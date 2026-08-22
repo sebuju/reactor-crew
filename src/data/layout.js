@@ -44,7 +44,68 @@ function port(p,side){
   return side==="l"?[x,y+h/2] : side==="r"?[x+w,y+h/2]
        : side==="t"?[x+w/2,y] : side==="b"?[x+w/2,y+h] : [x+w/2,y+h/2];
 }
-const elbow=(a,b,m)=> m==="hv" ? [a,[b[0],a[1]],b] : [a,[a[0],b[1]],b];
+/* Route between two ports so the pipe LEAVES and ARRIVES perpendicular to the
+   face it lands on.  A pipe must turn into a component, never slide along it.
+   Two ports on the same face get a run that stands off clear of both. */
+/* Where to put the bend, when there is a choice: the lane that cuts through the
+   fewest components.  A pipe should not run through the middle of a machine on
+   its way somewhere else.  `vert` means the bend run itself is vertical. */
+function bendAt(lo,hi,c0,c1,vert,skip){
+  const g=occupied(null), mid=(lo+hi)/2;
+  const base=vert?GX:GY, n=vert?GW:GH;
+  const k0=Math.floor((Math.min(c0,c1)-(vert?GY:GX))/CELL);
+  const k1=Math.floor((Math.max(c0,c1)-(vert?GY:GX))/CELL);
+  let best=mid, bd=1e9;
+  for(let c=0;c<n;c++){
+    const m=base+(c+0.5)*CELL;
+    if(m<Math.min(lo,hi)-1 || m>Math.max(lo,hi)+1) continue;
+    let hits=0;
+    for(let k=Math.max(0,k0);k<=k1;k++){
+      const cell = vert ? (g[k]||[])[c] : (g[c]||[])[k];
+      if(cell && skip.indexOf(cell)<0) hits++;
+    }
+    const d=hits*10+Math.abs(m-mid)/CELL;
+    if(d<bd){ bd=d; best=m; }
+  }
+  return best;
+}
+
+/* the face of p that points at q - a nozzle should be on the side the pipe comes from,
+   otherwise the run crosses the component to reach the far face and looks unconnected */
+function face(p,q){
+  const a=cen(p), b=cen(q), dx=b.x-a.x, dy=b.y-a.y;
+  return Math.abs(dx)>Math.abs(dy) ? (dx>=0?"r":"l") : (dy>=0?"b":"t");
+}
+
+function route(p,sa,q,sb){
+  const a=port(p,sa), b=port(q,sb);
+  const va=sa==="t"||sa==="b", vb=sb==="t"||sb==="b", off=CELL/2;
+  if(va&&vb){
+    const m = sa===sb ? (sa==="b" ? Math.max(a[1],b[1])+off : Math.min(a[1],b[1])-off)
+                      : bendAt(a[1],b[1],a[0],b[0],false,[p,q]);
+    return [a,[a[0],m],[b[0],m],b];
+  }
+  if(!va&&!vb){
+    const m = sa===sb ? (sa==="r" ? Math.max(a[0],b[0])+off : Math.min(a[0],b[0])-off)
+                      : bendAt(a[0],b[0],a[1],b[1],true,[p,q]);
+    return [a,[m,a[1]],[m,b[1]],b];
+  }
+  return va ? [a,[a[0],b[1]],b]     // out vertically, in horizontally
+            : [a,[b[0],a[1]],b];    // out horizontally, in vertically
+}
+/* nearest point on a polyline - where a branch line tees onto a run */
+function nearestOn(pts,p){
+  let best=pts[0], bd=1e9;
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1], b=pts[i];
+    const dx=b[0]-a[0], dy=b[1]-a[1], L=dx*dx+dy*dy;
+    const t = L? clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L,0,1) : 0;
+    const q=[a[0]+dx*t, a[1]+dy*t];
+    const d=Math.hypot(q[0]-p[0],q[1]-p[1]);
+    if(d<bd){ bd=d; best=q; }
+  }
+  return {pt:best,d:bd};
+}
 function plen(pts){ let L=0;
   for(let i=1;i<pts.length;i++) L+=Math.abs(pts[i][0]-pts[i-1][0])+Math.abs(pts[i][1]-pts[i-1][1]);
   return L/CELL*MPC; }
@@ -56,22 +117,31 @@ function pipeNetwork(){
   for(let i=0;i<D.loops;i++){
     const sg=id("sg"+i), pu=id("pump"+i);
     if(!sg) continue;
-    const h=elbow(port(core,"r"),port(sg,"l"),"hv");
+    const h=route(core,"r",sg,"l");
     net.push({k:"hot",pts:h}); if(i===0) hot0=h;
     if(pu){
-      net.push({k:"cold",pts:elbow(port(sg,"b"),port(pu,"t"),"vh")});
-      net.push({k:"cold",pts:elbow(port(pu,"b"),port(core,"b"),"vh")});
-    } else net.push({k:"cold",pts:elbow(port(sg,"b"),port(core,"b"),"vh")});
-    if(tb) net.push({k:"steam",pts:elbow(port(sg,"t"),port(tb,"t"),"vh")});
-    if(fp) net.push({k:"feed",pts:elbow(port(fp,"b"),port(sg,"b"),"vh")});
+      net.push({k:"cold",pts:route(sg,"b",pu,"t")});
+      net.push({k:"cold",pts:route(pu,"b",core,"b")});
+    } else net.push({k:"cold",pts:route(sg,"b",core,"b")});
+    if(tb) net.push({k:"steam",pts:route(sg,"t",tb,"t")});
+    if(fp) net.push({k:"feed",pts:route(fp,face(fp,sg),sg,"b")});   // discharge
   }
-  if(pzr&&hot0){                                   // surge line down onto the hot leg
-    const a=port(pzr,"b"), yh=hot0[1][1];
-    net.push({k:"surge",pts:[a,[a[0],yh]]});
+  if(pzr&&hot0){                       // surge line drops onto the hot leg
+    const a=port(pzr,"b");
+    let ty=null;                         // nearest hot run passing under the pressurizer
+    for(let i=1;i<hot0.length;i++){
+      if(Math.abs(hot0[i][1]-hot0[i-1][1])>0.5) continue;
+      const lo=Math.min(hot0[i-1][0],hot0[i][0]), hi=Math.max(hot0[i-1][0],hot0[i][0]);
+      if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
+        ty=hot0[i][1];
+    }
+    if(ty!==null) net.push({k:"surge",pts:[a,[a[0],ty]]});
+    else { const t=nearestOn(hot0,a);   /* nothing underneath: reach across to the leg */
+      if(t.d>3) net.push({k:"surge",pts:[a,[a[0],t.pt[1]],t.pt]}); }
   }
-  if(tb&&cd) net.push({k:"exh",pts:elbow(port(tb,"b"),port(cd,"t"),"vh")});
-  if(cd&&fp) net.push({k:"feed",pts:elbow(port(cd,"r"),port(fp,"t"),"hv")});
-  if(hp&&fitted(hp)) net.push({k:"hpi",pts:elbow(port(hp,"b"),port(core,"b"),"vh")});
+  if(tb&&cd) net.push({k:"exh",pts:route(tb,"b",cd,"t")});
+  if(cd&&fp) net.push({k:"feed",pts:route(cd,"r",fp,face(fp,cd))});   // suction
+  if(hp&&fitted(hp)) net.push({k:"hpi",pts:route(hp,"b",core,"b")});
   return net;
 }
 const fitted=p => p.id==="hpi" ? D.accum : p.id==="bkp" ? D.bkp>0 : true;
