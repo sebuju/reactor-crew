@@ -1,0 +1,6 @@
+html,body{margin:0;padding:0;background:#06090a}
+#scroller{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch}
+canvas{display:block;margin:0 auto;background:#080c0e;touch-action:pan-y;cursor:default}
+#hint{color:#5d7378;font:9px ui-monospace,"SF Mono",monospace;letter-spacing:.2em;
+      text-transform:uppercase;padding:6px 10px;margin:0}
+@media(min-width:800px){#hint{display:none}}

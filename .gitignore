@@ -1,0 +1,6 @@
+# Local assistant config - not part of the project
+.claude/
+.claudeignore
+CLAUDE.md
+CLAUDE.local.md
+graphify-out/
