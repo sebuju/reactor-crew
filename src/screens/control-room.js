@@ -47,24 +47,32 @@ function ctrlInspector(y0){
   }
   else if(id==="rods"){
     rule("CONTROL BANK",X[0],Y0+9,W2);
-    slider(X[0],Y0+28,W2,s.rodPos*100,0,100,{fn:v=>{S.rodDem=v/100;S.scrammed=false;}});
+    slider(X[0],Y0+28,W2,s.rodPos*100,0,100,{fn:v=>{S.rodDem=v/100;}});
     txt(pad((s.rodPos*100).toFixed(0),3)+" % INSERTED",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
     TIP(X[0],Y0,W2,54,"CONTROL BANK","Rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking which eats thermal margin.");
-    const sw=push({x:X[1],y:Y0+6,w:W2,h:48,type:"btn",
+    const sw=push({x:X[1],y:Y0+6,w:W2,h:40,type:"btn",
       fn:()=>{S.scrammed=true;S.rodDem=1;S.rodJam=false;S.load=Math.min(S.load,.05);S.trip="MANUAL SCRAM";}});
-    fillRect(X[1],Y0+6,W2,48,hov(sw)?"#5a1109":"#3a0d08"); frame(X[1],Y0+6,W2,48,C.red);
-    ticks(X[1]+.5,Y0+6.5,W2-1,47,C.red,6);
-    txt("SCRAM",X[1]+W2/2,Y0+30,{size:12,weight:700,sp:3,align:"center",color:C.red});
-    txt("TRIP RODS + TURBINE",X[1]+W2/2,Y0+44,{size:7,sp:1.2,align:"center",color:"#8a3428"});
-    TIP(X[1],Y0+6,W2,48,"SCRAM","Drops the full bank in "+(1/P.scram).toFixed(1)+" s and trips the turbine with it. Always safe, never free: xenon then locks you out for minutes.");
-    const rw=push({x:X[2],y:Y0+6,w:W2,h:26,type:"btn",fn:()=>S.rpsBypass=!S.rpsBypass});
-    fillRect(X[2],Y0+6,W2,26,S.rpsBypass?"#2a1f08":(hov(rw)?C.panelHi:C.panel));
-    frame(X[2],Y0+6,W2,26,S.rpsBypass?C.amber:C.edge); accent(X[2],Y0+6,W2,S.rpsBypass?C.amber:C.edge2);
-    txt("RPS",X[2]+9,Y0+23,{size:8,weight:700,sp:1.2,color:S.rpsBypass?C.amber:C.ink2});
-    txt(S.rpsBypass?"BYPASSED":"ARMED",X[2]+W2-9,Y0+23,{size:8,sp:1,align:"right",
-        color:S.rpsBypass?C.amber:C.green});
-    TIP(X[2],Y0+6,W2,26,"RPS "+(S.rpsBypass?"[ BYPASSED ]":"[ ARMED ]"),
-      "Reactor Protection System. Armed, it scrams automatically on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure or core void. Bypass it to run past rated power - and to melt the core.");
+    fillRect(X[1],Y0+6,W2,40,hov(sw)?"#5a1109":"#3a0d08"); frame(X[1],Y0+6,W2,40,C.red);
+    ticks(X[1]+.5,Y0+6.5,W2-1,39,C.red,6);
+    txt("SCRAM",X[1]+W2/2,Y0+26,{size:12,weight:700,sp:3,align:"center",color:C.red});
+    txt("TRIP RODS + TURBINE",X[1]+W2/2,Y0+39,{size:7,sp:1.2,align:"center",color:"#8a3428"});
+    TIP(X[1],Y0+6,W2,40,"SCRAM","Drops the full bank in "+(1/P.scram).toFixed(1)+" s and trips the turbine with it. Always safe, never free: xenon then locks you out for minutes.");
+    /* the latch has to be cleared on purpose - moving the bank no longer does it */
+    const tr=push({x:X[1],y:Y0+50,w:W2,h:20,type:"btn",fn:()=>{ resetTrip(); }});
+    fillRect(X[1],Y0+50,W2,20,S.scrammed&&hov(tr)?C.panelHi:C.panel);
+    frame(X[1],Y0+50,W2,20,S.scrammed?C.amber:C.edge);
+    txt("TRIP RESET",X[1]+W2/2,Y0+64,{size:8,sp:1.2,align:"center",
+        color:S.scrammed?C.amber:C.ink2});
+    TIP(X[1],Y0+50,W2,20,"TRIP RESET","Clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present, and says which one.");
+    const lit=!P.rps||S.rpsBypass, st=rpsState();
+    const rw=push({x:X[2],y:Y0+6,w:W2,h:26,type:"btn",fn:()=>{ if(P.rps) S.rpsBypass=!S.rpsBypass; }});
+    fillRect(X[2],Y0+6,W2,26,lit?"#2a1f08":(hov(rw)&&P.rps?C.panelHi:C.panel));
+    frame(X[2],Y0+6,W2,26,lit?C.amber:C.edge); accent(X[2],Y0+6,W2,lit?C.amber:C.edge2);
+    txt("RPS",X[2]+9,Y0+23,{size:8,weight:700,sp:1.2,color:lit?C.amber:C.ink2});
+    txt(st,X[2]+W2-9,Y0+23,{size:8,sp:1,align:"right",color:lit?C.amber:C.green});
+    TIP(X[2],Y0+6,W2,26,"RPS [ "+st+" ]",
+      P.rps?"Reactor Protection System. Armed, it scrams automatically on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core."
+           :"No Reactor Protection System was fitted at the design bench. There is nothing to arm and nothing to bypass. Nothing will scram this reactor except you.");
     if(P.boroninj){
       const bb=push({x:X[2],y:Y0+40,w:W2,h:26,type:"btn",fn:()=>{ if(!S.borInjUsed){
         S.borInjUsed=true; S.boron-=4000;
@@ -143,7 +151,8 @@ function ctrlInspector(y0){
       P.noise>.6?C.amber:C.green);
     row(X[0],1,"PARTY DOSE",s.dose.toFixed(1)+" %",s.dose>50?C.red:C.cyan);
     row(X[0],2,"DOSE RATE",P.dose.toFixed(2)+" x",P.dose>1?C.amber:C.green);
-    row(X[1],0,"RPS",S.rpsBypass?"BYPASSED":"armed",S.rpsBypass?C.amber:C.green);
+    row(X[1],0,"RPS",rpsState().toLowerCase()==="armed"?"armed":rpsState(),
+        P.rps&&!S.rpsBypass?C.green:C.amber);
     row(X[1],1,"LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
     row(X[1],2,"EVENTS",LOG.length+"");
     wrap("Crew dose is set by how far you put this room from the reactor and how much shielding sits between them - both decided on the design bench.",
@@ -222,9 +231,9 @@ function drawMimic(){
 
 function drawAnnunciator(y0){
   const colw=742/6, tw_=Math.round(colw)-6;
-  rule("ANNUNCIATOR",12,y0-6,736);
+  rule("ANNUNCIATOR",12,y0+8,736);
   ANN.forEach((a,i)=>{
-    const x=Math.round(12+(i%6)*colw), y=y0+Math.floor(i/6)*40, on=a[2](S);
+    const x=Math.round(12+(i%6)*colw), y=y0+14+Math.floor(i/6)*40, on=a[2](S);
     const col=a[1]==="red"?C.red:a[1]==="amber"?C.amber:C.blue;
     const blink=on&&a[1]==="red"&&(performance.now()%900<450);
     const lit=on&&!blink;
@@ -234,10 +243,12 @@ function drawAnnunciator(y0){
         color:lit?"#120404":"#33484e"});
     TIP(x,y,tw_,34,a[0]+(on?"  [ LIT ]":"  [ clear ]"),a[3]);
   });
+  return y0+14+Math.ceil(ANN.length/6)*40-6+12;
 }
 function drawLedger(y0){
   const s=S;
-  well(12,y0,364,150,"REACTIVITY LEDGER / TRAINING AID",C.amber);
+  const LH=176;
+  well(12,y0,364,LH,"REACTIVITY LEDGER / TRAINING AID",C.amber);
   TIP(12,y0,364,18,"REACTIVITY LEDGER",
     "Reactivity is the reactor's tendency to speed up or slow down, measured in pcm. Bars pointing left are pushing the reactor down, right is pushing it up. When Net Rho sits at zero, power is steady. Real operators never get this view.");
   const rows=[["RODS","rod","Negative reactivity from the inserted control rods. The deeper they go the stronger this gets, but not evenly: the rods bite hardest around mid-travel."],
@@ -248,7 +259,7 @@ function drawLedger(y0){
               ["VOID","vd","Steam bubbles in the core. In a water design this is strongly negative and shuts the reactor down as it uncovers. In a graphite or sodium design it is POSITIVE, and voiding adds power instead."],
               ["NET RHO","net","The sum of everything above. Zero means steady power. Positive means power is climbing, negative means it is falling. If this exceeds your fuel's beta the reactor goes prompt critical and nothing can stop it in time."]];
   rows.forEach((r,i)=>{
-    const y=y0+32+i*16, v=r[1]==="net"?s.rho:s.parts[r[1]];
+    const y=y0+34+i*18, v=r[1]==="net"?s.rho:s.parts[r[1]];
     txt(r[0],22,y+9,{size:8,sp:1.1,color:r[1]==="net"?C.bright:C.ink2});
     const col=r[1]==="net"?(Math.abs(v)<50?C.green:(v<0?C.blue:C.red)):(v<0?C.blue:C.amber);
     segSigned(88,y+1,200,10,clamp(v/2600,-1,1),col);
@@ -258,13 +269,13 @@ function drawLedger(y0){
     if(lch&&plot.includes(lch)) chip(13,y+2,CH[lch].col);
     TIP(18,y,352,14,r[0],r[2]+(lch?"  Click to plot it on the trend chart.":""));
   });
-  well(384,y0,364,150,"SECONDARY INDICATIONS");
+  well(384,y0,364,LH,"SECONDARY INDICATIONS");
   const dn=(s.n-lastN)/0.05; lastN=s.n;
   const per=Math.abs(dn)<1e-4?Infinity:s.n/dn, dev=s.Tavg-(565+18*s.load);
   const rows2=[
-    ["PERIOD",(isFinite(per)&&Math.abs(per)<999?per.toFixed(0):"INF")+" s",
+    ["PERIOD",(isFinite(per)&&Math.abs(per)<999?per.toFixed(0):"INF")+" s",null,
      "How many seconds it takes power to multiply by 2.7x at the current rate. Infinity means steady. A short positive period means power is running away from you; under about 10 seconds you are in trouble."],
-    ["TAVG VS PROGRAM",(dev>=0?"+":"")+dev.toFixed(1)+" K",
+    ["TAVG VS PROGRAM",(dev>=0?"+":"")+dev.toFixed(1)+" K",null,
      "How far average coolant temperature is from the target for the current load. Non-zero means the reactor and turbine are out of balance and something is drifting."],
     ["XENON WORTH",s.parts.xe.toFixed(0)+" pcm","xe",
      "Current xenon poison in pcm. At equilibrium it sits near -2700. After a shutdown it deepens toward -4800 over about eighty seconds, and that is the window where you cannot restart."],
@@ -276,17 +287,18 @@ function drawLedger(y0){
      "Flow the core is generating by buoyancy alone right now. It only develops once the loop is hot, and it is all you have if the pumps stop."],
     ["RADIOLOGICAL RELEASE",s.release.toFixed(2)+" %",null,
      "Fraction of the core inventory that has escaped containment and reached the crew. Driven by fuel damage and cut down by whatever containment you paid for."],
-    ["INSTRUMENTATION",P.noise<.2?"VOTED / CLEAN":P.noise<.6?"2CH / DRIFTING":"1CH / UNVERIFIED",
+    ["INSTRUMENTATION",P.noise<.2?"VOTED / CLEAN":P.noise<.6?"2CH / DRIFTING":"1CH / UNVERIFIED",null,
      "How many sensors watch each parameter, set at the design bench. With one channel your readings jitter and a failed sensor is undetectable. Three channels vote a liar out and the numbers hold still."],
   ];
   rows2.forEach((r,i)=>{
-    const y=y0+42+i*18, ch=r[3], on=ch&&plot.includes(ch);
+    const y=y0+42+i*16, ch=r[2], on=ch&&plot.includes(ch);
     if(ch) push({x:384,y:y-11,w:364,h:17,type:"btn",fn:()=>togglePlot(ch)});
     txt(r[0],394,y,{size:8.5,sp:1.1,color:on?CH[ch].col:C.ink2});
     txt(r[1],738,y,{size:10,align:"right",color:on?CH[ch].col:C.cyan});
     fillRect(394,y+5,344,1,"rgba(120,180,190,.07)");
-    TIP(384,y-11,364,17,r[0],r[2]+(ch?"  Click to plot it on the trend chart.":""));
+    TIP(384,y-11,364,17,r[0],r[3]+(ch?"  Click to plot it on the trend chart.":""));
   });
+  return y0+LH+12;
 }
 function drawTrend(yy){
   const x=12,y=yy,w=736,h=176;
@@ -332,16 +344,21 @@ function drawTrend(yy){
       {size:8.5,sp:.8,color:C.ink2});
   TIP(x,y,w,20,"TREND CHART",
     "Rolling three-minute history of any value on the panel. Click any gauge, control bench or readout to add it; click again to remove. Up to four at once, each auto-scaled to its own range shown in the legend.");
+  return y+h+12;
 }
 
 function drawLog(yy){
-  const x=12,y=yy,w=736,h=186;
+  const x=12,y=yy,w=736;
+  const shown=LOG.slice(-4).reverse(), body={size:9,color:C.ink2};
+  /* the panel is as tall as the entries it holds - four long ones used to spill out */
+  let need=0;
+  for(const e of shown) need += 13 + wrapCount(e.why,700,body)*12 + 9;
+  const h = LOG.length ? 36+need-9+12 : 56;
   well(x,y,w,h,"EVENT LOG / WHAT WENT WRONG AND WHY",C.amber);
   txt(LOG.length+" EVENTS",738,y+15,{size:8,sp:1.2,align:"right",color:C.ink2});
   if(!LOG.length){
-    txt("NO EVENTS - PLANT NOMINAL",x+w/2,y+h/2,{size:10,sp:2,align:"center",color:C.ink2});
+    txt("NO EVENTS - PLANT NOMINAL",x+w/2,y+42,{size:10,sp:2,align:"center",color:C.ink2});
   } else {
-    const shown=LOG.slice(-4).reverse();
     let ly=y+36;
     for(const e of shown){
       const col = e.sev==="alarm"?C.red : e.sev==="warn"?C.amber : C.ink2;
@@ -355,6 +372,7 @@ function drawLog(yy){
   }
   TIP(x,y,w,20,"EVENT LOG",
     "Everything that has gone wrong this run, newest first, each with the reason it happened and what it means. Cleared by Reset Plant.");
+  return y+h+12;
 }
 
 function combatHit(){
@@ -392,12 +410,12 @@ function combatHit(){
 }
 
 function drawDamage(yy){
-  const x=12,y=yy,w=736,h=110;
+  const x=12,y=yy,w=736,h=S.dmgParts.length?110:56;
   well(x,y,w,h,"DAMAGE CONTROL",S.dmgParts.length?C.red:C.amber);
   txt("PARTY DOSE "+S.dose.toFixed(1)+" %",738,y+15,
       {size:8,sp:1.2,align:"right",color:S.dose>50?C.red:C.ink2});
   if(!S.dmgParts.length){
-    txt("ALL EQUIPMENT IN SERVICE",x+w/2,y+66,{size:10,sp:2,align:"center",color:C.ink2});
+    txt("ALL EQUIPMENT IN SERVICE",x+w/2,y+42,{size:10,sp:2,align:"center",color:C.ink2});
   } else {
     let bx=22;
     for(const k of S.dmgParts){
@@ -426,11 +444,18 @@ function drawDamage(yy){
   }
   TIP(x,y,w,20,"DAMAGE CONTROL",
     "Equipment knocked out by combat damage. What gets hit is decided by where you put it: hull cells are roughly ten times likelier to be struck, and anything with no free adjacent cell can never be repaired.");
+  return y+h+12;
 }
 
-function drawFaults(y){
-  rule("FAULT INJECTION / TEST HARNESS",12,y-8,736);
-  TIP(12,y-16,736,14,"FAULT INJECTION",
+/* the stacked panels, as one block that can live in either column */
+function drawPanels(y){
+  y=drawAnnunciator(y); y=drawDamage(y); y=drawTrend(y);
+  y=drawLog(y); y=drawLedger(y); return drawFaults(y);
+}
+function drawFaults(y0){
+  const y=y0+16;
+  rule("FAULT INJECTION / TEST HARNESS",12,y0+8,736);
+  TIP(12,y0,736,14,"FAULT INJECTION",
     "Developer buttons for triggering emergencies on demand. In the real game these would be caused by combat damage, not by you.");
   button(12,y,178,26,"STUCK PORV",{fn:()=>{S.porvOpen=true;S.porvBlocked=false;}});
   TIP(12,y,178,26,"STUCK PORV",
@@ -442,8 +467,7 @@ function drawFaults(y){
   TIP(384,y,178,26,"LOAD STEP 125%",
     "Slams turbine demand to 125% instantly, like a full weapons volley. The primary loop cools, the reactor raises its own power to follow, and thermal margin gets squeezed.");
   button(570,y,178,26,"RESET PLANT",{fn:resetPlant});
-  const bot=y+72;
-  if(screen==="operate" && Math.abs(H-bot)>2){ H=bot; resize(); }
+
   button(384,y+34,178,26,"COMBAT HIT",{fn:combatHit});
   TIP(384,y+34,178,26,"COMBAT HIT",
     "Takes a hit somewhere in the engineering space. What it destroys is decided by your layout: components sitting in hull cells are roughly ten times more likely to be struck.");
@@ -461,4 +485,5 @@ function drawFaults(y){
   }
   TIP(570,y,178,26,"RESET PLANT",
     "Returns the reactor to steady 100% power with all faults cleared and damage counters zeroed. Keeps your current design.");
+  return y0+88;
 }

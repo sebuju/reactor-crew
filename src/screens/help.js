@@ -13,7 +13,7 @@ const HELP=[
  ["d","FUEL","Sets delayed neutron fraction and excess reactivity. Low-enriched uranium gives 650 pcm of margin before prompt criticality; plutonium MOX gives 300."],
  ["d","SCRAM SYSTEM","Gravity is fail-safe but slow and direction dependent. Springs are fast and need charge. Boron injection is near instant and irreversible for the mission."],
  ["d","INSTRUMENT CHANNELS","How many sensors watch each parameter. One channel means a failed sensor is indistinguishable from reality; three channels vote a liar out."],
- ["d","MASS BUDGET","900 tonnes total. A bigger core, a heavier vessel and every safeguard compete for the same allowance, so a safe plant is a small one unless you give something up."],
+ ["d","MASS BUDGET",BUDGET+" tonnes total. A bigger core, a heavier vessel and every safeguard compete for the same allowance, so a safe plant is a small one unless you give something up."],
  ["d","GRACE TIME","How long the core survives total loss of cooling. It is the single number that decides whether a combat repair is possible at all."],
  ["h","GAUGES"],
  ["d","DNBR","Departure from nucleate boiling ratio, the margin before the steam film on the cladding goes continuous and cooling collapses. Above 1.30 is safe, 1.00 is failure. This, not the power rating, limits how hard you can push."],
@@ -38,29 +38,35 @@ const HELP=[
  ["d","THE TMI-2 TRAP","Inject the stuck PORV fault. Pressure falls while pressurizer level rises. The correct move is to watch subcooling collapse, close the block valve, then start HPI, and accept the vessel fatigue."],
 ];
 function drawHelp(){
-  const x=12,maxw=716, o={size:10,color:"#9fb4b9"};
+  const maxw=716, o={size:10,color:"#9fb4b9"};
   ctx.save(); ctx.beginPath(); ctx.rect(0,44,W,H-44); ctx.clip();
-  let y=44+30-helpScroll;
-  for(const it of HELP){
-    if(it[0]==="h"){ y+=12;
-      if(y>30&&y<H+30) rule(it[1],x,y,maxw,C.amber);
-      y+=22;
-    } else {
-      const n=wrapCount(it[2],maxw-14,o);
-      if(y>10&&y<H+70){
-        chip(x,y-7,C.cyan);
-        txt(it[1],x+10,y,{size:9.5,weight:700,sp:1.4,color:C.cyan});
-        wrap(it[2],x+10,y+15,maxw-14,14,o);
+  const run=(from,to)=>{
+    let y=44+30-helpScroll;
+    for(let i=from;i<to;i++){
+      const it=HELP[i];
+      if(it[0]==="h"){ y+=12;
+        if(y>30&&y<H+30) rule(it[1],12,y,maxw,C.amber);
+        y+=22;
+      } else {
+        const n=wrapCount(it[2],maxw-14,o);
+        if(y>10&&y<H+70){
+          chip(12,y-7,C.cyan);
+          txt(it[1],22,y,{size:9.5,weight:700,sp:1.4,color:C.cyan});
+          wrap(it[2],22,y+15,maxw-14,14,o);
+        }
+        y+=15+n*14+12;
       }
-      y+=15+n*14+12;
     }
-  }
-  helpMax=Math.max(0,y+helpScroll-H+40);
+    return y;
+  };
+  const bot=run(0,HELP.length)+helpScroll;
+  helpMax=Math.max(0,bot-H+40);
   ctx.restore();
+  if(screen==="help") setPageH(bot+40);
   push({x:0,y:44,w:W,h:H-44,type:"scroll"});
   if(helpMax>0){
-    fillRect(744,48,4,H-56,C.well);
+    fillRect(W-16,48,4,H-56,C.well);
     const th=Math.max(28,(H-56)*(H-44)/(helpMax+H-44));
-    fillRect(744,48+(H-56-th)*(helpScroll/helpMax),4,th,C.amber);
+    fillRect(W-16,48+(H-56-th)*(helpScroll/helpMax),4,th,C.amber);
   }
 }

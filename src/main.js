@@ -11,12 +11,11 @@ function tick(now){
   ctx.fillStyle=gridPat; ctx.fillRect(0,40,W,H-40);
   ui.widgets=[]; ui.tips=[]; topbar();
   if(screen==="design") drawDesign();
-  else if(screen==="operate"){ const y=drawMimic();
-    drawAnnunciator(y); drawDamage(y+128); drawTrend(y+250); drawLog(y+438);
-    drawLedger(y+636); drawFaults(y+800); }
+  else if(screen==="operate") setPageH(drawPanels(drawMimic())+16);
   else drawHelp();
   drawTip();
   ui.prev=ui.widgets;
+  applyPageH();          /* never resize mid-frame: it clears the canvas */
   requestAnimationFrame(tick);
 }
 layoutMetrics(); layout(); requestAnimationFrame(tick);
