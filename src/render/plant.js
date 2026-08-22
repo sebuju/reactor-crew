@@ -24,7 +24,7 @@ function drawSym(p,x,y,w,h,ink,L){
     for(let i=0;i<4;i++) fillRect(bx+4+i*((bw-8)/4),by+2,3,bh-4,"rgba(185,205,210,.35)");
   } else if(id==="rods"){
     shell(()=>ctx.rect(X+8,Y+2,W-16,Hh-10));
-    const ins = L? 6+L.rodPos*16 : 10;
+    const ins = L? 4+L.rodPos*9 : 6;
     for(let i=0;i<5;i++) fillRect(X+12+i*((W-24)/5),Y+Hh-10,4,ins,
       (L&&L.rodJam)?"#8a7a4a":"#b9cdd2");
   } else if(id==="pzr"){
@@ -71,10 +71,17 @@ function drawSym(p,x,y,w,h,ink,L){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink); fillRect(X+4,Y+Hh-11,W-8,3,ink);
   } else {
-    shell(()=>ctx.rect(X,Y+2,W,Hh-4));
-    for(let i=-Hh;i<W;i+=6){ ctx.beginPath(); ctx.moveTo(X+i,Y+Hh-2); ctx.lineTo(X+i+Hh,Y+2);
-      ctx.strokeStyle="rgba(109,143,152,.5)"; ctx.lineWidth=1.4; ctx.stroke(); }
+    shell(()=>ctx.rect(X,Y+2,W,Hh-4)); hatch(X+1,Y+3,W-2,Hh-6,"#6d8f98",.5);
   }
+}
+
+/* an equipment tag on its own plate, clamped to the grid so the symbol never
+   shows through it and an outer-column part is never clipped by the panel edge */
+function tag(s,cx,base,size,sp,col){
+  const o={size,sp}, w=tw(s,o), Lx=GX+2, Rx=GX+GW*CELL-2;
+  cx=clamp(cx,Lx+w/2,Rx-w/2);
+  fillRect(cx-w/2-3,base-size-1,w+6,size+3,"rgba(6,10,11,.88)");
+  txt(s,cx,base,{size,sp,align:"center",color:col});
 }
 
 /* live one-line readout shown inside a component in the control room */
@@ -94,6 +101,83 @@ function liveValue(p,s){
     case p.id==="cont":  return s.release.toFixed(1)+"%";
     case p.id==="ctrl":  return s.dose.toFixed(0)+"%";
     default: return null;
+  }
+}
+
+/* ══════════ IN-COMPONENT CONTROLS (control room only) ══════════
+   A control is not a separate box parked somewhere on the grid: it is a strip
+   along the bottom of the component it drives, inside that component's own cells.
+   Several controls share one strip by weight.  The design bench passes no live
+   state, so its grid carries no strips at all. */
+const CTL_H=13;
+function ctlFor(p){
+  if(p.id.startsWith("pump")) return [
+    {kind:"sld",flex:1,val:()=>S.flow*100,min:()=>P.flowMin*100,max:()=>100,
+     fmt:v=>v.toFixed(0)+" %",set:v=>{S.flow=v/100;},
+     tip:"COOLANT PUMPS - primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core."}];
+  switch(p.id){
+    case "rods": return [
+      {kind:"sld",flex:4,val:()=>S.rodPos*100,min:()=>0,max:()=>100,
+       fmt:v=>v.toFixed(0)+" %",set:v=>{S.rodDem=v/100;},
+       tip:"CONTROL BANK - rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."},
+      {kind:"btn",flex:3,danger:()=>true,text:()=>"SCRAM",
+       fn:()=>{S.scrammed=true;S.rodDem=1;S.rodJam=false;
+               S.load=Math.min(S.load,.05);S.trip="MANUAL SCRAM";},
+       tip:"SCRAM - drops the full bank and trips the turbine with it. Always safe, never free: the xenon that follows locks you out for minutes."},
+      {kind:"btn",flex:3,on:()=>S.scrammed,text:()=>"RESET",
+       fn:()=>{ resetTrip(); },
+       tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}];
+    case "core": return [
+      {kind:"sld",flex:P.boroninj?3:1,val:()=>S.boron,min:()=>-6000,max:()=>0,step:10,
+       fmt:v=>v.toFixed(0)+" pcm",set:v=>{S.boron=v;},
+       tip:"BORON - neutron poison dissolved in the coolant. Slow, loop-wide coarse trim, and the only way out of a deep xenon pit."}].concat(
+      P.boroninj?[{kind:"btn",flex:2,danger:()=>!S.borInjUsed,
+       text:()=>S.borInjUsed?"SPENT":"BORON DUMP",
+       fn:()=>{ if(!S.borInjUsed){ S.borInjUsed=true; S.boron-=4000;
+         logE("alarm","EMERGENCY BORON INJECTED",
+           "4000 pcm dumped into the loop. Shut down hard, and it cannot be undone this run."); } },
+       tip:"EMERGENCY BORON - one-shot poison dump worth 4000 pcm. Shuts the reactor down when the rods will not, and it cannot be undone."}]:[]);
+    case "turb": return [
+      {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>125,
+       fmt:v=>v.toFixed(0)+" %",set:v=>{S.load=v/100;},
+       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod."}];
+    case "pzr": return [
+      {kind:"btn",flex:1,on:()=>S.porvBlocked,text:()=>S.porvBlocked?"SHUT":"OPEN",
+       fn:()=>{S.porvBlocked=!S.porvBlocked;},
+       tip:"BLOCK VALVE - manual backup under the relief valve. Shut it when the PORV fails to reseat; that is the whole answer to a stuck-open valve."}];
+    case "hpi": return [
+      {kind:"btn",flex:1,on:()=>S.hpi,text:()=>S.hpi?"INJECT":"OFF",
+       fn:()=>{S.hpi=!S.hpi;},
+       tip:"HIGH PRESSURE INJECTION - emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs."}];
+    case "ctrl": return [
+      {kind:"btn",flex:1,on:()=>P.rps&&S.rpsBypass,
+       text:()=>P.rps?(S.rpsBypass?"RPS BYPASS":"RPS ARMED"):"NO RPS",
+       fn:()=>{ if(P.rps) S.rpsBypass=!S.rpsBypass; },
+       tip:P.rps?"REACTOR PROTECTION SYSTEM. Armed, it scrams automatically on eight conditions. Bypass it to run past rated power - and to melt the core."
+               :"NO REACTOR PROTECTION SYSTEM. None was fitted at the design bench, so there is nothing to arm and nothing to bypass. Every trip is a manual scram."}];
+  }
+  return null;
+}
+
+/* the control strip along the bottom of one component */
+function ctlStrip(list,x,y,w,h){
+  const gap=4, tot=list.reduce((a,c)=>a+c.flex,0);
+  const span=(w-gap*(list.length-1))/tot;
+  let cx=x;
+  for(const c of list){
+    const cw=span*c.flex;
+    const dan = c.danger? c.danger() : false, on = c.on? c.on() : false;
+    if(c.kind==="sld"){
+      const cy=y+h/2, lab=c.fmt(c.val());
+      slider(cx,cy,cw,c.val(),c.min(),c.max(),
+        {th:h,tw:7,ticks:false,fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
+      if(cw>=64) tag(lab,cx+cw-tw(lab,{size:6.5})/2-3,cy+3,6.5,0,C.cyan);
+    } else {
+      /* a narrow box loses its letter spacing before it loses its label */
+      button(cx,y,cw,h,c.text(),{danger:dan,on:on,size:6.5,sp:cw<30?0:.5,fn:c.fn});
+    }
+    TIP(cx,y,cw,h,c.tip.split(" - ")[0],c.tip);
+    cx+=cw+gap;
   }
 }
 
@@ -135,20 +219,25 @@ function drawPlant(y0,L){
 
   for(const p of LAY.parts){
     const x=PXc(p.x), y=PYc(p.y), w=p.w*CELL, h=p.h*CELL;
+    const ctl = L && (fitted(p)||p.id==="hpi") ? ctlFor(p) : null,
+          sh = ctl? CTL_H : 0, sy = y+h-sh;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p, fit=fitted(p);
     const dmgd = L && L.dmgParts.includes(p.id);
     const ink = !fit?"#3c4c47" : dmgd?C.red : on?C.amber : (hov(wd)||drag)?C.bright : C.metal;
     if(on){ fillRect(x+1,y+1,w-2,h-2,"rgba(240,168,48,.07)"); ticks(x+2.5,y+2.5,w-5,h-5,C.amber,7); }
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
-    else drawSym(p,x,y,w,h,ink,L);
+    else drawSym(p,x,y,w,h-sh,ink,L);
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red); }
     else if(!p.access && p.grp!=="shield" && fit) badge(x+w-9,y+12,C.amber);
-    const v = L&&fit ? liveValue(p,L) : null;
-    txt(p.name,x+w/2,y+h-(v?13:4),{size:6.5,sp:.4,align:"center",
-        color:!fit?"#3c4c47":(on?C.amber:C.ink2)});
-    if(v) txt(v,x+w/2,y+h-3,{size:8,align:"center",color:dmgd?C.red:C.cyan});
-    if(!fit) txt("NOT FITTED",x+w/2,y+h/2+2,{size:6,sp:.6,align:"center",color:"#3c4c47"});
+    /* a one-cell component with a knob has no room for a separate value tag,
+       and does not need one - the knob shows its own number */
+    const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
+    const nm = (v0&&!v)? p.name+"  "+v0 : p.name;
+    tag(nm,x+w/2,sy-(v?14:4),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
+    if(v) tag(v,x+w/2,sy-3,8,0,dmgd?C.red:C.cyan);
+    if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
+    if(ctl) ctlStrip(ctl,x+4,sy+1,w-8,sh-3);
     TIP(x,y,w,h,p.name+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
       p.tip+(p.access||p.grp==="shield"?"":"  It is boxed in on every side - nobody could reach it to repair it."));

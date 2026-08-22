@@ -76,8 +76,11 @@ function inspector(y0){
   else if(id==="ctrl"){
     c[0]=optList(X[0],c[0],CW2,"INSTRUMENT CHANNELS",CHAN,"chan",
       "How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.");
-    c[1]=sliderF(X[1],c[1],CW2,"RPS TRIP MARGIN","rpsm",0,1,v=>(v*100).toFixed(0)+" % permissive",
-      "How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error.",.05);
+    c[1]=toggleF(X[1],c[1],CW2,"REACTOR PROTECTION SYSTEM","rps",55,
+      "The automatic trips. Fitted, it scrams the core on high flux, low DNBR, high or low pressure, high fuel temperature, low flow, core void or low subcooling. Leave it off and none of that happens: the reactor will run itself to destruction and wait for you to notice.");
+    if(D.rps)
+      c[1]=sliderF(X[1],c[1],CW2,"RPS TRIP MARGIN","rpsm",0,1,v=>(v*100).toFixed(0)+" % permissive",
+        "How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error.",.05);
     wrap("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure below.",
       X[2],c[2]+10,CW2*2+8,11,{size:8.5,color:C.ink2});
   }
@@ -109,20 +112,19 @@ function inspector(y0){
   return y0+IH;
 }
 
-function drawDesign(){
-  layoutMetrics();
-  const d=derived();
+/* left column: the plant itself and the component inspector */
+function designLeft(){
   rule("PLANT DESIGN",12,58,736,C.amber);
   txt("longitudinal section, looking to port / up is up: elevation drives gravity, buoyancy and passive cooling",
       12,73,{size:8.5,color:C.ink2});
   txt("click a component to configure it, drag to reposition",12,84,{size:8.5,color:C.ink2});
   button(596,47,152,20,"AUTO-ARRANGE",{size:8,fn:()=>{ LAY=null; layoutMetrics(); }});
   TIP(596,47,152,20,"AUTO-ARRANGE","Resets every component to its default position.");
+  return inspector(drawGrid(94)+12)+12;
+}
 
-  let y=drawGrid(94)+12;
-  y=inspector(y)+12;
-  const LM=layoutMetrics();
-
+/* right column: what the design adds up to, and the button that builds it */
+function designRight(y,d,LM){
   rule("MASS BUDGET",12,y,736);
   seg(12,y+12,736,14,clamp(d.mass/BUDGET,0,1),
       d.over?C.red:(d.mass/BUDGET>.9?C.amber:C.green),48);
@@ -145,12 +147,19 @@ function drawDesign(){
   });
   y+=Math.ceil(stats.length/2)*32+46;
 
-  const W_=d.warn.concat(layoutWarnings(LM)), hard=W_.some(w=>w[0]==="HARD");
+  const W_=designIssues(d,LM), hard=designBlocked(d,LM);
   if(W_.length){
-    well(12,y,736,20+W_.length*15,"DESIGN REVIEW",hard?C.red:C.amber);
-    W_.forEach((w,i)=>txt((w[0]==="HARD"?"[BLOCK] ":"[WARN ] ")+w[1],22,y+34+i*15,
-      {size:8.5,color:w[0]==="HARD"?C.red:C.amber}));
-    y+=32+W_.length*15;
+    /* a review note is a sentence, not a label: wrap it and size the well to fit */
+    const rx=78, rw=748-rx-12, ro={size:8.5};
+    const hh=30+W_.reduce((a,w)=>a+wrapCount(w[1],rw,ro)*12+4,0);
+    well(12,y,736,hh,"DESIGN REVIEW",hard?C.red:C.amber);
+    let ry=y+34;
+    for(const w of W_){
+      const col=w[0]==="HARD"?C.red:C.amber;
+      txt(w[0]==="HARD"?"[BLOCK]":"[WARN ]",22,ry,{size:8.5,color:col});
+      ry=wrap(w[1],rx,ry,rw,12,{size:8.5,color:col})+4;
+    }
+    y+=hh+12;
   } else {
     well(12,y,736,44,"DESIGN REVIEW",C.green);
     txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",22,y+34,{size:8.5,sp:1,color:C.green});
@@ -165,6 +174,11 @@ function drawDesign(){
     TIP(12,y,736,34,"COMMISSION UNIT",
       "Builds this reactor and takes you to the control room. Every parameter and every position above is baked into the physics.");
   }
-  y+=50;
-  if(screen==="design" && Math.abs(H-y)>2){ H=y; resize(); }
+  return y+50;
+}
+
+function drawDesign(){
+  layoutMetrics();
+  const d=derived(), lb=designLeft(), LM=layoutMetrics();
+  if(screen==="design") setPageH(designRight(lb,d,LM)+16);
 }
