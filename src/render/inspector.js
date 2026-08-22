@@ -35,13 +35,17 @@ function inspector(y0){
     c[2]=toggleF(X[2],c[2],CW2,"EMERG BORON INJECTION","boroninj",18,
       "A one-shot tank of concentrated poison worth 4000 pcm. Shuts the reactor down when the rods will not, and cannot be undone.")+8;
     c[2]=toggleF(X[2],c[2],CW2,"AUTOMATIC ROD CONTROL","autorod",26,
-      "A controller that holds coolant temperature on program so the plant follows load by itself. Limited to 15% of rod travel; you can always override it.");
+      "A controller that holds coolant temperature on program so the plant follows load by itself. Limited to 15% of rod travel; you can always override it.")+10;
+    c[2]=optList(X[2],c[2],CW2,"ROD FOLLOWER",FOLL,"foll",
+      "What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.");
     txt("SHUTDOWN MARGIN "+d.sdm.toFixed(0)+" pcm",X[3],c[3]+10,
       {size:8,sp:1.2,color:d.sdm<200?C.red:C.green});
     seg(X[3],c[3]+16,CW2,9,clamp(d.sdm/2000,0,1),d.sdm<200?C.red:C.green,18);
     wrap(d.sdm<200?"Not enough. After a trip this core creeps back to power on its own."
                   :"Enough to hold the core down after a trip, cold and xenon-free.",
       X[3],c[3]+40,CW2,11,{size:8.5,color:C.ink2});
+    segSel(X[3],c[3]+80,CW2,"ROD BANKS",["2","3","4"],"nbank",
+      "How many independent banks the worth is split across. More banks shape the core more finely and cost mass; two banks move the whole core at once.",2);
   }
   else if(id==="pzr"){
     c[0]=sliderF(X[0],c[0],CW2,"DESIGN PRESSURE","pdes",.7,1.25,v=>(v*ARCH[D.arch].P0).toFixed(1)+" MPa",
