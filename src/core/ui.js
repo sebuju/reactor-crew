@@ -41,18 +41,21 @@ function button(x,y,w,h,label,o){
   fillRect(x,y,w,h, o.on?"#2a1f08":(o.danger?"#2a0f0b":(h_?C.panelHi:C.panel)));
   frame(x,y,w,h,col);
   if(o.on||o.danger) ticks(x+.5,y+.5,w-1,h-1,col,4);
-  txt(label,x+w/2,y+h/2+3.5,{size:o.size||9,sp:1.6,caps:1,align:"center",
+  txt(label,x+w/2,y+h/2+3.5,{size:o.size||9,sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
       color:o.danger?C.red:o.on?C.amber:(h_?C.bright:C.ink)});
   return wd;
 }
+/* o.th / o.tw shrink the thumb so the same slider fits inside a component;
+   left out, they give the bench sizes exactly as before */
 function slider(x,y,w,val,min,max,o){
-  o=o||{}; const wd=push({x,y:y-13,w,h:26,type:"sld",min,max,fn:o.fn});
+  o=o||{}; const th=o.th||22, tw_=o.tw||10;
+  const wd=push({x,y:y-th/2-2,w,h:th+4,type:"sld",min,max,fn:o.fn});
   fillRect(x,y-3,w,6,C.well); frame(x,y-3,w,6,C.edge);
-  for(let i=0;i<=8;i++) fillRect(x+i*(w/8), y+6, 1, 3, C.edge2);
+  if(o.ticks!==false) for(let i=0;i<=8;i++) fillRect(x+i*(w/8), y+6, 1, 3, C.edge2);
   const t=(val-min)/(max-min), tx=x+t*w;
   fillRect(x,y-3,t*w,6,"#1d3a41");
-  fillRect(tx-5,y-11,10,22,C.amber);
-  fillRect(tx-1,y-7,2,14,"#2a1f08");
+  fillRect(tx-tw_/2,y-th/2,tw_,th,C.amber);
+  fillRect(tx-1,y-th/2+4,2,th-8,"#2a1f08");
   return wd;
 }
 function local(e){ const r=cv.getBoundingClientRect();
@@ -66,9 +69,11 @@ cv.addEventListener("pointerdown",e=>{
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
     if(!inside(w,p)) continue;
-    if(w.type==="part"){ sel=w.part.id; ui.drag={type:"part",part:w.part,
-      ox:p.x-(GX+w.part.x*CELL), oy:p.y-(GY+w.part.y*CELL),
-      sx:w.part.x, sy:w.part.y}; }
+    if(w.type==="part"){ sel=w.part.id;
+      /* a commissioned plant is welded down - you may select a component, not move it */
+      if(screen==="design") ui.drag={type:"part",part:w.part,
+        ox:p.x-(GX+w.part.x*CELL), oy:p.y-(GY+w.part.y*CELL),
+        sx:w.part.x, sy:w.part.y}; }
     else if(w.type==="sld"){ ui.drag=w; w.fn(valFrom(w,p.x)); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
     else if(w.type==="scroll"){ ui.drag=w; w.last=p.y; }

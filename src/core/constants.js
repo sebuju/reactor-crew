@@ -5,7 +5,7 @@
    reactor-crew — design bench, plant mimic, gauges, annunciators, ledger,
    controls and reference, all rendered into one 2D canvas.
    ═══════════════════════════════════════════════════════════════════ */
-const W = 760;
+const W = 760;          // layout units across; the canvas scales this to the window
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 const scroller = document.getElementById("scroller");
 const MONO = `ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace`;
