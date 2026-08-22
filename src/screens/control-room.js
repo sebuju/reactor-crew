@@ -42,8 +42,17 @@ function ctrlInspector(y0){
     slider(X[2],Y0+28,W2,s.boron,-6000,0,{fn:v=>S.boron=Math.round(v/10)*10});
     txt(pad(s.boron.toFixed(0),5)+" pcm",X[2]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
     TIP(X[2],Y0,W2,54,"BORON","Neutron poison dissolved in the coolant. Slow, loop-wide coarse trim, and the only way out of a deep xenon pit.");
-    wrap("Everything the core does is decided by the reactivity ledger below and the coolant the pumps push through it.",
-      X[3],Y0+12,W2,11,{size:8.5,color:C.ink2});
+    rule("CORE FLUX",X[3],Y0+9,W2);
+    coreField(X[3],Y0+16,W2,116,coreView(s));
+    const fr=(i,k,v,col)=>{ const yy=Y0+146+i*16;
+      txt(k,X[3],yy,{size:8,sp:1.1,color:C.ink2});
+      txt(v,X[3]+W2,yy,{size:10,align:"right",color:col||C.cyan}); };
+    fr(0,"PEAK Fq",s.fq.toFixed(2),s.fq>3.2?C.amber:C.cyan);
+    fr(1,"HOT SPOT","R"+s.hotRing+" / EL"+s.hotLev);
+    fr(2,"AXIAL / RADIAL",(s.ao*100).toFixed(0)+" / "+(s.ro*100).toFixed(0)+" %",
+       Math.abs(s.ao)>.35||Math.abs(s.ro)>.35?C.amber:C.cyan);
+    TIP(X[3],Y0,W2,198,"CORE FLUX",
+      "The core seen along its axis, mirrored about the centreline. Dot size is local power, colour is how hard that spot is running, a hollow ring is steam, and the violet shadow is xenon eating the neutrons where it has built up. The vertical marks are the rod banks, with the follower drawn below each absorber.");
   }
   else if(id==="rods"){
     rule("CONTROL BANK",X[0],Y0+9,W2);
@@ -247,7 +256,7 @@ function drawAnnunciator(y0){
 }
 function drawLedger(y0){
   const s=S;
-  const LH=176;
+  const LH=194;
   well(12,y0,364,LH,"REACTIVITY LEDGER / TRAINING AID",C.amber);
   TIP(12,y0,364,18,"REACTIVITY LEDGER",
     "Reactivity is the reactor's tendency to speed up or slow down, measured in pcm. Bars pointing left are pushing the reactor down, right is pushing it up. When Net Rho sits at zero, power is steady. Real operators never get this view.");
@@ -257,6 +266,7 @@ function drawLedger(y0){
               ["XENON","xe","Xenon-135, a neutron poison that builds up after fission. It has memory: what you did minutes ago is still eating your reactivity now. Scram, and this bar grows until the reactor cannot restart."],
               ["BORON","bor","Whatever you dialled in on the boron bench. Slow to change, but it is your only lever when rods and temperature have run out."],
               ["VOID","vd","Steam bubbles in the core. In a water design this is strongly negative and shuts the reactor down as it uncovers. In a graphite or sodium design it is POSITIVE, and voiding adds power instead."],
+              ["ROD TIP","tip","Whatever hangs below the absorber. With a water follower this stays at zero all the way in. With a graphite one it goes POSITIVE as the bank drops, because graphite displaces water at the bottom of the core and the absorber has not reached there yet - the reactivity you add before the reactivity you remove."],
               ["NET RHO","net","The sum of everything above. Zero means steady power. Positive means power is climbing, negative means it is falling. If this exceeds your fuel's beta the reactor goes prompt critical and nothing can stop it in time."]];
   rows.forEach((r,i)=>{
     const y=y0+34+i*18, v=r[1]==="net"?s.rho:s.parts[r[1]];

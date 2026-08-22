@@ -15,5 +15,8 @@ const C = {
   edge:"#1d2f35", edge2:"#2c464e", rail:"#33525b",
   ink:"#9fb4b9", ink2:"#5d7378", bright:"#dff0f3",
   amber:"#f0a830", cyan:"#5fd2e2", red:"#ff5a45", green:"#57d38c",
-  blue:"#5aa9d6", metal:"#6d8f98"
+  blue:"#5aa9d6", metal:"#6d8f98",
+  /* xenon is drawn as shadow, because a poison eating neutrons is darkness;
+     violet already means "the thing that damps" here - the surge line is one */
+  xe:"#2a1f3a", graph:"#8a6a4a"
 };

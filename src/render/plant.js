@@ -21,12 +21,14 @@ function drawSym(p,x,y,w,h,ink,L){
       fillRect(bx,by+bh*.62,bw,bh*.38,"#ff5a45"); ctx.globalAlpha=1; }
     if(L&&L.dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+L.dmg/140,.2,.85));
     frame(bx,by,bw,bh,ink);
-    for(let i=0;i<4;i++) fillRect(bx+4+i*((bw-8)/4),by+2,3,bh-4,"rgba(185,205,210,.35)");
+    coreField(bx+2,by+2,bw-4,bh-4,coreView(L));
   } else if(id==="rods"){
     shell(()=>ctx.rect(X+8,Y+2,W-16,Hh-10));
-    const ins = L? 4+L.rodPos*9 : 6;
-    for(let i=0;i<5;i++) fillRect(X+12+i*((W-24)/5),Y+Hh-10,4,ins,
-      (L&&L.rodJam)?"#8a7a4a":"#b9cdd2");
+    const ins = L? 4+L.rodPos*9 : 6, fol = L&&P&&P.tipLen>0;
+    for(let i=0;i<5;i++){ const sx=X+12+i*((W-24)/5);
+      fillRect(sx,Y+Hh-10,4,ins,(L&&L.rodJam)?"#8a7a4a":"#b9cdd2");
+      if(fol) fillRect(sx,Y+Hh-10+ins,4,3,P.tipRho>0?C.graph:C.rail);  // the follower
+    }
   } else if(id==="pzr"){
     shell(()=>rr(X,Y+8,W,Hh-8,W/2.6));
     ctx.save(); ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.clip();
@@ -72,6 +74,46 @@ function drawSym(p,x,y,w,h,ink,L){
     fillRect(X+4,Y+6,W-8,3,ink); fillRect(X+4,Y+Hh-11,W-8,3,ink);
   } else {
     shell(()=>ctx.rect(X,Y+2,W,Hh-4)); hatch(X+1,Y+3,W-2,Hh-6,"#6d8f98",.5);
+  }
+}
+
+/* ══════════ THE CORE AS A FIELD ══════════
+   Drawn the way the core behaves rather than the way a schematic looks: a
+   lattice of points, mirrored about the centreline so it reads as a section.
+   Four quantities on four channels that do not compete for the same ink -
+     size    is local power
+     colour  is local margin, cyan through amber to red
+     hollow  is steam, because steam is an absence
+     shadow  is xenon, drawn as darkness because that is what a poison does
+   One function serves both screens: the bench passes no live state and gets
+   the shape this design is predicted to settle into. */
+function coreField(x,y,w,h,V){
+  const NC=XNR*2-1, cw=w/NC, ch=h/XNZ, rMax=Math.min(cw,ch)*0.44;
+  for(let c=0;c<NC;c++){
+    const i=Math.abs(c-(XNR-1));
+    for(let j=0;j<XNZ;j++){
+      const k=XIX(i,j), cx=x+(c+.5)*cw, cy=y+h-(j+.5)*ch;   // level 0 at the bottom
+      if(V.xX){ const a=clamp(V.xX[k]/Math.max(V.X0,1e-9)*.34,0,.6);
+        if(a>.02){ ctx.globalAlpha=a; fillRect(cx-cw/2,cy-ch/2,cw,ch,C.xe); ctx.globalAlpha=1; } }
+      const t=V.nTf? clamp((V.nTf[k]-V.TfRef)/620,0,1) : 0;
+      const col=t<.5? lerpC(C.cyan,C.amber,t*2) : lerpC(C.amber,C.red,(t-.5)*2);
+      let r=rMax*Math.sqrt(clamp(V.phi[k]/2.6,.03,1));
+      /* the one animation in here: a node in film boiling is not steady */
+      if(t>.85) r*=.72+.28*Math.abs(Math.sin(performance.now()/90));
+      ctx.beginPath(); ctx.arc(cx,cy,r,0,7);
+      if(V.nV && V.nV[k]>.12){ ctx.strokeStyle=col; ctx.lineWidth=Math.max(.7,r*.55); ctx.stroke(); }
+      else { ctx.fillStyle=col; ctx.fill(); }
+    }
+  }
+  for(let b=0;b<V.NB;b++){
+    const ins=V.rodZ? clamp(V.rodZ[b],0,1) : .35, tip=XNZ*(1-ins);
+    for(const sg of [-1,1]){
+      const cx=x+((XNR-1)+sg*V.bankR[b]+.5)*cw, yTip=y+h-tip*ch;
+      if(yTip>y) fillRect(cx-.9,y,1.8,yTip-y,C.metal);              // absorber
+      const yF=Math.min(y+h,yTip+V.tipLen*ch);
+      if(V.tipLen>0 && yF>yTip)                                     // follower
+        frame(cx-1.5,yTip,3,yF-yTip,V.tipRho>0?C.graph:C.rail);
+    }
   }
 }
 
