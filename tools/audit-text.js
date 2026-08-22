@@ -49,21 +49,25 @@ global.document={getElementById:()=>({getContext:()=>proxy,addEventListener(){},
 global.window=global; global.performance={now:()=>1000}; global.devicePixelRatio=1;
 global.requestAnimationFrame=()=>{}; global.addEventListener=()=>{};
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
- '; return {drawDesign,drawMimic,drawAnnunciator,drawTrend,drawLog,'+
- 'drawLedger,drawFaults,drawDamage,drawHelp,topbar,commission,step,sample,combatHit,'+
- 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S};')();
+ '; return {drawDesign,drawMimic,drawPanels,drawHelp,topbar,commission,step,sample,combatHit,'+
+ 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D};')();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
-M.setScreen('design'); cap('topbar',M.topbar); cap('design',M.drawDesign);
-M.commission(); M.setScreen('operate');
-for(let i=0;i<300;i++){ M.step(0.02); if(i%5===0) M.sample(); }
-M.combatHit(); M.combatHit();
-let PY=0;
-cap('plant',()=>{PY=M.drawMimic();});
-cap('annun',()=>M.drawAnnunciator(PY)); cap('damage',()=>M.drawDamage(PY+128));
-cap('trend',()=>M.drawTrend(PY+250));   cap('log',()=>M.drawLog(PY+438));
-cap('ledger',()=>M.drawLedger(PY+636)); cap('faults',()=>M.drawFaults(PY+800));
-M.setScreen('help'); cap('help',M.drawHelp);
+function warmUp(){
+  M.commission();
+  for(let i=0;i<300;i++){ M.step(0.02); if(i%5===0) M.sample(); }
+  M.combatHit(); M.combatHit();
+}
+warmUp();
+
+function sweep(tag){
+  M.setScreen('design'); cap(tag+'topbar',M.topbar); cap(tag+'design',M.drawDesign);
+  M.setScreen('operate'); cap(tag+'plant',()=>M.drawPanels(M.drawMimic()));
+  M.setScreen('help'); cap(tag+'help',M.drawHelp);
+}
+sweep('');
+/* optional kit changes what the bench and the panel draw, so audit those paths too */
+M.D().rps=false; warmUp(); sweep('norps:'); M.D().rps=true;
 
 console.log('=== TEXT OUTSIDE THE 12..748 CONTENT MARGINS ===');
 let n=0;
