@@ -155,34 +155,35 @@ const CTL_H=13;
 function ctlFor(p){
   if(p.id.startsWith("pump")) return [
     {kind:"sld",flex:1,val:()=>S.flow*100,min:()=>P.flowMin*100,max:()=>100,
-     fmt:v=>v.toFixed(0)+" %",set:v=>{S.flow=v/100;},
-     tip:"COOLANT PUMPS - primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core."}];
+     dem:()=>S.flowDem*100,
+     fmt:v=>v.toFixed(0)+" %",set:v=>{S.flowDem=v/100;},
+     tip:"COOLANT PUMPS - primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes."}];
   switch(p.id){
     case "rods": return [
-      {kind:"sld",flex:4,val:()=>S.rodPos*100,min:()=>0,max:()=>100,
+      {kind:"sld",flex:4,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{S.rodDem=v/100;},
        tip:"CONTROL BANK - rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."},
       {kind:"btn",flex:3,danger:()=>true,text:()=>"SCRAM",
-       fn:()=>{S.scrammed=true;S.rodDem=1;S.rodJam=false;
-               S.load=Math.min(S.load,.05);S.trip="MANUAL SCRAM";},
+       fn:()=>{ manualScram(); },
        tip:"SCRAM - drops the full bank and trips the turbine with it. Always safe, never free: the xenon that follows locks you out for minutes."},
       {kind:"btn",flex:3,on:()=>S.scrammed,text:()=>"RESET",
        fn:()=>{ resetTrip(); },
        tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}];
     case "core": return [
       {kind:"sld",flex:P.boroninj?3:1,val:()=>S.boron,min:()=>-6000,max:()=>0,step:10,
-       fmt:v=>v.toFixed(0)+" pcm",set:v=>{S.boron=v;},
-       tip:"BORON - neutron poison dissolved in the coolant. Slow, loop-wide coarse trim, and the only way out of a deep xenon pit."}].concat(
+       dem:()=>S.boronDem,
+       fmt:v=>v.toFixed(0)+" pcm",set:v=>{S.boronDem=v;},
+       tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}].concat(
       P.boroninj?[{kind:"btn",flex:2,danger:()=>!S.borInjUsed,
        text:()=>S.borInjUsed?"SPENT":"BORON DUMP",
-       fn:()=>{ if(!S.borInjUsed){ S.borInjUsed=true; S.boron-=4000;
+       fn:()=>{ if(!S.borInjUsed){ S.borInjUsed=true; S.boron-=4000; S.boronDem-=4000;
          logE("alarm","EMERGENCY BORON INJECTED",
            "4000 pcm dumped into the loop. Shut down hard, and it cannot be undone this run."); } },
        tip:"EMERGENCY BORON - one-shot poison dump worth 4000 pcm. Shuts the reactor down when the rods will not, and it cannot be undone."}]:[]);
     case "turb": return [
-      {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>125,
-       fmt:v=>v.toFixed(0)+" %",set:v=>{S.load=v/100;},
-       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod."}];
+      {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>125,dem:()=>S.loadDem*100,
+       fmt:v=>v.toFixed(0)+" %",set:v=>{S.loadDem=v/100;},
+       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}];
     case "pzr": return [
       {kind:"btn",flex:1,on:()=>S.porvBlocked,text:()=>S.porvBlocked?"SHUT":"OPEN",
        fn:()=>{S.porvBlocked=!S.porvBlocked;},
@@ -191,14 +192,33 @@ function ctlFor(p){
       {kind:"btn",flex:1,on:()=>S.hpi,text:()=>S.hpi?"INJECT":"OFF",
        fn:()=>{S.hpi=!S.hpi;},
        tip:"HIGH PRESSURE INJECTION - emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs."}];
-    case "ctrl": return [
-      {kind:"btn",flex:1,on:()=>P.rps&&S.rpsBypass,
-       text:()=>P.rps?(S.rpsBypass?"RPS BYPASS":"RPS ARMED"):"NO RPS",
-       fn:()=>{ if(P.rps) S.rpsBypass=!S.rpsBypass; },
-       tip:P.rps?"REACTOR PROTECTION SYSTEM. Armed, it scrams automatically on eight conditions. Bypass it to run past rated power - and to melt the core."
-               :"NO REACTOR PROTECTION SYSTEM. None was fitted at the design bench, so there is nothing to arm and nothing to bypass. Every trip is a manual scram."}];
   }
   return null;
+}
+
+/* ══════════ BYPASS SWITCHES (control room only) ══════════
+   Defeating a system is not an operating control, so it does not share the
+   control strip: it gets its own thinner strip along the very bottom of the
+   component that carries the system. AUTOSYS says which component that is, so
+   there is exactly one switch per system and no component carries two. */
+const BYP_H=11;
+function bypRow(k,x,y,w,h){
+  const A=AUTOSYS[k], fit=autoFit(k), lit=fit&&S.byp[k];
+  const wd=push({x,y,w,h,type:"btn",fn:()=>{ if(fit) autoToggle(k); }});
+  const hv=fit&&hov(wd);
+  fillRect(x,y,w,h, lit?"#2a1f08":(hv?C.panelHi:C.panel));
+  frame(x,y,w,h, lit?C.amber:C.edge);
+  const col = !fit?"#3c4c47" : lit?C.amber : C.green;
+  const st  = !fit?"none" : lit?"BYP" : "AUTO";
+  const o={size:6.5,sp:.3};
+  /* a narrow component loses the label before it loses the state: the component
+     name is printed directly above it anyway */
+  if(w >= tw(A.label,o)+tw(st,o)+10){
+    txt(A.label,x+3,y+h-3.5,{size:6.5,sp:.3,color:fit?C.ink2:"#3c4c47"});
+    txt(st,x+w-3,y+h-3.5,{size:6.5,sp:.3,align:"right",color:col});
+  } else txt(st,x+w/2,y+h-3.5,{size:6.5,sp:.3,align:"center",color:col});
+  TIP(x,y,w,h,A.name+"  [ "+autoState(k)+" ]",
+    A.tip+(fit?"":"  None was fitted at the design bench, so there is nothing to arm and nothing to bypass."));
 }
 
 /* the control strip along the bottom of one component */
@@ -212,7 +232,8 @@ function ctlStrip(list,x,y,w,h){
     if(c.kind==="sld"){
       const cy=y+h/2, lab=c.fmt(c.val());
       slider(cx,cy,cw,c.val(),c.min(),c.max(),
-        {th:h,tw:7,ticks:false,fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
+        {th:h,tw:7,ticks:false,dem:c.dem?c.dem():null,
+         fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
       if(cw>=64) tag(lab,cx+cw-tw(lab,{size:6.5})/2-3,cy+3,6.5,0,C.cyan);
     } else {
       /* a narrow box loses its letter spacing before it loses its label */
@@ -261,8 +282,11 @@ function drawPlant(y0,L){
 
   for(const p of LAY.parts){
     const x=PXc(p.x), y=PYc(p.y), w=p.w*CELL, h=p.h*CELL;
-    const ctl = L && (fitted(p)||p.id==="hpi") ? ctlFor(p) : null,
-          sh = ctl? CTL_H : 0, sy = y+h-sh;
+    const live = L && (fitted(p)||p.id==="hpi");
+    const ctl = live ? ctlFor(p) : null,
+          byk = live ? autoOn(p.id) : null,
+          bh  = byk? BYP_H : 0,
+          sh  = (ctl? CTL_H : 0) + bh, sy = y+h-sh;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p, fit=fitted(p);
     const dmgd = L && L.dmgParts.includes(p.id);
@@ -279,7 +303,8 @@ function drawPlant(y0,L){
     tag(nm,x+w/2,sy-(v?14:4),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
     if(v) tag(v,x+w/2,sy-3,8,0,dmgd?C.red:C.cyan);
     if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
-    if(ctl) ctlStrip(ctl,x+4,sy+1,w-8,sh-3);
+    if(ctl) ctlStrip(ctl,x+4,sy+1,w-8,CTL_H-3);
+    if(byk) bypRow(byk,x+4,y+h-bh+1,w-8,bh-3);
     TIP(x,y,w,h,p.name+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
       p.tip+(p.access||p.grp==="shield"?"":"  It is boxed in on every side - nobody could reach it to repair it."));

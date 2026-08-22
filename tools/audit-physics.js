@@ -55,23 +55,23 @@ console.log('\n=== DOCUMENTED BEHAVIOUR ===');
   console.log(`  PWR at rest: n=${(s.n*100).toFixed(1)}% Tf=${s.Tf.toFixed(0)}K DNBR=${s.dnbr.toFixed(2)}`);
 }
 { const s=set({}); run(s,10);
-  s.scrammed=true; s.rodDem=1; s.load=0.05; run(s,120);
+  s.scrammed=true; s.rodDem=1; s.load=s.loadDem=0.05; run(s,120);
   if(s.n>0.02) bad(`after scram + 120 s power is ${(s.n*100).toFixed(2)}%, expected <2%`);
   console.log(`  scram + 120 s: n=${(s.n*100).toFixed(3)}%`);
 }
 { const s=set({}); run(s,10);
-  s.rpsBypass=true; s.boron=0; run(s,120);
+  s.byp.rps=true; s.boron=0; s.boronDem=0; run(s,120);   // demand too, or the walk drags it back
   if(!s.melt && !s.breach) bad('boron dump + RPS bypass destroyed nothing');
   if(s.t>60)               bad(`boron dump + RPS bypass took ${s.t.toFixed(0)} s, expected well under 60`);
   console.log(`  boron dump + bypass: melt=${s.melt} breach=${s.breach} at t=${s.t.toFixed(0)}s`);
 }
 { const s=set({arch:2}); run(s,10);
-  s.rpsBypass=true; s.flow=0.05; run(s,400);   // power collapses, xenon burns out, then it runs away
+  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05; run(s,400);   // power collapses, xenon burns out, then it runs away
   if(!s.melt) bad('RBMK low flow + bypass did not melt the core');
   console.log(`  RBMK low flow + bypass: melt=${s.melt} dmg=${s.dmg.toFixed(0)}`);
 }
 { const s=set({arch:5}); run(s,10);
-  s.rpsBypass=true; s.flow=0.05; run(s,300);
+  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05; run(s,300);
   if(s.melt) bad('HTGR melted on low flow + bypass; it is meant to survive');
   console.log(`  HTGR low flow + bypass: melt=${s.melt} dmg=${s.dmg.toFixed(0)}`);
 }
@@ -104,7 +104,7 @@ console.log('\n=== PROTECTION SYSTEM IS A DESIGN CHOICE ===');
 console.log('\n=== NO FREE COOLING, NO FREE TRIP RESET ===');
 { const s=set({rps:false, bkp:0, chim:0}); run(s,10);
   M.D().autorod=false; M.P().autorod=false;
-  s.flow=0; s.blackout=true; s.bkpLost=true;                    // nothing turning, nothing to turn it
+  s.flow=0; s.flowDem=0; s.blackout=true; s.bkpLost=true;                    // nothing turning, nothing to turn it
   const feff=[];
   for(let i=0;i<600*50;i++){ M.step(0.02); if(i%2500===0) feff.push(s.n); }
   if(s.dmg===0 && s.n>0.30) bad(`total loss of flow settled at ${(s.n*100).toFixed(0)}% with no damage`);
@@ -128,6 +128,59 @@ console.log('\n=== NO FREE COOLING, NO FREE TRIP RESET ===');
   const ok=M.resetTrip();
   if(ok || !s.scrammed) bad('resetTrip() accepted while a trip condition was still live');
   console.log(`  resetTrip() with LOW PRESSURE still live: accepted=${ok} (must be false)`);
+}
+
+/* Every automatic system can be switched off at the panel. Each check below
+   proves the switch reaches the physics: the same abuse must land differently
+   with the system armed and with it bypassed. */
+console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
+{ const s=set({});
+  const keys=Object.keys(s.byp);
+  const want=['rps','rod','porv','runback','efw','bkp'];
+  for(const k of want) if(!keys.includes(k)) bad(`no bypass switch for ${k}`);
+  console.log(`  switches: ${keys.join(' ')}`);
+}
+{ /* auto rod control walks the bank back to its own band; bypassed, the bank
+     stays exactly where the operator put it */
+  const a=set({autorod:true}); run(a,10); a.rodDem=0.90; run(a,60);
+  const b=set({autorod:true}); run(b,10); b.byp.rod=true; b.rodDem=0.90; run(b,60);
+  if(a.rodPos>0.60) bad(`auto rod control armed let the bank reach ${(a.rodPos*100).toFixed(0)}%, expected it held back`);
+  if(b.rodPos<0.85) bad(`auto rod control bypassed only reached ${(b.rodPos*100).toFixed(0)}%, expected ~90%`);
+  console.log(`  AUTO ROD: armed holds bank at ${(a.rodPos*100).toFixed(0)}%, bypassed obeys ${(b.rodPos*100).toFixed(0)}%`);
+}
+{ /* the relief valve is what stops a pressure transient reaching the vessel.
+     Hand the loop an overpressure it must answer, then ask whether it lifted. */
+  const a=set({}); run(a,10); a.P=M.P().P0*1.08; run(a,1);
+  const b=set({}); run(b,10); b.byp.porv=true; b.P=M.P().P0*1.08; run(b,1);
+  if(!a.porvOpen) bad('armed PORV did not lift at 108% of nominal pressure');
+  if(b.porvOpen)  bad('PORV lifted automatically while its bypass was in');
+  if(b.P <= a.P)  bad(`PORV bypass did not hold pressure up (armed ${a.P.toFixed(2)}, bypassed ${b.P.toFixed(2)} MPa)`);
+  console.log(`  PORV AUTO: armed lifted=${a.porvOpen} at ${a.P.toFixed(2)} MPa, bypassed lifted=${b.porvOpen} at ${b.P.toFixed(2)} MPa`);
+}
+{ /* runback sheds the turbine on a trip; bypassed, the turbine drains a dead core */
+  const a=set({}); run(a,10); a.scrammed=true; a.rodDem=1; a.load=a.loadDem=Math.min(a.load,0.05); run(a,60);
+  const b=set({}); run(b,10); b.byp.runback=true; b.scrammed=true; b.rodDem=1; run(b,60);
+  if(b.load<0.5) bad(`runback bypassed still shed load to ${(b.load*100).toFixed(0)}%`);
+  if(b.Tavg>=a.Tavg) bad(`runback bypassed did not overcool (armed ${a.Tavg.toFixed(0)} K, bypassed ${b.Tavg.toFixed(0)} K)`);
+  console.log(`  RUNBACK: armed load ${(a.load*100).toFixed(0)}% Tavg ${a.Tavg.toFixed(0)}K, bypassed load ${(b.load*100).toFixed(0)}% Tavg ${b.Tavg.toFixed(0)}K`);
+}
+{ /* emergency feedwater is the decay heat sink after a trip */
+  const a=set({efw:true}); run(a,10); a.scrammed=true; a.rodDem=1; a.load=a.loadDem=0.05; run(a,120);
+  const b=set({efw:true}); run(b,10); b.byp.efw=true; b.scrammed=true; b.rodDem=1; b.load=b.loadDem=0.05; run(b,120);
+  if(b.Tavg<=a.Tavg) bad(`emergency feedwater bypass did not run hotter (armed ${a.Tavg.toFixed(1)} K, bypassed ${b.Tavg.toFixed(1)} K)`);
+  console.log(`  EMERG FEED: armed Tavg ${a.Tavg.toFixed(1)}K, bypassed Tavg ${b.Tavg.toFixed(1)}K after a trip`);
+}
+{ /* backup power is the only thing turning the pumps in a blackout. Bypassed,
+     flow collapses to natural circulation and the protection system says so -
+     the bypassed core ends up COLDER because the RPS shut it down. */
+  const a=set({bkp:2}); run(a,10); a.blackout=true; run(a,60);
+  const b=set({bkp:2}); run(b,10); b.byp.bkp=true; b.blackout=true; run(b,60);
+  if(a.scrammed) bad(`backup power armed still tripped in a blackout: ${a.trip}`);
+  if(!b.scrammed) bad('backup power bypassed did not starve the loop; the plant rode the blackout out');
+  /* the trip lands on LOW DNBR, not LOW FLOW: the pump slider is still at 100%,
+     it is the supply behind it that is gone, and the fuel feels that first */
+  if(!/LOW DNBR|LOW FLOW/.test(b.trip)) bad(`backup power bypassed tripped on "${b.trip}", expected a flow-starvation trip`);
+  console.log(`  BACKUP: armed rides it out (Tf ${a.Tf.toFixed(0)}K), bypassed trips on "${b.trip}"`);
 }
 
 console.log(fails? `\n${fails} FAILURE(S)` : '\nall physics checks passed');

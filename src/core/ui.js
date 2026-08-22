@@ -54,6 +54,10 @@ function slider(x,y,w,val,min,max,o){
   if(o.ticks!==false) for(let i=0;i<=8;i++) fillRect(x+i*(w/8), y+6, 1, 3, C.edge2);
   const t=(val-min)/(max-min), tx=x+t*w;
   fillRect(x,y-3,t*w,6,"#1d3a41");
+  /* demand marker: with a rate limit the thumb shows where the plant IS, not
+     where you dragged to. The 1px line is where you asked for. */
+  if(o.dem!=null){ const dt_=clamp((o.dem-min)/(max-min),0,1);
+    fillRect(x+dt_*w-0.5,y-th/2,1,th,C.amber); }
   fillRect(tx-tw_/2,y-th/2,tw_,th,C.amber);
   fillRect(tx-1,y-th/2+4,2,th-8,"#2a1f08");
   return wd;

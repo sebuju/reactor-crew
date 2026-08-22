@@ -35,11 +35,64 @@ function commission(){
   resetPlant();
   screen="operate"; layout();
 }
-/* Whether the protection system is watching is asked in the sim and in three
-   places on screen, so it is answered once here. Not fitted is a design-bench
-   decision and cannot be undone at the panel; bypassed is the operator's. */
-const rpsLive  = ()=> !!(P.rps && !S.rpsBypass);
-const rpsState = ()=> !P.rps ? "NOT FITTED" : S.rpsBypass ? "BYPASSED" : "ARMED";
+/* ══════════ THE AUTOMATIC SYSTEMS ══════════
+   Every system that acts on the plant without being asked, in one table.
+   Fitted is a design-bench decision and cannot be undone at the panel;
+   bypassed is the operator's, and the operator is allowed to be wrong - all of
+   these can be switched off from the panel, including the ones that only ever
+   help you. Each system is mounted on exactly one component, and that is where
+   its bypass switch is drawn. */
+const AUTOSYS={
+  rps:{part:"ctrl",label:"RPS",ann:"RPS BYPASS",name:"PROTECTION SYSTEM",
+    fit:()=>P.rps,
+    tip:"Reactor Protection System. Armed, it scrams the core on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core.",
+    warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
+  rod:{part:"rods",label:"AUTO ROD",ann:"ROD AUTO BYP",name:"AUTOMATIC ROD CONTROL",
+    fit:()=>P.autorod,
+    tip:"Walks the bank to hold average coolant temperature on programme, and it holds the bank near where it started - so it overrides the slider you just moved. Bypass it and the rods go exactly where you put them, and stay there.",
+    warn:"The bank now goes where you put it and nothing walks it back. Coolant temperature is yours to hold."},
+  porv:{part:"pzr",label:"PORV AUTO",ann:"PORV AUTO BYP",name:"AUTOMATIC RELIEF",
+    fit:()=>true,
+    tip:"Lifts the relief valve at 106% pressure, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
+    warn:"The relief valve will not lift. An overpressure now ends at the vessel, not at the valve."},
+  runback:{part:"turb",label:"RUNBACK",ann:"RUNBACK BYP",name:"TURBINE RUNBACK",
+    fit:()=>true,
+    tip:"Drops turbine load to 5% the instant the reactor trips, so the turbine cannot draw heat out of a shut-down core. Bypass it and load stays wherever you left it right through a scram.",
+    warn:"A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop."},
+  efw:{part:"feed",label:"EMERG FEED",ann:"EMERG FEED BYP",name:"EMERGENCY FEEDWATER",
+    fit:()=>P.efw,
+    tip:"Feeds the steam generator by itself after a trip, so decay heat still has somewhere to go. Bypass it and it will not start.",
+    warn:"Nothing feeds the steam generator after a trip. Decay heat has no sink but the loop itself."},
+  bkp:{part:"bkp",label:"BACKUP",ann:"BACKUP PWR BYP",name:"BACKUP POWER",
+    fit:()=>P.backup>0,
+    tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
+    warn:"The backup supply will not pick up the pumps. A blackout now leaves natural circulation only."},
+};
+const AUTOKEYS = Object.keys(AUTOSYS);
+const autoFit   = k => !!AUTOSYS[k].fit();
+const autoLive  = k => autoFit(k) && !S.byp[k];
+const autoState = k => !autoFit(k) ? "NOT FITTED" : S.byp[k] ? "BYPASSED" : "ARMED";
+/* which system, if any, is mounted on this component - the renderer asks this */
+const autoOn    = id => AUTOKEYS.find(k=>AUTOSYS[k].part===id) || null;
+function autoToggle(k){
+  if(!autoFit(k)) return false;
+  S.byp[k]=!S.byp[k];
+  return true;
+}
+const rpsLive  = ()=> autoLive("rps");
+const rpsState = ()=> autoState("rps");
+
+/* A stop valve slams shut in well under a second, so a runback is the one
+   place load moves without waiting for the governor: it writes both the
+   actual and the demand, or the lag would wind the turbine straight back up. */
+function runback(s){ if(autoLive("runback")) s.load=s.loadDem=Math.min(s.load,0.05); }
+/* A scram is the same act from the diagram and from the inspector, and the
+   turbine runback that rides along with it is defeatable, so it lives here. */
+function manualScram(){
+  const s=S;
+  s.scrammed=true; s.rodDem=1; s.rodJam=false; s.trip="MANUAL SCRAM";
+  runback(s);
+}
 /* The eight conditions the protection system watches, in one place. The RPS
    asks this when it decides to trip; the trip reset asks the same list before
    it will agree to clear, so you cannot reset out of a hazard that is still on. */
@@ -76,6 +129,13 @@ function resetTrip(){
 }
 
 const AUTOROD_LEAD=12;                  // seconds of lead in the T-avg rod controller
+/* actuator rates. Boration is charging-pump flow; dilution has to displace loop
+   inventory, so it is slower. Poisoning yourself is easy, getting back out is not. */
+const BOR_IN=60, BOR_OUT=35;            // pcm/s toward more / less boron
+/* pump rotational inertia, and the longer coastdown once the power is gone */
+const FLOW_TAU=5, FLOW_TAU_COAST=12;    // seconds
+/* governor valve stroke plus steam-plant response */
+const LOAD_TAU=2;                       // seconds
 const rodWorth=x=>-P.rodW*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
 const tsat=p=>P.tsat0*Math.pow(Math.max(p,.05)/P.P0,.10);
 
@@ -83,19 +143,21 @@ function resetPlant(){
   const x0=.35;
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
-     load:1,flow:1,P:P.P0,lvl:54,sgl:50,inv:100,hpi:false,
+     load:1,loadDem:1,flow:1,flowDem:1,P:P.P0,lvl:54,sgl:50,inv:100,hpi:false,
      porvOpen:false,porvBlocked:false,porvAuto:false,porvStuck:false,
      dmg:0,fatigue:0,dnbr:P.dnbr0,rho:0,decay:.065,voidTh:0,cav:0,vf:0,
-     rpsBypass:false,breach:false,melt:false,trip:"",
+     byp:Object.fromEntries(AUTOKEYS.map(k=>[k,false])),
+     breach:false,melt:false,trip:"",
      ev:{}, blackout:false, nat:0, release:0, rodAuto:x0, borInjUsed:false,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false,
-     boron:0,boron0:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
+     boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
      dash:{hot:0,cold:0,stm:0,fw:0,rel:0,hpi:0},spin:0,jit:0,dTavg:0,heat:1,sc:35,t:0};
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
   coreReset(S);
   S.boron = S.boron0 = -(P.excess+coreRodWorth(S)-P.KXE*P.X0);
+  S.boronDem = S.boron;                 // start on demand, or it walks off commissioning
   lastN=P.n0; LOG=[]; initHist();
   logE("info","PLANT AT POWER",
     P.name+" commissioned at "+P.rated+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
@@ -104,7 +166,7 @@ function step(dt){
   const s=S; s.t+=dt;
 
   /* ── control rods ── */
-  if(P.autorod && !s.scrammed && !s.rodJam){         // holds T-avg on program
+  if(autoLive("rod") && !s.scrammed && !s.rodJam){   // holds T-avg on program
     /* T-avg error alone is two integrations away from rod position, so on a
        weakly self-limiting core (small moderator coefficient) the bank hunts
        and the swing grows until the RPS trips it. The rate term is the lead
@@ -116,6 +178,16 @@ function step(dt){
   if(!s.rodJam){ const r=s.scrammed?P.scram:0.012, d=s.rodDem-s.rodPos;
     s.rodPos+=Math.sign(d)*Math.min(Math.abs(d),r*dt); }
 
+  /* ── boron: an actuator, not a setting ──
+     The slider writes demand; the loop gets there at the rate a charging pump
+     can push. Same pattern as the bank above, and the reason its tooltip can
+     finally say "slow" without lying. */
+  { const db=s.boronDem-s.boron, rb=(db<0?BOR_IN:BOR_OUT)*dt;
+    s.boron+=Math.sign(db)*Math.min(Math.abs(db),rb); }
+
+  /* ── turbine load: the governor valves take a moment to stroke ── */
+  s.load += (s.loadDem-s.load)*Math.min(dt/LOAD_TAU,1);
+
   /* ── decay heat: the core keeps making heat long after it shuts down ── */
   s.decay += (s.n*0.065 - s.decay)*dt/22;
   const heat = s.n*0.935 + s.decay;
@@ -125,15 +197,26 @@ function step(dt){
   s.cav = clamp((Tc0-(sat0-6))/12,0,1);
   const lost = s.dmgParts.filter(k=>k.startsWith("pump")).length;
   const pumpK = Math.max(0,(P.loops-lost)/P.loops);
-  const driven = (s.blackout ? (s.bkpLost?0:P.backup*0.55) : s.flow) * P.flowK * pumpK;
+  const bkpUp = !s.bkpLost && autoLive("bkp");
+  /* ── coolant flow: pumps have inertia ──
+     Losing power does not stop a pump dead, it coasts. Blackout is the same lag
+     with a longer time constant, so the grace time the brief promises is real. */
+  { const tgt = s.blackout ? (bkpUp?P.backup*0.55:0) : s.flowDem,
+          tau = s.blackout ? FLOW_TAU_COAST : FLOW_TAU;
+    s.flow += (tgt-s.flow)*Math.min(dt/tau,1); }
+  const driven = s.flow * P.flowK * pumpK;
   const nat = P.natCirc*clamp((s.Tavg-(P.Tref-38))/70,0,1);      // buoyancy-driven flow
   s.nat = nat;
   const feff = Math.max(driven*(1-0.8*s.cav), nat);    // no flow means no removal, floor included
 
   /* ── heat balance ── */
-  const Tprog = P.Tref-18 + (s.scrammed ? 0 : 18*s.load);
+  /* With the runback bypassed the turbine keeps its load through a trip, so the
+     temperature programme has to keep following that load: the loop is still
+     being drained of heat by a machine that should have shed it. */
+  const shed = s.scrammed && autoLive("runback");
+  const Tprog = P.Tref-18 + (shed ? 0 : 18*s.load);
   const feedOK = !s.dmgParts.includes("feed");
-  const dump = s.scrammed ? clamp((s.Tavg-Tprog)*0.02,0,P.bypass)*(feedOK?1:.25)+(P.efw?0.08:0) : 0;
+  const dump = s.scrammed ? clamp((s.Tavg-Tprog)*0.02,0,P.bypass)*(feedOK?1:.25)+(autoLive("efw")?0.08:0) : 0;
   const vNow = clamp(s.vf,0,1.5);
   const removal = (s.load+dump)*feff*(1-0.85*Math.min(vNow,1));
   s.dTavg = (heat-removal)*1.8/P.graceK;               // K/s, for the rod controller's lead term
@@ -142,7 +225,7 @@ function step(dt){
   /* ── pressure: hot loop pressurises, relief valve lifts, vessel can burst ── */
   const Pdem = P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (s.hpi?0.5*P.pRise:0);
   s.P += (Pdem-s.P)*(0.30/P.pzrK)*dt;
-  if(!s.porvOpen && s.P > P.P0*1.06){                 // automatic lift
+  if(!s.porvOpen && autoLive("porv") && s.P > P.P0*1.06){   // automatic lift
     s.porvOpen=true; s.porvAuto=true; s.porvStuck = Math.random()<0.18;
   }
   if(s.porvOpen && s.porvAuto && !s.porvStuck && s.P < P.P0*1.01){
@@ -211,8 +294,8 @@ function step(dt){
   /* ── reactor protection system: trips unless it was never fitted, or is defeated ── */
   if(!s.scrammed && rpsLive()){
     const why=tripCause();
-    if(why){ s.scrammed=true; s.rodDem=1; s.load=Math.min(s.load,0.05);
-             s.trip="RPS TRIP / "+why; }
+    if(why){ s.scrammed=true; s.rodDem=1; s.trip="RPS TRIP / "+why;
+             runback(s); }
   }
 
   /* ── event log: every transition, with why ── */
@@ -239,8 +322,8 @@ function step(dt){
     "Xenon-135 past 3200 pcm. Raising power may be physically impossible until it decays, whatever you do with the rods.");
   ev("jam",s.rodJam,"alarm","CONTROL RODS NOT RESPONDING",
     "The bank is ignoring demand, a scram included. You are left with boron, flow and load.");
-  ev("byp",P.rps&&s.rpsBypass,"warn","PROTECTION SYSTEM BYPASSED",
-    "Automatic trips are defeated. Nothing will shut this reactor down for you.");
+  for(const k of AUTOKEYS)
+    ev("byp_"+k, autoFit(k)&&s.byp[k], "warn", AUTOSYS[k].name+" BYPASSED", AUTOSYS[k].warn);
   ev("norps",!P.rps,"warn","NO PROTECTION SYSTEM FITTED",
     "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call.",true);
   ev("hpi",s.hpi,"info","HPI INJECTING",
@@ -309,8 +392,6 @@ const ANN=[
   "Primary pressure above 105% of normal. The relief valve will lift shortly. Sustained overpressure past about 122% bursts the vessel outright, and every point of vessel fatigue lowers that threshold."],
  ["PUMP CAVITATION","amber",s=>s.cav>0.15,
   "The water arriving at the coolant pumps is close to boiling, so the pumps are churning vapour instead of liquid. Actual flow is far below what the bench says. Raise pressure or cool the loop."],
- ["RPS BYPASS","amber",s=>P.rps&&s.rpsBypass,
-  "The automatic protection system is defeated. Nothing will scram the reactor for you. This is how you get more than rated power out of the plant, and how you destroy it."],
  ["NO RPS","amber",()=>!P.rps,
   "No protection system was fitted at the design bench. Nothing is watching flux, DNBR, pressure, fuel temperature, flow or void on your behalf. You are the protection system."],
  ["VESSEL BREACH","red",s=>s.breach,
@@ -319,4 +400,6 @@ const ANN=[
   "Main power to the coolant pumps is lost. Flow is now limited to your backup power supply plus whatever natural circulation the core geometry generates."],
  ["CORE MELT","red",s=>s.melt,
   "More than 60% of the fuel has failed and the core is melting. Unrecoverable. Reset the plant."],
-];
+/* one tile per defeated automatic system, built from the same table the sim uses */
+].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",s=>autoFit(k)&&s.byp[k],
+  AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn]));

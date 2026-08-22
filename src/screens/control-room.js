@@ -39,9 +39,9 @@ function ctrlInspector(y0){
     row(X[1],2,"FUEL DAMAGE",s.dmg.toFixed(1)+" %",s.dmg>0?C.red:C.cyan);
     row(X[1],3,"VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
     rule("BORON CONCENTRATION",X[2],Y0+9,W2);
-    slider(X[2],Y0+28,W2,s.boron,-6000,0,{fn:v=>S.boron=Math.round(v/10)*10});
+    slider(X[2],Y0+28,W2,s.boron,-6000,0,{dem:s.boronDem,fn:v=>S.boronDem=Math.round(v/10)*10});
     txt(pad(s.boron.toFixed(0),5)+" pcm",X[2]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
-    TIP(X[2],Y0,W2,54,"BORON","Neutron poison dissolved in the coolant. Slow, loop-wide coarse trim, and the only way out of a deep xenon pit.");
+    TIP(X[2],Y0,W2,54,"BORON","Neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s. The thin line on the track is what you asked for, the thumb is what the loop has. The only way out of a deep xenon pit.");
     rule("CORE FLUX",X[3],Y0+9,W2);
     coreField(X[3],Y0+16,W2,116,coreView(s));
     const fr=(i,k,v,col)=>{ const yy=Y0+146+i*16;
@@ -56,11 +56,11 @@ function ctrlInspector(y0){
   }
   else if(id==="rods"){
     rule("CONTROL BANK",X[0],Y0+9,W2);
-    slider(X[0],Y0+28,W2,s.rodPos*100,0,100,{fn:v=>{S.rodDem=v/100;}});
+    slider(X[0],Y0+28,W2,s.rodPos*100,0,100,{dem:s.rodDem*100,fn:v=>{S.rodDem=v/100;}});
     txt(pad((s.rodPos*100).toFixed(0),3)+" % INSERTED",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
     TIP(X[0],Y0,W2,54,"CONTROL BANK","Rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking which eats thermal margin.");
     const sw=push({x:X[1],y:Y0+6,w:W2,h:40,type:"btn",
-      fn:()=>{S.scrammed=true;S.rodDem=1;S.rodJam=false;S.load=Math.min(S.load,.05);S.trip="MANUAL SCRAM";}});
+      fn:()=>{ manualScram(); }});
     fillRect(X[1],Y0+6,W2,40,hov(sw)?"#5a1109":"#3a0d08"); frame(X[1],Y0+6,W2,40,C.red);
     ticks(X[1]+.5,Y0+6.5,W2-1,39,C.red,6);
     txt("SCRAM",X[1]+W2/2,Y0+26,{size:12,weight:700,sp:3,align:"center",color:C.red});
@@ -73,8 +73,8 @@ function ctrlInspector(y0){
     txt("TRIP RESET",X[1]+W2/2,Y0+64,{size:8,sp:1.2,align:"center",
         color:S.scrammed?C.amber:C.ink2});
     TIP(X[1],Y0+50,W2,20,"TRIP RESET","Clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present, and says which one.");
-    const lit=!P.rps||S.rpsBypass, st=rpsState();
-    const rw=push({x:X[2],y:Y0+6,w:W2,h:26,type:"btn",fn:()=>{ if(P.rps) S.rpsBypass=!S.rpsBypass; }});
+    const lit=!P.rps||S.byp.rps, st=rpsState();
+    const rw=push({x:X[2],y:Y0+6,w:W2,h:26,type:"btn",fn:()=>{ autoToggle("rps"); }});
     fillRect(X[2],Y0+6,W2,26,lit?"#2a1f08":(hov(rw)&&P.rps?C.panelHi:C.panel));
     frame(X[2],Y0+6,W2,26,lit?C.amber:C.edge); accent(X[2],Y0+6,W2,lit?C.amber:C.edge2);
     txt("RPS",X[2]+9,Y0+23,{size:8,weight:700,sp:1.2,color:lit?C.amber:C.ink2});
@@ -84,7 +84,7 @@ function ctrlInspector(y0){
            :"No Reactor Protection System was fitted at the design bench. There is nothing to arm and nothing to bypass. Nothing will scram this reactor except you.");
     if(P.boroninj){
       const bb=push({x:X[2],y:Y0+40,w:W2,h:26,type:"btn",fn:()=>{ if(!S.borInjUsed){
-        S.borInjUsed=true; S.boron-=4000;
+        S.borInjUsed=true; S.boron-=4000; S.boronDem-=4000;
         logE("alarm","EMERGENCY BORON INJECTED","4000 pcm dumped into the loop. Shut down hard, and it cannot be undone this run."); }}});
       fillRect(X[2],Y0+40,W2,26,S.borInjUsed?C.panel:(hov(bb)?"#5a1109":"#2a0f0b"));
       frame(X[2],Y0+40,W2,26,S.borInjUsed?C.edge:C.red);
@@ -132,9 +132,9 @@ function ctrlInspector(y0){
   }
   else if(id.startsWith("pump")){
     rule("COOLANT PUMPS",X[0],Y0+9,W2);
-    slider(X[0],Y0+28,W2,s.flow*100,P.flowMin*100,100,{fn:v=>S.flow=v/100});
-    txt(pad((s.flow*100).toFixed(0),3)+" % DEMAND",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
-    TIP(X[0],Y0,W2,54,"COOLANT PUMPS","Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core.");
+    slider(X[0],Y0+28,W2,s.flow*100,P.flowMin*100,100,{dem:s.flowDem*100,fn:v=>S.flowDem=v/100});
+    txt(pad((s.flow*100).toFixed(0),3)+" % ACTUAL",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
+    TIP(X[0],Y0,W2,54,"COOLANT PUMPS","Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The thin line is demand, the thumb is what the loop has.");
     row(X[1],0,"CAVITATION",(s.cav*100).toFixed(0)+" %",s.cav>.15?C.amber:C.cyan);
     row(X[1],1,"NAT CIRC",(s.nat*100).toFixed(0)+" %");
     row(X[1],2,"PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+P.loops,
@@ -145,9 +145,9 @@ function ctrlInspector(y0){
   }
   else if(id==="turb"){
     rule("LOAD DEMAND",X[0],Y0+9,W2);
-    slider(X[0],Y0+28,W2,s.load*100,0,125,{fn:v=>S.load=v/100});
+    slider(X[0],Y0+28,W2,s.load*100,0,125,{dem:s.loadDem*100,fn:v=>S.loadDem=v/100});
     txt(pad((s.load*100).toFixed(0),3)+" %",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
-    TIP(X[0],Y0,W2,54,"LOAD DEMAND","Turbine draw - weapons and ship systems in the full game. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod.");
+    TIP(X[0],Y0,W2,54,"LOAD DEMAND","Turbine draw - weapons and ship systems in the full game. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line.");
     row(X[1],0,"ELECTRICAL",(Math.min(s.n,s.load)*P.rated/3).toFixed(0)+" MWe");
     row(X[1],1,"T-AVG VS PROGRAM",(s.Tavg-(565+18*s.load)>=0?"+":"")+
       (s.Tavg-(565+18*s.load)).toFixed(1)+" K");
@@ -161,7 +161,7 @@ function ctrlInspector(y0){
     row(X[0],1,"PARTY DOSE",s.dose.toFixed(1)+" %",s.dose>50?C.red:C.cyan);
     row(X[0],2,"DOSE RATE",P.dose.toFixed(2)+" x",P.dose>1?C.amber:C.green);
     row(X[1],0,"RPS",rpsState().toLowerCase()==="armed"?"armed":rpsState(),
-        P.rps&&!S.rpsBypass?C.green:C.amber);
+        rpsLive()?C.green:C.amber);
     row(X[1],1,"LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
     row(X[1],2,"EVENTS",LOG.length+"");
     wrap("Crew dose is set by how far you put this room from the reactor and how much shielding sits between them - both decided on the design bench.",
@@ -411,7 +411,7 @@ function combatHit(){
        || ["EQUIPMENT HIT","A component has been knocked out."]);
   if(p.id==="core"){ S.inv-=6; S.fatigue=Math.min(100,S.fatigue+12); }
   if(p.id==="pzr"){ S.porvOpen=true; S.porvStuck=true; S.porvAuto=true; }
-  if(p.id==="turb"||p.id==="cond") S.load=0.05;
+  if(p.id==="turb"||p.id==="cond") S.load=S.loadDem=0.05;   // a stop valve slams, it does not stroke
   if(p.id==="ctrl") S.noiseMul=3.5;
   if(p.id==="bkp") S.bkpLost=true;
   if(p.id.startsWith("sg")) S.sgtr=true;
@@ -473,7 +473,7 @@ function drawFaults(y0){
   button(198,y,178,26,"ROD BANK JAM",{on:S.rodJam,fn:()=>S.rodJam=!S.rodJam});
   TIP(198,y,178,26,"ROD BANK JAM",
     "The control rods stop answering commands, including a scram. You are left steering the reactor with boron, coolant flow and turbine load only.");
-  button(384,y,178,26,"LOAD STEP 125%",{fn:()=>S.load=1.25});
+  button(384,y,178,26,"LOAD STEP 125%",{fn:()=>S.loadDem=1.25});
   TIP(384,y,178,26,"LOAD STEP 125%",
     "Slams turbine demand to 125% instantly, like a full weapons volley. The primary loop cools, the reactor raises its own power to follow, and thermal margin gets squeezed.");
   button(570,y,178,26,"RESET PLANT",{fn:resetPlant});
@@ -487,7 +487,7 @@ function drawFaults(y0){
   if(P.boroninj){
     const used=S.borInjUsed;
     button(198,y+34,178,26,used?"BORON EXPENDED":"EMERGENCY BORON",
-      {danger:!used,fn:()=>{ if(!S.borInjUsed){ S.borInjUsed=true; S.boron-=4000;
+      {danger:!used,fn:()=>{ if(!S.borInjUsed){ S.borInjUsed=true; S.boron-=4000; S.boronDem-=4000;
         logE("alarm","EMERGENCY BORON INJECTED",
           "4000 pcm of poison dumped into the loop. The reactor is shut down hard and cannot be restarted this run."); } }});
     TIP(198,y+34,178,26,"EMERGENCY BORON INJECTION",
