@@ -129,3 +129,8 @@ function layoutWarnings(M){ const w=[];
   if(D.loops>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both."]);
   return w;
 }
+
+/* one source of truth for "may this design be built" and "has it changed since it was" */
+function designIssues(d,M){ return (d||derived()).warn.concat(layoutWarnings(M||layoutMetrics())); }
+function designBlocked(d,M){ return designIssues(d,M).some(w=>w[0]==="HARD"); }
+function designSig(){ return JSON.stringify(D)+"|"+LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";"); }

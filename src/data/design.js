@@ -79,7 +79,7 @@ ARCH.forEach(a=>a.note=a.tie+". "+a.good+", but "+a.bad.replace(/^[A-Z]/,c=>c.to
 const BUDGET=1500;
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          loops:1,pumps:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
-         scram:0,chan:1,rodw:2600,rpsm:.35,autorod:true,boroninj:false,
+         scram:0,chan:1,rodw:2600,rps:true,rpsm:.35,autorod:true,boroninj:false,
          cont:1,accum:false,efw:true,catcher:false,bkp:1,bypassCap:.5};
 
 function derived(){
@@ -90,6 +90,7 @@ function derived(){
     +PUMPS[D.pumps].mass+SGT[D.sg].mass+CONT[D.cont].mass+BKP[D.bkp].mass
     +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     + (D.rodw-1800)/100*4 + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
+    + (D.rps?55:0)
     + (D.autorod?26:0) + D.bypassCap*40 + layMass;
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
@@ -115,5 +116,6 @@ function derived(){
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel."]);
       if(CONT[D.cont].rel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew."]);
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely."]);
+      if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand."]);
       return w;})()};
 }
