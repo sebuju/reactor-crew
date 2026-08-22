@@ -30,6 +30,7 @@ function commission(){
   P.n0    = Math.min(1, P.feff0);                      // power at which removal balances heat
   P.TfRef = P.Tref + 320*P.condK*P.n0/Math.max(P.feff0,.10);
   P.X0    = (P.gI+P.gX)*P.n0/(P.lamX+P.sig*P.n0);      // xenon equilibrium at that power
+  coreConst(P,d);                        // the core as a place: mesh, coupling, rods
   P.dsig = designSig();                 // what this plant was built from
   resetPlant();
   screen="operate"; layout();
@@ -79,17 +80,22 @@ const rodWorth=x=>-P.rodW*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
 const tsat=p=>P.tsat0*Math.pow(Math.max(p,.05)/P.P0,.10);
 
 function resetPlant(){
-  const x0=.35, boron=-(P.excess+rodWorth(x0)-P.KXE*P.X0);
+  const x0=.35;
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
-     boron,boron0:boron,load:1,flow:1,P:P.P0,lvl:54,sgl:50,inv:100,hpi:false,
+     load:1,flow:1,P:P.P0,lvl:54,sgl:50,inv:100,hpi:false,
      porvOpen:false,porvBlocked:false,porvAuto:false,porvStuck:false,
      dmg:0,fatigue:0,dnbr:P.dnbr0,rho:0,decay:.065,voidTh:0,cav:0,vf:0,
      rpsBypass:false,breach:false,melt:false,trip:"",
      ev:{}, blackout:false, nat:0, release:0, rodAuto:x0, borInjUsed:false,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false,
-     parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0},
+     boron:0,boron0:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
      dash:{hot:0,cold:0,stm:0,fw:0,rel:0,hpi:0},spin:0,jit:0,dTavg:0,heat:1,sc:35,t:0};
+  /* Settle the flux shape first, then dial in the boron that actually makes
+     THIS shape critical. Rod worth is emergent now, so a formula would leave
+     the plant slightly off-critical and walk it into a trip nobody caused. */
+  coreReset(S);
+  S.boron = S.boron0 = -(P.excess+coreRodWorth(S)-P.KXE*P.X0);
   lastN=P.n0; LOG=[]; initHist();
   logE("info","PLANT AT POWER",
     P.name+" commissioned at "+P.rated+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
@@ -132,8 +138,6 @@ function step(dt){
   const removal = (s.load+dump)*feff*(1-0.85*Math.min(vNow,1));
   s.dTavg = (heat-removal)*1.8/P.graceK;               // K/s, for the rod controller's lead term
   s.Tavg = clamp(s.Tavg + s.dTavg*dt, 500, 1000);
-  const TfT = s.Tavg + 320*P.condK*heat/Math.max(feff,.10)*(1+4.0*vNow);
-  s.Tf += (TfT-s.Tf)*dt/4;
 
   /* ── pressure: hot loop pressurises, relief valve lifts, vessel can burst ── */
   const Pdem = P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (s.hpi?0.5*P.pRise:0);
@@ -153,12 +157,15 @@ function step(dt){
   s.P = clamp(s.P, P.P0*0.06, P.P0*1.6);
   s.inv = clamp(s.inv,0,100);
 
-  /* ── void: steam from boiling AND from lost inventory ── */
+  /* ── the core as a place: shape, hot channel, local boiling, local xenon ──
+     This is where boiling actually happens now. It happens in particular
+     nodes, in particular channels, and the channel that boils is the one
+     that then loses the flow it needed. s.vf, s.Tf, s.X and s.I below are
+     the whole-core aggregates of a field, not lumps in their own right. */
   const sat = tsat(s.P), Th = s.Tavg+15*heat;
-  const boil = clamp((Th-(sat-3))/14,0,1);
-  const vT = clamp(boil*clamp(heat/Math.max(feff,.10),0,2.5)*0.5,0,1);
-  s.voidTh += (vT - s.voidTh)*dt/1.5;
   const vLeak = Math.max(0,(95-s.inv)/25);
+  const nod = coreStep(s,dt,feff,heat,sat,vLeak);
+  s.voidTh = s.vNode;
   s.vf = clamp(Math.max(vLeak,s.voidTh)+0.3*Math.min(vLeak,s.voidTh),0,1.6);
 
   const sc = sat - Th;
@@ -168,11 +175,9 @@ function step(dt){
 
   /* ── reactivity ── */
   const p=s.parts;
-  p.rod=rodWorth(s.rodPos);
-  p.dop=clamp(P.aF*(s.Tf-P.TfRef),-6000,3000);
-  p.mod=clamp(P.aM*(s.Tavg-P.Tref),-6000,2500);
-  p.xe=-P.KXE*s.X; p.bor=s.boron; p.vd=P.aV*s.vf;
-  s.rho=P.excess+p.rod+p.dop+p.mod+p.xe+p.bor+p.vd;
+  p.rod=nod.rod; p.dop=nod.dop; p.mod=nod.mod; p.xe=nod.xe; p.vd=nod.vd;
+  p.tip=nod.tip; p.bor=s.boron;
+  s.rho=P.excess+p.rod+p.dop+p.mod+p.xe+p.bor+p.vd+p.tip;
 
   const h=dt/4, rk=s.rho*1e-5;
   for(let k=0;k<4;k++){
@@ -186,13 +191,14 @@ function step(dt){
     for(let i=0;i<6;i++) s.C[i]=(s.C[i]+h*P.bet[i]/P.LAM*s.n)/(1+h*P.lam[i]);
   }
   s.n=Math.max(s.n,1e-9);
-  s.I=Math.max(0,s.I+(P.gI*s.n-P.lamI*s.I)*dt);
-  s.X=Math.max(0,s.X+(P.gX*s.n+P.lamI*s.I-P.lamX*s.X-P.sig*s.n*s.X)*dt);
 
   /* ── thermal margin ── */
-  const Fq=P.Fq0+0.9*s.rodPos*(P.rodW/1800), subF=clamp(sc/20,.08,1.3);
-  s.dnbr=P.dnbr0*Math.pow(feff,.6)*Math.pow(s.P/P.P0,.3)*Math.pow(subF,.4)
-        /Math.max(.02,heat*(Fq/2.66));
+  /* Peaking is the measured peak of the flux field, and the flow that counts
+     is the flow through the channel that peak sits in - a starved channel can
+     dry out while the core average still looks comfortable. */
+  const subF=clamp(sc/20,.08,1.3);
+  s.dnbr=P.dnbr0*Math.pow(s.hotFlow,.6)*Math.pow(s.P/P.P0,.3)*Math.pow(subF,.4)
+        /Math.max(.02,heat*(s.fq/2.66));
 
   /* ── damage ── */
   if(s.dnbr<1)     s.dmg+= (1-s.dnbr)*22*dt;

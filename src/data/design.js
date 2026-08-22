@@ -51,6 +51,14 @@ const SCRAM=[
  {name:"SPRING ASSISTED",rate:.90,mass:45,note:"Twice as fast. Its accumulators must be kept charged to work."},
  {name:"BORON INJECTION",rate:2.5,mass:30,note:"Near instant. Irreversible: the loop stays poisoned for the rest of the mission."},
 ];
+const FOLL=[
+ {name:"WATER",tipRho:0,tipLen:0,mass:0,
+  note:"Nothing below the absorber but coolant. Inserting the bank only ever removes reactivity, all the way in. The dull, safe, correct answer."},
+ {name:"GRAPHITE DISPLACER",tipRho:1200,tipLen:8.0,mass:-14,
+  note:"A graphite follower keeps water out of the channel below the absorber, so the core wastes fewer neutrons on coolant and the bank is lighter and quicker. It also means the first thing a scram does is drive graphite through the BOTTOM of the core, adding reactivity down there before any absorber arrives. This is the Chernobyl scram."},
+ {name:"BORATED STEEL",tipRho:-420,tipLen:4.0,mass:34,
+  note:"A poisoned follower. The bank bites early and there is no positive excursion anywhere in its travel, at the price of carrying that poison all campaign - and of the mass."},
+];
 const CHAN=[
  {name:"SINGLE CHANNEL",noise:1.0,mass:10,note:"One sensor per parameter. When it lies, nothing contradicts it."},
  {name:"TWO CHANNEL",noise:.45,mass:25,note:"Disagreement is visible, but you cannot tell which of the two is wrong."},
@@ -79,7 +87,7 @@ ARCH.forEach(a=>a.note=a.tie+". "+a.good+", but "+a.bad.replace(/^[A-Z]/,c=>c.to
 const BUDGET=1500;
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          loops:1,pumps:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
-         scram:0,chan:1,rodw:2600,rps:true,rpsm:.35,autorod:true,boroninj:false,
+         scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
          cont:1,accum:false,efw:true,catcher:false,bkp:1,bypassCap:.5};
 
 function derived(){
@@ -90,19 +98,22 @@ function derived(){
     +PUMPS[D.pumps].mass+SGT[D.sg].mass+CONT[D.cont].mass+BKP[D.bkp].mass
     +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     + (D.rodw-1800)/100*4 + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
-    + (D.rps?55:0)
+    + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + D.bypassCap*40 + layMass;
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess+rf.dRho-D.poison-leak;
   const dnbr=a.dnbr*(.55+.45*D.pitch)*Math.pow(D.pdes,.35)*(1+.05*(D.loops-2));
-  const Fq=2.10+.35*D.hd-.25*(D.poison/1500);
+  /* peaking is no longer a curve fitted to H/D: it is the peak of the flux
+     shape this core actually settles into, solved on the nodal mesh */
+  const core=corePredict({dens,rf});
+  const Fq=core.FqCold;
   const natCirc=(.10+.22*D.hd+.30*D.chim)*(a.P0>3?1:1.3);
   const graceK=a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2));
   const xeW=2700*a.xe;
   const boronOp=-(excess+(-D.rodw*(.35-Math.sin(.7*Math.PI)/(2*Math.PI)))-xeW);
   const sdm=D.rodw-398-335*Math.abs(a.aF)-18*Math.abs(aM);
-  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,excess,dnbr,Fq,natCirc,xeW,
+  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,excess,dnbr,Fq,natCirc,xeW,core,
     boronOp,sdm,leak,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0:a.P0*D.pdes,
@@ -116,6 +127,9 @@ function derived(){
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel."]);
       if(CONT[D.cont].rel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew."]);
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely."]);
+      if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown."]);
+      if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own."]);
+      if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average."]);
       if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand."]);
       return w;})()};
 }
