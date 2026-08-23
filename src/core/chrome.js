@@ -60,6 +60,14 @@ function hatch(x,y,w,h,col,a){          // damage overlay
   for(let i=-h;i<w;i+=7){ ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
   ctx.restore();
 }
+/* An alarm lamp on a component: a solid pip and nothing round it. The board
+   says WHICH alarm; this only says HERE. Red blinks on the annunciator's own
+   rhythm, so the tile and the lamp read as one thing seen in two places. */
+function lamp(x,y,col){
+  ctx.beginPath(); ctx.arc(x,y,4,0,7);
+  ctx.fillStyle = (col===C.red && performance.now()%900<450) ? "#5a1109" : col;
+  ctx.fill();
+}
 function badge(x,y,col){                 // "!" fault marker
   ctx.beginPath(); ctx.moveTo(x,y-8); ctx.lineTo(x+8,y+5); ctx.lineTo(x-8,y+5);
   ctx.closePath(); ctx.fillStyle=col; ctx.fill();

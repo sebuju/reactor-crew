@@ -653,48 +653,70 @@ function step(dt){
 const pColor = v => v > P.P0*1.05 ? C.red : v < P.P0*0.935 ? C.amber : C.cyan;
 const ANN=[
  ["HI FLUX","red",s=>s.n>1.12,
-  "The reactor is making more than 112% of its rated power. You are outside the design envelope and the fuel is being pushed harder than it was built for. Reduce load or insert rods."],
+  "The reactor is making more than 112% of its rated power. You are outside the design envelope and the fuel is being pushed harder than it was built for. Reduce load or insert rods.","core"],
  ["LO DNBR","red",s=>s.dnbr<1.30,
-  "Departure from Nucleate Boiling Ratio has fallen below 1.30. The cooling water is close to boiling into a continuous film on the fuel rods, which would stop heat transfer almost instantly. Raise pump flow, raise pressure, or cut power. Note that flow means PUMP flow: buoyancy circulation removes heat but barely moves the water, so it buys almost no DNBR."],
+  "Departure from Nucleate Boiling Ratio has fallen below 1.30. The cooling water is close to boiling into a continuous film on the fuel rods, which would stop heat transfer almost instantly. Raise pump flow, raise pressure, or cut power. Note that flow means PUMP flow: buoyancy circulation removes heat but barely moves the water, so it buys almost no DNBR.","core"],
  ["FUEL DMG","red",s=>s.dmg>0.1,
-  "Fuel cladding has failed somewhere in the core. This is permanent, it puts radioactive fission products into the coolant, and it only gets worse. Nothing you do now un-breaks it."],
+  "Fuel cladding has failed somewhere in the core. This is permanent, it puts radioactive fission products into the coolant, and it only gets worse. Nothing you do now un-breaks it.","core"],
  ["LO PRESS","amber",s=>s.P<P.P0*.935,
-  "Primary loop pressure has dropped below 93% of normal. Either you are leaking coolant, or the pressurizer sprays are overcooling the steam bubble. Pressure is what stops the loop boiling, so this matters."],
+  "Primary loop pressure has dropped below 93% of normal. Either you are leaking coolant, or the pressurizer sprays are overcooling the steam bubble. Pressure is what stops the loop boiling, so this matters.","pzr"],
  ["HI PZR LVL","amber",s=>s.lvl>78,
-  "Pressurizer water level above 78%. Either the loop genuinely has too much water in it, or steam forming in the core is pushing water up into the pressurizer while the loop actually empties. Check subcooling to tell which."],
+  "Pressurizer water level above 78%. Either the loop genuinely has too much water in it, or steam forming in the core is pushing water up into the pressurizer while the loop actually empties. Check subcooling to tell which.","pzr"],
  ["LO SUBCOOL","red",s=>s.sc<8,
-  "Less than 8 degrees of margin before the coolant boils. This is the alarm that does not lie about inventory. If this is lit and pressurizer level looks fine, believe this one."],
+  "Less than 8 degrees of margin before the coolant boils. This is the alarm that does not lie about inventory. If this is lit and pressurizer level looks fine, believe this one.","pzr"],
  ["TAVG DEV","amber",s=>Math.abs(s.Tavg-tProg(s))>4,
-  "Average coolant temperature is more than 4 K away from where it should be for the current load. The reactor and the turbine are not in balance: one is making more heat than the other is taking."],
+  "Average coolant temperature is more than 4 K away from where it should be for the current load. The reactor and the turbine are not in balance: one is making more heat than the other is taking.","rods"],
  ["XENON PIT","blue",s=>-s.parts.xe>3200,
-  "Xenon-135 has built up past 3200 pcm of negative reactivity. This poison eats neutrons, and until it decays you may physically be unable to restart or raise power no matter how far you pull the rods."],
+  "Xenon-135 has built up past 3200 pcm of negative reactivity. This poison eats neutrons, and until it decays you may physically be unable to restart or raise power no matter how far you pull the rods.","core"],
  ["RECRITICAL","red",s=>s.scrammed&&s.rho>-200,
-  "A tripped core is on its way back to critical with the bank fully inserted. Xenon shut this reactor down as much as the rods did, and xenon decays. Nothing but boron will hold it now, and if it gets there before you do it will come back to power against a turbine that is not taking any."],
+  "A tripped core is on its way back to critical with the bank fully inserted. Xenon shut this reactor down as much as the rods did, and xenon decays. Nothing but boron will hold it now, and if it gets there before you do it will come back to power against a turbine that is not taking any.","core"],
  ["ROD JAM","amber",s=>s.rodJam,
-  "The control rods are not moving when commanded. Your fast reactivity handle is gone. You now control the reactor only with boron, coolant temperature and load."],
+  "The control rods are not moving when commanded. Your fast reactivity handle is gone. You now control the reactor only with boron, coolant temperature and load.","rods"],
  ["PORV OPEN","red",s=>s.porvOpen&&!s.porvBlocked,
-  "The pressure relief valve on top of the pressurizer is passing flow. If you did not command it open, you are dumping primary coolant overboard right now. Close the block valve."],
+  "The pressure relief valve on top of the pressurizer is passing flow. If you did not command it open, you are dumping primary coolant overboard right now. Close the block valve.","pzr"],
  ["CORE VOID","red",s=>s.vf>0.15,
-  "Steam pockets are forming inside the core where liquid water should be. Steam cannot carry heat away, so fuel temperature climbs fast even though reactor power may be falling."],
+  "Steam pockets are forming inside the core where liquid water should be. Steam cannot carry heat away, so fuel temperature climbs fast even though reactor power may be falling.","core"],
  ["RX TRIP","red",s=>s.scrammed,
-  "A scram has occurred and the control rods are fully inserted. The reactor is shut down. Expect a xenon buildup that will keep it shut down for the next few minutes."],
+  "A scram has occurred and the control rods are fully inserted. The reactor is shut down. Expect a xenon buildup that will keep it shut down for the next few minutes.","rods"],
  ["HI PRESS","red",s=>s.P>P.P0*1.05,
-  "Primary pressure above 105% of normal. The relief valve will lift shortly. Sustained overpressure past about 122% bursts the vessel outright, and every point of vessel fatigue lowers that threshold."],
+  "Primary pressure above 105% of normal. The relief valve will lift shortly. Sustained overpressure past about 122% bursts the vessel outright, and every point of vessel fatigue lowers that threshold.","pzr"],
  ["PUMP CAVITATION","amber",s=>s.cav>0.15,
-  "The water arriving at the coolant pumps is close to boiling, so the pumps are churning vapour instead of liquid. Actual flow is far below what the bench says. Raise pressure or cool the loop."],
+  "The water arriving at the coolant pumps is close to boiling, so the pumps are churning vapour instead of liquid. Actual flow is far below what the bench says. Raise pressure or cool the loop.","pump"],
  /* no heat guard here, unlike tripCause(): the trip refuses to fire on a shut-down
     plant, but the tile is information and the operator wants it most when the
     protection has been defeated and the flow is simply gone. */
  ["LO FLOW","amber",s=>s.flow<P.flowMin,
-  "Coolant flow is below the design floor for the pumps fitted. With protection armed the reactor trips here. Bypassed, the fuel is cooled by buoyancy alone, and that is all the cooling there is."],
+  "Coolant flow is below the design floor for the pumps fitted. With protection armed the reactor trips here. Bypassed, the fuel is cooled by buoyancy alone, and that is all the cooling there is.","pump"],
  ["NO RPS","amber",()=>!P.rps,
-  "No protection system was fitted at the design bench. Nothing is watching flux, DNBR, pressure, fuel temperature, flow or void on your behalf. You are the protection system."],
+  "No protection system was fitted at the design bench. Nothing is watching flux, DNBR, pressure, fuel temperature, flow or void on your behalf. You are the protection system.","ctrl"],
  ["VESSEL BREACH","red",s=>s.breach,
-  "The pressure vessel has ruptured. Coolant is leaving faster than anything can replace it. This is unrecoverable."],
+  "The pressure vessel has ruptured. Coolant is leaving faster than anything can replace it. This is unrecoverable.","core"],
  ["BLACKOUT","amber",s=>s.blackout,
-  "Main power to the coolant pumps is lost. Flow is now limited to your backup power supply plus whatever natural circulation the core geometry generates."],
+  "Main power to the coolant pumps is lost. Flow is now limited to your backup power supply plus whatever natural circulation the core geometry generates.",null],
  ["CORE MELT","red",s=>s.melt,
-  "More than 60% of the fuel has failed and the core is melting. Unrecoverable. Reset the plant."],
+  "More than 60% of the fuel has failed and the core is melting. Unrecoverable. Reset the plant.","core"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",s=>autoFit(k)&&s.byp[k],
-  AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn]));
+  AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn, AUTOSYS[k].part]));
+
+/* ── one lamp per component ──
+   Built from the same table the board is built from, so a tile cannot exist
+   that no component owns and a lamp cannot light for something that is not on
+   the board. Eight of the twenty-six belong to the reactor and six to the
+   pressurizer, which is why the component carries ONE lamp and not a row of
+   tiles: a 1x2 pressurizer has no room to say six things, and it does not need
+   to. The lamp says "here", the board says "what".
+   The id is matched by PREFIX, so the two unindexed pump alarms light every
+   pump you fitted - the sim keeps one cavitation number for the whole plant
+   and it would be a lie to point at one loop. Red beats amber beats blue; a
+   tile with no component at all (BLACKOUT is the only one) lights nothing. */
+function annLamp(id){
+  let best=null;
+  for(const a of ANN){
+    if(!a[4] || !id.startsWith(a[4]) || !a[2](S)) continue;
+    if(a[1]==="red") return C.red;
+    if(a[1]==="amber") best=C.amber;
+    else if(!best) best=C.blue;
+  }
+  return best;
+}
