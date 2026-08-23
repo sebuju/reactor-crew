@@ -85,6 +85,10 @@ const BKP=[
 ];
 ARCH.forEach(a=>a.note=a.tie+". "+a.good+", but "+a.bad.replace(/^[A-Z]/,c=>c.toLowerCase())+".");
 const BUDGET=1500;
+/* Where the control bank stands at commissioning. The plant is boronated to be
+   critical here, the shutdown margin is measured from here, and resetPlant()
+   starts the bank here - one number, because three copies of it would drift. */
+const RODX0=.35;
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          loops:1,pumps:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
@@ -111,15 +115,39 @@ function derived(){
   const natCirc=(.10+.22*D.hd+.30*D.chim)*(a.P0>3?1:1.3);
   const graceK=a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2));
   const xeW=2700*a.xe;
-  const boronOp=-(excess+(-D.rodw*(.35-Math.sin(.7*Math.PI)/(2*Math.PI)))-xeW);
-  const sdm=D.rodw-398-335*Math.abs(a.aF)-18*Math.abs(aM);
+  /* The bank S-curve, written once: how much worth is bought by inserting to x.
+     boronOp and the shutdown margin below both read it, so they cannot drift. */
+  const rodS=x=>D.rodw*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
+  const boronOp=-(excess-rodS(RODX0)-xeW);
+  /* ── SHUTDOWN MARGIN ──
+     Measured against the state a tripped core actually drifts into, not fitted
+     to one. Three things move after a scram and then keep moving:
+       - the bank travels from its operating position to fully in, which is only
+         the worth it had not already spent,
+       - the equilibrium xenon the plant was commissioned with decays away, and
+         every pcm of that poison comes back as POSITIVE reactivity,
+       - the fuel cools from operating temperature down to the coolant, and
+         Doppler hands that back too.
+     The old number was a polynomial in rod worth and the feedback coefficients
+     that touched none of this. It sold margin that did not exist: a default PWR
+     read +454 pcm and went critical again, bank fully inserted, about three
+     minutes after a scram, then wrecked itself.
+     Rods alone are not expected to win that argument - on a real plant they do
+     not either, which is what the boron system is for. So the honest number is
+     reported twice: what the bank holds on its own, and what it holds with the
+     chemical system driven to its 6000 pcm limit. The first is a warning, the
+     second is the one that decides whether the design is buildable at all. */
+  const dopBack=Math.abs(a.aF)*320*f.condK;      // Doppler released as the fuel cools
+  const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
+  const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
   return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,excess,dnbr,Fq,natCirc,xeW,core,
-    boronOp,sdm,leak,
+    boronOp,sdm,sdmB,leak,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0:a.P0*D.pdes,
     warn:(()=>{const w=[];
       if(mass>BUDGET) w.push(["HARD","Over the "+BUDGET+" t mass budget by "+(mass-BUDGET).toFixed(0)+" t."]);
-      if(sdm<200) w.push(["HARD","Shutdown margin only "+sdm.toFixed(0)+" pcm. A scram will not hold this core down - add control bank worth."]);
+      if(sdmB<200) w.push(["HARD","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison."]);
+      else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin."]);
       if(boronOp<-6000) w.push(["HARD","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment."]);
       if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop."]);
       if(aM>0) w.push(["SOFT","Positive moderator coefficient. The lattice is over-moderated: heating the coolant raises power instead of lowering it."]);
