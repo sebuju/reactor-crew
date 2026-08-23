@@ -12,40 +12,41 @@ function inspector(y0){
   const id=p.id;
 
   if(id==="core"){
-    c[0]=optList(X[0],c[0],CW2,"REACTOR TYPE",ARCH,"arch",
-      "The coolant and moderator family. Sets power density, operating pressure, grace time and the sign of the void coefficient.");
-    c[1]=optList(X[1],c[1],CW2,"FUEL",FUEL,"fuel",
+    /* The lattice is the design now, so it gets the first column and the four
+       sliders that used to sit here are gone: rated power, lattice pitch, core
+       H/D and burnable poison are all MEASUREMENTS of it, printed in column 3.
+       You still buy the coolant, the fuel and the reflector MATERIAL - the
+       drawing decides how much of the last one there is. */
+    c[0]=latPlan(X[0],c[0],CW2);
+    c[1]=latTools(X[1],c[1],CW2,LATPEN_CORE)+6;
+    c[1]=latDimRack(X[1],c[1],CW2);
+    c[2]=optList(X[2],c[2],CW2,"REACTOR TYPE",ARCH,"arch",
+      "The coolant and moderator family. Sets power density, operating pressure, grace time and the sign of the void coefficient. It also decides how much heat a given lattice makes: the same assemblies rate differently in a different family.");
+    c[3]=optList(X[3],c[3],CW2,"FUEL",FUEL,"fuel",
       "Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density.");
-    c[2]=optList(X[2],c[2],CW2,"REFLECTOR",REFL,"refl",
-      "Bounces escaping neutrons back into the core, so you need less excess reactivity. Beryllium and graphite nudge the void coefficient positive.")+8;
-    c[2]=sliderF(X[2],c[2],CW2,"RATED POWER","power",400,2400,v=>pad(v,4)+" MWt",
-      "How much heat the core makes. More power needs a bigger core, and shortens grace time because there is more decay heat to remove.",50,
-      v=>{const o=D.power;D.power=v;const m=derived().mass;D.power=o;return m;});
-    c[3]=sliderF(X[3],c[3],CW2,"LATTICE PITCH","pitch",.6,1.8,v=>v.toFixed(2)+" x",
-      "Fuel pin spacing. TIGHT under-moderates: the moderator coefficient gets much stronger and safer, but less water gap means less thermal margin. OPEN over-moderates: better DNBR, weaker feedback, and past about 1.5 the void coefficient goes POSITIVE.",.05)+8;
-    c[3]=sliderF(X[3],c[3],CW2,"CORE HEIGHT / DIA","hd",.5,2.5,v=>v.toFixed(2)+" H/D",
-      "Core shape. Squat leaks fewest neutrons. Tall leaks more but drives far better natural circulation, and peaks harder axially.",.05)+8;
-    c[3]=sliderF(X[3],c[3],CW2,"BURNABLE POISON","poison",0,1500,v=>v.toFixed(0)+" pcm",
-      "Gadolinium in the fuel that burns away with age. Soaks up excess reactivity and flattens power across the core.",50);
+    latMeasuredBar(22,y0+IH-26,712);
   }
   else if(id==="rods"){
-    c[0]=optList(X[0],c[0],CW2,"SCRAM SYSTEM",SCRAM,"scram","How the rods are driven in during an emergency shutdown.");
-    c[1]=sliderF(X[1],c[1],CW2,"CONTROL BANK WORTH","rodw",1200,4000,v=>v.toFixed(0)+" pcm",
-      "Total negative reactivity the rods can insert. This is your shutdown margin: too little and a scram will not hold the core down once it cools and the xenon decays. More worth also means more power peaking when inserted.",50,v=>(v-1200)/100*4);
+    /* the same plan, with the cluster pen in your hand - where a bank goes is
+       decided looking down at the core, not on a list */
+    c[0]=latPlan(X[0],c[0],CW2);
+    c[1]=latTools(X[1],c[1],CW2,LATPEN_RODS)+6;
+    c[1]=optList(X[1],c[1],CW2,"SCRAM SYSTEM",SCRAM,"scram","How the rods are driven in during an emergency shutdown.");
+    c[2]=optList(X[2],c[2],CW2,"ABSORBER",ABSORB,"__abs",
+      "What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.")+8;
     c[2]=toggleF(X[2],c[2],CW2,"EMERG BORON INJECTION","boroninj",18,
       "A one-shot tank of concentrated poison worth 4000 pcm. Shuts the reactor down when the rods will not, and cannot be undone.")+8;
     c[2]=toggleF(X[2],c[2],CW2,"AUTOMATIC ROD CONTROL","autorod",26,
-      "A controller that holds coolant temperature on program so the plant follows load by itself. Limited to 15% of rod travel; you can always override it.")+10;
-    c[2]=optList(X[2],c[2],CW2,"ROD FOLLOWER",FOLL,"foll",
-      "What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.");
-    txt("SHUTDOWN MARGIN "+d.sdm.toFixed(0)+" pcm",X[3],c[3]+10,
-      {size:8,sp:1.2,color:d.sdm<200?C.red:C.green});
-    seg(X[3],c[3]+16,CW2,9,clamp(d.sdm/2000,0,1),d.sdm<200?C.red:C.green,18);
+      "A controller that holds coolant temperature on program so the plant follows load by itself. Limited to 15% of rod travel; you can always override it.");
+    c[3]=optList(X[3],c[3],CW2,"ROD FOLLOWER",FOLL,"foll",
+      "What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.")+8;
+    seg(X[3],c[3],CW2,9,clamp(d.sdm/2000,0,1),d.sdm<200?C.red:C.green,18);
     wrap(d.sdm<200?"Not enough. After a trip this core creeps back to power on its own."
                   :"Enough to hold the core down after a trip, cold and xenon-free.",
-      X[3],c[3]+40,CW2,11,{size:8.5,color:C.ink2});
-    segSel(X[3],c[3]+80,CW2,"ROD BANKS",["2","3","4"],"nbank",
-      "How many independent banks the worth is split across. More banks shape the core more finely and cost mass; two banks move the whole core at once.",2);
+      X[3],c[3]+22,CW2,11,{size:8.5,color:C.ink2});
+    /* worth, bank count and margin are readouts now - every one of them a
+       consequence of where the clusters went, and none of them dialled */
+    latMeasuredBar(22,y0+IH-26,712,LATREAD_RODS);
   }
   else if(id==="pzr"){
     c[0]=sliderF(X[0],c[0],CW2,"DESIGN PRESSURE","pdes",.7,1.25,v=>(v*ARCH[D.arch].P0).toFixed(1)+" MPa",

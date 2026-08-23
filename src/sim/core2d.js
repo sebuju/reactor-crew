@@ -32,6 +32,12 @@ const XCOUP=1.0, XPG=0.9, XRINF=2.2;
    0.35 the outer bank hits full withdrawal, the trim saturates and the response
    stops being monotonic, so this is the knee and not a free dial. */
 const XTILTZ=0.30;
+/* The absorber strength that makes a stock bank in a stock lattice worth what
+   it has always been worth. Solved once, on the first coreConst(), and then
+   held: rod worth is a measurement now, and this is the only thing left in the
+   file that is fitted to the old bench rather than read off the drawing. */
+const XRODW0=2600;
+let XABS0=null;
 const XDRY=0.015;    // the least cooling the fuel-temperature correlation will assume
 
 /* volume weights: ring i is an annulus, so it is worth 2i+1 unit cells */
@@ -54,35 +60,38 @@ function nodePeak(a){ let v=-1e30,k=0;
    T is the object the constants land on: P when commissioning, a scratch
    object when the bench is only asking what a design would look like. */
 function coreConst(T,d){
-  /* real dimensions, so H/D stops being a fitted peaking term and becomes a
-     shape. Volume is rated power over power density. */
-  const vol=D.power/d.dens;                 // MW over kW/L is m3 exactly
-  const dia=Math.cbrt(4*vol/(Math.PI*Math.max(D.hd,.05)));
-  T.coreDia=dia; T.coreHgt=D.hd*dia;
+  /* Every dimension below is MEASURED off the lattice in src/data/lattice.js.
+     It used to be manufactured here out of D.power, D.hd, D.pitch, D.poison
+     and D.nbank - a volume, a diameter, a coupling length, an albedo, a poison
+     grading and a bank spread, all invented from numbers on tracks. Those five
+     are now readouts of the thing that was laid out, and this function reads
+     the same measurement they do. */
+  const M=LM||latRevolve();
+  T.coreDia=M.dia; T.coreHgt=M.hgt;
 
   /* migration length against node size gives the coupling. A tight lattice
      under-moderates, which lengthens it and binds the core together; an open
      lattice lets one corner of the core drift on its own. */
   const Lm=0.21*Math.sqrt(D.pitch);
-  T.cz=XCOUP*Math.pow(Lm/(T.coreHgt/XNZ),2);
-  T.cr=XCOUP*Math.pow(Lm/((dia/2)/XNR),2);
+  T.cz=XCOUP*Math.pow(Lm/(Math.max(T.coreHgt,.05)/XNZ),2);
+  T.cr=XCOUP*Math.pow(Lm/(Math.max(T.coreDia,.05)/2/XNR),2);
 
   /* the reflector stops being a flat pcm bonus and starts reflecting: the
-     share of what leaks out of an edge node that finds its way back in */
-  T.alb=Math.min(0.90,0.53+0.40*Math.min(1,d.rf.dRho/750));
+     share of what leaks out of an edge node that finds its way back in, per
+     face, at the thickness that face was given */
+  T.albR=latAlb(LAT.reflR,d.rf);
+  T.albT=latAlb(LAT.reflT,d.rf);
+  T.albB=latAlb(LAT.reflB,d.rf);
+  T.alb=(T.albR+T.albT+T.albB)/3;      // for anything reading the scalar
 
-  /* burnable poison graded toward the centre, normalised so the core-average
+  /* burnable poison is where you put the pins, normalised so the core-average
      worth is still exactly D.poison - it buys flatness, not reactivity */
-  T.poiG=new Float64Array(XNR);
-  { let s=0;
-    for(let i=0;i<XNR;i++){ T.poiG[i]=1+XPG*(1-2*i/(XNR-1)); s+=T.poiG[i]*ringW[i]; }
-    for(let i=0;i<XNR;i++) T.poiG[i]/=s; }
-  T.poison=D.poison;
+  T.poiG=M.poiG; T.poison=D.poison;
+  /* and a ring the lattice did not fill is a ring with no source in it */
+  T.nPen=M.nPen;
 
-  /* banks spread by area, not radius, so the outer ones cover the rings that
-     hold most of the core */
-  T.NB=D.nbank; T.bankR=[];
-  for(let b=0;b<T.NB;b++) T.bankR.push(Math.round(Math.sqrt((b+.5)/T.NB)*(XNR-1)));
+  /* banks are wherever you put their clusters */
+  T.NB=M.NB; T.bankR=M.bankR.slice();
   T.rinf=Math.max(XRINF,XNR/T.NB);
   /* How much bank reach overlaps on each ring. A pure function of bankR and
      rinf, both fixed here, so rodShape() no longer rebuilds it every tick. */
@@ -102,23 +111,53 @@ function coreConst(T,d){
   const fo=FOLL[D.foll];
   T.tipRho=fo.tipRho; T.tipLen=fo.tipLen; T.follName=fo.name;
 
-  /* Absorber strength is calibrated, not guessed. Drive the bank fully in,
-     see what the flux-weighted worth comes to, and scale it so that equals
-     the bank worth the bench sold you. Shutdown margin stays honest, and the
-     S-curve on the way there stops being a formula and starts being a
-     consequence of where the flux is. */
-  T.rodA=1;
+  /* ── what the bank is worth ──
+     This used to solve for an absorber strength that made the fully-inserted
+     bank come to whatever D.rodw was set to. Now the strength is the MATERIAL
+     you bought and the worth is what the solve says: drive the bank fully in
+     and read the flux-weighted answer off it. Worth stopped being a purchase
+     and became a consequence of where you put the clusters.
+
+     Three passes over ONE warm-started flux, because the flux moves when the
+     absorber does. Do not cut it to a single cold solve - the answer lands a
+     quarter of a per cent low, which looks exactly like a lattice measuring
+     the wrong reactor.
+
+     XABS0 is the one calibration left in the file. It is solved once, on the
+     stock lattice, so that a stock core with a stock absorber is worth the
+     2600 pcm a stock bank always was. */
   const st={rodZ:new Float64Array(T.NB).fill(1)};
   const phi=new Float64Array(XNN).fill(1);
   const cov=new Float64Array(XNN), fol=new Float64Array(XNN), rho=new Float64Array(XNN);
-  for(let pass=0;pass<3;pass++){
-    rodShape(T,st,cov,fol);
-    for(let k=0;k<XNN;k++) rho[k]=-T.rodA*cov[k];
-    coreSolve(T,phi,rho,25);
-    let w=0; for(let k=0;k<XNN;k++) w+=cov[k]*phi[k]*nodeW[k];
-    T.rodA=D.rodw/Math.max(w,1e-3);
+  const worth=a=>{
+    let w=0;
+    for(let pass=0;pass<3;pass++){
+      rodShape(T,st,cov,fol);
+      for(let k=0;k<XNN;k++) rho[k]=-a*cov[k];
+      coreSolve(T,phi,rho,25);
+      w=0; for(let k=0;k<XNN;k++) w+=cov[k]*phi[k]*nodeW[k];
+    }
+    return w;
+  };
+  if(XABS0==null){
+    /* the old fixed point, verbatim and once: unit strength is worth w in the
+       flux it makes, so scale to the target, then re-solve and repeat. Running
+       it at a fixed a=1 instead would calibrate against an almost unrodded
+       core and come out several per cent adrift. */
+    let a=1;
+    const p0=new Float64Array(XNN).fill(1);
+    for(let pass=0;pass<3;pass++){
+      rodShape(T,st,cov,fol);
+      for(let k=0;k<XNN;k++) rho[k]=-a*cov[k];
+      coreSolve(T,p0,rho,25);
+      let w=0; for(let k=0;k<XNN;k++) w+=cov[k]*p0[k]*nodeW[k];
+      a=XRODW0/Math.max(w,1e-3);
+    }
+    XABS0=a;
   }
-  T.FqCold=coreFq(T,0.35);
+  T.rodA=XABS0*ABSORB[LAT.abs].k;
+  D.rodw=Math.max(0,T.rodA*worth(T.rodA));
+  T.FqCold=coreFq(T,RODX0);
   return T;
 }
 
@@ -129,7 +168,7 @@ function coreFq(T,x){
   const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
   rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    rho[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1); }
+    rho[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)-T.nPen[i]; }
   coreSolve(T,phi,rho,60);
   T.phiCold=phi;
   return nodePeak(phi).v;
@@ -179,16 +218,20 @@ function rodShape(T,st,cov,fol){
 /* ── the diffusion solve ── */
 function coreSolve(T,phi,rho,sweeps){
   const n=sweeps||SOR_SWEEPS;
+  /* One albedo per face. The rim, the lid and the floor used to share a single
+     number, so a reflector drawn on top and one drawn round the side were the
+     same reactor - and then the thickness you gave a face did not matter. */
+  const aR=T.albR, aT=T.albT, aB=T.albB;
   for(let s=0;s<n;s++){
     for(let i=0;i<XNR;i++){
       const b=i*XNZ, fi=faceI[i], fo=faceO[i];
       const den=T.cr*(fi+fo)+2*T.cz+1;
       for(let j=0;j<XNZ;j++){
         const k=b+j;
-        const In = i>0       ? phi[k-XNZ] : 0;             // centreline: mirror
-        const Ou = i<XNR-1   ? phi[k+XNZ] : T.alb*phi[k];  // rim, floor and lid
-        const Dn = j>0       ? phi[k-1]   : T.alb*phi[k];  // leak out, minus
-        const Up = j<XNZ-1   ? phi[k+1]   : T.alb*phi[k];  // the reflected part
+        const In = i>0       ? phi[k-XNZ] : 0;          // centreline: mirror
+        const Ou = i<XNR-1   ? phi[k+XNZ] : aR*phi[k];  // rim, floor and lid
+        const Dn = j>0       ? phi[k-1]   : aB*phi[k];  // leak out, minus
+        const Up = j<XNZ-1   ? phi[k+1]   : aT*phi[k];  // the reflected part
         const num=T.cr*(fi*In+fo*Ou)+T.cz*(Dn+Up)+(1+rho[k]*1e-5)*phi[k];
         const v=phi[k]+SOR_OM*(num/den-phi[k]);
         phi[k]= (isFinite(v)&&v>1e-6) ? v : 1e-6;
@@ -237,7 +280,8 @@ function coreReset(s){
      flat core and kick a transient nobody asked for */
   rodShape(P,s,s.nCov,s.nFol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    s.nRho[k]=-P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]-P.poison*(P.poiG[i]-1); }
+    s.nRho[k]=-P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]-P.poison*(P.poiG[i]-1)
+             -P.nPen[i]; }
   coreSolve(P,s.phi,s.nRho,60);
   s.fq=nodePeak(s.phi).v;
 }
@@ -335,7 +379,8 @@ function coreStep(s,dt,feff,heat,sat,vLeak,mflux){
                +clamp(P.aM*(s.nTc[k]-P.Tref),-6000,2500)
                +P.aV*s.nV[k]-P.KXE*s.xX[k]
                -P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]
-               -P.poison*(P.poiG[i]-1);
+               -P.poison*(P.poiG[i]-1)
+               -P.nPen[i];
     }
   }
 

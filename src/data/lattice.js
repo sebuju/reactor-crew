@@ -1,0 +1,343 @@
+"use strict";
+/* the core as a lattice you lay out, not as seven numbers you buy */
+
+/* ═══════════════ THE FUEL LATTICE ═══════════════
+   A core is not designed in section. It is laid out in PLAN, on a square
+   lattice, one assembly at a time: which assemblies are there, which carry a
+   rod cluster, which carry burnable poison. The section only ever says how
+   tall it is and what is wrapped round it.
+
+   So this file is the design surface, and seven things that used to be sliders
+   on the bench are now MEASUREMENTS of it:
+
+     D.power    fuel volume x power density. Counted, never chosen.
+     D.hd       the envelope the lattice revolves to, against its length.
+     D.pitch    the assembly spacing, against the reference spacing.
+     D.poison   the volume mean of the poison pins you placed.
+     D.nbank    how many banks your clusters are grouped into.
+     D.rodw     measured off the solve by core2d, not bought.
+     coreDia    the lattice's own outer envelope.
+
+   coreConst() used to manufacture all of that out of the numbers. It now reads
+   what latRevolve() measured, and everything downstream is unchanged.
+
+   LOAD ORDER. This is a data file that loads after a sim file, which is
+   unusual and deliberate: it sizes its arrays from XNR/XNZ in core2d.js, and
+   core2d.js only needs the lattice at call time. index.html is the one place
+   that order lives. */
+
+const LQ=10;                     // quarter-plan slots per side
+const L_EMPTY=0, L_FUEL=1, L_POIS=2;
+const LIX=(u,v)=>u*LQ+v;
+
+/* The design point the stock lattice is sized to. Everything else about the
+   reactor is drawn; these two only fix what "pitch 1.0x" means, so that a
+   default lattice lands on the plant the bench used to sell. */
+const LAT_MW0=1200, LAT_HD0=1.0;
+/* Stock fuel radius, in slots. Sized so the round core reaches BOTH axes of
+   the quarter: shorter than this and the outer row and column are permanently
+   empty, which reads as a cropped drawing rather than as a round core in a
+   square lattice. The CORNERS staying empty is correct and is the point. */
+const LAT_R0=9.6;
+/* How much reactivity a ring that is not full of fuel loses. A one-group
+   stand-in for "no source here", big enough that a gap is genuinely a gap and
+   small enough that a solve through it still converges. The one fitted number
+   this file adds. */
+const LAT_NF=22000;
+const LAT_REFLMAX=3;             // reflector past this buys nothing
+const LAT_POIPIN=1200;           // a fully poisoned ring, pcm
+/* How hard the stock lattice grades its poison from centreline to rim. Tuned
+   against the old bench default of 400 pcm mean - see latDefault(). */
+const LAT_POIG=0.90;
+
+/* Absorber is a MATERIAL, not a calibration. coreConst() used to solve for a
+   strength that made the fully-inserted bank come to whatever the slider said;
+   now you buy a material, put the clusters where you want them, and the worth
+   is what the solve measures. LAT_A0 below is the one calibration left, and it
+   exists only so a stock lattice is worth what a stock bank always was. */
+const ABSORB=[
+  {name:"BORON CARBIDE",k:1.00,dens:2.5,
+   note:"The baseline, and what the control bank used to be calibrated against. Cheap, light, and it swells and cracks as it burns, so a long campaign costs you worth you cannot see going."},
+  {name:"SILVER-INDIUM-CADMIUM",k:0.62,dens:10.2,
+   note:"Weaker per cluster and four times as dense, but it does not swell, so it is the one that still moves at the end of a campaign. Buy it and you need more clusters, or clusters nearer the flux."},
+  {name:"HAFNIUM",k:1.34,dens:13.3,
+   note:"A third more worth per cluster, and it takes decades of irradiation without complaint. Heavy - and margin bought from fewer, stronger clusters is margin concentrated in fewer things that can jam."},
+];
+
+const LAT={
+  slot:new Uint8Array(LQ*LQ),
+  rod:new Int8Array(LQ*LQ),      // -1 none, else bank 0..3
+  pitch:0,                       // assembly pitch, metres
+  len:0,                         // active fuel length, metres
+  reflR:1, reflT:1, reflB:1,     // reflector thickness per face, cells
+  abs:0,                         // index into ABSORB
+};
+let LM=null;                     // the revolve: what the solver is handed
+let latRev=0;                    // bumped whenever the lattice changes
+
+/* ── THE EQUIVALENT RADIUS ──
+   How far out the mesh reaches, and the single most consequential line in this
+   file. A round core of square assemblies has a RAGGED edge: the fuel reaches
+   the disc, but the corner of the outermost assembly sticks out past it. Span
+   the mesh to that corner and the outermost of fourteen rings comes back only
+   31% full of fuel, which is a 15,000 pcm hole sitting exactly where the
+   peripheral control bank lives. The measured consequence: a zero-sum lean in
+   rod TRAVEL became a 1,900 pcm net-negative lean in rod WORTH, power
+   collapsed and the plant tripped itself on LOW PRESSURE.
+
+   So the mesh spans the EQUAL-AREA radius instead - the radius of the smooth
+   cylinder holding the same fuel. The raggedness beyond it folds into the
+   outer ring, which is what the albedo boundary is there to smear anyway, and
+   every ring comes back essentially full. Do not "simplify" this back to the
+   corner radius; audit-physics.js will trip on the split-lean block if you do,
+   and that is the failure telling you about it. */
+const latEqR=()=>{
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
+  return Math.sqrt(4*n/Math.PI)*LAT.pitch;
+};
+
+/* ── the reference pitch ──
+   Solved against VOLUME, so a stock lattice lands on the stock reactor:
+
+     fuel area = 4*n*p^2                n filled slots in the quarter
+     radius    = sqrt(4n/pi)*p          the equal-area radius above
+     length    = 2*Req*hd
+     volume    = 8*n*sqrt(4n/pi)*hd*p^3 -> one cube root                   */
+const LAT_P0=(function(){
+  let n=0;
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
+    if(Math.hypot(u+.5,v+.5)<=LAT_R0) n++;
+  const dens=ARCH[0].dens*FUEL[1].densK*(1.15-0.15*1.0);
+  return Math.cbrt((LAT_MW0/dens)/(8*n*Math.sqrt(4*n/Math.PI)*LAT_HD0));
+})();
+
+/* ── the stock lattice ── */
+function latDefault(){
+  LAT.slot.fill(L_EMPTY); LAT.rod.fill(-1);
+  LAT.pitch=LAT_P0;
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
+    if(Math.hypot(u+.5,v+.5)<=LAT_R0) LAT.slot[LIX(u,v)]=L_FUEL;
+  /* Poison graded toward the centre, because that is where the flux peaks -
+     the same job the old XPG constant did, except that you can see every pin
+     and move it.
+
+     It is a RAMP, not a disc. A checkerboard inside 0.58 of the radius was the
+     first attempt and it loaded only 181 pcm against the 400 the old default
+     carried, because ring weight goes as the radius and a disc that stops
+     halfway misses most of the core's volume. Hold-down that burnable poison
+     does not do falls to uniform boron instead, and boron is flat where poison
+     is graded - which moved the flux shape enough to trip a split lean that
+     used to ride out. The dither is a fixed pattern rather than random, so the
+     stock lattice is the same reactor every time it is laid out. */
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
+    if(!LAT.slot[LIX(u,v)]) continue;
+    const f=LAT_POIG*(1-Math.hypot(u+.5,v+.5)/LAT_R0);
+    if(((u*3+v*5)%7)/7 < f) LAT.slot[LIX(u,v)]=L_POIS;
+  }
+  /* Clusters spread by AREA, so the outer banks cover the rings that hold most
+     of the core - the same rule the bench used, and aimed at the same rings it
+     used to land on: 5, 8, 10 and 12 of fourteen.
+
+     Aiming at rings rather than at a fraction of the fuel radius is
+     load-bearing, and the outermost bank is why. Placed by radius fraction it
+     lands on ring 13, the LAST ring, which is the lowest flux in the core - so
+     it gives back far less on withdrawal than the inner bank takes on
+     insertion. A lean that is zero-sum in rod TRAVEL then comes out 30% more
+     negative in rod WORTH, the loop drops a further 0.3 MPa, and a trim-sized
+     split lean trips the plant on LOW PRESSURE. Measured, not guessed: the
+     baseline dips to 13.53 MPa against a 13.33 MPa trip and this put it at
+     13.23. Two per bank, either side of the quarter, and each landing is
+     CHECKED rather than assumed - a hand-written list did this first and one
+     entry sat outside the fuel, so that bank quietly shipped with half its
+     clusters and nothing said so. */
+  const rEqSlots=latEqR()/LAT.pitch;
+  for(let b=0;b<4;b++){
+    const ring=Math.round(Math.sqrt((b+.5)/4)*(XNR-1));
+    const rr=(ring+0.5)/XNR*rEqSlots;
+    for(const th of [Math.PI/9, Math.PI*7/18]){
+      let u=clamp(Math.round(rr*Math.cos(th)-.5),0,LQ-1);
+      let v=clamp(Math.round(rr*Math.sin(th)-.5),0,LQ-1);
+      for(let g=0;g<LQ && !LAT.slot[LIX(u,v)];g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
+      if(LAT.slot[LIX(u,v)]) LAT.rod[LIX(u,v)]=b;
+    }
+  }
+  LAT.len=2*latEqR()*LAT_HD0;
+  LAT.reflR=LAT.reflT=LAT.reflB=1;
+  LAT.abs=0;
+  latRevolve();
+}
+const latCount=()=>{               // assemblies in the WHOLE core, not the quarter
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
+  return 4*n;
+};
+
+/* ── the revolve ──
+   Sample each assembly LAT_SSxLAT_SS times. Every sample is an equal patch of
+   area that lands in whichever ring its radius falls in; ring coverage is that
+   area over the annulus area, times four because the plan is a quarter.
+
+   LAT_SS is a convergence knob and nothing else. A patch straddling a ring
+   boundary is booked entirely to one side, so the revolve loses a little
+   volume and the loss falls as the patches shrink. On the stock lattice, which
+   is a 1200 MWt reactor by construction:
+
+       SS=4  1192 MWt      SS=8  1195 MWt      SS=16  1198 MWt
+
+   Sixteen is nothing next to the diffusion solve that follows, and it holds
+   the error under two tenths of a per cent. audit-physics.js asserts the
+   revolved volume against the volume laid out, so it cannot quietly drift. */
+const LAT_SS=16;
+function latRevolve(){
+  const p=LAT.pitch, rEq=latEqR();
+  latRev++;
+  if(rEq<=0 || p<=0){
+    LM={dr:.1,dz:.1,frac:new Float64Array(XNR),poi:new Float64Array(XNR),
+        nPen:new Float64Array(XNR).fill(LAT_NF),chan:[],bankR:[(XNR-1)/2],NB:1,
+        dia:0,hgt:0,vol:0,nAsm:0,laid:0};
+    return LM;
+  }
+  const dr=rEq/XNR, patch=(p/LAT_SS)*(p/LAT_SS);
+  const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR);
+  const rodN=[]; for(let i=0;i<XNR;i++) rodN.push({});
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
+    const s=LAT.slot[LIX(u,v)]; if(!s) continue;
+    const rod=LAT.rod[LIX(u,v)];
+    for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++){
+      const r=Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p);
+      const i=Math.min(XNR-1,Math.floor(r/dr));
+      fuelA[i]+=patch;
+      if(s===L_POIS) poisA[i]+=patch;
+      if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1;
+    }
+  }
+  const frac=new Float64Array(XNR), poi=new Float64Array(XNR);
+  const nPen=new Float64Array(XNR);
+  let vol=0;
+  for(let i=0;i<XNR;i++){
+    /* ringW is the annulus weight core2d already keeps; the area itself is
+       pi*((i+1)^2 - i^2)*dr^2 and a quarter plan is a quarter of it */
+    const ring=Math.PI*((i+1)*(i+1)-i*i)*dr*dr;
+    frac[i]=clamp(4*fuelA[i]/ring,0,1);
+    poi[i]=LAT_POIPIN*(fuelA[i]>1e-9? poisA[i]/fuelA[i] : 0);
+    /* a ring half full of fuel is half a hole, and the deficit is linear */
+    nPen[i]=LAT_NF*(1-frac[i]);
+    vol+=ring*LAT.len*frac[i];
+  }
+  /* one channel per ring that has a cluster in it, on that ring's own bank */
+  const chan=[];
+  for(let i=0;i<XNR;i++){
+    const ks=Object.keys(rodN[i]); if(!ks.length) continue;
+    ks.sort((a,b)=>rodN[i][b]-rodN[i][a]);
+    chan.push({i,b:+ks[0]});
+  }
+  const bank=[];
+  for(const c of chan) (bank[c.b]=bank[c.b]||[]).push(c.i);
+  const bankR=bank.filter(a=>a&&a.length).map(a=>a.reduce((s,v)=>s+v,0)/a.length);
+  if(!bankR.length) bankR.push((XNR-1)/2);
+
+  let laid=0;                       // the area actually laid out, for the audit
+  for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) laid++;
+  LM={dr, dz:LAT.len/XNZ, frac, poi, nPen, chan, bankR, NB:bankR.length,
+      dia:2*rEq, hgt:LAT.len, vol, nAsm:4*laid, laid:4*laid*p*p*LAT.len};
+  latMeasure();
+  return LM;
+}
+
+/* ── the lattice, turned into the numbers the bench already reads ──
+   THE one place the drawing becomes D. derived() is untouched and every figure
+   it produces is the real one. */
+function latMeasure(){
+  const M=LM;
+  D.pitch=LAT.pitch/LAT_P0;
+  const dens=ARCH[D.arch].dens*FUEL[D.fuel].densK*(1.15-0.15*D.pitch);
+  D.power=M.vol*dens;              // MW over kW/L is m3 exactly
+  D.hd=M.dia>1e-6? M.hgt/M.dia : 1;
+  D.nbank=M.NB;
+  let pm=0; for(let i=0;i<XNR;i++) pm+=M.poi[i]*ringW[i];
+  D.poison=pm;
+  /* poiG keeps its old contract: graded shape, volume mean exactly one, so
+     poison still buys flatness rather than reactivity */
+  const g=new Float64Array(XNR);
+  for(let i=0;i<XNR;i++) g[i]= pm>1e-9? M.poi[i]/pm : 1;
+  M.poiG=g;
+}
+
+/* ── what the drawing weighs ──
+   The reflector used to be a flat catalogue figure. This weighs the real one,
+   cell by cell, and a single ring of steel round a real core comes to rather
+   more than the 28 t the option list sold - which is a finding, not a rounding
+   error. Fuel mass is NOT here: derived() already gets it from the volume. */
+function latMass(){
+  if(!LM) latRevolve();
+  const rf=REFL[D.refl], dr=LM.dr, dz=LM.dz;
+  const ringA=i=>Math.PI*((i+1)*(i+1)-i*i)*dr*dr;
+  let m=0;
+  /* rim: the band outside the mesh, at the thickness that face was given */
+  for(let q=0;q<Math.ceil(LAT.reflR);q++)
+    m+=ringA(XNR+q)*LAT.len*Math.min(1,LAT.reflR-q)*rf.dens;
+  /* lid and floor: a disc over the whole core, one cell of height each */
+  const disc=Math.PI*Math.pow((XNR+LAT.reflR)*dr,2);
+  m+=disc*dz*(LAT.reflT+LAT.reflB)*rf.dens;
+  /* the clusters themselves - a channel is about 6% of its ring by volume */
+  for(const c of LM.chan) m+=ringA(c.i)*LAT.len*0.06*ABSORB[LAT.abs].dens;
+  return m;
+}
+
+/* ── can this lattice be built ──
+   Same [SEV, sentence] shape derived().warn uses, so the two concatenate. */
+function latWarn(){
+  const w=[], M=LM||latRevolve();
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
+  if(!n){ w.push(["HARD","There is no fuel in this core at all."]); return w; }
+  /* the fuel has to be one piece: an island across a water gap is a second
+     reactor with one set of rods between them */
+  const seen=new Uint8Array(LQ*LQ), q=[];
+  for(let i=0;i<LQ*LQ&&!q.length;i++) if(LAT.slot[i]){ q.push(i); seen[i]=1; }
+  let head=0, reach=1;
+  while(head<q.length){
+    const k=q[head++], u=(k/LQ)|0, v=k%LQ;
+    for(const d of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const a=u+d[0], b=v+d[1];
+      if(a<0||a>=LQ||b<0||b>=LQ) continue;
+      const j=LIX(a,b);
+      if(seen[j]||!LAT.slot[j]) continue;
+      seen[j]=1; reach++; q.push(j);
+    }
+  }
+  if(reach<n) w.push(["HARD","There are "+((n-reach)*4)+" assemblies that no other assembly touches. A core split by a water gap is two reactors with one set of rods between them."]);
+  if(!M.chan.length) w.push(["HARD","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is."]);
+  if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with."]);
+  if(D.power<400||D.power>2400) w.push(["SOFT","This lattice rates "+D.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for."]);
+  if(D.hd<.5||D.hd>2.5) w.push(["SOFT","H/D of "+D.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make."]);
+  if(D.pitch<.6||D.pitch>1.8) w.push(["SOFT","Assembly pitch "+(LAT.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble."]);
+  const bare=[[LAT.reflR,"rim"],[LAT.reflT,"lid"],[LAT.reflB,"floor"]].filter(z=>z[0]<0.5);
+  if(bare.length) w.push(["SOFT","Bare "+bare.map(z=>z[1]).join(" and ")+
+    ". Neutrons that leave that face are gone. A single ring of reflector is worth most of what a reflector has to give."]);
+  return w;
+}
+
+/* Reflector thickness is not a D field, so JSON.stringify(D) cannot see it
+   change. designSig() asks this as well, or moving a face would leave the
+   commissioned plant quietly out of date with the bench. */
+const latSig=()=>LAT.slot.join("")+"|"+LAT.rod.join("")+"|"+
+  [LAT.pitch,LAT.len,LAT.reflR,LAT.reflT,LAT.reflB,LAT.abs].join(",");
+
+/* ── thickness to albedo ──
+   The ramp is pinned so that ONE cell of a material gives exactly the flat
+   albedo the old formula gave it, and the two cells after that are diminishing
+   returns on top. Zero cells is a bare face at 0.53. */
+function latAlb(t,rf){
+  if(t<=0) return 0.53;
+  return Math.min(0.90, 0.53+0.40*Math.min(1,rf.dRho/750)*(1+0.6*(1-Math.pow(0.55,t-1))));
+}
+
+/* optList() writes D[key], and the absorber is not a D field - it belongs to
+   the lattice. One accessor rather than a second option-list widget, so the
+   rows, the live mass deltas and the tooltips all still come from the real
+   bench widget instead of a copy of it. Non-enumerable, so designSig()'s
+   JSON.stringify(D) does not see it twice - latSig() already carries it. */
+Object.defineProperty(D,"__abs",{
+  get:()=>LAT.abs,
+  set:v=>{ if(v!==LAT.abs){ LAT.abs=v; latRevolve(); } }});
+
+latDefault();

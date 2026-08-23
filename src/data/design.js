@@ -40,11 +40,14 @@ const FUEL=[
  {name:"U-ZR METALLIC",beta:640,excess:6000,densK:1.85,condK:.55,mass:-25,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
 ];
+/* dens is what latMass() weighs the drawn band with. The old flat `mass`
+   figure is gone: a reflector is a thickness you give a face now, so what it
+   weighs depends on how much of it you asked for. */
 const REFL=[
- {name:"NONE",dRho:0,dV:0,mass:0,note:"Neutrons that leak out are lost. Simplest and lightest option."},
- {name:"STEEL",dRho:250,dV:0,mass:28,note:"Reflects some leakage back into the core, worth about 250 pcm."},
- {name:"BERYLLIUM",dRho:750,dV:120,mass:62,note:"The best reflector available, worth 750 pcm. Its (n,2n) reaction also pushes the void coefficient in the positive direction."},
- {name:"GRAPHITE",dRho:520,dV:60,mass:48,note:"Good reflector and cheap, with a mild positive shift to the void coefficient."},
+ {name:"NONE",dRho:0,dV:0,dens:0,note:"Neutrons that leak out are lost. Simplest and lightest option, because there is nothing there."},
+ {name:"STEEL",dRho:250,dV:0,dens:7.9,note:"Reflects some leakage back into the core, worth about 250 pcm at one ring of thickness. Dense, so a thick band is expensive."},
+ {name:"BERYLLIUM",dRho:750,dV:120,dens:1.85,note:"The best reflector available, worth 750 pcm, and light enough to use thickly. Its (n,2n) reaction also pushes the void coefficient in the positive direction."},
+ {name:"GRAPHITE",dRho:520,dV:60,dens:1.7,note:"Good reflector, cheap and light, with a mild positive shift to the void coefficient."},
 ];
 const SCRAM=[
  {name:"GRAVITY DROP",rate:.45,mass:20,note:"Fail-safe on loss of power, but slow, and it slows further under hull acceleration."},
@@ -89,6 +92,12 @@ const BUDGET=1500;
    critical here, the shutdown margin is measured from here, and resetPlant()
    starts the bank here - one number, because three copies of it would drift. */
 const RODX0=.35;
+/* SEVEN OF THESE ARE NO LONGER INPUTS. poison, pitch, hd, power, nbank and
+   rodw are written by latMeasure() in src/data/lattice.js from the lattice you
+   laid out, and the values below are only what they read before the first
+   revolve. Everything still reads them the way it always did; nothing writes
+   them but the measurement. refl is still yours - you pick the material, the
+   drawing decides how much of it there is. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          loops:1,pumps:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
@@ -116,12 +125,18 @@ function derived(){
   const a=ARCH[D.arch],f=FUEL[D.fuel],rf=REFL[D.refl];
   const dens=a.dens*f.densK*(1.15-0.15*D.pitch);
   const coreMass=D.power/dens*22*(0.8+0.2*D.hd);
-  const mass=a.mass+f.mass+rf.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
+  /* latMass() replaces two table entries that used to stand in for drawn
+     things: the reflector's flat catalogue figure, and a rod-worth surcharge
+     that priced a number rather than the clusters that made it. Both are now
+     weighed - volume times density, ring by ring - and a single ring of real
+     steel round a real core comes to rather more than the 28 t the option list
+     sold. That gap is a finding, not a rounding error. */
+  const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
     +PUMPS[D.pumps].mass+SGT[D.sg].mass+CONT[D.cont].mass+BKP[D.bkp].mass
     +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
-    + (D.rodw-1800)/100*4 + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
+    + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
-    + (D.autorod?26:0) + D.turb*50 + D.condCap*40 + layMass;
+    + (D.autorod?26:0) + D.turb*50 + D.condCap*40 + layMass + latMass();
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess+rf.dRho-D.poison-leak;

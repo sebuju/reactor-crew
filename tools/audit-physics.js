@@ -9,10 +9,24 @@ const {execFileSync}=require('child_process');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
  'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
- 'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI}');
+ 'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
+ 'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM}');
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), PUMPS=M.PUMPS(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
-const set=o=>{ Object.assign(D,BASE,o); M.commission(); return M.S(); };
+/* THE LATTICE IS PART OF THE DESIGN NOW, so set() has to put it back as well
+   as D, or one case's core leaks into the next. Order matters: BASE carries
+   the seven fields the lattice MEASURES, and they are stale the moment the
+   lattice differs - so latDefault() runs last and overwrites them with the
+   truth. `o.lat` is a hook for a case that wants a different core: it runs
+   after the reset and does its own latRevolve(). */
+const set=o=>{
+  o=o||{};
+  const lat=o.lat; if(lat) { o=Object.assign({},o); delete o.lat; }
+  Object.assign(D,BASE,o);
+  M.latDefault();
+  if(lat) lat();
+  M.commission(); return M.S();
+};
 const run=(s,secs)=>{ for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) break; } return s; };
 
 let fails=0;
@@ -149,11 +163,26 @@ console.log('\n=== PROTECTION SYSTEM IS A DESIGN CHOICE ===');
   if(s.scrammed)       bad(`no RPS fitted but the plant scrammed itself: ${s.trip}`);
   console.log(`  RPS not fitted: ${s.trip||'no trip'} at t=${s.t.toFixed(1)}s n=${(s.n*100).toFixed(0)}%`);
 }
-{ const s=set({rps:false, rodw:5200}); run(s,10);
+{ /* Rod worth used to be a number you set. It is measured off the solve now,
+     so this case has to BUILD a core worth about 5200 pcm instead of asking
+     for one: hafnium clusters, and a lot of them, packed inward where the flux
+     is. The assertion is unchanged and so is the point of it - withdraw a very
+     heavy bank with nothing watching and the core destroys itself. */
+  const s=set({rps:false, lat:()=>{
+    const LAT=M.LAT(), LQ=M.LQ, LIX=M.LIX;
+    LAT.abs=2;                                   // hafnium
+    for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
+      if(LAT.slot[LIX(u,v)] && (u+v)%2===0) LAT.rod[LIX(u,v)]=(u+v)%8<4?0:1;
+    M.latRevolve();
+  }});
+  const built=D.rodw;
+  if(built<3400) bad(`the heavy-bank core came to only ${built.toFixed(0)} pcm; hafnium alone is worth 1.34x the stock 2600`);
+  if(built>4600) bad(`the heavy-bank core came to ${built.toFixed(0)} pcm - cluster count is buying worth again, so rodShape() stopped normalising`);
+  run(s,10);
   M.D().autorod=false; M.P().autorod=false; s.rodDem=0;
   run(s,120);
   if(!s.melt && !s.breach) bad('no RPS fitted and a full rod withdrawal destroyed nothing');
-  console.log(`  RPS not fitted, rod worth 5200: melt=${s.melt} breach=${s.breach} at t=${s.t.toFixed(0)}s`);
+  console.log(`  RPS not fitted, ${built.toFixed(0)} pcm of DRAWN bank worth: melt=${s.melt} breach=${s.breach} at t=${s.t.toFixed(0)}s`);
 }
 { set({rps:false});
   const w=M.derived().warn;
