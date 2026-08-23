@@ -9,7 +9,7 @@ const {execFileSync}=require('child_process');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
  'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
- 'setSplit,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI}');
+ 'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI}');
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), PUMPS=M.PUMPS(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 const set=o=>{ Object.assign(D,BASE,o); M.commission(); return M.S(); };
@@ -388,6 +388,35 @@ const Zs = s => Array.from(s.rodZ).map(v=>v.toFixed(3)).join(' ');
   for(let b=1;b<s.rodZ.length;b++)
     if(s.rodZ[b]!==others[b-1]) bad(`driving bank 1 moved bank ${b+1} (${others[b-1]} -> ${s.rodZ[b]})`);
   console.log(`  driving one bank: ${(moved*100).toFixed(2)}% of travel in 5 s at ROD_RATE, the others did not move`);
+}
+{ /* The master slider is never taken off the panel, so it has to MEAN something
+     in split - and the meaning is "move the whole stack", not "move bank 1".
+     Bank 2 is put on MANUAL first: the master is the operator's handle, and
+     MANUAL only stands a bank down from the TEMPERATURE CONTROLLER. If the
+     master ever stopped carrying a manual bank the spread would open every time
+     it was used, which is exactly the bug this asserts against. */
+  const s=set({}); run(s,60); s.byp.rod=true; M.setSplit(true);
+  s.bankAuto[1]=false;
+  s.rodZDem[0]+=0.06; s.rodZDem[2]-=0.04;     // a spread the master must not disturb
+  run(s,12);
+  const before=Array.from(s.rodZDem), spread0=Math.max(...before)-Math.min(...before);
+  M.setCommon(s.rodDem+0.10);
+  const after=Array.from(s.rodZDem), spread1=Math.max(...after)-Math.min(...after);
+  const step0=after[0]-before[0];
+  for(let b=0;b<after.length;b++){
+    const d=after[b]-before[b];
+    if(Math.abs(d-step0)>1e-9) bad(`the master moved bank ${b+1} by ${d.toFixed(5)} and bank 1 by ${step0.toFixed(5)}`);
+  }
+  if(Math.abs(step0-0.10)>1e-9) bad(`the master was asked for +0.100 and delivered ${step0.toFixed(5)}`);
+  if(Math.abs(spread1-spread0)>1e-9) bad(`the master changed the spread ${spread0.toFixed(5)} -> ${spread1.toFixed(5)}`);
+  if(s.bankAuto[1]) bad('bank 2 was supposed to be on MANUAL for this case');
+  console.log(`  the master in split: every bank +${(step0*100).toFixed(1)}%, bank 2 on MANUAL came too, spread held at ${(spread0*100).toFixed(1)} points`);
+  /* and it still steers the walk while the banks are reganging, instead of the
+     regang block overwriting it every tick */
+  M.setSplit(false); const tgt=s.rodDem+0.05; M.setCommon(tgt); run(s,20);
+  if(s.split) bad('the banks never finished ganging in 20 s');
+  if(Math.abs(s.rodPos-tgt)>2e-3) bad(`ganged onto ${s.rodPos.toFixed(4)}, the master had asked for ${tgt.toFixed(4)}`);
+  console.log(`  the master steers the regang walk: banks ganged onto ${(s.rodPos*100).toFixed(1)}%, asked for ${(tgt*100).toFixed(1)}%`);
 }
 { /* Split has to reach the flux or it is decoration - the same bar the tilt
      trim is held to. Use the SAME spread the trim gets (XTILTZ) and the same

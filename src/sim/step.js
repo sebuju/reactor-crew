@@ -143,6 +143,30 @@ function manualScram(){
    step several hundred pcm into the core - so it sets reGang instead and the
    drives walk the banks together at their own rate. The mode does not actually
    change until they have arrived. */
+/* ── the master bank demand, in every mode ──
+   The bank slider is the control you reach for without looking, so it is never
+   taken off the panel. What it MEANS is the same sentence in all three states:
+   "move the whole stack to here". Ganged there is one stack; split there are NB
+   of them and the slider carries them all by the same amount, so the spread the
+   per-bank sliders set is untouched; reganging, s.rodDem IS the target the banks
+   are walking to, so writing it steers the walk instead of being wiped by it.
+
+   It moves a bank on MANUAL as well. MANUAL means the temperature controller is
+   not driving that bank - it never meant the operator could not. This is the one
+   writer; nothing else may set s.rodDem from the panel.
+
+   The mean is refreshed here rather than waiting for the next tick, because the
+   pointer can call this twice in one frame and a delta measured against a stale
+   mean would be applied twice. */
+function setCommon(v){
+  const s=S;
+  if(s.split && !s.reGang){
+    const d=v-s.rodDem;
+    let m=0; for(let b=0;b<P.NB;b++){ s.rodZDem[b]=clamp(s.rodZDem[b]+d,0,1); m+=s.rodZDem[b]; }
+    s.rodDem=m/P.NB;
+  } else s.rodDem=clamp(v,0,1);
+}
+
 function setSplit(on){
   const s=S;
   if(on && !s.split){
@@ -150,8 +174,10 @@ function setSplit(on){
     logE("warn","BANKS SPLIT",
       "The banks are now driven one at a time and the tilt trim is stood down - per-bank demand is the tilt handle from here. Each bank keeps its own AUTO or MANUAL setting, and the T-avg controller drives only the ones left on AUTO. Fewer banks on AUTO means less worth answering the same temperature error, so the loop gets slower, not just smaller.");
   } else if(!on && s.split && !s.reGang){
-    /* Freeze the master here, once. If rodPos kept tracking the mean while the
-       banks converge, the target would chase the banks that are chasing it. */
+    /* Seed the target here, once. If it kept tracking the mean while the banks
+       converge, the target would chase the banks that are chasing it. The target
+       is s.rodDem rather than s.rodPos, so the master slider still steers the
+       walk instead of being overwritten by it every tick. */
     let m=0; for(let b=0;b<P.NB;b++) m+=s.rodZ[b];
     s.rodPos=s.rodDem=m/P.NB;
     s.reGang=true;
@@ -310,7 +336,7 @@ function step(dt){
   if(s.reGang){
     let done=true;
     for(let b=0;b<P.NB;b++){
-      s.rodZDem[b]=clamp(s.rodPos+P.bankW[b]*XTILTZ*s.tilt,0,1);
+      s.rodZDem[b]=clamp(s.rodDem+P.bankW[b]*XTILTZ*s.tilt,0,1);
       if(Math.abs(s.rodZ[b]-s.rodZDem[b])>1e-6) done=false;
     }
     if(done){ s.split=false; s.reGang=false; }
@@ -352,9 +378,13 @@ function step(dt){
   /* Split, the master pair is a readout rather than a state, so the ~8 places
      that print or plot "the bank" keep working without knowing about banks.
      Not while reganging: rodPos is the frozen target the banks are walking to. */
-  if(s.split && !s.reGang){
-    let m=0,d=0; for(let b=0;b<P.NB;b++){ m+=s.rodZ[b]; d+=s.rodZDem[b]; }
-    s.rodPos=m/P.NB; s.rodDem=d/P.NB;
+  if(s.split){
+    let m=0; for(let b=0;b<P.NB;b++) m+=s.rodZ[b];
+    s.rodPos=m/P.NB;                       // actual: the mean of where the banks are
+    /* Demand is the master's own command while reganging - it is the target the
+       walk is aimed at, so deriving it back off the banks would erase the order
+       the moment it was given. Settled, it is the mean of the per-bank demands. */
+    if(!s.reGang){ let d=0; for(let b=0;b<P.NB;b++) d+=s.rodZDem[b]; s.rodDem=d/P.NB; }
   }
 
   /* ── boron: an actuator, not a setting ──
