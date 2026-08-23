@@ -7,7 +7,8 @@
 */
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
- 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo}');
+ 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
+ 'setSplit,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI}');
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), PUMPS=M.PUMPS(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 const set=o=>{ Object.assign(D,BASE,o); M.commission(); return M.S(); };
@@ -309,6 +310,179 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
   const s=set({bkp:1}); run(s,10); s.blackout=true; run(s,60);
   if(Math.abs(s.flow-0.5)>0.03) bad(`battery bank holds ${(s.flow*100).toFixed(0)}% flow in a blackout, bench promised half`);
   console.log(`  BACKUP: diesels hold full flow through a blackout, battery holds ${(s.flow*100).toFixed(0)}%`);
+}
+
+/* ══════════ THE BANKS SPLIT, AND THE CONTROLLER IS TUNED BY HAND ══════════
+   Everything below defends one idea: a bank is a place, not a share of one
+   number. The dangerous edge is the mode change itself - flipping s.split
+   without walking the drives would overwrite every bank in a single tick and
+   step several hundred pcm into a critical core. */
+console.log('\n=== THE BANKS ARE SEVERAL PLACES, NOT ONE NUMBER ===');
+const Zs = s => Array.from(s.rodZ).map(v=>v.toFixed(3)).join(' ');
+
+{ /* a plant nobody has touched is ganged, all-auto, and sitting on its demand */
+  const s=set({});
+  if(s.split)  bad('a freshly commissioned plant came up with its banks split');
+  if(s.reGang) bad('a freshly commissioned plant came up mid-regang');
+  if(!s.bankAuto.every(Boolean)) bad(`a freshly commissioned plant has banks off auto: ${s.bankAuto}`);
+  let d=0; for(let b=0;b<M.P().NB;b++) d=Math.max(d,Math.abs(s.rodZDem[b]-s.rodZ[b]));
+  if(d!==0) bad(`per-bank demand does not equal actual at commissioning (off by ${d})`);
+  console.log(`  commissioned ganged, ${s.bankAuto.length} banks on auto, demand on actual`);
+}
+{ /* Splitting must not move a single rod. The tilt is deliberately non-zero:
+     the banks are spread when it happens, and adopting that spread as demand
+     is the whole trick. One drive step of slack is allowed, nothing more. */
+  const s=set({}); s.tiltDem=0.5; run(s,60);
+  const was=Array.from(s.rodZ), rho0=s.rho;
+  M.setSplit(true); M.step(0.02);
+  const jump=Math.max(...was.map((v,i)=>Math.abs(v-s.rodZ[i]))), lim=M.ROD_RATE*0.02;
+  if(!s.split) bad('setSplit(true) did not take');
+  if(jump>lim*1.001) bad(`entering split moved a bank ${jump.toExponential(2)} in one tick, limit ${lim.toExponential(2)}`);
+  if(Math.abs(s.rho-rho0)>1) bad(`entering split stepped reactivity by ${(s.rho-rho0).toFixed(1)} pcm`);
+  console.log(`  entering split: worst bank moved ${jump.toExponential(1)} (one drive step), rho step ${(s.rho-rho0).toFixed(2)} pcm`);
+}
+{ /* And leaving must not either. This is the assertion the reGang walk exists
+     for: drop it and flip s.split directly, and rodBanks() rewrites every bank
+     from the master in one tick - this fails by three orders of magnitude. */
+  const s=set({}); run(s,60); M.setSplit(true);
+  s.rodZDem[0]=0.60; s.rodZDem[s.rodZ.length-1]=0.20; run(s,40);
+  const spread=Math.max(...s.rodZ)-Math.min(...s.rodZ);
+  if(spread<0.15) bad(`could not open a spread to regang from (only ${spread.toFixed(3)})`);
+  M.setSplit(false);
+  if(!s.reGang) bad('setSplit(false) flipped the mode instead of starting a walk');
+  let worst=0, arrived=-1; const lim=M.ROD_RATE*0.02;
+  for(let i=0;i<90*50;i++){
+    const prev=Array.from(s.rodZ); M.step(0.02);
+    for(let b=0;b<s.rodZ.length;b++) worst=Math.max(worst,Math.abs(s.rodZ[b]-prev[b]));
+    if(arrived<0 && !s.split) arrived=i/50;
+  }
+  if(worst>lim*1.001) bad(`reganging teleported a bank ${worst.toExponential(3)} in one tick, limit ${lim.toExponential(3)}`);
+  if(s.split||s.reGang) bad('the banks never finished ganging in 90 s');
+  const left=Math.max(...s.rodZ)-Math.min(...s.rodZ);
+  if(left>0.005) bad(`ganged banks still spread by ${left.toFixed(4)}`);
+  console.log(`  leaving split: ${spread.toFixed(2)} of spread walked shut in ${arrived.toFixed(0)} s, worst tick ${worst.toExponential(1)} (drive limit ${lim.toExponential(1)})`);
+}
+{ /* One motor, one speed - and moving one bank must not disturb the others.
+     Measured over a short window on purpose: drive a bank far enough and the
+     plant answers with a real transient, and then it is the transient being
+     timed rather than the drive. */
+  const s=set({}); run(s,60); s.byp.rod=true; M.setSplit(true);
+  const start=s.rodZ[0], others=Array.from(s.rodZ).slice(1);
+  s.rodZDem[0]=1; run(s,5);
+  const moved=s.rodZ[0]-start, want=M.ROD_RATE*5;
+  if(Math.abs(moved-want)>1e-6) bad(`a split bank travelled ${moved.toFixed(5)} in 5 s, ROD_RATE says ${want.toFixed(5)}`);
+  for(let b=1;b<s.rodZ.length;b++)
+    if(s.rodZ[b]!==others[b-1]) bad(`driving bank 1 moved bank ${b+1} (${others[b-1]} -> ${s.rodZ[b]})`);
+  console.log(`  driving one bank: ${(moved*100).toFixed(2)}% of travel in 5 s at ROD_RATE, the others did not move`);
+}
+{ /* Split has to reach the flux or it is decoration - the same bar the tilt
+     trim is held to. Use the SAME spread the trim gets (XTILTZ) and the same
+     zero-sum bankW shape, so this measures the handle and not the size of the
+     shove. It does NOT beat the trim, and it is not supposed to: a spread is
+     zero-sum in rod TRAVEL, never in rod WORTH, because the inner bank sits
+     where the flux is. Widen it past XTILTZ and the net negative reactivity
+     collapses power and the plant trips on LOW PRESSURE - measured. What split
+     buys is per-bank MANUAL, not a bigger tilt. */
+  const XT=0.30;                       // XTILTZ, the span the trim is allowed
+  const lean=dir=>{ const s=set({}); run(s,60); s.byp.rod=true; M.setSplit(true);
+    const z=s.rodZ[0], W=M.P().bankW;
+    for(let b=0;b<M.P().NB;b++) s.rodZDem[b]=Math.max(0,Math.min(1,z+W[b]*XT*dir));
+    run(s,90); return s; };
+  const inn=lean(1), out=lean(-1);
+  if(inn.scrammed||out.scrammed) bad(`a trim-sized split lean tripped the plant: ${inn.trip||out.trip}`);
+  if(!(inn.ro<out.ro)) bad(`leaning the banks inward did not pull power outward: ro ${out.ro.toFixed(4)} -> ${inn.ro.toFixed(4)}`);
+  const auth=(out.ro-inn.ro)*100;
+  if(auth<1.2) bad(`split only moves the radial offset ${auth.toFixed(2)} points; weaker than the tilt trim it stands down`);
+  console.log(`  radial offset, banks leaned in / out at the trim's own span: ${(inn.ro*100).toFixed(1)}% / ${(out.ro*100).toFixed(1)}%`);
+  console.log(`  split authority: ${auth.toFixed(1)} points, against the tilt trim's 1.5 - the same handle, not a bigger one`);
+}
+{ /* the point of the feature: hold one bank by hand while the rest follow load */
+  const s=set({}); run(s,60); M.setSplit(true); s.bankAuto[0]=false;
+  const held=s.rodZ[0], was=Array.from(s.rodZ);
+  s.loadDem=1.10; run(s,90);
+  if(s.scrammed) bad(`the manual-bank case tripped before it could be measured: ${s.trip}`);
+  if(s.rodZ[0]!==held) bad(`a bank on MANUAL moved anyway: ${held} -> ${s.rodZ[0]}`);
+  let moved=false;
+  for(let b=1;b<s.rodZ.length;b++) if(Math.abs(s.rodZ[b]-was[b])>0.01) moved=true;
+  if(!moved) bad('no bank on AUTO answered a 110% load step, so the manual test proves nothing');
+  if(!M.bankAutoLive(1)) bad('bank 2 should still be under the controller');
+  if(M.bankAutoLive(0))  bad('bankAutoLive() still claims a MANUAL bank is being driven');
+  console.log(`  bank 1 held on MANUAL at ${(held*100).toFixed(0)}% while the rest went to ${Zs(s)}`);
+}
+{ /* a latch outranks every one of those switches at once */
+  const s=set({}); run(s,60); M.setSplit(true);
+  s.bankAuto.fill(false); s.byp.rod=true;
+  s.rodZDem[0]=0; s.rodZDem[1]=0.2;
+  M.manualScram(); run(s,5);
+  for(let b=0;b<s.rodZ.length;b++){
+    if(s.rodZ[b]<0.99)   bad(`a scram left bank ${b+1} at ${s.rodZ[b].toFixed(3)} - manual must not outrank a latch`);
+    if(s.rodZDem[b]!==1) bad(`a scram left bank ${b+1} demanding ${s.rodZDem[b]}`);
+  }
+  if(s.rodDem!==1) bad(`a scram left master demand at ${s.rodDem}`);
+  console.log(`  scram with every bank split, manual and bypassed: banks ${Zs(s)}`);
+}
+{ /* and a jam outranks the scram, split or not - the drives are simply gone */
+  const s=set({}); run(s,60); M.setSplit(true); run(s,1);
+  s.rodJam=true; const was=Array.from(s.rodZ);
+  s.rodZDem.fill(0); run(s,30);
+  for(let b=0;b<s.rodZ.length;b++)
+    if(s.rodZ[b]!==was[b]) bad(`a jammed drive still moved bank ${b+1} (${was[b]} -> ${s.rodZ[b]})`);
+  console.log(`  jammed drives: banks frozen at ${Zs(s)} however hard you ask`);
+}
+
+console.log('\n=== THE ROD CONTROLLER IS TUNED FROM THE PANEL ===');
+{ /* The lead term is the one that earns its five lines of comment: without it
+     the bank hunts on a load step, the swing grows, and the plant trips itself.
+     Gain is raised for both runs so the loop is fast enough to be unstable. */
+  const swing=lead=>{ const s=set({}); run(s,60);
+    s.arLead=lead; s.arGain=M.AUTOROD_GAIN*4; s.loadDem=1.10;
+    let lo=1e9,hi=-1e9;
+    for(let i=0;i<120*50;i++){ M.step(0.02); const d=s.Tavg-M.tProg(s); lo=Math.min(lo,d); hi=Math.max(hi,d); }
+    return {pp:hi-lo, trip:s.trip}; };
+  const off=swing(0), on=swing(M.AUTOROD_LEAD);
+  if(!(off.pp>on.pp*3)) bad(`lead 0 swings ${off.pp.toFixed(2)} K vs ${on.pp.toFixed(2)} K with lead on; the lead term is not doing its job`);
+  if(!off.trip) bad('a 4x-gain controller with no lead compensation rode out a load step; it is meant to hunt itself into a trip');
+  if(on.trip)   bad(`the same gain WITH lead compensation still tripped: ${on.trip}`);
+  console.log(`  lead 0: T-avg swings ${off.pp.toFixed(1)} K and trips on "${off.trip}"`);
+  console.log(`  lead ${M.AUTOROD_LEAD} s: swings ${on.pp.toFixed(1)} K, no trip`);
+}
+{ /* Gain reaches the physics, but only below the point where the drives
+     saturate: past roughly a quarter of the commissioning tune the bank is
+     already moving as fast as ROD_RATE allows and more gain buys nothing. Both
+     halves are asserted, because the panel tooltip claims both. */
+  const dev=g=>{ const s=set({}); run(s,60); s.arGain=g; s.loadDem=1.10;
+    let peak=0, gap=0;
+    for(let i=0;i<60*50;i++){ M.step(0.02);
+      peak=Math.max(peak,Math.abs(s.Tavg-M.tProg(s))); gap=Math.max(gap,Math.abs(s.rodDem-s.rodPos)); }
+    return {peak,gap}; };
+  const slow=dev(M.AUTOROD_GAIN/32), tune=dev(M.AUTOROD_GAIN), fast=dev(M.AUTOROD_GAIN*8);
+  if(!(slow.peak>tune.peak*1.15)) bad(`detuning the gain 32x barely changed the transient: ${slow.peak.toFixed(3)} K vs ${tune.peak.toFixed(3)} K`);
+  if(slow.gap>1e-9) bad('a detuned controller still outran the drives; the saturation claim is wrong');
+  if(fast.gap<0.05) bad('an 8x gain did not outrun the drives; the "drives are the limit" claim is wrong');
+  if(Math.abs(fast.peak-tune.peak)>0.05) bad(`past saturation the gain still changed the transient by ${Math.abs(fast.peak-tune.peak).toFixed(3)} K`);
+  console.log(`  gain /32 -> peak deviation ${slow.peak.toFixed(2)} K, drives never behind demand`);
+  console.log(`  gain x1 -> ${tune.peak.toFixed(2)} K, x8 -> ${fast.peak.toFixed(2)} K: past saturation the drives are the limit, not the gain`);
+}
+{ /* The band reaches the physics. Pinned, the controller cannot leave it;
+     opened, it finds its own operating point. Note what this does NOT do:
+     opening the band does not free the bank - only the bypass or MANUAL does. */
+  const pin=(lo,hi)=>{ const s=set({}); run(s,60); s.arLo=lo; s.arHi=hi; run(s,90); return s.rodPos; };
+  const narrow=pin(0.44,0.46), wide=pin(0,1);
+  if(narrow<0.435||narrow>0.465) bad(`a band pinned to 44..46% left the bank at ${(narrow*100).toFixed(1)}%`);
+  if(Math.abs(wide-narrow)<0.02) bad('opening the band all the way changed nothing; it does not reach the physics');
+  console.log(`  band pinned 44..46%: bank sits at ${(narrow*100).toFixed(1)}%; band opened 0..100%: ${(wide*100).toFixed(1)}%`);
+  const s=set({}); run(s,60); s.arLo=0; s.arHi=1; s.rodDem=0.90; run(s,90);
+  if(Math.abs(s.rodPos-0.90)<0.05) bad('a wide band handed the bank to the operator; that is what the bypass is for');
+  console.log(`  a wide band is authority, not freedom: demand 90% was walked back to ${(s.rodPos*100).toFixed(1)}%`);
+}
+{ /* lo and hi cannot cross. clamp(v,50,20) returns 50 with no complaint, which
+     would pin the bank at the wrong end and say nothing about why. */
+  const s=set({});
+  s.arLo=Math.min(0.80,s.arHi);            // exactly what the panel setter does
+  if(s.arLo>s.arHi) bad(`the OUT limit crossed the IN limit (${s.arLo} > ${s.arHi})`);
+  s.arHi=Math.max(0.05,s.arLo);
+  if(s.arHi<s.arLo) bad(`the IN limit crossed the OUT limit (${s.arHi} < ${s.arLo})`);
+  console.log(`  the band cannot invert: dragging either limit past the other stops it at ${(s.arLo*100).toFixed(0)}%`);
 }
 
 console.log(fails? `\n${fails} FAILURE(S)` : '\nall physics checks passed');

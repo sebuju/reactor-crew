@@ -50,7 +50,7 @@ global.window=global; global.performance={now:()=>1000}; global.devicePixelRatio
 global.requestAnimationFrame=()=>{}; global.addEventListener=()=>{};
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
  '; return {drawDesign,drawMimic,drawPanels,drawHelp,topbar,commission,step,sample,combatHit,'+
- 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D};')();
+ 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v};')();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
 function warmUp(){
@@ -68,6 +68,26 @@ function sweep(tag){
 sweep('');
 /* optional kit changes what the bench and the panel draw, so audit those paths too */
 M.D().rps=false; warmUp(); sweep('norps:'); M.D().rps=true;
+/* The stock sweep leaves the core selected, so it never draws the rod-drive
+   inspector at all - and the split control strip and the per-bank table are the
+   densest text in the plant. Select the rods and walk every mode. */
+warmUp(); M.setSel('rods'); sweep('rods:');
+/* SPLIT with the banks actually apart: the strip grows a row per bank and each
+   row carries a button and a labelled slider in the same width the ganged one
+   gave a slider alone. Four banks is the worst case the bench will sell. */
+M.setSplit(true);
+for(let b=0;b<M.S().rodZDem.length;b++) M.S().rodZDem[b]=0.15+b*0.25;
+M.S().bankAuto[1]=false;
+for(let i=0;i<600;i++) M.step(0.02);
+sweep('split:');
+/* mid-regang, which is the one state with a third button label */
+M.setSplit(false); for(let i=0;i<20;i++) M.step(0.02);
+sweep('ganging:');
+/* and the fewest banks, where every row is widest and the labels have most room
+   to be wrong about how many banks there are */
+M.D().nbank=2; warmUp(); M.setSel('rods'); M.setSplit(true);
+for(let i=0;i<200;i++) M.step(0.02);
+sweep('split2:'); M.D().nbank=4; warmUp(); M.setSel('core');
 
 console.log('=== TEXT OUTSIDE THE 12..748 CONTENT MARGINS ===');
 let n=0;
