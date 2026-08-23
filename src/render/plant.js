@@ -122,7 +122,10 @@ function coreField(x,y,w,h,V){
 function tag(s,cx,base,size,sp,col){
   const o={size,sp}, w=tw(s,o), Lx=GX+2, Rx=GX+GW*CELL-2;
   cx=clamp(cx,Lx+w/2,Rx-w/2);
-  fillRect(cx-w/2-3,base-size-1,w+6,size+3,"rgba(6,10,11,.88)");
+  /* the plate is sized from cap height, not from the em: built from the em it
+     sat low and left a gap over the letters it was meant to back */
+  const c=capH(size);
+  fillRect(cx-w/2-3,base-c-2,w+6,c+5,"rgba(6,10,11,.88)");
   txt(s,cx,base,{size,sp,align:"center",color:col});
 }
 
@@ -146,54 +149,95 @@ function liveValue(p,s){
   }
 }
 
+/* Semantic colour for that readout, where the number carries an alarm meaning of
+   its own. Everything else is plain data cyan. Mirrors liveValue() case for case. */
+function liveColor(p,s){
+  switch(true){
+    case p.id==="pzr": return pColor(s.P);
+    default: return C.cyan;
+  }
+}
+
 /* ══════════ IN-COMPONENT CONTROLS (control room only) ══════════
    A control is not a separate box parked somewhere on the grid: it is a strip
    along the bottom of the component it drives, inside that component's own cells.
    Several controls share one strip by weight.  The design bench passes no live
    state, so its grid carries no strips at all. */
+/* The pump tooltip is shown by the diagram strip and by the inspector, so it is
+   written once. It is a function, not a constant, because the design floor it
+   names is only known after commission(). */
+const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The pumps can be stopped completely: the red line on the track is the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
+/* ctlFor() returns ROWS of controls, not one flat list. A slider sharing a strip
+   with two buttons got 30px of a 92px component, which is 3.3% of rod travel per
+   pixel - unusable. Each row is CTL_H tall and the grid row underneath the
+   component grows to fit them all, so a slider gets the whole component width. */
 const CTL_H=13;
 function ctlFor(p){
-  if(p.id.startsWith("pump")) return [
-    {kind:"sld",flex:1,val:()=>S.flow*100,min:()=>P.flowMin*100,max:()=>100,
-     dem:()=>S.flowDem*100,
+  if(p.id.startsWith("pump")) return [[
+    /* the floor is a trip setpoint, not a stop: the panel may order the pumps
+       off entirely, and the mark says where that starts costing */
+    {kind:"sld",flex:1,val:()=>S.flow*100,min:()=>0,max:()=>100,
+     dem:()=>S.flowDem*100,mark:()=>P.flowMin*100,
      fmt:v=>v.toFixed(0)+" %",set:v=>{S.flowDem=v/100;},
-     tip:"COOLANT PUMPS - primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes."}];
+     tip:"COOLANT PUMPS - "+pumpTip()}]];
   switch(p.id){
     case "rods": return [
-      {kind:"sld",flex:4,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
+     [{kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{S.rodDem=v/100;},
-       tip:"CONTROL BANK - rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."},
-      {kind:"btn",flex:3,danger:()=>true,text:()=>"SCRAM",
+       tip:"CONTROL BANK - rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."}],
+     [{kind:"btn",flex:1,danger:()=>true,text:()=>"SCRAM",
        fn:()=>{ manualScram(); },
        tip:"SCRAM - drops the full bank and trips the turbine with it. Always safe, never free: the xenon that follows locks you out for minutes."},
-      {kind:"btn",flex:3,on:()=>S.scrammed,text:()=>"RESET",
+      {kind:"btn",flex:1,on:()=>S.scrammed,text:()=>"RESET",
        fn:()=>{ resetTrip(); },
-       tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}];
+       tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}],
+     /* the one handle on a radial xenon tilt: it stands the inner banks against
+        the outer ones instead of moving the whole bank together */
+     [{kind:"sld",flex:1,val:()=>S.tilt,min:()=>-1,max:()=>1,dem:()=>S.tiltDem,
+       fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{S.tiltDem=v;},
+       tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. It is the only handle you have on a radial xenon tilt, and full travel takes "+(1/TILT_RATE).toFixed(0)+" s because the drives moving it are the drives that move the bank."}]];
     case "core": return [
-      {kind:"sld",flex:P.boroninj?3:1,val:()=>S.boron,min:()=>-6000,max:()=>0,step:10,
+     [{kind:"sld",flex:1,val:()=>S.boron,min:()=>-6000,max:()=>0,step:10,
        dem:()=>S.boronDem,
        fmt:v=>v.toFixed(0)+" pcm",set:v=>{S.boronDem=v;},
-       tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}].concat(
-      P.boroninj?[{kind:"btn",flex:2,danger:()=>!S.borInjUsed,
+       tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}]].concat(
+      P.boroninj?[[{kind:"btn",flex:1,danger:()=>!S.borInjUsed,
        text:()=>S.borInjUsed?"SPENT":"BORON DUMP",
        fn:()=>{ if(!S.borInjUsed){ S.borInjUsed=true; S.boron-=4000; S.boronDem-=4000;
          logE("alarm","EMERGENCY BORON INJECTED",
            "4000 pcm dumped into the loop. Shut down hard, and it cannot be undone this run."); } },
-       tip:"EMERGENCY BORON - one-shot poison dump worth 4000 pcm. Shuts the reactor down when the rods will not, and it cannot be undone."}]:[]);
-    case "turb": return [
+       tip:"EMERGENCY BORON - one-shot poison dump worth 4000 pcm. Shuts the reactor down when the rods will not, and it cannot be undone."}]]:[]);
+    case "turb": return [[
       {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>125,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{S.loadDem=v/100;},
-       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}];
-    case "pzr": return [
+       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}]];
+    case "pzr": return [[
       {kind:"btn",flex:1,on:()=>S.porvBlocked,text:()=>S.porvBlocked?"SHUT":"OPEN",
        fn:()=>{S.porvBlocked=!S.porvBlocked;},
-       tip:"BLOCK VALVE - manual backup under the relief valve. Shut it when the PORV fails to reseat; that is the whole answer to a stuck-open valve."}];
-    case "hpi": return [
+       tip:"BLOCK VALVE - manual backup under the relief valve. Shut it when the PORV fails to reseat; that is the whole answer to a stuck-open valve."}]];
+    case "hpi": return [[
       {kind:"btn",flex:1,on:()=>S.hpi,text:()=>S.hpi?"INJECT":"OFF",
        fn:()=>{S.hpi=!S.hpi;},
-       tip:"HIGH PRESSURE INJECTION - emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs."}];
+       tip:"HIGH PRESSURE INJECTION - emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs."}]];
   }
   return null;
+}
+
+/* How much room this component's controls need, and therefore how far the grid
+   row it ends in has to grow. Asked once per part per frame, before anything
+   is drawn, because the row heights decide where everything lands. */
+function stripH(p){
+  if(!fitted(p)) return 0;
+  const ctl=ctlFor(p);
+  return (ctl? ctl.length*CTL_H : 0) + (autoOn(p.id)? BYP_H : 0);
+}
+function ctlBands(){
+  const b=new Array(GH).fill(0);
+  for(const p of LAY.parts){
+    const r=p.y+p.h-1;                       // the strip sits in the LAST row it spans
+    if(r>=0&&r<GH) b[r]=Math.max(b[r],stripH(p));
+  }
+  return b;
 }
 
 /* ══════════ BYPASS SWITCHES (control room only) ══════════
@@ -213,10 +257,11 @@ function bypRow(k,x,y,w,h){
   const o={size:6.5,sp:.3};
   /* a narrow component loses the label before it loses the state: the component
      name is printed directly above it anyway */
+  const bl=midBase(y,h,6.5);   // centred, not stuck to the bottom edge
   if(w >= tw(A.label,o)+tw(st,o)+10){
-    txt(A.label,x+3,y+h-3.5,{size:6.5,sp:.3,color:fit?C.ink2:"#3c4c47"});
-    txt(st,x+w-3,y+h-3.5,{size:6.5,sp:.3,align:"right",color:col});
-  } else txt(st,x+w/2,y+h-3.5,{size:6.5,sp:.3,align:"center",color:col});
+    txt(A.label,x+3,bl,{size:6.5,sp:.3,color:fit?C.ink2:"#3c4c47"});
+    txt(st,x+w-3,bl,{size:6.5,sp:.3,align:"right",color:col});
+  } else txt(st,x+w/2,bl,{size:6.5,sp:.3,align:"center",color:col});
   TIP(x,y,w,h,A.name+"  [ "+autoState(k)+" ]",
     A.tip+(fit?"":"  None was fitted at the design bench, so there is nothing to arm and nothing to bypass."));
 }
@@ -232,9 +277,13 @@ function ctlStrip(list,x,y,w,h){
     if(c.kind==="sld"){
       const cy=y+h/2, lab=c.fmt(c.val());
       slider(cx,cy,cw,c.val(),c.min(),c.max(),
-        {th:h,tw:7,ticks:false,dem:c.dem?c.dem():null,
+        {th:h,tw:7,ticks:false,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,
          fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
-      if(cw>=64) tag(lab,cx+cw-tw(lab,{size:6.5})/2-3,cy+3,6.5,0,C.cyan);
+      /* the readout sits at whichever end the thumb is not, or the opaque plate
+         hides the very thing you are dragging */
+      if(cw>=64){ const lw=tw(lab,{size:6.5}),
+            far=(c.val()-c.min())/(c.max()-c.min()) > .5;
+        tag(lab, far? cx+lw/2+3 : cx+cw-lw/2-3, midBase(y,h,6.5), 6.5,0,C.cyan); }
     } else {
       /* a narrow box loses its letter spacing before it loses its label */
       button(cx,y,cw,h,c.text(),{danger:dan,on:on,size:6.5,sp:cw<30?0:.5,fn:c.fn});
@@ -246,19 +295,23 @@ function ctlStrip(list,x,y,w,h){
 
 function drawPlant(y0,L){
   layoutMetrics(); GY=y0;
-  fillRect(GX,GY,GW*CELL,GH*CELL,C.well);
+  /* layoutMetrics() measured the design with no bands; from here on the view has
+     them, and every row position comes from rowTop() rather than Y*CELL */
+  BANDS = L? ctlBands() : null;
+  const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
+  fillRect(GX,GY,GW*CELL,GHp,C.well);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
-    if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,GY+Y*CELL,CELL,CELL,"#1c1210");
+    if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,rowTop(Y),CELL,rowH(Y),"#1c1210");
   const gl = L? "rgba(120,180,190,.03)" : "rgba(120,180,190,.05)";
-  for(let X=0;X<=GW;X++) fillRect(GX+X*CELL,GY,1,GH*CELL,gl);
-  for(let Y=0;Y<=GH;Y++) fillRect(GX,GY+Y*CELL,GW*CELL,1,gl);
-  frame(GX,GY,GW*CELL,GH*CELL,C.edge2);
-  for(let Y=0;Y<GH;Y++) txt("EL"+pad(GH-1-Y,1),GX+4,GY+Y*CELL+11,{size:6.5,color:"#2c4148"});
-  txt("KEEL / HULL",GX+GW*CELL/2,GY+GH*CELL-6,{size:7,sp:1.6,align:"center",color:"#5a3128"});
+  for(let X=0;X<=GW;X++) fillRect(GX+X*CELL,GY,1,GHp,gl);
+  for(let Y=0;Y<=GH;Y++) fillRect(GX,rowTop(Y),GW*CELL,1,gl);
+  frame(GX,GY,GW*CELL,GHp,C.edge2);
+  for(let Y=0;Y<GH;Y++) txt("EL"+pad(GH-1-Y,1),GX+4,rowTop(Y)+11,{size:6.5,color:"#2c4148"});
+  txt("KEEL / HULL",GX+GW*CELL/2,GY+GHp-6,{size:7,sp:1.6,align:"center",color:"#5a3128"});
   txt("UPPER DECK / HULL",GX+GW*CELL/2,GY+12,{size:7,sp:1.6,align:"center",color:"#5a3128"});
-  ctx.save(); ctx.translate(GX+11,GY+GH*CELL/2); ctx.rotate(-Math.PI/2);
+  ctx.save(); ctx.translate(GX+11,GY+GHp/2); ctx.rotate(-Math.PI/2);
   txt("FWD BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
-  ctx.save(); ctx.translate(GX+GW*CELL-7,GY+GH*CELL/2); ctx.rotate(Math.PI/2);
+  ctx.save(); ctx.translate(GX+GW*CELL-7,GY+GHp/2); ctx.rotate(Math.PI/2);
   txt("AFT BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
 
   const Th = L? L.Tavg+15*(L.n*.935+L.decay) : 598;
@@ -266,7 +319,7 @@ function drawPlant(y0,L){
   const PC={ hot: L?lerpC("#5aa9d6","#ff5a45",(Th-520)/110):"#c8735e",
              cold:L?lerpC("#5aa9d6","#ff5a45",(Tc-520)/110):"#5aa9d6",
              surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2" };
-  const DASH={hot:"hot",cold:"cold",steam:"stm",feed:"fw",hpi:"hpi",surge:null,exh:null};
+  const DASH={hot:"hot",cold:"cold",steam:"stm",feed:"fw",hpi:"hpi",surge:"surge",exh:"exh"};
   for(const pass of [0,1]) for(const r of pipeNetwork()){
     if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
@@ -281,12 +334,14 @@ function drawPlant(y0,L){
   }
 
   for(const p of LAY.parts){
-    const x=PXc(p.x), y=PYc(p.y), w=p.w*CELL, h=p.h*CELL;
-    const live = L && (fitted(p)||p.id==="hpi");
+    const {x,y,w,h}=prect(p);
+    /* an accumulator you never fitted has no pump to start: it used to draw
+       "NOT FITTED" and a working INJECT button in the same box */
+    const live = L && fitted(p);
     const ctl = live ? ctlFor(p) : null,
           byk = live ? autoOn(p.id) : null,
           bh  = byk? BYP_H : 0,
-          sh  = (ctl? CTL_H : 0) + bh, sy = y+h-sh;
+          sh  = (ctl? ctl.length*CTL_H : 0) + bh, sy = y+h-sh;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p, fit=fitted(p);
     const dmgd = L && L.dmgParts.includes(p.id);
@@ -301,14 +356,17 @@ function drawPlant(y0,L){
     const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
     const nm = (v0&&!v)? p.name+"  "+v0 : p.name;
     tag(nm,x+w/2,sy-(v?14:4),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
-    if(v) tag(v,x+w/2,sy-3,8,0,dmgd?C.red:C.cyan);
+    if(v) tag(v,x+w/2,sy-3,8,0,dmgd?C.red:liveColor(p,L));
     if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
-    if(ctl) ctlStrip(ctl,x+4,sy+1,w-8,CTL_H-3);
-    if(byk) bypRow(byk,x+4,y+h-bh+1,w-8,bh-3);
+    /* the component tooltip goes down FIRST: findTip() scans backwards and takes
+       the first hit, so anything pushed after it wins inside its own rect. Push
+       it last and it swallows every control tooltip in the strip. */
     TIP(x,y,w,h,p.name+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
       p.tip+(p.access||p.grp==="shield"?"":"  It is boxed in on every side - nobody could reach it to repair it."));
+    if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+4,sy+i*CTL_H+1,w-8,CTL_H-3));
+    if(byk) bypRow(byk,x+4,y+h-bh+1,w-8,bh-3);
   }
-  return GY+GH*CELL;
+  return GY+GHp;
 }
 const drawGrid = y0 => drawPlant(y0,null);

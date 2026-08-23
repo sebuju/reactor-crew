@@ -38,9 +38,36 @@ function buildLayout(){
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.");
   LAY={parts:A}; layLoops=D.loops;
 }
-const PXc=g=>GX+g*CELL, PYc=g=>GY+g*CELL;
+/* ─────────────── control bands ───────────────
+   A control mounted inside a component is only as wide as that component, and a
+   2-cell part is 92px. That is not enough for a slider AND two buttons, so the
+   control room gives each grid ROW extra height at the bottom, exactly as much as
+   the widest strip of any component that ends in that row. Rows with nothing to
+   control get nothing. The design bench passes no live state, so BANDS is null
+   there and the bench grid is pixel-identical to a plant with no controls at all.
+
+   BANDS is a view property, never a design property: layoutMetrics() clears it
+   before it measures, so pipe lengths, thermosiphon head and every coefficient
+   that falls out of them are the same numbers on both screens. */
+let BANDS=null;                                  // per-row extra height, or null
+function rowTop(r){ let y=GY+r*CELL;
+  if(BANDS) for(let i=0;i<r;i++) y+=BANDS[i]||0;
+  return y; }
+/* the inverse of rowTop(), and it must keep counting past both ends of the grid:
+   a port on the very bottom edge lands on row GH, and bendAt() relies on that
+   index falling off its occupancy grid rather than being clamped onto row GH-1 */
+function rowAt(py){
+  if(py<GY) return Math.floor((py-GY)/CELL);
+  for(let r=0;r<GH;r++) if(py<rowTop(r+1)) return r;
+  return GH+Math.floor((py-rowTop(GH))/CELL);
+}
+const gridH = () => rowTop(GH)-GY;
+const PXc=g=>GX+g*CELL, PYc=g=>rowTop(g);
+/* the pixel rect of a component - its height is not p.h*CELL any more, because
+   the rows it spans may carry control bands */
+const prect=p=>({x:PXc(p.x), y:rowTop(p.y), w:p.w*CELL, h:rowTop(p.y+p.h)-rowTop(p.y)});
 function port(p,side){
-  const x=PXc(p.x), y=PYc(p.y), w=p.w*CELL, h=p.h*CELL;
+  const {x,y,w,h}=prect(p);
   return side==="l"?[x,y+h/2] : side==="r"?[x+w,y+h/2]
        : side==="t"?[x+w/2,y] : side==="b"?[x+w/2,y+h] : [x+w/2,y+h/2];
 }
@@ -52,12 +79,14 @@ function port(p,side){
    its way somewhere else.  `vert` means the bend run itself is vertical. */
 function bendAt(lo,hi,c0,c1,vert,skip){
   const g=occupied(null), mid=(lo+hi)/2;
-  const base=vert?GX:GY, n=vert?GW:GH;
-  const k0=Math.floor((Math.min(c0,c1)-(vert?GY:GX))/CELL);
-  const k1=Math.floor((Math.max(c0,c1)-(vert?GY:GX))/CELL);
+  const n=vert?GW:GH;
+  /* rows are not a fixed pitch once the control bands are in, so a pixel y has
+     to be looked up rather than divided */
+  const k0 = vert ? rowAt(Math.min(c0,c1)) : Math.floor((Math.min(c0,c1)-GX)/CELL);
+  const k1 = vert ? rowAt(Math.max(c0,c1)) : Math.floor((Math.max(c0,c1)-GX)/CELL);
   let best=mid, bd=1e9;
   for(let c=0;c<n;c++){
-    const m=base+(c+0.5)*CELL;
+    const m = vert ? GX+(c+0.5)*CELL : rowTop(c)+CELL/2;
     if(m<Math.min(lo,hi)-1 || m>Math.max(lo,hi)+1) continue;
     let hits=0;
     for(let k=Math.max(0,k0);k<=k1;k++){
@@ -161,6 +190,9 @@ function fits(p,nx,ny){
 }
 function layoutMetrics(){
   if(!LAY||layLoops!==D.loops) buildLayout();
+  /* measure the design, not the view: drawPlant() sets the bands again straight
+     after this returns, and nothing else measures between the two */
+  BANDS=null;
   const P_=LAY.parts, id=k=>P_.find(q=>q.id===k), core=id("core"), cc=cen(core);
   let head=0, n=0;
   for(const p of P_) if(p.id.startsWith("sg")){ head += (cc.y - cen(p).y); n++; }
