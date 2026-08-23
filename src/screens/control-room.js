@@ -407,6 +407,7 @@ function combatHit(){
     : p.id.startsWith("sg")
     ? ["STEAM GENERATOR TUBE RUPTURE","Primary coolant is leaking into the secondary side and venting past containment. Inventory falls and activity escapes."]
     : ({core:["REACTOR VESSEL HIT","A penetration in the vessel wall. Coolant is leaking and the metal is permanently damaged."],
+        rods:["ROD DRIVE HIT","The drive mechanisms are wrecked. The bank is stuck where it stands and a scram will not move it. Boron is the only shutdown you have left."],
         pzr :["PRESSURIZER HIT","The relief valve has been knocked open and will not reseat. Close the block valve on the mimic."],
         turb:["TURBINE HIT","Load rejected. The turbine is offline, so the reactor has nowhere to send its heat."],
         cond:["CONDENSER HIT","Heat rejection lost. Steam has nowhere to condense."],
@@ -416,6 +417,7 @@ function combatHit(){
         hpi :["HPI TANK HIT","Emergency injection is unavailable. You cannot refill a leaking loop."]}[p.id]
        || ["EQUIPMENT HIT","A component has been knocked out."]);
   if(p.id==="core"){ S.inv-=6; S.fatigue=Math.min(100,S.fatigue+12); }
+  if(p.id==="rods") S.rodJam=true;
   if(p.id==="pzr"){ S.porvOpen=true; S.porvStuck=true; S.porvAuto=true; }
   if(p.id==="turb"||p.id==="cond") S.load=S.loadDem=0.05;   // a stop valve slams, it does not stroke
   if(p.id==="ctrl") S.noiseMul=3.5;

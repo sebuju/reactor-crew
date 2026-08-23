@@ -93,7 +93,10 @@ function runback(s){ if(autoLive("runback")) s.load=s.loadDem=Math.min(s.load,0.
    turbine runback that rides along with it is defeatable, so it lives here. */
 function manualScram(){
   const s=S;
-  s.scrammed=true; s.rodDem=1; s.rodJam=false; s.trip="MANUAL SCRAM";
+  s.scrammed=true; s.rodDem=1; s.trip="MANUAL SCRAM";
+  /* a scram frees a sticky bank, but not a wrecked one - once the drives have
+     been shot away only a repair party puts them back */
+  if(!s.dmgParts.includes("rods")) s.rodJam=false;
   runback(s);
 }
 /* The eight conditions the protection system watches, in one place. The RPS
@@ -450,6 +453,7 @@ function step(dt){
       if(k.startsWith("sg")) s.sgtr=false;
       if(k==="ctrl") s.noiseMul=1;
       if(k==="bkp") s.bkpLost=false;
+      if(k==="rods") s.rodJam=false;
       logE("info","REPAIR COMPLETE / "+k.toUpperCase(),
         "The component is back in service. It took "+s.repair.need.toFixed(0)+" seconds and cost the repair party dose.");
       s.repair=null;
