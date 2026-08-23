@@ -3,12 +3,31 @@
 
 /* ═══════════════ SCREENS ═══════════════ */
 let screen="design",H=790,helpScroll=0,helpMax=0,pendH=0;
+/* ── the page is the window, not the content ──
+   A screen that fits the window cannot scroll, and that is the whole point. It
+   Nothing here assumes a window shape. The canvas is scaled to the window's
+   WIDTH, so the height it can show is whatever that scale leaves:
+   H = windowHeight / (windowWidth / 760). A window twice as tall shows twice
+   as many units and the plant is drawn bigger; a wide one shows fewer. What is
+   fixed is that the plant is FITTED into whatever that comes to rather than
+   allowed to overflow it - which is also what the plant view's own zoom is for.
+   Worth knowing for the shapes people actually use: the grid alone wants 633
+   units, and a 1920x1080 window leaves about 427. So on a wide screen the
+   plant is drawn at roughly half size until you zoom.
+   The screens that have not been converted yet still size themselves to their
+   content through setPageH(), and say so here. */
+const fitsWindow=()=>screen!=="help";   /* the reference screen scrolls its own text */
+const winPx=()=>(typeof innerHeight==="number"&&innerHeight>200)?innerHeight:900;
 /* a screen asks for its height here; the frame loop applies it after the frame */
-function setPageH(v){ if(Math.abs(H-v)>2) pendH=v; }
+function setPageH(v){ if(!fitsWindow() && Math.abs(H-v)>2) pendH=v; }
 function applyPageH(){ if(pendH){ H=pendH; pendH=0; resize(); } }
 function layout(){ H = screen==="design"?H||1400 : screen==="operate"?H||1700 : H||700; resize(); }
 function resize(){
-  const cssW=Math.max(740,scroller.clientWidth), sc=cssW/W, dpr=devicePixelRatio||1;
+  /* clientWidth is 0 or missing before the page has laid out, and the page
+     height is now DERIVED from it - so an unguarded read does not make the
+     canvas the wrong size, it makes H itself NaN and nothing draws at all */
+  const cssW=Math.max(740,scroller.clientWidth||0), sc=cssW/W, dpr=devicePixelRatio||1;
+  if(fitsWindow()) H=Math.max(420,winPx()/sc);
   cv.style.width=cssW+"px"; cv.style.height=(H*sc)+"px";
   cv.width=Math.round(W*sc*dpr); cv.height=Math.round(H*sc*dpr);
   ctx.setTransform(sc*dpr,0,0,sc*dpr,0,0);

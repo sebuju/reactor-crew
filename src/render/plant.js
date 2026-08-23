@@ -21,7 +21,7 @@ function drawSym(p,x,y,w,h,ink,L){
       fillRect(bx,by+bh*.62,bw,bh*.38,"#ff5a45"); ctx.globalAlpha=1; }
     if(L&&L.dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+L.dmg/140,.2,.85));
     frame(bx,by,bw,bh,ink);
-    coreField(bx+2,by+2,bw-4,bh-4,coreView(L));
+    coreDraw(bx+2,by+2,bw-4,bh-4,coreView(L));
   } else if(id==="rods"){
     shell(()=>ctx.rect(X+8,Y+2,W-16,Hh-10));
     /* One stem per bank on a live plant, each at its own insertion: split banks
@@ -82,6 +82,49 @@ function drawSym(p,x,y,w,h,ink,L){
   }
 }
 
+/* ══════════ THE CORE AT THE SIZE YOU DREW IT ══════════
+   The mesh is 14 rings by 10 levels whatever the lattice is, so a core drawn at
+   two thirds the diameter painted exactly the same picture as a full one. That
+   is the bench and the panel between them telling you the drawing did not
+   matter. The FIELD keeps its mesh - it is a mesh, not a photograph - and the
+   BOX it is painted into is scaled by the metres the revolve measured.
+
+   One reference per axis, and deliberately not the same number: the space
+   inside the vessel symbol is 110 x 82 and a reactor is not. Scaled
+   isotropically, a 2.5 m square core sits as a small square in the middle with
+   three quarters of the width left empty. So width answers to the diameter and
+   height answers to the height, each against a little more than the biggest the
+   bench draws - 2.73 m across at the loosest preset pitch. A little more,
+   because what is left over round the edges is where the reflector goes, and a
+   band has to have somewhere to be.
+
+   The band is CLIPPED to the vessel, not fitted to it. Three cells of reflector
+   round a full-diameter core is wider than the gap, and the honest thing for a
+   symbol to do there is run out of room. */
+const CORE_DIA_REF=2.9, CORE_HGT_REF=3.1, CORE_MIN=0.3;
+/* NONE draws nothing, which is the whole point of a bare face. The other three
+   borrow tones that already mean the right thing here: steel is the metal grey
+   the rod stems are drawn in, graphite is the warm brown the follower is drawn
+   in, and beryllium takes the pale one left. */
+const REFLC=[null,C.metal,C.ink,C.graph];
+function coreDraw(x,y,w,h,V){
+  if(w<=0||h<=0) return;
+  const fw=w*clamp(V.dia/CORE_DIA_REF,CORE_MIN,1);
+  const fh=h*clamp(V.hgt/CORE_HGT_REF,CORE_MIN,1);
+  const fx=x+(w-fw)/2, fy=y+(h-fh)/2, col=REFLC[V.reflMat];
+  if(col){
+    const rc=fw/2/XNR, zc=fh/XNZ;        // one ring across, one level up
+    const br=V.reflR*rc, bt=V.reflT*zc, bb=V.reflB*zc;
+    ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip(); ctx.globalAlpha=.3;
+    if(br>0){ fillRect(fx-br,fy-bt,br,fh+bt+bb,col);
+              fillRect(fx+fw,fy-bt,br,fh+bt+bb,col); }
+    if(bt>0) fillRect(fx,fy-bt,fw,bt,col);
+    if(bb>0) fillRect(fx,fy+fh,fw,bb,col);
+    ctx.restore();
+  }
+  coreField(fx,fy,fw,fh,V);
+}
+
 /* ══════════ THE CORE AS A FIELD ══════════
    Drawn the way the core behaves rather than the way a schematic looks: a
    lattice of points, mirrored about the centreline so it reads as a section.
@@ -93,7 +136,11 @@ function drawSym(p,x,y,w,h,ink,L){
    One function serves both screens: the bench passes no live state and gets
    the shape this design is predicted to settle into. */
 function coreField(x,y,w,h,V){
-  const NC=XNR*2-1, cw=w/NC, ch=h/XNZ, rMax=Math.min(cw,ch)*0.44;
+  /* A negative box is a caller's bug, not a drawing to attempt - but it must
+     not be a thrown exception either, because this runs inside the frame loop
+     and one bad frame takes the whole plant with it. */
+  if(w<=0||h<=0) return;
+  const NC=XNR*2-1, cw=w/NC, ch=h/XNZ, rMax=Math.max(0,Math.min(cw,ch)*0.44);
   for(let c=0;c<NC;c++){
     const i=Math.abs(c-(XNR-1));
     for(let j=0;j<XNZ;j++){
@@ -105,9 +152,31 @@ function coreField(x,y,w,h,V){
       let r=rMax*Math.sqrt(clamp(V.phi[k]/2.6,.03,1));
       /* the one animation in here: a node in film boiling is not steady */
       if(t>.85) r*=.72+.28*Math.abs(Math.sin(performance.now()/90));
+      /* ── how much fuel is actually in this ring ──
+         The mesh has 14 rings whatever you drew, so a ring you left half empty
+         used to paint a full node with a slightly smaller dot on it - the flux
+         fell, but nothing said the fuel was missing. The dot now fades with the
+         fill, so a hole you drew stays a hole while you operate it, and a rim
+         ring that is only half full reads as half there. The solver has known
+         this all along; it is what nPen is. */
+      const ff=V.frac? clamp(V.frac[i],0,1) : 1;
+      if(ff<.985){ ctx.globalAlpha=.12+.88*ff;
+        if(ff<.3) fillRect(cx-1,cy-1,2,2,"#1b2c33"); }   // an empty slot, as in the plan
       ctx.beginPath(); ctx.arc(cx,cy,r,0,7);
       if(V.nV && V.nV[k]>.12){ ctx.strokeStyle=col; ctx.lineWidth=Math.max(.7,r*.55); ctx.stroke(); }
       else { ctx.fillStyle=col; ctx.fill(); }
+      ctx.globalAlpha=1;
+      /* The hot spot, ringed on both sides of the centreline because the field
+         is mirrored and the node genuinely is a whole annulus. This is the node
+         that sets DNBR, so it is the one place the lattice you drew and the
+         limit you are pushing against are the same object. Drawn bright rather
+         than red: the colour channel already means margin, and a mark that
+         changed colour with the thing it is marking would say it twice. */
+      if(V.peak && i===V.peak.i && j===V.peak.j){
+        ctx.beginPath(); ctx.arc(cx,cy,Math.max(r+1.6,rMax*.85),0,7);
+        ctx.strokeStyle=C.bright; ctx.lineWidth=.8; ctx.globalAlpha=.75;
+        ctx.stroke(); ctx.globalAlpha=1;
+      }
     }
   }
   for(let b=0;b<V.NB;b++){
@@ -376,7 +445,222 @@ function ctlStrip(list,x,y,w,h){
   }
 }
 
-function drawPlant(y0,L){
+/* y0 is where the VIEWPORT starts and vh is how tall it is - the room the
+   screen has decided to give the plant, which is not the same thing as how tall
+   the plant is. Leave vh out and the viewport is exactly the grid, which is
+   what the design bench still does until it moves too. */
+/* ══════════ THE PLANT VIEW IS THE READOUT ══════════
+   There is no component readout panel. EVERY fitted component draws its FULL
+   table, every frame, at every zoom. The tables are plates standing in the two
+   margins beside the grid, each on a leader line back to the component that
+   owns it, ordered top to bottom so no two leaders ever cross. It is an exploded
+   callout drawing, and it is complete the moment it opens - nothing is hidden
+   behind a click you have not made.
+
+   ZOOM IS MAGNIFICATION, NOT DISCLOSURE. Fit shows the whole plant and every
+   number at once but small; zooming in makes them bigger without ever making a
+   different set of them appear. The trade, stated plainly: at fit you can see
+   that a number is red without being able to read it. A panel could not show it
+   to you at all.
+
+   readoutsFor() is DATA - rows of [key, value, colour] - and it is the ONE
+   description of what a component is worth watching. It replaced ctrlInspector(),
+   which hard-coded the same rows into fixed 172px columns and so could not be
+   drawn at any other size. Ported from .trash/mockups/z1-liveplant.js. */
+const PLW=158, PLGAP=10, PLROW=13, PLLEAD=30;
+
+function readoutsFor(p,s){
+  const heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
+  const id=p.id, R=[];
+  const add=(k,v,c)=>R.push([k,v,c||C.cyan]);
+  if(id==="core"){
+    add("POWER",(s.n*100).toFixed(1)+" %",(s.n>1.1||s.dnbr<1.3)?C.red:C.green);
+    add("THERMAL",(s.n*P.rated).toFixed(0)+" MWt");
+    add("DNBR",s.dnbr.toFixed(2),s.dnbr<1?C.red:s.dnbr<1.3?C.amber:C.cyan);
+    add("FUEL TEMP",s.Tf.toFixed(0)+" K",s.Tf>1500?C.red:C.cyan);
+    add("PEAK Fq",s.fq.toFixed(2),s.fq>3.2?C.amber:C.cyan);
+    add("HOT SPOT","R"+s.hotRing+" / EL"+s.hotLev);
+    add("AX / RAD OFFSET",(s.ao*100).toFixed(0)+" / "+(s.ro*100).toFixed(0)+" %",
+        Math.abs(s.ao)>.35||Math.abs(s.ro)>.35?C.amber:C.cyan);
+    add("VOID",s.vf.toFixed(2),s.vf>.15?C.red:C.cyan);
+    add("INVENTORY",s.inv.toFixed(1)+" %",s.inv<95?C.red:C.blue);
+    add("BORON",s.boron.toFixed(0)+" pcm");
+    add("BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
+        Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2);
+    add("EMERG BORON",!P.boroninj?"none":s.borInjUsed?"EXPENDED":"available",
+        !P.boroninj?C.ink2:s.borInjUsed?C.red:C.green);
+    add("XENON",s.parts.xe.toFixed(0)+" pcm");
+    add("FUEL DAMAGE",s.dmg.toFixed(1)+" %",s.dmg>0?C.red:C.cyan);
+    add("VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
+  } else if(id==="rods"){
+    add("BANK POSITION",(s.rodPos*100).toFixed(1)+" %");
+    add("BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",
+        Math.abs(s.rodDem-s.rodPos)>.005?C.amber:C.ink2);
+    add("WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm");
+    add("DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green);
+    add("SCRAM TIME",(1/P.scram).toFixed(1)+" s");
+    add("TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green);
+    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
+    add("RESET WOULD",!s.scrammed?"n/a":(P.rps&&tripCause())?"REFUSE":"clear",
+        !s.scrammed?C.ink2:(P.rps&&tripCause())?C.red:C.green);
+    add("NET RHO",s.rho.toFixed(0)+" pcm",Math.abs(s.rho)<50?C.green:C.amber);
+    add("TILT TRIM",(s.tilt>=0?"+":"")+s.tilt.toFixed(2),
+        Math.abs(s.tilt)>.05?C.amber:C.ink2);
+    add("TILT DEMAND",(s.tiltDem>=0?"+":"")+s.tiltDem.toFixed(2),
+        Math.abs(s.tiltDem-s.tilt)>.01?C.amber:C.ink2);
+    add("SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",P.sdm<200?C.red:C.green);
+  } else if(id==="pzr"){
+    add("PRESSURE",s.P.toFixed(2)+" MPa",pColor(s.P));
+    add("LEVEL",s.lvl.toFixed(1)+" %",s.lvl>78?C.amber:C.cyan);
+    add("SUBCOOLING",sc.toFixed(1)+" K",sc<8?C.red:C.cyan);
+    add("SAT TEMP",tsat(s.P).toFixed(0)+" K");
+    add("LIFT SETPOINT",(P.P0*1.06).toFixed(2)+" MPa");
+    add("MARGIN TO LIFT",(P.P0*1.06-s.P).toFixed(2)+" MPa",
+        P.P0*1.06-s.P<0.3?C.amber:C.cyan);
+    add("PORV",(s.porvOpen&&!s.porvBlocked)?"PASSING":"shut",
+        (s.porvOpen&&!s.porvBlocked)?C.red:C.green);
+    add("BLOCK VALVE",s.porvBlocked?"SHUT":"open",s.porvBlocked?C.red:C.green);
+    add("AUTO RELIEF",autoState("porv").toLowerCase(),
+        autoLive("porv")?C.green:C.amber);
+  } else if(id.startsWith("sg")){
+    add("SG LEVEL",s.sgl.toFixed(1)+" %",s.sgl<25?C.red:C.cyan);
+    add("STEAM PRESS",(P.P0*.45*Math.pow(Math.max(s.load,.05),.25)).toFixed(2)+" MPa");
+    add("T-HOT IN",Th.toFixed(0)+" K");
+    add("T-COLD OUT",Tc.toFixed(0)+" K");
+    add("HEAT REMOVED",(Math.min(s.n,s.load)*P.rated).toFixed(0)+" MWt");
+    add("NAT CIRC",(s.nat*100).toFixed(0)+" %",s.nat>.1?C.green:C.ink2);
+    add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green);
+  } else if(id.startsWith("pump")){
+    add("FLOW",(s.flow*100).toFixed(1)+" %",s.flow<P.flowMin?C.red:C.cyan);
+    add("FLOW DEMAND",(s.flowDem*100).toFixed(1)+" %",
+        Math.abs(s.flowDem-s.flow)>.005?C.amber:C.ink2);
+    add("DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %");
+    add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",s.hotFlow<.8?C.amber:C.cyan);
+    add("CAVITATION",(s.cav*100).toFixed(0)+" %",s.cav>.15?C.amber:C.cyan);
+    add("NAT CIRC",(s.nat*100).toFixed(0)+" %");
+    add("PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+P.loops,
+        s.dmgParts.some(k=>k.startsWith("pump"))?C.red:C.green);
+  } else if(id==="turb"){
+    add("LOAD",(s.load*100).toFixed(1)+" %");
+    add("LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
+        Math.abs(s.loadDem-s.load)>.005?C.amber:C.ink2);
+    add("ELECTRICAL",(Math.min(s.n,s.load)*P.rated/3).toFixed(0)+" MWe");
+    add("T-AVG DEV",(s.Tavg-tProg(s)>=0?"+":"")+(s.Tavg-tProg(s)).toFixed(1)+" K");
+    add("STEAM DUMP",(P.bypass*100).toFixed(0)+" %");
+    add("GOV STROKE",LOAD_TAU.toFixed(0)+" s");
+    add("RUNBACK",autoState("runback").toLowerCase(),
+        autoLive("runback")?C.green:C.amber);
+  } else if(id==="ctrl"){
+    add("RPS",rpsState().toLowerCase(),rpsLive()?C.green:C.amber);
+    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
+    add("INSTRUMENTS",P.noise<.2?"VOTED":P.noise<.6?"2CH DRIFT":"1CH RAW",
+        P.noise>.6?C.amber:C.green);
+    add("PARTY DOSE",s.dose.toFixed(1)+" %",s.dose>50?C.red:C.cyan);
+    add("DOSE RATE",P.dose.toFixed(2)+" x",P.dose>1?C.amber:C.green);
+    add("EVENTS",LOG.length+"");
+  } else if(id==="hpi"){
+    add("INJECTION",s.hpi?"RUNNING":"stopped",s.hpi?C.cyan:C.ink2);
+    add("RATE",P.hpiRate.toFixed(2)+" %/s");
+    add("HEAD OVER CORE",P.lay.hpiHead.toFixed(2)+" x");
+    add("INVENTORY",s.inv.toFixed(1)+" %",s.inv<95?C.red:C.blue);
+    add("VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
+  } else if(id==="cont"){
+    add("RELEASE",s.release.toFixed(2)+" %",s.release>1?C.red:C.cyan);
+    add("HELD BACK",((1-P.contRel)*100).toFixed(0)+" %");
+    add("CORE CATCHER",P.catcher?"fitted":"none",P.catcher?C.green:C.ink2);
+    add("VESSEL",s.breach?"RUPTURED":"intact",s.breach?C.red:C.green);
+  } else if(id==="bkp"){
+    add("BLACKOUT",s.blackout?"ACTIVE":"no",s.blackout?C.red:C.green);
+    add("CAPACITY",(P.backup*100).toFixed(0)+" %");
+    add("SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green);
+    add("NAT CIRC",(s.nat*100).toFixed(0)+" %");
+  } else if(id==="feed"){
+    add("SG LEVEL",s.sgl.toFixed(1)+" %",s.sgl<25?C.red:C.cyan);
+    add("EMERG FEED",autoState("efw").toLowerCase(),
+        autoLive("efw")?C.green:C.amber);
+    add("FEED PUMP",s.dmgParts.includes("feed")?"DESTROYED":"running",
+        s.dmgParts.includes("feed")?C.red:C.green);
+  } else if(id==="cond"){
+    add("T-HOT",Th.toFixed(0)+" K");
+    add("HEAT REJECTED",(Math.min(s.n,s.load)*P.rated*.66).toFixed(0)+" MWt");
+    add("CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
+        s.dmgParts.includes("cond")?C.red:C.green);
+  }
+  /* Shielding has nothing to report, and neither has a component you never
+     bought: an empty plate reading NOT FITTED is a leader line, a slot in the
+     margin and a share of the zoom spent saying nothing. The grid already draws
+     the dashed outline and the words on the symbol itself. No plate. */
+  if(!R.length||!fitted(p)) return [];
+  if(s.dmgParts.includes(p.id)) R.unshift(["STATUS","DAMAGED",C.red]);
+  if(!p.access && p.grp!=="shield") R.unshift(["ACCESS","BLOCKED",C.red]);
+  return R;
+}
+
+function platesFor(){
+  const L=[], R=[];
+  for(const p of LAY.parts){
+    const rows=readoutsFor(p,S); if(!rows.length) continue;
+    const r=prect(p);
+    (p.x+p.w/2 < GW/2 ? L : R).push({p,rows,cy:r.y+r.h/2,h:20+rows.length*PLROW});
+  }
+  /* Side by grid position alone leaves one margin twice as tall as the other, and
+     the whole drawing is then as tall as its worst column - which is what sets the
+     zoom you can read everything at. So the two margins are balanced: the plate
+     whose component sits nearest the centre line changes sides, over and over,
+     for exactly as long as that shortens the taller margin. Nearest the centre
+     first, because that is the one whose leader line grows least. */
+  const sum=A=>A.reduce((a,q)=>a+q.h,0)+PLGAP*Math.max(0,A.length-1);
+  for(let guard=0;guard<40;guard++){
+    const d=sum(L)-sum(R); if(!d) break;
+    const A=d>0?L:R, B=d>0?R:L;
+    let best=-1, bd=1e9;
+    A.forEach((q,i)=>{ const t=Math.abs(q.p.x+q.p.w/2-GW/2); if(t<bd){ bd=t; best=i; } });
+    if(best<0) break;
+    const q=A[best];
+    B.push(q); A.splice(best,1);
+    if(Math.abs(sum(L)-sum(R))>=Math.abs(d)){ A.push(q); B.pop(); break; }
+  }
+  const mid=GY+gridH()/2, out=[];
+  for(const [list,side] of [[L,"L"],[R,"R"]]){
+    list.sort((a,b)=>a.cy-b.cy);
+    const tot=list.reduce((a,q)=>a+q.h,0)+PLGAP*Math.max(0,list.length-1);
+    let y=mid-tot/2;
+    const x = side==="L" ? GX-PLLEAD-PLW : GX+GW*CELL+PLLEAD;
+    for(const q of list){ q.x=x; q.y=y; q.w=PLW; q.side=side; y+=q.h+PLGAP; out.push(q); }
+  }
+  return out;
+}
+
+function drawPlate(q){
+  const r=prect(q.p), dmg=S.dmgParts.includes(q.p.id), on=q.p.id===sel;
+  const col=dmg?C.red:on?C.amber:C.edge2;
+  const ax=q.side==="L"? q.x+q.w : q.x, ay=q.y+q.h/2;
+  const bx=q.side==="L"? r.x : r.x+r.w, by=r.y+r.h/2;
+  /* the leader turns once, square to the face it leaves, so it reads as a
+     drawing callout rather than a wire */
+  const mx=(ax+bx)/2;
+  ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(mx,ay); ctx.lineTo(mx,by); ctx.lineTo(bx,by);
+  ctx.strokeStyle=dmg?C.red:on?C.amber:"#1b2c31"; ctx.lineWidth=on||dmg?1.4:1;
+  ctx.setLineDash(on||dmg?[]:[4,3]); ctx.stroke(); ctx.setLineDash([]);
+  fillRect(bx-2,by-2,4,4,col);
+
+  fillRect(q.x,q.y,q.w,q.h,C.panel); frame(q.x,q.y,q.w,q.h,col); accent(q.x,q.y,q.w,col);
+  if(on) ticks(q.x+.5,q.y+.5,q.w-1,q.h-1,C.amber,6);
+  txt(q.p.name,q.x+7,q.y+13,{size:7.5,sp:1.2,caps:1,color:col===C.edge2?C.ink:col});
+  txt("EL"+(GH-1-q.p.y),q.x+q.w-7,q.y+13,{size:6.5,sp:.8,align:"right",color:C.ink2});
+  fillRect(q.x+7,q.y+17,q.w-14,1,"rgba(120,180,190,.10)");
+  q.rows.forEach((row,i)=>{
+    const ry=q.y+20+i*PLROW+9;
+    txt(row[0],q.x+7,ry,{size:7,sp:.9,color:C.ink2});
+    txt(row[1],q.x+q.w-7,ry,{size:9,align:"right",color:row[2]});
+    if(i<q.rows.length-1) fillRect(q.x+7,ry+3,q.w-14,1,"rgba(120,180,190,.05)");
+  });
+  /* the plate is the component: clicking it selects, and it carries the same tip */
+  push({x:q.x,y:q.y,w:q.w,h:q.h,type:"btn",fn:()=>{ sel=q.p.id; }});
+  TIP(q.x,q.y,q.w,q.h,q.p.name+" / LIVE READOUTS",q.p.tip);
+}
+
+function drawPlant(y0,L,vh){
   layoutMetrics(); GY=y0;
   /* layoutMetrics() measured the design with no bands; from here on the view has
      them, and every row position comes from rowTop() rather than Y*CELL */
@@ -385,6 +669,30 @@ function drawPlant(y0,L){
      plant changed size the moment you commissioned it. */
   BANDS = ctlBands(!!L);
   const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
+  /* ══ the viewport ══
+     Everything from here to the restore below is drawn in PLANT coordinates and
+     shown through VIEW: clipped to the grid box, then scaled and offset. At
+     s=1 that is the identity, so the plant is where it has always been and the
+     geometry audit still measures it there. viewOn tags the widgets and the
+     tooltip regions pushed inside, which is how the hit test knows to bring the
+     pointer into this space instead of taking it at face value. */
+  /* The VIEWPORT is the room the screen gives the plant - the content column,
+     12..748 - and the CONTENT is the grid, which is now wider than that and is
+     meant to be. These two were the same number while a cell was 46px, so
+     passing the grid width as the viewport looked right and was not: it made
+     fit come out at 1 and the plant hung a whole screen off the right margin. */
+  const B=(()=>{
+    let x0=GX,x1=GX+GW*CELL,y0=GY,y1=GY+GHp;
+    if(L) for(const q of platesFor()){ x0=Math.min(x0,q.x); x1=Math.max(x1,q.x+q.w);
+      y0=Math.min(y0,q.y); y1=Math.max(y1,q.y+q.h); }
+    return {x:x0-18,y:y0-18,w:x1-x0+36,h:y1-y0+36};
+  })();
+  vFit(GX,GY,W-2*GX,vh||GHp,B.x,B.y,B.w,B.h);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
+  ctx.translate(VIEW.x-(VIEW.cx+VIEW.ox)*VIEW.s, VIEW.y-(VIEW.cy+VIEW.oy)*VIEW.s);
+  ctx.scale(VIEW.s,VIEW.s);
+  viewOn=true;
   fillRect(GX,GY,GW*CELL,GHp,C.well);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
     if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,rowTop(Y),CELL,rowH(Y),"#1c1210");
@@ -452,7 +760,7 @@ function drawPlant(y0,L){
     if(plinth) fillRect(x+2,y+2,w-4,h-4,C.panel);
     if(on) fillRect(x+1,y+1,w-2,h-2,"rgba(240,168,48,.07)");
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
-    else drawSym(p,x,y,w,h-sh-(plinth?4:0),ink,L);
+    if(fit) drawSym(p,x,y,w,h-sh-(plinth?4:0),ink,L);
     /* No outline and no divider. Tone alone says where the machine ends and its
        base begins: body, then a step lighter for the plinth, then the keys sunk
        back down into it. A line on top of that boundary was drawing an edge the
@@ -474,8 +782,22 @@ function drawPlant(y0,L){
        bottom two corners of a selected part were all but invisible. The keys land
        clear of them: they start at x+6 and stop STRIP_PAD above the bottom edge. */
     if(on) ticks(x+2.5,y+2.5,w-5,h-5,C.amber,7);
-    if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red); }
+    if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red);
+      /* the party is dispatched from the broken thing itself; the damage panel
+         still lists them, because you want one place that says how many */
+      /* centred in the SYMBOL, not in the component: a component with controls
+         on it is mostly plinth below the symbol, and the middle of the whole
+         box is somebody else's row of readouts. Measured by the auditor, which
+         caught this key sitting on TILT. */
+      const symH=h-sh-(plinth?4:0);
+      const busy=L.repair&&L.repair.id===p.id, kw=Math.min(w-16,86), kx=x+(w-kw)/2;
+      button(kx,y+symH/2-9,kw,14,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
+             :p.access?"REPAIR":"NO ACCESS",
+        {sunk:1,on:busy,danger:!p.access,size:7,sp:.8,fn:()=>repairSend(p)});
+    }
     else if(!p.access && p.grp!=="shield" && fit) badge(x+w-9,y+12,C.amber);
+    /* what this component is shouting about, if anything */
+    if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
     /* a one-cell component with a knob has no room for a separate value tag,
        and does not need one - the knob shows its own number */
     const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
@@ -500,6 +822,27 @@ function drawPlant(y0,L){
      last. Drawn before the components, the pressurizer gauge was painted over by the
      pressurizer. */
   if(L) pipeGauges(L);
-  return GY+GHp;
+  if(L){ const pl=platesFor();
+    for(const q of pl) if(q.p.id!==sel) drawPlate(q);
+    for(const q of pl) if(q.p.id===sel) drawPlate(q);   // the selected one on top
+  }
+  viewOn=false; ctx.restore();
+
+  /* The one control the view itself has, drawn OUTSIDE the transform so it
+     keeps its size and its place whatever the plant is doing. It is one key
+     rather than two because it has one job at a time: at fit scale the only
+     useful move is in, and once you are in the only move you cannot make with
+     the hand is all the way back out. Zooming in aims at the component you have
+     selected, because that is the one you were reading. */
+  { const zoomed=VIEW.z>1.001, kw=52, kx=VIEW.x+VIEW.w-kw-4, ky=VIEW.y+4;
+    button(kx,ky,kw,14,zoomed?"FIT "+VIEW.z.toFixed(1)+"X":"ZOOM",
+      {sunk:1,size:6.5,sp:.6,fn:()=>{
+        if(zoomed){ VIEW.z=1; VIEW.ox=VIEW.oy=0; }
+        else { const p=LAY.parts.find(q=>q.id===sel), r=p&&prect(p);
+          vZoom(1.8, r? r.x+r.w/2 : GX+GW*CELL/2, r? r.y+r.h/2 : GY+GHp/2); }
+      }});
+    TIP(kx,ky,kw,14,zoomed?"FIT THE WHOLE PLANT":"ZOOM IN",
+      "The plant view pans and zooms. Roll the wheel over it to zoom about the pointer, hold the RIGHT button to drag the plant about, and this key jumps between the whole plant and a close look at whatever component is selected. Nothing about the plant itself changes - the hull is still sixteen cells by nine, and a component still has to fit in it.");
+  }
+  return VIEW.y+VIEW.h;
 }
-const drawGrid = y0 => drawPlant(y0,null);

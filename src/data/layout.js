@@ -2,6 +2,13 @@
 /* component grid, pipe routing, spatial derivations */
 
 /* ═══════════════ PLANT LAYOUT ═══════════════ */
+/* CELL is a RENDERING size, not a physical one: pipe runs are measured in
+   pixels and divided by CELL again to get metres (see pipeLen), elevation is
+   counted in rows, and MPC is the only thing that says how big a cell really
+   is. So the plant can be drawn at any size without moving the physics -
+   audited, by doubling it and running audit-physics.js, which passed unchanged.
+   Worth knowing, because the plant view fits-and-zooms: the grid no longer has
+   to land on the 736-unit content column, so this is free to change. */
 const GW=16, GH=9, CELL=46, GX=12, MPC=1.4;   // metres per cell
 let GY=100;                                   // grid top, set each frame by the layout section
 let LAY=null, layLoops=-1, sel="core", layMass=0;

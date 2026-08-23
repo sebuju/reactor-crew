@@ -14,270 +14,42 @@ function vital(x,y,w,label,value,unit,col,tip,ch){
   if(tip) TIP(x,y,w,44,label,tip);
 }
 
-function ctrlInspector(y0){
-  const s=S, p=LAY.parts.find(q=>q.id===sel)||LAY.parts[0];
-  const IH=232, X=[22,202,382,562], W2=172;
-  const dmgd=s.dmgParts.includes(p.id);
-  well(12,y0,736,IH,"COMPONENT READOUTS / "+p.name,dmgd?C.red:C.amber);
-  txt("EL"+(GH-1-p.y)+"  ·  "+(dmgd?"DAMAGED":fitted(p)?"in service":"not fitted"),738,y0+15,
-      {size:8,sp:1.2,align:"right",color:dmgd?C.red:C.ink2});
-  const Y0=y0+34;
-  /* the value is the data and keeps its size; the label yields, because a long
-     label running under its own number is the failure this row used to have */
-  const row=(cx,i,k,v,col)=>{ const yy=Y0+8+i*20;
-    const vo={size:10,align:"right",color:col||C.cyan};
-    fitTxt(k,cx,yy,W2-tw(v,vo)-6,{size:8,sp:1.1,color:C.ink2});
-    txt(v,cx+W2,yy,vo);
-    fillRect(cx,yy+5,W2,1,"rgba(120,180,190,.07)"); };
-  const heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
-  const id=p.id;
+/* ══ A COMPONENT IS ITS OWN PANEL ══
+   These readouts used to be a 736-wide box parked under the plant. They are
+   drawn INSIDE the component that owns them now, so the number and the machine
+   it came off are the same object on the screen.
 
-  if(id==="core"){
-    row(X[0],0,"POWER",(s.n*100).toFixed(1)+" %",(s.n>1.1||s.dnbr<1.3)?C.red:C.green);
-    row(X[0],1,"THERMAL",(s.n*P.rated).toFixed(0)+" MWt");
-    row(X[0],2,"FUEL TEMP",s.Tf.toFixed(0)+" K",s.Tf>1500?C.red:C.cyan);
-    row(X[0],3,"DNBR",s.dnbr.toFixed(2),s.dnbr<1?C.red:s.dnbr<1.3?C.amber:C.cyan);
-    row(X[1],0,"INVENTORY",s.inv.toFixed(1)+" %",s.inv<95?C.red:C.blue);
-    row(X[1],1,"VOID",s.vf.toFixed(2),s.vf>.15?C.red:C.cyan);
-    row(X[1],2,"FUEL DAMAGE",s.dmg.toFixed(1)+" %",s.dmg>0?C.red:C.cyan);
-    row(X[1],3,"VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
-    row(X[2],0,"BORON",s.boron.toFixed(0)+" pcm");
-    row(X[2],1,"BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
-        Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2);
-    row(X[2],2,"EMERG BORON",!P.boroninj?"none":s.borInjUsed?"EXPENDED":"available",
-        !P.boroninj?C.ink2:s.borInjUsed?C.red:C.green);
-    row(X[2],3,"XENON",s.parts.xe.toFixed(0)+" pcm");
-    TIP(X[2],Y0,W2,84,"BORON","Neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s. Demand is what you asked the charging pumps for; boron is what the loop actually has. Drive it from the slider on the reactor itself.");
-    rule("CORE FLUX",X[3],Y0+9,W2);
-    coreField(X[3],Y0+16,W2,116,coreView(s));
-    const fr=(i,k,v,col)=>{ const yy=Y0+146+i*16;
-      txt(k,X[3],yy,{size:8,sp:1.1,color:C.ink2});
-      txt(v,X[3]+W2,yy,{size:10,align:"right",color:col||C.cyan}); };
-    fr(0,"PEAK Fq",s.fq.toFixed(2),s.fq>3.2?C.amber:C.cyan);
-    fr(1,"HOT SPOT","R"+s.hotRing+" / EL"+s.hotLev);
-    fr(2,"AXIAL / RADIAL",(s.ao*100).toFixed(0)+" / "+(s.ro*100).toFixed(0)+" %",
-       Math.abs(s.ao)>.35||Math.abs(s.ro)>.35?C.amber:C.cyan);
-    TIP(X[3],Y0,W2,198,"CORE FLUX",
-      "The core seen along its axis, mirrored about the centreline. Dot size is local power, colour is how hard that spot is running, a hollow ring is steam, and the violet shadow is xenon eating the neutrons where it has built up. The vertical marks are the rod banks, with the follower drawn below each absorber.");
+   The four columns became four BLOCKS, and how many of them stand side by side
+   depends on how wide the component is: a 4-cell reactor takes two abreast, a
+   1-cell pump takes one and stacks them. Nothing else in the two hundred lines
+   below changed shape - every X[k] became CX(k) and every Y0 became CY(k), so
+   each block still knows only which block it is. */
+/* ══ THE CONTROL ROOM IS ONE SCREEN ══
+   Top bar, the six numbers you never want to have to hunt for, then the plant
+   filling everything left - and the plant carries every component's readouts
+   itself, on plates in its own margins. Nothing is stacked below anything,
+   because there is no below: the page is exactly the window. */
+function drawOperate(){
+  const s=S;
+  vitalRow(44);
+  const bh=20, vy=96, vh=Math.max(120,H-vy-bh-4);
+  drawPlant(vy,s,vh);
+  /* a trip is news, so it is drawn ACROSS the plant rather than stacked above it */
+  if(s.melt||s.breach){
+    const bl=performance.now()%1000<500;
+    fillRect(12,vy+8,736,30,bl?"#3a0d08":"#1a0605");
+    txt(s.melt?"CORE MELT - UNRECOVERABLE":"VESSEL RUPTURE - UNRECOVERABLE",380,vy+28,
+      {size:12,weight:700,sp:3,align:"center",color:C.red});
+  } else if(s.trip){
+    fillRect(12,vy+8,736,22,"#1a1206");
+    txt("LAST TRIP / "+s.trip,380,vy+23,{size:9,weight:700,sp:1.6,align:"center",color:C.amber});
   }
-  else if(id==="rods"){
-    row(X[0],0,"BANK POSITION",(s.rodPos*100).toFixed(1)+" %");
-    row(X[0],1,"BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",
-        Math.abs(s.rodDem-s.rodPos)>.005?C.amber:C.ink2);
-    row(X[0],2,"BANK WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm");
-    row(X[0],3,"DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green);
-    TIP(X[0],Y0,W2,84,"CONTROL BANK","Rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking which eats thermal margin. Demand is where you asked for; position is where the drives have got to. The slider is on the rod drives themselves.");
-    row(X[1],0,"TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green);
-    row(X[1],1,"LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
-    row(X[1],2,"SCRAM TIME",(1/P.scram).toFixed(1)+" s");
-    row(X[1],3,"RESET WOULD",!s.scrammed?"n/a":(P.rps&&tripCause())?"REFUSE":"clear",
-        !s.scrammed?C.ink2:(P.rps&&tripCause())?C.red:C.green);
-    TIP(X[1],Y0,W2,84,"TRIP STATE","A scram latches. The latch has to be cleared on purpose, and with protection fitted it refuses while a trip condition is still present. SCRAM and RESET are mounted on the rod drives on the diagram.");
-    row(X[2],0,"TILT TRIM",(s.tilt>=0?"+":"")+s.tilt.toFixed(2),
-        Math.abs(s.tilt)>.05?C.amber:C.ink2);
-    row(X[2],1,"TILT DEMAND",(s.tiltDem>=0?"+":"")+s.tiltDem.toFixed(2),
-        Math.abs(s.tiltDem-s.tilt)>.01?C.amber:C.ink2);
-    row(X[2],2,"RADIAL OFFSET",(s.ro*100).toFixed(0)+" %",Math.abs(s.ro)>.35?C.amber:C.cyan);
-    row(X[2],3,"AXIAL OFFSET",(s.ao*100).toFixed(0)+" %",Math.abs(s.ao)>.35?C.amber:C.cyan);
-    TIP(X[2],Y0,W2,84,"TILT TRIM","Drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart, so it is the one handle you have on a radial xenon tilt. Radial offset is what the flux field is actually doing about it. The trim slider is on the rod drives.");
-
-    /* ── the T-avg controller's own tune ──
-       Four numbers that decide where the bank readouts above end up, so they sit
-       under them. Everything is read off S every frame: these are live settings
-       the operator is allowed to get wrong, not a commissioning snapshot. */
-    rule("T-AVG CONTROLLER",X[0],Y0+84,W2);
-    /* fmt is a formatter, not a formatted string, because the number above the
-       slider has to be able to show the value a hover WOULD set as well as the
-       one the plant has */
-    const tune=(i,lab,val,min,max,fmt,fn,tt,tb)=>{
-      const ly=Y0+96+i*25;
-      txt(lab,X[0],ly,{size:8,sp:1.1,color:C.ink2});
-      const wd=slider(X[0],ly+11,W2,val,min,max,{th:14,tw:9,fn});
-      const r=sldRead(wd,fmt);
-      txt(r.s,X[0]+W2,ly,{size:9.5,align:"right",color:r.col});
-      TIP(X[0],ly-9,W2,25,tt,tb);
-    };
-    /* One body for both ends of the band, because the fact is about the band. */
-    const limTip="How far the T-avg controller may walk the rods, as a fraction inserted. Widening it hands the controller more authority and leaves you less shutdown margin - the band is what keeps the bank near the position that margin was measured from. It does NOT free the bank from the controller: only the AUTO ROD bypass, or switching a bank to MANUAL while the banks are split, does that. The two ends clamp against each other, so the band cannot be turned inside out.";
-    tune(0,"CTRL GAIN",s.arGain,0,4*AUTOROD_GAIN,
-      v=>(v/AUTOROD_GAIN).toFixed(2)+" x",v=>S.arGain=v,"CONTROLLER GAIN",
-      "How hard the controller pushes for a given temperature error, against the commissioning tune of 1.00x. Above about 0.25x the drives are already moving as fast as they can at "+(ROD_RATE*100).toFixed(1)+" %/s, so more gain buys nothing - the drives are the limit, not the controller. Below that it genuinely trades response against overshoot.");
-    tune(1,"CTRL LEAD",s.arLead,0,40,v=>v.toFixed(0)+" s",v=>S.arLead=v,
-      "CONTROLLER LEAD",
-      "The term that stops the controller pushing once temperature is already coming back, by adding "+s.arLead.toFixed(0)+" seconds of the current rate of change to the error. Set it to zero and the bank hunts, the swing grows, and the plant trips itself on HIGH FLUX. That was measured on this model, not guessed.");
-    tune(2,"AUTO LIMIT OUT",s.arLo*100,0,100,v=>v.toFixed(0)+" %",
-      v=>S.arLo=Math.min(v/100,S.arHi),"AUTO LIMIT / RODS OUT",limTip);
-    tune(3,"AUTO LIMIT IN",s.arHi*100,0,100,v=>v.toFixed(0)+" %",
-      v=>S.arHi=Math.max(v/100,S.arLo),"AUTO LIMIT / RODS IN",limTip);
-
-    /* ── who is actually driving each bank ──
-       AUTO/MANUAL is remembered through a gang and a split, so without this
-       table a bank can sit in MANUAL with nothing on the panel admitting it.
-       IDLE rather than a dimmed AUTO for a bank the controller cannot reach:
-       AUTO is already drawn dim, so dimming it further says nothing. */
-    rule("ROD BANKS",X[2],Y0+88,W2);
-    const mode=s.reGang?"GANGING":s.split?"SPLIT":"GANGED";
-    txt("DRIVE MODE",X[2],Y0+102,{size:8,sp:1.1,color:C.ink2});
-    txt(mode,X[2]+W2,Y0+102,{size:9.5,align:"right",color:s.split?C.amber:C.ink2});
-    fillRect(X[2],Y0+107,W2,1,"rgba(120,180,190,.07)");
-    txt("BANK",X[2],Y0+120,{size:6.5,sp:.8,color:C.ink2});
-    txt("POS",X[2]+90,Y0+120,{size:6.5,sp:.8,align:"right",color:C.ink2});
-    txt("DEM",X[2]+130,Y0+120,{size:6.5,sp:.8,align:"right",color:C.ink2});
-    txt("STATE",X[2]+W2,Y0+120,{size:6.5,sp:.8,align:"right",color:C.ink2});
-    for(let b=0;b<P.NB;b++){
-      const yy=Y0+134+b*16;
-      const st=!s.bankAuto[b]?"MAN":bankAutoLive(b)?"AUTO":"IDLE";
-      txt("B"+(b+1),X[2],yy,{size:8,sp:1.1,color:C.ink2});
-      txt((s.rodZ[b]*100).toFixed(0)+" %",X[2]+90,yy,{size:10,align:"right",color:C.cyan});
-      txt((s.rodZDem[b]*100).toFixed(0)+" %",X[2]+130,yy,{size:8.5,align:"right",
-          color:Math.abs(s.rodZDem[b]-s.rodZ[b])>.005?C.amber:C.ink2});
-      txt(st,X[2]+W2,yy,{size:8,sp:1.1,align:"right",color:st==="MAN"?C.amber:C.ink2});
-      fillRect(X[2],yy+5,W2,1,"rgba(120,180,190,.07)");
-    }
-    TIP(X[2],Y0+88,W2,60+P.NB*16,"ROD BANKS",
-      "Where each bank stands and who is driving it. AUTO is the T-avg controller, MAN is you. That setting is remembered through a gang and a split, so a bank you took to MANUAL is still MANUAL the next time you split - which is the only reason this table exists. IDLE means the bank is on AUTO but the controller cannot reach it at all: bypassed, jammed, or held by a latched trip. Splitting does not divide the temperature error between the banks - every bank left on AUTO gets all of it, so fewer banks answering means less worth against the same error and a slower loop.");
-    row(X[3],0,"PERIOD",(()=>{const dn=(s.n-lastN)/0.05; lastN=s.n;
-      const pr=Math.abs(dn)<1e-4?Infinity:s.n/dn;
-      return (isFinite(pr)&&Math.abs(pr)<999?pr.toFixed(0):"INF")+" s";})());
-    row(X[3],1,"NET RHO",s.rho.toFixed(0)+" pcm",Math.abs(s.rho)<50?C.green:C.amber);
-    row(X[3],2,"XENON",s.parts.xe.toFixed(0)+" pcm");
-    row(X[3],3,"SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",P.sdm<200?C.red:C.green);
-    row(X[3],4,"  W/ FULL BORON",P.sdmB.toFixed(0)+" pcm",P.sdmB<200?C.red:C.green);
-  }
-  else if(id==="pzr"){
-    row(X[0],0,"PRESSURE",s.P.toFixed(2)+" MPa",pColor(s.P));
-    row(X[0],1,"LEVEL",s.lvl.toFixed(1)+" %",s.lvl>78?C.amber:C.cyan);
-    row(X[0],2,"SUBCOOLING",sc.toFixed(1)+" K",sc<8?C.red:C.cyan);
-    row(X[0],3,"SAT TEMP",tsat(s.P).toFixed(0)+" K");
-    const open=s.porvOpen&&!s.porvBlocked;
-    row(X[1],0,"BLOCK VALVE",s.porvBlocked?"SHUT":"open",s.porvBlocked?C.red:C.green);
-    row(X[1],1,"PORV",open?"PASSING":"shut",open?C.red:C.green);
-    row(X[1],2,"RELIEF PATH",s.porvBlocked?"ISOLATED":"available",s.porvBlocked?C.red:C.ink2);
-    row(X[1],3,"AUTO RELIEF",autoState("porv").toLowerCase(),
-        autoLive("porv")?C.green:C.amber);
-    TIP(X[1],Y0,W2,84,"RELIEF PATH","Manual backup under the relief valve. Shut the block valve when the PORV fails to reseat - that is the whole answer to a stuck-open valve. Both switches are on the pressurizer on the diagram.");
-    row(X[2],0,"LIFT SETPOINT",(P.P0*1.06).toFixed(2)+" MPa");
-    row(X[2],1,"MARGIN TO LIFT",(P.P0*1.06-s.P).toFixed(2)+" MPa",
-        P.P0*1.06-s.P<0.3?C.amber:C.cyan);
-    wrap(s.lvl>78&&sc<12?"Level reads HIGH while subcooling collapses. That combination means the core is voiding and pushing water up the surge line - the loop is emptying, not filling."
-        :"Level and subcooling agree. Watch them diverge and you are looking at a leak, not an overfill.",
-      X[3],Y0+12,W2,11,{size:8.5,color:s.lvl>78&&sc<12?C.red:C.ink2});
-  }
-  else if(id.startsWith("sg")){
-    row(X[0],0,"SG LEVEL",s.sgl.toFixed(1)+" %");
-    row(X[0],1,"STEAM PRESS",(P.P0*.45*Math.pow(Math.max(s.load,.05),.25)).toFixed(2)+" MPa");
-    row(X[0],2,"T-HOT IN",Th.toFixed(0)+" K");
-    row(X[0],3,"T-COLD OUT",Tc.toFixed(0)+" K");
-    row(X[1],0,"TUBE RUPTURE",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green);
-    row(X[1],1,"HEAT REMOVED",(Math.min(s.n,s.load)*P.rated).toFixed(0)+" MWt");
-    row(X[1],2,"NAT CIRC",(s.nat*100).toFixed(0)+" %",s.nat>.1?C.green:C.ink2);
-    wrap("This unit sits "+(cen(p).y<cen(LAY.parts.find(q=>q.id==="core")).y?"above":"BELOW")+
-      " the reactor. Buoyancy flow is "+(s.nat*100).toFixed(0)+"% right now, and that is all you get if the pumps stop.",
-      X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id.startsWith("pump")){
-    row(X[0],0,"FLOW",(s.flow*100).toFixed(1)+" %",
-        s.flow<P.flowMin?C.red:C.cyan);
-    row(X[0],1,"FLOW DEMAND",(s.flowDem*100).toFixed(1)+" %",
-        Math.abs(s.flowDem-s.flow)>.005?C.amber:C.ink2);
-    row(X[0],2,"DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %");
-    row(X[0],3,"HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
-        s.hotFlow<.8?C.amber:C.cyan);
-    TIP(X[0],Y0,W2,84,"COOLANT PUMPS",pumpTip());
-    row(X[1],0,"CAVITATION",(s.cav*100).toFixed(0)+" %",s.cav>.15?C.amber:C.cyan);
-    row(X[1],1,"NAT CIRC",(s.nat*100).toFixed(0)+" %");
-    row(X[1],2,"PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+P.loops,
-      s.dmgParts.some(k=>k.startsWith("pump"))?C.red:C.green);
-    row(X[1],3,"BLACKOUT",s.blackout?"YES":"no",s.blackout?C.red:C.green);
-    wrap("Pipe friction from your layout already caps demand at "+((P.flowK)*100).toFixed(0)+
-      "% of nominal before anything breaks.",X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id==="turb"){
-    row(X[0],0,"LOAD",(s.load*100).toFixed(1)+" %");
-    row(X[0],1,"LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
-        Math.abs(s.loadDem-s.load)>.005?C.amber:C.ink2);
-    row(X[0],2,"RUNBACK",autoState("runback").toLowerCase(),
-        autoLive("runback")?C.green:C.amber);
-    row(X[0],3,"GOVERNOR STROKE",LOAD_TAU.toFixed(0)+" s");
-    TIP(X[0],Y0,W2,84,"LOAD DEMAND","Turbine draw - weapons and ship systems in the full game. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so load trails demand. The slider is on the turbine.");
-    row(X[1],0,"ELECTRICAL",mwE(s).toFixed(0)+" MWe");
-    row(X[1],1,"T-AVG VS PROGRAM",(s.Tavg-tProg(s)>=0?"+":"")+
-      (s.Tavg-tProg(s)).toFixed(1)+" K");
-    row(X[1],2,"STEAM DUMP",(P.bypass*100).toFixed(0)+" %");
-    row(X[1],3,"EFFICIENCY",(P.eff*100).toFixed(1)+" %");
-    wrap("Ride the moderator feedback instead of fighting it: raise load and power follows on its own.",
-      X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id==="ctrl"){
-    row(X[0],0,"INSTRUMENTS",P.noise<.2?"VOTED":P.noise<.6?"2CH DRIFT":"1CH RAW",
-      P.noise>.6?C.amber:C.green);
-    row(X[0],1,"PARTY DOSE",s.dose.toFixed(1)+" %",s.dose>50?C.red:C.cyan);
-    row(X[0],2,"DOSE RATE",P.dose.toFixed(2)+" x",P.dose>1?C.amber:C.green);
-    row(X[1],0,"RPS",rpsState().toLowerCase()==="armed"?"armed":rpsState(),
-        rpsLive()?C.green:C.amber);
-    row(X[1],1,"LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
-    row(X[1],2,"EVENTS",LOG.length+"");
-    wrap("Crew dose is set by how far you put this room from the reactor and how much shielding sits between them - both decided on the design bench.",
-      X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id==="hpi"){
-    row(X[0],0,"INJECTION",s.hpi?"RUNNING":"stopped",s.hpi?C.cyan:C.ink2);
-    row(X[0],1,"ACCUMULATOR",fitted(p)?"fitted":"none",fitted(p)?C.green:C.ink2);
-    row(X[0],2,"HEAD OVER CORE",(P.lay.hpiHead).toFixed(2)+" x");
-    TIP(X[0],Y0,W2,64,"HIGH PRESSURE INJECTION","Emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs. The switch is on the tank on the diagram.");
-    row(X[1],0,"RATE",P.hpiRate.toFixed(2)+" %/s");
-    row(X[1],1,"INVENTORY",s.inv.toFixed(1)+" %",s.inv<95?C.red:C.blue);
-    row(X[1],2,"VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
-    wrap("Injection is gravity assisted: this tank's height above the core is why the rate is "+
-      P.hpiRate.toFixed(2)+" %/s and not something else.",X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id==="cont"){
-    row(X[0],0,"RELEASE",s.release.toFixed(2)+" %",s.release>1?C.red:C.cyan);
-    row(X[0],1,"HELD BY CONTAINMENT",((1-P.contRel)*100).toFixed(0)+" %");
-    row(X[0],2,"CORE CATCHER",P.catcher?"fitted":"none",P.catcher?C.green:C.ink2);
-    row(X[0],3,"VESSEL",s.breach?"RUPTURED":"intact",s.breach?C.red:C.green);
-    wrap("Containment does nothing for the reactor and everything for the people around it.",
-      X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id==="bkp"){
-    row(X[0],0,"BLACKOUT",s.blackout?"ACTIVE":"no",s.blackout?C.red:C.green);
-    row(X[0],1,"BACKUP CAPACITY",(P.backup*100).toFixed(0)+" % of pump flow");
-    row(X[0],2,"SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green);
-    row(X[0],3,"NAT CIRC",(s.nat*100).toFixed(0)+" %");
-    wrap("With no backup and no chimney, a blackout leaves the core with nothing but buoyancy.",
-      X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id==="feed"){
-    row(X[0],0,"SG LEVEL",s.sgl.toFixed(1)+" %",s.sgl<25?C.red:C.cyan);
-    row(X[0],1,"EMERG FEED",autoState("efw").toLowerCase(),
-        autoLive("efw")?C.green:C.amber);
-    row(X[0],2,"FEED PUMP",s.dmgParts.includes("feed")?"DESTROYED":"running",
-        s.dmgParts.includes("feed")?C.red:C.green);
-    wrap("Emergency feedwater is the only thing that keeps a sink under decay heat after a trip. Its bypass switch is on this pump on the diagram.",
-      X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else if(id==="cond"){
-    row(X[0],0,"T-HOT",Th.toFixed(0)+" K");
-    row(X[0],1,"HEAT REJECTED",mwRej(s).toFixed(0)+" MWt");
-    row(X[0],3,"BACKPRESSURE",((1-condPen(s))*100).toFixed(0)+" % loss",
-        condPen(s)<0.98?C.amber:C.ink2);
-    row(X[0],2,"CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
-        s.dmgParts.includes("cond")?C.red:C.green);
-    wrap(p.tip,X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
-  }
-  else {
-    wrap(p.tip,X[0],Y0+14,W2*2+8,12,{size:9,color:C.ink});
-    txt("NO LIVE READOUTS",X[0],Y0+80,{size:8,sp:1.6,color:C.ink2});
-  }
-  return y0+IH;
+  drawOverlay();
+  const e=LOG[LOG.length-1];
+  ovlBar(H-bh,bh, e? "T+"+e.t.toFixed(1)+"  "+e.msg : "PLANT NOMINAL - NO EVENTS");
 }
-
-function drawMimic(){
+function vitalRow(y){
   const s=S, heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, sc=tsat(s.P)-Th;
-  rule("PLANT",12,58,736,C.amber);
-  txt("as built / every control is on the plant itself - click a component for its readouts",12,73,{size:8.5,color:C.ink2});
-  let y=drawPlant(84,s)+12;
-
   const V=[["REACTOR POWER",(s.n*100).toFixed(1),"%",
       (s.n>1.1||s.dnbr<1.3)?C.red:C.green,"Heat the core is making as a share of rated output.","pwr"],
     ["DNBR",s.dnbr.toFixed(2),"",s.dnbr<1?C.red:s.dnbr<1.3?C.amber:C.cyan,
@@ -291,20 +63,26 @@ function drawMimic(){
     ["XENON",s.parts.xe.toFixed(0),"pcm",-s.parts.xe>3200?C.blue:C.cyan,
       "Xenon-135 poison. Slow, remembers your power history, and can lock you out of restarting.","xe"]];
   V.forEach((v,i)=>vital(12+i*124,y,116,v[0],v[1],v[2],v[3],v[4],v[5]));
-  y+=56;
-  if(s.melt||s.breach){
-    const bl=performance.now()%1000<500;
-    fillRect(12,y,736,30,bl?"#3a0d08":"#1a0605"); frame(12,y,736,30,C.red);
-    txt(s.melt?"CORE MELT — UNRECOVERABLE":"VESSEL RUPTURE — UNRECOVERABLE",380,y+20,
-      {size:12,weight:700,sp:3,align:"center",color:C.red});
-    y+=42;
-  } else if(s.trip){
-    fillRect(12,y,736,22,"#1a1206"); frame(12,y,736,22,C.amber);
-    txt("LAST TRIP / "+s.trip,380,y+15,{size:9,weight:700,sp:1.6,align:"center",color:C.amber});
-    y+=34;
-  }
-  return ctrlInspector(y)+12;
 }
+
+/* ══ everything else, over the plant ══
+   One entry per panel, in the order the keys read along the bottom bar. The
+   draw functions are the ones that were already there - an overlay is the same
+   736-wide column they were drawing into, so not one of them had to be re-laid.
+   Heights are RESERVED rather than measured: a panel that changes height would
+   move its own keys under the pointer. */
+ovlAdd({k:"ann",label:"ALARMS",h:232,sc:"operate",draw:drawAnnunciator,
+  tip:"The full annunciator board. Every component on the plant carries a lamp when one of its own alarms is up; this says which."});
+ovlAdd({k:"trend",label:"TRENDS",h:200,sc:"operate",draw:drawTrend,
+  tip:"Strip charts. Click a vital along the top of the screen to add or drop its trace."});
+ovlAdd({k:"led",label:"LEDGER",h:206,sc:"operate",draw:drawLedger,
+  tip:"Every reactivity term, and what they sum to. A training aid - a real operator never sees this."});
+ovlAdd({k:"log",label:"LOG",h:180,sc:"operate",draw:drawLog,
+  tip:"The last few events and why each one happened. The newest is always on the bar behind this key."});
+ovlAdd({k:"dmg",label:"REPAIR",h:92,sc:"operate",draw:drawDamage,
+  tip:"Damaged equipment and the repair parties you can send. A damaged component also carries its own repair key on the plant."});
+ovlAdd({k:"flt",label:"FAULTS",h:88,sc:"operate",draw:drawFaults,
+  tip:"Developer buttons for causing emergencies on demand. In the finished game these come from combat damage, not from you."});
 
 function drawAnnunciator(y0){
   const colw=742/6, tw_=Math.round(colw)-6;
@@ -489,6 +267,17 @@ function combatHit(){
     (p.access?"  A repair party can reach it.":"  IT IS WALLED IN - no repair is possible with this layout."));
 }
 
+/* Sending a repair party is ONE act with two ways to ask for it - the card in
+   the damage panel and the key on the damaged component itself - so it is one
+   function, and it refuses the same way from both. */
+const repairNeed=p=>14+p.w*p.h*4;
+function repairSend(p){
+  if(!p.access||S.repair) return;
+  const need=repairNeed(p);
+  S.repair={id:p.id,t:0,need};
+  logE("info","REPAIR PARTY DISPATCHED / "+p.name,
+    "Estimated "+need+" seconds. The party takes dose the whole time, at the rate your layout allows.");
+}
 function drawDamage(yy){
   const x=12,y=yy,w=736,h=S.dmgParts.length?110:56;
   well(x,y,w,h,"DAMAGE CONTROL",S.dmgParts.length?C.red:C.amber);
@@ -501,13 +290,8 @@ function drawDamage(yy){
     for(const k of S.dmgParts){
       const part=LAY.parts.find(q=>q.id===k); if(!part) continue;
       const busy=S.repair&&S.repair.id===k, blocked=!part.access, bw=172;
-      const need=14+part.w*part.h*4;
-      const wd=push({x:bx,y:y+30,w:bw,h:56,type:"btn",fn:()=>{
-        if(blocked||S.repair) return;
-        S.repair={id:k,t:0,need};
-        logE("info","REPAIR PARTY DISPATCHED / "+part.name,
-          "Estimated "+need+" seconds. The party takes dose the whole time, at the rate your layout allows.");
-      }});
+      const need=repairNeed(part);
+      const wd=push({x:bx,y:y+30,w:bw,h:56,type:"btn",fn:()=>repairSend(part)});
       fillRect(bx,y+30,bw,56, busy?"#2a1f08":(blocked?"#1a0d0b":(hov(wd)?C.panelHi:C.panel)));
       frame(bx,y+30,bw,56, busy?C.amber:(blocked?C.red:C.edge2));
       accent(bx,y+30,bw,part.col);
@@ -527,11 +311,6 @@ function drawDamage(yy){
   return y+h+12;
 }
 
-/* the stacked panels, as one block that can live in either column */
-function drawPanels(y){
-  y=drawAnnunciator(y); y=drawDamage(y); y=drawTrend(y);
-  y=drawLog(y); y=drawLedger(y); return drawFaults(y);
-}
 function drawFaults(y0){
   const y=y0+16;
   rule("FAULT INJECTION / TEST HARNESS",12,y0+8,736);

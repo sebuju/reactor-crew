@@ -3,16 +3,137 @@
 
 /* ═══════════════ immediate-mode UI ═══════════════ */
 const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9}};
-const push=w=>{ui.widgets.push(w);return w;};
-const inside=(w,p)=>p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
-const hov=w=>inside(w,ui.ptr)&&!ui.drag;
+
+/* ═══════════════ THE PLANT VIEW TRANSFORM ═══════════════
+   The plant is drawn into a viewport you can pan and zoom, so a widget pushed
+   while that view is up lives in PLANT coordinates while the pointer arriving
+   from the DOM lives in PAGE coordinates. Exactly one of those two is allowed
+   to move, and it is the POINTER: the hit test converts it on the way in and a
+   widget's own numbers are never touched. Storing page coordinates in the
+   widget instead puts two spaces inside one object, and the slider strips
+   mounted on the components would then draw their thumb in one and hit-test it
+   in the other.
+
+   The pan is an OFFSET into the viewport, not an absolute plant point, because
+   the plant sits at a different y on the two screens and an absolute point
+   would mean something different the moment you commissioned.
+
+   At s=1 the whole thing is the identity, which is why every geometry audit
+   still measures the plant exactly where it always was. It cannot be
+   initialised from GX and CELL up here: layout.js loads after this file. */
+/* Zoom is a MULTIPLE OF FIT, never an absolute scale. The page is the window
+   now, so the room the plant gets depends on the window and changes under you;
+   an absolute scale would mean "twice life size" on one monitor and "the whole
+   plant" on another, and a resize would silently change how much you could see.
+   VIEW.z is what the player sets, 1 = everything visible, and VIEW.s is what
+   the frame works out from it. */
+const VMAX=3;
+const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
+let viewOn=false;                       // are widgets being pushed through it?
+const vPt=p=>({x:VIEW.cx+VIEW.ox+(p.x-VIEW.x)/VIEW.s,
+               y:VIEW.cy+VIEW.oy+(p.y-VIEW.y)/VIEW.s});
+const vScr=p=>({x:VIEW.x+(p.x-VIEW.cx-VIEW.ox)*VIEW.s,
+                y:VIEW.y+(p.y-VIEW.cy-VIEW.oy)*VIEW.s});
+const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
+/* The viewport, and the plant that has to go in it. Called once a frame before
+   anything is drawn through the view. Anything smaller than its viewport is
+   CENTRED rather than pinned to a corner - a small plant on a big screen sat in
+   the top left with the room stacked to one side of it. */
+/* The CONTENT is the whole drawing - the grid and every plate standing beside
+   it - and it starts wherever that drawing starts, which is left of the grid. */
+function vFit(x,y,w,h,cx,cy,cw,ch){
+  VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h;
+  VIEW.cx=cx; VIEW.cy=cy; VIEW.cw=cw; VIEW.ch=ch;
+  VIEW.fit=Math.min(w/Math.max(cw,1), h/Math.max(ch,1));
+  VIEW.z=clamp(VIEW.z,1,VMAX);
+  VIEW.s=VIEW.fit*VIEW.z;
+  vClamp();
+}
+/* You can drag the plant PAST its own edges. The first version pinned it so
+   the grid could never leave the viewport, which meant that at fit scale - the
+   scale you are at most of the time - the plant simply would not move at all.
+   The limit now is half a screen of overscan in each direction: far enough to
+   put any corner of the plant wherever you want it, near enough that you cannot
+   throw the whole thing off and lose it. */
+function vClamp(){
+  const ww=VIEW.w/VIEW.s, hh=VIEW.h/VIEW.s, mx=ww*0.5, my=hh*0.5;
+  VIEW.ox=clamp(VIEW.ox,-mx,Math.max(-mx,VIEW.cw-ww+mx));
+  VIEW.oy=clamp(VIEW.oy,-my,Math.max(-my,VIEW.ch-hh+my));
+}
+/* zoom about a plant point - the wheel holds the point under the pointer, the
+   key centres on the component you have selected */
+function vZoom(z,cx,cy){
+  VIEW.z=clamp(z,1,VMAX); VIEW.s=VIEW.fit*VIEW.z;
+  VIEW.ox=(cx-VIEW.cx)-VIEW.w/2/VIEW.s;
+  VIEW.oy=(cy-VIEW.cy)-VIEW.h/2/VIEW.s;
+  vClamp();
+}
+/* ═══════════════ OVERLAYS ═══════════════
+   The page is exactly the window now, so everything that used to be stacked
+   below the plant has nowhere left to be. It is drawn OVER the plant instead,
+   out of one registry: a key in the bar along the bottom opens it, the same key
+   closes it, and only one is ever up.
+
+   The panels themselves did not have to change. The overlay is the same
+   736-wide content column they were already drawing into, so each one is still
+   the function it always was, handed a y.
+
+   Sparing with edges, like the rest of this UI: the plant behind is dimmed
+   rather than hidden - you are still operating the thing you are reading about
+   - and the panel is a tone step with a single accent along its top. No frame,
+   no drop shadow, nothing drawn twice. */
+const OVL=[];
+let ovlOpen=null;
+const ovlAdd=o=>{ OVL.push(o); return o; };
+const ovlList=()=>OVL.filter(o=>!o.sc||o.sc===screen);
+const ovlFor=k=>ovlList().find(o=>o.k===k);
+function ovlToggle(k){ ovlOpen = ovlOpen===k ? null : k; }
+function ovlShow(k){ ovlOpen=k; }
+function drawOverlay(){
+  if(!ovlOpen) return;
+  const o=ovlFor(ovlOpen); if(!o) return;
+  const h=Math.min(typeof o.h==="function"?o.h():o.h, VIEW.h-10), y=VIEW.y+VIEW.h-h;
+  fillRect(VIEW.x,VIEW.y,VIEW.w,VIEW.h,"rgba(6,10,11,.62)");
+  fillRect(12,y,736,h,C.panel);
+  accent(12,y,736,C.amber);
+  /* a catcher, pushed BEFORE the panel's own widgets so they still win inside
+     it: a click on bare overlay must not reach the component behind it */
+  push({x:12,y,w:736,h,type:"btn"});
+  o.draw(y);
+}
+/* the bar along the very bottom: what just happened on the left, the keys that
+   open the panels on the right */
+function ovlBar(y,h,note){
+  fillRect(0,y,W,h,C.panel); fillRect(0,y,W,1,C.edge);
+  let x=W-12;
+  const L=ovlList();
+  for(let i=L.length-1;i>=0;i--){ const o=L[i];
+    const kw=tw(o.label,{size:7,sp:1,caps:1})+14;
+    x-=kw;
+    button(x,y+3,kw,h-6,o.label,
+      {sunk:1,on:ovlOpen===o.k,size:7,sp:1,fn:()=>ovlToggle(o.k)});
+    TIP(x,y+3,kw,h-6,o.label,o.tip);
+    x-=4;
+  }
+  if(note) fitTxt(note,12,midBase(y,h,8),x-20,{size:8,color:C.ink2});
+}
+
+/* The pointer in the space this widget was pushed in - or nothing at all when
+   it is a plant widget and the pointer is outside the viewport, because a
+   component panned under the panel below must stop being clickable. */
+const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
+
+const push=w=>{ if(viewOn) w.v=1; ui.widgets.push(w); return w; };
+const inside=(w,p)=>!!p&&p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
+const hov=w=>inside(w,ptIn(w,ui.ptr))&&!ui.drag;
 
 /* ─────────────── tooltips ─────────────── */
 let touchTip=null, isTouch=false;
-function TIP(x,y,w,h,title,body){ ui.tips.push({x,y,w,h,title,body}); }
+function TIP(x,y,w,h,title,body){ ui.tips.push({x,y,w,h,title,body,v:viewOn?1:0}); }
 function findTip(p){
   for(let i=ui.tips.length-1;i>=0;i--){ const t=ui.tips[i];
-    if(p.x>=t.x&&p.x<=t.x+t.w&&p.y>=t.y&&p.y<=t.y+t.h) return t; }
+    const q=ptIn(t,p); if(!q) continue;
+    if(q.x>=t.x&&q.x<=t.x+t.w&&q.y>=t.y&&q.y<=t.y+t.h) return t; }
   return null;
 }
 function drawTip(){
@@ -23,7 +144,10 @@ function drawTip(){
   if(!t) return;
   const maxw=248, ob={size:10,color:C.ink};
   const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=26+n*13;
-  const ax = isTouch ? t.x+t.w/2 : ui.ptr.x, ay = isTouch ? t.y+t.h : ui.ptr.y;
+  /* a touch anchors the box on the thing it describes, so a plant tip has to
+     come back out of plant space to say where that is */
+  const an = t.v ? vScr({x:t.x+t.w/2,y:t.y+t.h}) : {x:t.x+t.w/2,y:t.y+t.h};
+  const ax = isTouch ? an.x : ui.ptr.x, ay = isTouch ? an.y : ui.ptr.y;
   let bx=clamp(ax+16,6,W-bw-6), by=ay+18;
   if(by+bh>H-6) by=Math.max(46,ay-bh-14);
   fillRect(bx+3,by+3,bw,bh,"rgba(0,0,0,.6)");
@@ -178,55 +302,95 @@ const valFrom=(w,x)=>w.min+clamp((x-w.x)/w.w,0,1)*(w.max-w.min);
    bare track still does, because that is how you get somewhere fast. */
 const sldGain = dy => 1/(1+Math.max(0,Math.abs(dy)-24)/16);
 
+/* The plant is dragged with the RIGHT button and worked with the left, so
+   there is no bare deck to find and no gesture that means two things. The
+   browser menu on that button would land on top of the plant, so it goes -
+   EXCEPT on shift, which is the escape hatch every browser gives you for
+   exactly this. Hold shift and the real menu comes back, with inspect and
+   save-image on it. */
+cv.addEventListener("contextmenu",e=>{ if(!e.shiftKey) e.preventDefault(); });
 cv.addEventListener("pointerdown",e=>{
   cv.setPointerCapture(e.pointerId); const p=local(e); ui.ptr=p;
+  /* shift+right is the browser's menu, not a pan - taking the drag as well
+     would leave the plant sliding about under an open menu */
+  if(e.button===2){ if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y};   /* at any zoom, from anywhere */
+    return; }
   isTouch = e.pointerType==="touch" || e.pointerType==="pen";
   if(isTouch){ const t=findTip(p);
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
-    if(!inside(w,p)) continue;
+    const q=ptIn(w,p); if(!inside(w,q)) continue;
     if(w.type==="part"){ sel=w.part.id;
+      /* clicking a component is the whole reason the readout panel exists, so
+         it opens with the click rather than after finding a key for it */
+      if(ovlFor("insp")) ovlShow("insp");
       /* a commissioned plant is welded down - you may select a component, not move it,
          and a pinned part rides its parent, so it is selectable but never draggable */
       /* rows carry control bands on both screens now, so a row is not CELL tall
          and the grab offset has to be measured against rowTop(), not against
          y*CELL - columns are still uniform */
       if(screen==="design" && !w.part.pin) ui.drag={type:"part",part:w.part,
-        ox:p.x-(GX+w.part.x*CELL), oy:p.y-rowTop(w.part.y),
-        sx:w.part.x, sy:w.part.y}; }
+        ox:q.x-(GX+w.part.x*CELL), oy:q.y-rowTop(w.part.y),
+        sx:w.part.x, sy:w.part.y, v:w.v}; }
     else if(w.type==="sld"){ ui.drag=w;
-      const onThumb=Math.abs(p.x-w.tx)<=w.tw_/2+3;
-      w.gv = onThumb ? w.val : valFrom(w,p.x);    // gv is the running command value
-      w.gx = p.x;
+      const onThumb=Math.abs(q.x-w.tx)<=w.tw_/2+3;
+      w.gv = onThumb ? w.val : valFrom(w,q.x);    // gv is the running command value
+      w.gx = q.x;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
-    else if(w.type==="scroll"){ ui.drag=w; w.last=p.y; }
+    else if(w.type==="scroll"){ ui.drag=w; w.last=q.y; }
     /* A drawing surface. Painting wants press-drag-release, which nothing else
        here does: a btn fires on press and a sld owns the drag outright. So a
        lat widget gets the pointer for as long as it is held and is handed the
        raw point, and it works out for itself which cell that is. */
-    else if(w.type==="lat"){ ui.drag=w; w.last=null; w.fn(p,e); }
+    else if(w.type==="lat"){ ui.drag=w; w.last=null; w.fn(q,e); }
     return; }
 });
 cv.addEventListener("pointermove",e=>{
   const p=local(e); ui.ptr=p;
   if(e.pointerType==="mouse") isTouch=false;
-  if(ui.drag){ if(ui.drag.type==="part"){ const d=ui.drag;
-      const nx=Math.round((p.x-d.ox-GX)/CELL);
+  if(ui.drag){ const d=ui.drag, q=d.v?vPt(p):p;
+    if(d.type==="part"){
+      const nx=Math.round((q.x-d.ox-GX)/CELL);
       /* rowAt() is the inverse of rowTop(); half a cell of lead makes it round to
          the nearest row rather than the row it is merely touching */
-      const ny=rowAt(p.y-d.oy+CELL/2);
+      const ny=rowAt(q.y-d.oy+CELL/2);
       if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
-    else if(ui.drag.type==="lat"){ ui.drag.fn(p,e); }
-    else if(ui.drag.type==="sld"){ const d=ui.drag;
+    else if(d.type==="lat"){ d.fn(q,e); }
+    else if(d.type==="sld"){
       /* integrate rather than re-derive, so moving away from the track changes
          the gearing from here on instead of jumping the value */
-      d.gv=clamp(d.gv+(p.x-d.gx)/d.w*(d.max-d.min)*sldGain(p.y-d.cy),d.min,d.max);
-      d.gx=p.x; d.fn(d.gv); }
-    else { helpScroll=clamp(helpScroll-(p.y-ui.drag.last),0,helpMax); ui.drag.last=p.y; } }
-  cv.style.cursor=ui.prev.some(w=>inside(w,p))?"pointer":"default";
+      d.gv=clamp(d.gv+(q.x-d.gx)/d.w*(d.max-d.min)*sldGain(q.y-d.cy),d.min,d.max);
+      d.gx=q.x; d.fn(d.gv); }
+    /* the pan is measured in PAGE pixels and spent in plant units, so the deck
+       keeps up with the hand at any zoom */
+    else if(d.type==="pan"){
+      VIEW.ox-=(p.x-d.lx)/VIEW.s; VIEW.oy-=(p.y-d.ly)/VIEW.s;
+      d.lx=p.x; d.ly=p.y; vClamp(); }
+    else { helpScroll=clamp(helpScroll-(q.y-d.last),0,helpMax); d.last=q.y; } }
+  cv.style.cursor = ui.drag&&ui.drag.type==="pan" ? "grabbing"
+    : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 });
 ["pointerup","pointercancel","pointerleave"].forEach(ev=>
   cv.addEventListener(ev,()=>{ui.drag=null;}));
-cv.addEventListener("wheel",e=>{ if(screen==="help"){ e.preventDefault();
-  helpScroll=clamp(helpScroll+e.deltaY,0,helpMax); }},{passive:false});
+cv.addEventListener("wheel",e=>{
+  if(screen==="help"){ e.preventDefault();
+    helpScroll=clamp(helpScroll+e.deltaY,0,helpMax); return; }
+  const p=local(e);
+  e.preventDefault();
+  /* Anywhere on the canvas, not just over the plant. The page does not scroll
+     any more, so there is nothing else for the wheel to do - and gating it to
+     the plant meant that from anywhere else the wheel did nothing, so there was
+     never anything to pan either.
+     The zoom holds the plant point under the pointer still, which is what makes
+     it feel like moving a lens rather than changing a number. With the pointer
+     off the plant there is no such point, so it holds the middle instead. */
+  const a=vIn(p)? vPt(p) : {x:VIEW.cx+VIEW.ox+VIEW.w/2/VIEW.s,
+                            y:VIEW.cy+VIEW.oy+VIEW.h/2/VIEW.s};
+  const px=vIn(p)? p.x : VIEW.x+VIEW.w/2, py=vIn(p)? p.y : VIEW.y+VIEW.h/2;
+  VIEW.z=clamp(VIEW.z*Math.exp(-e.deltaY*0.0015),1,VMAX);
+  VIEW.s=VIEW.fit*VIEW.z;
+  VIEW.ox=(a.x-VIEW.cx)-(px-VIEW.x)/VIEW.s;
+  VIEW.oy=(a.y-VIEW.cy)-(py-VIEW.y)/VIEW.s;
+  vClamp();
+},{passive:false});

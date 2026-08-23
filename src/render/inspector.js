@@ -24,6 +24,7 @@ function inspector(y0){
       "The coolant and moderator family. Sets power density, operating pressure, grace time and the sign of the void coefficient. It also decides how much heat a given lattice makes: the same assemblies rate differently in a different family.");
     c[3]=optList(X[3],c[3],CW2,"FUEL",FUEL,"fuel",
       "Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density.");
+    c[3]=latPreRow(X[3],c[3]+6,CW2);
     latMeasuredBar(22,y0+IH-26,712);
   }
   else if(id==="rods"){
@@ -41,9 +42,10 @@ function inspector(y0){
     c[3]=optList(X[3],c[3],CW2,"ROD FOLLOWER",FOLL,"foll",
       "What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.")+8;
     seg(X[3],c[3],CW2,9,clamp(d.sdm/2000,0,1),d.sdm<200?C.red:C.green,18);
-    wrap(d.sdm<200?"Not enough. After a trip this core creeps back to power on its own."
-                  :"Enough to hold the core down after a trip, cold and xenon-free.",
+    c[3]=wrap(d.sdm<200?"Not enough. After a trip it creeps back to power."
+                  :"Enough to hold this core down after a trip, cold.",
       X[3],c[3]+22,CW2,11,{size:8.5,color:C.ink2});
+    c[3]=latBankRow(X[3],c[3]+4,CW2);
     /* worth, bank count and margin are readouts now - every one of them a
        consequence of where the clusters went, and none of them dialled */
     latMeasuredBar(22,y0+IH-26,712,LATREAD_RODS);
@@ -134,19 +136,37 @@ function inspector(y0){
   return y0+IH;
 }
 
-/* left column: the plant itself and the component inspector */
-function designLeft(){
-  rule("PLANT DESIGN",12,58,736,C.amber);
-  txt("longitudinal section, looking to port / up is up: elevation drives gravity, buoyancy and passive cooling",
-      12,73,{size:8.5,color:C.ink2});
-  txt("click a component to configure it, drag to reposition",12,84,{size:8.5,color:C.ink2});
-  button(596,47,152,20,"AUTO-ARRANGE",{size:8,fn:()=>{ LAY=null; layoutMetrics(); }});
-  TIP(596,47,152,20,"AUTO-ARRANGE","Resets every component to its default position.");
-  return inspector(drawGrid(94)+12)+12;
+/* ══ THE BENCH IS ONE SCREEN TOO ══
+   Same shape as the control room: a head, the plant filling everything left,
+   and a bar along the bottom that opens the rest over it. */
+function drawDesign(){
+  layoutMetrics();
+  const d=derived(), LM=layoutMetrics();
+  rule("PLANT DESIGN",12,52,736,C.amber);
+  txt("longitudinal section, looking to port / up is up / click a component to configure it, drag to move it",
+      12,68,{size:8.5,color:C.ink2});
+  button(596,42,152,18,"AUTO-ARRANGE",{size:8,fn:()=>{ LAY=null; layoutMetrics(); }});
+  TIP(596,42,152,18,"AUTO-ARRANGE","Resets every component to its default position.");
+  const bh=20, vy=76, vh=Math.max(120,H-vy-bh-4);
+  drawPlant(vy,null,vh);
+  drawOverlay();
+  const hard=designBlocked(d,LM);
+  ovlBar(H-bh,bh,
+    "MASS "+d.mass.toFixed(0)+" / "+BUDGET+" t"+
+    (hard?"   -   BLOCKED: OPEN REVIEW":d.over?"   -   OVER BUDGET":""));
 }
 
-/* right column: what the design adds up to, and the button that builds it */
-function designRight(y,d,LM){
+/* what the design adds up to, and the button that builds it */
+/* How much room the DESIGN REVIEW panel is given. Swept over every
+   architecture x fuel x loop count x RPS x shielding x lattice preset - 1440
+   designs, worst case six notes at 150 px - and rounded to nothing, because the
+   sweep is the measurement. Re-measure it if a new warning is added. */
+const REVIEW_H=150;
+/* Was one stacked block; it is two overlays now, because between them they are
+   740 units tall and the whole page is about 427. Split where the reading
+   splits: what the plant IS, and what is wrong with it. */
+function benchResults(y){
+  const d=derived(), LM=layoutMetrics();
   rule("MASS BUDGET",12,y,736);
   seg(12,y+12,736,14,clamp(d.mass/BUDGET,0,1),
       d.over?C.red:(d.mass/BUDGET>.9?C.amber:C.green),48);
@@ -158,35 +178,49 @@ function designRight(y,d,LM){
     "You have "+BUDGET+" tonnes. Vessel, core, fuel, loops, scram gear, sensors, safeguards, pipe runs and shielding all compete for the same allowance.");
   y+=64;
 
-  const stats=planStats(d).concat(layoutStats(LM));
-  well(12,y,736,Math.ceil(stats.length/2)*32+34,"RESULTING PLANT");
+  /* THREE columns, not two. Seventeen figures two abreast is 322 units tall and
+     the overlay has about 300 to give; three abreast is 226 and reads no worse,
+     because each row is a label, a bar and a number and none of them wanted 362
+     units to say it in. */
+  const stats=planStats(d).concat(layoutStats(LM)), NC=3, cw=237;
+  const rows=Math.ceil(stats.length/NC);
+  well(12,y,736,rows*32+34,"RESULTING PLANT");
   stats.forEach((st,i)=>{
-    const sx=22+(i%2)*362, sy=y+40+Math.floor(i/2)*32;
+    const sx=22+(i%NC)*cw, sy=y+40+Math.floor(i/NC)*32;
     txt(st[0],sx,sy,{size:8,sp:1.3,color:C.ink2});
-    seg(sx,sy+5,204,9,st[2],st[3],20);
-    txt(st[1],sx+354,sy+13,{size:10,align:"right",color:C.bright});
-    TIP(sx-10,sy-10,362,28,st[0],st[4]);
+    seg(sx,sy+5,130,9,st[2],st[3],20);
+    txt(st[1],sx+cw-8,sy+13,{size:10,align:"right",color:C.bright});
+    TIP(sx-10,sy-10,cw,28,st[0],st[4]);
   });
-  y+=Math.ceil(stats.length/2)*32+46;
-
+  return y+rows*32+46;
+}
+function benchReview(y){
+  const d=derived(), LM=layoutMetrics();
   const W_=designIssues(d,LM), hard=designBlocked(d,LM);
+  /* a review note is a sentence, not a label: wrap it and size the well to fit */
+  const rx=78, rw=748-rx-12, ro={size:8.5};
+  /* RESERVED, not fitted, and it is the last thing on the page that could
+     change height. The bench page is exactly as tall as this panel makes it, so
+     a panel that grows a line moves the whole page under the pointer: the
+     COMPACT preset takes 137 t off, the over-budget note goes away, and the
+     click that did it shortened the page by 16 px. Now the block is always
+     REVIEW_H tall whatever it has to say, including when it has nothing to say.
+     A floor and not a clamp - a design that finds more notes than the reserve
+     still gets the room to print them, it just moves the page again while it
+     does. */
+  const hh=Math.max(REVIEW_H,
+    W_.length? 30+W_.reduce((a,w)=>a+wrapCount(w[1],rw,ro)*12+4,0) : 0);
+  well(12,y,736,hh,"DESIGN REVIEW",W_.length?(hard?C.red:C.amber):C.green);
   if(W_.length){
-    /* a review note is a sentence, not a label: wrap it and size the well to fit */
-    const rx=78, rw=748-rx-12, ro={size:8.5};
-    const hh=30+W_.reduce((a,w)=>a+wrapCount(w[1],rw,ro)*12+4,0);
-    well(12,y,736,hh,"DESIGN REVIEW",hard?C.red:C.amber);
     let ry=y+34;
     for(const w of W_){
       const col=w[0]==="HARD"?C.red:C.amber;
       txt(w[0]==="HARD"?"[BLOCK]":"[WARN ]",22,ry,{size:8.5,color:col});
       ry=wrap(w[1],rx,ry,rw,12,{size:8.5,color:col})+4;
     }
-    y+=hh+12;
-  } else {
-    well(12,y,736,44,"DESIGN REVIEW",C.green);
-    txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",22,y+34,{size:8.5,sp:1,color:C.green});
-    y+=56;
-  }
+  } else txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",22,y+34,
+      {size:8.5,sp:1,color:C.green});
+  y+=hh+12;
   if(hard){
     fillRect(12,y,736,34,"#1a0d0b"); frame(12,y,736,34,C.red);
     txt("RESOLVE BLOCKING ISSUES BEFORE COMMISSIONING",380,y+21,
@@ -199,8 +233,10 @@ function designRight(y,d,LM){
   return y+50;
 }
 
-function drawDesign(){
-  layoutMetrics();
-  const d=derived(), lb=designLeft(), LM=layoutMetrics();
-  if(screen==="design") setPageH(designRight(lb,d,LM)+16);
-}
+/* the bench's own three panels, over its own plant */
+ovlAdd({k:"insp",label:"COMPONENT",h:244,sc:"design",draw:y=>inspector(y),
+  tip:"Everything you can set about the selected component. Clicking a component on the plant opens this."});
+ovlAdd({k:"res",label:"RESULTS",h:300,sc:"design",draw:benchResults,
+  tip:"What this design adds up to: the mass it spends, and the seventeen figures that come out of the choices you made."});
+ovlAdd({k:"rev",label:"REVIEW",h:200,sc:"design",draw:benchReview,
+  tip:"What is wrong with this design, and the key that builds it. A blocking issue has to be cleared before the unit can be commissioned."});

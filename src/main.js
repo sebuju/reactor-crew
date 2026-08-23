@@ -11,7 +11,7 @@ function tick(now){
   ctx.fillStyle=gridPat; ctx.fillRect(0,40,W,H-40);
   ui.widgets=[]; ui.tips=[]; topbar();
   if(screen==="design") drawDesign();
-  else if(screen==="operate") setPageH(drawPanels(drawMimic())+16);
+  else if(screen==="operate") drawOperate();
   else drawHelp();
   drawTip();
   ui.prev=ui.widgets;
