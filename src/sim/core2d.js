@@ -84,6 +84,11 @@ function coreConst(T,d){
   T.NB=D.nbank; T.bankR=[];
   for(let b=0;b<T.NB;b++) T.bankR.push(Math.round(Math.sqrt((b+.5)/T.NB)*(XNR-1)));
   T.rinf=Math.max(XRINF,XNR/T.NB);
+  /* How much bank reach overlaps on each ring. A pure function of bankR and
+     rinf, both fixed here, so rodShape() no longer rebuilds it every tick. */
+  T.rinfW=new Float64Array(XNR);
+  for(let b=0;b<T.NB;b++) for(let i=0;i<XNR;i++)
+    T.rinfW[i]+=Math.max(0,1-Math.abs(i-T.bankR[b])/T.rinf);
   /* Tilt weight per bank: +1 on the centreline falling to -1 at the outer bank,
      centred so the weights sum to zero. That last part is what makes it a tilt
      rather than a bank move - an off-centre set would insert net reactivity, the
@@ -155,9 +160,7 @@ function coreView(L){
 /* ── where the absorber is, and what is hanging below it ── */
 function rodShape(T,st,cov,fol){
   cov.fill(0); fol.fill(0);
-  const rw=new Float64Array(XNR);
-  for(let b=0;b<T.NB;b++) for(let i=0;i<XNR;i++)
-    rw[i]+=Math.max(0,1-Math.abs(i-T.bankR[b])/T.rinf);
+  const rw=T.rinfW;
   for(let b=0;b<T.NB;b++){
     const ins=clamp(st.rodZ[b],0,1), tip=XNZ*(1-ins);   // tip, in node units
     const fLo=tip-T.tipLen, fHi=tip;

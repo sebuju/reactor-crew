@@ -72,6 +72,9 @@ const AUTOSYS={
     warn:"The backup supply will not pick up the pumps. A blackout now leaves natural circulation only."},
 };
 const AUTOKEYS = Object.keys(AUTOSYS);
+/* One event key and one title per system, built once. step() raises these
+   thirty times a second and has no business concatenating them each time. */
+const AUTOEV = AUTOKEYS.map(k=>[k, "byp_"+k, AUTOSYS[k].name+" BYPASSED"]);
 const autoFit   = k => !!AUTOSYS[k].fit();
 const autoLive  = k => autoFit(k) && !S.byp[k];
 const autoState = k => !autoFit(k) ? "NOT FITTED" : S.byp[k] ? "BYPASSED" : "ARMED";
@@ -349,7 +352,7 @@ function step(dt){
   /* ── pump cavitation: pumps stall if the water they suck is near boiling ── */
   const sat0 = tsat(s.P), Tc0 = s.Tavg-15*heat;
   s.cav = clamp((Tc0-(sat0-6))/12,0,1);
-  const lost = s.dmgParts.filter(k=>k.startsWith("pump")).length;
+  let lost=0; for(const k of s.dmgParts) if(k.startsWith("pump")) lost++;
   const pumpK = Math.max(0,(P.loops-lost)/P.loops);
   const bkpUp = !s.bkpLost && autoLive("bkp");
   /* ── coolant flow: pumps have inertia ──
@@ -497,7 +500,9 @@ function step(dt){
 
   /* ── event log: every transition, with why ── */
   const E=s.ev, ev=(k,cond,sev,msg,why,latch)=>{
-    if(cond && !E[k]){ E[k]=true; logE(sev,msg,why); }
+    /* `why` may be a thunk: several of these build their text with toFixed(),
+       and a log line nobody is reading is not worth a string a tick. */
+    if(cond && !E[k]){ E[k]=true; logE(sev,msg,typeof why==="function"?why():why); }
     else if(!cond && !latch) E[k]=false; };
   ev("hipow",s.n>1.10,"warn","POWER ABOVE 110%",
     "Running past rated output. Thermal margin is what pays for it, and DNBR is falling.");
@@ -506,13 +511,13 @@ function step(dt){
   ev("dnbr10",s.dnbr<1.00,"alarm","DNBR BELOW 1.00 / CLADDING FAILING",
     "The fuel is now wrapped in insulating steam. Heat is not reaching the water and damage is accumulating this second.");
   ev("recrit",s.scrammed&&s.rho>-200,"alarm","TRIPPED CORE GOING CRITICAL",
-    "The bank is in and the reactor is climbing back to critical anyway. The xenon it was shut down by has decayed, and the bank alone is worth "+P.sdm.toFixed(0)+" pcm against it. Borate now - the boron system is worth "+P.sdmB.toFixed(0)+" pcm of margin.");
+    ()=>"The bank is in and the reactor is climbing back to critical anyway. The xenon it was shut down by has decayed, and the bank alone is worth "+P.sdm.toFixed(0)+" pcm against it. Borate now - the boron system is worth "+P.sdmB.toFixed(0)+" pcm of margin.");
   ev("cav",s.cav>0.15,"warn","COOLANT PUMP CAVITATION",
     "Water arriving at the pumps is close to boiling, so they are churning vapour. Real flow is far below the bench setting.");
   ev("flowfloor",s.flowDem<P.flowMin,"warn","PUMPS ORDERED BELOW DESIGN FLOOR",
-    "Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
+    ()=>"Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
   ev("hip",s.P>P.P0*1.05,"warn","PRIMARY OVERPRESSURE",
-    "Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burst.toFixed(1)+" MPa.");
+    ()=>"Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burst.toFixed(1)+" MPa.");
   ev("porv",s.porvOpen&&!s.porvBlocked,"warn","RELIEF VALVE PASSING",
     "The PORV is open and venting to the relief tank. If nobody commanded it, primary coolant is leaving the loop.");
   ev("stuck",s.porvOpen&&s.porvAuto&&s.porvStuck&&!s.porvBlocked,"alarm","PORV FAILED TO RESEAT",
@@ -523,8 +528,8 @@ function step(dt){
     "Xenon-135 past 3200 pcm. Raising power may be physically impossible until it decays, whatever you do with the rods.");
   ev("jam",s.rodJam,"alarm","CONTROL RODS NOT RESPONDING",
     "The bank is ignoring demand, a scram included. You are left with boron, flow and load.");
-  for(const k of AUTOKEYS)
-    ev("byp_"+k, autoFit(k)&&s.byp[k], "warn", AUTOSYS[k].name+" BYPASSED", AUTOSYS[k].warn);
+  for(const [k,evk,title] of AUTOEV)
+    ev(evk, autoFit(k)&&s.byp[k], "warn", title, AUTOSYS[k].warn);
   ev("norps",!P.rps,"warn","NO PROTECTION SYSTEM FITTED",
     "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call.",true);
   ev("hpi",s.hpi,"info","HPI INJECTING",
@@ -536,9 +541,9 @@ function step(dt){
   ev("d25",s.dmg>25,"alarm","FUEL DAMAGE 25%",
     "A quarter of the fuel cladding has failed.",1);
   ev("fat50",s.fatigue>50,"warn","VESSEL FATIGUE PAST 50%",
-    "Thermal shock has embrittled the vessel. Its burst pressure is now "+burst.toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+".",1);
+    ()=>"Thermal shock has embrittled the vessel. Its burst pressure is now "+burst.toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+".",1);
   ev("brk",s.breach,"alarm","VESSEL RUPTURE",
-    "The pressure vessel failed at "+s.P.toFixed(1)+" MPa. Coolant is leaving faster than anything can replace it. Unrecoverable.",1);
+    ()=>"The pressure vessel failed at "+s.P.toFixed(1)+" MPa. Coolant is leaving faster than anything can replace it. Unrecoverable.",1);
   ev("melt",s.melt,"alarm","CORE MELT",
     "Over 60% of the fuel has failed and the core is melting. Unrecoverable.",1);
 
