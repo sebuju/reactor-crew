@@ -68,24 +68,84 @@ const PXc=g=>GX+g*CELL, PYc=g=>rowTop(g);
 /* the pixel rect of a component - its height is not p.h*CELL any more, because
    the rows it spans may carry control bands */
 const prect=p=>({x:PXc(p.x), y:rowTop(p.y), w:p.w*CELL, h:rowTop(p.y+p.h)-rowTop(p.y)});
-function port(p,side){
+/* A face is not one nozzle. Four loops all leave the reactor on its starboard
+   side, and if every one of them leaves from the same point the four hot legs
+   are one line with three of them hidden underneath. So a port is a slot on a
+   face: `n` pipes land here, this is the `slot`-th of them, spread evenly and
+   centred on the face centre. The pitch never exceeds half a cell, because a
+   nozzle further out than that reads as belonging to the neighbouring cell.
+   With n===1 the offset is zero and the port is exactly the face centre it has
+   always been, which is what keeps every single-pipe face pixel-identical. */
+function port(p,side,slot=0,n=1,shift=0){
   const {x,y,w,h}=prect(p);
-  return side==="l"?[x,y+h/2] : side==="r"?[x+w,y+h/2]
-       : side==="t"?[x+w/2,y] : side==="b"?[x+w/2,y+h] : [x+w/2,y+h/2];
+  const len = (side==="t"||side==="b") ? w : h;
+  const pitch = Math.min(len/(n+1),CELL/2);
+  /* how far this nozzle may slide off its slot before it fouls its neighbour on
+     the same face, or runs off the end of the face */
+  const room = n>1 ? pitch/2-1 : len/2-6;
+  const d = (n>1 ? (slot-(n-1)/2)*pitch : 0) + clamp(shift,-room,room);
+  const o = Math.round(Math.abs(d))*Math.sign(d);   // symmetric, so the spread stays balanced
+  return side==="l"?[x,y+h/2+o] : side==="r"?[x+w,y+h/2+o]
+       : side==="t"?[x+w/2+o,y] : side==="b"?[x+w/2+o,y+h] : [x+w/2,y+h/2];
+}
+/* a run reduced to the lanes it occupies: axis, the coordinate of the lane, and
+   how far along the lane the run actually reaches */
+function laneSegs(pts){ const out=[];
+  for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i];
+    if(Math.abs(a[0]-b[0])<0.5){ if(Math.abs(a[1]-b[1])>0.5)
+        out.push(["v",a[0],Math.min(a[1],b[1]),Math.max(a[1],b[1])]); }
+    else out.push(["h",a[1],Math.min(a[0],b[0]),Math.max(a[0],b[0])]); }
+  return out; }
+/* Where the runs of one network remember the lanes they have taken.  Two runs
+   that pick the same lane draw one line and hide the other, and nothing in the
+   old router could see that: the standoff rule and bendAt() each chose in total
+   ignorance of the rest of the network.  A claim is an interval, not a whole
+   lane - two runs that share a lane but never pass each other are not on top of
+   each other, and insisting otherwise pushes pipes off the grid for nothing.
+   A run is scored and claimed whole, not just at its bend, because the stubs
+   that leave and arrive square to a face collide just as readily as the bend.
+   The registry lives for one pipeNetwork() call - it is routing scratch, not
+   plant state. */
+const LANE_STEP=8, LANE_COST=8;
+/* the lanes a run would like to try, nearest wish first */
+const outboard=d=>{ const a=[]; for(let i=0;i<24;i++) a.push(d*LANE_STEP*i); return a; };
+const eitherWay=(()=>{ const a=[0];
+  for(let i=1;i<=5;i++) a.push(LANE_STEP*i,-LANE_STEP*i); return a; })();
+function laneReg(){
+  const held=[];
+  /* a pipe is 8px of halo wide, so two runs a couple of pixels apart are one fat
+     pipe to look at. LANE_STEP is the separation at which they read as two. */
+  const clash=s=>held.filter(u=>u[0]===s[0] && Math.abs(u[1]-s[1])<LANE_STEP-0.5 &&
+        Math.min(u[3],s[3])-Math.max(u[2],s[2])>1.5).length;
+  const cost=pts=>laneSegs(pts).reduce((n,s)=>n+clash(s),0);
+  return {
+    cost,
+    claim(pts){ for(const s of laneSegs(pts)) held.push(s); return pts; },
+    /* the first lane that lands the whole run clear.  Wishes are tried in order,
+       so the first run to ask keeps the lane it has always had and later ones
+       stand off from it rather than through it. */
+    pick(mk,v,wish){ for(const d of wish) if(!cost(mk(v+d))) return v+d;
+      return v; }
+  };
 }
 /* Route between two ports so the pipe LEAVES and ARRIVES perpendicular to the
    face it lands on.  A pipe must turn into a component, never slide along it.
    Two ports on the same face get a run that stands off clear of both. */
+const bendPoly=(a,b,vert)=> vert ? m=>[a,[m,a[1]],[m,b[1]],b]
+                                 : m=>[a,[a[0],m],[b[0],m],b];
 /* Where to put the bend, when there is a choice: the lane that cuts through the
-   fewest components.  A pipe should not run through the middle of a machine on
-   its way somewhere else.  `vert` means the bend run itself is vertical. */
-function bendAt(lo,hi,c0,c1,vert,skip){
-  const g=occupied(null), mid=(lo+hi)/2;
+   fewest components, and among those the one that buries the least other pipe.
+   A pipe should not run through the middle of a machine on its way somewhere
+   else, and it should not hide another pipe either.  `vert` means the bend run
+   itself is vertical. */
+function bendAt(a,b,vert,skip,reg){
+  const g=occupied(null), i=vert?0:1, j=vert?1:0;
+  const lo=a[i], hi=b[i], mid=(lo+hi)/2, mk=bendPoly(a,b,vert);
   const n=vert?GW:GH;
   /* rows are not a fixed pitch once the control bands are in, so a pixel y has
      to be looked up rather than divided */
-  const k0 = vert ? rowAt(Math.min(c0,c1)) : Math.floor((Math.min(c0,c1)-GX)/CELL);
-  const k1 = vert ? rowAt(Math.max(c0,c1)) : Math.floor((Math.max(c0,c1)-GX)/CELL);
+  const k0 = vert ? rowAt(Math.min(a[j],b[j])) : Math.floor((Math.min(a[j],b[j])-GX)/CELL);
+  const k1 = vert ? rowAt(Math.max(a[j],b[j])) : Math.floor((Math.max(a[j],b[j])-GX)/CELL);
   let best=mid, bd=1e9;
   for(let c=0;c<n;c++){
     const m = vert ? GX+(c+0.5)*CELL : rowTop(c)+CELL/2;
@@ -95,10 +155,15 @@ function bendAt(lo,hi,c0,c1,vert,skip){
       const cell = vert ? (g[k]||[])[c] : (g[c]||[])[k];
       if(cell && skip.indexOf(cell)<0) hits++;
     }
-    const d=hits*10+Math.abs(m-mid)/CELL;
+    /* burying another pipe costs, but less than cutting a machine in half:
+       avoiding hardware still outranks avoiding pipe */
+    const d=hits*10+Math.abs(m-mid)/CELL+reg.cost(mk(m))*LANE_COST;
     if(d<bd){ bd=d; best=m; }
   }
-  return best;
+  /* a cell centre is also where a one-cell component puts its own nozzle, so the
+     tidy lane is exactly the one an existing port stub is most likely to be
+     lying in.  If it is, step off the cell grid rather than draw on top of it. */
+  return reg.pick(mk,best,eitherWay);
 }
 
 /* the face of p that points at q - a nozzle should be on the side the pipe comes from,
@@ -108,21 +173,45 @@ function face(p,q){
   return Math.abs(dx)>Math.abs(dy) ? (dx>=0?"r":"l") : (dy>=0?"b":"t");
 }
 
-function route(p,sa,q,sb){
-  const a=port(p,sa), b=port(q,sb);
+/* a bend that lands on one of its own endpoints emits that point twice, and a
+   zero-length segment is a stroke the renderer pays for and nobody can see */
+function dedupe(pts){
+  const out=[pts[0]];
+  for(let i=1;i<pts.length;i++){ const q=out[out.length-1];
+    if(Math.abs(pts[i][0]-q[0])>0.5||Math.abs(pts[i][1]-q[1])>0.5) out.push(pts[i]); }
+  return out;
+}
+const SLIDES=[[8,0],[-8,0],[0,8],[0,-8],[8,8],[-8,-8],[16,0],[-16,0],[0,16],[0,-16]];
+/* `o` carries what this run cannot know by itself: which slot it has on each of
+   its two faces, and the lane registry shared with every other run in the same
+   network. Left out, the run routes exactly as it always did. */
+function route(p,sa,q,sb,o){
+  o=o||{};
+  const reg=o.reg||laneReg();
   const va=sa==="t"||sa==="b", vb=sb==="t"||sb==="b", off=CELL/2;
-  if(va&&vb){
-    const m = sa===sb ? (sa==="b" ? Math.max(a[1],b[1])+off : Math.min(a[1],b[1])-off)
-                      : bendAt(a[1],b[1],a[0],b[0],false,[p,q]);
-    return [a,[a[0],m],[b[0],m],b];
+  const build=(da,db)=>{
+    const a=port(p,sa,o.ia,o.na,da), b=port(q,sb,o.ib,o.nb,db);
+    if(va!==vb) return va ? [a,[a[0],b[1]],b]    // out vertically, in horizontally
+                          : [a,[b[0],a[1]],b];   // out horizontally, in vertically
+    const vert=!va, mk=bendPoly(a,b,vert), i=vert?0:1;
+    const away=(sa==="r"||sa==="b")?1:-1;       // which way is clear of both components
+    const m = sa===sb
+      ? reg.pick(mk, away>0?Math.max(a[i],b[i])+off:Math.min(a[i],b[i])-off, outboard(away))
+      : bendAt(a,b,vert,[p,q],reg);
+    return mk(m);
+  };
+  /* A nozzle whose run would be buried anyway may slide along its own face. The
+     grid puts components on shared centrelines - at four loops the turbine, the
+     condenser and the last pump all sit on column 13 - and a pipe entering a
+     face on that line has nowhere to be except underneath the pipe already
+     passing through it. No lane choice can help; the nozzle has to move, which
+     is what a real plant does with it. */
+  let pts=build(0,0);
+  if(reg.cost(pts)) for(const [da,db] of SLIDES){
+    const t=build(da,db);
+    if(!reg.cost(t)){ pts=t; break; }
   }
-  if(!va&&!vb){
-    const m = sa===sb ? (sa==="r" ? Math.max(a[0],b[0])+off : Math.min(a[0],b[0])-off)
-                      : bendAt(a[0],b[0],a[1],b[1],true,[p,q]);
-    return [a,[m,a[1]],[m,b[1]],b];
-  }
-  return va ? [a,[a[0],b[1]],b]     // out vertically, in horizontally
-            : [a,[b[0],a[1]],b];    // out horizontally, in vertically
+  return reg.claim(dedupe(pts));
 }
 /* nearest point on a polyline - where a branch line tees onto a run */
 function nearestOn(pts,p){
@@ -141,38 +230,61 @@ function plen(pts){ let L=0;
   for(let i=1;i<pts.length;i++) L+=Math.abs(pts[i][0]-pts[i-1][0])+Math.abs(pts[i][1]-pts[i-1][1]);
   return L/CELL*MPC; }
 
+/* Routing happens twice over, because neither half can be done first. A run
+   cannot pick its nozzle until the face knows how many pipes land on it, and a
+   face cannot know that until every run has been declared. So pass one is pure
+   data - who joins what, on which face - pass two counts the faces and hands
+   each run its slot, and only then is anything routed. The declaration order is
+   the network order, which is also the draw order, so it has not changed. */
 function pipeNetwork(){
-  const id=k=>LAY.parts.find(q=>q.id===k), net=[];
+  const id=k=>LAY.parts.find(q=>q.id===k);
   const core=id("core"), pzr=id("pzr"), tb=id("turb"), cd=id("cond"), fp=id("feed"), hp=id("hpi");
-  let hot0=null;
+  const conn=[], link=(k,a,sa,b,sb)=>conn.push({k,a,sa,b,sb});
   for(let i=0;i<D.loops;i++){
     const sg=id("sg"+i), pu=id("pump"+i);
     if(!sg) continue;
-    const h=route(core,"r",sg,"l");
-    net.push({k:"hot",pts:h}); if(i===0) hot0=h;
-    if(pu){
-      net.push({k:"cold",pts:route(sg,"b",pu,"t")});
-      net.push({k:"cold",pts:route(pu,"b",core,"b")});
-    } else net.push({k:"cold",pts:route(sg,"b",core,"b")});
-    if(tb) net.push({k:"steam",pts:route(sg,"t",tb,"t")});
-    if(fp) net.push({k:"feed",pts:route(fp,face(fp,sg),sg,"b")});   // discharge
+    link("hot",core,"r",sg,"l");
+    if(pu){ link("cold",sg,"b",pu,"t"); link("cold",pu,"b",core,"b"); }
+    else    link("cold",sg,"b",core,"b");
+    if(tb) link("steam",sg,"t",tb,"t");
+    if(fp) link("feed",fp,face(fp,sg),sg,"b");   // discharge
   }
-  if(pzr&&hot0){                       // surge line drops onto the hot leg
-    const a=port(pzr,"b");
-    let ty=null;                         // nearest hot run passing under the pressurizer
-    for(let i=1;i<hot0.length;i++){
-      if(Math.abs(hot0[i][1]-hot0[i-1][1])>0.5) continue;
-      const lo=Math.min(hot0[i-1][0],hot0[i][0]), hi=Math.max(hot0[i-1][0],hot0[i][0]);
-      if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
-        ty=hot0[i][1];
+  /* the surge line is not a route() - it drops straight down onto whatever hot
+     leg passes underneath - but it is still a pipe on the pressurizer's bottom
+     face, so it is declared here and counted with the rest */
+  if(pzr) conn.push({k:"surge",a:pzr,sa:"b"});
+  if(tb&&cd) link("exh",tb,"b",cd,"t");
+  if(cd&&fp) link("feed",cd,"r",fp,face(fp,cd));   // suction
+  if(hp&&fitted(hp)) link("hpi",hp,"b",core,"b");
+
+  const key=(p,s)=>p.id+s, cnt={}, seen={};
+  const tally=(p,s)=>{ if(p) cnt[key(p,s)]=(cnt[key(p,s)]||0)+1; };
+  for(const c of conn){ tally(c.a,c.sa); tally(c.b,c.sb); }
+  const take=(p,s)=>{ const k=key(p,s), i=seen[k]||0; seen[k]=i+1; return [i,cnt[k]]; };
+
+  const reg=laneReg(), net=[];
+  let hot0=null;
+  for(const c of conn){
+    if(c.k==="surge"){                 // surge line drops onto the hot leg
+      const [ia,na]=take(c.a,c.sa), a=port(c.a,c.sa,ia,na);
+      if(!hot0) continue;
+      let ty=null;                     // nearest hot run passing under the pressurizer
+      for(let i=1;i<hot0.length;i++){
+        if(Math.abs(hot0[i][1]-hot0[i-1][1])>0.5) continue;
+        const lo=Math.min(hot0[i-1][0],hot0[i][0]), hi=Math.max(hot0[i-1][0],hot0[i][0]);
+        if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
+          ty=hot0[i][1];
+      }
+      if(ty!==null) net.push({k:"surge",pts:[a,[a[0],ty]]});
+      else { const t=nearestOn(hot0,a);  /* nothing underneath: reach across to the leg */
+        if(t.d>3) net.push({k:"surge",pts:dedupe([a,[a[0],t.pt[1]],t.pt])}); }
+      continue;
     }
-    if(ty!==null) net.push({k:"surge",pts:[a,[a[0],ty]]});
-    else { const t=nearestOn(hot0,a);   /* nothing underneath: reach across to the leg */
-      if(t.d>3) net.push({k:"surge",pts:[a,[a[0],t.pt[1]],t.pt]}); }
+    const [ia,na]=take(c.a,c.sa), [ib,nb]=take(c.b,c.sb);
+    const pts=route(c.a,c.sa,c.b,c.sb,{reg,ia,na,ib,nb});
+    net.push({k:c.k,pts});
+    if(c.k==="hot"&&!hot0) hot0=pts;
   }
-  if(tb&&cd) net.push({k:"exh",pts:route(tb,"b",cd,"t")});
-  if(cd&&fp) net.push({k:"feed",pts:route(cd,"r",fp,face(fp,cd))});   // suction
-  if(hp&&fitted(hp)) net.push({k:"hpi",pts:route(hp,"b",core,"b")});
   return net;
 }
 const fitted=p => p.id==="hpi" ? D.accum : p.id==="bkp" ? D.bkp>0 : true;
