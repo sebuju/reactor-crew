@@ -5,7 +5,8 @@
 const HELP=[
  ["h","READING THE DIAGRAM"],
  ["d","PIPE COLOUR","Primary piping is tinted by the water temperature inside it, blue near 520 K and red near 630 K. If hot and cold legs converge in colour, heat is not being removed."],
- ["d","DASH ANIMATION","Moving dashes mean flow, at a speed proportional to it. Primary dashes track pump setting, secondary dashes track load demand. A stalled line means no circulation."],
+ ["d","PACKETS IN THE PIPES","Each bolus sliding down a line is fluid actually moving, at a speed proportional to the flow, and its bright face points the way it is going. Primary packets track pump setting, secondary packets track load demand. A line with nothing moving in it has no circulation."],
+ ["d","FLOW METERS","Every line carries a needle at the middle of its longest straight run, reading real flow against what that line was built for. Hover it for per cent of design. The needle runs on past the mark into a red band, because you are allowed to push a line past its rating - it just tells you that you are. The pressurizer carries the same gauge reading pressure, and its band opens at the relief valve setpoint."],
  ["d","FILL LEVELS","The shaded column inside the pressurizer, steam generator and vessel is the real level, drawn to scale. The vessel column turns red when thermal margin is lost."],
  ["d","VALVE SYMBOLS","Bowties are valves. Green is closed and holding, red is open and passing flow."],
  ["d","ELECTRICAL OUTPUT","The turbine box reads the megawatts the ship is actually getting, not a percentage. It turns amber when condenser backpressure is taking some of that output back off you."],
