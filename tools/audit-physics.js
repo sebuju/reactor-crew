@@ -20,7 +20,7 @@ global.requestAnimationFrame=noop; global.addEventListener=noop;
 
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
  '; return {commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
- 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN};')();
+ 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo};')();
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), PUMPS=M.PUMPS(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 const set=o=>{ Object.assign(D,BASE,o); M.commission(); return M.S(); };
@@ -189,6 +189,44 @@ const tiltRun=t=>{ const s=set({}); s.tiltDem=t; run(s,60); return s; };
 { const s=set({}); s.rodJam=true; s.tiltDem=1; run(s,30);
   if(s.tilt!==0) bad(`a jammed bank still moved the tilt trim (${s.tilt.toFixed(3)})`);
   console.log(`  jammed bank: tilt stays ${s.tilt.toFixed(2)} however hard you ask`);
+}
+
+console.log('\n=== THE ROD DRIVES ARE A TARGET, AND THEY RIDE THE HEAD ===');
+{ /* combatHit() picks its victim at random, so aim it: hand it a list of one */
+  const s=set({}); run(s,5);
+  const L=M.LAY(), all=L.parts.slice(), rods=all.find(q=>q.id==='rods');
+  L.parts=[rods]; M.combatHit(); L.parts=all;
+  if(!s.dmgParts.includes('rods')) bad('a hit on the rod drives was not recorded as damage');
+  if(!s.rodJam) bad('a hit on the rod drives did not jam the bank');
+  const at=s.rodPos; s.rodDem=0; run(s,10);
+  if(s.rodPos!==at) bad(`a wrecked bank still answered the slider (${at.toFixed(3)} -> ${s.rodPos.toFixed(3)})`);
+  M.manualScram();
+  if(!s.rodJam) bad('SCRAM un-wrecked the rod drives - damage must need a repair party');
+  run(s,10);
+  if(s.rodPos!==at) bad(`a wrecked bank still dropped on a scram (${s.rodPos.toFixed(3)})`);
+  console.log(`  drive hit: bank frozen at ${(at*100).toFixed(0)}%, slider and scram both ignored`);
+  s.repair={id:'rods',t:0,need:0.01}; M.step(0.02); M.step(0.02);
+  if(s.rodJam||s.dmgParts.includes('rods')) bad('a completed repair left the rod drives out of service');
+  console.log('  repair complete: the drives answer again');
+}
+{ /* a sticky bank is not a wrecked one - the malfunction toggle still clears */
+  const s=set({}); run(s,5); s.rodJam=true; M.manualScram();
+  if(s.rodJam) bad('a scram no longer frees a merely sticky bank');
+  console.log('  sticky bank, no damage: a scram still frees it');
+}
+{ /* the drives are bolted to the vessel head and are never sited on their own */
+  const L=M.LAY(), core=L.parts.find(q=>q.id==='core'), rods=L.parts.find(q=>q.id==='rods');
+  if(!rods.pin||rods.pin.to!=='core') bad('the rod drives are not pinned to the reactor');
+  if(rods.w!==core.w) bad(`the drives are ${rods.w} cells wide on a ${core.w}-cell vessel head`);
+  if(M.moveTo(rods,8,8)) bad('the rod drives were sited on their own');
+  /* the top-left corner is clear on every loop count, so row 1 is a fair test of
+     the head rule and row 0 can only fail for the reason being checked */
+  if(!M.moveTo(core,0,1)) bad('the reactor could not be moved to a clear part of the grid');
+  if(rods.x!==core.x||rods.y!==core.y-1)
+    bad(`the drives came off the head (core ${core.x},${core.y} drives ${rods.x},${rods.y})`);
+  if(M.moveTo(core,0,0)) bad('the reactor took row 0, leaving no row for its own drive head');
+  if(!M.moveTo(core,2,4)) bad('the reactor could not be put back where it started');
+  console.log('  drives follow the vessel head, and refuse to be sited alone');
 }
 
 console.log('\n=== NO FREE COOLING, NO FREE TRIP RESET ===');
