@@ -19,6 +19,20 @@ function tw(s,o){
   try{ctx.letterSpacing="0px";}catch(e){}
   return w;
 }
+/* The documented type scale, largest first. fitTxt() walks it, so a shrunk label
+   still lands on a real step of the scale instead of an arbitrary size. */
+const TSCALE=[15,13,12,10,9.5,9,8.5,8,7.5,7,6.5,6];
+/* Draw a string that must not run into whatever sits beside it: step down the
+   scale until it fits maxw, then draw. Returns the size actually used.
+   A label overrunning its own row is the commonest way this UI breaks - two
+   panels were doing it silently before this existed, and neither was noticed by
+   eye. Give it the width the neighbour leaves free, not the width of the box. */
+function fitTxt(s,x,y,maxw,o){
+  o=o||{}; const want=o.size||10; let size=6;
+  for(const t of TSCALE) if(t<=want && tw(s,Object.assign({},o,{size:t}))<=maxw){ size=t; break; }
+  txt(s,x,y,Object.assign({},o,{size}));
+  return size;
+}
 function wrap(s,x,y,maxw,lh,o){
   const words=String(s).split(" "); let line="";
   for(const wd of words){

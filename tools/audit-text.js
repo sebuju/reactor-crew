@@ -50,7 +50,7 @@ global.window=global; global.performance={now:()=>1000}; global.devicePixelRatio
 global.requestAnimationFrame=()=>{}; global.addEventListener=()=>{};
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
  '; return {drawDesign,drawMimic,drawPanels,drawHelp,topbar,commission,step,sample,combatHit,'+
- 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v};')();
+ 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,TSCALE:()=>TSCALE};')();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
 function warmUp(){
@@ -88,8 +88,35 @@ sweep('ganging:');
 M.D().nbank=2; warmUp(); M.setSel('rods'); M.setSplit(true);
 for(let i=0;i<200;i++) M.step(0.02);
 sweep('split2:'); M.D().nbank=4; warmUp(); M.setSel('core');
+/* Both inspectors show only the selected component's panel, so a sweep that never
+   selects a part never draws that part's panel at all. The bench turbine and
+   condenser panels shipped unaudited exactly this way. Walk every part instead of
+   naming the interesting ones - the list is short and it cannot go stale. */
+warmUp();
+for(const part of M.parts()) { M.setSel(part.id); sweep('sel:'+part.id+':'); }
+M.setSel('core');
 
-console.log('=== TEXT OUTSIDE THE 12..748 CONTENT MARGINS ===');
+/* A number that came out NaN or undefined still draws happily - no error, no
+   overflow, just a broken readout sitting on the panel. Nothing caught that
+   before, so it goes here where every draw path is already being walked. */
+console.log('=== BROKEN VALUES IN DRAWN TEXT ===');
+{ let n=0;
+  for(const t of TEXTS) if(/NaN|undefined|Infinity/.test(t.t)){
+    console.log(`  [${t.screen}] "${t.t.slice(0,60)}"`); n++; }
+  console.log(n?`  ${n} broken value(s)`:'  none'); }
+
+/* Every size drawn must be a step of the documented scale. An off-scale size is
+   somebody typing a number instead of picking one, and it is also how fitTxt()
+   would show up if it ever shrank a label to something arbitrary. TSCALE is the
+   scale itself, imported rather than copied. */
+console.log('\n=== TEXT OFF THE DOCUMENTED TYPE SCALE ===');
+{ const scale=M.TSCALE(); let n=0; const seen={};
+  for(const t of TEXTS) if(!scale.includes(t.size) && !seen[t.size]){
+    seen[t.size]=1;
+    console.log(`  ${t.size}px  e.g. [${t.screen}] "${t.t.slice(0,40)}"`); n++; }
+  console.log(n?`  ${n} off-scale size(s)`:'  none'); }
+
+console.log('\n=== TEXT OUTSIDE THE 12..748 CONTENT MARGINS ===');
 let n=0;
 for(const t of TEXTS){
   if(t.x0<11.5 || t.x1>748.5){
