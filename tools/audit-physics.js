@@ -5,22 +5,9 @@
      2. the documented behaviours in .claude/CLAUDE.md still hold
    Usage:  node tools/audit-physics.js
 */
-const src=require('./bundle').bundle();
-const noop=()=>{};
-const ctx=new Proxy({font:'10px m'},{
-  get(t,k){ if(k==='measureText') return ()=>({width:10});
-            if(k==='canvas') return {width:760,height:900};
-            if(k in t) return t[k]; return ()=>({addColorStop(){}}); },
-  set(t,k,v){ t[k]=v; return true; }});
-global.document={getElementById:()=>({getContext:()=>ctx,addEventListener:noop,style:{},
-  getBoundingClientRect:()=>({left:0,top:0,width:760,height:900})}),
-  createElement:()=>({getContext:()=>ctx}),addEventListener:noop};
-global.window=global; global.performance={now:()=>1000}; global.devicePixelRatio=1;
-global.requestAnimationFrame=noop; global.addEventListener=noop;
-
-const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
- '; return {commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
- 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo};')();
+const M=require('./bundle').headless(
+ '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
+ 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo}');
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), PUMPS=M.PUMPS(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 const set=o=>{ Object.assign(D,BASE,o); M.commission(); return M.S(); };
