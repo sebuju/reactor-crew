@@ -170,7 +170,6 @@ function designSig(){ return JSON.stringify(D)+"|"+latSig()+"|"
    Everything is drawn inside a clip of the grid: the rim is a circle centred
    on a corner and three quarters of it belong to nobody. */
 const LATPEN={tool:"fuel",bank:0,hover:null,last:null};
-const LATTOOLS=[["FUEL","fuel"],["POISON","pois"],["CLUSTER","rod"]];
 
 /* Flux per mesh ring, from the shape this lattice is predicted to settle into
    rather than from whatever happens to be commissioned - while you are laying
@@ -185,6 +184,15 @@ function latRingPhi(){
   for(let i=0;i<XNR;i++) r[i]/=mx;
   return r;
 }
+/* No latPeakRing() here, and that is a finding rather than an omission. Marking
+   the peak ring on the plan was drawn, measured and taken out again: the radial
+   flux peaks on the CENTRELINE for every core the bench can lay out - stock,
+   compact, flat, and even one with a nine-slot hole punched through the middle
+   of it, where ring 0 has no fuel in it at all and still reads 1.00. A thermal
+   flux does peak in a water hole, so that is right rather than broken, but it
+   makes "peak ring" a readout that says 0 forever. What actually moves with the
+   drawing is the SHAPE, and the plan already draws that: the dot in each
+   assembly is the flux at its own radius. */
 const latRingOf=(u,v)=>Math.min(XNR-1,
   Math.floor(Math.hypot(u+.5,v+.5)*LAT.pitch/LM.dr));
 /* Flux at an assembly rather than at its ring: interpolated between ring
@@ -271,12 +279,19 @@ function latPlan(x,y,w,tool){
     ctx.beginPath(); ctx.arc(X+cs/2,Y+cs/2,r,0,7);
     ctx.fillStyle=ink; ctx.globalAlpha=s===L_POIS?.9:.55; ctx.fill(); ctx.globalAlpha=1;
     if(rod>=0){
-      /* amber only while you are holding that bank: amber is the interactive
+      /* SOLID, not a hairline box. A slot is 14px on this panel and the cell is
+         already framed, so a second frame inside the first read as a slightly
+         thicker edge rather than as a cluster - the banks were all but
+         invisible. A cluster is a lump of absorber dropped into the lattice, so
+         it is drawn as a block of metal with dark type on it. The 3px inset
+         leaves the fuel/poison colour showing as a ring, so the assembly under
+         it can still be read.
+         Amber only while you are holding that bank: amber is the interactive
          colour, and a board of permanently amber clusters spends it on nothing */
       const on=LATPEN.tool==="rod"&&LATPEN.bank===rod;
-      frame(X+3,Y+3,cs-6,cs-6,on?C.amber:C.metal);
+      fillRect(X+3,Y+3,cs-6,cs-6,on?C.amber:C.metal);
       txt(String(rod+1),X+cs/2,Y+cs/2+3,
-        {size:7.5,weight:700,align:"center",color:on?C.amber:C.metal});
+        {size:7.5,weight:700,align:"center",color:C.well});
     }
     if(hv&&hv.u===u&&hv.v===v) ticks(X,Y,cs,cs,C.amber,4);
   }
@@ -284,8 +299,13 @@ function latPlan(x,y,w,tool){
   frame(gx,gy,gw,gh,C.edge);
   /* centrelines last and running past the grid, the way a drawing marks an
      axis - drawn before the frame they are simply painted over by it */
+  /* The overhang is what makes them read as axes rather than as a border, but
+     it is measured against the COLUMN, not against the grid: the plan column is
+     x..x+w and anything past that is the next column's. Eight pixels to the
+     left ran into the rotated axis label and three to the right sat on the
+     column edge; the vertical tail ran down into the caption line below. */
   ctx.save(); ctx.setLineDash([9,3,2,3]);
-  line(CX,gy-3,CX,CY+8,C.rail,1); line(gx-8,CY,gx+gw+3,CY,C.rail,1);
+  line(CX,gy-3,CX,CY+5,C.rail,1); line(gx-AX+9,CY,gx+gw,CY,C.rail,1);
   ctx.restore();
   ctx.save(); ctx.translate(x+6,gy+gh/2); ctx.rotate(-Math.PI/2);
   txt("REACTOR AXIS",0,0,{size:6,sp:1.2,align:"center",color:C.rail});
@@ -304,16 +324,23 @@ function latPlan(x,y,w,tool){
   }
   if(!ui.drag) LATPEN.last=null;
 
-  if(hv) txt("SLOT "+hv.u+","+hv.v+"  RING "+hRing+
-      "  r "+(Math.hypot(hv.u+.5,hv.v+.5)*p).toFixed(2)+" m"+
+  /* One caption line, and it must fit the 157px the grid is wide - the two
+     strings that used to be here ran 180px and 220px, straight across the
+     gutter and into the pen column beside them. Measured, not eyeballed: a
+     6.5px monospace glyph is 4.4px wide here, so this line gets about 35
+     characters and no more. fitTxt() is the guard rather than the fix - the
+     strings themselves are short now, and what came off them (arcs are mesh
+     rings, the dot is flux) is already said by the tooltip, at length. */
+  if(hv) fitTxt("S "+hv.u+","+hv.v+"  RING "+hRing+
+      "  r"+(Math.hypot(hv.u+.5,hv.v+.5)*p).toFixed(2)+"m"+
       (LAT.slot[LIX(hv.u,hv.v)]
-        ? "  "+(latShare(hv.u,hv.v,ph)*100).toFixed(2)+"% OF CORE"
+        ? "  "+(latShare(hv.u,hv.v,ph)*100).toFixed(2)+"%"
         : "  EMPTY"),
-      gx,gy+gh+11,{size:6.5,sp:.3,color:C.amber});
-  else txt(latCount()+" ASSEMBLIES / ARCS ARE MESH RINGS / DOT IS FLUX",
-      gx,gy+gh+11,{size:6.5,sp:.5,color:C.ink2});
+      gx,gy+gh+11,gw,{size:6.5,sp:.3,color:C.amber});
+  else fitTxt(latCount()+" ASSEMBLIES / DOT IS FLUX",
+      gx,gy+gh+11,gw,{size:6.5,sp:.5,color:C.ink2});
   TIP(gx,gy,gw,gh,"FUEL LATTICE / QUARTER PLAN",
-    "The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius.");
+    "The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius. A ring you leave part empty fades in the control room's flux view too, so a hole you draw here is a hole you can still see while you are operating it.");
   return gy+gh+16;
 }
 
@@ -323,22 +350,74 @@ function latPlan(x,y,w,tool){
    on the machine it drives - and it is also why the tool cannot be left in a
    state the panel you are looking at has no use for. */
 function latTools(x,y,w,tools){
-  rule("PEN",x,y+9,w,C.amber); let ty=y+16;
+  rule("PEN",x,y+9,w,C.amber); TIP(x,y-4,w,14,"PEN",
+    "What clicking on the plan does. Every tool is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross.");
+  let ty=y+16;
   if(!tools.some(t=>t[1]===LATPEN.tool)) LATPEN.tool=tools[0][1];
   const bw=(w-(tools.length-1)*4)/tools.length;
-  tools.forEach((t,i)=>button(x+i*(bw+4),ty,bw,19,t[0],
-    {on:LATPEN.tool===t[1],size:7,sp:.3,fn:()=>{LATPEN.tool=t[1];}}));
+  tools.forEach((t,i)=>{
+    button(x+i*(bw+4),ty,bw,19,t[0],
+      {on:LATPEN.tool===t[1],size:7,sp:.3,fn:()=>{LATPEN.tool=t[1];}});
+    TIP(x+i*(bw+4),ty,bw,19,t[0]+" PEN",t[2]);
+  });
   ty+=23;
   if(LATPEN.tool==="rod"){
     const cw=(w-12)/4;
-    for(let b=0;b<4;b++) button(x+b*(cw+4),ty,cw,19,"BANK "+(b+1),
-      {on:LATPEN.bank===b,size:6.5,sp:.2,fn:()=>{LATPEN.bank=b;}});
+    for(let b=0;b<4;b++){
+      button(x+b*(cw+4),ty,cw,19,"BANK "+(b+1),
+        {on:LATPEN.bank===b,size:6.5,sp:.2,fn:()=>{LATPEN.bank=b;}});
+      TIP(x+b*(cw+4),ty,cw,19,"BANK "+(b+1),
+        "Which bank the clusters you draw belong to. A bank is a group of clusters that move together, so it is the unit the panel gives a slider to and the unit SPLIT mode drives one at a time. Draw clusters at different radii into different banks and you can lean the flux; put them all in one and there is nothing to lean against. Worth is decided by where the clusters sit, not by how many you fit.");
+    }
     ty+=23;
   }
   return ty;
 }
-const LATPEN_CORE=[["FUEL","fuel"],["POISON","pois"]];
-const LATPEN_RODS=[["CLUSTER","rod"]];
+const LATPEN_CORE=[
+  ["FUEL","fuel",
+   "Lay an assembly, or lift one out. Every square is four assemblies in the finished core, because the axis runs along the corner of the first slot. Rated power, core diameter and H/D are all counted off this, so an outer square is worth far more than an inner one - it carries a bigger annulus."],
+  ["POISON","pois",
+   "Swap an assembly between plain fuel and one carrying burnable poison pins. Poison holds down fresh excess reactivity that would otherwise be held by boron, and unlike boron it is graded: put it where the flux peaks and it flattens the core. It only works on a slot that already has fuel in it."],
+];
+const LATPEN_RODS=[
+  ["CLUSTER","rod",
+   "Drop a control cluster into an assembly, in whichever bank is selected below. The cluster is drawn as a block with its bank number on it. Count buys no worth - a fully inserted bank covers the core once however many you fit - so what you are choosing here is how near the flux each bank sits, and how many things can jam."],
+];
+
+/* ── the pen, working in bulk ──
+   A preset is the pen doing in one click what you would otherwise draw slot by
+   slot, so it is drawn as a row of pen-sized keys. It sits at the FOOT OF THE
+   LAST COLUMN in both inspectors, which is where it fits: the plan takes a
+   whole column, the pen and the section dimensions take another and the two
+   option lists take the last two, and a 232px box has one spare row in it and
+   only in column four. Same place on both panels, so it is learnt once.
+
+   One row, two callers - the lattice presets on the core and the bank spreads
+   on the drives. Each key is an ACT, not a mode, so none of them is ever drawn
+   lit: nothing here is a state you are in. */
+function latBulkRow(x,y,w,label,items){
+  const lo={size:6.5,sp:.7,caps:1,color:C.ink2}, lw=tw(label,lo)+6;
+  txt(label,x,midBase(y,19,6.5),lo);
+  const n=items.length, bw=(w-lw-(n-1)*4)/n;
+  items.forEach((it,i)=>{
+    const bx=x+lw+i*(bw+4);
+    button(bx,y,bw,19,it[0],{size:6.5,sp:.2,fn:it[2]});
+    TIP(bx,y,bw,19,it[0],it[1]);
+  });
+  return y+19;
+}
+const latPreRow=(x,y,w)=>latBulkRow(x,y,w,"LATTICE",
+  LATPRE.map((p,i)=>[p[0],p[2],()=>latPreset(i)]));
+/* Spreading the banks re-lays every cluster, so it is the one act on this
+   panel that throws away a plan you drew by hand. It says so, and there are
+   four of it rather than one, because how many banks you want is the whole
+   question - fewer banks sit nearer the flux and are worth more; more banks
+   are what tilt trim and SPLIT mode need to have something to lean against. */
+const latBankRow=(x,y,w)=>latBulkRow(x,y,w,"SPREAD",[1,2,3,4].map(n=>[String(n),
+  "Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
+  (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
+      :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
+  ()=>{ latLayBanks(n); latRevolve(); }]));
 
 /* The four things the section still gets to say. Dimension bars, not sliders:
    the bar is the extent of the thing and the figure beside it is what that

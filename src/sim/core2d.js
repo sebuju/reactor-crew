@@ -83,12 +83,20 @@ function coreConst(T,d){
   T.albT=latAlb(LAT.reflT,d.rf);
   T.albB=latAlb(LAT.reflB,d.rf);
   T.alb=(T.albR+T.albT+T.albB)/3;      // for anything reading the scalar
+  /* the band itself, kept so the plant view can DRAW the reflector you
+     dimensioned rather than only the albedo it bought. A commissioned plant
+     carries its own, because the bench lattice may have been redrawn since. */
+  T.reflR=LAT.reflR; T.reflT=LAT.reflT; T.reflB=LAT.reflB; T.reflMat=D.refl;
 
   /* burnable poison is where you put the pins, normalised so the core-average
      worth is still exactly D.poison - it buys flatness, not reactivity */
   T.poiG=M.poiG; T.poison=D.poison;
   /* and a ring the lattice did not fill is a ring with no source in it */
   T.nPen=M.nPen;
+  /* how full of fuel each ring actually is. The solver only needs the penalty
+     above; the RENDERER needs the fraction, because a hole you drew should be
+     a hole you can still see while you are operating the thing. */
+  T.frac=M.frac;
 
   /* banks are wherever you put their clusters */
   T.NB=M.NB; T.bankR=M.bankR.slice();
@@ -176,11 +184,21 @@ function coreFq(T,x){
 
 /* The bench asks this every frame while a slider is moving, and massWith()
    asks it once per option row on top of that, so it is cached on the design
-   signature and only actually solved when the design changes. */
+   signature and only actually solved when the design changes.
+
+   latRev is in the signature because the DRAWING is an input and D is not
+   enough to see it: move a cluster from one ring to another and D.nbank does
+   not change, so the key did not either. What saved it was an accident - the
+   solve writes D.rodw, which is itself in the key, so the next call disagreed
+   with the previous one and re-solved. That means the readout was one edit
+   behind, and which answer you got depended on how many times the frame had
+   asked. Measured: laying four banks over the stock lattice read 2485 pcm for
+   a bank the solve puts at 2600. latRev is bumped by latRevolve(), so it moves
+   exactly when the lattice does. */
 let fqSig=null, fqVal=null;
 function corePredict(d){
   const sig=[D.arch,D.fuel,D.refl,D.poison,D.pitch,D.hd,D.power,
-             D.rodw,D.nbank,D.foll].join(",");
+             D.rodw,D.nbank,D.foll,latRev].join(",");
   if(sig!==fqSig){ fqSig=sig; fqVal=coreConst({},d); }
   return fqVal;
 }
@@ -190,10 +208,14 @@ function corePredict(d){
    bench and the panel cannot drift apart. */
 function coreView(L){
   if(L && L.phi) return {phi:L.phi,nV:L.nV,xX:L.xX,nTf:L.nTf,rodZ:L.rodZ,
-    bankR:P.bankR,NB:P.NB,tipLen:P.tipLen,tipRho:P.tipRho,TfRef:P.TfRef,X0:P.X0};
+    bankR:P.bankR,NB:P.NB,tipLen:P.tipLen,tipRho:P.tipRho,TfRef:P.TfRef,X0:P.X0,
+    dia:P.coreDia,hgt:P.coreHgt,frac:P.frac,peak:{i:L.hotRing,j:L.hotLev},
+    reflR:P.reflR,reflT:P.reflT,reflB:P.reflB,reflMat:P.reflMat};
   const T=corePredict(derived());
   return {phi:T.phiCold,nV:null,xX:null,nTf:null,rodZ:null,
-    bankR:T.bankR,NB:T.NB,tipLen:T.tipLen,tipRho:T.tipRho,TfRef:0,X0:1};
+    bankR:T.bankR,NB:T.NB,tipLen:T.tipLen,tipRho:T.tipRho,TfRef:0,X0:1,
+    dia:T.coreDia,hgt:T.coreHgt,frac:T.frac,peak:nodePeak(T.phiCold),
+    reflR:T.reflR,reflT:T.reflT,reflB:T.reflB,reflMat:T.reflMat};
 }
 
 /* ── where the absorber is, and what is hanging below it ── */

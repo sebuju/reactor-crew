@@ -111,12 +111,19 @@ const LAT_P0=(function(){
   return Math.cbrt((LAT_MW0/dens)/(8*n*Math.sqrt(4*n/Math.PI)*LAT_HD0));
 })();
 
-/* ── the stock lattice ── */
-function latDefault(){
+/* ── laying the lattice in bulk ──
+   Every stock core is the same two acts: fill a disc with fuel and grade
+   poison into it, then spread the clusters over what you filled. They are two
+   functions rather than a block written once per preset, because a preset IS
+   latDefault() with different numbers in it - and a copy of this loop is the
+   copy that would quietly stop agreeing with the core audit-physics measures.
+
+   Neither of them revolves. The caller does, once, when it has finished
+   changing things. */
+function latLayFuel(r0,poig){
   LAT.slot.fill(L_EMPTY); LAT.rod.fill(-1);
-  LAT.pitch=LAT_P0;
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
-    if(Math.hypot(u+.5,v+.5)<=LAT_R0) LAT.slot[LIX(u,v)]=L_FUEL;
+    if(Math.hypot(u+.5,v+.5)<=r0) LAT.slot[LIX(u,v)]=L_FUEL;
   /* Poison graded toward the centre, because that is where the flux peaks -
      the same job the old XPG constant did, except that you can see every pin
      and move it.
@@ -131,9 +138,10 @@ function latDefault(){
      stock lattice is the same reactor every time it is laid out. */
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
     if(!LAT.slot[LIX(u,v)]) continue;
-    const f=LAT_POIG*(1-Math.hypot(u+.5,v+.5)/LAT_R0);
+    const f=poig*(1-Math.hypot(u+.5,v+.5)/r0);
     if(((u*3+v*5)%7)/7 < f) LAT.slot[LIX(u,v)]=L_POIS;
   }
+}
   /* Clusters spread by AREA, so the outer banks cover the rings that hold most
      of the core - the same rule the bench used, and aimed at the same rings it
      used to land on: 5, 8, 10 and 12 of fourteen.
@@ -150,9 +158,13 @@ function latDefault(){
      CHECKED rather than assumed - a hand-written list did this first and one
      entry sat outside the fuel, so that bank quietly shipped with half its
      clusters and nothing said so. */
+function latLayBanks(nb){
+  for(let q=0;q<LQ*LQ;q++) LAT.rod[q]=-1;
   const rEqSlots=latEqR()/LAT.pitch;
-  for(let b=0;b<4;b++){
-    const ring=Math.round(Math.sqrt((b+.5)/4)*(XNR-1));
+  for(let b=0;b<nb;b++){
+    /* nb in the denominator, so four banks land on the same rings 5/8/10/12
+       the hand-written list used to and audit-physics still measures */
+    const ring=Math.round(Math.sqrt((b+.5)/nb)*(XNR-1));
     const rr=(ring+0.5)/XNR*rEqSlots;
     for(const th of [Math.PI/9, Math.PI*7/18]){
       let u=clamp(Math.round(rr*Math.cos(th)-.5),0,LQ-1);
@@ -161,11 +173,45 @@ function latDefault(){
       if(LAT.slot[LIX(u,v)]) LAT.rod[LIX(u,v)]=b;
     }
   }
+}
+
+/* ── the stock lattice ── */
+function latDefault(){
+  LAT.pitch=LAT_P0;
+  latLayFuel(LAT_R0,LAT_POIG);
+  latLayBanks(4);
   LAT.len=2*latEqR()*LAT_HD0;
   LAT.reflR=LAT.reflT=LAT.reflB=1;
   LAT.abs=0;
   latRevolve();
 }
+/* ── whole cores you can start from ──
+   Three lattices laid out with the same two helpers the stock core uses, so a
+   preset cannot describe a reactor the pens could not have drawn. What a
+   preset does NOT touch is what you bought rather than drew: the reflector
+   material, the absorber material, the reactor family and the fuel all stay
+   where you left them. It rewrites the drawing, not the shopping.
+
+   Every figure in the notes below is measured off the lattice by latMeasure(),
+   not asserted here. */
+const LATPRE=[
+  ["STOCK",{r:LAT_R0,pk:1.00,hd:LAT_HD0,poi:LAT_POIG,refl:1,nb:4},
+   "The reference core, and what the bench boots with: a full disc of fuel at the reference pitch, poison graded toward the centre, four banks on rings 5, 8, 10 and 12. About 1200 MWt in a 2.5 m core. Start here and edit."],
+  ["COMPACT",{r:7.2,pk:0.90,hd:1.40,poi:0.80,refl:2,nb:4},
+   "A small, tall, tightly pitched core: about 545 MWt in 1.7 m, some 140 tonnes lighter than stock, and half again the grace time, because there is less power in each litre of it. A narrow core leaks harder, and the doubled reflector is what pays for that. You get mass back to spend elsewhere and you give up half your power to do it."],
+  ["FLAT",{r:9.6,pk:1.10,hd:0.70,poi:1.60,refl:2,nb:4},
+   "A wide, squat core: full diameter, seven tenths of that in height, opened-out pitch and heavy central poison. Peaking falls and DNBR rises, so it takes more overpower before the hot channel is the thing that stops you. It weighs about what stock does, and the looser lattice weakens the moderator feedback that makes the plant follow load by itself."],
+];
+function latPreset(i){
+  const q=LATPRE[i][1];
+  LAT.pitch=q.pk*LAT_P0;
+  latLayFuel(q.r,q.poi);
+  latLayBanks(q.nb);
+  LAT.len=2*latEqR()*q.hd;
+  LAT.reflR=LAT.reflT=LAT.reflB=q.refl;
+  latRevolve();
+}
+
 const latCount=()=>{               // assemblies in the WHOLE core, not the quarter
   let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
   return 4*n;
