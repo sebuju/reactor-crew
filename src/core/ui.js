@@ -88,8 +88,9 @@ cv.addEventListener("pointerdown",e=>{
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
     if(!inside(w,p)) continue;
     if(w.type==="part"){ sel=w.part.id;
-      /* a commissioned plant is welded down - you may select a component, not move it */
-      if(screen==="design") ui.drag={type:"part",part:w.part,
+      /* a commissioned plant is welded down - you may select a component, not move it,
+         and a pinned part rides its parent, so it is selectable but never draggable */
+      if(screen==="design" && !w.part.pin) ui.drag={type:"part",part:w.part,
         ox:p.x-(GX+w.part.x*CELL), oy:p.y-(GY+w.part.y*CELL),
         sx:w.part.x, sy:w.part.y}; }
     else if(w.type==="sld"){ ui.drag=w;
@@ -106,7 +107,7 @@ cv.addEventListener("pointermove",e=>{
   if(e.pointerType==="mouse") isTouch=false;
   if(ui.drag){ if(ui.drag.type==="part"){ const d=ui.drag;
       const nx=Math.round((p.x-d.ox-GX)/CELL), ny=Math.round((p.y-d.oy-GY)/CELL);
-      if((nx!==d.part.x||ny!==d.part.y)&&fits(d.part,nx,ny)){ d.part.x=nx; d.part.y=ny; } }
+      if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
     else if(ui.drag.type==="sld"){ const d=ui.drag;
       /* integrate rather than re-derive, so moving away from the track changes
          the gearing from here on instead of jumping the value */

@@ -7,12 +7,14 @@ let GY=100;                                   // grid top, set each frame by the
 let LAY=null, layLoops=-1, sel="core", layMass=0;
 
 function buildLayout(){
-  const A=[], add=(id,name,w,h,x,y,col,grp,tip)=>A.push({id,name,w,h,x,y,col,grp,tip});
-  add("core","REACTOR",2,3,2,4,"#ff5a45","core",
+  const A=[], add=(id,name,w,h,x,y,col,grp,tip)=>{ const p={id,name,w,h,x,y,col,grp,tip}; A.push(p); return p; };
+  add("core","REACTOR",3,3,2,4,"#ff5a45","core",
     "The vessel and the fuel inside it. Select it to choose the coolant family, the fuel, the lattice and the core shape.");
-  add("rods","ROD DRIVES",2,1,2,3,"#c8d8dc","core",
-    "Control rod drive mechanisms, mounted on the vessel head. Select for scram gear, bank worth and emergency poison.");
-  add("pzr","PRESSURIZER",1,2,5,2,"#a98cf0","primary",
+  /* the drives are bolted to the vessel head: they are sited by siting the reactor */
+  add("rods","ROD DRIVES",3,1,2,3,"#c8d8dc","core",
+    "Control rod drive mechanisms, bolted to the vessel head. They ride on the head and move with the reactor - you site the reactor, not the drives. Select for scram gear, bank worth and emergency poison.")
+    .pin={to:"core",dx:0,dy:-1};
+  add("pzr","PRESSURIZER",1,2,5,1,"#a98cf0","primary",
     "Sets loop pressure. It has to sit high - the steam bubble must stay at the top of the loop.");
   for(let i=0;i<D.loops;i++){
     add("sg"+i,"STEAM GEN "+(i+1),1,3,7+i*2,1,"#5fd2e2","loop"+i,
@@ -34,7 +36,7 @@ function buildLayout(){
     "Emergency injection water. Mount it HIGH so it can drain into the loop by gravity with no power.");
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.");
-  for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,4,4+i,"#6d8f98","shield",
+  for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.");
   LAY={parts:A}; layLoops=D.loops;
 }
@@ -175,17 +177,37 @@ function pipeNetwork(){
 }
 const fitted=p => p.id==="hpi" ? D.accum : p.id==="bkp" ? D.bkp>0 : true;
 const cen=p=>({x:p.x+p.w/2,y:p.y+p.h/2});
+/* parts that ride another part rather than being sited on their own */
+const pinnedTo=p=>LAY.parts.filter(q=>q.pin&&q.pin.to===p.id);
+/* skip is one part or a whole group - a group move lifts parent and pinned
+   children off the grid together, or the parent collides with its own child */
 function occupied(skip){
+  const off = skip ? (Array.isArray(skip)?skip:[skip]) : [];
   const g=Array.from({length:GH},()=>new Array(GW).fill(null));
-  for(const p of LAY.parts){ if(p===skip) continue;
+  for(const p of LAY.parts){ if(off.includes(p)) continue;
     for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
       if(X>=0&&X<GW&&Y>=0&&Y<GH) g[Y][X]=p; }
   return g;
 }
-function fits(p,nx,ny){
-  if(nx<0||ny<0||nx+p.w>GW||ny+p.h>GH) return false;
-  const g=occupied(p);
-  for(let X=nx;X<nx+p.w;X++) for(let Y=ny;Y<ny+p.h;Y++) if(g[Y][X]) return false;
+/* Can every placement in this list land at once? One part or a pinned group -
+   all of it is tested before any of it moves, so a group never half-lands. */
+function groupFits(cells){
+  const g=occupied(cells.map(c=>c.q));
+  for(const {q,x,y} of cells){
+    if(x<0||y<0||x+q.w>GW||y+q.h>GH) return false;
+    for(let X=x;X<x+q.w;X++) for(let Y=y;Y<y+q.h;Y++) if(g[Y][X]) return false;
+  }
+  return true;
+}
+/* The only way a component changes position. A pinned child travels with its
+   parent and is never moved on its own, which is what keeps the rod drives on
+   the vessel head however the reactor is sited. */
+function moveTo(p,nx,ny){
+  if(p.pin) return false;
+  const cells=[{q:p,x:nx,y:ny}].concat(
+    pinnedTo(p).map(q=>({q,x:nx+q.pin.dx,y:ny+q.pin.dy})));
+  if(!groupFits(cells)) return false;
+  for(const {q,x,y} of cells){ q.x=x; q.y=y; }
   return true;
 }
 function layoutMetrics(){
