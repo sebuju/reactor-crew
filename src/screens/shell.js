@@ -40,7 +40,7 @@ function topbar(){
     x+=w+5;
   }
   const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7);
-  txt(P?`${P.id}  ${pad(P.rated,4)} MWt`:"NO CORE COMMISSIONED",W-12,20,
+  txt(P?`${P.id}  ${pad(P.rated,4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`:"NO CORE COMMISSIONED",W-12,20,
       {size:9,sp:1,align:"right",color:P?C.cyan:C.amber});
   txt(clk,W-12,31,{size:9,sp:1,align:"right",color:C.ink2});
   if(Math.floor(performance.now()/500)%2) fillRect(W-12-tw(clk,{size:9,sp:1})-11,24,6,7,C.amber);

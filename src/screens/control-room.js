@@ -22,9 +22,12 @@ function ctrlInspector(y0){
   txt("EL"+(GH-1-p.y)+"  ·  "+(dmgd?"DAMAGED":fitted(p)?"in service":"not fitted"),738,y0+15,
       {size:8,sp:1.2,align:"right",color:dmgd?C.red:C.ink2});
   const Y0=y0+34;
+  /* the value is the data and keeps its size; the label yields, because a long
+     label running under its own number is the failure this row used to have */
   const row=(cx,i,k,v,col)=>{ const yy=Y0+8+i*20;
-    txt(k,cx,yy,{size:8,sp:1.1,color:C.ink2});
-    txt(v,cx+W2,yy,{size:10,align:"right",color:col||C.cyan});
+    const vo={size:10,align:"right",color:col||C.cyan};
+    fitTxt(k,cx,yy,W2-tw(v,vo)-6,{size:8,sp:1.1,color:C.ink2});
+    txt(v,cx+W2,yy,vo);
     fillRect(cx,yy+5,W2,1,"rgba(120,180,190,.07)"); };
   const heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
   const id=p.id;
@@ -193,10 +196,11 @@ function ctrlInspector(y0){
         autoLive("runback")?C.green:C.amber);
     row(X[0],3,"GOVERNOR STROKE",LOAD_TAU.toFixed(0)+" s");
     TIP(X[0],Y0,W2,84,"LOAD DEMAND","Turbine draw - weapons and ship systems in the full game. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so load trails demand. The slider is on the turbine.");
-    row(X[1],0,"ELECTRICAL",(Math.min(s.n,s.load)*P.rated/3).toFixed(0)+" MWe");
+    row(X[1],0,"ELECTRICAL",mwE(s).toFixed(0)+" MWe");
     row(X[1],1,"T-AVG VS PROGRAM",(s.Tavg-tProg(s)>=0?"+":"")+
       (s.Tavg-tProg(s)).toFixed(1)+" K");
     row(X[1],2,"STEAM DUMP",(P.bypass*100).toFixed(0)+" %");
+    row(X[1],3,"EFFICIENCY",(P.eff*100).toFixed(1)+" %");
     wrap("Ride the moderator feedback instead of fighting it: raise load and power follows on its own.",
       X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
   }
@@ -250,7 +254,9 @@ function ctrlInspector(y0){
   }
   else if(id==="cond"){
     row(X[0],0,"T-HOT",Th.toFixed(0)+" K");
-    row(X[0],1,"HEAT REJECTED",(Math.min(s.n,s.load)*P.rated*.66).toFixed(0)+" MWt");
+    row(X[0],1,"HEAT REJECTED",mwRej(s).toFixed(0)+" MWt");
+    row(X[0],3,"BACKPRESSURE",((1-condPen(s))*100).toFixed(0)+" % loss",
+        condPen(s)<0.98?C.amber:C.ink2);
     row(X[0],2,"CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
         s.dmgParts.includes("cond")?C.red:C.green);
     wrap(p.tip,X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
@@ -533,9 +539,10 @@ function drawFaults(y0){
   button(198,y,178,26,"ROD BANK JAM",{on:S.rodJam,fn:()=>S.rodJam=!S.rodJam});
   TIP(198,y,178,26,"ROD BANK JAM",
     "The control rods stop answering commands, including a scram. You are left steering the reactor with boron, coolant flow and turbine load only.");
-  button(384,y,178,26,"LOAD STEP 125%",{fn:()=>S.loadDem=1.25});
-  TIP(384,y,178,26,"LOAD STEP 125%",
-    "Slams turbine demand to 125% instantly, like a full weapons volley. The primary loop cools, the reactor raises its own power to follow, and thermal margin gets squeezed.");
+  const step=(P.loadMax*100).toFixed(0)+"%";
+  button(384,y,178,26,"LOAD STEP "+step,{fn:()=>S.loadDem=P.loadMax});
+  TIP(384,y,178,26,"LOAD STEP "+step,
+    "Slams turbine demand to "+step+" instantly, like a full weapons volley. The primary loop cools, the reactor raises its own power to follow, and thermal margin gets squeezed. The ceiling is the turbine you bought at the bench, not a fixed number.");
   button(570,y,178,26,"RESET PLANT",{fn:resetPlant});
 
   button(384,y+34,178,26,"COMBAT HIT",{fn:combatHit});

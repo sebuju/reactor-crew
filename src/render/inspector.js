@@ -72,10 +72,27 @@ function inspector(y0){
       X[1],c[1]+10,CW2*2+8,11,{size:8.5,color:C.ink2});
   }
   else if(id==="turb"){
-    c[0]=sliderF(X[0],c[0],CW2,"TURBINE BYPASS","bypassCap",0,1,v=>(20+60*v).toFixed(0)+" % dump",
-      "How much steam can be dumped straight to the condenser when the turbine trips. Generous bypass absorbs the heat surge after a scram so pressure never reaches the relief valve. Skimp on it and every trip lifts the PORV, which is how stuck-open-valve accidents start.",.05,v=>v*40);
+    c[0]=sliderF(X[0],c[0],CW2,"TURBINE SIZE","turb",0,1,
+      v=>(ARCH[D.arch].eff*(0.92+0.16*v)*100).toFixed(1)+" % gross",
+      "How many stages the machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.",.05,v=>v*50);
+    c[1]=readF(X[1],c[1],CW2,"RATED OUTPUT",(D.power*d.eff).toFixed(0)+" MWe",
+      "Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here.");
+    c[1]=readF(X[1],c[1],CW2,"MAX LOAD",(d.loadMax*100).toFixed(0)+" %",
+      "The furthest the load slider will go in the control room. Overpower is not free reach: it is turbine you paid mass for.");
     wrap("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.",
-      X[1],c[1]+10,CW2*2+8,11,{size:8.5,color:C.ink2});
+      X[2],c[2]+10,CW2*2+8,11,{size:8.5,color:C.ink2});
+  }
+  else if(id==="cond"){
+    c[0]=sliderF(X[0],c[0],CW2,"CONDENSER SIZE","condCap",0,1,v=>(20+60*v).toFixed(0)+" % dump",
+      "The heat sink, and it sets two things at once. It caps how much steam can be dumped straight past a tripped turbine, so a generous unit absorbs a scram without the relief valve ever lifting. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat.",.05,v=>v*40);
+    c[1]=readF(X[1],c[1],CW2,"CONDENSING CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",
+      "How much steam this unit turns back into water. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss.");
+    c[1]=readF(X[1],c[1],CW2,"TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",
+      "The turbine's own ceiling, shown here so the mismatch is visible from either component.");
+    wrap(d.condShort
+      ?"This condenser is far smaller than the turbine can overload to. Sustained overpower will hand a large part of itself straight back as backpressure."
+      :"Condenser is matched to the turbine. A brief overload costs little or nothing.",
+      X[2],c[2]+10,CW2*2+8,11,{size:8.5,color:d.condShort?C.amber:C.ink2});
   }
   else if(id==="ctrl"){
     c[0]=optList(X[0],c[0],CW2,"INSTRUMENT CHANNELS",CHAN,"chan",

@@ -47,14 +47,23 @@ function sliderF(x,y,w,title,key,min,max,fmt,tip,step,massFn){
   TIP(x,y-4,w,54,title,tip);
   return y+52;
 }
+/* a bench readout with no control under it: a number the other sliders caused.
+   Same rule/value geometry as sliderF so a column of the two lines up. */
+function readF(x,y,w,title,val,tip){
+  rule(title,x,y+9,w);
+  txt(val,x+w,y+30,{size:10,align:"right",color:C.cyan});
+  TIP(x,y-4,w,36,title,tip);
+  return y+34;
+}
 function toggleF(x,y,w,label,key,mass,tip){
   const on=D[key];
   const wd=push({x,y,w,h:28,type:"btn",fn:()=>D[key]=!D[key]});
   fillRect(x,y,w,28,on?"#0f2018":(hov(wd)?C.panelHi:C.panel));
   frame(x,y,w,28,on?C.green:C.edge);
   fillRect(x+9,y+10,9,9,on?C.green:"#22343a"); frame(x+9,y+10,9,9,on?C.green:C.edge2);
-  txt(label,x+24,y+18,{size:8,sp:.3,color:on?C.green:C.ink});
-  txt("+"+mass+"t",x+w-7,y+18,{size:8,align:"right",color:C.ink2});
+  const mo={size:8,align:"right",color:C.ink2}, mt="+"+mass+"t";
+  fitTxt(label,x+24,y+18,w-31-tw(mt,mo)-6,{size:8,sp:.3,color:on?C.green:C.ink});
+  txt(mt,x+w-7,y+18,mo);
   TIP(x,y,w,28,label+(on?"  [ FITTED ]":"  [ not fitted ]"),tip+"  Costs "+mass+" tonnes.");
   return y+28;
 }

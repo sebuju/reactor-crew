@@ -4,27 +4,27 @@
 /* ═══════════════ DESIGN DATA ═══════════════ */
 const ARCH=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
-  P0:15.5,tsat:618,Lam:2.0e-5,aF:-2.8,aM:-45,aV:-900,dens:100,grace:1.0,dnbr:1.85,xe:1.0,flowMin:.30,
+  P0:15.5,tsat:618,Lam:2.0e-5,aF:-2.8,aM:-45,aV:-900,dens:100,grace:1.0,dnbr:1.85,xe:1.0,flowMin:.30,eff:.33,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
-  P0:7.0,tsat:559,Lam:2.0e-5,aF:-2.8,aM:-38,aV:-1400,dens:95,grace:0.9,dnbr:1.55,xe:1.0,flowMin:.30,
+  P0:7.0,tsat:559,Lam:2.0e-5,aF:-2.8,aM:-38,aV:-1400,dens:95,grace:0.9,dnbr:1.55,xe:1.0,flowMin:.30,eff:.33,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"GRAPHITE + WATER", tie:"RBMK-1000", mass:410,
-  P0:6.9,tsat:558,Lam:2.2e-5,aF:-1.6,aM:-8,aV:+1500,dens:55,grace:1.2,dnbr:1.60,xe:1.0,flowMin:.30,
+  P0:6.9,tsat:558,Lam:2.2e-5,aF:-1.6,aM:-8,aV:+1500,dens:55,grace:1.2,dnbr:1.60,xe:1.0,flowMin:.30,eff:.31,
   good:"Cheap fuel, refuels online, huge core inertia",
   bad:"POSITIVE void coefficient - voiding adds power"},
  {id:"SFR", name:"SODIUM FAST", tie:"EBR-II / BN-800", mass:210,
-  P0:0.2,tsat:1150,Lam:4.0e-7,aF:-1.2,aM:-12,aV:+400,dens:280,grace:6.0,dnbr:3.20,xe:0.85,flowMin:.20,
+  P0:0.2,tsat:1150,Lam:4.0e-7,aF:-1.2,aM:-12,aV:+400,dens:280,grace:6.0,dnbr:3.20,xe:0.85,flowMin:.20,eff:.40,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Positive void in a big core; sodium burns on water contact"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
-  P0:0.2,tsat:1700,Lam:3.0e-5,aF:-3.5,aM:-60,aV:-300,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,
+  P0:0.2,tsat:1700,Lam:3.0e-5,aF:-3.5,aM:-60,aV:-300,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,eff:.44,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM PEBBLE BED", tie:"HTR-PM", mass:520,
-  P0:7.0,tsat:2000,Lam:5.0e-5,aF:-4.5,aM:-20,aV:0,dens:6,grace:40,dnbr:2.60,xe:1.0,flowMin:.15,
+  P0:7.0,tsat:2000,Lam:5.0e-5,aF:-4.5,aM:-20,aV:0,dens:6,grace:40,dnbr:2.60,xe:1.0,flowMin:.15,eff:.42,
   good:"Cannot melt. Grace time in hours, not seconds",
   bad:"Six kW per litre - enormous for the power it makes"},
 ];
@@ -92,7 +92,25 @@ const RODX0=.35;
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          loops:1,pumps:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
-         cont:1,accum:false,efw:true,catcher:false,bkp:1,bypassCap:.5};
+         cont:1,accum:false,efw:true,catcher:false,bkp:1,turb:.5,condCap:.5};
+
+/* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
+   drive a far better cycle than a 559 K boiler - and the turbine you buy decides
+   how much of that ceiling you actually capture. One function, because the bench
+   previews it and commission() bakes it; two formulas would drift apart.
+   The multiplier is centred on 1.0 so the default turbine delivers exactly the
+   architecture's own figure. */
+const grossEff  = () => ARCH[D.arch].eff * (0.92 + 0.16*D.turb);
+/* How much steam the turbine can swallow, and how much the condenser can turn
+   back into water. They are separate on purpose: overload past the condenser and
+   the output is there but the backpressure eats it. */
+const loadCeil  = () => 1.05 + 0.40*D.turb;
+const condCeil  = () => 0.85 + 0.35*D.condCap;
+/* When the pair is mismatched enough to matter. A condenser is normally sized for
+   about full load and a brief overload is bought with backpressure, so a gap is
+   not a fault - only a gap wide enough to cost roughly 15% of output is. One
+   threshold, read by both the bench warning and the condenser panel prose. */
+const condShort_ = () => loadCeil() - condCeil() > 0.26;
 
 function derived(){
   const a=ARCH[D.arch],f=FUEL[D.fuel],rf=REFL[D.refl];
@@ -103,7 +121,7 @@ function derived(){
     +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     + (D.rodw-1800)/100*4 + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
-    + (D.autorod?26:0) + D.bypassCap*40 + layMass;
+    + (D.autorod?26:0) + D.turb*50 + D.condCap*40 + layMass;
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess+rf.dRho-D.poison-leak;
@@ -140,8 +158,9 @@ function derived(){
   const dopBack=Math.abs(a.aF)*320*f.condK;      // Doppler released as the fuel cools
   const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
+  const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
   return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,excess,dnbr,Fq,natCirc,xeW,core,
-    boronOp,sdm,sdmB,leak,
+    boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0:a.P0*D.pdes,
     warn:(()=>{const w=[];
@@ -155,6 +174,8 @@ function derived(){
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel."]);
       if(CONT[D.cont].rel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew."]);
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely."]);
+      if(loadMax<1.10) w.push(["SOFT","The turbine draws at most "+(loadMax*100).toFixed(0)+"% of rated. In combat the reactor will be able to make power this machine cannot take."]);
+      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Overload past the condenser and backpressure takes output back off you, while the reactor goes on making the heat."]);
       if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown."]);
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own."]);
       if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average."]);

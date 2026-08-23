@@ -143,7 +143,7 @@ function liveValue(p,s){
     case p.id==="pzr":   return s.P.toFixed(1)+" MPa";
     case p.id.startsWith("sg"):   return s.sgl.toFixed(0)+"%";
     case p.id.startsWith("pump"): return (s.flow*100).toFixed(0)+"%";
-    case p.id==="turb":  return (s.load*100).toFixed(0)+"%";
+    case p.id==="turb":  return mwE(s).toFixed(0)+" MWe";
     case p.id==="cond":  return H_.toFixed(0)+"K";
     case p.id==="feed":  return s.sgl.toFixed(0)+"%";
     case p.id==="hpi":   return s.hpi?"INJ":"off";
@@ -159,6 +159,9 @@ function liveValue(p,s){
 function liveColor(p,s){
   switch(true){
     case p.id==="pzr": return pColor(s.P);
+    /* an undersized condenser is quietly taking output back off you. Say so on
+       the diagram, or the only place it shows is an inspector nobody opened. */
+    case p.id==="turb": return condPen(s)<0.98 ? C.amber : C.cyan;
     default: return C.cyan;
   }
 }
@@ -247,7 +250,7 @@ function ctlFor(p){
            "4000 pcm dumped into the loop. Shut down hard, and it cannot be undone this run."); } },
        tip:"EMERGENCY BORON - one-shot poison dump worth 4000 pcm. Shuts the reactor down when the rods will not, and it cannot be undone."}]]:[]);
     case "turb": return [[
-      {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>125,dem:()=>S.loadDem*100,
+      {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{S.loadDem=v/100;},
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}]];
     case "pzr": return [[

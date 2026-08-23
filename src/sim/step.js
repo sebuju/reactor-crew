@@ -12,8 +12,9 @@ function commission(){
      excess:d.excess, flowMin:PUMPS[D.pumps].floor,
      hpiRate:(D.accum?2.6:1.6)*L.hpiHead, graceK:Math.pow(a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2)),.6)*L.inertiaK,
      noise:CHAN[D.chan].noise, pumps:D.pumps, id:a.id, name:a.name,
+     eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, natCirc:d.natCirc*L.natK, pzrK:D.pzr*L.pzrK,
-     flowK:L.flowK, dose:L.dose, exposure:L.exposure, bypass:.20+.60*D.bypassCap,
+     flowK:L.flowK, dose:L.dose, exposure:L.exposure, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, boroninj:D.boroninj, efw:D.efw,
      catcher:D.catcher, contRel:CONT[D.cont].rel, backup:BKP[D.bkp].bk,
      loops:D.loops, sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
@@ -99,6 +100,31 @@ const bankAutoLive = b => autoLive("rod") && !S.scrammed && !S.rodJam
    place load moves without waiting for the governor: it writes both the
    actual and the demand, or the lag would wind the turbine straight back up. */
 function runback(s){ if(autoLive("runback")) s.load=s.loadDem=Math.min(s.load,0.05); }
+
+/* ── what the steam is worth once it leaves the plant ──────────────────────
+   Every figure below is readout-side. The heat leaves the core at exactly the
+   same rate whatever these say; they only decide how much of it becomes
+   electricity. Nothing in removal, tProg or the trip logic reads them, which is
+   why the whole physics invariant set survives untouched. */
+
+/* Condenser backpressure. The unit is sized for a set fraction of rated steam.
+   Push more through it than it can condense and exhaust pressure climbs, which
+   costs the turbine work - so an undersized heat sink hands back the overload
+   you paid mass for. */
+function condPen(s){
+  const ex = Math.max(0, Math.min(s.n,s.load) - P.condCap);
+  return Math.max(0.6, 1 - 2.2*ex*ex);
+}
+
+/* Gross electrical output. The steam that reaches the turbine is the smaller of
+   what the core is making and what the governor is passing; the steam dump goes
+   straight to the condenser and does no work, so it is deliberately not in here.
+   One helper, because the diagram tag and both inspectors read the same number.
+   What is not electricity is rejected, so mwRej is the remainder rather than a
+   second efficiency figure that could drift away from the first. */
+const mwE   = s => s.dmgParts.includes("turb") ? 0
+  : Math.min(s.n,s.load)*P.rated*P.eff*condPen(s);
+const mwRej = s => Math.min(s.n,s.load)*P.rated - mwE(s);
 /* A scram is the same act from the diagram and from the inspector, and the
    turbine runback that rides along with it is defeatable, so it lives here. */
 function manualScram(){
