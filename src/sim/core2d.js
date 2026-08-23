@@ -197,6 +197,18 @@ function coreSolve(T,phi,rho,sweeps){
 }
 
 /* ── fresh core, at the settling point commission() derived ── */
+/* ── where each bank stands: the ONE place that says so ──
+   GANG: every bank follows the master position, biased by the tilt trim, which
+   moves inner and outer banks opposite ways. SPLIT: each bank is its own actual
+   and there is nothing to derive - but the 0..1 clamp still happens here, once,
+   so no caller has to remember it. coreStep() only reads what this left behind.
+   Declared as a function, not a const: top-level const is shared across these
+   plain scripts with a TDZ, and core2d loads before its callers do. */
+function rodBanks(s){
+  for(let b=0;b<P.NB;b++)
+    s.rodZ[b]=clamp(s.split ? s.rodZ[b] : s.rodPos+P.bankW[b]*XTILTZ*s.tilt, 0, 1);
+}
+
 function coreReset(s){
   s.phi =new Float64Array(XNN).fill(1);
   s.xI  =new Float64Array(XNN); s.xX=new Float64Array(XNN);
@@ -205,7 +217,13 @@ function coreReset(s){
   s.nVt =new Float64Array(XNN);
   s.nCov=new Float64Array(XNN); s.nFol=new Float64Array(XNN);
   s.chW =new Float64Array(XNR).fill(1);
-  s.rodZ=new Float64Array(P.NB).fill(s.rodPos);
+  /* Every P.NB-sized allocation lives here, because a bench change to nbank
+     re-runs coreConst() and then resetPlant() -> coreReset(), so sizes can
+     never go stale. Demand starts equal to actual, per bank, or the plant
+     walks off its own commissioning point on tick one. */
+  s.rodZ   =new Float64Array(P.NB).fill(s.rodPos);
+  s.rodZDem=new Float64Array(P.NB).fill(s.rodPos);
+  s.bankAuto=new Array(P.NB).fill(true);
   s.tilt=0; s.tiltDem=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
   s.hotFlow=1; s.tipRho=0;
   for(let k=0;k<XNN;k++){
@@ -237,10 +255,8 @@ function coreRodWorth(s){
    node and hands back the flux-weighted reactivity that point kinetics needs.
    The field it leaves behind is what the renderer draws. */
 function coreStep(s,dt,feff,heat,sat,vLeak,mflux){
-  /* banks follow the master demand, biased by the tilt trim. Trim moves inner
-     and outer banks opposite ways, and it is the only handle the operator has
-     on a radial xenon tilt. */
-  for(let b=0;b<P.NB;b++) s.rodZ[b]=clamp(s.rodPos+P.bankW[b]*XTILTZ*s.tilt,0,1);
+  /* Where the banks stand is settled by the rod drives in step(), through
+     rodBanks(). This function only reads it. */
 
   /* ── parallel channels: steam costs pressure drop, so a voiding channel
         loses the very flow it needed to stop voiding. That runaway is what

@@ -9,7 +9,7 @@ function commission(){
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:a.Lam,
      aF:a.aF, aM:d.aM, aV:d.aV, P0:d.P0, tsat0:a.tsat*Math.pow(D.pdes,.25),
      rated:D.power, dnbr0:d.dnbr, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
-     rodW:D.rodw, excess:d.excess, flowMin:PUMPS[D.pumps].floor,
+     excess:d.excess, flowMin:PUMPS[D.pumps].floor,
      hpiRate:(D.accum?2.6:1.6)*L.hpiHead, graceK:Math.pow(a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2)),.6)*L.inertiaK,
      noise:CHAN[D.chan].noise, pumps:D.pumps, id:a.id, name:a.name,
      condK:f.condK, natCirc:d.natCirc*L.natK, pzrK:D.pzr*L.pzrK,
@@ -52,8 +52,8 @@ const AUTOSYS={
     warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
   rod:{part:"rods",label:"AUTO ROD",ann:"ROD AUTO BYP",name:"AUTOMATIC ROD CONTROL",
     fit:()=>P.autorod,
-    tip:"Walks the bank to hold average coolant temperature on programme, and it holds the bank near where it started - so it overrides the slider you just moved. Bypass it and the rods go exactly where you put them, and stay there.",
-    warn:"The bank now goes where you put it and nothing walks it back. Coolant temperature is yours to hold."},
+    tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band set on the rod-drive panel - widen that band and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
+    warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
   porv:{part:"pzr",label:"PORV AUTO",ann:"PORV AUTO BYP",name:"AUTOMATIC RELIEF",
     fit:()=>true,
     tip:"Lifts the relief valve at 106% pressure, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
@@ -84,6 +84,13 @@ function autoToggle(k){
 }
 const rpsLive  = ()=> autoLive("rps");
 const rpsState = ()=> autoState("rps");
+/* There are three ways a bank ends up going where the operator put it: the
+   system was bypassed, the bank was switched to MANUAL while the banks are
+   split, or a latch/jam took the drives away entirely. The precedence is
+   written once, here, because the controller, the renderer and the inspector
+   all have to agree on it. */
+const bankAutoLive = b => autoLive("rod") && !S.scrammed && !S.rodJam
+                          && (!S.split || S.bankAuto[b]);
 
 /* A stop valve slams shut in well under a second, so a runback is the one
    place load moves without waiting for the governor: it writes both the
@@ -98,6 +105,30 @@ function manualScram(){
      been shot away only a repair party puts them back */
   if(!s.dmgParts.includes("rods")) s.rodJam=false;
   runback(s);
+}
+/* ── ganging and splitting the banks ──
+   The one act, because both directions have seeding rules that must not exist
+   twice. Splitting is bumpless by construction: every bank simply adopts where
+   it already stands as its own demand. Ganging is NOT bumpless if you just
+   flip the flag - the gang derivation would overwrite rodZ in a single tick and
+   step several hundred pcm into the core - so it sets reGang instead and the
+   drives walk the banks together at their own rate. The mode does not actually
+   change until they have arrived. */
+function setSplit(on){
+  const s=S;
+  if(on && !s.split){
+    s.rodZDem.set(s.rodZ); s.split=true; s.reGang=false;
+    logE("warn","BANKS SPLIT",
+      "The banks are now driven one at a time and the tilt trim is stood down - per-bank demand is the tilt handle from here. Each bank keeps its own AUTO or MANUAL setting, and the T-avg controller drives only the ones left on AUTO. Fewer banks on AUTO means less worth answering the same temperature error, so the loop gets slower, not just smaller.");
+  } else if(!on && s.split && !s.reGang){
+    /* Freeze the master here, once. If rodPos kept tracking the mean while the
+       banks converge, the target would chase the banks that are chasing it. */
+    let m=0; for(let b=0;b<P.NB;b++) m+=s.rodZ[b];
+    s.rodPos=s.rodDem=m/P.NB;
+    s.reGang=true;
+    logE("info","BANKS GANGING",
+      "The banks are being driven back together at "+(ROD_RATE*100).toFixed(1)+" %/s. They are still split until they arrive, and a scram overrides this at any point.");
+  }
 }
 /* The eight conditions the protection system watches, in one place. The RPS
    asks this when it decides to trip; the trip reset asks the same list before
@@ -134,7 +165,20 @@ function resetTrip(){
   return true;
 }
 
-const AUTOROD_LEAD=12;                  // seconds of lead in the T-avg rod controller
+/* ── the T-avg rod controller, as four numbers the operator can reach ──
+   These are the commissioning tune, not a law. resetPlant() copies each one
+   onto S, the panel drives it from there, and every tooltip quotes the const
+   rather than a second copy of the number. */
+const AUTOROD_LEAD=12;                  // seconds of lead
+const AUTOROD_GAIN=0.0016;              // rod fraction per K of error per tick-second
+/* How far the controller may walk the bank. Not a safety limit - it is what
+   stops the bank wandering off the position the shutdown margin was measured
+   from. Widen it and the controller has more authority and less margin. */
+const AUTOROD_LO=0.20, AUTOROD_HI=0.50; // furthest out / furthest in, fraction inserted
+/* How fast a rod drive moves, ganged or split - one motor, one speed. The tilt
+   trim and the reganging walk are both derived from it below, so retuning the
+   drives cannot leave one of the three behind. P.scram replaces it on a trip. */
+const ROD_RATE=0.012;                   // fraction of travel per second
 /* actuator rates. Boration is charging-pump flow; dilution has to displace loop
    inventory, so it is slower. Poisoning yourself is easy, getting back out is not. */
 const BOR_IN=60, BOR_OUT=35;            // pcm/s toward more / less boron
@@ -162,8 +206,7 @@ const DEC_L=[.0994,.00477,4.11e-4,2.19e-5];     // 1/s
    outermost, and the drives that do it are the same drives that move the bank.
    So the trim walks at the bank rate divided by that span - derived, not typed,
    or the two drift apart the next time the span is retuned. */
-const TILT_RATE=0.012/XTILTZ;
-const rodWorth=x=>-P.rodW*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
+const TILT_RATE=ROD_RATE/XTILTZ;
 const tsat=p=>P.tsat0*Math.pow(Math.max(p,.05)/P.P0,.10);
 /* The coolant temperature programme: where T-avg is meant to sit for the load
    the turbine is drawing. One function, because the rod controller walks to it,
@@ -187,7 +230,11 @@ function resetPlant(){
      dec:DEC_A.map(a=>a*P.n0), decay:DEC_A.reduce((t,a)=>t+a,0)*P.n0,
      byp:Object.fromEntries(AUTOKEYS.map(k=>[k,false])),
      breach:false,melt:false,trip:"",
-     ev:{}, blackout:false, nat:0, release:0, rodAuto:x0, borInjUsed:false,
+     ev:{}, blackout:false, nat:0, release:0, borInjUsed:false,
+     /* the controller's tune, copied from the commissioning constants so a
+        RESET PLANT puts the operator's experiments back where they started */
+     split:false, reGang:false,
+     arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:AUTOROD_LO, arHi:AUTOROD_HI,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
      dash:{hot:0,cold:0,stm:0,exh:0,fw:0,surge:0,hpi:0},spin:0,jit:0,dTavg:0,heat:1,sc:35,t:0};
@@ -204,29 +251,81 @@ function resetPlant(){
 function step(dt){
   const s=S; s.t+=dt;
 
-  /* ── control rods ── */
-  if(autoLive("rod") && !s.scrammed && !s.rodJam){   // holds T-avg on program
-    /* T-avg error alone is two integrations away from rod position, so on a
-       weakly self-limiting core (small moderator coefficient) the bank hunts
-       and the swing grows until the RPS trips it. The rate term is the lead
-       compensation a real rod controller uses: it stops pushing once T-avg is
-       already moving the right way. */
-    const err=s.Tavg-tProg(s) + AUTOROD_LEAD*s.dTavg;
-    s.rodDem=clamp(s.rodDem+clamp(err,-6,6)*0.0016*dt*50, clamp(s.rodAuto-0.15,0,1), clamp(s.rodAuto+0.15,0,1));
-  }
-  /* A latched trip owns the bank. The slider can still be moved, but its demand
-     does not reach the drives until the latch is reset by hand - otherwise a
-     nudge on the slider pulled the rods straight back out of a scrammed core,
-     and the reset then refused because the flux it caused was still high. */
-  if(s.scrammed) s.rodDem=1;
-  if(!s.rodJam){ const r=s.scrammed?P.scram:0.012, d=s.rodDem-s.rodPos;
-    s.rodPos+=Math.sign(d)*Math.min(Math.abs(d),r*dt); }
+  /* ── control rods ──
+     T-avg error alone is two integrations away from rod position, so on a
+     weakly self-limiting core (small moderator coefficient) the bank hunts and
+     the swing grows until the RPS trips it. The rate term is the lead
+     compensation a real rod controller uses: it stops pushing once T-avg is
+     already moving the right way. Both the gain and the lead are the operator's
+     to get wrong. Note s.dTavg is last tick's rate - it is computed further down
+     - and that one-tick lag is part of the tune this was fitted with. */
+  const rodErr = clamp(s.Tavg-tProg(s) + s.arLead*s.dTavg, -6, 6) * s.arGain*dt*50;
+  /* The band is what stops the controller wandering off the position the
+     shutdown margin was measured from. It is not a safety limit and the operator
+     may open it all the way - but opening it does NOT free the bank, it gives
+     the controller more room to move it. The only two ways out from under this
+     controller are the bypass and per-bank MANUAL. lo/hi cannot invert, because
+     the two setters clamp against each other. */
+  const rodLo=clamp(s.arLo,0,1), rodHi=clamp(Math.max(s.arHi,s.arLo),0,1);
 
-  /* ── radial tilt trim: an actuator too ──
-     It biases the inner banks against the outer ones, so it is the one handle on
-     a radial xenon tilt. A jammed bank takes the trim with it. */
-  if(!s.rodJam){ const d=s.tiltDem-s.tilt;
-    s.tilt+=Math.sign(d)*Math.min(Math.abs(d),TILT_RATE*dt); }
+  if(!s.split && bankAutoLive(0))                 // ganged: one controller, one bank
+    s.rodDem=clamp(s.rodDem+rodErr, rodLo, rodHi);
+
+  /* ── ganging the banks back together ──
+     The banks are driven together, never teleported: rodBanks() would otherwise
+     overwrite every bank in a single tick. The mode stays SPLIT until they have
+     all arrived, so the gang derivation is never handed a spread it did not
+     produce. rodPos was frozen by setSplit() and is deliberately not tracking
+     the mean here, or the target would chase the banks that are chasing it. */
+  if(s.reGang){
+    let done=true;
+    for(let b=0;b<P.NB;b++){
+      s.rodZDem[b]=clamp(s.rodPos+P.bankW[b]*XTILTZ*s.tilt,0,1);
+      if(Math.abs(s.rodZ[b]-s.rodZDem[b])>1e-6) done=false;
+    }
+    if(done){ s.split=false; s.reGang=false; }
+  } else if(s.split){
+    /* Split: the same temperature error reaches every bank left on AUTO. It is
+       deliberately NOT divided among them - two banks in manual means the two
+       still answering carry the same error with less worth between them, so the
+       loop genuinely gets slower. That is the cost of taking banks off auto,
+       and it is emergent rather than charged. */
+    for(let b=0;b<P.NB;b++)
+      if(bankAutoLive(b)) s.rodZDem[b]=clamp(s.rodZDem[b]+rodErr, rodLo, rodHi);
+  }
+
+  /* A latched trip owns every bank, ganged or split, auto or manual. The slider
+     can still be moved, but its demand does not reach the drives until the latch
+     is reset by hand - otherwise a nudge on the slider pulled the rods straight
+     back out of a scrammed core, and the reset then refused because the flux it
+     caused was still high. This sits after the reganging block so a scram wins. */
+  if(s.scrammed){ s.rodDem=1; s.rodZDem.fill(1); }
+
+  /* One motor, one speed, whichever mode it is in. A jam freezes the lot. */
+  if(!s.rodJam){
+    const r=s.scrammed?P.scram:ROD_RATE;
+    if(s.split) for(let b=0;b<P.NB;b++){ const d=s.rodZDem[b]-s.rodZ[b];
+      s.rodZ[b]+=Math.sign(d)*Math.min(Math.abs(d),r*dt); }
+    else { const d=s.rodDem-s.rodPos;
+      s.rodPos+=Math.sign(d)*Math.min(Math.abs(d),r*dt); }
+
+    /* ── radial tilt trim: an actuator too ──
+       It biases the inner banks against the outer ones, and it is the one handle
+       on a radial xenon tilt while the banks are ganged. Split, the per-bank
+       demands are that handle, so the trim stands still rather than fighting
+       them. A jammed bank takes the trim with it either way. */
+    if(!s.split){ const d=s.tiltDem-s.tilt;
+      s.tilt+=Math.sign(d)*Math.min(Math.abs(d),TILT_RATE*dt); }
+  }
+  /* Settle where each bank actually stands - the one place that decides it. */
+  rodBanks(s);
+  /* Split, the master pair is a readout rather than a state, so the ~8 places
+     that print or plot "the bank" keep working without knowing about banks.
+     Not while reganging: rodPos is the frozen target the banks are walking to. */
+  if(s.split && !s.reGang){
+    let m=0,d=0; for(let b=0;b<P.NB;b++){ m+=s.rodZ[b]; d+=s.rodZDem[b]; }
+    s.rodPos=m/P.NB; s.rodDem=d/P.NB;
+  }
 
   /* ── boron: an actuator, not a setting ──
      The slider writes demand; the loop gets there at the rate a charging pump
