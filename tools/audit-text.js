@@ -10,7 +10,11 @@ const src=require('./bundle').bundle();
 const TEXTS=[], RECTS=[];
 function mkctx(){
   const st={font:'10px m',fillStyle:'#000',textAlign:'left',letterSpacing:'0px'};
-  let tx=0,ty=0,rot=0; const stack=[];
+  /* sx/sy track ctx.scale(), because the plant is drawn through a view
+     transform now: its text is in PLANT units and lands on the page scaled and
+     offset. Without this the auditor measures the plant at its unscaled size
+     and reports the whole grid as hanging off the right margin. */
+  let tx=0,ty=0,rot=0,sx=1,sy=1; const stack=[];
   const size=()=>parseFloat(st.font.match(/([\d.]+)px/)[1]);
   const sp=()=>parseFloat(st.letterSpacing)||0;
   const wOf=t=>String(t).length*(0.60*size()+sp());
@@ -19,17 +23,19 @@ function mkctx(){
       if(k in st && typeof st[k]!=='function') return st[k];
       switch(k){
         case 'measureText': return t2=>({width:wOf(t2)});
-        case 'save': return ()=>{ stack.push([tx,ty,rot]); };
-        case 'restore': return ()=>{ const v=stack.pop(); if(v)[tx,ty,rot]=v; };
-        case 'translate': return (dx,dy)=>{ tx+=dx; ty+=dy; };
+        case 'save': return ()=>{ stack.push([tx,ty,rot,sx,sy]); };
+        case 'restore': return ()=>{ const v=stack.pop(); if(v)[tx,ty,rot,sx,sy]=v; };
+        case 'translate': return (dx,dy)=>{ tx+=dx*sx; ty+=dy*sy; };
+        case 'scale': return (a,b)=>{ sx*=a; sy*=(b===undefined?a:b); };
         case 'rotate': return r=>{ rot+=r; };
         case 'fillText': return (t2,x,y)=>{
-          const w=wOf(t2), a=st.textAlign, s2=size();
+          const w=wOf(t2)*sx, a=st.textAlign, s2=size();
           if(Math.abs(rot)>1e-6){          // rotated: swap the bounding box axes
-            TEXTS.push({t:String(t2),x0:tx+x-s2,x1:tx+x+s2,y:ty+y,size:s2,screen:CUR,rot:true});
+            /* a rotated string is about one em wide, and that em is scaled too */
+            TEXTS.push({t:String(t2),x0:tx+x*sx-s2*sx,x1:tx+x*sx+s2*sx,y:ty+y*sy,size:s2,screen:CUR,rot:true});
           } else {
-            const x0 = (a==='right'? x-w : a==='center'? x-w/2 : x)+tx;
-            TEXTS.push({t:String(t2),x0,x1:x0+w,y:y+ty,size:s2,screen:CUR});
+            const x0 = (a==='right'? x*sx-w : a==='center'? x*sx-w/2 : x*sx)+tx;
+            TEXTS.push({t:String(t2),x0,x1:x0+w,y:y*sy+ty,size:s2,screen:CUR});
           }
         };
         case 'fillRect': return (x,y,w,h)=>{ if(w>8&&h>8) RECTS.push({x,y,w,h,c:st.fillStyle,screen:CUR}); };
@@ -49,8 +55,9 @@ global.document={getElementById:()=>({getContext:()=>proxy,addEventListener(){},
 global.window=global; global.performance={now:()=>1000}; global.devicePixelRatio=1;
 global.requestAnimationFrame=()=>{}; global.addEventListener=()=>{};
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
- '; return {drawDesign,drawMimic,drawPanels,drawHelp,topbar,commission,step,sample,combatHit,'+
- 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,TSCALE:()=>TSCALE};')();
+ '; return {drawDesign,drawOperate,drawOverlay,drawHelp,topbar,commission,step,sample,combatHit,'+
+ 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
+ 'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v};')();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
 function warmUp(){
@@ -71,7 +78,18 @@ warmUp();
 
 function sweep(tag){
   M.setScreen('design'); cap(tag+'topbar',M.topbar); cap(tag+'design',M.drawDesign);
-  M.setScreen('operate'); cap(tag+'plant',()=>M.drawPanels(M.drawMimic()));
+  /* Every panel on the control room is an OVERLAY now, and an overlay that is
+     shut is a draw path that never runs. Walk them: closed, then one at a time.
+     Miss this and six panels go unaudited the day they stop being stacked. */
+  M.setScreen('operate');
+  M.ovlSet(null); cap(tag+'plant',M.drawOperate);
+  /* Each overlay is captured ALONE, not on top of the plant. It is opaque and
+     it covers what is behind it, so auditing the two together reports the grid
+     labels underneath as collisions - which is the auditor describing a
+     stacking order rather than a fault. drawOperate() ran a line ago, so the
+     viewport the overlay docks into is already set. */
+  for(const o of M.OVL()){ M.ovlSet(o.k); cap(tag+'ovl:'+o.k,M.drawOverlay); }
+  M.ovlSet(null);
   M.setScreen('help'); cap(tag+'help',M.drawHelp);
 }
 sweep('');

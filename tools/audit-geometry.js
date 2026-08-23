@@ -64,15 +64,30 @@ for(const loops of [1,2,3,4]){
 const GW=Number(S.match(/const GW=(\d+)/)[1]), GH=Number(S.match(/GH=(\d+)/)[1]);
 const CELL=Number(S.match(/CELL=(\d+)/)[1]), GX=Number(S.match(/GX=(\d+)/)[1]);
 const checks=[
- ['grid fills content width', GX+GW*CELL===748, `${GX} .. ${GX+GW*CELL} (want 12..748)`],
- ['grid left margin',         GX===12, `GX=${GX}`],
- ['one plant renderer',       /const drawGrid = y0 => drawPlant\(y0,null\)/.test(S) &&
-                              /drawPlant\(84,s\)/.test(S), 'design and control both call drawPlant'],
+ /* The plant is a world you pan and zoom now, so it is no longer required to
+    land exactly on the right content margin - it is FITTED into whatever
+    viewport the screen gives it. What still has to hold is that it starts on
+    the left margin and that a cell is square. */
+ ['grid starts on the margin', GX===12, `GX=${GX}`],
+ ['grid is whole cells',      GW*CELL%GW===0, `${GW} x ${CELL} = ${GW*CELL} units wide`],
+ /* Both screens draw the plant through the ONE renderer, each handing it the
+    viewport it decided to give the plant and its own live state - null on the
+    bench, S in the control room. The old form named the y each screen used;
+    those became viewport heights the moment the page stopped scrolling, so this
+    asks about the arguments that carry the meaning instead. */
+ ['one plant renderer',       S.includes('drawPlant(vy,null,vh)') &&
+                              S.includes('drawPlant(vy,s,vh)'), 'design and control both call drawPlant'],
  ['one symbol set',           (S.match(/function drawSym/g)||[]).length===1, 'drawSym defined once'],
  ['one pipe network',         (S.match(/function pipeNetwork/g)||[]).length===1, 'pipeNetwork defined once'],
- ['one inspector shape',      /function inspector\(y0\)/.test(S) && /function ctrlInspector\(y0\)/.test(S),
-                              'design + control inspectors share position and size'],
- ['inspector heights match',  (S.match(/const IH=232/g)||[]).length===2, 'both 232px'],
+ /* The control room's readouts are no longer a panel with a shape of its own -
+    they are drawn inside the component that owns them. What has to hold is that
+    ONE function draws them and that it is handed the component's own box. */
+ /* There is no readout panel at all any more. What has to hold is that every
+    component's table comes from ONE data function and is drawn as a plate in
+    the plant's own margin, on a leader back to the machine it belongs to. */
+ ['readouts are the plant',   S.includes('function readoutsFor(p,s)') &&
+                              S.includes('function drawPlate(q)'), 'one table, drawn as a plate on a leader'],
+ ['one bench inspector',      S.includes('function inspector(y0)'), 'design inspector defined once'],
  ['no hand-placed mimic',     !/OY=44/.test(S), 'fixed-coordinate mimic removed'],
  ...pipeChecks,
 ];
