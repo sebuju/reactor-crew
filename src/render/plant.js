@@ -360,24 +360,26 @@ function drawPlant(y0,L){
   ctx.save(); ctx.translate(GX+GW*CELL-7,GY+GHp/2); ctx.rotate(Math.PI/2);
   txt("AFT BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
 
-  const Th = L? L.Tavg+15*(L.n*.935+L.decay) : 598;
-  const Tc = L? L.Tavg-15*(L.n*.935+L.decay) : 568;
-  const PC={ hot: L?lerpC("#5aa9d6","#ff5a45",(Th-520)/110):"#c8735e",
-             cold:L?lerpC("#5aa9d6","#ff5a45",(Tc-520)/110):"#5aa9d6",
-             surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2" };
-  const DASH={hot:"hot",cold:"cold",steam:"stm",feed:"fw",hpi:"hpi",surge:"surge",exh:"exh"};
+  /* The pipe itself: a dark casing, then the coloured fluid line inside it. A ROUND
+     join, because a pipe bends and does not fold - the radius is half the line width,
+     so the casing curves on 4px and the fluid inside it on 2px, concentric, which is
+     what a real elbow does. What is IN the pipe is pipeFlow(), in render/pipes.js. */
+  const PC=pipeColours(L);
   for(const pass of [0,1]) for(const r of pipeNetwork()){
     if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
-    ctx.lineCap="square"; ctx.lineJoin="miter";
+    ctx.lineCap="square"; ctx.lineJoin="round";
     const thin = r.k==="hpi"||r.k==="surge";
     ctx.lineWidth = pass? (thin?3:4) : (thin?6:8);
     ctx.strokeStyle = pass? PC[r.k] : "#22383e";
-    if(pass&&L&&DASH[r.k]){ ctx.setLineDash([7,9]); ctx.lineDashOffset=L.dash[DASH[r.k]]||0;
-      ctx.lineCap="butt"; }
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.stroke();
   }
+  ctx.lineJoin="miter";
+  /* the fluid goes down BEFORE the components, because a pipe runs behind the plant
+     and a packet should disappear under a vessel. The instruments go down after them
+     - see pipeGauges() at the end of this function. */
+  if(L) pipeFlow(L);
 
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
@@ -413,6 +415,10 @@ function drawPlant(y0,L){
     if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+4,sy+i*CTL_H+1,w-8,CTL_H-3));
     if(byk) bypRow(byk,x+4,y+h-bh+1,w-8,bh-3);
   }
+  /* an instrument is bolted to the outside of the thing it measures, so it goes down
+     last. Drawn before the components, the pressurizer gauge was painted over by the
+     pressurizer. */
+  if(L) pipeGauges(L);
   return GY+GHp;
 }
 const drawGrid = y0 => drawPlant(y0,null);
