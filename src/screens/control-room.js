@@ -18,7 +18,7 @@ function ctrlInspector(y0){
   const s=S, p=LAY.parts.find(q=>q.id===sel)||LAY.parts[0];
   const IH=232, X=[22,202,382,562], W2=172;
   const dmgd=s.dmgParts.includes(p.id);
-  well(12,y0,736,IH,"COMPONENT / "+p.name,dmgd?C.red:C.amber);
+  well(12,y0,736,IH,"COMPONENT READOUTS / "+p.name,dmgd?C.red:C.amber);
   txt("EL"+(GH-1-p.y)+"  ·  "+(dmgd?"DAMAGED":fitted(p)?"in service":"not fitted"),738,y0+15,
       {size:8,sp:1.2,align:"right",color:dmgd?C.red:C.ink2});
   const Y0=y0+34;
@@ -38,10 +38,13 @@ function ctrlInspector(y0){
     row(X[1],1,"VOID",s.vf.toFixed(2),s.vf>.15?C.red:C.cyan);
     row(X[1],2,"FUEL DAMAGE",s.dmg.toFixed(1)+" %",s.dmg>0?C.red:C.cyan);
     row(X[1],3,"VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
-    rule("BORON CONCENTRATION",X[2],Y0+9,W2);
-    slider(X[2],Y0+28,W2,s.boron,-6000,0,{dem:s.boronDem,fn:v=>S.boronDem=Math.round(v/10)*10});
-    txt(pad(s.boron.toFixed(0),5)+" pcm",X[2]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
-    TIP(X[2],Y0,W2,54,"BORON","Neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s. The thin line on the track is what you asked for, the thumb is what the loop has. The only way out of a deep xenon pit.");
+    row(X[2],0,"BORON",s.boron.toFixed(0)+" pcm");
+    row(X[2],1,"BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
+        Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2);
+    row(X[2],2,"EMERG BORON",!P.boroninj?"none":s.borInjUsed?"EXPENDED":"available",
+        !P.boroninj?C.ink2:s.borInjUsed?C.red:C.green);
+    row(X[2],3,"XENON",s.parts.xe.toFixed(0)+" pcm");
+    TIP(X[2],Y0,W2,84,"BORON","Neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s. Demand is what you asked the charging pumps for; boron is what the loop actually has. Drive it from the slider on the reactor itself.");
     rule("CORE FLUX",X[3],Y0+9,W2);
     coreField(X[3],Y0+16,W2,116,coreView(s));
     const fr=(i,k,v,col)=>{ const yy=Y0+146+i*16;
@@ -55,65 +58,48 @@ function ctrlInspector(y0){
       "The core seen along its axis, mirrored about the centreline. Dot size is local power, colour is how hard that spot is running, a hollow ring is steam, and the violet shadow is xenon eating the neutrons where it has built up. The vertical marks are the rod banks, with the follower drawn below each absorber.");
   }
   else if(id==="rods"){
-    rule("CONTROL BANK",X[0],Y0+9,W2);
-    slider(X[0],Y0+28,W2,s.rodPos*100,0,100,{dem:s.rodDem*100,fn:v=>{S.rodDem=v/100;}});
-    txt(pad((s.rodPos*100).toFixed(0),3)+" % INSERTED",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
-    TIP(X[0],Y0,W2,54,"CONTROL BANK","Rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking which eats thermal margin.");
-    const sw=push({x:X[1],y:Y0+6,w:W2,h:40,type:"btn",
-      fn:()=>{ manualScram(); }});
-    fillRect(X[1],Y0+6,W2,40,hov(sw)?"#5a1109":"#3a0d08"); frame(X[1],Y0+6,W2,40,C.red);
-    ticks(X[1]+.5,Y0+6.5,W2-1,39,C.red,6);
-    txt("SCRAM",X[1]+W2/2,Y0+26,{size:12,weight:700,sp:3,align:"center",color:C.red});
-    txt("TRIP RODS + TURBINE",X[1]+W2/2,Y0+39,{size:7,sp:1.2,align:"center",color:"#8a3428"});
-    TIP(X[1],Y0+6,W2,40,"SCRAM","Drops the full bank in "+(1/P.scram).toFixed(1)+" s and trips the turbine with it. Always safe, never free: xenon then locks you out for minutes.");
-    /* the latch has to be cleared on purpose - moving the bank no longer does it */
-    const tr=push({x:X[1],y:Y0+50,w:W2,h:20,type:"btn",fn:()=>{ resetTrip(); }});
-    fillRect(X[1],Y0+50,W2,20,S.scrammed&&hov(tr)?C.panelHi:C.panel);
-    frame(X[1],Y0+50,W2,20,S.scrammed?C.amber:C.edge);
-    txt("TRIP RESET",X[1]+W2/2,Y0+64,{size:8,sp:1.2,align:"center",
-        color:S.scrammed?C.amber:C.ink2});
-    TIP(X[1],Y0+50,W2,20,"TRIP RESET","Clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present, and says which one.");
-    const lit=!P.rps||S.byp.rps, st=rpsState();
-    const rw=push({x:X[2],y:Y0+6,w:W2,h:26,type:"btn",fn:()=>{ autoToggle("rps"); }});
-    fillRect(X[2],Y0+6,W2,26,lit?"#2a1f08":(hov(rw)&&P.rps?C.panelHi:C.panel));
-    frame(X[2],Y0+6,W2,26,lit?C.amber:C.edge); accent(X[2],Y0+6,W2,lit?C.amber:C.edge2);
-    txt("RPS",X[2]+9,Y0+23,{size:8,weight:700,sp:1.2,color:lit?C.amber:C.ink2});
-    txt(st,X[2]+W2-9,Y0+23,{size:8,sp:1,align:"right",color:lit?C.amber:C.green});
-    TIP(X[2],Y0+6,W2,26,"RPS [ "+st+" ]",
-      P.rps?"Reactor Protection System. Armed, it scrams automatically on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core."
-           :"No Reactor Protection System was fitted at the design bench. There is nothing to arm and nothing to bypass. Nothing will scram this reactor except you.");
-    if(P.boroninj){
-      const bb=push({x:X[2],y:Y0+40,w:W2,h:26,type:"btn",fn:()=>{ if(!S.borInjUsed){
-        S.borInjUsed=true; S.boron-=4000; S.boronDem-=4000;
-        logE("alarm","EMERGENCY BORON INJECTED","4000 pcm dumped into the loop. Shut down hard, and it cannot be undone this run."); }}});
-      fillRect(X[2],Y0+40,W2,26,S.borInjUsed?C.panel:(hov(bb)?"#5a1109":"#2a0f0b"));
-      frame(X[2],Y0+40,W2,26,S.borInjUsed?C.edge:C.red);
-      txt(S.borInjUsed?"BORON EXPENDED":"EMERGENCY BORON",X[2]+W2/2,Y0+57,
-        {size:8,sp:1.2,align:"center",color:S.borInjUsed?C.ink2:C.red});
-    }
+    row(X[0],0,"BANK POSITION",(s.rodPos*100).toFixed(1)+" %");
+    row(X[0],1,"BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",
+        Math.abs(s.rodDem-s.rodPos)>.005?C.amber:C.ink2);
+    row(X[0],2,"BANK WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm");
+    row(X[0],3,"DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green);
+    TIP(X[0],Y0,W2,84,"CONTROL BANK","Rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking which eats thermal margin. Demand is where you asked for; position is where the drives have got to. The slider is on the rod drives themselves.");
+    row(X[1],0,"TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green);
+    row(X[1],1,"LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
+    row(X[1],2,"SCRAM TIME",(1/P.scram).toFixed(1)+" s");
+    row(X[1],3,"RESET WOULD",!s.scrammed?"n/a":(P.rps&&tripCause())?"REFUSE":"clear",
+        !s.scrammed?C.ink2:(P.rps&&tripCause())?C.red:C.green);
+    TIP(X[1],Y0,W2,84,"TRIP STATE","A scram latches. The latch has to be cleared on purpose, and with protection fitted it refuses while a trip condition is still present. SCRAM and RESET are mounted on the rod drives on the diagram.");
+    row(X[2],0,"TILT TRIM",(s.tilt>=0?"+":"")+s.tilt.toFixed(2),
+        Math.abs(s.tilt)>.05?C.amber:C.ink2);
+    row(X[2],1,"TILT DEMAND",(s.tiltDem>=0?"+":"")+s.tiltDem.toFixed(2),
+        Math.abs(s.tiltDem-s.tilt)>.01?C.amber:C.ink2);
+    row(X[2],2,"RADIAL OFFSET",(s.ro*100).toFixed(0)+" %",Math.abs(s.ro)>.35?C.amber:C.cyan);
+    row(X[2],3,"AXIAL OFFSET",(s.ao*100).toFixed(0)+" %",Math.abs(s.ao)>.35?C.amber:C.cyan);
+    TIP(X[2],Y0,W2,84,"TILT TRIM","Drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart, so it is the one handle you have on a radial xenon tilt. Radial offset is what the flux field is actually doing about it. The trim slider is on the rod drives.");
     row(X[3],0,"PERIOD",(()=>{const dn=(s.n-lastN)/0.05; lastN=s.n;
       const pr=Math.abs(dn)<1e-4?Infinity:s.n/dn;
       return (isFinite(pr)&&Math.abs(pr)<999?pr.toFixed(0):"INF")+" s";})());
     row(X[3],1,"NET RHO",s.rho.toFixed(0)+" pcm",Math.abs(s.rho)<50?C.green:C.amber);
     row(X[3],2,"XENON",s.parts.xe.toFixed(0)+" pcm");
     row(X[3],3,"SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",P.sdm<200?C.red:C.green);
+    row(X[3],4,"  W/ FULL BORON",P.sdmB.toFixed(0)+" pcm",P.sdmB<200?C.red:C.green);
   }
   else if(id==="pzr"){
-    row(X[0],0,"PRESSURE",s.P.toFixed(2)+" MPa",s.P<P.P0*.935?C.amber:C.cyan);
+    row(X[0],0,"PRESSURE",s.P.toFixed(2)+" MPa",pColor(s.P));
     row(X[0],1,"LEVEL",s.lvl.toFixed(1)+" %",s.lvl>78?C.amber:C.cyan);
     row(X[0],2,"SUBCOOLING",sc.toFixed(1)+" K",sc<8?C.red:C.cyan);
     row(X[0],3,"SAT TEMP",tsat(s.P).toFixed(0)+" K");
     const open=s.porvOpen&&!s.porvBlocked;
-    const bv=push({x:X[1],y:Y0+6,w:W2,h:48,type:"btn",fn:()=>S.porvBlocked=!S.porvBlocked});
-    fillRect(X[1],Y0+6,W2,48,hov(bv)?C.panelHi:C.panel);
-    frame(X[1],Y0+6,W2,48,S.porvBlocked?C.red:C.edge2);
-    accent(X[1],Y0+6,W2,S.porvBlocked?C.red:C.green);
-    txt(S.porvBlocked?"BLOCK VALVE SHUT":"BLOCK VALVE OPEN",X[1]+W2/2,Y0+30,
-      {size:9,sp:1.2,align:"center",color:S.porvBlocked?C.red:C.green});
-    txt("CLICK TO TOGGLE",X[1]+W2/2,Y0+44,{size:7,sp:1.2,align:"center",color:C.ink2});
-    TIP(X[1],Y0+6,W2,48,"BLOCK VALVE","Manual backup under the relief valve. Shut it when the PORV fails to reseat - that is the whole answer to a stuck-open valve.");
-    row(X[2],0,"PORV",open?"PASSING":"SHUT",open?C.red:C.green);
-    row(X[2],1,"RELIEF PATH",S.porvBlocked?"ISOLATED":"available",S.porvBlocked?C.red:C.ink2);
+    row(X[1],0,"BLOCK VALVE",s.porvBlocked?"SHUT":"open",s.porvBlocked?C.red:C.green);
+    row(X[1],1,"PORV",open?"PASSING":"shut",open?C.red:C.green);
+    row(X[1],2,"RELIEF PATH",s.porvBlocked?"ISOLATED":"available",s.porvBlocked?C.red:C.ink2);
+    row(X[1],3,"AUTO RELIEF",autoState("porv").toLowerCase(),
+        autoLive("porv")?C.green:C.amber);
+    TIP(X[1],Y0,W2,84,"RELIEF PATH","Manual backup under the relief valve. Shut the block valve when the PORV fails to reseat - that is the whole answer to a stuck-open valve. Both switches are on the pressurizer on the diagram.");
+    row(X[2],0,"LIFT SETPOINT",(P.P0*1.06).toFixed(2)+" MPa");
+    row(X[2],1,"MARGIN TO LIFT",(P.P0*1.06-s.P).toFixed(2)+" MPa",
+        P.P0*1.06-s.P<0.3?C.amber:C.cyan);
     wrap(s.lvl>78&&sc<12?"Level reads HIGH while subcooling collapses. That combination means the core is voiding and pushing water up the surge line - the loop is emptying, not filling."
         :"Level and subcooling agree. Watch them diverge and you are looking at a leak, not an overfill.",
       X[3],Y0+12,W2,11,{size:8.5,color:s.lvl>78&&sc<12?C.red:C.ink2});
@@ -131,10 +117,14 @@ function ctrlInspector(y0){
       X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
   }
   else if(id.startsWith("pump")){
-    rule("COOLANT PUMPS",X[0],Y0+9,W2);
-    slider(X[0],Y0+28,W2,s.flow*100,P.flowMin*100,100,{dem:s.flowDem*100,fn:v=>S.flowDem=v/100});
-    txt(pad((s.flow*100).toFixed(0),3)+" % ACTUAL",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
-    TIP(X[0],Y0,W2,54,"COOLANT PUMPS","Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The thin line is demand, the thumb is what the loop has.");
+    row(X[0],0,"FLOW",(s.flow*100).toFixed(1)+" %",
+        s.flow<P.flowMin?C.red:C.cyan);
+    row(X[0],1,"FLOW DEMAND",(s.flowDem*100).toFixed(1)+" %",
+        Math.abs(s.flowDem-s.flow)>.005?C.amber:C.ink2);
+    row(X[0],2,"DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %");
+    row(X[0],3,"HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
+        s.hotFlow<.8?C.amber:C.cyan);
+    TIP(X[0],Y0,W2,84,"COOLANT PUMPS",pumpTip());
     row(X[1],0,"CAVITATION",(s.cav*100).toFixed(0)+" %",s.cav>.15?C.amber:C.cyan);
     row(X[1],1,"NAT CIRC",(s.nat*100).toFixed(0)+" %");
     row(X[1],2,"PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+P.loops,
@@ -144,13 +134,16 @@ function ctrlInspector(y0){
       "% of nominal before anything breaks.",X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
   }
   else if(id==="turb"){
-    rule("LOAD DEMAND",X[0],Y0+9,W2);
-    slider(X[0],Y0+28,W2,s.load*100,0,125,{dem:s.loadDem*100,fn:v=>S.loadDem=v/100});
-    txt(pad((s.load*100).toFixed(0),3)+" %",X[0]+W2,Y0+48,{size:10,align:"right",color:C.cyan});
-    TIP(X[0],Y0,W2,54,"LOAD DEMAND","Turbine draw - weapons and ship systems in the full game. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line.");
+    row(X[0],0,"LOAD",(s.load*100).toFixed(1)+" %");
+    row(X[0],1,"LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
+        Math.abs(s.loadDem-s.load)>.005?C.amber:C.ink2);
+    row(X[0],2,"RUNBACK",autoState("runback").toLowerCase(),
+        autoLive("runback")?C.green:C.amber);
+    row(X[0],3,"GOVERNOR STROKE",LOAD_TAU.toFixed(0)+" s");
+    TIP(X[0],Y0,W2,84,"LOAD DEMAND","Turbine draw - weapons and ship systems in the full game. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so load trails demand. The slider is on the turbine.");
     row(X[1],0,"ELECTRICAL",(Math.min(s.n,s.load)*P.rated/3).toFixed(0)+" MWe");
-    row(X[1],1,"T-AVG VS PROGRAM",(s.Tavg-(565+18*s.load)>=0?"+":"")+
-      (s.Tavg-(565+18*s.load)).toFixed(1)+" K");
+    row(X[1],1,"T-AVG VS PROGRAM",(s.Tavg-tProg(s)>=0?"+":"")+
+      (s.Tavg-tProg(s)).toFixed(1)+" K");
     row(X[1],2,"STEAM DUMP",(P.bypass*100).toFixed(0)+" %");
     wrap("Ride the moderator feedback instead of fighting it: raise load and power follows on its own.",
       X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
@@ -168,13 +161,10 @@ function ctrlInspector(y0){
       X[2],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
   }
   else if(id==="hpi"){
-    const hb=push({x:X[0],y:Y0+6,w:W2,h:48,type:"btn",fn:()=>S.hpi=!S.hpi});
-    fillRect(X[0],Y0+6,W2,48,S.hpi?"#0f2028":(hov(hb)?C.panelHi:C.panel));
-    frame(X[0],Y0+6,W2,48,S.hpi?C.cyan:C.edge2); accent(X[0],Y0+6,W2,S.hpi?C.cyan:C.edge2);
-    txt(S.hpi?"INJECTING":"STOPPED",X[0]+W2/2,Y0+30,{size:10,sp:2,align:"center",
-      color:S.hpi?C.cyan:C.ink2});
-    txt("CLICK TO TOGGLE",X[0]+W2/2,Y0+44,{size:7,sp:1.2,align:"center",color:C.ink2});
-    TIP(X[0],Y0+6,W2,48,"HIGH PRESSURE INJECTION","Emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs.");
+    row(X[0],0,"INJECTION",s.hpi?"RUNNING":"stopped",s.hpi?C.cyan:C.ink2);
+    row(X[0],1,"ACCUMULATOR",fitted(p)?"fitted":"none",fitted(p)?C.green:C.ink2);
+    row(X[0],2,"HEAD OVER CORE",(P.lay.hpiHead).toFixed(2)+" x");
+    TIP(X[0],Y0,W2,64,"HIGH PRESSURE INJECTION","Emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs. The switch is on the tank on the diagram.");
     row(X[1],0,"RATE",P.hpiRate.toFixed(2)+" %/s");
     row(X[1],1,"INVENTORY",s.inv.toFixed(1)+" %",s.inv<95?C.red:C.blue);
     row(X[1],2,"VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
@@ -191,15 +181,31 @@ function ctrlInspector(y0){
   }
   else if(id==="bkp"){
     row(X[0],0,"BLACKOUT",s.blackout?"ACTIVE":"no",s.blackout?C.red:C.green);
-    row(X[0],1,"BACKUP CAPACITY",(P.backup*55).toFixed(0)+" % flow");
+    row(X[0],1,"BACKUP CAPACITY",(P.backup*100).toFixed(0)+" % of pump flow");
     row(X[0],2,"SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green);
     row(X[0],3,"NAT CIRC",(s.nat*100).toFixed(0)+" %");
     wrap("With no backup and no chimney, a blackout leaves the core with nothing but buoyancy.",
       X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
   }
+  else if(id==="feed"){
+    row(X[0],0,"SG LEVEL",s.sgl.toFixed(1)+" %",s.sgl<25?C.red:C.cyan);
+    row(X[0],1,"EMERG FEED",autoState("efw").toLowerCase(),
+        autoLive("efw")?C.green:C.amber);
+    row(X[0],2,"FEED PUMP",s.dmgParts.includes("feed")?"DESTROYED":"running",
+        s.dmgParts.includes("feed")?C.red:C.green);
+    wrap("Emergency feedwater is the only thing that keeps a sink under decay heat after a trip. Its bypass switch is on this pump on the diagram.",
+      X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
+  }
+  else if(id==="cond"){
+    row(X[0],0,"T-HOT",Th.toFixed(0)+" K");
+    row(X[0],1,"HEAT REJECTED",(Math.min(s.n,s.load)*P.rated*.66).toFixed(0)+" MWt");
+    row(X[0],2,"CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
+        s.dmgParts.includes("cond")?C.red:C.green);
+    wrap(p.tip,X[1],Y0+12,W2*2+8,11,{size:8.5,color:C.ink2});
+  }
   else {
     wrap(p.tip,X[0],Y0+14,W2*2+8,12,{size:9,color:C.ink});
-    txt("NO OPERATING CONTROLS",X[0],Y0+80,{size:8,sp:1.6,color:C.ink2});
+    txt("NO LIVE READOUTS",X[0],Y0+80,{size:8,sp:1.6,color:C.ink2});
   }
   return y0+IH;
 }
@@ -207,14 +213,14 @@ function ctrlInspector(y0){
 function drawMimic(){
   const s=S, heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, sc=tsat(s.P)-Th;
   rule("PLANT",12,58,736,C.amber);
-  txt("as built / click a component for its readouts and controls",12,73,{size:8.5,color:C.ink2});
+  txt("as built / every control is on the plant itself - click a component for its readouts",12,73,{size:8.5,color:C.ink2});
   let y=drawPlant(84,s)+12;
 
   const V=[["REACTOR POWER",(s.n*100).toFixed(1),"%",
       (s.n>1.1||s.dnbr<1.3)?C.red:C.green,"Heat the core is making as a share of rated output.","pwr"],
     ["DNBR",s.dnbr.toFixed(2),"",s.dnbr<1?C.red:s.dnbr<1.3?C.amber:C.cyan,
-      "Margin before coolant boils into an insulating film on the fuel. Above 1.30 safe, 1.00 is failure. This, not the rating, limits how hard you can push.","dnbr"],
-    ["PRESSURE",s.P.toFixed(2),"MPa",s.P<P.P0*.935?C.amber:C.cyan,
+      "Departure from Nucleate Boiling Ratio. Nucleate boiling is bubbles forming and collapsing on the fuel pins, which cools them very well. Departure is those bubbles joining into one continuous steam film, which does not. The number is how far you are from that: above 1.30 safe, 1.00 is failure. This, not the rating, limits how hard you can push.","dnbr"],
+    ["PRESSURE",s.P.toFixed(2),"MPa",pColor(s.P),
       "Primary loop pressure. Raises the boiling point, so it directly buys thermal margin.","prs"],
     ["SUBCOOLING",sc.toFixed(1),"K",sc<8?C.red:C.cyan,
       "Degrees below boiling in the hot leg. The honest leak indicator - it collapses before anything else admits the loop is voiding.","sub"],
@@ -281,7 +287,7 @@ function drawLedger(y0){
   });
   well(384,y0,364,LH,"SECONDARY INDICATIONS");
   const dn=(s.n-lastN)/0.05; lastN=s.n;
-  const per=Math.abs(dn)<1e-4?Infinity:s.n/dn, dev=s.Tavg-(565+18*s.load);
+  const per=Math.abs(dn)<1e-4?Infinity:s.n/dn, dev=s.Tavg-tProg(s);
   const rows2=[
     ["PERIOD",(isFinite(per)&&Math.abs(per)<999?per.toFixed(0):"INF")+" s",null,
      "How many seconds it takes power to multiply by 2.7x at the current rate. Infinity means steady. A short positive period means power is running away from you; under about 10 seconds you are in trouble."],
@@ -290,7 +296,7 @@ function drawLedger(y0){
     ["XENON WORTH",s.parts.xe.toFixed(0)+" pcm","xe",
      "Current xenon poison in pcm. At equilibrium it sits near -2700. After a shutdown it deepens toward -4800 over about eighty seconds, and that is the window where you cannot restart."],
     ["FUEL DAMAGE",s.dmg.toFixed(1)+" %","dmg",
-     "Percentage of fuel cladding that has failed. Permanent. It accumulates whenever DNBR drops below 1.00 or fuel temperature exceeds 1600 K."],
+     "Percentage of fuel cladding that has failed. Permanent. It accumulates whenever DNBR drops below 1.00 or fuel temperature exceeds 1500 K."],
     ["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %","fat",
      "Permanent metal damage from thermal shock, mostly caused by emergency injection dumping cold water into a hot vessel. The safe action has a long-term bill, and it never resets."],
     ["NAT CIRCULATION",(s.nat*100).toFixed(0)+" %",null,
