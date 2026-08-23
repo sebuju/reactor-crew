@@ -77,6 +77,58 @@ function ctrlInspector(y0){
     row(X[2],2,"RADIAL OFFSET",(s.ro*100).toFixed(0)+" %",Math.abs(s.ro)>.35?C.amber:C.cyan);
     row(X[2],3,"AXIAL OFFSET",(s.ao*100).toFixed(0)+" %",Math.abs(s.ao)>.35?C.amber:C.cyan);
     TIP(X[2],Y0,W2,84,"TILT TRIM","Drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart, so it is the one handle you have on a radial xenon tilt. Radial offset is what the flux field is actually doing about it. The trim slider is on the rod drives.");
+
+    /* ── the T-avg controller's own tune ──
+       Four numbers that decide where the bank readouts above end up, so they sit
+       under them. Everything is read off S every frame: these are live settings
+       the operator is allowed to get wrong, not a commissioning snapshot. */
+    rule("T-AVG CONTROLLER",X[0],Y0+84,W2);
+    const tune=(i,lab,val,min,max,disp,fn,tt,tb)=>{
+      const ly=Y0+96+i*25;
+      txt(lab,X[0],ly,{size:8,sp:1.1,color:C.ink2});
+      txt(disp,X[0]+W2,ly,{size:9.5,align:"right",color:C.cyan});
+      slider(X[0],ly+11,W2,val,min,max,{th:14,tw:9,ticks:false,fn});
+      TIP(X[0],ly-9,W2,25,tt,tb);
+    };
+    /* One body for both ends of the band, because the fact is about the band. */
+    const limTip="How far the T-avg controller may walk the rods, as a fraction inserted. Widening it hands the controller more authority and leaves you less shutdown margin - the band is what keeps the bank near the position that margin was measured from. It does NOT free the bank from the controller: only the AUTO ROD bypass, or switching a bank to MANUAL while the banks are split, does that. The two ends clamp against each other, so the band cannot be turned inside out.";
+    tune(0,"CTRL GAIN",s.arGain,0,4*AUTOROD_GAIN,
+      (s.arGain/AUTOROD_GAIN).toFixed(2)+" x",v=>S.arGain=v,"CONTROLLER GAIN",
+      "How hard the controller pushes for a given temperature error, against the commissioning tune of 1.00x. Above about 0.25x the drives are already moving as fast as they can at "+(ROD_RATE*100).toFixed(1)+" %/s, so more gain buys nothing - the drives are the limit, not the controller. Below that it genuinely trades response against overshoot.");
+    tune(1,"CTRL LEAD",s.arLead,0,40,s.arLead.toFixed(0)+" s",v=>S.arLead=v,
+      "CONTROLLER LEAD",
+      "The term that stops the controller pushing once temperature is already coming back, by adding "+s.arLead.toFixed(0)+" seconds of the current rate of change to the error. Set it to zero and the bank hunts, the swing grows, and the plant trips itself on HIGH FLUX. That was measured on this model, not guessed.");
+    tune(2,"AUTO LIMIT OUT",s.arLo*100,0,100,(s.arLo*100).toFixed(0)+" %",
+      v=>S.arLo=Math.min(v/100,S.arHi),"AUTO LIMIT / RODS OUT",limTip);
+    tune(3,"AUTO LIMIT IN",s.arHi*100,0,100,(s.arHi*100).toFixed(0)+" %",
+      v=>S.arHi=Math.max(v/100,S.arLo),"AUTO LIMIT / RODS IN",limTip);
+
+    /* ── who is actually driving each bank ──
+       AUTO/MANUAL is remembered through a gang and a split, so without this
+       table a bank can sit in MANUAL with nothing on the panel admitting it.
+       IDLE rather than a dimmed AUTO for a bank the controller cannot reach:
+       AUTO is already drawn dim, so dimming it further says nothing. */
+    rule("ROD BANKS",X[2],Y0+88,W2);
+    const mode=s.reGang?"GANGING":s.split?"SPLIT":"GANGED";
+    txt("DRIVE MODE",X[2],Y0+102,{size:8,sp:1.1,color:C.ink2});
+    txt(mode,X[2]+W2,Y0+102,{size:9.5,align:"right",color:s.split?C.amber:C.ink2});
+    fillRect(X[2],Y0+107,W2,1,"rgba(120,180,190,.07)");
+    txt("BANK",X[2],Y0+120,{size:6.5,sp:.8,color:C.ink2});
+    txt("POS",X[2]+90,Y0+120,{size:6.5,sp:.8,align:"right",color:C.ink2});
+    txt("DEM",X[2]+130,Y0+120,{size:6.5,sp:.8,align:"right",color:C.ink2});
+    txt("STATE",X[2]+W2,Y0+120,{size:6.5,sp:.8,align:"right",color:C.ink2});
+    for(let b=0;b<P.NB;b++){
+      const yy=Y0+134+b*16;
+      const st=!s.bankAuto[b]?"MAN":bankAutoLive(b)?"AUTO":"IDLE";
+      txt("B"+(b+1),X[2],yy,{size:8,sp:1.1,color:C.ink2});
+      txt((s.rodZ[b]*100).toFixed(0)+" %",X[2]+90,yy,{size:10,align:"right",color:C.cyan});
+      txt((s.rodZDem[b]*100).toFixed(0)+" %",X[2]+130,yy,{size:8.5,align:"right",
+          color:Math.abs(s.rodZDem[b]-s.rodZ[b])>.005?C.amber:C.ink2});
+      txt(st,X[2]+W2,yy,{size:8,sp:1.1,align:"right",color:st==="MAN"?C.amber:C.ink2});
+      fillRect(X[2],yy+5,W2,1,"rgba(120,180,190,.07)");
+    }
+    TIP(X[2],Y0+88,W2,60+P.NB*16,"ROD BANKS",
+      "Where each bank stands and who is driving it. AUTO is the T-avg controller, MAN is you. That setting is remembered through a gang and a split, so a bank you took to MANUAL is still MANUAL the next time you split - which is the only reason this table exists. IDLE means the bank is on AUTO but the controller cannot reach it at all: bypassed, jammed, or held by a latched trip. Splitting does not divide the temperature error between the banks - every bank left on AUTO gets all of it, so fewer banks answering means less worth against the same error and a slower loop.");
     row(X[3],0,"PERIOD",(()=>{const dn=(s.n-lastN)/0.05; lastN=s.n;
       const pr=Math.abs(dn)<1e-4?Infinity:s.n/dn;
       return (isFinite(pr)&&Math.abs(pr)<999?pr.toFixed(0):"INF")+" s";})());

@@ -24,8 +24,13 @@ function drawSym(p,x,y,w,h,ink,L){
     coreField(bx+2,by+2,bw-4,bh-4,coreView(L));
   } else if(id==="rods"){
     shell(()=>ctx.rect(X+8,Y+2,W-16,Hh-10));
-    const ins = L? 4+L.rodPos*9 : 6, fol = L&&P&&P.tipLen>0;
-    for(let i=0;i<5;i++){ const sx=X+12+i*((W-24)/5);
+    /* One stem per bank on a live plant, each at its own insertion: split banks
+       are not in the same place, and five identical stems drawn from the mean
+       would be exactly the lie the split mode exists to expose. The bench has no
+       banks standing anywhere yet, so it keeps its five even drives. */
+    const nb = L&&L.rodZ? P.NB : 5, fol = L&&P&&P.tipLen>0, step=(W-24)/nb;
+    for(let i=0;i<nb;i++){ const sx=X+12+i*step,
+          ins = L? 4+clamp(L.rodZ? L.rodZ[i] : L.rodPos,0,1)*9 : 6;
       fillRect(sx,Y+Hh-10,4,ins,(L&&L.rodJam)?"#8a7a4a":"#b9cdd2");
       if(fol) fillRect(sx,Y+Hh-10+ins,4,3,P.tipRho>0?C.graph:C.rail);  // the follower
     }
@@ -172,6 +177,16 @@ const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly
    pixel - unusable. Each row is CTL_H tall and the grid row underneath the
    component grows to fit them all, so a slider gets the whole component width. */
 const CTL_H=13;
+/* SCRAM and RESET are the same pair whether the banks are ganged or split, and
+   they are the controls you reach for without looking, so the row is built once
+   and both modes push the same object. Two copies would drift. */
+const ROD_TRIP_ROW=[
+  {kind:"btn",flex:1,danger:()=>true,text:()=>"SCRAM",
+   fn:()=>{ manualScram(); },
+   tip:"SCRAM - drops every bank, split or not, and trips the turbine with it. Always safe, never free: the xenon that follows locks you out for minutes."},
+  {kind:"btn",flex:1,on:()=>S.scrammed,text:()=>"RESET",
+   fn:()=>{ resetTrip(); },
+   tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}];
 function ctlFor(p){
   if(p.id.startsWith("pump")) return [[
     /* the floor is a trip setpoint, not a stop: the panel may order the pumps
@@ -181,21 +196,45 @@ function ctlFor(p){
      fmt:v=>v.toFixed(0)+" %",set:v=>{S.flowDem=v/100;},
      tip:"COOLANT PUMPS - "+pumpTip()}]];
   switch(p.id){
-    case "rods": return [
-     [{kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
-       fmt:v=>v.toFixed(0)+" %",set:v=>{S.rodDem=v/100;},
-       tip:"CONTROL BANK - rod insertion. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."}],
-     [{kind:"btn",flex:1,danger:()=>true,text:()=>"SCRAM",
-       fn:()=>{ manualScram(); },
-       tip:"SCRAM - drops the full bank and trips the turbine with it. Always safe, never free: the xenon that follows locks you out for minutes."},
-      {kind:"btn",flex:1,on:()=>S.scrammed,text:()=>"RESET",
-       fn:()=>{ resetTrip(); },
-       tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}],
-     /* the one handle on a radial xenon tilt: it stands the inner banks against
-        the outer ones instead of moving the whole bank together */
-     [{kind:"sld",flex:1,val:()=>S.tilt,min:()=>-1,max:()=>1,dem:()=>S.tiltDem,
-       fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{S.tiltDem=v;},
-       tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. It is the only handle you have on a radial xenon tilt, and full travel takes "+(1/TILT_RATE).toFixed(0)+" s because the drives moving it are the drives that move the bank."}]];
+    /* Two modes, one component. GANGED the plant has a single bank and the tilt
+       slider is the only handle on the shape; SPLIT, the per-bank demands ARE
+       that handle, so the tilt slider stands down and each bank takes a row of
+       its own with its own AUTO switch. Ganged is held to exactly three rows,
+       because that is the height the default plant's grid was measured with. */
+    case "rods": {
+      const bankRow=b=>[
+       {kind:"btn",flex:1,on:()=>!S.bankAuto[b],text:()=>S.bankAuto[b]?"AUT":"MAN",
+        fn:()=>{ S.bankAuto[b]=!S.bankAuto[b]; },
+        tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank goes exactly where you put it and stays there through everything short of a scram. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
+       {kind:"sld",flex:2.8,val:()=>S.rodZ[b]*100,min:()=>0,max:()=>100,
+        dem:()=>S.rodZDem[b]*100,
+        fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",set:v=>{S.rodZDem[b]=v/100;},
+        tip:"BANK "+(b+1)+" - insertion of this bank alone. While the banks are split these per-bank demands are the tilt handle: standing one bank against another is the whole of how you answer a radial xenon tilt here. A bank left on MANUAL is not answering the temperature controller at all, and the fewer banks on AUTO, the less rod worth is left to answer the same error - the loop gets slower, not just smaller."}];
+      if(S.split){
+        const rows=[[{kind:"btn",flex:1,on:()=>S.reGang,
+          text:()=>S.reGang?"GANGING..":"BANK GANG",
+          /* already a no-op once the walk is running: setSplit() refuses to
+             re-seed a gang it is in the middle of */
+          fn:()=>{ setSplit(false); },
+          tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close."}]];
+        for(let b=0;b<P.NB;b++) rows.push(bankRow(b));
+        rows.push(ROD_TRIP_ROW);
+        return rows;
+      }
+      return [
+       [{kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
+         fmt:v=>v.toFixed(0)+" %",set:v=>{S.rodDem=v/100;},
+         tip:"CONTROL BANK - rod insertion, every bank together. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."}],
+       ROD_TRIP_ROW,
+       /* the ganged handle on a radial xenon tilt: it stands the inner banks
+          against the outer ones instead of moving the whole bank together */
+       [{kind:"sld",flex:2.8,val:()=>S.tilt,min:()=>-1,max:()=>1,dem:()=>S.tiltDem,
+         fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{S.tiltDem=v;},
+         tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. Full travel takes "+(1/TILT_RATE).toFixed(0)+" s because the drives moving it are the drives that move the bank. It is your tilt handle only while the banks are ganged - split them and each bank's own demand takes over."},
+        {kind:"btn",flex:1,text:()=>"SPL",
+         fn:()=>{ setSplit(true); },
+         tip:"SPLIT BANKS - stops driving the banks as one and gives each its own demand. Splitting is bumpless by construction: every bank simply adopts where it already stands. From there the tilt slider stands down, the per-bank sliders are your tilt handle, and any bank you switch to MANUAL stops answering the temperature controller."}]];
+    }
     case "core": return [
      [{kind:"sld",flex:1,val:()=>S.boron,min:()=>-6000,max:()=>0,step:10,
        dem:()=>S.boronDem,
@@ -280,8 +319,12 @@ function ctlStrip(list,x,y,w,h){
         {th:h,tw:7,ticks:false,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,
          fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
       /* the readout sits at whichever end the thumb is not, or the opaque plate
-         hides the very thing you are dragging */
-      if(cw>=64){ const lw=tw(lab,{size:6.5}),
+         hides the very thing you are dragging.
+         The gate is measured rather than picked: it used to be cw>=64, a number
+         standing in for "the label is narrower than the track". It stopped being
+         true the moment a slider carried a label that was not a bare percentage,
+         so ask the label how wide it is - plate plus a 3px margin at each end. */
+      if(cw >= tw(lab,{size:6.5})+16){ const lw=tw(lab,{size:6.5}),
             far=(c.val()-c.min())/(c.max()-c.min()) > .5;
         tag(lab, far? cx+lw/2+3 : cx+cw-lw/2-3, midBase(y,h,6.5), 6.5,0,C.cyan); }
     } else {
