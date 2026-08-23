@@ -38,3 +38,13 @@ function wrapCount(s,maxw,o){
 }
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const pad=(v,n)=>String(v).padStart(n," ");
+
+/* ─────────────── label placement ───────────────
+   Every small label used to be positioned by a hand-tuned magic number, and each
+   number had been tuned against a different font size, so a 6.5px label in a 10px
+   box sat a pixel low while an 8px one in an 8px box poked out of the top. Cap
+   height is a fixed share of the em in this mono stack, so one helper places them
+   all: midBase() returns the baseline that optically centres CAPS in a box. */
+const CAP=0.72;                                     // cap height / em
+const capH    = size       => size*CAP;
+const midBase = (y,h,size) => y+h/2+size*CAP/2;

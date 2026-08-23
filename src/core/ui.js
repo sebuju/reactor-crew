@@ -41,7 +41,7 @@ function button(x,y,w,h,label,o){
   fillRect(x,y,w,h, o.on?"#2a1f08":(o.danger?"#2a0f0b":(h_?C.panelHi:C.panel)));
   frame(x,y,w,h,col);
   if(o.on||o.danger) ticks(x+.5,y+.5,w-1,h-1,col,4);
-  txt(label,x+w/2,y+h/2+3.5,{size:o.size||9,sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
+  txt(label,x+w/2,midBase(y,h,o.size||9),{size:o.size||9,sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
       color:o.danger?C.red:o.on?C.amber:(h_?C.bright:C.ink)});
   return wd;
 }
@@ -49,22 +49,36 @@ function button(x,y,w,h,label,o){
    left out, they give the bench sizes exactly as before */
 function slider(x,y,w,val,min,max,o){
   o=o||{}; const th=o.th||22, tw_=o.tw||10;
-  const wd=push({x,y:y-th/2-2,w,h:th+4,type:"sld",min,max,fn:o.fn});
+  const wd=push({x,y:y-th/2-2,w,h:th+4,type:"sld",min,max,fn:o.fn,
+                 cy:y,val,tw_});     // cy/val/tw_ are what the drag handler needs
   fillRect(x,y-3,w,6,C.well); frame(x,y-3,w,6,C.edge);
   if(o.ticks!==false) for(let i=0;i<=8;i++) fillRect(x+i*(w/8), y+6, 1, 3, C.edge2);
-  const t=(val-min)/(max-min), tx=x+t*w;
+  /* clamp t, or a value outside the range draws the thumb off the end of its track */
+  const t=clamp((val-min)/(max-min),0,1), tx=x+t*w;
+  wd.tx=tx;
   fillRect(x,y-3,t*w,6,"#1d3a41");
-  /* demand marker: with a rate limit the thumb shows where the plant IS, not
-     where you dragged to. The 1px line is where you asked for. */
-  if(o.dem!=null){ const dt_=clamp((o.dem-min)/(max-min),0,1);
-    fillRect(x+dt_*w-0.5,y-th/2,1,th,C.amber); }
-  fillRect(tx-tw_/2,y-th/2,tw_,th,C.amber);
-  fillRect(tx-1,y-th/2+4,2,th-8,"#2a1f08");
+  /* two 1px markers ride the same track, so they share one closure.
+     o.mark is a fixed setpoint the slider is ALLOWED to cross - crossing it
+     costs something, and the line is drawn so it is never a surprise.
+     o.dem is where you dragged to: with a rate limit the thumb shows where
+     the plant IS, not what you asked for. */
+  const tick=(v,col)=>fillRect(x+clamp((v-min)/(max-min),0,1)*w-0.5,y-th/2,1,th,col);
+  if(o.mark!=null) tick(o.mark,C.red);
+  if(o.dem!=null)  tick(o.dem,C.amber);
+  const thx=clamp(tx-tw_/2,x,x+w-tw_);            // the thumb stays on its own track
+  fillRect(thx,y-th/2,tw_,th,C.amber);
+  fillRect(thx+tw_/2-1,y-th/2+4,2,th-8,"#2a1f08");
   return wd;
 }
 function local(e){ const r=cv.getBoundingClientRect();
   return {x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)}; }
 const valFrom=(w,x)=>w.min+clamp((x-w.x)/w.w,0,1)*(w.max-w.min);
+/* A control mounted inside a component is only as wide as the component, and the
+   rod bank gets 84px for a full 0..100% stroke. So the drag is relative and
+   geared: pull away from the track and the same hand movement buys less travel,
+   the way a fader does. Grabbing the thumb never jumps the value; pressing the
+   bare track still does, because that is how you get somewhere fast. */
+const sldGain = dy => 1/(1+Math.max(0,Math.abs(dy)-24)/16);
 
 cv.addEventListener("pointerdown",e=>{
   cv.setPointerCapture(e.pointerId); const p=local(e); ui.ptr=p;
@@ -78,7 +92,11 @@ cv.addEventListener("pointerdown",e=>{
       if(screen==="design") ui.drag={type:"part",part:w.part,
         ox:p.x-(GX+w.part.x*CELL), oy:p.y-(GY+w.part.y*CELL),
         sx:w.part.x, sy:w.part.y}; }
-    else if(w.type==="sld"){ ui.drag=w; w.fn(valFrom(w,p.x)); }
+    else if(w.type==="sld"){ ui.drag=w;
+      const onThumb=Math.abs(p.x-w.tx)<=w.tw_/2+3;
+      w.gv = onThumb ? w.val : valFrom(w,p.x);    // gv is the running command value
+      w.gx = p.x;
+      if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
     else if(w.type==="scroll"){ ui.drag=w; w.last=p.y; }
     return; }
@@ -89,7 +107,11 @@ cv.addEventListener("pointermove",e=>{
   if(ui.drag){ if(ui.drag.type==="part"){ const d=ui.drag;
       const nx=Math.round((p.x-d.ox-GX)/CELL), ny=Math.round((p.y-d.oy-GY)/CELL);
       if((nx!==d.part.x||ny!==d.part.y)&&fits(d.part,nx,ny)){ d.part.x=nx; d.part.y=ny; } }
-    else if(ui.drag.type==="sld") ui.drag.fn(valFrom(ui.drag,p.x));
+    else if(ui.drag.type==="sld"){ const d=ui.drag;
+      /* integrate rather than re-derive, so moving away from the track changes
+         the gearing from here on instead of jumping the value */
+      d.gv=clamp(d.gv+(p.x-d.gx)/d.w*(d.max-d.min)*sldGain(p.y-d.cy),d.min,d.max);
+      d.gx=p.x; d.fn(d.gv); }
     else { helpScroll=clamp(helpScroll-(p.y-ui.drag.last),0,helpMax); ui.drag.last=p.y; } }
   cv.style.cursor=ui.prev.some(w=>inside(w,p))?"pointer":"default";
 });
