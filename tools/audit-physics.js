@@ -5,6 +5,7 @@
      2. the documented behaviours in .claude/CLAUDE.md still hold
    Usage:  node tools/audit-physics.js
 */
+const {execFileSync}=require('child_process');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
  'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
@@ -19,21 +20,34 @@ const bad=m=>{ console.log('  FAIL '+m); fails++; };
 
 /* With automatic rod control fitted, a plant nobody touches must hold. Without it
    the bank never moves, so xenon walks the core off its start point over the
-   compressed clock and an eventual trip is the player's problem, not a bug. */
+   compressed clock and an eventual trip is the player's problem, not a bug.
+
+   The ticks live in tools/sweep.js, which spreads them over every core - they
+   were 93% of this auditor's runtime on one thread. It hands back raw results
+   and this block is still the only place that says what they mean. */
 console.log('=== UNTOUCHED PLANT WITH AUTO ROD CONTROL MUST NOT TRIP ITSELF (600 s) ===');
-let cases=0;
-for(let a=0;a<ARCH.length;a++)
-for(let f=0;f<FUEL.length;f++)
-for(const pumps of [0,1,2])
-for(const scram of [0,1,2]){
-  const s=set({arch:a,fuel:f,pumps,scram,autorod:true});
-  if(M.derived().warn.some(w=>w[0]==='HARD')) continue;   // bench would block this build
-  cases++;
-  run(s,600);
-  if(s.scrammed) bad(`${ARCH[a].id}/${FUEL[f].name}/${PUMPS[pumps].name}/${SCRAM[scram].name}`+
-                     ` tripped at t=${s.t.toFixed(1)}s: ${s.trip}`);
+{ const sw=JSON.parse(execFileSync(process.execPath,[require.resolve('./sweep')],
+                                   {maxBuffer:1<<24}).toString());
+  let cases=0, sims=0;
+  for(const g of sw.groups){
+    cases+=g.built.length;
+    if(!g.built.length) continue;
+    sims++;
+    if(g.trip) bad(`${ARCH[g.a].id}/${FUEL[g.f].name}/${PUMPS[g.p].name}/${SCRAM[g.scram].name}`+
+                   ` tripped at t=${g.t.toFixed(1)}s: ${g.trip}`);
+  }
+  /* Why sims < cases: the scram system is the one design axis that cannot
+     change an untouched plant, because P.scram is only read once the plant has
+     scrammed and the assertion above is that it never does. The sweep still
+     asks the bench about every scram choice - a heavier one can break the mass
+     budget - but simulates each group once. This is the check that keeps that
+     true: the group below was run at all three settings anyway. */
+  const g=sw.groups.find(x=>x.guard);
+  if(!g) bad('the sweep ran no scram-equivalence guard, so sharing a run per group is unproven');
+  else if(new Set(g.guard).size!==1)
+    bad('scram choice now changes an untouched plant - sweep.js must stop sharing one run per group');
+  console.log(`  ${cases} buildable designs checked, ${sims} distinct plants simulated on ${sw.workers} threads`);
 }
-console.log(`  ${cases} buildable designs checked`);
 
 console.log('\n=== DOCUMENTED BEHAVIOUR ===');
 { const s=set({}); run(s,60);

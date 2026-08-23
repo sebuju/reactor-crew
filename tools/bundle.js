@@ -8,9 +8,14 @@ function scriptPaths(){
   return [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m => m[1]);
 }
 
-/* every script concatenated in load order, exactly as the browser sees it */
+/* every script concatenated in load order, exactly as the browser sees it.
+   Memoised: audit-geometry asks for the source and then for a headless plant,
+   which is nineteen files read twice to build one identical string. */
+let bundleSrc = null;
 function bundle(){
-  return scriptPaths().map(p => fs.readFileSync(path.join(ROOT, p), 'utf8')).join('\n');
+  if(bundleSrc === null)
+    bundleSrc = scriptPaths().map(p => fs.readFileSync(path.join(ROOT, p), 'utf8')).join('\n');
+  return bundleSrc;
 }
 
 /* Run the whole page headless.
