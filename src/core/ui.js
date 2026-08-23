@@ -201,6 +201,11 @@ cv.addEventListener("pointerdown",e=>{
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
     else if(w.type==="scroll"){ ui.drag=w; w.last=p.y; }
+    /* A drawing surface. Painting wants press-drag-release, which nothing else
+       here does: a btn fires on press and a sld owns the drag outright. So a
+       lat widget gets the pointer for as long as it is held and is handed the
+       raw point, and it works out for itself which cell that is. */
+    else if(w.type==="lat"){ ui.drag=w; w.last=null; w.fn(p,e); }
     return; }
 });
 cv.addEventListener("pointermove",e=>{
@@ -212,6 +217,7 @@ cv.addEventListener("pointermove",e=>{
          the nearest row rather than the row it is merely touching */
       const ny=rowAt(p.y-d.oy+CELL/2);
       if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
+    else if(ui.drag.type==="lat"){ ui.drag.fn(p,e); }
     else if(ui.drag.type==="sld"){ const d=ui.drag;
       /* integrate rather than re-derive, so moving away from the track changes
          the gearing from here on instead of jumping the value */
