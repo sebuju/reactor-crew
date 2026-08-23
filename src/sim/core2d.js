@@ -25,6 +25,14 @@ const SOR_SWEEPS=6, SOR_OM=1.5;
    travels before the rest of the core notices. XPG is how hard burnable
    poison grades toward the centre. XRINF is how many rings one bank reaches. */
 const XCOUP=1.0, XPG=0.9, XRINF=2.2;
+/* How far apart the tilt trim can stand the innermost and outermost banks, as a
+   share of core height. Measured, not picked: the radial offset a load transient
+   swings on its own is ~3.5 points, and the trim has to be able to answer a real
+   part of that or it is decoration. 0.15 bought 0.8 points, 0.30 buys 1.5. Past
+   0.35 the outer bank hits full withdrawal, the trim saturates and the response
+   stops being monotonic, so this is the knee and not a free dial. */
+const XTILTZ=0.30;
+const XDRY=0.015;    // the least cooling the fuel-temperature correlation will assume
 
 /* volume weights: ring i is an annulus, so it is worth 2i+1 unit cells */
 const ringW=new Float64Array(XNR), nodeW=new Float64Array(XNN);
@@ -76,6 +84,15 @@ function coreConst(T,d){
   T.NB=D.nbank; T.bankR=[];
   for(let b=0;b<T.NB;b++) T.bankR.push(Math.round(Math.sqrt((b+.5)/T.NB)*(XNR-1)));
   T.rinf=Math.max(XRINF,XNR/T.NB);
+  /* Tilt weight per bank: +1 on the centreline falling to -1 at the outer bank,
+     centred so the weights sum to zero. That last part is what makes it a tilt
+     rather than a bank move - an off-centre set would insert net reactivity, the
+     T-avg controller would walk the bank back to cancel it, and the trim would
+     end up shifting the flux almost nowhere. Banks spread by AREA, so a plain
+     inner/outer flip put three of four banks on the same side. */
+  { const rm=T.bankR.reduce((a,r)=>a+r,0)/T.NB;
+    const sp=Math.max(...T.bankR.map(r=>Math.abs(r-rm)));
+    T.bankW=T.bankR.map(r=> sp>1e-9 ? -(r-rm)/sp : 0); }   // one bank cannot tilt anything
 
   const fo=FOLL[D.foll];
   T.tipRho=fo.tipRho; T.tipLen=fo.tipLen; T.follName=fo.name;
@@ -189,7 +206,7 @@ function coreReset(s){
   s.nCov=new Float64Array(XNN); s.nFol=new Float64Array(XNN);
   s.chW =new Float64Array(XNR).fill(1);
   s.rodZ=new Float64Array(P.NB).fill(s.rodPos);
-  s.tilt=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
+  s.tilt=0; s.tiltDem=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
   s.hotFlow=1; s.tipRho=0;
   for(let k=0;k<XNN;k++){
     s.xI[k]=P.gI*P.n0/P.lamI; s.xX[k]=P.X0;
@@ -219,14 +236,11 @@ function coreRodWorth(s){
    step() has already worked out the loop conditions; this spends them node by
    node and hands back the flux-weighted reactivity that point kinetics needs.
    The field it leaves behind is what the renderer draws. */
-function coreStep(s,dt,feff,heat,sat,vLeak){
+function coreStep(s,dt,feff,heat,sat,vLeak,mflux){
   /* banks follow the master demand, biased by the tilt trim. Trim moves inner
      and outer banks opposite ways, and it is the only handle the operator has
      on a radial xenon tilt. */
-  for(let b=0;b<P.NB;b++){
-    const inner=P.bankR[b]<(XNR-1)/2 ? 1 : -1;
-    s.rodZ[b]=clamp(s.rodPos+inner*0.15*s.tilt,0,1);
-  }
+  for(let b=0;b<P.NB;b++) s.rodZ[b]=clamp(s.rodPos+P.bankW[b]*XTILTZ*s.tilt,0,1);
 
   /* ── parallel channels: steam costs pressure drop, so a voiding channel
         loses the very flow it needed to stop voiding. That runaway is what
@@ -254,7 +268,11 @@ function coreStep(s,dt,feff,heat,sat,vLeak){
 
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
-    const fRing=Math.max(feff*s.chW[i],0.02);
+    /* XDRY is the smallest cooling the correlation will pretend exists. It used
+       to be 0.10 in the fuel-temperature line below, which quietly capped an
+       uncovered core at a few tens of kelvin above its coolant and made a dry
+       core impossible to damage. It never binds on a plant that has water. */
+    const fRing=Math.max(feff*s.chW[i],XDRY);
     let ringP=0; for(let j=0;j<XNZ;j++) ringP+=s.phi[XIX(i,j)];
     ringP=Math.max(ringP,1e-6);
     /* Rise across THIS channel. The core-average rise is already paid for by
@@ -278,8 +296,12 @@ function coreStep(s,dt,feff,heat,sat,vLeak){
       vCh=Math.max(vCh,clamp(boil*clamp(s.n*pw/fRing,0,2.5)*0.5,0,1));
       s.nVt[k]=vCh;
 
-      const TfT=s.nTc[k]+320*P.condK*((s.n*0.935+s.decay)*pw/pk2)/Math.max(fRing,.10)
-                *(1+4.0*s.nV[k]);
+      /* UO2 melts at about 3120 K. Past that the pellet is a puddle and its
+         "temperature" stops being a number the plant can act on, so the
+         correlation is capped there rather than being allowed to report the
+         six thousand kelvin that dividing by a dry channel produces. */
+      const TfT=Math.min(3200, s.nTc[k]+320*P.condK*((s.n*0.935+s.decay)*pw/pk2)/fRing
+                *(1+4.0*s.nV[k]));
       s.nTf[k]+=(TfT-s.nTf[k])*dt/4;
 
       /* local xenon on local flux. A node running hard burns its own poison
@@ -311,7 +333,11 @@ function coreStep(s,dt,feff,heat,sat,vLeak){
     let raw=0; for(let k=0;k<XNN;k++) raw+=nodeW[k]*s.nVt[k];
     const sc=raw>1e-4 ? clamp(vLump/raw,0,6) : (vLump>1e-4?6:0);
     for(let k=0;k<XNN;k++){
-      const vT=Math.max(Math.min(s.nVt[k]*sc,1),vLeak);
+      /* A void fraction is a fraction: a node can be all steam and no more.
+         vLeak runs past 1 on purpose - s.vf uses the overshoot to say HOW far
+         past empty the loop is - but the node field is a real fraction, and
+         letting 3.8 through here multiplied fuel temperature by seventeen. */
+      const vT=clamp(Math.max(Math.min(s.nVt[k]*sc,1),vLeak),0,1);
       s.nV[k]+=(vT-s.nV[k])*dt/1.5;
     }
   }
@@ -339,7 +365,10 @@ function coreStep(s,dt,feff,heat,sat,vLeak){
   s.ao=(top-bot)/Math.max(top+bot,1e-6);
   s.ro=(inn-out)/Math.max(inn+out,1e-6);
   s.X=X; s.I=I; s.Tf=Tf; s.vNode=V; s.tipRho=o.tip;
-  /* the hot channel is what burns out, not the core average */
-  s.hotFlow=Math.max(feff*s.chW[s.hotRing],0.02);
+  /* The hot channel is what burns out, not the core average - and burnout is a
+     question of how fast the water is moving past the pin, not of how much heat
+     left the loop. Those two are the same number while the pumps are running and
+     nothing like it once they stop, so this reads mass flux, never feff. */
+  s.hotFlow=Math.max(mflux*s.chW[s.hotRing],0.02);
   return o;
 }
