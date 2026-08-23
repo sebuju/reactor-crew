@@ -86,24 +86,28 @@ function ctrlInspector(y0){
        under them. Everything is read off S every frame: these are live settings
        the operator is allowed to get wrong, not a commissioning snapshot. */
     rule("T-AVG CONTROLLER",X[0],Y0+84,W2);
-    const tune=(i,lab,val,min,max,disp,fn,tt,tb)=>{
+    /* fmt is a formatter, not a formatted string, because the number above the
+       slider has to be able to show the value a hover WOULD set as well as the
+       one the plant has */
+    const tune=(i,lab,val,min,max,fmt,fn,tt,tb)=>{
       const ly=Y0+96+i*25;
       txt(lab,X[0],ly,{size:8,sp:1.1,color:C.ink2});
-      txt(disp,X[0]+W2,ly,{size:9.5,align:"right",color:C.cyan});
-      slider(X[0],ly+11,W2,val,min,max,{th:14,tw:9,ticks:false,fn});
+      const wd=slider(X[0],ly+11,W2,val,min,max,{th:14,tw:9,fn});
+      const r=sldRead(wd,fmt);
+      txt(r.s,X[0]+W2,ly,{size:9.5,align:"right",color:r.col});
       TIP(X[0],ly-9,W2,25,tt,tb);
     };
     /* One body for both ends of the band, because the fact is about the band. */
     const limTip="How far the T-avg controller may walk the rods, as a fraction inserted. Widening it hands the controller more authority and leaves you less shutdown margin - the band is what keeps the bank near the position that margin was measured from. It does NOT free the bank from the controller: only the AUTO ROD bypass, or switching a bank to MANUAL while the banks are split, does that. The two ends clamp against each other, so the band cannot be turned inside out.";
     tune(0,"CTRL GAIN",s.arGain,0,4*AUTOROD_GAIN,
-      (s.arGain/AUTOROD_GAIN).toFixed(2)+" x",v=>S.arGain=v,"CONTROLLER GAIN",
+      v=>(v/AUTOROD_GAIN).toFixed(2)+" x",v=>S.arGain=v,"CONTROLLER GAIN",
       "How hard the controller pushes for a given temperature error, against the commissioning tune of 1.00x. Above about 0.25x the drives are already moving as fast as they can at "+(ROD_RATE*100).toFixed(1)+" %/s, so more gain buys nothing - the drives are the limit, not the controller. Below that it genuinely trades response against overshoot.");
-    tune(1,"CTRL LEAD",s.arLead,0,40,s.arLead.toFixed(0)+" s",v=>S.arLead=v,
+    tune(1,"CTRL LEAD",s.arLead,0,40,v=>v.toFixed(0)+" s",v=>S.arLead=v,
       "CONTROLLER LEAD",
       "The term that stops the controller pushing once temperature is already coming back, by adding "+s.arLead.toFixed(0)+" seconds of the current rate of change to the error. Set it to zero and the bank hunts, the swing grows, and the plant trips itself on HIGH FLUX. That was measured on this model, not guessed.");
-    tune(2,"AUTO LIMIT OUT",s.arLo*100,0,100,(s.arLo*100).toFixed(0)+" %",
+    tune(2,"AUTO LIMIT OUT",s.arLo*100,0,100,v=>v.toFixed(0)+" %",
       v=>S.arLo=Math.min(v/100,S.arHi),"AUTO LIMIT / RODS OUT",limTip);
-    tune(3,"AUTO LIMIT IN",s.arHi*100,0,100,(s.arHi*100).toFixed(0)+" %",
+    tune(3,"AUTO LIMIT IN",s.arHi*100,0,100,v=>v.toFixed(0)+" %",
       v=>S.arHi=Math.max(v/100,S.arLo),"AUTO LIMIT / RODS IN",limTip);
 
     /* ── who is actually driving each bank ──

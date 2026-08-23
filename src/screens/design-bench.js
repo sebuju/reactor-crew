@@ -40,8 +40,11 @@ function segSel(x,y,w,title,labels,key,tip,base){
 }
 function sliderF(x,y,w,title,key,min,max,fmt,tip,step,massFn){
   rule(title,x,y+9,w);
-  slider(x,y+28,w,D[key],min,max,{fn:v=>D[key]=step?Math.round(v/step)*step:v});
-  txt(fmt(D[key]),x+w,y+48,{size:10,align:"right",color:C.cyan});
+  const wd=slider(x,y+28,w,D[key],min,max,{fn:v=>D[key]=step?Math.round(v/step)*step:v});
+  /* this number is the slider's readout, it just lives in the panel rather than in
+     the row, so it answers a hover the same way a strip readout does */
+  const r=sldRead(wd,fmt);
+  txt(r.s,x+w,y+48,{size:10,align:"right",color:r.col});
   if(massFn){ const dm=massFn(D[key])-massFn(min);
     txt("+"+dm.toFixed(0)+"t",x,y+48,{size:9,color:dm<1?C.green:C.ink2}); }
   TIP(x,y-4,w,54,title,tip);

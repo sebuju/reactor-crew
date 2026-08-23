@@ -21,7 +21,6 @@ function drawTip(){
   if(isTouch){ if(touchTip && performance.now()<touchTip.until) t=touchTip; }
   else t=findTip(ui.ptr);
   if(!t) return;
-  ctx.setLineDash([2,2]); frame(t.x-1,t.y-1,t.w+2,t.h+2,C.amber); ctx.setLineDash([]);
   const maxw=248, ob={size:10,color:C.ink};
   const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=26+n*13;
   const ax = isTouch ? t.x+t.w/2 : ui.ptr.x, ay = isTouch ? t.y+t.h : ui.ptr.y;
@@ -38,36 +37,135 @@ function button(x,y,w,h,label,o){
   o=o||{}; const wd=push({x,y,w,h,type:"btn",fn:o.fn});
   const h_=hov(wd);
   const col = o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
-  fillRect(x,y,w,h, o.on?"#2a1f08":(o.danger?"#2a0f0b":(h_?C.panelHi:C.panel)));
-  frame(x,y,w,h,col);
-  if(o.on||o.danger) ticks(x+.5,y+.5,w-1,h-1,col,4);
-  txt(label,x+w/2,midBase(y,h,o.size||9),{size:o.size||9,sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
-      color:o.danger?C.red:o.on?C.amber:(h_?C.bright:C.ink)});
+  /* o.sunk is a key set INTO a lighter base, so it needs no border: it is already
+     a darker block against a lighter plinth, and the shape reads from the tone
+     step alone. Boxing it as well put a line round every one of a dozen keys in
+     a 46px component - the plant view read as a cage. Tone does the job, so the
+     frame and the corner ticks come off, and hover lifts the whole key instead
+     of brightening a hairline nobody was looking at. */
+  const base = o.sunk?C.well:C.panel, lift = o.sunk?C.panel:C.panelHi;
+  /* Danger is the one state drawn SOLID, dark text on full red, the way a lit
+     annunciator tile is. It used to be red text on a near-black block, which was
+     the quietest thing on a panel once the borders came off - and SCRAM is the
+     one key that must never be found by reading it. There are exactly two:
+     SCRAM and the one-shot boron dump. Both should stop your hand. */
+  fillRect(x,y,w,h, o.danger?(h_?"#ff7d6c":C.red):(o.on?"#2a1f08":(h_?lift:base)));
+  if(!o.sunk){
+    frame(x,y,w,h,col);
+    if(o.on) ticks(x+.5,y+.5,w-1,h-1,col,4);
+  }
+  txt(label,x+w/2,midBase(y,h,o.size||9),{size:o.size||9,weight:o.danger?700:o.weight,
+      sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
+      color:o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)});
   return wd;
 }
-/* o.th / o.tw shrink the thumb so the same slider fits inside a component;
-   left out, they give the bench sizes exactly as before */
+/* One rule for every readout attached to a slider: while the pointer is over the
+   track it shows what a click WOULD set, in amber; otherwise the value the plant
+   actually has, in cyan. Three callers share it - the strip readout below, the
+   bench and the controller tunables - so the preview cannot exist on one and not
+   the others. */
+function sldRead(wd,fmt){
+  return wd.pv!=null ? {s:fmt(wd.pv),col:C.amber} : {s:fmt(wd.val),col:C.cyan};
+}
+
+/* o.th sizes the widget; o.tw is the GRAB zone, not a drawn width - the indicator
+   is a hairline either way, so the thing you aim at stays wider than the thing you
+   see. o.fmt makes the slider draw its own readout, OUTSIDE the track.
+
+   The track is a bargraph, because every other bar on this plant is one. seg()
+   cannot draw it: a rate-limited control has THREE things to say, not two -
+   where the plant IS, where it is on its WAY to, and where it is not. */
 function slider(x,y,w,val,min,max,o){
   o=o||{}; const th=o.th||22, tw_=o.tw||10;
-  const wd=push({x,y:y-th/2-2,w,h:th+4,type:"sld",min,max,fn:o.fn,
+  /* Every edge of the indicator is rounded to whole layout units before it is
+     drawn. At th=13 the top of the strip lands on a half unit, and a 1-unit
+     serif drawn across a half unit is a 2-unit smear - which is what made the
+     indicator read as blunt and slightly lopsided. */
+  const t0=Math.round(y-th/2), t1=Math.round(y+th/2), hh=t1-t0;
+  /* The readout stands OUTSIDE the track. It used to be an opaque plate ON it,
+     and on an 84px strip it covered most of the bar it was labelling. The track
+     gives up the room instead. Width is measured at both ends of the range as
+     well as at the value, or the track would jiggle as digits come and go. */
+  const ro={size:6.5};
+  let rw = o.fmt ? Math.max(tw(o.fmt(min),ro),tw(o.fmt(max),ro),tw(o.fmt(val),ro))+5 : 0;
+  if(w-rw<24) rw=0;                  // no room for both: the bar wins
+  const tW=w-rw;
+  /* the widget is the TRACK, not the row - otherwise clicking the number would
+     slam the value to whatever the number's own x means */
+  const wd=push({x,y:y-th/2-2,w:tW,h:th+4,type:"sld",min,max,fn:o.fn,
                  cy:y,val,tw_});     // cy/val/tw_ are what the drag handler needs
-  fillRect(x,y-3,w,6,C.well); frame(x,y-3,w,6,C.edge);
-  if(o.ticks!==false) for(let i=0;i<=8;i++) fillRect(x+i*(w/8), y+6, 1, 3, C.edge2);
-  /* clamp t, or a value outside the range draws the thumb off the end of its track */
-  const t=clamp((val-min)/(max-min),0,1), tx=x+t*w;
-  wd.tx=tx;
-  fillRect(x,y-3,t*w,6,"#1d3a41");
-  /* two 1px markers ride the same track, so they share one closure.
-     o.mark is a fixed setpoint the slider is ALLOWED to cross - crossing it
-     costs something, and the line is drawn so it is never a surprise.
-     o.dem is where you dragged to: with a rate limit the thumb shows where
-     the plant IS, not what you asked for. */
-  const tick=(v,col)=>fillRect(x+clamp((v-min)/(max-min),0,1)*w-0.5,y-th/2,1,th,col);
-  if(o.mark!=null) tick(o.mark,C.red);
-  if(o.dem!=null)  tick(o.dem,C.amber);
-  const thx=clamp(tx-tw_/2,x,x+w-tw_);            // the thumb stays on its own track
-  fillRect(thx,y-th/2,tw_,th,C.amber);
-  fillRect(thx+tw_/2-1,y-th/2+4,2,th-8,"#2a1f08");
+  /* clamp t, or a value outside the range draws the indicator off its own track.
+     o.dem is what you asked for: with a rate limit the plant is not there yet.
+     o.mark is a setpoint the slider is ALLOWED to cross - crossing it costs
+     something, and it is drawn so it is never a surprise. */
+  const t=clamp((val-min)/(max-min),0,1);
+  wd.tx=x+t*tW;
+  const dem = o.dem==null ? t : clamp((o.dem-min)/(max-min),0,1);
+  /* Which SIDE of the mark costs you is the caller's business. A ceiling is red
+     above it; the pumps' design floor is red BELOW it, and drawing every mark as
+     a ceiling painted the whole safe half of an RCP bar red. Out-of-range
+     defaults sit off the end of the track on the harmless side. */
+  const lo_ = !!o.markLo;
+  const mk  = o.mark==null ? (lo_?-1:2) : clamp((o.mark-min)/(max-min),0,1);
+  const lo=Math.min(t,dem), hi=Math.max(t,dem), rising=dem>t;
+  /* has the plant crossed the mark, and has the order crossed it */
+  const viol = o.mark==null ? false : (lo_? t<mk   : t>mk);
+  const violD= o.mark==null ? false : (lo_? dem<mk : dem>mk);
+  /* What a click here would set. Only on the bare track: pressing the indicator
+     itself grabs it and changes nothing, and a DRAG is geared, so the pointer is
+     not the value once you are dragging - hov() already stands down for that. */
+  wd.pv = (hov(wd) && Math.abs(ui.ptr.x-wd.tx)>tw_/2+3) ? valFrom(wd,ui.ptr.x) : null;
+  /* one cell per ~5px: an 84px strip gets 17, a 240px bench gets 30 */
+  const n=clamp(Math.round(tW/5),6,30), cw=tW/n;
+  const bh=Math.min(10,th-3), by=Math.round(y-bh/2);
+  for(let i=0;i<n;i++){
+    /* A scale does not END at its limit, it is only MARKED there - the same rule
+       pipeDial() follows - so the wrong side of the mark is drawn as a zone you
+       can see before you are in it.
+       Being IN it is a separate question from a cell merely lying in it, and a
+       floor is where the two come apart: a bar at 100% fills straight through the
+       low end, so "lit and below the floor" is every running pump, not a fault.
+       The violation is the VALUE crossing the mark, so that is what lights it. */
+    const c=(i+.5)/n, past=lo_? c<mk : c>mk;
+    /* An unlit cell is a dark slot, not a grey one. It used to be #152125, which
+       is within a shade of the plinth a control strip sits on, so the bar washed
+       out into its own base. C.well is what everything recessed on this panel is
+       cut back to - the sunk keys beside it use the same tone. */
+    let col = past?"#240b08":C.well;                                          // not there
+    if(c<=lo)      col = (past&&viol)?C.red:"#2f7d8c";                        // there
+    else if(c<=hi) col = (past&&(viol||violD))?"#5c2a1c"
+                                              :(rising?"#5a4415":"#1d3a41");  // on its way
+    fillRect(x+i*cw,by,cw-1.3,bh,col);
+  }
+  if(o.mark!=null) fillRect(Math.round(x+mk*tW),t0,1,hh,C.red);
+  if(wd.pv!=null) fillRect(Math.round(ui.ptr.x),t0,1,hh,"#7a5a18");  // where a click lands
+  /* A hairline in a cut, not a plate. The old 10px thumb covered an eighth of an
+     84px track and the readout had to dodge it; the cut is what keeps 1px of
+     amber readable against a lit cell. */
+  const cx=Math.round(clamp(x+t*tW,x+1,x+tW-1));
+  fillRect(cx-1,t0,3,hh,C.bg);       // the cut, so 1 unit of amber survives a lit cell
+  fillRect(cx,t0,1,hh,C.amber);      // the indicator itself
+  fillRect(cx-2,t0,5,1,C.amber);     // serifs, 1 unit tall - they mark the ends, not the value
+  fillRect(cx-2,t1-1,5,1,C.amber);
+  /* demand is an ORDER, not a position, so it rides above the track as a caret.
+     Its serif is 3 units against the indicator's 5, or the two read the same. */
+  if(o.dem!=null && Math.abs(dem-t)>.002){
+    const dx=Math.round(clamp(x+dem*tW,x+1,x+tW-1));
+    fillRect(dx,t0,1,4,C.amber); fillRect(dx-1,t0,3,1,C.amber);
+  }
+  if(rw){ const r=sldRead(wd,o.fmt);
+    txt(r.s,x+w,midBase(t0,hh,6.5),Object.assign({},ro,{align:"right",color:r.col})); }
+  /* A one-cell component - an RCP - has no room for a track AND a number, so
+     there it is hover-only: nothing covers the bar until you are pointing at it,
+     and then the number you want is the one under the pointer anyway. It stands
+     in the half of the track the pointer is not in, so it never hides its own
+     click target. */
+  else if(o.fmt && wd.pv!=null){
+    const ps=o.fmt(wd.pv), lw=tw(ps,ro)+4, far=(ui.ptr.x-x)/tW>.5;
+    const px=far ? x+1 : x+tW-lw-1;
+    fillRect(px,t0,lw,hh,C.bg);
+    txt(ps,px+lw/2,midBase(t0,hh,6.5),Object.assign({},ro,{align:"center",color:C.amber}));
+  }
   return wd;
 }
 function local(e){ const r=cv.getBoundingClientRect();
@@ -90,8 +188,11 @@ cv.addEventListener("pointerdown",e=>{
     if(w.type==="part"){ sel=w.part.id;
       /* a commissioned plant is welded down - you may select a component, not move it,
          and a pinned part rides its parent, so it is selectable but never draggable */
+      /* rows carry control bands on both screens now, so a row is not CELL tall
+         and the grab offset has to be measured against rowTop(), not against
+         y*CELL - columns are still uniform */
       if(screen==="design" && !w.part.pin) ui.drag={type:"part",part:w.part,
-        ox:p.x-(GX+w.part.x*CELL), oy:p.y-(GY+w.part.y*CELL),
+        ox:p.x-(GX+w.part.x*CELL), oy:p.y-rowTop(w.part.y),
         sx:w.part.x, sy:w.part.y}; }
     else if(w.type==="sld"){ ui.drag=w;
       const onThumb=Math.abs(p.x-w.tx)<=w.tw_/2+3;
@@ -106,7 +207,10 @@ cv.addEventListener("pointermove",e=>{
   const p=local(e); ui.ptr=p;
   if(e.pointerType==="mouse") isTouch=false;
   if(ui.drag){ if(ui.drag.type==="part"){ const d=ui.drag;
-      const nx=Math.round((p.x-d.ox-GX)/CELL), ny=Math.round((p.y-d.oy-GY)/CELL);
+      const nx=Math.round((p.x-d.ox-GX)/CELL);
+      /* rowAt() is the inverse of rowTop(); half a cell of lead makes it round to
+         the nearest row rather than the row it is merely touching */
+      const ny=rowAt(p.y-d.oy+CELL/2);
       if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
     else if(ui.drag.type==="sld"){ const d=ui.drag;
       /* integrate rather than re-derive, so moving away from the track changes

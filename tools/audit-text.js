@@ -58,6 +58,15 @@ function warmUp(){
   for(let i=0;i<300;i++){ M.step(0.02); if(i%5===0) M.sample(); }
   M.combatHit(); M.combatHit();
 }
+/* BEFORE any of that. The bench is reachable with no plant commissioned - P is
+   still null there - and ctlFor() is called on the bench to reserve the control
+   rows, so everything it builds eagerly has to survive that. This exact path
+   threw on P.flowMin and the auditor could not see it, because warmUp() had
+   already commissioned a plant before anything was ever drawn. */
+M.setScreen('design');
+cap('precommission:topbar',M.topbar);
+cap('precommission:design',M.drawDesign);
+
 warmUp();
 
 function sweep(tag){

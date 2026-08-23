@@ -171,15 +171,27 @@ function liveColor(p,s){
    along the bottom of the component it drives, inside that component's own cells.
    Several controls share one strip by weight.  The design bench passes no live
    state, so its grid carries no strips at all. */
+/* The design floor is PUMPS[D.pumps].floor - commission() bakes exactly that into
+   P.flowMin. The bench asks the design directly because it runs BEFORE any plant
+   has been commissioned and P is still null there; ctlFor() is called on the bench
+   now, to reserve the room the control room will need, so everything it builds
+   eagerly has to survive P===null. */
+const pumpFloor=()=>P? P.flowMin : PUMPS[D.pumps].floor;
 /* The pump tooltip is shown by the diagram strip and by the inspector, so it is
-   written once. It is a function, not a constant, because the design floor it
-   names is only known after commission(). */
-const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The pumps can be stopped completely: the red line on the track is the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
+   written once. It is a function, not a constant, because the floor it names
+   depends on the design. */
+const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The pumps can be stopped completely: the red line on the track is the "+(pumpFloor()*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
 /* ctlFor() returns ROWS of controls, not one flat list. A slider sharing a strip
    with two buttons got 30px of a 92px component, which is 3.3% of rod travel per
    pixel - unusable. Each row is CTL_H tall and the grid row underneath the
    component grows to fit them all, so a slider gets the whole component width. */
 const CTL_H=13;
+/* The plinth's inner margin, top AND bottom, from one constant so the two cannot
+   drift apart - they did, and an even lip above the first key with a deeper one
+   below the last read as a mistake. The bottom half is reserved by stripH(), so
+   the grid row grows to hold it rather than eating into the keys; the top half
+   falls out of where the plinth starts. */
+const STRIP_PAD=4;
 /* SCRAM and RESET are the same pair whether the banks are ganged or split, and
    they are the controls you reach for without looking, so the row is built once
    and both modes push the same object. Two copies would drift. */
@@ -190,12 +202,18 @@ const ROD_TRIP_ROW=[
   {kind:"btn",flex:1,on:()=>S.scrammed,text:()=>"RESET",
    fn:()=>{ resetTrip(); },
    tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}];
-function ctlFor(p){
+/* live=false asks the DESIGN question - what will this component need once it is
+   commissioned - so the bench can reserve exactly the room the control room will
+   fill. Nothing in the structure may read S in that case; the closures below still
+   may, because they are only ever called while drawing a live plant.
+   split is asked for separately from S, because stripH() has to be able to ask
+   for BOTH modes and reserve the taller of the two. */
+function ctlFor(p,live,split){
   if(p.id.startsWith("pump")) return [[
     /* the floor is a trip setpoint, not a stop: the panel may order the pumps
        off entirely, and the mark says where that starts costing */
     {kind:"sld",flex:1,val:()=>S.flow*100,min:()=>0,max:()=>100,
-     dem:()=>S.flowDem*100,mark:()=>P.flowMin*100,
+     dem:()=>S.flowDem*100,mark:()=>pumpFloor()*100,markLo:true,
      fmt:v=>v.toFixed(0)+" %",set:v=>{S.flowDem=v/100;},
      tip:"COOLANT PUMPS - "+pumpTip()}]];
   switch(p.id){
@@ -205,29 +223,36 @@ function ctlFor(p){
        its own with its own AUTO switch. Ganged is held to exactly three rows,
        because that is the height the default plant's grid was measured with. */
     case "rods": {
+      /* The master is the same control, in the same row, in both modes, because
+         it is the one you reach for without looking. What it means is one
+         sentence everywhere - "move the whole stack to here" - and setCommon()
+         in step.js is the only thing that carries it out. Splitting the banks
+         changes what the stack IS, never whether you have a handle on it. */
+      const MASTER=[
+       {kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
+        fmt:v=>v.toFixed(0)+" %",set:v=>{ setCommon(v/100); },
+        tip:"CONTROL BANK - moves the whole stack. Ganged that is one bank; split it carries every bank by the same amount, so the spread you set with the per-bank sliders is untouched, and it moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."}];
       const bankRow=b=>[
        {kind:"btn",flex:1,on:()=>!S.bankAuto[b],text:()=>S.bankAuto[b]?"AUT":"MAN",
         fn:()=>{ S.bankAuto[b]=!S.bankAuto[b]; },
-        tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank goes exactly where you put it and stays there through everything short of a scram. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
+        tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank stops answering the controller, but it still answers you: its own slider and the master both still move it. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
        {kind:"sld",flex:2.8,val:()=>S.rodZ[b]*100,min:()=>0,max:()=>100,
         dem:()=>S.rodZDem[b]*100,
         fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",set:v=>{S.rodZDem[b]=v/100;},
         tip:"BANK "+(b+1)+" - insertion of this bank alone. While the banks are split these per-bank demands are the tilt handle: standing one bank against another is the whole of how you answer a radial xenon tilt here. A bank left on MANUAL is not answering the temperature controller at all, and the fewer banks on AUTO, the less rod worth is left to answer the same error - the loop gets slower, not just smaller."}];
-      if(S.split){
-        const rows=[[{kind:"btn",flex:1,on:()=>S.reGang,
+      if(split){
+        const rows=[MASTER, ROD_TRIP_ROW,
+         [{kind:"btn",flex:1,on:()=>S.reGang,
           text:()=>S.reGang?"GANGING..":"BANK GANG",
           /* already a no-op once the walk is running: setSplit() refuses to
              re-seed a gang it is in the middle of */
           fn:()=>{ setSplit(false); },
-          tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close."}]];
-        for(let b=0;b<P.NB;b++) rows.push(bankRow(b));
-        rows.push(ROD_TRIP_ROW);
+          tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close. The master slider still steers the walk while it runs."}]];
+        for(let b=0;b<(live?P.NB:D.nbank);b++) rows.push(bankRow(b));
         return rows;
       }
       return [
-       [{kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
-         fmt:v=>v.toFixed(0)+" %",set:v=>{S.rodDem=v/100;},
-         tip:"CONTROL BANK - rod insertion, every bank together. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."}],
+       MASTER,
        ROD_TRIP_ROW,
        /* the ganged handle on a radial xenon tilt: it stands the inner banks
           against the outer ones instead of moving the whole bank together */
@@ -243,7 +268,9 @@ function ctlFor(p){
        dem:()=>S.boronDem,
        fmt:v=>v.toFixed(0)+" pcm",set:v=>{S.boronDem=v;},
        tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}]].concat(
-      P.boroninj?[[{kind:"btn",flex:1,danger:()=>!S.borInjUsed,
+      /* the bench asks D, because that is the design being edited right now; a
+         commissioned plant asks P, because that is the design it was built to */
+      (live?P.boroninj:D.boroninj)?[[{kind:"btn",flex:1,danger:()=>!S.borInjUsed,
        text:()=>S.borInjUsed?"SPENT":"BORON DUMP",
        fn:()=>{ if(!S.borInjUsed){ S.borInjUsed=true; S.boron-=4000; S.boronDem-=4000;
          logE("alarm","EMERGENCY BORON INJECTED",
@@ -268,32 +295,48 @@ function ctlFor(p){
 /* How much room this component's controls need, and therefore how far the grid
    row it ends in has to grow. Asked once per part per frame, before anything
    is drawn, because the row heights decide where everything lands. */
-function stripH(p){
+function stripH(p,live){
   if(!fitted(p)) return 0;
-  const ctl=ctlFor(p);
-  return (ctl? ctl.length*CTL_H : 0) + (autoOn(p.id)? BYP_H : 0);
+  /* The room a component reserves is the WORST of its modes, never the mode it
+     happens to be in. Ganging and splitting the rod banks must not resize the
+     plant under the operator - the rows DRAWN are still the live ones, and the
+     rows it is not using are simply empty plinth. */
+  const rows=m=>{ const c=ctlFor(p,live,m); return c? c.length : 0; };
+  const n=Math.max(rows(false),rows(true)), bh=autoOn(p.id)? CTL_H : 0;
+  /* Nothing to mount, nothing to stand on. STRIP_PAD is the plinth's margin, so
+     adding it unconditionally gave a component with no controls a 4px plinth
+     holding nothing - and, because plinth is sh>0, a body to go with it. */
+  if(!n && !bh) return 0;
+  return n*CTL_H + bh + STRIP_PAD;
 }
-function ctlBands(){
+function ctlBands(live){
   const b=new Array(GH).fill(0);
   for(const p of LAY.parts){
     const r=p.y+p.h-1;                       // the strip sits in the LAST row it spans
-    if(r>=0&&r<GH) b[r]=Math.max(b[r],stripH(p));
+    if(r>=0&&r<GH) b[r]=Math.max(b[r],stripH(p,live));
   }
   return b;
 }
 
 /* ══════════ BYPASS SWITCHES (control room only) ══════════
-   Defeating a system is not an operating control, so it does not share the
-   control strip: it gets its own thinner strip along the very bottom of the
-   component that carries the system. AUTOSYS says which component that is, so
-   there is exactly one switch per system and no component carries two. */
-const BYP_H=11;
+   Defeating a system is not an operating control, so it gets its own row along
+   the very bottom of the component that carries the system. AUTOSYS says which
+   component that is, so there is exactly one switch per system and no component
+   carries two.
+
+   That row used to be 11px against the controls' 13, and was fenced off with a
+   hairline above it. The hairline is gone, and a 2px height difference on its own
+   does not read as a decision - it reads as a misalignment. So a bypass is now
+   exactly the same height as every other key in the plant view, and it carries no
+   visual distinction at all. If one is wanted back, give it tone, not size: two
+   key heights in one strip is the thing that looked untidy. */
 function bypRow(k,x,y,w,h){
   const A=AUTOSYS[k], fit=autoFit(k), lit=fit&&S.byp[k];
   const wd=push({x,y,w,h,type:"btn",fn:()=>{ if(fit) autoToggle(k); }});
   const hv=fit&&hov(wd);
+  /* no border, for the same reason the control keys above it lost theirs: the
+     tone step off the plinth already says where the switch is */
   fillRect(x,y,w,h, lit?"#2a1f08":(hv?C.panelHi:C.panel));
-  frame(x,y,w,h, lit?C.amber:C.edge);
   const col = !fit?"#3c4c47" : lit?C.amber : C.green;
   const st  = !fit?"none" : lit?"BYP" : "AUTO";
   const o={size:6.5,sp:.3};
@@ -317,22 +360,16 @@ function ctlStrip(list,x,y,w,h){
     const cw=span*c.flex;
     const dan = c.danger? c.danger() : false, on = c.on? c.on() : false;
     if(c.kind==="sld"){
-      const cy=y+h/2, lab=c.fmt(c.val());
-      slider(cx,cy,cw,c.val(),c.min(),c.max(),
-        {th:h,tw:7,ticks:false,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,
+      /* The readout is the slider's own now, and it stands beside the track
+         rather than on it. It used to be an opaque plate dodging from one end to
+         the other to keep clear of the thumb, which on a one-cell component
+         covered the bar completely. */
+      slider(cx,y+h/2,cw,c.val(),c.min(),c.max(),
+        {th:h,tw:7,fmt:c.fmt,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
          fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
-      /* the readout sits at whichever end the thumb is not, or the opaque plate
-         hides the very thing you are dragging.
-         The gate is measured rather than picked: it used to be cw>=64, a number
-         standing in for "the label is narrower than the track". It stopped being
-         true the moment a slider carried a label that was not a bare percentage,
-         so ask the label how wide it is - plate plus a 3px margin at each end. */
-      if(cw >= tw(lab,{size:6.5})+16){ const lw=tw(lab,{size:6.5}),
-            far=(c.val()-c.min())/(c.max()-c.min()) > .5;
-        tag(lab, far? cx+lw/2+3 : cx+cw-lw/2-3, midBase(y,h,6.5), 6.5,0,C.cyan); }
     } else {
       /* a narrow box loses its letter spacing before it loses its label */
-      button(cx,y,cw,h,c.text(),{danger:dan,on:on,size:6.5,sp:cw<30?0:.5,fn:c.fn});
+      button(cx,y,cw,h,c.text(),{danger:dan,on:on,sunk:true,size:6.5,sp:cw<30?0:.5,fn:c.fn});
     }
     TIP(cx,y,cw,h,c.tip.split(" - ")[0],c.tip);
     cx+=cw+gap;
@@ -343,7 +380,10 @@ function drawPlant(y0,L){
   layoutMetrics(); GY=y0;
   /* layoutMetrics() measured the design with no bands; from here on the view has
      them, and every row position comes from rowTop() rather than Y*CELL */
-  BANDS = L? ctlBands() : null;
+  /* BANDS is computed on BOTH screens now. It used to be null on the bench, which
+     made every operable component shorter there than in the control room - the
+     plant changed size the moment you commissioned it. */
+  BANDS = ctlBands(!!L);
   const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
   fillRect(GX,GY,GW*CELL,GHp,C.well);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
@@ -385,26 +425,65 @@ function drawPlant(y0,L){
     const {x,y,w,h}=prect(p);
     /* an accumulator you never fitted has no pump to start: it used to draw
        "NOT FITTED" and a working INJECT button in the same box */
-    const live = L && fitted(p);
-    const ctl = live ? ctlFor(p) : null,
-          byk = live ? autoOn(p.id) : null,
-          bh  = byk? BYP_H : 0,
-          sh  = (ctl? ctl.length*CTL_H : 0) + bh, sy = y+h-sh;
+    const fit = fitted(p), live = L && fit;
+    const ctl = live ? ctlFor(p,true,S.split) : null;
+    /* The strip is a property of the DESIGN, not of the screen. The bench reserves
+       exactly the room the control room will fill and draws the plinth empty, so
+       the plant is the same size on both and nothing jumps when you commission. */
+    const byk = fit ? autoOn(p.id) : null,
+          bh  = byk? CTL_H : 0,
+          sh  = stripH(p,live), sy = y+h-sh;
     const wd=push({x,y,w,h,type:"part",part:p});
-    const on=sel===p.id, drag=ui.drag&&ui.drag.part===p, fit=fitted(p);
+    const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
     const dmgd = L && L.dmgParts.includes(p.id);
     const ink = !fit?"#3c4c47" : dmgd?C.red : on?C.amber : (hov(wd)||drag)?C.bright : C.metal;
-    if(on){ fillRect(x+1,y+1,w-2,h-2,"rgba(240,168,48,.07)"); ticks(x+2.5,y+2.5,w-5,h-5,C.amber,7); }
+    /* ══ a component you operate is ONE object ══
+       A body outline round the whole part, the symbol in the top of it, and the
+       controls inset into a plinth at the bottom. The outline is drawn in the
+       component's own live ink, so the controls dim, brighten, select and go red
+       WITH the machine they drive - that tie is the whole point, and it is why
+       the plinth carries no colour of its own.
+       A part with nothing to operate gets no body, because a body means "this is
+       a machine you work". The design bench passes no live state, so it has no
+       strips, so it has no bodies either - it is still the same renderer. */
+    /* keys start at sy+1, so a top margin of STRIP_PAD puts the plinth here; the
+       bottom margin is the STRIP_PAD that stripH() already reserved */
+    const plinth = sh>0, py = sy+1-STRIP_PAD, pb = y+h-2;
+    if(plinth) fillRect(x+2,y+2,w-4,h-4,C.panel);
+    if(on) fillRect(x+1,y+1,w-2,h-2,"rgba(240,168,48,.07)");
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
-    else drawSym(p,x,y,w,h-sh,ink,L);
+    else drawSym(p,x,y,w,h-sh-(plinth?4:0),ink,L);
+    /* No outline and no divider. Tone alone says where the machine ends and its
+       base begins: body, then a step lighter for the plinth, then the keys sunk
+       back down into it. A line on top of that boundary was drawing an edge the
+       fills had already drawn. The ink tie is carried by the symbol, which still
+       brightens, selects and goes red with the component. */
+    if(plinth) fillRect(x+2,py,w-4,pb-py,C.panelHi);   // the base the controls are set into
+    /* Defeating a safety system should not look like flicking a pump switch. The
+       distinction used to be a hairline and a shorter key; both are gone, because
+       both read as untidiness rather than as meaning. It is tone now: the bypass
+       stands in a band cut right back to the grid tone, so the bottom of a
+       component visibly is not part of its control base. One step was not enough
+       to see - C.panel against C.panelHi is a shade - so this is the full drop,
+       and the key is INVERTED to match: every operating control is sunk into the
+       plinth, a bypass stands proud out of a cut. Same height, same inset. */
+    if(plinth && bh) fillRect(x+2,y+h-STRIP_PAD-bh,w-4,STRIP_PAD+bh-2,C.well);
+    /* The registration marks go down AFTER the plinth, and they are the only part
+       of the selection that does. The plinth covers the bottom third of a
+       component, so drawn with the wash they were painted straight over and the
+       bottom two corners of a selected part were all but invisible. The keys land
+       clear of them: they start at x+6 and stop STRIP_PAD above the bottom edge. */
+    if(on) ticks(x+2.5,y+2.5,w-5,h-5,C.amber,7);
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red); }
     else if(!p.access && p.grp!=="shield" && fit) badge(x+w-9,y+12,C.amber);
     /* a one-cell component with a knob has no room for a separate value tag,
        and does not need one - the knob shows its own number */
     const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
     const nm = (v0&&!v)? p.name+"  "+v0 : p.name;
-    tag(nm,x+w/2,sy-(v?14:4),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
-    if(v) tag(v,x+w/2,sy-3,8,0,dmgd?C.red:liveColor(p,L));
+    /* the tags stop above the divider rather than sitting on it */
+    const tb = plinth ? sy-6 : sy-3;
+    tag(nm,x+w/2,tb-(v?11:1),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
+    if(v) tag(v,x+w/2,tb,8,0,dmgd?C.red:liveColor(p,L));
     if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
     /* the component tooltip goes down FIRST: findTip() scans backwards and takes
        the first hit, so anything pushed after it wins inside its own rect. Push
@@ -412,8 +491,10 @@ function drawPlant(y0,L){
     TIP(x,y,w,h,p.name+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
       p.tip+(p.access||p.grp==="shield"?"":"  It is boxed in on every side - nobody could reach it to repair it."));
-    if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+4,sy+i*CTL_H+1,w-8,CTL_H-3));
-    if(byk) bypRow(byk,x+4,y+h-bh+1,w-8,bh-3);
+    /* inset far enough that a margin of plinth shows all the way round each
+       control - at 4px the body outline and the control frame were touching */
+    if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+6,sy+i*CTL_H+1,w-12,CTL_H-3));
+    if(byk && live) bypRow(byk,x+6,y+h-STRIP_PAD-bh+1,w-12,bh-3);
   }
   /* an instrument is bolted to the outside of the thing it measures, so it goes down
      last. Drawn before the components, the pressurizer gauge was painted over by the
