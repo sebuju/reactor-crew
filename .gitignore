@@ -7,3 +7,6 @@ graphify-out/
 
 # Local screenshot scratch - browser profiles and captured PNGs
 .shots/
+
+# Local scratch bin - files moved out of the way, never committed
+.trash/
