@@ -266,7 +266,8 @@ function resetPlant(){
      arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:AUTOROD_LO, arHi:AUTOROD_HI,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
-     dash:{hot:0,cold:0,stm:0,exh:0,fw:0,surge:0,hpi:0},spin:0,jit:0,dTavg:0,heat:1,sc:35,t:0};
+     flowPos:{hot:0,cold:0,steam:0,exh:0,feed:0,surge:0,hpi:0},
+     spin:0,jit:0,dTavg:0,heat:1,sc:35,t:0};
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
@@ -591,25 +592,27 @@ function step(dt){
   }
 
   /* ── pipe animation ──
-     A moving dash means fluid is actually moving in that line, at a speed
-     proportional to the flow. So the flow has to be zero when there is nothing
-     left to move: an empty primary, a dry steam generator, a feed pump that no
-     longer exists. Natural circulation is real flow and keeps its dashes. */
-  const d=s.dash,sp=60*dt;
+     s.flowPos[k] is how far the fluid in that line has TRAVELLED, in diagram
+     pixels, counting up. The renderer slides packets along it and differentiates it
+     for the flow meters, so both come from this one integral and cannot disagree.
+     It has to stop when there is nothing left to move: an empty primary, a dry steam
+     generator, a feed pump that no longer exists. Natural circulation is real flow
+     and keeps moving. */
+  const d=s.flowPos,sp=60*dt;
   const sgWet = clamp(s.sgl/25,0,1);           // secondary side still has a level
-  d.hot-=sp*feff*1.4; d.cold-=sp*feff*1.4;
+  d.hot+=sp*feff*1.4; d.cold+=sp*feff*1.4;
   const stm = s.load*sgWet*wet*1.6;            // no primary water, nothing boils
-  d.stm-=sp*stm;
-  d.exh-=sp*stm;                               // what the turbine passes, it exhausts
-  d.fw -=sp*stm*(feedOK?1:0);
-  /* Dash speed is a velocity, and a gravity feed runs at the square root of its
-     head - so it scales off hpiRate without four-fold swings between layouts. */
-  d.hpi-=sp*(s.hpi?2*Math.sqrt(P.hpiRate/1.6):0);
+  d.steam+=sp*stm;
+  d.exh  +=sp*stm;                             // what the turbine passes, it exhausts
+  d.feed +=sp*stm*(feedOK?1:0);
+  /* This is a velocity, and a gravity feed runs at the square root of its head - so
+     it scales off hpiRate without four-fold swings between layouts. */
+  d.hpi+=sp*(s.hpi?2*Math.sqrt(P.hpiRate/1.6):0);
   /* Surge line: positive is out of the pressurizer, which is the direction the
      pipe is drawn. A falling level is an outsurge; a relief valve passing flow
      pulls loop water the other way, up into the pressurizer and out of the top.
      Clamped below the hot leg's 1.24 - it is a small line and must not outrun it. */
-  d.surge-=sp*wet*clamp(-s.dLvl*0.07-((s.porvOpen&&!s.porvBlocked)?0.75:0),-1.2,1.2);
+  d.surge+=sp*wet*clamp(-s.dLvl*0.07-((s.porvOpen&&!s.porvBlocked)?0.75:0),-1.2,1.2);
   s.spin=(s.spin+360*dt*feff)%360;
   s.jit=Math.sin(performance.now()/70)*P.noise*(s.noiseMul||1);
 }
