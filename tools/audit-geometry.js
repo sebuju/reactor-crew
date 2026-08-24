@@ -87,7 +87,16 @@ const checks=[
     the plant's own margin, on a leader back to the machine it belongs to. */
  ['readouts are the plant',   S.includes('function readoutsFor(p,s)') &&
                               S.includes('function drawPlate(q)'), 'one table, drawn as a plate on a leader'],
- ['one bench inspector',      S.includes('function inspector(y0)'), 'design inspector defined once'],
+ /* The bench has no inspector panel either. Its parameters are DATA the same way
+    the control room's readouts are, and they are drawn into the SAME plate - so
+    what has to hold is that one function says what a component lets you set,
+    and that the box and the leader it stands in are the shared ones. */
+ ['params are the plant',     S.includes('function paramsFor(p)') &&
+                              S.includes('function benchPlate()'), 'one parameter table, drawn as a plate on a leader'],
+ ['one plate, two fillings',  (S.match(/function plateShell/g)||[]).length===1 &&
+                              (S.match(/function plateLead/g)||[]).length===1 &&
+                              S.includes('plateShell(q,col,on,') && S.includes('plateShell(q,C.amber,true,'),
+                              'readouts and parameters share the box and the leader'],
  ['no hand-placed mimic',     !/OY=44/.test(S), 'fixed-coordinate mimic removed'],
  ...pipeChecks,
 ];

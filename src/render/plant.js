@@ -469,130 +469,317 @@ function ctlStrip(list,x,y,w,h){
    drawn at any other size. Ported from .trash/mockups/z1-liveplant.js. */
 const PLW=158, PLGAP=10, PLROW=13, PLLEAD=30;
 
+/* Four numbers show up on more than one component's plate. Their band and their
+   sentence are written ONCE here, so two plates cannot end up describing the
+   same quantity in two different ways. */
+const rowInv=s=>["INVENTORY",s.inv.toFixed(1)+" %",
+  band(s.inv,80,100,[[95,C.red,"LEAKING"],[100,C.blue,"FULL"]],{dp:0}),
+  "How much water is actually in the loop. A whole loop sits at 100%; under 95% you are losing it somewhere."];
+const rowFat=s=>["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",
+  band(s.fatigue,0,100,[[50,C.cyan,"SOUND"],[100,C.amber,"WORN"]],{dp:0}),
+  "Permanent metal damage from cold water hitting hot steel, mostly from emergency injection. It never resets, and the vessel bursts lower for every point of it."];
+const rowSgl=s=>["SG LEVEL",s.sgl.toFixed(1)+" %",
+  band(s.sgl,0,100,[[25,C.red,"LOW"],[100,C.cyan,"NORMAL"]],{dp:0}),
+  "Water in the steam generator. Under 25% it is boiling dry and the core is losing its heat sink."];
+/* Natural circulation was the case AGAINST sharing these and then the case for
+   it: the same s.nat was printed green-or-grey on the steam generator and flat
+   cyan on the pump and the backup, so one number gave three answers depending
+   on which plate you happened to be looking at. Its ceiling is the plant's own
+   P.natCirc, which is why the scale is measured off that rather than picked. */
+const rowNat=s=>["NAT CIRC",(s.nat*100).toFixed(0)+" %",
+  band(s.nat*100,0,Math.max(20,P.natCirc*100),
+    [[10,C.ink2,"NONE"],[Math.max(20,P.natCirc*100),C.green,"ESTABLISHED"]],{dp:0}),
+  "Flow that buoyancy alone is making. It builds once the loop is hot, and it is all you have with the pumps dead. Generator height over the core sets it."];
+const T_TRIP="What tripped the plant most recently. It stays here after a reset, so you can still see what you were fighting.";
+
+/* Every term in the reactivity balance, and what each one is. The key is the
+   field on `s.parts`, except "net" which is the sum the sim already keeps. One
+   table, because the reactor's plate is now the only thing that draws it. */
+const RHO_ROWS=[
+ ["RODS","rod","Negative reactivity from the inserted control rods. The deeper they go the stronger this gets, but not evenly: the rods bite hardest around mid-travel."],
+ ["DOPPLER","dop","Feedback from hot fuel. As fuel heats it absorbs more neutrons, pushing power back down. Instant, automatic and always stabilising - this is what stops a runaway before a human could react."],
+ ["MODERATOR","mod","Feedback from coolant temperature. Hotter coolant is less dense and moderates neutrons less, so power drops. This is why the reactor follows turbine load on its own."],
+ ["XENON","xe","Xenon-135, a neutron poison that builds up after fission. It has memory: what you did minutes ago is still eating your reactivity now. Equilibrium sits near -2700; after a scram it deepens toward -4800 and locks you out of restarting."],
+ ["BORON","bor","Poison dissolved in the coolant, and whatever you have dialled in on the boron control. Slow to change, but it is the only lever left once rods and temperature have run out."],
+ ["VOID","vd","Steam bubbles in the core. In a water design this is strongly negative and shuts the reactor down as it uncovers. In a graphite or sodium design it is POSITIVE, and voiding adds power instead."],
+ ["ROD TIP","tip","Whatever hangs below the absorber. With a water follower this stays at zero all the way in. With a graphite one it goes POSITIVE as the bank drops, because graphite displaces water at the bottom of the core before the absorber has reached there - the reactivity you add before the reactivity you remove."],
+ ["NET RHO","net","The sum of everything above. Zero means steady power, positive means it is climbing, negative means it is falling. If this exceeds your fuel's beta the reactor goes prompt critical and nothing can stop it in time."],
+];
 function readoutsFor(p,s){
   const heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
-  const id=p.id, R=[];
-  const add=(k,v,c)=>R.push([k,v,c||C.cyan]);
+  const id=p.id, R=[], m=P.rpsm;
+  /* A setpoint only exists while something is watching it. With no protection
+     fitted, or the bypass thrown, there is no mark to draw - which is the
+     overpower mechanic stated as a picture rather than as a sentence. */
+  const trip=(v,l)=>rpsLive()?[[v,l]]:null;
+  /* A row hands in a colour OR a band. Hand in a band and the colour comes off
+     it, which is the whole point: the figure and the strip under its tooltip
+     cannot then disagree about where the limit is. */
+  /* `bar` is an optional signed fraction, -1..1. A row that hands one in draws
+     it where its hairline would have gone; see plateRows(). */
+  const add=(k,v,c,tip,bar)=>{
+    const g=(c&&typeof c==="object")?c:null;
+    R.push([k,v, g?bandCol(g):(c||C.cyan), tip, g, bar]);
+  };
   if(id==="core"){
-    add("POWER",(s.n*100).toFixed(1)+" %",(s.n>1.1||s.dnbr<1.3)?C.red:C.green);
-    add("THERMAL",(s.n*P.rated).toFixed(0)+" MWt");
-    add("DNBR",s.dnbr.toFixed(2),s.dnbr<1?C.red:s.dnbr<1.3?C.amber:C.cyan);
-    add("FUEL TEMP",s.Tf.toFixed(0)+" K",s.Tf>1500?C.red:C.cyan);
-    add("PEAK Fq",s.fq.toFixed(2),s.fq>3.2?C.amber:C.cyan);
-    add("HOT SPOT","R"+s.hotRing+" / EL"+s.hotLev);
+    add("POWER",(s.n*100).toFixed(1)+" %",
+      band(s.n*100,0,150,[[110,C.green,"NORMAL"],[150,C.red,"OVERPOWER"]],
+        {dp:0,lim:trip((1.10+0.22*m)*100,"FLUX"),col:s.dnbr<1.3?C.red:null}),
+      "Heat the core is making, as a share of what it is rated for. The real ceiling is DNBR, not this number.");
+    add("THERMAL",(s.n*P.rated).toFixed(0)+" MWt",null,
+      "The same power in megawatts of heat: the rating times the share above.");
+    /* period() and not a subtraction done here: readoutsFor() runs twice a
+       frame, so a differentiator in this function reports half the answer */
+    { const per=period(), fin=isFinite(per)&&Math.abs(per)<999;
+      add("PERIOD", fin?per.toFixed(0)+" s":"INF",
+        fin&&per>0&&per<30 ? C.red : fin&&per>0&&per<80 ? C.amber : C.cyan,
+        "Seconds for power to multiply by 2.7 times at the rate it is moving right now. INF means steady. A short POSITIVE period is power running away from you, and under about ten seconds nothing you do will catch it."); }
+    /* The top of this scale is MEASURED off the plant, not picked. A sodium or
+       salt core sits at 3.2 at rest against a water core's 1.76, so a fixed 2.6
+       pegs the needle on three of the six architectures from the first frame -
+       a gauge that is hard over before you have touched anything. The bottom
+       end and both zone boundaries are absolute, because film boiling is. */
+    const dHi=Math.max(2.6,P.dnbr0*1.3);
+    add("DNBR",s.dnbr.toFixed(2),
+      band(s.dnbr,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],
+        {dp:2,lim:trip(1.18-0.16*m,"TRIP")}),
+      "How far the fuel is from a steam film that stops cooling it. Over 1.30 is comfortable; 1.00 damages fuel.");
+    add("FUEL TEMP",s.Tf.toFixed(0)+" K",
+      band(s.Tf,300,2200,[[1500,C.cyan,"NORMAL"],[2200,C.red,"FAILING"]],
+        {dp:0,lim:trip(1600+280*m,"TRIP")}),
+      "Temperature inside the pellets. Past 1500 K the cladding starts to fail, and that damage is permanent.");
+    add("PEAK Fq",s.fq.toFixed(2),
+      band(s.fq,1,5,[[3.2,C.cyan,"FLAT"],[5,C.amber,"PEAKED"]],{dp:2}),
+      "How much hotter the hottest spot is than the core average. 1.00 is perfectly flat; past 3.2 one channel is doing far too much of the work.");
+    add("HOT SPOT","R"+s.hotRing+" / EL"+s.hotLev,null,
+      "Which mesh ring and which level is carrying that peak. It is ringed in the core field on the reactor symbol.");
     add("AX / RAD OFFSET",(s.ao*100).toFixed(0)+" / "+(s.ro*100).toFixed(0)+" %",
-        Math.abs(s.ao)>.35||Math.abs(s.ro)>.35?C.amber:C.cyan);
-    add("VOID",s.vf.toFixed(2),s.vf>.15?C.red:C.cyan);
-    add("INVENTORY",s.inv.toFixed(1)+" %",s.inv<95?C.red:C.blue);
-    add("BORON",s.boron.toFixed(0)+" pcm");
+        Math.abs(s.ao)>.35||Math.abs(s.ro)>.35?C.amber:C.cyan,
+      "How far the flux leans up-down and in-out from centred. Past 35% either way the peak has moved somewhere you did not design for.");
+    add("VOID",s.vf.toFixed(2),
+      band(s.vf,0,.6,[[.15,C.cyan,"LIQUID"],[.6,C.red,"BOILING"]],
+        {dp:2,lim:trip(.30,"TRIP")}),
+      "Share of the coolant that has turned to steam. Steam carries heat away far worse than water, and in a graphite core it adds reactivity as well.");
+    add.apply(null,rowInv(s));
+    /* BORON and XENON are not stated here any more. They are reactivity terms,
+       so the ledger section below says them - with a direction on them, which is
+       what they are actually for. Two rows quoting one number is how a panel
+       starts disagreeing with itself. */
     add("BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
-        Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2);
+        Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2,
+      "Where you have asked boron to go. It borates at "+BOR_IN+" pcm/s and only dilutes at "+BOR_OUT+", so poisoning yourself is the fast direction.");
     add("EMERG BORON",!P.boroninj?"none":s.borInjUsed?"EXPENDED":"available",
-        !P.boroninj?C.ink2:s.borInjUsed?C.red:C.green);
-    add("XENON",s.parts.xe.toFixed(0)+" pcm");
-    add("FUEL DAMAGE",s.dmg.toFixed(1)+" %",s.dmg>0?C.red:C.cyan);
-    add("VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
+        !P.boroninj?C.ink2:s.borInjUsed?C.red:C.green,
+      "A one-shot 4000 pcm dump. It shuts the core down when the rods will not, and it cannot be undone for the rest of the run.");
+    add("FUEL DAMAGE",s.dmg.toFixed(1)+" %",
+      /* any damage at all is the bad zone, so the good one is a sliver - which
+         is the strip saying honestly that this scale has no safe stretch */
+      band(s.dmg,0,100,[[1e-9,C.cyan,"NONE"],[100,C.red,"CLAD FAILED"]],{dp:0}),
+      "Cladding that has already failed, and it is permanent. It grows whenever DNBR drops under 1.00 or the fuel passes 1500 K.");
+    add.apply(null,rowFat(s));
+    /* ══ THE LEDGER IS THE REACTOR'S ══
+       This was a 364-wide overlay called REACTIVITY LEDGER, opened over the
+       plant by a key. Every line in it is a property of the core, so it is on
+       the core's plate, under its own head - and the bar each row used to carry
+       is still there, in the 3 units the row already spent on a hairline.
+       Nothing else on the plant wanted it, and nothing else can now show it. */
+    R.push({sec:"REACTIVITY"});
+    for(const r of RHO_ROWS){
+      const v = r[1]==="net" ? s.rho : s.parts[r[1]];
+      const col = r[1]==="net" ? (Math.abs(v)<50?C.green:(v<0?C.blue:C.red))
+                               : (v<0?C.blue:C.amber);
+      add(r[0],(v>=0?"+":"")+v.toFixed(0),col,r[2],clamp(v/2600,-1,1));
+    }
   } else if(id==="rods"){
-    add("BANK POSITION",(s.rodPos*100).toFixed(1)+" %");
+    add("BANK POSITION",(s.rodPos*100).toFixed(1)+" %",null,
+      "Where the bank stands. 100% is fully inserted, and the rods bite hardest around mid-travel rather than evenly.");
     add("BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",
-        Math.abs(s.rodDem-s.rodPos)>.005?C.amber:C.ink2);
-    add("WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm");
-    add("DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green);
-    add("SCRAM TIME",(1/P.scram).toFixed(1)+" s");
-    add("TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green);
-    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
+        Math.abs(s.rodDem-s.rodPos)>.005?C.amber:C.ink2,
+      "Where you have asked the bank to go. The drives walk to it at "+(ROD_RATE*100).toFixed(1)+" %/s, so this leads the position every time you move the slider.");
+    add("WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm",null,
+      "What the bank is worth where it actually stands, solved on the live flux. Move a cluster inward at the bench and this changes.");
+    add("DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green,
+      "Whether the drive mechanisms answer at all. A hit here jams the bank where it stands, and a scram will not move it either.");
+    add("SCRAM TIME",(1/P.scram).toFixed(1)+" s",null,
+      "How long a full insertion takes on a trip. You bought this at the bench, and faster gear is heavier gear.");
+    add("TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green,
+      "Whether a trip is latched in. While it is, the drives are pinned fully inserted whatever the slider says.");
+    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2,T_TRIP);
     add("RESET WOULD",!s.scrammed?"n/a":(P.rps&&tripCause())?"REFUSE":"clear",
-        !s.scrammed?C.ink2:(P.rps&&tripCause())?C.red:C.green);
-    add("NET RHO",s.rho.toFixed(0)+" pcm",Math.abs(s.rho)<50?C.green:C.amber);
+        !s.scrammed?C.ink2:(P.rps&&tripCause())?C.red:C.green,
+      "What the trip reset would do if you pressed it now. Protection holds a veto for as long as a trip condition is still standing.");
+    add("NET RHO",s.rho.toFixed(0)+" pcm",
+      band(s.rho,-800,800,[[-50,C.amber,"FALLING"],[50,C.green,"STEADY"],[800,C.amber,"RISING"]],
+        {dp:0,lim:[[P.BETA*1e5,"PROMPT"]]}),
+      "Everything pushing the reactor up or down, added together. Zero is steady power; past your fuel's beta nothing can stop it in time.");
     add("TILT TRIM",(s.tilt>=0?"+":"")+s.tilt.toFixed(2),
-        Math.abs(s.tilt)>.05?C.amber:C.ink2);
+      band(s.tilt,-.3,.3,[[-.05,C.amber,"LEANING"],[.05,C.ink2,"CENTRED"],[.3,C.amber,"LEANING"]],{dp:2}),
+      "How far the banks are leaned against each other to shape the flux. Live in GANG only - SPLIT stands it down, because two things cannot own the same spacing.");
     add("TILT DEMAND",(s.tiltDem>=0?"+":"")+s.tiltDem.toFixed(2),
-        Math.abs(s.tiltDem-s.tilt)>.01?C.amber:C.ink2);
-    add("SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",P.sdm<200?C.red:C.green);
+        Math.abs(s.tiltDem-s.tilt)>.01?C.amber:C.ink2,
+      "Where you have asked the tilt to go. It walks there at drive speed, so it leads the trim above.");
+    add("SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",
+      band(P.sdm,-3000,3000,[[200,C.red,"THIN"],[3000,C.green,"AMPLE"]],{dp:0}),
+      "How firmly the bank ALONE holds this core down once it cools and the xenon decays. Usually negative, and that is what boron is for.");
   } else if(id==="pzr"){
-    add("PRESSURE",s.P.toFixed(2)+" MPa",pColor(s.P));
-    add("LEVEL",s.lvl.toFixed(1)+" %",s.lvl>78?C.amber:C.cyan);
-    add("SUBCOOLING",sc.toFixed(1)+" K",sc<8?C.red:C.cyan);
-    add("SAT TEMP",tsat(s.P).toFixed(0)+" K");
-    add("LIFT SETPOINT",(P.P0*1.06).toFixed(2)+" MPa");
+    add("PRESSURE",s.P.toFixed(2)+" MPa",
+      band(s.P,P.P0*.80,P.P0*1.15,
+        [[P.P0*0.935,C.amber,"LOW"],[P.P0*1.05,C.cyan,"NORMAL"],[P.P0*1.15,C.red,"HIGH"]],
+        {dp:2,lim:rpsLive()?[[P.P0*(1.06+0.07*m),"HI"],[P.P0*0.86,"LO"]]:null}),
+      "Loop pressure. It sets the temperature the coolant boils at, so every megapascal here is thermal margin.");
+    add("LEVEL",s.lvl.toFixed(1)+" %",
+      band(s.lvl,0,100,[[78,C.cyan,"NORMAL"],[100,C.amber,"HIGH"]],{dp:0}),
+      "Water level in the pressurizer. Level RISING while pressure falls is a stuck relief valve - the trap that wrecked Three Mile Island.");
+    /* Measured off the plant for the same reason DNBR is: a helium core runs
+       1400 K below its own boiling point and a water one runs 22, so one fixed
+       ceiling either pegs the gas plants or squashes the water ones into the
+       first pixel. The 8 K line stays absolute - that is where the coolant
+       stops being liquid, whatever it is made of. */
+    const scHi=Math.max(60,(P.tsat0-P.Tref)*1.25);
+    add("SUBCOOLING",sc.toFixed(1)+" K",
+      band(sc,0,scHi,[[8,C.red,"SATURATED"],[scHi,C.cyan,"SUBCOOLED"]],
+        {dp:0,lim:trip(3,"TRIP")}),
+      "Degrees below boiling in the hot leg. The honest leak indicator: it collapses before anything else admits the loop is voiding.");
+    add("SAT TEMP",tsat(s.P).toFixed(0)+" K",null,
+      "The temperature the coolant would boil at, at the pressure it is held to right now.");
+    add("LIFT SETPOINT",(P.P0*1.06).toFixed(2)+" MPa",null,
+      "Where the relief valve opens on its own. It has an 18% chance of sticking open every single time it lifts.");
+    /* The scale is a share of THIS plant's pressure - a sodium loop runs at
+       0.2 MPa, so half a megapascal of scale is two and a half times its whole
+       operating pressure. The 0.3 MPa line is absolute and stays that way; on a
+       low-pressure plant it simply sits off the end, which is the reading
+       saying honestly that such a plant is always within 0.3 of lifting. */
+    const mlLo=Math.min(-0.1,-P.P0*.04), mlHi=Math.max(0.4,P.P0*.12);
     add("MARGIN TO LIFT",(P.P0*1.06-s.P).toFixed(2)+" MPa",
-        P.P0*1.06-s.P<0.3?C.amber:C.cyan);
+      band(P.P0*1.06-s.P,mlLo,mlHi,
+        [[0.3,C.amber,"NEAR LIFT"],[mlHi,C.cyan,"CLEAR"]],{dp:2}),
+      "How much pressure is left before that valve lifts by itself. Negative means it is passing right now.");
     add("PORV",(s.porvOpen&&!s.porvBlocked)?"PASSING":"shut",
-        (s.porvOpen&&!s.porvBlocked)?C.red:C.green);
-    add("BLOCK VALVE",s.porvBlocked?"SHUT":"open",s.porvBlocked?C.red:C.green);
+        (s.porvOpen&&!s.porvBlocked)?C.red:C.green,
+      "The relief valve itself. PASSING means coolant is leaving the loop through it, whether you asked or not.");
+    add("BLOCK VALVE",s.porvBlocked?"SHUT":"open",s.porvBlocked?C.red:C.green,
+      "Your last defence against a stuck relief valve. Shutting it stops the leak and gives the valve up for good.");
     add("AUTO RELIEF",autoState("porv").toLowerCase(),
-        autoLive("porv")?C.green:C.amber);
+        autoLive("porv")?C.green:C.amber,
+      "Whether the valve is allowed to lift by itself at 106%. Bypass it and pressure climbs to the burst point instead.");
   } else if(id.startsWith("sg")){
-    add("SG LEVEL",s.sgl.toFixed(1)+" %",s.sgl<25?C.red:C.cyan);
-    add("STEAM PRESS",(P.P0*.45*Math.pow(Math.max(s.load,.05),.25)).toFixed(2)+" MPa");
-    add("T-HOT IN",Th.toFixed(0)+" K");
-    add("T-COLD OUT",Tc.toFixed(0)+" K");
-    add("HEAT REMOVED",(Math.min(s.n,s.load)*P.rated).toFixed(0)+" MWt");
-    add("NAT CIRC",(s.nat*100).toFixed(0)+" %",s.nat>.1?C.green:C.ink2);
-    add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green);
+    add.apply(null,rowSgl(s));
+    add("STEAM PRESS",(P.P0*.45*Math.pow(Math.max(s.load,.05),.25)).toFixed(2)+" MPa",null,
+      "Pressure on the secondary side. It follows how hard the turbine is drawing.");
+    add("T-HOT IN",Th.toFixed(0)+" K",null,
+      "Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out.");
+    add("T-COLD OUT",Tc.toFixed(0)+" K",null,
+      "Coolant going back to the core, after the generator has taken its heat.");
+    add("HEAT REMOVED",(Math.min(s.n,s.load)*P.rated).toFixed(0)+" MWt",null,
+      "Heat actually leaving the primary loop. It is the LOWER of what the core makes and what the turbine will take.");
+    add.apply(null,rowNat(s));
+    add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
+      "The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment.");
   } else if(id.startsWith("pump")){
-    add("FLOW",(s.flow*100).toFixed(1)+" %",s.flow<P.flowMin?C.red:C.cyan);
+    add("FLOW",(s.flow*100).toFixed(1)+" %",
+      band(s.flow*100,0,110,[[P.flowMin*100,C.red,"STARVED"],[110,C.cyan,"NORMAL"]],
+        {dp:0,lim:trip(P.flowMin*102,"TRIP")}),
+      "Coolant moving through the core. Flow is the biggest single input to thermal margin, and the first thing a blackout takes off you.");
     add("FLOW DEMAND",(s.flowDem*100).toFixed(1)+" %",
-        Math.abs(s.flowDem-s.flow)>.005?C.amber:C.ink2);
-    add("DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %");
-    add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",s.hotFlow<.8?C.amber:C.cyan);
-    add("CAVITATION",(s.cav*100).toFixed(0)+" %",s.cav>.15?C.amber:C.cyan);
-    add("NAT CIRC",(s.nat*100).toFixed(0)+" %");
+        Math.abs(s.flowDem-s.flow)>.005?C.amber:C.ink2,
+      "Where you have asked the pumps to go. Flow lags it by "+FLOW_TAU+" s, and by "+FLOW_TAU_COAST+" s while coasting down in a blackout.");
+    add("DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %",null,
+      "The least flow this pump set still delivers after damage. You bought it with the redundancy option at the bench.");
+    add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
+      band(s.hotFlow*100,0,110,[[80,C.amber,"STARVED"],[110,C.cyan,"FED"]],{dp:0}),
+      "Flow in the WORST channel, not the average. A voiding channel loses the flow it needed to stop voiding, and that runaway is why the core is a place and not a number.");
+    add("CAVITATION",(s.cav*100).toFixed(0)+" %",
+      band(s.cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
+      "Vapour forming at the pump inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well.");
+    add.apply(null,rowNat(s));
     add("PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+P.loops,
-        s.dmgParts.some(k=>k.startsWith("pump"))?C.red:C.green);
+        s.dmgParts.some(k=>k.startsWith("pump"))?C.red:C.green,
+      "How many of your coolant pumps have been destroyed, out of how many you paid for.");
   } else if(id==="turb"){
-    add("LOAD",(s.load*100).toFixed(1)+" %");
+    add("LOAD",(s.load*100).toFixed(1)+" %",null,
+      "How hard the turbine is drawing steam. This is the demand the reactor spends its whole time trying to follow.");
     add("LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
-        Math.abs(s.loadDem-s.load)>.005?C.amber:C.ink2);
-    add("ELECTRICAL",(Math.min(s.n,s.load)*P.rated/3).toFixed(0)+" MWe");
-    add("T-AVG DEV",(s.Tavg-tProg(s)>=0?"+":"")+(s.Tavg-tProg(s)).toFixed(1)+" K");
-    add("STEAM DUMP",(P.bypass*100).toFixed(0)+" %");
-    add("GOV STROKE",LOAD_TAU.toFixed(0)+" s");
+        Math.abs(s.loadDem-s.load)>.005?C.amber:C.ink2,
+      "Where you have set the load. The governor strokes there over about "+LOAD_TAU.toFixed(0)+" s.");
+    add("ELECTRICAL",(Math.min(s.n,s.load)*P.rated/3).toFixed(0)+" MWe",null,
+      "Electrical power the ship is actually getting. It is the lower of heat made and heat taken, priced by the machine you bought.");
+    add("T-AVG DEV",(s.Tavg-tProg(s)>=0?"+":"")+(s.Tavg-tProg(s)).toFixed(1)+" K",null,
+      "How far coolant temperature sits from the programme for this load. Anything but zero means reactor and turbine are out of balance.");
+    add("STEAM DUMP",(P.bypass*100).toFixed(0)+" %",null,
+      "How much steam can go straight past the turbine to the condenser. It is what absorbs a trip without the relief valve lifting.");
+    add("GOV STROKE",LOAD_TAU.toFixed(0)+" s",null,
+      "How long the governor valves take to answer a change in load demand.");
     add("RUNBACK",autoState("runback").toLowerCase(),
-        autoLive("runback")?C.green:C.amber);
+        autoLive("runback")?C.green:C.amber,
+      "Whether a trip also pulls the turbine back. Bypass it and a scram leaves the turbine drawing hard on a dead core, chilling the loop.");
   } else if(id==="ctrl"){
-    add("RPS",rpsState().toLowerCase(),rpsLive()?C.green:C.amber);
-    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2);
+    add("RPS",rpsState().toLowerCase(),rpsLive()?C.green:C.amber,
+      "The automatic protection. Live, it trips on eight conditions; bypassed, it watches you run the plant to destruction and says nothing.");
+    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2,T_TRIP);
     add("INSTRUMENTS",P.noise<.2?"VOTED":P.noise<.6?"2CH DRIFT":"1CH RAW",
-        P.noise>.6?C.amber:C.green);
-    add("PARTY DOSE",s.dose.toFixed(1)+" %",s.dose>50?C.red:C.cyan);
-    add("DOSE RATE",P.dose.toFixed(2)+" x",P.dose>1?C.amber:C.green);
-    add("EVENTS",LOG.length+"");
+        P.noise>.6?C.amber:C.green,
+      "How many sensors watch each parameter. One channel jitters and hides a liar; three vote the liar out and the numbers hold still.");
+    add("PARTY DOSE",s.dose.toFixed(1)+" %",
+      band(s.dose,0,100,[[50,C.cyan,"LOW"],[100,C.red,"HIGH"]],{dp:0}),
+      "Radiation your repair parties have taken so far. Where you put this room, and what shielding is between, decides it.");
+    add("DOSE RATE",P.dose.toFixed(2)+" x",
+      band(P.dose,0,3,[[1,C.green,"SHIELDED"],[3,C.amber,"EXPOSED"]],{dp:2}),
+      "How fast that dose piles up, against a nominal of 1.00. Move this room away from the reactor and watch it fall.");
+    add("EVENTS",LOG.length+"",null,
+      "How many things have gone wrong this run. The LOG panel says what each of them was.");
   } else if(id==="hpi"){
-    add("INJECTION",s.hpi?"RUNNING":"stopped",s.hpi?C.cyan:C.ink2);
-    add("RATE",P.hpiRate.toFixed(2)+" %/s");
-    add("HEAD OVER CORE",P.lay.hpiHead.toFixed(2)+" x");
-    add("INVENTORY",s.inv.toFixed(1)+" %",s.inv<95?C.red:C.blue);
-    add("VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",s.fatigue>50?C.amber:C.cyan);
+    add("INJECTION",s.hpi?"RUNNING":"stopped",s.hpi?C.cyan:C.ink2,
+      "Whether emergency water is going into the loop right now. It is the safe act with a long bill: see fatigue below.");
+    add("RATE",P.hpiRate.toFixed(2)+" %/s",null,
+      "How fast injection refills the loop. A passive accumulator nearly doubles it and needs no power at all.");
+    add("HEAD OVER CORE",P.lay.hpiHead.toFixed(2)+" x",null,
+      "How high this tank sits above the core, as a multiplier on the rate above. Gravity does the work, so mount it high.");
+    add.apply(null,rowInv(s));
+    add.apply(null,rowFat(s));
   } else if(id==="cont"){
-    add("RELEASE",s.release.toFixed(2)+" %",s.release>1?C.red:C.cyan);
-    add("HELD BACK",((1-P.contRel)*100).toFixed(0)+" %");
-    add("CORE CATCHER",P.catcher?"fitted":"none",P.catcher?C.green:C.ink2);
-    add("VESSEL",s.breach?"RUPTURED":"intact",s.breach?C.red:C.green);
+    add("RELEASE",s.release.toFixed(2)+" %",
+      band(s.release,0,10,[[1,C.cyan,"CONTAINED"],[10,C.red,"RELEASING"]],{dp:2}),
+      "Share of the core inventory that has escaped and reached the crew. Driven by fuel damage, cut down by the containment you paid for.");
+    add("HELD BACK",((1-P.contRel)*100).toFixed(0)+" %",null,
+      "How much of any release this containment keeps in. It does nothing for the reactor and everything for the people around it.");
+    add("CORE CATCHER",P.catcher?"fitted":"none",P.catcher?C.green:C.ink2,
+      "A cooled basin under the vessel. It will not save the fuel, but it stops a melt burning through and breaching.");
+    add("VESSEL",s.breach?"RUPTURED":"intact",s.breach?C.red:C.green,
+      "Whether the pressure vessel is still whole. A rupture is the end of the run.");
   } else if(id==="bkp"){
-    add("BLACKOUT",s.blackout?"ACTIVE":"no",s.blackout?C.red:C.green);
-    add("CAPACITY",(P.backup*100).toFixed(0)+" %");
-    add("SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green);
-    add("NAT CIRC",(s.nat*100).toFixed(0)+" %");
+    add("BLACKOUT",s.blackout?"ACTIVE":"no",s.blackout?C.red:C.green,
+      "Whether main power to the coolant pumps has gone. Test it from the FAULTS panel before you ever need to know.");
+    add("CAPACITY",(P.backup*100).toFixed(0)+" %",null,
+      "Share of pump flow your backup supply can still turn. Everything above this has to come from buoyancy.");
+    add("SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green,
+      "Whether the backup set itself survived. A hit here means a blackout is natural circulation and nothing else.");
+    add.apply(null,rowNat(s));
   } else if(id==="feed"){
-    add("SG LEVEL",s.sgl.toFixed(1)+" %",s.sgl<25?C.red:C.cyan);
+    add.apply(null,rowSgl(s));
     add("EMERG FEED",autoState("efw").toLowerCase(),
-        autoLive("efw")?C.green:C.amber);
+        autoLive("efw")?C.green:C.amber,
+      "An independent supply that keeps the generator boiling after the main pumps are lost. Bypass it and grace time after a trip collapses.");
     add("FEED PUMP",s.dmgParts.includes("feed")?"DESTROYED":"running",
-        s.dmgParts.includes("feed")?C.red:C.green);
+        s.dmgParts.includes("feed")?C.red:C.green,
+      "The main feedwater pump. Destroyed, the generator boils dry unless emergency feed picks it up.");
   } else if(id==="cond"){
-    add("T-HOT",Th.toFixed(0)+" K");
-    add("HEAT REJECTED",(Math.min(s.n,s.load)*P.rated*.66).toFixed(0)+" MWt");
+    add("T-HOT",Th.toFixed(0)+" K",null,
+      "Steam temperature arriving at the condenser.");
+    add("HEAT REJECTED",(Math.min(s.n,s.load)*P.rated*.66).toFixed(0)+" MWt",null,
+      "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
     add("CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
-        s.dmgParts.includes("cond")?C.red:C.green);
+        s.dmgParts.includes("cond")?C.red:C.green,
+      "The heat sink itself. Destroyed, the steam has nowhere to condense and the loop has nowhere to put its heat.");
   }
   /* Shielding has nothing to report, and neither has a component you never
      bought: an empty plate reading NOT FITTED is a leader line, a slot in the
      margin and a share of the zoom spent saying nothing. The grid already draws
      the dashed outline and the words on the symbol itself. No plate. */
   if(!R.length||!fitted(p)) return [];
-  if(s.dmgParts.includes(p.id)) R.unshift(["STATUS","DAMAGED",C.red]);
-  if(!p.access && p.grp!=="shield") R.unshift(["ACCESS","BLOCKED",C.red]);
+  if(s.dmgParts.includes(p.id)) R.unshift(["STATUS","DAMAGED",C.red,
+    "This component has taken a hit. Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
+  if(!p.access && p.grp!=="shield") R.unshift(["ACCESS","BLOCKED",C.red,
+    "Your layout walls this in on every side, so no repair party can ever reach it. It stays broken for the rest of the run."]);
   return R;
 }
 
@@ -631,33 +818,129 @@ function platesFor(){
   return out;
 }
 
-function drawPlate(q){
-  const r=prect(q.p), dmg=S.dmgParts.includes(q.p.id), on=q.p.id===sel;
-  const col=dmg?C.red:on?C.amber:C.edge2;
+/* ══ A PLATE IS A PLATE ON EITHER SCREEN ══
+   The control room stands a table of live readouts beside every component. The
+   bench stands the SELECTED component's parameters beside it - in the same box,
+   on the same leader, in the same margin. So the leader, the box, the title row
+   and the click target are drawn ONCE and neither screen has its own idea of
+   what a callout looks like; only what goes inside differs. */
+
+/* one label-and-value list, at whatever width it is handed. The control room's
+   live table and the bench's MEASURED figures are the same object, so there is
+   one of them and neither screen owns it. */
+function plateRows(x,y,w,rows){
+  rows.forEach((row,i)=>{
+    const ry=y+i*PLROW+9;
+    /* A section head is a row like any other - it costs PLROW and nothing else
+       has to know it is there. It exists because the reactor's plate carries
+       two different kinds of number now: what the core IS doing, and the
+       reactivity that is making it do that. */
+    if(row.sec){ rule(row.sec,x,ry,w,C.ink2); return; }
+    txt(row[0],x,ry,{size:7,sp:.9,color:C.ink2});
+    txt(row[1],x+w,ry,{size:9,align:"right",color:row[2]||C.cyan});
+    /* A row that brought a sentence gets its own region. The plate pushed its
+       own catcher first and findTip() takes the LAST match, so the row wins
+       inside it and the component's tooltip still covers the gaps between rows.
+       A row with nothing to add pushes nothing and falls through to it. */
+    if(row[3]) TIP(x,ry-9,w,PLROW,row[0],row[3],row[4]);
+    /* ══ THE ROW SEPARATOR IS THE LEDGER BAR ══
+       A reactivity term is a DIRECTION before it is a number - left is pushing
+       the core down, right is pushing it up - and that was the whole point of
+       the ledger panel. A plate row is 144 units wide and the label and the
+       figure take about 95 of them, so there is no lane in the middle for a bar
+       that reads. There is one under it: the 3 units every row already reserves
+       for its hairline. So a row that brings a signed fraction spends that on a
+       bargraph instead, full width, and a row that does not still gets its
+       hairline. Nothing grew to make room. */
+    if(row[5]!=null) segSigned(x,ry+3,w,2,clamp(row[5],-1,1),row[2]);
+    else if(i<rows.length-1) fillRect(x,ry+3,w,1,"rgba(120,180,190,.05)");
+  });
+  return y+rows.length*PLROW;
+}
+/* the leader turns once, square to the face it leaves, so it reads as a
+   drawing callout rather than a wire */
+function plateLead(q,col,firm){
+  const r=prect(q.p);
   const ax=q.side==="L"? q.x+q.w : q.x, ay=q.y+q.h/2;
   const bx=q.side==="L"? r.x : r.x+r.w, by=r.y+r.h/2;
-  /* the leader turns once, square to the face it leaves, so it reads as a
-     drawing callout rather than a wire */
   const mx=(ax+bx)/2;
   ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(mx,ay); ctx.lineTo(mx,by); ctx.lineTo(bx,by);
-  ctx.strokeStyle=dmg?C.red:on?C.amber:"#1b2c31"; ctx.lineWidth=on||dmg?1.4:1;
-  ctx.setLineDash(on||dmg?[]:[4,3]); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle=firm?col:"#1b2c31"; ctx.lineWidth=firm?1.4:1;
+  ctx.setLineDash(firm?[]:[4,3]); ctx.stroke(); ctx.setLineDash([]);
   fillRect(bx-2,by-2,4,4,col);
-
+}
+/* The box, and the fact that a plate IS the component: clicking it selects, and
+   it carries the same tooltip. Both go down BEFORE whatever fills the plate,
+   because the hit test and findTip() each take the LAST match - so a slider
+   inside a bench plate has to be pushed after the plate's own catcher if it is
+   to win inside it. Returns the y the content starts at. */
+function plateShell(q,col,on,what){
   fillRect(q.x,q.y,q.w,q.h,C.panel); frame(q.x,q.y,q.w,q.h,col); accent(q.x,q.y,q.w,col);
   if(on) ticks(q.x+.5,q.y+.5,q.w-1,q.h-1,C.amber,6);
   txt(q.p.name,q.x+7,q.y+13,{size:7.5,sp:1.2,caps:1,color:col===C.edge2?C.ink:col});
   txt("EL"+(GH-1-q.p.y),q.x+q.w-7,q.y+13,{size:6.5,sp:.8,align:"right",color:C.ink2});
   fillRect(q.x+7,q.y+17,q.w-14,1,"rgba(120,180,190,.10)");
-  q.rows.forEach((row,i)=>{
-    const ry=q.y+20+i*PLROW+9;
-    txt(row[0],q.x+7,ry,{size:7,sp:.9,color:C.ink2});
-    txt(row[1],q.x+q.w-7,ry,{size:9,align:"right",color:row[2]});
-    if(i<q.rows.length-1) fillRect(q.x+7,ry+3,q.w-14,1,"rgba(120,180,190,.05)");
-  });
-  /* the plate is the component: clicking it selects, and it carries the same tip */
   push({x:q.x,y:q.y,w:q.w,h:q.h,type:"btn",fn:()=>{ sel=q.p.id; }});
-  TIP(q.x,q.y,q.w,q.h,q.p.name+" / LIVE READOUTS",q.p.tip);
+  TIP(q.x,q.y,q.w,q.h,q.p.name+what,q.p.tip);
+  return q.y+20;
+}
+function drawPlate(q){
+  const dmg=S.dmgParts.includes(q.p.id), on=q.p.id===sel;
+  const col=dmg?C.red:on?C.amber:C.edge2;
+  plateLead(q,col,on||dmg);
+  plateRows(q.x+7,plateShell(q,col,on," / LIVE READOUTS"),q.w-14,q.rows);
+}
+
+/* ══ THE BENCH IS THE PLANT TOO ══
+   The bench's parameters used to be a 736-wide drawer opened OVER the plant, so
+   configuring a component hid the plant you were configuring it into. They
+   stand in the margin now, in a plate, on a leader back to the machine.
+
+   ONE plate, not seventeen, and that is measured rather than preferred: the
+   seventeen parameter stacks come to roughly 3000 units of column between them
+   against a grid that is 633 tall, so a bench drawn the control room's way
+   would fit at about a quarter scale - too small to read, and far too small to
+   put a slider thumb on. The difference is in the content and not in the taste:
+   a readout is something you WATCH, so all of them at once is the whole point;
+   a parameter is something you are WORKING ON, one at a time.
+
+   The plate takes as many columns as it needs to stand inside the grid's own
+   height, so it never becomes the thing that sets the scale everything else has
+   to be drawn at. */
+/* A bench column is 172, not the readout plate's 158, and that is measured
+   rather than chosen: every bench widget - the option lists, the lattice plan,
+   the dimension rack - was laid out and audited at 172, and at 158 the longest
+   option names run straight into their own mass tags. What the two screens
+   share is the BOX, not a number: a plate is as wide as what stands in it. */
+const PLCW=172, PLBW=PLCW+14;
+function benchPlate(){
+  const p=LAY.parts.find(q=>q.id===sel); if(!p) return null;
+  const blocks=paramsFor(p); if(!blocks.length) return null;
+  const gap=6, head=20, pad=8;
+  const tot=blocks.reduce((a,b)=>a+b.h+gap,0)-gap;
+  const cap=Math.max(120,gridH()-head-pad);
+  let n=1; while(n<4 && tot/n>cap) n++;
+  const target=tot/n, cols=[[]];
+  let cy=0;
+  for(const b of blocks){
+    /* break on the block's MIDDLE, so a tall one lands wherever it leaves the
+       columns least uneven rather than always being pushed to the next */
+    if(cols.length<n && cy>0 && cy+b.h/2>target){ cols.push([]); cy=0; }
+    cols[cols.length-1].push(b); cy+=b.h+gap;
+  }
+  const colH=cols.map(c=>c.reduce((a,b)=>a+b.h+gap,0)-gap);
+  const h=head+Math.max(...colH)+pad, w=cols.length*PLBW+(cols.length-1)*PLGAP;
+  const side = p.x+p.w/2 < GW/2 ? "L" : "R";
+  return {p,cols,gap,x: side==="L" ? GX-PLLEAD-w : GX+GW*CELL+PLLEAD,
+          y:GY+gridH()/2-h/2, w, h, side};
+}
+function drawBenchPlate(q){
+  plateLead(q,C.amber,true);
+  const y0=plateShell(q,C.amber,true," / PARAMETERS");
+  q.cols.forEach((c,i)=>{
+    let cy=y0; const cx=q.x+7+i*(PLBW+PLGAP);
+    for(const b of c){ b.draw(cx,cy,PLCW); cy+=b.h+q.gap; }
+  });
 }
 
 function drawPlant(y0,L,vh){
@@ -681,9 +964,13 @@ function drawPlant(y0,L,vh){
      meant to be. These two were the same number while a cell was 46px, so
      passing the grid width as the viewport looked right and was not: it made
      fit come out at 1 and the plant hung a whole screen off the right margin. */
+  /* the bench's ONE plate, laid out before anything is drawn, because the
+     drawing it belongs to has to be measured with it in */
+  const BP = L? null : benchPlate();
   const B=(()=>{
     let x0=GX,x1=GX+GW*CELL,y0=GY,y1=GY+GHp;
-    if(L) for(const q of platesFor()){ x0=Math.min(x0,q.x); x1=Math.max(x1,q.x+q.w);
+    for(const q of (L? platesFor() : (BP?[BP]:[]))){
+      x0=Math.min(x0,q.x); x1=Math.max(x1,q.x+q.w);
       y0=Math.min(y0,q.y); y1=Math.max(y1,q.y+q.h); }
     return {x:x0-18,y:y0-18,w:x1-x0+36,h:y1-y0+36};
   })();
@@ -743,7 +1030,12 @@ function drawPlant(y0,L,vh){
           sh  = stripH(p,live), sy = y+h-sh;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
-    const dmgd = L && L.dmgParts.includes(p.id);
+    /* `fit &&`, or a component you never bought draws a REPAIR key straight
+       across its own NOT FITTED tag. combatHit() only ever picks fitted parts
+       so the game cannot reach that state - but the renderer should not depend
+       on somebody else's filter to stay correct, and the auditor now damages
+       every part at once precisely to ask whether it does. */
+    const dmgd = L && fit && L.dmgParts.includes(p.id);
     const ink = !fit?"#3c4c47" : dmgd?C.red : on?C.amber : (hov(wd)||drag)?C.bright : C.metal;
     /* ══ a component you operate is ONE object ══
        A body outline round the whole part, the symbol in the top of it, and the
@@ -826,6 +1118,7 @@ function drawPlant(y0,L,vh){
     for(const q of pl) if(q.p.id!==sel) drawPlate(q);
     for(const q of pl) if(q.p.id===sel) drawPlate(q);   // the selected one on top
   }
+  else if(BP) drawBenchPlate(BP);
   viewOn=false; ctx.restore();
 
   /* The one control the view itself has, drawn OUTSIDE the transform so it

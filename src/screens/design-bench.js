@@ -3,6 +3,16 @@
 
 /* ─────────────── DESIGN BENCH (spatial) ─────────────── */
 function massWith(key,i){ const o=D[key]; D[key]=i; const m=derived().mass; D[key]=o; return m; }
+
+/* ══ EVERY BENCH WIDGET DECLARES ITS OWN HEIGHT ══
+   A parameter plate has to be LAID OUT before anything is drawn into it - how
+   many columns it needs is a question about how tall the stack is - so the
+   height of each widget has to be knowable without drawing it. Each helper
+   returns through the same constant the plate measures with, so the two cannot
+   drift: change the widget and the packer changes with it. */
+const optListH=arr=>16+arr.length*25;
+const SEGSEL_H=39, SLDF_H=52, READF_H=34, TOGGLE_H=28;
+
 function optList(x,y,w,title,arr,key,tip){
   rule(title,x,y+9,w); TIP(x,y-4,w,14,title,tip);
   const tot=arr.map((o,i)=>massWith(key,i)), lo=Math.min(...tot);
@@ -21,7 +31,7 @@ function optList(x,y,w,title,arr,key,tip){
       (dm<1?" - the lightest choice in this group."
            :", which is "+dm.toFixed(0)+" t more than the lightest choice."));
   });
-  return y+16+arr.length*25;
+  return y+optListH(arr);
 }
 function segSel(x,y,w,title,labels,key,tip,base){
   rule(title,x,y+9,w); TIP(x,y-4,w,14,title,tip);
@@ -36,7 +46,7 @@ function segSel(x,y,w,title,labels,key,tip,base){
     txt("+"+(tot[i]-lo).toFixed(0)+"t",bx+cw/2,y+37,
       {size:6.5,align:"center",color:tot[i]-lo<1?C.green:C.ink2});
   });
-  return y+39;
+  return y+SEGSEL_H;
 }
 function sliderF(x,y,w,title,key,min,max,fmt,tip,step,massFn){
   rule(title,x,y+9,w);
@@ -48,7 +58,7 @@ function sliderF(x,y,w,title,key,min,max,fmt,tip,step,massFn){
   if(massFn){ const dm=massFn(D[key])-massFn(min);
     txt("+"+dm.toFixed(0)+"t",x,y+48,{size:9,color:dm<1?C.green:C.ink2}); }
   TIP(x,y-4,w,54,title,tip);
-  return y+52;
+  return y+SLDF_H;
 }
 /* a bench readout with no control under it: a number the other sliders caused.
    Same rule/value geometry as sliderF so a column of the two lines up. */
@@ -56,7 +66,7 @@ function readF(x,y,w,title,val,tip){
   rule(title,x,y+9,w);
   txt(val,x+w,y+30,{size:10,align:"right",color:C.cyan});
   TIP(x,y-4,w,36,title,tip);
-  return y+34;
+  return y+READF_H;
 }
 function toggleF(x,y,w,label,key,mass,tip){
   const on=D[key];
@@ -68,9 +78,8 @@ function toggleF(x,y,w,label,key,mass,tip){
   fitTxt(label,x+24,y+18,w-31-tw(mt,mo)-6,{size:8,sp:.3,color:on?C.green:C.ink});
   txt(mt,x+w-7,y+18,mo);
   TIP(x,y,w,28,label+(on?"  [ FITTED ]":"  [ not fitted ]"),tip+"  Costs "+mass+" tonnes.");
-  return y+28;
+  return y+TOGGLE_H;
 }
-function section(title,y){ rule(title,12,y,736,C.amber); return y+14; }
 
 function planStats(d){ return [
   ["POWER DENSITY",d.dens.toFixed(0)+" kW/L",clamp(d.dens/320,0,1),C.cyan,
@@ -234,6 +243,9 @@ function latAct(u,v,shift){
   latRevolve();
 }
 
+/* The plan is square-ish: the grid is w-15 wide with 6 taken off the height so
+   its gutter line clears whatever sits under it, then a caption line. */
+const latPlanH=w=>w-5;
 function latPlan(x,y,w,tool){
   if(tool) LATPEN.tool=tool;
   const AX=15;                                  // gutter the centrelines live in
@@ -341,7 +353,7 @@ function latPlan(x,y,w,tool){
       gx,gy+gh+11,gw,{size:6.5,sp:.5,color:C.ink2});
   TIP(gx,gy,gw,gh,"FUEL LATTICE / QUARTER PLAN",
     "The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius. A ring you leave part empty fades in the control room's flux view too, so a hole you draw here is a hole you can still see while you are operating it.");
-  return gy+gh+16;
+  return y+latPlanH(w);
 }
 
 /* The pen, carrying only the tools that belong to the component it is mounted
@@ -349,6 +361,11 @@ function latPlan(x,y,w,tool){
    That is the same rule the control room uses for its strips - a control lives
    on the machine it drives - and it is also why the tool cannot be left in a
    state the panel you are looking at has no use for. */
+/* The pen is a row of tools, and the cluster pen carries a second row of banks
+   under it - so its height depends on which tool is in your hand. latTools()
+   normalises the tool the same way before it draws, so the two agree. */
+const latPenTool=tools=>tools.some(t=>t[1]===LATPEN.tool)?LATPEN.tool:tools[0][1];
+const latToolsH=tools=>39+(latPenTool(tools)==="rod"?23:0);
 function latTools(x,y,w,tools){
   rule("PEN",x,y+9,w,C.amber); TIP(x,y-4,w,14,"PEN",
     "What clicking on the plan does. Every tool is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross.");
@@ -371,7 +388,7 @@ function latTools(x,y,w,tools){
     }
     ty+=23;
   }
-  return ty;
+  return y+latToolsH(tools);
 }
 const LATPEN_CORE=[
   ["FUEL","fuel",
@@ -395,6 +412,7 @@ const LATPEN_RODS=[
    One row, two callers - the lattice presets on the core and the bank spreads
    on the drives. Each key is an ACT, not a mode, so none of them is ever drawn
    lit: nothing here is a state you are in. */
+const LATROW_H=19;
 function latBulkRow(x,y,w,label,items){
   const lo={size:6.5,sp:.7,caps:1,color:C.ink2}, lw=tw(label,lo)+6;
   txt(label,x,midBase(y,19,6.5),lo);
@@ -404,7 +422,7 @@ function latBulkRow(x,y,w,label,items){
     button(bx,y,bw,19,it[0],{size:6.5,sp:.2,fn:it[2]});
     TIP(bx,y,bw,19,it[0],it[1]);
   });
-  return y+19;
+  return y+LATROW_H;
 }
 const latPreRow=(x,y,w)=>latBulkRow(x,y,w,"LATTICE",
   LATPRE.map((p,i)=>[p[0],p[2],()=>latPreset(i)]));
@@ -433,6 +451,7 @@ const LATDIMS=[
    "Reflector under the core. Leave it bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
 ];
 const LATREFL=["NONE","STEEL","BERYL","GRAPH"];
+const latDimRackH=()=>38+LATDIMS.length*20;
 function latDimRack(x,y,w){
   rule("SECTION",x,y+9,w,C.cyan); let ty=y+15;
   /* the reflector MATERIAL sits with the three thicknesses that dimension it,
@@ -456,7 +475,7 @@ function latDimRack(x,y,w){
     TIP(x,ty,w,20,d[0],d[5]);
     ty+=20;
   });
-  return ty;
+  return y+latDimRackH();
 }
 
 /* ── the numbers that used to be sliders ──
@@ -479,17 +498,18 @@ const LATREAD=[
   ["ASSEMBLIES",()=>String(latCount()),
    "How many fuel assemblies the core has. The plan shows a quarter of them: the axis runs along the corner of the first slot, so every square you place is four assemblies in the finished core."],
 ];
-function latMeasuredBar(x,y,w,rows){
+/* These used to run in a BAND along the foot of a 736-wide inspector, six of
+   them abreast at 118px each. A plate column is 158px, so a band would give
+   each figure 26px to say a four-digit number with a unit in - they are a
+   label-and-value LIST now, which is exactly what a plate row already is, so
+   they are drawn by plateRows() and not by a second copy of it. */
+const latReadH=rows=>15+(rows||LATREAD).length*PLROW;
+function latReadRows(x,y,w,rows){
   rows=rows||LATREAD;
-  const cw=w/rows.length;
-  fillRect(x,y,w,1,C.edge2);
-  rows.forEach((r,i)=>{
-    const bx=x+i*cw;
-    txt(r[0],bx,y+11,{size:6.5,sp:.7,caps:1,color:C.ink2});
-    txt(r[1](),bx,y+22,{size:9,color:r[3]?r[3]():C.cyan});
-    TIP(bx,y+2,cw-4,22,r[0]+"  [ MEASURED ]",r[2]);
-  });
-  return y+26;
+  rule("MEASURED",x,y+9,w,C.cyan);
+  plateRows(x,y+15,w,rows.map(r=>[r[0],r[1](),r[3]?r[3]():C.cyan]));
+  rows.forEach((r,i)=>TIP(x,y+15+i*PLROW,w,PLROW,r[0]+"  [ MEASURED ]",r[2]));
+  return y+latReadH(rows);
 }
 /* the rod drives ask for different numbers, and every one of them is a
    consequence of where the clusters went */
