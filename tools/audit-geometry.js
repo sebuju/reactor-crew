@@ -132,8 +132,16 @@ const checks=[
     defined once and both plate lists are returned through it. */
  ['one plate packer',        (S.match(/function plateStack/g)||[]).length===1 &&
                              /function platesFor\(\)[\s\S]{0,400}?return plateStack\(/.test(S) &&
-                             /function benchPlates\(\)[\s\S]{0,900}?return plateStack\(/.test(S),
+                             /function benchPlates\(\)[\s\S]{0,900}?plateStack\(items/.test(S),
                              'the two margins are balanced and stacked in one place'],
+ /* The bench also stands two plates that belong to no component - RESULTS and
+    REVIEW - and those cannot be packed, because the packer picks a margin off
+    the component's cell. They are placed against the packed list instead, in
+    ONE place, and they are dragged by the same offset every other plate is. */
+ ['one free-plate placer',   (S.match(/function benchFree/g)||[]).length===1 &&
+                             (S.match(/function plateDrag/g)||[]).length===1 &&
+                             /return packed\.concat\(benchFree\(packed\)\)/.test(S),
+                             'RESULTS and REVIEW stand clear of whatever the packer laid'],
  ['no hand-placed mimic',     !/OY=44/.test(S), 'fixed-coordinate mimic removed'],
  ...pipeChecks,
  ...dragChecks,

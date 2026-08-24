@@ -798,6 +798,10 @@ function readoutsFor(p,s){
    the only unspent room on the page. The control room stays on two, because its
    plates ARE measured into the view fit and a top margin would push the plant
    down the screen - say the word and it can have four as well. */
+/* the packed position, then whatever the player has dragged it by. Every plate
+   on the page moves this way, packed or placed, so it is one function: what is
+   stored is an OFFSET from wherever it was put, never an absolute point. */
+function plateDrag(q){ const o=plateOff[q.p.id]; if(o){ q.x+=o.dx; q.y+=o.dy; } return q; }
 function plateStack(items,sides,anchor){
   sides = sides || ["L","R"]; anchor = anchor || "mid";
   const G={L:[],R:[],T:[],B:[]};
@@ -848,8 +852,6 @@ function plateStack(items,sides,anchor){
      alarmStack() floats at VIEW.x+4, VIEW.y+44, in the top left corner of the
      viewport, and a left margin started at the grid's top corner lands straight
      underneath it. Align the control room the day that stack moves. */
-  /* the packed position, then whatever the player has dragged it by */
-  const drag=q=>{ const o=plateOff[q.p.id]; if(o){ q.x+=o.dx; q.y+=o.dy; } return q; };
   const out=[];
   for(const k of sides){
     const list=G[k]; if(!list.length) continue;
@@ -859,13 +861,13 @@ function plateStack(items,sides,anchor){
       let y=st(GY,gridH());
       for(const q of list){
         q.x = k==="L" ? GX-PLLEAD-q.w : GX+GW*CELL+PLLEAD;
-        q.y=y; q.side=k; y+=q.h+PLGAP; out.push(drag(q)); }
+        q.y=y; q.side=k; y+=q.h+PLGAP; out.push(plateDrag(q)); }
     } else {
       list.sort((a,b)=>a.cx-b.cx);
       let x=st(GX,GW*CELL);
       for(const q of list){
         q.y = k==="T" ? GY-PLLEAD-q.h : GY+gridH()+PLLEAD;
-        q.x=x; q.side=k; x+=q.w+PLGAP; out.push(drag(q)); }
+        q.x=x; q.side=k; x+=q.w+PLGAP; out.push(plateDrag(q)); }
     }
   }
   return out;
@@ -1071,9 +1073,12 @@ function plateShell(q,col,on,what){
   fillRect(q.x,q.y,q.w,q.h,C.panel); frame(q.x,q.y,q.w,q.h,col); accent(q.x,q.y,q.w,col);
   if(on) ticks(q.x+.5,q.y+.5,q.w-1,q.h-1,C.amber,6);
   txt(q.title||q.p.name,q.x+7,q.y+13,{size:7.5,sp:1.2,caps:1,color:col===C.edge2?C.ink:col});
-  txt("EL"+(GH-1-q.p.y),q.x+q.w-7,q.y+13,{size:6.5,sp:.8,align:"right",color:C.ink2});
+  /* a FREE plate belongs to the whole design and to no machine on it, so it has
+     no elevation to print and nothing to select - but it still catches its own
+     clicks, or a click on bare plate would reach the plant behind it */
+  if(!q.free) txt("EL"+(GH-1-q.p.y),q.x+q.w-7,q.y+13,{size:6.5,sp:.8,align:"right",color:C.ink2});
   fillRect(q.x+7,q.y+17,q.w-14,1,"rgba(120,180,190,.10)");
-  push({x:q.x,y:q.y,w:q.w,h:q.h,type:"btn",fn:()=>{ sel=q.p.id; }});
+  push({x:q.x,y:q.y,w:q.w,h:q.h,type:"btn",fn:q.free?null:()=>{ sel=q.p.id; }});
   /* The HEAD is the handle. Pushed after the plate's own catcher so it wins
      inside it, and it is only the 18 units above the hairline - everything
      below is a slider or an option row and has to stay clickable. */
@@ -1160,9 +1165,49 @@ function benchPlates(){
     }
     items.push(q);
   }
-  return plateStack(items,["L","R","T","B"],"start");
+  const packed=plateStack(items,["L","R","T","B"],"start");
+  return packed.concat(benchFree(packed));
+}
+
+/* ══ TWO PLATES BELONG TO THE PLANT AND NOT TO ANY MACHINE ON IT ══
+   What the design adds up to, and what is wrong with it. Neither is a property
+   of a component, so neither HAS a component: no leader, no elevation, nothing
+   to select. That is also why they cannot go through plateStack() - the packer
+   picks a margin by asking which grid edge the plate's component sits nearest,
+   and there is no component to ask.
+
+   So they are placed against what the packer has already done rather than
+   inside it: RESULTS across the foot of the drawing, below the lowest plate on
+   the page, and REVIEW down the right of it, clear of the rightmost. Measured
+   off the packed list every frame, so they stay clear however the margins fall
+   and wherever a plate has been dragged to. RESULTS is exactly the width of the
+   grid and starts on its corner - it is the whole plant's figure, so it lines
+   up with the whole plant.
+
+   They are still plates: same shell, same head, dragged by the same offset. */
+const FREE_W=2*PLBW+PLGAP;
+function benchFree(packed){
+  let x1=GX+GW*CELL, y1=GY+gridH();
+  for(const q of packed){ x1=Math.max(x1,q.x+q.w); y1=Math.max(y1,q.y+q.h); }
+  const d=derived(), hard=designBlocked(null,PLANT_LM);
+  const plate=(id,name,tip,w,ch,draw,col)=>
+    ({free:1,draw,col,w,h:20+ch+8,p:{id,name,tip}});
+  const res=plate("#results","RESULTS",
+    "What this design adds up to: the mass it spends, and the seventeen figures that come out of the choices you made.",
+    GW*CELL,benchResultsH(),benchResults,d.over?C.red:C.edge2);
+  res.x=GX; res.y=y1+PLLEAD;
+  const rev=plate("#review","DESIGN REVIEW",
+    "What is wrong with this design, and the key that builds it. A blocking issue has to be cleared before the unit can be commissioned.",
+    FREE_W,benchReviewH(FREE_W-14),benchReview,
+    hard?C.red:(designIssues(null,PLANT_LM).length?C.amber:C.green));
+  rev.x=Math.max(x1,res.x+res.w)+PLLEAD; rev.y=GY;
+  return [res,rev].map(plateDrag);
 }
 function drawBenchPlate(q){
+  /* a free plate points at nothing and is never the selection, so it is the box
+     and whatever stands in it - and its frame carries its own state instead,
+     which is what says BLOCKED without anything having to be opened */
+  if(q.free){ q.draw(q.x+7,plateShell(q,q.col,false,""),q.w-14); return; }
   const on=q.ids? q.ids.includes(sel) : q.p.id===sel, col=on?C.amber:C.edge2;
   q.lead = on&&q.ids ? LAY.parts.find(p=>p.id===sel) : q.p;
   plateLead(q,col,on);
@@ -1173,8 +1218,15 @@ function drawBenchPlate(q){
   });
 }
 
+/* the layoutMetrics() a drawPlant() call already paid for, so the bench's two
+   FREE plates - which read layout figures too - do not pay for it again. They
+   are measured and drawn from inside this same call, after BANDS has been set
+   from the layoutMetrics() below, and layoutMetrics() clears BANDS as the very
+   first thing it does: a second call anywhere downstream of that line would
+   clobber it back to null with nothing left in the frame to set it again. */
+let PLANT_LM=null;
 function drawPlant(y0,L,vh){
-  layoutMetrics(); GY=y0;
+  PLANT_LM=layoutMetrics(); GY=y0;
   /* layoutMetrics() measured the design with no bands; from here on the view has
      them, and every row position comes from rowTop() rather than Y*CELL */
   /* BANDS is computed on BOTH screens now. It used to be null on the bench, which
@@ -1206,11 +1258,25 @@ function drawPlant(y0,L,vh){
      view is for. The control room still measures its plates in, because there
      every fitted component has one and the set does not change with the
      selection. */
+  /* THE FIT MEASURES WHERE THE PACKER PUT EACH PLATE, NEVER WHERE THE PLAYER
+     DRAGGED IT. plateOff is subtracted back off here, because the view
+     transform must not depend on the thing the pointer is currently moving:
+     the drag delta is computed in PLANT units through vPt(), so a dragged
+     plate that grows this box re-scales the view, which changes vPt(), which
+     changes the next frame's delta - a runaway. Measured: a hand moving a
+     steady 6 page px per frame moved the turbine plate 9 units on the first
+     frame and 72 on the tenth, dragged it 87 units DOWN that it was never
+     pushed, and shrank the whole plant from 0.64 to 0.47 under the hand. The
+     bench dodges this by fitting the grid alone; the control room still wants
+     its plates in the fit, because every fitted component has one and the set
+     does not change with the selection - it only must not count the drag. */
   const B=(()=>{
     let x0=GX,x1=GX+GW*CELL,y0=GY,y1=GY+GHp;
     for(const q of (L? platesFor() : [])){
-      x0=Math.min(x0,q.x); x1=Math.max(x1,q.x+q.w);
-      y0=Math.min(y0,q.y); y1=Math.max(y1,q.y+q.h); }
+      const o=plateOff[q.p.id]||{dx:0,dy:0};
+      const px=q.x-o.dx, py=q.y-o.dy;
+      x0=Math.min(x0,px); x1=Math.max(x1,px+q.w);
+      y0=Math.min(y0,py); y1=Math.max(y1,py+q.h); }
     return {x:x0-18,y:y0-18,w:x1-x0+36,h:y1-y0+36};
   })();
   vFit(GX,GY,W-2*GX,vh||GHp,B.x,B.y,B.w,B.h);

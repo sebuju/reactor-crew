@@ -270,6 +270,10 @@ console.log('\n=== LEADERS DRAWN THROUGH SOMETHING ===');
     return x1>o.x+.5 && x0<o.x+o.w-.5 && y1>o.y+.5 && y0<o.y+o.h-.5;
   };
   for(const q of M.benchPlates()){
+    /* the RESULTS and REVIEW plates belong to the whole design and point at no
+       component, so they have no leader to measure - they are still in the
+       obstacle set, which is what the plates that DO have one are tested against */
+    if(q.free) continue;
     const pts=M.leadPts(q), mine=["@"+q.p.id,(q.lead||q.p).id];
     for(let i=1;i<pts.length;i++){ let done=false;
       for(const o of obs){

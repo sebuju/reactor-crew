@@ -177,95 +177,102 @@ function drawDesign(){
   TIP(596,42,152,18,"AUTO-ARRANGE","Resets every component to its default position.");
   const bh=20, vy=76, vh=Math.max(120,H-vy-bh-4);
   drawPlant(vy,null,vh);
-  drawOverlay();
+  /* No overlay is registered on this screen any more - the last two are plates
+     in the margins - so the bar along the bottom carries no keys and is only
+     the running total. It stays because that total is the one figure you want
+     under your eye while you spend it, wherever the plant is panned to. */
   const hard=designBlocked(d,LM);
   ovlBar(H-bh,bh,
     "MASS "+d.mass.toFixed(0)+" / "+BUDGET+" t"+
-    (hard?"   -   BLOCKED: OPEN REVIEW":d.over?"   -   OVER BUDGET":""));
+    (hard?"   -   BLOCKED: SEE THE DESIGN REVIEW PLATE":d.over?"   -   OVER BUDGET":""));
 }
 
-/* what the design adds up to, and the button that builds it */
-/* How much room the DESIGN REVIEW panel is given. Swept over every
-   architecture x fuel x loop count x RPS x shielding x lattice preset - 1440
-   designs, worst case six notes at 150 px - and rounded to nothing, because the
-   sweep is the measurement. Re-measure it if a new warning is added. */
-const REVIEW_H=150;
-/* Was one stacked block; it is two overlays now, because between them they are
-   740 units tall and the whole page is about 427. Split where the reading
-   splits: what the plant IS, and what is wrong with it. */
-function benchResults(y){
-  const d=derived(), LM=layoutMetrics();
-  rule("MASS BUDGET",12,y,736);
-  seg(12,y+12,736,14,clamp(d.mass/BUDGET,0,1),
+/* ══ WHAT THE WHOLE DESIGN ADDS UP TO ══
+   Two panels belong to no machine on the plant: what it IS, and what is wrong
+   with it. They were overlays, and an overlay hides the plant you opened it to
+   read about - which is the same objection that moved every per-component panel
+   out into the margins in the first place. They are PLATES now, in the same box
+   on the same head, placed by benchFree() in plant.js: RESULTS below the plant
+   and every plate on it, REVIEW to the right of both. Neither carries a leader,
+   because neither of them points at anything.
+   These two functions say what stands inside; where they stand is not their
+   question, exactly as it is not paramsFor()'s. Both are handed a content x, y
+   and w and draw from that corner, so neither knows the page it is on. */
+
+/* THREE columns, not two. Seventeen figures two abreast is 322 units tall and
+   three abreast is 226, and it reads no worse, because each row is a label, a
+   bar and a number and none of them wanted 362 units to say it in. */
+const RES_NC=3, RES_HEAD=90;
+/* PLANT_LM, not a fresh layoutMetrics() call: this runs from inside drawPlant()
+   (through benchFree(), called out of benchPlates()), after BANDS has already
+   been set from THAT layoutMetrics() call - and layoutMetrics() clears BANDS as
+   the first thing it does, so calling it again here would clobber it back to
+   null with nothing left downstream in the frame to set it again. */
+const resStats=()=>planStats(derived()).concat(layoutStats(PLANT_LM));
+const benchResultsH=()=>RES_HEAD-12+Math.ceil(resStats().length/RES_NC)*32;
+function benchResults(x,y,w){
+  const d=derived();
+  rule("MASS BUDGET",x,y+9,w);
+  seg(x,y+14,w,14,clamp(d.mass/BUDGET,0,1),
       d.over?C.red:(d.mass/BUDGET>.9?C.amber:C.green),48);
-  txt(d.mass.toFixed(0)+" / "+BUDGET+" t",748,y+50,{size:13,align:"right",color:d.over?C.red:C.cyan});
+  txt(d.mass.toFixed(0)+" / "+BUDGET+" t",x+w,y+52,
+      {size:13,align:"right",color:d.over?C.red:C.cyan});
   txt("EQUIPMENT "+(d.mass-layMass).toFixed(0)+" t   PIPING + SHIELDING "+layMass.toFixed(0)+
       " t   /   CORE "+d.dens.toFixed(0)+" kW/L   EXCESS "+d.excess.toFixed(0)+" pcm",
-      12,y+50,{size:8.5,color:C.ink2});
-  TIP(12,y-8,736,62,"MASS BUDGET",
+      x,y+52,{size:8.5,color:C.ink2});
+  TIP(x,y,w,58,"MASS BUDGET",
     "You have "+BUDGET+" tonnes. Vessel, core, fuel, loops, scram gear, sensors, safeguards, pipe runs and shielding all compete for the same allowance.");
-  y+=64;
-
-  /* THREE columns, not two. Seventeen figures two abreast is 322 units tall and
-     the overlay has about 300 to give; three abreast is 226 and reads no worse,
-     because each row is a label, a bar and a number and none of them wanted 362
-     units to say it in. */
-  const stats=planStats(d).concat(layoutStats(LM)), NC=3, cw=237;
-  const rows=Math.ceil(stats.length/NC);
-  well(12,y,736,rows*32+34,"RESULTING PLANT");
+  rule("RESULTING PLANT",x,y+76,w);
+  const stats=resStats(), cw=w/RES_NC;
   stats.forEach((st,i)=>{
-    const sx=22+(i%NC)*cw, sy=y+40+Math.floor(i/NC)*32;
+    const sx=x+(i%RES_NC)*cw, sy=y+RES_HEAD+Math.floor(i/RES_NC)*32;
     txt(st[0],sx,sy,{size:8,sp:1.3,color:C.ink2});
     seg(sx,sy+5,130,9,st[2],st[3],20);
-    txt(st[1],sx+cw-8,sy+13,{size:10,align:"right",color:C.bright});
-    TIP(sx-10,sy-10,cw,28,st[0],st[4]);
+    txt(st[1],sx+cw-14,sy+13,{size:10,align:"right",color:C.bright});
+    TIP(sx-6,sy-10,cw,28,st[0],st[4]);
   });
-  return y+rows*32+46;
-}
-function benchReview(y){
-  const d=derived(), LM=layoutMetrics();
-  const W_=designIssues(d,LM), hard=designBlocked(d,LM);
-  /* a review note is a sentence, not a label: wrap it and size the well to fit */
-  const rx=78, rw=748-rx-12, ro={size:8.5};
-  /* RESERVED, not fitted, and it is the last thing on the page that could
-     change height. The bench page is exactly as tall as this panel makes it, so
-     a panel that grows a line moves the whole page under the pointer: the
-     COMPACT preset takes 137 t off, the over-budget note goes away, and the
-     click that did it shortened the page by 16 px. Now the block is always
-     REVIEW_H tall whatever it has to say, including when it has nothing to say.
-     A floor and not a clamp - a design that finds more notes than the reserve
-     still gets the room to print them, it just moves the page again while it
-     does. */
-  const hh=Math.max(REVIEW_H,
-    W_.length? 30+W_.reduce((a,w)=>a+wrapCount(w[1],rw,ro)*12+4,0) : 0);
-  well(12,y,736,hh,"DESIGN REVIEW",W_.length?(hard?C.red:C.amber):C.green);
-  if(W_.length){
-    let ry=y+34;
-    for(const w of W_){
-      const col=w[0]==="HARD"?C.red:C.amber;
-      txt(w[0]==="HARD"?"[BLOCK]":"[WARN ]",22,ry,{size:8.5,color:col});
-      ry=wrap(w[1],rx,ry,rw,12,{size:8.5,color:col})+4;
-    }
-  } else txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",22,y+34,
-      {size:8.5,sp:1,color:C.green});
-  y+=hh+12;
-  if(hard){
-    fillRect(12,y,736,34,"#1a0d0b"); frame(12,y,736,34,C.red);
-    txt("RESOLVE BLOCKING ISSUES BEFORE COMMISSIONING",380,y+21,
-        {size:10,sp:2,align:"center",color:C.red});
-  } else {
-    button(12,y,736,34,P?">> RE-COMMISSION UNIT <<":">> COMMISSION UNIT <<",{on:true,size:10,fn:commission});
-    TIP(12,y,736,34,"COMMISSION UNIT",
-      "Builds this reactor and takes you to the control room. Every parameter and every position above is baked into the physics.");
-  }
-  return y+50;
 }
 
-/* The bench keeps TWO panels over its plant, not three. The component drawer is
-   gone, because what a component lets you set now stands beside the component
-   itself. What is left is what the WHOLE design adds up to - which belongs to no
-   one machine, and so has nowhere on the plant to be. */
-ovlAdd({k:"res",label:"RESULTS",h:300,sc:"design",draw:benchResults,
-  tip:"What this design adds up to: the mass it spends, and the seventeen figures that come out of the choices you made."});
-ovlAdd({k:"rev",label:"REVIEW",h:200,sc:"design",draw:benchReview,
-  tip:"What is wrong with this design, and the key that builds it. A blocking issue has to be cleared before the unit can be commissioned."});
+/* How much room the note block is given. RESERVED and not fitted, because the
+   COMMISSION key stands at the foot of it: a block exactly as tall as it has
+   something to say moves that key under the pointer every time a note appears
+   or goes away. A floor and not a clamp - a design that finds more notes than
+   the reserve still gets the room to print them.
+   Swept over every architecture x fuel x loop count x RPS x containment x
+   lattice preset - 2160 designs, worst case seven notes at 200 px at THIS
+   plate's wrap width - and rounded up, because the sweep is the measurement.
+   It was 150 while this was a 736-wide overlay; the plate is 382, so the same
+   seven notes wrap half again as far. Re-measure it if a new warning is added
+   or if the plate changes width. */
+const REVIEW_H=210;
+const REV_TAG=50, REV_LH=12, REV_O={size:8.5};
+const revNoteH=w=>Math.max(REVIEW_H, designIssues(null,PLANT_LM)
+  .reduce((a,q)=>a+wrapCount(q[1],w-REV_TAG,REV_O)*REV_LH+4,0));
+const benchReviewH=w=>18+revNoteH(w)+12+34;
+function benchReview(x,y,w){
+  const d=derived(), LM=PLANT_LM;
+  const W_=designIssues(d,LM), hard=designBlocked(d,LM);
+  /* a review note is a sentence, not a label: it wraps, and the tag beside it
+     keeps its own column so the sentences all start on one line */
+  rule("DESIGN REVIEW",x,y+9,w,W_.length?(hard?C.red:C.amber):C.green);
+  if(W_.length){
+    let ry=y+30;
+    for(const q of W_){
+      const col=q[0]==="HARD"?C.red:C.amber;
+      txt(q[0]==="HARD"?"[BLOCK]":"[WARN ]",x,ry,{size:8.5,color:col});
+      ry=wrap(q[1],x+REV_TAG,ry,w-REV_TAG,REV_LH,{size:8.5,color:col})+4;
+    }
+  } else txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",x,y+30,
+      {size:8.5,sp:1,color:C.green});
+  const by=y+18+revNoteH(w)+12;
+  if(hard){
+    fillRect(x,by,w,34,"#1a0d0b"); frame(x,by,w,34,C.red);
+    txt("RESOLVE BLOCKING ISSUES BEFORE COMMISSIONING",x+w/2,by+21,
+        {size:10,sp:2,align:"center",color:C.red});
+  } else {
+    button(x,by,w,34,P?">> RE-COMMISSION UNIT <<":">> COMMISSION UNIT <<",
+      {on:true,size:10,fn:commission});
+    TIP(x,by,w,34,"COMMISSION UNIT",
+      "Builds this reactor and takes you to the control room. Every parameter and every position above is baked into the physics.");
+  }
+}
