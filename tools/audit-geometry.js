@@ -12,7 +12,7 @@ const g=(re,d)=>{const m=S.match(re);return m?m.slice(1).map(Number):d;};
 /* The pipe checks below are the one part of this auditor that has to *run* the code:
    routing is emergent from component positions, so no amount of reading the source
    tells you whether two runs land on top of each other. */
-const M=require('./bundle').headless('{pipeNetwork,commission,D:()=>D}');
+const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,addJunction}');
 
 /* Chop every run into its axis-aligned segments. Zero-length ones are the corner
    artefacts a polyline picks up when two waypoints coincide; they cannot overlap
@@ -58,6 +58,59 @@ for(const loops of [1,2,3,4]){
   pipeChecks.push([`no pipe overlaps (${loops} loop${loops>1?'s':''})`, over.length===0,
                    `${over.length} overlapping segment pairs`, loops, over]);
 }
+/* No junction exists on a default plant, so the sweep above never routes
+   one. A placed junction lands a branch on a loop's cold leg and into a
+   neighbouring pump face nothing else was using - check it stays clear at
+   every loop count, with every adjacent pair actually tied (real junctions,
+   not the fixed three-slot chain this replaced), the densest a plant this
+   size can be wired. */
+for(const loops of [2,3,4]){
+  M.D().loops=loops; M.D().junc={}; M.commission();
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
+  for(let i=0;i<loops-1;i++) M.addJunction(i,i+1,...tap('cold:sg'+i));
+  const over=pipeOverlaps(pipeSegs(M.pipeNetwork()));
+  pipeChecks.push([`no overlaps (${loops} loops, tied)`, over.length===0,
+                   `${over.length} overlapping segment pairs`, loops, over]);
+}
+M.D().junc={};
+
+/* ══ A WAYPOINT STEERS THE RUN, AND DOES NOT TANGLE IT ══
+   A steered run is n+1 legs from the same two-point router, so what the ROUTER
+   still owes is checkable and is checked here, over every snapped position a
+   hand could drop a point in: the run goes through the point, every segment is
+   still axis-aligned, and no run ever lies on top of ITSELF - two legs doubling
+   back along one lane is one pipe drawn twice, and no amount of looking at the
+   screen makes that obvious.
+   What the router does NOT owe is a clear lane through everybody else's pipes.
+   A waypoint parked on another run's lane puts the two on top of each other,
+   because the leg it makes has no free parameter left to dodge with - and that
+   is the player asking for it, exactly like the component dragged into a corner
+   the sweep above already forgives. So the guard on that one is a ceiling on
+   how OFTEN it happens rather than a demand for zero, and the ceiling is
+   measured: 12 of the 672 places swept below, all of them on lanes the cold
+   legs already own. */
+const wpSpots=[];
+for(let x=8;x<=760;x+=24) for(let y=104;y<=600;y+=24) wpSpots.push([x,y]);
+M.D().loops=2; M.commission();
+const wpKey=M.pipeNetwork().find(r=>r.k==='hot').key;
+let wpMiss=0, wpBent=0, wpSelf=0, wpOther=0;
+for(const [x,y] of wpSpots){
+  M.pipeWaypoints[wpKey]=[{x,y}];
+  const net=M.pipeNetwork(), r=net.find(q=>q.key===wpKey);
+  if(!r.pts.some(p=>Math.abs(p[0]-x)<0.5 && Math.abs(p[1]-y)<0.5)) wpMiss++;
+  if(r.legs.length!==r.wps.length+1) wpBent++;
+  if(r.pts.some((p,i)=>i>0 && Math.abs(p[0]-r.pts[i-1][0])>0.5 && Math.abs(p[1]-r.pts[i-1][1])>0.5)) wpBent++;
+  if(pipeOverlaps(pipeSegs([r])).length) wpSelf++;
+  if(pipeOverlaps(pipeSegs(net)).length) wpOther++;
+}
+delete M.pipeWaypoints[wpKey];
+const wpChecks=[
+  ['waypoint steers the run', wpMiss===0, `${wpSpots.length} places checked, ${wpMiss} not routed through`],
+  ['waypoint keeps it square', wpBent===0, `${wpBent} runs bent off the axes or split wrong`],
+  ['waypoint never doubles back', wpSelf===0, `${wpSelf} runs overlapping themselves`],
+  ['waypoint clears other runs', wpOther/wpSpots.length<0.05,
+   `${wpOther} of ${wpSpots.length} land on a lane another run owns`],
+];
 
 
 /* The control-room fit used to be measured FROM the plates it draws,
@@ -144,6 +197,7 @@ const checks=[
                              'RESULTS and REVIEW stand clear of whatever the packer laid'],
  ['no hand-placed mimic',     !/OY=44/.test(S), 'fixed-coordinate mimic removed'],
  ...pipeChecks,
+ ...wpChecks,
  ...dragChecks,
 ];
 let bad=0;

@@ -40,11 +40,17 @@ if(!isMainThread){
   const endState = s => [s.n,s.Tf,s.dnbr,s.rodPos,s.boron,s.P,s.vf,s.t]
     .map(v => Number(v).toPrecision(17)).join(",");
 
-  /* ── one (arch, fuel, pumps) group ──
-     The fourth design axis, `scram`, is deliberately simulated only once.
+  /* ── one (arch, fuel) group ──
+     The third design axis, `scram`, is deliberately simulated only once.
      P.scram is read in exactly one place - `s.scrammed ? P.scram : ROD_RATE`
      in src/sim/step.js - so on a plant that never trips it is never read at
      all, and this sweep's whole assertion is that nothing trips.
+     Pump count/size is not a fourth axis here at all any more - it is a
+     placed component now, open-ended, not a fixed dropdown with a finite set
+     of choices to cross the other two against. Every plant this sweep builds
+     carries the one static pump per loop it is born with and nothing placed,
+     which is the one pump configuration every design shares regardless of
+     anything else it was built from.
 
      A scram system still carries mass, so it can push a design over the budget
      and change what is BUILDABLE. Every scram value is therefore still put to
@@ -54,11 +60,11 @@ if(!isMainThread){
      group it simulates all three anyway and hands back the end states, so
      audit-physics.js can assert they still match instead of trusting this. */
   const group = c => {
-    const s = set({arch:c.a, fuel:c.f, pumps:c.p, scram:c.built[0], autorod:true});
+    const s = set({arch:c.a, fuel:c.f, scram:c.built[0], autorod:true});
     run(s, SECS);
     const r = { i:c.i, scram:c.built[0], trip: s.scrammed ? s.trip : null, t:s.t };
     if(c.guard) r.guard = c.built.map(sc => {
-      const g = set({arch:c.a, fuel:c.f, pumps:c.p, scram:sc, autorod:true});
+      const g = set({arch:c.a, fuel:c.f, scram:sc, autorod:true});
       run(g, SECS); return endState(g); });
     return r;
   };
@@ -70,7 +76,7 @@ if(!isMainThread){
 /* ══════════ main thread: shard, collect, emit ══════════ */
 const os = require("os");
 
-/* Every (arch, fuel, pumps) the bench offers, each carrying the list of scram
+/* Every (arch, fuel) the bench offers, each carrying the list of scram
    choices the bench will actually build it with. The dimensions are read from
    the design tables rather than hard-coded, so adding an architecture widens
    the sweep without anyone having to remember this file.
@@ -79,14 +85,14 @@ const os = require("os");
    derived() only, no commission - and because keeping it in one place stops
    the workers and the report disagreeing about what "buildable" counted. */
 function cases(){
-  const M = require("./bundle").headless("{derived,D:()=>D,ARCH:()=>ARCH,FUEL:()=>FUEL,PUMPS:()=>PUMPS}");
+  const M = require("./bundle").headless("{derived,D:()=>D,ARCH:()=>ARCH,FUEL:()=>FUEL}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
   const ok = o => { Object.assign(D, BASE, o); return !M.derived().warn.some(w=>w[0]==="HARD"); };
-  const nA = M.ARCH().length, nF = M.FUEL().length, nP = M.PUMPS().length;
+  const nA = M.ARCH().length, nF = M.FUEL().length;
   const out = [];
-  for(let a=0;a<nA;a++) for(let f=0;f<nF;f++) for(let p=0;p<nP;p++){
-    const built = [0,1,2].filter(sc => ok({arch:a, fuel:f, pumps:p, scram:sc, autorod:true}));
-    out.push({ i:out.length, a, f, p, built });
+  for(let a=0;a<nA;a++) for(let f=0;f<nF;f++){
+    const built = [0,1,2].filter(sc => ok({arch:a, fuel:f, scram:sc, autorod:true}));
+    out.push({ i:out.length, a, f, built });
   }
   return out;
 }
@@ -114,7 +120,7 @@ function main(){
     /* every group, buildable or not, so the report can count what the bench
        offered as well as what was worth simulating */
     const byI = new Map(got.map(r => [r.i, r]));
-    const groups = all.map(c => Object.assign({ i:c.i, a:c.a, f:c.f, p:c.p, built:c.built },
+    const groups = all.map(c => Object.assign({ i:c.i, a:c.a, f:c.f, built:c.built },
                                               byI.get(c.i) || {}));
     process.stdout.write(JSON.stringify({ secs:SECS, workers:N, groups }));
   };

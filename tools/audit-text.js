@@ -103,6 +103,7 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'setDmg:v=>S.dmgParts=v,'+
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
+ 'pipeNetwork,pipeWaypoints,nearestOn,placePart,addJunction,removePart,removeJunction,'+
  'benchPlates,leadPts,leadObs:()=>LEADOBS};')();
 global.__viewOn=()=>M.vOn();
 
@@ -199,6 +200,45 @@ M.setSel('core');
 { const L0=M.D().loops;
   M.D().loops=4; warmUp(); M.setSel('sg2'); sweep('loops4:');
   M.D().loops=L0; warmUp(); M.setSel('core'); }
+
+/* JUNCTIONS AND SPARE PUMPS. Neither exists on any default plant, so a
+   junction's valve mark, a spare pump's own symbol and plate are draw paths
+   nothing else here reaches. Two junctions spread across a four-loop plant
+   (0-1 and 2-3, not both crowding the same pair of pumps) plus a spare pump
+   on loop 0 - one of them open, so the meters are not all reading an
+   identical zero. */
+{ const L0=M.D().loops, J0=M.D().junc, PS0=M.D().pumpSize;
+  M.D().loops=4; M.D().junc={}; M.D().pumpSize={};
+  warmUp();                       // 4-loop LAY exists now, for the tap lookup below
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
+  const j0=M.addJunction(0,1,...tap('cold:sg0'));
+  M.addJunction(2,3,...tap('cold:sg2'));
+  const spare=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',
+    grp:'loop0',tip:'A spare coolant pump.',loop:0}));
+  /* warmUp() re-commissions - P.junc has to be baked AFTER the junctions
+     exist, or the control room never sees them - and commission() resets S
+     wholesale, so juncOpen can only be set AFTER this, not before it. */
+  warmUp(); M.S().juncOpen[j0]=true;
+  M.setSel(spare.id); sweep('spare:');
+  M.setSel('core'); sweep('junc:');
+  /* and broken, because a REPAIR key is drawn across the symbol of a
+     one-cell component and a spare pump is one of the smallest on the grid */
+  warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('juncdmg:');
+  /* placedParts (layout.js) is a persistent array outside D, unlike every
+     other field this block restores - removePart() is the only way to
+     take the spare back out, or it goes on lingering into every sweep
+     after this one. */
+  M.removePart(spare.id);
+  M.D().loops=L0; M.D().junc=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
+
+/* A STEERED PIPE. Every leg of a run offers a grip and every placed waypoint
+   offers another, so a run with two waypoints on it draws five where a plain
+   run draws one - each with a tooltip region the bench has to fit around. */
+{ warmUp();
+  const key=M.pipeNetwork().find(r=>r.k==='hot').key;
+  M.pipeWaypoints[key]=[{x:400,y:500},{x:200,y:300}];
+  sweep('wp:');
+  delete M.pipeWaypoints[key]; warmUp(); }
 
 /* EVERY component broken at once. This is the worst case the plant can draw:
    every symbol carries a repair key, every plate grows a STATUS row, and the

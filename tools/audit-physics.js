@@ -8,21 +8,28 @@
 const {execFileSync}=require('child_process');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
- 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,PUMPS:()=>PUMPS,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
- 'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
+ 'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
+ 'setSplit,setCommon,bankAutoLive,tProg,loopFlowK,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
+ 'pumpCap,totalPumpCap,placePart,removePart,addJunction,removeJunction,pipeNetwork,'+
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM}');
-const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), PUMPS=M.PUMPS(), ANN=M.ANN();
+const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 /* THE LATTICE IS PART OF THE DESIGN NOW, so set() has to put it back as well
    as D, or one case's core leaks into the next. Order matters: BASE carries
    the seven fields the lattice MEASURES, and they are stale the moment the
    lattice differs - so latDefault() runs last and overwrites them with the
    truth. `o.lat` is a hook for a case that wants a different core: it runs
-   after the reset and does its own latRevolve(). */
+   after the reset and does its own latRevolve().
+   BASE is COPIED on every reset rather than assigned from: D carries objects
+   now (pumpSize, junc), and Object.assign hands over the reference, so a case
+   that wrote through one would poison BASE and every case after it. set() does
+   NOT touch placedParts (layout.js) - that is not a D field, so any case that
+   places a pump has to remove it again itself, the same way it would restore
+   any other module state set() does not own. */
 const set=o=>{
   o=o||{};
   const lat=o.lat; if(lat) { o=Object.assign({},o); delete o.lat; }
-  Object.assign(D,BASE,o);
+  Object.assign(D,JSON.parse(JSON.stringify(BASE)),o);
   M.latDefault();
   if(lat) lat();
   M.commission(); return M.S();
@@ -47,7 +54,7 @@ console.log('=== UNTOUCHED PLANT WITH AUTO ROD CONTROL MUST NOT TRIP ITSELF (600
     cases+=g.built.length;
     if(!g.built.length) continue;
     sims++;
-    if(g.trip) bad(`${ARCH[g.a].id}/${FUEL[g.f].name}/${PUMPS[g.p].name}/${SCRAM[g.scram].name}`+
+    if(g.trip) bad(`${ARCH[g.a].id}/${FUEL[g.f].name}/${SCRAM[g.scram].name}`+
                    ` tripped at t=${g.t.toFixed(1)}s: ${g.trip}`);
   }
   /* Why sims < cases: the scram system is the one design axis that cannot
@@ -100,18 +107,26 @@ console.log('  no annunciator lit at rest, every architecture');
   if(s.melt) bad('HTGR melted on low flow + bypass; it is meant to survive');
   console.log(`  HTGR low flow + bypass: melt=${s.melt} dmg=${s.dmg.toFixed(0)}`);
 }
-/* the pump slider reaches zero: stopping the pumps is an order the panel accepts.
-   Armed, the flow trip catches it before DNBR is anywhere near the limit, whatever
-   redundancy was bought - the floor is a setpoint, not a stop. Bypassed, the core
-   is left on buoyancy and must settle there instead of running away. */
-for(const pumps of [0,1,2]){
-  const s=set({pumps}); run(s,10);
+/* the pump slider reaches zero: stopping the pumps is an order the panel
+   accepts. Armed, the flow trip catches it before DNBR is anywhere near the
+   limit, whatever redundancy was bought - the floor is a setpoint, not a
+   stop. Bypassed, the core is left on buoyancy and must settle there instead
+   of running away. Redundancy is placed spare pumps now, not a dial - zero,
+   one and two of them, each a real component added before commissioning and
+   removed again after, so it does not leak into the next case. */
+for(const spares of [0,1,2]){
+  set({});
+  const added=[];
+  for(let i=0;i<spares;i++) added.push(M.placePart(n=>
+    ({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9+i,y:5,col:'#57d38c',grp:'loop0',tip:'t',loop:0})));
+  M.commission(); const s=M.S(); run(s,10);
   s.flowDem=0;
   for(let i=0;i<120*50 && !s.scrammed && !s.breach;i++) M.step(0.02);
   const floor=M.P().flowMin;
-  if(!/LOW FLOW/.test(s.trip)) bad(`pumps commanded to zero with ${PUMPS[pumps].name} tripped on "${s.trip}", expected LOW FLOW`);
+  if(!/LOW FLOW/.test(s.trip)) bad(`pumps commanded to zero with ${spares} spare(s) tripped on "${s.trip}", expected LOW FLOW`);
   if(s.flow>floor*1.05) bad(`pumps commanded to zero tripped at ${(s.flow*100).toFixed(1)}%, nowhere near the ${(floor*100).toFixed(0)}% floor`);
-  console.log(`  pumps to zero, ${PUMPS[pumps].name}: trip="${s.trip}" at flow=${(s.flow*100).toFixed(1)}% dnbr=${s.dnbr.toFixed(2)}`);
+  console.log(`  pumps to zero, ${spares} spare(s): trip="${s.trip}" at flow=${(s.flow*100).toFixed(1)}% dnbr=${s.dnbr.toFixed(2)}`);
+  for(const p of added) M.removePart(p.id);
 }
 /* Buoyancy removes heat but hardly moves the water, so it buys no DNBR. Stopping
    the pumps with the protection defeated must destroy the core, not settle into a
@@ -333,9 +348,19 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
 }
 { /* backup power is the only thing turning the pumps in a blackout. Bypassed,
      flow collapses to natural circulation and the protection system says so -
-     the bypassed core ends up COLDER because the RPS shut it down. */
+     the bypassed core ends up COLDER because the RPS shut it down.
+     220 s, not 60: the default flow floor is lower now that it is read off
+     pump capacity actually on the grid rather than a dropdown that used to
+     default to "one spare" for free (commission(), step.js) - a plant with
+     no spare pumps placed tolerates flow falling further before LOW FLOW is
+     even armed, so on the true baseline the core has time to self-limit on
+     feedback alone (power and fuel temperature both fall, DNBR stays healthy,
+     nothing melts) before flow crosses that lower line. It still trips - on
+     LOW DNBR once temperature and flow cross, same as the comment below
+     always allowed for - just later. Measured directly before widening this:
+     ~180 s to LOW DNBR, never melts, DNBR never drops below 1.5 on the way. */
   const a=set({bkp:2}); run(a,10); a.blackout=true; run(a,60);
-  const b=set({bkp:2}); run(b,10); b.byp.bkp=true; b.blackout=true; run(b,60);
+  const b=set({bkp:2}); run(b,10); b.byp.bkp=true; b.blackout=true; run(b,220);
   if(a.scrammed) bad(`backup power armed still tripped in a blackout: ${a.trip}`);
   if(!b.scrammed) bad('backup power bypassed did not starve the loop; the plant rode the blackout out');
   /* the trip lands on LOW DNBR, not LOW FLOW: the pump slider is still at 100%,
@@ -344,15 +369,123 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
   console.log(`  BACKUP: armed rides it out (Tf ${a.Tf.toFixed(0)}K), bypassed trips on "${b.trip}"`);
 }
 { /* the bench sells diesels as full pump power, so a blackout on diesels must
-     hold the flow the pumps had - above the floor of any pump set you bought */
-  for(const pumps of [0,1,2]){
-    const s=set({pumps,bkp:2}); run(s,10); s.blackout=true; run(s,60);
-    if(s.scrammed) bad(`diesels fitted with ${PUMPS[pumps].name} still tripped in a blackout: ${s.trip} at flow ${(s.flow*100).toFixed(0)}%`);
+     hold the flow the pumps had - above the floor of any pump set you bought.
+     Redundancy is placed spares now, not a dial. */
+  for(const spares of [0,1,2]){
+    set({bkp:2});
+    const added=[]; for(let i=0;i<spares;i++) added.push(M.placePart(n=>
+      ({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9+i,y:5,col:'#57d38c',grp:'loop0',tip:'t',loop:0})));
+    M.commission(); const s=M.S(); run(s,10); s.blackout=true; run(s,60);
+    if(s.scrammed) bad(`diesels fitted with ${spares} spare(s) still tripped in a blackout: ${s.trip} at flow ${(s.flow*100).toFixed(0)}%`);
     if(s.flow<0.95) bad(`diesels hold only ${(s.flow*100).toFixed(0)}% flow in a blackout, bench promised full pump power`);
+    for(const p of added) M.removePart(p.id);
   }
   const s=set({bkp:1}); run(s,10); s.blackout=true; run(s,60);
   if(Math.abs(s.flow-0.5)>0.03) bad(`battery bank holds ${(s.flow*100).toFixed(0)}% flow in a blackout, bench promised half`);
   console.log(`  BACKUP: diesels hold full flow through a blackout, battery holds ${(s.flow*100).toFixed(0)}%`);
+}
+
+/* ══════════ JUNCTIONS: FLOW IS PER LOOP NOW ══════════
+   Two loops with an open junction between them are one shared-flow group, and
+   a pump still turning can push into its neighbour's loop as well. With
+   nothing placed - which is every plant in this file above, and every plant
+   the sweep built - each group is a single loop and the whole calculation
+   collapses back to the (loops-lost)/loops it replaced. That identity is the
+   reason the DOCUMENTED BEHAVIOUR figures did not move when the model went
+   per-loop, so it is asserted against the formula itself rather than
+   inferred from them - and it is asserted with junctions placed anywhere a
+   real one can go now, not read off a fixed three-slot table. */
+console.log('\n=== JUNCTIONS ===');
+/* Ties every adjacent pair with a real junction, the same chain the old
+   fixed xtie0/1/2 slots always offered - four loops, three junctions, each
+   tap point found the exact way the right-click menu finds one. No spare
+   pumps here - see the block below for why that is its own case. */
+const tieChain=()=>{
+  set({loops:4});
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
+  const ids=[0,1,2].map(i=>M.addJunction(i,i+1,...tap('cold:sg'+i)));
+  M.commission();               // re-bakes P.junc with the three junctions in it
+  return {s:M.S(), ids};
+};
+{ /* strict equality, not a tolerance: shut, this is meant to be the same
+     arithmetic and not merely the same answer to a few decimal places. No
+     spares fitted in this case on purpose - loopPumpCap() would then sum
+     real hardware above 1.0 per loop and (loops-lost)/loops is no longer
+     the right-hand side of the identity being checked; that combination
+     gets its own case below instead of being asserted here. */
+  const {s,ids}=tieChain();
+  let drift=0;
+  for(const dmg of [[],['pump1'],['pump0','pump3'],['pump0','pump1','pump2','pump3']]){
+    s.dmgParts=dmg.slice();
+    if(M.loopFlowK(s)!==(4-dmg.length)/4) drift++;
+  }
+  if(drift) bad(`${drift} of 4 damage cases: shut junctions no longer give (loops-lost)/loops exactly`);
+  else console.log('  shut junctions are the old formula exactly, 0..4 pumps lost');
+  s.dmgParts=[];
+  if(M.loopFlowK(s)!==1) bad('an open junction changed the flow of a plant with every pump running');
+}
+{ /* ── A JUNCTION ONLY HAS SOMETHING TO PROVE ONCE THERE IS SOMETHING TO SHARE ──
+     loopPumpCap() sums real hardware - a pump at default size delivers
+     exactly 1.0, its own loop's own ceiling, so min(groupSize,up) never
+     actually clamps anything when every pump in a group is bare and
+     default-sized: tying two loops each already at their own 1.0 changes
+     nothing, because there was never a spare pcm of capacity to move. That
+     is not a bug, it is "nobody gets flow for free" (loopFlowK's own
+     comment, step.js) - a junction is a path for capacity that already
+     exists to travel, not a source of capacity on its own.
+     So this case places two spares deliberately unequal, to keep three
+     figures strictly increasing rather than two of them landing on the same
+     ceiling: a SMALL one (sized to 0, capacity 0.7) on loop 1, reachable the
+     moment the single junction j0 opens, and a FULL one (default size,
+     capacity 1.0) on loop 3, reachable only once the whole chain is open -
+     which is also what actually exercises the graph-connectivity
+     generalisation this replaced a fixed adjacent-pair chain with, rather
+     than only ever proving one edge works. Verified by hand before this was
+     written: shut 75.0%, one junction 92.5%, full chain 100.0%. */
+  set({loops:4});
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
+  const ids=[0,1,2].map(i=>M.addJunction(i,i+1,...tap('cold:sg'+i)));
+  const sp1=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',grp:'loop1',tip:'t',loop:1}));
+  M.D().pumpSize[sp1.id]=0;
+  const sp3=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:13,y:5,col:'#57d38c',grp:'loop3',tip:'t',loop:3}));
+  M.commission(); const s=M.S();
+  s.dmgParts=['pump0'];
+  const alone=M.loopFlowK(s);
+  s.juncOpen[ids[0]]=true; const one=M.loopFlowK(s);
+  s.juncOpen[ids[1]]=true; s.juncOpen[ids[2]]=true; const all=M.loopFlowK(s);
+  if(!(one>alone)) bad('opening the junction beside a dead pump bought no flow at all');
+  if(!(all>one))   bad('opening the rest of the chain bought nothing over one junction');
+  console.log(`  4 loops, RCP 1 lost, 2 spares placed: shut ${(alone*100).toFixed(1)}%`+
+              ` -> one junction ${(one*100).toFixed(1)}% -> chain ${(all*100).toFixed(1)}%`);
+  M.removePart(sp1.id); M.removePart(sp3.id);
+}
+{ /* ── AND IT REACHES THE FUEL, NOT JUST THE ARITHMETIC ──
+     What a junction buys is POWER, and deliberately not DNBR. A plant that has
+     lost a pump is flow-limited: heat removal balances heat lower down, so
+     power falls to meet it and margin goes UP while output goes down. Give the
+     flow back and the reactor carries the load again at the same fuel
+     temperature, with DNBR settling back toward where it started - so asserting
+     that a junction buys margin would be asserting the plant backwards.
+     A spare on loop 1 (default size, reachable via j0 alone) is enough for
+     this one - it only needs "open" to differ from "shut", not a third rung. */
+  const hurt=open=>{
+    const {ids}=tieChain();
+    const sp=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',grp:'loop1',tip:'t',loop:1}));
+    M.commission(); const s=M.S(); run(s,20);
+    if(open) s.juncOpen[ids[0]]=true;
+    s.dmgParts.push('pump0'); run(s,90);
+    M.removePart(sp.id);
+    return s;
+  };
+  const shut=hurt(false), open=hurt(true);
+  if(!(open.n>shut.n))
+    bad(`an open junction handed back no power with a pump down: ${(open.n*100).toFixed(1)}% vs ${(shut.n*100).toFixed(1)}%`);
+  if(!(open.hotFlow>shut.hotFlow))
+    bad('an open junction did not reach the hot channel');
+  console.log(`  4 loops, RCP 1 lost: tie shut n=${(shut.n*100).toFixed(1)}%`+
+              ` hot channel ${(shut.hotFlow*100).toFixed(0)}% DNBR ${shut.dnbr.toFixed(2)}`+
+              ` -> chain open n=${(open.n*100).toFixed(1)}%`+
+              ` hot channel ${(open.hotFlow*100).toFixed(0)}% DNBR ${open.dnbr.toFixed(2)}`);
 }
 
 /* ══════════ THE BANKS SPLIT, AND THE CONTROLLER IS TUNED BY HAND ══════════
