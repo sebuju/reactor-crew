@@ -386,8 +386,12 @@ cv.addEventListener("pointermove",e=>{
          the nearest row rather than the row it is merely touching */
       const ny=rowAt(q.y-d.oy+CELL/2);
       if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
+    /* Snapped to PLSNAP (the 8px gutter every other measurement in the plant
+       is a multiple of), so a dragged plate lines up with the plates the
+       packer placed instead of stopping wherever the hand happened to let go. */
     else if(d.type==="plate"){
-      plateOff[d.id]={dx:d.dx+(q.x-d.sx), dy:d.dy+(q.y-d.sy)}; }
+      const snap=v=>Math.round(v/PLSNAP)*PLSNAP;
+      plateOff[d.id]={dx:snap(d.dx+(q.x-d.sx)), dy:snap(d.dy+(q.y-d.sy))}; }
     else if(d.type==="lat"){ d.fn(q,e); }
     else if(d.type==="sld"){
       /* integrate rather than re-derive, so moving away from the track changes

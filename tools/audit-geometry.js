@@ -60,6 +60,36 @@ for(const loops of [1,2,3,4]){
 }
 
 
+/* The control-room fit used to be measured FROM the plates it draws,
+   including whatever the player had already dragged. Dragging a plate grew
+   that box, which rescaled VIEW, which changed the pointer maths (vPt) the
+   very next frame's drag reads to compute its new offset - a hand moving a
+   steady 6px/frame corkscrewed the zoom outward instead of tracking the hand.
+   Caught here by actually dragging a plate ten frames and asserting the one
+   thing a drag must never move: the zoom. */
+const M3=require('./bundle').headless(
+  '{commission,drawPlant,VIEW,vPt,plateOff,platesFor,S:()=>S,H:()=>H}');
+M3.commission();
+const dragVy=96, dragVh=Math.max(120, M3.H()-dragVy-20-4);
+M3.drawPlant(dragVy, M3.S(), dragVh);
+const dragId=M3.platesFor()[0].p.id;
+const zoomBefore=M3.VIEW.s;
+const vScr=p=>({x:M3.VIEW.x+(p.x-M3.VIEW.cx-M3.VIEW.ox)*M3.VIEW.s,
+                y:M3.VIEW.y+(p.y-M3.VIEW.cy-M3.VIEW.oy)*M3.VIEW.s});
+const q0=M3.platesFor().find(q=>q.p.id===dragId);
+let pagePt=vScr({x:q0.x+10,y:q0.y+8});
+const start=M3.vPt(pagePt);
+for(let i=0;i<10;i++){
+  pagePt={x:pagePt.x+6,y:pagePt.y};
+  const g=M3.vPt(pagePt);
+  M3.plateOff[dragId]={dx:g.x-start.x, dy:g.y-start.y};
+  M3.drawPlant(dragVy, M3.S(), dragVh);
+}
+const dragChecks=[
+  ['plate drag holds the zoom', Math.abs(M3.VIEW.s-zoomBefore)<1e-9,
+   `VIEW.s ${zoomBefore.toFixed(4)} -> ${M3.VIEW.s.toFixed(4)}`],
+];
+
 // the plant is now generated from the layout, so check the shared renderer's invariants
 const GW=Number(S.match(/const GW=(\d+)/)[1]), GH=Number(S.match(/GH=(\d+)/)[1]);
 const CELL=Number(S.match(/CELL=(\d+)/)[1]), GX=Number(S.match(/GX=(\d+)/)[1]);
@@ -106,6 +136,7 @@ const checks=[
                              'the two margins are balanced and stacked in one place'],
  ['no hand-placed mimic',     !/OY=44/.test(S), 'fixed-coordinate mimic removed'],
  ...pipeChecks,
+ ...dragChecks,
 ];
 let bad=0;
 for(const [n,ok,detail,,over] of checks){

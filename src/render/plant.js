@@ -467,7 +467,7 @@ function ctlStrip(list,x,y,w,h){
    description of what a component is worth watching. It replaced ctrlInspector(),
    which hard-coded the same rows into fixed 172px columns and so could not be
    drawn at any other size. Ported from .trash/mockups/z1-liveplant.js. */
-const PLW=158, PLGAP=10, PLROW=13, PLLEAD=30;
+const PLW=158, PLGAP=10, PLROW=13, PLLEAD=30, PLSNAP=8;
 
 /* Four numbers show up on more than one component's plate. Their band and their
    sentence are written ONCE here, so two plates cannot end up describing the
