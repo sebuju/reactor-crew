@@ -16,7 +16,8 @@ function commission(){
      condK:f.condK, natCirc:d.natCirc*L.natK, pzrK:D.pzr*L.pzrK,
      flowK:L.flowK, dose:L.dose, exposure:L.exposure, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, boroninj:D.boroninj, efw:D.efw,
-     catcher:D.catcher, contRel:CONT[D.cont].rel, backup:BKP[D.bkp].bk,
+     catcher:D.catcher, contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
+     turbFit:D.turbFit, condFit:D.condFit,
      loops:D.loops, sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237};
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
@@ -127,7 +128,7 @@ function condPen(s){
    One helper, because the diagram tag and both inspectors read the same number.
    What is not electricity is rejected, so mwRej is the remainder rather than a
    second efficiency figure that could drift away from the first. */
-const mwE   = s => s.dmgParts.includes("turb") ? 0
+const mwE   = s => (s.dmgParts.includes("turb") || !P.turbFit || !P.condFit) ? 0
   : Math.min(s.n,s.load)*P.rated*P.eff*condPen(s);
 const mwRej = s => Math.min(s.n,s.load)*P.rated - mwE(s);
 /* A scram is the same act from the diagram and from the inspector, and the

@@ -200,32 +200,32 @@ function warnFor(id){
 }
 
 /* ══ RIGHT-CLICK, HELD STILL AND RELEASED: ADD OR REMOVE ══
-   CONTAINMENT and the passive ACCUMULATOR are the two parts of the plant that
-   can be fitted or not - everything else on the grid is always there. "Not
-   fitted" already exists (fitted() in layout.js, the dashed outline and the
-   NOT FITTED tag on the component itself); this is just a second, quicker way
-   to flip it than dragging the CONTAINMENT dropdown to NONE or hunting down
-   the checkbox on the HPI TANK plate - both of those still work too. */
+   The FITTABLE parts (layout.js) can be on the grid or not - everything else
+   is always there. "Not fitted" for one of these means gone, not a ghost box
+   left standing: see FITTABLE for why. This is a second, quicker way to flip
+   one than reaching its own plate - the CONTAINMENT dropdown, the ACCUMULATOR
+   checkbox and the TURBINE/CONDENSER sliders all still work too, and none of
+   them forget their own setting while unfit.
+   A row is a plain {label,fn} action rather than the FITTABLE tuple itself,
+   so a COOLANT LOOP - a count with a floor of 1, not an on/off part - reads
+   as two more rows of the same shape instead of a special case of its own. */
 let ctxMenu=null;
 function openCtxMenu(p){ if(screen==="design") ctxMenu={x:p.x,y:p.y}; }
-/* what type was fitted before REMOVE, so FIT restores it instead of always
-   landing back on the cheapest option - the dropdown still writes D.cont
-   directly and this still tracks it, since it is read at click time */
-let contMemory=1;
-function ctxItems(){ return [
-  ["CONTAINMENT", D.cont>0, ()=>{ if(D.cont>0){ contMemory=D.cont; D.cont=0; } else D.cont=contMemory; }],
-  ["PASSIVE ACCUMULATOR", D.accum, ()=>{ D.accum=!D.accum; }],
-]; }
+function ctxItems(){
+  const items=FITTABLE.map(f=>({label:(f.get()?"REMOVE ":"FIT ")+f.label, fn:()=>f.set(!f.get())}));
+  if(D.loops<4) items.push({label:"ADD STEAM GEN LOOP", fn:()=>{ D.loops++; }});
+  if(D.loops>1) items.push({label:"REMOVE STEAM GEN LOOP", fn:()=>{ D.loops--; }});
+  return items;
+}
 function drawCtxMenu(){
   if(!ctxMenu) return;
   const items=ctxItems(), rh=20, w=190, h=items.length*rh+8;
   let x=Math.min(ctxMenu.x,W-4-w), y=Math.min(ctxMenu.y,H-4-h);
   fillRect(x,y,w,h,C.panel); frame(x,y,w,h,C.edge2);
   push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach the plant
-  items.forEach(([label,fit,fn],i)=>{
+  items.forEach((it,i)=>{
     const iy=y+4+i*rh;
-    button(x+4,iy,w-8,rh-2,(fit?"REMOVE ":"FIT ")+label,
-      {size:8,sp:.6,fn:()=>{ fn(); ctxMenu=null; }});
+    button(x+4,iy,w-8,rh-2,it.label,{size:8,sp:.6,fn:()=>{ it.fn(); ctxMenu=null; }});
   });
 }
 /* The lattice is part of the design, and most of what a pen changes on it is

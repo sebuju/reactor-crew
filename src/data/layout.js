@@ -11,7 +11,27 @@
    to land on the 736-unit content column, so this is free to change. */
 const GW=16, GH=9, CELL=46, GX=12, MPC=1.4;   // metres per cell
 let GY=100;                                   // grid top, set each frame by the layout section
-let LAY=null, layLoops=-1, sel="core", layMass=0;
+let LAY=null, layLoops=-1, layFit="", sel="core", layMass=0;
+/* ══ PARTS THAT CAN BE ADDED OR REMOVED FROM THE GRID ══
+   Everything else on the grid is always there; these are optional - present
+   or absent, never a ghost box left standing when unfit. One table says which
+   parts they are and how to read/flip whether the grid currently carries each
+   one: buildLayout() gates its add() call on it, layoutMetrics() rebuilds
+   whenever any of it changes, and the right-click menu (design-bench.js) is
+   generated FROM it. A new optional part is one entry here, not a new special
+   case in three different places.
+   The get/set is its OWN field, decoupled from any type/quality dial the part
+   also carries (CONTAINMENT's type, a TURBINE's D.turb rating) - "is it on
+   the grid" and "how good is the one you bought" are different questions, so
+   unfitting one never forgets the other. */
+const FITTABLE=[
+  {id:"cont", label:"CONTAINMENT",         get:()=>D.contFit, set:v=>{D.contFit=v;}},
+  {id:"hpi",  label:"PASSIVE ACCUMULATOR", get:()=>D.accum,   set:v=>{D.accum=v;}},
+  {id:"turb", label:"TURBINE",             get:()=>D.turbFit, set:v=>{D.turbFit=v;}},
+  {id:"cond", label:"CONDENSER",           get:()=>D.condFit, set:v=>{D.condFit=v;}},
+];
+const fitOf=id=>FITTABLE.find(f=>f.id===id).get();
+const fitSig=()=>FITTABLE.map(f=>f.get()?1:0).join("");
 /* ══ WHERE THE PLAYER PUT A PLATE, IF THEY MOVED IT ══
    An OFFSET from the packed position, never an absolute point. The margins are
    repacked every frame - open a loop, drag a component, resize the window and
@@ -37,23 +57,23 @@ function buildLayout(){
     add("pump"+i,"RCP "+(i+1),1,1,7+i*2,6,"#57d38c","loop"+i,
       "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.");
   }
-  add("turb","TURBINE",3,1,12,4,"#f0a830","sec",
+  if(fitOf("turb")) add("turb","TURBINE",3,1,12,4,"#f0a830","sec",
     "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.");
-  add("cond","CONDENSER",3,1,12,7,"#5aa9d6","sec",
+  if(fitOf("cond")) add("cond","CONDENSER",3,1,12,7,"#5aa9d6","sec",
     "Rejects waste heat. Bulky, and it wants to be near the hull.");
   add("feed","FEED PUMP",1,1,15,5,"#5aa9d6","sec",
     "Returns water to the steam generator. Lose it and the heat sink boils dry.");
   add("ctrl","CONTROL",2,1,1,8,"#cfc9b8","crew",
     "Where your crew sits. Distance and shielding from the reactor set the dose they take.");
-  add("cont","CONTAINMENT",2,1,4,8,"#8fa9ae","safety",
+  if(fitOf("cont")) add("cont","CONTAINMENT",2,1,4,8,"#8fa9ae","safety",
     "The barrier between damaged fuel and your crew. Select it for containment type and the core catcher.");
-  add("hpi","HPI TANK",1,1,0,5,"#5aa9d6","safety",
+  if(fitOf("hpi")) add("hpi","HPI TANK",1,1,0,5,"#5aa9d6","safety",
     "Emergency injection water. Mount it HIGH so it can drain into the loop by gravity with no power.");
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.");
-  LAY={parts:A}; layLoops=D.loops;
+  LAY={parts:A}; layLoops=D.loops; layFit=fitSig();
 }
 /* ─────────────── control bands ───────────────
    A control mounted inside a component is only as wide as that component, and a
@@ -302,7 +322,13 @@ function pipeNetwork(){
   }
   return net;
 }
-const fitted=p => p.id==="hpi" ? D.accum : p.id==="bkp" ? D.bkp>0 : p.id==="cont" ? D.cont>0 : true;
+/* BACKUP PWR is the one part left that ghosts rather than vanishes: NONE is a
+   real dropdown choice (mass 0) that still occupies its cell, because it is a
+   three-way quality dial (NONE/BATTERY/DIESEL) and not an add/remove part -
+   see FITTABLE above for the parts that are actually removed from LAY.parts
+   when unfit, which makes fitted() trivially true for them whenever they are
+   present at all. */
+const fitted=p => p.id==="bkp" ? D.bkp>0 : true;
 const cen=p=>({x:p.x+p.w/2,y:p.y+p.h/2});
 /* parts that ride another part rather than being sited on their own */
 const pinnedTo=p=>LAY.parts.filter(q=>q.pin&&q.pin.to===p.id);
@@ -338,7 +364,7 @@ function moveTo(p,nx,ny){
   return true;
 }
 function layoutMetrics(){
-  if(!LAY||layLoops!==D.loops) buildLayout();
+  if(!LAY||layLoops!==D.loops||layFit!==fitSig()) buildLayout();
   /* measure the design, not the view: drawPlant() sets the bands again straight
      after this returns, and nothing else measures between the two */
   BANDS=null;

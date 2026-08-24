@@ -98,10 +98,15 @@ const RODX0=.35;
    revolve. Everything still reads them the way it always did; nothing writes
    them but the measurement. refl is still yours - you pick the material, the
    drawing decides how much of it there is. */
+/* contFit/turbFit/condFit: is the part on the grid at all - see FITTABLE in
+   layout.js. Decoupled from cont/turb/condCap, which still say what TYPE or
+   how good a one you would buy if you fitted it, so unfitting one never
+   forgets the other. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          loops:1,pumps:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
-         cont:1,accum:false,efw:true,catcher:false,bkp:1,turb:.5,condCap:.5};
+         cont:1,contFit:true,accum:false,efw:true,catcher:false,bkp:1,
+         turb:.5,turbFit:true,condCap:.5,condFit:true};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
@@ -131,12 +136,19 @@ function derived(){
      weighed - volume times density, ring by ring - and a single ring of real
      steel round a real core comes to rather more than the 28 t the option list
      sold. That gap is a finding, not a rounding error. */
+  /* A part FITTABLE (layout.js) can remove is not on the grid at all when
+     unfit, so it charges no mass either - the same "not there" the box on the
+     plant already draws. contRel folds the same fallback into the one number
+     the warning below and commission()'s contRel both read, so NONE and
+     "never fitted" price and warn identically without saying so twice. */
+  const contRel=D.contFit?CONT[D.cont].rel:1;
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
-    +PUMPS[D.pumps].mass+SGT[D.sg].mass+CONT[D.cont].mass+BKP[D.bkp].mass
+    +PUMPS[D.pumps].mass+SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
     +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
-    + (D.autorod?26:0) + D.turb*50 + D.condCap*40 + layMass + latMass();
+    + (D.autorod?26:0) + (D.turbFit?D.turb*50:0) + (D.condFit?D.condCap*40:0)
+    + layMass + latMass();
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess+rf.dRho-D.poison-leak;
@@ -190,8 +202,10 @@ function derived(){
       if(aM>0) w.push(["SOFT","Positive moderator coefficient. The lattice is over-moderated: heating the coolant raises power instead of lowering it.","core"]);
       if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power.","core"]);
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
-      if(CONT[D.cont].rel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew.","cont"]);
+      if(contRel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew.","cont"]);
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
+      if(!D.turbFit) w.push(["SOFT","No turbine fitted. This design generates no electricity at all.","turb"]);
+      else if(!D.condFit) w.push(["SOFT","No condenser fitted. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
       if(loadMax<1.10) w.push(["SOFT","The turbine draws at most "+(loadMax*100).toFixed(0)+"% of rated. In combat the reactor will be able to make power this machine cannot take.","turb"]);
       if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Overload past the condenser and backpressure takes output back off you, while the reactor goes on making the heat.","cond"]);
       if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);

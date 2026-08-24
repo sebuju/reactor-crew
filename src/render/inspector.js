@@ -105,7 +105,7 @@ function paramsFor(p){
       "Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."));
     blk(READF_H,(x,y,w)=>readF(x,y,w,"MAX LOAD",(d.loadMax*100).toFixed(0)+" %",
       "The furthest the load slider will go in the control room. Overpower is not free reach: it is turbine you paid mass for."));
-    note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
+    note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat. Right-click the plant to remove it - no turbine, no electricity.");
   }
   else if(id==="cond"){
     blk(SLDF_H,(x,y,w)=>sliderF(x,y,w,"CONDENSER SIZE","condCap",0,1,v=>(20+60*v).toFixed(0)+" % dump",
@@ -114,9 +114,10 @@ function paramsFor(p){
       "How much steam this unit turns back into water. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."));
     blk(READF_H,(x,y,w)=>readF(x,y,w,"TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",
       "The turbine's own ceiling, shown here so the mismatch is visible from either component."));
-    note(d.condShort
+    note((d.condShort
       ?"This condenser is far smaller than the turbine can overload to. Sustained overpower will hand a large part of itself straight back as backpressure."
-      :"Condenser is matched to the turbine. A brief overload costs little or nothing.",
+      :"Condenser is matched to the turbine. A brief overload costs little or nothing.")
+      +" Right-click the plant to remove it - the turbine has nowhere to exhaust to without one.",
       d.condShort?C.amber:C.ink2);
   }
   else if(id==="ctrl"){
