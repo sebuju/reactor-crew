@@ -2,16 +2,31 @@
 /* the live control screen */
 
 /* ─────────────── CONTROL ROOM: same plant, same inspector, live ─────────────── */
-function vital(x,y,w,label,value,unit,col,tip,ch){
-  const on=ch&&plot.includes(ch);
+/* A vital is a BAR, and the number under it is the detail. Six numbers in a row
+   cannot be read at a glance, because reading one means remembering the limit it
+   is judged against - six different limits, three of which move with the
+   architecture. A bar carries its own limit on the track, so the row is one
+   shape: everything short and left is a plant with margin.
+
+   Every bar FILLS TOWARD TROUBLE. Empty is comfortable, the tick is the line the
+   plant trips or alarms on, and the track runs on past it into the quarter you
+   are not supposed to be in. That is one mental model for six quantities, which
+   is the whole reason this stopped being six numbers.
+
+   `v.u` is the value in LIMIT UNITS: 1.0 means "at the line", whatever the line
+   is. LIM_AT places it on the track. Pressure is the one two-sided vital - both
+   ends are a trip - so it is the one signed bar, centred on P0. */
+function vital(x,y,w,v){
+  const ch=v.ch, on=ch&&plot.includes(ch);
   let hv=false;
   if(ch){ const wd=push({x,y,w,h:44,type:"btn",fn:()=>togglePlot(ch)}); hv=hov(wd); }
   fillRect(x,y,w,44,C.panel); frame(x,y,w,44,on?CH[ch].col:(hv?C.edge2:C.edge));
   accent(x,y,w,on?CH[ch].col:C.edge2);
-  txt(label,x+7,y+16,{size:7,sp:1.1,caps:1,color:C.ink2});
-  txt(value,x+7,y+36,{size:15,color:col||C.cyan});
-  if(unit) txt(unit,x+w-6,y+36,{size:8,align:"right",color:C.ink2});
-  if(tip) TIP(x,y,w,44,label,tip);
+  txt(v.lab,x+7,y+13,{size:6,sp:1.1,caps:1,color:C.ink2});
+  segMark(x+7,y+19,w-14,6,v.u*LIM_AT,v.sgn?[-LIM_AT,LIM_AT]:[LIM_AT],v.col,v.sgn);
+  txt(v.val,x+7,y+38,{size:8,color:v.col||C.cyan});
+  if(v.unit) txt(v.unit,x+w-6,y+38,{size:6.5,align:"right",color:C.ink2});
+  if(v.tip) TIP(x,y,w,44,v.lab,v.tip);
 }
 
 /* ══ A COMPONENT IS ITS OWN PANEL ══
@@ -44,25 +59,57 @@ function drawOperate(){
     fillRect(12,vy+8,736,22,"#1a1206");
     txt("LAST TRIP / "+s.trip,380,vy+23,{size:9,weight:700,sp:1.6,align:"center",color:C.amber});
   }
+  /* clear of the trip banner above it, and on the left because the ZOOM key
+     already owns the top right corner of the viewport */
+  alarmStack(VIEW.x+4, VIEW.y+44);
   drawOverlay();
   const e=LOG[LOG.length-1];
   ovlBar(H-bh,bh, e? "T+"+e.t.toFixed(1)+"  "+e.msg : "PLANT NOMINAL - NO EVENTS");
 }
+/* The six limits, and where each vital stands against its own. Every one of
+   these is the number the plant actually judges itself by - tripCause() for the
+   five that trip, and the vLeak span for inventory - so the tick on the track
+   and the thing that bites are the same number, read from one place.
+
+   Two of the six are scaled against the COMMISSIONED plant rather than an
+   absolute figure, because at rest they are nowhere near each other across the
+   architectures: DNBR is 1.54 on a BWR and 3.42 on an SFR, and subcooling is
+   22 K on a PWR against 1400 K on an HTGR. Measured, not guessed. For those the
+   bar reads "how much of the margin you were built with has gone", so an empty
+   bar is a plant standing where it was commissioned.
+
+   Inventory has no trip. Its line is 95%, where vLeak in step() starts eating
+   heat removal, and the bar is spanned onto 70%, where it has eaten all of it. */
 function vitalRow(y){
-  const s=S, heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, sc=tsat(s.P)-Th;
-  const V=[["REACTOR POWER",(s.n*100).toFixed(1),"%",
-      (s.n>1.1||s.dnbr<1.3)?C.red:C.green,"Heat the core is making as a share of rated output.","pwr"],
-    ["DNBR",s.dnbr.toFixed(2),"",s.dnbr<1?C.red:s.dnbr<1.3?C.amber:C.cyan,
-      "Departure from Nucleate Boiling Ratio. Nucleate boiling is bubbles forming and collapsing on the fuel pins, which cools them very well. Departure is those bubbles joining into one continuous steam film, which does not. The number is how far you are from that: above 1.30 safe, 1.00 is failure. This, not the rating, limits how hard you can push.","dnbr"],
-    ["PRESSURE",s.P.toFixed(2),"MPa",pColor(s.P),
-      "Primary loop pressure. Raises the boiling point, so it directly buys thermal margin.","prs"],
-    ["SUBCOOLING",sc.toFixed(1),"K",sc<8?C.red:C.cyan,
-      "Degrees below boiling in the hot leg. The honest leak indicator - it collapses before anything else admits the loop is voiding.","sub"],
-    ["INVENTORY",s.inv.toFixed(1),"%",s.inv<95?C.red:C.blue,
-      "How much water is actually in the loop. A real plant has no such gauge.","inv"],
-    ["XENON",s.parts.xe.toFixed(0),"pcm",-s.parts.xe>3200?C.blue:C.cyan,
-      "Xenon-135 poison. Slow, remembers your power history, and can lock you out of restarting.","xe"]];
-  V.forEach((v,i)=>vital(12+i*124,y,116,v[0],v[1],v[2],v[3],v[4],v[5]));
+  /* s.sc is the subcooling step() already worked out and tripCause() already
+     judges. Recomputing tsat(s.P)-Th here made a second copy of it that could
+     drift from the one that trips the plant. */
+  const s=S, m=P.rpsm, sc=s.sc;
+  const nTrip=1.10+0.22*m, dTrip=1.18-0.16*m,
+        pLo=P.P0*0.86, pHi=P.P0*(1.06+0.07*m);
+  /* toward: 0 where the plant sits at commissioning, 1 at the line */
+  const toward=(now,rest,lim)=> rest===lim ? 0 : (rest-now)/(rest-lim);
+  const V=[
+   {lab:"REACTOR POWER",val:(s.n*100).toFixed(1),unit:"%",ch:"pwr",
+    u:s.n/nTrip, col:(s.n>1.1||s.dnbr<1.3)?C.red:C.green,
+    tip:"Heat the core is making as a share of rated output. The bar fills toward the high-flux trip at "+(nTrip*100).toFixed(0)+"%, marked on the track; past that mark you are running on a bypassed protection system."},
+   {lab:"DNBR",val:s.dnbr.toFixed(2),unit:"",ch:"dnbr",
+    u:toward(s.dnbr,P.dnbr0,dTrip), col:s.dnbr<1?C.red:s.dnbr<1.3?C.amber:C.cyan,
+    tip:"Departure from Nucleate Boiling Ratio. Nucleate boiling is bubbles forming and collapsing on the fuel pins, which cools them very well. Departure is those bubbles joining into one continuous steam film, which does not. This, not the rating, limits how hard you can push. The bar is the thermal margin you were commissioned with being spent: empty is the "+P.dnbr0.toFixed(2)+" you were built with, the mark is the trip at "+dTrip.toFixed(2)+"."},
+   {lab:"PRESSURE",val:s.P.toFixed(2),unit:"MPa",ch:"prs",sgn:1,
+    u:s.P>=P.P0 ? (s.P-P.P0)/(pHi-P.P0) : (s.P-P.P0)/(P.P0-pLo),
+    col:pColor(s.P),
+    tip:"Primary loop pressure. Raises the boiling point, so it directly buys thermal margin. The only vital where both directions are a trip, so the bar is centred on the design pressure of "+P.P0.toFixed(2)+" MPa and marked at both trips: "+pLo.toFixed(2)+" low, "+pHi.toFixed(2)+" high."},
+   {lab:"SUBCOOLING",val:sc.toFixed(1),unit:"K",ch:"sub",
+    u:toward(sc,P.sc0,3), col:sc<8?C.red:C.cyan,
+    tip:"Degrees below boiling in the hot leg. The honest leak indicator - it collapses before anything else admits the loop is voiding. This plant was commissioned "+P.sc0.toFixed(0)+" K subcooled, so the bar is that cushion being spent, marked at the 3 K trip."},
+   {lab:"INVENTORY",val:s.inv.toFixed(1),unit:"%",ch:"inv",
+    u:(100-s.inv)/30, col:s.inv<95?C.red:C.blue,
+    tip:"How much water is actually in the loop. A real plant has no such gauge. Nothing trips on it, but below the 95% mark the missing water starts taking heat removal with it, and by 70% - the end of this bar - it has taken all of it."},
+   {lab:"XENON",val:s.parts.xe.toFixed(0),unit:"pcm",ch:"xe",
+    u:-s.parts.xe/3200, col:-s.parts.xe>3200?C.blue:C.cyan,
+    tip:"Xenon-135 poison. Slow, remembers your power history, and can lock you out of restarting. The mark is 3200 pcm, about where the pit costs you more reactivity than the rods have left to give."}];
+  V.forEach((v,i)=>vital(12+i*124,y,116,v));
 }
 
 /* ══ everything else, over the plant ══
@@ -71,12 +118,31 @@ function vitalRow(y){
    736-wide column they were drawing into, so not one of them had to be re-laid.
    Heights are RESERVED rather than measured: a panel that changes height would
    move its own keys under the pointer. */
-ovlAdd({k:"ann",label:"ALARMS",h:232,sc:"operate",draw:drawAnnunciator,
-  tip:"The full annunciator board. Every component on the plant carries a lamp when one of its own alarms is up; this says which."});
+/* TWO of the six are gone, and each for its own reason.
+
+   ALARMS was the whole 26-tile board opened over the plant. Twenty-six tiles do
+   not belong on top of a plant view, and twenty of them are dark: what you need
+   while operating is what is LIT, which is now a stack that floats on the edge
+   of the plant and is never shut. The board itself was still worth keeping, but
+   as REFERENCE and not as state, so it moved to the help screen beside
+   everything else that explains rather than reports.
+
+   LEDGER was every reactivity term. Every one of them is a property of the
+   reactor, so they are rows on the reactor's own plate now, under a REACTIVITY
+   head, each still carrying its bar. Its right-hand column was already said
+   somewhere better: fuel damage and vessel fatigue on the core, release on
+   containment, natural circulation on the pumps, instrument trust on the
+   cabinet, T-avg deviation on the turbine. Only PERIOD had no home, and it has
+   one now - on the core, computed in sample() where the clock ticks once.
+
+   The four that stay, stay on purpose. TRENDS is the one that MUST be a panel:
+   a strip chart is 716 units wide and a plate column is 144, and three minutes
+   of history in 144 units at fit scale is a texture, not a chart. LOG is
+   history rather than state. REPAIR is the "how many" view; the act itself is
+   already a key on the broken component. FAULTS is a workbench, not a plant
+   control. */
 ovlAdd({k:"trend",label:"TRENDS",h:200,sc:"operate",draw:drawTrend,
   tip:"Strip charts. Click a vital along the top of the screen to add or drop its trace."});
-ovlAdd({k:"led",label:"LEDGER",h:206,sc:"operate",draw:drawLedger,
-  tip:"Every reactivity term, and what they sum to. A training aid - a real operator never sees this."});
 ovlAdd({k:"log",label:"LOG",h:180,sc:"operate",draw:drawLog,
   tip:"The last few events and why each one happened. The newest is always on the bar behind this key."});
 ovlAdd({k:"dmg",label:"REPAIR",h:92,sc:"operate",draw:drawDamage,
@@ -84,78 +150,53 @@ ovlAdd({k:"dmg",label:"REPAIR",h:92,sc:"operate",draw:drawDamage,
 ovlAdd({k:"flt",label:"FAULTS",h:88,sc:"operate",draw:drawFaults,
   tip:"Developer buttons for causing emergencies on demand. In the finished game these come from combat damage, not from you."});
 
-function drawAnnunciator(y0){
-  const colw=742/6, tw_=Math.round(colw)-6;
-  rule("ANNUNCIATOR",12,y0+8,736);
-  ANN.forEach((a,i)=>{
-    const x=Math.round(12+(i%6)*colw), y=y0+14+Math.floor(i/6)*40, on=a[2](S);
-    const col=a[1]==="red"?C.red:a[1]==="amber"?C.amber:C.blue;
-    const blink=on&&a[1]==="red"&&(performance.now()%900<450);
-    const lit=on&&!blink;
-    fillRect(x,y,tw_,34, lit?col:C.panel); frame(x,y,tw_,34, lit?col:C.edge);
-    txt(pad(i+1,2),x+5,y+11,{size:6.5,color:lit?"#2a0a06":"#2c3f45"});
-    txt(a[0],x+tw_/2,y+23,{size:8,weight:700,sp:1.1,align:"center",
-        color:lit?"#120404":"#33484e"});
-    TIP(x,y,tw_,34,a[0]+(on?"  [ LIT ]":"  [ clear ]"),a[3]);
+/* ══ THE ALARM STACK ══
+   Ported from .trash/mockups/z1-liveplant.js, which put it this way and gave
+   the reason: twenty-six tiles do not belong on top of a plant view, so only
+   what is LIT is on screen and the header keeps the count honest when nothing
+   is. It floats on the edge of the plant rather than living in the view
+   transform, so it keeps its size at every zoom - the same rule the ZOOM key
+   follows, and for the same reason: it is a thing you read, not a thing you
+   are looking at the plant through.
+
+   It sits BELOW the trip banner, which is drawn across the top of the viewport
+   and is 30 units tall. Overlapping it would put the two loudest things on the
+   screen in the same place. */
+const ALW=138;
+function alarmStack(x,y){
+  const lit=ANN.filter(a=>a[2](S));
+  /* NOTHING when nothing is lit, and that is not the mockup's answer - it drew
+     a box reading PLANT NOMINAL. The mockup had a fixed 660px page with room
+     going spare; this page is exactly the window, and the stack floats OVER the
+     plant rather than beside it, so an empty box is 37 units of a component's
+     readouts hidden to say that there is nothing to say. The bottom bar already
+     reads PLANT NOMINAL - NO EVENTS when it is quiet. An annunciator with no
+     alarm on it should be invisible. */
+  if(!lit.length) return 0;
+  const rows=Math.min(lit.length,9), h=18+rows*15+4;
+  const top=lit.some(a=>a[1]==="red")?C.red:C.amber;
+  /* a catcher first: a click on the stack must not reach the plant behind it */
+  push({x,y,w:ALW,h,type:"btn"});
+  fillRect(x,y,ALW,h,"rgba(7,12,13,.92)");
+  frame(x,y,ALW,h,top); accent(x,y,ALW,top);
+  txt("ALARMS",x+7,y+13,{size:7,sp:1.4,color:top});
+  txt(String(lit.length),x+ALW-7,y+13,{size:7,sp:1,align:"right",color:top});
+  TIP(x,y,ALW,18,"ALARM STACK",
+    "Every annunciator that is currently lit, and nothing that is not - it is not drawn at all when the plant is quiet. The full board of all "+ANN.length+", including the ones that are dark, is on the HELP screen: what they MEAN is reference, what is LIT is state. A component on the plant also carries one lamp when any of its own alarms is up.");
+  lit.slice(0,rows).forEach((a,i)=>{
+    const ry=y+18+i*15, col=a[1]==="red"?C.red:a[1]==="amber"?C.amber:C.blue;
+    /* red blinks on the annunciator's own rhythm, so a tile here and the lamp
+       on the component it belongs to read as one thing seen in two places */
+    const on=!(a[1]==="red"&&performance.now()%900<450);
+    fillRect(x+5,ry+3,ALW-10,13,on?col:"rgba(0,0,0,0)");
+    fitTxt(a[0],x+10,ry+13,ALW-20,{size:7.5,weight:700,sp:.8,color:on?"#120404":col});
+    TIP(x+5,ry+3,ALW-10,13,a[0]+"  [ LIT ]",a[3]);
   });
-  return y0+14+Math.ceil(ANN.length/6)*40-6+12;
+  if(lit.length>rows)
+    txt("+"+(lit.length-rows)+" MORE",x+7,y+h-6,{size:6.5,sp:1,color:C.amber});
+  return h;
 }
-function drawLedger(y0){
-  const s=S;
-  const LH=194;
-  well(12,y0,364,LH,"REACTIVITY LEDGER / TRAINING AID",C.amber);
-  TIP(12,y0,364,18,"REACTIVITY LEDGER",
-    "Reactivity is the reactor's tendency to speed up or slow down, measured in pcm. Bars pointing left are pushing the reactor down, right is pushing it up. When Net Rho sits at zero, power is steady. Real operators never get this view.");
-  const rows=[["RODS","rod","Negative reactivity from the inserted control rods. The deeper they go the stronger this gets, but not evenly: the rods bite hardest around mid-travel."],
-              ["DOPPLER","dop","Feedback from hot fuel. As fuel heats it absorbs more neutrons, pushing power back down. Instant, automatic, and always stabilising. This is what stops a runaway before a human could react."],
-              ["MODERATOR","mod","Feedback from coolant temperature. Hotter coolant is less dense and moderates neutrons less, so power drops. This is why the reactor follows turbine load on its own."],
-              ["XENON","xe","Xenon-135, a neutron poison that builds up after fission. It has memory: what you did minutes ago is still eating your reactivity now. Scram, and this bar grows until the reactor cannot restart."],
-              ["BORON","bor","Whatever you dialled in on the boron bench. Slow to change, but it is your only lever when rods and temperature have run out."],
-              ["VOID","vd","Steam bubbles in the core. In a water design this is strongly negative and shuts the reactor down as it uncovers. In a graphite or sodium design it is POSITIVE, and voiding adds power instead."],
-              ["ROD TIP","tip","Whatever hangs below the absorber. With a water follower this stays at zero all the way in. With a graphite one it goes POSITIVE as the bank drops, because graphite displaces water at the bottom of the core and the absorber has not reached there yet - the reactivity you add before the reactivity you remove."],
-              ["NET RHO","net","The sum of everything above. Zero means steady power. Positive means power is climbing, negative means it is falling. If this exceeds your fuel's beta the reactor goes prompt critical and nothing can stop it in time."]];
-  rows.forEach((r,i)=>{
-    const y=y0+34+i*18, v=r[1]==="net"?s.rho:s.parts[r[1]];
-    txt(r[0],22,y+9,{size:8,sp:1.1,color:r[1]==="net"?C.bright:C.ink2});
-    const col=r[1]==="net"?(Math.abs(v)<50?C.green:(v<0?C.blue:C.red)):(v<0?C.blue:C.amber);
-    segSigned(88,y+1,200,10,clamp(v/2600,-1,1),col);
-    txt(pad((v>=0?"+":"")+v.toFixed(0),6),366,y+10,{size:10,align:"right",color:C.bright});
-    const lch={xe:"xe",vd:"vd",net:"rho"}[r[1]];
-    if(lch) push({x:18,y,w:352,h:14,type:"btn",fn:()=>togglePlot(lch)});
-    if(lch&&plot.includes(lch)) chip(13,y+2,CH[lch].col);
-    TIP(18,y,352,14,r[0],r[2]+(lch?"  Click to plot it on the trend chart.":""));
-  });
-  well(384,y0,364,LH,"SECONDARY INDICATIONS");
-  const dn=(s.n-lastN)/0.05; lastN=s.n;
-  const per=Math.abs(dn)<1e-4?Infinity:s.n/dn, dev=s.Tavg-tProg(s);
-  const rows2=[
-    ["PERIOD",(isFinite(per)&&Math.abs(per)<999?per.toFixed(0):"INF")+" s",null,
-     "How many seconds it takes power to multiply by 2.7x at the current rate. Infinity means steady. A short positive period means power is running away from you; under about 10 seconds you are in trouble."],
-    ["TAVG VS PROGRAM",(dev>=0?"+":"")+dev.toFixed(1)+" K",null,
-     "How far average coolant temperature is from the target for the current load. Non-zero means the reactor and turbine are out of balance and something is drifting."],
-    ["XENON WORTH",s.parts.xe.toFixed(0)+" pcm","xe",
-     "Current xenon poison in pcm. At equilibrium it sits near -2700. After a shutdown it deepens toward -4800 over about eighty seconds, and that is the window where you cannot restart."],
-    ["FUEL DAMAGE",s.dmg.toFixed(1)+" %","dmg",
-     "Percentage of fuel cladding that has failed. Permanent. It accumulates whenever DNBR drops below 1.00 or fuel temperature exceeds 1500 K."],
-    ["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %","fat",
-     "Permanent metal damage from thermal shock, mostly caused by emergency injection dumping cold water into a hot vessel. The safe action has a long-term bill, and it never resets."],
-    ["NAT CIRCULATION",(s.nat*100).toFixed(0)+" %",null,
-     "Flow the core is generating by buoyancy alone right now. It only develops once the loop is hot, and it is all you have if the pumps stop."],
-    ["RADIOLOGICAL RELEASE",s.release.toFixed(2)+" %",null,
-     "Fraction of the core inventory that has escaped containment and reached the crew. Driven by fuel damage and cut down by whatever containment you paid for."],
-    ["INSTRUMENTATION",P.noise<.2?"VOTED / CLEAN":P.noise<.6?"2CH / DRIFTING":"1CH / UNVERIFIED",null,
-     "How many sensors watch each parameter, set at the design bench. With one channel your readings jitter and a failed sensor is undetectable. Three channels vote a liar out and the numbers hold still."],
-  ];
-  rows2.forEach((r,i)=>{
-    const y=y0+42+i*16, ch=r[2], on=ch&&plot.includes(ch);
-    if(ch) push({x:384,y:y-11,w:364,h:17,type:"btn",fn:()=>togglePlot(ch)});
-    txt(r[0],394,y,{size:8.5,sp:1.1,color:on?CH[ch].col:C.ink2});
-    txt(r[1],738,y,{size:10,align:"right",color:on?CH[ch].col:C.cyan});
-    fillRect(394,y+5,344,1,"rgba(120,180,190,.07)");
-    TIP(384,y-11,364,17,r[0],r[3]+(ch?"  Click to plot it on the trend chart.":""));
-  });
-  return y0+LH+12;
-}
+
 function drawTrend(yy){
   const x=12,y=yy,w=736,h=176;
   well(x,y,w,h,"TREND / CLICK ANY GAUGE, BENCH OR READOUT TO PLOT IT",C.amber);

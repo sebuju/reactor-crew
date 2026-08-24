@@ -32,7 +32,11 @@ const HELP=[
  ["d","LOAD DEMAND","Turbine draw. Increasing it cools the primary, which raises power on its own through the negative moderator coefficient. Ride that instead of fighting it."],
  ["d","SCRAM","Clicked on the diagram beside the rod drives. Always safe, never free: the xenon that follows locks you out of power for roughly three minutes."],
  ["d","BLOCK VALVE / HPI","Both clicked on the diagram. The block valve shuts a PORV that will not reseat. HPI refills the loop and adds vessel fatigue the entire time it runs."],
+ ["h","THE ANNUNCIATOR"],
+ ["d","WHERE IT IS","A component on the plant lights ONE lamp when any alarm of its own is up - the lamp says HERE. The stack floating at the top left of the control room says WHAT, listing every alarm that is currently lit and nothing that is not. This board is the third thing: every alarm the plant can raise, including the twenty that are dark, so you can learn what a lamp will mean before it lights. Hover any tile."],
+ ["ann","ANNUNCIATOR BOARD"],
  ["h","REACTIVITY LEDGER"],
+ ["d","WHERE IT IS","On the reactor's own plate in the control room, under a REACTIVITY head, because every term in it is a property of the core. Each row carries its bar where an ordinary row carries a hairline."],
  ["d","HOW TO READ IT","Terms are in pcm; beta for your chosen fuel is one dollar. Bars left of centre shut the reactor down, right of centre push it up. Net rho near zero is steady state."],
  ["d","DOPPLER","Fuel temperature feedback, instant and always stabilising, the thing that stops a runaway before you can."],
  ["d","XENON","Xe-135 poison. Slow, has memory, and the reason power history matters. Runs on a 400x compressed clock, so a nine hour transient plays in about eighty seconds."],
@@ -41,6 +45,31 @@ const HELP=[
  ["d","THE XENON PIT","Sit at 100 percent, hit SCRAM, then try to return to power immediately. Rods fully out will not do it. Diluting boron is the only way back, and it takes time you would not have in a fight."],
  ["d","THE TMI-2 TRAP","Inject the stuck PORV fault. Pressure falls while pressurizer level rises. The correct move is to watch subcooling collapse, close the block valve, then start HPI, and accept the vessel fatigue."],
 ];
+/* ══ THE FULL BOARD, AS REFERENCE ══
+   This used to be an overlay called ALARMS in the control room, opened by a key
+   over the plant. Twenty-six tiles do not belong on top of a plant view and
+   twenty of them are dark at any moment, so the LIT ones went to a floating
+   stack there and the board came here - where everything else that explains
+   rather than reports already lives.
+   It draws dark on an uncommissioned plant: the reference is worth reading
+   before you have built anything, and a[2] would ask a null plant how it feels. */
+const ANN_COLS=6, ANN_TILE=40;
+const annBoardH=()=>Math.ceil(ANN.length/ANN_COLS)*ANN_TILE;
+function annBoard(x,y,w){
+  const colw=(w+6)/ANN_COLS, tw_=Math.round(colw)-6;
+  ANN.forEach((a,i)=>{
+    const tx=Math.round(x+(i%ANN_COLS)*colw), ty=y+Math.floor(i/ANN_COLS)*ANN_TILE;
+    const on = (P&&S) ? a[2](S) : false;
+    const col=a[1]==="red"?C.red:a[1]==="amber"?C.amber:C.blue;
+    const lit=on&&!(a[1]==="red"&&performance.now()%900<450);
+    fillRect(tx,ty,tw_,34, lit?col:C.panel); frame(tx,ty,tw_,34, lit?col:C.edge);
+    txt(pad(i+1,2),tx+5,ty+11,{size:6.5,color:lit?"#2a0a06":"#2c3f45"});
+    fitTxt(a[0],tx+tw_/2,ty+23,tw_-8,{size:8,weight:700,sp:1.1,align:"center",
+        color:lit?"#120404":"#33484e"});
+    TIP(tx,ty,tw_,34,a[0]+(on?"  [ LIT ]":"  [ clear ]"),a[3]);
+  });
+  return annBoardH();
+}
 function drawHelp(){
   const maxw=716, o={size:10,color:"#9fb4b9"};
   ctx.save(); ctx.beginPath(); ctx.rect(0,44,W,H-44); ctx.clip();
@@ -51,6 +80,9 @@ function drawHelp(){
       if(it[0]==="h"){ y+=12;
         if(y>30&&y<H+30) rule(it[1],12,y,maxw,C.amber);
         y+=22;
+      } else if(it[0]==="ann"){
+        if(y>-annBoardH()&&y<H+30) annBoard(12,y,maxw);
+        y+=annBoardH()+12;
       } else {
         const n=wrapCount(it[2],maxw-14,o);
         if(y>10&&y<H+70){
