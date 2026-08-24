@@ -92,11 +92,18 @@ const checks=[
     what has to hold is that one function says what a component lets you set,
     and that the box and the leader it stands in are the shared ones. */
  ['params are the plant',     S.includes('function paramsFor(p)') &&
-                              S.includes('function benchPlate()'), 'one parameter table, drawn as a plate on a leader'],
+                              S.includes('function benchPlateFor(p)'), 'one parameter table, drawn as a plate on a leader'],
  ['one plate, two fillings',  (S.match(/function plateShell/g)||[]).length===1 &&
                               (S.match(/function plateLead/g)||[]).length===1 &&
-                              S.includes('plateShell(q,col,on,') && S.includes('plateShell(q,C.amber,true,'),
+                              (S.match(/plateShell\(q,col,on," \//g)||[]).length===2,
                               'readouts and parameters share the box and the leader'],
+ /* Both screens now stand MORE THAN ONE plate in the margins, which is the same
+    balance-and-stack question asked twice. It is answered once: plateStack() is
+    defined once and both plate lists are returned through it. */
+ ['one plate packer',        (S.match(/function plateStack/g)||[]).length===1 &&
+                             /function platesFor\(\)[\s\S]{0,400}?return plateStack\(/.test(S) &&
+                             /function benchPlates\(\)[\s\S]{0,900}?return plateStack\(/.test(S),
+                             'the two margins are balanced and stacked in one place'],
  ['no hand-placed mimic',     !/OY=44/.test(S), 'fixed-coordinate mimic removed'],
  ...pipeChecks,
 ];

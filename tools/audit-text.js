@@ -15,6 +15,23 @@ function mkctx(){
      offset. Without this the auditor measures the plant at its unscaled size
      and reports the whole grid as hanging off the right margin. */
   let tx=0,ty=0,rot=0,sx=1,sy=1; const stack=[];
+  /* ══ THE AUDITOR HAS TO KNOW WHAT IS CLIPPED AWAY ══
+     The bench plate is drawn inside the plant's viewport clip and stands off
+     the edge of a grid that already fills that viewport, so at fit scale it is
+     entirely outside the clip: invisible, not overflowing. Without this the
+     auditor reported all 800-odd of its strings as hanging off the margin.
+     Only ctx.rect() feeds the box - a clip built from any other path leaves it
+     alone, which is the permissive way round: a missed clip costs a false
+     report, a guessed one costs a missed fault. */
+  let clipBox=null, pend=null;
+  /* Is this string being drawn through the plant's view transform? That view
+     pans and zooms without limit and its content is MEANT to be bigger than the
+     window - seventeen plates standing in four margins do not fit and are not
+     supposed to - so the 12..748 rule cannot be asked of it. Every other check
+     still is, and the collision check is the one that matters there anyway. */
+  const inView=()=>typeof global.__viewOn==='function' && global.__viewOn();
+  const outside=(x0,x1,y)=>clipBox &&
+    (x1<=clipBox.x0 || x0>=clipBox.x1 || y<=clipBox.y0 || y-12>=clipBox.y1);
   const size=()=>parseFloat(st.font.match(/([\d.]+)px/)[1]);
   const sp=()=>parseFloat(st.letterSpacing)||0;
   const wOf=t=>String(t).length*(0.60*size()+sp());
@@ -23,8 +40,17 @@ function mkctx(){
       if(k in st && typeof st[k]!=='function') return st[k];
       switch(k){
         case 'measureText': return t2=>({width:wOf(t2)});
-        case 'save': return ()=>{ stack.push([tx,ty,rot,sx,sy]); };
-        case 'restore': return ()=>{ const v=stack.pop(); if(v)[tx,ty,rot,sx,sy]=v; };
+        case 'save': return ()=>{ stack.push([tx,ty,rot,sx,sy,clipBox]); };
+        case 'restore': return ()=>{ const v=stack.pop();
+          if(v)[tx,ty,rot,sx,sy,clipBox]=v; };
+        case 'beginPath': return ()=>{ pend=null; };
+        case 'rect': return (x,y,w,h)=>{ pend={x0:tx+x*sx,y0:ty+y*sy,
+                                               x1:tx+(x+w)*sx,y1:ty+(y+h)*sy}; };
+        case 'clip': return ()=>{ if(!pend) return;
+          clipBox = clipBox? {x0:Math.max(clipBox.x0,pend.x0),y0:Math.max(clipBox.y0,pend.y0),
+                              x1:Math.min(clipBox.x1,pend.x1),y1:Math.min(clipBox.y1,pend.y1)}
+                           : pend;
+          pend=null; };
         case 'translate': return (dx,dy)=>{ tx+=dx*sx; ty+=dy*sy; };
         case 'scale': return (a,b)=>{ sx*=a; sy*=(b===undefined?a:b); };
         case 'rotate': return r=>{ rot+=r; };
@@ -32,10 +58,14 @@ function mkctx(){
           const w=wOf(t2)*sx, a=st.textAlign, s2=size();
           if(Math.abs(rot)>1e-6){          // rotated: swap the bounding box axes
             /* a rotated string is about one em wide, and that em is scaled too */
-            TEXTS.push({t:String(t2),x0:tx+x*sx-s2*sx,x1:tx+x*sx+s2*sx,y:ty+y*sy,size:s2,screen:CUR,rot:true});
+            const rx0=tx+x*sx-s2*sx, rx1=tx+x*sx+s2*sx, ry=ty+y*sy;
+            if(outside(rx0,rx1,ry)) return;
+            TEXTS.push({t:String(t2),x0:rx0,x1:rx1,y:ry,size:s2,screen:CUR,rot:true,view:inView()});
           } else {
             const x0 = (a==='right'? x*sx-w : a==='center'? x*sx-w/2 : x*sx)+tx;
-            TEXTS.push({t:String(t2),x0,x1:x0+w,y:y*sy+ty,size:s2,screen:CUR});
+            const yy = y*sy+ty;
+            if(outside(x0,x0+w,yy)) return;
+            TEXTS.push({t:String(t2),x0,x1:x0+w,y:yy,size:s2,screen:CUR,view:inView()});
           }
         };
         case 'fillRect': return (x,y,w,h)=>{ if(w>8&&h>8) RECTS.push({x,y,w,h,c:st.fillStyle,screen:CUR}); };
@@ -72,7 +102,9 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
  'setDmg:v=>S.dmgParts=v,'+
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
- 'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v};')();
+ 'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
+ 'benchPlates,leadPts,leadObs:()=>LEADOBS};')();
+global.__viewOn=()=>M.vOn();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
 /* A TOOLTIP ONLY DRAWS ON HOVER, so until now nothing in this file ever ran
@@ -153,8 +185,20 @@ sweep('split2:'); M.D().nbank=4; warmUp(); M.setSel('core');
    condenser panels shipped unaudited exactly this way. Walk every part instead of
    naming the interesting ones - the list is short and it cannot go stale. */
 warmUp();
+/* Every bench plate is drawn on every pass now, so a sweep no longer has to
+   name a part to reach its parameter blocks. What setSel still changes is which
+   plate is AMBER and which is dim, and the selected plate is the one that grows
+   a highlight - so the walk stays. */
 for(const part of M.parts()) { M.setSel(part.id); sweep('sel:'+part.id+':'); }
 M.setSel('core');
+
+/* FOUR LOOPS. Every loop is built the same, so this is the only plant on which
+   a GANGED plate exists at all - one box for four steam generators and one for
+   four pumps, with the leader swung onto whichever member is selected. A draw
+   path a single-loop plant never reaches, and the layout is denser besides. */
+{ const L0=M.D().loops;
+  M.D().loops=4; warmUp(); M.setSel('sg2'); sweep('loops4:');
+  M.D().loops=L0; warmUp(); M.setSel('core'); }
 
 /* EVERY component broken at once. This is the worst case the plant can draw:
    every symbol carries a repair key, every plate grows a STATUS row, and the
@@ -183,12 +227,17 @@ console.log('\n=== TEXT OFF THE DOCUMENTED TYPE SCALE ===');
   console.log(n?`  ${n} off-scale size(s)`:'  none'); }
 
 console.log('\n=== TEXT OUTSIDE THE 12..748 CONTENT MARGINS ===');
-let n=0;
+/* the margin rule is a PAGE rule - panels, bars, overlays, the head. The plant
+   view is a pannable window onto a drawing deliberately larger than it, so its
+   strings are counted and reported here, never failed. */
+let n=0, inv=0;
 for(const t of TEXTS){
+  if(t.view){ if(t.x0<11.5||t.x1>748.5) inv++; continue; }
   if(t.x0<11.5 || t.x1>748.5){
     console.log(`  [${t.screen}] "${t.t.slice(0,42)}" x ${t.x0.toFixed(0)}..${t.x1.toFixed(0)} size ${t.size}`); n++; }
 }
 console.log(n?`  ${n} overflow(s)`:'  none');
+console.log(`  (${inv} string(s) in the pannable plant view, not judged here)`);
 
 console.log('\n=== TEXT COLLIDING WITH OTHER TEXT ON THE SAME LINE ===');
 n=0;
@@ -203,6 +252,36 @@ for(const k in byScreen){
   }
 }
 console.log(n?`  ${n} collision(s)`:'  none');
+
+/* ══ NO LEADER IS DRAWN THROUGH ANYTHING ══
+   The route is searched now rather than assumed, so whether it worked is a
+   measurement and not an opinion. Every leader on the bench is chopped into its
+   segments and each is tested against every obstacle the router was given - the
+   components, the empty slots, the other plates, the grid's own captions - minus
+   the two rectangles that leader is allowed inside, which are its own ends.
+   A leader that fell back to the old midpoint route WILL be reported here, and
+   that is the point: the fallback is a last resort, not a quiet default. */
+console.log('\n=== LEADERS DRAWN THROUGH SOMETHING ===');
+{ M.setScreen('design'); M.setSel('core'); cap('leadcheck',M.drawDesign);
+  const obs=M.leadObs(); let bad=0;
+  const hit=(a,b,o)=>{                       // axis-aligned segment vs rectangle
+    const x0=Math.min(a[0],b[0]), x1=Math.max(a[0],b[0]);
+    const y0=Math.min(a[1],b[1]), y1=Math.max(a[1],b[1]);
+    return x1>o.x+.5 && x0<o.x+o.w-.5 && y1>o.y+.5 && y0<o.y+o.h-.5;
+  };
+  for(const q of M.benchPlates()){
+    const pts=M.leadPts(q), mine=["@"+q.p.id,(q.lead||q.p).id];
+    for(let i=1;i<pts.length;i++){ let done=false;
+      for(const o of obs){
+        if(mine.includes(o.id)) continue;
+        if(hit(pts[i-1],pts[i],o)){
+          console.log('  '+q.p.name+' -> '+o.id+' at ('+pts[i-1][0].toFixed(0)+','+
+            pts[i-1][1].toFixed(0)+')-('+pts[i][0].toFixed(0)+','+pts[i][1].toFixed(0)+')');
+          bad++; done=true; break; } }
+      if(done) break; }
+  }
+  console.log(bad?'  '+bad+' crossing(s)':'  none');
+}
 
 console.log('\n=== FONT SIZE HISTOGRAM ===');
 const h={}; for(const t of TEXTS) h[t.size]=(h[t.size]||0)+1;
