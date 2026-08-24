@@ -83,11 +83,19 @@ function paramsFor(p){
     blk(TOGGLE_H,(x,y,w)=>toggleF(x,y,w,"EMERGENCY FEEDWATER","efw",38,
       "An independent feed supply that keeps the generator removing heat after the main feed pumps are lost. Extends grace time considerably after a trip."));
     note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
+    /* ══ GANGED: ONE PLATE FOR THE WHOLE SET ══
+       Every loop is built the same, so all four steam generators return exactly
+       these blocks and every one of them writes the same three design fields.
+       Four loops used to mean four identical plates in the margins, any of which
+       moved all four - the drawing said there were four decisions and there was
+       one. benchPlates() keeps the first of a gang and drops the rest. */
+    B.gang="sg";
   }
   else if(id.startsWith("pump")){
     blk(optListH(PUMPS),(x,y,w)=>optList(x,y,w,"PUMP REDUNDANCY",PUMPS,"pumps",
       "Spare coolant pumps. Sets the minimum flow the plant still delivers after damage, and flow is thermal margin."));
     note("Flow is the single biggest input to thermal margin. It is also the first thing you lose in a blackout, which is why the chimney height you gave the core matters so much.");
+    B.gang="pump";   // same set, same field, same one plate
   }
   else if(id==="turb"){
     blk(SLDF_H,(x,y,w)=>sliderF(x,y,w,"TURBINE SIZE","turb",0,1,
@@ -143,6 +151,15 @@ function paramsFor(p){
   else {
     note(p.tip);
     blk(14,(x,y,w)=>txt("NO ADJUSTABLE PARAMETERS",x,y+9,{size:8,sp:1.6,color:C.ink2}));
+    /* ══ PLAIN: THIS PLATE SAYS NOTHING YOU HAVE TO READ ══
+       Every bench plate is up at once now, so a component you cannot configure
+       would stand a box in the margin whose whole content is that there is
+       nothing in it - and seventeen of those are what makes a margin unreadable.
+       benchPlates() drops a plain plate; the component is still selectable and
+       still carries its tooltip on the plant.
+       NOT plain when access is blocked, because that note is the one thing on
+       such a plate that has to be read: it stops the unit commissioning. */
+    B.plain = p.access || p.grp==="shield";
   }
   return B;
 }

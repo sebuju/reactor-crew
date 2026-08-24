@@ -783,39 +783,101 @@ function readoutsFor(p,s){
   return R;
 }
 
+/* ══ ONE PACKER, BOTH SCREENS ══
+   The control room stands a plate beside every fitted component; the bench does
+   the same with every component's parameters. That is one question asked twice -
+   given a set of boxes that each belong to a component, which margin does each
+   go in and where in it does it sit - so it is answered once, here. The caller
+   brings boxes that already know their own size, because that is the part that
+   genuinely differs: a readout plate is always PLW wide and a bench plate is as
+   wide as the columns its parameters needed.
+
+   `sides` is the margins the caller is willing to use. The bench uses all four:
+   seventeen parameter plates in two side margins come to roughly 1500 units of
+   column EACH against a grid 633 tall, so the deck above and below the plant is
+   the only unspent room on the page. The control room stays on two, because its
+   plates ARE measured into the view fit and a top margin would push the plant
+   down the screen - say the word and it can have four as well. */
+function plateStack(items,sides,anchor){
+  sides = sides || ["L","R"]; anchor = anchor || "mid";
+  const G={L:[],R:[],T:[],B:[]};
+  /* the nearest edge in CELLS, because that is the face a leader wants to leave:
+     a component on the keel calls out downwards whatever its x is */
+  const near=q=>{
+    const d={L:q.p.x, R:GW-(q.p.x+q.p.w), T:q.p.y, B:GH-(q.p.y+q.p.h)};
+    return sides.reduce((a,k)=>d[k]<d[a]?k:a, sides[0]);
+  };
+  for(const q of items) G[near(q)].push(q);
+  /* A margin's RUN is how far it stretches along its own axis - down the page in
+     the side margins, across it above and below - and the drawing is as big as
+     its worst margin, which is what sets the scale you can read everything at.
+     So the run is levelled: take from the longest margin, give to the shortest,
+     and take the plate whose component sits nearest the receiving edge, because
+     that is the one whose leader grows least. Keep the move only while it
+     actually shortens the longest margin. */
+  const ax=k=>(k==="L"||k==="R");
+  const run=k=>G[k].reduce((a,q)=>a+(ax(k)?q.h:q.w),0)+PLGAP*Math.max(0,G[k].length-1);
+  const worst=()=>Math.max(...sides.map(run));
+  const edge=(q,k)=>k==="L"?q.p.x : k==="R"?GW-(q.p.x+q.p.w)
+                   : k==="T"?q.p.y : GH-(q.p.y+q.p.h);
+  for(let guard=0;guard<60 && sides.length>1;guard++){
+    const before=worst();
+    const from=sides.reduce((a,k)=>run(k)>run(a)?k:a, sides[0]);
+    const to  =sides.reduce((a,k)=>run(k)<run(a)?k:a, sides[0]);
+    if(from===to || !G[from].length) break;
+    let best=-1, bd=1e9;
+    G[from].forEach((q,i)=>{ const t=edge(q,to); if(t<bd){ bd=t; best=i; } });
+    const q=G[from][best];
+    G[from].splice(best,1); G[to].push(q);
+    if(worst()>=before){ G[to].pop(); G[from].splice(best,0,q); break; }
+  }
+  /* ══ EVERY EDGE THAT CAN BE A LINE IS A LINE ══
+     Two alignments, and each is one line shared by a whole margin.
+     ACROSS the margin, plates hang off their INNER edge - the one facing the
+     plant, the one the leader leaves from - so all four margins present a
+     straight edge to the drawing. A bench plate's width is modular by
+     construction (n columns of PLBW with PLGAP between), so squaring the inner
+     edge puts the outer edges on a ladder of the same module instead of
+     nowhere in particular. The alternative, squaring the OUTER edge, is what
+     was here and it left the inner edge ragged against the plant.
+     ALONG the margin, `anchor:"start"` begins the stack on the grid's own corner
+     rather than centred on its middle: a centred stack begins at whatever y the
+     total run happens to make, which is a line shared with nothing, while
+     started at GX/GY the first plate of every margin lines up with the edge of
+     the plant itself. The control room stays on `"mid"` and that is not taste -
+     alarmStack() floats at VIEW.x+4, VIEW.y+44, in the top left corner of the
+     viewport, and a left margin started at the grid's top corner lands straight
+     underneath it. Align the control room the day that stack moves. */
+  /* the packed position, then whatever the player has dragged it by */
+  const drag=q=>{ const o=plateOff[q.p.id]; if(o){ q.x+=o.dx; q.y+=o.dy; } return q; };
+  const out=[];
+  for(const k of sides){
+    const list=G[k]; if(!list.length) continue;
+    const st=(from,len)=>anchor==="start"? from : from+len/2-run(k)/2;
+    if(ax(k)){
+      list.sort((a,b)=>a.cy-b.cy);
+      let y=st(GY,gridH());
+      for(const q of list){
+        q.x = k==="L" ? GX-PLLEAD-q.w : GX+GW*CELL+PLLEAD;
+        q.y=y; q.side=k; y+=q.h+PLGAP; out.push(drag(q)); }
+    } else {
+      list.sort((a,b)=>a.cx-b.cx);
+      let x=st(GX,GW*CELL);
+      for(const q of list){
+        q.y = k==="T" ? GY-PLLEAD-q.h : GY+gridH()+PLLEAD;
+        q.x=x; q.side=k; x+=q.w+PLGAP; out.push(drag(q)); }
+    }
+  }
+  return out;
+}
 function platesFor(){
-  const L=[], R=[];
+  const items=[];
   for(const p of LAY.parts){
     const rows=readoutsFor(p,S); if(!rows.length) continue;
     const r=prect(p);
-    (p.x+p.w/2 < GW/2 ? L : R).push({p,rows,cy:r.y+r.h/2,h:20+rows.length*PLROW});
+    items.push({p,rows,cx:r.x+r.w/2,cy:r.y+r.h/2,w:PLW,h:20+rows.length*PLROW});
   }
-  /* Side by grid position alone leaves one margin twice as tall as the other, and
-     the whole drawing is then as tall as its worst column - which is what sets the
-     zoom you can read everything at. So the two margins are balanced: the plate
-     whose component sits nearest the centre line changes sides, over and over,
-     for exactly as long as that shortens the taller margin. Nearest the centre
-     first, because that is the one whose leader line grows least. */
-  const sum=A=>A.reduce((a,q)=>a+q.h,0)+PLGAP*Math.max(0,A.length-1);
-  for(let guard=0;guard<40;guard++){
-    const d=sum(L)-sum(R); if(!d) break;
-    const A=d>0?L:R, B=d>0?R:L;
-    let best=-1, bd=1e9;
-    A.forEach((q,i)=>{ const t=Math.abs(q.p.x+q.p.w/2-GW/2); if(t<bd){ bd=t; best=i; } });
-    if(best<0) break;
-    const q=A[best];
-    B.push(q); A.splice(best,1);
-    if(Math.abs(sum(L)-sum(R))>=Math.abs(d)){ A.push(q); B.pop(); break; }
-  }
-  const mid=GY+gridH()/2, out=[];
-  for(const [list,side] of [[L,"L"],[R,"R"]]){
-    list.sort((a,b)=>a.cy-b.cy);
-    const tot=list.reduce((a,q)=>a+q.h,0)+PLGAP*Math.max(0,list.length-1);
-    let y=mid-tot/2;
-    const x = side==="L" ? GX-PLLEAD-PLW : GX+GW*CELL+PLLEAD;
-    for(const q of list){ q.x=x; q.y=y; q.w=PLW; q.side=side; y+=q.h+PLGAP; out.push(q); }
-  }
-  return out;
+  return plateStack(items,["L","R"]);
 }
 
 /* ══ A PLATE IS A PLATE ON EITHER SCREEN ══
@@ -857,17 +919,148 @@ function plateRows(x,y,w,rows){
   });
   return y+rows.length*PLROW;
 }
-/* the leader turns once, square to the face it leaves, so it reads as a
-   drawing callout rather than a wire */
+/* ══ A LEADER FINDS ITS OWN WAY ══
+   The old leader was a fixed two-turn route through the midpoint, which is the
+   right SHAPE and the wrong PATH: it went wherever the midpoint happened to be,
+   straight across component labels, across the NOT FITTED tags on empty slots
+   and across other plates. So the shape is now searched for rather than assumed
+   - a 4-connected A* on a lattice a third of a cell across, with a turn penalty
+   so it still comes out as a few long straight runs instead of a staircase.
+
+   Everything a leader must not cross is a rectangle grown by LEAD_PAD, which is
+   the "slight margin": every component (fitted or not - an empty slot still
+   carries a dashed frame and a tag), every other plate, and the grid's own
+   lettering, which is text nobody thinks of as an obstacle until a leader is
+   drawn through it. The target component and the plate the leader belongs to
+   are the two the search is allowed to touch, because they are its endpoints.
+
+   The search is CACHED on a signature of every part and plate position, so it
+   runs on the frame something moves and not on the 59 frames after it, and it
+   gives up after LEAD_CAP expansions and falls back to the old two-turn route -
+   a leader that is drawn late is worse than one drawn through a label. */
+const LEAD_PAD=6, LEAD_STEP=CELL/3, LEAD_TURN=CELL*0.7, LEAD_CAP=9000;
+let LEADOBS=[], LEADSIG="", LEADCACHE={};
+function leadSetup(list){
+  const obs=[], sig=[], GHp=gridH(), GWp=GW*CELL;
+  const box=(x,y,w,h,id)=>obs.push({x:x-LEAD_PAD,y:y-LEAD_PAD,
+                                    w:w+2*LEAD_PAD,h:h+2*LEAD_PAD,id});
+  for(const p of LAY.parts){ const r=prect(p);
+    box(r.x,r.y,r.w,r.h,p.id); sig.push(p.id,p.x,p.y); }
+  for(const q of list){ box(q.x,q.y,q.w,q.h,"@"+q.p.id);
+    sig.push("@"+q.p.id,q.x|0,q.y|0,q.w|0,q.h|0); }
+  /* The grid's own captions, boxed where the WORDS are and not as bands round
+     the whole perimeter. A band is what this was first, and it walled the plant
+     off from its own margins: every leader has to cross the edge of the grid to
+     reach anything inside it, so a full-width caption strip made every route
+     impossible and every leader fell back. The elevation ruler down the left
+     edge is left out for exactly that reason - it runs the full height, it is
+     the faintest thing on the screen, and it is the one caption a leader is
+     allowed to cross. */
+  const cx=GX+GWp/2, cy=GY+GHp/2;
+  box(cx-55,GY+3,110,12,"#deck");        // UPPER DECK / HULL
+  box(cx-36,GY+GHp-15,72,12,"#keel");    // KEEL / HULL
+  box(GX+5,cy-38,12,76,"#fwd");          // FWD BULKHEAD, read sideways
+  box(GX+GWp-17,cy-38,12,76,"#aft");     // AFT BULKHEAD
+  sig.push(GX|0,GY|0,GWp,GHp|0);
+  const k=sig.join(",");
+  if(k!==LEADSIG){ LEADSIG=k; LEADCACHE={}; }
+  LEADOBS=obs;
+}
+/* the two rectangles a leader is allowed inside are its own two ends */
+function leadBlocked(x,y,a,b){
+  for(const o of LEADOBS){
+    if(o.id===a||o.id===b) continue;
+    if(x>=o.x&&x<=o.x+o.w&&y>=o.y&&y<=o.y+o.h) return true; }
+  return false;
+}
+function leadSearch(from,to,a,b){
+  const x0=Math.min(from.x,to.x)-2*CELL, y0=Math.min(from.y,to.y)-2*CELL;
+  const x1=Math.max(from.x,to.x)+2*CELL, y1=Math.max(from.y,to.y)+2*CELL;
+  const nx=Math.ceil((x1-x0)/LEAD_STEP)+1, ny=Math.ceil((y1-y0)/LEAD_STEP)+1;
+  if(nx*ny>LEAD_CAP*2) return null;
+  const px=i=>x0+i*LEAD_STEP, py=j=>y0+j*LEAD_STEP;
+  const IX=(i,j,d)=>(j*nx+i)*4+d;                       // d = the way we arrived
+  const si=Math.round((from.x-x0)/LEAD_STEP), sj=Math.round((from.y-y0)/LEAD_STEP);
+  const gi=Math.round((to.x-x0)/LEAD_STEP),   gj=Math.round((to.y-y0)/LEAD_STEP);
+  const DX=[1,-1,0,0], DY=[0,0,1,-1];
+  const prev={}, open=[[0,si,sj,-1]], seen={};
+  seen[IX(si,sj,0)]=0;
+  const h=(i,j)=>(Math.abs(i-gi)+Math.abs(j-gj))*LEAD_STEP;
+  let n=0, endKey=null;
+  while(open.length && n++<LEAD_CAP){
+    let bi=0; for(let i=1;i<open.length;i++) if(open[i][0]<open[bi][0]) bi=i;
+    const [,ci,cj,cd]=open.splice(bi,1)[0];
+    const ck=IX(ci,cj,cd<0?0:cd), cg=seen[ck];
+    if(cg===undefined) continue;
+    if(ci===gi&&cj===gj){ endKey=ck; break; }
+    for(let d=0;d<4;d++){
+      const ni=ci+DX[d], nj=cj+DY[d];
+      if(ni<0||nj<0||ni>=nx||nj>=ny) continue;
+      const X=px(ni), Y=py(nj);
+      const isEnd=(ni===gi&&nj===gj);
+      if(!isEnd && leadBlocked(X,Y,a,b)) continue;
+      const ng=cg+LEAD_STEP+(cd>=0&&cd!==d?LEAD_TURN:0);
+      const nk=IX(ni,nj,d);
+      if(seen[nk]!==undefined && seen[nk]<=ng) continue;
+      seen[nk]=ng; prev[nk]=ck;
+      open.push([ng+h(ni,nj),ni,nj,d]);
+    }
+  }
+  if(endKey===null) return null;
+  const pts=[]; let k=endKey;
+  while(k!==undefined){ const c=Math.floor(k/4), i=c%nx, j=Math.floor(c/nx);
+    pts.push([px(i),py(j)]); k=prev[k]; }
+  pts.reverse();
+  /* three points on one line are two points and a dot */
+  const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){
+    const A=out[out.length-1], B=pts[i], C=pts[i+1];
+    if((A[0]===B[0]&&B[0]===C[0])||(A[1]===B[1]&&B[1]===C[1])) continue;
+    out.push(B); }
+  out.push(pts[pts.length-1]);
+  return out;
+}
+/* The leader turns twice, square to the face it leaves and square to the face it
+   lands on, so it reads as a drawing callout rather than a wire. A plate above or
+   below the plant is the same move rotated: out of the plate's near edge, across,
+   and into the component's top or bottom face. */
+/* the polyline only - separated from the stroke so the auditor can measure the
+   route without a canvas, which is the whole reason the invariant is checkable */
+function leadPts(q){
+  const tgt=q.lead||q.p, r=prect(tgt), side=q.side;
+  let pts, ax, ay, bx, by, sx=0, sy=0, tx=0, ty=0;
+  if(side==="L"||side==="R"){
+    ax=side==="L"? q.x+q.w : q.x; ay=q.y+q.h/2;
+    bx=side==="L"? r.x : r.x+r.w; by=r.y+r.h/2;
+    sx=side==="L"? 1 : -1; tx=-sx;
+    const mx=(ax+bx)/2;
+    pts=[[ax,ay],[mx,ay],[mx,by],[bx,by]];
+  } else {
+    ax=q.x+q.w/2; ay=side==="T"? q.y+q.h : q.y;
+    bx=r.x+r.w/2; by=side==="T"? r.y : r.y+r.h;
+    sy=side==="T"? 1 : -1; ty=-sy;
+    const my=(ay+by)/2;
+    pts=[[ax,ay],[ax,my],[bx,my],[bx,by]];
+  }
+  /* the searched path, or the old midpoint route if there is no way through */
+  const key=q.p.id+">"+tgt.id+side;
+  let found=LEADCACHE[key];
+  if(found===undefined){
+    const st=LEAD_PAD+2;
+    found=leadSearch({x:ax+sx*st,y:ay+sy*st},{x:bx+tx*st,y:by+ty*st},
+                     "@"+q.p.id,tgt.id) || null;
+    LEADCACHE[key]=found;
+  }
+  if(found) pts=[[ax,ay]].concat(found).concat([[bx,by]]);
+  return pts;
+}
 function plateLead(q,col,firm){
-  const r=prect(q.p);
-  const ax=q.side==="L"? q.x+q.w : q.x, ay=q.y+q.h/2;
-  const bx=q.side==="L"? r.x : r.x+r.w, by=r.y+r.h/2;
-  const mx=(ax+bx)/2;
-  ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(mx,ay); ctx.lineTo(mx,by); ctx.lineTo(bx,by);
+  const pts=leadPts(q), e=pts[pts.length-1];
+  ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
   ctx.strokeStyle=firm?col:"#1b2c31"; ctx.lineWidth=firm?1.4:1;
   ctx.setLineDash(firm?[]:[4,3]); ctx.stroke(); ctx.setLineDash([]);
-  fillRect(bx-2,by-2,4,4,col);
+  fillRect(e[0]-2,e[1]-2,4,4,col);
 }
 /* The box, and the fact that a plate IS the component: clicking it selects, and
    it carries the same tooltip. Both go down BEFORE whatever fills the plate,
@@ -877,10 +1070,16 @@ function plateLead(q,col,firm){
 function plateShell(q,col,on,what){
   fillRect(q.x,q.y,q.w,q.h,C.panel); frame(q.x,q.y,q.w,q.h,col); accent(q.x,q.y,q.w,col);
   if(on) ticks(q.x+.5,q.y+.5,q.w-1,q.h-1,C.amber,6);
-  txt(q.p.name,q.x+7,q.y+13,{size:7.5,sp:1.2,caps:1,color:col===C.edge2?C.ink:col});
+  txt(q.title||q.p.name,q.x+7,q.y+13,{size:7.5,sp:1.2,caps:1,color:col===C.edge2?C.ink:col});
   txt("EL"+(GH-1-q.p.y),q.x+q.w-7,q.y+13,{size:6.5,sp:.8,align:"right",color:C.ink2});
   fillRect(q.x+7,q.y+17,q.w-14,1,"rgba(120,180,190,.10)");
   push({x:q.x,y:q.y,w:q.w,h:q.h,type:"btn",fn:()=>{ sel=q.p.id; }});
+  /* The HEAD is the handle. Pushed after the plate's own catcher so it wins
+     inside it, and it is only the 18 units above the hairline - everything
+     below is a slider or an option row and has to stay clickable. */
+  push({x:q.x,y:q.y,w:q.w,h:18,type:"plate",id:q.p.id});
+  TIP(q.x,q.y,q.w,18,q.title||q.p.name,
+    "Drag this head to move the plate. Double-click it to hand the plate back to the automatic layout. What is moved is the plate, not the component - the leader keeps pointing at the machine it belongs to.");
   TIP(q.x,q.y,q.w,q.h,q.p.name+what,q.p.tip);
   return q.y+20;
 }
@@ -896,13 +1095,14 @@ function drawPlate(q){
    configuring a component hid the plant you were configuring it into. They
    stand in the margin now, in a plate, on a leader back to the machine.
 
-   ONE plate, not seventeen, and that is measured rather than preferred: the
-   seventeen parameter stacks come to roughly 3000 units of column between them
-   against a grid that is 633 tall, so a bench drawn the control room's way
-   would fit at about a quarter scale - too small to read, and far too small to
-   put a slider thumb on. The difference is in the content and not in the taste:
-   a readout is something you WATCH, so all of them at once is the whole point;
-   a parameter is something you are WORKING ON, one at a time.
+   ALL SEVENTEEN, the same as the control room, and the old objection to that is
+   dead rather than forgotten. The seventeen parameter stacks come to roughly
+   3000 units of column against a grid that is 633 tall, so while the bench
+   measured its plates into the view fit, drawing them all made the whole plant
+   fit at about a quarter scale - too small to read and far too small to put a
+   slider thumb on. The bench fits to the grid alone now, so a tall margin costs
+   a pan and nothing else. What it buys is that a plate stops appearing and
+   vanishing under the pointer as you click about the plant.
 
    The plate takes as many columns as it needs to stand inside the grid's own
    height, so it never becomes the thing that sets the scale everything else has
@@ -913,9 +1113,11 @@ function drawPlate(q){
    option names run straight into their own mass tags. What the two screens
    share is the BOX, not a number: a plate is as wide as what stands in it. */
 const PLCW=172, PLBW=PLCW+14;
-function benchPlate(){
-  const p=LAY.parts.find(q=>q.id===sel); if(!p) return null;
-  const blocks=paramsFor(p); if(!blocks.length) return null;
+/* one component's parameters, measured into columns. No x or y: where it goes
+   in the margin is plateStack()'s question, not this one's. */
+function benchPlateFor(p){
+  const blocks=paramsFor(p); if(!blocks.length || blocks.plain) return null;
+  const gang=blocks.gang;
   const gap=6, head=20, pad=8;
   const tot=blocks.reduce((a,b)=>a+b.h+gap,0)-gap;
   const cap=Math.max(120,gridH()-head-pad);
@@ -929,14 +1131,42 @@ function benchPlate(){
     cols[cols.length-1].push(b); cy+=b.h+gap;
   }
   const colH=cols.map(c=>c.reduce((a,b)=>a+b.h+gap,0)-gap);
-  const h=head+Math.max(...colH)+pad, w=cols.length*PLBW+(cols.length-1)*PLGAP;
-  const side = p.x+p.w/2 < GW/2 ? "L" : "R";
-  return {p,cols,gap,x: side==="L" ? GX-PLLEAD-w : GX+GW*CELL+PLLEAD,
-          y:GY+gridH()/2-h/2, w, h, side};
+  const r=prect(p);
+  return {p,cols,gap,gang,cx:r.x+r.w/2,cy:r.y+r.h/2,
+          w:cols.length*PLBW+(cols.length-1)*PLGAP,
+          h:head+Math.max(...colH)+pad};
+}
+/* ══ EVERY PLATE IS UP, ALL THE TIME ══
+   It used to be exactly one, the selected component's, and it appeared and
+   vanished under you as you clicked about the plant - which reads as the UI
+   rearranging itself rather than as you reading a drawing. Nothing opens or
+   shuts now: every component that has parameters has a plate, the same way the
+   control room stands one beside every fitted component, and `sel` only says
+   which of them is drawn in amber. Seventeen plates come to roughly 3000 units
+   of column, which was the old objection to drawing them all - but the bench no
+   longer measures its plates into the view fit, so a tall margin costs a pan and
+   not the whole plant's scale. */
+function benchPlates(){
+  const items=[], gangs={};
+  for(const p of LAY.parts){
+    const q=benchPlateFor(p); if(!q) continue;
+    /* a ganged component keeps the FIRST plate and lends the rest their ids: the
+       set is one decision, so it is one box, and clicking any member lights it
+       and swings the leader onto the member you actually clicked */
+    if(q.gang){
+      const first=gangs[q.gang];
+      if(first){ first.ids.push(p.id); first.title=first.p.name.replace(/ \d+$/,"")+" x"+first.ids.length; continue; }
+      q.ids=[p.id]; gangs[q.gang]=q;
+    }
+    items.push(q);
+  }
+  return plateStack(items,["L","R","T","B"],"start");
 }
 function drawBenchPlate(q){
-  plateLead(q,C.amber,true);
-  const y0=plateShell(q,C.amber,true," / PARAMETERS");
+  const on=q.ids? q.ids.includes(sel) : q.p.id===sel, col=on?C.amber:C.edge2;
+  q.lead = on&&q.ids ? LAY.parts.find(p=>p.id===sel) : q.p;
+  plateLead(q,col,on);
+  const y0=plateShell(q,col,on," / PARAMETERS");
   q.cols.forEach((c,i)=>{
     let cy=y0; const cx=q.x+7+i*(PLBW+PLGAP);
     for(const b of c){ b.draw(cx,cy,PLCW); cy+=b.h+q.gap; }
@@ -965,11 +1195,20 @@ function drawPlant(y0,L,vh){
      passing the grid width as the viewport looked right and was not: it made
      fit come out at 1 and the plant hung a whole screen off the right margin. */
   /* the bench's ONE plate, laid out before anything is drawn, because the
-     drawing it belongs to has to be measured with it in */
-  const BP = L? null : benchPlate();
+     drawing needs it in hand by the time the components go down */
+  const BP = L? null : benchPlates();
+  /* ON THE BENCH THE FIT IS THE GRID, AND ONLY THE GRID. Measuring the plate
+     into it made the whole plant re-scale and re-centre on every selection: a
+     reactor plate is 382x465 and a turbine's is a fifth of that, so picking a
+     component moved the drawing under the hand that picked it. The plate stands
+     off the left or right edge of a grid that is already the full width of the
+     viewport, so it is off-screen at fit and you PAN to it - which is what the
+     view is for. The control room still measures its plates in, because there
+     every fitted component has one and the set does not change with the
+     selection. */
   const B=(()=>{
     let x0=GX,x1=GX+GW*CELL,y0=GY,y1=GY+GHp;
-    for(const q of (L? platesFor() : (BP?[BP]:[]))){
+    for(const q of (L? platesFor() : [])){
       x0=Math.min(x0,q.x); x1=Math.max(x1,q.x+q.w);
       y0=Math.min(y0,q.y); y1=Math.max(y1,q.y+q.h); }
     return {x:x0-18,y:y0-18,w:x1-x0+36,h:y1-y0+36};
@@ -1114,11 +1353,11 @@ function drawPlant(y0,L,vh){
      last. Drawn before the components, the pressurizer gauge was painted over by the
      pressurizer. */
   if(L) pipeGauges(L);
-  if(L){ const pl=platesFor();
+  if(L){ const pl=platesFor(); leadSetup(pl);
     for(const q of pl) if(q.p.id!==sel) drawPlate(q);
     for(const q of pl) if(q.p.id===sel) drawPlate(q);   // the selected one on top
   }
-  else if(BP) drawBenchPlate(BP);
+  else { leadSetup(BP); for(const q of BP) drawBenchPlate(q); }
   viewOn=false; ctx.restore();
 
   /* The one control the view itself has, drawn OUTSIDE the transform so it
@@ -1127,7 +1366,9 @@ function drawPlant(y0,L,vh){
      useful move is in, and once you are in the only move you cannot make with
      the hand is all the way back out. Zooming in aims at the component you have
      selected, because that is the one you were reading. */
-  { const zoomed=VIEW.z>1.001, kw=52, kx=VIEW.x+VIEW.w-kw-4, ky=VIEW.y+4;
+  /* OFF FIT, not just zoomed IN: the view zooms out past fit as well now, and a
+     key that only offered the way home from above left the far side stranded */
+  { const zoomed=Math.abs(VIEW.z-1)>0.001, kw=52, kx=VIEW.x+VIEW.w-kw-4, ky=VIEW.y+4;
     button(kx,ky,kw,14,zoomed?"FIT "+VIEW.z.toFixed(1)+"X":"ZOOM",
       {sunk:1,size:6.5,sp:.6,fn:()=>{
         if(zoomed){ VIEW.z=1; VIEW.ox=VIEW.oy=0; }
