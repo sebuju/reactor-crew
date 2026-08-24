@@ -252,17 +252,21 @@ const benchReviewH=w=>18+revNoteH(w)+12+34;
 function benchReview(x,y,w){
   const d=derived(), LM=PLANT_LM;
   const W_=designIssues(d,LM), hard=designBlocked(d,LM);
-  /* a review note is a sentence, not a label: it wraps, and the tag beside it
-     keeps its own column so the sentences all start on one line */
-  rule("DESIGN REVIEW",x,y+9,w,W_.length?(hard?C.red:C.amber):C.green);
+  /* plateShell() already prints "DESIGN REVIEW" once, in the plate's own state
+     colour, on the band at the top of the box - so the notes simply start
+     where a second heading used to sit. revNoteH() floors the plate's height
+     regardless of what prints above the notes, so nothing below needed that
+     room on purpose. a review note is a sentence, not a label: it wraps, and
+     the tag beside it keeps its own column so the sentences all start on one
+     line */
   if(W_.length){
-    let ry=y+30;
+    let ry=y+12;
     for(const q of W_){
       const col=q[0]==="HARD"?C.red:C.amber;
       txt(q[0]==="HARD"?"[BLOCK]":"[WARN ]",x,ry,{size:8.5,color:col});
       ry=wrap(q[1],x+REV_TAG,ry,w-REV_TAG,REV_LH,{size:8.5,color:col})+4;
     }
-  } else txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",x,y+30,
+  } else txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",x,y+12,
       {size:8.5,sp:1,color:C.green});
   const by=y+18+revNoteH(w)+12;
   if(hard){

@@ -21,7 +21,6 @@ function vital(x,y,w,v){
   let hv=false;
   if(ch){ const wd=push({x,y,w,h:44,type:"btn",fn:()=>togglePlot(ch)}); hv=hov(wd); }
   fillRect(x,y,w,44,C.panel); frame(x,y,w,44,on?CH[ch].col:(hv?C.edge2:C.edge));
-  accent(x,y,w,on?CH[ch].col:C.edge2);
   txt(v.lab,x+7,y+13,{size:6,sp:1.1,caps:1,color:C.ink2});
   segMark(x+7,y+19,w-14,6,v.u*LIM_AT,v.sgn?[-LIM_AT,LIM_AT]:[LIM_AT],v.col,v.sgn);
   txt(v.val,x+7,y+38,{size:8,color:v.col||C.cyan});
@@ -162,8 +161,21 @@ ovlAdd({k:"flt",label:"FAULTS",h:88,sc:"operate",draw:drawFaults,
    It sits BELOW the trip banner, which is drawn across the top of the viewport
    and is 30 units tall. Overlapping it would put the two loudest things on the
    screen in the same place. */
-const ALW=138;
+/* ALW was 138 for no reason anything inside it needed - every alarm name is
+   fixed (ANN never changes at runtime) and already drawn through fitTxt(),
+   which shrinks a label that does not fit. Measured instead: the real tw()
+   over every label at the row's own type, plus the row's own 10-unit margin
+   each side, so a longer name added to ANN widens the stack instead of
+   clipping. Computed once and cached, since ANN is a constant table. */
+let ALW_CACHE=null;
+function alwWidth(){
+  if(ALW_CACHE) return ALW_CACHE;
+  let m=0;
+  for(const a of ANN) m=Math.max(m,tw(a[0],{size:7.5,weight:700,sp:.8}));
+  return ALW_CACHE=Math.ceil(m)+20;
+}
 function alarmStack(x,y){
+  const ALW=alwWidth();
   const lit=ANN.filter(a=>a[2](S));
   /* NOTHING when nothing is lit, and that is not the mockup's answer - it drew
      a box reading PLANT NOMINAL. The mockup had a fixed 660px page with room
@@ -177,8 +189,11 @@ function alarmStack(x,y){
   const top=lit.some(a=>a[1]==="red")?C.red:C.amber;
   /* a catcher first: a click on the stack must not reach the plant behind it */
   push({x,y,w:ALW,h,type:"btn"});
+  /* flat: the header text and the count are already in the alarm colour, and
+     every lit row inside is filled solid in its own - the outline was a third
+     cue on a panel that is already opaque and needs no edge to separate it
+     from what is behind it. */
   fillRect(x,y,ALW,h,"rgba(7,12,13,.92)");
-  frame(x,y,ALW,h,top); accent(x,y,ALW,top);
   txt("ALARMS",x+7,y+13,{size:7,sp:1.4,color:top});
   txt(String(lit.length),x+ALW-7,y+13,{size:7,sp:1,align:"right",color:top});
   TIP(x,y,ALW,18,"ALARM STACK",
@@ -335,7 +350,6 @@ function drawDamage(yy){
       const wd=push({x:bx,y:y+30,w:bw,h:56,type:"btn",fn:()=>repairSend(part)});
       fillRect(bx,y+30,bw,56, busy?"#2a1f08":(blocked?"#1a0d0b":(hov(wd)?C.panelHi:C.panel)));
       frame(bx,y+30,bw,56, busy?C.amber:(blocked?C.red:C.edge2));
-      accent(bx,y+30,bw,part.col);
       txt(part.name,bx+11,y+48,{size:8.5,sp:.5,color:C.bright});
       if(blocked) txt("NO ACCESS / UNREPAIRABLE",bx+11,y+64,{size:7.5,sp:.8,color:C.red});
       else if(busy){ txt("REPAIR IN PROGRESS",bx+11,y+64,{size:7.5,sp:.8,color:C.amber});

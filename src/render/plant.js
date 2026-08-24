@@ -468,6 +468,19 @@ function ctlStrip(list,x,y,w,h){
    which hard-coded the same rows into fixed 172px columns and so could not be
    drawn at any other size. Ported from .trash/mockups/z1-liveplant.js. */
 const PLW=158, PLGAP=10, PLROW=13, PLLEAD=30, PLSNAP=8;
+/* The plate's own top/bottom padding, on a READOUT plate only. plateShell()'s
+   head is a whole heading - a PLROW-tall title cell, its rule, 3 units of air -
+   not padding, so squeezing it to buy a bottom margin just makes the heading
+   cramped. The plate grows by PLPAD at each end instead: PLPAD above the
+   heading, PLPAD below the last row, h = 20+2*PLPAD+rows*PLROW.
+   READOUT PLATES ONLY. benchPlateFor()'s bench-parameter plates and benchFree()'s
+   RESULTS/REVIEW already reserve their own bottom pad (head=20, pad=8) against a
+   content-start of q.y+20 - handing plateShell() a pad there too would push
+   their content down without their own height budget growing to match, and
+   quietly shrink their bottom margin from 8 units to 2. So only platesFor() and
+   drawPlate() pass PLPAD; every other plateShell() caller omits it and gets the
+   original q.y+20. */
+const PLPAD=6;
 
 /* Four numbers show up on more than one component's plate. Their band and their
    sentence are written ONCE here, so two plates cannot end up describing the
@@ -877,7 +890,7 @@ function platesFor(){
   for(const p of LAY.parts){
     const rows=readoutsFor(p,S); if(!rows.length) continue;
     const r=prect(p);
-    items.push({p,rows,cx:r.x+r.w/2,cy:r.y+r.h/2,w:PLW,h:20+rows.length*PLROW});
+    items.push({p,rows,cx:r.x+r.w/2,cy:r.y+r.h/2,w:PLW,h:20+2*PLPAD+rows.length*PLROW});
   }
   return plateStack(items,["L","R"]);
 }
@@ -1069,15 +1082,28 @@ function plateLead(q,col,firm){
    because the hit test and findTip() each take the LAST match - so a slider
    inside a bench plate has to be pushed after the plate's own catcher if it is
    to win inside it. Returns the y the content starts at. */
-function plateShell(q,col,on,what){
-  fillRect(q.x,q.y,q.w,q.h,C.panel); frame(q.x,q.y,q.w,q.h,col); accent(q.x,q.y,q.w,col);
-  if(on) ticks(q.x+.5,q.y+.5,q.w-1,q.h-1,C.amber,6);
+function plateShell(q,col,on,what,pad){
+  pad=pad||0;
+  fillRect(q.x,q.y,q.w,q.h,C.panel);
+  /* the heading is a BAND now, not a line under some text. A hairline rule was
+     the only thing separating the title cell from the table below, which is a
+     border doing a job a change of ground does better; the band is flush to the
+     plate's top edge and full width, so it reads as the heading rather than as
+     a box drawn inside the box. */
+  fillRect(q.x,q.y,q.w,20,C.panelHi);
+  /* DESIGN REVIEW carries q.noBorder: it is already red, amber or green in
+     three other places at once - its own title text, the [BLOCK]/[WARN] tag on
+     every line, and "NO OBJECTIONS" in green when the list is empty - so an
+     outline would be a fourth cue for a state the plate had already said three
+     times over. Every other plate's border is still state carried where
+     nothing else says it (a selected or damaged readout plate, an over-budget
+     RESULTS) and stays. */
+  if(!q.noBorder) frame(q.x,q.y,q.w,q.h,col);
   txt(q.title||q.p.name,q.x+7,q.y+13,{size:7.5,sp:1.2,caps:1,color:col===C.edge2?C.ink:col});
   /* a FREE plate belongs to the whole design and to no machine on it, so it has
      no elevation to print and nothing to select - but it still catches its own
      clicks, or a click on bare plate would reach the plant behind it */
   if(!q.free) txt("EL"+(GH-1-q.p.y),q.x+q.w-7,q.y+13,{size:6.5,sp:.8,align:"right",color:C.ink2});
-  fillRect(q.x+7,q.y+17,q.w-14,1,"rgba(120,180,190,.10)");
   push({x:q.x,y:q.y,w:q.w,h:q.h,type:"btn",fn:q.free?null:()=>{ sel=q.p.id; }});
   /* The HEAD is the handle. Pushed after the plate's own catcher so it wins
      inside it, and it is only the 18 units above the hairline - everything
@@ -1086,13 +1112,13 @@ function plateShell(q,col,on,what){
   TIP(q.x,q.y,q.w,18,q.title||q.p.name,
     "Drag this head to move the plate. Double-click it to hand the plate back to the automatic layout. What is moved is the plate, not the component - the leader keeps pointing at the machine it belongs to.");
   TIP(q.x,q.y,q.w,q.h,q.p.name+what,q.p.tip);
-  return q.y+20;
+  return q.y+20+pad;
 }
 function drawPlate(q){
   const dmg=S.dmgParts.includes(q.p.id), on=q.p.id===sel;
   const col=dmg?C.red:on?C.amber:C.edge2;
   plateLead(q,col,on||dmg);
-  plateRows(q.x+7,plateShell(q,col,on," / LIVE READOUTS"),q.w-14,q.rows);
+  plateRows(q.x+7,plateShell(q,col,on," / LIVE READOUTS",PLPAD),q.w-14,q.rows);
 }
 
 /* ══ THE BENCH IS THE PLANT TOO ══
@@ -1200,6 +1226,9 @@ function benchFree(packed){
     "What is wrong with this design, and the key that builds it. A blocking issue has to be cleared before the unit can be commissioned.",
     FREE_W,benchReviewH(FREE_W-14),benchReview,
     hard?C.red:(designIssues(null,PLANT_LM).length?C.amber:C.green));
+  /* the plate's own title, its BLOCK/WARN tags and its NO OBJECTIONS line
+     already say this state three times over - see plateShell() */
+  rev.noBorder=1;
   rev.x=Math.max(x1,res.x+res.w)+PLLEAD; rev.y=GY;
   return [res,rev].map(plateDrag);
 }
@@ -1373,12 +1402,8 @@ function drawPlant(y0,L,vh){
        and the key is INVERTED to match: every operating control is sunk into the
        plinth, a bypass stands proud out of a cut. Same height, same inset. */
     if(plinth && bh) fillRect(x+2,y+h-STRIP_PAD-bh,w-4,STRIP_PAD+bh-2,C.well);
-    /* The registration marks go down AFTER the plinth, and they are the only part
-       of the selection that does. The plinth covers the bottom third of a
-       component, so drawn with the wash they were painted straight over and the
-       bottom two corners of a selected part were all but invisible. The keys land
-       clear of them: they start at x+6 and stop STRIP_PAD above the bottom edge. */
-    if(on) ticks(x+2.5,y+2.5,w-5,h-5,C.amber,7);
+    /* The keys land clear of the plinth: they start at x+6 and stop STRIP_PAD
+       above the bottom edge. */
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red);
       /* the party is dispatched from the broken thing itself; the damage panel
          still lists them, because you want one place that says how many */

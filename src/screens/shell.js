@@ -48,8 +48,11 @@ function topbar(){
     const wd=push({x,y:9,w,h:23,type:"btn",fn:()=>{ if(dis) return;
       if(k==="operate"&&(!P||P.dsig!==designSig())){ commission(); return; }
       screen=k; helpScroll=0; layout(); }});
+    /* no outline, on any of the three, in any state: a tab already carries an
+       amber fill and amber type when it is the one you are on, and there are
+       only three of them side by side - "which one is lit" is answered before
+       you have read a word, so the border was a fourth cue. */
     fillRect(x,9,w,23,on?"#2a1f08":(hov(wd)&&!dis?C.panelHi:C.well));
-    frame(x,9,w,23,on||isHelp?C.amber:C.edge);
     txt(label,x+w/2,midBase(9,23,8),{size:8,sp:1.8,caps:1,align:"center",
         color:on||isHelp?C.amber:(dis?"#2c3f45":C.ink)});
     TIP(x,9,w,23,label,

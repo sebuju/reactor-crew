@@ -13,18 +13,35 @@ function massWith(key,i){ const o=D[key]; D[key]=i; const m=derived().mass; D[ke
 const optListH=arr=>16+arr.length*25;
 const SEGSEL_H=39, SLDF_H=52, READF_H=34, TOGGLE_H=28;
 
+/* ── THE ROW'S OWN BORDER GOES, ON BOTH OF THESE AND ON toggleF() BELOW ──
+   An option row, a segmented choice and a fit-toggle are the three things you
+   pick on the bench, and each was outlined in C.edge unchosen and C.amber (or
+   C.green) chosen. The chosen one already carries a lit fill, a lit label and,
+   on optList, a lit marker - the outline was a fourth cue for a state that was
+   already said three times, and it is why the outline goes even where the state
+   colour would otherwise have kept it under frame()'s own rule. */
+
+/* the ground a marker sits on, lifted clear of the row behind it: an unlit
+   radio was C.panelHi and a hovered row is ALSO C.panelHi, so hovering a row
+   made its own marker vanish - the control disappearing exactly when you
+   reached for it. Shared by the radio and the checkbox below. */
+const markGround=(mark,row)=>mark===row?C.rail:mark;
+
 function optList(x,y,w,title,arr,key,tip){
   rule(title,x,y+9,w); TIP(x,y-4,w,14,title,tip);
   const tot=arr.map((o,i)=>massWith(key,i)), lo=Math.min(...tot);
   arr.forEach((o,i)=>{
     const by=y+16+i*25, on=D[key]===i;
     const wd=push({x,y:by,w,h:23,type:"btn",fn:()=>D[key]=i});
-    fillRect(x,by,w,23,on?"#2a1f08":(hov(wd)?C.panelHi:C.panel));
-    frame(x,by,w,23,on?C.amber:C.edge);
-    fillRect(x+8,by+8,7,7,on?C.amber:"#22343a");
-    txt(o.name,x+22,by+15,{size:8.5,sp:.3,color:on?C.amber:C.ink});
+    const row=on?"#2a1f08":(hov(wd)?C.panelHi:C.panel);
+    fillRect(x,by,w,23,row);
+    dot(x+8,by+8,7, on?C.amber:markGround(C.panelHi,row));
+    /* optically centred on the MARKER's own box, not on the row - a fixed drop
+       cannot do that once the two widgets carry different type sizes */
+    const ly=midBase(by+8,7,8.5);
+    txt(o.name,x+22,ly,{size:8.5,sp:.3,color:on?C.amber:C.ink});
     const dm=tot[i]-lo;
-    txt("+"+dm.toFixed(0)+"t",x+w-7,by+15,
+    txt("+"+dm.toFixed(0)+"t",x+w-7,ly,
       {size:8,align:"right",color:dm<1?C.green:(on?C.amber:C.ink2)});
     TIP(x,by,w,23,o.name,(o.note||"")+
       "  Total plant mass with this option: "+tot[i].toFixed(0)+" t"+
@@ -41,7 +58,6 @@ function segSel(x,y,w,title,labels,key,tip,base){
     const bx=x+i*(cw+4), v=(base||0)+i, on=D[key]===v;
     const wd=push({x:bx,y:y+16,w:cw,h:23,type:"btn",fn:()=>D[key]=v});
     fillRect(bx,y+16,cw,23,on?"#2a1f08":(hov(wd)?C.panelHi:C.panel));
-    frame(bx,y+16,cw,23,on?C.amber:C.edge);
     txt(L,bx+cw/2,y+28,{size:9,sp:.5,align:"center",color:on?C.amber:C.ink});
     txt("+"+(tot[i]-lo).toFixed(0)+"t",bx+cw/2,y+37,
       {size:6.5,align:"center",color:tot[i]-lo<1?C.green:C.ink2});
@@ -71,12 +87,27 @@ function readF(x,y,w,title,val,tip){
 function toggleF(x,y,w,label,key,mass,tip){
   const on=D[key];
   const wd=push({x,y,w,h:28,type:"btn",fn:()=>D[key]=!D[key]});
-  fillRect(x,y,w,28,on?"#0f2018":(hov(wd)?C.panelHi:C.panel));
-  frame(x,y,w,28,on?C.green:C.edge);
-  fillRect(x+9,y+10,9,9,on?C.green:"#22343a"); frame(x+9,y+10,9,9,on?C.green:C.edge2);
+  /* THE ROW IS DRAWN 23 TALL, CENTRED IN THE 28 IT IS GIVEN. TOGGLE_H is what
+     the plate packer RESERVES for this widget and is not this function's to
+     change, so it stays 28; but a fit-toggle beside a 23-tall optList row read
+     a fifth taller for no reason anyone chose - just TOGGLE_H being 28. The 5
+     spare units become space between one toggle and the next instead. The
+     click target stays the full 28, so nothing about reaching for it changes.
+     An unlit row was C.panel, the plate's own colour, so with its outline gone
+     there was nothing left to say it was a row at all - C.well replaces it. */
+  const row=on?"#0f2018":(hov(wd)?C.panelHi:C.well);
+  fillRect(x,y+2,w,23,row);
+  /* SAME SIZE AND SAME LEFT MARGIN AS THE RADIO ABOVE - 7x7 at x+8 - so the two
+     controls read as one kind of thing, a marker in a row, rather than two
+     different widgets that happen to sit near each other. It stays a SQUARE:
+     the radio is round because it is a pick-one list and this is a
+     fit-it-or-not switch, and that is the distinction shape is carrying now
+     that neither has an outline. */
+  fillRect(x+8,y+10,7,7, on?C.green:markGround(C.edge2,row));
   const mo={size:8,align:"right",color:C.ink2}, mt="+"+mass+"t";
-  fitTxt(label,x+24,y+18,w-31-tw(mt,mo)-6,{size:8,sp:.3,color:on?C.green:C.ink});
-  txt(mt,x+w-7,y+18,mo);
+  const ly=midBase(y+10,7,8);
+  fitTxt(label,x+22,ly,w-29-tw(mt,mo)-6,{size:8,sp:.3,color:on?C.green:C.ink});
+  txt(mt,x+w-7,ly,mo);
   TIP(x,y,w,28,label+(on?"  [ FITTED ]":"  [ not fitted ]"),tip+"  Costs "+mass+" tonnes.");
   return y+TOGGLE_H;
 }
@@ -305,7 +336,6 @@ function latPlan(x,y,w,tool){
       txt(String(rod+1),X+cs/2,Y+cs/2+3,
         {size:7.5,weight:700,align:"center",color:C.well});
     }
-    if(hv&&hv.u===u&&hv.v===v) ticks(X,Y,cs,cs,C.amber,4);
   }
   ctx.restore();
   frame(gx,gy,gw,gh,C.edge);
@@ -373,8 +403,12 @@ function latTools(x,y,w,tools){
   if(!tools.some(t=>t[1]===LATPEN.tool)) LATPEN.tool=tools[0][1];
   const bw=(w-(tools.length-1)*4)/tools.length;
   tools.forEach((t,i)=>{
+    /* flat + a darker resting ground: the CHOSEN tool already carries an amber
+       fill and amber type, so its outline was a fourth cue, and the unchosen
+       ones sat on C.panel - the plate's own colour - so with the outline gone
+       they had no ground until you hovered them. base:C.well gives them one. */
     button(x+i*(bw+4),ty,bw,19,t[0],
-      {on:LATPEN.tool===t[1],size:7,sp:.3,fn:()=>{LATPEN.tool=t[1];}});
+      {on:LATPEN.tool===t[1],size:7,sp:.3,fn:()=>{LATPEN.tool=t[1];},flat:true,base:C.well});
     TIP(x+i*(bw+4),ty,bw,19,t[0]+" PEN",t[2]);
   });
   ty+=23;
@@ -382,7 +416,7 @@ function latTools(x,y,w,tools){
     const cw=(w-12)/4;
     for(let b=0;b<4;b++){
       button(x+b*(cw+4),ty,cw,19,"BANK "+(b+1),
-        {on:LATPEN.bank===b,size:6.5,sp:.2,fn:()=>{LATPEN.bank=b;}});
+        {on:LATPEN.bank===b,size:6.5,sp:.2,fn:()=>{LATPEN.bank=b;},flat:true,base:C.well});
       TIP(x+b*(cw+4),ty,cw,19,"BANK "+(b+1),
         "Which bank the clusters you draw belong to. A bank is a group of clusters that move together, so it is the unit the panel gives a slider to and the unit SPLIT mode drives one at a time. Draw clusters at different radii into different banks and you can lean the flux; put them all in one and there is nothing to lean against. Worth is decided by where the clusters sit, not by how many you fit.");
     }
@@ -419,7 +453,7 @@ function latBulkRow(x,y,w,label,items){
   const n=items.length, bw=(w-lw-(n-1)*4)/n;
   items.forEach((it,i)=>{
     const bx=x+lw+i*(bw+4);
-    button(bx,y,bw,19,it[0],{size:6.5,sp:.2,fn:it[2]});
+    button(bx,y,bw,19,it[0],{size:6.5,sp:.2,fn:it[2],flat:true,base:C.well});
     TIP(bx,y,bw,19,it[0],it[1]);
   });
   return y+LATROW_H;
@@ -459,7 +493,7 @@ function latDimRack(x,y,w){
      of it there is */
   { const cw=(w-12)/4;
     LATREFL.forEach((L,i)=>button(x+i*(cw+4),ty,cw,19,L,
-      {on:D.refl===i,size:6.5,sp:.2,fn:()=>{D.refl=i;}}));
+      {on:D.refl===i,size:6.5,sp:.2,fn:()=>{D.refl=i;},flat:true,base:C.well}));
     TIP(x,ty,w,19,"REFLECTOR MATERIAL",
       "What the band around the core is made of; the three thicknesses below decide how much of it there is. Beryllium and graphite reflect better per tonne and nudge the void coefficient positive; steel is dense, so a thick steel band is real tonnage on the budget.");
     ty+=23; }
