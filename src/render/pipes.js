@@ -35,6 +35,22 @@
 const PIPE_NAME={hot:"HOT LEG",cold:"COLD LEG",steam:"MAIN STEAM",feed:"FEEDWATER",
                  hpi:"HP INJECTION",surge:"SURGE LINE",exh:"EXHAUST"};
 const PIPE_VAPOUR={steam:1,exh:1};              // kinds that carry vapour, not liquid
+/* ── EVERY JUNCTION IS ONE LINE, NOT ONE TABLE ROW EACH ──
+   The kind carries the junction's own generated id ("xtie:"+id), because any
+   number of them can open and shut independently and each therefore needs
+   its own flow integral. Nothing else in this file wants to know WHICH one:
+   one name, one colour, one full scale, one unit between all of them.
+   Written as a prefix test rather than a table keyed by id, so placing or
+   removing a junction never touches this file - there is no fixed count to
+   run a loop over any more. The "xtie" spelling is kept from the fixed-slot
+   cross-ties this replaced, on purpose: it is the one string every lookup
+   below already knew how to fall back on. */
+const pipeName=k=>k.startsWith("xtie")?"CROSS-TIE":PIPE_NAME[k];
+/* a junction joins two cold legs and carries what they carry - PC[k] is
+   undefined for any "xtie:"+id kind, since pipeColours() cannot enumerate
+   every id that exists, so every reader of the colour table falls back
+   through this rather than through a pre-populated key for each one. */
+const pipeCol=(PC,k)=>PC[k]||(k.startsWith("xtie")?PC.cold:C.ink2);
 
 /* The one pipe colour table. drawPlant() strokes the run with it and the packets are
    drawn in it, so a packet can never be a different colour from its own pipe. */
@@ -190,6 +206,10 @@ function pipeFmt(v){
 function pipeFullScale(k){
   if(k==="hpi") return 120*Math.sqrt(P.hpiRate/1.6);
   if(k==="hot"||k==="cold") return 84*Math.max(0.05,P.feff0);
+  /* step() runs a cross-tie at a flat 60 while the valve is open, so the needle
+     reads full whenever it is passing. Same shape as HP injection: a valve is
+     open or it is not, and the meter says which. */
+  if(k.startsWith("xtie")) return 60;
   return {steam:96,exh:96,feed:96,surge:72}[k]||84;
 }
 const pipeFrac=(k,sp)=>sp/Math.max(1e-6,pipeFullScale(k));
@@ -224,7 +244,7 @@ function pipeUnit(k){
 function pipeSteam(k,L){
   if(PIPE_VAPOUR[k]) return 1;
   if(k==="hot")  return clamp(L.vf*1.6,0,1);
-  if(k==="cold") return clamp((L.vf-0.25)*1.6,0,1);
+  if(k==="cold"||k.startsWith("xtie")) return clamp((L.vf-0.25)*1.6,0,1);
   return 0;
 }
 
@@ -309,27 +329,44 @@ function pipeDial(x,y,r,fr,col,label,o){
   }
 }
 
-/* One anchor per KIND: the middle of the longest STRAIGHT run that kind owns, so a
-   meter never lands on a bend and a four-loop plant grows four meters, not one each. */
+/* One anchor per KIND: the middle of a STRAIGHT run that kind owns, so a meter never
+   lands on a bend and a four-loop plant grows four meters, not one each.
+
+   THE LONGEST STRETCH IS NOT ALWAYS THE RIGHT ONE. A pipe runs BEHIND the plant, so
+   the middle of the longest segment can be inside a vessel - where a meter is a face
+   bolted to nothing and its reading lands across whatever that component is drawing.
+   At four loops the main steam meter sat inside the fourth generator, and audit-text
+   found it as the reading colliding with that generator's own REPAIR key. So a
+   stretch that is long enough to hold a meter AND clear of every component wins;
+   length only decides between equals. A kind with nowhere better keeps the anchor it
+   always had rather than losing its meter.
+   Clear of the WHOLE instrument, face and reading together - the same box the meter
+   puts its own tooltip on. The reading hangs a dial's radius below the face, so an
+   anchor that is itself in open air can still drop its digits inside a component,
+   which is how the hot-leg reading ended up under a damage badge. */
+const PIPE_DIAL_R=10;
 function pipeAnchors(runs){
-  const best={};
+  const best={}, need=2*PIPE_DIAL_R+6, r0=PIPE_DIAL_R;
+  const clear=(x,y)=>!LAY.parts.some(p=>{ const r=prect(p);
+    return x+r0>r.x && x-r0<r.x+r.w && y+r0+11>r.y && y-r0<r.y+r.h; });
   for(const r of runs){
     const g=pipeGeom(r.pts);
-    for(const q of g.segs)
-      if(!best[r.k] || q.L>best[r.k].L)
-        best[r.k]={L:q.L, x:q.x+q.dx*q.L/2, y:q.y+q.dy*q.L/2};
+    for(const q of g.segs){
+      const x=q.x+q.dx*q.L/2, y=q.y+q.dy*q.L/2;
+      const a={L:q.L,x,y,rank:(q.L>=need?2:0)+(clear(x,y)?1:0)}, b=best[r.k];
+      if(!b || a.rank>b.rank || (a.rank===b.rank && a.L>b.L)) best[r.k]=a;
+    }
   }
   return best;
 }
-const PIPE_DIAL_R=10;
 function pipeMeters(runs,L){
   const best=pipeAnchors(runs), PC=pipeColours(L), r=PIPE_DIAL_R;
   for(const k in best){
     const a=best[k];
     if(a.L<2*r+6) continue;                  // too short a run to fit a meter in it
     const fr=pipeDisplay(k,pipeFrac(k,pipeSpd[k]||0)), un=pipeUnit(k);
-    pipeDial(a.x,a.y,r,fr,PC[k],pipeFmt(Math.abs(fr)*un.nom)+" "+un.u);
-    TIP(a.x-r,a.y-r,2*r,2*r+11,PIPE_NAME[k]+"  FLOW METER",
+    pipeDial(a.x,a.y,r,fr,pipeCol(PC,k),pipeFmt(Math.abs(fr)*un.nom)+" "+un.u);
+    TIP(a.x-r,a.y-r,2*r,2*r+11,pipeName(k)+"  FLOW METER",
       Math.abs(Math.round(fr*100))+" % of the flow this line carries at design conditions"+
       (fr>1.001?" - the needle is in the over-range band, so this line is being pushed past what it was built for."
        :fr<-0.008?", and the needle is back past the zero stop - it is running backwards."
@@ -388,7 +425,7 @@ function pipeFlow(L){
     const thin=(r.k==="hpi"||r.k==="surge"), w=thin?3:4, hw=(thin?6:8)/2;
     ctx.save(); pipeClip(g,hw,w/2);
     pipeSlugs(pipePad(g,PIPE_RUNWAY), L.flowPos[r.k]||0,
-              pipeSpd[r.k]||0, PC[r.k], w, pipeSteam(r.k,L));
+              pipeSpd[r.k]||0, pipeCol(PC,r.k), w, pipeSteam(r.k,L));
     ctx.restore();
   }
 }

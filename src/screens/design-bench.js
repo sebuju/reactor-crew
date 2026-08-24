@@ -64,14 +64,19 @@ function segSel(x,y,w,title,labels,key,tip,base){
   });
   return y+SEGSEL_H;
 }
+/* key is a plain D field name in every existing call - a string is `D[key]`
+   read and written directly. A pump's own size is not a top-level D field,
+   it is one entry in D.pumpSize keyed by that pump's id, so key may also be
+   a {get,set} pair for exactly that case: every other caller is untouched. */
 function sliderF(x,y,w,title,key,min,max,fmt,tip,step,massFn){
+  const isKey=typeof key==="string", get=isKey?()=>D[key]:key.get, set=isKey?v=>D[key]=v:key.set;
   rule(title,x,y+9,w);
-  const wd=slider(x,y+28,w,D[key],min,max,{fn:v=>D[key]=step?Math.round(v/step)*step:v});
+  const wd=slider(x,y+28,w,get(),min,max,{fn:v=>set(step?Math.round(v/step)*step:v)});
   /* this number is the slider's readout, it just lives in the panel rather than in
      the row, so it answers a hover the same way a strip readout does */
   const r=sldRead(wd,fmt);
   txt(r.s,x+w,y+48,{size:10,align:"right",color:r.col});
-  if(massFn){ const dm=massFn(D[key])-massFn(min);
+  if(massFn){ const dm=massFn(get())-massFn(min);
     txt("+"+dm.toFixed(0)+"t",x,y+48,{size:9,color:dm<1?C.green:C.ink2}); }
   TIP(x,y-4,w,54,title,tip);
   return y+SLDF_H;
@@ -200,21 +205,86 @@ function warnFor(id){
 }
 
 /* ══ RIGHT-CLICK, HELD STILL AND RELEASED: ADD OR REMOVE ══
-   The FITTABLE parts (layout.js) can be on the grid or not - everything else
+   The fittable parts (layout.js) can be on the grid or not - everything else
    is always there. "Not fitted" for one of these means gone, not a ghost box
-   left standing: see FITTABLE for why. This is a second, quicker way to flip
-   one than reaching its own plate - the CONTAINMENT dropdown, the ACCUMULATOR
-   checkbox and the TURBINE/CONDENSER sliders all still work too, and none of
-   them forget their own setting while unfit.
-   A row is a plain {label,fn} action rather than the FITTABLE tuple itself,
+   left standing: see fittableList() for why. This is a second, quicker way to
+   flip one than reaching its own plate - the CONTAINMENT dropdown, the
+   ACCUMULATOR checkbox and the TURBINE/CONDENSER sliders all still work too,
+   and none of them forget their own setting while unfit.
+   A row is a plain {label,fn} action rather than the fittable entry itself,
    so a COOLANT LOOP - a count with a floor of 1, not an on/off part - reads
-   as two more rows of the same shape instead of a special case of its own. */
+   as two more rows of the same shape instead of a special case of its own.
+   The list is asked for fresh here rather than held, so it always reflects
+   whatever the click landed on.
+
+   A SPARE PUMP or a JUNCTION is not a fittable slot - there is no fixed
+   place for either of them, which is the entire point (see the general
+   part-placement spec). So the menu has to know what the click was actually
+   OVER before it can offer the right row: empty grid space offers ADD SPARE
+   PUMP; a placed spare (never the loop's own static pump - that one is
+   structural) offers REMOVE SPARE PUMP; a loop's own cold leg offers ADD
+   JUNCTION TO LOOP n for every OTHER loop that exists; an existing junction's
+   own tap point offers REMOVE JUNCTION. openCtxMenu() resolves all of that
+   once, at the moment of the click, and stores it on ctxMenu - ctxItems()
+   only ever reads what was already found. */
 let ctxMenu=null;
-function openCtxMenu(p){ if(screen==="design") ctxMenu={x:p.x,y:p.y}; }
+/* which loop a newly placed pump belongs to, for loopFlowK()'s per-loop
+   capacity sum (step.js) - the loop whose own pump sits nearest the cell the
+   player clicked, baked onto the part once at placement rather than
+   recomputed, so it cannot change out from under a group mid-game. */
+function nearestLoop(gx,gy){
+  let best=0, bd=1e9;
+  for(let i=0;i<D.loops;i++){ const pu=LAY.parts.find(q=>q.id==="pump"+i);
+    if(!pu) continue;
+    const d=Math.hypot(pu.x-gx,pu.y-gy);
+    if(d<bd){ bd=d; best=i; } }
+  return best;
+}
+function openCtxMenu(p){
+  if(screen!=="design") return;
+  const pt=vIn(p)?vPt(p):null;
+  if(!pt){ ctxMenu=null; return; }
+  const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
+  const part=LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h);
+  let junction=null;
+  for(const jid in D.junc){ const j=D.junc[jid];
+    if(Math.hypot(j.x-pt.x,j.y-pt.y)<10){ junction=jid; break; } }
+  /* a cold leg's own key names the loop it belongs to (cold:sg0b-pump0t, or
+     cold:pump0b-coreb once that loop has no pump of its own) - regexed out
+     rather than carried as a separate field, because pipeNetwork() already
+     builds this exact string for every other reader of a run's identity */
+  let coldLoop=null, tapPt=null;
+  if(!part && !junction) for(const r of pipeNetwork()){
+    if(!r.key || !r.key.startsWith("cold:")) continue;
+    const near=nearestOn(r.pts,[pt.x,pt.y]);
+    if(near.d<8){ const m=r.key.match(/(?:sg|pump)(\d+)/);
+      if(m){ coldLoop=+m[1]; tapPt=near.pt; } break; }
+  }
+  ctxMenu={x:p.x,y:p.y,cell:{gx,gy},part,junction,coldLoop,tapPt};
+}
 function ctxItems(){
-  const items=FITTABLE.map(f=>({label:(f.get()?"REMOVE ":"FIT ")+f.label, fn:()=>f.set(!f.get())}));
+  const items=fittableList().map(f=>({label:(f.get()?"REMOVE ":"FIT ")+f.label, fn:()=>f.set(!f.get())}));
   if(D.loops<4) items.push({label:"ADD STEAM GEN LOOP", fn:()=>{ D.loops++; }});
   if(D.loops>1) items.push({label:"REMOVE STEAM GEN LOOP", fn:()=>{ D.loops--; }});
+  if(!ctxMenu) return items;
+  if(ctxMenu.junction){
+    const jid=ctxMenu.junction;
+    items.push({label:"REMOVE JUNCTION", fn:()=>{ removeJunction(jid); }});
+  } else if(ctxMenu.part && ctxMenu.part.id.startsWith("pumpX")){
+    const pid=ctxMenu.part.id;
+    items.push({label:"REMOVE SPARE PUMP", fn:()=>{ removePart(pid); }});
+  } else if(ctxMenu.coldLoop!=null){
+    const a=ctxMenu.coldLoop, tp=ctxMenu.tapPt;
+    for(let j=0;j<D.loops;j++) if(j!==a)
+      items.push({label:"ADD JUNCTION TO LOOP "+(j+1), fn:()=>{ addJunction(a,j,tp[0],tp[1]); }});
+  } else if(!ctxMenu.part){
+    const {gx,gy}=ctxMenu.cell;
+    if(gx>=0 && gy>=0 && gx<GW && gy<GH) items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
+      placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
+        grp:"loop"+nearestLoop(gx,gy),tip:"A spare coolant pump, placed where you put it.",
+        loop:nearestLoop(gx,gy)}));
+    }});
+  }
   return items;
 }
 function drawCtxMenu(){

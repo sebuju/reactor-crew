@@ -3,6 +3,16 @@
 
 /* ══════════ ONE PLANT RENDERER, USED BY BOTH SCREENS ══════════
    design mode: static, selectable, draggable.   live mode: same symbols, animated. */
+/* The one valve symbol: two triangles nose to nose. The relief valve on top of
+   the pressurizer and a cross-tie between two pumps are the same drawing at two
+   sizes, so it is drawn in one place - the second one is where a copy starts
+   drifting from the first. */
+function bowtie(cx,cy,w,h,col){
+  ctx.beginPath();
+  ctx.moveTo(cx-w/2,cy-h/2); ctx.lineTo(cx+w/2,cy+h/2);
+  ctx.lineTo(cx+w/2,cy-h/2); ctx.lineTo(cx-w/2,cy+h/2);
+  ctx.closePath(); ctx.fillStyle=col; ctx.fill();
+}
 function drawSym(p,x,y,w,h,ink,L){
   const cx=x+w/2, X=x+5, Y=y+5, W=w-10, Hh=h-10;
   const shell=fn=>{ ctx.beginPath(); fn(); ctx.fillStyle=C.panel; ctx.fill();
@@ -40,8 +50,7 @@ function drawSym(p,x,y,w,h,ink,L){
     lvl(X,Y+8,W,Hh-8, L? L.lvl/100 : .54, C.blue); ctx.restore();
     ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
     const open = L && L.porvOpen && !L.porvBlocked;
-    ctx.beginPath(); ctx.moveTo(cx-6,Y+8); ctx.lineTo(cx+6,Y); ctx.lineTo(cx+6,Y+8);
-    ctx.lineTo(cx-6,Y); ctx.closePath(); ctx.fillStyle=open?C.red:C.green; ctx.fill();
+    bowtie(cx,Y+4,12,8,open?C.red:C.green);
   } else if(id.startsWith("sg")){
     shell(()=>{ ctx.moveTo(X,Y+12); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
       ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); });
@@ -240,12 +249,13 @@ function liveColor(p,s){
    along the bottom of the component it drives, inside that component's own cells.
    Several controls share one strip by weight.  The design bench passes no live
    state, so its grid carries no strips at all. */
-/* The design floor is PUMPS[D.pumps].floor - commission() bakes exactly that into
-   P.flowMin. The bench asks the design directly because it runs BEFORE any plant
-   has been commissioned and P is still null there; ctlFor() is called on the bench
-   now, to reserve the room the control room will need, so everything it builds
-   eagerly has to survive P===null. */
-const pumpFloor=()=>P? P.flowMin : PUMPS[D.pumps].floor;
+/* The design floor is derived from pump capacity actually on the grid - see
+   commission() (step.js) for the exact formula, mirrored here because the
+   bench asks the design directly: it runs BEFORE any plant has been
+   commissioned and P is still null there. ctlFor() is called on the bench
+   now, to reserve the room the control room will need, so everything it
+   builds eagerly has to survive P===null. */
+const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(totalPumpCap()-D.loops),0.15,0.75);
 /* The pump tooltip is shown by the diagram strip and by the inspector, so it is
    written once. It is a function, not a constant, because the floor it names
    depends on the design. */
@@ -285,6 +295,9 @@ function ctlFor(p,live,split){
      dem:()=>S.flowDem*100,mark:()=>pumpFloor()*100,markLo:true,
      fmt:v=>v.toFixed(0)+" %",set:v=>{S.flowDem=v/100;},
      tip:"COOLANT PUMPS - "+pumpTip()}]];
+  /* A junction has no box, so it has no control strip - its open/shut valve
+     is drawn and clicked straight on the pipe at its own tap point instead.
+     See pipeJuncMarks() below. */
   switch(p.id){
     /* Two modes, one component. GANGED the plant has a single bank and the tilt
        slider is the only handle on the shape; SPLIT, the per-bank demands ARE
@@ -442,6 +455,92 @@ function ctlStrip(list,x,y,w,h){
     }
     TIP(cx,y,cw,h,c.tip.split(" - ")[0],c.tip);
     cx+=cw+gap;
+  }
+}
+
+/* ══════════ A PIPE IS STEERED BY A POINT ON IT (design bench only) ══════════
+   The router is a two-point geometric construction and not a search, so there
+   is no open list to add a constraint to and no way to ask it for a shape. What
+   the player gets instead is a point the run has to pass THROUGH: grab the
+   corner a leg already has, drop it somewhere else, and that leg becomes two
+   legs from the same router. Drawing pipes freehand was considered and set
+   aside - hand-rolled pathfinding never quite works - and this keeps the router
+   in charge of every metre of the result.
+
+   The gesture vocabulary is the plate's, exactly: automatic by default, grab to
+   override, double-click to hand it back. Bench only, the same way dragging a
+   component is: where a pipe runs is a design decision that feeds the mass and
+   the friction the plant is commissioned with, and the control room operates
+   what was built rather than reshaping it.
+
+   The grips go down AFTER the components, so one lying over a vessel is still
+   grabbable - the hit test takes the LAST widget pushed. */
+const WPG=9;                          // the grab box; a grip has to be findable at fit scale
+/* the one point on a leg the hand can grab: its corner, or the middle of the
+   run if the leg came out straight and has no corner to offer */
+function legGrip(pts){
+  if(pts.length<2) return null;
+  if(pts.length<3) return {x:(pts[0][0]+pts[1][0])/2, y:(pts[0][1]+pts[1][1])/2};
+  const seg=i=>Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);
+  let tot=0; for(let i=1;i<pts.length;i++) tot+=seg(i);
+  /* the corner nearest the middle of the leg: a leg with two of them offers the
+     one the hand was most likely aiming at */
+  let s=0, best=pts[1], bd=1e9;
+  for(let i=1;i<pts.length-1;i++){
+    s+=seg(i);
+    const d=Math.abs(s-tot/2);
+    if(d<bd){ bd=d; best=pts[i]; }
+  }
+  return {x:best[0],y:best[1]};
+}
+function pipeGrip(x,y,key,pt){
+  const wd=push({x:x-WPG/2,y:y-WPG/2,w:WPG,h:WPG,type:"pipewp",key,pt});
+  const hv=hov(wd);
+  /* a placed waypoint is amber because it is yours; an automatic corner is the
+     rail tone the pipe casing already sits in, so the drawing is not peppered
+     with marks until you go looking for one */
+  fillRect(x-2.5,y-2.5,5,5, pt?C.amber : hv?C.bright : C.rail);
+  if(hv) frame(x-WPG/2,y-WPG/2,WPG,WPG,C.amber);
+  TIP(x-WPG/2,y-WPG/2,WPG,WPG, pt?"PIPE WAYPOINT":"PIPE ROUTE",
+    pt?"A point you told this run to pass through. Drag it to move it, or double-click to take it out and hand that stretch of pipe back to the automatic route."
+      :"Drag this corner and the run will be routed through wherever you drop it. It is still the same router doing the work - a run with a waypoint on it is two runs end to end.");
+}
+function pipeGrips(runs){
+  for(const r of runs){
+    /* the surge line is not a route() - it drops onto whatever hot leg passes
+       underneath - so there is nothing here to steer */
+    if(!r.key) continue;
+    for(const p of r.wps) pipeGrip(p.x,p.y,r.key,p);
+    for(const leg of r.legs){ const g=legGrip(leg); if(g) pipeGrip(g.x,g.y,r.key,null); }
+  }
+}
+/* ══ A JUNCTION HAS NO BOX, SO ITS VALVE IS DRAWN ON THE PIPE ITSELF ══
+   Confirmed explicitly: no component, no cell, no control strip to mount an
+   open/shut button in - so the same bowtie() glyph the pressurizer relief
+   valve and the old fixed cross-ties both already drew goes straight on the
+   tapped point instead, exactly the way a waypoint grip is a mark on the pipe
+   rather than a widget on a component. Unlike a grip it never drags - a
+   junction's position is fixed the moment it is placed, only its removal
+   (right-click, design-bench.js) and its open state change.
+   Both screens draw a mark, because a placed junction has to be findable to
+   be removed even before it is live: the bench gets a dim, passive dot, and
+   only the control room's fitted plant gets the clickable valve, matching
+   how a bypass switch only exists once a system is actually commissioned. */
+function pipeJuncMarks(L){
+  const junc = L? P.junc : D.junc;
+  for(const id in junc){
+    const j=junc[id], tipBody="Bridges loop "+(j.loopA+1)+" and loop "+(j.loopB+1)+
+      (L?". Open, they share whatever their pumps are still delivering, so a pump you lose on one is propped up by the other. Shut, each loop keeps its own water - which is what you want the moment one starts leaking, because an open junction will drain the good loop into the bad one. It moves the instant you press it."
+        :". Right-click it to remove.");
+    if(L){
+      const open=S.juncOpen[id];
+      const wd=push({x:j.x-7,y:j.y-7,w:14,h:14,type:"btn",fn:()=>{ S.juncOpen[id]=!open; }});
+      bowtie(j.x,j.y,14,10, open?C.green:(hov(wd)?C.bright:C.metal));
+      TIP(j.x-7,j.y-7,14,14,"JUNCTION VALVE",tipBody);
+    } else {
+      dot(j.x-2,j.y-2,4,C.rail);
+      TIP(j.x-7,j.y-7,14,14,"JUNCTION",tipBody);
+    }
   }
 }
 
@@ -705,7 +804,8 @@ function readoutsFor(p,s){
       band(s.cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
       "Vapour forming at the pump inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well.");
     add.apply(null,rowNat(s));
-    add("PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+P.loops,
+    add("PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+
+        LAY.parts.filter(q=>q.id.startsWith("pump")).length,
         s.dmgParts.some(k=>k.startsWith("pump"))?C.red:C.green,
       "How many of your coolant pumps have been destroyed, out of how many you paid for.");
   } else if(id==="turb"){
@@ -1341,15 +1441,15 @@ function drawPlant(y0,L,vh){
      join, because a pipe bends and does not fold - the radius is half the line width,
      so the casing curves on 4px and the fluid inside it on 2px, concentric, which is
      what a real elbow does. What is IN the pipe is pipeFlow(), in render/pipes.js. */
-  const PC=pipeColours(L);
-  for(const pass of [0,1]) for(const r of pipeNetwork()){
+  const PC=pipeColours(L), NET=pipeNetwork();
+  for(const pass of [0,1]) for(const r of NET){
     if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";
     const thin = r.k==="hpi"||r.k==="surge";
     ctx.lineWidth = pass? (thin?3:4) : (thin?6:8);
-    ctx.strokeStyle = pass? PC[r.k] : "#22383e";
+    ctx.strokeStyle = pass? pipeCol(PC,r.k) : "#22383e";
     ctx.stroke();
   }
   ctx.lineJoin="miter";
@@ -1457,6 +1557,8 @@ function drawPlant(y0,L,vh){
      last. Drawn before the components, the pressurizer gauge was painted over by the
      pressurizer. */
   if(L) pipeGauges(L);
+  else pipeGrips(NET);          // where a pipe runs is a bench question - see pipeGrips()
+  pipeJuncMarks(L);             // both screens - see pipeJuncMarks()
   if(L){ const pl=platesFor(); leadSetup(pl);
     for(const q of pl) if(q.p.id!==sel) drawPlate(q);
     for(const q of pl) if(q.p.id===sel) drawPlate(q);   // the selected one on top

@@ -92,10 +92,19 @@ function paramsFor(p){
     B.gang="sg";
   }
   else if(id.startsWith("pump")){
-    blk(optListH(PUMPS),(x,y,w)=>optList(x,y,w,"PUMP REDUNDANCY",PUMPS,"pumps",
-      "Spare coolant pumps. Sets the minimum flow the plant still delivers after damage, and flow is thermal margin."));
-    note("Flow is the single biggest input to thermal margin. It is also the first thing you lose in a blackout, which is why the chimney height you gave the core matters so much.");
-    B.gang="pump";   // same set, same field, same one plate
+    /* No longer ganged: PUMP REDUNDANCY used to be one shared dropdown for
+       the whole set. A pump is a placed part now, sized on its own, so every
+       pump - the one static per-loop pump and any placed spare alike - is
+       its own decision with its own plate, the same way a cross-tie already
+       was one plate each rather than one shared row. */
+    const key={get:()=>pumpSizeOf(id), set:v=>{D.pumpSize[id]=v;}};
+    blk(SLDF_H,(x,y,w)=>sliderF(x,y,w,"PUMP SIZE",key,0,1,
+      v=>(pumpCap(v)*100).toFixed(0)+" % capacity",
+      "How much this pump can carry on its own. Bigger costs more mass, but it is also what a junction actually shares with a neighbouring loop if you tie the two together - a pump running at its own rated point has nothing spare to lend.",.05,
+      v=>pumpCap(v)*PUMP_MASS));
+    note(id.startsWith("pumpX")
+      ?"A placed spare. Right-click the plant to remove it."
+      :"This loop's own pump. Every loop keeps one - it cannot be removed, only sized. Flow is the single biggest input to thermal margin, and the first thing a blackout takes off you.");
   }
   else if(id==="turb"){
     blk(SLDF_H,(x,y,w)=>sliderF(x,y,w,"TURBINE SIZE","turb",0,1,

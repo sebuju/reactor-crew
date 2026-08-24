@@ -384,6 +384,22 @@ cv.addEventListener("pointerdown",e=>{
       if(e.detail>=2){ delete plateOff[w.id]; return; }
       const o=plateOff[w.id]||{dx:0,dy:0};
       ui.drag={type:"plate",id:w.id,sx:q.x,sy:q.y,dx:o.dx,dy:o.dy,v:w.v}; }
+    /* A PIPE IS STEERED THE WAY A PLATE IS MOVED. Grab the corner the router
+       already put there and it becomes a waypoint where you drop it, which is
+       what splits that leg in two - there is no separate "add" gesture to go
+       looking for, at any waypoint count. What the drag holds is the stored
+       OBJECT and never its index, because the list is re-sorted by distance
+       from the run's start on every read and an index would renumber under the
+       hand. Double-click hands it back, exactly as a plate's head does. */
+    else if(w.type==="pipewp"){
+      const L=pipeWaypoints[w.key]||(pipeWaypoints[w.key]=[]);
+      let pt=w.pt;
+      if(pt){
+        if(e.detail>=2){ L.splice(L.indexOf(pt),1);
+          if(!L.length) delete pipeWaypoints[w.key];
+          return; }
+      } else { pt={x:w.x+w.w/2,y:w.y+w.h/2}; L.push(pt); }
+      ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
     else if(w.type==="scroll"){ ui.drag=w; w.last=q.y; }
     /* A drawing surface. Painting wants press-drag-release, which nothing else
        here does: a btn fires on press and a sld owns the drag outright. So a
@@ -411,6 +427,11 @@ cv.addEventListener("pointermove",e=>{
     else if(d.type==="plate"){
       const snap=v=>Math.round(v/PLSNAP)*PLSNAP;
       plateOff[d.id]={dx:snap(d.dx+(q.x-d.sx)), dy:snap(d.dy+(q.y-d.sy))}; }
+    /* the same 8-unit snap, and for the same reason: two waypoints put on one
+       line by hand should land on one line */
+    else if(d.type==="pipewp"){
+      const snap=v=>Math.round(v/PLSNAP)*PLSNAP;
+      d.pt.x=snap(d.px+(q.x-d.sx)); d.pt.y=snap(d.py+(q.y-d.sy)); }
     else if(d.type==="lat"){ d.fn(q,e); }
     else if(d.type==="sld"){
       /* integrate rather than re-derive, so moving away from the track changes
@@ -427,7 +448,8 @@ cv.addEventListener("pointermove",e=>{
          not a plant one, so it feels the same at any zoom */
       if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
     else { helpScroll=clamp(helpScroll-(q.y-d.last),0,helpMax); d.last=q.y; } }
-  cv.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="plate") ? "grabbing"
+  cv.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="plate"
+                             ||ui.drag.type==="pipewp") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 });
 cv.addEventListener("pointerup",e=>{
