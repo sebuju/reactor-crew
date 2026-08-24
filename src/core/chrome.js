@@ -5,7 +5,15 @@
 function fillRect(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
 function line(x1,y1,x2,y2,c,w){ ctx.strokeStyle=c; ctx.lineWidth=w||1;
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
-function frame(x,y,w,h,c){ ctx.strokeStyle=c||C.edge; ctx.lineWidth=1;
+/* A call site already says what a border is FOR by what it colours it: no
+   colour, C.edge or C.edge2 is a box drawn only because a panel needs an edge -
+   structural, and every one of these already carries its own fill and its own
+   type colour, so the outline was a third cue saying nothing the box did not
+   already say. Anything else is STATE - selected, damaged, fitted, plotted -
+   and a state colour is the only thing left saying it, so it stays. */
+function frame(x,y,w,h,c){
+  if(!c || c===C.edge || c===C.edge2) return;
+  ctx.strokeStyle=c; ctx.lineWidth=1;
   ctx.strokeRect(Math.round(x)+.5,Math.round(y)+.5,Math.round(w)-1,Math.round(h)-1); }
 function rr(x,y,w,h,r){                 // rounded-rect path (no roundRect in older engines)
   r=Math.min(r||0,w/2,h/2);
@@ -18,19 +26,14 @@ const lerpC=(a,b,t)=>{ t=clamp(t,0,1);
   const h=c=>[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)];
   const A=h(a),B=h(b);
   return `rgb(${A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(",")})`; };
-function accent(x,y,w,col){ fillRect(x,y,w,2,col); }   // top-edge accent, replaces the old left spine
 function chip(x,y,col){ fillRect(x,y,6,6,col); }       // inline row marker
-function ticks(x,y,w,h,c,L){                    // corner registration marks
-  L=L||5; ctx.strokeStyle=c||C.edge2; ctx.lineWidth=1; ctx.beginPath();
-  ctx.moveTo(x,y+L); ctx.lineTo(x,y); ctx.lineTo(x+L,y);
-  ctx.moveTo(x+w-L,y); ctx.lineTo(x+w,y); ctx.lineTo(x+w,y+L);
-  ctx.moveTo(x+w,y+h-L); ctx.lineTo(x+w,y+h); ctx.lineTo(x+w-L,y+h);
-  ctx.moveTo(x+L,y+h); ctx.lineTo(x,y+h); ctx.lineTo(x,y+h-L);
-  ctx.stroke();
-}
+/* a round marker at the size fillRect draws its square counterpart at - same
+   signature, top-left x/y and a diameter, so a caller can pick the shape
+   without touching where anything sits */
+function dot(x,y,d,col){ ctx.beginPath(); ctx.arc(x+d/2,y+d/2,d/2,0,Math.PI*2);
+  ctx.fillStyle=col; ctx.fill(); }
 function well(x,y,w,h,title,titleCol){
   fillRect(x,y,w,h,C.panel); frame(x,y,w,h,C.edge);
-  ticks(x+.5,y+.5,w-1,h-1,C.edge2,5);
   if(title) rule(title,x+10,y+15,w-20,titleCol);
 }
 function rule(label,x,y,w,col){                 // LABEL ─────────────

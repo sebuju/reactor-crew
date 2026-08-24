@@ -93,7 +93,6 @@ function drawOverlay(){
   const h=Math.min(typeof o.h==="function"?o.h():o.h, VIEW.h-10), y=VIEW.y+VIEW.h-h;
   fillRect(VIEW.x,VIEW.y,VIEW.w,VIEW.h,"rgba(6,10,11,.62)");
   fillRect(12,y,736,h,C.panel);
-  accent(12,y,736,C.amber);
   /* a catcher, pushed BEFORE the panel's own widgets so they still win inside
      it: a click on bare overlay must not reach the component behind it */
   push({x:12,y,w:736,h,type:"btn"});
@@ -153,7 +152,6 @@ function drawTip(){
   if(by+bh>H-6) by=Math.max(46,ay-bh-14);
   fillRect(bx+3,by+3,bw,bh,"rgba(0,0,0,.6)");
   fillRect(bx,by,bw,bh,"#0b1215"); frame(bx,by,bw,bh,C.amber);
-  accent(bx,by,bw,C.amber); ticks(bx+.5,by+.5,bw-1,bh-1,C.amber,5);
   txt(t.title,bx+11,by+13,{size:8,weight:700,sp:1.3,caps:1,color:C.amber});
   wrap(t.body,bx+11,by+26,maxw,11,ob);
   if(t.g){
@@ -182,17 +180,22 @@ function button(x,y,w,h,label,o){
      a 46px component - the plant view read as a cage. Tone does the job, so the
      frame and the corner ticks come off, and hover lifts the whole key instead
      of brightening a hairline nobody was looking at. */
-  const base = o.sunk?C.well:C.panel, lift = o.sunk?C.panel:C.panelHi;
+  /* o.base overrides the RESTING fill, for a key whose row is otherwise the
+     same colour as the plate under it and would vanish once its border does -
+     the bench's pen and preset rows are the only callers that use it. */
+  const base = o.sunk?C.well:(o.base!==undefined?o.base:C.panel), lift = o.sunk?C.panel:C.panelHi;
   /* Danger is the one state drawn SOLID, dark text on full red, the way a lit
      annunciator tile is. It used to be red text on a near-black block, which was
      the quietest thing on a panel once the borders came off - and SCRAM is the
      one key that must never be found by reading it. There are exactly two:
      SCRAM and the one-shot boron dump. Both should stop your hand. */
   fillRect(x,y,w,h, o.danger?(h_?"#ff7d6c":C.red):(o.on?"#2a1f08":(h_?lift:base)));
-  if(!o.sunk){
-    frame(x,y,w,h,col);
-    if(o.on) ticks(x+.5,y+.5,w-1,h-1,col,4);
-  }
+  /* o.flat is o.sunk's sibling for a key whose SELECTED state must also lose its
+     outline - the bench's pen and preset keys, where the chosen key already
+     carries an amber fill and amber type and the border is a third cue. o.sunk
+     drops it by tone (a darker block set into a lighter plinth needs no edge);
+     o.flat drops it while keeping the ordinary base/lift scheme. */
+  if(!o.sunk && !o.flat) frame(x,y,w,h,col);
   txt(label,x+w/2,midBase(y,h,o.size||9),{size:o.size||9,weight:o.danger?700:o.weight,
       sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
       color:o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)});
