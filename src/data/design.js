@@ -178,22 +178,25 @@ function derived(){
     boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0:a.P0*D.pdes,
+    /* Third element is the component the warning is ABOUT, for the bench's
+       per-component warning circle - null when no single component owns it
+       (a whole-design figure like mass or shutdown margin). */
     warn:(()=>{const w=[];
-      if(mass>BUDGET) w.push(["HARD","Over the "+BUDGET+" t mass budget by "+(mass-BUDGET).toFixed(0)+" t."]);
-      if(sdmB<200) w.push(["HARD","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison."]);
-      else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin."]);
-      if(boronOp<-6000) w.push(["HARD","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment."]);
-      if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop."]);
-      if(aM>0) w.push(["SOFT","Positive moderator coefficient. The lattice is over-moderated: heating the coolant raises power instead of lowering it."]);
-      if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power."]);
-      if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel."]);
-      if(CONT[D.cont].rel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew."]);
-      if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely."]);
-      if(loadMax<1.10) w.push(["SOFT","The turbine draws at most "+(loadMax*100).toFixed(0)+"% of rated. In combat the reactor will be able to make power this machine cannot take."]);
-      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Overload past the condenser and backpressure takes output back off you, while the reactor goes on making the heat."]);
-      if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown."]);
-      if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own."]);
-      if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average."]);
-      if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand."]);
+      if(mass>BUDGET) w.push(["HARD","Over the "+BUDGET+" t mass budget by "+(mass-BUDGET).toFixed(0)+" t.",null]);
+      if(sdmB<200) w.push(["HARD","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
+      else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin.","rods"]);
+      if(boronOp<-6000) w.push(["HARD","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment.","core"]);
+      if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop.","core"]);
+      if(aM>0) w.push(["SOFT","Positive moderator coefficient. The lattice is over-moderated: heating the coolant raises power instead of lowering it.","core"]);
+      if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power.","core"]);
+      if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
+      if(CONT[D.cont].rel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew.","cont"]);
+      if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
+      if(loadMax<1.10) w.push(["SOFT","The turbine draws at most "+(loadMax*100).toFixed(0)+"% of rated. In combat the reactor will be able to make power this machine cannot take.","turb"]);
+      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Overload past the condenser and backpressure takes output back off you, while the reactor goes on making the heat.","cond"]);
+      if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
+      if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);
+      if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);
+      if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
       return w;})()};
 }

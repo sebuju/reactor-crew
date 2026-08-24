@@ -134,13 +134,14 @@ function paramsFor(p){
       "What holds the radioactivity in when fuel fails. Sets how much of a release reaches your crew."));
     blk(TOGGLE_H,(x,y,w)=>toggleF(x,y,w,"CORE CATCHER","catcher",66,
       "A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained."));
-    note("Containment does nothing for the reactor and everything for the people around it. It is pure insurance, and it is heavy.");
+    note("Containment does nothing for the reactor and everything for the people around it. It is pure insurance, and it is heavy. Right-click the plant to fit or remove it without opening this list.");
   }
   else if(id==="hpi"){
     blk(TOGGLE_H,(x,y,w)=>toggleF(x,y,w,"PASSIVE ACCUMULATOR","accum",45,
       "Gravity and gas driven emergency water needing no electricity. Refills a leaking loop far faster than the pumped system, and still works in a blackout."));
-    note(D.accum?"Fitted. Injection runs at 2.6 %/s instead of 1.6, and it works with no power at all. Mount it high."
-                :"Not fitted. Emergency injection is limited to the pumped system, which needs power.",
+    note((D.accum?"Fitted. Injection runs at 2.6 %/s instead of 1.6, and it works with no power at all. Mount it high."
+                :"Not fitted. Emergency injection is limited to the pumped system, which needs power.")
+       +" Right-click the plant to fit or remove it directly.",
       D.accum?C.green:C.amber);
   }
   else if(id==="bkp"){
@@ -180,11 +181,29 @@ function drawDesign(){
   /* No overlay is registered on this screen any more - the last two are plates
      in the margins - so the bar along the bottom carries no keys and is only
      the running total. It stays because that total is the one figure you want
-     under your eye while you spend it, wherever the plant is panned to. */
-  const hard=designBlocked(d,LM);
-  ovlBar(H-bh,bh,
-    "MASS "+d.mass.toFixed(0)+" / "+BUDGET+" t"+
-    (hard?"   -   BLOCKED: SEE THE DESIGN REVIEW PLATE":d.over?"   -   OVER BUDGET":""));
+     under your eye while you spend it, wherever the plant is panned to.
+     MASS and WARNINGS are each a jump to the plate that has the whole story -
+     RESULTS and DESIGN REVIEW - rather than a second place that repeats it. */
+  const hard=designBlocked(d,LM), nIssue=designIssues(d,LM).length;
+  ovlBar(H-bh,bh,null);
+  const by=midBase(H-bh,bh,8), toF={size:8};
+  const massS="MASS "+d.mass.toFixed(0)+" / "+BUDGET+" t"+
+    (hard?"   -   BLOCKED":d.over?"   -   OVER BUDGET":"");
+  const massCol=hard?C.red:d.over?C.amber:C.ink2, mw=tw(massS,toF);
+  txt(massS,12,by,{...toF,color:massCol});
+  const goTo=id=>()=>{ const q=BENCH_PLATES&&BENCH_PLATES.find(p=>p.p.id===id); if(q) vZoomTo(q); };
+  push({x:12,y:H-bh,w:mw,h:bh,type:"btn",fn:goTo("#results")});
+  TIP(12,H-bh,mw,bh,"MASS BUDGET","Jump to the RESULTS plate.");
+  if(nIssue){
+    const wx=12+mw+18, warnS="WARNINGS "+nIssue, wcol=hard?C.red:C.amber, ww=tw(warnS,toF);
+    txt(warnS,wx,by,{...toF,color:wcol});
+    push({x:wx,y:H-bh,w:ww,h:bh,type:"btn",fn:goTo("#review")});
+    TIP(wx,H-bh,ww,bh,"DESIGN WARNINGS","Jump to the DESIGN REVIEW plate.");
+  }
+  /* last, so it draws over everything above and its own widgets win the hit
+     test - pointerdown checks ui.prev backwards, so whatever pushed last is
+     tried first */
+  drawCtxMenu();
 }
 
 /* ══ WHAT THE WHOLE DESIGN ADDS UP TO ══
@@ -248,7 +267,14 @@ const REVIEW_H=210;
 const REV_TAG=50, REV_LH=12, REV_O={size:8.5};
 const revNoteH=w=>Math.max(REVIEW_H, designIssues(null,PLANT_LM)
   .reduce((a,q)=>a+wrapCount(q[1],w-REV_TAG,REV_O)*REV_LH+4,0));
-const benchReviewH=w=>18+revNoteH(w)+12+34;
+/* No COMMISSION key any more - the CONTROL tab in the top bar already builds
+   the plant on its way in (shell.js) and is disabled outright while blocked,
+   so a second key here only ever did what that tab already does, one plate
+   you had to pan to first to reach it. The banner explaining WHY the tab is
+   disabled stays, at a fixed 20px whether or not it has anything to say -
+   RESERVED and not fitted, same reasoning as revNoteH() below, so the plate's
+   own height does not jump the moment the last blocking issue is fixed. */
+const benchReviewH=w=>18+revNoteH(w)+12+20;
 function benchReview(x,y,w){
   const d=derived(), LM=PLANT_LM;
   const W_=designIssues(d,LM), hard=designBlocked(d,LM);
@@ -262,21 +288,17 @@ function benchReview(x,y,w){
   if(W_.length){
     let ry=y+12;
     for(const q of W_){
-      const col=q[0]==="HARD"?C.red:C.amber;
-      txt(q[0]==="HARD"?"[BLOCK]":"[WARN ]",x,ry,{size:8.5,color:col});
+      const col=q[0]==="HARD"?C.red:C.amber, label=q[0]==="HARD"?"BLOCK":"WARN";
+      dot(x,ry-8,8,col);
+      txt(label,x+12,ry,{size:8.5,sp:.6,color:col});
       ry=wrap(q[1],x+REV_TAG,ry,w-REV_TAG,REV_LH,{size:8.5,color:col})+4;
     }
   } else txt("NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT",x,y+12,
       {size:8.5,sp:1,color:C.green});
-  const by=y+18+revNoteH(w)+12;
   if(hard){
-    fillRect(x,by,w,34,"#1a0d0b"); frame(x,by,w,34,C.red);
-    txt("RESOLVE BLOCKING ISSUES BEFORE COMMISSIONING",x+w/2,by+21,
-        {size:10,sp:2,align:"center",color:C.red});
-  } else {
-    button(x,by,w,34,P?">> RE-COMMISSION UNIT <<":">> COMMISSION UNIT <<",
-      {on:true,size:10,fn:commission});
-    TIP(x,by,w,34,"COMMISSION UNIT",
-      "Builds this reactor and takes you to the control room. Every parameter and every position above is baked into the physics.");
+    const by=y+18+revNoteH(w)+12;
+    fillRect(x,by,w,20,"#1a0d0b"); frame(x,by,w,20,C.red);
+    txt("RESOLVE BLOCKING ISSUES BEFORE THE CONTROL TAB WILL OPEN",x+w/2,by+13,
+        {size:8.5,sp:1,align:"center",color:C.red});
   }
 }

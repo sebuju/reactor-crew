@@ -1099,7 +1099,12 @@ function plateShell(q,col,on,what,pad){
      nothing else says it (a selected or damaged readout plate, an over-budget
      RESULTS) and stays. */
   if(!q.noBorder) frame(q.x,q.y,q.w,q.h,col);
-  txt(q.title||q.p.name,q.x+7,q.y+13,{size:7.5,sp:1.2,caps:1,color:col===C.edge2?C.ink:col});
+  const titleF={size:7.5,sp:1.2,caps:1};
+  txt(q.title||q.p.name,q.x+7,q.y+13,{...titleF,color:col===C.edge2?C.ink:col});
+  /* the same warning circle the component itself carries on the bench (design
+     review is its own plate and needs no dot pointing at itself, hence !q.free) */
+  if(!q.free && screen==="design"){ const wc=warnFor(q.p.id);
+    if(wc) dot(q.x+9+tw(q.title||q.p.name,titleF),q.y+6,6,wc); }
   /* a FREE plate belongs to the whole design and to no machine on it, so it has
      no elevation to print and nothing to select - but it still catches its own
      clicks, or a click on bare plate would reach the plant behind it */
@@ -1254,6 +1259,9 @@ function drawBenchPlate(q){
    first thing it does: a second call anywhere downstream of that line would
    clobber it back to null with nothing left in the frame to set it again. */
 let PLANT_LM=null;
+/* the RESULTS/REVIEW plate rects, current as of the last bench frame - read
+   by the bottom bar's MASS/WARNINGS click handlers to pan-and-zoom to them */
+let BENCH_PLATES=null;
 function drawPlant(y0,L,vh){
   PLANT_LM=layoutMetrics(); GY=y0;
   /* layoutMetrics() measured the design with no bands; from here on the view has
@@ -1420,6 +1428,11 @@ function drawPlant(y0,L,vh){
     else if(!p.access && p.grp!=="shield" && fit) badge(x+w-9,y+12,C.amber);
     /* what this component is shouting about, if anything */
     if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
+    /* the bench has no alarm lamp (L is null, no live state to light one), so
+       that top-left corner is free for the same thing the DESIGN REVIEW plate
+       says about this component - a warning circle, not the fault triangle,
+       because nothing is broken yet */
+    if(!L && fit && !dmgd){ const wc=warnFor(p.id); if(wc) dot(x+6,y+8,8,wc); }
     /* a one-cell component with a knob has no room for a separate value tag,
        and does not need one - the knob shows its own number */
     const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
@@ -1448,7 +1461,7 @@ function drawPlant(y0,L,vh){
     for(const q of pl) if(q.p.id!==sel) drawPlate(q);
     for(const q of pl) if(q.p.id===sel) drawPlate(q);   // the selected one on top
   }
-  else { leadSetup(BP); for(const q of BP) drawBenchPlate(q); }
+  else { leadSetup(BP); for(const q of BP) drawBenchPlate(q); BENCH_PLATES=BP; }
   viewOn=false; ctx.restore();
 
   /* The one control the view itself has, drawn OUTSIDE the transform so it
