@@ -88,7 +88,6 @@ const ovlAdd=o=>{ OVL.push(o); return o; };
 const ovlList=()=>OVL.filter(o=>!o.sc||o.sc===screen);
 const ovlFor=k=>ovlList().find(o=>o.k===k);
 function ovlToggle(k){ ovlOpen = ovlOpen===k ? null : k; }
-function ovlShow(k){ ovlOpen=k; }
 function drawOverlay(){
   if(!ovlOpen) return;
   const o=ovlFor(ovlOpen); if(!o) return;
@@ -129,7 +128,10 @@ const hov=w=>inside(w,ptIn(w,ui.ptr))&&!ui.drag;
 
 /* ─────────────── tooltips ─────────────── */
 let touchTip=null, isTouch=false;
-function TIP(x,y,w,h,title,body){ ui.tips.push({x,y,w,h,title,body,v:viewOn?1:0}); }
+/* g is an optional band(): the scale the value in this region lives on. A
+   tooltip that only says a number is fine is asking to be believed; one that
+   draws where the number sits between its limits can be checked at a glance. */
+function TIP(x,y,w,h,title,body,g){ ui.tips.push({x,y,w,h,title,body,g,v:viewOn?1:0}); }
 function findTip(p){
   for(let i=ui.tips.length-1;i>=0;i--){ const t=ui.tips[i];
     const q=ptIn(t,p); if(!q) continue;
@@ -142,8 +144,8 @@ function drawTip(){
   if(isTouch){ if(touchTip && performance.now()<touchTip.until) t=touchTip; }
   else t=findTip(ui.ptr);
   if(!t) return;
-  const maxw=248, ob={size:10,color:C.ink};
-  const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=26+n*13;
+  const maxw=248, ob={size:8.5,color:C.ink};
+  const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=23+n*11+(t.g?BAND_H:0);
   /* a touch anchors the box on the thing it describes, so a plant tip has to
      come back out of plant space to say where that is */
   const an = t.v ? vScr({x:t.x+t.w/2,y:t.y+t.h}) : {x:t.x+t.w/2,y:t.y+t.h};
@@ -153,8 +155,22 @@ function drawTip(){
   fillRect(bx+3,by+3,bw,bh,"rgba(0,0,0,.6)");
   fillRect(bx,by,bw,bh,"#0b1215"); frame(bx,by,bw,bh,C.amber);
   accent(bx,by,bw,C.amber); ticks(bx+.5,by+.5,bw-1,bh-1,C.amber,5);
-  txt(t.title,bx+11,by+14,{size:9,weight:700,sp:1.3,caps:1,color:C.amber});
-  wrap(t.body,bx+11,by+29,maxw,13,ob);
+  txt(t.title,bx+11,by+13,{size:8,weight:700,sp:1.3,caps:1,color:C.amber});
+  wrap(t.body,bx+11,by+26,maxw,11,ob);
+  if(t.g){
+    /* The verdict and the setpoint ride on the TITLE row rather than under the
+       strip. They are two more short strings and the strip already carries
+       three; put them below it and the tooltip grows a line to say what its own
+       colours were saying. */
+    const z=bandZone(t.g); let rx=bx+bw-11;
+    if(t.g.lim) for(const L of t.g.lim){
+      const s_=L[1]+" "+L[0].toFixed(t.g.dp);
+      txt(s_,rx,by+13,{size:6.5,sp:.7,align:"right",color:C.red});
+      rx-=tw(s_,{size:6.5,sp:.7})+7;
+    }
+    txt(z[2],rx,by+13,{size:6.5,sp:.9,align:"right",color:z[1]});
+    bandBar(bx+11,by+bh-BAND_H+8,maxw,t.g);
+  }
 }
 
 function button(x,y,w,h,label,o){
@@ -238,7 +254,15 @@ function slider(x,y,w,val,min,max,o){
   /* What a click here would set. Only on the bare track: pressing the indicator
      itself grabs it and changes nothing, and a DRAG is geared, so the pointer is
      not the value once you are dragging - hov() already stands down for that. */
-  wd.pv = (hov(wd) && Math.abs(ui.ptr.x-wd.tx)>tw_/2+3) ? valFrom(wd,ui.ptr.x) : null;
+  /* The pointer arrives in PAGE units and this widget's geometry may be in
+     PLANT units, so it is converted the same way the hit test converts it -
+     ptIn() is null when the pointer is outside the viewport entirely. Reading
+     ui.ptr raw put the readout's number and the click-preview hairline
+     wherever the PAGE said, which at fit scale is a long way from the track:
+     hov() said the pointer was on the slider and valFrom() then clamped the
+     page x to the far end of it. */
+  const pp = ptIn(wd,ui.ptr);
+  wd.pv = (pp && hov(wd) && Math.abs(pp.x-wd.tx)>tw_/2+3) ? valFrom(wd,pp.x) : null;
   /* one cell per ~5px: an 84px strip gets 17, a 240px bench gets 30 */
   const n=clamp(Math.round(tW/5),6,30), cw=tW/n;
   const bh=Math.min(10,th-3), by=Math.round(y-bh/2);
@@ -262,7 +286,7 @@ function slider(x,y,w,val,min,max,o){
     fillRect(x+i*cw,by,cw-1.3,bh,col);
   }
   if(o.mark!=null) fillRect(Math.round(x+mk*tW),t0,1,hh,C.red);
-  if(wd.pv!=null) fillRect(Math.round(ui.ptr.x),t0,1,hh,"#7a5a18");  // where a click lands
+  if(wd.pv!=null) fillRect(Math.round(pp.x),t0,1,hh,"#7a5a18");  // where a click lands
   /* A hairline in a cut, not a plate. The old 10px thumb covered an eighth of an
      84px track and the readout had to dodge it; the cut is what keeps 1px of
      amber readable against a lit cell. */
@@ -285,7 +309,7 @@ function slider(x,y,w,val,min,max,o){
      in the half of the track the pointer is not in, so it never hides its own
      click target. */
   else if(o.fmt && wd.pv!=null){
-    const ps=o.fmt(wd.pv), lw=tw(ps,ro)+4, far=(ui.ptr.x-x)/tW>.5;
+    const ps=o.fmt(wd.pv), lw=tw(ps,ro)+4, far=(pp.x-x)/tW>.5;
     const px=far ? x+1 : x+tW-lw-1;
     fillRect(px,t0,lw,hh,C.bg);
     txt(ps,px+lw/2,midBase(t0,hh,6.5),Object.assign({},ro,{align:"center",color:C.amber}));
@@ -321,9 +345,6 @@ cv.addEventListener("pointerdown",e=>{
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
     const q=ptIn(w,p); if(!inside(w,q)) continue;
     if(w.type==="part"){ sel=w.part.id;
-      /* clicking a component is the whole reason the readout panel exists, so
-         it opens with the click rather than after finding a key for it */
-      if(ovlFor("insp")) ovlShow("insp");
       /* a commissioned plant is welded down - you may select a component, not move it,
          and a pinned part rides its parent, so it is selectable but never draggable */
       /* rows carry control bands on both screens now, so a row is not CELL tall

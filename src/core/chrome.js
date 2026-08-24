@@ -54,6 +54,24 @@ function segSigned(x,y,w,h,f,col){              // centre-zero bargraph
   }
   fillRect(x+w/2-.5, y-2, 1, h+4, C.rail);
 }
+/* A bargraph with the limits marked ON the track. seg() and segSigned() say how
+   far along you are; this says how far along you are ALLOWED to be, which is the
+   thing a glance is actually asking. The scale deliberately does NOT end at the
+   limit - it is only marked there, and the track runs on past it, the same rule
+   pipeDial() follows and for the same reason: this plant lets you push past a
+   rating and then shows you what it cost. LIM_AT is where on the track the mark
+   lands, so every bar in a row puts its limit in the same place and the row can
+   be read as one shape instead of six scales.
+   `marks` are track fractions: 0..1 unsigned, -1..1 signed. */
+const LIM_AT=0.75;
+function segMark(x,y,w,h,frac,marks,col,signed){
+  if(signed) segSigned(x,y,w,h,clamp(frac,-1,1),col);
+  else       seg(x,y,w,h,clamp(frac,0,1),col,16);
+  for(const m of marks){
+    const mx=Math.round(x+w*(signed?(m+1)/2:m));
+    fillRect(mx-.5,y-2,1,h+4,C.rail);
+  }
+}
 function hatch(x,y,w,h,col,a){          // damage overlay
   ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
   ctx.globalAlpha=a||.55; ctx.strokeStyle=col; ctx.lineWidth=1.4;
@@ -85,3 +103,71 @@ let gridPat=null;
 (function(){ const g=document.createElement("canvas"); g.width=g.height=8;
   const c=g.getContext("2d"); c.fillStyle="rgba(120,180,190,.075)"; c.fillRect(0,0,1,1);
   gridPat=ctx.createPattern(g,"repeat"); })();
+
+/* ══ A NUMBER IS ONLY GOOD OR BAD AGAINST SOMETHING ══
+   A readout carries its own SCALE: the range it can sit in, which stretches of
+   that are healthy, and where the protection system is watching from. ONE
+   object, because the colour the number is printed in and the strip drawn under
+   its tooltip are both read off it - state a threshold in two places and the
+   day one of them moves, the other goes on quoting the old number at you.
+
+   zones run low to high, each [upTo, colour, label]; a value past the last
+   boundary takes the last zone. A LIMIT is a mark ON the scale and never the
+   end of it, exactly the way pipeDial() marks a rating - this plant is built to
+   let you push past a setpoint and then show you what it cost.
+
+   o.col is the one escape hatch and there is one row using it: reactor POWER
+   goes red on low DNBR, because 89% with a steam film on the pins is not a
+   green number. Everything else lets the band decide, which is what keeps the
+   strip and the figure above it agreeing. */
+function band(v,lo,hi,zones,o){
+  o=o||{};
+  return {v,lo,hi,zones,dp:o.dp||0,lim:o.lim||null,col:o.col||null};
+}
+function bandZone(g,v){
+  v=(v===undefined)?g.v:v;
+  for(const z of g.zones) if(v<z[0]) return z;
+  return g.zones[g.zones.length-1];
+}
+const bandCol=g=>g.col||bandZone(g)[1];
+
+/* The strip. Drawn from y-6 (the value's cap) to y+25 (the numbers under it),
+   so a caller reserving BAND_H gets the bar top at y and nothing spills. */
+const BAND_H=30;
+function bandBar(x,y,w,g){
+  const span=(g.hi-g.lo)||1, at=v=>x+clamp((v-g.lo)/span,0,1)*w;
+  const num=v=>v.toFixed(g.dp);
+  const cells=Math.max(10,Math.round(w/5)), cw=w/cells, act=bandZone(g);
+  /* segments, never a solid fill. The zone you are in burns at full strength
+     and the rest of the scale sits at a quarter, so the strip reads as context
+     rather than as three alarms lit at once. */
+  for(let i=0;i<cells;i++){
+    const z=bandZone(g,g.lo+span*(i+.5)/cells);
+    if(z!==act) ctx.globalAlpha=.26;
+    fillRect(x+i*cw,y,cw-1.3,7,z[1]);
+    ctx.globalAlpha=1;
+  }
+  if(g.lim) for(const L of g.lim) fillRect(at(L[0])-.5,y-4,1,15,C.red);
+  /* the value stands ON its own scale: thicker and brighter than any setpoint
+     mark, and drawn last so it is never the thing hidden underneath */
+  const px=at(g.v);
+  fillRect(px-1,y-4,3,15,C.bright);
+  fillRect(px-3,y-6,7,2,C.bright);
+  /* A scale is drawn for the range the plant is STEERED in, so a scrammed core
+     runs DNBR clean off the end of it and net rho well past the bottom. That is
+     the gauge working - widen it to swallow a scram and the 50 pcm the reading
+     is actually for becomes a tenth of a segment. The needle pegs, and a
+     detached pip past the end says it pegged rather than arrived. */
+  if(g.v<g.lo||g.v>g.hi) fillRect(g.v>g.hi?px+4:px-7,y+2,3,3,C.bright);
+  /* The ends give the scale its meaning; the boundaries between zones are the
+     numbers the player is actually steering by. A boundary crowding an end is
+     dropped rather than overprinted - the end is the one that cannot be
+     guessed from the colour it separates. */
+  txt(num(g.lo),x,y+17,{size:6,sp:.5,color:C.ink2});
+  txt(num(g.hi),x+w,y+17,{size:6,sp:.5,align:"right",color:C.ink2});
+  g.zones.slice(0,-1).forEach((z,i)=>{
+    const bx=at(z[0]);
+    if(bx-x<18 || x+w-bx<18) return;
+    txt(num(z[0]),bx,y+17,{size:6,sp:.5,align:"center",color:g.zones[i+1][1]});
+  });
+}
