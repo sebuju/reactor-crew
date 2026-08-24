@@ -54,12 +54,45 @@ global.document={getElementById:()=>({getContext:()=>proxy,addEventListener(){},
   createElement:()=>({getContext:()=>proxy}),addEventListener(){}};
 global.window=global; global.performance={now:()=>1000}; global.devicePixelRatio=1;
 global.requestAnimationFrame=()=>{}; global.addEventListener=()=>{};
+/* ══ THE AUDIT MUST GIVE THE SAME ANSWER TWICE ══
+   warmUp() fires combatHit(), which picks its target at random - so which
+   component drew a repair key, and which plate grew a DAMAGED row, changed from
+   run to run. A collision could hide behind a lucky draw, and one already had:
+   the REPAIR key sitting on TILT was found by accident rather than by this
+   file. Seeding Math.random makes the same two components take the hit every
+   run AND keeps the real fault effects the hit sets - a jammed bank, a stuck
+   PORV, a rejected load - which is coverage a hand-written damage list loses.
+   A separate pass below then damages EVERY component at once, which is the
+   worst case for the key and for the rows a damaged plate grows. */
+let rngSeed=20260824;
+Math.random=()=>{ rngSeed=(rngSeed*1103515245+12345)&0x7fffffff;
+                  return rngSeed/0x7fffffff; };
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
  '; return {drawDesign,drawOperate,drawOverlay,drawHelp,topbar,commission,step,sample,combatHit,'+
  'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
+ 'setDmg:v=>S.dmgParts=v,'+
+ 'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v};')();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
+/* A TOOLTIP ONLY DRAWS ON HOVER, so until now nothing in this file ever ran
+   one. That was survivable while a tip was a title and a sentence. It is not,
+   now that a plate row's tip draws the SCALE the number lives on: two end
+   figures, a boundary figure per zone and a label per setpoint, all sized and
+   placed against a box that grew for them.
+
+   Each is captured ALONE. Two tooltip boxes in one frame overlap by
+   construction - only ever one is on screen - so drawing them together reports
+   a stacking order as a collision, which is the same trap the overlays are
+   captured alone for. */
+function capTips(tag){
+  /* indexed, not titled: a plant carries four shield blocks and the plate and
+     the row that own a condenser are both called CONDENSER, so a name off the
+     title alone drops several boxes into one bucket and the collision check
+     then reports one tooltip lying over another */
+  M.ui().tips.slice().forEach((t,i)=>
+    cap(tag+i+':'+(t.title||'?'),()=>{ M.forceTip(t); M.drawTip(); }));
+}
 function warmUp(){
   M.commission();
   for(let i=0;i<300;i++){ M.step(0.02); if(i%5===0) M.sample(); }
@@ -82,7 +115,7 @@ function sweep(tag){
      shut is a draw path that never runs. Walk them: closed, then one at a time.
      Miss this and six panels go unaudited the day they stop being stacked. */
   M.setScreen('operate');
-  M.ovlSet(null); cap(tag+'plant',M.drawOperate);
+  M.ovlSet(null); cap(tag+'plant',M.drawOperate); capTips(tag+'plant:');
   /* Each overlay is captured ALONE, not on top of the plant. It is opaque and
      it covers what is behind it, so auditing the two together reports the grid
      labels underneath as collisions - which is the auditor describing a
@@ -122,6 +155,12 @@ sweep('split2:'); M.D().nbank=4; warmUp(); M.setSel('core');
 warmUp();
 for(const part of M.parts()) { M.setSel(part.id); sweep('sel:'+part.id+':'); }
 M.setSel('core');
+
+/* EVERY component broken at once. This is the worst case the plant can draw:
+   every symbol carries a repair key, every plate grows a STATUS row, and the
+   two margins are as tall as they ever get. Two random hits never reach it. */
+warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('alldmg:');
+warmUp();
 
 /* A number that came out NaN or undefined still draws happily - no error, no
    overflow, just a broken readout sitting on the panel. Nothing caught that
