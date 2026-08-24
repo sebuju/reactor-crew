@@ -12,6 +12,14 @@
 const GW=16, GH=9, CELL=46, GX=12, MPC=1.4;   // metres per cell
 let GY=100;                                   // grid top, set each frame by the layout section
 let LAY=null, layLoops=-1, sel="core", layMass=0;
+/* ══ WHERE THE PLAYER PUT A PLATE, IF THEY MOVED IT ══
+   An OFFSET from the packed position, never an absolute point. The margins are
+   repacked every frame - open a loop, drag a component, resize the window and
+   every plate moves - so an absolute point would strand a moved plate the first
+   time anything else changed. An offset survives all of it and still means
+   "this far from where the packer would have put it". Keyed by the component
+   the plate belongs to; a ganged plate is keyed by the member that carries it. */
+const plateOff={};
 
 function buildLayout(){
   const A=[], add=(id,name,w,h,x,y,col,grp,tip)=>{ const p={id,name,w,h,x,y,col,grp,tip}; A.push(p); return p; };

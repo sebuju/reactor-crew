@@ -27,7 +27,6 @@ const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9}};
    plant" on another, and a resize would silently change how much you could see.
    VIEW.z is what the player sets, 1 = everything visible, and VIEW.s is what
    the frame works out from it. */
-const VMAX=3;
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
 let viewOn=false;                       // are widgets being pushed through it?
 const vPt=p=>({x:VIEW.cx+VIEW.ox+(p.x-VIEW.x)/VIEW.s,
@@ -39,34 +38,34 @@ const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
    anything is drawn through the view. Anything smaller than its viewport is
    CENTRED rather than pinned to a corner - a small plant on a big screen sat in
    the top left with the room stacked to one side of it. */
-/* The CONTENT is the whole drawing - the grid and every plate standing beside
-   it - and it starts wherever that drawing starts, which is left of the grid. */
+/* The CONTENT is whatever the caller says the drawing is. The control room
+   hands in the grid AND every plate standing beside it; the bench hands in the
+   grid alone, because its one plate changes with the selection and measuring it
+   in re-scaled the plant on every click. */
 function vFit(x,y,w,h,cx,cy,cw,ch){
   VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h;
   VIEW.cx=cx; VIEW.cy=cy; VIEW.cw=cw; VIEW.ch=ch;
   VIEW.fit=Math.min(w/Math.max(cw,1), h/Math.max(ch,1));
-  VIEW.z=clamp(VIEW.z,1,VMAX);
   VIEW.s=VIEW.fit*VIEW.z;
-  vClamp();
 }
-/* You can drag the plant PAST its own edges. The first version pinned it so
-   the grid could never leave the viewport, which meant that at fit scale - the
-   scale you are at most of the time - the plant simply would not move at all.
-   The limit now is half a screen of overscan in each direction: far enough to
-   put any corner of the plant wherever you want it, near enough that you cannot
-   throw the whole thing off and lose it. */
-function vClamp(){
-  const ww=VIEW.w/VIEW.s, hh=VIEW.h/VIEW.s, mx=ww*0.5, my=hh*0.5;
-  VIEW.ox=clamp(VIEW.ox,-mx,Math.max(-mx,VIEW.cw-ww+mx));
-  VIEW.oy=clamp(VIEW.oy,-my,Math.max(-my,VIEW.ch-hh+my));
-}
+/* ══ THE VIEW IS NOT LIMITED, IN EITHER AXIS ══
+   There was a zoom cap of 3x and a pan stop half a screen past the content, and
+   between them they cost more than they bought. The cap decided for the player
+   how close a look at a lattice cell is a reasonable one. The pan stop was
+   measured off the CONTENT box, which is the grid alone on the bench - so the
+   plate standing off the edge of a grid that already fills the viewport was
+   outside the roam area, and worse, the allowance shrank as you zoomed in
+   (it was half of VIEW.w/VIEW.s), so 2x could not reach what 1x could.
+   Nothing needs the stop: the key in the top right of the grid always reads the
+   scale you are at and always jumps back to fit, so the plant cannot be lost,
+   only put down somewhere. z stays positive on its own - the wheel scales it
+   through an exponential and every other writer passes a positive number. */
 /* zoom about a plant point - the wheel holds the point under the pointer, the
    key centres on the component you have selected */
 function vZoom(z,cx,cy){
-  VIEW.z=clamp(z,1,VMAX); VIEW.s=VIEW.fit*VIEW.z;
+  VIEW.z=z; VIEW.s=VIEW.fit*VIEW.z;
   VIEW.ox=(cx-VIEW.cx)-VIEW.w/2/VIEW.s;
   VIEW.oy=(cy-VIEW.cy)-VIEW.h/2/VIEW.s;
-  vClamp();
 }
 /* ═══════════════ OVERLAYS ═══════════════
    The page is exactly the window now, so everything that used to be stacked
@@ -359,6 +358,16 @@ cv.addEventListener("pointerdown",e=>{
       w.gx = q.x;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
+    /* A PLATE IS DRAGGED BY ITS HEAD. The grab is remembered as the pointer
+       position it started at plus the offset the plate already carried, and the
+       move writes the sum - so picking a plate up again does not snap it back to
+       where the packer wanted it. */
+    else if(w.type==="plate"){
+      /* double-click the head to give the plate back to the packer - otherwise a
+         plate dragged out over the deck is only findable by panning to it */
+      if(e.detail>=2){ delete plateOff[w.id]; return; }
+      const o=plateOff[w.id]||{dx:0,dy:0};
+      ui.drag={type:"plate",id:w.id,sx:q.x,sy:q.y,dx:o.dx,dy:o.dy,v:w.v}; }
     else if(w.type==="scroll"){ ui.drag=w; w.last=q.y; }
     /* A drawing surface. Painting wants press-drag-release, which nothing else
        here does: a btn fires on press and a sld owns the drag outright. So a
@@ -377,6 +386,8 @@ cv.addEventListener("pointermove",e=>{
          the nearest row rather than the row it is merely touching */
       const ny=rowAt(q.y-d.oy+CELL/2);
       if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
+    else if(d.type==="plate"){
+      plateOff[d.id]={dx:d.dx+(q.x-d.sx), dy:d.dy+(q.y-d.sy)}; }
     else if(d.type==="lat"){ d.fn(q,e); }
     else if(d.type==="sld"){
       /* integrate rather than re-derive, so moving away from the track changes
@@ -387,9 +398,9 @@ cv.addEventListener("pointermove",e=>{
        keeps up with the hand at any zoom */
     else if(d.type==="pan"){
       VIEW.ox-=(p.x-d.lx)/VIEW.s; VIEW.oy-=(p.y-d.ly)/VIEW.s;
-      d.lx=p.x; d.ly=p.y; vClamp(); }
+      d.lx=p.x; d.ly=p.y; }
     else { helpScroll=clamp(helpScroll-(q.y-d.last),0,helpMax); d.last=q.y; } }
-  cv.style.cursor = ui.drag&&ui.drag.type==="pan" ? "grabbing"
+  cv.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="plate") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 });
 ["pointerup","pointercancel","pointerleave"].forEach(ev=>
@@ -409,9 +420,8 @@ cv.addEventListener("wheel",e=>{
   const a=vIn(p)? vPt(p) : {x:VIEW.cx+VIEW.ox+VIEW.w/2/VIEW.s,
                             y:VIEW.cy+VIEW.oy+VIEW.h/2/VIEW.s};
   const px=vIn(p)? p.x : VIEW.x+VIEW.w/2, py=vIn(p)? p.y : VIEW.y+VIEW.h/2;
-  VIEW.z=clamp(VIEW.z*Math.exp(-e.deltaY*0.0015),1,VMAX);
+  VIEW.z=VIEW.z*Math.exp(-e.deltaY*0.0015);
   VIEW.s=VIEW.fit*VIEW.z;
   VIEW.ox=(a.x-VIEW.cx)-(px-VIEW.x)/VIEW.s;
   VIEW.oy=(a.y-VIEW.cy)-(py-VIEW.y)/VIEW.s;
-  vClamp();
 },{passive:false});
