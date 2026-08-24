@@ -9,15 +9,25 @@ function commission(){
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:a.Lam,
      aF:a.aF, aM:d.aM, aV:d.aV, P0:d.P0, tsat0:a.tsat*Math.pow(D.pdes,.25),
      rated:D.power, dnbr0:d.dnbr, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
-     excess:d.excess, flowMin:PUMPS[D.pumps].floor,
+     /* The trip floor used to be a flat number per PUMPS[D.pumps] tier. It now
+        scales with pump capacity actually on the grid: +.15 for every full
+        unit of capacity bought beyond the bare minimum (one pump per loop),
+        the identical +.15-per-spare progression the old three-tier table
+        priced, just read off real components instead of a dropdown. At the
+        true baseline - one pump per loop, default size - totalPumpCap()
+        equals D.loops exactly, so this returns the old NO SPARE floor (.30),
+        not the old default of .45: the true baseline now prices as the true
+        baseline, rather than inheriting a floor that assumed a spare nobody
+        had placed. */
+     excess:d.excess, flowMin:clamp(0.30+0.15*(totalPumpCap()-D.loops),0.15,0.75),
      hpiRate:(D.accum?2.6:1.6)*L.hpiHead, graceK:Math.pow(a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2)),.6)*L.inertiaK,
-     noise:CHAN[D.chan].noise, pumps:D.pumps, id:a.id, name:a.name,
+     noise:CHAN[D.chan].noise, id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, natCirc:d.natCirc*L.natK, pzrK:D.pzr*L.pzrK,
      flowK:L.flowK, dose:L.dose, exposure:L.exposure, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, boroninj:D.boroninj, efw:D.efw,
      catcher:D.catcher, contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
-     turbFit:D.turbFit, condFit:D.condFit,
+     turbFit:D.turbFit, condFit:D.condFit, junc:{...D.junc},
      loops:D.loops, sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237};
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
@@ -94,6 +104,58 @@ function autoToggle(k){
 }
 const rpsLive  = ()=> autoLive("rps");
 const rpsState = ()=> autoState("rps");
+/* ══════════ JUNCTIONS ══════════
+   Fitted (placed, for a junction - see D.junc, layout.js) and open at the
+   panel are two different questions, the same way a protection system is
+   fitted and then armed - but a junction is NOT in AUTOSYS, because nothing
+   about it is automatic. There is no system acting on the plant behind your
+   back to defeat: it is a valve, and the operator works it. Ask this, never
+   P.junc or S.juncOpen on their own. */
+const juncLive = id => !!(P.junc[id] && S.juncOpen[id]);
+/* ── HOW MUCH FLOW THE PUMPS THAT ARE LEFT ACTUALLY DELIVER ──
+   Every loop used to share one number: lose one pump out of three and the
+   whole plant lost a third of its flow, as though every loop were already
+   perfectly cross-tied and there were no way to make that better or worse.
+   Flow is per LOOP. Junctions can bridge ANY two loops now, not just
+   adjacent ones, and there can be any number of them - so "which loops share
+   flow" is graph connectivity over every OPEN junction, not a fixed chain: a
+   flood-fill from each loop over the open-junction adjacency list finds the
+   groups, and there are at most four loops to fill from, so nothing about
+   this needs to be clever.
+
+   What an open junction buys is head, not water, and nobody gets that for
+   free. A pump only has reserve above its own loop if it was bought with
+   reserve - loopPumpCap() (layout.js) sums every pump actually on that loop
+   by its own real capacity, static and placed alike, so the group's total is
+   real hardware, not a flat number invented for this feature. A group of m
+   loops with total capacity `up` delivers min(m, up) between them: never
+   more than the group's own loops can carry, however much pump is behind it.
+
+   WITH NOTHING OPEN THIS IS THE OLD FORMULA, EXACTLY. Every group is then
+   one loop, m is 1, and min(1, up) for a single undamaged default-size pump
+   is 1 - a whole number, no arithmetic to round - so the total is the count
+   of live pumps and this returns (loops-lost)/loops to the last bit. That is
+   not a nicety: every figure in audit-physics.js's DOCUMENTED BEHAVIOUR
+   block is measured on a plant with no junction placed, and they are quoted
+   to the digit. The auditor asserts the identity against the formula rather
+   than inferring it from those figures, so the day it stops collapsing, it
+   says so. */
+function loopFlowK(s){
+  const n=P.loops, adj=Array.from({length:n},()=>[]);
+  for(const id in P.junc){ const j=P.junc[id];
+    if(juncLive(id) && j.loopA<n && j.loopB<n){ adj[j.loopA].push(j.loopB); adj[j.loopB].push(j.loopA); } }
+  const seen=new Array(n).fill(false);
+  let k=0;
+  for(let i=0;i<n;i++){
+    if(seen[i]) continue;
+    const stack=[i], group=[]; seen[i]=true;
+    while(stack.length){ const u=stack.pop(); group.push(u);
+      for(const v of adj[u]) if(!seen[v]){ seen[v]=true; stack.push(v); } }
+    let up=0; for(const g of group) up+=loopPumpCap(g,s.dmgParts);
+    k += Math.min(group.length, up);
+  }
+  return k/n;
+}
 /* There are three ways a bank ends up going where the operator put it: the
    system was bypassed, the bank was switched to MANUAL while the banks are
    split, or a latch/jam took the drives away entirely. The precedence is
@@ -295,11 +357,21 @@ function resetPlant(){
      /* the controller's tune, copied from the commissioning constants so a
         RESET PLANT puts the operator's experiments back where they started */
      split:false, reGang:false,
+     /* Shut, always, whatever was fitted. A junction you have to open by hand
+        is one that cannot change the plant you just commissioned behind your
+        back, and one that was never placed is the same plant to the flow
+        model as one placed and left shut. */
+     juncOpen:Object.fromEntries(Object.keys(P.junc).map(k=>[k,false])),
      arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:AUTOROD_LO, arHi:AUTOROD_HI,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
      flowPos:{hot:0,cold:0,steam:0,exh:0,feed:0,surge:0,hpi:0},
      spin:0,jit:0,dTavg:0,heat:0,sc:0,t:0};
+  /* One integral per junction rather than one for all of them: any two can be
+     open and shut independently, so unlike the hot legs - which are one
+     lumped flow and animate as one kind - each junction's packets have to be
+     able to stop while another's keep going. */
+  for(const id in P.junc) S.flowPos["xtie:"+id]=0;
   /* heat and subcooling used to start on two round numbers that were nowhere
      near the plant being commissioned - 35 K of subcooling on a gas core that
      actually sits 1400 K below saturation. They are derived from the state this
@@ -422,8 +494,7 @@ function step(dt){
   /* ── pump cavitation: pumps stall if the water they suck is near boiling ── */
   const sat0 = tsat(s.P), Tc0 = s.Tavg-15*heat;
   s.cav = clamp((Tc0-(sat0-6))/12,0,1);
-  let lost=0; for(const k of s.dmgParts) if(k.startsWith("pump")) lost++;
-  const pumpK = Math.max(0,(P.loops-lost)/P.loops);
+  const pumpK = loopFlowK(s);
   const bkpUp = !s.bkpLost && autoLive("bkp");
   /* ── coolant flow: pumps have inertia ──
      Losing power does not stop a pump dead, it coasts. Blackout is the same lag
@@ -656,6 +727,10 @@ function step(dt){
      pulls loop water the other way, up into the pressurizer and out of the top.
      Clamped below the hot leg's 1.24 - it is a small line and must not outrun it. */
   d.surge+=sp*wet*clamp(-s.dLvl*0.07-((s.porvOpen&&!s.porvBlocked)?0.75:0),-1.2,1.2);
+  /* A shut valve passes nothing, which is the whole of what a shut valve looks
+     like. A flat rate while open, because how much crosses depends on an
+     imbalance between two loops the lumped flow model does not carry. */
+  for(const id in P.junc) if(juncLive(id)) d["xtie:"+id]+=sp;
   s.spin=(s.spin+360*dt*feff)%360;
   s.jit=Math.sin(performance.now()/70)*P.noise*(s.noiseMul||1);
 }

@@ -67,11 +67,6 @@ const CHAN=[
  {name:"TWO CHANNEL",noise:.45,mass:25,note:"Disagreement is visible, but you cannot tell which of the two is wrong."},
  {name:"THREE CHANNEL VOTE",noise:.10,mass:45,note:"Majority voting rejects a failed sensor outright and the readings hold still."},
 ];
-const PUMPS=[
- {name:"N  / NO SPARE",floor:.30,mass:0,note:"Exactly enough pumps. Lose one and you lose that fraction of your flow permanently."},
- {name:"N+1 / ONE SPARE",floor:.45,mass:60,note:"One spare pump. Survives a single pump casualty with full flow."},
- {name:"N+2 / TWO SPARES",floor:.60,mass:115,note:"Two spares. Heavy, and almost impossible to starve of flow."},
-];
 const SGT=[
  {name:"U-TUBE",graceK:1.0,mass:70,note:"Large secondary water inventory acts as a heat sink for minutes after feedwater is lost. Heavy and slow to respond."},
  {name:"ONCE-THROUGH",graceK:.68,mass:42,note:"Very little water in it, so it responds instantly to load changes and boils dry almost as fast. Light."},
@@ -98,15 +93,17 @@ const RODX0=.35;
    revolve. Everything still reads them the way it always did; nothing writes
    them but the measurement. refl is still yours - you pick the material, the
    drawing decides how much of it there is. */
-/* contFit/turbFit/condFit: is the part on the grid at all - see FITTABLE in
-   layout.js. Decoupled from cont/turb/condCap, which still say what TYPE or
-   how good a one you would buy if you fitted it, so unfitting one never
-   forgets the other. */
+/* contFit/turbFit/condFit: is the part on the grid at all - see fittableList()
+   in layout.js. Decoupled from cont/turb/condCap, which still say what TYPE
+   or how good a one you would buy if you fitted it, so unfitting one never
+   forgets the other. pumpSize and junc are not FITTABLE flags at all - a
+   pump and a junction are placed, not toggled, at a spot the player chose
+   rather than a fixed slot - see PLACED PARTS and JUNCTIONS in layout.js. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
-         loops:1,pumps:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
+         loops:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
          cont:1,contFit:true,accum:false,efw:true,catcher:false,bkp:1,
-         turb:.5,turbFit:true,condCap:.5,condFit:true};
+         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},junc:{}};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
@@ -136,19 +133,24 @@ function derived(){
      weighed - volume times density, ring by ring - and a single ring of real
      steel round a real core comes to rather more than the 28 t the option list
      sold. That gap is a finding, not a rounding error. */
-  /* A part FITTABLE (layout.js) can remove is not on the grid at all when
+  /* A part fittableList() (layout.js) can remove is not on the grid at all when
      unfit, so it charges no mass either - the same "not there" the box on the
      plant already draws. contRel folds the same fallback into the one number
      the warning below and commission()'s contRel both read, so NONE and
      "never fitted" price and warn identically without saying so twice. */
   const contRel=D.contFit?CONT[D.cont].rel:1;
+  /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
+     layout.js - sums pumpCap() over every "pump"+ part, static and placed
+     alike), replacing the old flat PUMPS[D.pumps] tier. Every junction that
+     exists costs a flat JUNC_MASS - a spool piece and a motor-operated valve,
+     so a junction is not free redundancy either. */
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
-    +PUMPS[D.pumps].mass+SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
+    +totalPumpCap()*PUMP_MASS+SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
     +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + (D.turbFit?D.turb*50:0) + (D.condFit?D.condCap*40:0)
-    + layMass + latMass();
+    + Object.keys(D.junc).length*JUNC_MASS + layMass + latMass();
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess+rf.dRho-D.poison-leak;

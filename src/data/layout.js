@@ -12,26 +12,90 @@
 const GW=16, GH=9, CELL=46, GX=12, MPC=1.4;   // metres per cell
 let GY=100;                                   // grid top, set each frame by the layout section
 let LAY=null, layLoops=-1, layFit="", sel="core", layMass=0;
-/* ══ PARTS THAT CAN BE ADDED OR REMOVED FROM THE GRID ══
+/* ══ PARTS THAT CAN BE ADDED OR REMOVED FROM THE GRID, AT A FIXED SLOT ══
    Everything else on the grid is always there; these are optional - present
-   or absent, never a ghost box left standing when unfit. One table says which
+   or absent, never a ghost box left standing when unfit. One list says which
    parts they are and how to read/flip whether the grid currently carries each
    one: buildLayout() gates its add() call on it, layoutMetrics() rebuilds
    whenever any of it changes, and the right-click menu (design-bench.js) is
-   generated FROM it. A new optional part is one entry here, not a new special
-   case in three different places.
-   The get/set is its OWN field, decoupled from any type/quality dial the part
-   also carries (CONTAINMENT's type, a TURBINE's D.turb rating) - "is it on
-   the grid" and "how good is the one you bought" are different questions, so
-   unfitting one never forgets the other. */
-const FITTABLE=[
+   generated FROM it. A new optional part at a FIXED slot is one entry here.
+   A part the player places at a slot of their own choosing - a spare pump, a
+   pipe junction - is not: see PLACED PARTS and JUNCTIONS below, which do not
+   fit this table's shape at all, because they are not one boolean each. */
+const fittableList=()=>[
   {id:"cont", label:"CONTAINMENT",         get:()=>D.contFit, set:v=>{D.contFit=v;}},
   {id:"hpi",  label:"PASSIVE ACCUMULATOR", get:()=>D.accum,   set:v=>{D.accum=v;}},
   {id:"turb", label:"TURBINE",             get:()=>D.turbFit, set:v=>{D.turbFit=v;}},
   {id:"cond", label:"CONDENSER",           get:()=>D.condFit, set:v=>{D.condFit=v;}},
 ];
-const fitOf=id=>FITTABLE.find(f=>f.id===id).get();
-const fitSig=()=>FITTABLE.map(f=>f.get()?1:0).join("");
+const fitOf=id=>fittableList().find(f=>f.id===id).get();
+const fitSig=()=>fittableList().map(f=>f.get()?1:0).join("");
+/* ══ PLACED PARTS: NOT A SLOT, A POINT THE PLAYER CHOSE ══
+   buildLayout() throws LAY.parts away and builds it fresh from nothing every
+   time its trigger fires - deliberate for the static, formula-driven parts,
+   documented as resetting every dragged position on purpose. A part the
+   player PLACED must not share that fate just because some unrelated FITTABLE
+   flag flipped in the same session. So it lives here, outside buildLayout()'s
+   own construction, and is merged back in at the end of every rebuild - see
+   buildLayout() below. A placed part that no longer fits (something else now
+   sits on its cell) is silently dropped from THAT rebuild rather than
+   overlapping anything; it stays in this array and reappears the moment the
+   conflict clears, the same non-fatal handling a walled-in component already
+   gets elsewhere. Never touched by anything but placePart()/removePart(). */
+let placedParts=[], placeSeq=0;
+function placePart(mk){
+  const p=mk(placeSeq++); placedParts.push(p); buildLayout(); return p;
+}
+function removePart(id){
+  placedParts=placedParts.filter(p=>p.id!==id); buildLayout();
+}
+/* A pump's own capacity, from its size (0..1, default .5) - centred the same
+   way grossEff() centres the turbine multiplier, so the default pump delivers
+   exactly what the one always-fitted pump used to deliver and sizing it up or
+   down moves it either way. D.pumpSize is keyed by pump id, static or placed
+   alike, so every pump - not just spares - can be sized. */
+const pumpSizeOf=id=>D.pumpSize[id]??0.5;
+const pumpCap=size=>0.7+0.6*size;
+const PUMP_MASS=50;                    // t, at pumpCap()==1 (default size)
+/* Every pump currently on the grid, whatever loop it belongs to - the design
+   floor (commission(), below) is a plant-wide figure, not a per-loop one, so
+   it reads the plant-wide total. A placed pump's own loop is stamped on it at
+   creation (placePart()'s caller, design-bench.js); the one static pump per
+   loop needs no stamp, because its id already says which loop it is. */
+const totalPumpCap=()=>{ let c=0;
+  for(const p of LAY.parts) if(p.id.startsWith("pump")) c+=pumpCap(pumpSizeOf(p.id));
+  return c; };
+/* Loop i's own pumps, undamaged, summed by capacity - what loopFlowK()
+   (step.js) reads per loop before any open junction groups loops together. */
+function loopPumpCap(i,dmg){
+  let c=0;
+  for(const p of LAY.parts){
+    if(!p.id.startsWith("pump")) continue;
+    const belongsTo = p.id==="pump"+i ? i : p.loop;
+    if(belongsTo===i && !dmg.includes(p.id)) c+=pumpCap(pumpSizeOf(p.id));
+  }
+  return c;
+}
+/* ══ JUNCTIONS: A TAP, NOT A COMPONENT ══
+   Confirmed explicitly: no visible box, no grid cell. D.junc is topology only
+   - which two loops a junction bridges and the plant-space point on loop A's
+   cold leg it taps into - keyed by a generated id. S.juncOpen, same keys, is
+   the live valve state, closed by default. Never in LAY.parts: pipeNetwork()
+   reads D.junc/P.junc directly and routes a branch for each one that exists,
+   the same way it already reads fitOf("hpi") to decide whether to link that
+   part in. See routeVia()/route()'s bare-point o.pa for why no new routing
+   code was needed for this. */
+/* Placed at design time, before S exists - resetPlant() is what seeds
+   S.juncOpen, one entry per id in P.junc, the same moment it seeds every
+   other live-state array. Nothing here writes to S. */
+let juncSeq=0;
+function addJunction(loopA,loopB,x,y){
+  const id="j"+(juncSeq++);
+  D.junc[id]={loopA,loopB,x,y};
+  return id;
+}
+function removeJunction(id){ delete D.junc[id]; }
+const JUNC_MASS=16;                    // a spool piece and a motor-operated valve, per tap
 /* ══ WHERE THE PLAYER PUT A PLATE, IF THEY MOVED IT ══
    An OFFSET from the packed position, never an absolute point. The margins are
    repacked every frame - open a loop, drag a component, resize the window and
@@ -73,6 +137,16 @@ function buildLayout(){
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.");
+  /* placed parts merge in last, and only the ones that still fit. groupFits()
+     cannot be asked here - it reads the GLOBAL LAY.parts, and LAY still
+     points at the layout from BEFORE this rebuild at this point in the
+     function - so this checks straight against A, the array actually being
+     built. See PLACED PARTS above for why they are not built here at all. */
+  for(const p of placedParts){
+    let ok = p.x>=0 && p.y>=0 && p.x+p.w<=GW && p.y+p.h<=GH;
+    if(ok) for(const q of A) if(p.x<q.x+q.w && p.x+p.w>q.x && p.y<q.y+q.h && p.y+p.h>q.y){ ok=false; break; }
+    if(ok) A.push(p);
+  }
   LAY={parts:A}; layLoops=D.loops; layFit=fitSig();
 }
 /* ─────────────── control bands ───────────────
@@ -219,13 +293,18 @@ function dedupe(pts){
 const SLIDES=[[8,0],[-8,0],[0,8],[0,-8],[8,8],[-8,-8],[16,0],[-16,0],[0,16],[0,-16]];
 /* `o` carries what this run cannot know by itself: which slot it has on each of
    its two faces, and the lane registry shared with every other run in the same
-   network. Left out, the run routes exactly as it always did. */
+   network. Left out, the run routes exactly as it always did.
+   `o.pa` / `o.pb` replace that end's PORT with a bare point - a waypoint has no
+   component behind it, no face to leave square to and no nozzle to share - and
+   `o.va` / `o.vb` say which way the leg leaves or arrives there, because a
+   point has no face to read it off. See routeVia(), the only caller. */
 function route(p,sa,q,sb,o){
   o=o||{};
   const reg=o.reg||laneReg();
-  const va=sa==="t"||sa==="b", vb=sb==="t"||sb==="b", off=CELL/2;
+  const va=o.va!=null?o.va:(sa==="t"||sa==="b"),
+        vb=o.vb!=null?o.vb:(sb==="t"||sb==="b"), off=CELL/2;
   const build=(da,db)=>{
-    const a=port(p,sa,o.ia,o.na,da), b=port(q,sb,o.ib,o.nb,db);
+    const a=o.pa||port(p,sa,o.ia,o.na,da), b=o.pb||port(q,sb,o.ib,o.nb,db);
     if(va!==vb) return va ? [a,[a[0],b[1]],b]    // out vertically, in horizontally
                           : [a,[b[0],a[1]],b];   // out horizontally, in vertically
     const vert=!va, mk=bendPoly(a,b,vert), i=vert?0:1;
@@ -247,6 +326,50 @@ function route(p,sa,q,sb,o){
     if(!reg.cost(t)){ pts=t; break; }
   }
   return reg.claim(dedupe(pts));
+}
+/* ══ WHERE THE PLAYER STEERED A PIPE ══
+   A point the run has to pass through, keyed by the run and stored as an
+   ABSOLUTE plant point - unlike plateOff, which is a delta. A plate has one
+   anchor to be an offset FROM; a pipe run has none, because both its ends and
+   everything between them are recomputed from nothing every frame. What a
+   waypoint means is "go through this spot in the room", so that is what is
+   written down. Nothing sweeps this: a run whose kind stops existing leaves its
+   entry behind exactly as plateOff keeps a plate that is no longer drawn. */
+const pipeWaypoints={};
+/* Sorted on every read, by distance from the run's own start, so dragging one
+   point past another re-orders the run instead of tangling it - and so nothing
+   anywhere has to keep an order in step with the drawing. The objects are the
+   stored ones, not copies: a grip holds the object it moves, which is what
+   keeps a sort from renumbering what the hand is holding. */
+function pipeWayList(key,a0){
+  const w=pipeWaypoints[key];
+  if(!w||!w.length) return [];
+  return w.slice().sort((p,q)=>Math.hypot(p.x-a0[0],p.y-a0[1])-Math.hypot(q.x-a0[0],q.y-a0[1]));
+}
+/* ══ A WAYPOINT STEERS THE ROUTER, IT DOES NOT REPLACE IT ══
+   A run with n waypoints is n+1 calls to route() and not one call to something
+   cleverer: hand-rolled pipe pathfinding is the thing this whole feature exists
+   to avoid. Every leg leaves on the same axis as the first one - the run's own
+   start face decides it - and arrives at its waypoint on the other, so the two
+   legs meeting at a waypoint always turn a corner there. Let each leg pick its
+   own axis and a pair of them doubles back along one lane, which is one pipe
+   drawn twice and audit-geometry.js reports it as the overlap it is.
+   A waypoint the player drops PAST the far end still makes the run go out and
+   come home, and it comes home on the lane it went out on. That is what any
+   two-point router does with such an order, and it is the player's diagram to
+   make ugly - the same allowance the overlap audit already makes for a
+   component dragged into a corner. */
+function routeVia(c,o){
+  const a0=port(c.a,c.sa,o.ia,o.na), wps=pipeWayList(c.key,a0);
+  if(!wps.length){ const pts=route(c.a,c.sa,c.b,c.sb,o); return {pts,legs:[pts],wps}; }
+  const va=c.sa==="t"||c.sa==="b", pt=p=>[p.x,p.y], legs=[];
+  legs.push(route(c.a,c.sa,null,"",{reg:o.reg,ia:o.ia,na:o.na,pb:pt(wps[0]),vb:!va}));
+  for(let i=1;i<wps.length;i++)
+    legs.push(route(null,"",null,"",{reg:o.reg,pa:pt(wps[i-1]),pb:pt(wps[i]),va,vb:!va}));
+  legs.push(route(null,"",c.b,c.sb,{reg:o.reg,ib:o.ib,nb:o.nb,pa:pt(wps[wps.length-1]),va}));
+  let pts=legs[0];
+  for(let i=1;i<legs.length;i++) pts=pts.concat(legs[i]);
+  return {pts:dedupe(pts),legs,wps};
 }
 /* nearest point on a polyline - where a branch line tees onto a run */
 function nearestOn(pts,p){
@@ -274,7 +397,12 @@ function plen(pts){ let L=0;
 function pipeNetwork(){
   const id=k=>LAY.parts.find(q=>q.id===k);
   const core=id("core"), pzr=id("pzr"), tb=id("turb"), cd=id("cond"), fp=id("feed"), hp=id("hpi");
-  const conn=[], link=(k,a,sa,b,sb)=>conn.push({k,a,sa,b,sb});
+  /* A KIND IS NOT AN IDENTITY. Every loop's hot leg is the kind "hot", because
+     they are physically the same line and animate as one - but a waypoint
+     belongs to ONE physical run, so a run needs a name of its own. Both ends
+     and both faces make one, and it is stable across a frame, a rebuild and a
+     loop being added: nothing about it is an index into anything. */
+  const conn=[], link=(k,a,sa,b,sb)=>conn.push({k,a,sa,b,sb,key:k+":"+a.id+sa+"-"+b.id+sb});
   for(let i=0;i<D.loops;i++){
     const sg=id("sg"+i), pu=id("pump"+i);
     if(!sg) continue;
@@ -316,16 +444,36 @@ function pipeNetwork(){
       continue;
     }
     const [ia,na]=take(c.a,c.sa), [ib,nb]=take(c.b,c.sb);
-    const pts=route(c.a,c.sa,c.b,c.sb,{reg,ia,na,ib,nb});
-    net.push({k:c.k,pts});
-    if(c.k==="hot"&&!hot0) hot0=pts;
+    const r=routeVia(c,{reg,ia,na,ib,nb});
+    net.push({k:c.k,key:c.key,pts:r.pts,legs:r.legs,wps:r.wps});
+    if(c.k==="hot"&&!hot0) hot0=r.pts;
+  }
+  /* junctions - a tap on loop A's cold leg (the stored point, exactly where
+     the player clicked) to loop B's pump discharge. The tapped end is a bare
+     point (o.pa), not a component+face - the identical route() machinery a
+     waypoint leg already uses, not new pathfinding. The kind is "xtie:"+id on
+     purpose: pipes.js's existing k.startsWith("xtie") fallbacks (name, colour,
+     full scale, unit) already cover any suffix, so a junction needs no table
+     row of its own there. Skipped, not crashed, if either loop it names no
+     longer exists - the identical defensive shape every other optional link
+     in this function already uses.
+     NO key, on purpose - unlike every other run, a junction's own branch does
+     not carry waypoints of its own in this version: pipeGrips() (plant.js)
+     already skips any run with no key, the same way it already skips the
+     surge line two blocks up, so this is the existing "nothing to steer here"
+     path and not a new one. */
+  for(const jid in D.junc){
+    const j=D.junc[jid], b=id("pump"+j.loopB);
+    if(!id("pump"+j.loopA) || !b) continue;
+    const pts=route(null,"",b,"l",{reg,pa:[j.x,j.y],va:false});
+    net.push({k:"xtie:"+jid, pts});
   }
   return net;
 }
 /* BACKUP PWR is the one part left that ghosts rather than vanishes: NONE is a
    real dropdown choice (mass 0) that still occupies its cell, because it is a
    three-way quality dial (NONE/BATTERY/DIESEL) and not an add/remove part -
-   see FITTABLE above for the parts that are actually removed from LAY.parts
+   see fittableList() above for the parts that are actually removed from LAY.parts
    when unfit, which makes fitted() trivially true for them whenever they are
    present at all. */
 const fitted=p => p.id==="bkp" ? D.bkp>0 : true;
@@ -375,6 +523,10 @@ function layoutMetrics(){
   let pipe=0, sec=0;
   for(const r of pipeNetwork()){
     const L=plen(r.pts);
+    /* `pipe` is what the pumps have to push through, and a cross-tie is not
+       that: it is a parallel branch, not another metre of loop. So it pays mass
+       and thermal inertia with the secondary runs and never slows the pumps
+       down - fitting one and leaving it shut must not cost flow. */
     if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi") pipe+=L; else sec+=L;
   }
 
