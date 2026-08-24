@@ -302,7 +302,7 @@ function pipeNetwork(){
   }
   return net;
 }
-const fitted=p => p.id==="hpi" ? D.accum : p.id==="bkp" ? D.bkp>0 : true;
+const fitted=p => p.id==="hpi" ? D.accum : p.id==="bkp" ? D.bkp>0 : p.id==="cont" ? D.cont>0 : true;
 const cen=p=>({x:p.x+p.w/2,y:p.y+p.h/2});
 /* parts that ride another part rather than being sited on their own */
 const pinnedTo=p=>LAY.parts.filter(q=>q.pin&&q.pin.to===p.id);

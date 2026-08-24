@@ -174,17 +174,60 @@ function layoutStats(M){ return [
    "Distance between redundant loops. Park two steam generators next to each other and a single hit takes out both, making the redundancy you paid for worthless."],
 ];}
 function layoutWarnings(M){ const w=[];
-  if(!M.pzrOK) w.push(["SOFT","The pressurizer is not the highest point of the primary loop. Its steam bubble cannot form properly, so pressure damping drops to 45%."]);
-  if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all."]);
-  if(M.access<1) w.push(["HARD","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged."]);
-  if(M.exposure>0.3) w.push(["SOFT","Over 30% of the plant sits in hull cells. Expect to lose something every time you are hit."]);
-  if(D.loops>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both."]);
+  if(!M.pzrOK) w.push(["SOFT","The pressurizer is not the highest point of the primary loop. Its steam bubble cannot form properly, so pressure damping drops to 45%.","pzr"]);
+  if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all.",null]);
+  if(M.access<1) w.push(["HARD","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
+  if(M.exposure>0.3) w.push(["SOFT","Over 30% of the plant sits in hull cells. Expect to lose something every time you are hit.",null]);
+  if(D.loops>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both.",null]);
   return w;
 }
 
 /* one source of truth for "may this design be built" and "has it changed since it was" */
 function designIssues(d,M){ return (d||derived()).warn.concat(layoutWarnings(M||layoutMetrics())); }
 function designBlocked(d,M){ return designIssues(d,M).some(w=>w[0]==="HARD"); }
+/* Worst warning colour a single component owns, or null - read by the bench's
+   per-component warning circle (plant.js) and its plate heading (inspector.js).
+   A component walled in with no access is its own trigger (paramsFor's own NO
+   ACCESS note reads p.access the same way) rather than a duplicate entry in
+   designIssues(), which keeps the aggregate M.access warning text there as one
+   line instead of splitting it per component. */
+function warnFor(id){
+  const p=LAY.parts.find(q=>q.id===id);
+  if(p && !p.access && p.grp!=="shield") return C.red;
+  const w=designIssues(null,PLANT_LM).filter(q=>q[2]===id);
+  if(!w.length) return null;
+  return w.some(q=>q[0]==="HARD")?C.red:C.amber;
+}
+
+/* ══ RIGHT-CLICK, HELD STILL AND RELEASED: ADD OR REMOVE ══
+   CONTAINMENT and the passive ACCUMULATOR are the two parts of the plant that
+   can be fitted or not - everything else on the grid is always there. "Not
+   fitted" already exists (fitted() in layout.js, the dashed outline and the
+   NOT FITTED tag on the component itself); this is just a second, quicker way
+   to flip it than dragging the CONTAINMENT dropdown to NONE or hunting down
+   the checkbox on the HPI TANK plate - both of those still work too. */
+let ctxMenu=null;
+function openCtxMenu(p){ if(screen==="design") ctxMenu={x:p.x,y:p.y}; }
+/* what type was fitted before REMOVE, so FIT restores it instead of always
+   landing back on the cheapest option - the dropdown still writes D.cont
+   directly and this still tracks it, since it is read at click time */
+let contMemory=1;
+function ctxItems(){ return [
+  ["CONTAINMENT", D.cont>0, ()=>{ if(D.cont>0){ contMemory=D.cont; D.cont=0; } else D.cont=contMemory; }],
+  ["PASSIVE ACCUMULATOR", D.accum, ()=>{ D.accum=!D.accum; }],
+]; }
+function drawCtxMenu(){
+  if(!ctxMenu) return;
+  const items=ctxItems(), rh=20, w=190, h=items.length*rh+8;
+  let x=Math.min(ctxMenu.x,W-4-w), y=Math.min(ctxMenu.y,H-4-h);
+  fillRect(x,y,w,h,C.panel); frame(x,y,w,h,C.edge2);
+  push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach the plant
+  items.forEach(([label,fit,fn],i)=>{
+    const iy=y+4+i*rh;
+    button(x+4,iy,w-8,rh-2,(fit?"REMOVE ":"FIT ")+label,
+      {size:8,sp:.6,fn:()=>{ fn(); ctxMenu=null; }});
+  });
+}
 /* The lattice is part of the design, and most of what a pen changes on it is
    not a D field - a reflector face, a cluster's slot, the active length. So
    latSig() joins the key, or moving any of them would leave the commissioned

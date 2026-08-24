@@ -67,6 +67,14 @@ function vZoom(z,cx,cy){
   VIEW.ox=(cx-VIEW.cx)-VIEW.w/2/VIEW.s;
   VIEW.oy=(cy-VIEW.cy)-VIEW.h/2/VIEW.s;
 }
+/* pan-and-zoom to a rect in PLANT coordinates - a plate's own {x,y,w,h} - with
+   enough zoom to fit it in the viewport and never more, so a wide plate like
+   RESULTS is not cropped the way jumping to a component at a fixed 1.8x would
+   crop it. */
+function vZoomTo(q){
+  const z=Math.max(.3,Math.min((VIEW.w-40)/(VIEW.fit*q.w),(VIEW.h-40)/(VIEW.fit*q.h)));
+  vZoom(z,q.x+q.w/2,q.y+q.h/2);
+}
 /* ═══════════════ OVERLAYS ═══════════════
    The page is exactly the window now, so everything that used to be stacked
    below the plant has nowhere left to be. It is drawn OVER the plant instead,
@@ -337,9 +345,14 @@ const sldGain = dy => 1/(1+Math.max(0,Math.abs(dy)-24)/16);
 cv.addEventListener("contextmenu",e=>{ if(!e.shiftKey) e.preventDefault(); });
 cv.addEventListener("pointerdown",e=>{
   cv.setPointerCapture(e.pointerId); const p=local(e); ui.ptr=p;
+  /* any fresh gesture dismisses an open menu - a widget it still stands over
+     re-opens or re-acts in the same handler call below, so nothing flashes */
+  ctxMenu=null;
   /* shift+right is the browser's menu, not a pan - taking the drag as well
-     would leave the plant sliding about under an open menu */
-  if(e.button===2){ if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y};   /* at any zoom, from anywhere */
+     would leave the plant sliding about under an open menu. Right held and
+     dragged pans, exactly as before; right pressed and released without
+     moving opens the ADD/REMOVE menu instead - see pointerup. */
+  if(e.button===2){ if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y,sx:p.x,sy:p.y,moved:false};
     return; }
   isTouch = e.pointerType==="touch" || e.pointerType==="pen";
   if(isTouch){ const t=findTip(p);
@@ -378,6 +391,9 @@ cv.addEventListener("pointerdown",e=>{
        raw point, and it works out for itself which cell that is. */
     else if(w.type==="lat"){ ui.drag=w; w.last=null; w.fn(q,e); }
     return; }
+  /* nothing under the pointer - a click on bare deck deselects rather than
+     leaving whatever was picked last lit with nothing on screen to justify it */
+  if(e.button!==2) sel=null;
 });
 cv.addEventListener("pointermove",e=>{
   const p=local(e); ui.ptr=p;
@@ -405,12 +421,23 @@ cv.addEventListener("pointermove",e=>{
        keeps up with the hand at any zoom */
     else if(d.type==="pan"){
       VIEW.ox-=(p.x-d.lx)/VIEW.s; VIEW.oy-=(p.y-d.ly)/VIEW.s;
-      d.lx=p.x; d.ly=p.y; }
+      d.lx=p.x; d.ly=p.y;
+      /* past a few page pixels this is a pan and not a held-still click, so the
+         ADD/REMOVE menu on release is off the table - a page pixel threshold,
+         not a plant one, so it feels the same at any zoom */
+      if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
     else { helpScroll=clamp(helpScroll-(q.y-d.last),0,helpMax); d.last=q.y; } }
   cv.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="plate") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 });
-["pointerup","pointercancel","pointerleave"].forEach(ev=>
+cv.addEventListener("pointerup",e=>{
+  const d=ui.drag;
+  /* right button, held down, released without having dragged the plant -
+     that is a click, and on the design bench it opens the ADD/REMOVE menu */
+  if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
+  ui.drag=null;
+});
+["pointercancel","pointerleave"].forEach(ev=>
   cv.addEventListener(ev,()=>{ui.drag=null;}));
 cv.addEventListener("wheel",e=>{
   if(screen==="help"){ e.preventDefault();
