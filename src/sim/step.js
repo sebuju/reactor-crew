@@ -2,7 +2,7 @@
 /* point kinetics, thermal, pressure, void, RPS */
 
 /* ═══════════════ SIM ═══════════════ */
-let P=null,S=null,lastN=1;
+let P=null,S=null;
 function commission(){
   const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
@@ -37,6 +37,11 @@ function commission(){
   coreConst(P,d);                        // the core as a place: mesh, coupling, rods
   P.dsig = designSig();                 // what this plant was built from
   resetPlant();
+  /* What THIS plant is subcooled by when nobody has touched it. The vital bar
+     scales against it, because subcooling at rest is 22 K on a PWR and 1400 K
+     on an HTGR - a fixed scale would peg four of the six architectures full and
+     say nothing. P.dnbr0 is the same idea and was already here. */
+  P.sc0 = S.sc;
   screen="operate"; layout();
 }
 /* ══════════ THE AUTOMATIC SYSTEMS ══════════
@@ -293,16 +298,23 @@ function resetPlant(){
      dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
      flowPos:{hot:0,cold:0,steam:0,exh:0,feed:0,surge:0,hpi:0},
-     spin:0,jit:0,dTavg:0,heat:1,sc:35,t:0};
+     spin:0,jit:0,dTavg:0,heat:0,sc:0,t:0};
+  /* heat and subcooling used to start on two round numbers that were nowhere
+     near the plant being commissioned - 35 K of subcooling on a gas core that
+     actually sits 1400 K below saturation. They are derived from the state this
+     function just built, by the same expressions step() uses, so the readouts
+     and P.sc0 are right on tick zero instead of after the first tick. */
+  S.heat = S.n*.935 + S.decay;
+  S.sc   = tsat(S.P) - (S.Tavg + 15*S.heat);
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
   coreReset(S);
   S.boron = S.boron0 = -(P.excess+coreRodWorth(S)-P.KXE*P.X0);
   S.boronDem = S.boron;                 // start on demand, or it walks off commissioning
-  lastN=P.n0; LOG=[]; initHist();
+  LOG=[]; initHist();
   logE("info","PLANT AT POWER",
-    P.name+" commissioned at "+P.rated+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
+    P.name+" commissioned at "+P.rated.toFixed(0)+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
 }
 function step(dt){
   const s=S; s.t+=dt;
