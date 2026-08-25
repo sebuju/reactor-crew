@@ -78,6 +78,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-dmg-card.busy{border-color:var(--c-amber)}
 .cr-dmg-name{font-size:var(--t8-5);color:var(--c-bright)}
 .cr-dmg-state{font-size:var(--t7-5);color:var(--c-ink2)}
+.cr-dmg-dose{font-size:var(--t7);margin-top:2px}
 .cr-flt .kit-btn{display:block;width:100%;margin-bottom:4px}
 
 .cr-comp-rail{display:flex;flex-direction:column;gap:6px}

@@ -53,7 +53,9 @@ function layoutStats(M){ return [
   ["REPAIR ACCESS",(M.access*100).toFixed(0)+" %",M.access,M.access<1?C.red:C.green,
    "Fraction of equipment with at least one free adjacent cell. A component walled in on all four sides cannot be repaired at all, however badly you need it."],
   ["CREW DOSE RATE",M.dose.toFixed(2)+" x",clamp(M.dose/2,0,1),M.dose>1?C.amber:C.green,
-   "Radiation reaching the control room during an accident. Falls with distance from the reactor and drops sharply for every shield block you put between the two."],
+   "Radiation reaching the control room during an accident, solved along the straight line from reactor to crew. A shield only pays for itself if it actually stands on that line - one parked off to the side blocks nothing, whatever a bounding box would have said. Any other equipment sitting on the line helps a little too, just less than a shield built for the job."],
+  ["SURVEY PEAK",M.peak.v.toFixed(2)+" x",clamp(M.peak.v/RAD_CEIL,0,1),ZONE[zoneOf(M.peak.v)].col,
+   "The crew dose rate above is one seat, in one room. This is the hottest cell any repair party could ever be sent to stand in"+(M.peak.who?" - right now, beside "+M.peak.who.name:"")+". A layout that is comfortable in the control room and lethal at the pumps has not been shielded, it has been decorated."],
   ["PRESSURIZER HEAD",M.pzrOK?"at loop top":"BELOW LOOP TOP",M.pzrOK?1:0.2,
    M.pzrOK?C.green:C.red,
    "The pressurizer works by holding a steam bubble at the highest point of the primary loop. Mount it below the reactor or the steam generators and the bubble cannot sit where it needs to: pressure control loses more than half its damping and every load change whips the loop pressure around."],
@@ -492,6 +494,11 @@ function dbRailBuild(rail){
   }
   const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
+  // one switch per LAYERS entry, built once per rail rebuild - see
+  // layerSwitches() in render/layers.js. The SAME helper the control room
+  // calls: a layer switch is not redrawn per screen, it is drawn once.
+  const layers=KIT.well({title:"LAYERS"}); rail.appendChild(layers.el);
+  layerSwitches(layers.body);
   return {panels,results,review};
 }
 /* the rail scrolls to a newly selected panel ONCE, on the frame sel changes -

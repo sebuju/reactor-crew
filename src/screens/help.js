@@ -9,6 +9,7 @@ const HELP=[
  ["d","FILL LEVELS","The shaded column inside the pressurizer, steam generator and vessel is the real level, drawn to scale. The vessel column turns red when thermal margin is lost."],
  ["d","VALVE SYMBOLS","Bowties are valves. Green is closed and holding, red is open and passing flow."],
  ["d","ELECTRICAL OUTPUT","The turbine box reads the megawatts the ship is actually getting, not a percentage. It turns amber when condenser backpressure is taking some of that output back off you."],
+ ["d","RADIATION LAYERS","Four switches on the rail, on both screens. RAD ZONES fills the floor in five bands, from CLEAR through EXCLUSION, and draws the boundary line where a shield's shadow actually falls. CELL DOSE prints the exact number in every free cell. REPAIR CELLS outlines just the cells a body could physically stand in beside something. PART DOSE prints, on the machine itself, what reaching it will cost. This is the survey: a machine is drawn over the field, and the cells left visible under it are the cells you can actually send someone to stand in."],
  ["h","DESIGN BENCH"],
  ["d","ARCHETYPE","Six coolant and moderator families, each with a real ancestor. They differ in power density, grace time, operating pressure and, critically, the sign of the void coefficient."],
  ["d","FUEL","Sets delayed neutron fraction and excess reactivity. Low-enriched uranium gives 650 pcm of margin before prompt criticality; plutonium MOX gives 300."],

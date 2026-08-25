@@ -208,13 +208,19 @@ function crDamageSync(list){
     const el=KIT.el("div","cr-dmg-card");
     const name=KIT.el("div","cr-dmg-name");
     const state=KIT.el("div","cr-dmg-state");
-    el.append(name,state);
+    const dose=KIT.el("div","cr-dmg-dose");
+    el.append(name,state,dose);
     /* the card is reused by whatever part is at this slot next, so the handler
        reads its CURRENT part rather than closing over one */
-    const h={el,name,state,id:null};
+    const h={el,name,state,dose,id:null};
     el.addEventListener("click",()=>{ if(h.id) act("repair",h.id); });
     return h;
   });
+  /* the field is SOLVED ONCE for the whole card list, not once per card - the
+     same field every card below reads radParty() against, per the "one
+     accessor" rule rad.js documents for radSrc()/radSolve() itself. */
+  const f = ids.length ? radSolve(P.radK, radSrc(S)) : null;
+  const g = ids.length ? occupied(null) : null;
   ids.forEach((k,i)=>{
     const h=pool[i], part=LAY.parts.find(q=>q.id===k);
     h.id=k;
@@ -223,11 +229,37 @@ function crDamageSync(list){
     if(h.name.textContent!==nm) h.name.textContent=nm;
     h.el.classList.toggle("blocked",blocked);
     h.el.classList.toggle("busy",!!busy);
-    const st = blocked?"NO ACCESS":busy?Math.round(S.repair.t/S.repair.need*100)+"%":"CLICK TO DISPATCH";
+
+    let st, tip;
+    if(S.partySpent){
+      st="PARTY EXPENDED";
+      tip="The repair party has taken all the dose it is going to take this run. Nobody is left to send out - whatever is still fitted and working is what you finish the run with.";
+    } else if(blocked){
+      st="NO ACCESS";
+      tip="Your layout walls this component in on every side, so no repair party can reach it.";
+    } else if(busy){
+      st=Math.round(S.repair.t/S.repair.need*100)+"%";
+      tip="Repair under way. The party is taking dose the whole time, at the rate shown below.";
+    } else {
+      st="CLICK TO DISPATCH";
+      tip="Click to send a repair party. It works from the coldest free cell beside this component, and the dose it takes is scaled by THAT cell - not by how close your control space sits to the reactor.";
+    }
     if(h.state.textContent!==st) h.state.textContent=st;
-    KIT.tip(h.el,nm+(blocked?"  [ UNREACHABLE ]":""),
-      blocked?"Your layout walls this component in on every side, so no repair party can reach it."
-        :"Click to send a repair party. The party accumulates dose throughout, scaled by how close your control space sits to the reactor.");
+
+    /* the estimate the card PROMISES has to be the dose the sim will actually
+       charge: rate*RAD_DOSE_K*dt integrated over the real time the job takes
+       (need/radWorkK(rate), since work only advances at that fraction of a
+       second per second) is exactly rate*RAD_DOSE_K*need/radWorkK(rate). */
+    const showDose = part && !blocked && !S.partySpent;
+    const rate = showDose ? radParty(f,part,g) : 0;
+    const doseTxt = showDose
+      ? rate.toFixed(2)+"x FIELD  ·  "+(rate*RAD_DOSE_K*repairNeed(part)/radWorkK(rate)).toFixed(2)+"% JOB"
+      : "";
+    if(h.dose.textContent!==doseTxt) h.dose.textContent=doseTxt;
+    const doseCol = showDose ? ZONE[zoneOf(rate)].col : "";
+    if(h.dose.style.color!==doseCol) h.dose.style.color=doseCol;
+
+    KIT.tip(h.el,nm+(blocked?"  [ UNREACHABLE ]":S.partySpent?"  [ PARTY EXPENDED ]":""), tip);
   });
 }
 
@@ -321,6 +353,13 @@ function crBuild(){
   const fltD=KIT.el("details","cr-op"); const fltS=KIT.el("summary"); fltS.textContent="FAULTS";
   const fltBody=KIT.el("div","cr-flt"); fltD.append(fltS,fltBody); ops.appendChild(fltD);
   const faults=crFaultsBuild(fltBody);
+
+  // one switch per LAYERS entry, built once - see layerSwitches() in
+  // render/layers.js. A layer manages its own "on" state on click, so there
+  // is nothing here for crSync() to keep in step with every frame.
+  const lyrD=KIT.el("details","cr-op"); const lyrS=KIT.el("summary"); lyrS.textContent="LAYERS";
+  const lyrBody=KIT.el("div","cr-lyr"); lyrD.append(lyrS,lyrBody); ops.appendChild(lyrD);
+  layerSwitches(lyrBody);
 
   const compRail=KIT.el("div","cr-comp-rail"); rail.appendChild(compRail);
 
