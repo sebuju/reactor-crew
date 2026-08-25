@@ -30,7 +30,15 @@ function bundle(){
    a list of names because several of those bindings - `S`, `P`, `LAY` - are
    *reassigned* during a run, so a caller that cares about the live value has to
    ask for a getter (`S:()=>S`) and one that does not can take the value directly. */
-function headless(exportSrc){
+/* THE CLOCK IS A STUB, AND A CONSTANT STUB IS A BLIND ONE.
+   performance.now() returned a fixed 1000 here for as long as this file has
+   existed, which is fine for a renderer and useless for the determinism check:
+   any wall clock leaking into S is CONSTANT under a frozen clock, so a
+   snapshot/restore round trip passes while the leak sits there. Pass
+   {clock:true} and the stub advances instead, so a tick that reads the wall
+   shows up as two futures that disagree. Default stays frozen, because every
+   other caller wants a still picture. */
+function headless(exportSrc, opts){
   const noop = () => {};
   const ctx = new Proxy({font:'10px m'},{
     get(t,k){ if(k==='measureText') return ()=>({width:10});
@@ -40,7 +48,9 @@ function headless(exportSrc){
   global.document = {getElementById:()=>({getContext:()=>ctx,addEventListener:noop,style:{},
     getBoundingClientRect:()=>({left:0,top:0,width:760,height:900})}),
     createElement:()=>({getContext:()=>ctx}),addEventListener:noop};
-  global.window = global; global.performance = {now:()=>1000}; global.devicePixelRatio = 1;
+  global.window = global; global.devicePixelRatio = 1;
+  let wall = 1000;
+  global.performance = (opts && opts.clock) ? {now:()=>(wall += 17)} : {now:()=>1000};
   global.requestAnimationFrame = noop; global.addEventListener = noop;
 
   const src = bundle().replace(
