@@ -1,121 +1,7 @@
 "use strict";
-/* the design screen */
+/* the design screen - the plant view (canvas) plus an HTML rail of panels */
 
-/* ─────────────── DESIGN BENCH (spatial) ─────────────── */
 function massWith(key,i){ const o=D[key]; D[key]=i; const m=derived().mass; D[key]=o; return m; }
-
-/* ══ EVERY BENCH WIDGET DECLARES ITS OWN HEIGHT ══
-   A parameter plate has to be LAID OUT before anything is drawn into it - how
-   many columns it needs is a question about how tall the stack is - so the
-   height of each widget has to be knowable without drawing it. Each helper
-   returns through the same constant the plate measures with, so the two cannot
-   drift: change the widget and the packer changes with it. */
-const optListH=arr=>16+arr.length*25;
-const SEGSEL_H=39, SLDF_H=52, READF_H=34, TOGGLE_H=28;
-
-/* ── THE ROW'S OWN BORDER GOES, ON BOTH OF THESE AND ON toggleF() BELOW ──
-   An option row, a segmented choice and a fit-toggle are the three things you
-   pick on the bench, and each was outlined in C.edge unchosen and C.amber (or
-   C.green) chosen. The chosen one already carries a lit fill, a lit label and,
-   on optList, a lit marker - the outline was a fourth cue for a state that was
-   already said three times, and it is why the outline goes even where the state
-   colour would otherwise have kept it under frame()'s own rule. */
-
-/* the ground a marker sits on, lifted clear of the row behind it: an unlit
-   radio was C.panelHi and a hovered row is ALSO C.panelHi, so hovering a row
-   made its own marker vanish - the control disappearing exactly when you
-   reached for it. Shared by the radio and the checkbox below. */
-const markGround=(mark,row)=>mark===row?C.rail:mark;
-
-function optList(x,y,w,title,arr,key,tip){
-  rule(title,x,y+9,w); TIP(x,y-4,w,14,title,tip);
-  const tot=arr.map((o,i)=>massWith(key,i)), lo=Math.min(...tot);
-  arr.forEach((o,i)=>{
-    const by=y+16+i*25, on=D[key]===i;
-    const wd=push({x,y:by,w,h:23,type:"btn",fn:()=>D[key]=i});
-    const row=on?"#2a1f08":(hov(wd)?C.panelHi:C.panel);
-    fillRect(x,by,w,23,row);
-    dot(x+8,by+8,7, on?C.amber:markGround(C.panelHi,row));
-    /* optically centred on the MARKER's own box, not on the row - a fixed drop
-       cannot do that once the two widgets carry different type sizes */
-    const ly=midBase(by+8,7,8.5);
-    txt(o.name,x+22,ly,{size:8.5,sp:.3,color:on?C.amber:C.ink});
-    const dm=tot[i]-lo;
-    txt("+"+dm.toFixed(0)+"t",x+w-7,ly,
-      {size:8,align:"right",color:dm<1?C.green:(on?C.amber:C.ink2)});
-    TIP(x,by,w,23,o.name,(o.note||"")+
-      "  Total plant mass with this option: "+tot[i].toFixed(0)+" t"+
-      (dm<1?" - the lightest choice in this group."
-           :", which is "+dm.toFixed(0)+" t more than the lightest choice."));
-  });
-  return y+optListH(arr);
-}
-function segSel(x,y,w,title,labels,key,tip,base){
-  rule(title,x,y+9,w); TIP(x,y-4,w,14,title,tip);
-  const n=labels.length, cw=(w-(n-1)*4)/n;
-  const tot=labels.map((L,i)=>massWith(key,(base||0)+i)), lo=Math.min(...tot);
-  labels.forEach((L,i)=>{
-    const bx=x+i*(cw+4), v=(base||0)+i, on=D[key]===v;
-    const wd=push({x:bx,y:y+16,w:cw,h:23,type:"btn",fn:()=>D[key]=v});
-    fillRect(bx,y+16,cw,23,on?"#2a1f08":(hov(wd)?C.panelHi:C.panel));
-    txt(L,bx+cw/2,y+28,{size:9,sp:.5,align:"center",color:on?C.amber:C.ink});
-    txt("+"+(tot[i]-lo).toFixed(0)+"t",bx+cw/2,y+37,
-      {size:6.5,align:"center",color:tot[i]-lo<1?C.green:C.ink2});
-  });
-  return y+SEGSEL_H;
-}
-/* key is a plain D field name in every existing call - a string is `D[key]`
-   read and written directly. A pump's own size is not a top-level D field,
-   it is one entry in D.pumpSize keyed by that pump's id, so key may also be
-   a {get,set} pair for exactly that case: every other caller is untouched. */
-function sliderF(x,y,w,title,key,min,max,fmt,tip,step,massFn){
-  const isKey=typeof key==="string", get=isKey?()=>D[key]:key.get, set=isKey?v=>D[key]=v:key.set;
-  rule(title,x,y+9,w);
-  const wd=slider(x,y+28,w,get(),min,max,{fn:v=>set(step?Math.round(v/step)*step:v)});
-  /* this number is the slider's readout, it just lives in the panel rather than in
-     the row, so it answers a hover the same way a strip readout does */
-  const r=sldRead(wd,fmt);
-  txt(r.s,x+w,y+48,{size:10,align:"right",color:r.col});
-  if(massFn){ const dm=massFn(get())-massFn(min);
-    txt("+"+dm.toFixed(0)+"t",x,y+48,{size:9,color:dm<1?C.green:C.ink2}); }
-  TIP(x,y-4,w,54,title,tip);
-  return y+SLDF_H;
-}
-/* a bench readout with no control under it: a number the other sliders caused.
-   Same rule/value geometry as sliderF so a column of the two lines up. */
-function readF(x,y,w,title,val,tip){
-  rule(title,x,y+9,w);
-  txt(val,x+w,y+30,{size:10,align:"right",color:C.cyan});
-  TIP(x,y-4,w,36,title,tip);
-  return y+READF_H;
-}
-function toggleF(x,y,w,label,key,mass,tip){
-  const on=D[key];
-  const wd=push({x,y,w,h:28,type:"btn",fn:()=>D[key]=!D[key]});
-  /* THE ROW IS DRAWN 23 TALL, CENTRED IN THE 28 IT IS GIVEN. TOGGLE_H is what
-     the plate packer RESERVES for this widget and is not this function's to
-     change, so it stays 28; but a fit-toggle beside a 23-tall optList row read
-     a fifth taller for no reason anyone chose - just TOGGLE_H being 28. The 5
-     spare units become space between one toggle and the next instead. The
-     click target stays the full 28, so nothing about reaching for it changes.
-     An unlit row was C.panel, the plate's own colour, so with its outline gone
-     there was nothing left to say it was a row at all - C.well replaces it. */
-  const row=on?"#0f2018":(hov(wd)?C.panelHi:C.well);
-  fillRect(x,y+2,w,23,row);
-  /* SAME SIZE AND SAME LEFT MARGIN AS THE RADIO ABOVE - 7x7 at x+8 - so the two
-     controls read as one kind of thing, a marker in a row, rather than two
-     different widgets that happen to sit near each other. It stays a SQUARE:
-     the radio is round because it is a pick-one list and this is a
-     fit-it-or-not switch, and that is the distinction shape is carrying now
-     that neither has an outline. */
-  fillRect(x+8,y+10,7,7, on?C.green:markGround(C.edge2,row));
-  const mo={size:8,align:"right",color:C.ink2}, mt="+"+mass+"t";
-  const ly=midBase(y+10,7,8);
-  fitTxt(label,x+22,ly,w-29-tw(mt,mo)-6,{size:8,sp:.3,color:on?C.green:C.ink});
-  txt(mt,x+w-7,ly,mo);
-  TIP(x,y,w,28,label+(on?"  [ FITTED ]":"  [ not fitted ]"),tip+"  Costs "+mass+" tonnes.");
-  return y+TOGGLE_H;
-}
 
 function planStats(d){ return [
   ["POWER DENSITY",d.dens.toFixed(0)+" kW/L",clamp(d.dens/320,0,1),C.cyan,
@@ -187,15 +73,8 @@ function layoutWarnings(M){ const w=[];
   return w;
 }
 
-/* one source of truth for "may this design be built" and "has it changed since it was" */
 function designIssues(d,M){ return (d||derived()).warn.concat(layoutWarnings(M||layoutMetrics())); }
 function designBlocked(d,M){ return designIssues(d,M).some(w=>w[0]==="HARD"); }
-/* Worst warning colour a single component owns, or null - read by the bench's
-   per-component warning circle (plant.js) and its plate heading (inspector.js).
-   A component walled in with no access is its own trigger (paramsFor's own NO
-   ACCESS note reads p.access the same way) rather than a duplicate entry in
-   designIssues(), which keeps the aggregate M.access warning text there as one
-   line instead of splitting it per component. */
 function warnFor(id){
   const p=LAY.parts.find(q=>q.id===id);
   if(p && !p.access && p.grp!=="shield") return C.red;
@@ -204,34 +83,7 @@ function warnFor(id){
   return w.some(q=>q[0]==="HARD")?C.red:C.amber;
 }
 
-/* ══ RIGHT-CLICK, HELD STILL AND RELEASED: ADD OR REMOVE ══
-   The fittable parts (layout.js) can be on the grid or not - everything else
-   is always there. "Not fitted" for one of these means gone, not a ghost box
-   left standing: see fittableList() for why. This is a second, quicker way to
-   flip one than reaching its own plate - the CONTAINMENT dropdown, the
-   ACCUMULATOR checkbox and the TURBINE/CONDENSER sliders all still work too,
-   and none of them forget their own setting while unfit.
-   A row is a plain {label,fn} action rather than the fittable entry itself,
-   so a COOLANT LOOP - a count with a floor of 1, not an on/off part - reads
-   as two more rows of the same shape instead of a special case of its own.
-   The list is asked for fresh here rather than held, so it always reflects
-   whatever the click landed on.
-
-   A SPARE PUMP or a JUNCTION is not a fittable slot - there is no fixed
-   place for either of them, which is the entire point (see the general
-   part-placement spec). So the menu has to know what the click was actually
-   OVER before it can offer the right row: empty grid space offers ADD SPARE
-   PUMP; a placed spare (never the loop's own static pump - that one is
-   structural) offers REMOVE SPARE PUMP; a loop's own cold leg offers ADD
-   JUNCTION TO LOOP n for every OTHER loop that exists; an existing junction's
-   own tap point offers REMOVE JUNCTION. openCtxMenu() resolves all of that
-   once, at the moment of the click, and stores it on ctxMenu - ctxItems()
-   only ever reads what was already found. */
-let ctxMenu=null;
-/* which loop a newly placed pump belongs to, for loopFlowK()'s per-loop
-   capacity sum (step.js) - the loop whose own pump sits nearest the cell the
-   player clicked, baked onto the part once at placement rather than
-   recomputed, so it cannot change out from under a group mid-game. */
+/* right-click, held still and released: add or remove - see .claude/CLAUDE.md */
 function nearestLoop(gx,gy){
   let best=0, bd=1e9;
   for(let i=0;i<D.loops;i++){ const pu=LAY.parts.find(q=>q.id==="pump"+i);
@@ -240,19 +92,14 @@ function nearestLoop(gx,gy){
     if(d<bd){ bd=d; best=i; } }
   return best;
 }
-function openCtxMenu(p){
-  if(screen!=="design") return;
+function ctxResolveDesign(p){
   const pt=vIn(p)?vPt(p):null;
-  if(!pt){ ctxMenu=null; return; }
+  if(!pt) return null;
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
   const part=LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h);
   let junction=null;
   for(const jid in D.junc){ const j=D.junc[jid];
     if(Math.hypot(j.x-pt.x,j.y-pt.y)<10){ junction=jid; break; } }
-  /* a cold leg's own key names the loop it belongs to (cold:sg0b-pump0t, or
-     cold:pump0b-coreb once that loop has no pump of its own) - regexed out
-     rather than carried as a separate field, because pipeNetwork() already
-     builds this exact string for every other reader of a run's identity */
   let coldLoop=null, tapPt=null;
   if(!part && !junction) for(const r of pipeNetwork()){
     if(!r.key || !r.key.startsWith("cold:")) continue;
@@ -260,25 +107,25 @@ function openCtxMenu(p){
     if(near.d<8){ const m=r.key.match(/(?:sg|pump)(\d+)/);
       if(m){ coldLoop=+m[1]; tapPt=near.pt; } break; }
   }
-  ctxMenu={x:p.x,y:p.y,cell:{gx,gy},part,junction,coldLoop,tapPt};
+  return {x:p.x,y:p.y,cell:{gx,gy},part,junction,coldLoop,tapPt};
 }
-function ctxItems(){
+function ctxItemsDesign(hit){
   const items=fittableList().map(f=>({label:(f.get()?"REMOVE ":"FIT ")+f.label, fn:()=>f.set(!f.get())}));
   if(D.loops<4) items.push({label:"ADD STEAM GEN LOOP", fn:()=>{ D.loops++; }});
   if(D.loops>1) items.push({label:"REMOVE STEAM GEN LOOP", fn:()=>{ D.loops--; }});
-  if(!ctxMenu) return items;
-  if(ctxMenu.junction){
-    const jid=ctxMenu.junction;
+  if(!hit) return items;
+  if(hit.junction){
+    const jid=hit.junction;
     items.push({label:"REMOVE JUNCTION", fn:()=>{ removeJunction(jid); }});
-  } else if(ctxMenu.part && ctxMenu.part.id.startsWith("pumpX")){
-    const pid=ctxMenu.part.id;
+  } else if(hit.part && hit.part.id.startsWith("pumpX")){
+    const pid=hit.part.id;
     items.push({label:"REMOVE SPARE PUMP", fn:()=>{ removePart(pid); }});
-  } else if(ctxMenu.coldLoop!=null){
-    const a=ctxMenu.coldLoop, tp=ctxMenu.tapPt;
+  } else if(hit.coldLoop!=null){
+    const a=hit.coldLoop, tp=hit.tapPt;
     for(let j=0;j<D.loops;j++) if(j!==a)
       items.push({label:"ADD JUNCTION TO LOOP "+(j+1), fn:()=>{ addJunction(a,j,tp[0],tp[1]); }});
-  } else if(!ctxMenu.part){
-    const {gx,gy}=ctxMenu.cell;
+  } else if(!hit.part){
+    const {gx,gy}=hit.cell;
     if(gx>=0 && gy>=0 && gx<GW && gy<GH) items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
       placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
         grp:"loop"+nearestLoop(gx,gy),tip:"A spare coolant pump, placed where you put it.",
@@ -287,46 +134,15 @@ function ctxItems(){
   }
   return items;
 }
-function drawCtxMenu(){
-  if(!ctxMenu) return;
-  const items=ctxItems(), rh=20, w=190, h=items.length*rh+8;
-  let x=Math.min(ctxMenu.x,W-4-w), y=Math.min(ctxMenu.y,H-4-h);
-  fillRect(x,y,w,h,C.panel); frame(x,y,w,h,C.edge2);
-  push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach the plant
-  items.forEach((it,i)=>{
-    const iy=y+4+i*rh;
-    button(x+4,iy,w-8,rh-2,it.label,{size:8,sp:.6,fn:()=>{ it.fn(); ctxMenu=null; }});
-  });
-}
-/* The lattice is part of the design, and most of what a pen changes on it is
-   not a D field - a reflector face, a cluster's slot, the active length. So
-   latSig() joins the key, or moving any of them would leave the commissioned
-   plant quietly out of date with the bench and nothing would say so. */
-function designSig(){ return JSON.stringify(D)+"|"+latSig()+"|"
-  +LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";"); }
+ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign});
 
-/* ─────────────── THE FUEL LATTICE, IN PLAN ───────────────
-   The one drawing surface on the bench. A quarter of the core seen from above,
-   with the reactor axis down the LEFT edge and along the BOTTOM, so the corner
-   is the centreline of the machine and the panel reads as the quarter of a
-   section it is. The mirrored three quarters are not drawn: they are the same
-   assemblies, and one place to click per assembly is the point.
-
-   It carries three things at once, on channels that do not compete:
-     the SQUARE     is an assembly, and what it is made of
-     the DOT SIZE   is local flux - the same channel coreField() uses, so the
-                    plan and the section say "power" with the same ink
-     the ARCS       are the mesh rings the revolve sorts it into, which is the
-                    only way to see why an assembly you moved two slots landed
-                    somewhere else entirely
-
-   Everything is drawn inside a clip of the grid: the rim is a circle centred
-   on a corner and three quarters of it belong to nobody. */
+/* ─────────────── THE FUEL LATTICE, IN PLAN (canvas - genuinely graphical) ───────────────
+   Hosted inside a small <canvas> in the CORE and RODS panels via hostRect():
+   the shared drawing primitives (fillRect/txt/frame/dot...) are all wired to
+   the one page canvas, so this still paints there, positioned to land inside
+   the placeholder's own box every frame - see hostRect() in plant.js. */
 const LATPEN={tool:"fuel",bank:0,hover:null,last:null};
 
-/* Flux per mesh ring, from the shape this lattice is predicted to settle into
-   rather than from whatever happens to be commissioned - while you are laying
-   assemblies out you want the flux of the thing on the table. */
 function latRingPhi(){
   const T=corePredict(derived()), phi=T.phiCold, r=new Float64Array(XNR);
   let mx=1e-9;
@@ -337,38 +153,20 @@ function latRingPhi(){
   for(let i=0;i<XNR;i++) r[i]/=mx;
   return r;
 }
-/* No latPeakRing() here, and that is a finding rather than an omission. Marking
-   the peak ring on the plan was drawn, measured and taken out again: the radial
-   flux peaks on the CENTRELINE for every core the bench can lay out - stock,
-   compact, flat, and even one with a nine-slot hole punched through the middle
-   of it, where ring 0 has no fuel in it at all and still reads 1.00. A thermal
-   flux does peak in a water hole, so that is right rather than broken, but it
-   makes "peak ring" a readout that says 0 forever. What actually moves with the
-   drawing is the SHAPE, and the plan already draws that: the dot in each
-   assembly is the flux at its own radius. */
 const latRingOf=(u,v)=>Math.min(XNR-1,
   Math.floor(Math.hypot(u+.5,v+.5)*LAT.pitch/LM.dr));
-/* Flux at an assembly rather than at its ring: interpolated between ring
-   CENTRES, so an assembly reads its own radius instead of stepping with the
-   whole annulus it sits in. It stops there on purpose - the solve is
-   axisymmetric, so two assemblies at the same radius have the same flux, and
-   drawing them differently would invent structure the plant has not got. */
 function latSlotPhi(u,v,ph){
   const t=Math.hypot(u+.5,v+.5)*LAT.pitch/LM.dr-0.5;
   const i0=Math.floor(t), f=clamp(t-i0,0,1);
   const a=ph[clamp(i0,0,XNR-1)], b=ph[clamp(i0+1,0,XNR-1)];
   return a+(b-a)*f;
 }
-/* what share of the CORE this one assembly makes. The x4 is load-bearing: the
-   axis runs along the corner of slot 0,0, so this quarter mirrors into four
-   DISTINCT assemblies and a quarter sum reads four times high. */
 function latShare(u,v,ph){
   let tot=0;
   for(let a=0;a<LQ;a++) for(let b=0;b<LQ;b++)
     if(LAT.slot[LIX(a,b)]) tot+=latSlotPhi(a,b,ph);
   return tot>1e-9? latSlotPhi(u,v,ph)/(4*tot) : 0;
 }
-
 function latAct(u,v,shift){
   const q=LIX(u,v);
   if(LATPEN.tool==="fuel"){
@@ -387,19 +185,11 @@ function latAct(u,v,shift){
   latRevolve();
 }
 
-/* The plan is square-ish: the grid is w-15 wide with 6 taken off the height so
-   its gutter line clears whatever sits under it, then a caption line. */
-const latPlanH=w=>w-5;
-function latPlan(x,y,w,tool){
-  if(tool) LATPEN.tool=tool;
-  const AX=15;                                  // gutter the centrelines live in
-  /* the grid is a few pixels shy of square so its gutter line clears the
-     MEASURED band that runs along the foot of the inspector */
-  const gx=x+AX, gy=y, gw=w-AX, gh=w-AX-6;
-  /* Headroom past the last slot, because the rim passes through the far CORNER
-     of the outermost assembly and that corner is further from the axis than
-     the lattice is wide. Size to LQ exactly and the rim is clipped off at the
-     two places it matters most. */
+/* x,y,w,h are the placeholder's own screen box, already converted to plant
+   layout units by hostRect() - see dbSync(). */
+function latPlan(x,y,w,h){
+  const AX=15;
+  const gx=x+AX, gy=y, gw=w-AX, gh=h-6;
   const cs=gh/(LQ+0.6), p=LAT.pitch, ph=latRingPhi();
   const hv=LATPEN.hover, hRing=hv? latRingOf(hv.u,hv.v) : -1;
   let rMax=0;
@@ -407,7 +197,7 @@ function latPlan(x,y,w,tool){
     if(LAT.slot[LIX(u,v)]) rMax=Math.max(rMax,Math.hypot(u+1,v+1)*p);
 
   fillRect(gx,gy,gw,gh,C.well);
-  const CX=gx, CY=gy+gh;                        // the machine axis, in pixels
+  const CX=gx, CY=gy+gh;
   ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,gw,gh); ctx.clip();
   if(hRing>=0){
     const r0=hRing*LM.dr/p*cs, r1=(hRing+1)*LM.dr/p*cs;
@@ -416,7 +206,7 @@ function latPlan(x,y,w,tool){
     ctx.fillStyle="rgba(240,168,48,.10)"; ctx.fill();
   }
   ctx.strokeStyle="rgba(95,210,226,.16)"; ctx.lineWidth=1;
-  for(let i=1;i<XNR;i++){                       // XNR would land on the rim
+  for(let i=1;i<XNR;i++){
     ctx.beginPath(); ctx.arc(CX,CY,i*LM.dr/p*cs,-Math.PI/2,0); ctx.stroke();
   }
   if(rMax>0){
@@ -435,15 +225,6 @@ function latPlan(x,y,w,tool){
     ctx.beginPath(); ctx.arc(X+cs/2,Y+cs/2,r,0,7);
     ctx.fillStyle=ink; ctx.globalAlpha=s===L_POIS?.9:.55; ctx.fill(); ctx.globalAlpha=1;
     if(rod>=0){
-      /* SOLID, not a hairline box. A slot is 14px on this panel and the cell is
-         already framed, so a second frame inside the first read as a slightly
-         thicker edge rather than as a cluster - the banks were all but
-         invisible. A cluster is a lump of absorber dropped into the lattice, so
-         it is drawn as a block of metal with dark type on it. The 3px inset
-         leaves the fuel/poison colour showing as a ring, so the assembly under
-         it can still be read.
-         Amber only while you are holding that bank: amber is the interactive
-         colour, and a board of permanently amber clusters spends it on nothing */
       const on=LATPEN.tool==="rod"&&LATPEN.bank===rod;
       fillRect(X+3,Y+3,cs-6,cs-6,on?C.amber:C.metal);
       txt(String(rod+1),X+cs/2,Y+cs/2+3,
@@ -452,13 +233,6 @@ function latPlan(x,y,w,tool){
   }
   ctx.restore();
   frame(gx,gy,gw,gh,C.edge);
-  /* centrelines last and running past the grid, the way a drawing marks an
-     axis - drawn before the frame they are simply painted over by it */
-  /* The overhang is what makes them read as axes rather than as a border, but
-     it is measured against the COLUMN, not against the grid: the plan column is
-     x..x+w and anything past that is the next column's. Eight pixels to the
-     left ran into the rotated axis label and three to the right sat on the
-     column edge; the vertical tail ran down into the caption line below. */
   ctx.save(); ctx.setLineDash([9,3,2,3]);
   line(CX,gy-3,CX,CY+5,C.rail,1); line(gx-AX+9,CY,gx+gw,CY,C.rail,1);
   ctx.restore();
@@ -466,10 +240,10 @@ function latPlan(x,y,w,tool){
   txt("REACTOR AXIS",0,0,{size:6,sp:1.2,align:"center",color:C.rail});
   ctx.restore();
 
-  const wd=push({x:gx,y:gy,w:gw,h:gh,type:"lat",fn:(pt,e)=>{
+  const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
     const u=Math.floor((pt.x-gx)/cs), v=LQ-1-Math.floor((pt.y-gy)/cs);
     if(u<0||u>=LQ||v<0||v>=LQ) return;
-    const id=u+","+v; if(id===LATPEN.last) return;   // one act per slot per drag
+    const id=u+","+v; if(id===LATPEN.last) return;
     LATPEN.last=id; latAct(u,v,e&&e.shiftKey);
   }});
   LATPEN.hover=null;
@@ -479,13 +253,6 @@ function latPlan(x,y,w,tool){
   }
   if(!ui.drag) LATPEN.last=null;
 
-  /* One caption line, and it must fit the 157px the grid is wide - the two
-     strings that used to be here ran 180px and 220px, straight across the
-     gutter and into the pen column beside them. Measured, not eyeballed: a
-     6.5px monospace glyph is 4.4px wide here, so this line gets about 35
-     characters and no more. fitTxt() is the guard rather than the fix - the
-     strings themselves are short now, and what came off them (arcs are mesh
-     rings, the dot is flux) is already said by the tooltip, at length. */
   if(hv) fitTxt("S "+hv.u+","+hv.v+"  RING "+hRing+
       "  r"+(Math.hypot(hv.u+.5,hv.v+.5)*p).toFixed(2)+"m"+
       (LAT.slot[LIX(hv.u,hv.v)]
@@ -495,48 +262,9 @@ function latPlan(x,y,w,tool){
   else fitTxt(latCount()+" ASSEMBLIES / DOT IS FLUX",
       gx,gy+gh+11,gw,{size:6.5,sp:.5,color:C.ink2});
   TIP(gx,gy,gw,gh,"FUEL LATTICE / QUARTER PLAN",
-    "The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius. A ring you leave part empty fades in the control room's flux view too, so a hole you draw here is a hole you can still see while you are operating it.");
-  return y+latPlanH(w);
+    "The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius.");
 }
 
-/* The pen, carrying only the tools that belong to the component it is mounted
-   on: the core inspector lays fuel and poison, the rod drives place clusters.
-   That is the same rule the control room uses for its strips - a control lives
-   on the machine it drives - and it is also why the tool cannot be left in a
-   state the panel you are looking at has no use for. */
-/* The pen is a row of tools, and the cluster pen carries a second row of banks
-   under it - so its height depends on which tool is in your hand. latTools()
-   normalises the tool the same way before it draws, so the two agree. */
-const latPenTool=tools=>tools.some(t=>t[1]===LATPEN.tool)?LATPEN.tool:tools[0][1];
-const latToolsH=tools=>39+(latPenTool(tools)==="rod"?23:0);
-function latTools(x,y,w,tools){
-  rule("PEN",x,y+9,w,C.amber); TIP(x,y-4,w,14,"PEN",
-    "What clicking on the plan does. Every tool is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross.");
-  let ty=y+16;
-  if(!tools.some(t=>t[1]===LATPEN.tool)) LATPEN.tool=tools[0][1];
-  const bw=(w-(tools.length-1)*4)/tools.length;
-  tools.forEach((t,i)=>{
-    /* flat + a darker resting ground: the CHOSEN tool already carries an amber
-       fill and amber type, so its outline was a fourth cue, and the unchosen
-       ones sat on C.panel - the plate's own colour - so with the outline gone
-       they had no ground until you hovered them. base:C.well gives them one. */
-    button(x+i*(bw+4),ty,bw,19,t[0],
-      {on:LATPEN.tool===t[1],size:7,sp:.3,fn:()=>{LATPEN.tool=t[1];},flat:true,base:C.well});
-    TIP(x+i*(bw+4),ty,bw,19,t[0]+" PEN",t[2]);
-  });
-  ty+=23;
-  if(LATPEN.tool==="rod"){
-    const cw=(w-12)/4;
-    for(let b=0;b<4;b++){
-      button(x+b*(cw+4),ty,cw,19,"BANK "+(b+1),
-        {on:LATPEN.bank===b,size:6.5,sp:.2,fn:()=>{LATPEN.bank=b;},flat:true,base:C.well});
-      TIP(x+b*(cw+4),ty,cw,19,"BANK "+(b+1),
-        "Which bank the clusters you draw belong to. A bank is a group of clusters that move together, so it is the unit the panel gives a slider to and the unit SPLIT mode drives one at a time. Draw clusters at different radii into different banks and you can lean the flux; put them all in one and there is nothing to lean against. Worth is decided by where the clusters sit, not by how many you fit.");
-    }
-    ty+=23;
-  }
-  return y+latToolsH(tools);
-}
 const LATPEN_CORE=[
   ["FUEL","fuel",
    "Lay an assembly, or lift one out. Every square is four assemblies in the finished core, because the axis runs along the corner of the first slot. Rated power, core diameter and H/D are all counted off this, so an outer square is worth far more than an inner one - it carries a bigger annulus."],
@@ -548,127 +276,286 @@ const LATPEN_RODS=[
    "Drop a control cluster into an assembly, in whichever bank is selected below. The cluster is drawn as a block with its bank number on it. Count buys no worth - a fully inserted bank covers the core once however many you fit - so what you are choosing here is how near the flux each bank sits, and how many things can jam."],
 ];
 
-/* ── the pen, working in bulk ──
-   A preset is the pen doing in one click what you would otherwise draw slot by
-   slot, so it is drawn as a row of pen-sized keys. It sits at the FOOT OF THE
-   LAST COLUMN in both inspectors, which is where it fits: the plan takes a
-   whole column, the pen and the section dimensions take another and the two
-   option lists take the last two, and a 232px box has one spare row in it and
-   only in column four. Same place on both panels, so it is learnt once.
-
-   One row, two callers - the lattice presets on the core and the bank spreads
-   on the drives. Each key is an ACT, not a mode, so none of them is ever drawn
-   lit: nothing here is a state you are in. */
-const LATROW_H=19;
-function latBulkRow(x,y,w,label,items){
-  const lo={size:6.5,sp:.7,caps:1,color:C.ink2}, lw=tw(label,lo)+6;
-  txt(label,x,midBase(y,19,6.5),lo);
-  const n=items.length, bw=(w-lw-(n-1)*4)/n;
-  items.forEach((it,i)=>{
-    const bx=x+lw+i*(bw+4);
-    button(bx,y,bw,19,it[0],{size:6.5,sp:.2,fn:it[2],flat:true,base:C.well});
-    TIP(bx,y,bw,19,it[0],it[1]);
-  });
-  return y+LATROW_H;
-}
-const latPreRow=(x,y,w)=>latBulkRow(x,y,w,"LATTICE",
-  LATPRE.map((p,i)=>[p[0],p[2],()=>latPreset(i)]));
-/* Spreading the banks re-lays every cluster, so it is the one act on this
-   panel that throws away a plan you drew by hand. It says so, and there are
-   four of it rather than one, because how many banks you want is the whole
-   question - fewer banks sit nearer the flux and are worth more; more banks
-   are what tilt trim and SPLIT mode need to have something to lean against. */
-const latBankRow=(x,y,w)=>latBulkRow(x,y,w,"SPREAD",[1,2,3,4].map(n=>[String(n),
-  "Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
-  (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
-      :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
-  ()=>{ latLayBanks(n); latRevolve(); }]));
-
-/* The four things the section still gets to say. Dimension bars, not sliders:
-   the bar is the extent of the thing and the figure beside it is what that
-   extent measures, so there is no track and no thumb to mistake for one. */
+const LATREFL=["NONE","STEEL","BERYL","GRAPH"];
 const LATDIMS=[
   ["ACTIVE LENGTH","len",0.6,5.0,v=>v.toFixed(2)+" m",
-   "How tall the fuel column is. Against the diameter the lattice revolves to, this is the core's H/D - which used to be a slider that a diameter was then computed backwards out of."],
+   "How tall the fuel column is. Against the diameter the lattice revolves to, this is the core's H/D."],
   ["RIM REFLECTOR","reflR",0,3,v=>v.toFixed(1)+" cells",
-   "Reflector thickness around the side of the core. One cell is worth most of what a reflector has to give and the two after it are diminishing returns - but every one of them is weighed, so a thick band of steel is real tonnage."],
+   "Reflector thickness around the side of the core. One cell is worth most of what a reflector has to give and the two after it are diminishing returns - but every one of them is weighed."],
   ["LID REFLECTOR","reflT",0,3,v=>v.toFixed(1)+" cells",
    "Reflector over the top. Its own face with its own albedo, so a bare lid leaks whatever the rim happens to be doing."],
   ["FLOOR REFLECTOR","reflB",0,3,v=>v.toFixed(1)+" cells",
    "Reflector under the core. Leave it bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
 ];
-const LATREFL=["NONE","STEEL","BERYL","GRAPH"];
-const latDimRackH=()=>38+LATDIMS.length*20;
-function latDimRack(x,y,w){
-  rule("SECTION",x,y+9,w,C.cyan); let ty=y+15;
-  /* the reflector MATERIAL sits with the three thicknesses that dimension it,
-     because between them they are one decision: what the band is and how much
-     of it there is */
-  { const cw=(w-12)/4;
-    LATREFL.forEach((L,i)=>button(x+i*(cw+4),ty,cw,19,L,
-      {on:D.refl===i,size:6.5,sp:.2,fn:()=>{D.refl=i;},flat:true,base:C.well}));
-    TIP(x,ty,w,19,"REFLECTOR MATERIAL",
-      "What the band around the core is made of; the three thicknesses below decide how much of it there is. Beryllium and graphite reflect better per tonne and nudge the void coefficient positive; steel is dense, so a thick steel band is real tonnage on the budget.");
-    ty+=23; }
-  LATDIMS.forEach(d=>{
-    const v=LAT[d[1]], t=clamp((v-d[2])/(d[3]-d[2]),0,1);
-    const wd=push({x,y:ty,w,h:20,type:"sld",min:d[2],max:d[3],cy:ty+10,val:v,tw_:8,
-      fn:nv=>{ LAT[d[1]]=clamp(nv,d[2],d[3]); latRevolve(); }});
-    wd.tx=x+t*w;
-    txt(d[0],x,ty+7,{size:6.5,sp:.7,caps:1,color:C.ink2});
-    fillRect(x,ty+11,w,1,C.edge2);
-    fillRect(x,ty+9,Math.max(2,t*w),5,hov(wd)?C.amber:C.cyan);
-    txt(d[4](v),x+w,ty+7,{size:7.5,align:"right",color:C.cyan});
-    TIP(x,ty,w,20,d[0],d[5]);
-    ty+=20;
-  });
-  return y+latDimRackH();
-}
 
-/* ── the numbers that used to be sliders ──
-   A band across the FOOT of the inspector rather than a column, because there
-   is no column to spare: the plan takes one, the pen and the section
-   dimensions take another, and the reactor and fuel families take the last
-   two. Across the bottom they also read as what they are - the answer the
-   whole panel above came to, rather than one more thing to set. */
 const LATREAD=[
   ["RATED POWER",()=>D.power.toFixed(0)+" MWt",
-   "Not chosen. Fuel volume times the power density your family and pitch buy. Lay one more assembly and this rises by that annulus - and an outer one is worth far more than an inner one."],
+   "Not chosen. Fuel volume times the power density your family and pitch buy. Lay one more assembly and this rises by that annulus."],
   ["CORE H / D",()=>D.hd.toFixed(2),
-   "The shape the lattice revolves to, against the active length you dimensioned. It used to be a slider that a diameter was computed backwards out of."],
+   "The shape the lattice revolves to, against the active length you dimensioned."],
   ["LATTICE PITCH",()=>(LAT.pitch*100).toFixed(1)+" cm",
-   "Assembly spacing, in centimetres - a real dimension now rather than a ratio. Tighter under-moderates: stronger, safer moderator feedback but less thermal margin."],
+   "Assembly spacing, in centimetres. Tighter under-moderates: stronger, safer moderator feedback but less thermal margin."],
   ["BURNABLE POISON",()=>D.poison.toFixed(0)+" pcm",
-   "The volume mean of the pins you placed. The bench used to sell you the mean and invent the shape; now you place the shape and the mean is counted."],
+   "The volume mean of the pins you placed."],
   ["CORE DIAMETER",()=>LM.dia.toFixed(2)+" m",
-   "The equal-area diameter of the fuel you laid out - the smooth cylinder holding the same assemblies. The ragged corner past it is what the reflector and the albedo boundary are for."],
+   "The equal-area diameter of the fuel you laid out."],
   ["ASSEMBLIES",()=>String(latCount()),
-   "How many fuel assemblies the core has. The plan shows a quarter of them: the axis runs along the corner of the first slot, so every square you place is four assemblies in the finished core."],
+   "How many fuel assemblies the core has. The plan shows a quarter of them."],
 ];
-/* These used to run in a BAND along the foot of a 736-wide inspector, six of
-   them abreast at 118px each. A plate column is 158px, so a band would give
-   each figure 26px to say a four-digit number with a unit in - they are a
-   label-and-value LIST now, which is exactly what a plate row already is, so
-   they are drawn by plateRows() and not by a second copy of it. */
-const latReadH=rows=>15+(rows||LATREAD).length*PLROW;
-function latReadRows(x,y,w,rows){
-  rows=rows||LATREAD;
-  rule("MEASURED",x,y+9,w,C.cyan);
-  plateRows(x,y+15,w,rows.map(r=>[r[0],r[1](),r[3]?r[3]():C.cyan]));
-  rows.forEach((r,i)=>TIP(x,y+15+i*PLROW,w,PLROW,r[0]+"  [ MEASURED ]",r[2]));
-  return y+latReadH(rows);
-}
-/* the rod drives ask for different numbers, and every one of them is a
-   consequence of where the clusters went */
 const LATREAD_RODS=[
   ["CONTROL BANK WORTH",()=>D.rodw.toFixed(0)+" pcm",
-   "Measured, not bought: the bank is driven fully in and the flux-weighted worth is read straight off the solve. Move a cluster inward and this rises, because that is where the flux is. Note that the NUMBER of clusters does not change it - full insertion covers the core once however many you fit - so the handles are the absorber material and how near the flux you put them."],
+   "Measured, not bought: the bank is driven fully in and the flux-weighted worth is read straight off the solve. The handles are the absorber material and how near the flux you put the clusters, not their count.",
+   ()=>null],
   ["ROD BANKS",()=>String(D.nbank),
-   "How many distinct banks your clusters are grouped into. One bank cannot tilt anything, because a tilt needs something to lean against.",
-   ()=>D.nbank<2?C.amber:C.cyan],
+   "How many distinct banks your clusters are grouped into. One bank cannot tilt anything.",
+   ()=>D.nbank<2?"var(--c-amber)":null],
   ["CLUSTER RINGS",()=>String(LM.chan.length),
-   "How many of the fourteen mesh rings have a cluster somewhere in them. This is what the solver actually sees of your plan: two clusters in the same ring are one channel to it."],
+   "How many of the fourteen mesh rings have a cluster somewhere in them.",
+   ()=>null],
   ["SHUTDOWN MARGIN",()=>derived().sdm.toFixed(0)+" pcm",
-   "How firmly the BANK ALONE holds the core down once it cools and the xenon decays. Usually negative, and that is not a fault - rods do not win that argument on a real plant either, which is what boron is for. The bench only blocks a design when full boration cannot hold it either.",
-   ()=>derived().sdm<200?C.red:C.green],
+   "How firmly the BANK ALONE holds the core down once it cools and the xenon decays.",
+   ()=>derived().sdm<200?"var(--c-red)":null],
 ];
+
+/* ══════════ HTML: the component panel rail ══════════ */
+function paramBlockMk(block){
+  switch(block.kind){
+    case "optlist": {
+      const set=v=>{ D[block.key]=v; };
+      const root=KIT.el("div","db-block");
+      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
+      const ol=KIT.optList(block.items,{onSelect:i=>set(block.base+i)});
+      root.appendChild(ol.el);
+      return {el:root,sync(){
+        const deltas=block.items.map((_,i)=>massWith(block.key,block.base+i));
+        const lo=Math.min(...deltas);
+        ol.set(D[block.key]-block.base, deltas.map(v=>v-lo));
+      }};
+    }
+    case "segsel": {
+      const root=KIT.el("div","db-block");
+      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
+      const ss=KIT.segSel(block.labels,{onSelect:i=>{ D[block.key]=block.base+i; }});
+      root.appendChild(ss.el);
+      return {el:root,sync(){
+        const deltas=block.labels.map((_,i)=>massWith(block.key,block.base+i));
+        const lo=Math.min(...deltas);
+        ss.set(D[block.key]-block.base, deltas.map(v=>v-lo));
+      }};
+    }
+    case "slider": {
+      const isKey=typeof block.key==="string";
+      const get=()=>isKey?D[block.key]:block.key.get();
+      const set=v=>{ const sv=block.step?Math.round(v/block.step)*block.step:v;
+        if(isKey) D[block.key]=sv; else block.key.set(sv); };
+      const row=KIT.sliderRow({title:block.title,min:block.min,max:block.max,step:block.step,
+        fmt:block.fmt,massFn:!!block.massFn,tip:block.tip,onChange:set});
+      return {el:row.el,sync(b){
+        row.el.style.display=b.when&&!b.when()?"none":"";
+        const v=get();
+        row.set(v,null,b.massFn?b.massFn(v)-b.massFn(block.min):undefined);
+      }};
+    }
+    case "readout": {
+      const r=KIT.readout({title:block.title,tip:block.tip});
+      return {el:r.el,sync(b){ r.set(typeof b.val==="function"?b.val():b.val); }};
+    }
+    case "toggle": {
+      const t=KIT.toggle({label:block.title,mass:block.mass,tip:block.tip,onToggle:()=>{ D[block.key]=!D[block.key]; }});
+      return {el:t.el,sync(){ t.set(D[block.key]); }};
+    }
+    case "note": {
+      const p=KIT.el("p","db-note");
+      return {el:p,sync(b){
+        const v=b.dyn?b.dyn():{text:b.text,color:b.color};
+        if(p.textContent!==v.text) p.textContent=v.text;
+        p.style.color=v.color||"";
+      }};
+    }
+    case "readlist": {
+      const box=KIT.el("div","db-readlist");
+      return {el:box,sync(b){ fieldRowsSync(box, b.rows()); }};
+    }
+    case "sdmnote": {
+      const seg=KIT.seg({cells:18});
+      const p=KIT.el("p","db-note");
+      const wrap_=KIT.el("div","db-block"); wrap_.append(seg.el,p);
+      return {el:wrap_,sync(){
+        const d=derived(), s = d.sdm<200 ? "Not enough. After a trip it creeps back to power."
+                                         : "Enough to hold this core down after a trip, cold.";
+        seg.set(clamp(d.sdm/2000,0,1), d.sdm<200?"var(--c-red)":"var(--c-green)");
+        p.textContent=s;
+      }};
+    }
+    case "bulkrow": {
+      const root=KIT.el("div","db-bulkrow");
+      const lab=KIT.el("span","db-bulkrow-lab"); lab.textContent=block.label;
+      root.appendChild(lab);
+      for(const it of block.items){
+        const b=KIT.button(it.name,{size:6.5,onClick:it.fn});
+        KIT.tip(b.el,it.name,it.tip);
+        root.appendChild(b.el);
+      }
+      return {el:root,sync(){}};
+    }
+    case "lattools": {
+      const root=KIT.el("div","db-block");
+      const r=KIT.rule("PEN"); root.appendChild(r.el);
+      KIT.tip(r.el,"PEN","What clicking on the plan does. Every tool is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross.");
+      const row=KIT.el("div","db-toolrow");
+      const btns=block.tools.map(t=>{
+        const b=KIT.button(t[0],{size:7,onClick:()=>{ LATPEN.tool=t[1]; }});
+        KIT.tip(b.el,t[0]+" PEN",t[2]); row.appendChild(b.el); return {b,k:t[1]};
+      });
+      root.appendChild(row);
+      const bankRow=KIT.el("div","db-bankrow");
+      const bankBtns=[0,1,2,3].map(b=>{
+        const bt=KIT.button("BANK "+(b+1),{size:6.5,onClick:()=>{ LATPEN.bank=b; }});
+        KIT.tip(bt.el,"BANK "+(b+1),"Which bank the clusters you draw belong to. Draw clusters at different radii into different banks and you can lean the flux; put them all in one and there is nothing to lean against.");
+        bankRow.appendChild(bt.el); return bt;
+      });
+      root.appendChild(bankRow);
+      return {el:root,sync(){
+        if(!block.tools.some(t=>t[1]===LATPEN.tool)) LATPEN.tool=block.tools[0][1];
+        btns.forEach(o=>o.b.set({on:LATPEN.tool===o.k}));
+        const showBank=LATPEN.tool==="rod";
+        bankRow.style.display=showBank?"":"none";
+        if(showBank) bankBtns.forEach((bt,i)=>bt.set({on:LATPEN.bank===i}));
+      }};
+    }
+    case "latdimrack": {
+      const root=KIT.el("div","db-block");
+      const r=KIT.rule("SECTION"); root.appendChild(r.el);
+      const refl=KIT.segSel(LATREFL,{onSelect:i=>{ D.refl=i; }});
+      root.appendChild(refl.el);
+      const rows=LATDIMS.map(d=>{
+        const sl=KIT.sliderRow({title:d[0],min:d[2],max:d[3],step:(d[3]-d[2])/200,fmt:d[4],tip:d[5],
+          onChange:v=>{ LAT[d[1]]=clamp(v,d[2],d[3]); latRevolve(); }});
+        root.appendChild(sl.el);
+        return {sl,d};
+      });
+      return {el:root,sync(){
+        refl.set(D.refl);
+        rows.forEach(({sl,d})=>sl.set(LAT[d[1]],null));
+      }};
+    }
+    case "latplan": {
+      const cv2=KIT.el("canvas","db-latplan-canvas");
+      cv2.width=1; cv2.height=1;
+      return {el:cv2,sync(){}};   // painted by dbSync() via hostRect(), not here
+    }
+    default: return {el:KIT.el("div"),sync(){}};
+  }
+}
+function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||"")).join("|"); }
+function dbPanelSync(container,blocks){
+  const sig=blockSig(blocks);
+  if(sig!==container._sig || !container._h){
+    container.innerHTML="";
+    container._h=blocks.map(b=>{ const h=paramBlockMk(b); container.appendChild(h.el); return h; });
+    container._sig=sig;
+  }
+  blocks.forEach((b,i)=>{ const h=container._h[i]; if(h&&h.sync) h.sync(b); });
+}
+
+/* one panel per component (or gang) */
+function dbRailBuild(rail){
+  rail.innerHTML="";
+  const panels=[], gangs={};
+  for(const p of LAY.parts){
+    const B=paramsFor(p); if(!B.length||B.plain) continue;
+    if(B.gang){
+      const g=gangs[B.gang];
+      if(g){ g.ids.push(p.id); g.well.setTitle(g.p.name.replace(/ \d+$/,"")+" x"+g.ids.length); continue; }
+      const well=KIT.well({title:p.name}); rail.appendChild(well.el);
+      const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
+      const h={p,ids:[p.id],well,body,B};
+      gangs[B.gang]=h; panels.push(h);
+    } else {
+      const well=KIT.well({title:p.name}); rail.appendChild(well.el);
+      const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
+      panels.push({p,ids:[p.id],well,body,B});
+    }
+  }
+  const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
+  const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
+  return {panels,results,review};
+}
+function dbRailSync(state){
+  for(const h of state.panels){
+    const on=h.ids.includes(sel);
+    h.well.el.classList.toggle("on",on);
+    const cur=paramsFor(LAY.parts.find(q=>q.id===h.p.id)||h.p);
+    dbPanelSync(h.body,cur);
+  }
+  { const rd=benchResultsData();
+    const body=state.results.body;
+    if(!body.firstChild){
+      const mass=KIT.el("div","db-mass"); body.appendChild(mass);
+      const massBar=KIT.seg({cells:48}); body.appendChild(massBar.el);
+      const massVal=KIT.el("div","db-mass-val"); body.appendChild(massVal);
+      const statBox=KIT.el("div","db-stats"); body.appendChild(statBox);
+      body._h={massVal,massBar,statBox};
+    }
+    const {massVal,massBar,statBox}=body._h;
+    massBar.set(clamp(rd.mass/BUDGET,0,1), rd.over?"var(--c-red)":(rd.mass/BUDGET>.9?"var(--c-amber)":"var(--c-green)"));
+    massVal.textContent=rd.mass.toFixed(0)+" / "+BUDGET+" t   EQUIPMENT "+rd.eq.toFixed(0)+
+      "t   PIPING+SHIELD "+rd.ship.toFixed(0)+"t   CORE "+rd.dens.toFixed(0)+" kW/L   EXCESS "+rd.excess.toFixed(0)+" pcm";
+    massVal.style.color=rd.over?"var(--c-red)":"";
+    statRowsSync(statBox, rd.stats);
+  }
+  { const rv=benchReviewData();
+    const body=state.review.body;
+    if(!body._list) body._list=(()=>{ const d=KIT.el("div","db-review-list"); body.appendChild(d); return d; })();
+    const list=body._list, sig=rv.issues.map(w=>w[1]).join("|");
+    if(list._sig!==sig){
+      list.innerHTML=""; list._sig=sig;
+      if(!rv.issues.length){ const ok=KIT.el("p","db-review-ok");
+        ok.textContent="NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT"; list.appendChild(ok); }
+      for(const w of rv.issues){
+        const row=KIT.el("div","db-review-row "+(w[0]==="HARD"?"hard":"warn"));
+        const tag=KIT.el("span","db-review-tag"); tag.textContent=w[0]==="HARD"?"BLOCK":"WARN";
+        const txt2=KIT.el("span"); txt2.textContent=w[1];
+        row.append(tag,txt2); list.appendChild(row);
+      }
+    }
+    state.review.el.classList.toggle("blocked",rv.hard);
+  }
+}
+
+let DB=null;
+function dbBuild(){
+  const mount=document.getElementById("scr-design");
+  if(!mount) return null;
+  const root=KIT.el("div","db-root");
+  const head=KIT.el("div","db-head");
+  const cap=KIT.el("span","db-head-cap");
+  cap.textContent="longitudinal section, looking to port / up is up / click a component to configure it, drag to move it";
+  const arr=KIT.button("AUTO-ARRANGE",{size:8,onClick:()=>{ LAY=null; layoutMetrics(); }});
+  KIT.tip(arr.el,"AUTO-ARRANGE","Resets every component to its default position.");
+  head.append(cap,arr.el);
+  const rail=KIT.el("div","db-rail");
+  root.append(head,rail);
+  mount.appendChild(root);
+  return {root,rail,state:null};
+}
+function dbSync(){
+  if(!DB) return;
+  if(DB.rail._layFit!==LAY) { DB.state=dbRailBuild(DB.rail); DB.rail._layFit=LAY; }
+  dbRailSync(DB.state);
+  /* the fuel lattice plan is genuinely graphical and stays canvas, hosted at
+     the placeholder's own screen box - see hostRect() in plant.js */
+  document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>{
+    const r=hostRect(cv2); if(r.w>4 && r.h>4) latPlan(r.x,r.y,r.w,r.h);
+  });
+}
+if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
+
+function drawDesign(){
+  dbSync();
+  const railBox=DB? hostRect(DB.rail) : null;
+  const vy=76, vh=Math.max(120,H-vy-4);
+  const vw = railBox ? Math.max(200, railBox.x-GX-8) : (W-2*GX);
+  drawPlant(vy,null,vh,GX,vw);
+  drawCtxMenu();
+}

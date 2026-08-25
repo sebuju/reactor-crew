@@ -1,0 +1,106 @@
+/* Control room and design bench: HTML rails around a plant view that is
+   still drawn on the one page canvas. The canvas keeps receiving pointer
+   events everywhere except the rail itself, so the plant still pans, zooms
+   and drags underneath these panels - see hostRect() in render/plant.js. */
+body[data-screen="operate"] #scr-operate,
+body[data-screen="design"] #scr-design{pointer-events:none}
+
+.cr-root,.db-root{position:absolute;inset:30px 0 0 0;display:grid;
+  grid-template-columns:1fr 300px;grid-template-rows:auto 1fr;pointer-events:none}
+
+/* ─────────────── control room ─────────────── */
+.cr-vitals{grid-column:1;grid-row:1;pointer-events:auto;display:flex;flex-direction:column;
+  width:270px;margin:4px 0 0 4px;background:var(--c-panel);border:1px solid var(--c-edge)}
+.cr-vital{display:grid;grid-template-columns:88px 1fr 60px;align-items:center;gap:6px;
+  padding:2px 8px;border-bottom:1px solid rgba(120,180,190,.05);cursor:pointer}
+.cr-vital:last-child{border-bottom:0}
+.cr-vital.on{background:rgba(240,168,48,.1)}
+.cr-vital-lab{font-size:var(--t7);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cr-vital-val{font-size:var(--t8);text-align:right;white-space:nowrap}
+.kit-seg-marks{position:absolute;inset:0}
+
+.cr-alarms{position:absolute;left:6px;top:118px;pointer-events:auto;max-width:220px;
+  background:rgba(7,12,13,.92);border:1px solid var(--c-edge2);display:none}
+.cr-alarms-head{display:flex;justify-content:space-between;padding:4px 8px;
+  font-size:var(--t7);letter-spacing:1.2px;color:var(--c-amber)}
+.cr-alarms-body{max-height:220px;overflow-y:auto}
+.cr-alarm-row{display:none;align-items:center;gap:6px;padding:2px 8px;font-size:var(--t7-5);
+  font-weight:700;letter-spacing:.6px}
+.cr-alarm-row.lit{display:flex;color:var(--c-ink-on-lit)}
+.cr-alarm-row.lit.red{background:var(--c-red)}
+.cr-alarm-row.lit.amber{background:var(--c-amber)}
+.cr-alarm-row.lit:not(.red):not(.amber){background:var(--c-blue)}
+.cr-alarm-dot{display:none}
+
+.cr-banner{position:absolute;left:6px;right:306px;top:6px;pointer-events:none;
+  padding:8px;text-align:center;font-size:var(--t12);font-weight:700;letter-spacing:2px;
+  text-transform:uppercase;display:none}
+.cr-banner.melt{background:var(--c-bg-melt);color:var(--c-red)}
+.cr-banner.trip{background:var(--c-bg-trip);color:var(--c-amber)}
+
+.cr-rail{grid-column:2;grid-row:1/3;overflow-y:auto;pointer-events:auto;
+  background:var(--c-panel);border-left:1px solid var(--c-edge2);padding:6px}
+.cr-ops{margin-bottom:8px}
+.cr-op{background:var(--c-well);border:1px solid var(--c-edge);margin-bottom:4px}
+.cr-op>summary{cursor:pointer;padding:5px 8px;font-size:var(--t7-5);letter-spacing:1.4px;
+  text-transform:uppercase;color:var(--c-ink2)}
+.cr-op[open]>summary{color:var(--c-amber)}
+.cr-trend-canvas{display:block;width:100%;height:150px}
+.cr-log,.cr-dmg,.cr-flt{padding:6px 8px 8px}
+.cr-empty{font-size:var(--t8);letter-spacing:1px;color:var(--c-ink2);text-align:center;margin:8px 0}
+.cr-log-row{padding:4px 0;border-top:1px solid var(--c-edge)}
+.cr-log-row:first-child{border-top:0}
+.cr-log-t{font-size:var(--t7);color:var(--c-ink2);margin-right:6px}
+.cr-log-m{font-size:var(--t8-5);font-weight:700}
+.cr-log-row.alarm .cr-log-m{color:var(--c-red)}
+.cr-log-row.warn .cr-log-m{color:var(--c-amber)}
+.cr-log-w{margin:2px 0 0;font-size:var(--t8);color:var(--c-ink2)}
+.cr-dmg-card{padding:6px 8px;margin-bottom:4px;background:var(--c-panel);border:1px solid var(--c-edge2);cursor:pointer}
+.cr-dmg-card.blocked{border-color:var(--c-red);cursor:default}
+.cr-dmg-card.busy{border-color:var(--c-amber)}
+.cr-dmg-name{font-size:var(--t8-5);color:var(--c-bright)}
+.cr-dmg-state{font-size:var(--t7-5);color:var(--c-ink2)}
+.cr-flt .kit-btn{display:block;width:100%;margin-bottom:4px}
+
+.cr-comp-rail{display:flex;flex-direction:column;gap:6px}
+.cr-panel-body .insp-row{padding:1px 0}
+.kit-well.on{border-color:var(--c-amber)}
+
+/* ─────────────── shared: label+value(+band) row, RESULTS stat row ─────────────── */
+.insp-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:1px 0}
+.insp-row-lab{font-size:var(--t7);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 0 auto;max-width:52%}
+.insp-row-val{font-size:var(--t8-5);text-align:right;white-space:nowrap}
+.insp-row .kit-band{flex:0 0 100%;order:3}
+.insp-stat{display:grid;grid-template-columns:1fr 60px 60px;align-items:center;gap:6px;padding:2px 0}
+.insp-stat-lab{font-size:var(--t7);letter-spacing:.5px;color:var(--c-ink2);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.insp-stat-val{font-size:var(--t8-5);text-align:right;white-space:nowrap}
+
+/* ─────────────── design bench ─────────────── */
+.db-head{grid-column:1;grid-row:1;pointer-events:auto;display:flex;align-items:center;
+  justify-content:space-between;gap:8px;padding:6px 8px}
+.db-head-cap{font-size:var(--t8-5);color:var(--c-ink2)}
+.db-rail{grid-column:2;grid-row:1/3;overflow-y:auto;pointer-events:auto;
+  background:var(--c-panel);border-left:1px solid var(--c-edge2);padding:6px;
+  display:flex;flex-direction:column;gap:6px}
+.db-panel-body{display:flex;flex-direction:column;gap:8px}
+.db-block{display:flex;flex-direction:column;gap:4px}
+.db-note{margin:0;font-size:var(--t8-5);color:var(--c-ink2);line-height:1.4}
+.db-bulkrow{display:flex;align-items:center;gap:4px}
+.db-bulkrow-lab{font-size:var(--t6-5);letter-spacing:.7px;text-transform:uppercase;color:var(--c-ink2)}
+.db-bulkrow .kit-btn{flex:1 1 auto}
+.db-toolrow,.db-bankrow{display:flex;gap:4px}
+.db-toolrow .kit-btn,.db-bankrow .kit-btn{flex:1 1 auto}
+.db-latplan-canvas{display:block;width:100%;aspect-ratio:1/1;pointer-events:none}
+.db-readlist{margin-top:2px}
+.db-mass{font-size:var(--t8-5)}
+.db-mass-val{font-size:var(--t7-5);color:var(--c-ink2);margin-top:4px}
+.db-stats{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.db-review-row{display:flex;gap:8px;padding:3px 0;font-size:var(--t8-5)}
+.db-review-tag{flex:0 0 auto;font-weight:700}
+.db-review-row.hard{color:var(--c-red)}
+.db-review-row.warn{color:var(--c-amber)}
+.db-review-ok{font-size:var(--t8-5);color:var(--c-green)}
+.kit-well.blocked{border-color:var(--c-red)}
