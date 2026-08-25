@@ -306,6 +306,16 @@ console.log('\n=== NO FREE COOLING, NO FREE TRIP RESET ===');
   if(ok || !s.scrammed) bad('resetTrip() accepted while a trip condition was still live');
   console.log(`  resetTrip() with LOW PRESSURE still live: accepted=${ok} (must be false)`);
 }
+/* The veto is the protection system's, so the bypass switch takes it off - the
+   same abuse, the same condition, and only the switch different. */
+{ const s=set({}); run(s,10);
+  s.scrammed=true; s.rodDem=1; s.trip="MANUAL SCRAM";
+  s.P=M.P().P0*0.5;
+  s.byp.rps=true;
+  const ok=M.resetTrip();
+  if(!ok || s.scrammed) bad('resetTrip() refused with the RPS bypassed at the panel');
+  console.log(`  resetTrip() with the same condition but RPS BYPASSED: accepted=${ok} (must be true)`);
+}
 
 /* Every automatic system can be switched off at the panel. Each check below
    proves the switch reaches the physics: the same abuse must land differently

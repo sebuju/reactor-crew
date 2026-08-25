@@ -400,13 +400,18 @@ function tripCause(){
   return "";
 }
 
+/* Why a reset would be refused right now, or "" if it would clear. The button
+   and the panel readout ask the same helper, so the promise cannot drift from
+   the act. The veto belongs to a LIVE protection system: bypassed is the
+   operator taking the check off, exactly as it does for the trip itself. */
+const resetVeto = ()=> (S.scrammed && rpsLive()) ? tripCause() : "";
 /* Clearing a trip is a deliberate act, never a side effect of nudging a slider.
-   With protection fitted the plant holds a veto while a trip condition stands.
-   With none fitted there is nothing to consult, and the risk is entirely yours. */
+   With protection armed the plant holds a veto while a trip condition stands.
+   Bypassed or never fitted, there is nothing to consult, and the risk is yours. */
 function resetTrip(){
   const s=S;
   if(!s.scrammed) return false;
-  const why = P.rps ? tripCause() : "";
+  const why = resetVeto();
   if(why){
     logE("warn","TRIP RESET REFUSED",
       why+" is still present. The latch will not clear until the condition does.");
@@ -415,7 +420,7 @@ function resetTrip(){
   s.scrammed=false; s.trip="";
   logE("info","TRIP RESET",
     "Protection latch cleared by hand. The control bank answers demand again."+
-    (P.rps?"":" Nothing checked the plant first - none was fitted."));
+    (rpsLive()?"":" Nothing checked the plant first - protection is "+rpsState().toLowerCase()+"."));
   return true;
 }
 
