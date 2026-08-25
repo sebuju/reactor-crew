@@ -30,6 +30,12 @@ const CH={
  cav :{lab:"CAVITATION",   u:"",   col:"#f0a830", f:s=>s.cav},
  nat :{lab:"NAT CIRC",     u:"%",  col:"#57d38c", f:s=>s.nat*100},
  rel :{lab:"RELEASE",      u:"%",  col:"#ff5a45", f:s=>s.release},
+ /* Both cost the tape nothing: a trend ring is rebuilt from S every time,
+    never recorded (see the header comment above), so these two are free the
+    same way every other channel here is - they read s.doseRate/s.crewDose,
+    which are themselves derived fresh every tick and never stored either. */
+ rad :{lab:"AREA DOSE",  u:"x", col:"#c8d8dc", f:s=>s.doseRate},
+ cdos:{lab:"WATCH DOSE", u:"%", col:"#8fa9ae", f:s=>s.crewDose},
 };
 /* ══ THE LATCHES LIVE BESIDE THE CHANNELS, NOT IN THEM ══
    A scenario limit is asked of a channel, and "did it trip" is exactly the sort

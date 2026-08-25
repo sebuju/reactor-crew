@@ -24,7 +24,7 @@ function commission(){
      noise:CHAN[D.chan].noise, id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, natCirc:d.natCirc*L.natK, pzrK:D.pzr*L.pzrK,
-     flowK:L.flowK, dose:L.dose, exposure:L.exposure, bypass:.20+.60*D.condCap,
+     flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, boroninj:D.boroninj, efw:D.efw,
      catcher:D.catcher, contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
      turbFit:D.turbFit, condFit:D.condFit, junc:{...D.junc},
@@ -307,11 +307,31 @@ function combatHit(id){
 const repairNeed = p => 14 + p.w*p.h*4;
 function repairStart(id){
   const s=S, p=LAY.parts.find(q=>q.id===id);
-  if(!p || !p.access || s.repair) return;
+  /* partySpent is the fourth refusal, beside "not there", "walled in" and
+     "already out": there is no second party this run, and the dispatch order
+     is simply not carried out - a no-op, the same shape as every other
+     refusal in this block, not a message about why the request was denied. */
+  if(!p || !p.access || s.repair || s.partySpent) return;
   const need=repairNeed(p);
   s.repair={id:p.id,t:0,need};
+  /* Seed repRate here rather than waiting for the next tick's radiation block.
+     Two reasons, and the second is the one that matters: s.repRate is written
+     only inside step(), so between the dispatch and the next tick it still
+     holds the rate of a job that is already over - and the sentence below is
+     composed in exactly that window. A dispatch that quotes the LAST job's
+     field would be wrong in the one place the player is actually reading.
+     The estimate is need/radWorkK, never need: the field does not change how
+     much work a job is, it changes how fast the party can do it, and quoting
+     the raw need would promise a time the sim will not honour. */
+  const f=radSolve(P.radK,radSrc(s));
+  s.repRate=radParty(f,p,occupied(null));
+  const eta=need/radWorkK(s.repRate);
   logE("info","REPAIR PARTY DISPATCHED / "+p.name,
-    "Estimated "+need+" seconds. The party takes dose the whole time, at the rate your layout allows.");
+    "Estimated "+eta.toFixed(0)+" seconds at "+s.repRate.toFixed(2)+
+    "x area dose - "+(s.repRate>RAD_SLOW
+      ? "hot enough that the party works in short shifts, which is why this is longer than the "+need+" s the job itself takes."
+      : "cool enough to work straight through, so this is the job's own "+need+" s.")+
+    " It takes dose the whole time, at the rate of the cell it is standing in.");
 }
 
 /* ── ganging and splitting the banks ──
@@ -427,6 +447,35 @@ const FLOW_TAU=5, FLOW_TAU_COAST=12;    // seconds
 const NAT_FLUX=0.12;                    // mass flux buoyancy gives per unit of heat removal
 /* governor valve stroke plus steam-plant response */
 const LOAD_TAU=2;                       // seconds
+/* ── RADIATION: HOW FAST THE TWO CREWS ARE SPENT ──
+   RAD_DOSE_K is deliberately the same 0.25 the old flat P.dose*0.25*dt line
+   used - what changed with the live field is WHICH number it multiplies
+   (s.repRate, the dose at the cell the party is actually standing in, not a
+   commissioning-time figure for a room on the far side of the plant), never
+   how fast a party spends itself once it is standing somewhere hot.
+   RAD_CREW_K is new: it puts a watch pinned at the RAD_CEIL (3x) ceiling at
+   100% dose in about 100 s, the same order as a serious accident's own
+   timescale on this clock, so the number is something a player can read
+   an emergency against rather than an arbitrary bar filling. */
+const RAD_DOSE_K=0.25, RAD_CREW_K=0.33;
+/* ── HOW A HOT FIELD SLOWS A REPAIR PARTY ──
+   Pillar 4: the game never refuses an order on the grounds that it is a bad
+   idea. A field too hot to work in does not turn the party back - it makes
+   them slower, because they are working in short shifts from behind whatever
+   cover the layout gave them rather than standing in the open the whole time.
+   No penalty at or below RAD_SLOW (a well-shielded default plant is exactly
+   as fast as it always was); half rate at 1.5x, a quarter at 3x, asymptotic
+   to zero but never actually zero - there is always a shift short enough to
+   make some progress in.
+   One helper and not an inline expression because it is read from TWO places
+   that must never be allowed to disagree: the repair block below DOES the
+   slowdown (s.repair.t advances by dt*radWorkK(rate)) and the damage panel
+   PROMISES it (its ETA is need/radWorkK(rate)). CLAUDE.md's own working-style
+   rule is that the number a control displays must match the number it
+   causes - two copies of this formula would let the panel's estimate and the
+   sim's reality drift apart the first time either one was retuned. */
+const RAD_SLOW=0.5;
+const radWorkK = r => 1/(1+Math.max(0,r-RAD_SLOW)/RAD_SLOW);
 /* ── DECAY HEAT ──
    Fission products keep making heat after the chain reaction stops, and they do
    NOT stop. A single lag chasing current power did: it fell to nothing about two
@@ -480,7 +529,19 @@ function resetPlant(){
         model as one placed and left shut. */
      juncOpen:Object.fromEntries(Object.keys(P.junc).map(k=>[k,false])),
      arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:AUTOROD_LO, arHi:AUTOROD_HI,
-     dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false, dLvl:0,
+     dmgParts:[], repair:null, sgtr:false, noiseMul:1,
+     /* Two crews, two places. `dose` is the repair party's own integral - it
+        takes whatever the cell it is STANDING in reads, via s.repRate below.
+        `crewDose` is the control-room watch's, off the crew's own seat
+        (P.radK.crew) - it accumulates whether or not anyone is out on a job,
+        because the watch never leaves. Each gets a RATE as well as an
+        INTEGRAL: the rate is what you steer by (it is what lights HI AREA RAD
+        and what the panel prints this second), the integral is what you
+        actually pay. doseRate starts on P.dose rather than 0 for the same
+        reason every other actuator's demand starts equal to its actual -
+        tick zero must not read a number this plant does not have yet. */
+     dose:0, crewDose:0, doseRate:P.dose, repRate:0, partySpent:false,
+     bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
      flowPos:{hot:0,cold:0,steam:0,exh:0,feed:0,surge:0,hpi:0},
      /* perN/perT/perV are the reactor-period differentiator's own state. They
@@ -776,6 +837,30 @@ function step(dt){
   if(s.melt && !P.catcher){ s.inv-=0.35*dt; s.fatigue=Math.min(100,s.fatigue+1.6*dt); }
   if(s.dmg>0) s.release=Math.min(100,s.release+s.dmg*0.004*P.contRel*P.dose*dt);
 
+  /* ── radiation: a live field, not a commissioning-time number ──
+     Placed here rather than with the demand walks at the top of the tick:
+     this is a derived READOUT, not an actuator, and it needs dmg, melt,
+     breach, release, sgtr, n and decay all settled for THIS tick - which the
+     block above just finished doing - so the event log and the annunciator
+     tile below see the same accident this integrator does.
+     THE FIELD ITSELF IS NEVER STORED. See the header comment in record.js:
+     a snapshot of the plant is a clone of S and nothing else, and a
+     Float64Array parked in a module global would not survive a restore -
+     the futures would diverge and the auditor would have no field to name.
+     So it is solved fresh every tick from radGeom() (memoised on the
+     arrangement, via P.radK) and radSrc(s) (read live off the plant this
+     instant), and only the handful of scalars this tick actually needs come
+     off it before it is thrown away. Nothing here can drift out of step
+     with a snapshot, because nothing here IS a snapshot. */
+  { const f=radSolve(P.radK,radSrc(s));
+    s.doseRate = radAt(f,P.radK.crew);
+    s.crewDose = Math.min(100, s.crewDose + s.doseRate*RAD_CREW_K*dt);
+    /* radParty() wants the coldest free cell next to the JOB, not the job's
+       own footprint - a party works from behind whatever shielding is
+       actually there. No party out, no rate: repRate is a readout of where
+       someone is standing, and nobody is standing anywhere. */
+    s.repRate  = s.repair ? radParty(f, LAY.parts.find(q=>q.id===s.repair.id), occupied(null)) : 0; }
+
   /* ── reactor protection system: trips unless it was never fitted, or is defeated ── */
   if(!s.scrammed && rpsLive()){
     const why=tripCause();
@@ -819,6 +904,12 @@ function step(dt){
     "It lifted on overpressure and did not shut again. Pressurizer level will read HIGH while the loop empties. Close the block valve.");
   ev("void",s.vf>0.15,"alarm","STEAM VOID IN CORE",
     "Steam is forming where liquid should be. It carries almost no heat, so fuel temperature climbs even while reactor power falls.");
+  /* Not latched: the live field falls back below RAD_HI the moment the source
+     that raised it does (a release stops, a repair closes off a jam), and an
+     operator watching this number needs to see it fall, the same way COOLANT
+     PUMP CAVITATION or PRIMARY OVERPRESSURE clear themselves above. */
+  ev("hirad",s.doseRate>RAD_HI,"warn","HIGH RADIATION IN THE SPACE",
+    ()=>"The crew's own seat is reading "+s.doseRate.toFixed(2)+"x background. A party out on the plant right now is taking "+(s.repRate*RAD_DOSE_K).toFixed(3)+" dose a second at the job it is standing next to.");
   ev("pit",-s.parts.xe>3200,"info","XENON PIT",
     "Xenon-135 past 3200 pcm. Raising power may be physically impossible until it decays, whatever you do with the rods.");
   ev("jam",s.rodJam,"alarm","CONTROL RODS NOT RESPONDING",
@@ -833,6 +924,11 @@ function step(dt){
     "Cladding has started to fail and fission products are entering the coolant. Permanent.",1);
   ev("d25",s.dmg>25,"alarm","FUEL DAMAGE 25%",
     "A quarter of the fuel cladding has failed.",1);
+  /* Latched like the fuel-damage and fatigue milestones above it: the watch
+     does not get its dose back by the number dipping under 50% again, so the
+     debrief should not either. */
+  ev("crew50",s.crewDose>50,"alarm","WATCH DOSE PAST 50%",
+    "The control-room watch has taken more than half its dose limit for this run. Nobody relieves them - that number only goes one way from here.",1);
   ev("fat50",s.fatigue>50,"warn","VESSEL FATIGUE PAST 50%",
     ()=>"Thermal shock has embrittled the vessel. Its burst pressure is now "+burst.toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+".",1);
   ev("brk",s.breach,"alarm","VESSEL RUPTURE",
@@ -841,9 +937,34 @@ function step(dt){
     "Over 60% of the fuel has failed and the core is melting. Unrecoverable.",1);
 
   if(s.repair){
-    s.repair.t += dt;
-    s.dose = Math.min(100, s.dose + P.dose*0.25*dt);
-    if(s.repair.t >= s.repair.need){
+    /* Advanced by radWorkK(s.repRate)*dt, never plain dt: a hot field does not
+       turn the party back (pillar 4 - no order is refused on the grounds it
+       is a bad idea), it slows them down, because they are working short
+       shifts from behind whatever cover the layout gives them. s.repair.need
+       stays exactly what repairNeed() sold at dispatch - the slowdown lives
+       entirely in how fast t catches up to it, so the panel's own estimate
+       (need/radWorkK(rate)) and this advance can never read two different
+       numbers for the same job. */
+    s.repair.t += dt*radWorkK(s.repRate);
+    /* The party takes the dose of the place it is STANDING IN, off s.repRate
+       (computed above, off the live field), not the dose of a room on the
+       other side of the plant. That is the whole feature: standing next to
+       a molten core used to cost exactly what standing in the control room
+       cost, because the old line charged the commissioning-time P.dose
+       whatever job was running and wherever it was. */
+    s.dose = Math.min(100, s.dose + s.repRate*RAD_DOSE_K*dt);
+    if(s.dose>=100 && !s.partySpent){
+      /* The party has taken its whole allowance for this run and is pulled
+         out - permanently, the same way fuel damage and vessel fatigue above
+         never heal. There is no second party, so whatever job it was on, and
+         whatever else breaks later this run, is nobody's to fix again.
+         repairStart() reads s.partySpent and refuses every dispatch after
+         this fires, silently, the same shape as its other refusals. */
+      s.partySpent=true;
+      s.repair=null;
+      logE("alarm","REPAIR PARTY WITHDRAWN",
+        "The repair party has taken its full dose allowance for this run and is being pulled off the plant. There is no second party - whatever is still broken, on this job and any that follows, stays broken for the rest of this run.");
+    } else if(s.repair.t >= s.repair.need){
       const k=s.repair.id;
       s.dmgParts = s.dmgParts.filter(q=>q!==k);
       /* the undo is the same row of DMGFX that did the damage, so a part can
@@ -937,6 +1058,16 @@ const ANN=[
   "Main power to the coolant pumps is lost. Flow is now limited to your backup power supply plus whatever natural circulation the core geometry generates.",null],
  ["CORE MELT","red",s=>s.melt,
   "More than 60% of the fuel has failed and the core is melting. Unrecoverable. Reset the plant.","core"],
+ /* appended after every existing entry so no earlier tile's index moves.
+    Reads s.doseRate, the LIVE field at the crew's own seat - not P.dose,
+    the as-built figure the bench quotes. What lit it is both what has
+    FAILED (a release, a melt, a stuck relief valve venting past
+    containment) and where the shielding was actually PLACED at the bench:
+    the same layout that reads comfortable at rest can read this the moment
+    the core starts shining, because nothing about the geometry changed,
+    only the source term did. */
+ ["HI AREA RAD","amber",s=>s.doseRate>RAD_HI,
+  "The control room is reading above 1x background. That number is set both by what has failed on the plant and by where you put the shielding at the bench - a well-shielded control room can sit this out through a release that would light this tile instantly on a poorly sited one. A repair party out on the plant right now is being spent while this is lit, faster the closer the job sits to whatever is shining.","ctrl"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",s=>autoFit(k)&&s.byp[k],
   AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn, AUTOSYS[k].part]));
