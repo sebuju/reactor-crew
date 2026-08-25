@@ -1,7 +1,6 @@
 "use strict";
 /* the reference screen */
 
-/* ─────────────── REFERENCE ─────────────── */
 const HELP=[
  ["h","READING THE DIAGRAM"],
  ["d","PIPE COLOUR","Primary piping is tinted by the water temperature inside it, blue near 520 K and red near 630 K. If hot and cold legs converge in colour, heat is not being removed."],
@@ -45,64 +44,56 @@ const HELP=[
  ["d","THE XENON PIT","Sit at 100 percent, hit SCRAM, then try to return to power immediately. Rods fully out will not do it. Diluting boron is the only way back, and it takes time you would not have in a fight."],
  ["d","THE TMI-2 TRAP","Inject the stuck PORV fault. Pressure falls while pressurizer level rises. The correct move is to watch subcooling collapse, close the block valve, then start HPI, and accept the vessel fatigue."],
 ];
-/* ══ THE FULL BOARD, AS REFERENCE ══
-   This used to be an overlay called ALARMS in the control room, opened by a key
-   over the plant. Twenty-six tiles do not belong on top of a plant view and
-   twenty of them are dark at any moment, so the LIT ones went to a floating
-   stack there and the board came here - where everything else that explains
-   rather than reports already lives.
-   It draws dark on an uncommissioned plant: the reference is worth reading
-   before you have built anything, and a[2] would ask a null plant how it feels. */
-const ANN_COLS=6, ANN_TILE=40;
-const annBoardH=()=>Math.ceil(ANN.length/ANN_COLS)*ANN_TILE;
-function annBoard(x,y,w){
-  const colw=(w+6)/ANN_COLS, tw_=Math.round(colw)-6;
-  ANN.forEach((a,i)=>{
-    const tx=Math.round(x+(i%ANN_COLS)*colw), ty=y+Math.floor(i/ANN_COLS)*ANN_TILE;
-    const on = (P&&S) ? a[2](S) : false;
-    const col=a[1]==="red"?C.red:a[1]==="amber"?C.amber:C.blue;
-    const lit=on&&!(a[1]==="red"&&performance.now()%900<450);
-    fillRect(tx,ty,tw_,34, lit?col:C.panel); frame(tx,ty,tw_,34, lit?col:C.edge);
-    txt(pad(i+1,2),tx+5,ty+11,{size:6.5,color:lit?"#2a0a06":"#2c3f45"});
-    fitTxt(a[0],tx+tw_/2,ty+23,tw_-8,{size:8,weight:700,sp:1.1,align:"center",
-        color:lit?"#120404":"#33484e"});
-    TIP(tx,ty,tw_,34,a[0]+(on?"  [ LIT ]":"  [ clear ]"),a[3]);
-  });
-  return annBoardH();
-}
-function drawHelp(){
-  const maxw=716, o={size:10,color:"#9fb4b9"};
-  ctx.save(); ctx.beginPath(); ctx.rect(0,44,W,H-44); ctx.clip();
-  const run=(from,to)=>{
-    let y=44+30-helpScroll;
-    for(let i=from;i<to;i++){
-      const it=HELP[i];
-      if(it[0]==="h"){ y+=12;
-        if(y>30&&y<H+30) rule(it[1],12,y,maxw,C.amber);
-        y+=22;
-      } else if(it[0]==="ann"){
-        if(y>-annBoardH()&&y<H+30) annBoard(12,y,maxw);
-        y+=annBoardH()+12;
-      } else {
-        const n=wrapCount(it[2],maxw-14,o);
-        if(y>10&&y<H+70){
-          chip(12,y-7,C.cyan);
-          txt(it[1],22,y,{size:9.5,weight:700,sp:1.4,color:C.cyan});
-          wrap(it[2],22,y+15,maxw-14,14,o);
-        }
-        y+=15+n*14+12;
-      }
+/* HELP is HTML now; the array above is still the one source of the prose. */
+let helpAnnTiles=null;
+
+function helpBuildDOM(){
+  const root=document.getElementById("help-doc");
+  if(!root) return;
+  root.innerHTML="";
+  for(const it of HELP){
+    if(it[0]==="h"){
+      const h=document.createElement("div"); h.className="help-h";
+      const s=document.createElement("span"); s.textContent=it[1];
+      h.appendChild(s); root.appendChild(h);
+    } else if(it[0]==="ann"){
+      root.appendChild(helpBuildAnnBoard());
+    } else {
+      const d=document.createElement("div"); d.className="help-d";
+      const t=document.createElement("div"); t.className="help-d-title";
+      const m=document.createElement("span"); m.className="help-chip";
+      t.appendChild(m); t.appendChild(document.createTextNode(it[1]));
+      const p=document.createElement("p"); p.className="help-d-body"; p.textContent=it[2];
+      d.appendChild(t); d.appendChild(p); root.appendChild(d);
     }
-    return y;
-  };
-  const bot=run(0,HELP.length)+helpScroll;
-  helpMax=Math.max(0,bot-H+40);
-  ctx.restore();
-  if(screen==="help") setPageH(bot+40);
-  push({x:0,y:44,w:W,h:H-44,type:"scroll"});
-  if(helpMax>0){
-    fillRect(W-16,48,4,H-56,C.well);
-    const th=Math.max(28,(H-56)*(H-44)/(helpMax+H-44));
-    fillRect(W-16,48+(H-56-th)*(helpScroll/helpMax),4,th,C.amber);
   }
 }
+
+function helpBuildAnnBoard(){
+  const grid=document.createElement("div"); grid.className="help-ann";
+  helpAnnTiles=ANN.map((a,i)=>{
+    const tile=document.createElement("div"); tile.className="ann-tile";
+    tile.dataset.tipTitle=a[0]+"  [ clear ]"; tile.dataset.tipBody=a[3];
+    const num=document.createElement("span"); num.className="ann-num"; num.textContent=pad(i+1,2);
+    const label=document.createElement("span"); label.className="ann-label"; label.textContent=a[0];
+    tile.appendChild(num); tile.appendChild(label); grid.appendChild(tile);
+    return {el:tile,row:a};
+  });
+  return grid;
+}
+
+/* Board draws dark on an uncommissioned plant - a[2](S) must not run without S. */
+function helpSync(){
+  if(screen!=="help" || !helpAnnTiles) return;
+  for(const {el,row} of helpAnnTiles){
+    const on=(P&&S)?row[2](S):false;
+    el.classList.toggle("lit",on);
+    el.classList.toggle("red",row[1]==="red");
+    el.classList.toggle("amber",row[1]==="amber");
+    el.classList.toggle("blue",row[1]!=="red"&&row[1]!=="amber");
+    el.classList.toggle("blink",on&&row[1]==="red");
+    el.dataset.tipTitle=row[0]+(on?"  [ LIT ]":"  [ clear ]");
+  }
+}
+
+function drawHelp(){}
