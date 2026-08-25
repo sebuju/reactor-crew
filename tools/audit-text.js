@@ -1,34 +1,20 @@
 #!/usr/bin/env node
-/* reactor-crew text auditor.
-   Runs every draw function against a stub canvas using real monospace metrics.
-   Catches text outside the content margins, text-on-text collisions, and any
-   runtime error in a draw path -- which a parse check cannot see.
-   Usage:  node tools/audit-text.js
-*/
+// Usage:  node tools/audit-text.js
 const src=require('./bundle').bundle();
 
 const TEXTS=[], RECTS=[];
 function mkctx(){
   const st={font:'10px m',fillStyle:'#000',textAlign:'left',letterSpacing:'0px'};
-  /* sx/sy track ctx.scale(), because the plant is drawn through a view
-     transform now: its text is in PLANT units and lands on the page scaled and
-     offset. Without this the auditor measures the plant at its unscaled size
-     and reports the whole grid as hanging off the right margin. */
+  // sx/sy track ctx.scale(): the plant draws through a view transform, so its
+  // text is in PLANT units and lands on the page scaled and offset
   let tx=0,ty=0,rot=0,sx=1,sy=1; const stack=[];
-  /* ══ THE AUDITOR HAS TO KNOW WHAT IS CLIPPED AWAY ══
-     The bench plate is drawn inside the plant's viewport clip and stands off
-     the edge of a grid that already fills that viewport, so at fit scale it is
-     entirely outside the clip: invisible, not overflowing. Without this the
-     auditor reported all 800-odd of its strings as hanging off the margin.
-     Only ctx.rect() feeds the box - a clip built from any other path leaves it
-     alone, which is the permissive way round: a missed clip costs a false
-     report, a guessed one costs a missed fault. */
+  // clip box built ONLY from ctx.rect() - a clip from any other path is
+  // ignored, the permissive way round: a missed clip costs a false report, a
+  // guessed one costs a missed fault
   let clipBox=null, pend=null;
-  /* Is this string being drawn through the plant's view transform? That view
-     pans and zooms without limit and its content is MEANT to be bigger than the
-     window - seventeen plates standing in four margins do not fit and are not
-     supposed to - so the 12..748 rule cannot be asked of it. Every other check
-     still is, and the collision check is the one that matters there anyway. */
+  // text drawn through the plant's view transform is exempt from the 12..748
+  // margin rule (that content is deliberately bigger than the viewport); the
+  // collision check still applies to it
   const inView=()=>typeof global.__viewOn==='function' && global.__viewOn();
   const outside=(x0,x1,y)=>clipBox &&
     (x1<=clipBox.x0 || x0>=clipBox.x1 || y<=clipBox.y0 || y-12>=clipBox.y1);
@@ -56,8 +42,7 @@ function mkctx(){
         case 'rotate': return r=>{ rot+=r; };
         case 'fillText': return (t2,x,y)=>{
           const w=wOf(t2)*sx, a=st.textAlign, s2=size();
-          if(Math.abs(rot)>1e-6){          // rotated: swap the bounding box axes
-            /* a rotated string is about one em wide, and that em is scaled too */
+          if(Math.abs(rot)>1e-6){          // rotated: swap the bounding box axes, ~1 scaled em wide
             const rx0=tx+x*sx-s2*sx, rx1=tx+x*sx+s2*sx, ry=ty+y*sy;
             if(outside(rx0,rx1,ry)) return;
             TEXTS.push({t:String(t2),x0:rx0,x1:rx1,y:ry,size:s2,screen:CUR,rot:true,view:inView()});
@@ -84,66 +69,51 @@ global.document={getElementById:()=>({getContext:()=>proxy,addEventListener(){},
   createElement:()=>({getContext:()=>proxy}),addEventListener(){}};
 global.window=global; global.performance={now:()=>1000}; global.devicePixelRatio=1;
 global.requestAnimationFrame=()=>{}; global.addEventListener=()=>{};
-/* ══ THE AUDIT MUST GIVE THE SAME ANSWER TWICE ══
-   warmUp() fires combatHit(), which picks its target at random - so which
-   component drew a repair key, and which plate grew a DAMAGED row, changed from
-   run to run. A collision could hide behind a lucky draw, and one already had:
-   the REPAIR key sitting on TILT was found by accident rather than by this
-   file. Seeding Math.random makes the same two components take the hit every
-   run AND keeps the real fault effects the hit sets - a jammed bank, a stuck
-   PORV, a rejected load - which is coverage a hand-written damage list loses.
-   A separate pass below then damages EVERY component at once, which is the
-   worst case for the key and for the rows a damaged plate grows. */
+// seeded so warmUp()'s combatHit() targets are reproducible: the sim's seed
+// is itself drawn from Math.random() in resetPlant(), so pinning this pins
+// every draw under it, and a collision cannot hide behind a lucky target draw
 let rngSeed=20260824;
 Math.random=()=>{ rngSeed=(rngSeed*1103515245+12345)&0x7fffffff;
                   return rngSeed/0x7fffffff; };
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
- '; return {drawDesign,drawOperate,drawOverlay,drawHelp,topbar,commission,step,sample,combatHit,'+
+ '; return {drawDesign,drawOperate,drawScenario,drawOverlay,commission,step,sample,combatHit,'+
+ 'SCN:()=>SCN,setSCN:v=>SCN=v,scnClone,scnNew,scnGest,scnLimit,SCNPRE:()=>SCNPRE,scnRun,scnJudge,'+
+ 'setScnSel:v=>scnSel=v,setScnPlay:v=>scnPlay=v,setScnVerd:v=>scnVerd=v,GESTKEYS:()=>GESTKEYS,'+
  'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
  'setDmg:v=>S.dmgParts=v,'+
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
  'pipeNetwork,pipeWaypoints,nearestOn,placePart,addJunction,removePart,removeJunction,'+
- 'benchPlates,leadPts,leadObs:()=>LEADOBS};')();
+ 'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek};')();
 global.__viewOn=()=>M.vOn();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
-/* A TOOLTIP ONLY DRAWS ON HOVER, so until now nothing in this file ever ran
-   one. That was survivable while a tip was a title and a sentence. It is not,
-   now that a plate row's tip draws the SCALE the number lives on: two end
-   figures, a boundary figure per zone and a label per setpoint, all sized and
-   placed against a box that grew for them.
-
-   Each is captured ALONE. Two tooltip boxes in one frame overlap by
-   construction - only ever one is on screen - so drawing them together reports
-   a stacking order as a collision, which is the same trap the overlays are
-   captured alone for. */
+// a tooltip only draws on hover, so it has to be forced; each is captured
+// alone since only one is ever on screen and two together would report a
+// stacking order as a collision
 function capTips(tag){
-  /* indexed, not titled: a plant carries four shield blocks and the plate and
-     the row that own a condenser are both called CONDENSER, so a name off the
-     title alone drops several boxes into one bucket and the collision check
-     then reports one tooltip lying over another */
+  // indexed, not titled: several boxes can share a title (e.g. CONDENSER),
+  // which would otherwise drop them into one collision bucket
   M.ui().tips.slice().forEach((t,i)=>
     cap(tag+i+':'+(t.title||'?'),()=>{ M.forceTip(t); M.drawTip(); }));
 }
+// recTick() runs directly because nothing in the sim calls the recorder; each
+// warmUp() is also a fresh plant, so a root opens and the branch picker has
+// something to draw in every sweep
 function warmUp(){
   M.commission();
-  for(let i=0;i<300;i++){ M.step(0.02); if(i%5===0) M.sample(); }
+  for(let i=0;i<300;i++){ M.step(0.02); if(i%5===0) M.sample(); M.recTick(); }
   M.combatHit(); M.combatHit();
 }
-/* BEFORE any of that. The bench is reachable with no plant commissioned - P is
-   still null there - and ctlFor() is called on the bench to reserve the control
-   rows, so everything it builds eagerly has to survive that. This exact path
-   threw on P.flowMin and the auditor could not see it, because warmUp() had
-   already commissioned a plant before anything was ever drawn. */
+// before warmUp(), because the bench is reachable with no plant commissioned
+// (P is still null) and has to survive that draw too
 M.setScreen('design');
-cap('precommission:topbar',M.topbar);
 cap('precommission:design',M.drawDesign);
 
 warmUp();
 
 function sweep(tag){
-  M.setScreen('design'); cap(tag+'topbar',M.topbar); cap(tag+'design',M.drawDesign);
+  M.setScreen('design'); cap(tag+'design',M.drawDesign);
   /* Every panel on the control room is an OVERLAY now, and an overlay that is
      shut is a draw path that never runs. Walk them: closed, then one at a time.
      Miss this and six panels go unaudited the day they stop being stacked. */
@@ -156,57 +126,42 @@ function sweep(tag){
      viewport the overlay docks into is already set. */
   for(const o of M.OVL()){ M.ovlSet(o.k); cap(tag+'ovl:'+o.k,M.drawOverlay); }
   M.ovlSet(null);
-  M.setScreen('help'); cap(tag+'help',M.drawHelp);
+  // drawScenario() must run before EACH drawOverlay(), not once before the
+  // loop: it is what calls vBox() and sets the rectangle the overlay docks into
+  M.setScreen('scenario');
+  M.ovlSet(null); cap(tag+'scn',M.drawScenario); capTips(tag+'scn:');
+  for(const o of M.OVL()){ M.ovlSet(o.k); cap(tag+'scnovl:'+o.k,M.drawOverlay); }
+  M.ovlSet(null);
 }
 sweep('');
-/* optional kit changes what the bench and the panel draw, so audit those paths too */
 M.D().rps=false; warmUp(); sweep('norps:'); M.D().rps=true;
-/* The stock sweep leaves the core selected, so it never draws the rod-drive
-   inspector at all - and the split control strip and the per-bank table are the
-   densest text in the plant. Select the rods and walk every mode. */
+// stock sweep leaves the core selected, so it never draws the rod-drive
+// inspector - the densest text in the plant
 warmUp(); M.setSel('rods'); sweep('rods:');
-/* SPLIT with the banks actually apart: the strip grows a row per bank and each
-   row carries a button and a labelled slider in the same width the ganged one
-   gave a slider alone. Four banks is the worst case the bench will sell. */
+// SPLIT with banks apart: a row per bank, four is the worst case
 M.setSplit(true);
 for(let b=0;b<M.S().rodZDem.length;b++) M.S().rodZDem[b]=0.15+b*0.25;
 M.S().bankAuto[1]=false;
 for(let i=0;i<600;i++) M.step(0.02);
 sweep('split:');
-/* mid-regang, which is the one state with a third button label */
 M.setSplit(false); for(let i=0;i<20;i++) M.step(0.02);
-sweep('ganging:');
-/* and the fewest banks, where every row is widest and the labels have most room
-   to be wrong about how many banks there are */
+sweep('ganging:');                 // mid-regang: the one state with a third button label
 M.D().nbank=2; warmUp(); M.setSel('rods'); M.setSplit(true);
 for(let i=0;i<200;i++) M.step(0.02);
 sweep('split2:'); M.D().nbank=4; warmUp(); M.setSel('core');
-/* Both inspectors show only the selected component's panel, so a sweep that never
-   selects a part never draws that part's panel at all. The bench turbine and
-   condenser panels shipped unaudited exactly this way. Walk every part instead of
-   naming the interesting ones - the list is short and it cannot go stale. */
+// each inspector shows only the selected part's panel, so walk every part -
+// the bench turbine and condenser panels once shipped unaudited this way
 warmUp();
-/* Every bench plate is drawn on every pass now, so a sweep no longer has to
-   name a part to reach its parameter blocks. What setSel still changes is which
-   plate is AMBER and which is dim, and the selected plate is the one that grows
-   a highlight - so the walk stays. */
 for(const part of M.parts()) { M.setSel(part.id); sweep('sel:'+part.id+':'); }
 M.setSel('core');
 
-/* FOUR LOOPS. Every loop is built the same, so this is the only plant on which
-   a GANGED plate exists at all - one box for four steam generators and one for
-   four pumps, with the leader swung onto whichever member is selected. A draw
-   path a single-loop plant never reaches, and the layout is denser besides. */
+// four loops: the only plant with a GANGED plate (steam gens, pumps)
 { const L0=M.D().loops;
   M.D().loops=4; warmUp(); M.setSel('sg2'); sweep('loops4:');
   M.D().loops=L0; warmUp(); M.setSel('core'); }
 
-/* JUNCTIONS AND SPARE PUMPS. Neither exists on any default plant, so a
-   junction's valve mark, a spare pump's own symbol and plate are draw paths
-   nothing else here reaches. Two junctions spread across a four-loop plant
-   (0-1 and 2-3, not both crowding the same pair of pumps) plus a spare pump
-   on loop 0 - one of them open, so the meters are not all reading an
-   identical zero. */
+// junctions and a spare pump: neither exists on a default plant, so their
+// valve mark / symbol / plate are draw paths nothing else here reaches
 { const L0=M.D().loops, J0=M.D().junc, PS0=M.D().pumpSize;
   M.D().loops=4; M.D().junc={}; M.D().pumpSize={};
   warmUp();                       // 4-loop LAY exists now, for the tap lookup below
@@ -215,50 +170,89 @@ M.setSel('core');
   M.addJunction(2,3,...tap('cold:sg2'));
   const spare=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',
     grp:'loop0',tip:'A spare coolant pump.',loop:0}));
-  /* warmUp() re-commissions - P.junc has to be baked AFTER the junctions
-     exist, or the control room never sees them - and commission() resets S
-     wholesale, so juncOpen can only be set AFTER this, not before it. */
+  // re-commission after the junctions exist (P.junc bakes from them), then set
+  // juncOpen - commission() would otherwise reset it
   warmUp(); M.S().juncOpen[j0]=true;
   M.setSel(spare.id); sweep('spare:');
   M.setSel('core'); sweep('junc:');
-  /* and broken, because a REPAIR key is drawn across the symbol of a
-     one-cell component and a spare pump is one of the smallest on the grid */
   warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('juncdmg:');
-  /* placedParts (layout.js) is a persistent array outside D, unlike every
-     other field this block restores - removePart() is the only way to
-     take the spare back out, or it goes on lingering into every sweep
-     after this one. */
+  // placedParts is a persistent array outside D; removePart() is the only way
+  // to take the spare back out before the block's other fields are restored
   M.removePart(spare.id);
   M.D().loops=L0; M.D().junc=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
 
-/* A STEERED PIPE. Every leg of a run offers a grip and every placed waypoint
-   offers another, so a run with two waypoints on it draws five where a plain
-   run draws one - each with a tooltip region the bench has to fit around. */
+// a steered pipe: two waypoints draw five grips where a plain run draws one
 { warmUp();
   const key=M.pipeNetwork().find(r=>r.k==='hot').key;
   M.pipeWaypoints[key]=[{x:400,y:500},{x:200,y:300}];
   sweep('wp:');
   delete M.pipeWaypoints[key]; warmUp(); }
 
-/* EVERY component broken at once. This is the worst case the plant can draw:
-   every symbol carries a repair key, every plate grows a STATUS row, and the
-   two margins are as tall as they ever get. Two random hits never reach it. */
+// every component broken at once: the worst case for repair keys and STATUS rows
 warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('alldmg:');
 warmUp();
 
-/* A number that came out NaN or undefined still draws happily - no error, no
-   overflow, just a broken readout sitting on the panel. Nothing caught that
-   before, so it goes here where every draw path is already being walked. */
+// the sweeps above all draw the same scenario (first preset, three events,
+// three limits, never run); these four reach states nothing else does:
+// scnempty - no limits at all; scncrowd - 8 events/1 moment, 12 limits, panel
+// overflow; scnlong - an hour, widest ruler labels; scnfail - a judged FAIL run
+{ const keep=M.SCN();
+  M.setSCN(M.scnNew('empty','EMPTY DRILL')); M.setScnVerd(null); M.setScnSel(-1);
+  sweep('scnempty:');
+
+  { const c=M.scnNew('crowd','CROWDED DRILL'); c.secs=120;
+    for(let i=0;i<8;i++) M.scnGest(c,30,'note','EVERYTHING AT ONCE '+i);
+    const chs=['dnbr','tf','tavg','prs','sub','lvl','inv','flow','load','rod','fq','trip'];
+    chs.forEach((k,i)=>M.scnLimit(c,k,k,i%2?'>':'<',1,0.5));
+    M.setSCN(c); M.setScnSel(0); M.setScnPlay(30); sweep('scncrowd:'); }
+
+  { const l=M.scnNew('long','THE LONG WATCH'); l.secs=3600;
+    M.scnGest(l,1800,'loadRamp',60,120); M.scnLimit(l,'dnbr','dnbr','>',1.3,0.5);
+    M.setSCN(l); M.setScnSel(-1); M.setScnPlay(3600); sweep('scnlong:'); }
+
+  // judged and FAILING: limits tight enough that the default plant cannot
+  // hold them, so the loss-only columns are all populated
+  { const f=M.scnClone(M.SCNPRE()[0]); f.secs=40;
+    f.limits=[]; M.scnLimit(f,'dnbr','dnbr','>',9,0);
+    M.scnLimit(f,'tavg','tavg','<',1,0); M.scnLimit(f,'pwr','pwr','>',999,0);
+    M.scnLimit(f,'trip','trip','<',1,0); M.scnLimit(f,'inv','inv','>',99.9,0.5);
+    const r=M.scnRun(f);
+    M.setSCN(f); M.setScnVerd(r.verdict); M.setScnSel(-1); M.setScnPlay(20);
+    sweep('scnfail:'); }
+
+  M.setSCN(keep); M.setScnVerd(null); M.setScnSel(-1); M.setScnPlay(0); warmUp(); }
+
+// the tape mid-scrub: every sweep above draws it LIVE (no replay keys, no
+// fork marks, a picker of roots only), so build a tree here - four takes, two
+// deep, one root forked twice, replay parked half way down a branch
+{ warmUp();
+  const rec=n=>{ for(let i=0;i<n;i++){ M.simTick(); M.recTick(); } };
+  rec(500);
+  const root=M.REC().takes[M.REC().cur];
+  const t1=M.recBranch(root.id,root.tick0+200); rec(400);
+  const t2=M.recBranch(t1.id,  t1.tick0+150);   rec(300);
+  M.recBranch(root.id,root.tick0+320);          rec(200);
+  t1.label="LOW FLOW DRILL";
+  // a real verdict object, not a hand-written string, so a shape change in
+  // scnJudge breaks this fixture instead of silently drawing [object Object]
+  t1.verdict=M.scnJudge(t1,[{id:"dnbr",ch:"dnbr",cmp:">",v:0.1,grace:0}]);
+  M.seek(t2.id,t2.tick0+120);                   // replay, half way down a branch
+  sweep('tape:');
+  // and the strip with no tape at all - lasts no frames in the real game
+  // (recTick() runs before every draw) but is still a branch a throw can hide in
+  { const c=M.REC().cur; M.REC().cur=-1;
+    M.setScreen('operate'); M.ovlSet(null);
+    cap('notape:plant',M.drawOperate); capTips('notape:plant:');
+    M.REC().cur=c; }
+}
+
+// a NaN/undefined value draws happily with no error - only this check catches it
 console.log('=== BROKEN VALUES IN DRAWN TEXT ===');
 { let n=0;
   for(const t of TEXTS) if(/NaN|undefined|Infinity/.test(t.t)){
     console.log(`  [${t.screen}] "${t.t.slice(0,60)}"`); n++; }
   console.log(n?`  ${n} broken value(s)`:'  none'); }
 
-/* Every size drawn must be a step of the documented scale. An off-scale size is
-   somebody typing a number instead of picking one, and it is also how fitTxt()
-   would show up if it ever shrank a label to something arbitrary. TSCALE is the
-   scale itself, imported rather than copied. */
 console.log('\n=== TEXT OFF THE DOCUMENTED TYPE SCALE ===');
 { const scale=M.TSCALE(); let n=0; const seen={};
   for(const t of TEXTS) if(!scale.includes(t.size) && !seen[t.size]){
@@ -267,9 +261,6 @@ console.log('\n=== TEXT OFF THE DOCUMENTED TYPE SCALE ===');
   console.log(n?`  ${n} off-scale size(s)`:'  none'); }
 
 console.log('\n=== TEXT OUTSIDE THE 12..748 CONTENT MARGINS ===');
-/* the margin rule is a PAGE rule - panels, bars, overlays, the head. The plant
-   view is a pannable window onto a drawing deliberately larger than it, so its
-   strings are counted and reported here, never failed. */
 let n=0, inv=0;
 for(const t of TEXTS){
   if(t.view){ if(t.x0<11.5||t.x1>748.5) inv++; continue; }
@@ -292,40 +283,6 @@ for(const k in byScreen){
   }
 }
 console.log(n?`  ${n} collision(s)`:'  none');
-
-/* ══ NO LEADER IS DRAWN THROUGH ANYTHING ══
-   The route is searched now rather than assumed, so whether it worked is a
-   measurement and not an opinion. Every leader on the bench is chopped into its
-   segments and each is tested against every obstacle the router was given - the
-   components, the empty slots, the other plates, the grid's own captions - minus
-   the two rectangles that leader is allowed inside, which are its own ends.
-   A leader that fell back to the old midpoint route WILL be reported here, and
-   that is the point: the fallback is a last resort, not a quiet default. */
-console.log('\n=== LEADERS DRAWN THROUGH SOMETHING ===');
-{ M.setScreen('design'); M.setSel('core'); cap('leadcheck',M.drawDesign);
-  const obs=M.leadObs(); let bad=0;
-  const hit=(a,b,o)=>{                       // axis-aligned segment vs rectangle
-    const x0=Math.min(a[0],b[0]), x1=Math.max(a[0],b[0]);
-    const y0=Math.min(a[1],b[1]), y1=Math.max(a[1],b[1]);
-    return x1>o.x+.5 && x0<o.x+o.w-.5 && y1>o.y+.5 && y0<o.y+o.h-.5;
-  };
-  for(const q of M.benchPlates()){
-    /* the RESULTS and REVIEW plates belong to the whole design and point at no
-       component, so they have no leader to measure - they are still in the
-       obstacle set, which is what the plates that DO have one are tested against */
-    if(q.free) continue;
-    const pts=M.leadPts(q), mine=["@"+q.p.id,(q.lead||q.p).id];
-    for(let i=1;i<pts.length;i++){ let done=false;
-      for(const o of obs){
-        if(mine.includes(o.id)) continue;
-        if(hit(pts[i-1],pts[i],o)){
-          console.log('  '+q.p.name+' -> '+o.id+' at ('+pts[i-1][0].toFixed(0)+','+
-            pts[i-1][1].toFixed(0)+')-('+pts[i][0].toFixed(0)+','+pts[i][1].toFixed(0)+')');
-          bad++; done=true; break; } }
-      if(done) break; }
-  }
-  console.log(bad?'  '+bad+' crossing(s)':'  none');
-}
 
 console.log('\n=== FONT SIZE HISTOGRAM ===');
 const h={}; for(const t of TEXTS) h[t.size]=(h[t.size]||0)+1;
