@@ -1,5 +1,5 @@
 /* Single source of truth for "what code does the page actually run?".
-   Both auditors use this so they can never drift from index.html. */
+   Every auditor goes through this so none of them can drift from index.html. */
 const fs = require('fs'), path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 
