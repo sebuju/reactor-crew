@@ -416,6 +416,12 @@ const ROD_RATE=0.012;                   // fraction of travel per second
 /* actuator rates. Boration is charging-pump flow; dilution has to displace loop
    inventory, so it is slower. Poisoning yourself is easy, getting back out is not. */
 const BOR_IN=60, BOR_OUT=35;            // pcm/s toward more / less boron
+/* The relief valve is a fixed orifice: while it passes, it passes at ONE rate.
+   Named here rather than written into the tick, because the pressurizer's RELIEF
+   FLOW readout and the steam plume drawn on it are both scaled off this number -
+   a literal in the tick would let the picture and the physics drift apart. */
+const PORV_INV=0.55;                    // % of loop inventory per second
+const PORV_DP=0.30;                     // MPa/s at the 15.5 MPa reference pressure
 /* pump rotational inertia, and the longer coastdown once the power is gone */
 const FLOW_TAU=5, FLOW_TAU_COAST=12;    // seconds
 const NAT_FLUX=0.12;                    // mass flux buoyancy gives per unit of heat removal
@@ -487,7 +493,7 @@ function resetPlant(){
         a scripted run; porvArm is the one-shot a scenario sets to command the
         next automatic lift to stick instead of rolling for it. */
      seed:0, rng:0, diceOff:false, porvArm:false,
-     spin:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
+     spin:0,spinT:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
   /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
      new run picks a seed, and from there every die comes off s.rng, so the run
      replays from its own seed. Rolling inside step() instead would put numbers
@@ -701,7 +707,7 @@ function step(dt){
     if(s.porvOpen && s.porvAuto && !s.porvStuck && s.P < P.P0*1.01){
       s.porvOpen=false; s.porvAuto=false;
     }
-    if(s.porvOpen && !s.porvBlocked){ s.P -= 0.30*(P.P0/15.5)*dt; s.inv -= .55*dt; }
+    if(s.porvOpen && !s.porvBlocked){ s.P -= PORV_DP*(P.P0/15.5)*dt; s.inv -= PORV_INV*dt; }
   }
   if(s.hpi){ s.inv=Math.min(100,s.inv+P.hpiRate*dt); s.fatigue+=0.35*dt; }
   if(s.sgtr){ s.inv-=0.30*dt; s.release=Math.min(100,s.release+0.02*P.dose*dt); }
@@ -789,7 +795,17 @@ function step(dt){
     "Coolant is approaching film boiling on the fuel pins. Raise pump flow or pressure, or cut power.");
   ev("dnbr10",s.dnbr<1.00,"alarm","DNBR BELOW 1.00 / CLADDING FAILING",
     "The fuel is now wrapped in insulating steam. Heat is not reaching the water and damage is accumulating this second.");
-  ev("recrit",s.scrammed&&s.rho>-200,"alarm","TRIPPED CORE GOING CRITICAL",
+  /* THE CAUSE IS RAISED BEFORE ITS CONSEQUENCE. These fire in list order within
+     one tick, and a manual scram sets s.scrammed and starts the bank moving in
+     the same tick - so with recrit first the log read "TRIPPED CORE GOING
+     CRITICAL" and only then "REACTOR TRIP", which is the story backwards. */
+  ev("scram",s.scrammed,"alarm","REACTOR TRIP / "+(s.trip||"SCRAM"),
+    "Rods fully inserted and the turbine tripped with them. Xenon now builds and will hold the reactor down for minutes.");
+  /* ...and the rods have to actually BE in. The message says "the bank is in",
+     and for the seconds the drives are still walking after a trip they are not:
+     rho has not had time to go anywhere yet, so without this the alarm fires on
+     every scram, latches, and is spent before the real re-criticality arrives. */
+  ev("recrit",s.scrammed&&s.rodPos>.98&&s.rho>-200,"alarm","TRIPPED CORE GOING CRITICAL",
     ()=>"The bank is in and the reactor is climbing back to critical anyway. The xenon it was shut down by has decayed, and the bank alone is worth "+P.sdm.toFixed(0)+" pcm against it. Borate now - the boron system is worth "+P.sdmB.toFixed(0)+" pcm of margin.");
   ev("cav",s.cav>0.15,"warn","COOLANT PUMP CAVITATION",
     "Water arriving at the pumps is close to boiling, so they are churning vapour. Real flow is far below the bench setting.");
@@ -813,8 +829,6 @@ function step(dt){
     "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call.",true);
   ev("hpi",s.hpi,"info","HPI INJECTING",
     "Emergency water is refilling the loop, and cold shock is ageing the vessel while it runs.");
-  ev("scram",s.scrammed,"alarm","REACTOR TRIP / "+(s.trip||"SCRAM"),
-    "Rods fully inserted and the turbine tripped with them. Xenon now builds and will hold the reactor down for minutes.");
   ev("d1",s.dmg>1,"alarm","FUEL DAMAGE 1%",
     "Cladding has started to fail and fission products are entering the coolant. Permanent.",1);
   ev("d25",s.dmg>25,"alarm","FUEL DAMAGE 25%",
@@ -868,6 +882,11 @@ function step(dt){
      imbalance between two loops the lumped flow model does not carry. */
   for(const id in P.junc) if(juncLive(id)) d["xtie:"+id]+=sp;
   s.spin=(s.spin+360*dt*feff)%360;
+  /* the turbine's own shaft angle. It is on S beside the pump's for the same
+     reason the pump's is: an angle integrated in the renderer would keep
+     turning while the sim is paused, and would not replay. Driven by LOAD -
+     the pumps answer flow, the turbine answers the draw. */
+  s.spinT=(s.spinT+360*dt*Math.min(s.load,1.5))%360;
 }
 /* One pressure colour, for every readout that shows pressure. Both thresholds are
    the annunciator's own, so a gauge can never disagree with the alarm beside it:

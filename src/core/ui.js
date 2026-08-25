@@ -1,6 +1,13 @@
 "use strict";
 
-const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9}};
+/* ptrHost names the canvas ui.ptr is measured in: null for the page canvas, or
+   the element a hosted widget owns (see hostPaint in render/plant.js). Each
+   host has its OWN coordinate space, so a point from one must never be tested
+   against a widget pushed by another - they overlap numerically.
+   ui.host is the one being painted right now: a draw function shared by two
+   hosts needs it to tell its own per-host state apart. */
+const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9},ptrHost:null,host:null};
+function hostScope(el){ ui.host=el; }
 const WPSNAP=8;
 
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
@@ -118,16 +125,17 @@ function drawCtxMenu(){
 
 const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
 
-const push=w=>{ if(viewOn) w.v=1; ui.widgets.push(w); return w; };
+const push=w=>{ if(viewOn) w.v=1; w.host=ui.host; ui.widgets.push(w); return w; };
 const inside=(w,p)=>!!p&&p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
-const hov=w=>inside(w,ptIn(w,ui.ptr))&&!ui.drag;
+const hov=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr))&&!ui.drag;
 
 let touchTip=null, isTouch=false;
 // g is an optional band(): the scale the value in this region lives on, so
 // the tooltip can be checked at a glance instead of just believed
-function TIP(x,y,w,h,title,body,g){ ui.tips.push({x,y,w,h,title,body,g,v:viewOn?1:0}); }
+function TIP(x,y,w,h,title,body,g){ ui.tips.push({x,y,w,h,title,body,g,v:viewOn?1:0,host:ui.host}); }
 function findTip(p){
   for(let i=ui.tips.length-1;i>=0;i--){ const t=ui.tips[i];
+    if(t.host!==ui.ptrHost) continue;
     const q=ptIn(t,p); if(!q) continue;
     if(q.x>=t.x&&q.x<=t.x+t.w&&q.y>=t.y&&q.y<=t.y+t.h) return t; }
   return null;
@@ -168,11 +176,13 @@ function button(x,y,w,h,label,o){
   o=o||{}; const wd=push({x,y,w,h,type:"btn",fn:o.fn});
   const h_=hov(wd);
   const col = o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
-  // o.sunk is a key set into a lighter base: tone alone reads the shape, so
-  // it draws no border (boxing every key in a 46px component read as a cage)
+  // o.sunk is a borderless key: tone alone reads the shape, so it draws no
+  // frame (boxing every key in a 46px component read as a cage). It sits a
+  // shade ABOVE the plinth it stands on - filled with C.well it read as a hole
+  // punched in the component rather than as a key mounted on it.
   // o.base overrides the RESTING fill for a key whose row is otherwise the
   // same colour as the plate under it and would vanish once its border does
-  const base = o.sunk?C.well:(o.base!==undefined?o.base:C.panel), lift = o.sunk?C.panel:C.panelHi;
+  const base = o.sunk?C.edge:(o.base!==undefined?o.base:C.panel), lift = o.sunk?C.edge2:C.panelHi;
   // danger is drawn SOLID (dark text on full red), the way a lit annunciator
   // tile is - SCRAM and the one-shot boron dump are the two keys that must
   // never be found by reading them, only by their colour
@@ -303,8 +313,15 @@ function dblCheck(p,e){
   return dbl;
 }
 cv.addEventListener("contextmenu",e=>{ if(!e.shiftKey) e.preventDefault(); });
-cv.addEventListener("pointerdown",e=>{
-  cv.setPointerCapture(e.pointerId); const p=local(e); ui.ptr=p;
+/* The three pointer handlers are named so uiForward() can bind them to a
+   SECOND element. A widget hosted inside an opaque rail (the fuel lattice
+   plan) sits over #cv but eats its events, so it has to feed the same
+   hit-test loop itself - local() is measured off #cv either way, so the
+   coordinates match the boxes hostPaint() let it push. */
+function uiDown(e){
+  const tgt=e.currentTarget||cv;
+  tgt.setPointerCapture(e.pointerId);
+  const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
   e.dbl=dblCheck(p,e);
   ctxMenu=null;
   // shift+right is the browser's own menu, not a pan; right held-and-dragged
@@ -317,6 +334,7 @@ cv.addEventListener("pointerdown",e=>{
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
     const q=ptIn(w,p); if(!inside(w,q)) continue;
+    if(w.host!==ui.ptrHost) continue;
     if(w.type==="part"){ sel=w.part.id;
       // a commissioned plant is welded down: selectable, not movable; a
       // pinned part rides its parent, so it's selectable but never draggable
@@ -346,9 +364,10 @@ cv.addEventListener("pointerdown",e=>{
   // nothing under the pointer: a click on bare deck deselects, rather than
   // leaving whatever was picked last lit with nothing on screen to justify it
   if(e.button!==2){ sel=null; deselFire(); }
-});
-cv.addEventListener("pointermove",e=>{
-  const p=local(e); ui.ptr=p;
+}
+function uiMove(e){
+  const tgt=e.currentTarget||cv;
+  const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
   if(e.pointerType==="mouse") isTouch=false;
   if(ui.drag){ const d=ui.drag, q=d.v?vPt(p):p;
     if(d.type==="part"){
@@ -376,18 +395,34 @@ cv.addEventListener("pointermove",e=>{
       // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
   }
-  cv.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp") ? "grabbing"
+  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
-});
-cv.addEventListener("pointerup",e=>{
+}
+function uiUp(e){
   const d=ui.drag;
   // right button held and released without dragging the plant is a click,
   // which on the design bench opens the ADD/REMOVE menu
   if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
   ui.drag=null;
-});
-["pointercancel","pointerleave"].forEach(ev=>
-  cv.addEventListener(ev,()=>{ui.drag=null;}));
+}
+/* the page canvas measures in layout units off local(); a hosted widget hands
+   uiForward() its own converter, because its box is its own space */
+function uiPt(el,e){ return el._uiLocal? el._uiLocal(e) : local(e); }
+function uiBind(el){
+  el.addEventListener("pointerdown",uiDown);
+  el.addEventListener("pointermove",uiMove);
+  el.addEventListener("pointerup",uiUp);
+  ["pointercancel","pointerleave"].forEach(ev=>
+    el.addEventListener(ev,()=>{ui.drag=null;}));
+}
+uiBind(cv);
+// a hosted widget also has to stand its hover down when the pointer leaves it,
+// or the last cell stays lit under a rail it is no longer over
+function uiForward(el,toLocal){
+  el._uiHost=el; el._uiLocal=toLocal;
+  uiBind(el);
+  el.addEventListener("pointerleave",()=>{ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null;});
+}
 cv.addEventListener("wheel",e=>{
   // the scenario bench draws no plant, so there's no VIEW to zoom here -
   // the wheel zooms the TIMELINE instead, about the second under the pointer

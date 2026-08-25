@@ -2,7 +2,11 @@
 /* canvas handle, palette, shared constants. The plant canvas now lives inside
    #stage, below the HTML #topbar - see TOPBAR_H in shell.js. */
 const W = 760;
-const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+/* ctx is `let`, not `const`: hostPaint() in render/plant.js swaps it for the
+   duration of one draw so a graphical widget living inside an opaque HTML rail
+   paints into its own bitmap using the same chrome.js primitives. */
+const cv = document.getElementById("cv");
+let ctx = cv.getContext("2d");
 const stage = document.getElementById("stage");
 const MONO = `ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace`;
 
