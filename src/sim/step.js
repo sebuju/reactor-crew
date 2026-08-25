@@ -578,12 +578,14 @@ function resetPlant(){
   coreReset(S);
   S.boron = S.boron0 = -(P.excess+coreRodWorth(S)-P.KXE*P.X0);
   S.boronDem = S.boron;                 // start on demand, or it walks off commissioning
-  /* THE SIM DOES NOT REQUIRE A DISPLAY. pipeReset() clears the pipe animation's
-     smoothing, which only exists when something is being drawn - a headless
-     runner (the auditors, a scenario run) loads no renderer at all. The guard
-     is the honest shape of that: ask whether there is a display before telling
-     it the clock moved. */
-  LOG=[]; initHist(); if(typeof pipeReset==="function") pipeReset();
+  /* THE SIM DOES NOT REQUIRE A DISPLAY. pipeReset()/fxReset() clear the pipe
+     animation's and the ambient effects' smoothing, which only exist when
+     something is being drawn - a headless runner (the auditors, a scenario
+     run) loads no renderer at all. The guard is the honest shape of that: ask
+     whether there is a display before telling it the clock moved. */
+  LOG=[]; initHist();
+  if(typeof pipeReset==="function") pipeReset();
+  if(typeof fxReset==="function") fxReset();
   logE("info","PLANT AT POWER",
     P.name+" commissioned at "+P.rated.toFixed(0)+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
 }

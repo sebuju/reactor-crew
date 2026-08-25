@@ -52,7 +52,9 @@ const snapS = s => snapVal(s);
    further back you scrub the more wrong it gets. This is the bug the whole
    recording layer dies of if it is got wrong, and it costs one clone to avoid. */
 function restoreS(snap){ S = snapVal(snap);
-  if(typeof pipeReset==="function") pipeReset();   // see resetPlant(): no display, nothing to clear
+  // see resetPlant(): no display, nothing to clear
+  if(typeof pipeReset==="function") pipeReset();
+  if(typeof fxReset==="function") fxReset();
   return S; }
 
 /* ══ WHERE TWO STATES FIRST DISAGREE, NOT WHETHER ══
