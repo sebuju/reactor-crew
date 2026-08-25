@@ -1,7 +1,7 @@
 /* Shared HTML widget kit styles. Colours are always var(--c-*), sizes always
    var(--t*) for text - see src/core/constants.js (cssVarsBoot) and kit-api.md. */
 
-.kit-well{background:var(--c-panel);border:1px solid var(--c-edge)}
+.kit-well{background:var(--c-panel)}
 .kit-well-body{padding:8px 10px}
 
 .kit-rule{display:flex;align-items:center;gap:7px;margin:0 0 6px;
@@ -9,22 +9,42 @@
   letter-spacing:2px;text-transform:uppercase;white-space:nowrap}
 .kit-rule::after{content:"";flex:1 1 auto;height:1px;background:var(--c-edge2)}
 
+/* the rule a well() builds for its own title. It sits OUTSIDE .kit-well-body,
+   so it carries its own padding, and since the well lost its border this bar
+   is what delimits the panel - and what .on/.blocked colour. */
+.kit-rule-head{margin:0;padding:6px 10px 5px;background:var(--c-edge);
+  font-size:var(--t9);font-weight:700;letter-spacing:1.8px;
+  color:var(--kit-rule-color,var(--c-bright))}
+.kit-rule-head::after{display:none}
+/* a title bar that selects its own component - see railPick() in inspector.js */
+.kit-rule-pick{cursor:pointer}
+.kit-rule-pick:hover{background:var(--c-edge2);color:var(--c-bright)}
+
 .kit-chip{display:inline-block;width:6px;height:6px;background:var(--c-cyan)}
 .kit-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--c-cyan)}
 
-/* segmented LED bargraph: a static N-cell mask over a plain fill div, never
-   a solid bar - the house rule is "segments, never a fill". */
-.kit-seg{position:relative;height:10px;background:var(--c-well);overflow:hidden}
-.kit-seg-fill{position:absolute;inset:0 auto 0 0;width:0;background:var(--c-cyan)}
-.kit-seg-signed .kit-seg-fill{left:50%;width:0}
-.kit-seg-mid{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--c-rail)}
+/* ONE segmented LED look, drawn by cellStrip() in kit.js - the house rule is
+   "segments, never a fill", and there is exactly one renderer of them. A cell
+   past the value is DIMMED, not absent, so the whole scale is always readable.
+   Colour is set through style.fill by the caller; this is only the default. */
+.kit-cells{display:block;width:100%;height:100%;overflow:visible}
+.kit-cell{fill:var(--c-cyan)}
+.kit-cell.dim{opacity:.22}
+
+/* a seg and a band are the same instrument at the same size - see cellStrip().
+   No ground behind the cells: a dimmed cell already says "scale, not value",
+   and the well made the seg a sunk box the band was not. */
+.kit-seg{position:relative;height:15px}
+.kit-seg .kit-cells{height:15px}
+/* the signed strip carries a band's end labels, so it needs a band's box under
+   the cells to put them in - the cells stay 15, like everywhere else */
+.kit-seg-signed{height:30px}
+.kit-seg-mid{position:absolute;left:50%;top:2px;height:11px;width:1px;background:var(--c-rail)}
 .kit-seg-marks{position:absolute;inset:0;pointer-events:none}
-.kit-seg-markline{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--c-rail)}
+.kit-seg-markline{position:absolute;top:2px;height:11px;width:1px;background:var(--c-rail)}
 
 .kit-band{position:relative;height:30px;padding-top:2px}
-.kit-band-svg{display:block;width:100%;height:15px;overflow:visible}
-.kit-band-cell{opacity:1}
-.kit-band-cell.dim{opacity:.26}
+.kit-band-svg{height:15px}
 .kit-band-lim{stroke:var(--c-red);stroke-width:1}
 .kit-band-needle{stroke:var(--c-bright);stroke-width:3}
 .kit-band-cap{stroke:var(--c-bright);stroke-width:6;stroke-linecap:round}
@@ -86,7 +106,8 @@
    walking toward the order. */
 .kit-slider{display:flex;align-items:center;gap:8px}
 .kit-slider-track{position:relative;flex:1 1 auto;height:22px}
-.kit-slider-fill{position:absolute;top:6px;left:0;height:10px;width:0;background:var(--c-cyan)}
+/* the same 15px cell box the seg and the band use, centred in the 22px track */
+.kit-slider-cells{position:absolute;top:4px;left:0;height:15px}
 .kit-slider-mark{position:absolute;top:0;width:1px;height:22px;background:var(--c-red)}
 .kit-slider-dem{position:absolute;top:0;width:1px;height:22px;background:var(--c-amber);display:none}
 .kit-slider-input{appearance:none;-webkit-appearance:none;position:absolute;inset:0;width:100%;
@@ -96,7 +117,11 @@
   background:var(--c-amber);cursor:pointer}
 .kit-slider-input::-moz-range-track{background:transparent;height:22px}
 .kit-slider-input::-moz-range-thumb{width:3px;height:22px;border:0;background:var(--c-amber);cursor:pointer}
-.kit-slider-readout{font-size:var(--t6-5);color:var(--c-cyan);white-space:nowrap}
+/* RESERVED, NOT MEASURED: the readout is sized off the longest string fmt can
+   produce, not off the current one. Content-driven, the track (flex:1 1 auto)
+   would resize under the hand every time "9%" became "100%". */
+.kit-slider-readout{flex:0 0 auto;text-align:right;
+  font-size:var(--t6-5);color:var(--c-cyan);white-space:nowrap}
 
 .kit-sliderrow{margin-bottom:8px}
 .kit-sliderrow-mass{display:block;margin-top:3px;font-size:var(--t9);color:var(--c-ink2)}

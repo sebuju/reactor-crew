@@ -19,7 +19,7 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 ::-webkit-scrollbar-corner{background:var(--c-well)}
 
 #topbar{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
-  gap:16px;height:40px;padding:0 12px;background:var(--c-panel);border-bottom:1px solid var(--c-edge2)}
+  gap:16px;height:40px;padding:0 12px;background:var(--c-panel)}
 #brand{display:flex;align-items:center;gap:8px}
 #logo-mark{position:relative;box-sizing:border-box;width:12px;height:12px;border:1px solid var(--c-amber)}
 #logo-mark::after{content:"";position:absolute;inset:3px;background:var(--c-amber)}

@@ -35,13 +35,18 @@ function crVitalsBuild(container){
   const rows=[];
   for(let i=0;i<6;i++){
     const row=KIT.el("div","cr-vital");
+    /* A SQUARE DOT, not a lit row. Tinting the whole row said "plotted" in the
+       same language the bars use for "in trouble", so a plotted channel read as
+       an alarming one. The dot carries the channel's own trend colour, which is
+       also the one thing that ties a row to its curve in the chart below. */
+    const plotDot=KIT.el("span","cr-vital-plot");
     const lab=KIT.el("span","cr-vital-lab");
     const bar=KIT.segMark({cells:24});
     const val=KIT.el("span","cr-vital-val");
-    row.append(lab,bar.el,val);
+    row.append(plotDot,lab,bar.el,val);
     container.appendChild(row);
     row.addEventListener("click",()=>{ const d=crVitalsData()[i]; if(d.ch) togglePlot(d.ch); });
-    rows.push({row,lab,bar,val});
+    rows.push({row,plotDot,lab,bar,val});
   }
   return rows;
 }
@@ -55,7 +60,10 @@ function crVitalsSync(rows){
     h.val.style.color=v.col;
     h.bar.set(v.u*LIM_AT, v.sgn?[-LIM_AT,LIM_AT]:[LIM_AT], v.col);
     KIT.tip(h.row,v.lab,v.tip);
-    h.row.classList.toggle("on", v.ch&&plot.includes(v.ch));
+    const on = !!(v.ch&&plot.includes(v.ch));
+    h.row.classList.toggle("on", on);
+    const dc = on ? CH[v.ch].col : "";
+    if(h.plotDot.style.background!==dc) h.plotDot.style.background=dc;
   });
 }
 
@@ -85,20 +93,35 @@ function crAlarmsSync(container,rows){
   container.parentNode.querySelector(".cr-alarms-count").textContent=String(lit);
 }
 
-/* ══ TRENDS: chart() STAYS CANVAS, HOSTED AT THE PANEL'S OWN PLACEHOLDER ══ */
+/* ══ TRENDS: chart() STAYS CANVAS, IN ITS OWN CANVAS UNDER THE VITALS ══
+   Not on #cv: the plate it sits on is opaque and paints over it. hostPaint()
+   swaps ctx and gives it its own box - see render/plant.js.
+
+   It lives with the vitals because clicking a vital is the only way to put a
+   channel on it, and the two were a screen apart: you plotted something in one
+   corner and went looking for it in the other. Nothing plotted, nothing drawn -
+   an empty chart taking 130 px to say "NO CHANNELS SELECTED" is worse than the
+   space back.
+
+   k:0.7 because this is a rail-scale chart: at HOST_K one layout unit is one
+   and a half CSS pixels, so chart()'s own sizes come out half again as big as
+   the HTML type either side of it. See chSz() in chart.js. */
 function crTrendSync(host){
-  if(!host.details.open) return;
-  const r=hostRect(host.canvas); if(r.w<10||r.h<10) return;
-  const ser=plot.map(k=>({lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i)}));
-  const box=chart(r.x,r.y,r.w,r.h,{
-    series:ser, n:hlen,
-    empty:hlen<2?"COLLECTING DATA":"NO CHANNELS SELECTED",
-    xlab:["-"+(hlen/10).toFixed(0)+"s","NOW"]});
-  chartLegend(box,r.y+r.h-22,ser);
+  const on = plot.length>0;
+  host.canvas.style.display = on?"":"none";
+  if(!on) return;
+  hostPaint(host.canvas,(x,y,w,h)=>{
+    const ser=plot.map(k=>({lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i)}));
+    const box=chart(x,y,w,h,{
+      series:ser, n:hlen, k:0.7,
+      empty:"COLLECTING DATA",
+      xlab:["-"+(hlen/10).toFixed(0)+"s","NOW"]});
+    chartLegend(box,y+h-22,ser);
+  });
 }
 
-/* drawTrend()/drawLog() stay real canvas functions - not for this screen (its
-   own TRENDS/LOG panels are HTML, see crTrendSync()/crLogSync() below) but
+/* drawTrend()/drawLog() draw full-width on #cv - not for this screen, which
+   has its own hosted chart (crTrendSync) and an HTML log (crLogSync), but
    because scenario.js reuses these two by reference for its own overlays, so
    a scenario run's history reads exactly like a free-play run's. */
 function drawTrend(yy){
@@ -126,8 +149,7 @@ function drawLog(yy){
   } else {
     let ly=y+36;
     for(const e of shown){
-      const col = e.sev==="alarm"?C.red : e.sev==="warn"?C.amber : C.ink2;
-      const tag = e.sev==="alarm"?"[ALARM]" : e.sev==="warn"?"[WARN ]" : "[INFO ]";
+      const sv=logSev(e), col=sv.col(), tag=sv.tag;
       chip(22,ly-8,col);
       txt("T+"+pad(e.t.toFixed(1),7),30,ly,{size:9,color:C.ink2});
       txt(tag,96,ly,{size:9,color:col});
@@ -139,50 +161,74 @@ function drawLog(yy){
   return y+h+12;
 }
 
+/* ══ TWO POOLED LISTS ══
+   Both used to throw their DOM away and build it again whenever their contents
+   changed - the log on every single new event, which is once a second in a
+   transient and is exactly when the panel is being read. A row is a row: keep
+   as many as are wanted, hide the rest, and write only the text that differs.
+   crPool() is the one place that grows and trims, so neither list carries its
+   own copy of the same three lines. */
+function crPool(list,n,mk){
+  const pool=list._pool||(list._pool=[]);
+  while(pool.length<n){ const h=mk(); list.appendChild(h.el); pool.push(h); }
+  pool.forEach((h,i)=>{ const on=i<n; if(h.el.hidden!==!on) h.el.hidden=!on; });
+  return pool;
+}
+function crEmpty(list,text,empty){
+  let p=list._empty;
+  if(!p){ p=list._empty=KIT.el("p","cr-empty"); p.textContent=text; list.appendChild(p); }
+  if(p.hidden!==!empty) p.hidden=!empty;
+}
+
+const CR_LOG_N=8;
 function crLogSync(list){
-  const sig=LOG.length;
-  if(list._sig===sig) return;
-  list._sig=sig; list.innerHTML="";
-  const shown=LOG.slice(-8).reverse();
-  if(!shown.length){ const p=KIT.el("p","cr-empty"); p.textContent="NO EVENTS - PLANT NOMINAL"; list.appendChild(p); return; }
-  for(const e of shown){
-    const row=KIT.el("div","cr-log-row "+e.sev);
-    const t=KIT.el("span","cr-log-t"); t.textContent="T+"+e.t.toFixed(1);
-    const m=KIT.el("span","cr-log-m"); m.textContent=e.msg;
-    const w=KIT.el("p","cr-log-w"); w.textContent=e.why;
-    row.append(t,m,w); list.appendChild(row);
-  }
+  const shown=LOG.slice(-CR_LOG_N).reverse();
+  crEmpty(list,"NO EVENTS - PLANT NOMINAL",!shown.length);
+  const pool=crPool(list,shown.length,()=>{
+    const el=KIT.el("div","cr-log-row");
+    const t=KIT.el("span","cr-log-t");
+    const m=KIT.el("span","cr-log-m");
+    const w=KIT.el("p","cr-log-w");
+    el.append(t,m,w);
+    return {el,t,m,w};
+  });
+  shown.forEach((e,i)=>{
+    const h=pool[i], cls="cr-log-row "+e.sev, ts="T+"+e.t.toFixed(1);
+    if(h.el.className!==cls) h.el.className=cls;
+    if(h.t.textContent!==ts) h.t.textContent=ts;
+    if(h.m.textContent!==e.msg) h.m.textContent=e.msg;
+    if(h.w.textContent!==e.why) h.w.textContent=e.why;
+  });
 }
 
 function crDamageSync(list){
-  const sig=S.dmgParts.join(",");
-  if(list._sig===sig) return;
-  list._sig=sig; list.innerHTML="";
-  if(!S.dmgParts.length){ const p=KIT.el("p","cr-empty"); p.textContent="ALL EQUIPMENT IN SERVICE"; list.appendChild(p); return; }
-  for(const k of S.dmgParts){
-    const part=LAY.parts.find(q=>q.id===k); if(!part) continue;
-    const blocked=!part.access;
-    const card=KIT.el("div","cr-dmg-card"+(blocked?" blocked":""));
-    const name=KIT.el("div","cr-dmg-name"); name.textContent=part.name;
+  const ids=S.dmgParts;
+  crEmpty(list,"ALL EQUIPMENT IN SERVICE",!ids.length);
+  const pool=crPool(list,ids.length,()=>{
+    const el=KIT.el("div","cr-dmg-card");
+    const name=KIT.el("div","cr-dmg-name");
     const state=KIT.el("div","cr-dmg-state");
-    card.append(name,state);
-    card.addEventListener("click",()=>act("repair",part.id));
-    KIT.tip(card,part.name+(blocked?"  [ UNREACHABLE ]":""),
+    el.append(name,state);
+    /* the card is reused by whatever part is at this slot next, so the handler
+       reads its CURRENT part rather than closing over one */
+    const h={el,name,state,id:null};
+    el.addEventListener("click",()=>{ if(h.id) act("repair",h.id); });
+    return h;
+  });
+  ids.forEach((k,i)=>{
+    const h=pool[i], part=LAY.parts.find(q=>q.id===k);
+    h.id=k;
+    const nm=part?part.name:k.toUpperCase(), blocked=!(part&&part.access);
+    const busy=S.repair&&S.repair.id===k;
+    if(h.name.textContent!==nm) h.name.textContent=nm;
+    h.el.classList.toggle("blocked",blocked);
+    h.el.classList.toggle("busy",!!busy);
+    const st = blocked?"NO ACCESS":busy?Math.round(S.repair.t/S.repair.need*100)+"%":"CLICK TO DISPATCH";
+    if(h.state.textContent!==st) h.state.textContent=st;
+    KIT.tip(h.el,nm+(blocked?"  [ UNREACHABLE ]":""),
       blocked?"Your layout walls this component in on every side, so no repair party can reach it."
         :"Click to send a repair party. The party accumulates dose throughout, scaled by how close your control space sits to the reactor.");
-    list.appendChild(card);
-  }
-}
-function crDamageTick(list){
-  for(const k of S.dmgParts){
-    const card=[...list.children].find(c=>c.querySelector(".cr-dmg-name")&&c.querySelector(".cr-dmg-name").textContent===
-      (LAY.parts.find(q=>q.id===k)||{}).name);
-    if(!card) continue;
-    const busy=S.repair&&S.repair.id===k, blocked=!(LAY.parts.find(q=>q.id===k)||{}).access;
-    const st=card.querySelector(".cr-dmg-state");
-    st.textContent = blocked?"NO ACCESS":busy?Math.round(S.repair.t/S.repair.need*100)+"%":"CLICK TO DISPATCH";
-    card.classList.toggle("busy",!!busy);
-  }
+  });
 }
 
 function crFaultsBuild(container){
@@ -218,17 +264,23 @@ function crRailBuild(rail){
   const panels=[];
   for(const p of LAY.parts){
     const well=KIT.well({title:p.name});
+    railPick(well,[p.id],p.name);
     const body=KIT.el("div","cr-panel-body"); well.body.appendChild(body);
     rail.appendChild(well.el);
     panels.push({p,well,body});
   }
   return panels;
 }
+/* see dbRailSync() - reveal on the frame sel changes, never every frame */
+let crLastSel=null;
 function crRailSync(panels){
+  const moved = sel!==crLastSel; crLastSel=sel;
   for(const h of panels){
     const rows=readoutsFor(h.p,S);
+    const on = h.p.id===sel;
     h.well.el.style.display=rows.length?"":"none";
-    h.well.el.classList.toggle("on",h.p.id===sel);
+    h.well.el.classList.toggle("on",on);
+    if(on && moved && rows.length) KIT.reveal(h.well.el,"start");
     if(rows.length) fieldRowsSync(h.body,rows);
   }
 }
@@ -240,6 +292,9 @@ function crBuild(){
   const root=KIT.el("div","cr-root");
   const vitals=KIT.el("div","cr-vitals"); root.appendChild(vitals);
   const vitalRows=crVitalsBuild(vitals);
+  const trendCanvas=KIT.el("canvas","cr-trend-canvas");   // sized by hostPaint()
+  KIT.tip(trendCanvas,"TREND","Rolling history of every channel you have picked. Click any vital above to put it on here or take it off; the square dot beside a vital is its colour in this chart.");
+  vitals.appendChild(trendCanvas);
 
   const alarmsWrap=KIT.el("div","cr-alarms");
   const alarmsHead=KIT.el("div","cr-alarms-head");
@@ -256,9 +311,6 @@ function crBuild(){
   const rail=KIT.el("div","cr-rail"); root.appendChild(rail);
 
   const ops=KIT.el("div","cr-ops"); rail.appendChild(ops);
-  const trendD=KIT.el("details","cr-op"); const trendS=KIT.el("summary"); trendS.textContent="TRENDS";
-  const trendCanvas=KIT.el("canvas","cr-trend-canvas"); trendCanvas.width=1; trendCanvas.height=1;
-  trendD.append(trendS,trendCanvas); ops.appendChild(trendD);
 
   const logD=KIT.el("details","cr-op"); const logS=KIT.el("summary"); logS.textContent="LOG";
   const logList=KIT.el("div","cr-log"); logD.append(logS,logList); ops.appendChild(logD);
@@ -274,7 +326,7 @@ function crBuild(){
 
   mount.appendChild(root);
   return {root,vitals,vitalRows,alarmsWrap,alarmRows,alarmsBody,banner,rail,
-    trend:{details:trendD,canvas:trendCanvas},logList,dmgList,faults,compRail,panels:null,Pfit:null};
+    trend:{canvas:trendCanvas},logList,dmgList,faults,compRail,panels:null,Pfit:null};
 }
 function crSync(){
   if(!CR) return;
@@ -282,10 +334,13 @@ function crSync(){
   crAlarmsSync(CR.alarmsBody,CR.alarmRows);
   crTrendSync(CR.trend);
   crLogSync(CR.logList);
-  crDamageSync(CR.dmgList); crDamageTick(CR.dmgList);
+  crDamageSync(CR.dmgList);
   crFaultsSync(CR.faults);
   if(CR.Pfit!==P){ CR.panels=crRailBuild(CR.compRail); CR.Pfit=P; }
   if(CR.panels) crRailSync(CR.panels);
+  /* the reactivity balance is genuinely graphical and keeps its own canvas, the
+     way the lattice plan does on the bench - see hostPaint() and rhoViz() */
+  document.querySelectorAll("#scr-operate .insp-viz-rho").forEach(c=>hostPaint(c,rhoViz));
 
   const s=S;
   if(s.melt||s.breach){
@@ -305,4 +360,6 @@ function drawOperate(){
   const vy=ty, vh=Math.max(120,H-vy-4);
   const vw = railBox ? Math.max(200, railBox.x-GX-8) : (W-2*GX);
   drawPlant(vy,S,vh,GX,vw);
+  { const h=CR&&CR.panels&&CR.panels.find(o=>o.p.id===sel);
+    if(h) leaderLine(h.well.el,CR.rail); }
 }

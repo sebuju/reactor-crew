@@ -50,6 +50,8 @@ const box = KIT.el("div", "my-row", {title:"x"});
 ## `KIT.tip(node, title, body)`
 
 Sets `dataset.tipTitle` / `dataset.tipBody` on any element. Returns the node.
+Guarded - it writes only when the text actually differs, so it is safe to
+re-state a tip on every sync pass rather than tracking whether it changed.
 
 ```js
 KIT.tip(myButton, "SCRAM", "Trips the reactor. Always safe, never free.");
@@ -57,15 +59,20 @@ KIT.tip(myButton, "SCRAM", "Trips the reactor. Always safe, never free.");
 
 ## `KIT.well(opts)` — panel box
 
-`opts: {title, color}`. Returns `{el, body, setTitle(label)}`. `body` is
-where you append content; `el` is the outer bordered box.
+`opts: {title, color}`. Returns `{el, body, head, setTitle(label)}`. `body` is
+where you append content; `el` is the outer box. The well has **no border** -
+the title bar is what delimits it, and `.on` / `.blocked` on `el` draw an
+amber / red outline (an outline, not a border, so picking a panel shifts
+nothing). `head` is the title bar itself, handed back so a caller can hang
+behaviour off it - both component rails use `railPick()` (inspector.js) to make
+it select the component the panel belongs to.
 
 ```js
 const w = KIT.well({title:"COOLANT PUMPS"});
 w.body.appendChild(mySlider.el);
 ```
 
-CSS: `.kit-well`, `.kit-well-body`
+CSS: `.kit-well`, `.kit-well-body`, `.kit-rule-head`, `.kit-rule-pick`
 
 ## `KIT.rule(label, opts)` — `LABEL ─────` section header
 
@@ -76,7 +83,25 @@ const r = KIT.rule("REACTIVITY");
 container.appendChild(r.el);
 ```
 
-CSS: `.kit-rule`
+CSS: `.kit-rule`. A well's own title also carries `.kit-rule-head` - a solid
+bar, bolder and brighter, with its own padding because it sits outside
+`.kit-well-body`. Only `well()` adds it.
+
+## `KIT.reveal(node, block)` — scroll a node into its scroller
+
+Scrolls the nearest scrolling ancestor to show `node`. `block` defaults to
+`"nearest"`, so a node already on screen never moves; the component rails pass
+`"start"` instead and get the picked panel at the top of the rail. That only
+works because the rails carry a viewport of empty space under the last panel -
+`padding-bottom` on `.cr-rail`/`.db-rail` - or the bottom panel could never
+scroll far enough to reach the top.
+
+Used when selection changes elsewhere: clicking a component on the plant brings
+its rail panel up, and opening the takes picker shows the current take.
+
+```js
+KIT.reveal(panel.well.el, "start");
+```
 
 ## `KIT.chip(color)` / `KIT.dot(color)` — inline row markers
 
@@ -91,27 +116,39 @@ CSS: `.kit-chip`, `.kit-dot`
 
 ## `KIT.seg(opts)` — LED bargraph
 
-`opts: {cells=24, frac, color}`. Segments are a static mask, never a solid
-fill. Returns `{el, set(frac, color)}`, `frac` 0..1.
+`opts: {cells=24, frac, color}`. Segments, never a solid fill - drawn by the
+one `cellStrip()` renderer that `band()` and `slider()` also use, in the **same
+15-unit cell box** they use, so a seg and a band sitting in one column are
+visibly the same instrument. Cells past the value are **dimmed**, not absent,
+so the whole scale stays readable. There is no ground behind them: a dimmed
+cell already says "scale, not value".
+Returns `{el, set(frac, color)}`, `frac` 0..1.
 
 ```js
 const bar = KIT.seg({cells:16});
 bar.set(0.62, "var(--c-cyan)");
 ```
 
-CSS: `.kit-seg`, `.kit-seg-fill`
+CSS: `.kit-seg`, `.kit-cells`, `.kit-cell`, `.kit-cell.dim`
 
 ## `KIT.segSigned(opts)` — centre-zero bargraph
 
-`opts: {cells=28, frac, color}`. `frac` -1..1, grows from the centre rail.
-Returns `{el, set(frac, color)}`.
+`opts: {cells=28, frac, color, full, dp}`. `frac` -1..1, grows from the centre
+rail. Returns `{el, set(frac, color)}`.
+
+Pass `full` and it grows a band's `-full` / `+full` end labels, because a
+centre-zero bar with no scale on it says which way but never how far. The
+reactivity ledger passes `RHO_BAR` (plant.js) - one scale for all eight terms,
+or the bars would be eight different scales in one column pretending to be
+comparable.
 
 ```js
-const tilt = KIT.segSigned({});
+const tilt = KIT.segSigned({full:2600});
 tilt.set(-0.3, "var(--c-amber)");
 ```
 
-CSS: `.kit-seg.kit-seg-signed`, `.kit-seg-mid`
+CSS: `.kit-seg.kit-seg-signed`, `.kit-seg-mid`, `.kit-cell`,
+`.kit-band-lo/hi`
 
 ## `KIT.segMark(opts)` — bargraph with limit marks
 
@@ -146,7 +183,7 @@ anything with a shape, so the ticks carry `vector-effect="non-scaling-stroke"`
 and the type stays HTML — squashed text at a size the CSS ladder never set is
 the one thing this would otherwise produce.
 
-CSS: `.kit-band`, `.kit-band-svg`, `.kit-band-cell` (`.dim`),
+CSS: `.kit-band`, `.kit-band-svg`, `.kit-cell` (`.dim`),
 `.kit-band-needle`, `.kit-band-cap`, `.kit-band-lim`, `.kit-band-peg`
 (`.lo`/`.hi`), `.kit-band-lo/hi/zlabel`
 
@@ -211,7 +248,12 @@ CSS: `.kit-btn`, `.kit-btn-sunk`, `.kit-btn-flat`, `.kit-btn-danger`, `.on`
 
 ## `KIT.slider(opts)` — actual vs demand
 
-`opts: {min, max, step, val, dem, mark, fmt, cells, onChange, tip, title}`.
+`opts: {min, max, step, val, dem, mark, fmt, cells, onChange, tip, title,
+readoutCh}`. The readout reserves its width from the longest string `fmt`
+returns (sampled across the range, then grown on sight if a closure formats
+something longer later) - left content-driven it resizes the flexible track,
+and the thumb with it, every time the value's LENGTH changes. `readoutCh`
+pins that reservation by hand.
 The thumb is the **actual** (native `<input type=range>` value); the amber
 caret overlay is **demand**, shown only while it differs from actual. Every
 `onChange(v)` fires while dragging — the caller decides whether to call
@@ -225,8 +267,11 @@ const flow = KIT.slider({min:0, max:100, fmt:v=>v.toFixed(0)+"%",
 flow.set(S.flow, S.flowDem);
 ```
 
-CSS: `.kit-slider`, `.kit-slider-track`, `.kit-slider-fill`, `.kit-slider-mark`,
-`.kit-slider-dem`, `.kit-slider-input`, `.kit-slider-readout`
+The track is the same `cellStrip()` the band and the bargraphs use: cells lit
+to the **actual**, dimmed past it. `cells` (default 30) is how many.
+
+CSS: `.kit-slider`, `.kit-slider-track`, `.kit-slider-cells`, `.kit-slider-mark`,
+`.kit-slider-dem`, `.kit-slider-input`, `.kit-slider-readout`, `.kit-cell`
 
 **Not ported**: the canvas slider's click-preview hairline (amber tick where
 a click on bare track would land), the away-from-track drag gearing, and

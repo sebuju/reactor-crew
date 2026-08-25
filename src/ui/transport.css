@@ -4,7 +4,7 @@
 
 .trs{position:relative;display:flex;align-items:center;gap:6px;
   height:30px;padding:0 12px;background:var(--c-panel);
-  border-bottom:1px solid var(--c-edge2);pointer-events:auto}
+  pointer-events:auto}
 
 .trs-rate .kit-segsel-cell{height:24px}
 .trs-rate .kit-segsel-mass{display:none}
@@ -26,7 +26,19 @@
   font-size:var(--t7);color:var(--c-ink2)}
 .trs-notape{font-size:var(--t7-5);letter-spacing:1px;text-transform:uppercase;color:var(--c-ink2)}
 
-.trs-scrub{position:relative;flex:1 1 auto;min-width:40px;height:12px;
+/* the log lane and the bar share one elastic column, so a mark's percentage and
+   the bar's percentages are measured against the same width */
+.trs-track{flex:1 1 auto;min-width:40px;display:flex;flex-direction:column;gap:1px}
+.trs-logs{position:relative;height:10px}
+.trs-log{position:absolute;top:0;transform:translateX(-50%);min-width:7px;height:10px;
+  line-height:10px;text-align:center;font-size:var(--t6);font-weight:700;
+  color:var(--c-ink-on-lit);background:var(--c-ink2);cursor:default}
+.trs-log.alarm{background:var(--c-red)}
+.trs-log.warn{background:var(--c-amber)}
+.trs-log.act{background:var(--c-cyan)}
+.trs-log.info{background:var(--c-metal)}
+
+.trs-scrub{position:relative;height:12px;
   background:var(--c-bg);border:1px solid var(--c-edge);cursor:pointer;touch-action:none}
 .trs-scrub:hover{border-color:var(--c-edge2)}
 .trs-scrub-block{position:absolute;top:0;bottom:0;background:var(--c-well)}

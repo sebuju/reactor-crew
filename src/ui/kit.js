@@ -24,31 +24,81 @@ const KIT = (function(){
   /* shell.js's document-wide pointerover/pointerout listener reads exactly
      these two attributes off whatever the pointer is over - no separate
      tooltip primitive is needed on the HTML side. */
+  /* Guarded, because several callers re-state a tip on every sync pass rather
+     than tracking whether it changed - and a dataset write is a real attribute
+     write, so an unguarded one is thirty DOM mutations a second saying nothing. */
   function tip(node, title, body){
-    node.dataset.tipTitle = title;
-    if(body != null) node.dataset.tipBody = body;
+    if(node.dataset.tipTitle !== title) node.dataset.tipTitle = title;
+    if(body != null && node.dataset.tipBody !== body) node.dataset.tipBody = body;
     return node;
   }
 
   const clampPct = t => Math.max(0, Math.min(1, t)) * 100;
 
-  /* Bakes a fixed N-cell segmented look via mask-image rather than N child
-     nodes, so a 30-cell slider track costs one element, not thirty. */
-  function applyMask(node, cells){
-    const pct = 100 / cells;
-    const m = `repeating-linear-gradient(to right, #000 0, #000 calc(${pct}% - 1.3px), transparent calc(${pct}% - 1.3px), transparent ${pct}%)`;
-    node.style.maskImage = m;
-    node.style.webkitMaskImage = m;
+  /* ONE cell geometry for every strip in the kit. seg()/segSigned() used to
+     draw full-height cells in a 10-unit box with a well behind them while
+     band() drew 7-unit cells floating in 15 - so the reactivity ledger, which
+     is the one panel that shows both, looked like two different instruments.
+     They are the same instrument, so they are the same box. */
+  const BAND_VB_H = 15, BAND_CELLS = 40;
+
+  /* THE one segment renderer. band(), seg(), segSigned() and slider() all draw
+     their cells here - real <rect>s that are lit or dimmed, never a solid fill
+     and never a second implementation of the same look.
+
+     The viewBox is 0..100 wide and stretched to the caller's box, so cell width
+     is proportional while a tick's stroke stays device-crisp (the ticks carry
+     vector-effect). Colour goes through style.fill, not the fill ATTRIBUTE:
+     zones are written as var(--c-*) and a custom property is only reliably
+     resolved in a style declaration. */
+  function cellStrip(opts){
+    opts = opts || {};
+    const n = opts.cells || BAND_CELLS, vbH = opts.vbH || BAND_VB_H;
+    const y = opts.y != null ? opts.y : 4, h = opts.h != null ? opts.h : 7;
+    const svg = svgEl("svg", "kit-cells" + (opts.cls ? " " + opts.cls : ""));
+    svg.setAttribute("viewBox", "0 0 100 " + vbH);
+    svg.setAttribute("preserveAspectRatio", "none");
+    const step = 100 / n, cells = [];
+    for(let i = 0; i < n; i++){
+      const r = svgEl("rect", "kit-cell");
+      r.setAttribute("x", i * step); r.setAttribute("y", y);
+      r.setAttribute("width", step * .8); r.setAttribute("height", h);
+      svg.appendChild(r); cells.push(r);
+    }
+    let lastKey = null;
+    /* key is whatever lit/fill actually depend on. Touching 48 rects on a frame
+       that changed nothing is the entire cost of this widget, so the caller
+       states when the repaint can be skipped. */
+    function paint(key, lit, fill){
+      if(key === lastKey) return; lastKey = key;
+      cells.forEach((r, i) => {
+        r.classList.toggle("dim", !lit(i));
+        if(fill){ const c = fill(i) || ""; if(r._c !== c){ r.style.fill = c; r._c = c; } }
+      });
+    }
+    return {el: svg, paint};
   }
 
   function well(opts){
     opts = opts || {};
     const root = el("div", "kit-well");
     let head = null;
-    if(opts.title){ head = rule(opts.title, opts); root.appendChild(head.el); }
+    if(opts.title){ head = rule(opts.title, opts); head.el.classList.add("kit-rule-head");
+      root.appendChild(head.el); }
     const body = el("div", "kit-well-body");
     root.appendChild(body);
-    return {el: root, body, setTitle: head ? head.set : function(){}};
+    /* `head` is handed back so a caller can make the title bar do something -
+       the component rails hang "select this component" off it. */
+    return {el: root, body, head: head ? head.el : null,
+            setTitle: head ? head.set : function(){}};
+  }
+
+  /* Scrolls a scrolling container to show one of its children. Default
+     "nearest", so a node already on screen never moves under the hand; a rail
+     that has just changed selection asks for "start" instead and gets the
+     panel at the top, which is why the rails carry a tail of empty space. */
+  function reveal(node, block){
+    if(node && node.scrollIntoView) node.scrollIntoView({block: block || "nearest"});
   }
 
   function rule(label, opts){
@@ -79,15 +129,13 @@ const KIT = (function(){
     opts = opts || {};
     const cells = opts.cells || 24;
     const root = el("div", "kit-seg");
-    const fill = el("div", "kit-seg-fill");
-    root.appendChild(fill);
-    applyMask(fill, cells);
-    let lastF = null, lastC = null;
+    const strip = cellStrip({cells});
+    root.appendChild(strip.el);
     function set(frac, color){
       frac = Math.max(0, Math.min(1, frac));
       color = color || "var(--c-cyan)";
-      if(frac !== lastF){ fill.style.width = (frac * 100) + "%"; lastF = frac; }
-      if(color !== lastC){ fill.style.background = color; lastC = color; }
+      const lit = Math.round(frac * cells);
+      strip.paint(lit + "|" + color, i => i < lit, () => color);
     }
     set(opts.frac || 0, opts.color);
     return {el: root, set};
@@ -95,22 +143,27 @@ const KIT = (function(){
 
   function segSigned(opts){
     opts = opts || {};
-    const cells = opts.cells || 28;
+    const cells = opts.cells || 28, half = cells / 2;
     const root = el("div", "kit-seg kit-seg-signed");
-    applyMask(root, cells);
-    const mid = el("div", "kit-seg-mid");
-    const fill = el("div", "kit-seg-fill");
-    root.appendChild(mid); root.appendChild(fill);
-    let lastF = null, lastC = null;
+    const strip = cellStrip({cells});
+    root.appendChild(strip.el);
+    root.appendChild(el("div", "kit-seg-mid"));
+    /* the same end labels a band() carries, for the same reason: a centre-zero
+       bar with no scale on it says which way but never how far. `full` is what
+       either end of the strip means. */
+    if(opts.full != null){
+      const dp = opts.dp || 0;
+      const lo = el("span", "kit-band-lo"); lo.textContent = "-" + opts.full.toFixed(dp);
+      const hi = el("span", "kit-band-hi"); hi.textContent = "+" + opts.full.toFixed(dp);
+      root.appendChild(lo); root.appendChild(hi);
+    }
     function set(frac, color){
       frac = Math.max(-1, Math.min(1, frac));
       color = color || "var(--c-cyan)";
-      if(frac !== lastF){
-        if(frac >= 0){ fill.style.left = "50%"; fill.style.right = "auto"; fill.style.width = (frac * 50) + "%"; }
-        else { fill.style.right = "50%"; fill.style.left = "auto"; fill.style.width = (-frac * 50) + "%"; }
-        lastF = frac;
-      }
-      if(color !== lastC){ fill.style.background = color; lastC = color; }
+      // lit outward from the middle, in the direction of the sign
+      const k = Math.round(Math.abs(frac) * half), up = frac >= 0;
+      const lit = up ? i => i >= half && i < half + k : i => i < half && i >= half - k;
+      strip.paint((up ? k : -k) + "|" + color, lit, () => color);
     }
     set(opts.frac || 0, opts.color);
     return {el: root, set};
@@ -144,7 +197,6 @@ const KIT = (function(){
      which is exactly right for the cells and wrong for anything with a shape:
      the ticks survive it through vector-effect, and text would not survive it
      at all - it would be squashed, and at a size the CSS ladder never set. */
-  const BAND_VB_H = 15, BAND_CELLS = 40;
   function band(opts){
     opts = opts || {};
     const lo = opts.lo || 0, hi = opts.hi != null ? opts.hi : 1;
@@ -155,20 +207,14 @@ const KIT = (function(){
     const at = v => clampPct((v - lo) / span);
 
     const root = el("div", "kit-band");
-    const svg = svgEl("svg", "kit-band-svg");
-    svg.setAttribute("viewBox", "0 0 100 " + BAND_VB_H);
-    svg.setAttribute("preserveAspectRatio", "none");
+    const strip = cellStrip({cells: BAND_CELLS, cls: "kit-band-svg"});
+    const svg = strip.el;
     root.appendChild(svg);
 
-    const step = 100 / BAND_CELLS, cellEls = [], cellZone = [];
-    for(let i = 0; i < BAND_CELLS; i++){
-      const zi = zoneAt(lo + span * (i + .5) / BAND_CELLS);
-      const r = svgEl("rect", "kit-band-cell");
-      r.setAttribute("x", i * step); r.setAttribute("y", 4);
-      r.setAttribute("width", step * .8); r.setAttribute("height", 7);
-      r.setAttribute("fill", zones[zi][1]);
-      svg.appendChild(r); cellEls.push(r); cellZone.push(zi);
-    }
+    const cellZone = [];
+    for(let i = 0; i < BAND_CELLS; i++)
+      cellZone.push(zoneAt(lo + span * (i + .5) / BAND_CELLS));
+    const zoneFill = i => zones[cellZone[i]][1];
     if(opts.lim) for(const L of opts.lim) svg.appendChild(tick("kit-band-lim", at(L[0])));
     const needle = tick("kit-band-needle", 0);
     /* a round cap on a zero-length line is a device-pixel DOT even under the x
@@ -193,7 +239,7 @@ const KIT = (function(){
       root.appendChild(lbl);
     });
 
-    let lastZone = -1, lastV = null;
+    let lastV = null;
     function set(v){
       if(v === lastV) return; lastV = v;
       const x = at(v);
@@ -201,11 +247,9 @@ const KIT = (function(){
       cap.setAttribute("x1", x); cap.setAttribute("x2", x);
       const off = v < lo ? -1 : v > hi ? 1 : 0;
       peg.className = "kit-band-peg" + (off ? (off > 0 ? " hi" : " lo") : "");
+      // only the zone the needle is in stays lit: the scale says WHERE you are
       const zi = zoneAt(v);
-      if(zi !== lastZone){
-        cellEls.forEach((c, i) => c.classList.toggle("dim", cellZone[i] !== zi));
-        lastZone = zi;
-      }
+      strip.paint(zi, i => cellZone[i] === zi, zoneFill);
     }
     set(opts.v != null ? opts.v : lo);
     return {el: root, set};
@@ -286,17 +330,17 @@ const KIT = (function(){
 
   /* Actual vs demand: the thumb (native range value) is the ACTUAL, the caret
      overlay is DEMAND. o.dem==null means no rate limit on this control. Uses
-     a native <input type=range> for free drag/keyboard/touch handling; the
-     segmented look is a mask over a plain fill div layered on top of it. */
+     a native <input type=range> for free drag/keyboard/touch handling, with the
+     kit's one cellStrip() laid under it for the segmented look. */
   function slider(opts){
     opts = opts || {};
     const min = opts.min, max = opts.max, step = opts.step || ((max - min) / 1000);
     const root = el("div", "kit-slider");
     const track = el("div", "kit-slider-track");
     root.appendChild(track);
-    const fill = el("div", "kit-slider-fill");
-    track.appendChild(fill);
-    applyMask(fill, opts.cells || 30);
+    const cells = opts.cells || 30;
+    const strip = cellStrip({cells, cls: "kit-slider-cells"});
+    track.appendChild(strip.el);
     if(opts.mark != null){
       const m = el("div", "kit-slider-mark");
       m.style.left = clampPct((opts.mark - min) / (max - min)) + "%";
@@ -307,6 +351,19 @@ const KIT = (function(){
     const input = el("input", "kit-slider-input", {type: "range", min, max, step});
     track.appendChild(input);
     const readout = el("span", "kit-slider-readout");
+    /* Reserve the readout at the widest string fmt can return, sampled across
+       the range. Left content-driven it resizes the flexible track - and so the
+       thumb - every time the value's LENGTH changes ("9%" -> "100%"). The body
+       font is monospace, so ch is exact. Grows but never shrinks: some fmt
+       closures label a target that changes under them, and a reservation that
+       gave width back would put the jitter straight back. */
+    let roCh = 0;
+    function roFit(str){
+      if(str.length <= roCh) return;
+      roCh = str.length; readout.style.minWidth = roCh + "ch";
+    }
+    if(opts.readoutCh) roFit(" ".repeat(opts.readoutCh));
+    else if(opts.fmt) for(let i = 0; i <= 4; i++) roFit(String(opts.fmt(min + (max - min) * i / 4)));
     root.appendChild(readout);
     if(opts.tip) tip(root, opts.title || "", opts.tip);
     input.addEventListener("input", () => { if(opts.onChange) opts.onChange(parseFloat(input.value)); });
@@ -315,8 +372,11 @@ const KIT = (function(){
       if(val !== lastVal){
         lastVal = val;
         if(document.activeElement !== input) input.value = val;
-        fill.style.width = clampPct((val - min) / (max - min)) + "%";
-        if(opts.fmt) readout.textContent = opts.fmt(val);
+        // lit to the ACTUAL, like the band's scale; the amber hairline the hand
+        // drags is the native thumb and the caret above it is demand
+        const lit = Math.round(Math.max(0, Math.min(1, (val - min) / (max - min))) * cells);
+        strip.paint(lit, i => i < lit);
+        if(opts.fmt){ const str = String(opts.fmt(val)); roFit(str); readout.textContent = str; }
       }
       if(demVal != null && demVal !== lastDem){
         lastDem = demVal;
@@ -444,6 +504,6 @@ const KIT = (function(){
     return {el: root, set};
   }
 
-  return {el, tip, well, rule, chip, dot, seg, segSigned, segMark, band,
+  return {el, tip, well, rule, reveal, chip, dot, seg, segSigned, segMark, band,
     lamp, badge, hatch, button, slider, optList, segSel, sliderRow, readout, toggle};
 })();

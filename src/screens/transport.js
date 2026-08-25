@@ -68,9 +68,14 @@ function trBuild(sc){
   const nameEl = KIT.el("span","trs-name");
   const forkEl = KIT.el("span","trs-fork");
 
+  /* the log gets a lane of its OWN above the bar rather than marks on it: a
+     marker on the bar is a marker the hand has to miss to scrub past it */
+  const track = KIT.el("div","trs-track");
+  const logLane = KIT.el("div","trs-logs");
   const scrub = KIT.el("div","trs-scrub");
   const scrubHead = KIT.el("div","trs-scrub-head");
   scrub.appendChild(scrubHead);
+  track.append(logLane,scrub);
 
   const clock = KIT.el("span","trs-clock");
 
@@ -90,7 +95,7 @@ function trBuild(sc){
   picker.body.append(pickHead,pickTree);
   takesBtn.el.addEventListener("click",()=>picker.el.classList.toggle("open"));
 
-  root.append(pause.el,rate.el,step.el,modeEl,notape,nameEl,forkEl,scrub,
+  root.append(pause.el,rate.el,step.el,modeEl,notape,nameEl,forkEl,track,
     clock,takesBtn.el);
   mount.appendChild(root);
   mount.appendChild(picker.el);
@@ -118,8 +123,56 @@ function trBuild(sc){
   scrub.addEventListener("pointerup",()=>{ dragging=false; });
   scrub.addEventListener("pointercancel",()=>{ dragging=false; });
 
-  return {sc,root,pause,rate,step,modeEl,notape,nameEl,forkEl,scrub,scrubHead,
-    clock,takesBtn,picker,pickTree,blocks:[],forks:[],pickSig:null};
+  return {sc,root,pause,rate,step,modeEl,notape,nameEl,forkEl,track,logLane,scrub,scrubHead,
+    clock,takesBtn,picker,pickTree,blocks:[],forks:[],marks:[],pickSig:null};
+}
+
+/* ═══════════ THE EVENT LOG, ON THE SCRUB BAR ═══════════
+   The log is a list of moments and the scrub bar is a line of moments, so the
+   log belongs on it: the point of a recording is to go back to the second
+   something happened, and reading a time off a list and then hunting for it
+   with the hand is the long way round.
+
+   ── THEY ARE GROUPED, NOT DRAWN ON TOP OF EACH OTHER ──
+   A trip raises six entries inside a second, which on a 300 px bar is six
+   marks inside one pixel: unreadable, and the top one is the only one you can
+   ever hover. So marks within MARK_GAP px of the first of a run collapse into
+   ONE, showing the count instead of a symbol and carrying every message in its
+   tooltip. The severity shown is the WORST in the group - a group that hid an
+   alarm behind four control actions would be a group that lies.
+   Grouping is done in PIXELS and not in ticks on purpose: what may overlap is a
+   question about the bar's width, and the bar is elastic. */
+const MARK_GAP=9;
+const SEV_RANK={alarm:3,warn:2,act:1,info:0};
+function trMarkGroups(t0,tEnd,wpx){
+  const out=[], span=Math.max(1,tEnd-t0);
+  const gap=MARK_GAP/Math.max(1,wpx);           // as a fraction of the bar
+  let g=null;
+  for(const e of LOG){
+    if(e.tick<t0||e.tick>tEnd) continue;
+    const f=(e.tick-t0)/span;
+    if(g && f-g.f0<gap){ g.evs.push(e); if(SEV_RANK[e.sev]>SEV_RANK[g.sev]) g.sev=e.sev; }
+    else { g={f0:f,f,sev:e.sev,evs:[e]}; out.push(g); }
+  }
+  return out;
+}
+function trMarksSync(h,t0,tEnd){
+  const wpx=h.scrub.clientWidth||1;
+  const groups=trMarkGroups(t0,tEnd,wpx);
+  while(h.marks.length<groups.length){ const m=KIT.el("div","trs-log"); h.logLane.appendChild(m); h.marks.push(m); }
+  while(h.marks.length>groups.length) h.logLane.removeChild(h.marks.pop());
+  groups.forEach((g,i)=>{
+    const m=h.marks[i], n=g.evs.length;
+    const left=(g.f*100).toFixed(3)+"%";
+    if(m.style.left!==left) m.style.left=left;
+    const cls="trs-log "+g.sev;
+    if(m.className!==cls) m.className=cls;
+    const sym = n>1 ? String(Math.min(n,9)) : logSev(g.evs[0]).sym;
+    if(m.textContent!==sym) m.textContent=sym;
+    KIT.tip(m, n>1 ? n+" EVENTS AT T+"+trSecs(g.evs[0].tick).toFixed(1)
+                   : "T+"+trSecs(g.evs[0].tick).toFixed(1),
+      g.evs.map(e=>logSev(e).tag+" "+e.msg).join("   /   "));
+  });
 }
 
 /* ─────────────── sync (cheap, every pass) ─────────────── */
@@ -180,12 +233,12 @@ function trSync(h){
   if(!cur){
     h.notape.style.display="";
     h.nameEl.style.display="none"; h.forkEl.style.display="none";
-    h.scrub.style.display="none"; h.clock.style.display="none";
+    h.track.style.display="none"; h.clock.style.display="none";
     return;
   }
   h.notape.style.display="none";
   h.nameEl.style.display=""; h.forkEl.style.display="";
-  h.scrub.style.display=""; h.clock.style.display="";
+  h.track.style.display=""; h.clock.style.display="";
 
   h.nameEl.textContent = trName(cur);
   const par = cur.parent===null ? null : REC.takes[cur.parent];
@@ -228,6 +281,7 @@ function trSync(h){
     }
   }
   h.scrubHead.style.left = frac(S.tick)+"%";
+  trMarksSync(h,t0,tEnd);
   KIT.tip(h.scrub,"SCRUB",
     "Press anywhere on the bar to put the plant there, and drag to run it under the hand. The bar is the whole lineage you are in, one block per take; the amber ticks are the "+forks+" place(s) this run has been forked. Scrubbing is watching and costs you nothing - the fork happens when you touch a control.");
 
@@ -237,8 +291,7 @@ function trSync(h){
       h.pickSig=sig;
       h.pickTree.innerHTML="";
       trPickerBuild(h.pickTree, REC.roots.filter(r=>REC.takes[r]));
-      const on=h.pickTree.querySelector && h.pickTree.querySelector(".trs-take-row.on");
-      if(on && on.scrollIntoView) on.scrollIntoView({block:"nearest"});
+      KIT.reveal(h.pickTree.querySelector && h.pickTree.querySelector(".trs-take-row.on"));
     }
   }
 }

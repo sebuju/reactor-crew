@@ -137,10 +137,10 @@ function ctxItemsDesign(hit){
 ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign});
 
 /* ─────────────── THE FUEL LATTICE, IN PLAN (canvas - genuinely graphical) ───────────────
-   Hosted inside a small <canvas> in the CORE and RODS panels via hostRect():
-   the shared drawing primitives (fillRect/txt/frame/dot...) are all wired to
-   the one page canvas, so this still paints there, positioned to land inside
-   the placeholder's own box every frame - see hostRect() in plant.js. */
+   Drawn into its OWN <canvas> in the CORE and RODS panels by hostPaint(), which
+   swaps the ctx the shared primitives (fillRect/txt/frame/dot...) write to. Not
+   on #cv: the rail is opaque and paints over it, so anything drawn there would
+   be both invisible and unclickable - see hostPaint() in plant.js. */
 const LATPEN={tool:"fuel",bank:0,hover:null,last:null};
 
 function latRingPhi(){
@@ -185,13 +185,20 @@ function latAct(u,v,shift){
   latRevolve();
 }
 
-/* x,y,w,h are the placeholder's own screen box, already converted to plant
-   layout units by hostRect() - see dbSync(). */
+/* x,y,w,h are the host canvas's own box, origin 0,0, in the fixed HOST_K scale
+   hostPaint() sets - not plant layout units. */
 function latPlan(x,y,w,h){
   const AX=15;
-  const gx=x+AX, gy=y, gw=w-AX, gh=h-6;
+  // the readout line under the grid has to fit INSIDE the box now: hostPaint()
+  // clips to the host element, where before this spilled onto #cv
+  const gx=x+AX, gy=y+3, gw=w-AX, gh=h-19;
   const cs=gh/(LQ+0.6), p=LAT.pitch, ph=latRingPhi();
-  const hv=LATPEN.hover, hRing=hv? latRingOf(hv.u,hv.v) : -1;
+  /* CORE and RODS each own a lattice plan, so both paint through here every
+     frame. The hover has to be tagged with the canvas it was taken in, or the
+     second call clears what the first just found and the ring highlight lands
+     on the plan the pointer is NOT over. */
+  const me=ui.host, hov0=LATPEN.hover;
+  const hv=(hov0&&hov0.host===me)? hov0 : null, hRing=hv? latRingOf(hv.u,hv.v) : -1;
   let rMax=0;
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
     if(LAT.slot[LIX(u,v)]) rMax=Math.max(rMax,Math.hypot(u+1,v+1)*p);
@@ -234,7 +241,7 @@ function latPlan(x,y,w,h){
   ctx.restore();
   frame(gx,gy,gw,gh,C.edge);
   ctx.save(); ctx.setLineDash([9,3,2,3]);
-  line(CX,gy-3,CX,CY+5,C.rail,1); line(gx-AX+9,CY,gx+gw,CY,C.rail,1);
+  line(CX,gy-2,CX,CY+4,C.rail,1); line(gx-AX+9,CY,gx+gw,CY,C.rail,1);
   ctx.restore();
   ctx.save(); ctx.translate(x+6,gy+gh/2); ctx.rotate(-Math.PI/2);
   txt("REACTOR AXIS",0,0,{size:6,sp:1.2,align:"center",color:C.rail});
@@ -246,10 +253,11 @@ function latPlan(x,y,w,h){
     const id=u+","+v; if(id===LATPEN.last) return;
     LATPEN.last=id; latAct(u,v,e&&e.shiftKey);
   }});
-  LATPEN.hover=null;
+  // clear only OUR hover: the other plan's is not ours to stand down
+  if(hov0&&hov0.host===me) LATPEN.hover=null;
   if(hov(wd)){
     const u=Math.floor((ui.ptr.x-gx)/cs), v=LQ-1-Math.floor((ui.ptr.y-gy)/cs);
-    if(u>=0&&u<LQ&&v>=0&&v<LQ) LATPEN.hover={u,v};
+    if(u>=0&&u<LQ&&v>=0&&v<LQ) LATPEN.hover={host:me,u,v};
   }
   if(!ui.drag) LATPEN.last=null;
 
@@ -261,9 +269,10 @@ function latPlan(x,y,w,h){
       gx,gy+gh+11,gw,{size:6.5,sp:.3,color:C.amber});
   else fitTxt(latCount()+" ASSEMBLIES / DOT IS FLUX",
       gx,gy+gh+11,gw,{size:6.5,sp:.5,color:C.ink2});
-  TIP(gx,gy,gw,gh,"FUEL LATTICE / QUARTER PLAN",
-    "The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius.");
 }
+/* the canvas TIP() is no use here: drawTip() paints it on #cv, under the rail.
+   The HTML #tip is position:fixed and clears everything. */
+const LATPLAN_TIP="The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius.";
 
 const LATPEN_CORE=[
   ["FUEL","fuel",
@@ -441,8 +450,9 @@ function paramBlockMk(block){
     }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas");
-      cv2.width=1; cv2.height=1;
-      return {el:cv2,sync(){}};   // painted by dbSync() via hostRect(), not here
+      KIT.tip(cv2,"FUEL LATTICE / QUARTER PLAN",LATPLAN_TIP);
+      hostForward(cv2);
+      return {el:cv2,sync(){}};   // painted by dbSync() via hostPaint(), not here
     }
     default: return {el:KIT.el("div"),sync(){}};
   }
@@ -470,21 +480,29 @@ function dbRailBuild(rail){
       const well=KIT.well({title:p.name}); rail.appendChild(well.el);
       const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
       const h={p,ids:[p.id],well,body,B};
+      railPick(well,h.ids,p.name);
       gangs[B.gang]=h; panels.push(h);
     } else {
       const well=KIT.well({title:p.name}); rail.appendChild(well.el);
       const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-      panels.push({p,ids:[p.id],well,body,B});
+      const h={p,ids:[p.id],well,body,B};
+      railPick(well,h.ids,p.name);
+      panels.push(h);
     }
   }
   const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
   return {panels,results,review};
 }
+/* the rail scrolls to a newly selected panel ONCE, on the frame sel changes -
+   every frame would fight the user's own scrolling */
+let dbLastSel=null;
 function dbRailSync(state){
+  const moved = sel!==dbLastSel; dbLastSel=sel;
   for(const h of state.panels){
     const on=h.ids.includes(sel);
     h.well.el.classList.toggle("on",on);
+    if(on && moved) KIT.reveal(h.well.el,"start");
     const cur=paramsFor(LAY.parts.find(q=>q.id===h.p.id)||h.p);
     dbPanelSync(h.body,cur);
   }
@@ -537,25 +555,29 @@ function dbBuild(){
   const rail=KIT.el("div","db-rail");
   root.append(head,rail);
   mount.appendChild(root);
-  return {root,rail,state:null};
+  return {root,head,rail,state:null};
 }
 function dbSync(){
   if(!DB) return;
   if(DB.rail._layFit!==LAY) { DB.state=dbRailBuild(DB.rail); DB.rail._layFit=LAY; }
   dbRailSync(DB.state);
-  /* the fuel lattice plan is genuinely graphical and stays canvas, hosted at
-     the placeholder's own screen box - see hostRect() in plant.js */
-  document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>{
-    const r=hostRect(cv2); if(r.w>4 && r.h>4) latPlan(r.x,r.y,r.w,r.h);
-  });
+  /* the fuel lattice plan is genuinely graphical and stays canvas - but its own
+     canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */
+  document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>hostPaint(cv2,latPlan));
 }
 if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
 
 function drawDesign(){
   dbSync();
   const railBox=DB? hostRect(DB.rail) : null;
-  const vy=76, vh=Math.max(120,H-vy-4);
+  // measured off the head row, not a magic reserve - the design screen has no
+  // transport strip above it, so there is no fixed band to hard-code
+  const headBox=DB? hostRect(DB.head) : null;
+  const vy = headBox? headBox.y+headBox.h+6 : 46;
+  const vh=Math.max(120,H-vy-4);
   const vw = railBox ? Math.max(200, railBox.x-GX-8) : (W-2*GX);
   drawPlant(vy,null,vh,GX,vw);
+  { const h=DB&&DB.state&&DB.state.panels.find(o=>o.ids.includes(sel));
+    if(h) leaderLine(h.well.el,DB.rail); }
   drawCtxMenu();
 }
