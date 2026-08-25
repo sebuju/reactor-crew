@@ -35,11 +35,13 @@ const KIT = (function(){
 
   const clampPct = t => Math.max(0, Math.min(1, t)) * 100;
 
-  /* ONE cell geometry for every strip in the kit. seg()/segSigned() used to
-     draw full-height cells in a 10-unit box with a well behind them while
-     band() drew 7-unit cells floating in 15 - so the reactivity ledger, which
-     is the one panel that shows both, looked like two different instruments.
-     They are the same instrument, so they are the same box. */
+  /* ONE cell geometry for every strip in the kit - box, cell height AND cell
+     count. seg()/segSigned() used to draw full-height cells in a 10-unit box
+     with a well behind them while band() drew 7-unit cells floating in 15, and
+     then kept 28 cells against a band's 40 - so the reactivity ledger, which is
+     the one panel that shows both, looked like two different instruments at two
+     different resolutions. They are the same instrument, so they are the same
+     box and the same pitch. A caller that wants a coarser strip still asks. */
   const BAND_VB_H = 15, BAND_CELLS = 40;
 
   /* THE one segment renderer. band(), seg(), segSigned() and slider() all draw
@@ -127,7 +129,7 @@ const KIT = (function(){
 
   function seg(opts){
     opts = opts || {};
-    const cells = opts.cells || 24;
+    const cells = opts.cells || BAND_CELLS;
     const root = el("div", "kit-seg");
     const strip = cellStrip({cells});
     root.appendChild(strip.el);
@@ -138,16 +140,17 @@ const KIT = (function(){
       strip.paint(lit + "|" + color, i => i < lit, () => color);
     }
     set(opts.frac || 0, opts.color);
-    return {el: root, set};
+    return {el: root, set, strip};
   }
 
   function segSigned(opts){
     opts = opts || {};
-    const cells = opts.cells || 28, half = cells / 2;
+    const cells = opts.cells || BAND_CELLS, half = cells / 2;
     const root = el("div", "kit-seg kit-seg-signed");
     const strip = cellStrip({cells});
     root.appendChild(strip.el);
-    root.appendChild(el("div", "kit-seg-mid"));
+    // the zero rule is a tick on the strip, like every other rule the kit draws
+    strip.el.appendChild(tick("kit-seg-mid", 50));
     /* the same end labels a band() carries, for the same reason: a centre-zero
        bar with no scale on it says which way but never how far. `full` is what
        either end of the strip means. */
@@ -166,23 +169,26 @@ const KIT = (function(){
       strip.paint((up ? k : -k) + "|" + color, lit, () => color);
     }
     set(opts.frac || 0, opts.color);
-    return {el: root, set};
+    return {el: root, set, strip};
   }
 
+  /* A mark on a seg is the SAME thing a band()'s lim tick is - the line you are
+     not meant to cross - so it is the same tick, in the same red, on the same
+     strip. It used to be a grey HTML rule floating over the cells, which read
+     as decoration next to a band sitting in the row above it. */
   function segMark(opts){
     opts = opts || {};
     const base = opts.signed ? segSigned(opts) : seg(opts);
-    const layer = el("div", "kit-seg-marks");
-    base.el.appendChild(layer);
+    const svg = base.strip.el;
     let marks = [];
     function set(frac, marksArr, color){
       base.set(frac, color);
       marksArr = marksArr || [];
-      while(marks.length < marksArr.length){ const m = el("div", "kit-seg-markline"); layer.appendChild(m); marks.push(m); }
-      while(marks.length > marksArr.length) layer.removeChild(marks.pop());
+      while(marks.length < marksArr.length){ const m = tick("kit-band-lim", 0); svg.appendChild(m); marks.push(m); }
+      while(marks.length > marksArr.length) svg.removeChild(marks.pop());
       marksArr.forEach((m, i) => {
-        const pct = (opts.signed ? (m + 1) / 2 : m) * 100 + "%";
-        if(marks[i].style.left !== pct) marks[i].style.left = pct;
+        const x = (opts.signed ? (m + 1) / 2 : m) * 100;
+        if(marks[i]._x !== x){ marks[i].setAttribute("x1", x); marks[i].setAttribute("x2", x); marks[i]._x = x; }
       });
     }
     set(opts.frac || 0, opts.marks, opts.color);

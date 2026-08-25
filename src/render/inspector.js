@@ -35,7 +35,9 @@ function railPick(well,ids,name){
 
 /* ══ ONE ROW LIST, TWO SCREENS ══
    readoutsFor() rows and the bench's MEASURED rows are the same shape -
-   [label,value,color,tip,band,signedBar] or {sec}. Built once, synced by a
+   [label,value,color,tip,band,signedBar] or {sec}. A signedBar carries `m`,
+   the limit marks in track fractions, so a centre-zero row can say where the
+   line is exactly the way a band's `lim` does. Built once, synced by a
    signature so a row set that changes shape (a STATUS row appearing on
    damage, a TRIP mark appearing when a bypass is thrown) rebuilds instead of
    silently misaligning against the old DOM. */
@@ -60,7 +62,7 @@ function fieldRowsBuild(container,rows){
     let bar=null,barKind=null;
     if(row[4]){ bar=KIT.band({lo:row[4].lo,hi:row[4].hi,zones:row[4].zones,dp:row[4].dp,lim:row[4].lim,v:row[4].v});
       barKind="band"; el.appendChild(bar.el); }
-    else if(row[5]){ bar=KIT.segSigned({full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
+    else if(row[5]){ bar=KIT.segMark({signed:true,full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
     if(row[3]) KIT.tip(el,row[0],row[3]);
     container.appendChild(el);
     out.push({val,bar,barKind});
@@ -86,7 +88,7 @@ function fieldRowsSync(container,rows){
     const col=cssCol(row[2]);
     if(H.val.style.color!==col) H.val.style.color=col;
     if(H.barKind==="band"){ H.bar.set(row[4].v); H.limSig=row[4].lim?JSON.stringify(row[4].lim):null; }
-    else if(H.barKind==="sig") H.bar.set(row[5].f,col);
+    else if(H.barKind==="sig") H.bar.set(row[5].f,row[5].m,col);
   });
 }
 

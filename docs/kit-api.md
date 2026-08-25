@@ -116,7 +116,7 @@ CSS: `.kit-chip`, `.kit-dot`
 
 ## `KIT.seg(opts)` — LED bargraph
 
-`opts: {cells=24, frac, color}`. Segments, never a solid fill - drawn by the
+`opts: {cells=40, frac, color}`. Segments, never a solid fill - drawn by the
 one `cellStrip()` renderer that `band()` and `slider()` also use, in the **same
 15-unit cell box** they use, so a seg and a band sitting in one column are
 visibly the same instrument. Cells past the value are **dimmed**, not absent,
@@ -133,8 +133,10 @@ CSS: `.kit-seg`, `.kit-cells`, `.kit-cell`, `.kit-cell.dim`
 
 ## `KIT.segSigned(opts)` — centre-zero bargraph
 
-`opts: {cells=28, frac, color, full, dp}`. `frac` -1..1, grows from the centre
-rail. Returns `{el, set(frac, color)}`.
+`opts: {cells=40, frac, color, full, dp}`. `frac` -1..1, grows from the centre
+rail. Returns `{el, set(frac, color), strip}`. The default cell count, the box
+and the padding are a `band()`'s, because the reactivity panel stacks the two
+kinds in one column.
 
 Pass `full` and it grows a band's `-full` / `+full` end labels, because a
 centre-zero bar with no scale on it says which way but never how far. The
@@ -156,12 +158,15 @@ CSS: `.kit-seg.kit-seg-signed`, `.kit-seg-mid`, `.kit-cell`,
 tick marks. `marks` are track fractions: 0..1 unsigned, -1..1 signed, same
 convention as canvas `segMark()`. Returns `{el, set(frac, marks, color)}`.
 
+A mark is the same red `.kit-band-lim` tick a `band()` draws, on the same
+strip - a limit is a limit whichever bar carries it.
+
 ```js
 const flow = KIT.segMark({});
 flow.set(0.8, [0.75], "var(--c-cyan)");
 ```
 
-CSS: `.kit-seg-marks`, `.kit-seg-markline`
+CSS: `.kit-band-lim`
 
 ## `KIT.band(opts)` — zoned scale strip (`band()`+`bandBar()` combined)
 

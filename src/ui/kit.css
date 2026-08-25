@@ -36,12 +36,11 @@
    and the well made the seg a sunk box the band was not. */
 .kit-seg{position:relative;height:15px}
 .kit-seg .kit-cells{height:15px}
-/* the signed strip carries a band's end labels, so it needs a band's box under
-   the cells to put them in - the cells stay 15, like everywhere else */
-.kit-seg-signed{height:30px}
-.kit-seg-mid{position:absolute;left:50%;top:2px;height:11px;width:1px;background:var(--c-rail)}
-.kit-seg-marks{position:absolute;inset:0;pointer-events:none}
-.kit-seg-markline{position:absolute;top:2px;height:11px;width:1px;background:var(--c-rail)}
+/* the signed strip carries a band's end labels, so it needs a band's box - the
+   SAME box, padding and all, because the reactivity panel stacks the two kinds
+   in one column and a 2px offset there reads as two different instruments */
+.kit-seg-signed{height:30px;padding-top:2px}
+.kit-seg-mid{stroke:var(--c-rail);stroke-width:1}
 
 .kit-band{position:relative;height:30px;padding-top:2px}
 .kit-band-svg{height:15px}
