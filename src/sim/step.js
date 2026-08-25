@@ -203,6 +203,117 @@ function manualScram(){
   if(!s.dmgParts.includes("rods")) s.rodJam=false;
   runback(s);
 }
+
+/* ══════════ COMBAT DAMAGE ══════════
+   ONE table, and that is the whole point of it. What a hit BREAKS and what a
+   repair party PUTS BACK used to be two lists in two files - the effects in
+   control-room.js, the undo down in step()'s repair block - so a part given an
+   effect in one and not the other was damage that could never be undone. They
+   are the same fact about a component, written once: msg/why is what the log
+   says, hit() is what it does to the plant, fix() is what the party reverses.
+
+   fix:null is deliberate and is NOT an oversight: for the vessel, the turbine,
+   the condenser, the feed pumps and the HPI tank the only thing a repair
+   restores is the component's presence, because their "effect" is either
+   permanent (fatigue, lost inventory) or read straight off s.dmgParts by the
+   physics, which stops reading it the moment the id comes out of the list.
+
+   Matched by PREFIX, the way ANN matches its lamps: the loop count is a design
+   parameter, so there is no fixed set of pump and steam-generator ids to
+   enumerate and any enumeration would go stale the day someone builds a
+   five-loop plant. */
+const DMGFX={
+  core:{msg:"REACTOR VESSEL HIT",
+    why:"A penetration in the vessel wall. Coolant is leaking and the metal is permanently damaged.",
+    hit:s=>{ s.inv-=6; s.fatigue=Math.min(100,s.fatigue+12); }, fix:null},
+  rods:{msg:"ROD DRIVE HIT",
+    why:"The drive mechanisms are wrecked. The bank is stuck where it stands and a scram will not move it. Boron is the only shutdown you have left.",
+    hit:s=>s.rodJam=true, fix:s=>s.rodJam=false},
+  pzr :{msg:"PRESSURIZER HIT",
+    why:"The relief valve has been knocked open and will not reseat. Close the block valve on the mimic.",
+    hit:s=>{ s.porvOpen=true; s.porvStuck=true; s.porvAuto=true; },
+    fix:s=>{ s.porvStuck=false; s.porvOpen=false; s.porvAuto=false; }},
+  /* a stop valve slams, it does not stroke - so this writes the actual AND the
+     demand, or the load lag would drag the turbine straight back up */
+  turb:{msg:"TURBINE HIT",
+    why:"Load rejected. The turbine is offline, so the reactor has nowhere to send its heat.",
+    hit:s=>s.load=s.loadDem=0.05, fix:null},
+  cond:{msg:"CONDENSER HIT",
+    why:"Heat rejection lost. Steam has nowhere to condense.",
+    hit:s=>s.load=s.loadDem=0.05, fix:null},
+  feed:{msg:"FEED PUMP HIT",
+    why:"Feedwater down to a quarter. The steam generator will boil dry if this is not fixed.",
+    hit:null, fix:null},
+  ctrl:{msg:"INSTRUMENT CABINET HIT",
+    why:"Sensor channels lost. Every reading on the panel is now far less trustworthy.",
+    hit:s=>s.noiseMul=3.5, fix:s=>s.noiseMul=1},
+  bkp :{msg:"BACKUP POWER HIT",
+    why:"Your emergency supply is gone. A blackout now means natural circulation only.",
+    hit:s=>s.bkpLost=true, fix:s=>s.bkpLost=false},
+  hpi :{msg:"HPI TANK HIT",
+    why:"Emergency injection is unavailable. You cannot refill a leaking loop.",
+    hit:null, fix:null},
+  pump:{msg:"COOLANT PUMP HIT",
+    why:"That pump is dead. Loop flow drops by its share and thermal margin goes with it.",
+    hit:null, fix:null},
+  sg  :{msg:"STEAM GENERATOR TUBE RUPTURE",
+    why:"Primary coolant is leaking into the secondary side and venting past containment. Inventory falls and activity escapes.",
+    hit:s=>s.sgtr=true, fix:s=>s.sgtr=false}
+};
+const DMGANY={msg:"EQUIPMENT HIT", why:"A component has been knocked out.", hit:null, fix:null};
+const dmgFx = id => DMGFX[id] || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(k))] || DMGANY;
+
+/* A hit is sim state and a scenario command, not a screen act, which is why it
+   lives here rather than in control-room.js where the FAULTS button is.
+   Aimed with an id, it hits exactly that component - and refuses silently if
+   that component cannot be hit, because a script that names the shield column
+   should get nothing, not the nearest thing to it. Unaimed, it draws its target
+   from the same weighted pick as before, off srand() rather than Math.random(),
+   so a recorded run takes the same hits when it is played back. The weighting is
+   the layout talking: a cell on the hull edge is worth roughly ten times an
+   interior one, which is what makes where you site a component a decision. */
+function combatHit(id){
+  const s=S;
+  const canHit = q => q.grp!=="shield" && fitted(q) && !s.dmgParts.includes(q.id);
+  let p;
+  if(id!==undefined && id!==null){
+    p=LAY.parts.find(q=>q.id===id);
+    if(!p||!canHit(p)) return;
+  } else {
+    const parts=LAY.parts.filter(canHit);
+    if(!parts.length) return;
+    const wgt=parts.map(q=>{ let e=0;
+      for(let X=q.x;X<q.x+q.w;X++) for(let Y=q.y;Y<q.y+q.h;Y++)
+        if(X===0||X===GW-1||Y===0||Y===GH-1) e++;
+      return 0.15 + e*1.6; });
+    let r=srand(s)*wgt.reduce((a,b)=>a+b,0), k=0;
+    while(r>wgt[k] && k<wgt.length-1){ r-=wgt[k]; k++; }
+    p=parts[k];
+  }
+  s.dmgParts.push(p.id);
+  const fx=dmgFx(p.id);
+  if(fx.hit) fx.hit(s);
+  logE("alarm","COMBAT DAMAGE / "+fx.msg, fx.why+
+    (p.access?"  A repair party can reach it.":"  IT IS WALLED IN - no repair is possible with this layout."));
+}
+/* ══════════ REPAIR ══════════
+   Sending a party is sim mutation, so it lives here beside the hit it undoes,
+   not in the screen that happens to carry a button for it. It is named by ID
+   rather than handed the part object, because an act has to be serialisable:
+   a tape and a scenario line both carry "sg2", never a reference to a member of
+   LAY.parts. The part is looked up here, which is also the only place the two
+   refusals are written - a component your layout has walled in can never be
+   reached, and a party already out is not split in two. */
+const repairNeed = p => 14 + p.w*p.h*4;
+function repairStart(id){
+  const s=S, p=LAY.parts.find(q=>q.id===id);
+  if(!p || !p.access || s.repair) return;
+  const need=repairNeed(p);
+  s.repair={id:p.id,t:0,need};
+  logE("info","REPAIR PARTY DISPATCHED / "+p.name,
+    "Estimated "+need+" seconds. The party takes dose the whole time, at the rate your layout allows.");
+}
+
 /* ── ganging and splitting the banks ──
    The one act, because both directions have seeding rules that must not exist
    twice. Splitting is bumpless by construction: every bank simply adopts where
@@ -366,7 +477,22 @@ function resetPlant(){
      dmgParts:[], repair:null, sgtr:false, noiseMul:1, dose:0, bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
      flowPos:{hot:0,cold:0,steam:0,exh:0,feed:0,surge:0,hpi:0},
-     spin:0,jit:0,dTavg:0,heat:0,sc:0,t:0};
+     /* perN/perT/perV are the reactor-period differentiator's own state. They
+        used to be module globals in trends.js; they are here because a
+        snapshot is a clone of S and nothing the tick carries may sit outside
+        it. s.tick is the recording's only index - s.t stays because forty
+        things read it, but a float second cannot key a keyframe. */
+     perN:P.n0, perT:0, perV:Infinity,
+     /* seed/rng are the dice cursor (see rng.js); diceOff stands them down for
+        a scripted run; porvArm is the one-shot a scenario sets to command the
+        next automatic lift to stick instead of rolling for it. */
+     seed:0, rng:0, diceOff:false, porvArm:false,
+     spin:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
+  /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
+     new run picks a seed, and from there every die comes off s.rng, so the run
+     replays from its own seed. Rolling inside step() instead would put numbers
+     in the plant that are in no snapshot. */
+  seedRng(S,(Math.random()*4294967296)>>>0);
   /* One integral per junction rather than one for all of them: any two can be
      open and shut independently, so unlike the hot legs - which are one
      lumped flow and animate as one kind - each junction's packets have to be
@@ -385,12 +511,17 @@ function resetPlant(){
   coreReset(S);
   S.boron = S.boron0 = -(P.excess+coreRodWorth(S)-P.KXE*P.X0);
   S.boronDem = S.boron;                 // start on demand, or it walks off commissioning
-  LOG=[]; initHist();
+  /* THE SIM DOES NOT REQUIRE A DISPLAY. pipeReset() clears the pipe animation's
+     smoothing, which only exists when something is being drawn - a headless
+     runner (the auditors, a scenario run) loads no renderer at all. The guard
+     is the honest shape of that: ask whether there is a display before telling
+     it the clock moved. */
+  LOG=[]; initHist(); if(typeof pipeReset==="function") pipeReset();
   logE("info","PLANT AT POWER",
     P.name+" commissioned at "+P.rated.toFixed(0)+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
 }
 function step(dt){
-  const s=S; s.t+=dt;
+  const s=S; s.t+=dt; s.tick++;
 
   /* ── control rods ──
      T-avg error alone is two integrations away from rod position, so on a
@@ -558,7 +689,14 @@ function step(dt){
     const Pdem = P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (s.hpi?0.5*P.pRise:0);
     s.P += (Pdem-s.P)*(0.30/P.pzrK)*dt;
     if(!s.porvOpen && autoLive("porv") && s.P > P.P0*1.06){   // automatic lift
-      s.porvOpen=true; s.porvAuto=true; s.porvStuck = Math.random()<0.18;
+      /* A commanded stick beats the die and is CONSUMED here: a scenario arms
+         the next lift, not every lift for the rest of the run, or one line of
+         script would silently make the valve permanently faulty. The roll is
+         still the free-play path, and roll() is the only thing that touches
+         the cursor - so with dice stood down an unarmed lift always reseats. */
+      s.porvOpen=true; s.porvAuto=true;
+      s.porvStuck = s.porvArm || roll(s,"porvStick");
+      s.porvArm=false;
     }
     if(s.porvOpen && s.porvAuto && !s.porvStuck && s.P < P.P0*1.01){
       s.porvOpen=false; s.porvAuto=false;
@@ -694,11 +832,9 @@ function step(dt){
     if(s.repair.t >= s.repair.need){
       const k=s.repair.id;
       s.dmgParts = s.dmgParts.filter(q=>q!==k);
-      if(k==="pzr"){ s.porvStuck=false; s.porvOpen=false; s.porvAuto=false; }
-      if(k.startsWith("sg")) s.sgtr=false;
-      if(k==="ctrl") s.noiseMul=1;
-      if(k==="bkp") s.bkpLost=false;
-      if(k==="rods") s.rodJam=false;
+      /* the undo is the same row of DMGFX that did the damage, so a part can
+         never be given an effect without also being given its reversal */
+      const fix=dmgFx(k).fix; if(fix) fix(s);
       logE("info","REPAIR COMPLETE / "+k.toUpperCase(),
         "The component is back in service. It took "+s.repair.need.toFixed(0)+" seconds and cost the repair party dose.");
       s.repair=null;
@@ -732,7 +868,6 @@ function step(dt){
      imbalance between two loops the lumped flow model does not carry. */
   for(const id in P.junc) if(juncLive(id)) d["xtie:"+id]+=sp;
   s.spin=(s.spin+360*dt*feff)%360;
-  s.jit=Math.sin(performance.now()/70)*P.noise*(s.noiseMul||1);
 }
 /* One pressure colour, for every readout that shows pressure. Both thresholds are
    the annunciator's own, so a gauge can never disagree with the alarm beside it:
