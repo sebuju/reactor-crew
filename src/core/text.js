@@ -28,10 +28,38 @@ const TSCALE=[15,13,12,10,9.5,9,8.5,8,7.5,7,6.5,6];
    panels were doing it silently before this existed, and neither was noticed by
    eye. Give it the width the neighbour leaves free, not the width of the box. */
 function fitTxt(s,x,y,maxw,o){
-  o=o||{}; const want=o.size||10; let size=6;
-  for(const t of TSCALE) if(t<=want && tw(s,Object.assign({},o,{size:t}))<=maxw){ size=t; break; }
+  o=o||{};
+  const size=fitStep(s,maxw,o);
   txt(s,x,y,Object.assign({},o,{size}));
   return size;
+}
+/* fitTxt shrinks; this one shrinks AND THEN CUTS. The ladder has a floor, so a
+   long string in a narrow column overflows at 6px however far it was stepped
+   down - which is how the trend legend came to draw past the edge of its own
+   chart. The HTML side has had this all along as text-overflow:ellipsis; this
+   is the canvas half of the same behaviour.
+
+   ONLY EVER FOR A NAME. A clipped number is a DIFFERENT number and reads as one
+   - "-5437" cut to "-54" is not a shortened value, it is a wrong one. A caller
+   with a figure to place must drop the unit, drop a neighbour, or take a wider
+   box; there is no honest way to trim it. */
+function clipTxt(s,x,y,maxw,o){
+  o=o||{};
+  const size=fitStep(s,maxw,o);
+  let t=String(s);
+  if(tw(t,Object.assign({},o,{size}))>maxw){
+    const per=Math.max(1e-6,tw("M",Object.assign({},o,{size})));
+    t=t.slice(0,Math.max(1,Math.floor(maxw/per)));
+  }
+  txt(t,x,y,Object.assign({},o,{size}));
+  return size;
+}
+/* the step fitTxt would use, without drawing - so clipTxt can ask the same
+   question and there is still one walk of the ladder */
+function fitStep(s,maxw,o){
+  const want=(o&&o.size)||10;
+  for(const t of TSCALE) if(t<=want && tw(s,Object.assign({},o,{size:t}))<=maxw) return t;
+  return TSCALE[TSCALE.length-1];
 }
 function wrap(s,x,y,maxw,lh,o){
   const words=String(s).split(" "); let line="";
