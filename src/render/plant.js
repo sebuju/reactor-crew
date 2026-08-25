@@ -980,9 +980,14 @@ function readoutsFor(p,s){
     add("PARTY DOSE",s.dose.toFixed(1)+" %",
       band(s.dose,0,100,[[50,C.cyan,"LOW"],[100,C.red,"HIGH"]],{dp:0}),
       "Radiation your repair parties have taken so far. Where you put this room, and what shielding is between, decides it.");
-    add("DOSE RATE",P.dose.toFixed(2)+" x",
-      band(P.dose,0,3,[[1,C.green,"SHIELDED"],[3,C.amber,"EXPOSED"]],{dp:2}),
-      "How fast that dose piles up, against a nominal of 1.00. Move this room away from the reactor and watch it fall.");
+    add("DOSE RATE",s.doseRate.toFixed(2)+" x",
+      band(s.doseRate,0,RAD_CEIL,ZONE.map(z=>[z.t,z.col,z.lab]),{dp:2}),
+      "How fast dose is piling up right now in the room the crew actually sit in. It moves with what has failed on the plant, not just with where you put the shielding.");
+    add("WATCH DOSE",s.crewDose.toFixed(1)+" %",
+      band(s.crewDose,0,100,[[50,C.cyan,"LOW"],[100,C.red,"HIGH"]],{dp:0}),
+      "Radiation the control-room watch has taken, over the whole run. The watch never leaves this room; the repair party stands wherever the damage is. Different places, different doses - that gap is the entire reason both are tracked.");
+    add("AS-BUILT RATE",P.dose.toFixed(2)+" x",C.ink2,
+      "What this room was designed to read at rating, with nothing broken. Set it against DOSE RATE above to see how far the accident has pushed you off what you built.");
     add("EVENTS",LOG.length+"",null,
       "How many things have gone wrong this run. The LOG panel says what each of them was.");
   } else if(id==="hpi"){
@@ -997,7 +1002,7 @@ function readoutsFor(p,s){
   } else if(id==="cont"){
     add("RELEASE",s.release.toFixed(2)+" %",
       band(s.release,0,10,[[1,C.cyan,"CONTAINED"],[10,C.red,"RELEASING"]],{dp:2}),
-      "Share of the core inventory that has escaped and reached the crew. Driven by fuel damage, cut down by the containment you paid for.");
+      "Share of the core inventory that has escaped and reached the crew. Driven by fuel damage, cut down by the containment you paid for. Once loose it is airborne in every compartment, not sitting at a point a wall can stand between - containment is the only thing that touches it, and no amount of shielding anywhere on the plant helps against it.");
     add("HELD BACK",((1-P.contRel)*100).toFixed(0)+" %",null,
       "How much of any release this containment keeps in. It does nothing for the reactor and everything for the people around it.");
     add("CORE CATCHER",P.catcher?"fitted":"none",P.catcher?C.green:C.ink2,
@@ -1134,6 +1139,7 @@ function leaderLine(panelEl,railEl){
 function drawPlant(y0,L,vh,vx,vw){
   PLANT_LM=layoutMetrics(); GY=y0;
   BANDS = ctlBands(!!L);
+  layerTick();                                     // one memo/frame - see layers.js
   const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
   // both screens are HTML rails now, so the content the view fits to is the grid alone
   vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX, GY, GW*CELL, GHp);
@@ -1172,6 +1178,14 @@ function drawPlant(y0,L,vh,vx,vw){
   }
   ctx.lineJoin="miter";
   if(L) pipeFlow(L);
+  // over the pipes, under the machines - the one seam a layer can paint
+  // without landing on a value tag, a control strip or a bypass row, because
+  // every one of those belongs to the component loop that runs after this.
+  // It is also the true seam for what a "field in the room" means: nobody
+  // can survey the inside of a vessel, so the cells a layer may cover here
+  // are exactly the cells a repair party could stand in. Move this call and
+  // the next reactor to show dose gets it painted on top of its own gauges.
+  layerPass("under",L);
 
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
@@ -1224,6 +1238,7 @@ function drawPlant(y0,L,vh,vx,vw){
     if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+6,sy+i*CTL_H+1,w-12,CTL_H-3));
     if(byk && live) bypRow(byk,x+6,y+h-STRIP_PAD-bh+1,w-12,bh-3);
   }
+  layerPass("over",L);          // on top of the machines - annotates a component, not the room
   if(L) pipeGauges(L);
   else pipeGrips(NET);          // where a pipe runs is a bench question
   pipeJuncMarks(L);
