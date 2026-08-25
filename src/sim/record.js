@@ -131,45 +131,60 @@ const eqS = (a, b) => eqWhere(a, b) === null;
    event inside one, so it starts a fresh root take instead of being written to
    the take it ended. */
 const ACT = {
-  /* ── the panel ── */
-  flowDem  : {lab:"PUMP DEMAND",  cont:true, apply:(s,v)=>{ s.flowDem=v; }},
-  rodCommon: {lab:"ROD DEMAND",   cont:true, apply:(s,v)=>{ setCommon(v); }},
-  rodBank  : {lab:"BANK DEMAND",  cont:true, apply:(s,b,v)=>{ s.rodZDem[b]=v; }},
-  bankAuto : {lab:"BANK AUT/MAN", apply:(s,b)=>{ s.bankAuto[b]=!s.bankAuto[b]; }},
-  split    : {lab:"GANG/SPLIT",   apply:(s,on)=>{ setSplit(on); }},
-  tiltDem  : {lab:"TILT TRIM",    cont:true, apply:(s,v)=>{ s.tiltDem=v; }},
-  boronDem : {lab:"BORON DEMAND", cont:true, apply:(s,v)=>{ s.boronDem=v; }},
+  /* ── the panel ──
+     `log` formats the VALUE for the event log; the row's `lab` already names
+     the control. `nolog:true` marks a row that writes its own entry and must
+     not be announced twice. See actLog() below. */
+  flowDem  : {lab:"PUMP DEMAND",  cont:true, log:v=>(v*100).toFixed(0)+" %", apply:(s,v)=>{ s.flowDem=v; }},
+  rodCommon: {lab:"ROD DEMAND",   cont:true, log:v=>(v*100).toFixed(1)+" %", apply:(s,v)=>{ setCommon(v); }},
+  rodBank  : {lab:"BANK DEMAND",  cont:true, log:(b,v)=>"BANK "+(b+1)+" TO "+(v*100).toFixed(1)+" %",
+              apply:(s,b,v)=>{ s.rodZDem[b]=v; }},
+  bankAuto : {lab:"BANK AUT/MAN", log:b=>"BANK "+(b+1)+" NOW "+(S.bankAuto[b]?"MANUAL":"AUTO"),
+              apply:(s,b)=>{ s.bankAuto[b]=!s.bankAuto[b]; }},
+  split    : {lab:"ROD MODE",     log:on=>on?"SPLIT":"GANG", apply:(s,on)=>{ setSplit(on); }},
+  tiltDem  : {lab:"TILT TRIM",    cont:true, log:v=>v.toFixed(2), apply:(s,v)=>{ s.tiltDem=v; }},
+  boronDem : {lab:"BORON DEMAND", cont:true, log:v=>v.toFixed(0)+" pcm", apply:(s,v)=>{ s.boronDem=v; }},
   /* The one-shot dump, and it is one-shot HERE rather than in the two buttons
      that ask for it. It used to be written out twice - once on the reactor's
      control strip and once on the fault harness - with the guard, the arithmetic
      and the log entry copied, and the two copies had already drifted apart in
      their wording. A pressurised dump, so it moves the actual AND the demand:
      writing only the actual lets the boration walk drag it straight back. */
-  boronDump: {lab:"EMERG BORON",  apply:(s)=>{
+  boronDump: {lab:"EMERG BORON",  nolog:true, apply:(s)=>{
     if(s.borInjUsed) return;
     s.borInjUsed=true; s.boron-=4000; s.boronDem-=4000;
     logE("alarm","EMERGENCY BORON INJECTED",
       "4000 pcm of poison dumped into the loop. The reactor is shut down hard and cannot be restarted this run.");
   }},
-  loadDem  : {lab:"LOAD DEMAND",  apply:(s,v)=>{ s.loadDem=v; }},
-  porvBlock: {lab:"PORV BLOCK",   apply:(s)=>{ s.porvBlocked=!s.porvBlocked; }},
-  hpi      : {lab:"HPI",          apply:(s)=>{ s.hpi=!s.hpi; }},
+  /* logCoal, not cont: a load slider drag must collapse in the LOG the way a
+     rod drag does, but `cont` is a fact about the TAPE and adding it here would
+     quietly change what a recorded scenario replays. */
+  loadDem  : {lab:"LOAD DEMAND",  logCoal:true, log:v=>(v*100).toFixed(0)+" %", apply:(s,v)=>{ s.loadDem=v; }},
+  porvBlock: {lab:"PORV BLOCK",   log:()=>S.porvBlocked?"OPENED":"SHUT", apply:(s)=>{ s.porvBlocked=!s.porvBlocked; }},
+  hpi      : {lab:"HPI",          log:()=>S.hpi?"OFF":"ON", apply:(s)=>{ s.hpi=!s.hpi; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
   resetTrip: {lab:"TRIP RESET",   apply:(s)=>{ resetTrip(); }},
-  byp      : {lab:"BYPASS",       apply:(s,k)=>{ autoToggle(k); }},
+  byp      : {lab:"BYPASS",       log:k=>AUTOSYS[k].name+" "+(S.byp[k]?"ARMED":"BYPASSED"),
+              apply:(s,k)=>{ autoToggle(k); }},
   /* The P.junc test is the refusal, not decoration: without it a scenario line
      naming a junction this design never had would put a phantom key on S, and a
      phantom key on S is snapshotted, restored and compared like a real one. */
-  junc     : {lab:"JUNCTION",     apply:(s,id)=>{ if(P.junc[id]) s.juncOpen[id]=!s.juncOpen[id]; }},
-  repair   : {lab:"REPAIR PARTY", apply:(s,id)=>{ repairStart(id); }},
+  junc     : {lab:"JUNCTION",     log:id=>id.toUpperCase()+" "+(S.juncOpen[id]?"SHUT":"OPEN"),
+              apply:(s,id)=>{ if(P.junc[id]) s.juncOpen[id]=!s.juncOpen[id]; }},
+  /* nolog: repairStart() writes REPAIR PARTY DISPATCHED itself, and it is the
+     one that knows whether the order was refused for want of access. */
+  repair   : {lab:"REPAIR PARTY", nolog:true, apply:(s,id)=>{ repairStart(id); }},
   /* ── things done TO the plant: combat, faults, the harness ──
      Identical rows to the panel's, deliberately. A scenario that wants to stick
      a PORV open reaches the plant by the same line the fault-injection button
      does, so there is never a "test" path and a "real" path to keep in step. */
-  hit      : {lab:"COMBAT HIT",   apply:(s,id)=>{ combatHit(id); }},
-  blackout : {lab:"BLACKOUT",     apply:(s,on)=>{ s.blackout = on===undefined ? !s.blackout : !!on; }},
-  porvArm  : {lab:"PORV STICKS",  apply:(s)=>{ s.porvArm=true; }},
-  rodJam   : {lab:"ROD JAM",      apply:(s)=>{ s.rodJam=!s.rodJam; }},
+  /* nolog: combatHit() logs the damage effect it actually rolled, which says
+     far more than the order to roll one. */
+  hit      : {lab:"COMBAT HIT",   nolog:true, apply:(s,id)=>{ combatHit(id); }},
+  blackout : {lab:"BLACKOUT",     log:on=>(on===undefined?!S.blackout:!!on)?"ON":"RESTORED",
+              apply:(s,on)=>{ s.blackout = on===undefined ? !s.blackout : !!on; }},
+  porvArm  : {lab:"PORV STICKS",  log:()=>"ARMED FOR NEXT LIFT", apply:(s)=>{ s.porvArm=true; }},
+  rodJam   : {lab:"ROD JAM",      log:()=>S.rodJam?"CLEARED":"JAMMED", apply:(s)=>{ s.rodJam=!s.rodJam; }},
   porvStick: {lab:"STUCK PORV",   apply:(s)=>{ s.porvOpen=true; s.porvBlocked=false; }},
   /* recRoot() and not just resetPlant(): a reset is where one recording ends
      and the next begins, so the tape has to be told. It is the one act that
@@ -196,9 +211,34 @@ const ACTKEYS = Object.keys(ACT);
 function act(k, ...a){
   if(!ACT[k]) throw new Error("act: no such act "+k);
   recAct(k, a);
-  ACT[k].apply(S, ...a);
+  actDo(k, a);
   return true;
 }
+
+/* ══ THE LOG CARRIES THE CREW'S HALF OF THE RUN TOO ══
+   The event log used to say only what the PLANT did, so a debrief could not
+   tell a transient somebody caused from one they merely watched.
+
+   It goes THROUGH actDo(), never inside act(), and that is the whole reason
+   this pair exists: a replay reaches the plant by applyDue(), not by act(), and
+   a seek restores LOG from a keyframe and then re-derives everything after it.
+   Log only in act() and the entries between the keyframe and the playhead would
+   simply be missing on the way past - the log would be different depending on
+   whether you had scrubbed. Both paths call actDo(), so they cannot differ.
+
+   The `key` is the act plus its TRACK - every argument except the value - so a
+   drag on bank 1 does not swallow bank 2's entry. Same rule recAct() uses, for
+   the same reason, and see logE() for why only a RUN of them collapses. */
+function actLog(k, a){
+  const r = ACT[k];
+  if(r.nolog || r.rec === false) return;
+  const det = r.log ? r.log(...a) : "";
+  const coal = r.cont || r.logCoal;
+  logE("act", r.lab + (det ? " / " + det : ""),
+    "Ordered from the panel" + (det ? ": " + det + "." : "."),
+    coal ? "act:" + k + ":" + a.slice(0, -1).join(",") : null);
+}
+function actDo(k, a){ actLog(k, a); ACT[k].apply(S, ...a); }
 
 /* ═══════════════ THE TAPE ═══════════════
    A recording is a FOREST, not a list. You play, you scrub back, you try it the
@@ -465,7 +505,7 @@ function applyDue(take, tick, from){
   let i = from | 0;
   while(i < take.evs.length && take.evs[i].tick <  tick) i++;
   while(i < take.evs.length && take.evs[i].tick === tick){
-    const ev = take.evs[i++]; ACT[ev.k].apply(S, ...ev.a);
+    const ev = take.evs[i++]; actDo(ev.k, ev.a);
   }
   return i;
 }
