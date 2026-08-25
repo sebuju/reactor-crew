@@ -1,0 +1,64 @@
+/* The transport strip - see docs/kit-api.md and .claude/CLAUDE.md's
+   "the playhead is always on screen". One builder (trBuild in transport.js),
+   mounted at the top of both #scr-operate and #scr-scenario. */
+
+.trs{position:relative;display:flex;align-items:center;gap:6px;
+  height:30px;padding:0 12px;background:var(--c-panel);
+  border-bottom:1px solid var(--c-edge2);pointer-events:auto}
+
+.trs-rate .kit-segsel-cell{height:24px}
+.trs-rate .kit-segsel-mass{display:none}
+
+/* RESERVED, NOT MEASURED: both variants sit in the same grid cell so the
+   container is always the width of the wider one - entering replay must not
+   shrink the scrub bar under the hand that just touched it. */
+.trs-mode{display:grid;align-items:center}
+.trs-mode>*{grid-area:1/1;display:flex;align-items:center;gap:5px;visibility:hidden}
+.trs-mode.replay .trs-replaybtns{visibility:visible}
+.trs-mode:not(.replay) .trs-live{visibility:visible}
+.trs-live{font-size:var(--t7);letter-spacing:1.6px;text-transform:uppercase;color:var(--c-ink2)}
+
+/* sized off "TAKE 88" / "<- 88 @ T+8888.8", not off the name they hold - a
+   scrub back across a fork must not resize the column under the hand. */
+.trs-name{min-width:7ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:var(--t9);color:var(--c-amber)}
+.trs-fork{min-width:17ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:var(--t7);color:var(--c-ink2)}
+.trs-notape{font-size:var(--t7-5);letter-spacing:1px;text-transform:uppercase;color:var(--c-ink2)}
+
+.trs-scrub{position:relative;flex:1 1 auto;min-width:40px;height:12px;
+  background:var(--c-bg);border:1px solid var(--c-edge);cursor:pointer;touch-action:none}
+.trs-scrub:hover{border-color:var(--c-edge2)}
+.trs-scrub-block{position:absolute;top:0;bottom:0;background:var(--c-well)}
+.trs-scrub-block.cur{background:var(--c-panel-hi)}
+.trs-scrub-fork{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--c-amber)}
+.trs-scrub-head{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;
+  background:var(--c-amber);box-shadow:0 0 0 1px var(--c-bg);pointer-events:none}
+
+.trs-clock{min-width:15ch;text-align:right;font-size:var(--t7);color:var(--c-cyan)}
+
+.trs-takes-btn.hide{display:none}
+
+.trs-picker{position:absolute;top:100%;left:12px;right:12px;z-index:5;display:none;
+  max-height:320px}
+.trs-picker.open{display:block}
+.trs-picker .kit-well-body{max-height:280px;overflow-y:auto;padding:6px 10px 8px}
+.trs-take-head{display:flex;gap:8px;padding:2px 8px 4px;
+  font-size:var(--t6);letter-spacing:1px;text-transform:uppercase;color:var(--c-ink2)}
+.trs-take-head span:first-child{flex:1 1 auto}
+.trs-take-head .col-fork{width:22ch}
+.trs-take-head .col-len{width:6ch;text-align:right}
+.trs-take-head .col-assist{width:8ch}
+.trs-take-head .col-verd{width:14ch}
+.trs-take-row{display:flex;align-items:center;gap:8px;padding:2px 8px;min-height:20px}
+.trs-take-go{width:30px}
+.trs-take-row.on{background:color-mix(in srgb,var(--c-amber) 16%,var(--c-panel))}
+.trs-take-name{flex:1 1 auto;font-size:var(--t8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trs-take-row.on .trs-take-name{color:var(--c-amber)}
+.trs-take-fork,.trs-take-root{width:22ch;font-size:var(--t7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trs-take-fork{background:none;border:0;padding:0;font-family:var(--mono);color:var(--c-cyan);cursor:pointer;text-align:left}
+.trs-take-root{color:var(--c-ink2)}
+.trs-take-len{width:6ch;text-align:right;font-size:var(--t8);color:var(--c-cyan)}
+.trs-take-assist{width:8ch;font-size:var(--t6);letter-spacing:.8px;text-transform:uppercase;color:var(--c-amber)}
+.trs-take-verd{width:14ch;font-size:var(--t7-5);letter-spacing:.8px}
+.trs-take-kids{margin-left:14px;padding-left:10px;border-left:1px solid var(--c-edge2)}
