@@ -1,32 +1,8 @@
 "use strict";
-/* immediate-mode widget list, hit testing, tooltips */
 
-/* ═══════════════ immediate-mode UI ═══════════════ */
 const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9}};
+const WPSNAP=8;
 
-/* ═══════════════ THE PLANT VIEW TRANSFORM ═══════════════
-   The plant is drawn into a viewport you can pan and zoom, so a widget pushed
-   while that view is up lives in PLANT coordinates while the pointer arriving
-   from the DOM lives in PAGE coordinates. Exactly one of those two is allowed
-   to move, and it is the POINTER: the hit test converts it on the way in and a
-   widget's own numbers are never touched. Storing page coordinates in the
-   widget instead puts two spaces inside one object, and the slider strips
-   mounted on the components would then draw their thumb in one and hit-test it
-   in the other.
-
-   The pan is an OFFSET into the viewport, not an absolute plant point, because
-   the plant sits at a different y on the two screens and an absolute point
-   would mean something different the moment you commissioned.
-
-   At s=1 the whole thing is the identity, which is why every geometry audit
-   still measures the plant exactly where it always was. It cannot be
-   initialised from GX and CELL up here: layout.js loads after this file. */
-/* Zoom is a MULTIPLE OF FIT, never an absolute scale. The page is the window
-   now, so the room the plant gets depends on the window and changes under you;
-   an absolute scale would mean "twice life size" on one monitor and "the whole
-   plant" on another, and a resize would silently change how much you could see.
-   VIEW.z is what the player sets, 1 = everything visible, and VIEW.s is what
-   the frame works out from it. */
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
 let viewOn=false;                       // are widgets being pushed through it?
 const vPt=p=>({x:VIEW.cx+VIEW.ox+(p.x-VIEW.x)/VIEW.s,
@@ -34,109 +10,121 @@ const vPt=p=>({x:VIEW.cx+VIEW.ox+(p.x-VIEW.x)/VIEW.s,
 const vScr=p=>({x:VIEW.x+(p.x-VIEW.cx-VIEW.ox)*VIEW.s,
                 y:VIEW.y+(p.y-VIEW.cy-VIEW.oy)*VIEW.s});
 const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
-/* The viewport, and the plant that has to go in it. Called once a frame before
-   anything is drawn through the view. Anything smaller than its viewport is
-   CENTRED rather than pinned to a corner - a small plant on a big screen sat in
-   the top left with the room stacked to one side of it. */
-/* The CONTENT is whatever the caller says the drawing is. The control room
-   hands in the grid AND every plate standing beside it; the bench hands in the
-   grid alone, because its one plate changes with the selection and measuring it
-   in re-scaled the plant on every click. */
+function vBox(x,y,w,h){ VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h; }
 function vFit(x,y,w,h,cx,cy,cw,ch){
-  VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h;
+  vBox(x,y,w,h);
   VIEW.cx=cx; VIEW.cy=cy; VIEW.cw=cw; VIEW.ch=ch;
   VIEW.fit=Math.min(w/Math.max(cw,1), h/Math.max(ch,1));
   VIEW.s=VIEW.fit*VIEW.z;
 }
-/* ══ THE VIEW IS NOT LIMITED, IN EITHER AXIS ══
-   There was a zoom cap of 3x and a pan stop half a screen past the content, and
-   between them they cost more than they bought. The cap decided for the player
-   how close a look at a lattice cell is a reasonable one. The pan stop was
-   measured off the CONTENT box, which is the grid alone on the bench - so the
-   plate standing off the edge of a grid that already fills the viewport was
-   outside the roam area, and worse, the allowance shrank as you zoomed in
-   (it was half of VIEW.w/VIEW.s), so 2x could not reach what 1x could.
-   Nothing needs the stop: the key in the top right of the grid always reads the
-   scale you are at and always jumps back to fit, so the plant cannot be lost,
-   only put down somewhere. z stays positive on its own - the wheel scales it
-   through an exponential and every other writer passes a positive number. */
-/* zoom about a plant point - the wheel holds the point under the pointer, the
-   key centres on the component you have selected */
+// zoom about a plant point - the wheel holds the point under the pointer, the
+// key centres on the component you have selected
 function vZoom(z,cx,cy){
   VIEW.z=z; VIEW.s=VIEW.fit*VIEW.z;
   VIEW.ox=(cx-VIEW.cx)-VIEW.w/2/VIEW.s;
   VIEW.oy=(cy-VIEW.cy)-VIEW.h/2/VIEW.s;
 }
-/* pan-and-zoom to a rect in PLANT coordinates - a plate's own {x,y,w,h} - with
-   enough zoom to fit it in the viewport and never more, so a wide plate like
-   RESULTS is not cropped the way jumping to a component at a fixed 1.8x would
-   crop it. */
-function vZoomTo(q){
-  const z=Math.max(.3,Math.min((VIEW.w-40)/(VIEW.fit*q.w),(VIEW.h-40)/(VIEW.fit*q.h)));
-  vZoom(z,q.x+q.w/2,q.y+q.h/2);
-}
-/* ═══════════════ OVERLAYS ═══════════════
-   The page is exactly the window now, so everything that used to be stacked
-   below the plant has nowhere left to be. It is drawn OVER the plant instead,
-   out of one registry: a key in the bar along the bottom opens it, the same key
-   closes it, and only one is ever up.
 
-   The panels themselves did not have to change. The overlay is the same
-   736-wide content column they were already drawing into, so each one is still
-   the function it always was, handed a y.
+// a keystroke is a registry too: a row carries BOTH the keystroke and the
+// function, so the on-screen key and the shortcut can never drift apart.
+// Modified keys are left alone on purpose - ctrl-R must still reload the
+// page and cmd-1 must still change browser tab.
+const KEYS=[];
+const keyAdd=o=>{ KEYS.push(o); return o; };
+const keyList=()=>KEYS.filter(k=>!k.sc||k.sc===screen);
+addEventListener("keydown",e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey) return;
+  const K=keyList().find(k=>k.k===e.key);
+  if(K){ e.preventDefault(); K.fn(); }
+});
 
-   Sparing with edges, like the rest of this UI: the plant behind is dimmed
-   rather than hidden - you are still operating the thing you are reading about
-   - and the panel is a tone step with a single accent along its top. No frame,
-   no drop shadow, nothing drawn twice. */
 const OVL=[];
 let ovlOpen=null;
 const ovlAdd=o=>{ OVL.push(o); return o; };
-const ovlList=()=>OVL.filter(o=>!o.sc||o.sc===screen);
+const ovlList=()=>OVL.filter(o=>(!o.sc||o.sc===screen)&&(!o.when||o.when()));
 const ovlFor=k=>ovlList().find(o=>o.k===k);
 function ovlToggle(k){ ovlOpen = ovlOpen===k ? null : k; }
 function drawOverlay(){
   if(!ovlOpen) return;
-  const o=ovlFor(ovlOpen); if(!o) return;
+  const o=ovlFor(ovlOpen); if(!o){ ovlOpen=null; return; }
   const h=Math.min(typeof o.h==="function"?o.h():o.h, VIEW.h-10), y=VIEW.y+VIEW.h-h;
   fillRect(VIEW.x,VIEW.y,VIEW.w,VIEW.h,"rgba(6,10,11,.62)");
   fillRect(12,y,736,h,C.panel);
-  /* a catcher, pushed BEFORE the panel's own widgets so they still win inside
-     it: a click on bare overlay must not reach the component behind it */
+  // catcher, pushed BEFORE the panel's own widgets so a click on bare overlay
+  // does not reach the component behind it
   push({x:12,y,w:736,h,type:"btn"});
   o.draw(y);
 }
-/* the bar along the very bottom: what just happened on the left, the keys that
-   open the panels on the right */
 function ovlBar(y,h,note){
   fillRect(0,y,W,h,C.panel); fillRect(0,y,W,1,C.edge);
   let x=W-12;
   const L=ovlList();
   for(let i=L.length-1;i>=0;i--){ const o=L[i];
-    const kw=tw(o.label,{size:7,sp:1,caps:1})+14;
+    const kw=tw(o.label,{size:6.5,sp:1,caps:1})+14;
     x-=kw;
     button(x,y+3,kw,h-6,o.label,
-      {sunk:1,on:ovlOpen===o.k,size:7,sp:1,fn:()=>ovlToggle(o.k)});
+      {sunk:1,on:ovlOpen===o.k,size:6.5,sp:1,fn:()=>ovlToggle(o.k)});
     TIP(x,y+3,kw,h-6,o.label,o.tip);
     x-=4;
   }
-  if(note) fitTxt(note,12,midBase(y,h,8),x-20,{size:8,color:C.ink2});
+  if(note) fitTxt(note,12,midBase(y,h,7),x-20,{size:7,color:C.ink2});
 }
 
-/* The pointer in the space this widget was pushed in - or nothing at all when
-   it is a plant widget and the pointer is outside the viewport, because a
-   component panned under the panel below must stop being clickable. */
+// a right-click menu is a registry for the same reason an overlay is: the
+// bench's ADD/REMOVE menu and the scenario timeline's own menu are the same
+// gesture answering two different questions, sharing one engine instead of
+// each carrying a copy. resolve(p) reads the raw release point and returns
+// what the click landed on (or null); items(hit) turns that into menu rows.
+const CTX=[];
+const ctxAdd=o=>{ CTX.push(o); return o; };
+const ctxFor=()=>CTX.find(o=>!o.sc||o.sc===screen);
+
+// `sel` is the one plant-component selection, shared by design and control
+// since they're the same renderer. A screen with a selection of its own that
+// `sel` doesn't know about (the scenario timeline's event/limit) registers
+// here so a bare-deck click clears it too, instead of leaving the inspector
+// lit with nothing to justify it.
+const DESEL=[];
+function deselFire(){ for(const o of DESEL) if(!o.sc||o.sc===screen) o.fn(); }
+let ctxMenu=null;
+function openCtxMenu(p){
+  const R=ctxFor();
+  ctxMenu = R ? R.resolve(p) : null;
+}
+// dressed like drawTip()'s box (drop shadow, amber frame) so it reads as a
+// popup rather than one more pane of ordinary chrome. Width is the longest
+// row plus padding, not a flat guess - a two-word bench row and thirteen
+// gesture names are not the same menu.
+function drawCtxMenu(){
+  if(!ctxMenu) return;
+  const R=ctxFor();
+  const items = R ? R.items(ctxMenu) : [];
+  if(!items.length){ ctxMenu=null; return; }
+  const tf={size:7.5,sp:.6,caps:1}, rh=15, pad=8;
+  const w=clamp(Math.max(...items.map(it=>tw(it.label,tf)))+pad*2, 90, 220);
+  const h=items.length*rh+6;
+  let x=Math.min(ctxMenu.x,W-4-w), y=Math.min(ctxMenu.y,H-4-h);
+  fillRect(x+3,y+3,w,h,"rgba(0,0,0,.6)");
+  fillRect(x,y,w,h,"#0b1215"); frame(x,y,w,h,C.amber);
+  push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach whatever is under it
+  items.forEach((it,i)=>{
+    const iy=y+3+i*rh;
+    const wd=push({x:x+2,y:iy,w:w-4,h:rh-1,type:"btn",fn:()=>{ it.fn(); ctxMenu=null; }});
+    const h_=hov(wd);
+    if(h_) fillRect(x+2,iy,w-4,rh-1,C.panelHi);
+    txt(it.label,x+pad,iy+rh-4,Object.assign({},tf,{color:h_?C.bright:C.ink}));
+  });
+}
+
 const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
 
 const push=w=>{ if(viewOn) w.v=1; ui.widgets.push(w); return w; };
 const inside=(w,p)=>!!p&&p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
 const hov=w=>inside(w,ptIn(w,ui.ptr))&&!ui.drag;
 
-/* ─────────────── tooltips ─────────────── */
 let touchTip=null, isTouch=false;
-/* g is an optional band(): the scale the value in this region lives on. A
-   tooltip that only says a number is fine is asking to be believed; one that
-   draws where the number sits between its limits can be checked at a glance. */
+// g is an optional band(): the scale the value in this region lives on, so
+// the tooltip can be checked at a glance instead of just believed
 function TIP(x,y,w,h,title,body,g){ ui.tips.push({x,y,w,h,title,body,g,v:viewOn?1:0}); }
 function findTip(p){
   for(let i=ui.tips.length-1;i>=0;i--){ const t=ui.tips[i];
@@ -152,8 +140,8 @@ function drawTip(){
   if(!t) return;
   const maxw=248, ob={size:8.5,color:C.ink};
   const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=23+n*11+(t.g?BAND_H:0);
-  /* a touch anchors the box on the thing it describes, so a plant tip has to
-     come back out of plant space to say where that is */
+  // a touch anchors the box on the thing it describes, so a plant tip has to
+  // come back out of plant space to say where that is
   const an = t.v ? vScr({x:t.x+t.w/2,y:t.y+t.h}) : {x:t.x+t.w/2,y:t.y+t.h};
   const ax = isTouch ? an.x : ui.ptr.x, ay = isTouch ? an.y : ui.ptr.y;
   let bx=clamp(ax+16,6,W-bw-6), by=ay+18;
@@ -163,10 +151,8 @@ function drawTip(){
   txt(t.title,bx+11,by+13,{size:8,weight:700,sp:1.3,caps:1,color:C.amber});
   wrap(t.body,bx+11,by+26,maxw,11,ob);
   if(t.g){
-    /* The verdict and the setpoint ride on the TITLE row rather than under the
-       strip. They are two more short strings and the strip already carries
-       three; put them below it and the tooltip grows a line to say what its own
-       colours were saying. */
+    // the verdict and setpoint ride on the title row rather than under the
+    // strip - the strip already carries three, and below it costs a line
     const z=bandZone(t.g); let rx=bx+bw-11;
     if(t.g.lim) for(const L of t.g.lim){
       const s_=L[1]+" "+L[0].toFixed(t.g.dp);
@@ -182,113 +168,83 @@ function button(x,y,w,h,label,o){
   o=o||{}; const wd=push({x,y,w,h,type:"btn",fn:o.fn});
   const h_=hov(wd);
   const col = o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
-  /* o.sunk is a key set INTO a lighter base, so it needs no border: it is already
-     a darker block against a lighter plinth, and the shape reads from the tone
-     step alone. Boxing it as well put a line round every one of a dozen keys in
-     a 46px component - the plant view read as a cage. Tone does the job, so the
-     frame and the corner ticks come off, and hover lifts the whole key instead
-     of brightening a hairline nobody was looking at. */
-  /* o.base overrides the RESTING fill, for a key whose row is otherwise the
-     same colour as the plate under it and would vanish once its border does -
-     the bench's pen and preset rows are the only callers that use it. */
+  // o.sunk is a key set into a lighter base: tone alone reads the shape, so
+  // it draws no border (boxing every key in a 46px component read as a cage)
+  // o.base overrides the RESTING fill for a key whose row is otherwise the
+  // same colour as the plate under it and would vanish once its border does
   const base = o.sunk?C.well:(o.base!==undefined?o.base:C.panel), lift = o.sunk?C.panel:C.panelHi;
-  /* Danger is the one state drawn SOLID, dark text on full red, the way a lit
-     annunciator tile is. It used to be red text on a near-black block, which was
-     the quietest thing on a panel once the borders came off - and SCRAM is the
-     one key that must never be found by reading it. There are exactly two:
-     SCRAM and the one-shot boron dump. Both should stop your hand. */
+  // danger is drawn SOLID (dark text on full red), the way a lit annunciator
+  // tile is - SCRAM and the one-shot boron dump are the two keys that must
+  // never be found by reading them, only by their colour
   fillRect(x,y,w,h, o.danger?(h_?"#ff7d6c":C.red):(o.on?"#2a1f08":(h_?lift:base)));
-  /* o.flat is o.sunk's sibling for a key whose SELECTED state must also lose its
-     outline - the bench's pen and preset keys, where the chosen key already
-     carries an amber fill and amber type and the border is a third cue. o.sunk
-     drops it by tone (a darker block set into a lighter plinth needs no edge);
-     o.flat drops it while keeping the ordinary base/lift scheme. */
+  // o.flat is o.sunk's sibling for a SELECTED key that must also lose its
+  // outline (the bench's pen/preset keys, whose amber fill+type already say it)
   if(!o.sunk && !o.flat) frame(x,y,w,h,col);
   txt(label,x+w/2,midBase(y,h,o.size||9),{size:o.size||9,weight:o.danger?700:o.weight,
       sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
       color:o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)});
   return wd;
 }
-/* One rule for every readout attached to a slider: while the pointer is over the
-   track it shows what a click WOULD set, in amber; otherwise the value the plant
-   actually has, in cyan. Three callers share it - the strip readout below, the
-   bench and the controller tunables - so the preview cannot exist on one and not
-   the others. */
+// while the pointer is over the track, the readout shows what a click WOULD
+// set (amber); otherwise the value the plant actually has (cyan) - shared by
+// the strip readout, the bench and the controller tunables so the preview
+// behaviour can't exist on one and not the others
 function sldRead(wd,fmt){
   return wd.pv!=null ? {s:fmt(wd.pv),col:C.amber} : {s:fmt(wd.val),col:C.cyan};
 }
 
-/* o.th sizes the widget; o.tw is the GRAB zone, not a drawn width - the indicator
-   is a hairline either way, so the thing you aim at stays wider than the thing you
-   see. o.fmt makes the slider draw its own readout, OUTSIDE the track.
-
-   The track is a bargraph, because every other bar on this plant is one. seg()
-   cannot draw it: a rate-limited control has THREE things to say, not two -
-   where the plant IS, where it is on its WAY to, and where it is not. */
+// o.th sizes the widget; o.tw is the GRAB zone, not a drawn width. o.fmt
+// makes the slider draw its own readout, outside the track. The track is a
+// bargraph (not seg()) because a rate-limited control has three things to
+// say - where the plant IS, where it's headed, and where it is not.
 function slider(x,y,w,val,min,max,o){
   o=o||{}; const th=o.th||22, tw_=o.tw||10;
-  /* Every edge of the indicator is rounded to whole layout units before it is
-     drawn. At th=13 the top of the strip lands on a half unit, and a 1-unit
-     serif drawn across a half unit is a 2-unit smear - which is what made the
-     indicator read as blunt and slightly lopsided. */
+  // every edge is rounded to whole layout units first: at th=13 the strip top
+  // lands on a half unit, and a 1-unit serif across a half unit smears to 2
   const t0=Math.round(y-th/2), t1=Math.round(y+th/2), hh=t1-t0;
-  /* The readout stands OUTSIDE the track. It used to be an opaque plate ON it,
-     and on an 84px strip it covered most of the bar it was labelling. The track
-     gives up the room instead. Width is measured at both ends of the range as
-     well as at the value, or the track would jiggle as digits come and go. */
+  // the readout stands OUTSIDE the track (an opaque plate ON an 84px strip
+  // used to cover most of the bar); width is measured at both range ends and
+  // the value, or the track would jiggle as digits come and go
   const ro={size:6.5};
   let rw = o.fmt ? Math.max(tw(o.fmt(min),ro),tw(o.fmt(max),ro),tw(o.fmt(val),ro))+5 : 0;
   if(w-rw<24) rw=0;                  // no room for both: the bar wins
   const tW=w-rw;
-  /* the widget is the TRACK, not the row - otherwise clicking the number would
-     slam the value to whatever the number's own x means */
+  // the widget is the TRACK, not the row - otherwise clicking the number
+  // would slam the value to whatever the number's own x means
   const wd=push({x,y:y-th/2-2,w:tW,h:th+4,type:"sld",min,max,fn:o.fn,
                  cy:y,val,tw_});     // cy/val/tw_ are what the drag handler needs
-  /* clamp t, or a value outside the range draws the indicator off its own track.
-     o.dem is what you asked for: with a rate limit the plant is not there yet.
-     o.mark is a setpoint the slider is ALLOWED to cross - crossing it costs
-     something, and it is drawn so it is never a surprise. */
+  // clamp t, or a value outside the range draws the indicator off its own
+  // track. o.dem is what you asked for (may lag behind with a rate limit);
+  // o.mark is a setpoint the slider is ALLOWED to cross.
   const t=clamp((val-min)/(max-min),0,1);
   wd.tx=x+t*tW;
   const dem = o.dem==null ? t : clamp((o.dem-min)/(max-min),0,1);
-  /* Which SIDE of the mark costs you is the caller's business. A ceiling is red
-     above it; the pumps' design floor is red BELOW it, and drawing every mark as
-     a ceiling painted the whole safe half of an RCP bar red. Out-of-range
-     defaults sit off the end of the track on the harmless side. */
+  // which side of the mark costs you is the caller's business: a ceiling is
+  // red above it, a design floor is red below it - drawing every mark as a
+  // ceiling would paint the whole safe half of an RCP bar red
   const lo_ = !!o.markLo;
   const mk  = o.mark==null ? (lo_?-1:2) : clamp((o.mark-min)/(max-min),0,1);
   const lo=Math.min(t,dem), hi=Math.max(t,dem), rising=dem>t;
-  /* has the plant crossed the mark, and has the order crossed it */
   const viol = o.mark==null ? false : (lo_? t<mk   : t>mk);
   const violD= o.mark==null ? false : (lo_? dem<mk : dem>mk);
-  /* What a click here would set. Only on the bare track: pressing the indicator
-     itself grabs it and changes nothing, and a DRAG is geared, so the pointer is
-     not the value once you are dragging - hov() already stands down for that. */
-  /* The pointer arrives in PAGE units and this widget's geometry may be in
-     PLANT units, so it is converted the same way the hit test converts it -
-     ptIn() is null when the pointer is outside the viewport entirely. Reading
-     ui.ptr raw put the readout's number and the click-preview hairline
-     wherever the PAGE said, which at fit scale is a long way from the track:
-     hov() said the pointer was on the slider and valFrom() then clamped the
-     page x to the far end of it. */
+  // what a click here would set - only on the bare track, since pressing the
+  // indicator itself grabs it, and a drag is geared so the pointer is not the
+  // value once dragging (hov() already stands down for that). Converted
+  // through ptIn() like any plant widget, or the preview hairline would land
+  // wherever the raw PAGE pointer is, far from the track at fit scale.
   const pp = ptIn(wd,ui.ptr);
   wd.pv = (pp && hov(wd) && Math.abs(pp.x-wd.tx)>tw_/2+3) ? valFrom(wd,pp.x) : null;
-  /* one cell per ~5px: an 84px strip gets 17, a 240px bench gets 30 */
-  const n=clamp(Math.round(tW/5),6,30), cw=tW/n;
+  const n=clamp(Math.round(tW/5),6,30), cw=tW/n;   // one cell per ~5px
   const bh=Math.min(10,th-3), by=Math.round(y-bh/2);
   for(let i=0;i<n;i++){
-    /* A scale does not END at its limit, it is only MARKED there - the same rule
-       pipeDial() follows - so the wrong side of the mark is drawn as a zone you
-       can see before you are in it.
-       Being IN it is a separate question from a cell merely lying in it, and a
-       floor is where the two come apart: a bar at 100% fills straight through the
-       low end, so "lit and below the floor" is every running pump, not a fault.
-       The violation is the VALUE crossing the mark, so that is what lights it. */
+    // the mark is a limit, never an end of the scale - the wrong side draws
+    // as a zone you can see before you're in it. Being IN it is separate from
+    // a cell merely lying in it: a floor is where those two come apart (a bar
+    // at 100% fills through the low end, which is every running pump, not a
+    // fault) - so it's the VALUE crossing the mark that lights a cell.
     const c=(i+.5)/n, past=lo_? c<mk : c>mk;
-    /* An unlit cell is a dark slot, not a grey one. It used to be #152125, which
-       is within a shade of the plinth a control strip sits on, so the bar washed
-       out into its own base. C.well is what everything recessed on this panel is
-       cut back to - the sunk keys beside it use the same tone. */
+    // an unlit cell is a dark slot (C.well), not the old #152125 grey, which
+    // was close enough to the plinth a control strip sits on to wash out
     let col = past?"#240b08":C.well;                                          // not there
     if(c<=lo)      col = (past&&viol)?C.red:"#2f7d8c";                        // there
     else if(c<=hi) col = (past&&(viol||violD))?"#5c2a1c"
@@ -297,27 +253,23 @@ function slider(x,y,w,val,min,max,o){
   }
   if(o.mark!=null) fillRect(Math.round(x+mk*tW),t0,1,hh,C.red);
   if(wd.pv!=null) fillRect(Math.round(pp.x),t0,1,hh,"#7a5a18");  // where a click lands
-  /* A hairline in a cut, not a plate. The old 10px thumb covered an eighth of an
-     84px track and the readout had to dodge it; the cut is what keeps 1px of
-     amber readable against a lit cell. */
+  // a hairline in a cut, not a plate - the old 10px thumb covered an eighth
+  // of an 84px track; the cut keeps 1px of amber readable against a lit cell
   const cx=Math.round(clamp(x+t*tW,x+1,x+tW-1));
   fillRect(cx-1,t0,3,hh,C.bg);       // the cut, so 1 unit of amber survives a lit cell
   fillRect(cx,t0,1,hh,C.amber);      // the indicator itself
   fillRect(cx-2,t0,5,1,C.amber);     // serifs, 1 unit tall - they mark the ends, not the value
   fillRect(cx-2,t1-1,5,1,C.amber);
-  /* demand is an ORDER, not a position, so it rides above the track as a caret.
-     Its serif is 3 units against the indicator's 5, or the two read the same. */
+  // demand is an ORDER, not a position, so it rides above the track as a
+  // caret with a 3-unit serif against the indicator's 5
   if(o.dem!=null && Math.abs(dem-t)>.002){
     const dx=Math.round(clamp(x+dem*tW,x+1,x+tW-1));
     fillRect(dx,t0,1,4,C.amber); fillRect(dx-1,t0,3,1,C.amber);
   }
   if(rw){ const r=sldRead(wd,o.fmt);
     txt(r.s,x+w,midBase(t0,hh,6.5),Object.assign({},ro,{align:"right",color:r.col})); }
-  /* A one-cell component - an RCP - has no room for a track AND a number, so
-     there it is hover-only: nothing covers the bar until you are pointing at it,
-     and then the number you want is the one under the pointer anyway. It stands
-     in the half of the track the pointer is not in, so it never hides its own
-     click target. */
+  // a one-cell component has no room for a track AND a number, so there it's
+  // hover-only, standing in the half of the track the pointer isn't in
   else if(o.fmt && wd.pv!=null){
     const ps=o.fmt(wd.pv), lw=tw(ps,ro)+4, far=(pp.x-x)/tW>.5;
     const px=far ? x+1 : x+tW-lw-1;
@@ -326,32 +278,38 @@ function slider(x,y,w,val,min,max,o){
   }
   return wd;
 }
+// the canvas covers layout y = TOPBAR_H..H, not 0..H: the HTML topbar owns the rest
 function local(e){ const r=cv.getBoundingClientRect();
-  return {x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)}; }
+  return {x:(e.clientX-r.left)*(W/r.width),
+          y:(e.clientY-r.top)*((H-TOPBAR_H)/r.height)+TOPBAR_H}; }
 const valFrom=(w,x)=>w.min+clamp((x-w.x)/w.w,0,1)*(w.max-w.min);
-/* A control mounted inside a component is only as wide as the component, and the
-   rod bank gets 84px for a full 0..100% stroke. So the drag is relative and
-   geared: pull away from the track and the same hand movement buys less travel,
-   the way a fader does. Grabbing the thumb never jumps the value; pressing the
-   bare track still does, because that is how you get somewhere fast. */
+// a control mounted inside a component is only as wide as the component (the
+// rod bank gets 84px for a full 0..100% stroke), so the drag is relative and
+// geared like a fader: pulling away from the track buys less travel per
+// pixel. Grabbing the thumb never jumps the value; pressing bare track does.
 const sldGain = dy => 1/(1+Math.max(0,Math.abs(dy)-24)/16);
 
-/* The plant is dragged with the RIGHT button and worked with the left, so
-   there is no bare deck to find and no gesture that means two things. The
-   browser menu on that button would land on top of the plant, so it goes -
-   EXCEPT on shift, which is the escape hatch every browser gives you for
-   exactly this. Hold shift and the real menu comes back, with inspect and
-   save-image on it. */
+const DBL_MS=400, DBL_PX=6;
+let lastDown=null;
+// MouseEvent.detail (click count) is never promised on a PointerEvent -
+// Chromium happens to set it, nothing requires it to - so a double-click is
+// detected here instead, off one clock/pointer, and stamped onto the event
+// as `.dbl` so every call site reads one boolean instead of re-deriving it
+function dblCheck(p,e){
+  const now=performance.now();
+  const dbl = !!lastDown && e.button===lastDown.button
+    && now-lastDown.t<DBL_MS && Math.hypot(p.x-lastDown.x,p.y-lastDown.y)<DBL_PX;
+  lastDown={t:now,x:p.x,y:p.y,button:e.button};
+  return dbl;
+}
 cv.addEventListener("contextmenu",e=>{ if(!e.shiftKey) e.preventDefault(); });
 cv.addEventListener("pointerdown",e=>{
   cv.setPointerCapture(e.pointerId); const p=local(e); ui.ptr=p;
-  /* any fresh gesture dismisses an open menu - a widget it still stands over
-     re-opens or re-acts in the same handler call below, so nothing flashes */
+  e.dbl=dblCheck(p,e);
   ctxMenu=null;
-  /* shift+right is the browser's menu, not a pan - taking the drag as well
-     would leave the plant sliding about under an open menu. Right held and
-     dragged pans, exactly as before; right pressed and released without
-     moving opens the ADD/REMOVE menu instead - see pointerup. */
+  // shift+right is the browser's own menu, not a pan; right held-and-dragged
+  // pans, right pressed-and-released without moving opens the ADD/REMOVE menu
+  // instead (see pointerup)
   if(e.button===2){ if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y,sx:p.x,sy:p.y,moved:false};
     return; }
   isTouch = e.pointerType==="touch" || e.pointerType==="pen";
@@ -360,11 +318,8 @@ cv.addEventListener("pointerdown",e=>{
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
     const q=ptIn(w,p); if(!inside(w,q)) continue;
     if(w.type==="part"){ sel=w.part.id;
-      /* a commissioned plant is welded down - you may select a component, not move it,
-         and a pinned part rides its parent, so it is selectable but never draggable */
-      /* rows carry control bands on both screens now, so a row is not CELL tall
-         and the grab offset has to be measured against rowTop(), not against
-         y*CELL - columns are still uniform */
+      // a commissioned plant is welded down: selectable, not movable; a
+      // pinned part rides its parent, so it's selectable but never draggable
       if(screen==="design" && !w.part.pin) ui.drag={type:"part",part:w.part,
         ox:q.x-(GX+w.part.x*CELL), oy:q.y-rowTop(w.part.y),
         sx:w.part.x, sy:w.part.y, v:w.v}; }
@@ -374,42 +329,23 @@ cv.addEventListener("pointerdown",e=>{
       w.gx = q.x;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
-    /* A PLATE IS DRAGGED BY ITS HEAD. The grab is remembered as the pointer
-       position it started at plus the offset the plate already carried, and the
-       move writes the sum - so picking a plate up again does not snap it back to
-       where the packer wanted it. */
-    else if(w.type==="plate"){
-      /* double-click the head to give the plate back to the packer - otherwise a
-         plate dragged out over the deck is only findable by panning to it */
-      if(e.detail>=2){ delete plateOff[w.id]; return; }
-      const o=plateOff[w.id]||{dx:0,dy:0};
-      ui.drag={type:"plate",id:w.id,sx:q.x,sy:q.y,dx:o.dx,dy:o.dy,v:w.v}; }
-    /* A PIPE IS STEERED THE WAY A PLATE IS MOVED. Grab the corner the router
-       already put there and it becomes a waypoint where you drop it, which is
-       what splits that leg in two - there is no separate "add" gesture to go
-       looking for, at any waypoint count. What the drag holds is the stored
-       OBJECT and never its index, because the list is re-sorted by distance
-       from the run's start on every read and an index would renumber under the
-       hand. Double-click hands it back, exactly as a plate's head does. */
+    // the drag holds the stored waypoint OBJECT, never its index - the list
+    // is re-sorted by distance on every read, so an index would renumber
+    // under the hand
     else if(w.type==="pipewp"){
       const L=pipeWaypoints[w.key]||(pipeWaypoints[w.key]=[]);
       let pt=w.pt;
       if(pt){
-        if(e.detail>=2){ L.splice(L.indexOf(pt),1);
+        if(e.dbl){ L.splice(L.indexOf(pt),1);
           if(!L.length) delete pipeWaypoints[w.key];
           return; }
       } else { pt={x:w.x+w.w/2,y:w.y+w.h/2}; L.push(pt); }
       ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
-    else if(w.type==="scroll"){ ui.drag=w; w.last=q.y; }
-    /* A drawing surface. Painting wants press-drag-release, which nothing else
-       here does: a btn fires on press and a sld owns the drag outright. So a
-       lat widget gets the pointer for as long as it is held and is handed the
-       raw point, and it works out for itself which cell that is. */
-    else if(w.type==="lat"){ ui.drag=w; w.last=null; w.fn(q,e); }
+    else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
     return; }
-  /* nothing under the pointer - a click on bare deck deselects rather than
-     leaving whatever was picked last lit with nothing on screen to justify it */
-  if(e.button!==2) sel=null;
+  // nothing under the pointer: a click on bare deck deselects, rather than
+  // leaving whatever was picked last lit with nothing on screen to justify it
+  if(e.button!==2){ sel=null; deselFire(); }
 });
 cv.addEventListener("pointermove",e=>{
   const p=local(e); ui.ptr=p;
@@ -417,62 +353,50 @@ cv.addEventListener("pointermove",e=>{
   if(ui.drag){ const d=ui.drag, q=d.v?vPt(p):p;
     if(d.type==="part"){
       const nx=Math.round((q.x-d.ox-GX)/CELL);
-      /* rowAt() is the inverse of rowTop(); half a cell of lead makes it round to
-         the nearest row rather than the row it is merely touching */
+      // rowAt() is rowTop()'s inverse; half a cell of lead rounds to the
+      // nearest row rather than the one merely touched
       const ny=rowAt(q.y-d.oy+CELL/2);
       if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
-    /* Snapped to PLSNAP (the 8px gutter every other measurement in the plant
-       is a multiple of), so a dragged plate lines up with the plates the
-       packer placed instead of stopping wherever the hand happened to let go. */
-    else if(d.type==="plate"){
-      const snap=v=>Math.round(v/PLSNAP)*PLSNAP;
-      plateOff[d.id]={dx:snap(d.dx+(q.x-d.sx)), dy:snap(d.dy+(q.y-d.sy))}; }
-    /* the same 8-unit snap, and for the same reason: two waypoints put on one
-       line by hand should land on one line */
+    // snapped to the 8-unit gutter the rest of the plant is measured in, so
+    // two waypoints placed by hand on one line land on one line
     else if(d.type==="pipewp"){
-      const snap=v=>Math.round(v/PLSNAP)*PLSNAP;
+      const snap=v=>Math.round(v/WPSNAP)*WPSNAP;
       d.pt.x=snap(d.px+(q.x-d.sx)); d.pt.y=snap(d.py+(q.y-d.sy)); }
-    else if(d.type==="lat"){ d.fn(q,e); }
+    else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
-      /* integrate rather than re-derive, so moving away from the track changes
-         the gearing from here on instead of jumping the value */
+      // integrate rather than re-derive, so moving away from the track
+      // changes the gearing from here on instead of jumping the value
       d.gv=clamp(d.gv+(q.x-d.gx)/d.w*(d.max-d.min)*sldGain(q.y-d.cy),d.min,d.max);
       d.gx=q.x; d.fn(d.gv); }
-    /* the pan is measured in PAGE pixels and spent in plant units, so the deck
-       keeps up with the hand at any zoom */
+    // the pan is measured in PAGE pixels and spent in plant units, so the
+    // deck keeps up with the hand at any zoom
     else if(d.type==="pan"){
       VIEW.ox-=(p.x-d.lx)/VIEW.s; VIEW.oy-=(p.y-d.ly)/VIEW.s;
       d.lx=p.x; d.ly=p.y;
-      /* past a few page pixels this is a pan and not a held-still click, so the
-         ADD/REMOVE menu on release is off the table - a page pixel threshold,
-         not a plant one, so it feels the same at any zoom */
+      // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
-    else { helpScroll=clamp(helpScroll-(q.y-d.last),0,helpMax); d.last=q.y; } }
-  cv.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="plate"
-                             ||ui.drag.type==="pipewp") ? "grabbing"
+  }
+  cv.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 });
 cv.addEventListener("pointerup",e=>{
   const d=ui.drag;
-  /* right button, held down, released without having dragged the plant -
-     that is a click, and on the design bench it opens the ADD/REMOVE menu */
+  // right button held and released without dragging the plant is a click,
+  // which on the design bench opens the ADD/REMOVE menu
   if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
   ui.drag=null;
 });
 ["pointercancel","pointerleave"].forEach(ev=>
   cv.addEventListener(ev,()=>{ui.drag=null;}));
 cv.addEventListener("wheel",e=>{
-  if(screen==="help"){ e.preventDefault();
-    helpScroll=clamp(helpScroll+e.deltaY,0,helpMax); return; }
+  // the scenario bench draws no plant, so there's no VIEW to zoom here -
+  // the wheel zooms the TIMELINE instead, about the second under the pointer
+  if(screen==="scenario"){ e.preventDefault(); scnWheel(local(e),e.deltaY); return; }
   const p=local(e);
   e.preventDefault();
-  /* Anywhere on the canvas, not just over the plant. The page does not scroll
-     any more, so there is nothing else for the wheel to do - and gating it to
-     the plant meant that from anywhere else the wheel did nothing, so there was
-     never anything to pan either.
-     The zoom holds the plant point under the pointer still, which is what makes
-     it feel like moving a lens rather than changing a number. With the pointer
-     off the plant there is no such point, so it holds the middle instead. */
+  // anywhere on the canvas, not just over the plant - the page doesn't
+  // scroll any more, so there's nothing else for the wheel to do. Holds the
+  // plant point under the pointer still (or the middle, off-plant).
   const a=vIn(p)? vPt(p) : {x:VIEW.cx+VIEW.ox+VIEW.w/2/VIEW.s,
                             y:VIEW.cy+VIEW.oy+VIEW.h/2/VIEW.s};
   const px=vIn(p)? p.x : VIEW.x+VIEW.w/2, py=vIn(p)? p.y : VIEW.y+VIEW.h/2;
