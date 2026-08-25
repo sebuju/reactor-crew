@@ -150,6 +150,11 @@ function pipeEdge(g,s){
    by exactly the step that moved the fluid, so the division is exact. */
 const pipeLast={}, pipeSpd={}, pipeShown={};
 let pipeT=null, pipeDt=0;
+/* a browser frame at 16x carries ~0.27 s of plant time - PIPE_DTMAX is what a frame
+   can legitimately carry (TICK_CAP ticks), not a per-frame smoothing constant. The
+   filter below is stepped one PIPE_DT tick at a time so a figure damps by plant time
+   elapsed, never by how often the browser happened to draw it. */
+const PIPE_DT=0.02, PIPE_DTMAX=1.0;
 /* ══ SMOOTHING IS DISPLAY STATE, SO IT IS NOT ON S AND IS CLEARED BY HAND ══
    Every damped figure in here is a picture of the last few frames, not a fact
    about the plant - which is exactly why it does not live on S and is not in a
@@ -166,12 +171,15 @@ function pipeReset(){
 }
 function pipeRate(s){
   const now=s.t, dt=pipeT===null?0:now-pipeT;
-  pipeT=now; pipeDt=(dt>0&&dt<=0.25)?dt:0;
+  pipeT=now; pipeDt=(dt>0&&dt<=PIPE_DTMAX)?dt:0;
   if(!pipeDt) return;
+  const n=Math.max(1,Math.round(pipeDt/PIPE_DT));
   for(const k in s.flowPos){
     const v=s.flowPos[k];
-    if(pipeLast[k]!==undefined)
-      pipeSpd[k]=(pipeSpd[k]||0)+(((v-pipeLast[k])/dt)-(pipeSpd[k]||0))*Math.min(1,dt*8);
+    if(pipeLast[k]!==undefined){
+      const tgt=(v-pipeLast[k])/pipeDt;
+      for(let i=0;i<n;i++) pipeSpd[k]=approach(pipeSpd[k]||0,tgt,PIPE_DT,8);
+    }
     pipeLast[k]=v;
   }
 }
@@ -186,10 +194,13 @@ function pipeRate(s){
 function pipeDisplay(k,fr){
   const cur=pipeShown[k];
   if(cur===undefined){ pipeShown[k]=fr; return fr; }
-  const err=fr-cur;
-  if(Math.abs(err)<0.0008) return cur;
-  pipeShown[k]=cur+err*Math.min(1,pipeDt*4);
-  return pipeShown[k];
+  if(!pipeDt) return cur;                    // a paused plant must still freeze
+  if(Math.abs(fr-cur)<0.0008) return cur;
+  const n=Math.max(1,Math.round(pipeDt/PIPE_DT));
+  let v=cur;
+  for(let i=0;i<n;i++) v=approach(v,fr,PIPE_DT,4);
+  pipeShown[k]=v;
+  return v;
 }
 /* three significant figures, which is what an instrument face gives you. The fourth
    digit of a four-figure flow is worth a hundredth of a per cent and is pure noise -

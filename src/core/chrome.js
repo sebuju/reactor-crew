@@ -1,5 +1,8 @@
 "use strict";
 
+/* one first-order approach, so every damped display figure closes the same way */
+const approach=(cur,target,dt,k)=>cur+(target-cur)*Math.min(1,dt*k);
+
 function fillRect(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
 function line(x1,y1,x2,y2,c,w){ ctx.strokeStyle=c; ctx.lineWidth=w||1;
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
