@@ -396,6 +396,22 @@ function moveTo(p,nx,ny){
   for(const {q,x,y} of cells){ q.x=x; q.y=y; }
   return true;
 }
+// every cell a party could stand in beside p and still be working ON p - not
+// inside its footprint, not diagonal-only off a corner, and not already
+// occupied by something else. One definition shared by three questions:
+// layoutMetrics() asks whether this list is empty (REPAIR ACCESS), the
+// radiation field asks which entry in it reads coldest (rad.js, radParty()),
+// and a survey renderer asks for the whole list to outline.
+function freeAdj(p,g){
+  const out=[];
+  for(let X=p.x-1;X<=p.x+p.w;X++) for(let Y=p.y-1;Y<=p.y+p.h;Y++){
+    if(X<0||Y<0||X>=GW||Y>=GH) continue;
+    const inside = X>=p.x&&X<p.x+p.w&&Y>=p.y&&Y<p.y+p.h;
+    const edge = (X<p.x||X>=p.x+p.w)!==(Y<p.y||Y>=p.y+p.h);
+    if(!inside && edge && !g[Y][X]) out.push([X,Y]);
+  }
+  return out;
+}
 function layoutMetrics(){
   if(!LAY||layLoops!==D.loops||layFit!==fitSig()) buildLayout();
   // measure the design, not the view: drawPlant() sets the bands again
@@ -422,26 +438,19 @@ function layoutMetrics(){
   const g=occupied(null);
   let reach=0, tot=0;
   for(const p of P_){ if(p.grp==="shield"||!fitted(p)) continue; tot++;
-    let ok=false;
-    for(let X=p.x-1;X<=p.x+p.w;X++) for(let Y=p.y-1;Y<=p.y+p.h;Y++){
-      if(X<0||Y<0||X>=GW||Y>=GH) continue;
-      const inside = X>=p.x&&X<p.x+p.w&&Y>=p.y&&Y<p.y+p.h;
-      const edge = (X<p.x||X>=p.x+p.w)!==(Y<p.y||Y>=p.y+p.h);
-      if(!inside && edge && !g[Y][X]) ok=true;
-    }
+    const ok=freeAdj(p,g).length>0;
     p.access=ok; if(ok) reach++;
   }
   const access = tot? reach/tot : 0;
 
-  const ct=id("ctrl"), ctc=ct?cen(ct):cc;
-  const dist=Math.abs(ctc.x-cc.x)+Math.abs(ctc.y-cc.y);
-  let shields=0;
-  for(const p of P_) if(p.grp==="shield"){
-    const c=cen(p);
-    if(c.x>=Math.min(ctc.x,cc.x)-1 && c.x<=Math.max(ctc.x,cc.x)+1 &&
-       c.y>=Math.min(ctc.y,cc.y)-1 && c.y<=Math.max(ctc.y,cc.y)+1) shields++;
-  }
-  const dose = clamp(2.4/Math.max(dist,1)*Math.pow(0.45,shields),0.02,3);
+  // Crew dose is not a correlation any more - it is the radiation field
+  // (rad.js) read at the room the crew actually sit in. The old formula
+  // counted every shield inside the core->ctrl bounding box whether or not
+  // it stood in the beam; the field instead attenuates along the exact ray,
+  // so the bench number and the picture on the diagram can never disagree
+  // about the same arrangement.
+  const radK=radGeom(), radF=radSolve(radK,radSrc(null));
+  const dose=radAt(radF,radK.crew), peak=radPeak(radF);
 
   let sep=99;
   if(D.loops>1) for(let i=0;i<D.loops;i++) for(let j=i+1;j<D.loops;j++){
@@ -459,11 +468,16 @@ function layoutMetrics(){
 
   const mass = (pipe+sec)*1.6 + P_.filter(p=>p.grp==="shield").length*30;
   layMass = mass;
-  return {pipe,sec,head,exposure,access,dose,sep,mass,pzrOK,pzrK,hpiHead,
+  return {pipe,sec,head,exposure,access,dose,sep,mass,pzrOK,pzrK,hpiHead,radK,peak,
     natK: 0.35+0.65*clamp((head+1)/4,0,1.6),
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
 }
+// The arrangement half of designSig(): id + grid position of every part on
+// the board, live parts only (no D fields, no lattice). rad.js's kernel
+// cache keys on exactly this - a shield sliding one cell invalidates it, a
+// bench slider that leaves every part where it stood does not.
+const laySig = () => LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";");
 
 // latSig() joins the key because most of what a lattice pen changes (a
 // reflector face, a cluster slot, active length) is NOT a D field - without
