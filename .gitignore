@@ -10,3 +10,6 @@ graphify-out/
 
 # Local scratch bin - files moved out of the way, never committed
 .trash/
+
+# What `node tools/server.js` writes - one player's scenarios and recordings
+saves/
