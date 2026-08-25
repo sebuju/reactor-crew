@@ -29,16 +29,17 @@ function drawSym(p,x,y,w,h,ink,L){
     coreDraw(bx+2,by+2,bw-4,bh-4,coreView(L));
     /* steam the core is actually making, normalised on the SAME 0..0.6 the VOID
        readout's band uses - so "the vessel is full of bubbles" and "the strip
-       says BOILING" can never be two different statements */
-    if(L) fxBubbles(bx+1,by+1,bw-2,bh-2,clamp(L.vf/.6,0,1),C.bright);
+       says BOILING" can never be two different statements. "chan": it rises in
+       the channel lattice, not a kettle */
+    if(L) fxBubbles(bx+1,by+1,bw-2,bh-2,fxEase(id+":boil",clamp(L.vf/.6,0,1)),C.bright,"chan");
     // DNBR under 1.00 is fuel being damaged right now, not a warning about
     // later. The melt flicker already owns the end state, so this stands down
     // once that takes over rather than beating against it.
-    if(L&&L.dnbr<1&&!L.melt) fxPulse(bx,by,bw,bh,C.red,1,1.6);
+    if(L) fxPulse(bx,by,bw,bh,C.red,fxEase(id+":dnb",L.dnbr<1&&!L.melt?1:0),1.6);
     /* a burst vessel blows its inventory into the compartment in about 13 s.
        Deliberately unclipped and wider than the valve's plume: this one is not
        a relief path working, it is the boundary gone */
-    if(L&&L.breach) fxSteam(cx,Y+6,W*.6,1,"#ffd0c4",31);
+    if(L) fxSteam(cx,Y+6,W*.6,fxEase(id+":breach",L.breach?1:0),"#ffd0c4",31);
     /* THE LATCHED TRIP, SAID ON THE COMPONENT IT IS ABOUT. The rod drives shout
        it too, but the eye goes to the reactor, and a scrammed core used to look
        exactly like a running one apart from four stems sitting low. */
@@ -67,7 +68,7 @@ function drawSym(p,x,y,w,h,ink,L){
         if(Math.abs(d-z)>.002) fillRect(sx+1,hy+4,3,Math.max(2,ht-8),"rgba(240,168,48,.5)");
       }
     }
-    if(jam) fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),1,C.red);
+    fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),fxEase(id+":jam",jam?1:0),C.red);
     /* JAMMED wins over SCRAM: a jammed bank while a trip is latched is a scram
        that did not happen, which is worse news than the trip itself. */
     if(jam||scram)
@@ -86,7 +87,7 @@ function drawSym(p,x,y,w,h,ink,L){
     if(blkd) line(cx-8,Y+4,cx+8,Y+4,C.red,1.6);
     // what the valve is actually passing, off the physics constant itself - see
     // porvRate(). The plume is the RELIEF FLOW readout drawn instead of typed.
-    if(L) fxSteam(cx,Y-1,10,porvRate(L)/PORV_INV,"#cfe6ea");
+    if(L) fxSteam(cx,Y-1,10,fxEase(id+":porv",porvRate(L)/PORV_INV),"#cfe6ea");
   } else if(id.startsWith("sg")){
     shell(()=>{ ctx.moveTo(X,Y+12); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
       ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); });
@@ -100,15 +101,15 @@ function drawSym(p,x,y,w,h,ink,L){
       // which is the lower of what the core makes and what the turbine will
       // take - and a kettle only boils while there is water left in it
       const wet=clamp(L.sgl/25,0,1);
-      fxBubbles(X+2,Y+14,W-4,Hh-16,clamp(Math.min(L.n,L.load),0,1)*wet,C.bright);
+      fxBubbles(X+2,Y+14,W-4,Hh-16,fxEase(id+":boil",clamp(Math.min(L.n,L.load),0,1)*wet),C.bright,"pool");
       /* boiling dry, on the same 25% the SG LEVEL band calls LOW. This is the
          core losing its heat sink, and it had no picture at all - the level
          fill alone drops quietly and says nothing about what that costs. */
-      if(L.sgl<25) fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,1-wet*.7,1.5);
+      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",L.sgl<25?1-wet*.7:0),1.5);
       /* ruptured tubes: primary water crossing into the secondary side, which
          is activity going straight past containment. Drawn rising off the
          bundle itself, where the leak is. */
-      if(L.sgtr) fxJet(cx,Y+Hh*.42,W*.45,1,C.red,0,-1,53);
+      fxJet(cx,Y+Hh*.42,W*.45,fxEase(id+":sgtr",L.sgtr?1:0),C.red,0,-1,53);
       /* RUPTURED wins over DRYING: a dry generator is a heat sink you can feed
          back, a ruptured one is primary water leaving past containment. */
       // sat high, in the steam space: the middle of a generator is where the
@@ -125,8 +126,9 @@ function drawSym(p,x,y,w,h,ink,L){
     ctx.closePath(); ctx.fillStyle=ink; ctx.fill(); ctx.restore();
     if(L&&L.cav>.15){ ctx.beginPath(); ctx.arc(cx,cy,r+3,0,7); ctx.strokeStyle=C.amber;
       ctx.lineWidth=1.5; ctx.setLineDash([3,3]); ctx.stroke(); ctx.setLineDash([]); }
-    // vapour at the inlet, on the same 0..0.6 the CAVITATION readout's band uses
-    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,clamp(L.cav/.6,0,1),C.amber);
+    // vapour flashing at the inlet, small and violent, not a kettle - on the same
+    // 0..0.6 the CAVITATION readout's band uses
+    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",clamp(L.cav/.6,0,1)),C.amber,"chan");
   } else if(id==="turb"){
     shell(()=>{ ctx.moveTo(X,Y+3); ctx.lineTo(X+W,Y-2); ctx.lineTo(X+W,Y+Hh+2);
       ctx.lineTo(X,Y+Hh-3); ctx.closePath(); });
@@ -173,7 +175,7 @@ function drawSym(p,x,y,w,h,ink,L){
     ctx.save(); ctx.globalAlpha=.45;
     fillRect(X+1,Y+Hh-2-hw,W-2,hw,C.blue); ctx.restore();       // the hotwell
     if(L){ ctx.save(); ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4-hw); ctx.clip();
-      fxJet(cx,Y+6,W*.62,clamp(Math.min(L.n,L.load),0,1)*.8,"rgba(150,195,225,.95)",0,1,23);
+      fxJet(cx,Y+6,W*.62,fxEase(id+":cond",clamp(Math.min(L.n,L.load),0,1)*.8),"rgba(150,195,225,.95)",0,1,23);
       ctx.restore(); }
   } else if(id==="ctrl"){
     shell(()=>{ ctx.moveTo(X,Y+Hh); ctx.lineTo(X,Y+6); ctx.lineTo(X+W,Y+2);
@@ -184,20 +186,20 @@ function drawSym(p,x,y,w,h,ink,L){
     const dark = L && L.blackout;
     for(let i=0;i<3;i++) fillRect(X+6+i*((W-12)/3),Y+9,(W-18)/3,4,
       dark?"rgba(255,90,69,.40)":"rgba(95,210,226,.45)");
-    if(dark) fxPulse(X+2,Y+4,W-4,Hh-8,C.red,1,0.7);
+    fxPulse(X+2,Y+4,W-4,Hh-8,C.red,fxEase(id+":dark",dark?1:0),0.7);
   } else if(id==="cont"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4)); hatch(X+1,Y+3,W-2,Hh-6,ink,.35);
     /* activity already past the barrier, on the 0..10% the RELEASE band uses.
        It leaves the box on purpose: a release is the one thing on this plant
        that does not stay inside the component it came from. */
-    if(L&&L.release>0.01) fxSteam(cx,Y+2,W*.7,clamp(L.release/10,0,1),C.amber,91);
+    if(L) fxSteam(cx,Y+2,W*.7,fxEase(id+":rel",clamp(L.release/10,0,1)),C.amber,91);
   } else if(id==="hpi"){
     shell(()=>rr(X,Y+2,W,Hh-4,6));
     lvl(X+2,Y+4,W-4,Hh-8, 1, (L&&L.hpi)?C.cyan:C.blue);
     // cold water going down the injection line. The safe act with the long
     // bill, and worth seeing that it is still running - every second of it
     // ages the vessel whether or not anybody is looking at FATIGUE
-    if(L&&L.hpi) fxJet(cx,Y+Hh-3,W*.35,1,C.cyan,0,1,71);
+    if(L) fxJet(cx,Y+Hh-3,W*.35,fxEase(id+":hpi",L.hpi?1:0),C.cyan,0,1,71);
   } else if(id==="bkp"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink);
@@ -212,7 +214,7 @@ function drawSym(p,x,y,w,h,ink,L){
       fillRect(bx2+i*cw2,by2,cw2-1.4,5, !lit?C.well : dead?"#3a1a14" : C.green);
     }
     // carrying the pumps right now, not merely able to
-    if(L&&L.blackout&&!dead&&cap>0) fxPulse(bx2,by2,bw2,5,C.green,1,1.4);
+    if(L) fxPulse(bx2,by2,bw2,5,C.green,fxEase(id+":bkp",L.blackout&&!dead&&cap>0?1:0),1.4);
   } else {
     shell(()=>ctx.rect(X,Y+2,W,Hh-4)); hatch(X+1,Y+3,W-2,Hh-6,"#6d8f98",.5);
   }
@@ -378,7 +380,7 @@ const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, 
    tip:"SCRAM - drops every bank, split or not, and trips the turbine with it. Always safe, never free: the xenon that follows locks you out for minutes."},
   {kind:"btn",flex:1,on:()=>S.scrammed,text:()=>"RESET",
    fn:()=>{ act("resetTrip"); },
-   tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection fitted it refuses while a trip condition is still present."}];
+   tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection armed it refuses while a trip condition is still present. Bypass the RPS and it clears anyway."}];
 // live=false asks the DESIGN question (what room will this need once
 // commissioned) so the bench can reserve it; nothing in the structure may
 // read S in that case, only the closures, which run only while drawing a
@@ -618,10 +620,17 @@ const rowNat=s=>["NAT CIRC",(s.nat*100).toFixed(0)+" %",
 const T_TRIP="What tripped the plant most recently. It stays here after a reset, so you can still see what you were fighting.";
 
 // the key is the field on s.parts, except "net" which is the sum the sim already keeps
-/* [label, s.parts key, tip, colour]. ONE table: the ledger rows in
+/* [label, s.parts key, tip, colour, limit]. ONE table: the ledger rows in
    readoutsFor(), the stack segments in rhoViz() and its key all read this, so a
    term cannot be given a colour in the picture and a different one in the list.
-   Each colour is the thing it names - fuel red, coolant cyan, graphite brown. */
+   Each colour is the thing it names - fuel red, coolant cyan, graphite brown.
+
+   `limit` is the pcm marks a row carries, and ONLY THE NET HAS ANY. A doppler
+   or a boron figure has no line you must not cross - it is just where that term
+   stands - and inventing one would teach a limit the plant does not have. Beta
+   is the one real line here: past it nothing on the ship is fast enough. (The
+   xenon pit is a limit too, but it sits past RHO_BAR, so on this scale the mark
+   would land on the end cap and say nothing. The VITALS bar carries it.) */
 const RHO_ROWS=[
  ["RODS","rod","Negative reactivity from the inserted control rods. The deeper they go the stronger this gets, but not evenly: the rods bite hardest around mid-travel.",()=>C.metal],
  ["DOPPLER","dop","Feedback from hot fuel. As fuel heats it absorbs more neutrons, pushing power back down. Instant, automatic and always stabilising - this is what stops a runaway before a human could react.",()=>C.red],
@@ -630,7 +639,7 @@ const RHO_ROWS=[
  ["BORON","bor","Poison dissolved in the coolant, and whatever you have dialled in on the boron control. Slow to change, but it is the only lever left once rods and temperature have run out.",()=>C.green],
  ["VOID","vd","Steam bubbles in the core. In a water design this is strongly negative and shuts the reactor down as it uncovers. In a graphite or sodium design it is POSITIVE, and voiding adds power instead.",()=>C.bright],
  ["ROD TIP","tip","Whatever hangs below the absorber. With a water follower this stays at zero all the way in. With a graphite one it goes POSITIVE as the bank drops, because graphite displaces water at the bottom of the core before the absorber has reached there - the reactivity you add before the reactivity you remove.",()=>C.graph],
- ["NET RHO","net","The sum of everything above. Zero means steady power, positive means it is climbing, negative means it is falling. If this exceeds your fuel's beta the reactor goes prompt critical and nothing can stop it in time.",()=>C.amber],
+ ["NET RHO","net","The sum of everything above. Zero means steady power, positive means it is climbing, negative means it is falling. The marks are your fuel's beta: past one of them the reactor is prompt critical and nothing can stop it in time.",()=>C.amber,()=>[-P.BETA*1e5,P.BETA*1e5]],
 ];
 const RHO_TERMS=RHO_ROWS.filter(r=>r[1]!=="net");
 /* full deflection of a ledger bar, pcm. Every term shares it, or the bars would
@@ -674,11 +683,22 @@ function rhoViz(x,y,w,h){
   const mag=Math.pow(10,Math.floor(Math.log10(raw)));
   const full=Math.ceil(raw/(mag/2))*(mag/2);
 
+  /* ── how tall everything gets ──
+     Four registers stacked in one column read as one solid block when every
+     seam sits at its minimum, which is what a pinned pitch gave at any height.
+     RHOVIZ_MIN is the height where nothing can give; whatever the row has over
+     that is shared out - a little to each of the three seams, a little to the
+     two bars, and the remainder to the trace. Shrink the row and it walks back
+     to the old pinned layout instead of overflowing. */
+  const KCOL=4, krows=Math.ceil(vals.length/KCOL);
+  const slack=Math.max(0,h-(88+krows*8));
+  const gap=Math.min(6,slack*.14), grow=Math.min(4,slack*.07);
+
   txt("REACTIVITY BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
   txt("+/-"+full.toFixed(0)+" pcm",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
 
   /* ── the balance ── */
-  const by=y+13, bh=14;
+  const by=y+13+gap, bh=14+grow;
   fillRect(L,by,R-L,bh,C.well);
   const seg=(from,dir)=>{
     let acc=0;
@@ -709,7 +729,7 @@ function rhoViz(x,y,w,h){
      TWO ROWS. Seven across is about 30 units a column at a stock rail width,
      and MODERATOR alone is 34 at the smallest size the ladder has - so a single
      row could only ever be a row of labels overwriting each other. */
-  const KCOL=4, krows=Math.ceil(vals.length/KCOL), kw=(R-L)/KCOL, ky=by+bh+13;
+  const kw=(R-L)/KCOL, ky=by+bh+13+gap;
   vals.forEach((t,i)=>{
     const kx=L+(i%KCOL)*kw, kyy=ky+((i/KCOL)|0)*8;
     fillRect(kx,kyy,4,4,t.col);
@@ -717,7 +737,7 @@ function rhoViz(x,y,w,h){
   });
 
   /* ── the net, on a scale of beta ── */
-  const ny=ky+krows*8+5, nh=13, bSpan=Math.max(beta*1.6,Math.abs(s.rho)*1.1,1);
+  const ny=ky+krows*8+5+gap, nh=13+grow, bSpan=Math.max(beta*1.6,Math.abs(s.rho)*1.1,1);
   const atN=v=>cx+clamp(v/bSpan,-1,1)*span;
   fillRect(L,ny+nh/2,R-L,1,C.edge2);
   // the prompt-critical lines are the only marks on this scale that matter
@@ -749,7 +769,7 @@ function rhoViz(x,y,w,h){
   txt("BETA "+beta.toFixed(0),R,ny+nh+8,{size:6,sp:.6,align:"right",color:C.ink2});
 
   /* ── the last minute of it ── */
-  const ty=ny+nh+12, th=Math.max(16,y+h-ty-2);
+  const ty=ny+nh+12+gap, th=Math.max(16,y+h-ty-2);
   fillRect(L,ty,R-L,th,C.well); frame(L,ty,R-L,th,C.edge);
   const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
   if(N>2){
@@ -845,8 +865,10 @@ function readoutsFor(p,s){
       const v = r[1]==="net" ? s.rho : s.parts[r[1]];
       const col = r[1]==="net" ? (Math.abs(v)<50?C.green:(v<0?C.blue:C.red))
                                : (v<0?C.blue:C.amber);
+      const lim = r[4] && r[4]();
       add(r[0],(v>=0?"+":"")+v.toFixed(0),col,r[2],
-        {f:clamp(v/RHO_BAR,-1,1),full:RHO_BAR});
+        {f:clamp(v/RHO_BAR,-1,1),full:RHO_BAR,
+         m:lim&&lim.map(q=>clamp(q/RHO_BAR,-1,1))});
     }
   } else if(id==="rods"){
     add("BANK POSITION",(s.rodPos*100).toFixed(1)+" %",null,
@@ -863,9 +885,9 @@ function readoutsFor(p,s){
     add("TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green,
       "Whether a trip is latched in. While it is, the drives are pinned fully inserted whatever the slider says.");
     add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2,T_TRIP);
-    add("RESET WOULD",!s.scrammed?"n/a":(P.rps&&tripCause())?"REFUSE":"clear",
-        !s.scrammed?C.ink2:(P.rps&&tripCause())?C.red:C.green,
-      "What the trip reset would do if you pressed it now. Protection holds a veto for as long as a trip condition is still standing.");
+    add("RESET WOULD",!s.scrammed?"n/a":resetVeto()?"REFUSE":"clear",
+        !s.scrammed?C.ink2:resetVeto()?C.red:C.green,
+      "What the trip reset would do if you pressed it now. Armed protection holds a veto for as long as a trip condition is still standing; bypass it and the latch clears on your word alone.");
     add("NET RHO",s.rho.toFixed(0)+" pcm",
       band(s.rho,-800,800,[[-50,C.amber,"FALLING"],[50,C.green,"STEADY"],[800,C.amber,"RISING"]],
         {dp:0,lim:[[P.BETA*1e5,"PROMPT"]]}),
@@ -1214,8 +1236,8 @@ function drawPlant(y0,L,vh,vx,vw){
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red);
       // a wrecked machine that is still energised. It dies down as the repair
       // party gets on top of it, so the effect tracks the work, not just the hit
-      fxSparks(x+4,y+4,w-8,h-sh-8,L.repair&&L.repair.id===p.id?
-        1-clamp(L.repair.t/L.repair.need,0,1):1,C.red);
+      fxSparks(x+4,y+4,w-8,h-sh-8,fxEase(p.id+":dmg",L.repair&&L.repair.id===p.id?
+        1-clamp(L.repair.t/L.repair.need,0,1):1),C.red);
       const symH=h-sh-(plinth?4:0);   // centred on the SYMBOL, not the whole component
       const busy=L.repair&&L.repair.id===p.id, kw=Math.min(w-16,86), kx=x+(w-kw)/2;
       button(kx,y+symH/2-9,kw,14,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
