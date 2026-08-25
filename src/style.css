@@ -1,14 +1,99 @@
-html,body{margin:0;padding:0;background:#06090a;color-scheme:dark}
+/* palette comes from C in core/constants.js via cssVarsBoot() - do not hand-copy colours here */
+:root{
+  --mono:ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace;
+  /* one step per TSCALE step in core/text.js, but +2px: canvas type is hinted
+     monospace at those sizes and HTML type needs the bump to read the same */
+  --t15:17px;--t13:15px;--t12:14px;--t10:12px;--t9-5:11.5px;--t9:11px;--t8-5:10.5px;
+  /* floored at 10px - the steps below it existed to squeeze text into canvas
+     boxes, and CSS fits text on its own */
+  --t8:10px;--t7-5:10px;--t7:10px;--t6-5:10px;--t6:10px;
+}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--c-bg);color-scheme:dark}
+body{display:flex;flex-direction:column;font-family:var(--mono)}
 
-/* scrollbars in the panel palette instead of the OS grey */
-*{scrollbar-width:thin;scrollbar-color:#2c464e #080c0e}
+*{scrollbar-width:thin;scrollbar-color:var(--c-edge2) var(--c-well)}
 ::-webkit-scrollbar{width:11px;height:11px}
-::-webkit-scrollbar-track{background:#080c0e;border-left:1px solid #1d2f35}
-::-webkit-scrollbar-thumb{background:#22383e;border:2px solid #080c0e}
-::-webkit-scrollbar-thumb:hover{background:#33525b}
-::-webkit-scrollbar-corner{background:#080c0e}
-#scroller{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch}
-canvas{display:block;margin:0 auto;background:#080c0e;touch-action:pan-y;cursor:default}
-#hint{color:#5d7378;font:9px ui-monospace,"SF Mono",monospace;letter-spacing:.2em;
-      text-transform:uppercase;padding:6px 10px;margin:0}
-@media(min-width:800px){#hint{display:none}}
+::-webkit-scrollbar-track{background:var(--c-well);border-left:1px solid var(--c-edge)}
+::-webkit-scrollbar-thumb{background:var(--c-edge);border:2px solid var(--c-well)}
+::-webkit-scrollbar-thumb:hover{background:var(--c-rail)}
+::-webkit-scrollbar-corner{background:var(--c-well)}
+
+#topbar{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+  gap:16px;height:40px;padding:0 12px;background:var(--c-panel);border-bottom:1px solid var(--c-edge2)}
+#brand{display:flex;align-items:center;gap:8px}
+#logo-mark{position:relative;box-sizing:border-box;width:12px;height:12px;border:1px solid var(--c-amber)}
+#logo-mark::after{content:"";position:absolute;inset:3px;background:var(--c-amber)}
+#brand-title{color:var(--c-bright);font-size:var(--t10);font-weight:700;letter-spacing:3px}
+
+#tabs{display:flex;gap:5px}
+.tab{appearance:none;border:0;cursor:pointer;font:inherit;font-size:var(--t8);letter-spacing:1.8px;
+  text-transform:uppercase;height:23px;padding:0 11px;display:inline-flex;align-items:center;
+  white-space:nowrap;background:var(--c-well);color:var(--c-ink)}
+.tab:hover:not(.dis){background:var(--c-panel-hi)}
+.tab.on{background:var(--c-on-amber);color:var(--c-amber)}
+.tab.dis{color:var(--c-dis);cursor:default}
+.tab[data-screen="help"]{color:var(--c-amber)}
+
+#plant-id{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:nowrap}
+#plant-line{color:var(--c-cyan);font-size:var(--t8);letter-spacing:1px}
+#plant-line.idle{color:var(--c-amber)}
+#clock-row{display:flex;align-items:center;gap:4px}
+#clock{color:var(--c-ink2);font-size:var(--t8);letter-spacing:1px}
+#clock-dot{width:6px;height:7px;background:var(--c-amber)}
+
+#stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;
+  overflow:hidden;background:var(--c-bg)}
+canvas{display:block;background:var(--c-well);touch-action:none;cursor:default}
+
+/* Mount points for the three HTML screens. Absolutely positioned over #stage
+   rather than flex siblings, so a screen with a plant (design, operate) can
+   lay HTML controls beside/over the canvas without disturbing the flex
+   centring that sizes it. Each screen's own script owns everything inside
+   its section; this file only says when it is visible. */
+#scr-operate,#scr-design,#scr-scenario{
+  display:none;position:absolute;inset:0;box-sizing:border-box;pointer-events:none}
+body[data-screen="operate"] #scr-operate,
+body[data-screen="design"] #scr-design,
+body[data-screen="scenario"] #scr-scenario{display:block;pointer-events:auto}
+
+/* HELP is a document, not a plant view - shown/hidden off body[data-screen],
+   written in one place (layout() in shell.js) */
+#help{display:none;box-sizing:border-box;width:100%;height:100%;overflow-y:auto;
+  padding:26px 32px 60px;color:var(--c-ink);font-size:var(--t9)}
+body[data-screen="help"] #help{display:block}
+body[data-screen="help"] #cv{display:none}
+#help-doc{max-width:736px;margin:0 auto}
+
+.help-h{display:flex;align-items:center;gap:7px;margin:26px 0 10px}
+.help-h:first-child{margin-top:0}
+.help-h span{color:var(--c-amber);font-size:var(--t8);font-weight:700;letter-spacing:2px;
+  text-transform:uppercase;white-space:nowrap}
+.help-h::after{content:"";flex:1 1 auto;height:1px;background:var(--c-edge2)}
+
+.help-d{margin:0 0 14px}
+.help-chip{display:inline-block;width:6px;height:6px;margin-right:6px;background:var(--c-cyan)}
+.help-d-title{display:flex;align-items:center;color:var(--c-cyan);font-size:var(--t9-5);
+  font-weight:700;letter-spacing:1.4px;text-transform:uppercase;margin-bottom:4px}
+.help-d-body{margin:0 0 0 12px;color:var(--c-ink);font-size:var(--t9);line-height:1.6;max-width:70ch}
+
+.help-ann{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:4px 0 20px}
+.ann-tile{box-sizing:border-box;padding:5px 6px;min-height:40px;
+  background:var(--c-panel);border:1px solid var(--c-edge);cursor:default}
+.ann-num{display:block;font-size:var(--t6-5);color:var(--c-ink2)}
+.ann-label{display:block;margin-top:9px;font-size:var(--t8);font-weight:700;letter-spacing:1.1px;
+  text-align:center;color:var(--c-ink2);text-transform:uppercase}
+.ann-tile.lit{border-color:transparent}
+.ann-tile.lit.red{background:var(--c-red)}
+.ann-tile.lit.amber{background:var(--c-amber)}
+.ann-tile.lit.blue{background:var(--c-blue)}
+.ann-tile.lit .ann-num,.ann-tile.lit .ann-label{color:var(--c-well)}
+@keyframes ann-blink{0%,49%{opacity:1}50%,100%{opacity:.4}}
+.ann-tile.blink{animation:ann-blink 900ms steps(1,end) infinite}
+
+#tip{position:fixed;z-index:1000;display:none;max-width:320px;padding:8px 10px;
+  background:var(--c-panel);border:1px solid var(--c-edge2);color:var(--c-ink);
+  font-family:var(--mono);font-size:var(--t8);line-height:1.4;pointer-events:none;
+  box-shadow:0 4px 14px rgba(0,0,0,.5)}
+#tip b{display:block;margin-bottom:4px;color:var(--c-bright);font-size:var(--t8);
+  letter-spacing:1px;text-transform:uppercase}
+#tip p{margin:0}

@@ -1,21 +1,32 @@
 "use strict";
 /* frame loop and boot */
 
-/* ═══════════════ FRAME ═══════════════ */
-let acc=0,prev=performance.now();
+let prev=performance.now();
 function tick(now){
   let dt=(now-prev)/1000; prev=now; dt=Math.min(dt,.25);
-  if(P&&screen==="operate"){ acc+=dt; while(acc>=0.02){ step(0.02); acc-=0.02; }
-    sampT+=dt; while(sampT>=0.1){ sample(); sampT-=0.1; } } else acc=0;
+  simFrame(dt);
   fillRect(0,0,W,H,C.bg);
-  ctx.fillStyle=gridPat; ctx.fillRect(0,40,W,H-40);
-  ui.widgets=[]; ui.tips=[]; topbar();
+  ctx.fillStyle=gridPat; ctx.fillRect(0,TOPBAR_H,W,H-TOPBAR_H);
+  ui.widgets=[]; ui.tips=[];
   if(screen==="design") drawDesign();
   else if(screen==="operate") drawOperate();
-  else drawHelp();
+  else if(screen==="scenario") drawScenario();
+  else drawHelp();   // HELP is HTML now; the branch stays so an unbranched tab still falls somewhere
   drawTip();
   ui.prev=ui.widgets;
-  applyPageH();          /* never resize mid-frame: it clears the canvas */
   requestAnimationFrame(tick);
 }
+
+storeProbe();   // fired once, never awaited - see storeProbe() in data/store.js
+
 layoutMetrics(); layout(); requestAnimationFrame(tick);
+
+/* after layoutMetrics(), because shellSync() asks designBlocked() and that
+   reads LAY. Guarded: no document under the headless bundle or the sim worker.
+   tools/bundle.js strips the boot line above by exact text - do not reword it. */
+if(typeof document!=="undefined" && document.documentElement){
+  shellInit();
+  helpBuildDOM();
+  shellSync();
+  setInterval(shellSync,100);
+}
