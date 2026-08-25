@@ -17,17 +17,42 @@ const C2VAR={};
     C2VAR[C[k]]="var(--c-"+k.replace(/([A-Z])/g,"-$1").toLowerCase()+")"; })();
 const cssCol=c=>c?(C2VAR[c]||c):"";
 
+/* ══ A PANEL'S TITLE BAR PICKS ITS COMPONENT ══
+   The other half of "clicking a component brings its panel up". The rail is a
+   list of every component on the ship, so it is also the way to get AROUND the
+   plant - and until now the only way to select something was to find it on the
+   drawing, which is hard for the parts that are small or behind something.
+   Both rails call this, because two rails with a copy each is how the two
+   would end up disagreeing about what a title bar does. */
+function railPick(well,ids,name){
+  if(!well.head) return well;
+  well.head.classList.add("kit-rule-pick");
+  well.head.addEventListener("click",()=>{ sel=ids[0]; });
+  KIT.tip(well.head,name||"",
+    "Click to select this component. It lights up on the plant, and a leader runs from it to this panel.");
+  return well;
+}
+
 /* ══ ONE ROW LIST, TWO SCREENS ══
    readoutsFor() rows and the bench's MEASURED rows are the same shape -
    [label,value,color,tip,band,signedBar] or {sec}. Built once, synced by a
    signature so a row set that changes shape (a STATUS row appearing on
    damage, a TRIP mark appearing when a bypass is thrown) rebuilds instead of
    silently misaligning against the old DOM. */
-function fieldRowSig(rows){ return rows.map(r=>r.sec?("#"+r.sec):r[0]).join("|"); }
+function fieldRowSig(rows){ return rows.map(r=>r.sec?("#"+r.sec):r.viz?("@"+r.viz):r[0]).join("|"); }
 function fieldRowsBuild(container,rows){
   const out=[];
   for(const row of rows){
     if(row.sec){ container.appendChild(KIT.rule(row.sec).el); out.push({sec:true}); continue; }
+    /* A genuinely graphical row keeps its own <canvas>, painted by the screen
+       through hostPaint() - the rail is opaque, so drawing it on #cv would put
+       it under the panel. Same arrangement the lattice plan uses. */
+    if(row.viz){
+      const c=KIT.el("canvas","insp-viz insp-viz-"+row.viz);
+      if(row.tip) KIT.tip(c,row.title||row.viz,row.tip);
+      container.appendChild(c);
+      out.push({viz:row.viz}); continue;
+    }
     const el=KIT.el("div","insp-row");
     const lab=KIT.el("span","insp-row-lab"); lab.textContent=row[0];
     const val=KIT.el("span","insp-row-val");
@@ -35,7 +60,7 @@ function fieldRowsBuild(container,rows){
     let bar=null,barKind=null;
     if(row[4]){ bar=KIT.band({lo:row[4].lo,hi:row[4].hi,zones:row[4].zones,dp:row[4].dp,lim:row[4].lim,v:row[4].v});
       barKind="band"; el.appendChild(bar.el); }
-    else if(row[5]!=null){ bar=KIT.segSigned({}); barKind="sig"; el.appendChild(bar.el); }
+    else if(row[5]){ bar=KIT.segSigned({full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
     if(row[3]) KIT.tip(el,row[0],row[3]);
     container.appendChild(el);
     out.push({val,bar,barKind});
@@ -56,12 +81,12 @@ function fieldRowsSync(container,rows){
     container.innerHTML=""; container._h=fieldRowsBuild(container,rows); container._sig=sig;
   }
   rows.forEach((row,i)=>{
-    const H=container._h[i]; if(!H||row.sec) return;
+    const H=container._h[i]; if(!H||row.sec||row.viz) return;
     if(H.val.textContent!==row[1]) H.val.textContent=row[1];
     const col=cssCol(row[2]);
     if(H.val.style.color!==col) H.val.style.color=col;
     if(H.barKind==="band"){ H.bar.set(row[4].v); H.limSig=row[4].lim?JSON.stringify(row[4].lim):null; }
-    else if(H.barKind==="sig") H.bar.set(row[5],col);
+    else if(H.barKind==="sig") H.bar.set(row[5].f,col);
   });
 }
 
