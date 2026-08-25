@@ -39,7 +39,7 @@ const EXPORTS = '{commission,step,sample,act,recTick,recRoot,resetPlant,combatHi
   'crSync,dbSync,trSync,trBuild,drawOperate,drawDesign,drawScenario,'+
   'CR:()=>CR,DB:()=>DB,S:()=>S,P:()=>P,LAY:()=>LAY,LOG:()=>LOG,REC:()=>REC,'+
   'TSCALE:()=>TSCALE,plot:()=>plot,togglePlot,sel:()=>sel,setSel:v=>sel=v,'+
-  'setScreen:v=>screen=v,layout,SCN:()=>SCN,scnNew}';
+  'setScreen:v=>screen=v,layout,SCN:()=>SCN,scnNew,LAYER_ORDER:()=>LAYER_ORDER}';
 
 /* One boot. `src` may be patched first - the self-test at the bottom injects
    real faults and re-boots to prove each check can actually go red. */
@@ -194,6 +194,17 @@ if(!wide.err){
                   : 'NO CANVAS with this class was ever painted - '+what);
   }
 
+  /* a layer with no switch on the rail has no way to be turned off, so both
+     rails must carry exactly one per entry in the registry - not more (a
+     leftover from a deleted layer), not fewer (a layer nobody can reach). */
+  {
+    const want = wide.M.LAYER_ORDER().length;
+    const crN = wide.M.CR().rail.querySelectorAll('.layer-switch').length;
+    const dbN = wide.M.DB().rail.querySelectorAll('.layer-switch').length;
+    add('every layer has a switch, on both rails', crN===want && dbN===want,
+        'control room: '+crN+'/'+want+' switches, design bench: '+dbN+'/'+want);
+  }
+
   const out = wide.hosts.filter(h => h.out.length);
   add('hosted text stays in its box', out.length === 0,
       out.length ? out.length+' widget(s) draw outside the box they were handed'
@@ -233,6 +244,23 @@ if(!wide.err){
         heads.length ? heads.length+' pickable title bar(s); clicking the last selected "'+picked+'"'
                      : 'no title bar carries .kit-rule-pick');
   }catch(e){ add('a title bar picks its component', false, 'threw: '+e.message); }
+
+  /* the 'damage' step above hit rods and pump1 and never repaired them, so a
+     reachable card must still be on screen carrying the two numbers the
+     estimated-job-dose promise depends on: the live field rate beside it and
+     the dose that job will cost, per the "a control must display the number
+     it causes" rule. */
+  {
+    const cards = [...wide.M.CR().dmgList.querySelectorAll('.cr-dmg-card')]
+      .filter(c => !c.classList.contains('blocked'));
+    const withDose = cards.filter(c => {
+      const d = c.querySelector('.cr-dmg-dose');
+      return d && /x FIELD/.test(d.textContent) && /% JOB/.test(d.textContent);
+    });
+    add('a damage card carries its dose figure', cards.length > 0 && withDose.length === cards.length,
+        cards.length ? withDose.length+'/'+cards.length+' reachable damage card(s) show a field rate and a job dose estimate'
+                     : 'no reachable damage cards were on screen to check');
+  }
 }
 
 /* every id the stub answers must be an id index.html really has, or the stub is

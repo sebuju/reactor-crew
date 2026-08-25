@@ -106,6 +106,40 @@ const plantChecks=[
    'both screens pass the width their own HTML rail leaves clear of the plant'],
 ];
 
+// the layer registry (render/layers.js) - one table, one pass function called
+// from exactly two seams inside drawPlant() and nowhere else, one switch
+// builder called by both rails. Brace-matched rather than regexed past the
+// function's own closing brace, because a stray third call anywhere else in
+// the bundle is exactly the bug this exists to catch and a plain substring
+// count can't tell "inside drawPlant" from "inside the file".
+function funcBody(src,name){
+  const at=src.indexOf('function '+name+'(');
+  if(at<0) return '';
+  const braceAt=src.indexOf('{',at);
+  let depth=0,i=braceAt;
+  for(;i<src.length;i++){
+    if(src[i]==='{') depth++;
+    else if(src[i]==='}'){ depth--; if(depth===0) break; }
+  }
+  return src.slice(braceAt,i+1);
+}
+// matched as a CALL (string literal seam arg) rather than any "layerPass("
+// substring, or the function's own declaration and its doc comment - which
+// both say "layerPass(" too - would inflate the count
+const drawPlantBody=funcBody(S,'drawPlant');
+const layerPassInDrawPlant=(drawPlantBody.match(/layerPass\(["']/g)||[]).length;
+const layerPassTotal=(S.match(/layerPass\(["']/g)||[]).length;
+const layerChecks=[
+ ['one layer table',        (S.match(/const LAYERS=/g)||[]).length===1, 'LAYERS defined once, in render/layers.js'],
+ ['layerPass called twice, both in drawPlant',
+   (S.match(/function layerPass/g)||[]).length===1 &&
+   layerPassTotal===2 && layerPassInDrawPlant===2,
+   `layerPass() defined once, called ${layerPassTotal} time(s) total, ${layerPassInDrawPlant} inside drawPlant()`],
+ ['one layer switch builder', (S.match(/function layerSwitches/g)||[]).length===1 &&
+   crSrc.includes('layerSwitches(') && dbSrc.includes('layerSwitches('),
+   'layerSwitches() defined once in render/layers.js, both rails call it'],
+];
+
 // scoped to the two renderer files on purpose: src/sim/* legitimately writes
 // S every tick, and store.js/record.js rebuild it wholesale. `=[^=]` keeps
 // ==, ===, <=, >=, !== out of the match; method mutation
@@ -114,9 +148,16 @@ const fs=require('fs'), path=require('path');
 const {ROOT, scriptPaths}=require('./bundle');
 const RENDERERS=['src/render/plant.js','src/screens/control-room.js']
   .filter(f=>scriptPaths().includes(f));
+/* A LAYER IS A VIEW, and this is where that stops being a comment. layers.js
+   states the contract; without the layer files in this scan the contract is
+   enforced on the two files that already obeyed it and on none of the ones
+   written since. Every future layer lands in one of these two files, so the
+   day someone smuggles a side effect into a draw callback, this says so. */
+const VIEW_FILES=RENDERERS.concat(
+  ['src/render/layers.js','src/render/rad.js'].filter(f=>scriptPaths().includes(f)));
 const S_WRITE=/(^|[^\w.])S\.[A-Za-z_$][\w$]*(\[[^\]]*\]|\.[A-Za-z_$][\w$]*)*\s*(=[^=]|\+\+|--|\+=|-=|\*=|\/=)/g;
 const sWrites=[];
-for(const f of RENDERERS){
+for(const f of VIEW_FILES){
   const src=fs.readFileSync(path.join(ROOT,f),'utf8');
   S_WRITE.lastIndex=0;
   for(let m; (m=S_WRITE.exec(src)); )
@@ -125,8 +166,8 @@ for(const f of RENDERERS){
 const actChecks=[
  ['one input dispatch',   (S.match(/function act\(/g)||[]).length===1 &&
                           RENDERERS.length===2, 'act() defined once, both renderers read'],
- ['no renderer writes S',  sWrites.length===0,
-  sWrites.length? sWrites.join(' ') : `${RENDERERS.length} files reach the plant only through act()`],
+ ['no view file writes S',  sWrites.length===0,
+  sWrites.length? sWrites.join(' ') : `${VIEW_FILES.length} view files reach the plant only through act()`],
 ];
 
 // the second half matters more than the first: a lone chart() nothing calls
@@ -192,6 +233,7 @@ const checks=[
  ...pipeChecks,
  ...wpChecks,
  ...plantChecks,
+ ...layerChecks,
  ...actChecks,
  ...chartChecks,
  ...scnChecks,

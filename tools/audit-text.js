@@ -75,6 +75,7 @@ global.requestAnimationFrame=()=>{}; global.addEventListener=()=>{};
 let rngSeed=20260824;
 Math.random=()=>{ rngSeed=(rngSeed*1103515245+12345)&0x7fffffff;
                   return rngSeed/0x7fffffff; };
+let LAYER_PURE=null;
 const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/,'layoutMetrics();')+
  '; return {drawDesign,drawOperate,drawScenario,drawOverlay,commission,step,sample,combatHit,'+
  'SCN:()=>SCN,setSCN:v=>SCN=v,scnClone,scnNew,scnGest,scnLimit,SCNPRE:()=>SCNPRE,scnRun,scnJudge,'+
@@ -84,7 +85,8 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
  'pipeNetwork,pipeWaypoints,nearestOn,placePart,addJunction,removePart,removeJunction,'+
- 'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek};')();
+ 'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
+ 'setLayer:(k,v)=>{LAYERS[k].on=v;}};')();
 global.__viewOn=()=>M.vOn();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
@@ -192,6 +194,7 @@ M.setSel('core');
 warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('alldmg:');
 warmUp();
 
+
 // the sweeps above all draw the same scenario (first preset, three events,
 // three limits, never run); these four reach states nothing else does:
 // scnempty - no limits at all; scncrowd - 8 events/1 moment, 12 limits, panel
@@ -247,6 +250,56 @@ warmUp();
 }
 
 // a NaN/undefined value draws happily with no error - only this check catches it
+// ── the radiation layers, and they go LAST on purpose ──
+// None of the sweeps above ever switch a layer on, so without this every
+// rad*.js draw path would ship unaudited - exactly how the turbine and
+// condenser bench panels once shipped unaudited before them.
+// It sits at the end because warmUp() calls combatHit() twice, off the same
+// pinned RNG stream every other sweep draws from. Run this in the middle and
+// the extra warmUp() shifts that stream, every later sweep gets a DIFFERENT
+// set of damaged parts, and the report changes for reasons that have nothing
+// to do with the change under test. Last means there is no "later" to shift.
+{ const keys=['radz','radn','radp','radc'];
+  keys.forEach(k=>M.setLayer(k,true));
+  warmUp(); sweep('rad:');
+  // once at rest, once wrecked - a saturated field is where the zone fill
+  // maxes out and the cell numbers print at their widest, which a plant at
+  // rest never shows
+  M.S().dmg=90; M.S().melt=true; M.S().release=95; M.S().sgtr=true; M.S().breach=true;
+  for(let i=0;i<10;i++) M.step(0.02);
+  sweep('radwreck:');
+  keys.forEach(k=>M.setLayer(k,false)); }
+
+// ── A LAYER IS A VIEW, AND THIS IS WHERE THAT STOPS BEING A COMMENT ──
+// layers.js states the contract: a layer draws and never writes S. A comment
+// cannot enforce it and neither can a grep - a draw callback could reach the
+// plant through any helper it calls. So fly the same plant twice, drawing it
+// every tick, once with every layer on and once with every layer off, and
+// demand the two end states are identical field for field. The RNG seed is
+// reset between runs because warmUp() spends draws on combatHit(): without
+// that the two plants take different damage and the check fails for a reason
+// that has nothing to do with layers.
+{ const keys=['radz','radn','radp','radc'];
+  const ser = o => JSON.stringify(o, (k,v) =>
+    ArrayBuffer.isView(v) ? Array.from(v) : (typeof v === 'number' && !isFinite(v) ? String(v) : v));
+  const fly = on => {
+    rngSeed=20260824;
+    keys.forEach(k=>M.setLayer(k,on));
+    M.commission();
+    for(let i=0;i<120;i++){ M.step(0.02); cap('purity'+(on?'On':'Off')+':'+i, M.drawOperate); }
+    return ser(M.S());
+  };
+  const withLayers=fly(true), without=fly(false);
+  keys.forEach(k=>M.setLayer(k,false));
+  LAYER_PURE = withLayers===without;
+}
+
+console.log('=== A LAYER CANNOT MOVE THE PLANT ===');
+console.log(LAYER_PURE
+  ? '  120 ticks drawn with every layer on and off: final S identical field for field'
+  : '  FAIL a layer changed the plant - a draw callback is writing sim state');
+if(!LAYER_PURE) process.exitCode=1;
+
 console.log('=== BROKEN VALUES IN DRAWN TEXT ===');
 { let n=0;
   for(const t of TEXTS) if(/NaN|undefined|Infinity/.test(t.t)){

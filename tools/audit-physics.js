@@ -12,7 +12,8 @@ const M=require('./bundle').headless(
  'setSplit,setCommon,bankAutoLive,tProg,loopFlowK,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
  'pumpCap,totalPumpCap,placePart,removePart,addJunction,removeJunction,pipeNetwork,'+
- 'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM}');
+ 'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
+ 'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW}');
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 /* THE LATTICE IS PART OF THE DESIGN NOW, so set() has to put it back as well
@@ -781,7 +782,7 @@ console.log('\n=== THE SIM ROLLS NO LOOSE DICE ===');
 console.log('\n=== A SNAPSHOT IS THE WHOLE PLANT ===');
 {
   const W=require('./bundle').headless(
-    '{commission,step,combatHit,snapS,restoreS,eqWhere,S:()=>S,D:()=>D,latDefault}',
+    '{commission,step,combatHit,repairStart,snapS,restoreS,eqWhere,S:()=>S,D:()=>D,latDefault}',
     {clock:true});
   const WD=W.D(), WBASE=JSON.parse(JSON.stringify(WD));
   const wset=o=>{ Object.assign(WD,JSON.parse(JSON.stringify(WBASE)),o||{});
@@ -806,6 +807,30 @@ console.log('\n=== A SNAPSHOT IS THE WHOLE PLANT ===');
      repair timer - and they are the ones a hand-written snapshot list forgets */
   const okC=trip('after a combat hit',{},s=>{ W.combatHit('rods'); });
   if(okA&&okB&&okC) console.log('  three plants round-trip bit-for-bit under an ADVANCING wall clock');
+
+  /* Stage 3 put five plain scalars on S (doseRate, crewDose, repRate,
+     partySpent, and dose kept its name and meaning). The field they are
+     read off is NEVER stored - see the header comment above the integrator
+     in step.js - so the only things a snapshot carries are exactly these
+     scalars, and this is the case that would catch one of them slipping
+     into a module global instead: a fault live, a party out and taking
+     dose at the moment of the snapshot, which is precisely the state that
+     lives on s.repair/s.dose/s.repRate/s.crewDose read together. */
+  const okD=trip('mid-accident with a repair party out',{},s=>{
+    s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
+    W.combatHit('rods'); W.repairStart('rods');
+  });
+  if(okD) console.log('  a plant mid-accident with a repair party taking dose round-trips bit-for-bit too');
+
+  /* partySpent is a fifth Stage-6 scalar on S, and the moment it flips is
+     exactly the moment step() also nulls s.repair and appends a log entry -
+     three writes in the same tick that a hand-maintained field list would be
+     three separate ways to get this case wrong. */
+  const okE=trip('after the repair party is spent',{},s=>{
+    W.combatHit('rods'); W.repairStart('rods'); s.dose=100;
+    W.step(0.02);           // the tick the withdrawal itself fires on
+  });
+  if(okE) console.log('  a plant with the repair party already spent round-trips bit-for-bit too');
 
   /* THE CLONER IS GENERIC, NOT A FIELD LIST. This is the literal test of the
      promise that a future feature's state is recorded for free: invent a field
@@ -1184,6 +1209,300 @@ console.log('\n=== TWO RUNNERS, ONE ANSWER ===');
   }
   if(same === SR.SCNPRE().length)
     console.log(`  all ${same} presets: the sliced runner lands on the reference runner's plant, bit for bit`);
+}
+
+/* ══════════ THE CREW DOSE IS A SOLVED FIELD, NOT A BOUNDING BOX ══════════
+   layoutMetrics() used to charge for every shield whose CENTRE fell inside
+   the core-to-ctrl bounding box, inflated by one cell, whether or not it
+   stood in the beam - on the stock layout that billed all three shields
+   when the ray only actually crosses one of them. rad.js replaces the whole
+   thing with a solved field: every source cell casts 1/r^2, attenuated over
+   the EXACT chord each straight ray crosses through every cell in its path
+   (Amanatides-Woo), and P.dose is now that field read at the room the crew
+   sit in - the same number layoutMetrics() bakes into P.radK for a renderer
+   to read identically. */
+console.log('\n=== CREW DOSE IS A SOLVED FIELD, NOT A BOUNDING BOX ===');
+{ /* the scalar is not a second computation that happens to agree with the
+     field today - it IS radAt() on P.radK, literally, at commissioning time */
+  set({});
+  const f=M.radSolve(M.P().radK, M.radSrc(null));
+  const d=M.radAt(f, M.P().radK.crew);
+  if(Math.abs(M.P().dose-d)>1e-12) bad(`P.dose (${M.P().dose}) and radAt() on P.radK (${d}) disagree`);
+  console.log(`  P.dose === radAt(radSolve(P.radK,radSrc(null)),P.radK.crew): ${d.toFixed(6)}`);
+}
+{ /* pins RAD_K and the whole radMu table at once - this is the exact figure
+     every s.release growth line in step.js (~713, ~777) was already tuned
+     against before the field existed; drifting it rescales every release
+     figure in the game */
+  set({});
+  if(M.P().dose<0.045||M.P().dose>0.052) bad(`default PWR P.dose is ${M.P().dose.toFixed(4)}, expected 0.045..0.052`);
+  console.log(`  default PWR P.dose = ${M.P().dose.toFixed(4)}`);
+}
+{ /* move all three shields clear of the beam and the crew must read a lot
+     more dose - measured at ~6.1x on the stock layout, so 4x is a floor with
+     real margin that still fails hard the day the field quietly stops
+     shielding anything */
+  set({});
+  const base=M.P().dose;
+  const L=M.LAY(), sh=['shld0','shld1','shld2'].map(id=>L.parts.find(p=>p.id===id));
+  const at=sh.map(p=>[p.x,p.y]);
+  if(!M.moveTo(sh[0],13,0)||!M.moveTo(sh[1],14,0)||!M.moveTo(sh[2],15,0))
+    bad('could not clear the stock shields off the beam to test with');
+  M.commission();
+  const clear=M.P().dose;
+  if(clear<base*4) bad(`clearing every shield off the beam only raised dose ${base.toFixed(4)} -> ${clear.toFixed(4)}, expected >=4x`);
+  else console.log(`  all three shields off the beam: dose ${base.toFixed(4)} -> ${clear.toFixed(4)} (${(clear/base).toFixed(1)}x)`);
+  for(let i=0;i<sh.length;i++) M.moveTo(sh[i],at[i][0],at[i][1]);
+  M.commission();
+  if(Math.abs(M.P().dose-base)>1e-9) bad('putting the shields back did not restore the original dose');
+}
+{ /* THE CASE THE OLD FORMULA COULD NEVER PASS. A shield parked in a corner
+     of the old inflated bounding box, nowhere near the actual core->crew
+     ray, must cost the crew nothing - the box-counting formula would have
+     charged for it purely on being inside the box. Move that SAME shield
+     onto the ray afterwards and the dose has to fall, or "the ray" is
+     decoration and the field is secretly still reading the box. Corner
+     (1,4) and on-ray point (2,7) are specific to the stock layout (core
+     3x3 at (2,4), ctrl 2x1 at (1,8)) and are asserted as found, not
+     re-derived every run, so a future default-layout change fails this
+     loudly instead of silently walking to a different corner. */
+  set({});
+  const L=M.LAY(), sh=['shld0','shld1','shld2'].map(id=>L.parts.find(p=>p.id===id));
+  const at=sh.map(p=>[p.x,p.y]);
+  M.moveTo(sh[0],13,0); M.moveTo(sh[1],14,0); M.moveTo(sh[2],15,0);
+  M.commission();
+  const none=M.P().dose;
+  if(!M.moveTo(sh[0],1,4)) bad('could not place the corner shield for the off-line case');
+  M.commission();
+  const corner=M.P().dose;
+  if(Math.abs(corner-none)>1e-9)
+    bad(`a shield in the old bbox's corner, off the ray, moved dose ${none.toFixed(6)} -> ${corner.toFixed(6)}; a ray model must ignore it`);
+  if(!M.moveTo(sh[0],2,7)) bad('could not place the shield back onto the ray');
+  M.commission();
+  const online=M.P().dose;
+  if(!(online<corner*0.5))
+    bad(`the same shield moved onto the ray only took dose ${corner.toFixed(4)} -> ${online.toFixed(4)}, expected at least half`);
+  console.log(`  corner of the old bbox, off the ray: dose unchanged at ${corner.toFixed(4)}; the same shield ON the ray: ${online.toFixed(4)}`);
+  for(let i=0;i<sh.length;i++) M.moveTo(sh[i],at[i][0],at[i][1]);
+  M.commission();
+}
+{ /* Manhattan distance is a routing metric, not a radiation one. Two control
+     room placements the same 7.5 cells away by taxicab distance but at
+     different Euclidean range must not read the same dose, or the field has
+     quietly fallen back to the old formula's notion of distance. */
+  set({});
+  const L=M.LAY(), ctrl=L.parts.find(p=>p.id==='ctrl'), at=[ctrl.x,ctrl.y];
+  const doseAt=(x,y)=>{ if(!M.moveTo(ctrl,x,y)) return null; M.commission(); return M.P().dose; };
+  const near=doseAt(0,0), far=doseAt(9,4);   // both 7.5 cells from the core centre by |dx|+|dy|
+  M.moveTo(ctrl,at[0],at[1]); M.commission();
+  if(near===null||far===null) bad('could not place the control room for the Manhattan-vs-Euclidean case');
+  else if(Math.abs(near-far)<1e-6)
+    bad(`two ctrl placements at equal taxicab distance gave the same dose (${near.toFixed(4)}); distance is not really Euclidean`);
+  else console.log(`  equal taxicab distance (7.5 cells), unequal dose: (0,0) ${near.toFixed(4)} vs (9,4) ${far.toFixed(4)}`);
+}
+{ /* the RAD_FLOOR..RAD_CEIL clamp in radAt() has to hold across a real sweep
+     of placements, not just the one layout the rest of this file measures */
+  set({});
+  const L=M.LAY(), ctrl=L.parts.find(p=>p.id==='ctrl'), at=[ctrl.x,ctrl.y];
+  let checked=0;
+  for(const [x,y] of [[0,0],[0,8],[9,4],[8,3],[6,7],[1,1],[0,4],[5,4]]){
+    if(!M.moveTo(ctrl,x,y)) continue;
+    M.commission(); checked++;
+    if(M.P().dose<0.02||M.P().dose>3) bad(`ctrl at (${x},${y}) gave P.dose=${M.P().dose}, outside 0.02..3`);
+  }
+  M.moveTo(ctrl,at[0],at[1]); M.commission();
+  if(checked<4) bad('the dose-bounds sweep placed too few layouts to mean anything');
+  else console.log(`  P.dose stayed inside 0.02..3 across ${checked} control-room placements`);
+}
+{ /* guards the freeAdj() extraction: layoutMetrics() used to compute repair
+     access inline, and a wrong inside/edge predicate makes default designs
+     unbuildable - REPAIR ACCESS < 1 is a HARD block at commissioning, so a
+     mistake here silently fails the whole design sweep at the top of this
+     file rather than showing up as its own line. */
+  set({});
+  const acc=M.layoutMetrics().access;
+  if(Math.abs(acc-1)>1e-9) bad(`default layout repair access is ${acc}, expected exactly 1.0`);
+  else console.log(`  default layout repair access: ${(acc*100).toFixed(0)}%`);
+}
+
+/* ══════════ RADIATION IS LIVE, NOT A COMMISSIONING-TIME NUMBER ══════════
+   Everything above this line asks what an ARRANGEMENT costs the crew at
+   rating - P.dose, baked in once at commission() and never touched again.
+   s.doseRate is the same field asked a different question every tick: what
+   does THIS plant, right now, damaged or not, actually cost. The two had
+   better agree at the one instant they are defined to (tick zero, before
+   the plant has done anything) and had better diverge hard the moment an
+   accident gives the source term something P.dose was never told about. */
+console.log('\n=== RADIATION IS LIVE, NOT A COMMISSIONING-TIME NUMBER ===');
+{ /* Every other actuator's demand starts equal to its actual so tick zero
+     never reads a number the plant does not have yet (see the boron/rod/
+     flow demands in resetPlant()) - doseRate is the same convention applied
+     to a readout instead of an actuator. This is the assertion that catches
+     the day somebody "simplifies" the initialiser back to 0. */
+  const s=set({});
+  if(Math.abs(s.doseRate-M.P().dose)>1e-9)
+    bad(`clean plant doseRate (${s.doseRate}) disagrees with P.dose (${M.P().dose}) at tick zero`);
+  console.log(`  clean plant, tick zero: s.doseRate === P.dose === ${s.doseRate.toFixed(4)}`);
+}
+{ /* THE FIELD IS LIVE: the same flow-kill fault the DOCUMENTED BEHAVIOUR
+     block above already uses to break a plant, run far enough to melt the
+     core. dmg is certain to be well past 25 long before that (it plateaus
+     around 29% inside 15 s of the fault landing) - melt is the point the
+     field cannot possibly still agree with a frozen P.dose, because RAD_MELT
+     enters the source term the moment s.melt goes true and nothing about
+     P.dose knows the core is molten. A static readout would sail through
+     this unmoved; measured margin here is more than 5x, so the >3x floor
+     has real slack in it. */
+  const s=set({}); run(s,10);
+  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
+  let ticks=0; while(!s.melt && !s.breach && ticks<50*300){ M.step(0.02); ticks++; }
+  if(!s.melt) bad('flow-kill + RPS bypass did not reach core melt inside 300 s of fault time; nothing to check the live field against');
+  if(s.dmg<=25) bad(`core melted at only dmg=${s.dmg.toFixed(1)}%, expected well past 25%`);
+  if(s.doseRate<=M.P().dose*3)
+    bad(`live doseRate only reached ${(s.doseRate/M.P().dose).toFixed(2)}x P.dose at melt; expected >3x`);
+  console.log(`  flow-kill + bypass, run to melt: dmg=${s.dmg.toFixed(0)}%, doseRate=${s.doseRate.toFixed(3)} (${(s.doseRate/M.P().dose).toFixed(1)}x the as-built figure)`);
+}
+{ /* CONTAINMENT REACHES THE FIELD: same fault, NONE (rel=1.0) against LARGE
+     DRY (rel=.05) - P.contRel scales both the direct cladding-failure term
+     and the rate the airborne term accumulates at, so the two containments
+     have to read very different dose rates for identical damage. Sampled at
+     60 s into the fault rather than at melt: dmg is already well past 25 by
+     then (it plateaus inside 15 s), but RAD_MELT - a flat addition neither
+     containment scales - is still well over 100 s away, so it cannot yet
+     swamp the very difference this case exists to measure. */
+  const doseAt=cont=>{ const s=set({cont,contFit:true}); run(s,10);
+    s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
+    for(let i=0;i<50*60;i++) M.step(0.02);
+    return s.doseRate; };
+  const none=doseAt(0), large=doseAt(2);
+  if(none<large*5)
+    bad(`containment NONE only read ${(none/large).toFixed(2)}x LARGE DRY 60 s into the same fault; expected >=5x`);
+  console.log(`  containment reaches the field: NONE ${none.toFixed(4)} vs LARGE DRY ${large.toFixed(4)} (${(none/large).toFixed(1)}x), 60 s into the same fault`);
+}
+{ /* NOTHING LIT AT REST, EVERY ARCHITECTURE - HI AREA RAD's own guard, named
+     rather than folded into the blanket "no annunciator lit at rest" sweep
+     near the top of this file, so a regression here says WHICH number moved
+     instead of just which tile lit. It is safe by construction: the design
+     source term is 1 by fiat (see radSrc() in rad.js), so P.dose is purely
+     geometric and nowhere near RAD_HI - but "safe by construction" is a
+     claim, and this is the check, not the assumption. */
+  let worst=0, worstArch='';
+  for(let a=0;a<ARCH.length;a++){
+    const s=set({arch:a}); run(s,60);
+    if(s.doseRate>worst){ worst=s.doseRate; worstArch=ARCH[a].id; }
+    if(s.doseRate>=M.RAD_HI) bad(`${ARCH[a].id} at rest reads doseRate=${s.doseRate.toFixed(3)}, at or past RAD_HI (${M.RAD_HI})`);
+  }
+  console.log(`  HI AREA RAD dark at rest on every architecture; worst is ${worstArch} at ${worst.toFixed(4)} (RAD_HI=${M.RAD_HI})`);
+}
+
+/* ══════════ DOSE HAS TEETH ══════════
+   Pillar 4 again, aimed at the repair party rather than an operator's switch:
+   a hot field is never a reason the sim refuses a dispatch, only a reason it
+   costs more. What it costs is TIME, via radWorkK() (step.js), and the panel's
+   own ETA reads the identical helper - so there is exactly one formula and it
+   cannot lie to itself. */
+console.log('\n=== DOSE HAS TEETH: A HOT FIELD SLOWS A REPAIR PARTY, IT NEVER REFUSES ONE ===');
+{
+  /* COOL: the stock plant at rest, sent to the rod drives - the case the
+     CLAUDE.md brief calls out by name. The default plant sits near 0.05x,
+     far under RAD_SLOW (0.5x), so radWorkK() must return exactly 1 here and
+     the job must run at the speed it always did. This plant is fully
+     settled and nothing on it is evolving, so it is also the one case where
+     the field a party stands in genuinely holds still for the whole job -
+     which is what lets this same case check the advertised ETA below to
+     the tick, not just the ratio. s.repRate is only ever written inside
+     step()'s radiation block, so the tick right after a dispatch still
+     holds whatever it read the last time a party was out (0, if none was) -
+     one step lets the field catch up before anything is measured. */
+  const cool=set({}); run(cool,5);
+  M.repairStart('rods');
+  if(!cool.repair) bad('dispatch on an undamaged, accessible component at rest was refused');
+  const need=cool.repair.need;
+  M.step(0.02); let ticksCool=1;
+  const rate0=cool.repRate, k0=M.radWorkK(rate0);
+  if(rate0>M.RAD_SLOW) bad(`the "cool" case reads repRate=${rate0.toFixed(3)}x, at or above RAD_SLOW - pick a colder case to prove the no-penalty floor`);
+  if(Math.abs(k0-1)>1e-9) bad(`radWorkK(${rate0.toFixed(3)}) = ${k0}, expected exactly 1 at or below RAD_SLOW`);
+  while(cool.repair && ticksCool<50*600) { M.step(0.02); ticksCool++; }
+  if(cool.repair) bad('a repair job at rest never completed inside 600 s');
+  const tCool=ticksCool*0.02;
+  console.log(`  cool: repRate=${rate0.toFixed(3)}x, radWorkK=${k0.toFixed(3)}, job took ${tCool.toFixed(2)}s`);
+  const est=need/k0;
+  if(Math.abs(tCool-est)>0.021)
+    bad(`advertised ETA need/radWorkK(rate) = ${est.toFixed(3)}s disagrees with the measured ${tCool.toFixed(3)}s by more than a tick`);
+  else console.log(`  advertised ETA need/radWorkK(rate)=${est.toFixed(2)}s matches the measured ${tCool.toFixed(2)}s to within a tick`);
+
+  /* HOT: the same flow-kill + RPS-bypass fault the RADIATION IS LIVE block
+     already trusts, with containment stripped (rel=1.0, see the CONTAINMENT
+     REACHES THE FIELD case above) so the field is strong enough to clear
+     RAD_SLOW well before the core is anywhere near melting, and the party
+     sent straight to the reactor vessel itself - the worst reachable spot
+     on this or any plant. MEASURED, not assumed: with no containment fitted,
+     dmg plateaus near 29% for a good two minutes before it starts climbing
+     again toward melt around t=186s, so a job dispatched at t=40s has a
+     wide, genuinely stable window to finish in -
+     stable enough to clear the party without melt or the party itself being
+     spent, but this case does NOT hold the field perfectly still the way
+     COOL does (dmg is still creeping upward under it), so unlike COOL above
+     it is only checked against the ratio below, not against the tick. */
+  const hot=set({cont:0, contFit:true}); run(hot,10);
+  hot.byp.rps=true; hot.flow=0.05; hot.flowDem=0.05;
+  while(hot.t<40 && !hot.melt) M.step(0.02);
+  if(hot.melt) bad('the no-containment fault reached melt before this case could even dispatch a party into it');
+  M.repairStart('core');
+  if(!hot.repair) bad('dispatch to the reactor vessel on an active, uncontained fault was refused - dose must slow a party, never turn it back');
+  M.step(0.02);
+  const rateHot=hot.repRate, kHot=M.radWorkK(rateHot);
+  if(rateHot<=M.RAD_SLOW) bad(`even the reactor vessel on an uncontained fault only reads repRate=${rateHot.toFixed(3)}x - expected well past RAD_SLOW`);
+  let ticksHot=1;
+  while(hot.repair && !hot.partySpent && !hot.melt && ticksHot<50*300) { M.step(0.02); ticksHot++; }
+  if(hot.melt) bad('the fault reached melt before this job finished - too tight a window to show a completed, merely slower, job');
+  if(hot.partySpent) bad('the party was spent before this job finished - too severe a case to show a completed, merely slower, job');
+  if(hot.repair) bad('a repair job into an active fault never completed inside a generous budget');
+  const tHot=ticksHot*0.02;
+  console.log(`  hot (reactor vessel, no containment, uncontained fault): repRate=${rateHot.toFixed(3)}x, radWorkK=${kHot.toFixed(3)}, job took ${tHot.toFixed(2)}s`);
+
+  if(tHot < tCool*1.8)
+    bad(`hot job (${tHot.toFixed(2)}s) was not even 1.8x the cool one (${tCool.toFixed(2)}s) - dose is not slowing the party enough to matter`);
+  else console.log(`  neither dispatch was refused, both jobs completed, hot took ${(tHot/tCool).toFixed(1)}x as long as cool`);
+}
+
+/* radPeak() (rad.js) IS "where does it hurt most", the exact field the live
+   doseRate/repRate readouts already trust - so asking it for the worst
+   reachable spot, rather than guessing an id, is what makes the case below
+   measure the real mechanic instead of a number this auditor made up. */
+const hotSpot = s => M.radPeak(M.radSolve(M.radGeom(), M.radSrc(s))).who.id;
+
+console.log('\n=== THE REPAIR PARTY CAN BE SPENT, AND IT IS PERMANENT ===');
+{
+  /* Drive s.dose to 100 for real: no containment, RPS bypassed, flow killed,
+     run to melt, then a party sent to the worst spot the field itself names
+     and left there - the accident this game is actually built to let happen,
+     not an injected number. */
+  const s=set({cont:0, contFit:true}); run(s,10);
+  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
+  let mt=0; while(!s.melt && mt<50*300) { M.step(0.02); mt++; }
+  if(!s.melt) bad('setup fault did not reach melt before this case could show a spent party');
+  const spot=hotSpot(s);
+  M.combatHit(spot);
+  if(!s.dmgParts.includes(spot)) bad(`combatHit(${spot}) did not damage the very component this case sends the party to`);
+  M.repairStart(spot);
+  if(!s.repair) bad('the dispatch this case depends on was refused');
+  let ticks=0;
+  while(!s.partySpent && ticks<50*2000) { M.step(0.02); ticks++; }
+  if(!s.partySpent) bad('s.dose never reached 100 and withdrew the party inside a generous budget');
+  if(s.dose!==100) bad(`partySpent latched at s.dose=${s.dose}, expected exactly 100`);
+  if(s.repair!==null) bad('the party was spent but s.repair was not cleared');
+  if(!s.dmgParts.includes(spot)) bad(`the party was spent mid-job and ${spot}, the job it never finished, came back fixed anyway`);
+  const dmgBefore=s.dmgParts.length, doseBefore=s.dose;
+  M.repairStart(spot);
+  if(s.repair) bad('a dispatch after the party was spent was carried out - it must be a silent no-op');
+  if(s.dose!==doseBefore || s.dmgParts.length!==dmgBefore)
+    bad('a refused dispatch after the party was spent still changed plant state');
+  console.log(`  s.dose reached 100 on the ${spot} job: party withdrawn permanently, s.repair=null, ${spot} still in dmgParts, a second dispatch is a no-op`);
+
+  M.resetPlant();
+  if(M.S().partySpent!==false) bad('resetPlant() did not clear partySpent back to false');
+  else console.log('  resetPlant() clears partySpent back to false');
 }
 
 console.log(fails? `\n${fails} FAILURE(S)` : '\nall physics checks passed');
