@@ -150,12 +150,22 @@ function pipeEdge(g,s){
    by exactly the step that moved the fluid, so the division is exact. */
 const pipeLast={}, pipeSpd={}, pipeShown={};
 let pipeT=null, pipeDt=0;
+/* ══ SMOOTHING IS DISPLAY STATE, SO IT IS NOT ON S AND IS CLEARED BY HAND ══
+   Every damped figure in here is a picture of the last few frames, not a fact
+   about the plant - which is exactly why it does not live on S and is not in a
+   snapshot. The cost of that is that whoever moves the clock has to say so. A
+   scrub landing on a DIFFERENT take at a similar s.t would otherwise smear one
+   frame of the run you just left across the run you just arrived in, and s.t
+   alone cannot tell those two apart - it is the same number in both takes.
+   restoreS() and resetPlant() both call this. */
+function pipeReset(){
+  for(const k in pipeLast)  delete pipeLast[k];
+  for(const k in pipeSpd)   delete pipeSpd[k];
+  for(const k in pipeShown) delete pipeShown[k];
+  pipeT=null; pipeDt=0;
+}
 function pipeRate(s){
   const now=s.t, dt=pipeT===null?0:now-pipeT;
-  if(now<pipeT){                     // resetPlant() rewound the clock: start clean
-    for(const k in pipeLast) delete pipeLast[k];
-    for(const k in pipeShown) delete pipeShown[k];
-  }
   pipeT=now; pipeDt=(dt>0&&dt<=0.25)?dt:0;
   if(!pipeDt) return;
   for(const k in s.flowPos){
