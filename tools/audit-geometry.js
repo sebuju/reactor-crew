@@ -230,6 +230,36 @@ function funcBody(src,name){
 const drawPlantBody=funcBody(S,'drawPlant');
 const layerPassInDrawPlant=(drawPlantBody.match(/layerPass\(["']/g)||[]).length;
 const layerPassTotal=(S.match(/layerPass\(["']/g)||[]).length;
+/* THE PRESSURIZER DOES NOT OWN A RELIEF VALVE, AND THIS IS WHAT KEEPS IT THAT
+   WAY. Six rows about the relief valve used to live in readoutsFor()'s pzr
+   branch, and every one of them resolved through primaryRelief() - so a plant
+   with three relief valves had this panel describe the first and pretend the
+   other two did not exist. They are readoutsForFit() rows now, one panel per
+   valve. A row that drifts back here is invisible to every other check in this
+   file, because it draws perfectly well; it is just describing the wrong valve.
+   P.P0*(1.06+0.07*m) is the HIGH PRESSURE TRIP and stays - a different setpoint
+   that merely shares a digit - so it is struck out before the scan. */
+const pzrBranch=(()=>{
+  const b=funcBody(S,'readoutsFor'), at=b.indexOf('id==="pzr"');
+  if(at<0) return '';
+  const end=b.indexOf('} else if(', at);
+  return b.slice(at, end<0? b.length : end).split('1.06+0.07*m').join('');
+})();
+const PZR_STRAY=['primaryRelief(','porvRate','reliefOpen','reliefBlocked','1.06','PORV_LIFT','autoState("porv")'];
+const pzrStrays=PZR_STRAY.filter(t=>pzrBranch.includes(t));
+const fitPanelChecks=[
+ ['the pzr branch names no valve', pzrBranch.length>0 && pzrStrays.length===0,
+  pzrStrays.length? 'the pzr branch of readoutsFor() still reaches a relief valve through: '+pzrStrays.join(', ')
+    : 'no relief valve is described from the pressurizer: the pzr branch of readoutsFor() carries none of '+PZR_STRAY.join(', ')],
+ ['a fitting has its own panel', (S.match(/function readoutsForFit\(/g)||[]).length===1 &&
+   (S.match(/function paramsForFit\(/g)||[]).length===1 &&
+   crSrc.includes('readoutsForFit(') && dbSrc.includes('paramsForFit('),
+  'readoutsForFit() and paramsForFit() are each defined once, and each rail builds fitting wells from its own one'],
+ ['one setpoint reader', (S.match(/function reliefSet\(/g)||[]).length===1 &&
+   !/PORV_LIFT|PORV_RESEAT/.test(S),
+  'reliefSet() is the one reader of a setpoint pair; no file reads a plant-wide PORV_LIFT/PORV_RESEAT any more'],
+];
+
 const layerChecks=[
  ['one layer table',        (S.match(/const LAYERS=/g)||[]).length===1, 'LAYERS defined once, in render/layers.js'],
  ['layerPass called twice, both in drawPlant',
@@ -473,6 +503,7 @@ const checks=[
  ...juncChecks,
  ...wpChecks,
  ...plantChecks,
+ ...fitPanelChecks,
  ...layerChecks,
  ...actChecks,
  ...chartChecks,

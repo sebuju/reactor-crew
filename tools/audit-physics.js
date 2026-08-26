@@ -15,7 +15,9 @@ const M=require('./bundle').headless(
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
  'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW,'+
  'netBuild,netFlowK,setPipeK,VALVE_RATE,hittableRunKeys,pipeCells,pipePart,'+
- 'hasRelief,primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,ventK,reliefG,PIPE_BORE:()=>PIPE_BORE}');
+ 'hasRelief,primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,ventK,reliefG,PIPE_BORE:()=>PIPE_BORE,'+
+ 'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,PORV_INV,autoLive,AUTOSYS:()=>AUTOSYS,'+
+ 'paramsForFit,readoutsForFit}');
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 /* THE LATTICE IS PART OF THE DESIGN NOW, so set() has to put it back as well
@@ -497,6 +499,194 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
     bad(`a severed relief branch produced a non-finite value: P=${s.P} inv=${s.inv} ventK=${vk}`);
   if(vk!==0) bad(`a severed relief branch still vented at ventK=${vk}, expected exactly 0`);
   console.log(`  a severed relief branch never produces NaN: ventK=${vk}, P and inv stay finite (P=${s.P.toFixed(2)} MPa)`);
+}
+
+console.log('\n=== A RELIEF VALVE CARRIES ITS OWN SETPOINTS AND ITS OWN ARM ===');
+/* Three relief valves on the stock relief header, the same way the bench's own
+   "ADD RELIEF VALVE HERE" taps one. Returns the ids in placement order. */
+const threeReliefs=(a,b,c)=>{
+  M.D().fit={};
+  const f0=M.addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,M.PIPE_BORE().relief,
+                    a&&a[0],a&&a[1]);
+  const f1=M.addFit('relief','cold:sg0b-pump0t',0.5,'relief:pzrt-reltkb',0.3,M.PIPE_BORE().relief,
+                    b&&b[0],b&&b[1]);
+  const f2=M.addFit('relief','cold:pump0b-coreb',0.5,'relief:pzrt-reltkb',0.7,M.PIPE_BORE().relief,
+                    c&&c[0],c&&c[1]);
+  M.commission();
+  return [f0,f1,f2];
+};
+{ /* 1. THE FEATURE IS FREE. A fitting nobody dialled must lift and reseat at
+     the identical pressures the single plant-wide constant always gave, and
+     vent at exactly ventK===1. Bit-equality, not a tolerance - that identity is
+     the whole claim that no existing design moved. */
+  const s=set({}); const fid=M.primaryRelief(), P0=M.P().P0;
+  const r=M.reliefSet(fid);
+  if(r.lift!==M.PORV_LIFT0) bad(`an undialled fitting's lift is ${r.lift}, not the default ${M.PORV_LIFT0}`);
+  if(r.reseat!==M.PORV_RESEAT0) bad(`an undialled fitting's reseat is ${r.reseat}, not the default ${M.PORV_RESEAT0}`);
+  const vk=M.ventK(s,fid);
+  if(Math.abs(vk-1)>1e-9) bad(`an undialled fitting's ventK is ${vk}, expected exactly 1`);
+  /* And the same plant with the pair DIALLED to those defaults must fly bit
+     for bit identically - a stronger statement than "the fields read right",
+     because it covers every path the tick takes through them. */
+  const fly=pair=>{
+    M.D().fit={};
+    const f=M.addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,M.PIPE_BORE().relief,
+                     pair&&pair[0],pair&&pair[1]);
+    M.commission(); const t=M.S(); t.byp.rps=true; t.diceOff=true; run(t,5);
+    const trace=[];
+    for(let i=0;i<400;i++){ t.P=P0*(1.00+0.10*(i/399)); M.step(0.02);
+      trace.push(t.P,t.inv,t.reliefOpen[f]?1:0); }
+    return trace;
+  };
+  const a=fly(null), b=fly([M.PORV_LIFT0,M.PORV_RESEAT0]);
+  const diff=a.findIndex((v,i)=>v!==b[i]);
+  if(diff>=0) bad(`an undialled valve and one dialled to the defaults diverged at sample ${diff}: ${a[diff]} vs ${b[diff]}`);
+  console.log(`  an undialled fitting is the old PORV exactly: lift=${r.lift} reseat=${r.reseat} ventK=${vk.toFixed(6)}, `+
+              `and ${a.length} samples of a forced pressure ramp are identical bit for bit to a valve dialled to those same defaults`);
+}
+{ /* 2. EACH VALVE LIFTS AT ITS OWN SETPOINT. Two valves, different lifts:
+     raise pressure between the two setpoints and exactly the lower one opens.
+     This is the failure the single PORV_LIFT constant made impossible to see. */
+  const [lo,hi]=threeReliefs([1.04,1.01],[1.12,1.06],[1.18,1.10]);
+  const s=M.S(); s.byp.rps=true; run(s,5);
+  const P0=M.P().P0;
+  s.P=P0*1.08; M.step(0.02);
+  if(!s.reliefOpen[lo]) bad('the 1.04 valve did not lift at 108% pressure');
+  if(s.reliefOpen[hi]) bad('the 1.12 valve lifted at 108% pressure - it read another valve\'s setpoint');
+  console.log(`  two setpoints, one pressure: at 108% the 1.04 valve is ${s.reliefOpen[lo]?'OPEN':'shut'} `+
+              `and the 1.12 valve is ${s.reliefOpen[hi]?'OPEN':'shut'}`);
+}
+{ /* 3. ONE VALVE'S ARM IS ITS OWN. Bypass one of two identical valves, drive an
+     overpressure, and exactly one opens - and the plant still vents. This is
+     the entire point of moving arming off the plant-wide switch. */
+  const [a,b]=threeReliefs([1.06,1.01],[1.06,1.01],[1.06,1.01]);
+  const s=M.S(); s.byp.rps=true; run(s,5);
+  M.act('porvByp',a);
+  if(!s.porvByp[a]) bad('act(porvByp) did not bypass the valve it named');
+  if(s.porvByp[b]) bad('bypassing one valve bypassed another');
+  if(M.porvLive(a)) bad('porvLive() is true for a bypassed valve');
+  const inv0=s.inv;
+  s.P=M.P().P0*1.10; run(s,2);
+  if(s.reliefOpen[a]) bad('a bypassed valve lifted anyway');
+  if(!s.reliefOpen[b]) bad('bypassing one valve stopped its neighbour lifting');
+  if(!(s.inv<inv0)) bad('one valve bypassed and the plant vented nothing at all');
+  console.log(`  one valve bypassed, its neighbour armed: bypassed=${s.reliefOpen[a]?'OPEN':'shut'} `+
+              `armed=${s.reliefOpen[b]?'OPEN':'shut'}, inventory still fell ${(inv0-s.inv).toFixed(2)}%`);
+}
+{ /* 4. THE MASTER STILL MEANS WHAT IT MEANT. act('byp','porv') is the signature
+     every tape written before per-valve arming carries. It must still defeat
+     EVERY valve, and arming it again must leave none of them individually
+     bypassed - the master and the individuals can never disagree. */
+  const ids=threeReliefs();
+  const s=M.S(); s.byp.rps=true; run(s,5);
+  M.act('byp','porv');
+  if(!s.byp.porv) bad('act(byp,porv) did not set the master');
+  if(!ids.every(f=>s.porvByp[f])) bad('the master bypass left a valve armed');
+  if(ids.some(f=>M.porvLive(f))) bad('porvLive() is true for a valve under a master bypass');
+  s.P=M.P().P0*1.20; run(s,2);
+  if(ids.some(f=>s.reliefOpen[f])) bad('a valve lifted under a master bypass');
+  M.act('byp','porv');
+  if(ids.some(f=>s.porvByp[f])) bad('re-arming the master left a valve individually bypassed');
+  console.log('  act(byp,porv) bypasses all three valves and nothing lifts at 120%; re-arming clears all three');
+}
+{ /* 5. THE DEADBAND IS REAL, AND IT IS A NUMBER. A wide band lifts once and
+     clears the transient; a narrow one cycles. Counting the cycles is the check
+     - "it cannot chatter" is an assertion, a cycle count is a measurement. The
+     valve is walked through the same shape of pressure swing both times; only
+     the width of its own band differs. A stuck valve is unstuck by hand, or the
+     die decides the count instead of the deadband. */
+  const cycles=(lift,reseat)=>{
+    M.D().fit={};
+    const f=M.addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,M.PIPE_BORE().relief,lift,reseat);
+    M.commission(); const s=M.S(); s.byp.rps=true; s.diceOff=true; run(s,5);
+    const P0=M.P().P0; let n=0, was=false;
+    /* ONE pressure swing, identical for both valves: up to 107% and back to
+       103%. 103% is above the wide valve's reseat point and below the narrow
+       one's, so the swing itself decides nothing - only the width of the band
+       does. Held five ticks at each end so the reseat has somewhere to happen. */
+    for(let i=0;i<300;i++){
+      s.P = P0*(Math.floor(i/5)%2 ? 1.03 : 1.07);
+      M.step(0.02);
+      if(s.reliefOpen[f] && !was) n++;
+      was=s.reliefOpen[f];
+    }
+    return n;
+  };
+  const wide=cycles(1.06,1.01), narrow=cycles(1.06,1.055);
+  if(wide!==1) bad(`a 0.05 deadband lifted ${wide} times through one pressure swing, expected exactly 1`);
+  if(!(narrow>wide)) bad(`a 0.005 deadband cycled ${narrow} times and a 0.05 deadband ${wide} - the band buys nothing`);
+  console.log(`  the deadband is measured, not asserted: through the same 103-107% swing a 0.05 band lifts ${wide} time(s), a 0.005 band ${narrow}`);
+}
+{ /* 6. THE RANGE FORBIDS INVERSION. A valve that reseats at or above its own
+     lift point has no shut state at all, so the bench must make that pair
+     unreachable - dragged from either end, it comes back ordered. And if a
+     design is forced inverted straight onto D, the tick still terminates
+     rather than chattering forever. */
+  M.D().fit={};
+  const f=M.addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,M.PIPE_BORE().relief,1.10,1.05);
+  M.commission();
+  const B=M.paramsForFit(f), row=t=>B.find(b=>b.title===t);
+  row('RESEAT PRESSURE').key.set(1.19);          // drag reseat far above lift
+  if(!(M.reliefSet(f).reseat < M.reliefSet(f).lift))
+    bad(`the bench let reseat (${M.reliefSet(f).reseat}) reach lift (${M.reliefSet(f).lift})`);
+  row('LIFT PRESSURE').key.set(1.02);            // now drag lift down under reseat
+  if(!(M.reliefSet(f).reseat < M.reliefSet(f).lift))
+    bad(`dragging lift below reseat left reseat (${M.reliefSet(f).reseat}) at or above lift (${M.reliefSet(f).lift})`);
+  const dialled=`lift=${M.reliefSet(f).lift} reseat=${M.reliefSet(f).reseat}`;
+  M.D().fit[f].lift=1.02; M.D().fit[f].reseat=1.15;   // forced, bypassing the bench entirely
+  M.commission();
+  const s=M.S(); s.byp.rps=true; run(s,5); s.P=M.P().P0*1.10; run(s,5);
+  if(!isFinite(s.P)||!isFinite(s.inv)) bad('an inverted setpoint pair produced a non-finite P or inv');
+  console.log(`  the bench cannot invert the pair (${dialled}); forced inverted onto D the tick still terminates, P=${s.P.toFixed(2)} MPa`);
+}
+{ /* 7. BOTH NEW ACTS REFUSE AN ID THIS DESIGN NEVER HAD - the same refusal
+     ACT.junc and ACT.valveDem carry, for the same reason: a phantom key on S is
+     snapshotted, restored and compared like a real one. Scoped by MODE too, so
+     a tee's id cannot arm a relief valve that does not exist. */
+  const [f0]=threeReliefs();
+  const tee=M.addFit('tee','cold:sg1b-pump1t',0.5,'cold:sg2b-pump2t',0.5);
+  M.commission(); const s=M.S();
+  M.act('porvByp','doesNotExist');
+  if('doesNotExist' in s.porvByp) bad('act(porvByp,...) put a phantom key on S for an id this design never had');
+  M.act('porvBlockOf','doesNotExist');
+  if('doesNotExist' in s.reliefBlocked) bad('act(porvBlockOf,...) put a phantom key on S for an id this design never had');
+  M.act('porvByp',tee); M.act('porvBlockOf',tee);
+  if((tee in s.porvByp)||(tee in s.reliefBlocked)) bad('a tee id reached a relief-only act');
+  M.act('porvBlockOf',f0);
+  if(!s.reliefBlocked[f0]) bad('act(porvBlockOf) did not work the valve it named');
+  console.log('  act() refuses an unknown id and a wrong-mode id, on both porvByp and porvBlockOf');
+}
+{ /* 8 + 11. THREE VALVES, THREE PANELS. This is the failure the pressurizer
+     panel had: six relief rows that every one of them resolved through
+     primaryRelief(), so valve two and valve three were described by valve one's
+     numbers. Each panel must carry its OWN lift, its OWN margin and its OWN
+     arm - and the margin the panel prints must be the tick's own
+     P0*reliefSet(fid).lift - s.P, never a second copy of the arithmetic. */
+  const ids=threeReliefs([1.04,1.01],[1.12,1.06],[1.18,1.10]);
+  const s=M.S(); s.byp.rps=true; run(s,5);
+  const P0=M.P().P0;
+  s.P=P0*1.08; M.step(0.02);
+  M.act('porvByp',ids[2]);
+  const seen=[];
+  for(const fid of ids){
+    const rows=M.readoutsForFit(fid,s), get=k=>{ const r=rows.find(q=>q[0]===k); return r&&r[1]; };
+    const st=M.reliefSet(fid);
+    const wantLift=(P0*st.lift).toFixed(2)+' MPa';
+    if(get('LIFT SETPOINT')!==wantLift)
+      bad(`${fid}: panel says LIFT SETPOINT ${get('LIFT SETPOINT')}, the tick lifts at ${wantLift}`);
+    const wantMarg=(P0*st.lift-s.P).toFixed(2)+' MPa';
+    if(get('MARGIN TO LIFT')!==wantMarg)
+      bad(`${fid}: panel says MARGIN TO LIFT ${get('MARGIN TO LIFT')}, the tick's own margin is ${wantMarg}`);
+    if(get('RESEAT SETPOINT')!==(P0*st.reseat).toFixed(2)+' MPa')
+      bad(`${fid}: panel says RESEAT SETPOINT ${get('RESEAT SETPOINT')}, expected ${(P0*st.reseat).toFixed(2)} MPa`);
+    seen.push(`${fid} ${get('LIFT SETPOINT')} ${get('PORV')} ${get('AUTO RELIEF')}`);
+  }
+  if(new Set(seen.map(t=>t.split(' ')[1])).size!==3)
+    bad('three valves with three different setpoints produced fewer than three distinct panel readings');
+  if(M.readoutsForFit(ids[2],s).find(r=>r[0]==='AUTO RELIEF')[1]!=='bypassed')
+    bad('a bypassed valve own panel did not say so');
+  console.log('  three valves, three panels: '+seen.join(' | '));
+  M.D().fit={}; M.commission();
 }
 
 /* ══════════ JUNCTIONS: FLOW IS PER LOOP NOW ══════════
