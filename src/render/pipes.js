@@ -152,6 +152,18 @@ function pipeEdge(g,s){
    smooth denominator swung the reading by tens of per cent every frame. S.t advances
    by exactly the step that moved the fluid, so the division is exact. */
 const pipeLast={}, pipeSpd={}, pipeShown={};
+/* This frame's head loss per run, off netDrops() (pipenet.js). Refilled once a
+   frame and never stored on S, for the same reason the solve is not: it is a
+   pure function of S, so a snapshot that carried it could only ever disagree
+   with the plant it was a snapshot of. Refilled, not rebuilt, so no reader
+   ever holds a stale object. */
+const pipeDrop={};
+function pipeDropRefresh(L){
+  for(const k in pipeDrop) delete pipeDrop[k];
+  if(!L) return;
+  const d=netDrops(L);
+  for(const k in d) pipeDrop[k]=d[k];
+}
 let pipeT=null, pipeDt=0;
 /* a browser frame at 16x carries ~0.27 s of plant time - PIPE_DTMAX is what a frame
    can legitimately carry (TICK_CAP ticks), not a per-frame smoothing constant. The
@@ -361,14 +373,20 @@ function pipeDial(x,y,r,fr,col,label,o){
   ctx.strokeStyle=ink; ctx.lineWidth=1.6; ctx.lineCap="round"; ctx.stroke();
   ctx.beginPath(); ctx.arc(x,y,1.5,0,6.2832); ctx.fillStyle=ink; ctx.fill();
   ctx.restore();
-  if(label){
+  if(label)
     /* the reading carries the same alarm state as the needle, so a number read
        without looking at the face still says you are over the limit */
-    const o2={size:6.5,sp:.4,align:"center"}, lw=tw(label,o2)+6;
-    fillRect(x-lw/2,y+r+1,lw,10,C.bg);
-    txt(label,x,y+r+9,Object.assign({},o2,
-        {color:dead?C.ink2:over?C.red:back?C.amber:C.cyan}));
-  }
+    pipeTag(x,y+r+1,label,dead?C.ink2:over?C.red:back?C.amber:C.cyan);
+}
+
+/* A reading set on the plant itself, on its own backing plate so a pipe or a
+   grid line cannot run through the digits. Every number that sits ON the
+   diagram rather than in a rail goes through here, or the second one drifts a
+   half pixel and a size away from the first. */
+function pipeTag(x,yTop,label,col){
+  const o={size:6.5,sp:.4,align:"center"}, lw=tw(label,o)+6;
+  fillRect(x-lw/2,yTop,lw,10,C.bg);
+  txt(label,x,yTop+8,Object.assign({},o,{color:col}));
 }
 
 /* One anchor per KIND: the middle of a STRAIGHT run that kind owns, so a meter never
@@ -404,12 +422,28 @@ function pipeAnchors(runs){
   }
   return best;
 }
+/* A relief path is dead by design: it passes only while the valve is lifted,
+   which is a fault, not an operating state. Its kind is "relief" (the header)
+   or "xtie:<fid>" for one valve's own branch - and a cross-tie between loops
+   wears the same "xtie:" prefix, so the mode is what has to be asked, never
+   the prefix. */
+const reliefRun = k => k==="relief" ||
+  (k.indexOf("xtie:")===0 && P.fit && P.fit[k.slice(5)] && P.fit[k.slice(5)].mode==="relief");
+
 function pipeMeters(runs,L){
   const best=pipeAnchors(runs), PC=pipeColours(L), r=PIPE_DIAL_R;
   for(const k in best){
     const a=best[k], key=a.key;
     if(a.L<2*r+6) continue;                  // too short a run to fit a meter in it
     const sp=pipeSpd[key]||0, fr=pipeDisplay(key,pipeFrac(key,k,sp)), un=pipeUnit(key,k);
+    /* Two of the seven dials a default plant draws were the relief header and
+       the stock valve's own branch, both pinned on 0.0 kg/s, both stacked in
+       the one corner that already carries the tank, its label, the bowtie, the
+       pressurizer and the vitals panel. A gauge that can only ever read zero
+       is not an instrument, it is furniture - so a relief path earns its dial
+       by passing, and the dial APPEARING is then the signal. Every other run
+       keeps its meter at zero, because zero on a main leg is real news. */
+    if(reliefRun(k) && Math.abs(fr)<0.008) continue;
     const mag=pipeFmt(Math.abs(fr)*un.nom);
     pipeDial(a.x,a.y,r,fr,pipeCol(PC,k),mag+" "+un.u);
     /* three things the solve can actually say, kept as three sentences rather than
@@ -421,7 +455,11 @@ function pipeMeters(runs,L){
       (fr>1.001?" The needle is in the over-range band, so this run is being pushed past what it was built for."
        :fr<-0.008?" The needle is back past the zero stop - it is running backwards."
        :Math.abs(fr)<0.008?" The line is stagnant."
-       :""));
+       :"")+
+      (pipeDrop[key]!=null
+        ? "  It spends "+(pipeDrop[key]*100).toFixed(0)+
+          " % of the loop's whole pump head getting the water along it - that is the price of this run's length, its bore, and anything throttling it."
+        : ""));
   }
 }
 
@@ -444,14 +482,15 @@ function pipeVessel(L){
   if(!p || !fitted(p) || L.dmgParts.includes("pzr")) return;
   const R=prect(p), r=PIPE_DIAL_R;
   const fr=pipeDisplay("pzrP", L.P/Math.max(0.1,P.P0));
-  /* far enough down to clear the relief bowtie on the very top of the shell, and high
-     enough to sit in the steam space rather than over the water */
+  /* low enough to sit in the steam space rather than over the water. It used to
+     be dodging a relief bowtie on the very top of the shell too; that valve is a
+     fitting now and is drawn at its own tap (pipeFitMarks()). */
   const cx=Math.round(R.x+R.w/2), cy=Math.round(R.y+r+16);
-  pipeDial(cx,cy,r,fr,C.cyan,null,{lim:1.06,max:1.35});
+  pipeDial(cx,cy,r,fr,C.cyan,null,{lim:PORV_LIFT,max:1.35});
   TIP(cx-r,cy-r,2*r,2*r,"PRESSURIZER  PRESSURE",
     L.P.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+P.P0.toFixed(1)+
     " MPa design point. Level "+L.lvl.toFixed(0)+" %."+
-    (fr>1.06?"  It is past the relief valve setpoint."
+    (fr>PORV_LIFT?"  It is past the relief valve setpoint."
             :reliefAnyOpen(L)?"  The relief valve is passing.":""));
 }
 

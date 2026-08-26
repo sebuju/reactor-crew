@@ -8,6 +8,72 @@ function bowtie(cx,cy,w,h,col){
   ctx.lineTo(cx+w/2,cy-h/2); ctx.lineTo(cx-w/2,cy+h/2);
   ctx.closePath(); ctx.fillStyle=col; ctx.fill();
 }
+/* A relief valve has THREE states, not two: shut and holding, passing, and
+   GIVEN UP - a blocked valve is dead metal with a bar through it, because
+   shutting the block valve buys the leak back at the price of the relief path
+   for the rest of the run. One drawing, once, at the fitting's own tap
+   (pipeFitMarks()) - however many relief valves a design carries. */
+/* THREE fittings, three symbols, one drawing. A bowtie alone says "valve" and
+   stops there, so a tee, a throttle and a relief valve were the same mark in
+   three places - and on the bench they were not even that, just a dot. What
+   tells them apart is what sits on the stem, the way a P&ID does it:
+
+     tee       bare        it is a gate, opened and shut, nothing drives it
+     throttle  crossbar    a handwheel - a position you set and it holds
+     relief    coil        a spring - it lifts itself, and no one asked it to
+
+   The bench draws the identical symbol in a dead colour, because the shape is
+   what the design is; only the state belongs to a running plant. */
+function fitGlyph(cx,cy,w,h,mode,col){
+  bowtie(cx,cy,w,h,col);
+  if(mode==="tee") return;
+  const t=cy-h/2;
+  line(cx,t,cx,t-3,col,1.3);                       // the stem a driven valve has
+  if(mode==="throttle") line(cx-4,t-3,cx+4,t-3,col,1.4);
+  else { line(cx-3,t-3,cx+3,t-6,col,1.2);          // a coil seen from the side
+         line(cx-3,t-6,cx+3,t-3,col,1.2); }
+}
+function reliefBowtie(cx,cy,w,h,L,fid){
+  const open = !!(L && fid && L.reliefOpen[fid] && !L.reliefBlocked[fid]);
+  const blkd = !!(L && fid && L.reliefBlocked[fid]);
+  fitGlyph(cx,cy,w,h,"relief", open?C.red : blkd?C.dis : C.green);
+  if(blkd) line(cx-w/1.5,cy,cx+w/1.5,cy,C.red,1.6);
+}
+/* The casing colour, named once: the nozzle below has to be the same dark as
+   the pipe it caps, or the joint reads as a different object bolted on. */
+const PIPE_CASE="#22383e";
+
+/* A run ends ON a component's shell, and the component loop draws straight
+   over that last pixel - so a pipe arrived at a box and simply STOPPED, with
+   nothing to say it was connected rather than parked against it. A nozzle is
+   that joint made visible: a short flange straddling the shell line, wider
+   than the bore it carries, drawn AFTER the machines so it reads as bolted on
+   instead of buried under them.
+
+   Only a real port gets one (r.nz, layout.js). A branch ends on another
+   PIPE, not on a shell, and it already carries the fitting's own glyph -
+   a flange there would be a second mark on the same joint.
+
+   Runs arrive square to a face (route(), layout.js), so the last leg is
+   axis-aligned and the flange only ever needs the two orientations. */
+function pipeNozzle(p,q,thin){
+  const dx=q[0]-p[0], dy=q[1]-p[1];
+  if(Math.abs(dx)<0.5 && Math.abs(dy)<0.5) return;
+  const half=thin?4:5.5;              // across the bore, wider than the casing
+  const deep=2.5;                     // how far it stands proud of the shell
+  const flat=Math.abs(dx)>Math.abs(dy);
+  const bx=flat?deep:half, by=flat?half:deep;
+  fillRect(p[0]-bx-1,p[1]-by-1,2*bx+2,2*by+2,PIPE_CASE);
+  fillRect(p[0]-bx,p[1]-by,2*bx,2*by,C.metal);
+}
+function pipeNozzles(NET){
+  for(const r of NET){
+    if(!r.nz) continue;
+    const n=r.pts.length, thin=r.k==="hpi"||r.k==="surge";
+    if(r.nz[0]) pipeNozzle(r.pts[0],r.pts[1],thin);
+    if(r.nz[1] && n>1) pipeNozzle(r.pts[n-1],r.pts[n-2],thin);
+  }
+}
 function drawSym(p,x,y,w,h,ink,L){
   const cx=x+w/2, X=x+5, Y=y+5, W=w-10, Hh=h-10;
   const shell=fn=>{ ctx.beginPath(); fn(); ctx.fillStyle=C.panel; ctx.fill();
@@ -83,16 +149,15 @@ function drawSym(p,x,y,w,h,ink,L){
     ctx.save(); ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.clip();
     lvl(X,Y+8,W,Hh-8, L? L.lvl/100 : .54, C.blue); ctx.restore();
     ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
-    // the pressurizer's own (primary) relief fitting - see primaryRelief()'s
-    // own comment, step.js, for why the mimic still shows one valve
-    const rfid = primaryRelief();
-    const open = L && rfid && L.reliefOpen[rfid] && !L.reliefBlocked[rfid];
-    // three states, not two: shut, passing, and GIVEN UP - a blocked valve is
-    // dead metal with a bar through it, because shutting the block valve buys
-    // the leak back at the price of the relief path for the rest of the run
-    const blkd = L && rfid && L.reliefBlocked[rfid];
-    bowtie(cx,Y+4,12,8, open?C.red : blkd?C.dis : C.green);
-    if(blkd) line(cx-8,Y+4,cx+8,Y+4,C.red,1.6);
+    /* No bowtie here. A relief valve is a FITTING now, with a tap of its own
+       and a glyph drawn at it (pipeFitMarks()) - the stock one sits on the hot
+       leg, not on this shell. Drawing a second copy on the mimic put the same
+       valve on screen twice, in the corner that already carries the tank, its
+       label, its level and this vessel's own pressure dial. It also lied on a
+       plant with no relief path left at all: primaryRelief() returns nothing,
+       and the mimic drew a cheerful green "shut and holding" valve for a
+       valve that does not exist. The plume below stays - it marks the top of
+       the relief HEADER, which is the route the discharge really takes. */
     // what the valve is actually passing, off the physics constant itself - see
     // porvRate(). The plume is the RELIEF FLOW readout drawn instead of typed.
     if(L) fxSteam(cx,Y-1,10,fxEase(id+":porv",porvRate(L)/PORV_INV),"#cfe6ea");
@@ -474,11 +539,6 @@ function ctlFor(p,live,split){
       {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}]];
-    case "pzr": return [[
-      {kind:"btn",flex:1,on:()=>{ const fid=primaryRelief(); return !!fid && S.reliefBlocked[fid]; },
-       text:()=>{ const fid=primaryRelief(); return (fid && S.reliefBlocked[fid])?"SHUT":"OPEN"; },
-       fn:()=>{ act("porvBlock"); },
-       tip:"BLOCK VALVE - manual backup under the relief valve. Shut it when the PORV fails to reseat; that is the whole answer to a stuck-open valve."}]];
     case "hpi": return [[
       {kind:"btn",flex:1,on:()=>S.hpi,text:()=>S.hpi?"INJECT":"OFF",
        fn:()=>{ act("hpi"); },
@@ -604,9 +664,13 @@ function pipeFitMarks(L,net){
     if(!jp) continue;                    // host run gone (part removed)
     const [x,y]=jp.pt;
     const removeHint = L?"":" Right-click it to remove.";
-    const isTee = j.mode==="tee";
+    const isTee = j.mode==="tee", isRel = j.mode==="relief";
     const la=loopOfKey(j.aKey), lb=j.bKey?loopOfKey(j.bKey):null, tied=la!=null&&lb!=null&&la!==lb;
-    const tipBody = !isTee
+    const tipBody = isRel
+      ? (L && id===primaryRelief()
+          ? "A relief valve on this line, venting to the RELIEF TANK. It lifts on its own above 106% of normal pressure and reseats below 101%; a shorter run to the tank vents faster. CLICK IT to work the block valve underneath - that is the whole answer to a valve that lifts and will not reseat, and it costs you the relief path for the rest of the run."
+          : "A relief valve on this line, venting to the RELIEF TANK. It lifts on its own above 106% of normal pressure and reseats below 101%; a shorter run to the tank vents faster. It has no block valve of its own - the one on the first relief valve placed is the one the controls address."+removeHint)
+      : !isTee
       ? (j.bKey
           ? "A throttle wired between two runs, worked like a variable cross-tie - shut it costs nothing extra to the pipe, wide open it passes freely, and every position between chokes it down."+removeHint
           : "A throttle spliced straight into this run. Wide open it costs the pipe nothing at all; closed, it is a real break in the line, same as a shut valve anywhere else."+removeHint)
@@ -616,10 +680,49 @@ function pipeFitMarks(L,net){
             :removeHint)
         : "A tie between two points on the plant that are not both loop legs, so it moves nothing between loops."+removeHint;
     if(L){
-      if(isTee){
+      /* Relief is drawn, never worked, from here. It is the one mode with no
+         control of its own on the line: ACT.porvBlock/porvArm address the
+         pressurizer's valve (primaryRelief(), step.js) and the mimic is where
+         they live. Before this branch existed, a relief fitting fell through
+         to the throttle case below and drew a live slider over S.valve[id] -
+         a key seeded for throttles ONLY (resetPlant(), step.js), so the
+         position read undefined and every drag was refused by ACT.valveDem.
+         A control that draws, invites a drag and does nothing is worse than
+         no control, and it was on the stock plant. */
+      if(isRel){
+        /* The block valve is the ONE handle a relief valve has, and it used to
+           be a button on the pressurizer strip - a control mounted on a vessel
+           the valve is not even tapped into, still drawn after the last relief
+           fitting was deleted and the act it fired had nothing to address.
+           It belongs here, on the valve, worked exactly the way a tee is:
+           the glyph IS the switch. ACT.porvBlock keeps its no-argument
+           signature (primaryRelief(), step.js) so every existing tape and
+           scenario still replays, which is also why only the PRIMARY valve is
+           clickable - a redundant one has no act that can address it. */
+        const prim = id===primaryRelief();
+        const wd = prim? push({x:x-7,y:y-7,w:14,h:14,type:"btn",
+                               fn:()=>{ act("porvBlock"); }}) : null;
+        reliefBowtie(x,y,14,10,L,id);
+        if(wd && hov(wd)) frame(x-8,y-8,16,16,C.bright);
+        /* How far pressure still has to climb before this valve lifts itself,
+           signed, in the units the pressurizer's own gauge reads. A relief
+           valve is the one instrument on the plant whose whole job is a
+           THRESHOLD, and it was the only one not saying where that threshold
+           was - the operator had a valve that would either be shut or already
+           venting, with nothing in between to watch. Negative means pressure
+           is past the setpoint: armed, it is lifting; bypassed or blocked,
+           that is the number telling you nothing is going to. */
+        const marg = P.P0*PORV_LIFT - L.P;
+        pipeTag(x,y+9, (marg>=0?"+":"")+marg.toFixed(2)+" MPa",
+                marg<0?C.red : marg<P.P0*0.02?C.amber : C.ink2);
+        TIP(x-7,y-7,14,24,"RELIEF VALVE",tipBody+
+          "  It lifts at "+(P.P0*PORV_LIFT).toFixed(2)+" MPa and does not reseat until "+
+          (P.P0*PORV_RESEAT).toFixed(2)+" MPa - the gap is what stops it chattering on the setpoint. "+
+          "The figure under it is how much pressure is left before it lifts.");
+      } else if(isTee){
         const open=S.juncOpen[id];
         const wd=push({x:x-7,y:y-7,w:14,h:14,type:"btn",fn:()=>{ act("junc",id); }});
-        bowtie(x,y,14,10, open?C.green:(hov(wd)?C.bright:C.metal));
+        fitGlyph(x,y,14,10,"tee", open?C.green:(hov(wd)?C.bright:C.metal));
         TIP(x-7,y-7,14,14,"JUNCTION VALVE",tipBody);
       } else {
         // no room for a control strip here, so the position lives on the
@@ -627,11 +730,23 @@ function pipeFitMarks(L,net){
         // width, hover-only readout, exactly like a narrow control strip row
         slider(x,y,28,S.valve[id],0,1,{th:10,tw:6,dem:S.valveDem[id],
           fmt:v=>(v*100).toFixed(0)+"%", fn:v=>act("valveDem",id,v)});
-        TIP(x-14,y-9,28,18,"THROTTLE VALVE",tipBody);
+        /* The differential is what a throttle is FOR. Position says what you
+           asked for; only the drop says what it cost, and without it the knob
+           is one whose effect has to be inferred from a flow meter three
+           components away. Off the solve's own node heads (netDrops()), as a
+           share of the whole loop's head, so it is comparable between a long
+           leg and a short one. */
+        const dk = j.bKey? "xtie:"+id : j.aKey;
+        if(pipeDrop[dk]!=null)
+          pipeTag(x,y+9,(pipeDrop[dk]*100).toFixed(0)+"% dP",
+                  pipeDrop[dk]>0.5?C.amber:C.ink2);
+        TIP(x-14,y-9,28,28,"THROTTLE VALVE",tipBody+
+          (pipeDrop[dk]!=null? "  It is eating "+(pipeDrop[dk]*100).toFixed(0)+
+            " % of the loop's whole pump head; that is the differential across it." : ""));
       }
     } else {
-      dot(x-2,y-2,4,C.rail);
-      TIP(x-7,y-7,14,14,isTee?"JUNCTION":"THROTTLE",tipBody);
+      fitGlyph(x,y,14,10,j.mode,C.metal);
+      TIP(x-7,y-9,14,16,isTee?"JUNCTION":isRel?"RELIEF VALVE":"THROTTLE",tipBody);
     }
   }
 }
@@ -1013,15 +1128,21 @@ function readoutsFor(p,s){
     add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
       "The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment.");
   } else if(id.startsWith("pump")){
-    add("FLOW",(s.flow*100).toFixed(1)+" %",
-      band(s.flow*100,0,110,[[P.flowMin*100,C.red,"STARVED"],[110,C.cyan,"NORMAL"]],
+    /* s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow
+       (tripCause(), step.js), so a gauge on the pump SETTING would sit at
+       100% NORMAL, with its own trip mark on a number that no longer causes
+       the trip, right up to the moment the plant tripped. Shut every throttle
+       and that is exactly what it did. The two are equal to the bit on an
+       undamaged, unthrottled plant, which is why nothing re-pins. */
+    add("FLOW",(s.flowNet*100).toFixed(1)+" %",
+      band(s.flowNet*100,0,110,[[P.flowMin*100,C.red,"STARVED"],[110,C.cyan,"NORMAL"]],
         {dp:0,lim:trip(P.flowMin*102,"TRIP")}),
-      "Coolant moving through the core. Flow is the biggest single input to thermal margin, and the first thing a blackout takes off you.");
+      "Coolant actually reaching the core, which is what the protection system trips on - not what the pumps were told to do. A shut valve or a severed run shows up here and nowhere else.");
     add("FLOW DEMAND",(s.flowDem*100).toFixed(1)+" %",
-        Math.abs(s.flowDem-s.flow)>.005?C.amber:C.ink2,
-      "Where you have asked the pumps to go. Flow lags it by "+FLOW_TAU+" s, and by "+FLOW_TAU_COAST+" s while coasting down in a blackout.");
+        Math.abs(s.flowDem-s.flowNet)>.005?C.amber:C.ink2,
+      "Where you have asked the pumps to go. Delivery lags it by "+FLOW_TAU+" s, by "+FLOW_TAU_COAST+" s while coasting down in a blackout, and falls short of it for good if the water has nowhere to go.");
     add("DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %",null,
-      "The least flow this pump set still delivers after damage. You bought it with the redundancy option at the bench.");
+      "The least flow this pump set still delivers after damage. It rises with how much spare pump capacity you actually placed on the grid, beyond one pump per loop.");
     add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
       band(s.hotFlow*100,0,110,[[80,C.amber,"STARVED"],[110,C.cyan,"FED"]],{dp:0}),
       "Flow in the WORST channel, not the average. A voiding channel loses the flow it needed to stop voiding, and that runaway is why the core is a place and not a number.");
@@ -1039,8 +1160,8 @@ function readoutsFor(p,s){
     add("LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
         Math.abs(s.loadDem-s.load)>.005?C.amber:C.ink2,
       "Where you have set the load. The governor strokes there over about "+LOAD_TAU.toFixed(0)+" s.");
-    add("ELECTRICAL",(Math.min(s.n,s.load)*P.rated/3).toFixed(0)+" MWe",null,
-      "Electrical power the ship is actually getting. It is the lower of heat made and heat taken, priced by the machine you bought.");
+    add("ELECTRICAL",mwE(s).toFixed(0)+" MWe",null,
+      "Electrical power the ship is actually getting. It is the lower of heat made and heat taken, priced by the machine you bought, and it is what a lost turbine or an undersized condenser takes straight off you.");
     add("T-AVG DEV",(s.Tavg-tProg(s)>=0?"+":"")+(s.Tavg-tProg(s)).toFixed(1)+" K",null,
       "How far coolant temperature sits from the programme for this load. Anything but zero means reactor and turbine are out of balance.");
     add("STEAM DUMP",(P.bypass*100).toFixed(0)+" %",null,
@@ -1059,7 +1180,7 @@ function readoutsFor(p,s){
       "How many sensors watch each parameter. One channel jitters and hides a liar; three vote the liar out and the numbers hold still.");
     add("PARTY DOSE",s.dose.toFixed(1)+" %",
       band(s.dose,0,100,[[50,C.cyan,"LOW"],[100,C.red,"HIGH"]],{dp:0}),
-      "Radiation your repair parties have taken so far. Where you put this room, and what shielding is between, decides it.");
+      "Radiation your repair parties have taken so far. It costs whatever the job site itself reads, from behind whatever shielding is actually there - this room has nothing to do with it.");
     add("DOSE RATE",s.doseRate.toFixed(2)+" x",
       band(s.doseRate,0,RAD_CEIL,ZONE.map(z=>[z.t,z.col,z.lab]),{dp:2}),
       "How fast dose is piling up right now in the room the crew actually sit in. It moves with what has failed on the plant, not just with where you put the shielding.");
@@ -1114,7 +1235,7 @@ function readoutsFor(p,s){
   } else if(id==="cond"){
     add("T-HOT",Th.toFixed(0)+" K",null,
       "Steam temperature arriving at the condenser.");
-    add("HEAT REJECTED",(Math.min(s.n,s.load)*P.rated*.66).toFixed(0)+" MWt",null,
+    add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
     add("CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
         s.dmgParts.includes("cond")?C.red:C.green,
@@ -1252,6 +1373,7 @@ function drawPlant(y0,L,vh,vx,vw){
   // dark casing, then the coloured fluid line inside it, both round-jointed
   // (concentric radii) so a pipe bends rather than folds
   const PC=pipeColours(L), NET=pipeNetwork();
+  pipeDropRefresh(L);           // one solve read per frame, shared by every gauge
   for(const pass of [0,1]) for(const r of NET){
     if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
@@ -1259,7 +1381,7 @@ function drawPlant(y0,L,vh,vx,vw){
     ctx.lineCap="square"; ctx.lineJoin="round";
     const thin = r.k==="hpi"||r.k==="surge";
     ctx.lineWidth = pass? (thin?3:4) : (thin?6:8);
-    ctx.strokeStyle = pass? pipeCol(PC,r.k) : "#22383e";
+    ctx.strokeStyle = pass? pipeCol(PC,r.k) : PIPE_CASE;
     ctx.stroke();
   }
   ctx.lineJoin="miter";
@@ -1273,6 +1395,7 @@ function drawPlant(y0,L,vh,vx,vw){
   // the next reactor to show dose gets it painted on top of its own gauges.
   layerPass("under",L);
 
+  const tags=[];                // drawn last - see the push below
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
     const fit = fitted(p), live = L && fit;
@@ -1314,9 +1437,19 @@ function drawPlant(y0,L,vh,vx,vw){
     const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
     const nm = (v0&&!v)? p.name+"  "+v0 : p.name;
     const tb = plinth ? sy-6 : sy-3;
-    tag(nm,x+w/2,tb-(v?11:1),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
-    if(v) tag(v,x+w/2,tb,8,0,dmgd?C.red:liveColor(p,L));
-    if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
+    /* Held back to a last pass, below. A name and a value sit OUTSIDE their
+       own box, in the same margin a pipe and its fittings run through, so a
+       glyph landing on one buried the reading it was covering - the relief
+       tank's level went under the very valve that fills it. The reading wins:
+       a fitting is a thing you can find by looking, a number is not. Only the
+       drawing waits; the TIP below still registers in loop order, because
+       findTip() matches backwards and a deferred one would swallow the
+       tooltip of every control mounted on this same box. */
+    tags.push(()=>{
+      tag(nm,x+w/2,tb-(v?11:1),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
+      if(v) tag(v,x+w/2,tb,8,0,dmgd?C.red:liveColor(p,L));
+      if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
+    });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
     TIP(x,y,w,h,p.name+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
@@ -1324,10 +1457,12 @@ function drawPlant(y0,L,vh,vx,vw){
     if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+6,sy+i*CTL_H+1,w-12,CTL_H-3));
     if(byk && live) bypRow(byk,x+6,y+h-STRIP_PAD-bh+1,w-12,bh-3);
   }
+  pipeNozzles(NET);             // the joint, over the shell it lands on
   layerPass("over",L);          // on top of the machines - annotates a component, not the room
   if(L) pipeGauges(L);
   else pipeGrips(NET);          // where a pipe runs is a bench question
   pipeFitMarks(L,NET);
+  for(const t of tags) t();     // every name and value, over the pipework
   viewOn=false; ctx.restore();
 
   // one key, not two: at fit the only useful move is in, and zoomed in the
