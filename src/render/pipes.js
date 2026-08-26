@@ -421,6 +421,45 @@ function pipeTag(x,yTop,label,col){
   txt(label,x,yTop+8,Object.assign({},o,{color:col}));
 }
 
+/* ══════════ THREE INSTRUMENTS, THREE SHAPES ══════════
+   Flow, pressure and subcooling are all on the plant at once by default, and
+   two of them used to be nothing but a number on a plate - so at a glance the
+   diagram was a field of digits with no way to tell which quantity you were
+   looking at without reading the unit. The eye should be able to answer "how
+   is this run doing" before it reads anything, so each quantity gets a shape
+   of its own and never borrows another's:
+
+     FLOW        a round DIAL with a needle (pipeDial) - a rate, signed,
+                 with an over-range band, and the only one that can run
+                 backwards.
+     PRESSURE    a horizontal BAR filling left to right against the design
+                 point, with a tick at P0. An absolute level on a fixed
+                 scale, so a row of runs reads as a row of levels.
+     SUBCOOLING  a vertical COLUMN filling bottom up, because what matters is
+                 the margin left above zero and a falling column is what
+                 running out of it looks like.
+
+   Both new ones sit on the same backing plate pipeTag() uses, for the same
+   reason: a pipe or a grid line must not run through an instrument. */
+const PBAR_W=24, PBAR_H=5, PCOL_W=5, PCOL_H=14;
+function pipeBar(x,yTop,frac,mark,col){
+  const w=PBAR_W, h=PBAR_H, x0=x-w/2;
+  fillRect(x0-1,yTop-1,w+2,h+2,C.bg);
+  fillRect(x0,yTop,w,h,C.well);
+  fillRect(x0,yTop,w*clamp(frac,0,1),h,col);
+  // the design point, so a bar is read against something rather than admired
+  if(mark!=null) fillRect(x0+w*clamp(mark,0,1),yTop-1.5,1,h+3,C.ink2);
+  frame(x0,yTop,w,h,C.edge2);
+}
+function pipeColumn(x,yBase,frac,col){
+  const w=PCOL_W, h=PCOL_H, x0=x-w/2, y0=yBase-h;
+  fillRect(x0-1,y0-1,w+2,h+2,C.bg);
+  fillRect(x0,y0,w,h,C.well);
+  const t=clamp(frac,0,1);
+  fillRect(x0,yBase-h*t,w,h*t,col);
+  frame(x0,y0,w,h,C.edge2);
+}
+
 /* One anchor per KIND: the middle of a STRAIGHT run that kind owns, so a meter never
    lands on a bend and a four-loop plant grows four meters, not one each.
 
@@ -588,8 +627,15 @@ function pipeBreaks(L){
   }
 }
 
+/* The FLOW METERS layer's draw pass (LAYERS.flow, render/layers.js). It is a
+   layer like the pressure and subcooling readings beside it now: three
+   instruments, three switches, one rail. Outside every clip, and over every
+   component - an instrument is bolted to the OUTSIDE of the thing it reads.
+   pipeBreaks() is NOT in here and must not be: a break plume is an effect, not
+   an instrument, and switching the meters off must not switch off the picture
+   of a hole in the plant. drawPlant() draws it before this pass, so a plume is
+   behind a dial rather than over it. */
 function pipeGauges(L){
-  pipeBreaks(L);                  // before the meters: a plume is behind a dial, not over it
-  pipeMeters(pipeRuns(L),L);      // outside every clip, and over every component
+  pipeMeters(pipeRuns(L),L);
   pipeVessel(L);
 }

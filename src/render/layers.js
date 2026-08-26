@@ -16,7 +16,7 @@
        space a body could stand in. It is also the one seam that never lands
        on a value tag, a control strip or a bypass row, because every one of
        those is drawn by the component loop that comes after it.
-     "over" - drawn AFTER the component loop and BEFORE pipeGauges(), for
+     "over" - drawn AFTER the component loop and BEFORE pipeFitMarks(), for
        anything that annotates one component rather than the room around it
        (a badge, a ring, a highlight pinned to a machine). Painted over the
        machine on purpose, the way a gauge is bolted to the outside of the
@@ -29,7 +29,7 @@
 
    `live` marks a layer that only means anything against a running plant - it
    needs S, and the bench passes L===null. Skipped there exactly the way
-   pipeFlow()/pipeGauges() already are: a reading with no plant behind it is
+   pipeFlow() already is: a reading with no plant behind it is
    not an empty state, it is a lie dressed as data.
 
    THE CONTRACT - rules, not prose, because a rule is checkable and a mood is not:
@@ -76,18 +76,21 @@ const LAYER_DATA={
      PRESSURE and SUBCOOLING share this one id on purpose: `data` is a memo
      key, so two layers naming it cost one refresh, not two - the same reason
      the four radiation layers cost one field. */
-  press: () => ({runs: pipeNetwork()}),
+  press: L => ({runs: L ? pipeRuns(L) : pipeNetwork()}),
 };
 
-/* One label per run, on its longest straight stretch so it never lands on a
-   bend - but a THIRD of the way along it, not halfway. `over` puts these
-   under the flow meters, the fitting glyphs and the deferred value tags,
-   which all draw after the over pass, and pipeAnchors() puts a meter at the
-   MIDDLE of that same longest stretch. Measured in a browser: at the midpoint
-   the hot leg's figure sat squarely behind its own meter dial and could not
-   be read. A third along clears it and is still unambiguously on the run. */
-const LABEL_T=1/3;
-function layerRunLabel(runs, L, val, col){
+/* One mark per run, on its longest straight stretch so it never lands on a
+   bend - but a FRACTION along it, not halfway. `over` puts these under the
+   flow meters, the fitting glyphs and the deferred value tags, which all draw
+   after the over pass, and pipeAnchors() puts a meter at the MIDDLE of that
+   same longest stretch. Measured in a browser: at the midpoint the hot leg's
+   figure sat squarely behind its own meter dial and could not be read.
+
+   THE FRACTION IS PER LAYER, and that is what lets both pressure and
+   subcooling be on at once: pressure takes a third along, subcooling
+   two-thirds, so the two never land on each other and neither lands on the
+   flow dial in the middle. Three instruments on one run, three places. */
+function layerRunMark(runs, t, val, draw){
   for(const r of runs){
     const v=val(r);
     if(v===null||v===undefined||!isFinite(v)) continue;
@@ -95,17 +98,28 @@ function layerRunLabel(runs, L, val, col){
     if(!g.len) continue;
     let best=null;
     for(const q of g.segs) if(!best||q.L>best.L) best=q;
-    pipeTag(best.x+best.dx*best.L*LABEL_T, best.y+best.dy*best.L*LABEL_T-5, ...col(v));
+    draw(best.x+best.dx*best.L*t, best.y+best.dy*best.L*t, v);
   }
 }
-const pressLayer = (d,L) => layerRunLabel(d.runs, L, pipeRunP,
-  v => [v.toFixed(2)+" MPa", C.cyan]);
-/* Coloured by margin, not by value: what matters about subcooling is how
-   close to zero it is, because zero is where the water in that pipe stops
-   being water - which is where a pump loses its head and where the loop
-   stops circulating. */
-const subcLayer = (d,L) => layerRunLabel(d.runs, L, r => pipeRunSc(r,L),
-  v => [v.toFixed(0)+" K sub", v<=0 ? C.red : v<15 ? C.amber : C.ink2]);
+/* Against the SAME 1.35x design-point scale the pressurizer dial uses, with
+   the tick at P0 - so a bar on a cold leg and the needle on the vessel are
+   two readings of one ruler and cannot disagree about what "high" means. */
+const PRESS_MAX_K=1.35;
+const pressLayer = (d,L) => layerRunMark(d.runs, 1/3, pipeRunP, (x,y,v)=>{
+  const max=Math.max(0.1,P.P0)*PRESS_MAX_K;
+  pipeBar(x,y-12,v/max,1/PRESS_MAX_K,v>=P.P0?C.amber:C.cyan);
+  pipeTag(x,y-5,v.toFixed(2)+" MPa",C.cyan);
+});
+/* Coloured by margin, not by value, and drawn as a column that EMPTIES: what
+   matters about subcooling is how close to zero it is, because zero is where
+   the water in that pipe stops being water - which is where a pump loses its
+   head and where the loop stops circulating. */
+const SUBC_FULL=60;
+const subcLayer = (d,L) => layerRunMark(d.runs, 2/3, r => pipeRunSc(r,L), (x,y,v)=>{
+  const col = v<=0 ? C.red : v<15 ? C.amber : C.blue;
+  pipeColumn(x,y-11,v/SUBC_FULL,col);
+  pipeTag(x,y-5,v.toFixed(0)+" K sub",v<=0 ? C.red : v<15 ? C.amber : C.ink2);
+});
 
 /* THE FOUR RADIATION LAYERS. See src/render/rad.js for the draw functions and
    the zone table they share - this table only says where each one goes down
@@ -124,12 +138,15 @@ const subcLayer = (d,L) => layerRunLabel(d.runs, L, r => pipeRunSc(r,L),
    a design answer, and the whole point of showing it on the bench is to see
    the shape change under a dragged shield BEFORE committing to it.
 
-   EVERY LAYER STARTS OFF. The plant diagram is the thing being read; a layer
-   is a question asked OF it, and a question nobody asked should not already
-   be answered over the top of the machines. Defaulting even one on would also
-   make the first screenshot of the plant a screenshot of an overlay, and hide
-   the fact that the switches exist at all - a survey you never turned on
-   teaches nothing about where the shielding went. */
+   EVERY RADIATION LAYER STARTS OFF, and every PIPE layer starts on. They are
+   two different kinds of question. A radiation survey is asked OF the plant -
+   nobody asked it, it paints over the machines, and answering it unbidden
+   makes the first look at the plant a look at an overlay. The three pipe
+   instruments are not an overlay at all: they are the gauges on the pipework,
+   flow, pressure and subcooling, one per run and each in its own place on the
+   run. A plant drawn with no instruments on it is not a cleaner picture, it is
+   a plant you cannot read - and the flow meters were never a layer in the
+   first place, they were simply always drawn. */
 const LAYERS={
   radz:{label:"RAD ZONES",    seam:"under", data:"rad", live:false, on:false,
         draw:radZones,
@@ -146,12 +163,22 @@ const LAYERS={
   /* live:true, unlike the four radiation layers above. A dose rate is a real
      answer on an uncommissioned arrangement; a pressure is not - there is no
      plant to have one yet, and inventing one would be a lie dressed as data. */
-  press:{label:"PRESSURE",    seam:"over",  data:"press", live:true, on:false,
+  press:{label:"PRESSURE",    seam:"over",  data:"press", live:true, on:true,
         draw:pressLayer,
         tip:"The pressure in every run, in MPa. Pressure is a place, not a number: it is highest at a pump's discharge, lowest at its suction, and it falls across every metre of pipe and every throttle in between. Turn this on to see where the head your pumps make actually goes."},
-  subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
+  subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:true,
         draw:subcLayer,
         tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},
+  /* The flow meters and the pressurizer's own dial. They were drawn
+     unconditionally, outside the table, which made them the one thing on the
+     plant nobody could turn off - and left two of the three pipe instruments
+     switchable and the third not. Last in the table on purpose: a dial is
+     bigger than a bar or a column, so it goes down over them rather than
+     under. Not the break plumes - drawPlant() draws those before the pass,
+     because an effect is not an instrument. */
+  flow: {label:"FLOW METERS", seam:"over",  data:null,    live:true, on:true,
+        draw:(d,L)=>pipeGauges(L),
+        tip:"A dial on every run, reading what that run is carrying as a share of what it was built to carry - and the pressurizer's own pressure dial. The needle goes backwards when a run reverses and into a red band when it is being pushed past its rating."},
 };
 const LAYER_ORDER=Object.keys(LAYERS);
 
@@ -166,6 +193,9 @@ function layerTick(){ layerCache={}; }
 /* memoised per frame: the first layer naming a `data` id pays for it, every
    later one in the same frame gets the cached object back. */
 function layerData(id, L){
+  // `data:null` is a layer with nothing to share - it reads caches that were
+  // already refreshed for the frame and computes nothing worth memoising
+  if(!id) return null;
   return layerCache[id] || (layerCache[id]=LAYER_DATA[id](L));
 }
 

@@ -140,7 +140,12 @@ function buildLayout(){
      not on the drawing. D.accum decides what is BEHIND the water now (a
      nitrogen charge or a set of pumps, TANK in pipenet.js), not whether the
      water exists. */
-  add("hpi", D.accum?"ACCUMULATOR":"HPI TANK",1,1,0,5,"#5aa9d6","safety",
+  /* HIGH, because its own tooltip says to mount it high and the stock layout
+     must satisfy every rule it teaches. It sat at y=5, dead level with the
+     core centre, so ACCUMULATOR HEAD read 0.0 m and the bench coloured its own
+     stock plant amber. Raising it lengthens the injection line, which P.flowK
+     prices - see the re-pinned figures in tools/audit-physics.js. */
+  add("hpi", D.accum?"ACCUMULATOR":"HPI TANK",1,1,3,1,"#5aa9d6","safety",
     "Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.");
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.");

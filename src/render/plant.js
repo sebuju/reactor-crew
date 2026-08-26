@@ -93,6 +93,27 @@ function drawSym(p,x,y,w,h,ink,L){
     ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke(); };
   const lvl=(fx,fy,fw,fh,frac,col)=>{ const t=clamp(frac,0,1);
     ctx.save(); ctx.globalAlpha=.45; fillRect(fx,fy+fh*(1-t),fw,fh*t,col); ctx.restore(); };
+  /* ══ A TANK IS A SHELL WITH WATER IN IT, AND THERE IS ONE OF THEM ══
+     Both tanks in TANK (pipenet.js) draw through this: shell, water CLIPPED to
+     that shell, a waterline, and the gas space above it left empty. Written
+     once because the two were drifting apart in opposite directions - the HPI
+     tank drew a square fill inside a rounded shell, so the water leaked past
+     its own border at the corners AND was pinned at a hard-coded full whatever
+     the tank had left, and the relief tank had no branch at all and came out
+     of the fallback as a hatched box with no level in it. */
+  const tank=(bx,by,bw,bh,rad,frac,col)=>{
+    const path=()=>{ ctx.beginPath(); rr(bx,by,bw,bh,rad); };
+    path(); ctx.fillStyle=C.panel; ctx.fill();
+    const t=clamp(frac,0,1);
+    if(t>0.001){
+      const wy=by+bh*(1-t);
+      ctx.save(); path(); ctx.clip();
+      ctx.globalAlpha=.45; fillRect(bx,wy,bw,bh*t,col); ctx.globalAlpha=1;
+      fillRect(bx,wy-0.6,bw,1.2,col);                    // the surface itself
+      ctx.restore();
+    }
+    path(); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
+  };
   const id=p.id;
   if(id==="core"){
     shell(()=>{ ctx.moveTo(X,Y+10); ctx.quadraticCurveTo(cx,Y-6,X+W,Y+10);
@@ -200,15 +221,20 @@ function drawSym(p,x,y,w,h,ink,L){
       fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",L.sgl<25?1-wet*.7:0),1.5);
       /* ruptured tubes: primary water crossing into the secondary side, which
          is activity going straight past containment. Drawn rising off the
-         bundle itself, where the leak is. */
-      fxJet(cx,Y+Hh*.42,W*.45,fxEase(id+":sgtr",L.sgtr?1:0),C.red,0,-1,53);
+         bundle itself, where the leak is - and on THIS generator's own solved
+         leak, so the fault stays on the machine that was hit and slows as the
+         primary comes down to the secondary, stopping at equalisation. It was
+         a latch drawn on every generator in the row at one rate forever. */
+      const sgtrQ = (L.sgtrBy && L.sgtrBy["sgtr:"+id]) || 0;
+      fxJet(cx,Y+Hh*.42,W*.45,fxEase(id+":sgtr",clamp(sgtrQ/SGTR_RATE,0,1)),C.red,0,-1,53);
       /* RUPTURED wins over DRYING: a dry generator is a heat sink you can feed
          back, a ruptured one is primary water leaving past containment. */
       // sat high, in the steam space: the middle of a generator is where the
       // flow gauge on its own steam line lands
-      if(L.sgtr||L.sgl<25)
-        banner(L.sgtr?"RUPTURED":"DRYING",cx,X+1,Y+11,W-2,Hh-12,
-               L.sgtr?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
+      const ruptured = sgtrLive(L, id);
+      if(ruptured||L.sgl<25)
+        banner(ruptured?"RUPTURED":"DRYING",cx,X+1,Y+11,W-2,Hh-12,
+               ruptured?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
     }
   } else if(id.startsWith("pump")||id==="feed"){
     const r=Math.min(W,Hh)/2-1, cy=y+h/2;
@@ -286,12 +312,30 @@ function drawSym(p,x,y,w,h,ink,L){
        that does not stay inside the component it came from. */
     if(L) fxSteam(cx,Y+2,W*.7,fxEase(id+":rel",clamp(L.release/10,0,1)),C.amber,91);
   } else if(id==="hpi"){
-    shell(()=>rr(X,Y+2,W,Hh-4,6));
-    lvl(X+2,Y+4,W-4,Hh-8, 1, (L&&L.hpi)?C.cyan:C.blue);
+    /* what is LEFT in it, not a full tank forever. An accumulator that has
+       finished injecting is empty, and this drew it brimming - the one picture
+       that says the mechanic is over. */
+    tank(X,Y+2,W,Hh-4,6, L? tankLvl(L,"hpi")/100 : 1, (L&&L.injRate>0)?C.cyan:C.blue);
     // cold water going down the injection line. The safe act with the long
     // bill, and worth seeing that it is still running - every second of it
     // ages the vessel whether or not anybody is looking at FATIGUE
-    if(L) fxJet(cx,Y+Hh-3,W*.35,fxEase(id+":hpi",L.hpi?1:0),C.cyan,0,1,71);
+    /* on what the tank is ACTUALLY pushing, against its own rating - not on
+       the operator's switch. Injection is a solved flow now: a tank at 4.5 MPa
+       against a loop at 15.5 delivers exactly nothing, and this jet ran at
+       full through all of it. */
+    if(L) fxJet(cx,Y+Hh-3,W*.35,
+      fxEase(id+":hpi",clamp((L.injRate||0)/TANK.hpi.rate(),0,1)),C.cyan,0,1,71);
+  } else if(id==="reltk"){
+    /* it had no branch of its own and fell through to the hatched fallback
+       box: no level, no shell, and hatching that reads as "not fitted"
+       everywhere else on the diagram. What every relief valve has put into it
+       is the whole point of the part. */
+    const lv = L? tankLvl(L,"reltk") : 0;
+    tank(X,Y+2,W,Hh-4,3, lv/100, lv>=90?C.red:lv>0?C.amber:C.blue);
+    /* the rupture disc, which is what the gas space above the water is FOR.
+       Burst, the tank is an opening to containment and its contents are on the
+       floor - so it stops being a tank and says so. */
+    if(L&&L.discBurst) hatch(X+1,Y+3,W-2,Hh-6,C.red,.55);
   } else if(id==="bkp"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink);
@@ -420,12 +464,12 @@ function banner(word,cx,x,y,w,h,col,ty){
    scope primaryRelief() gives every other legacy control (step.js). The one
    reader of PORV_INV outside the tick: the plume on the pressurizer and the
    RELIEF FLOW readout both come through here, so neither can describe a vent
-   the sim is not performing. It is a fixed orifice at ventK()===1 - open is
-   one rate, not a range - so a stock plant reads 0 or PORV_INV and nothing
-   between, exactly as before; a fitting plumbed narrower or longer than
-   reference reads its own share of that. */
+   the sim is not performing. ventKNow() is the sim's own vent term, tank
+   back-pressure and all, so a filling relief tank shrinks the plume and the
+   readout together. A fitting plumbed narrower or longer than reference reads
+   its own share of the reference rate. */
 function porvRateOf(s,fid){
-  return (fid && s.reliefOpen[fid] && !s.reliefBlocked[fid] && !s.breach) ? PORV_INV*ventK(s,fid) : 0;
+  return (fid && s.reliefOpen[fid] && !s.reliefBlocked[fid] && !s.breach) ? PORV_INV*ventKNow(s,fid) : 0;
 }
 const porvRate = s => porvRateOf(s,primaryRelief());
 
@@ -1436,6 +1480,36 @@ function hostPaint(el,draw){
   try{ draw(0,0,w,h); } finally { ctx=prev; hostScope(null); }
 }
 
+/* ══ THE LEADER STARTS SOMEWHERE FREE, NOT AT THE MIDDLE OF THE FACE ══
+   It used to leave from the exact centre of the part's right edge, which is
+   where port() puts a pipe whenever a face carries an odd number of them - so
+   on the components that matter most the dashed leader set off along a pipe
+   and read as one more branch of the plumbing for its first few pixels.
+
+   So: walk candidate points down the face and take the one furthest from any
+   pipe that actually lands on it. The middle is still FIRST in the list, so a
+   face with nothing on it is unchanged; the offsets alternate above and below
+   so a leader never has to travel far from where the eye expects it. */
+const LEADER_SPOTS=[0.5,0.30,0.70,0.14,0.86];
+const LEADER_CLEAR=7;
+function leaderAnchor(part){
+  const a=prect(part), x=a.x+a.w;
+  // every pipe vertex sitting on this face, whichever run it belongs to
+  const ys=[];
+  for(const r of pipeNetwork()) for(const q of r.pts)
+    if(Math.abs(q[0]-x)<=3 && q[1]>=a.y-2 && q[1]<=a.y+a.h+2) ys.push(q[1]);
+  if(!ys.length) return {x, y:a.y+a.h/2};
+  let best=null;
+  for(const f of LEADER_SPOTS){
+    const y=a.y+a.h*f;
+    let d=Infinity;
+    for(const py of ys) d=Math.min(d,Math.abs(py-y));
+    if(d>=LEADER_CLEAR) return {x,y};
+    if(!best||d>best.d) best={x,y,d};
+  }
+  return {x:best.x, y:best.y};
+}
+
 /* the panels live in HTML rails now, so a selected component and the panel that
    configures it no longer touch. This leader is redrawn every frame in LAYOUT
    space - outside drawPlant()'s view transform - and hostRect() reads the live
@@ -1453,8 +1527,7 @@ function leaderLine(panelEl,railEl){
   if(vx1<=vx0||vy1<=vy0) return;
   // clamped, not culled: panned off the plant, the leader pins to the viewport
   // edge and still says which way the component went
-  const s0 = tap? vScr({x:tap.x+9,y:tap.y})
-                : (a=>vScr({x:a.x+a.w,y:a.y+a.h/2}))(prect(part));
+  const s0 = tap? vScr({x:tap.x+9,y:tap.y}) : vScr(leaderAnchor(part));
   const sx=clamp(s0.x,vx0,vx1), sy=clamp(s0.y,vy0,vy1);
   // scrolled away, the leader takes the first turn only and then runs clean off
   // the top or bottom of the canvas, so it reads as continuing to a panel that
@@ -1613,9 +1686,12 @@ function drawPlant(y0,L,vh,vx,vw){
     if(byk && live) bypRow(byk,x+6,y+h-STRIP_PAD-bh+1,w-12,BTN_H);
   }
   pipeNozzles(NET);             // the joint, over the shell it lands on
-  layerPass("over",L);          // on top of the machines - annotates a component, not the room
-  if(L) pipeGauges(L);
-  else pipeGrips(NET);          // where a pipe runs is a bench question
+  /* the break plumes go down BEFORE the layer pass, because a plume is behind
+     a dial and not over it - and because an effect is not an instrument: the
+     FLOW METERS switch must not be able to switch off the picture of a hole. */
+  if(L) pipeBreaks(L);
+  layerPass("over",L);          // instruments and annotations, on top of the machines
+  if(!L) pipeGrips(NET);        // where a pipe runs is a bench question
   pipeFitMarks(L,NET);
   for(const t of tags) t();     // every name and value, over the pipework
   viewOn=false; ctx.restore();
