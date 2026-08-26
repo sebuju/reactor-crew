@@ -14,7 +14,8 @@ const M=require('./bundle').headless(
  'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,pipeNetwork,act,'+
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
  'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW,'+
- 'netBuild,netFlowK,setPipeK,VALVE_RATE,hittableRunKeys,pipeCells,pipePart,'+
+ 'netBuild,netFlowK,setPipeK,setPumpH0,setHeadK,netPressures,netDrops,'+
+ 'VALVE_RATE,hittableRunKeys,pipeCells,pipePart,'+
  'hasRelief,primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,ventK,reliefG,PIPE_BORE:()=>PIPE_BORE,'+
  'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,PORV_INV,autoLive,AUTOSYS:()=>AUTOSYS,'+
  'paramsForFit,readoutsForFit}');
@@ -387,6 +388,63 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
   if(!/LOW DNBR|LOW FLOW/.test(b.trip)) bad(`backup power bypassed tripped on "${b.trip}", expected a flow-starvation trip`);
   console.log(`  BACKUP: armed rides it out (Tf ${a.Tf.toFixed(0)}K), bypassed trips on "${b.trip}"`);
 }
+{ /* ══ A STATION BLACKOUT IS SURVIVED BY THE SUPPLY YOU BOUGHT, NOT BY THE
+     ══ SIMULATION'S GOOD NATURE.
+     THE SIM GIVES NO FREE HELP. What saves a plant here is a design decision -
+     backup power, or generators hung high enough to thermosiphon - and never a
+     floor the physics hands out to everybody. Natural circulation is solved off
+     the plant's own geometry now; it used to be a fitted fraction of rated
+     removal sitting beside the solve, which is exactly free help, and it meant
+     all three BACKUP PWR settings rode a total blackout out indefinitely. The
+     dial cost mass and bought only the trip it avoided.
+
+     NOTHING NOTICED when that changed, which is the second reason this block
+     exists. It is checked per setting now, so the next drift says which way it
+     went.
+
+     The bench's own text for NONE is "Lose main power and the coolant pumps
+     stop dead. Only natural circulation remains", and a plant with no makeup
+     and no power does damage its core. That is the promise being kept.
+
+     If a plant should survive this, the lever is the ARRANGEMENT - raise the
+     steam generators, which layoutMetrics().head measures and buoyH() actually
+     solves. It is NOT BUOY_LIN or the enthalpy cap: those are one linearisation
+     correction and one saturation limit, applied identically to every design,
+     and neither hands a particular plant anything. Turning either into a
+     survival dial would be putting the floor back under a different name.
+
+     900 s of patience, offsite power cut once the plant has settled. Measured:
+       NONE     melt at 302 s, VESSEL RUPTURE at 361 s, dmg 100
+       BATTERY  survives, no damage, trips on LOW DNBR
+       DIESEL   survives, no damage, never trips at all
+
+     HOW it is lost, because the obvious guess is wrong and two attempts to
+     break this check by flooring the flow proved it: buoyancy carries decay
+     heat perfectly well. For 250 s DNBR CLIMBS, to 9.2, and fuel temperature
+     falls to 604 K. What ends it is SUBCOOLING. Pressure decays with Tavg
+     while the core's own rise grows as the flow drops (s.coreDT, step.js), the
+     hot leg reaches saturation, the loop boils, DNBR collapses to 0.41 inside
+     one sample, and the vessel bursts a minute later. A flow floor does not
+     save it and should not be reached for; the thing that saves it is a supply
+     that keeps a pump turning.
+     Asserted as an ORDERING as well as three outcomes - whatever the numbers
+     do, a bigger supply may never do worse than a smaller one. */
+  const sbo = bkp => { const s=set({bkp}); run(s,60); s.blackout=true;
+    let meltT=null;
+    for(let i=0;i<50*900;i++){ M.step(0.02); if(s.melt&&meltT===null) meltT=s.t-60; }
+    return {melt:s.melt, dmg:s.dmg, meltT, trip:s.trip, scrammed:s.scrammed}; };
+  const none=sbo(0), batt=sbo(1), dies=sbo(2);
+  if(!none.melt)
+    bad(`no backup power rode a 900 s station blackout out undamaged (dmg=${none.dmg.toFixed(1)}) - the loop never lost subcooling, so the supply you buy costs mass and buys nothing`);
+  if(batt.melt) bad(`a battery bank melted the core in a blackout at t=${batt.meltT&&batt.meltT.toFixed(0)}s - half pump flow is meant to be enough`);
+  if(dies.melt) bad(`diesels melted the core in a blackout at t=${dies.meltT&&dies.meltT.toFixed(0)}s - full pump power is meant to be enough`);
+  if(!(none.dmg > batt.dmg) || !(batt.dmg >= dies.dmg))
+    bad(`a bigger supply did not do better: NONE ${none.dmg.toFixed(0)}% damage, BATTERY ${batt.dmg.toFixed(0)}%, DIESEL ${dies.dmg.toFixed(0)}%`);
+  if(dies.scrammed) bad(`diesels still tripped the plant in a blackout: ${dies.trip}`);
+  console.log(`  station blackout, 900 s: NONE melts at ${none.meltT===null?'-':none.meltT.toFixed(0)+'s'},`+
+              ` BATTERY survives (${batt.dmg.toFixed(0)}% damage, "${batt.trip}"),`+
+              ` DIESEL survives untripped`);
+}
 { /* the bench sells diesels as full pump power, so a blackout on diesels must
      hold the flow the pumps had - above the floor of any pump set you bought.
      Redundancy is placed spares now, not a dial. */
@@ -716,18 +774,27 @@ const tieChain=()=>{
   M.commission();               // re-bakes P.fit with the three junctions in it
   return {s:M.S(), ids};
 };
-{ /* strict equality, not a tolerance: shut, a junction is a removed edge, so
-     netFlowK() must fall back to exactly what each surviving loop's own
-     P.netRefByloop contributes, on the nose - never an approximation of it.
-     No spares fitted in this case on purpose - loopPumpCap() would then sum
-     real hardware above 1.0 per loop, which is its own case below. */
+{ /* Shut, a junction is a removed edge, so netFlowK() must fall back to what
+     each surviving loop's own P.netRefByloop contributes and nothing else.
+     Last-bit tolerance rather than strict equality, for one stated reason and
+     no other: the surge line lands on hot leg 0 where it is drawn now, so
+     that run is SPLIT into two series segments. Series resistance sums to
+     exactly the unsplit run in algebra (K*L1 + K*L2 == K*L, resist()'s own
+     identity) and to about 4e-15 off it in floating point, so every case
+     naming loop 0 carries that one extra rounding and no case naming any
+     other loop does. Measured: pump0+pump3 lost reads 0.47912978143962276
+     against 0.47912978143962653. The claim is unchanged - it is still each
+     surviving loop's OWN reference share, never a flat 1/n and never an
+     approximation of a different quantity. No spares fitted in this case on
+     purpose - loopPumpCap() would then sum real hardware above 1.0 per loop,
+     which is its own case below. */
   const {s,ids}=tieChain();
   const ref=M.P().netRefByLoop, tot=M.P().netRef;
   const expect=dmg=>{ let sum=0; for(let i=0;i<4;i++) if(!dmg.includes('pump'+i)) sum+=ref[i]; return sum/tot; };
   let drift=0;
   for(const dmg of [[],['pump1'],['pump0','pump3'],['pump0','pump1','pump2','pump3']]){
     s.dmgParts=dmg.slice();
-    if(M.netFlowK(s)!==expect(dmg)) drift++;
+    if(Math.abs(M.netFlowK(s)-expect(dmg)) > 1e-12) drift++;
   }
   if(drift) bad(`${drift} of 4 damage cases: a shut junction no longer gives exactly its surviving loops' own reference share`);
   else console.log('  shut junctions give exactly the surviving loops\' own reference share, 0..4 pumps lost');
@@ -896,12 +963,26 @@ console.log('\n=== A PIPE RUN CAN BE HIT ===');
      on the grid. */
   const s=set({}); run(s,5);
   const before=M.netFlowK(s);
+  /* Held still, because the plant runs for minutes between the two readings
+     and s.coreDT - the core's own temperature rise, and the whole of what
+     buoyancy consumes - will not be the same number at the end of a repair
+     as it was at the start. The claim being made here is about the
+     FACTORISATION CACHE, so the thermal state has to be the one input that
+     is not allowed to differ, or a genuine difference in buoyancy would read
+     as a stale factorisation. */
+  /* s.cavP too: it is what each pump's own head is derated by, and a loop
+     that has spent minutes with a leg cut is not the same temperature as one
+     that has not. Both are thermal state, and the claim here is about the
+     FACTORISATION CACHE - a genuine difference in buoyancy or in cavitation
+     would otherwise read as a stale factorisation. */
+  const dt0=s.coreDT, cav0=JSON.stringify(s.cavP);
   const key=M.hittableRunKeys(M.P().net)[0];
   M.combatHit('pipe:'+key);
   M.repairStart('pipe:'+key);
   if(!s.repair) bad(`repair on a freshly hit, reachable run (${key}) was refused`);
   let n=0; while(s.repair && n<200000){ M.step(0.02); n++; }
   if(s.dmgParts.includes('pipe:'+key)) bad('a completed repair left the run marked damaged');
+  s.coreDT=dt0; Object.assign(s.cavP, JSON.parse(cav0));
   const after=M.netFlowK(s);
   if(after!==before) bad(`a repaired run left netFlowK at ${after}, expected exactly ${before} (bit-identical to undamaged)`);
   else console.log(`  hit-and-repaired ${key}: flow returns to exactly ${(after*100).toFixed(1)}% in ${(n*0.02).toFixed(0)} s`);
@@ -1577,8 +1658,18 @@ console.log('\n=== A SCENARIO RUNS THE SAME WAY TWICE ===');
      limit and re-judge instead of flying the drill again. */
   const lim=(id,ch,cmp,v,g)=>{ const s=SC.scnNew('l','L'); SC.scnLimit(s,id,ch,cmp,v,g); return s.limits; };
   const tick0=SC.S().tick, trN0=b.take.trN, end0=b.take.tickEnd;
-  const tight=SC.scnJudge(b.take,lim('power','pwr','>',90,0));
-  const grace=SC.scnJudge(b.take,lim('power','pwr','>',90,2));
+  /* 200%, not 90%. Grace only moves a break by exactly its own window while
+     the limit is broken CONTINUOUSLY - a limit the run crosses back over
+     restarts the count, and the answer is then a property of the trace rather
+     than of the grace. 90% used to sit under this plant's own resting power
+     and now sits just above it (the injection line is a real pipe on the
+     drawing since the HPI tank stopped appearing only when an accumulator was
+     bought, so P.flowK and the power it settles at are both a little lower),
+     which put the trace right on the threshold. 200% is a bar this plant
+     never approaches, so the break is the first sample either way and the
+     only thing between the two answers is the grace itself. */
+  const tight=SC.scnJudge(b.take,lim('power','pwr','>',200,0));
+  const grace=SC.scnJudge(b.take,lim('power','pwr','>',200,2));
   const slack=SC.scnJudge(b.take,lim('power','pwr','>',0.5,0));
   if(tight.pass) bad('a limit the run plainly breaks came back passed');
   if(slack.pass===false) bad('a limit the run never came near came back broken');
@@ -1841,32 +1932,67 @@ console.log('\n=== RADIATION IS LIVE, NOT A COMMISSIONING-TIME NUMBER ===');
      enters the source term the moment s.melt goes true and nothing about
      P.dose knows the core is molten. A static readout would sail through
      this unmoved; measured margin here is more than 5x, so the >3x floor
-     has real slack in it. */
+     has real slack in it.
+
+     Run 30 s PAST melt before reading, which it did not have to be before.
+     Losing the pumps is a much faster way to wreck a core than it was: the
+     thermosiphon is solved off the plant's own geometry now instead of being
+     floored at a fitted 24% of rated removal, so 5% pump flow reaches melt in
+     about 6 s rather than about 160. The airborne term needs a moment to
+     accumulate after that, and reading the instant melt latches is a race,
+     not a measurement. */
   const s=set({}); run(s,10);
   s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
   let ticks=0; while(!s.melt && !s.breach && ticks<50*300){ M.step(0.02); ticks++; }
   if(!s.melt) bad('flow-kill + RPS bypass did not reach core melt inside 300 s of fault time; nothing to check the live field against');
   if(s.dmg<=25) bad(`core melted at only dmg=${s.dmg.toFixed(1)}%, expected well past 25%`);
+  for(let i=0;i<50*30 && !s.breach;i++) M.step(0.02);
   if(s.doseRate<=M.P().dose*3)
     bad(`live doseRate only reached ${(s.doseRate/M.P().dose).toFixed(2)}x P.dose at melt; expected >3x`);
-  console.log(`  flow-kill + bypass, run to melt: dmg=${s.dmg.toFixed(0)}%, doseRate=${s.doseRate.toFixed(3)} (${(s.doseRate/M.P().dose).toFixed(1)}x the as-built figure)`);
+  console.log(`  flow-kill + bypass, run to melt + 30 s: dmg=${s.dmg.toFixed(0)}%, doseRate=${s.doseRate.toFixed(3)} (${(s.doseRate/M.P().dose).toFixed(1)}x the as-built figure)`);
 }
 { /* CONTAINMENT REACHES THE FIELD: same fault, NONE (rel=1.0) against LARGE
      DRY (rel=.05) - P.contRel scales both the direct cladding-failure term
      and the rate the airborne term accumulates at, so the two containments
      have to read very different dose rates for identical damage. Sampled at
-     60 s into the fault rather than at melt: dmg is already well past 25 by
-     then (it plateaus inside 15 s), but RAD_MELT - a flat addition neither
-     containment scales - is still well over 100 s away, so it cannot yet
-     swamp the very difference this case exists to measure. */
+     60 s into the fault, on a fault chosen to STAY short of melt: RAD_MELT is
+     a flat addition neither containment scales, so a molten core swamps the
+     very difference this case exists to measure.
+     42% pump flow, not 5%. It used to be 5%, which plateaued near 29% damage
+     for well over a minute; with the thermosiphon solved off the plant rather
+     than floored at a fitted 24%, 5% flow now melts in about 6 s. 42% is the
+     same fault at the severity this case has always wanted: measured, damage
+     is near 50% at 40 s and melt is still ahead of it, so the sample is taken
+     at 40 s and both runs are asserted short of melt - a drift that starts
+     melting this fault should say so, not report a bad ratio.
+
+     Measured as the EXCESS over the plant's own as-built shine, not as a raw
+     ratio of doseRate. A reactor at power lights its own room whatever
+     containment is bolted round it - P.contRel scales the release, and
+     nothing scales the operating source - so a raw ratio measures the
+     containment's effect diluted by a term it cannot touch, and the dilution
+     grows as the release shrinks. The excess is the containment's own
+     contribution and nothing else, which is what this case has always been
+     about.
+
+     The baseline is each run's OWN shine at its own power, taken by clearing
+     s.dmg and s.release and stepping once - not P.dose, which is the as-built
+     figure at full power and is bigger than the shine of a plant this fault
+     has knocked down to half of it. Subtracting the wrong baseline gives a
+     negative excess, which is how this was caught. */
   const doseAt=cont=>{ const s=set({cont,contFit:true}); run(s,10);
-    s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
-    for(let i=0;i<50*60;i++) M.step(0.02);
-    return s.doseRate; };
+    s.byp.rps=true; s.flow=0.42; s.flowDem=0.42;
+    for(let i=0;i<50*40;i++) M.step(0.02);
+    if(s.melt) bad(`the containment case's own fault melted the core before its sample - it can no longer measure what it exists to measure`);
+    if(s.dmg<10) bad(`the containment case's own fault only reached ${s.dmg.toFixed(1)}% damage - there is no release to tell two containments apart by`);
+    const hurt=s.doseRate;
+    s.dmg=0; s.release=0; M.step(0.02);
+    return hurt - s.doseRate; };
   const none=doseAt(0), large=doseAt(2);
-  if(none<large*5)
-    bad(`containment NONE only read ${(none/large).toFixed(2)}x LARGE DRY 60 s into the same fault; expected >=5x`);
-  console.log(`  containment reaches the field: NONE ${none.toFixed(4)} vs LARGE DRY ${large.toFixed(4)} (${(none/large).toFixed(1)}x), 60 s into the same fault`);
+  if(!(large>0)) bad(`LARGE DRY read no excess at all over its own as-built shine (${large}) - this case has nothing to divide by`);
+  else if(none<large*5)
+    bad(`containment NONE only read ${(none/large).toFixed(2)}x LARGE DRY's excess over its own shine, 40 s into the same fault; expected >=5x`);
+  console.log(`  containment reaches the field: excess over each run's own shine, NONE ${none.toFixed(4)} vs LARGE DRY ${large.toFixed(4)} (${(none/large).toFixed(1)}x), 40 s into the same fault`);
 }
 { /* NOTHING LIT AT REST, EVERY ARCHITECTURE - HI AREA RAD's own guard, named
      rather than folded into the blanket "no annunciator lit at rest" sweep
@@ -1927,18 +2053,18 @@ console.log('\n=== DOSE HAS TEETH: A HOT FIELD SLOWS A REPAIR PARTY, IT NEVER RE
      sent straight to the reactor vessel itself - the worst reachable spot
      on this or any plant. MEASURED, not assumed: with no containment fitted,
      dmg plateaus near 33% for about a minute before it climbs again toward
-     melt at t=160.7s, and the job itself takes ~144s in that field, so it
-     has to be dispatched at t=10s to finish at all. That window is 6s wide,
-     which is TIGHT - it was 40s of slack before the steam generators and the
-     relief tank moved, and the move both raised the crew field (0.1075 ->
-     0.1210, so radWorkK fell 0.397 -> 0.346) and brought melt forward. Widen
-     it by shielding the crew, not by shortening the job -
-     stable enough to clear the party without melt or the party itself being
-     spent, but this case does NOT hold the field perfectly still the way
-     COOL does (dmg is still creeping upward under it), so unlike COOL above
-     it is only checked against the ratio below, not against the tick. */
+     melt. HALF pump flow, not 5%: the thermosiphon is solved off the plant's
+     own geometry now rather than floored at a fitted 24% of rated removal, so
+     5% flow reaches melt in about 6 s and there is no window left to finish a
+     job in at all. Measured on the fault this case uses now: damage holds
+     near 35% indefinitely and the core never melts, which is what it always
+     wanted - the old 5% case survived only because it happened to plateau,
+     and its window had already been whittled to 6 s by two components moving.
+     This case does NOT hold the field perfectly still the way COOL does, so
+     unlike COOL above it is only checked against the ratio below, not against
+     the tick. */
   const hot=set({cont:0, contFit:true}); run(hot,10);
-  hot.byp.rps=true; hot.flow=0.05; hot.flowDem=0.05;
+  hot.byp.rps=true; hot.flow=0.50; hot.flowDem=0.50;
   while(hot.t<10 && !hot.melt) M.step(0.02);
   if(hot.melt) bad('the no-containment fault reached melt before this case could even dispatch a party into it');
   M.repairStart('core');
@@ -2075,6 +2201,333 @@ console.log('\n=== THE NETWORK IS PIPE_K-INVARIANT, AND KNOWS A SHORT LOOP FROM 
   }
   console.log(`  P.netRef>0 on all ${archChecked} architectures`);
 }
+
+/* ══════════ PRESSURE IS A PLACE, NOT A NUMBER ══════════
+   The solve is ABSOLUTE now: every potential it hands back is a pressure in
+   MPa, the pressurizer is the node that fixes the level, and elevation and
+   density are in every edge's head. This block is what earns that.
+
+   Read the head-invariance cases together, because the obvious version of the
+   first one fails a CORRECT implementation. The network is homogeneous in
+   head, so scaling EVERY head by k scales every flow by k and netFlowK() -
+   which only ever consumes Q/P.netRef - cannot move. That holds under two
+   conditions, and both are checked here rather than assumed:
+
+     1. All heads together, not one term. Buoyancy does not scale with
+        PUMP_H0, so sweeping PUMP_H0 alone changes the pump-to-buoyancy RATIO,
+        which legitimately changes the flow split. It still cancels on an
+        ISOTHERMAL plant, where buoyancy is exactly zero - that is a useful
+        check and it is not the general one.
+     2. A closed loop. A second fixed node (containment behind a break) is
+        driven by an absolute difference that does not scale with head at all.
+
+   A sweep of PUMP_H0 alone on a hot plant is not a bug report. It is the
+   ratio changing, as it should. */
+console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
+{
+  /* A plant that has actually been run, so s.coreDT is a real temperature
+     rise and buoyancy is genuinely in the heads. Every case below that says
+     "hot" means this state; "isothermal" means s.coreDT forced to 0, which is
+     also exactly what a freshly commissioned plant is. */
+  const hot=()=>{ const s=set({loops:4}); run(s,90); return s; };
+  /* RE-COMMISSIONED inside the sweep, exactly the way the PIPE_K sweep above
+     already does it. P.netRef is built at commission with whatever head the
+     pumps had then, and netFlowK() is a ratio against it - sweep the head
+     without rebuilding the reference and the ratio moves for that reason
+     alone, which is bookkeeping and not a physics claim. The thermal state is
+     then written back on, so every point in the sweep is the same plant at
+     the same temperature and only the head differs. */
+  const atHead=(setter,v,dt)=>{ setter(v); const t=set({loops:4}); t.coreDT=dt; return M.netFlowK(t); };
+
+  { const s=hot();
+    if(!(s.coreDT>5)) bad(`the hot case never developed a core temperature rise (coreDT=${s.coreDT}) - every buoyancy check below would be vacuous`);
+    const dt=s.coreDT;
+    const vals=[0.1,1,10].map(k=>atHead(M.setHeadK,k,dt));
+    M.setHeadK(1); set({loops:4});
+    const drift=Math.max(...vals)-Math.min(...vals);
+    if(drift>1e-12) bad(`netFlowK drifted ${drift} across a 100x sweep of EVERY head - a head with an additive term in it`);
+    console.log(`  every head scaled 100x: netFlowK invariant to ${drift.toExponential(2)} (coreDT=${dt.toFixed(1)} K)`);
+  }
+
+  { /* PUMP_H0 alone: invariant while isothermal, and it MUST NOT be invariant
+       once the plant is hot. The second half is the one that matters - it is
+       what proves buoyancy is actually contributing rather than being
+       accidentally zero, which is the failure mode every other check here
+       would sail straight through. */
+    const warm=hot().coreDT;
+    const iso=[0.2,0.6,3].map(v=>atHead(M.setPumpH0,v,0));
+    const hotv=[0.2,0.6,3].map(v=>atHead(M.setPumpH0,v,warm));
+    M.setPumpH0(0.60); set({loops:4});
+    const isoDrift=Math.max(...iso)-Math.min(...iso);
+    const hotDrift=Math.max(...hotv)-Math.min(...hotv);
+    if(isoDrift>1e-12) bad(`isothermal, PUMP_H0 alone moved netFlowK by ${isoDrift} - buoyancy is not zero on an isothermal plant`);
+    if(!(hotDrift>1e-9)) bad(`hot, PUMP_H0 alone left netFlowK unmoved (${hotDrift}) - buoyancy is contributing nothing, so every elevation case below is vacuous`);
+    console.log(`  PUMP_H0 alone: isothermal invariant to ${isoDrift.toExponential(2)}, hot NOT invariant (${hotDrift.toExponential(2)}) - the pump-to-buoyancy ratio, as it should be`);
+  }
+
+  { /* AN ISOTHERMAL PLANT HAS NO BUOYANCY, AT ANY ELEVATION. Stronger than a
+       flat plant and the check that actually matters: the elevations stay
+       wild and only the temperature difference goes. A formulation that leaks
+       here manufactures circulation out of geometry alone, which looks
+       plausible and is a perpetual motion machine. Every static head must be
+       identically 0.0 - not small - so the answer is bit-for-bit the
+       pump-only one. */
+    const s=set({loops:4});
+    const net=M.P().net;
+    let spread=0;
+    for(let i=0;i<net.n;i++) spread=Math.max(spread,Math.abs(net.z[i]-net.z[net.core]));
+    if(!(spread>3)) bad(`the layout is nearly flat (${spread.toFixed(2)} m of spread) - the isothermal case proves nothing on it`);
+    s.coreDT=0;
+    let anyStatic=0;
+    for(const ed of net.edges) if(ed.kind!=='pump')
+      anyStatic=Math.max(anyStatic,Math.abs(typeof ed.h==='function'?ed.h(s):(ed.h||0)));
+    if(anyStatic!==0) bad(`isothermal, ${spread.toFixed(1)} m of elevation spread still produced a static head of ${anyStatic} - buoyancy is being read off the absolute column, not the anomaly`);
+    if(M.netFlowK(s)!==1) bad(`isothermal, undamaged: netFlowK=${M.netFlowK(s)}, expected exactly 1`);
+    console.log(`  isothermal over ${spread.toFixed(1)} m of elevation: every static head identically 0, netFlowK exactly 1`);
+  }
+
+  { /* NOTHING SILENTLY BECAME ZERO WHEN GROUND WENT AWAY. Both of the two
+       places that used to special-case the ground node fail without throwing:
+       netFlows() would read the core as being at zero pressure, and
+       netCoreFracOf() would find no core edges at all and hand back 0. The
+       first is caught by the core's own pressure being a real number well
+       away from 0; the second by netFlowK() still being exactly 1. */
+    const s=set({loops:4});
+    if(M.netFlowK(s)!==1) bad(`undamaged plant after the ground node went away: netFlowK=${M.netFlowK(s)}, expected exactly 1`);
+    const f=M.netPressures(s);
+    if(!(f.core>1)) bad(`the core reads ${f.core} MPa - netFlows() is still treating it as the zero-potential ground node`);
+    console.log(`  core is a node, not a ground: netFlowK still exactly 1, core reads ${f.core.toFixed(3)} MPa`);
+  }
+
+  { /* THE PRESSURIZER READS ITSELF. The P.dose identity, and the one check
+       that catches a wrong anchor: whatever else the field does, the node
+       whose pressure the solve is TOLD must hand that number back. */
+    for(const n of [1,4]){
+      const s=set({loops:n});
+      for(const pres of [12, 15.5, 17.2]){
+        s.P=pres;
+        const got=M.netPressures(s).pzrb;
+        if(Math.abs(got-pres)>1e-12) bad(`${n} loops, s.P=${pres}: the pressurizer node reads ${got}, expected its own pressure`);
+      }
+    }
+    console.log('  pAt(pzr) === s.P to 1e-12, 1 and 4 loops, three pressures');
+  }
+
+  { /* PRESSURE FALLS THE RIGHT WAY ROUND THE LOOP. Highest at pump discharge,
+       lowest at its suction - the one thing a reader of this field will check
+       by eye, so it is checked here by measurement. */
+    const s=set({loops:4}); run(s,60);
+    const f=M.netPressures(s);
+    for(let i=0;i<4;i++){
+      if(!(f['pump'+i+'b']>f['pump'+i+'t']))
+        bad(`pump${i}: discharge ${f['pump'+i+'b']} is not above suction ${f['pump'+i+'t']}`);
+      if(!(f['pump'+i+'b']>f['sg'+i+'l']))
+        bad(`pump${i} discharge ${f['pump'+i+'b']} is not above the far side of the loop (sg${i}l ${f['sg'+i+'l']})`);
+    }
+    console.log(`  round loop 0: discharge ${f.pump0b.toFixed(3)} -> core ${f.core.toFixed(3)}`+
+                ` -> sg inlet ${f.sg0l.toFixed(3)} -> suction ${f.pump0t.toFixed(3)} MPa`);
+  }
+
+  { /* ELEVATION ROUTES THE THERMOSIPHON. Two steam generators, one hung high
+       and one low, pumps stopped: the high one must carry more flow. This is
+       the gap the pipe-network handover doc names and the one thing a
+       correlation beside the solve can never close, however it is fitted -
+       s.nat is one number for the whole plant and cannot tell one generator
+       from another. */
+    const s=set({loops:2});
+    const sg0=M.LAY().parts.find(p=>p.id==='sg0'), sg1=M.LAY().parts.find(p=>p.id==='sg1');
+    const y0=sg0.y, y1=sg1.y;
+    M.moveTo(sg1, sg1.x, Math.min(8-sg1.h, y1+2));
+    M.commission();
+    const t=M.S();
+    const net=M.P().net;
+    const hi=net.z[net.index.sg0l], lo=net.z[net.index.sg1l];
+    if(!(hi>lo)) bad(`the two generators did not end up at different heights (${hi} vs ${lo}) - this case proves nothing`);
+    t.flow=0; t.coreDT=60;
+    const byRun={};
+    M.netFlowK(t, byRun);
+    const q0=byRun['hot:corer-sg0l']||0, q1=byRun['hot:corer-sg1l']||0;
+    if(!(q0>q1)) bad(`pumps dead, sg0 hung ${(hi-lo).toFixed(1)} m above sg1: sg0 carried ${q0} and sg1 ${q1} - elevation is not routing the thermosiphon`);
+    else console.log(`  pumps dead, sg0 hung ${(hi-lo).toFixed(1)} m above sg1: sg0 carries ${(q0/q1).toFixed(2)}x sg1's buoyancy flow`);
+    M.moveTo(sg1, sg1.x, y1); M.moveTo(sg0, sg0.x, y0); M.commission();
+  }
+
+  { /* A BREAK BREAKS THE INVARIANT, CORRECTLY. Said out loud because someone
+       will later find a sweep that does not hold and "fix" it. A second fixed
+       node - containment behind a hole - is driven by an ABSOLUTE difference
+       between the loop and containment, and that does not scale with head at
+       all. Scaling every head therefore genuinely changes the split between
+       what goes round the loop and what goes out of the hole. */
+    const vals=[0.5,1,2].map(k=>{ M.setHeadK(k); const t=set({loops:2});
+      t.coreDT=25; t.dmgParts=['pipe:hot:corer-sg0l']; return M.netFlowK(t); });
+    M.setHeadK(1); set({loops:2});
+    const drift=Math.max(...vals)-Math.min(...vals);
+    if(!(drift>1e-9)) bad(`a BREACHED plant stayed head-invariant (${drift}) - the break is not a second fixed node, it is still a blockage`);
+    console.log(`  a break correctly breaks head-invariance: ${drift.toExponential(2)} across a 4x head sweep, because a hole is driven by an absolute difference`);
+  }
+
+  { /* A SEVERED PIPE LEAKS. Against HEAD this failed hard: cutting a primary
+       hot leg lost no inventory at all, because a severance was modelled as a
+       plugged pipe - the textbook large-break LOCA drawn as a blockage. */
+    const s=set({loops:2}); run(s,10);
+    const inv0=s.inv;
+    M.combatHit('pipe:hot:corer-sg0l');
+    for(let i=0;i<50*20;i++) M.step(0.02);
+    if(!(s.inv < inv0-5)) bad(`a severed hot leg lost ${(inv0-s.inv).toFixed(2)}% of inventory in 20 s - a cut pipe is still being modelled as a plugged one`);
+    if(!(s.P < 12)) bad(`a severed hot leg left the loop at ${s.P.toFixed(1)} MPa - a hole does not depressurise it`);
+    console.log(`  a severed hot leg leaks: inventory ${inv0.toFixed(0)}% -> ${s.inv.toFixed(0)}% and pressure -> ${s.P.toFixed(1)} MPa in 20 s`);
+  }
+
+  { /* BREAK SIZE MATTERS, because bore already prices the opening. A full-bore
+       hot leg against the relief-bore cross-tie the bench can place. */
+    const drain=(key,secs)=>{ const s=set({loops:2}); run(s,10);
+      const i0=s.inv; s.dmgParts.push('pipe:'+key);
+      for(let i=0;i<50*secs;i++) M.step(0.02);
+      return i0-s.inv; };
+    const big=drain('hot:corer-sg0l',6), small=drain('hpi:hpib-coreb',6);
+    if(!(big>small*2)) bad(`a full-bore hot leg (${big.toFixed(2)}%) did not drain more than twice as fast as the narrow injection line (${small.toFixed(2)}%) - bore is not pricing the opening`);
+    console.log(`  break size matters: 6 s of a full-bore hot leg costs ${big.toFixed(1)}%, the 0.25-bore injection line ${small.toFixed(2)}%`);
+  }
+
+  { /* TWO OPEN ENDS. A cut pipe spills from both, so severing a run costs more
+       than one opening of the same bore. Measured against the vessel's own
+       single-ended breach, scaled by nothing - the claim is only that two ends
+       beat one, and it is checked on the SOLVE rather than on a run, so
+       nothing else about the plant can drift into the answer. */
+    const s=set({loops:2}); run(s,10);
+    const one={}, two={};
+    s.dmgParts=[]; s.breach=true;  M.netFlowK(s,null,null,one);
+    s.breach=false; s.dmgParts=['pipe:cold:sg0b-pump0t']; M.netFlowK(s,null,null,two);
+    const edges=M.P().net.edges.filter(e=>e.kind==='break'&&e.key==='break:cold:sg0b-pump0t');
+    if(edges.length!==2) bad(`a severed run offered ${edges.length} break edge(s), expected exactly 2 - a cut pipe has two open ends`);
+    if(!(two.spill>0)) bad('a severed run spilled nothing at all');
+    console.log(`  two open ends: a severed run carries ${edges.length} break edges and spills ${two.spill.toFixed(2)} against the vessel's ${one.spill.toFixed(2)} through one`);
+  }
+
+  { /* A BREAK STOPS WHEN IT EQUALISES. It used to run at a flat 2.4 %/s
+       forever, whatever the pressure was, so an empty loop at containment
+       pressure went on "draining". */
+    const s=set({loops:2}); run(s,10);
+    s.breach=true;
+    let peak=0;
+    for(let i=0;i<50*4;i++){ M.step(0.02); const o={}; M.netFlowK(s,null,null,o); peak=Math.max(peak,o.spill); }
+    for(let i=0;i<50*300;i++) M.step(0.02);
+    const o={}; M.netFlowK(s,null,null,o);
+    if(!(peak>0)) bad('a ruptured vessel never spilled anything');
+    if(!(o.spill < peak*0.25))
+      bad(`a break still passing ${o.spill.toFixed(3)} against a peak of ${peak.toFixed(3)} after the loop has drained - it is a schedule, not a hole`);
+    console.log(`  a break stops when it equalises: peak outflow ${peak.toFixed(2)} -> ${o.spill.toFixed(3)} at ${s.P.toFixed(2)} MPa against containment's ${M.P().Pcont}`);
+  }
+
+  { /* SHUT EVERY PRIMARY VALVE AND THE CORE COOKS. This FAILED against HEAD,
+       and watching it fail is the point: the network correctly reported zero
+       flow while the core went on being cooled, because natural circulation
+       was a correlation that never looked at the plant. Measured on HEAD: a
+       2-loop plant read netFlowK 0.000 with nat 0.243, tripped on LOW DNBR
+       and survived. */
+    const s0=set({loops:2});
+    const runs=M.pipeNetwork().filter(r=>r.key&&(r.key.startsWith('hot:')||r.key.startsWith('cold:')));
+    const ids=runs.map(r=>M.addFit('throttle', r.key, 0.5));
+    M.commission();
+    const s=M.S(); run(s,10);
+    for(const id of ids){ s.valve[id]=0; s.valveDem[id]=0; }
+    s.byp.rps=true;
+    for(let i=0;i<50*400 && !s.melt;i++) M.step(0.02);
+    if(!(M.netFlowK(s)===0)) bad(`every primary valve shut still gave netFlowK=${M.netFlowK(s)}, expected exactly 0`);
+    if(!s.melt) bad(`every primary valve on the plant shut and the core did not melt (dmg=${s.dmg.toFixed(0)}%) - it is being cooled through pipes that are welded shut`);
+    console.log(`  shut every primary valve: netFlowK exactly 0, nat ${s.nat.toFixed(3)}, and the core melts (dmg ${s.dmg.toFixed(0)}%)`);
+    for(const id of ids) M.removeFit(id);
+    M.commission();
+  }
+
+  { /* SEVER EVERY PRIMARY RUN AND THE CORE COOKS, AND THE LOOP DRAINS. Two
+       gaps propping each other up, and both FAILED against HEAD: nat stayed
+       at 0.243 and inventory stayed at 100%, because a severance did not
+       leak. Measured there: it survived. */
+    const s=set({loops:2}); run(s,10);
+    for(const k of M.hittableRunKeys(M.P().net))
+      if(k.startsWith('hot:')||k.startsWith('cold:')) s.dmgParts.push('pipe:'+k);
+    s.byp.rps=true;
+    /* run the whole window, not "until it melts": melt arrives first now and
+       the loop goes on emptying through the holes afterwards, which is the
+       half of this case HEAD could not do at all */
+    for(let i=0;i<50*300;i++) M.step(0.02);
+    if(!(M.netFlowK(s)===0)) bad(`every primary run severed still gave netFlowK=${M.netFlowK(s)}`);
+    if(!(s.inv < 50)) bad(`every primary run severed left inventory at ${s.inv.toFixed(0)}% - a severed pipe is still not a hole`);
+    if(!s.melt) bad(`every primary run severed and the core did not melt (dmg=${s.dmg.toFixed(0)}%)`);
+    console.log(`  sever every primary run: netFlowK exactly 0, inventory ${s.inv.toFixed(0)}%, core melts`);
+  }
+
+  { /* A BADLY PIPED PUMP CAVITATES FIRST, and only that one. Two identical
+       pumps; one gets a throttle on its own suction leg, so its suction
+       pressure is genuinely lower and its water genuinely closer to flashing.
+       This could not happen at all while cavitation was one scalar computed
+       from s.P for the whole plant. */
+    set({loops:2});
+    const id=M.addFit('throttle','cold:sg0b-pump0t',0.5);
+    M.commission();
+    const s=M.S(); run(s,20);
+    s.valve[id]=s.valveDem[id]=0.10;
+    s.byp.rps=true;
+    /* Depressurise, because that is what actually brings a loop to cavitation
+       - the water does not get hotter, its boiling point comes down to meet
+       it. Held down by hand each tick rather than waited for, so the case
+       measures WHICH pump goes first and not how long a stuck relief valve
+       takes to get there. */
+    let firstBad=null, firstGood=null;
+    for(let pset=15.5; pset>4 && firstGood===null; pset-=0.05){
+      for(let i=0;i<10;i++){ s.P=pset; M.step(0.02); }
+      if(firstBad===null && s.cavP[0]>0.02) firstBad=pset;
+      if(firstGood===null && s.cavP[1]>0.02) firstGood=pset;
+    }
+    if(firstBad===null) bad('neither pump ever cavitated - this case measured nothing');
+    else if(!(firstBad>firstGood))
+      bad(`the throttled pump started cavitating at ${firstBad} MPa and its healthy twin at ${firstGood} - cavitation is not local to the pump that is piped badly`);
+    else console.log(`  a badly piped pump cavitates first: the throttled one starts at ${firstBad.toFixed(2)} MPa, its identical twin only at ${firstGood.toFixed(2)} MPa`);
+    M.removeFit(id); M.commission();
+  }
+
+  { /* CAVITATION CARRIES NO CONSTANTS OF ITS OWN. A source scan, because this
+       is the check that stops the correlation growing back: the 6 K offset and
+       the 12 K window that used to sit in s.cav were standing in for a fact
+       the field states directly - cavitation begins when subcooling reaches
+       zero - and the expression has to name the thing that says so. */
+    const src=require('./bundle').bundle();
+    const m=/s\.cavP\[i\][\s\S]{0,200}?;/.exec(src) || /const c = ([^;]*);/.exec(src);
+    const line=(/const c = clamp\([^;]*\);/.exec(src)||[''])[0];
+    if(!line) bad('could not find the cavitation expression at all to scan it');
+    else {
+      if(line.indexOf('scAt')<0) bad(`the cavitation expression does not name scAt: ${line}`);
+      if(/[^A-Za-z_](6|12)[^0-9]/.test(line.replace('CAV_SPAN','')))
+        bad(`the cavitation expression still carries a bare constant of its own: ${line}`);
+      console.log(`  cavitation names the field and carries no constants of its own: ${line.trim()}`);
+    }
+  }
+
+  { /* A THROTTLE SHOWS A REAL PRESSURE DROP, and it grows as the valve shuts.
+       Today's readout is a fraction of a span; the differential a gauge would
+       print is a number of MPa, and it has to move the right way. */
+    const s0=set({loops:2});
+    const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0.5]; };
+    const id=M.addFit('throttle',...tap('hot:corer-sg0l'));
+    M.commission();
+    const s=M.S(); run(s,30);
+    let last=-1, mono=true;
+    const seen=[];
+    for(const x of [1,0.5,0.25,0.12]){
+      s.valve[id]=s.valveDem[id]=x;
+      const f=M.netPressures(s);
+      const drop=f.core - f.sg0l;
+      seen.push(drop);
+      if(last>=0 && !(drop>last)) mono=false;
+      last=drop;
+    }
+    if(!mono) bad(`throttling hot leg 0 did not raise the core-to-generator drop monotonically: ${seen.map(v=>v.toFixed(4)).join(' -> ')} MPa`);
+    else console.log(`  throttling hot leg 0 1.00 -> 0.12: core-to-generator drop ${seen.map(v=>v.toFixed(3)).join(' -> ')} MPa`);
+    M.removeFit(id); M.commission();
+  }
+}
+
 
 console.log(fails? `\n${fails} FAILURE(S)` : '\nall physics checks passed');
 process.exit(fails?1:0);

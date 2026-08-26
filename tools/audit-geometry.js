@@ -308,11 +308,53 @@ for(const f of VIEW_FILES){
   for(let m; (m=S_WRITE.exec(src)); )
     sWrites.push(f+':'+(src.slice(0,m.index).split('\n').length));
 }
+/* AND A LAYER MUST NOT SOLVE - the same rule at the seam it is easiest to
+   break. netFactored() caches its factorisation onto net.Af/net.AfSig, and
+   net IS P.net, so a draw callback that asked the pipe network for a pressure
+   would be a layer writing to P. The S-write scan above cannot see that; nor
+   can a state comparison, because a redundant solve against a warm cache
+   writes nothing and is invisible in the answer - which is exactly why it has
+   to be a rule about the SOURCE.
+   drawPlant() refreshes the field once a frame and pipeFieldRefresh() is the
+   one place allowed to ask, so every solve entry point is banned from the
+   layer files outright and allowed in pipes.js only inside that function. */
+const SOLVER_NAMES=['netPressures','netDrops','netField','netFlowK',
+                   'netCoreFracOf','netFactored','netSolve','netSubst'];
+/* Comments stripped first, or the sentence explaining WHY a layer must not
+   solve would itself trip the check that says so. */
+const blank=t=>t.replace(/[^\n]/g,' ');   // same length, same lines, no content
+const stripComments=src=>src.replace(/\/\*[\s\S]*?\*\//g,blank)
+  .replace(/\/\/[^\n]*/g,blank);
+const solverHits=(raw)=>{
+  const src=stripComments(raw);
+  const out=[];
+  for(const n of SOLVER_NAMES){
+    let i=-1;
+    while((i=src.indexOf(n+'(', i+1))>=0) out.push({n, i});
+  }
+  return out;
+};
+const solveCalls=[];
+for(const f of ['src/render/layers.js','src/render/rad.js'].filter(f=>scriptPaths().includes(f))){
+  const src=fs.readFileSync(path.join(ROOT,f),'utf8');
+  for(const h of solverHits(src))
+    solveCalls.push(f+':'+(src.slice(0,h.i).split('\n').length)+' '+h.n);
+}
+{ const src=fs.readFileSync(path.join(ROOT,'src/render/pipes.js'),'utf8');
+  const fn=src.indexOf('function pipeFieldRefresh');
+  const end=fn<0?-1:src.indexOf('\n}', fn);
+  for(const h of solverHits(src))
+    if(fn<0 || h.i<fn || h.i>end)
+      solveCalls.push('src/render/pipes.js:'+(src.slice(0,h.i).split('\n').length)+' '+h.n);
+}
 const actChecks=[
  ['one input dispatch',   (S.match(/function act\(/g)||[]).length===1 &&
                           RENDERERS.length===2, 'act() defined once, both renderers read'],
  ['no view file writes S',  sWrites.length===0,
   sWrites.length? sWrites.join(' ') : `${VIEW_FILES.length} view files reach the plant only through act()`],
+ ['no layer solves the network', solveCalls.length===0,
+  solveCalls.length? solveCalls.join(' ')
+    : 'the pressure field is solved once a frame in pipeFieldRefresh() and read from there'],
 ];
 
 // the second half matters more than the first: a lone chart() nothing calls

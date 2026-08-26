@@ -80,7 +80,7 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  '; return {drawDesign,drawOperate,drawScenario,drawOverlay,commission,step,sample,combatHit,'+
  'SCN:()=>SCN,setSCN:v=>SCN=v,scnClone,scnNew,scnGest,scnLimit,SCNPRE:()=>SCNPRE,scnRun,scnJudge,'+
  'setScnSel:v=>scnSel=v,setScnPlay:v=>scnPlay=v,setScnVerd:v=>scnVerd=v,GESTKEYS:()=>GESTKEYS,'+
- 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
+ 'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,P:()=>P,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
  'setDmg:v=>S.dmgParts=v,'+
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
@@ -259,7 +259,15 @@ warmUp();
 // the extra warmUp() shifts that stream, every later sweep gets a DIFFERENT
 // set of damaged parts, and the report changes for reasons that have nothing
 // to do with the change under test. Last means there is no "later" to shift.
-{ const keys=['radz','radn','radp','radc'];
+/* AND IT NEVER WRITES P EITHER, which is the sharper half of the same rule
+   and the one a reader will get wrong. netFactored() caches its factorisation
+   onto net.Af/net.AfSig, and net IS P.net - so a draw callback that asked the
+   pipe network for a pressure would be writing to P from inside a layer, and
+   audit-geometry's own scan of the view files looks for `S.` writes only. The
+   two pressure layers therefore read a field drawPlant() refreshed once for
+   the frame (pipeFieldRefresh(), pipes.js) and never solve; P.net.AfSig is
+   captured alongside S below to prove they did not. */
+{ const keys=['radz','radn','radp','radc','press','subc'];
   keys.forEach(k=>M.setLayer(k,true));
   warmUp(); sweep('rad:');
   // once at rest, once wrecked - a saturated field is where the zone fill
@@ -279,7 +287,15 @@ warmUp();
 // reset between runs because warmUp() spends draws on combatHit(): without
 // that the two plants take different damage and the check fails for a reason
 // that has nothing to do with layers.
-{ const keys=['radz','radn','radp','radc'];
+/* AND IT NEVER WRITES P EITHER, which is the sharper half of the same rule
+   and the one a reader will get wrong. netFactored() caches its factorisation
+   onto net.Af/net.AfSig, and net IS P.net - so a draw callback that asked the
+   pipe network for a pressure would be writing to P from inside a layer, and
+   audit-geometry's own scan of the view files looks for `S.` writes only. The
+   two pressure layers therefore read a field drawPlant() refreshed once for
+   the frame (pipeFieldRefresh(), pipes.js) and never solve; P.net.AfSig is
+   captured alongside S below to prove they did not. */
+{ const keys=['radz','radn','radp','radc','press','subc'];
   const ser = o => JSON.stringify(o, (k,v) =>
     ArrayBuffer.isView(v) ? Array.from(v) : (typeof v === 'number' && !isFinite(v) ? String(v) : v));
   const fly = on => {
@@ -287,7 +303,7 @@ warmUp();
     keys.forEach(k=>M.setLayer(k,on));
     M.commission();
     for(let i=0;i<120;i++){ M.step(0.02); cap('purity'+(on?'On':'Off')+':'+i, M.drawOperate); }
-    return ser(M.S());
+    return ser(M.S()) + '|' + String(M.P().net.AfSig);
   };
   const withLayers=fly(true), without=fly(false);
   keys.forEach(k=>M.setLayer(k,false));
@@ -296,8 +312,8 @@ warmUp();
 
 console.log('=== A LAYER CANNOT MOVE THE PLANT ===');
 console.log(LAYER_PURE
-  ? '  120 ticks drawn with every layer on and off: final S identical field for field'
-  : '  FAIL a layer changed the plant - a draw callback is writing sim state');
+  ? '  120 ticks drawn with every layer on and off: final S identical field for field, and the same P.net factorisation'
+  : '  FAIL a layer changed the plant - a draw callback is writing sim state, or solving the pipe network into P');
 if(!LAYER_PURE) process.exitCode=1;
 
 console.log('=== BROKEN VALUES IN DRAWN TEXT ===');
