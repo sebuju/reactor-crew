@@ -11,14 +11,19 @@ const M=require('./bundle').headless(
  'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
  'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
- 'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,pipeNetwork,act,'+
+ 'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,addRun,removeRun,fittableList,'+
+ 'loopOf,loopOfKey,loopPumpCap,portRoom,nearestFreePort,hasHeatSink,ROLE:()=>ROLE,'+
+ 'pipeNetwork,act,ctxItemsDesign,'+
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
  'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW,'+
  'netBuild,netFlowK,setPipeK,setPumpH0,setHeadK,netPressures,netDrops,'+
  'VALVE_RATE,hittableRunKeys,pipeCells,pipePart,'+
- 'hasRelief,primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,ventK,reliefG,PIPE_BORE:()=>PIPE_BORE,'+
- 'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,PORV_INV,autoLive,AUTOSYS:()=>AUTOSYS,'+
- 'paramsForFit,readoutsForFit}');
+ 'primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,reliefRate,reliefFullRate,PIPE_BORE:()=>PIPE_BORE,'+
+ 'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,autoLive,AUTOSYS:()=>AUTOSYS,'+
+ 'paramsForFit,readoutsForFit,SGT:()=>SGT,sgCount,invRate,tankLvl,TANK:()=>TANK,'+
+ 'sgIds,sglMin,sgLvl,sgShare,netExpSurge,secP,BETA_W,LVL_K}');
+const {makeLoops}=require('./loopgen');
+const HOT_NPSH_A=10;   // mirrors step.js's own HOT_NPSH - the suction taper this block asserts against
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 /* THE LATTICE IS PART OF THE DESIGN NOW, so set() has to put it back as well
@@ -32,13 +37,22 @@ const BASE=JSON.parse(JSON.stringify(D));
    that wrote through one would poison BASE and every case after it. set() does
    NOT touch placedParts (layout.js) - that is not a D field, so any case that
    places a pump has to remove it again itself, the same way it would restore
-   any other module state set() does not own. */
+   any other module state set() does not own.
+   `o.loops`, unlike every other field, is NOT a D field any more - D.loops
+   was deleted in Stage 3b. It is a request this helper honours through the
+   real mechanism (makeLoops(), loopgen.js): placed generators, placed pumps,
+   real D.run entries, exactly what a player's ADD STEAM GENERATOR HERE +
+   CONNECT would build. Every set() call re-syncs to the requested count,
+   tearing down whatever a PRIOR call built first, so `loops` never needs
+   its own restore the way a bare D field would. */
 const set=o=>{
   o=o||{};
   const lat=o.lat; if(lat) { o=Object.assign({},o); delete o.lat; }
+  const loops=o.loops; if(loops!=null){ o=Object.assign({},o); delete o.loops; }
   Object.assign(D,JSON.parse(JSON.stringify(BASE)),o);
   M.latDefault();
   if(lat) lat();
+  makeLoops(M, loops||1);
   M.commission(); return M.S();
 };
 const run=(s,secs)=>{ for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) break; } return s; };
@@ -462,40 +476,45 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
   console.log(`  BACKUP: diesels hold full flow through a blackout, battery holds ${(s.flow*100).toFixed(0)}%`);
 }
 
-/* ══════════ RELIEF: THE VENT IS A BOUNDARY CONDITION, AND REDUNDANCY COSTS ══════════
-   Stage 5. FIT.relief (pipenet.js) is a fitting whose g() is a constant 0 -
-   never a row of the Laplacian - so netFlowK() cannot see it at all; this is
-   what proves the vent stayed a boundary condition rather than sneaking
-   into the circulation solve. ventK() judges each fitting's own branch
-   conductance against P.ventRef, and RELIEF_REF_LEN (pipenet.js) is fitted
-   so the stock plant's own relief valve lands on exactly 1 - already proven
-   above (EVERY AUTOMATIC SYSTEM IS BYPASSABLE reads 16.16/16.42 MPa, and THE
-   SIM ROLLS NO LOOSE DICE reads the identical stick pattern, both bit for
-   bit the pre-Stage-5 figures). This block is the redundancy half: what
-   changes when there is more than one relief path, and what happens when
-   there is none. */
+/* ══════════ RELIEF: THE VENT IS THE SOLVED EDGE FLOW, AND REDUNDANCY COSTS ══════════
+   Stage 4. FIT.relief (pipenet.js) is a fitting whose g() is a live gate on
+   S.reliefOpen/S.reliefBlocked now, the identical "tee" shape with a
+   setpoint instead of a switch - so a SHUT relief valve is g<=0, never a row
+   of the Laplacian, the same "shut is absent" identity every other shut edge
+   already gets; an OPEN one genuinely enters the solve and genuinely moves
+   netFlowK() by whatever it actually vents. ventK()/ventRefG()/
+   RELIEF_REF_LEN are gone - there is no reference valve to judge a fitting's
+   own branch against any more, because there is no second vent physics
+   beside the network to keep in step with it. reliefRate() (pipenet.js) is
+   the one reader of a fitting's own vent, in the same %-of-loop-inventory
+   units invRate() already gives a break or an injection line, resolved off
+   the identical solve netFlowK() runs. This block is the redundancy half:
+   what changes when there is more than one relief path, and what happens
+   when there is none. */
 console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
-{ /* netFlowK() must not move a hair for a fitting whose own g() never
-     contributes an edge - the strongest statement available is exact
-     equality against a plant with NO relief fitting at all, not a
-     tolerance, because a vent that touched the Laplacian even by
-     floating-point accident would still likely read "close". */
+{ /* A SHUT relief valve is a removed edge, not a small one - netFlowK() must
+     not move a hair for a fitting whose own g() is 0, the strongest
+     statement available being exact equality against a plant with NO relief
+     fitting at all, not a tolerance, because a vent that touched the
+     Laplacian even by floating-point accident would still likely read
+     "close". The valve is freshly commissioned and never lifted here - see
+     the next block for what an OPEN one is allowed to move. */
   const withRelief=set({}); run(withRelief,5);
   M.D().fit={}; M.commission(); const noRelief=M.S(); run(noRelief,5);
   if(M.netFlowK(withRelief)!==M.netFlowK(noRelief))
-    bad(`a relief fitting moved netFlowK: ${M.netFlowK(withRelief)} (with) vs ${M.netFlowK(noRelief)} (without) - it reached the Laplacian`);
-  console.log(`  a relief fitting never moves netFlowK: ${(M.netFlowK(withRelief)*100).toFixed(1)}% with or without one fitted`);
+    bad(`a shut relief fitting moved netFlowK: ${M.netFlowK(withRelief)} (with) vs ${M.netFlowK(noRelief)} (without) - it reached the Laplacian`);
+  console.log(`  a SHUT relief fitting never moves netFlowK: ${(M.netFlowK(withRelief)*100).toFixed(1)}% with or without one fitted`);
 }
 { /* the stock relief valve, isolated: armed, it lifts at 106%, reseats below
-     101%, and vents at exactly PORV_INV/PORV_DP (ventK===1) - the same
-     three facts the pre-Stage-5 PORV promised, now read off the fitting.
-     set({}) first, or primaryRelief() would still be reading the empty
-     D.fit the block above left behind. */
+     101%, and vents a real, positive, solved rate once open - the same
+     three facts the pre-Stage-4 PORV promised, now read off the fitting
+     rather than a reference-valve ratio. set({}) first, or primaryRelief()
+     would still be reading the empty D.fit the block above left behind. */
   const s=set({}); const fid=M.primaryRelief(); run(s,10); s.P=M.P().P0*1.10; run(s,1);
   if(!s.reliefOpen[fid]) bad('the stock relief fitting did not lift at 110% pressure');
-  const vk=M.ventK(s,fid);
-  if(Math.abs(vk-1)>1e-9) bad(`the stock relief fitting's ventK is ${vk}, expected exactly 1`);
-  console.log(`  one relief path: lifts at 110% (open=${s.reliefOpen[fid]}), ventK=${vk.toFixed(6)} - the pre-Stage-5 PORV rate exactly`);
+  const rate=M.reliefRate(s,fid);
+  if(!(rate>0)) bad(`the stock relief fitting is open but reliefRate is ${rate}, expected > 0`);
+  console.log(`  one relief path: lifts at 110% (open=${s.reliefOpen[fid]}), vents ${rate.toFixed(4)} %/s of loop inventory`);
 }
 { /* redundancy: two more relief valves, tapped onto the stock relief HEADER
      the way the design bench's own "ADD RELIEF VALVE HERE" does. Three taps
@@ -526,37 +545,104 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
               `(1-(1-${p1})^3=${pOr.toFixed(4)}, each path rolling its own die)`);
   M.D().fit={}; M.commission();
 }
-{ /* deleting the last relief path is buildable, not blocked - only warned,
-     the same SOFT/HARD shape every other bad-design choice on the bench
-     gets (design.js). commission() must not throw either: a plant with no
-     vent is a legal plant, just one where an overpressure ends at the
+{ /* Stage 5a: the relief tank is a PLACED PART, never derived from D.fit's
+     own content any more - clearing D.fit deletes the FITTING (the valve),
+     not the tank it used to conjure. Buildable, not blocked either way:
+     commission() must not throw with no relief fitting at all, a plant with
+     no vent is a legal plant, just one where an overpressure ends at the
      vessel (see the pressure block, step.js) instead of a valve. */
   M.D().fit={};
-  if(M.hasRelief()) bad('hasRelief() is true with an empty D.fit');
-  const w=M.derived().warn;
-  if(!w.some(x=>/no relief path/i.test(x[1])))
-    bad('deleting the last relief fitting raised no bench warning');
+  if(!M.LAY().parts.some(p=>p.id==='reltk'))
+    bad('clearing D.fit removed the relief tank - it is a placed part now (Stage 5a), not derived from D.fit');
   let threw=false;
   try{ M.commission(); } catch(e){ threw=true; }
   if(threw) bad('a plant with no relief path refused to commission');
   else if(M.primaryRelief()) bad('primaryRelief() found one after every relief fitting was deleted');
-  console.log('  no relief path: warns at the bench, commissions anyway, and P.fit carries no relief fitting');
+  console.log('  no relief path: commissions anyway, P.fit carries no relief fitting, and the tank stays on the grid');
 }
-{ /* a vent is a boundary condition read straight off ventK() (pipenet.js) -
-     sever the fitting's own branch pipe (pipeExtraLen -> Infinity -> g=0,
-     same idiom every other severed run uses) and force a lift: no NaN in
-     P, inv, or the fitting's own ventK, whatever the network underneath is
-     doing. Re-fit the stock relief afterward so no later case inherits an
-     unrelieved plant. */
+{ /* CHECKED (Stage 5a): a tank with no run to it has no vent - remove the
+     header run itself (rather than the fitting), armed and open, and demand
+     nothing reaches the tank: no fixed-node target for fitBKey() to resolve,
+     so the branch falls back to venting straight to containment instead
+     (netBuild()'s own contTarget fallback) - "vents somewhere" is not "vents
+     into the tank it is drawn next to". */
+  const s=set({}); const fid=M.primaryRelief();
+  M.removeRun('relief'); M.commission();
+  const s2=M.S(); s2.reliefOpen[fid]=true; s2.reliefBlocked[fid]=false;
+  run(s2,5);
+  if(M.tankLvl(s2,'reltk')>0)
+    bad(`disconnecting the relief header still filled the tank: reltk level ${M.tankLvl(s2,'reltk')}`);
+  if(!(M.reliefRate(s2,fid)>=0) || !isFinite(M.reliefRate(s2,fid)))
+    bad(`disconnecting the relief header left reliefRate non-finite or negative: ${M.reliefRate(s2,fid)}`);
+  console.log(`  a tank with no run to it never fills: reltk level stays ${M.tankLvl(s2,'reltk').toFixed(1)}% while the valve vents to containment instead`);
+  M.D().run.relief={a:"pzr",af:null,b:"reltk",bf:null,k:"relief",bore:0.20}; M.commission();
+}
+{ /* the vent is the solved edge flow, read straight off reliefRate()
+     (pipenet.js) - sever the fitting's own branch pipe (pipeExtraLen ->
+     Infinity -> FIT.relief.g's own isFinite(len) gate -> 0, same idiom
+     every other severed run uses, restated explicitly on this mode because
+     it prices off bore alone and would otherwise never ask about length at
+     all) and force a lift: no NaN in P, inv, or the fitting's own vent rate,
+     whatever the network underneath is doing. Re-fit the stock relief
+     afterward so no later case inherits an unrelieved plant. */
   const s=set({}); run(s,5);
   const fid=M.primaryRelief();
   s.dmgParts.push('pipe:xtie:'+fid);
   s.byp.rps=true; s.P=M.P().P0*1.20; run(s,20);
-  const vk=M.ventK(s,fid);
-  if(!isFinite(s.P)||!isFinite(s.inv)||!isFinite(vk))
-    bad(`a severed relief branch produced a non-finite value: P=${s.P} inv=${s.inv} ventK=${vk}`);
-  if(vk!==0) bad(`a severed relief branch still vented at ventK=${vk}, expected exactly 0`);
-  console.log(`  a severed relief branch never produces NaN: ventK=${vk}, P and inv stay finite (P=${s.P.toFixed(2)} MPa)`);
+  const rate=M.reliefRate(s,fid);
+  if(!isFinite(s.P)||!isFinite(s.inv)||!isFinite(rate))
+    bad(`a severed relief branch produced a non-finite value: P=${s.P} inv=${s.inv} rate=${rate}`);
+  if(rate!==0) bad(`a severed relief branch still vented at rate=${rate}, expected exactly 0`);
+  console.log(`  a severed relief branch never produces NaN: rate=${rate}, P and inv stay finite (P=${s.P.toFixed(2)} MPa)`);
+}
+{ /* NEW: the tick's own vent (netOut.reliefBy, step.js) and reliefRate()'s
+     off-tick reader (pipenet.js) are the SAME solve asked twice - bit for
+     bit, not close, or the panel and the physics could quietly disagree the
+     moment either one changed. */
+  const s=set({}); const fid=M.primaryRelief(); run(s,10);
+  s.reliefOpen[fid]=true; s.reliefBlocked[fid]=false;
+  const outs={}; M.netFlowK(s,null,null,outs);
+  const tickRate=Math.max(0, M.invRate((outs.reliefBy&&outs.reliefBy[fid])||0));
+  const offTick=M.reliefRate(s,fid);
+  if(Math.abs(tickRate-offTick)>1e-12)
+    bad(`the tick's own vent (${tickRate}) and reliefRate() (${offTick}) disagree by more than 1e-12`);
+  console.log(`  vent rate equals the solved edge flow to 1e-12: ${tickRate.toFixed(6)} %/s`);
+}
+{ /* NEW: a filling tank throttles the vent by its OWN gas ALONE - no second,
+     hand-rolled back-pressure term beside the fixed-node pressure the
+     Laplacian already solves against. Raise the relief tank's own level
+     (its fixed pressure rises with it, RELTK_GAS) and demand the rate falls
+     monotonically toward the same reference relief.P0-Pcont differential
+     collapsing - never a discontinuity, never a rise. */
+  const s=set({}); const fid=M.primaryRelief(); run(s,10);
+  s.reliefOpen[fid]=true; s.reliefBlocked[fid]=false;
+  const rateAt=lvl=>{ s.tank.reltk=lvl; const outs={}; M.netFlowK(s,null,null,outs);
+    return Math.max(0, M.invRate((outs.reliefBy&&outs.reliefBy[fid])||0)); };
+  const levels=[0,20,40,60,80,95], rates=levels.map(rateAt);
+  let rose=false; for(let i=1;i<rates.length;i++) if(rates[i]>rates[i-1]+1e-12) rose=true;
+  if(rose) bad(`a filling relief tank raised the vent rate somewhere in ${JSON.stringify(rates)}`);
+  if(!(rates[0]>rates[rates.length-1])) bad('a full relief tank did not vent slower than an empty one');
+  s.tank.reltk=0;
+  console.log(`  a filling tank throttles the vent by its own gas alone: ${levels.map((l,i)=>l+'%='+rates[i].toFixed(3)).join(', ')}`);
+}
+{ /* NEW: venting to containment raises s.release and needs no part - a
+     relief fitting whose header/tank never resolved (D.run.relief deleted)
+     still vents, off pipenet.js's own containment fallback (a relief valve
+     may never have nowhere to vent), straight into s.release rather than a
+     tank that does not exist. */
+  M.D().fit={}; const savedRelief=M.D().run.relief; delete M.D().run.relief;
+  const fid=M.addFit('relief','hot:corer-sg0l',0.9,'relief:x',0.5);
+  M.commission(); const s=M.S();
+  if(M.P().net.fitTarget[fid]!==null)
+    bad(`a relief fitting with no header resolved a tank target (${M.P().net.fitTarget[fid]}), expected null (containment)`);
+  s.byp.rps=true; s.reliefOpen[fid]=true; s.reliefAuto[fid]=false; s.reliefBlocked[fid]=false;
+  const lvl0=s.tank.reltk;
+  run(s,5);
+  if(!(s.release>0)) bad(`venting with no tank on the grid left s.release at ${s.release}, expected > 0`);
+  if(s.tank.reltk!==lvl0)
+    bad(`s.tank.reltk moved (${lvl0} -> ${s.tank.reltk}) venting to a plant with no relief tank part`);
+  console.log(`  venting to containment with no tank raises s.release: ${s.release.toFixed(4)} after 5 s, needs no part`);
+  M.D().fit={}; M.D().run.relief=savedRelief; M.commission();
 }
 
 console.log('\n=== A RELIEF VALVE CARRIES ITS OWN SETPOINTS AND ITS OWN ARM ===');
@@ -574,15 +660,13 @@ const threeReliefs=(a,b,c)=>{
   return [f0,f1,f2];
 };
 { /* 1. THE FEATURE IS FREE. A fitting nobody dialled must lift and reseat at
-     the identical pressures the single plant-wide constant always gave, and
-     vent at exactly ventK===1. Bit-equality, not a tolerance - that identity is
-     the whole claim that no existing design moved. */
+     the identical pressures the single plant-wide constant always gave.
+     Bit-equality, not a tolerance - that identity is the whole claim that no
+     existing design moved. */
   const s=set({}); const fid=M.primaryRelief(), P0=M.P().P0;
   const r=M.reliefSet(fid);
   if(r.lift!==M.PORV_LIFT0) bad(`an undialled fitting's lift is ${r.lift}, not the default ${M.PORV_LIFT0}`);
   if(r.reseat!==M.PORV_RESEAT0) bad(`an undialled fitting's reseat is ${r.reseat}, not the default ${M.PORV_RESEAT0}`);
-  const vk=M.ventK(s,fid);
-  if(Math.abs(vk-1)>1e-9) bad(`an undialled fitting's ventK is ${vk}, expected exactly 1`);
   /* And the same plant with the pair DIALLED to those defaults must fly bit
      for bit identically - a stronger statement than "the fields read right",
      because it covers every path the tick takes through them. */
@@ -599,7 +683,7 @@ const threeReliefs=(a,b,c)=>{
   const a=fly(null), b=fly([M.PORV_LIFT0,M.PORV_RESEAT0]);
   const diff=a.findIndex((v,i)=>v!==b[i]);
   if(diff>=0) bad(`an undialled valve and one dialled to the defaults diverged at sample ${diff}: ${a[diff]} vs ${b[diff]}`);
-  console.log(`  an undialled fitting is the old PORV exactly: lift=${r.lift} reseat=${r.reseat} ventK=${vk.toFixed(6)}, `+
+  console.log(`  an undialled fitting is the old PORV exactly: lift=${r.lift} reseat=${r.reseat}, `+
               `and ${a.length} samples of a forced pressure ramp are identical bit for bit to a valve dialled to those same defaults`);
 }
 { /* 2. EACH VALVE LIFTS AT ITS OWN SETPOINT. Two valves, different lifts:
@@ -747,6 +831,72 @@ const threeReliefs=(a,b,c)=>{
   M.D().fit={}; M.commission();
 }
 
+/* ══════════ HPI: INJECTION IS A FUNCTION OF ITS OWN LINE (Stage 5b) ══════════
+   tankG() is gone. The tank-edge branch (netBuild(), pipenet.js) prices the
+   HPI line off injResist(bore, L+pipeExtraLen) now, the same
+   bore-and-length shape every other run in this graph already carries -
+   never a conductance picked so flow equalled a "rated delivery" the pipe
+   never entered. TANK.hpi.rate() stops being an input and becomes what the
+   bench reads back off the model this section pins. */
+console.log('\n=== HPI: INJECTION IS A FUNCTION OF ITS OWN LINE ===');
+{ /* injRate at three pressure points - re-pinned, not re-derived: the old
+     tankG() figures (0, 0.44, 1.51) priced a rating, never a pipe, and this
+     is what the pipe itself now gives. */
+  const s=set({}); s.hpi=true;
+  const at=P0=>{ s.P=P0; s.pCore=P0; const outs={}; M.netFlowK(s,null,null,outs);
+    return M.invRate(outs.qTank||0); };
+  const full=at(M.P().P0), half=at(M.P().P0*0.5), dep=at(M.P().Pcont+0.5);
+  if(full!==0) bad(`full pressure: injRate is ${full}, expected exactly 0 (the check valve shut)`);
+  if(!(half>0)) bad(`half pressure: injRate is ${half}, expected > 0`);
+  if(!(dep>half)) bad(`depressurised injRate (${dep}) is not greater than half-pressure's (${half})`);
+  console.log(`  s.injRate: full pressure=0, half pressure=${half.toFixed(4)}, depressurised=${dep.toFixed(4)} %/s`);
+}
+{ /* two plants differing ONLY in the HPI line's own length inject at
+     DIFFERENT rates - the measured defect this stage closes (moved +5 grid
+     cells, previously bit-identical to the last bit). Moved to the nearest
+     free cell in column x rather than a fixed offset, because groupFits()
+     may refuse the literal +5 depending on what else is on the grid. */
+  const s=set({}); s.hpi=true; s.P=M.P().Pcont+0.5; s.pCore=s.P;
+  const rateNow=()=>{ const outs={}; M.netFlowK(s,null,null,outs); return M.invRate(outs.qTank||0); };
+  const home=rateNow();
+  const p=M.LAY().parts.find(q=>q.id==='hpi'); const hx=p.x, hy=p.y;
+  let moved=false;
+  for(let ny=0; ny<9 && !moved; ny++){ if(ny!==hy && M.moveTo(p,hx,ny)) moved=true; }
+  if(!moved) bad('could not move the HPI tank anywhere to test line-length sensitivity');
+  M.commission();
+  const away=rateNow();
+  M.moveTo(p,hx,hy); M.commission();
+  if(moved && away===home)
+    bad(`moving the HPI tank left injRate bit-identical (${home}) - the line still buys nothing`);
+  console.log(`  HPI tank moved (${hx},${hy}) -> (${hx},${moved?'elsewhere':hy}): injRate ${home.toFixed(6)} -> ${away.toFixed(6)}`);
+}
+{ /* severing the injection line is ADDITIVE (pipeExtraLen folded into the
+     SAME injResist(bore,L+extra) call every undamaged run uses) rather than
+     the old boolean "!pipeExtraLen(...) ? tankG : 0" gate - and the end
+     state is identical either way: exactly zero. Read the EDGE'S OWN
+     conductance directly, keyed "hpi:hpib-coreb", not qTank: severing this
+     run ALSO opens a break at its own ends (the same s.dmgParts entry drives
+     both - Stage 1's "no second signal" rule), and that break's own edges
+     carry the DIFFERENT key "break:hpi:hpib-coreb" but still touch the same
+     tank node (hpib) qTank sums flow over - conflating "the injection edge
+     itself still conducts" with "the severed stub is now correctly spilling
+     to containment", a different, already-covered fact. */
+  const s=set({}); s.hpi=true; s.P=M.P().Pcont+0.5; s.pCore=s.P;
+  M.netFlowK(s);
+  const key='hpi:hpib-coreb';
+  const edgeG=()=>{ const ed=M.P().net.edges.find(e=>e.key===key); return ed?(typeof ed.g==='function'?ed.g(s):ed.g):null; };
+  const before=edgeG();
+  s.dmgParts.push('pipe:'+key);
+  const after=edgeG();
+  const kflow=M.netFlowK(s);
+  if(before===null||after===null) bad(`the HPI tank-edge (key ${key}) was not found in P.net.edges`);
+  if(!isFinite(kflow)||!isFinite(after)) bad(`a severed HPI line produced a non-finite value: netFlowK=${kflow} g=${after}`);
+  if(!(before>0)) bad('nothing to sever: the injection edge already conducted 0 before combat damage');
+  if(after!==0) bad(`a severed HPI line's own edge still conducts at g=${after}, expected exactly 0`);
+  s.dmgParts=[];
+  console.log(`  severing the HPI line: edge conductance g ${before.toFixed(4)} -> ${after}, never NaN`);
+}
+
 /* ══════════ JUNCTIONS: FLOW IS PER LOOP NOW ══════════
    Two loops with an open junction between them are one shared-flow group, and
    a pump still turning can push into its neighbour's loop as well. With
@@ -803,12 +953,28 @@ const tieChain=()=>{
   s.juncOpen[ids[0]]=true; s.juncOpen[ids[1]]=true; s.juncOpen[ids[2]]=true;
   if(M.netFlowK(s)!==1) bad('opening a junction between healthy loops manufactured flow that was not there shut');
 }
+/* A spare pump only pools capacity once it is genuinely PLUMBED - Stage
+   3a-ii's own fix: loopPumpCap() used to sum p.loop, a field set by
+   nearestLoop()'s proximity guess (or, in this very file, a bare `loop:i`
+   literal on an otherwise unconnected part), so a spare with ZERO edges
+   reaching it still doubled the ceiling. It reads the RUN GRAPH now
+   (loopOf(), layout.js) - a spare has to be wired into its loop with real
+   D.run entries (addRun(), the same primitive CONNECT uses) or it counts
+   for nothing. plumbedSpare() below does that: ports into the target
+   loop's own generator and back to the core, paralleling the stock cold
+   leg - exactly what a player's CONNECT gesture would draw. */
+const plumbedSpare=(loopIdx,x,y)=>{
+  const p=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x,y,col:'#57d38c',tip:'t',role:'pump'}));
+  const runs=[M.addRun(p.id,'t','sg'+loopIdx,'b'), M.addRun(p.id,'b','core','b')];
+  return {part:p, runs};
+};
+const removePlumbedSpare=sp=>{ M.removePart(sp.part.id); for(const r of sp.runs) M.removeRun(r); };
 { /* ── A JUNCTION ONLY HAS SOMETHING TO PROVE ONCE THERE IS SOMETHING TO SHARE ──
-     loopPumpCap() sums real hardware - a pump at default size delivers
-     exactly 1.0, its own loop's own ceiling, so a lone loop's own group
-     ceiling never actually clamps anything when every pump on it is bare
-     and default-sized. That is not a bug, it is "nobody gets flow for free"
-     (netFlowK's own comment, pipenet.js) - a junction is a path for
+     loopPumpCap() sums real, PLUMBED hardware - a pump at default size
+     delivers exactly 1.0, its own loop's own ceiling, so a lone loop's own
+     group ceiling never actually clamps anything when every pump on it is
+     bare and default-sized. That is not a bug, it is "nobody gets flow for
+     free" (netFlowK's own comment, pipenet.js) - a junction is a path for
      capacity that already exists to travel, not a source of capacity on its
      own.
      So this case places two spares deliberately unequal, to keep three
@@ -825,9 +991,8 @@ const tieChain=()=>{
   set({loops:4});
   const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
   const ids=[0,1,2].map(i=>M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1))));
-  const sp1=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',grp:'loop1',tip:'t',loop:1}));
-  M.D().pumpSize[sp1.id]=0;
-  const sp3=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:13,y:5,col:'#57d38c',grp:'loop3',tip:'t',loop:3}));
+  const sp1=plumbedSpare(1,9,5); M.D().pumpSize[sp1.part.id]=0;
+  const sp3=plumbedSpare(3,13,5);
   M.commission(); const s=M.S();
   s.dmgParts=['pump0'];
   const alone=M.netFlowK(s);
@@ -837,7 +1002,7 @@ const tieChain=()=>{
   if(!(all>one))   bad('opening the rest of the chain bought nothing over one junction');
   console.log(`  4 loops, RCP 1 lost, 2 spares placed: shut ${(alone*100).toFixed(1)}%`+
               ` -> one junction ${(one*100).toFixed(1)}% -> chain ${(all*100).toFixed(1)}%`);
-  M.removePart(sp1.id); M.removePart(sp3.id);
+  removePlumbedSpare(sp1); removePlumbedSpare(sp3);
 }
 { /* ── AND IT REACHES THE FUEL, NOT JUST THE ARITHMETIC ──
      What a junction buys is POWER, and deliberately not DNBR. A plant that has
@@ -850,11 +1015,11 @@ const tieChain=()=>{
      this one - it only needs "open" to differ from "shut", not a third rung. */
   const hurt=open=>{
     const {ids}=tieChain();
-    const sp=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',grp:'loop1',tip:'t',loop:1}));
+    const sp=plumbedSpare(1,9,5);
     M.commission(); const s=M.S(); run(s,20);
     if(open) s.juncOpen[ids[0]]=true;
     s.dmgParts.push('pump0'); run(s,90);
-    M.removePart(sp.id);
+    removePlumbedSpare(sp);
     return s;
   };
   const shut=hurt(false), open=hurt(true);
@@ -866,6 +1031,172 @@ const tieChain=()=>{
               ` hot channel ${(shut.hotFlow*100).toFixed(0)}% DNBR ${shut.dnbr.toFixed(2)}`+
               ` -> chain open n=${(open.n*100).toFixed(1)}%`+
               ` hot channel ${(open.hotFlow*100).toFixed(0)}% DNBR ${open.dnbr.toFixed(2)}`);
+}
+
+/* ══════════ A PLACED PART CONTRIBUTES NOTHING UNTIL IT IS PLUMBED (Stage 3a-ii) ══════════
+   loopOf()/loopPumpCap() (layout.js) read the RUN GRAPH now, never a stored
+   p.loop - nearestLoop() (design-bench.js) was a Euclidean-distance guess
+   and is gone outright. This block proves both halves: a spare with no run
+   reaching it buys NOTHING (not even a stale `loop` field on the object can
+   fool it), and the same spare wired in with real D.run entries (addRun(),
+   the CONNECT primitive) DOES pool capacity - pinned as the two numbers the
+   ceiling actually produces, not one clamp asserted by inspection. */
+console.log('\n=== A PLACED PART CONTRIBUTES NOTHING UNTIL IT IS PLUMBED ===');
+{
+  set({loops:1}); M.commission();
+  const baseline=M.netFlowK(M.S()), baseCap=M.loopPumpCap(0,[]);
+  // an UNCONNECTED spare - no D.run entry names it at all, and it still
+  // carries a `loop` field, the exact shape nearestLoop() used to hand it,
+  // to prove that field is dead rather than merely absent from this case
+  const sp=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,
+    col:'#57d38c',tip:'t',role:'pump',loop:0}));
+  M.commission();
+  const li=M.loopOf(sp.id), capUnplumbed=M.loopPumpCap(0,[]), flowUnplumbed=M.netFlowK(M.S());
+  if(li!==null) bad(`an unrouted spare pump reports loop ${li}, expected null (not plumbed, not a member)`);
+  if(capUnplumbed!==baseCap) bad(`an unrouted spare pump changed loopPumpCap(0): ${baseCap} -> ${capUnplumbed}`);
+  if(flowUnplumbed!==baseline) bad(`an unrouted spare pump changed netFlowK: ${baseline} -> ${flowUnplumbed}`);
+  console.log(`  unrouted spare (stale loop:0 field): loopOf=${li}, loopPumpCap(0)=${capUnplumbed} (was ${baseCap}), netFlowK=${flowUnplumbed} (was ${baseline})`);
+
+  // NOW plumb it - two addRun() calls, the identical primitive CONNECT
+  // drives, paralleling the stock loop's own core<->pump<->generator path
+  const r1=M.addRun(sp.id,'t','core','b'), r2=M.addRun(sp.id,'b','sg0','b');
+  M.commission();
+  const liOn=M.loopOf(sp.id), capOn=M.loopPumpCap(0,[]);
+  if(liOn!==0) bad(`a plumbed spare on loop 0's own generator reports loop ${liOn}, expected 0`);
+  if(!(capOn>baseCap)) bad(`a plumbed spare did not raise loopPumpCap(0): ${baseCap} -> ${capOn}`);
+  const both=M.netFlowK(M.S());
+  const sLost=M.S(); sLost.dmgParts=['pump0'];
+  const withSpareLost=M.netFlowK(sLost);
+  M.removeRun(r1); M.removeRun(r2); M.removePart(sp.id); M.commission();
+  const sLostNoSpare=M.S(); sLostNoSpare.dmgParts=['pump0'];
+  const noSpareLost=M.netFlowK(sLostNoSpare);
+  /* THE TWO NUMBERS. Both pumps running: the group ceiling (min(groupSize,
+     capacity)/groupSize, netFlowK's own comment) still bounds the total at
+     the loop's own reference, so a second pump buys the plant nothing while
+     the first is healthy - exactly bit-identical, not merely "close". Lose
+     the ORIGINAL pump: with the spare plumbed in, the loop's own reference
+     is still fully covered (0..4 pumps lost, both members of one loop,
+     capacity >= groupSize=1 either way); with no spare, a 1-loop plant that
+     loses its only pump is the "every pump lost" case netFlowK pins at
+     exactly 0. */
+  if(both!==baseline) bad(`a plumbed spare moved netFlowK with both pumps healthy: ${baseline} (1) vs ${both} (2) - redundancy is meant to buy survival, not flow`);
+  if(withSpareLost<baseline-1e-9) bad(`losing the original pump did not hand the loop back with a spare plumbed in: ${withSpareLost} (want ${baseline})`);
+  if(noSpareLost!==0) bad(`losing the only pump on a 1-loop plant with no spare gave ${noSpareLost}, expected exactly 0`);
+  console.log(`  plumbed spare: loopPumpCap(0) ${baseCap} -> ${capOn}, netFlowK both running ${(both*100).toFixed(1)}% (want ${(baseline*100).toFixed(1)}%, unchanged)`);
+  console.log(`  original pump lost: ${(noSpareLost*100).toFixed(1)}% with no spare -> ${(withSpareLost*100).toFixed(1)}% with the spare plumbed in (the loop bought back)`);
+}
+{ /* a port already carrying its declared capacity refuses a second pipe -
+     ROLE.ports enforced by portRoom() (layout.js), the same table CONNECT's
+     own menu offer reads. The pressurizer's own "*":2 budget is already
+     spent on the stock plant (surge plus the relief header run), so this
+     needs nothing built - and freeing ONE of those two proves the refusal
+     tracks OCCUPANCY, not "a pressurizer isn't a pump" or any other
+     judgement about what the part is for: the same part, the same role,
+     answers differently only because the count changed. */
+  set({loops:1}); M.commission();
+  const pzr=M.LAY().parts.find(q=>q.id==='pzr');
+  const fullRoom=M.portRoom(pzr);
+  const anyFreeFull=Object.values(fullRoom).some(v=>v);
+  if(anyFreeFull) bad(`pzr ports read free (${JSON.stringify(fullRoom)}) but the stock plant already spends its "*":2 budget on surge + relief`);
+  const savedRelief=M.D().run.relief;
+  delete M.D().run.relief;                    // one of pzr's two connections gone
+  M.commission();
+  const openRoom=M.portRoom(pzr);
+  const anyFreeOpen=Object.values(openRoom).some(v=>v);
+  M.D().run.relief=savedRelief; M.commission();
+  if(!anyFreeOpen) bad(`freeing one of pzr's two "*" slots (deleted D.run.relief) still reads full: ${JSON.stringify(openRoom)}`);
+  console.log(`  pzr ports: full while surge+relief both land there (${JSON.stringify(fullRoom)}), free the moment one is removed (${JSON.stringify(openRoom)}) - occupancy, not purpose`);
+}
+
+/* ══════════ A STEAM GENERATOR IS A PLACED PART, D.loops IS GONE ══════════
+   The finding this stage closes: a COUNT standing in for geometry the solve
+   already has. D.loops is deleted as an input entirely - no formula in
+   src/ may read a count of anything as a proxy for a solved quantity (DNBR,
+   graceK), and every generator now carries its own SGT[D.sg].mass rather
+   than one flat lump for the whole plant. */
+console.log('\n=== A STEAM GENERATOR IS A PLACED PART, D.loops IS GONE ===');
+{
+  set({loops:1}); M.commission();
+  if('loops' in M.D()) bad('D.loops still exists as a key on D - it must be deleted as an input');
+  else console.log('  D.loops is not a key of D');
+
+  /* SOURCE SCAN, seen to fail: the old correlations were shaped
+     "(1+.NN*(count-2))" wherever `count` was a stored knob, never a solved
+     quantity. Proven red by testing the regex against a synthetic re-
+     injection of the exact deleted expression before trusting it clean on
+     the real bundle. */
+  const src=require('./bundle').bundle();
+  const countProxyRe=/\(\s*1\s*\+\s*\.\d+\s*\*\s*\(\s*[A-Za-z_][A-Za-z0-9_.()]*\s*-\s*2\s*\)\s*\)/;
+  if(!countProxyRe.test('dnbr=a.dnbr*(1+.05*(D.loops-2));'))
+    bad('countProxyRe does not even catch the exact expression it exists to ban - the check is not testing what it claims to');
+  else console.log('  (sentinel) the re-injected DNBR/graceK loop-count correlation is caught by the scan');
+  const hit=countProxyRe.exec(src);
+  if(hit) bad(`a count-as-proxy-for-a-solved-quantity expression survives in src/: "${hit[0]}"`);
+  else console.log('  no formula in src/ reads a count of anything as a proxy for a solved quantity');
+
+  /* MASS CARRIES ONE GENERATOR'S STEEL PER GENERATOR. An UNCONNECTED spare
+     generator routes no new run (pipeNetwork() skips a part with nothing
+     naming it), so every other mass term - piping, pumps, core - is
+     unmoved; the entire delta has to be exactly SGT[D.sg].mass, not a flat
+     per-loop lump and not zero (the bug this replaces: SGT[D.sg].mass used
+     to be charged once for the whole plant, so a second generator was
+     free). */
+  const m0=M.derived().mass;
+  const gen=M.placePart(n=>({id:'sgX'+n,name:'STEAM GEN SPARE',w:1,h:2,x:11,y:1,
+    col:'#5fd2e2',grp:'sg',tip:'',role:'sg'}));
+  const m1=M.derived().mass;
+  const want=M.SGT()[M.D().sg].mass;
+  if(Math.abs((m1-m0)-want)>1e-9)
+    bad(`adding a second generator moved mass by ${(m1-m0).toFixed(3)} t, expected exactly SGT[D.sg].mass = ${want} t`);
+  else console.log(`  a placed second generator raises mass by exactly SGT[D.sg].mass: ${(m1-m0).toFixed(3)} t`);
+  M.removePart(gen.id); M.commission();
+
+  /* NO MENU ITEM CREATES MORE THAN ONE PART. D.loops++ used to conjure a
+     generator, a pump AND four routed runs in one act (Stage 7b's own
+     finding) - walk every item ctxItemsDesign() offers at an empty cell and
+     a placed part, run each fn(), and demand LAY.parts grew by at most one
+     part (a run or a fitting is not a LAY.parts entry, so those items are
+     free to add zero). */
+  {
+    M.layoutMetrics();
+    const before=M.LAY().parts.length;
+    const items=M.ctxItemsDesign({cell:{gx:11,gy:6},part:null,fitting:null,tapKey:null});
+    const isAdd=label=>label.startsWith('ADD ');   // the only non-toggle items this hit offers
+    let worst=-Infinity, worstLabel='';
+    for(const it of items){
+      /* layoutMetrics() forces the rebuild, on both sides of fn() - a
+         fittableList() "FIT " item (catcher/efw/boroninj/reltk, Stage 5d)
+         only flips a D flag or edits placedParts, it does not itself call
+         buildLayout(), so LAY.parts would read stale without this and the
+         delta below would either miss a real +1 or, worse, carry a phantom
+         part into the NEXT item's own n0 baseline. */
+      M.layoutMetrics();
+      const n0=M.LAY().parts.length;
+      it.fn();
+      M.layoutMetrics();
+      const grew=M.LAY().parts.length-n0;
+      if(grew>worst){ worst=grew; worstLabel=it.label; }
+      if(isAdd(it.label)){
+        // an ADD item: undo the part(s) it placed, so the next item starts clean
+        const added=M.LAY().parts.slice(n0);
+        for(const p of added) if(p.id.startsWith('pumpX')||p.id.startsWith('sgX')) M.removePart(p.id);
+      } else {
+        /* a "FIT " item: fn() is bound to f.set(true), not a toggle, so
+           calling it again is a no-op, not a restore - true since Stage 5d
+           gave some of these entries a real LAY.parts box behind them
+           (catcher/efw/boroninj/reltk), where it used to only ever be true
+           for accum, which never grows LAY.parts at all and so never
+           surfaced this. Un-fit through fittableList() itself, by label. */
+        const f=M.fittableList().find(x=>'FIT '+x.label===it.label);
+        if(f) f.set(false); else it.fn();
+      }
+      M.layoutMetrics();
+    }
+    if(worst>1) bad(`"${worstLabel}" added ${worst} parts in one act - no menu item may create more than one`);
+    else console.log(`  every empty-cell menu item adds at most one part (worst: "${worstLabel}" +${worst})`);
+    if(M.LAY().parts.length!==before) bad('the empty-cell menu sweep left the layout larger than it started');
+  }
+  set({loops:1});
 }
 
 /* ══════════ THROTTLES ══════════
@@ -1716,7 +2047,12 @@ console.log('\n=== A DESIGN TRAVELS AS A HEAD ===');
   /* the player's session, deliberately NOT the stock plant */
   const page=B.headless(EX);
   page.layoutMetrics(); page.latDefault(); page.commission();
-  page.D().turb=0.8; page.D().loops=3; page.commission();
+  /* Stage 3b: a second/third generator is a PLACED part now, and placedParts
+     is exactly the state recApplyHead() cannot carry (see its own comment,
+     record.js) - proving that gap needs its own case, not this one. This
+     case is about a plain-D change surviving the round trip, so it stays a
+     plain-D change: turb alone is already non-stock. */
+  page.D().turb=0.8; page.commission();
   const head=page.recHead();
 
   /* a fresh module that has never seen it */
@@ -1740,8 +2076,44 @@ console.log('\n=== A DESIGN TRAVELS AS A HEAD ===');
   const w2=B.headless(EX); w2.layoutMetrics(); w2.latDefault(); w2.commission();
   if(w2.recApplyHead(bent)) bad('a head whose signature did not match was accepted anyway');
 
-  console.log('  a 3-loop plant rebuilds from its head in a module that never saw it, and runs identically');
+  console.log('  a non-stock plant rebuilds from its head in a module that never saw it, and runs identically');
   console.log('  a head that does not re-sign is refused, so a verdict is never about the wrong reactor');
+
+  /* Stage 3b's own known gap, proved rather than asserted: a PLACED steam
+     generator is exactly the placedParts state recApplyHead() was already
+     documented not to carry (record.js). It must fail LOUDLY - refuse via
+     designSig() mismatch - never silently hand back a confident PASS about
+     a reactor with one fewer generator than the player built. */
+  const EX2=EX.replace('}', ',placePart,LAY:()=>LAY}');
+  const page2=B.headless(EX2);
+  page2.layoutMetrics(); page2.latDefault(); page2.commission();
+  page2.placePart(()=>({id:'sgX0',name:'STEAM GEN SPARE',w:1,h:2,x:11,y:1,col:'#5fd2e2',
+    grp:'sg',tip:'',role:'sg'}));
+  page2.commission();
+  const head2=page2.recHead();
+  const w3=B.headless(EX2); w3.layoutMetrics(); w3.latDefault(); w3.commission();
+  if(w3.recApplyHead(head2))
+    bad('recApplyHead() silently accepted a head with a placed generator - placedParts is not carried, this must refuse');
+  else console.log('  a placed generator is refused by recApplyHead() (placedParts not carried) - loud, not silent, as documented');
+
+  /* Stage 5a's own version of the same gap: the relief tank ships already
+     placed (layout.js), present in placedParts from a fresh module load
+     exactly like this one - so a design that REMOVES it is the direction
+     that breaks here, not adding one. A fresh module replaying the head
+     still starts with the tank present (it is not session state, it is the
+     module's own default), and recApplyHead() has no mechanism to delete a
+     part a head's own parts list does not carry it moving there - so this
+     must refuse via the same designSig() mismatch, loudly, never a
+     confident PASS about a plant with a tank the player deleted. */
+  const EX3=EX2.replace('}', ',removePart}');
+  const page3=B.headless(EX3);
+  page3.layoutMetrics(); page3.latDefault(); page3.commission();
+  page3.removePart('reltk'); page3.commission();
+  const head3=page3.recHead();
+  const w4=B.headless(EX3); w4.layoutMetrics(); w4.latDefault(); w4.commission();
+  if(w4.recApplyHead(head3))
+    bad('recApplyHead() silently accepted a head with the relief tank removed - a fresh module still ships one, this must refuse');
+  else console.log('  a removed relief tank is refused by recApplyHead() (placedParts not carried) - loud, not silent, matching the generator case');
 }
 
 /* ══════════ TWO RUNNERS, ONE ANSWER ══════════
@@ -2528,6 +2900,485 @@ console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
   }
 }
 
+
+console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
+{ /* SOURCE RULE over derived()'s mass expression (design.js): every additive
+     term must resolve to a part actually on the grid (partMass(), a count
+     off LAY.parts/D.fit), a lattice/layout fact (coreMass, layMass,
+     latMass()), or a term on the EXPLICIT exception list below, each with
+     its own reason. This is the "checked, not trusted" half of Stage 5d -
+     EFW/catcher/boroninj were each a flag with nothing on the grid for two
+     stages running (the "+26 t toggle", "fuel labels off by 10x") before
+     anyone wrote a check that could have caught it the day it landed.
+     A regex scan of the SOURCE, not a behavioural probe, on purpose: a
+     behavioural test can only ask about the terms it already knows to ask
+     about, while this reads whatever derived() actually contains today and
+     refuses anything it cannot place. */
+  const fsM=require('fs'), pathM=require('path');
+  const ROOTM=require('./bundle').ROOT;
+  const stripComments=t=>t.replace(/\/\*[\s\S]*?\*\//g,m=>m.replace(/[^\n]/g,' '))
+                          .replace(/\/\/[^\n]*/g,m=>m.replace(/[^\n]/g,' '));
+  // top-level '+' only - depth-aware, so a '+' inside a ?: or a call's own
+  // parens never splits that term in half
+  const splitTerms=expr=>{
+    const out=[]; let depth=0, start=0;
+    for(let i=0;i<expr.length;i++){ const c=expr[i];
+      if('([{'.includes(c)) depth++;
+      else if(')]}'.includes(c)) depth--;
+      else if(c==='+' && depth===0){ out.push(expr.slice(start,i).trim()); start=i+1; } }
+    out.push(expr.slice(start).trim());
+    return out.filter(Boolean);
+  };
+  // PART: names a part on the grid, counted off LAY.parts or D.fit, never a
+  // D flag. MEASURED: a lattice/layout fact, not a toggle at all. EXCEPTION:
+  // a flag that sizes or upgrades a part whose own EXISTENCE is already
+  // tracked elsewhere (contFit/turbFit/condFit gate the box itself in
+  // buildLayout(); accum swaps what is behind a tank that always exists;
+  // rps/autorod/scram/chan/foll/nbank/pdes/pzr/chim are quality or size
+  // dials on core/rods/pzr/ctrl, which are always on the grid) - listed by
+  // name, not inferred, so a NEW flag-only term can never hide in this set.
+  const PART=new Set(['totalPumpCap()*PUMP_MASS','sgCount()*SGT[D.sg].mass',
+    'partMass("catcher")','partMass("efw")','partMass("boroninj")','partMass("reltk")',
+    'Object.keys(D.fit).length*FIT_MASS']);
+  const MEASURED=new Set(['coreMass','layMass','latMass()']);
+  const EXCEPTION=new Set(['a.mass','f.mass','SCRAM[D.scram].mass','CHAN[D.chan].mass',
+    '(D.contFit?CONT[D.cont].mass:0)','BKP[D.bkp].mass',
+    '(D.pdes-1)*220','(D.pzr-1)*45','D.chim*38','(D.accum?45:0)',
+    '(D.rps?55:0)','FOLL[D.foll].mass','(D.nbank-4)*9',
+    '(D.autorod?26:0)','(D.turbFit?D.turb*50:0)','(D.condFit?D.condCap*40:0)']);
+  const classify=(designSrc)=>{
+    const src=stripComments(designSrc);
+    const m=/const mass\s*=([\s\S]*?);/.exec(src);
+    if(!m) return {terms:null};
+    const terms=splitTerms(m[1]);
+    const unknown=terms.filter(t=>!PART.has(t)&&!MEASURED.has(t)&&!EXCEPTION.has(t));
+    return {terms,unknown};
+  };
+  const designSrc=fsM.readFileSync(pathM.join(ROOTM,'src/data/design.js'),'utf8');
+  const {terms,unknown}=classify(designSrc);
+  if(!terms) bad('could not find "const mass=...;" in design.js to check - the source rule has nothing to scan');
+  else if(unknown.length) bad(`derived()'s mass expression has a term this source rule cannot place: ${unknown.join(' | ')}`);
+  else console.log(`  every one of ${terms.length} terms in derived()'s mass expression is a part, a measured fact, or a listed exception`);
+  // FAULT INJECTION, on a string in memory only - never the real file. Puts
+  // back the exact shape the "+26 t toggle"/EFW bugs had: a flag priced with
+  // nothing on the grid behind it, and no exception entry naming it.
+  const injected=designSrc.replace('const mass=a.mass','const mass=(D.efw2?38:0)+a.mass');
+  const {unknown:injUnknown}=classify(injected);
+  if(!injUnknown.length) bad('re-injecting (D.efw2?38:0) with no part behind it was NOT caught by the source rule - it is not checked, only trusted');
+  else console.log(`  fault injection: re-adding "(D.efw2?38:0)" with no part or exception behind it IS caught: ${injUnknown.join(' | ')}`);
+}
+{ /* EVERY FITTED TOGGLE MOVES THE FIGURE ITS OWN TOOLTIP NAMES. Flip each
+     one design-time (fitted vs not, never the runtime bypass switches
+     already covered above) and measure the exact figure the tooltip claims
+     - this is the shape of check that would have caught EFW's false "grace
+     time" label, the +26 t toggle that did nothing, and the 10x fuel
+     labels: all three were a claim nobody ever measured against the sim. */
+  /* catcher/efw/boroninj each get their own direct case rather than a
+     shared table - each names a different kind of figure (an inventory, a
+     coolant temperature, a button's own existence) and forcing them through
+     one shape would hide more than it would share. */
+  const stockFig=(o)=>{ const s=set(o); run(s,10); s.scrammed=true; s.rodDem=1; run(s,120); return s; };
+  { /* EFW: "runs the loop a few degrees cooler after a trip" (inspector.js) -
+       NOT grace time, which is the whole point of this stage. */
+    const off=stockFig({efw:false}), on=stockFig({efw:true});
+    if(!(on.Tavg<off.Tavg))
+      bad(`EFW fitted did not run the loop cooler after a trip: off ${off.Tavg.toFixed(1)} K, on ${on.Tavg.toFixed(1)} K`);
+    else console.log(`  EFW: off ${off.Tavg.toFixed(1)} K -> on ${on.Tavg.toFixed(1)} K after a trip (its tooltip's own claim, not grace time)`);
+  }
+  { /* CATCHER: "stops a melted core burning through and breaching the
+       vessel" - step.js only drains s.inv on a melt when P.catcher is
+       false (the burn-through itself), so inventory held after a long melt
+       is exactly what the tooltip claims. */
+    const run_=catcher=>{ const s=set({catcher}); s.melt=true; run(s,60); return s.inv; };
+    const invOff=run_(false), invOn=run_(true);
+    if(!(invOn>invOff))
+      bad(`CORE CATCHER fitted did not hold inventory after a melt: off ${invOff.toFixed(1)}, on ${invOn.toFixed(1)}`);
+    else console.log(`  CATCHER: inventory after a melt off=${invOff.toFixed(1)}% -> on=${invOn.toFixed(1)}% (its tooltip's own claim)`);
+  }
+  { /* BORON INJECTION: "shuts the reactor down when the rods will not" -
+       measured here as the button existing at all, which is what its own
+       tooltip and plant.js's own gate (P.boroninj) both mean by "fitted". */
+    set({boroninj:false});
+    if(M.P().boroninj) bad('P.boroninj is true with the toggle off');
+    M.D().boroninj=true; M.commission();
+    if(!M.P().boroninj) bad('P.boroninj is false with the toggle on and the tank on the grid');
+    else console.log('  BORON INJECTION: P.boroninj (the button\'s own gate) tracks the tank being on the grid, off then on');
+    M.D().boroninj=false; M.commission();
+  }
+}
+{ /* A TANK WITH NO RUN TO IT HAS NO VENT, visibly and in the solve - the
+     EFW/boroninj half of the same rule Stage 5a proved for relief above.
+     Disconnect boroninj's own line into the core and demand its edge
+     carries nothing: netPressures() must not show a live differential
+     driving flow through a run that no longer exists in D.run at all. */
+  const s=set({boroninj:true}); run(s,5);
+  const before=M.pipeNetwork().some(r=>r.key.indexOf('boroninjb')>=0);
+  if(!before) bad('boroninj is on the grid but its own run never routed - nothing to disconnect for this check');
+  M.removeRun('boronR'); M.commission();
+  const after=M.pipeNetwork().some(r=>r.key.indexOf('boroninjb')>=0);
+  if(after) bad('removeRun("boronR") left a run still reaching the boron tank\'s own node');
+  else console.log('  a disconnected boron tank routes no run at all - DISCONNECT is a real removal, not a cosmetic one');
+  M.D().run.boronR={a:"boroninj",af:null,b:"core",bf:"b",k:"boron",bore:0.20}; M.commission();
+}
+
+
+/* ══════════ THE SECONDARY CONSERVES WATER (Stage 6a) ══════════
+   s.sgl was clamp(50+(heat-s.load)*40-(s.load-1)*14,0,100) - recomputed from
+   scratch every tick, with no memory, so it could not run out however long the
+   feedwater was gone. Measured on the old code: combatHit('feed') then 600 s
+   left it steady at 44.118 forever, on BOTH generator types identically, while
+   DMGFX.feed's own text promised "the steam generator will boil dry if this is
+   not fixed".
+
+   Nothing pinned s.sgl or P.graceK before this block existed. */
+console.log('\n=== SECONDARY INVENTORY ===');
+{ const SGT=M.SGT();
+  /* The whole re-pin argument in one check: the feed controller holds the
+     setpoint exactly, so an undamaged plant's sgWet is exactly 1, so heat
+     removal is bit-identical to what it was before the secondary had a mass
+     balance at all. Every other figure this auditor pins rests on this one. */
+  let held=[];
+  for(const sg of [0,1]){ const s=set({sg}); run(s,600);
+    if(Math.abs(M.sglMin(s)-50) > 1e-9) held.push(SGT[sg].name+' drifted to '+M.sglMin(s).toFixed(6)); }
+  if(held.length) bad('an undamaged plant does not hold the feed setpoint: '+held.join('; '));
+  else console.log('  an undamaged plant holds 50.000000 % for 600 s on both generator types - sgWet is exactly 1, so removal is untouched');
+
+  /* MEMORY. The old level was a pure function of (heat, load) with no dt in
+     it, so two plants alike in everything but their level history collapsed
+     onto the same number in a single tick. An integral keeps them apart. This
+     is the structural claim; the boil-dry numbers below are its consequence. */
+  /* Same plant, same heat, same load, two levels: an integral moves each by
+     at most one tick's worth and leaves them ~60 points apart. */
+  { const s=set({}); run(s,60);
+    const g=M.sgIds()[0];
+    s.sglBy[g]=20; M.step(0.02); const after20=s.sglBy[g];
+    s.sglBy[g]=80; M.step(0.02); const after80=s.sglBy[g];
+    if(Math.abs(after80-after20) < 50)
+      bad('s.sgl has no memory: two levels 60 points apart collapsed to '+
+          after20.toFixed(3)+' / '+after80.toFixed(3)+' in one tick - that is a correlation, not an integral');
+    else console.log('  s.sgl remembers: 20 % and 80 % stay '+(after80-after20).toFixed(3)+
+                     ' points apart after a tick, where a correlation would collapse them');
+  }
+
+  /* The mechanic the bench has always sold in prose, now measured. SGT.water
+     is the only thing that differs between these two runs, and the drain rate
+     has to track it: a once-through unit holds ~8x less water and empties ~8x
+     faster. graceK is deliberately NOT what does this any more.
+
+     Measured over THREE seconds, and the window is load-bearing: a
+     once-through unit is through SG_DRY inside ten, and past it removal
+     collapses and the drain slows itself down. Average over twenty and the
+     ratio reads 2.7x - the feedback, not the inventory. */
+  const drain=sg=>{ const s=set({sg}); run(s,10); M.combatHit('feed');
+                    const from=M.sglMin(s); run(s,3); return (from-M.sglMin(s))/3; };   // %/s
+  const dU=drain(0), dO=drain(1);
+  const wRatio=SGT[0].water/SGT[1].water;
+  if(!(dU>0.05)) bad('a hit feed pump does not drain a U-TUBE generator at all ('+dU.toFixed(4)+' %/s) - DMGFX.feed is still a promise the code cannot keep');
+  else if(Math.abs(dO/dU - wRatio)/wRatio > 0.15)
+    bad('the drain ratio is '+(dO/dU).toFixed(2)+'x where SGT.water says '+wRatio.toFixed(2)+
+        'x - the boil-dry rate is not being set by the inventory (U-TUBE '+dU.toFixed(3)+', ONCE-THROUGH '+dO.toFixed(3)+' %/s)');
+  else console.log('  a hit feed pump drains U-TUBE at '+dU.toFixed(3)+' %/s and ONCE-THROUGH at '+
+                   dO.toFixed(3)+' %/s - a ratio of '+(dO/dU).toFixed(2)+'x against SGT.water\'s '+wRatio.toFixed(2)+'x');
+
+  /* THE FEEDBACK, and the half that never existed. A generator with no water
+     in it is a heat exchanger with nothing on the cold side. Before this, a
+     boiled-dry generator went on removing full rated power for ever.
+
+     Against a CONTROL held wet at the setpoint, not against a bare threshold.
+     Automatic rod control fights the runaway - it sees the temperature climb
+     and runs the reactor back, so the absolute rise is small (3.3 K) while the
+     power it had to give up to get there is most of the plant. The pair is
+     what isolates the secondary; either one alone measures the controller. */
+  { const held=lvl=>{ const s=set({}); run(s,10); const T0=s.Tavg, n0=s.n;
+      for(let i=0;i<50*60;i++){ for(const g of M.sgIds()) s.sglBy[g]=lvl; M.step(0.02); }
+      return {dT:s.Tavg-T0, dn:s.n-n0}; };
+    const dry=held(0), wet=held(50);
+    if(!(dry.dT > wet.dT+2 && dry.dn < wet.dn-0.2))
+      bad('a generator held at 0 % level still removes heat: dry Tavg '+dry.dT.toFixed(2)+
+          ' K / power '+dry.dn.toFixed(3)+' against wet '+wet.dT.toFixed(2)+' K / '+wet.dn.toFixed(3));
+    else console.log('  a generator held dry stops being a heat sink: Tavg +'+dry.dT.toFixed(1)+
+                     ' K and power '+dry.dn.toFixed(2)+' in 60 s, against '+wet.dT.toFixed(1)+
+                     ' K and '+wet.dn.toFixed(2)+' held wet');
+  }
+
+  /* EFW refills something real. It was 0.08 bolted onto the steam dump and
+     touched no inventory at all. It starts on LOW LEVEL, not on being armed -
+     an emergency pump feeding a healthy generator would overfill it (measured
+     at 82 % on a once-through unit before the gate went in). */
+  { const floor=efw=>{ const s=set({sg:1}); run(s,10);
+      s.byp.efw=!efw; M.combatHit('feed');
+      run(s,120); return M.sglMin(s); };
+    const off=floor(false), on=floor(true);
+    if(!(on > off+0.5)) bad('EMERG FEED refills nothing: level floors at '+off.toFixed(2)+' without it and '+on.toFixed(2)+' with it');
+    else console.log('  EMERG FEED holds a hit plant at '+on.toFixed(1)+' % where it floors at '+off.toFixed(1)+' % without it');
+  }
+
+  /* INJECTION - the boil-dry difference must come from SGT.water and nothing
+     else. Make the two rows hold the same water and the check above has to go
+     red, or it is reading graceK or a count by accident. */
+  { const keep=SGT[1].water; SGT[1].water=SGT[0].water;
+    const d2=(sg=>{ const s=set({sg}); run(s,10); M.combatHit('feed');
+                    const from=M.sglMin(s); run(s,3); return (from-M.sglMin(s))/3; })(1);
+    SGT[1].water=keep; set({});
+    if(d2 > dU*3) bad('inject: SGT.water equalised and ONCE-THROUGH still drained '+(d2/dU).toFixed(1)+'x faster - the drain check is reading something other than the water');
+    else console.log('  inject: SGT.water equalised   caught by "a hit feed pump drains ... off SGT.water alone" ('+(d2/dU).toFixed(2)+'x, was '+(dO/dU).toFixed(1)+'x)');
+  }
+  /* graceK USED TO BE COMPUTED TWICE, independently, from the same raw inputs
+     - once in derived() and once in commission() - so a partial fix succeeded
+     in one file and silently did not in the other. sgInertiaK() is the one
+     helper both read now, and this is the check that says so: move SGT[].mass
+     and BOTH figures have to follow it. One that moves alone means the
+     duplicate is back.
+
+     The old SGT[].graceK field is gone. It was charging for the boil-dry time
+     that SGT[].water now buys outright. U-TUBE normalises to exactly 1.0, so
+     the stock plant's P.graceK - and every trip calibrated against it - does
+     not move; only ONCE-THROUGH does, 0.68 -> 0.60. */
+  { if(SGT.some(r=>'graceK' in r))
+      bad('SGT still carries a graceK field - it double-charges the boil-dry time SGT.water now buys');
+    const read=sg=>{ set({sg}); return {P:M.P().graceK, d:M.derived().grace}; };
+    const u=read(0), keep=SGT[1].mass;
+    SGT[1].mass=SGT[0].mass;
+    const same=read(1);
+    SGT[1].mass=keep;
+    const diff=read(1);
+    set({});
+    if(Math.abs(same.P-u.P)>1e-12 || Math.abs(same.d-u.d)>1e-9)
+      bad('SGT[].mass equalised and the two generator types still disagree on grace ('+
+          same.P.toFixed(4)+'/'+same.d.toFixed(2)+' against '+u.P.toFixed(4)+'/'+u.d.toFixed(2)+
+          ') - something other than sgInertiaK() is still setting it');
+    else if(!(Math.abs(diff.P-u.P)>1e-6 && Math.abs(diff.d-u.d)>1e-6))
+      bad('SGT[].mass restored and only '+(Math.abs(diff.P-u.P)>1e-6?'commission()':'derived()')+
+          ' followed it - graceK is computed twice again');
+    else console.log('  sgInertiaK() is the one grace helper: SGT[].mass moves P.graceK '+
+                     u.P.toFixed(4)+' -> '+diff.P.toFixed(4)+' AND derived().grace '+
+                     u.d.toFixed(1)+' -> '+diff.d.toFixed(1)+' s together, and equalising it collapses both');
+  }
+  /* THE POINT OF SPLITTING IT. plant.js printed one global s.sgl on every
+     generator's panel whichever one you clicked, which is the bug per-generator
+     exists to fix. Two generators, one loop's pump destroyed: heat crosses into
+     a generator in proportion to the flow through its OWN loop (sgShare(), off
+     the netOut.byLoop the solve already computed and used to throw away), so
+     the starved loop's generator boils down slower than its twin.
+
+     CLAUDE.md's core rule still holds and this does not break it: the core
+     stays axisymmetric and total flow is what it sees. The asymmetry lives in
+     the generators, which is exactly where the file says per-loop asymmetry
+     belongs. */
+  { const s=set({loops:2}); run(s,10);
+    const ids=M.sgIds();
+    if(ids.length<2) bad('a 2-loop plant built only '+ids.length+' generator(s) - nothing to tell apart');
+    else {
+      const w=M.sgShare(null);
+      s.dmgParts=['pump0']; M.combatHit('feed');
+      const from=ids.map(id=>M.sgLvl(s,id));
+      run(s,15);
+      const drop=ids.map((id,i)=>from[i]-M.sgLvl(s,id));
+      if(!(Math.abs(drop[0]-drop[1]) > 0.5))
+        bad('two generators on a plant with one loop starved boiled down the same: '+
+            drop.map(d=>d.toFixed(2)).join(' / ')+' - s.sglBy is split but nothing feeds the halves differently');
+      else console.log('  a starved loop boils its OWN generator down slower: '+
+            ids.map((id,i)=>id+' '+drop[i].toFixed(2)).join(', ')+' %, off sgShare() (equal split reads '+
+            ids.map(id=>w[id].toFixed(2)).join('/')+')');
+    }
+    set({});
+  }
+  /* ── THE HOTWELL: the secondary as ONE closed system ──
+     Not a TANK row, deliberately: a TANK row is a hydraulic object with an
+     elevation, a node and an edge into the solve, and the secondary still has
+     no solve, only a boundary. A hotwell with a node would invent the very
+     thing CLAUDE.md says is not there. It is a MASS balance instead, in the
+     same kilograms the generators are counted in - which is what makes the
+     conservation check below possible at all. */
+  { const s=set({}); run(s,300);
+    if(Math.abs(s.hotwell-50) > 1e-9)
+      bad('an undamaged plant does not hold its hotwell still: 50 -> '+s.hotwell.toFixed(6)+
+          ' over 300 s - steam raised and feedwater returned are not cancelling');
+    else console.log('  a closed secondary holds its hotwell at 50.000000 % for 300 s - what boils out comes back');
+  }
+  /* CONSERVATION, and the reason the hotwell is worth having at all. Water
+     that leaves a generator has to arrive somewhere. Both sides are measured
+     in the same kg (one generator's SGT.water against sgCount() of them), so
+     this is an equality and not a correlation. */
+  { const s=set({}); run(s,10);
+    const g=M.sgIds()[0], l0=M.sgLvl(s,g), h0=s.hotwell;
+    M.combatHit('feed'); run(s,120);
+    const lost=(l0-M.sgLvl(s,g))/100*SGT[M.D().sg].water*1000;        // kg out of the generator
+    const gained=(s.hotwell-h0)/100*M.sgIds().length*SGT[M.D().sg].water*1000;
+    if(!(lost>1000)) bad('the feed hit moved almost no water at all ('+lost.toFixed(0)+' kg) - nothing to conserve');
+    else if(Math.abs(lost-gained)/lost > 0.01)
+      bad('the secondary does not conserve water: '+lost.toFixed(0)+' kg left the generator and '+
+          gained.toFixed(0)+' kg arrived in the hotwell');
+    else console.log('  the secondary conserves: '+lost.toFixed(0)+' kg left the generator and '+
+          gained.toFixed(0)+' kg arrived in the hotwell, to '+
+          (100*Math.abs(lost-gained)/lost).toFixed(3)+' %');
+  }
+  /* A TUBE RUPTURE IS A LEAK INTO THE SECONDARY, so the secondary total GROWS
+     and the water ends up here. This is the operational problem the game could
+     not pose before: the hotwell fills and has to go somewhere. */
+  { const s=set({}); run(s,10); const h0=s.hotwell;
+    M.combatHit('sg0'); run(s,200);
+    if(!(s.hotwell > h0+10))
+      bad('a tube rupture does not fill the hotwell: '+h0.toFixed(1)+' -> '+s.hotwell.toFixed(1)+
+          ' % - primary water is crossing into the secondary and going nowhere');
+    else if(!(s.hotOver > 0))
+      bad('the hotwell reached '+s.hotwell.toFixed(1)+' % and overflowed nothing - a clamp that swallows a rupture reports nothing');
+    else console.log('  a tube rupture fills the hotwell '+h0.toFixed(0)+' -> '+s.hotwell.toFixed(0)+
+          ' % and then overflows it at '+s.hotOver.toFixed(0)+' kg/s');
+    set({});
+  }
+  /* THE OPERATOR'S ANSWER. A hotwell that only ever overflowed posed the
+     problem without offering the move. HOTWELL DUMP is an ACT like any other -
+     recorded, scrubbed, scriptable - and it never refuses: open it on a healthy
+     plant and the feed pumps lose the water they live on. */
+  { const s=set({}); run(s,10);
+    M.combatHit('sg0'); run(s,200);
+    if(!(s.hotOver > 0)) bad('the SGTR did not overflow the hotwell - nothing for the dump to answer');
+    else {
+      const full=s.hotwell;
+      M.act('hotDump'); run(s,120);
+      if(!(s.hotwell < full-10) || s.hotOver > 0)
+        bad('HOTWELL DUMP did not empty it: '+full.toFixed(1)+' -> '+s.hotwell.toFixed(1)+
+            ' %, still overflowing at '+s.hotOver.toFixed(0)+' kg/s');
+      else console.log('  HOTWELL DUMP answers a tube rupture: '+full.toFixed(0)+' -> '+
+            s.hotwell.toFixed(0)+' % and the overflow stops');
+    }
+    /* and it never refuses a bad order */
+    const h=set({}); run(h,10); const g0=M.sglMin(h);
+    M.act('hotDump'); run(h,120);
+    /* Not "it empties": it settles where the dump balances what the closed
+       loop still condenses back, and that point is BELOW HOT_NPSH - so the
+       feed pumps are on tapered suction and the generator is losing water.
+       That is the cost, and the game charges it without ever refusing. */
+    if(!(h.hotwell < HOT_NPSH_A && M.sglMin(h) < g0-1))
+      bad('HOTWELL DUMP on a healthy plant left '+h.hotwell.toFixed(1)+' % with the generator at '+
+          M.sglMin(h).toFixed(1)+' (from '+g0.toFixed(1)+') - the game refused a bad order');
+    else console.log('  ...and it never refuses a bad order: dumped on a healthy plant it settles at '+
+          h.hotwell.toFixed(1)+' %, under the '+HOT_NPSH_A+' % suction limit, and the generator falls '+
+          g0.toFixed(1)+' -> '+M.sglMin(h).toFixed(1)+' %');
+    set({});
+  }
+
+  /* ── EVERY GENERATOR HAS ITS OWN SECONDARY PRESSURE (Stage 6b) ──
+     secP() was one scalar of s.load applied to every generator's fixed node.
+     Stage 1A made the NODE per generator and then fixed all of them at the
+     identical number, so an SGTR's driving differential could not differ loop
+     to loop - and CLAUDE.md's claim that per-loop asymmetry lives in the steam
+     generators was not yet true. MEASURED on the old code, 2-loop plant with
+     pump0 destroyed, 20 s: sg0t 6.975, sg1t 6.975, bit-identical. */
+  { const s=set({loops:2}); run(s,10);
+    const before=M.netPressures(s);
+    /* NOT an equality on the untouched plant, and that is the point. CLAUDE.md
+       states the stock loops are NOT the same length - generators sit in a row
+       at x = 7 + i*2, so loop 0 is the short one and carries more flow. That
+       asymmetry has been in the solve since the network landed and could not
+       reach the generators while secP() was one scalar. Now it does: the short
+       loop's generator sits higher. Asserting equality here would have been
+       asserting a premise this project explicitly calls physically false. */
+    if(before.sg0t===undefined || before.sg1t===undefined)
+      bad('a 2-loop plant has no sg0t/sg1t node to read - Stage 1A per-generator steam port is missing');
+    else if(!(before.sg0t > before.sg1t + 0.01))
+      bad('the short loop generator does not sit above the long one ('+
+          before.sg0t.toFixed(4)+' / '+before.sg1t.toFixed(4)+
+          ') - loop length reaches the flow but still not the secondary');
+    else {
+      const gap0=before.sg0t-before.sg1t;
+      s.dmgParts=['pump0']; run(s,20);
+      const f=M.netPressures(s);
+      if(!(f.sg0t < f.sg1t))
+        bad('pump0 destroyed and its own generator still sits above its neighbour ('+
+            f.sg0t.toFixed(4)+' / '+f.sg1t.toFixed(4)+') - secP() is not reading this loop own flow');
+      else console.log('  each generator carries its own secondary pressure: untouched, the SHORT loop leads by '+
+            gap0.toFixed(3)+' MPa ('+before.sg0t.toFixed(3)+'/'+before.sg1t.toFixed(3)+
+            '); starve loop 0 and it reverses to '+f.sg0t.toFixed(3)+'/'+f.sg1t.toFixed(3)+
+            ' MPa - one scalar for all of them could do neither');
+    }
+    set({});
+  }
+  /* ── PRESSURIZER LEVEL IS AN INTEGRAL (Stage 6c) ──
+     THE TRAP THIS BLOCK EXISTS TO AVOID. The obvious check - "heat the loop at
+     constant inventory and see the level move" - PASSES ON THE UNFIXED CODE.
+     Measured on the old correlation: Tavg +10 K with s.inv pinned moved s.lvl
+     54.059 -> 63.058, exactly its -0.9 coefficient, by direct algebraic
+     substitution, integrating nothing. A check that goes green either way is
+     not a check.
+
+     So this asserts the STRUCTURE instead: the level is the integral of a
+     SOLVED CONDUCTANCE FLOW, which means severing the surge line has to stop
+     the gauge dead. A correlation goes on moving the needle through a pipe
+     that is not there - it never asked. */
+  { const s=set({}); run(s,30);
+    /* a real thermal transient: drop the load and the programme cools the loop */
+    const l0=s.lvl, T0=s.Tavg; s.load=0.8; s.loadDem=0.8; run(s,60);
+    const moved=Math.abs(s.lvl-l0);
+    if(!(moved > 1))
+      bad('a 60 s cooldown moved the pressurizer level only '+moved.toFixed(3)+' points - nothing to tell apart');
+    else {
+      /* CALIBRATION, deliberately unchanged: LVL_K is the loop/pressurizer
+         volume ratio the old correlation implied, so the same transient still
+         reads the same 0.9 %/K it always did. What changed is where the number
+         comes from, not what it is. */
+      const want=0.9*Math.abs(s.Tavg-T0);
+      if(Math.abs(moved-want)/Math.max(want,1e-9) > 0.02)
+        bad('the level integral no longer matches the correlation it replaces: '+
+            moved.toFixed(3)+' points against '+want.toFixed(3)+' (0.9 %/K over '+
+            Math.abs(s.Tavg-T0).toFixed(2)+' K) - LVL_K is not 0.9/(100*BETA_W)');
+      else console.log('  the level integral reproduces the correlation exactly: '+moved.toFixed(2)+
+            ' points over '+Math.abs(s.Tavg-T0).toFixed(2)+' K, against 0.9 %/K = '+want.toFixed(2));
+      /* THE STRUCTURAL CLAIM: MEMORY. The old level was an algebraic function
+         of (Tavg, vf, inv) recomputed from scratch, so two plants alike in all
+         three collapsed onto the same number in a single tick whatever their
+         history. An integral keeps them apart. This is the same shape as the
+         s.sgl memory check above and it is decisive in the same way - it
+         cannot go green on the correlation.
+
+         NOT a "heat it and watch it move" check: measured on the OLD code,
+         Tavg +10 K at pinned inventory moved s.lvl 54.059 -> 63.058, exactly
+         its -0.9 coefficient, integrating nothing. That check passes either
+         way and proves nothing. */
+      const s2=set({}); run(s2,30);
+      s2.lvl=30; M.step(0.02); const lo=s2.lvl;
+      s2.lvl=70; M.step(0.02); const hi=s2.lvl;
+      if(Math.abs(hi-lo) < 35)
+        bad('s.lvl has no memory: 30 % and 70 % collapsed to '+lo.toFixed(3)+' / '+hi.toFixed(3)+
+            ' in one tick - that is a correlation, not an integral');
+      else console.log('  s.lvl remembers: 30 % and 70 % stay '+(hi-lo).toFixed(3)+
+            ' points apart after a tick, where the correlation collapsed them onto one number');
+      /* THE STRUCTURAL CLAIM, and it is provable now. Sever the surge line and
+         the expansion has nowhere to go, so the term is exactly 0 - a
+         correlation would go on reporting it through a pipe that is not there.
+
+         Read on netExpSurge() rather than on s.lvl, because a severed run is
+         also a HOLE (two break edges): the plant drains and the gauge falls
+         46 points for a reason that has nothing to do with expansion.
+
+         THIS CHECK COULD NOT BE WRITTEN UNTIL THE SURGE EDGE WAS LIVE. It was
+         a static resist(bore,len) - a number, not a function of s - so it never
+         read pipeExtraLen() and the hit was decorative, while hittableRunKeys()
+         offered it as a target the whole time. Measured before that fix:
+         -0.024890 severed against -0.025000 intact. */
+      const s3=set({}); run(s3,30);
+      s3.dTavg=0.1;
+      const open=M.invRate(M.netExpSurge(M.P().net, s3));
+      if(Math.abs(open - -100*M.BETA_W*0.1) > 1e-9)
+        bad('the whole expansion source does not arrive up the surge line: '+open.toExponential(4)+
+            ' against '+(-100*M.BETA_W*0.1).toExponential(4)+' - the pressurizer is meant to be the only compliance');
+      s3.dmgParts=['pipe:'+M.P().net.surgeKey];
+      const cut=M.invRate(M.netExpSurge(M.P().net, s3));
+      if(cut !== 0)
+        bad('the surge line was severed and expansion still reported '+cut.toExponential(4)+
+            ' %/s - that edge is not live against pipe damage');
+      else console.log('  sever the surge line and expansion stops dead: '+open.toExponential(3)+
+            ' %/s intact (exactly -100*BETA_W*dTavg) against exactly 0 severed');
+
+    }
+    set({});
+  }
+
+
+
+
+}
 
 console.log(fails? `\n${fails} FAILURE(S)` : '\nall physics checks passed');
 process.exit(fails?1:0);

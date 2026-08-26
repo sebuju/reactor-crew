@@ -39,7 +39,18 @@ const EXPORTS = '{commission,step,sample,act,recTick,recRoot,resetPlant,combatHi
   'crSync,dbSync,trSync,trBuild,drawOperate,drawDesign,drawScenario,'+
   'CR:()=>CR,DB:()=>DB,S:()=>S,P:()=>P,LAY:()=>LAY,LOG:()=>LOG,REC:()=>REC,'+
   'TSCALE:()=>TSCALE,plot:()=>plot,togglePlot,sel:()=>sel,setSel:v=>sel=v,'+
-  'setScreen:v=>screen=v,layout,SCN:()=>SCN,scnNew,LAYER_ORDER:()=>LAYER_ORDER}';
+  'setScreen:v=>screen=v,layout,SCN:()=>SCN,scnNew,LAYER_ORDER:()=>LAYER_ORDER,'+
+  /* Stage 8/7a test hooks: D and CTX are const objects mutated in place, not
+     reassigned, but wrapped as getters anyway to match every other "peek at
+     internal state" export here (CR, DB, S, P, LAY...) - a bare reference
+     would work too, but M.D() reading like the rest of this list is worth
+     the one extra character. ctxItemsDesign is a plain function, called the
+     same way commission/step/act already are. */
+  'D:()=>D,CTX:()=>CTX,ctxItemsDesign,NAME_CAP:()=>NAME_CAP,pipeNetwork,'+
+  /* Stage 9 (gauge half) test hooks: place and plumb a spare pump exactly the
+     way CONNECT does, then read pumpGauge() straight - the shared primitive
+     the PUMP CAPACITY row and, later, the pump panel both build on. */
+  'placePart,removePart,addRun,removeRun,pumpGauge}';
 
 /* One boot. `src` may be patched first - the self-test at the bottom injects
    real faults and re-boots to prove each check can actually go red. */
@@ -180,6 +191,73 @@ function auditRun(patch, opts){
 const checks = [];
 const add = (name, ok, detail, lines) => checks.push([name, ok, detail, lines]);
 
+/* ══ STAGE 8: partName() IS THE ONLY READER OF A DISPLAY NAME ══
+   A source scan, not a runtime one: a raw p.name read is not a throw, it is
+   the rail and the mimic quietly disagreeing about a name the first time
+   someone renames something - the same failure mode `displayWrites()` below
+   exists for. Scoped to the files THIS stage owns; render/plant.js and
+   sim/step.js have their own three raw reads, reported, not scanned - see
+   .claude/CLAUDE.md's "Known gaps" table for that boundary. Declared here,
+   above the main run, so the fault-injection self-test below can reuse it
+   against a patched string without re-deriving it. */
+const blankOut = t => t.replace(/[^\n]/g,' ');
+const stripJsComments = src => src.replace(/\/\*[\s\S]*?\*\//g, blankOut)
+                                  .replace(/\/\/[^\n]*/g, blankOut);
+const NAME_FILES = ['src/screens/design-bench.js','src/screens/control-room.js',
+                     'src/screens/shell.js','src/core/ui.js','src/ui/kit.js'];
+function nameReads(override){
+  const hits = [];
+  for(const f of NAME_FILES){
+    const raw = (override && override.f === f) ? override.src
+              : fs.readFileSync(path.join(ROOT, f), 'utf8');
+    let src = stripJsComments(raw.replace(/^.*DEFAULT NAME:.*$/gm, m => blankOut(m)));
+    // partName()'s own fallback read is the one authorised p.name - blank
+    // its body out (like a comment) before scanning: the LINE is real, the
+    // read inside it is the reason the rule can exist at all.
+    src = src.replace(/function partName\([^)]*\)\{[^}]*\}/, m => blankOut(m));
+    /* The rename box is the second: its placeholder and its tip must show the
+       DEFAULT, or "blank uses X" would quote the name you are replacing. A
+       line carrying the tag opts out and says why, the same way a surviving
+       .k read carries // LABEL: or // DEFAULT:. */
+    const re = /\b(p|part|who)\.name\b/g;
+    let m;
+    while((m = re.exec(src))) hits.push(f + ':' + src.slice(0, m.index).split('\n').length);
+  }
+  return hits;
+}
+
+/* ══ STAGE 8: THE NAME CAP, AND THE RAIL TITLE IT PROTECTS ══
+   .kit-rule-head is plain HTML textContent - domstub has no CSS, no
+   scrollWidth, nothing hostReport() already measures. So this ESTIMATES the
+   rendered width the same way domstub's own canvas recorder does (wOf() in
+   domstub.js): 0.60em per glyph plus the rule's letter-spacing. --t9 is
+   11px (style.css), .kit-rule-head's letter-spacing is 1.8px (kit.css), the
+   rail is 340px in both screens and 10px padding either side leaves a
+   320px run (the stage brief measured this against the real CSS). */
+const NAME_FONT_PX = 11, NAME_SP_PX = 1.8, NAME_RUN_PX = 320;
+const estWidth = s => s.length * (0.60*NAME_FONT_PX + NAME_SP_PX);
+function nameCapAudit(M){
+  M.commission(); M.setScreen('design'); M.dbSync();
+  const D = M.D(), rail = M.DB().rail;
+  // domstub's textContent is a flat property, not a real aggregate - rule()
+  // writes the visible text onto its own inner <span>, not onto the head div
+  // itself, so the span is what has to be read.
+  const heads = () => [...rail.querySelectorAll('.kit-rule-head')].map(h => (h.children[0]&&h.children[0].textContent)||'');
+  const before = heads();
+  D.name = D.name || {};
+  D.name.core = 'A VERY LONG COMPONENT NAME NOBODY SHOULD EVER TYPE INTO THIS BOX';
+  M.dbSync();
+  const afterLong = heads();
+  const i = afterLong.findIndex((t,k) => t !== before[k]);
+  const shownLong = i>=0 ? afterLong[i] : null;
+  D.name.core = '   ';                          // whitespace-only: still blank
+  M.dbSync();
+  const shownBlank = i>=0 ? heads()[i] : null;
+  return {shownLong, shownBlank, defaultName: i>=0 ? before[i] : null, cap: M.NAME_CAP()};
+}
+const capOk = r => !!r.shownLong && r.shownLong.length <= r.cap && estWidth(r.shownLong) <= NAME_RUN_PX;
+const blankOk = r => !!r.shownBlank && r.shownBlank === r.defaultName;
+
 const wide = auditRun(null, {box:{width:320, height:190}});
 add('every screen runs', !wide.err,
     wide.err ? wide.err.message : 'built, synced and drew through power, scram, damage, blackout and every component',
@@ -265,6 +343,111 @@ if(!wide.err){
         cards.length ? withDose.length+'/'+cards.length+' reachable damage card(s) show a field rate and a job dose estimate'
                      : 'no reachable damage cards were on screen to check');
   }
+
+  {
+    const hits = nameReads(null);
+    add('partName() is the only reader of a display name', hits.length === 0,
+        hits.length ? hits.length+' raw part-name read(s) - use partName()'
+                    : NAME_FILES.length+' owned files read a display name only through partName()',
+        hits.map(h => '  ' + h));
+  }
+
+  {
+    const {M} = boot(null, {box:{width:320, height:190}});
+    const r = nameCapAudit(M);
+    add('a long name is capped and fits the rail title', capOk(r),
+        r.shownLong ? 'renamed head shows '+r.shownLong.length+' char(s), ~'+estWidth(r.shownLong).toFixed(0)+
+                      'px estimated (cap '+r.cap+', usable run '+NAME_RUN_PX+'px)'
+                    : 'the REACTOR rail title never changed after D.name.core was set - rename is not live-synced');
+    add('a blank name falls back to the default title', blankOk(r),
+        r.shownBlank ? 'blank name shows "'+r.shownBlank+'"'+(blankOk(r)?' (the default)':' - NOT the default "'+r.defaultName+'"')
+                     : 'no rail title to check');
+  }
+
+  /* ══ STAGE 7A: A RIGHT-CLICK'S REMOVE OFFER BELONGS TO WHAT IS UNDER IT ══
+     ctxItemsDesign() is a pure function of the resolved hit - so it is
+     called directly with hand-built hit objects rather than reconstructing
+     a page-space point through the VIEW transform. */
+  {
+    const {M} = boot(null, {box:{width:320, height:190}});
+    M.commission();
+    const emptyItems = M.ctxItemsDesign({part:null,fitting:null,tapKey:null,tapT:null,runRid:null,port:null,cell:{gx:0,gy:0}});
+    const emptyHasRemove = emptyItems.some(it => /^REMOVE\b/.test(it.label));
+    add('empty space offers no REMOVE', !emptyHasRemove,
+        emptyHasRemove ? 'REMOVE offered with nothing under the cursor: '+emptyItems.map(i=>i.label).join(', ')
+                       : emptyItems.length+' item(s) offered, none REMOVE');
+
+    const contP = M.LAY().parts.find(p => p.id === 'cont');
+    const contItems = contP ? M.ctxItemsDesign({part:contP,fitting:null,tapKey:null,tapT:null,runRid:null,port:null,cell:null}) : null;
+    add('a fitted component offers exactly one REMOVE', !!contP && contItems.length===1 && contItems[0].label==='REMOVE',
+        contP ? '('+(contItems.map(i=>i.label).join(', ')||'none')+')'
+              : 'CONTAINMENT is not fitted on the stock plant - cannot check');
+
+    /* A HIT ON A PIPE, which the two cases above never reach: both pass
+       tapKey:null, so the whole run-tap branch - throttle, relief valve, tee -
+       had no coverage at all. It shipped a call to hasRelief(), which was
+       never written, and right-clicking any pipe on the bench threw
+       "hasRelief is not defined". That takes the FRAME with it, not just the
+       menu: ctxItemsDesign() runs inside the draw (drawCtxMenu -> drawDesign
+       -> tick), so the bench stops rendering entirely.
+
+       Asserted as "it returns a usable menu", not as an exact item list - the
+       offers legitimately depend on how many loops the plant has. What is
+       being checked is that the branch RUNS. */
+    const run = M.pipeNetwork().find(r => r.key && r.k === 'hot');
+    let tapItems=null, tapErr=null;
+    try { tapItems = M.ctxItemsDesign({part:null,fitting:null,tapKey:run&&run.key,tapT:0.5,runRid:null,port:null,cell:null}); }
+    catch(e){ tapErr = e.message; }
+    add('right-clicking a pipe builds a menu', !!run && !tapErr && !!tapItems && tapItems.length>0,
+        tapErr ? 'threw: '+tapErr
+               : (run ? tapItems.length+' item(s): '+tapItems.map(i=>i.label).join(', ')
+                      : 'no hot run on the stock plant - cannot check'));
+  }
+
+  /* ══ STAGE 9 (gauge half): PUMP CAPACITY - INSTALLED VS DELIVERED ══
+     netFlowK()'s per-group ceiling (pipenet.js) is invisible without a
+     readout that says so: install a second pump and nothing on screen
+     moves. The RESULTS panel's PUMP CAPACITY row (layoutStats(), design-
+     bench.js) is that readout - checked here as the rendered DOM text, not
+     just the function behind it, because a row that always prints the same
+     figure twice would still pass a check on pumpGauge() alone.
+     The damage-recovery half (losing the pump a spare backs up) is checked
+     straight against pumpGauge(dmg) instead of the rendered row: the bench
+     has no damage concept and the row is deliberately damage-blind (dmg
+     defaults to none) - dmg is there for a LIVE caller, the pump panel this
+     stage hands off rather than implements. */
+  {
+    const {M} = boot(null, {box:{width:320, height:190}});
+    M.setScreen('design');
+    const rowVal = () => { M.dbSync();
+      const row = [...M.DB().rail.querySelectorAll('.insp-stat')]
+        .find(r => r.querySelector('.insp-stat-lab').textContent === 'PUMP CAPACITY');
+      return row ? row.querySelector('.insp-stat-val').textContent : null;
+    };
+    M.commission();
+    const base = rowVal();
+    add('the PUMP CAPACITY row exists', base != null,
+        base ? 'renders "'+base+'" on a stock plant' : 'no row titled PUMP CAPACITY in the RESULTS panel');
+
+    const sp = M.placePart(n => ({id:'pumpX'+n, name:'RCP SPARE', w:1, h:1, x:9, y:5,
+      col:'#57d38c', tip:'A spare coolant pump.', role:'pump'}));
+    const r1 = M.addRun(sp.id,'t','core','b'), r2 = M.addRun(sp.id,'b','sg0','b');
+    M.commission();
+    const plumbed = rowVal();
+    const g3 = M.pumpGauge();
+    add('a plumbed spare reports installed > delivered', base != null &&
+        g3.installed > g3.delivered + 1e-9 && plumbed !== base,
+        'installed '+g3.installed.toFixed(1)+' vs delivered '+g3.delivered.toFixed(1)+
+        ' - row now reads "'+plumbed+'" (was "'+base+'")');
+
+    const g4 = M.pumpGauge(['pump0']);
+    M.removeRun(r1); M.removeRun(r2); M.removePart(sp.id); M.commission();
+    const g5 = M.pumpGauge(['pump0']);
+    add('losing the original pump: the spare hands the loop back', g4.delivered >= g3.delivered - 1e-9 &&
+        g5.delivered < g4.delivered - 1e-9,
+        'pump0 lost: delivered '+g4.delivered.toFixed(1)+' with the spare plumbed in vs '+
+        g5.delivered.toFixed(1)+' with none installed');
+  }
 }
 
 /* ══ VISIBILITY IS A CLASS, NEVER AN INLINE DISPLAY STRING ══
@@ -281,9 +464,6 @@ if(!wide.err){
    `style.display` at all. Banning the write outright rather than only the empty
    string is deliberate: a literal "block" written over a stylesheet that says
    "flex" is the same bug wearing a value. */
-const blankOut = t => t.replace(/[^\n]/g,' ');
-const stripJsComments = src => src.replace(/\/\*[\s\S]*?\*\//g, blankOut)
-                                  .replace(/\/\/[^\n]*/g, blankOut);
 const DISPLAY_FILES = scriptPaths().filter(
   f => /^src\/(screens|render|ui)\//.test(f) && f.endsWith('.js'));
 function displayWrites(override){
@@ -332,6 +512,12 @@ const FAULTS = [
                   'function crRailSync(panels){ KIT.el("div","leak");')],
   ['a hosted label drawn outside its box', 'hosted text stays in its box',
    s => s.replace('txt("REACTIVITY BALANCE",L,y+8,', 'txt("REACTIVITY BALANCE",L,y-400,')],
+  /* THE ONE THAT SHIPPED. hasRelief() was called from ctxItemsDesign() and
+     never written, so right-clicking any pipe on the bench threw and took the
+     frame with it. Put the undefined name back and the pipe-menu check must
+     go red - it is the only thing that opens that branch. */
+  ['a context-menu helper that does not exist', 'right-clicking a pipe builds a menu',
+   s => s.replace('function hasRelief(){', 'function hasRelief__gone(){')],
 ];
 const selftest = [];
 for(const [what, guard, patch] of FAULTS){
@@ -342,6 +528,18 @@ for(const [what, guard, patch] of FAULTS){
   let caught;
   if(guard === 'every screen runs')            caught = !!r.err;
   else if(guard === 'screens build DOM once')  caught = !r.err && r.reuse !== 0;
+  /* The context menu is not built during a screen sync - it is built on a
+     right-click - so the three guards above cannot see it. auditRun() hands
+     back the PATCHED module, so this one opens the menu on it directly and
+     asks whether that throws, which is exactly what the shipped fault did. */
+  else if(guard === 'right-clicking a pipe builds a menu'){
+    if(r.err) caught = true;
+    else try {
+      const run = r.M.pipeNetwork().find(q => q.key && q.k === 'hot');
+      const items = r.M.ctxItemsDesign({part:null,fitting:null,tapKey:run&&run.key,tapT:0.5,runRid:null,port:null,cell:null});
+      caught = !items || !items.length;
+    } catch(e){ caught = true; }
+  }
   else                                         caught = !r.err && r.hosts.some(h => h.out.length);
   selftest.push([what, guard, caught, caught ? 'caught by "'+guard+'"' : 'SLIPPED PAST "'+guard+'"']);
 }
@@ -358,6 +556,127 @@ for(const [what, guard, patch] of FAULTS){
                  caught ? 'caught by "visibility is a class, not an inline display"'
                         : bad === raw ? 'the injection no longer matches the source'
                                       : 'SLIPPED PAST the source scan']);
+}
+
+/* Stage 8: a raw p.name read reintroduced - nothing throws and nothing draws
+   wrong, so only the source scan can catch it before the rail and the mimic
+   quietly disagree about a name. */
+{
+  const f = 'src/screens/design-bench.js';
+  const raw = fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const bad = raw.replace('label:"CONNECT TO "+partName(to.part)', 'label:"CONNECT TO "+to.part.name');
+  const caught = bad !== raw && nameReads({f, src: bad}).length >= 1;
+  selftest.push(['a raw p.name read reintroduced (CONNECT TO)',
+                 'partName() is the only reader of a display name', caught,
+                 caught ? 'caught by "partName() is the only reader of a display name"'
+                        : bad === raw ? 'the injection no longer matches the source'
+                                      : 'SLIPPED PAST the source scan']);
+}
+
+/* Stage 8: the cap removed from partName() - an over-long name must be
+   caught overflowing the rail's estimated run, not merely hoped never to
+   happen. */
+{
+  const src = bundle();
+  const patch = s => s.replace('return n?n.slice(0,NAME_CAP):p.name;', 'return n?n:p.name;');
+  const patched = patch(src);
+  let caught, detail;
+  if(patched === src){ caught = false; detail = 'the injection no longer matches the source'; }
+  else try{
+    const {M} = boot(patch, {box:{width:320, height:190}});
+    caught = !capOk(nameCapAudit(M));
+    detail = caught ? 'caught by "a long name is capped and fits the rail title"' : 'SLIPPED PAST the cap check';
+  }catch(e){ caught = false; detail = 'threw before the check could run: '+e.message; }
+  selftest.push(['the name cap removed from partName()',
+                 'a long name is capped and fits the rail title', caught, detail]);
+}
+
+/* Stage 8: the blank/whitespace fallback removed from partName() - a name
+   that trims to nothing must still show the default title. */
+{
+  const src = bundle();
+  const patch = s => s.replace('const n=(D.name&&D.name[p.id]||"").trim();',
+                               'const n=(D.name&&D.name[p.id])||"";');
+  const patched = patch(src);
+  let caught, detail;
+  if(patched === src){ caught = false; detail = 'the injection no longer matches the source'; }
+  else try{
+    const {M} = boot(patch, {box:{width:320, height:190}});
+    caught = !blankOk(nameCapAudit(M));
+    detail = caught ? 'caught by "a blank name falls back to the default title"' : 'SLIPPED PAST the blank-fallback check';
+  }catch(e){ caught = false; detail = 'threw before the check could run: '+e.message; }
+  selftest.push(['the blank-name fallback removed from partName()',
+                 'a blank name falls back to the default title', caught, detail]);
+}
+
+/* Stage 7a: the old hoisted FIT/REMOVE prefix, reintroduced - the actual
+   historical bug (a fixed item list built before ctxItemsDesign() ever
+   looked at hit). Proves both the empty-space and the exactly-one-REMOVE
+   checks would have caught it. */
+{
+  const src = bundle();
+  const patch = s => s.replace('function ctxItemsDesign(hit){',
+    'function ctxItemsDesign(hit){\n'+
+    '  { const items=fittableList().map(f=>({label:(f.get()?"REMOVE ":"FIT ")+f.label, fn:()=>f.set(!f.get())})); if(items.length) return items; }');
+  const patched = patch(src);
+  if(patched === src){
+    selftest.push(['the old hoisted FIT/REMOVE prefix reintroduced (empty space)',
+                   'empty space offers no REMOVE', false, 'the injection no longer matches the source']);
+    selftest.push(['the old hoisted FIT/REMOVE prefix reintroduced (a component)',
+                   'a fitted component offers exactly one REMOVE', false, 'the injection no longer matches the source']);
+  } else try{
+    const {M} = boot(patch, {box:{width:320, height:190}});
+    M.commission();
+    const emptyItems = M.ctxItemsDesign({part:null,fitting:null,tapKey:null,tapT:null,runRid:null,port:null,cell:{gx:0,gy:0}});
+    const emptyCaught = emptyItems.some(it => /^REMOVE\b/.test(it.label));
+    selftest.push(['the old hoisted FIT/REMOVE prefix reintroduced (empty space)',
+                   'empty space offers no REMOVE', emptyCaught,
+                   emptyCaught ? 'caught by "empty space offers no REMOVE"' : 'SLIPPED PAST the check']);
+    const contP = M.LAY().parts.find(p => p.id === 'cont');
+    const contItems = contP ? M.ctxItemsDesign({part:contP,fitting:null,tapKey:null,tapT:null,runRid:null,port:null,cell:null}) : [];
+    const compCaught = !(contItems.length===1 && contItems[0].label==='REMOVE');
+    selftest.push(['the old hoisted FIT/REMOVE prefix reintroduced (a component)',
+                   'a fitted component offers exactly one REMOVE', compCaught,
+                   compCaught ? 'caught by "a fitted component offers exactly one REMOVE"' : 'SLIPPED PAST the check']);
+  }catch(e){
+    selftest.push(['the old hoisted FIT/REMOVE prefix reintroduced (empty space)',
+                   'empty space offers no REMOVE', false, 'threw before the check could run: '+e.message]);
+    selftest.push(['the old hoisted FIT/REMOVE prefix reintroduced (a component)',
+                   'a fitted component offers exactly one REMOVE', false, 'threw before the check could run: '+e.message]);
+  }
+}
+
+/* Stage 9 (gauge half): pumpGauge() patched to print the installed figure
+   twice - the exact failure this readout exists to catch, since it is
+   indistinguishable on screen from the ceiling silently doing nothing. */
+{
+  const src = bundle();
+  const patch = s => s.replace(
+    'return {installed: totalPumpCap(), delivered, n};',
+    'return {installed: totalPumpCap(), delivered: totalPumpCap(), n};');
+  const patched = patch(src);
+  if(patched === src){
+    selftest.push(['pumpGauge() prints installed for delivered too',
+                   'a plumbed spare reports installed > delivered', false,
+                   'the injection no longer matches the source']);
+  } else try{
+    const {M} = boot(patch, {box:{width:320, height:190}});
+    M.commission();
+    const sp = M.placePart(n => ({id:'pumpX'+n, name:'RCP SPARE', w:1, h:1, x:9, y:5,
+      col:'#57d38c', tip:'A spare coolant pump.', role:'pump'}));
+    M.addRun(sp.id,'t','core','b'); M.addRun(sp.id,'b','sg0','b');
+    M.commission();
+    const g = M.pumpGauge();
+    const caught = !(g.installed > g.delivered + 1e-9);
+    selftest.push(['pumpGauge() prints installed for delivered too',
+                   'a plumbed spare reports installed > delivered', caught,
+                   caught ? 'caught: installed '+g.installed.toFixed(1)+' == delivered '+g.delivered.toFixed(1)+' with a spare plumbed in'
+                          : 'SLIPPED PAST the check']);
+  }catch(e){
+    selftest.push(['pumpGauge() prints installed for delivered too',
+                   'a plumbed spare reports installed > delivered', false,
+                   'threw before the check could run: '+e.message]);
+  }
 }
 
 /* ════════════════════ report ════════════════════ */

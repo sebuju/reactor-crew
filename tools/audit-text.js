@@ -3,6 +3,9 @@
 const fs=require('fs'), path=require('path');
 const {ROOT}=require('./bundle');
 const src=require('./bundle').bundle();
+// Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
+// same way a player builds one, through placed parts and real D.run entries.
+const {makeLoops}=require('./loopgen');
 
 const TEXTS=[], RECTS=[];
 function mkctx(){
@@ -88,8 +91,8 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
  'pipeNetwork,pipeWaypoints,nearestOn,placePart,addFit,removePart,removeFit,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
- 'FXR:()=>FXR,fxReset,porvRate,PORV_INV:()=>PORV_INV,SPILL_FULL:()=>SPILL_FULL,'+
- 'SGTR_RATE:()=>SGTR_RATE,TANK:()=>TANK,ventKNow,primaryRelief,'+
+ 'FXR:()=>FXR,fxReset,porvRate,reliefRate,reliefFullRate,SPILL_FULL:()=>SPILL_FULL,'+
+ 'SGTR_RATE:()=>SGTR_RATE,TANK:()=>TANK,primaryRelief,'+
  'setLayer:(k,v)=>{LAYERS[k].on=v;}};')();
 global.__viewOn=()=>M.vOn();
 
@@ -162,14 +165,13 @@ for(const part of M.parts()) { M.setSel(part.id); sweep('sel:'+part.id+':'); }
 M.setSel('core');
 
 // four loops: the only plant with a GANGED plate (steam gens, pumps)
-{ const L0=M.D().loops;
-  M.D().loops=4; warmUp(); M.setSel('sg2'); sweep('loops4:');
-  M.D().loops=L0; warmUp(); M.setSel('core'); }
+{ makeLoops(M,4); warmUp(); M.setSel('sg2'); sweep('loops4:');
+  makeLoops(M,1); warmUp(); M.setSel('core'); }
 
 // fittings and a spare pump: neither exists on a default plant, so their
 // valve mark / symbol / plate are draw paths nothing else here reaches
-{ const L0=M.D().loops, J0=M.D().fit, PS0=M.D().pumpSize;
-  M.D().loops=4; M.D().fit={}; M.D().pumpSize={};
+{ const J0=M.D().fit, PS0=M.D().pumpSize;
+  makeLoops(M,4); M.D().fit={}; M.D().pumpSize={};
   warmUp();                       // 4-loop LAY exists now, for the tap lookup below
   const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
   const j0=M.addFit('tee',...tap('cold:sg0'),...tap('cold:sg1'));
@@ -185,7 +187,7 @@ M.setSel('core');
   // placedParts is a persistent array outside D; removePart() is the only way
   // to take the spare back out before the block's other fields are restored
   M.removePart(spare.id);
-  M.D().loops=L0; M.D().fit=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
+  makeLoops(M,1); M.D().fit=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
 
 // a steered pipe: two waypoints draw five grips where a plain run draws one
 { warmUp();
@@ -374,7 +376,7 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
   rngSeed=20260824;
   // FOUR loops on purpose: a one-loop plant cannot show that a rupture stays
   // on the machine that was hit, which is half of what this block is for.
-  const loops0=M.D().loops; M.D().loops=4;
+  makeLoops(M,4);
   M.commission();
   const S=M.S();
   const sgIds=M.parts().filter(p=>p.id.startsWith('sg')).map(p=>p.id);
@@ -401,7 +403,7 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
     sgIds.length>1 && wrong.length===0 && (f[hurt+':sgtr']||0)>0,
     wrong.length? wrong.join(', ')+' drew a leak they do not have'
                 : 'the leak is on '+hurt+' alone, '+(sgIds.length-1)+' intact generator(s) dry');
-  M.D().loops=loops0;
+  makeLoops(M,1);
 }
 
 /* 3. IT STOPS. A break run to equalisation with containment must stop drawing,
@@ -439,21 +441,31 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
      that it is large. It was flat at 1.000 across all of it. */
   const lv=[0,45,90].map(l=>{ S.tank.reltk=l; return fxRead()['pzr:porv']; });
   const mono=lv[0]>lv[1] && lv[1]>lv[2];
+  /* Not exactly 1 at an empty tank any more: the plume is now drawn against
+     reliefFullRate() (pipenet.js), each fitting's OWN ceiling off the SAME
+     BREAK_K*bore*bore its edge is actually priced with - a live, solved
+     ratio, not a pre-fitted reference tuned to read 1.000 at rest. What
+     survives, and is still the whole claim, is that it is LESS than 1 (the
+     valve never draws more than its own theoretical full-open rate) and
+     MONOTONE as the tank's own gas pressure rises against it. */
   fxAdd('a filling relief tank shrinks the plume',
-    S.reliefOpen[fid] && Math.abs(lv[0]-1)<=1e-12 && mono && lv[2]<0.97,
+    S.reliefOpen[fid] && lv[0]<=1+1e-9 && lv[0]>0 && mono && lv[2]<lv[0],
     'valve still open, plume '+lv.map(v=>v.toFixed(4)).join(' -> ')+' at 0/45/90% tank');
-  /* and the plume IS THE TICK'S OWN VENT TERM. Against ventKNow() rather than
-     against porvRate(): comparing the renderer with itself would have stayed
-     green through the whole defect, because both readers came off the one
-     renderer-side expression that had gone stale. */
+  /* and the plume IS THE TICK'S OWN VENT TERM. Against reliefRate()/
+     reliefFullRate() rather than against porvRate() alone: comparing the
+     renderer with itself would have stayed green through the whole defect,
+     because both readers came off the one renderer-side expression that had
+     gone stale. */
   S.tank.reltk=60;
-  const drawn=fxRead()['pzr:porv'], sim=M.ventKNow(S,fid);
+  const drawn=fxRead()['pzr:porv'];
+  const sim=Math.max(0,Math.min(1, M.reliefRate(S,fid)/Math.max(1e-9,M.reliefFullRate(S,fid))));
   fxAdd('the PORV plume is the tick vent term', near(drawn,sim) && drawn>0,
-    near(drawn,sim)? 'plume '+drawn.toFixed(6)+' = ventKNow() at a 60% tank'
+    near(drawn,sim)? 'plume '+drawn.toFixed(6)+' = reliefRate()/reliefFullRate() at a 60% tank'
                    : 'plume '+drawn+' vs the tick '+sim);
-  // and the panel row reads the same one number
+  // and the panel row reads the same one number - porvRate() IS reliefRate()
+  // of the primary fitting now, not a ratio against a deleted reference
   fxAdd('the RELIEF FLOW row is that number too',
-    near(M.porvRate(S)/M.PORV_INV(), sim), 'RELIEF FLOW / PORV_INV = ventKNow()');
+    near(M.porvRate(S), M.reliefRate(S,fid)), 'RELIEF FLOW = reliefRate() = '+M.reliefRate(S,fid).toFixed(6));
 }
 
 /* 4. IT DOES NOT SURVIVE A SCRUB. FXR is display state, cleared by hand
@@ -479,38 +491,124 @@ console.log('=== BROKEN VALUES IN DRAWN TEXT ===');
 { let n=0;
   for(const t of TEXTS) if(/NaN|undefined|Infinity/.test(t.t)){
     console.log(`  [${t.screen}] "${t.t.slice(0,60)}"`); n++; }
-  console.log(n?`  ${n} broken value(s)`:'  none'); }
+  console.log(n?`  ${n} broken value(s)`:'  none');
+  if(n) process.exitCode=1; }
 
 console.log('\n=== TEXT OFF THE DOCUMENTED TYPE SCALE ===');
 { const scale=M.TSCALE(); let n=0; const seen={};
   for(const t of TEXTS) if(!scale.includes(t.size) && !seen[t.size]){
     seen[t.size]=1;
     console.log(`  ${t.size}px  e.g. [${t.screen}] "${t.t.slice(0,40)}"`); n++; }
-  console.log(n?`  ${n} off-scale size(s)`:'  none'); }
+  console.log(n?`  ${n} off-scale size(s)`:'  none');
+  if(n) process.exitCode=1; }
 
 console.log('\n=== TEXT OUTSIDE THE 12..748 CONTENT MARGINS ===');
-let n=0, inv=0;
-for(const t of TEXTS){
-  if(t.view){ if(t.x0<11.5||t.x1>748.5) inv++; continue; }
-  if(t.x0<11.5 || t.x1>748.5){
-    console.log(`  [${t.screen}] "${t.t.slice(0,42)}" x ${t.x0.toFixed(0)}..${t.x1.toFixed(0)} size ${t.size}`); n++; }
-}
-console.log(n?`  ${n} overflow(s)`:'  none');
-console.log(`  (${inv} string(s) in the pannable plant view, not judged here)`);
+{ let n=0, inv=0;
+  for(const t of TEXTS){
+    if(t.view){ if(t.x0<11.5||t.x1>748.5) inv++; continue; }
+    if(t.x0<11.5 || t.x1>748.5){
+      console.log(`  [${t.screen}] "${t.t.slice(0,42)}" x ${t.x0.toFixed(0)}..${t.x1.toFixed(0)} size ${t.size}`); n++; }
+  }
+  console.log(n?`  ${n} overflow(s)`:'  none');
+  console.log(`  (${inv} string(s) in the pannable plant view, not judged here)`);
+  if(n) process.exitCode=1; }
 
 console.log('\n=== TEXT COLLIDING WITH OTHER TEXT ON THE SAME LINE ===');
-n=0;
-const byScreen={};
-for(const t of TEXTS){ (byScreen[t.screen]=byScreen[t.screen]||[]).push(t); }
-for(const k in byScreen){
-  const a=byScreen[k];
-  for(let i=0;i<a.length;i++) for(let j=i+1;j<a.length;j++){
-    if(Math.abs(a[i].y-a[j].y)>2||a[i].rot||a[j].rot) continue;
-    const ov=Math.min(a[i].x1,a[j].x1)-Math.max(a[i].x0,a[j].x0);
-    if(ov>1.5){ console.log(`  [${k}] "${a[i].t.slice(0,26)}" x "${a[j].t.slice(0,26)}" overlap ${ov.toFixed(0)}px @y${a[i].y.toFixed(0)}`); n++; }
+/* ══════════ KNOWN COLLISIONS, TRIAGED - NOT IGNORED ══════════
+   Section 0c of the pipe-ownership plan: this check printed collisions for a
+   long time with no way to fail the run on them. Run against the stock plant
+   with every overlay layer on, every one of the ~250 it found traces to
+   exactly one of the three shapes below - each a genuine overlap between two
+   independent draw passes that were never told about each other, not a false
+   positive in the detector. Matched by TEXT SHAPE, never by the exact number
+   in the string: the numbers move every run (sim state, RNG-seeded damage),
+   the shape does not. Each entry also carries a ceiling - if the count behind
+   a shape balloons past its baseline, that is a NEW fault wearing an old
+   pattern's clothes, and it fails the run rather than vanishing into a total. */
+// Match formats, not "one side is a pressure tag and the other is anything":
+// a shape-only key that never inspects the OTHER side's own text format is
+// the same hole twice over - it forgives whatever a real bug happens to sit
+// next to, not just the one collision it was written to describe.
+const DOSE_TAG=/^\d+\.\d\dx$/;              // radPart(): r.toFixed(2)+"x"
+const CELL_FIGURE=/^(\d+\.\d\d|·)$/;   // radNumbers(): r.toFixed(2), or "·" below RAD_FLOOR
+const RAD_SCREEN=/^(rad|radwreck|purityOn):/;   // both shapes below need a radiation layer switched on
+// Every ceiling here is dominated by the 120-tick layer-purity sweep further
+// down this file ('purityOn:0'..'119', the only sweep that leaves every
+// radiation layer on for more than one frame): 120 of ceil:124's hits and
+// 120 of ceil:122's come from it. Change that sweep's tick count and both
+// ceilings move by exactly that delta - that is the sweep length changing,
+// not a new fault wearing an old shape's clothes.
+const COLLISION_ALLOW=[
+  { reason:'RELIEF TANK (layout.js add("reltk",...,7,0,...)) sits in the hull '+
+           'border row (row 0) by design - the same row CLAUDE.md documents as '+
+           '"~10x more likely to be hit". radPart() (the PART DOSE layer, radc) '+
+           "always labels a part at its own box top+11px with no knowledge of "+
+           'the fixed "UPPER DECK / HULL" caption drawn on that same row, so a '+
+           'part placed in row 0 lands its dose tag on the boundary text. Only '+
+           'visible with PART DOSE switched on; the four radiation layers start '+
+           'off, so a player sees this only by asking for it. The other side '+
+           "must be radPart()'s own tag shape (DOSE_TAG) - not anything at all.",
+    ceil:124,
+    test:(a,b)=>RAD_SCREEN.test(a.screen) &&
+                ((a.t==='UPPER DECK / HULL' && DOSE_TAG.test(b.t)) ||
+                 (b.t==='UPPER DECK / HULL' && DOSE_TAG.test(a.t))) },
+  { reason:"layerRunMark() (layers.js) places the PRESSURE tag 1/3 along a "+
+           "run's OWN longest segment, one run at a time, with no knowledge of "+
+           "any other run's tag. A tee fitting's short branch stub or a spare "+
+           "pump's short suction leg can sit close enough to a neighbouring "+
+           "run that the two tags land on each other. Seen only in the "+
+           "fitting/spare-pump/4-loop stress sweeps ('spare:', 'junc:', "+
+           "'juncdmg:', 'loops4:' - the only sweeps that place a fitting or a "+
+           "fourth loop), never on the stock plant, so the key requires that "+
+           "screen tag as well as two pressure tags - a coincidence anywhere "+
+           "else in the run is not this fault. Ceiling raised 4->5 by pipenet.js "+
+           "Stage 1: every run carries a PRESSURE tag now, not only the old "+
+           "hot/cold/hpi/xtie four, so the crowded 4-loop sweep ('loops4:') "+
+           "picked up a second instance of the exact same fault shape (two "+
+           "generators' own pressure tags, 14.34/14.36 MPa) beside the one it "+
+           "already had; spare/junc/juncdmg are unchanged at one each.",
+    ceil:5,
+    test:(a,b)=>/^(loops4|spare|junc|juncdmg):/.test(a.screen) &&
+                / MPa$/.test(a.t) && / MPa$/.test(b.t) }
+];
+{ let n=0;
+  // keyed on the array index, not the ~500-char reason string: two entries
+  // that happened to share wording would otherwise merge counts
+  const allowHits=[];
+  const byScreen={};
+  for(const t of TEXTS){ (byScreen[t.screen]=byScreen[t.screen]||[]).push(t); }
+  for(const k in byScreen){
+    const a=byScreen[k];
+    for(let i=0;i<a.length;i++) for(let j=i+1;j<a.length;j++){
+      if(Math.abs(a[i].y-a[j].y)>2||a[i].rot||a[j].rot) continue;
+      const ov=Math.min(a[i].x1,a[j].x1)-Math.max(a[i].x0,a[j].x0);
+      if(ov<=1.5) continue;
+      const hi=COLLISION_ALLOW.findIndex(e=>e.test(a[i],a[j]));
+      if(hi>=0){ allowHits[hi]=(allowHits[hi]||0)+1; continue; }
+      console.log(`  [${k}] "${a[i].t.slice(0,26)}" x "${a[j].t.slice(0,26)}" overlap ${ov.toFixed(0)}px @y${a[i].y.toFixed(0)}`); n++;
+    }
   }
+  const allowed=COLLISION_ALLOW.map((e,i)=>allowHits[i]||0);
+  const nAllowed=allowed.reduce((s,v)=>s+v,0);
+  const overIdx=[], staleIdx=[];
+  COLLISION_ALLOW.forEach((e,i)=>{
+    if(allowed[i]===0) staleIdx.push(i); else if(allowed[i]>e.ceil) overIdx.push(i);
+  });
+  n+=overIdx.length+staleIdx.length;
+  console.log(n?`  ${n} collision(s)`:'  none');
+  if(nAllowed) console.log(`  ${nAllowed} allow-listed collision(s) (known and triaged - see COLLISION_ALLOW):`);
+  COLLISION_ALLOW.forEach((e,i)=>{
+    if(allowed[i]===0){
+      // a shape with 0 hits is dead code wearing an allow-list entry - fail
+      // it so it gets deleted rather than rotting here forever (rule 12)
+      console.log(`    x  0 STALE (ceiling ${e.ceil}) - this shape no longer occurs, delete the entry:  ${e.reason.slice(0,70)}...`);
+      return;
+    }
+    const over=allowed[i]>e.ceil;
+    console.log(`    x${String(allowed[i]).padStart(3)}${over?` FAIL (ceiling ${e.ceil})`:''}  ${e.reason.slice(0,90)}...`);
+  });
+  if(n) process.exitCode=1;
 }
-console.log(n?`  ${n} collision(s)`:'  none');
 
 console.log('\n=== FONT SIZE HISTOGRAM ===');
 const h={}; for(const t of TEXTS) h[t.size]=(h[t.size]||0)+1;
