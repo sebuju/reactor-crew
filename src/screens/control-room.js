@@ -298,6 +298,7 @@ function crFaultsBuild(container){
 }
 function crFaultsSync(h){
   if(!P) return;
+  h.porv.set({on:reliefAnyStuck(S)});
   h.jam.set({on:S.rodJam});
   h.load.set({label:"LOAD STEP "+(P.loadMax*100).toFixed(0)+"%"});
   h.black.set({on:S.blackout});

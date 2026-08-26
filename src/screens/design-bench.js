@@ -151,8 +151,8 @@ function ctxItemsDesign(hit){
        every relief fitting shares the one tank (hasRelief(), layout.js).
        Only on offer once that header exists - a plant with the last relief
        fitting deleted has no tank and no header run yet to tap into. */
-    { const relKey='relief:pzrt-reltkb';
-      if(hasRelief() && pipeNetwork().some(r=>r.key===relKey))
+    { const relKey=reliefHeaderKey(pipeNetwork());
+      if(hasRelief() && relKey)
         items.push({label:"ADD RELIEF VALVE HERE", fn:()=>{
           addFit('relief',hit.tapKey,hit.tapT,relKey,0.5,PIPE_BORE.relief); }}); }
     const hostLoop=loopOfKey(hit.tapKey);
