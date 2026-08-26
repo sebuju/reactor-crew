@@ -379,6 +379,23 @@ function ventK(s, fid){
   return isFinite(k) && k>=0 ? k : 0;
 }
 
+/* ══ THE ONE VENT RATE, TANK BACK-PRESSURE INCLUDED ══
+   The relief tank is a CLOSED vessel with a cover gas: the gas space shrinks
+   as it fills, so the relief path gets worse the longer you use it. That was
+   in the tick and only in the tick, while porvRateOf() (render/plant.js) still
+   returned a bare ventK() - so the plume and the RELIEF FLOW row both claimed
+   a rate the plant was not passing, and the error grew exactly as the tank
+   filled. A renderer must not recompute a physics term; this is the term, and
+   the tick and the readout both call it.
+   Written as the tank's own rise above containment rather than as the loop's
+   differential, so an EMPTY tank costs exactly nothing: at rest its gas sits at
+   P.Pcont and this is bit-for-bit 1, which is why no PORV figure moves for a
+   plant that has never vented. */
+function ventKNow(s, fid){
+  const back = clamp(1 - (tankP(s,"reltk")-P.Pcont)/(P.P0-P.Pcont), 0, 1);
+  return ventK(s, fid) * back;
+}
+
 // pipeNetwork() keys a routed run "kind:aIdSide-bIdSide" (see layout.js's
 // link()). Node identity in this graph IS that "partId+side" string
 // verbatim, so splitting the key on its one '-' hands back the two node ids
@@ -976,7 +993,14 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
     }
     /* signed: primary into secondary is positive, and once the primary is
        brought DOWN to the secondary this reaches zero on its own */
-    if(outs && ed.kind === "sgtr") outs.qSgtr = (outs.qSgtr||0) + q[e];
+    if(outs && ed.kind === "sgtr"){
+      outs.qSgtr = (outs.qSgtr||0) + q[e];
+      /* per GENERATOR, the same argument outs.by makes for openings: the jet
+         belongs on the machine whose tubes went, not on every machine in the
+         row. Keyed by the edge's own key ("sgtr:"+part id). */
+      (outs.sgtrBy || (outs.sgtrBy = {}));
+      outs.sgtrBy[ed.key] = (outs.sgtrBy[ed.key]||0) + q[e];
+    }
     if(ed.kind === "cold" && (ed.u === net.core || ed.v === net.core)){
       const qe = Math.abs(q[e]);
       core += qe;

@@ -783,6 +783,9 @@ function resetPlant(){
         % of loop inventory per second - a readout, and the number the panel
         and the badge both print */
      sgtrRate:0,
+     /* and the same per GENERATOR, so the jet lands on the machine that was
+        hit - refilled, never rebuilt, exactly like spillBy */
+     sgtrBy:{},
      /* every opening on the plant and what it is passing - refilled, never
         rebuilt, so a renderer holding it never reads a stale object */
      spillBy:{}, spillRate:0,
@@ -1124,15 +1127,7 @@ function step(dt){
         s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
       }
       if(s.reliefOpen[fid] && !s.reliefBlocked[fid]){
-        /* The tank pushes back. It is a CLOSED vessel with a cover gas, so
-           the gas space shrinks as it fills and the relief path gets worse
-           the longer you use it - which is true, and was free. Written as
-           the tank's own rise above containment rather than as the loop's
-           differential, so an EMPTY tank costs exactly nothing: at rest its
-           gas sits at P.Pcont and this is bit-for-bit 1, which is why no
-           PORV figure moves for a plant that has never vented. */
-        const back = clamp(1 - (tankP(s,"reltk")-P.Pcont)/(P.P0-P.Pcont), 0, 1);
-        const vk = ventK(s,fid)*back;
+        const vk = ventKNow(s,fid);
         s.P -= PORV_DP*vk*(P.P0/15.5)*dt;
         vented += PORV_INV*vk*dt;
       }
@@ -1180,6 +1175,9 @@ function step(dt){
      back the other way carries no primary activity with it. */
   { const leak = Math.max(0, invRate(netOut.qSgtr||0));
     s.sgtrRate = leak;
+    const sby = netOut.sgtrBy || {};
+    for(const k in s.sgtrBy) if(!(k in sby)) delete s.sgtrBy[k];
+    for(const k in sby) s.sgtrBy[k] = Math.max(0, invRate(sby[k]));
     s.inv -= leak*dt;
     if(leak>0) s.release = Math.min(100, s.release + (leak/0.30)*0.02*P.dose*dt); }
   const burst = P.P0*(P.burstK - 0.0028*s.fatigue);   // fatigue weakens the vessel

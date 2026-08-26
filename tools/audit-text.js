@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // Usage:  node tools/audit-text.js
+const fs=require('fs'), path=require('path');
+const {ROOT}=require('./bundle');
 const src=require('./bundle').bundle();
 
 const TEXTS=[], RECTS=[];
@@ -86,6 +88,8 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
  'pipeNetwork,pipeWaypoints,nearestOn,placePart,addFit,removePart,removeFit,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
+ 'FXR:()=>FXR,fxReset,porvRate,PORV_INV:()=>PORV_INV,SPILL_FULL:()=>SPILL_FULL,'+
+ 'SGTR_RATE:()=>SGTR_RATE,TANK:()=>TANK,ventKNow,primaryRelief,'+
  'setLayer:(k,v)=>{LAYERS[k].on=v;}};')();
 global.__viewOn=()=>M.vOn();
 
@@ -315,6 +319,161 @@ console.log(LAYER_PURE
   ? '  120 ticks drawn with every layer on and off: final S identical field for field, and the same P.net factorisation'
   : '  FAIL a layer changed the plant - a draw callback is writing sim state, or solving the pipe network into P');
 if(!LAYER_PURE) process.exitCode=1;
+
+/* ══════════ AN EFFECT DRAWS THE RATE THE SIM IS PASSING ══════════
+   A pressure effect has four things to get right: it must be driven by the
+   SOLVED quantity and not a proxy, drawn where the physics happens, start and
+   stop with the thing it depicts, and run at the simulation's rate. Three of
+   them were wrong at once: the HPI jet and the tube-rupture jet were literally
+   `?1:0`, and the PORV plume recomputed a vent term the tick had since given a
+   back-pressure factor - so the picture over-stated the vent by exactly that
+   factor, and the error grew as the tank filled.
+
+   fxEase() smooths a rate across frames, so the RAW argument is not readable
+   afterwards - except on the first call for a key, which stores it verbatim.
+   fxReset() then one draw is therefore an exact read of what every effect was
+   handed, to the last bit. Same identity P.dose already gets: not "close". */
+const FX = {};
+function fxRead(){
+  M.fxReset();
+  cap('fxprobe:'+(FX.n=(FX.n||0)+1), M.drawOperate);
+  const out={}; const r=M.FXR();
+  for(const k in r) out[k]=r[k].v;
+  return out;
+}
+const near=(a,b)=>a!=null&&b!=null&&Math.abs(a-b)<=1e-12;
+const fxChecks=[];
+const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
+
+/* 1. NO PRESSURE EFFECT IS BOOLEAN-DRIVEN. Named keys, not a blanket ban: rod
+      jam, DNB, blackout dark, backup supply and repair sparks depict LATCHES,
+      and `?1:0` is the honest driver for those. */
+{
+  const src=fs.readFileSync(path.join(ROOT,'src/render/plant.js'),'utf8')
+             .replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/[^\n]*/g,'');
+  const bad=[];
+  for(const key of ['breach','porv','boil','hpi','sgtr']){
+    const tag='fxEase(id+":'+key+'"';
+    let k=-1;
+    while((k=src.replace(/\s+/g,'').indexOf(tag,k+1))>=0){
+      const flat=src.replace(/\s+/g,'');
+      const arg=flat.slice(k+tag.length, flat.indexOf(')', k+tag.length));
+      if(arg.indexOf('?1:0')>=0) bad.push(key);
+    }
+  }
+  fxAdd('no pressure effect is boolean-driven', bad.length===0,
+    bad.length? bad.join(', ')+' still drawn off a flag'
+              : 'breach, porv, boil, hpi and sgtr all read a solved quantity');
+}
+
+/* 2. THE RATE MATCHES, NUMERICALLY. Fly a plant into every pressure effect at
+      once - a hole in the vessel, a lifted relief valve, injection running and
+      one generator's tubes gone - and demand each eased argument IS the sim
+      number it claims. */
+{
+  rngSeed=20260824;
+  // FOUR loops on purpose: a one-loop plant cannot show that a rupture stays
+  // on the machine that was hit, which is half of what this block is for.
+  const loops0=M.D().loops; M.D().loops=4;
+  M.commission();
+  const S=M.S();
+  const sgIds=M.parts().filter(p=>p.id.startsWith('sg')).map(p=>p.id);
+  const hurt=sgIds[1];
+  M.setDmg([hurt]);
+  S.hpi=true; S.breach=true;
+  for(let i=0;i<40;i++) M.step(0.02);
+  const f=fxRead();
+  const cl=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const want={
+    'core:breach': cl((S.spillBy['break:core']||0)/M.SPILL_FULL(),0,1),
+    'core:boil'  : cl(S.vf/0.6,0,1),
+    'hpi:hpi'    : cl((S.injRate||0)/M.TANK().hpi.rate(),0,1),
+  };
+  want[hurt+':sgtr'] = cl((S.sgtrBy['sgtr:'+hurt]||0)/M.SGTR_RATE(),0,1);
+  const off=Object.keys(want).filter(k=>!near(f[k],want[k]));
+  fxAdd('every effect runs at the sim rate', off.length===0,
+    off.length? off.map(k=>k+': drawn '+f[k]+' vs sim '+want[k]).join('; ')
+              : Object.keys(want).length+' effect(s) identical to the sim to 1e-12');
+
+  /* 3b. POSITION MATTERS. The leak belongs to the generator that was hit. */
+  const wrong=sgIds.filter(id=>id!==hurt && (f[id+':sgtr']||0)>0);
+  fxAdd('only the ruptured generator leaks',
+    sgIds.length>1 && wrong.length===0 && (f[hurt+':sgtr']||0)>0,
+    wrong.length? wrong.join(', ')+' drew a leak they do not have'
+                : 'the leak is on '+hurt+' alone, '+(sgIds.length-1)+' intact generator(s) dry');
+  M.D().loops=loops0;
+}
+
+/* 3. IT STOPS. A break run to equalisation with containment must stop drawing,
+      and a relief valve held open into a filling tank must fade with the
+      DELIVERED rate rather than hold at the valve's position. */
+{
+  rngSeed=20260824;
+  M.commission();
+  const S=M.S();
+  S.breach=true;
+  for(let i=0;i<40;i++) M.step(0.02);
+  const early=fxRead()['core:breach'];
+  for(let i=0;i<12000;i++) M.step(0.02);
+  const late=fxRead()['core:breach'];
+  /* not exactly 0: s.P is floored at min(6% of P0, Pcont) so a hair of
+     differential survives forever. What matters is that it collapses with the
+     hole instead of blowing at full rate for as long as the flag is latched -
+     it was 1.0 at 240 s before the plume read its own solved outflow. */
+  fxAdd('a break stops when it equalises', early>0.01 && late<early*0.02,
+    'breach plume '+early.toFixed(4)+' at 0.8 s, '+late.toFixed(6)+' at 240 s ('
+      +(100*late/early).toFixed(1)+'% of it)');
+}
+{
+  rngSeed=20260824;
+  M.commission();
+  const S=M.S();
+  const fid=Object.keys(S.reliefOpen||{})[0];
+  S.reliefOpen[fid]=true; S.reliefBlocked[fid]=false; S.reliefAuto[fid]=false;
+  S.tank.reltk=0;
+  for(let i=0;i<5;i++) M.step(0.02);
+  /* the whole usable range: the gas sits at containment pressure empty (so an
+     untouched plant is bit-for-bit 1) and the rupture disc bursts at 1.4 MPa,
+     which the tank reaches at about 91% - so ~5% is all the back-pressure a
+     player can ever see, and the point is that it is THERE and MONOTONE, not
+     that it is large. It was flat at 1.000 across all of it. */
+  const lv=[0,45,90].map(l=>{ S.tank.reltk=l; return fxRead()['pzr:porv']; });
+  const mono=lv[0]>lv[1] && lv[1]>lv[2];
+  fxAdd('a filling relief tank shrinks the plume',
+    S.reliefOpen[fid] && Math.abs(lv[0]-1)<=1e-12 && mono && lv[2]<0.97,
+    'valve still open, plume '+lv.map(v=>v.toFixed(4)).join(' -> ')+' at 0/45/90% tank');
+  /* and the plume IS THE TICK'S OWN VENT TERM. Against ventKNow() rather than
+     against porvRate(): comparing the renderer with itself would have stayed
+     green through the whole defect, because both readers came off the one
+     renderer-side expression that had gone stale. */
+  S.tank.reltk=60;
+  const drawn=fxRead()['pzr:porv'], sim=M.ventKNow(S,fid);
+  fxAdd('the PORV plume is the tick vent term', near(drawn,sim) && drawn>0,
+    near(drawn,sim)? 'plume '+drawn.toFixed(6)+' = ventKNow() at a 60% tank'
+                   : 'plume '+drawn+' vs the tick '+sim);
+  // and the panel row reads the same one number
+  fxAdd('the RELIEF FLOW row is that number too',
+    near(M.porvRate(S)/M.PORV_INV(), sim), 'RELIEF FLOW / PORV_INV = ventKNow()');
+}
+
+/* 4. IT DOES NOT SURVIVE A SCRUB. FXR is display state, cleared by hand
+      whenever the clock moves - beside the display smoothing in pipes.js.
+      fxReset() is called from record.js and step.js behind a typeof guard so
+      the no-DOM probe still flies, and nothing has ever asserted it works. */
+{
+  fxRead();
+  const before=Object.keys(M.FXR()).length;
+  M.fxReset();
+  const after=Object.keys(M.FXR()).length;
+  fxAdd('an effect does not survive a scrub', before>0 && after===0,
+    before+' eased rate(s) held, 0 after fxReset()');
+}
+
+console.log('\n=== AN EFFECT DRAWS THE RATE THE SIM IS PASSING ===');
+for(const [n,ok,detail] of fxChecks){
+  console.log((ok?'  ok   ':'  FAIL ')+n.padEnd(38)+detail);
+  if(!ok) process.exitCode=1;
+}
 
 console.log('=== BROKEN VALUES IN DRAWN TEXT ===');
 { let n=0;
