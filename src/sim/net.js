@@ -2,8 +2,16 @@
 //
 // Edge e=(u,v) with conductance g_e and head h_e carries flow
 //   Q_e = g_e * (p_u - p_v + h_e)
-// KCL at every non-ground node gives a symmetric PSD system G p = b, with
+// KCL at every FREE node gives a symmetric PSD system G p = b, with
 //   G_uu = sum of g on u,  G_uv = -g_e,  b_u = sum of head terms on u.
+//
+// A FIXED node is one whose pressure is KNOWN rather than solved. The single
+// `ground` node this file used to carry was the one-node case of that, pinned
+// at 0; it is a set now because a plant can hold several known pressures at
+// once - the pressurizer at s.P, containment behind a break, a tank's own
+// charge - and no single affine offset can satisfy two of them at the same
+// time. `fixed` is an object keyed by node index whose value is that node's
+// pressure; a node absent from it is solved for.
 //
 // Factorization: LDL^T (Cholesky without the square root — the matrix is
 // only PSD, not always strictly PD, because a floating island contributes an
@@ -82,18 +90,23 @@ function netSolve(A, x, n){
 // position, pump demand) while the graph topology itself does not change
 // tick to tick.
 //
-// Ground node: rather than pinning it with a penalty (an arbitrary, hard to
-// justify condition number) or resizing the system to drop its row/column,
-// ground is simply never written to during assembly. Its row and column of
-// A stay exactly zero, so netFactor's pivot guard decouples it exactly like
-// any other node with no path to ground, and netSubst lands its potential at
-// exactly 0 — the same single mechanism does both jobs.
+// Fixed nodes: rather than pinning one with a penalty (an arbitrary, hard to
+// justify condition number) or resizing the system to drop its row/column, a
+// fixed node is simply never written to during assembly. Its row and column
+// of A stay exactly zero, so netFactor's pivot guard decouples it exactly
+// like any node with no path to a fixed one, and netSubst lands its solved
+// potential at exactly 0 — the same single mechanism does both jobs, and the
+// caller reads the KNOWN value back out of `fixed` rather than out of p.
+// A fixed node's own pressure reaches its free neighbours through b instead:
+// the -g*p_v term that would have sat in the matrix moves to the right-hand
+// side as +g*pFixed. With one fixed node at 0 that term vanishes and this
+// assembles bit-for-bit the matrix the single-ground version did.
 //
 // An edge with g<=0 (a fully-shut valve, same as a removed pipe) is skipped
 // entirely rather than assembled with a zero conductance: a structurally-
 // absent edge and a shut valve must produce a bit-identical matrix, because
 // a later stage compares assembled matrices by strict equality.
-function netAssemble(edges, n, ground, s, A, b){
+function netAssemble(edges, n, fixed, s, A, b){
   A = A || new Float64Array(n*n);
   b = b || new Float64Array(n);
   A.fill(0);
@@ -104,31 +117,44 @@ function netAssemble(edges, n, ground, s, A, b){
     if(!(g > 0)) continue;
     const h = typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0);
     const u = ed.u, v = ed.v;
-    const gu = u !== ground, gv = v !== ground;
+    const pu = fixed[u], pv = fixed[v];
+    const gu = pu === undefined, gv = pv === undefined;
     if(gu) A[u*n+u] += g;
     if(gv) A[v*n+v] += g;
     if(gu && gv){ A[u*n+v] -= g; A[v*n+u] -= g; }
     if(gu) b[u] -= g*h;
     if(gv) b[v] += g*h;
+    if(gu && !gv) b[u] += g*pv;
+    if(gv && !gu) b[v] += g*pu;
   }
   return { A, b };
 }
 
 // Per-edge flow from solved potentials p: Q_e = g_e*(p_u - p_v + h_e).
-// The ground node reads as potential 0 regardless of whatever p[ground]
-// holds (netSubst already forces it to 0, but a caller passing a raw
-// pressure array without solving through ground should still get the
-// right answer). Writes into out (length edges.length) to avoid allocating
-// per tick; s is only needed if any edge's g/h is a function.
-function netFlows(edges, p, ground, out, s){
+// A fixed node reads as its KNOWN pressure, never as whatever p holds for it
+// (netSubst leaves that at 0, which is the right answer only for a node
+// fixed at 0 - leave it and every flow touching the core reads as though the
+// vessel were at zero pressure: a large, plausible-looking wrong number with
+// nothing thrown anywhere). Writes into out (length edges.length) to avoid
+// allocating per tick; s is only needed if any edge's g/h is a function.
+function netFlows(edges, p, fixed, out, s){
   for(let e=0;e<edges.length;e++){
     const ed = edges[e];
     const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
     if(!(g > 0)){ out[e] = 0; continue; }
     const h = typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0);
-    const pu = ed.u === ground ? 0 : p[ed.u];
-    const pv = ed.v === ground ? 0 : p[ed.v];
+    const fu = fixed[ed.u], fv = fixed[ed.v];
+    const pu = fu === undefined ? p[ed.u] : fu;
+    const pv = fv === undefined ? p[ed.v] : fv;
     out[e] = g * (pu - pv + h);
   }
   return out;
+}
+
+// The solved field, with every fixed node's known pressure written back over
+// the 0 netSubst left there. One place says "a fixed node reads its own
+// value", so a reader can take p straight afterwards.
+function netUnfix(p, fixed){
+  for(const i in fixed) p[i] = fixed[i];
+  return p;
 }
