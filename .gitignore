@@ -13,3 +13,6 @@ graphify-out/
 
 # What `node tools/server.js` writes - one player's scenarios and recordings
 saves/
+
+# Design notes and handovers - written for people, not shipped with the game
+docs/
