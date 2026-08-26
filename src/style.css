@@ -90,7 +90,7 @@ body[data-screen="help"] #cv{display:none}
 @keyframes ann-blink{0%,49%{opacity:1}50%,100%{opacity:.4}}
 .ann-tile.blink{animation:ann-blink 900ms steps(1,end) infinite}
 
-#tip{position:fixed;z-index:1000;display:none;max-width:320px;padding:8px 10px;
+#tip{position:fixed;z-index:1000;display:block;max-width:320px;padding:8px 10px;
   background:var(--c-panel);border:1px solid var(--c-edge2);color:var(--c-ink);
   font-family:var(--mono);font-size:var(--t8);line-height:1.4;pointer-events:none;
   box-shadow:0 4px 14px rgba(0,0,0,.5)}

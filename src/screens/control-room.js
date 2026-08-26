@@ -87,9 +87,9 @@ function crAlarmsSync(container,rows){
     h.row.classList.toggle("lit",on);
     h.row.classList.toggle("red",on&&h.a[1]==="red");
     h.row.classList.toggle("amber",on&&h.a[1]==="amber");
-    h.row.style.display=on?"":"none";
+    KIT.show(h.row,on);
   }
-  container.parentNode.style.display=lit?"":"none";
+  KIT.show(container.parentNode,lit);
   container.parentNode.querySelector(".cr-alarms-count").textContent=String(lit);
 }
 
@@ -122,7 +122,7 @@ function crAlarmsSync(container,rows){
 const CR_TREND_PAD=8/HOST_K, CR_TREND_LEG=30;
 function crTrendSync(host){
   const on = plot.length>0;
-  host.canvas.style.display = on?"":"none";
+  KIT.show(host.canvas,on);
   if(!on) return;
   hostPaint(host.canvas,(x,y,w,h)=>{
     const ser=plot.map(k=>({lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i)}));
@@ -302,7 +302,7 @@ function crFaultsSync(h){
   h.jam.set({on:S.rodJam});
   h.load.set({label:"LOAD STEP "+(P.loadMax*100).toFixed(0)+"%"});
   h.black.set({on:S.blackout});
-  h.boron.el.style.display=P.boroninj?"":"none";
+  KIT.show(h.boron.el,P.boroninj);
   h.boron.set({label:S.borInjUsed?"BORON EXPENDED":"EMERGENCY BORON",disabled:S.borInjUsed});
 }
 
@@ -349,7 +349,7 @@ function crRailSync(panels){
     const first = h.empty===null;
     if(!first && !railSeen(h.well.el) && !(on&&moved)) continue;
     const rows = h.fid? readoutsForFit(h.fid,S) : readoutsFor(h.p,S);
-    if(first){ h.empty=!rows.length; h.well.el.style.display=rows.length?"":"none"; }
+    if(first){ h.empty=!rows.length; KIT.show(h.well.el,rows.length>0); }
     if(!rows.length) continue;
     if(on && moved) KIT.reveal(h.well.el,"start");
     fieldRowsSync(h.body,rows);
@@ -435,12 +435,12 @@ function crSync(){
   if(s.melt!==CR.bMelt||s.breach!==CR.bBreach||s.trip!==CR.bTrip){
     CR.bMelt=s.melt; CR.bBreach=s.breach; CR.bTrip=s.trip;
     if(s.melt||s.breach){
-      CR.banner.style.display=""; CR.banner.className="cr-banner melt";
+      CR.banner.className="cr-banner melt"; KIT.show(CR.banner,true);
       CR.banner.textContent=s.melt?"CORE MELT - UNRECOVERABLE":"VESSEL RUPTURE - UNRECOVERABLE";
     } else if(s.trip){
-      CR.banner.style.display=""; CR.banner.className="cr-banner trip";
+      CR.banner.className="cr-banner trip"; KIT.show(CR.banner,true);
       CR.banner.textContent="LAST TRIP / "+s.trip;
-    } else CR.banner.style.display="none";
+    } else KIT.show(CR.banner,false);
   }
 }
 if(typeof document!=="undefined" && document.documentElement) CR=crBuild();

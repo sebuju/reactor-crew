@@ -397,7 +397,7 @@ function paramBlockMk(block){
       const row=KIT.sliderRow({title:block.title,min:block.min,max:block.max,step:block.step,
         fmt:block.fmt,massFn:!!block.massFn,tip:block.tip,onChange:set});
       return {el:row.el,sync(b){
-        row.el.style.display=b.when&&!b.when()?"none":"";
+        KIT.show(row.el,!(b.when&&!b.when()));
         const v=get();
         row.set(v,null,b.massFn?b.massFn(v)-b.massFn(block.min):undefined);
       }};
@@ -465,7 +465,7 @@ function paramBlockMk(block){
         if(!block.tools.some(t=>t[1]===LATPEN.tool)) LATPEN.tool=block.tools[0][1];
         btns.forEach(o=>o.b.set({on:LATPEN.tool===o.k}));
         const showBank=LATPEN.tool==="rod";
-        bankRow.style.display=showBank?"":"none";
+        KIT.show(bankRow,showBank);
         if(showBank) bankBtns.forEach((bt,i)=>bt.set({on:LATPEN.bank===i}));
       }};
     }

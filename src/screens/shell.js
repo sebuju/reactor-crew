@@ -83,8 +83,8 @@ function shellInitTooltip(){
   let cur=null;
   const show=el=>{ cur=el;
     tip.innerHTML=`<b>${el.dataset.tipTitle||""}</b><p>${el.dataset.tipBody||""}</p>`;
-    tip.style.display="block"; };
-  const hide=()=>{ cur=null; tip.style.display="none"; };
+    KIT.show(tip,true); };
+  const hide=()=>{ cur=null; KIT.show(tip,false); };
   document.addEventListener("pointerover",e=>{
     const el=e.target.closest("[data-tip-title]");
     if(el && el!==cur) show(el);

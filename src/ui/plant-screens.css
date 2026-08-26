@@ -32,13 +32,13 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   border-top:1px solid var(--c-edge)}
 
 .cr-alarms{position:absolute;left:6px;top:118px;pointer-events:auto;max-width:220px;
-  background:rgba(7,12,13,.92);border:1px solid var(--c-edge2);display:none}
+  background:rgba(7,12,13,.92);border:1px solid var(--c-edge2);display:block}
 .cr-alarms-head{display:flex;justify-content:space-between;padding:4px 8px;
   font-size:var(--t7);letter-spacing:1.2px;color:var(--c-amber)}
 .cr-alarms-body{max-height:220px;overflow-y:auto}
-.cr-alarm-row{display:none;align-items:center;gap:6px;padding:2px 8px;font-size:var(--t7-5);
+.cr-alarm-row{display:flex;align-items:center;gap:6px;padding:2px 8px;font-size:var(--t7-5);
   font-weight:700;letter-spacing:.6px}
-.cr-alarm-row.lit{display:flex;color:var(--c-ink-on-lit)}
+.cr-alarm-row.lit{color:var(--c-ink-on-lit)}
 .cr-alarm-row.lit.red{background:var(--c-red)}
 .cr-alarm-row.lit.amber{background:var(--c-amber)}
 .cr-alarm-row.lit:not(.red):not(.amber){background:var(--c-blue)}
@@ -46,7 +46,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 
 .cr-banner{position:absolute;left:6px;right:306px;top:6px;pointer-events:none;
   padding:8px;text-align:center;font-size:var(--t12);font-weight:700;letter-spacing:2px;
-  text-transform:uppercase;display:none}
+  text-transform:uppercase;display:block}
 .cr-banner.melt{background:var(--c-bg-melt);color:var(--c-red)}
 .cr-banner.trip{background:var(--c-bg-trip);color:var(--c-amber)}
 

@@ -56,6 +56,19 @@ const KIT = (function(){
   }
   function setStyle(node, k, v){ if(node.style[k] !== v) node.style[k] = v; return node; }
 
+  /* ══ VISIBILITY IS A CLASS, NEVER AN INLINE DISPLAY STRING ══
+     `node.style.display = ""` does not mean "show it" - it REMOVES the inline
+     override and hands the element back to the stylesheet. Every element whose
+     stylesheet default was `display:none` therefore stayed hidden forever, and
+     no auditor could see it because none of them loads CSS. The alarm stack and
+     the MELT/TRIP banner both lived there. So the stylesheet states the SHOWN
+     display for every element, this class is the only hide, and `audit-dom.js`
+     bans an inline display write in the screen and renderer files outright. */
+  function show(node, on){
+    node.classList.toggle("kit-hide", !on);
+    return node;
+  }
+
   const clampPct = t => Math.max(0, Math.min(1, t)) * 100;
 
   /* ONE cell geometry for every strip in the kit - box, cell height AND cell
@@ -334,7 +347,7 @@ const KIT = (function(){
       isVis = !!isVis; c = c || col;
       if(isVis === vis && c === col) return;
       vis = isVis; col = c;
-      e.style.display = vis ? "flex" : "none";
+      show(e, vis);
       e.style.background = col;
     }
     set(false, col);
@@ -348,7 +361,7 @@ const KIT = (function(){
       isOn = !!isOn; c = c || col;
       if(isOn === on && c === col) return;
       on = isOn; col = c;
-      e.style.display = on ? "block" : "none";
+      show(e, on);
       e.style.setProperty("--kit-hatch-color", col);
     }
     set(false, col);
@@ -394,7 +407,7 @@ const KIT = (function(){
       m.style.left = clampPct((opts.mark - min) / (max - min)) + "%";
       track.appendChild(m);
     }
-    const dem = el("div", "kit-slider-dem");
+    const dem = el("div", "kit-slider-dem kit-hide");
     track.appendChild(dem);
     const input = el("input", "kit-slider-input", {type: "range", min, max, step});
     track.appendChild(input);
@@ -429,7 +442,7 @@ const KIT = (function(){
       if(demVal != null && demVal !== lastDem){
         lastDem = demVal;
         dem.style.left = clampPct((demVal - min) / (max - min)) + "%";
-        dem.style.display = Math.abs(demVal - val) > 1e-9 ? "block" : "none";
+        show(dem, Math.abs(demVal - val) > 1e-9);
       }
     }
     set(opts.val != null ? opts.val : min, opts.dem);
@@ -552,7 +565,7 @@ const KIT = (function(){
     return {el: root, set};
   }
 
-  return {el, tip, setText, setStyle, well, rule, reveal, chip, dot, seg, segSigned,
+  return {el, tip, setText, setStyle, show, well, rule, reveal, chip, dot, seg, segSigned,
     segMark, band, lamp, badge, hatch, button, slider, optList, segSel, sliderRow,
     readout, toggle};
 })();

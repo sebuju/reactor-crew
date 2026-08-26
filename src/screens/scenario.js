@@ -356,11 +356,11 @@ function scnApplyBlock(el,b){
   el.style.width=(b.pt?0:Math.max(0.2,(f1-f0)*100))+"%";
   el.classList.toggle("cleared", !b.pt && b.G.span==="latch" && b.G.pair===0 && !b.e.a[0]);
   const R=el._refs;
-  R.pt.style.display=b.pt?"":"none";
-  R.span.style.display=b.pt?"none":"";
-  R.sqL.style.display=b.pt?"none":"";
-  R.sqR.style.display=b.pt?"none":"";
-  R.handle.style.display=(!b.pt && RAMPARG[b.e.k]!=null)?"":"none";
+  KIT.show(R.pt,b.pt);
+  KIT.show(R.span,!b.pt);
+  KIT.show(R.sqL,!b.pt);
+  KIT.show(R.sqR,!b.pt);
+  KIT.show(R.handle,!b.pt && RAMPARG[b.e.k]!=null);
   R.lab.textContent=scnBlockLab(b);
   R.lab.style.left=b.pt?"8px":"4px";
 }
@@ -414,7 +414,7 @@ function scnSyncRuler(){
     UI.rulerTrack.appendChild(fk); UI.rulerMarks.push(fk);
   }
   const pf=clamp(scnFracOf(scnPlay),0,1), inview=scnFracOf(scnPlay)>=0 && scnFracOf(scnPlay)<=1;
-  UI.playhead.style.display=inview?"":"none";
+  KIT.show(UI.playhead,inview);
   UI.playhead.style.left=`calc(var(--scn-gutter) + ${pf*100}% - ${pf}*var(--scn-gutter))`;
 }
 
@@ -450,12 +450,12 @@ function scnSyncLimits(){
       (L.grace?", and a violation shorter than "+L.grace+" s does not count.":".")+
       " Select it to change it - the verdict is re-read off the run you already have, nothing is simulated again.");
     const r=scnVerd?scnVerd.rows.find(q=>q.L===L):null;
-    if(!r){ rec.held.style.width="100%"; rec.held.style.background="var(--c-well)"; rec.broke.style.display="none"; }
+    if(!r){ rec.held.style.width="100%"; rec.held.style.background="var(--c-well)"; KIT.show(rec.broke,false); }
     else {
       const total=(scnTake&&scnTake.tickEnd)||1;
       const bx = r.broke ? clamp(r.tick/total,0,1) : 1;
       rec.held.style.width=(bx*100)+"%"; rec.held.style.background="";
-      rec.broke.style.display = r.broke? "" : "none";
+      KIT.show(rec.broke,!!r.broke);
       if(r.broke){ rec.broke.style.left=(bx*100)+"%"; rec.broke.style.width=((1-bx)*100)+"%"; }
     }
   });
@@ -613,11 +613,11 @@ function scnBuildLimitInspector(){
       breakInfo.textContent="broke "+trStamp(r.tick)+
         (typeof r.worst==="number"&&isFinite(r.worst)
           ? "  worst "+(Math.abs(r.worst)>=100?r.worst.toFixed(0):r.worst.toFixed(2))+" @ "+trStamp(r.worstAt) : "");
-      jumpBtn.el.style.display="";
+      KIT.show(jumpBtn.el,true);
     } else if(r){
       breakInfo.className="scn-insp-held"; breakInfo.textContent="held";
-      jumpBtn.el.style.display="none";
-    } else { breakInfo.className=""; breakInfo.textContent=""; jumpBtn.el.style.display="none"; }
+      KIT.show(jumpBtn.el,false);
+    } else { breakInfo.className=""; breakInfo.textContent=""; KIT.show(jumpBtn.el,false); }
   }};
 }
 
@@ -688,9 +688,9 @@ function scnSyncFloats(){
   UI.saveEl.el.classList.toggle("open",scnSaveOpen);
   if(!scnSaveOpen) return;
   const s=UI.saveEl;
-  s.offMsg.style.display = STORE.on ? "none" : "";
-  s.checkBtn.el.style.display = STORE.on ? "none" : "";
-  s.onWrap.style.display = STORE.on ? "" : "none";
+  KIT.show(s.offMsg,!STORE.on);
+  KIT.show(s.checkBtn.el,!STORE.on);
+  KIT.show(s.onWrap,STORE.on);
   if(!STORE.on){ s.offMsg.textContent=storeWhy(); return; }
   s.listMsg.textContent = scnFiles===null ? "press REFRESH to list what is saved"
     : !scnFiles.length ? "nothing saved yet" : "";

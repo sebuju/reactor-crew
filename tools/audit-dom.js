@@ -32,7 +32,7 @@
    Everything below is arithmetic, and the browser is still the only thing that
    can answer the other question. */
 const fs = require('fs'), path = require('path');
-const {ROOT, bundle} = require('./bundle');
+const {ROOT, bundle, scriptPaths} = require('./bundle');
 const domstub = require('./domstub');
 
 const EXPORTS = '{commission,step,sample,act,recTick,recRoot,resetPlant,combatHit,'+
@@ -267,6 +267,45 @@ if(!wide.err){
   }
 }
 
+/* ══ VISIBILITY IS A CLASS, NEVER AN INLINE DISPLAY STRING ══
+   `el.style.display = ""` does not SHOW an element. It removes the inline
+   override and hands the element back to the stylesheet - so an element whose
+   stylesheet default is `display:none` stays hidden forever. The alarm stack
+   and the MELT/TRIP banner both sat in that state, in a project with four green
+   auditors, because none of them loads a stylesheet: with no CSS, `display:none`
+   never applies and the empty string looks exactly right.
+
+   This is a SOURCE rule for that reason - it is the one shape of CSS fault that
+   is visible without CSS. KIT.show() toggles `.kit-hide`, every stylesheet rule
+   states the SHOWN display, and no screen, renderer or widget writes
+   `style.display` at all. Banning the write outright rather than only the empty
+   string is deliberate: a literal "block" written over a stylesheet that says
+   "flex" is the same bug wearing a value. */
+const blankOut = t => t.replace(/[^\n]/g,' ');
+const stripJsComments = src => src.replace(/\/\*[\s\S]*?\*\//g, blankOut)
+                                  .replace(/\/\/[^\n]*/g, blankOut);
+const DISPLAY_FILES = scriptPaths().filter(
+  f => /^src\/(screens|render|ui)\//.test(f) && f.endsWith('.js'));
+function displayWrites(override){
+  const hits = [];
+  for(const f of DISPLAY_FILES){
+    const raw = (override && override.f === f) ? override.src
+              : fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const src = stripJsComments(raw);
+    const re = /\.style\.display\s*=/g;
+    let m;
+    while((m = re.exec(src))) hits.push(f + ':' + src.slice(0, m.index).split('\n').length);
+  }
+  return hits;
+}
+{
+  const hits = displayWrites(null);
+  add('visibility is a class, not an inline display', hits.length === 0,
+      hits.length ? hits.length+' inline display write(s) - use KIT.show()'
+                  : DISPLAY_FILES.length+' screen/renderer/kit files hide through .kit-hide only',
+      hits.map(h => '  ' + h));
+}
+
 /* every id the stub answers must be an id index.html really has, or the stub is
    propping up a lookup that returns null in a browser */
 {
@@ -305,6 +344,20 @@ for(const [what, guard, patch] of FAULTS){
   else if(guard === 'screens build DOM once')  caught = !r.err && r.reuse !== 0;
   else                                         caught = !r.err && r.hosts.some(h => h.out.length);
   selftest.push([what, guard, caught, caught ? 'caught by "'+guard+'"' : 'SLIPPED PAST "'+guard+'"']);
+}
+
+/* the source rule boots nothing, so it proves itself against a patched STRING:
+   the exact line that hid the alarm stack, put back. */
+{
+  const f = 'src/screens/control-room.js';
+  const raw = fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const bad = raw.replace('KIT.show(h.row,on);', 'h.row.style.display=on?"":"none";');
+  const caught = bad !== raw && displayWrites({f, src: bad}).length === 1;
+  selftest.push(['the alarm stack hidden by style.display=""',
+                 'visibility is a class, not an inline display', caught,
+                 caught ? 'caught by "visibility is a class, not an inline display"'
+                        : bad === raw ? 'the injection no longer matches the source'
+                                      : 'SLIPPED PAST the source scan']);
 }
 
 /* ════════════════════ report ════════════════════ */
