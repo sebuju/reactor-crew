@@ -18,7 +18,17 @@ const fittableList=()=>[
   {id:"cond", label:"CONDENSER",           get:()=>D.condFit, set:v=>{D.condFit=v;}},
 ];
 const fitOf=id=>fittableList().find(f=>f.id===id).get();
-const fitSig=()=>fittableList().map(f=>f.get()?1:0).join("");
+// whether the RELIEF TANK belongs on the grid at all: it is not a
+// fittableList() toggle, it is DERIVED from whether any relief fitting still
+// taps it (see FIT.relief, pipenet.js) - one tank serves every relief path,
+// and deleting the last one removes the tank the same rebuild it removes
+// the last fitting, no separate switch to leave stale.
+const hasRelief=()=>Object.keys(D.fit).some(id=>D.fit[id].mode==="relief");
+// buildLayout() only rebuilds when this changes, so hasRelief() has to be
+// folded in - a tee or a throttle never touches LAY.parts and never needed
+// to be, but a relief fitting is the first mode whose PRESENCE (not just its
+// live position) decides whether a component exists on the grid.
+const fitSig=()=>fittableList().map(f=>f.get()?1:0).join("")+(hasRelief()?"1":"0");
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
 // at the end of buildLayout()) or it would vanish whenever an unrelated
@@ -51,19 +61,39 @@ function loopPumpCap(i,dmg){
   }
   return c;
 }
-// a junction is a tap, not a component: no box, no grid cell, never in
-// LAY.parts. D.junc is topology only - which two loops it bridges and the
-// plant-space point on loop A's cold leg it taps - keyed by a generated id.
-// S.juncOpen (same keys) is the live valve state; resetPlant() seeds it from
-// P.junc, so nothing here writes to S directly.
-let juncSeq=0;
-function addJunction(loopA,loopB,x,y){
-  const id="j"+(juncSeq++);
-  D.junc[id]={loopA,loopB,x,y};
+// a run's key encodes which physical leg it is (kind:aIdFace-bIdFace); only a
+// hot or cold leg belongs to a LOOP the way loopFlowK's connectivity graph
+// means it. A junction tapped onto a steam or feed line still exists and
+// still draws (pipeNetwork/juncPt don't care what kind they're routing
+// between) - it just never resolves to a loop, so it never joins that graph.
+function loopOfKey(key){
+  if(!key || !(key.startsWith("hot:")||key.startsWith("cold:"))) return null;
+  const m=key.match(/(?:sg|pump)(\d+)/);
+  return m ? +m[1] : null;
+}
+// a fitting is a tap, not a component: no box, no grid cell, never in
+// LAY.parts. D.fit is topology only - one tap (aKey,aT) always, and a
+// second (bKey,bT) only for a fitting that branches to another run - a
+// throttle may sit in-line instead, bKey null, splicing straight into the
+// run it taps (see FIT.throttle, pipenet.js). Resolved fresh every frame by
+// juncPt() off whatever pipeNetwork() just routed - never a stored pixel,
+// so a part moved upstream of a tap can't leave the glyph or the branch
+// behind. mode picks the FIT (pipenet.js) row that prices its resistance;
+// bore is unused until the relief valve gets its own path. S.juncOpen/
+// S.valve (same keys) are the live actuator state; resetPlant() seeds them
+// from P.fit, so nothing here writes to S directly.
+let fitSeq=0;
+function addFit(mode,aKey,aT,bKey,bT,bore=0.55){
+  const id="f"+(fitSeq++);
+  D.fit[id]={aKey,aT,bKey,bT,bore,mode};
   return id;
 }
-function removeJunction(id){ delete D.junc[id]; }
-const JUNC_MASS=16;                    // a spool piece and a motor-operated valve, per tap
+function removeFit(id){ delete D.fit[id]; }
+const FIT_MASS=16;                     // a spool piece and a motor-operated valve, per tap
+// The tank itself, once - every relief fitting shares it (hasRelief(),
+// above), so redundancy costs through FIT_MASS and each fitting's own
+// branch pipe (layMass, layoutMetrics()) rather than through a second tank.
+const RELIEF_TANK_MASS=18;
 
 function buildLayout(){
   const A=[], add=(id,name,w,h,x,y,col,grp,tip)=>{ const p={id,name,w,h,x,y,col,grp,tip}; A.push(p); return p; };
@@ -94,6 +124,12 @@ function buildLayout(){
     "Emergency injection water. Mount it HIGH so it can drain into the loop by gravity with no power.");
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.");
+  // one tank for every relief fitting (FIT.relief, pipenet.js) - deleting
+  // the last one deletes this too (hasRelief(), above). It has mass and it
+  // shines once a vent has charged it, so where you put it is a decision
+  // like any other part's, not a free vent to nowhere.
+  if(hasRelief()) add("reltk","RELIEF TANK",1,1,6,0,"#8a6cd0","safety",
+    "Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.");
   // placed parts merge in last, checked straight against A (not groupFits(),
@@ -278,18 +314,51 @@ function routeVia(c,o){
   for(let i=1;i<legs.length;i++) pts=pts.concat(legs[i]);
   return {pts:dedupe(pts),legs,wps};
 }
-/* nearest point on a polyline - where a branch line tees onto a run */
+// segment lengths and total, for turning a point-on-polyline into a fraction
+// of the WHOLE run (nearestOn) or back again (juncPt) - written once so the
+// two stay the same arithmetic
+function polySegLens(pts){
+  const seg=[]; let tot=0;
+  for(let i=1;i<pts.length;i++){ const d=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]); seg.push(d); tot+=d; }
+  return {seg,tot};
+}
+/* nearest point on a polyline - where a branch line tees onto a run - plus
+   t, that point's fraction of the run's own length, for a junction tap to
+   store instead of a pixel (juncPt below resolves it back) */
 function nearestOn(pts,p){
-  let best=pts[0], bd=1e9;
+  const {seg,tot}=polySegLens(pts);
+  let best=pts[0], bd=1e9, bt=0, acc=0;
   for(let i=1;i<pts.length;i++){
     const a=pts[i-1], b=pts[i];
     const dx=b[0]-a[0], dy=b[1]-a[1], L=dx*dx+dy*dy;
     const t = L? clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L,0,1) : 0;
     const q=[a[0]+dx*t, a[1]+dy*t];
     const d=Math.hypot(q[0]-p[0],q[1]-p[1]);
-    if(d<bd){ bd=d; best=q; }
+    if(d<bd){ bd=d; best=q; bt = tot? (acc+seg[i-1]*t)/tot : 0; }
+    acc+=seg[i-1];
   }
-  return {pt:best,d:bd};
+  return {pt:best,d:bd,t:bt};
+}
+// resolves a (run key, t) tap to a plant-space point off THIS frame's routed
+// network, plus which way the host run runs there. The one place any of the
+// four junction call sites (branch routing, glyph draw/hit-test, bench menu
+// resolve, bench menu store) turns a tap into a point, so a part moved
+// upstream of a tap is picked up by all four the same frame it moves.
+function juncPt(net,key,t){
+  const r=net.find(x=>x.key===key);
+  if(!r) return null;                 // the tapped run's part is gone
+  const pts=r.pts, {seg,tot}=polySegLens(pts);
+  if(!tot) return {pt:pts[0].slice(),vert:false};
+  const target=clamp(t,0,1)*tot; let acc=0;
+  for(let i=1;i<pts.length;i++){
+    const d=seg[i-1];
+    if(acc+d>=target-1e-6 || i===pts.length-1){
+      const lt=d? clamp((target-acc)/d,0,1) : 0;
+      const a=pts[i-1], b=pts[i];
+      return {pt:[a[0]+(b[0]-a[0])*lt, a[1]+(b[1]-a[1])*lt], vert:Math.abs(a[0]-b[0])<0.5};
+    }
+    acc+=d;
+  }
 }
 function plen(pts){ let L=0;
   for(let i=1;i<pts.length;i++) L+=Math.abs(pts[i][0]-pts[i-1][0])+Math.abs(pts[i][1]-pts[i-1][1]);
@@ -300,7 +369,7 @@ function plen(pts){ let L=0;
 // cannot know that until every run has been declared
 function pipeNetwork(){
   const id=k=>LAY.parts.find(q=>q.id===k);
-  const core=id("core"), pzr=id("pzr"), tb=id("turb"), cd=id("cond"), fp=id("feed"), hp=id("hpi");
+  const core=id("core"), pzr=id("pzr"), tb=id("turb"), cd=id("cond"), fp=id("feed"), hp=id("hpi"), rt=id("reltk");
   // a KIND is not an identity: every loop's hot leg is kind "hot" (one animated
   // line), but a waypoint belongs to ONE physical run, so each gets its own
   // stable key from both ends and both faces
@@ -320,6 +389,13 @@ function pipeNetwork(){
   if(tb&&cd) link("exh",tb,"b",cd,"t");
   if(cd&&fp) link("feed",cd,"r",fp,face(fp,cd));   // suction
   if(hp&&fitted(hp)) link("hpi",hp,"b",core,"b");
+  // the relief HEADER: always drawn once a tank exists, whatever fittings
+  // tap it - one physical line from the pressurizer down to the tank, the
+  // anchor every relief fitting's own branch (FIT.relief, pipenet.js) tees
+  // onto. It carries no edge of its own (netBuild() never builds one for
+  // kind "relief"): it is the vent's destination, not a path current can
+  // take, the same way surge below is a destination with no source.
+  if(pzr&&rt) link("relief",pzr,face(pzr,rt),rt,face(rt,pzr));
 
   const key=(p,s)=>p.id+s, cnt={}, seen={};
   const tally=(p,s)=>{ if(p) cnt[key(p,s)]=(cnt[key(p,s)]||0)+1; };
@@ -331,6 +407,7 @@ function pipeNetwork(){
   for(const c of conn){
     if(c.k==="surge"){                 // surge line drops onto the hot leg
       const [ia,na]=take(c.a,c.sa), a=port(c.a,c.sa,ia,na);
+      const surgeKey="surge:"+c.a.id+c.sa;
       if(!hot0) continue;
       let ty=null;                     // nearest hot run passing under the pressurizer
       for(let i=1;i<hot0.length;i++){
@@ -339,27 +416,42 @@ function pipeNetwork(){
         if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
           ty=hot0[i][1];
       }
-      if(ty!==null) net.push({k:"surge",pts:[a,[a[0],ty]]});
+      if(ty!==null) net.push({k:"surge",key:surgeKey,pts:[a,[a[0],ty]],wp:false});
       else { const t=nearestOn(hot0,a);  /* nothing underneath: reach across to the leg */
-        if(t.d>3) net.push({k:"surge",pts:dedupe([a,[a[0],t.pt[1]],t.pt])}); }
+        if(t.d>3) net.push({k:"surge",key:surgeKey,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false}); }
       continue;
     }
     const [ia,na]=take(c.a,c.sa), [ib,nb]=take(c.b,c.sb);
     const r=routeVia(c,{reg,ia,na,ib,nb});
-    net.push({k:c.k,key:c.key,pts:r.pts,legs:r.legs,wps:r.wps});
+    net.push({k:c.k,key:c.key,pts:r.pts,legs:r.legs,wps:r.wps,wp:true});
     if(c.k==="hot"&&!hot0) hot0=r.pts;
   }
-  // a junction: a tap on loop A's cold leg (the stored click point, a bare
-  // o.pa) to loop B's pump discharge, routed with the same machinery a
-  // waypoint leg uses. Kind is "xtie:"+id on purpose - pipes.js's existing
-  // k.startsWith("xtie") fallbacks cover any suffix, so no new table row is
-  // needed. No `key`, so pipeGrips() skips it the same way it skips the surge
-  // line - a junction branch carries no waypoints of its own.
-  for(const jid in D.junc){
-    const j=D.junc[jid], b=id("pump"+j.loopB);
-    if(!id("pump"+j.loopA) || !b) continue;
-    const pts=route(null,"",b,"l",{reg,pa:[j.x,j.y],va:false});
-    net.push({k:"xtie:"+jid, pts});
+  // a branch fitting: a tap on one run reaching a tap on another, both
+  // resolved off the NET this call just built (main conn loop first, so both
+  // taps have something to resolve against). An in-line fitting (bKey null -
+  // only a throttle can be one) has no second tap and so no route of its own
+  // to draw; it lives entirely inside the run it sits on. Kind is "xtie:"+id
+  // on purpose - pipes.js's existing k.startsWith("xtie") fallbacks cover any
+  // suffix, so no new table row is needed, tee or throttle alike. wp:false: a
+  // branch pinned to two taps has no route of its own to steer, and the glyph
+  // (plant.js) stays pinned to the A tap - letting it gain a grip would let
+  // it drift off the point it's supposed to mark.
+  for(const jid in D.fit){
+    const j=D.fit[jid];
+    if(!j.bKey) continue;               // in-line: no second tap, no route
+    const A=juncPt(net,j.aKey,j.aT), B=juncPt(net,j.bKey,j.bT);
+    if(!A||!B) continue;              // a tapped run's part was removed
+    // sa/sb just need to differ - both taps are bare points (o.pa/o.pb), so
+    // neither string reaches port(). Equal strings would send route() down
+    // its "leaving the same named face" outboard slide, which assumes a real
+    // face direction; a hardcoded fallback there instead sends every tie
+    // bending the same way regardless of where its two taps actually sit,
+    // which folds the branch back over its own start when the far tap ends
+    // up on the near side of that fixed bend. Distinct strings route it
+    // through bendAt()'s collision search instead, the same one every other
+    // bare-point-to-bare-point leg (a waypoint run) already resolves through.
+    const pts=route(null,"a",null,"b",{reg,pa:A.pt,pb:B.pt,va:!A.vert,vb:!B.vert});
+    net.push({k:"xtie:"+jid, key:"xtie:"+jid, pts, wp:false});
   }
   return net;
 }
@@ -421,12 +513,21 @@ function layoutMetrics(){
   let head=0, n=0;
   for(const p of P_) if(p.id.startsWith("sg")){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
-  let pipe=0, sec=0;
+  let pipe=0, sec=0, dead=0;
   for(const r of pipeNetwork()){
     const L=plen(r.pts);
+    /* A relief line is a DEAD LEG: it sits shut behind its valve and carries
+       no flow until something lifts, so its water is not moving and adds no
+       inertia to a loop transient. It still has to be built and hung, so it
+       still costs mass - that is the whole cost of a relief path, and it is
+       meant to be felt on the budget, not as a plant that coasts down
+       differently for owning a valve it has never opened. */
+    const fid = r.k.startsWith("xtie:") ? r.k.slice(5) : null;
+    const isRelief = r.k==="relief" || (fid && D.fit[fid] && D.fit[fid].mode==="relief");
+    if(isRelief) dead+=L;
     // a cross-tie is a parallel branch, not another metre of loop, so it pays
     // mass/inertia with the secondary runs and never slows the pumps down
-    if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi") pipe+=L; else sec+=L;
+    else if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi") pipe+=L; else sec+=L;
   }
 
   const hull=p=>{ let k=0; for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
@@ -466,9 +567,9 @@ function layoutMetrics(){
   const hp=id("hpi");
   const hpiHead = hp ? clamp((cc.y-cen(hp).y+2)/5,0.35,1.35) : 1;
 
-  const mass = (pipe+sec)*1.6 + P_.filter(p=>p.grp==="shield").length*30;
+  const mass = (pipe+sec+dead)*1.6 + P_.filter(p=>p.grp==="shield").length*30;
   layMass = mass;
-  return {pipe,sec,head,exposure,access,dose,sep,mass,pzrOK,pzrK,hpiHead,radK,peak,
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,hpiHead,radK,peak,
     natK: 0.35+0.65*clamp((head+1)/4,0,1.6),
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
