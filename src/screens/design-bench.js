@@ -637,10 +637,10 @@ function drawDesign(){
   // measured off the head row, not a magic reserve - the design screen has no
   // transport strip above it, so there is no fixed band to hard-code
   const headBox=DB? hostRect(DB.head) : null;
-  const vy = headBox? headBox.y+headBox.h+6 : 46;
-  const vh=Math.max(120,H-vy-4);
-  const vw = railBox ? Math.max(200, railBox.x-GX-8) : (W-2*GX);
-  drawPlant(vy,null,vh,GX,vw);
+  const vy = headBox? headBox.y+headBox.h : TOPBAR_H;
+  const vh=Math.max(120,H-vy);
+  const vw = railBox ? Math.max(200, railBox.x) : W;
+  drawPlant(vy,null,vh,0,vw);
   { const st=DB&&DB.state;
     const h = st && (st.panels.find(o=>o.ids.includes(sel)) || st.fits.find(o=>o.fid===sel));
     if(h) leaderLine(h.well.el,DB.rail); }

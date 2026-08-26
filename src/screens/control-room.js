@@ -423,11 +423,19 @@ if(typeof document!=="undefined" && document.documentElement) CR=crBuild();
 
 function drawOperate(){
   crSync();
-  const ty=44+TRSTRIP_H;   // the HTML strip floats over the canvas; reserve its band
+  /* MEASURED, not reserved. The strip is a fixed CSS height floating over the
+     canvas while the plant view is in layout units, so any constant band is
+     right at exactly one window width and leaves a growing gap at every other -
+     which is what put a strip of dead canvas above the plant. Same measurement
+     the design bench already makes off its head row.
+     The box runs to the edges from there: the rail is opaque and the strip is
+     opaque, so there is nothing for a margin to protect the plant from. */
+  const stripBox = trStrip("operate") ? hostRect(trStrip("operate").root) : null;
   const railBox=CR? hostRect(CR.rail) : null;
-  const vy=ty, vh=Math.max(120,H-vy-4);
-  const vw = railBox ? Math.max(200, railBox.x-GX-8) : (W-2*GX);
-  drawPlant(vy,S,vh,GX,vw);
+  const vy = stripBox ? stripBox.y+stripBox.h : TOPBAR_H;
+  const vh=Math.max(120,H-vy);
+  const vw = railBox ? Math.max(200, railBox.x) : W;
+  drawPlant(vy,S,vh,0,vw);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }
 }

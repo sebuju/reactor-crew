@@ -202,9 +202,23 @@ const plantChecks=[
  ['one canvas host, two callers', (S.match(/function hostRect/g)||[]).length===1 &&
    crSrc.includes('hostRect(') && dbSrc.includes('hostRect('),
    'hostRect() is defined once in render/plant.js and both screens host a canvas widget through it'],
+ /* The WIDTH, not the spelling. This used to match the literal argument `GX`,
+    which pinned a constant nobody promised rather than the property the label
+    claims - so it went red the day the plant view was widened to the rail edge,
+    on a change that made the claim MORE true. It now demands the thing that
+    matters: each screen derives vw from the rail it measured. */
  ['drawPlant takes a rail width', /function drawPlant\(y0,L,vh,vx,vw\)/.test(S) &&
-   crSrc.includes('drawPlant(vy,S,vh,GX,vw)') && dbSrc.includes('drawPlant(vy,null,vh,GX,vw)'),
+   crSrc.includes('drawPlant(vy,S,vh,0,vw)') && dbSrc.includes('drawPlant(vy,null,vh,0,vw)') &&
+   /const vw\s*=\s*railBox\s*\?\s*Math\.max\(200,\s*railBox\.x\)/.test(crSrc) &&
+   /const vw\s*=\s*railBox\s*\?\s*Math\.max\(200,\s*railBox\.x\)/.test(dbSrc),
    'both screens pass the width their own HTML rail leaves clear of the plant'],
+ /* The band above the plant is MEASURED off the strip, never reserved as a
+    constant: the strip is a fixed CSS height and the plant view is in layout
+    units, so a constant is right at one window width and leaves dead canvas at
+    every other. TRSTRIP_H was that constant and must stay gone. */
+ ['the strip is measured, not reserved',
+   crSrc.includes('hostRect(trStrip("operate").root)') && !/TRSTRIP_H/.test(S),
+   'drawOperate() measures the transport strip instead of reserving a band'],
 ];
 
 // the layer registry (render/layers.js) - one table, one pass function called
@@ -488,8 +502,8 @@ const checks=[
  // square cells still have to hold
  ['grid starts on the margin', GX===12, `GX=${GX}`],
  ['grid is whole cells',      GW*CELL%GW===0, `${GW} x ${CELL} = ${GW*CELL} units wide`],
- ['one plant renderer',       S.includes('drawPlant(vy,null,vh,GX,vw)') &&
-                              S.includes('drawPlant(vy,S,vh,GX,vw)'), 'design and control both call drawPlant'],
+ ['one plant renderer',       S.includes('drawPlant(vy,null,vh,0,vw)') &&
+                              S.includes('drawPlant(vy,S,vh,0,vw)'), 'design and control both call drawPlant'],
  ['one symbol set',           (S.match(/function drawSym/g)||[]).length===1, 'drawSym defined once'],
  ['one pipe network',         (S.match(/function pipeNetwork/g)||[]).length===1, 'pipeNetwork defined once'],
  // readoutsFor()/paramsFor() are unchanged; only where the data lands changed

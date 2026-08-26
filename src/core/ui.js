@@ -12,10 +12,26 @@ const WPSNAP=8;
 
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
 let viewOn=false;                       // are widgets being pushed through it?
-const vPt=p=>({x:VIEW.cx+VIEW.ox+(p.x-VIEW.x)/VIEW.s,
-               y:VIEW.cy+VIEW.oy+(p.y-VIEW.y)/VIEW.s});
-const vScr=p=>({x:VIEW.x+(p.x-VIEW.cx-VIEW.ox)*VIEW.s,
-                y:VIEW.y+(p.y-VIEW.cy-VIEW.oy)*VIEW.s});
+/* ══ THE LETTERBOX, HALVED ══
+   vFit() scales the plant to FIT its box, so unless the box happens to share the
+   plant's aspect ratio there is slack on one axis - and the transform lands the
+   plant's top-left on the box's top-left, so every pixel of that slack used to
+   pile up on the bottom and the right. It read as a plant sitting wrong in its
+   frame rather than as a margin. Split it.
+   Measured against the CURRENT scale, not the fit, so it is exactly zero the
+   moment you zoom in - which is when there is no slack to split.
+   Recomputed per call rather than stored on VIEW: it is a pure function of four
+   fields already there, and a stored copy is one more thing a pan could leave
+   stale. The three places that map plant space to screen space add it; the clip
+   rect and vIn() do not, so a pan can still carry the plant across the whole box. */
+const vPad=()=>({x:Math.max(0,(VIEW.w-VIEW.cw*VIEW.s)/2),
+                 y:Math.max(0,(VIEW.h-VIEW.ch*VIEW.s)/2)});
+const vPt=p=>{ const d=vPad();
+  return {x:VIEW.cx+VIEW.ox+(p.x-VIEW.x-d.x)/VIEW.s,
+          y:VIEW.cy+VIEW.oy+(p.y-VIEW.y-d.y)/VIEW.s}; };
+const vScr=p=>{ const d=vPad();
+  return {x:VIEW.x+d.x+(p.x-VIEW.cx-VIEW.ox)*VIEW.s,
+          y:VIEW.y+d.y+(p.y-VIEW.cy-VIEW.oy)*VIEW.s}; };
 const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
 function vBox(x,y,w,h){ VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h; }
 function vFit(x,y,w,h,cx,cy,cw,ch){
@@ -24,12 +40,23 @@ function vFit(x,y,w,h,cx,cy,cw,ch){
   VIEW.fit=Math.min(w/Math.max(cw,1), h/Math.max(ch,1));
   VIEW.s=VIEW.fit*VIEW.z;
 }
+/* ══ PUT PLANT POINT `a` UNDER SCREEN POINT (sx,sy) ══
+   This is the inverse of vScr() and it must stay the inverse of vScr(). Three
+   call sites - the zoom key, the wheel, and the wheel's off-plant fallback -
+   each inverted the mapping by hand, which was survivable while the mapping was
+   two terms and stopped being survivable the moment vPad() added a third: two of
+   the three would have silently missed it and the plant would jump under the
+   pointer on every wheel notch. One function, so it cannot be missed twice. */
+function vAnchor(a,sx,sy){
+  const d=vPad();
+  VIEW.ox=(a.x-VIEW.cx)-(sx-VIEW.x-d.x)/VIEW.s;
+  VIEW.oy=(a.y-VIEW.cy)-(sy-VIEW.y-d.y)/VIEW.s;
+}
 // zoom about a plant point - the wheel holds the point under the pointer, the
 // key centres on the component you have selected
 function vZoom(z,cx,cy){
   VIEW.z=z; VIEW.s=VIEW.fit*VIEW.z;
-  VIEW.ox=(cx-VIEW.cx)-VIEW.w/2/VIEW.s;
-  VIEW.oy=(cy-VIEW.cy)-VIEW.h/2/VIEW.s;
+  vAnchor({x:cx,y:cy}, VIEW.x+VIEW.w/2, VIEW.y+VIEW.h/2);
 }
 
 // a keystroke is a registry too: a row carries BOTH the keystroke and the
@@ -459,11 +486,10 @@ cv.addEventListener("wheel",e=>{
   // anywhere on the canvas, not just over the plant - the page doesn't
   // scroll any more, so there's nothing else for the wheel to do. Holds the
   // plant point under the pointer still (or the middle, off-plant).
-  const a=vIn(p)? vPt(p) : {x:VIEW.cx+VIEW.ox+VIEW.w/2/VIEW.s,
-                            y:VIEW.cy+VIEW.oy+VIEW.h/2/VIEW.s};
-  const px=vIn(p)? p.x : VIEW.x+VIEW.w/2, py=vIn(p)? p.y : VIEW.y+VIEW.h/2;
+  const on=vIn(p);
+  const px=on? p.x : VIEW.x+VIEW.w/2, py=on? p.y : VIEW.y+VIEW.h/2;
+  const a=vPt({x:px,y:py});          // the plant point to hold still, at the OLD scale
   VIEW.z=VIEW.z*Math.exp(-e.deltaY*0.0015);
   VIEW.s=VIEW.fit*VIEW.z;
-  VIEW.ox=(a.x-VIEW.cx)-(px-VIEW.x)/VIEW.s;
-  VIEW.oy=(a.y-VIEW.cy)-(py-VIEW.y)/VIEW.s;
+  vAnchor(a,px,py);
 },{passive:false});
