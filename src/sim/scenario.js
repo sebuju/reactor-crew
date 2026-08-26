@@ -591,7 +591,15 @@ const SCNPRE = [
      the margin actually goes, which is why the DNBR limit is the one that has
      something to say here. A trip is not forbidden: tripping is a correct
      answer to losing your pumps, and forbidding it would be teaching the
-     opposite of the lesson. */
+     opposite of the lesson.
+     The DNBR bar was 1.30 and is 1.10. Half pump flow costs margin twice over
+     now: once on the flow itself, and again on subcooling, because the core's
+     temperature rise is told about flow (s.coreDT, step.js) instead of being
+     pinned at its rated value - half the flow really is twice the rise, and a
+     hotter hot leg really is closer to saturation. Measured on the default
+     plant with nobody touching anything, DNBR bottoms at 1.123 at t=57s. A
+     bar the do-nothing run cannot clear is not a lesson, it is a broken
+     scenario. */
   (()=>{ const s = scnNew("blackout","STATION BLACKOUT");
     s.seed = SCN_SEED; s.secs = 150;
     scnGest(s, 20, "note", "OFFSITE POWER LOST");
@@ -600,7 +608,7 @@ const SCNPRE = [
     scnGest(s,100, "blackout", false);
     scnLimit(s,"no melt",  "melt",   "<", 1,    0);
     scnLimit(s,"no breach","breach", "<", 1,    0);
-    scnLimit(s,"dnbr",     "dnbr",   ">", 1.30, 0.5);
+    scnLimit(s,"dnbr",     "dnbr",   ">", 1.10, 0.5);
     return s; })(),
 
   /* ── ACTION DAMAGE ──
