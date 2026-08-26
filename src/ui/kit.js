@@ -33,6 +33,29 @@ const KIT = (function(){
     return node;
   }
 
+  /* ══ THE SAME GUARD tip() NEEDS, FOR TEXT AND STYLE ══
+     `el.textContent = s` DESTROYS the text node and builds a new one - even when
+     the string is IDENTICAL. Two separate costs, and this answers both:
+
+       - restating a label that did not change is pure churn, and a
+         build-once/sync-only-what-changed screen is not allowed to do it;
+       - a label that DID change (the playhead clock, ten times a second) still
+         has no business replacing a node. Writing the existing text node's
+         nodeValue mutates it in place, so the element keeps one child from the
+         first sync to the last.
+
+     The first call has no text node yet and takes the textContent path, which
+     makes one; every call after it edits that one. Written here rather than in
+     each screen because trMarksSync had already hand-rolled the guard, and the
+     second copy is the one that starts drifting. */
+  function setText(node, s){
+    const t = node.firstChild;
+    if(t && t.nodeType === 3 && !t.nextSibling){ if(t.nodeValue !== s) t.nodeValue = s; }
+    else if(node.textContent !== s) node.textContent = s;
+    return node;
+  }
+  function setStyle(node, k, v){ if(node.style[k] !== v) node.style[k] = v; return node; }
+
   const clampPct = t => Math.max(0, Math.min(1, t)) * 100;
 
   /* ONE cell geometry for every strip in the kit - box, cell height AND cell
@@ -346,7 +369,7 @@ const KIT = (function(){
     b.classList.toggle("on", on);
     function set(o){
       o = o || {};
-      if(o.label != null && b.textContent !== o.label) b.textContent = o.label;
+      if(o.label != null) setText(b, o.label);
       if(o.on != null && o.on !== on){ on = o.on; b.classList.toggle("on", on); }
       if(o.disabled != null) b.disabled = !!o.disabled;
     }
@@ -529,6 +552,7 @@ const KIT = (function(){
     return {el: root, set};
   }
 
-  return {el, tip, well, rule, reveal, chip, dot, seg, segSigned, segMark, band,
-    lamp, badge, hatch, button, slider, optList, segSel, sliderRow, readout, toggle};
+  return {el, tip, setText, setStyle, well, rule, reveal, chip, dot, seg, segSigned,
+    segMark, band, lamp, badge, hatch, button, slider, optList, segSel, sliderRow,
+    readout, toggle};
 })();

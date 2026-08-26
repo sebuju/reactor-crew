@@ -70,7 +70,11 @@ function exercise(M, dom, o){
   const syncAll = () => {
     M.setScreen('operate'); M.crSync();
     M.setScreen('design');  M.dbSync();
-    for(const h of strips) M.trSync(h);
+    /* each strip on ITS OWN screen: trSync() stands down for a strip whose
+       screen is not up, so syncing both from 'design' would exercise neither
+       and this whole check would go quietly green on nothing. */
+    for(const h of strips){ M.setScreen(h.sc); M.trSync(h); }
+    M.setScreen('design');
   };
 
   step('sync at rest', syncAll);

@@ -2,9 +2,6 @@
 /* The transport strip - HTML now (docs/kit-api.md). trBuild()/trSync() at the
    foot of this file mount it into #scr-operate and #scr-scenario. */
 
-const TRSTRIP_H = 22;
-/* kept only because control-room.js/scenario.js still call these on canvas */
-
 const trSecs  = t => t*0.02;
 const trStamp = t => "T+"+trSecs(t).toFixed(1);
 const trName  = t => t.label || ("TAKE "+(t.id+1));
@@ -31,8 +28,12 @@ for(const [key,r] of TR_RATES){
   keyAdd({k:key, sc:"operate",  lab:r+"x", fn:()=>trRate(r)});
   keyAdd({k:key, sc:"scenario", lab:r+"x", fn:()=>trRate(r)});
 }
-keyAdd({k:".", sc:"operate",  lab:"STEP", fn:trStep});
-keyAdd({k:".", sc:"scenario", lab:"STEP", fn:trStep});
+/* "," and "." are the frame-back/frame-forward pair every editing tool binds,
+   and they sit next to each other under the same finger. */
+for(const sc of ["operate","scenario"]){
+  keyAdd({k:",", sc, lab:"STEP -", fn:trStepBack});
+  keyAdd({k:".", sc, lab:"STEP +", fn:trStep});
+}
 
 
 /* ─────────────── build (once per screen) ─────────────── */
@@ -43,13 +44,18 @@ function trBuild(sc){
   const root = KIT.el("div","trs");
 
   const pause = KIT.button("PAUSE",{sunk:1,onClick:trBind(sc," ").fn});
+  pause.el.classList.add("trs-pause","trs-fixw");
 
   const rate = KIT.segSel(TR_RATES.map(r=>r[2]),
     {onSelect:i=>trBind(sc,TR_RATES[i][0]).fn()});
   rate.el.classList.add("trs-rate");
 
-  const step = KIT.button("STEP",{sunk:1,onClick:trBind(sc,".").fn,
+  const stepBack = KIT.button("STEP -",{sunk:1,onClick:trBind(sc,",").fn,
+    tip:"Puts the plant back one 0.02 s tick and leaves it paused. It is a scrub, not an undo: the tick is re-derived from the last keyframe, so it is exact but it costs more than stepping forward, and it puts you in REPLAY the same way dragging the bar does."});
+  stepBack.el.classList.add("trs-fixw");
+  const step = KIT.button("STEP +",{sunk:1,onClick:trBind(sc,".").fn,
     tip:"Advances the plant by one 0.02 s tick and leaves it paused. The one way to watch a fast transient happen rather than watching what it left behind."});
+  step.el.classList.add("trs-fixw");
 
   const modeEl = KIT.el("div","trs-mode");
   const live = KIT.el("span","trs-live"); live.textContent="LIVE";
@@ -78,6 +84,7 @@ function trBuild(sc){
   track.append(logLane,scrub);
 
   const clock = KIT.el("span","trs-clock");
+  KIT.tip(clock,"PLAYHEAD","Where the plant stands in this lineage, and where the recording of it ends. Sim seconds, not seconds you have been sitting here - at 16x these advance sixteen times faster than the clock on the wall.");
 
   const takesBtn = KIT.button("TAKES",{sunk:1});
   takesBtn.el.classList.add("trs-takes-btn");
@@ -95,7 +102,7 @@ function trBuild(sc){
   picker.body.append(pickHead,pickTree);
   takesBtn.el.addEventListener("click",()=>picker.el.classList.toggle("open"));
 
-  root.append(pause.el,rate.el,step.el,modeEl,notape,nameEl,forkEl,track,
+  root.append(pause.el,rate.el,stepBack.el,step.el,modeEl,notape,nameEl,forkEl,track,
     clock,takesBtn.el);
   mount.appendChild(root);
   mount.appendChild(picker.el);
@@ -123,8 +130,9 @@ function trBuild(sc){
   scrub.addEventListener("pointerup",()=>{ dragging=false; });
   scrub.addEventListener("pointercancel",()=>{ dragging=false; });
 
-  return {sc,root,pause,rate,step,modeEl,notape,nameEl,forkEl,track,logLane,scrub,scrubHead,
-    clock,takesBtn,picker,pickTree,blocks:[],forks:[],marks:[],pickSig:null};
+  return {sc,root,pause,rate,stepBack,step,modeEl,notape,nameEl,forkEl,track,logLane,scrub,scrubHead,
+    clock,takesBtn,picker,pickTree,blocks:[],forks:[],marks:[],
+    pickSig:null,parSig:null,forkSig:null};
 }
 
 /* ═══════════ THE EVENT LOG, ON THE SCRUB BAR ═══════════
@@ -136,39 +144,54 @@ function trBuild(sc){
    ── THEY ARE GROUPED, NOT DRAWN ON TOP OF EACH OTHER ──
    A trip raises six entries inside a second, which on a 300 px bar is six
    marks inside one pixel: unreadable, and the top one is the only one you can
-   ever hover. So marks within MARK_GAP px of the first of a run collapse into
-   ONE, showing the count instead of a symbol and carrying every message in its
-   tooltip. The severity shown is the WORST in the group - a group that hid an
-   alarm behind four control actions would be a group that lies.
-   Grouping is done in PIXELS and not in ticks on purpose: what may overlap is a
-   question about the bar's width, and the bar is elastic. */
-const MARK_GAP=9;
+   ever hover. So marks landing in the same SLOT collapse into ONE, showing the
+   count instead of a symbol and carrying every message in its tooltip. The
+   severity shown is the WORST in the group - a group that hid an alarm behind
+   four control actions would be a group that lies.
+   The slot is a question about the bar's WIDTH and not about ticks, because the
+   bar is elastic and what may overlap depends on how wide it is today. */
+/* ── A MARK LANDS IN A SLOT, NEVER ON A FRACTION ──
+   The lane holds a whole number of marks and no more: TRS_SLOT px each, so the
+   bar is floor(width/TRS_SLOT) slots wide and a mark's left is an integer pixel
+   multiple of it. The old code placed each mark at (f*100).toFixed(3)+"%", which
+   is a sub-pixel offset on a transform:translateX(-50%) box - so marks landed on
+   half pixels, rendered soft, and sat at uneven gaps that changed with the
+   window width.
+
+   The slot index is also what GROUPS them, which is the point: "these two would
+   overlap" and "these two are drawn in the same place" used to be two separate
+   calculations (a fractional gap test, then a fractional position) that could
+   disagree. One integer answers both, and it cannot. */
+const TRS_SLOT=9;                                // px per mark: 8 of body, 1 of gutter
 const SEV_RANK={alarm:3,warn:2,act:1,info:0};
-function trMarkGroups(t0,tEnd,wpx){
+function trMarkGroups(t0,tEnd,slots){
   const out=[], span=Math.max(1,tEnd-t0);
-  const gap=MARK_GAP/Math.max(1,wpx);           // as a fraction of the bar
   let g=null;
   for(const e of LOG){
     if(e.tick<t0||e.tick>tEnd) continue;
-    const f=(e.tick-t0)/span;
-    if(g && f-g.f0<gap){ g.evs.push(e); if(SEV_RANK[e.sev]>SEV_RANK[g.sev]) g.sev=e.sev; }
-    else { g={f0:f,f,sev:e.sev,evs:[e]}; out.push(g); }
+    const slot=clamp(Math.round(((e.tick-t0)/span)*(slots-1)),0,slots-1);
+    if(g && g.slot===slot){ g.evs.push(e); if(SEV_RANK[e.sev]>SEV_RANK[g.sev]) g.sev=e.sev; }
+    else { g={slot,sev:e.sev,evs:[e]}; out.push(g); }
   }
   return out;
 }
 function trMarksSync(h,t0,tEnd){
-  const wpx=h.scrub.clientWidth||1;
-  const groups=trMarkGroups(t0,tEnd,wpx);
+  /* Measured off the LANE, not off the bar: they are two boxes and only one of
+     them is the one the marks are laid out in. transport.css gives the lane a
+     transparent border to match the bar's real one, so the two content boxes are
+     the same width and a mark sits over the tick it names. */
+  const wpx=h.logLane.clientWidth;
+  if(wpx<=0) return;              // a hidden screen has no width and no picture to draw
+  const slots=Math.max(1,Math.floor(wpx/TRS_SLOT));
+  const groups=trMarkGroups(t0,tEnd,slots);
   while(h.marks.length<groups.length){ const m=KIT.el("div","trs-log"); h.logLane.appendChild(m); h.marks.push(m); }
   while(h.marks.length>groups.length) h.logLane.removeChild(h.marks.pop());
   groups.forEach((g,i)=>{
     const m=h.marks[i], n=g.evs.length;
-    const left=(g.f*100).toFixed(3)+"%";
-    if(m.style.left!==left) m.style.left=left;
+    KIT.setStyle(m,"left",g.slot*TRS_SLOT+"px");
     const cls="trs-log "+g.sev;
     if(m.className!==cls) m.className=cls;
-    const sym = n>1 ? String(Math.min(n,9)) : logSev(g.evs[0]).sym;
-    if(m.textContent!==sym) m.textContent=sym;
+    KIT.setText(m, n>1 ? String(Math.min(n,9)) : logSev(g.evs[0]).sym);
     KIT.tip(m, n>1 ? n+" EVENTS AT T+"+trSecs(g.evs[0].tick).toFixed(1)
                    : "T+"+trSecs(g.evs[0].tick).toFixed(1),
       g.evs.map(e=>logSev(e).tag+" "+e.msg).join("   /   "));
@@ -176,6 +199,12 @@ function trMarksSync(h,t0,tEnd){
 }
 
 /* ─────────────── sync (cheap, every pass) ─────────────── */
+/* NO TAPE YET and the strip proper are the same four elements shown either way
+   round, so they are one write and cannot get out of step. */
+function trTape(h,on){
+  KIT.setStyle(h.notape,"display",on?"none":"");
+  for(const el of [h.nameEl,h.forkEl,h.track,h.clock]) KIT.setStyle(el,"display",on?"":"none");
+}
 function trPickerRow(t){
   const row = KIT.el("div","trs-take-row");
   row.classList.toggle("on", t.id===REC.cur);
@@ -221,6 +250,15 @@ function trPickerBuild(container,ids){
 
 function trSync(h){
   if(!h) return;
+  /* Both strips are synced on one interval, and only one screen is ever up.
+     Syncing the other one is a full pass of string building and DOM writes
+     against a box with no width - which is also where the mark lane collapsed,
+     since clientWidth is 0 on a display:none subtree.
+     Against `screen` and not body.dataset.screen: the dataset is a copy layout()
+     makes for CSS, so reading it would make this depend on layout() having run.
+     audit-dom sets `screen` per strip before syncing it, or this guard would
+     skip the work AND the check with it. */
+  if(screen !== h.sc) return;
   const cur = recCur();
   h.pause.set({label:TR.paused?"PLAY":"PAUSE", on:TR.paused});
   h.rate.set(TR_RATES.findIndex(r=>r[1]===TR.rate));
@@ -231,34 +269,36 @@ function trSync(h){
   if(!many) h.picker.el.classList.remove("open");
 
   if(!cur){
-    h.notape.style.display="";
-    h.nameEl.style.display="none"; h.forkEl.style.display="none";
-    h.track.style.display="none"; h.clock.style.display="none";
+    trTape(h,false);
     return;
   }
-  h.notape.style.display="none";
-  h.nameEl.style.display=""; h.forkEl.style.display="";
-  h.track.style.display=""; h.clock.style.display="";
+  trTape(h,true);
 
-  h.nameEl.textContent = trName(cur);
+  KIT.setText(h.nameEl, trName(cur));
   const par = cur.parent===null ? null : REC.takes[cur.parent];
   if(par){
-    h.forkEl.textContent = "<- "+(par.id+1)+" @ "+trStamp(cur.tick0);
-    h.forkEl.classList.remove("root");
+    KIT.setText(h.forkEl, "<- "+(par.id+1)+" @ "+trStamp(cur.tick0));
   } else {
-    h.forkEl.textContent = "ROOT";
-    h.forkEl.classList.add("root");
+    KIT.setText(h.forkEl, "ROOT");
   }
-  const parTip = (par ? "Forked off "+trName(par)+" at "+trStamp(cur.tick0)+", so everything before that belongs to the parent and is shared with it."
-       : "A root run: this take starts at the reset that made the plant and owes nothing to any other.")+
-      " A recording is a forest, not a list - the run you scrubbed away from is still a run, so it stays as the parent and the second attempt hangs off it.";
-  KIT.tip(h.nameEl,trName(cur),parTip);
-  KIT.tip(h.forkEl,trName(cur),parTip);
+  h.forkEl.classList.toggle("root", !par);
+  /* KIT.tip() already refuses to WRITE a tip it has written before, but the
+     string still had to be built to find that out - and this one is a paragraph,
+     ten times a second, for a fork point that changes when you fork and never
+     otherwise. The signature is what the paragraph is made of. */
+  const parSig = cur.id+":"+(par?par.id+"@"+cur.tick0:"root");
+  if(parSig!==h.parSig){
+    h.parSig=parSig;
+    const parTip = (par ? "Forked off "+trName(par)+" at "+trStamp(cur.tick0)+", so everything before that belongs to the parent and is shared with it."
+         : "A root run: this take starts at the reset that made the plant and owes nothing to any other.")+
+        " A recording is a forest, not a list - the run you scrubbed away from is still a run, so it stays as the parent and the second attempt hangs off it.";
+    KIT.tip(h.nameEl,trName(cur),parTip);
+    KIT.tip(h.forkEl,trName(cur),parTip);
+  }
 
   const line = trLine(), tip = REC.takes[trTip];
   const t0 = line[0].tick0, tEnd = Math.max(tip.tickEnd,t0+1);
-  h.clock.textContent = trStamp(S.tick)+" / "+trSecs(tEnd).toFixed(1);
-  KIT.tip(h.clock,"PLAYHEAD","Where the plant stands in this lineage, and where the recording of it ends. Sim seconds, not seconds you have been sitting here - at 16x these advance sixteen times faster than the clock on the wall.");
+  KIT.setText(h.clock, trStamp(S.tick)+" / "+trSecs(tEnd).toFixed(1));
 
   const frac = t => Math.max(0,Math.min(1,(t-t0)/(tEnd-t0)))*100;
   while(h.blocks.length<line.length){ const b=KIT.el("div","trs-scrub-block"); h.scrub.insertBefore(b,h.scrubHead); h.blocks.push(b); }
@@ -266,27 +306,38 @@ function trSync(h){
   line.forEach((t,i)=>{
     const a=frac(t.tick0), b=frac(i<line.length-1?line[i+1].tick0:tip.tickEnd);
     const el=h.blocks[i];
-    el.style.left=a+"%"; el.style.width=Math.max(0.3,b-a)+"%";
+    KIT.setStyle(el,"left",a+"%");
+    KIT.setStyle(el,"width",Math.max(0.3,b-a)+"%");
     el.classList.toggle("cur", t.id===REC.cur);
   });
 
-  let forks=0;
-  for(const t of line) forks += t.kids.filter(k=>REC.takes[k]).length;
+  /* Only the branches that LEFT this line get a ring. A take's own successor is
+     one of its kids too, and it is already the next segment of the rail with its
+     own filled dot on it - ringing that as well would draw a departure where the
+     run simply carried on. */
+  const onLine=new Set(line.map(t=>t.id));
+  const gone=[];
+  for(const t of line) for(const k of t.kids){
+    const c=REC.takes[k];
+    if(c && !onLine.has(c.id)) gone.push(c);
+  }
+  const forks=gone.length;
   while(h.forks.length<forks){ const f=KIT.el("div","trs-scrub-fork"); h.scrub.insertBefore(f,h.scrubHead); h.forks.push(f); }
   while(h.forks.length>forks) h.scrub.removeChild(h.forks.pop());
-  { let i=0;
-    for(const t of line) for(const k of t.kids){
-      const c=REC.takes[k]; if(!c) continue;
-      h.forks[i++].style.left=frac(c.tick0)+"%";
-    }
-  }
-  h.scrubHead.style.left = frac(S.tick)+"%";
+  gone.forEach((c,i)=>KIT.setStyle(h.forks[i],"left",frac(c.tick0)+"%"));
+  KIT.setStyle(h.scrubHead,"left",frac(S.tick)+"%");
   trMarksSync(h,t0,tEnd);
-  KIT.tip(h.scrub,"SCRUB",
-    "Press anywhere on the bar to put the plant there, and drag to run it under the hand. The bar is the whole lineage you are in, one block per take; the amber ticks are the "+forks+" place(s) this run has been forked. Scrubbing is watching and costs you nothing - the fork happens when you touch a control.");
+  if(forks!==h.forkSig){
+    h.forkSig=forks;
+    KIT.tip(h.scrub,"SCRUB",
+      "Press anywhere on the line to put the plant there, and drag to run it under the hand. The line is the whole lineage you are in: one segment per take, a filled dot where each take begins, and "+forks+" hollow ring(s) where a branch left this run for a future you are not watching. Scrubbing is watching and costs you nothing - the fork happens when you touch a control.");
+  }
 
   if(h.picker.el.classList.contains("open")){
-    const sig = REC.takes.map(t=>t&&(t.id+":"+t.kids.join(","))).join("|")+"|"+REC.cur;
+    /* The columns, not just the shape: LENGTH, VERDICT and ASSISTED all move
+       while the picker is held open, and a sig of ids alone left them stale. */
+    const sig = REC.takes.map(t=>t&&(t.id+":"+t.kids.join(",")+":"+t.tickEnd+":"+
+      (t.label||"")+":"+(t.verdict||"")+":"+(t.assisted?1:0))).join("|")+"|"+REC.cur;
     if(sig!==h.pickSig){
       h.pickSig=sig;
       h.pickTree.innerHTML="";
@@ -296,9 +347,16 @@ function trSync(h){
   }
 }
 
+/* Keyed by screen rather than held in two consts, so drawOperate() can MEASURE
+   the strip it has to draw under instead of reserving a constant band for it.
+   The strip is a fixed CSS height and the plant view is in layout units, so a
+   reserve is only ever right at one window width. */
+const TRS_STRIP = {};
+const trStrip = sc => TRS_STRIP[sc] || null;
+
 if(typeof document!=="undefined" && document.documentElement){
-  const TR_STRIP_OPERATE  = trBuild("operate");
-  const TR_STRIP_SCENARIO = trBuild("scenario");
-  trSync(TR_STRIP_OPERATE); trSync(TR_STRIP_SCENARIO);
-  setInterval(()=>{ trSync(TR_STRIP_OPERATE); trSync(TR_STRIP_SCENARIO); },100);
+  for(const sc of ["operate","scenario"]) TRS_STRIP[sc] = trBuild(sc);
+  const syncAll = () => { for(const sc in TRS_STRIP) trSync(TRS_STRIP[sc]); };
+  syncAll();
+  setInterval(syncAll,100);
 }

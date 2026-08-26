@@ -6,6 +6,36 @@
   height:30px;padding:0 12px;background:var(--c-panel);
   pointer-events:auto}
 
+/* ══ RESERVE A WIDTH, SO A LABEL SWAP DOES NOT MOVE THE STRIP ══
+   PAUSE/PLAY and STEP -/STEP + both change their own text. A button that sizes
+   to its text drags every control right of it sideways - and drags itself out
+   from under the finger that just pressed it.
+
+   box-sizing:content-box IS THE FIX, and it is not the default here: Chrome's
+   UA stylesheet sets border-box on <button>, so a bare min-width has to beat the
+   label AND .kit-btn's 20px of padding before it binds at all. Measured, it did
+   not: min-width came out 48.4px against a padded PAUSE of 58.3px, so the clamp
+   never fired and the button went on resizing. Against the content box, 8ch is
+   48.4px against a PAUSE text box of 38.3px, so it always fires - and it never
+   has to know what the kit pads by.
+   8ch and not 6: the reserve must beat the longest label, and letter-spacing is
+   not in a ch. PAUSE is 5 glyphs plus 5 x 1.6px, which a 5ch reserve would miss. */
+.trs-fixw{box-sizing:content-box;min-width:8ch;text-align:center}
+
+/* ══ A STOPPED PLANT IS A STATE, SO IT IS LIT - AND IT IS NEVER BLACK ══
+   Every other .on button in this strip is a mode you chose and can see the
+   result of somewhere else on screen. This one is the CLOCK BEING STOPPED, and
+   the only other evidence of it is that nothing moves - which is exactly what a
+   plant sitting quietly at power looks like. So it carries the state on its own.
+   Both states are coloured. The kit's sunk button is --c-well on --c-bg, two
+   near-blacks, and its .on tint (--c-on-amber) is a third: at a glance the
+   control read as an unlit slab whichever way it was set.
+   Specificity, not source order: .trs .trs-pause is three classes, so it beats
+   .kit-btn.on and .kit-btn-sunk.on outright and cannot be undone by someone
+   reordering the <link> tags in index.html. */
+.trs .trs-pause,.trs .trs-pause:hover{background:var(--c-panel-hi);color:var(--c-cyan)}
+.trs .trs-pause.on,.trs .trs-pause.on:hover{background:var(--c-amber);color:var(--c-ink-on-lit)}
+
 .trs-rate .kit-segsel-cell{height:24px}
 .trs-rate .kit-segsel-mass{display:none}
 
@@ -26,26 +56,73 @@
   font-size:var(--t7);color:var(--c-ink2)}
 .trs-notape{font-size:var(--t7-5);letter-spacing:1px;text-transform:uppercase;color:var(--c-ink2)}
 
-/* the log lane and the bar share one elastic column, so a mark's percentage and
-   the bar's percentages are measured against the same width */
-.trs-track{flex:1 1 auto;min-width:40px;display:flex;flex-direction:column;gap:1px}
-.trs-logs{position:relative;height:10px}
-.trs-log{position:absolute;top:0;transform:translateX(-50%);min-width:7px;height:10px;
-  line-height:10px;text-align:center;font-size:var(--t6);font-weight:700;
+/* ══ THE RAIL SITS ON THE STRIP'S OWN CENTRE LINE ══
+   Stacked in flow, the lane and the rail were centred as a PAIR, which put the
+   rail itself about 5px below the line every button in the strip centres on -
+   so the one horizontal line in the row was the one thing not lining up with
+   the row. Both are placed off 50% instead: the rail lands exactly on centre,
+   and the marks hang directly above it, resting on its top edge.
+   The lane and the rail are both left:0;right:0 in the same box, so they still
+   share one content box and one origin with the drag's getBoundingClientRect() -
+   a mark, a dot and the tick the hand lands on stay the same pixel. */
+.trs{--trs-rail-h:2px;--trs-mark-h:10px;--trs-scrub-h:14px}
+.trs-track{position:relative;flex:1 1 auto;min-width:40px;align-self:stretch}
+/* ON the line, not above it. An event is a moment IN the run, so it belongs on
+   the timeline the same way a fork ring does - hung above, it read as a separate
+   second lane of its own. Centred on the same 50% every other mark uses, so the
+   rail, the take dots, the fork rings, the playhead and the events all share one
+   centre line. The lane is the first child of .trs-track and the rail the
+   second, so the playhead paints OVER an event mark it is standing on. */
+.trs-logs{position:absolute;left:0;right:0;height:var(--trs-mark-h);top:50%;
+  margin-top:calc(-1 * var(--trs-mark-h) / 2)}
+/* width is TRS_SLOT-1 (transport.js): a mark fills its slot and leaves one pixel
+   of gutter, so marks never touch and never overlap. left is an integer pixel
+   multiple of the slot, so there is nothing here to centre. */
+.trs-log{position:absolute;top:0;width:8px;height:var(--trs-mark-h);
+  line-height:var(--trs-mark-h);text-align:center;font-size:var(--t6);font-weight:700;
   color:var(--c-ink-on-lit);background:var(--c-ink2);cursor:default}
 .trs-log.alarm{background:var(--c-red)}
 .trs-log.warn{background:var(--c-amber)}
 .trs-log.act{background:var(--c-cyan)}
 .trs-log.info{background:var(--c-metal)}
 
-.trs-scrub{position:relative;height:12px;
-  background:var(--c-bg);border:1px solid var(--c-edge);cursor:pointer;touch-action:none}
-.trs-scrub:hover{border-color:var(--c-edge2)}
-.trs-scrub-block{position:absolute;top:0;bottom:0;background:var(--c-well)}
-.trs-scrub-block.cur{background:var(--c-panel-hi)}
-.trs-scrub-fork{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--c-amber)}
-.trs-scrub-head{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;
-  background:var(--c-amber);box-shadow:0 0 0 1px var(--c-bg);pointer-events:none}
+/* ══ THE LINEAGE AS A LINE WITH DOTS ON IT ══
+   Read like a commit graph: one rail running left to right, a filled dot where
+   this run began or changed hands, a hollow ring where a branch left it, and the
+   playhead as the one solid marker riding on top. The old bar was a filled
+   trough with hairline ticks - it said "a range" when the thing it describes is
+   a sequence of MOMENTS, and a recording is a forest of moments.
+   No border on the rail, and none on the log lane above it either: all three of
+   the lane, the rail and the getBoundingClientRect() the drag measures then
+   share one content box, so a mark, a dot and the tick the hand lands on are
+   the same pixel. Do not give either one a border back. */
+.trs-scrub{position:absolute;left:0;right:0;height:var(--trs-scrub-h);
+  top:50%;margin-top:calc(-1 * var(--trs-scrub-h) / 2);
+  cursor:pointer;touch-action:none}
+/* the rail spans the whole box, not just the lineage, so a short run still
+   reads as a timeline rather than as a gap with something in the corner */
+.trs-scrub::before{content:"";position:absolute;left:0;right:0;top:6px;
+  height:var(--trs-rail-h);background:var(--c-edge)}
+.trs-scrub:hover::before{background:var(--c-edge2)}
+
+/* one segment per take, butted end to end into one continuous rail */
+.trs-scrub-block{position:absolute;top:6px;height:var(--trs-rail-h);background:var(--c-rail)}
+.trs-scrub-block.cur{background:var(--c-cyan)}
+/* the dot where a take starts: the root for the first, a fork for every one
+   after it. Drawn off the segment so it can never land anywhere else. */
+.trs-scrub-block::before{content:"";position:absolute;left:0;top:-2px;
+  width:6px;height:6px;margin-left:-3px;border-radius:50%;background:var(--c-rail)}
+.trs-scrub-block.cur::before{background:var(--c-cyan)}
+
+/* a branch that LEFT this line. Hollow on purpose - you are not on it, and a
+   filled dot would claim the run went that way. */
+.trs-scrub-fork{position:absolute;top:4px;box-sizing:border-box;
+  width:6px;height:6px;margin-left:-3px;border-radius:50%;
+  border:1px solid var(--c-amber);background:var(--c-bg)}
+
+.trs-scrub-head{position:absolute;top:2px;width:10px;height:10px;margin-left:-5px;
+  border-radius:50%;background:var(--c-amber);
+  box-shadow:0 0 0 2px var(--c-bg);pointer-events:none}
 
 .trs-clock{min-width:15ch;text-align:right;font-size:var(--t7);color:var(--c-cyan)}
 

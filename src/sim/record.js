@@ -685,9 +685,20 @@ function simFrame(dt){
 const trRate=r=>{ TR.rate=r; TR.paused=false; };
 const trPause=()=>{ TR.paused=!TR.paused; };
 const trStep=()=>{ TR.paused=true; TR.step1++; };
+/* ── BACKWARDS IS A SEEK, NOT AN UN-STEP ──
+   A tick cannot be undone: step() is not invertible and nothing keeps the state
+   it overwrote. So one tick back is one tick of SCRUB - restore the nearest
+   keyframe and re-derive forward to tick-1, exactly what the scrub bar does,
+   one tick wide. It costs up to KF_TICKS of re-simulation and it is exact.
+   REC.cur and not trTip: seek() walks the lineage for whoever owns the target
+   tick, so stepping back over a fork point lands on the parent by itself.
+   A queued forward step is dropped - it was ordered before you changed your
+   mind about which way you were going, and firing it after would cancel this. */
+const trStepBack=()=>{ TR.paused=true; TR.step1=0; if(S) seek(REC.cur, S.tick-1); };
 
 /* THE KEYSTROKES LIVE WITH THE STRIP THAT DRAWS THEM, in transport.js. They
    were here first, next to the functions they call, and that put a UI
    registration inside the tape - which is the layer a headless runner wants to
    load on its own, with no screens and no keyboard anywhere. trPause/trRate/
-   trStep stay here because they are the driver; who presses them does not. */
+   trStep/trStepBack stay here because they are the driver; who presses them
+   does not. */
