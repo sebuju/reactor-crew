@@ -147,28 +147,33 @@ function drawTip(){
   if(isTouch){ if(touchTip && performance.now()<touchTip.until) t=touchTip; }
   else t=findTip(ui.ptr);
   if(!t) return;
-  const maxw=248, ob={size:8.5,color:C.ink};
-  const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=23+n*11+(t.g?BAND_H:0);
-  // a touch anchors the box on the thing it describes, so a plant tip has to
-  // come back out of plant space to say where that is
-  const an = t.v ? vScr({x:t.x+t.w/2,y:t.y+t.h}) : {x:t.x+t.w/2,y:t.y+t.h};
-  const ax = isTouch ? an.x : ui.ptr.x, ay = isTouch ? an.y : ui.ptr.y;
-  let bx=clamp(ax+16,6,W-bw-6), by=ay+18;
-  if(by+bh>H-6) by=Math.max(46,ay-bh-14);
+  const maxw=210, ob={size:7.5,color:C.ink};
+  const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=21+n*10+(t.g?BAND_H:0);
+  /* PARKED bottom-right OF THE PLANT VIEW, not carried on the pointer. A box
+     that follows the hand is a box between the hand and whatever it is reaching
+     for, and on this screen that is the component it just described. Parked, it
+     never covers the thing being read, it never flips sides mid-sentence, and
+     touch and mouse get the same answer - which is why the old touch anchor is
+     gone with it.
+     The VIEW box and not the canvas: the rails are opaque and sit ON the canvas,
+     so the canvas corner is underneath one of them and a box parked there is a
+     box nobody can read. VIEW.x/w/y/h is exactly the room the rails leave. */
+  const bx=clamp(VIEW.x+VIEW.w-bw-6, 4, W-bw-4);
+  const by=clamp(VIEW.y+VIEW.h-bh-6, TOPBAR_H+4, H-bh-4);
   fillRect(bx+3,by+3,bw,bh,"rgba(0,0,0,.6)");
   fillRect(bx,by,bw,bh,"#0b1215"); frame(bx,by,bw,bh,C.amber);
-  txt(t.title,bx+11,by+13,{size:8,weight:700,sp:1.3,caps:1,color:C.amber});
-  wrap(t.body,bx+11,by+26,maxw,11,ob);
+  txt(t.title,bx+11,by+12,{size:7,weight:700,sp:1.3,caps:1,color:C.amber});
+  wrap(t.body,bx+11,by+24,maxw,10,ob);
   if(t.g){
     // the verdict and setpoint ride on the title row rather than under the
     // strip - the strip already carries three, and below it costs a line
     const z=bandZone(t.g); let rx=bx+bw-11;
     if(t.g.lim) for(const L of t.g.lim){
       const s_=L[1]+" "+L[0].toFixed(t.g.dp);
-      txt(s_,rx,by+13,{size:6.5,sp:.7,align:"right",color:C.red});
-      rx-=tw(s_,{size:6.5,sp:.7})+7;
+      txt(s_,rx,by+12,{size:6,sp:.7,align:"right",color:C.red});
+      rx-=tw(s_,{size:6,sp:.7})+7;
     }
-    txt(z[2],rx,by+13,{size:6.5,sp:.9,align:"right",color:z[1]});
+    txt(z[2],rx,by+12,{size:6,sp:.9,align:"right",color:z[1]});
     bandBar(bx+11,by+bh-BAND_H+8,maxw,t.g);
   }
 }
