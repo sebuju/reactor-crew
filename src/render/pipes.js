@@ -45,7 +45,10 @@ const PIPE_VAPOUR={steam:1,exh:1};              // kinds that carry vapour, not 
    run a loop over any more. The "xtie" spelling is kept from the fixed-slot
    cross-ties this replaced, on purpose: it is the one string every lookup
    below already knew how to fall back on. */
-const pipeName=k=>k.startsWith("xtie")?"CROSS-TIE":PIPE_NAME[k];
+/* named pipeLabel, not pipeName: src/data/pipenet.js declares its own
+   pipeName() for a placed-pipe part's own id, a different concept (and a
+   global collision if this file used the same name). */
+const pipeLabel=k=>k.startsWith("xtie")?"CROSS-TIE":PIPE_NAME[k];
 /* a junction joins two cold legs and carries what they carry - PC[k] is
    undefined for any "xtie:"+id kind, since pipeColours() cannot enumerate
    every id that exists, so every reader of the colour table falls back
@@ -211,49 +214,67 @@ function pipeFmt(v){
   return v.toFixed(1);
 }
 
-/* ── what 100% means, per line ──
-   A needle needs a full scale, and it has to be a property of the PLANT. Each line's
-   is the rate step() gives it at design conditions.
+/* ── what 100% means, per run ──
+   A needle needs a full scale, and now that S.flowPos is kept per RUN rather than
+   per kind, the honest full scale is per run too: P.netRefByRun[key], what THAT run
+   carries as commissioned, undamaged, valves wide. A short loop and a long loop are
+   not the same pipe wearing two labels, so they no longer share one guessed number -
+   each is judged against its own build.
 
-   The primary cannot be pushed past its own pumps - driven flow is s.flow times
-   P.flowK - so a hot leg's design figure is this plant's own full-flow heat-removal
-   fraction, not a flat 1.0. The secondary is the side with headroom: turbine demand
-   runs to P.loadMax, so main steam, exhaust and feedwater are what drive a needle
-   past the mark. HP injection is fixed, which is why it reads 100% whenever it is
-   open: a head tank is either flowing or it is not.
+   P.netRefByRun is in the network solver's own units, not the diagram's px/s, so it
+   still has to be carried across into pipeSpd's units before it means anything to a
+   needle - that's what 84*feff0 is doing below. It is not a hand-tuned guess re-fitted
+   per kind any more (the old table had to be kept in sync with step()'s pipe-animation
+   rates by hand); it is the ONE calibration point where a run's own reference equals
+   the shared mean (P.netRefRun) and the two unit systems can be read off against each
+   other. Every run is then scaled off that single point by its own share,
+   ref/P.netRefRun, so nothing here has to change if step()'s per-run weighting ever does.
 
-   These mirror the rates in the pipe-animation block of step(). If those change,
-   change these with them. */
-function pipeFullScale(k){
+   Only hot, cold and a fitting branch (xtie:*) are on the solved network. Everything
+   past the turbine has none - the secondary side PRICES the heat, it is not a physics
+   path - so main steam, exhaust, feedwater, HP injection and the surge line keep the
+   flat, plant-wide design rate they always had. That fallback is also what a hot/cold/
+   xtie run falls back to if it has no reference yet (a design mid-edit, before
+   commission() has run) - the old flat guess, so a gauge never divides by zero. */
+function pipeFullScale(key,k){
+  if(k==="hot"||k==="cold"||k.startsWith("xtie")){
+    const ref=P.netRefByRun[key];
+    if(!ref) return k.startsWith("xtie")?60:84*Math.max(0.05,P.feff0);
+    return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
+  }
   if(k==="hpi") return 120*Math.sqrt(P.hpiRate/1.6);
-  if(k==="hot"||k==="cold") return 84*Math.max(0.05,P.feff0);
-  /* step() runs a cross-tie at a flat 60 while the valve is open, so the needle
-     reads full whenever it is passing. Same shape as HP injection: a valve is
-     open or it is not, and the meter says which. */
-  if(k.startsWith("xtie")) return 60;
   return {steam:96,exh:96,feed:96,surge:72}[k]||84;
 }
-const pipeFrac=(k,sp)=>sp/Math.max(1e-6,pipeFullScale(k));
+const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
 
-/* ── what a line actually carries, in a unit that exists ──
-   The gauge reads a real quantity; per cent of design is on the tooltip. Both come
-   from ONE fraction times a nominal, so they cannot disagree.
+/* ── what a run actually carries, in a unit that exists ──
+   The gauge reads a real quantity; per cent of that run's own rating is on the
+   tooltip. Both come from ONE fraction (pipeFrac, off pipeSpd - the same integral the
+   packets move on) times a nominal, so a digit can never disagree with the needle
+   beside it, or with a packet's own speed.
 
-   The nominals are a heat balance on the rated power, the only sizing input the plant
-   has. Primary: Q = m*cp*dT, water at these conditions is about 5.5 kJ/kg/K and the
-   loop is drawn with a 30 K rise, shared between the loops that were built.
-   Secondary: Q = m*dh, feedwater to saturated steam is about 1800 kJ/kg. A 3000 MWt
-   three-loop plant therefore gets about 6100 kg/s in each hot leg and 555 kg/s of
-   steam from each generator, which is what real ones run.
-   The surge line is sized at 2% of a hot leg. HP injection is the odd one out: the
-   sim models it as INVENTORY per second, not mass, so it reads per cent per minute
-   and its label says so. */
-function pipeUnit(k){
+   The nominal is a heat balance on the rated power, the plant's only sizing input -
+   this file does not run a second one per run. Primary: Q = m*cp*dT, water at these
+   conditions is about 5.5 kJ/kg/K and the loop is drawn with a 30 K rise, shared
+   between the loops that were built. Secondary: Q = m*dh, feedwater to saturated
+   steam is about 1800 kJ/kg. Both are DESIGN figures, fixed at commissioning, never
+   read off S - they only exist to give a dimensionless rate a unit.
+   For hot, cold and a fitting branch, that flat per-loop figure is then weighted by
+   the same ref/P.netRefRun share pipeFullScale() uses, so a short loop's bigger
+   nominal times its own (now correctly ~1.0) fraction lands on its own real kg/s,
+   not the plant's average pretending to be every loop's. The surge line is sized at
+   2% of a (still flat) hot leg. HP injection is the odd one out: the sim models it as
+   INVENTORY per second, not mass, so it reads per cent per minute and its label
+   says so. */
+function pipeUnit(key,k){
   const per=Math.max(1,D.loops);
-  const loop=P.rated*1000/(5.5*30)/per;        // kg/s through one primary loop
+  const loop=P.rated*1000/(5.5*30)/per;        // kg/s through an average primary loop
   const stm =P.rated*1000/1800/per;            // kg/s of steam from one generator
+  if(k==="hot"||k==="cold"||k.startsWith("xtie")){
+    const ref=P.netRefByRun[key], w=ref?ref/Math.max(1e-6,P.netRefRun):1;
+    return {nom:loop*w, u:"kg/s"};
+  }
   switch(k){
-    case "hot": case "cold":               return {nom:loop,        u:"kg/s"};
     case "steam": case "exh": case "feed":  return {nom:stm,         u:"kg/s"};
     case "surge":                          return {nom:loop*0.02,   u:"kg/s"};
     case "hpi":                            return {nom:P.hpiRate*60,u:"%/min"};
@@ -374,7 +395,10 @@ function pipeAnchors(runs){
     const g=pipeGeom(r.pts);
     for(const q of g.segs){
       const x=q.x+q.dx*q.L/2, y=q.y+q.dy*q.L/2;
-      const a={L:q.L,x,y,rank:(q.L>=need?2:0)+(clear(x,y)?1:0)}, b=best[r.k];
+      /* the winning segment's own run key travels with it, so the one meter this
+         KIND gets still reads THAT run's real numbers (pipeFullScale/pipeUnit are
+         keyed by run, not kind) rather than a kind-wide placeholder. */
+      const a={L:q.L,x,y,key:r.key,rank:(q.L>=need?2:0)+(clear(x,y)?1:0)}, b=best[r.k];
       if(!b || a.rank>b.rank || (a.rank===b.rank && a.L>b.L)) best[r.k]=a;
     }
   }
@@ -383,16 +407,21 @@ function pipeAnchors(runs){
 function pipeMeters(runs,L){
   const best=pipeAnchors(runs), PC=pipeColours(L), r=PIPE_DIAL_R;
   for(const k in best){
-    const a=best[k];
+    const a=best[k], key=a.key;
     if(a.L<2*r+6) continue;                  // too short a run to fit a meter in it
-    const fr=pipeDisplay(k,pipeFrac(k,pipeSpd[k]||0)), un=pipeUnit(k);
-    pipeDial(a.x,a.y,r,fr,pipeCol(PC,k),pipeFmt(Math.abs(fr)*un.nom)+" "+un.u);
-    TIP(a.x-r,a.y-r,2*r,2*r+11,pipeName(k)+"  FLOW METER",
-      Math.abs(Math.round(fr*100))+" % of the flow this line carries at design conditions"+
-      (fr>1.001?" - the needle is in the over-range band, so this line is being pushed past what it was built for."
-       :fr<-0.008?", and the needle is back past the zero stop - it is running backwards."
-       :Math.abs(fr)<0.008?". The line is stagnant."
-       :"."));
+    const sp=pipeSpd[key]||0, fr=pipeDisplay(key,pipeFrac(key,k,sp)), un=pipeUnit(key,k);
+    const mag=pipeFmt(Math.abs(fr)*un.nom);
+    pipeDial(a.x,a.y,r,fr,pipeCol(PC,k),mag+" "+un.u);
+    /* three things the solve can actually say, kept as three sentences rather than
+       one number doing all three jobs: how much, which way, and against what. No
+       pressure/dP reading here - a fitting's node potentials never left pipenet.js. */
+    TIP(a.x-r,a.y-r,2*r,2*r+11,pipeLabel(k)+"  FLOW METER",
+      mag+" "+un.u+" - "+Math.abs(Math.round(fr*100))+
+      " % of what this run carries as commissioned, undamaged, valves wide."+
+      (fr>1.001?" The needle is in the over-range band, so this run is being pushed past what it was built for."
+       :fr<-0.008?" The needle is back past the zero stop - it is running backwards."
+       :Math.abs(fr)<0.008?" The line is stagnant."
+       :""));
   }
 }
 
@@ -423,7 +452,7 @@ function pipeVessel(L){
     L.P.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+P.P0.toFixed(1)+
     " MPa design point. Level "+L.lvl.toFixed(0)+" %."+
     (fr>1.06?"  It is past the relief valve setpoint."
-            :L.porvOpen?"  The relief valve is passing.":""));
+            :reliefAnyOpen(L)?"  The relief valve is passing.":""));
 }
 
 /* ══════════ the two entry points ══════════
@@ -445,8 +474,11 @@ function pipeFlow(L){
     if(!g.len) continue;
     const thin=(r.k==="hpi"||r.k==="surge"), w=thin?3:4, hw=(thin?6:8)/2;
     ctx.save(); pipeClip(g,hw,w/2);
-    pipeSlugs(pipePad(g,PIPE_RUNWAY), L.flowPos[r.k]||0,
-              pipeSpd[r.k]||0, pipeCol(PC,r.k), w, pipeSteam(r.k,L));
+    /* L.flowPos and pipeSpd are keyed by the RUN (r.key), never the kind (r.k) - a
+       kind has no entry of its own, so reading r.k here silently fed every packet
+       phase 0 and every speed 0, whatever loop it was on. */
+    pipeSlugs(pipePad(g,PIPE_RUNWAY), L.flowPos[r.key]||0,
+              pipeSpd[r.key]||0, pipeCol(PC,r.k), w, pipeSteam(r.k,L));
     ctx.restore();
   }
 }

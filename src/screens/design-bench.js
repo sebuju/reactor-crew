@@ -99,33 +99,70 @@ function ctxResolveDesign(p){
   if(!pt) return null;
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
   const part=LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h);
-  let junction=null;
-  for(const jid in D.junc){ const j=D.junc[jid];
-    if(Math.hypot(j.x-pt.x,j.y-pt.y)<10){ junction=jid; break; } }
-  let coldLoop=null, tapPt=null;
-  if(!part && !junction) for(const r of pipeNetwork()){
-    if(!r.key || !r.key.startsWith("cold:")) continue;
+  const net=pipeNetwork();
+  let fitting=null;
+  for(const fid in D.fit){ const j=D.fit[fid];
+    const jp=juncPt(net,j.aKey,j.aT);
+    if(jp && Math.hypot(jp.pt[0]-pt.x,jp.pt[1]-pt.y)<10){ fitting=fid; break; } }
+  let tapKey=null, tapT=null;
+  // any real loop run can be tapped for a fresh fitting now - not the surge
+  // line (a drop, not a loop leg) and not an existing fitting's own branch
+  // (tapping a tie onto a tie is not a plant a right-click should build)
+  if(!part && !fitting) for(const r of net){
+    if(!r.key || r.k==="surge" || r.k.startsWith("xtie")) continue;
     const near=nearestOn(r.pts,[pt.x,pt.y]);
-    if(near.d<8){ const m=r.key.match(/(?:sg|pump)(\d+)/);
-      if(m){ coldLoop=+m[1]; tapPt=near.pt; } break; }
+    if(near.d<8){ tapKey=r.key; tapT=near.t; break; }
   }
-  return {x:p.x,y:p.y,cell:{gx,gy},part,junction,coldLoop,tapPt};
+  return {x:p.x,y:p.y,cell:{gx,gy},part,fitting,tapKey,tapT};
+}
+// the far end of a fresh tee: a tap on loop j's own cold leg, as close as it
+// can get to where the old fixed-slot cross-tie always landed (the pump's
+// free left face) - so a tie still lands somewhere a real cross-tie would.
+function farTapForLoop(j){
+  const pu=LAY.parts.find(q=>q.id==="pump"+j);
+  if(!pu) return null;
+  const want=port(pu,"l");
+  let best=null, bd=1e9;
+  for(const r of pipeNetwork()){
+    if(loopOfKey(r.key)!==j || !r.key.startsWith("cold:")) continue;
+    const near=nearestOn(r.pts,want);
+    if(near.d<bd){ bd=near.d; best={key:r.key,t:near.t}; }
+  }
+  return best;
 }
 function ctxItemsDesign(hit){
   const items=fittableList().map(f=>({label:(f.get()?"REMOVE ":"FIT ")+f.label, fn:()=>f.set(!f.get())}));
   if(D.loops<4) items.push({label:"ADD STEAM GEN LOOP", fn:()=>{ D.loops++; }});
   if(D.loops>1) items.push({label:"REMOVE STEAM GEN LOOP", fn:()=>{ D.loops--; }});
   if(!hit) return items;
-  if(hit.junction){
-    const jid=hit.junction;
-    items.push({label:"REMOVE JUNCTION", fn:()=>{ removeJunction(jid); }});
+  if(hit.fitting){
+    const fid=hit.fitting;
+    items.push({label:"REMOVE FITTING", fn:()=>{ removeFit(fid); }});
   } else if(hit.part && hit.part.id.startsWith("pumpX")){
     const pid=hit.part.id;
     items.push({label:"REMOVE SPARE PUMP", fn:()=>{ removePart(pid); }});
-  } else if(hit.coldLoop!=null){
-    const a=hit.coldLoop, tp=hit.tapPt;
-    for(let j=0;j<D.loops;j++) if(j!==a)
-      items.push({label:"ADD JUNCTION TO LOOP "+(j+1), fn:()=>{ addJunction(a,j,tp[0],tp[1]); }});
+  } else if(hit.tapKey!=null){
+    // a throttle needs nothing beyond the one tap it sits on - it can splice
+    // straight into the run it's on, so it is always on offer here, even on
+    // a single-loop plant with no second run to tie to
+    items.push({label:"ADD THROTTLE HERE", fn:()=>{ addFit('throttle',hit.tapKey,hit.tapT,null,null); }});
+    /* Redundancy, the same way a second tee is added - taps the same RELIEF
+       HEADER (pipeNetwork(), layout.js) the stock valve already uses, so
+       every relief fitting shares the one tank (hasRelief(), layout.js).
+       Only on offer once that header exists - a plant with the last relief
+       fitting deleted has no tank and no header run yet to tap into. */
+    { const relKey='relief:pzrt-reltkb';
+      if(hasRelief() && pipeNetwork().some(r=>r.key===relKey))
+        items.push({label:"ADD RELIEF VALVE HERE", fn:()=>{
+          addFit('relief',hit.tapKey,hit.tapT,relKey,0.5,PIPE_BORE.relief); }}); }
+    const hostLoop=loopOfKey(hit.tapKey);
+    for(let j=0;j<D.loops;j++){ if(j===hostLoop) continue;
+      const far=farTapForLoop(j);
+      if(!far) continue;
+      const label = hostLoop!=null ? "ADD TEE, LOOP "+(hostLoop+1)+" TO LOOP "+(j+1)
+                                    : "ADD TEE TO LOOP "+(j+1);
+      items.push({label, fn:()=>{ addFit('tee',hit.tapKey,hit.tapT,far.key,far.t); }});
+    }
   } else if(!hit.part){
     const {gx,gy}=hit.cell;
     if(gx>=0 && gy>=0 && gx<GW && gy<GH) items.push({label:"ADD SPARE PUMP HERE", fn:()=>{

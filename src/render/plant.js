@@ -70,19 +70,27 @@ function drawSym(p,x,y,w,h,ink,L){
     }
     fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),fxEase(id+":jam",jam?1:0),C.red);
     /* JAMMED wins over SCRAM: a jammed bank while a trip is latched is a scram
-       that did not happen, which is worse news than the trip itself. */
+       that did not happen, which is worse news than the trip itself. Pinned
+       near the TOP of the frame rather than its default vertical centre: a
+       jammed bank came from a hit on the drives, and the generic REPAIR key
+       every damaged component draws (below, in this same loop) is centred
+       in this same box - two labels sharing one centre is a guaranteed
+       overlap the moment both are true at once. */
     if(jam||scram)
-      banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red);
+      banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red,Y+9);
   } else if(id==="pzr"){
     shell(()=>rr(X,Y+8,W,Hh-8,W/2.6));
     ctx.save(); ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.clip();
     lvl(X,Y+8,W,Hh-8, L? L.lvl/100 : .54, C.blue); ctx.restore();
     ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
-    const open = L && L.porvOpen && !L.porvBlocked;
+    // the pressurizer's own (primary) relief fitting - see primaryRelief()'s
+    // own comment, step.js, for why the mimic still shows one valve
+    const rfid = primaryRelief();
+    const open = L && rfid && L.reliefOpen[rfid] && !L.reliefBlocked[rfid];
     // three states, not two: shut, passing, and GIVEN UP - a blocked valve is
     // dead metal with a bar through it, because shutting the block valve buys
     // the leak back at the price of the relief path for the rest of the run
-    const blkd = L && L.porvBlocked;
+    const blkd = L && rfid && L.reliefBlocked[rfid];
     bowtie(cx,Y+4,12,8, open?C.red : blkd?C.dis : C.green);
     if(blkd) line(cx-8,Y+4,cx+8,Y+4,C.red,1.6);
     // what the valve is actually passing, off the physics constant itself - see
@@ -323,13 +331,18 @@ function banner(word,cx,x,y,w,h,col,ty){
   tag(word,cx,ty!=null?ty:midBase(y,h,9),9,sp,col,mw);
 }
 
-/* What the relief valve is passing, in % of loop inventory per second. The one
+/* What the pressurizer's OWN (primary) relief valve is passing, in % of loop
+   inventory per second - the mimic draws one plume for one valve, the same
+   scope primaryRelief() gives every other legacy control (step.js). The one
    reader of PORV_INV outside the tick: the plume on the pressurizer and the
    RELIEF FLOW readout both come through here, so neither can describe a vent
-   the sim is not performing. It is a fixed orifice - open is one rate, not a
-   range - so this is 0 or PORV_INV and nothing between. */
+   the sim is not performing. It is a fixed orifice at ventK()===1 - open is
+   one rate, not a range - so a stock plant reads 0 or PORV_INV and nothing
+   between, exactly as before; a fitting plumbed narrower or longer than
+   reference reads its own share of that. */
 function porvRate(s){
-  return (s.porvOpen && !s.porvBlocked && !s.breach) ? PORV_INV : 0;
+  const fid = primaryRelief();
+  return (fid && s.reliefOpen[fid] && !s.reliefBlocked[fid] && !s.breach) ? PORV_INV*ventK(s,fid) : 0;
 }
 
 function liveValue(p,s){
@@ -347,6 +360,7 @@ function liveValue(p,s){
     case p.id==="bkp":   return s.blackout?"LOAD":"rdy";
     case p.id==="cont":  return s.release.toFixed(1)+"%";
     case p.id==="ctrl":  return s.dose.toFixed(0)+"%";
+    case p.id==="reltk": return s.ventTank.toFixed(0)+"%";
     default: return null;
   }
 }
@@ -393,8 +407,8 @@ function ctlFor(p,live,split){
      dem:()=>S.flowDem*100,mark:()=>pumpFloor()*100,markLo:true,
      fmt:v=>v.toFixed(0)+" %",set:v=>{ act("flowDem",v/100); },
      tip:"COOLANT PUMPS - "+pumpTip()}]];
-  // a junction has no box, so no control strip - its valve is drawn on the
-  // pipe itself, see pipeJuncMarks() below
+  // a fitting has no box, so no control strip - its valve is drawn on the
+  // pipe itself, see pipeFitMarks() below
   switch(p.id){
     // GANGED holds exactly three rows, measured against the default plant's grid
     case "rods": {
@@ -461,7 +475,8 @@ function ctlFor(p,live,split){
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}]];
     case "pzr": return [[
-      {kind:"btn",flex:1,on:()=>S.porvBlocked,text:()=>S.porvBlocked?"SHUT":"OPEN",
+      {kind:"btn",flex:1,on:()=>{ const fid=primaryRelief(); return !!fid && S.reliefBlocked[fid]; },
+       text:()=>{ const fid=primaryRelief(); return (fid && S.reliefBlocked[fid])?"SHUT":"OPEN"; },
        fn:()=>{ act("porvBlock"); },
        tip:"BLOCK VALVE - manual backup under the relief valve. Shut it when the PORV fails to reseat; that is the whole answer to a stuck-open valve."}]];
     case "hpi": return [[
@@ -569,30 +584,54 @@ function pipeGrip(x,y,key,pt){
 }
 function pipeGrips(runs){
   for(const r of runs){
-    if(!r.key) continue;   // the surge line has no route(), so nothing to steer
+    if(r.wp===false) continue;   // surge/xtie: not steerable, on purpose - see layout.js
     for(const p of r.wps) pipeGrip(p.x,p.y,r.key,p);
     for(const leg of r.legs){ const g=legGrip(leg); if(g) pipeGrip(g.x,g.y,r.key,null); }
   }
 }
-// a junction has no box or control strip, so its bowtie() valve is drawn
-// straight on the tapped point - fixed in position (only removal and open
-// state change). Both screens draw a mark so a placed junction is findable
-// to remove even before it's live: bench gets a dim dot, control room the
-// clickable valve.
-function pipeJuncMarks(L){
-  const junc = L? P.junc : D.junc;
-  for(const id in junc){
-    const j=junc[id], tipBody="Bridges loop "+(j.loopA+1)+" and loop "+(j.loopB+1)+
-      (L?". Open, they share whatever their pumps are still delivering, so a pump you lose on one is propped up by the other. Shut, each loop keeps its own water - which is what you want the moment one starts leaking, because an open junction will drain the good loop into the bad one. It moves the instant you press it."
-        :". Right-click it to remove.");
+// a fitting has no box or control strip, so its glyph is drawn straight on
+// the tapped point - fixed in position. Both screens draw a mark so a
+// placed fitting is findable to remove even before it's live: bench gets a
+// dim dot, control room the live control - a bowtie() valve for a tee (open
+// or shut is all it has), the same slider() every other actuator on the
+// plant uses for a throttle (a position, not a toggle - see FIT.throttle,
+// pipenet.js). One function for both, mode-driven, the same way LAYERS picks
+// a row instead of every screen growing its own switch on the type.
+function pipeFitMarks(L,net){
+  const fits = L? P.fit : D.fit;
+  for(const id in fits){
+    const j=fits[id], jp=juncPt(net,j.aKey,j.aT);
+    if(!jp) continue;                    // host run gone (part removed)
+    const [x,y]=jp.pt;
+    const removeHint = L?"":" Right-click it to remove.";
+    const isTee = j.mode==="tee";
+    const la=loopOfKey(j.aKey), lb=j.bKey?loopOfKey(j.bKey):null, tied=la!=null&&lb!=null&&la!==lb;
+    const tipBody = !isTee
+      ? (j.bKey
+          ? "A throttle wired between two runs, worked like a variable cross-tie - shut it costs nothing extra to the pipe, wide open it passes freely, and every position between chokes it down."+removeHint
+          : "A throttle spliced straight into this run. Wide open it costs the pipe nothing at all; closed, it is a real break in the line, same as a shut valve anywhere else."+removeHint)
+      : tied
+        ? "Bridges loop "+(la+1)+" and loop "+(lb+1)+
+          (L?". Open, they share whatever their pumps are still delivering, so a pump you lose on one is propped up by the other. Shut, each loop keeps its own water - which is what you want the moment one starts leaking, because an open junction will drain the good loop into the bad one. It moves the instant you press it."
+            :removeHint)
+        : "A tie between two points on the plant that are not both loop legs, so it moves nothing between loops."+removeHint;
     if(L){
-      const open=S.juncOpen[id];
-      const wd=push({x:j.x-7,y:j.y-7,w:14,h:14,type:"btn",fn:()=>{ act("junc",id); }});
-      bowtie(j.x,j.y,14,10, open?C.green:(hov(wd)?C.bright:C.metal));
-      TIP(j.x-7,j.y-7,14,14,"JUNCTION VALVE",tipBody);
+      if(isTee){
+        const open=S.juncOpen[id];
+        const wd=push({x:x-7,y:y-7,w:14,h:14,type:"btn",fn:()=>{ act("junc",id); }});
+        bowtie(x,y,14,10, open?C.green:(hov(wd)?C.bright:C.metal));
+        TIP(x-7,y-7,14,14,"JUNCTION VALVE",tipBody);
+      } else {
+        // no room for a control strip here, so the position lives on the
+        // same compact drag-slider every other actuator uses - a one-cell
+        // width, hover-only readout, exactly like a narrow control strip row
+        slider(x,y,28,S.valve[id],0,1,{th:10,tw:6,dem:S.valveDem[id],
+          fmt:v=>(v*100).toFixed(0)+"%", fn:v=>act("valveDem",id,v)});
+        TIP(x-14,y-9,28,18,"THROTTLE VALVE",tipBody);
+      }
     } else {
-      dot(j.x-2,j.y-2,4,C.rail);
-      TIP(j.x-7,j.y-7,14,14,"JUNCTION",tipBody);
+      dot(x-2,y-2,4,C.rail);
+      TIP(x-7,y-7,14,14,isTee?"JUNCTION":"THROTTLE",tipBody);
     }
   }
 }
@@ -677,11 +716,25 @@ function rhoViz(x,y,w,h){
   const vals=RHO_TERMS.map(r=>({lab:r[0],v:s.parts[r[1]],col:r[3]()}));
   let neg=0,pos=0;
   for(const t of vals){ if(t.v<0) neg-=t.v; else pos+=t.v; }
-  // ONE scale for both arms, rounded up to a round number so the axis label is
-  // readable and the bar does not rescale on every tick
-  const raw=Math.max(neg,pos,1);
-  const mag=Math.pow(10,Math.floor(Math.log10(raw)));
-  const full=Math.ceil(raw/(mag/2))*(mag/2);
+  /* ONE scale for both arms, and it is CONTINUOUS in the total.
+
+     A half-decade quantiser set it before, and a hard quantiser is the failure
+     pipeDisplay() exists for: the step IS the snap. Full scale was a ceiling to
+     the next mag/2, so one pcm of wobble across 5000 took the axis to 5500 and
+     every segment in the bar changed width in a single frame with nothing in
+     the plant having moved. Damping that target only trades the snap for a lag,
+     and a lagging scale is worse than a snapping one here: a segment is placed
+     at acc/full, so the instant full sits under the true total the bar and its
+     labels run outside the widget.
+
+     Headroom is ADDITIVE, not a factor. A factor pins the longer arm at the same
+     length whatever the total is, which throws away the one thing the axis label
+     is left saying. Adding a constant compresses instead: a few hundred pcm of
+     imbalance draws short, thousands draws nearly full, and the ratio between the
+     two arms - the actual question - is untouched either way, because both arms
+     divide by the same number. */
+  const RHO_HEAD=800;
+  const raw=Math.max(neg,pos,1), full=raw+RHO_HEAD;
 
   /* ── how tall everything gets ──
      Four registers stacked in one column read as one solid block when every
@@ -695,7 +748,11 @@ function rhoViz(x,y,w,h){
   const gap=Math.min(6,slack*.14), grow=Math.min(4,slack*.07);
 
   txt("REACTIVITY BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
-  txt("+/-"+full.toFixed(0)+" pcm",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
+  /* the GEOMETRY is continuous, the LABEL is not: printing full scale to the pcm
+     would hunt its last digits on a plant that is standing still. 50 pcm is under
+     a per cent of any axis this widget draws, so the caption is round and steady
+     and still describes the bar under it. */
+  txt("+/-"+(Math.round(full/50)*50).toFixed(0)+" pcm",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
 
   /* ── the balance ── */
   const by=y+13+gap, bh=14+grow;
@@ -930,14 +987,15 @@ function readoutsFor(p,s){
       band(P.P0*1.06-s.P,mlLo,mlHi,
         [[0.3,C.amber,"NEAR LIFT"],[mlHi,C.cyan,"CLEAR"]],{dp:2}),
       "How much pressure is left before that valve lifts by itself. Negative means it is passing right now.");
-    add("PORV",(s.porvOpen&&!s.porvBlocked)?"PASSING":"shut",
-        (s.porvOpen&&!s.porvBlocked)?C.red:C.green,
+    { const rfid=primaryRelief(), rOpen = !!rfid && s.reliefOpen[rfid] && !s.reliefBlocked[rfid],
+            rBlkd = !!rfid && s.reliefBlocked[rfid];
+    add("PORV",rOpen?"PASSING":"shut", rOpen?C.red:C.green,
       "The relief valve itself. PASSING means coolant is leaving the loop through it, whether you asked or not.");
     add("RELIEF FLOW",porvRate(s).toFixed(2)+" %/s",
       band(porvRate(s),0,PORV_INV,[[1e-9,C.green,"SHUT"],[PORV_INV,C.red,"PASSING"]],{dp:2}),
       "Coolant leaving the loop through the relief valve, as a share of the whole loop every second. The valve is a fixed orifice, so it is this rate or nothing - there is no half-open. The steam drawn on the pressurizer is this number, and at "+PORV_INV.toFixed(2)+" %/s a stuck valve empties the loop in about "+(100/PORV_INV).toFixed(0)+" seconds.");
-    add("BLOCK VALVE",s.porvBlocked?"SHUT":"open",s.porvBlocked?C.red:C.green,
-      "Your last defence against a stuck relief valve. Shutting it stops the leak and gives the valve up for good.");
+    add("BLOCK VALVE",rBlkd?"SHUT":"open",rBlkd?C.red:C.green,
+      "Your last defence against a stuck relief valve. Shutting it stops the leak and gives the valve up for good."); }
     add("AUTO RELIEF",autoState("porv").toLowerCase(),
         autoLive("porv")?C.green:C.amber,
       "Whether the valve is allowed to lift by itself at 106%. Bypass it and pressure climbs to the burst point instead.");
@@ -1031,6 +1089,12 @@ function readoutsFor(p,s){
       "A cooled basin under the vessel. It will not save the fuel, but it stops a melt burning through and breaching.");
     add("VESSEL",s.breach?"RUPTURED":"intact",s.breach?C.red:C.green,
       "Whether the pressure vessel is still whole. A rupture is the end of the run.");
+  } else if(id==="reltk"){
+    add("TANK LEVEL",s.ventTank.toFixed(1)+" %",
+      band(s.ventTank,0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1}),
+      "What every relief valve venting to this tank has put into it, 0..100. It never empties on its own - a full tank is a place a repair party would rather not stand.");
+    add("RELIEF PATHS",""+reliefFitIds().length,null,
+      "How many relief fittings vent here. Every one of them rolls its own die on its own lift - more paths means pressure is relieved more reliably, and something is more likely stuck open.");
   } else if(id==="bkp"){
     add("BLACKOUT",s.blackout?"ACTIVE":"no",s.blackout?C.red:C.green,
       "Whether main power to the coolant pumps has gone. Test it from the FAULTS panel before you ever need to know.");
@@ -1263,7 +1327,7 @@ function drawPlant(y0,L,vh,vx,vw){
   layerPass("over",L);          // on top of the machines - annotates a component, not the room
   if(L) pipeGauges(L);
   else pipeGrips(NET);          // where a pipe runs is a bench question
-  pipeJuncMarks(L);
+  pipeFitMarks(L,NET);
   viewOn=false; ctx.restore();
 
   // one key, not two: at fit the only useful move is in, and zoomed in the
