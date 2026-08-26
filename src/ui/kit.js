@@ -98,9 +98,28 @@ const KIT = (function(){
   /* Scrolls a scrolling container to show one of its children. Default
      "nearest", so a node already on screen never moves under the hand; a rail
      that has just changed selection asks for "start" instead and gets the
-     panel at the top, which is why the rails carry a tail of empty space. */
+     panel at the top, which is why the rails carry a tail of empty space.
+
+     scrollIntoView() is deliberately NOT used. It scrolls EVERY scrollable
+     ancestor, and overflow:hidden only removes the scrollbar, not the scroll -
+     so the first reveal in the control room scrolled #stage itself and left
+     the top of the transport strip cut off until a reload. This walks up to
+     the one box that declared itself a scroller and moves only that. */
+  function scroller(node){
+    if(typeof getComputedStyle !== "function") return null;
+    for(let p = node.parentNode; p && p.nodeType === 1; p = p.parentNode){
+      const o = getComputedStyle(p).overflowY;
+      if(o === "auto" || o === "scroll" || o === "overlay") return p;
+    }
+    return null;
+  }
   function reveal(node, block){
-    if(node && node.scrollIntoView) node.scrollIntoView({block: block || "nearest"});
+    if(!node || !node.getBoundingClientRect) return;
+    const box = scroller(node);
+    if(!box) return;
+    const n = node.getBoundingClientRect(), b = box.getBoundingClientRect();
+    if(block === "start" || n.top < b.top) box.scrollTop += n.top - b.top;
+    else if(n.bottom > b.bottom) box.scrollTop += n.bottom - b.bottom;
   }
 
   function rule(label, opts){

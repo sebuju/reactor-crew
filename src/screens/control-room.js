@@ -103,9 +103,23 @@ function crAlarmsSync(container,rows){
    an empty chart taking 130 px to say "NO CHANNELS SELECTED" is worse than the
    space back.
 
-   k:0.7 because this is a rail-scale chart: at HOST_K one layout unit is one
-   and a half CSS pixels, so chart()'s own sizes come out half again as big as
-   the HTML type either side of it. See chSz() in chart.js. */
+   ── IT IS SIZED OFF THE HTML AROUND IT, NOT OFF ITSELF ──
+   At HOST_K one layout unit is one and a half CSS pixels, so every number here
+   is a CSS measurement divided by that, and the panel is what states them:
+
+     k    0.87 puts the legend NAME on TSCALE's 6.5 - the step HOST_K was
+          picked to land on the 10 px floor src/style.css gives HTML type, so
+          it matches the vital labels stacked directly above - and the READING
+          one step up at 8, because a reading that is the same size as its own
+          caption stops looking like the number the panel is for. At 0.7 both
+          collapsed onto the bottom of the ladder and the chart read as a
+          footnote to the panel rather than part of it.
+     pad  CR_TREND_PAD is .cr-vital's 8 px side padding, so the plot frame
+          stands in the same column as the six labels instead of 7 px inside them.
+     ph   the plot takes everything the legend does not: CR_TREND_LEG is the
+          legend band, and chart()'s `top` of 6 is the breathing room under the
+          border-top that separates this from the vitals. */
+const CR_TREND_PAD=8/HOST_K, CR_TREND_LEG=30;
 function crTrendSync(host){
   const on = plot.length>0;
   host.canvas.style.display = on?"":"none";
@@ -113,10 +127,11 @@ function crTrendSync(host){
   hostPaint(host.canvas,(x,y,w,h)=>{
     const ser=plot.map(k=>({lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i)}));
     const box=chart(x,y,w,h,{
-      series:ser, n:hlen, k:0.7,
+      series:ser, n:hlen, k:0.87, pad:CR_TREND_PAD,
+      ph:Math.max(24,h-6-CR_TREND_LEG),
       empty:"COLLECTING DATA",
       xlab:["-"+(hlen/10).toFixed(0)+"s","NOW"]});
-    chartLegend(box,y+h-22,ser);
+    chartLegend(box,box.py+box.ph+4,ser);
   });
 }
 
@@ -222,7 +237,7 @@ function crDamageSync(list){
   const f = ids.length ? radSolve(P.radK, radSrc(S)) : null;
   const g = ids.length ? occupied(null) : null;
   ids.forEach((k,i)=>{
-    const h=pool[i], part=LAY.parts.find(q=>q.id===k);
+    const h=pool[i], part=dmgPart(k);
     h.id=k;
     const nm=part?part.name:k.toUpperCase(), blocked=!(part&&part.access);
     const busy=S.repair&&S.repair.id===k;

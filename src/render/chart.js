@@ -14,9 +14,32 @@
 const chSz=(want,k)=>{ const t=want*(k||1);
   for(const s of TSCALE) if(s<=t) return s;
   return TSCALE[TSCALE.length-1]; };
+/* ── A FLAT TRACE HAS TO READ FLAT ──
+   Every series gets its own invisible scale, so "how much wobble is none" is
+   the whole question. The test was an absolute 1e-6, which no real channel ever
+   reaches: fuel temp resting at 903 K breathes in its fourth decimal, and that
+   got stretched over the full height of the plot until the noise WAS the
+   picture. A thousandth of the magnitude is flat, whatever the magnitude is. */
+function chBand(lo,hi){
+  const span=hi-lo, mag=Math.max(Math.abs(lo),Math.abs(hi));
+  if(span<=Math.max(1e-6,mag*1e-3)){
+    const s=Math.max(mag*.2,1), mid=(lo+hi)/2;
+    return [mid-s/2, mid+s/2];
+  }
+  return [lo-span*.08, hi+span*.08];
+}
+/* THE PLOT FILLS WHAT IS LEFT, and what is left depends on what is drawn.
+   `top` is the band above the plot: a titled chart owes well()'s title bar 24
+   units, an untitled one owes nothing, and the untitled trend panel was paying
+   for a title bar it never drew - a quarter of its height, blank, above a plot
+   squeezed into a third of the box. `pad` is the side inset, so a chart hosted
+   in an HTML panel can line its frame up with the rows above it instead of
+   standing 15 px proud of them. */
 function chart(x,y,w,h,o){
   o=o||{};
-  const k=o.k, S9=o.series||[], px=x+10, py=y+24, pw=w-20, ph=o.ph!==undefined?o.ph:h-64;
+  const k=o.k, S9=o.series||[];
+  const top=o.top!==undefined?o.top:(o.title?24:6), pad=o.pad!==undefined?o.pad:10;
+  const px=x+pad, py=y+top, pw=w-2*pad, ph=o.ph!==undefined?o.ph:h-top-40;
   if(o.title) well(x,y,w,h,o.title,o.titleCol||C.amber,o.titleO);
   fillRect(px,py,pw,ph,C.well); frame(px,py,pw,ph,C.edge);
   for(let g=1;g<4;g++) fillRect(px,py+ph*g/4,pw,1,"rgba(120,180,190,.06)");
@@ -29,11 +52,12 @@ function chart(x,y,w,h,o){
     txt(o.empty||"COLLECTING DATA",px+pw/2,py+ph/2+4,
         {size:chSz(10,k),sp:2,align:"center",color:C.ink2});
   } else {
-    // stepN decimates to at most one sample per pixel column
-    const stepN=Math.max(1,Math.ceil(n/pw));
+    /* The range is read off EVERY sample, not off the ones the drawing happens
+       to land on: a decimated range with an undecimated line lets a spike out
+       through the top of the frame. */
     const scale=s=>{
       let lo=Infinity,hiV=-Infinity;
-      for(let i=0;i<n;i+=stepN){ const v=s.at(i); if(v<lo)lo=v; if(v>hiV)hiV=v; }
+      for(let i=0;i<n;i++){ const v=s.at(i); if(v<lo)lo=v; if(v>hiV)hiV=v; }
       return [lo,hiV];
     };
     if(o.share){
@@ -41,27 +65,32 @@ function chart(x,y,w,h,o){
       // that both sit still land on two different invisible scales
       let lo=Infinity,hiV=-Infinity;
       for(const s of S9){ const [a,b]=scale(s); if(a<lo)lo=a; if(b>hiV)hiV=b; }
-      let span=hiV-lo;
-      if(span<1e-6){ span=Math.max(Math.abs(hiV)*.2,1); lo-=span/2; }
-      else { lo-=span*.08; span*=1.16; }
-      for(const s of S9){ s._lo=lo; s._hi=lo+span; }
+      const [a,b]=chBand(lo,hiV);
+      for(const s of S9){ s._lo=a; s._hi=b; }
     } else {
-      for(const s of S9){
-        const [lo0,hi0]=scale(s);
-        let lo=lo0, span=hi0-lo0;
-        if(span<1e-6){ span=Math.max(Math.abs(hi0)*.2,1); lo-=span/2; }
-        else { lo-=span*.08; span*=1.16; }
-        s._lo=lo; s._hi=lo+span;
-      }
+      for(const s of S9){ const [lo0,hi0]=scale(s), [a,b]=chBand(lo0,hi0);
+        s._lo=a; s._hi=b; }
     }
+    /* ── ONE COLUMN PER PIXEL, AND IT KEEPS BOTH ENDS ──
+       Three minutes of history is ~1800 samples across ~180 units of plot, so
+       something has to give. Taking every tenth sample is the cheap answer and
+       the wrong one: it ALIASES, and a channel with any ripple on it came out
+       as jitter that moved when the ring shifted - the same plant redrawn twice
+       gave two different pictures. Each column carries the min and the max of
+       the samples inside it instead. A calm trace draws as one line, a busy one
+       draws as its envelope, and neither invents a shape the data does not have. */
+    const cols=Math.max(2,Math.min(n,Math.floor(pw)));
     for(const s of S9){
-      const lo=s._lo, span=s._hi-s._lo;
+      const lo=s._lo, span=s._hi-s._lo, Yof=v=>py+ph-((v-lo)/span)*ph;
       ctx.beginPath(); ctx.strokeStyle=s.col; ctx.lineWidth=1.6;
       if(s.style==="dash") ctx.setLineDash([4,3]);
-      let first=true;
-      for(let i=0;i<n;i+=stepN){
-        const X=px+(i/(n-1))*pw, Y=py+ph-((s.at(i)-lo)/span)*ph;
-        first?(ctx.moveTo(X,Y),first=false):ctx.lineTo(X,Y);
+      for(let c=0;c<cols;c++){
+        const i0=Math.floor(c*n/cols), i1=Math.max(i0+1,Math.floor((c+1)*n/cols));
+        let mn=Infinity,mx=-Infinity;
+        for(let i=i0;i<i1&&i<n;i++){ const v=s.at(i); if(v<mn)mn=v; if(v>mx)mx=v; }
+        const X=px+(c/(cols-1))*pw, a=Yof(mn), b=Yof(mx);
+        c?ctx.lineTo(X,a):ctx.moveTo(X,a);
+        if(b!==a) ctx.lineTo(X,b);
       }
       ctx.stroke();
       if(s.style==="dash") ctx.setLineDash([]);
