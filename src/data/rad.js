@@ -30,18 +30,16 @@ const RAD_BREACH=3.0, RAD_DMG=0.06, RAD_MELT=4.0, RAD_SGTR=1.2, RAD_AIR=0.05;
 const RAD_TANK=0.03;
 const RAD_HI=1.0, RAD_FLOOR=0.02, RAD_CEIL=3;
 
-// Keyed on WHAT the component IS, never on p.grp: `cont` and `hpi` are both
-// grp:"safety", and exactly one of them is a wall. Reading grp here would
-// shield the crew behind a water tank.
+// Keyed on WHAT the component IS - ROLE.mu (layout.js), never on p.grp or
+// p.id: `cont` and `hpi` are both grp:"safety", and exactly one of them is a
+// wall. A part with no role (should not happen - every add() in
+// buildLayout() and the one placeable part, design-bench.js, carries one)
+// falls back to the same 0.75 ordinary equipment already reads, rather than
+// inventing a shield out of an unnamed part.
 function radMu(p){
   if(!p) return 1;
-  if(p.grp==="shield")           return 0.18;
-  if(p.id==="cont")              return 0.30;
-  if(p.id==="core")              return 0.50;
-  if(p.id.startsWith("sg"))      return 0.60;
-  if(p.id==="pzr"||p.id==="hpi") return 0.65;
-  if(p.grp==="sec")              return 0.82;
-  return 0.75;
+  const R = ROLE[p.role];
+  return (R && R.mu !== undefined) ? R.mu : 0.75; // DEFAULT: no role declared - see ROLE's own comment on why this must not read as a shield
 }
 
 /* Transmission along the straight source->target line, by the EXACT chord
@@ -96,7 +94,7 @@ function radGeom(){
   const K={core:radKernel(g,cc.x,cc.y), sg:[],
            tank: tank ? radKernel(g,cen(tank).x,cen(tank).y) : null,
            crew:LAY.parts.find(p=>p.id==="ctrl")||core};
-  for(const p of LAY.parts) if(p.id.startsWith("sg")){
+  for(const p of LAY.parts) if(p.role==="sg"){
     const c=cen(p); K.sg.push(radKernel(g,c.x,c.y));
   }
   radCache=K; radCacheSig=sig;

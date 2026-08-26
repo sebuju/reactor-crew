@@ -106,7 +106,21 @@ function netSolve(A, x, n){
 // entirely rather than assembled with a zero conductance: a structurally-
 // absent edge and a shut valve must produce a bit-identical matrix, because
 // a later stage compares assembled matrices by strict equality.
-function netAssemble(edges, n, fixed, s, A, b){
+/* `src`, if given, is a per-node injected CURRENT added to the KCL right-hand
+   side after every edge has been stamped - a volume appearing at a node rather
+   than flowing to it through a conductance. Thermal expansion is exactly that
+   (step.js): heating the loop makes water where there was none, and in an
+   incompressible network it has to leave somewhere, which is what makes the
+   solved surge flow contain expansion by construction instead of a correlation
+   standing beside the solve claiming it does.
+
+   It goes in HERE and not in a pre-loaded b, which is what it looks like it
+   should be: this function fills b from zero every call, so anything a caller
+   wrote into b beforehand is wiped before the first edge is stamped.
+
+   A fixed node absorbs whatever it is given by definition, so injecting into
+   one is a no-op that would silently vanish; skipped rather than added. */
+function netAssemble(edges, n, fixed, s, A, b, src){
   A = A || new Float64Array(n*n);
   b = b || new Float64Array(n);
   A.fill(0);
@@ -127,6 +141,7 @@ function netAssemble(edges, n, fixed, s, A, b){
     if(gu && !gv) b[u] += g*pv;
     if(gv && !gu) b[v] += g*pu;
   }
+  if(src) for(let i=0;i<n;i++) if(fixed[i]===undefined && src[i]) b[i] += src[i];
   return { A, b };
 }
 

@@ -6,7 +6,7 @@
 // running audit-physics.js, which passed unchanged.
 const GW=16, GH=9, CELL=46, GX=12, MPC=1.4;   // metres per cell
 let GY=100;                                   // grid top, set each frame by the layout section
-let LAY=null, layLoops=-1, layFit="", sel="core", layMass=0;
+let LAY=null, layFit="", sel="core", layMass=0;
 // parts optionally present at a FIXED slot: buildLayout() gates add() on
 // get(), layoutMetrics() rebuilds when any of it changes, and the right-click
 // menu is generated from it. A part placed at a slot of the player's choosing
@@ -20,25 +20,49 @@ const fittableList=()=>[
   {id:"hpi",  label:"PASSIVE ACCUMULATOR", get:()=>D.accum,   set:v=>{D.accum=v;}},
   {id:"turb", label:"TURBINE",             get:()=>D.turbFit, set:v=>{D.turbFit=v;}},
   {id:"cond", label:"CONDENSER",           get:()=>D.condFit, set:v=>{D.condFit=v;}},
+  /* Stage 5d: catcher/efw/boroninj used to be bare D flags with nothing on
+     the grid to click. Listing them here gives each the identical FIT/REMOVE
+     right-click affordance cont/turb/cond already have, for free -
+     ctxItemsDesign() (design-bench.js) reads this table generically, never
+     by naming a component, so a part id that matches its own fittableList id
+     is all a new row needs. */
+  {id:"catcher",  label:"CORE CATCHER",        get:()=>D.catcher,  set:v=>{D.catcher=v;}},
+  {id:"efw",      label:"EMERGENCY FEEDWATER", get:()=>D.efw,      set:v=>{D.efw=v;}},
+  {id:"boroninj", label:"BORON INJECTION",     get:()=>D.boroninj, set:v=>{D.boroninj=v;}},
+  /* The relief tank has no D flag of its own - it is placedParts state
+     (Stage 5a), not a toggle - so get/set read and drive that directly
+     rather than a boolean field. Same id both ends (fittableList's id and
+     the part's own id) is what lets ctxItemsDesign()'s generic REMOVE/FIT
+     lookup (design-bench.js) find it with no change on that side; the
+     placePart() callback ignores the sequence number placePart() always
+     hands it, because this part keeps the one fixed id everything else
+     (D.run.relief, TANK.reltk, ROLE.reltk) is keyed on. */
+  {id:"reltk", label:"RELIEF TANK",
+   get:()=>LAY.parts.some(p=>p.id==="reltk"),
+   set:v=>{ if(v) placePart(()=>({id:"reltk",name:"RELIEF TANK",w:1,h:1,x:7,y:0,col:"#8a6cd0",
+       grp:"safety",tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
+       role:"reltk"}));
+     else removePart("reltk"); }},
 ];
 const fitOf=id=>fittableList().find(f=>f.id===id).get();
-// whether the RELIEF TANK belongs on the grid at all: it is not a
-// fittableList() toggle, it is DERIVED from whether any relief fitting still
-// taps it (see FIT.relief, pipenet.js) - one tank serves every relief path,
-// and deleting the last one removes the tank the same rebuild it removes
-// the last fitting, no separate switch to leave stale.
-const hasRelief=()=>Object.keys(D.fit).some(id=>D.fit[id].mode==="relief");
-// buildLayout() only rebuilds when this changes, so hasRelief() has to be
-// folded in - a tee or a throttle never touches LAY.parts and never needed
-// to be, but a relief fitting is the first mode whose PRESENCE (not just its
-// live position) decides whether a component exists on the grid.
-const fitSig=()=>fittableList().map(f=>f.get()?1:0).join("")+(hasRelief()?"1":"0");
+// Stage 5a: the relief tank is a placed part now (placedParts, below), never
+// a box conjured from whatever D.fit happens to contain - so fitSig() needs
+// no relief term any more. placePart()/removePart() already rebuild on
+// their own, exactly like a spare pump or generator.
+const fitSig=()=>fittableList().map(f=>f.get()?1:0).join("");
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
 // at the end of buildLayout()) or it would vanish whenever an unrelated
 // FITTABLE flag flipped. A placed part that no longer fits is dropped from
 // that one rebuild, not deleted - it reappears once the conflict clears.
-let placedParts=[], placeSeq=0;
+// Stage 5a: the relief tank ships already placed - a real part, like a spare
+// pump, not a box buildLayout() used to conjure from D.fit's own content.
+// Seeded here rather than through placePart() (which would rebuild the
+// layout before D itself has finished loading) - same id, same cell (7,0)
+// the old conditional add() put it at, so no pinned figure moves.
+let placedParts=[{id:"reltk",name:"RELIEF TANK",w:1,h:1,x:7,y:0,col:"#8a6cd0",
+  grp:"safety",tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
+  role:"reltk"}], placeSeq=0;
 function placePart(mk){
   const p=mk(placeSeq++); placedParts.push(p); buildLayout(); return p;
 }
@@ -51,29 +75,115 @@ function removePart(id){
 const pumpSizeOf=id=>D.pumpSize[id]??0.5;
 const pumpCap=size=>0.7+0.6*size;
 const PUMP_MASS=50;                    // t, at pumpCap()==1 (default size)
+// ROLE[p.role].head, not p.id.startsWith("pump") - what MAKES something a
+// pump for capacity purposes is that its role puts head into the loop
+// (ROLE.head), the identical test netBuild() gates its own head edge on.
 const totalPumpCap=()=>{ let c=0;
-  for(const p of LAY.parts) if(p.id.startsWith("pump")) c+=pumpCap(pumpSizeOf(p.id));
+  for(const p of LAY.parts) if(ROLE[p.role] && ROLE[p.role].head) c+=pumpCap(pumpSizeOf(p.id));
   return c; };
-// loop i's own pumps, undamaged, summed by capacity - what loopFlowK() (step.js)
-// reads per loop before any open junction groups loops together
+// how many steam generators are on the grid right now - the fact D.loops
+// used to fake as an input. Every reader that priced or counted "loops"
+// wants this counted value instead, never a stored knob.
+const sgCount=()=>LAY.parts.filter(p=>p.role==="sg").length;
+/* A part whose mass is not already counted by some other measure
+   (totalPumpCap(), sgCount(), latMass(), a fitting's own FIT_MASS) - one row
+   per role, priced once if that role is anywhere on LAY.parts at all. Off
+   the grid, never off a D flag: derived()'s mass expression (design.js)
+   must be able to point at a BOX for every tonne it charges, and this is
+   where a term that only ever gated a checkbox before (D.efw, D.catcher,
+   D.boroninj) now names one. RELIEF_TANK_MASS lived here as its own module
+   constant; folded into this table instead of restoring it as a second one. */
+const PART_MASS={reltk:18, catcher:66, efw:38, boroninj:18};
+const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
+/* ══════════ LOOP MEMBERSHIP COMES OFF THE GRAPH ══════════
+   p.loop used to be a STORED field - set once, off nearestLoop() (a
+   Euclidean-distance guess) for a placed spare and off a literal index for a
+   stock pump - and every reader trusted it forever after. That is exactly
+   the frozen-pixel bug juncPt() exists to forbid one level up: a pump
+   connected to a loop by PROXIMITY is not connected to it at all. Measured
+   consequence: place a spare pump nobody ever piped in and loopPumpCap(0)
+   doubled anyway, purely because the spare's `.loop` happened to read 0.
+
+   loopMap() answers it off D.run instead, structurally: which PARTS a run
+   connects, flood-filled outward from every generator on the grid. Two
+   parts only link through it if BOTH carry a ROLE this loop concept is
+   even about (core/sg/pump) - never by a run's own `k` label. That is not
+   a permission on the SOLVE (every run still conducts, taps, hits and
+   spills regardless of role - Stage 1's rule is untouched), it is a
+   bookkeeping default exactly like KIND_TEMP's hot/cold tag (pipenet.js):
+   read for a display bucket, never for whether current flows. Filtering by
+   role instead of by kind sidesteps a real landmine - the feed pump's own
+   run lands on the SAME node a cold leg does (sg's "b" face carries both;
+   see KIND_TEMP's own comment) - a kind-based or pure node-reachability
+   walk would pull the feedwater pump into "loop 0" the moment that
+   coincidence lines up; ROLE.feed is not in the set, so it never can.
+
+   A pump this walk cannot reach from any generator (nothing plumbed to it
+   at all, or plumbed somewhere no generator's branch reaches - Stage 3a's
+   reactor-condenser-RCP-reactor loop, say) simply has no loop index. It
+   still develops its OWN head once it has any real run at all - see
+   netBuild()'s pump-head block, pipenet.js - it just does not pool
+   capacity with anyone else's, because there is no group to pool with. */
+const LOOP_ROLE={core:1, sg:1, pump:1};
+let loopMapCache=null, loopMapSig="";
+function loopMap(){
+  const sig=laySig()+"|"+JSON.stringify(D.run);
+  if(loopMapCache && loopMapSig===sig) return loopMapCache;
+  const id=k=>LAY.parts.find(q=>q.id===k);
+  const adj={};
+  const link=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b); (adj[b]||(adj[b]=[])).push(a); };
+  for(const rid in D.run){
+    const e=D.run[rid];
+    if(e.tap) continue;                       // no part-to-part link of its own (surge etc.)
+    const a=id(e.a), b=id(e.b);
+    if(!a||!b || !LOOP_ROLE[a.role] || !LOOP_ROLE[b.role]) continue;
+    if(a.id==="core"||b.id==="core") continue; // the shared hub, not a link BETWEEN two loops
+    link(a.id,b.id);
+  }
+  const partLoop={};
+  // seeded off ROLE.sg parts directly, in LAY.parts' own order - counted,
+  // never named: a generator is a placed part now (Stage 3b), not a fixed
+  // "sg"+i slot buildLayout() conjured for i<D.loops.
+  let nextLoop=0;
+  for(const p of LAY.parts){
+    if(p.role!=="sg" || partLoop[p.id]!==undefined) continue;
+    const stack=[p.id], i=nextLoop++;
+    partLoop[p.id]=i;
+    while(stack.length){ const u=stack.pop();
+      for(const v of (adj[u]||[])) if(partLoop[v]===undefined){ partLoop[v]=i; stack.push(v); } }
+  }
+  loopMapCache={partLoop, n:nextLoop}; loopMapSig=sig;
+  return loopMapCache;
+}
+// which loop a PART pools capacity with, or null if the walk
+// above never reaches it from any generator - never read as "is it plumbed
+// at all" (netBuild()'s own port-usage check answers that, off net.usage).
+const loopOf = id => { const v=loopMap().partLoop[id]; return v===undefined?null:v; };
+// loop i's own pumps, undamaged, summed by capacity - what netFlowK()'s
+// per-group ceiling (pipenet.js) reads per loop before any open junction
+// groups loops together. Off loopOf(), never a stored p.loop.
 function loopPumpCap(i,dmg){
   let c=0;
   for(const p of LAY.parts){
-    if(!p.id.startsWith("pump")) continue;
-    const belongsTo = p.id==="pump"+i ? i : p.loop;
-    if(belongsTo===i && !dmg.includes(p.id)) c+=pumpCap(pumpSizeOf(p.id));
+    if(!ROLE[p.role] || !ROLE[p.role].head) continue;
+    if(loopOf(p.id)===i && !dmg.includes(p.id)) c+=pumpCap(pumpSizeOf(p.id));
   }
   return c;
 }
-// a run's key encodes which physical leg it is (kind:aIdFace-bIdFace); only a
-// hot or cold leg belongs to a LOOP the way loopFlowK's connectivity graph
-// means it. A junction tapped onto a steam or feed line still exists and
-// still draws (pipeNetwork/juncPt don't care what kind they're routing
-// between) - it just never resolves to a loop, so it never joins that graph.
+// a run's key is "kind:aIdFace-bIdFace" (or "kind:aIdFace" for a tap, which
+// has no loop identity of its own - stripped by the missing '-'). Off the
+// SAME graph loopOf() reads, never a regex on the kind prefix or on "sg"/
+// "pump" appearing in the string - a user-authored connection's key still
+// resolves correctly because it is the PARTS that carry loop membership,
+// not the label the run happens to be drawn with.
 function loopOfKey(key){
-  if(!key || !(key.startsWith("hot:")||key.startsWith("cold:"))) return null;
-  const m=key.match(/(?:sg|pump)(\d+)/);
-  return m ? +m[1] : null;
+  if(!key) return null;
+  const ci=key.indexOf(":"); if(ci<0) return null;
+  const rest=key.slice(ci+1), di=rest.indexOf("-");
+  if(di<0) return null;                       // a tap-ended run has no loop identity of its own
+  const aP=rest.slice(0,di-1), bP=rest.slice(di+1,-1);   // strip each node's single-letter face
+  const {partLoop}=loopMap();
+  return partLoop[aP]!==undefined ? partLoop[aP] : (partLoop[bP]!==undefined ? partLoop[bP] : null);
 }
 // a fitting is a tap, not a component: no box, no grid cell, never in
 // LAY.parts. D.fit is topology only - one tap (aKey,aT) always, and a
@@ -91,48 +201,158 @@ function loopOfKey(key){
 // had to be added to every one of them.
 const FITNAME={tee:"JUNCTION",relief:"RELIEF VALVE",throttle:"THROTTLE"};
 let fitSeq=0;
+// A relief valve's setpoints are mechanical - chosen when it is built, not
+// worked during a transient - so they live in D beside the tap and never on
+// S. null means "this plant's default"; reliefSet() (step.js) is the one
+// place that answers what the default is. Carried unconditionally rather
+// than behind a mode check: a fitting that is never "relief" simply carries
+// two unread nulls, the same standing `bore` already has on a mode that
+// never reads it - cheaper than a second branch in the one function every
+// mode's fitting is built through.
 function addFit(mode,aKey,aT,bKey,bT,bore=0.55,lift=null,reseat=null){
   const id="f"+(fitSeq++);
-  D.fit[id]={aKey,aT,bKey,bT,bore,mode};
-  // A relief valve's setpoints are mechanical - chosen when it is built, not
-  // worked during a transient - so they live in D beside the tap and never on
-  // S. null means "this plant's default"; reliefSet() (step.js) is the one
-  // place that answers what the default is.
-  if(mode==="relief"){ D.fit[id].lift=lift; D.fit[id].reseat=reseat; }
+  D.fit[id]={aKey,aT,bKey,bT,bore,mode,lift,reseat};
   return id;
 }
 function removeFit(id){ delete D.fit[id]; }
 const FIT_MASS=16;                     // a spool piece and a motor-operated valve, per tap
-// The tank itself, once - every relief fitting shares it (hasRelief(),
-// above), so redundancy costs through FIT_MASS and each fitting's own
-// branch pipe (layMass, layoutMetrics()) rather than through a second tank.
-const RELIEF_TANK_MASS=18;
+// The tank's own mass lives on PART_MASS.reltk (above) now - a second
+// relief valve still only ever costs through FIT_MASS and its own branch
+// pipe (layMass, layoutMetrics()), because there is still only one tank.
+
+/* ══════════ ROLE: one row per part ROLE, the network + radiation contract ══════════
+   Same idiom as FIT/TANK/LAYERS/DMGFX/AUTOSYS/DICE/ANN - one table, adding a
+   role is adding a row. Named on the part by add(), beside col/grp/tip: grp
+   is for the RAIL (how a part groups on screen - sg and pump share grp
+   "loop"+i), role is for the SOLVE and the FIELD (what a part structurally
+   IS - sg and pump need different rows). A part built with no role takes
+   radMu()'s documented fallback (0.75) forever, exactly like every unnamed
+   id used to - which is fine for ordinary steel and a lie the moment
+   something is placed and meant to shield or fix a pressure. Every add()
+   call below carries one; the one placeable part outside buildLayout()
+   (the spare pump, design-bench.js) carries one too.
+
+     internal  {a,b,kind} - an edge through the component, face a to face b,
+               stamping `kind` onto that edge (rendering/lookup only, never
+               compared). null if nothing passes through. The pressurizer
+               must NOT get one: its "b" node is the loop's own fixed datum,
+               and an edge to "t" would turn the relief header into a live,
+               permanently-open pressurizer-to-tank path - FIT.relief.g is a
+               flat 0 today and nothing else shuts that door.
+     head      true if the internal edge above also carries a pump's head
+               (PUMP_H0 * loopPumpCap(loopOf(p.id),...) * ...). Requires
+               `internal`; loop membership is read off the run graph
+               (loopOf(), above), never a stored field.
+     fixed     {type:"datum",face} - exactly one part's node, on `face`, is
+               where the loop's own piezometric zero is anchored (net2.pzrNode
+               falls back to the core when no part declares this).
+               {type:"tank"} - every node ANY part with this role reaches is
+               priced by TANK[part.id], off whatever face pipeNetwork()
+               actually routed there this frame - never a stored face name.
+               null otherwise.
+     fold      faces that collapse onto the bare part id (one electrical node,
+               not one per face) - the model's one core plenum, r_core=0; see
+               coreFold(). null otherwise.
+     mu        radiation attenuation per cell of chord crossed (radMu()) -
+               keyed on what the part IS, never on p.grp: cont and hpi are
+               both grp:"safety" and only one of them is a wall.
+     sgtr      true if this role's tubes can rupture into their own secondary
+               (netBuild()'s per-generator sgtr edge, and what busts the
+               factorisation cache when one does).
+     ports     {face:N} - the most this role's own face has ever been asked
+               to carry, MEASURED off the stock plant at every loop count the
+               bench allows (1..4), never assumed at 1. "*" caps a TOTAL
+               across every face instead, for a role whose own faces
+               pipeNetwork() picks dynamically (feed, and the tank-side end
+               of relief) rather than declares. UNREAD this pass - it is the
+               contract Stage 3a's "a port that is already occupied" rule
+               will rest on, not an enforced ceiling yet.
+     thermal   "source"|"transfer"|"sink"|"none" - adds heat, moves it from
+               primary to secondary, rejects it, or neither. DECLARED ONLY
+               this pass: the heat model behind it is Stage 6, and nothing in
+               the tick reads this field yet. */
+const ROLE = {
+  core:  {internal:null, head:false, fixed:null, fold:["r","b"], mu:0.50, sgtr:false,
+          ports:{r:4, b:5}, thermal:"source"},
+  rods:  {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
+          ports:{}, thermal:"none"},
+  pzr:   {internal:null, head:false, fixed:{type:"datum", face:"b"}, fold:null, mu:0.65, sgtr:false,
+          ports:{"*":2}, thermal:"none"},                     // surge always "b"; relief's own face is dynamic (face(pzr,rt)) and could coincide
+  sg:    {internal:{a:"l", b:"b", kind:"comp"}, head:false, fixed:null, fold:null, mu:0.60, sgtr:true,
+          ports:{l:1, b:2, t:1}, thermal:"transfer"},
+  pump:  {internal:{a:"t", b:"b", kind:"pump"}, head:true, fixed:null, fold:null, mu:0.75, sgtr:false,
+          ports:{t:1, b:1}, thermal:"none"},
+  turb:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
+          ports:{t:4, b:1}, thermal:"none"},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
+  cond:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
+          ports:{t:1, r:1}, thermal:"sink"},
+  feed:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
+          ports:{"*":5}, thermal:"none"},                     // its own two links pick a face dynamically (face(fp,sg)/face(fp,cd)) - measured total at 4 loops, not a per-face number this role ever declares
+  ctrl:  {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
+          ports:{}, thermal:"none"},
+  cont:  {internal:null, head:false, fixed:null, fold:null, mu:0.30, sgtr:false,
+          ports:{}, thermal:"none"},
+  hpi:   {internal:null, head:false, fixed:{type:"tank"}, fold:null, mu:0.65, sgtr:false,
+          ports:{b:1}, thermal:"none"},
+  bkp:   {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
+          ports:{}, thermal:"none"},
+  reltk: {internal:null, head:false, fixed:{type:"tank"}, fold:null, mu:0.75, sgtr:false,
+          ports:{"*":1}, thermal:"none"},                     // its own face (face(rt,pzr)) is dynamic
+  shield:{internal:null, head:false, fixed:null, fold:null, mu:0.18, sgtr:false,
+          ports:{}, thermal:"none"},
+  /* Stage 5d: three "systems with mass" that used to be a checkbox and
+     nothing on the grid. None gets `fixed` - the run each one carries
+     (D.run, design.js) lands on a node that is ALREADY reachable from the
+     rest of the primary network (sg0's own "b" face, the core's folded
+     node), so each hangs off it as a true pendant leaf: no fixed pressure
+     and no head anywhere past that one edge means KCL forces exactly zero
+     current through it, so it cannot move a single other pressure or flow
+     in the solve - see the auditor's own sweep proving netFlowK/DNBR/n
+     don't move with these parts on the grid. */
+  catcher: {internal:null, head:false, fixed:null, fold:null, mu:0.55, sgtr:false,
+          ports:{}, thermal:"none"},                          // a structure, not a network part - no run, no ports, no exception needed
+  efw:     {internal:null, head:false, fixed:null, fold:null, mu:0.65, sgtr:false,
+          ports:{"*":1}, thermal:"none"},                     // tank and pump as one box, the same idiom D.accum already gives HPI
+  boroninj:{internal:null, head:false, fixed:null, fold:null, mu:0.65, sgtr:false,
+          ports:{"*":1}, thermal:"none"},
+};
 
 function buildLayout(){
-  const A=[], add=(id,name,w,h,x,y,col,grp,tip)=>{ const p={id,name,w,h,x,y,col,grp,tip}; A.push(p); return p; };
+  const A=[], add=(id,name,w,h,x,y,col,grp,tip,role)=>{ const p={id,name,w,h,x,y,col,grp,tip,role}; A.push(p); return p; };
   add("core","REACTOR",3,3,2,4,"#ff5a45","core",
-    "The vessel and the fuel inside it. Select it to choose the coolant family, the fuel, the lattice and the core shape.");
+    "The vessel and the fuel inside it. Select it to choose the coolant family, the fuel, the lattice and the core shape.","core");
   add("rods","ROD DRIVES",3,1,2,3,"#c8d8dc","core",
-    "Control rod drive mechanisms, bolted to the vessel head. They ride on the head and move with the reactor - you site the reactor, not the drives. Select for scram gear, bank worth and emergency poison.")
+    "Control rod drive mechanisms, bolted to the vessel head. They ride on the head and move with the reactor - you site the reactor, not the drives. Select for scram gear, bank worth and emergency poison.","rods")
     .pin={to:"core",dx:0,dy:-1};
   add("pzr","PRESSURIZER",1,2,5,1,"#a98cf0","primary",
-    "Sets loop pressure. It has to sit high - the steam bubble must stay at the top of the loop.");
-  for(let i=0;i<D.loops;i++){
-    add("sg"+i,"STEAM GEN "+(i+1),1,2,8+i*2,1,"#5fd2e2","loop"+i,
-      "Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival.");
-    add("pump"+i,"RCP "+(i+1),1,1,8+i*2,6,"#57d38c","loop"+i,
-      "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.");
-  }
+    "Sets loop pressure. It has to sit high - the steam bubble must stay at the top of the loop.","pzr");
+  // ONE generator, ONE pump - the stock loadout, exactly like every other
+  // fixed-slot part above. There is no knob for how many of these exist:
+  // an additional generator is a PLACED part (ADD STEAM GENERATOR HERE,
+  // design-bench.js), wired by hand through Stage 3a's CONNECT, the same
+  // way a spare pump already is. Loop membership is read off the run graph
+  // (loopOf(), above), not stored.
+  add("sg0","STEAM GEN 1",1,2,8,1,"#5fd2e2","loop0",
+    "Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival.","sg");
+  add("pump0","RCP 1",1,1,8,6,"#57d38c","loop0",
+    "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.","pump");
   if(fitOf("turb")) add("turb","TURBINE",3,1,12,4,"#f0a830","sec",
-    "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.");
+    "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.","turb");
   if(fitOf("cond")) add("cond","CONDENSER",3,1,12,7,"#5aa9d6","sec",
-    "Rejects waste heat. Bulky, and it wants to be near the hull.");
+    "Rejects waste heat. Bulky, and it wants to be near the hull.","cond");
   add("feed","FEED PUMP",1,1,15,5,"#5aa9d6","sec",
-    "Returns water to the steam generator. Lose it and the heat sink boils dry.");
+    "Returns water to the steam generator. Lose it and the heat sink boils dry.","feed");
   add("ctrl","CONTROL",2,1,1,8,"#cfc9b8","crew",
-    "Where your crew sits. Distance and shielding from the reactor set the dose they take.");
+    "Where your crew sits. Distance and shielding from the reactor set the dose they take.","ctrl");
   if(fitOf("cont")) add("cont","CONTAINMENT",2,1,4,8,"#8fa9ae","safety",
-    "The barrier between damaged fuel and your crew. Select it for containment type and the core catcher.");
+    "The barrier between damaged fuel and your crew. Select it for containment type and the core catcher.","cont");
+  // Stage 5d: a structure, not a flag - it occupies real floor space under
+  // the vessel rather than costing 66 t for nothing on the grid at all.
+  // ports:{} (ROLE.catcher) - it carries no run and needs none; "is the core
+  // sitting over the catcher" is a geometric question with a geometric
+  // answer now, exactly like "is the pressurizer the highest point".
+  if(D.catcher) add("catcher","CORE CATCHER",1,1,3,8,"#5a4a3a","safety",
+    "A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher");
   /* Unconditional, because every plant has one. It used to appear only when
      the PASSIVE ACCUMULATOR was bought, while step() injected at a fixed rate
      either way - so a plant with pumped injection had a system with no tank,
@@ -146,17 +366,27 @@ function buildLayout(){
      stock plant amber. Raising it lengthens the injection line, which P.flowK
      prices - see the re-pinned figures in tools/audit-physics.js. */
   add("hpi", D.accum?"ACCUMULATOR":"HPI TANK",1,1,3,1,"#5aa9d6","safety",
-    "Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.");
+    "Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.","hpi");
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
-    "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.");
-  // one tank for every relief fitting (FIT.relief, pipenet.js) - deleting
-  // the last one deletes this too (hasRelief(), above). It has mass and it
-  // shines once a vent has charged it, so where you put it is a decision
-  // like any other part's, not a free vent to nowhere.
-  if(hasRelief()) add("reltk","RELIEF TANK",1,1,7,0,"#8a6cd0","safety",
-    "Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.");
+    "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.","bkp");
+  // Stage 5d: emergency feedwater is a tank and a pump now (one box, the
+  // same idiom D.accum already gives HPI), placed and piped to the
+  // generator's own free "r" face, not a checkbox. D.run's own efwF entry
+  // (design.js) wires it unconditionally; pipeNetwork() already skips any
+  // run whose part is off the grid, so nothing routes while D.efw is false.
+  // The effect stays a STATED, MEASURED one (AUTOSYS.efw, step.js) until
+  // Stage 6a gives the secondary something to actually deliver flow to.
+  if(D.efw) add("efw","EFW TANK",1,1,9,1,"#5aa9d6","safety",
+    "Independent feedwater reserve and pump, piped straight to the generator. Keeps it fed after the main feed pumps are lost - see its own panel for what that is measured to buy.","efw");
+  // Stage 5d: same argument as EFW - a tank and a line into the primary
+  // loop (core's own folded node), not a flag. The dump itself (act
+  // boronDump, record.js) stays a one-shot pcm kick; this is what makes the
+  // button on the mimic answer "is there a tank on the grid" rather than a
+  // D flag with nothing behind it.
+  if(D.boroninj) add("boroninj","BORON TANK",1,1,1,3,"#8a6cd0","safety",
+    "A one-shot tank of concentrated poison worth 4000 pcm, piped into the loop. Shuts the reactor down when the rods will not, and cannot be undone.","boroninj");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
-    "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.");
+    "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
   // placed parts merge in last, checked straight against A (not groupFits(),
   // which reads the global LAY.parts - still the PRE-rebuild layout here)
   for(const p of placedParts){
@@ -164,7 +394,7 @@ function buildLayout(){
     if(ok) for(const q of A) if(p.x<q.x+q.w && p.x+p.w>q.x && p.y<q.y+q.h && p.y+p.h>q.y){ ok=false; break; }
     if(ok) A.push(p);
   }
-  LAY={parts:A}; layLoops=D.loops; layFit=fitSig();
+  LAY={parts:A}; layFit=fitSig();
 }
 // a control strip needs more than a 2-cell component's 92px width, so the
 // control room gives each grid ROW extra height at the bottom - as much as
@@ -277,6 +507,38 @@ function dedupe(pts){
     if(Math.abs(pts[i][0]-q[0])>0.5||Math.abs(pts[i][1]-q[1])>0.5) out.push(pts[i]); }
   return out;
 }
+// half the render's 4px pipe stroke (src/render/pipes.js) - a leg no wider
+// than the pipe drawn over it is invisible as a leg, so it is folded into
+// its neighbour before asking whether the legs on either side of it reverse
+const RETRACE_TOL=2;
+// a leg shorter than the pipe's own width can't be seen as a leg - the pipe
+// drawn either side of it already overlaps it - so drop its far point and let
+// the legs before and after it be compared directly, as if it were absent
+function foldShortLegs(pts){
+  const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){
+    const q=out[out.length-1], p=pts[i];
+    if(Math.hypot(p[0]-q[0],p[1]-q[1])<=RETRACE_TOL) continue;
+    out.push(p);
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
+// true if a leg immediately reverses over the one before it (collinear, opposite
+// direction) - a same-face elbow whose lateral leg collapsed to, or shrank
+// within, the pipe's own width folds this way, drawing one stroke over another
+// instead of turning a corner
+function retraces(pts){
+  const d=foldShortLegs(dedupe(pts));
+  for(let i=2;i<d.length;i++){
+    const ax=d[i-2][0],ay=d[i-2][1], bx=d[i-1][0],by=d[i-1][1], cx=d[i][0],cy=d[i][1];
+    const legLen=Math.hypot(bx-ax,by-ay);
+    if(!legLen) continue;
+    if(Math.abs((bx-ax)*(cy-by)-(by-ay)*(cx-bx))/legLen>RETRACE_TOL) continue;
+    if((bx-ax)*(cx-bx)+(by-ay)*(cy-by)<0) return true;
+  }
+  return false;
+}
 const SLIDES=[[8,0],[-8,0],[0,8],[0,-8],[8,8],[-8,-8],[16,0],[-16,0],[0,16],[0,-16]];
 // o.pa/o.pb replace that end's PORT with a bare point (a waypoint has no
 // component or face to leave square to); o.va/o.vb then say which way the leg
@@ -316,7 +578,7 @@ function route(p,sa,q,sb,o){
     const d = port(q,sb,o.ib,nB,0)[ax] - port(p,sa,o.ia,nA,0)[ax];
     if(d){
       const t = nA===1 ? build(d,0) : build(0,-d);
-      if(!reg.cost(t)) pts=t;
+      if(!reg.cost(t) && !retraces(t)) pts=t;
     }
   }
   // a nozzle whose run would be buried anyway may slide along its own face:
@@ -324,9 +586,12 @@ function route(p,sa,q,sb,o){
   // pipe entering there has nowhere to be but under the one already passing
   // through - no lane choice helps, the nozzle itself has to move
   if(!pts) pts=build(0,0);
-  if(reg.cost(pts)) for(const [da,db] of SLIDES){
+  // build() only reads da/db through port(), and o.pa/o.pb (both set on a
+  // waypoint-to-waypoint leg) replace that call outright - so every SLIDES
+  // candidate would rebuild the identical polyline pts already is
+  if((reg.cost(pts) || retraces(pts)) && !(o.pa && o.pb)) for(const [da,db] of SLIDES){
     const t=build(da,db);
-    if(!reg.cost(t)){ pts=t; break; }
+    if(!reg.cost(t) && !retraces(t)){ pts=t; break; }
   }
   return reg.claim(dedupe(pts));
 }
@@ -410,16 +675,17 @@ function plen(pts){ let L=0;
   for(let i=1;i<pts.length;i++) L+=Math.abs(pts[i][0]-pts[i-1][0])+Math.abs(pts[i][1]-pts[i-1][1]);
   return L/CELL*MPC; }
 
-/* The ONE relief header pipeNetwork() draws (link("relief",...) below), found
-   live. Its key carries the two faces that call picked, so it changes the
-   moment the pressurizer or the tank moves - and a fitting that had stored the
-   old string then resolved against nothing: no branch routed, reliefG() 0,
-   ventK() 0, and the valve vented NOTHING while its glyph, its tank, its mimic
-   and its mass all stayed. That is the frozen-pixel bug juncPt() exists to
-   prevent, one level up: a fitting must store a tap, never a key that geometry
-   is still free to rename. Relief is the only mode that can resolve this way,
-   because it is the only one whose far end is a run the design derives rather
-   than one the player picked. */
+/* The ONE relief header D.run declares (design.js), routed live by
+   pipeNetwork(). Its key carries the two faces that routing picked, so it
+   changes the moment the pressurizer or the tank moves - and a fitting that
+   had stored the old string then resolved against nothing: no branch
+   routed, FIT.relief.g 0 whatever S.reliefOpen said, and the valve vented
+   NOTHING while its glyph, its tank, its mimic and its mass all stayed.
+   That is the frozen-pixel bug juncPt() exists to prevent, one level up: a
+   fitting must store a tap, never a key that geometry is still free to
+   rename. Relief is the only mode that can resolve this way, because it is
+   the only one whose far end is a run the design derives rather than one
+   the player picked. */
 function reliefHeaderKey(net){
   const r=net.find(x=>x.k==="relief");
   return r?r.key:null;
@@ -431,38 +697,37 @@ function fitBKey(net,j){
   return j.mode==="relief" ? reliefHeaderKey(net) : j.bKey;
 }
 
-// routing happens in two passes because neither can go first: a run cannot
-// pick its nozzle until its face knows how many pipes land on it, and a face
-// cannot know that until every run has been declared
+/* pipeNetwork() reads D.run (design.js), not a hard-coded topology: a run
+   EXISTS because it is declared, never because pipeNetwork() inferred it
+   from which parts happen to be on the grid. What is still decided HERE is
+   the ROUTE - which face a dynamic (`af`/`bf` null) end leaves from, and
+   (for a tap-ended run) where along the target run it lands - because a
+   route is a presentation of a connection the design already made, not an
+   invention of one. See D.run's own comment (design.js) for the entry
+   shape.
+
+   routing happens in two passes because neither can go first: a run cannot
+   pick its nozzle until its face knows how many pipes land on it, and a face
+   cannot know that until every run has been declared */
 function pipeNetwork(){
   const id=k=>LAY.parts.find(q=>q.id===k);
-  const core=id("core"), pzr=id("pzr"), tb=id("turb"), cd=id("cond"), fp=id("feed"), hp=id("hpi"), rt=id("reltk");
   // a KIND is not an identity: every loop's hot leg is kind "hot" (one animated
   // line), but a waypoint belongs to ONE physical run, so each gets its own
   // stable key from both ends and both faces
-  const conn=[], link=(k,a,sa,b,sb)=>conn.push({k,a,sa,b,sb,key:k+":"+a.id+sa+"-"+b.id+sb});
-  for(let i=0;i<D.loops;i++){
-    const sg=id("sg"+i), pu=id("pump"+i);
-    if(!sg) continue;
-    link("hot",core,"r",sg,"l");
-    if(pu){ link("cold",sg,"b",pu,"t"); link("cold",pu,"b",core,"b"); }
-    else    link("cold",sg,"b",core,"b");
-    if(tb) link("steam",sg,"t",tb,"t");
-    if(fp) link("feed",fp,face(fp,sg),sg,"b");   // discharge
+  const conn=[];
+  for(const rid in D.run){
+    const e=D.run[rid];
+    const a=id(e.a);
+    if(!a) continue;                    // this entry's part is not on the grid this frame
+    if(e.tap){                          // lands on another run, not on a port of its own
+      conn.push({rid,k:e.k,a,sa:e.af,tap:e.tap,key:e.k+":"+a.id+e.af});
+      continue;
+    }
+    const b=id(e.b);
+    if(!b) continue;
+    const sa=e.af!=null?e.af:face(a,b), sb=e.bf!=null?e.bf:face(b,a);
+    conn.push({rid,k:e.k,a,sa,b,sb,key:e.k+":"+a.id+sa+"-"+b.id+sb});
   }
-  // the surge line drops straight onto whatever hot leg passes underneath
-  // rather than routing, but it's still declared here and counted with the rest
-  if(pzr) conn.push({k:"surge",a:pzr,sa:"b"});
-  if(tb&&cd) link("exh",tb,"b",cd,"t");
-  if(cd&&fp) link("feed",cd,"r",fp,face(fp,cd));   // suction
-  if(hp&&fitted(hp)) link("hpi",hp,"b",core,"b");
-  // the relief HEADER: always drawn once a tank exists, whatever fittings
-  // tap it - one physical line from the pressurizer down to the tank, the
-  // anchor every relief fitting's own branch (FIT.relief, pipenet.js) tees
-  // onto. It carries no edge of its own (netBuild() never builds one for
-  // kind "relief"): it is the vent's destination, not a path current can
-  // take, the same way surge below is a destination with no source.
-  if(pzr&&rt) link("relief",pzr,face(pzr,rt),rt,face(rt,pzr));
 
   const key=(p,s)=>p.id+s, cnt={}, seen={};
   const tally=(p,s)=>{ if(p) cnt[key(p,s)]=(cnt[key(p,s)]||0)+1; };
@@ -470,22 +735,22 @@ function pipeNetwork(){
   const take=(p,s)=>{ const k=key(p,s), i=seen[k]||0; seen[k]=i+1; return [i,cnt[k]]; };
 
   const reg=laneReg(), net=[];
-  let hot0=null;
+  const ridPts={};                      // this frame's routed pts, by D.run id - what a tap lands against
   for(const c of conn){
-    if(c.k==="surge"){                 // surge line drops onto the hot leg
+    if(c.tap){                          // e.g. surge, dropping onto whatever run it names
       const [ia,na]=take(c.a,c.sa), a=port(c.a,c.sa,ia,na);
-      const surgeKey="surge:"+c.a.id+c.sa;
-      if(!hot0) continue;
-      let ty=null;                     // nearest hot run passing under the pressurizer
+      const hot0=ridPts[c.tap];
+      if(!hot0) continue;               // the tapped run didn't route this frame
+      let ty=null;                     // nearest run passing under this end
       for(let i=1;i<hot0.length;i++){
         if(Math.abs(hot0[i][1]-hot0[i-1][1])>0.5) continue;
         const lo=Math.min(hot0[i-1][0],hot0[i][0]), hi=Math.max(hot0[i-1][0],hot0[i][0]);
         if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
           ty=hot0[i][1];
       }
-      if(ty!==null) net.push({k:"surge",key:surgeKey,pts:[a,[a[0],ty]],wp:false,nz:[true,false]});
+      if(ty!==null) net.push({k:c.k,key:c.key,rid:c.rid,pts:[a,[a[0],ty]],wp:false,nz:[true,false]});
       else { const t=nearestOn(hot0,a);  /* nothing underneath: reach across to the leg */
-        if(t.d>3) net.push({k:"surge",key:surgeKey,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false,nz:[true,false]}); }
+        if(t.d>3) net.push({k:c.k,key:c.key,rid:c.rid,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false,nz:[true,false]}); }
       continue;
     }
     const [ia,na]=take(c.a,c.sa), [ib,nb]=take(c.b,c.sb);
@@ -493,9 +758,11 @@ function pipeNetwork(){
     /* nz: which END of this run lands on a component PORT, so drawPlant()
        knows where a nozzle belongs. Stated, never inferred - the wp flag
        right beside it used to be read off "has no key", which was control
-       flow by accident, and this would rot the same way. */
-    net.push({k:c.k,key:c.key,pts:r.pts,legs:r.legs,wps:r.wps,wp:true,nz:[true,true]});
-    if(c.k==="hot"&&!hot0) hot0=r.pts;
+       flow by accident, and this would rot the same way. rid: which D.run
+       entry this is - CONNECT's own DISCONNECT offer needs it to name what
+       to delete, the same way a fitting's own id already does. */
+    net.push({k:c.k,key:c.key,rid:c.rid,pts:r.pts,legs:r.legs,wps:r.wps,wp:true,nz:[true,true]});
+    ridPts[c.rid]=r.pts;
   }
   // a branch fitting: a tap on one run reaching a tap on another, both
   // resolved off the NET this call just built (main conn loop first, so both
@@ -510,7 +777,15 @@ function pipeNetwork(){
   for(const jid in D.fit){
     const j=D.fit[jid];
     if(!j.bKey) continue;               // in-line: no second tap, no route
-    const A=juncPt(net,j.aKey,j.aT), B=juncPt(net,fitBKey(net,j),j.bT);
+    const A=juncPt(net,j.aKey,j.aT);
+    let B=juncPt(net,fitBKey(net,j),j.bT);
+    /* A relief valve with nowhere to land its far tap - no header run, no
+       tank on the grid yet - still vents (pipenet.js's own containment
+       fallback), so it still needs a stub to draw: a short nub straight up
+       off its own tap, "vents into the room" made picture-shaped, rather
+       than the branch silently not existing. Every other mode keeps the old
+       behaviour: a tapped run whose part vanished draws nothing. */
+    if(!B && j.mode==="relief" && A) B={pt:[A.pt[0], A.pt[1]-CELL*0.4], vert:true};
     if(!A||!B) continue;              // a tapped run's part was removed
     // sa/sb just need to differ - both taps are bare points (o.pa/o.pb), so
     // neither string reaches port(). Equal strings would send route() down
@@ -524,7 +799,103 @@ function pipeNetwork(){
     const pts=route(null,"a",null,"b",{reg,pa:A.pt,pb:B.pt,va:!A.vert,vb:!B.vert});
     net.push({k:"xtie:"+jid, key:"xtie:"+jid, pts, wp:false, nz:[false,false]});
   }
+  // which faces are occupied THIS frame, by "partId+face" - the same tally
+  // route()/port() already built to spread N pipes into N slots, exposed
+  // once rather than rebuilt: CONNECT's own "is this port free" check
+  // (portRoom(), below) reads it, and so does netBuild()'s "does this part
+  // have ANY real run reaching it at all" test (pipenet.js).
+  net.usage=cnt;
   return net;
+}
+/* Which faces of a part still have room for one more run, per ROLE.ports -
+   "*" caps the TOTAL across every face instead of one each (feed, and the
+   tank-side end of relief, pick their own face live rather than declaring
+   one). The only two things CONNECT may ever refuse are this and "no route"
+   - never what a component IS FOR. */
+function portRoom(p){
+  const R=ROLE[p.role], out={t:false,b:false,l:false,r:false};
+  if(!R || !R.ports) return out;
+  const usage=pipeNetwork().usage||{};
+  if(R.ports["*"]!=null){
+    let used=0; for(const f in out) used+=usage[p.id+f]||0;
+    const free=used<R.ports["*"];
+    for(const f in out) out[f]=free;
+    return out;
+  }
+  for(const f in out) out[f] = R.ports[f]!=null && (usage[p.id+f]||0)<R.ports[f];
+  return out;
+}
+// the nearest FREE port to a plant-space point, over every part but one -
+// the "convenience, never a gate" half of CONNECT (design-bench.js): it
+// only ever picks a DEFAULT, and finding nothing here means no offer, never
+// a refusal. threshold is half a cell, the same reach a run's own tap
+// search already uses relative to CELL.
+function nearestFreePort(pt,excludeId){
+  let best=null,bd=1e9;
+  for(const p of LAY.parts){
+    if(p.id===excludeId) continue;
+    const room=portRoom(p);
+    for(const f in room){
+      if(!room[f]) continue;
+      const a=port(p,f);
+      const d=Math.hypot(a[0]-pt[0],a[1]-pt[1]);
+      if(d<bd){ bd=d; best={part:p,face:f,pt:a}; }
+    }
+  }
+  return best && bd<CELL*0.85 ? best : null;
+}
+/* ══════════ D.run: A CONNECTION IS AUTHORED, A ROUTE IS COMPUTED ══════════
+   addRun()/removeRun() are the CONNECT/DISCONNECT half of Stage 3a, the
+   same standing addFit()/removeFit() already have: a design edit, called
+   straight from the context menu (design-bench.js), not through act(). That
+   is an EXISTING gap, not a new one - nothing in ACT writes D today, so a
+   fitting was already unrecorded and unreplayable before this. Extending
+   the same shape rather than inventing a second one keeps that gap
+   singular instead of doubling it; giving D edits their own recording path
+   is real work nobody has asked for in this pass.
+   `k:"user"` is a LABEL only (bore default, display name) - it never gates
+   the solve, and it never gates loopMap() either, which is why a spare pump
+   plumbed this way genuinely pools capacity with whatever it reaches. */
+let runSeq=0;
+function addRun(aId,af,bId,bf,bore=1){
+  const rid="usr"+(runSeq++);
+  D.run[rid]={a:aId,af,b:bId,bf,k:"user",bore};
+  return rid;
+}
+function removeRun(rid){ delete D.run[rid]; }
+/* Is there a relief tank on the board for a relief valve to discharge into?
+   Every relief fitting shares the one tank, so the design-bench menu only
+   offers ADD RELIEF VALVE once it exists.
+
+   Off ROLE, never p.id: "is this the relief tank" is a declared role, and the
+   PARTS row's own get() matches on the id only because that row IS the id's
+   definition. This was referenced from design-bench.js and never written -
+   right-clicking a pipe on the bench threw "hasRelief is not defined" and
+   took the whole frame with it, because ctxItemsDesign() runs inside the draw
+   (drawCtxMenu -> drawDesign -> tick). No auditor opens that menu. */
+function hasRelief(){ return LAY.parts.some(p => p.role === "reltk"); }
+
+/* A soft, honest "nothing removes heat" warning (design.js's derived()) -
+   topological only, off D.run alone: Stage 6 is what would let this READ
+   the loop, so today it can only ask whether anything that COULD reject
+   heat is wired to the primary at all. Any run counts, any kind - Stage 1's
+   rule again, a run is a run. */
+function hasHeatSink(){
+  const id=k=>LAY.parts.find(q=>q.id===k);
+  const core=id("core"); if(!core) return true;   // no core, no claim to make
+  const seen=new Set(["core"]), stack=["core"];
+  while(stack.length){
+    const u=stack.pop();
+    for(const rid in D.run){
+      const e=D.run[rid]; if(e.tap) continue;
+      const a=id(e.a), b=id(e.b); if(!a||!b) continue;
+      if(a.id===u && !seen.has(b.id)){ seen.add(b.id); stack.push(b.id); }
+      else if(b.id===u && !seen.has(a.id)){ seen.add(a.id); stack.push(a.id); }
+    }
+  }
+  for(const pid of seen){ const p=id(pid), R=p&&ROLE[p.role];
+    if(R && (R.thermal==="sink"||R.thermal==="transfer")) return true; }
+  return false;
 }
 // BACKUP PWR ghosts rather than vanishes: NONE is a real dropdown choice
 // (mass 0) that still occupies its cell, because it's a three-way quality
@@ -576,13 +947,13 @@ function freeAdj(p,g){
   return out;
 }
 function layoutMetrics(){
-  if(!LAY||layLoops!==D.loops||layFit!==fitSig()) buildLayout();
+  if(!LAY||layFit!==fitSig()) buildLayout();
   // measure the design, not the view: drawPlant() sets the bands again
   // straight after this returns, and nothing measures between the two
   BANDS=null;
   const P_=LAY.parts, id=k=>P_.find(q=>q.id===k), core=id("core"), cc=cen(core);
   let head=0, n=0;
-  for(const p of P_) if(p.id.startsWith("sg")){ head += (cc.y - cen(p).y); n++; }
+  for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
   let pipe=0, sec=0, dead=0;
   for(const r of pipeNetwork()){
@@ -625,14 +996,15 @@ function layoutMetrics(){
   const dose=radAt(radF,radK.crew), peak=radPeak(radF);
 
   let sep=99;
-  if(D.loops>1) for(let i=0;i<D.loops;i++) for(let j=i+1;j<D.loops;j++){
-    const a=cen(id("sg"+i)), b=cen(id("sg"+j));
+  const sgs=P_.filter(p=>p.role==="sg");
+  if(sgs.length>1) for(let i=0;i<sgs.length;i++) for(let j=i+1;j<sgs.length;j++){
+    const a=cen(sgs[i]), b=cen(sgs[j]);
     sep=Math.min(sep,Math.abs(a.x-b.x)+Math.abs(a.y-b.y));
   }
   // the steam bubble has to sit at the top of the loop, and the accumulator drains downhill
   const pz=id("pzr");
   let loopTop=core.y;
-  for(const q of P_) if(q.id.startsWith("sg")) loopTop=Math.min(loopTop,q.y);
+  for(const q of P_) if(q.role==="sg") loopTop=Math.min(loopTop,q.y);
   const pzrOK = pz ? pz.y<=loopTop : true;
   const pzrK  = pzrOK ? 1 : 0.45;
   /* Metres, measured - not a clamped multiplier on an injection rate that no

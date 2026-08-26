@@ -67,10 +67,42 @@ const CHAN=[
  {name:"TWO CHANNEL",noise:.45,mass:25,note:"Disagreement is visible, but you cannot tell which of the two is wrong."},
  {name:"THREE CHANNEL VOTE",noise:.10,mass:45,note:"Majority voting rejects a failed sensor outright and the readings hold still."},
 ];
+/* `water` is tonnes of SECONDARY water held by ONE generator at power, and it
+   is the whole of the boil-dry mechanic: step()'s mass balance divides the
+   steam raised into it. It is not a free constant - it is read off the real
+   machines the two rows name, because the note prose was already selling
+   those inventories and only graceK was spending them.
+
+   A recirculating U-tube unit (Westinghouse Model F class) carries ~55 t on
+   its secondary side at power. A once-through unit (B&W OTSG class) carries
+   ~7 t: it is a boiler with almost no standing water, which is exactly why
+   TMI-2 had seconds rather than minutes. The ~8x ratio is the point; the
+   graceK ratio of 1.47 never was that mechanic, only a stand-in for it.
+
+   Re-derive by measuring boil-dry time at full load, M*H_FG/Q. At four
+   generators (Q = 299 MWt each) that is 278 s U-tube and 35 s once-through -
+   "minutes" and "almost as fast", the two claims the notes make. */
 const SGT=[
- {name:"U-TUBE",graceK:1.0,mass:70,note:"Large secondary water inventory acts as a heat sink for minutes after feedwater is lost. Heavy and slow to respond."},
- {name:"ONCE-THROUGH",graceK:.68,mass:42,note:"Very little water in it, so it responds instantly to load changes and boils dry almost as fast. Light."},
+ {name:"U-TUBE",water:55,mass:70,note:"Large secondary water inventory acts as a heat sink for minutes after feedwater is lost. Heavy and slow to respond."},
+ {name:"ONCE-THROUGH",water:7,mass:42,note:"Very little water in it, so it responds instantly to load changes and boils dry almost as fast. Light."},
 ];
+/* The generator's contribution to the PRIMARY's thermal inertia, and the ONE
+   place it is decided: derived() here and commission() in step.js both read
+   this, where each used to compute it independently from the same raw inputs -
+   so a partial fix succeeded in one file and silently did not in the other.
+
+   It is SGT[].mass now, and the old SGT[].graceK field is GONE. That field was
+   a single number standing in for two different things: how much metal there
+   is to heat up, and how long the water lasts once the feedwater stops. While
+   the level was an algebraic guess only the first could be spent, so one
+   number could carry both. Stage 6a made the water real (SGT[].water), and
+   keeping graceK would have charged the boil-dry time twice.
+
+   Normalised on the U-TUBE row because the stock plant is U-TUBE: it reads
+   exactly 1.0, so every trip and coefficient calibrated against that plant is
+   untouched. Only ONCE-THROUGH moves, 0.68 -> 0.60, and it moves onto a figure
+   the design already states in tonnes instead of a fitted multiplier. */
+const sgInertiaK = () => SGT[D.sg].mass / SGT[0].mass;
 const CONT=[
  {name:"NONE",rel:1.0,mass:0,note:"No containment. Any fuel damage releases directly to the environment, and to your crew."},
  {name:"SUPPRESSION POOL",rel:.25,mass:40,note:"Compact pool that condenses released steam. Holds most of a release, and can be overwhelmed by a large break."},
@@ -99,11 +131,75 @@ const RODX0=.35;
    forgets the other. pumpSize and fit are not FITTABLE flags at all - a
    pump and a fitting are placed, not toggled, at a spot the player chose
    rather than a fixed slot - see PLACED PARTS and FITTINGS in layout.js. */
+/* ═══════════ D.run: THE PLANT'S OWN PLUMBING, DECLARED ═══════════
+   pipeNetwork() (layout.js) used to CONJURE every pipe on the plant from a
+   hard-coded topology - a generator was always between the core and a pump,
+   feed always came from the condenser, because a `link()` call said so in
+   imperative code nowhere near the tables that claim to own the plant. A run
+   is a thing that EXISTS now, not a thing a part implies: this is that
+   topology, moved onto D so it rides designSig(), the recording head and the
+   save format for free, the same trick D.fit already relies on.
+
+   One entry per run. `a`/`b` name the two PARTS; `af`/`bf` name the FACE
+   each leaves from, or null - null means "whichever face points at the
+   other end", resolved live by face() exactly as it always was. Face
+   selection is ROUTE, not topology - a part that moves still leaves from
+   whichever face makes sense, the same as `route()`/`port()` always
+   decided. `k` is the run's own label - it never gates whether the run is
+   an edge, a tap target, a hit target or a spill point (every run answers
+   yes to all four now); it only picks a default bore and a name.
+
+   A run with a `tap` field instead of `b`/`bf` lands on ANOTHER run rather
+   than on a port of its own - surge is the one run authored this way today,
+   because "drop onto whatever hot leg passes underneath" is a ROUTE
+   decision (a directional search, unchanged in pipeNetwork()), not a
+   topology one; what changed is that WHICH run it searches against is now
+   named here (`hot0`) instead of "the first hot leg pipeNetwork() happens
+   to build".
+
+   Authored for the ONE generator the stock plant ships with - "sg0"/"pump0",
+   the fixed slot buildLayout() (layout.js) still places unconditionally, the
+   same standing core/pzr/rods have. There is no D.loops any more: a second,
+   third or fourth generator is a PLACED part (ADD STEAM GENERATOR HERE,
+   design-bench.js) wired by hand through addRun()/CONNECT, exactly like a
+   spare pump - it gets its OWN entries in this same table, added by
+   addRun(), not a set of slots pre-declared here and waiting for a knob to
+   turn them on. pipeNetwork() still skips any entry whose part is not on
+   the grid this frame, which is what lets a design missing its generator
+   entirely still resolve to a sane (if unpiped) plant.
+
+   `bore` is a SPEC, not yet a live one - runBore() (pipenet.js) still reads
+   PIPE_BORE[r.k], so this is data for a later pass to consume, the same
+   standing ROLE.ports has this pass: declared, not yet enforced. Values
+   here mirror PIPE_BORE's current defaults so nothing is invented. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
-         loops:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
+         pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
          cont:1,contFit:true,accum:false,efw:true,catcher:false,bkp:1,
-         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{}};
+         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{},
+         run:{
+           hot0  :{a:"core",af:"r",b:"sg0",bf:"l",k:"hot",  bore:1},
+           coldA0:{a:"sg0", af:"b",b:"pump0",bf:"t",k:"cold", bore:1},
+           coldB0:{a:"pump0",af:"b",b:"core",bf:"b",k:"cold", bore:1},
+           steam0:{a:"sg0", af:"t",b:"turb",bf:"t",k:"steam",bore:1},
+           feedD0:{a:"feed",af:null,b:"sg0",bf:"b",k:"feed",bore:1},
+           surge :{a:"pzr", af:"b",tap:"hot0",           k:"surge", bore:.30},
+           exh   :{a:"turb",af:"b",b:"cond",bf:"t",k:"exh",  bore:1},
+           feedS :{a:"cond",af:"r",b:"feed",bf:null,k:"feed", bore:1},
+           hpi   :{a:"hpi", af:null,b:"core",bf:"b",k:"hpi",  bore:.25},
+           relief:{a:"pzr", af:null,b:"reltk",bf:null,k:"relief",bore:.20},
+           /* Stage 5d: efw/boroninj are placed parts now (layout.js), and
+              these are their own runs, declared unconditionally like every
+              other stock run - pipeNetwork() already skips any entry whose
+              part is not on the grid this frame, which is what lets D.efw/
+              D.boroninj stay false with nothing routed. Both land on a node
+              the rest of the primary network already reaches (sg0's own
+              free "r" face -> its "b" face's internal edge; core's own
+              folded node), so each hangs off it as a pendant leaf and moves
+              nothing else in the solve - see ROLE.efw/boroninj's comment. */
+           efwF  :{a:"efw",af:null,b:"sg0",bf:"b",k:"feed",bore:.5},
+           boronR:{a:"boroninj",af:null,b:"core",bf:"b",k:"boron",bore:.20},
+         }};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
@@ -141,26 +237,55 @@ function derived(){
   const contRel=D.contFit?CONT[D.cont].rel:1;
   /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
      layout.js - sums pumpCap() over every "pump"+ part, static and placed
-     alike), replacing the old flat PUMPS[D.pumps] tier. Every fitting that
-     exists costs a flat FIT_MASS - a spool piece and a motor-operated valve
-     or throttle, so a tee or a throttle is not free redundancy either. */
+     alike), replacing the old flat PUMPS[D.pumps] tier. Every generator on
+     the grid costs SGT[D.sg].mass of its own (sgCount(), layout.js) - the
+     old D.loops*34 flat lump priced neither the pump (totalPumpCap() already
+     does) nor the generator (SGT[D.sg].mass was only ever charged once for
+     the whole plant); a 4-loop plant used to carry one generator's steel.
+     Every fitting that exists costs a flat FIT_MASS - a spool piece and a
+     motor-operated valve or throttle, so a tee or a throttle is not free
+     redundancy either. */
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
-    +totalPumpCap()*PUMP_MASS+SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
-    +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
-    + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
+    +totalPumpCap()*PUMP_MASS+sgCount()*SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
+    +coreMass + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
+    + (D.accum?45:0)
+    /* Stage 5d: catcher/efw/boroninj no longer price a bare flag - each term
+       now names the placed part it is charging for (PART_MASS, layout.js),
+       priced off LAY.parts the same way totalPumpCap()/sgCount() already
+       are, never off the D flag that only decides whether buildLayout()
+       puts the box there. reltk is priced the same way, off LAY.parts rather
+       than off whether any relief fitting still taps it. */
+    + partMass("catcher") + partMass("efw") + partMass("boroninj") + partMass("reltk")
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + (D.turbFit?D.turb*50:0) + (D.condFit?D.condCap*40:0)
-    + Object.keys(D.fit).length*FIT_MASS + (hasRelief()?RELIEF_TANK_MASS:0)
+    + Object.keys(D.fit).length*FIT_MASS
     + layMass + latMass();
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess+rf.dRho-D.poison-leak;
-  const dnbr=a.dnbr*(.55+.45*D.pitch)*Math.pow(D.pdes,.35)*(1+.05*(D.loops-2));
+  /* DNBR no longer rises 5.25% per generator for free. Flow is SOLVED (the
+     pipe network, pipenet.js), so thermal margin already follows what is
+     actually built and piped - a count sitting on top of that would be a
+     second, contradictory opinion about the same flow.
+     The SCALING is gone (D.loops no longer exists to scale against); the
+     0.95 is not a new fit, it is the old formula's own value at the stock
+     one-generator baseline (1+.05*(1-2) = 0.95), kept flat so the pinned
+     stock figures (derived().dnbr 1.7575, s.dnbr 1.83 at rest) do not move.
+     A design with more generators no longer buys anything for free - every
+     count now reads the identical 0.95, where the old table gave a 4-loop
+     plant 1.10. DNBR is read off s.dnbr (step.js) at run time, off the real
+     solved flow, for anything beyond this fitted baseline. */
+  const dnbr=a.dnbr*(.55+.45*D.pitch)*Math.pow(D.pdes,.35)*0.95;
   /* peaking is no longer a curve fitted to H/D: it is the peak of the flux
      shape this core actually settles into, solved on the nodal mesh */
   const core=corePredict({dens,rf});
   const Fq=core.FqCold;
-  const graceK=a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2));
+  /* Same argument as DNBR above: graceK no longer buys 12% per generator for
+     free. Grace time is how long the core survives with no primary flow at
+     all, which is a property of the coolant family and the SG type, not of
+     how many of them are on the grid - deleted, not replaced with a count.
+     The SG term is sgInertiaK(), shared with commission(). */
+  const graceK=a.grace*sgInertiaK();
   const xeW=2700*a.xe;
   /* The bank S-curve, written once: how much worth is bought by inserting to x.
      boronOp and the shutdown margin below both read it, so they cannot drift. */
@@ -214,11 +339,9 @@ function derived(){
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);
       if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);
       if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
-      /* buildable, not blocked - the vessel bursting on an unrelieved
-         overpressure is the player's own decision, the same way no RPS is
-         above. hasRelief() (layout.js) is true the moment any relief
-         fitting exists; the stock plant ships one, so this only lights up
-         once the player deletes it. */
-      if(!hasRelief()) w.push(["SOFT","No relief path fitted. An overpressure transient now ends at the vessel, not at a valve.","pzr"]);
+      /* Buildable, not blocked - same standing as "no RPS" above. Topological
+         only (hasHeatSink(), layout.js): Stage 6 is what would let this warning
+         read the loop rather than just its wiring. */
+      if(!hasHeatSink()) w.push(["SOFT","This design has no heat sink. Nothing wired to the primary loop removes heat from it.",null]);
       return w;})()};
 }
