@@ -172,6 +172,10 @@ const ACT = {
                 return (fid && S.reliefBlocked[fid])?"OPENED":"SHUT"; },
               apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
   hpi      : {lab:"HPI",          log:()=>S.hpi?"OFF":"ON", apply:(s)=>{ s.hpi=!s.hpi; }},
+  /* The hotwell is an inventory now (Stage 6a) and a tube rupture fills it
+     with primary water. Dumping it is the real operational answer, and it is
+     an act like any other: recorded, scrubbed and scriptable. */
+  hotDump  : {lab:"HOTWELL DUMP", log:()=>S.hotDump?"SHUT":"OPEN", apply:(s)=>{ s.hotDump=!s.hotDump; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
   resetTrip: {lab:"TRIP RESET",   apply:(s)=>{ resetTrip(); }},
   /* The master switch. For relief it also drives every valve's own arm to
@@ -368,7 +372,18 @@ function recHead(){
    PLACED rather than moved, for instance, since placedParts is layout state
    that buildLayout() owns and the head does not carry. That must fail loudly
    and visibly, because the alternative is a verdict about a plant you did not
-   design, which is the worst thing this feature could possibly do. */
+   design, which is the worst thing this feature could possibly do.
+
+   D.run (Stage 3a's CONNECT/DISCONNECT, layout.js's addRun()/removeRun()) is
+   NOT part of that gap - it rides the `D: snapVal(D)` line above exactly like
+   D.fit already does, because it lives on D rather than in placedParts. What
+   it does NOT do is go through act(): addRun()/removeRun() are called
+   straight from the context menu, the same as addFit()/removeFit() already
+   are, so a connect or a disconnect is not a recorded, scrubbable INPUT on
+   the tape - a replay only ever sees it because the head it started from
+   already had it, never at the tick the player actually made it. Giving D
+   edits their own place in ACT is real work nobody has asked for in this
+   pass; this states the gap rather than papering over it. */
 function recApplyHead(h){
   Object.assign(D, snapVal(h.D));
   LAT.slot.set(h.lat.slot); LAT.rod.set(h.lat.rod);

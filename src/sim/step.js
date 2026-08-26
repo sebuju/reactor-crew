@@ -11,24 +11,33 @@ function commission(){
      rated:D.power, dnbr0:d.dnbr, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      /* The trip floor used to be a flat number per PUMPS[D.pumps] tier. It now
         scales with pump capacity actually on the grid: +.15 for every full
-        unit of capacity bought beyond the bare minimum (one pump per loop),
-        the identical +.15-per-spare progression the old three-tier table
-        priced, just read off real components instead of a dropdown. At the
-        true baseline - one pump per loop, default size - totalPumpCap()
-        equals D.loops exactly, so this returns the old NO SPARE floor (.30),
-        not the old default of .45: the true baseline now prices as the true
-        baseline, rather than inheriting a floor that assumed a spare nobody
-        had placed. */
-     excess:d.excess, flowMin:clamp(0.30+0.15*(totalPumpCap()-D.loops),0.15,0.75),
-     graceK:Math.pow(a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2)),.6)*L.inertiaK,
+        unit of capacity bought beyond the bare minimum (one pump per
+        generator), the identical +.15-per-spare progression the old
+        three-tier table priced, just read off real components instead of a
+        dropdown. sgCount() (layout.js) is the counted number of generators
+        on the grid, never a stored D.loops - at the true baseline, one pump
+        per generator at default size, totalPumpCap() equals sgCount()
+        exactly, so this returns the old NO SPARE floor (.30), not the old
+        default of .45. graceK no longer carries a per-generator bonus either
+        (design.js's own comment says why) - only the coolant/SG term and the
+        layout's own inertia, and the SG half of it is sgInertiaK(), the one
+        helper derived() reads too. */
+     excess:d.excess, flowMin:clamp(0.30+0.15*(totalPumpCap()-sgCount()),0.15,0.75),
+     graceK:Math.pow(a.grace*sgInertiaK(),.6)*L.inertiaK,
      noise:CHAN[D.chan].noise, id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:D.pzr*L.pzrK,
      flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
-     rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, boroninj:D.boroninj, efw:D.efw,
-     catcher:D.catcher, contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
+     rps:D.rps, rpsm:D.rpsm, autorod:D.autorod,
+     /* Stage 5d: boroninj/efw/catcher used to be the D flag itself - each is
+        a placed part now (layout.js), so what P carries is whether that
+        part actually made it onto the grid this commission, off LAY.parts
+        (already rebuilt by layoutMetrics() above), not off the flag that
+        only decided whether buildLayout() put it there. */
+     boroninj:LAY.parts.some(p=>p.role==="boroninj"), efw:LAY.parts.some(p=>p.role==="efw"),
+     catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
      turbFit:D.turbFit, condFit:D.condFit, fit:{...D.fit},
-     loops:D.loops, sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
+     loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237,
      /* the coolant's own density, in kg/m^3 - the pipe network weighs a
         column of it to get buoyancy (rhoAt(), pipenet.js) */
@@ -54,10 +63,6 @@ function commission(){
   P.netRefByLoop = {};
   P.netRefByRun  = {};
   P.netRef = netCoreFrac0(P.net, P.netRefByLoop, P.netRefByRun);
-  /* The relief valve's own reference conductance (pipenet.js's own comment on
-     RELIEF_REF_LEN) - every fitting's ventK() is judged against this ONE
-     number, computed once here rather than re-derived every call. */
-  P.ventRef = ventRefG();
   /* ONE scale for every run to animate against, and it must not be the run's
      OWN reference. Dividing a run by itself is 1 for every healthy run, which
      normalises out exactly the thing the network was built to see: the stock
@@ -105,15 +110,16 @@ const AUTOSYS={
     fit:()=>P.autorod,
     tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band set on the rod-drive panel - widen that band and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
     warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
-  /* Hosted on the RELIEF TANK, not the pressurizer. The pressurizer has not
-     owned a relief valve since one became a fitting with a tap of its own -
-     the stock valve sits on a hot leg - so the pressurizer was carrying the
-     bypass for a system nothing on it was part of. The tank is the one part
-     that exists exactly when a relief path does (hasRelief(), layout.js), so
-     the switch appears and disappears with the thing it defeats.
-     fit is no longer a flat true for the same reason: with no relief fitting
-     placed there is no automatic relief to arm, and bypRow() draws that as a
-     dead "none" the way it already does for an RPS nobody bought. */
+  /* Not hosted on the pressurizer. The pressurizer has not owned a relief
+     valve since one became a fitting with a tap of its own - the stock
+     valve sits on a hot leg - so the pressurizer was carrying the bypass
+     for a system nothing on it was part of. The relief tank is a placed
+     part now (Stage 5a) and no longer answers "does a relief path exist" by
+     its own presence, so this reads reliefFitIds() (the fittings
+     themselves) instead: fit is not a flat true because with no relief
+     fitting placed there is no automatic relief to arm, and bypRow() draws
+     that as a dead "none" the way it already does for an RPS nobody
+     bought. */
   /* part:null - this system has NO component host. Every relief valve now
      carries its own arming switch on its own glyph (pipeFitMarks(), plant.js),
      so a part-mounted row would be a second switch saying the same thing on a
@@ -423,6 +429,12 @@ function repairStart(id){
   const f=radSolve(P.radK,radSrc(s));
   s.repRate=repairRadRate(f,p.id);
   const eta=need/radWorkK(s.repRate);
+  /* NOT partName(p): that lives in src/core/ui.js, which WORKER_SIM
+     (runworker.js) deliberately excludes from the sim's own loaded subset -
+     this call site runs inside the scenario worker too, and a scenario that
+     dispatches a repair party would silently die there. p.name stays the
+     honest, worker-safe choice until a player-renamed label has a home the
+     sim can reach without reaching for the render layer. */
   logE("info","REPAIR PARTY DISPATCHED / "+p.name,
     "Estimated "+eta.toFixed(0)+" seconds at "+s.repRate.toFixed(2)+
     "x area dose - "+(s.repRate>RAD_SLOW
@@ -565,27 +577,106 @@ function reliefSet(fid){
    master switch and the valve's own arm both defeat it; nothing reads
    S.porvByp[fid] raw. */
 const porvLive = fid => autoLive("porv") && !S.porvByp[fid];
-/* A relief valve is a fixed orifice: while it passes, it passes at ONE rate.
-   These are no longer the plant's own flat rate - they are the rated figures
-   of ONE fully open relief edge of REFERENCE bore (PIPE_BORE.relief,
-   pipenet.js), and a real fitting's actual rate is these times its own
-   ventK() (pipenet.js), which is exactly 1 for the stock relief valve - see
-   RELIEF_REF_LEN's own comment there for why no PORV figure moved. Named
-   here rather than written into the tick, because the pressurizer's RELIEF
-   FLOW readout and the steam plume drawn on it are both scaled off this
-   number - a literal in the tick would let the picture and the physics
-   drift apart. */
-const PORV_INV=0.55;                    // % of loop inventory per second, at ventK===1
-const PORV_DP=0.30;                     // MPa/s at the 15.5 MPa reference pressure, at ventK===1
+/* How fast the pressurizer's steam bubble gives up, per unit of inventory
+   leaving per second through ANY opening (a break, the vessel itself, or a
+   relief valve - see its own comment where it is applied, below). Fitted
+   once, against the flat 0.35/s the old vessel blowdown used at the rate a
+   break drained, so a full vessel rupture still blows down in about the
+   same dozen seconds, and everything smaller than one now takes
+   proportionally longer instead of exactly as long. */
+const BLOWDOWN_K=0.20;
 /* pump rotational inertia, and the longer coastdown once the power is gone */
 const FLOW_TAU=5, FLOW_TAU_COAST=12;    // seconds
 const NAT_FLUX=0.12;                    // mass flux buoyancy gives per unit of heat removal
-/* How fast the pressurizer's steam bubble gives up, per unit of inventory
-   leaving per second. Fitted once, against the flat 0.35/s the old vessel
-   blowdown used at the rate that break drained - so a full vessel rupture
-   still blows down in about the same dozen seconds, and everything smaller
-   than one now takes proportionally longer instead of exactly as long. */
-const BLOWDOWN_K=0.20;
+/* ── the secondary mass balance (Stage 6a) ──
+   s.sgl used to be clamp(50+(heat-s.load)*40-(s.load-1)*14,0,100), recomputed
+   from scratch every tick with no memory, so it could not run out however long
+   the feed was gone. It is an INTEGRAL now: steam raised out, feedwater in.
+
+   Steam raised is heat removed over the latent heat, which is the only new
+   physics here - the tick already computes `removal`, so this is a mass
+   balance and not a second solve. */
+const H_FG=1510;          // kJ/kg, latent heat at the secondary's ~6.9 MPa
+const SGL_SET=50;         // %, the level the feed controller holds
+const FEED_TAU=30;        // s, how fast feedwater walks a level error out
+const FEED_HURT=0.25;     // DMGFX.feed's own promise: "feedwater down to a quarter"
+const EFW_FRAC=0.15;      // emergency feed delivers this much of the rated steam rate
+/* Below this the tubes are uncovered and the generator stops being a heat sink.
+   It was already the threshold the mimic's dry-out pulse and the LOW banner
+   used; making removal read the same number is what closes the loop. */
+const SG_DRY=25;          // %
+/* Hotwell level at commissioning. Half full: it has to be able to fall (a
+   feed pump drawing on nothing) and to rise (a tube rupture filling it), and
+   a level that starts at either end can only do one of them. */
+const HOT0=50;
+/* Hotwell level below which the feed pump starts losing suction, %. A pump
+   does not run cleanly to the last drop; this is the taper, and it is above
+   the hard mass limit rather than instead of it. */
+const HOT_NPSH=10;
+/* What the hotwell dump valve passes, in % of hotwell per second. Sized off
+   the plant it serves rather than picked: at the stock plant's steam rate it
+   empties a full hotwell in about a minute, which is fast enough to stay ahead
+   of a tube rupture and slow enough that opening it is a decision. */
+const HOT_DUMP=1.6;
+/* Loop volume over pressurizer volume, which is what turns a volumetric
+   expansion (% of loop) into a level (% of pressurizer). NOT a free constant:
+   it is exactly the figure the correlation this replaces implied, so the gauge
+   does not re-pin. At a steady heating rate the whole expansion source arrives
+   up the surge line, so LVL_K*100*BETA_W is the correlation's own 0.9 %/K.
+   Re-derive: LVL_K = 0.9/(100*BETA_W). A real PWR is nearer 7.5. */
+const LVL_K = 0.9/(100*BETA_W);
+/* Kilograms of secondary water at 100 % level in ONE generator. */
+const sgMass=()=>SGT[D.sg].water*1000;
+/* Specific heat of pressurised water at PWR conditions, kJ/kg/K. PHYSICAL,
+   not fitted. With CORE_DT0 it turns rated power into the loop's rated mass
+   flow, and that is the one bridge between a flow in % of loop inventory -
+   invRate()'s currency, which is what an SGTR leak is measured in - and a
+   flow in kg/s, which is what the secondary mass balance counts. Without it
+   the two sides of a tube rupture are in units that cannot be added. */
+const CP_W=5.5;
+const loopKg=()=>P.rated*1000/(CP_W*CORE_DT0)*LOOP_TRANSIT;
+/* Kilograms of condensate the hotwell holds full. The plant's own generators
+   are the yardstick - a condenser hotwell holds roughly what the generators
+   it feeds do - so this needs no constant of its own and follows the
+   generator type the player actually bought. */
+const hotMass=()=>Math.max(1, sgCount()*SGT[D.sg].water*1000);
+/* Every generator on the plant, by id, in LAY order. s.sglBy is keyed on
+   these and so is every reader - a level belongs to a machine, not to the
+   plant, which is the whole of the per-generator half of Stage 6a. */
+const sgIds=()=>LAY.parts.filter(p=>p.role==="sg").map(p=>p.id);
+/* How much of a heat sink ONE generator still is: 1 down to SG_DRY, then
+   straight to nothing. A generator that is not on the plant, or a level that
+   was never seeded, reads 1 - such a design is stopped by having no thermal
+   path at all, not by a level it does not have. */
+const sgFill=(s,id)=>{ const v=s.sglBy&&s.sglBy[id];
+  return v===undefined?1:clamp(v/SG_DRY,0,1); };
+/* ONE generator's level as a number, for a reader that wants to print it.
+   Defaults to SGL_SET rather than 0 for a generator with no entry yet - a
+   bench with no sim running draws a half-full kettle, not an empty one. */
+const sgLvl=(s,id)=>{ const v=s&&s.sglBy&&s.sglBy[id]; return v===undefined?SGL_SET:v; };
+/* The driest generator on the plant. The trend, the annunciator and the feed
+   panel each want ONE number, and the dry one is the number that matters -
+   an average would hide a generator boiling dry behind three healthy ones. */
+const sglMin=s=>{ const ids=sgIds(); if(!ids.length) return 100;
+  let m=100; for(const id of ids){ const v=s.sglBy&&s.sglBy[id];
+    if(v!==undefined && v<m) m=v; } return m; };
+/* Each generator's share of the heat leaving the primary, off the per-loop
+   flow the network already solved (netFlowK fills outs.byLoop). Heat crosses
+   into a generator in proportion to the water going through its own loop, so
+   a throttled loop boils its own generator down more slowly and a loop with
+   no flow at all boils nothing. Falls back to an equal split when the solve
+   has nothing to say - a plant at rest before its first solve, or one whose
+   generators sit on no loop at all. */
+function sgShare(byLoop){
+  const ids=sgIds(), out={};
+  if(!ids.length) return out;
+  let tot=0;
+  for(const id of ids){ const i=loopOf(id);
+    const q=(i!=null && byLoop && byLoop[i]>0) ? byLoop[i] : 0; out[id]=q; tot+=q; }
+  if(tot>0){ for(const id of ids) out[id]/=tot; }
+  else for(const id of ids) out[id]=1/ids.length;
+  return out;
+}
 /* The outflow a full-bore severance makes at design pressure, in % of loop
    inventory per second - the scale every break EFFECT is drawn against, so a
    pinhole reads as a wisp and a guillotine reads as full. One number, in the
@@ -678,7 +769,19 @@ function resetPlant(){
   const x0=RODX0;
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
-     load:1,loadDem:1,flow:1,flowDem:1,flowNet:1,P:P.P0,lvl:54,sgl:50,inv:100,hpi:false,
+     load:1,loadDem:1,flow:1,flowDem:1,flowNet:1,P:P.P0,lvl:54,inv:100,hpi:false,
+     /* one level per generator, keyed by part id like s.sgtrBy - REFILLED by
+        step(), never rebuilt, so a renderer may hold it across frames */
+     sglBy:Object.fromEntries(sgIds().map(id=>[id,SGL_SET])),
+     /* each generator's share of the heat leaving the primary, measured off
+        the solve and read back by secP() next tick - like s.cavP */
+     sgShare:Object.fromEntries(sgIds().map(id=>[id,1/Math.max(1,sgCount())])),
+     /* last tick's void and inventory, so the two halves of the level that are
+        still correlations can be differentiated into rates - the expansion
+        half is the solve's own surge flow and needs no memory of its own */
+     vf0:0, inv0:100,
+     /* condensate, % of hotMass() - the other half of the closed secondary */
+     hotwell:HOT0, hotOver:0, hotDump:false,
      /* One map per relief fitting, keyed like S.valve/S.valveDem - seeded
         from P.fit rather than a fixed set of keys, so a plant with no
         relief path (a legal design choice, see the bench warning in
@@ -999,11 +1102,21 @@ function step(dt){
      is why it lives on S: a gate that depends on the answer cannot be part of
      the question. */
   { let worst=0;
-    for(let i=0;i<P.loops;i++){
-      const c = clamp(-scAt("pump"+i+"t")/CAV_SPAN, 0, 1);
-      s.cavP[i] = c;
-      if(c>worst) worst=c;
+    /* Off the real parts and the run graph, never off "pump"+i - a spare
+       pump's own id doesn't match its loop's index, and once a generator can
+       be placed rather than conjured at a fixed "pump"+i slot, that string
+       stops being anything but coincidence. Every pump with ROLE.head reports
+       at its own suction; a loop with more than one pump pooling capacity
+       (loopOf()) takes the WORST of them, because that is the one head loss
+       actually costs the group. */
+    const byLoop={};
+    for(const p of LAY.parts){
+      if(!ROLE[p.role] || !ROLE[p.role].head) continue;
+      const li=loopOf(p.id); if(li==null) continue;
+      const c = clamp(-scAt(p.id+"t")/CAV_SPAN, 0, 1);
+      if(!(li in byLoop) || c>byLoop[li]) byLoop[li]=c;
     }
+    for(const li in s.cavP){ s.cavP[li]=byLoop[li]||0; if(s.cavP[li]>worst) worst=s.cavP[li]; }
     s.cav = worst; }
   const bkpUp = !s.bkpLost && autoLive("bkp");
   /* ── coolant flow: pumps have inertia ──
@@ -1059,7 +1172,30 @@ function step(dt){
   /* no (1-0.8*cav) here, and none on mflux or the packet animation below:
      cavitation is inside the pump's own head now, so pumpK already carries
      it. Leaving one of the three behind would count it twice. */
-  const feff = driven * wet * enth;   // no water, no removal
+  /* The other side's water, and the half that never existed. `wet` asks
+     whether there is primary water to carry heat; this asks whether there is
+     secondary water to carry it INTO. A generator boiled dry is a heat
+     exchanger with nothing on the cold side, and until Stage 6a it went on
+     removing full power forever.
+
+     Last tick's level on purpose, the same argument s.coreDT carries: this
+     tick's removal sets this tick's boil-off, which would set this tick's
+     level, which would set this tick's removal. Lagged, that is a first-order
+     filter; algebraic, it is a fixed point that oscillates.
+
+     Flow-weighted across the generators, not averaged: a generator that is
+     dry loses its OWN loop's share of the removal and no more, so three
+     healthy generators go on cooling while the fourth boils dry. */
+  const sgW = sgShare(netOut.byLoop);
+  /* Fed to NEXT tick's solve, where secP() (pipenet.js) reads it to give each
+     generator a secondary pressure of its own - the same lag s.cavP carries,
+     and for the same reason: this tick's share comes out of this tick's solve,
+     so it cannot also be an input to it. REFILLED, never rebuilt. */
+  for(const k in s.sgShare) if(!sgW.hasOwnProperty(k)) delete s.sgShare[k];
+  for(const k in sgW) s.sgShare[k] = sgW[k];
+  let sgWet = 0; for(const id in sgW) sgWet += sgW[id]*sgFill(s,id);
+  if(!sgIds().length) sgWet = 1;              // no generator: stopped by having no heat path, not by a level
+  const feff = driven * wet * enth * sgWet;   // no water on either side, no removal
   /* Buoyancy flow is a heat-REMOVAL fraction, not a velocity. It gets away with
      moving very little water because that water comes back much colder, so the
      temperature rise across the core does the work the flow rate is not doing.
@@ -1102,6 +1238,11 @@ function step(dt){
      the vessel is open the steam bubble is gone, so everything the pressurizer and
      its relief valve do stops mattering: the loop flashes down to containment and
      nothing on the panel can hold it up. */
+  /* vented mass leaving through a relief valve, in %/s of loop inventory -
+     declared here, outside the !s.breach block below, so the blowdown term
+     after it (still zero-vented while breached, since nothing opens a
+     relief valve's own gate there) can read it either way. */
+  let vented = 0;
   if(!s.breach){
     const Pdem = P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (inj>0?0.5*P.pRise:0);
     s.P += (Pdem-s.P)*(0.30/P.pzrK)*pzrAuth*dt;
@@ -1111,11 +1252,20 @@ function step(dt){
        auto-lift at 106%, a reseat below 101%, and a commanded stick
        (s.reliefArm[fid]) that beats the die and is CONSUMED by the lift it
        arms, or one scenario line would make that one valve permanently
-       faulty. vented is this tick's total loss across every open fitting,
-       in %/s of loop inventory - the tank's own source term (radSrc(),
-       rad.js) reads exactly this, because what the crew should fear IS what
-       has left the loop and gone into that box. */
-    let vented = 0;
+       faulty.
+       VENTED MASS IS THE SOLVED EDGE FLOW now - netOut.reliefBy[fid], off
+       the identical netFlowK() solve this tick already ran, through the
+       same invRate() a break or an injection line is charged through. No
+       second, hand-rolled vent physics beside the network any more, and no
+       separate back-pressure correction - a filling tank throttles the vent
+       by its own fixed-node pressure alone, because that pressure is one of
+       the two potentials the Laplacian was solved against. A fitting whose
+       branch reaches a TANK (net.fitTarget, pipenet.js) fills that tank; one
+       with nowhere else to vent - no header, no tank on the grid, routed to
+       containment instead (pipenet.js's own fallback) - raises s.release
+       straight, at the same primary-into-containment scale an SGTR leak
+       already uses: what has left the loop is loose in the compartment's
+       air, not behind a wall the tank would have been. */
     for(const fid of reliefFitIds()){
       const set=reliefSet(fid);
       if(!s.reliefOpen[fid] && porvLive(fid) && s.P > P.P0*set.lift){
@@ -1126,14 +1276,15 @@ function step(dt){
       if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && s.P < P.P0*set.reseat){
         s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
       }
-      if(s.reliefOpen[fid] && !s.reliefBlocked[fid]){
-        const vk = ventKNow(s,fid);
-        s.P -= PORV_DP*vk*(P.P0/15.5)*dt;
-        vented += PORV_INV*vk*dt;
-      }
+      if(!s.reliefOpen[fid] || s.reliefBlocked[fid]) continue;
+      const rate = Math.max(0, invRate((netOut.reliefBy && netOut.reliefBy[fid]) || 0));
+      const q = rate*dt;
+      vented += q;
+      const tid = P.net.fitTarget && P.net.fitTarget[fid];
+      if(tid && TANK[tid]) s.tank[tid] = clamp(s.tank[tid] + q*100/TANK[tid].vol, 0, 100);
+      else s.release = Math.min(100, s.release + (rate/SGTR_RATE)*0.02*P.dose*dt);
     }
     s.inv -= vented;
-    s.tank.reltk = clamp(s.tank.reltk + vented*100/TANK.reltk.vol, 0, 100);
   }
   /* THE RUPTURE DISC. At TMI-2 it burst and put primary coolant on the
      containment floor, and this game already teaches TMI-2 and already makes
@@ -1152,12 +1303,24 @@ function step(dt){
     s.release = Math.min(100, s.release + out*DISC_REL*P.dose*dt);
   }
   s.inv -= spill*dt;
-  /* The pressurizer's bubble blows down at a rate set by how much is actually
-     leaving, not at a flat slope - so a pinhole depressurises slowly and a
-     guillotine violently, which one number could not tell apart. Exactly zero
-     with nothing open, so an intact plant is untouched, and a SEVERED RUN
-     depressurises the loop now, which it never did. */
-  if(spill>0) s.P += (P.Pcont-s.P)*BLOWDOWN_K*spill*dt;
+  /* THE PRESSURIZER'S BUBBLE BLOWS DOWN AT A RATE SET BY HOW MUCH IS ACTUALLY
+     LEAVING - a pinhole depressurises slowly and a guillotine violently,
+     which one number could not tell apart, and a relief valve passing a
+     trickle should not collapse the bubble at the same rate a severed hot
+     leg does. s.P is a FIXED BOUNDARY the network is solved against, never
+     an output of it, so nothing about a hole the network finds can feed
+     back into this scalar on its own - MEASURED, twice: deleting this term
+     outright left a breached vessel frozen at its pre-breach pressure
+     forever (spillRate constant at its opening value for the full 240 s the
+     auditor drives it, instead of collapsing with the hole), and left an
+     armed relief valve holding pressure no lower than one bypassed and
+     never lifting at all. Combined over EVERY opening - spill (a break, the
+     vessel itself) and vented (a relief valve) alike - because both are the
+     same fact, primary water leaving through a hole, and a plant venting
+     through its relief valve alone deserves the identical physics a break
+     already gets, not a second, unwritten one. Exactly zero with nothing
+     open, so an intact, unvented plant is untouched. */
+  if(spill+vented>0) s.P += (P.Pcont-s.P)*BLOWDOWN_K*(spill+vented)*dt;
   /* ── injection: what the tank actually pushed, against the loop it is
      fighting ── s.hpi stays the operator's on/off. What goes is the idea that
      switching it on means a RATE: a loop at full pressure takes almost
@@ -1215,14 +1378,127 @@ function step(dt){
      notice - the pumps are still commanded to 100%. pumpK is exactly 1 on an
      undamaged plant with nothing throttled, which is why nothing re-pins. */
   s.flowNet = pumpK;
+  /* ── PRESSURIZER LEVEL IS AN INTEGRAL (Stage 6c) ──
+     It was clamp(54 + (Tref-Tavg)*-0.9 + vf*60 + (inv-100)*0.15, 0, 100): an
+     algebraic function of three state variables, recomputed from scratch every
+     tick, and s.dLvl was a finite difference OF that correlation which the
+     surge animation then read as though it were a flow.
+
+     The expansion half is a SOLVED FLOW now. expSrc() (pipenet.js) injects
+     the loop's thermal expansion as a current at the core node and the network
+     carries it to the pressurizer, which is its only compliance - so what this
+     integrates is the surge line's own solved flow. What that buys, and no
+     correlation could: shut the surge line and the gauge stops, because the
+     water genuinely has nowhere to go. Sever it and the same. The correlation
+     went on moving the needle through a valve nobody had opened.
+
+     THE CALIBRATION IS DELIBERATELY UNCHANGED. LVL_K is the loop-volume-to-
+     pressurizer-volume ratio the old correlation implies: at a steady heating
+     rate the whole source arrives up the surge line, so LVL_K*100*BETA_W must
+     equal the 0.9 %/K the correlation carried. Real plants are nearer 7.5 than
+     3.6; keeping the correlation's own figure means the gauge does not re-pin
+     and what Stage 6c changes is the STRUCTURE, which is what it is for.
+
+     VOID AND INVENTORY ARE STILL CORRELATIONS, and this is honest rather than
+     hidden: they are added here as explicit RATES with the same coefficients
+     they always had, differentiated rather than solved. Void needs a steam
+     volume the incompressible solve does not have; inventory needs the break
+     to draw on a compliance the pressurizer only approximates. Both are named
+     in the gaps list. */
   const lvl0 = s.lvl;
-  s.lvl = clamp(54+(P.Tref-s.Tavg)*-0.9+s.vf*60+(s.inv-100)*0.15,0,100);
+  /* NEGATED: the surge edge is oriented pressurizer -> loop, so a positive
+     flow on it is water leaving the pressurizer and the level falling.
+     Expansion pushes the other way. MEASURED at +0.1 K/s: netExpSurge returns
+     -0.025 %/s of loop inventory, which is exactly 100*BETA_W*dTavg - the
+     whole source arrives up the surge line, as it must when the pressurizer
+     is the network's only compliance - and -LVL_K times that is +0.09 %/s,
+     exactly the 0.9 %/K the correlation carried. */
+  const dExp = -LVL_K*invRate(netExpSurge(P.net, s));       // %/s, SOLVED
+  const dVoid = (s.vf - s.vf0)*60/Math.max(dt,1e-9);        // %/s, still a correlation
+  const dInv = (s.inv - s.inv0)*0.15/Math.max(dt,1e-9);     // %/s, still a correlation
+  s.vf0 = s.vf; s.inv0 = s.inv;
+  s.lvl = clamp(lvl0 + (dExp + dVoid + dInv)*dt, 0, 100);
   /* Void can only push water up the surge line while there is a loop to push it
      into. Once the vessel is open the pressurizer drains into the break, and that
      overrides the void term that would otherwise peg this gauge full. */
   if(s.breach) s.lvl = Math.max(0, lvl0 - 14*dt);   // from last tick, or it never drains
-  s.dLvl = dt>0 ? (s.lvl-lvl0)/dt : 0;   // %/s - this is the surge flow
-  s.sgl = clamp(50+(heat-s.load)*40-(s.load-1)*14,0,100);
+  s.dLvl = dt>0 ? (s.lvl-lvl0)/dt : 0;   // %/s - a solved surge flow now, not a difference of a formula
+  /* ── the secondary mass balance ──
+     Steam raised is the heat that actually left the primary, over the latent
+     heat: kg/s out. Feedwater is what the condensate system puts back, and a
+     healthy one both matches the steam and walks the level back to setpoint,
+     so an undamaged plant sits at SGL_SET and every figure pinned against a
+     healthy plant is untouched. A hit feed pump delivers a quarter of the
+     steam rate and the difference is what boils the generator dry.
+
+     EFW is a separate source, not a multiplier on the main one: it is a
+     different pump drawing on a different tank, and it works when the main
+     feed does not. That is the whole reason it is on the board. It starts on
+     LOW LEVEL, which is the real actuation signal - armed is not running, and
+     an emergency pump that feeds a healthy generator would simply overfill
+     it (measured: the once-through unit went to 82 % at rest).
+
+     Per generator, off sgW - the same flow-weighted share removal itself was
+     taken with, so what boils out of each machine is what crossed into it.
+     REFILLED, never rebuilt, the same rule s.spillBy and s.sgtrBy carry: a
+     renderer holds this object across frames, so a fresh one each tick would
+     leave the mimic drawing a generator that is no longer on the plant. */
+  const M = sgMass(), ids = sgIds();
+  for(const id in s.sglBy) if(!sgW.hasOwnProperty(id)) delete s.sglBy[id];
+  let boiled = 0, fed = 0;                       // kg/s, summed for the hotwell below
+  if(M > 0) for(const id of ids){
+    if(s.sglBy[id]===undefined) s.sglBy[id]=SGL_SET;                 // a generator placed mid-run starts full
+    const lvl = s.sglBy[id];
+    const steamOut = removal*sgW[id]*P.rated*1000/H_FG;              // kg/s into THIS generator
+    /* A feed pump cannot send on water that is not in the hotwell, and it
+       loses suction before the hotwell is literally empty. Two limits, and
+       both are ceilings rather than terms: HOT_NPSH tapers delivery over the
+       last stretch, and `avail` is the hard one - what is actually in there,
+       shared between the generators drawing on it. Neither binds on a healthy
+       plant (the taper is 1 above HOT_NPSH), which is why the setpoint still
+       holds exactly. This is the SECOND way to lose feedwater; the first is
+       the pump itself. */
+    const suction = clamp(s.hotwell/HOT_NPSH,0,1);
+    const avail = s.hotwell/100*hotMass()/Math.max(dt,1e-9)/Math.max(ids.length,1);
+    const feedIn = Math.min(avail,
+                   suction * (feedOK?1:FEED_HURT) * Math.max(0,
+                     steamOut + (SGL_SET-lvl)/100*M/FEED_TAU))
+                 + (autoLive("efw") && lvl<SG_DRY ? EFW_FRAC/ids.length*P.rated*1000/H_FG : 0);
+    s.sglBy[id] = clamp(lvl + 100*(feedIn-steamOut)/M*dt, 0, 100);
+    boiled += steamOut; fed += feedIn;
+  }
+  /* ── the hotwell: the other half of a closed secondary ──
+     Steam raised leaves a generator, turns the turbine, condenses, and
+     arrives here; feedwater leaves here and goes back. In a healthy plant
+     the two cancel exactly and this sits still, which is why nothing pinned
+     against a healthy plant moved when it landed.
+
+     It is NOT a TANK row, and that is a deliberate deviation from the plan.
+     A TANK row is a hydraulic object - an elevation, a node and one edge into
+     the solve - and the secondary still gets no solve, only a boundary. A
+     hotwell with a node would be inventing the very thing CLAUDE.md says is
+     not there. What it is instead is a MASS balance, in the same kilograms
+     the generators are counted in, so the secondary conserves water as one
+     closed system and a leak into it has to show up somewhere.
+
+     A tube rupture is where it stops being decorative: that is primary water
+     crossing into the secondary, so the secondary total GROWS, and the water
+     ends up here. It is the real operational problem at an SGTR. loopKg() is
+     the one bridge between invRate()'s % of loop inventory and these kg. */
+  { const H = hotMass();
+    const sgtrKg = Math.max(0, s.sgtrRate)/100*loopKg();
+    const net = boiled - fed + sgtrKg;
+    /* The operator's own valve. It is the answer to a tube rupture filling the
+       hotwell with primary water, and it never refuses: open it on a healthy
+       plant and you dump the condensate the feed pumps need. */
+    const dumped = s.hotDump ? HOT_DUMP*Math.min(s.hotwell,100)/100 : 0;   // %/s
+    const raw = s.hotwell + (100*net/H - dumped)*dt;
+    /* Past full it overflows, and the overflow is gone - a hotwell that
+       silently clamped would swallow a tube rupture's whole inventory and
+       report nothing. What overflows an SGTR's hotwell is contaminated. */
+    s.hotOver = raw > 100 ? (raw-100)/100*H/Math.max(dt,1e-9) : 0;    // kg/s
+    s.hotwell = clamp(raw, 0, 100);
+  }
 
   /* ── reactivity ── */
   const p=s.parts;
@@ -1406,23 +1682,33 @@ function step(dt){
      packets along it and differentiates it for the flow meters, so both come
      from this one integral and cannot disagree.
 
-     hot/cold and every fitting branch (xtie:*, tee or throttle alike) are
-     driven off the network's own solved flow for THAT run (runFlow, filled
-     by netFlowK() above) judged against P.netRefRun, the shared mean of what
-     the primary legs carry as commissioned - substituting a per-run ratio for
-     the pooled pumpK in the same feff formula physics already uses, so the
-     plant as a whole still animates at the old rate while a short leg runs
-     visibly faster than a long one. Everything the
-     network does not model yet (steam, feed, exhaust, hpi, surge) keeps the
-     single plant-wide rate it always had, just written under every run key
-     of that kind so a plant with more than one still animates all of them.
+     Which runs the graph's OWN solved flow is honest for reads net.tag
+     (pipenet.js) - the same hot-side/cold-side/neither answer buoyH() trusts
+     for density, built from every run that touches a node - rather than
+     re-deciding it here: a run whose own edge carries a tag is real primary
+     circulation, and a cross-tie needs no case of its own, because its two
+     tap nodes already inherit their tag off whichever leg they split.
+     Three runs read a tag this way and are NOT real circulation, and are
+     excluded by name - the one kind read this loop keeps, because nothing
+     solved distinguishes "cold" from "never went through the core" yet:
+     HPI and the surge line are tagged hot/cold for BUOYANCY only (a tank's
+     or a pressurizer's own water); feed SHARES its discharge node with a
+     cold leg (sg0b - see pipenet.js's own note on that collision) and would
+     misread the leg's own tag as its own. Steam and exhaust carry no tag at
+     all yet (Stage 6, nothing forces flow through the secondary) and read
+     the flat design rate this file always gave them instead.
+
+     A fitting branch is picked out the same way netBuild() names its own
+     edges (STRUCTURAL - net.fitIds, never a prefix compared against r.k),
+     because it alone skips the P.flowK/wet/1.4 shaping a main leg gets: a
+     branch is a small, fast-equalising line and was never meant to carry
+     that shaping.
 
      It has to stop when there is nothing left to move: an empty primary, a
      dry steam generator, a feed pump that no longer exists. Natural
      circulation is real flow and keeps moving. */
   const d=s.flowPos, sp=60*dt;
-  const sgWet = clamp(s.sgl/25,0,1);           // secondary side still has a level
-  const stm = s.load*sgWet*wet*1.6;            // no primary water, nothing boils
+  const stm = s.load*sgWet*wet*1.6;            // no water either side, nothing boils - sgWet is the flow-weighted fill from the heat balance above
   /* the injection line reads the solve like every other run: a tank pushing
      hard against a depressurised loop visibly runs, one that has equalised
      visibly stops, and one running backwards runs backwards */
@@ -1433,25 +1719,29 @@ function step(dt){
      Clamped below the hot leg's 1.24 - it is a small line and must not outrun it. */
   const surgeFlow = sp*wet*clamp(-s.dLvl*0.07-(reliefAnyOpen(s)?0.75:0),-1.2,1.2);
   const runRatio = key => P.netRefRun>0 ? (runFlow[key]||0)/P.netRefRun : 0;
+  const PIPE_CORR={hpi:1,surge:1,feed:1};      // DEFAULT: tagged hot/cold for buoyancy only, not real circulation
+  const PIPE_FLAT_STM={steam:1,exh:1};         // DEFAULT: no tag reaches these yet
+  const xtieKeys=new Set(P.net.fitIds.map(fid=>"xtie:"+fid)); // LABEL: mirrors netBuild's own key convention for a fitting's own branch run
   for(const key in d){
     const r = P.net.byKey[key];
     if(!r) continue;                           // a design change left a stale key
-    if(r.k==="hot"||r.k==="cold"){
-      /* the run's OWN solved flow, with no correlation floor under it -
-         buoyancy is already in that solve, so a plant on natural circulation
-         still visibly moves water and a plant with the valve shut visibly
-         does not */
-      d[key]+=sp*P.flowK*runRatio(key)*wet*1.4;
-    } else if(r.k.startsWith("xtie")){
-      d[key]+=sp*runRatio(key);
-    } else if(r.k==="steam"||r.k==="exh"){
+    if(PIPE_CORR[r.k]){                        // DEFAULT: see the comment above
+      if(r.k==="hpi") d[key]+=hpiFlow;          // DEFAULT: which correlation
+      else if(r.k==="surge") d[key]+=surgeFlow; // DEFAULT: which correlation
+      else d[key]+=sp*stm*(feedOK?1:0);         // DEFAULT: feed
+      continue;
+    }
+    let tag=0;
+    for(const ed of P.net.edges) if(ed.key===key) tag = tag||P.net.tag[ed.u]||P.net.tag[ed.v];
+    if(tag){
+      if(xtieKeys.has(key)) d[key]+=sp*runRatio(key);
+      else /* the run's OWN solved flow, with no correlation floor under it -
+              buoyancy is already in that solve, so a plant on natural
+              circulation still visibly moves water and a plant with the
+              valve shut visibly does not */
+           d[key]+=sp*P.flowK*runRatio(key)*wet*1.4;
+    } else if(PIPE_FLAT_STM[r.k]){             // DEFAULT: see the comment above
       d[key]+=sp*stm;
-    } else if(r.k==="feed"){
-      d[key]+=sp*stm*(feedOK?1:0);
-    } else if(r.k==="hpi"){
-      d[key]+=hpiFlow;
-    } else if(r.k==="surge"){
-      d[key]+=surgeFlow;
     }
   }
   s.spin=(s.spin+360*dt*feff)%360;

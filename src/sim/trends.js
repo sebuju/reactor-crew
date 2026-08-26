@@ -13,7 +13,8 @@ const CH={
  prs :{lab:"PRESSURE",     u:"MPa",col:"#a98cf0", f:s=>s.P},
  sub :{lab:"SUBCOOLING",   u:"K",  col:"#5fd2e2", f:s=>tsat(s.P)-HT(s)},
  lvl :{lab:"PZR LEVEL",    u:"%",  col:"#c8d8dc", f:s=>s.lvl},
- sgl :{lab:"SG LEVEL",     u:"%",  col:"#8fa9ae", f:s=>s.sgl},
+ sgl :{lab:"SG LEVEL",     u:"%",  col:"#8fa9ae", f:s=>sglMin(s)},   // the driest generator - an average would hide one boiling dry behind three healthy ones
+ hot :{lab:"HOTWELL",      u:"%",  col:"#6f97a8", f:s=>s.hotwell},
  inv :{lab:"INVENTORY",    u:"%",  col:"#5aa9d6", f:s=>s.inv},
  /* flowNet, not flow: the label says CORE FLOW, so it has to be the flow that
     reaches the core - what the pumps were TOLD to do is s.flowDem's business.
