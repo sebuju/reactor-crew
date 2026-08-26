@@ -1736,16 +1736,20 @@ console.log('\n=== DOSE HAS TEETH: A HOT FIELD SLOWS A REPAIR PARTY, IT NEVER RE
      RAD_SLOW well before the core is anywhere near melting, and the party
      sent straight to the reactor vessel itself - the worst reachable spot
      on this or any plant. MEASURED, not assumed: with no containment fitted,
-     dmg plateaus near 29% for a good two minutes before it starts climbing
-     again toward melt around t=186s, so a job dispatched at t=40s has a
-     wide, genuinely stable window to finish in -
+     dmg plateaus near 33% for about a minute before it climbs again toward
+     melt at t=160.7s, and the job itself takes ~144s in that field, so it
+     has to be dispatched at t=10s to finish at all. That window is 6s wide,
+     which is TIGHT - it was 40s of slack before the steam generators and the
+     relief tank moved, and the move both raised the crew field (0.1075 ->
+     0.1210, so radWorkK fell 0.397 -> 0.346) and brought melt forward. Widen
+     it by shielding the crew, not by shortening the job -
      stable enough to clear the party without melt or the party itself being
      spent, but this case does NOT hold the field perfectly still the way
      COOL does (dmg is still creeping upward under it), so unlike COOL above
      it is only checked against the ratio below, not against the tick. */
   const hot=set({cont:0, contFit:true}); run(hot,10);
   hot.byp.rps=true; hot.flow=0.05; hot.flowDem=0.05;
-  while(hot.t<40 && !hot.melt) M.step(0.02);
+  while(hot.t<10 && !hot.melt) M.step(0.02);
   if(hot.melt) bad('the no-containment fault reached melt before this case could even dispatch a party into it');
   M.repairStart('core');
   if(!hot.repair) bad('dispatch to the reactor vessel on an active, uncontained fault was refused - dose must slow a party, never turn it back');

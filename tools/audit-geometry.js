@@ -4,7 +4,7 @@ const S=require('./bundle').bundle();
 
 // routing is emergent from component positions, so this has to run the code,
 // not just read it
-const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY}');
+const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,ventK,reliefHeaderKey}');
 
 // zero-length segments are corner artefacts from coincident waypoints; skip
 // them or every corner is a false positive
@@ -314,6 +314,105 @@ const scnChecks=[
 // own any more, so there is nothing about one that can go stale
 const GW=Number(S.match(/const GW=(\d+)/)[1]), GH=Number(S.match(/GH=(\d+)/)[1]);
 const CELL=Number(S.match(/CELL=(\d+)/)[1]), GX=Number(S.match(/GX=(\d+)/)[1]);
+/* ── A RENDERER KEY MUST RESOLVE AGAINST THE SIM'S OWN KEY SET ──
+   This is the one class of fault every other auditor is blind to by
+   construction. Stage 3a re-keyed S.flowPos from pipe KIND to run KEY and
+   left render/pipes.js looking up by kind: every lookup returned undefined,
+   so every flow packet on every pipe stopped moving and every flow meter
+   read zero - and all five checks stayed green, because a string metric and
+   a widget's box cannot tell that a number is silently nothing.
+   So: the set of keys the renderer asks for and the set the sim writes must
+   be the SAME set, both ways. A key the renderer asks for and the sim never
+   writes is a frozen packet; a key the sim writes and no run carries is a
+   stale entry that will outlive its pipe. */
+const keyMisses=(want,have)=>want.filter(k=>!have.includes(k));
+const netKeyChecks=[];
+{
+  let rendMiss=0, simMiss=0, posMiss=0, cases=0;
+  for(const loops of [1,2,3,4]){
+    M.D().loops=loops; M.D().fit={}; M.commission();
+    // and again with the plant fully wired, since a fitting adds runs
+    // (xtie:) that only exist once one is placed
+    for(const wired of [false,true]){
+      if(wired){
+        const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r?[r.key,0.4]:null; };
+        const a=tap('cold:sg0');
+        if(a) M.addFit('throttle',a[0],a[1],null,null);
+        for(let i=0;i<loops-1;i++){
+          const u=tap('cold:sg'+i), v=tap('cold:sg'+(i+1));
+          if(u&&v) M.addFit('tee',u[0],u[1],v[0],v[1]);
+        }
+        M.commission();
+      }
+      const rend=M.pipeNetwork().filter(r=>r.key).map(r=>r.key);
+      const sim=Object.keys(M.P().net.byKey);
+      const pos=Object.keys(M.S().flowPos);
+      rendMiss+=keyMisses(rend,sim).length;   // renderer asks, sim never wrote
+      simMiss +=keyMisses(sim,rend).length;   // sim wrote, no run carries it
+      posMiss +=keyMisses(pos,sim).length;    // an animated key off the graph
+      cases++;
+    }
+    M.D().fit={};
+  }
+  /* The injected fault, the same idiom audit-dom.js uses: a check nobody has
+     seen fail is not a check. Look the runs up by KIND, exactly as pipes.js
+     did before Stage 3a was finished, and the miss count must go POSITIVE -
+     otherwise the comparison above is passing for some reason other than the
+     keys agreeing. */
+  M.D().loops=4; M.D().fit={}; M.commission();
+  const byKind=M.pipeNetwork().filter(r=>r.key).map(r=>r.k);
+  const injected=keyMisses(byKind,Object.keys(M.P().net.byKey)).length;
+  netKeyChecks.push(
+    ['renderer key is a sim key', rendMiss===0,
+     `${cases} plants: ${rendMiss} run keys the renderer draws that the sim never wrote`],
+    ['sim key still has a run',      simMiss===0,
+     `${simMiss} keys on the graph that pipeNetwork() no longer routes`],
+    ['every animated key is real',   posMiss===0,
+     `${posMiss} S.flowPos keys with no edge record behind them`],
+    ['inject: lookup by kind',       injected>0,
+     `caught by "renderer key is a sim key" (${injected} kind lookups resolve to nothing)`]);
+}
+
+/* ── A RELIEF FITTING SURVIVES ITS TANK MOVING ──
+   The relief HEADER's key carries the two faces pipeNetwork() picked for it
+   (link("relief",...), layout.js), so it is renamed by any move of the
+   pressurizer or the tank. The stock relief fitting used to STORE that
+   string, which meant moving either part - both of which the game invites -
+   silently dropped the fitting out of netBuild(), took reliefG() and ventK()
+   to zero, and left the valve venting NOTHING while its glyph, its tank, its
+   mimic and its mass all stayed exactly where they were. */
+const reliefChecks=[];
+{
+  M.D().loops=4; M.D().fit={}; M.commission();
+  const tapHot=M.pipeNetwork().find(r=>r.k==='hot');
+  const stale='relief:pzrt-reltkb';       // the literal that used to be stored
+  M.addFit('relief',tapHot.key,0.9,stale,0.5);
+  M.commission();
+  const fid=Object.keys(M.D().fit)[0];
+  const at=id=>M.LAY().parts.find(q=>q.id===id);
+  const home={reltk:{...at('reltk')}, pzr:{...at('pzr')}};
+  const base=M.ventK(M.S(),fid);
+  M.moveTo(at('reltk'),8,2); M.commission();
+  const afterTank=M.ventK(M.S(),fid), renamed=!M.P().net.byKey[stale];
+  const offerable=!!M.reliefHeaderKey(M.pipeNetwork());
+  M.moveTo(at('pzr'),3,1); M.commission();
+  const afterPzr=M.ventK(M.S(),fid);
+  M.moveTo(at('reltk'),home.reltk.x,home.reltk.y);
+  M.moveTo(at('pzr'),home.pzr.x,home.pzr.y);
+  M.commission();
+  const backHome=M.ventK(M.S(),fid);
+  reliefChecks.push(
+    ['relief vents where it sits', base>0 && afterTank>0 && afterPzr>0,
+     `ventK ${base.toFixed(2)} -> tank moved ${afterTank.toFixed(2)} -> pzr moved ${afterPzr.toFixed(2)}`],
+    ['relief comes home unchanged', Math.abs(backHome-base)<1e-12,
+     `moving both parts away and back returns ventK to ${base.toFixed(4)}`],
+    ['relief can still be added',  offerable,
+     'the bench can resolve a header to tap after the tank moves'],
+    ['inject: the stored literal',  renamed,
+     `caught by "relief vents where it sits" (${stale} no longer names any run)`]);
+  M.D().fit={}; M.D().loops=4; M.commission();
+}
+
 const checks=[
  // the plant pans/zooms now, so it is FITTED into whatever viewport it is
  // given rather than pinned to the right margin - only the left start and
@@ -339,6 +438,8 @@ const checks=[
  ...actChecks,
  ...chartChecks,
  ...scnChecks,
+ ...netKeyChecks,
+ ...reliefChecks,
 ];
 let bad=0;
 for(const [n,ok,detail,,over] of checks){
