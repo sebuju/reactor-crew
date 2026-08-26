@@ -22,6 +22,12 @@
 const RAD_K = 7.1583;
 
 const RAD_BREACH=3.0, RAD_DMG=0.06, RAD_MELT=4.0, RAD_SGTR=1.2, RAD_AIR=0.05;
+// A fresh constant, not a re-derivation of an existing figure: nothing
+// documented depends on its exact value, only on the tank getting hotter as
+// it fills, which any positive number gives it. Scaled the same shape as
+// RAD_DMG against s.ventTank (0..100, step.js) rather than fitted against a
+// pinned dose the way RAD_K was.
+const RAD_TANK=0.03;
 const RAD_HI=1.0, RAD_FLOOR=0.02, RAD_CEIL=3;
 
 // Keyed on WHAT the component IS, never on p.grp: `cont` and `hpi` are both
@@ -86,7 +92,9 @@ function radGeom(){
   const sig=laySig();
   if(radCache && radCacheSig===sig) return radCache;
   const g=occupied(null), core=LAY.parts.find(p=>p.id==="core"), cc=cen(core);
+  const tank=LAY.parts.find(p=>p.id==="reltk");
   const K={core:radKernel(g,cc.x,cc.y), sg:[],
+           tank: tank ? radKernel(g,cen(tank).x,cen(tank).y) : null,
            crew:LAY.parts.find(p=>p.id==="ctrl")||core};
   for(const p of LAY.parts) if(p.id.startsWith("sg")){
     const c=cen(p); K.sg.push(radKernel(g,c.x,c.y));
@@ -114,6 +122,11 @@ function radSrc(L){
   return {core:(L.n*0.935+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*P.contRel
               + (L.melt&&!P.catcher?RAD_MELT:0),
           sg: L.sgtr?RAD_SGTR:0,
+          // The relief tank: clean at commissioning (s.ventTank starts at 0,
+          // step.js), so this is exactly 0 the moment P.dose is asked and
+          // stays out of that geometric figure entirely. It only shines
+          // once a valve has actually vented into it.
+          tank: RAD_TANK*(L.ventTank||0),
           // Airborne activity is a FLOOR ON EVERY CELL and is NOT shielded at
           // all - this is the containment argument made picture-shaped.
           // What has already escaped the primary boundary is loose in the
@@ -128,6 +141,7 @@ function radSolve(K,q){
   for(let i=0;i<f.length;i++){
     let v=q.air + q.core*K.core[i];
     if(q.sg) for(const k of K.sg) v+=q.sg*k[i];
+    if(q.tank && K.tank) v+=q.tank*K.tank[i];
     f[i]=v;
   }
   return f;
@@ -146,8 +160,14 @@ function radAt(f,p){
 // not stupid, it approaches from behind whatever shielding is actually
 // there. That is the reward for siting a shield somewhere it helps, rather
 // than merely somewhere inside a bounding box.
+// `p.stand` is the escape hatch for a thing that is not a rectangle: a pipe
+// run is a polyline, so it brings its own list of cells a party could stand
+// in and freeAdj() is never asked to make sense of a w/h it does not have.
+// One accessor either way - the alternative was a second copy of the two
+// lines below, which is how a run and a component start disagreeing about
+// what standing next to something costs.
 function radParty(f,p,g){
-  const a=freeAdj(p,g); if(!a.length) return RAD_CEIL;
+  const a=(p&&p.stand)||freeAdj(p,g); if(!a.length) return RAD_CEIL;
   let v=1e9; for(const c of a) v=Math.min(v,f[c[1]*GW+c[0]]);
   return clamp(v,RAD_FLOOR,RAD_CEIL);
 }

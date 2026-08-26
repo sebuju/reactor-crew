@@ -96,14 +96,14 @@ const RODX0=.35;
 /* contFit/turbFit/condFit: is the part on the grid at all - see fittableList()
    in layout.js. Decoupled from cont/turb/condCap, which still say what TYPE
    or how good a one you would buy if you fitted it, so unfitting one never
-   forgets the other. pumpSize and junc are not FITTABLE flags at all - a
-   pump and a junction are placed, not toggled, at a spot the player chose
-   rather than a fixed slot - see PLACED PARTS and JUNCTIONS in layout.js. */
+   forgets the other. pumpSize and fit are not FITTABLE flags at all - a
+   pump and a fitting are placed, not toggled, at a spot the player chose
+   rather than a fixed slot - see PLACED PARTS and FITTINGS in layout.js. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          loops:1,pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
          cont:1,contFit:true,accum:false,efw:true,catcher:false,bkp:1,
-         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},junc:{}};
+         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{}};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
@@ -141,16 +141,17 @@ function derived(){
   const contRel=D.contFit?CONT[D.cont].rel:1;
   /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
      layout.js - sums pumpCap() over every "pump"+ part, static and placed
-     alike), replacing the old flat PUMPS[D.pumps] tier. Every junction that
-     exists costs a flat JUNC_MASS - a spool piece and a motor-operated valve,
-     so a junction is not free redundancy either. */
+     alike), replacing the old flat PUMPS[D.pumps] tier. Every fitting that
+     exists costs a flat FIT_MASS - a spool piece and a motor-operated valve
+     or throttle, so a tee or a throttle is not free redundancy either. */
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
     +totalPumpCap()*PUMP_MASS+SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
     +coreMass + D.loops*34 + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     + (D.accum?45:0)+(D.efw?38:0)+(D.catcher?66:0)+(D.boroninj?18:0)
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + (D.turbFit?D.turb*50:0) + (D.condFit?D.condCap*40:0)
-    + Object.keys(D.junc).length*JUNC_MASS + layMass + latMass();
+    + Object.keys(D.fit).length*FIT_MASS + (hasRelief()?RELIEF_TANK_MASS:0)
+    + layMass + latMass();
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess+rf.dRho-D.poison-leak;
@@ -214,5 +215,11 @@ function derived(){
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);
       if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);
       if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
+      /* buildable, not blocked - the vessel bursting on an unrelieved
+         overpressure is the player's own decision, the same way no RPS is
+         above. hasRelief() (layout.js) is true the moment any relief
+         fitting exists; the stock plant ships one, so this only lights up
+         once the player deletes it. */
+      if(!hasRelief()) w.push(["SOFT","No relief path fitted. An overpressure transient now ends at the vessel, not at a valve.","pzr"]);
       return w;})()};
 }

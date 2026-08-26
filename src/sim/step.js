@@ -27,9 +27,37 @@ function commission(){
      flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, boroninj:D.boroninj, efw:D.efw,
      catcher:D.catcher, contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
-     turbFit:D.turbFit, condFit:D.condFit, junc:{...D.junc},
+     turbFit:D.turbFit, condFit:D.condFit, fit:{...D.fit},
      loops:D.loops, sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237};
+  /* The pipe network: netFlowK() (pipenet.js) is what feeds pumpK below now,
+     not a capacity-counting formula. netRef is the valves-shut (as
+     commissioned), no-damage reference flow every later tick becomes a
+     fraction of - see netCoreFrac0's own comment for why shut rather than
+     open. It is >0 by construction (a fresh net always has at least one live
+     pump path to ground), so a reading of 0 or worse is a bug to report, not
+     a case to guard here. netRefByLoop is the same reference split per loop -
+     netFlowK's own per-connected-group ceiling needs it, because the loops
+     are not the same length. */
+  P.net    = netBuild();
+  P.netRefByLoop = {};
+  P.netRefByRun  = {};
+  P.netRef = netCoreFrac0(P.net, P.netRefByLoop, P.netRefByRun);
+  /* The relief valve's own reference conductance (pipenet.js's own comment on
+     RELIEF_REF_LEN) - every fitting's ventK() is judged against this ONE
+     number, computed once here rather than re-derived every call. */
+  P.ventRef = ventRefG();
+  /* ONE scale for every run to animate against, and it must not be the run's
+     OWN reference. Dividing a run by itself is 1 for every healthy run, which
+     normalises out exactly the thing the network was built to see: the stock
+     loops are not the same length, so loop 0 really does carry more water than
+     loop 3. Against a shared mean the plant still averages to the old rate -
+     nothing on screen speeds up overall - but the legs finally differ from each
+     other, which is the whole reason a run has its own integral. */
+  { let sum=0, n=0;
+    for(const k in P.netRefByRun)
+      if(k.startsWith("hot:")||k.startsWith("cold:")){ sum+=P.netRefByRun[k]; n++; }
+    P.netRefRun = n ? sum/n : 0; }
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = a.P0>3 ? 1.22 : 4.0;
@@ -104,58 +132,57 @@ function autoToggle(k){
 }
 const rpsLive  = ()=> autoLive("rps");
 const rpsState = ()=> autoState("rps");
-/* ══════════ JUNCTIONS ══════════
-   Fitted (placed, for a junction - see D.junc, layout.js) and open at the
-   panel are two different questions, the same way a protection system is
-   fitted and then armed - but a junction is NOT in AUTOSYS, because nothing
-   about it is automatic. There is no system acting on the plant behind your
-   back to defeat: it is a valve, and the operator works it. Ask this, never
-   P.junc or S.juncOpen on their own. */
-const juncLive = id => !!(P.junc[id] && S.juncOpen[id]);
+/* ══════════ FITTINGS ══════════
+   Fitted (placed, for a tee or a throttle - see D.fit, layout.js) and worked
+   at the panel are two different questions, the same way a protection
+   system is fitted and then armed - but a fitting is NOT in AUTOSYS, because
+   nothing about it is automatic. There is no system acting on the plant
+   behind your back to defeat: it is a valve, and the operator works it,
+   either by hand (a tee's S.juncOpen) or by demand (a throttle's
+   S.valveDem, walked toward at VALVE_RATE below). */
+/* ── RELIEF FITTINGS: every valve rolls its own die ──
+   Deleting the last relief fitting is a legal design choice (see the
+   warning in derived(), design.js) - a plant can be built with nowhere for
+   an overpressure to go, and the vessel bursting is then the player's own
+   decision. So every reader below is written to answer "none fitted" with
+   an empty list or a no-op, never a throw.
+   reliefFitIds() walks P.fit in ITS OWN insertion order (fid keys are
+   "f0","f1",... - not integer-index keys, so Object.keys preserves the
+   order addFit() gave them) - deterministic, so which fitting is "primary"
+   never depends on iteration order changing under a future engine.
+   primaryRelief() is what the LEGACY, single-valve controls (ACT.porvBlock,
+   ACT.porvArm, the pzr mimic and its readouts) still address: their exact
+   signature has no id argument (see ACT, record.js), so they can only ever
+   reach the one relief fitting a plant had before redundancy existed. A
+   second or third relief path is worked through the generic fitting
+   controls, the same way a second tee or throttle already is. */
+// P is null on the design bench (nothing commissioned yet) - the mimic still
+// draws there, so this asks D directly rather than throwing, the same
+// P?fallback:D idiom pumpFloor() (plant.js) already uses.
+const reliefFitIds = () => { const f=P?P.fit:D.fit;
+  return Object.keys(f).filter(id=>f[id].mode==="relief"); };
+const primaryRelief = () => reliefFitIds()[0];
+// any relief fitting passing flow right now - what the annunciator, the
+// surge-line animation and the event log all mean by "the relief valve is
+// open", because any one of them venting is the same fact to a watch
+// reading the board.
+const reliefAnyOpen = s => reliefFitIds().some(id=>s.reliefOpen[id] && !s.reliefBlocked[id]);
+// any relief fitting that lifted and did not reseat - the fact "PORV FAILED
+// TO RESEAT" and the PORV OPEN annunciator both mean.
+const reliefAnyStuck = s => reliefFitIds().some(id=>
+  s.reliefOpen[id] && s.reliefAuto[id] && s.reliefStuck[id] && !s.reliefBlocked[id]);
 /* ── HOW MUCH FLOW THE PUMPS THAT ARE LEFT ACTUALLY DELIVER ──
-   Every loop used to share one number: lose one pump out of three and the
-   whole plant lost a third of its flow, as though every loop were already
-   perfectly cross-tied and there were no way to make that better or worse.
-   Flow is per LOOP. Junctions can bridge ANY two loops now, not just
-   adjacent ones, and there can be any number of them - so "which loops share
-   flow" is graph connectivity over every OPEN junction, not a fixed chain: a
-   flood-fill from each loop over the open-junction adjacency list finds the
-   groups, and there are at most four loops to fill from, so nothing about
-   this needs to be clever.
-
-   What an open junction buys is head, not water, and nobody gets that for
-   free. A pump only has reserve above its own loop if it was bought with
-   reserve - loopPumpCap() (layout.js) sums every pump actually on that loop
-   by its own real capacity, static and placed alike, so the group's total is
-   real hardware, not a flat number invented for this feature. A group of m
-   loops with total capacity `up` delivers min(m, up) between them: never
-   more than the group's own loops can carry, however much pump is behind it.
-
-   WITH NOTHING OPEN THIS IS THE OLD FORMULA, EXACTLY. Every group is then
-   one loop, m is 1, and min(1, up) for a single undamaged default-size pump
-   is 1 - a whole number, no arithmetic to round - so the total is the count
-   of live pumps and this returns (loops-lost)/loops to the last bit. That is
-   not a nicety: every figure in audit-physics.js's DOCUMENTED BEHAVIOUR
-   block is measured on a plant with no junction placed, and they are quoted
-   to the digit. The auditor asserts the identity against the formula rather
-   than inferring it from those figures, so the day it stops collapsing, it
-   says so. */
-function loopFlowK(s){
-  const n=P.loops, adj=Array.from({length:n},()=>[]);
-  for(const id in P.junc){ const j=P.junc[id];
-    if(juncLive(id) && j.loopA<n && j.loopB<n){ adj[j.loopA].push(j.loopB); adj[j.loopB].push(j.loopA); } }
-  const seen=new Array(n).fill(false);
-  let k=0;
-  for(let i=0;i<n;i++){
-    if(seen[i]) continue;
-    const stack=[i], group=[]; seen[i]=true;
-    while(stack.length){ const u=stack.pop(); group.push(u);
-      for(const v of adj[u]) if(!seen[v]){ seen[v]=true; stack.push(v); } }
-    let up=0; for(const g of group) up+=loopPumpCap(g,s.dmgParts);
-    k += Math.min(group.length, up);
-  }
-  return k/n;
-}
+   Used to be a capacity-counting formula here: lose one pump out of three
+   and the whole plant lost a third of its flow, as though every loop were
+   already perfectly cross-tied and there were no way to make that better or
+   worse, and an open junction bought a group min(groupSize, capacity) with
+   no regard for which loops actually got tied together. netFlowK()
+   (pipenet.js) replaced it with the solved pipe network, which sees that the
+   loops are not all the same length and gives the short one more - it keeps
+   the same min(groupSize, capacity) ceiling per connected group (a spare
+   pump still cannot deliver more than its own loops' bore), applied on top
+   of the solve rather than instead of it. See pipenet.js for the current
+   comment; see git history for the formula this replaced. */
 /* There are three ways a bank ends up going where the operator put it: the
    system was bypassed, the bank was switched to MANUAL while the banks are
    split, or a latch/jam took the drives away entirely. The precedence is
@@ -231,8 +258,14 @@ const DMGFX={
     hit:s=>s.rodJam=true, fix:s=>s.rodJam=false},
   pzr :{msg:"PRESSURIZER HIT",
     why:"The relief valve has been knocked open and will not reseat. Close the block valve on the mimic.",
-    hit:s=>{ s.porvOpen=true; s.porvStuck=true; s.porvAuto=true; },
-    fix:s=>{ s.porvStuck=false; s.porvOpen=false; s.porvAuto=false; }},
+    /* sticks whichever relief fitting the pressurizer owns (primaryRelief())
+       - and refuses, silently, like every other hit/fix pair here, if there
+       is none: a plant built with no relief path has nothing on the
+       pressurizer for a hit to knock open. */
+    hit:s=>{ const fid=primaryRelief(); if(!fid) return;
+      s.reliefOpen[fid]=true; s.reliefStuck[fid]=true; s.reliefAuto[fid]=true; },
+    fix:s=>{ const fid=primaryRelief(); if(!fid) return;
+      s.reliefStuck[fid]=false; s.reliefOpen[fid]=false; s.reliefAuto[fid]=false; }},
   /* a stop valve slams, it does not stroke - so this writes the actual AND the
      demand, or the load lag would drag the turbine straight back up */
   turb:{msg:"TURBINE HIT",
@@ -258,7 +291,16 @@ const DMGFX={
     hit:null, fix:null},
   sg  :{msg:"STEAM GENERATOR TUBE RUPTURE",
     why:"Primary coolant is leaking into the secondary side and venting past containment. Inventory falls and activity escapes.",
-    hit:s=>s.sgtr=true, fix:s=>s.sgtr=false}
+    hit:s=>s.sgtr=true, fix:s=>s.sgtr=false},
+  /* hit/fix are null for the same reason pump/hpi/feed are: the effect is
+     read straight off s.dmgParts by the physics (pipeExtraLen(), pipenet.js)
+     and stops the moment the id comes out of the list, so there is nothing
+     left for a handler to do here. A run is severed, not throttled - see
+     pipeExtraLen()'s own comment for why that is additive resistance taken
+     to its limit rather than a second mechanism. */
+  pipe:{msg:"PRIMARY PIPE RUPTURE",
+    why:"A primary run has been severed. Nothing moves through it any more - whatever loop it fed is down to natural circulation, or to a cross-tie if you built one.",
+    hit:null, fix:null}
 };
 const DMGANY={msg:"EQUIPMENT HIT", why:"A component has been knocked out.", hit:null, fix:null};
 const dmgFx = id => DMGFX[id] || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(k))] || DMGANY;
@@ -275,20 +317,41 @@ const dmgFx = id => DMGFX[id] || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(
 function combatHit(id){
   const s=S;
   const canHit = q => q.grp!=="shield" && fitted(q) && !s.dmgParts.includes(q.id);
+  const canHitRun = key => !s.dmgParts.includes("pipe:"+key);
   let p;
   if(id!==undefined && id!==null){
-    p=LAY.parts.find(q=>q.id===id);
-    if(!p||!canHit(p)) return;
+    /* a run is named "pipe:"+its own net key, never a raw key on its own -
+       so an id that names a fitting or a component can never accidentally
+       resolve as a run, and vice versa */
+    if(typeof id==="string" && id.indexOf("pipe:")===0){
+      const key=id.slice(5);
+      if(!P.net.byKey[key] || !canHitRun(key)) return;
+      p=pipePart(key);
+    } else {
+      p=LAY.parts.find(q=>q.id===id);
+      if(!p||!canHit(p)) return;
+    }
   } else {
     const parts=LAY.parts.filter(canHit);
-    if(!parts.length) return;
-    const wgt=parts.map(q=>{ let e=0;
+    const runs=hittableRunKeys(P.net).filter(canHitRun).map(pipePart);
+    const targets=parts.concat(runs);
+    if(!targets.length) return;
+    /* the layout talking, part and run alike: a cell on the hull edge is
+       worth roughly ten times an interior one (HITW_HULL/HITW_BASE,
+       pipenet.js). A part pays the flat rate once regardless of its own
+       footprint; a run pays it once per cell of pipe, because a longer run
+       really is more exposed pipe for a stray round to find - see runWgt()'s
+       own comment for why that is the one deliberate difference. */
+    const wgt=targets.map(q=>{
+      if(q.isRun) return runWgt(q.cells);
+      let e=0;
       for(let X=q.x;X<q.x+q.w;X++) for(let Y=q.y;Y<q.y+q.h;Y++)
         if(X===0||X===GW-1||Y===0||Y===GH-1) e++;
-      return 0.15 + e*1.6; });
+      return HITW_BASE + e*HITW_HULL;
+    });
     let r=srand(s)*wgt.reduce((a,b)=>a+b,0), k=0;
     while(r>wgt[k] && k<wgt.length-1){ r-=wgt[k]; k++; }
-    p=parts[k];
+    p=targets[k];
   }
   s.dmgParts.push(p.id);
   const fx=dmgFx(p.id);
@@ -305,8 +368,15 @@ function combatHit(id){
    refusals are written - a component your layout has walled in can never be
    reached, and a party already out is not split in two. */
 const repairNeed = p => 14 + p.w*p.h*4;
+/* Either kind of job's live dose rate, through the one accessor: dmgPart()
+   hands back a rectangle for a component and a cell list for a run, and
+   radParty() reads whichever it is given. Two shapes, one definition of what
+   standing next to a job costs - the alternative was a second copy of that
+   formula, and a run and a component quietly disagreeing about dose. */
+const repairRadRate = (f, id) => radParty(f, dmgPart(id), occupied(null));
 function repairStart(id){
-  const s=S, p=LAY.parts.find(q=>q.id===id);
+  const s=S;
+  const p = dmgPart(id);
   /* partySpent is the fourth refusal, beside "not there", "walled in" and
      "already out": there is no second party this run, and the dispatch order
      is simply not carried out - a no-op, the same shape as every other
@@ -324,7 +394,7 @@ function repairStart(id){
      much work a job is, it changes how fast the party can do it, and quoting
      the raw need would promise a time the sim will not honour. */
   const f=radSolve(P.radK,radSrc(s));
-  s.repRate=radParty(f,p,occupied(null));
+  s.repRate=repairRadRate(f,p.id);
   const eta=need/radWorkK(s.repRate);
   logE("info","REPAIR PARTY DISPATCHED / "+p.name,
     "Estimated "+eta.toFixed(0)+" seconds at "+s.repRate.toFixed(2)+
@@ -393,7 +463,7 @@ function tripCause(){
   if(s.dnbr<1.18-0.16*m)                    return "LOW DNBR";
   if(s.P>P.P0*(1.06+0.07*m))                return "HIGH PRESSURE";
   if(s.Tf>1600+280*m)                       return "HIGH FUEL TEMP";
-  if(s.flow<P.flowMin*1.02 && s.heat>0.3)   return "LOW FLOW";
+  if(s.flowNet<P.flowMin*1.02 && s.heat>0.3) return "LOW FLOW";
   if(s.P<P.P0*0.86)                         return "LOW PRESSURE";
   if(s.vf>0.30)                             return "CORE VOID";
   if(s.sc<3)                                return "LOW SUBCOOLING";
@@ -441,12 +511,23 @@ const ROD_RATE=0.012;                   // fraction of travel per second
 /* actuator rates. Boration is charging-pump flow; dilution has to displace loop
    inventory, so it is slower. Poisoning yourself is easy, getting back out is not. */
 const BOR_IN=60, BOR_OUT=35;            // pcm/s toward more / less boron
-/* The relief valve is a fixed orifice: while it passes, it passes at ONE rate.
-   Named here rather than written into the tick, because the pressurizer's RELIEF
-   FLOW readout and the steam plume drawn on it are both scaled off this number -
-   a literal in the tick would let the picture and the physics drift apart. */
-const PORV_INV=0.55;                    // % of loop inventory per second
-const PORV_DP=0.30;                     // MPa/s at the 15.5 MPa reference pressure
+/* A motor-operated valve strokes end to end in roughly 17 s - 1/17 fraction
+   of travel per second, the same shape as ROD_RATE above, just a slower
+   motor. S.valve walks toward S.valveDem at this rate every tick; see the
+   walk beside the boron one below. */
+const VALVE_RATE=1/17;
+/* A relief valve is a fixed orifice: while it passes, it passes at ONE rate.
+   These are no longer the plant's own flat rate - they are the rated figures
+   of ONE fully open relief edge of REFERENCE bore (PIPE_BORE.relief,
+   pipenet.js), and a real fitting's actual rate is these times its own
+   ventK() (pipenet.js), which is exactly 1 for the stock relief valve - see
+   RELIEF_REF_LEN's own comment there for why no PORV figure moved. Named
+   here rather than written into the tick, because the pressurizer's RELIEF
+   FLOW readout and the steam plume drawn on it are both scaled off this
+   number - a literal in the tick would let the picture and the physics
+   drift apart. */
+const PORV_INV=0.55;                    // % of loop inventory per second, at ventK===1
+const PORV_DP=0.30;                     // MPa/s at the 15.5 MPa reference pressure, at ventK===1
 /* pump rotational inertia, and the longer coastdown once the power is gone */
 const FLOW_TAU=5, FLOW_TAU_COAST=12;    // seconds
 const NAT_FLUX=0.12;                    // mass flux buoyancy gives per unit of heat removal
@@ -516,8 +597,19 @@ function resetPlant(){
   const x0=RODX0;
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
-     load:1,loadDem:1,flow:1,flowDem:1,P:P.P0,lvl:54,sgl:50,inv:100,hpi:false,
-     porvOpen:false,porvBlocked:false,porvAuto:false,porvStuck:false,
+     load:1,loadDem:1,flow:1,flowDem:1,flowNet:1,P:P.P0,lvl:54,sgl:50,inv:100,hpi:false,
+     /* One map per relief fitting, keyed like S.valve/S.valveDem - seeded
+        from P.fit rather than a fixed set of keys, so a plant with no
+        relief path (a legal design choice, see the bench warning in
+        design.js) simply seeds nothing and every reader above (all written
+        against reliefFitIds()) finds an empty list rather than a phantom
+        valve. reliefArm mirrors porvArm's old job, per fitting: the one-shot
+        a scenario sets to command THAT fitting's next lift to stick. */
+     reliefOpen:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
+     reliefAuto:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
+     reliefStuck:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
+     reliefBlocked:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
+     reliefArm:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      dmg:0,fatigue:0,dnbr:P.dnbr0,rho:0,voidTh:0,cav:0,vf:0,
      /* the groups start in equilibrium with commissioning power, or the plant
         would spend its first minutes breeding heat it should already have */
@@ -525,14 +617,30 @@ function resetPlant(){
      byp:Object.fromEntries(AUTOKEYS.map(k=>[k,false])),
      breach:false,melt:false,trip:"",
      ev:{}, blackout:false, nat:0, release:0, borInjUsed:false,
+     /* what the relief tank has taken, 0..100 - a place a repair party would
+        rather not stand once this is up (radSrc(), rad.js); clean at
+        commissioning, because nothing has vented yet. */
+     ventTank:0,
      /* the controller's tune, copied from the commissioning constants so a
         RESET PLANT puts the operator's experiments back where they started */
      split:false, reGang:false,
-     /* Shut, always, whatever was fitted. A junction you have to open by hand
-        is one that cannot change the plant you just commissioned behind your
-        back, and one that was never placed is the same plant to the flow
-        model as one placed and left shut. */
-     juncOpen:Object.fromEntries(Object.keys(P.junc).map(k=>[k,false])),
+     /* Shut, always, whatever tee was fitted. A branch you have to open by
+        hand is one that cannot change the plant you just commissioned
+        behind your back, and one that was never placed is the same plant to
+        the flow model as one placed and left shut. */
+     juncOpen:Object.fromEntries(Object.keys(P.fit).filter(k=>P.fit[k].mode==="tee").map(k=>[k,false])),
+     /* A throttle's actual AND demand both start on the same as-commissioned
+        default (every actuator's demand starts equal to its actual - see
+        flow/rod/boron below): a BRANCH throttle shut, for the same reason a
+        tee is - a branch you have to open by hand cannot change the plant
+        behind your back. An IN-LINE throttle WIDE - it sits directly on a
+        run every design already depends on, so shut-by-default would choke
+        a main leg the moment it was fitted, which is not a conservative
+        default, it is a broken one. */
+     valve:Object.fromEntries(Object.keys(P.fit).filter(k=>P.fit[k].mode==="throttle")
+       .map(k=>[k, P.fit[k].bKey?0:1])),
+     valveDem:Object.fromEntries(Object.keys(P.fit).filter(k=>P.fit[k].mode==="throttle")
+       .map(k=>[k, P.fit[k].bKey?0:1])),
      arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:AUTOROD_LO, arHi:AUTOROD_HI,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
@@ -548,7 +656,12 @@ function resetPlant(){
      dose:0, crewDose:0, doseRate:P.dose, repRate:0, partySpent:false,
      bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
-     flowPos:{hot:0,cold:0,steam:0,exh:0,feed:0,surge:0,hpi:0},
+     /* One flow integral per RUN, not per kind - see the pipe-animation block
+        below. Seeded from P.net's own key set (every run pipeNetwork() would
+        draw, hot/cold/steam/feed/exh/surge/hpi and one per branch fitting)
+        rather than a fixed kind table, so a four-loop plant gets four hot-leg
+        integrals and a fitting that failed to route gets none. */
+     flowPos:Object.fromEntries(Object.keys(P.net.byKey).map(k=>[k,0])),
      /* perN/perT/perV are the reactor-period differentiator's own state. They
         used to be module globals in trends.js; they are here because a
         snapshot is a clone of S and nothing the tick carries may sit outside
@@ -556,20 +669,14 @@ function resetPlant(){
         things read it, but a float second cannot key a keyframe. */
      perN:P.n0, perT:0, perV:Infinity,
      /* seed/rng are the dice cursor (see rng.js); diceOff stands them down for
-        a scripted run; porvArm is the one-shot a scenario sets to command the
-        next automatic lift to stick instead of rolling for it. */
-     seed:0, rng:0, diceOff:false, porvArm:false,
+        a scripted run. */
+     seed:0, rng:0, diceOff:false,
      spin:0,spinT:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
   /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
      new run picks a seed, and from there every die comes off s.rng, so the run
      replays from its own seed. Rolling inside step() instead would put numbers
      in the plant that are in no snapshot. */
   seedRng(S,(Math.random()*4294967296)>>>0);
-  /* One integral per junction rather than one for all of them: any two can be
-     open and shut independently, so unlike the hot legs - which are one
-     lumped flow and animate as one kind - each junction's packets have to be
-     able to stop while another's keep going. */
-  for(const id in P.junc) S.flowPos["xtie:"+id]=0;
   /* heat and subcooling used to start on two round numbers that were nowhere
      near the plant being commissioned - 35 K of subcooling on a gas core that
      actually sits 1400 K below saturation. They are derived from the state this
@@ -684,6 +791,13 @@ function step(dt){
   { const db=s.boronDem-s.boron, rb=(db<0?BOR_IN:BOR_OUT)*dt;
     s.boron+=Math.sign(db)*Math.min(Math.abs(db),rb); }
 
+  /* ── throttles: an actuator, not a switch ──
+     Same pattern as the bank and the boron walk above: the panel writes
+     demand, the motor gets there at VALVE_RATE. One walk for every throttle
+     on the plant, keyed by id exactly like S.valve/S.valveDem themselves. */
+  for(const id in s.valve){ const dv=s.valveDem[id]-s.valve[id];
+    s.valve[id]+=Math.sign(dv)*Math.min(Math.abs(dv),VALVE_RATE*dt); }
+
   /* ── turbine load: the governor valves take a moment to stroke ── */
   s.load += (s.loadDem-s.load)*Math.min(dt/LOAD_TAU,1);
 
@@ -699,7 +813,12 @@ function step(dt){
   /* ── pump cavitation: pumps stall if the water they suck is near boiling ── */
   const sat0 = tsat(s.P), Tc0 = s.Tavg-15*heat;
   s.cav = clamp((Tc0-(sat0-6))/12,0,1);
-  const pumpK = loopFlowK(s);
+  /* runFlow is filled by netFlowK() with this tick's real per-run flow -
+     scratch, not sim state (it is rebuilt fresh every tick, the same way
+     `heat` and `Tprog` below are), so it lives as a local rather than on S.
+     The pipe-animation block near the end of this function reads it back. */
+  const runFlow = {};
+  const pumpK = netFlowK(s, runFlow);
   const bkpUp = !s.bkpLost && autoLive("bkp");
   /* ── coolant flow: pumps have inertia ──
      Losing power does not stop a pump dead, it coasts. Blackout is the same lag
@@ -762,20 +881,34 @@ function step(dt){
   if(!s.breach){
     const Pdem = P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (s.hpi?0.5*P.pRise:0);
     s.P += (Pdem-s.P)*(0.30/P.pzrK)*dt;
-    if(!s.porvOpen && autoLive("porv") && s.P > P.P0*1.06){   // automatic lift
-      /* A commanded stick beats the die and is CONSUMED here: a scenario arms
-         the next lift, not every lift for the rest of the run, or one line of
-         script would silently make the valve permanently faulty. The roll is
-         still the free-play path, and roll() is the only thing that touches
-         the cursor - so with dice stood down an unarmed lift always reseats. */
-      s.porvOpen=true; s.porvAuto=true;
-      s.porvStuck = s.porvArm || roll(s,"porvStick");
-      s.porvArm=false;
+    /* Every relief path rolls its own die, on its own lift - three redundant
+       valves are three independent chances to stick, not one. Each fitting
+       is otherwise the identical machine the single PORV always was: an
+       auto-lift at 106%, a reseat below 101%, and a commanded stick
+       (s.reliefArm[fid]) that beats the die and is CONSUMED by the lift it
+       arms, or one scenario line would make that one valve permanently
+       faulty. vented is this tick's total loss across every open fitting,
+       in %/s of loop inventory - the tank's own source term (radSrc(),
+       rad.js) reads exactly this, because what the crew should fear IS what
+       has left the loop and gone into that box. */
+    let vented = 0;
+    for(const fid of reliefFitIds()){
+      if(!s.reliefOpen[fid] && autoLive("porv") && s.P > P.P0*1.06){
+        s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
+        s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
+        s.reliefArm[fid]=false;
+      }
+      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && s.P < P.P0*1.01){
+        s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
+      }
+      if(s.reliefOpen[fid] && !s.reliefBlocked[fid]){
+        const vk = ventK(s,fid);
+        s.P -= PORV_DP*vk*(P.P0/15.5)*dt;
+        vented += PORV_INV*vk*dt;
+      }
     }
-    if(s.porvOpen && s.porvAuto && !s.porvStuck && s.P < P.P0*1.01){
-      s.porvOpen=false; s.porvAuto=false;
-    }
-    if(s.porvOpen && !s.porvBlocked){ s.P -= PORV_DP*(P.P0/15.5)*dt; s.inv -= PORV_INV*dt; }
+    s.inv -= vented;
+    s.ventTank = Math.min(100, s.ventTank + vented);
   }
   if(s.hpi){ s.inv=Math.min(100,s.inv+P.hpiRate*dt); s.fatigue+=0.35*dt; }
   if(s.sgtr){ s.inv-=0.30*dt; s.release=Math.min(100,s.release+0.02*P.dose*dt); }
@@ -800,6 +933,14 @@ function step(dt){
 
   const sc = sat - Th;
   s.heat = heat; s.sc = sc;              // tripCause() reads these outside the tick
+  /* What a flow meter in the loop would actually read, as opposed to what the
+     pump dial was set to. They could not diverge before: nothing between the
+     pump and the core could restrict it. A throttle can, and a severed run
+     can, so LOW FLOW has to trip on the delivered figure or a player could
+     shut every valve on the primary and the protection system would never
+     notice - the pumps are still commanded to 100%. pumpK is exactly 1 on an
+     undamaged plant with nothing throttled, which is why nothing re-pins. */
+  s.flowNet = s.flow * pumpK;
   const lvl0 = s.lvl;
   s.lvl = clamp(54+(P.Tref-s.Tavg)*-0.9+s.vf*60+(s.inv-100)*0.15,0,100);
   /* Void can only push water up the surge line while there is a loop to push it
@@ -866,7 +1007,7 @@ function step(dt){
        own footprint - a party works from behind whatever shielding is
        actually there. No party out, no rate: repRate is a readout of where
        someone is standing, and nobody is standing anywhere. */
-    s.repRate  = s.repair ? radParty(f, LAY.parts.find(q=>q.id===s.repair.id), occupied(null)) : 0; }
+    s.repRate  = s.repair ? repairRadRate(f, s.repair.id) : 0; }
 
   /* ── reactor protection system: trips unless it was never fitted, or is defeated ── */
   if(!s.scrammed && rpsLive()){
@@ -905,9 +1046,9 @@ function step(dt){
     ()=>"Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
   ev("hip",s.P>P.P0*1.05,"warn","PRIMARY OVERPRESSURE",
     ()=>"Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burst.toFixed(1)+" MPa.");
-  ev("porv",s.porvOpen&&!s.porvBlocked,"warn","RELIEF VALVE PASSING",
-    "The PORV is open and venting to the relief tank. If nobody commanded it, primary coolant is leaving the loop.");
-  ev("stuck",s.porvOpen&&s.porvAuto&&s.porvStuck&&!s.porvBlocked,"alarm","PORV FAILED TO RESEAT",
+  ev("porv",reliefAnyOpen(s),"warn","RELIEF VALVE PASSING",
+    "A relief valve is open and venting to the tank. If nobody commanded it, primary coolant is leaving the loop.");
+  ev("stuck",reliefAnyStuck(s),"alarm","PORV FAILED TO RESEAT",
     "It lifted on overpressure and did not shut again. Pressurizer level will read HIGH while the loop empties. Close the block valve.");
   ev("void",s.vf>0.15,"alarm","STEAM VOID IN CORE",
     "Steam is forming where liquid should be. It carries almost no heat, so fuel temperature climbs even while reactor power falls.");
@@ -984,31 +1125,57 @@ function step(dt){
   }
 
   /* ── pipe animation ──
-     s.flowPos[k] is how far the fluid in that line has TRAVELLED, in diagram
-     pixels, counting up. The renderer slides packets along it and differentiates it
-     for the flow meters, so both come from this one integral and cannot disagree.
-     It has to stop when there is nothing left to move: an empty primary, a dry steam
-     generator, a feed pump that no longer exists. Natural circulation is real flow
-     and keeps moving. */
-  const d=s.flowPos,sp=60*dt;
+     s.flowPos[key] is how far the fluid in that RUN has TRAVELLED, in
+     diagram pixels, counting up - keyed since Stage 3a by the run itself,
+     not its kind, so a four-loop plant's four hot legs finally read four
+     different numbers instead of one shared one. The renderer slides
+     packets along it and differentiates it for the flow meters, so both come
+     from this one integral and cannot disagree.
+
+     hot/cold and every fitting branch (xtie:*, tee or throttle alike) are
+     driven off the network's own solved flow for THAT run (runFlow, filled
+     by netFlowK() above) judged against P.netRefRun, the shared mean of what
+     the primary legs carry as commissioned - substituting a per-run ratio for
+     the pooled pumpK in the same feff formula physics already uses, so the
+     plant as a whole still animates at the old rate while a short leg runs
+     visibly faster than a long one. Everything the
+     network does not model yet (steam, feed, exhaust, hpi, surge) keeps the
+     single plant-wide rate it always had, just written under every run key
+     of that kind so a plant with more than one still animates all of them.
+
+     It has to stop when there is nothing left to move: an empty primary, a
+     dry steam generator, a feed pump that no longer exists. Natural
+     circulation is real flow and keeps moving. */
+  const d=s.flowPos, sp=60*dt;
   const sgWet = clamp(s.sgl/25,0,1);           // secondary side still has a level
-  d.hot+=sp*feff*1.4; d.cold+=sp*feff*1.4;
   const stm = s.load*sgWet*wet*1.6;            // no primary water, nothing boils
-  d.steam+=sp*stm;
-  d.exh  +=sp*stm;                             // what the turbine passes, it exhausts
-  d.feed +=sp*stm*(feedOK?1:0);
   /* This is a velocity, and a gravity feed runs at the square root of its head - so
      it scales off hpiRate without four-fold swings between layouts. */
-  d.hpi+=sp*(s.hpi?2*Math.sqrt(P.hpiRate/1.6):0);
+  const hpiFlow = sp*(s.hpi?2*Math.sqrt(P.hpiRate/1.6):0);
   /* Surge line: positive is out of the pressurizer, which is the direction the
      pipe is drawn. A falling level is an outsurge; a relief valve passing flow
      pulls loop water the other way, up into the pressurizer and out of the top.
      Clamped below the hot leg's 1.24 - it is a small line and must not outrun it. */
-  d.surge+=sp*wet*clamp(-s.dLvl*0.07-((s.porvOpen&&!s.porvBlocked)?0.75:0),-1.2,1.2);
-  /* A shut valve passes nothing, which is the whole of what a shut valve looks
-     like. A flat rate while open, because how much crosses depends on an
-     imbalance between two loops the lumped flow model does not carry. */
-  for(const id in P.junc) if(juncLive(id)) d["xtie:"+id]+=sp;
+  const surgeFlow = sp*wet*clamp(-s.dLvl*0.07-(reliefAnyOpen(s)?0.75:0),-1.2,1.2);
+  const runRatio = key => P.netRefRun>0 ? (runFlow[key]||0)/P.netRefRun : 0;
+  for(const key in d){
+    const r = P.net.byKey[key];
+    if(!r) continue;                           // a design change left a stale key
+    if(r.k==="hot"||r.k==="cold"){
+      const feffKey = Math.max(s.flow*P.flowK*runRatio(key)*(1-0.8*s.cav), nat)*wet;
+      d[key]+=sp*feffKey*1.4;
+    } else if(r.k.startsWith("xtie")){
+      d[key]+=sp*runRatio(key);
+    } else if(r.k==="steam"||r.k==="exh"){
+      d[key]+=sp*stm;
+    } else if(r.k==="feed"){
+      d[key]+=sp*stm*(feedOK?1:0);
+    } else if(r.k==="hpi"){
+      d[key]+=hpiFlow;
+    } else if(r.k==="surge"){
+      d[key]+=surgeFlow;
+    }
+  }
   s.spin=(s.spin+360*dt*feff)%360;
   /* the turbine's own shaft angle. It is on S beside the pump's for the same
      reason the pump's is: an angle integrated in the renderer would keep
@@ -1042,7 +1209,7 @@ const ANN=[
   "A tripped core is on its way back to critical with the bank fully inserted. Xenon shut this reactor down as much as the rods did, and xenon decays. Nothing but boron will hold it now, and if it gets there before you do it will come back to power against a turbine that is not taking any.","core"],
  ["ROD JAM","amber",s=>s.rodJam,
   "The control rods are not moving when commanded. Your fast reactivity handle is gone. You now control the reactor only with boron, coolant temperature and load.","rods"],
- ["PORV OPEN","red",s=>s.porvOpen&&!s.porvBlocked,
+ ["PORV OPEN","red",s=>reliefAnyOpen(s),
   "The pressure relief valve on top of the pressurizer is passing flow. If you did not command it open, you are dumping primary coolant overboard right now. Close the block valve.","pzr"],
  ["CORE VOID","red",s=>s.vf>0.15,
   "Steam pockets are forming inside the core where liquid water should be. Steam cannot carry heat away, so fuel temperature climbs fast even though reactor power may be falling.","core"],

@@ -162,17 +162,33 @@ const ACT = {
      rod drag does, but `cont` is a fact about the TAPE and adding it here would
      quietly change what a recorded scenario replays. */
   loadDem  : {lab:"LOAD DEMAND",  logCoal:true, log:v=>(v*100).toFixed(0)+" %", apply:(s,v)=>{ s.loadDem=v; }},
-  porvBlock: {lab:"PORV BLOCK",   log:()=>S.porvBlocked?"OPENED":"SHUT", apply:(s)=>{ s.porvBlocked=!s.porvBlocked; }},
+  /* Addresses the PRESSURIZER'S relief fitting - primaryRelief() (step.js),
+     the first one placed - so this keeps its exact no-argument signature
+     for a tape or a scenario written before redundancy existed. A second or
+     third relief path is worked through the fitting's own generic controls,
+     not this one. No-op if the plant has none: a legal design choice (see
+     the bench warning, design.js) cannot leave a phantom block valve on S. */
+  porvBlock: {lab:"PORV BLOCK",   log:()=>{ const fid=primaryRelief();
+                return (fid && S.reliefBlocked[fid])?"OPENED":"SHUT"; },
+              apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
   hpi      : {lab:"HPI",          log:()=>S.hpi?"OFF":"ON", apply:(s)=>{ s.hpi=!s.hpi; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
   resetTrip: {lab:"TRIP RESET",   apply:(s)=>{ resetTrip(); }},
   byp      : {lab:"BYPASS",       log:k=>AUTOSYS[k].name+" "+(S.byp[k]?"ARMED":"BYPASSED"),
               apply:(s,k)=>{ autoToggle(k); }},
-  /* The P.junc test is the refusal, not decoration: without it a scenario line
-     naming a junction this design never had would put a phantom key on S, and a
-     phantom key on S is snapshotted, restored and compared like a real one. */
+  /* The P.fit test is the refusal, not decoration: without it a scenario line
+     naming a fitting this design never had would put a phantom key on S, and a
+     phantom key on S is snapshotted, restored and compared like a real one.
+     Scoped to mode==="tee" too - S.juncOpen only carries keys for a tee (see
+     resetPlant()), so an id that exists but names a throttle would otherwise
+     plant exactly that phantom key on S the moment somebody toggled it. */
   junc     : {lab:"JUNCTION",     log:id=>id.toUpperCase()+" "+(S.juncOpen[id]?"SHUT":"OPEN"),
-              apply:(s,id)=>{ if(P.junc[id]) s.juncOpen[id]=!s.juncOpen[id]; }},
+              apply:(s,id)=>{ if(P.fit[id] && P.fit[id].mode==="tee") s.juncOpen[id]=!s.juncOpen[id]; }},
+  /* A throttle's position, sim units 0..1 like every other demand - the
+     panel's /100 stays at the call site. Same refusal, same reason, scoped
+     to mode==="throttle" for the same reason junc above is scoped to "tee". */
+  valveDem : {lab:"VALVE DEMAND", cont:true, log:(id,v)=>id.toUpperCase()+" TO "+(v*100).toFixed(0)+" %",
+              apply:(s,id,v)=>{ if(P.fit[id] && P.fit[id].mode==="throttle") s.valveDem[id]=v; }},
   /* nolog: repairStart() writes REPAIR PARTY DISPATCHED itself, and it is the
      one that knows whether the order was refused for want of access. */
   repair   : {lab:"REPAIR PARTY", nolog:true, apply:(s,id)=>{ repairStart(id); }},
@@ -185,9 +201,13 @@ const ACT = {
   hit      : {lab:"COMBAT HIT",   nolog:true, apply:(s,id)=>{ combatHit(id); }},
   blackout : {lab:"BLACKOUT",     log:on=>(on===undefined?!S.blackout:!!on)?"ON":"RESTORED",
               apply:(s,on)=>{ s.blackout = on===undefined ? !s.blackout : !!on; }},
-  porvArm  : {lab:"PORV STICKS",  log:()=>"ARMED FOR NEXT LIFT", apply:(s)=>{ s.porvArm=true; }},
+  /* Same primaryRelief() scope as porvBlock above - the one-shot the DICE
+     table (rng.js) commands instead of rolling for. */
+  porvArm  : {lab:"PORV STICKS",  log:()=>"ARMED FOR NEXT LIFT",
+              apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefArm[fid]=true; }},
   rodJam   : {lab:"ROD JAM",      log:()=>S.rodJam?"CLEARED":"JAMMED", apply:(s)=>{ s.rodJam=!s.rodJam; }},
-  porvStick: {lab:"STUCK PORV",   apply:(s)=>{ s.porvOpen=true; s.porvBlocked=false; }},
+  porvStick: {lab:"STUCK PORV",   apply:(s)=>{ const fid=primaryRelief();
+                if(fid){ s.reliefOpen[fid]=true; s.reliefBlocked[fid]=false; } }},
   /* recRoot() and not just resetPlant(): a reset is where one recording ends
      and the next begins, so the tape has to be told. It is the one act that
      does its own bookkeeping, and it is `rec:false` so the event itself lands
@@ -305,7 +325,7 @@ function recHead(){
        thermosiphon head, exposure - so a tape without them replays into a
        different reactor. */
     parts    : LAY ? LAY.parts.map(p => ({id:p.id, x:p.x, y:p.y})) : [],
-    junc     : snapVal(D.junc),
+    fit      : snapVal(D.fit),
     dsig     : designSig(),
     seed     : S ? S.seed : 0,
   });
