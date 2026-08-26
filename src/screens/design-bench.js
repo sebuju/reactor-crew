@@ -3,6 +3,27 @@
 
 function massWith(key,i){ const o=D[key]; D[key]=i; const m=derived().mass; D[key]=o; return m; }
 
+/* Nameplate pump capacity vs what a loop's own ceiling will ever pass right
+   now - netFlowK()'s per-group min(groupSize,up) clamp (pipenet.js), read
+   here as-commissioned: every cross-tie starts shut (resetPlant()), so each
+   loop is its own singleton group and the clamp is just min(1,up) per loop.
+   totalPumpCap() is damage-blind by construction (LAY.parts carries no
+   damage), so it is exactly "what you built"; the per-loop sum is exactly
+   "what a healthy loop's ceiling lets through", with dmg (default none - the
+   bench has no damage) taking the pumps a live caller lost out of it. One
+   function for both readouts, so a spare pump cannot be explained one way on
+   the bench and a different way on the pump panel.
+   Approximate for a MULTI-loop plant with unequal loop lengths: this treats
+   every loop's ceiling as worth the same 1.0, where netFlowK() weights each
+   loop by its own P.netRefByLoop. Exact for the single-loop stock case. */
+function pumpGauge(dmg){
+  dmg = dmg || [];
+  const {n} = loopMap();
+  let delivered = 0;
+  for(let i=0;i<n;i++) delivered += Math.min(1, loopPumpCap(i, dmg));
+  return {installed: totalPumpCap(), delivered, n};
+}
+
 function planStats(d){ return [
   ["POWER DENSITY",d.dens.toFixed(0)+" kW/L",clamp(d.dens/320,0,1),C.cyan,
    "Power per litre of core. Higher means a smaller, lighter reactor, and less material to soak up heat when cooling fails."],
@@ -37,13 +58,19 @@ function planStats(d){ return [
    CHAN[D.chan].noise>.6?C.amber:C.green,
    "How much you can believe your own gauges. Single-channel readings visibly jitter and a failed sensor is undetectable."],
 ];}
-function layoutStats(M){ return [
+function layoutStats(M){
+ const G=pumpGauge();
+ return [
   ["THERMOSIPHON HEAD",M.head.toFixed(1)+" cells",clamp((M.head+1)/4,0,1),M.head<0.5?C.amber:C.green,
    "How far the steam generators sit above the reactor. Hot water rises into them and cold water falls back with no pumps at all. Raise the generators and a blackout stops being fatal."],
   ["PRIMARY PIPE RUN",M.pipe.toFixed(1)+" m",clamp(M.pipe/60,0,1),M.pipe>40?C.amber:C.green,
    "Total hot and cold leg length. Long runs add friction so your pumps deliver less flow, and give more pipe for a hit to find. They also add coolant mass, which is thermal inertia in your favour."],
   ["FLOW PENALTY",((1-M.flowK)*100).toFixed(0)+" %",1-M.flowK,(1-M.flowK)>.2?C.amber:C.green,
    "Pumping loss from pipe friction. A short straight run from reactor to steam generator costs nothing; a sprawling layout quietly caps the flow you can ever achieve."],
+  ["PUMP CAPACITY",G.delivered.toFixed(1)+" / "+G.installed.toFixed(1)+" pumps",
+   G.installed>0?clamp(G.delivered/G.installed,0,1):1,
+   G.delivered<G.installed-1e-9?C.amber:C.green,
+   "What a spare pump actually buys, right now. A loop's ceiling only ever passes one healthy pump's worth, however many more you plumb into it - so DELIVERED sits under INSTALLED the moment a spare is connected, and that is the ceiling doing its job, not a wasted pump. It does nothing to this number until the day a pump on that loop is damaged or destroyed, when it is what brings DELIVERED straight back instead of leaving the loop starved."],
   ["COOLANT INERTIA",((M.inertiaK-1)*100).toFixed(0)+" % grace",clamp((M.inertiaK-1)*3,0,1),C.cyan,
    "Extra water in long pipe runs takes longer to heat, so transients develop more slowly and you get more time to react. The one genuine reward for a spread-out layout."],
   ["HULL EXPOSURE",(M.exposure*100).toFixed(0)+" %",M.exposure,M.exposure>.2?C.red:C.green,
@@ -53,15 +80,15 @@ function layoutStats(M){ return [
   ["CREW DOSE RATE",M.dose.toFixed(2)+" x",clamp(M.dose/2,0,1),M.dose>1?C.amber:C.green,
    "Radiation reaching the control room during an accident, solved along the straight line from reactor to crew. A shield only pays for itself if it actually stands on that line - one parked off to the side blocks nothing, whatever a bounding box would have said. Any other equipment sitting on the line helps a little too, just less than a shield built for the job."],
   ["SURVEY PEAK",M.peak.v.toFixed(2)+" x",clamp(M.peak.v/RAD_CEIL,0,1),ZONE[zoneOf(M.peak.v)].col,
-   "The crew dose rate above is one seat, in one room. This is the hottest cell any repair party could ever be sent to stand in"+(M.peak.who?" - right now, beside "+M.peak.who.name:"")+". A layout that is comfortable in the control room and lethal at the pumps has not been shielded, it has been decorated."],
+   "The crew dose rate above is one seat, in one room. This is the hottest cell any repair party could ever be sent to stand in"+(M.peak.who?" - right now, beside "+partName(M.peak.who):"")+". A layout that is comfortable in the control room and lethal at the pumps has not been shielded, it has been decorated."],
   ["PRESSURIZER HEAD",M.pzrOK?"at loop top":"BELOW LOOP TOP",M.pzrOK?1:0.2,
    M.pzrOK?C.green:C.red,
    "The pressurizer works by holding a steam bubble at the highest point of the primary loop. Mount it below the reactor or the steam generators and the bubble cannot sit where it needs to: pressure control loses more than half its damping and every load change whips the loop pressure around."],
   ["ACCUMULATOR HEAD",M.hpiZ.toFixed(1)+" m",clamp((M.hpiZ+2)/8,0,1),
    M.hpiZ<1?C.amber:C.green,
    "Emergency injection is gravity fed. Mounted high above the reactor it drains in fast with no power at all; mounted level with or below the core it barely trickles."],
-  ["LOOP SEPARATION",D.loops>1?M.sep.toFixed(0)+" cells":"n/a",D.loops>1?clamp(M.sep/8,0,1):1,
-   D.loops>1&&M.sep<4?C.amber:C.green,
+  ["LOOP SEPARATION",sgCount()>1?M.sep.toFixed(0)+" cells":"n/a",sgCount()>1?clamp(M.sep/8,0,1):1,
+   sgCount()>1&&M.sep<4?C.amber:C.green,
    "Distance between redundant loops. Park two steam generators next to each other and a single hit takes out both, making the redundancy you paid for worthless."],
 ];}
 function layoutWarnings(M){ const w=[];
@@ -69,7 +96,7 @@ function layoutWarnings(M){ const w=[];
   if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all.",null]);
   if(M.access<1) w.push(["HARD","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
   if(M.exposure>0.3) w.push(["SOFT","Over 30% of the plant sits in hull cells. Expect to lose something every time you are hit.",null]);
-  if(D.loops>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both.",null]);
+  if(sgCount()>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both.",null]);
   return w;
 }
 
@@ -84,14 +111,6 @@ function warnFor(id){
 }
 
 /* right-click, held still and released: add or remove - see .claude/CLAUDE.md */
-function nearestLoop(gx,gy){
-  let best=0, bd=1e9;
-  for(let i=0;i<D.loops;i++){ const pu=LAY.parts.find(q=>q.id==="pump"+i);
-    if(!pu) continue;
-    const d=Math.hypot(pu.x-gx,pu.y-gy);
-    if(d<bd){ bd=d; best=i; } }
-  return best;
-}
 function ctxResolveDesign(p){
   const pt=vIn(p)?vPt(p):null;
   if(!pt) return null;
@@ -102,44 +121,80 @@ function ctxResolveDesign(p){
   for(const fid in D.fit){ const j=D.fit[fid];
     const jp=juncPt(net,j.aKey,j.aT);
     if(jp && Math.hypot(jp.pt[0]-pt.x,jp.pt[1]-pt.y)<10){ fitting=fid; break; } }
-  let tapKey=null, tapT=null;
-  // any real loop run can be tapped for a fresh fitting now - not the surge
-  // line (a drop, not a loop leg) and not an existing fitting's own branch
-  // (tapping a tie onto a tie is not a plant a right-click should build)
+  let tapKey=null, tapT=null, runRid=null, tapK=null;
+  // Stage 1 makes every run an edge, tappable, hittable and able to spill -
+  // the surge line included, so it is no longer excluded here. What is kept
+  // is a UI decision, not a physics one: tapping a fitting's own branch
+  // (xtie:*) is not a plant a right-click should offer to build, because the
+  // result would be a tee spliced onto a tee rather than onto a real run.
   if(!part && !fitting) for(const r of net){
-    if(!r.key || r.k==="surge" || r.k.startsWith("xtie")) continue;
+    if(!r.key || r.k.startsWith("xtie")) continue; // LABEL: a UI choice (no tee-on-a-tee), not a network permission
     const near=nearestOn(r.pts,[pt.x,pt.y]);
-    if(near.d<8){ tapKey=r.key; tapT=near.t; break; }
+    // tapK: the run's kind, kept ONLY as a label for the context menu's
+    // header (Stage 7a) - never read to decide what the run may do.
+    if(near.d<8){ tapKey=r.key; tapT=near.t; runRid=r.rid||null; tapK=r.k; break; }
   }
-  return {x:p.x,y:p.y,cell:{gx,gy},part,fitting,tapKey,tapT};
+  // Stage 3a's CONNECT offer: the nearest FREE port to the pointer, on
+  // whatever is under an EMPTY cell - the same "click the space beside a
+  // part" gesture ADD SPARE PUMP HERE already uses, so the two never
+  // compete for the same click. nearestFreePort() (layout.js) is the one
+  // place that decides "free"; this only asks it.
+  const port=!part ? nearestFreePort([pt.x,pt.y],null) : null;
+  return {x:p.x,y:p.y,cell:{gx,gy},part,fitting,tapKey,tapT,tapK,runRid,port};
 }
-// the far end of a fresh tee: a tap on loop j's own cold leg, as close as it
-// can get to where the old fixed-slot cross-tie always landed (the pump's
-// free left face) - so a tie still lands somewhere a real cross-tie would.
-function farTapForLoop(j){
-  const pu=LAY.parts.find(q=>q.id==="pump"+j);
-  if(!pu) return null;
-  const want=port(pu,"l");
+// Stage 7a: the menu header names the thing it is ABOUT - a part, a run, a
+// fitting, or the plant itself for a bare cell. Never a menu item, so it
+// carries no fn and cannot be clicked - see drawCtxMenu() (core/ui.js).
+function ctxTitleDesign(hit){
+  if(hit.fitting) return FITNAME[D.fit[hit.fitting].mode]+" "+hit.fitting.toUpperCase();
+  if(hit.part) return partName(hit.part);
+  if(hit.tapKey!=null) return pipeLabel(hit.tapK)||"PIPE";
+  return "PLANT";
+}
+// the far end of a fresh cross-loop tee: the nearest point, on loop j's own
+// runs, to the tap the player already chose - a DEFAULT-PICKER (may sort by
+// nearest, never a gate), not a guess about where a fixed-slot cross-tie
+// used to land. loopOfKey() is graph-derived now (layout.js), so this asks
+// the graph "which runs are loop j's" honestly instead of by name.
+function nearestRunOfLoop(j,from){
   let best=null, bd=1e9;
   for(const r of pipeNetwork()){
-    if(loopOfKey(r.key)!==j || !r.key.startsWith("cold:")) continue;
-    const near=nearestOn(r.pts,want);
+    if(loopOfKey(r.key)!==j) continue;
+    const near=nearestOn(r.pts,from);
     if(near.d<bd){ bd=near.d; best={key:r.key,t:near.t}; }
   }
   return best;
 }
+/* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
+   decides - a click on a component offers REMOVE, one item, about that
+   part; a click on nothing offers no removal at all. The old shape built a
+   fixed FIT/REMOVE prefix before it ever looked at hit, so right-clicking
+   dead space offered to remove equipment that was nowhere near the cursor.
+   fittableList()'s FIT side survives on the bare-cell fallback below - a
+   part that is not yet fitted has no box on the grid to click. */
 function ctxItemsDesign(hit){
-  const items=fittableList().map(f=>({label:(f.get()?"REMOVE ":"FIT ")+f.label, fn:()=>f.set(!f.get())}));
-  if(D.loops<4) items.push({label:"ADD STEAM GEN LOOP", fn:()=>{ D.loops++; }});
-  if(D.loops>1) items.push({label:"REMOVE STEAM GEN LOOP", fn:()=>{ D.loops--; }});
-  if(!hit) return items;
-  if(hit.fitting){
-    const fid=hit.fitting;
-    items.push({label:"REMOVE FITTING", fn:()=>{ removeFit(fid); }});
-  } else if(hit.part && hit.part.id.startsWith("pumpX")){
-    const pid=hit.part.id;
-    items.push({label:"REMOVE SPARE PUMP", fn:()=>{ removePart(pid); }});
-  } else if(hit.tapKey!=null){
+  if(hit.fitting)
+    return [{label:"REMOVE", fn:()=>{ removeFit(hit.fitting); }}];
+  if(hit.part){
+    // a FITTABLE slot's part exists on the grid only while it IS fitted
+    // (cont/turb/cond), so clicking it can only ever mean REMOVE - except
+    // hpi, always on the grid, where get() picks a machine behind the same
+    // box rather than the box's presence; there REMOVE downgrades it back
+    // to the plain tank instead of taking the part away.
+    const f=fittableList().find(x=>x.id===hit.part.id);
+    if(f) return f.get()
+      ? [{label:"REMOVE", fn:()=>{ f.set(false); }}]
+      : [{label:"FIT "+f.label, fn:()=>{ f.set(true); }}];
+    if(hit.part.id.startsWith("pumpX") || hit.part.id.startsWith("sgX"))
+      return [{label:"REMOVE", fn:()=>{ removePart(hit.part.id); }}];
+    return [];   // a base component (core, rods, pzr...) offers no menu at all
+  }
+  if(hit.tapKey!=null){
+    // a run under the cursor: disconnect it outright, or splice something
+    // onto it - a pipe, not a component, so "exactly one" does not apply
+    // here (Stage 7a is only about REMOVE).
+    const items=[];
+    if(hit.runRid) items.push({label:"DISCONNECT", fn:()=>{ removeRun(hit.runRid); }});
     // a throttle needs nothing beyond the one tap it sits on - it can splice
     // straight into the run it's on, so it is always on offer here, even on
     // a single-loop plant with no second run to tie to
@@ -154,24 +209,53 @@ function ctxItemsDesign(hit){
         items.push({label:"ADD RELIEF VALVE HERE", fn:()=>{
           addFit('relief',hit.tapKey,hit.tapT,relKey,0.5,PIPE_BORE.relief); }}); }
     const hostLoop=loopOfKey(hit.tapKey);
-    for(let j=0;j<D.loops;j++){ if(j===hostLoop) continue;
-      const far=farTapForLoop(j);
+    const from=juncPt(pipeNetwork(),hit.tapKey,hit.tapT);
+    for(let j=0;j<sgCount();j++){ if(j===hostLoop) continue;
+      const far=from && nearestRunOfLoop(j,from.pt);
       if(!far) continue;
       const label = hostLoop!=null ? "ADD TEE, LOOP "+(hostLoop+1)+" TO LOOP "+(j+1)
                                     : "ADD TEE TO LOOP "+(j+1);
       items.push({label, fn:()=>{ addFit('tee',hit.tapKey,hit.tapT,far.key,far.t); }});
     }
-  } else if(!hit.part){
+    return items;
+  }
+  // a genuinely bare cell: nothing is under the cursor, so no REMOVE
+  // belongs here - only offers that create or connect something.
+  const items=fittableList().filter(f=>!f.get()).map(f=>({label:"FIT "+f.label, fn:()=>{ f.set(true); }}));
+  if(hit.cell){
     const {gx,gy}=hit.cell;
-    if(gx>=0 && gy>=0 && gx<GW && gy<GH) items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
-      placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
-        grp:"loop"+nearestLoop(gx,gy),tip:"A spare coolant pump, placed where you put it.",
-        loop:nearestLoop(gx,gy)}));
+    if(gx>=0 && gy>=0 && gx<GW && gy<GH){
+      items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
+        placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
+          grp:"pump",tip:"A spare coolant pump, placed where you put it. Right-click a free port to CONNECT it - unplumbed, it does nothing at all.",
+          role:"pump"}));
+      }});
+      /* Stage 3b: no D.loops++ - that used to conjure a generator, a pump
+         and four routed runs in one act. This adds exactly the ONE part it
+         names, the same standing ADD SPARE PUMP HERE already has; it pays
+         its own SGT[D.sg].mass (derived(), design.js) the moment it exists,
+         and does nothing at all until wired up through CONNECT. */
+      items.push({label:"ADD STEAM GENERATOR HERE", fn:()=>{
+        placePart(n=>({id:"sgX"+n,name:"STEAM GEN SPARE",w:1,h:2,x:gx,y:gy,col:"#5fd2e2",
+          grp:"sg",tip:"An additional steam generator, placed where you put it. Right-click a free port to CONNECT it - unplumbed, it does nothing at all.",
+          role:"sg"}));
+      }});
+    }
+  }
+  /* Stage 3a: any port to any port, no legality table. The only things
+     that may stop this are physical - ROLE.ports occupancy (nearestFreePort
+     already checked the FROM end; the TO search below checks the far end
+     the same way) and a route that cannot get there. Nothing here asks
+     what either part is FOR. */
+  if(hit.port){
+    const to=nearestFreePort(hit.port.pt,hit.port.part.id);
+    if(to) items.push({label:"CONNECT TO "+partName(to.part), fn:()=>{
+      addRun(hit.port.part.id,hit.port.face,to.part.id,to.face);
     }});
   }
   return items;
 }
-ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign});
+ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign, title:ctxTitleDesign});
 
 /* ─────────────── THE FUEL LATTICE, IN PLAN (canvas - genuinely graphical) ───────────────
    Drawn into its OWN <canvas> in the CORE and RODS panels by hostPaint(), which
@@ -505,6 +589,21 @@ function dbPanelSync(container,blocks){
   blocks.forEach((b,i)=>{ const h=container._h[i]; if(h&&h.sync) h.sync(b); });
 }
 
+/* Stage 8: the one place a rename can be typed. Appended straight to
+   well.body, a SIBLING of the param-block container - dbPanelSync() wipes
+   that container's innerHTML on every signature change, and a text input
+   living inside it would be torn down and rebuilt under the player's own
+   cursor mid-keystroke. */
+function dbNameRow(wellBody,p){
+  const row=KIT.el("div","db-name-row");
+  const lab=KIT.el("span","db-name-lab"); lab.textContent="NAME";
+  const input=KIT.textInput({placeholder:p.name,maxLength:NAME_CAP,   // DEFAULT NAME: the box offers the name a blank falls back to
+    tip:"Rename this component. Blank uses the default name \""+p.name+"\".",   // DEFAULT NAME: quoting the current name here would be circular
+    onChange:v=>{ setPartName(p.id,v); }});
+  row.append(lab,input.el);
+  wellBody.appendChild(row);
+  return input;
+}
 /* one panel per component (or gang) */
 function dbRailBuild(rail,watch){
   rail.innerHTML="";
@@ -513,18 +612,20 @@ function dbRailBuild(rail,watch){
     const B=paramsFor(p); if(!B.length||B.plain) continue;
     if(B.gang){
       const g=gangs[B.gang];
-      if(g){ g.ids.push(p.id); g.well.setTitle(g.p.name.replace(/ \d+$/,"")+" x"+g.ids.length); continue; }
-      const well=KIT.well({title:p.name}); rail.appendChild(well.el);
+      if(g){ g.ids.push(p.id); g.well.setTitle(partName(g.p).replace(/ \d+$/,"")+" x"+g.ids.length); continue; }
+      const well=KIT.well({title:partName(p)}); rail.appendChild(well.el);
+      const nameIn=dbNameRow(well.body,p);
       const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-      const h={p,ids:[p.id],well,body,B,on:null};
-      railPick(well,h.ids,p.name);
+      const h={p,ids:[p.id],well,body,B,on:null,nameIn};
+      railPick(well,h.ids,partName(p));
       watch.add(well.el);
       gangs[B.gang]=h; panels.push(h);
     } else {
-      const well=KIT.well({title:p.name}); rail.appendChild(well.el);
+      const well=KIT.well({title:partName(p)}); rail.appendChild(well.el);
+      const nameIn=dbNameRow(well.body,p);
       const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-      const h={p,ids:[p.id],well,body,B,on:null};
-      railPick(well,h.ids,p.name);
+      const h={p,ids:[p.id],well,body,B,on:null,nameIn};
+      railPick(well,h.ids,partName(p));
       watch.add(well.el);
       panels.push(h);
     }
@@ -562,6 +663,13 @@ function dbRailSync(state){
     const on=h.ids.includes(sel);
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     if(on && moved) KIT.reveal(h.well.el,"start");
+    // a rename does not rebuild LAY, so the title has to be re-read here
+    // every sync, not just once at build time - cheap, since setTitle()/
+    // KIT.tip() are themselves guarded no-ops when nothing changed.
+    const nm=partName(h.p);
+    h.well.setTitle(h.ids.length>1 ? nm.replace(/ \d+$/,"")+" x"+h.ids.length : nm);
+    KIT.tip(h.well.head,nm);
+    h.nameIn.set(D.name&&D.name[h.p.id]||"");
     // paramsFor() rebuilds the whole block list, so it is only asked for a
     // panel that is actually on screen - see railWatch() in inspector.js
     if(!railSeen(h.well.el) && !(on&&moved)) continue;

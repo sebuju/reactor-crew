@@ -449,6 +449,32 @@ const KIT = (function(){
     return {el: root, set};
   }
 
+  /* THE one free-text input in the kit. Same shape as slider(): a native
+     control for free keyboard/IME/paste handling, guarded against
+     clobbering an in-progress edit the way slider()'s native range input
+     already is. maxlength is a real browser-level refusal, not just a
+     display truncation - the caller (partName()'s cap, core/ui.js) still
+     truncates on read too, so a value written any other way (a save file)
+     can't outrun it. */
+  function textInput(opts){
+    opts = opts || {};
+    const root = el("div", "kit-textinput");
+    const input = el("input", "kit-textinput-input", {type: "text"});
+    if(opts.placeholder) input.setAttribute("placeholder", opts.placeholder);
+    if(opts.maxLength) input.setAttribute("maxlength", opts.maxLength);
+    root.appendChild(input);
+    if(opts.tip) tip(root, opts.title || "", opts.tip);
+    input.addEventListener("input", () => { if(opts.onChange) opts.onChange(input.value); });
+    let last = null;
+    function set(val){
+      val = val || "";
+      if(val !== last){ last = val; if(document.activeElement !== input) input.value = val; }
+    }
+    function get(){ return input.value; }
+    if(opts.val != null) set(opts.val);
+    return {el: root, set, get};
+  }
+
   function optList(items, opts){
     opts = opts || {};
     const root = el("div", "kit-optlist");
@@ -566,6 +592,6 @@ const KIT = (function(){
   }
 
   return {el, tip, setText, setStyle, show, well, rule, reveal, chip, dot, seg, segSigned,
-    segMark, band, lamp, badge, hatch, button, slider, optList, segSel, sliderRow,
+    segMark, band, lamp, badge, hatch, button, slider, textInput, optList, segSel, sliderRow,
     readout, toggle};
 })();

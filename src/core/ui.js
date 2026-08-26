@@ -135,20 +135,50 @@ function drawCtxMenu(){
   const R=ctxFor();
   const items = R ? R.items(ctxMenu) : [];
   if(!items.length){ ctxMenu=null; return; }
-  const tf={size:7.5,sp:.6,caps:1}, rh=15, pad=8;
-  const w=clamp(Math.max(...items.map(it=>tw(it.label,tf)))+pad*2, 90, 220);
-  const h=items.length*rh+6;
+  // the header names the thing the menu is ABOUT (a part, a run, a fitting,
+  // or the plant itself for a bare cell) - see registries' optional title().
+  // It is never a row: no push(), so it cannot be clicked, and its own fill
+  // keeps it from reading as one.
+  const title = R && R.title ? R.title(ctxMenu) : "";
+  const tf={size:7.5,sp:.6,caps:1}, hf={size:7,sp:1,caps:1,weight:700}, rh=15, pad=8;
+  const hh = title ? 16 : 0;
+  const w=clamp(Math.max(...items.map(it=>tw(it.label,tf)), title?tw(title,hf):0)+pad*2, 90, 220);
+  const h=hh+items.length*rh+6;
   let x=Math.min(ctxMenu.x,W-4-w), y=Math.min(ctxMenu.y,H-4-h);
   fillRect(x+3,y+3,w,h,"rgba(0,0,0,.6)");
   fillRect(x,y,w,h,"#0b1215"); frame(x,y,w,h,C.amber);
   push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach whatever is under it
+  if(title){
+    fillRect(x,y,w,hh,C.edge);
+    txt(title,x+pad,y+hh-5,Object.assign({},hf,{color:C.bright}));
+  }
   items.forEach((it,i)=>{
-    const iy=y+3+i*rh;
+    const iy=y+hh+3+i*rh;
     const wd=push({x:x+2,y:iy,w:w-4,h:rh-1,type:"btn",fn:()=>{ it.fn(); ctxMenu=null; }});
     const h_=hov(wd);
     if(h_) fillRect(x+2,iy,w-4,rh-1,C.panelHi);
     txt(it.label,x+pad,iy+rh-4,Object.assign({},tf,{color:h_?C.bright:C.ink}));
   });
+}
+
+/* ══ STAGE 8: A COMPONENT CARRIES THE NAME THE PLAYER GAVE IT ══
+   D.name is not declared in design.js (which this file does not own) - it is
+   created lazily, here, by the one writer. Keyed by part id, so a rename
+   rides designSig() (JSON.stringify(D)+...), the recording head and the save
+   format for free - the same trick D.fit and D.run already use - and the
+   stock plant's signature does not move until a rename actually happens:
+   nothing here writes D.name until setPartName() is handed a real string.
+   partName() is the ONE reader - audit-dom.js source-scans the files that
+   build this UI for a raw p.name read and fails the build if one survives. */
+const NAME_CAP=24;
+function partName(p){
+  const n=(D.name&&D.name[p.id]||"").trim();
+  return n?n.slice(0,NAME_CAP):p.name;
+}
+function setPartName(id,str){
+  const t=(str||"").trim().slice(0,NAME_CAP);
+  if(t){ if(!D.name) D.name={}; D.name[id]=t; }
+  else if(D.name) delete D.name[id];
 }
 
 const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;

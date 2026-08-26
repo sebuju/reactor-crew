@@ -55,6 +55,20 @@ const pipeLabel=k=>k.startsWith("xtie")?"CROSS-TIE":PIPE_NAME[k];
    through this rather than through a pre-populated key for each one. */
 const pipeCol=(PC,k)=>PC[k]||(k.startsWith("xtie")?PC.cold:C.ink2);
 
+/* Line width follows the run's own BORE, never its kind - a 0.25-bore
+   injection line and a 0.30-bore surge line are not the same pipe as a
+   1.0-bore hot leg, and once bore is a player choice (Stage 3a) the drawn
+   line has to track what was actually built. Linear through the two widths
+   this file always drew: the narrowest stock default (relief, 0.20) at 3px,
+   a full 1.0 bore (hot/cold, and the fallback runBore() itself uses for any
+   kind PIPE_BORE has no row for) at 4px. Every bore between them - a
+   0.55-bore cross-tie, a 0.25-bore HPI line - draws a width between them
+   instead of being lumped into whichever side of a boolean it used to fall
+   on. Casing half-width and fluid line width were always the same number
+   drawn two ways (thin?6:8)/2 === thin?3:4 - kept that way here too, one
+   value instead of two that happened to agree. */
+const pipeWidth = bore => clamp(2.75+1.25*bore, 2, 5);
+
 /* The one pipe colour table. drawPlant() strokes the run with it and the packets are
    drawn in it, so a packet can never be a different colour from its own pipe. */
 function pipeColours(L){
@@ -274,20 +288,30 @@ function pipeFmt(v){
    other. Every run is then scaled off that single point by its own share,
    ref/P.netRefRun, so nothing here has to change if step()'s per-run weighting ever does.
 
-   Only hot, cold and a fitting branch (xtie:*) are on the solved network. Everything
-   past the turbine has none - the secondary side PRICES the heat, it is not a physics
-   path - so main steam, exhaust, feedwater, HP injection and the surge line keep the
-   flat, plant-wide design rate they always had. That fallback is also what a hot/cold/
-   xtie run falls back to if it has no reference yet (a design mid-edit, before
-   commission() has run) - the old flat guess, so a gauge never divides by zero. */
+   Every run's dial now scales off ITS OWN reference the same way - not just
+   hot/cold/a fitting branch - because Stage 1 makes every run an edge and
+   P.netRefByRun is filled for every one of them. Two runs never get a real
+   one, and say so STRUCTURALLY rather than by name: HPI lands on a TANK's
+   own node (tid, mirroring netBuild()'s own test - see pipenet.js) and is
+   metered in inventory, not mass; the surge line has no second port of its
+   own to solve a reference for at all (runEnds() returns null - it drops
+   onto another run's pipe, see pipenet.js's own comment on that). Everything
+   else that genuinely has no reference yet - main steam, exhaust and
+   feedwater, because nothing forces flow through the secondary in the graph
+   until Stage 6 - keeps the flat, plant-wide design rate this file always
+   gave that KIND while there is nothing solved to read instead; that
+   fallback is a DEFAULT-PICKER, not a permission, and it is also what a
+   hot/cold/xtie run falls back to before commission() has run, same as
+   before. */
+const PIPE_FS_FLAT={steam:96,exh:96,feed:96};                    // DEFAULT: no forcing on the secondary side yet
 function pipeFullScale(key,k){
-  if(k==="hot"||k==="cold"||k.startsWith("xtie")){
-    const ref=P.netRefByRun[key];
-    if(!ref) return k.startsWith("xtie")?60:84*Math.max(0.05,P.feff0);
-    return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
-  }
-  if(k==="hpi") return 120;
-  return {steam:96,exh:96,feed:96,surge:72}[k]||84;
+  const ends=runEnds(key,k);
+  const tid=ends && Object.keys(TANK).find(id=>TANK[id].node===ends[0]||TANK[id].node===ends[1]); // LABEL: which TANK row this run's own node names (mirrors netBuild's own test)
+  if(tid==="hpi") return 120;
+  if(!ends) return 72;                                            // DEFAULT: surge has no port of its own - see pipeUnit
+  const ref=P.netRefByRun[key];
+  if(ref) return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
+  return PIPE_FS_FLAT[k] || (k.startsWith("xtie")?60:84*Math.max(0.05,P.feff0)); // DEFAULT
 }
 const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
 
@@ -303,35 +327,64 @@ const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
    between the loops that were built. Secondary: Q = m*dh, feedwater to saturated
    steam is about 1800 kJ/kg. Both are DESIGN figures, fixed at commissioning, never
    read off S - they only exist to give a dimensionless rate a unit.
-   For hot, cold and a fitting branch, that flat per-loop figure is then weighted by
-   the same ref/P.netRefRun share pipeFullScale() uses, so a short loop's bigger
-   nominal times its own (now correctly ~1.0) fraction lands on its own real kg/s,
-   not the plant's average pretending to be every loop's. The surge line is sized at
-   2% of a (still flat) hot leg. HP injection is the odd one out: the sim models it as
-   INVENTORY per second, not mass, so it reads per cent per minute and its label
-   says so. */
+   Any run WITH a solved reference (P.netRefByRun[key], the same figure
+   pipeFullScale() now reads for everyone) is weighted by ref/P.netRefRun, so
+   a short loop's bigger nominal times its own (now correctly ~1.0) fraction
+   lands on its own real kg/s, not the plant's average pretending to be every
+   loop's - that covers hot, cold and a fitting branch today, and whatever
+   else earns a real reference later with no change here. Two runs are never
+   mass flow at all and are picked out STRUCTURALLY, not by kind: a run
+   landing on a TANK's own node (tid, mirroring netBuild()'s own test) is
+   metered the way that tank is - HPI is INVENTORY per second, not mass, so
+   it reads per cent per minute; the surge line has no second port of its
+   own (runEnds() returns null) to hang a reference off at all, and is sized
+   at 2% of a flat hot leg exactly as it always was, because its real driver
+   (thermal expansion) is not in the solve yet - see Stage 6c. What is left
+   - main steam, feedwater, exhaust, and a hot/cold/xtie run before
+   commission() has given it a reference - keeps the flat design figure this
+   file always gave it, a DEFAULT-PICKER read off the kind ONLY when there is
+   genuinely nothing solved to read instead. */
 function pipeUnit(key,k){
-  const per=Math.max(1,D.loops);
+  const per=Math.max(1,P.loops);
   const loop=P.rated*1000/(5.5*30)/per;        // kg/s through an average primary loop
   const stm =P.rated*1000/1800/per;            // kg/s of steam from one generator
-  if(k==="hot"||k==="cold"||k.startsWith("xtie")){
-    const ref=P.netRefByRun[key], w=ref?ref/Math.max(1e-6,P.netRefRun):1;
-    return {nom:loop*w, u:"kg/s"};
-  }
-  switch(k){
-    case "steam": case "exh": case "feed":  return {nom:stm,         u:"kg/s"};
-    case "surge":                          return {nom:loop*0.02,   u:"kg/s"};
-    case "hpi":                            return {nom:Math.abs(S.injRate)*60,u:"%/min"};
-  }
-  return {nom:loop,u:"kg/s"};
+  const ends=runEnds(key,k);
+  const tid=ends && Object.keys(TANK).find(id=>TANK[id].node===ends[0]||TANK[id].node===ends[1]); // LABEL: which TANK row this run's own node names
+  if(tid==="hpi") return {nom:Math.abs(S.injRate)*60, u:"%/min"};
+  if(!ends) return {nom:loop*0.02, u:"kg/s"};                      // DEFAULT: surge has no port of its own - see pipeFullScale
+  const ref=P.netRefByRun[key];
+  if(ref) return {nom:loop*(ref/Math.max(1e-6,P.netRefRun)), u:"kg/s"};
+  return {nom:PIPE_FS_FLAT[k]!=null ? stm : loop, u:"kg/s"};       // DEFAULT: nothing forces flow through this run yet
 }
-/* how two-phase a line is, 0..1. There is no per-segment phase anywhere in the sim,
-   so it comes from the kind plus the globals the sim does publish. */
-function pipeSteam(k,L){
-  if(PIPE_VAPOUR[k]) return 1;
-  if(k==="hot")  return clamp(L.vf*1.6,0,1);
-  if(k==="cold"||k.startsWith("xtie")) return clamp((L.vf-0.25)*1.6,0,1);
-  return 0;
+/* how two-phase a line is, 0..1 - off the FLUID AT THE RUN'S OWN ENDS, not
+   its name. net.tag (pipenet.js) already answers hot-side/cold-side/neither
+   for every node the primary reaches, built from the runs that touch it -
+   the same array buoyH() trusts for density - so this reads that instead of
+   re-deciding a run's own thermal side. Read off the run's OWN graph edge
+   (net.edges, matched by key), never runEnds()+coreFold(): a cross-tie's key
+   ("xtie:f0") has no second half for runEnds() to split, but its edge's u/v
+   are the real tap nodes either way, and those already carry NT_COLD off
+   whichever cold leg they split - so a junction needs no case of its own.
+
+   Three runs read a node this array also tags but carry no CORE CARRYOVER
+   of their own, and are excluded by name - the one kind read this function
+   keeps, because nothing solved distinguishes "cold" from "fresh, never
+   went through the core" yet: HPI and the surge line are cold/hot by
+   BUOYANCY (KIND_TEMP tags them so on purpose, for density) but are a
+   tank's or a pressurizer's own water, not recirculating core water; feed
+   SHARES its discharge node with a cold leg (sg0b - see pipenet.js's own
+   note on that collision) and would misread the leg's own tag as its own.
+   Steam and exhaust are genuinely past the turbine - no primary tag reaches
+   them at all yet (Stage 6) - and read PIPE_VAPOUR instead. */
+const PIPE_NO_CARRYOVER={hpi:1,surge:1,feed:1};                   // DEFAULT: liquid regardless of what node they land on
+function pipeSteam(r,L){
+  if(PIPE_NO_CARRYOVER[r.k]) return PIPE_VAPOUR[r.k]?1:0;    // DEFAULT: no core-carryover signal for these yet - see the comment above
+  const net=P.net;
+  let tag=0;
+  if(net) for(const ed of net.edges) if(ed.key===r.key) tag = tag||net.tag[ed.u]||net.tag[ed.v];
+  if(tag===NT_HOT)  return clamp(L.vf*1.6,0,1);
+  if(tag===NT_COLD) return clamp((L.vf-0.25)*1.6,0,1);
+  return PIPE_VAPOUR[r.k]?1:0;                                    // DEFAULT: no tag reaches this run yet
 }
 
 /* ══════════ the packets ══════════ */
@@ -494,19 +547,22 @@ function pipeAnchors(runs){
       /* the winning segment's own run key travels with it, so the one meter this
          KIND gets still reads THAT run's real numbers (pipeFullScale/pipeUnit are
          keyed by run, not kind) rather than a kind-wide placeholder. */
-      const a={L:q.L,x,y,key:r.key,rank:(q.L>=need?2:0)+(clear(x,y)?1:0)}, b=best[r.k];
-      if(!b || a.rank>b.rank || (a.rank===b.rank && a.L>b.L)) best[r.k]=a;
+      const a={L:q.L,x,y,key:r.key,rank:(q.L>=need?2:0)+(clear(x,y)?1:0)}, b=best[r.k]; // LABEL: one meter bucket per kind, not a network permission
+      if(!b || a.rank>b.rank || (a.rank===b.rank && a.L>b.L)) best[r.k]=a;              // LABEL: same bucket
     }
   }
   return best;
 }
-/* A relief path is dead by design: it passes only while the valve is lifted,
-   which is a fault, not an operating state. Its kind is "relief" (the header)
-   or "xtie:<fid>" for one valve's own branch - and a cross-tie between loops
-   wears the same "xtie:" prefix, so the mode is what has to be asked, never
-   the prefix. */
-const reliefRun = k => k==="relief" ||
-  (k.indexOf("xtie:")===0 && P.fit && P.fit[k.slice(5)] && P.fit[k.slice(5)].mode==="relief");
+/* A run whose dial should stay hidden until it actually passes - FIT[mode]
+   .quiet says so now (pipenet.js), a KIND/FIT field rather than a name
+   comparison: a relief valve's own branch ("xtie:<fid>") is asked off its
+   fitting's MODE, never off the "xtie:" prefix a cross-tie between loops
+   wears too. The header run's own kind ("relief") stays a literal - that is
+   the run's own LABEL, which Stage 1 leaves legal to read for a display
+   default, never a mode to look up. */
+const dialQuiet = k => k==="relief" ||
+  (k.indexOf("xtie:")===0 && P.fit && P.fit[k.slice(5)] &&
+   FIT[P.fit[k.slice(5)].mode] && FIT[P.fit[k.slice(5)].mode].quiet);
 
 function pipeMeters(runs,L){
   const best=pipeAnchors(runs), PC=pipeColours(L), r=PIPE_DIAL_R;
@@ -521,7 +577,7 @@ function pipeMeters(runs,L){
        is not an instrument, it is furniture - so a relief path earns its dial
        by passing, and the dial APPEARING is then the signal. Every other run
        keeps its meter at zero, because zero on a main leg is real news. */
-    if(reliefRun(k) && Math.abs(fr)<0.008) continue;
+    if(dialQuiet(k) && Math.abs(fr)<0.008) continue;
     const mag=pipeFmt(Math.abs(fr)*un.nom);
     pipeDial(a.x,a.y,r,fr,pipeCol(PC,k),mag+" "+un.u);
     /* three things the solve can actually say, kept as three sentences rather than
@@ -585,7 +641,13 @@ function pipeVessel(L){
    the way it should. An instrument is bolted to the outside of the thing it measures,
    so pipeGauges() goes down after them - drawn first, the pressurizer gauge was simply
    painted over by the pressurizer. */
-const pipeRuns = L => pipeNetwork().filter(r=>!(r.k==="hpi"&&!L.hpi));  // drawPlant's rule
+/* A VIEW filter, not a permission: the HPI run stays a real, solved,
+   hittable edge whether or not this hides it - it is hidden only because an
+   idle injection line the operator has not commanded on is not worth
+   drawing. Pinned in tools/audit-geometry.js: whenever this hides it,
+   netBuild()'s own S.hpi gate on that tank edge (pipenet.js) has already put
+   its conductance at exactly 0, so "hidden" and "shut" can never disagree. */
+const pipeRuns = L => pipeNetwork().filter(r=>!(r.k==="hpi"&&!L.hpi));  // LABEL: a VIEW declutter, pinned above - not a permission
 
 function pipeFlow(L){
   pipeRate(L);
@@ -593,13 +655,13 @@ function pipeFlow(L){
   for(const r of pipeRuns(L)){
     const g=pipeGeom(r.pts);
     if(!g.len) continue;
-    const thin=(r.k==="hpi"||r.k==="surge"), w=thin?3:4, hw=(thin?6:8)/2;
-    ctx.save(); pipeClip(g,hw,w/2);
+    const w=pipeWidth(runBore(r));
+    ctx.save(); pipeClip(g,w,w/2);
     /* L.flowPos and pipeSpd are keyed by the RUN (r.key), never the kind (r.k) - a
        kind has no entry of its own, so reading r.k here silently fed every packet
        phase 0 and every speed 0, whatever loop it was on. */
     pipeSlugs(pipePad(g,PIPE_RUNWAY), L.flowPos[r.key]||0,
-              pipeSpd[r.key]||0, pipeCol(PC,r.k), w, pipeSteam(r.k,L));
+              pipeSpd[r.key]||0, pipeCol(PC,r.k), w, pipeSteam(r,L));
     ctx.restore();
   }
 }

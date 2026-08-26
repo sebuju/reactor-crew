@@ -18,7 +18,8 @@
    is what delimits the panel - and what .on/.blocked colour. */
 .kit-rule-head{margin:0;padding:6px 10px 5px;background:var(--c-edge);
   font-size:var(--t9);font-weight:700;letter-spacing:1.8px;
-  color:var(--kit-rule-color,var(--c-bright))}
+  color:var(--kit-rule-color,var(--c-bright));
+  overflow:hidden;text-overflow:ellipsis}
 .kit-rule-head::after{display:none}
 /* a title bar that selects its own component - see railPick() in inspector.js */
 .kit-rule-pick{cursor:pointer}
@@ -125,6 +126,14 @@
    would resize under the hand every time "9%" became "100%". */
 .kit-slider-readout{flex:0 0 auto;text-align:right;
   font-size:var(--t6-5);color:var(--c-cyan);white-space:nowrap}
+
+/* the kit's one free-text control - see textInput() in kit.js */
+.kit-textinput-input{width:100%;box-sizing:border-box;appearance:none;
+  border:1px solid var(--c-edge);background:var(--c-well);color:var(--c-bright);
+  font:inherit;font-size:var(--t8-5);letter-spacing:.3px;padding:3px 6px;height:22px}
+.kit-textinput-input:hover{border-color:var(--c-edge2)}
+.kit-textinput-input:focus{outline:none;border-color:var(--c-amber)}
+.kit-textinput-input::placeholder{color:var(--c-ink2)}
 
 .kit-sliderrow{margin-bottom:8px}
 .kit-sliderrow-mass{display:block;margin-top:3px;font-size:var(--t9);color:var(--c-ink2)}

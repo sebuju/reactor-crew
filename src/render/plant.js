@@ -75,10 +75,15 @@ function nozzleEnds(r){
   if(r.nz[1]) add(r.pts[n-1],r.pts[n-2]);
   return out;
 }
+/* Across the bore, wider than the casing so the joint reads as sitting IN
+   the pipe rather than being the pipe's own outline - the same ratio the old
+   two-value table (4 or 5.5, against a casing half of 3 or 4) always kept,
+   generalised off pipeWidth() (pipes.js) so a nozzle tracks the run's own
+   bore exactly as the pipe it joins does. */
+const pipeNozzleHalf = bore => pipeWidth(bore)*1.4;
 function pipeNozzles(NET){
   for(const r of NET){
-    const thin=r.k==="hpi"||r.k==="surge";
-    const half=thin?4:5.5;            // across the bore, wider than the casing
+    const half=pipeNozzleHalf(runBore(r));
     const deep=2.5;                   // how far it stands proud of the shell
     for(const e of nozzleEnds(r)){
       const bx=e.flat?deep:half, by=e.flat?half:deep;
@@ -87,6 +92,10 @@ function pipeNozzles(NET){
     }
   }
 }
+// ART EXEMPT: the id if/else chain below draws each part's own glyph - what
+// a component LOOKS like, never a network decision - so it is exempt from
+// the no-unlabelled-kind-read scan (tools/audit-geometry.js) by name, not
+// because the scanner's regex happens not to reach `p.id`.
 function drawSym(p,x,y,w,h,ink,L){
   const cx=x+w/2, X=x+5, Y=y+5, W=w-10, Hh=h-10;
   const shell=fn=>{ ctx.beginPath(); fn(); ctx.fillStyle=C.panel; ctx.fill();
@@ -198,14 +207,16 @@ function drawSym(p,x,y,w,h,ink,L){
        and the mimic drew a cheerful green "shut and holding" valve for a
        valve that does not exist. The plume below stays - it marks the top of
        the relief HEADER, which is the route the discharge really takes. */
-    // what the valve is actually passing, off the physics constant itself - see
-    // porvRate(). The plume is the RELIEF FLOW readout drawn instead of typed.
-    if(L) fxSteam(cx,Y-1,10,fxEase(id+":porv",porvRate(L)/PORV_INV),"#cfe6ea");
+    // what the valve is actually passing, judged against its OWN fully-open
+    // rate (reliefFullRate() - display only, pipenet.js) - see porvRate().
+    // The plume is the RELIEF FLOW readout drawn instead of typed.
+    if(L){ const rfid=primaryRelief();
+      fxSteam(cx,Y-1,10,fxEase(id+":porv",rfid?clamp(porvRate(L)/Math.max(1e-9,reliefFullRate(L,rfid)),0,1):0),"#cfe6ea"); }
   } else if(id.startsWith("sg")){
     shell(()=>{ ctx.moveTo(X,Y+12); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
       ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); });
     ctx.save(); ctx.beginPath(); ctx.rect(X,Y+12,W,Hh-12); ctx.clip();
-    lvl(X,Y+12,W,Hh-12, L? L.sgl/100 : .5, C.blue); ctx.restore();
+    lvl(X,Y+12,W,Hh-12, L? sgLvl(L,id)/100 : .5, C.blue); ctx.restore();
     ctx.beginPath(); ctx.moveTo(X+7,Y+Hh-4); ctx.lineTo(X+7,Y+Hh*.4);
     ctx.quadraticCurveTo(cx,Y+Hh*.18,X+W-7,Y+Hh*.4); ctx.lineTo(X+W-7,Y+Hh-4);
     ctx.strokeStyle=ink; ctx.lineWidth=1.6; ctx.stroke();
@@ -213,12 +224,12 @@ function drawSym(p,x,y,w,h,ink,L){
       // it is a kettle: how hard it boils is the heat actually crossing into it,
       // which is the lower of what the core makes and what the turbine will
       // take - and a kettle only boils while there is water left in it
-      const wet=clamp(L.sgl/25,0,1);
+      const wet=clamp(sgLvl(L,id)/25,0,1);
       fxBubbles(X+2,Y+14,W-4,Hh-16,fxEase(id+":boil",clamp(Math.min(L.n,L.load),0,1)*wet),C.bright,"pool");
       /* boiling dry, on the same 25% the SG LEVEL band calls LOW. This is the
          core losing its heat sink, and it had no picture at all - the level
          fill alone drops quietly and says nothing about what that costs. */
-      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",L.sgl<25?1-wet*.7:0),1.5);
+      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",sgLvl(L,id)<25?1-wet*.7:0),1.5);
       /* ruptured tubes: primary water crossing into the secondary side, which
          is activity going straight past containment. Drawn rising off the
          bundle itself, where the leak is - and on THIS generator's own solved
@@ -232,7 +243,7 @@ function drawSym(p,x,y,w,h,ink,L){
       // sat high, in the steam space: the middle of a generator is where the
       // flow gauge on its own steam line lands
       const ruptured = sgtrLive(L, id);
-      if(ruptured||L.sgl<25)
+      if(ruptured||sgLvl(L,id)<25)
         banner(ruptured?"RUPTURED":"DRYING",cx,X+1,Y+11,W-2,Hh-12,
                ruptured?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
     }
@@ -289,9 +300,14 @@ function drawSym(p,x,y,w,h,ink,L){
        rising plume said the opposite of what this machine is for. Rate is the
        heat it is actually rejecting, and it is clipped inside the shell,
        because a condenser that vented to the compartment would be a leak. */
-    const hw=Math.max(3,Hh*.16);
+    /* THE HOTWELL, and it is a real level now (Stage 6a): condensate in from
+       the tubes above, feed suction out to the generators. It was a fixed
+       .16 of the shell for as long as this symbol has existed. Full is half
+       the shell, so a rupture filling it is visible without swallowing the
+       tube bank the jet is drawn against. */
+    const hw=Math.max(3,Hh*.5*(L?clamp(L.hotwell/100,0,1):HOT0/100));
     ctx.save(); ctx.globalAlpha=.45;
-    fillRect(X+1,Y+Hh-2-hw,W-2,hw,C.blue); ctx.restore();       // the hotwell
+    fillRect(X+1,Y+Hh-2-hw,W-2,hw,C.blue); ctx.restore();
     if(L){ ctx.save(); ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4-hw); ctx.clip();
       fxJet(cx,Y+6,W*.62,fxEase(id+":cond",clamp(Math.min(L.n,L.load),0,1)*.8),"rgba(150,195,225,.95)",0,1,23);
       ctx.restore(); }
@@ -459,19 +475,15 @@ function banner(word,cx,x,y,w,h,col,ty){
   tag(word,cx,ty!=null?ty:midBase(y,h,9),9,sp,col,mw);
 }
 
-/* What the pressurizer's OWN (primary) relief valve is passing, in % of loop
-   inventory per second - the mimic draws one plume for one valve, the same
-   scope primaryRelief() gives every other legacy control (step.js). The one
-   reader of PORV_INV outside the tick: the plume on the pressurizer and the
-   RELIEF FLOW readout both come through here, so neither can describe a vent
-   the sim is not performing. ventKNow() is the sim's own vent term, tank
-   back-pressure and all, so a filling relief tank shrinks the plume and the
-   readout together. A fitting plumbed narrower or longer than reference reads
-   its own share of the reference rate. */
-function porvRateOf(s,fid){
-  return (fid && s.reliefOpen[fid] && !s.reliefBlocked[fid] && !s.breach) ? PORV_INV*ventKNow(s,fid) : 0;
-}
-const porvRate = s => porvRateOf(s,primaryRelief());
+/* What the pressurizer's OWN (primary) relief valve is passing, off the
+   SOLVED edge flow (reliefRate(), pipenet.js) - the mimic draws one plume
+   for one valve, the same scope primaryRelief() gives every other legacy
+   control (step.js). reliefRate() is the one reader outside the tick: the
+   plume and the RELIEF FLOW readout both call it, so neither can describe a
+   vent the sim is not performing. Unlike the old porvRateOf() this does not
+   gate on !s.breach - a breached plant's open, passing relief valve reads
+   whatever the solve actually gives it, not a forced zero. */
+const porvRate = s => { const fid=primaryRelief(); return fid ? reliefRate(s,fid) : 0; };
 
 function liveValue(p,s){
   const H_=s.Tavg+15*(s.n*.935+s.decay);
@@ -479,11 +491,11 @@ function liveValue(p,s){
     case p.id==="core":  return (s.n*100).toFixed(0)+"%";
     case p.id==="rods":  return (s.rodPos*100).toFixed(0)+"%";
     case p.id==="pzr":   return s.P.toFixed(1)+" MPa";
-    case p.id.startsWith("sg"):   return s.sgl.toFixed(0)+"%";
+    case p.id.startsWith("sg"):   return sgLvl(s,p.id).toFixed(0)+"%";
     case p.id.startsWith("pump"): return (s.flow*100).toFixed(0)+"%";
     case p.id==="turb":  return mwE(s).toFixed(0)+" MWe";
-    case p.id==="cond":  return H_.toFixed(0)+"K";
-    case p.id==="feed":  return s.sgl.toFixed(0)+"%";
+    case p.id==="cond":  return s.hotwell.toFixed(0)+"%";
+    case p.id==="feed":  return sglMin(s).toFixed(0)+"%";
     case p.id==="hpi":   return s.hpi?"INJ":"off";
     case p.id==="bkp":   return s.blackout?"LOAD":"rdy";
     case p.id==="cont":  return s.release.toFixed(1)+"%";
@@ -505,7 +517,7 @@ function liveColor(p,s){
 
 // mirrors commission()'s formula (step.js) because ctlFor() is also called on
 // the bench, before any plant is commissioned and P is still null
-const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(totalPumpCap()-D.loops),0.15,0.75);
+const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(totalPumpCap()-sgCount()),0.15,0.75);
 const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The pumps can be stopped completely: the red line on the track is the "+(pumpFloor()*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
 // rows, not a flat list: a slider sharing 30px with two buttons is 3.3% of
 // rod travel per pixel, unusable
@@ -614,6 +626,11 @@ function ctlFor(p,live,split){
       {kind:"btn",flex:1,on:()=>S.hpi,text:()=>S.hpi?"INJECT":"OFF",
        fn:()=>{ act("hpi"); },
        tip:"HIGH PRESSURE INJECTION - emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs."}]];
+    case "cond": return [[
+      {kind:"btn",flex:1,on:()=>S.hotDump,danger:()=>S.hotwell<HOT_NPSH,
+       text:()=>S.hotDump?"DUMPING":"HOTWELL DUMP",
+       fn:()=>{ act("hotDump"); },
+       tip:"HOTWELL DUMP - puts condensate over the side. This is the answer to a ruptured tube filling the hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."}]];
   }
   return null;
 }
@@ -675,7 +692,7 @@ function ctlStrip(list,x,y,w,h){
   for(const c of list){
     const cw=span*c.flex;
     const dan = c.danger? c.danger() : false, on = c.on? c.on() : false;
-    if(c.kind==="sld"){
+    if(c.kind==="sld"){ // LABEL: a control-strip WIDGET kind (slider vs button), unrelated to a pipe run's kind
       slider(cx,y+h/2,cw,c.val(),c.min(),c.max(),
         {th:h,tw:7,fmt:c.fmt,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
          fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
@@ -896,9 +913,14 @@ const rowInv=s=>["INVENTORY",s.inv.toFixed(1)+" %",
 const rowFat=s=>["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",
   band(s.fatigue,0,100,[[50,C.cyan,"SOUND"],[100,C.amber,"WORN"]],{dp:0}),
   "Permanent metal damage from cold water hitting hot steel, mostly from emergency injection. It never resets, and the vessel bursts lower for every point of it."];
-const rowSgl=s=>["SG LEVEL",s.sgl.toFixed(1)+" %",
-  band(s.sgl,0,100,[[25,C.red,"LOW"],[100,C.cyan,"NORMAL"]],{dp:0}),
-  "Water in the steam generator. Under 25% it is boiling dry and the core is losing its heat sink."];
+/* THIS generator's level when a generator is asking, the driest on the plant
+   when the feed panel is - the feed system is one system serving all of them,
+   and the one worth showing is the one closest to uncovering. It printed the
+   same global number on every panel until Stage 6a split s.sglBy per machine. */
+const rowSgl=(s,id)=>{ const v=id?sgLvl(s,id):sglMin(s), n=sgIds().length;
+  return [id?"SG LEVEL":(n>1?"SG LEVEL (LOWEST)":"SG LEVEL"),v.toFixed(1)+" %",
+  band(v,0,100,[[25,C.red,"LOW"],[100,C.cyan,"NORMAL"]],{dp:0}),
+  "Water in the steam generator. Under 25% it is boiling dry and the core is losing its heat sink."]; };
 // same s.nat used to be coloured three different ways on three components;
 // shared here, as a percentage of RATED loop flow - the solved thermosiphon
 // is a real flow now, so it is scaled against the same 100% every other flow
@@ -1235,9 +1257,13 @@ function readoutsFor(p,s){
        valve; the pressurizer keeps the four numbers that are genuinely its
        own. audit-geometry scans this branch to keep it that way. */
   } else if(id.startsWith("sg")){
-    add.apply(null,rowSgl(s));
-    add("STEAM PRESS",(P.P0*.45*Math.pow(Math.max(s.load,.05),.25)).toFixed(2)+" MPa",null,
-      "Pressure on the secondary side. It follows how hard the turbine is drawing.");
+    add.apply(null,rowSgl(s,id));
+    /* secP(), not a second copy of its formula: CLAUDE.md's rule is that the
+       node an SGTR leaks into is fixed at "the same expression the STEAM PRESS
+       row prints", and this row printed its own copy - which stopped being the
+       same expression the moment Stage 6b gave each generator its own. */
+    add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",null,
+      "Pressure on the secondary side of THIS generator. It follows how hard the turbine is drawing on it and how much water is left in it - a unit boiling dry raises less steam and falls back toward the condenser, which is also what slows a ruptured tube down.");
     add("T-HOT IN",Th.toFixed(0)+" K",null,
       "Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out.");
     add("T-COLD OUT",Tc.toFixed(0)+" K",null,
@@ -1353,7 +1379,7 @@ function readoutsFor(p,s){
     add.apply(null,rowSgl(s));
     add("EMERG FEED",autoState("efw").toLowerCase(),
         autoLive("efw")?C.green:C.amber,
-      "An independent supply that keeps the generator boiling after the main pumps are lost. Bypass it and grace time after a trip collapses.");
+      "The tank and pump piped to the generator (see its own panel). Armed, it adds a small dump while the reactor is scrammed, running the loop a few degrees cooler; bypassed, it does not. It does not touch grace time.");
     add("FEED PUMP",s.dmgParts.includes("feed")?"DESTROYED":"running",
         s.dmgParts.includes("feed")?C.red:C.green,
       "The main feedwater pump. Destroyed, the generator boils dry unless emergency feed picks it up.");
@@ -1362,6 +1388,11 @@ function readoutsFor(p,s){
       "Steam temperature arriving at the condenser.");
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
+    add("HOTWELL",s.hotwell.toFixed(1)+" %",
+      band(s.hotwell,0,100,[[10,C.red,"LOW"],[95,C.cyan,"NORMAL"],[100,C.amber,"HIGH"]],{dp:0}),
+      "Condensate waiting to be pumped back to the generators. In a healthy plant it does not move: what boils out comes back. It falls when a generator is losing water faster than the feed returns it, and it RISES when a ruptured tube is pushing primary water into the secondary - which is the one that has to be dealt with, because past 100% it overflows and what overflows is contaminated.");
+    if(s.hotOver>0) add("HOTWELL OVERFLOW",s.hotOver.toFixed(0)+" kg/s",C.red,
+      "The hotwell is full and cannot take any more. This water is leaving the plant, and after a tube rupture it is primary water.");
     add("CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
         s.dmgParts.includes("cond")?C.red:C.green,
       "The heat sink itself. Destroyed, the steam has nowhere to condense and the loop has nowhere to put its heat.");
@@ -1408,12 +1439,10 @@ function readoutsForFit(fid,s){
       "How much pressure is left before this valve lifts by itself. Negative means it is passing right now.");
     add("PORV",open?"PASSING":"shut", open?C.red:C.green,
       "The valve itself. PASSING means coolant is leaving the loop through it, whether you asked or not.");
-    const rate=porvRateOf(s,fid);
+    const rate=reliefRate(s,fid), full=reliefFullRate(s,fid);
     add("RELIEF FLOW",rate.toFixed(2)+" %/s",
-      band(rate,0,PORV_INV,[[1e-9,C.green,"SHUT"],[PORV_INV,C.red,"PASSING"]],{dp:2}),
-      "Coolant leaving the loop through this valve, as a share of the whole loop every second. It is a fixed orifice, so it is this rate or nothing - there is no half-open.");
-    add("VENT RATE",ventK(s,fid).toFixed(2)+" x",null,
-      "What this valve's own branch pipe is worth against a reference relief line. A short, fat run to the tank vents faster than a long, thin one - so where you put the relief tank is how fast an overpressure clears.");
+      band(rate,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:2}),
+      "Coolant leaving the loop through this valve, as a share of the whole loop every second - the network's own solved flow through this valve's branch, not a fixed reference rate. A short, fat run to the tank vents faster than a long, thin one.");
     add("BLOCK VALVE",blkd?"SHUT":"open",blkd?C.red:C.green,
       "Your last defence against this valve sticking open. Shutting it stops the leak and gives this relief path up for good.");
     add("AUTO RELIEF", byp?"bypassed":autoState("porv").toLowerCase(),
@@ -1599,12 +1628,12 @@ function drawPlant(y0,L,vh,vx,vw){
   const PC=pipeColours(L), NET=pipeNetwork();
   pipeFieldRefresh(L);          // one solve read per frame, shared by every gauge and both pressure layers
   for(const pass of [0,1]) for(const r of NET){
-    if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;
+    if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;   // LABEL: a VIEW declutter, pinned in tools/audit-geometry.js - see pipeRuns() (pipes.js)
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";
-    const thin = r.k==="hpi"||r.k==="surge";
-    ctx.lineWidth = pass? (thin?3:4) : (thin?6:8);
+    const w = pipeWidth(runBore(r));
+    ctx.lineWidth = pass? w : 2*w;
     ctx.strokeStyle = pass? pipeCol(PC,r.k) : PIPE_CASE;
     ctx.stroke();
   }
@@ -1663,7 +1692,7 @@ function drawPlant(y0,L,vh,vx,vw){
     if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
     if(!L && fit && !dmgd){ const wc=warnFor(p.id); if(wc) dot(x+6,y+8,8,wc); }   // bench has no alarm lamp
     const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
-    const nm = (v0&&!v)? p.name+"  "+v0 : p.name;
+    const nm = (v0&&!v)? partName(p)+"  "+v0 : partName(p);
     const tb = plinth ? sy-6 : sy-3;
     /* Held back to a last pass, below. A name and a value sit OUTSIDE their
        own box, in the same margin a pipe and its fittings run through, so a
@@ -1679,7 +1708,7 @@ function drawPlant(y0,L,vh,vx,vw){
       if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
     });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
-    TIP(x,y,w,h,p.name+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
+    TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
       p.tip+(p.access||p.grp==="shield"?"":"  It is boxed in on every side - nobody could reach it to repair it."));
     if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+6,sy+i*CTL_H+1,w-12,BTN_H));

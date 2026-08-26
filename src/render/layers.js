@@ -90,7 +90,19 @@ const LAYER_DATA={
    subcooling be on at once: pressure takes a third along, subcooling
    two-thirds, so the two never land on each other and neither lands on the
    flow dial in the middle. Three instruments on one run, three places. */
-function layerRunMark(runs, t, val, draw){
+/* `minL` is the shortest segment this mark will land on, in plant pixels. A
+   run gets three of these - PRESSURE at 1/3, the flow dial at 1/2, SUBCOOLING
+   at 2/3 - so the outer two sit L/3 apart, and a tag is about 45 px wide. Below
+   about 135 px they overlap each other, which is what the condenser's own 2.8 m
+   exhaust and suction legs do: they became real conductance edges in Stage 1
+   and started drawing live data for the first time, on a pipe too short to
+   hold three labels.
+
+   The flow dial passes no minimum and always draws, so a short run still says
+   what it is carrying. The two that would collide stand down instead of
+   printing on top of each other - a reading nobody can read is not a reading,
+   and this is the fix the audit-text allow-list entry named. */
+function layerRunMark(runs, t, val, draw, minL){
   for(const r of runs){
     const v=val(r);
     if(v===null||v===undefined||!isFinite(v)) continue;
@@ -98,9 +110,11 @@ function layerRunMark(runs, t, val, draw){
     if(!g.len) continue;
     let best=null;
     for(const q of g.segs) if(!best||q.L>best.L) best=q;
+    if(minL && best.L < minL) continue;
     draw(best.x+best.dx*best.L*t, best.y+best.dy*best.L*t, v);
   }
 }
+const MARK_MIN_L=135;
 /* Against the SAME 1.35x design-point scale the pressurizer dial uses, with
    the tick at P0 - so a bar on a cold leg and the needle on the vessel are
    two readings of one ruler and cannot disagree about what "high" means. */
@@ -109,7 +123,7 @@ const pressLayer = (d,L) => layerRunMark(d.runs, 1/3, pipeRunP, (x,y,v)=>{
   const max=Math.max(0.1,P.P0)*PRESS_MAX_K;
   pipeBar(x,y-12,v/max,1/PRESS_MAX_K,v>=P.P0?C.amber:C.cyan);
   pipeTag(x,y-5,v.toFixed(2)+" MPa",C.cyan);
-});
+}, MARK_MIN_L);
 /* Coloured by margin, not by value, and drawn as a column that EMPTIES: what
    matters about subcooling is how close to zero it is, because zero is where
    the water in that pipe stops being water - which is where a pump loses its
@@ -119,7 +133,7 @@ const subcLayer = (d,L) => layerRunMark(d.runs, 2/3, r => pipeRunSc(r,L), (x,y,v
   const col = v<=0 ? C.red : v<15 ? C.amber : C.blue;
   pipeColumn(x,y-11,v/SUBC_FULL,col);
   pipeTag(x,y-5,v.toFixed(0)+" K sub",v<=0 ? C.red : v<15 ? C.amber : C.ink2);
-});
+}, MARK_MIN_L);
 
 /* THE FOUR RADIATION LAYERS. See src/render/rad.js for the draw functions and
    the zone table they share - this table only says where each one goes down

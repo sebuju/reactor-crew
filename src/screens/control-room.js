@@ -239,7 +239,7 @@ function crDamageSync(list){
   ids.forEach((k,i)=>{
     const h=pool[i], part=dmgPart(k);
     h.id=k;
-    const nm=part?part.name:k.toUpperCase(), blocked=!(part&&part.access);
+    const nm=part?partName(part):k.toUpperCase(), blocked=!(part&&part.access);
     const busy=S.repair&&S.repair.id===k;
     if(h.name.textContent!==nm) h.name.textContent=nm;
     h.el.classList.toggle("blocked",blocked);
@@ -311,8 +311,8 @@ function crRailBuild(rail,watch){
   rail.innerHTML="";
   const panels=[];
   for(const p of LAY.parts){
-    const well=KIT.well({title:p.name});
-    railPick(well,[p.id],p.name);
+    const well=KIT.well({title:partName(p)});
+    railPick(well,[p.id],partName(p));
     const body=KIT.el("div","cr-panel-body"); well.body.appendChild(body);
     rail.appendChild(well.el);
     watch.add(well.el);
@@ -348,6 +348,9 @@ function crRailSync(panels){
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     const first = h.empty===null;
     if(!first && !railSeen(h.well.el) && !(on&&moved)) continue;
+    // a rename does not touch P, so this rail's build trigger (Pfit) never
+    // fires for it - re-read the name every sync, guarded no-ops either way
+    if(h.p){ const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm); }
     const rows = h.fid? readoutsForFit(h.fid,S) : readoutsFor(h.p,S);
     if(first){ h.empty=!rows.length; KIT.show(h.well.el,rows.length>0); }
     if(!rows.length) continue;

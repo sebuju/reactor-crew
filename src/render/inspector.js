@@ -191,7 +191,7 @@ function paramsFor(p){
     B.push({kind:"lattools",tools:LATPEN_RODS});
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
-    tog("EMERG BORON INJECTION","A one-shot tank of concentrated poison worth 4000 pcm. Shuts the reactor down when the rods will not, and cannot be undone.","boroninj",18);
+    tog("EMERG BORON INJECTION","A one-shot tank of concentrated poison worth 4000 pcm, piped into the loop. Shuts the reactor down when the rods will not, and cannot be undone.","boroninj",PART_MASS.boroninj);
     tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. Limited to 15% of rod travel; you can always override it.","autorod",26);
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
     B.push({kind:"sdmnote"});
@@ -210,7 +210,14 @@ function paramsFor(p){
   else if(id.startsWith("sg")){
     seg_("COOLANT LOOPS","Parallel primary loops. More loops means losing one costs a smaller share of your flow, and each pipe is smaller so a break is less severe.","loops",["1","2","3","4"],1);
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast.","sg",SGT);
-    tog("EMERGENCY FEEDWATER","An independent feed supply that keeps the generator removing heat after the main feed pumps are lost. Extends grace time considerably after a trip.","efw",38);
+    /* MEASURED, not the label this used to carry: a placed tank and pump
+       (layout.js) piped to the generator, but the flow itself is not solved
+       until the secondary conserves water - so what this buys today is the
+       stated dump term below, and NOTHING measurable on grace time (that is
+       set by the coolant family and the generator type, off sgInertiaK(),
+       not by this). Stock plant, scram, 600 s: on runs the loop a few
+       degrees cooler than off, and P.graceK does not move for it. */
+    tog("EMERGENCY FEEDWATER","A tank and pump piped to the generator, feeding a small dump into it while the reactor is scrammed - runs the loop a few degrees cooler after a trip. It does NOT extend grace time; that is set by the coolant family and the generator type.","efw",PART_MASS.efw);
     note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
     B.gang="sg";
   }
@@ -252,7 +259,7 @@ function paramsFor(p){
   }
   else if(id==="cont"){
     opt("CONTAINMENT","What holds the radioactivity in when fuel fails. Sets how much of a release reaches your crew.","cont",CONT);
-    tog("CORE CATCHER","A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher",66);
+    tog("CORE CATCHER","A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher",PART_MASS.catcher);
     note("Containment does nothing for the reactor and everything for the people around it. It is pure insurance, and it is heavy. Right-click the plant to fit or remove it without opening this list.");
   }
   else if(id==="hpi"){
