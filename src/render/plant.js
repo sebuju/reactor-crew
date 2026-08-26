@@ -101,7 +101,7 @@ function drawSym(p,x,y,w,h,ink,L){
     fillRect(bx,by,bw,bh,C.well);
     if(L) lvl(bx,by,bw,bh,clamp((L.inv-88)/12,0,1),L.dnbr<1.3?C.red:C.blue);
     else  lvl(bx,by,bw,bh,1,C.blue);
-    if(L&&L.melt){ ctx.globalAlpha=.55+.4*Math.abs(Math.sin(performance.now()/300));
+    if(L&&L.melt){ ctx.globalAlpha=.55+.4*Math.abs(Math.sin(fxClock()/0.3));
       fillRect(bx,by+bh*.62,bw,bh*.38,"#ff5a45"); ctx.globalAlpha=1; }
     if(L&&L.dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+L.dmg/140,.2,.85));
     frame(bx,by,bw,bh,ink);
@@ -344,7 +344,7 @@ function coreField(x,y,w,h,V){
       const col=t<.5? lerpC(C.cyan,C.amber,t*2) : lerpC(C.amber,C.red,(t-.5)*2);
       let r=rMax*Math.sqrt(clamp(V.phi[k]/2.6,.03,1));
       // the one animation in here: a node in film boiling is not steady
-      if(t>.85) r*=.72+.28*Math.abs(Math.sin(performance.now()/90));
+      if(t>.85) r*=.72+.28*Math.abs(Math.sin(fxClock()/0.09));
       // dot fades with how much fuel is actually in this ring, so a hole you
       // drew stays a hole rather than painting as a smaller full node
       const ff=V.frac? clamp(V.frac[i],0,1) : 1;
@@ -1475,12 +1475,18 @@ function drawPlant(y0,L,vh,vx,vw){
   PLANT_LM=layoutMetrics(); GY=y0;
   BANDS = ctlBands(!!L);
   layerTick();                                     // one memo/frame - see layers.js
+  /* one clock/frame, and it is the PLANT's - so pause freezes every effect and
+     16x runs them sixteen times over. The bench has no plant to take a time
+     from, and nothing there should freeze, so it gets wall seconds. */
+  fxSetClock(L ? L.t : fxWall());
   const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
   // both screens are HTML rails now, so the content the view fits to is the grid alone
   vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX, GY, GW*CELL, GHp);
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
-  ctx.translate(VIEW.x-(VIEW.cx+VIEW.ox)*VIEW.s, VIEW.y-(VIEW.cy+VIEW.oy)*VIEW.s);
+  { const d=vPad();   // the halved letterbox - see vPad() in core/ui.js
+    ctx.translate(VIEW.x+d.x-(VIEW.cx+VIEW.ox)*VIEW.s,
+                  VIEW.y+d.y-(VIEW.cy+VIEW.oy)*VIEW.s); }
   ctx.scale(VIEW.s,VIEW.s);
   viewOn=true;
   fillRect(GX,GY,GW*CELL,GHp,C.well);

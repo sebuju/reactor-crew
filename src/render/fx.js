@@ -1,8 +1,8 @@
 "use strict";
 /* Ambient plant effects - steam, bubbles, sparks, glow.
 
-   Every effect here is a pure function of a box, a RATE and the wall clock. It
-   reads no sim state, writes none, and rolls no die: placement comes out of
+   Every effect here is a pure function of a box, a RATE and the PLANT's clock.
+   It reads no sim state, writes none, and rolls no die: placement comes out of
    fxHash(), so the same plant draws the same picture on two machines and a
    headless draw needs no generator (see rng.js - the sim's cursor lives on S
    and an effect must never touch it).
@@ -13,7 +13,7 @@
    next to the physics the number came from.
 
    Rate owns how many, how big, how bright - never a phase speed. Phase runs off
-   the wall clock over minutes of page uptime, so multiplying it by rate meant a
+   the clock over minutes of uptime, so multiplying it by rate meant a
    0.01 rate change moved a bubble's position by whole cycles - it teleported.
    fxBubbles' climb is a real px/s (FXBUB[style].rise) instead. Where a count is fractional
    (n before Math.ceil), the newest particle's alpha is scaled by what is left of
@@ -28,7 +28,19 @@ function fxHash(i){
   h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
-const fxClock = () => (typeof performance !== "undefined" ? performance.now() : Date.now()) / 1000;
+/* ══ THE CLOCK IS THE PLANT'S, NOT THE WALL'S ══
+   Steam off a relief valve is the plant doing something, so it has to stop when
+   the plant stops and run sixteen times over at 16x - a wall clock did neither,
+   and left a paused reactor visibly boiling. Same argument as the damped meters
+   in pipes.js, which freeze because their dt comes from S.t.
+   Set once a frame by drawPlant(), which is the only thing that knows whether
+   there is a plant at all; the bench passes wall seconds so a design preview
+   still moves. Fed in rather than read off S, because nothing in a view file may
+   reach for sim state - audit-geometry checks that. */
+let FXT = 0;
+const fxSetClock = t => { FXT = t; };
+const fxClock = () => FXT;
+const fxWall = () => (typeof performance !== "undefined" ? performance.now() : Date.now()) / 1000;
 /* FRACTIONAL on purpose: the caller takes Math.ceil() of this and fades the last
    particle by whatever is left over, so a rising rate grows one in. */
 const fxN = (rate, max) => clamp(rate, 0, 1) * (max || FX_MAX);
