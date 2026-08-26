@@ -139,7 +139,7 @@ const FIT = {
    about 1.03 at the 106% lift point, not 1.00, so adding it would move
    every PORV figure this stage exists to hold still. Pressure-dependent
    flow is its own change, with its own re-pin. */
-const RELIEF_REF_LEN = 2.8;
+const RELIEF_REF_LEN = 2.24;
 const ventRefG = () => resist(PIPE_BORE.relief, RELIEF_REF_LEN);
 
 // A relief fitting's own conductance, off its own routed branch pipe - never
@@ -230,7 +230,7 @@ function netBuild(){
     }
     const r = byKey["xtie:" + fid];
     if(!r) continue;                    // the branch itself was never routed
-    const hostB = byKey[j.bKey];
+    const hostB = byKey[fitBKey(net, j)];   // relief re-resolves; see layout.js
     if(!hostB) continue;                // a tapped run's part was removed
     const endsA = runEnds(hostA.key, hostA.k), endsB = runEnds(hostB.key, hostB.k);
     if(!endsA || !endsB) continue;
@@ -425,17 +425,29 @@ function netFactored(net, s){
    several edges; the LAST one written wins, which is the most-downstream
    segment - the one a throttle between it and the core has already acted
    on, so that is the number the animation should show. */
-function netCoreFracOf(net, s, byLoop, byRun){
+function netCoreFracOf(net, s, byLoop, byRun, byDrop){
   const Af = netFactored(net, s);
   const b = new Float64Array(net.n);
   netAssemble(net.edges, net.n, net.ground, s, new Float64Array(net.n*net.n), b);
   netSubst(Af, b, net.n);
   const q = new Float64Array(net.edges.length);
   netFlows(net.edges, b, net.ground, q, s);
+  /* b IS the solved head at every node once netSubst() has run. The scale is
+     the SPAN across the whole network, highest node to lowest - not the
+     highest alone, which is only the discharge above ground and leaves the
+     suction side below zero, so a hard-throttled leg could report a drop of
+     200% of it. Against the span, one edge can never lose more than all of
+     them do, and the figure stays free of PIPE_K exactly the way netFlowK()
+     is: the number a gauge prints must not move when a constant nobody can
+     see is re-fitted. */
+  let pmax = -Infinity, pmin = Infinity;
+  for(let i=0;i<net.n;i++){ if(b[i]>pmax) pmax=b[i]; if(b[i]<pmin) pmin=b[i]; }
+  const span = pmax - pmin;
   let core = 0;
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
     if(byRun && ed.key) byRun[ed.key] = Math.abs(q[e]);
+    if(byDrop && ed.key) byDrop[ed.key] = span>0 ? Math.abs(b[ed.u]-b[ed.v])/span : 0;
     if(ed.kind === "cold" && (ed.u === net.ground || ed.v === net.ground)){
       const qe = Math.abs(q[e]);
       core += qe;
@@ -476,6 +488,21 @@ const netCoreFrac0 = (net, byLoop, byRun) => {
   }
   return netCoreFracOf(net, s, byLoop, byRun);
 };
+
+/* Head lost across every edge, as a fraction of pump discharge. Read-only and
+   derived - the potentials themselves never leave this file, because a caller
+   holding a node number would be holding a piece of the solve it could not
+   keep in step with the tick that produced it.
+
+   This is what makes a throttle legible. Flow already tells you a leg is
+   quiet; only the drop tells you WHICH fitting is doing it, and a throttle
+   with no differential beside it is a knob whose effect the player has to
+   infer from a number three components away. */
+function netDrops(s){
+  const o = {};
+  if(P && P.net) netCoreFracOf(P.net, s, null, null, o);
+  return o;
+}
 
 /* The one seam a caller actually uses - wired into step() in place of
    loopFlowK(), which is gone.
@@ -675,6 +702,10 @@ function runWgt(cells){
    inertia/mass this stage was written to charge for as the geometry allows,
    never more than the fitting itself is worth. bKey taps the RELIEF HEADER
    (pipeNetwork(), layout.js), which exists precisely because this fitting
-   does (hasRelief(), layout.js). */
+   does (hasRelief(), layout.js) - so at load there is no header to look up
+   yet and this string is a BOOTSTRAP, not the address. Every reader goes
+   through fitBKey() (layout.js) and gets whatever faces the header actually
+   has this frame; move the tank or the pressurizer and this literal is
+   already stale, which is why nothing is allowed to trust it. */
 addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,PIPE_BORE.relief);
 

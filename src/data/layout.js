@@ -105,9 +105,9 @@ function buildLayout(){
   add("pzr","PRESSURIZER",1,2,5,1,"#a98cf0","primary",
     "Sets loop pressure. It has to sit high - the steam bubble must stay at the top of the loop.");
   for(let i=0;i<D.loops;i++){
-    add("sg"+i,"STEAM GEN "+(i+1),1,3,7+i*2,1,"#5fd2e2","loop"+i,
+    add("sg"+i,"STEAM GEN "+(i+1),1,2,8+i*2,1,"#5fd2e2","loop"+i,
       "Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival.");
-    add("pump"+i,"RCP "+(i+1),1,1,7+i*2,6,"#57d38c","loop"+i,
+    add("pump"+i,"RCP "+(i+1),1,1,8+i*2,6,"#57d38c","loop"+i,
       "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.");
   }
   if(fitOf("turb")) add("turb","TURBINE",3,1,12,4,"#f0a830","sec",
@@ -128,7 +128,7 @@ function buildLayout(){
   // the last one deletes this too (hasRelief(), above). It has mass and it
   // shines once a vent has charged it, so where you put it is a decision
   // like any other part's, not a free vent to nowhere.
-  if(hasRelief()) add("reltk","RELIEF TANK",1,1,6,0,"#8a6cd0","safety",
+  if(hasRelief()) add("reltk","RELIEF TANK",1,1,7,0,"#8a6cd0","safety",
     "Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.");
@@ -273,11 +273,32 @@ function route(p,sa,q,sb,o){
       : bendAt(a,b,vert,[p,q],reg);
     return mk(m);
   };
+  /* STRAIGHTEN FIRST. port() spreads N pipes on one face into N slots, so a
+     face carrying two runs puts neither on its centre - the steam generator's
+     bottom hands the cold leg out 8px off, while the pump's top carries one
+     pipe and sits dead centre. The run then stepped sideways between two
+     components standing in the same column, for a reason nothing on screen
+     explains. So when one face is crowded and the other carries a single
+     nozzle, the FREE one slides to meet the fixed one and the run comes out
+     straight. It is only ever the single-nozzle end that moves: sliding a
+     slot on a crowded face would foul the neighbour it was spread away from.
+     Alignment loses to burial - a straight run nobody can see is no better
+     than a bent one - so a shift that costs a lane is thrown away here and
+     the ordinary build below stands. */
+  const nA=o.na||1, nB=o.nb||1, ax=va?0:1;
+  let pts=null;
+  if(va===vb && !o.pa && !o.pb && (nA===1)!==(nB===1)){
+    const d = port(q,sb,o.ib,nB,0)[ax] - port(p,sa,o.ia,nA,0)[ax];
+    if(d){
+      const t = nA===1 ? build(d,0) : build(0,-d);
+      if(!reg.cost(t)) pts=t;
+    }
+  }
   // a nozzle whose run would be buried anyway may slide along its own face:
   // at four loops the turbine, condenser and last pump share column 13, so a
   // pipe entering there has nowhere to be but under the one already passing
   // through - no lane choice helps, the nozzle itself has to move
-  let pts=build(0,0);
+  if(!pts) pts=build(0,0);
   if(reg.cost(pts)) for(const [da,db] of SLIDES){
     const t=build(da,db);
     if(!reg.cost(t)){ pts=t; break; }
@@ -364,6 +385,27 @@ function plen(pts){ let L=0;
   for(let i=1;i<pts.length;i++) L+=Math.abs(pts[i][0]-pts[i-1][0])+Math.abs(pts[i][1]-pts[i-1][1]);
   return L/CELL*MPC; }
 
+/* The ONE relief header pipeNetwork() draws (link("relief",...) below), found
+   live. Its key carries the two faces that call picked, so it changes the
+   moment the pressurizer or the tank moves - and a fitting that had stored the
+   old string then resolved against nothing: no branch routed, reliefG() 0,
+   ventK() 0, and the valve vented NOTHING while its glyph, its tank, its mimic
+   and its mass all stayed. That is the frozen-pixel bug juncPt() exists to
+   prevent, one level up: a fitting must store a tap, never a key that geometry
+   is still free to rename. Relief is the only mode that can resolve this way,
+   because it is the only one whose far end is a run the design derives rather
+   than one the player picked. */
+function reliefHeaderKey(net){
+  const r=net.find(x=>x.k==="relief");
+  return r?r.key:null;
+}
+// Where a fitting's far tap actually lands this frame. Only relief re-resolves;
+// a tee or a branch throttle taps two runs the player chose, and moving one out
+// from under it is a real answer, not a rename to paper over.
+function fitBKey(net,j){
+  return j.mode==="relief" ? reliefHeaderKey(net) : j.bKey;
+}
+
 // routing happens in two passes because neither can go first: a run cannot
 // pick its nozzle until its face knows how many pipes land on it, and a face
 // cannot know that until every run has been declared
@@ -416,14 +458,18 @@ function pipeNetwork(){
         if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
           ty=hot0[i][1];
       }
-      if(ty!==null) net.push({k:"surge",key:surgeKey,pts:[a,[a[0],ty]],wp:false});
+      if(ty!==null) net.push({k:"surge",key:surgeKey,pts:[a,[a[0],ty]],wp:false,nz:[true,false]});
       else { const t=nearestOn(hot0,a);  /* nothing underneath: reach across to the leg */
-        if(t.d>3) net.push({k:"surge",key:surgeKey,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false}); }
+        if(t.d>3) net.push({k:"surge",key:surgeKey,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false,nz:[true,false]}); }
       continue;
     }
     const [ia,na]=take(c.a,c.sa), [ib,nb]=take(c.b,c.sb);
     const r=routeVia(c,{reg,ia,na,ib,nb});
-    net.push({k:c.k,key:c.key,pts:r.pts,legs:r.legs,wps:r.wps,wp:true});
+    /* nz: which END of this run lands on a component PORT, so drawPlant()
+       knows where a nozzle belongs. Stated, never inferred - the wp flag
+       right beside it used to be read off "has no key", which was control
+       flow by accident, and this would rot the same way. */
+    net.push({k:c.k,key:c.key,pts:r.pts,legs:r.legs,wps:r.wps,wp:true,nz:[true,true]});
     if(c.k==="hot"&&!hot0) hot0=r.pts;
   }
   // a branch fitting: a tap on one run reaching a tap on another, both
@@ -439,7 +485,7 @@ function pipeNetwork(){
   for(const jid in D.fit){
     const j=D.fit[jid];
     if(!j.bKey) continue;               // in-line: no second tap, no route
-    const A=juncPt(net,j.aKey,j.aT), B=juncPt(net,j.bKey,j.bT);
+    const A=juncPt(net,j.aKey,j.aT), B=juncPt(net,fitBKey(net,j),j.bT);
     if(!A||!B) continue;              // a tapped run's part was removed
     // sa/sb just need to differ - both taps are bare points (o.pa/o.pb), so
     // neither string reaches port(). Equal strings would send route() down
@@ -451,7 +497,7 @@ function pipeNetwork(){
     // through bendAt()'s collision search instead, the same one every other
     // bare-point-to-bare-point leg (a waypoint run) already resolves through.
     const pts=route(null,"a",null,"b",{reg,pa:A.pt,pb:B.pt,va:!A.vert,vb:!B.vert});
-    net.push({k:"xtie:"+jid, key:"xtie:"+jid, pts, wp:false});
+    net.push({k:"xtie:"+jid, key:"xtie:"+jid, pts, wp:false, nz:[false,false]});
   }
   return net;
 }
