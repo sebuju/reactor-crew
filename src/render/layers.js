@@ -66,7 +66,46 @@
 const LAYER_DATA={
   rad: L => { const K = L ? P.radK : radGeom(), g = occupied(null);
               return {f:radSolve(K, radSrc(L)), g, K, cells:partyCells()}; },
+  /* A LAYER MUST NOT SOLVE, and pressure is the trap in that rule. The
+     network's factorisation is cached onto P.net.Af by netFactored(), so a
+     draw callback that asked the solve for a pressure would be a layer
+     writing to P - and audit-geometry scans the view files for `S.` writes
+     only, so it would sail through. drawPlant() refreshes the field once a
+     frame (pipeFieldRefresh(), pipes.js), exactly the way it already does for
+     pipeDrop, and this hands the layers what is already there.
+     PRESSURE and SUBCOOLING share this one id on purpose: `data` is a memo
+     key, so two layers naming it cost one refresh, not two - the same reason
+     the four radiation layers cost one field. */
+  press: () => ({runs: pipeNetwork()}),
 };
+
+/* One label per run, on its longest straight stretch so it never lands on a
+   bend - but a THIRD of the way along it, not halfway. `over` puts these
+   under the flow meters, the fitting glyphs and the deferred value tags,
+   which all draw after the over pass, and pipeAnchors() puts a meter at the
+   MIDDLE of that same longest stretch. Measured in a browser: at the midpoint
+   the hot leg's figure sat squarely behind its own meter dial and could not
+   be read. A third along clears it and is still unambiguously on the run. */
+const LABEL_T=1/3;
+function layerRunLabel(runs, L, val, col){
+  for(const r of runs){
+    const v=val(r);
+    if(v===null||v===undefined||!isFinite(v)) continue;
+    const g=pipeGeom(r.pts);
+    if(!g.len) continue;
+    let best=null;
+    for(const q of g.segs) if(!best||q.L>best.L) best=q;
+    pipeTag(best.x+best.dx*best.L*LABEL_T, best.y+best.dy*best.L*LABEL_T-5, ...col(v));
+  }
+}
+const pressLayer = (d,L) => layerRunLabel(d.runs, L, pipeRunP,
+  v => [v.toFixed(2)+" MPa", C.cyan]);
+/* Coloured by margin, not by value: what matters about subcooling is how
+   close to zero it is, because zero is where the water in that pipe stops
+   being water - which is where a pump loses its head and where the loop
+   stops circulating. */
+const subcLayer = (d,L) => layerRunLabel(d.runs, L, r => pipeRunSc(r,L),
+  v => [v.toFixed(0)+" K sub", v<=0 ? C.red : v<15 ? C.amber : C.ink2]);
 
 /* THE FOUR RADIATION LAYERS. See src/render/rad.js for the draw functions and
    the zone table they share - this table only says where each one goes down
@@ -104,6 +143,15 @@ const LAYERS={
   radc:{label:"PART DOSE",    seam:"over",  data:"rad", live:false, on:false,
         draw:radPart,
         tip:"What each machine costs to reach, from the coldest free cell beside it - the triage number - the figure you read before deciding who goes to fix what."},
+  /* live:true, unlike the four radiation layers above. A dose rate is a real
+     answer on an uncommissioned arrangement; a pressure is not - there is no
+     plant to have one yet, and inventing one would be a lie dressed as data. */
+  press:{label:"PRESSURE",    seam:"over",  data:"press", live:true, on:false,
+        draw:pressLayer,
+        tip:"The pressure in every run, in MPa. Pressure is a place, not a number: it is highest at a pump's discharge, lowest at its suction, and it falls across every metre of pipe and every throttle in between. Turn this on to see where the head your pumps make actually goes."},
+  subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
+        draw:subcLayer,
+        tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},
 };
 const LAYER_ORDER=Object.keys(LAYERS);
 

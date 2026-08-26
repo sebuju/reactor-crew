@@ -115,10 +115,16 @@ function drawSym(p,x,y,w,h,ink,L){
     // later. The melt flicker already owns the end state, so this stands down
     // once that takes over rather than beating against it.
     if(L) fxPulse(bx,by,bw,bh,C.red,fxEase(id+":dnb",L.dnbr<1&&!L.melt?1:0),1.6);
-    /* a burst vessel blows its inventory into the compartment in about 13 s.
-       Deliberately unclipped and wider than the valve's plume: this one is not
-       a relief path working, it is the boundary gone */
-    if(L) fxSteam(cx,Y+6,W*.6,fxEase(id+":breach",L.breach?1:0),"#ffd0c4",31);
+    /* A burst vessel blows its inventory into the compartment. Deliberately
+       unclipped and wider than the valve's plume: this one is not a relief
+       path working, it is the boundary gone.
+       Driven by THIS opening's own solved outflow, not by the s.breach flag -
+       a pinhole and a guillotine used to look identical, and both went on
+       blowing at full rate long after the loop had equalised with
+       containment. It now starts, scales and STOPS with the thing it depicts,
+       because it is reading the thing it depicts. */
+    if(L) fxSteam(cx,Y+6,W*.6,
+      fxEase(id+":breach",clamp((L.spillBy["break:core"]||0)/SPILL_FULL,0,1)),"#ffd0c4",31);
     /* THE LATCHED TRIP, SAID ON THE COMPONENT IT IS ABOUT. The rod drives shout
        it too, but the eye goes to the reactor, and a scrammed core used to look
        exactly like a running one apart from four stems sitting low. */
@@ -438,7 +444,7 @@ function liveValue(p,s){
     case p.id==="bkp":   return s.blackout?"LOAD":"rdy";
     case p.id==="cont":  return s.release.toFixed(1)+"%";
     case p.id==="ctrl":  return s.dose.toFixed(0)+"%";
-    case p.id==="reltk": return s.ventTank.toFixed(0)+"%";
+    case p.id==="reltk": return s.discBurst ? "BURST" : s.tank.reltk.toFixed(0)+"%";
     default: return null;
   }
 }
@@ -850,10 +856,12 @@ const rowSgl=s=>["SG LEVEL",s.sgl.toFixed(1)+" %",
   band(s.sgl,0,100,[[25,C.red,"LOW"],[100,C.cyan,"NORMAL"]],{dp:0}),
   "Water in the steam generator. Under 25% it is boiling dry and the core is losing its heat sink."];
 // same s.nat used to be coloured three different ways on three components;
-// shared here, scaled off the plant's own P.natCirc ceiling
+// shared here, as a percentage of RATED loop flow - the solved thermosiphon
+// is a real flow now, so it is scaled against the same 100% every other flow
+// readout uses instead of against a correlation's own ceiling
 const rowNat=s=>["NAT CIRC",(s.nat*100).toFixed(0)+" %",
-  band(s.nat*100,0,Math.max(20,P.natCirc*100),
-    [[10,C.ink2,"NONE"],[Math.max(20,P.natCirc*100),C.green,"ESTABLISHED"]],{dp:0}),
+  band(s.nat*100,0,20,
+    [[2,C.ink2,"NONE"],[20,C.green,"ESTABLISHED"]],{dp:0}),
   "Flow that buoyancy alone is making. It builds once the loop is hot, and it is all you have with the pumps dead. Generator height over the core sets it."];
 const T_TRIP="What tripped the plant most recently. It stays here after a reset, so you can still see what you were fighting.";
 
@@ -1262,10 +1270,15 @@ function readoutsFor(p,s){
   } else if(id==="hpi"){
     add("INJECTION",s.hpi?"RUNNING":"stopped",s.hpi?C.cyan:C.ink2,
       "Whether emergency water is going into the loop right now. It is the safe act with a long bill: see fatigue below.");
-    add("RATE",P.hpiRate.toFixed(2)+" %/s",null,
-      "How fast injection refills the loop. A passive accumulator nearly doubles it and needs no power at all.");
-    add("HEAD OVER CORE",P.lay.hpiHead.toFixed(2)+" x",null,
-      "How high this tank sits above the core, as a multiplier on the rate above. Gravity does the work, so mount it high.");
+    add("RATE",s.injRate.toFixed(2)+" %/s",null,
+      "How fast injection is refilling the loop right now. Not a setting: it is what the tank wins against the pressure in the loop, so it is near zero at full pressure and surges once the primary comes down.");
+    add("TANK LEVEL",s.tank.hpi.toFixed(0)+" %",
+      band(s.tank.hpi,0,100,[[15,C.red,"LOW"],[100,C.cyan,"FULL"]],{dp:0}),
+      "How much water is left to inject. It is not an infinite reservoir - run it dry and there is nothing behind it.");
+    add("TANK PRESS",tankP(s,"hpi").toFixed(1)+" MPa",null,
+      D.accum
+        ? "The nitrogen charge behind the water. It needs no electricity, so it still works in a blackout - and it falls as the tank drains, because the gas is expanding, so injection tapers instead of holding to the last drop."
+        : "What the injection pumps are holding. Steady until the tank is dry, and gone with the bus in a blackout.");
     add.apply(null,rowInv(s));
     add.apply(null,rowFat(s));
   } else if(id==="cont"){
@@ -1279,8 +1292,8 @@ function readoutsFor(p,s){
     add("VESSEL",s.breach?"RUPTURED":"intact",s.breach?C.red:C.green,
       "Whether the pressure vessel is still whole. A rupture is the end of the run.");
   } else if(id==="reltk"){
-    add("TANK LEVEL",s.ventTank.toFixed(1)+" %",
-      band(s.ventTank,0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1}),
+    add("TANK LEVEL",s.tank.reltk.toFixed(1)+" %",
+      band(s.tank.reltk,0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1}),
       "What every relief valve venting to this tank has put into it, 0..100. It never empties on its own - a full tank is a place a repair party would rather not stand.");
     add("RELIEF PATHS",""+reliefFitIds().length,null,
       "How many relief fittings vent here. Every one of them rolls its own die on its own lift - more paths means pressure is relieved more reliably, and something is more likely stuck open.");
@@ -1374,7 +1387,7 @@ function readoutsForFit(fid,s){
       "Where you have asked it to go.");
   }
   if(dk!=null && pipeDrop[dk]!=null)
-    add("HEAD DROP",(pipeDrop[dk]*100).toFixed(0)+" %",
+    add("HEAD DROP",(pipeDrop[dk]*100).toFixed(0)+" % of span",
       band(pipeDrop[dk]*100,0,100,[[50,C.cyan,"CHEAP"],[100,C.amber,"COSTLY"]],{dp:0}),
       "The share of the loop's whole pump head this fitting is eating. Position says what you asked for; only this says what it cost.");
   return R;
@@ -1511,7 +1524,7 @@ function drawPlant(y0,L,vh,vx,vw){
   // dark casing, then the coloured fluid line inside it, both round-jointed
   // (concentric radii) so a pipe bends rather than folds
   const PC=pipeColours(L), NET=pipeNetwork();
-  pipeDropRefresh(L);           // one solve read per frame, shared by every gauge
+  pipeFieldRefresh(L);          // one solve read per frame, shared by every gauge and both pressure layers
   for(const pass of [0,1]) for(const r of NET){
     if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);

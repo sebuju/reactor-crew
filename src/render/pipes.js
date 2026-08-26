@@ -158,11 +158,43 @@ const pipeLast={}, pipeSpd={}, pipeShown={};
    with the plant it was a snapshot of. Refilled, not rebuilt, so no reader
    ever holds a stale object. */
 const pipeDrop={};
-function pipeDropRefresh(L){
+/* THE PRESSURE FIELD FOR THIS FRAME, in MPa, keyed by node id. Same standing
+   as pipeDrop beside it: a view cache, never state, refilled once a frame off
+   one solve and read by everything that draws a pressure.
+
+   THIS is why it lives here and not in a layer's own data function.
+   netFactored() caches its factorisation onto net.Af, and net is P.net - so a
+   draw callback that solved would be a LAYER WRITING TO P, which is exactly
+   what the layer contract forbids, and audit-geometry only scans the view
+   files for `S.` writes, so it would not catch it. One refresh, from
+   drawPlant(), and the layers read the answer. */
+const pipeP={};
+function pipeFieldRefresh(L){
   for(const k in pipeDrop) delete pipeDrop[k];
+  for(const k in pipeP) delete pipeP[k];
   if(!L) return;
-  const d=netDrops(L);
-  for(const k in d) pipeDrop[k]=d[k];
+  netField(L, pipeDrop, pipeP);
+}
+/* Pressure on a RUN rather than at a node: the mean of its two ends, which is
+   what a gauge tapped into the middle of it would read. null for a run this
+   graph carries no nodes for (steam, feed - not modeled here yet), so a
+   caller draws nothing rather than a zero. */
+function pipeRunP(r){
+  const ends=runEnds(r.key,r.k);
+  if(!ends) return null;
+  const a=pipeP[coreFold(ends[0])], b=pipeP[coreFold(ends[1])];
+  if(a===undefined||b===undefined) return null;
+  return (a+b)/2;
+}
+/* Subcooling on a run: how far the water in it is below its own local boiling
+   point. The same two questions asked at the same place - tsat() of the
+   pressure HERE against the temperature HERE - which is the whole argument
+   for a field instead of a number. */
+function pipeRunSc(r,L){
+  const pr=pipeRunP(r);
+  if(pr===null) return null;
+  const ends=runEnds(r.key,r.k);
+  return tsat(pr) - (netTempAt(L,coreFold(ends[0])) + netTempAt(L,coreFold(ends[1])))/2;
 }
 let pipeT=null, pipeDt=0;
 /* a browser frame at 16x carries ~0.27 s of plant time - PIPE_DTMAX is what a frame
@@ -254,7 +286,7 @@ function pipeFullScale(key,k){
     if(!ref) return k.startsWith("xtie")?60:84*Math.max(0.05,P.feff0);
     return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
   }
-  if(k==="hpi") return 120*Math.sqrt(P.hpiRate/1.6);
+  if(k==="hpi") return 120;
   return {steam:96,exh:96,feed:96,surge:72}[k]||84;
 }
 const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
@@ -289,7 +321,7 @@ function pipeUnit(key,k){
   switch(k){
     case "steam": case "exh": case "feed":  return {nom:stm,         u:"kg/s"};
     case "surge":                          return {nom:loop*0.02,   u:"kg/s"};
-    case "hpi":                            return {nom:P.hpiRate*60,u:"%/min"};
+    case "hpi":                            return {nom:Math.abs(S.injRate)*60,u:"%/min"};
   }
   return {nom:loop,u:"kg/s"};
 }
@@ -532,7 +564,32 @@ function pipeFlow(L){
     ctx.restore();
   }
 }
+/* A CUT PIPE SPILLS FROM BOTH ENDS, AND THAT IS WHERE THE STEAM IS.
+   One plume per open end, at the end's own plant point, at that opening's own
+   solved rate - so severing a hot leg away from the reactor puts steam at the
+   cut and not at the vessel, and the plume dies away as the loop empties
+   because the flow driving it does. The two ends share one key and one rate:
+   they are one hole in one run, seen from both sides. */
+function pipeBreaks(L){
+  if(!L || !L.spillBy) return;
+  for(const r of pipeRuns(L)){
+    const q=L.spillBy["break:"+r.key];
+    if(!(q>0)) continue;
+    /* q is the RUN's total, both ends together, and each end is drawn at that
+       scale rather than at half of it - the two plumes are one hole seen from
+       both sides, and halving each would draw a full-bore guillotine as two
+       wisps. */
+    const rate=clamp(q/SPILL_FULL,0,1);
+    const g=pipeGeom(r.pts);
+    if(!g.len) continue;
+    const a=g.segs[0], z=g.segs[g.segs.length-1];
+    fxSteam(a.x, a.y, 22, fxEase("brk:"+r.key+":a", rate), "#ffd0c4", 29);
+    fxSteam(z.x+z.dx*z.L, z.y+z.dy*z.L, 22, fxEase("brk:"+r.key+":b", rate), "#ffd0c4", 29);
+  }
+}
+
 function pipeGauges(L){
+  pipeBreaks(L);                  // before the meters: a plume is behind a dial, not over it
   pipeMeters(pipeRuns(L),L);      // outside every clip, and over every component
   pipeVessel(L);
 }
