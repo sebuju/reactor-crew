@@ -508,7 +508,7 @@ function dbPanelSync(container,blocks){
 }
 
 /* one panel per component (or gang) */
-function dbRailBuild(rail){
+function dbRailBuild(rail,watch){
   rail.innerHTML="";
   const panels=[], gangs={};
   for(const p of LAY.parts){
@@ -518,14 +518,16 @@ function dbRailBuild(rail){
       if(g){ g.ids.push(p.id); g.well.setTitle(g.p.name.replace(/ \d+$/,"")+" x"+g.ids.length); continue; }
       const well=KIT.well({title:p.name}); rail.appendChild(well.el);
       const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-      const h={p,ids:[p.id],well,body,B};
+      const h={p,ids:[p.id],well,body,B,on:null};
       railPick(well,h.ids,p.name);
+      watch.add(well.el);
       gangs[B.gang]=h; panels.push(h);
     } else {
       const well=KIT.well({title:p.name}); rail.appendChild(well.el);
       const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-      const h={p,ids:[p.id],well,body,B};
+      const h={p,ids:[p.id],well,body,B,on:null};
       railPick(well,h.ids,p.name);
+      watch.add(well.el);
       panels.push(h);
     }
   }
@@ -541,7 +543,8 @@ function dbRailBuild(rail){
     const well=KIT.well({title:name}); rail.appendChild(well.el);
     const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
     railPick(well,[fid],name);
-    fits.push({fid,well,body});
+    watch.add(well.el);
+    fits.push({fid,well,body,on:null});
   }
   const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
@@ -559,15 +562,19 @@ function dbRailSync(state){
   const moved = sel!==dbLastSel; dbLastSel=sel;
   for(const h of state.panels){
     const on=h.ids.includes(sel);
-    h.well.el.classList.toggle("on",on);
+    if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     if(on && moved) KIT.reveal(h.well.el,"start");
+    // paramsFor() rebuilds the whole block list, so it is only asked for a
+    // panel that is actually on screen - see railWatch() in inspector.js
+    if(!railSeen(h.well.el) && !(on&&moved)) continue;
     const cur=paramsFor(LAY.parts.find(q=>q.id===h.p.id)||h.p);
     dbPanelSync(h.body,cur);
   }
   for(const h of state.fits){
     const on=h.fid===sel;
-    h.well.el.classList.toggle("on",on);
+    if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     if(on && moved) KIT.reveal(h.well.el,"start");
+    if(!railSeen(h.well.el) && !(on&&moved)) continue;
     dbPanelSync(h.body,paramsForFit(h.fid));
   }
   { const rd=benchResultsData();
@@ -619,11 +626,15 @@ function dbBuild(){
   const rail=KIT.el("div","db-rail");
   root.append(head,rail);
   mount.appendChild(root);
-  return {root,head,rail,state:null};
+  return {root,head,rail,state:null,watch:null};
 }
 function dbSync(){
   if(!DB) return;
-  if(DB.rail._layFit!==LAY) { DB.state=dbRailBuild(DB.rail); DB.rail._layFit=LAY; }
+  if(DB.rail._layFit!==LAY) {
+    if(DB.watch) DB.watch.free();
+    DB.watch=railWatch(DB.rail);
+    DB.state=dbRailBuild(DB.rail,DB.watch); DB.rail._layFit=LAY;
+  }
   dbRailSync(DB.state);
   /* the fuel lattice plan is genuinely graphical and stays canvas - but its own
      canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */

@@ -307,7 +307,7 @@ function crFaultsSync(h){
 }
 
 /* ══ THE COMPONENT RAIL: EVERY FITTED COMPONENT'S readoutsFor() TABLE ══ */
-function crRailBuild(rail){
+function crRailBuild(rail,watch){
   rail.innerHTML="";
   const panels=[];
   for(const p of LAY.parts){
@@ -315,7 +315,8 @@ function crRailBuild(rail){
     railPick(well,[p.id],p.name);
     const body=KIT.el("div","cr-panel-body"); well.body.appendChild(body);
     rail.appendChild(well.el);
-    panels.push({p,well,body});
+    watch.add(well.el);
+    panels.push({p,well,body,on:null,empty:null});
   }
   /* A fitting gets a panel here too, off readoutsForFit() - READOUT ONLY, the
      way every panel in this rail is. Its handles are on the valve itself
@@ -328,7 +329,8 @@ function crRailBuild(rail){
     railPick(well,[fid],name);
     const body=KIT.el("div","cr-panel-body"); well.body.appendChild(body);
     rail.appendChild(well.el);
-    panels.push({fid,well,body});
+    watch.add(well.el);
+    panels.push({fid,well,body,on:null,empty:null});
   }
   return panels;
 }
@@ -337,12 +339,25 @@ let crLastSel=null;
 function crRailSync(panels){
   const moved = sel!==crLastSel; crLastSel=sel;
   for(const h of panels){
-    const rows = h.fid? readoutsForFit(h.fid,S) : readoutsFor(h.p,S);
+    /* whether a panel has anything to report is a question about the DESIGN -
+       readoutsFor() answers [] on fitted(p), p.grp and P, all frozen for the
+       run - so it is asked once per rail and the rail is rebuilt when P moves.
+       Asking it every frame meant building the table just to throw it away. */
+    if(h.empty) continue;
     const on = (h.fid||h.p.id)===sel;
-    h.well.el.style.display=rows.length?"":"none";
-    h.well.el.classList.toggle("on",on);
-    if(on && moved && rows.length) KIT.reveal(h.well.el,"start");
-    if(rows.length) fieldRowsSync(h.body,rows);
+    if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
+    const first = h.empty===null;
+    if(!first && !railSeen(h.well.el) && !(on&&moved)) continue;
+    const rows = h.fid? readoutsForFit(h.fid,S) : readoutsFor(h.p,S);
+    if(first){ h.empty=!rows.length; h.well.el.style.display=rows.length?"":"none"; }
+    if(!rows.length) continue;
+    if(on && moved) KIT.reveal(h.well.el,"start");
+    fieldRowsSync(h.body,rows);
+    /* the reactivity balance is genuinely graphical and keeps its own canvas,
+       the way the lattice plan does on the bench - see hostPaint() and
+       rhoViz(). fieldRowsBuild() hands the canvas back on the container, so
+       this never searches the screen for it. */
+    const v=h.body._viz; if(v&&v.rho) hostPaint(v.rho,rhoViz);
   }
 }
 
@@ -394,7 +409,8 @@ function crBuild(){
 
   mount.appendChild(root);
   return {root,vitals,vitalRows,alarmsWrap,alarmRows,alarmsBody,banner,rail,
-    trend:{canvas:trendCanvas},logList,dmgList,faults,compRail,panels:null,Pfit:null};
+    trend:{canvas:trendCanvas},logList,dmgList,faults,compRail,panels:null,Pfit:null,
+    watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
 function crSync(){
   if(!CR) return;
@@ -404,20 +420,28 @@ function crSync(){
   crLogSync(CR.logList);
   crDamageSync(CR.dmgList);
   crFaultsSync(CR.faults);
-  if(CR.Pfit!==P){ CR.panels=crRailBuild(CR.compRail); CR.Pfit=P; }
+  if(CR.Pfit!==P){
+    if(CR.watch) CR.watch.free();
+    CR.watch=railWatch(CR.rail);
+    CR.panels=crRailBuild(CR.compRail,CR.watch); CR.Pfit=P;
+  }
   if(CR.panels) crRailSync(CR.panels);
-  /* the reactivity balance is genuinely graphical and keeps its own canvas, the
-     way the lattice plan does on the bench - see hostPaint() and rhoViz() */
-  document.querySelectorAll("#scr-operate .insp-viz-rho").forEach(c=>hostPaint(c,rhoViz));
 
+  /* the banner is a view of three fields, so it is written when one of them
+     moves and not otherwise - the trip line alone built a string every frame.
+     Nothing to clear on a scrub: it compares against the live S each frame, so
+     a restored snapshot writes it on the next one. */
   const s=S;
-  if(s.melt||s.breach){
-    CR.banner.style.display=""; CR.banner.className="cr-banner melt";
-    CR.banner.textContent=s.melt?"CORE MELT - UNRECOVERABLE":"VESSEL RUPTURE - UNRECOVERABLE";
-  } else if(s.trip){
-    CR.banner.style.display=""; CR.banner.className="cr-banner trip";
-    CR.banner.textContent="LAST TRIP / "+s.trip;
-  } else CR.banner.style.display="none";
+  if(s.melt!==CR.bMelt||s.breach!==CR.bBreach||s.trip!==CR.bTrip){
+    CR.bMelt=s.melt; CR.bBreach=s.breach; CR.bTrip=s.trip;
+    if(s.melt||s.breach){
+      CR.banner.style.display=""; CR.banner.className="cr-banner melt";
+      CR.banner.textContent=s.melt?"CORE MELT - UNRECOVERABLE":"VESSEL RUPTURE - UNRECOVERABLE";
+    } else if(s.trip){
+      CR.banner.style.display=""; CR.banner.className="cr-banner trip";
+      CR.banner.textContent="LAST TRIP / "+s.trip;
+    } else CR.banner.style.display="none";
+  }
 }
 if(typeof document!=="undefined" && document.documentElement) CR=crBuild();
 
