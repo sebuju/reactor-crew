@@ -99,8 +99,17 @@ const AUTOSYS={
     fit:()=>P.autorod,
     tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band set on the rod-drive panel - widen that band and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
     warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
-  porv:{part:"pzr",label:"PORV AUTO",ann:"PORV AUTO BYP",name:"AUTOMATIC RELIEF",
-    fit:()=>true,
+  /* Hosted on the RELIEF TANK, not the pressurizer. The pressurizer has not
+     owned a relief valve since one became a fitting with a tap of its own -
+     the stock valve sits on a hot leg - so the pressurizer was carrying the
+     bypass for a system nothing on it was part of. The tank is the one part
+     that exists exactly when a relief path does (hasRelief(), layout.js), so
+     the switch appears and disappears with the thing it defeats.
+     fit is no longer a flat true for the same reason: with no relief fitting
+     placed there is no automatic relief to arm, and bypRow() draws that as a
+     dead "none" the way it already does for an RPS nobody bought. */
+  porv:{part:"reltk",label:"PORV AUTO",ann:"PORV AUTO BYP",name:"AUTOMATIC RELIEF",
+    fit:()=>reliefFitIds().length>0,
     tip:"Lifts the relief valve at 106% pressure, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
     warn:"The relief valve will not lift. An overpressure now ends at the vessel, not at the valve."},
   runback:{part:"turb",label:"RUNBACK",ann:"RUNBACK BYP",name:"TURBINE RUNBACK",
@@ -516,6 +525,13 @@ const BOR_IN=60, BOR_OUT=35;            // pcm/s toward more / less boron
    motor. S.valve walks toward S.valveDem at this rate every tick; see the
    walk beside the boron one below. */
 const VALVE_RATE=1/17;
+/* The lift and reseat setpoints, as fractions of P0. Named because the plant
+   view now prints the margin to the lift point beside the valve, and a readout
+   that carried its own copy of 1.06 would go on promising a setpoint the sim
+   had moved. The gap between them is the valve's deadband: it lifts high and
+   does not reseat until pressure is well back down, which is what stops it
+   chattering on the setpoint. */
+const PORV_LIFT=1.06, PORV_RESEAT=1.01;
 /* A relief valve is a fixed orifice: while it passes, it passes at ONE rate.
    These are no longer the plant's own flat rate - they are the rated figures
    of ONE fully open relief edge of REFERENCE bore (PIPE_BORE.relief,
@@ -893,12 +909,12 @@ function step(dt){
        has left the loop and gone into that box. */
     let vented = 0;
     for(const fid of reliefFitIds()){
-      if(!s.reliefOpen[fid] && autoLive("porv") && s.P > P.P0*1.06){
+      if(!s.reliefOpen[fid] && autoLive("porv") && s.P > P.P0*PORV_LIFT){
         s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
         s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
         s.reliefArm[fid]=false;
       }
-      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && s.P < P.P0*1.01){
+      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && s.P < P.P0*PORV_RESEAT){
         s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
       }
       if(s.reliefOpen[fid] && !s.reliefBlocked[fid]){
@@ -1222,7 +1238,7 @@ const ANN=[
  /* no heat guard here, unlike tripCause(): the trip refuses to fire on a shut-down
     plant, but the tile is information and the operator wants it most when the
     protection has been defeated and the flow is simply gone. */
- ["LO FLOW","amber",s=>s.flow<P.flowMin,
+ ["LO FLOW","amber",s=>s.flowNet<P.flowMin,
   "Coolant flow is below the design floor for the pumps fitted. With protection armed the reactor trips here. Bypassed, the fuel is cooled by buoyancy alone, and that is all the cooling there is.","pump"],
  ["NO RPS","amber",()=>!P.rps,
   "No protection system was fitted at the design bench. Nothing is watching flux, DNBR, pressure, fuel temperature, flow or void on your behalf. You are the protection system.","ctrl"],

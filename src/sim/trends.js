@@ -15,7 +15,12 @@ const CH={
  lvl :{lab:"PZR LEVEL",    u:"%",  col:"#c8d8dc", f:s=>s.lvl},
  sgl :{lab:"SG LEVEL",     u:"%",  col:"#8fa9ae", f:s=>s.sgl},
  inv :{lab:"INVENTORY",    u:"%",  col:"#5aa9d6", f:s=>s.inv},
- flow:{lab:"CORE FLOW",    u:"%",  col:"#57d38c", f:s=>s.flow*100},
+ /* flowNet, not flow: the label says CORE FLOW, so it has to be the flow that
+    reaches the core - what the pumps were TOLD to do is s.flowDem's business.
+    The two are equal on an undamaged, unthrottled plant, so no archived trend
+    changes shape; they part company exactly when a valve shuts or a run is
+    severed, which is the moment this trace has something to say. */
+ flow:{lab:"CORE FLOW",    u:"%",  col:"#57d38c", f:s=>s.flowNet*100},
  load:{lab:"LOAD DEMAND",  u:"%",  col:"#f0a830", f:s=>s.load*100},
  rod :{lab:"ROD BANK",     u:"%",  col:"#c8d8dc", f:s=>s.rodPos*100},
  bor :{lab:"BORON",        u:"pcm",col:"#5fd2e2", f:s=>s.boron},

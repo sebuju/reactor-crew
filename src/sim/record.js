@@ -206,8 +206,13 @@ const ACT = {
   porvArm  : {lab:"PORV STICKS",  log:()=>"ARMED FOR NEXT LIFT",
               apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefArm[fid]=true; }},
   rodJam   : {lab:"ROD JAM",      log:()=>S.rodJam?"CLEARED":"JAMMED", apply:(s)=>{ s.rodJam=!s.rodJam; }},
+  /* All four flags, matching DMGFX.pzr (step.js) exactly. Setting only open
+     and unblocked left the valve stuck in fact - nothing reseats it - while
+     reliefAnyStuck() (step.js) stayed false, so "PORV FAILED TO RESEAT" never
+     lit and the board silently disagreed with the plant. */
   porvStick: {lab:"STUCK PORV",   apply:(s)=>{ const fid=primaryRelief();
-                if(fid){ s.reliefOpen[fid]=true; s.reliefBlocked[fid]=false; } }},
+                if(fid){ s.reliefOpen[fid]=true; s.reliefBlocked[fid]=false;
+                         s.reliefAuto[fid]=true; s.reliefStuck[fid]=true; } }},
   /* recRoot() and not just resetPlant(): a reset is where one recording ends
      and the next begins, so the tape has to be told. It is the one act that
      does its own bookkeeping, and it is `rec:false` so the event itself lands
