@@ -532,7 +532,11 @@ function ctlFor(p,live,split){
          tip:"SPLIT BANKS - stops driving the banks as one and gives each its own demand. Splitting is bumpless by construction: every bank simply adopts where it already stands. From there the tilt slider stands down, the per-bank sliders are your tilt handle, and any bank you switch to MANUAL stops answering the temperature controller."}]];
     }
     case "core": return [
-     [{kind:"sld",flex:1,val:()=>S.boron,min:()=>-6000,max:()=>0,step:10,
+     /* the scale runs 0 -> -6000, clean water at the LEFT: "+B" adds poison and
+        must drive the thumb right, and the -B / RST / +B row must read in the
+        direction it moves. A slider() scale is allowed to run either way - see
+        the ordered clamp in the drag handler in core/ui.js. */
+     [{kind:"sld",flex:1,val:()=>S.boron,min:()=>0,max:()=>-6000,step:10,
        dem:()=>S.boronDem,
        fmt:v=>v.toFixed(0)+" pcm",set:v=>{ act("boronDem",v); },
        tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}],

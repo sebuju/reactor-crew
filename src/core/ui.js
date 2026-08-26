@@ -401,8 +401,13 @@ function uiMove(e){
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
       // integrate rather than re-derive, so moving away from the track
-      // changes the gearing from here on instead of jumping the value
-      d.gv=clamp(d.gv+(q.x-d.gx)/d.w*(d.max-d.min)*sldGain(q.y-d.cy),d.min,d.max);
+      // changes the gearing from here on instead of jumping the value.
+      // ORDERED bounds: a scale is allowed to run backwards (boron is 0 at the
+      // left and -6000 at the right), and clamp() is max(a,min(b,v)), so
+      // handing it min>max pins every value to the low end. Everything else in
+      // slider() is (v-min)/(max-min) and reverses on its own.
+      const lo=Math.min(d.min,d.max), hi=Math.max(d.min,d.max);
+      d.gv=clamp(d.gv+(q.x-d.gx)/d.w*(d.max-d.min)*sldGain(q.y-d.cy),lo,hi);
       d.gx=q.x; d.fn(d.gv); }
     // the pan is measured in PAGE pixels and spent in plant units, so the
     // deck keeps up with the hand at any zoom
