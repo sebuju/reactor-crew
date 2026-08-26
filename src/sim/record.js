@@ -174,8 +174,25 @@ const ACT = {
   hpi      : {lab:"HPI",          log:()=>S.hpi?"OFF":"ON", apply:(s)=>{ s.hpi=!s.hpi; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
   resetTrip: {lab:"TRIP RESET",   apply:(s)=>{ resetTrip(); }},
+  /* The master switch. For relief it also drives every valve's own arm to
+     match, so the master and the individuals can never disagree - and a tape
+     recorded before per-valve arming existed still means exactly what it
+     meant: one line, every valve. */
   byp      : {lab:"BYPASS",       log:k=>AUTOSYS[k].name+" "+(S.byp[k]?"ARMED":"BYPASSED"),
-              apply:(s,k)=>{ autoToggle(k); }},
+              apply:(s,k)=>{ if(!autoToggle(k)) return;
+                if(k==="porv") for(const fid of reliefFitIds()) s.porvByp[fid]=s.byp[k]; }},
+  /* One relief valve's own arm, and one relief valve's own block valve. Both
+     carry the P.fit guard ACT.junc and ACT.valveDem carry, and for the same
+     reason: a scenario line naming a fitting this design never had would
+     otherwise put a phantom key on S, and a phantom key on S is snapshotted,
+     restored and compared like a real one. Scoped to mode==="relief" because
+     S.porvByp carries keys for relief fittings only (resetPlant(), step.js). */
+  porvByp  : {lab:"PORV ARM",     log:fid=>fid.toUpperCase()+" "+(S.porvByp[fid]?"ARMED":"BYPASSED"),
+              apply:(s,fid)=>{ if(P.fit[fid] && P.fit[fid].mode==="relief")
+                s.porvByp[fid]=!s.porvByp[fid]; }},
+  porvBlockOf:{lab:"BLOCK VALVE", log:fid=>fid.toUpperCase()+" "+(S.reliefBlocked[fid]?"OPENED":"SHUT"),
+              apply:(s,fid)=>{ if(P.fit[fid] && P.fit[fid].mode==="relief")
+                s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
   /* The P.fit test is the refusal, not decoration: without it a scenario line
      naming a fitting this design never had would put a phantom key on S, and a
      phantom key on S is snapshotted, restored and compared like a real one.

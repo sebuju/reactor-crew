@@ -82,10 +82,19 @@ function loopOfKey(key){
 // bore is unused until the relief valve gets its own path. S.juncOpen/
 // S.valve (same keys) are the live actuator state; resetPlant() seeds them
 // from P.fit, so nothing here writes to S directly.
+// What each mode is CALLED, once - the plant view's tooltips and both rails
+// each used to spell this out for themselves, and a fourth mode would have
+// had to be added to every one of them.
+const FITNAME={tee:"JUNCTION",relief:"RELIEF VALVE",throttle:"THROTTLE"};
 let fitSeq=0;
-function addFit(mode,aKey,aT,bKey,bT,bore=0.55){
+function addFit(mode,aKey,aT,bKey,bT,bore=0.55,lift=null,reseat=null){
   const id="f"+(fitSeq++);
   D.fit[id]={aKey,aT,bKey,bT,bore,mode};
+  // A relief valve's setpoints are mechanical - chosen when it is built, not
+  // worked during a transient - so they live in D beside the tap and never on
+  // S. null means "this plant's default"; reliefSet() (step.js) is the one
+  // place that answers what the default is.
+  if(mode==="relief"){ D.fit[id].lift=lift; D.fit[id].reseat=reseat; }
   return id;
 }
 function removeFit(id){ delete D.fit[id]; }

@@ -108,9 +108,19 @@ const AUTOSYS={
      fit is no longer a flat true for the same reason: with no relief fitting
      placed there is no automatic relief to arm, and bypRow() draws that as a
      dead "none" the way it already does for an RPS nobody bought. */
-  porv:{part:"reltk",label:"PORV AUTO",ann:"PORV AUTO BYP",name:"AUTOMATIC RELIEF",
+  /* part:null - this system has NO component host. Every relief valve now
+     carries its own arming switch on its own glyph (pipeFitMarks(), plant.js),
+     so a part-mounted row would be a second switch saying the same thing on a
+     one-valve plant and an ambiguous one on a three-valve plant. The row stays:
+     it still owns the label, the annunciator name, the warning and its AUTOEV
+     entry - one table per concept, and the concept still exists. Only its host
+     and its granularity moved. autoOn() must tolerate the null. */
+  porv:{part:null,label:"PORV AUTO",ann:"PORV AUTO BYP",name:"AUTOMATIC RELIEF",
     fit:()=>reliefFitIds().length>0,
-    tip:"Lifts the relief valve at 106% pressure, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
+    /* One lamp for "automatic relief is defeated anywhere", because that is
+       the question the watch reading the board is actually asking. */
+    lit:s=>reliefFitIds().length>0 && (s.byp.porv || reliefFitIds().some(fid=>s.porvByp[fid])),
+    tip:"Lifts each relief valve at its own setpoint, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
     warn:"The relief valve will not lift. An overpressure now ends at the vessel, not at the valve."},
   runback:{part:"turb",label:"RUNBACK",ann:"RUNBACK BYP",name:"TURBINE RUNBACK",
     fit:()=>true,
@@ -133,7 +143,9 @@ const autoFit   = k => !!AUTOSYS[k].fit();
 const autoLive  = k => autoFit(k) && !S.byp[k];
 const autoState = k => !autoFit(k) ? "NOT FITTED" : S.byp[k] ? "BYPASSED" : "ARMED";
 /* which system, if any, is mounted on this component - the renderer asks this */
-const autoOn    = id => AUTOKEYS.find(k=>AUTOSYS[k].part===id) || null;
+// AUTOSYS[k].part may be null (a system hosted on a fitting, not a component),
+// so the null host must never match a component that was asked about.
+const autoOn    = id => AUTOKEYS.find(k=>AUTOSYS[k].part!=null && AUTOSYS[k].part===id) || null;
 function autoToggle(k){
   if(!autoFit(k)) return false;
   S.byp[k]=!S.byp[k];
@@ -531,7 +543,22 @@ const VALVE_RATE=1/17;
    had moved. The gap between them is the valve's deadband: it lifts high and
    does not reseat until pressure is well back down, which is what stops it
    chattering on the setpoint. */
-const PORV_LIFT=1.06, PORV_RESEAT=1.01;
+const PORV_LIFT0=1.06, PORV_RESEAT0=1.01;
+/* The one reader of a relief fitting's own setpoints. A valve dialled at the
+   bench carries its own pair in D.fit (addFit(), layout.js); an older design,
+   or any fitting never dialled, carries null and gets the defaults above. The
+   fallback is written HERE and nowhere else, or the tick, the plant view and
+   the auditor would each grow their own idea of what an unset field means.
+   P is null on the bench, the same P?fallback:D idiom reliefFitIds() uses. */
+function reliefSet(fid){
+  const f=P?P.fit:D.fit, j=(f&&f[fid])||{};
+  return {lift: j.lift||PORV_LIFT0, reseat: j.reseat||PORV_RESEAT0};
+}
+/* "is THIS valve allowed to lift by itself" - the one predicate the tick may
+   ask, exactly as autoLive(k) is the one predicate for a system bypass. The
+   master switch and the valve's own arm both defeat it; nothing reads
+   S.porvByp[fid] raw. */
+const porvLive = fid => autoLive("porv") && !S.porvByp[fid];
 /* A relief valve is a fixed orifice: while it passes, it passes at ONE rate.
    These are no longer the plant's own flat rate - they are the rated figures
    of ONE fully open relief edge of REFERENCE bore (PIPE_BORE.relief,
@@ -626,6 +653,10 @@ function resetPlant(){
      reliefStuck:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      reliefBlocked:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      reliefArm:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
+     /* per-valve arming, seeded for RELIEF fittings only - a tee or a throttle
+        has no automatic behaviour to defeat, and a phantom key here is a
+        phantom key in every snapshot taken from now on. */
+     porvByp:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      dmg:0,fatigue:0,dnbr:P.dnbr0,rho:0,voidTh:0,cav:0,vf:0,
      /* the groups start in equilibrium with commissioning power, or the plant
         would spend its first minutes breeding heat it should already have */
@@ -909,12 +940,13 @@ function step(dt){
        has left the loop and gone into that box. */
     let vented = 0;
     for(const fid of reliefFitIds()){
-      if(!s.reliefOpen[fid] && autoLive("porv") && s.P > P.P0*PORV_LIFT){
+      const set=reliefSet(fid);
+      if(!s.reliefOpen[fid] && porvLive(fid) && s.P > P.P0*set.lift){
         s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
         s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
         s.reliefArm[fid]=false;
       }
-      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && s.P < P.P0*PORV_RESEAT){
+      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && s.P < P.P0*set.reseat){
         s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
       }
       if(s.reliefOpen[fid] && !s.reliefBlocked[fid]){
@@ -1259,7 +1291,7 @@ const ANN=[
  ["HI AREA RAD","amber",s=>s.doseRate>RAD_HI,
   "The control room is reading above 1x background. That number is set both by what has failed on the plant and by where you put the shielding at the bench - a well-shielded control room can sit this out through a release that would light this tile instantly on a poorly sited one. A repair party out on the plant right now is being spent while this is lit, faster the closer the job sits to whatever is shining.","ctrl"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
-].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",s=>autoFit(k)&&s.byp[k],
+].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
   AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn, AUTOSYS[k].part]));
 
 /* ── one lamp per component ──
