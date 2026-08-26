@@ -13,6 +13,10 @@ let LAY=null, layLoops=-1, layFit="", sel="core", layMass=0;
 // (spare pump, junction) doesn't fit this shape - see PLACED PARTS below.
 const fittableList=()=>[
   {id:"cont", label:"CONTAINMENT",         get:()=>D.contFit, set:v=>{D.contFit=v;}},
+  /* This one upgrades a part rather than adding one: the HPI tank is always
+     on the grid, and this decides whether a nitrogen charge or a set of pumps
+     stands behind it. fitSig() still has to see it, because the part's own
+     NAME changes with it. */
   {id:"hpi",  label:"PASSIVE ACCUMULATOR", get:()=>D.accum,   set:v=>{D.accum=v;}},
   {id:"turb", label:"TURBINE",             get:()=>D.turbFit, set:v=>{D.turbFit=v;}},
   {id:"cond", label:"CONDENSER",           get:()=>D.condFit, set:v=>{D.condFit=v;}},
@@ -129,8 +133,15 @@ function buildLayout(){
     "Where your crew sits. Distance and shielding from the reactor set the dose they take.");
   if(fitOf("cont")) add("cont","CONTAINMENT",2,1,4,8,"#8fa9ae","safety",
     "The barrier between damaged fuel and your crew. Select it for containment type and the core catcher.");
-  if(fitOf("hpi")) add("hpi","HPI TANK",1,1,0,5,"#5aa9d6","safety",
-    "Emergency injection water. Mount it HIGH so it can drain into the loop by gravity with no power.");
+  /* Unconditional, because every plant has one. It used to appear only when
+     the PASSIVE ACCUMULATOR was bought, while step() injected at a fixed rate
+     either way - so a plant with pumped injection had a system with no tank,
+     no pipe and no place, and the injection line it drew water through was
+     not on the drawing. D.accum decides what is BEHIND the water now (a
+     nitrogen charge or a set of pumps, TANK in pipenet.js), not whether the
+     water exists. */
+  add("hpi", D.accum?"ACCUMULATOR":"HPI TANK",1,1,0,5,"#5aa9d6","safety",
+    "Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.");
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.");
   // one tank for every relief fitting (FIT.relief, pipenet.js) - deleting
@@ -619,13 +630,24 @@ function layoutMetrics(){
   for(const q of P_) if(q.id.startsWith("sg")) loopTop=Math.min(loopTop,q.y);
   const pzrOK = pz ? pz.y<=loopTop : true;
   const pzrK  = pzrOK ? 1 : 0.45;
+  /* Metres, measured - not a clamped multiplier on an injection rate that no
+     longer exists. Elevation is LIVE for this tank now, like every other
+     node's: it enters the solve as the static head of the tank's own column
+     (pipenet.js), so moving it on the bench changes what it delivers without
+     re-commissioning anything. */
   const hp=id("hpi");
-  const hpiHead = hp ? clamp((cc.y-cen(hp).y+2)/5,0.35,1.35) : 1;
+  const hpiZ = hp ? (cc.y-cen(hp).y)*MPC : 0;
 
   const mass = (pipe+sec+dead)*1.6 + P_.filter(p=>p.grp==="shield").length*30;
   layMass = mass;
-  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,hpiHead,radK,peak,
-    natK: 0.35+0.65*clamp((head+1)/4,0,1.6),
+  /* natK is gone. Buoyancy is an edge head in the pipe network now
+     (pipenet.js), so the thermosiphon is solved off exactly the geometry
+     `head` measures instead of being predicted from it by a second formula
+     standing beside the solve - and unlike a correlation, the solve can tell
+     one steam generator from another, and can tell a shut valve from an open
+     one. `head` stays: it is what the bench shows, and it is now what
+     actually drives the thing it is named after. */
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,hpiZ,radK,peak,
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
 }

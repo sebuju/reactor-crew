@@ -25,7 +25,7 @@ const RAD_BREACH=3.0, RAD_DMG=0.06, RAD_MELT=4.0, RAD_SGTR=1.2, RAD_AIR=0.05;
 // A fresh constant, not a re-derivation of an existing figure: nothing
 // documented depends on its exact value, only on the tank getting hotter as
 // it fills, which any positive number gives it. Scaled the same shape as
-// RAD_DMG against s.ventTank (0..100, step.js) rather than fitted against a
+// RAD_DMG against s.tank.reltk (0..100, step.js) rather than fitted against a
 // pinned dose the way RAD_K was.
 const RAD_TANK=0.03;
 const RAD_HI=1.0, RAD_FLOOR=0.02, RAD_CEIL=3;
@@ -122,11 +122,11 @@ function radSrc(L){
   return {core:(L.n*0.935+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*P.contRel
               + (L.melt&&!P.catcher?RAD_MELT:0),
           sg: L.sgtr?RAD_SGTR:0,
-          // The relief tank: clean at commissioning (s.ventTank starts at 0,
+          // The relief tank: clean at commissioning (s.tank.reltk starts at 0,
           // step.js), so this is exactly 0 the moment P.dose is asked and
           // stays out of that geometric figure entirely. It only shines
           // once a valve has actually vented into it.
-          tank: RAD_TANK*(L.ventTank||0),
+          tank: RAD_TANK*((L.tank && L.tank.reltk) || 0),
           // Airborne activity is a FLOOR ON EVERY CELL and is NOT shielded at
           // all - this is the containment argument made picture-shaped.
           // What has already escaped the primary boundary is loose in the

@@ -160,7 +160,6 @@ function derived(){
      shape this core actually settles into, solved on the nodal mesh */
   const core=corePredict({dens,rf});
   const Fq=core.FqCold;
-  const natCirc=(.10+.22*D.hd+.30*D.chim)*(a.P0>3?1:1.3);
   const graceK=a.grace*SGT[D.sg].graceK*(1+.12*(D.loops-2));
   const xeW=2700*a.xe;
   /* The bank S-curve, written once: how much worth is bought by inserting to x.
@@ -189,7 +188,7 @@ function derived(){
   const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
   const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
-  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,excess,dnbr,Fq,natCirc,xeW,core,
+  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,excess,dnbr,Fq,xeW,core,
     boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0:a.P0*D.pdes,
