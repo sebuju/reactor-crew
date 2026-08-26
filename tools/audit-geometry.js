@@ -4,7 +4,7 @@ const S=require('./bundle').bundle();
 
 // routing is emergent from component positions, so this has to run the code,
 // not just read it
-const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,ventK,reliefHeaderKey}');
+const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,ventK,reliefHeaderKey,nozzleEnds}');
 
 // zero-length segments are corner artefacts from coincident waypoints; skip
 // them or every corner is a false positive
@@ -325,6 +325,7 @@ const CELL=Number(S.match(/CELL=(\d+)/)[1]), GX=Number(S.match(/GX=(\d+)/)[1]);
    be the SAME set, both ways. A key the renderer asks for and the sim never
    writes is a frozen packet; a key the sim writes and no run carries is a
    stale entry that will outlive its pipe. */
+const GWc=Number(S.match(/const GW=(\d+)/)[1]), GHc=Number(S.match(/GH=(\d+)/)[1]);
 const keyMisses=(want,have)=>want.filter(k=>!have.includes(k));
 const netKeyChecks=[];
 {
@@ -371,6 +372,44 @@ const netKeyChecks=[];
      `${posMiss} S.flowPos keys with no edge record behind them`],
     ['inject: lookup by kind',       injected>0,
      `caught by "renderer key is a sim key" (${injected} kind lookups resolve to nothing)`]);
+}
+
+/* ── A NOZZLE NEEDS A DIRECTION, AND A RUN CAN HAVE NONE ──
+   Park the relief tank straight above the pressurizer and the header's two
+   ports resolve to the same point; dedupe() collapses the run to ONE point,
+   and an endpoint with no second point to face away from has no direction for
+   a flange. Reading it took the whole frame down - every screen, every frame,
+   on a move the bench offers. So: sweep the tank over every cell of the grid
+   and demand nozzleEnds() answers for every run it produces. The collapsed
+   count is asserted POSITIVE beside it, or the sweep would be quietly passing
+   on 144 placements that never reproduce the case at all. */
+const nozChecks=[];
+{
+  // a relief fitting FIRST, or hasRelief() leaves no tank on the grid and the
+  // sweep below runs 144 times over a plant that cannot reproduce the fault
+  M.D().loops=1; M.D().fit={}; M.commission();
+  { const hot=M.pipeNetwork().find(r=>r.k==="hot");
+    M.addFit('relief',hot.key,0.9,M.reliefHeaderKey(M.pipeNetwork())||'relief:x',0.5); }
+  M.commission();
+  let threw=0, swept=0, collapsed=0, noDir=0;
+  for(let x=0;x<GWc;x++) for(let y=0;y<GHc;y++){
+    const p=M.LAY().parts.find(q=>q.id==="reltk");
+    if(!p) continue;
+    M.moveTo(p,x,y); M.commission(); swept++;
+    for(const r of M.pipeNetwork()){
+      if(r.pts.length<2) collapsed++;
+      try{ const e=M.nozzleEnds(r);
+           for(const o of e) if(!o.p || o.p.length!==2) noDir++; }
+      catch(err){ threw++; }
+    }
+  }
+  nozChecks.push(
+    ['a nozzle always faces', threw===0,
+     `${swept} tank placements swept, ${threw} runs a flange could not be read off`],
+    ['every nozzle has a point', noDir===0, `${noDir} ends with no plant point`],
+    ['the collapse really happens', collapsed>0,
+     `${collapsed} zero-length runs seen in the sweep - the case is reproduced, not assumed`]);
+  M.D().fit={}; M.D().loops=4; M.commission();
 }
 
 /* ── A RELIEF FITTING SURVIVES ITS TANK MOVING ──
@@ -440,6 +479,7 @@ const checks=[
  ...scnChecks,
  ...netKeyChecks,
  ...reliefChecks,
+ ...nozChecks,
 ];
 let bad=0;
 for(const [n,ok,detail,,over] of checks){

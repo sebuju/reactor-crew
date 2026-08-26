@@ -56,22 +56,35 @@ const PIPE_CASE="#22383e";
 
    Runs arrive square to a face (route(), layout.js), so the last leg is
    axis-aligned and the flange only ever needs the two orientations. */
-function pipeNozzle(p,q,thin){
-  const dx=q[0]-p[0], dy=q[1]-p[1];
-  if(Math.abs(dx)<0.5 && Math.abs(dy)<0.5) return;
-  const half=thin?4:5.5;              // across the bore, wider than the casing
-  const deep=2.5;                     // how far it stands proud of the shell
-  const flat=Math.abs(dx)>Math.abs(dy);
-  const bx=flat?deep:half, by=flat?half:deep;
-  fillRect(p[0]-bx-1,p[1]-by-1,2*bx+2,2*by+2,PIPE_CASE);
-  fillRect(p[0]-bx,p[1]-by,2*bx,2*by,C.metal);
+/* WHERE a run's nozzles go, and which way each one faces - pure, so the
+   auditor can sweep it without a canvas. A flange needs a DIRECTION, and a run
+   can have none: park the relief tank straight above the pressurizer and the
+   header's two ports land on the same point, dedupe() collapses it to a single
+   point, and there is no second point to face away from. That crashed the
+   whole frame. An end with no direction simply has no nozzle - the run is
+   zero-length, so there is no joint to draw anyway. */
+function nozzleEnds(r){
+  const out=[], n=r.pts.length;
+  if(!r.nz || n<2) return out;
+  const add=(p,q)=>{
+    const dx=q[0]-p[0], dy=q[1]-p[1];
+    if(Math.abs(dx)<0.5 && Math.abs(dy)<0.5) return;   // coincident: no facing
+    out.push({p, flat:Math.abs(dx)>Math.abs(dy)});
+  };
+  if(r.nz[0]) add(r.pts[0],r.pts[1]);
+  if(r.nz[1]) add(r.pts[n-1],r.pts[n-2]);
+  return out;
 }
 function pipeNozzles(NET){
   for(const r of NET){
-    if(!r.nz) continue;
-    const n=r.pts.length, thin=r.k==="hpi"||r.k==="surge";
-    if(r.nz[0]) pipeNozzle(r.pts[0],r.pts[1],thin);
-    if(r.nz[1] && n>1) pipeNozzle(r.pts[n-1],r.pts[n-2],thin);
+    const thin=r.k==="hpi"||r.k==="surge";
+    const half=thin?4:5.5;            // across the bore, wider than the casing
+    const deep=2.5;                   // how far it stands proud of the shell
+    for(const e of nozzleEnds(r)){
+      const bx=e.flat?deep:half, by=e.flat?half:deep;
+      fillRect(e.p[0]-bx-1,e.p[1]-by-1,2*bx+2,2*by+2,PIPE_CASE);
+      fillRect(e.p[0]-bx,e.p[1]-by,2*bx,2*by,C.metal);
+    }
   }
 }
 function drawSym(p,x,y,w,h,ink,L){
