@@ -4,7 +4,7 @@ const S=require('./bundle').bundle();
 
 // routing is emergent from component positions, so this has to run the code,
 // not just read it
-const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,addJunction}');
+const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY}');
 
 // zero-length segments are corner artefacts from coincident waypoints; skip
 // them or every corner is a false positive
@@ -44,18 +44,119 @@ for(const loops of [1,2,3,4]){
   pipeChecks.push([`no pipe overlaps (${loops} loop${loops>1?'s':''})`, over.length===0,
                    `${over.length} overlapping segment pairs`, loops, over]);
 }
-// no junction exists on a default plant, so this sweep is the only thing
+// no fitting exists on a default plant, so this sweep is the only thing
 // that ever routes one - check every adjacent pair actually tied, the
 // densest a plant this size can be wired
 for(const loops of [2,3,4]){
-  M.D().loops=loops; M.D().junc={}; M.commission();
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
-  for(let i=0;i<loops-1;i++) M.addJunction(i,i+1,...tap('cold:sg'+i));
+  M.D().loops=loops; M.D().fit={}; M.commission();
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  for(let i=0;i<loops-1;i++) M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1)));
   const over=pipeOverlaps(pipeSegs(M.pipeNetwork()));
   pipeChecks.push([`no overlaps (${loops} loops, tied)`, over.length===0,
                    `${over.length} overlapping segment pairs`, loops, over]);
 }
-M.D().junc={};
+M.D().fit={};
+
+// a fitting stores a TAP - (run key, fraction along it) at each end -
+// resolved fresh by juncPt() off whatever pipeNetwork() just routed. The bug
+// this replaces stored a plant-space pixel once, at creation, so a part
+// moved upstream of the tap left the glyph and the branch drawn on empty
+// space. Everything below is measured by moving a real part and re-routing,
+// never read off the source.
+const juncChecks=[];
+{
+  const dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
+  M.D().loops=2; M.D().fit={}; M.commission();
+  let net=M.pipeNetwork();
+  // both faces of this run sit on components a pump move disturbs
+  const runKey='cold:pump0b-coreb', tapT=0.5;
+  const before=M.juncPt(net,runKey,tapT).pt;
+
+  const pump0=M.LAY().parts.find(p=>p.id==='pump0');
+  const p0x=pump0.x, p0y=pump0.y;
+  const movedOk=M.moveTo(pump0,p0x-2,p0y);
+  net=M.pipeNetwork();
+  const runAfter=net.find(r=>r.key===runKey);
+  const after=movedOk?M.juncPt(net,runKey,tapT).pt:before;
+  const moveDist=dist(before,after);
+
+  juncChecks.push(['tap follows its run', movedOk && moveDist>5,
+    movedOk?`moved ${moveDist.toFixed(1)}px when the run it's tapped on moved`
+           :'the pump move was blocked, nothing measured']);
+
+  // THE REGRESSION SENTINEL - "seen to fail", not just seen to pass. The old
+  // bug's whole shape was "the tap doesn't move": reusing the pre-move point
+  // IS what a stored pixel would still hand back after the run moved. Same
+  // assertion, frozen input - it must go red, or the check above is not
+  // actually testing anything.
+  const frozenMoveDist=dist(before,before);
+  const sentinelCaught = !(movedOk && frozenMoveDist>5);
+  juncChecks.push(['(sentinel) a frozen tap is caught by the check above', sentinelCaught,
+    sentinelCaught?`a stored-pixel tap measures ${frozenMoveDist.toFixed(1)}px of movement - "tap follows its run" would fail it`
+                  :'a frozen pixel slipped past the movement check - it is not testing what it claims to']);
+
+  const onRun=M.nearestOn(runAfter.pts,after);
+  juncChecks.push(['tap stays on its run', onRun.d<0.5,
+    `resolved point sits ${onRun.d.toFixed(3)}px off the run's own polyline`]);
+
+  // a point taken off a run at a known t must come back out through
+  // nearestOn() -> juncPt() at (about) the same place - on two differently
+  // shaped runs, so a bug in one leg's geometry can't hide behind the other's
+  let rtWorst=0;
+  for(const key of ['hot:corer-sg0l','cold:sg0b-pump0t']){
+    const r=net.find(x=>x.key===key);
+    for(let i=0;i<8;i++){
+      const t=i/7;
+      const p=M.juncPt(net,key,t).pt;
+      const back=M.nearestOn(r.pts,p);
+      const p2=M.juncPt(net,key,back.t).pt;
+      rtWorst=Math.max(rtWorst,dist(p,p2));
+    }
+  }
+  juncChecks.push(['t round-trips through nearestOn()', rtWorst<0.5,
+    `worst of 16 samples (hot + cold runs) off by ${rtWorst.toFixed(3)}px`]);
+
+  // the branch itself: after the move, its run must still exist, be finite,
+  // and hold the same square-only invariant every other run in this file is
+  // held to
+  const jid=M.addFit('tee',runKey,tapT,'cold:sg1b-pump1t',0.5);
+  const tieNet=M.pipeNetwork();
+  const tie=tieNet.find(r=>r.key==='xtie:'+jid);
+  const tieFinite=!!tie && tie.pts.length>=2 &&
+    tie.pts.every(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
+  const tieSquare=!!tie && tie.pts.every((p,i)=>i===0 ||
+    Math.abs(p[0]-tie.pts[i-1][0])<0.5 || Math.abs(p[1]-tie.pts[i-1][1])<0.5);
+  juncChecks.push(['branch re-routes after the move', tieFinite && tieSquare,
+    tie?`${tie.pts.length} points, ${tieSquare?'axis-aligned':'a diagonal segment'}`:'no xtie run in the network']);
+  M.removeFit(jid);
+
+  // a tap naming a run pipeNetwork() didn't build this frame (its part
+  // removed, or the key simply wrong) must be skipped, not throw the whole
+  // network away
+  const badId=M.addFit('tee','cold:doesNotExist',0.5,'hot:corer-sg0l',0.5);
+  let threw=false;
+  try{ M.pipeNetwork(); } catch(e){ threw=true; }
+  M.removeFit(badId);
+  juncChecks.push(['a dangling tap is skipped, not fatal', !threw,
+    threw?'pipeNetwork() threw on an unresolvable fitting':'pipeNetwork() returned normally']);
+
+  // an IN-LINE throttle (bKey null) has no route of its own - the per-jid
+  // routing loop must skip it rather than call juncPt(net,null,...) and blow
+  // up, and pipeNetwork() must still return normally with everything else
+  // routed around it.
+  const inlineId=M.addFit('throttle',runKey,tapT,null,null);
+  let inlineThrew=false;
+  try{ M.pipeNetwork(); } catch(e){ inlineThrew=true; }
+  const inlineNet=M.pipeNetwork();
+  const inlineHasRoute=inlineNet.some(r=>r.key==='xtie:'+inlineId);
+  M.removeFit(inlineId);
+  juncChecks.push(['an in-line fitting draws no route of its own', !inlineThrew && !inlineHasRoute,
+    inlineThrew?'pipeNetwork() threw on an in-line throttle'
+      :inlineHasRoute?'an in-line throttle still got an xtie run':'pipeNetwork() returned normally, no xtie run']);
+
+  M.D().fit={};
+  M.moveTo(pump0,p0x,p0y);
+}
 
 // a waypoint owes a straight, self-clear run through its own point; it owes
 // no clear lane through OTHER runs' pipes (a parked point can eat one, same
@@ -231,6 +332,7 @@ const checks=[
                               S.includes('function dbPanelSync'), 'one parameter table, read into the HTML rail'],
  ['no hand-placed mimic',     !/OY=44/.test(S), 'fixed-coordinate mimic removed'],
  ...pipeChecks,
+ ...juncChecks,
  ...wpChecks,
  ...plantChecks,
  ...layerChecks,

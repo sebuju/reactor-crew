@@ -84,7 +84,7 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'setDmg:v=>S.dmgParts=v,'+
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
- 'pipeNetwork,pipeWaypoints,nearestOn,placePart,addJunction,removePart,removeJunction,'+
+ 'pipeNetwork,pipeWaypoints,nearestOn,placePart,addFit,removePart,removeFit,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
  'setLayer:(k,v)=>{LAYERS[k].on=v;}};')();
 global.__viewOn=()=>M.vOn();
@@ -162,17 +162,17 @@ M.setSel('core');
   M.D().loops=4; warmUp(); M.setSel('sg2'); sweep('loops4:');
   M.D().loops=L0; warmUp(); M.setSel('core'); }
 
-// junctions and a spare pump: neither exists on a default plant, so their
+// fittings and a spare pump: neither exists on a default plant, so their
 // valve mark / symbol / plate are draw paths nothing else here reaches
-{ const L0=M.D().loops, J0=M.D().junc, PS0=M.D().pumpSize;
-  M.D().loops=4; M.D().junc={}; M.D().pumpSize={};
+{ const L0=M.D().loops, J0=M.D().fit, PS0=M.D().pumpSize;
+  M.D().loops=4; M.D().fit={}; M.D().pumpSize={};
   warmUp();                       // 4-loop LAY exists now, for the tap lookup below
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
-  const j0=M.addJunction(0,1,...tap('cold:sg0'));
-  M.addJunction(2,3,...tap('cold:sg2'));
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  const j0=M.addFit('tee',...tap('cold:sg0'),...tap('cold:sg1'));
+  M.addFit('throttle',...tap('cold:sg2'),...tap('cold:sg3'));
   const spare=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',
     grp:'loop0',tip:'A spare coolant pump.',loop:0}));
-  // re-commission after the junctions exist (P.junc bakes from them), then set
+  // re-commission after the fittings exist (P.fit bakes from them), then set
   // juncOpen - commission() would otherwise reset it
   warmUp(); M.S().juncOpen[j0]=true;
   M.setSel(spare.id); sweep('spare:');
@@ -181,7 +181,7 @@ M.setSel('core');
   // placedParts is a persistent array outside D; removePart() is the only way
   // to take the spare back out before the block's other fields are restored
   M.removePart(spare.id);
-  M.D().loops=L0; M.D().junc=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
+  M.D().loops=L0; M.D().fit=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
 
 // a steered pipe: two waypoints draw five grips where a plain run draws one
 { warmUp();

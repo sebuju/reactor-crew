@@ -9,11 +9,13 @@ const {execFileSync}=require('child_process');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
  'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
- 'setSplit,setCommon,bankAutoLive,tProg,loopFlowK,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
+ 'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
- 'pumpCap,totalPumpCap,placePart,removePart,addJunction,removeJunction,pipeNetwork,'+
+ 'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,pipeNetwork,act,'+
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
- 'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW}');
+ 'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW,'+
+ 'netBuild,netFlowK,setPipeK,VALVE_RATE,hittableRunKeys,pipeCells,pipePart,'+
+ 'hasRelief,primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,ventK,reliefG,PIPE_BORE:()=>PIPE_BORE}');
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
 /* THE LATTICE IS PART OF THE DESIGN NOW, so set() has to put it back as well
@@ -23,7 +25,7 @@ const BASE=JSON.parse(JSON.stringify(D));
    truth. `o.lat` is a hook for a case that wants a different core: it runs
    after the reset and does its own latRevolve().
    BASE is COPIED on every reset rather than assigned from: D carries objects
-   now (pumpSize, junc), and Object.assign hands over the reference, so a case
+   now (pumpSize, fit), and Object.assign hands over the reference, so a case
    that wrote through one would poison BASE and every case after it. set() does
    NOT touch placedParts (layout.js) - that is not a D field, so any case that
    places a pump has to remove it again itself, the same way it would restore
@@ -336,13 +338,17 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
   console.log(`  AUTO ROD: armed holds bank at ${(a.rodPos*100).toFixed(0)}%, bypassed obeys ${(b.rodPos*100).toFixed(0)}%`);
 }
 { /* the relief valve is what stops a pressure transient reaching the vessel.
-     Hand the loop an overpressure it must answer, then ask whether it lifted. */
+     Hand the loop an overpressure it must answer, then ask whether it lifted.
+     s.reliefOpen/etc are per-fitting now (Stage 5) - reliefAnyOpen() is the
+     same fact the annunciator and the event log mean by "the relief valve
+     is open" (step.js). */
   const a=set({}); run(a,10); a.P=M.P().P0*1.08; run(a,1);
   const b=set({}); run(b,10); b.byp.porv=true; b.P=M.P().P0*1.08; run(b,1);
-  if(!a.porvOpen) bad('armed PORV did not lift at 108% of nominal pressure');
-  if(b.porvOpen)  bad('PORV lifted automatically while its bypass was in');
+  const aOpen=M.reliefAnyOpen(a), bOpen=M.reliefAnyOpen(b);
+  if(!aOpen) bad('armed PORV did not lift at 108% of nominal pressure');
+  if(bOpen)  bad('PORV lifted automatically while its bypass was in');
   if(b.P <= a.P)  bad(`PORV bypass did not hold pressure up (armed ${a.P.toFixed(2)}, bypassed ${b.P.toFixed(2)} MPa)`);
-  console.log(`  PORV AUTO: armed lifted=${a.porvOpen} at ${a.P.toFixed(2)} MPa, bypassed lifted=${b.porvOpen} at ${b.P.toFixed(2)} MPa`);
+  console.log(`  PORV AUTO: armed lifted=${aOpen} at ${a.P.toFixed(2)} MPa, bypassed lifted=${bOpen} at ${b.P.toFixed(2)} MPa`);
 }
 { /* runback sheds the turbine on a trip; bypassed, the turbine drains a dead core */
   const a=set({}); run(a,10); a.scrammed=true; a.rodDem=1; a.load=a.loadDem=Math.min(a.load,0.05); run(a,60);
@@ -396,16 +402,118 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
   console.log(`  BACKUP: diesels hold full flow through a blackout, battery holds ${(s.flow*100).toFixed(0)}%`);
 }
 
+/* ══════════ RELIEF: THE VENT IS A BOUNDARY CONDITION, AND REDUNDANCY COSTS ══════════
+   Stage 5. FIT.relief (pipenet.js) is a fitting whose g() is a constant 0 -
+   never a row of the Laplacian - so netFlowK() cannot see it at all; this is
+   what proves the vent stayed a boundary condition rather than sneaking
+   into the circulation solve. ventK() judges each fitting's own branch
+   conductance against P.ventRef, and RELIEF_REF_LEN (pipenet.js) is fitted
+   so the stock plant's own relief valve lands on exactly 1 - already proven
+   above (EVERY AUTOMATIC SYSTEM IS BYPASSABLE reads 16.16/16.42 MPa, and THE
+   SIM ROLLS NO LOOSE DICE reads the identical stick pattern, both bit for
+   bit the pre-Stage-5 figures). This block is the redundancy half: what
+   changes when there is more than one relief path, and what happens when
+   there is none. */
+console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
+{ /* netFlowK() must not move a hair for a fitting whose own g() never
+     contributes an edge - the strongest statement available is exact
+     equality against a plant with NO relief fitting at all, not a
+     tolerance, because a vent that touched the Laplacian even by
+     floating-point accident would still likely read "close". */
+  const withRelief=set({}); run(withRelief,5);
+  M.D().fit={}; M.commission(); const noRelief=M.S(); run(noRelief,5);
+  if(M.netFlowK(withRelief)!==M.netFlowK(noRelief))
+    bad(`a relief fitting moved netFlowK: ${M.netFlowK(withRelief)} (with) vs ${M.netFlowK(noRelief)} (without) - it reached the Laplacian`);
+  console.log(`  a relief fitting never moves netFlowK: ${(M.netFlowK(withRelief)*100).toFixed(1)}% with or without one fitted`);
+}
+{ /* the stock relief valve, isolated: armed, it lifts at 106%, reseats below
+     101%, and vents at exactly PORV_INV/PORV_DP (ventK===1) - the same
+     three facts the pre-Stage-5 PORV promised, now read off the fitting.
+     set({}) first, or primaryRelief() would still be reading the empty
+     D.fit the block above left behind. */
+  const s=set({}); const fid=M.primaryRelief(); run(s,10); s.P=M.P().P0*1.10; run(s,1);
+  if(!s.reliefOpen[fid]) bad('the stock relief fitting did not lift at 110% pressure');
+  const vk=M.ventK(s,fid);
+  if(Math.abs(vk-1)>1e-9) bad(`the stock relief fitting's ventK is ${vk}, expected exactly 1`);
+  console.log(`  one relief path: lifts at 110% (open=${s.reliefOpen[fid]}), ventK=${vk.toFixed(6)} - the pre-Stage-5 PORV rate exactly`);
+}
+{ /* redundancy: two more relief valves, tapped onto the stock relief HEADER
+     the way the design bench's own "ADD RELIEF VALVE HERE" does. Three taps
+     that each roll their own die, p=0.18, over 200 forced lifts each -
+     independent draws, so the OR of three is measured directly (count a
+     trial "stuck" the moment any one of the three did) rather than derived
+     from a single fitting's count, and checked against the closed form
+     1-(1-0.18)^3 = 0.4486 with the same 3.3-sigma window the single-valve
+     test above uses (n=200, p=0.4486: sigma=7.0, window ~67..113). */
+  M.D().fit={};
+  const f0=M.addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,M.PIPE_BORE().relief);
+  const f1=M.addFit('relief','cold:sg0b-pump0t',0.5,'relief:pzrt-reltkb',0.3,M.PIPE_BORE().relief);
+  const f2=M.addFit('relief','cold:pump0b-coreb',0.5,'relief:pzrt-reltkb',0.7,M.PIPE_BORE().relief);
+  M.commission(); const s=M.S(); s.byp.rps=true; run(s,5);
+  const ids=[f0,f1,f2];
+  let anyStuck=0;
+  for(let i=0;i<200;i++){
+    for(const id of ids){ s.reliefOpen[id]=false; s.reliefAuto[id]=false; s.reliefStuck[id]=false; }
+    s.P=M.P().P0*1.10;
+    M.step(0.02);
+    if(ids.some(id=>s.reliefStuck[id])) anyStuck++;
+  }
+  const p1=M.DICE().porvStick.p, pOr=1-Math.pow(1-p1,3);
+  const mean=200*pOr, sigma=Math.sqrt(200*pOr*(1-pOr)), lo=Math.round(mean-3.3*sigma), hi=Math.round(mean+3.3*sigma);
+  if(anyStuck<lo||anyStuck>hi)
+    bad(`3 relief paths: ${anyStuck} of 200 trials had one stick, expected ${lo}..${hi} (p=${pOr.toFixed(4)}, mean ${mean.toFixed(0)})`);
+  console.log(`  three relief paths: ${anyStuck} of 200 trials stuck at least one valve, expected ${lo}..${hi} `+
+              `(1-(1-${p1})^3=${pOr.toFixed(4)}, each path rolling its own die)`);
+  M.D().fit={}; M.commission();
+}
+{ /* deleting the last relief path is buildable, not blocked - only warned,
+     the same SOFT/HARD shape every other bad-design choice on the bench
+     gets (design.js). commission() must not throw either: a plant with no
+     vent is a legal plant, just one where an overpressure ends at the
+     vessel (see the pressure block, step.js) instead of a valve. */
+  M.D().fit={};
+  if(M.hasRelief()) bad('hasRelief() is true with an empty D.fit');
+  const w=M.derived().warn;
+  if(!w.some(x=>/no relief path/i.test(x[1])))
+    bad('deleting the last relief fitting raised no bench warning');
+  let threw=false;
+  try{ M.commission(); } catch(e){ threw=true; }
+  if(threw) bad('a plant with no relief path refused to commission');
+  else if(M.primaryRelief()) bad('primaryRelief() found one after every relief fitting was deleted');
+  console.log('  no relief path: warns at the bench, commissions anyway, and P.fit carries no relief fitting');
+}
+{ /* a vent is a boundary condition read straight off ventK() (pipenet.js) -
+     sever the fitting's own branch pipe (pipeExtraLen -> Infinity -> g=0,
+     same idiom every other severed run uses) and force a lift: no NaN in
+     P, inv, or the fitting's own ventK, whatever the network underneath is
+     doing. Re-fit the stock relief afterward so no later case inherits an
+     unrelieved plant. */
+  const s=set({}); run(s,5);
+  const fid=M.primaryRelief();
+  s.dmgParts.push('pipe:xtie:'+fid);
+  s.byp.rps=true; s.P=M.P().P0*1.20; run(s,20);
+  const vk=M.ventK(s,fid);
+  if(!isFinite(s.P)||!isFinite(s.inv)||!isFinite(vk))
+    bad(`a severed relief branch produced a non-finite value: P=${s.P} inv=${s.inv} ventK=${vk}`);
+  if(vk!==0) bad(`a severed relief branch still vented at ventK=${vk}, expected exactly 0`);
+  console.log(`  a severed relief branch never produces NaN: ventK=${vk}, P and inv stay finite (P=${s.P.toFixed(2)} MPa)`);
+}
+
 /* ══════════ JUNCTIONS: FLOW IS PER LOOP NOW ══════════
    Two loops with an open junction between them are one shared-flow group, and
    a pump still turning can push into its neighbour's loop as well. With
    nothing placed - which is every plant in this file above, and every plant
-   the sweep built - each group is a single loop and the whole calculation
-   collapses back to the (loops-lost)/loops it replaced. That identity is the
-   reason the DOCUMENTED BEHAVIOUR figures did not move when the model went
-   per-loop, so it is asserted against the formula itself rather than
-   inferred from them - and it is asserted with junctions placed anywhere a
-   real one can go now, not read off a fixed three-slot table. */
+   the sweep built - each group is a single loop and netFlowK() (the solved
+   network, pipenet.js) is exactly that loop's own share of P.netRef; with
+   junctions PLACED but SHUT, every group is STILL a single loop (a shut
+   junction is a removed edge, not a small one - see netBuild()), so the
+   identity is the same, just no longer the OLD (loops-lost)/loops formula:
+   the loops are not the same length, so each one's own share is weighted by
+   its own reference (P.netRefByLoop), not a flat 1/n. That per-loop identity
+   is asserted directly below, against the implementation's own numbers
+   rather than a formula that stopped applying the day the network went
+   in - and it is asserted with junctions placed anywhere a real one can go
+   now, not read off a fixed three-slot table. */
 console.log('\n=== JUNCTIONS ===');
 /* Ties every adjacent pair with a real junction, the same chain the old
    fixed xtie0/1/2 slots always offered - four loops, three junctions, each
@@ -413,57 +521,61 @@ console.log('\n=== JUNCTIONS ===');
    pumps here - see the block below for why that is its own case. */
 const tieChain=()=>{
   set({loops:4});
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
-  const ids=[0,1,2].map(i=>M.addJunction(i,i+1,...tap('cold:sg'+i)));
-  M.commission();               // re-bakes P.junc with the three junctions in it
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  const ids=[0,1,2].map(i=>M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1))));
+  M.commission();               // re-bakes P.fit with the three junctions in it
   return {s:M.S(), ids};
 };
-{ /* strict equality, not a tolerance: shut, this is meant to be the same
-     arithmetic and not merely the same answer to a few decimal places. No
-     spares fitted in this case on purpose - loopPumpCap() would then sum
-     real hardware above 1.0 per loop and (loops-lost)/loops is no longer
-     the right-hand side of the identity being checked; that combination
-     gets its own case below instead of being asserted here. */
+{ /* strict equality, not a tolerance: shut, a junction is a removed edge, so
+     netFlowK() must fall back to exactly what each surviving loop's own
+     P.netRefByloop contributes, on the nose - never an approximation of it.
+     No spares fitted in this case on purpose - loopPumpCap() would then sum
+     real hardware above 1.0 per loop, which is its own case below. */
   const {s,ids}=tieChain();
+  const ref=M.P().netRefByLoop, tot=M.P().netRef;
+  const expect=dmg=>{ let sum=0; for(let i=0;i<4;i++) if(!dmg.includes('pump'+i)) sum+=ref[i]; return sum/tot; };
   let drift=0;
   for(const dmg of [[],['pump1'],['pump0','pump3'],['pump0','pump1','pump2','pump3']]){
     s.dmgParts=dmg.slice();
-    if(M.loopFlowK(s)!==(4-dmg.length)/4) drift++;
+    if(M.netFlowK(s)!==expect(dmg)) drift++;
   }
-  if(drift) bad(`${drift} of 4 damage cases: shut junctions no longer give (loops-lost)/loops exactly`);
-  else console.log('  shut junctions are the old formula exactly, 0..4 pumps lost');
+  if(drift) bad(`${drift} of 4 damage cases: a shut junction no longer gives exactly its surviving loops' own reference share`);
+  else console.log('  shut junctions give exactly the surviving loops\' own reference share, 0..4 pumps lost');
   s.dmgParts=[];
-  if(M.loopFlowK(s)!==1) bad('an open junction changed the flow of a plant with every pump running');
+  if(M.netFlowK(s)!==1) bad('a shut junction changed the flow of a plant with every pump running');
+  s.juncOpen[ids[0]]=true; s.juncOpen[ids[1]]=true; s.juncOpen[ids[2]]=true;
+  if(M.netFlowK(s)!==1) bad('opening a junction between healthy loops manufactured flow that was not there shut');
 }
 { /* ── A JUNCTION ONLY HAS SOMETHING TO PROVE ONCE THERE IS SOMETHING TO SHARE ──
      loopPumpCap() sums real hardware - a pump at default size delivers
-     exactly 1.0, its own loop's own ceiling, so min(groupSize,up) never
-     actually clamps anything when every pump in a group is bare and
-     default-sized: tying two loops each already at their own 1.0 changes
-     nothing, because there was never a spare pcm of capacity to move. That
-     is not a bug, it is "nobody gets flow for free" (loopFlowK's own
-     comment, step.js) - a junction is a path for capacity that already
-     exists to travel, not a source of capacity on its own.
+     exactly 1.0, its own loop's own ceiling, so a lone loop's own group
+     ceiling never actually clamps anything when every pump on it is bare
+     and default-sized. That is not a bug, it is "nobody gets flow for free"
+     (netFlowK's own comment, pipenet.js) - a junction is a path for
+     capacity that already exists to travel, not a source of capacity on its
+     own.
      So this case places two spares deliberately unequal, to keep three
      figures strictly increasing rather than two of them landing on the same
      ceiling: a SMALL one (sized to 0, capacity 0.7) on loop 1, reachable the
      moment the single junction j0 opens, and a FULL one (default size,
      capacity 1.0) on loop 3, reachable only once the whole chain is open -
      which is also what actually exercises the graph-connectivity
-     generalisation this replaced a fixed adjacent-pair chain with, rather
-     than only ever proving one edge works. Verified by hand before this was
-     written: shut 75.0%, one junction 92.5%, full chain 100.0%. */
+     generalisation loopFlowK() used to offer. The figures below are the
+     network's own - they are not the old formula's 75.0% / 92.5% / 100.0%,
+     because the loops are not the same length (see pipenet.js) and pump0's
+     own loop is not an average loop; only the ordering (each rung strictly
+     ahead of the last) is the claim. */
   set({loops:4});
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r.pts[0]; };
-  const ids=[0,1,2].map(i=>M.addJunction(i,i+1,...tap('cold:sg'+i)));
+  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  const ids=[0,1,2].map(i=>M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1))));
   const sp1=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',grp:'loop1',tip:'t',loop:1}));
   M.D().pumpSize[sp1.id]=0;
   const sp3=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:13,y:5,col:'#57d38c',grp:'loop3',tip:'t',loop:3}));
   M.commission(); const s=M.S();
   s.dmgParts=['pump0'];
-  const alone=M.loopFlowK(s);
-  s.juncOpen[ids[0]]=true; const one=M.loopFlowK(s);
-  s.juncOpen[ids[1]]=true; s.juncOpen[ids[2]]=true; const all=M.loopFlowK(s);
+  const alone=M.netFlowK(s);
+  s.juncOpen[ids[0]]=true; const one=M.netFlowK(s);
+  s.juncOpen[ids[1]]=true; s.juncOpen[ids[2]]=true; const all=M.netFlowK(s);
   if(!(one>alone)) bad('opening the junction beside a dead pump bought no flow at all');
   if(!(all>one))   bad('opening the rest of the chain bought nothing over one junction');
   console.log(`  4 loops, RCP 1 lost, 2 spares placed: shut ${(alone*100).toFixed(1)}%`+
@@ -497,6 +609,177 @@ const tieChain=()=>{
               ` hot channel ${(shut.hotFlow*100).toFixed(0)}% DNBR ${shut.dnbr.toFixed(2)}`+
               ` -> chain open n=${(open.n*100).toFixed(1)}%`+
               ` hot channel ${(open.hotFlow*100).toFixed(0)}% DNBR ${open.dnbr.toFixed(2)}`);
+}
+
+/* ══════════ THROTTLES ══════════
+   A tee is boolean; a throttle is Stage 3a's new mode, a live position
+   0..1. Four things are new and unproven by the JUNCTIONS block above:
+   wide open costs the run nothing at all (bit-identical to no fitting),
+   closing it chokes flow monotonically, shut is a real break (exactly
+   zero), and the position is an ACTUATOR - demand and actual converge at
+   VALVE_RATE, never teleport. A fifth defends the refusal every ACT row
+   in this stage owes a design that never had the id it was asked to work. */
+console.log('\n=== THROTTLES ===');
+{
+  set({loops:1}); M.commission();
+  const bare=M.netFlowK(M.S());
+
+  set({loops:1});
+  const tap=()=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith('cold:sg0')); return [r.key,0.5]; };
+  const tid=M.addFit('throttle',...tap(),null,null);   // in-line: bKey null
+  M.commission();
+  const s=M.S();
+  if(s.valve[tid]!==1) bad(`an in-line throttle commissioned at ${s.valve[tid]}, expected wide open (1)`);
+  if(s.valveDem[tid]!==1) bad('valveDem did not start equal to valve, like every other actuator');
+
+  const wide=M.netFlowK(s);
+  if(wide!==bare)
+    bad(`a wide-open throttle changed flow: ${(wide*100).toFixed(4)}% vs no fitting at all ${(bare*100).toFixed(4)}%`);
+  else console.log(`  wide open (x=1) is bit-identical to no fitting at all: ${(wide*100).toFixed(1)}%`);
+
+  let prev=wide, monotone=true;
+  for(const x of [0.9,0.75,0.5,0.25,0.1,0.05]){
+    s.valve[tid]=x;
+    const k=M.netFlowK(s);
+    if(!(k<=prev)) monotone=false;
+    prev=k;
+  }
+  if(!monotone) bad('closing a throttle did not reduce flow monotonically');
+  else console.log(`  closing 1.0 -> 0.05: flow falls monotonically to ${(prev*100).toFixed(1)}%`);
+
+  s.valve[tid]=0;
+  const shutK=M.netFlowK(s);
+  if(shutK!==0) bad(`a fully shut throttle left flow at ${shutK}, expected exactly 0`);
+  else console.log('  fully shut (x=0) cuts the run to exactly zero');
+
+  // the actuator: demand and actual converge at VALVE_RATE, from the
+  // as-commissioned default, like every other slider on the plant - s.valve
+  // was driven straight to 0 above to test the physics, so put it back to
+  // where commissioning left it before testing the WALK toward a new demand
+  s.valve[tid]=1; s.valveDem[tid]=1;
+  s.valveDem[tid]=0;
+  M.step(0.02);
+  const want=1-M.VALVE_RATE*0.02;
+  if(Math.abs(s.valve[tid]-want)>1e-9)
+    bad(`one tick moved the valve to ${s.valve[tid]}, expected ${want} (VALVE_RATE*dt)`);
+  let n=0; while(s.valve[tid]>0 && n<10000){ M.step(0.02); n++; }
+  if(s.valve[tid]!==0) bad(`the valve did not settle exactly on its demand, stopped at ${s.valve[tid]}`);
+  else console.log(`  valve strokes fully shut in ${(n*0.02).toFixed(1)} s at VALVE_RATE=${M.VALVE_RATE.toFixed(4)}/s`);
+
+  // an id this design never had is refused, not phantom-keyed onto S
+  M.act('junc','doesNotExist');
+  if('doesNotExist' in M.S().juncOpen) bad('act(junc,...) put a phantom key on S for an id this design never had');
+  M.act('valveDem','doesNotExist',0.5);
+  if('doesNotExist' in M.S().valve) bad('act(valveDem,...) put a phantom key on S for an id this design never had');
+  console.log('  act() refuses a fitting id this design never had, on both junc and valveDem');
+}
+
+/* ══════════ A PIPE RUN IS A HITTABLE TARGET (STAGE 4) ══════════
+   combatHit() and repairStart() (step.js) now draw from LAY.parts AND from
+   every run the solved network actually prices a resistance for
+   (hittableRunKeys(), pipenet.js). A hit is a SEVERANCE: additive
+   equivalent length taken to Infinity, which resist() (pipenet.js) carries
+   straight through to an exact 0 conductance - the identical g<=0 path a
+   shut valve already takes through netAssemble. See pipeExtraLen()'s own
+   comment (pipenet.js) for why that is additive, never a multiplier, and
+   why a severance rather than a graduated restriction. */
+console.log('\n=== A PIPE RUN CAN BE HIT ===');
+{ const s=set({}); run(s,5);
+  const keys=M.hittableRunKeys(M.P().net);
+  if(!keys.length) bad('a default PWR has no hittable pipe runs');
+  const key=keys.find(k=>k.indexOf('cold:')===0)||keys[0];
+  const before=M.netFlowK(s);
+  M.combatHit('pipe:'+key);
+  if(!s.dmgParts.includes('pipe:'+key)) bad(`combatHit('pipe:${key}') did not record damage`);
+  const after=M.netFlowK(s);
+  if(!(after<before)) bad(`severing ${key} did not reduce flow: ${(before*100).toFixed(1)}% -> ${(after*100).toFixed(1)}%`);
+  else console.log(`  severing ${key}: flow ${(before*100).toFixed(1)}% -> ${(after*100).toFixed(1)}%`);
+  M.combatHit('pipe:'+key);           // already severed: refused, not doubled
+  if(s.dmgParts.filter(k=>k==='pipe:'+key).length!==1) bad('a second hit on an already-severed run was not refused');
+  M.combatHit('pipe:doesNotExist');   // a run key this design never had: refused, not phantom-keyed
+  if(s.dmgParts.includes('pipe:doesNotExist')) bad('a hit on a run key this design never had was not refused');
+}
+{ /* undamaged unaffected, and hit-then-repaired returns to EXACTLY the
+     float netFlowK() started at - the network's own factorisation cache
+     (netFactored(), pipenet.js) has to bust on both the hit and the repair,
+     or one of the two would solve against a pipe that is no longer the one
+     on the grid. */
+  const s=set({}); run(s,5);
+  const before=M.netFlowK(s);
+  const key=M.hittableRunKeys(M.P().net)[0];
+  M.combatHit('pipe:'+key);
+  M.repairStart('pipe:'+key);
+  if(!s.repair) bad(`repair on a freshly hit, reachable run (${key}) was refused`);
+  let n=0; while(s.repair && n<200000){ M.step(0.02); n++; }
+  if(s.dmgParts.includes('pipe:'+key)) bad('a completed repair left the run marked damaged');
+  const after=M.netFlowK(s);
+  if(after!==before) bad(`a repaired run left netFlowK at ${after}, expected exactly ${before} (bit-identical to undamaged)`);
+  else console.log(`  hit-and-repaired ${key}: flow returns to exactly ${(after*100).toFixed(1)}% in ${(n*0.02).toFixed(0)} s`);
+}
+{ /* walled in on every side: the same refusal a walled-in PART already gets
+     (layoutMetrics()'s REPAIR ACCESS). LAY.parts is mutated directly rather
+     than through placePart()/buildLayout(), which would re-route the run
+     around the very obstruction this case is trying to build. */
+  const s=set({}); run(s,5);
+  const rk=M.hittableRunKeys(M.P().net), key=rk.find(k=>k.indexOf('cold:')===0)||rk[0];
+  const r=M.P().net.byKey[key], cells=M.pipeCells(r.pts);
+  const L=M.LAY(), blocked={}, added=[];
+  for(const [x,y] of cells) blocked[x+','+y]=1;
+  for(const [x,y] of cells) for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    const gx=x+dx, gy=y+dy, k2=gx+','+gy;
+    if(gx<0||gy<0||gx>=16||gy>=9||blocked[k2]) continue;
+    blocked[k2]=1;
+    const b={id:'blk'+added.length,name:'BLOCK',w:1,h:1,x:gx,y:gy,grp:'wall'};
+    added.push(b); L.parts.push(b);
+  }
+  M.combatHit('pipe:'+key);
+  M.repairStart('pipe:'+key);
+  if(s.repair) bad(`a run walled in on every side still accepted a repair dispatch (${key})`);
+  else console.log(`  ${key} walled in on every side: dispatch refused, same as a walled-in part`);
+  L.parts.length -= added.length;     // undo the mutation or every later case inherits the wall
+}
+console.log('\n=== A SEVERED RUN NEVER PRODUCES NaN, ANY ARCHITECTURE ===');
+{ for(let a=0;a<ARCH.length;a++){
+    const s=set({arch:a}); run(s,5);
+    const keys=M.hittableRunKeys(M.P().net);
+    if(!keys.length) continue;
+    for(const key of keys) M.combatHit('pipe:'+key);   // sever everything the graph prices for this plant
+    run(s,30);
+    const nums={n:s.n,Tf:s.Tf,dnbr:s.dnbr,flow:s.flow,nat:s.nat,P:s.P,Tavg:s.Tavg,k:M.netFlowK(s)};
+    const bad_=Object.keys(nums).filter(k=>!isFinite(nums[k]));
+    if(bad_.length) bad(`${ARCH[a].id}: severing every hittable run left ${bad_.join(',')} non-finite`);
+  }
+  console.log('  severing every hittable run, every architecture: no NaN - the plant falls back to whatever natural circulation gives it');
+}
+
+/* ══════════ THE PROTECTION SYSTEM MEASURES FLOW, IT DOES NOT READ THE DIAL ══════════
+   A hole this feature OPENED and then closed. LOW FLOW used to trip on
+   s.flow, the pump demand - and before an in-line valve existed, demand and
+   delivery could not diverge, so nothing was wrong with that. A throttle can
+   restrict a run, and a severed run can cut it outright, so a player could
+   shut every valve on the primary with the pumps still commanded to 100% and
+   the RPS would never have noticed. s.flowNet is what a flow meter in the
+   loop actually reads, and pumpK is exactly 1 on an undamaged plant with
+   nothing throttled - which is why nothing had to be re-pinned for this. */
+console.log('\n=== LOW FLOW TRIPS ON DELIVERED FLOW, NOT THE PUMP DIAL ===');
+{ set({loops:1});
+  const cold=M.pipeNetwork().find(r=>r.key&&r.key.startsWith('cold:'));
+  const th=M.addFit('throttle',cold.key,0.5,null,null);
+  M.commission();
+  const s=M.S(), floor=M.P().flowMin*1.02;
+  run(s,2);
+  if(s.trip) bad('a wide-open throttle tripped a plant nobody had touched: '+s.trip);
+  s.valveDem[th]=0;                       // shut it. the pump demand never moves.
+  for(let i=0;i<3000 && !s.trip;i++) M.step(0.02);
+  if(!/LOW FLOW/.test(s.trip))
+    bad(`shutting every valve on the primary did not trip LOW FLOW (trip="${s.trip}", delivered ${s.flowNet.toFixed(3)} vs floor ${floor.toFixed(3)})`);
+  /* THE SENTINEL. Not decoration: this is the exact condition the OLD trip
+     read, and it is still above the floor - so if anyone points LOW FLOW back
+     at s.flow, the case above stops tripping and this line says why. */
+  else if(!(s.flow>floor))
+    bad('the pump dial fell below the floor too, so this case no longer proves the trip reads the delivered figure');
+  else console.log(`  every valve shut, pumps still ordered to ${(s.flow*100).toFixed(0)}%: delivered ${(s.flowNet*100).toFixed(1)}% is under the ${(floor*100).toFixed(0)}% floor and "${s.trip}" fires - the dial alone would have missed it`);
+  M.removeFit(th);
 }
 
 /* ══════════ THE BANKS SPLIT, AND THE CONTROLLER IS TUNED BY HAND ══════════
@@ -717,13 +1000,18 @@ console.log('\n=== THE SIM ROLLS NO LOOSE DICE ===');
 { /* One forced lift per call: put the pressure above the 106% setpoint, take a
      tick, read what the valve did, then reseat it by hand for the next one.
      The RPS is bypassed because a trip is not what is under test here and a
-     scrammed plant would simply stop reaching the setpoint. */
+     scrammed plant would simply stop reaching the setpoint. Addresses the
+     stock plant's ONE relief fitting directly (primaryRelief()) - its per-
+     fitting fields (Stage 5) are the same shape the old global porv* fields
+     were, just keyed by fid. */
+  const fid=M.primaryRelief();
+  if(!fid) bad('the stock plant has no relief fitting to test the dice against');
   const lifts=(s,n)=>{ let pat='';
     for(let i=0;i<n;i++){
-      s.porvOpen=false; s.porvAuto=false; s.porvStuck=false;
+      s.reliefOpen[fid]=false; s.reliefAuto[fid]=false; s.reliefStuck[fid]=false;
       s.P=M.P().P0*1.10;
       M.step(0.02);
-      pat += s.porvStuck?'1':'0';
+      pat += s.reliefStuck[fid]?'1':'0';
     }
     return pat; };
   const stuck=p=>p.split('').filter(c=>c==='1').length;
@@ -753,7 +1041,7 @@ console.log('\n=== THE SIM ROLLS NO LOOSE DICE ===');
   const d=set({}); d.byp.rps=true; run(d,5); d.diceOff=true;
   const off=lifts(d,200);
   if(stuck(off)) bad(`${stuck(off)} of 200 lifts stuck with the dice stood down`);
-  d.porvArm=true;
+  d.reliefArm[fid]=true;
   const armed=lifts(d,3);
   if(armed[0]!=='1') bad('an armed lift did not stick');
   if(armed.slice(1).includes('1')) bad('porvArm was not consumed; one command made the valve permanently faulty');
@@ -813,8 +1101,8 @@ console.log('\n=== A SNAPSHOT IS THE WHOLE PLANT ===');
 
   const okA=trip('default PWR',{});
   const okB=trip('RBMK (arch 2)',{arch:2});
-  /* damage and repair carry their own fields - rodJam, dmgParts, porvStuck, the
-     repair timer - and they are the ones a hand-written snapshot list forgets */
+  /* damage and repair carry their own fields - rodJam, dmgParts, reliefStuck,
+     the repair timer - and they are the ones a hand-written snapshot list forgets */
   const okC=trip('after a combat hit',{},s=>{ W.combatHit('rods'); });
   if(okA&&okB&&okC) console.log('  three plants round-trip bit-for-bit under an ADVANCING wall clock');
 
@@ -1012,7 +1300,7 @@ console.log('\n=== THE KEYFRAMES ARE A CACHE ===');
    blocks are reading. */
 const SC=require('./bundle').headless(
  '{commission,latDefault,scnRun,scnJudge,scnCompile,scnClone,scnNew,scnGest,scnLimit,'+
- 'SCNPRE:()=>SCNPRE,GEST:()=>GEST,ACT:()=>ACT,snapS,eqWhere,S:()=>S}',
+ 'SCNPRE:()=>SCNPRE,GEST:()=>GEST,ACT:()=>ACT,snapS,eqWhere,S:()=>S,primaryRelief}',
  {clock:true});
 /* A verdict as one comparable string: the pass, and for every limit whether it
    broke, where, and the worst the channel ever got. Comparing the objects would
@@ -1082,11 +1370,12 @@ console.log('\n=== A SCENARIO RUNS THE SAME WAY TWICE ===');
     SC.scnGest(s,2,'loadStep',0);           // nowhere for the heat to go: the valve lifts
     return s; };
   SC.scnRun(porv(false)); const off=SC.S();
-  if(!off.porvAuto) bad('the scripted overpressure never lifted the relief valve, so nothing was under test');
-  if(off.porvStuck) bad('the relief valve stuck with the dice stood down');
+  const rfid=SC.primaryRelief();
+  if(!rfid || !off.reliefAuto[rfid]) bad('the scripted overpressure never lifted the relief valve, so nothing was under test');
+  if(rfid && off.reliefStuck[rfid]) bad('the relief valve stuck with the dice stood down');
   if(off.rng!==off.seed) bad('a scripted run moved the generator cursor; something rolled');
   SC.scnRun(porv(true)); const armed=SC.S();
-  if(!armed.porvStuck) bad('a porvArm gesture did not stick the lift it armed');
+  if(!rfid || !armed.reliefStuck[rfid]) bad('a porvArm gesture did not stick the lift it armed');
   console.log('  dice off: the valve lifts and reseats and the cursor never moves; '+
               'one porvArm gesture sticks the next lift');
 
@@ -1513,6 +1802,84 @@ console.log('\n=== THE REPAIR PARTY CAN BE SPENT, AND IT IS PERMANENT ===');
   M.resetPlant();
   if(M.S().partySpent!==false) bad('resetPlant() did not clear partySpent back to false');
   else console.log('  resetPlant() clears partySpent back to false');
+}
+
+/* ══════════ THE NETWORK IS PIPE_K-INVARIANT, AND KNOWS A SHORT LOOP FROM A LONG ONE ══════════
+   netFlowK() (src/data/pipenet.js) is what feeds pumpK in step() now -
+   loopFlowK(), the capacity-counting formula it replaced, is gone. This is
+   what earns that.
+
+   PIPE_K is a common scale on every resistance in the graph and the linear
+   system is homogeneous in it, so whatever netFlowK() hands back has to be
+   identical whichever PIPE_K the plant happened to be commissioned with -
+   the whole calibration argument (pipenet.js's own note on PIPE_K) rests on
+   that. It is checked two ways: with no damage or every pump lost, the
+   answer is pinned exactly (1 or 0, no tolerance, over the same PIPE_K x
+   loops x damage sweep Stage 1 used); for a fixed, partially-damaged plant,
+   PIPE_K is swept three orders of magnitude and the result may drift only
+   in the last few bits (1e-12), never move - if it ever moves more than
+   that, someone put an ADDITIVE term into a conductance.
+
+   The stock steam generators sit in a row (x = 7 + i*2), so the four loops'
+   own primary pipe runs are NOT the same length - short to long, loop 0
+   through loop 3 - and a solved network correctly gives the short loop more
+   flow, because it is less resistance for the same head. loopFlowK() could
+   never see this (a capacity count cannot tell which loop died); netFlowK()
+   does, and that is the property that makes solving the network worth doing
+   at all - killing the shortest loop's own pump must cost strictly more
+   than killing the longest's. */
+console.log('\n=== THE NETWORK IS PIPE_K-INVARIANT, AND KNOWS A SHORT LOOP FROM A LONG ONE ===');
+{
+  const dmgCases = n => [[], ['pump0'], ['pump0','pump1'], Array.from({length:n},(_,i)=>'pump'+i)]
+    .filter(dmg => dmg.every(id => +id.slice(4) < n));   // drop cases that name a pump this loop count doesn't have
+  let checked=0, refChecked=0;
+  for(const k of [0.0006, 0.006, 0.06]){
+    M.setPipeK(k);
+    for(let n=1;n<=4;n++){
+      const s = set({loops:n});
+      if(!(M.P().netRef>0)) bad(`PIPE_K=${k} loops=${n}: P.netRef=${M.P().netRef}, expected >0`);
+      else refChecked++;
+      for(const dmg of dmgCases(n)){
+        s.dmgParts = dmg;
+        const nf = M.netFlowK(s);
+        checked++;
+        if(nf<0 || nf>1) bad(`PIPE_K=${k} loops=${n} dmg=[${dmg}]: netFlowK=${nf}, outside [0,1]`);
+        if(dmg.length===0 && nf!==1) bad(`PIPE_K=${k} loops=${n}: no damage gave netFlowK=${nf}, expected exactly 1`);
+        if(dmg.length===n && nf!==0) bad(`PIPE_K=${k} loops=${n}: every pump lost gave netFlowK=${nf}, expected exactly 0`);
+      }
+    }
+  }
+  console.log(`  no damage -> netFlowK===1 exactly, every pump lost -> netFlowK===0 exactly, always in [0,1]:`+
+              ` ${checked} (PIPE_K x loops x damage) cases; P.netRef>0 on all ${refChecked} builds`);
+
+  /* One fixed plant, one fixed (partial) damage set, PIPE_K swept three
+     orders of magnitude - a tolerance rather than strict equality because
+     netFactor()'s elimination runs on a differently-SCALED matrix each time
+     (net.js), and floating point does not promise the same last bit off a
+     different scale even when the algebra is exact. */
+  const vals = [0.0006, 0.006, 0.06].map(k => { M.setPipeK(k);
+    const s = set({loops:4}); s.dmgParts=['pump1']; return M.netFlowK(s); });
+  M.setPipeK(0.006);   // restore the default so no later case in this run inherits a swept value
+  const drift = Math.max(...vals) - Math.min(...vals);
+  if(drift > 1e-12) bad(`netFlowK drifted ${drift} across a 100x PIPE_K sweep - an additive term crept into a conductance`);
+  console.log(`  PIPE_K-invariant to ${drift.toExponential(2)} across a 100x sweep (pump1 dead, 4 loops)`);
+
+  { const s = set({loops:4});
+    s.dmgParts=['pump0']; const short = M.netFlowK(s);
+    s.dmgParts=['pump3']; const long  = M.netFlowK(s);
+    if(!(short < long))
+      bad(`killing the shortest loop's pump (${(short*100).toFixed(1)}%) did not cost more than the longest's (${(long*100).toFixed(1)}%)`);
+    console.log(`  4 loops, no junctions: shortest loop's pump lost -> ${(short*100).toFixed(1)}%,`+
+                ` longest loop's pump lost -> ${(long*100).toFixed(1)}%`);
+  }
+
+  let archChecked=0;
+  for(let a=0;a<ARCH.length;a++){
+    set({arch:a});
+    if(!(M.P().netRef>0)) bad(`${ARCH[a].id}: P.netRef=${M.P().netRef}, expected >0`);
+    else archChecked++;
+  }
+  console.log(`  P.netRef>0 on all ${archChecked} architectures`);
 }
 
 console.log(fails? `\n${fails} FAILURE(S)` : '\nall physics checks passed');
