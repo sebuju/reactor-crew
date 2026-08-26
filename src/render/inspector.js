@@ -33,19 +33,57 @@ function railPick(well,ids,name){
   return well;
 }
 
+/* ══ A RAIL ONLY SYNCS THE PANELS YOU CAN SEE ══
+   Both rails rebuild every panel's data table on every frame - readoutsFor() in
+   the control room, paramsFor() on the bench - and a rail is a tall scroller,
+   so most of those panels are past its bottom edge. An IntersectionObserver
+   marks the ones actually on screen and the sync loops skip the rest. The
+   margin makes a panel live before it scrolls in, so nothing is ever seen
+   catching up.
+
+   With no observer (headless) every panel counts as visible, because a gate
+   that skips the work would skip the auditor's coverage of it with it. */
+function railWatch(scroller){
+  if(typeof IntersectionObserver!=="function") return {add(el){ el._vis=true; },free(){}};
+  const io=new IntersectionObserver(es=>{ for(const e of es) e.target._vis=e.isIntersecting; },
+                                    {root:scroller,rootMargin:"200px"});
+  return {add(el){ el._vis=true; io.observe(el); }, free(){ io.disconnect(); }};
+}
+const railSeen = el => el._vis!==false;
+
 /* ══ ONE ROW LIST, TWO SCREENS ══
    readoutsFor() rows and the bench's MEASURED rows are the same shape -
    [label,value,color,tip,band,signedBar] or {sec}. A signedBar carries `m`,
    the limit marks in track fractions, so a centre-zero row can say where the
-   line is exactly the way a band's `lim` does. Built once, synced by a
-   signature so a row set that changes shape (a STATUS row appearing on
-   damage, a TRIP mark appearing when a bypass is thrown) rebuilds instead of
-   silently misaligning against the old DOM. */
-function fieldRowSig(rows){ return rows.map(r=>r.sec?("#"+r.sec):r.viz?("@"+r.viz):r[0]).join("|"); }
+   line is exactly the way a band's `lim` does. Built once, and checked against
+   the handles that build made, so a row set that changes shape (a STATUS row
+   appearing on damage, a TRIP mark appearing when a bypass is thrown) rebuilds
+   instead of silently misaligning against the old DOM. */
+
+/* Both checks run per panel per frame, so neither may allocate. They compare
+   against the handles the last build made rather than building a signature
+   string to compare. `lim` in particular is a fresh array literal every frame
+   (readoutsFor), so identity can never match it and a JSON string per band row
+   per frame was the whole cost of asking. */
+function fieldRowsMatch(h,rows){
+  if(!h || h.length!==rows.length) return false;
+  for(let i=0;i<rows.length;i++){ const r=rows[i], H=h[i];
+    if(r.sec){ if(H.sec!==r.sec) return false; }
+    else if(r.viz){ if(H.viz!==r.viz) return false; }
+    else if(H.key!==r[0]) return false; }
+  return true;
+}
+function limSame(a,b){
+  if(!a||!b) return !a===!b;
+  if(a.length!==b.length) return false;
+  for(let i=0;i<a.length;i++) if(a[i][0]!==b[i][0]||a[i][1]!==b[i][1]) return false;
+  return true;
+}
 function fieldRowsBuild(container,rows){
   const out=[];
+  let viz=null;
   for(const row of rows){
-    if(row.sec){ container.appendChild(KIT.rule(row.sec).el); out.push({sec:true}); continue; }
+    if(row.sec){ container.appendChild(KIT.rule(row.sec).el); out.push({sec:row.sec}); continue; }
     /* A genuinely graphical row keeps its own <canvas>, painted by the screen
        through hostPaint() - the rail is opaque, so drawing it on #cv would put
        it under the panel. Same arrangement the lattice plan uses. */
@@ -53,6 +91,10 @@ function fieldRowsBuild(container,rows){
       const c=KIT.el("canvas","insp-viz insp-viz-"+row.viz);
       if(row.tip) KIT.tip(c,row.title||row.viz,row.tip);
       container.appendChild(c);
+      /* handed back on the container so the screen paints it off this build
+         instead of re-querying the whole screen for it every frame. It cannot
+         go stale: a rebuild replaces the canvas and this map together. */
+      (viz||(viz={}))[row.viz]=c;
       out.push({viz:row.viz}); continue;
     }
     const el=KIT.el("div","insp-row");
@@ -65,31 +107,32 @@ function fieldRowsBuild(container,rows){
     else if(row[5]){ bar=KIT.segMark({signed:true,full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
     if(row[3]) KIT.tip(el,row[0],row[3]);
     container.appendChild(el);
-    out.push({val,bar,barKind});
+    /* txt/col are what was last WRITTEN. Asking the element back costs a DOM
+       read per row per frame, and for a colour outside the palette it is also
+       wrong: #00ffff goes in and rgb(0, 255, 255) comes out, so the guard never
+       held and those rows repainted on every frame. Same cache the kit keeps
+       for a cell's fill (kit.js). */
+    out.push({key:row[0],val,bar,barKind,txt:null,col:null,lim:row[4]?row[4].lim:null});
   }
+  container._viz=viz;
   return out;
 }
 function fieldRowsSync(container,rows){
-  const sig=fieldRowSig(rows);
-  let limChanged=false;
-  if(sig===container._sig && container._h) rows.forEach((row,i)=>{
-    const H=container._h[i];
-    if(H && H.barKind==="band"){
-      const ls=row[4].lim?JSON.stringify(row[4].lim):null;
-      if(ls!==H.limSig) limChanged=true;
-    }
-  });
-  if(sig!==container._sig || limChanged || !container._h){
-    container.innerHTML=""; container._h=fieldRowsBuild(container,rows); container._sig=sig;
+  let h=container._h, rebuild=!fieldRowsMatch(h,rows);
+  if(!rebuild) for(let i=0;i<rows.length;i++){
+    const H=h[i];
+    if(H.barKind==="band" && !limSame(rows[i][4].lim,H.lim)){ rebuild=true; break; }
   }
-  rows.forEach((row,i)=>{
-    const H=container._h[i]; if(!H||row.sec||row.viz) return;
-    if(H.val.textContent!==row[1]) H.val.textContent=row[1];
+  if(rebuild){ container.innerHTML=""; h=container._h=fieldRowsBuild(container,rows); }
+  for(let i=0;i<rows.length;i++){
+    const H=h[i], row=rows[i];
+    if(!H||row.sec||row.viz) continue;
+    if(H.txt!==row[1]){ H.val.textContent=row[1]; H.txt=row[1]; }
     const col=cssCol(row[2]);
-    if(H.val.style.color!==col) H.val.style.color=col;
-    if(H.barKind==="band"){ H.bar.set(row[4].v); H.limSig=row[4].lim?JSON.stringify(row[4].lim):null; }
+    if(H.col!==col){ H.val.style.color=col; H.col=col; }
+    if(H.barKind==="band"){ H.bar.set(row[4].v); H.lim=row[4].lim; }
     else if(H.barKind==="sig") H.bar.set(row[5].f,row[5].m,col);
-  });
+  }
 }
 
 /* A stat row - [label,value,frac,color,tip] - the RESULTS panel's shape. */
