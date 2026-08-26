@@ -405,10 +405,17 @@ function pipeTag(x,yTop,label,col){
    anchor that is itself in open air can still drop its digits inside a component,
    which is how the hot-leg reading ended up under a damage badge. */
 const PIPE_DIAL_R=10;
+/* Is this rectangle clear of every component box? The one test a widget that
+   floats in the pipe margin - a meter, a fitting's control strip - uses to
+   decide where it may sit, so two of them cannot disagree about what "in the
+   way" means. */
+function boxClear(x,y,w,h){
+  return !LAY.parts.some(p=>{ const r=prect(p);
+    return x+w>r.x && x<r.x+r.w && y+h>r.y && y<r.y+r.h; });
+}
 function pipeAnchors(runs){
   const best={}, need=2*PIPE_DIAL_R+6, r0=PIPE_DIAL_R;
-  const clear=(x,y)=>!LAY.parts.some(p=>{ const r=prect(p);
-    return x+r0>r.x && x-r0<r.x+r.w && y+r0+11>r.y && y-r0<r.y+r.h; });
+  const clear=(x,y)=>boxClear(x-r0,y-r0,2*r0,2*r0+11);
   for(const r of runs){
     const g=pipeGeom(r.pts);
     for(const q of g.segs){
@@ -486,11 +493,15 @@ function pipeVessel(L){
      be dodging a relief bowtie on the very top of the shell too; that valve is a
      fitting now and is drawn at its own tap (pipeFitMarks()). */
   const cx=Math.round(R.x+R.w/2), cy=Math.round(R.y+r+16);
-  pipeDial(cx,cy,r,fr,C.cyan,null,{lim:PORV_LIFT,max:1.35});
+  /* The vessel gauge shows ONE plant pressure, so it can only mark one valve;
+     the primary is the honest choice, and it follows that valve's own dialled
+     setpoint rather than a constant every relief valve used to share. */
+  const lift=reliefSet(primaryRelief()).lift;
+  pipeDial(cx,cy,r,fr,C.cyan,null,{lim:lift,max:1.35});
   TIP(cx-r,cy-r,2*r,2*r,"PRESSURIZER  PRESSURE",
     L.P.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+P.P0.toFixed(1)+
     " MPa design point. Level "+L.lvl.toFixed(0)+" %."+
-    (fr>PORV_LIFT?"  It is past the relief valve setpoint."
+    (fr>lift?"  It is past the relief valve setpoint."
             :reliefAnyOpen(L)?"  The relief valve is passing.":""));
 }
 

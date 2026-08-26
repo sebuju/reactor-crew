@@ -317,6 +317,19 @@ function crRailBuild(rail){
     rail.appendChild(well.el);
     panels.push({p,well,body});
   }
+  /* A fitting gets a panel here too, off readoutsForFit() - READOUT ONLY, the
+     way every panel in this rail is. Its handles are on the valve itself
+     (fitStrip(), plant.js), because a fitting has no component box to mount a
+     control strip on and this rail has never held a control. */
+  const fits = P? P.fit : {};        // the rail is built once before commissioning too
+  for(const fid in fits){
+    const name=FITNAME[fits[fid].mode]+" "+fid.toUpperCase();
+    const well=KIT.well({title:name});
+    railPick(well,[fid],name);
+    const body=KIT.el("div","cr-panel-body"); well.body.appendChild(body);
+    rail.appendChild(well.el);
+    panels.push({fid,well,body});
+  }
   return panels;
 }
 /* see dbRailSync() - reveal on the frame sel changes, never every frame */
@@ -324,8 +337,8 @@ let crLastSel=null;
 function crRailSync(panels){
   const moved = sel!==crLastSel; crLastSel=sel;
   for(const h of panels){
-    const rows=readoutsFor(h.p,S);
-    const on = h.p.id===sel;
+    const rows = h.fid? readoutsForFit(h.fid,S) : readoutsFor(h.p,S);
+    const on = (h.fid||h.p.id)===sel;
     h.well.el.style.display=rows.length?"":"none";
     h.well.el.classList.toggle("on",on);
     if(on && moved && rows.length) KIT.reveal(h.well.el,"start");
@@ -415,6 +428,6 @@ function drawOperate(){
   const vy=ty, vh=Math.max(120,H-vy-4);
   const vw = railBox ? Math.max(200, railBox.x-GX-8) : (W-2*GX);
   drawPlant(vy,S,vh,GX,vw);
-  { const h=CR&&CR.panels&&CR.panels.find(o=>o.p.id===sel);
+  { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }
 }

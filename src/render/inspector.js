@@ -231,6 +231,48 @@ function paramsFor(p){
   return B;
 }
 
+/* ══ WHAT A FITTING LETS YOU SET ══
+   paramsFor()'s sibling, same block kinds, same consumer - a fitting is not in
+   LAY.parts, which is the only reason it had nowhere to put a control. Only a
+   relief valve has anything to adjust: its lift and reseat pressures are
+   MECHANICAL, chosen when it is built, so they live in D.fit beside the tap and
+   never on S. The arming switch is the opposite - it is worked during a
+   transient - and lives on the valve's own canvas strip (fitStrip(), plant.js).
+   A tee and a throttle have no design-time setting at all; their whole
+   behaviour is the position the operator gives them. */
+function paramsForFit(fid){
+  const B=[], j=D.fit[fid]; if(!j) return B;
+  const P0=ARCH[D.arch].P0*D.pdes;
+  const sld=(title,tip,key,min,max,fmt,step)=>B.push({kind:"slider",title,tip,key,min,max,fmt,step});
+  const rdo=(title,tip,val)=>B.push({kind:"readout",title,tip,val});
+  if(j.mode!=="relief"){
+    B.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS. This fitting is worked from the plant view."});
+    B.plain=true;
+    return B;
+  }
+  sld("LIFT PRESSURE",
+    "The pressure this valve opens itself at, as a multiple of the loop's design pressure. Low and it lifts on every transient and spends its stick chances early; high and pressure climbs further before anything vents, toward a vessel that bursts at about 122%.",
+    {get:()=>reliefSet(fid).lift,
+     // the deadband is dragged down with the lift point, or a valve dialled
+     // low would end up reseating above its own lift and chatter every tick
+     set:v=>{ j.lift=v; if(reliefSet(fid).reseat > v-0.01) j.reseat=+(v-0.01).toFixed(2); }},
+    1.02,1.20,v=>(v*P0).toFixed(2)+" MPa",.01);
+  sld("RESEAT PRESSURE",
+    "The pressure it shuts again at. The gap up to the lift point is the deadband, and it is what stops the valve chattering on its own setpoint - it cannot be dragged above the lift point, because a valve that reseats above where it lifts has no shut state at all.",
+    {get:()=>reliefSet(fid).reseat,
+     set:v=>{ j.reseat=Math.min(v, +(reliefSet(fid).lift-0.01).toFixed(2)); }},
+    1.00,1.19,v=>(v*P0).toFixed(2)+" MPa",.01);
+  rdo("DEADBAND","How far pressure has to fall, once this valve has lifted, before it shuts again. A wide band lifts once and clears the transient; a narrow one cycles.",
+    ()=>{ const r=reliefSet(fid); return ((r.lift-r.reseat)*P0).toFixed(2)+" MPa"; });
+  /* Nothing showed this before, so a relief tank sited across the plant cost
+     vent rate silently. It is a commissioned figure - it reads the routed
+     branch pipe - so the bench shows the length that drives it instead. */
+  rdo("BRANCH LENGTH","How far this valve has to vent to reach the relief tank. A short, fat run vents faster; a long one is a relief path that cannot keep up with the transient it was fitted for.",
+    ()=>{ const r=(pipeNetwork()||[]).find(q=>q.key==="xtie:"+fid);
+          return r? plen(r.pts).toFixed(1)+" m" : "unrouted"; });
+  return B;
+}
+
 /* ══ THE TWO PLATES THAT BELONG TO THE WHOLE DESIGN ══
    RESULTS (what it adds up to) and REVIEW (what is wrong with it) point at no
    component - data only, built into HTML by design-bench.js. */

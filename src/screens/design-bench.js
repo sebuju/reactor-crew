@@ -529,6 +529,20 @@ function dbRailBuild(rail){
       panels.push(h);
     }
   }
+  /* A fitting is not in LAY.parts, so it never had a panel - which is why a
+     relief valve's setpoints had nowhere to be set. One well per fitting,
+     built from paramsForFit() exactly the way a component's is built from
+     paramsFor(). The rail is rebuilt whenever the fitting set changes (LAY is
+     rebuilt on fitSig(), layout.js), so this list cannot go stale. */
+  const fits=[];
+  for(const fid in D.fit){
+    const B=paramsForFit(fid); if(!B.length||B.plain) continue;
+    const name=FITNAME[D.fit[fid].mode]+" "+fid.toUpperCase();
+    const well=KIT.well({title:name}); rail.appendChild(well.el);
+    const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
+    railPick(well,[fid],name);
+    fits.push({fid,well,body});
+  }
   const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
   // one switch per LAYERS entry, built once per rail rebuild - see
@@ -536,7 +550,7 @@ function dbRailBuild(rail){
   // calls: a layer switch is not redrawn per screen, it is drawn once.
   const layers=KIT.well({title:"LAYERS"}); rail.appendChild(layers.el);
   layerSwitches(layers.body);
-  return {panels,results,review};
+  return {panels,fits,results,review};
 }
 /* the rail scrolls to a newly selected panel ONCE, on the frame sel changes -
    every frame would fight the user's own scrolling */
@@ -549,6 +563,12 @@ function dbRailSync(state){
     if(on && moved) KIT.reveal(h.well.el,"start");
     const cur=paramsFor(LAY.parts.find(q=>q.id===h.p.id)||h.p);
     dbPanelSync(h.body,cur);
+  }
+  for(const h of state.fits){
+    const on=h.fid===sel;
+    h.well.el.classList.toggle("on",on);
+    if(on && moved) KIT.reveal(h.well.el,"start");
+    dbPanelSync(h.body,paramsForFit(h.fid));
   }
   { const rd=benchResultsData();
     const body=state.results.body;
@@ -621,7 +641,8 @@ function drawDesign(){
   const vh=Math.max(120,H-vy-4);
   const vw = railBox ? Math.max(200, railBox.x-GX-8) : (W-2*GX);
   drawPlant(vy,null,vh,GX,vw);
-  { const h=DB&&DB.state&&DB.state.panels.find(o=>o.ids.includes(sel));
+  { const st=DB&&DB.state;
+    const h = st && (st.panels.find(o=>o.ids.includes(sel)) || st.fits.find(o=>o.fid===sel));
     if(h) leaderLine(h.well.el,DB.rail); }
   drawCtxMenu();
 }

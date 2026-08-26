@@ -69,9 +69,10 @@ function ovlBar(y,h,note){
   for(let i=L.length-1;i>=0;i--){ const o=L[i];
     const kw=tw(o.label,{size:6.5,sp:1,caps:1})+14;
     x-=kw;
-    button(x,y+3,kw,h-6,o.label,
+    const ky=y+(h-BTN_H)/2;
+    button(x,ky,kw,BTN_H,o.label,
       {sunk:1,on:ovlOpen===o.k,size:6.5,sp:1,fn:()=>ovlToggle(o.k)});
-    TIP(x,y+3,kw,h-6,o.label,o.tip);
+    TIP(x,ky,kw,BTN_H,o.label,o.tip);
     x-=4;
   }
   if(note) fitTxt(note,12,midBase(y,h,7),x-20,{size:7,color:C.ink2});
@@ -172,21 +173,37 @@ function drawTip(){
   }
 }
 
+/* ONE HEIGHT FOR EVERY KEY DRAWN ON THE CANVAS. A control strip cell, a bypass
+   row, a relief valve's arm, the REPAIR key and the ZOOM key were 10, 10, 13, 14
+   and 14 px tall - five numbers for one kind of object, so any two of them next
+   to each other read as different kinds of control. The height is still passed
+   in, because a caller sometimes has to fill a rect it does not own; what it
+   passes is this. */
+const BTN_H=14;
+/* THE FILL UNDER A KEY, BY STATE, IN ONE PLACE. An arming switch draws its own
+   two-part label so it cannot go through button() whole - and while it also
+   picked its own fill, it sat at the PLINTH tone while every key beside it sat
+   a shade above, so the switch read as a hole punched in the strip rather than
+   a key mounted on it. Danger is drawn SOLID (dark text on full red), the way a
+   lit annunciator tile is - SCRAM and the one-shot boron dump are the two keys
+   that must never be found by reading them, only by their colour. */
+function btnFill(o,hovered){
+  if(o.danger) return hovered?"#ff7d6c":C.red;
+  if(o.on) return "#2a1f08";
+  // o.sunk is a borderless key: it sits a shade ABOVE the plinth it stands on -
+  // filled with C.well it read as a hole punched in the component rather than
+  // as a key mounted on it. o.base overrides the RESTING fill for a key whose
+  // row is otherwise the same colour as the plate under it.
+  const base = o.sunk?C.edge:(o.base!==undefined?o.base:C.panel);
+  return hovered ? (o.sunk?C.edge2:C.panelHi) : base;
+}
 function button(x,y,w,h,label,o){
   o=o||{}; const wd=push({x,y,w,h,type:"btn",fn:o.fn});
   const h_=hov(wd);
-  const col = o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
   // o.sunk is a borderless key: tone alone reads the shape, so it draws no
-  // frame (boxing every key in a 46px component read as a cage). It sits a
-  // shade ABOVE the plinth it stands on - filled with C.well it read as a hole
-  // punched in the component rather than as a key mounted on it.
-  // o.base overrides the RESTING fill for a key whose row is otherwise the
-  // same colour as the plate under it and would vanish once its border does
-  const base = o.sunk?C.edge:(o.base!==undefined?o.base:C.panel), lift = o.sunk?C.edge2:C.panelHi;
-  // danger is drawn SOLID (dark text on full red), the way a lit annunciator
-  // tile is - SCRAM and the one-shot boron dump are the two keys that must
-  // never be found by reading them, only by their colour
-  fillRect(x,y,w,h, o.danger?(h_?"#ff7d6c":C.red):(o.on?"#2a1f08":(h_?lift:base)));
+  // frame (boxing every key in a 46px component read as a cage)
+  const col = o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
+  fillRect(x,y,w,h, btnFill(o,h_));
   // o.flat is o.sunk's sibling for a SELECTED key that must also lose its
   // outline (the bench's pen/preset keys, whose amber fill+type already say it)
   if(!o.sunk && !o.flat) frame(x,y,w,h,col);
