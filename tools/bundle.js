@@ -58,4 +58,44 @@ function headless(exportSrc, opts){
   return new Function(src + '; return ' + exportSrc + ';')();
 }
 
-module.exports = { ROOT, scriptPaths, bundle, headless };
+/* ══════════ PLACING A FITTING, THE WAY A PLAYER DOES ══════════
+   A fitting used to be a fraction along a pipe key, so an auditor could
+   place one in a single addFit(mode, aKey, aT, bKey, bT) call. It is a
+   COMPONENT in a grid CELL now, and placing one is three gestures: put the
+   box down, draw a run to it, draw a run from it. That is more honest and it
+   is also three lines at ~40 call sites, which is exactly the kind of
+   duplication that drifts - so both shapes are written ONCE, here, beside
+   headless(), which is the only module every auditor already loads.
+
+   These build nothing the bench cannot: addFitting(), addRun() and
+   removeRun() are the same calls the context menu and the part drag make.
+   M is a headless() export bag and must carry D, pipeNetwork, addFitting,
+   addRun and removeRun.
+
+   spliceFitting: cut a RUN and put a fitting in the middle of it. The two
+   halves keep the original run's own end faces, so the plant is the plant it
+   was with a box in the line.
+   tieFitting: a fitting between two PORTS on two different machines - what a
+   cross-tie is, now that nothing can tap a pipe mid-run. */
+function spliceFitting(M, runKey, mode, cell){
+  const D = M.D();
+  const r = M.pipeNetwork().find(x => x.key === runKey);
+  if(!r || !r.rid) throw new Error("spliceFitting: no run keyed " + runKey);
+  const e = D.run[r.rid], a = e.a, af = e.af, b = e.b, bf = e.bf;
+  M.removeRun(r.rid);
+  const fid = M.addFitting(cell[0], cell[1]);
+  D.fittings[fid].mode = mode;
+  M.addRun(a, af, fid, "l");
+  M.addRun(fid, "r", b, bf);
+  return fid;
+}
+function tieFitting(M, aId, aFace, bId, bFace, mode, cell){
+  const D = M.D();
+  const fid = M.addFitting(cell[0], cell[1]);
+  D.fittings[fid].mode = mode;
+  M.addRun(aId, aFace, fid, "l");
+  M.addRun(fid, "r", bId, bFace);
+  return fid;
+}
+
+module.exports = { ROOT, scriptPaths, bundle, headless, spliceFitting, tieFitting };

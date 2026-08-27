@@ -418,85 +418,27 @@ if(!wide.err){
        being checked is that the branch RUNS. */
     const run = M.pipeNetwork().find(r => r.key && r.k === 'hot');
     let tapItems=null, tapErr=null;
-    try { tapItems = M.ctxItemsDesign({part:null,fitting:null,tapKey:run&&run.key,tapT:0.5,runRid:null,port:null,cell:null}); }
+    try { tapItems = M.ctxItemsDesign({part:null,runRid:run&&run.rid,runK:run&&run.k,cell:null}); }
     catch(e){ tapErr = e.message; }
     add('right-clicking a pipe builds a menu', !!run && !tapErr && !!tapItems && tapItems.length>0,
         tapErr ? 'threw: '+tapErr
                : (run ? tapItems.length+' item(s): '+tapItems.map(i=>i.label).join(', ')
                       : 'no hot run on the stock plant - cannot check'));
-    /* THE OTHER MENU ON A PIPE, and the newer one: the drop menu a tap drag
-       opens once it has BOTH its taps. It runs in the same place, inside the
-       draw, so it takes the frame with it in exactly the same way - and it is
-       reached through the `extra` argument rather than through the point, so
-       nothing the check above does would ever open it. Every row must be a
-       fitting mode the plant can actually build. */
-    const cold = M.pipeNetwork().find(r => r.key && r.k === 'cold');
-    let dropItems=null, dropErr=null;
-    try { const h=M.ctxResolveDesign({x:0,y:0},
-            {tapPair:{aKey:run&&run.key,aT:0.5,bKey:cold&&cold.key,bT:0.3}});
-          dropItems = h && M.ctxItemsDesign(h); }
-    catch(e){ dropErr = e.message; }
-    const modes = dropItems ? dropItems.map(i=>i.label) : [];
-    add('dropping a tap on a pipe builds the fitting menu',
-        !dropErr && modes.length===3 && modes.includes('TEE') && modes.includes('RELIEF VALVE'),
-        dropErr ? 'threw: '+dropErr : modes.length+' item(s): '+modes.join(', '));
-
-    /* ══ THE HANDLE HAS TO BE PRESSABLE, NOT MERELY DRAWN ══
-       THE ONE THAT SHIPPED. The tap handle's hit box was pinned to the point
-       on the PIPE while the gesture starts wherever the POINTER is - and the
-       handle exists whenever the pointer is within reach of a run, so the two
-       are routinely CELL*0.85 apart against a box TAPG across. At fit zoom
-       that box is under two SCREEN pixels. The handle drew, the drop menu
-       worked, every check above was green, and a player could not add a relief
-       valve at all: there was no way to grab the thing.
-
-       So this asks the only question that matters - sweep the pointer over the
-       plant, and every frame that SHOWS a handle must also be a frame where a
-       press at the pointer LANDS on it. Drawn-but-ungrabbable is the failure
-       mode, so drawing it is not the assertion. */
-    const ui=M.ui();
-    let shown=0, grabbable=0;
-    for(let px=20; px<180; px+=3) for(let py=615; py<730; py+=3){
-      ui.ptr={x:px,y:py}; ui.widgets.length=0;
-      M.setScreen('design'); M.drawDesign();
-      const t=ui.widgets.filter(w=>w.type==='tap');
-      if(!t.length) continue;
-      shown++;
-      const q=M.vPt(ui.ptr), w=t[0];
-      if(q.x>=w.x && q.x<=w.x+w.w && q.y>=w.y && q.y<=w.y+w.h) grabbable++;
-    }
-    add('a tap handle that is drawn can be grabbed', shown>0 && grabbable===shown,
-        shown ? `${grabbable} of ${shown} frames showing a handle put it under the pointer`
-              : 'no frame showed a tap handle at all - the gesture is unreachable');
-
-    /* ...and it must not be ON TOP of the marks that sit still. The handle
-       rides the pointer, so it covers whatever is under the hand wherever a
-       pipe is near - which is exactly where the waypoint grips and the free
-       nozzles are. Pushed FIRST so the hit test (last widget wins) gives both
-       of them the press: steering a run and starting a run are aimed at marks
-       that do not move, and losing either to a splice nobody asked for is the
-       worse trade. */
-    { let stolen=0, overlaps=0;
-      for(let px=20; px<180; px+=3) for(let py=615; py<730; py+=3){
-        ui.ptr={x:px,y:py}; ui.widgets.length=0;
-        M.setScreen('design'); M.drawDesign();
-        const q=M.vPt(ui.ptr);
-        const on=w=>q.x>=w.x&&q.x<=w.x+w.w&&q.y>=w.y&&q.y<=w.y+w.h;
-        const hitAll=ui.widgets.filter(on);
-        if(!hitAll.some(w=>w.type==='tap')) continue;
-        const rival=hitAll.filter(w=>w.type==='pipewp'||w.type==='port');
-        if(!rival.length) continue;
-        overlaps++;
-        // the hit test walks BACKWARDS, so the last matching widget wins
-        for(let i=hitAll.length-1;i>=0;i--){
-          if(hitAll[i].type==='tap'){ stolen++; break; }
-          if(hitAll[i].type==='pipewp'||hitAll[i].type==='port') break;
-        }
-      }
-      add('a tap handle never steals a grip or a nozzle', stolen===0,
-          overlaps ? `${overlaps} frame(s) where a handle overlapped one, ${stolen} stolen`
-                   : 'no overlap found to test - ordering unproven');
-    }
+    /* ══ A BARE CELL OFFERS THE ONE THING A FITTING NEEDS ══
+       Two checks used to live here and both were about the TAP DRAG: the menu
+       it opened on the drop ("which fitting are these two taps?"), and whether
+       the 9-unit handle it started from could actually be grabbed at fit zoom.
+       Neither gesture exists. A fitting is placed in a CELL, so what has to be
+       reachable is ADD VALVE HERE on a bare cell - the same offer ADD TANK
+       HERE already is, and the same failure mode: a row that is not on the
+       menu is a component the player cannot build at all. */
+    let cellItems=null, cellErr=null;
+    try { cellItems = M.ctxItemsDesign({part:null,runRid:null,cell:{gx:13,gy:0}}); }
+    catch(e){ cellErr = e.message; }
+    const cellLabels = cellItems ? cellItems.map(i=>i.label) : [];
+    add('a bare cell offers ADD VALVE HERE',
+        !cellErr && cellLabels.includes('ADD VALVE HERE') && cellLabels.includes('ADD TANK HERE'),
+        cellErr ? 'threw: '+cellErr : cellLabels.length+' item(s): '+cellLabels.join(', '));
   }
 
   /* ══ STAGE 9 (gauge half): PUMP CAPACITY - INSTALLED VS DELIVERED ══
@@ -611,15 +553,15 @@ const FAULTS = [
      never written, so right-clicking any pipe on the bench threw and took the
      frame with it - ctxItemsDesign() runs INSIDE the draw (drawCtxMenu ->
      drawDesign -> tick), and no auditor opened that menu.
-     It is juncPt() that is renamed now rather than hasRelief(): the relief
-     menu row was deleted when a relief valve became a drag with both ends
-     aimed, and with it the only call hasRelief() ever had, so renaming that
-     one stopped biting and this injection silently proved nothing. juncPt()
-     is reached from ctxItemsDesign() itself, which is the function the check
-     below actually calls and the one the original fault lived in. */
+     The name it renames has had to move twice, each time because the helper
+     it named was deleted - hasRelief(), then juncPt(). What matters is only
+     that the injected call is reached from ctxItemsDesign() itself, which is
+     the function the check below opens and the one the original fault lived
+     in, so the name is deliberately a FAKE one: nothing can delete it out
+     from under this injection again. */
   ['a context-menu helper that does not exist', 'right-clicking a pipe builds a menu',
    s => s.replace('function ctxItemsDesign(hit){',
-                  'function ctxItemsDesign(hit){ juncPt__gone(null,null,0);')],
+                  'function ctxItemsDesign(hit){ __noSuchHelper(hit);')],
 ];
 const selftest = [];
 for(const [what, guard, patch] of FAULTS){

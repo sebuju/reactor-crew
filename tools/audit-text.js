@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Usage:  node tools/audit-text.js
 const fs=require('fs'), path=require('path');
-const {ROOT}=require('./bundle');
+const {ROOT,spliceFitting,tieFitting}=require('./bundle');
 const src=require('./bundle').bundle();
 // Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
 // same way a player builds one, through placed parts and real D.run entries.
@@ -88,7 +88,7 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'setDmg:v=>S.dmgParts=v,'+
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
- 'pipeNetwork,buildStockPlumbing,nearestOn,placePart,addFit,removePart,removeFit,'+
+ 'pipeNetwork,buildStockPlumbing,placePart,addFitting,addRun,removeRun,removePart,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
  'FXR:()=>FXR,fxReset,porvRate,reliefRate,reliefFullRate,SPILL_FULL:()=>SPILL_FULL,'+
  'SGTR_RATE:()=>SGTR_RATE,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,primaryRelief,'+
@@ -167,32 +167,28 @@ M.setSel('core');
 { M.buildStockPlumbing({loops:4}); warmUp(); M.setSel('sg2'); sweep('loops4:');
   M.buildStockPlumbing({loops:1}); warmUp(); M.setSel('core'); }
 
-// fittings and a spare pump: neither exists on a default plant, so their
-// valve mark / symbol / plate are draw paths nothing else here reaches
-{ const J0=M.D().fit, PS0=M.D().pumpSize;
-  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.D().pumpSize={};
-  warmUp();                       // 4-loop LAY exists now, for the tap lookup below
-  const tap=k=>{ const c=k.split(':');
-    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
-    /* t is measured from the NAMED part's end. A key carries its two ends
-       sorted now, so t=0 is whichever id sorts first, not the machine the
-       caller asked for - and a tee tapped at the wrong end of a cold leg
-       lands its branch in another run's lane. */
-    return [r.key, r.key.slice(c[0].length+1).indexOf(c[1])===0 ? 0 : 1]; };
-  const j0=M.addFit('tee',...tap('cold:sg0'),...tap('cold:sg1'));
-  M.addFit('throttle',...tap('cold:sg2'),...tap('cold:sg3'));
+// fittings and a spare pump: a THROTTLE exists on no default plant, and its
+// symbol, its slider and its head-drop tag are draw paths nothing else here
+// reaches. Placed the way a player places one - a box in a cell with two runs
+// drawn to it (tieFitting(), bundle.js) - because that is the only way there
+// is now.
+{ const PS0=M.D().pumpSize;
+  M.buildStockPlumbing({loops:4}); M.D().pumpSize={};
+  warmUp();                       // 4-loop LAY exists now, for the placements below
+  const j0=tieFitting(M,'pump0','t','pump1','t','throttle',[9,7]);
+  tieFitting(M,'pump2','t','pump3','t','throttle',[11,7]);
   const spare=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',
     grp:'loop0',tip:'A spare coolant pump.',loop:0}));
-  // re-commission after the fittings exist (P.fit bakes from them), then set
-  // juncOpen - commission() would otherwise reset it
-  warmUp(); M.S().juncOpen[j0]=true;
+  // re-commission after the fittings exist (P.fittings bakes from them), then
+  // work one of them - commission() would otherwise leave both wide open
+  warmUp(); M.S().valve[j0]=0.4; M.S().valveDem[j0]=0.4;
   M.setSel(spare.id); sweep('spare:');
-  M.setSel('core'); sweep('junc:');
+  M.setSel(j0); sweep('junc:');
   warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('juncdmg:');
   // placedParts is a persistent array outside D; removePart() is the only way
   // to take the spare back out before the block's other fields are restored
   M.removePart(spare.id);
-  M.buildStockPlumbing({loops:1}); M.D().fit=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
+  M.buildStockPlumbing({loops:1}); M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
 
 // a steered pipe: two waypoints draw five grips where a plain run draws one
 { warmUp();
@@ -561,23 +557,6 @@ const COLLISION_ALLOW=[
     test:(a,b)=>RAD_SCREEN.test(a.screen) &&
                 ((a.t==='UPPER DECK / HULL' && DOSE_TAG.test(b.t)) ||
                  (b.t==='UPPER DECK / HULL' && DOSE_TAG.test(a.t))) },
-  { reason:"radNumbers() (the CELL DOSE layer, radn) prints a figure in every "+
-           "cell it believes is EMPTY, and its own test for that is the part "+
-           "occupancy grid - so it knows about MACHINES and nothing else. A "+
-           "FITTING has no cell and never will (a junction is a tap, not a "+
-           "component), so a relief valve's own arm row, drawn on the pipe it "+
-           "sits on, is invisible to that test and the two land on the same "+
-           "line. It surfaced when the feedwater pump gained a control strip "+
-           "of its own: a strip makes that row's BAND taller (ctlBands(), "+
-           "plant.js), every row's height is re-shared, and the valve's arm "+
-           "settled 2px onto the cell figure beside it. Only visible with CELL "+
-           "DOSE switched on, and that layer ships off. Scoped to armRow()'s "+
-           "own two state words against radNumbers()'s own figure shape - not "+
-           "to whatever happens to sit next to a number.",
-    ceil:122,
-    test:(a,b)=>RAD_SCREEN.test(a.screen) &&
-                ((CELL_FIGURE.test(a.t) && ARM_STATE.test(b.t)) ||
-                 (CELL_FIGURE.test(b.t) && ARM_STATE.test(a.t))) },
 ];
 { let n=0;
   // keyed on the array index, not the ~500-char reason string: two entries

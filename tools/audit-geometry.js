@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Usage:  node tools/audit-geometry.js
-const S=require('./bundle').bundle();
+const {bundle:_b,spliceFitting,tieFitting}=require('./bundle');
+const S=_b();
 
 // routing is emergent from component positions, so this has to run the code,
 // not just read it
-const M=require('./bundle').headless('{pipeNetwork,pipeAnchors,pipeAnchorTick,pipeStackBoxes,commission,buildStockPlumbing,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,reliefRate,reliefHeaderKey,nozzleEnds,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,packVal,unpackVal,designSig,face,placePart,removePart}');
+const M=require('./bundle').headless('{pipeNetwork,pipeAnchors,pipeAnchorTick,pipeStackBoxes,commission,buildStockPlumbing,D:()=>D,P:()=>P,S:()=>S,addFitting,addRun,removeRun,moveTo,LAY:()=>LAY,reliefRate,nozzleEnds,fittingParts,freeAdj,layoutMetrics,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,packVal,unpackVal,designSig,face,placePart,removePart}');
 // Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
 // same way a player builds one, through placed parts and real D.run entries.
 
@@ -59,13 +60,18 @@ for(const loops of [1,2,3,4]){
   retraceChecks.push([`no retrace (${loops} loop${loops>1?'s':''})`, bad.length===0,
     `${bad.length} run(s): ${bad.map(r=>r.key).join(', ')}`]);
 }
-// no fitting exists on a default plant, so this sweep is the only thing
-// that ever routes one - check every adjacent pair actually tied, the
+/* Three free cells along the bottom of the grid, measured against the 4-loop
+   plant's own occupancy - a cross-tie is a BOX now, so it needs somewhere to
+   stand and cannot be dropped a fraction along a pipe. */
+const TIE_CELL=[[9,7],[11,7],[13,8]];
+// only the stock surge tee and relief valve exist on a default plant, so this
+// sweep is the only thing that ever routes a CROSS-TIE - check every adjacent
+// pair actually tied, the
 // densest a plant this size can be wired. It is also the densest network
 // route() ever has to fold a bend into, so the retrace check rides the same
 // sweep instead of only ever seeing the sparse stock layouts above.
 for(const loops of [2,3,4]){
-  M.buildStockPlumbing({loops:loops}); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:loops}); M.commission();
   const tap=k=>{ const c=k.split(':');
     const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
     /* t is measured from the NAMED part's end. A key carries its two ends
@@ -73,7 +79,7 @@ for(const loops of [2,3,4]){
        caller asked for - and a tee tapped at the wrong end of a cold leg
        lands its branch in another run's lane. */
     return [r.key, r.key.slice(c[0].length+1).indexOf(c[1])===0 ? 0 : 1]; };
-  for(let i=0;i<loops-1;i++) M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1)));
+  for(let i=0;i<loops-1;i++) tieFitting(M,'pump'+i,'t','pump'+(i+1),'t','tee',TIE_CELL[i]);
   const net=M.pipeNetwork();
   const over=pipeOverlaps(pipeSegs(net));
   pipeChecks.push([`no overlaps (${loops} loops, tied)`, over.length===0,
@@ -82,7 +88,6 @@ for(const loops of [2,3,4]){
   retraceChecks.push([`no retrace (${loops} loops, tied)`, bad.length===0,
     `${bad.length} run(s): ${bad.map(r=>r.key).join(', ')}`]);
 }
-M.D().fit={};
 
 // SENTINEL - the exact pre-fix hpi polyline, put through a fake run and the
 // SAME RETRACE_FILTER the checks above run (not a direct M.retraces() call,
@@ -93,105 +98,68 @@ const sentinelCaught=[{key:'(sentinel)',pts:preFixOvershoot}].filter(RETRACE_FIL
 retraceChecks.push(['(sentinel) pre-fix hpi polyline caught', sentinelCaught,
   sentinelCaught?'flagged, as it must be':'NOT flagged - RETRACE_FILTER would miss it']);
 
-// a fitting stores a TAP - (run key, fraction along it) at each end -
-// resolved fresh by juncPt() off whatever pipeNetwork() just routed. The bug
-// this replaces stored a plant-space pixel once, at creation, so a part
-// moved upstream of the tap left the glyph and the branch drawn on empty
-// space. Everything below is measured by moving a real part and re-routing,
-// never read off the source.
+/* ══ A FITTING IS A BOX, AND ITS CELL IS NOT DERIVED FROM ANYTHING ══
+   This block used to pin the frozen-pixel rule: a fitting stored a (run key,
+   fraction) tap resolved fresh every frame, and the bug it forbade was a
+   plant-space pixel cached at creation. That rule ceases to be true because
+   the thing it protected ceases to exist - and the argument matters: the
+   frozen pixel was a DERIVED quantity (a point on a route) being cached, and
+   a fitting's CELL is derived from nothing. moveTo() is its only writer, the
+   same standing every other part on the grid has.
+   What replaces it is the claim that buys: move the box and every run
+   touching it re-routes with it, and nothing else on the plant does. */
 const juncChecks=[];
 {
-  const dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
-  M.buildStockPlumbing({loops:2}); M.D().fit={}; M.commission();
-  let net=M.pipeNetwork();
-  // both faces of this run sit on components a pump move disturbs
-  const runKey='cold:coreb-pump0b', tapT=0.5;
-  const before=M.juncPt(net,runKey,tapT).pt;
+  M.buildStockPlumbing({loops:2}); M.commission();
+  const fid=tieFitting(M,'pump0','t','pump1','t','throttle',[9,7]);
+  const mine=k=>k.indexOf(fid)>=0;
+  const snap=()=>{ const o={};
+    for(const r of M.pipeNetwork()) o[r.key]=JSON.stringify(r.pts); return o; };
+  const before=snap();
+  const own=Object.keys(before).filter(mine);
+  juncChecks.push(['a placed fitting gets its runs routed', own.length===2 &&
+      own.every(k=>{ const r=M.pipeNetwork().find(x=>x.key===k);
+        return r.pts.length>=2 && r.pts.every(p=>Number.isFinite(p[0])&&Number.isFinite(p[1])) &&
+               r.pts.every((p,i)=>i===0 || Math.abs(p[0]-r.pts[i-1][0])<0.5 || Math.abs(p[1]-r.pts[i-1][1])<0.5); }),
+    own.length+' run(s) reach it, finite and axis-aligned']);
 
-  const pump0=M.LAY().parts.find(p=>p.id==='pump0');
-  const p0x=pump0.x, p0y=pump0.y;
-  const movedOk=M.moveTo(pump0,p0x-2,p0y);
-  net=M.pipeNetwork();
-  const runAfter=net.find(r=>r.key===runKey);
-  const after=movedOk?M.juncPt(net,runKey,tapT).pt:before;
-  const moveDist=dist(before,after);
-
-  juncChecks.push(['tap follows its run', movedOk && moveDist>5,
-    movedOk?`moved ${moveDist.toFixed(1)}px when the run it's tapped on moved`
-           :'the pump move was blocked, nothing measured']);
-
-  // THE REGRESSION SENTINEL - "seen to fail", not just seen to pass. The old
-  // bug's whole shape was "the tap doesn't move": reusing the pre-move point
-  // IS what a stored pixel would still hand back after the run moved. Same
-  // assertion, frozen input - it must go red, or the check above is not
-  // actually testing anything.
-  const frozenMoveDist=dist(before,before);
-  const sentinelCaught = !(movedOk && frozenMoveDist>5);
-  juncChecks.push(['(sentinel) a frozen tap is caught by the check above', sentinelCaught,
-    sentinelCaught?`a stored-pixel tap measures ${frozenMoveDist.toFixed(1)}px of movement - "tap follows its run" would fail it`
-                  :'a frozen pixel slipped past the movement check - it is not testing what it claims to']);
-
-  const onRun=M.nearestOn(runAfter.pts,after);
-  juncChecks.push(['tap stays on its run', onRun.d<0.5,
-    `resolved point sits ${onRun.d.toFixed(3)}px off the run's own polyline`]);
-
-  // a point taken off a run at a known t must come back out through
-  // nearestOn() -> juncPt() at (about) the same place - on two differently
-  // shaped runs, so a bug in one leg's geometry can't hide behind the other's
-  let rtWorst=0;
-  for(const key of ['hot:corer-sg0l','cold:pump0t-sg0b']){
-    const r=net.find(x=>x.key===key);
-    for(let i=0;i<8;i++){
-      const t=i/7;
-      const p=M.juncPt(net,key,t).pt;
-      const back=M.nearestOn(r.pts,p);
-      const p2=M.juncPt(net,key,back.t).pt;
-      rtWorst=Math.max(rtWorst,dist(p,p2));
-    }
+  const box=M.LAY().parts.find(p=>p.id===fid);
+  const movedOk=M.moveTo(box,box.x,box.y-1);
+  const after=snap();
+  let movedMine=0, movedOther=0;
+  for(const k in after){
+    if(!(k in before) || after[k]===before[k]) continue;
+    if(mine(k)) movedMine++; else movedOther++;
   }
-  juncChecks.push(['t round-trips through nearestOn()', rtWorst<0.5,
-    `worst of 16 samples (hot + cold runs) off by ${rtWorst.toFixed(3)}px`]);
+  juncChecks.push(['moving a fitting re-routes its own runs and only those',
+    movedOk && movedMine===2 && movedOther===0,
+    movedOk? movedMine+' of its own run(s) re-routed, '+movedOther+' other run(s) moved'
+           : 'the move was blocked, nothing measured']);
 
-  // the branch itself: after the move, its run must still exist, be finite,
-  // and hold the same square-only invariant every other run in this file is
-  // held to
-  const jid=M.addFit('tee',runKey,tapT,'cold:pump1t-sg1b',0.5);
-  const tieNet=M.pipeNetwork();
-  const tie=tieNet.find(r=>r.key==='xtie:'+jid);
-  const tieFinite=!!tie && tie.pts.length>=2 &&
-    tie.pts.every(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
-  const tieSquare=!!tie && tie.pts.every((p,i)=>i===0 ||
-    Math.abs(p[0]-tie.pts[i-1][0])<0.5 || Math.abs(p[1]-tie.pts[i-1][1])<0.5);
-  juncChecks.push(['branch re-routes after the move', tieFinite && tieSquare,
-    tie?`${tie.pts.length} points, ${tieSquare?'axis-aligned':'a diagonal segment'}`:'no xtie run in the network']);
-  M.removeFit(jid);
+  /* THE REGRESSION SENTINEL - "seen to fail", not just seen to pass. Reusing
+     the pre-move polylines IS what a fitting whose cell did not follow the
+     move would still hand back, and the assertion above must reject it. */
+  const frozen=(()=>{ let n=0; for(const k in before) if(mine(k) && before[k]!==before[k]) n++; return n; })();
+  juncChecks.push(['(sentinel) a fitting that did not move is caught', !(movedOk && frozen===2),
+    'a fitting whose runs did not re-route measures '+frozen+' of 2 - the check above would fail it']);
 
-  // a tap naming a run pipeNetwork() didn't build this frame (its part
-  // removed, or the key simply wrong) must be skipped, not throw the whole
-  // network away
-  const badId=M.addFit('tee','cold:doesNotExist',0.5,'hot:corer-sg0l',0.5);
-  let threw=false;
-  try{ M.pipeNetwork(); } catch(e){ threw=true; }
-  M.removeFit(badId);
-  juncChecks.push(['a dangling tap is skipped, not fatal', !threw,
-    threw?'pipeNetwork() threw on an unresolvable fitting':'pipeNetwork() returned normally']);
+  /* THE NEW CAPABILITY, and the whole reason a fitting is a cell: a box with
+     no free neighbour cannot be repaired, so it blocks commissioning exactly
+     as any other walled-in machine does. A tap could never be asked this. */
+  const g={}; for(const p of M.LAY().parts)
+    for(let x=p.x;x<p.x+p.w;x++) for(let y=p.y;y<p.y+p.h;y++) g[x+','+y]=1;
+  M.layoutMetrics();
+  const acc=M.LAY().parts.find(p=>p.id===fid).access;
+  juncChecks.push(['a fitting is asked for access like any other part', acc===true||acc===false,
+    'access reads '+acc+' - a fraction along a pipe has no cell to ask this of']);
 
-  // an IN-LINE throttle (bKey null) has no route of its own - the per-jid
-  // routing loop must skip it rather than call juncPt(net,null,...) and blow
-  // up, and pipeNetwork() must still return normally with everything else
-  // routed around it.
-  const inlineId=M.addFit('throttle',runKey,tapT,null,null);
-  let inlineThrew=false;
-  try{ M.pipeNetwork(); } catch(e){ inlineThrew=true; }
-  const inlineNet=M.pipeNetwork();
-  const inlineHasRoute=inlineNet.some(r=>r.key==='xtie:'+inlineId);
-  M.removeFit(inlineId);
-  juncChecks.push(['an in-line fitting draws no route of its own', !inlineThrew && !inlineHasRoute,
-    inlineThrew?'pipeNetwork() threw on an in-line throttle'
-      :inlineHasRoute?'an in-line throttle still got an xtie run':'pipeNetwork() returned normally, no xtie run']);
-
-  M.D().fit={};
-  M.moveTo(pump0,p0x,p0y);
+  /* DELETING THE BOX TAKES ITS PIPES WITH IT. removePart()'s cascade, on a
+     fitting rather than on a tank - the same rule, and the reason lowest-free
+     id reuse is safe. */
+  M.removePart(fid);
+  const left=M.pipeNetwork().filter(r=>mine(r.key)).length;
+  juncChecks.push(['removing a fitting takes its runs with it', left===0,
+    left+' run(s) still name a fitting that is gone']);
 }
 
 /* A waypoint owes a straight, self-clear run through its own point; it owes no
@@ -204,12 +172,10 @@ const juncChecks=[];
    static layout fault hiding under the same number.
 
    It was 12 of 672 when this was written and it is 86 now, and the rise is
-   real rather than a regression: Stage 1/3a made relief, feed, steam, exh and
-   every fitting branch REAL routed runs, so there is far more pipe on the
-   board to land on - and a waypoint on a hot leg moves the taps that sit on
-   it, which re-routes each branch off them in turn (juncPt() resolves a tap
-   against whatever pipeNetwork() routed this frame, by design). Hence pairs
-   like relief x xtie appearing from a waypoint on hot:corer-sg0l.
+   real rather than a regression: Stage 1/3a made relief, feed, steam and exh
+   REAL routed runs, so there is far more pipe on the board to land on - and
+   at the time a waypoint on a hot leg also moved every tap sitting on it,
+   dragging each branch across the board with it.
 
    EXACT, not a fraction. The old guard was "under 5%", which left 21 swept
    positions of unexplained slack for a regression to hide in - the same hole
@@ -223,17 +189,30 @@ const juncChecks=[];
    cold leg and the branches tapped off it already own; landing on the near
    face instead, they cross almost nothing. A fall here is the routing getting
    out of its own way, not a weakened check - the sweep, the pairing and the
-   672 positions are all unchanged. */
-const WP_OTHER_BASE=18;   // exact measured baseline - see the note above
+   672 positions are all unchanged.
+
+   18 -> 9 when a fitting stopped being a fraction along a pipe. Two separate
+   causes, both structural: a relief valve had a BRANCH RUN of its own, tapped
+   onto whatever the waypoint was steering, so bending the hot leg dragged that
+   branch across the board with it - the valve is a box in the header now and
+   owns no branch; and the surge line stopped landing on the hot leg at all, so
+   a waypoint on that leg no longer moves it either. Same sweep, same pairing,
+   same 672 positions - there is simply less pipe pinned to the run being
+   bent. */
+const WP_OTHER_BASE=9;   // exact measured baseline - see the note above
 const wpSpots=[];
 for(let x=8;x<=760;x+=24) for(let y=104;y<=600;y+=24) wpSpots.push([x,y]);
-/* NO FITTINGS. The 18 below was measured on a bare 2-loop plant, and a
-   fitting adds a branch run for a waypoint to land on. This used to be
-   true by LEAK - an earlier block happened to leave D.fit empty and
-   makeLoops() did not put it back - so say it out loud instead:
-   buildStockPlumbing() lays the stock relief valve like a fresh design. */
-M.buildStockPlumbing({loops:2}); M.D().fit={}; M.commission();
-const wpRun=M.pipeNetwork().find(r=>r.k==='hot');
+/* THE STOCK PLANT, and nothing added. The 9 below was measured on a bare
+   2-loop plant as buildStockPlumbing() lays it - surge tee, relief valve and
+   all. A fitting no longer adds a run for a waypoint to land on (it is a box
+   between two runs, not a branch off one), so what an extra one would add
+   here is only its own two legs. */
+M.buildStockPlumbing({loops:2}); M.commission();
+/* the LONGEST hot run, not the first. The surge tee splits hot leg 0 into a
+   46px stub and the leg proper, and a waypoint parked on the stub sweeps far
+   less of the board than one on a run that crosses it. */
+const plenPx=pts=>{ let L=0; for(let i=1;i<pts.length;i++) L+=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]); return L; };
+const wpRun=M.pipeNetwork().filter(r=>r.k==='hot').sort((a,b)=>plenPx(b.pts)-plenPx(a.pts))[0];
 const wpKey=wpRun.key, wpRid=wpRun.rid;   // a waypoint lives on the RUN now, not on its key
 /* The claim the ceiling below rests on: with no waypoint parked anywhere, this
    plant routes with ZERO overlapping pipe. Without this, "86 positions cause an
@@ -344,10 +323,18 @@ const fitPanelChecks=[
  ['the pzr branch names no valve', pzrBranch.length>0 && pzrStrays.length===0,
   pzrStrays.length? 'the pzr branch of readoutsFor() still reaches a relief valve through: '+pzrStrays.join(', ')
     : 'no relief valve is described from the pressurizer: the pzr branch of readoutsFor() carries none of '+PZR_STRAY.join(', ')],
- ['a fitting has its own panel', (S.match(/function readoutsForFit\(/g)||[]).length===1 &&
+ /* A fitting is an ordinary PART now, so it needs no rail of its own: each
+    rail builds one well per LAY.parts entry and reaches a valve through the
+    same paramsFor()/readoutsFor() call it reaches a pump through. What is
+    still checked is that the fitting BRANCH exists and is reached from those
+    two, and that no rail grew a second fitting-only loop beside them - which
+    is what the two functions this replaces were. */
+ ['a fitting is an ordinary part row', (S.match(/function readoutsForFit\(/g)||[]).length===1 &&
    (S.match(/function paramsForFit\(/g)||[]).length===1 &&
-   crSrc.includes('readoutsForFit(') && dbSrc.includes('paramsForFit('),
-  'readoutsForFit() and paramsForFit() are each defined once, and each rail builds fitting wells from its own one'],
+   /readoutsFor\(p,s\)\{[\s\S]{0,2000}?readoutsForFit\(/.test(S) &&
+   /function paramsFor\(p\)\{[\s\S]{0,16000}?paramsForFit\(/.test(S) &&
+   !crSrc.includes('readoutsForFit(') && !dbSrc.includes('paramsForFit('),
+  'readoutsForFit()/paramsForFit() are each defined once and reached only from readoutsFor()/paramsFor(); neither rail carries a fitting-only loop'],
  ['one setpoint reader', (S.match(/function reliefSet\(/g)||[]).length===1 &&
    !/PORV_LIFT|PORV_RESEAT/.test(S),
   'reliefSet() is the one reader of a setpoint pair; no file reads a plant-wide PORV_LIFT/PORV_RESEAT any more'],
@@ -496,20 +483,13 @@ const netKeyChecks=[];
 {
   let rendMiss=0, simMiss=0, posMiss=0, cases=0;
   for(const loops of [1,2,3,4]){
-    M.buildStockPlumbing({loops:loops}); M.D().fit={}; M.commission();
-    // and again with the plant fully wired, since a fitting adds runs
-    // (xtie:) that only exist once one is placed
+    M.buildStockPlumbing({loops:loops}); M.commission();
+    // and again with the plant fully CROSS-TIED, since a placed fitting adds
+    // two runs and a gated edge that only exist once one is placed
     for(const wired of [false,true]){
       if(wired){
-        const tap=k=>{ const c=k.split(':');
-    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
-    return r?[r.key,0.4]:null; };
-        const a=tap('cold:sg0');
-        if(a) M.addFit('throttle',a[0],a[1],null,null);
-        for(let i=0;i<loops-1;i++){
-          const u=tap('cold:sg'+i), v=tap('cold:sg'+(i+1));
-          if(u&&v) M.addFit('tee',u[0],u[1],v[0],v[1]);
-        }
+        for(let i=0;i<loops-1;i++)
+          tieFitting(M,'pump'+i,'t','pump'+(i+1),'t','tee',TIE_CELL[i]);
         M.commission();
       }
       const rend=M.pipeNetwork().filter(r=>r.key).map(r=>r.key);
@@ -520,14 +500,13 @@ const netKeyChecks=[];
       posMiss +=keyMisses(pos,sim).length;    // an animated key off the graph
       cases++;
     }
-    M.D().fit={};
-  }
+      }
   /* The injected fault, the same idiom audit-dom.js uses: a check nobody has
      seen fail is not a check. Look the runs up by KIND, exactly as pipes.js
      did before Stage 3a was finished, and the miss count must go POSITIVE -
      otherwise the comparison above is passing for some reason other than the
      keys agreeing. */
-  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:4}); M.commission();
   const byKind=M.pipeNetwork().filter(r=>r.key).map(r=>r.k);
   const injected=keyMisses(byKind,Object.keys(M.P().net.byKey)).length;
   netKeyChecks.push(
@@ -552,12 +531,10 @@ const netKeyChecks=[];
    on 144 placements that never reproduce the case at all. */
 const nozChecks=[];
 {
-  // the relief tank is a placed part now (Stage 5a) - on the grid from load,
-  // with or without a relief fitting - but this sweep wants the FITTING too,
-  // so the branch itself (not just the header run) is on the graph to sweep
-  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
-  { const hot=M.pipeNetwork().find(r=>r.k==="hot");
-    M.addFit('relief',hot.key,0.9,M.reliefHeaderKey(M.pipeNetwork())||'relief:x',0.5); }
+  // the relief tank and the relief VALVE are both placed parts now, and the
+  // stock plant ships with the valve in the header - so the two runs either
+  // side of it are already on the graph for this sweep to move the tank under
+  M.buildStockPlumbing({loops:1}); M.commission();
   M.commission();
   let threw=0, swept=0, collapsed=0, noDir=0;
   for(let x=0;x<GWc;x++) for(let y=0;y<GHc;y++){
@@ -577,51 +554,58 @@ const nozChecks=[];
     ['every nozzle has a point', noDir===0, `${noDir} ends with no plant point`],
     ['the collapse really happens', collapsed>0,
      `${collapsed} zero-length runs seen in the sweep - the case is reproduced, not assumed`]);
-  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:4}); M.commission();
 }
 
-/* ── A RELIEF FITTING SURVIVES ITS TANK MOVING ──
-   The relief HEADER's key carries the two faces pipeNetwork() picked for it
-   (the relief header run, routed live), so it is renamed by any move of the
-   pressurizer or the tank. The stock relief fitting used to STORE that
-   string, which meant moving either part - both of which the game invites -
-   silently dropped the fitting out of netBuild(), took FIT.relief.g and its
-   solved vent rate to zero, and left the valve venting NOTHING while its
-   glyph, its tank, its mimic and its mass all stayed exactly where they
-   were. reliefRate() (pipenet.js) is the solved-flow reader Stage 4 gives
-   this test now - forced open (S.reliefOpen), since unlike the old ventK()
-   it only reads a valve that is actually passing. */
+/* ── A RELIEF VALVE SURVIVES ITS TANK MOVING ──
+   This used to pin a stored STRING: a fitting kept its far end as a run KEY,
+   the header's key carries the two faces pipeNetwork() picked for it, and so
+   moving the pressurizer or the tank - both of which the game invites -
+   silently dropped the fitting out of netBuild(), took its solved vent rate
+   to zero, and left the valve venting NOTHING while its glyph, its tank, its
+   mimic and its mass all stayed exactly where they were.
+   A valve stores no key at all now: it is a box, and the runs either side of
+   it are ordinary runs that re-route like every other. So the failure mode is
+   gone by construction and what is pinned is the BEHAVIOUR it cost - the
+   valve goes on venting wherever its tank is put, and comes home to exactly
+   the rate it left. reliefRate() (pipenet.js) is the solved-flow reader,
+   forced open (S.reliefOpen), since it only ever reads a valve that is
+   actually passing. */
 const reliefChecks=[];
 {
-  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
-  const tapHot=M.pipeNetwork().find(r=>r.k==='hot');
-  const stale='relief:pzrt-reltkb';       // the literal that used to be stored
-  M.addFit('relief',tapHot.key,0.9,stale,0.5);
-  M.commission();
-  const fid=Object.keys(M.D().fit)[0];
+  M.buildStockPlumbing({loops:4}); M.commission();
+  const fid=Object.keys(M.D().fittings).find(k=>M.D().fittings[k].mode==='relief');
   const at=id=>M.LAY().parts.find(q=>q.id===id);
   const home={reltk:{...at('reltk')}, pzr:{...at('pzr')}};
   const rate=()=>{ const s=M.S(); s.reliefOpen[fid]=true; s.reliefBlocked[fid]=false; return M.reliefRate(s,fid); };
   const base=rate();
-  M.moveTo(at('reltk'),8,2); M.commission();
-  const afterTank=rate(), renamed=!M.P().net.byKey[stale];
-  const offerable=!!M.reliefHeaderKey(M.pipeNetwork());
-  M.moveTo(at('pzr'),3,1); M.commission();
+  const tankMoved=M.moveTo(at("reltk"),10,0); M.commission();
+  const afterTank=rate(), caught=M.P().net.fitTarget[fid]==='reltk';
+  const pzrMoved=M.moveTo(at('pzr'),4,1); M.commission();
   const afterPzr=rate();
   M.moveTo(at('reltk'),home.reltk.x,home.reltk.y);
   M.moveTo(at('pzr'),home.pzr.x,home.pzr.y);
   M.commission();
   const backHome=rate();
+  /* THE INJECTED FAULT. A valve that lost its far end reads a vent rate of
+     exactly zero, which is what the old stored-key rot produced - so break
+     the path on purpose (delete the run to the tank) and the rate must go to
+     it. Without this, "vents where it sits" would pass on a plant where the
+     valve had quietly stopped venting for some other reason. */
+  const outRid=Object.keys(M.D().run).find(r=>{ const e=M.D().run[r];
+    return (e.a===fid&&e.b==='reltk')||(e.b===fid&&e.a==='reltk'); });
+  M.removeRun(outRid); M.commission();
+  const unpiped=rate();
+  M.buildStockPlumbing({loops:4}); M.commission();
   reliefChecks.push(
-    ['relief vents where it sits', base>0 && afterTank>0 && afterPzr>0,
+    ['relief vents where it sits', tankMoved && pzrMoved && base>0 && afterTank>0 && afterPzr>0,
      `rate ${base.toFixed(3)} -> tank moved ${afterTank.toFixed(3)} -> pzr moved ${afterPzr.toFixed(3)} %/s`],
     ['relief comes home unchanged', Math.abs(backHome-base)<1e-12,
      `moving both parts away and back returns the vent rate to ${base.toFixed(4)}`],
-    ['relief can still be added',  offerable,
-     'the bench can resolve a header to tap after the tank moves'],
-    ['inject: the stored literal',  renamed,
-     `caught by "relief vents where it sits" (${stale} no longer names any run)`]);
-  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
+    ['the discharge is caught by the tank it reaches', caught,
+     'net.fitTarget names the tank the outlet walks to, after the tank moved'],
+    ['inject: the far end deleted', unpiped!==0,
+     `caught by "relief vents where it sits" - unpiped it vents ${unpiped.toFixed(3)} %/s to the ROOM, never a silent 0`]);
 }
 
 /* ══════════ A RUN'S KIND IS A SPEC, NOT A PERMISSION (Stage 1/1B) ══════════
@@ -676,8 +660,8 @@ const kindPermChecks=[];
   // \r?\n rather than a literal \n - the file is CRLF on disk (git config),
   // and a literal-string anchor silently no-ops on that line ending
   const faulted=stock.replace(
-    /if\(builtKeys\.has\(r\.key\)\) continue;/,
-    'if(r.k !== "hot" && r.k !== "cold") continue;\r\n    if(builtKeys.has(r.key)) continue;');
+    /const u = nodeIdx\(coreFold\(ends\[0\]\)\), v = nodeIdx\(coreFold\(ends\[1\]\)\);/,
+    'if(r.k !== "hot" && r.k !== "cold") continue;\r\n    const u = nodeIdx(coreFold(ends[0])), v = nodeIdx(coreFold(ends[1]));');
   if(faulted===stock){
     kindPermChecks.push(['inject: a kind permission', false, 'the fault-injection anchor text was not found - update it, this proves nothing while it silently no-ops']);
   } else {
@@ -700,20 +684,15 @@ const kindPermChecks=[];
    different lists (netBuild()'s own comment), one per question. */
 const kindBehaveChecks=[];
 {
-  // a run earlier in this file cleared D.fit - the relief tank and its
-  // header run are on the grid regardless (Stage 5a), but checks 1/2 want
-  // the FITTING'S OWN branch on the graph too, so put one back, the same
-  // setup nozChecks above already uses
-  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
-  { const hot=M.pipeNetwork().find(r=>r.k==="hot");
-    M.addFit('relief',hot.key,0.9,M.reliefHeaderKey(M.pipeNetwork())||'relief:x',0.5); }
-  M.commission();
+  // the stock plant ships a relief valve and a surge tee, both placed parts,
+  // so the runs either side of each are already ordinary runs on the graph
+  M.buildStockPlumbing({loops:1}); M.commission();
   const net=M.P().net;
 
   // 1. EVERY RUN IS IN THE SOLVE: every routed run's key is the key of at
-  // least one edge netBuild() actually built (surge and every xtie:* branch
-  // fitting included - built by their own dedicated pass, not the general
-  // loop, but still an edge in net.edges either way).
+  // least one edge netBuild() actually built. There is one loop that builds
+  // them now - the dedicated surge and branch-fitting passes went with the
+  // tap shape, because every run is port to port.
   const runKeys=M.pipeNetwork().filter(r=>r.key).map(r=>r.key);
   const edgeKeys=new Set(net.edges.map(e=>e.key));
   const notInSolve=runKeys.filter(k=>!edgeKeys.has(k));
@@ -729,27 +708,33 @@ const kindBehaveChecks=[];
   kindBehaveChecks.push(['every run can be hit', newlyHittable.length===4,
     `${hittable.length} hittable run(s), including ${newlyHittable.join(', ')} - kinds the old four-item allowlist refused`]);
 
-  // 3. EVERY RUN CAN BE TAPPED: a branch fitting landing on a formerly-
-  // excluded kind (steam) must resolve to a REAL node - finite elevation,
-  // present in net.z - not the old kind-gated fallback tapEndpoint() used to
-  // take for a host this graph carried no edges for.
+  // 3. EVERY RUN CAN BE SPLICED: a fitting cut into a formerly-excluded kind
+  // (steam) must commission and leave real edges on BOTH halves - never the
+  // old kind-gated fallback taken for a host this graph carried no edges for.
   const steamRun=M.pipeNetwork().find(r=>r.k==='steam');
-  let tapResolved=false;
+  let spliceResolved=false, spliceFid=null;
   if(steamRun){
-    const fid=M.addFit('throttle', steamRun.key, 0.5, null, null);
+    spliceFid=spliceFitting(M, steamRun.key, 'throttle', [13,4]);
     M.commission();
     const net2=M.P().net;
-    tapResolved = net2.fitIds.includes(fid);
-    M.removeFit(fid); M.commission();
+    // live means BOTH: netBuild() knows the valve, and the two runs it was
+    // spliced into carry real edges either side of it
+    const ek=new Set(net2.edges.map(e=>e.key));
+    spliceResolved = net2.fitIds.includes(spliceFid) &&
+      M.pipeNetwork().filter(r=>r.key&&r.key.indexOf(spliceFid)>=0).every(r=>ek.has(r.key));
+    // removePart() cascades: it takes the two halves with it, so the steam
+    // run is not "put back" by removing the valve - the plant is rebuilt
+    M.removePart(spliceFid);
+    M.buildStockPlumbing({loops:1}); M.commission();
   }
-  kindBehaveChecks.push(['every run can be tapped', !!steamRun && tapResolved,
-    steamRun? 'an in-line throttle on the steam run commissions and is live'
+  kindBehaveChecks.push(['every run can be spliced', !!steamRun && spliceResolved,
+    steamRun? 'a throttle spliced into the steam run commissions, and both halves are edges'
              : 'no steam run routed on this plant - cannot test']);
 
   // 4. EVERY RUN CAN SPILL: severing a formerly-excluded kind (steam) must
   // open a real break edge and register in outs.by, exactly like a severed
   // hot or cold leg always has.
-  M.D().fit={}; M.commission();
+  M.commission();
   const s=M.S();
   const steamRun2=M.pipeNetwork().find(r=>r.k==='steam');
   let spillKey=0;
@@ -763,7 +748,7 @@ const kindBehaveChecks=[];
   kindBehaveChecks.push(['every run can spill', !!steamRun2 && spillKey>0,
     steamRun2? `severed steam run spills ${spillKey.toFixed(4)} (break:${steamRun2.key})`
              : 'no steam run routed on this plant - cannot test']);
-  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:4}); M.commission();
 }
 
 /* ══════════ STAGE 1B SURVIVORS: NAMED, NOT MERELY UNCAUGHT ══════════
@@ -789,7 +774,7 @@ const kindViewChecks=[];
     exempted? 'an ART EXEMPT marker sits immediately above drawSym()'
              : 'no ART EXEMPT marker found above drawSym() - the exemption is implicit again']);
 
-  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:1}); M.commission();
   const net=M.P().net;
   const hpiEdge=net.edges.find(e=>e.key && e.key.startsWith('hpi:'));
   const s=M.S(); s.hpi=false;
@@ -919,7 +904,7 @@ const roleBehaveChecks=[];
   // the declaration (no part can be removed to test this: pzr is
   // unconditional in buildLayout()) and watching the anchor fall back to the
   // core, exactly as netFixed()'s own comment promises.
-  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:1}); M.commission();
   const coreIdx=M.P().net.index.core, pzrIdxBefore=M.P().net.pzrNode;
   const savedFixed=M.ROLE().pzr.fixed;
   M.ROLE().pzr.fixed=null;
@@ -958,7 +943,7 @@ const roleBehaveChecks=[];
    CURRENT name back to net.tankNid every rebuild. */
 const tankMoveChecks=[];
 {
-  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:1}); M.commission();
   const at=id=>M.LAY().parts.find(q=>q.id===id);
   const home={...at('hpi')};
   const nodeHome=M.P().net.tankNid.hpi, idxHome=M.P().net.tankNode.hpi;
@@ -1052,50 +1037,46 @@ const runDataChecks=[];
     const sa=e.af!=null?e.af:M.face(a,b), sb=e.bf!=null?e.bf:M.face(b,a);
     declaredKeys.add(e.k+':'+a.id+sa+'-'+b.id+sb);
   }
-  // xtie:* is a branch FITTING's own run - D.fit's domain, not D.run's
-  const routed=M.pipeNetwork().filter(r=>!r.key.startsWith('xtie:'));
+  // EVERY routed run, with no exception left to make: a fitting is a box, so
+  // it owns no run of its own and every polyline on the board traces to a
+  // D.run entry somebody drew.
+  const routed=M.pipeNetwork();
   const untraced=routed.filter(r=>!declaredKeys.has(r.key));
   runDataChecks.push(['every routed run traces to D.run', untraced.length===0,
     untraced.length? `${untraced.length} routed run(s) with no D.run entry: ${untraced.map(r=>r.key).join(', ')}`
                     : `${routed.length} routed run(s), every key resolves off a D.run entry`]);
 
-  // a part with no run reaching it contributes NOTHING to the solve: delete
-  // the one D.run entry naming the relief header - the tank is still on the
-  // grid (a placed part now, Stage 5a, on the grid whether or not any
-  // relief fitting exists) but becomes electrically unreachable, no edge in
-  // net.edges touches one of its nodes. Its own branch fitting does NOT lose its
-  // route the same way any more (Stage 4): a relief valve is never allowed
-  // nowhere to vent, so it falls back to pipenet.js's own containment
-  // target instead of the tank it can no longer reach - "a part with no run
-  // contributes nothing" and "a relief valve always has somewhere to vent"
-  // are both true at once, because the fitting's own branch is not the part
-  // that went missing.
-  M.D().fit={}; M.commission();
-  const hotKey=M.pipeNetwork().find(r=>r.k==='hot').key;
-  M.addFit('relief',hotKey,0.9,M.reliefHeaderKey(M.pipeNetwork())||'relief:x',0.5);
+  /* A part with no run reaching it contributes NOTHING to the solve: delete
+     the one D.run entry between the relief VALVE and the tank, and the tank
+     is still a box on the grid but is electrically unreachable - no edge in
+     net.edges touches one of its nodes. The valve does NOT go quiet with it:
+     a relief valve is never allowed nowhere to vent, so its now-unpiped
+     outlet gets the containment anchor a break's own opening gets. Both
+     claims hold at once, because what went missing is the tank's pipe and
+     not the valve. */
   M.commission();
+  const fidNow=Object.keys(M.D().fittings).find(k=>M.D().fittings[k].mode==='relief');
   // no stock run has a NAME any more - buildStockPlumbing() mints usrN, the
-  // same as any gesture would - so the header is found by the kind it carries.
-  const reliefRid=Object.keys(M.D().run).find(r=>M.D().run[r].k==='relief');
+  // same as any gesture would - so the outlet is found by what it CONNECTS.
+  const reliefRid=Object.keys(M.D().run).find(r=>{ const e=M.D().run[r];
+    return (e.a===fidNow&&e.b==='reltk')||(e.b===fidNow&&e.a==='reltk'); });
   const savedRelief=M.D().run[reliefRid];
   delete M.D().run[reliefRid];
   M.commission();
   const net2=M.P().net;
-  const fidNow=Object.keys(M.D().fit)[0];
   const reltkEdges=net2.edges.filter(e=>(e.key&&e.key.indexOf('reltk')>=0));
-  const xtieStillRoutes=M.pipeNetwork().some(r=>r.key.startsWith('xtie:'));
+  const ventsToRoom=net2.edges.some(e=>e.key==='vent:'+fidNow);
   const targetsContainment=net2.fitTarget && net2.fitTarget[fidNow]===null;
   M.D().run[reliefRid]=savedRelief;
   M.commission();
   const restoredEdges=M.P().net.edges.filter(e=>e.key&&e.key.indexOf('reltk')>=0).length;
   runDataChecks.push(['a part with no run touches no edge', reltkEdges.length===0,
-    `relief header entry removed from D.run: ${reltkEdges.length} edges reach reltk (want 0)`]);
-  runDataChecks.push(['...but the valve still vents, to containment', xtieStillRoutes && targetsContainment,
-    `branch fitting still routed: ${xtieStillRoutes} (want true), fitTarget: ${net2.fitTarget && net2.fitTarget[fidNow]} (want null - containment, pipenet.js's own fallback)`]);
+    `the valve's outlet run removed from D.run: ${reltkEdges.length} edges reach reltk (want 0)`]);
+  runDataChecks.push(['...but the valve still vents, to containment', ventsToRoom && targetsContainment,
+    `vent edge built: ${ventsToRoom} (want true), fitTarget: ${net2.fitTarget && net2.fitTarget[fidNow]} (want null - the room)`]);
   runDataChecks.push(['...and comes back once the run is restored', restoredEdges>0,
     `${restoredEdges} edges reach reltk once the relief header run is put back`]);
-  M.D().fit={};
-
+  
   // no connection is refused for what a component is FOR: author a run from
   // the core straight to the condenser - nothing says a hot leg goes to a
   // generator, so nothing may refuse this one. It does not have to cool
@@ -1172,7 +1153,7 @@ const runDataChecks=[];
     // fault injection: prove the scan actually goes red, same idiom as
     // every other "X no longer exists" check above
     const stockDB=fsD.readFileSync(pathD.join(ROOTD,'src/screens/design-bench.js'),'utf8');
-    const anchorDB='function ctxResolveDesign(p,extra){';
+    const anchorDB='function ctxResolveDesign(p){';
     const faultedDB=stockDB.replace(anchorDB, 'function nearestLoop(gx,gy){ return 0; }\r\n'+anchorDB);
     if(faultedDB===stockDB){
       runDataChecks.push(['inject: nearestLoop() reappears', false, 'the fault-injection anchor text was not found - update it, this proves nothing while it silently no-ops']);
@@ -1188,7 +1169,7 @@ const runDataChecks=[];
   }
 
   // D.run survives a store.js round trip (packVal/unpackVal) unchanged, and
-  // rides designSig() the same way D.fit already does
+  // rides designSig() the same way D.tanks and D.fittings already do
   const before=JSON.parse(JSON.stringify(M.D().run));
   const roundTripped=M.unpackVal(M.packVal(M.D().run));
   const rtOk=JSON.stringify(roundTripped)===JSON.stringify(before);
