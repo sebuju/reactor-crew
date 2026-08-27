@@ -813,13 +813,13 @@ function netBuild(){
   // junction always did; an IN-LINE fitting (bKey null - only a throttle can
   // be one) taps just the one run it sits on, gets no node of its own, and is
   // folded straight into that run's own edge instead (pushSeg, below) - it
-  // has no route to draw, so there is no "xtie:"+id run to look up for it. A
-  // fitting whose host run kind isn't one this graph builds edges for (steam,
-  // feed - not modeled here yet) still gets registered; tapEndpoint() and
-  // pushSeg below just never have an edge-building pass consume it, so it
-  // falls back to the pre-split nearer-end pick (branch) or is simply inert
-  // (in-line), no coarser than before for a kind this stage still doesn't
-  // carry flow on.
+  // has no route to draw, so there is no "xtie:"+id run to look up for it. The
+  // one host this cannot serve is a TAP-ENDED run (runEnds() null, i.e. the
+  // surge line): it still gets registered, but tapEndpoint() and pushSeg below
+  // never have an edge-building pass consume it, so it falls back to the
+  // pre-split nearer-end pick (branch) or is simply inert (in-line). Kind is
+  // NOT the test - every run with two ends carries an edge, steam and feed
+  // included.
   const tapNode = (fid, side) => "tap:" + fid + ":" + side;
   const branches = [], inlineByRun = {}, fitIds = [], fitMode = {};
   /* Which TANK a relief fitting's own vent reaches, or null for straight to

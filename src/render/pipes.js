@@ -202,9 +202,10 @@ function pipeFieldRefresh(L){
   netField(L, pipeDrop, pipeP);
 }
 /* Pressure on a RUN rather than at a node: the mean of its two ends, which is
-   what a gauge tapped into the middle of it would read. null for a run this
-   graph carries no nodes for (steam, feed - not modeled here yet), so a
-   caller draws nothing rather than a zero. */
+   what a gauge tapped into the middle of it would read. null for a TAP-ENDED
+   run - one whose key names no second node, i.e. the surge line - so a caller
+   draws nothing rather than a zero. Every run with two ends has an edge and
+   two nodes, steam and feed included; runEnds() is the whole test. */
 function pipeRunP(r){
   const ends=runEnds(r.key,r.k);
   if(!ends) return null;
