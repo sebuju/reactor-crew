@@ -891,38 +891,35 @@ function ctlStrip(list,x,y,w,h){
 // reshaping it. Grips are pushed AFTER the components so one lying over a
 // vessel is still grabbable (hit test takes the LAST widget pushed).
 const WPG=9;                          // the grab box; a grip has to be findable at fit scale
-/* the one point on a leg the hand can grab: its corner, or the middle of the
-   run if the leg came out straight and has no corner to offer */
-function legGrip(pts){
-  if(pts.length<2) return null;
-  if(pts.length<3) return {x:(pts[0][0]+pts[1][0])/2, y:(pts[0][1]+pts[1][1])/2};
-  const seg=i=>Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);
-  let tot=0; for(let i=1;i<pts.length;i++) tot+=seg(i);
-  /* the corner nearest the middle of the leg: a leg with two of them offers the
-     one the hand was most likely aiming at */
-  let s=0, best=pts[1], bd=1e9;
-  for(let i=1;i<pts.length-1;i++){
-    s+=seg(i);
-    const d=Math.abs(s-tot/2);
-    if(d<bd){ bd=d; best=pts[i]; }
-  }
-  return {x:best[0],y:best[1]};
-}
-function pipeGrip(x,y,rid,pt){
-  const wd=push({x:x-WPG/2,y:y-WPG/2,w:WPG,h:WPG,type:"pipewp",rid,pt});
+const WPL=9;                          // how close to the line a double-click counts as on it
+/* THERE IS ONE KIND OF POINT ON A PIPE. A grip is a waypoint the player set,
+   and the way to set one is to double-click the LINE - which is also the
+   biggest target on the drawing. The automatic corners used to be pushed as
+   grips of their own, so the same idea wore two names, two colours and two
+   tooltips, and the grey one marked a point the router owned and would move
+   out from under the hand anyway. */
+function pipeGrip(pt,rid){
+  const wd=push({x:pt.x-WPG/2,y:pt.y-WPG/2,w:WPG,h:WPG,type:"pipewp",rid,pt});
   const hv=hov(wd);
-  // placed waypoint is amber (yours); automatic corner is the rail tone the
-  // pipe casing already sits in, so the drawing isn't peppered with marks
-  fillRect(x-2.5,y-2.5,5,5, pt?C.amber : hv?C.bright : C.rail);
-  if(hv) frame(x-WPG/2,y-WPG/2,WPG,WPG,C.amber);
-  TIP(x-WPG/2,y-WPG/2,WPG,WPG, pt?"PIPE WAYPOINT":"PIPE ROUTE",
-    pt?"A point you told this run to pass through. Drag it to move it, or double-click to take it out and hand that stretch of pipe back to the automatic route."
-      :"Drag this corner and the run will be routed through wherever you drop it. It is still the same router doing the work - a run with a waypoint on it is two runs end to end.");
+  fillRect(pt.x-2.5,pt.y-2.5,5,5,C.amber);
+  if(hv) frame(pt.x-WPG/2,pt.y-WPG/2,WPG,WPG,C.amber);
+  TIP(pt.x-WPG/2,pt.y-WPG/2,WPG,WPG,"PIPE WAYPOINT",
+    "A point you told this run to pass through. Drag it to move it, or right-click to take it out and hand that stretch of pipe back to the automatic route.");
 }
 function pipeGrips(runs){
-  for(const r of runs){
-    for(const p of r.wps) pipeGrip(p.x,p.y,r.rid,p);
-    for(const leg of r.legs){ const g=legGrip(leg); if(g) pipeGrip(g.x,g.y,r.rid,null); }
+  for(const r of runs) for(const p of r.wps) pipeGrip(p,r.rid);
+}
+// pushed with the pipes, UNDER the machines: a run passing behind a vessel
+// belongs to the vessel, and a waypoint could not be dropped inside one anyway
+function pipeLines(runs){
+  for(const r of runs) for(let i=1;i<r.pts.length;i++){
+    const [x0,y0]=r.pts[i-1], [x1,y1]=r.pts[i];
+    const x=Math.min(x0,x1)-WPL/2, y=Math.min(y0,y1)-WPL/2;
+    const w=Math.abs(x1-x0)+WPL, h=Math.abs(y1-y0)+WPL;
+    if(w<=WPL&&h<=WPL) continue;                 // a zero-length segment is a corner artefact
+    push({x,y,w,h,type:"pipewp",rid:r.rid,pt:null});
+    TIP(x,y,w,h,"PIPE ROUTE",
+      "Double-click anywhere on this run to pin a waypoint there, then drag it wherever you want the pipe to go. It is still the same router doing the work - a run with a waypoint on it is two runs end to end.");
   }
 }
 /* ══ THE RUBBER BAND OF THE ONE GESTURE ══
@@ -1759,6 +1756,7 @@ function drawPlant(y0,L,vh,vx,vw){
     ctx.stroke();
   }
   ctx.lineJoin="miter";
+  if(!L) pipeLines(NET);        // the line itself is where a waypoint is made
   if(L) pipeFlow(L);
   // over the pipes, under the machines - the one seam a layer can paint
   // without landing on a value tag, a control strip or a bypass row, because

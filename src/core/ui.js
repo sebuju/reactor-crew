@@ -9,6 +9,9 @@
 const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9},ptrHost:null,host:null};
 function hostScope(el){ ui.host=el; }
 const WPSNAP=8;
+// the gutter the rest of the plant is measured in, so two waypoints placed by
+// hand on one line land on one line
+const wpSnap=v=>Math.round(v/WPSNAP)*WPSNAP;
 
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
 let viewOn=false;                       // are widgets being pushed through it?
@@ -181,6 +184,18 @@ const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
 const push=w=>{ if(viewOn) w.v=1; w.host=ui.host; ui.widgets.push(w); return w; };
 const inside=(w,p)=>!!p&&p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
 const hov=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr))&&!ui.drag;
+// the ONE hit test: last widget pushed wins, and it answers for either button
+const hitAt=p=>{
+  for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
+    if(w.host===ui.ptrHost&&inside(w,ptIn(w,p))) return w; }
+  return null;
+};
+function wpDrop(rid,pt){
+  const e0=D.run[rid], L=e0&&e0.wp; if(!L) return;
+  const i=L.indexOf(pt); if(i<0) return;
+  L.splice(i,1);
+  if(!L.length) delete e0.wp;
+}
 
 let touchTip=null, isTouch=false;
 // g is an optional band(): the scale the value in this region lives on, so
@@ -417,14 +432,21 @@ function uiDown(e){
   // shift+right is the browser's own menu, not a pan; right held-and-dragged
   // pans, right pressed-and-released without moving opens the ADD/REMOVE menu
   // instead (see pointerup)
-  if(e.button===2){ if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y,sx:p.x,sy:p.y,moved:false};
+  if(e.button===2){
+    // a waypoint is taken out where it lives, not through the deck menu: the
+    // menu is addressed at a CELL and a waypoint is a point on a run
+    const w=hitAt(p);
+    if(w&&w.type==="pipewp"&&w.pt){ wpDrop(w.rid,w.pt); return; }
+    if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y,sx:p.x,sy:p.y,moved:false};
     return; }
   isTouch = e.pointerType==="touch" || e.pointerType==="pen";
   if(isTouch){ const t=findTip(p);
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
-  for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
-    const q=ptIn(w,p); if(!inside(w,q)) continue;
-    if(w.host!==ui.ptrHost) continue;
+  const w=hitAt(p);
+  // nothing under the pointer: a click on bare deck deselects, rather than
+  // leaving whatever was picked last lit with nothing on screen to justify it
+  if(!w){ sel=null; return; }
+  const q=ptIn(w,p);
     /* ONE GESTURE, AND THE DROP DECIDES WHAT IT WAS. Press anywhere on a
        box and drag: let go over another component and you have laid a pipe,
        let go over free deck and you have moved the part. No mode, no
@@ -450,19 +472,14 @@ function uiDown(e){
     // under the hand
     else if(w.type==="pipewp"){
       const e0=D.run[w.rid]; if(!e0) return;
-      const L=e0.wp||(e0.wp=[]);
       let pt=w.pt;
-      if(pt){
-        if(e.dbl){ L.splice(L.indexOf(pt),1);
-          if(!L.length) delete e0.wp;
-          return; }
-      } else { pt={x:w.x+w.w/2,y:w.y+w.h/2}; L.push(pt); }
+      // no pt = the press landed on the LINE, which pins a waypoint where the
+      // hand is - but only on a double-click, or every brush past a pipe
+      // would bend it
+      if(!pt){ if(!e.dbl) return;
+        pt={x:wpSnap(q.x),y:wpSnap(q.y)}; (e0.wp||(e0.wp=[])).push(pt); }
       ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
-    else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
-    return; }
-  // nothing under the pointer: a click on bare deck deselects, rather than
-  // leaving whatever was picked last lit with nothing on screen to justify it
-  if(e.button!==2) sel=null;
+  else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
 }
 function uiMove(e){
   const tgt=e.currentTarget||cv;
@@ -484,11 +501,8 @@ function uiMove(e){
         // nearest row rather than the one merely touched
         d.gy=rowAt(q.y-d.oy+CELL/2);
       } }
-    // snapped to the 8-unit gutter the rest of the plant is measured in, so
-    // two waypoints placed by hand on one line land on one line
     else if(d.type==="pipewp"){
-      const snap=v=>Math.round(v/WPSNAP)*WPSNAP;
-      d.pt.x=snap(d.px+(q.x-d.sx)); d.pt.y=snap(d.py+(q.y-d.sy)); }
+      d.pt.x=wpSnap(d.px+(q.x-d.sx)); d.pt.y=wpSnap(d.py+(q.y-d.sy)); }
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
       // integrate rather than re-derive, so moving away from the track
