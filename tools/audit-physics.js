@@ -12,7 +12,7 @@ const M=require('./bundle').headless(
  'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
  'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,addRun,removeRun,fittableList,'+
- 'loopOf,loopOfKey,loopPumpCap,portRoom,nearestFreePort,hasHeatSink,ROLE:()=>ROLE,'+
+ 'loopOf,loopOfKey,loopPumpCap,portRoom,nearestFreePort,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
  'pipeNetwork,act,ctxItemsDesign,'+
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
  'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW,'+
@@ -578,6 +578,43 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
   console.log(`  a tank with no run to it never fills: reltk level stays ${M.tankLvl(s2,'reltk').toFixed(1)}% while the valve vents to containment instead`);
   M.D().run.relief={a:"pzr",af:null,b:"reltk",bf:null,k:"relief",bore:0.20}; M.commission();
 }
+{ /* ══ AN UNPLUMBED PRESSURIZER SETS NOTHING ══
+     A vessel with no pipe to the loop has no steam bubble in the loop, so it
+     cannot hold pressure. MEASURED BEFORE THE FIX, on this exact scenario:
+     s.P sat at 15.521 MPa sixty seconds after the surge line was deleted -
+     the plant ran on unchanged, which is what this exists to catch. The
+     figure is recorded rather than re-injected because pzrLive() is a
+     function of the network, not a flag a test can stand down.
+
+     Off REACHABILITY, not off a D.run lookup, which the third case is what
+     proves: the run is still declared and still drawn, and shutting the
+     path is exactly as disconnected as deleting it. */
+  const savedSurge=M.D().run.surge;
+  set({}); M.commission();
+  if(!M.pzrLive(M.P().net, M.S()))
+    bad('the STOCK plant reads its pressurizer as unplumbed - pzrLive() is inverted or the datum face moved');
+  const kIntact=M.netFlowK(M.S());
+
+  delete M.D().run.surge; M.commission();
+  if(M.pzrLive(M.P().net, M.S()))
+    bad('the surge line was deleted and the pressurizer still reads plumbed');
+  const sCut=M.S(); run(sCut,60);
+  if(!(sCut.P < M.P().P0*0.5))
+    bad(`surge line deleted and pressure held at ${sCut.P.toFixed(3)} MPa after 60 s (was 15.521 before this landed) - it must fall away`);
+  const pCut=sCut.P;
+
+  /* AND IT COMES BACK BIT-IDENTICAL. The whole risk of a new predicate in the
+     tick is that it costs an intact plant a float; this is the check that says
+     it did not. */
+  M.D().run.surge=savedSurge; M.commission();
+  const kBack=M.netFlowK(M.S());
+  if(kBack!==kIntact)
+    bad(`restoring the surge line did not restore netFlowK bit-identically: ${kIntact} -> ${kBack}`);
+  const sBack=M.S(); run(sBack,60);
+  if(!(Math.abs(sBack.P-M.P().P0) < 0.2))
+    bad(`restoring the surge line left pressure at ${sBack.P.toFixed(3)} MPa, not back on programme`);
+  console.log(`  surge line deleted: P ${pCut.toFixed(3)} MPa after 60 s (was 15.521 unfixed); restored: P ${sBack.P.toFixed(3)} MPa and netFlowK bit-identical at ${kBack}`);
+}
 { /* the vent is the solved edge flow, read straight off reliefRate()
      (pipenet.js) - sever the fitting's own branch pipe (pipeExtraLen ->
      Infinity -> FIT.relief.g's own isFinite(len) gate -> 0, same idiom
@@ -1086,27 +1123,40 @@ console.log('\n=== A PLACED PART CONTRIBUTES NOTHING UNTIL IT IS PLUMBED ===');
   console.log(`  plumbed spare: loopPumpCap(0) ${baseCap} -> ${capOn}, netFlowK both running ${(both*100).toFixed(1)}% (want ${(baseline*100).toFixed(1)}%, unchanged)`);
   console.log(`  original pump lost: ${(noSpareLost*100).toFixed(1)}% with no spare -> ${(withSpareLost*100).toFixed(1)}% with the spare plumbed in (the loop bought back)`);
 }
-{ /* a port already carrying its declared capacity refuses a second pipe -
-     ROLE.ports enforced by portRoom() (layout.js), the same table CONNECT's
-     own menu offer reads. The pressurizer's own "*":2 budget is already
-     spent on the stock plant (surge plus the relief header run), so this
-     needs nothing built - and freeing ONE of those two proves the refusal
-     tracks OCCUPANCY, not "a pressurizer isn't a pump" or any other
-     judgement about what the part is for: the same part, the same role,
-     answers differently only because the count changed. */
+{ /* a port already carrying its capacity refuses a second pipe - ROLE.ports
+     plus portRoom()'s one documented spare (PORT_SPARE, layout.js), which is
+     the same ceiling the bench's own port handles read.
+
+     THE CONDITION IS BUILT, NOT ASSUMED. This used to lean on the stock plant
+     happening to spend the pressurizer's whole "*":2 budget on surge + relief,
+     so it needed nothing built. That coincidence is gone the moment a design
+     is allowed to be added to at all, and a check resting on a coincidence
+     reports on the coincidence. Runs are added to the pressurizer until it
+     reads full instead - which asserts the strictly stronger thing, that the
+     ceiling is FINITE and enforced at all - and one is then taken away again,
+     which is what proves the refusal tracks OCCUPANCY rather than "a
+     pressurizer isn't a pump" or any other judgement about what the part is
+     for: the same part, the same role, answering differently only because the
+     count changed. */
   set({loops:1}); M.commission();
   const pzr=M.LAY().parts.find(q=>q.id==='pzr');
+  const free=p=>Object.values(M.portRoom(p)).some(v=>v);
+  const added=[];
+  const CAP_SANE=12;                          // a ceiling that never arrives is the failure, not a hang
+  while(free(pzr) && added.length<CAP_SANE){
+    added.push(M.addRun('pzr','t','core','t'));
+    M.commission();
+  }
   const fullRoom=M.portRoom(pzr);
-  const anyFreeFull=Object.values(fullRoom).some(v=>v);
-  if(anyFreeFull) bad(`pzr ports read free (${JSON.stringify(fullRoom)}) but the stock plant already spends its "*":2 budget on surge + relief`);
-  const savedRelief=M.D().run.relief;
-  delete M.D().run.relief;                    // one of pzr's two connections gone
-  M.commission();
+  if(Object.values(fullRoom).some(v=>v))
+    bad(`pzr ports still read free after ${added.length} extra run(s): ${JSON.stringify(fullRoom)} - the ROLE.ports ceiling is not enforced at all`);
+  M.removeRun(added.pop()); M.commission();
   const openRoom=M.portRoom(pzr);
   const anyFreeOpen=Object.values(openRoom).some(v=>v);
-  M.D().run.relief=savedRelief; M.commission();
-  if(!anyFreeOpen) bad(`freeing one of pzr's two "*" slots (deleted D.run.relief) still reads full: ${JSON.stringify(openRoom)}`);
-  console.log(`  pzr ports: full while surge+relief both land there (${JSON.stringify(fullRoom)}), free the moment one is removed (${JSON.stringify(openRoom)}) - occupancy, not purpose`);
+  for(const rid of added) M.removeRun(rid);
+  M.commission();
+  if(!anyFreeOpen) bad(`freeing one of pzr's "*" slots still reads full: ${JSON.stringify(openRoom)}`);
+  console.log(`  pzr ports: full after ${added.length+1} run(s) land there (${JSON.stringify(fullRoom)}), free the moment one is removed (${JSON.stringify(openRoom)}) - occupancy, not purpose`);
 }
 
 /* ══════════ A STEAM GENERATOR IS A PLACED PART, D.loops IS GONE ══════════
