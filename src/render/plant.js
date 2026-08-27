@@ -168,20 +168,35 @@ function drawSym(p,x,y,w,h,ink,L){
        drawn - to scale, on the flux - in the core field on the reactor, and a
        second set of stems here said the same thing again in a box that has no
        core in it. What this component owns is whether the drives ANSWER. */
-    const nb = L&&L.rodZ? P.NB : 5, step=(W-24)/nb;
+    const nb = L&&L.rodZ? P.NB : 5;
+    /* CENTRED, and packed no wider than a drive needs. The group used to start
+       at X+12 and step by (W-24)/nb, which leaves a whole slot of empty plinth
+       on the right - the row read as sitting off to one side of its own box. */
+    const DW=5, step=Math.min((W-24)/nb, DW*3), x0=cx-nb*step/2+(step-DW)/2;
     const jam = L&&L.rodJam, scram = L&&L.scrammed;
     const hcol = jam?"#8a7a4a" : scram?C.red : "#b9cdd2";
     const ht=Math.max(4,Hh-16), hy=Y+6;
-    for(let i=0;i<nb;i++){ const sx=X+12+i*step;
-      fillRect(sx,hy,5,ht,C.well);                 // the housing the lead screw runs in
-      fillRect(sx,hy,5,3,hcol);                    // the motor on top of it
+    // where the nut sits for an insertion 0..1: the top of the screw is a bank
+    // fully OUT, the foot of it a bank fully IN, which is the way the drawing
+    // already runs and the way the core field beside it already reads
+    const at=v=>hy+3+clamp(v,0,1)*Math.max(0,ht-8);
+    for(let i=0;i<nb;i++){ const sx=Math.round(x0+i*step);
+      fillRect(sx,hy,DW,ht,C.well);                // the housing the lead screw runs in
+      fillRect(sx,hy,DW,3,hcol);                   // the motor on top of it
       fillRect(sx+1,hy+ht-2,3,2,hcol);             // the gearbox at its foot
-      // a lit band while THIS drive is walking: the one thing the mechanism has
-      // to say that the core field does not already say for it
-      if(L&&!jam&&!scram){
-        const d=L.rodZDem?L.rodZDem[i]:L.rodDem, z=L.rodZ?L.rodZ[i]:L.rodPos;
-        if(Math.abs(d-z)>.002) fillRect(sx+1,hy+4,3,Math.max(2,ht-8),"rgba(240,168,48,.5)");
+      const z = L? (L.rodZ?L.rodZ[i]:L.rodPos) : 0.2;
+      const d = L? (L.rodZDem?L.rodZDem[i]:L.rodDem) : 0.2;
+      /* the stretch of screw still to run, so a walking drive says HOW FAR it
+         has to go and not merely that it is moving */
+      if(L&&!jam&&!scram&&Math.abs(d-z)>.002){
+        const a=Math.min(at(z),at(d)), b=Math.max(at(z),at(d));
+        fillRect(sx+1,a,3,Math.max(1,b-a),"rgba(240,168,48,.5)");
       }
+      /* THE NUT ON THE LEAD SCREW - how far this drive has run its own bank in.
+         The core field says where the absorber is; this says where the MACHINE
+         that put it there has got to, which is the reading that survives a jam,
+         and it is what makes a row of stems mean anything at a glance. */
+      fillRect(sx-1,Math.round(at(z)),DW+2,2,hcol);
     }
     fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),fxEase(id+":jam",jam?1:0),C.red);
     /* JAMMED wins over SCRAM: a jammed bank while a trip is latched is a scram
@@ -198,20 +213,19 @@ function drawSym(p,x,y,w,h,ink,L){
     ctx.save(); ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.clip();
     lvl(X,Y+8,W,Hh-8, L? L.lvl/100 : .54, C.blue); ctx.restore();
     ctx.beginPath(); rr(X,Y+8,W,Hh-8,W/2.6); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
-    /* No bowtie here. A relief valve is a FITTING now, with a tap of its own
-       and a glyph drawn at it (pipeFitMarks()) - the stock one sits on the hot
-       leg, not on this shell. Drawing a second copy on the mimic put the same
-       valve on screen twice, in the corner that already carries the tank, its
-       label, its level and this vessel's own pressure dial. It also lied on a
-       plant with no relief path left at all: primaryRelief() returns nothing,
-       and the mimic drew a cheerful green "shut and holding" valve for a
-       valve that does not exist. The plume below stays - it marks the top of
-       the relief HEADER, which is the route the discharge really takes. */
-    // what the valve is actually passing, judged against its OWN fully-open
-    // rate (reliefFullRate() - display only, pipenet.js) - see porvRate().
-    // The plume is the RELIEF FLOW readout drawn instead of typed.
-    if(L){ const rfid=primaryRelief();
-      fxSteam(cx,Y-1,10,fxEase(id+":porv",rfid?clamp(porvRate(L)/Math.max(1e-9,reliefFullRate(L,rfid)),0,1):0),"#cfe6ea"); }
+    /* No bowtie here, and no plume either. A relief valve is a FITTING now,
+       with a tap of its own and a glyph drawn at it (pipeFitMarks()) - the
+       stock one sits on the hot leg, not on this shell. Drawing a second copy
+       on the mimic put the same valve on screen twice, in the corner that
+       already carries the tank, its label, its level and this vessel's own
+       pressure dial. It also lied on a plant with no relief path left at all.
+       The plume went with it for the same reason it was drawn in the first
+       place: it is the RELIEF FLOW readout drawn instead of typed, and a
+       readout belongs on the instrument it is about. On this shell it said a
+       valve somewhere was passing something, while the valve itself sat
+       elsewhere on the drawing doing nothing visible - and with two relief
+       valves fitted it could only ever depict one of them. It is drawn at each
+       valve's own tap now, off that valve's own rate (pipeFitMarks()). */
   } else if(id.startsWith("sg")){
     shell(()=>{ ctx.moveTo(X,Y+12); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
       ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); });
@@ -536,6 +550,16 @@ const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly
    not be dragged to */
 const BOR_STEP=200, BOR_LO=-6000, BOR_HI=0;
 const borStep=dir=>clamp(S.boronDem-dir*BOR_STEP,BOR_LO,BOR_HI);
+/* ONE step for every PERCENTAGE control on a strip - the rod bank and the
+   turbine both, so the two keys cannot end up meaning different amounts. It
+   lands on the 5% GRID rather than adding 5 to wherever the demand happens to
+   sit, so repeated presses give round numbers; the strict floor/ceil is what
+   guarantees a press off the grid still moves the way it was pressed. */
+const PCT_STEP=5;
+function pctStep(cur,dir,lo,hi){
+  const g=cur*100/PCT_STEP;
+  return clamp((dir>0?Math.floor(g)+1:Math.ceil(g)-1)*PCT_STEP/100,lo,hi);
+}
 /* The strip's row PITCH: one key (BTN_H, core/ui.js) plus the 3 px of air
    between two of them. The key's own height is never written here, or the strip
    would go on reserving room for a size the button no longer draws at. */
@@ -583,9 +607,15 @@ function tankCtl(id){
      text:()=>S.tankDump[id]?"DUMPING":"DUMP",
      fn:()=>{ act("tankDump",id); },
      tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."};
+  /* THE SAME SWITCH a system's bypass row is, so it goes through the same
+     armRow() - green ARMED against amber BYPASSED. Drawn as an ordinary key it
+     inherited button()'s `on` amber, so a tank whose rule was still armed lit
+     up in the colour every other arming switch on the plant uses for DEFEATED,
+     and the one that had been bypassed sat dark. */
   const arm=
-    {kind:"btn",flex:1,on:()=>!S.tankByp[id],text:()=>S.tankByp[id]?"BYP":"AUTO",       // the same two words every other bypass switch on the plant uses (bypRow)
+    {kind:"arm",flex:1,label:()=>rule()?rule().label:"AUTO",on:()=>S.tankByp[id],
      fn:()=>{ act("tankByp",id); },
+     title:()=>"TANK AUTO  [ "+(S.tankByp[id]?"BYPASSED":"ARMED")+" ]",
      tip:"AUTO / BYP - whether this tank's own rule ("+(rule()?rule().label:"none")
        +") may line it up without being asked. Bypassed, only the valve beside it does anything. The switch is on the TANK because the rule is the tank's: there is no system elsewhere on the plant that owns it."};
   const hasRule = t().auto && t().auto!=="manual" && t().auto!=="always";
@@ -610,6 +640,16 @@ function ctlFor(p,live,split){
        {kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
         fmt:v=>v.toFixed(0)+" %",set:v=>{ act("rodCommon",v/100); },
         tip:"CONTROL BANK - moves the whole stack. Ganged that is one bank; split it carries every bank by the same amount, so the spread you set with the per-bank sliders is untouched, and it moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."}];
+      /* The same demand the master slider writes, in fixed bites - the boron
+         row's argument, for a control that is just as slow to drag: the bank
+         travels at 1.2%/s, so a fine adjustment by hand is a fight with the
+         gearing. Both keys go through act("rodCommon") like the slider, so a
+         recording sees no difference. */
+      const STEP=[
+       {kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("rodCommon",pctStep(S.rodDem,-1,0,1)); },
+        tip:"WITHDRAW 5% - takes the whole stack five percent of core height further out, onto the nearest 5% mark. Withdrawing adds reactivity, so power rises until the loop settles."},
+       {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("rodCommon",pctStep(S.rodDem,1,0,1)); },
+        tip:"INSERT 5% - drives the whole stack five percent of core height further in, onto the nearest 5% mark. Deeper insertion removes reactivity and raises power peaking, which eats thermal margin."}];
       const bankRow=b=>[
        {kind:"btn",flex:1,on:()=>!S.bankAuto[b],text:()=>S.bankAuto[b]?"AUT":"MAN",
         fn:()=>{ act("bankAuto",b); },
@@ -619,7 +659,7 @@ function ctlFor(p,live,split){
         fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",set:v=>{ act("rodBank",b,v/100); },
         tip:"BANK "+(b+1)+" - insertion of this bank alone. While the banks are split these per-bank demands are the tilt handle: standing one bank against another is the whole of how you answer a radial xenon tilt here. A bank left on MANUAL is not answering the temperature controller at all, and the fewer banks on AUTO, the less rod worth is left to answer the same error - the loop gets slower, not just smaller."}];
       if(split){
-        const rows=[MASTER, ROD_TRIP_ROW,
+        const rows=[MASTER, STEP, ROD_TRIP_ROW,
          [{kind:"btn",flex:1,on:()=>S.reGang,
           text:()=>S.reGang?"GANGING..":"BANK GANG",
           /* already a no-op once the walk is running: setSplit() refuses to
@@ -631,6 +671,7 @@ function ctlFor(p,live,split){
       }
       return [
        MASTER,
+       STEP,
        ROD_TRIP_ROW,
        /* the ganged handle on a radial xenon tilt: it stands the inner banks
           against the outer ones instead of moving the whole bank together */
@@ -660,10 +701,16 @@ function ctlFor(p,live,split){
        tip:"RESET BORON - asks for zero boron: clean water, no poison at all. It does not happen at once - the loop still has to dilute its way there at "+BOR_OUT+" pcm/s, so from a deep pit this is minutes, not seconds."},
       {kind:"btn",flex:1,text:()=>"+B",fn:()=>{ act("boronDem",borStep(1)); },
        tip:"BORATE "+BOR_STEP+" PCM - puts one step more poison in. Boration is the fast direction at "+BOR_IN+" pcm/s, about "+(BOR_STEP/BOR_IN).toFixed(0)+" s a press, and every step you add has to be diluted back out again slowly."}]];
-    case "turb": return [[
-      {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
+    case "turb": return [
+     [{kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
-       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}]];
+       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}],
+     // the same 5% bite the rod strip takes, against the same demand the
+     // slider writes - a load change is an order given in round numbers
+     [{kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,-1,0,P.loadMax)); },
+       tip:"UNLOAD 5% - drops turbine demand five percent, onto the nearest 5% mark. Less draw means less heat leaving the loop, so the primary warms and the reactor backs its own power off."},
+      {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,1,0,P.loadMax)); },
+       tip:"LOAD 5% - raises turbine demand five percent, onto the nearest 5% mark, and never past the turbine's own ceiling. More draw cools the loop and the reactor answers by raising power."}]];
     /* The tanks this machine HOSTS - a tank with no cell has no box of its
        own to carry a strip, so it gets one here, on the component it lives
        inside. One row per hosted tank, so two hotwells are two rows. */
@@ -734,11 +781,14 @@ function ctlStrip(list,x,y,w,h){
       slider(cx,y+h/2,cw,c.val(),c.min(),c.max(),
         {th:h,tw:7,fmt:c.fmt,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
          fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
+    } else if(c.kind==="arm"){   // LABEL: the same control-strip WIDGET kind, unrelated to a pipe run's kind
+      // armRow() states its own tooltip, so this row skips ctlStrip's below
+      armRow(cx,y,cw,h,{label:c.label(),fit:true,lit:on,fn:c.fn,title:c.title(),tip:c.tip});
     } else {
       // a narrow box loses its letter spacing before it loses its label
       button(cx,y,cw,h,c.text(),{danger:dan,on:on,sunk:true,size:6.5,sp:cw<30?0:.5,fn:c.fn});
     }
-    TIP(cx,y,cw,h,c.tip.split(" - ")[0],c.tip);
+    if(c.kind!=="arm") TIP(cx,y,cw,h,c.tip.split(" - ")[0],c.tip);   // LABEL: widget kind again, not a run kind
     cx+=cw+gap;
   }
 }
@@ -786,6 +836,76 @@ function pipeGrips(runs){
     for(const leg of r.legs){ const g=legGrip(leg); if(g) pipeGrip(g.x,g.y,r.key,null); }
   }
 }
+/* ══ EVERY FREE PORT IS A HANDLE YOU CAN PULL A PIPE OUT OF ══
+   Bench only, exactly like pipeGrips(): where a pipe runs is a bench question,
+   and so is whether it exists at all. One handle per FREE face per part, off
+   portRoom() - the same predicate the right-click CONNECT offer already asks -
+   so a component with room always shows somewhere to start a run, and one whose
+   ports are all taken shows none rather than advertising a connection that
+   would be refused. It costs no extra route: drawPlant() hands in the usage the
+   frame already computed.
+
+   Pushed AFTER pipeGrips() because the hit test takes the last widget pushed: a
+   pipe corner lying under a nozzle can still be found by moving the pipe, and a
+   port that has been swallowed cannot be found at all. */
+const PORTG=9;
+function portHandle(x,y,p,f,src,tgt){
+  const wd=push({x:x-PORTG/2,y:y-PORTG/2,w:PORTG,h:PORTG,type:"port",part:p,face:f});
+  const lit=src||tgt||hov(wd);
+  // a nozzle stub, drawn in the rail tone the pipe casing already sits in, so
+  // an untouched bench is not peppered with marks
+  fillRect(x-2.5,y-2.5,5,5, src?C.amber : tgt?C.green : lit?C.bright : C.rail);
+  if(lit) frame(x-PORTG/2,y-PORTG/2,PORTG,PORTG,src||tgt?C.amber:C.edge2);
+  TIP(x-PORTG/2,y-PORTG/2,PORTG,PORTG,"FREE PORT  ·  "+partName(p),
+    "A nozzle with room for one more run. Drag from here onto another component and the router lays the pipe; drop it on empty space, or on a machine with no port left, and nothing is connected. Right-click a run to disconnect it again.");
+}
+/* WHOSE handles are on screen. Thirty nozzles drawn at once turned the bench
+   into a pegboard, so they belong to the machine you are pointing at - plus the
+   selected one, which is the machine you are already working on, and every
+   machine at once WHILE A RUN IS BEING PULLED, because that is exactly when you
+   need to see where it can land.
+   The reach is the part's box grown by half a handle: a nozzle sits ON the edge,
+   and the ones on the right and bottom faces fall outside the box the grid
+   lookup would answer with, so they would blink out from under the hand that
+   was reaching for them. */
+function portsShown(p,ptr,anyDrag){
+  if(anyDrag||sel===p.id) return true;
+  if(!ptr) return false;
+  const r=prect(p), m=PORTG/2;
+  return ptr.x>=r.x-m&&ptr.x<=r.x+r.w+m&&ptr.y>=r.y-m&&ptr.y<=r.y+r.h+m;
+}
+function pipePorts(usage){
+  const d = ui.drag&&ui.drag.type==="port" ? ui.drag : null;   // LABEL: a DRAG kind, unrelated to a pipe run's kind
+  // the pointer is wanted whether or not a drag is running - it picks the
+  // hovered machine when there is none, and the drop target when there is
+  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null;
+  const to  = d&&ptr ? portDrop([ptr.x,ptr.y],d.part.id,usage) : null;
+  for(const p of LAY.parts){
+    if(!fitted(p)) continue;
+    if(!portsShown(p,ptr,!!d)) continue;
+    const room=portRoom(p,usage);
+    for(const f in room){
+      if(!room[f]) continue;
+      const a=port(p,f);
+      portHandle(a[0],a[1],p,f,
+        !!(d&&d.part.id===p.id&&d.face===f),
+        !!(to&&to.part.id===p.id&&to.face===f));
+    }
+  }
+  /* the rubber band. Dashed and thin on purpose - it is a proposal, not a run:
+     the router has not been asked yet, and what it lays will be square where
+     this is straight. Green once it has somewhere to land, amber while it has
+     not, which is the whole of the feedback this gesture needs. */
+  if(d&&ptr){
+    const a=port(d.part,d.face);
+    ctx.save(); ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(a[0],a[1]);
+    ctx.lineTo(to?to.pt[0]:ptr.x, to?to.pt[1]:ptr.y);
+    ctx.strokeStyle=to?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // a fitting has no box or control strip, so its glyph is drawn straight on
 // the tapped point - fixed in position. Both screens draw a mark so a
 // placed fitting is findable to remove even before it's live: bench gets a
@@ -881,6 +1001,15 @@ function pipeFitMarks(L,net){
            in two places is how the two start disagreeing about what a click
            does. */
         const set=reliefSet(id);
+        /* WHAT THIS VALVE IS PASSING, drawn instead of typed, at the valve. It
+           is judged against this fitting's OWN fully-open rate
+           (reliefFullRate() - display only, pipenet.js), so the plume can never
+           show a rate the sim is not performing. Per fitting, not per plant:
+           two relief valves are two plumes, each off its own rate, where the
+           single copy this replaces could only ever depict one of them.
+           Under the glyph, so the bowtie stays readable through it. */
+        fxSteam(x,y-8,10,fxEase(id+":porv",
+          clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
         const wd = push({x:x-7,y:y-7,w:14,h:14,type:"btn",fn:()=>{ sel=id; }});
         reliefBowtie(x,y,14,10,L,id);
         if(hov(wd)) frame(x-8,y-8,16,16,C.bright);
@@ -1774,7 +1903,8 @@ function drawPlant(y0,L,vh,vx,vw){
      FLOW METERS switch must not be able to switch off the picture of a hole. */
   if(L) pipeBreaks(L);
   layerPass("over",L);          // instruments and annotations, on top of the machines
-  if(!L) pipeGrips(NET);        // where a pipe runs is a bench question
+  if(!L){ pipeGrips(NET);       // where a pipe runs is a bench question
+          pipePorts(NET.usage||{}); }   // ...and so is whether it runs at all
   pipeFitMarks(L,NET);
   for(const t of tags) t();     // every name and value, over the pipework
   viewOn=false; ctx.restore();

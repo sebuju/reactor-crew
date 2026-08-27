@@ -439,7 +439,10 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
      which the tank reaches at about 91% - so ~5% is all the back-pressure a
      player can ever see, and the point is that it is THERE and MONOTONE, not
      that it is large. It was flat at 1.000 across all of it. */
-  const lv=[0,45,90].map(l=>{ S.tank.reltk=l; return fxRead()['pzr:porv']; });
+  /* keyed on the FITTING, not on the pressurizer: the plume is drawn at each
+     relief valve's own tap now, off that valve's own rate, so two valves are
+     two plumes. `fid` is the same fitting this block already opened. */
+  const lv=[0,45,90].map(l=>{ S.tank.reltk=l; return fxRead()[fid+':porv']; });
   const mono=lv[0]>lv[1] && lv[1]>lv[2];
   /* Not exactly 1 at an empty tank any more: the plume is now drawn against
      reliefFullRate() (pipenet.js), each fitting's OWN ceiling off the SAME
@@ -457,7 +460,7 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
      because both readers came off the one renderer-side expression that had
      gone stale. */
   S.tank.reltk=60;
-  const drawn=fxRead()['pzr:porv'];
+  const drawn=fxRead()[fid+':porv'];
   const sim=Math.max(0,Math.min(1, M.reliefRate(S,fid)/Math.max(1e-9,M.reliefFullRate(S,fid))));
   fxAdd('the PORV plume is the tick vent term', near(drawn,sim) && drawn>0,
     near(drawn,sim)? 'plume '+drawn.toFixed(6)+' = reliefRate()/reliefFullRate() at a 60% tank'
