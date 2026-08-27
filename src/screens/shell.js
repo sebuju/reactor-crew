@@ -80,12 +80,13 @@ function shellSync(){
 function shellInitTooltip(){
   const tip=document.getElementById("tip");
   if(!tip) return;
-  let cur=null;
-  const show=el=>{ cur=el;
+  let cur=null, curRail=null;
+  const show=el=>{ cur=el; curRail=railOf(el);
     tip.innerHTML=`<b>${el.dataset.tipTitle||""}</b><p>${el.dataset.tipBody||""}</p>`;
     KIT.show(tip,true);
-    const b=el.getBoundingClientRect(); place(b.top+b.height/2); };
-  const hide=()=>{ cur=null; KIT.show(tip,false); };
+    const b=el.getBoundingClientRect();
+    if(curRail) place(b.top+b.height/2); else placeBy(b); };
+  const hide=()=>{ cur=null; curRail=null; KIT.show(tip,false); };
   document.addEventListener("pointerover",e=>{
     const el=e.target.closest("[data-tip-title]");
     if(el && el!==cur) show(el);
@@ -94,8 +95,8 @@ function shellInitTooltip(){
     const el=e.target.closest("[data-tip-title]");
     if(el && el===cur && !(e.relatedTarget && el.contains(e.relatedTarget))) hide();
   });
-  /* PARKED CLEAR OF THE RAIL, not carried on the pointer. Every panel worth a
-     tooltip lives in a rail, so a box that follows the hand is a box sitting on
+  /* PARKED CLEAR OF THE RAIL, not carried on the pointer. A panel in a rail is
+     read control by control, so a box that follows the hand is a box sitting on
      top of the next control you were going to read - and the rails are where
      the hand spends the whole session. It stands just OUTSIDE whichever rail is
      on screen and only tracks the pointer vertically, which is the same
@@ -103,16 +104,20 @@ function shellInitTooltip(){
      Measured, not a constant: the rail is a fixed CSS width today, but a
      hard-coded 340 here would be a second copy of that number in a second
      file. */
-  const railLeft=()=>{
-    for(const el of document.querySelectorAll(".db-rail,.cr-rail,.scn-rail"))
-      if(el.offsetParent) return el.getBoundingClientRect().left;
-    return innerWidth;
-  };
+  const railOf=el=>{ const r=el.closest(".db-rail,.cr-rail,.scn-rail"); return r&&r.offsetParent?r:null; };
   const place=clientY=>{
     const gap=12, r=tip.getBoundingClientRect();
-    const x=Math.max(4, railLeft()-gap-r.width);
+    const x=Math.max(4, curRail.getBoundingClientRect().left-gap-r.width);
     const y=Math.max(4, Math.min(clientY-r.height/2, innerHeight-r.height-4));
     tip.style.left=x+"px"; tip.style.top=y+"px";
   };
-  document.addEventListener("pointermove",e=>{ if(cur) place(e.clientY); });
+  /* A control outside any rail gets its tooltip on its OWN box - parking that one
+     beside a rail it does not live in put it half a screen from what it names. */
+  const placeBy=b=>{
+    const gap=8, r=tip.getBoundingClientRect();
+    const below=b.bottom+gap, y=below+r.height<=innerHeight-4?below:Math.max(4,b.top-gap-r.height);
+    tip.style.left=Math.max(4, Math.min(b.left, innerWidth-r.width-4))+"px";
+    tip.style.top=y+"px";
+  };
+  document.addEventListener("pointermove",e=>{ if(cur&&curRail) place(e.clientY); });
 }
