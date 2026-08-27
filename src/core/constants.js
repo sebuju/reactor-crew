@@ -21,6 +21,11 @@ const C = {
      the two banner grounds. Here rather than in a stylesheet so there is still
      exactly one palette. */
   onAmber:"#2a1f08", onGreen:"#0f2018", redHi:"#ff7d6c", dis:"#2c3f45",
+  /* amber carrying its own alpha, for a ring that marks a thing without
+     shouting as loud as the thing. A var() cannot be given an alpha at the
+     use site, so the translucent value is a palette entry rather than a
+     literal hex in a stylesheet. */
+  amberSoft:"#f0a8305e",
   inkOnAmber:"#180404", inkOnRed:"#160404", inkOnLit:"#120404",
   bgMelt:"#1a0605", bgTrip:"#1a1206"
 };

@@ -95,7 +95,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-comp-rail{display:flex;flex-direction:column;gap:6px}
 /* the well has no border any more, so its two states are outlines - which cost
    no layout, so nothing shifts by 2px when a panel is picked */
-.kit-well.on{outline:1px solid #f0a8305e;outline-offset:-2px}
+.kit-well.on{outline:1px solid var(--c-amber-soft);outline-offset:-2px}
 
 /* ─────────────── shared: label+value(+band) row, RESULTS stat row ─────────────── */
 /* a grid, not a flex row: the bar needs a line of its own, and only an explicit
