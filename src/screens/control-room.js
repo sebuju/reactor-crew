@@ -79,9 +79,12 @@ function crAlarmsBuild(container){
   });
   return rows;
 }
-function crAlarmsSync(container,rows){
+/* the count element is held, not searched for, and written only when the count
+   moves - it was a querySelector plus a textContent write every frame to say the
+   same number. */
+function crAlarmsSync(al){
   let lit=0;
-  for(const h of rows){
+  for(const h of al.rows){
     const on=h.a[2](S);
     if(on) lit++;
     h.row.classList.toggle("lit",on);
@@ -89,8 +92,8 @@ function crAlarmsSync(container,rows){
     h.row.classList.toggle("amber",on&&h.a[1]==="amber");
     KIT.show(h.row,on);
   }
-  KIT.show(container.parentNode,lit);
-  container.parentNode.querySelector(".cr-alarms-count").textContent=String(lit);
+  KIT.show(al.wrap,lit);
+  if(lit!==al.lit){ al.lit=lit; al.count.textContent=String(lit); }
 }
 
 /* ══ TRENDS: chart() STAYS CANVAS, IN ITS OWN CANVAS UNDER THE VITALS ══
@@ -381,7 +384,7 @@ function crBuild(){
   const ah2=KIT.el("span","cr-alarms-count");
   alarmsHead.append(ah1,ah2); alarmsWrap.appendChild(alarmsHead);
   const alarmsBody=KIT.el("div","cr-alarms-body"); alarmsWrap.appendChild(alarmsBody);
-  const alarmRows=crAlarmsBuild(alarmsBody);
+  const alarms={wrap:alarmsWrap,body:alarmsBody,count:ah2,rows:crAlarmsBuild(alarmsBody),lit:-1};
   KIT.tip(alarmsWrap,"ALARM STACK","Every annunciator that is currently lit, and nothing that is not. The full board, including what is dark, is on the HELP screen.");
   root.appendChild(alarmsWrap);
 
@@ -411,14 +414,14 @@ function crBuild(){
   const compRail=KIT.el("div","cr-comp-rail"); rail.appendChild(compRail);
 
   mount.appendChild(root);
-  return {root,vitals,vitalRows,alarmsWrap,alarmRows,alarmsBody,banner,rail,
+  return {root,vitals,vitalRows,alarms,banner,rail,
     trend:{canvas:trendCanvas},logList,dmgList,faults,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
 function crSync(){
   if(!CR) return;
   crVitalsSync(CR.vitalRows);
-  crAlarmsSync(CR.alarmsBody,CR.alarmRows);
+  crAlarmsSync(CR.alarms);
   crTrendSync(CR.trend);
   crLogSync(CR.logList);
   crDamageSync(CR.dmgList);
