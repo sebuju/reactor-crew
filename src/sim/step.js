@@ -30,7 +30,7 @@ function commission(){
      flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi,
      catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
-     turbFit:D.turbFit, condFit:D.condFit, fit:{...D.fit},
+     fit:{...D.fit},
      loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237,
      /* the coolant's own density, in kg/m^3 - the pipe network weighs a
@@ -158,6 +158,26 @@ const AUTOSYS={
      so two reserves can be armed independently and neither is hosted on
      somebody else's box. Same move porv made when a relief valve became a
      fitting; this finishes it. */
+  /* THE FEED CONTROLLER. Fitted when there is a pump on the grid that reaches
+     a generator's shell - asked of the drawing (secGensOf(), layout.js), so a
+     plant with no feedwater path honestly reads NOT FITTED rather than
+     offering a switch for a system nobody built. Mounted on the first such
+     pump, because that is the box the switch belongs on.
+     Bypassed, every regulating valve FREEZES where it stands; it does not
+     slam open, because a valve that lost its controller is a valve nobody is
+     moving. What is left is the pump's own demand, which is a real control
+     the operator has (ACT.pumpDem) - so this is manual feedwater, not no
+     feedwater. */
+  /* part:null - no COMPONENT host, the same choice porv makes and for the same
+     reason: this system is per-instance. There is one regulating valve per
+     generator, so hanging the master switch on one pump's 1x1 box would put a
+     plant-wide control on a machine that owns one part of it, and there is no
+     room on that box for a slider, a value and a switch at once. */
+  feed:{part:null,
+    label:"FEED CTRL",ann:"FEED CTRL BYP",name:"FEEDWATER CONTROL",
+    fit:()=>pumpIds().some(id=>secGensOf(id).length>0),
+    tip:"Holds each steam generator at its own level setpoint by throttling its feed regulating valve. Bypass it and the valves stop where they are - you feed by hand, on the pump's own demand.",
+    warn:"Feedwater is on manual. Every regulating valve is frozen where it stands and the generators will drift off setpoint."},
   bkp:{part:"bkp",label:"BACKUP",ann:"BACKUP PWR BYP",name:"BACKUP POWER",
     fit:()=>P.backup>0,
     tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
@@ -169,11 +189,24 @@ const AUTOKEYS = Object.keys(AUTOSYS);
 const AUTOEV = AUTOKEYS.map(k=>[k, "byp_"+k, AUTOSYS[k].name+" BYPASSED"]);
 const autoFit   = k => !!AUTOSYS[k].fit();
 const autoLive  = k => autoFit(k) && !S.byp[k];
+/* WHAT THE SWITCHBOARD IS ACTUALLY DELIVERING, as a share of normal: 1 with
+   the grid up, the backup's own capacity in a blackout, 0 with no backup on
+   the plant. ONE expression, because the coolant pumps and the feedwater pump
+   are on the same board - the feed head reads it too (feedDrive, pipenet.js),
+   and a plant whose diesels carry its coolant pumps but not its feed pumps
+   was a plant where buying a bigger supply made the blackout worse. */
+const supplyK = s => s.blackout ? ((!s.bkpLost && autoLive("bkp")) ? P.backup : 0) : 1;
 const autoState = k => !autoFit(k) ? "NOT FITTED" : S.byp[k] ? "BYPASSED" : "ARMED";
 /* which system, if any, is mounted on this component - the renderer asks this */
 // AUTOSYS[k].part may be null (a system hosted on a fitting, not a component),
 // so the null host must never match a component that was asked about.
-const autoOn    = id => AUTOKEYS.find(k=>AUTOSYS[k].part!=null && AUTOSYS[k].part===id) || null;
+/* WHICH COMPONENT HOSTS THIS SYSTEM. A row may state it (rps sits on the
+   control station and always will) or ANSWER it off the drawing - the feed
+   controller is mounted on whichever pump actually feeds a generator, which
+   is a question only the graph can settle, and stating an id there would be
+   the stored-flag mistake this codebase keeps deleting. */
+const autoPart  = k => { const v=AUTOSYS[k].part; return typeof v==="function" ? v() : v; };
+const autoOn    = id => AUTOKEYS.find(k=>{ const h=autoPart(k); return h!=null && h===id; }) || null;
 function autoToggle(k){
   if(!autoFit(k)) return false;
   S.byp[k]=!S.byp[k];
@@ -266,8 +299,15 @@ function condPen(s){
    One helper, because the diagram tag and both inspectors read the same number.
    What is not electricity is rejected, so mwRej is the remainder rather than a
    second efficiency figure that could drift away from the first. */
-const mwE   = s => (s.dmgParts.includes("turb") || !P.turbFit || !P.condFit) ? 0
-  : Math.min(s.n,s.load)*P.rated*P.eff*condPen(s);
+/* COUNTED, not flagged, and a SHARE rather than a name test. It used to read
+   s.dmgParts.includes("turb") and P.turbFit: one turbine, present or absent,
+   and a hit on it zeroed the plant. With two on the grid, losing one costs
+   half the output and losing one condenser costs half the heat sink - which
+   is what redundancy is FOR, and the reason it was worth paying mass for was
+   invisible while a flag stood in for a count. No turbine or no condenser at
+   all is still exactly 0, and still a legal design the bench warns about. */
+const mwE   = s => Math.min(s.n,s.load)*P.rated*P.eff*condPen(s)
+  * roleAlive("turb",s.dmgParts) * roleAlive("cond",s.dmgParts);
 const mwRej = s => Math.min(s.n,s.load)*P.rated - mwE(s);
 /* A scram is the same act from the diagram and from the inspector, and the
    turbine runback that rides along with it is defeatable, so it lives here. */
@@ -621,15 +661,20 @@ const NAT_FLUX=0.12;                    // mass flux buoyancy gives per unit of 
 const H_FG=1510;          // kJ/kg, latent heat at the secondary's ~6.9 MPa
 const SGL_SET=50;         // %, the level the feed controller holds
 const FEED_TAU=30;        // s, how fast feedwater walks a level error out
-const FEED_HURT=0.25;     // DMGFX.feed's own promise: "feedwater down to a quarter"
+/* THE FEED REGULATING VALVE, one generator's own. FREG_RATE is how fast it
+   strokes, in MPa of back-pressure per second at full error - a valve, not an
+   algebraic answer, so a step change in demand is followed over a second and
+   not inside one tick. FREG_MAX has to exceed the worst secP() spread a legal
+   plant can develop, or the valve saturates and the generator nearest the
+   pump takes the lot; the stock four-loop plant spreads about 1.1 MPa.
+   FREG_SPAN floors the relative error's denominator so a generator asking for
+   nothing does not divide by zero - a kg/s figure, small against any real
+   steam rate. */
+const FREG_RATE=1.0, FREG_MAX=4, FREG_SPAN=10;
 /* Below this the tubes are uncovered and the generator stops being a heat sink.
    It was already the threshold the mimic's dry-out pulse and the LOW banner
    used; making removal read the same number is what closes the loop. */
 const SG_DRY=25;          // %
-/* Level below which a feed pump starts losing suction, %. A pump does not run
-   cleanly to the last drop; this is the taper, and it is above the hard mass
-   limit rather than instead of it. */
-const HOT_NPSH=10;
 /* What a tank's overboard dump valve passes, in % of that tank per second.
    Sized off the plant it serves rather than picked: at the stock plant's steam
    rate it empties a full hotwell in about a minute, which is fast enough to
@@ -783,10 +828,24 @@ function resetPlant(){
   const x0=RODX0;
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
-     load:1,loadDem:1,flow:1,flowDem:1,flowNet:1,P:P.P0,lvl:54,inv:100,
+     load:1,loadDem:1,flowNet:1,P:P.P0,lvl:54,inv:100,
+     /* ONE DEMAND AND ONE ACTUAL PER PUMP, keyed by part id like s.sglBy and
+        s.tank[id] - REFILLED by step(), never rebuilt. There is one pump role
+        now, so one global speed would be the odd control out: what a coolant
+        pump is told and what a feedwater pump is told are different orders to
+        different machines that happen to share a role. Demand starts equal to
+        actual, which is the rule every actuator on this plant owes. */
+     flowBy:Object.fromEntries(pumpIds().map(id=>[id,1])),
+     flowDemBy:Object.fromEntries(pumpIds().map(id=>[id,1])),
      /* one level per generator, keyed by part id like s.sgtrBy - REFILLED by
         step(), never rebuilt, so a renderer may hold it across frames */
      sglBy:Object.fromEntries(sgIds().map(id=>[id,SGL_SET])),
+     /* each generator's own feed regulating valve, in MPa of back-pressure -
+        an ACTUATOR, walked toward what the controller is asking for, never
+        written to the answer directly. 0 is wide open, which is what an
+        untouched plant starts at and what makes its first tick identical to a
+        plant with no valve. Keyed and refilled exactly like s.sglBy. */
+     fregBy:Object.fromEntries(sgIds().map(id=>[id,0])),
      /* each generator's share of the heat leaving the primary, measured off
         the solve and read back by secP() next tick - like s.cavP */
      sgShare:Object.fromEntries(sgIds().map(id=>[id,1/Math.max(1,sgCount())])),
@@ -1104,13 +1163,21 @@ function step(dt){
   const injIds = [];               // WHICH tanks, for the log - a local, never on S
   for(const k in s.tankRate) if(!D.tanks[k]) delete s.tankRate[k];
   for(const tid of tankIds()){
-    const q = D.tanks[tid].side==="primary" ? invRate(qTankBy[tid]||0) : 0;
+    /* IN THAT TANK'S OWN CURRENCY. A secondary tank has a solved edge now, so
+       reading 0 here would print a still gauge on a tank that is emptying;
+       invRate() speaks % of LOOP inventory, and a reserve on the other side of
+       the tubes is a share of the SECONDARY charge instead. tankKg() makes the
+       same switch and for the same reason. */
+    const raw = invRate(qTankBy[tid]||0);
+    const q = tankSide(tid)==="primary" ? raw : raw*loopKg()/hotMass();
     /* s.tankRate keeps the RAW signed figure: it is what the panels and the
        pipe gauges read, and a tank being filled reads negative there on
        purpose. Only the "is anything injecting" question needs the noise
        floor - see tankInjecting() (pipenet.js) for what a bare q>0 cost. */
     s.tankRate[tid] = q;
-    if(tankInjecting(tid, q)){ inj += q; injIds.push(tid); }
+    /* inj is what the PRIMARY is taking - it feeds vessel fatigue and the
+       injection log line, both of which are about this vessel. */
+    if(tankSide(tid)==="primary" && tankInjecting(tid, q)){ inj += q; injIds.push(tid); }
   }
   /* What is left of the pressurizer's authority. It only sets pressure while
      the loop is a closed boundary: past a real leak there is no steam bubble
@@ -1145,14 +1212,16 @@ function step(dt){
     /* Off the real parts and the run graph, never off "pump"+i - a spare
        pump's own id doesn't match its loop's index, and once a generator can
        be placed rather than conjured at a fixed "pump"+i slot, that string
-       stops being anything but coincidence. Every pump with ROLE.head reports
-       at its own suction; a loop with more than one pump pooling capacity
-       (loopOf()) takes the WORST of them, because that is the one head loss
-       actually costs the group. */
+       stops being anything but coincidence. Every PRIMARY pump reports at its
+       own suction; a loop with more than one pump pooling capacity (loopOf())
+       takes the WORST of them, because that is the one head loss actually
+       costs the group. primaryPump() is the shared predicate (layout.js) - a
+       feedwater pump is a ROLE.pump too, and s.cavP is keyed by primary loop,
+       so one that read this block would be derated by a foreign suction. */
     const byLoop={};
     for(const p of LAY.parts){
-      if(!ROLE[p.role] || !ROLE[p.role].head) continue;
-      const li=loopOf(p.id); if(li==null) continue;
+      if(!primaryPump(p.id)) continue;
+      const li=loopOf(p.id);
       const c = clamp(-scAt(p.id+"t")/CAV_SPAN, 0, 1);
       if(!(li in byLoop) || c>byLoop[li]) byLoop[li]=c;
       /* WHICH pump, kept for the log alone. s.cavP is keyed by LOOP because
@@ -1165,16 +1234,19 @@ function step(dt){
     }
     for(const li in s.cavP){ s.cavP[li]=byLoop[li]||0; if(s.cavP[li]>worst) worst=s.cavP[li]; }
     s.cav = worst; }
-  const bkpUp = !s.bkpLost && autoLive("bkp");
   /* ── coolant flow: pumps have inertia ──
      Losing power does not stop a pump dead, it coasts. Blackout is the same lag
      with a longer time constant, so the grace time the brief promises is real. */
   /* The backup supply carries the share of pump power the bench sold: diesels
      are the full set, a battery bank is half of it. Scaled off demand, so what
      the operator asked for is still what the supply is trying to deliver. */
-  { const tgt = s.blackout ? (bkpUp?P.backup*s.flowDem:0) : s.flowDem,
-          tau = s.blackout ? FLOW_TAU_COAST : FLOW_TAU;
-    s.flow += (tgt-s.flow)*Math.min(dt/tau,1); }
+  { const tau = s.blackout ? FLOW_TAU_COAST : FLOW_TAU, k = Math.min(dt/tau,1);
+    const live = {};
+    for(const id of pumpIds()){ live[id]=1;
+      if(s.flowDemBy[id]===undefined) s.flowDemBy[id]=1;             // a pump placed mid-run arrives at rated
+      if(s.flowBy[id]===undefined) s.flowBy[id]=s.flowDemBy[id];
+      s.flowBy[id] += (supplyK(s)*s.flowDemBy[id] - s.flowBy[id])*k; }
+    for(const id in s.flowBy) if(!live[id]){ delete s.flowBy[id]; delete s.flowDemBy[id]; } }
 
   /* ── the core's temperature rise: the same 0-D split, told about flow ──
      Tavg +/- 15*heat has always BEEN this quantity, at rated flow. The heat
@@ -1427,7 +1499,7 @@ function step(dt){
      poison straight back out at BOR_OUT. */
   for(const id of tankIds()){
     const t = D.tanks[id];
-    if(t.side !== "primary") continue;
+    if(tankSide(id) !== "primary") continue;
     const out = invRate(qTankBy[id]||0);              // % of loop inventory per second, tank-out-positive
     const dPct = out*dt;
     s.tank[id] = clamp(s.tank[id] - dPct*100/t.vol, 0, 100);
@@ -1550,6 +1622,7 @@ function step(dt){
      leave the mimic drawing a generator that is no longer on the plant. */
   const M = sgMass(), ids = sgIds();
   for(const id in s.sglBy) if(!sgW.hasOwnProperty(id)) delete s.sglBy[id];
+  for(const id in s.fregBy) if(!sgW.hasOwnProperty(id)) delete s.fregBy[id];
   /* ── WHERE FEEDWATER COMES FROM ──
      Two pools, told apart by a RULE and never by a name. A tank whose valve
      stands open all the time IS the circuit - condensate comes back to it and
@@ -1563,21 +1636,15 @@ function step(dt){
   for(const id of secTankIds())
     (D.tanks[id].auto === "always" ? circ : res).push(id);
   const poolKg = list => tankPoolKg(s,list);
-  const poolPct = list => tankPoolPct(s,list);
-  /* A pump does not run cleanly to the last drop, and it cannot send on water
-     that is not there. Two limits, and both are ceilings rather than terms:
-     HOT_NPSH tapers delivery over the last stretch, and the pool mass is the
-     hard one, shared between the generators drawing on it. Neither binds on a
-     healthy plant (the taper is 1 above HOT_NPSH), which is why the setpoint
-     still holds exactly. This is the SECOND way to lose feedwater; the first
-     is the pump itself. */
-  const circPct = poolPct(circ), circAvail = poolKg(circ);
-  const suction = clamp(circPct/HOT_NPSH,0,1);
-  /* A reserve is open only if its own rule says so, and only if that rule has
+  /* A pump does not run cleanly to the last drop. That taper is HOT_NPSH,
+     and it lives in the pump's own HEAD (feedDrive, pipenet.js) rather than
+     as a ceiling here - see the delivery below for why a ceiling costs the
+     books. This is the SECOND way to lose feedwater; the first is the pump
+     itself and the third is the switchboard.
+     A reserve is open only if its own rule says so, and only if that rule has
      not been bypassed on that tank - tankOpen() asks both. */
   const resOpen = res.filter(id=>tankOpen(s,id));
-  const resAvail = poolKg(resOpen);
-  let boiled = 0, fedCirc = 0, fedRes = 0;       // kg/s, summed for the mass balance below
+  let boiled = 0, fedTot = 0, fedCirc = 0, fedRes = 0;   // kg/s, summed for the mass balance below
   if(M > 0) for(const id of ids){
     if(s.sglBy[id]===undefined) s.sglBy[id]=SGL_SET;                 // a generator placed mid-run starts full
     const lvl = s.sglBy[id];
@@ -1588,12 +1655,49 @@ function step(dt){
        a flat fraction of rated steam that scaled with a number the tank has
        never had anything to do with. */
     const want = Math.max(0, steamOut + (SGL_SET-lvl)/100*M/FEED_TAU);
-    const share = Math.max(dt,1e-9)*Math.max(ids.length,1);
-    const fromCirc = Math.min(circAvail/share, suction*(feedOK?1:FEED_HURT)*want);
-    const fromRes  = Math.min(resAvail/share, Math.max(0, want - fromCirc));
-    s.sglBy[id] = clamp(lvl + 100*(fromCirc+fromRes-steamOut)/M*dt, 0, 100);
-    boiled += steamOut; fedCirc += fromCirc; fedRes += fromRes;
+    /* ── THE FEED REGULATING VALVE IS AN ACTUATOR ──
+       `want` is the DEMAND; what this generator's own shell edge actually
+       carried this tick is the ACTUAL, and the valve is walked between them.
+       Fed forward, like s.cavP and s.sgShare: this tick's answer sets next
+       tick's valve, because a gate that depends on the answer cannot be part
+       of the question. Nothing here writes flow - it writes a valve, and the
+       network decides what that is worth.
+       The error is RELATIVE to what this machine is boiling off, so one gain
+       serves a 55 t recirculating unit and a 7 t once-through one; against an
+       absolute kg/s error the same gain would be violent on the small
+       machine. FREG_SPAN floors the denominator so a generator asking for
+       nothing does not divide by zero. Rate-limited by FREG_RATE, which is
+       what makes it a valve rather than an algebraic answer. */
+    const fed = invRate((netOut.sgFeedBy && netOut.sgFeedBy[id]) || 0)/100*loopKg();
+    if(s.fregBy[id]===undefined) s.fregBy[id]=0;
+    if(autoLive("feed")){ const e = (fed - want)/Math.max(want, FREG_SPAN);
+      s.fregBy[id] = clamp(s.fregBy[id] + clamp(e,-1,1)*FREG_RATE*dt, 0, FREG_MAX); }
+    /* ── WHAT ARRIVES IS THE SOLVED FLOW, NOT THE DEMAND ──
+       `want` is what the controller asked for; this is what the network
+       actually carried, and the two agree only when nothing is in the way.
+       A damaged pump and a blackout are already IN the head (feedDrive,
+       pipenet.js), so they arrive here as less flow rather than as a
+       fraction applied to the answer - the same argument s.cavP makes for a
+       coolant pump.
+       NO CEILING IS APPLIED HERE, and that is load-bearing: a ceiling would
+       discard mass the solve had already moved and the secondary's books
+       would stop closing (measured, 4365 kg in fifteen seconds). Every way of
+       running out is in the HEAD instead - a hit pump, a dead switchboard, a
+       suction pool going empty (feedDrive, pipenet.js) - and a reserve tank
+       limits itself, because it is a fixed node whose own edge shuts when it
+       is dry. Negative is a generator draining backwards up its own feed
+       line: real, and the level integral's business. */
+    s.sglBy[id] = clamp(lvl + 100*(fed-steamOut)/M*dt, 0, 100);
+    boiled += steamOut; fedTot += fed;
   }
+  /* WHICH POOL PAID FOR IT. The reserve's share is its own tanks' solved
+     outflow - the same qTankBy every primary tank is already charged through,
+     asked of the secondary ones for the first time - and the circuit paid for
+     the rest. Split at plant level rather than per generator: a shared header
+     genuinely does mix them, and there is no per-generator answer to give. */
+  { let k=0;
+    for(const id of resOpen) k += Math.max(0, invRate((netOut.qTankBy && netOut.qTankBy[id])||0)/100*loopKg());
+    fedRes = k; fedCirc = fedTot - fedRes; }
   /* ── the secondary as ONE closed system ──
      Steam raised leaves a generator, turns the turbine, condenses, and
      arrives back in the circuit; feedwater leaves the circuit and goes back.
@@ -1739,7 +1843,7 @@ function step(dt){
     ()=>"Water arriving at "+(cavIds.length?nameList(cavIds):"the pumps")+
         " is close to boiling, so "+(cavIds.length>1?"they are":"it is")+
         " churning vapour. Real flow is far below the bench setting.");
-  ev("flowfloor",s.flowDem<P.flowMin,"warn","PUMPS ORDERED BELOW DESIGN FLOOR",
+  ev("flowfloor",flowDemPri(s)<P.flowMin,"warn","PUMPS ORDERED BELOW DESIGN FLOOR",
     ()=>"Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
   ev("hip",s.P>P.P0*1.05,"warn","PRIMARY OVERPRESSURE",
     ()=>"Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burst.toFixed(1)+" MPa.");
@@ -1858,7 +1962,6 @@ function step(dt){
      dry steam generator, a feed pump that no longer exists. Natural
      circulation is real flow and keeps moving. */
   const d=s.flowPos, sp=60*dt;
-  const stm = s.load*sgWet*wet*1.6;            // no water either side, nothing boils - sgWet is the flow-weighted fill from the heat balance above
   /* the injection line reads the solve like every other run: a tank pushing
      hard against a depressurised loop visibly runs, one that has equalised
      visibly stops, and one running backwards runs backwards */
@@ -1869,29 +1972,43 @@ function step(dt){
      Clamped below the hot leg's 1.24 - it is a small line and must not outrun it. */
   const surgeFlow = sp*wet*clamp(-s.dLvl*0.07-(reliefAnyOpen(s)?0.75:0),-1.2,1.2);
   const runRatio = key => P.netRefRun>0 ? (runFlow[key]||0)/P.netRefRun : 0;
-  const PIPE_CORR={hpi:1,surge:1,feed:1};      // DEFAULT: tagged hot/cold for buoyancy only, not real circulation
-  const PIPE_FLAT_STM={steam:1,exh:1};         // DEFAULT: no tag reaches these yet
+  /* THE THREE RUNS WITH A CORRELATION OF THEIR OWN became TWO. `feed` is gone
+     from here: feedwater is a solved flow through a real pump now, so the
+     packets on it move on that run's own answer like every hot leg's do, and
+     driving them off s.load was the animation showing a rate the sim was not
+     performing - the exact fault audit-text.js already pins against the vent
+     plume. hpi and surge keep theirs because both are tagged hot/cold for
+     BUOYANCY rather than for circulation, so their tagged flow is not what
+     the pipe carries. */
+  const PIPE_CORR={hpi:1,surge:1};
+  /* AND STEAM AND EXHAUST GET NOTHING. They used to be driven by s.load with
+     a flat scale - a confident, moving picture of a rate nobody had solved.
+     Nothing forces them (this solver knows liquid, and a turbine is the heat
+     model), so their packets stand still and their meters are blank. That is
+     a real loss on the diagram and it is the honest one. */
   const xtieKeys=new Set(P.net.fitIds.map(fid=>"xtie:"+fid)); // LABEL: mirrors netBuild's own key convention for a fitting's own branch run
   for(const key in d){
     const r = P.net.byKey[key];
     if(!r) continue;                           // a design change left a stale key
     if(PIPE_CORR[r.k]){                        // DEFAULT: see the comment above
-      if(r.k==="hpi") d[key]+=hpiFlow;          // DEFAULT: which correlation
-      else if(r.k==="surge") d[key]+=surgeFlow; // DEFAULT: which correlation
-      else d[key]+=sp*stm*(feedOK?1:0);         // DEFAULT: feed
+      d[key] += r.k==="hpi" ? hpiFlow : surgeFlow;   // DEFAULT: which correlation
       continue;
     }
     let tag=0;
     for(const ed of P.net.edges) if(ed.key===key) tag = tag||P.net.tag[ed.u]||P.net.tag[ed.v];
-    if(tag){
+    /* HAVING A SOLVED REFERENCE is the test, not carrying a temperature tag.
+       KIND_TEMP is about BUOYANCY and deliberately says nothing about the
+       secondary (see its own comment), so gating the animation on it left the
+       feedwater line - which has a real reference and a real solved flow -
+       falling through to a made-up rate. `wet` is a PRIMARY inventory factor
+       and only a primary run owes it. */
+    if(tag || P.netRefByRun[key]!==undefined){
       if(xtieKeys.has(key)) d[key]+=sp*runRatio(key);
       else /* the run's OWN solved flow, with no correlation floor under it -
               buoyancy is already in that solve, so a plant on natural
               circulation still visibly moves water and a plant with the
               valve shut visibly does not */
-           d[key]+=sp*P.flowK*runRatio(key)*wet*1.4;
-    } else if(PIPE_FLAT_STM[r.k]){             // DEFAULT: see the comment above
-      d[key]+=sp*stm;
+           d[key]+=sp*P.flowK*runRatio(key)*(tag?wet:1)*1.4;
     }
   }
   s.spin=(s.spin+360*dt*feff)%360;
@@ -1962,7 +2079,11 @@ const ANN=[
   "The control room is reading above 1x background. That number is set both by what has failed on the plant and by where you put the shielding at the bench - a well-shielded control room can sit this out through a release that would light this tile instantly on a poorly sited one. A repair party out on the plant right now is being spent while this is lit, faster the closer the job sits to whatever is shining.","ctrl"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
-  AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn, AUTOSYS[k].part]));
+  AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn,
+  /* LAZY, because a host that is read off the drawing cannot be resolved
+     while this table is being built - LAY does not exist yet. annHost()
+     below is the one place a row's host is turned into an id. */
+  ()=>autoPart(k)]));
 
 /* ── one lamp per component ──
    Built from the same table the board is built from, so a tile cannot exist
@@ -1975,10 +2096,12 @@ const ANN=[
    pump you fitted - the sim keeps one cavitation number for the whole plant
    and it would be a lie to point at one loop. Red beats amber beats blue; a
    tile with no component at all (BLACKOUT is the only one) lights nothing. */
+const annHost = h => typeof h==="function" ? h() : h;
 function annLamp(id){
   let best=null;
   for(const a of ANN){
-    if(!a[4] || !id.startsWith(a[4]) || !a[2](S)) continue;
+    const host = annHost(a[4]);
+    if(!host || !id.startsWith(host) || !a[2](S)) continue;
     if(a[1]==="red") return C.red;
     if(a[1]==="amber") best=C.amber;
     else if(!best) best=C.blue;

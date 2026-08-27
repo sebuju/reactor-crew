@@ -137,7 +137,22 @@ const ACT = {
      `log` formats the VALUE for the event log; the row's `lab` already names
      the control. `nolog:true` marks a row that writes its own entry and must
      not be announced twice. See actLog() below. */
-  flowDem  : {lab:"PUMP DEMAND",  cont:true, log:v=>(v*100).toFixed(0)+" %", apply:(s,v)=>{ s.flowDem=v; }},
+  /* THE COOLANT PUMP ORDER - every pump that serves the core, in one line,
+     the way the board's own RCP speed demand addresses them all. Keeps its
+     exact one-argument signature so a tape or a scenario written before pumps
+     had individual demands still means what it meant. */
+  flowDem  : {lab:"PUMP DEMAND",  cont:true, log:v=>(v*100).toFixed(0)+" %",
+              apply:(s,v)=>{ for(const id of pumpIds()) if(primaryPump(id)) s.flowDemBy[id]=v; }},
+  /* ONE PUMP'S OWN ORDER. Guarded like ACT.tankOpen: a tape naming a pump
+     this design never had is a no-op, not a phantom key on S. */
+  /* p.name, NOT partName(): that lives in src/core/ui.js, which the scenario
+     worker deliberately excludes from the sim's own loaded subset, and an ACT
+     row is replayed in there. Same choice, and the same reason, as the repair
+     dispatch line in step.js. */
+  pumpDem  : {lab:"PUMP DEMAND",  cont:true,
+              log:(id,v)=>{ const p=LAY.parts.find(q=>q.id===id);
+                return (p?p.name:id)+" TO "+(v*100).toFixed(0)+" %"; },
+              apply:(s,id,v)=>{ if(s.flowDemBy[id]!==undefined) s.flowDemBy[id]=v; }},
   rodCommon: {lab:"ROD DEMAND",   cont:true, log:v=>(v*100).toFixed(1)+" %", apply:(s,v)=>{ setCommon(v); }},
   rodBank  : {lab:"BANK DEMAND",  cont:true, log:(b,v)=>"BANK "+(b+1)+" TO "+(v*100).toFixed(1)+" %",
               apply:(s,b,v)=>{ s.rodZDem[b]=v; }},

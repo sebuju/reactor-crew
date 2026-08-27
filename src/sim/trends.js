@@ -17,7 +17,7 @@ const CH={
  hot :{lab:"HOTWELL",      u:"%",  col:"#6f97a8", f:s=>tankPoolPct(s,hostedTankIds())},
  inv :{lab:"INVENTORY",    u:"%",  col:"#5aa9d6", f:s=>s.inv},
  /* flowNet, not flow: the label says CORE FLOW, so it has to be the flow that
-    reaches the core - what the pumps were TOLD to do is s.flowDem's business.
+    reaches the core - what the pumps were TOLD to do is flowDemPri()'s business.
     The two are equal on an undamaged, unthrottled plant, so no archived trend
     changes shape; they part company exactly when a valve shuts or a run is
     severed, which is the moment this trace has something to say. */
