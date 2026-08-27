@@ -92,6 +92,9 @@ function layoutStats(M){
    "Radiation reaching the control room during an accident, solved along the straight line from reactor to crew. A shield only pays for itself if it actually stands on that line - one parked off to the side blocks nothing, whatever a bounding box would have said. Any other equipment sitting on the line helps a little too, just less than a shield built for the job."],
   ["SURVEY PEAK",M.peak.v.toFixed(2)+" x",clamp(M.peak.v/RAD_CEIL,0,1),ZONE[zoneOf(M.peak.v)].col,
    "The crew dose rate above is one seat, in one room. This is the hottest cell any repair party could ever be sent to stand in"+(M.peak.who?" - right now, beside "+partName(M.peak.who):"")+". A layout that is comfortable in the control room and lethal at the pumps has not been shielded, it has been decorated."],
+  ["PRESSURIZER LINK",M.pzrConn?"plumbed":"NOT PLUMBED",M.pzrConn?1:0,
+   M.pzrConn?C.green:C.red,
+   "Whether any pipe reaches the pressurizer from the loop at all. A vessel nobody plumbed in holds nothing: pressure follows whatever the loop is doing instead of the programme, and it will not come back. The bench will still let you build it - it just will not pretend it works."],
   ["PRESSURIZER HEAD",M.pzrOK?"at loop top":"BELOW LOOP TOP",M.pzrOK?1:0.2,
    M.pzrOK?C.green:C.red,
    "The pressurizer works by holding a steam bubble at the highest point of the primary loop. Mount it below the reactor or the steam generators and the bubble cannot sit where it needs to: pressure control loses more than half its damping and every load change whips the loop pressure around."],
@@ -103,6 +106,11 @@ function layoutStats(M){
    "Distance between redundant loops. Park two steam generators next to each other and a single hit takes out both, making the redundancy you paid for worthless."],
 ];}
 function layoutWarnings(M){ const w=[];
+  /* SOFT, deliberately. The game never refuses a bad order - it carries it
+     out and shows the cost - so an unplumbed pressurizer commissions, runs
+     and loses its pressure, and that is the lesson. What it must not do is
+     happen SILENTLY, which is what it did until this row existed. */
+  if(!M.pzrConn) w.push(["SOFT","No pipe reaches the pressurizer. It holds nothing: loop pressure will drift off programme and stay there.","pzr"]);
   if(!M.pzrOK) w.push(["SOFT","The pressurizer is not the highest point of the primary loop. Its steam bubble cannot form properly, so pressure damping drops to 45%.","pzr"]);
   if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all.",null]);
   if(M.access<1) w.push(["HARD","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
@@ -122,7 +130,13 @@ function warnFor(id){
 }
 
 /* right-click, held still and released: add or remove - see .claude/CLAUDE.md */
-function ctxResolveDesign(p){
+function ctxResolveDesign(p,extra){
+  /* A TAP DRAG THAT LANDED. Both ends are already places the player pointed
+     at, so this menu is not about the pixel under the cursor at all - it asks
+     the one thing the gesture cannot: which fitting these two taps are. Ahead
+     of the view test for that reason: the pair is settled whatever the release
+     point resolves to, and it is the release point that opened this menu. */
+  if(extra && extra.tapPair) return {x:p.x,y:p.y,tapPair:extra.tapPair};
   const pt=vIn(p)?vPt(p):null;
   if(!pt) return null;
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
@@ -156,19 +170,30 @@ function ctxTitleDesign(hit){
   if(hit.tapKey!=null) return pipeLabel(hit.tapK)||"PIPE";
   return "PLANT";
 }
-// the far end of a fresh cross-loop tee: the nearest point, on loop j's own
-// runs, to the tap the player already chose - a DEFAULT-PICKER (may sort by
-// nearest, never a gate), not a guess about where a fixed-slot cross-tie
-// used to land. loopOfKey() is graph-derived now (layout.js), so this asks
-// the graph "which runs are loop j's" honestly instead of by name.
-function nearestRunOfLoop(j,from){
+/* WHICH RUN THE PLAYER JUST POINTED AT, and where along it. This is a
+   RESOLVER, not a picker: the point is one the player aimed, and the only
+   question is which polyline it landed on. That is the whole difference from
+   nearestRunOfLoop(), which this replaces - that one took a point the player
+   chose for the NEAR end and searched a whole loop for a far end nobody had
+   pointed at.
+   `skip` keeps a tee off its own host run: a tee spliced onto the run it
+   already taps is a tee on itself, not a cross-tie. Untargeted clicks return
+   null, which the caller treats as a cancel - there is nothing to refuse. */
+function nearestRunTo(pt,skip){
   let best=null, bd=1e9;
   for(const r of pipeNetwork()){
-    if(loopOfKey(r.key)!==j) continue;
-    const near=nearestOn(r.pts,from);
-    if(near.d<bd){ bd=near.d; best={key:r.key,t:near.t}; }
+    if(!r.key || r.key===skip || r.k.startsWith("xtie")) continue;
+    const near=nearestOn(r.pts,pt);
+    // rid as well as key: a TAP run stores the D.run id it lands on (plus its
+    // kind as the fallback), so a caller authoring one needs both.
+    if(near.d<bd){ bd=near.d; best={key:r.key,t:near.t,rid:r.rid||null}; }
   }
-  return best;
+  /* The reach the PORT drag's own drop test uses (CELL*0.85, portDrop() in
+     layout.js), for the same reason and to the same feel: a drop is aimed
+     with a mouse, not with a caret. 12 plant units was the first guess and it
+     is about 1.9 SCREEN pixels at fit zoom - a target nobody can hit, which
+     is most of why the tap handle read as missing entirely. */
+  return bd<=CELL*0.85 ? best : null;     // aimed at a pipe, not at empty deck
 }
 /* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
    decides - a click on a component offers REMOVE, one item, about that
@@ -178,6 +203,18 @@ function nearestRunOfLoop(j,from){
    fittableList()'s FIT side survives on the bare-cell fallback below - a
    part that is not yet fitted has no box on the grid to click. */
 function ctxItemsDesign(hit){
+  /* WHICH FITTING, and nothing else - both taps are settled. Every row here
+     builds the identical geometry and differs only in `mode`, which is what
+     makes this a type question rather than a placement one. A branch throttle
+     is on the list because it is the same two taps too, and until now it could
+     not be authored at all: the in-line offer passes a null far end. */
+  if(hit.tapPair){ const t=hit.tapPair;
+    return [
+      {label:"TEE",             fn:()=>{ addFit('tee',t.aKey,t.aT,t.bKey,t.bT); }},
+      {label:"RELIEF VALVE",    fn:()=>{ addFit('relief',t.aKey,t.aT,t.bKey,t.bT,PIPE_BORE.relief); }},
+      {label:"THROTTLE, BRANCH",fn:()=>{ addFit('throttle',t.aKey,t.aT,t.bKey,t.bT); }},
+    ];
+  }
   if(hit.fitting)
     return [{label:"REMOVE", fn:()=>{ removeFit(hit.fitting); }}];
   if(hit.part){
@@ -204,34 +241,22 @@ function ctxItemsDesign(hit){
     // straight into the run it's on, so it is always on offer here, even on
     // a single-loop plant with no second run to tie to
     items.push({label:"ADD THROTTLE HERE", fn:()=>{ addFit('throttle',hit.tapKey,hit.tapT,null,null); }});
-    /* Redundancy, the same way a second tee is added - taps the same RELIEF
-       HEADER (pipeNetwork(), layout.js) the stock valve already uses, so
-       every relief fitting shares the one tank (hasRelief(), layout.js).
-
-       THE OFFER IS NEVER REFUSED. hasRelief() and the header key decide what
-       the valve DISCHARGES INTO, not whether you may fit one: with no header
-       and no primary tank it vents into the room, which pipenet.js already
-       models (net.fitTarget null - straight into containment) and drawPlant()
-       already draws as a stub off its own tap. Gating the OFFER on them
-       refused an order the plant can carry out - delete the relief tank and
-       the bench would not let you fit a relief valve anywhere, on a plant
-       whose pressurizer then had no relief path at all, which is precisely
-       the design you would want to be shown the cost of. fitBKey() re-resolves
-       a relief valve's far tap every frame, so plumbing a tank back in later
-       lands the discharge without touching the fitting. */
-    { const relKey=reliefHeaderKey(pipeNetwork());
-      const land = hasRelief() && relKey;
-      items.push({label:"ADD RELIEF VALVE HERE", fn:()=>{
-        addFit('relief',hit.tapKey,hit.tapT,land?relKey:null,land?0.5:null,PIPE_BORE.relief); }}); }
-    const hostLoop=loopOfKey(hit.tapKey);
-    const from=juncPt(pipeNetwork(),hit.tapKey,hit.tapT);
-    for(let j=0;j<sgCount();j++){ if(j===hostLoop) continue;
-      const far=from && nearestRunOfLoop(j,from.pt);
-      if(!far) continue;
-      const label = hostLoop!=null ? "ADD TEE, LOOP "+(hostLoop+1)+" TO LOOP "+(j+1)
-                                    : "ADD TEE TO LOOP "+(j+1);
-      items.push({label, fn:()=>{ addFit('tee',hit.tapKey,hit.tapT,far.key,far.t); }});
-    }
+    /* NO RELIEF VALVE OFFER HERE, and no tee. Both need a SECOND tap, and this
+       menu knew only the one under the cursor - so it picked the far end
+       itself: reliefHeaderKey() found the first run of kind "relief" on the
+       plant and dropped the discharge at exactly t=0.5 along it, a point
+       nobody chose. Drag a tap onto the pipe you mean instead
+       (pipeTapHandles(), plant.js) and the menu that opens on the drop asks
+       only WHICH fitting it is. Nothing about the old behaviour is lost:
+       fitBKey() still re-resolves a relief valve's far tap every frame, and a
+       valve whose discharge reaches no tank still vents into the room. */
+    /* NO TEE AND NO SURGE-LINE OFFER HERE EITHER, for the same reason there is
+       no CONNECT offer: both are DRAWN now. A tee is pulled out of the square
+       riding the pipe under the pointer and dropped on the pipe you mean; a
+       surge line is a PORT drag - out of the pressurizer's own nozzle - let go
+       over the pipe you want it to tap. The menu row this replaces still chose
+       which run of the right kind to land on and left the fraction along it to
+       the router, so half the geometry was authored by nobody. */
     return items;
   }
   // a genuinely bare cell: nothing is under the cursor, so no REMOVE
@@ -544,6 +569,11 @@ function paramBlockMk(block){
       }
       return {el:root,sync(){}};
     }
+    case "rule": {
+      const r=KIT.rule(block.title);
+      if(block.tip) KIT.tip(r.el,block.title,block.tip);
+      return {el:r.el,sync(){}};
+    }
     case "lattools": {
       const root=KIT.el("div","db-block");
       const r=KIT.rule("PEN"); root.appendChild(r.el);
@@ -572,6 +602,7 @@ function paramBlockMk(block){
     case "latdimrack": {
       const root=KIT.el("div","db-block");
       const r=KIT.rule("SECTION"); root.appendChild(r.el);
+      KIT.tip(r.el,"SECTION","The core in ELEVATION, where the plan above is the core looking down. How tall the fuel column is, and how much reflector is packed around the sides, the lid and the floor. Everything here is dimensioned in the section, so it decides core H/D and where the flux leaks away - the plan decides how wide the core is, this decides what shape it revolves to.");
       const refl=KIT.segSel(LATREFL,{onSelect:i=>{ D.refl=i; }});
       root.appendChild(refl.el);
       const rows=LATDIMS.map(d=>{
@@ -605,46 +636,48 @@ function dbPanelSync(container,blocks){
   blocks.forEach((b,i)=>{ const h=container._h[i]; if(h&&h.sync) h.sync(b); });
 }
 
-/* Stage 8: the one place a rename can be typed. Appended straight to
-   well.body, a SIBLING of the param-block container - dbPanelSync() wipes
-   that container's innerHTML on every signature change, and a text input
-   living inside it would be torn down and rebuilt under the player's own
-   cursor mid-keystroke. */
-function dbNameRow(wellBody,p){
-  const row=KIT.el("div","db-name-row");
-  const lab=KIT.el("span","db-name-lab"); lab.textContent="NAME";
-  const input=KIT.textInput({placeholder:p.name,maxLength:NAME_CAP,   // DEFAULT NAME: the box offers the name a blank falls back to
-    tip:"Rename this component. Blank uses the default name \""+p.name+"\".",   // DEFAULT NAME: quoting the current name here would be circular
-    onChange:v=>{ setPartName(p.id,v); }});
-  row.append(lab,input.el);
-  wellBody.appendChild(row);
-  return input;
+/* THE HEADING IS THE NAME FIELD. It was a NAME row inside the panel, under a
+   title bar already showing the same word - so the panel said the name twice
+   and only one of them could be typed into. rule()'s `edit` (kit.js) makes the
+   title bar itself the input: the DEFAULT name is its placeholder, so a blank
+   box still reads as the machine it is. It lives in the head and not in the
+   body on purpose - dbPanelSync() wipes the body's innerHTML on every
+   signature change, and an input living there would be torn down and rebuilt
+   under the player's own cursor mid-keystroke. */
+function dbNameWell(p){
+  const def=p.name;   // DEFAULT NAME: the placeholder and the tip both offer the name a blank falls back to, so this is the one name partName() must NOT be asked for
+  const well=KIT.well({title:def,edit:{maxLength:NAME_CAP,onChange:v=>{ setPartName(p.id,v); }}});
+  if(well.nameInput)
+    KIT.tip(well.nameInput,"NAME",
+      "Type to rename this machine. Clear the box and it goes back to \""+def+"\". Clicking anywhere on this bar also selects the machine on the plant.");
+  return well;
 }
 /* one panel per component (or gang) */
 function dbRailBuild(rail,watch){
   rail.innerHTML="";
   const panels=[], gangs={};
   for(const p of LAY.parts){
-    const B=paramsFor(p); if(!B.length||B.plain) continue;
-    if(B.gang){
-      const g=gangs[B.gang];
-      if(g){ g.ids.push(p.id); g.well.setTitle(partName(g.p).replace(/ \d+$/,"")+" x"+g.ids.length); continue; }
-      const well=KIT.well({title:partName(p)}); rail.appendChild(well.el);
-      const nameIn=dbNameRow(well.body,p);
-      const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-      const h={p,ids:[p.id],well,body,B,on:null,nameIn};
-      railPick(well,h.ids,partName(p));
-      watch.add(well.el);
-      gangs[B.gang]=h; panels.push(h);
-    } else {
-      const well=KIT.well({title:partName(p)}); rail.appendChild(well.el);
-      const nameIn=dbNameRow(well.body,p);
-      const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-      const h={p,ids:[p.id],well,body,B,on:null,nameIn};
-      railPick(well,h.ids,partName(p));
-      watch.add(well.el);
-      panels.push(h);
+    const B=paramsFor(p); if(!B.length&&!B.gang || B.plain) continue;
+    /* A GANG IS TWO MACHINES SHARING ONE PANEL, and it now covers two cases
+       with one mechanism. Identical components (three pumps) fold together and
+       the head carries an "x3" suffix; machines that are simply married - the
+       reactor and the drives bolted to its head - fold together with no suffix
+       at all, because they are not copies of each other. Either way the FIRST
+       one to arrive owns the well and lends the others its selection, so
+       clicking either machine on the plant lights the same panel. */
+    const g=gangs[B.gang];
+    if(B.gang && g){
+      g.ids.push(p.id);
+      if(!g.noSfx) g.well.setSfx("x"+g.ids.length);
+      continue;
     }
+    const well=dbNameWell(p); rail.appendChild(well.el);
+    const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
+    const h={p,ids:[p.id],well,body,B,on:null,noSfx:!!B.gangPlain};
+    railPick(well,h.ids,partName(p));
+    watch.add(well.el);
+    if(B.gang) gangs[B.gang]=h;
+    panels.push(h);
   }
   /* A fitting is not in LAY.parts, so it never had a panel - which is why a
      relief valve's setpoints had nowhere to be set. One well per fitting,
@@ -682,10 +715,12 @@ function dbRailSync(state){
     // a rename does not rebuild LAY, so the title has to be re-read here
     // every sync, not just once at build time - cheap, since setTitle()/
     // KIT.tip() are themselves guarded no-ops when nothing changed.
+    /* The heading SHOWS the display name and the placeholder offers the
+       default, so a cleared box reads as the machine's own name rather than as
+       an empty bar. */
     const nm=partName(h.p);
-    h.well.setTitle(h.ids.length>1 ? nm.replace(/ \d+$/,"")+" x"+h.ids.length : nm);
+    h.well.setName(nm);
     KIT.tip(h.well.head,nm);
-    h.nameIn.set(D.name&&D.name[h.p.id]||"");
     // paramsFor() rebuilds the whole block list, so it is only asked for a
     // panel that is actually on screen - see railWatch() in inspector.js
     if(!railSeen(h.well.el) && !(on&&moved)) continue;

@@ -28,7 +28,7 @@ function commission(){
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:D.pzr*L.pzrK,
      flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
-     rps:D.rps, rpsm:D.rpsm, autorod:D.autorod,
+     rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi,
      catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
      turbFit:D.turbFit, condFit:D.condFit, fit:{...D.fit},
      loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
@@ -63,10 +63,29 @@ function commission(){
      loops are not the same length, so loop 0 really does carry more water than
      loop 3. Against a shared mean the plant still averages to the old rate -
      nothing on screen speeds up overall - but the legs finally differ from each
-     other, which is the whole reason a run has its own integral. */
-  { let sum=0, n=0;
+     other, which is the whole reason a run has its own integral.
+
+     A RUN THAT CARRIES NOTHING IS NOT IN THE MEAN. A dead-end leg - a spare
+     steam generator plumbed to the core with no return path, which is what a
+     half-finished second loop looks like - is a hot leg by kind and by role,
+     so it counted, and it contributed a zero. Measured: it pulled the shared
+     scale 4.5982 -> 3.7193, and since every packet's speed is ref/netRefRun,
+     the whole plant's flow animation sped up 24% the moment a pipe that moves
+     no water was drawn. Nothing about the actual flow had changed.
+
+     The gate is a NUMERICAL NOISE FLOOR, not a physical threshold: a genuine
+     dead end solves to ~1e-15 against a live leg's ~5, so there are fifteen
+     orders of magnitude between the two cases and nothing to tune. Relative
+     to the largest reference on this plant, so it cannot become a hidden
+     absolute scale. A plant whose legs all carry flow keeps every one of
+     them, which is why no stock figure moves. */
+  { let big=0;
     for(const k in P.netRefByRun)
-      if(k.startsWith("hot:")||k.startsWith("cold:")){ sum+=P.netRefByRun[k]; n++; }
+      if(k.startsWith("hot:")||k.startsWith("cold:")) big=Math.max(big,P.netRefByRun[k]);
+    let sum=0, n=0;
+    for(const k in P.netRefByRun)
+      if((k.startsWith("hot:")||k.startsWith("cold:")) && P.netRefByRun[k] > 1e-9*big){
+        sum+=P.netRefByRun[k]; n++; }
     P.netRefRun = n ? sum/n : 0; }
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
@@ -102,7 +121,7 @@ const AUTOSYS={
     warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
   rod:{part:"rods",label:"AUTO ROD",ann:"ROD AUTO BYP",name:"AUTOMATIC ROD CONTROL",
     fit:()=>P.autorod,
-    tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band set on the rod-drive panel - widen that band and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
+    tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band the rod drives were commissioned with - widen that band at the design bench and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
     warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
   /* Not hosted on the pressurizer. The pressurizer has not owned a relief
      valve since one became a fitting with a tap of its own - the stock
@@ -546,10 +565,6 @@ function resetTrip(){
    rather than a second copy of the number. */
 const AUTOROD_LEAD=12;                  // seconds of lead
 const AUTOROD_GAIN=0.0016;              // rod fraction per K of error per tick-second
-/* How far the controller may walk the bank. Not a safety limit - it is what
-   stops the bank wandering off the position the shutdown margin was measured
-   from. Widen it and the controller has more authority and less margin. */
-const AUTOROD_LO=0.20, AUTOROD_HI=0.50; // furthest out / furthest in, fraction inserted
 /* How fast a rod drive moves, ganged or split - one motor, one speed. The tilt
    trim and the reganging walk are both derived from it below, so retuning the
    drives cannot leave one of the three behind. P.scram replaces it on a trip. */
@@ -843,7 +858,7 @@ function resetPlant(){
        .map(k=>[k, P.fit[k].bKey?0:1])),
      valveDem:Object.fromEntries(Object.keys(P.fit).filter(k=>P.fit[k].mode==="throttle")
        .map(k=>[k, P.fit[k].bKey?0:1])),
-     arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:AUTOROD_LO, arHi:AUTOROD_HI,
+     arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
         takes whatever the cell it is STANDING in reads, via s.repRate below.
@@ -1086,11 +1101,16 @@ function step(dt){
      only: a tank being FILLED is not injecting, and summing the two together
      would let one tank hide behind another. Nothing here names a tank. */
   let inj = 0;
+  const injIds = [];               // WHICH tanks, for the log - a local, never on S
   for(const k in s.tankRate) if(!D.tanks[k]) delete s.tankRate[k];
   for(const tid of tankIds()){
     const q = D.tanks[tid].side==="primary" ? invRate(qTankBy[tid]||0) : 0;
+    /* s.tankRate keeps the RAW signed figure: it is what the panels and the
+       pipe gauges read, and a tank being filled reads negative there on
+       purpose. Only the "is anything injecting" question needs the noise
+       floor - see tankInjecting() (pipenet.js) for what a bare q>0 cost. */
     s.tankRate[tid] = q;
-    if(q>0) inj += q;
+    if(tankInjecting(tid, q)){ inj += q; injIds.push(tid); }
   }
   /* What is left of the pressurizer's authority. It only sets pressure while
      the loop is a closed boundary: past a real leak there is no steam bubble
@@ -1120,6 +1140,7 @@ function step(dt){
      Fed to NEXT tick's solve (the pump head reads s.cavP, pipenet.js), which
      is why it lives on S: a gate that depends on the answer cannot be part of
      the question. */
+  const cavIds = [];               // WHICH pumps, for the log - a local, never on S
   { let worst=0;
     /* Off the real parts and the run graph, never off "pump"+i - a spare
        pump's own id doesn't match its loop's index, and once a generator can
@@ -1134,6 +1155,13 @@ function step(dt){
       const li=loopOf(p.id); if(li==null) continue;
       const c = clamp(-scAt(p.id+"t")/CAV_SPAN, 0, 1);
       if(!(li in byLoop) || c>byLoop[li]) byLoop[li]=c;
+      /* WHICH pump, kept for the log alone. s.cavP is keyed by LOOP because
+         that is what the head derate applies to, so the id was thrown away
+         here and "COOLANT PUMP CAVITATION" could not say which pump on a
+         four-loop plant. A local, deliberately: it is a pure function of this
+         tick's field, so putting it on S would be a snapshot field that says
+         nothing a resolve could not. */
+      if(c>0.15) cavIds.push(p.id);
     }
     for(const li in s.cavP){ s.cavP[li]=byLoop[li]||0; if(s.cavP[li]>worst) worst=s.cavP[li]; }
     s.cav = worst; }
@@ -1668,7 +1696,22 @@ function step(dt){
              runback(s); }
   }
 
-  /* ── event log: every transition, with why ── */
+  /* ── event log: every transition, with why ──
+     NAME THE THING. "A tank is pushing water into the loop" is a sentence
+     about a plant that has one tank; on a plant with four it has told you
+     nothing, and the same goes for four pumps and three relief valves. One
+     helper so a component and a fitting are named the same way wherever they
+     appear, and so partName() - which is what the player RENAMED it to - is
+     read rather than the internal id. */
+  const nameOf = id => {
+    const p = LAY.parts.find(q=>q.id===id);
+    if(p) return partName(p);
+    const j = D.fit[id];
+    return j ? (FITNAME[j.mode]||"FITTING")+" "+id.toUpperCase() : id.toUpperCase();
+  };
+  const nameList = ids => ids.map(nameOf).join(", ");
+  // naming the machines means the verb has to agree with how many there were
+  const isAre = ids => ids.length>1 ? "are" : "is";
   const E=s.ev, ev=(k,cond,sev,msg,why,latch)=>{
     /* `why` may be a thunk: several of these build their text with toFixed(),
        and a log line nobody is reading is not worth a string a tick. */
@@ -1693,15 +1736,19 @@ function step(dt){
   ev("recrit",s.scrammed&&s.rodPos>.98&&s.rho>-200,"alarm","TRIPPED CORE GOING CRITICAL",
     ()=>"The bank is in and the reactor is climbing back to critical anyway. The xenon it was shut down by has decayed, and the bank alone is worth "+P.sdm.toFixed(0)+" pcm against it. Borate now - the boron system is worth "+P.sdmB.toFixed(0)+" pcm of margin.");
   ev("cav",s.cav>0.15,"warn","COOLANT PUMP CAVITATION",
-    "Water arriving at the pumps is close to boiling, so they are churning vapour. Real flow is far below the bench setting.");
+    ()=>"Water arriving at "+(cavIds.length?nameList(cavIds):"the pumps")+
+        " is close to boiling, so "+(cavIds.length>1?"they are":"it is")+
+        " churning vapour. Real flow is far below the bench setting.");
   ev("flowfloor",s.flowDem<P.flowMin,"warn","PUMPS ORDERED BELOW DESIGN FLOOR",
     ()=>"Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
   ev("hip",s.P>P.P0*1.05,"warn","PRIMARY OVERPRESSURE",
     ()=>"Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burst.toFixed(1)+" MPa.");
   ev("porv",reliefAnyOpen(s),"warn","RELIEF VALVE PASSING",
-    "A relief valve is open and venting to the tank. If nobody commanded it, primary coolant is leaving the loop.");
+    ()=>{ const open=reliefFitIds().filter(id=>s.reliefOpen[id]&&!s.reliefBlocked[id]);
+      return nameList(open)+" "+isAre(open)+" open and venting. If nobody commanded it, primary coolant is leaving the loop."; });
   ev("stuck",reliefAnyStuck(s),"alarm","PORV FAILED TO RESEAT",
-    "It lifted on overpressure and did not shut again. Pressurizer level will read HIGH while the loop empties. Close the block valve.");
+    ()=>nameList(reliefFitIds().filter(id=>s.reliefStuck[id]))+
+        " lifted on overpressure and did not shut again. Pressurizer level will read HIGH while the loop empties. Close its block valve.");
   ev("void",s.vf>0.15,"alarm","STEAM VOID IN CORE",
     "Steam is forming where liquid should be. It carries almost no heat, so fuel temperature climbs even while reactor power falls.");
   /* Not latched: the live field falls back below RAD_HI the moment the source
@@ -1718,8 +1765,9 @@ function step(dt){
     ev(evk, autoFit(k)&&s.byp[k], "warn", title, AUTOSYS[k].warn);
   ev("norps",!P.rps,"warn","NO PROTECTION SYSTEM FITTED",
     "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call.",true);
-  ev("inj",s.injRate>0,"info","INJECTING",
-    "A tank is pushing water into the loop, and cold shock is ageing the vessel while it runs.");
+  ev("inj",injIds.length>0,"info","INJECTING",
+    ()=>nameList(injIds)+" "+isAre(injIds)+" pushing water into the loop at "+
+        s.injRate.toFixed(2)+" %/s, and cold shock is ageing the vessel while it runs.");
   ev("d1",s.dmg>1,"alarm","FUEL DAMAGE 1%",
     "Cladding has started to fail and fission products are entering the coolant. Permanent.",1);
   ev("d25",s.dmg>25,"alarm","FUEL DAMAGE 25%",

@@ -175,6 +175,13 @@ const RODX0=.35;
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
+         /* How far the temperature controller may walk the bank on its own,
+            as fractions inserted. Not a safety limit - it is what stops the
+            controller wandering off the position the shutdown margin was
+            measured from, so it is a commissioning decision and lives here
+            rather than as two constants nobody could see or move. commission()
+            carries it to P and resetPlant() to S, like every other tune. */
+         arLo:0.20, arHi:0.50,
          cont:1,contFit:true,catcher:false,bkp:1,
          turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{},
          /* ══ THE STOCK PLANT'S TANKS ══

@@ -177,21 +177,40 @@ function paramsFor(p){
   if(!p.access && p.grp!=="shield")
     note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, and the unit cannot be commissioned like this.","var(--c-red)");
 
+  /* ONE PANEL FOR THE REACTOR AND ITS DRIVES. They were two, and each carried
+     its OWN copy of the lattice plan - the same canvas twice, over one shared
+     pen, so whichever panel synced last decided what a click on either plan
+     did and the other panel's tools could never be selected at all. They are
+     one machine to configure: the clusters go into the assemblies, and the
+     drives are bolted to the head that carries them. So the rods FOLD into
+     this panel (they are a gang, dbRailBuild()) and there is exactly one plan,
+     with every pen on it. Two boxes on the plant, one panel - clicking either
+     brings this up. */
   if(id==="core"){
+    B.gang="reactor"; B.gangPlain=true;
     B.push({kind:"latplan"});
-    B.push({kind:"lattools",tools:LATPEN_CORE});
+    B.push({kind:"lattools",tools:LATPEN_CORE.concat(LATPEN_RODS)});
     B.push({kind:"latdimrack"});
     opt("REACTOR TYPE","The coolant and moderator family. Sets power density, operating pressure, grace time and the sign of the void coefficient. It also decides how much heat a given lattice makes: the same assemblies rate differently in a different family.","arch",ARCH);
     opt("FUEL","Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density.","fuel",FUEL);
     B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(i)}))});
     B.push({kind:"readlist",rows:()=>LATREAD.map(r=>[r[0],r[1](),null,r[2]])});
-  }
-  else if(id==="rods"){
-    B.push({kind:"latplan"});
-    B.push({kind:"lattools",tools:LATPEN_RODS});
+    B.push({kind:"rule",title:"ROD DRIVES",
+      tip:"The control rod drive mechanisms, bolted to the vessel head. Everything below this line belongs to them, not to the fuel: what drives the clusters in, what they are made of, and how the banks are grouped. They ride on the head and move with the reactor, which is why they share this panel."});
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
-    tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. Limited to 15% of rod travel; you can always override it.","autorod",26);
+    tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. It only ever drives the bank inside the travel band you set below; you can always override it.","autorod",26);
+    /* THE BAND THE CONTROLLER WORKS IN, as two handles rather than two
+       constants. AUTOSYS.rod's own tooltip has always promised "the travel
+       band set on the rod-drive panel" and there was no such control - the
+       numbers were real, live and invisible. Hidden with the controller
+       itself: with nothing automatic fitted there is no band to set. */
+    B.push({kind:"slider",title:"AUTO ROD OUT LIMIT",key:"arLo",min:0,max:1,step:.01,
+      when:()=>D.autorod, fmt:v=>(v*100).toFixed(0)+" %",
+      tip:"The furthest OUT the temperature controller may walk the bank on its own. Pull it out and the controller has more authority over coolant temperature and you have less shutdown margin, because the position your margin was measured from is the position it is allowed to leave. Your own demand is never bound by it."});
+    B.push({kind:"slider",title:"AUTO ROD IN LIMIT",key:"arHi",min:0,max:1,step:.01,
+      when:()=>D.autorod, fmt:v=>(v*100).toFixed(0)+" %",
+      tip:"The furthest IN the controller may drive the bank on its own. Deeper insertion buys it more authority and costs thermal margin, because a deep bank peaks the power. Set it at or below the out limit and the band closes to nothing, which parks the controller where it stands."});
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
     B.push({kind:"sdmnote"});
     B.push({kind:"bulkrow",label:"SPREAD",items:[1,2,3,4].map(n=>({name:String(n),
@@ -201,6 +220,10 @@ function paramsFor(p){
       fn:()=>{ latLayBanks(n); latRevolve(); }}))});
     B.push({kind:"readlist",rows:()=>LATREAD_RODS.map(r=>[r[0],r[1](),r[3]?r[3]():null,r[2]])});
   }
+  /* No blocks of its own: every one of them is on the reactor panel above,
+     and this marks the drives as the second member of that gang so clicking
+     the drives on the plant brings the same panel up. */
+  else if(id==="rods"){ B.gang="reactor"; B.gangPlain=true; }
   else if(id==="pzr"){
     sld("DESIGN PRESSURE","Loop pressure as a multiple of this coolant's nominal. Higher raises the boiling point, so it buys thermal margin and resists voiding, but the vessel gets much heavier and a breach more violent.","pdes",.7,1.25,v=>(v*ARCH[D.arch].P0).toFixed(1)+" MPa",.05,v=>(v-0.7)*220);
     sld("PRESSURIZER VOLUME","Size of the steam bubble. A big pressurizer damps pressure swings so the relief valve rarely lifts. A small one is light but pressure whips around on every load change.","pzr",.5,2,v=>v.toFixed(2)+" x",.05,v=>(v-0.5)*45);
