@@ -457,16 +457,29 @@ function uiDown(e){
     if(w.type==="part"){ sel=w.part.id;
       // a commissioned plant is welded down: selectable, not movable; a
       // pinned part rides its parent, so it's selectable but never draggable
-      if(screen==="design" && !w.part.pin) ui.drag={type:"part",part:w.part,
-        ox:q.x-(GX+w.part.x*CELL), oy:q.y-rowTop(w.part.y),
-        sx:w.part.x, sy:w.part.y, mode:"move", gx:w.part.x, gy:w.part.y,
-        over:null, pair:null, v:w.v}; }
+      // the face is read WHERE THE HAND PRESSED, once, and never searched for
+      // again - press near the pump's bottom edge and the pipe leaves the
+      // pump's bottom edge
+      if(screen==="design" && !w.part.pin){ const g=gridPt([q.x,q.y]);
+        ui.drag={type:"part",part:w.part,
+          // WHERE IN THE PART THE HAND TOOK HOLD, in CELLS. It was a pixel
+          // offset, and a pixel is not a fixed share of a row: a 1-row pump is
+          // DRAWN 84 px tall in a banded row, so a grab near its plinth stored
+          // ~80 px and, carried into the 46 px row above, put the part's top
+          // nearly two rows clear of the hand. In cells the grab is bounded by
+          // the part's own size and the same spot stays under the pointer.
+          ox:g.x-w.part.x, oy:g.y-w.part.y,
+          sx:w.part.x, sy:w.part.y, mode:"move", gx:w.part.x, gy:w.part.y,
+          over:null, fa:faceAt(w.part,g.x,g.y), fb:null, v:w.v}; } }
     else if(w.type==="sld"){ ui.drag=w;
       const onThumb=Math.abs(q.x-w.tx)<=w.tw_/2+3;
       w.gv = onThumb ? w.val : valFrom(w,q.x);    // gv is the running command value
       w.gx = q.x; w.gx0 = q.x; w.moved = false;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
+    // a port mark is pushed after its own box, so it takes the press before
+    // the part drag can - which is the whole reason it is drawn at all
+    else if(w.type==="port"){ portFlip(w.pid,w.face); }
     // the drag holds the stored waypoint OBJECT, never its index - the list
     // is re-sorted by distance on every read, so an index would renumber
     // under the hand
@@ -489,15 +502,24 @@ function uiDown(e){
    crossing the deck to get there. The drop decides what the gesture was, so
    the drop is what gets measured. */
 function partDragTo(d,q){
-  const over=partAt([q.x,q.y]);
-  if(over && over.id!==d.part.id){
-    d.mode="pipe"; d.over=over; d.pair=bestFreePortPair(d.part,over);
+  const g=gridPt([q.x,q.y]), over=partAt([q.x,q.y]);
+  // ...and the group is not a pipe target. Excluding only d.part let the
+  // reactor's own pinned rod drives claim the drop, and ROLE.rods declares no
+  // ports, so dragging the reactor up resolved to a pipe that could not be
+  // laid and a move that was never reached.
+  if(over && !moveCells(d.part,0,0).some(c=>c.q===over)){
+    // the far face is read where the hand IS, so it follows the pointer round
+    // the box it is over - the same question the press already answered
+    d.mode="pipe"; d.over=over; d.fb=faceAt(over,g.x,g.y);
   } else {
-    d.mode="move"; d.over=null; d.pair=null;
-    d.gx=Math.round((q.x-d.ox-GX)/CELL);
-    // rowAt() is rowTop()'s inverse; half a cell of lead rounds to the
-    // nearest row rather than the one merely touched
-    d.gy=rowAt(q.y-d.oy+CELL/2);
+    d.mode="move"; d.over=null; d.fb=null;
+    /* THE PART'S TOP-LEFT UNDER THE HAND, SNAPPED, AND ALL OF IT IN CELLS. It
+       was a CELL/2 pixel lead against rowAt(), which is only a half-cell where
+       every row is CELL tall - and BANDS is set on the bench too, because the
+       bench reserves each strip's room. Rows there run 46..203 px, so leaving
+       one downward cost 23+band px and upward 23, and a part dropped on free
+       deck landed a row off. gridPt() normalises by each row's own height. */
+    d.gx=Math.round(g.x-d.ox); d.gy=Math.round(g.y-d.oy);
   }
 }
 function uiMove(e){
@@ -532,7 +554,7 @@ function uiMove(e){
       // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
   }
-  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||(ui.drag.type==="part"&&ui.drag.mode==="pipe")) ? "grabbing"
+  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||ui.drag.type==="part") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 }
 function uiUp(e){
@@ -556,9 +578,15 @@ function uiUp(e){
      cancel, not an error, so there is no refusal to report. */
   if(d&&d.type==="part"){
     const p=uiPt(e.currentTarget||cv,e);
-    partDragTo(d, d.v?vPt(p):p);
-    if(d.mode==="pipe" && d.over && d.pair)
-      addRun(d.part.id,d.pair.fa,d.over.id,d.pair.fb);
+    // ...but only off a point the plant actually covers. The press took the
+    // pointer capture, so a release over a docked rail is still delivered here
+    // and vPt() extrapolates it happily - the part landed somewhere nobody had
+    // aimed at. Out of view, the last in-view sample stands, which is the cell
+    // the ghost was last drawn on.
+    if(!d.v || vIn(p)) partDragTo(d, d.v?vPt(p):p);
+    if(d.mode==="pipe" && d.over && d.fa && d.fb
+       && portRoom(d.part)[d.fa] && portRoom(d.over)[d.fb])
+      addRun(d.part.id,d.fa,d.over.id,d.fb);
     else if(d.mode==="move" && (d.gx!==d.sx||d.gy!==d.sy)) moveTo(d.part,d.gx,d.gy);
   }
   ui.drag=null;

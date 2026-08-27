@@ -66,13 +66,15 @@ const PIPE_CASE="#22383e";
 function nozzleEnds(r){
   const out=[], n=r.pts.length;
   if(!r.nz || n<2) return out;
-  const add=(p,q)=>{
+  // `end` names WHOSE nozzle this is, so a caller can ask what side of the
+  // machine it lands on without re-deriving which end of pts it was
+  const add=(p,q,end)=>{
     const dx=q[0]-p[0], dy=q[1]-p[1];
     if(Math.abs(dx)<0.5 && Math.abs(dy)<0.5) return;   // coincident: no facing
-    out.push({p, flat:Math.abs(dx)>Math.abs(dy)});
+    out.push({p, flat:Math.abs(dx)>Math.abs(dy), end});
   };
-  if(r.nz[0]) add(r.pts[0],r.pts[1]);
-  if(r.nz[1]) add(r.pts[n-1],r.pts[n-2]);
+  if(r.nz[0]) add(r.pts[0],r.pts[1],"a");
+  if(r.nz[1]) add(r.pts[n-1],r.pts[n-2],"b");
   return out;
 }
 /* Across the bore, wider than the casing so the joint reads as sitting IN
@@ -81,6 +83,19 @@ function nozzleEnds(r){
    generalised off pipeWidth() (pipes.js) so a nozzle tracks the run's own
    bore exactly as the pipe it joins does. */
 const pipeNozzleHalf = bore => pipeWidth(bore)*1.4;
+/* WHICH SIDE OF A MACHINE A NOZZLE IS ON, IN COLOUR. The joint was flat
+   C.metal, which is the truth for a vessel that is one node and a lie for a
+   pump: its suction and its discharge are different water, and a plant with
+   both its loop pipes on one of them drives nothing. So a machine that HAS
+   two sides gets two colours and a machine that does not keeps the metal -
+   the same rule portPath() states once for the click. Nothing is added to
+   the picture; the joint already drawn is the port. */
+/* NOT amber: amber IS the selection, and a nozzle wearing it reads as picked
+   rather than as a side. Not red either - a side is not an alarm. Cyan and
+   green are the two live inks left, and neither is the cold leg's own blue,
+   so a port never disappears into the pipe on it. */
+const portCol=(p,f)=>{ const IN=portPath(p,f);
+  return !IN ? C.metal : IN.a===f ? C.cyan : C.green; };
 function pipeNozzles(NET){
   for(const r of NET){
     const half=pipeNozzleHalf(runBore(r));
@@ -88,7 +103,8 @@ function pipeNozzles(NET){
     for(const e of nozzleEnds(r)){
       const bx=e.flat?deep:half, by=e.flat?half:deep;
       fillRect(e.p[0]-bx-1,e.p[1]-by-1,2*bx+2,2*by+2,PIPE_CASE);
-      fillRect(e.p[0]-bx,e.p[1]-by,2*bx,2*by,C.metal);
+      fillRect(e.p[0]-bx,e.p[1]-by,2*bx,2*by,
+        portCol(e.end==="a"?r.a:r.b, e.end==="a"?r.sa:r.sb));
     }
   }
 }
@@ -930,22 +946,96 @@ function pipeLines(runs){
    only thing left to draw is the proposal in between.
    Dashed and thin on purpose - it is a proposal, not a run: the router has
    not been asked yet, and what it lays will be square where this is straight.
-   Its SOURCE end is the face bestFreePortPair() just picked, so the band
-   walks to the nozzle the router will actually use - that feedback is what
-   the handles used to give. Green once both ends resolve, amber while they
-   do not, which is the whole of what this gesture needs to say. */
+   BOTH ends are now the hand's: faceAt() reads the face where the press
+   landed and the face the pointer is over, so the band walks between the two
+   nozzles the router will actually use. Green once both ends resolve, amber
+   while they do not, which is the whole of what this gesture needs to say. */
 function pipePorts(usage){
   const d = ui.drag&&ui.drag.type==="part"&&ui.drag.mode==="pipe" ? ui.drag : null;
   const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null;
   if(!d||!ptr) return;
-  const pair=d.pair;
-  const a = pair ? port(d.part,pair.fa) : prectMid(d.part);
+  const ok = d.fa && d.fb && d.over && portRoom(d.part,usage)[d.fa] && portRoom(d.over,usage)[d.fb];
+  const a = d.fa ? port(d.part,d.fa) : prectMid(d.part);
+  const b = ok ? port(d.over,d.fb) : [ptr.x,ptr.y];
   frame2(d.part); if(d.over) frame2(d.over);
   ctx.save(); ctx.setLineDash([4,4]);
   ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-  ctx.lineTo(pair?pair.pb[0]:ptr.x, pair?pair.pb[1]:ptr.y);
-  ctx.strokeStyle=pair?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.lineTo(b[0],b[1]);
+  ctx.strokeStyle=ok?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
   ctx.restore();
+}
+/* ══ WHERE A DRAGGED MACHINE WOULD LAND ══
+   The move half of the gesture had no picture at all: the part stayed drawn in
+   the cell it came from and the only sign was its own outline going bright, so
+   a drop was aimed blind and a refusal was indistinguishable from a drop the
+   browser never delivered. This is the same proposal the pipe band is - dashed,
+   because nothing has moved yet - and it asks groupFits(), the one predicate
+   moveTo() will ask on release, so green means it WILL land and red means it
+   will not. Red is the whole reason a drop is refused: off the grid, or on top
+   of another machine. Reads gx/gy and writes nothing. */
+function partGhost(){
+  const d = ui.drag&&ui.drag.type==="part"&&ui.drag.mode==="move" ? ui.drag : null;
+  if(!d || (d.gx===d.sx && d.gy===d.sy)) return;
+  const cells=moveCells(d.part,d.gx,d.gy), ok=groupFits(cells);
+  ctx.save(); ctx.setLineDash([4,4]);
+  for(const {q,x,y} of cells){ const r=grect(x,y,q.w,q.h);
+    fillRect(r.x,r.y,r.w,r.h, ok?"rgba(87,211,140,.10)":"rgba(255,90,69,.10)");
+    frame(r.x,r.y,r.w,r.h, ok?C.green:C.red); }
+  ctx.restore();
+}
+/* ══ THE PORTS THAT MOVE SAY SO, AND THEY ARE THE ONLY TARGETS ══
+   Every run end is a port and pipeNozzles() above has already coloured all
+   of them. What this adds is the LABEL and the press, and only where
+   portPath() says there is a side to choose - a pump, a generator, a
+   throttle. The reactor, the pressurizer, a tee and a tank are one node, so
+   they wear their metal joint and offer nothing: clicking one would ask it
+   to be where it already is. That is what keeps this a handful of targets
+   instead of the thirty that made a pegboard of the bench.
+   Pushed AFTER the component loop so the mark wins the hit test over the box
+   it sits on; a press that moves is still a drag, because a click is only a
+   click when the pointer never left. */
+const PORTG=9;
+function pipePortMarks(runs){
+  const seen={};
+  for(const r of runs){ if(!r.rid) continue;
+    for(const e of nozzleEnds(r)){
+      const p = e.end==="a" ? r.a : r.b, f = e.end==="a" ? r.sa : r.sb;
+      const IN=portPath(p,f), [x,y]=e.p, col=portCol(p,f), n=portEnds(p.id,f).length;
+      const bx=x-PORTG/2, by=y-PORTG/2;
+      /* NO OUTLINE ON ANYTHING. The coloured joint pipeNozzles() already drew
+         IS the port; a box round it said nothing the colour did not, and it
+         was drawn once a PORT while the joint is drawn once a PIPE - so a
+         face carrying two runs (the reactor's bottom takes the cold leg and
+         the HPI line) wore two joints and one box, which reads as some ports
+         having a border and some not.
+         A port with no side to choose still says whose it is, per PIPE, and
+         still takes NO widget: a hit target that does nothing would eat the
+         press that starts a pipe drag, and twenty of those is the pegboard
+         this bench already threw out once. */
+      if(!IN){
+        TIP(bx,by,PORTG,PORTG,partName(p)+" PORT",
+          "Where this pipe joins "+partName(p)+", carrying "+n+" pipe"+(n===1?"":"s")+
+          ". This machine is one vessel - every port on it is the same water, so "+
+          "there is no side to move a pipe to.");
+        continue;
+      }
+      // ONE label and ONE target a PORT, not one a pipe: four cold legs
+      // reaching a pump's suction are four pipes on one place, and drawing
+      // the place four times stacked its own label on itself
+      const k=p.id+f; if(seen[k]) continue; seen[k]=1;
+      const w=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid:p.id,face:f});
+      if(hov(w)) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
+      // clear of the pipe, never along it: a horizontal run's joint takes its
+      // label above, a vertical run's takes it to the right
+      const lx = e.flat ? x : x+8, ly = e.flat ? y-7 : y+2.5;
+      txt(portWord(p,f),lx,ly,{size:6.5,color:col,align:e.flat?"center":"left",sp:.4});
+      const word=portWord(p,f,true), other=portWord(p,portOther(IN,f),true);
+      TIP(bx,by,PORTG,PORTG,word+" - "+partName(p),
+        "The "+word+" of "+partName(p)+", carrying "+n+" pipe"+(n===1?"":"s")+
+        ". Click it to move "+(n===1?"that pipe":"them all")+" to the "+other+
+        ". Both of a pump's pipes on one side is a pump plumbed into itself, "+
+        "and it drives nothing.");
+    } }
 }
 // the centre of a part's box, for a band that has no port to leave from yet
 function prectMid(p){ const r=prect(p); return [r.x+r.w/2, r.y+r.h/2]; }
@@ -1844,7 +1934,9 @@ function drawPlant(y0,L,vh,vx,vw){
      shape: a fitting is placed in a CELL now, so nothing has to be aimed at a
      fraction along a pipe and nothing competes with the waypoint grips or the
      nozzles for the press. */
-  if(!L){ pipeGrips(NET);               // where a run runs...
+  if(!L){ partGhost();                  // where a machine would land...
+          pipeGrips(NET);               // ...where a run runs...
+          pipePortMarks(NET);           // ...which side of a machine it is on...
           pipePorts(NET.usage||{}); }   // ...and whether it runs at all
   pipeFitMarks(L,NET);
   for(const t of tags) t();     // every name and value, over the pipework

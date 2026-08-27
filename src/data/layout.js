@@ -535,6 +535,11 @@ const fittingMass=()=>{ let m=0;
                and an edge to "t" would turn the relief header into a live,
                permanently-open pressurizer-to-tank path - FIT.relief.g is a
                flat 0 today and nothing else shuts that door.
+     na/nb     one word, five characters at most, for each end of that path -
+               what a port on that face IS, so the bench can label the two
+               sides a click moves a run's end between (portPath(), below).
+               On the row that declares the two faces, because the row that
+               owns them is the row that can name them.
      head      true if the internal edge above also carries a pump's head
                (PUMP_H0 * loopPumpCap(loopOf(p.id),...) * ...). Requires
                `internal`; loop membership is read off the run graph
@@ -590,7 +595,7 @@ const ROLE = {
      `a` is the INLET on a shell path - the feed regulating valve's own head
      is signed off it (netBuild()), so the two faces are not interchangeable
      even though the conductance between them is. */
-  sg:    {internal:[{a:"l", b:"b", kind:"comp"}, {a:"r", b:"t", kind:"comp"}], fixed:null, fold:null, mu:0.60, sgtr:true,
+  sg:    {internal:[{a:"l", b:"b", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer"},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
   /* ONE PUMP. There is no feedwater pump role: what makes a pump a feedwater
      pump is where it is piped, which the graph already answers (primaryPump()
@@ -600,7 +605,7 @@ const ROLE = {
      is PINNED rather than dynamic: an internal t<->b edge is only correct if
      the runs land on t and b, and face() used to resolve those off wherever
      cond happened to sit. */
-  pump:  {internal:{a:"t", b:"b", kind:"pump", head:true}, fixed:null, fold:null, mu:0.75, sgtr:false,
+  pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"SUCT", nb:"DISCH", la:"SUCTION", lb:"DISCHARGE"}, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{t:4, b:1}, thermal:"none"},
   turb:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:4, b:1}, thermal:"none"},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
@@ -643,7 +648,7 @@ const ROLE = {
      rotation knob to get wrong.
      ports is 2 a face: a fitting is a spool piece, and two runs a face is
      what lets one sit in-line and still be branched off. */
-  fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true}], fixed:null,
+  fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true, na:"A", nb:"B", la:"SIDE A", lb:"SIDE B"}], fixed:null,
           fold:p=>fitModeOf(p.id)==="tee" ? ["l","r","t","b"] : {t:"l", b:"r"},
           mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none"},
 };
@@ -708,9 +713,10 @@ function buildLayout(){
 }
 // a control strip needs more than a 2-cell component's 92px width, so the
 // control room gives each grid ROW extra height at the bottom - as much as
-// the widest strip ending in that row. Null on the bench (no live state), and
-// reset before every layoutMetrics() measure so pipe/thermosiphon figures
-// stay identical on both screens regardless of what the control room drew.
+// the widest strip ending in that row. Set on BOTH screens - the bench reserves
+// the strip's room so nothing changes size at commissioning - so nothing may
+// assume a row is CELL tall. Only layoutMetrics() stands it down, so
+// pipe/thermosiphon figures stay identical whatever the control room drew.
 let BANDS=null;                                  // per-row extra height, or null
 function rowTop(r){ let y=GY+r*CELL;
   if(BANDS) for(let i=0;i<r;i++) y+=BANDS[i]||0;
@@ -724,9 +730,17 @@ function rowAt(py){
   return GH+Math.floor((py-rowTop(GH))/CELL);
 }
 const gridH = () => rowTop(GH)-GY;
+// a plant-space point in FRACTIONAL grid units - rowAt() gives the row and the
+// row's own height gives the fraction inside it, so a control-room band never
+// leaks into an answer the bench has to agree with
+const gridPt=pt=>{ const r=rowAt(pt[1]), t=rowTop(r), h=rowTop(r+1)-t;
+  return {x:(pt[0]-GX)/CELL, y:r+(pt[1]-t)/h}; };
 const PXc=g=>GX+g*CELL, PYc=g=>rowTop(g);
-// height is not p.h*CELL: the rows it spans may carry control bands
-const prect=p=>({x:PXc(p.x), y:rowTop(p.y), w:p.w*CELL, h:rowTop(p.y+p.h)-rowTop(p.y)});
+// height is not h*CELL: the rows it spans may carry control bands. Takes cells
+// rather than a part, so a drop PREVIEW can be measured for a footprint no part
+// occupies yet - the same box the part would get, asked one step earlier
+const grect=(x,y,w,h)=>({x:PXc(x), y:rowTop(y), w:w*CELL, h:rowTop(y+h)-rowTop(y)});
+const prect=p=>grect(p.x,p.y,p.w,p.h);
 function port(p,side,slot=0,n=1,shift=0){
   const {x,y,w,h}=prect(p);
   const len = (side==="t"||side==="b") ? w : h;
@@ -807,6 +821,27 @@ function bendAt(a,b,vert,skip,reg){
 function face(p,q){
   const a=cen(p), b=cen(q), dx=b.x-a.x, dy=b.y-a.y;
   return Math.abs(dx)>Math.abs(dy) ? (dx>=0?"r":"l") : (dy>=0?"b":"t");
+}
+/* ══ WHICH NOZZLE THE HAND POINTED AT ══
+   face() above is a DIRECTION between two box centres; this is the nearest
+   EDGE of one box to a point inside it, normalised by the box's own half-span
+   so a 2x4 vessel's right edge is not lost to its long axis. Not the same
+   question, so not the same body - collapsing them would cost face() its
+   meaning. GRID units, never pixels: BANDS makes rows unequal on the control
+   room, so a pixel-space answer would depend on which screen is open, the
+   same rule elevation already follows. Restricted to the faces the role
+   declares, and it falls through to the next-nearest rather than refusing -
+   the hand aimed at a box, and every box with a port has one to give. */
+function faceAt(p,gx,gy){
+  const R=ROLE[p.role], ps=R&&R.ports;
+  if(!ps) return null;
+  const any=ps["*"]!=null;
+  const c=cen(p), nx=(gx-c.x)/(p.w/2), ny=(gy-c.y)/(p.h/2);
+  const rank=Math.abs(nx)>Math.abs(ny)
+    ? [nx>=0?"r":"l", ny>=0?"b":"t", nx>=0?"l":"r", ny>=0?"t":"b"]
+    : [ny>=0?"b":"t", nx>=0?"r":"l", ny>=0?"t":"b", nx>=0?"l":"r"];
+  for(const f of rank) if(any || ps[f]!=null) return f;
+  return null;
 }
 
 /* a bend that lands on one of its own endpoints emits that point twice, and a
@@ -992,7 +1027,11 @@ function pipeNetwork(){
        flow by accident, and this would rot the same way. rid: which D.run
        entry this is - CONNECT's own DISCONNECT offer needs it to name what
        to delete, the same way a fitting's own id already does. */
-    net.push({k:c.k,key:c.key,rid:c.rid,pts:r.pts,legs:r.legs,wps:r.wps,wp:true,nz:[true,true]});
+    // a,sa,b,sb: whose end each end of pts IS. The bench draws a mark on the
+    // ports that can move (portPath(), above) and has to name the part and
+    // the face to ask; pts alone is two coordinates with no owner.
+    net.push({k:c.k,key:c.key,rid:c.rid,pts:r.pts,legs:r.legs,wps:r.wps,wp:true,nz:[true,true],
+              a:c.a,sa:c.sa,b:c.b,sb:c.sb});
   }
   // which faces are occupied THIS frame, by "partId+face" - the same tally
   // route()/port() already built to spread N pipes into N slots, exposed
@@ -1043,33 +1082,88 @@ function partAt(pt){
   const gx=Math.floor((pt[0]-GX)/CELL), gy=rowAt(pt[1]);
   return LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h)||null;
 }
-/* ══ BOTH ENDS OF A RUN, OFF THE TWO BOXES THE HAND POINTED AT ══
-   The gesture is "drag from this machine to that machine", so the two
-   COMPONENTS are aimed and the two NOZZLES are not. Which face a run leaves
-   from is a ROUTE question, which D.run has said in its own comment since it
-   existed ("Face selection is ROUTE, not topology") and which the stock hpi
-   and relief runs already answer with af:null/bf:null. So: over every free
-   face of a against every free face of b, take the pair whose ports are
-   nearest each other - the shortest pipe, which is what a hand aiming at two
-   boxes means.
-   This is not the CONNECT offer coming back. That picked the nearest free
-   port to the CLICK and then the nearest free port to THAT, so the far
-   COMPONENT was a guess. Here both components are the player's.
-   null when either side is full - a cancel, never a silent landing on some
-   other machine. The resolved pair is STORED rather than null/null, because
-   face() ignores portRoom() and a stored null could not refuse honestly. */
-function bestFreePortPair(a,b,usage){
-  if(!a||!b||a.id===b.id) return null;
-  const ra=portRoom(a,usage), rb=portRoom(b,usage);
-  let best=null,bd=1e9;
-  for(const fa in ra){ if(!ra[fa]) continue;
-    const pa=port(a,fa);
-    for(const fb in rb){ if(!rb[fb]) continue;
-      const pb=port(b,fb), d=Math.hypot(pa[0]-pb[0],pa[1]-pb[1]);
-      if(d<bd){ bd=d; best={fa,fb,pa,pb}; }
-    }
-  }
-  return best;
+/* ══ WHICH SIDE OF A MACHINE A RUN'S END IS ON, AND HOW IT MOVES ══
+   There is no port PICKER. The pair of nozzles used to be searched for -
+   over every free face of a against every free face of b, nearest wins -
+   and that search is what put the redrawn cold leg on the pump's SUCTION
+   beside the suction it already had: two runs on one node, the head edge
+   left as a dead-end stub, and a plant that circulates nothing. It was also
+   the last survivor of "CONNECT picked the nearest free port", a shape this
+   file has now rejected six times. The hand names the face (faceAt, above)
+   and a click moves it (portFlip, below).
+   portPath() is the ONE predicate for "is there anything to choose here":
+   the internal row a face sits on, or null. A part that declares no path is
+   one node and has no sides - clicking the reactor's nozzle would be asking
+   it to be somewhere it already is. A generator declares TWO paths and a
+   port flips within its own: tubes to tubes, shell to shell, never across.
+   Which side of a generator a run is on stays a fact about the FACE, which
+   is what runKindFor() already reads to tell a cold leg from a feed line. */
+const roleIns=p=>{ const R=ROLE[p.role]; if(!R||!R.internal) return [];
+  return Array.isArray(R.internal)?R.internal:[R.internal]; };
+function portPath(p,f){
+  if(!p||f==null) return null;
+  const IN=roleIns(p).find(q=>q.a===f||q.b===f);
+  // ...and a path whose two ends FOLD onto one node is not a choice either.
+  // The role says a fitting has an l<->r path, but the fold is per INSTANCE:
+  // a tee is one node and a throttle is two, so asking the role alone offered
+  // to move a tee's pipe from the tee to the tee. coreFold() is the one
+  // authority on which faces are the same water, so it is the one asked.
+  if(!IN || coreFold(p.id+IN.a)===coreFold(p.id+IN.b)) return null;
+  return IN;
+}
+/* The word this face wears, or null where there is nothing to say. `long`
+   asks for the spoken name: the short one is a LABEL, sized to sit beside a
+   nozzle on the grid, and a tooltip has room to say SUCTION rather than
+   SUCT. One helper, because the mark and its tooltip must never disagree
+   about which side they are describing. */
+function portWord(p,f,long){ const IN=portPath(p,f); if(!IN) return null;
+  return IN.a===f ? (long?IN.la:IN.na) : (long?IN.lb:IN.nb); }
+const portOther=(IN,f)=>IN.a===f?IN.b:IN.a;
+/* ══ A PORT BELONGS TO THE COMPONENT, NOT TO THE RUN ══
+   It is (part, face), and everything that lands on it is on it: a pump's
+   suction is ONE place however many pipes reach it. Asked per run end
+   instead, a feed pump at four loops drew SUCT four times over itself and
+   offered four stacked handles that each moved a quarter of the same port.
+   THE ONLY WRITER OF af/bf AFTER THE DRAG, and it writes the FACE rather
+   than some second, invisible notion of which node a port taps: the three
+   readers of af/bf (nodeGraph, the loop walk, pipeNetwork) are one line
+   repeated, so moving the face moves the node, the route, the key and the
+   picture together and they cannot come to disagree.
+   Refuses when the far side cannot take them all - portRoom()'s standing
+   answer asked N times, not a new rule. */
+function portEnds(id,f){
+  const out=[];
+  for(const rid in D.run){ const e=D.run[rid];
+    if(e.a===id && e.af===f) out.push([rid,"a"]);
+    if(e.b===id && e.bf===f) out.push([rid,"b"]); }
+  return out;
+}
+function portFlip(id,f){
+  const p=LAY.parts.find(q=>q.id===id), IN=portPath(p,f);
+  if(!IN) return false;
+  const to=portOther(IN,f), here=portEnds(id,f), there=portEnds(id,to);
+  if(!here.length && !there.length) return false;
+  /* IT IS AN EXCHANGE, NOT A MOVE, AND THAT IS WHY IT CANNOT MERGE.
+     Moved, the RCP's discharge landed on a suction that already had a pipe:
+     both ends on one node, the two ports reading as CONNECTED, the head edge
+     left a dead-end stub and the machine quietly no longer a pump - the very
+     fault this toggle exists to make visible. Refusing instead would have
+     made the control dead, because on a finished plant EVERY internal path
+     has both its ends piped, so nothing could ever move. Swapping is the one
+     rule that is neither: the two sides trade pipes, so flipping an RCP asks
+     "which way round is this pump" and a side with nothing on it makes the
+     swap a plain move, with no second branch to write. */
+  const room=(face,n)=>{ const R=ROLE[p.role].ports;
+    const cap=R["*"]!=null?R["*"]:R[face];
+    return cap!=null && n<=cap+PORT_SPARE; };
+  if(!room(to,here.length) || !room(f,there.length)) return false;
+  const put=(list,face)=>{ for(const [rid,end] of list){ const e=D.run[rid];
+    if(end==="a") e.af=face; else e.bf=face;
+    // addRun() canonicalises by (id, face), and a run joining a part to
+    // itself is the one shape a flip can leave sorted backwards
+    if(e.a===e.b && e.bf<e.af){ const t=e.af; e.af=e.bf; e.bf=t; } } };
+  put(here,to); put(there,f);
+  return true;
 }
 /* ══════════ D.run: A CONNECTION IS AUTHORED, A ROUTE IS COMPUTED ══════════
    addRun()/removeRun() are the CONNECT/DISCONNECT half of Stage 3a, the
@@ -1376,10 +1470,16 @@ function groupFits(cells){
   }
   return true;
 }
+/* WHAT A MOVE WOULD FILL, asked before it happens: the part plus everything
+   pinned to it. The drag reads it to know what is riding along (a part's own
+   pinned child is not something to pipe to) and the bench reads it to draw the
+   landing preview, so the picture and the move can never disagree about where
+   the group is going. */
+const moveCells=(p,nx,ny)=>[{q:p,x:nx,y:ny}].concat(
+  pinnedTo(p).map(q=>({q,x:nx+q.pin.dx,y:ny+q.pin.dy})));
 function moveTo(p,nx,ny){
   if(p.pin) return false;
-  const cells=[{q:p,x:nx,y:ny}].concat(
-    pinnedTo(p).map(q=>({q,x:nx+q.pin.dx,y:ny+q.pin.dy})));
+  const cells=moveCells(p,nx,ny);
   if(!groupFits(cells)) return false;
   /* A tank is rebuilt from D.tanks on every buildLayout(), so its cell has to
      land back there or the move is undone by the next unrelated rebuild.
@@ -1408,9 +1508,15 @@ function freeAdj(p,g){
 }
 function layoutMetrics(){
   if(!LAY||layFit!==laySrcSig()) buildLayout();
-  // measure the design, not the view: drawPlant() sets the bands again
-  // straight after this returns, and nothing measures between the two
-  BANDS=null;
+  /* Measure the DESIGN, not the view - and hand the view back exactly as it
+     was found. This used to just null BANDS and walk away, on the grounds that
+     drawPlant() sets them again straight after; true of drawPlant's own call
+     and of no other. The rail sync, the bench's warning list and step() all
+     measure too, and each of them left every row 46 px tall until the next
+     frame repainted - so a pointer answered in between got a row index counted
+     off the wrong pitch. A drag ghost drawn from one flashed rows below the
+     hand. A measure is not a mode. */
+  const bands0=BANDS; BANDS=null;
   const P_=LAY.parts, id=k=>P_.find(q=>q.id===k), core=id("core"), cc=cen(core);
   let head=0, n=0;
   for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
@@ -1499,6 +1605,7 @@ function layoutMetrics(){
      one steam generator from another, and can tell a shut valve from an open
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
+  BANDS=bands0;
   return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};

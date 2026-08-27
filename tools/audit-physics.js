@@ -15,7 +15,7 @@ const M=require('./bundle').headless(
  'pumpCap,totalPumpCap,placePart,removePart,addFitting,addRun,removeRun,fittableList,'+
  'primaryPump,pumpIds,flowPri,flowDemPri,secGensOf,secondaryNode,tankSide,crossTies,'+
  'loopKg,hotMass,turbCount,condCount,roleAlive,mwE,'+
- 'loopOf,loopOfKey,loopPumpCap,portRoom,bestFreePortPair,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
+ 'loopOf,loopOfKey,loopPumpCap,portRoom,faceAt,portPath,portWord,portFlip,portEnds,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
  'runKindFor,buildStockPlumbing,pzrPlumbed,datumPart,designBlocked,designIssues,'+
  'fitModeOf,fitEdgeKey,fittingMass,FIT_MASS,FIT_BORE0,fitTies,fitLoops,resist,NET_COMP_LEN,'+
  'pipeNetwork,act,ctxItemsDesign,'+
@@ -783,6 +783,86 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
   if(!M.pzrLive(M.P().net, M.S()))
     bad('a hand-built surge tee does not read as plumbed');
   console.log(`  hot leg deleted and redrawn, and the whole surge TEE deleted and rebuilt, through the bench: every figure bit-identical (netFlowK ${REF.k}, Tf ${REF.Tf})`);
+}
+{ /* ══ THE DRAG NAMES THE FACE, AND A PORT MOVES ══
+     The case the block above could not make: it redraws with the faces
+     TYPED IN, so the picker that chose them was never exercised at all -
+     bestFreePortPair was in this file's export bag with no caller. What it
+     did, asked for the cold leg, was take core"r" to pump"t", landing both
+     loop runs on the pump's SUCTION: the loop still closed, the head edge
+     became a dead-end stub, netRef went to 1.6e-14 and the core cooked.
+     So this asks the two halves separately. First that the GESTURE works -
+     press on the RCP's bottom edge, release on the reactor's bottom edge,
+     and the plant must circulate; that is what stops the bug being drawable
+     in the first place. Then that the PORT is real: a port is (part, face)
+     and everything landing on it is on it, so flipping the stock pump's
+     discharge onto its suction must pile both loop runs onto one node and
+     collapse the plant, and flipping it back must restore it exactly. That
+     is the toggle wired to the physics, injected as a fault rather than
+     asserted - a predicate nobody has seen fail is not a check.
+     It is deliberately NOT a repair for a mis-drawn pipe: the port carries
+     every pipe on it, so flipping a suction that already has two moves both
+     and the plant is no better. Taking one pipe off is DISCONNECT and draw
+     it again, which is the gesture the first half just proved. */
+  const cell=(p,fx,fy)=>M.faceAt(p,p.x+p.w*fx,p.y+p.h*fy);
+  const at=id=>M.LAY().parts.find(q=>q.id===id);
+
+  set({}); const REF={net:M.P().netRef, k:M.netFlowK(M.S())};
+  const rid0=ridOf("core","pump0");
+  if(!rid0) bad('no run joins the reactor and the RCP');
+  delete D.run[rid0];
+  const fa=cell(at("pump0"),0.5,0.95), fb=cell(at("core"),0.5,0.95);
+  if(fa!=="b"||fb!=="b") bad(`a press on the bottom edge did not read as face b: ${fa} ${fb}`);
+  M.addRun("pump0",fa,"core",fb);
+  { M.commission(); const s=M.S(), drawn=M.P().netRef;
+    if(!(drawn > REF.net*0.5)) bad(`the RCP discharge redrawn by the drag does not circulate: netRef ${drawn}`);
+    run(s,60);
+    if(s.melt||s.breach||s.trip) bad(`a redrawn cold leg trips or melts the plant: ${s.trip||'melt'}`); }
+
+  set({});
+  if(M.portWord(at("pump0"),"t") !== "SUCT" || M.portWord(at("pump0"),"b") !== "DISCH")
+    bad('the RCP does not label its two sides SUCT and DISCH');
+  if(M.portWord(at("pump0"),"t",true) !== "SUCTION") bad('a port has no spoken name');
+  const sucRid=()=>M.portEnds("pump0","t").map(x=>x[0]).join(),
+        disRid=()=>M.portEnds("pump0","b").map(x=>x[0]).join();
+  const suc0=sucRid(), dis0=disRid();
+  if(!suc0 || !dis0 || suc0===dis0)
+    bad(`the stock RCP does not carry one run a side: SUCT ${suc0} DISCH ${dis0}`);
+  /* A FLIP IS AN EXCHANGE, SO THE TWO SIDES CAN NEVER BECOME ONE. Moving
+     instead put the discharge run onto a suction that already had one: both
+     ends on a single node, the head edge a dead-end stub, the two ports
+     reading as CONNECTED - the very fault the toggle exists to show. */
+  if(!M.portFlip("pump0","b")) bad("the RCP's discharge port refused to flip");
+  M.commission();
+  if(sucRid()!==dis0 || disRid()!==suc0)
+    bad(`flipping a port did not EXCHANGE the two sides: SUCT ${sucRid()} DISCH ${disRid()}`);
+  /* And a pump piped backwards drives nothing, because netCoreFracOf() counts
+     core INFLOW only (`if(qin > 0)`, pipenet.js) - so a reversed loop reads as
+     no circulation rather than as circulation the other way round. That is a
+     property of the reference, pinned here because this toggle is now the one
+     gesture that can reach it. */
+  if(M.P().netRef > REF.net*1e-6)
+    bad(`an RCP with its two pipes exchanged still circulates: netRef ${M.P().netRef}`);
+  if(!M.portFlip("pump0","t")) bad("the RCP's suction port refused to flip back");
+  M.commission();
+  if(sucRid()!==suc0 || disRid()!==dis0)
+    bad('flipping a port back did not put both runs where they started');
+  if(M.P().netRef !== REF.net)
+    bad(`flipping a port there and back is not bit-identical: ${REF.net} -> ${M.P().netRef}`);
+  /* And a port with nothing to choose does not offer a choice: the reactor
+     folds r and b onto one node, so both its faces are the same water and a
+     click would be asking it to be where it already is. */
+  if(M.portPath(at("core"),"b")) bad('the reactor offers a port toggle it cannot honour');
+  if(!M.portPath(at("pump0"),"t")) bad('the RCP offers no port toggle');
+  /* And a fold is per INSTANCE, so the role cannot answer this alone: the
+     same box offers nothing as a tee (all four faces one node - moving a
+     pipe from the tee to the tee) and two sides as a throttle. Asking
+     ROLE.internal without coreFold() offered the tee's port a flip. */
+  { const tee=teeOf();
+    if(M.portPath(at(tee),"l")) bad('a tee offers a port toggle across its own single node');
+    D.fittings[tee].mode='throttle'; M.layoutMetrics();
+    if(!M.portPath(at(tee),"l")) bad('the same box as a throttle offers no port toggle'); }
+  console.log(`  the drag names the face (bottom edge -> "b", the redrawn cold leg circulates), and a PORT is (part, face): flipping the RCP's DISCH onto its SUCT piles both loop runs on one node and stops the plant, and flipping back moves both of them home`);
 }
 { /* ══ A HAND-DRAWN PRESSURIZER LINE IS A SURGE LINE ══
      Port to port rather than tapped, which is the OTHER thing a player can
