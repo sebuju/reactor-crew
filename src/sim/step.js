@@ -29,12 +29,6 @@ function commission(){
      condK:f.condK, pzrK:D.pzr*L.pzrK,
      flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod,
-     /* Stage 5d: boroninj/efw/catcher used to be the D flag itself - each is
-        a placed part now (layout.js), so what P carries is whether that
-        part actually made it onto the grid this commission, off LAY.parts
-        (already rebuilt by layoutMetrics() above), not off the flag that
-        only decided whether buildLayout() put it there. */
-     boroninj:LAY.parts.some(p=>p.role==="boroninj"), efw:LAY.parts.some(p=>p.role==="efw"),
      catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
      turbFit:D.turbFit, condFit:D.condFit, fit:{...D.fit},
      loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
@@ -138,10 +132,13 @@ const AUTOSYS={
     fit:()=>true,
     tip:"Drops turbine load to 5% the instant the reactor trips, so the turbine cannot draw heat out of a shut-down core. Bypass it and load stays wherever you left it right through a scram.",
     warn:"A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop."},
-  efw:{part:"feed",label:"EMERG FEED",ann:"EMERG FEED BYP",name:"EMERGENCY FEEDWATER",
-    fit:()=>P.efw,
-    tip:"Feeds the steam generator by itself after a trip, so decay heat still has somewhere to go. Bypass it and it will not start.",
-    warn:"Nothing feeds the steam generator after a trip. Decay heat has no sink but the loop itself."},
+  /* THERE IS NO "EMERGENCY FEEDWATER" ROW HERE, and that is the point. It was
+     one named system mounted on the FEED PUMP - a switch on a component that
+     was not part of it - standing in for what is really a rule on a tank. A
+     tank carries its own arm switch on its own strip (s.tankByp, ACT.tankByp),
+     so two reserves can be armed independently and neither is hosted on
+     somebody else's box. Same move porv made when a relief valve became a
+     fitting; this finishes it. */
   bkp:{part:"bkp",label:"BACKUP",ann:"BACKUP PWR BYP",name:"BACKUP POWER",
     fit:()=>P.backup>0,
     tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
@@ -316,8 +313,8 @@ const DMGFX={
   bkp :{msg:"BACKUP POWER HIT",
     why:"Your emergency supply is gone. A blackout now means natural circulation only.",
     hit:s=>s.bkpLost=true, fix:s=>s.bkpLost=false},
-  hpi :{msg:"HPI TANK HIT",
-    why:"Emergency injection is unavailable. You cannot refill a leaking loop.",
+  tank:{msg:"TANK HIT",
+    why:"That tank's line is severed. Whatever it held is no longer reaching the loop.",
     hit:null, fix:null},
   pump:{msg:"COOLANT PUMP HIT",
     why:"That pump is dead. Loop flow drops by its share and thermal margin goes with it.",
@@ -336,7 +333,17 @@ const DMGFX={
     hit:null, fix:null}
 };
 const DMGANY={msg:"EQUIPMENT HIT", why:"A component has been knocked out.", hit:null, fix:null};
-const dmgFx = id => DMGFX[id] || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(k))] || DMGANY;
+/* WHAT a component is comes first, then its id, then the id-prefix fallback.
+   Role first because a tank's id is a slot number the player may rename and a
+   prefix match on it would find nothing - and because "what happens when this
+   is hit" is a fact about the kind of thing it is. Every part that matched by
+   prefix before (pump0, sg0) has a role of the same name, so nothing else
+   moves. */
+const dmgFx = id => {
+  const p = LAY.parts.find(q=>q.id===id);
+  return (p && DMGFX[p.role]) || DMGFX[id]
+      || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(k))] || DMGANY;
+};
 
 /* A hit is sim state and a scenario command, not a screen act, which is why it
    lives here rather than in control-room.js where the FAULTS button is.
@@ -600,23 +607,18 @@ const H_FG=1510;          // kJ/kg, latent heat at the secondary's ~6.9 MPa
 const SGL_SET=50;         // %, the level the feed controller holds
 const FEED_TAU=30;        // s, how fast feedwater walks a level error out
 const FEED_HURT=0.25;     // DMGFX.feed's own promise: "feedwater down to a quarter"
-const EFW_FRAC=0.15;      // emergency feed delivers this much of the rated steam rate
 /* Below this the tubes are uncovered and the generator stops being a heat sink.
    It was already the threshold the mimic's dry-out pulse and the LOW banner
    used; making removal read the same number is what closes the loop. */
 const SG_DRY=25;          // %
-/* Hotwell level at commissioning. Half full: it has to be able to fall (a
-   feed pump drawing on nothing) and to rise (a tube rupture filling it), and
-   a level that starts at either end can only do one of them. */
-const HOT0=50;
-/* Hotwell level below which the feed pump starts losing suction, %. A pump
-   does not run cleanly to the last drop; this is the taper, and it is above
-   the hard mass limit rather than instead of it. */
+/* Level below which a feed pump starts losing suction, %. A pump does not run
+   cleanly to the last drop; this is the taper, and it is above the hard mass
+   limit rather than instead of it. */
 const HOT_NPSH=10;
-/* What the hotwell dump valve passes, in % of hotwell per second. Sized off
-   the plant it serves rather than picked: at the stock plant's steam rate it
-   empties a full hotwell in about a minute, which is fast enough to stay ahead
-   of a tube rupture and slow enough that opening it is a decision. */
+/* What a tank's overboard dump valve passes, in % of that tank per second.
+   Sized off the plant it serves rather than picked: at the stock plant's steam
+   rate it empties a full hotwell in about a minute, which is fast enough to
+   stay ahead of a tube rupture and slow enough that opening it is a decision. */
 const HOT_DUMP=1.6;
 /* Loop volume over pressurizer volume, which is what turns a volumetric
    expansion (% of loop) into a level (% of pressurizer). NOT a free constant:
@@ -687,9 +689,6 @@ const SPILL_FULL=8.0;
    scAt() says where that is, but a pump does not lose all its head inside one
    kelvin. */
 const CAV_SPAN=12;
-// how fast a burst relief tank puts itself on the floor, in % of its own
-// level per second, and what that costs in release per unit dumped
-const DISC_DRAIN=6.0, DISC_REL=0.004;
 // the leak, in % of inventory per second, that takes the pressurizer's
 // authority away entirely - a pinhole barely touches it, a LOCA ends it
 const PZR_LOSE=2.0;
@@ -769,7 +768,7 @@ function resetPlant(){
   const x0=RODX0;
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
-     load:1,loadDem:1,flow:1,flowDem:1,flowNet:1,P:P.P0,lvl:54,inv:100,hpi:false,
+     load:1,loadDem:1,flow:1,flowDem:1,flowNet:1,P:P.P0,lvl:54,inv:100,
      /* one level per generator, keyed by part id like s.sgtrBy - REFILLED by
         step(), never rebuilt, so a renderer may hold it across frames */
      sglBy:Object.fromEntries(sgIds().map(id=>[id,SGL_SET])),
@@ -780,8 +779,6 @@ function resetPlant(){
         still correlations can be differentiated into rates - the expansion
         half is the solve's own surge flow and needs no memory of its own */
      vf0:0, inv0:100,
-     /* condensate, % of hotMass() - the other half of the closed secondary */
-     hotwell:HOT0, hotOver:0, hotDump:false,
      /* One map per relief fitting, keyed like S.valve/S.valveDem - seeded
         from P.fit rather than a fixed set of keys, so a plant with no
         relief path (a legal design choice, see the bench warning in
@@ -804,17 +801,28 @@ function resetPlant(){
      dec:DEC_A.map(a=>a*P.n0), decay:DEC_A.reduce((t,a)=>t+a,0)*P.n0,
      byp:Object.fromEntries(AUTOKEYS.map(k=>[k,false])),
      breach:false,melt:false,trip:"",
-     ev:{}, blackout:false, nat:0, release:0, borInjUsed:false,
-     /* Every tank's level, 0..100, one entry per TANK row (pipenet.js) - a
-        plain object, so snapVal() takes it for free. The relief tank starts
-        clean because nothing has vented yet, and it is still the place a
-        repair party would rather not stand once it is up (radSrc(), rad.js);
-        the HPI tank starts FULL, and can now run out, which it could not
-        when it was an infinite reservoir with a fixed rate. */
-     tank:Object.fromEntries(Object.keys(TANK).map(k=>[k,TANK[k].level0])),
-     /* the relief tank's rupture disc, once it has gone. Latched: a burst
-        disc does not reseat, and what was in the tank is on the floor. */
-     discBurst:false,
+     ev:{}, blackout:false, nat:0, release:0,
+     /* EVERY tank, four plain objects keyed by tank id - so snapVal() takes
+        them for free and adding a tank adds an entry to each rather than a
+        field to S. Nothing here knows what any of these tanks IS.
+          tank      level, 0..100, seeded from the tank's own commissioning level
+          tankOpen  the operator's own valve (an AUTORULE may open it anyway)
+          tankDump  its overboard dump valve
+          tankByp   its own rule, defeated - the arm switch every automatic
+                    system has, on the tank instead of on a system row
+          burstBy   its rupture disc, once gone. Latched: a burst disc does
+                    not reseat, and what was in the tank is on the floor.
+          tankOver  what it is spilling past full, kg/s - a readout */
+     tank:Object.fromEntries(tankIds().map(k=>[k,D.tanks[k].level])),
+     tankOpen:Object.fromEntries(tankIds().map(k=>[k,false])),
+     tankDump:Object.fromEntries(tankIds().map(k=>[k,false])),
+     tankByp:Object.fromEntries(tankIds().map(k=>[k,false])),
+     burstBy:Object.fromEntries(tankIds().map(k=>[k,false])),
+     tankOver:{},
+     /* what each tank's own edge is carrying, % of loop inventory per second,
+        tank-out-positive - a readout, REFILLED never rebuilt, because a
+        renderer holds it across frames to meter that tank's own line */
+     tankRate:{},
      /* the controller's tune, copied from the commissioning constants so a
         RESET PLANT puts the operator's experiments back where they started */
      split:false, reGang:false,
@@ -1072,7 +1080,18 @@ function step(dt){
      nothing from a tank charged to 4.5 MPa, and a depressurised one takes a
      surge, which is the entire mechanic high pressure injection is named
      after. Signed, because the same edge run backwards fills the tank. */
-  const inj = invRate(netOut.qTank||0);
+  const qTankBy = netOut.qTankBy || {};
+  /* WHAT IS BEING INJECTED, over every primary tank at once - the positive
+     half of the same signed figure the level loop below integrates. Positive
+     only: a tank being FILLED is not injecting, and summing the two together
+     would let one tank hide behind another. Nothing here names a tank. */
+  let inj = 0;
+  for(const k in s.tankRate) if(!D.tanks[k]) delete s.tankRate[k];
+  for(const tid of tankIds()){
+    const q = D.tanks[tid].side==="primary" ? invRate(qTankBy[tid]||0) : 0;
+    s.tankRate[tid] = q;
+    if(q>0) inj += q;
+  }
   /* What is left of the pressurizer's authority. It only sets pressure while
      the loop is a closed boundary: past a real leak there is no steam bubble
      to work against, and this is what used to be a hard on/off gated on
@@ -1222,7 +1241,11 @@ function step(dt){
      being drained of heat by a machine that should have shed it. */
   const Tprog = tProg(s);
   const feedOK = !s.dmgParts.includes("feed");
-  const dump = s.scrammed ? clamp((s.Tavg-Tprog)*0.02,0,P.bypass)*(feedOK?1:.25)+(autoLive("efw")?0.08:0) : 0;
+  /* A secondary reserve that is armed adds a small dump while the reactor is
+     scrammed, which is what runs the loop a few degrees cooler after a trip.
+     It asks the TANKS, not a system row - and reads identically on a stock
+     plant, where exactly one tank carries a rule. */
+  const dump = s.scrammed ? clamp((s.Tavg-Tprog)*0.02,0,P.bypass)*(feedOK?1:.25)+(tankRuleAny(s,"secondary")?0.08:0) : 0;
   const vNow = clamp(s.vf,0,1.5);
   /* The void term is steam mixed INTO the water and bottoms out at 15%, because
      a bubbly loop still carries heat. Inventory is the other question entirely -
@@ -1266,6 +1289,7 @@ function step(dt){
        straight, at the same primary-into-containment scale an SGTR leak
        already uses: what has left the loop is loose in the compartment's
        air, not behind a wall the tank would have been. */
+    let ventLoose = 0;
     for(const fid of reliefFitIds()){
       const set=reliefSet(fid);
       if(!s.reliefOpen[fid] && porvLive(fid) && s.P > P.P0*set.lift){
@@ -1280,27 +1304,49 @@ function step(dt){
       const rate = Math.max(0, invRate((netOut.reliefBy && netOut.reliefBy[fid]) || 0));
       const q = rate*dt;
       vented += q;
-      const tid = P.net.fitTarget && P.net.fitTarget[fid];
-      if(tid && TANK[tid]) s.tank[tid] = clamp(s.tank[tid] + q*100/TANK[tid].vol, 0, 100);
-      else s.release = Math.min(100, s.release + (rate/SGTR_RATE)*0.02*P.dose*dt);
+      /* A fitting that reaches a TANK fills nothing HERE: that tank's own
+         node carries the identical current, and the level loop below charges
+         it off the solve (qTankBy). Adding it a second time here would
+         double it, and would miss any vent path that is not a relief
+         fitting. net.fitTarget survives for exactly one question - is there
+         a tank to catch this at all, or is it going straight into the room. */
+      if(!(P.net.fitTarget && P.net.fitTarget[fid])){
+        s.release = Math.min(100, s.release + (rate/SGTR_RATE)*0.02*P.dose*dt);
+        /* ONLY the vent that reaches no tank is charged to inventory here.
+           What a valve puts INTO a tank leaves the loop through that tank's
+           own node, which the per-tank loop below already integrates off the
+           same solve - subtracting it twice would drain the loop at double
+           the rate the network actually found. `vented` stays the TOTAL,
+           because the pressurizer's blowdown is about every hole alike. */
+        ventLoose += q;
+      }
     }
-    s.inv -= vented;
+    s.inv -= ventLoose;
   }
-  /* THE RUPTURE DISC. At TMI-2 it burst and put primary coolant on the
-     containment floor, and this game already teaches TMI-2 and already makes
-     a full relief tank a radiation source - the one piece missing was the
-     pressure that connects them. Past the setpoint the tank is an opening to
-     containment: it drains onto the floor and what was contained is now in
-     s.release. Latched, because a burst disc does not reseat. */
-  if(!s.discBurst && tankP(s,"reltk") >= RELTK_DISC){
-    s.discBurst = true;
-    logE("alarm","RELIEF TANK DISC BURST",
-      "The relief tank filled and its rupture disc let go. Primary coolant is on the containment floor and its activity is in the air, not behind a wall. This is the TMI-2 sequence.");
-  }
-  if(s.discBurst && s.tank.reltk > 0){
-    const out = Math.min(s.tank.reltk, DISC_DRAIN*dt);
-    s.tank.reltk -= out;
-    s.release = Math.min(100, s.release + out*DISC_REL*P.dose*dt);
+  /* THE RUPTURE DISC, on any tank fitted with one. At TMI-2 it burst and put
+     primary coolant on the containment floor, and this game already teaches
+     TMI-2 and already makes a full tank of contaminated water a radiation
+     source - the one piece missing was the pressure that connects them. Past
+     its own setpoint the tank is an opening to containment: it drains onto
+     the floor and what was contained is now in s.release. Latched, because a
+     burst disc does not reseat.
+     What it dumps costs release in proportion to the ACTIVITY of what was in
+     it (FLUID), so a burst tank of clean water makes a mess and not an
+     accident - which is the difference the old flat coefficient could not
+     express, because it only ever ran on one tank. */
+  for(const tid of tankIds()){
+    const b = D.tanks[tid].burst;
+    if(!b) continue;
+    if(!s.burstBy[tid] && tankP(s,tid) >= b.at){
+      s.burstBy[tid] = true;
+      logE("alarm",D.tanks[tid].name+" DISC BURST",
+        "The tank filled and its rupture disc let go. What was in it is on the containment floor and its activity is in the air, not behind a wall. This is the TMI-2 sequence.");
+    }
+    if(s.burstBy[tid] && s.tank[tid] > 0){
+      const out = Math.min(s.tank[tid], b.drain*dt);
+      s.tank[tid] -= out;
+      s.release = Math.min(100, s.release + out*b.rel*tankFluid(tid).act*P.dose*dt);
+    }
   }
   s.inv -= spill*dt;
   /* THE PRESSURIZER'S BUBBLE BLOWS DOWN AT A RATE SET BY HOW MUCH IS ACTUALLY
@@ -1328,9 +1374,28 @@ function step(dt){
      surge, which is the entire mechanic high pressure injection is named
      after. Signed, because the same edge run backwards fills the tank. */
   s.injRate = inj;
-  s.inv += inj*dt;
-  s.tank.hpi = clamp(s.tank.hpi - inj*dt*100/TANK.hpi.vol, 0, 100);
-  if(s.hpi && inj>0) s.fatigue += 0.35*dt*clamp(inj/1.6,0,2);
+  /* EVERY PRIMARY TANK, off its OWN solved edge - not just the one an
+     operator used to be able to switch on. Tank-out-positive
+     (netCoreFracOf), so a tank being filled reads negative here and the same
+     subtraction raises it: "the disc bursts" and "the tank runs dry" really
+     are one range seen at two ends.
+     What each one carries into the loop is charged to s.inv, and what its
+     FLUID is worth in reactivity to the boron the loop is carrying. A tank of
+     water has FLUID.boron 0, so the term is unconditional and nothing here
+     asks which tank is the boron tank. Both s.boron and s.boronDem move,
+     because the boron walk is an actuator and would otherwise dilute the
+     poison straight back out at BOR_OUT. */
+  for(const id of tankIds()){
+    const t = D.tanks[id];
+    if(t.side !== "primary") continue;
+    const out = invRate(qTankBy[id]||0);              // % of loop inventory per second, tank-out-positive
+    const dPct = out*dt;
+    s.tank[id] = clamp(s.tank[id] - dPct*100/t.vol, 0, 100);
+    s.inv += dPct;
+    const bw = FLUID[t.fluid].boron;
+    if(bw && dPct>0){ s.boron -= bw*dPct; s.boronDem -= bw*dPct; }
+  }
+  if(inj>0) s.fatigue += 0.35*dt*clamp(inj/1.6,0,2);
   /* ── a tube rupture, at whatever the differential says ──
      Bring the primary down to the secondary and it stops, which is the actual
      operator answer to an SGTR and was not reachable while this was a flat
@@ -1445,59 +1510,84 @@ function step(dt){
      leave the mimic drawing a generator that is no longer on the plant. */
   const M = sgMass(), ids = sgIds();
   for(const id in s.sglBy) if(!sgW.hasOwnProperty(id)) delete s.sglBy[id];
-  let boiled = 0, fed = 0;                       // kg/s, summed for the hotwell below
+  /* ── WHERE FEEDWATER COMES FROM ──
+     Two pools, told apart by a RULE and never by a name. A tank whose valve
+     stands open all the time IS the circuit - condensate comes back to it and
+     the feed pumps draw on it. A tank that has to be opened is a RESERVE, and
+     its own AUTORULE decides when: EFW starts on low generator level, not on
+     being armed, because an emergency pump feeding a healthy generator
+     overfills it - measured at 82 % on a once-through unit before the gate
+     went in. Give a second tank the same rule and both feed; give the reserve
+     "always" and it simply joins the circuit. */
+  const circ = [], res = [];
+  for(const id of secTankIds())
+    (D.tanks[id].auto === "always" ? circ : res).push(id);
+  const poolKg = list => tankPoolKg(s,list);
+  const poolPct = list => tankPoolPct(s,list);
+  /* A pump does not run cleanly to the last drop, and it cannot send on water
+     that is not there. Two limits, and both are ceilings rather than terms:
+     HOT_NPSH tapers delivery over the last stretch, and the pool mass is the
+     hard one, shared between the generators drawing on it. Neither binds on a
+     healthy plant (the taper is 1 above HOT_NPSH), which is why the setpoint
+     still holds exactly. This is the SECOND way to lose feedwater; the first
+     is the pump itself. */
+  const circPct = poolPct(circ), circAvail = poolKg(circ);
+  const suction = clamp(circPct/HOT_NPSH,0,1);
+  /* A reserve is open only if its own rule says so, and only if that rule has
+     not been bypassed on that tank - tankOpen() asks both. */
+  const resOpen = res.filter(id=>tankOpen(s,id));
+  const resAvail = poolKg(resOpen);
+  let boiled = 0, fedCirc = 0, fedRes = 0;       // kg/s, summed for the mass balance below
   if(M > 0) for(const id of ids){
     if(s.sglBy[id]===undefined) s.sglBy[id]=SGL_SET;                 // a generator placed mid-run starts full
     const lvl = s.sglBy[id];
     const steamOut = removal*sgW[id]*P.rated*1000/H_FG;              // kg/s into THIS generator
-    /* A feed pump cannot send on water that is not in the hotwell, and it
-       loses suction before the hotwell is literally empty. Two limits, and
-       both are ceilings rather than terms: HOT_NPSH tapers delivery over the
-       last stretch, and `avail` is the hard one - what is actually in there,
-       shared between the generators drawing on it. Neither binds on a healthy
-       plant (the taper is 1 above HOT_NPSH), which is why the setpoint still
-       holds exactly. This is the SECOND way to lose feedwater; the first is
-       the pump itself. */
-    const suction = clamp(s.hotwell/HOT_NPSH,0,1);
-    const avail = s.hotwell/100*hotMass()/Math.max(dt,1e-9)/Math.max(ids.length,1);
-    const feedIn = Math.min(avail,
-                   suction * (feedOK?1:FEED_HURT) * Math.max(0,
-                     steamOut + (SGL_SET-lvl)/100*M/FEED_TAU))
-                 + (autoLive("efw") && lvl<SG_DRY ? EFW_FRAC/ids.length*P.rated*1000/H_FG : 0);
-    s.sglBy[id] = clamp(lvl + 100*(feedIn-steamOut)/M*dt, 0, 100);
-    boiled += steamOut; fed += feedIn;
+    /* ONE feed controller. Both pools answer to it - an emergency feed pump is
+       a feed pump - so what a reserve delivers is what THIS generator is
+       short, drawn against what is actually left in the reserve, rather than
+       a flat fraction of rated steam that scaled with a number the tank has
+       never had anything to do with. */
+    const want = Math.max(0, steamOut + (SGL_SET-lvl)/100*M/FEED_TAU);
+    const share = Math.max(dt,1e-9)*Math.max(ids.length,1);
+    const fromCirc = Math.min(circAvail/share, suction*(feedOK?1:FEED_HURT)*want);
+    const fromRes  = Math.min(resAvail/share, Math.max(0, want - fromCirc));
+    s.sglBy[id] = clamp(lvl + 100*(fromCirc+fromRes-steamOut)/M*dt, 0, 100);
+    boiled += steamOut; fedCirc += fromCirc; fedRes += fromRes;
   }
-  /* ── the hotwell: the other half of a closed secondary ──
+  /* ── the secondary as ONE closed system ──
      Steam raised leaves a generator, turns the turbine, condenses, and
-     arrives here; feedwater leaves here and goes back. In a healthy plant
-     the two cancel exactly and this sits still, which is why nothing pinned
-     against a healthy plant moved when it landed.
-
-     It is NOT a TANK row, and that is a deliberate deviation from the plan.
-     A TANK row is a hydraulic object - an elevation, a node and one edge into
-     the solve - and the secondary still gets no solve, only a boundary. A
-     hotwell with a node would be inventing the very thing CLAUDE.md says is
-     not there. What it is instead is a MASS balance, in the same kilograms
-     the generators are counted in, so the secondary conserves water as one
-     closed system and a leak into it has to show up somewhere.
+     arrives back in the circuit; feedwater leaves the circuit and goes back.
+     In a healthy plant the two cancel exactly and the level sits still, which
+     is why nothing pinned against a healthy plant moved when it landed.
 
      A tube rupture is where it stops being decorative: that is primary water
      crossing into the secondary, so the secondary total GROWS, and the water
      ends up here. It is the real operational problem at an SGTR. loopKg() is
-     the one bridge between invRate()'s % of loop inventory and these kg. */
-  { const H = hotMass();
-    const sgtrKg = Math.max(0, s.sgtrRate)/100*loopKg();
-    const net = boiled - fed + sgtrKg;
-    /* The operator's own valve. It is the answer to a tube rupture filling the
-       hotwell with primary water, and it never refuses: open it on a healthy
-       plant and you dump the condensate the feed pumps need. */
-    const dumped = s.hotDump ? HOT_DUMP*Math.min(s.hotwell,100)/100 : 0;   // %/s
-    const raw = s.hotwell + (100*net/H - dumped)*dt;
-    /* Past full it overflows, and the overflow is gone - a hotwell that
-       silently clamped would swallow a tube rupture's whole inventory and
-       report nothing. What overflows an SGTR's hotwell is contaminated. */
-    s.hotOver = raw > 100 ? (raw-100)/100*H/Math.max(dt,1e-9) : 0;    // kg/s
-    s.hotwell = clamp(raw, 0, 100);
+     the one bridge between invRate()'s % of loop inventory and these kg.
+
+     A RESERVE is one-way: what leaves it does not come back. */
+  { const sgtrKg = Math.max(0, s.sgtrRate)/100*loopKg();
+    const netKg = boiled - fedCirc + sgtrKg;
+    const circCap = (()=>{ let c=0; for(const id of circ) c+=tankKg(id); return c; })();
+    for(const id in s.tankOver) delete s.tankOver[id];
+    for(const id of secTankIds()){
+      const cap = Math.max(1, tankKg(id));
+      /* The operator's own valve. It is the answer to a tube rupture filling
+         the hotwell with primary water, and it never refuses: open it on a
+         healthy plant and you dump the condensate the feed pumps need. */
+      const dumped = s.tankDump[id] ? HOT_DUMP*Math.min(s.tank[id],100)/100 : 0;   // %/s
+      /* Every tank in a pool moves together, in proportion to how much of
+         that pool it is - so two hotwells behave as one hotwell of their
+         combined size and neither drains first. */
+      const inKg = circ.indexOf(id)>=0 ? netKg*cap/Math.max(circCap,1e-9)
+                                       : -fedRes*(s.tank[id]/100*cap)/Math.max(poolKg(resOpen),1e-9);
+      const raw = s.tank[id] + (100*(inKg||0)/cap - dumped)*dt;
+      /* Past full it overflows, and the overflow is gone - a tank that
+         silently clamped would swallow a tube rupture's whole inventory and
+         report nothing. What overflows an SGTR's hotwell is contaminated. */
+      if(raw > 100) s.tankOver[id] = (raw-100)/100*cap/Math.max(dt,1e-9);          // kg/s
+      s.tank[id] = clamp(raw, 0, 100);
+    }
   }
 
   /* ── reactivity ── */
@@ -1616,8 +1706,8 @@ function step(dt){
     ev(evk, autoFit(k)&&s.byp[k], "warn", title, AUTOSYS[k].warn);
   ev("norps",!P.rps,"warn","NO PROTECTION SYSTEM FITTED",
     "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call.",true);
-  ev("hpi",s.hpi,"info","HPI INJECTING",
-    "Emergency water is refilling the loop, and cold shock is ageing the vessel while it runs.");
+  ev("inj",s.injRate>0,"info","INJECTING",
+    "A tank is pushing water into the loop, and cold shock is ageing the vessel while it runs.");
   ev("d1",s.dmg>1,"alarm","FUEL DAMAGE 1%",
     "Cladding has started to fail and fission products are entering the coolant. Permanent.",1);
   ev("d25",s.dmg>25,"alarm","FUEL DAMAGE 25%",

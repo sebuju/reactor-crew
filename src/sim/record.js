@@ -110,7 +110,7 @@ const eqS = (a, b) => eqWhere(a, b) === null;
    ── refusals live in the act, not at the call site ──
    Every guard a row needs is inside its `apply`, or inside the sim function it
    calls: `autoToggle` already refuses a system that was never fitted,
-   `repairStart` refuses a walled-in component, `boronDump` refuses a second
+   `repairStart` refuses a walled-in component, `tankOpen` refuses a tank
    dump. The panel therefore does not have to remember any of them, and neither
    does a scenario - both get the same answer from the same line.
 
@@ -146,18 +146,6 @@ const ACT = {
   split    : {lab:"ROD MODE",     log:on=>on?"SPLIT":"GANG", apply:(s,on)=>{ setSplit(on); }},
   tiltDem  : {lab:"TILT TRIM",    cont:true, log:v=>v.toFixed(2), apply:(s,v)=>{ s.tiltDem=v; }},
   boronDem : {lab:"BORON DEMAND", cont:true, log:v=>v.toFixed(0)+" pcm", apply:(s,v)=>{ s.boronDem=v; }},
-  /* The one-shot dump, and it is one-shot HERE rather than in the two buttons
-     that ask for it. It used to be written out twice - once on the reactor's
-     control strip and once on the fault harness - with the guard, the arithmetic
-     and the log entry copied, and the two copies had already drifted apart in
-     their wording. A pressurised dump, so it moves the actual AND the demand:
-     writing only the actual lets the boration walk drag it straight back. */
-  boronDump: {lab:"EMERG BORON",  nolog:true, apply:(s)=>{
-    if(s.borInjUsed) return;
-    s.borInjUsed=true; s.boron-=4000; s.boronDem-=4000;
-    logE("alarm","EMERGENCY BORON INJECTED",
-      "4000 pcm of poison dumped into the loop. The reactor is shut down hard and cannot be restarted this run.");
-  }},
   /* logCoal, not cont: a load slider drag must collapse in the LOG the way a
      rod drag does, but `cont` is a fact about the TAPE and adding it here would
      quietly change what a recorded scenario replays. */
@@ -171,11 +159,25 @@ const ACT = {
   porvBlock: {lab:"PORV BLOCK",   log:()=>{ const fid=primaryRelief();
                 return (fid && S.reliefBlocked[fid])?"OPENED":"SHUT"; },
               apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
-  hpi      : {lab:"HPI",          log:()=>S.hpi?"OFF":"ON", apply:(s)=>{ s.hpi=!s.hpi; }},
-  /* The hotwell is an inventory now (Stage 6a) and a tube rupture fills it
-     with primary water. Dumping it is the real operational answer, and it is
-     an act like any other: recorded, scrubbed and scriptable. */
-  hotDump  : {lab:"HOTWELL DUMP", log:()=>S.hotDump?"SHUT":"OPEN", apply:(s)=>{ s.hotDump=!s.hotDump; }},
+  /* ONE ACT FOR EVERY TANK'S VALVE, and it replaced three: HPI's on/off, the
+     one-shot EMERG BORON dump and HOTWELL DUMP. There is no latch on the
+     boron one any more - a tank that is empty is empty, which is the same
+     refusal expressed by the physics instead of by a flag, and it can be shut
+     again because a real valve can. Guarded like ACT.junc: a tape naming a
+     tank this design never had is a no-op, not a phantom key on S. */
+  tankOpen : {lab:"TANK VALVE",   log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankOpen[id]?"SHUT":"OPEN"),
+              apply:(s,id)=>{ if(s.tankOpen[id]!==undefined) s.tankOpen[id]=!s.tankOpen[id]; }},
+  /* A tank's overboard dump. It is the answer to a tube rupture filling the
+     hotwell with primary water, and it never refuses: open it on a healthy
+     plant and you are throwing away the water the feed pumps live on. */
+  /* A tank's own arm switch. Every automatic system is fitted and then armed;
+     for a tank the rule is the system and the tank is where the switch lives,
+     so two reserves can be armed independently and neither hangs off a
+     component that is not part of it. */
+  tankByp  : {lab:"TANK AUTO",    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankByp[id]?"ARMED":"BYPASSED"),
+              apply:(s,id)=>{ if(s.tankByp[id]!==undefined) s.tankByp[id]=!s.tankByp[id]; }},
+  tankDump : {lab:"TANK DUMP",    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" DUMP "+(S.tankDump[id]?"SHUT":"OPEN"),
+              apply:(s,id)=>{ if(s.tankDump[id]!==undefined) s.tankDump[id]=!s.tankDump[id]; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
   resetTrip: {lab:"TRIP RESET",   apply:(s)=>{ resetTrip(); }},
   /* The master switch. For relief it also drives every valve's own arm to
@@ -351,6 +353,14 @@ function recHead(){
        thermosiphon head, exposure - so a tape without them replays into a
        different reactor. */
     parts    : LAY ? LAY.parts.map(p => ({id:p.id, x:p.x, y:p.y})) : [],
+    /* The parts the player PLACED, whole - id, role, size, cell, everything
+       add() would have given them - because `parts` above can only move a
+       part that the rebuild already created. Without this a design with a
+       spare pump on it rebuilt into a plant that never had one, and
+       recApplyHead() could only report the mismatch, never fix it. Tanks are
+       NOT here: they live in D.tanks, which the D line above already carries
+       whole, which is the point of a tank being one object rather than two. */
+    placed   : snapVal(placedParts),
     fit      : snapVal(D.fit),
     dsig     : designSig(),
     seed     : S ? S.seed : 0,
@@ -368,11 +378,9 @@ function recHead(){
    IT RETURNS WHETHER IT WORKED, and the caller must ask. A head carries every
    term of designSig(), so rebuilding it and re-signing is a complete check:
    equal signatures mean the same reactor down to where each part stands.
-   Unequal means something in the design is not in the head - a part the player
-   PLACED rather than moved, for instance, since placedParts is layout state
-   that buildLayout() owns and the head does not carry. That must fail loudly
-   and visibly, because the alternative is a verdict about a plant you did not
-   design, which is the worst thing this feature could possibly do.
+   Unequal means something in the design is not in the head. That must fail
+   loudly and visibly, because the alternative is a verdict about a plant you
+   did not design, which is the worst thing this feature could possibly do.
 
    D.run (Stage 3a's CONNECT/DISCONNECT, layout.js's addRun()/removeRun()) is
    NOT part of that gap - it rides the `D: snapVal(D)` line above exactly like
@@ -390,6 +398,10 @@ function recApplyHead(h){
   LAT.pitch=h.lat.pitch; LAT.len=h.lat.len;
   LAT.reflR=h.lat.reflR; LAT.reflT=h.lat.reflT; LAT.reflB=h.lat.reflB; LAT.abs=h.lat.abs;
   latRevolve();                       // rebuilds LM and the D fields the lattice measures
+  /* Before the cell restore below, because a placed part that is not on the
+     board yet has nothing for that loop to move. buildLayout() runs inside
+     this, so LAY is the head's own plant by the time the loop starts. */
+  setPlacedParts(h.placed || []);
   for(const q of h.parts){ const p=LAY.parts.find(x=>x.id===q.id); if(p){ p.x=q.x; p.y=q.y; } }
   layoutMetrics();
   return designSig() === h.dsig;
