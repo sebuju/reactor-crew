@@ -41,12 +41,17 @@ function crVitalsBuild(container){
        also the one thing that ties a row to its curve in the chart below. */
     const plotDot=KIT.el("span","cr-vital-plot");
     const lab=KIT.el("span","cr-vital-lab");
-    const bar=KIT.segMark({cells:24});
+    /* The strip lives in its own box because WHICH strip it is depends on the
+       row's data, and the data needs a commissioned plant to exist. The box
+       holds the place in the grid; crVitalsSync() puts the right instrument
+       in it. */
+    const barBox=KIT.el("span","cr-vital-bar");
+    const bar=KIT.segMark({cells:24}); barBox.appendChild(bar.el);
     const val=KIT.el("span","cr-vital-val");
-    row.append(plotDot,lab,bar.el,val);
+    row.append(plotDot,lab,barBox,val);
     container.appendChild(row);
     row.addEventListener("click",()=>{ const d=crVitalsData()[i]; if(d.ch) togglePlot(d.ch); });
-    rows.push({row,plotDot,lab,bar,val});
+    rows.push({row,plotDot,lab,barBox,bar,val,signed:false});
   }
   return rows;
 }
@@ -54,6 +59,18 @@ function crVitalsSync(rows){
   const data=crVitalsData();
   data.forEach((v,i)=>{
     const h=rows[i];
+    /* A TWO-SIDED ROW NEEDS A TWO-SIDED STRIP. PRESSURE is the one vital where
+       both directions are a trip, so it carries marks at -LIM_AT as well as
+       +LIM_AT - and on an UNSIGNED strip a negative mark is drawn at a negative
+       percentage, i.e. off the left end of the bar and straight over the label
+       beside it. The row's own data says which it is, so the widget is built
+       from that rather than from the position it happens to sit in. */
+    const wantSigned=!!v.sgn;
+    if(h.signed!==wantSigned){
+      h.barBox.innerHTML="";
+      h.bar=KIT.segMark({cells:24,signed:wantSigned});
+      h.barBox.appendChild(h.bar.el); h.signed=wantSigned;
+    }
     if(h.lab.textContent!==v.lab) h.lab.textContent=v.lab;
     const s2=v.val+(v.unit?" "+v.unit:"");
     if(h.val.textContent!==s2) h.val.textContent=s2;
@@ -122,19 +139,43 @@ function crAlarmsSync(al){
      ph   the plot takes everything the legend does not: CR_TREND_LEG is the
           legend band, and chart()'s `top` of 6 is the breathing room under the
           border-top that separates this from the vitals. */
-const CR_TREND_PAD=8/HOST_K, CR_TREND_LEG=30;
+const CR_TREND_PAD=8/HOST_K, CR_TREND_LEG=13;
+/* ── ONE CHART PER CHANNEL, NOT ONE CHART PER PANEL ──
+   Four channels sharing one plot meant four invisible scales stacked on top of
+   each other, so a curve's HEIGHT said nothing and two curves crossing said
+   nothing either. Each channel gets its own small plot instead, pinned to its
+   own range (CHVIEW, trends.js) with its own warning lines on it - so the
+   picture is "where is this against its limit", which is the only question the
+   panel is ever asked. A one-series legend is one line (chartLegend), which is
+   what pays for the extra frames. */
 function crTrendSync(host){
-  const on = plot.length>0;
-  KIT.show(host.canvas,on);
-  if(!on) return;
-  hostPaint(host.canvas,(x,y,w,h)=>{
-    const ser=plot.map(k=>({lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i)}));
+  const want=plot;
+  KIT.show(host.box, want.length>0);
+  for(const k in host.cvs)
+    if(!want.includes(k)){ host.box.removeChild(host.cvs[k]); delete host.cvs[k]; }
+  want.forEach((k,i)=>{
+    let cv2=host.cvs[k];
+    if(!cv2){
+      cv2=KIT.el("canvas","cr-trend-canvas");
+      KIT.tip(cv2,"TREND / "+CH[k].lab,
+        "Rolling history of this channel. The scale is fixed to the range the plant is steered in, so a flat trace reads flat; the dashed lines are the trip and alarm limits it is being read against. Click the vital above to take it off.");
+      host.cvs[k]=cv2;
+    }
+    // DOM order follows plot order, so reordering the picks reorders the stack
+    if(host.box.children[i]!==cv2) host.box.insertBefore(cv2, host.box.children[i]||null);
+  });
+  if(!want.length) return;
+  for(const k of want) hostPaint(host.cvs[k],(x,y,w,h)=>{
+    const V=CHVIEW[k]||{}, R=V.rng?V.rng():null;
+    const ser=[{lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i),
+                lo:R?R[0]:undefined, hi:R?R[1]:undefined}];
     const box=chart(x,y,w,h,{
       series:ser, n:hlen, k:0.87, pad:CR_TREND_PAD,
-      ph:Math.max(24,h-6-CR_TREND_LEG),
+      ph:Math.max(20,h-4-CR_TREND_LEG),
+      hline:V.warn?V.warn():null,
       empty:"COLLECTING DATA",
       xlab:["-"+(hlen/10).toFixed(0)+"s","NOW"]});
-    chartLegend(box,box.py+box.ph+4,ser);
+    chartLegend(box,box.py+box.ph+3,ser);
   });
 }
 
@@ -379,9 +420,8 @@ function crBuild(){
   const root=KIT.el("div","cr-root");
   const vitals=KIT.el("div","cr-vitals"); root.appendChild(vitals);
   const vitalRows=crVitalsBuild(vitals);
-  const trendCanvas=KIT.el("canvas","cr-trend-canvas");   // sized by hostPaint()
-  KIT.tip(trendCanvas,"TREND","Rolling history of every channel you have picked. Click any vital above to put it on here or take it off; the square dot beside a vital is its colour in this chart.");
-  vitals.appendChild(trendCanvas);
+  const trendBox=KIT.el("div","cr-trends");   // one canvas per plotted channel
+  vitals.appendChild(trendBox);
 
   const alarmsWrap=KIT.el("div","cr-alarms");
   const alarmsHead=KIT.el("div","cr-alarms-head");
@@ -420,7 +460,7 @@ function crBuild(){
 
   mount.appendChild(root);
   return {root,vitals,vitalRows,alarms,banner,rail,
-    trend:{canvas:trendCanvas},logList,dmgList,faults,compRail,panels:null,Pfit:null,
+    trend:{box:trendBox,cvs:{}},logList,dmgList,faults,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
 function crSync(){

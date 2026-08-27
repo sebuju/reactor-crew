@@ -43,6 +43,55 @@ const CH={
  rad :{lab:"AREA DOSE",  u:"x", col:"#c8d8dc", f:s=>s.doseRate},
  cdos:{lab:"WATCH DOSE", u:"%", col:"#8fa9ae", f:s=>s.crewDose},
 };
+/* ══ HOW A CHANNEL IS DRAWN, NOT WHAT IT IS ══
+   A trend used to scale itself to whatever it happened to contain, and that is
+   the wrong picture twice over: a channel resting on its setpoint got its own
+   fourth decimal stretched over the full height of the plot, so a plant doing
+   nothing drew as a plant thrashing; and the scale moved every time the ring
+   filled, so the SAME data redrew at a different height a second later. A
+   vital has a range it is STEERED in, and that range is a property of the
+   plant, so the chart is pinned to it and a flat trace draws flat.
+
+   `rng` is that range and `warn` is the line you are not meant to cross - the
+   same figure tripCause() and ANN already use, read from the same place rather
+   than copied, so retuning a trip moves the line on the chart with it. Both
+   are functions because nearly every one of them is a fraction of a
+   COMMISSIONED figure: 15.5 MPa is nominal on a PWR and nothing like it on an
+   HTGR, and a fixed scale would peg half the architectures.
+
+   A channel with no row here keeps the old self-scaling behaviour. */
+const CHVIEW={
+ pwr :{rng:()=>[0,125],                     warn:()=>[(1.10+0.22*P.rpsm)*100]},
+ dnbr:{rng:()=>[0,Math.max(3,P.dnbr0*1.3)], warn:()=>[1.30, 1.18-0.16*P.rpsm]},
+ tf  :{rng:()=>[300,2000],                  warn:()=>[1500, 1600+280*P.rpsm]},
+ tavg:{rng:()=>[P.Tref-60,P.Tref+60]},
+ th  :{rng:()=>[P.Tref-40,P.Tref+80]},
+ tc  :{rng:()=>[P.Tref-80,P.Tref+40]},
+ prs :{rng:()=>[P.P0*0.70,P.P0*1.25],       warn:()=>[P.P0*0.86, P.P0*(1.06+0.07*P.rpsm)]},
+ sub :{rng:()=>[0,Math.max(40,P.sc0*1.4)],  warn:()=>[8,3]},
+ lvl :{rng:()=>[0,100],                     warn:()=>[78]},
+ sgl :{rng:()=>[0,100],                     warn:()=>[SG_DRY]},
+ hot :{rng:()=>[0,100]},
+ inv :{rng:()=>[60,102],                    warn:()=>[95]},
+ flow:{rng:()=>[0,120],                     warn:()=>[P.flowMin*100]},
+ load:{rng:()=>[0,110]},
+ rod :{rng:()=>[0,100]},
+ bor :{rng:()=>[-6000,0]},
+ xe  :{rng:()=>[-4000,0],                   warn:()=>[-3200]},
+ fq  :{rng:()=>[1,3.5]},
+ ao  :{rng:()=>[-40,40]},
+ ro  :{rng:()=>[-40,40]},
+ rho :{rng:()=>[-3000,1000],                warn:()=>[0]},
+ vd  :{rng:()=>[0,0.5],                     warn:()=>[0.15,0.30]},
+ dmg :{rng:()=>[0,100],                     warn:()=>[10]},
+ fat :{rng:()=>[0,100]},
+ cav :{rng:()=>[0,1],                       warn:()=>[0.15]},
+ nat :{rng:()=>[0,25]},
+ rel :{rng:()=>[0,100]},
+ rad :{rng:()=>[0,2]},
+ cdos:{rng:()=>[0,100]},
+};
+
 /* ══ THE LATCHES LIVE BESIDE THE CHANNELS, NOT IN THEM ══
    A scenario limit is asked of a channel, and "did it trip" is exactly the sort
    of thing somebody wants to write a limit about - so these have to be in the

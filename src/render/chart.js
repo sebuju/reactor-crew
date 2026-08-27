@@ -48,29 +48,60 @@ function chart(x,y,w,h,o){
   let n=o.n; if(n===undefined) n=S9.reduce((m,s)=>Math.max(m,s.n||0),0);
   const live = S9.length && n>=2;
 
-  if(!live){
-    txt(o.empty||"COLLECTING DATA",px+pw/2,py+ph/2+4,
-        {size:chSz(10,k),sp:2,align:"center",color:C.ink2});
-  } else {
-    /* The range is read off EVERY sample, not off the ones the drawing happens
-       to land on: a decimated range with an undecimated line lets a spike out
-       through the top of the frame. */
-    const scale=s=>{
-      let lo=Infinity,hiV=-Infinity;
-      for(let i=0;i<n;i++){ const v=s.at(i); if(v<lo)lo=v; if(v>hiV)hiV=v; }
-      return [lo,hiV];
-    };
+  /* THE SCALES ARE SETTLED BEFORE ANYTHING IS DRAWN, live or not. A series
+     carrying its own `lo`/`hi` is PINNED to them - see CHVIEW in trends.js -
+     and a pinned scale is a scale a warning line can be placed on while the
+     ring is still filling, which is exactly when an operator wants to see
+     where the line is. */
+  /* The range is read off EVERY sample, not off the ones the drawing happens
+     to land on: a decimated range with an undecimated line lets a spike out
+     through the top of the frame. */
+  const scale=s=>{
+    let lo=Infinity,hiV=-Infinity;
+    for(let i=0;i<n;i++){ const v=s.at(i); if(v<lo)lo=v; if(v>hiV)hiV=v; }
+    return [lo,hiV];
+  };
+  const auto=[];
+  for(const s of S9){
+    if(s.lo!==undefined&&s.hi!==undefined){ s._lo=s.lo; s._hi=s.hi; }
+    else auto.push(s);
+  }
+  if(live&&auto.length){
     if(o.share){
       // the flat-line case is handled on the shared range too, or two curves
       // that both sit still land on two different invisible scales
       let lo=Infinity,hiV=-Infinity;
-      for(const s of S9){ const [a,b]=scale(s); if(a<lo)lo=a; if(b>hiV)hiV=b; }
+      for(const s of auto){ const [a,b]=scale(s); if(a<lo)lo=a; if(b>hiV)hiV=b; }
       const [a,b]=chBand(lo,hiV);
-      for(const s of S9){ s._lo=a; s._hi=b; }
+      for(const s of auto){ s._lo=a; s._hi=b; }
     } else {
-      for(const s of S9){ const [lo0,hi0]=scale(s), [a,b]=chBand(lo0,hi0);
+      for(const s of auto){ const [lo0,hi0]=scale(s), [a,b]=chBand(lo0,hi0);
         s._lo=a; s._hi=b; }
     }
+  }
+
+  /* THE LINE YOU ARE NOT MEANT TO CROSS, dashed and horizontal, on the first
+     series' own scale - which is the only scale on a one-channel chart, and
+     the shared one when `share` is set. Drawn under the curves: it is the
+     background the trace is read against, never a thing in front of it. */
+  const ref=S9[0];
+  if(o.hline&&ref&&ref._lo!==undefined&&ref._hi>ref._lo){
+    ctx.save(); ctx.setLineDash([3,4]); ctx.lineWidth=1; ctx.globalAlpha=.45;
+    for(const L of o.hline){
+      const v=typeof L==="number"?L:L.v;
+      const t=(v-ref._lo)/(ref._hi-ref._lo);
+      if(t<0||t>1) continue;
+      const Y=Math.round(py+ph-t*ph)+.5;
+      ctx.beginPath(); ctx.moveTo(px,Y); ctx.lineTo(px+pw,Y);
+      ctx.strokeStyle=(L&&L.col)||C.red; ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  if(!live){
+    txt(o.empty||"COLLECTING DATA",px+pw/2,py+ph/2+4,
+        {size:chSz(10,k),sp:2,align:"center",color:C.ink2});
+  } else {
     /* ── ONE COLUMN PER PIXEL, AND IT KEEPS BOTH ENDS ──
        Three minutes of history is ~1800 samples across ~180 units of plot, so
        something has to give. Taking every tenth sample is the cheap answer and
@@ -127,21 +158,38 @@ function chart(x,y,w,h,o){
    this panel exists to be believed. If it will not fit, something else goes. */
 function chartLegend(box,y,S9,o){
   o=o||{};
-  const k=box.k, cw=box.pw/4, chip=chSz(7.5,k);
+  const k=box.k, chip=chSz(6.5,k);
+  /* ── ONE SERIES IS ONE LINE ──
+     The two-line column exists because four of them have to share the width.
+     With a single curve there is nothing to share with, so the name and the
+     reading sit on the same baseline and the chart gets the other line of
+     height back - which is most of what makes a stack of one-channel charts
+     fit where one four-channel chart used to. */
+  if(S9.length===1){
+    const s=S9[0], vo={size:chSz(8,k),align:"right",color:s.col};
+    const cur=s.n?s.at(s.n-1):0, num=cur.toFixed(Math.abs(cur)>=100?0:2);
+    const str=s.u? num+" "+s.u : num;
+    fillRect(box.px,y,7,7,s.col);
+    txt(str,box.px+box.pw,y+7,vo);
+    clipTxt(s.lab,box.px+10,y+7,box.pw-10-tw(str,vo)-6,
+      {size:chip,sp:.9,color:C.ink});
+    return;
+  }
+  const cw=box.pw/4;
   S9.forEach((s,i)=>{
     const lx=box.px+i*cw, room=cw-3;
     fillRect(lx,y,7,7,s.col);
     clipTxt(s.lab,lx+10,y+7,room-10,{size:chip,sp:.9,color:C.ink});
 
     const cur=s.n?s.at(s.n-1):0, num=cur.toFixed(Math.abs(cur)>=100?0:2);
-    const vSize=chSz(10,k), vo={size:vSize,color:s.col};
+    const vSize=chSz(8,k), vo={size:vSize,color:s.col};
     const withU=s.u? num+" "+s.u : num;
     const str=tw(withU,vo)<=room ? withU : num;
     txt(str,lx,y+21,vo);
 
     const left=room-tw(str,vo)-4;
     if(s._lo!==undefined){
-      const rng=s._lo.toFixed(0)+" .. "+s._hi.toFixed(0), ro={size:chSz(7.5,k),align:"right",color:C.ink2};
+      const rng=s._lo.toFixed(0)+" .. "+s._hi.toFixed(0), ro={size:chSz(6.5,k),align:"right",color:C.ink2};
       if(tw(rng,ro)<=left) txt(rng,lx+room,y+21,ro);
     }
   });
