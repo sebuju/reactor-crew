@@ -664,9 +664,16 @@ function dbRailBuild(rail,watch){
 }
 /* the rail scrolls to a newly selected panel ONCE, on the frame sel changes -
    every frame would fight the user's own scrolling */
-let dbLastSel=null;
+let dbLastSel=null, dbPanelSig=null;
+/* PRICING AN OPTION WRITES THE DESIGN, so an ungated sync is not merely a
+   wasted read. massWith() sets D[key] to ask what the plant would weigh, and
+   D.arch/D.fuel/D.foll are in corePredict()'s cache key while __abs re-runs
+   latRevolve() - so every option list burned a full core solve per option,
+   every frame, 5.6 ms of it on the reactor panel alone. designSig() is the
+   signature five other caches here already key on, and costs 0.017 ms. */
 function dbRailSync(state){
   const moved = sel!==dbLastSel; dbLastSel=sel;
+  const sig=designSig()+"|"+sel, fresh=sig!==dbPanelSig; dbPanelSig=sig;
   for(const h of state.panels){
     const on=h.ids.includes(sel);
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
@@ -682,10 +689,15 @@ function dbRailSync(state){
     KIT.tip(h.well.head,nm);
     // paramsFor() rebuilds the whole block list, so it is only asked for a
     // panel that is actually on screen - see railWatch() in inspector.js
-    if(!railSeen(h.well.el) && !(on&&moved)) continue;
+    const seen=railSeen(h.well.el), shown=seen&&!h.seen; h.seen=seen;
+    if(!seen && !(on&&moved)) continue;
+    // scrolling is not a design change, so a panel arriving on screen has to
+    // ask for its first sync itself - the signature cannot know it moved
+    if(!fresh && !shown) continue;
     const cur=paramsFor(LAY.parts.find(q=>q.id===h.p.id)||h.p);
     dbPanelSync(h.body,cur);
   }
+  if(!fresh) return;
   { const rd=benchResultsData();
     const body=state.results.body;
     if(!body.firstChild){
@@ -743,6 +755,7 @@ function dbSync(){
     if(DB.watch) DB.watch.free();
     DB.watch=railWatch(DB.rail);
     DB.state=dbRailBuild(DB.rail,DB.watch); DB.rail._layFit=LAY;
+    dbPanelSig=null;                // new DOM, so the old signature says nothing about it
   }
   dbRailSync(DB.state);
   /* the fuel lattice plan is genuinely graphical and stays canvas - but its own
