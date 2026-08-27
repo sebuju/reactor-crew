@@ -243,23 +243,29 @@ function paramsFor(p){
     note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
     B.gang="sg";
   }
-  else if(id.startsWith("pump")){
+  else if(roleHead(p.role)){
     const key={get:()=>pumpSizeOf(id),set:v=>{ D.pumpSize[id]=v; }};
     B.push({kind:"slider",title:"PUMP SIZE",key,min:0,max:1,step:.05,
       fmt:v=>(pumpCap(v)*100).toFixed(0)+" % capacity",massFn:v=>pumpCap(v)*PUMP_MASS,
       tip:"How much this pump can carry on its own. Bigger costs more mass, but it is also what a junction actually shares with a neighbouring loop if you tie the two together - a pump running at its own rated point has nothing spare to lend."});
-    note(id.startsWith("pumpX")
-      ?"A placed spare. Right-click the plant to remove it."
-      :"This loop's own pump. Every loop keeps one - it cannot be removed, only sized. Flow is the single biggest input to thermal margin, and the first thing a blackout takes off you.");
+    /* WHAT THIS PUMP IS FOR, off the drawing rather than off its id. There is
+       one pump role: a coolant pump is a pump the loop walk reaches from a
+       generator, a feed pump is one that reaches a generator's SHELL, and a
+       pump piped to neither is a pump somebody placed and has not wired up. */
+    note(secGensOf(id).length
+      ?"Piped to a generator's shell, so this is a FEEDWATER pump: it holds that generator's level through its own regulating valve, and the level controller's switch is the FEED CTRL bypass."
+      :primaryPump(id)
+        ?"In a coolant loop, so this is a COOLANT pump. Flow is the single biggest input to thermal margin, and the first thing a blackout takes off you."
+        :"Piped to nothing that reaches a core or a generator. It develops its own head and pools capacity with nobody - draw a run from it, or right-click the plant to remove it.");
   }
-  else if(id==="turb"){
+  else if(p.role==="turb"){
     sld("TURBINE SIZE","How many stages the machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.","turb",0,1,v=>(ARCH[D.arch].eff*(0.92+0.16*v)*100).toFixed(1)+" % gross",.05,v=>v*50);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
       ["RATED OUTPUT",(D.power*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
       ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room. Overpower is not free reach: it is turbine you paid mass for."]]; }});
     note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat. Right-click the plant to remove it - no turbine, no electricity.");
   }
-  else if(id==="cond"){
+  else if(p.role==="cond"){
     sld("CONDENSER SIZE","The heat sink, and it sets two things at once. It caps how much steam can be dumped straight past a tripped turbine, so a generous unit absorbs a scram without the relief valve ever lifting. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat.","condCap",0,1,v=>(20+60*v).toFixed(0)+" % dump",.05,v=>v*40);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
       ["CONDENSING CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",null,"How much steam this unit turns back into water. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
@@ -301,10 +307,18 @@ function paramsFor(p){
       items:FLUID_IDS.map(f=>({name:FLUID[f].label,
         tip:(FLUID[f].boron?"Worth "+FLUID[f].boron+" pcm per 1 % of loop inventory delivered. ":"")
            +(FLUID[f].act?"Active - a full tank of it is a place a repair party would rather not stand.":"Not active.")}))});
-    B.push({kind:"segsel",title:"PLUMBED TO",key:{get:()=>t().side==="secondary"?1:0,
-        set:i=>{ t().side=i?"secondary":"primary"; }},base:0,labels:["PRIMARY","SECONDARY"],
-      tip:"PRIMARY gives this tank a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure. SECONDARY makes it a boundary the feed pumps draw on - no node, no solve, because the secondary side is priced and not solved."});
-    sld("CAPACITY","How big it is, as a share of the side it is plumbed to. It costs mass in proportion, and it is what turns a solved flow into a level.",
+    /* THE "PLUMBED TO" SELECTOR IS DELETED. It asked the designer to declare
+       what the drawing already said, and let the two disagree with nothing to
+       catch it - a tank marked PRIMARY and piped into the secondary was a
+       legal, silent lie. tankSide() reads it off the runs instead
+       (layout.js), so there is one fact and it comes from the pipe you drew.
+       This row is a READOUT now, and it says "not connected" honestly. */
+    B.push({kind:"readlist",rows:()=>{ const sd=tankSide(id);
+      return [["PLUMBED TO", sd? sd.toUpperCase() : "NOTHING", sd?null:C.amber,
+        sd==="primary" ? "This tank has a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure."
+        : sd==="secondary" ? "This tank is on the far side of the generator tubes: it answers to the generator's own secondary pressure, not to the loop's."
+        : "Nothing is piped to this tank, so it is on no side at all - it has no edge, it can deliver nothing, and it is counted by nothing. Draw a run from it."]]; }});
+    sld("CAPACITY","How big it is, as a share of whichever side you piped it into. It costs mass in proportion, and it is what turns a solved flow into a level.",
       acc("vol"),5,100,v=>v.toFixed(0)+" %",5,v=>v*0.4);
     sld("FILL AT COMMISSIONING","How full it starts. A source ships full; a tank meant to catch something ships empty, and its gas charge is set at whatever level you leave here.",
       acc("level"),0,100,v=>v.toFixed(0)+" %",5);

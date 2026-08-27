@@ -261,7 +261,7 @@ function drawSym(p,x,y,w,h,ink,L){
         banner(ruptured?"RUPTURED":"DRYING",cx,X+1,Y+11,W-2,Hh-12,
                ruptured?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
     }
-  } else if(id.startsWith("pump")||id==="feed"){
+  } else if(roleHead(p.role)){
     const r=Math.min(W,Hh)/2-1, cy=y+h/2;
     shell(()=>ctx.arc(cx,cy,r,0,7));
     ctx.save(); ctx.translate(cx,cy); if(L) ctx.rotate(L.spin*Math.PI/180);
@@ -272,7 +272,7 @@ function drawSym(p,x,y,w,h,ink,L){
     // vapour flashing at the inlet, small and violent, not a kettle - on the same
     // 0..0.6 the CAVITATION readout's band uses
     if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",clamp(L.cav/.6,0,1)),C.amber,"chan");
-  } else if(id==="turb"){
+  } else if(p.role==="turb"){
     shell(()=>{ ctx.moveTo(X,Y+3); ctx.lineTo(X+W,Y-2); ctx.lineTo(X+W,Y+Hh+2);
       ctx.lineTo(X,Y+Hh-3); ctx.closePath(); });
     /* Drawn FROM THE FRONT, like the pump - a ring of fixed stator vanes with
@@ -306,7 +306,7 @@ function drawSym(p,x,y,w,h,ink,L){
       ctx.stroke(); }
     ctx.restore();
     dot(cx-2,cyT-2,4,ink);                                     // the hub
-  } else if(id==="cond"){
+  } else if(p.role==="cond"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     for(let i=1;i<7;i++) fillRect(X+i*(W/7),Y+5,1,Hh-10,"rgba(140,170,178,.45)");
     /* it CONDENSES: steam meets cold tubes and falls off them as water, into
@@ -358,7 +358,7 @@ function drawSym(p,x,y,w,h,ink,L){
        red as a relief tank about to burst. */
     const lv = L ? tankLvl(L,id) : D.tanks[id].level;
     const rate = L ? ((L.tankRate&&L.tankRate[id])||0) : 0;
-    const src = !(D.tanks[id].side==="primary" && !D.tanks[id].check);
+    const src = !(tankSide(id)==="primary" && !D.tanks[id].check);
     tank(X,Y+2,W,Hh-4,6, lv/100,
       rate>0 ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
@@ -515,10 +515,9 @@ function liveValue(p,s){
     case p.id==="rods":  return (s.rodPos*100).toFixed(0)+"%";
     case p.id==="pzr":   return s.P.toFixed(1)+" MPa";
     case p.id.startsWith("sg"):   return sgLvl(s,p.id).toFixed(0)+"%";
-    case p.id.startsWith("pump"): return (s.flow*100).toFixed(0)+"%";
-    case p.id==="turb":  return mwE(s).toFixed(0)+" MWe";
-    case p.id==="cond":  return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
-    case p.id==="feed":  return sglMin(s).toFixed(0)+"%";
+    case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
+    case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
+    case p.role==="cond": return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
     case p.id==="bkp":   return s.blackout?"LOAD":"rdy";
     case p.id==="cont":  return s.release.toFixed(1)+"%";
     case p.id==="ctrl":  return s.dose.toFixed(0)+"%";
@@ -534,7 +533,7 @@ function liveColor(p,s){
     case p.id==="pzr": return pColor(s.P);
     // an undersized condenser quietly takes output back off you; say so on
     // the diagram, or the only place it shows is an inspector nobody opened
-    case p.id==="turb": return condPen(s)<0.98 ? C.amber : C.cyan;
+    case p.role==="turb": return condPen(s)<0.98 ? C.amber : C.cyan;
     default: return C.cyan;
   }
 }
@@ -598,7 +597,7 @@ function tankCtl(id){
     {kind:"btn",flex:1,on:()=>S.tankOpen[id],text:()=>S.tankOpen[id]?"OPEN":"SHUT",
      fn:()=>{ act("tankOpen",id); },
      tip:"TANK VALVE - lines this tank up with what it is piped to. It is "
-       +(t().side==="primary"
+       +(tankSide(id)==="primary"
          ? "a solved flow: full loop pressure against a tank charged below it delivers exactly nothing, and a depressurised loop takes a surge."
          : "drawn on by the feed pumps.")
        +"  Its automatic rule is "+(rule()?rule().label:"none")+", which opens it without you."};
@@ -608,7 +607,7 @@ function tankCtl(id){
        which is what a vent header discharges into) is a tank you WANT empty,
        so an empty one lighting up red said the opposite of the truth. */
     {kind:"btn",flex:1,on:()=>S.tankDump[id],
-     danger:()=>!(t().side==="primary" && !t().check) && tankLvl(S,id)<HOT_NPSH,
+     danger:()=>!(tankSide(id)==="primary" && !t().check) && tankLvl(S,id)<HOT_NPSH,
      text:()=>S.tankDump[id]?"DUMPING":"DUMP",
      fn:()=>{ act("tankDump",id); },
      tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."};
@@ -628,12 +627,53 @@ function tankCtl(id){
 }
 function ctlFor(p,live,split){
   if(p.role==="tank") return tankCtl(p.id);
-  if(p.id.startsWith("pump")) return [[
-    // the floor is a trip setpoint, not a stop - the mark says where it costs
-    {kind:"sld",flex:1,val:()=>S.flow*100,min:()=>0,max:()=>100,
-     dem:()=>S.flowDem*100,mark:()=>pumpFloor()*100,markLo:true,
-     fmt:v=>v.toFixed(0)+" %",set:v=>{ act("flowDem",v/100); },
-     tip:"COOLANT PUMPS - "+pumpTip()}]];
+  /* ONE LOAD LEVER, on the FIRST turbine. There can be more than one now, and
+     load demand is an order to the plant rather than to a machine - the same
+     shape the coolant pump lever has, and the same reason: what changed is
+     that "the turbine" is no longer a thing there is exactly one of. */
+  if(p.role==="turb"){
+    if(LAY.parts.find(q=>q.role==="turb")!==p) return null;
+    return [
+     [{kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
+       fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
+       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}],
+     // the same 5% bite the rod strip takes, against the same demand the
+     // slider writes - a load change is an order given in round numbers
+     [{kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,-1,0,P.loadMax)); },
+       tip:"UNLOAD 5% - drops turbine demand five percent, onto the nearest 5% mark. Less draw means less heat leaving the loop, so the primary warms and the reactor backs its own power off."},
+      {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,1,0,P.loadMax)); },
+       tip:"LOAD 5% - raises turbine demand five percent, onto the nearest 5% mark, and never past the turbine's own ceiling. More draw cools the loop and the reactor answers by raising power."}]];
+  }
+  /* The tanks this machine HOSTS - a tank with no cell has no box of its own
+     to carry a strip, so it gets one here, on the component it lives inside.
+     One row per hosted tank, so two hotwells are two rows. On the FIRST
+     condenser only, for the same reason the load lever is on the first
+     turbine: two condensers must not each draw a copy of the same hotwell's
+     strip. hostPartOf() (layout.js) is the one answer to "which machine hosts
+     a cell-less tank". */
+  if(p.role==="cond"){
+    if(hostPartOf()!==p) return null;
+    const h=hostedTankIds(); if(!h.length) return null;
+    const out=[]; for(const id of h) for(const r of tankCtl(id)) out.push(r); return out;
+  }
+
+  /* ONE STRIP FOR EVERY PUMP, and what it ADDRESSES is the only difference: a
+     coolant pump's lever is the order to ALL of them, the way a real board
+     carries one RCP speed demand, and any other pump answers only for itself.
+     Both write the same s.flowDemBy through the same ACT table - one
+     mechanism, two spans. The floor is a trip setpoint, not a stop, so the
+     mark says where it costs rather than where the slider ends. */
+  if(roleHead(p.role)){
+    const pri = primaryPump(p.id);
+    return [[
+    {kind:"sld",flex:1,val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
+     dem:()=>(pri?flowDemPri(S):(S.flowDemBy[p.id]??1))*100,
+     mark:()=>pri?pumpFloor()*100:null,markLo:true,
+     fmt:v=>v.toFixed(0)+" %",
+     set:v=>{ pri ? act("flowDem",v/100) : act("pumpDem",p.id,v/100); },
+     tip:(pri?"COOLANT PUMPS - "+pumpTip()
+            :"THIS PUMP ONLY - what it is told to deliver. It answers for itself: a pump that is not in a coolant loop is not part of the coolant order.")}]];
+  }
   // a fitting has no box, so no control strip - its valve is drawn on the
   // pipe itself, see pipeFitMarks() below
   switch(p.id){
@@ -710,21 +750,7 @@ function ctlFor(p,live,split){
        tip:"RESET BORON - asks for zero boron: clean water, no poison at all. It does not happen at once - the loop still has to dilute its way there at "+BOR_OUT+" pcm/s, so from a deep pit this is minutes, not seconds."},
       {kind:"btn",flex:1,text:()=>"+B",fn:()=>{ act("boronDem",borStep(1)); },
        tip:"BORATE "+BOR_STEP+" PCM - puts one step more poison in. Boration is the fast direction at "+BOR_IN+" pcm/s, about "+(BOR_STEP/BOR_IN).toFixed(0)+" s a press, and every step you add has to be diluted back out again slowly."}]];
-    case "turb": return [
-     [{kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
-       fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
-       tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}],
-     // the same 5% bite the rod strip takes, against the same demand the
-     // slider writes - a load change is an order given in round numbers
-     [{kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,-1,0,P.loadMax)); },
-       tip:"UNLOAD 5% - drops turbine demand five percent, onto the nearest 5% mark. Less draw means less heat leaving the loop, so the primary warms and the reactor backs its own power off."},
-      {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,1,0,P.loadMax)); },
-       tip:"LOAD 5% - raises turbine demand five percent, onto the nearest 5% mark, and never past the turbine's own ceiling. More draw cools the loop and the reactor answers by raising power."}]];
-    /* The tanks this machine HOSTS - a tank with no cell has no box of its
-       own to carry a strip, so it gets one here, on the component it lives
-       inside. One row per hosted tank, so two hotwells are two rows. */
-    case "cond": { const h=hostedTankIds(); if(!h.length) return null;
-      const out=[]; for(const id of h) for(const r of tankCtl(id)) out.push(r); return out; }
+    /* ── replaced by the role branches above ── */
   }
   return null;
 }
@@ -1530,8 +1556,8 @@ function readoutsFor(p,s){
       band(s.flowNet*100,0,110,[[P.flowMin*100,C.red,"STARVED"],[110,C.cyan,"NORMAL"]],
         {dp:0,lim:trip(P.flowMin*102,"TRIP")}),
       "Coolant actually reaching the core, which is what the protection system trips on - not what the pumps were told to do. A shut valve or a severed run shows up here and nowhere else.");
-    add("FLOW DEMAND",(s.flowDem*100).toFixed(1)+" %",
-        Math.abs(s.flowDem-s.flowNet)>.005?C.amber:C.ink2,
+    add("FLOW DEMAND",(flowDemPri(s)*100).toFixed(1)+" %",
+        Math.abs(flowDemPri(s)-s.flowNet)>.005?C.amber:C.ink2,
       "Where you have asked the pumps to go. Delivery lags it by "+FLOW_TAU+" s, by "+FLOW_TAU_COAST+" s while coasting down in a blackout, and falls short of it for good if the water has nowhere to go.");
     add("DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %",null,
       "The least flow this pump set still delivers after damage. It rises with how much spare pump capacity you actually placed on the grid, beyond one pump per loop.");
@@ -1546,7 +1572,7 @@ function readoutsFor(p,s){
         LAY.parts.filter(q=>q.id.startsWith("pump")).length,
         s.dmgParts.some(k=>k.startsWith("pump"))?C.red:C.green,
       "How many of your coolant pumps have been destroyed, out of how many you paid for.");
-  } else if(id==="turb"){
+  } else if(p.role==="turb"){
     add("LOAD",(s.load*100).toFixed(1)+" %",null,
       "How hard the turbine is drawing steam. This is the demand the reactor spends its whole time trying to follow.");
     add("LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
@@ -1594,7 +1620,7 @@ function readoutsFor(p,s){
     add("TANK LEVEL",tankLvl(s,id).toFixed(1)+" %",
       /* the same source/sink question the symbol asks, so the bar and the box
          can never disagree about whether full is good news */
-      (t.side==="primary" && !t.check)
+      (tankSide(id)==="primary" && !t.check)
         ? band(tankLvl(s,id),0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1})
         : band(tankLvl(s,id),0,100,[[15,C.red,"LOW"],[100,C.cyan,"FULL"]],{dp:1}),
       "How much is left in it. It is not an infinite reservoir - run it dry and there is nothing behind it, and fill it past 100 % and what will not fit leaves the plant.");
@@ -1606,7 +1632,7 @@ function readoutsFor(p,s){
           : "Nothing is holding this tank up. With neither a pump nor a gas charge it sits at zero and can only ever be filled.");
     add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
       "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
-    if(t.side==="primary"){
+    if(tankSide(id)==="primary"){
       add("RATE",rate.toFixed(2)+" %/s",rate>0?C.cyan:rate<0?C.amber:null,
         "What this tank's own line is carrying, positive out. Not a setting: it is what the tank wins against the pressure in the loop, so it is near zero at full pressure and surges once the primary comes down. Negative means the loop is filling it.");
       add("HEAD",((P.lay&&P.lay.tankZ&&P.lay.tankZ[id])||0).toFixed(1)+" m",null,
@@ -1616,7 +1642,7 @@ function readoutsFor(p,s){
       "It lets go at "+t.burst.at.toFixed(2)+" MPa. Past that the tank is an opening to containment: it drains onto the floor and what was in it is in the air, not behind a wall. This is the TMI-2 sequence, and a burst disc does not reseat.");
     if(s.tankOver&&s.tankOver[id]>0) add("OVERFLOW",s.tankOver[id].toFixed(0)+" kg/s",C.red,
       "It is full and cannot take any more. This is leaving the plant, and after a tube rupture it is primary water.");
-    if(t.side==="primary"){ add.apply(null,rowInv(s)); add.apply(null,rowFat(s)); }
+    if(tankSide(id)==="primary"){ add.apply(null,rowInv(s)); add.apply(null,rowFat(s)); }
   } else if(id==="cont"){
     add("RELEASE",s.release.toFixed(2)+" %",
       band(s.release,0,10,[[1,C.cyan,"CONTAINED"],[10,C.red,"RELEASING"]],{dp:2}),
@@ -1635,15 +1661,18 @@ function readoutsFor(p,s){
     add("SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green,
       "Whether the backup set itself survived. A hit here means a blackout is natural circulation and nothing else.");
     add.apply(null,rowNat(s));
-  } else if(id==="feed"){
+  /* A PUMP THAT FEEDS A GENERATOR'S SHELL - asked of the drawing (secGensOf(),
+     layout.js), never of the id "feed". There is one pump role, so which
+     panel a pump gets is a question about where it is piped. */
+  } else if(roleHead(p.role) && secGensOf(id).length){
     add.apply(null,rowSgl(s));
     { const arm=tankRuleAny(s,"secondary"), any=secTankIds().some(id=>D.tanks[id].auto!=="always"&&D.tanks[id].auto!=="manual");
       add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
         "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time."); }
-    add("FEED PUMP",s.dmgParts.includes("feed")?"DESTROYED":"running",
-        s.dmgParts.includes("feed")?C.red:C.green,
+    add("FEED PUMP",s.dmgParts.includes(id)?"DESTROYED":"running",
+        s.dmgParts.includes(id)?C.red:C.green,
       "The main feedwater pump. Destroyed, the generator boils dry unless emergency feed picks it up.");
-  } else if(id==="cond"){
+  } else if(p.role==="cond"){
     add("T-HOT",Th.toFixed(0)+" K",null,
       "Steam temperature arriving at the condenser.");
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
@@ -1658,8 +1687,8 @@ function readoutsFor(p,s){
       if(s.tankOver&&s.tankOver[tid]>0) add(D.tanks[tid].name+" OVERFLOW",s.tankOver[tid].toFixed(0)+" kg/s",C.red,
         "It is full and cannot take any more. This water is leaving the plant, and after a tube rupture it is primary water.");
     }
-    add("CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
-        s.dmgParts.includes("cond")?C.red:C.green,
+    add("CONDENSER",s.dmgParts.includes(id)?"DESTROYED":"in service",
+        s.dmgParts.includes(id)?C.red:C.green,
       "The heat sink itself. Destroyed, the steam has nowhere to condense and the loop has nowhere to put its heat.");
   }
   // shielding has nothing to report, and neither has a component never

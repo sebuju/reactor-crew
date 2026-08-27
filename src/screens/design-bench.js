@@ -113,6 +113,16 @@ function layoutWarnings(M){ const w=[];
   if(!M.pzrConn) w.push(["SOFT","No pipe reaches the pressurizer. It holds nothing: loop pressure will drift off programme and stay there.","pzr"]);
   if(!M.pzrOK) w.push(["SOFT","The pressurizer is not the highest point of the primary loop. Its steam bubble cannot form properly, so pressure damping drops to 45%.","pzr"]);
   if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all.",null]);
+  /* A HYDRAULIC SHORT BETWEEN THE TWO SIDES, named and not refused. The tubes
+     are the only crossing a plant is meant to have; a pipe drawn round them
+     puts primary water into a generator's shell and secondary water into the
+     loop, and the solve prices it honestly because every run is an edge. This
+     could not be reached while the secondary carried no flow. */
+  /* NOT COUNTED. One pipe drawn round the tubes puts several runs on the same
+     side of the short - the feed line into that generator is then carrying
+     primary water too - so a count would report more pipes than the designer
+     drew. The fault is that the two sides are joined at all. */
+  if(crossTies().length) w.push(["SOFT","The primary side is piped into a generator's shell, going round its tubes. Whatever is in one side will end up in the other: primary water into the steam, and steam pressure into the loop.",null]);
   if(M.access<1) w.push(["HARD","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
   if(M.exposure>0.3) w.push(["SOFT","Over 30% of the plant sits in hull cells. Expect to lose something every time you are hit.",null]);
   if(sgCount()>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both.",null]);
@@ -284,6 +294,24 @@ function ctxItemsDesign(hit){
         placePart(n=>({id:"sgX"+n,name:"STEAM GEN SPARE",w:1,h:2,x:gx,y:gy,col:"#5fd2e2",
           grp:"sg",tip:"An additional steam generator, placed where you put it. Right-click a free port to CONNECT it - unplumbed, it does nothing at all.",
           role:"sg"}));
+      }});
+      /* A SECOND TURBINE AND A SECOND CONDENSER. Both used to be one part,
+         present or absent, and every reader that priced or gated them read
+         that flag - so a hit on the one turbine zeroed the plant's output and
+         a second could not exist to carry it. They are COUNTED now
+         (turbCount()/condCount(), layout.js), the third time this codebase has
+         made that move. The STOCK unit stays behind its own fittable
+         checkbox, so "no turbine at all" is still a legal design and the bench
+         still warns about it; these are the extra ones. */
+      items.push({label:"ADD TURBINE HERE", fn:()=>{
+        placePart(n=>({id:"turbX"+n,name:"TURBINE SPARE",w:3,h:1,x:gx,y:gy,col:"#f0a830",
+          grp:"sec",tip:"An additional turbine, placed where you put it. It swallows its own share of steam and carries its own share of the load - lose one of two and you lose half the output, not all of it. Right-click a free port to CONNECT it.",
+          role:"turb"}));
+      }});
+      items.push({label:"ADD CONDENSER HERE", fn:()=>{
+        placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:3,h:1,x:gx,y:gy,col:"#5aa9d6",
+          grp:"sec",tip:"An additional condenser, placed where you put it. It is heat sink and it is where the feed pumps draw from, so a second one is a second place for both. Right-click a free port to CONNECT it.",
+          role:"cond"}));
       }});
     }
   }

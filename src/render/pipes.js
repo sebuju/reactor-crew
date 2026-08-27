@@ -198,6 +198,14 @@ const pipeP={};
 function pipeFieldRefresh(L){
   for(const k in pipeDrop) delete pipeDrop[k];
   for(const k in pipeP) delete pipeP[k];
+  /* AND THE READING PLACES, once, before anything draws. The allocator has to
+     run first because the UNDER seam draws before the gauges do, and one of
+     the things drawn there prints a number in every cell it believes is empty
+     - which it can only know if the stacks have already chosen. This is the
+     seam contract in layers.js made true rather than merely written down:
+     `under` "never lands on a value tag". */
+  pipeAnchorTick();
+  pipeAnchors(pipeRuns(L));
   if(!L) return;
   netField(L, pipeDrop, pipeP);
 }
@@ -316,7 +324,15 @@ function pipeFmt(v){
    fallback is a DEFAULT-PICKER, not a permission, and it is also what a
    hot/cold/xtie run falls back to before commission() has run, same as
    before. */
-const PIPE_FS_FLAT={steam:96,exh:96,feed:96};                    // DEFAULT: no forcing on the secondary side yet
+/* NO FLAT FULL-SCALE TABLE ANY MORE. It read {steam:96, exh:96, feed:96} -
+   three invented numbers that looked exactly like measurements, on the three
+   kinds nothing was forcing. Feedwater is SOLVED now and has a real reference
+   like every other run, so its row deleted itself. Steam and exhaust do not:
+   this solver knows incompressible liquid, a turbine turns a pressure drop
+   into work, and neither of those is going to change without the heat model.
+   So they get NO NUMBER AND NO PACKETS rather than a confident 96 - which is
+   a real loss on the diagram and the point of losing it. A missing reading
+   reads as missing; an invented one reads as a measurement. */
 /* Which TANK's own node this run lands on, or null - mirroring netBuild()'s
    own test, off the node NAMES it wrote back (P.net.tankNid) rather than off
    a face string or a tank id anything here could recognise. */
@@ -329,10 +345,15 @@ function runTankId(key,k){
 function pipeFullScale(key,k){
   const ends=runEnds(key,k);
   if(runTankId(key,k)) return 120;
-  if(!ends) return 72;                                            // DEFAULT: surge has no port of its own - see pipeUnit
   const ref=P.netRefByRun[key];
   if(ref) return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
-  return PIPE_FS_FLAT[k] || (k.startsWith("xtie")?60:84*Math.max(0.05,P.feff0)); // DEFAULT
+  /* A TAP-ENDED RUN has one end and so no reference of its own; the surge
+     line is the only one on a stock plant. Its FLOW is real (the tick reads
+     that very edge for the level integral), so it keeps a scale - taken off
+     the loop's own reference rather than the 72 that used to be written here,
+     which was a number with nothing behind it. */
+  if(!ends) return 0.02*84*Math.max(0.05,P.feff0);
+  return k.startsWith("xtie") ? 60 : 84*Math.max(0.05,P.feff0);   // DEFAULT
 }
 const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
 
@@ -368,7 +389,6 @@ const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
 function pipeUnit(key,k){
   const per=Math.max(1,P.loops);
   const loop=P.rated*1000/(5.5*30)/per;        // kg/s through an average primary loop
-  const stm =P.rated*1000/1800/per;            // kg/s of steam from one generator
   const ends=runEnds(key,k);
   /* A run landing on a tank's own node is metered the way that tank is -
      INVENTORY per second, not mass - and off THAT TANK'S own solved flow
@@ -376,10 +396,13 @@ function pipeUnit(key,k){
      tank's delivery on another tank's line. */
   const tid=runTankId(key,k);
   if(tid) return {nom:Math.abs((S.tankRate&&S.tankRate[tid])||0)*60, u:"%/min"};
-  if(!ends) return {nom:loop*0.02, u:"kg/s"};                      // DEFAULT: surge has no port of its own - see pipeFullScale
   const ref=P.netRefByRun[key];
   if(ref) return {nom:loop*(ref/Math.max(1e-6,P.netRefRun)), u:"kg/s"};
-  return {nom:PIPE_FS_FLAT[k]!=null ? stm : loop, u:"kg/s"};       // DEFAULT: nothing forces flow through this run yet
+  if(!ends) return {nom:loop*0.02, u:"kg/s"};   // a tap-ended run - see pipeFullScale
+  /* NULL, not a guess. Nothing in this sim forces steam or exhaust, so there
+     is no rate to print and this hands back nothing at all - the caller draws
+     no meter and no packets. `stm` was that guess and it is gone with it. */
+  return null;
 }
 /* how two-phase a line is, 0..1 - off the FLUID AT THE RUN'S OWN ENDS, not
    its name. net.tag (pipenet.js) already answers hot-side/cold-side/neither
@@ -561,56 +584,129 @@ function boxClear(x,y,w,h){
   return !LAY.parts.some(p=>{ const r=prect(p);
     return x+w>r.x && x<r.x+r.w && y+h>r.y && y<r.y+r.h; });
 }
+/* The straight stretch a stack would LIKE to sit on. Not a permission any
+   more: a run shorter than this still gets its readings, it just has fewer
+   places to put them. */
 const STACK_MIN_L=2*PIPE_DIAL_R+6;
-// the box all three lines occupy together, hung around the run's own point
-const stackClear=(x,y)=>boxClear(x-STACK_W/2,stackY(y,0),STACK_W,3*STACK_H);
-/* THE point for one run. Every layer that prints on a run asks this, so the
-   three quantities cannot end up at three places along the same pipe. */
-function pipeRunAnchor(r){
-  let best=null;
-  for(const q of pipeGeom(r.pts).segs){
-    const x=q.x+q.dx*q.L/2, y=q.y+q.dy*q.L/2;
-    const a={L:q.L,x,y,key:r.key,rank:(q.L>=STACK_MIN_L?2:0)+(stackClear(x,y)?1:0)};
-    if(!best || a.rank>best.rank || (a.rank===best.rank && a.L>best.L)) best=a;
-  }
-  return best;
-}
-function pipeAnchors(runs){
-  const best={};
-  for(const r of runs){
-    /* the winning run's own key travels with it, so the one meter this KIND gets
-       still reads THAT run's real numbers (pipeFullScale/pipeUnit are keyed by
-       run, not kind) rather than a kind-wide placeholder. */
-    const a=pipeRunAnchor(r), b=best[r.k];                                       // LABEL: one meter bucket per kind, not a network permission
-    if(a && (!b || a.rank>b.rank || (a.rank===b.rank && a.L>b.L))) best[r.k]=a;  // LABEL: same bucket
-  }
-  return best;
-}
-/* A run whose dial should stay hidden until it actually passes - FIT[mode]
-   .quiet says so now (pipenet.js), a KIND/FIT field rather than a name
-   comparison: a relief valve's own branch ("xtie:<fid>") is asked off its
-   fitting's MODE, never off the "xtie:" prefix a cross-tie between loops
-   wears too. The header run's own kind ("relief") stays a literal - that is
-   the run's own LABEL, which Stage 1 leaves legal to read for a display
-   default, never a mode to look up. */
-const meterQuiet = k => k==="relief" ||
-  (k.indexOf("xtie:")===0 && P.fit && P.fit[k.slice(5)] &&
-   FIT[P.fit[k.slice(5)].mode] && FIT[P.fit[k.slice(5)].mode].quiet);
+const stackBox=(x,y)=>({x:x-STACK_W/2, y:stackY(y,0), w:STACK_W, h:3*STACK_H});
+const hit=(a,b)=>a.x+a.w>b.x && a.x<b.x+b.w && a.y+a.h>b.y && a.y<b.y+b.h;
+/* ══ EVERY RUN SHOWS EVERY VALUE IT HAS, AND NONE IT DOES NOT ══
+   This used to hand out ONE anchor per KIND, so four hot legs shared one flow
+   meter and three of them read nothing at all - and the two pressure layers
+   each ran their own private clash test and simply DROPPED the loser. Three
+   separate ways of hiding a number that the solve had already worked out.
 
+   The reason all three existed is real and does not go away: stacks collide.
+   boxClear() only ever asked about COMPONENT boxes, and nothing asked whether
+   one run's stack overlapped another's - which is the normal case the moment
+   every run has one. So this is a per-frame ALLOCATOR instead: every run is
+   offered several places along its own polyline, takes the first that is
+   clear of the machines and of every stack already placed, and if none is
+   clear it takes its best one ANYWAY and says so by being there. A reading
+   nudged along its own pipe is still that pipe's reading; a reading that was
+   never drawn is a number the operator had no way to ask for.
+
+   ONE MAP, computed once a frame and shared: the flow meter and both pressure
+   layers must agree about where a run's three lines go, or the same pipe
+   sprouts three plates in three places. */
+/* How far beside its own pipe a reading may stand. One stack height: far
+   enough to get out of a neighbour's way on a crowded plant, near enough that
+   it is plainly THAT pipe's reading and not the next one's. */
+const STACK_OFF=STACK_H+2;
+function pipeRunSpots(r){
+  const out=[];
+  for(const q of pipeGeom(r.pts).segs){
+    /* midpoint first, then in from each end - a long leg gets more chances
+       than a stub, which is what makes the crowded corner resolve at all. */
+    const n = q.L>=STACK_MIN_L*2 ? 7 : 3;
+    /* ...and each of those may also stand BESIDE the pipe rather than on it.
+       Four parallel legs a cell apart cannot all fit their plates on the
+       centreline, and the answer to that is a step sideways, not a dropped
+       reading. Perpendicular to the segment, so it steps off a vertical run
+       horizontally and off a horizontal run vertically - which is the
+       direction that has room in each case. */
+    const px=-q.dy, py=q.dx;
+    for(let i=0;i<n;i++){
+      const t = n===1 ? 0.5 : 0.5 + (i%2?1:-1)*Math.ceil(i/2)/(n+1);
+      const x=q.x+q.dx*q.L*t, y=q.y+q.dy*q.L*t;
+      for(const o of [0,1,-1,2,-2,3,-3])
+        out.push({L:q.L, x:x+px*STACK_OFF*o, y:y+py*STACK_OFF*o, key:r.key,
+                  fits:q.L>=STACK_MIN_L, off:Math.abs(o)});
+    }
+  }
+  /* on the pipe first, then one step off, then two - so a plant with room
+     never gets an offset reading, and only a crowded one pays for it. */
+  return out.sort((a,b)=>a.off-b.off);
+}
+let anchorCache=null, anchorBoxes=[];
+function pipeAnchorTick(){ anchorCache=null; anchorBoxes=[]; }
+/* WHERE THE READINGS ARE THIS FRAME, for a layer that has to keep off them.
+   One list, filled by the allocator below and by nothing else. */
+function pipeStackBoxes(){ return anchorBoxes; }
+function pipeAnchors(runs){
+  if(anchorCache) return anchorCache;
+  const out={}, taken=[];
+  /* longest run first: a main leg has the most to say and the fewest places
+     to say it, and letting a stub take the good spot first is what produced
+     the smears this replaces. */
+  const order=runs.slice().sort((a,b)=>{
+    const la=Math.max(...pipeRunSpots(a).map(s=>s.L),0);
+    const lb=Math.max(...pipeRunSpots(b).map(s=>s.L),0);
+    return lb-la; });
+  for(const r of order){
+    const spots=pipeRunSpots(r);
+    if(!spots.length) continue;
+    /* SCORED, not first-past-the-post. A ranked search that took the first
+       clear candidate and otherwise fell back to spots[0] left three
+       overlapping pairs on a four-loop plant - the fallback was picking
+       blindly. Every candidate is priced instead: how much of another
+       reading it would smear (the thing this whole allocator exists to
+       stop), then how much of a machine it would sit on, then how far it has
+       had to step off its own pipe, then whether the stretch was long enough
+       to hold it. The best one wins, and on a plant with room the best one is
+       always the plain midpoint at zero cost. */
+    let pick=null, bestCost=Infinity;
+    for(const sp of spots){
+      const bx=stackBox(sp.x,sp.y);
+      let over=0;
+      for(const t of taken){
+        const ox=Math.min(bx.x+bx.w,t.x+t.w)-Math.max(bx.x,t.x);
+        const oy=Math.min(bx.y+bx.h,t.y+t.h)-Math.max(bx.y,t.y);
+        if(ox>0&&oy>0) over+=ox*oy;
+      }
+      const cost = over*1000
+                 + (boxClear(bx.x,bx.y,bx.w,bx.h)?0:400)
+                 + sp.off*40
+                 + (sp.fits?0:120);
+      if(cost<bestCost){ bestCost=cost; pick=sp; if(!cost) break; }
+    }
+    out[r.key]=pick;
+    { const bx=stackBox(pick.x,pick.y); bx.key=r.key; taken.push(bx); }
+  }
+  anchorCache=out; anchorBoxes=taken;
+  return out;
+}
+/* One run's own point, for a caller that has a run rather than the list. The
+   allocator above has already decided it for this frame. */
+function pipeRunAnchor(r){ return (anchorCache && anchorCache[r.key]) || pipeRunSpots(r)[0] || null; }
 function pipeMeters(runs,L){
   const best=pipeAnchors(runs), PC=pipeColours(L);
-  for(const k in best){
-    const a=best[k], key=a.key;
-    if(a.L<STACK_MIN_L) continue;            // too short a run to hold a reading
-    const sp=pipeSpd[key]||0, fr=pipeDisplay(key,pipeFrac(key,k,sp)), un=pipeUnit(key,k);
-    /* Two of the seven meters a default plant draws were the relief header and
-       the stock valve's own branch, both pinned on 0.0 kg/s, both stacked in
-       the one corner that already carries the tank, its label, the bowtie, the
-       pressurizer and the vitals panel. A reading that can only ever be zero
-       is not an instrument, it is furniture - so a relief path earns its line
-       by passing, and the line APPEARING is then the signal. Every other run
-       keeps its meter at zero, because zero on a main leg is real news. */
-    if(meterQuiet(k) && Math.abs(fr)<0.008) continue;
+  /* ONE METER PER RUN, and every run that has a number gets one. It used to be
+     one per KIND, so a four-loop plant drew a single hot-leg reading and the
+     other three legs - each with its own length, its own valve and its own
+     solved flow - showed nothing. And a relief path used to stay blank until
+     it passed (meterQuiet), on the argument that a reading which can only be
+     zero is furniture. It cannot only be zero: a relief header reads zero
+     because the valve upstream is SHUT, and "shut" is exactly what an
+     operator is trying to confirm. Both are deleted. What is NOT deleted is
+     the honesty rule going the other way - a run pipeUnit() has no scale for
+     gets no number at all, below. */
+  for(const r of runs){
+    const a=best[r.key]; if(!a) continue;
+    const k=r.k, key=r.key;
+    const un=pipeUnit(key,k);
+    if(!un) continue;                        // nothing forces this run - see pipeUnit()
+    const sp=pipeSpd[key]||0, fr=pipeDisplay(key,pipeFrac(key,k,sp));
     const mag=pipeFmt(Math.abs(fr)*un.nom);
     /* the same three states the needle used to carry, in the ink instead:
        stagnant, backwards, over its rating. */
@@ -678,19 +774,14 @@ function pipeVessel(L){
    the way it should. An instrument is bolted to the outside of the thing it measures,
    so pipeGauges() goes down after them - drawn first, the pressurizer gauge was simply
    painted over by the pressurizer. */
-/* A VIEW filter, not a permission: an injection run stays a real, solved,
-   hittable edge whether or not this hides it - it is hidden only because an
-   idle injection line nothing has commanded on is not worth drawing. Pinned
-   in tools/audit-geometry.js: it hides a run only when tankLive() - the
-   IDENTICAL predicate netBuild() builds that tank's edge conductance from -
-   is false, so "hidden" and "shut" can never disagree. Still limited to the
-   "hpi" run KIND, because a tapped header (relief) is not built as a tank
-   edge at all and hiding it would break exactly that agreement. */
-const pipeRuns = L => pipeNetwork().filter(r=>{
-  if(r.k!=="hpi") return true;   // LABEL: a VIEW declutter scoped to the injection run kind, pinned above - not a permission
-  const tid=runTankId(r.key,r.k);
-  return !(tid && !tankLive(L,tid));
-});
+/* NOTHING IS HIDDEN. This used to drop an injection run whose tank was not
+   live - a VIEW declutter on the argument that an idle line nobody has
+   commanded on is not worth drawing. It is worth drawing: a line that is
+   there and shut is the answer to "is my injection lined up", and a pipe
+   that vanishes when a valve closes teaches an operator that a shut valve
+   has no pipe behind it. The run was always real, solved and hittable
+   underneath; only the picture lied. */
+const pipeRuns = L => pipeNetwork();
 
 function pipeFlow(L){
   pipeRate(L);

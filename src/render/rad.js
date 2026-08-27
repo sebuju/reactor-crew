@@ -111,13 +111,23 @@ function radZones(data){
    component's own name and value tags already live in that space, and a
    digit grid sitting behind them is exactly the vessel-interior survey the
    "under" seam is defined never to draw. */
+/* A CELL A READING IS ALREADY STANDING IN IS NOT AN EMPTY CELL. The part
+   occupancy grid answers "is there a machine here" and nothing else, so this
+   used to print its figure straight through a pipe's own flow, pressure and
+   subcooling plate - and once every run showed every value it has, that was
+   the normal case rather than a corner one. The stack places are chosen once
+   a frame, before anything draws (pipeFieldRefresh(), pipes.js), which is
+   what makes the `under` seam's own promise - "it never lands on a value
+   tag" - true rather than merely written down. */
 function radNumbers(data){
-  const f=data.f, g=data.g;
+  const f=data.f, g=data.g, boxes=pipeStackBoxes();
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), bl=midBase(y,rowTop(Y+1)-y,8);
     for(let X=0;X<GW;X++){
       if(g[Y][X]) continue;
       const r=f[Y*GW+X], cx=GX+X*CELL+CELL/2, dim=r<RAD_FLOOR;
+      const bx=cx-CELL/2, by=bl-8, bw=CELL, bh=10;
+      if(boxes.some(t=>bx+bw>t.x && bx<t.x+t.w && by+bh>t.y && by<t.y+t.h)) continue;
       txt(dim?"·":r.toFixed(2), cx, bl,
         {size:8, align:"center", color:dim?C.ink2:ZONE[zoneOf(r)].col});
     }

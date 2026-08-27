@@ -90,25 +90,23 @@ const LAYER_DATA={
    switched on. A line that moved up when a neighbour was switched off would
    be a reading you have to find again every time you change what is on. */
 function layerRunLine(runs, slot, val, col, fmt){
-  /* TWO ANCHORS CAN LAND ON TOP OF EACH OTHER. Every run picks its own anchor
-     with no idea what its neighbours picked, and at four loops two cold legs
-     sit close enough that their plates overlap - measured by audit-text.js,
-     which counts colliding strings and does not care that each label was
-     individually correct. Two readings printed over each other are one
-     unreadable smear, so the second one stands down; it is still on that
-     run's own gauge and its own tooltip. A VIEW declutter, the same standing
-     pipeRuns() has - it hides a label, never a number. */
-  const placed=[];
+  /* NOTHING STANDS DOWN. This used to run its own private clash test and drop
+     the second of two overlapping readings - a VIEW declutter that hid a
+     number the solve had already worked out, and it did it silently, so the
+     only way to know a pipe had a pressure was to hover it. Placement is one
+     frame-scoped allocator now (pipeAnchors(), pipes.js): every run is offered
+     several points along its own polyline and takes the first clear of the
+     machines and of every stack already placed. The three quantities on one
+     run still share one point, which is the property that mattered.
+     What IS still refused is a value that does not exist: null, undefined or
+     non-finite draws nothing, because a missing reading has to read as
+     missing. */
+  const anch=pipeAnchors(runs);
   for(const r of runs){
     const v=val(r);
     if(v===null||v===undefined||!isFinite(v)) continue;
-    const a=pipeRunAnchor(r);
-    if(!a || a.L<STACK_MIN_L) continue;   // too short a stretch to hold a reading
-    let clash=false;
-    for(const q of placed)
-      if(Math.abs(q.x-a.x)<STACK_W && Math.abs(q.y-a.y)<STACK_H){ clash=true; break; }
-    if(clash) continue;
-    placed.push({x:a.x,y:a.y});
+    const a=anch[r.key];
+    if(!a) continue;
     pipeStackLine(a.x,a.y,slot,fmt(v),col(v));
   }
 }
@@ -156,16 +154,16 @@ const subcLayer = (d,L) => layerRunLine(d.runs, 2, r => pipeRunSc(r,L), subcCol,
 const LAYERS={
   radz:{label:"RAD ZONES",    seam:"under", data:"rad", live:false, on:false,
         draw:radZones,
-        tip:"Area dose rate as a survey map: five bands from CLEAR to EXCLUSION, hard edges between them. Turn this on to see the shape of the hazard, not just a number for it."},
+        tip:"Area dose rate as a survey map: five bands from CLEAR to EXCLUSION, hard edges between them. Turn this on to see the shape of the hazard, not just a number for it. It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
   radn:{label:"CELL DOSE",    seam:"under", data:"rad", live:false, on:false,
         draw:radNumbers,
-        tip:"The dose rate printed in every grid cell, same units the bench already quotes. 144 numbers is a lot of ink for a glance - ask for it when you need the exact figure rather than the band."},
+        tip:"The dose rate printed in every grid cell, same units the bench already quotes. 144 numbers is a lot of ink for a glance - ask for it when you need the exact figure rather than the band. It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
   radp:{label:"REPAIR CELLS", seam:"under", data:"rad", live:false, on:false,
         draw:radCells,
-        tip:"Every cell a repair party could actually stand in to work a job. Turn this on before you send anyone anywhere - it is the answer to \"where can I put a body\", not just \"how hot is it here\"."},
+        tip:"Every cell a repair party could actually stand in to work a job. Turn this on before you send anyone anywhere - it is the answer to \"where can I put a body\", not just \"how hot is it here\". It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
   radc:{label:"PART DOSE",    seam:"over",  data:"rad", live:false, on:false,
         draw:radPart,
-        tip:"What each machine costs to reach, from the coldest free cell beside it - the triage number - the figure you read before deciding who goes to fix what."},
+        tip:"What each machine costs to reach, from the coldest free cell beside it - the triage number - the figure you read before deciding who goes to fix what. It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
   /* live:true, unlike the four radiation layers above. A dose rate is a real
      answer on an uncommissioned arrangement; a pressure is not - there is no
      plant to have one yet, and inventing one would be a lie dressed as data. */
