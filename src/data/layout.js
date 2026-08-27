@@ -268,8 +268,23 @@ const LOOP_ROLE={core:1, sg:1, pump:1, fitting:1};
    pump role now, so that is not hypothetical - it is what would happen.
    Node = partId+face, exactly the key netBuild() indexes on, so this graph and
    the solve's graph are the same drawing read twice. */
-let nodeGraphCache=null, nodeGraphSig="";
+/* THE KEY COST MORE THAN THE ANSWER. A tick asks for this graph ~85 times -
+   tankSide, loopMap, secGensFromNode and secGensOf all want it - and the exact
+   signature below was rebuilt for every one of them, at 2.9 us a call to
+   stringify eleven runs. Measured: 58% of one sim tick spent proving a cache
+   was still valid, against a walk that is nearly free.
+   The drawing cannot change while a tick is running: every gesture that writes
+   D.run or LAY is a bench gesture, and commission() follows it. So step() takes
+   the graph ONCE, holds it for the tick, and drops the hold at the end - the
+   same "resolve once, read many" move pipeFieldRefresh() makes for the pipe
+   field. The hold is a WINDOW, never a latch: outside it, and everywhere on the
+   bench, the exact signature is still the only answer, because a designer
+   editing a paused plant leaves s.tick standing still and a tick number would
+   go stale under them. */
+let nodeGraphCache=null, nodeGraphSig="", nodeGraphHeld=false;
+const nodeGraphHold=on=>{ nodeGraphHeld=!!on && !!nodeGraphCache; };
 function nodeGraph(){
+  if(nodeGraphHeld) return nodeGraphCache;
   const sig=laySig()+"|"+JSON.stringify(D.run);
   if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
   const id=k=>LAY.parts.find(q=>q.id===k);

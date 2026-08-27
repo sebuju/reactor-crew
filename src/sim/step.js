@@ -1009,6 +1009,10 @@ function resetPlant(){
 }
 function step(dt){
   const s=S; s.t+=dt; s.tick++;
+  /* Settle the node graph for this tick and hold it. Nothing below redraws the
+     plant, and ~85 readers ask for it - see nodeGraph(), layout.js. The hold is
+     dropped on the last line of this function, so it never outlives the tick. */
+  nodeGraphHold(false); nodeGraph(); nodeGraphHold(true);
 
   /* ── control rods ──
      T-avg error alone is two integrations away from rod position, so on a
@@ -2017,6 +2021,7 @@ function step(dt){
      turning while the sim is paused, and would not replay. Driven by LOAD -
      the pumps answer flow, the turbine answers the draw. */
   s.spinT=(s.spinT+360*dt*Math.min(s.load,1.5))%360;
+  nodeGraphHold(false);
 }
 /* One pressure colour, for every readout that shows pressure. Both thresholds are
    the annunciator's own, so a gauge can never disagree with the alarm beside it:

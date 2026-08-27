@@ -1782,7 +1782,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
   const fixed = netFixed(net, s);
   const Af = netFactored(net, s, fixed);
   const b = new Float64Array(net.n);
-  netAssemble(net.edges, net.n, fixed, s, new Float64Array(net.n*net.n), b);
+  netAssemble(net.edges, net.n, fixed, s, false, b);
   netSubst(Af, b, net.n);
   netUnfix(b, fixed);
   /* phi -> p: the datum column comes off here, once, so every reader of the

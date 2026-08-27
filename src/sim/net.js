@@ -120,10 +120,17 @@ function netSolve(A, x, n){
 
    A fixed node absorbs whatever it is given by definition, so injecting into
    one is a no-op that would silently vanish; skipped rather than added. */
+/* PASS `false` FOR `A` TO ASK FOR THE RIGHT-HAND SIDE ONLY. A back-substitution
+   against a cached factorisation needs b and nothing else, and the matrix it
+   was throwing away was n*n doubles allocated, zeroed and stamped every call -
+   measured at 18% of a sim tick, twice a tick, for an answer nobody read.
+   `null`/omitted still means "make me one", because that is what a caller
+   assembling a matrix to factor wants; only an explicit `false` skips it. */
 function netAssemble(edges, n, fixed, s, A, b, src){
-  A = A || new Float64Array(n*n);
+  const wantA = A !== false;
+  if(wantA) A = A || new Float64Array(n*n);
   b = b || new Float64Array(n);
-  A.fill(0);
+  if(wantA) A.fill(0);
   b.fill(0);
   for(let e=0;e<edges.length;e++){
     const ed = edges[e];
@@ -133,9 +140,11 @@ function netAssemble(edges, n, fixed, s, A, b, src){
     const u = ed.u, v = ed.v;
     const pu = fixed[u], pv = fixed[v];
     const gu = pu === undefined, gv = pv === undefined;
-    if(gu) A[u*n+u] += g;
-    if(gv) A[v*n+v] += g;
-    if(gu && gv){ A[u*n+v] -= g; A[v*n+u] -= g; }
+    if(wantA){
+      if(gu) A[u*n+u] += g;
+      if(gv) A[v*n+v] += g;
+      if(gu && gv){ A[u*n+v] -= g; A[v*n+u] -= g; }
+    }
     if(gu) b[u] -= g*h;
     if(gv) b[v] += g*h;
     if(gu && !gv) b[u] += g*pv;
