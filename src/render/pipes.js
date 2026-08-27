@@ -304,10 +304,18 @@ function pipeFmt(v){
    hot/cold/xtie run falls back to before commission() has run, same as
    before. */
 const PIPE_FS_FLAT={steam:96,exh:96,feed:96};                    // DEFAULT: no forcing on the secondary side yet
+/* Which TANK's own node this run lands on, or null - mirroring netBuild()'s
+   own test, off the node NAMES it wrote back (P.net.tankNid) rather than off
+   a face string or a tank id anything here could recognise. */
+function runTankId(key,k){
+  const ends=runEnds(key,k), N=P.net && P.net.tankNid;
+  if(!ends || !N) return null;
+  for(const id in N) if(N[id]===ends[0] || N[id]===ends[1]) return id;
+  return null;
+}
 function pipeFullScale(key,k){
   const ends=runEnds(key,k);
-  const tid=ends && Object.keys(TANK).find(id=>TANK[id].node===ends[0]||TANK[id].node===ends[1]); // LABEL: which TANK row this run's own node names (mirrors netBuild's own test)
-  if(tid==="hpi") return 120;
+  if(runTankId(key,k)) return 120;
   if(!ends) return 72;                                            // DEFAULT: surge has no port of its own - see pipeUnit
   const ref=P.netRefByRun[key];
   if(ref) return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
@@ -349,8 +357,12 @@ function pipeUnit(key,k){
   const loop=P.rated*1000/(5.5*30)/per;        // kg/s through an average primary loop
   const stm =P.rated*1000/1800/per;            // kg/s of steam from one generator
   const ends=runEnds(key,k);
-  const tid=ends && Object.keys(TANK).find(id=>TANK[id].node===ends[0]||TANK[id].node===ends[1]); // LABEL: which TANK row this run's own node names
-  if(tid==="hpi") return {nom:Math.abs(S.injRate)*60, u:"%/min"};
+  /* A run landing on a tank's own node is metered the way that tank is -
+     INVENTORY per second, not mass - and off THAT TANK'S own solved flow
+     (S.tankRate), never a plant-wide injection total that would print one
+     tank's delivery on another tank's line. */
+  const tid=runTankId(key,k);
+  if(tid) return {nom:Math.abs((S.tankRate&&S.tankRate[tid])||0)*60, u:"%/min"};
   if(!ends) return {nom:loop*0.02, u:"kg/s"};                      // DEFAULT: surge has no port of its own - see pipeFullScale
   const ref=P.netRefByRun[key];
   if(ref) return {nom:loop*(ref/Math.max(1e-6,P.netRefRun)), u:"kg/s"};
@@ -653,13 +665,19 @@ function pipeVessel(L){
    the way it should. An instrument is bolted to the outside of the thing it measures,
    so pipeGauges() goes down after them - drawn first, the pressurizer gauge was simply
    painted over by the pressurizer. */
-/* A VIEW filter, not a permission: the HPI run stays a real, solved,
+/* A VIEW filter, not a permission: an injection run stays a real, solved,
    hittable edge whether or not this hides it - it is hidden only because an
-   idle injection line the operator has not commanded on is not worth
-   drawing. Pinned in tools/audit-geometry.js: whenever this hides it,
-   netBuild()'s own S.hpi gate on that tank edge (pipenet.js) has already put
-   its conductance at exactly 0, so "hidden" and "shut" can never disagree. */
-const pipeRuns = L => pipeNetwork().filter(r=>!(r.k==="hpi"&&!L.hpi));  // LABEL: a VIEW declutter, pinned above - not a permission
+   idle injection line nothing has commanded on is not worth drawing. Pinned
+   in tools/audit-geometry.js: it hides a run only when tankLive() - the
+   IDENTICAL predicate netBuild() builds that tank's edge conductance from -
+   is false, so "hidden" and "shut" can never disagree. Still limited to the
+   "hpi" run KIND, because a tapped header (relief) is not built as a tank
+   edge at all and hiding it would break exactly that agreement. */
+const pipeRuns = L => pipeNetwork().filter(r=>{
+  if(r.k!=="hpi") return true;   // LABEL: a VIEW declutter scoped to the injection run kind, pinned above - not a permission
+  const tid=runTankId(r.key,r.k);
+  return !(tid && !tankLive(L,tid));
+});
 
 function pipeFlow(L){
   pipeRate(L);

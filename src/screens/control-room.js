@@ -295,7 +295,11 @@ function crFaultsBuild(container){
   KIT.tip(hit.el,"COMBAT HIT","Takes a hit somewhere in the engineering space, weighted toward the hull.");
   const black=scram("STATION BLACKOUT",{onClick:()=>act("blackout")});
   KIT.tip(black.el,"STATION BLACKOUT","Cuts main power to the coolant pumps.");
-  const boron=scram("EMERGENCY BORON",{danger:true,onClick:()=>act("boronDump")});
+  /* Opens EVERY tank that could poison the loop, off what is in them. It is a
+     shortcut for the tanks' own valves and nothing more - there is no one-shot
+     latch behind it any more, because a tank that is empty is empty. */
+  const boron=scram("EMERGENCY BORON",{danger:true,
+    onClick:()=>{ for(const id of boronTankIds()) if(!S.tankOpen[id]) act("tankOpen",id); }});
   container.append(porv.el,jam.el,load.el,reset.el,hit.el,black.el,boron.el);
   return {porv,jam,load,reset,hit,black,boron};
 }
@@ -305,8 +309,9 @@ function crFaultsSync(h){
   h.jam.set({on:S.rodJam});
   h.load.set({label:"LOAD STEP "+(P.loadMax*100).toFixed(0)+"%"});
   h.black.set({on:S.blackout});
-  KIT.show(h.boron.el,P.boroninj);
-  h.boron.set({label:S.borInjUsed?"BORON EXPENDED":"EMERGENCY BORON",disabled:S.borInjUsed});
+  const bt=boronTankIds(), spent=bt.length>0 && bt.every(id=>S.tank[id]<=0);
+  KIT.show(h.boron.el,bt.length>0);
+  h.boron.set({label:spent?"BORON EXPENDED":"EMERGENCY BORON",disabled:spent});
 }
 
 /* ══ THE COMPONENT RAIL: EVERY FITTED COMPONENT'S readoutsFor() TABLE ══ */

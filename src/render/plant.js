@@ -103,7 +103,7 @@ function drawSym(p,x,y,w,h,ink,L){
   const lvl=(fx,fy,fw,fh,frac,col)=>{ const t=clamp(frac,0,1);
     ctx.save(); ctx.globalAlpha=.45; fillRect(fx,fy+fh*(1-t),fw,fh*t,col); ctx.restore(); };
   /* ══ A TANK IS A SHELL WITH WATER IN IT, AND THERE IS ONE OF THEM ══
-     Both tanks in TANK (pipenet.js) draw through this: shell, water CLIPPED to
+     EVERY tank draws through this, however many there are: shell, water CLIPPED to
      that shell, a waterline, and the gas space above it left empty. Written
      once because the two were drifting apart in opposite directions - the HPI
      tank drew a square fill inside a rounded shell, so the water leaked past
@@ -300,12 +300,16 @@ function drawSym(p,x,y,w,h,ink,L){
        rising plume said the opposite of what this machine is for. Rate is the
        heat it is actually rejecting, and it is clipped inside the shell,
        because a condenser that vented to the compartment would be a leak. */
-    /* THE HOTWELL, and it is a real level now (Stage 6a): condensate in from
-       the tubes above, feed suction out to the generators. It was a fixed
-       .16 of the shell for as long as this symbol has existed. Full is half
-       the shell, so a rupture filling it is visible without swallowing the
-       tube bank the jet is drawn against. */
-    const hw=Math.max(3,Hh*.5*(L?clamp(L.hotwell/100,0,1):HOT0/100));
+    /* THE HOTWELL: condensate in from the tubes above, feed suction out to
+       the generators. It is a TANK like any other now - it simply has no cell
+       of its own, so the machine it lives inside draws it (hostedTankIds(),
+       pipenet.js). Two hosted tanks pool and draw as one. Full is half the
+       shell, so a rupture filling it is visible without swallowing the tube
+       bank the jet is drawn against. */
+    const hosted=hostedTankIds();
+    const hwPct = L ? tankPoolPct(L,hosted)
+                    : (hosted.length ? D.tanks[hosted[0]].level : 0);
+    const hw=Math.max(3,Hh*.5*clamp(hwPct/100,0,1));
     ctx.save(); ctx.globalAlpha=.45;
     fillRect(X+1,Y+Hh-2-hw,W-2,hw,C.blue); ctx.restore();
     if(L){ ctx.save(); ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4-hw); ctx.clip();
@@ -327,31 +331,36 @@ function drawSym(p,x,y,w,h,ink,L){
        It leaves the box on purpose: a release is the one thing on this plant
        that does not stay inside the component it came from. */
     if(L) fxSteam(cx,Y+2,W*.7,fxEase(id+":rel",clamp(L.release/10,0,1)),C.amber,91);
-  } else if(id==="hpi"){
-    /* what is LEFT in it, not a full tank forever. An accumulator that has
-       finished injecting is empty, and this drew it brimming - the one picture
-       that says the mechanic is over. */
-    tank(X,Y+2,W,Hh-4,6, L? tankLvl(L,"hpi")/100 : 1, (L&&L.injRate>0)?C.cyan:C.blue);
-    // cold water going down the injection line. The safe act with the long
-    // bill, and worth seeing that it is still running - every second of it
-    // ages the vessel whether or not anybody is looking at FATIGUE
-    /* on what the tank is ACTUALLY pushing, against its own rating - not on
-       the operator's switch. Injection is a solved flow now: a tank at 4.5 MPa
-       against a loop at 15.5 delivers exactly nothing, and this jet ran at
-       full through all of it. */
+  } else if(p.role==="tank"){
+    /* ONE BRANCH FOR EVERY TANK. What is LEFT in it, not a full tank forever -
+       a tank that has finished injecting is empty, and drawing it brimming is
+       the one picture that says the mechanic is over.
+       A SOURCE IS ALARMING WHEN IT IS EMPTY AND A SINK WHEN IT IS FULL, and
+       which of the two this is is STRUCTURAL, never a name: the only thing
+       that can fill against its own will is a PRIMARY tank with no
+       non-return valve on its edge - that is what a vent header discharges
+       into. Everything else is something you draw on, and full is good news.
+       Get it backwards and a healthy full accumulator is painted in the same
+       red as a relief tank about to burst. */
+    const lv = L ? tankLvl(L,id) : D.tanks[id].level;
+    const rate = L ? ((L.tankRate&&L.tankRate[id])||0) : 0;
+    const src = !(D.tanks[id].side==="primary" && !D.tanks[id].check);
+    tank(X,Y+2,W,Hh-4,6, lv/100,
+      rate>0 ? C.cyan
+      : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
+            : (lv>=90 ? C.red : lv>0  ? C.amber : C.blue));
+    /* Cold water going down the line. The safe act with the long bill, and
+       worth seeing that it is still running - every second of it ages the
+       vessel whether or not anybody is looking at FATIGUE. On what the tank is
+       ACTUALLY pushing against its own rating, never on the operator's switch:
+       injection is a solved flow, and a tank at 4.5 MPa against a loop at 15.5
+       delivers exactly nothing. */
     if(L) fxJet(cx,Y+Hh-3,W*.35,
-      fxEase(id+":hpi",clamp((L.injRate||0)/TANK.hpi.rate(),0,1)),C.cyan,0,1,71);
-  } else if(id==="reltk"){
-    /* it had no branch of its own and fell through to the hatched fallback
-       box: no level, no shell, and hatching that reads as "not fitted"
-       everywhere else on the diagram. What every relief valve has put into it
-       is the whole point of the part. */
-    const lv = L? tankLvl(L,"reltk") : 0;
-    tank(X,Y+2,W,Hh-4,3, lv/100, lv>=90?C.red:lv>0?C.amber:C.blue);
+      fxEase(id+":inj",clamp(rate/tankRateRef(id),0,1)),C.cyan,0,1,71);
     /* the rupture disc, which is what the gas space above the water is FOR.
        Burst, the tank is an opening to containment and its contents are on the
        floor - so it stops being a tank and says so. */
-    if(L&&L.discBurst) hatch(X+1,Y+3,W-2,Hh-6,C.red,.55);
+    if(L&&L.burstBy&&L.burstBy[id]) hatch(X+1,Y+3,W-2,Hh-6,C.red,.55);
   } else if(id==="bkp"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink);
@@ -494,13 +503,14 @@ function liveValue(p,s){
     case p.id.startsWith("sg"):   return sgLvl(s,p.id).toFixed(0)+"%";
     case p.id.startsWith("pump"): return (s.flow*100).toFixed(0)+"%";
     case p.id==="turb":  return mwE(s).toFixed(0)+" MWe";
-    case p.id==="cond":  return s.hotwell.toFixed(0)+"%";
+    case p.id==="cond":  return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
     case p.id==="feed":  return sglMin(s).toFixed(0)+"%";
-    case p.id==="hpi":   return s.hpi?"INJ":"off";
     case p.id==="bkp":   return s.blackout?"LOAD":"rdy";
     case p.id==="cont":  return s.release.toFixed(1)+"%";
     case p.id==="ctrl":  return s.dose.toFixed(0)+"%";
-    case p.id==="reltk": return s.discBurst ? "BURST" : s.tank.reltk.toFixed(0)+"%";
+    /* ONE ROW FOR EVERY TANK. A burst disc first, because a tank that is an
+       opening to containment is not reporting a level any more. */
+    case p.role==="tank": return s.burstBy[p.id] ? "BURST" : tankLvl(s,p.id).toFixed(0)+"%";
     default: return null;
   }
 }
@@ -544,7 +554,45 @@ const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, 
 // read S in that case, only the closures, which run only while drawing a
 // live plant. split is asked separately because stripH() reserves the taller
 // of both modes.
+/* Every tank's own strip, and it is the same strip for every tank: the
+   operator's valve, and its overboard dump. What used to be three separate
+   buttons on three different components - HPI's INJECT, the reactor's
+   one-shot BORON DUMP and the condenser's HOTWELL DUMP - reading three
+   different pieces of state. */
+/* TWO ROWS, not three buttons. A tank is one cell wide and three labels
+   collide in it - measured, not guessed (audit-text.js counts them). The arm
+   switch goes on its own row, and only for a tank that HAS a rule to arm:
+   a manual tank has nothing to defeat. */
+function tankCtl(id){
+  const t=()=>D.tanks[id]||{}, rule=()=>AUTORULE[t().auto];
+  const valve=
+    {kind:"btn",flex:1,on:()=>S.tankOpen[id],text:()=>S.tankOpen[id]?"OPEN":"SHUT",
+     fn:()=>{ act("tankOpen",id); },
+     tip:"TANK VALVE - lines this tank up with what it is piped to. It is "
+       +(t().side==="primary"
+         ? "a solved flow: full loop pressure against a tank charged below it delivers exactly nothing, and a depressurised loop takes a surge."
+         : "drawn on by the feed pumps.")
+       +"  Its automatic rule is "+(rule()?rule().label:"none")+", which opens it without you."};
+  const dump=
+    /* Dumping is only dangerous for a tank you DRAW ON - throwing away water
+       something else needs. A sink (a primary tank with no non-return valve,
+       which is what a vent header discharges into) is a tank you WANT empty,
+       so an empty one lighting up red said the opposite of the truth. */
+    {kind:"btn",flex:1,on:()=>S.tankDump[id],
+     danger:()=>!(t().side==="primary" && !t().check) && tankLvl(S,id)<HOT_NPSH,
+     text:()=>S.tankDump[id]?"DUMPING":"DUMP",
+     fn:()=>{ act("tankDump",id); },
+     tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."};
+  const arm=
+    {kind:"btn",flex:1,on:()=>!S.tankByp[id],text:()=>S.tankByp[id]?"BYP":"AUTO",       // the same two words every other bypass switch on the plant uses (bypRow)
+     fn:()=>{ act("tankByp",id); },
+     tip:"AUTO / BYP - whether this tank's own rule ("+(rule()?rule().label:"none")
+       +") may line it up without being asked. Bypassed, only the valve beside it does anything. The switch is on the TANK because the rule is the tank's: there is no system elsewhere on the plant that owns it."};
+  const hasRule = t().auto && t().auto!=="manual" && t().auto!=="always";
+  return hasRule ? [[valve,dump],[arm]] : [[valve,dump]];
+}
 function ctlFor(p,live,split){
+  if(p.role==="tank") return tankCtl(p.id);
   if(p.id.startsWith("pump")) return [[
     // the floor is a trip setpoint, not a stop - the mark says where it costs
     {kind:"sld",flex:1,val:()=>S.flow*100,min:()=>0,max:()=>100,
@@ -611,26 +659,16 @@ function ctlFor(p,live,split){
       {kind:"btn",flex:1,text:()=>"RST",fn:()=>{ act("boronDem",0); },
        tip:"RESET BORON - asks for zero boron: clean water, no poison at all. It does not happen at once - the loop still has to dilute its way there at "+BOR_OUT+" pcm/s, so from a deep pit this is minutes, not seconds."},
       {kind:"btn",flex:1,text:()=>"+B",fn:()=>{ act("boronDem",borStep(1)); },
-       tip:"BORATE "+BOR_STEP+" PCM - puts one step more poison in. Boration is the fast direction at "+BOR_IN+" pcm/s, about "+(BOR_STEP/BOR_IN).toFixed(0)+" s a press, and every step you add has to be diluted back out again slowly."}]].concat(
-      /* the bench asks D, because that is the design being edited right now; a
-         commissioned plant asks P, because that is the design it was built to */
-      (live?P.boroninj:D.boroninj)?[[{kind:"btn",flex:1,danger:()=>!S.borInjUsed,
-       text:()=>S.borInjUsed?"SPENT":"BORON DUMP",
-       fn:()=>{ act("boronDump"); },
-       tip:"EMERGENCY BORON - one-shot poison dump worth 4000 pcm. Shuts the reactor down when the rods will not, and it cannot be undone."}]]:[]);
+       tip:"BORATE "+BOR_STEP+" PCM - puts one step more poison in. Boration is the fast direction at "+BOR_IN+" pcm/s, about "+(BOR_STEP/BOR_IN).toFixed(0)+" s a press, and every step you add has to be diluted back out again slowly."}]];
     case "turb": return [[
       {kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}]];
-    case "hpi": return [[
-      {kind:"btn",flex:1,on:()=>S.hpi,text:()=>S.hpi?"INJECT":"OFF",
-       fn:()=>{ act("hpi"); },
-       tip:"HIGH PRESSURE INJECTION - emergency cold water into the loop. Refills a leak, and the cold shock ages the vessel every second it runs."}]];
-    case "cond": return [[
-      {kind:"btn",flex:1,on:()=>S.hotDump,danger:()=>S.hotwell<HOT_NPSH,
-       text:()=>S.hotDump?"DUMPING":"HOTWELL DUMP",
-       fn:()=>{ act("hotDump"); },
-       tip:"HOTWELL DUMP - puts condensate over the side. This is the answer to a ruptured tube filling the hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."}]];
+    /* The tanks this machine HOSTS - a tank with no cell has no box of its
+       own to carry a strip, so it gets one here, on the component it lives
+       inside. One row per hosted tank, so two hotwells are two rows. */
+    case "cond": { const h=hostedTankIds(); if(!h.length) return null;
+      const out=[]; for(const id of h) for(const r of tankCtl(id)) out.push(r); return out; }
   }
   return null;
 }
@@ -1179,9 +1217,6 @@ function readoutsFor(p,s){
     add("BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
         Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2,
       "Where you have asked boron to go. It borates at "+BOR_IN+" pcm/s and only dilutes at "+BOR_OUT+", so poisoning yourself is the fast direction.");
-    add("EMERG BORON",!P.boroninj?"none":s.borInjUsed?"EXPENDED":"available",
-        !P.boroninj?C.ink2:s.borInjUsed?C.red:C.green,
-      "A one-shot 4000 pcm dump. It shuts the core down when the rods will not, and it cannot be undone for the rest of the run.");
     add("FUEL DAMAGE",s.dmg.toFixed(1)+" %",
       // any damage at all is the bad zone, so the good one is a sliver - the
       // strip saying honestly that this scale has no safe stretch
@@ -1337,20 +1372,40 @@ function readoutsFor(p,s){
       "What this room was designed to read at rating, with nothing broken. Set it against DOSE RATE above to see how far the accident has pushed you off what you built.");
     add("EVENTS",LOG.length+"",null,
       "How many things have gone wrong this run. The LOG panel says what each of them was.");
-  } else if(id==="hpi"){
-    add("INJECTION",s.hpi?"RUNNING":"stopped",s.hpi?C.cyan:C.ink2,
-      "Whether emergency water is going into the loop right now. It is the safe act with a long bill: see fatigue below.");
-    add("RATE",s.injRate.toFixed(2)+" %/s",null,
-      "How fast injection is refilling the loop right now. Not a setting: it is what the tank wins against the pressure in the loop, so it is near zero at full pressure and surges once the primary comes down.");
-    add("TANK LEVEL",s.tank.hpi.toFixed(0)+" %",
-      band(s.tank.hpi,0,100,[[15,C.red,"LOW"],[100,C.cyan,"FULL"]],{dp:0}),
-      "How much water is left to inject. It is not an infinite reservoir - run it dry and there is nothing behind it.");
-    add("TANK PRESS",tankP(s,"hpi").toFixed(1)+" MPa",null,
-      D.accum
-        ? "The nitrogen charge behind the water. It needs no electricity, so it still works in a blackout - and it falls as the tank drains, because the gas is expanding, so injection tapers instead of holding to the last drop."
-        : "What the injection pumps are holding. Steady until the tank is dry, and gone with the bus in a blackout.");
-    add.apply(null,rowInv(s));
-    add.apply(null,rowFat(s));
+  } else if(p.role==="tank"){
+    /* ONE PANEL FOR EVERY TANK. Every row is read off the instance's own
+       config and its own solved flow, so the same rows describe an
+       accumulator, a boron tank, a relief tank and a hotwell. */
+    const t=D.tanks[id], fl=tankFluid(id), rate=(s.tankRate&&s.tankRate[id])||0;
+    add("CONTENTS",fl.label.toLowerCase()+", "+fl.temp.toFixed(0)+" K",null,
+      "What is in this tank. Activity and reactivity worth follow from this and from nothing else"
+      +(fl.boron?" - a tank of this is worth "+fl.boron+" pcm for every 1 % of loop inventory it pushes in.":"."));
+    add("TANK LEVEL",tankLvl(s,id).toFixed(1)+" %",
+      /* the same source/sink question the symbol asks, so the bar and the box
+         can never disagree about whether full is good news */
+      (t.side==="primary" && !t.check)
+        ? band(tankLvl(s,id),0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1})
+        : band(tankLvl(s,id),0,100,[[15,C.red,"LOW"],[100,C.cyan,"FULL"]],{dp:1}),
+      "How much is left in it. It is not an infinite reservoir - run it dry and there is nothing behind it, and fill it past 100 % and what will not fit leaves the plant.");
+    add("TANK PRESS",tankP(s,id).toFixed(2)+" MPa",null,
+      t.pump
+        ? "What the pumps behind it are holding. Steady until the tank is dry, and gone with the bus in a blackout - a tank with a gas charge instead is the one injection path a blackout does not kill."
+        : t.gas
+          ? "The gas charge behind the contents. It needs no electricity, so it still works in a blackout - and it moves as the level moves, because the gas is expanding or being compressed."
+          : "Nothing is holding this tank up. With neither a pump nor a gas charge it sits at zero and can only ever be filled.");
+    add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
+      "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
+    if(t.side==="primary"){
+      add("RATE",rate.toFixed(2)+" %/s",rate>0?C.cyan:rate<0?C.amber:null,
+        "What this tank's own line is carrying, positive out. Not a setting: it is what the tank wins against the pressure in the loop, so it is near zero at full pressure and surges once the primary comes down. Negative means the loop is filling it.");
+      add("HEAD",((P.lay&&P.lay.tankZ&&P.lay.tankZ[id])||0).toFixed(1)+" m",null,
+        "How high this tank stands above the core. It is real static head in the solve: mount it high and it drains in fast, mount it level with the core and it barely trickles.");
+    }
+    if(t.burst) add("RUPTURE DISC",s.burstBy[id]?"BURST":"intact",s.burstBy[id]?C.red:C.green,
+      "It lets go at "+t.burst.at.toFixed(2)+" MPa. Past that the tank is an opening to containment: it drains onto the floor and what was in it is in the air, not behind a wall. This is the TMI-2 sequence, and a burst disc does not reseat.");
+    if(s.tankOver&&s.tankOver[id]>0) add("OVERFLOW",s.tankOver[id].toFixed(0)+" kg/s",C.red,
+      "It is full and cannot take any more. This is leaving the plant, and after a tube rupture it is primary water.");
+    if(t.side==="primary"){ add.apply(null,rowInv(s)); add.apply(null,rowFat(s)); }
   } else if(id==="cont"){
     add("RELEASE",s.release.toFixed(2)+" %",
       band(s.release,0,10,[[1,C.cyan,"CONTAINED"],[10,C.red,"RELEASING"]],{dp:2}),
@@ -1361,12 +1416,6 @@ function readoutsFor(p,s){
       "A cooled basin under the vessel. It will not save the fuel, but it stops a melt burning through and breaching.");
     add("VESSEL",s.breach?"RUPTURED":"intact",s.breach?C.red:C.green,
       "Whether the pressure vessel is still whole. A rupture is the end of the run.");
-  } else if(id==="reltk"){
-    add("TANK LEVEL",s.tank.reltk.toFixed(1)+" %",
-      band(s.tank.reltk,0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1}),
-      "What every relief valve venting to this tank has put into it, 0..100. It never empties on its own - a full tank is a place a repair party would rather not stand.");
-    add("RELIEF PATHS",""+reliefFitIds().length,null,
-      "How many relief fittings vent here. Every one of them rolls its own die on its own lift - more paths means pressure is relieved more reliably, and something is more likely stuck open.");
   } else if(id==="bkp"){
     add("BLACKOUT",s.blackout?"ACTIVE":"no",s.blackout?C.red:C.green,
       "Whether main power to the coolant pumps has gone. Test it from the FAULTS panel before you ever need to know.");
@@ -1377,9 +1426,9 @@ function readoutsFor(p,s){
     add.apply(null,rowNat(s));
   } else if(id==="feed"){
     add.apply(null,rowSgl(s));
-    add("EMERG FEED",autoState("efw").toLowerCase(),
-        autoLive("efw")?C.green:C.amber,
-      "The tank and pump piped to the generator (see its own panel). Armed, it adds a small dump while the reactor is scrammed, running the loop a few degrees cooler; bypassed, it does not. It does not touch grace time.");
+    { const arm=tankRuleAny(s,"secondary"), any=secTankIds().some(id=>D.tanks[id].auto!=="always"&&D.tanks[id].auto!=="manual");
+      add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
+        "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time."); }
     add("FEED PUMP",s.dmgParts.includes("feed")?"DESTROYED":"running",
         s.dmgParts.includes("feed")?C.red:C.green,
       "The main feedwater pump. Destroyed, the generator boils dry unless emergency feed picks it up.");
@@ -1388,11 +1437,16 @@ function readoutsFor(p,s){
       "Steam temperature arriving at the condenser.");
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
-    add("HOTWELL",s.hotwell.toFixed(1)+" %",
-      band(s.hotwell,0,100,[[10,C.red,"LOW"],[95,C.cyan,"NORMAL"],[100,C.amber,"HIGH"]],{dp:0}),
-      "Condensate waiting to be pumped back to the generators. In a healthy plant it does not move: what boils out comes back. It falls when a generator is losing water faster than the feed returns it, and it RISES when a ruptured tube is pushing primary water into the secondary - which is the one that has to be dealt with, because past 100% it overflows and what overflows is contaminated.");
-    if(s.hotOver>0) add("HOTWELL OVERFLOW",s.hotOver.toFixed(0)+" kg/s",C.red,
-      "The hotwell is full and cannot take any more. This water is leaving the plant, and after a tube rupture it is primary water.");
+    /* The tanks this machine hosts - a tank with no cell of its own has no
+       panel of its own either, so it reports here, on the component it lives
+       inside. One row per hosted tank. */
+    for(const tid of hostedTankIds()){
+      add(D.tanks[tid].name,tankLvl(s,tid).toFixed(1)+" %",
+        band(tankLvl(s,tid),0,100,[[10,C.red,"LOW"],[95,C.cyan,"NORMAL"],[100,C.amber,"HIGH"]],{dp:0}),
+        "Condensate waiting to be pumped back to the generators. In a healthy plant it does not move: what boils out comes back. It falls when a generator is losing water faster than the feed returns it, and it RISES when a ruptured tube is pushing primary water into the secondary - which is the one that has to be dealt with, because past 100% it overflows and what overflows is contaminated.");
+      if(s.tankOver&&s.tankOver[tid]>0) add(D.tanks[tid].name+" OVERFLOW",s.tankOver[tid].toFixed(0)+" kg/s",C.red,
+        "It is full and cannot take any more. This water is leaving the plant, and after a tube rupture it is primary water.");
+    }
     add("CONDENSER",s.dmgParts.includes("cond")?"DESTROYED":"in service",
         s.dmgParts.includes("cond")?C.red:C.green,
       "The heat sink itself. Destroyed, the steam has nowhere to condense and the loop has nowhere to put its heat.");
@@ -1628,7 +1682,7 @@ function drawPlant(y0,L,vh,vx,vw){
   const PC=pipeColours(L), NET=pipeNetwork();
   pipeFieldRefresh(L);          // one solve read per frame, shared by every gauge and both pressure layers
   for(const pass of [0,1]) for(const r of NET){
-    if(pass&&r.k==="hpi"&&L&&!L.hpi) continue;   // LABEL: a VIEW declutter, pinned in tools/audit-geometry.js - see pipeRuns() (pipes.js)
+    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key,r.k); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter, pinned in tools/audit-geometry.js - see pipeRuns() (pipes.js)
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";

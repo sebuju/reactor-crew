@@ -1,7 +1,18 @@
 "use strict";
 /* the design screen - the plant view (canvas) plus an HTML rail of panels */
 
-function massWith(key,i){ const o=D[key]; D[key]=i; const m=derived().mass; D[key]=o; return m; }
+/* ONE ACCESSOR FOR EVERY PARAM BLOCK. A block's `key` is either a field name
+   on D or an explicit {get,set} pair - the latter for anything that does not
+   live at the top level of D, a tank's own config (D.tanks[id]) above all.
+   The slider already understood both; every other kind read D[key] directly,
+   which is how a tank panel would have had to invent a second mechanism. */
+const blockAcc = key => typeof key==="string"
+  ? {get:()=>D[key], set:v=>{ D[key]=v; }} : key;
+/* What the plant would weigh with this block set to that value. It has to
+   WRITE the value to ask, so it puts it back - through the same accessor, so
+   a nested key is restored as exactly as a flat one. */
+function massWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
+  const m=derived().mass; a.set(o); return m; }
 
 /* Nameplate pump capacity vs what a loop's own ceiling will ever pass right
    now - netFlowK()'s per-group min(groupSize,up) clamp (pipenet.js), read
@@ -84,9 +95,9 @@ function layoutStats(M){
   ["PRESSURIZER HEAD",M.pzrOK?"at loop top":"BELOW LOOP TOP",M.pzrOK?1:0.2,
    M.pzrOK?C.green:C.red,
    "The pressurizer works by holding a steam bubble at the highest point of the primary loop. Mount it below the reactor or the steam generators and the bubble cannot sit where it needs to: pressure control loses more than half its damping and every load change whips the loop pressure around."],
-  ["ACCUMULATOR HEAD",M.hpiZ.toFixed(1)+" m",clamp((M.hpiZ+2)/8,0,1),
-   M.hpiZ<1?C.amber:C.green,
-   "Emergency injection is gravity fed. Mounted high above the reactor it drains in fast with no power at all; mounted level with or below the core it barely trickles."],
+  ["INJECTION HEAD",M.injZ.toFixed(1)+" m",clamp((M.injZ+2)/8,0,1),
+   M.injZ<1?C.amber:C.green,
+   "Emergency injection is gravity fed. A tank mounted high above the reactor drains in fast with no power at all; one level with or below the core barely trickles. This is the WORST of the tanks that could inject - each tank's own head is on its own panel."],
   ["LOOP SEPARATION",sgCount()>1?M.sep.toFixed(0)+" cells":"n/a",sgCount()>1?clamp(M.sep/8,0,1):1,
    sgCount()>1&&M.sep<4?C.amber:C.green,
    "Distance between redundant loops. Park two steam generators next to each other and a single hit takes out both, making the redundancy you paid for worthless."],
@@ -177,15 +188,15 @@ function ctxItemsDesign(hit){
     return [{label:"REMOVE", fn:()=>{ removeFit(hit.fitting); }}];
   if(hit.part){
     // a FITTABLE slot's part exists on the grid only while it IS fitted
-    // (cont/turb/cond), so clicking it can only ever mean REMOVE - except
-    // hpi, always on the grid, where get() picks a machine behind the same
-    // box rather than the box's presence; there REMOVE downgrades it back
-    // to the plain tank instead of taking the part away.
+    // (cont/turb/cond), so clicking it can only ever mean REMOVE.
     const f=fittableList().find(x=>x.id===hit.part.id);
     if(f) return f.get()
       ? [{label:"REMOVE", fn:()=>{ f.set(false); }}]
-      : [{label:"FIT "+f.label, fn:()=>{ f.set(true); }}];
-    if(hit.part.id.startsWith("pumpX") || hit.part.id.startsWith("sgX"))
+      : [{label:"ADD "+f.label, fn:()=>{ f.set(true); }}];
+    // Every tank is an instance the player added, so every tank can be taken
+    // away again - including the three the stock plant ships with. Zero tanks
+    // is a legal plant.
+    if(hit.part.role==="tank" || hit.part.id.startsWith("pumpX") || hit.part.id.startsWith("sgX"))
       return [{label:"REMOVE", fn:()=>{ removePart(hit.part.id); }}];
     return [];   // a base component (core, rods, pzr...) offers no menu at all
   }
@@ -221,10 +232,15 @@ function ctxItemsDesign(hit){
   }
   // a genuinely bare cell: nothing is under the cursor, so no REMOVE
   // belongs here - only offers that create or connect something.
-  const items=fittableList().filter(f=>!f.get()).map(f=>({label:"FIT "+f.label, fn:()=>{ f.set(true); }}));
+  const items=fittableList().filter(f=>!f.get()).map(f=>({label:"ADD "+f.label, fn:()=>{ f.set(true); }}));
   if(hit.cell){
     const {gx,gy}=hit.cell;
     if(gx>=0 && gy>=0 && gx<GW && gy<GH){
+      /* ONE ENTRY, no submenu of kinds. It places the single default tank
+         config (TANK_DEFAULT, pipenet.js); what goes in it, what is behind it
+         and how it is plumbed are set afterwards on its own panel. Not gated
+         on a count - four tanks is a legal plant. */
+      items.push({label:"ADD TANK HERE", fn:()=>{ addTank(gx,gy); }});
       items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
         placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
           grp:"pump",tip:"A spare coolant pump, placed where you put it. Right-click a free port to CONNECT it - unplumbed, it does nothing at all.",
@@ -451,33 +467,33 @@ const LATREAD_RODS=[
 function paramBlockMk(block){
   switch(block.kind){
     case "optlist": {
-      const set=v=>{ D[block.key]=v; };
+      const a=blockAcc(block.key);
       const root=KIT.el("div","db-block");
       const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
-      const ol=KIT.optList(block.items,{onSelect:i=>set(block.base+i)});
+      const ol=KIT.optList(block.items,{onSelect:i=>a.set(block.base+i)});
       root.appendChild(ol.el);
       return {el:root,sync(){
         const deltas=block.items.map((_,i)=>massWith(block.key,block.base+i));
         const lo=Math.min(...deltas);
-        ol.set(D[block.key]-block.base, deltas.map(v=>v-lo));
+        ol.set(a.get()-block.base, deltas.map(v=>v-lo));
       }};
     }
     case "segsel": {
+      const a=blockAcc(block.key);
       const root=KIT.el("div","db-block");
       const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
-      const ss=KIT.segSel(block.labels,{onSelect:i=>{ D[block.key]=block.base+i; }});
+      const ss=KIT.segSel(block.labels,{onSelect:i=>a.set(block.base+i)});
       root.appendChild(ss.el);
       return {el:root,sync(){
         const deltas=block.labels.map((_,i)=>massWith(block.key,block.base+i));
         const lo=Math.min(...deltas);
-        ss.set(D[block.key]-block.base, deltas.map(v=>v-lo));
+        ss.set(a.get()-block.base, deltas.map(v=>v-lo));
       }};
     }
     case "slider": {
-      const isKey=typeof block.key==="string";
-      const get=()=>isKey?D[block.key]:block.key.get();
-      const set=v=>{ const sv=block.step?Math.round(v/block.step)*block.step:v;
-        if(isKey) D[block.key]=sv; else block.key.set(sv); };
+      const a=blockAcc(block.key);
+      const get=()=>a.get();
+      const set=v=>{ a.set(block.step?Math.round(v/block.step)*block.step:v); };
       const row=KIT.sliderRow({title:block.title,min:block.min,max:block.max,step:block.step,
         fmt:block.fmt,massFn:!!block.massFn,tip:block.tip,onChange:set});
       return {el:row.el,sync(b){
@@ -491,8 +507,9 @@ function paramBlockMk(block){
       return {el:r.el,sync(b){ r.set(typeof b.val==="function"?b.val():b.val); }};
     }
     case "toggle": {
-      const t=KIT.toggle({label:block.title,mass:block.mass,tip:block.tip,onToggle:()=>{ D[block.key]=!D[block.key]; }});
-      return {el:t.el,sync(){ t.set(D[block.key]); }};
+      const a=blockAcc(block.key);
+      const t=KIT.toggle({label:block.title,mass:block.mass,tip:block.tip,onToggle:()=>{ a.set(!a.get()); }});
+      return {el:t.el,sync(){ t.set(!!a.get()); }};
     }
     case "note": {
       const p=KIT.el("p","db-note");

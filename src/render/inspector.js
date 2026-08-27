@@ -191,7 +191,6 @@ function paramsFor(p){
     B.push({kind:"lattools",tools:LATPEN_RODS});
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
-    tog("EMERG BORON INJECTION","A one-shot tank of concentrated poison worth 4000 pcm, piped into the loop. Shuts the reactor down when the rods will not, and cannot be undone.","boroninj",PART_MASS.boroninj);
     tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. Limited to 15% of rod travel; you can always override it.","autorod",26);
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
     B.push({kind:"sdmnote"});
@@ -217,7 +216,7 @@ function paramsFor(p){
        set by the coolant family and the generator type, off sgInertiaK(),
        not by this). Stock plant, scram, 600 s: on runs the loop a few
        degrees cooler than off, and P.graceK does not move for it. */
-    tog("EMERGENCY FEEDWATER","A tank and pump piped to the generator, feeding a small dump into it while the reactor is scrammed - runs the loop a few degrees cooler after a trip. It does NOT extend grace time; that is set by the coolant family and the generator type.","efw",PART_MASS.efw);
+    note("Emergency feedwater is a TANK, not a fitting on this pump: add one, set it to the secondary side and give it the LOW SG LEVEL rule. Its arm switch lives on the tank.");
     note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
     B.gang="sg";
   }
@@ -262,12 +261,49 @@ function paramsFor(p){
     tog("CORE CATCHER","A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher",PART_MASS.catcher);
     note("Containment does nothing for the reactor and everything for the people around it. It is pure insurance, and it is heavy. Right-click the plant to fit or remove it without opening this list.");
   }
-  else if(id==="hpi"){
-    tog("PASSIVE ACCUMULATOR","Gravity and gas driven emergency water needing no electricity. Refills a leaking loop far faster than the pumped system, and still works in a blackout.","accum",45);
-    B.push({kind:"note",dyn:()=>({text:(D.accum?"Fitted. Injection runs at 2.6 %/s instead of 1.6, and it works with no power at all. Mount it high."
-                :"Not fitted. Emergency injection is limited to the pumped system, which needs power.")
-       +" Right-click the plant to fit or remove it directly.",
-       color:D.accum?"var(--c-green)":"var(--c-amber)"})});
+  /* ══ ONE PANEL, EVERY TANK ══
+     There is no menu of kinds anywhere in this game, and this is why: an
+     accumulator, a boron tank, a relief tank and a hotwell are these eight
+     knobs at four settings. Every one of them writes D.tanks[id] through the
+     normal design path, so designSig() sees it and the plant re-commissions.
+     FLUID_IDS/AUTO_IDS are read off the tables themselves, so adding a
+     substance or an opening rule adds an entry here for free. */
+  else if(p.role==="tank"){
+    const t=()=>D.tanks[id];
+    const acc=(f)=>({get:()=>t()[f], set:v=>{ t()[f]=v; }});
+    const FLUID_IDS=Object.keys(FLUID), AUTO_IDS=Object.keys(AUTORULE);
+    B.push({kind:"optlist",title:"CONTENTS",key:{get:()=>FLUID_IDS.indexOf(t().fluid),
+        set:i=>{ t().fluid=FLUID_IDS[i]; }},base:0,
+      tip:"What is in the tank. This is the whole of what makes one tank different from another: activity, reactivity worth and what a burst disc puts into the air all follow from it.",
+      items:FLUID_IDS.map(f=>({name:FLUID[f].label,
+        tip:(FLUID[f].boron?"Worth "+FLUID[f].boron+" pcm per 1 % of loop inventory delivered. ":"")
+           +(FLUID[f].act?"Active - a full tank of it is a place a repair party would rather not stand.":"Not active.")}))});
+    B.push({kind:"segsel",title:"PLUMBED TO",key:{get:()=>t().side==="secondary"?1:0,
+        set:i=>{ t().side=i?"secondary":"primary"; }},base:0,labels:["PRIMARY","SECONDARY"],
+      tip:"PRIMARY gives this tank a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure. SECONDARY makes it a boundary the feed pumps draw on - no node, no solve, because the secondary side is priced and not solved."});
+    sld("CAPACITY","How big it is, as a share of the side it is plumbed to. It costs mass in proportion, and it is what turns a solved flow into a level.",
+      acc("vol"),5,100,v=>v.toFixed(0)+" %",5,v=>v*0.4);
+    sld("FILL AT COMMISSIONING","How full it starts. A source ships full; a tank meant to catch something ships empty, and its gas charge is set at whatever level you leave here.",
+      acc("level"),0,100,v=>v.toFixed(0)+" %",5);
+    B.push({kind:"toggle",title:"PRESSURISED BY PUMPS",mass:12,
+      key:{get:()=>!!t().pump, set:v=>{ t().pump = v?{p:11.0,bus:"bkp"}:null; }},
+      tip:"A set of pumps holds a steady pressure until the tank is dry - and dies with the bus, so a blackout kills it. Off, the tank is passive: whatever gas charge you give it below is all it has, which is exactly why a passive tank is the one injection path a blackout does not kill."});
+    B.push({kind:"toggle",title:"GAS CHARGE",mass:8,
+      key:{get:()=>!!t().gas, set:v=>{ t().gas = v?{p0:4.5,frac:0.35}:null; }},
+      tip:"A cover gas above the liquid. It is what makes the pressure mean anything: a vented tank never pressurises, so it can have no back-pressure and no rupture disc. It expands as a source empties and is compressed as a sink fills."});
+    sld("CHARGE PRESSURE","What the gas holds at the commissioning level. It falls as a source drains and rises as a sink fills - that taper is the whole difference between an accumulator and a pump.",
+      {get:()=>t().gas?t().gas.p0:0, set:v=>{ if(t().gas) t().gas.p0=v; }},
+      0.05,15,v=>v.toFixed(2)+" MPa",0.05);
+    B.push({kind:"toggle",title:"CHECK VALVE",mass:4,
+      key:acc("check"),
+      tip:"A non-return valve on the tank's own line. With one, the tank can only ever push OUT - which is what makes it a source. Without one it fills as readily as it drains, which is what makes it a sink."});
+    B.push({kind:"toggle",title:"RUPTURE DISC",mass:2,
+      key:{get:()=>!!t().burst, set:v=>{ t().burst = v?{at:1.4,drain:6.0,rel:0.004}:null; }},
+      tip:"A disc that lets go once the tank is full enough to push its gas past the setpoint. Past that the tank is an opening to containment and what was in it is on the floor. This is the TMI-2 sequence, and it does not reseat."});
+    B.push({kind:"optlist",title:"OPENS ITSELF ON",key:{get:()=>AUTO_IDS.indexOf(t().auto),
+        set:i=>{ t().auto=AUTO_IDS[i]; }},base:0,
+      tip:"When this tank lines itself up without being asked. The operator's own valve is always there beside it - this only ever OPENS, it never overrides a switch.",
+      items:AUTO_IDS.map(a=>({name:AUTORULE[a].label,tip:""}))});
   }
   else if(id==="bkp"){
     opt("BACKUP POWER","What keeps the coolant pumps turning when main power is lost. Test it with the Station Blackout fault in the control room.","bkp",BKP);
