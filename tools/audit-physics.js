@@ -3696,13 +3696,13 @@ console.log('\n=== SECONDARY INVENTORY ===');
      the tail of that stroke; pinning that it does not move pins the claim,
      which is that steam raised and feedwater returned cancel. The tolerance
      is unchanged - it is the QUESTION that moved. */
-  let held=[];
+  { let held=[];
   for(const sg of [0,1]){ const s=set({sg}); run(s,900);
     const a=M.sglMin(s); run(s,300); const b=M.sglMin(s);
     if(Math.abs(b-a) > 1e-9) held.push(SGT[sg].name+' moved '+(b-a).toExponential(2)+' between 900 s and 1200 s');
     else if(Math.abs(b-50) > 1e-6) held.push(SGT[sg].name+' settled at '+b.toFixed(6)+', not at the setpoint'); }
   if(held.length) bad('an undamaged plant does not hold the feed setpoint: '+held.join('; '));
-  else console.log('  an undamaged plant settles at 50.000000 % and then does not move at all between 900 s and 1200 s, on both generator types - sgWet is exactly 1, so removal is untouched');
+  else console.log('  an undamaged plant settles at 50.000000 % and then does not move at all between 900 s and 1200 s, on both generator types - sgWet is exactly 1, so removal is untouched'); }
 
   /* MEMORY. The old level was a pure function of (heat, load) with no dt in
      it, so two plants alike in everything but their level history collapsed
@@ -3730,6 +3730,10 @@ console.log('\n=== SECONDARY INVENTORY ===');
      once-through unit is through SG_DRY inside ten, and past it removal
      collapses and the drain slows itself down. Average over twenty and the
      ratio reads 2.7x - the feedback, not the inventory. */
+  /* dU stays at this level on purpose: the fault-injection sentinel further
+     down measures the same drain with SGT.water equalised and compares against
+     it, so bracing this off would leave that sentinel with nothing to check.
+     It is 13 sim seconds - the one check cheap enough to run once per shard. */
   const drain=sg=>{ const s=set({sg}); run(s,10); M.combatHit('feed');
                     const from=M.sglMin(s); run(s,3); return (from-M.sglMin(s))/3; };   // %/s
   const dU=drain(0), dO=drain(1);
