@@ -5,7 +5,6 @@ const {ROOT}=require('./bundle');
 const src=require('./bundle').bundle();
 // Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
 // same way a player builds one, through placed parts and real D.run entries.
-const {makeLoops}=require('./loopgen');
 
 const TEXTS=[], RECTS=[];
 function mkctx(){
@@ -89,7 +88,7 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'setDmg:v=>S.dmgParts=v,'+
  'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
- 'pipeNetwork,pipeWaypoints,nearestOn,placePart,addFit,removePart,removeFit,'+
+ 'pipeNetwork,buildStockPlumbing,nearestOn,placePart,addFit,removePart,removeFit,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
  'FXR:()=>FXR,fxReset,porvRate,reliefRate,reliefFullRate,SPILL_FULL:()=>SPILL_FULL,'+
  'SGTR_RATE:()=>SGTR_RATE,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,primaryRelief,'+
@@ -165,15 +164,21 @@ for(const part of M.parts()) { M.setSel(part.id); sweep('sel:'+part.id+':'); }
 M.setSel('core');
 
 // four loops: the only plant with a GANGED plate (steam gens, pumps)
-{ makeLoops(M,4); warmUp(); M.setSel('sg2'); sweep('loops4:');
-  makeLoops(M,1); warmUp(); M.setSel('core'); }
+{ M.buildStockPlumbing({loops:4}); warmUp(); M.setSel('sg2'); sweep('loops4:');
+  M.buildStockPlumbing({loops:1}); warmUp(); M.setSel('core'); }
 
 // fittings and a spare pump: neither exists on a default plant, so their
 // valve mark / symbol / plate are draw paths nothing else here reaches
 { const J0=M.D().fit, PS0=M.D().pumpSize;
-  makeLoops(M,4); M.D().fit={}; M.D().pumpSize={};
+  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.D().pumpSize={};
   warmUp();                       // 4-loop LAY exists now, for the tap lookup below
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  const tap=k=>{ const c=k.split(':');
+    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
+    /* t is measured from the NAMED part's end. A key carries its two ends
+       sorted now, so t=0 is whichever id sorts first, not the machine the
+       caller asked for - and a tee tapped at the wrong end of a cold leg
+       lands its branch in another run's lane. */
+    return [r.key, r.key.slice(c[0].length+1).indexOf(c[1])===0 ? 0 : 1]; };
   const j0=M.addFit('tee',...tap('cold:sg0'),...tap('cold:sg1'));
   M.addFit('throttle',...tap('cold:sg2'),...tap('cold:sg3'));
   const spare=M.placePart(n=>({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9,y:5,col:'#57d38c',
@@ -187,14 +192,14 @@ M.setSel('core');
   // placedParts is a persistent array outside D; removePart() is the only way
   // to take the spare back out before the block's other fields are restored
   M.removePart(spare.id);
-  makeLoops(M,1); M.D().fit=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
+  M.buildStockPlumbing({loops:1}); M.D().fit=J0; M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
 
 // a steered pipe: two waypoints draw five grips where a plain run draws one
 { warmUp();
-  const key=M.pipeNetwork().find(r=>r.k==='hot').key;
-  M.pipeWaypoints[key]=[{x:400,y:500},{x:200,y:300}];
+  const rid=M.pipeNetwork().find(r=>r.k==='hot').rid;   // a waypoint lives on the RUN now
+  M.D().run[rid].wp=[{x:400,y:500},{x:200,y:300}];
   sweep('wp:');
-  delete M.pipeWaypoints[key]; warmUp(); }
+  delete M.D().run[rid].wp; warmUp(); }
 
 // every component broken at once: the worst case for repair keys and STATUS rows
 warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('alldmg:');
@@ -376,7 +381,7 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
   rngSeed=20260824;
   // FOUR loops on purpose: a one-loop plant cannot show that a rupture stays
   // on the machine that was hit, which is half of what this block is for.
-  makeLoops(M,4);
+  M.buildStockPlumbing({loops:4});
   M.commission();
   const S=M.S();
   const sgIds=M.parts().filter(p=>p.id.startsWith('sg')).map(p=>p.id);
@@ -403,7 +408,7 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
     sgIds.length>1 && wrong.length===0 && (f[hurt+':sgtr']||0)>0,
     wrong.length? wrong.join(', ')+' drew a leak they do not have'
                 : 'the leak is on '+hurt+' alone, '+(sgIds.length-1)+' intact generator(s) dry');
-  makeLoops(M,1);
+  M.buildStockPlumbing({loops:1});
 }
 
 /* 3. IT STOPS. A break run to equalisation with containment must stop drawing,

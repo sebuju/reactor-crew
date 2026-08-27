@@ -4,10 +4,9 @@ const S=require('./bundle').bundle();
 
 // routing is emergent from component positions, so this has to run the code,
 // not just read it
-const M=require('./bundle').headless('{pipeNetwork,pipeAnchors,pipeAnchorTick,pipeStackBoxes,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,reliefRate,reliefHeaderKey,nozzleEnds,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,packVal,unpackVal,designSig,face,placePart,removePart}');
+const M=require('./bundle').headless('{pipeNetwork,pipeAnchors,pipeAnchorTick,pipeStackBoxes,commission,buildStockPlumbing,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,reliefRate,reliefHeaderKey,nozzleEnds,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,packVal,unpackVal,designSig,face,placePart,removePart}');
 // Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
 // same way a player builds one, through placed parts and real D.run entries.
-const {makeLoops}=require('./loopgen');
 
 // zero-length segments are corner artefacts from coincident waypoints; skip
 // them or every corner is a false positive
@@ -51,7 +50,7 @@ const retraceChecks=[];
 // run, not a stand-in for it.
 const RETRACE_FILTER=r=>M.retraces(r.pts);
 for(const loops of [1,2,3,4]){
-  makeLoops(M,loops); M.commission();
+  M.buildStockPlumbing({loops:loops}); M.commission();
   const net=M.pipeNetwork();
   const over=pipeOverlaps(pipeSegs(net));
   pipeChecks.push([`no pipe overlaps (${loops} loop${loops>1?'s':''})`, over.length===0,
@@ -66,8 +65,14 @@ for(const loops of [1,2,3,4]){
 // route() ever has to fold a bend into, so the retrace check rides the same
 // sweep instead of only ever seeing the sparse stock layouts above.
 for(const loops of [2,3,4]){
-  makeLoops(M,loops); M.D().fit={}; M.commission();
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  M.buildStockPlumbing({loops:loops}); M.D().fit={}; M.commission();
+  const tap=k=>{ const c=k.split(':');
+    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
+    /* t is measured from the NAMED part's end. A key carries its two ends
+       sorted now, so t=0 is whichever id sorts first, not the machine the
+       caller asked for - and a tee tapped at the wrong end of a cold leg
+       lands its branch in another run's lane. */
+    return [r.key, r.key.slice(c[0].length+1).indexOf(c[1])===0 ? 0 : 1]; };
   for(let i=0;i<loops-1;i++) M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1)));
   const net=M.pipeNetwork();
   const over=pipeOverlaps(pipeSegs(net));
@@ -97,10 +102,10 @@ retraceChecks.push(['(sentinel) pre-fix hpi polyline caught', sentinelCaught,
 const juncChecks=[];
 {
   const dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]);
-  makeLoops(M,2); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:2}); M.D().fit={}; M.commission();
   let net=M.pipeNetwork();
   // both faces of this run sit on components a pump move disturbs
-  const runKey='cold:pump0b-coreb', tapT=0.5;
+  const runKey='cold:coreb-pump0b', tapT=0.5;
   const before=M.juncPt(net,runKey,tapT).pt;
 
   const pump0=M.LAY().parts.find(p=>p.id==='pump0');
@@ -134,7 +139,7 @@ const juncChecks=[];
   // nearestOn() -> juncPt() at (about) the same place - on two differently
   // shaped runs, so a bug in one leg's geometry can't hide behind the other's
   let rtWorst=0;
-  for(const key of ['hot:corer-sg0l','cold:sg0b-pump0t']){
+  for(const key of ['hot:corer-sg0l','cold:pump0t-sg0b']){
     const r=net.find(x=>x.key===key);
     for(let i=0;i<8;i++){
       const t=i/7;
@@ -150,7 +155,7 @@ const juncChecks=[];
   // the branch itself: after the move, its run must still exist, be finite,
   // and hold the same square-only invariant every other run in this file is
   // held to
-  const jid=M.addFit('tee',runKey,tapT,'cold:sg1b-pump1t',0.5);
+  const jid=M.addFit('tee',runKey,tapT,'cold:pump1t-sg1b',0.5);
   const tieNet=M.pipeNetwork();
   const tie=tieNet.find(r=>r.key==='xtie:'+jid);
   const tieFinite=!!tie && tie.pts.length>=2 &&
@@ -212,7 +217,7 @@ const juncChecks=[];
    what moved it.
 
    86 -> 18 when feedwater moved off the generator's "b" face onto its own
-   "r" face - in design.js for loop 0, and in loopgen.js for loops 1..3, which
+   "r" face - in buildStockPlumbing() (pipenet.js), for every loop, which
    had been left building the old shape. Those runs used to cross the board
    from the right-hand plant to a generator's UNDERSIDE, through the lanes the
    cold leg and the branches tapped off it already own; landing on the near
@@ -222,13 +227,19 @@ const juncChecks=[];
 const WP_OTHER_BASE=18;   // exact measured baseline - see the note above
 const wpSpots=[];
 for(let x=8;x<=760;x+=24) for(let y=104;y<=600;y+=24) wpSpots.push([x,y]);
-makeLoops(M,2); M.commission();
-const wpKey=M.pipeNetwork().find(r=>r.k==='hot').key;
+/* NO FITTINGS. The 18 below was measured on a bare 2-loop plant, and a
+   fitting adds a branch run for a waypoint to land on. This used to be
+   true by LEAK - an earlier block happened to leave D.fit empty and
+   makeLoops() did not put it back - so say it out loud instead:
+   buildStockPlumbing() lays the stock relief valve like a fresh design. */
+M.buildStockPlumbing({loops:2}); M.D().fit={}; M.commission();
+const wpRun=M.pipeNetwork().find(r=>r.k==='hot');
+const wpKey=wpRun.key, wpRid=wpRun.rid;   // a waypoint lives on the RUN now, not on its key
 /* The claim the ceiling below rests on: with no waypoint parked anywhere, this
    plant routes with ZERO overlapping pipe. Without this, "86 positions cause an
    overlap" could equally mean "this layout always overlaps and the sweep found
    it 86 times" - two completely different facts wearing one number. */
-{ delete M.pipeWaypoints[wpKey];
+{ delete M.D().run[wpRid].wp;
   const base=pipeOverlaps(pipeSegs(M.pipeNetwork()));
   pipeChecks.push(['no waypoint, no overlap', base.length===0,
     base.length? `${base.length} run(s) overlap with nothing parked: `+
@@ -237,7 +248,7 @@ const wpKey=M.pipeNetwork().find(r=>r.k==='hot').key;
 }
 let wpMiss=0, wpBent=0, wpSelf=0, wpOther=0;
 for(const [x,y] of wpSpots){
-  M.pipeWaypoints[wpKey]=[{x,y}];
+  M.D().run[wpRid].wp=[{x,y}];
   const net=M.pipeNetwork(), r=net.find(q=>q.key===wpKey);
   if(!r.pts.some(p=>Math.abs(p[0]-x)<0.5 && Math.abs(p[1]-y)<0.5)) wpMiss++;
   if(r.legs.length!==r.wps.length+1) wpBent++;
@@ -245,7 +256,7 @@ for(const [x,y] of wpSpots){
   if(pipeOverlaps(pipeSegs([r])).length) wpSelf++;
   if(pipeOverlaps(pipeSegs(net)).length) wpOther++;
 }
-delete M.pipeWaypoints[wpKey];
+delete M.D().run[wpRid].wp;
 const wpChecks=[
   ['waypoint steers the run', wpMiss===0, `${wpSpots.length} places checked, ${wpMiss} not routed through`],
   ['waypoint keeps it square', wpBent===0, `${wpBent} runs bent off the axes or split wrong`],
@@ -485,12 +496,14 @@ const netKeyChecks=[];
 {
   let rendMiss=0, simMiss=0, posMiss=0, cases=0;
   for(const loops of [1,2,3,4]){
-    makeLoops(M,loops); M.D().fit={}; M.commission();
+    M.buildStockPlumbing({loops:loops}); M.D().fit={}; M.commission();
     // and again with the plant fully wired, since a fitting adds runs
     // (xtie:) that only exist once one is placed
     for(const wired of [false,true]){
       if(wired){
-        const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return r?[r.key,0.4]:null; };
+        const tap=k=>{ const c=k.split(':');
+    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
+    return r?[r.key,0.4]:null; };
         const a=tap('cold:sg0');
         if(a) M.addFit('throttle',a[0],a[1],null,null);
         for(let i=0;i<loops-1;i++){
@@ -514,7 +527,7 @@ const netKeyChecks=[];
      did before Stage 3a was finished, and the miss count must go POSITIVE -
      otherwise the comparison above is passing for some reason other than the
      keys agreeing. */
-  makeLoops(M,4); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
   const byKind=M.pipeNetwork().filter(r=>r.key).map(r=>r.k);
   const injected=keyMisses(byKind,Object.keys(M.P().net.byKey)).length;
   netKeyChecks.push(
@@ -542,7 +555,7 @@ const nozChecks=[];
   // the relief tank is a placed part now (Stage 5a) - on the grid from load,
   // with or without a relief fitting - but this sweep wants the FITTING too,
   // so the branch itself (not just the header run) is on the graph to sweep
-  makeLoops(M,1); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
   { const hot=M.pipeNetwork().find(r=>r.k==="hot");
     M.addFit('relief',hot.key,0.9,M.reliefHeaderKey(M.pipeNetwork())||'relief:x',0.5); }
   M.commission();
@@ -564,12 +577,12 @@ const nozChecks=[];
     ['every nozzle has a point', noDir===0, `${noDir} ends with no plant point`],
     ['the collapse really happens', collapsed>0,
      `${collapsed} zero-length runs seen in the sweep - the case is reproduced, not assumed`]);
-  M.D().fit={}; makeLoops(M,4); M.commission();
+  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
 }
 
 /* ── A RELIEF FITTING SURVIVES ITS TANK MOVING ──
    The relief HEADER's key carries the two faces pipeNetwork() picked for it
-   (D.run.relief, routed live), so it is renamed by any move of the
+   (the relief header run, routed live), so it is renamed by any move of the
    pressurizer or the tank. The stock relief fitting used to STORE that
    string, which meant moving either part - both of which the game invites -
    silently dropped the fitting out of netBuild(), took FIT.relief.g and its
@@ -580,7 +593,7 @@ const nozChecks=[];
    it only reads a valve that is actually passing. */
 const reliefChecks=[];
 {
-  makeLoops(M,4); M.D().fit={}; M.commission();
+  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
   const tapHot=M.pipeNetwork().find(r=>r.k==='hot');
   const stale='relief:pzrt-reltkb';       // the literal that used to be stored
   M.addFit('relief',tapHot.key,0.9,stale,0.5);
@@ -608,7 +621,7 @@ const reliefChecks=[];
      'the bench can resolve a header to tap after the tank moves'],
     ['inject: the stored literal',  renamed,
      `caught by "relief vents where it sits" (${stale} no longer names any run)`]);
-  M.D().fit={}; makeLoops(M,4); M.commission();
+  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
 }
 
 /* ══════════ A RUN'S KIND IS A SPEC, NOT A PERMISSION (Stage 1/1B) ══════════
@@ -691,7 +704,7 @@ const kindBehaveChecks=[];
   // header run are on the grid regardless (Stage 5a), but checks 1/2 want
   // the FITTING'S OWN branch on the graph too, so put one back, the same
   // setup nozChecks above already uses
-  M.D().fit={}; makeLoops(M,1); M.commission();
+  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
   { const hot=M.pipeNetwork().find(r=>r.k==="hot");
     M.addFit('relief',hot.key,0.9,M.reliefHeaderKey(M.pipeNetwork())||'relief:x',0.5); }
   M.commission();
@@ -750,7 +763,7 @@ const kindBehaveChecks=[];
   kindBehaveChecks.push(['every run can spill', !!steamRun2 && spillKey>0,
     steamRun2? `severed steam run spills ${spillKey.toFixed(4)} (break:${steamRun2.key})`
              : 'no steam run routed on this plant - cannot test']);
-  M.D().fit={}; makeLoops(M,4); M.commission();
+  M.buildStockPlumbing({loops:4}); M.D().fit={}; M.commission();
 }
 
 /* ══════════ STAGE 1B SURVIVORS: NAMED, NOT MERELY UNCAUGHT ══════════
@@ -776,7 +789,7 @@ const kindViewChecks=[];
     exempted? 'an ART EXEMPT marker sits immediately above drawSym()'
              : 'no ART EXEMPT marker found above drawSym() - the exemption is implicit again']);
 
-  M.D().fit={}; makeLoops(M,1); M.commission();
+  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
   const net=M.P().net;
   const hpiEdge=net.edges.find(e=>e.key && e.key.startsWith('hpi:'));
   const s=M.S(); s.hpi=false;
@@ -784,7 +797,7 @@ const kindViewChecks=[];
   kindViewChecks.push(['a shut injection tank is a shut edge', !!hpiEdge && gOff<=0,
     hpiEdge? `a shut injection tank gives the hpi edge g=${gOff} (<=0 required) - the run is still drawn, and still reads 0`
             : 'no hpi edge on this plant - cannot test']);
-  makeLoops(M,4); M.commission();
+  M.buildStockPlumbing({loops:4}); M.commission();
 }
 
 /* ══════════ EVERY RUN SHOWS EVERY VALUE IT HAS, AND NO TWO SMEAR ══════════
@@ -799,7 +812,7 @@ const kindViewChecks=[];
    is exactly the one the old bucket was hiding. */
 {
   for(const n of [1,2,3,4]){
-    makeLoops(M,n); M.commission();
+    M.buildStockPlumbing({loops:n}); M.commission();
     const runs=M.pipeNetwork();
     M.pipeAnchorTick();
     const anch=M.pipeAnchors(runs);
@@ -825,7 +838,7 @@ const kindViewChecks=[];
       worst? worst.a+' and '+worst.b+' overlap by '+worst.ov.toFixed(0)+'x'+worst.oy.toFixed(0)+'px'
            : 'checked every pair']);
   }
-  makeLoops(M,1); M.commission();
+  M.buildStockPlumbing({loops:1}); M.commission();
 }
 
 /* ══════════ ROLE: A PART ROLE IS A ROW (Stage 2) ══════════
@@ -906,7 +919,7 @@ const roleBehaveChecks=[];
   // the declaration (no part can be removed to test this: pzr is
   // unconditional in buildLayout()) and watching the anchor fall back to the
   // core, exactly as netFixed()'s own comment promises.
-  M.D().fit={}; makeLoops(M,1); M.commission();
+  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
   const coreIdx=M.P().net.index.core, pzrIdxBefore=M.P().net.pzrNode;
   const savedFixed=M.ROLE().pzr.fixed;
   M.ROLE().pzr.fixed=null;
@@ -945,7 +958,7 @@ const roleBehaveChecks=[];
    CURRENT name back to net.tankNid every rebuild. */
 const tankMoveChecks=[];
 {
-  M.D().fit={}; makeLoops(M,1); M.commission();
+  M.buildStockPlumbing({loops:1}); M.D().fit={}; M.commission();
   const at=id=>M.LAY().parts.find(q=>q.id===id);
   const home={...at('hpi')};
   const nodeHome=M.P().net.tankNid.hpi, idxHome=M.P().net.tankNode.hpi;
@@ -974,7 +987,7 @@ const tankMoveChecks=[];
     ['the moved tank still solves', injOk, `netFlowK=${M.netFlowK(s)} (finite and >= 0 required)`],
     ['HPI tank comes home unchanged', nodeBack===nodeHome && idxBack===idxHome,
      `back at the stock position: net.tankNid.hpi=${nodeBack}, net.tankNode.hpi=${idxBack}`]);
-  makeLoops(M,4); M.commission();
+  M.buildStockPlumbing({loops:4}); M.commission();
 }
 
 /* ══════════ A PIPE IS A THING THAT EXISTS (Stage 3a) ══════════
@@ -1027,7 +1040,7 @@ const runDataChecks=[];
   // is "kind:aIdFace-bIdFace" (or "kind:aIdFace" for a tap), so a key this
   // scan cannot reconstruct from SOME D.run entry (resolving its dynamic
   // faces live) would mean a run pipeNetwork() drew that D.run never declared
-  makeLoops(M,4); M.commission();
+  M.buildStockPlumbing({loops:4}); M.commission();
   const declaredKeys=new Set();
   for(const rid in M.D().run){
     const e=M.D().run[rid];
@@ -1061,15 +1074,18 @@ const runDataChecks=[];
   const hotKey=M.pipeNetwork().find(r=>r.k==='hot').key;
   M.addFit('relief',hotKey,0.9,M.reliefHeaderKey(M.pipeNetwork())||'relief:x',0.5);
   M.commission();
-  const savedRelief=M.D().run.relief;
-  delete M.D().run.relief;
+  // no stock run has a NAME any more - buildStockPlumbing() mints usrN, the
+  // same as any gesture would - so the header is found by the kind it carries.
+  const reliefRid=Object.keys(M.D().run).find(r=>M.D().run[r].k==='relief');
+  const savedRelief=M.D().run[reliefRid];
+  delete M.D().run[reliefRid];
   M.commission();
   const net2=M.P().net;
   const fidNow=Object.keys(M.D().fit)[0];
   const reltkEdges=net2.edges.filter(e=>(e.key&&e.key.indexOf('reltk')>=0));
   const xtieStillRoutes=M.pipeNetwork().some(r=>r.key.startsWith('xtie:'));
   const targetsContainment=net2.fitTarget && net2.fitTarget[fidNow]===null;
-  M.D().run.relief=savedRelief;
+  M.D().run[reliefRid]=savedRelief;
   M.commission();
   const restoredEdges=M.P().net.edges.filter(e=>e.key&&e.key.indexOf('reltk')>=0).length;
   runDataChecks.push(['a part with no run touches no edge', reltkEdges.length===0,
@@ -1077,14 +1093,14 @@ const runDataChecks=[];
   runDataChecks.push(['...but the valve still vents, to containment', xtieStillRoutes && targetsContainment,
     `branch fitting still routed: ${xtieStillRoutes} (want true), fitTarget: ${net2.fitTarget && net2.fitTarget[fidNow]} (want null - containment, pipenet.js's own fallback)`]);
   runDataChecks.push(['...and comes back once the run is restored', restoredEdges>0,
-    `${restoredEdges} edges reach reltk once D.run.relief is put back`]);
+    `${restoredEdges} edges reach reltk once the relief header run is put back`]);
   M.D().fit={};
 
   // no connection is refused for what a component is FOR: author a run from
   // the core straight to the condenser - nothing says a hot leg goes to a
   // generator, so nothing may refuse this one. It does not have to cool
   // anything (Stage 6 owns heat); it must only fail to be REFUSED.
-  makeLoops(M,1); M.commission();
+  M.buildStockPlumbing({loops:1}); M.commission();
   M.D().run.__auditTest={a:'core',af:null,b:'cond',bf:null,k:'test',bore:1};
   M.commission();
   const testRun=M.pipeNetwork().find(r=>r.k==='test');
@@ -1108,7 +1124,7 @@ const runDataChecks=[];
   // fail the second if this loop dead-ended anywhere. Three assertions on
   // purpose, because "it was refused" and "it cooked" must never be
   // confusable either - the third is stated and left UNASSERTED, not faked.
-  makeLoops(M,1); M.commission();
+  M.buildStockPlumbing({loops:1}); M.commission();
   M.D().run.__auditA={a:'core',af:null,b:'cond',bf:null,k:'test',bore:1};
   M.D().run.__auditB={a:'cond',af:null,b:'pump0',bf:'t',k:'test',bore:1};
   M.D().run.__auditC={a:'pump0',af:'b',b:'core',bf:null,k:'test',bore:1};

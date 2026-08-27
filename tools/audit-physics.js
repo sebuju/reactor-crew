@@ -14,8 +14,8 @@ const M=require('./bundle').headless(
  'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,addRun,removeRun,fittableList,'+
  'primaryPump,pumpIds,flowPri,flowDemPri,secGensOf,secondaryNode,tankSide,crossTies,'+
  'loopKg,hotMass,turbCount,condCount,roleAlive,mwE,'+
- 'loopOf,loopOfKey,loopPumpCap,portRoom,nearestFreePort,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
- 'addTapRun,runKindFor,pzrPlumbed,datumPart,designBlocked,designIssues,'+
+ 'loopOf,loopOfKey,loopPumpCap,portRoom,bestFreePortPair,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
+ 'addTapRun,runKindFor,buildStockPlumbing,pzrPlumbed,datumPart,designBlocked,designIssues,'+
  'nearestRunTo,juncPt,D_fit:()=>D.fit,'+
  'pipeNetwork,act,ctxItemsDesign,'+
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
@@ -26,7 +26,6 @@ const M=require('./bundle').headless(
  'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,autoLive,AUTOSYS:()=>AUTOSYS,'+
  'paramsForFit,readoutsForFit,SGT:()=>SGT,sgCount,invRate,tankPoolPct,tankRuleAny,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,'+
  'sgIds,sglMin,sgLvl,sgShare,netExpSurge,secP,BETA_W,LVL_K,LOG:()=>LOG}');
-const {makeLoops}=require('./loopgen');
 const HOT_NPSH_A=10;   // mirrors step.js's own HOT_NPSH - the suction taper this block asserts against
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), ANN=M.ANN();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -44,11 +43,20 @@ const BASE=JSON.parse(JSON.stringify(D));
    any other module state set() does not own.
    `o.loops`, unlike every other field, is NOT a D field any more - D.loops
    was deleted in Stage 3b. It is a request this helper honours through the
-   real mechanism (makeLoops(), loopgen.js): placed generators, placed pumps,
-   real D.run entries, exactly what a player's ADD STEAM GENERATOR HERE +
-   CONNECT would build. Every set() call re-syncs to the requested count,
-   tearing down whatever a PRIOR call built first, so `loops` never needs
-   its own restore the way a bare D field would. */
+   real mechanism (buildStockPlumbing(), pipenet.js): placed generators,
+   placed pumps, real D.run entries, exactly what a player's ADD STEAM
+   GENERATOR HERE + CONNECT would build. Every set() call re-syncs to the
+   requested count, tearing the WHOLE plumbing down first, so `loops` never
+   needs its own restore the way a bare D field would.
+   That builder is idempotent and re-mints the same rids every time, which
+   is why the helpers below can find a stock run by what it CONNECTS - a
+   gesture cannot name a rid, so no stock run has a name to quote. */
+/* FIND A STOCK RUN. Every run is minted usrN now, so a case that means "the
+   hot leg" or "the surge line" has to say which one it means: the pair of
+   parts it joins, or the kind it carries where the plant has only one. */
+const ridOf=(a,b)=>Object.keys(D.run).find(r=>{ const e=D.run[r];
+  return (e.a===a&&e.b===b)||(e.a===b&&e.b===a); });
+const ridOfKind=k=>Object.keys(D.run).find(r=>D.run[r].k===k);
 const set=o=>{
   o=o||{};
   const lat=o.lat; if(lat) { o=Object.assign({},o); delete o.lat; }
@@ -56,7 +64,7 @@ const set=o=>{
   Object.assign(D,JSON.parse(JSON.stringify(BASE)),o);
   M.latDefault();
   if(lat) lat();
-  makeLoops(M, loops||1);
+  M.buildStockPlumbing({loops:loops||1});
   M.commission(); return M.S();
 };
 /* ORDER EVERY PUMP, actual and demand together, the way a case that wants a
@@ -557,8 +565,8 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
      test above uses (n=200, p=0.4486: sigma=7.0, window ~67..113). */
   M.D().fit={};
   const f0=M.addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,M.PIPE_BORE().relief);
-  const f1=M.addFit('relief','cold:sg0b-pump0t',0.5,'relief:pzrt-reltkb',0.3,M.PIPE_BORE().relief);
-  const f2=M.addFit('relief','cold:pump0b-coreb',0.5,'relief:pzrt-reltkb',0.7,M.PIPE_BORE().relief);
+  const f1=M.addFit('relief','cold:pump0t-sg0b',0.5,'relief:pzrt-reltkb',0.3,M.PIPE_BORE().relief);
+  const f2=M.addFit('relief','cold:coreb-pump0b',0.5,'relief:pzrt-reltkb',0.7,M.PIPE_BORE().relief);
   M.commission(); const s=M.S(); s.byp.rps=true; run(s,5);
   const ids=[f0,f1,f2];
   let anyStuck=0;
@@ -598,7 +606,7 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
      (netBuild()'s own contTarget fallback) - "vents somewhere" is not "vents
      into the tank it is drawn next to". */
   const s=set({}); const fid=M.primaryRelief();
-  M.removeRun('relief'); M.commission();
+  M.removeRun(ridOfKind('relief')); M.commission();
   const s2=M.S(); s2.reliefOpen[fid]=true; s2.reliefBlocked[fid]=false;
   run(s2,5);
   if(M.tankLvl(s2,'reltk')>0)
@@ -606,7 +614,7 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
   if(!(M.reliefRate(s2,fid)>=0) || !isFinite(M.reliefRate(s2,fid)))
     bad(`disconnecting the relief header left reliefRate non-finite or negative: ${M.reliefRate(s2,fid)}`);
   console.log(`  a tank with no run to it never fills: reltk level stays ${M.tankLvl(s2,'reltk').toFixed(1)}% while the valve vents to containment instead`);
-  M.D().run.relief={a:"pzr",af:null,b:"reltk",bf:null,k:"relief",bore:0.20}; M.commission();
+  M.addRun("pzr",null,"reltk",null); M.commission();
 }
 { /* ══ AN UNPLUMBED PRESSURIZER SETS NOTHING ══
      A vessel with no pipe to the loop has no steam bubble in the loop, so it
@@ -619,13 +627,13 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
      Off REACHABILITY, not off a D.run lookup, which the third case is what
      proves: the run is still declared and still drawn, and shutting the
      path is exactly as disconnected as deleting it. */
-  const savedSurge=M.D().run.surge;
   set({}); M.commission();
+  const surgeRid=ridOfKind('surge'), savedSurge=M.D().run[surgeRid];
   if(!M.pzrLive(M.P().net, M.S()))
     bad('the STOCK plant reads its pressurizer as unplumbed - pzrLive() is inverted or the datum face moved');
   const kIntact=M.netFlowK(M.S());
 
-  delete M.D().run.surge; M.commission();
+  delete M.D().run[surgeRid]; M.commission();
   if(M.pzrLive(M.P().net, M.S()))
     bad('the surge line was deleted and the pressurizer still reads plumbed');
   const sCut=M.S(); run(sCut,60);
@@ -636,7 +644,7 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
   /* AND IT COMES BACK BIT-IDENTICAL. The whole risk of a new predicate in the
      tick is that it costs an intact plant a float; this is the check that says
      it did not. */
-  M.D().run.surge=savedSurge; M.commission();
+  M.D().run[surgeRid]=savedSurge; M.commission();
   const kBack=M.netFlowK(M.S());
   if(kBack!==kIntact)
     bad(`restoring the surge line did not restore netFlowK bit-identically: ${kIntact} -> ${kBack}`);
@@ -671,17 +679,17 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
 
   set({}); const REF=fig();
 
-  delete D.run.hot0;
+  delete D.run[ridOf("core","sg0")];
   M.addRun("core","r","sg0","l");
   const redrawnHot=fig();
   if(!same(REF,redrawnHot))
     bad(`a hot leg deleted and drawn again is not the stock hot leg:\n      ${show(REF)}\n      ${show(redrawnHot)}`);
 
   set({});
-  delete D.run.surge;
+  delete D.run[ridOfKind("surge")];
   { const pz=M.datumPart(), face=M.ROLE()[pz.role].fixed.face;
     const hostRid=Object.keys(D.run).find(r=>D.run[r].k==="hot");
-    M.addTapRun(pz.id, face, hostRid, "hot", "surge", M.PIPE_BORE().surge); }
+    M.addTapRun(pz.id, face, hostRid, "hot", "surge"); }
   const redrawnSurge=fig();
   if(!same(REF,redrawnSurge))
     bad(`a surge line deleted and tapped on again is not the stock surge line:\n      ${show(REF)}\n      ${show(redrawnSurge)}`);
@@ -699,7 +707,7 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
   set({});
   if(M.runKindFor("pzr","core")!=="surge")
     bad(`a pipe drawn from the pressurizer to the core is kind "${M.runKindFor("pzr","core")}", not "surge"`);
-  delete D.run.surge;
+  delete D.run[ridOfKind("surge")];
   const pz=M.datumPart(), face=M.ROLE()[pz.role].fixed.face;
   M.addRun(pz.id, face, "core", "r");
   M.commission();
@@ -720,8 +728,8 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
      pzrLive() did not, so the bench would have called an unplumbed vessel
      wired. The core is the case that bites, because it declares only r and b. */
   set({});
-  delete D.run.surge;
-  D.run.bogus={a:"pzr",af:"b",b:"core",bf:"t",k:"surge",bore:0.30};
+  delete D.run[ridOfKind("surge")];
+  D.run.bogus={a:"pzr",af:"b",b:"core",bf:"t",k:"surge"};
   M.layoutMetrics();
   if(M.pzrPlumbed()) bad('a run to a face the core has no port on reads as plumbed on the bench');
   M.commission();
@@ -738,7 +746,7 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
   set({});
   if(!M.pzrPlumbed()) bad('the STOCK plant reads its pressurizer as unwired - pzrPlumbed() misses a tap run');
 
-  delete D.run.surge; M.layoutMetrics();
+  delete D.run[ridOfKind("surge")]; M.layoutMetrics();
   if(M.pzrPlumbed()) bad('the surge line was deleted and the bench still reads the pressurizer as wired');
   if(M.designBlocked()) bad('an unplumbed pressurizer BLOCKS the design - it must warn, never refuse');
   const issues=M.designIssues().filter(w=>/pressurizer/i.test(w[1]) && /no pipe/i.test(w[1]));
@@ -758,8 +766,8 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
      pzrPlumbed() a reachability test with the same stopping rule pzrLive()
      has, and not a "does any run name the pressurizer" lookup. */
   set({});
-  delete D.run.surge; M.layoutMetrics();
-  if(!D.run.relief) bad('the relief header is gone, so this case proves nothing');
+  delete D.run[ridOfKind("surge")]; M.layoutMetrics();
+  if(!ridOfKind("relief")) bad('the relief header is gone, so this case proves nothing');
   if(M.pzrPlumbed())
     bad('a pressurizer reachable only through a tank reads as wired - the walk crossed a pressure boundary');
   M.commission();
@@ -1001,11 +1009,12 @@ set({});
   console.log(`  a filling tank throttles the vent by its own gas alone: ${levels.map((l,i)=>l+'%='+rates[i].toFixed(3)).join(', ')}`);
 }
 { /* NEW: venting to containment raises s.release and needs no part - a
-     relief fitting whose header/tank never resolved (D.run.relief deleted)
+     relief fitting whose header/tank never resolved (the relief run deleted)
      still vents, off pipenet.js's own containment fallback (a relief valve
      may never have nowhere to vent), straight into s.release rather than a
      tank that does not exist. */
-  M.D().fit={}; const savedRelief=M.D().run.relief; delete M.D().run.relief;
+  M.D().fit={}; const reliefRid=ridOfKind("relief");
+  const savedRelief=M.D().run[reliefRid]; delete M.D().run[reliefRid];
   const fid=M.addFit('relief','hot:corer-sg0l',0.9,'relief:x',0.5);
   M.commission(); const s=M.S();
   if(M.P().net.fitTarget[fid]!==null)
@@ -1017,7 +1026,7 @@ set({});
   if(s.tank.reltk!==lvl0)
     bad(`s.tank.reltk moved (${lvl0} -> ${s.tank.reltk}) venting to a plant with no relief tank part`);
   console.log(`  venting to containment with no tank raises s.release: ${s.release.toFixed(4)} after 5 s, needs no part`);
-  M.D().fit={}; M.D().run.relief=savedRelief; M.commission();
+  M.D().fit={}; M.D().run[reliefRid]=savedRelief; M.commission();
 }
 
 console.log('\n=== A RELIEF VALVE CARRIES ITS OWN SETPOINTS AND ITS OWN ARM ===');
@@ -1027,9 +1036,9 @@ const threeReliefs=(a,b,c)=>{
   M.D().fit={};
   const f0=M.addFit('relief','hot:corer-sg0l',0.9,'relief:pzrt-reltkb',0.5,M.PIPE_BORE().relief,
                     a&&a[0],a&&a[1]);
-  const f1=M.addFit('relief','cold:sg0b-pump0t',0.5,'relief:pzrt-reltkb',0.3,M.PIPE_BORE().relief,
+  const f1=M.addFit('relief','cold:pump0t-sg0b',0.5,'relief:pzrt-reltkb',0.3,M.PIPE_BORE().relief,
                     b&&b[0],b&&b[1]);
-  const f2=M.addFit('relief','cold:pump0b-coreb',0.5,'relief:pzrt-reltkb',0.7,M.PIPE_BORE().relief,
+  const f2=M.addFit('relief','cold:coreb-pump0b',0.5,'relief:pzrt-reltkb',0.7,M.PIPE_BORE().relief,
                     c&&c[0],c&&c[1]);
   M.commission();
   return [f0,f1,f2];
@@ -1161,7 +1170,7 @@ const threeReliefs=(a,b,c)=>{
      snapshotted, restored and compared like a real one. Scoped by MODE too, so
      a tee's id cannot arm a relief valve that does not exist. */
   const [f0]=threeReliefs();
-  const tee=M.addFit('tee','cold:sg1b-pump1t',0.5,'cold:sg2b-pump2t',0.5);
+  const tee=M.addFit('tee','cold:pump1t-sg1b',0.5,'cold:pump2t-sg2b',0.5);
   M.commission(); const s=M.S();
   M.act('porvByp','doesNotExist');
   if('doesNotExist' in s.porvByp) bad('act(porvByp,...) put a phantom key on S for an id this design never had');
@@ -1249,16 +1258,16 @@ console.log('\n=== HPI: INJECTION IS A FUNCTION OF ITS OWN LINE ===');
      SAME injResist(bore,L+extra) call every undamaged run uses) rather than
      the old boolean "!pipeExtraLen(...) ? tankG : 0" gate - and the end
      state is identical either way: exactly zero. Read the EDGE'S OWN
-     conductance directly, keyed "hpi:hpib-coreb", not qTankBy: severing this
+     conductance directly, keyed "hpi:coreb-hpib", not qTankBy: severing this
      run ALSO opens a break at its own ends (the same s.dmgParts entry drives
      both - Stage 1's "no second signal" rule), and that break's own edges
-     carry the DIFFERENT key "break:hpi:hpib-coreb" but still touch the same
+     carry the DIFFERENT key "break:hpi:coreb-hpib" but still touch the same
      tank node (hpib) qTankBy sums flow over - conflating "the injection edge
      itself still conducts" with "the severed stub is now correctly spilling
      to containment", a different, already-covered fact. */
   const s=set({}); s.tankOpen.hpi=true; s.P=M.P().Pcont+0.5; s.pCore=s.P;
   M.netFlowK(s);
-  const key='hpi:hpib-coreb';
+  const key='hpi:coreb-hpib';
   const edgeG=()=>{ const ed=M.P().net.edges.find(e=>e.key===key); return ed?(typeof ed.g==='function'?ed.g(s):ed.g):null; };
   const before=edgeG();
   s.dmgParts.push('pipe:'+key);
@@ -1294,7 +1303,13 @@ console.log('\n=== JUNCTIONS ===');
    pumps here - see the block below for why that is its own case. */
 const tieChain=()=>{
   set({loops:4});
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  const tap=k=>{ const c=k.split(':');
+    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
+    /* t is measured from the NAMED part's end. A key carries its two ends
+       sorted now, so t=0 is whichever id sorts first, not the machine the
+       caller asked for - and a tee tapped at the wrong end of a cold leg
+       lands its branch in another run's lane. */
+    return [r.key, r.key.slice(c[0].length+1).indexOf(c[1])===0 ? 0 : 1]; };
   const ids=[0,1,2].map(i=>M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1))));
   M.commission();               // re-bakes P.fit with the three junctions in it
   return {s:M.S(), ids};
@@ -1364,7 +1379,13 @@ const removePlumbedSpare=sp=>{ M.removePart(sp.part.id); for(const r of sp.runs)
      own loop is not an average loop; only the ordering (each rung strictly
      ahead of the last) is the claim. */
   set({loops:4});
-  const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0]; };
+  const tap=k=>{ const c=k.split(':');
+    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
+    /* t is measured from the NAMED part's end. A key carries its two ends
+       sorted now, so t=0 is whichever id sorts first, not the machine the
+       caller asked for - and a tee tapped at the wrong end of a cold leg
+       lands its branch in another run's lane. */
+    return [r.key, r.key.slice(c[0].length+1).indexOf(c[1])===0 ? 0 : 1]; };
   const ids=[0,1,2].map(i=>M.addFit('tee',...tap('cold:sg'+i),...tap('cold:sg'+(i+1))));
   const sp1=plumbedSpare(1,9,5); M.D().pumpSize[sp1.part.id]=0;
   const sp3=plumbedSpare(3,13,5);
@@ -1595,7 +1616,7 @@ console.log('\n=== THROTTLES ===');
   const bare=M.netFlowK(M.S());
 
   set({loops:1});
-  const tap=()=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith('cold:sg0')); return [r.key,0.5]; };
+  const tap=()=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith('cold:')&&x.key.indexOf('sg0')>=0); return [r.key,0.5]; };
   const tid=M.addFit('throttle',...tap(),null,null);   // in-line: bKey null
   M.commission();
   const s=M.S();
@@ -3175,7 +3196,7 @@ console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
       const i0=s.inv; s.dmgParts.push('pipe:'+key);
       for(let i=0;i<50*secs;i++) M.step(0.02);
       return i0-s.inv; };
-    const big=drain('hot:corer-sg0l',6), small=drain('hpi:hpib-coreb',6);
+    const big=drain('hot:corer-sg0l',6), small=drain('hpi:coreb-hpib',6);
     if(!(big>small*2)) bad(`a full-bore hot leg (${big.toFixed(2)}%) did not drain more than twice as fast as the narrow injection line (${small.toFixed(2)}%) - bore is not pricing the opening`);
     console.log(`  break size matters: 6 s of a full-bore hot leg costs ${big.toFixed(1)}%, the 0.25-bore injection line ${small.toFixed(2)}%`);
   }
@@ -3188,8 +3209,8 @@ console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
     const s=set({loops:2}); run(s,10);
     const one={}, two={};
     s.dmgParts=[]; s.breach=true;  M.netFlowK(s,null,null,one);
-    s.breach=false; s.dmgParts=['pipe:cold:sg0b-pump0t']; M.netFlowK(s,null,null,two);
-    const edges=M.P().net.edges.filter(e=>e.kind==='break'&&e.key==='break:cold:sg0b-pump0t');
+    s.breach=false; s.dmgParts=['pipe:cold:pump0t-sg0b']; M.netFlowK(s,null,null,two);
+    const edges=M.P().net.edges.filter(e=>e.kind==='break'&&e.key==='break:cold:pump0t-sg0b');
     if(edges.length!==2) bad(`a severed run offered ${edges.length} break edge(s), expected exactly 2 - a cut pipe has two open ends`);
     if(!(two.spill>0)) bad('a severed run spilled nothing at all');
     console.log(`  two open ends: a severed run carries ${edges.length} break edges and spills ${two.spill.toFixed(2)} against the vessel's ${one.spill.toFixed(2)} through one`);
@@ -3255,7 +3276,7 @@ console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
        This could not happen at all while cavitation was one scalar computed
        from s.P for the whole plant. */
     set({loops:2});
-    const id=M.addFit('throttle','cold:sg0b-pump0t',0.5);
+    const id=M.addFit('throttle','cold:pump0t-sg0b',0.5);
     M.commission();
     const s=M.S(); run(s,20);
     s.valve[id]=s.valveDem[id]=0.10;
@@ -3299,7 +3320,9 @@ console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
        Today's readout is a fraction of a span; the differential a gauge would
        print is a number of MPa, and it has to move the right way. */
     const s0=set({loops:2});
-    const tap=k=>{ const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(k)); return [r.key,0.5]; };
+    const tap=k=>{ const c=k.split(':');
+    const r=M.pipeNetwork().find(x=>x.key&&x.key.startsWith(c[0]+':')&&x.key.indexOf(c[1])>=0);
+    return [r.key,0.5]; };
     const id=M.addFit('throttle',...tap('hot:corer-sg0l'));
     M.commission();
     const s=M.S(); run(s,30);
@@ -3452,7 +3475,7 @@ const boronPlant=(n)=>{
     const t=M.tanks()[id];
     t.fluid='borated'; t.check=true; t.auto='manual';
     t.pump={p:11.0,bus:'bkp'}; t.gas=null;
-    M.D().run['bor'+i]={a:id,af:null,b:'core',bf:'b',k:'boron',bore:0.20};
+    M.D().run['bor'+i]={a:id,af:null,b:'core',bf:'b',k:'boron'};
     ids.push(id);
   }
   M.commission();
