@@ -95,16 +95,54 @@ const tankMass=()=>{ let m=0;
 const pumpSizeOf=id=>D.pumpSize[id]??0.5;
 const pumpCap=size=>0.7+0.6*size;
 const PUMP_MASS=50;                    // t, at pumpCap()==1 (default size)
-// ROLE[p.role].head, not p.id.startsWith("pump") - what MAKES something a
-// pump for capacity purposes is that its role puts head into the loop
-// (ROLE.head), the identical test netBuild() gates its own head edge on.
+/* IS THIS A PRIMARY PUMP? There is one pump role, so the question cannot be
+   asked of a name or of a second role - it is asked of the GRAPH, exactly
+   like loop membership itself: a pump the flood fill can trace to a generator
+   is a coolant pump, one it cannot is piped somewhere else and is somebody
+   else's pump. Written once and shared; four sites used to ask
+   ROLE.head and would each count a feedwater pump.
+   Declared here, above its first reader, but loopOf() is hoisted below - it
+   is only ever CALLED after the module has finished loading. */
+/* WHICH PATH THROUGH A COMPONENT IS THE PUMP CASING. head sits on the PATH
+   row, not on the role: a role may carry several internal paths and only one
+   of them can be the thing that pushes. A role with no path pushes nothing,
+   which is every role but one. */
+const roleHead=role=>{ const R=ROLE[role]; if(!R||!R.internal) return false;
+  return (Array.isArray(R.internal)?R.internal:[R.internal]).some(IN=>IN.head); };
+const primaryPump=id=>{ const p=LAY.parts.find(q=>q.id===id);
+  return !!p && roleHead(p.role) && loopOf(id)!==null; };
+/* EVERY PUMP ON THE GRID, in LAY order - the set s.flowBy/s.flowDemBy are
+   keyed on, counted and never named, exactly like sgIds(). */
+const pumpIds=()=>LAY.parts.filter(p=>roleHead(p.role)).map(p=>p.id);
+// roleHead(), not p.id.startsWith("pump") - what MAKES something a
+// pump for capacity purposes is that its role puts head into the loop,
+// the identical test netBuild() gates its own head edge on.
+// ...and then primaryPump(), because that head has to reach the CORE for this
+// book to be about it: flowMin (step.js) prices the RPS low-flow floor off
+// this total, so counting a feedwater pump would raise the trip floor of a
+// plant whose coolant flow it cannot touch.
 const totalPumpCap=()=>{ let c=0;
-  for(const p of LAY.parts) if(ROLE[p.role] && ROLE[p.role].head) c+=pumpCap(pumpSizeOf(p.id));
+  for(const p of LAY.parts) if(primaryPump(p.id)) c+=pumpCap(pumpSizeOf(p.id));
   return c; };
 // how many steam generators are on the grid right now - the fact D.loops
 // used to fake as an input. Every reader that priced or counted "loops"
 // wants this counted value instead, never a stored knob.
 const sgCount=()=>LAY.parts.filter(p=>p.role==="sg").length;
+/* HOW MANY TURBINES AND HOW MANY CONDENSERS ARE ON THE GRID. Same move,
+   twice: a flag said "there is one, or there is none", and every reader that
+   priced, gated or NAMED one wants a count. The stock unit is still behind
+   its own fittable checkbox - "no turbine at all" stays a legal design and
+   the bench still warns about it - and any further one is a PLACED part, the
+   standing a spare pump and a spare generator already have. */
+const turbCount=()=>LAY.parts.filter(p=>p.role==="turb").length;
+const condCount=()=>LAY.parts.filter(p=>p.role==="cond").length;
+/* WHAT SHARE OF THEM IS STILL WORKING. mwE() used to ask
+   s.dmgParts.includes("turb") - a NAME test, and with two turbines a hit on
+   one would have zeroed the plant's whole output. A share, so losing one of
+   two costs half. */
+const roleAlive=(role,dmg)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p=>p.id);
+  if(!ids.length) return 0;
+  return ids.filter(id=>!dmg||dmg.indexOf(id)<0).length/ids.length; };
 /* A part whose mass is not already counted by some other measure
    (totalPumpCap(), sgCount(), latMass(), a fitting's own FIT_MASS) - one row
    per role, priced once if that role is anywhere on LAY.parts at all. Off
@@ -124,19 +162,21 @@ const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
    consequence: place a spare pump nobody ever piped in and loopPumpCap(0)
    doubled anyway, purely because the spare's `.loop` happened to read 0.
 
-   loopMap() answers it off D.run instead, structurally: which PARTS a run
-   connects, flood-filled outward from every generator on the grid. Two
-   parts only link through it if BOTH carry a ROLE this loop concept is
-   even about (core/sg/pump) - never by a run's own `k` label. That is not
-   a permission on the SOLVE (every run still conducts, taps, hits and
-   spills regardless of role - Stage 1's rule is untouched), it is a
-   bookkeeping default exactly like KIND_TEMP's hot/cold tag (pipenet.js):
-   read for a display bucket, never for whether current flows. Filtering by
-   role instead of by kind sidesteps a real landmine - the feed pump's own
-   run lands on the SAME node a cold leg does (sg's "b" face carries both;
-   see KIND_TEMP's own comment) - a kind-based or pure node-reachability
-   walk would pull the feedwater pump into "loop 0" the moment that
-   coincidence lines up; ROLE.feed is not in the set, so it never can.
+   loopMap() answers it off the drawing instead, structurally: nodeGraph()
+   below, flood-filled outward from every generator's PRIMARY nodes. Only a
+   part carrying a ROLE this loop concept is even about (core/sg/pump) takes
+   an index - never a run's own `k` label. That is not a permission on the
+   SOLVE (every run still conducts, taps, hits and spills regardless of role -
+   Stage 1's rule is untouched), it is a bookkeeping default exactly like
+   KIND_TEMP's hot/cold tag (pipenet.js): read for a display bucket, never for
+   whether current flows.
+
+   Role alone used to be what kept the feedwater pump out of loop 0, because
+   its run landed on the SAME node a cold leg did (sg's "b" face carried both)
+   and ROLE.feed was simply not in the set. Both halves of that are gone: the
+   feed run lands on the generator's own "r" face, and there is one pump role,
+   so the walk itself has to be able to tell a tube from a shell. It can,
+   because it walks NODES and the generator's two internal paths do not meet.
 
    A pump this walk cannot reach from any generator (nothing plumbed to it
    at all, or plumbed somewhere no generator's branch reaches - Stage 3a's
@@ -145,35 +185,182 @@ const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
    netBuild()'s pump-head block, pipenet.js - it just does not pool
    capacity with anyone else's, because there is no group to pool with. */
 const LOOP_ROLE={core:1, sg:1, pump:1};
-let loopMapCache=null, loopMapSig="";
-function loopMap(){
+/* THE WALK IS OVER NODES, NOT PARTS. It used to link two PARTS whenever a run
+   joined them, which was only ever right while every part was a single
+   through-path: a steam generator carries two that do not meet (tubes and the
+   shell around them), so a part-level link walks straight through the tube
+   wall and out the other side, and a feedwater pump piped to a generator's
+   shell would read as one of that generator's coolant pumps. There is one
+   pump role now, so that is not hypothetical - it is what would happen.
+   Node = partId+face, exactly the key netBuild() indexes on, so this graph and
+   the solve's graph are the same drawing read twice. */
+let nodeGraphCache=null, nodeGraphSig="";
+function nodeGraph(){
   const sig=laySig()+"|"+JSON.stringify(D.run);
-  if(loopMapCache && loopMapSig===sig) return loopMapCache;
+  if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
   const id=k=>LAY.parts.find(q=>q.id===k);
-  const adj={};
+  const adj={}, nodesOf={};
+  const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
   const link=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b); (adj[b]||(adj[b]=[])).push(a); };
+  for(const p of LAY.parts){
+    const R=ROLE[p.role]; if(!R||!R.internal) continue;
+    for(const IN of (Array.isArray(R.internal)?R.internal:[R.internal])){
+      note(p.id,IN.a); note(p.id,IN.b); link(p.id+IN.a, p.id+IN.b); }
+  }
+  /* A TAP RUN IS A LINK TOO - runReach() makes the same move for the same
+     reason. It lands on another RUN rather than on a port, so it joins its own
+     face to BOTH ends of whatever it lands on. Skip it and the stock surge
+     line is not a connection: the pressurizer hangs off nothing, the relief
+     tank behind it reads as SECONDARY, and a primary tank lands in the
+     secondary's books. */
+  const hostRun=e=>{ const h=D.run[e.tap];
+    if(h && !h.tap) return h;
+    if(!e.tapK) return null;
+    for(const rid in D.run){ const o=D.run[rid]; if(o!==e && !o.tap && o.k===e.tapK) return o; }
+    return null; };
+  const endNode=(pid,f,other)=>{ const p=id(pid), q=id(other);
+    if(!p) return null;
+    const fc=f!=null?f:(q?face(p,q):null);
+    if(fc==null) return null;
+    note(p.id,fc); return p.id+fc; };
+  const taps=[];
   for(const rid in D.run){
     const e=D.run[rid];
-    if(e.tap) continue;                       // no part-to-part link of its own (surge etc.)
-    const a=id(e.a), b=id(e.b);
-    if(!a||!b || !LOOP_ROLE[a.role] || !LOOP_ROLE[b.role]) continue;
-    if(a.id==="core"||b.id==="core") continue; // the shared hub, not a link BETWEEN two loops
-    link(a.id,b.id);
+    if(e.tap){ taps.push(e); continue; }
+    const a=id(e.a), b=id(e.b); if(!a||!b) continue;
+    const sa=e.af!=null?e.af:face(a,b), sb=e.bf!=null?e.bf:face(b,a);
+    note(a.id,sa); note(b.id,sb);
+    link(a.id+sa, b.id+sb);
   }
+  for(const e of taps){
+    const h=hostRun(e); if(!h) continue;
+    const mine=endNode(e.a, e.af, h.a); if(!mine) continue;
+    const ha=endNode(h.a, h.af, h.b), hb=endNode(h.b, h.bf, h.a);
+    if(ha) link(mine, ha);
+    if(hb) link(mine, hb);
+  }
+  /* A COMPONENT THAT DECLARES NO PATH IS STILL ONE VESSEL. ROLE.internal says
+     what the SOLVE carries through a part, and a pressurizer declares none -
+     correctly, it is a boundary rather than a through-path. But the question
+     THIS graph answers is "which side is this on", and a pipe on the
+     pressurizer's bottom and one on its side are plainly the same water. Left
+     unlinked, the relief tank hung off a face the core could not reach and
+     read as SECONDARY: a primary tank in the secondary's books. A part that
+     DOES declare its paths is taken at its word - the generator's tubes and
+     shell do not meet, and that is the whole point. */
+  for(const p of LAY.parts){
+    const R=ROLE[p.role]; if(R && R.internal) continue;
+    const ns=nodesOf[p.id]; if(!ns) continue;
+    for(let i=1;i<ns.length;i++) link(ns[0], ns[i]);
+  }
+  const reach=(seeds,cut)=>{ const seen={}, stack=[];
+    for(const n of seeds) if(!seen[n]){ seen[n]=1; stack.push(n); }
+    while(stack.length){ const u=stack.pop();
+      for(const v of (adj[u]||[])){
+        if(seen[v] || (cut && cut[v])) continue;
+        seen[v]=1; stack.push(v); } }
+    return seen; };
+  /* PRIMARY IS THE COMPONENT CONTAINING THE CORE. Not a side field, not a
+     kind: the one structural fact the drawing already carries. A plant with no
+     core on the grid has no primary at all, and every node is secondary by
+     this definition - which is honest, there is nothing for them to be the
+     primary OF. */
+  const primary = reach(nodesOf.core||[]);
+  nodeGraphCache={adj, nodesOf, primary, reach}; nodeGraphSig=sig;
+  return nodeGraphCache;
+}
+/* Keyed on the node graph's own IDENTITY, not on a second signature: this is
+   a pure function of that graph, and re-deriving the signature here would
+   stringify D.run twice per call on a hot path (loopOf() is asked once per
+   pump per solve). */
+let loopMapCache=null, loopMapFor=null;
+function loopMap(){
+  const G=nodeGraph();
+  if(loopMapCache && loopMapFor===G) return loopMapCache;
   const partLoop={};
   // seeded off ROLE.sg parts directly, in LAY.parts' own order - counted,
   // never named: a generator is a placed part now (Stage 3b), not a fixed
   // "sg"+i slot buildLayout() conjured for i<D.loops.
+  // Seeded on that generator's PRIMARY nodes only, and walked with the core's
+  // own nodes cut out - the core is the shared hub, so crossing it would make
+  // every loop one loop, which is the same exclusion the part-level walk made
+  // and the reason it is a cut rather than a filter.
   let nextLoop=0;
   for(const p of LAY.parts){
     if(p.role!=="sg" || partLoop[p.id]!==undefined) continue;
-    const stack=[p.id], i=nextLoop++;
+    const seeds=(G.nodesOf[p.id]||[]).filter(n=>G.primary[n]);
+    const i=nextLoop++;
     partLoop[p.id]=i;
-    while(stack.length){ const u=stack.pop();
-      for(const v of (adj[u]||[])) if(partLoop[v]===undefined){ partLoop[v]=i; stack.push(v); } }
+    const cut={}; for(const n of (G.nodesOf.core||[])) cut[n]=1;
+    const seen=G.reach(seeds,cut);
+    for(const q of LAY.parts){
+      if(!LOOP_ROLE[q.role] || q.id==="core" || partLoop[q.id]!==undefined) continue;
+      if((G.nodesOf[q.id]||[]).some(n=>seen[n])) partLoop[q.id]=i;
+    }
   }
-  loopMapCache={partLoop, n:nextLoop}; loopMapSig=sig;
+  loopMapCache={partLoop, n:nextLoop}; loopMapFor=G;
   return loopMapCache;
+}
+/* WHICH GENERATORS' SHELLS THIS PUMP FEEDS - the whole of "is this a feedwater
+   pump", asked of the drawing. A generator's secondary node is simply one of
+   its nodes the core cannot reach; a pump that reaches one is pushing water
+   into that shell, whatever it is called and whatever anyone declared. */
+function secGensFromNode(node, cut){
+  const G=nodeGraph();
+  if(G.primary[node]) return [];
+  const seen=G.reach([node], cut);
+  return LAY.parts.filter(p=>p.role==="sg" &&
+    (G.nodesOf[p.id]||[]).some(n=>seen[n] && !G.primary[n])).map(p=>p.id);
+}
+/* WHICH RUNS SHORT THE TWO SIDES TOGETHER. A run with one end the core can
+   reach and one it cannot is a hydraulic path from the primary straight into
+   a generator's shell - past the tubes, which are the only crossing this
+   plant is supposed to have. It was unreachable while the secondary carried
+   no flow; it is reachable now, and it is NOT forbidden: the game never
+   refuses a bad order, it carries it out and shows the cost. The solve
+   already prices it, because every run is an edge - so all this owes is a
+   name for it, at the bench, where a designer can still change their mind.
+
+   Asked with the run itself CUT, and it has to be: leave it in and the walk
+   crosses it, the two components merge, and the very run under test makes
+   itself look innocent. */
+function crossTies(){
+  const G=nodeGraph(), out=[];
+  const id=k=>LAY.parts.find(q=>q.id===k);
+  for(const rid in D.run){
+    const e=D.run[rid];
+    if(e.tap) continue;                      // a tap lands on a run, and takes that run's own side
+    const a=id(e.a), b=id(e.b); if(!a||!b) continue;
+    const sa=e.af!=null?e.af:face(a,b), sb=e.bf!=null?e.bf:face(b,a);
+    const na=a.id+sa, nb=b.id+sb;
+    if(!G.adj[na] || !G.adj[nb]) continue;
+    /* Cut the run, then ask BOTH sides where they are - and ask the second
+       question of the generators rather than of "not the first", or a tank on
+       a dead-end branch reads as secondary purely by being unreachable. The
+       stock relief tank is exactly that: cut its one run and it is connected
+       to nothing at all, which is not the same thing as being on the far side
+       of a generator's tubes. */
+    const cut={}; cut[na]=1; cut[nb]=1;
+    const pri=G.reach(G.nodesOf.core||[], cut);
+    const seeds=[];
+    for(const q of LAY.parts) if(ROLE[q.role] && ROLE[q.role].sgtr)
+      for(const n of (G.nodesOf[q.id]||[])) if(!pri[n] && !cut[n]) seeds.push(n);
+    const sec=G.reach(seeds, cut);
+    const at=n=>(G.adj[n]||[]);
+    const inPri=n=>at(n).some(v=>pri[v]), inSec=n=>at(n).some(v=>sec[v]);
+    if((inPri(na)&&inSec(nb)) || (inPri(nb)&&inSec(na))) out.push(rid);
+  }
+  return out;
+}
+/* IS THIS NODE ON THE SECONDARY? One question, one answer, one place - the
+   core cannot reach it. Every caller that used to want a `side` field wants
+   this instead. */
+const secondaryNode=node=>!nodeGraph().primary[node];
+function secGensOf(pid){
+  const G=nodeGraph(), out=[];
+  for(const n of (G.nodesOf[pid]||[]))
+    for(const g of secGensFromNode(n)) if(!out.includes(g)) out.push(g);
+  return out;
 }
 // which loop a PART pools capacity with, or null if the walk
 // above never reaches it from any generator - never read as "is it plumbed
@@ -185,7 +372,10 @@ const loopOf = id => { const v=loopMap().partLoop[id]; return v===undefined?null
 function loopPumpCap(i,dmg){
   let c=0;
   for(const p of LAY.parts){
-    if(!ROLE[p.role] || !ROLE[p.role].head) continue;
+    // loopOf()===i already says "primary" - a pump with no loop index is not
+    // in any group, so primaryPump() here would only ask loopOf() twice on a
+    // path the solve walks once per pump per tick.
+    if(!roleHead(p.role)) continue;
     if(loopOf(p.id)===i && !dmg.includes(p.id)) c+=pumpCap(pumpSizeOf(p.id));
   }
   return c;
@@ -292,35 +482,47 @@ const FIT_MASS=16;                     // a spool piece and a motor-operated val
                this pass: the heat model behind it is Stage 6, and nothing in
                the tick reads this field yet. */
 const ROLE = {
-  core:  {internal:null, head:false, fixed:null, fold:["r","b"], mu:0.50, sgtr:false,
+  core:  {internal:null, fixed:null, fold:["r","b"], mu:0.50, sgtr:false,
           ports:{r:4, b:5}, thermal:"source"},
-  rods:  {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
+  rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none"},
-  pzr:   {internal:null, head:false, fixed:{type:"datum", face:"b"}, fold:null, mu:0.65, sgtr:false,
+  pzr:   {internal:null, fixed:{type:"datum", face:"b"}, fold:null, mu:0.65, sgtr:false,
           ports:{"*":2}, thermal:"none"},                     // surge always "b"; relief's own face is dynamic (face(pzr,rt)) and could coincide
-  sg:    {internal:{a:"l", b:"b", kind:"comp"}, head:false, fixed:null, fold:null, mu:0.60, sgtr:true,
+  /* TWO internal paths that do not meet: the tubes (l<->b, primary) and the
+     shell around them (r<->t, secondary). The only way across is the sgtr
+     edge, which is a LEAK and is built as one.
+     `a` is the INLET on a shell path - the feed regulating valve's own head
+     is signed off it (netBuild()), so the two faces are not interchangeable
+     even though the conductance between them is. */
+  sg:    {internal:[{a:"l", b:"b", kind:"comp"}, {a:"r", b:"t", kind:"comp"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer"},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
-  pump:  {internal:{a:"t", b:"b", kind:"pump"}, head:true, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{t:1, b:1}, thermal:"none"},
-  turb:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
+  /* ONE PUMP. There is no feedwater pump role: what makes a pump a feedwater
+     pump is where it is piped, which the graph already answers (primaryPump()
+     above). ports is the usual MEASUREMENT across every pump on the stock
+     plant at 1..4 loops - t carries one suction leg on a coolant pump and one
+     discharge per generator on a feed pump, so 4 is the measured most, and it
+     is PINNED rather than dynamic: an internal t<->b edge is only correct if
+     the runs land on t and b, and face() used to resolve those off wherever
+     cond happened to sit. */
+  pump:  {internal:{a:"t", b:"b", kind:"pump", head:true}, fixed:null, fold:null, mu:0.75, sgtr:false,
+          ports:{t:4, b:1}, thermal:"none"},
+  turb:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:4, b:1}, thermal:"none"},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
-  cond:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
+  cond:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:1, r:1}, thermal:"sink"},
-  feed:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
-          ports:{b:1, t:4}, thermal:"none"},                  // PINNED, not dynamic: an internal b<->t edge is only correct if the runs land on b and t, and face() resolved those off wherever cond happened to sit
-  ctrl:  {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
+  ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none"},
-  cont:  {internal:null, head:false, fixed:null, fold:null, mu:0.30, sgtr:false,
+  cont:  {internal:null, fixed:null, fold:null, mu:0.30, sgtr:false,
           ports:{}, thermal:"none"},
   /* ONE ROLE FOR EVERY TANK. There is no kind: what a tank is made of, what
      is behind it and what it is plumbed to are per-instance config
      (D.tanks), never a role. mu is a tank of liquid, which shields rather
      better than bare equipment and rather worse than a wall. */
-  tank:  {internal:null, head:false, fixed:{type:"tank"}, fold:null, mu:0.65, sgtr:false,
+  tank:  {internal:null, fixed:{type:"tank"}, fold:null, mu:0.65, sgtr:false,
           ports:{"*":1}, thermal:"none"},
-  bkp:   {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
+  bkp:   {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none"},
-  shield:{internal:null, head:false, fixed:null, fold:null, mu:0.18, sgtr:false,
+  shield:{internal:null, fixed:null, fold:null, mu:0.18, sgtr:false,
           ports:{}, thermal:"none"},
   /* A structure with mass that used to be a checkbox and nothing on the
      grid. It gets no `fixed` - the run each one carries
@@ -330,7 +532,7 @@ const ROLE = {
      and no head anywhere past that one edge means KCL forces exactly zero
      current through it, so it cannot move a single other pressure or flow
      in the solve. */
-  catcher: {internal:null, head:false, fixed:null, fold:null, mu:0.55, sgtr:false,
+  catcher: {internal:null, fixed:null, fold:null, mu:0.55, sgtr:false,
           ports:{}, thermal:"none"},                          // a structure, not a network part - no run, no ports, no exception needed
 };
 
@@ -358,7 +560,7 @@ function buildLayout(){
   if(fitOf("cond")) add("cond","CONDENSER",3,1,12,7,"#5aa9d6","sec",
     "Rejects waste heat. Bulky, and it wants to be near the hull.","cond");
   add("feed","FEED PUMP",1,1,15,5,"#5aa9d6","sec",
-    "Returns water to the steam generator. Lose it and the heat sink boils dry.","feed");
+    "Returns water to the steam generator. Lose it and the heat sink boils dry.","pump");
   add("ctrl","CONTROL",2,1,1,8,"#cfc9b8","crew",
     "Where your crew sits. Distance and shielding from the reactor set the dose they take.","ctrl");
   if(fitOf("cont")) add("cont","CONTAINMENT",2,1,4,8,"#8fa9ae","safety",
@@ -950,7 +1152,9 @@ function bestFreePortOn(p,pt,usage){
 const RUN_KIND={
   "core|sg":"hot", "pump|sg":"cold", "core|pump":"cold",
   "sg|turb":"steam", "cond|turb":"exh",
-  "feed|sg":"feed", "cond|feed":"feed",
+  // the condenser is on nobody's primary, so a pump drawn to it is drawing
+  // feedwater whatever else it is plumbed to
+  "cond|pump":"feed",
   /* A pipe between the pressurizer and any primary machine IS a surge line -
      the vessel has exactly one connection to the loop and that is what it is
      called. Without these rows a hand-drawn pressurizer line came out
@@ -958,9 +1162,20 @@ const RUN_KIND={
      KIND_TEMP hot tag - a working connection wearing no name. */
   "core|pzr":"surge", "pzr|sg":"surge", "pump|pzr":"surge",
 };
-function runKindFor(aId,bId){
+function runKindFor(aId,bId,af,bf){
   const A=LAY.parts.find(q=>q.id===aId), B=LAY.parts.find(q=>q.id===bId);
   if(!A||!B) return "user";
+  /* A PUMP IS A PUMP; WHICH SIDE OF A GENERATOR IT LANDS ON NAMES THE PIPE.
+     There is no feedwater-pump role left to key the table on, so "pump|sg"
+     alone cannot tell a cold leg from a feedwater line - the FACE tells it,
+     and it is the same fact the solve reads: a generator's shell is the part
+     of it the core cannot reach. Faces unknown (an older caller), fall
+     through to the table and get a cold leg, which is what the pair used to
+     mean on its own. */
+  if(A.role==="sg" !== (B.role==="sg") && (A.role==="pump" || B.role==="pump")){
+    const g = A.role==="sg" ? A : B, f = A.role==="sg" ? af : bf;
+    if(f!=null && !nodeGraph().primary[g.id+f]) return "feed";
+  }
   /* A TANK'S LINE IS NAMED BY WHAT IT REACHES, not by which tank it is - there
      is no such thing as "the relief tank" or "the HPI tank", only a tank with a
      pipe drawn somewhere. On the primary side the pressurizer end makes it a
@@ -978,7 +1193,7 @@ let runSeq=0;
 // `k` is the run's KIND; left out, the ends decide it (runKindFor, above).
 function addRun(aId,af,bId,bf,bore=1,k){
   const rid="usr"+(runSeq++);
-  D.run[rid]={a:aId,af,b:bId,bf,k:k||runKindFor(aId,bId),bore};
+  D.run[rid]={a:aId,af,b:bId,bf,k:k||runKindFor(aId,bId,af,bf),bore};
   return rid;
 }
 function removeRun(rid){ delete D.run[rid]; }
@@ -1001,13 +1216,44 @@ function addTapRun(aId,af,tapRid,tapK,k,bore=1){
 function datumPart(){
   return LAY.parts.find(q=>{ const R=ROLE[q.role]; return R && R.fixed && R.fixed.type==="datum"; }) || null;
 }
+/* ══ WHICH SIDE A TANK IS ON IS A QUESTION FOR THE DRAWING ══
+   `side` was a field the designer set, on a control labelled "PLUMBED TO" -
+   which asked the player to declare what the plumbing already said, and let
+   the two disagree with nothing to catch it. It is derived now, and this is
+   the third time this codebase has made exactly this move: D.loops ->
+   sgCount(), p.loop -> loopOf(), side -> component membership.
+
+     PRIMARY is the component containing the CORE. SECONDARY is the other one.
+
+   Three cases, all stated rather than left to fall out:
+   - A tank with a CELL is wherever its own nodes are.
+   - A tank with NO cell has no node and never can - it is condensate inside
+     another machine, not a hydraulic object. It takes its HOST's answer.
+     The host is the part that draws it, found by its DECLARED role field
+     (ROLE.thermal === "sink") and not by being called "cond".
+   - A tank placed and piped to NOTHING is in neither component and returns
+     null: not connected, not counted, exactly the rule a pump already lives
+     under. It has no edge either, so there is nothing for it to be the
+     primary or secondary OF. */
+const hostPartOf = () => LAY.parts.find(p=>ROLE[p.role] && ROLE[p.role].thermal==="sink") || null;
+function tankSide(id){
+  const t=D.tanks && D.tanks[id]; if(!t) return null;
+  const G=nodeGraph();
+  const sideOfNodes = ns => !ns || !ns.length ? null
+    : (ns.some(n=>G.primary[n]) ? "primary" : "secondary");
+  if(!t.cell){ const h=hostPartOf();
+    /* no host on the grid at all: a hosted tank is still not something the
+       core can reach, so it is secondary rather than nothing. */
+    return (h && sideOfNodes(G.nodesOf[h.id])) || "secondary"; }
+  return sideOfNodes(G.nodesOf[id]);
+}
 /* Is this part id a tank on the PRIMARY side - the one predicate for "could
    catch a relief discharge". Any primary tank will do: "the relief tank" is
    not a kind of thing, it is whichever tank you happened to plumb the relief
-   header to. Off ROLE and `side`, never p.id. */
+   header to. Off ROLE and the graph, never p.id. */
 function primaryTank(id){
   const p=LAY.parts.find(q=>q.id===id);
-  return !!(p && p.role==="tank" && D.tanks[id] && D.tanks[id].side==="primary");
+  return !!(p && p.role==="tank" && tankSide(id)==="primary");
 }
 
 /* WHICH PARTS A WALK OVER D.run REACHES FROM ONE PART - the design-time
@@ -1232,7 +1478,7 @@ function layoutMetrics(){
      there is nothing to warn about, and 0 is the honest answer. */
   let injZ = null;
   for(const q of P_){ const t=q.role==="tank" && D.tanks[q.id];
-    if(t && t.side==="primary" && t.check) injZ = injZ===null ? tankZ[q.id] : Math.min(injZ, tankZ[q.id]); }
+    if(t && tankSide(q.id)==="primary" && t.check) injZ = injZ===null ? tankZ[q.id] : Math.min(injZ, tankZ[q.id]); }
 
   const mass = (pipe+sec+dead)*1.6 + P_.filter(p=>p.grp==="shield").length*30;
   layMass = mass;

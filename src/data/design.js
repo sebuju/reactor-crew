@@ -193,7 +193,7 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          tanks:{
            hpi:  {name:"HPI TANK", col:"#5aa9d6", cell:[3,1],
                   tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
-                  side:"primary", vol:65, level:100, fluid:"water",
+                  vol:65, level:100, fluid:"water",
                   /* Pumped, and no nitrogen charge behind it - so it is worth
                      exactly nothing in a blackout. Give it a `gas` and drop
                      the pump and it is a passive accumulator, which is the
@@ -203,7 +203,7 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
                   gas:null, pump:{p:11.0, bus:"bkp"}, check:true, auto:"manual", burst:null},
            reltk:{name:"RELIEF TANK", col:"#8a6cd0", cell:[7,0],
                   tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
-                  side:"primary", vol:40, level:0, fluid:"contaminated",
+                  vol:40, level:0, fluid:"contaminated",
                   /* At rest the gas sits at containment pressure, which is
                      what makes an empty tank cost the relief path exactly
                      nothing. frac is 25/23 because the law this replaces
@@ -212,8 +212,21 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
                   burst:{at:1.4, drain:6.0, rel:0.004}},
            efw:  {name:"EFW TANK", col:"#5aa9d6", cell:[9,1],
                   tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
-                  side:"secondary", vol:35, level:100, fluid:"condensate",
-                  gas:null, pump:null, check:false, auto:"sglow", burst:null},
+                  vol:35, level:100, fluid:"condensate",
+                  /* Its own pump, on the backup bus, at a real discharge
+                     pressure. It had NEITHER a gas charge nor a pump until
+                     feedwater was solved, which cost nothing while the reserve
+                     was an algebraic term - and delivered exactly nothing the
+                     moment its line became a real edge against a generator's
+                     own secP(). 8.0 MPa clears a generator's shell at any
+                     level it can be needed at; what keeps it shut on a healthy
+                     plant is its AUTORULE, not its pressure, because "starts
+                     on LOW GENERATOR LEVEL, not on being armed" is a rule and
+                     not a coincidence of numbers. Give it a `gas` and drop the
+                     pump and it becomes the one feedwater path a blackout with
+                     no backup supply does not kill - a knob on THIS tank, the
+                     same trade the injection tank offers. */
+                  gas:null, pump:{p:8.0, bus:"bkp"}, check:false, auto:"sglow", burst:null},
            /* No cell: a SECONDARY tank has no node, so it needs none, and the
               hotwell lives inside the condenser it condenses into. Giving it
               a box would be inventing hydraulics the secondary does not have. */
@@ -225,7 +238,7 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
                      losing feedwater is to overflow the condensate over the
                      side - measured: at exactly one charge it hit 100 % and
                      spilled, and emergency feed came out NET NEGATIVE. */
-                  side:"secondary", vol:150, level:50, fluid:"condensate",
+                  vol:150, level:50, fluid:"condensate",
                   gas:null, pump:null, check:false, auto:"always", burst:null},
          },
          run:{
@@ -256,12 +269,18 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
    previews it and commission() bakes it; two formulas would drift apart.
    The multiplier is centred on 1.0 so the default turbine delivers exactly the
    architecture's own figure. */
+/* COUNTED. D.turb sizes ONE machine; how many of them there are is read off
+   the grid (turbCount(), layout.js), so a second turbine buys a second
+   machine's swallow rather than nothing at all - and no turbine is exactly
+   zero, which is what the bench warning is about. Efficiency itself is a
+   property of the STEAM, not of how many machines take it, so only the
+   ceilings below are counted. */
 const grossEff  = () => ARCH[D.arch].eff * (0.92 + 0.16*D.turb);
 /* How much steam the turbine can swallow, and how much the condenser can turn
    back into water. They are separate on purpose: overload past the condenser and
    the output is there but the backpressure eats it. */
-const loadCeil  = () => 1.05 + 0.40*D.turb;
-const condCeil  = () => 0.85 + 0.35*D.condCap;
+const loadCeil  = () => turbCount() * (1.05 + 0.40*D.turb);
+const condCeil  = () => condCount() * (0.85 + 0.35*D.condCap);
 /* When the pair is mismatched enough to matter. A condenser is normally sized for
    about full load and a brief overload is bought with backpressure, so a gap is
    not a fault - only a gap wide enough to cost roughly 15% of output is. One
@@ -302,7 +321,7 @@ function derived(){
        no flag anywhere pricing a system with nothing drawn behind it. */
     + partMass("catcher") + tankMass()
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
-    + (D.autorod?26:0) + (D.turbFit?D.turb*50:0) + (D.condFit?D.condCap*40:0)
+    + (D.autorod?26:0) + turbCount()*D.turb*50 + condCount()*D.condCap*40
     + Object.keys(D.fit).length*FIT_MASS
     + layMass + latMass();
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
@@ -376,8 +395,8 @@ function derived(){
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
       if(contRel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew.","cont"]);
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
-      if(!D.turbFit) w.push(["SOFT","No turbine fitted. This design generates no electricity at all.","turb"]);
-      else if(!D.condFit) w.push(["SOFT","No condenser fitted. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
+      if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
+      else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
       if(loadMax<1.10) w.push(["SOFT","The turbine draws at most "+(loadMax*100).toFixed(0)+"% of rated. In combat the reactor will be able to make power this machine cannot take.","turb"]);
       if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Overload past the condenser and backpressure takes output back off you, while the reactor goes on making the heat.","cond"]);
       if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);

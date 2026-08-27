@@ -20,10 +20,15 @@ const PIPE_BORE = {hot:1, cold:1, surge:.30, hpi:.25, xtie:.55, relief:.20, boro
    edge loop, below) - PIPE_BORE only ever picks the STARTING bore a fresh run
    of that kind gets, the seam Stage 3a overrides once bore becomes the
    player's own choice, same as D.pumpSize already is.
-   steam, feed and exh have no row: nobody has measured a narrower bore for
-   them, and this stage is what first lets current reach them at all - so the
-   honest default is full-bore (identical to hot/cold), not an invented
-   choke. Route every bore read through this resolver, never PIPE_BORE[r.k]
+   steam, feed and exh still have no row, and that is now a decision rather
+   than an omission. A feedwater line really is narrower than a hot leg, but
+   what a feed pump's head is actually spent on is its REGULATING TRAIN, and
+   that is priced explicitly (FEED_LEN, above) rather than smuggled into a
+   bore - so narrowing the pipe as well would charge the same restriction
+   twice and re-fit FEED_DP against it. Steam and exhaust carry no solved flow
+   at all (the solver knows liquid), so a bore for them would be a number with
+   nothing behind it. Full-bore, identical to hot/cold, until someone measures
+   one. Route every bore read through this resolver, never PIPE_BORE[r.k]
    directly, or the fallback lives in two places and can disagree. */
 const runBore = r => PIPE_BORE[r.k] !== undefined ? PIPE_BORE[r.k] : 1; // DEFAULT: PIPE_BORE picks a starting bore, never gates an edge's existence
 
@@ -114,6 +119,16 @@ const rhoDatum = s => rhoAt(s.Tavg === undefined ? P.Tref : s.Tavg);
 // see THE NETWORK IS PIPE_K-INVARIANT... in the auditor, which sweeps
 // PIPE_K three orders of magnitude specifically to catch that.
 const NET_COMP_LEN = 0.1;   // metres-equivalent, short against a real run
+/* A GENERATOR'S OWN FEEDWATER PATH is not a short piece of full-bore pipe.
+   Priced at NET_COMP_LEN it carried about 15,800 kg/s per MPa, so the 0.42 MPa
+   secP() spread the stock loops legitimately develop swung feedwater by six
+   thousand kg/s and no valve could settle against it - the regulator below
+   went bang-bang at its own rate limit and stayed there. A real feedwater
+   train (regulating valve, economizer, distribution ring) is where the pump's
+   head is spent, and this is that length. Still a resist(), so it shares
+   PIPE_K exactly like every other conductance and the invariance sweep is
+   untouched; still STATIC, so it never enters netFactored()'s signature. */
+const FEED_LEN = 400;
 
 function setPipeK(v){ PIPE_K = v; }
 
@@ -364,12 +379,16 @@ const AUTORULE = {
              and therefore needs no cell: the hotwell lives inside the
              condenser it condenses into, and giving it a box of its own
              would be inventing hydraulics the secondary does not have. */
+/* NO `side` ROW. Which side a tank is on is not config and never was a choice
+   the designer should have been asked to make - it is read off the runs
+   (tankSide(), layout.js). A new tank starts connected to nothing and is on
+   no side at all until somebody draws a pipe to it. */
 const TANK_DEFAULT = {
-  side:"primary", vol:40, level:100, fluid:"water",
+  vol:40, level:100, fluid:"water",
   gas:{p0:4.5, frac:0.35}, pump:null, check:true, auto:"manual", burst:null,
 };
 const tankIds   = () => Object.keys(D.tanks);
-const secTankIds= () => tankIds().filter(id=>D.tanks[id].side==="secondary");
+const secTankIds= () => tankIds().filter(id=>tankSide(id)==="secondary");
 /* A tank with no cell has no box on the grid and no node - which is what a
    SECONDARY tank is allowed to be. It is HOSTED: the hotwell lives inside the
    condenser it condenses into, and the condenser draws it. */
@@ -378,12 +397,15 @@ const hostedTankIds = () => tankIds().filter(id=>!D.tanks[id].cell);
    Zero of them is a legal plant; four is a legal plant, and four of them are
    worth four times one. */
 const boronTankIds = () => tankIds().filter(id=>
-  D.tanks[id].side==="primary" && tankFluid(id).boron>0);
+  tankSide(id)==="primary" && tankFluid(id).boron>0);
 /* A tank's capacity in the units its OWN side counts in: % of loop inventory
    for the primary (invRate()'s currency), kilograms for the secondary. One
    conversion per side, so a solved flow reaches a level and a mass balance
    without either side inventing a second one. */
-const tankKg = id => D.tanks[id].vol/100*(D.tanks[id].side==="primary" ? loopKg() : hotMass());
+/* A tank in NEITHER component - placed, piped to nothing - is priced in the
+   loop's own currency: it is not the secondary's water either, and a scale it
+   has to have has to be something. */
+const tankKg = id => D.tanks[id].vol/100*(tankSide(id)==="secondary" ? hotMass() : loopKg());
 /* Several tanks lined up together behave as one tank of their combined size.
    Two questions, one answer: how much is in the pool, and how full it is. */
 const tankPoolKg = (s,list) => { let m=0;
@@ -459,7 +481,7 @@ const tankRuleLive = (s,id) => {
   return a!=="manual" && a!=="always" && !(s.tankByp && s.tankByp[id]);
 };
 const tankRuleAny = (s,side) => tankIds().some(id =>
-  D.tanks[id].side===side && tankRuleLive(s,id));
+  tankSide(id)===side && tankRuleLive(s,id));
 /* Can this tank's own edge carry anything at all? Valve, diode, and one more:
    an EMPTY tank has nothing to give. Stated as "or the loop is above me", not
    as a bare level test, because a tank at 0 with the loop above it can still
@@ -487,6 +509,70 @@ const tankLive = (s,id) =>
    that range; a case for exactness has not been made, only for a real
    anchor instead of a rounding artefact. */
 const COND_P0 = 0.01;
+
+/* THE DRIVE A FEEDWATER PUMP DEVELOPS, in MPa, ON TOP of the standing
+   difference between the two fixed nodes it spans (see the secPumps pass in
+   netBuild()). Fitted ONCE, the RAD_K / BREAK_K / BUOY_LIN idiom, and stated
+   as such: it is what makes an undamaged stock plant deliver what its
+   generators are boiling off, so the level holds at SGL_SET. Split off the
+   standing term deliberately - that way this is a property of the PUMP and
+   not of where the condenser happens to sit, and moving a generator does not
+   silently re-fit it.
+   FEED_HURT is DMGFX.feed's own promise: a hit feed pump makes a quarter of
+   the drive, and the network decides what that costs rather than a fraction
+   applied to the answer.
+   EVERY WAY OF LOSING FEEDWATER IS IN THE HEAD, deliberately, and none of
+   them is a ceiling on the answer: the pump is hit, the switchboard is dead
+   (supplyK(), step.js - the coolant pumps read the identical expression), or
+   its suction is running out. A ceiling applied afterwards would discard mass
+   the solve had already moved and the secondary's books would stop closing -
+   measured, 4365 kg out of them in fifteen seconds. HOT_NPSH tapers the
+   drive over the last stretch of the CIRCUIT pool, which is the pool a feed
+   pump draws on; a reserve tank is a fixed node in its own right and limits
+   itself when it runs dry (tankLive()). Above the taper it is exactly 1, so a
+   healthy plant is untouched. */
+const FEED_DP   = 2.0;
+const FEED_HURT = 0.25;
+/* Level below which a feed pump starts losing suction, %. A pump does not
+   run cleanly to the last drop; this is the taper. ONE constant - it used to
+   be declared here and again in step.js, for the two halves of the same
+   sentence. */
+const HOT_NPSH = 10;
+/* 100 when there is no S to ask - the reference solve (netCoreFrac0) runs on
+   a synthetic state during commission(), and the reference plant is an
+   untouched one with full tanks, so its taper is 1 by definition. */
+const circPoolPct = s => s.tank
+  ? tankPoolPct(s, secTankIds().filter(id=>D.tanks[id].auto==="always")) : 100;
+/* ONE PUMP'S OWN SPEED, 0..1 - its ACTUAL, walked toward its own demand by
+   step() with its own inertia. 1 when there is no S to ask, because the
+   reference solve (netCoreFrac0) runs on a synthetic state and the reference
+   plant is a plant at rated speed.
+   s.flowScale is NOT sim state and is never on S: it is the per-solve override
+   netFlowK() uses to run the same plant with its pumps stopped, so a ceiling
+   written about pump capacity can be applied to the pumped share alone. Same
+   standing as s.capScale beside it, and there for the same reason. */
+const flowOf = (s, pid) =>
+  (s.flowBy && s.flowBy[pid]!==undefined ? s.flowBy[pid] : 1)
+  * (s.flowScale===undefined ? 1 : s.flowScale);
+/* THE COOLANT PUMP ORDER, and what the coolant pumps are actually doing: the
+   mean over the pumps that serve the core (primaryPump(), layout.js). One
+   lever drives them all - ACT.flowDem writes every one of them - so on any
+   plant nobody has reached into with ACT.pumpDem these are just that lever's
+   own value read back. The slider, the annunciator, the trend and the
+   inspector row all ask HERE rather than each averaging their own way.
+   A plant with no coolant pump at all reads 1: there is nothing being ordered
+   about, and a 0 would trip the low-flow floor on a design that has no pumps
+   to order. What the CORE is actually getting is s.flowNet, measured off the
+   solve, and that is a different question this must never be mistaken for. */
+const flowMean = (s, map) => { const ids = pumpIds().filter(primaryPump);
+  if(!ids.length) return 1;
+  let t=0; for(const id of ids) t += (map && map[id]!==undefined) ? map[id] : 1;
+  return t/ids.length; };
+const flowPri    = s => flowMean(s, s.flowBy);
+const flowDemPri = s => flowMean(s, s.flowDemBy);
+const feedDrive = (s, pid) =>
+  (s.dmgParts && s.dmgParts.indexOf(pid)>=0 ? FEED_HURT : 1) * supplyK(s)
+  * clamp(circPoolPct(s)/HOT_NPSH, 0, 1) * flowOf(s, pid);
 
 // A pipe hit (combatHit(), step.js) is a rupture, not a throttle: modelled as
 // ADDITIVE equivalent length on the SAME resist() every other run already
@@ -561,12 +647,6 @@ const FIT = {
     branch:true,
     g:(s,id,bore,len)=>(s.reliefOpen && s.reliefOpen[id] && !(s.reliefBlocked && s.reliefBlocked[id]) && isFinite(len))
       ? BREAK_K*bore*bore : 0,
-    /* Dead by design: a relief path passes only while the valve is lifted, a
-       fault, not an operating state - a dial that can only ever read zero is
-       furniture, not an instrument. render/pipes.js reads this off the
-       fitting's own MODE now, never a name compared against "xtie:" a
-       cross-tie between loops wears too. */
-    quiet:true,
   },
 };
 
@@ -673,14 +753,23 @@ const NT_HOT = 1, NT_COLD = 2;
    than guessed from a kind. A DEFAULT-PICKER, never a permission: every one
    of those runs still carries conductance, still taps, still hits and still
    spills whatever this table says about it.
-   "feed" is deliberately NOT a row here, unlike "hot"/"cold"/"surge"/"hpi":
-   one feed run (feedl-sg0b) shares sg0b with the primary cold leg - a node
-   collision in the topology this stage did not create and is not this
-   stage's to fix (layout.js hands both a cold leg and a feed discharge the
-   SG's own "b" face) - so tagging by KIND would retag that PRIMARY node
-   through a SECONDARY run, silently changing what the cold leg itself is
-   measured against. See condDisplayT()/condTag below for how the condenser
-   side of "feed" is grounded instead, by NODE rather than by kind. */
+   NO ROW FOR feed, steam, relief OR xtie, and adding one WOULD BREAK THE
+   ISOTHERMAL INVARIANT. This array, and only this array, feeds buoyH(): a
+   tagged node is a node with a temperature anomaly, and audit-physics.js
+   requires every static head to be identically 0 when s.coreDT is 0. The
+   secondary edges are untagged, so buoyH() on them is exactly 0 for any
+   coreDT, and the static lift they DO owe arrives from the datum column
+   inside the fixed-node values instead - where, for an open path between two
+   fixed nodes at different heights, it does not telescope away. Elevation
+   still pays and the invariant is untouched. Tag them and both stop being
+   true at once.
+   The original reason for leaving "feed" out is also gone and worth recording
+   as gone: one feed run used to share the generator's "b" face with the
+   primary cold leg, so tagging by kind would have retagged a PRIMARY node
+   through a SECONDARY run. Feedwater lands on the generator's own "r" face
+   now and there is no collision left - the reason above is the one that
+   stands. See condDisplayT()/condTag below for how the condenser side is
+   grounded, by NODE rather than by kind. */
 const KIND_TEMP = {hot: NT_HOT, surge: NT_HOT, cold: NT_COLD, hpi: NT_COLD};
 const nodeT = (net, i, s) => {
   const t = net.tag[i], dt = s.coreDT || 0;
@@ -779,12 +868,18 @@ function netBuild(){
      juncPt() derives a tap from whatever pipeNetwork() routed this frame
      rather than from a face name authored once and left to go stale the
      moment the part moves to a different face.
-     A SECONDARY tank is excluded here and nowhere else: it is a boundary,
-     not a solve, so it has no node and cannot have one - which is the whole
-     of what `side` decides. */
+     EVERY TANK ON THE GRID, both sides. This used to exclude a secondary
+     tank, because the secondary was a boundary and a tank there could have no
+     node to be fixed at. That is over: the generator's shell is in the graph,
+     so an emergency reserve piped to it has a real edge, its own gas or pump
+     pressure has to beat that generator's own secP() to deliver anything, and
+     "a passive tank works in a blackout and a pumped one does not" is finally
+     true on this side too. A tank with no CELL still has no node - the
+     hotwell is condensate inside the condenser, not a hydraulic object - and
+     that is a fact about the drawing, not about a side. */
   const tankIdOf = nid => {
     const p = partOfNode(nid), R = p && ROLE[p.role], t = p && D.tanks[p.id];
-    return (R && R.fixed && R.fixed.type === "tank" && t && t.side === "primary") ? p.id : null;
+    return (R && R.fixed && R.fixed.type === "tank" && t) ? p.id : null;
   };
 
   const nodes = [], index = {};
@@ -1016,15 +1111,47 @@ function netBuild(){
   // ROLE[p.role].internal, not p.id.startsWith("sg")/"pump" - an edge THROUGH
   // a component is a fact about its role (tube path, pump casing), and which
   // faces it spans is stated on that row (layout.js) rather than guessed
-  // from a name here. ROLE.head layers a pump's developed head onto the
-  // identical edge rather than building a second one, so "pump" is still
+  // from a name here. A path's own `head` layers a pump's developed head onto
+  // the identical edge rather than building a second one, so "pump" is still
   // just "internal, and also a head source" - not a different shape.
+  const secPumps = [];   // resolved once net2's fixed nodes exist - see below
   for(const p of LAY.parts){
     const R = ROLE[p.role];
     if(!R || !R.internal) continue;
-    const edge = {u: nodeIdx(p.id+R.internal.a), v: nodeIdx(p.id+R.internal.b),
-                  g: resist(1,NET_COMP_LEN), h: 0, kind: R.internal.kind, key: "comp:"+p.id};
-    if(R.head){
+    /* internal is a LIST - a component may carry more than one path through
+       itself that does NOT join up inside it, which is exactly what a steam
+       generator is: primary l<->b through the tubes, secondary r<->t around
+       them, and no edge between the two (a leak between them is the sgtr edge
+       and it is built elsewhere, deliberately). One row still writes one
+       path, so the common case is unchanged. */
+    for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+    const edge = {u: nodeIdx(p.id+IN.a), v: nodeIdx(p.id+IN.b),
+                  g: resist(1,NET_COMP_LEN), h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b};
+    /* ── THE FEED REGULATING VALVE ──
+       One pump and one header cannot hold two generators at level on their
+       own: what each takes is set by its own secP() against a shared
+       discharge, and the stock loops are different lengths on purpose, so a
+       0.42 MPa spread meets a 0.043 MPa drive and one generator takes ten
+       times its share. A real plant answers that with a regulating valve per
+       generator and so does this.
+       It is a HEAD, not a conductance, and that is load-bearing twice over: a
+       head only ever reaches b (netAssemble), so a valve that moves every
+       tick cannot bust netFactored()'s signature and force an O(n^3)
+       elimination per tick; and a back-pressure cannot make the Laplacian
+       indefinite the way a live g could. Wide open is exactly 0, so a
+       generator whose valve never moves is bit-identical to one with no valve
+       at all - the same standing the throttle fitting's own valveLeq() has.
+       Signed against the path's INLET face: positive s.fregBy opposes flow
+       INTO the shell. Which machine it belongs to is ROLE.sgtr - the same
+       "can this part's tubes rupture" the sgtr edge is built from - and which
+       PATH is the shell is asked of the drawing (secondaryNode), never of a
+       face name. */
+    if(R.sgtr && secondaryNode(p.id+IN.a)){
+      edge.shellOf = p.id;
+      edge.g = resist(1, FEED_LEN);
+      edge.h = s => -((s.fregBy && s.fregBy[p.id]) || 0);
+    }
+    if(IN.head){
       /* A part with no run reaching ANY of its faces contributes NOTHING -
          no head, no capacity, no loop membership: the spare-pump bug this
          stage fixes, where a floating pumpX0 used to double loopPumpCap()
@@ -1043,8 +1170,8 @@ function netBuild(){
            - Stage 3a's reactor-condenser-RCP-reactor loop, say) still
            develops its OWN head below; it just pools with nobody. */
         const li = loopOf(p.id);
-        /* s.flow - the pump's ACTUAL speed, walked toward demand with its own
-           inertia in step() - is part of the head now, not a multiplier applied
+        /* flowOf() - THIS pump's ACTUAL speed, walked toward its own demand with
+           its own inertia in step() - is part of the head, not a multiplier applied
            to the answer afterwards. It has to be: once buoyancy is also a head,
            a plant whose pumps have coasted to a stop still circulates, and a
            factor outside the solve would multiply that thermosiphon by zero. */
@@ -1060,14 +1187,30 @@ function netBuild(){
            one cavitation number for the whole plant. A pump with no loop index
            has no group cavitation figure to read either, so it skips that term
            rather than reading a foreign loop's. */
-        edge.h = li!=null
+        /* IS THIS A FEEDWATER PUMP? Asked of the drawing and of nothing else:
+           a pump one of whose ends reaches a generator's SHELL - the part of
+           it the core cannot reach - is pushing water into that generator,
+           whatever it is called. Nobody declares it and nothing stores it, so
+           a player who pipes a spare pump from the condenser to a generator
+           has built a feed pump and a player who unpipes it has removed one.
+           Asked with the pump's OWN casing edge cut, or every pump would
+           reach the shell through itself and both ends would look like the
+           discharge. */
+        const gensA = li!=null ? [] : secGensFromNode(p.id+IN.a, {[p.id+IN.b]:1});
+        const gensB = li!=null ? [] : secGensFromNode(p.id+IN.b, {[p.id+IN.a]:1});
+        if(li==null && (gensA.length || gensB.length))
+          secPumps.push({p, edge, dis: p.id+(gensA.length?IN.a:IN.b),
+                                   suc: p.id+(gensA.length?IN.b:IN.a),
+                                   gens: gensA.length?gensA:gensB});
+        else edge.h = li!=null
           ? (s => PUMP_H0 * loopPumpCap(li, s.dmgParts) * (s.capScale ? (s.capScale[li]??1) : 1)
-                          * (s.flow===undefined ? 1 : s.flow)
+                          * flowOf(s, p.id)
                           * (1 - 0.8*((s.cavP && s.cavP[li]) || 0)))
-          : (s => PUMP_H0 * pumpCap(pumpSizeOf(p.id)) * (s.flow===undefined ? 1 : s.flow));
+          : (s => PUMP_H0 * pumpCap(pumpSizeOf(p.id)) * flowOf(s, p.id));
       }
     }
     edges.push(edge);
+    }
   }
 
   // branch fittings: lands on the real tap node the host run's own edge-
@@ -1284,9 +1427,16 @@ function netBuild(){
      no condenser, or one whose exhaust/feed lines never routed to it,
      genuinely has no anchor here - see netFixed(), which only fixes what is
      actually in this map, never invents an entry. */
+  /* EVERY CONDENSER'S OWN PORTS, keyed by node id rather than by face, because
+     there can be more than one of them now - this used to name "condt" and
+     "condr" outright and so could only ever see a part called `cond`. Off
+     ROLE.thermal === "sink", the same declared field hostPartOf() reads, never
+     an id. */
   net2.condNode = {};
-  if("condt" in index) net2.condNode.t = index.condt;
-  if("condr" in index) net2.condNode.r = index.condr;
+  for(const q of LAY.parts){
+    if(!ROLE[q.role] || ROLE[q.role].thermal !== "sink") continue;
+    for(const f of ["t","r","l","b"]) if((q.id+f) in index) net2.condNode[q.id+f] = index[q.id+f];
+  }
 
   /* Which side of the loop each node sits on, built from the RUNS that touch
      it so no component has to be named. A node the hot legs reach is hot, one
@@ -1305,10 +1455,12 @@ function netBuild(){
      comment for why it cannot live in net2.tag. Flood-filled exactly one hop
      out from the condenser's own two ports, along whatever edge reaches them
      (turbb via the exhaust run, feedb via the feed-suction run). One hop
-     only: both of those neighbours are themselves dead ends (the turbine and
-     the feed pump carry no internal comp: edge - see the LAY.parts loop,
-     above), so nothing this could reach is more than one edge from the
-     anchor. Skips any node net2.tag already claims, which is what keeps this
+     ONLY, and that is now a deliberate limit rather than a free consequence:
+     the turbine is still a dead end, but a feed pump carries a casing edge
+     like any other pump, so a second hop would run up the discharge and put
+     condenser temperature on the generator's shell. What is wanted here is
+     the cold end of the condenser, not the whole secondary.
+     Skips any node net2.tag already claims, which is what keeps this
      from ever reaching sg0b - the feed run that shares it (feedl-sg0b) is a
      SEPARATE run from the one condr connects to (condr-feedb), so nodes
      grown from condNode never touch it, but the guard is kept anyway rather
@@ -1320,6 +1472,65 @@ function netBuild(){
       if(seeds.indexOf(ed.u)>=0 && net2.tag[ed.v]===0) net2.condTag[ed.v] = true;
       else if(seeds.indexOf(ed.v)>=0 && net2.tag[ed.u]===0) net2.condTag[ed.u] = true;
     } }
+
+  /* ── WHAT A FEEDWATER PUMP HAS TO BEAT ──
+     Two parts, and only the second is the pump doing anything. The first is
+     the standing difference between the two FIXED nodes the pump spans - a
+     generator's shell at secP() on one side, whatever its suction draws on
+     (the condenser at COND_P0, or a secondary tank) on the other - which it
+     must simply cancel before a single drop moves. The second is FEED_DP, the
+     real drive. Split that way FEED_DP is a property of the PUMP rather than
+     of where anybody put the condenser: hang the generator ten metres higher
+     and the standing term grows to match, exactly as it does for a real pump,
+     while the authority the operator has over level does not move.
+     Highest generator against lowest supply - a pump serving two generators
+     has to beat the harder one and the easier one simply takes more, which is
+     what a real feedwater header does.
+     The suction anchor is found by walking THIS graph out from the suction
+     node with the pump's own casing edge cut, stopping AT a fixed node
+     without crossing it - pzrLive()'s "reached, never crossed" idiom. Nothing
+     is named: whatever fixed thing is actually plumbed to the suction is what
+     the pump draws on. Resolved on the first solve and kept, because the
+     fixed SET is constant for a given net (netFixed()'s own comment) even
+     though every value in it moves each tick. */
+  if(secPumps.length){
+    const adj2 = {};
+    for(const ed of edges){ (adj2[ed.u]||(adj2[ed.u]=[])).push([ed.v,ed]);
+                            (adj2[ed.v]||(adj2[ed.v]=[])).push([ed.u,ed]); }
+    for(const sp of secPumps){
+      const disIdx = sp.gens.map(g=>index[g+"t"]).filter(i=>i!==undefined);
+      const sucStart = index[sp.suc];
+      /* h drives u -> v (netAssemble), so it is signed by which END of this
+         pump's own casing edge the suction is on. A coolant pump draws on "t"
+         and discharges to "b", a feed pump the other way round, and there is
+         one pump role - so the orientation is read off the drawing here
+         rather than declared twice on the role. */
+      const sign = index[sp.suc] === sp.edge.u ? 1 : -1;
+      let sucIdx = null;
+      sp.edge.h = s => {
+        /* the map THIS solve already built. Every caller computes it and
+           hands it straight to netAssemble/netFlows, which is the only place
+           a head is ever evaluated, so what is parked here is always this
+           tick's - and building a second one per pump per solve is pure
+           waste. Falls back rather than trusting that. */
+        const f = net2.fixedNow || netFixed(net2, s);
+        if(sucIdx === null){
+          sucIdx = [];
+          const seen = {}, stack = [sucStart]; seen[sucStart] = 1;
+          while(stack.length){ const u = stack.pop();
+            if(f[u] !== undefined){ sucIdx.push(u); continue; }   // reached, never crossed
+            for(const [v,ed] of (adj2[u]||[])){
+              if(ed === sp.edge || seen[v]) continue;
+              seen[v] = 1; stack.push(v); } }
+        }
+        let dis = -Infinity, suc = Infinity;
+        for(const i of disIdx) if(f[i] > dis) dis = f[i];
+        for(const i of sucIdx) if(f[i] < suc) suc = f[i];
+        if(!isFinite(dis) || !isFinite(suc)) return 0;   // nothing fixed either side: no standing term to beat
+        return sign * ((dis - suc) + FEED_DP*feedDrive(s, sp.p.id));
+      };
+    }
+  }
 
   /* Every edge's head gains its static term alongside whatever source pushed
      it. Done here, once, rather than at each push site: buoyancy is a property
@@ -1429,6 +1640,7 @@ function netFixed(net, s){
      Object.keys(fixed) already carries: the SET only changes when the net
      itself is rebuilt (a different plant), never tick to tick. */
   for(const k in net.condNode) f[net.condNode[k]] = COND_P0 + rd*net.z[net.condNode[k]] - p0;
+  net.fixedNow = f;   // for a head that has to read another fixed node - see the secPumps pass
   return f;
 }
 /* WHICH nodes are fixed, never what they hold. A fixed node's VALUE only ever
@@ -1482,8 +1694,12 @@ function netFactored(net, s, fixed){
      rule, the diode and "is there anything left to give" - as ONE bit per
      tank, off the same tankLive() the edge itself is built from. Any of them
      crossing changes A, not just b. No tank is named here: adding a tank is
-     adding a bit, and a tank whose gates never move never busts anything. */
-  + '|' + tankIds().filter(id=>D.tanks[id].side==="primary").map(id=>tankLive(s,id)?'1':'0').join('');
+     adding a bit, and a tank whose gates never move never busts anything.
+     Filtered on HAVING A NODE, not on being primary: a secondary tank has a
+     real edge now, and it is a live g exactly like any other tank's. A tank
+     with no cell has no node and so adds no bit, which is right - there is
+     nothing about it for A to depend on. */
+  + '|' + tankIds().filter(id=>net.tankNode[id]!==undefined).map(id=>tankLive(s,id)?'1':'0').join('');
   if(!net.Af || net.AfSig !== sig){
     const A = new Float64Array(net.n*net.n);
     netAssemble(net.edges, net.n, fixed, s, A, new Float64Array(net.n));
@@ -1576,6 +1792,17 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
          reactor whatever actually broke. */
       if(outs){ (outs.by || (outs.by = {}));
                 outs.by[ed.key] = (outs.by[ed.key]||0) + Math.abs(q[e]); }
+    }
+    /* WHAT THIS GENERATOR IS ACTUALLY BEING FED, off its own shell edge and
+       not off any pipe. Signed: positive is into the shell. Read off the
+       machine rather than off a run key because how many pipes feed it, and
+       what anyone called them, is the player's business - one feed line, two,
+       or an emergency line as well all arrive here and sum. This is the
+       ACTUAL the feed controller walks its valve against (step.js); `want` is
+       the demand. */
+    if(outs && ed.shellOf !== undefined){
+      (outs.sgFeedBy || (outs.sgFeedBy = {}));
+      outs.sgFeedBy[ed.shellOf] = (outs.sgFeedBy[ed.shellOf]||0) + q[e];
     }
     /* signed: primary into secondary is positive, and once the primary is
        brought DOWN to the secondary this reaches zero on its own */
@@ -1854,7 +2081,7 @@ function netFlowK(s, byRun, byP, outs){
      assemble and one substitution and never a re-elimination. Object.create
      rather than a spread, so a tick allocates one object and not forty
      copied fields. */
-  const sNat = Object.create(s); sNat.flow = 0;
+  const sNat = Object.create(s); sNat.flowScale = 0;
   netCoreFracOf(P.net, sNat, natLoop);
   const adj = Array.from({length:n}, () => []);
   for(const id in P.fit){
