@@ -90,11 +90,25 @@ const LAYER_DATA={
    switched on. A line that moved up when a neighbour was switched off would
    be a reading you have to find again every time you change what is on. */
 function layerRunLine(runs, slot, val, col, fmt){
+  /* TWO ANCHORS CAN LAND ON TOP OF EACH OTHER. Every run picks its own anchor
+     with no idea what its neighbours picked, and at four loops two cold legs
+     sit close enough that their plates overlap - measured by audit-text.js,
+     which counts colliding strings and does not care that each label was
+     individually correct. Two readings printed over each other are one
+     unreadable smear, so the second one stands down; it is still on that
+     run's own gauge and its own tooltip. A VIEW declutter, the same standing
+     pipeRuns() has - it hides a label, never a number. */
+  const placed=[];
   for(const r of runs){
     const v=val(r);
     if(v===null||v===undefined||!isFinite(v)) continue;
     const a=pipeRunAnchor(r);
     if(!a || a.L<STACK_MIN_L) continue;   // too short a stretch to hold a reading
+    let clash=false;
+    for(const q of placed)
+      if(Math.abs(q.x-a.x)<STACK_W && Math.abs(q.y-a.y)<STACK_H){ clash=true; break; }
+    if(clash) continue;
+    placed.push({x:a.x,y:a.y});
     pipeStackLine(a.x,a.y,slot,fmt(v),col(v));
   }
 }
