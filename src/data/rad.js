@@ -25,7 +25,7 @@ const RAD_BREACH=3.0, RAD_DMG=0.06, RAD_MELT=4.0, RAD_SGTR=1.2, RAD_AIR=0.05;
 // A fresh constant, not a re-derivation of an existing figure: nothing
 // documented depends on its exact value, only on the tank getting hotter as
 // it fills, which any positive number gives it. Scaled the same shape as
-// RAD_DMG against s.tank.reltk (0..100, step.js) rather than fitted against a
+// RAD_DMG against a tank level (0..100, step.js) rather than fitted against a
 // pinned dose the way RAD_K was.
 const RAD_TANK=0.03;
 const RAD_HI=1.0, RAD_FLOOR=0.02, RAD_CEIL=3;
@@ -90,12 +90,17 @@ function radGeom(){
   const sig=laySig();
   if(radCache && radCacheSig===sig) return radCache;
   const g=occupied(null), core=LAY.parts.find(p=>p.id==="core"), cc=cen(core);
-  const tank=LAY.parts.find(p=>p.id==="reltk");
-  const K={core:radKernel(g,cc.x,cc.y), sg:[],
-           tank: tank ? radKernel(g,cen(tank).x,cen(tank).y) : null,
+  const K={core:radKernel(g,cc.x,cc.y), sg:[], tank:[],
            crew:LAY.parts.find(p=>p.id==="ctrl")||core};
   for(const p of LAY.parts) if(p.role==="sg"){
     const c=cen(p); K.sg.push(radKernel(g,c.x,c.y));
+  }
+  /* ONE KERNEL PER TANK, following K.sg's existing shape rather than
+     inventing a second one. Unlike a generator, each tank shines at its own
+     strength (its level and what is in it - radSrc(), below), so the id
+     rides along and the strengths arrive as a map keyed the same way. */
+  for(const p of LAY.parts) if(p.role==="tank"){
+    const c=cen(p); K.tank.push({id:p.id, k:radKernel(g,c.x,c.y)});
   }
   radCache=K; radCacheSig=sig;
   return K;
@@ -120,11 +125,14 @@ function radSrc(L){
   return {core:(L.n*0.935+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*P.contRel
               + (L.melt&&!P.catcher?RAD_MELT:0),
           sg: L.sgtr?RAD_SGTR:0,
-          // The relief tank: clean at commissioning (s.tank.reltk starts at 0,
-          // step.js), so this is exactly 0 the moment P.dose is asked and
-          // stays out of that geometric figure entirely. It only shines
-          // once a valve has actually vented into it.
-          tank: RAD_TANK*((L.tank && L.tank.reltk) || 0),
+          /* EVERY tank, at its own strength: how much is in it times how
+             active what is in it IS (FLUID.act). Water, borated water and
+             condensate all read 0, so a plant full of tanks is still dark at
+             rest and P.dose stays a purely geometric figure - a tank only
+             shines once something has actually put activity in it. */
+          tank: (()=>{ const q={};
+            for(const id in (L.tank||{})) q[id] = RAD_TANK*L.tank[id]*tankFluid(id).act;
+            return q; })(),
           // Airborne activity is a FLOOR ON EVERY CELL and is NOT shielded at
           // all - this is the containment argument made picture-shaped.
           // What has already escaped the primary boundary is loose in the
@@ -139,7 +147,7 @@ function radSolve(K,q){
   for(let i=0;i<f.length;i++){
     let v=q.air + q.core*K.core[i];
     if(q.sg) for(const k of K.sg) v+=q.sg*k[i];
-    if(q.tank && K.tank) v+=q.tank*K.tank[i];
+    if(q.tank) for(const t of K.tank){ const w=q.tank[t.id]; if(w) v+=w*t.k[i]; }
     f[i]=v;
   }
   return f;

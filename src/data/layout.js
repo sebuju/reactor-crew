@@ -13,62 +13,82 @@ let LAY=null, layFit="", sel="core", layMass=0;
 // (spare pump, junction) doesn't fit this shape - see PLACED PARTS below.
 const fittableList=()=>[
   {id:"cont", label:"CONTAINMENT",         get:()=>D.contFit, set:v=>{D.contFit=v;}},
-  /* This one upgrades a part rather than adding one: the HPI tank is always
-     on the grid, and this decides whether a nitrogen charge or a set of pumps
-     stands behind it. fitSig() still has to see it, because the part's own
-     NAME changes with it. */
-  {id:"hpi",  label:"PASSIVE ACCUMULATOR", get:()=>D.accum,   set:v=>{D.accum=v;}},
   {id:"turb", label:"TURBINE",             get:()=>D.turbFit, set:v=>{D.turbFit=v;}},
   {id:"cond", label:"CONDENSER",           get:()=>D.condFit, set:v=>{D.condFit=v;}},
-  /* Stage 5d: catcher/efw/boroninj used to be bare D flags with nothing on
-     the grid to click. Listing them here gives each the identical FIT/REMOVE
-     right-click affordance cont/turb/cond already have, for free -
-     ctxItemsDesign() (design-bench.js) reads this table generically, never
-     by naming a component, so a part id that matches its own fittableList id
-     is all a new row needs. */
   {id:"catcher",  label:"CORE CATCHER",        get:()=>D.catcher,  set:v=>{D.catcher=v;}},
-  {id:"efw",      label:"EMERGENCY FEEDWATER", get:()=>D.efw,      set:v=>{D.efw=v;}},
-  {id:"boroninj", label:"BORON INJECTION",     get:()=>D.boroninj, set:v=>{D.boroninj=v;}},
-  /* The relief tank has no D flag of its own - it is placedParts state
-     (Stage 5a), not a toggle - so get/set read and drive that directly
-     rather than a boolean field. Same id both ends (fittableList's id and
-     the part's own id) is what lets ctxItemsDesign()'s generic REMOVE/FIT
-     lookup (design-bench.js) find it with no change on that side; the
-     placePart() callback ignores the sequence number placePart() always
-     hands it, because this part keeps the one fixed id everything else
-     (D.run.relief, TANK.reltk, ROLE.reltk) is keyed on. */
-  {id:"reltk", label:"RELIEF TANK",
-   get:()=>LAY.parts.some(p=>p.id==="reltk"),
-   set:v=>{ if(v) placePart(()=>({id:"reltk",name:"RELIEF TANK",w:1,h:1,x:7,y:0,col:"#8a6cd0",
-       grp:"safety",tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
-       role:"reltk"}));
-     else removePart("reltk"); }},
+  /* NO TANK ROW HERE, and that is the point. A tank is not a checkbox that
+     upgrades or conjures a named system - it is a component you ADD, as many
+     as you like, and configure per instance (D.tanks, design.js). PASSIVE
+     ACCUMULATOR, EMERGENCY FEEDWATER, BORON INJECTION and RELIEF TANK were
+     four rows here and they were one component wearing four names. */
 ];
 const fitOf=id=>fittableList().find(f=>f.id===id).get();
-// Stage 5a: the relief tank is a placed part now (placedParts, below), never
-// a box conjured from whatever D.fit happens to contain - so fitSig() needs
-// no relief term any more. placePart()/removePart() already rebuild on
-// their own, exactly like a spare pump or generator.
 const fitSig=()=>fittableList().map(f=>f.get()?1:0).join("");
+/* WHAT buildLayout() READS, all of it. It used to be fitSig() alone, which
+   was true only while every part was either always there or behind a
+   checkbox. A tank is neither: it is an instance, and its id and its cell
+   are the two things that decide what box goes on the board. Leave them out
+   and editing D.tanks directly - a rename, a tank moved, a tank the bench
+   just reconfigured - leaves LAY holding parts that no longer exist, and the
+   runs pointing at them silently stop routing. */
+const tankSig=()=>{ let out="";
+  for(const id in D.tanks){ const c=D.tanks[id].cell;
+    out += "|"+id+":"+(c?c[0]+","+c[1]:"-"); }
+  return out; };
+const laySrcSig=()=>fitSig()+tankSig();
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
 // at the end of buildLayout()) or it would vanish whenever an unrelated
 // FITTABLE flag flipped. A placed part that no longer fits is dropped from
 // that one rebuild, not deleted - it reappears once the conflict clears.
-// Stage 5a: the relief tank ships already placed - a real part, like a spare
-// pump, not a box buildLayout() used to conjure from D.fit's own content.
-// Seeded here rather than through placePart() (which would rebuild the
-// layout before D itself has finished loading) - same id, same cell (7,0)
-// the old conditional add() put it at, so no pinned figure moves.
-let placedParts=[{id:"reltk",name:"RELIEF TANK",w:1,h:1,x:7,y:0,col:"#8a6cd0",
-  grp:"safety",tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
-  role:"reltk"}], placeSeq=0;
+let placedParts=[], placeSeq=0;
+/* The one way anything outside this file replaces the placed set wholesale -
+   a recording head putting its own plant back on the board (recApplyHead()).
+   Copied in, not aliased, so the head stays frozen. */
+function setPlacedParts(list){
+  placedParts = (list||[]).map(p=>({...p}));
+  buildLayout();
+}
 function placePart(mk){
   const p=mk(placeSeq++); placedParts.push(p); buildLayout(); return p;
 }
 function removePart(id){
+  if(D.tanks[id]){ delete D.tanks[id]; buildLayout(); return; }
   placedParts=placedParts.filter(p=>p.id!==id); buildLayout();
 }
+/* ══════════ ADDING A TANK IS ADDING A TANK ══════════
+   ONE default config (TANK_DEFAULT, pipenet.js), not a menu of four kinds.
+   Everything that used to distinguish a boron tank from an accumulator from
+   a relief tank is a knob on the instance, set afterwards on its own panel.
+   The id carries no meaning at all - it is a slot number, and Stage 7's
+   "rename every tank" check exists to prove nothing reads it. */
+function addTank(x,y){
+  let n=1; while(D.tanks["tank"+n]) n++;
+  const id="tank"+n;
+  const t=JSON.parse(JSON.stringify(TANK_DEFAULT));
+  t.name=FLUID[t.fluid].label+" TANK"; t.col="#5aa9d6"; t.cell=[x,y];
+  t.tip="A tank. Say what is in it, how it is charged and how it is plumbed on its own panel - the physics follows from that and from where you put it.";
+  D.tanks[id]=t; buildLayout(); return id;
+}
+/* Tanks are neither add()ed statically nor placedParts: they are read from
+   D.tanks, which is where their whole configuration already lives, so a tank
+   is one object and not two halves that can disagree. A tank with no `cell`
+   is a SECONDARY tank with no node and no box - the hotwell. */
+const tankParts=()=>{
+  const out=[];
+  for(const id in D.tanks){ const t=D.tanks[id]; if(!t.cell) continue;
+    out.push({id, name:t.name, w:1, h:1, x:t.cell[0], y:t.cell[1], col:t.col,
+              grp:"safety", tip:t.tip, role:"tank"}); }
+  return out;
+};
+/* t per 1 % of reference inventory. One rate for every tank, so four tanks
+   cost four tanks and a bigger tank costs more - replacing four flat
+   per-name figures (PART_MASS.reltk/efw/boroninj and D.accum's own +45 t)
+   that between them priced the stock plant at exactly what this does. */
+const TANK_T_PER_VOL=0.4;
+const tankMass=()=>{ let m=0;
+  for(const id in D.tanks) if(D.tanks[id].cell) m+=TANK_T_PER_VOL*D.tanks[id].vol;
+  return m; };
 // pump capacity from size (0..1, default .5), centred the way grossEff()
 // centres the turbine multiplier so a default pump matches the old
 // always-fitted one. D.pumpSize is keyed by id, static or placed alike.
@@ -90,10 +110,10 @@ const sgCount=()=>LAY.parts.filter(p=>p.role==="sg").length;
    per role, priced once if that role is anywhere on LAY.parts at all. Off
    the grid, never off a D flag: derived()'s mass expression (design.js)
    must be able to point at a BOX for every tonne it charges, and this is
-   where a term that only ever gated a checkbox before (D.efw, D.catcher,
-   D.boroninj) now names one. RELIEF_TANK_MASS lived here as its own module
-   constant; folded into this table instead of restoring it as a second one. */
-const PART_MASS={reltk:18, catcher:66, efw:38, boroninj:18};
+   where a term that only ever gated a checkbox before now names one. Every
+   tank left this table for tankMass() (above), which charges per instance
+   off the instance's own vol rather than one flat figure per name. */
+const PART_MASS={catcher:66};
 const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
 /* ══════════ LOOP MEMBERSHIP COMES OFF THE GRAPH ══════════
    p.loop used to be a STORED field - set once, off nearestLoop() (a
@@ -216,9 +236,9 @@ function addFit(mode,aKey,aT,bKey,bT,bore=0.55,lift=null,reseat=null){
 }
 function removeFit(id){ delete D.fit[id]; }
 const FIT_MASS=16;                     // a spool piece and a motor-operated valve, per tap
-// The tank's own mass lives on PART_MASS.reltk (above) now - a second
-// relief valve still only ever costs through FIT_MASS and its own branch
-// pipe (layMass, layoutMetrics()), because there is still only one tank.
+// A tank's own mass is tankMass() (above), per instance and off its own vol.
+// A second relief valve costs FIT_MASS and its own branch pipe (layMass,
+// layoutMetrics()) and nothing else - it does not need a second tank.
 
 /* ══════════ ROLE: one row per part ROLE, the network + radiation contract ══════════
    Same idiom as FIT/TANK/LAYERS/DMGFX/AUTOSYS/DICE/ANN - one table, adding a
@@ -247,7 +267,7 @@ const FIT_MASS=16;                     // a spool piece and a motor-operated val
                where the loop's own piezometric zero is anchored (net2.pzrNode
                falls back to the core when no part declares this).
                {type:"tank"} - every node ANY part with this role reaches is
-               priced by TANK[part.id], off whatever face pipeNetwork()
+               priced by D.tanks[part.id], off whatever face pipeNetwork()
                actually routed there this frame - never a stored face name.
                null otherwise.
      fold      faces that collapse onto the bare part id (one electrical node,
@@ -292,29 +312,26 @@ const ROLE = {
           ports:{}, thermal:"none"},
   cont:  {internal:null, head:false, fixed:null, fold:null, mu:0.30, sgtr:false,
           ports:{}, thermal:"none"},
-  hpi:   {internal:null, head:false, fixed:{type:"tank"}, fold:null, mu:0.65, sgtr:false,
-          ports:{b:1}, thermal:"none"},
+  /* ONE ROLE FOR EVERY TANK. There is no kind: what a tank is made of, what
+     is behind it and what it is plumbed to are per-instance config
+     (D.tanks), never a role. mu is a tank of liquid, which shields rather
+     better than bare equipment and rather worse than a wall. */
+  tank:  {internal:null, head:false, fixed:{type:"tank"}, fold:null, mu:0.65, sgtr:false,
+          ports:{"*":1}, thermal:"none"},
   bkp:   {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none"},
-  reltk: {internal:null, head:false, fixed:{type:"tank"}, fold:null, mu:0.75, sgtr:false,
-          ports:{"*":1}, thermal:"none"},                     // its own face (face(rt,pzr)) is dynamic
   shield:{internal:null, head:false, fixed:null, fold:null, mu:0.18, sgtr:false,
           ports:{}, thermal:"none"},
-  /* Stage 5d: three "systems with mass" that used to be a checkbox and
-     nothing on the grid. None gets `fixed` - the run each one carries
+  /* A structure with mass that used to be a checkbox and nothing on the
+     grid. It gets no `fixed` - the run each one carries
      (D.run, design.js) lands on a node that is ALREADY reachable from the
      rest of the primary network (sg0's own "b" face, the core's folded
      node), so each hangs off it as a true pendant leaf: no fixed pressure
      and no head anywhere past that one edge means KCL forces exactly zero
      current through it, so it cannot move a single other pressure or flow
-     in the solve - see the auditor's own sweep proving netFlowK/DNBR/n
-     don't move with these parts on the grid. */
+     in the solve. */
   catcher: {internal:null, head:false, fixed:null, fold:null, mu:0.55, sgtr:false,
           ports:{}, thermal:"none"},                          // a structure, not a network part - no run, no ports, no exception needed
-  efw:     {internal:null, head:false, fixed:null, fold:null, mu:0.65, sgtr:false,
-          ports:{"*":1}, thermal:"none"},                     // tank and pump as one box, the same idiom D.accum already gives HPI
-  boroninj:{internal:null, head:false, fixed:null, fold:null, mu:0.65, sgtr:false,
-          ports:{"*":1}, thermal:"none"},
 };
 
 function buildLayout(){
@@ -353,38 +370,13 @@ function buildLayout(){
   // answer now, exactly like "is the pressurizer the highest point".
   if(D.catcher) add("catcher","CORE CATCHER",1,1,3,8,"#5a4a3a","safety",
     "A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher");
-  /* Unconditional, because every plant has one. It used to appear only when
-     the PASSIVE ACCUMULATOR was bought, while step() injected at a fixed rate
-     either way - so a plant with pumped injection had a system with no tank,
-     no pipe and no place, and the injection line it drew water through was
-     not on the drawing. D.accum decides what is BEHIND the water now (a
-     nitrogen charge or a set of pumps, TANK in pipenet.js), not whether the
-     water exists. */
-  /* HIGH, because its own tooltip says to mount it high and the stock layout
-     must satisfy every rule it teaches. It sat at y=5, dead level with the
-     core centre, so ACCUMULATOR HEAD read 0.0 m and the bench coloured its own
-     stock plant amber. Raising it lengthens the injection line, which P.flowK
-     prices - see the re-pinned figures in tools/audit-physics.js. */
-  add("hpi", D.accum?"ACCUMULATOR":"HPI TANK",1,1,3,1,"#5aa9d6","safety",
-    "Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.","hpi");
+  /* EVERY TANK ON THE PLANT, from D.tanks and nothing else - no conditional
+     add(), no seeded placedParts entry, no checkbox. Zero tanks is a legal
+     plant; four is a legal plant. A tank with no cell has no box, which is
+     what a secondary tank with no node means (the hotwell). */
+  for(const p of tankParts()) A.push(p);
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.","bkp");
-  // Stage 5d: emergency feedwater is a tank and a pump now (one box, the
-  // same idiom D.accum already gives HPI), placed and piped to the
-  // generator's own free "r" face, not a checkbox. D.run's own efwF entry
-  // (design.js) wires it unconditionally; pipeNetwork() already skips any
-  // run whose part is off the grid, so nothing routes while D.efw is false.
-  // The effect stays a STATED, MEASURED one (AUTOSYS.efw, step.js) until
-  // Stage 6a gives the secondary something to actually deliver flow to.
-  if(D.efw) add("efw","EFW TANK",1,1,9,1,"#5aa9d6","safety",
-    "Independent feedwater reserve and pump, piped straight to the generator. Keeps it fed after the main feed pumps are lost - see its own panel for what that is measured to buy.","efw");
-  // Stage 5d: same argument as EFW - a tank and a line into the primary
-  // loop (core's own folded node), not a flag. The dump itself (act
-  // boronDump, record.js) stays a one-shot pcm kick; this is what makes the
-  // button on the mimic answer "is there a tank on the grid" rather than a
-  // D flag with nothing behind it.
-  if(D.boroninj) add("boroninj","BORON TANK",1,1,1,3,"#8a6cd0","safety",
-    "A one-shot tank of concentrated poison worth 4000 pcm, piped into the loop. Shuts the reactor down when the rods will not, and cannot be undone.","boroninj");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
   // placed parts merge in last, checked straight against A (not groupFits(),
@@ -394,7 +386,7 @@ function buildLayout(){
     if(ok) for(const q of A) if(p.x<q.x+q.w && p.x+p.w>q.x && p.y<q.y+q.h && p.y+p.h>q.y){ ok=false; break; }
     if(ok) A.push(p);
   }
-  LAY={parts:A}; layFit=fitSig();
+  LAY={parts:A}; layFit=laySrcSig();
 }
 // a control strip needs more than a 2-cell component's 92px width, so the
 // control room gives each grid ROW extra height at the bottom - as much as
@@ -863,17 +855,17 @@ function addRun(aId,af,bId,bf,bore=1){
   return rid;
 }
 function removeRun(rid){ delete D.run[rid]; }
-/* Is there a relief tank on the board for a relief valve to discharge into?
-   Every relief fitting shares the one tank, so the design-bench menu only
-   offers ADD RELIEF VALVE once it exists.
+/* Is there a tank on the board a relief valve could discharge into? Any
+   PRIMARY tank will do - "the relief tank" is not a kind of thing, it is
+   whichever tank you happened to plumb the relief header to.
 
-   Off ROLE, never p.id: "is this the relief tank" is a declared role, and the
-   PARTS row's own get() matches on the id only because that row IS the id's
-   definition. This was referenced from design-bench.js and never written -
+   Off ROLE and `side`, never p.id. This was referenced from design-bench.js and never written -
    right-clicking a pipe on the bench threw "hasRelief is not defined" and
    took the whole frame with it, because ctxItemsDesign() runs inside the draw
    (drawCtxMenu -> drawDesign -> tick). No auditor opens that menu. */
-function hasRelief(){ return LAY.parts.some(p => p.role === "reltk"); }
+function hasRelief(){
+  return LAY.parts.some(p => p.role === "tank" && D.tanks[p.id] && D.tanks[p.id].side === "primary");
+}
 
 /* A soft, honest "nothing removes heat" warning (design.js's derived()) -
    topological only, off D.run alone: Stage 6 is what would let this READ
@@ -927,7 +919,11 @@ function moveTo(p,nx,ny){
   const cells=[{q:p,x:nx,y:ny}].concat(
     pinnedTo(p).map(q=>({q,x:nx+q.pin.dx,y:ny+q.pin.dy})));
   if(!groupFits(cells)) return false;
-  for(const {q,x,y} of cells){ q.x=x; q.y=y; }
+  /* A tank is rebuilt from D.tanks on every buildLayout(), so its cell has to
+     land back there or the move is undone by the next unrelated rebuild.
+     moveTo() is the ONLY way a part changes position, so this is the one
+     place that has to know it. */
+  for(const {q,x,y} of cells){ q.x=x; q.y=y; if(D.tanks[q.id]) D.tanks[q.id].cell=[x,y]; }
   return true;
 }
 // every cell a party could stand in beside p and still be working ON p - not
@@ -947,7 +943,7 @@ function freeAdj(p,g){
   return out;
 }
 function layoutMetrics(){
-  if(!LAY||layFit!==fitSig()) buildLayout();
+  if(!LAY||layFit!==laySrcSig()) buildLayout();
   // measure the design, not the view: drawPlant() sets the bands again
   // straight after this returns, and nothing measures between the two
   BANDS=null;
@@ -1007,13 +1003,24 @@ function layoutMetrics(){
   for(const q of P_) if(q.role==="sg") loopTop=Math.min(loopTop,q.y);
   const pzrOK = pz ? pz.y<=loopTop : true;
   const pzrK  = pzrOK ? 1 : 0.45;
-  /* Metres, measured - not a clamped multiplier on an injection rate that no
-     longer exists. Elevation is LIVE for this tank now, like every other
-     node's: it enters the solve as the static head of the tank's own column
-     (pipenet.js), so moving it on the bench changes what it delivers without
-     re-commissioning anything. */
-  const hp=id("hpi");
-  const hpiZ = hp ? (cc.y-cen(hp).y)*MPC : 0;
+  /* Metres above the core, per TANK - measured, not a clamped multiplier on
+     an injection rate that no longer exists. Elevation is LIVE for a tank
+     like every other node's: it enters the solve as the static head of the
+     tank's own column (pipenet.js), so moving one on the bench changes what
+     it delivers without re-commissioning anything.
+     A MAP, because there is no privileged tank to hand one number back for -
+     that scalar was named hpiZ and was the last thing in this file that knew
+     a tank by name. */
+  const tankZ = {};
+  for(const q of P_) if(q.role==="tank") tankZ[q.id] = (cc.y-cen(q).y)*MPC;
+  /* The one figure the bench can print for a WHOLE PLANT: the worst head of
+     any tank that could inject. "Could inject" is a check valve on a primary
+     tank - a structural fact, not a name - because a non-return valve is what
+     makes a tank a source rather than a sink. No tank on the grid can, so
+     there is nothing to warn about, and 0 is the honest answer. */
+  let injZ = null;
+  for(const q of P_){ const t=q.role==="tank" && D.tanks[q.id];
+    if(t && t.side==="primary" && t.check) injZ = injZ===null ? tankZ[q.id] : Math.min(injZ, tankZ[q.id]); }
 
   const mass = (pipe+sec+dead)*1.6 + P_.filter(p=>p.grp==="shield").length*30;
   layMass = mass;
@@ -1024,7 +1031,7 @@ function layoutMetrics(){
      one steam generator from another, and can tell a shut valve from an open
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
-  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,hpiZ,radK,peak,
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
 }

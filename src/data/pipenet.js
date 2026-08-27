@@ -260,12 +260,62 @@ const SGTR_RATE = 0.30;
 const sgtrG = () => (SGTR_RATE/100)*P.netRef*LOOP_TRANSIT/Math.max(P.P0*0.55, 0.05);
 const sgtrLive = (s, id) => !!(s.dmgParts && s.dmgParts.indexOf(id) >= 0);
 
-/* ══════════ TANK: one row per tank, and adding a tank is adding a row ══════════
-   Same idiom as LAYERS, DMGFX, AUTOSYS, FIT, DICE and ANN. There were two
-   tanks here and they were mirror images with nothing shared: one an infinite
-   source with an elevation frozen at commissioning and a fixed injection
-   rate, the other a sink with a level that clamped at full and shrugged.
+/* ══════════ FLUID: a table of SUBSTANCES, not of components ══════════
+   There is no such thing as "the HPI tank" any more. There is a tank, and
+   there is what is in it. This table is the second half of that sentence -
+   a real physical taxonomy, not a component list, and the thing that lets
+   ONE tank component be four different tanks.
 
+   There is deliberately no DENSITY row. The solve carries piezometric head
+   about rhoDatum(), so a fixed node's own column is the DATUM's by
+   definition, and the only other place a density could go is buoyH() - which
+   is a TEMPERATURE anomaly, and where buoyancy strength being a collapse
+   rather than a fit is pinned. A density field here would have had no honest
+   consumer, and dead config reads as a second implementation of the thing it
+   is named after.
+
+     act    what a FULL tank of it reads as a radiation source (rad.js).
+            Only contaminated carries any.
+     boron  pcm of reactivity delivered per 1 % of loop inventory pushed into
+            the loop. Zero for anything that is not poison, so the term is
+            unconditional and there is no "is this the boron tank" test.
+     temp   K at the tank's own liquid surface. DISPLAY ONLY, the same words
+            netTempAt()'s condenser tag already carries: a tank is not a
+            thermal path yet, and a number that looked like one would be
+            read as one. */
+const FLUID = {
+  water:        {label:"WATER",        act:0, boron:0,   temp:310},
+  /* A default tank of this (TANK_DEFAULT, below) is worth almost exactly the
+     4000 pcm the old one-shot EMERG BORON button subtracted in a single tick
+     - kept as the SCALE so the mechanic reads the same, while what changed is
+     that it now arrives over the seconds the tank takes to empty against loop
+     pressure, through the same solved edge every tank uses. */
+  borated:      {label:"BORATED",      act:0, boron:100, temp:310},
+  condensate:   {label:"CONDENSATE",   act:0, boron:0,   temp:320},
+  contaminated: {label:"CONTAMINATED", act:1, boron:0,   temp:400},
+};
+
+/* ══════════ AUTORULE: when a tank opens itself ══════════
+   Every tank has a valve the operator can open and shut (s.tankOpen). Some
+   tanks also have a rule that opens it for them. EFW's "starts on low level,
+   not on being armed" is a rule the player PICKS here, not a lambda welded to
+   one named tank - which is what let an emergency pump overfill a healthy
+   generator for as long as "armed" was the only gate.
+   `live` is asked every tick and never latches: a rule that stopped being
+   true shuts the valve again, and the operator's own switch is an OR beside
+   it, never overridden. */
+const AUTORULE = {
+  manual: {label:"MANUAL ONLY",       live:()=>false},
+  /* Locked open. This is what a relief header IS: what holds the relief tank
+     shut is the RELIEF VALVE upstream of it (FIT.relief), not anything this
+     tank's own edge could ask about honestly. A rule, not a special case -
+     any tank may be given it. */
+  always: {label:"ALWAYS OPEN",       live:()=>true},
+  sglow:  {label:"LOW SG LEVEL",      live:s=>sglMin(s) < SG_DRY},
+  plow:   {label:"LOW LOOP PRESSURE", live:s=>s.P < P.P0*0.55},
+};
+
+/* ══════════ A TANK ══════════
    Under a pressure field a tank is exactly five things: an ELEVATION (its own
    node's, live, off the grid like every other), a LEVEL 0..100, a PRESSURE
    that follows from that level and the gas above it, ONE EDGE into the
@@ -279,72 +329,134 @@ const sgtrLive = (s, id) => !!(s.dmgParts && s.dmgParts.indexOf(id) >= 0);
    no back-pressure and no rupture disc. The gas space is what rises as a sink
    fills and falls as a source empties.
 
-   `vol` is the tank's own inventory measured in the same units s.inv is - %
-   of the LOOP - so one conversion carries a solved flow into both numbers and
-   a tank cannot leak into the loop's books.
-   `pres` is MPa at the tank's own liquid surface.
-   `act` is what a full tank of it reads as a radiation source (rad.js).
-   `node` is NOT authored here any more - it used to be a frozen face string
-   ("hpib"/"reltkl") that went stale the moment the part moved to a different
-   face. netBuild() writes the CURRENT one back onto this row every rebuild,
-   off the part's own declared ROLE.fixed (layout.js) and whatever
-   pipeNetwork() actually routed that frame - see tankIdOf() there. */
-const ACC_P0 = 4.5, ACC_GAS = 0.35, HPI_PUMP_P = 11.0;
-const RELTK_P0 = 0.15, RELTK_GAS = 0.92, RELTK_DISC = 1.4;
-const TANK = {
-  hpi: {
-    level0:100, vol:65, act:0,
-    /* RATED delivery, in % of loop inventory per second, at full differential
-       against containment - the two figures the bench has always promised.
-       A tank's edge is priced from this rather than from its line's bore,
-       because what limits high pressure injection is the machine behind it,
-       not the pipe: a positive-displacement pump delivers its rating until it
-       runs into its own shutoff head. The pressure relationship is still the
-       whole mechanic - delivery falls off linearly as the loop rises to meet
-       the tank and reaches exactly zero when they equalise. */
-    /* What the bench reads back, in % of loop inventory per second - it used
-       to PRICE the injection line (a conductance picked so flow equalled
-       this number exactly, no bore, no length); now the line is a real
-       resist(bore,length) edge and this is only what THAT model measures at
-       full differential against containment - an OUTPUT the panel quotes,
-       never an input the solve consumes. */
-    rate:()=> D.accum ? 2.6 : 1.6,
-    /* A PASSIVE ACCUMULATOR is a nitrogen charge behind a check valve: as it
-       empties the gas expands, the pressure falls, and injection tapers
-       instead of holding to the last drop. It needs no electricity, so it is
-       the one injection path a blackout does not kill - which the bench has
-       been selling for as long as it has existed while step() injected at the
-       same rate either way. A PUMPED system holds its pressure until the tank
-       is dry, and dies with the bus. */
-    pres:(s,l)=> D.accum ? ACC_P0*ACC_GAS/(ACC_GAS + (100-l)/100)
-                         : (s.blackout && !(!s.bkpLost && autoLive("bkp")) ? 0 : HPI_PUMP_P),
-    /* A non-return valve on this tank's own edge - see tankCheckOpen() below.
-       The relief tank has none: it is held shut by the RELIEF VALVE upstream
-       of it (FIT.relief), not by anything this tank's own edge could ask
-       about honestly. */
-    check:true,
-  },
-  reltk: {
-    level0:0, vol:40, act:1,
-    /* Gas above the water, compressed as the tank fills. At rest it sits at
-       containment pressure, which is what makes an empty tank cost the relief
-       path exactly nothing. */
-    pres:(s,l)=> RELTK_P0/(1 - RELTK_GAS*clamp(l,0,100)/100),
-  },
+   The config for every instance lives in D.tanks[id] (design.js) - so it
+   rides designSig(), the recording head and the save file for free - and all
+   of it is free except `side`, which decides whether the tank gets a node at
+   all. Neither mass nor node is config: mass follows from `vol`, and
+   netBuild() writes the CURRENT node back every rebuild off the part's own
+   declared ROLE.fixed and whatever pipeNetwork() actually routed that frame.
+
+     side    "primary"   - a node in the graph and one solved edge
+             "secondary" - a boundary, no node, no solve (CLAUDE.md: the
+                           secondary is PRICED, not solved)
+     vol     capacity, in % of that side's own reference inventory -
+             loopKg() for the primary, hotMass() for the secondary. One
+             conversion carries a solved flow into both a tank level and
+             s.inv, so a tank cannot leak into the loop's books.
+     level   0..100 at commissioning
+     fluid   which FLUID row is in it
+     gas     {p0,frac} cover gas, or null for a tank with no charge at all.
+             ONE law, exact: p(l) = p0*frac/(frac + (level - l)/100), where
+             `level` is the commissioning level the charge was set at. Both
+             laws this replaces are that function at two commissioning
+             levels - a full accumulator (level 100) and an empty relief tank
+             (level 0).
+     pump    {p,bus} - a machine that holds `p` MPa until the tank is dry and
+             dies with `bus`. null for a passive tank, which is the one
+             injection path a blackout does not kill.
+     check   non-return valve on its own edge (the diode, below)
+     auto    an AUTORULE key
+     burst   {at,drain,rel} rupture disc, or null: it lets go at `at` MPa,
+             puts the tank on the floor at `drain` %/s, and each point of
+             level dumped costs `rel` of release. Latched - a burst disc does
+             not reseat.
+     cell    [x,y] on the grid, or null for a SECONDARY tank that has no node
+             and therefore needs no cell: the hotwell lives inside the
+             condenser it condenses into, and giving it a box of its own
+             would be inventing hydraulics the secondary does not have. */
+const TANK_DEFAULT = {
+  side:"primary", vol:40, level:100, fluid:"water",
+  gas:{p0:4.5, frac:0.35}, pump:null, check:true, auto:"manual", burst:null,
 };
-const tankLvl = (s,id) => (s.tank && s.tank[id] !== undefined) ? s.tank[id] : TANK[id].level0;
-const tankP   = (s,id) => TANK[id].pres(s, tankLvl(s,id));
+const tankIds   = () => Object.keys(D.tanks);
+const secTankIds= () => tankIds().filter(id=>D.tanks[id].side==="secondary");
+/* A tank with no cell has no box on the grid and no node - which is what a
+   SECONDARY tank is allowed to be. It is HOSTED: the hotwell lives inside the
+   condenser it condenses into, and the condenser draws it. */
+const hostedTankIds = () => tankIds().filter(id=>!D.tanks[id].cell);
+/* Which tanks could poison the loop - off what is IN them, never off a name.
+   Zero of them is a legal plant; four is a legal plant, and four of them are
+   worth four times one. */
+const boronTankIds = () => tankIds().filter(id=>
+  D.tanks[id].side==="primary" && tankFluid(id).boron>0);
+/* A tank's capacity in the units its OWN side counts in: % of loop inventory
+   for the primary (invRate()'s currency), kilograms for the secondary. One
+   conversion per side, so a solved flow reaches a level and a mass balance
+   without either side inventing a second one. */
+const tankKg = id => D.tanks[id].vol/100*(D.tanks[id].side==="primary" ? loopKg() : hotMass());
+/* Several tanks lined up together behave as one tank of their combined size.
+   Two questions, one answer: how much is in the pool, and how full it is. */
+const tankPoolKg = (s,list) => { let m=0;
+  for(const id of list) m += (s.tank[id]||0)/100*tankKg(id); return m; };
+const tankPoolPct = (s,list) => { let c=0, m=0;
+  for(const id of list){ const k=tankKg(id); c+=k; m+=(s.tank[id]||0)/100*k; }
+  return c>0 ? 100*m/c : 0; };
+const tankFluid = id => FLUID[D.tanks[id].fluid] || FLUID.water;
+const tankLvl   = (s,id) => (s.tank && s.tank[id] !== undefined) ? s.tank[id] : D.tanks[id].level;
+/* A pump dies with its bus; a gas charge does not. A tank with neither reads
+   zero, which is exactly what a pumped tank with no nitrogen behind it is
+   worth in a blackout - and the whole of why an accumulator is worth buying. */
+const tankPumpLive = s => !s.blackout || (!s.bkpLost && autoLive("bkp"));
+function tankP(s,id){
+  const t = D.tanks[id];
+  if(!t) return 0;
+  if(t.pump) return tankPumpLive(s) ? t.pump.p : 0;
+  if(!t.gas) return 0;
+  return t.gas.p0*t.gas.frac/(t.gas.frac + (t.level - clamp(tankLvl(s,id),0,100))/100);
+}
+/* What the bench quotes as this tank's rated delivery, in % of loop inventory
+   per second. An OUTPUT the panel reads back off the model, never an input
+   the solve consumes - the line is a real resist(bore,length) edge and this
+   is only what that model measures at full differential against containment. */
+const tankRateRef = id => (D.tanks[id] && D.tanks[id].pump) ? 1.6 : 2.6;
 /* ══ THE CHECK VALVE IS A MODE, NOT A NAME ══
    An injection line does not run backwards. A non-return valve is a DIODE,
    and this solve is LINEAR - a gate that depends on the answer cannot be
    part of the question - so it reads last tick's s.pCore rather than this
    tick's, and it is a BOOLEAN so the factorisation cache holds two states
    to key on, not a continuum (see netFactored's own signature, below).
-   TANK[id].check says whether a tank's own edge carries one at all; a tank
-   with no check valve (reltk) always answers open here; asking is free and
+   A tank with no check valve always answers open here; asking is free and
    costs nothing new for a tank this can never gate. */
 const tankCheckOpen = (s, id) =>
-  !TANK[id].check || (s.pCore === undefined || s.pCore < tankP(s, id));
+  !D.tanks[id].check || (s.pCore === undefined || s.pCore < tankP(s, id));
+/* THE OPERATOR'S OWN VALVE, or the rule that opens it for them. One question
+   asked of every tank alike, in place of s.hpi, D.efw's "armed" flag and
+   boronDump's one-shot latch. A tank that is empty is empty, which is the
+   same refusal the latch used to express as a flag.
+   The relief tank has no switch and no rule and still reads OPEN: what holds
+   it shut is the RELIEF VALVE upstream of it (FIT.relief), not anything this
+   tank's own edge could ask about honestly - so a tank with no check valve
+   and no gas charge of its own to fight is one this can never gate. */
+const tankOpen = (s,id) => {
+  if(s.tankOpen && s.tankOpen[id]) return true;
+  /* the operator may defeat the RULE without touching the valve - the same
+     "fitted, then armed" pair every automatic system answers, per tank
+     rather than as one flag over a named system */
+  if(s.tankByp && s.tankByp[id]) return false;
+  const r = AUTORULE[D.tanks[id].auto];
+  return !!(r && r.live(s));
+};
+/* A tank that opens itself, and has not been bypassed. This is what
+   "emergency feedwater is armed" MEANS now - there is no such system, there
+   are tanks with rules - and it is what the steam dump after a trip and the
+   reserve delivery both ask. `always` is the circuit, not a rule you arm. */
+const tankRuleLive = (s,id) => {
+  const a = D.tanks[id].auto;
+  return a!=="manual" && a!=="always" && !(s.tankByp && s.tankByp[id]);
+};
+const tankRuleAny = (s,side) => tankIds().some(id =>
+  D.tanks[id].side===side && tankRuleLive(s,id));
+/* Can this tank's own edge carry anything at all? Valve, diode, and one more:
+   an EMPTY tank has nothing to give. Stated as "or the loop is above me", not
+   as a bare level test, because a tank at 0 with the loop above it can still
+   be FILLED - which is the entire life of a relief tank, and a bare level
+   test would weld it shut at commissioning. A checked tank cannot reach that
+   second clause anyway (the diode already demands the loop be BELOW it), so
+   this is exactly the old HPI gate for a checked tank and a real capability
+   for an unchecked one. */
+const tankLive = (s,id) =>
+  tankOpen(s,id) && tankCheckOpen(s,id) &&
+  (tankLvl(s,id) > 0 || (s.pCore !== undefined && s.pCore > tankP(s,id)));
 
 /* ══════════ GROUNDING THE SECONDARY ══════════
    Stage 1 makes steam/feed/exh real edges, which reach nodes (condt, condr,
@@ -648,15 +760,17 @@ function netBuild(){
   const byId = {};
   for(const q of LAY.parts) byId[q.id] = q;
   const partOfNode = nid => byId[nid.slice(0, -1)];
-  /* Which TANK row (if any) this node is priced by - derived from the PART
-     the node's face belongs to and that part's own declared ROLE.fixed, the
-     way juncPt() derives a tap from whatever pipeNetwork() routed this frame
+  /* Which TANK (if any) this node is priced by - derived from the PART the
+     node's face belongs to and that part's own declared ROLE.fixed, the way
+     juncPt() derives a tap from whatever pipeNetwork() routed this frame
      rather than from a face name authored once and left to go stale the
-     moment the part moves to a different face. Replaces the old
-     TANK[id].node==="hpib" (etc.) literal comparison - see ROLE.hpi/reltk. */
+     moment the part moves to a different face.
+     A SECONDARY tank is excluded here and nowhere else: it is a boundary,
+     not a solve, so it has no node and cannot have one - which is the whole
+     of what `side` decides. */
   const tankIdOf = nid => {
-    const p = partOfNode(nid), R = p && ROLE[p.role];
-    return (R && R.fixed && R.fixed.type === "tank" && TANK[p.id]) ? p.id : null;
+    const p = partOfNode(nid), R = p && ROLE[p.role], t = p && D.tanks[p.id];
+    return (R && R.fixed && R.fixed.type === "tank" && t && t.side === "primary") ? p.id : null;
   };
 
   const nodes = [], index = {};
@@ -808,16 +922,11 @@ function netBuild(){
        otherwise short straight past the fitting that is supposed to own it. */
     const tid = (!taps || !taps.length) ? (tankIdOf(ends[0]) || tankIdOf(ends[1])) : null;
     if(tid){
-      /* The operator's own isolation valve, and (for HPI only) whether
-         there is anything left to give - HPI-specific because HPI is the
-         only tank an operator switches on and off; the relief tank has no
-         such switch and reads this as always-open. The level only stops it
-         DRAINING (a tank at 0 with the loop above it can still be filled),
-         which the pressure already does on its own once the gas has
-         finished expanding - see TANK[id].pres(). */
-      const sourceOK = tid==="hpi" ? (s => !!s.hpi && tankLvl(s,"hpi")>0) : (()=>true);
+      /* Valve, diode and "is there anything left to give", asked of EVERY
+         tank by the same predicate - see tankLive(). Nothing here knows
+         which tank this is. */
       edges.push({u, v,
-        g: s => (sourceOK(s) && tankCheckOpen(s,tid)) ? injResist(bore, L + pipeExtraLen(s, r.key)) : 0,
+        g: s => tankLive(s,tid) ? injResist(bore, L + pipeExtraLen(s, r.key)) : 0,
         h: 0, kind: r.k, key: r.key}); // LABEL: carried onto the edge for rendering/lookup, never re-compared here
       continue;
     }
@@ -1127,16 +1236,23 @@ function netBuild(){
   /* which node each TANK row actually landed on this frame, or nothing if
      that tank is not on this plant - tankIdOf() derives it from the PART and
      the RUN, never a stored face name (see its own comment, above). Also
-     written back onto TANK[id].node itself: render/pipes.js mirrors this
-     exact test (pipeFullScale/pipeUnit, "mirroring netBuild()'s own test")
-     to meter an HPI-bound run in inventory rather than mass, and it reads
-     that field as a plain string - refreshed here, once per commission, so
-     a tank that changes face is caught there too without a second resolver. */
-  for(const id in TANK) TANK[id].node = undefined;
+     kept as net2.tankNid (id -> node NAME) as well: render/pipes.js mirrors
+     this exact test (pipeFullScale/pipeUnit) to meter a tank-bound run in
+     inventory rather than mass, and it reads the name. It lives on the built
+     network rather than on the tank's own config, because D.tanks rides
+     designSig() and a per-frame writeback there would churn it. */
+  net2.tankNid = {};
   net2.tankNode = {};
+  /* the same map read the other way. netCoreFracOf() walks EDGES, not tanks,
+     so without this it would have to scan every tank per edge to answer
+     "which tank, if any, does this edge belong to" - and the answer has to
+     be per-tank now that more than one tank can drain. */
+  net2.tankIdByNode = {};
   for(const nid in index){
     const tid2 = tankIdOf(nid);
-    if(tid2 && net2.tankNode[tid2] === undefined){ net2.tankNode[tid2] = index[nid]; TANK[tid2].node = nid; }
+    if(tid2 && net2.tankNode[tid2] === undefined){
+      net2.tankNode[tid2] = index[nid]; net2.tankIdByNode[index[nid]] = tid2; net2.tankNid[tid2] = nid;
+    }
   }
   /* The condenser's own two ports (see COND_P0 above) - "or nothing" applies
      here too. Each is its own node: the condenser has no comp: edge (only an
@@ -1300,15 +1416,12 @@ function netFactored(net, s, fixed){
      on the id - a damage id is only ever "this part ruptured" for a part
      whose role can rupture at all. */
   + '|' + (s.dmgParts ? s.dmgParts.filter(k => net.sgtrParts.indexOf(k)>=0).join(',') : '')
-  /* a tank's own isolation valve, and its check valve (the diode - see
-     tankCheckOpen(), above) both gate its own edge, so either crossing
-     changes A. Generalised over every TANK row rather than hardcoded to
-     "hpi": today only HPI carries an operator switch, and only a tank with
-     TANK[id].check set even asks the diode question at all, but neither
-     term is named here by id any more - a future tank with a check valve
-     of its own is covered for free. */
-  + '|' + (s.hpi && tankLvl(s,"hpi")>0 ? 'S' : '')
-  + '|' + Object.keys(TANK).filter(id=>TANK[id].check).map(id=>tankCheckOpen(s,id)?'1':'0').join('');
+  /* Every gate on every tank's own edge - the operator's valve, its auto
+     rule, the diode and "is there anything left to give" - as ONE bit per
+     tank, off the same tankLive() the edge itself is built from. Any of them
+     crossing changes A, not just b. No tank is named here: adding a tank is
+     adding a bit, and a tank whose gates never move never busts anything. */
+  + '|' + tankIds().filter(id=>D.tanks[id].side==="primary").map(id=>tankLive(s,id)?'1':'0').join('');
   if(!net.Af || net.AfSig !== sig){
     const A = new Float64Array(net.n*net.n);
     netAssemble(net.edges, net.n, fixed, s, A, new Float64Array(net.n));
@@ -1374,17 +1487,24 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
     if(byRun && ed.key) byRun[ed.key] = Math.abs(q[e]);
-    /* SIGNED, and only for the HPI tank's own edge - identified by which NODE
-       it touches (net.tankNode.hpi), not by a kind label, so a run reaching
-       that node any other way would count too. Kept specific to HPI rather
-       than generalised to every tank: step.js drains s.tank.hpi off this
-       exact figure, and mixing the relief tank's own fill rate into it would
-       be a second tank's bookkeeping landing on the wrong tank's level. A
-       tank fills or drains depending on which way the solved differential
-       points, and an absolute value cannot say which; positive is INTO the
-       loop. */
-    if(outs && net.tankNode && (ed.u === net.tankNode.hpi || ed.v === net.tankNode.hpi))
-      outs.qTank = (outs.qTank||0) + q[e]*(ed.u === net.core ? -1 : 1);
+    /* SIGNED, PER TANK - identified by which NODE the edge touches
+       (net.tankIdByNode), not by a kind label, so a run reaching that node
+       any other way counts too. TANK-OUT-POSITIVE: positive is out of the
+       tank, which for an injection line is into the loop. Signed off the
+       TANK's own node rather than off the core's, because a tank whose far
+       end is not the core (a relief header, a generator's feed line) has no
+       core end for a core-relative sign to read, and would silently take
+       whichever sign the node numbering happened to give it. A tank fills or
+       drains depending on which way the solved differential points, and an
+       absolute value cannot say which. */
+    if(outs && net.tankIdByNode){
+      const tu = net.tankIdByNode[ed.u], tv = net.tankIdByNode[ed.v];
+      if(tu !== undefined || tv !== undefined){
+        const by = outs.qTankBy || (outs.qTankBy = {});
+        const tid3 = tu !== undefined ? tu : tv;
+        by[tid3] = (by[tid3]||0) + (tu !== undefined ? q[e] : -q[e]);
+      }
+    }
     if(byDrop && ed.key) byDrop[ed.key] = span>0 ? Math.abs(b[ed.u]-b[ed.v])/span : 0;
     if(ed.kind === "break"){ // LABEL: synthetic edge kind this function invents
       spill += Math.abs(q[e]);
@@ -1428,7 +1548,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
        - an edge incident on a TANK node (net.tankNode - HPI, today): this
          figure is the LOOP's own circulation, judged against a pump-derived
          P.netRef, and an injection line reaching the core directly is a
-         real but DIFFERENT flow - already its own figure (outs.qTank,
+         real but DIFFERENT flow - already its own figure (outs.qTankBy,
          above). Sever every hot/cold run and HPI auto-opens on the crashing
          pressure; without this exclusion its injection would read as "the
          loop still carries flow" the moment every leg feeding it is cut.

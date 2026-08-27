@@ -174,9 +174,53 @@ const RODX0=.35;
    here mirror PIPE_BORE's current defaults so nothing is invented. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          pdes:1.0,pzr:1.0,chim:.3,sg:0,
-         scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,boroninj:false,
-         cont:1,contFit:true,accum:false,efw:true,catcher:false,bkp:1,
+         scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
+         cont:1,contFit:true,catcher:false,bkp:1,
          turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{},
+         /* ══ THE STOCK PLANT'S TANKS ══
+            A STARTING DESIGN, exactly like the default rod count - not code.
+            Every field is the player's (see the tank contract in pipenet.js);
+            nothing anywhere may ask which one of these is "the HPI tank",
+            because there is no such thing. There is a tank at (3,1), full of
+            water, behind a check valve, with a pump. */
+         tanks:{
+           hpi:  {name:"HPI TANK", col:"#5aa9d6", cell:[3,1],
+                  tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
+                  side:"primary", vol:65, level:100, fluid:"water",
+                  /* Pumped, and no nitrogen charge behind it - so it is worth
+                     exactly nothing in a blackout. Give it a `gas` and drop
+                     the pump and it is a passive accumulator, which is the
+                     one injection path a blackout does not kill. That choice
+                     is a knob on THIS tank now, not a global flag about a
+                     named one. */
+                  gas:null, pump:{p:11.0, bus:"bkp"}, check:true, auto:"manual", burst:null},
+           reltk:{name:"RELIEF TANK", col:"#8a6cd0", cell:[7,0],
+                  tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
+                  side:"primary", vol:40, level:0, fluid:"contaminated",
+                  /* At rest the gas sits at containment pressure, which is
+                     what makes an empty tank cost the relief path exactly
+                     nothing. frac is 25/23 because the law this replaces
+                     compressed at 0.92 per unit level, and 1/0.92 = 25/23. */
+                  gas:{p0:0.15, frac:25/23}, pump:null, check:false, auto:"always",
+                  burst:{at:1.4, drain:6.0, rel:0.004}},
+           efw:  {name:"EFW TANK", col:"#5aa9d6", cell:[9,1],
+                  tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
+                  side:"secondary", vol:35, level:100, fluid:"condensate",
+                  gas:null, pump:null, check:false, auto:"sglow", burst:null},
+           /* No cell: a SECONDARY tank has no node, so it needs none, and the
+              hotwell lives inside the condenser it condenses into. Giving it
+              a box would be inventing hydraulics the secondary does not have. */
+           hotwell:{name:"HOTWELL", col:"#5aa9d6", cell:null,
+                  tip:"Condensate returning from the condenser, and what the feed pumps draw on. A tube rupture puts primary water in here and it has to go somewhere.",
+                  /* Half again what the generators themselves hold. It has to
+                     be able to take a generator's WHOLE charge back plus what
+                     an emergency reserve pushes through it, or the answer to
+                     losing feedwater is to overflow the condensate over the
+                     side - measured: at exactly one charge it hit 100 % and
+                     spilled, and emergency feed came out NET NEGATIVE. */
+                  side:"secondary", vol:150, level:50, fluid:"condensate",
+                  gas:null, pump:null, check:false, auto:"always", burst:null},
+         },
          run:{
            hot0  :{a:"core",af:"r",b:"sg0",bf:"l",k:"hot",  bore:1},
            coldA0:{a:"sg0", af:"b",b:"pump0",bf:"t",k:"cold", bore:1},
@@ -188,17 +232,13 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
            feedS :{a:"cond",af:"r",b:"feed",bf:null,k:"feed", bore:1},
            hpi   :{a:"hpi", af:null,b:"core",bf:"b",k:"hpi",  bore:.25},
            relief:{a:"pzr", af:null,b:"reltk",bf:null,k:"relief",bore:.20},
-           /* Stage 5d: efw/boroninj are placed parts now (layout.js), and
-              these are their own runs, declared unconditionally like every
-              other stock run - pipeNetwork() already skips any entry whose
-              part is not on the grid this frame, which is what lets D.efw/
-              D.boroninj stay false with nothing routed. Both land on a node
-              the rest of the primary network already reaches (sg0's own
-              free "r" face -> its "b" face's internal edge; core's own
-              folded node), so each hangs off it as a pendant leaf and moves
-              nothing else in the solve - see ROLE.efw/boroninj's comment. */
+           /* The EFW tank's own line. It lands on sg0's "b" face, which is
+              THE SAME NODE the cold leg lands on - which is exactly why this
+              tank is side:"secondary" and gets no fixed pressure: a fixed
+              node there would make it a second HPI injecting into the
+              primary. As a pendant leaf with nothing fixed past this one
+              edge, KCL forces exactly zero current through it. */
            efwF  :{a:"efw",af:null,b:"sg0",bf:"b",k:"feed",bore:.5},
-           boronR:{a:"boroninj",af:null,b:"core",bf:"b",k:"boron",bore:.20},
          }};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
@@ -248,14 +288,10 @@ function derived(){
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
     +totalPumpCap()*PUMP_MASS+sgCount()*SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
     +coreMass + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
-    + (D.accum?45:0)
-    /* Stage 5d: catcher/efw/boroninj no longer price a bare flag - each term
-       now names the placed part it is charging for (PART_MASS, layout.js),
-       priced off LAY.parts the same way totalPumpCap()/sgCount() already
-       are, never off the D flag that only decides whether buildLayout()
-       puts the box there. reltk is priced the same way, off LAY.parts rather
-       than off whether any relief fitting still taps it. */
-    + partMass("catcher") + partMass("efw") + partMass("boroninj") + partMass("reltk")
+    /* Every term here names a BOX on the grid. tankMass() charges per tank
+       INSTANCE, off its own vol, so four tanks cost four tanks and there is
+       no flag anywhere pricing a system with nothing drawn behind it. */
+    + partMass("catcher") + tankMass()
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + (D.turbFit?D.turb*50:0) + (D.condFit?D.condCap*40:0)
     + Object.keys(D.fit).length*FIT_MASS
