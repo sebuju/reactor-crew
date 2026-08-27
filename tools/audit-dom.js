@@ -46,7 +46,7 @@ const EXPORTS = '{commission,step,sample,act,recTick,recRoot,resetPlant,combatHi
      would work too, but M.D() reading like the rest of this list is worth
      the one extra character. ctxItemsDesign is a plain function, called the
      same way commission/step/act already are. */
-  'D:()=>D,CTX:()=>CTX,ctxItemsDesign,NAME_CAP:()=>NAME_CAP,pipeNetwork,'+
+  'D:()=>D,CTX:()=>CTX,ctxItemsDesign,ctxResolveDesign,NAME_CAP:()=>NAME_CAP,pipeNetwork,ui:()=>ui,vPt,'+
   /* Stage 9 (gauge half) test hooks: place and plumb a spare pump exactly the
      way CONNECT does, then read pumpGauge() straight - the shared primitive
      the PUMP CAPACITY row and, later, the pump panel both build on. */
@@ -259,7 +259,12 @@ function nameCapAudit(M){
   // domstub's textContent is a flat property, not a real aggregate - rule()
   // writes the visible text onto its own inner <span>, not onto the head div
   // itself, so the span is what has to be read.
-  const heads = () => [...rail.querySelectorAll('.kit-rule-head')].map(h => (h.children[0]&&h.children[0].textContent)||'');
+  // rule() writes the visible text onto its own inner node: a <span> for a
+  // fixed title, an <input> for an editable one (the component headings), so
+  // the value is where the name lives on those.
+  const headText = h => { const c = h.children[0];
+    return (c && (c.tagName === 'INPUT' ? c.value : c.textContent)) || ''; };
+  const heads = () => [...rail.querySelectorAll('.kit-rule-head')].map(headText);
   const before = heads();
   D.name = D.name || {};
   D.name.core = 'A VERY LONG COMPONENT NAME NOBODY SHOULD EVER TYPE INTO THIS BOX';
@@ -419,6 +424,79 @@ if(!wide.err){
         tapErr ? 'threw: '+tapErr
                : (run ? tapItems.length+' item(s): '+tapItems.map(i=>i.label).join(', ')
                       : 'no hot run on the stock plant - cannot check'));
+    /* THE OTHER MENU ON A PIPE, and the newer one: the drop menu a tap drag
+       opens once it has BOTH its taps. It runs in the same place, inside the
+       draw, so it takes the frame with it in exactly the same way - and it is
+       reached through the `extra` argument rather than through the point, so
+       nothing the check above does would ever open it. Every row must be a
+       fitting mode the plant can actually build. */
+    const cold = M.pipeNetwork().find(r => r.key && r.k === 'cold');
+    let dropItems=null, dropErr=null;
+    try { const h=M.ctxResolveDesign({x:0,y:0},
+            {tapPair:{aKey:run&&run.key,aT:0.5,bKey:cold&&cold.key,bT:0.3}});
+          dropItems = h && M.ctxItemsDesign(h); }
+    catch(e){ dropErr = e.message; }
+    const modes = dropItems ? dropItems.map(i=>i.label) : [];
+    add('dropping a tap on a pipe builds the fitting menu',
+        !dropErr && modes.length===3 && modes.includes('TEE') && modes.includes('RELIEF VALVE'),
+        dropErr ? 'threw: '+dropErr : modes.length+' item(s): '+modes.join(', '));
+
+    /* ══ THE HANDLE HAS TO BE PRESSABLE, NOT MERELY DRAWN ══
+       THE ONE THAT SHIPPED. The tap handle's hit box was pinned to the point
+       on the PIPE while the gesture starts wherever the POINTER is - and the
+       handle exists whenever the pointer is within reach of a run, so the two
+       are routinely CELL*0.85 apart against a box TAPG across. At fit zoom
+       that box is under two SCREEN pixels. The handle drew, the drop menu
+       worked, every check above was green, and a player could not add a relief
+       valve at all: there was no way to grab the thing.
+
+       So this asks the only question that matters - sweep the pointer over the
+       plant, and every frame that SHOWS a handle must also be a frame where a
+       press at the pointer LANDS on it. Drawn-but-ungrabbable is the failure
+       mode, so drawing it is not the assertion. */
+    const ui=M.ui();
+    let shown=0, grabbable=0;
+    for(let px=20; px<180; px+=3) for(let py=615; py<730; py+=3){
+      ui.ptr={x:px,y:py}; ui.widgets.length=0;
+      M.setScreen('design'); M.drawDesign();
+      const t=ui.widgets.filter(w=>w.type==='tap');
+      if(!t.length) continue;
+      shown++;
+      const q=M.vPt(ui.ptr), w=t[0];
+      if(q.x>=w.x && q.x<=w.x+w.w && q.y>=w.y && q.y<=w.y+w.h) grabbable++;
+    }
+    add('a tap handle that is drawn can be grabbed', shown>0 && grabbable===shown,
+        shown ? `${grabbable} of ${shown} frames showing a handle put it under the pointer`
+              : 'no frame showed a tap handle at all - the gesture is unreachable');
+
+    /* ...and it must not be ON TOP of the marks that sit still. The handle
+       rides the pointer, so it covers whatever is under the hand wherever a
+       pipe is near - which is exactly where the waypoint grips and the free
+       nozzles are. Pushed FIRST so the hit test (last widget wins) gives both
+       of them the press: steering a run and starting a run are aimed at marks
+       that do not move, and losing either to a splice nobody asked for is the
+       worse trade. */
+    { let stolen=0, overlaps=0;
+      for(let px=20; px<180; px+=3) for(let py=615; py<730; py+=3){
+        ui.ptr={x:px,y:py}; ui.widgets.length=0;
+        M.setScreen('design'); M.drawDesign();
+        const q=M.vPt(ui.ptr);
+        const on=w=>q.x>=w.x&&q.x<=w.x+w.w&&q.y>=w.y&&q.y<=w.y+w.h;
+        const hitAll=ui.widgets.filter(on);
+        if(!hitAll.some(w=>w.type==='tap')) continue;
+        const rival=hitAll.filter(w=>w.type==='pipewp'||w.type==='port');
+        if(!rival.length) continue;
+        overlaps++;
+        // the hit test walks BACKWARDS, so the last matching widget wins
+        for(let i=hitAll.length-1;i>=0;i--){
+          if(hitAll[i].type==='tap'){ stolen++; break; }
+          if(hitAll[i].type==='pipewp'||hitAll[i].type==='port') break;
+        }
+      }
+      add('a tap handle never steals a grip or a nozzle', stolen===0,
+          overlaps ? `${overlaps} frame(s) where a handle overlapped one, ${stolen} stolen`
+                   : 'no overlap found to test - ordering unproven');
+    }
   }
 
   /* ══ STAGE 9 (gauge half): PUMP CAPACITY - INSTALLED VS DELIVERED ══
@@ -529,12 +607,19 @@ const FAULTS = [
                   'function crRailSync(panels){ KIT.el("div","leak");')],
   ['a hosted label drawn outside its box', 'hosted text stays in its box',
    s => s.replace('txt("REACTIVITY BALANCE",L,y+8,', 'txt("REACTIVITY BALANCE",L,y-400,')],
-  /* THE ONE THAT SHIPPED. hasRelief() was called from ctxItemsDesign() and
+  /* THE CLASS THAT SHIPPED. hasRelief() was called from ctxItemsDesign() and
      never written, so right-clicking any pipe on the bench threw and took the
-     frame with it. Put the undefined name back and the pipe-menu check must
-     go red - it is the only thing that opens that branch. */
+     frame with it - ctxItemsDesign() runs INSIDE the draw (drawCtxMenu ->
+     drawDesign -> tick), and no auditor opened that menu.
+     It is juncPt() that is renamed now rather than hasRelief(): the relief
+     menu row was deleted when a relief valve became a drag with both ends
+     aimed, and with it the only call hasRelief() ever had, so renaming that
+     one stopped biting and this injection silently proved nothing. juncPt()
+     is reached from ctxItemsDesign() itself, which is the function the check
+     below actually calls and the one the original fault lived in. */
   ['a context-menu helper that does not exist', 'right-clicking a pipe builds a menu',
-   s => s.replace('function hasRelief(){', 'function hasRelief__gone(){')],
+   s => s.replace('function ctxItemsDesign(hit){',
+                  'function ctxItemsDesign(hit){ juncPt__gone(null,null,0);')],
 ];
 const selftest = [];
 for(const [what, guard, patch] of FAULTS){

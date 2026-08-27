@@ -128,7 +128,10 @@ const KIT = (function(){
     /* `head` is handed back so a caller can make the title bar do something -
        the component rails hang "select this component" off it. */
     return {el: root, body, head: head ? head.el : null,
-            setTitle: head ? head.set : function(){}};
+            setTitle: head ? head.set : function(){},
+            setName:  head ? head.setVal : function(){},
+            setSfx:   head ? head.setSfx : function(){},
+            nameInput: head ? head.input : null};
   }
 
   /* Scrolls a scrolling container to show one of its children. Default
@@ -158,14 +161,36 @@ const KIT = (function(){
     else if(n.bottom > b.bottom) box.scrollTop += n.bottom - b.bottom;
   }
 
+  /* `opts.edit` turns the heading itself into the name field. A component's
+     name was a separate NAME row inside the panel, which said the same word
+     twice: once as the title and once as the thing you type into. The heading
+     IS the name, so the heading is the input. The label becomes the
+     PLACEHOLDER - the default name a blank falls back to - and `setVal()` is
+     what carries the custom one, guarded while the box has focus so a sync
+     cannot rewrite what is being typed. `sfx` is the trailing count a ganged
+     panel needs, kept out of the input so it cannot be typed over. */
   function rule(label, opts){
     opts = opts || {};
     const r = el("div", "kit-rule");
-    const s = document.createElement("span");
-    s.textContent = label;
-    r.appendChild(s);
+    let s = null, box = null, sfx = null;
+    if(opts.edit){
+      box = textInput({bare: true, cls: "kit-rule-input", placeholder: label,
+                       maxLength: opts.edit.maxLength, onChange: opts.edit.onChange});
+      sfx = el("span", "kit-rule-sfx");
+      r.appendChild(box.el); r.appendChild(sfx);
+    } else {
+      s = document.createElement("span");
+      s.textContent = label;
+      r.appendChild(s);
+    }
     if(opts.color) r.style.setProperty("--kit-rule-color", opts.color);
-    return {el: r, set(l){ if(s.textContent !== l) s.textContent = l; }};
+    return {el: r, input: box ? box.el : null,
+      set(l){
+        if(box) box.setPlaceholder(l);
+        else if(s.textContent !== l) s.textContent = l;
+      },
+      setSfx(t){ if(sfx && sfx.textContent !== t) sfx.textContent = t; },
+      setVal(v){ if(box) box.set(v); }};
   }
 
   function chip(color){
@@ -456,13 +481,18 @@ const KIT = (function(){
      display truncation - the caller (partName()'s cap, core/ui.js) still
      truncates on read too, so a value written any other way (a save file)
      can't outrun it. */
+  /* `bare` hands back the <input> itself instead of a wrapper, and `cls`
+     replaces the class it is dressed in. Both exist for rule()'s editable
+     heading, which is a free-text control that has to sit INSIDE a flex row
+     wearing the heading's own type - a second implementation of "guarded text
+     box" would be a second place the focus guard could be forgotten. */
   function textInput(opts){
     opts = opts || {};
-    const root = el("div", "kit-textinput");
-    const input = el("input", "kit-textinput-input", {type: "text"});
+    const input = el("input", opts.cls || "kit-textinput-input", {type: "text"});
     if(opts.placeholder) input.setAttribute("placeholder", opts.placeholder);
     if(opts.maxLength) input.setAttribute("maxlength", opts.maxLength);
-    root.appendChild(input);
+    let root = input;
+    if(!opts.bare){ root = el("div", "kit-textinput"); root.appendChild(input); }
     if(opts.tip) tip(root, opts.title || "", opts.tip);
     input.addEventListener("input", () => { if(opts.onChange) opts.onChange(input.value); });
     let last = null;
@@ -471,8 +501,11 @@ const KIT = (function(){
       if(val !== last){ last = val; if(document.activeElement !== input) input.value = val; }
     }
     function get(){ return input.value; }
+    function setPlaceholder(p){
+      if(input.getAttribute("placeholder") !== p) input.setAttribute("placeholder", p);
+    }
     if(opts.val != null) set(opts.val);
-    return {el: root, set, get};
+    return {el: root, input, set, get, setPlaceholder};
   }
 
   function optList(items, opts){
