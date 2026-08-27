@@ -83,7 +83,8 @@ function shellInitTooltip(){
   let cur=null;
   const show=el=>{ cur=el;
     tip.innerHTML=`<b>${el.dataset.tipTitle||""}</b><p>${el.dataset.tipBody||""}</p>`;
-    KIT.show(tip,true); };
+    KIT.show(tip,true);
+    const b=el.getBoundingClientRect(); place(b.top+b.height/2); };
   const hide=()=>{ cur=null; KIT.show(tip,false); };
   document.addEventListener("pointerover",e=>{
     const el=e.target.closest("[data-tip-title]");
@@ -93,12 +94,25 @@ function shellInitTooltip(){
     const el=e.target.closest("[data-tip-title]");
     if(el && el===cur && !(e.relatedTarget && el.contains(e.relatedTarget))) hide();
   });
-  document.addEventListener("pointermove",e=>{
-    if(!cur) return;
+  /* PARKED CLEAR OF THE RAIL, not carried on the pointer. Every panel worth a
+     tooltip lives in a rail, so a box that follows the hand is a box sitting on
+     top of the next control you were going to read - and the rails are where
+     the hand spends the whole session. It stands just OUTSIDE whichever rail is
+     on screen and only tracks the pointer vertically, which is the same
+     decision drawTip() already made for the canvas.
+     Measured, not a constant: the rail is a fixed CSS width today, but a
+     hard-coded 340 here would be a second copy of that number in a second
+     file. */
+  const railLeft=()=>{
+    for(const el of document.querySelectorAll(".db-rail,.cr-rail,.scn-rail"))
+      if(el.offsetParent) return el.getBoundingClientRect().left;
+    return innerWidth;
+  };
+  const place=clientY=>{
     const gap=12, r=tip.getBoundingClientRect();
-    let x=e.clientX+gap, y=e.clientY+gap;
-    if(x+r.width>innerWidth-4) x=innerWidth-r.width-4;
-    if(y+r.height>innerHeight-4) y=e.clientY-r.height-gap;
+    const x=Math.max(4, railLeft()-gap-r.width);
+    const y=Math.max(4, Math.min(clientY-r.height/2, innerHeight-r.height-4));
     tip.style.left=x+"px"; tip.style.top=y+"px";
-  });
+  };
+  document.addEventListener("pointermove",e=>{ if(cur) place(e.clientY); });
 }

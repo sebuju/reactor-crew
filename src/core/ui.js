@@ -114,17 +114,15 @@ const CTX=[];
 const ctxAdd=o=>{ CTX.push(o); return o; };
 const ctxFor=()=>CTX.find(o=>!o.sc||o.sc===screen);
 
-// `sel` is the one plant-component selection, shared by design and control
-// since they're the same renderer. A screen with a selection of its own that
-// `sel` doesn't know about (the scenario timeline's event/limit) registers
-// here so a bare-deck click clears it too, instead of leaving the inspector
-// lit with nothing to justify it.
-const DESEL=[];
-function deselFire(){ for(const o of DESEL) if(!o.sc||o.sc===screen) o.fn(); }
 let ctxMenu=null;
-function openCtxMenu(p){
+/* `extra` is what a GESTURE already decided, handed to the resolver so the
+   menu can be about that instead of about the pixel under the cursor. One
+   caller: a tap drag that has both its endpoints and needs only to be told
+   WHICH fitting to build. Geometry is dragged, type is menued - the menu
+   never chooses a place, and the drag never chooses a kind. */
+function openCtxMenu(p, extra){
   const R=ctxFor();
-  ctxMenu = R ? R.resolve(p) : null;
+  ctxMenu = R ? R.resolve(p, extra) : null;
 }
 // dressed like drawTip()'s box - a drop shadow and a ground darker than any
 // panel - so it reads as a popup rather than one more pane of ordinary chrome.
@@ -324,7 +322,13 @@ function slider(x,y,w,val,min,max,o){
   // through ptIn() like any plant widget, or the preview hairline would land
   // wherever the raw PAGE pointer is, far from the track at fit scale.
   const pp = ptIn(wd,ui.ptr);
-  wd.pv = (pp && hov(wd) && Math.abs(pp.x-wd.tx)>tw_/2+3) ? valFrom(wd,pp.x) : null;
+  /* THE PREVIEW HAS NO DEAD ZONE. It used to stand down within a thumb-width
+     of the indicator, because pressing there GRABS instead of jumping - but
+     that is exactly the neighbourhood a fine adjustment lives in, so the one
+     place the bar refused to say what a click would set was the one place you
+     were aiming at. Pressing the thumb still grabs; releasing without moving
+     now lands the click (see uiUp), so the preview is honest again. */
+  wd.pv = (pp && hov(wd)) ? valFrom(wd,pp.x) : null;
   const n=clamp(Math.round(tW/5),6,30), cw=tW/n;   // one cell per ~5px
   const bh=Math.min(10,th-3), by=Math.round(y-bh/2);
   for(let i=0;i<n;i++){
@@ -343,6 +347,16 @@ function slider(x,y,w,val,min,max,o){
     fillRect(x+i*cw,by,cw-1.3,bh,col);
   }
   if(o.mark!=null) fillRect(Math.round(x+mk*tW),t0,1,hh,C.red);
+  /* `marks` is a BAND the caller is telling you about, not a limit it will be
+     scored against - the automatic rod controller's own travel band, drawn on
+     the bank's own bar so "where may it go" is answered where the question is
+     asked. Amber and half-lit: it is a fact about another hand on the same
+     control, never a fault of yours, so it must not wear the red a violated
+     mark does. */
+  if(o.marks) for(const mv of o.marks){
+    const f=clamp((mv-min)/(max-min),0,1);
+    ctx.globalAlpha=.5; fillRect(Math.round(x+f*tW),t0,1,hh,C.amber); ctx.globalAlpha=1;
+  }
   if(wd.pv!=null) fillRect(Math.round(pp.x),t0,1,hh,"#7a5a18");  // where a click lands
   // a hairline in a cut, not a plate - the old 10px thumb covered an eighth
   // of an 84px track; the cut keeps 1px of amber readable against a lit cell
@@ -425,7 +439,7 @@ function uiDown(e){
     else if(w.type==="sld"){ ui.drag=w;
       const onThumb=Math.abs(q.x-w.tx)<=w.tw_/2+3;
       w.gv = onThumb ? w.val : valFrom(w,q.x);    // gv is the running command value
-      w.gx = q.x;
+      w.gx = q.x; w.gx0 = q.x; w.moved = false;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
     // the drag holds the stored waypoint OBJECT, never its index - the list
@@ -446,11 +460,19 @@ function uiDown(e){
        runs land on the face, so the point moves the moment this drag creates
        one. Resolved in uiUp() - see portDrop() (layout.js). */
     else if(w.type==="port"){ ui.drag={type:"port",part:w.part,face:w.face,v:w.v}; }
+    /* A TEE IS PULLED OUT OF A PIPE, exactly as a run is pulled out of a port.
+       It used to be a menu row per OTHER LOOP with the far end picked by
+       proximity - so a one-loop plant was offered no tee at all, and the far
+       end was a guess the player never saw, which is the same fault the old
+       CONNECT offer was deleted for. Holding the run KEY and the fraction,
+       never the pixel: pipeNetwork() re-routes every polyline each frame, so a
+       stored point would be off the pipe the moment anything upstream moves. */
+    else if(w.type==="tap"){ ui.drag={type:"tap",key:w.key,t:w.t,v:w.v}; }
     else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
     return; }
   // nothing under the pointer: a click on bare deck deselects, rather than
   // leaving whatever was picked last lit with nothing on screen to justify it
-  if(e.button!==2){ sel=null; deselFire(); }
+  if(e.button!==2) sel=null;
 }
 function uiMove(e){
   const tgt=e.currentTarget||cv;
@@ -478,6 +500,7 @@ function uiMove(e){
       // slider() is (v-min)/(max-min) and reverses on its own.
       const lo=Math.min(d.min,d.max), hi=Math.max(d.min,d.max);
       d.gv=clamp(d.gv+(q.x-d.gx)/d.w*(d.max-d.min)*sldGain(q.y-d.cy),lo,hi);
+      if(q.x!==d.gx0) d.moved=true;
       d.gx=q.x; d.fn(d.gv); }
     // the pan is measured in PAGE pixels and spent in plant units, so the
     // deck keeps up with the hand at any zoom
@@ -487,11 +510,18 @@ function uiMove(e){
       // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
   }
-  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="port") ? "grabbing"
+  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="port"||ui.drag.type==="tap") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 }
 function uiUp(e){
   const d=ui.drag;
+  /* A PRESS THAT NEVER MOVED IS A CLICK, even on the indicator. Pressing the
+     thumb grabs it so a drag can be geared, and that grab used to swallow the
+     press outright - so on a 48-unit bar carrying 0..100% there was a whole
+     neighbourhood around the current value that could not be typed at all:
+     standing at 40%, the click that means 41% landed on the thumb and did
+     nothing. Releasing without moving now lands where it was pressed. */
+  if(d&&d.type==="sld"&&!d.moved) d.fn(valFrom(d,d.gx0));
   // right button held and released without dragging the plant is a click,
   // which on the design bench opens the ADD/REMOVE menu
   if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
@@ -503,26 +533,57 @@ function uiUp(e){
     const p=uiPt(e.currentTarget||cv,e), q=vIn(p)?vPt(p):null;
     const to = q && portDrop([q.x,q.y],d.part.id);
     if(to) addRun(d.part.id,d.face,to.part.id,to.face);
+    /* DROPPED ON A PIPE INSTEAD OF A MACHINE: that is a TAP run, the shape
+       the stock surge line has. Same gesture, and the difference is what you
+       let go over - which is the only honest way to author one, because the
+       alternative was a menu row that put the pressurizer's line on whatever
+       run of the right kind it found first and let the router choose where
+       along it to land. Nothing is inferred here: the part and face come from
+       where the drag started, the run from where it ended. */
+    else if(q){ const far=nearestRunTo([q.x,q.y],null);
+      const host=far&&far.rid ? D.run[far.rid] : null;
+      /* Named off the two PARTS, exactly as a port-to-port run is: the part
+         that was dragged, and the part the tapped run leaves from. A
+         pressurizer dropped on a hot leg is "core|pzr", which is a surge
+         line. Bore follows the kind, the same table runBore() prices it from. */
+      if(host){ const k=runKindFor(d.part.id,host.a);
+        addTapRun(d.part.id,d.face,far.rid,host.k,k,
+                  PIPE_BORE[k]!==undefined?PIPE_BORE[k]:1); } }
+  }
+  /* THE SAME RESOLUTION, one step down: a tap dropped on another run gives a
+     fitting BOTH its ends, and the menu that opens on the drop asks only
+     which fitting it is. A tee and a relief valve are the same geometry -
+     two taps - so the drag cannot tell them apart and must not try; what it
+     refuses to do is pick either end itself. Dropping on nothing is a cancel,
+     not an error, identical standing to the port drag above. */
+  if(d&&d.type==="tap"){
+    const p=uiPt(e.currentTarget||cv,e), q=vIn(p)?vPt(p):null;
+    const far = q && nearestRunTo([q.x,q.y],d.key);
+    ui.drag=null;                                  // the menu must not see a live drag
+    if(far) openCtxMenu(local(e),{tapPair:{aKey:d.key,aT:d.t,bKey:far.key,bT:far.t}});
+    return;
   }
   ui.drag=null;
 }
 /* the page canvas measures in layout units off local(); a hosted widget hands
    uiForward() its own converter, because its box is its own space */
 function uiPt(el,e){ return el._uiLocal? el._uiLocal(e) : local(e); }
+/* Leaving the surface stands the POINTER down as well as the drag. It only
+   stood the drag down, so the page canvas kept the last point the pointer was
+   measured at forever - and findTip() is a pure function of that point, so the
+   canvas tooltip went on describing whatever the hand had last passed over
+   while the hand was somewhere else entirely. */
 function uiBind(el){
   el.addEventListener("pointerdown",uiDown);
   el.addEventListener("pointermove",uiMove);
   el.addEventListener("pointerup",uiUp);
   ["pointercancel","pointerleave"].forEach(ev=>
-    el.addEventListener(ev,()=>{ui.drag=null;}));
+    el.addEventListener(ev,()=>{ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null;}));
 }
 uiBind(cv);
-// a hosted widget also has to stand its hover down when the pointer leaves it,
-// or the last cell stays lit under a rail it is no longer over
 function uiForward(el,toLocal){
   el._uiHost=el; el._uiLocal=toLocal;
   uiBind(el);
-  el.addEventListener("pointerleave",()=>{ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null;});
 }
 cv.addEventListener("wheel",e=>{
   // the scenario bench draws no plant, so there's no VIEW to zoom here -

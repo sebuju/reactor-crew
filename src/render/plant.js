@@ -556,9 +556,14 @@ const borStep=dir=>clamp(S.boronDem-dir*BOR_STEP,BOR_LO,BOR_HI);
    sit, so repeated presses give round numbers; the strict floor/ceil is what
    guarantees a press off the grid still moves the way it was pressed. */
 const PCT_STEP=5;
+/* PCT_EPS is not a tolerance, it is the float grid's own error: 0.55*100 is
+   55.00000000000001, so a demand sitting exactly ON a mark reads as a hair
+   above it and the strict ceil()-1 hands back the mark it started on - the
+   key draws, records an act, and moves nothing. */
+const PCT_EPS=1e-9;
 function pctStep(cur,dir,lo,hi){
   const g=cur*100/PCT_STEP;
-  return clamp((dir>0?Math.floor(g)+1:Math.ceil(g)-1)*PCT_STEP/100,lo,hi);
+  return clamp((dir>0?Math.floor(g+PCT_EPS)+1:Math.ceil(g-PCT_EPS)-1)*PCT_STEP/100,lo,hi);
 }
 /* The strip's row PITCH: one key (BTN_H, core/ui.js) plus the 3 px of air
    between two of them. The key's own height is never written here, or the strip
@@ -638,8 +643,12 @@ function ctlFor(p,live,split){
       // step.js is the only thing that carries it out
       const MASTER=[
        {kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
+        /* Only while the controller is actually driving: a band drawn for a
+           system that is bypassed or was never fitted is two marks describing
+           nobody. autoLive() is the one predicate for that. */
+        marks:()=>autoLive("rod")?[S.arLo*100,S.arHi*100]:null,
         fmt:v=>v.toFixed(0)+" %",set:v=>{ act("rodCommon",v/100); },
-        tip:"CONTROL BANK - moves the whole stack. Ganged that is one bank; split it carries every bank by the same amount, so the spread you set with the per-bank sliders is untouched, and it moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it."}];
+        tip:"CONTROL BANK - moves the whole stack. Ganged that is one bank; split it carries every bank by the same amount, so the spread you set with the per-bank sliders is untouched, and it moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it. The two amber marks are the travel band the automatic controller may move inside; they are drawn only while it is armed, and they never bind you."}];
       /* The same demand the master slider writes, in fixed bites - the boron
          row's argument, for a control that is just as slow to drag: the bank
          travels at 1.2%/s, so a fine adjustment by hand is a fight with the
@@ -780,6 +789,7 @@ function ctlStrip(list,x,y,w,h){
     if(c.kind==="sld"){ // LABEL: a control-strip WIDGET kind (slider vs button), unrelated to a pipe run's kind
       slider(cx,y+h/2,cw,c.val(),c.min(),c.max(),
         {th:h,tw:7,fmt:c.fmt,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
+         marks:c.marks?c.marks():null,
          fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
     } else if(c.kind==="arm"){   // LABEL: the same control-strip WIDGET kind, unrelated to a pipe run's kind
       // armRow() states its own tooltip, so this row skips ctlStrip's below
@@ -905,6 +915,58 @@ function pipePorts(usage){
     ctx.restore();
   }
 }
+/* ══ EVERY PIPE IS A HANDLE YOU CAN PULL A TEE OUT OF ══
+   The same gesture pipePorts() gives a component, one level down: grab the
+   square, drop it on the pipe you mean, and the two points you pointed at are
+   the two ends of the tee. It replaces a menu that listed one row per OTHER
+   LOOP and then chose the far end by proximity - so a single-loop plant was
+   offered no tee at all, and on a bigger one the far end was a guess the
+   player never saw and could not aim. That is the same fault the CONNECT
+   offer was deleted for, and this is the same answer: draw it.
+
+   ONE handle, riding the pipe under the pointer, rather than a peg per run -
+   the bench is already a pegboard's worth of nozzles and waypoint grips, and
+   a tap can be taken anywhere along a run, so a fixed set of them would be
+   both noisier and less aimable than the point you are already pointing at.
+   Bench only, like pipeGrips() and pipePorts(): where a pipe runs, whether it
+   exists, and what is spliced into it are all bench questions. */
+const TAPG=9;
+function pipeTapHandles(runs){
+  const d = ui.drag&&ui.drag.type==="tap" ? ui.drag : null;   // LABEL: a DRAG kind, not a run's kind
+  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null;
+  const src = d ? juncPt(runs,d.key,d.t) : null;
+  const to  = d&&ptr ? nearestRunTo([ptr.x,ptr.y],d.key) : null;
+  const toPt = to ? juncPt(runs,to.key,to.t) : null;
+  // the handle you can start from: wherever the pointer is sitting on a pipe
+  const hovRun = !d&&ptr ? nearestRunTo([ptr.x,ptr.y],null) : null;
+  if(hovRun){ const hp=juncPt(runs,hovRun.key,hovRun.t);
+    if(hp){ const [x,y]=hp.pt;
+      /* THE BOX FOLLOWS THE POINTER; THE MARK FOLLOWS THE PIPE. They are not
+         the same place - the handle exists whenever the cursor is within
+         reach of a run, so the cursor can be CELL*0.85 away from the point on
+         the pipe, while the box is TAPG across. Pinning the box to the pipe
+         made this unpressable: you press where your hand is, and at fit zoom
+         a 9-unit box is under two SCREEN pixels, so the handle drew and could
+         not be grabbed. The MARK still belongs on the pipe, because that is
+         where the tap will actually land. */
+      push({x:ptr.x-TAPG/2,y:ptr.y-TAPG/2,w:TAPG,h:TAPG,type:"tap",key:hovRun.key,t:hovRun.t});
+      fillRect(x-2.5,y-2.5,5,5,C.bright);
+      frame(x-TAPG/2,y-TAPG/2,TAPG,TAPG,C.edge2);
+      TIP(ptr.x-TAPG/2,ptr.y-TAPG/2,TAPG,TAPG,"TAP  ·  "+(pipeLabel(hovRun.key.split(":")[0])||"PIPE"),
+        "Drag onto another pipe and a fitting is spliced between the two points you pointed at - a tee, a relief valve or a branch throttle, asked when you let go. Drop it on empty space and nothing is built."); }}
+  if(src){ const [x,y]=src.pt;
+    fillRect(x-2.5,y-2.5,5,5,C.amber);
+    frame(x-TAPG/2,y-TAPG/2,TAPG,TAPG,C.amber);
+    if(toPt){ const [bx,by]=toPt.pt; fillRect(bx-2.5,by-2.5,5,5,C.green);
+      frame(bx-TAPG/2,by-TAPG/2,TAPG,TAPG,C.green); }
+    /* the same rubber band the port drag uses, and for the same reason: green
+       once it has somewhere to land, amber while it has not. */
+    if(ptr){ ctx.save(); ctx.setLineDash([4,4]);
+      ctx.beginPath(); ctx.moveTo(x,y);
+      ctx.lineTo(toPt?toPt.pt[0]:ptr.x, toPt?toPt.pt[1]:ptr.y);
+      ctx.strokeStyle=toPt?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
+      ctx.restore(); } }
+}
 
 // a fitting has no box or control strip, so its glyph is drawn straight on
 // the tapped point - fixed in position. Both screens draw a mark so a
@@ -1007,7 +1069,18 @@ function pipeFitMarks(L,net){
            show a rate the sim is not performing. Per fitting, not per plant:
            two relief valves are two plumes, each off its own rate, where the
            single copy this replaces could only ever depict one of them.
-           Under the glyph, so the bowtie stays readable through it. */
+           Under the glyph, so the bowtie stays readable through it.
+
+           IT IS DRAWN WHETHER OR NOT THE VALVE IS PIPED, deliberately. This
+           depicts WHAT THE VALVE IS PASSING, not what reaches the room - a
+           valve discharging into a relief tank is still a valve blowing down
+           the loop, and that is the thing the operator has to see. Where the
+           discharge GOES is a separate question the tick asks separately
+           (net.fitTarget, step.js: only a vent that reaches no tank is charged
+           to s.release and s.inv). Gating the plume on that was tried and is
+           wrong: audit-text.js pins the plume against the tick's own vent term
+           AND pins that it SHRINKS as the receiving tank fills on back
+           pressure - both of which are claims about a valve that is piped. */
         fxSteam(x,y-8,10,fxEase(id+":porv",
           clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
         const wd = push({x:x-7,y:y-7,w:14,h:14,type:"btn",fn:()=>{ sel=id; }});
@@ -1036,6 +1109,15 @@ function pipeFitMarks(L,net){
         fitGlyph(x,y,14,10,"tee", open?C.green:(hov(wd)?C.bright:C.metal));
         TIP(x-7,y-7,14,14,"JUNCTION VALVE",tipBody);
       } else {
+        /* THE GLYPH SURVIVES COMMISSIONING. Every other fitting keeps its
+           mark on the operate screen - a relief valve draws its bowtie, a tee
+           draws its own glyph - and the throttle was the one that did not: it
+           drew the slider and nothing else, so a valve you had placed and
+           aimed vanished from the drawing the moment you left the bench, and
+           the only thing left saying a fitting was there at all was a bare
+           slider floating on the pipe. Above the slider, the same stack the
+           relief valve uses (mark, then handle, then reading below). */
+        fitGlyph(x,y-11,14,10,j.mode,C.metal);
         // no room for a control strip here, so the position lives on the
         // same compact drag-slider every other actuator uses - a one-cell
         // width, hover-only readout, exactly like a narrow control strip row
@@ -1051,7 +1133,7 @@ function pipeFitMarks(L,net){
         if(pipeDrop[dk]!=null)
           pipeTag(x,y+9,(pipeDrop[dk]*100).toFixed(0)+"% dP",
                   pipeDrop[dk]>0.5?C.amber:C.ink2);
-        TIP(x-14,y-9,28,28,"THROTTLE VALVE",tipBody+
+        TIP(x-14,y-17,28,36,"THROTTLE VALVE",tipBody+
           (pipeDrop[dk]!=null? "  It is eating "+(pipeDrop[dk]*100).toFixed(0)+
             " % of the loop's whole pump head; that is the differential across it." : ""));
       }
@@ -1903,8 +1985,16 @@ function drawPlant(y0,L,vh,vx,vw){
      FLOW METERS switch must not be able to switch off the picture of a hole. */
   if(L) pipeBreaks(L);
   layerPass("over",L);          // instruments and annotations, on top of the machines
-  if(!L){ pipeGrips(NET);       // where a pipe runs is a bench question
-          pipePorts(NET.usage||{}); }   // ...and so is whether it runs at all
+  /* ORDER IS PRIORITY: the hit test takes the LAST widget pushed. The tap
+     handle rides the pointer, so it covers whatever is under the hand
+     wherever a pipe is near - which is exactly where the waypoint grips and
+     the nozzles are. It goes FIRST so both of them win the press: steering a
+     run and starting a run are aimed at marks that sit still, and losing
+     either to a splice you did not ask for is worse than having to move a few
+     pixels off a corner to splice one. */
+  if(!L){ pipeTapHandles(NET);          // what is spliced into a pipe...
+          pipeGrips(NET);               // ...where it runs...
+          pipePorts(NET.usage||{}); }   // ...and whether it runs at all
   pipeFitMarks(L,NET);
   for(const t of tags) t();     // every name and value, over the pipework
   viewOn=false; ctx.restore();
