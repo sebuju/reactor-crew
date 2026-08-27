@@ -1267,8 +1267,20 @@ function step(dt){
      relief valve's own gate there) can read it either way. */
   let vented = 0;
   if(!s.breach){
-    const Pdem = P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (inj>0?0.5*P.pRise:0);
-    s.P += (Pdem-s.P)*(0.30/P.pzrK)*pzrAuth*dt;
+    /* A PRESSURIZER WITH NO PIPE TO THE LOOP SETS NOTHING. Unplumbed it is a
+       vessel welded shut beside the plant: no surge line means no steam bubble
+       anywhere in the loop, so nothing is holding pressure up and it relaxes
+       toward containment - the SAME anchor a real break already uses, and
+       deliberately the same approximation rather than a saturation curve the
+       tick does not carry (see the plan in docs/). It is reachability, not a
+       D.run lookup, so shutting every valve between the core and the vessel is
+       exactly as disconnected as cutting the line. Level already behaved:
+       netExpSurge() has always returned zero with no surge line. */
+    const pzrOn = pzrLive(P.net, s);
+    const Pdem = pzrOn
+      ? P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (inj>0?0.5*P.pRise:0)
+      : P.Pcont;
+    s.P += (Pdem-s.P)*(0.30/P.pzrK)*(pzrOn?pzrAuth:1)*dt;
     /* Every relief path rolls its own die, on its own lift - three redundant
        valves are three independent chances to stick, not one. Each fitting
        is otherwise the identical machine the single PORV always was: an

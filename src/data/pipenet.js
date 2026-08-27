@@ -1224,10 +1224,18 @@ function netBuild(){
      never floats. Was a literal "pzrb" - now the declared face of whichever
      part's role claims the datum, so this stays correct if a different part
      ever carries that role instead of being re-hardcoded to its name. */
+  net2.coreNode = coreNode;   // pzrLive() needs the loop end of the walk, and nothing else knew it
   net2.pzrNode = coreNode;
+  /* WHETHER A PART CLAIMED THE DATUM AT ALL, kept apart from whether its node
+     exists. The fallback to the core covers both cases and they are not the
+     same plant: no pressurizer on the grid is a design, while a pressurizer on
+     the grid whose own datum face is on no run is a vessel nobody plumbed.
+     pzrLive() needs to tell them apart, and off the fallback alone it cannot. */
+  net2.pzrDatum = false;
   for(const q of LAY.parts){
     const R = ROLE[q.role];
     if(R && R.fixed && R.fixed.type === "datum"){
+      net2.pzrDatum = true;
       const nid = q.id + R.fixed.face;
       if(nid in index) net2.pzrNode = index[nid];
       break;
@@ -1333,6 +1341,46 @@ function netBuild(){
    pressure is recovered by adding this straight back (netCoreFracOf). */
 const phiRef = (net, s) =>
   (s.P === undefined ? P.P0 : s.P) + rhoDatum(s)*G_MPA*net.z[net.pzrNode];
+/* ══ IS THE PRESSURIZER PLUMBED TO THE LOOP AT ALL ══
+   Reachability from the core node to the datum node, over the edges the solve
+   would actually assemble (g>0) - never a D.run lookup. A shut valve, a severed
+   run and a run that was never drawn must all answer the same, which is the
+   rule netAssemble already keeps: a shut branch is an absent branch.
+
+   The walk does not pass THROUGH a fixed node. A boundary absorbs whatever it
+   is given, so pressure does not propagate across one - and that is what stops
+   the relief header counting as a path home: it runs from the vessel to a tank
+   fixed at its own gas pressure, which is a dead end, not a way back to the
+   loop. A break is the same: each opening gets its own containment node.
+
+   Costs one pass over the edge list. Called once a tick from step(), not from a
+   layer - a layer must not solve, and this walks the same conductances a solve
+   would. */
+function pzrLive(net, s){
+  if(!net.pzrDatum) return true;                  // no pressurizer on the grid: nothing to disconnect
+  // it claimed the datum and its own face is on no run at all - the vessel is
+  // sitting there unplumbed, and the solve has already fallen back to the core
+  if(net.pzrNode === net.coreNode) return false;
+  const fixed = netFixed(net, s);
+  const adj = new Array(net.n);
+  for(let e=0;e<net.edges.length;e++){
+    const ed = net.edges[e];
+    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+    if(!(g > 0)) continue;
+    (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
+    (adj[ed.v] || (adj[ed.v] = [])).push(ed.u);
+  }
+  const seen = new Uint8Array(net.n), stack = [net.coreNode];
+  seen[net.coreNode] = 1;
+  while(stack.length){
+    const u = stack.pop();
+    if(u === net.pzrNode) return true;
+    if(u !== net.coreNode && fixed[u] !== undefined) continue;   // reached, never crossed
+    const a = adj[u];
+    if(a) for(let i=0;i<a.length;i++){ const v=a[i]; if(!seen[v]){ seen[v]=1; stack.push(v); } }
+  }
+  return false;
+}
 function netFixed(net, s){
   const f = {}, p0 = phiRef(net, s), rd = rhoDatum(s)*G_MPA;
   f[net.pzrNode] = 0;
