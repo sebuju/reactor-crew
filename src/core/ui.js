@@ -481,6 +481,25 @@ function uiDown(e){
       ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
   else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
 }
+/* WHERE THE GESTURE IS, ASKED ONCE. The release used to inherit whatever the
+   last pointermove had decided, and a release carries no move of its own - so
+   a drop the browser delivered without one, or a hand a pixel off the target
+   box, committed the OTHER half of the gesture: the part jumped to the cell
+   beside the machine it was being piped to, using a gx/gy left over from
+   crossing the deck to get there. The drop decides what the gesture was, so
+   the drop is what gets measured. */
+function partDragTo(d,q){
+  const over=partAt([q.x,q.y]);
+  if(over && over.id!==d.part.id){
+    d.mode="pipe"; d.over=over; d.pair=bestFreePortPair(d.part,over);
+  } else {
+    d.mode="move"; d.over=null; d.pair=null;
+    d.gx=Math.round((q.x-d.ox-GX)/CELL);
+    // rowAt() is rowTop()'s inverse; half a cell of lead rounds to the
+    // nearest row rather than the one merely touched
+    d.gy=rowAt(q.y-d.oy+CELL/2);
+  }
+}
 function uiMove(e){
   const tgt=e.currentTarget||cv;
   const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
@@ -490,17 +509,7 @@ function uiMove(e){
        every pointermove, which re-measured layoutMetrics() at pointer rate
        and - now that the same drag can end as a pipe - would have walked the
        part across the board on the way to the machine you were aiming at. */
-    if(d.type==="part"){
-      const over=partAt([q.x,q.y]);
-      if(over && over.id!==d.part.id){
-        d.mode="pipe"; d.over=over; d.pair=bestFreePortPair(d.part,over);
-      } else {
-        d.mode="move"; d.over=null; d.pair=null;
-        d.gx=Math.round((q.x-d.ox-GX)/CELL);
-        // rowAt() is rowTop()'s inverse; half a cell of lead rounds to the
-        // nearest row rather than the one merely touched
-        d.gy=rowAt(q.y-d.oy+CELL/2);
-      } }
+    if(d.type==="part") partDragTo(d,q);
     else if(d.type==="pipewp"){
       d.pt.x=wpSnap(d.px+(q.x-d.sx)); d.pt.y=wpSnap(d.py+(q.y-d.sy)); }
     else if(d.type==="paint"){ d.fn(q,e); }
@@ -546,6 +555,8 @@ function uiUp(e){
      - a machine with every port taken, a cell the part does not fit - is a
      cancel, not an error, so there is no refusal to report. */
   if(d&&d.type==="part"){
+    const p=uiPt(e.currentTarget||cv,e);
+    partDragTo(d, d.v?vPt(p):p);
     if(d.mode==="pipe" && d.over && d.pair)
       addRun(d.part.id,d.pair.fa,d.over.id,d.pair.fb);
     else if(d.mode==="move" && (d.gx!==d.sx||d.gy!==d.sy)) moveTo(d.part,d.gx,d.gy);
@@ -570,19 +581,40 @@ function uiPt(el,e){ return el._uiLocal? el._uiLocal(e) : local(e); }
    anywhere marks the canvas instead, in the CAPTURE phase so a handler that
    stops propagation cannot also stop the repaint. main.js owns the floor that
    covers whatever this still misses. */
-let uiWants=true;
-const uiDirty=()=>{ uiWants=true; };
-const uiTakeDirty=()=>{ const w=uiWants; uiWants=false; return w; };
+/* A HAND IS A CONTINUUM, NOT A SET OF INSTANTS, so an input does not buy one
+   frame - it keeps the loop awake for UI_TRAIL of them. Painting only the
+   frames an event landed in makes the interval between paints as ragged as
+   the event stream is, and a hover ink that changes on a ragged interval
+   shimmers even though every frame drawn is correct. A trail is also the
+   honest reading of the gate: the loop idles when the PLAYER is idle, not
+   between one twitch of a mouse and the next.
+   A live drag never idles either. uiDown() takes a pointer CAPTURE, so a
+   moving hand is not a page-wide event the listener below can be trusted to
+   see. Asked here because whether a gesture is in flight is ui's own business. */
+const UI_TRAIL=12;                 // frames, ~200 ms
+let uiWants=true, uiTrail=0;
+const uiDirty=()=>{ uiWants=true; uiTrail=UI_TRAIL; };
+const uiTakeDirty=()=>{
+  const w=uiWants||uiTrail>0||!!ui.drag;
+  uiWants=false; if(uiTrail>0) uiTrail--;
+  return w;
+};
 if(typeof document!=="undefined" && document.addEventListener)
   for(const ev of ["pointerdown","pointermove","pointerup","pointercancel","wheel","keydown","focusin","scroll"])
     document.addEventListener(ev,uiDirty,{capture:true,passive:true});
 
 function uiBind(el){
+  /* MARKED AT THE HANDLER THAT MOVES THE PICTURE, not only at the document.
+     These three write ui.ptr and ui.drag, which is what the canvas draws from,
+     so a repaint owed to a hand cannot be lost to a retargeted event. */
+  el.addEventListener("pointerdown",uiDirty);
+  el.addEventListener("pointermove",uiDirty);
+  el.addEventListener("pointerup",uiDirty);
   el.addEventListener("pointerdown",uiDown);
   el.addEventListener("pointermove",uiMove);
   el.addEventListener("pointerup",uiUp);
   ["pointercancel","pointerleave"].forEach(ev=>
-    el.addEventListener(ev,()=>{ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null;}));
+    el.addEventListener(ev,()=>{ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty();}));
 }
 uiBind(cv);
 function uiForward(el,toLocal){
