@@ -31,12 +31,14 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-trend-canvas{display:block;width:100%;height:132px;background:transparent;
   border-top:1px solid var(--c-edge)}
 
-.cr-alarms{position:absolute;left:6px;top:118px;pointer-events:auto;max-width:220px;
+/* BOTTOM-ANCHORED: the stack grows upward out of the corner, so a row lighting
+   up never pushes the rows already being read off their line. */
+.cr-alarms{position:absolute;left:6px;bottom:6px;pointer-events:auto;max-width:300px;
   background:rgba(7,12,13,.92);border:1px solid var(--c-edge2);display:block}
-.cr-alarms-head{display:flex;justify-content:space-between;padding:4px 8px;
-  font-size:var(--t7);letter-spacing:1.2px;color:var(--c-amber)}
-.cr-alarms-body{max-height:220px;overflow-y:auto}
-.cr-alarm-row{display:flex;align-items:center;gap:6px;padding:2px 8px;font-size:var(--t7-5);
+.cr-alarms-head{display:flex;justify-content:space-between;gap:12px;padding:5px 10px;
+  font-size:var(--t9);letter-spacing:1.2px;color:var(--c-amber)}
+.cr-alarms-body{max-height:44vh;overflow-y:auto}
+.cr-alarm-row{display:flex;align-items:center;gap:6px;padding:4px 10px;font-size:var(--t10);
   font-weight:700;letter-spacing:.6px}
 .cr-alarm-row.lit{color:var(--c-ink-on-lit)}
 .cr-alarm-row.lit.red{background:var(--c-red)}
@@ -44,9 +46,11 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-alarm-row.lit:not(.red):not(.amber){background:var(--c-blue)}
 .cr-alarm-dot{display:none}
 
-.cr-banner{position:absolute;left:6px;right:306px;top:6px;pointer-events:none;
+/* right clears the 340px rail plus the same 6px gutter the left side keeps -
+   at 306 the banner ran a full 34px in under the rail. */
+.cr-banner{position:absolute;left:6px;right:346px;top:6px;pointer-events:none;
   padding:8px;text-align:center;font-size:var(--t12);font-weight:700;letter-spacing:2px;
-  text-transform:uppercase;display:block}
+  text-transform:uppercase;overflow-wrap:anywhere;display:block}
 .cr-banner.melt{background:var(--c-bg-melt);color:var(--c-red)}
 .cr-banner.trip{background:var(--c-bg-trip);color:var(--c-amber)}
 
