@@ -1,0 +1,295 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pipe instrument mockups</title>
+<style>
+  :root{ --bg:#080c0e; --panel:#0e1518; --edge:#1d2f35; --ink:#9fb4b9; --ink2:#5d7378; --bright:#dff0f3; }
+  html,body{background:var(--bg);color:var(--ink);margin:0;
+    font:12px/1.5 ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace}
+  header{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--edge);
+    padding:8px 14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;z-index:2}
+  h1{font-size:12px;margin:0;color:var(--bright);letter-spacing:1px}
+  label{display:flex;gap:6px;align-items:center;color:var(--ink2)}
+  input[type=range]{width:150px}
+  canvas{display:block;margin:0 auto}
+  .hint{color:var(--ink2);padding:6px 14px}
+</style>
+<header>
+  <h1>PIPE INSTRUMENT MOCKUPS</h1>
+  <label>zoom <input id=zoom type=range min=1 max=5 step=1 value=2><span id=zv>2x</span></label>
+  <label>live value <input id=val type=range min=0 max=1000 value=620><span id=vv>0.62</span></label>
+  <label><input id=sweep type=checkbox> sweep</label>
+</header>
+<div class=hint>Every gauge is drawn at its REAL plant size (the flow dial is r=10) and then zoomed. The right-hand column follows the live slider.</div>
+<canvas id=c></canvas>
+<script>
+"use strict";
+const C={bg:"#080c0e",panel:"#0e1518",panelHi:"#142126",well:"#060a0b",
+  edge:"#1d2f35",edge2:"#2c464e",rail:"#33525b",ink:"#9fb4b9",ink2:"#5d7378",bright:"#dff0f3",
+  amber:"#f0a830",cyan:"#5fd2e2",red:"#ff5a45",green:"#57d38c",blue:"#5aa9d6",metal:"#6d8f98"};
+const MONO='ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace';
+const cv=document.getElementById("c"); const ctx=cv.getContext("2d");
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+
+/* the same primitives the plant draws with */
+function fillRect(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(x,y,w,h);}
+function frame(x,y,w,h,c){ctx.strokeStyle=c;ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,h-1);}
+function fnt(o){return (o.weight===700?"bold ":"")+(o.size||10)+"px "+MONO;}
+function txt(s,x,y,o){o=o||{};ctx.font=fnt(o);ctx.fillStyle=o.color||C.ink;
+  ctx.textAlign=o.align||"left";ctx.textBaseline="alphabetic";
+  try{ctx.letterSpacing=(o.sp||0)+"px";}catch(e){}
+  ctx.fillText(o.caps?String(s).toUpperCase():s,x,y);
+  try{ctx.letterSpacing="0px";}catch(e){}}
+function tw(s,o){o=o||{};ctx.font=fnt(o);
+  try{ctx.letterSpacing=(o.sp||0)+"px";}catch(e){}
+  const w=ctx.measureText(String(s)).width;
+  try{ctx.letterSpacing="0px";}catch(e){}return w;}
+function pipeTag(x,yTop,label,col){const o={size:6.5,sp:.4,align:"center"},lw=tw(label,o)+6;
+  fillRect(x-lw/2,yTop,lw,10,C.bg); txt(label,x,yTop+8,Object.assign({},o,{color:col}));}
+
+/* ===== RATE: the one that already works, here as the yardstick ===== */
+const PIPE_A0=Math.PI*0.75, PIPE_SW=Math.PI*1.5, PIPE_OVER=1.25, R=10;
+function pipeDial(x,y,r,fr,col,label,o){
+  o=o||{}; const lim=o.lim==null?1:o.lim, max=o.max==null?PIPE_OVER:o.max, lo=-0.2;
+  const U=v=>(clamp(v,lo,max)-lo)/(max-lo);
+  const dead=Math.abs(fr)<0.008, over=fr>lim+0.001, back=fr<-0.008;
+  const ink=dead?C.ink2:over?C.red:back?C.amber:col;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x,y,r,0,6.2832); ctx.fillStyle=C.panel; ctx.fill();
+  ctx.lineWidth=1; ctx.strokeStyle=over?C.red:(dead?C.edge:C.edge2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x,y,r-2.6,PIPE_A0+PIPE_SW*U(lim),PIPE_A0+PIPE_SW);
+  ctx.strokeStyle=over?C.red:"#4a1712"; ctx.lineWidth=1.8; ctx.stroke();
+  const mark=(t,len,c)=>{const a=PIPE_A0+PIPE_SW*t,cs=Math.cos(a),sn=Math.sin(a);
+    ctx.beginPath(); ctx.moveTo(x+cs*(r-1.5),y+sn*(r-1.5));
+    ctx.lineTo(x+cs*(r-1.5-len),y+sn*(r-1.5-len));
+    ctx.strokeStyle=c; ctx.lineWidth=1; ctx.stroke();};
+  for(let i=0;i<=4;i++) mark(U(i/4),2.4,C.edge2);
+  mark(U(0),3.2,C.amber);
+  const a=PIPE_A0+PIPE_SW*U(fr);
+  ctx.beginPath(); ctx.moveTo(x-Math.cos(a)*2,y-Math.sin(a)*2);
+  ctx.lineTo(x+Math.cos(a)*(r-3),y+Math.sin(a)*(r-3));
+  ctx.strokeStyle=ink; ctx.lineWidth=1.6; ctx.lineCap="round"; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x,y,1.5,0,6.2832); ctx.fillStyle=ink; ctx.fill();
+  ctx.restore();
+  if(label) pipeTag(x,y+r+1,label,dead?C.ink2:over?C.red:back?C.amber:C.cyan);
+}
+
+/* ===== shared shapes ===== */
+/* the shipped face: every pipe instrument is INSTR_W x INSTR_H, hung above the
+   pipe with its reading straddling the pipe line underneath */
+const INSTR_W=20, INSTR_H=20;
+const instrY = y => y-6-INSTR_H/2;
+function instrFace(x,y){ const x0=x-INSTR_W/2, y0=y-INSTR_H/2;
+  fillRect(x0-1,y0-1,INSTR_W+2,INSTR_H+2,C.bg);
+  fillRect(x0,y0,INSTR_W,INSTR_H,C.panel);
+  frame(x0,y0,INSTR_W,INSTR_H,C.edge2); return x0; }
+function plate(x,yTop,w,h){ fillRect(x-w/2-1,yTop-1,w+2,h+2,C.bg); }
+function wedgePath(x,y,w,h){ ctx.beginPath(); ctx.moveTo(x-w/2,y); ctx.lineTo(x+w/2,y); ctx.lineTo(x+w/2,y-h); ctx.closePath(); }
+function tri(x,y,s,c,down){ ctx.beginPath();
+  if(down){ctx.moveTo(x-s,y-s);ctx.lineTo(x+s,y-s);ctx.lineTo(x,y);}
+  else {ctx.moveTo(x-s,y+s);ctx.lineTo(x+s,y+s);ctx.lineTo(x,y);}
+  ctx.closePath(); ctx.fillStyle=c; ctx.fill(); }
+function ramp(t){ /* cold blue -> cyan -> amber -> red */
+  const S=[[0,C.blue],[0.45,C.cyan],[0.75,C.amber],[1,C.red]];
+  t=clamp(t,0,1); let i=0; while(i<S.length-2 && t>S[i+1][0]) i++;
+  const a=S[i],b=S[i+1],u=(t-a[0])/(b[0]-a[0]);
+  const hx=c=>[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)];
+  const p=hx(a[1]),q=hx(b[1]);
+  return "rgb("+Math.round(lerp(p[0],q[0],u))+","+Math.round(lerp(p[1],q[1],u))+","+Math.round(lerp(p[2],q[2],u))+")";
+}
+
+/* ===== PRESSURE candidates. scale 0..1.35*P0, design point marked. v is MPa ===== */
+const P0=15.5, PMAX=P0*1.35;
+const pcol=v=>v>=P0*1.06?C.red:v>=P0?C.amber:v<P0*0.55?C.blue:C.cyan;
+const PTAG=v=>v.toFixed(2)+" MPa";
+
+const PRESS=[
+{name:"P1 BAR (current)",note:"level bar, tick at design point",
+ draw(x,y,v){ const w=24,h=5,x0=x-w/2,yT=y-12;
+   plate(x,yT,w,h); fillRect(x0,yT,w,h,C.well);
+   fillRect(x0,yT,w*clamp(v/PMAX,0,1),h,pcol(v));
+   fillRect(x0+w*(P0/PMAX),yT-1.5,1,h+3,C.ink2); frame(x0,yT,w,h,C.edge2);
+   pipeTag(x,y-5,PTAG(v),pcol(v)); }},
+
+{name:"P2 ARC",note:"half dial, no needle - a filling arc",
+ draw(x,y,v){ const r=9, cy=y-6;
+   fillRect(x-r-1,cy-r-1,2*r+2,r+3,C.bg);
+   ctx.save(); ctx.lineCap="butt";
+   ctx.beginPath(); ctx.arc(x,cy,r-2,Math.PI,2*Math.PI); ctx.strokeStyle=C.well; ctx.lineWidth=3.4; ctx.stroke();
+   ctx.beginPath(); ctx.arc(x,cy,r-2,Math.PI,Math.PI+Math.PI*clamp(v/PMAX,0,1)); ctx.strokeStyle=pcol(v); ctx.lineWidth=3.4; ctx.stroke();
+   const a=Math.PI+Math.PI*(P0/PMAX);
+   ctx.beginPath(); ctx.moveTo(x+Math.cos(a)*(r-4.4),cy+Math.sin(a)*(r-4.4));
+   ctx.lineTo(x+Math.cos(a)*(r+0.4),cy+Math.sin(a)*(r+0.4));
+   ctx.strokeStyle=C.bright; ctx.lineWidth=1; ctx.stroke(); ctx.restore();
+   pipeTag(x,y-5,PTAG(v),pcol(v)); }},
+
+{name:"P3 DEVIATION",note:"centre IS the design point; the marker rides off it",
+ draw(x,y,v){ const cy=instrY(y); instrFace(x,cy);
+   const w=16,h=10,x0=x-w/2,y0=cy-h/2, col=pcol(v);
+   fillRect(x0,y0,w,h,C.panelHi);
+   const d=clamp((v-P0)/(P0*0.35),-1,1), mx=x+d*(w/2-1);
+   ctx.globalAlpha=0.45;
+   if(d>=0) fillRect(x,y0+1,Math.max(0,mx-x),h-2,col); else fillRect(mx,y0+1,Math.max(0,x-mx),h-2,col);
+   ctx.globalAlpha=1;
+   fillRect(mx-1,y0,2,h,col);
+   frame(x0,y0,w,h,C.edge2);
+   fillRect(x-0.5,y0-2.5,1,2,C.ink2); fillRect(x-0.5,y0+h+0.5,1,2,C.ink2);
+   pipeTag(x,cy+INSTR_H/2+1,PTAG(v),col); }},
+
+{name:"P4 LADDER",note:"7 lit segments; design point is a pip under the frame",
+ draw(x,y,v){ const n=7,sw=3,gap=1.2,w=n*sw+(n-1)*gap,x0=x-w/2,h=7,yT=y-13;
+   plate(x,yT,w,h); const lit=Math.round(clamp(v/PMAX,0,1)*n);
+   for(let i=0;i<n;i++){ const bx=x0+i*(sw+gap);
+     fillRect(bx,yT,sw,h,i<lit?pcol(v):C.well);
+     if(i>=lit) frame(bx,yT,sw,h,C.edge); }
+   const px=x0+w*(P0/PMAX); fillRect(px-0.5,yT+h+1,1,2.5,C.bright);
+   pipeTag(x,y-5,PTAG(v),pcol(v)); }},
+
+{name:"P5 SLEEVE",note:"the pipe itself swells; no box at all",
+ draw(x,y,v){ const w=30,t=clamp(v/PMAX,0,1),h=1+8*t;
+   fillRect(x-w/2-1,y-8,w+2,16,C.bg);
+   fillRect(x-w/2,y-0.5,w,1,C.edge2);
+   ctx.globalAlpha=0.85; fillRect(x-w/2,y-h/2,w,h,pcol(v)); ctx.globalAlpha=1;
+   fillRect(x-0.5,y-6,1,12,C.bg); fillRect(x-0.5,y-5.5,1,3,C.ink2); fillRect(x-0.5,y+2.5,1,3,C.ink2);
+   pipeTag(x,y+6,PTAG(v),pcol(v)); }},
+
+{name:"P6 GAUGE FACE",note:"round face, filled sector, no needle",
+ draw(x,y,v){ const r=8.5, cy=y-9;
+   ctx.save(); ctx.beginPath(); ctx.arc(x,cy,r,0,6.2832); ctx.fillStyle=C.bg; ctx.fill();
+   ctx.beginPath(); ctx.arc(x,cy,r-1.5,0,6.2832); ctx.fillStyle=C.well; ctx.fill();
+   const a0=-Math.PI/2, sw=6.2832*clamp(v/PMAX,0,1);
+   ctx.beginPath(); ctx.moveTo(x,cy); ctx.arc(x,cy,r-1.5,a0,a0+sw); ctx.closePath();
+   ctx.fillStyle=pcol(v); ctx.globalAlpha=0.9; ctx.fill(); ctx.globalAlpha=1;
+   const am=a0+6.2832*(P0/PMAX);
+   ctx.beginPath(); ctx.moveTo(x+Math.cos(am)*(r-3),cy+Math.sin(am)*(r-3));
+   ctx.lineTo(x+Math.cos(am)*(r+0.5),cy+Math.sin(am)*(r+0.5));
+   ctx.strokeStyle=C.bright; ctx.lineWidth=1; ctx.stroke();
+   ctx.beginPath(); ctx.arc(x,cy,r-1.5,0,6.2832); ctx.strokeStyle=C.edge2; ctx.lineWidth=1; ctx.stroke();
+   ctx.restore(); pipeTag(x,y-3,PTAG(v),pcol(v)); }},
+];
+
+/* ===== TEMPERATURE candidates. v is degC in the run ===== */
+const TLO=140, THI=350, TSAT=330;
+const tt=v=>clamp((v-TLO)/(THI-TLO),0,1);
+const tcol=v=>v>=TSAT?C.red:ramp(tt(v));
+const TTAG=v=>Math.round(v)+" C";
+
+const TEMP=[
+{name:"T1 COLUMN (today's shape)",note:"what subcooling uses now, run upward for temperature",
+ draw(x,y,v){ const w=5,h=14,x0=x-w/2,yBase=y-11,yTop=yBase-h;
+   fillRect(x0-1,yTop-1,w+2,h+2,C.bg); fillRect(x0,yTop,w,h,C.well);
+   const t=tt(v); fillRect(x0,yBase-h*t,w,h*t,tcol(v)); frame(x0,yTop,w,h,C.edge2);
+   pipeTag(x,y-5,TTAG(v),tcol(v)); }},
+
+{name:"T2 THERMOMETER",note:"bulb + stem; the shape everyone already reads",
+ draw(x,y,v){ const h=13,w=4,b=3.2,yBase=y-12,yTop=yBase-h;
+   fillRect(x-b-1,yTop-1,2*b+2,h+2*b+3,C.bg);
+   fillRect(x-w/2,yTop,w,h,C.well);
+   const t=tt(v); fillRect(x-w/2,yBase-h*t,w,h*t,tcol(v));
+   frame(x-w/2,yTop,w,h,C.edge2);
+   ctx.beginPath(); ctx.arc(x,yBase+b-1,b,0,6.2832); ctx.fillStyle=tcol(v); ctx.fill();
+   ctx.strokeStyle=C.edge2; ctx.lineWidth=1; ctx.stroke();
+   for(let i=1;i<3;i++) fillRect(x+w/2,yTop+h*i/3,2,1,C.edge2);
+   fillRect(x+w/2,yTop+h*(1-(TSAT-TLO)/(THI-TLO)),3,1,C.red);
+   pipeTag(x,y-5,TTAG(v),tcol(v)); }},
+
+{name:"T3 WEDGE",note:"a triangle that fills - shape says hot before colour does",
+ draw(x,y,v){ const w=18,h=9,yB=y-11;
+   fillRect(x-w/2-1,yB-h-1,w+2,h+2,C.bg);
+   ctx.save(); wedgePath(x,yB,w,h); ctx.fillStyle=C.well; ctx.fill();
+   ctx.clip(); const t=tt(v); fillRect(x-w/2,yB-h,w*t,h,tcol(v)); ctx.restore();
+   ctx.save(); wedgePath(x,yB,w,h); ctx.strokeStyle=C.edge2; ctx.lineWidth=1; ctx.stroke(); ctx.restore();
+   const sx=x-w/2+w*(TSAT-TLO)/(THI-TLO); fillRect(sx-0.5,yB-h-1.5,1,h+2,C.red);
+   pipeTag(x,y-5,TTAG(v),tcol(v)); }},
+
+{name:"T4 RULER + POINTER",note:"fixed scale, moving pointer; the limit tick stays put",
+ draw(x,y,v){ const h=14,x0=x+4,yB=y-8,yT=yB-h;
+   fillRect(x-6,yT-2,14,h+5,C.bg);
+   fillRect(x0,yT,1.5,h,C.edge2);
+   for(let i=0;i<=4;i++) fillRect(x0-2,yT+h*(1-i/4),2,1,C.edge2);
+   fillRect(x0-3,yT+h*(1-(TSAT-TLO)/(THI-TLO)),5,1,C.red);
+   tri(x0-1.5,yB-h*tt(v),2.6,tcol(v),false);
+   pipeTag(x-1,y-5,TTAG(v),tcol(v)); }},
+
+{name:"T5 SWATCH",note:"colour is the whole reading; the figure sits inside it",
+ draw(x,y,v){ const cy=instrY(y), x0=instrFace(x,cy), i=3;
+   fillRect(x0+i,cy-INSTR_H/2+i,INSTR_W-2*i,INSTR_H-2*i,tcol(v));
+   if(v>=TSAT) frame(x0-1,cy-INSTR_H/2-1,INSTR_W+2,INSTR_H+2,C.red);
+   txt(Math.round(v/10)+"K",x,cy+2.5,{size:6.5,sp:.2,align:"center",color:"#120404"}); }},
+
+{name:"T6 BAND ON PIPE",note:"a heat band on the run; the tick says where on the ramp",
+ draw(x,y,v){ const w=30,h=4,x0=x-w/2,yT=y-9;
+   fillRect(x0-1,yT-1,w+2,h+7,C.bg);
+   for(let i=0;i<w;i++) fillRect(x0+i,yT,1,h,ramp(i/(w-1)));
+   const mx=x0+w*tt(v);
+   fillRect(mx-1,yT-2,2,h+4,C.bg); fillRect(mx-0.5,yT-2,1,h+4,C.bright);
+   const sx=x0+w*(TSAT-TLO)/(THI-TLO); fillRect(sx-0.5,yT+h,1,2,C.red);
+   pipeTag(x,y-3,TTAG(v),tcol(v)); }},
+];
+
+/* ===== RATE. v is a signed fraction of rating ===== */
+const FTAG=v=>(Math.abs(v)*18.4).toFixed(1)+" kg/s";
+const RATE=[
+{name:"R1 DIAL (current - the keeper)",note:"signed, over-range band, zero stop",
+ draw(x,y,v){ pipeDial(x,y-14,R,v,C.cyan,FTAG(v)); }},
+{name:"R2 DIAL, SLIM",note:"same dial two pixels smaller, for short runs",
+ draw(x,y,v){ pipeDial(x,y-14,8,v,C.cyan,FTAG(v)); }},
+];
+
+/* ===== page ===== */
+const SETS=[
+ {title:"PRESSURE", rows:PRESS, samples:[6.2,13.0,15.5,17.6,20.4], fmt:v=>v.toFixed(1)+" MPa"},
+ {title:"TEMPERATURE", rows:TEMP, samples:[165,250,292,325,346], fmt:v=>Math.round(v)+" C"},
+ {title:"RATE", rows:RATE, samples:[-0.14,0,0.45,0.98,1.18], fmt:v=>Math.round(v*100)+" %"},
+];
+const liveOf=(set,f)=>{
+  if(set.title==="PRESSURE") return f*PMAX;
+  if(set.title==="TEMPERATURE") return TLO+f*(THI-TLO);
+  return -0.2+f*1.45;
+};
+const COLW=64, ROWH=52, LABW=210, PAD=16;
+let Z=2, F=0.62;
+
+function drawPipe(x,y,w){ fillRect(x-w/2,y-0.5,w,1,C.edge2); }
+
+function render(){
+  const cols=6;
+  const W=LABW+cols*COLW+PAD*2;
+  let H=PAD;
+  for(const s of SETS) H+=26+s.rows.length*ROWH+10;
+  const dpr=window.devicePixelRatio||1;
+  cv.width=W*Z*dpr; cv.height=H*Z*dpr;
+  cv.style.width=(W*Z)+"px"; cv.style.height=(H*Z)+"px";
+  ctx.setTransform(Z*dpr,0,0,Z*dpr,0,0);
+  fillRect(0,0,W,H,C.bg);
+  let y=PAD;
+  for(const s of SETS){
+    txt(s.title,PAD,y+8,{size:8,sp:1.2,color:C.bright,weight:700});
+    for(let i=0;i<5;i++) txt(s.fmt(s.samples[i]),LABW+COLW*i+COLW/2,y+8,{size:6.5,align:"center",color:C.ink2});
+    txt("LIVE",LABW+COLW*5+COLW/2,y+8,{size:6.5,align:"center",color:C.amber});
+    fillRect(PAD,y+12,W-2*PAD,1,C.edge);
+    y+=26;
+    for(const g of s.rows){
+      txt(g.name,PAD,y+16,{size:7.5,color:C.ink});
+      txt(g.note,PAD,y+25,{size:6.5,color:C.ink2});
+      for(let i=0;i<6;i++){
+        const cx=LABW+COLW*i+COLW/2, cy=y+ROWH-21;
+        drawPipe(cx,cy,COLW-10);
+        g.draw(cx,cy,i<5?s.samples[i]:liveOf(s,F));
+      }
+      fillRect(PAD,y+ROWH-1,W-2*PAD,1,"#0f1a1e");
+      y+=ROWH;
+    }
+    y+=10;
+  }
+}
+const zoom=document.getElementById("zoom"), val=document.getElementById("val"),
+      zv=document.getElementById("zv"), vv=document.getElementById("vv"), sw=document.getElementById("sweep");
+zoom.oninput=()=>{Z=+zoom.value; zv.textContent=Z+"x"; render();};
+val.oninput=()=>{F=+val.value/1000; vv.textContent=F.toFixed(2); render();};
+const t0=performance.now();
+function loop(now){ if(sw.checked){ F=0.5+0.5*Math.sin((now-t0)/2200); val.value=Math.round(F*1000);
+  vv.textContent=F.toFixed(2); render(); } requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+render();
+</script>
