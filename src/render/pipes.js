@@ -474,47 +474,47 @@ function pipeTag(x,yTop,label,col){
   txt(label,x,yTop+8,Object.assign({},o,{color:col}));
 }
 
-/* ══════════ THREE INSTRUMENTS, THREE SHAPES ══════════
+/* ══════════ ONE STACK OF READINGS PER RUN ══════════
    Flow, pressure and subcooling are all on the plant at once by default, and
-   two of them used to be nothing but a number on a plate - so at a glance the
-   diagram was a field of digits with no way to tell which quantity you were
-   looking at without reading the unit. The eye should be able to answer "how
-   is this run doing" before it reads anything, so each quantity gets a shape
-   of its own and never borrows another's:
+   each of them used to carry a picture of itself - a dial, then a bar and a
+   column, then a deviation strip and a colour swatch. Three faces of three
+   shapes, at three points along one run, and none of them could be read at the
+   size a pipe run leaves for an instrument: what they added up to was clutter.
 
-     FLOW        a round DIAL with a needle (pipeDial) - a rate, signed,
-                 with an over-range band, and the only one that can run
-                 backwards.
-     PRESSURE    a horizontal BAR filling left to right against the design
-                 point, with a tick at P0. An absolute level on a fixed
-                 scale, so a row of runs reads as a row of levels.
-     SUBCOOLING  a vertical COLUMN filling bottom up, because what matters is
-                 the margin left above zero and a falling column is what
-                 running out of it looks like.
+   So there is no face any more. A run gets ONE PLACE and the readings stack
+   there, one line per quantity, each in its own colour:
 
-   Both new ones sit on the same backing plate pipeTag() uses, for the same
-   reason: a pipe or a grid line must not run through an instrument. */
-const PBAR_W=24, PBAR_H=5, PCOL_W=5, PCOL_H=14;
-function pipeBar(x,yTop,frac,mark,col){
-  const w=PBAR_W, h=PBAR_H, x0=x-w/2;
-  fillRect(x0-1,yTop-1,w+2,h+2,C.bg);
-  fillRect(x0,yTop,w,h,C.well);
-  fillRect(x0,yTop,w*clamp(frac,0,1),h,col);
-  // the design point, so a bar is read against something rather than admired
-  if(mark!=null) fillRect(x0+w*clamp(mark,0,1),yTop-1.5,1,h+3,C.ink2);
-  frame(x0,yTop,w,h,C.edge2);
+     slot 0   FLOW         kg/s, coloured by the run and by its alarm state
+     slot 1   PRESSURE     MPa
+     slot 2   SUBCOOLING   K of margin
+
+   The three are INDEPENDENT: each is still its own layer with its own switch,
+   each colours itself off its own value, and a slot whose layer is off simply
+   leaves a gap rather than shuffling the others - a reading that moves line
+   when a neighbour is switched off is a reading you have to find again.
+   Slot 1 sits exactly where the pressure reading has always sat, so the line
+   the whole plant's text was laid out around does not move.
+
+   The one round face left on the plant is the pressurizer's (pipeVessel), and
+   that is bolted to a vessel rather than to a pipe. */
+const STACK_H=10;                         // one line of 6.5px ink and its plate
+const stackY = (y,slot) => y-20+slot*STACK_H;
+/* NOT pipeTag(): a tag's plate is as wide as its own string, so three of them
+   stacked gave three different widths and a ragged block with the pipe showing
+   through at each step. Every line of a stack takes the SAME width, and the
+   plate is one pixel taller than the line so the next plate starts under it
+   rather than beside it - butting two plates edge to edge leaves a hairline of
+   pipe between them wherever the view transform lands them on a half pixel. */
+const STACK_W=48;
+function pipeStackLine(x,y,slot,label,col){
+  const yT=stackY(y,slot);
+  fillRect(x-STACK_W/2,yT,STACK_W,STACK_H+1,C.bg);
+  txt(label,x,yT+8,{size:6.5,sp:.4,align:"center",color:col});
 }
-function pipeColumn(x,yBase,frac,col){
-  const w=PCOL_W, h=PCOL_H, x0=x-w/2, y0=yBase-h;
-  fillRect(x0-1,y0-1,w+2,h+2,C.bg);
-  fillRect(x0,y0,w,h,C.well);
-  const t=clamp(frac,0,1);
-  fillRect(x0,yBase-h*t,w,h*t,col);
-  frame(x0,y0,w,h,C.edge2);
-}
 
-/* One anchor per KIND: the middle of a STRAIGHT run that kind owns, so a meter never
-   lands on a bend and a four-loop plant grows four meters, not one each.
+/* Where a run's readings go: the middle of a STRAIGHT stretch of it, so a
+   stack never lands on a bend, and ONE point per run that all three layers
+   ask for - the whole reason the readings can stack at all.
 
    THE LONGEST STRETCH IS NOT ALWAYS THE RIGHT ONE. A pipe runs BEHIND the plant, so
    the middle of the longest segment can be inside a vessel - where a meter is a face
@@ -524,10 +524,9 @@ function pipeColumn(x,yBase,frac,col){
    stretch that is long enough to hold a meter AND clear of every component wins;
    length only decides between equals. A kind with nowhere better keeps the anchor it
    always had rather than losing its meter.
-   Clear of the WHOLE instrument, face and reading together - the same box the meter
-   puts its own tooltip on. The reading hangs a dial's radius below the face, so an
-   anchor that is itself in open air can still drop its digits inside a component,
-   which is how the hot-leg reading ended up under a damage badge. */
+   Clear of the WHOLE STACK, all three lines together - a point that is itself in
+   open air can still drop the line below it inside a component, which is how the
+   hot-leg reading ended up under a damage badge. */
 const PIPE_DIAL_R=10;
 /* Is this rectangle clear of every component box? The one test a widget that
    floats in the pipe margin - a meter, a fitting's control strip - uses to
@@ -537,19 +536,28 @@ function boxClear(x,y,w,h){
   return !LAY.parts.some(p=>{ const r=prect(p);
     return x+w>r.x && x<r.x+r.w && y+h>r.y && y<r.y+r.h; });
 }
+const STACK_MIN_L=2*PIPE_DIAL_R+6;
+// the box all three lines occupy together, hung around the run's own point
+const stackClear=(x,y)=>boxClear(x-STACK_W/2,stackY(y,0),STACK_W,3*STACK_H);
+/* THE point for one run. Every layer that prints on a run asks this, so the
+   three quantities cannot end up at three places along the same pipe. */
+function pipeRunAnchor(r){
+  let best=null;
+  for(const q of pipeGeom(r.pts).segs){
+    const x=q.x+q.dx*q.L/2, y=q.y+q.dy*q.L/2;
+    const a={L:q.L,x,y,key:r.key,rank:(q.L>=STACK_MIN_L?2:0)+(stackClear(x,y)?1:0)};
+    if(!best || a.rank>best.rank || (a.rank===best.rank && a.L>best.L)) best=a;
+  }
+  return best;
+}
 function pipeAnchors(runs){
-  const best={}, need=2*PIPE_DIAL_R+6, r0=PIPE_DIAL_R;
-  const clear=(x,y)=>boxClear(x-r0,y-r0,2*r0,2*r0+11);
+  const best={};
   for(const r of runs){
-    const g=pipeGeom(r.pts);
-    for(const q of g.segs){
-      const x=q.x+q.dx*q.L/2, y=q.y+q.dy*q.L/2;
-      /* the winning segment's own run key travels with it, so the one meter this
-         KIND gets still reads THAT run's real numbers (pipeFullScale/pipeUnit are
-         keyed by run, not kind) rather than a kind-wide placeholder. */
-      const a={L:q.L,x,y,key:r.key,rank:(q.L>=need?2:0)+(clear(x,y)?1:0)}, b=best[r.k]; // LABEL: one meter bucket per kind, not a network permission
-      if(!b || a.rank>b.rank || (a.rank===b.rank && a.L>b.L)) best[r.k]=a;              // LABEL: same bucket
-    }
+    /* the winning run's own key travels with it, so the one meter this KIND gets
+       still reads THAT run's real numbers (pipeFullScale/pipeUnit are keyed by
+       run, not kind) rather than a kind-wide placeholder. */
+    const a=pipeRunAnchor(r), b=best[r.k];                                       // LABEL: one meter bucket per kind, not a network permission
+    if(a && (!b || a.rank>b.rank || (a.rank===b.rank && a.L>b.L))) best[r.k]=a;  // LABEL: same bucket
   }
   return best;
 }
@@ -560,35 +568,39 @@ function pipeAnchors(runs){
    wears too. The header run's own kind ("relief") stays a literal - that is
    the run's own LABEL, which Stage 1 leaves legal to read for a display
    default, never a mode to look up. */
-const dialQuiet = k => k==="relief" ||
+const meterQuiet = k => k==="relief" ||
   (k.indexOf("xtie:")===0 && P.fit && P.fit[k.slice(5)] &&
    FIT[P.fit[k.slice(5)].mode] && FIT[P.fit[k.slice(5)].mode].quiet);
 
 function pipeMeters(runs,L){
-  const best=pipeAnchors(runs), PC=pipeColours(L), r=PIPE_DIAL_R;
+  const best=pipeAnchors(runs), PC=pipeColours(L);
   for(const k in best){
     const a=best[k], key=a.key;
-    if(a.L<2*r+6) continue;                  // too short a run to fit a meter in it
+    if(a.L<STACK_MIN_L) continue;            // too short a run to hold a reading
     const sp=pipeSpd[key]||0, fr=pipeDisplay(key,pipeFrac(key,k,sp)), un=pipeUnit(key,k);
-    /* Two of the seven dials a default plant draws were the relief header and
+    /* Two of the seven meters a default plant draws were the relief header and
        the stock valve's own branch, both pinned on 0.0 kg/s, both stacked in
        the one corner that already carries the tank, its label, the bowtie, the
-       pressurizer and the vitals panel. A gauge that can only ever read zero
-       is not an instrument, it is furniture - so a relief path earns its dial
-       by passing, and the dial APPEARING is then the signal. Every other run
+       pressurizer and the vitals panel. A reading that can only ever be zero
+       is not an instrument, it is furniture - so a relief path earns its line
+       by passing, and the line APPEARING is then the signal. Every other run
        keeps its meter at zero, because zero on a main leg is real news. */
-    if(dialQuiet(k) && Math.abs(fr)<0.008) continue;
+    if(meterQuiet(k) && Math.abs(fr)<0.008) continue;
     const mag=pipeFmt(Math.abs(fr)*un.nom);
-    pipeDial(a.x,a.y,r,fr,pipeCol(PC,k),mag+" "+un.u);
+    /* the same three states the needle used to carry, in the ink instead:
+       stagnant, backwards, over its rating. */
+    const dead=Math.abs(fr)<0.008, over=fr>1.001, back=fr<-0.008;
+    pipeStackLine(a.x,a.y,0,(back?"-":"")+mag+" "+un.u,
+                  dead?C.ink2:over?C.red:back?C.amber:pipeCol(PC,k));
     /* three things the solve can actually say, kept as three sentences rather than
        one number doing all three jobs: how much, which way, and against what. No
        pressure/dP reading here - a fitting's node potentials never left pipenet.js. */
-    TIP(a.x-r,a.y-r,2*r,2*r+11,pipeLabel(k)+"  FLOW METER",
+    TIP(a.x-STACK_W/2,stackY(a.y,0),STACK_W,STACK_H,pipeLabel(k)+"  FLOW METER",
       mag+" "+un.u+" - "+Math.abs(Math.round(fr*100))+
       " % of what this run carries as commissioned, undamaged, valves wide."+
-      (fr>1.001?" The needle is in the over-range band, so this run is being pushed past what it was built for."
-       :fr<-0.008?" The needle is back past the zero stop - it is running backwards."
-       :Math.abs(fr)<0.008?" The line is stagnant."
+      (over?" It is being pushed past what it was built for."
+       :back?" It is running backwards."
+       :dead?" The line is stagnant."
        :"")+
       (pipeDrop[key]!=null
         ? "  It spends "+(pipeDrop[key]*100).toFixed(0)+

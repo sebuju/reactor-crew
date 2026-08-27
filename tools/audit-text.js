@@ -552,24 +552,6 @@ const COLLISION_ALLOW=[
     test:(a,b)=>RAD_SCREEN.test(a.screen) &&
                 ((a.t==='UPPER DECK / HULL' && DOSE_TAG.test(b.t)) ||
                  (b.t==='UPPER DECK / HULL' && DOSE_TAG.test(a.t))) },
-  { reason:"layerRunMark() (layers.js) places the PRESSURE tag 1/3 along a "+
-           "run's OWN longest segment, one run at a time, with no knowledge of "+
-           "any other run's tag. A tee fitting's short branch stub or a spare "+
-           "pump's short suction leg can sit close enough to a neighbouring "+
-           "run that the two tags land on each other. Seen only in the "+
-           "fitting/spare-pump/4-loop stress sweeps ('spare:', 'junc:', "+
-           "'juncdmg:', 'loops4:' - the only sweeps that place a fitting or a "+
-           "fourth loop), never on the stock plant, so the key requires that "+
-           "screen tag as well as two pressure tags - a coincidence anywhere "+
-           "else in the run is not this fault. Ceiling raised 4->5 by pipenet.js "+
-           "Stage 1: every run carries a PRESSURE tag now, not only the old "+
-           "hot/cold/hpi/xtie four, so the crowded 4-loop sweep ('loops4:') "+
-           "picked up a second instance of the exact same fault shape (two "+
-           "generators' own pressure tags, 14.34/14.36 MPa) beside the one it "+
-           "already had; spare/junc/juncdmg are unchanged at one each.",
-    ceil:5,
-    test:(a,b)=>/^(loops4|spare|junc|juncdmg):/.test(a.screen) &&
-                / MPa$/.test(a.t) && / MPa$/.test(b.t) }
 ];
 { let n=0;
   // keyed on the array index, not the ~500-char reason string: two entries

@@ -79,61 +79,39 @@ const LAYER_DATA={
   press: L => ({runs: L ? pipeRuns(L) : pipeNetwork()}),
 };
 
-/* One mark per run, on its longest straight stretch so it never lands on a
-   bend - but a FRACTION along it, not halfway. `over` puts these under the
-   flow meters, the fitting glyphs and the deferred value tags, which all draw
-   after the over pass, and pipeAnchors() puts a meter at the MIDDLE of that
-   same longest stretch. Measured in a browser: at the midpoint the hot leg's
-   figure sat squarely behind its own meter dial and could not be read.
+/* One line per run, in the run's OWN slot of the stack pipes.js lays out
+   (pipeStackLine): the anchor is pipeRunAnchor(), the same point the flow
+   meter asks for, so a run's three readings are one block of text rather than
+   three instruments scattered along a pipe. `over` puts these under the
+   fitting glyphs and the deferred value tags, which draw after the over pass.
 
-   THE FRACTION IS PER LAYER, and that is what lets both pressure and
-   subcooling be on at once: pressure takes a third along, subcooling
-   two-thirds, so the two never land on each other and neither lands on the
-   flow dial in the middle. Three instruments on one run, three places. */
-/* `minL` is the shortest segment this mark will land on, in plant pixels. A
-   run gets three of these - PRESSURE at 1/3, the flow dial at 1/2, SUBCOOLING
-   at 2/3 - so the outer two sit L/3 apart, and a tag is about 45 px wide. Below
-   about 135 px they overlap each other, which is what the condenser's own 2.8 m
-   exhaust and suction legs do: they became real conductance edges in Stage 1
-   and started drawing live data for the first time, on a pipe too short to
-   hold three labels.
-
-   The flow dial passes no minimum and always draws, so a short run still says
-   what it is carrying. The two that would collide stand down instead of
-   printing on top of each other - a reading nobody can read is not a reading,
-   and this is the fix the audit-text allow-list entry named. */
-function layerRunMark(runs, t, val, draw, minL){
+   THE SLOT IS PER LAYER and it is fixed: pressure is always the middle line
+   and subcooling always the bottom one, whether or not the other two are
+   switched on. A line that moved up when a neighbour was switched off would
+   be a reading you have to find again every time you change what is on. */
+function layerRunLine(runs, slot, val, col, fmt){
   for(const r of runs){
     const v=val(r);
     if(v===null||v===undefined||!isFinite(v)) continue;
-    const g=pipeGeom(r.pts);
-    if(!g.len) continue;
-    let best=null;
-    for(const q of g.segs) if(!best||q.L>best.L) best=q;
-    if(minL && best.L < minL) continue;
-    draw(best.x+best.dx*best.L*t, best.y+best.dy*best.L*t, v);
+    const a=pipeRunAnchor(r);
+    if(!a || a.L<STACK_MIN_L) continue;   // too short a stretch to hold a reading
+    pipeStackLine(a.x,a.y,slot,fmt(v),col(v));
   }
 }
-const MARK_MIN_L=135;
-/* Against the SAME 1.35x design-point scale the pressurizer dial uses, with
-   the tick at P0 - so a bar on a cold leg and the needle on the vessel are
-   two readings of one ruler and cannot disagree about what "high" means. */
-const PRESS_MAX_K=1.35;
-const pressLayer = (d,L) => layerRunMark(d.runs, 1/3, pipeRunP, (x,y,v)=>{
-  const max=Math.max(0.1,P.P0)*PRESS_MAX_K;
-  pipeBar(x,y-12,v/max,1/PRESS_MAX_K,v>=P.P0?C.amber:C.cyan);
-  pipeTag(x,y-5,v.toFixed(2)+" MPa",C.cyan);
-}, MARK_MIN_L);
-/* Coloured by margin, not by value, and drawn as a column that EMPTIES: what
-   matters about subcooling is how close to zero it is, because zero is where
-   the water in that pipe stops being water - which is where a pump loses its
-   head and where the loop stops circulating. */
-const SUBC_FULL=60;
-const subcLayer = (d,L) => layerRunMark(d.runs, 2/3, r => pipeRunSc(r,L), (x,y,v)=>{
-  const col = v<=0 ? C.red : v<15 ? C.amber : C.blue;
-  pipeColumn(x,y-11,v/SUBC_FULL,col);
-  pipeTag(x,y-5,v.toFixed(0)+" K sub",v<=0 ? C.red : v<15 ? C.amber : C.ink2);
-}, MARK_MIN_L);
+/* Absolute, in MPa, on the same 1.35x design-point scale everything else on
+   this plant reads pressure against. Blue is well under the design point,
+   amber is over it, red is where the relief valve is about to talk. */
+const pressCol = v => { const p0=Math.max(0.1,P.P0);
+  return v>=p0*1.06?C.red : v>=p0?C.amber : v<p0*0.55?C.blue : C.cyan; };
+const pressLayer = (d,L) => layerRunLine(d.runs, 1, pipeRunP, pressCol,
+                                         v=>v.toFixed(2)+" MPa");
+/* Coloured by MARGIN, not by value: what matters about subcooling is how close
+   to zero it is, because zero is where the water in that pipe stops being
+   water - which is where a pump loses its head and where the loop stops
+   circulating. */
+const subcCol = v => v<=0 ? C.red : v<15 ? C.amber : C.blue;
+const subcLayer = (d,L) => layerRunLine(d.runs, 2, r => pipeRunSc(r,L), subcCol,
+                                        v=>v.toFixed(0)+" K sub");
 
 /* THE FOUR RADIATION LAYERS. See src/render/rad.js for the draw functions and
    the zone table they share - this table only says where each one goes down
@@ -183,16 +161,16 @@ const LAYERS={
   subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:true,
         draw:subcLayer,
         tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},
-  /* The flow meters and the pressurizer's own dial. They were drawn
+  /* The flow readings and the pressurizer's own dial. They were drawn
      unconditionally, outside the table, which made them the one thing on the
      plant nobody could turn off - and left two of the three pipe instruments
-     switchable and the third not. Last in the table on purpose: a dial is
-     bigger than a bar or a column, so it goes down over them rather than
-     under. Not the break plumes - drawPlant() draws those before the pass,
-     because an effect is not an instrument. */
+     switchable and the third not. Last in the table on purpose: it carries the
+     pressurizer's dial, which is bigger than a line of text and so goes down
+     over the stack rather than under it. Not the break plumes - drawPlant()
+     draws those before the pass, because an effect is not an instrument. */
   flow: {label:"FLOW METERS", seam:"over",  data:null,    live:true, on:true,
         draw:(d,L)=>pipeGauges(L),
-        tip:"A dial on every run, reading what that run is carrying as a share of what it was built to carry - and the pressurizer's own pressure dial. The needle goes backwards when a run reverses and into a red band when it is being pushed past its rating."},
+        tip:"The top line of every run's readings: what that run is carrying, in kg/s - and the pressurizer's own pressure dial. The figure goes amber and takes a minus sign when a run reverses, and red when it is being pushed past its rating."},
 };
 const LAYER_ORDER=Object.keys(LAYERS);
 
