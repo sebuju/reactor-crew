@@ -30,7 +30,7 @@ function commission(){
      flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi,
      catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
-     fit:{...D.fit},
+     fittings:JSON.parse(JSON.stringify(D.fittings)),
      loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237,
      /* the coolant's own density, in kg/m^3 - the pipe network weighs a
@@ -53,6 +53,17 @@ function commission(){
      a case to guard here. netRefByLoop is the same reference split per loop -
      netFlowK's own per-connected-group ceiling needs it, because the loops
      are not the same length. */
+  /* Where a loop that is no longer a loop ends up. Absolute, not a fraction of
+     P0: containment sits near atmospheric whatever the plant was designed for.
+     AHEAD OF THE NETWORK, and it has to be: netCoreFrac0() below solves the
+     plant, and every containment node is FIXED at this value. It used to sit
+     forty lines further down and get away with it, because the only edges
+     reaching containment were break edges and a break edge is g exactly 0 in
+     the reference - netAssemble skips it, so an undefined pressure never
+     entered the matrix. A relief valve venting to the room has a LIVE stub
+     edge to that same anchor, so it does, and the whole reference solve came
+     back NaN: netRef 0, and every figure derived from it with it. */
+  P.Pcont = 0.15;
   P.net    = netBuild();
   P.netRefByLoop = {};
   P.netRefByRun  = {};
@@ -90,9 +101,6 @@ function commission(){
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = a.P0>3 ? 1.22 : 4.0;
-  /* Where a loop that is no longer a loop ends up. Absolute, not a fraction of
-     P0: containment sits near atmospheric whatever the plant was designed for. */
-  P.Pcont = 0.15;
   P.feff0 = P.flowK;                                   // heat removal fraction at full flow, undamaged
   P.n0    = Math.min(1, P.feff0);                      // power at which removal balances heat
   P.TfRef = P.Tref + 320*P.condK*P.n0/Math.max(P.feff0,.10);
@@ -215,33 +223,32 @@ function autoToggle(k){
 const rpsLive  = ()=> autoLive("rps");
 const rpsState = ()=> autoState("rps");
 /* ══════════ FITTINGS ══════════
-   Fitted (placed, for a tee or a throttle - see D.fit, layout.js) and worked
-   at the panel are two different questions, the same way a protection
-   system is fitted and then armed - but a fitting is NOT in AUTOSYS, because
-   nothing about it is automatic. There is no system acting on the plant
-   behind your back to defeat: it is a valve, and the operator works it,
-   either by hand (a tee's S.juncOpen) or by demand (a throttle's
-   S.valveDem, walked toward at VALVE_RATE below). */
+   Placed (a box in a cell - see D.fittings, layout.js) and worked at the
+   panel are two different questions, the same way a protection system is
+   fitted and then armed - but a fitting is NOT in AUTOSYS, because nothing
+   about it is automatic. There is no system acting on the plant behind your
+   back to defeat: it is a valve, and the operator works it by demand
+   (S.valveDem, walked toward at VALVE_RATE below). */
 /* ── RELIEF FITTINGS: every valve rolls its own die ──
    Deleting the last relief fitting is a legal design choice (see the
    warning in derived(), design.js) - a plant can be built with nowhere for
    an overpressure to go, and the vessel bursting is then the player's own
    decision. So every reader below is written to answer "none fitted" with
    an empty list or a no-op, never a throw.
-   reliefFitIds() walks P.fit in ITS OWN insertion order (fid keys are
-   "f0","f1",... - not integer-index keys, so Object.keys preserves the
-   order addFit() gave them) - deterministic, so which fitting is "primary"
-   never depends on iteration order changing under a future engine.
+   reliefFitIds() walks P.fittings in ITS OWN insertion order (fitting ids
+   are never integer-index keys, so Object.keys preserves the order they were
+   placed in) - deterministic, so which fitting is "primary" never depends on
+   iteration order changing under a future engine.
    primaryRelief() is what the LEGACY, single-valve controls (ACT.porvBlock,
    ACT.porvArm, the pzr mimic and its readouts) still address: their exact
    signature has no id argument (see ACT, record.js), so they can only ever
    reach the one relief fitting a plant had before redundancy existed. A
    second or third relief path is worked through the generic fitting
-   controls, the same way a second tee or throttle already is. */
+   controls, the same way a second throttle already is. */
 // P is null on the design bench (nothing commissioned yet) - the mimic still
 // draws there, so this asks D directly rather than throwing, the same
 // P?fallback:D idiom pumpFloor() (plant.js) already uses.
-const reliefFitIds = () => { const f=P?P.fit:D.fit;
+const reliefFitIds = () => { const f=P?P.fittings:D.fittings;
   return Object.keys(f).filter(id=>f[id].mode==="relief"); };
 const primaryRelief = () => reliefFitIds()[0];
 // any relief fitting passing flow right now - what the annunciator, the
@@ -625,13 +632,13 @@ const VALVE_RATE=1/17;
    chattering on the setpoint. */
 const PORV_LIFT0=1.06, PORV_RESEAT0=1.01;
 /* The one reader of a relief fitting's own setpoints. A valve dialled at the
-   bench carries its own pair in D.fit (addFit(), layout.js); an older design,
+   bench carries its own pair in D.fittings (layout.js); an older design,
    or any fitting never dialled, carries null and gets the defaults above. The
    fallback is written HERE and nowhere else, or the tick, the plant view and
    the auditor would each grow their own idea of what an unset field means.
    P is null on the bench, the same P?fallback:D idiom reliefFitIds() uses. */
 function reliefSet(fid){
-  const f=P?P.fit:D.fit, j=(f&&f[fid])||{};
+  const f=P?P.fittings:D.fittings, j=(f&&f[fid])||{};
   return {lift: j.lift||PORV_LIFT0, reseat: j.reseat||PORV_RESEAT0};
 }
 /* "is THIS valve allowed to lift by itself" - the one predicate the tick may
@@ -854,7 +861,7 @@ function resetPlant(){
         half is the solve's own surge flow and needs no memory of its own */
      vf0:0, inv0:100,
      /* One map per relief fitting, keyed like S.valve/S.valveDem - seeded
-        from P.fit rather than a fixed set of keys, so a plant with no
+        from P.fittings rather than a fixed set of keys, so a plant with no
         relief path (a legal design choice, see the bench warning in
         design.js) simply seeds nothing and every reader above (all written
         against reliefFitIds()) finds an empty list rather than a phantom
@@ -865,8 +872,8 @@ function resetPlant(){
      reliefStuck:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      reliefBlocked:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      reliefArm:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
-     /* per-valve arming, seeded for RELIEF fittings only - a tee or a throttle
-        has no automatic behaviour to defeat, and a phantom key here is a
+     /* per-valve arming, seeded for RELIEF fittings only - a throttle has no
+        automatic behaviour to defeat, and a phantom key here is a
         phantom key in every snapshot taken from now on. */
      porvByp:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      dmg:0,fatigue:0,dnbr:P.dnbr0,rho:0,voidTh:0,cav:0,vf:0,
@@ -900,23 +907,24 @@ function resetPlant(){
      /* the controller's tune, copied from the commissioning constants so a
         RESET PLANT puts the operator's experiments back where they started */
      split:false, reGang:false,
-     /* Shut, always, whatever tee was fitted. A branch you have to open by
-        hand is one that cannot change the plant you just commissioned
-        behind your back, and one that was never placed is the same plant to
-        the flow model as one placed and left shut. */
-     juncOpen:Object.fromEntries(Object.keys(P.fit).filter(k=>P.fit[k].mode==="tee").map(k=>[k,false])),
-     /* A throttle's actual AND demand both start on the same as-commissioned
+     /* A THROTTLE'S ACTUAL AND DEMAND both start on the same as-commissioned
         default (every actuator's demand starts equal to its actual - see
-        flow/rod/boron below): a BRANCH throttle shut, for the same reason a
-        tee is - a branch you have to open by hand cannot change the plant
-        behind your back. An IN-LINE throttle WIDE - it sits directly on a
-        run every design already depends on, so shut-by-default would choke
-        a main leg the moment it was fitted, which is not a conservative
-        default, it is a broken one. */
-     valve:Object.fromEntries(Object.keys(P.fit).filter(k=>P.fit[k].mode==="throttle")
-       .map(k=>[k, P.fit[k].bKey?0:1])),
-     valveDem:Object.fromEntries(Object.keys(P.fit).filter(k=>P.fit[k].mode==="throttle")
-       .map(k=>[k, P.fit[k].bKey?0:1])),
+        flow/rod/boron below), and WHICH default is a structural question:
+        a CROSS-TIE starts SHUT, because a branch you have to open by hand
+        cannot change the plant you just commissioned behind your back; a
+        valve spliced INTO a line the design already depends on starts WIDE,
+        because shut-by-default would choke a main leg the moment it was
+        placed, which is not a conservative default but a broken one.
+        fitTies() (layout.js) is the one predicate for the difference - a
+        cross-tie is a valve whose two sides belong to different loops - and
+        it replaces the old `bKey` test, which asked about the SHAPE of a tap
+        rather than about the plant. Wide open is bit-identical to no valve at
+        all (valveLeq(1) is exactly 0), so a spliced valve nobody touches
+        moves no pinned figure. */
+     valve:Object.fromEntries(Object.keys(P.fittings).filter(k=>P.fittings[k].mode==="throttle")
+       .map(k=>[k, fitTies(k)?0:1])),
+     valveDem:Object.fromEntries(Object.keys(P.fittings).filter(k=>P.fittings[k].mode==="throttle")
+       .map(k=>[k, fitTies(k)?0:1])),
      arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
@@ -1188,7 +1196,11 @@ function step(dt){
      to work against, and this is what used to be a hard on/off gated on
      s.breach alone - which said a severed hot leg was a closed loop. */
   const pzrAuth = clamp(1 - spill/PZR_LOSE, 0, 1);
-  const pAt = n => { const v = pField[n]; return v===undefined ? s.P : v; };
+  // coreFold() first: a folded part (the core's plenum, the pressurizer's
+  // shell, a tee's four faces) has ONE node under its bare id, so a caller
+  // naming a face would otherwise fall through to the s.P default and read a
+  // plant-wide number where it asked for a place.
+  const pAt = n => { const v = pField[coreFold(n)]; return v===undefined ? s.P : v; };
   /* SUBCOOLING AT A PLACE: how far the water THERE is below its own local
      boiling point. Subcooling and cavitation are the same physics asked at
      two locations, so they are one function called twice. */
@@ -1808,14 +1820,12 @@ function step(dt){
      NAME THE THING. "A tank is pushing water into the loop" is a sentence
      about a plant that has one tank; on a plant with four it has told you
      nothing, and the same goes for four pumps and three relief valves. One
-     helper so a component and a fitting are named the same way wherever they
-     appear, and so partName() - which is what the player RENAMED it to - is
-     read rather than the internal id. */
+     helper so every machine is named the same way wherever it appears, and so
+     partName() - which is what the player RENAMED it to - is read rather than
+     the internal id. A fitting is a part now, so it needs no second branch. */
   const nameOf = id => {
     const p = LAY.parts.find(q=>q.id===id);
-    if(p) return partName(p);
-    const j = D.fit[id];
-    return j ? (FITNAME[j.mode]||"FITTING")+" "+id.toUpperCase() : id.toUpperCase();
+    return p ? partName(p) : id.toUpperCase();
   };
   const nameList = ids => ids.map(nameOf).join(", ");
   // naming the machines means the verb has to agree with how many there were
@@ -1990,7 +2000,6 @@ function step(dt){
      Nothing forces them (this solver knows liquid, and a turbine is the heat
      model), so their packets stand still and their meters are blank. That is
      a real loss on the diagram and it is the honest one. */
-  const xtieKeys=new Set(P.net.fitIds.map(fid=>"xtie:"+fid)); // LABEL: mirrors netBuild's own key convention for a fitting's own branch run
   for(const key in d){
     const r = P.net.byKey[key];
     if(!r) continue;                           // a design change left a stale key
@@ -2007,12 +2016,12 @@ function step(dt){
        falling through to a made-up rate. `wet` is a PRIMARY inventory factor
        and only a primary run owes it. */
     if(tag || P.netRefByRun[key]!==undefined){
-      if(xtieKeys.has(key)) d[key]+=sp*runRatio(key);
-      else /* the run's OWN solved flow, with no correlation floor under it -
-              buoyancy is already in that solve, so a plant on natural
-              circulation still visibly moves water and a plant with the
-              valve shut visibly does not */
-           d[key]+=sp*P.flowK*runRatio(key)*(tag?wet:1)*1.4;
+      /* the run's OWN solved flow, with no correlation floor under it -
+         buoyancy is already in that solve, so a plant on natural circulation
+         still visibly moves water and a plant with a valve shut in the line
+         visibly does not. Every key here is a RUN now - a fitting's own edge
+         is inside its box and has no polyline to animate. */
+      d[key]+=sp*P.flowK*runRatio(key)*(tag?wet:1)*1.4;
     }
   }
   s.spin=(s.spin+360*dt*feff)%360;

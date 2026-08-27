@@ -62,12 +62,11 @@ const SCN_RAMP_DT = 0.5;
            load, which a ramp needs a start value for.
 
    ── TOGGLES ARE TOGGLES, AND THAT IS NOT A SHORTCUT ──
-   `byp` and `junc` toggle in `ACT`, so they toggle here. Authoring them as
-   "set this bypass ON" would be a promise this layer cannot keep: the act
-   flips whatever the switch is currently at, and a compiled track cannot know
-   that. In a scripted run it is exact anyway - resetPlant() leaves every bypass
-   off and every junction shut, and in an unattended run the script is the only
-   thing that touches them - so a toggle at t=20 IS "bypass it at 20 s". The day
+   `byp` toggles in `ACT`, so it toggles here. Authoring it as "set this
+   bypass ON" would be a promise this layer cannot keep: the act flips
+   whatever the switch is currently at, and a compiled track cannot know that.
+   In a scripted run it is exact anyway - resetPlant() leaves every bypass off,
+   and in an unattended run the script is the only thing that touches them - so a toggle at t=20 IS "bypass it at 20 s". The day
    a set-state act exists in `ACT`, this row changes to name it and gains its
    `on` argument; until then the shape here is the shape underneath it. */
 const GEST = {
@@ -120,9 +119,13 @@ const GEST = {
   byp      :{lab:"BYPASS",     act:"byp", lane:"sys", span:"latch",
     args:[{lab:"SYSTEM", u:"sys", def:"rps"}],
     emit:(a,ctx,put)=>put(0,[a[0]])},
-  junc     :{lab:"JUNCTION",   act:"junc", lane:"sys", span:"latch",
-    args:[{lab:"ID", u:"id", def:""}],
-    emit:(a,ctx,put)=>put(0,[a[0]])},
+  /* A VALVE IS A POSITION, not a switch. This row was JUNCTION and it toggled
+     S.juncOpen - a two-position gate on a tap-shaped cross-tie. A fitting is a
+     box with a mode now, and the gated one is a throttle, so the script sets
+     it where it wants it, 0..1, the same as every other continuous demand. */
+  valve    :{lab:"VALVE",      act:"valveDem", lane:"sys", span:"latch",
+    args:[{lab:"ID", u:"id", def:""},{lab:"TO", u:"%", min:0, max:100, def:0}],
+    emit:(a,ctx,put)=>put(0,[a[0], a[1]/100])},
 
   /* The one row with no act: a caption on the timeline for whoever is being
      taught. It compiles to nothing at all, which is why `act:null` rather than

@@ -138,7 +138,7 @@ const RODX0=.35;
    imperative code nowhere near the tables that claim to own the plant. A run
    is a thing that EXISTS now, not a thing a part implies: this is that
    topology, moved onto D so it rides designSig(), the recording head and the
-   save format for free, the same trick D.fit already relies on.
+   save format for free, the same trick D.tanks already relies on.
 
    One entry per run. `a`/`b` name the two PARTS; `af`/`bf` name the FACE
    each leaves from, or null - null means "whichever face points at the
@@ -149,13 +149,12 @@ const RODX0=.35;
    an edge, a tap target, a hit target or a spill point (every run answers
    yes to all four now); it only picks a default bore and a name.
 
-   A run with a `tap` field instead of `b`/`bf` lands on ANOTHER run rather
-   than on a port of its own - surge is the one run authored this way today,
-   because "drop onto whatever hot leg passes underneath" is a ROUTE
-   decision (a directional search, unchanged in pipeNetwork()), not a
-   topology one; what changed is that WHICH run it searches against is
-   named by the tap itself (the rid addRun() minted for it) instead of
-   "the first hot leg pipeNetwork() happens to build".
+   EVERY RUN IS PORT TO PORT. There used to be a second shape - a `tap`
+   field instead of `b`/`bf`, landing on another RUN - and the surge line
+   was the one entry that wore it. The surge line is three ordinary runs
+   through a tee COMPONENT now, so the shape is gone and with it the
+   directional search, the SURGE_TAP node and the load-bearing declaration
+   order that came with them.
 
    Authored for the ONE generator the stock plant ships with - "sg0"/"pump0",
    the fixed slot buildLayout() (layout.js) still places unconditionally, the
@@ -168,10 +167,9 @@ const RODX0=.35;
    the grid this frame, which is what lets a design missing its generator
    entirely still resolve to a sane (if unpiped) plant.
 
-   `bore` is a SPEC, not yet a live one - runBore() (pipenet.js) still reads
-   PIPE_BORE[r.k], so this is data for a later pass to consume, the same
-   standing ROLE.ports has this pass: declared, not yet enforced. Values
-   here mirror PIPE_BORE's current defaults so nothing is invented. */
+   A run carries no stored bore: runBore() (pipenet.js) prices it off
+   PIPE_BORE[r.k], so a field here would be one nothing reads. D.fittings
+   carries a real per-instance bore, which is a different question. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
@@ -183,13 +181,13 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
             carries it to P and resetPlant() to S, like every other tune. */
          arLo:0.20, arHi:0.50,
          cont:1,contFit:true,catcher:false,bkp:1,
-         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{},fittings:{},
-         /* NO STOCK PLUMBING DECLARED HERE. The tanks, the runs and the
-            relief fitting are BUILT - buildStockPlumbing() (pipenet.js)
-            lays them through the same addTank()/addRun()/addTapRun()/
-            addFit() calls the bench hands the player, so the reference
-            plant IS the gestures. Two literals describing one plant is
-            how the declared shape and the authored shape drift apart. */
+         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fittings:{},
+         /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
+            runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
+            through the same addTank()/addFitting()/addRun() calls the bench
+            hands the player, so the reference plant IS the gestures. Two
+            literals describing one plant is how the declared shape and the
+            authored shape drift apart. */
          tanks:{}, run:{}};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
@@ -239,19 +237,18 @@ function derived(){
      old D.loops*34 flat lump priced neither the pump (totalPumpCap() already
      does) nor the generator (SGT[D.sg].mass was only ever charged once for
      the whole plant); a 4-loop plant used to carry one generator's steel.
-     Every fitting that exists costs a flat FIT_MASS - a spool piece and a
-     motor-operated valve or throttle, so a tee or a throttle is not free
-     redundancy either. */
+     fittingMass() charges per fitting INSTANCE off its own bore, the same
+     way tankMass() charges per tank - a spool piece and a valve body, so a
+     tee is not free redundancy and a full-bore one is not free either. */
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
     +totalPumpCap()*PUMP_MASS+sgCount()*SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
     +coreMass + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     /* Every term here names a BOX on the grid. tankMass() charges per tank
        INSTANCE, off its own vol, so four tanks cost four tanks and there is
        no flag anywhere pricing a system with nothing drawn behind it. */
-    + partMass("catcher") + tankMass()
+    + partMass("catcher") + tankMass() + fittingMass()
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + turbCount()*D.turb*50 + condCount()*D.condCap*40
-    + Object.keys(D.fit).length*FIT_MASS
     + layMass + latMass();
   const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);

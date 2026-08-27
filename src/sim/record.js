@@ -178,7 +178,7 @@ const ACT = {
      one-shot EMERG BORON dump and HOTWELL DUMP. There is no latch on the
      boron one any more - a tank that is empty is empty, which is the same
      refusal expressed by the physics instead of by a flag, and it can be shut
-     again because a real valve can. Guarded like ACT.junc: a tape naming a
+     again because a real valve can. Guarded like ACT.valveDem: a tape naming a
      tank this design never had is a no-op, not a phantom key on S. */
   tankOpen : {lab:"TANK VALVE",   log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankOpen[id]?"SHUT":"OPEN"),
               apply:(s,id)=>{ if(s.tankOpen[id]!==undefined) s.tankOpen[id]=!s.tankOpen[id]; }},
@@ -203,30 +203,30 @@ const ACT = {
               apply:(s,k)=>{ if(!autoToggle(k)) return;
                 if(k==="porv") for(const fid of reliefFitIds()) s.porvByp[fid]=s.byp[k]; }},
   /* One relief valve's own arm, and one relief valve's own block valve. Both
-     carry the P.fit guard ACT.junc and ACT.valveDem carry, and for the same
+     carry the P.fittings guard ACT.valveDem carries, and for the same
      reason: a scenario line naming a fitting this design never had would
      otherwise put a phantom key on S, and a phantom key on S is snapshotted,
      restored and compared like a real one. Scoped to mode==="relief" because
      S.porvByp carries keys for relief fittings only (resetPlant(), step.js). */
   porvByp  : {lab:"PORV ARM",     log:fid=>fid.toUpperCase()+" "+(S.porvByp[fid]?"ARMED":"BYPASSED"),
-              apply:(s,fid)=>{ if(P.fit[fid] && P.fit[fid].mode==="relief")
+              apply:(s,fid)=>{ if(P.fittings[fid] && P.fittings[fid].mode==="relief")
                 s.porvByp[fid]=!s.porvByp[fid]; }},
   porvBlockOf:{lab:"BLOCK VALVE", log:fid=>fid.toUpperCase()+" "+(S.reliefBlocked[fid]?"OPENED":"SHUT"),
-              apply:(s,fid)=>{ if(P.fit[fid] && P.fit[fid].mode==="relief")
+              apply:(s,fid)=>{ if(P.fittings[fid] && P.fittings[fid].mode==="relief")
                 s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
-  /* The P.fit test is the refusal, not decoration: without it a scenario line
-     naming a fitting this design never had would put a phantom key on S, and a
-     phantom key on S is snapshotted, restored and compared like a real one.
-     Scoped to mode==="tee" too - S.juncOpen only carries keys for a tee (see
-     resetPlant()), so an id that exists but names a throttle would otherwise
-     plant exactly that phantom key on S the moment somebody toggled it. */
-  junc     : {lab:"JUNCTION",     log:id=>id.toUpperCase()+" "+(S.juncOpen[id]?"SHUT":"OPEN"),
-              apply:(s,id)=>{ if(P.fit[id] && P.fit[id].mode==="tee") s.juncOpen[id]=!s.juncOpen[id]; }},
-  /* A throttle's position, sim units 0..1 like every other demand - the
-     panel's /100 stays at the call site. Same refusal, same reason, scoped
-     to mode==="throttle" for the same reason junc above is scoped to "tee". */
+  /* A THROTTLE'S POSITION, and it is the ONE valve act. ACT.junc is gone with
+     S.juncOpen too: a two-position switch on a gated cross-tie and a slider on a
+     throttle were one edge in the solve wearing two controls (see FIT,
+     pipenet.js - a throttle at 1 is bit-identical to an open tee and at 0 to
+     a shut one), and a tee COMPONENT has no gate to work at all. Sim units
+     0..1 like every other demand; the panel's /100 stays at the call site.
+     The P.fittings test is the refusal, not decoration: without it a scenario
+     line naming a fitting this design never had would put a phantom key on S,
+     and a phantom key on S is snapshotted, restored and compared like a real
+     one. Scoped to mode==="throttle" because S.valveDem carries keys for a
+     throttle only (resetPlant(), step.js). */
   valveDem : {lab:"VALVE DEMAND", cont:true, log:(id,v)=>id.toUpperCase()+" TO "+(v*100).toFixed(0)+" %",
-              apply:(s,id,v)=>{ if(P.fit[id] && P.fit[id].mode==="throttle") s.valveDem[id]=v; }},
+              apply:(s,id,v)=>{ if(P.fittings[id] && P.fittings[id].mode==="throttle") s.valveDem[id]=v; }},
   /* nolog: repairStart() writes REPAIR PARTY DISPATCHED itself, and it is the
      one that knows whether the order was refused for want of access. */
   repair   : {lab:"REPAIR PARTY", nolog:true, apply:(s,id)=>{ repairStart(id); }},
@@ -398,10 +398,10 @@ function recHead(){
 
    D.run (Stage 3a's CONNECT/DISCONNECT, layout.js's addRun()/removeRun()) is
    NOT part of that gap - it rides the `D: snapVal(D)` line above exactly like
-   D.fit already does, because it lives on D rather than in placedParts. What
-   it does NOT do is go through act(): addRun()/removeRun() are called
-   straight from the context menu, the same as addFit()/removeFit() already
-   are, so a connect or a disconnect is not a recorded, scrubbable INPUT on
+   D.fittings and D.tanks do, because it lives on D rather than in
+   placedParts. What it does NOT do is go through act(): addRun()/removeRun()
+   are called straight from the context menu, the same as addFitting() and
+   removePart() already are, so a connect or a disconnect is not a recorded, scrubbable INPUT on
    the tape - a replay only ever sees it because the head it started from
    already had it, never at the tick the player actually made it. Giving D
    edits their own place in ACT is real work nobody has asked for in this

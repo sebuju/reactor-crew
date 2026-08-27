@@ -135,12 +135,20 @@ const fittingParts=()=>{
    valve are one component with `mode` set differently, exactly as four
    tank-shaped things became one tank. Lowest free slot id, which is safe
    because removePart() takes a part's runs with it. */
-function addFitting(x,y){
-  let n=1; while(D.fittings["fit"+n]) n++;
-  const id="fit"+n;
+/* mintFitting() is the one place a fitting is built; addFitting() is the
+   GESTURE on top of it and picks the lowest free slot, because the bench
+   never asks a player to name one. buildStockPlumbing() (pipenet.js) names
+   its own, which costs nothing and reads better in a test: a fitting id
+   carries no meaning whatsoever, and the "rename every fitting id" audit
+   exists to prove exactly that. Same split addTank()/mintTank() already has. */
+function mintFitting(id,x,y){
   const f=JSON.parse(JSON.stringify(FIT_DEFAULT));
   f.cell=[x,y];
   D.fittings[id]=f; buildLayout(); return id;
+}
+function addFitting(x,y){
+  let n=1; while(D.fittings["fit"+n]) n++;
+  return mintFitting("fit"+n,x,y);
 }
 /* WHICH FACES OF A PART ARE THE SAME NODE. A list folds them all onto one
    node (the core's single plenum). A fitting's answer is not a property of
@@ -227,7 +235,7 @@ const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
    p.loop used to be a STORED field - set once, off nearestLoop() (a
    Euclidean-distance guess) for a placed spare and off a literal index for a
    stock pump - and every reader trusted it forever after. That is exactly
-   the frozen-pixel bug juncPt() exists to forbid one level up: a pump
+   the frozen-pixel bug a stored tap pixel used to be, one level up: a pump
    connected to a loop by PROXIMITY is not connected to it at all. Measured
    consequence: place a spare pump nobody ever piped in and loopPumpCap(0)
    doubled anyway, purely because the spare's `.loop` happened to read 0.
@@ -285,48 +293,33 @@ let nodeGraphCache=null, nodeGraphSig="", nodeGraphHeld=false;
 const nodeGraphHold=on=>{ nodeGraphHeld=!!on && !!nodeGraphCache; };
 function nodeGraph(){
   if(nodeGraphHeld) return nodeGraphCache;
-  const sig=laySig()+"|"+JSON.stringify(D.run);
+  // fittingSig() too: a fitting's MODE decides both its fold and whether its
+  // own internal link is a gate, and a mode change moves no part and no run.
+  const sig=laySig()+"|"+JSON.stringify(D.run)+"|"+fittingSig();
   if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
   const id=k=>LAY.parts.find(q=>q.id===k);
   const adj={}, nodesOf={};
   const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
   const link=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b); (adj[b]||(adj[b]=[])).push(a); };
+  /* WHICH INTERNAL LINKS ARE A GATE. A valve's own path is a link this graph
+     has to carry - cut it outright and everything past an in-line throttle
+     reads as a different half of the plant - but it is not the same KIND of
+     link as a length of steel, and loopMap() below has to be able to tell
+     them apart. Recorded per undirected pair, not per part, because a
+     fitting also carries fold links (t->l, b->r) that are solid metal. */
+  const gate={}, gateKey=(u,v)=>u<v?u+"|"+v:v+"|"+u;
   for(const p of LAY.parts){
     const R=ROLE[p.role]; if(!R||!R.internal) continue;
     for(const IN of (Array.isArray(R.internal)?R.internal:[R.internal])){
-      note(p.id,IN.a); note(p.id,IN.b); link(p.id+IN.a, p.id+IN.b); }
+      note(p.id,IN.a); note(p.id,IN.b); link(p.id+IN.a, p.id+IN.b);
+      if(IN.gate && fitModeOf(p.id)!=="tee") gate[gateKey(p.id+IN.a, p.id+IN.b)]=1; }
   }
-  /* A TAP RUN IS A LINK TOO - runReach() makes the same move for the same
-     reason. It lands on another RUN rather than on a port, so it joins its own
-     face to BOTH ends of whatever it lands on. Skip it and the stock surge
-     line is not a connection: the pressurizer hangs off nothing, the relief
-     tank behind it reads as SECONDARY, and a primary tank lands in the
-     secondary's books. */
-  const hostRun=e=>{ const h=D.run[e.tap];
-    if(h && !h.tap) return h;
-    if(!e.tapK) return null;
-    for(const rid in D.run){ const o=D.run[rid]; if(o!==e && !o.tap && o.k===e.tapK) return o; }
-    return null; };
-  const endNode=(pid,f,other)=>{ const p=id(pid), q=id(other);
-    if(!p) return null;
-    const fc=f!=null?f:(q?face(p,q):null);
-    if(fc==null) return null;
-    note(p.id,fc); return p.id+fc; };
-  const taps=[];
   for(const rid in D.run){
     const e=D.run[rid];
-    if(e.tap){ taps.push(e); continue; }
     const a=id(e.a), b=id(e.b); if(!a||!b) continue;
     const sa=e.af!=null?e.af:face(a,b), sb=e.bf!=null?e.bf:face(b,a);
     note(a.id,sa); note(b.id,sb);
     link(a.id+sa, b.id+sb);
-  }
-  for(const e of taps){
-    const h=hostRun(e); if(!h) continue;
-    const mine=endNode(e.a, e.af, h.a); if(!mine) continue;
-    const ha=endNode(h.a, h.af, h.b), hb=endNode(h.b, h.bf, h.a);
-    if(ha) link(mine, ha);
-    if(hb) link(mine, hb);
   }
   /* A COMPONENT THAT DECLARES NO PATH IS STILL ONE VESSEL. ROLE.internal says
      what the SOLVE carries through a part, and a pressurizer declares none -
@@ -352,11 +345,12 @@ function nodeGraph(){
     if(Array.isArray(f)){ for(let i=1;i<f.length;i++) link(p.id+f[0], p.id+f[i]); }
     else for(const face in f) link(p.id+face, p.id+f[face]);
   }
-  const reach=(seeds,cut)=>{ const seen={}, stack=[];
+  const reach=(seeds,cut,noGate)=>{ const seen={}, stack=[];
     for(const n of seeds) if(!seen[n]){ seen[n]=1; stack.push(n); }
     while(stack.length){ const u=stack.pop();
       for(const v of (adj[u]||[])){
         if(seen[v] || (cut && cut[v])) continue;
+        if(noGate && gate[gateKey(u,v)]) continue;
         seen[v]=1; stack.push(v); } }
     return seen; };
   /* PRIMARY IS THE COMPONENT CONTAINING THE CORE. Not a side field, not a
@@ -384,19 +378,38 @@ function loopMap(){
   // own nodes cut out - the core is the shared hub, so crossing it would make
   // every loop one loop, which is the same exclusion the part-level walk made
   // and the reason it is a cut rather than a filter.
+  /* ══ A LOOP WALK CROSSES A VALVE ONLY WHERE IT HAS TO ══
+     A fitting is a COMPONENT now, so a cross-tie between two loops is two
+     ordinary runs through a box and the walk goes straight down it: four
+     loops read as one, P.netRefByLoop collapses to a single entry, and every
+     per-loop share netFlowK() is judged against stops existing. Cutting every
+     gate instead breaks the opposite case - an in-line throttle on a cold leg
+     would orphan the pump beyond it from its own generator.
+     Both cases fall out of one structural question, asked with no live valve
+     state in it: WOULD CUTTING THIS GATE DISCONNECT? Pass one walks with
+     every gate cut, so a cross-tie cannot merge two loops that each stand up
+     on their own. Pass two re-walks the same seeds crossing gates, and picks
+     up only what pass one could not reach at all - which is exactly the
+     in-line case, where the gate is the single path. A fitting's own box is
+     claimed by whichever loop reaches it first, deterministically, the same
+     standing every other part in this map has. */
   let nextLoop=0;
-  for(const p of LAY.parts){
-    if(p.role!=="sg" || partLoop[p.id]!==undefined) continue;
-    const seeds=(G.nodesOf[p.id]||[]).filter(n=>G.primary[n]);
-    const i=nextLoop++;
-    partLoop[p.id]=i;
-    const cut={}; for(const n of (G.nodesOf.core||[])) cut[n]=1;
-    const seen=G.reach(seeds,cut);
+  const cut={}; for(const n of (G.nodesOf.core||[])) cut[n]=1;
+  const seeded=[];
+  const claim=(p,i,noGate)=>{
+    const seen=G.reach((G.nodesOf[p.id]||[]).filter(n=>G.primary[n]), cut, noGate);
     for(const q of LAY.parts){
       if(!LOOP_ROLE[q.role] || q.id==="core" || partLoop[q.id]!==undefined) continue;
       if((G.nodesOf[q.id]||[]).some(n=>seen[n])) partLoop[q.id]=i;
     }
+  };
+  for(const p of LAY.parts){
+    if(p.role!=="sg" || partLoop[p.id]!==undefined) continue;
+    const i=nextLoop++;
+    partLoop[p.id]=i; seeded.push({p,i});
+    claim(p,i,true);
   }
+  for(const {p,i} of seeded) claim(p,i,false);
   loopMapCache={partLoop, n:nextLoop}; loopMapFor=G;
   return loopMapCache;
 }
@@ -428,7 +441,6 @@ function crossTies(){
   const id=k=>LAY.parts.find(q=>q.id===k);
   for(const rid in D.run){
     const e=D.run[rid];
-    if(e.tap) continue;                      // a tap lands on a run, and takes that run's own side
     const a=id(e.a), b=id(e.b); if(!a||!b) continue;
     const sa=e.af!=null?e.af:face(a,b), sb=e.bf!=null?e.bf:face(b,a);
     const na=a.id+sa, nb=b.id+sb;
@@ -494,46 +506,15 @@ function loopOfKey(key){
   const {partLoop}=loopMap();
   return partLoop[aP]!==undefined ? partLoop[aP] : (partLoop[bP]!==undefined ? partLoop[bP] : null);
 }
-// a fitting is a tap, not a component: no box, no grid cell, never in
-// LAY.parts. D.fit is topology only - one tap (aKey,aT) always, and a
-// second (bKey,bT) only for a fitting that branches to another run - a
-// throttle may sit in-line instead, bKey null, splicing straight into the
-// run it taps (see FIT.throttle, pipenet.js). Resolved fresh every frame by
-// juncPt() off whatever pipeNetwork() just routed - never a stored pixel,
-// so a part moved upstream of a tap can't leave the glyph or the branch
-// behind. mode picks the FIT (pipenet.js) row that prices its resistance;
-// bore is unused until the relief valve gets its own path. S.juncOpen/
-// S.valve (same keys) are the live actuator state; resetPlant() seeds them
-// from P.fit, so nothing here writes to S directly.
-// What each mode is CALLED, once - the plant view's tooltips and both rails
-// each used to spell this out for themselves, and a fourth mode would have
-// had to be added to every one of them.
-const FITNAME={tee:"JUNCTION",relief:"RELIEF VALVE",throttle:"THROTTLE"};
-
-// A relief valve's setpoints are mechanical - chosen when it is built, not
-// worked during a transient - so they live in D beside the tap and never on
-// S. null means "this plant's default"; reliefSet() (step.js) is the one
-// place that answers what the default is. Carried unconditionally rather
-// than behind a mode check: a fitting that is never "relief" simply carries
-// two unread nulls, the same standing `bore` already has on a mode that
-// never reads it - cheaper than a second branch in the one function every
-// mode's fitting is built through.
-/* LOWEST FREE SLOT, not a module counter - the same argument freeRid() and
-   addTank() make. A counter outside D cannot be restored by a recording
-   head, and it also made a REBUILT plant's fittings come back under
-   different ids every time, so anything holding an id across a rebuild
-   (an S from before it, a P.fit key) quietly stopped matching. */
-function addFit(mode,aKey,aT,bKey,bT,bore=0.55,lift=null,reseat=null){
-  let n=0; while(D.fit["f"+n]) n++;
-  const id="f"+n;
-  D.fit[id]={aKey,aT,bKey,bT,bore,mode,lift,reseat};
-  return id;
-}
-function removeFit(id){ delete D.fit[id]; }
-const FIT_MASS=16;                     // a spool piece and a motor-operated valve, per tap
-// A tank's own mass is tankMass() (above), per instance and off its own vol.
-// A second relief valve costs FIT_MASS and its own branch pipe (layMass,
-// layoutMetrics()) and nothing else - it does not need a second tank.
+/* A FITTING'S OWN MASS, per INSTANCE and off its own bore - the same move
+   tankMass() already makes. It was a flat 16 t per tap on the old D.fit,
+   which priced a 0.20 m relief valve and a full-bore tee alike. FIT_BORE0 mirrors
+   FIT_DEFAULT.bore (pipenet.js, which loads after this file), so a valve
+   left at the default still costs exactly the 16 t the flat charge did. */
+const FIT_MASS=16, FIT_BORE0=0.55;
+const fittingMass=()=>{ let m=0;
+  for(const id in D.fittings) m += FIT_MASS*(D.fittings[id].bore/FIT_BORE0);
+  return m; };
 
 /* ══════════ ROLE: one row per part ROLE, the network + radiation contract ══════════
    Same idiom as FIT/TANK/LAYERS/DMGFX/AUTOSYS/DICE/ANN - one table, adding a
@@ -591,8 +572,18 @@ const ROLE = {
           ports:{r:4, b:5}, thermal:"source"},
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none"},
-  pzr:   {internal:null, fixed:{type:"datum", face:"b"}, fold:null, mu:0.65, sgtr:false,
-          ports:{"*":2}, thermal:"none"},                     // surge always "b"; relief's own face is dynamic (face(pzr,rt)) and could coincide
+  /* ONE VESSEL, ONE NODE. The pressurizer declares no internal path - it is a
+     boundary, not a through-path - and that used to mean the SOLVE treated a
+     pipe on its bottom and a pipe on its side as two unconnected nodes, while
+     nodeGraph() (which answers "which side is this on") had already been
+     taught the opposite in as many words: they are plainly the same water.
+     The two disagreed, and it cost: the stock relief valve now sits between
+     the vessel and the tank, and against two separate nodes it was a dead-end
+     that vented nothing whatever its own gate said. Folding is not an
+     internal PATH - there is still no resistance through a pressurizer, and
+     nothing here makes it a leg of the loop. */
+  pzr:   {internal:null, fixed:{type:"datum", face:"b"}, fold:["t","b","l","r"], mu:0.65, sgtr:false,
+          ports:{"*":2}, thermal:"none"},
   /* TWO internal paths that do not meet: the tubes (l<->b, primary) and the
      shell around them (r<->t, secondary). The only way across is the sgtr
      edge, which is a LEAK and is built as one.
@@ -949,95 +940,9 @@ function routeVia(c,o){
   for(let i=1;i<legs.length;i++) pts=pts.concat(legs[i]);
   return {pts:dedupe(pts),legs,wps};
 }
-// segment lengths and total, for turning a point-on-polyline into a fraction
-// of the WHOLE run (nearestOn) or back again (juncPt) - written once so the
-// two stay the same arithmetic
-function polySegLens(pts){
-  const seg=[]; let tot=0;
-  for(let i=1;i<pts.length;i++){ const d=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]); seg.push(d); tot+=d; }
-  return {seg,tot};
-}
-/* nearest point on a polyline - where a branch line tees onto a run - plus
-   t, that point's fraction of the run's own length, for a junction tap to
-   store instead of a pixel (juncPt below resolves it back) */
-function nearestOn(pts,p){
-  const {seg,tot}=polySegLens(pts);
-  let best=pts[0], bd=1e9, bt=0, acc=0;
-  for(let i=1;i<pts.length;i++){
-    const a=pts[i-1], b=pts[i];
-    const dx=b[0]-a[0], dy=b[1]-a[1], L=dx*dx+dy*dy;
-    const t = L? clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L,0,1) : 0;
-    const q=[a[0]+dx*t, a[1]+dy*t];
-    const d=Math.hypot(q[0]-p[0],q[1]-p[1]);
-    if(d<bd){ bd=d; best=q; bt = tot? (acc+seg[i-1]*t)/tot : 0; }
-    acc+=seg[i-1];
-  }
-  return {pt:best,d:bd,t:bt};
-}
-// resolves a (run key, t) tap to a plant-space point off THIS frame's routed
-// network, plus which way the host run runs there. The one place any of the
-// four junction call sites (branch routing, glyph draw/hit-test, bench menu
-// resolve, bench menu store) turns a tap into a point, so a part moved
-// upstream of a tap is picked up by all four the same frame it moves.
-function juncPt(net,key,t){
-  const r=net.find(x=>x.key===key);
-  if(!r) return null;                 // the tapped run's part is gone
-  const pts=r.pts, {seg,tot}=polySegLens(pts);
-  if(!tot) return {pt:pts[0].slice(),vert:false};
-  const target=clamp(t,0,1)*tot; let acc=0;
-  for(let i=1;i<pts.length;i++){
-    const d=seg[i-1];
-    if(acc+d>=target-1e-6 || i===pts.length-1){
-      const lt=d? clamp((target-acc)/d,0,1) : 0;
-      const a=pts[i-1], b=pts[i];
-      return {pt:[a[0]+(b[0]-a[0])*lt, a[1]+(b[1]-a[1])*lt], vert:Math.abs(a[0]-b[0])<0.5};
-    }
-    acc+=d;
-  }
-}
 function plen(pts){ let L=0;
   for(let i=1;i<pts.length;i++) L+=Math.abs(pts[i][0]-pts[i-1][0])+Math.abs(pts[i][1]-pts[i-1][1]);
   return L/CELL*MPC; }
-
-/* The ONE relief header D.run declares (design.js), routed live by
-   pipeNetwork(). Its key carries the two faces that routing picked, so it
-   changes the moment the pressurizer or the tank moves - and a fitting that
-   had stored the old string then resolved against nothing: no branch
-   routed, FIT.relief.g 0 whatever S.reliefOpen said, and the valve vented
-   NOTHING while its glyph, its tank, its mimic and its mass all stayed.
-   That is the frozen-pixel bug juncPt() exists to prevent, one level up: a
-   fitting must store a tap, never a key that geometry is still free to
-   rename. Relief is the only mode that can resolve this way, because it is
-   the only one whose far end is a run the design derives rather than one
-   the player picked. */
-/* The header is the run AUTHORED as one, never a run inferred to be one. The
-   inference is tempting and it is wrong: "any run reaching a primary tank"
-   picks up the HPI INJECTION line, so a relief valve would quietly discharge
-   into the injection tank, up the pipe that is supposed to be feeding the core.
-   A player who wants a new tank to catch the discharge authors the header for
-   it by drawing the pipe: pressurizer to primary tank is the one pair
-   runKindFor() calls "relief", so the port drag writes the same entry the
-   stock plant ships with. */
-function reliefHeaderKey(net){
-  const r=net.find(x=>x.k==="relief");   // LABEL: a run KIND, and the one place it decides anything
-  return r?r.key:null;
-}
-// Where a fitting's far tap actually lands this frame. Only relief re-resolves;
-// a tee or a branch throttle taps two runs the player chose, and moving one out
-// from under it is a real answer, not a rename to paper over.
-/* THE TAP THE PLAYER AIMED AT, and the header only as a FALLBACK. A relief
-   valve used to have its far end overwritten every frame with
-   reliefHeaderKey() - the first run of kind "relief" on the plant - so a
-   discharge dropped onto a particular pipe was discarded the moment it was
-   drawn, and two valves could not discharge into two different places.
-   The fallback survives because it earns its keep on a run whose target has
-   been DELETED: that is what lets plumbing a tank back in later land the
-   discharge without touching the fitting, which audit-physics pins. It is
-   only reached when the stored key routes nowhere this frame. */
-function fitBKey(net,j){
-  if(j.bKey && net.some(r=>r.key===j.bKey)) return j.bKey;
-  return j.mode==="relief" ? reliefHeaderKey(net) : j.bKey;
-}
 
 /* pipeNetwork() reads D.run (design.js), not a hard-coded topology: a run
    EXISTS because it is declared, never because pipeNetwork() inferred it
@@ -1061,10 +966,6 @@ function pipeNetwork(){
     const e=D.run[rid];
     const a=id(e.a);
     if(!a) continue;                    // this entry's part is not on the grid this frame
-    if(e.tap){                          // lands on another run, not on a port of its own
-      conn.push({rid,k:e.k,a,sa:e.af,tap:e.tap,tapK:e.tapK,key:e.k+":"+a.id+e.af});
-      continue;
-    }
     const b=id(e.b);
     if(!b) continue;
     const sa=e.af!=null?e.af:face(a,b), sb=e.bf!=null?e.bf:face(b,a);
@@ -1077,17 +978,12 @@ function pipeNetwork(){
   const take=(p,s)=>{ const k=key(p,s), i=seen[k]||0; seen[k]=i+1; return [i,cnt[k]]; };
 
   const reg=laneReg(), net=[];
-  const ridPts={};                      // this frame's routed pts, by D.run id - what a tap lands against
-  /* A TAP IS ROUTED IN A SECOND PASS, over the runs the first pass produced.
-     It used to be routed in line, which quietly made D.run's DECLARATION ORDER
-     load-bearing: the surge line resolved only because `hot0` happens to be
-     declared above it, and a hot leg deleted and drawn again is appended at the
-     END, so the surge went off the drawing and stayed off. Nozzle SLOTS are
-     still taken in the original single order below - take() is what spreads N
-     pipes across one face, and reordering it would move stock geometry. */
-  const taps=[];
+  /* EVERY RUN IS PORT TO PORT. The second pass this loop used to need - a
+     tap run, routed against whatever the first pass produced - is gone with
+     the tap shape itself: the surge line is three ordinary runs through a tee
+     component now, so declaration order stopped being load-bearing rather
+     than being worked around. */
   for(const c of conn){
-    if(c.tap){ const [ia,na]=take(c.a,c.sa); taps.push({c,ia,na}); continue; }
     const [ia,na]=take(c.a,c.sa), [ib,nb]=take(c.b,c.sb);
     const r=routeVia(c,{reg,ia,na,ib,nb});
     /* nz: which END of this run lands on a component PORT, so drawPlant()
@@ -1097,70 +993,6 @@ function pipeNetwork(){
        entry this is - CONNECT's own DISCONNECT offer needs it to name what
        to delete, the same way a fitting's own id already does. */
     net.push({k:c.k,key:c.key,rid:c.rid,pts:r.pts,legs:r.legs,wps:r.wps,wp:true,nz:[true,true]});
-    ridPts[c.rid]=r.pts;
-  }
-  for(const {c,ia,na} of taps){
-    {                                   // e.g. surge, dropping onto whatever run it names
-      const a=port(c.a,c.sa,ia,na);
-      let hot0=ridPts[c.tap];
-      /* THE RUN IT NAMED IS GONE, SO LAND ON ANOTHER OF THE SAME KIND. `tap`
-         names one D.run entry, and deleting that entry used to strand the tap
-         for good - delete the hot leg and the surge line was off the drawing
-         permanently, even after a fresh hot leg was drawn in its place, because
-         the new entry carries a new id. `tapK` says what the tap is really
-         about: the surge line belongs on the HOT LEG, and WHICH hot leg is a
-         routing decision, not a design one. Same argument juncPt() already
-         makes one level up - a tap is a relationship, never a stored address. */
-      if(!hot0 && c.tapK)
-        for(const rid2 in ridPts){ const e2=D.run[rid2];
-          if(e2 && e2.k===c.tapK){ hot0=ridPts[rid2]; break; } }   // LABEL: the tapped run's KIND, named by the tap itself
-      if(!hot0) continue;               // nothing of that kind routed this frame either
-      let ty=null;                     // nearest run passing under this end
-      for(let i=1;i<hot0.length;i++){
-        if(Math.abs(hot0[i][1]-hot0[i-1][1])>0.5) continue;
-        const lo=Math.min(hot0[i-1][0],hot0[i][0]), hi=Math.max(hot0[i-1][0],hot0[i][0]);
-        if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
-          ty=hot0[i][1];
-      }
-      if(ty!==null) net.push({k:c.k,key:c.key,rid:c.rid,pts:[a,[a[0],ty]],wp:false,nz:[true,false]});
-      else { const t=nearestOn(hot0,a);  /* nothing underneath: reach across to the leg */
-        if(t.d>3) net.push({k:c.k,key:c.key,rid:c.rid,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false,nz:[true,false]}); }
-    }
-  }
-  // a branch fitting: a tap on one run reaching a tap on another, both
-  // resolved off the NET this call just built (main conn loop first, so both
-  // taps have something to resolve against). An in-line fitting (bKey null -
-  // only a throttle can be one) has no second tap and so no route of its own
-  // to draw; it lives entirely inside the run it sits on. Kind is "xtie:"+id
-  // on purpose - pipes.js's existing k.startsWith("xtie") fallbacks cover any
-  // suffix, so no new table row is needed, tee or throttle alike. wp:false: a
-  // branch pinned to two taps has no route of its own to steer, and the glyph
-  // (plant.js) stays pinned to the A tap - letting it gain a grip would let
-  // it drift off the point it's supposed to mark.
-  for(const jid in D.fit){
-    const j=D.fit[jid];
-    if(!j.bKey) continue;               // in-line: no second tap, no route
-    const A=juncPt(net,j.aKey,j.aT);
-    let B=juncPt(net,fitBKey(net,j),j.bT);
-    /* A relief valve with nowhere to land its far tap - no header run, no
-       tank on the grid yet - still vents (pipenet.js's own containment
-       fallback), so it still needs a stub to draw: a short nub straight up
-       off its own tap, "vents into the room" made picture-shaped, rather
-       than the branch silently not existing. Every other mode keeps the old
-       behaviour: a tapped run whose part vanished draws nothing. */
-    if(!B && j.mode==="relief" && A) B={pt:[A.pt[0], A.pt[1]-CELL*0.4], vert:true};
-    if(!A||!B) continue;              // a tapped run's part was removed
-    // sa/sb just need to differ - both taps are bare points (o.pa/o.pb), so
-    // neither string reaches port(). Equal strings would send route() down
-    // its "leaving the same named face" outboard slide, which assumes a real
-    // face direction; a hardcoded fallback there instead sends every tie
-    // bending the same way regardless of where its two taps actually sit,
-    // which folds the branch back over its own start when the far tap ends
-    // up on the near side of that fixed bend. Distinct strings route it
-    // through bendAt()'s collision search instead, the same one every other
-    // bare-point-to-bare-point leg (a waypoint run) already resolves through.
-    const pts=route(null,"a",null,"b",{reg,pa:A.pt,pb:B.pt,va:!A.vert,vb:!B.vert});
-    net.push({k:"xtie:"+jid, key:"xtie:"+jid, pts, wp:false, nz:[false,false]});
   }
   // which faces are occupied THIS frame, by "partId+face" - the same tally
   // route()/port() already built to spread N pipes into N slots, exposed
@@ -1241,10 +1073,10 @@ function bestFreePortPair(a,b,usage){
 }
 /* ══════════ D.run: A CONNECTION IS AUTHORED, A ROUTE IS COMPUTED ══════════
    addRun()/removeRun() are the CONNECT/DISCONNECT half of Stage 3a, the
-   same standing addFit()/removeFit() already have: a design edit, called
-   straight from the context menu (design-bench.js), not through act(). That
-   is an EXISTING gap, not a new one - nothing in ACT writes D today, so a
-   fitting was already unrecorded and unreplayable before this. Extending
+   same standing addFitting()/removePart() already have: a design edit,
+   called straight from the context menu (design-bench.js), not through
+   act(). That is an EXISTING gap, not a new one - nothing in ACT writes D
+   today, so placing a tank was already unrecorded and unreplayable. Extending
    the same shape rather than inventing a second one keeps that gap
    singular instead of doubling it; giving D edits their own recording path
    is real work nobody has asked for in this pass.
@@ -1255,8 +1087,8 @@ function bestFreePortPair(a,b,usage){
    One table, keyed on the unordered pair of ROLES - never on a part id, which
    is the same rule every other decision in this file already meets. A kind is
    not decoration: `hot` and `cold` are what loopOfKey() counts as a loop leg,
-   `relief` is what reliefHeaderKey() looks for, and pipes.js colours and
-   animates off it. So a player who deletes the hot leg and draws it again has
+   `relief` is what names the two runs either side of a relief valve, and
+   pipes.js colours and animates off it. So a player who deletes the hot leg and draws it again has
    to get a hot leg back, and before this they got a k:"user" pipe that routed,
    solved and carried flow while belonging to no loop at all.
 
@@ -1299,7 +1131,6 @@ function throughFitting(id,avoid,seen){
   if(!p || p.role!=="fitting") return p||null;
   seen=seen||{}; if(seen[id]) return null; seen[id]=1;
   for(const rid in D.run){ const e=D.run[rid];
-    if(e.tap) continue;
     const o = e.a===id ? e.b : e.b===id ? e.a : null;
     if(o==null || o===avoid) continue;
     const q=throughFitting(o,avoid,seen); if(q) return q; }
@@ -1332,6 +1163,37 @@ function runKindFor(aId,bId,af,bf){
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
 }
+/* ══ WHICH LOOPS A FITTING JOINS ══
+   The loops of the RUNS that reach it, deduplicated. Two answers come off
+   this one question and they used to be two different tests:
+   - netFlowK()'s per-group ceiling (pipenet.js) asks which loops an OPEN
+     valve pools together;
+   - resetPlant() (step.js) asks whether a valve is a CROSS-TIE, because a
+     branch you have to open by hand cannot change the plant you just
+     commissioned behind your back, while a valve spliced INTO a line the
+     design already depends on has to commission wide open or it chokes
+     whatever it was placed in.
+   That second question used to be answered by `bKey` - a tap that named two
+   runs was a branch, one that named one was in-line. A fitting is a box with
+   two runs either way, so the shape cannot answer it; what a cross-tie IS,
+   structurally, is a valve whose two sides belong to different loops, and
+   that is a question the drawing answers on its own. */
+/* Off the loop of what is at the FAR END of each run, never loopOfKey() on
+   the run itself: a run key resolves to whichever of its two parts loopMap()
+   knows, and it knows the fitting - which was claimed by whichever loop
+   reached it first. Asked that way every run touching a cross-tie answers
+   with the tie's own loop and the two sides never look different. */
+function fitLoops(id){
+  const out=[];
+  for(const rid in D.run){ const e=D.run[rid];
+    const other = e.a===id ? e.b : e.b===id ? e.a : null;
+    if(other==null) continue;
+    const l=loopOf(other);
+    if(l!=null && out.indexOf(l)<0) out.push(l);
+  }
+  return out;
+}
+const fitTies=id=>fitLoops(id).length>1;
 /* LOWEST FREE SLOT, not a module counter. runSeq was a counter living
    outside D, so recApplyHead() could not restore it: apply a head holding
    usr7 into a process whose counter was 3 and the next four mints land on
@@ -1367,25 +1229,12 @@ function addRun(aId,af,bId,bf,k){
      second run is what makes both of them nameable, and this is the moment
      that happens. */
   for(const r2 in D.run){ const e2=D.run[r2];
-    if(r2===rid || e2.k!=="user" || e2.tap) continue;
+    if(r2===rid || e2.k!=="user") continue;
     if(!isFitting(e2.a) && !isFitting(e2.b)) continue;
     e2.k=runKindFor(e2.a,e2.b,e2.af,e2.bf); }
   return rid;
 }
 function removeRun(rid){ delete D.run[rid]; }
-/* THE OTHER SHAPE A RUN CAN HAVE: one that lands on another RUN instead of on
-   a port. The stock surge line is the only entry that has ever been written
-   this way, and nothing in the UI could produce one - so deleting D.run.surge
-   was permanent, and the stock plant was the one plant the bench could not
-   build. `tapK` rather than the rid alone for the same reason the stock entry
-   carries it: the run it names may be deleted and drawn again, and WHICH run
-   of that kind it lands on is a routing decision (pipeNetwork()), not a
-   design one. */
-function addTapRun(aId,af,tapRid,tapK,k){
-  const rid=freeRid();
-  D.run[rid]={a:aId,af,tap:tapRid,tapK,k};
-  return rid;
-}
 /* THE PART THAT FIXES THE LOOP'S PRESSURE, or null - the same ROLE question
    netBuild() takes its datum node from, asked once here so the bench and
    pzrPlumbed() do not each spell it out. Never the id "pzr". */
@@ -1436,26 +1285,12 @@ function primaryTank(id){
    answer to "is this wired to that", asked with no net, no solve and no S,
    which is all the bench ever has. Any run counts, any kind: a run is a run.
 
-   A TAP RUN IS A LINK TOO. It lands on another run rather than on a port, so
-   it joins its own part to BOTH ends of whatever it lands on - skip it and
-   the stock pressurizer, which hangs off the hot leg by a tap, reads as
-   wired to nothing. Resolved by rid first and by `tapK` second, the same
-   two-step pipeNetwork() routes a tap with, so a hot leg deleted and drawn
-   again does not silently unplumb what taps it.
-
    `blocks` marks a part the walk may REACH but never CROSS - pzrLive()'s
    "reached, never crossed" rule (pipenet.js), made design-shaped: a tank is
    a pressure boundary, so a path that goes in one of its nozzles and out the
    other is not a path. Omitted, nothing blocks and this is pure wiring. */
 function runReach(fromId, blocks){
   const id=k=>LAY.parts.find(q=>q.id===k);
-  const host=e=>{
-    const h=D.run[e.tap];
-    if(h && !h.tap) return h;
-    if(!e.tapK) return null;
-    for(const rid in D.run){ const o=D.run[rid]; if(o!==e && !o.tap && o.k===e.tapK) return o; }
-    return null;   // nothing of that kind on the plant either: the tap hangs
-  };
   /* A FACE THE PART HAS NO PORT ON IS NOT A CONNECTION. netBuild() names a
      node `partId+face` and folds only the faces ROLE declares, so a run to an
      undeclared face lands on a node nothing else touches - a dangling stub
@@ -1472,7 +1307,6 @@ function runReach(fromId, blocks){
   for(const rid in D.run){
     const e=D.run[rid];
     if(!portOK(e.a,e.af)) continue;
-    if(e.tap){ const h=host(e); if(h) link.push([e.a,h.a],[e.a,h.b]); continue; }
     if(!portOK(e.b,e.bf)) continue;
     link.push([e.a,e.b]);
   }
@@ -1590,9 +1424,7 @@ function layoutMetrics(){
        still costs mass - that is the whole cost of a relief path, and it is
        meant to be felt on the budget, not as a plant that coasts down
        differently for owning a valve it has never opened. */
-    const fid = r.k.startsWith("xtie:") ? r.k.slice(5) : null;
-    const isRelief = r.k==="relief" || (fid && D.fit[fid] && D.fit[fid].mode==="relief");
-    if(isRelief) dead+=L;
+    if(r.k==="relief") dead+=L;
     // a cross-tie is a parallel branch, not another metre of loop, so it pays
     // mass/inertia with the secondary runs and never slows the pumps down
     else if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi") pipe+=L; else sec+=L;
