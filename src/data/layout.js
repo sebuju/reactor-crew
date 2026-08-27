@@ -678,8 +678,16 @@ function plen(pts){ let L=0;
    rename. Relief is the only mode that can resolve this way, because it is
    the only one whose far end is a run the design derives rather than one
    the player picked. */
+/* The header is the run AUTHORED as one, never a run inferred to be one. The
+   inference is tempting and it is wrong: "any run reaching a primary tank"
+   picks up the HPI INJECTION line, so a relief valve would quietly discharge
+   into the injection tank, up the pipe that is supposed to be feeding the core.
+   A player who wants a new tank to catch the discharge authors the header for
+   it - CONNECT RELIEF HEADER, on the tank's own right-click menu
+   (design-bench.js), which writes the same k:"relief" entry the stock plant
+   ships with. */
 function reliefHeaderKey(net){
-  const r=net.find(x=>x.k==="relief");
+  const r=net.find(x=>x.k==="relief");   // LABEL: a run KIND, and the one place it decides anything
   return r?r.key:null;
 }
 // Where a fitting's far tap actually lands this frame. Only relief re-resolves;
@@ -712,7 +720,7 @@ function pipeNetwork(){
     const a=id(e.a);
     if(!a) continue;                    // this entry's part is not on the grid this frame
     if(e.tap){                          // lands on another run, not on a port of its own
-      conn.push({rid,k:e.k,a,sa:e.af,tap:e.tap,key:e.k+":"+a.id+e.af});
+      conn.push({rid,k:e.k,a,sa:e.af,tap:e.tap,tapK:e.tapK,key:e.k+":"+a.id+e.af});
       continue;
     }
     const b=id(e.b);
@@ -728,23 +736,16 @@ function pipeNetwork(){
 
   const reg=laneReg(), net=[];
   const ridPts={};                      // this frame's routed pts, by D.run id - what a tap lands against
+  /* A TAP IS ROUTED IN A SECOND PASS, over the runs the first pass produced.
+     It used to be routed in line, which quietly made D.run's DECLARATION ORDER
+     load-bearing: the surge line resolved only because `hot0` happens to be
+     declared above it, and a hot leg deleted and drawn again is appended at the
+     END, so the surge went off the drawing and stayed off. Nozzle SLOTS are
+     still taken in the original single order below - take() is what spreads N
+     pipes across one face, and reordering it would move stock geometry. */
+  const taps=[];
   for(const c of conn){
-    if(c.tap){                          // e.g. surge, dropping onto whatever run it names
-      const [ia,na]=take(c.a,c.sa), a=port(c.a,c.sa,ia,na);
-      const hot0=ridPts[c.tap];
-      if(!hot0) continue;               // the tapped run didn't route this frame
-      let ty=null;                     // nearest run passing under this end
-      for(let i=1;i<hot0.length;i++){
-        if(Math.abs(hot0[i][1]-hot0[i-1][1])>0.5) continue;
-        const lo=Math.min(hot0[i-1][0],hot0[i][0]), hi=Math.max(hot0[i-1][0],hot0[i][0]);
-        if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
-          ty=hot0[i][1];
-      }
-      if(ty!==null) net.push({k:c.k,key:c.key,rid:c.rid,pts:[a,[a[0],ty]],wp:false,nz:[true,false]});
-      else { const t=nearestOn(hot0,a);  /* nothing underneath: reach across to the leg */
-        if(t.d>3) net.push({k:c.k,key:c.key,rid:c.rid,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false,nz:[true,false]}); }
-      continue;
-    }
+    if(c.tap){ const [ia,na]=take(c.a,c.sa); taps.push({c,ia,na}); continue; }
     const [ia,na]=take(c.a,c.sa), [ib,nb]=take(c.b,c.sb);
     const r=routeVia(c,{reg,ia,na,ib,nb});
     /* nz: which END of this run lands on a component PORT, so drawPlant()
@@ -755,6 +756,34 @@ function pipeNetwork(){
        to delete, the same way a fitting's own id already does. */
     net.push({k:c.k,key:c.key,rid:c.rid,pts:r.pts,legs:r.legs,wps:r.wps,wp:true,nz:[true,true]});
     ridPts[c.rid]=r.pts;
+  }
+  for(const {c,ia,na} of taps){
+    {                                   // e.g. surge, dropping onto whatever run it names
+      const a=port(c.a,c.sa,ia,na);
+      let hot0=ridPts[c.tap];
+      /* THE RUN IT NAMED IS GONE, SO LAND ON ANOTHER OF THE SAME KIND. `tap`
+         names one D.run entry, and deleting that entry used to strand the tap
+         for good - delete the hot leg and the surge line was off the drawing
+         permanently, even after a fresh hot leg was drawn in its place, because
+         the new entry carries a new id. `tapK` says what the tap is really
+         about: the surge line belongs on the HOT LEG, and WHICH hot leg is a
+         routing decision, not a design one. Same argument juncPt() already
+         makes one level up - a tap is a relationship, never a stored address. */
+      if(!hot0 && c.tapK)
+        for(const rid2 in ridPts){ const e2=D.run[rid2];
+          if(e2 && e2.k===c.tapK){ hot0=ridPts[rid2]; break; } }   // LABEL: the tapped run's KIND, named by the tap itself
+      if(!hot0) continue;               // nothing of that kind routed this frame either
+      let ty=null;                     // nearest run passing under this end
+      for(let i=1;i<hot0.length;i++){
+        if(Math.abs(hot0[i][1]-hot0[i-1][1])>0.5) continue;
+        const lo=Math.min(hot0[i-1][0],hot0[i][0]), hi=Math.max(hot0[i-1][0],hot0[i][0]);
+        if(a[0]>=lo-1 && a[0]<=hi+1 && hot0[i][1]>a[1]+3 && (ty===null||hot0[i][1]<ty))
+          ty=hot0[i][1];
+      }
+      if(ty!==null) net.push({k:c.k,key:c.key,rid:c.rid,pts:[a,[a[0],ty]],wp:false,nz:[true,false]});
+      else { const t=nearestOn(hot0,a);  /* nothing underneath: reach across to the leg */
+        if(t.d>3) net.push({k:c.k,key:c.key,rid:c.rid,pts:dedupe([a,[a[0],t.pt[1]],t.pt]),wp:false,nz:[true,false]}); }
+    }
   }
   // a branch fitting: a tap on one run reaching a tap on another, both
   // resolved off the NET this call just built (main conn loop first, so both
@@ -804,17 +833,33 @@ function pipeNetwork(){
    tank-side end of relief, pick their own face live rather than declaring
    one). The only two things CONNECT may ever refuse are this and "no route"
    - never what a component IS FOR. */
-function portRoom(p){
+/* `usage` is optional and it is the whole point of the argument: a caller
+   asking this of ONE part can let it solve the network itself, and a caller
+   asking it of EVERY part (the bench's port handles, plant.js) hands in the
+   usage the frame already routed, so drawing N handles costs one route and
+   not N. */
+/* ONE SPARE NOZZLE, EVERYWHERE. ROLE.ports is a MEASUREMENT - the most the
+   stock plant has ever asked of that face, swept at 1..4 loops - so taken as a
+   ceiling it says the stock plant is full, and a bench where nothing can be
+   connected to anything is not a bench. The spare is added HERE rather than
+   folded into the table so the table stays the honest census it is documented
+   as; what it means is a design rule, and it is a modest one: every face that
+   carries a nozzle at all carries room for one more run than the stock plant
+   ever needed. A role that declares NO port (rods, the control space, the
+   shields) gets no spare - it is not a network part, and inventing one would
+   be inventing plumbing into a wall. */
+const PORT_SPARE=1;
+function portRoom(p,usage){
   const R=ROLE[p.role], out={t:false,b:false,l:false,r:false};
   if(!R || !R.ports) return out;
-  const usage=pipeNetwork().usage||{};
+  if(!usage) usage=pipeNetwork().usage||{};
   if(R.ports["*"]!=null){
     let used=0; for(const f in out) used+=usage[p.id+f]||0;
-    const free=used<R.ports["*"];
+    const free=used<R.ports["*"]+PORT_SPARE;
     for(const f in out) out[f]=free;
     return out;
   }
-  for(const f in out) out[f] = R.ports[f]!=null && (usage[p.id+f]||0)<R.ports[f];
+  for(const f in out) out[f] = R.ports[f]!=null && (usage[p.id+f]||0)<R.ports[f]+PORT_SPARE;
   return out;
 }
 // the nearest FREE port to a plant-space point, over every part but one -
@@ -822,20 +867,50 @@ function portRoom(p){
 // only ever picks a DEFAULT, and finding nothing here means no offer, never
 // a refusal. threshold is half a cell, the same reach a run's own tap
 // search already uses relative to CELL.
-function nearestFreePort(pt,excludeId){
+function nearestFreePort(pt,excludeId,usage){
   let best=null,bd=1e9;
   for(const p of LAY.parts){
     if(p.id===excludeId) continue;
-    const room=portRoom(p);
-    for(const f in room){
-      if(!room[f]) continue;
-      const a=port(p,f);
-      const d=Math.hypot(a[0]-pt[0],a[1]-pt[1]);
-      if(d<bd){ bd=d; best={part:p,face:f,pt:a}; }
-    }
+    const b=bestFreePortOn(p,pt,usage);
+    if(!b) continue;
+    const d=Math.hypot(b.pt[0]-pt[0],b.pt[1]-pt[1]);
+    if(d<bd){ bd=d; best=b; }
   }
   return best && bd<CELL*0.85 ? best : null;
 }
+// which part a plant-space point lands in, or null - the grid lookup the
+// bench's right-click resolve had written out by hand, wanted a second time
+// by the port drag's drop test
+function partAt(pt){
+  const gx=Math.floor((pt[0]-GX)/CELL), gy=rowAt(pt[1]);
+  return LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h)||null;
+}
+/* THE DROP HALF of a port-to-port drag (pipePorts(), plant.js). The gesture is
+   "pull a pipe onto that machine", so the PART under the release point decides
+   and its own free face nearest the release is what the run is authored onto -
+   the hand never has to find a 9-unit handle at the far end. A part with every
+   port already taken returns nothing: an honest refusal, not a silent landing
+   on some other component the pointer was not over. Off the grid entirely, it
+   falls through to nearestFreePort(), which is what the right-click CONNECT
+   offer already asks - one question, one answer, two gestures. */
+function portDrop(pt,fromId,usage){
+  const p=partAt(pt);
+  if(p) return p.id===fromId ? null : bestFreePortOn(p,pt,usage);
+  return nearestFreePort(pt,fromId,usage);
+}
+// the free face of ONE part nearest a point - nearestFreePort()'s inner loop,
+// lifted out so the two callers cannot drift on what "free" or "nearest" mean
+function bestFreePortOn(p,pt,usage){
+  const room=portRoom(p,usage);
+  let best=null,bd=1e9;
+  for(const f in room){
+    if(!room[f]) continue;
+    const a=port(p,f), d=Math.hypot(a[0]-pt[0],a[1]-pt[1]);
+    if(d<bd){ bd=d; best={part:p,face:f,pt:a}; }
+  }
+  return best;
+}
+
 /* ══════════ D.run: A CONNECTION IS AUTHORED, A ROUTE IS COMPUTED ══════════
    addRun()/removeRun() are the CONNECT/DISCONNECT half of Stage 3a, the
    same standing addFit()/removeFit() already have: a design edit, called
@@ -848,10 +923,46 @@ function nearestFreePort(pt,excludeId){
    `k:"user"` is a LABEL only (bore default, display name) - it never gates
    the solve, and it never gates loopMap() either, which is why a spare pump
    plumbed this way genuinely pools capacity with whatever it reaches. */
+/* ══ THE KIND OF A HAND-DRAWN RUN, READ OFF WHAT THE TWO ENDS ARE ══
+   One table, keyed on the unordered pair of ROLES - never on a part id, which
+   is the same rule every other decision in this file already meets. A kind is
+   not decoration: `hot` and `cold` are what loopOfKey() counts as a loop leg,
+   `relief` is what reliefHeaderKey() looks for, and pipes.js colours and
+   animates off it. So a player who deletes the hot leg and draws it again has
+   to get a hot leg back, and before this they got a k:"user" pipe that routed,
+   solved and carried flow while belonging to no loop at all.
+
+   It is scoped to runs AUTHORED HERE, and that scope is what keeps it honest:
+   asking the same question of every run already in the network would sweep up
+   the stock HPI injection line as a relief header, and have a relief valve
+   quietly venting up the pipe that feeds the core. Those runs ship with their
+   own kinds and never pass through here. */
+const RUN_KIND={
+  "core|sg":"hot", "pump|sg":"cold", "core|pump":"cold",
+  "sg|turb":"steam", "cond|turb":"exh",
+  "feed|sg":"feed", "cond|feed":"feed",
+};
+function runKindFor(aId,bId){
+  const A=LAY.parts.find(q=>q.id===aId), B=LAY.parts.find(q=>q.id===bId);
+  if(!A||!B) return "user";
+  /* A TANK'S LINE IS NAMED BY WHAT IT REACHES, not by which tank it is - there
+     is no such thing as "the relief tank" or "the HPI tank", only a tank with a
+     pipe drawn somewhere. On the primary side the pressurizer end makes it a
+     relief header and anything else makes it an injection line; on the
+     secondary side a tank feeds what it is piped to. */
+  const t = A.role==="tank"? A : B.role==="tank"? B : null;
+  if(t){
+    const o = t===A? B : A;
+    if(!primaryTank(t.id)) return "feed";
+    return o.role==="pzr" ? "relief" : "hpi";
+  }
+  return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
+}
 let runSeq=0;
-function addRun(aId,af,bId,bf,bore=1){
+// `k` is the run's KIND; left out, the ends decide it (runKindFor, above).
+function addRun(aId,af,bId,bf,bore=1,k){
   const rid="usr"+(runSeq++);
-  D.run[rid]={a:aId,af,b:bId,bf,k:"user",bore};
+  D.run[rid]={a:aId,af,b:bId,bf,k:k||runKindFor(aId,bId),bore};
   return rid;
 }
 function removeRun(rid){ delete D.run[rid]; }
@@ -864,7 +975,14 @@ function removeRun(rid){ delete D.run[rid]; }
    took the whole frame with it, because ctxItemsDesign() runs inside the draw
    (drawCtxMenu -> drawDesign -> tick). No auditor opens that menu. */
 function hasRelief(){
-  return LAY.parts.some(p => p.role === "tank" && D.tanks[p.id] && D.tanks[p.id].side === "primary");
+  return LAY.parts.some(p => primaryTank(p.id));
+}
+// is this part id a tank on the PRIMARY side - the one predicate for "could
+// catch a relief discharge", asked by hasRelief() and by reliefHeaderKey()'s
+// own fallback, which were about to state it twice
+function primaryTank(id){
+  const p=LAY.parts.find(q=>q.id===id);
+  return !!(p && p.role==="tank" && D.tanks[id] && D.tanks[id].side==="primary");
 }
 
 /* A soft, honest "nothing removes heat" warning (design.js's derived()) -

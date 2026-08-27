@@ -126,10 +126,12 @@ function openCtxMenu(p){
   const R=ctxFor();
   ctxMenu = R ? R.resolve(p) : null;
 }
-// dressed like drawTip()'s box (drop shadow, amber frame) so it reads as a
-// popup rather than one more pane of ordinary chrome. Width is the longest
-// row plus padding, not a flat guess - a two-word bench row and thirteen
-// gesture names are not the same menu.
+// dressed like drawTip()'s box - a drop shadow and a ground darker than any
+// panel - so it reads as a popup rather than one more pane of ordinary chrome.
+// No frame: an amber outline is the plant's SELECTED tone, and a menu wearing
+// it read as one more selected thing on a deck that already has one.
+// Width is the longest row plus padding, not a flat guess - a two-word bench
+// row and thirteen gesture names are not the same menu.
 function drawCtxMenu(){
   if(!ctxMenu) return;
   const R=ctxFor();
@@ -146,7 +148,7 @@ function drawCtxMenu(){
   const h=hh+items.length*rh+6;
   let x=Math.min(ctxMenu.x,W-4-w), y=Math.min(ctxMenu.y,H-4-h);
   fillRect(x+3,y+3,w,h,"rgba(0,0,0,.6)");
-  fillRect(x,y,w,h,"#0b1215"); frame(x,y,w,h,C.amber);
+  fillRect(x,y,w,h,"#0b1215");
   push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach whatever is under it
   if(title){
     fillRect(x,y,w,hh,C.edge);
@@ -438,6 +440,12 @@ function uiDown(e){
           return; }
       } else { pt={x:w.x+w.w/2,y:w.y+w.h/2}; L.push(pt); }
       ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
+    /* A PIPE IS PULLED OUT OF A PORT. The drag holds the part and the FACE,
+       never the port's pixel: a part dragged about while... it cannot be, but
+       the route under it can change, and port() spreads its nozzles by how many
+       runs land on the face, so the point moves the moment this drag creates
+       one. Resolved in uiUp() - see portDrop() (layout.js). */
+    else if(w.type==="port"){ ui.drag={type:"port",part:w.part,face:w.face,v:w.v}; }
     else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
     return; }
   // nothing under the pointer: a click on bare deck deselects, rather than
@@ -479,7 +487,7 @@ function uiMove(e){
       // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
   }
-  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp") ? "grabbing"
+  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="port") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 }
 function uiUp(e){
@@ -487,6 +495,15 @@ function uiUp(e){
   // right button held and released without dragging the plant is a click,
   // which on the design bench opens the ADD/REMOVE menu
   if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
+  /* THE ONE PLACE A PORT DRAG BECOMES A CONNECTION. addRun() is the same design
+     edit the right-click CONNECT offer calls, with the same standing: a D edit,
+     not an act() - see addRun()'s own comment (layout.js). Dropping on nothing
+     is not an error, it is a cancel, so there is no refusal to report. */
+  if(d&&d.type==="port"){
+    const p=uiPt(e.currentTarget||cv,e), q=vIn(p)?vPt(p):null;
+    const to = q && portDrop([q.x,q.y],d.part.id);
+    if(to) addRun(d.part.id,d.face,to.part.id,to.face);
+  }
   ui.drag=null;
 }
 /* the page canvas measures in layout units off local(); a hosted widget hands

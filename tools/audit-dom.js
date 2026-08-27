@@ -581,9 +581,12 @@ for(const [what, guard, patch] of FAULTS){
 {
   const f = 'src/screens/design-bench.js';
   const raw = fs.readFileSync(path.join(ROOT, f), 'utf8');
-  const bad = raw.replace('label:"CONNECT TO "+partName(to.part)', 'label:"CONNECT TO "+to.part.name');
+  // anchored on the menu HEADER's own name read: the CONNECT TO row this used
+  // to inject into is gone, a run being drawn from a port square now rather
+  // than picked by two guesses off one right-click
+  const bad = raw.replace('if(hit.part) return partName(hit.part);', 'if(hit.part) return hit.part.name;');
   const caught = bad !== raw && nameReads({f, src: bad}).length >= 1;
-  selftest.push(['a raw p.name read reintroduced (CONNECT TO)',
+  selftest.push(['a raw p.name read reintroduced (menu header)',
                  'partName() is the only reader of a display name', caught,
                  caught ? 'caught by "partName() is the only reader of a display name"'
                         : bad === raw ? 'the injection no longer matches the source'

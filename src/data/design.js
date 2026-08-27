@@ -227,7 +227,9 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
            coldB0:{a:"pump0",af:"b",b:"core",bf:"b",k:"cold", bore:1},
            steam0:{a:"sg0", af:"t",b:"turb",bf:"t",k:"steam",bore:1},
            feedD0:{a:"feed",af:null,b:"sg0",bf:"b",k:"feed",bore:1},
-           surge :{a:"pzr", af:"b",tap:"hot0",           k:"surge", bore:.30},
+           /* tapK: what this tap is ABOUT, so it survives the run it names being
+              deleted and redrawn - see pipeNetwork() (layout.js). */
+           surge :{a:"pzr", af:"b",tap:"hot0",tapK:"hot", k:"surge", bore:.30},
            exh   :{a:"turb",af:"b",b:"cond",bf:"t",k:"exh",  bore:1},
            feedS :{a:"cond",af:"r",b:"feed",bf:null,k:"feed", bore:1},
            hpi   :{a:"hpi", af:null,b:"core",bf:"b",k:"hpi",  bore:.25},

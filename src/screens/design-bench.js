@@ -126,7 +126,7 @@ function ctxResolveDesign(p){
   const pt=vIn(p)?vPt(p):null;
   if(!pt) return null;
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
-  const part=LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h);
+  const part=partAt([pt.x,pt.y]);   // layout.js - the same lookup the port drag's drop test uses
   const net=pipeNetwork();
   let fitting=null;
   for(const fid in D.fit){ const j=D.fit[fid];
@@ -145,13 +145,7 @@ function ctxResolveDesign(p){
     // header (Stage 7a) - never read to decide what the run may do.
     if(near.d<8){ tapKey=r.key; tapT=near.t; runRid=r.rid||null; tapK=r.k; break; }
   }
-  // Stage 3a's CONNECT offer: the nearest FREE port to the pointer, on
-  // whatever is under an EMPTY cell - the same "click the space beside a
-  // part" gesture ADD SPARE PUMP HERE already uses, so the two never
-  // compete for the same click. nearestFreePort() (layout.js) is the one
-  // place that decides "free"; this only asks it.
-  const port=!part ? nearestFreePort([pt.x,pt.y],null) : null;
-  return {x:p.x,y:p.y,cell:{gx,gy},part,fitting,tapKey,tapT,tapK,runRid,port};
+  return {x:p.x,y:p.y,cell:{gx,gy},part,fitting,tapKey,tapT,tapK,runRid};
 }
 // Stage 7a: the menu header names the thing it is ABOUT - a part, a run, a
 // fitting, or the plant itself for a bare cell. Never a menu item, so it
@@ -213,12 +207,22 @@ function ctxItemsDesign(hit){
     /* Redundancy, the same way a second tee is added - taps the same RELIEF
        HEADER (pipeNetwork(), layout.js) the stock valve already uses, so
        every relief fitting shares the one tank (hasRelief(), layout.js).
-       Only on offer once that header exists - a plant with the last relief
-       fitting deleted has no tank and no header run yet to tap into. */
+
+       THE OFFER IS NEVER REFUSED. hasRelief() and the header key decide what
+       the valve DISCHARGES INTO, not whether you may fit one: with no header
+       and no primary tank it vents into the room, which pipenet.js already
+       models (net.fitTarget null - straight into containment) and drawPlant()
+       already draws as a stub off its own tap. Gating the OFFER on them
+       refused an order the plant can carry out - delete the relief tank and
+       the bench would not let you fit a relief valve anywhere, on a plant
+       whose pressurizer then had no relief path at all, which is precisely
+       the design you would want to be shown the cost of. fitBKey() re-resolves
+       a relief valve's far tap every frame, so plumbing a tank back in later
+       lands the discharge without touching the fitting. */
     { const relKey=reliefHeaderKey(pipeNetwork());
-      if(hasRelief() && relKey)
-        items.push({label:"ADD RELIEF VALVE HERE", fn:()=>{
-          addFit('relief',hit.tapKey,hit.tapT,relKey,0.5,PIPE_BORE.relief); }}); }
+      const land = hasRelief() && relKey;
+      items.push({label:"ADD RELIEF VALVE HERE", fn:()=>{
+        addFit('relief',hit.tapKey,hit.tapT,land?relKey:null,land?0.5:null,PIPE_BORE.relief); }}); }
     const hostLoop=loopOfKey(hit.tapKey);
     const from=juncPt(pipeNetwork(),hit.tapKey,hit.tapT);
     for(let j=0;j<sgCount();j++){ if(j===hostLoop) continue;
@@ -258,17 +262,12 @@ function ctxItemsDesign(hit){
       }});
     }
   }
-  /* Stage 3a: any port to any port, no legality table. The only things
-     that may stop this are physical - ROLE.ports occupancy (nearestFreePort
-     already checked the FROM end; the TO search below checks the far end
-     the same way) and a route that cannot get there. Nothing here asks
-     what either part is FOR. */
-  if(hit.port){
-    const to=nearestFreePort(hit.port.pt,hit.port.part.id);
-    if(to) items.push({label:"CONNECT TO "+partName(to.part), fn:()=>{
-      addRun(hit.port.part.id,hit.port.face,to.part.id,to.face);
-    }});
-  }
+  /* NO CONNECT OFFER HERE. It used to pick the nearest free port to the click
+     and then the nearest free port to THAT, so the plant a right-click built
+     was decided by two guesses the player never saw and could not aim. A run
+     is drawn now: pull it out of a port square and drop it on the machine you
+     mean (pipePorts(), plant.js). Both ends are chosen by the hand, so there
+     is nothing left here for a default-picker to get wrong. */
   return items;
 }
 ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign, title:ctxTitleDesign});
