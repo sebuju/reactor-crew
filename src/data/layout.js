@@ -22,9 +22,9 @@ const fittableList=()=>[
      ACCUMULATOR, EMERGENCY FEEDWATER, BORON INJECTION and RELIEF TANK were
      four rows here and they were one component wearing four names. */
 ];
-const fitOf=id=>fittableList().find(f=>f.id===id).get();
-const fitSig=()=>fittableList().map(f=>f.get()?1:0).join("");
-/* WHAT buildLayout() READS, all of it. It used to be fitSig() alone, which
+const checkOf=id=>fittableList().find(f=>f.id===id).get();
+const checkSig=()=>fittableList().map(f=>f.get()?1:0).join("");
+/* WHAT buildLayout() READS, all of it. It used to be checkSig() alone, which
    was true only while every part was either always there or behind a
    checkbox. A tank is neither: it is an instance, and its id and its cell
    are the two things that decide what box goes on the board. Leave them out
@@ -35,7 +35,15 @@ const tankSig=()=>{ let out="";
   for(const id in D.tanks){ const c=D.tanks[id].cell;
     out += "|"+id+":"+(c?c[0]+","+c[1]:"-"); }
   return out; };
-const laySrcSig=()=>fitSig()+tankSig();
+/* A FITTING IS A PART TOO, so the same argument tankSig() makes applies: its
+   id and its cell decide what box goes on the board, and its MODE decides
+   which faces are one node (foldFacesOf()). Leave any of the three out and a
+   direct D.fittings edit leaves LAY holding a box that no longer exists. */
+const fittingSig=()=>{ let out="";
+  for(const id in D.fittings){ const f=D.fittings[id], c=f.cell;
+    out += "|"+id+":"+(c?c[0]+","+c[1]:"-")+":"+f.mode; }
+  return out; };
+const laySrcSig=()=>checkSig()+tankSig()+fittingSig();
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
 // at the end of buildLayout()) or it would vanish whenever an unrelated
@@ -49,12 +57,31 @@ function setPlacedParts(list){
   placedParts = (list||[]).map(p=>({...p}));
   buildLayout();
 }
+/* ANYTHING THE PLAYER ADDED, THE PLAYER CAN REMOVE. The bench used to ask
+   whether an id started with "pumpX" or "sgX", which is a name test deciding
+   what a part IS - the exact smell four stages went to delete. Ask the list
+   that actually knows. */
+const isPlaced=id=>placedParts.some(p=>p.id===id);
 function placePart(mk){
   const p=mk(placeSeq++); placedParts.push(p); buildLayout(); return p;
 }
+/* REMOVING A PART TAKES ITS PIPES WITH IT. It used to leave them behind,
+   which was survivable only while ids were never reused - and they are, on
+   purpose (addTank()/addFitting() take the lowest free slot, which is what
+   makes the "rename every id" audit mean anything). Delete tank2, add a
+   tank, and the new one inherited the dead one's plumbing.
+   A run is deleted here rather than orphaned because a run naming a part
+   that is not on the board routes nothing, draws nothing and still rides
+   designSig() - a pipe you cannot see, cannot delete and cannot repair. */
 function removePart(id){
-  if(D.tanks[id]){ delete D.tanks[id]; buildLayout(); return; }
-  placedParts=placedParts.filter(p=>p.id!==id); buildLayout();
+  for(const rid in D.run){ const r=D.run[rid];
+    if(r.a===id || r.b===id) delete D.run[rid]; }
+  delete D.tanks[id];
+  /* NO fitting->fitting cascade. A fitting left with no runs is a valve
+     you can re-plumb, exactly as a tank with no runs is. */
+  delete D.fittings[id];
+  placedParts=placedParts.filter(p=>p.id!==id);
+  buildLayout();
 }
 /* ══════════ ADDING A TANK IS ADDING A TANK ══════════
    ONE default config (TANK_DEFAULT, pipenet.js), not a menu of four kinds.
@@ -62,13 +89,22 @@ function removePart(id){
    a relief tank is a knob on the instance, set afterwards on its own panel.
    The id carries no meaning at all - it is a slot number, and Stage 7's
    "rename every tank" check exists to prove nothing reads it. */
-function addTank(x,y){
-  let n=1; while(D.tanks["tank"+n]) n++;
-  const id="tank"+n;
+/* mintTank() is the one place a tank is built; addTank() is the GESTURE on
+   top of it and picks the lowest free slot id, because the bench never asks
+   a player to name one. buildStockPlumbing() (pipenet.js) names its own,
+   which costs nothing: a tank id carries no meaning whatsoever, and the
+   "rename every tank id" audit exists to prove exactly that. A null x is a
+   tank with no cell - a SECONDARY tank with no node and no box. */
+function mintTank(id,x,y){
   const t=JSON.parse(JSON.stringify(TANK_DEFAULT));
-  t.name=FLUID[t.fluid].label+" TANK"; t.col="#5aa9d6"; t.cell=[x,y];
+  t.name=FLUID[t.fluid].label+" TANK"; t.col="#5aa9d6";
+  t.cell = x==null ? null : [x,y];
   t.tip="A tank. Say what is in it, how it is charged and how it is plumbed on its own panel - the physics follows from that and from where you put it.";
   D.tanks[id]=t; buildLayout(); return id;
+}
+function addTank(x,y){
+  let n=1; while(D.tanks["tank"+n]) n++;
+  return mintTank("tank"+n,x,y);
 }
 /* Tanks are neither add()ed statically nor placedParts: they are read from
    D.tanks, which is where their whole configuration already lives, so a tank
@@ -81,6 +117,40 @@ const tankParts=()=>{
               grp:"safety", tip:t.tip, role:"tank"}); }
   return out;
 };
+/* A FITTING IS A COMPONENT, exactly like a tank: read from D.fittings, which
+   is where its whole configuration already lives, so it is one object and not
+   two halves that can disagree. It occupies a whole grid cell - hittable,
+   repairable, blocking - which is what buys "a fitting with no free adjacent
+   cell blocks commissioning", a thing a fraction along a pipe could never be
+   asked. */
+const fittingParts=()=>{
+  const out=[];
+  for(const id in D.fittings){ const f=D.fittings[id]; if(!f.cell) continue;
+    out.push({id, name:f.name, w:1, h:1, x:f.cell[0], y:f.cell[1], col:f.col,
+              grp:"safety", tip:f.tip, role:"fitting"}); }
+  return out;
+};
+/* ADDING A FITTING IS ADDING A FITTING. One default config (FIT_DEFAULT,
+   pipenet.js) and no menu of kinds: a tee, a branch throttle and a relief
+   valve are one component with `mode` set differently, exactly as four
+   tank-shaped things became one tank. Lowest free slot id, which is safe
+   because removePart() takes a part's runs with it. */
+function addFitting(x,y){
+  let n=1; while(D.fittings["fit"+n]) n++;
+  const id="fit"+n;
+  const f=JSON.parse(JSON.stringify(FIT_DEFAULT));
+  f.cell=[x,y];
+  D.fittings[id]=f; buildLayout(); return id;
+}
+/* WHICH FACES OF A PART ARE THE SAME NODE. A list folds them all onto one
+   node (the core's single plenum). A fitting's answer is not a property of
+   its ROLE but of its own mode - a tee is one node, a valve is two with a
+   gate between - so the row names a resolver instead of a literal list.
+   Read by foldMap() (the solve) and by nodeGraph() (which side is this on),
+   because a fold those two disagreed about would put a valve's own two ends
+   in different halves of the plant. */
+const foldFacesOf=p=>{ const R=ROLE[p.role]; if(!R||!R.fold) return null;
+  return typeof R.fold==="function" ? R.fold(p) : R.fold; };
 /* t per 1 % of reference inventory. One rate for every tank, so four tanks
    cost four tanks and a bigger tank costs more - replacing four flat
    per-name figures (PART_MASS.reltk/efw/boroninj and D.accum's own +45 t)
@@ -184,7 +254,11 @@ const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
    still develops its OWN head once it has any real run at all - see
    netBuild()'s pump-head block, pipenet.js - it just does not pool
    capacity with anyone else's, because there is no group to pool with. */
-const LOOP_ROLE={core:1, sg:1, pump:1};
+/* A FITTING IS IN THE LOOP IT SITS IN. Splice a tee into a hot leg and the
+   leg on the core side is still that loop's leg - leave `fitting` off this
+   list and loopOfKey() answers null for it, which silently costs the loop a
+   leg in P.netRefRun's scale and in every per-loop question the tick asks. */
+const LOOP_ROLE={core:1, sg:1, pump:1, fitting:1};
 /* THE WALK IS OVER NODES, NOT PARTS. It used to link two PARTS whenever a run
    joined them, which was only ever right while every part was a single
    through-path: a steam generator carries two that do not meet (tubes and the
@@ -252,6 +326,16 @@ function nodeGraph(){
     const R=ROLE[p.role]; if(R && R.internal) continue;
     const ns=nodesOf[p.id]; if(!ns) continue;
     for(let i=1;i<ns.length;i++) link(ns[0], ns[i]);
+  }
+  /* AND A FOLD IS A LINK. foldMap() (pipenet.js) says which faces of a part
+     are one node in the SOLVE; this graph answers "which side is this on",
+     and the two must not disagree - a valve whose t face folds onto l is one
+     piece of steel however either graph is built. Left out, a fitting piped
+     top-to-bottom had its two ends in different halves of the plant. */
+  for(const p of LAY.parts){
+    const f=foldFacesOf(p); if(!f) continue;
+    if(Array.isArray(f)){ for(let i=1;i<f.length;i++) link(p.id+f[0], p.id+f[i]); }
+    else for(const face in f) link(p.id+face, p.id+f[face]);
   }
   const reach=(seeds,cut)=>{ const seen={}, stack=[];
     for(const n of seeds) if(!seen[n]){ seen[n]=1; stack.push(n); }
@@ -410,7 +494,7 @@ function loopOfKey(key){
 // each used to spell this out for themselves, and a fourth mode would have
 // had to be added to every one of them.
 const FITNAME={tee:"JUNCTION",relief:"RELIEF VALVE",throttle:"THROTTLE"};
-let fitSeq=0;
+
 // A relief valve's setpoints are mechanical - chosen when it is built, not
 // worked during a transient - so they live in D beside the tap and never on
 // S. null means "this plant's default"; reliefSet() (step.js) is the one
@@ -419,8 +503,14 @@ let fitSeq=0;
 // two unread nulls, the same standing `bore` already has on a mode that
 // never reads it - cheaper than a second branch in the one function every
 // mode's fitting is built through.
+/* LOWEST FREE SLOT, not a module counter - the same argument freeRid() and
+   addTank() make. A counter outside D cannot be restored by a recording
+   head, and it also made a REBUILT plant's fittings come back under
+   different ids every time, so anything holding an id across a rebuild
+   (an S from before it, a P.fit key) quietly stopped matching. */
 function addFit(mode,aKey,aT,bKey,bT,bore=0.55,lift=null,reseat=null){
-  const id="f"+(fitSeq++);
+  let n=0; while(D.fit["f"+n]) n++;
+  const id="f"+n;
   D.fit[id]={aKey,aT,bKey,bT,bore,mode,lift,reseat};
   return id;
 }
@@ -534,7 +624,26 @@ const ROLE = {
      in the solve. */
   catcher: {internal:null, fixed:null, fold:null, mu:0.55, sgtr:false,
           ports:{}, thermal:"none"},                          // a structure, not a network part - no run, no ports, no exception needed
+  /* ONE ROLE FOR EVERY FITTING. There is no kind: a tee, a branch throttle
+     and a relief valve differ by `mode` on the instance (D.fittings), never
+     by role - the same move that turned five tank-shaped things into one
+     tank. mu is a valve body: a lump of steel, thinner than a vessel.
+     internal is the GATED path through it, and `gate` is what tells
+     netAssemble to price its conductance off FIT[mode] instead of the flat
+     component length every other path uses. fold answers per INSTANCE
+     because it depends on the mode: a tee is one node (all four faces, no
+     edge, a true junction), a valve is two with the gate between them - and
+     t/b fold onto l/r so a valve plumbs vertically or horizontally with no
+     rotation knob to get wrong.
+     ports is 2 a face: a fitting is a spool piece, and two runs a face is
+     what lets one sit in-line and still be branched off. */
+  fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true}], fixed:null,
+          fold:p=>fitModeOf(p.id)==="tee" ? ["l","r","t","b"] : {t:"l", b:"r"},
+          mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none"},
 };
+// what a fitting IS, asked of the instance and never of the role - the one
+// reader for the fold above and for every branch in the draw and the solve
+const fitModeOf=id=>(D.fittings[id]&&D.fittings[id].mode)||"tee";
 
 function buildLayout(){
   const A=[], add=(id,name,w,h,x,y,col,grp,tip,role)=>{ const p={id,name,w,h,x,y,col,grp,tip,role}; A.push(p); return p; };
@@ -555,15 +664,15 @@ function buildLayout(){
     "Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival.","sg");
   add("pump0","RCP 1",1,1,8,6,"#57d38c","loop0",
     "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.","pump");
-  if(fitOf("turb")) add("turb","TURBINE",3,1,12,4,"#f0a830","sec",
+  if(checkOf("turb")) add("turb","TURBINE",3,1,12,4,"#f0a830","sec",
     "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.","turb");
-  if(fitOf("cond")) add("cond","CONDENSER",3,1,12,7,"#5aa9d6","sec",
+  if(checkOf("cond")) add("cond","CONDENSER",3,1,12,7,"#5aa9d6","sec",
     "Rejects waste heat. Bulky, and it wants to be near the hull.","cond");
   add("feed","FEED PUMP",1,1,15,5,"#5aa9d6","sec",
     "Returns water to the steam generator. Lose it and the heat sink boils dry.","pump");
   add("ctrl","CONTROL",2,1,1,8,"#cfc9b8","crew",
     "Where your crew sits. Distance and shielding from the reactor set the dose they take.","ctrl");
-  if(fitOf("cont")) add("cont","CONTAINMENT",2,1,4,8,"#8fa9ae","safety",
+  if(checkOf("cont")) add("cont","CONTAINMENT",2,1,4,8,"#8fa9ae","safety",
     "The barrier between damaged fuel and your crew. Select it for containment type and the core catcher.","cont");
   // Stage 5d: a structure, not a flag - it occupies real floor space under
   // the vessel rather than costing 66 t for nothing on the grid at all.
@@ -577,6 +686,7 @@ function buildLayout(){
      plant; four is a legal plant. A tank with no cell has no box, which is
      what a secondary tank with no node means (the hotwell). */
   for(const p of tankParts()) A.push(p);
+  for(const p of fittingParts()) A.push(p);
   add("bkp","BACKUP PWR",1,1,15,8,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.","bkp");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",1,1,2+i,7,"#6d8f98","shield",
@@ -789,16 +899,21 @@ function route(p,sa,q,sb,o){
   }
   return reg.claim(dedupe(pts));
 }
-// a point the run has to pass through, stored as an ABSOLUTE plant point (a
-// pipe has no anchor to be an offset FROM - both ends are recomputed from
-// nothing every frame). Nothing sweeps this array; an entry for a run whose
-// kind stops existing is simply left behind.
-const pipeWaypoints={};
+/* A WAYPOINT LIVES ON ITS RUN. It is an ABSOLUTE plant point (a pipe has no
+   anchor to be an offset FROM - both ends are recomputed from nothing every
+   frame), and it sits on D.run[rid].wp rather than in a module-level table
+   keyed by the run's KEY. Four things follow, and all four were broken:
+   it rides designSig(), so bending a pipe changes plen()/P.flowK and the
+   plant asks to be re-commissioned instead of operating a shape it was not
+   built with; it rides the save and the recording head for free; a part
+   moved RENAMES the key but not the rid, so a bend is no longer abandoned
+   the moment anything upstream shifts; and removeRun() takes it with it,
+   where the old table was swept by nothing at all. */
 // sorted on every read by distance from the run's start, so dragging one
 // point past another re-orders the run instead of tangling it. Objects are
 // the stored ones, not copies, so a sort never renumbers what a grip is holding.
-function pipeWayList(key,a0){
-  const w=pipeWaypoints[key];
+function pipeWayList(rid,a0){
+  const e=D.run[rid], w=e&&e.wp;
   if(!w||!w.length) return [];
   return w.slice().sort((p,q)=>Math.hypot(p.x-a0[0],p.y-a0[1])-Math.hypot(q.x-a0[0],q.y-a0[1]));
 }
@@ -808,7 +923,7 @@ function pipeWayList(key,a0){
 // end still routes out-and-back on the same lane; that's the player's
 // diagram to make ugly, the same allowance a dragged-into-a-corner part gets.
 function routeVia(c,o){
-  const a0=port(c.a,c.sa,o.ia,o.na), wps=pipeWayList(c.key,a0);
+  const a0=port(c.a,c.sa,o.ia,o.na), wps=pipeWayList(c.rid,a0);
   if(!wps.length){ const pts=route(c.a,c.sa,c.b,c.sb,o); return {pts,legs:[pts],wps}; }
   const va=c.sa==="t"||c.sa==="b", pt=p=>[p.x,p.y], legs=[];
   legs.push(route(c.a,c.sa,null,"",{reg:o.reg,ia:o.ia,na:o.na,pb:pt(wps[0]),vb:!va}));
@@ -1074,22 +1189,6 @@ function portRoom(p,usage){
   for(const f in out) out[f] = R.ports[f]!=null && (usage[p.id+f]||0)<R.ports[f]+PORT_SPARE;
   return out;
 }
-// the nearest FREE port to a plant-space point, over every part but one -
-// the "convenience, never a gate" half of CONNECT (design-bench.js): it
-// only ever picks a DEFAULT, and finding nothing here means no offer, never
-// a refusal. threshold is half a cell, the same reach a run's own tap
-// search already uses relative to CELL.
-function nearestFreePort(pt,excludeId,usage){
-  let best=null,bd=1e9;
-  for(const p of LAY.parts){
-    if(p.id===excludeId) continue;
-    const b=bestFreePortOn(p,pt,usage);
-    if(!b) continue;
-    const d=Math.hypot(b.pt[0]-pt[0],b.pt[1]-pt[1]);
-    if(d<bd){ bd=d; best=b; }
-  }
-  return best && bd<CELL*0.85 ? best : null;
-}
 // which part a plant-space point lands in, or null - the grid lookup the
 // bench's right-click resolve had written out by hand, wanted a second time
 // by the port drag's drop test
@@ -1097,32 +1196,34 @@ function partAt(pt){
   const gx=Math.floor((pt[0]-GX)/CELL), gy=rowAt(pt[1]);
   return LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h)||null;
 }
-/* THE DROP HALF of a port-to-port drag (pipePorts(), plant.js). The gesture is
-   "pull a pipe onto that machine", so the PART under the release point decides
-   and its own free face nearest the release is what the run is authored onto -
-   the hand never has to find a 9-unit handle at the far end. A part with every
-   port already taken returns nothing: an honest refusal, not a silent landing
-   on some other component the pointer was not over. Off the grid entirely, it
-   falls through to nearestFreePort(), which is what the right-click CONNECT
-   offer already asks - one question, one answer, two gestures. */
-function portDrop(pt,fromId,usage){
-  const p=partAt(pt);
-  if(p) return p.id===fromId ? null : bestFreePortOn(p,pt,usage);
-  return nearestFreePort(pt,fromId,usage);
-}
-// the free face of ONE part nearest a point - nearestFreePort()'s inner loop,
-// lifted out so the two callers cannot drift on what "free" or "nearest" mean
-function bestFreePortOn(p,pt,usage){
-  const room=portRoom(p,usage);
+/* ══ BOTH ENDS OF A RUN, OFF THE TWO BOXES THE HAND POINTED AT ══
+   The gesture is "drag from this machine to that machine", so the two
+   COMPONENTS are aimed and the two NOZZLES are not. Which face a run leaves
+   from is a ROUTE question, which D.run has said in its own comment since it
+   existed ("Face selection is ROUTE, not topology") and which the stock hpi
+   and relief runs already answer with af:null/bf:null. So: over every free
+   face of a against every free face of b, take the pair whose ports are
+   nearest each other - the shortest pipe, which is what a hand aiming at two
+   boxes means.
+   This is not the CONNECT offer coming back. That picked the nearest free
+   port to the CLICK and then the nearest free port to THAT, so the far
+   COMPONENT was a guess. Here both components are the player's.
+   null when either side is full - a cancel, never a silent landing on some
+   other machine. The resolved pair is STORED rather than null/null, because
+   face() ignores portRoom() and a stored null could not refuse honestly. */
+function bestFreePortPair(a,b,usage){
+  if(!a||!b||a.id===b.id) return null;
+  const ra=portRoom(a,usage), rb=portRoom(b,usage);
   let best=null,bd=1e9;
-  for(const f in room){
-    if(!room[f]) continue;
-    const a=port(p,f), d=Math.hypot(a[0]-pt[0],a[1]-pt[1]);
-    if(d<bd){ bd=d; best={part:p,face:f,pt:a}; }
+  for(const fa in ra){ if(!ra[fa]) continue;
+    const pa=port(a,fa);
+    for(const fb in rb){ if(!rb[fb]) continue;
+      const pb=port(b,fb), d=Math.hypot(pa[0]-pb[0],pa[1]-pb[1]);
+      if(d<bd){ bd=d; best={fa,fb,pa,pb}; }
+    }
   }
   return best;
 }
-
 /* ══════════ D.run: A CONNECTION IS AUTHORED, A ROUTE IS COMPUTED ══════════
    addRun()/removeRun() are the CONNECT/DISCONNECT half of Stage 3a, the
    same standing addFit()/removeFit() already have: a design edit, called
@@ -1162,8 +1263,35 @@ const RUN_KIND={
      KIND_TEMP hot tag - a working connection wearing no name. */
   "core|pzr":"surge", "pzr|sg":"surge", "pump|pzr":"surge",
 };
+/* ══ A FITTING IS TRANSPARENT TO NAMING ══
+   A tee spliced into the hot leg leaves two runs where there was one, and
+   both are still the hot leg - the pipe did not stop being a hot leg because
+   somebody put a junction in it. So a `fitting` end is resolved THROUGH the
+   fitting's own runs to the nearest machine that is not one, and the table
+   below then reads the pair it always read.
+   Get this wrong and the failure is QUIET: three stock runs come out
+   k:"user", loopOfKey() loses loop 0, P.netRefRun loses its scale, and what
+   you see is grey pipes that still conduct. Same move a tank already gets
+   below, for the same reason. */
+const isFitting=id=>{ const p=LAY.parts.find(q=>q.id===id); return !!p && p.role==="fitting"; };
+/* `avoid` is the OTHER end of the run being named, and leaving it out is the
+   whole of the bug this had first: asked what is on the far side of a tee
+   spliced into the hot leg, the walk went straight back down the run it was
+   naming and answered "the core", so core|core matched no row and the run
+   stayed grey. */
+function throughFitting(id,avoid,seen){
+  const p=LAY.parts.find(q=>q.id===id);
+  if(!p || p.role!=="fitting") return p||null;
+  seen=seen||{}; if(seen[id]) return null; seen[id]=1;
+  for(const rid in D.run){ const e=D.run[rid];
+    if(e.tap) continue;
+    const o = e.a===id ? e.b : e.b===id ? e.a : null;
+    if(o==null || o===avoid) continue;
+    const q=throughFitting(o,avoid,seen); if(q) return q; }
+  return null;
+}
 function runKindFor(aId,bId,af,bf){
-  const A=LAY.parts.find(q=>q.id===aId), B=LAY.parts.find(q=>q.id===bId);
+  const A=throughFitting(aId,bId), B=throughFitting(bId,aId);
   if(!A||!B) return "user";
   /* A PUMP IS A PUMP; WHICH SIDE OF A GENERATOR IT LANDS ON NAMES THE PIPE.
      There is no feedwater-pump role left to key the table on, so "pump|sg"
@@ -1189,11 +1317,44 @@ function runKindFor(aId,bId,af,bf){
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
 }
-let runSeq=0;
-// `k` is the run's KIND; left out, the ends decide it (runKindFor, above).
-function addRun(aId,af,bId,bf,bore=1,k){
-  const rid="usr"+(runSeq++);
-  D.run[rid]={a:aId,af,b:bId,bf,k:k||runKindFor(aId,bId,af,bf),bore};
+/* LOWEST FREE SLOT, not a module counter. runSeq was a counter living
+   outside D, so recApplyHead() could not restore it: apply a head holding
+   usr7 into a process whose counter was 3 and the next four mints land on
+   top of runs the head just put back. Asked of D.run itself there is no
+   counter to sync and the head is complete by construction - the same
+   argument that deleted p.loop. */
+function freeRid(){ let n=0; while(D.run["usr"+n]) n++; return "usr"+n; }
+/* `k` is the run's KIND; left out, the ends decide it (runKindFor, above).
+   THE RUN IS INSERTED BEFORE IT IS NAMED. runKindFor() asks nodeGraph()
+   which side a tank is on, and a tank's side is read off the runs that
+   reach it - so a run named before it existed asks about a plant that does
+   not have it yet. Every line the player draws to an unplumbed tank came
+   out "feed": the first pipe from an injection tank to the core, which is
+   the one gesture that makes it an injection tank at all. */
+/* EITHER END FIRST, ONE RUN. The gesture is "drag from this box to that
+   box" and the hand may start at either end, so the two ends are sorted
+   here - by part id, then by face - and the entry is CANONICAL from the
+   moment it is minted. Normalising the ENTRY rather than just the key is
+   what makes the two drags produce the same run and not merely the same
+   name: route() is handed (a,sa) and (b,sb) in that order, and the lane
+   registrar takes them in that order too. Measured: sorting the stock
+   plant's ends moves pipe, mass, flowK, inertiaK and dose by exactly
+   nothing, and renames four keys. */
+function addRun(aId,af,bId,bf,k){
+  const rid=freeRid();
+  if(bId<aId || (bId===aId && bf<af)){
+    const tI=aId, tF=af; aId=bId; af=bf; bId=tI; bf=tF; }
+  D.run[rid]={a:aId,af,b:bId,bf,k:k||"user"};
+  if(!k) D.run[rid].k=runKindFor(aId,bId,af,bf);
+  /* AND EVERY UNNAMED RUN THROUGH A FITTING IS ASKED AGAIN. The first of the
+     pair that splices a tee into a line is drawn into a dead end - the tee
+     has nothing on its other side yet - so it can only come out "user". The
+     second run is what makes both of them nameable, and this is the moment
+     that happens. */
+  for(const r2 in D.run){ const e2=D.run[r2];
+    if(r2===rid || e2.k!=="user" || e2.tap) continue;
+    if(!isFitting(e2.a) && !isFitting(e2.b)) continue;
+    e2.k=runKindFor(e2.a,e2.b,e2.af,e2.bf); }
   return rid;
 }
 function removeRun(rid){ delete D.run[rid]; }
@@ -1205,9 +1366,9 @@ function removeRun(rid){ delete D.run[rid]; }
    carries it: the run it names may be deleted and drawn again, and WHICH run
    of that kind it lands on is a routing decision (pipeNetwork()), not a
    design one. */
-function addTapRun(aId,af,tapRid,tapK,k,bore=1){
-  const rid="usr"+(runSeq++);
-  D.run[rid]={a:aId,af,tap:tapRid,tapK,k,bore};
+function addTapRun(aId,af,tapRid,tapK,k){
+  const rid=freeRid();
+  D.run[rid]={a:aId,af,tap:tapRid,tapK,k};
   return rid;
 }
 /* THE PART THAT FIXES THE LOOP'S PRESSURE, or null - the same ROLE question
@@ -1375,7 +1536,9 @@ function moveTo(p,nx,ny){
      land back there or the move is undone by the next unrelated rebuild.
      moveTo() is the ONLY way a part changes position, so this is the one
      place that has to know it. */
-  for(const {q,x,y} of cells){ q.x=x; q.y=y; if(D.tanks[q.id]) D.tanks[q.id].cell=[x,y]; }
+  for(const {q,x,y} of cells){ q.x=x; q.y=y;
+    if(D.tanks[q.id])    D.tanks[q.id].cell=[x,y];
+    if(D.fittings[q.id]) D.fittings[q.id].cell=[x,y]; }
   return true;
 }
 // every cell a party could stand in beside p and still be working ON p - not

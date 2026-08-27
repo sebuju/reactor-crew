@@ -387,6 +387,21 @@ const TANK_DEFAULT = {
   vol:40, level:100, fluid:"water",
   gas:{p0:4.5, frac:0.35}, pump:null, check:true, auto:"manual", burst:null,
 };
+/* ══ ONE FITTING. No kinds, no presets, no special cases ══
+   A tee, a branch throttle and a relief valve are one component with `mode`
+   set differently - the identical contract TANK_DEFAULT above states for
+   tanks. Every field is the player's; `cell` is written back by moveTo() and
+   `mode` is what decides whether the thing has an edge at all.
+   lift/reseat are carried unconditionally rather than behind a mode check: a
+   fitting that is never "relief" simply holds two unread nulls, which is
+   cheaper than a second branch in the one function every fitting is built
+   through. null means "this plant's default" - reliefSet() (step.js) is the
+   one place that answers what that is. */
+const FIT_DEFAULT = {
+  name:"VALVE", col:"#c8b060", cell:null, mode:"throttle", bore:0.55,
+  lift:null, reseat:null,
+  tip:"A fitting in the pipe. Say what it is on its own panel - a tee that joins two lines, a throttle you can close, or a relief valve that lifts on pressure.",
+};
 const tankIds   = () => Object.keys(D.tanks);
 const secTankIds= () => tankIds().filter(id=>tankSide(id)==="secondary");
 /* A tank with no cell has no box on the grid and no node - which is what a
@@ -634,17 +649,28 @@ const pipeExtraLen = (s, key) =>
    resist() everywhere else, or a severed relief branch would go on venting
    at its full BREAK_K rate - a length this mode is otherwise right to
    ignore is still the ONE way that pipe gets to say "there is no pipe". */
+/* ══ WHAT A FITTING'S OWN PATH CONDUCTS ══
+   One row per MODE, and the mode is a knob on the instance. `tee` has no row
+   because a tee has no edge at all: its four faces are one node (ROLE.fold),
+   which is what a junction IS.
+   The gated cross-tie that used to be `tee` is `throttle` now, and that merge
+   is VERIFIED, not asserted: the old FIT.tee.g was resist(bore,len) open and
+   0 shut, and valveLeq() is `x => x>=1 ? 0 : ...`, so a throttle at 1 is
+   bit-identical to an open tee and at 0 to a shut one. Only the CONTROL ever
+   differed - a two-position switch against a slider - and that is a panel
+   question, not a solve one. */
 const FIT = {
+  /* STILL HERE, and only for the OLD tap-shaped fitting (D.fit) that has not
+     been removed yet. A tee COMPONENT never reaches this row: its four faces
+     fold onto one node, so its internal path is a self-loop and netBuild()
+     skips it before FIT is consulted. This row goes with D.fit. */
   tee:{
-    branch:true,
     g:(s,id,bore,len)=>(s.juncOpen && s.juncOpen[id]) ? resist(bore,len) : 0,
   },
   throttle:{
-    branch:"optional",
     g:(s,id,bore,len)=>throttled(s,bore,len,[id]),
   },
   relief:{
-    branch:true,
     g:(s,id,bore,len)=>(s.reliefOpen && s.reliefOpen[id] && !(s.reliefBlocked && s.reliefBlocked[id]) && isFinite(len))
       ? BREAK_K*bore*bore : 0,
   },
@@ -713,12 +739,19 @@ function runEnds(key, kind){
 // edge and the set of folding parts never changes mid-frame.
 let foldCache=null, foldCacheSig="";
 function foldMap(){
-  const sig=laySig();
+  // fittingSig() as well as laySig(): a fitting's fold depends on its MODE,
+  // and a mode change moves no part, so an arrangement-only key would hand
+  // back a tee's single node for a valve that now has two.
+  const sig=laySig()+fittingSig();
   if(foldCache && foldCacheSig===sig) return foldCache;
   const m={};
   for(const p of LAY.parts){
-    const R=ROLE[p.role];
-    if(R && R.fold) for(const face of R.fold) m[p.id+face]=p.id;
+    const f=foldFacesOf(p); if(!f) continue;
+    // a LIST folds every face onto one node; a MAP folds each named face
+    // onto another face of the same part, which is what gives a valve two
+    // sides with its gate in between
+    if(Array.isArray(f)) for(const face of f) m[p.id+face]=p.id;
+    else for(const face in f) m[p.id+face]=p.id+f[face];
   }
   foldCache=m; foldCacheSig=sig;
   return m;
@@ -1125,8 +1158,27 @@ function netBuild(){
        and it is built elsewhere, deliberately). One row still writes one
        path, so the common case is unchanged. */
     for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+    /* A TEE HAS NO EDGE. Its faces are one node (ROLE.fitting.fold), so this
+       path's two ends resolve to the SAME index - a self-loop, which is not
+       a resistance and must not be assembled as one. A junction that cost
+       something would not be a junction. */
+    if(nodeIdx(p.id+IN.a) === nodeIdx(p.id+IN.b)) continue;
     const edge = {u: nodeIdx(p.id+IN.a), v: nodeIdx(p.id+IN.b),
                   g: resist(1,NET_COMP_LEN), h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b};
+    /* ── THE GATED PATH: A FITTING IS ITS OWN VALVE ──
+       Every other component's internal path is a flat length of steel; a
+       fitting's is whatever FIT[mode] says it is, priced off its own bore.
+       This is the whole of what used to need ~150 lines of edge-splitting:
+       a fitting was a FRACTION along a run, so the run had to be cut in two
+       and a node invented in the middle of it. A fitting is a node now,
+       because it is a box, so the general loop above already built it. */
+    if(IN.gate){
+      const row = FIT[fitModeOf(p.id)];
+      if(!row) continue;                       // a mode with no edge (tee) - already skipped above
+      const bore = D.fittings[p.id].bore;
+      edge.g = s => row.g(s, p.id, bore, NET_COMP_LEN);
+      edge.fit = p.id;
+    }
     /* ── THE FEED REGULATING VALVE ──
        One pump and one header cannot hold two generators at level on their
        own: what each takes is set by its own secP() against a shared
@@ -2245,22 +2297,159 @@ function runWgt(cells){
   return w;
 }
 
-/* THE STOCK RELIEF PATH. Seeded once, at load, the same way every other
-   as-commissioned default lives in D itself (design.js) rather than behind
-   a menu action nobody has to run - a fresh design already has a relief
-   valve venting to the tank below the pressurizer, and deleting it is the
-   player's own choice.
-   aT=0.9 is not arbitrary: it is the shortest tap the stock hot leg offers
-   onto the tank at (7,0) (buildLayout()) - measured by sweeping every tenth
-   of the run headless, so the stock branch pipe costs as little of the
-   inertia/mass this stage was written to charge for as the geometry allows,
-   never more than the fitting itself is worth. bKey taps the RELIEF HEADER
-   (pipeNetwork(), layout.js) at the key it resolves to for the stock
-   layout - the tank is a placed part now (Stage 5a), on the grid from load,
-   so there is no bootstrap gap left to paper over. It is still only a
-   STARTING value, not the address: every reader goes through fitBKey()
-   (layout.js) and gets whatever faces the header actually has this frame,
-   so moving the tank or the pressurizer re-resolves it live rather than
-   leaving this literal to go stale unnoticed. */
-addFit('relief','hot:corer-sg0l',0.9,'relief:pzrr-reltkl',0.5,PIPE_BORE.relief);
+/* ══════════════ THE REFERENCE PLANT, BUILT BY GESTURE ══════════════
+   The stock plumbing used to be a hand-written literal in D (design.js) plus
+   one load-time addFit() below it plus a third copy in tools/loopgen.js -
+   three descriptions of one plant, free to drift from each other and from
+   what the bench's own gestures actually produce. This is the one builder
+   all three collapsed into: every line here goes through an authoring call
+   a player has, so "the bench can rebuild the reference plant, gesture for
+   gesture" stops being a claim an auditor checks case by case and becomes
+   the way the plant is made.
 
+   It lives in pipenet.js rather than layout.js because it needs TANK_DEFAULT
+   and PIPE_BORE, and pipenet.js loads after layout.js (index.html) - which
+   is already why the relief seed lived here.
+
+   IDEMPOTENT: it clears D.run/D.tanks/D.fit first, so calling it twice gives
+   one plant and not two, and an auditor building an n-loop plant calls the
+   same thing a RESET DESIGN button would.
+
+   KINDS ARE NOT PASSED. runKindFor() (layout.js) already names every stock
+   run off the pair of ROLES. If a kind ever needs an explicit argument here,
+   that is a missing RUN_KIND row and the row is the fix. Only the surge line
+   names its own, because a TAP run has no second part for the table to read. */
+function buildStockPlumbing(opt){
+  const loops = (opt && opt.loops) || 1;
+  for(const rid in D.run)   delete D.run[rid];
+  for(const id  in D.tanks) delete D.tanks[id];
+  for(const id  in D.fit)   delete D.fit[id];
+  /* Loops 1..3's generators and pumps are PLACED parts, so they survive a
+     rebuild of D and have to be torn down by hand - the same sweep
+     makeLoops() did, for the same reason. Loop 0's sg0/pump0 are fixed slots
+     buildLayout() places unconditionally and are never touched. */
+  const placed = id => LAY && LAY.parts.some(p => p.id === id);
+  for(let i=1;i<=3;i++){
+    if(placed("sg"+i))   removePart("sg"+i);
+    if(placed("pump"+i)) removePart("pump"+i);
+  }
+
+  /* ══ THE TANKS ══
+     A STARTING DESIGN, exactly like the default rod count - not code. Every
+     field is the player's (see the tank contract above); nothing anywhere
+     may ask which one of these is "the HPI tank", because there is no such
+     thing. There is a tank at (3,1), full of water, behind a check valve,
+     with a pump. Each starts from TANK_DEFAULT through mintTank() and is
+     then set the way its own bench panel would set it. */
+  const tank = (id,x,y,cfg) => { mintTank(id,x,y); Object.assign(D.tanks[id],cfg); };
+
+  tank("hpi",3,1,{ name:"HPI TANK", col:"#5aa9d6",
+    tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
+    vol:65, level:100, fluid:"water",
+    /* Pumped, and no nitrogen charge behind it - so it is worth exactly
+       nothing in a blackout. Give it a `gas` and drop the pump and it is a
+       passive accumulator, which is the one injection path a blackout does
+       not kill. That choice is a knob on THIS tank, not a global flag about
+       a named one. */
+    gas:null, pump:{p:11.0, bus:"bkp"}, check:true, auto:"manual", burst:null});
+
+  tank("reltk",7,0,{ name:"RELIEF TANK", col:"#8a6cd0",
+    tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
+    vol:40, level:0, fluid:"contaminated",
+    /* At rest the gas sits at containment pressure, which is what makes an
+       empty tank cost the relief path exactly nothing. frac is 25/23 because
+       the law this replaces compressed at 0.92 per unit level, and
+       1/0.92 = 25/23. */
+    gas:{p0:0.15, frac:25/23}, pump:null, check:false, auto:"always",
+    burst:{at:1.4, drain:6.0, rel:0.004}});
+
+  tank("efw",9,1,{ name:"EFW TANK", col:"#5aa9d6",
+    tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
+    vol:35, level:100, fluid:"condensate",
+    /* Its own pump, on the backup bus, at a real discharge pressure. It had
+       NEITHER a gas charge nor a pump until feedwater was solved, which cost
+       nothing while the reserve was an algebraic term - and delivered
+       exactly nothing the moment its line became a real edge against a
+       generator's own secP(). 8.0 MPa clears a generator's shell at any
+       level it can be needed at; what keeps it shut on a healthy plant is
+       its AUTORULE, not its pressure, because "starts on LOW GENERATOR
+       LEVEL, not on being armed" is a rule and not a coincidence of numbers.
+       Give it a `gas` and drop the pump and it becomes the one feedwater
+       path a blackout with no backup supply does not kill - a knob on THIS
+       tank, the same trade the injection tank offers. */
+    gas:null, pump:{p:8.0, bus:"bkp"}, check:false, auto:"sglow", burst:null});
+
+  /* No cell: a SECONDARY tank has no node, so it needs none, and the hotwell
+     lives inside the condenser it condenses into. Giving it a box would be
+     inventing hydraulics the secondary does not have. */
+  tank("hotwell",null,null,{ name:"HOTWELL", col:"#5aa9d6",
+    tip:"Condensate returning from the condenser, and what the feed pumps draw on. A tube rupture puts primary water in here and it has to go somewhere.",
+    /* Half again what the generators themselves hold. It has to be able to
+       take a generator's WHOLE charge back plus what an emergency reserve
+       pushes through it, or the answer to losing feedwater is to overflow
+       the condensate over the side - measured: at exactly one charge it hit
+       100 % and spilled, and emergency feed came out NET NEGATIVE. */
+    vol:150, level:50, fluid:"condensate",
+    gas:null, pump:null, check:false, auto:"always", burst:null});
+
+  /* ══ THE RUNS ══
+     Order matters, and it is the order a hand would draw them in: port()
+     spreads N pipes along a face into N slots in the order D.run carries
+     them, so re-ordering this list re-routes the plant. */
+  const hot0 = addRun("core","r","sg0","l");
+  addRun("sg0","b","pump0","t");
+  addRun("pump0","b","core","b");
+  addRun("sg0","t","turb","t");
+  addRun("feed","t","sg0","r");
+  /* The surge line: the one run that lands on ANOTHER RUN rather than on a
+     port. tapK ("hot") rather than the rid alone so it survives the run it
+     names being deleted and redrawn - WHICH hot leg it lands on is a routing
+     decision, not a design one. */
+  addTapRun("pzr","b",hot0,"hot","surge");
+  addRun("turb","b","cond","t");
+  addRun("cond","r","feed","b");
+  addRun("hpi",null,"core","b");
+  addRun("pzr",null,"reltk",null);
+  /* The EFW tank's own line, onto the generator's SECONDARY face. It used to
+     land on "b" - the same node the cold leg lands on - so a fixed node
+     behind it would have injected into the primary. That collision is gone;
+     what keeps this a pendant leaf now is only the side contract, and KCL
+     still forces exactly zero current through it until that contract
+     changes. */
+  addRun("efw",null,"sg0","r");
+
+  /* ══ LOOPS 1..3 ══
+     Exactly what ADD STEAM GENERATOR HERE plus a pipe drag builds: a placed
+     generator, a placed pump, and five ordinary runs. */
+  for(let i=1;i<loops;i++){
+    placePart(() => ({id:"sg"+i, name:"STEAM GEN "+(i+1), w:1, h:2, x:8+i*2, y:1,
+      col:"#5fd2e2", grp:"loop"+i, tip:"", role:"sg"}));
+    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:1, h:1, x:8+i*2, y:6,
+      col:"#57d38c", grp:"loop"+i, tip:"", role:"pump"}));
+    addRun("core","r","sg"+i,"l");
+    addRun("sg"+i,"b","pump"+i,"t");
+    addRun("pump"+i,"b","core","b");
+    addRun("sg"+i,"t","turb","t");
+    // "r", not "b": the generator's secondary feed face, mirroring loop 0.
+    // Left on "b" this lands feedwater on the PRIMARY cold-leg node.
+    addRun("feed","t","sg"+i,"r");
+  }
+
+  /* ══ THE STOCK RELIEF PATH ══
+     A fresh design already has a relief valve venting to the tank below the
+     pressurizer, and deleting it is the player's own choice.
+     aT=0.9 is not arbitrary: it is the shortest tap the stock hot leg offers
+     onto the tank at (7,0) - measured by sweeping every tenth of the run
+     headless, so the stock branch pipe costs as little of the inertia/mass
+     this charges for as the geometry allows, never more than the fitting
+     itself is worth. bKey taps the RELIEF HEADER at the key it resolves to
+     for the stock layout. It is a STARTING value, not the address: every
+     reader goes through fitBKey() (layout.js) and gets whatever faces the
+     header actually has this frame, so moving the tank or the pressurizer
+     re-resolves it live rather than leaving this literal to go stale
+     unnoticed. */
+  addFit('relief','hot:corer-sg0l',0.9,'relief:pzrr-reltkl',0.5,PIPE_BORE.relief);
+
+  buildLayout();
+}
+buildStockPlumbing();

@@ -153,9 +153,9 @@ const RODX0=.35;
    than on a port of its own - surge is the one run authored this way today,
    because "drop onto whatever hot leg passes underneath" is a ROUTE
    decision (a directional search, unchanged in pipeNetwork()), not a
-   topology one; what changed is that WHICH run it searches against is now
-   named here (`hot0`) instead of "the first hot leg pipeNetwork() happens
-   to build".
+   topology one; what changed is that WHICH run it searches against is
+   named by the tap itself (the rid addRun() minted for it) instead of
+   "the first hot leg pipeNetwork() happens to build".
 
    Authored for the ONE generator the stock plant ships with - "sg0"/"pump0",
    the fixed slot buildLayout() (layout.js) still places unconditionally, the
@@ -183,85 +183,14 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
             carries it to P and resetPlant() to S, like every other tune. */
          arLo:0.20, arHi:0.50,
          cont:1,contFit:true,catcher:false,bkp:1,
-         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{},
-         /* ══ THE STOCK PLANT'S TANKS ══
-            A STARTING DESIGN, exactly like the default rod count - not code.
-            Every field is the player's (see the tank contract in pipenet.js);
-            nothing anywhere may ask which one of these is "the HPI tank",
-            because there is no such thing. There is a tank at (3,1), full of
-            water, behind a check valve, with a pump. */
-         tanks:{
-           hpi:  {name:"HPI TANK", col:"#5aa9d6", cell:[3,1],
-                  tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
-                  vol:65, level:100, fluid:"water",
-                  /* Pumped, and no nitrogen charge behind it - so it is worth
-                     exactly nothing in a blackout. Give it a `gas` and drop
-                     the pump and it is a passive accumulator, which is the
-                     one injection path a blackout does not kill. That choice
-                     is a knob on THIS tank now, not a global flag about a
-                     named one. */
-                  gas:null, pump:{p:11.0, bus:"bkp"}, check:true, auto:"manual", burst:null},
-           reltk:{name:"RELIEF TANK", col:"#8a6cd0", cell:[7,0],
-                  tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
-                  vol:40, level:0, fluid:"contaminated",
-                  /* At rest the gas sits at containment pressure, which is
-                     what makes an empty tank cost the relief path exactly
-                     nothing. frac is 25/23 because the law this replaces
-                     compressed at 0.92 per unit level, and 1/0.92 = 25/23. */
-                  gas:{p0:0.15, frac:25/23}, pump:null, check:false, auto:"always",
-                  burst:{at:1.4, drain:6.0, rel:0.004}},
-           efw:  {name:"EFW TANK", col:"#5aa9d6", cell:[9,1],
-                  tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
-                  vol:35, level:100, fluid:"condensate",
-                  /* Its own pump, on the backup bus, at a real discharge
-                     pressure. It had NEITHER a gas charge nor a pump until
-                     feedwater was solved, which cost nothing while the reserve
-                     was an algebraic term - and delivered exactly nothing the
-                     moment its line became a real edge against a generator's
-                     own secP(). 8.0 MPa clears a generator's shell at any
-                     level it can be needed at; what keeps it shut on a healthy
-                     plant is its AUTORULE, not its pressure, because "starts
-                     on LOW GENERATOR LEVEL, not on being armed" is a rule and
-                     not a coincidence of numbers. Give it a `gas` and drop the
-                     pump and it becomes the one feedwater path a blackout with
-                     no backup supply does not kill - a knob on THIS tank, the
-                     same trade the injection tank offers. */
-                  gas:null, pump:{p:8.0, bus:"bkp"}, check:false, auto:"sglow", burst:null},
-           /* No cell: a SECONDARY tank has no node, so it needs none, and the
-              hotwell lives inside the condenser it condenses into. Giving it
-              a box would be inventing hydraulics the secondary does not have. */
-           hotwell:{name:"HOTWELL", col:"#5aa9d6", cell:null,
-                  tip:"Condensate returning from the condenser, and what the feed pumps draw on. A tube rupture puts primary water in here and it has to go somewhere.",
-                  /* Half again what the generators themselves hold. It has to
-                     be able to take a generator's WHOLE charge back plus what
-                     an emergency reserve pushes through it, or the answer to
-                     losing feedwater is to overflow the condensate over the
-                     side - measured: at exactly one charge it hit 100 % and
-                     spilled, and emergency feed came out NET NEGATIVE. */
-                  vol:150, level:50, fluid:"condensate",
-                  gas:null, pump:null, check:false, auto:"always", burst:null},
-         },
-         run:{
-           hot0  :{a:"core",af:"r",b:"sg0",bf:"l",k:"hot",  bore:1},
-           coldA0:{a:"sg0", af:"b",b:"pump0",bf:"t",k:"cold", bore:1},
-           coldB0:{a:"pump0",af:"b",b:"core",bf:"b",k:"cold", bore:1},
-           steam0:{a:"sg0", af:"t",b:"turb",bf:"t",k:"steam",bore:1},
-           feedD0:{a:"feed",af:"t", b:"sg0",bf:"r",k:"feed",bore:1},
-           /* tapK: what this tap is ABOUT, so it survives the run it names being
-              deleted and redrawn - see pipeNetwork() (layout.js). */
-           surge :{a:"pzr", af:"b",tap:"hot0",tapK:"hot", k:"surge", bore:.30},
-           exh   :{a:"turb",af:"b",b:"cond",bf:"t",k:"exh",  bore:1},
-           feedS :{a:"cond",af:"r",b:"feed",bf:"b",  k:"feed", bore:1},
-           hpi   :{a:"hpi", af:null,b:"core",bf:"b",k:"hpi",  bore:.25},
-           relief:{a:"pzr", af:null,b:"reltk",bf:null,k:"relief",bore:.20},
-           /* The EFW tank's own line, onto the generator's SECONDARY face.
-              It used to land on "b" - the same node the cold leg lands on -
-              so a fixed node behind it would have injected into the primary.
-              That collision is gone; what keeps this a pendant leaf now is
-              only the side contract (see pipenet.js), and KCL still forces
-              exactly zero current through it until that contract changes. */
-           efwF  :{a:"efw",af:null,b:"sg0",bf:"r",k:"feed",bore:.5},
-         }};
+         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fit:{},fittings:{},
+         /* NO STOCK PLUMBING DECLARED HERE. The tanks, the runs and the
+            relief fitting are BUILT - buildStockPlumbing() (pipenet.js)
+            lays them through the same addTank()/addRun()/addTapRun()/
+            addFit() calls the bench hands the player, so the reference
+            plant IS the gestures. Two literals describing one plant is
+            how the declared shape and the authored shape drift apart. */
+         tanks:{}, run:{}};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
