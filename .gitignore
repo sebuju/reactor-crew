@@ -16,3 +16,6 @@ saves/
 
 # Design notes and handovers - written for people, not shipped with the game
 docs/
+
+# Visual scratch - HTML sketches, generated PNGs and the scripts that make them
+mockups/
