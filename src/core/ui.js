@@ -430,12 +430,20 @@ function uiDown(e){
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
     const q=ptIn(w,p); if(!inside(w,q)) continue;
     if(w.host!==ui.ptrHost) continue;
+    /* ONE GESTURE, AND THE DROP DECIDES WHAT IT WAS. Press anywhere on a
+       box and drag: let go over another component and you have laid a pipe,
+       let go over free deck and you have moved the part. No mode, no
+       modifier (dead on touch), no press-and-hold (invisible), no 8-unit
+       edge band (~1.9 screen pixels at fit zoom). It is unambiguous because
+       dropping a part ON another part is already illegal - groupFits()
+       refuses it - so the new rule spends a gesture that did nothing. */
     if(w.type==="part"){ sel=w.part.id;
       // a commissioned plant is welded down: selectable, not movable; a
       // pinned part rides its parent, so it's selectable but never draggable
       if(screen==="design" && !w.part.pin) ui.drag={type:"part",part:w.part,
         ox:q.x-(GX+w.part.x*CELL), oy:q.y-rowTop(w.part.y),
-        sx:w.part.x, sy:w.part.y, v:w.v}; }
+        sx:w.part.x, sy:w.part.y, mode:"move", gx:w.part.x, gy:w.part.y,
+        over:null, pair:null, v:w.v}; }
     else if(w.type==="sld"){ ui.drag=w;
       const onThumb=Math.abs(q.x-w.tx)<=w.tw_/2+3;
       w.gv = onThumb ? w.val : valFrom(w,q.x);    // gv is the running command value
@@ -446,20 +454,15 @@ function uiDown(e){
     // is re-sorted by distance on every read, so an index would renumber
     // under the hand
     else if(w.type==="pipewp"){
-      const L=pipeWaypoints[w.key]||(pipeWaypoints[w.key]=[]);
+      const e0=D.run[w.rid]; if(!e0) return;
+      const L=e0.wp||(e0.wp=[]);
       let pt=w.pt;
       if(pt){
         if(e.dbl){ L.splice(L.indexOf(pt),1);
-          if(!L.length) delete pipeWaypoints[w.key];
+          if(!L.length) delete e0.wp;
           return; }
       } else { pt={x:w.x+w.w/2,y:w.y+w.h/2}; L.push(pt); }
       ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
-    /* A PIPE IS PULLED OUT OF A PORT. The drag holds the part and the FACE,
-       never the port's pixel: a part dragged about while... it cannot be, but
-       the route under it can change, and port() spreads its nozzles by how many
-       runs land on the face, so the point moves the moment this drag creates
-       one. Resolved in uiUp() - see portDrop() (layout.js). */
-    else if(w.type==="port"){ ui.drag={type:"port",part:w.part,face:w.face,v:w.v}; }
     /* A TEE IS PULLED OUT OF A PIPE, exactly as a run is pulled out of a port.
        It used to be a menu row per OTHER LOOP with the far end picked by
        proximity - so a one-loop plant was offered no tee at all, and the far
@@ -479,12 +482,21 @@ function uiMove(e){
   const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
   if(e.pointerType==="mouse") isTouch=false;
   if(ui.drag){ const d=ui.drag, q=d.v?vPt(p):p;
+    /* NOTHING IS COMMITTED UNTIL THE RELEASE. moveTo() used to be called on
+       every pointermove, which re-measured layoutMetrics() at pointer rate
+       and - now that the same drag can end as a pipe - would have walked the
+       part across the board on the way to the machine you were aiming at. */
     if(d.type==="part"){
-      const nx=Math.round((q.x-d.ox-GX)/CELL);
-      // rowAt() is rowTop()'s inverse; half a cell of lead rounds to the
-      // nearest row rather than the one merely touched
-      const ny=rowAt(q.y-d.oy+CELL/2);
-      if(nx!==d.part.x||ny!==d.part.y) moveTo(d.part,nx,ny); }
+      const over=partAt([q.x,q.y]);
+      if(over && over.id!==d.part.id){
+        d.mode="pipe"; d.over=over; d.pair=bestFreePortPair(d.part,over);
+      } else {
+        d.mode="move"; d.over=null; d.pair=null;
+        d.gx=Math.round((q.x-d.ox-GX)/CELL);
+        // rowAt() is rowTop()'s inverse; half a cell of lead rounds to the
+        // nearest row rather than the one merely touched
+        d.gy=rowAt(q.y-d.oy+CELL/2);
+      } }
     // snapped to the 8-unit gutter the rest of the plant is measured in, so
     // two waypoints placed by hand on one line land on one line
     else if(d.type==="pipewp"){
@@ -510,7 +522,7 @@ function uiMove(e){
       // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
   }
-  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="port"||ui.drag.type==="tap") ? "grabbing"
+  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||(ui.drag.type==="part"&&ui.drag.mode==="pipe")) ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 }
 function uiUp(e){
@@ -525,30 +537,17 @@ function uiUp(e){
   // right button held and released without dragging the plant is a click,
   // which on the design bench opens the ADD/REMOVE menu
   if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
-  /* THE ONE PLACE A PORT DRAG BECOMES A CONNECTION. addRun() is the same design
-     edit the right-click CONNECT offer calls, with the same standing: a D edit,
-     not an act() - see addRun()'s own comment (layout.js). Dropping on nothing
-     is not an error, it is a cancel, so there is no refusal to report. */
-  if(d&&d.type==="port"){
-    const p=uiPt(e.currentTarget||cv,e), q=vIn(p)?vPt(p):null;
-    const to = q && portDrop([q.x,q.y],d.part.id);
-    if(to) addRun(d.part.id,d.face,to.part.id,to.face);
-    /* DROPPED ON A PIPE INSTEAD OF A MACHINE: that is a TAP run, the shape
-       the stock surge line has. Same gesture, and the difference is what you
-       let go over - which is the only honest way to author one, because the
-       alternative was a menu row that put the pressurizer's line on whatever
-       run of the right kind it found first and let the router choose where
-       along it to land. Nothing is inferred here: the part and face come from
-       where the drag started, the run from where it ended. */
-    else if(q){ const far=nearestRunTo([q.x,q.y],null);
-      const host=far&&far.rid ? D.run[far.rid] : null;
-      /* Named off the two PARTS, exactly as a port-to-port run is: the part
-         that was dragged, and the part the tapped run leaves from. A
-         pressurizer dropped on a hot leg is "core|pzr", which is a surge
-         line. Bore follows the kind, the same table runBore() prices it from. */
-      if(host){ const k=runKindFor(d.part.id,host.a);
-        addTapRun(d.part.id,d.face,far.rid,host.k,k,
-                  PIPE_BORE[k]!==undefined?PIPE_BORE[k]:1); } }
+  /* WHERE THE ONE GESTURE COMMITS. Released over another component it is a
+     RUN; released over free deck it is a MOVE, and moveTo() is still the only
+     way a part changes position - it is just called once, here, instead of at
+     pointer rate. addRun() is a D edit and not an act(), the same standing it
+     has always had (see addRun(), layout.js). A drop that resolves to nothing
+     - a machine with every port taken, a cell the part does not fit - is a
+     cancel, not an error, so there is no refusal to report. */
+  if(d&&d.type==="part"){
+    if(d.mode==="pipe" && d.over && d.pair)
+      addRun(d.part.id,d.pair.fa,d.over.id,d.pair.fb);
+    else if(d.mode==="move" && (d.gx!==d.sx||d.gy!==d.sy)) moveTo(d.part,d.gx,d.gy);
   }
   /* THE SAME RESOLUTION, one step down: a tap dropped on another run gives a
      fitting BOTH its ends, and the menu that opens on the drop asks only

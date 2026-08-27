@@ -376,7 +376,6 @@ function recHead(){
        NOT here: they live in D.tanks, which the D line above already carries
        whole, which is the point of a tank being one object rather than two. */
     placed   : snapVal(placedParts),
-    fit      : snapVal(D.fit),
     dsig     : designSig(),
     seed     : S ? S.seed : 0,
   });

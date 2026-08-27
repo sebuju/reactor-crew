@@ -854,8 +854,8 @@ function legGrip(pts){
   }
   return {x:best[0],y:best[1]};
 }
-function pipeGrip(x,y,key,pt){
-  const wd=push({x:x-WPG/2,y:y-WPG/2,w:WPG,h:WPG,type:"pipewp",key,pt});
+function pipeGrip(x,y,rid,pt){
+  const wd=push({x:x-WPG/2,y:y-WPG/2,w:WPG,h:WPG,type:"pipewp",rid,pt});
   const hv=hov(wd);
   // placed waypoint is amber (yours); automatic corner is the rail tone the
   // pipe casing already sits in, so the drawing isn't peppered with marks
@@ -868,79 +868,41 @@ function pipeGrip(x,y,key,pt){
 function pipeGrips(runs){
   for(const r of runs){
     if(r.wp===false) continue;   // surge/xtie: not steerable, on purpose - see layout.js
-    for(const p of r.wps) pipeGrip(p.x,p.y,r.key,p);
-    for(const leg of r.legs){ const g=legGrip(leg); if(g) pipeGrip(g.x,g.y,r.key,null); }
+    for(const p of r.wps) pipeGrip(p.x,p.y,r.rid,p);
+    for(const leg of r.legs){ const g=legGrip(leg); if(g) pipeGrip(g.x,g.y,r.rid,null); }
   }
 }
-/* ══ EVERY FREE PORT IS A HANDLE YOU CAN PULL A PIPE OUT OF ══
-   Bench only, exactly like pipeGrips(): where a pipe runs is a bench question,
-   and so is whether it exists at all. One handle per FREE face per part, off
-   portRoom() - the same predicate the right-click CONNECT offer already asks -
-   so a component with room always shows somewhere to start a run, and one whose
-   ports are all taken shows none rather than advertising a connection that
-   would be refused. It costs no extra route: drawPlant() hands in the usage the
-   frame already computed.
-
-   Pushed AFTER pipeGrips() because the hit test takes the last widget pushed: a
-   pipe corner lying under a nozzle can still be found by moving the pipe, and a
-   port that has been swallowed cannot be found at all. */
-const PORTG=9;
-function portHandle(x,y,p,f,src,tgt){
-  const wd=push({x:x-PORTG/2,y:y-PORTG/2,w:PORTG,h:PORTG,type:"port",part:p,face:f});
-  const lit=src||tgt||hov(wd);
-  // a nozzle stub, drawn in the rail tone the pipe casing already sits in, so
-  // an untouched bench is not peppered with marks
-  fillRect(x-2.5,y-2.5,5,5, src?C.amber : tgt?C.green : lit?C.bright : C.rail);
-  if(lit) frame(x-PORTG/2,y-PORTG/2,PORTG,PORTG,src||tgt?C.amber:C.edge2);
-  TIP(x-PORTG/2,y-PORTG/2,PORTG,PORTG,"FREE PORT  ·  "+partName(p),
-    "A nozzle with room for one more run. Drag from here onto another component and the router lays the pipe; drop it on empty space, or on a machine with no port left, and nothing is connected. Right-click a run to disconnect it again.");
-}
-/* WHOSE handles are on screen. Thirty nozzles drawn at once turned the bench
-   into a pegboard, so they belong to the machine you are pointing at - plus the
-   selected one, which is the machine you are already working on, and every
-   machine at once WHILE A RUN IS BEING PULLED, because that is exactly when you
-   need to see where it can land.
-   The reach is the part's box grown by half a handle: a nozzle sits ON the edge,
-   and the ones on the right and bottom faces fall outside the box the grid
-   lookup would answer with, so they would blink out from under the hand that
-   was reaching for them. */
-function portsShown(p,ptr,anyDrag){
-  if(anyDrag||sel===p.id) return true;
-  if(!ptr) return false;
-  const r=prect(p), m=PORTG/2;
-  return ptr.x>=r.x-m&&ptr.x<=r.x+r.w+m&&ptr.y>=r.y-m&&ptr.y<=r.y+r.h+m;
-}
+/* ══ THE RUBBER BAND OF THE ONE GESTURE ══
+   There are no nozzle handles any more. Thirty 9-unit squares turned the
+   bench into a pegboard, and the run they authored was aimed at a handle on
+   the far machine that the hand could not find at fit zoom - so the whole
+   gesture now starts on the COMPONENT BOX and ends on another one, and the
+   only thing left to draw is the proposal in between.
+   Dashed and thin on purpose - it is a proposal, not a run: the router has
+   not been asked yet, and what it lays will be square where this is straight.
+   Its SOURCE end is the face bestFreePortPair() just picked, so the band
+   walks to the nozzle the router will actually use - that feedback is what
+   the handles used to give. Green once both ends resolve, amber while they
+   do not, which is the whole of what this gesture needs to say. */
 function pipePorts(usage){
-  const d = ui.drag&&ui.drag.type==="port" ? ui.drag : null;   // LABEL: a DRAG kind, unrelated to a pipe run's kind
-  // the pointer is wanted whether or not a drag is running - it picks the
-  // hovered machine when there is none, and the drop target when there is
+  const d = ui.drag&&ui.drag.type==="part"&&ui.drag.mode==="pipe" ? ui.drag : null;
   const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null;
-  const to  = d&&ptr ? portDrop([ptr.x,ptr.y],d.part.id,usage) : null;
-  for(const p of LAY.parts){
-    if(!fitted(p)) continue;
-    if(!portsShown(p,ptr,!!d)) continue;
-    const room=portRoom(p,usage);
-    for(const f in room){
-      if(!room[f]) continue;
-      const a=port(p,f);
-      portHandle(a[0],a[1],p,f,
-        !!(d&&d.part.id===p.id&&d.face===f),
-        !!(to&&to.part.id===p.id&&to.face===f));
-    }
-  }
-  /* the rubber band. Dashed and thin on purpose - it is a proposal, not a run:
-     the router has not been asked yet, and what it lays will be square where
-     this is straight. Green once it has somewhere to land, amber while it has
-     not, which is the whole of the feedback this gesture needs. */
-  if(d&&ptr){
-    const a=port(d.part,d.face);
-    ctx.save(); ctx.setLineDash([4,4]);
-    ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-    ctx.lineTo(to?to.pt[0]:ptr.x, to?to.pt[1]:ptr.y);
-    ctx.strokeStyle=to?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
-    ctx.restore();
-  }
+  if(!d||!ptr) return;
+  const pair=d.pair;
+  const a = pair ? port(d.part,pair.fa) : prectMid(d.part);
+  frame2(d.part); if(d.over) frame2(d.over);
+  ctx.save(); ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(a[0],a[1]);
+  ctx.lineTo(pair?pair.pb[0]:ptr.x, pair?pair.pb[1]:ptr.y);
+  ctx.strokeStyle=pair?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.restore();
 }
+// the centre of a part's box, for a band that has no port to leave from yet
+function prectMid(p){ const r=prect(p); return [r.x+r.w/2, r.y+r.h/2]; }
+// both ends of the gesture are lit, so it is plain WHICH two machines are
+// about to be joined - the handles used to say this one nozzle at a time
+function frame2(p){ const r=prect(p); frame(r.x,r.y,r.w,r.h,C.amber); }
+
 /* ══ EVERY PIPE IS A HANDLE YOU CAN PULL A TEE OUT OF ══
    The same gesture pipePorts() gives a component, one level down: grab the
    square, drop it on the pipe you mean, and the two points you pointed at are

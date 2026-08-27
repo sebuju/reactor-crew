@@ -198,11 +198,11 @@ function nearestRunTo(pt,skip){
     // kind as the fallback), so a caller authoring one needs both.
     if(near.d<bd){ bd=near.d; best={key:r.key,t:near.t,rid:r.rid||null}; }
   }
-  /* The reach the PORT drag's own drop test uses (CELL*0.85, portDrop() in
-     layout.js), for the same reason and to the same feel: a drop is aimed
-     with a mouse, not with a caret. 12 plant units was the first guess and it
-     is about 1.9 SCREEN pixels at fit zoom - a target nobody can hit, which
-     is most of why the tap handle read as missing entirely. */
+  /* ONE reach for "did I hit a pipe", shared by the tap drag and the
+     right-click menu, for the same reason and to the same feel: a drop is
+     aimed with a mouse, not with a caret. 12 plant units was the first guess
+     and it is about 1.9 SCREEN pixels at fit zoom - a target nobody can hit,
+     which is most of why the tap handle read as missing entirely. */
   return bd<=CELL*0.85 ? best : null;     // aimed at a pipe, not at empty deck
 }
 /* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
@@ -236,8 +236,9 @@ function ctxItemsDesign(hit){
       : [{label:"ADD "+f.label, fn:()=>{ f.set(true); }}];
     // Every tank is an instance the player added, so every tank can be taken
     // away again - including the three the stock plant ships with. Zero tanks
-    // is a legal plant.
-    if(hit.part.role==="tank" || hit.part.id.startsWith("pumpX") || hit.part.id.startsWith("sgX"))
+    // is a legal plant. Everything else that can go is whatever was PLACED -
+    // asked of the placed list (isPlaced(), layout.js), never of the id.
+    if(hit.part.role==="tank" || isPlaced(hit.part.id))
       return [{label:"REMOVE", fn:()=>{ removePart(hit.part.id); }}];
     return [];   // a base component (core, rods, pzr...) offers no menu at all
   }
@@ -711,7 +712,7 @@ function dbRailBuild(rail,watch){
      relief valve's setpoints had nowhere to be set. One well per fitting,
      built from paramsForFit() exactly the way a component's is built from
      paramsFor(). The rail is rebuilt whenever the fitting set changes (LAY is
-     rebuilt on fitSig(), layout.js), so this list cannot go stale. */
+     rebuilt on checkSig(), layout.js), so this list cannot go stale. */
   const fits=[];
   for(const fid in D.fit){
     const B=paramsForFit(fid); if(!B.length||B.plain) continue;
