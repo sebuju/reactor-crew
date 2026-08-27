@@ -50,7 +50,9 @@ const EXPORTS = '{commission,step,sample,act,recTick,recRoot,resetPlant,combatHi
   /* Stage 9 (gauge half) test hooks: place and plumb a spare pump exactly the
      way CONNECT does, then read pumpGauge() straight - the shared primitive
      the PUMP CAPACITY row and, later, the pump panel both build on. */
-  'placePart,removePart,addRun,removeRun,pumpGauge}';
+  'placePart,removePart,addRun,removeRun,pumpGauge,'+
+  /* the tank hooks: one component, added and configured per instance */
+  'addTank,tanks:()=>D.tanks,tankIds}';
 
 /* One boot. `src` may be patched first - the self-test at the bottom injects
    real faults and re-boots to prove each check can actually go red. */
@@ -112,9 +114,24 @@ function exercise(M, dom, o){
   step('scram', () => { M.act('scram'); run(200); syncAll(); });
   step('damage', () => { M.combatHit('rods'); M.combatHit('pump1'); run(100); syncAll(); });
   step('blackout', () => { M.act('blackout', true); run(100); syncAll(); });
-  step('boron dump', () => { M.act('boronDump'); run(50); syncAll(); });
+  /* A boron tank added, filled and lined up - the whole of what EMERG BORON is
+     now. There is no boronDump act any more: a tank's valve is the control,
+     and there is no one-shot latch behind it. */
+  step('add a boron tank and open it', () => {
+    const id = M.addTank(1,3);
+    M.tanks()[id].fluid = 'borated';
+    M.commission();
+    M.act('tankOpen', id); run(50); syncAll();
+  });
+  step('open every tank valve', () => {
+    for(const id of M.tankIds()) if(!M.S().tankOpen[id]) M.act('tankOpen', id);
+    for(const id of M.tankIds()) M.act('tankDump', id);
+    run(50); syncAll();
+  });
   step('bypass every system', () => {
-    for(const k of ['rps','rod','porv','runback','efw','bkp']){ M.act('byp',k); syncAll(); }
+    for(const k of ['rps','rod','porv','runback','bkp']){ M.act('byp',k); syncAll(); }
+    for(const id of M.tankIds()) M.act('tankByp',id);
+    syncAll();
   });
   step('scenario bench', () => { M.setScreen('scenario'); M.drawScenario(); M.drawScenario(); });
 

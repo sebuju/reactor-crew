@@ -4,7 +4,7 @@ const S=require('./bundle').bundle();
 
 // routing is emergent from component positions, so this has to run the code,
 // not just read it
-const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,reliefRate,reliefHeaderKey,nozzleEnds,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,TANK:()=>TANK,packVal,unpackVal,designSig,face,placePart,removePart}');
+const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,reliefRate,reliefHeaderKey,nozzleEnds,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,packVal,unpackVal,designSig,face,placePart,removePart}');
 // Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
 // same way a player builds one, through placed parts and real D.run entries.
 const {makeLoops}=require('./loopgen');
@@ -882,43 +882,44 @@ const roleBehaveChecks=[];
     `core.fold declared: ${nBefore} nodes; undeclared (corer/coreb split): ${nAfter} nodes`]);
 }
 
-/* ── the HPI tank's fixed node follows the part, never a frozen face ──
-   TANK.hpi used to be node:"hpib" always. hp's own link() (layout.js) now
-   picks its face live (face(hp,core)), so moving the tank across the core's
-   centreline actually relands it on a different face - the scenario the old
-   literal could never be shown wrong under, because pipeNetwork() itself
-   never varied which face hp used. */
+/* ── a tank's fixed node follows the part, never a frozen face ──
+   It used to be authored as node:"hpib" and left there. The part's own link()
+   (layout.js) picks its face live (face(hp,core)), so moving the tank across
+   the core's centreline actually relands it on a different face - the
+   scenario the old literal could never be shown wrong under, because
+   pipeNetwork() itself never varied which face it used. netBuild() writes the
+   CURRENT name back to net.tankNid every rebuild. */
 const tankMoveChecks=[];
 {
   M.D().fit={}; makeLoops(M,1); M.commission();
   const at=id=>M.LAY().parts.find(q=>q.id===id);
   const home={...at('hpi')};
-  const nodeHome=M.TANK().hpi.node, idxHome=M.P().net.tankNode.hpi;
+  const nodeHome=M.P().net.tankNid.hpi, idxHome=M.P().net.tankNode.hpi;
   M.moveTo(at('hpi'), 0, home.y+3);           // west of the core's centreline -> face(hp,core) swings from "b" to "r"
   M.commission();
-  const nodeMoved=M.TANK().hpi.node, idxMoved=M.P().net.tankNode.hpi;
+  const nodeMoved=M.P().net.tankNid.hpi, idxMoved=M.P().net.tankNode.hpi;
   // idxMoved is an ordinal into a DIFFERENT graph than idxHome came from -
   // two separate builds can coincidentally assign the same ordinal to a
   // differently-NAMED node, so the meaningful check is that the index
   // actually resolves back to the node the string itself now says.
   const nodeAtIdxMoved = idxMoved!==undefined ? M.P().net.nodes[idxMoved] : undefined;
   const idxResolves = nodeAtIdxMoved===nodeMoved;
-  const s=M.S(); s.hpi=true; s.tank={hpi:100,reltk:0}; s.pCore=0;
+  const s=M.S(); s.tankOpen.hpi=true; s.tank.hpi=100; s.pCore=0;
   const injOk=M.netFlowK(s)>=0;                // the moved tank's edge still solves (no dangling node)
   M.moveTo(at('hpi'), home.x, home.y);
   M.commission();
-  const nodeBack=M.TANK().hpi.node, idxBack=M.P().net.tankNode.hpi;
+  const nodeBack=M.P().net.tankNid.hpi, idxBack=M.P().net.tankNode.hpi;
   tankMoveChecks.push(
     ['stock HPI tank node', nodeHome==='hpib' && idxHome!==undefined,
-     `TANK.hpi.node=${nodeHome}, net.tankNode.hpi=${idxHome}`],
+     `net.tankNid.hpi=${nodeHome}, net.tankNode.hpi=${idxHome}`],
     ['moved HPI tank: the fixed node follows', nodeMoved!=='hpib' && nodeMoved!=null && idxResolves,
-     `moved west of the core -> TANK.hpi.node=${nodeMoved} (was hpib), net.tankNode.hpi=${idxMoved} resolves to "${nodeAtIdxMoved}"`],
+     `moved west of the core -> net.tankNid.hpi=${nodeMoved} (was hpib), net.tankNode.hpi=${idxMoved} resolves to "${nodeAtIdxMoved}"`],
     ['inject: the frozen literal', nodeMoved!=='hpib',
      nodeMoved!=='hpib' ? `caught: a stored "hpib" would still be "hpib" after the move; this is "${nodeMoved}"`
                          : 'the node did not move with the part - the derivation is still frozen'],
     ['the moved tank still solves', injOk, `netFlowK=${M.netFlowK(s)} (finite and >= 0 required)`],
     ['HPI tank comes home unchanged', nodeBack===nodeHome && idxBack===idxHome,
-     `back at the stock position: TANK.hpi.node=${nodeBack}, net.tankNode.hpi=${idxBack}`]);
+     `back at the stock position: net.tankNid.hpi=${nodeBack}, net.tankNode.hpi=${idxBack}`]);
   makeLoops(M,4); M.commission();
 }
 

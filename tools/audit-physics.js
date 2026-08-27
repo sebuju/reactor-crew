@@ -20,7 +20,7 @@ const M=require('./bundle').headless(
  'VALVE_RATE,hittableRunKeys,pipeCells,pipePart,'+
  'primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,reliefRate,reliefFullRate,PIPE_BORE:()=>PIPE_BORE,'+
  'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,autoLive,AUTOSYS:()=>AUTOSYS,'+
- 'paramsForFit,readoutsForFit,SGT:()=>SGT,sgCount,invRate,tankLvl,TANK:()=>TANK,'+
+ 'paramsForFit,readoutsForFit,SGT:()=>SGT,sgCount,invRate,tankPoolPct,tankRuleAny,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,'+
  'sgIds,sglMin,sgLvl,sgShare,netExpSurge,secP,BETA_W,LVL_K}');
 const {makeLoops}=require('./loopgen');
 const HOT_NPSH_A=10;   // mirrors step.js's own HOT_NPSH - the suction taper this block asserts against
@@ -342,7 +342,7 @@ console.log('\n=== NO FREE COOLING, NO FREE TRIP RESET ===');
 console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
 { const s=set({});
   const keys=Object.keys(s.byp);
-  const want=['rps','rod','porv','runback','efw','bkp'];
+  const want=['rps','rod','porv','runback','bkp'];
   for(const k of want) if(!keys.includes(k)) bad(`no bypass switch for ${k}`);
   console.log(`  switches: ${keys.join(' ')}`);
 }
@@ -375,8 +375,9 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
   console.log(`  RUNBACK: armed load ${(a.load*100).toFixed(0)}% Tavg ${a.Tavg.toFixed(0)}K, bypassed load ${(b.load*100).toFixed(0)}% Tavg ${b.Tavg.toFixed(0)}K`);
 }
 { /* emergency feedwater is the decay heat sink after a trip */
-  const a=set({efw:true}); run(a,10); a.scrammed=true; a.rodDem=1; a.load=a.loadDem=0.05; run(a,120);
-  const b=set({efw:true}); run(b,10); b.byp.efw=true; b.scrammed=true; b.rodDem=1; b.load=b.loadDem=0.05; run(b,120);
+  const a=set({}); run(a,10); a.scrammed=true; a.rodDem=1; a.load=a.loadDem=0.05; run(a,120);
+  const b=set({}); run(b,10); for(const id in b.tankByp) b.tankByp[id]=true;
+  b.scrammed=true; b.rodDem=1; b.load=b.loadDem=0.05; run(b,120);
   if(b.Tavg<=a.Tavg) bad(`emergency feedwater bypass did not run hotter (armed ${a.Tavg.toFixed(1)} K, bypassed ${b.Tavg.toFixed(1)} K)`);
   console.log(`  EMERG FEED: armed Tavg ${a.Tavg.toFixed(1)}K, bypassed Tavg ${b.Tavg.toFixed(1)}K after a trip`);
 }
@@ -842,9 +843,9 @@ console.log('\n=== HPI: INJECTION IS A FUNCTION OF ITS OWN LINE ===');
 { /* injRate at three pressure points - re-pinned, not re-derived: the old
      tankG() figures (0, 0.44, 1.51) priced a rating, never a pipe, and this
      is what the pipe itself now gives. */
-  const s=set({}); s.hpi=true;
+  const s=set({}); s.tankOpen.hpi=true;
   const at=P0=>{ s.P=P0; s.pCore=P0; const outs={}; M.netFlowK(s,null,null,outs);
-    return M.invRate(outs.qTank||0); };
+    return M.invRate((outs.qTankBy&&outs.qTankBy.hpi)||0); };
   const full=at(M.P().P0), half=at(M.P().P0*0.5), dep=at(M.P().Pcont+0.5);
   if(full!==0) bad(`full pressure: injRate is ${full}, expected exactly 0 (the check valve shut)`);
   if(!(half>0)) bad(`half pressure: injRate is ${half}, expected > 0`);
@@ -856,8 +857,8 @@ console.log('\n=== HPI: INJECTION IS A FUNCTION OF ITS OWN LINE ===');
      cells, previously bit-identical to the last bit). Moved to the nearest
      free cell in column x rather than a fixed offset, because groupFits()
      may refuse the literal +5 depending on what else is on the grid. */
-  const s=set({}); s.hpi=true; s.P=M.P().Pcont+0.5; s.pCore=s.P;
-  const rateNow=()=>{ const outs={}; M.netFlowK(s,null,null,outs); return M.invRate(outs.qTank||0); };
+  const s=set({}); s.tankOpen.hpi=true; s.P=M.P().Pcont+0.5; s.pCore=s.P;
+  const rateNow=()=>{ const outs={}; M.netFlowK(s,null,null,outs); return M.invRate((outs.qTankBy&&outs.qTankBy.hpi)||0); };
   const home=rateNow();
   const p=M.LAY().parts.find(q=>q.id==='hpi'); const hx=p.x, hy=p.y;
   let moved=false;
@@ -874,14 +875,14 @@ console.log('\n=== HPI: INJECTION IS A FUNCTION OF ITS OWN LINE ===');
      SAME injResist(bore,L+extra) call every undamaged run uses) rather than
      the old boolean "!pipeExtraLen(...) ? tankG : 0" gate - and the end
      state is identical either way: exactly zero. Read the EDGE'S OWN
-     conductance directly, keyed "hpi:hpib-coreb", not qTank: severing this
+     conductance directly, keyed "hpi:hpib-coreb", not qTankBy: severing this
      run ALSO opens a break at its own ends (the same s.dmgParts entry drives
      both - Stage 1's "no second signal" rule), and that break's own edges
      carry the DIFFERENT key "break:hpi:hpib-coreb" but still touch the same
-     tank node (hpib) qTank sums flow over - conflating "the injection edge
+     tank node (hpib) qTankBy sums flow over - conflating "the injection edge
      itself still conducts" with "the severed stub is now correctly spilling
      to containment", a different, already-covered fact. */
-  const s=set({}); s.hpi=true; s.P=M.P().Pcont+0.5; s.pCore=s.P;
+  const s=set({}); s.tankOpen.hpi=true; s.P=M.P().Pcont+0.5; s.pCore=s.P;
   M.netFlowK(s);
   const key='hpi:hpib-coreb';
   const edgeG=()=>{ const ed=M.P().net.edges.find(e=>e.key===key); return ed?(typeof ed.g==='function'?ed.g(s):ed.g):null; };
@@ -1161,35 +1162,29 @@ console.log('\n=== A STEAM GENERATOR IS A PLACED PART, D.loops IS GONE ===');
     M.layoutMetrics();
     const before=M.LAY().parts.length;
     const items=M.ctxItemsDesign({cell:{gx:11,gy:6},part:null,fitting:null,tapKey:null});
-    const isAdd=label=>label.startsWith('ADD ');   // the only non-toggle items this hit offers
     let worst=-Infinity, worstLabel='';
     for(const it of items){
-      /* layoutMetrics() forces the rebuild, on both sides of fn() - a
-         fittableList() "FIT " item (catcher/efw/boroninj/reltk, Stage 5d)
-         only flips a D flag or edits placedParts, it does not itself call
-         buildLayout(), so LAY.parts would read stale without this and the
-         delta below would either miss a real +1 or, worse, carry a phantom
-         part into the NEXT item's own n0 baseline. */
+      /* layoutMetrics() forces the rebuild, on both sides of fn() - an item
+         that only flips a D flag or edits placedParts/D.tanks does not itself
+         call buildLayout(), so LAY.parts would read stale without this and
+         the delta below would either miss a real +1 or, worse, carry a
+         phantom part into the NEXT item's own n0 baseline. */
       M.layoutMetrics();
-      const n0=M.LAY().parts.length;
+      const ids0=new Set(M.LAY().parts.map(q=>q.id));
       it.fn();
       M.layoutMetrics();
-      const grew=M.LAY().parts.length-n0;
+      const grew=M.LAY().parts.length-ids0.size;
       if(grew>worst){ worst=grew; worstLabel=it.label; }
-      if(isAdd(it.label)){
-        // an ADD item: undo the part(s) it placed, so the next item starts clean
-        const added=M.LAY().parts.slice(n0);
-        for(const p of added) if(p.id.startsWith('pumpX')||p.id.startsWith('sgX')) M.removePart(p.id);
-      } else {
-        /* a "FIT " item: fn() is bound to f.set(true), not a toggle, so
-           calling it again is a no-op, not a restore - true since Stage 5d
-           gave some of these entries a real LAY.parts box behind them
-           (catcher/efw/boroninj/reltk), where it used to only ever be true
-           for accum, which never grows LAY.parts at all and so never
-           surfaced this. Un-fit through fittableList() itself, by label. */
-        const f=M.fittableList().find(x=>'FIT '+x.label===it.label);
-        if(f) f.set(false); else it.fn();
-      }
+      /* UNDO BY DIFF, not by label. Every item on this menu reads "ADD ..."
+         now - a tank is not fitted, it is added - so a label test alone can no
+         longer tell a placed instance from a fittable slot. Ask the table
+         first: a row whose label matches is un-fit through its own set().
+         Everything else placed something, and what it placed is whatever id
+         is on the board that was not before - removePart() takes a tank or a
+         placed part alike. */
+      const f=M.fittableList().find(x=>'ADD '+x.label===it.label);
+      if(f) f.set(false);
+      else for(const q of M.LAY().parts.filter(q=>!ids0.has(q.id))) M.removePart(q.id);
       M.layoutMetrics();
     }
     if(worst>1) bad(`"${worstLabel}" added ${worst} parts in one act - no menu item may create more than one`);
@@ -2079,11 +2074,12 @@ console.log('\n=== A DESIGN TRAVELS AS A HEAD ===');
   console.log('  a non-stock plant rebuilds from its head in a module that never saw it, and runs identically');
   console.log('  a head that does not re-sign is refused, so a verdict is never about the wrong reactor');
 
-  /* Stage 3b's own known gap, proved rather than asserted: a PLACED steam
-     generator is exactly the placedParts state recApplyHead() was already
-     documented not to carry (record.js). It must fail LOUDLY - refuse via
-     designSig() mismatch - never silently hand back a confident PASS about
-     a reactor with one fewer generator than the player built. */
+  /* A PLACED PART TRAVELS NOW. This used to be a documented gap proved
+     rather than fixed: placedParts was layout state recHead() did not carry,
+     so a design with a spare generator on it could only ever be REFUSED,
+     never rebuilt. Making every tank an instance forced the fix - a plant
+     whose tanks are placed is every plant - so the head serialises the placed
+     set whole and recApplyHead() puts it back before it re-signs. */
   const EX2=EX.replace('}', ',placePart,LAY:()=>LAY}');
   const page2=B.headless(EX2);
   page2.layoutMetrics(); page2.latDefault(); page2.commission();
@@ -2092,28 +2088,37 @@ console.log('\n=== A DESIGN TRAVELS AS A HEAD ===');
   page2.commission();
   const head2=page2.recHead();
   const w3=B.headless(EX2); w3.layoutMetrics(); w3.latDefault(); w3.commission();
-  if(w3.recApplyHead(head2))
-    bad('recApplyHead() silently accepted a head with a placed generator - placedParts is not carried, this must refuse');
-  else console.log('  a placed generator is refused by recApplyHead() (placedParts not carried) - loud, not silent, as documented');
+  if(!w3.recApplyHead(head2))
+    bad('recApplyHead() refused a head with a placed generator - the placed set is carried now, this must rebuild');
+  else if(!w3.LAY().parts.some(q=>q.id==='sgX0'))
+    bad('recApplyHead() re-signed a head with a placed generator without putting the generator back');
+  else console.log('  a placed generator rebuilds from its head: the spare is on the board and the design re-signs');
 
-  /* Stage 5a's own version of the same gap: the relief tank ships already
-     placed (layout.js), present in placedParts from a fresh module load
-     exactly like this one - so a design that REMOVES it is the direction
-     that breaks here, not adding one. A fresh module replaying the head
-     still starts with the tank present (it is not session state, it is the
-     module's own default), and recApplyHead() has no mechanism to delete a
-     part a head's own parts list does not carry it moving there - so this
-     must refuse via the same designSig() mismatch, loudly, never a
-     confident PASS about a plant with a tank the player deleted. */
-  const EX3=EX2.replace('}', ',removePart}');
+  /* AND A TANK THE PLAYER DELETED STAYS DELETED. A fresh module ships three
+     tanks; this head has one fewer. It rides D.tanks, which the head carries
+     whole, so it rebuilds rather than being refused - which is the direction
+     that used to break. */
+  const EX3=EX2.replace('}', ',removePart,tanks:()=>D.tanks}');
   const page3=B.headless(EX3);
   page3.layoutMetrics(); page3.latDefault(); page3.commission();
   page3.removePart('reltk'); page3.commission();
   const head3=page3.recHead();
   const w4=B.headless(EX3); w4.layoutMetrics(); w4.latDefault(); w4.commission();
-  if(w4.recApplyHead(head3))
-    bad('recApplyHead() silently accepted a head with the relief tank removed - a fresh module still ships one, this must refuse');
-  else console.log('  a removed relief tank is refused by recApplyHead() (placedParts not carried) - loud, not silent, matching the generator case');
+  if(!w4.recApplyHead(head3))
+    bad('recApplyHead() refused a head with a tank removed - D.tanks rides the head, this must rebuild');
+  else if(w4.tanks().reltk)
+    bad('recApplyHead() re-signed a head with a tank removed and left the tank on the board');
+  else console.log('  a deleted tank rebuilds from its head too: the fresh module ends up without it and re-signs');
+
+  /* AND IT STILL REFUSES. A check that has never been seen to fail is not a
+     check: drop ONE field out of the placed set and the head must go back to
+     refusing, exactly as loudly as it used to for the whole class. */
+  const bentPlaced=JSON.parse(JSON.stringify(head2));
+  for(const q of bentPlaced.placed) delete q.y;
+  const w5=B.headless(EX2); w5.layoutMetrics(); w5.latDefault(); w5.commission();
+  if(w5.recApplyHead(bentPlaced))
+    bad('a head whose placed set is missing a field was accepted anyway - the round trip is not checked, only trusted');
+  else console.log('  inject: dropping `y` from the head\'s placed set IS refused - the round trip is checked, not trusted');
 }
 
 /* ══════════ TWO RUNNERS, ONE ANSWER ══════════
@@ -2933,17 +2938,25 @@ console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
   // D flag. MEASURED: a lattice/layout fact, not a toggle at all. EXCEPTION:
   // a flag that sizes or upgrades a part whose own EXISTENCE is already
   // tracked elsewhere (contFit/turbFit/condFit gate the box itself in
-  // buildLayout(); accum swaps what is behind a tank that always exists;
+  // buildLayout());
   // rps/autorod/scram/chan/foll/nbank/pdes/pzr/chim are quality or size
   // dials on core/rods/pzr/ctrl, which are always on the grid) - listed by
   // name, not inferred, so a NEW flag-only term can never hide in this set.
   const PART=new Set(['totalPumpCap()*PUMP_MASS','sgCount()*SGT[D.sg].mass',
-    'partMass("catcher")','partMass("efw")','partMass("boroninj")','partMass("reltk")',
+    'partMass("catcher")',
+    /* Per tank INSTANCE, off that instance's own vol and off whether it has a
+       cell on the grid at all - so four tanks cost four tanks and a tank with
+       no box (a hotwell, inside the condenser that is already priced) costs
+       nothing twice. It replaced four flat per-name figures and D.accum's own
+       +45 t, which between them priced the stock plant at exactly what this
+       does. A widening of the PART set, not a weakening: it still resolves to
+       boxes on the grid, just to a variable number of them. */
+    'tankMass()',
     'Object.keys(D.fit).length*FIT_MASS']);
   const MEASURED=new Set(['coreMass','layMass','latMass()']);
   const EXCEPTION=new Set(['a.mass','f.mass','SCRAM[D.scram].mass','CHAN[D.chan].mass',
     '(D.contFit?CONT[D.cont].mass:0)','BKP[D.bkp].mass',
-    '(D.pdes-1)*220','(D.pzr-1)*45','D.chim*38','(D.accum?45:0)',
+    '(D.pdes-1)*220','(D.pzr-1)*45','D.chim*38',
     '(D.rps?55:0)','FOLL[D.foll].mass','(D.nbank-4)*9',
     '(D.autorod?26:0)','(D.turbFit?D.turb*50:0)','(D.condFit?D.condCap*40:0)']);
   const classify=(designSrc)=>{
@@ -2973,17 +2986,27 @@ console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
      - this is the shape of check that would have caught EFW's false "grace
      time" label, the +26 t toggle that did nothing, and the 10x fuel
      labels: all three were a claim nobody ever measured against the sim. */
-  /* catcher/efw/boroninj each get their own direct case rather than a
+  /* catcher and emergency feed get their own direct case rather than a
      shared table - each names a different kind of figure (an inventory, a
-     coolant temperature, a button's own existence) and forcing them through
-     one shape would hide more than it would share. */
-  const stockFig=(o)=>{ const s=set(o); run(s,10); s.scrammed=true; s.rodDem=1; run(s,120); return s; };
-  { /* EFW: "runs the loop a few degrees cooler after a trip" (inspector.js) -
-       NOT grace time, which is the whole point of this stage. */
-    const off=stockFig({efw:false}), on=stockFig({efw:true});
+     coolant temperature) and forcing them through one shape would hide more
+     than it would share. */
+  const stockFig=(o,mk)=>{ set(o); if(mk) mk(); M.commission();
+    const s=M.S();                      // commission() builds a FRESH S - the one set() handed back is stale
+    run(s,10); s.scrammed=true; s.rodDem=1; run(s,120); return s; };
+  { /* EMERGENCY FEED: "runs the loop a few degrees cooler after a trip"
+       (inspector.js) - NOT grace time. It is a TANK now, so "not fitted" is
+       the tank not being there, and nothing here names it: what makes a tank
+       emergency feed is that it is on the secondary and opens itself on low
+       generator level. */
+    const efwIds=()=>M.tankIds().filter(id=>M.tanks()[id].side==='secondary' && M.tanks()[id].auto==='sglow');
+    const on=stockFig({});
+    const nOn=efwIds().length;
+    const off=stockFig({}, ()=>{ for(const id of efwIds()) delete M.tanks()[id]; });
+    if(!nOn) bad('the stock plant ships no emergency feed tank - nothing for this check to remove');
     if(!(on.Tavg<off.Tavg))
       bad(`EFW fitted did not run the loop cooler after a trip: off ${off.Tavg.toFixed(1)} K, on ${on.Tavg.toFixed(1)} K`);
-    else console.log(`  EFW: off ${off.Tavg.toFixed(1)} K -> on ${on.Tavg.toFixed(1)} K after a trip (its tooltip's own claim, not grace time)`);
+    else console.log(`  EMERG FEED: no tank ${off.Tavg.toFixed(1)} K -> ${nOn} tank ${on.Tavg.toFixed(1)} K after a trip (its tooltip's own claim, not grace time)`);
+    set({});
   }
   { /* CATCHER: "stops a melted core burning through and breaching the
        vessel" - step.js only drains s.inv on a melt when P.catcher is
@@ -2995,32 +3018,145 @@ console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
       bad(`CORE CATCHER fitted did not hold inventory after a melt: off ${invOff.toFixed(1)}, on ${invOn.toFixed(1)}`);
     else console.log(`  CATCHER: inventory after a melt off=${invOff.toFixed(1)}% -> on=${invOn.toFixed(1)}% (its tooltip's own claim)`);
   }
-  { /* BORON INJECTION: "shuts the reactor down when the rods will not" -
-       measured here as the button existing at all, which is what its own
-       tooltip and plant.js's own gate (P.boroninj) both mean by "fitted". */
-    set({boroninj:false});
-    if(M.P().boroninj) bad('P.boroninj is true with the toggle off');
-    M.D().boroninj=true; M.commission();
-    if(!M.P().boroninj) bad('P.boroninj is false with the toggle on and the tank on the grid');
-    else console.log('  BORON INJECTION: P.boroninj (the button\'s own gate) tracks the tank being on the grid, off then on');
-    M.D().boroninj=false; M.commission();
-  }
-}
-{ /* A TANK WITH NO RUN TO IT HAS NO VENT, visibly and in the solve - the
-     EFW/boroninj half of the same rule Stage 5a proved for relief above.
-     Disconnect boroninj's own line into the core and demand its edge
-     carries nothing: netPressures() must not show a live differential
-     driving flow through a run that no longer exists in D.run at all. */
-  const s=set({boroninj:true}); run(s,5);
-  const before=M.pipeNetwork().some(r=>r.key.indexOf('boroninjb')>=0);
-  if(!before) bad('boroninj is on the grid but its own run never routed - nothing to disconnect for this check');
-  M.removeRun('boronR'); M.commission();
-  const after=M.pipeNetwork().some(r=>r.key.indexOf('boroninjb')>=0);
-  if(after) bad('removeRun("boronR") left a run still reaching the boron tank\'s own node');
-  else console.log('  a disconnected boron tank routes no run at all - DISCONNECT is a real removal, not a cosmetic one');
-  M.D().run.boronR={a:"boroninj",af:null,b:"core",bf:"b",k:"boron",bore:0.20}; M.commission();
 }
 
+console.log('\n=== ONE TANK. NO KINDS, NO PRESETS, NO SPECIAL CASES ===');
+/* Add a tank, put boron in it, plumb it to the core. Nothing about this is a
+   named system: it is TANK_DEFAULT with two knobs turned. */
+const boronPlant=(n)=>{
+  const s=set({});
+  const ids=[];
+  for(let i=0;i<n;i++){
+    const id=M.addTank(0, 1+i);
+    const t=M.tanks()[id];
+    t.fluid='borated'; t.check=true; t.auto='manual';
+    t.pump={p:11.0,bus:'bkp'}; t.gas=null;
+    M.D().run['bor'+i]={a:id,af:null,b:'core',bf:'b',k:'boron',bore:0.20};
+    ids.push(id);
+  }
+  M.commission();
+  return {s:M.S(), ids};
+};
+/* Depressurised, so a tank charged above the loop actually delivers - the
+   whole mechanic, and the thing an instant 4000 pcm never had to obey. */
+const dumpWorth=(n,secs)=>{
+  const {s,ids}=boronPlant(n);
+  run(s,2);
+  s.P=1.0; s.pCore=1.0;
+  const b0=s.boron;
+  for(const id of ids) s.tankOpen[id]=true;
+  run(s,secs);
+  return {d:b0-s.boron, s, ids};
+};
+{ const one=dumpWorth(1,60);
+  if(!(one.d>0)) bad(`one boron tank delivered nothing: s.boron moved ${one.d.toFixed(0)} pcm`);
+  else console.log(`  one boron tank, opened against a depressurised loop: ${one.d.toFixed(0)} pcm over 60 s, tank at ${one.s.tank[one.ids[0]].toFixed(0)} %`);
+  /* Four tanks, four levels, four solved deliveries. Worth is per instance
+     and additive - nothing caps the count and nothing sums a hardcoded 4000. */
+  const four=dumpWorth(4,60);
+  const ratio=one.d>0 ? four.d/one.d : 0;
+  if(!(ratio>2.5))
+    bad(`four boron tanks were not worth several times one: one ${one.d.toFixed(0)} pcm, four ${four.d.toFixed(0)} pcm (x${ratio.toFixed(2)})`);
+  else console.log(`  four boron tanks: ${four.d.toFixed(0)} pcm, x${ratio.toFixed(2)} one tank's - additive, with four separate levels [${four.ids.map(i=>four.s.tank[i].toFixed(0)).join(', ')}] %`);
+  /* And it is not instantaneous. An instant 4000 pcm was a number with no
+     tank behind it; this arrives over the seconds the tank takes to empty. */
+  const brief=dumpWorth(1,2);
+  if(!(brief.d < one.d*0.9))
+    bad(`a boron tank delivered its whole worth at once: 2 s gave ${brief.d.toFixed(0)} pcm against 60 s giving ${one.d.toFixed(0)} pcm`);
+  else console.log(`  it takes time: 2 s of open valve is ${brief.d.toFixed(0)} pcm against ${one.d.toFixed(0)} pcm over 60 s`);
+  set({});
+}
+{ /* A TANK WITH NO RUN TO IT DELIVERS NOTHING, visibly and in the solve -
+     the same rule Stage 5a proved for relief. Disconnect the boron tank's
+     own line into the core and demand no run reaches its node at all. */
+  const {s,ids}=boronPlant(1); run(s,5);
+  const nid=ids[0];
+  const before=M.pipeNetwork().some(r=>r.key.indexOf(nid)>=0);
+  if(!before) bad('the boron tank is on the grid but its own run never routed - nothing to disconnect for this check');
+  M.removeRun('bor0'); M.commission();
+  const after=M.pipeNetwork().some(r=>r.key.indexOf(nid)>=0);
+  if(after) bad('removing the run left one still reaching the boron tank\'s own node');
+  else console.log('  a disconnected boron tank routes no run at all - DISCONNECT is a real removal, not a cosmetic one');
+  set({});
+}
+{ /* ZERO TANKS IS A LEGAL PLANT. A bad design, not a crash: it must still
+     build, still solve, still commission and still run. */
+  set({});
+  for(const id of M.tankIds()) delete M.tanks()[id];
+  M.commission();
+  const s=M.S(); run(s,20);
+  if(!(M.netFlowK(s)>0)) bad(`a plant with no tanks does not solve: netFlowK=${M.netFlowK(s)}`);
+  else if(!(s.n>0.5)) bad(`a plant with no tanks does not run: n=${(s.n*100).toFixed(1)} %`);
+  else console.log(`  zero tanks: the plant builds, solves and runs - netFlowK=${M.netFlowK(s).toFixed(3)}, n=${(s.n*100).toFixed(1)} %`);
+  set({});
+}
+{ /* NOTHING KNOWS A TANK BY NAME. Rename every tank id and demand every
+     figure this file pins comes back bit-identical. This is the one claim
+     the whole refactor makes, and it goes red on any surviving hardcode. */
+  const fig=()=>{ const s=set({}); run(s,10);
+    return [s.n, s.Tf, s.dnbr, M.P().dose, M.P().flowK, M.netFlowK(s)]; };
+  const before=fig();
+  const T=M.tanks(), old=Object.keys(T), ren={};
+  for(let i=0;i<old.length;i++) ren['zz'+i]=T[old[i]];
+  /* the runs that pointed at them have to follow - a run names a PART, and
+     renaming a part without its pipe is renaming half a plant */
+  const R=M.D().run;
+  for(let i=0;i<old.length;i++) for(const k in R){
+    if(R[k].a===old[i]) R[k].a='zz'+i;
+    if(R[k].b===old[i]) R[k].b='zz'+i;
+  }
+  for(const k of old) delete T[k];
+  Object.assign(T, ren);
+  M.commission();
+  const s=M.S(); run(s,10);
+  const after=[s.n, s.Tf, s.dnbr, M.P().dose, M.P().flowK, M.netFlowK(s)];
+  const names=['n','Tf','dnbr','P.dose','P.flowK','netFlowK'];
+  let moved=null;
+  for(let i=0;i<after.length;i++) if(after[i]!==before[i]) moved=`${names[i]}: ${before[i]} -> ${after[i]}`;
+  if(moved) bad(`renaming every tank moved a pinned figure - a hardcode survived. ${moved}`);
+  else console.log(`  every tank id renamed (${old.join(', ')} -> ${Object.keys(ren).join(', ')}): n, Tf, DNBR, P.dose, P.flowK and netFlowK all bit-identical`);
+  set({});
+}
+{ /* NOTHING REMEMBERS WHAT A TANK "WAS". Take the stock plant's own
+     injection tank and switch it to boron; then take a tank added BLANK and
+     set it to the same eight settings, standing in the same slot under the
+     same id on the same pipe. Same id, same position, same order in
+     D.tanks - the only thing that differs is which object the config started
+     life as, and if that changes anything at all then something is
+     remembering a kind that is not supposed to exist. */
+  const CFG={side:'primary', vol:40, level:100, fluid:'borated',
+             gas:null, pump:{p:11.0,bus:'bkp'}, check:true, auto:'manual', burst:null,
+             name:'X', col:'#5aa9d6', cell:[0,1], tip:''};
+  const worth=(mk)=>{ set({}); mk(); M.commission();
+    const t=M.S(); run(t,2); t.P=1.0; t.pCore=1.0; const b0=t.boron;
+    t.tankOpen.hpi=true; run(t,30); return b0-t.boron; };
+  /* the stock injection tank, reconfigured in place */
+  const reused=worth(()=>{ Object.assign(M.tanks().hpi, JSON.parse(JSON.stringify(CFG))); });
+  /* a tank added blank through the bench's own ADD TANK, then given the same
+     settings and moved into the same slot in D.tanks under the same id */
+  const fresh=worth(()=>{
+    const T=M.tanks(), order=Object.keys(T);
+    const nid=M.addTank(0,1);
+    const blank=T[nid]; delete T[nid];
+    Object.assign(blank, JSON.parse(JSON.stringify(CFG)));
+    const rebuilt={};
+    for(const k of order) rebuilt[k] = k==='hpi' ? blank : T[k];
+    for(const k of Object.keys(T)) delete T[k];
+    Object.assign(T, rebuilt);
+  });
+  if(Math.abs(reused-fresh) > 1e-9)
+    bad(`a reconfigured tank did not behave like a fresh one: reused ${reused.toFixed(6)} pcm, fresh ${fresh.toFixed(6)} pcm`);
+  else console.log(`  the stock injection tank switched to boron delivers exactly what a blank tank set to boron does: ${reused.toFixed(3)} pcm, identical to 1e-9`);
+  set({});
+}
+
+
+/* THE HOTWELL IS A TANK. It has no cell of its own - it lives inside the
+   condenser it condenses into - which is exactly what hostedTankIds() names,
+   and nothing here knows it by any other description. Two hosted tanks pool
+   and read as one, the same way the plant treats them. */
+const HW = s => M.tankPoolPct(s, M.hostedTankIds());
+const HWO = s => { let q=0; for(const id of M.hostedTankIds()) q += (s.tankOver&&s.tankOver[id])||0; return q; };
 
 /* ══════════ THE SECONDARY CONSERVES WATER (Stage 6a) ══════════
    s.sgl was clamp(50+(heat-s.load)*40-(s.load-1)*14,0,100) - recomputed from
@@ -3104,13 +3240,33 @@ console.log('\n=== SECONDARY INVENTORY ===');
   /* EFW refills something real. It was 0.08 bolted onto the steam dump and
      touched no inventory at all. It starts on LOW LEVEL, not on being armed -
      an emergency pump feeding a healthy generator would overfill it (measured
-     at 82 % on a once-through unit before the gate went in). */
-  { const floor=efw=>{ const s=set({sg:1}); run(s,10);
-      s.byp.efw=!efw; M.combatHit('feed');
-      run(s,120); return M.sglMin(s); };
-    const off=floor(false), on=floor(true);
-    if(!(on > off+0.5)) bad('EMERG FEED refills nothing: level floors at '+off.toFixed(2)+' without it and '+on.toFixed(2)+' with it');
-    else console.log('  EMERG FEED holds a hit plant at '+on.toFixed(1)+' % where it floors at '+off.toFixed(1)+' % without it');
+     at 82 % on a once-through unit before the gate went in).
+
+     THREE THINGS CHANGED ABOUT THIS MEASUREMENT, and each is a consequence of
+     the reserve being a real tank rather than a fraction of rated steam:
+     - AFTER A TRIP, with the load actually shed. Its own tooltip says decay
+       heat is what it is for, and a 1200 MW generator at full power boils a
+       whole reserve away in about three seconds. That is not a bug in the
+       tank, it is the size of the machine.
+     - WHILE THE TANK STILL HAS WATER (15 s). Past that the reserve is spent
+       and the level settles wherever the crippled main feed balances the
+       steam - and it settles LOWER with the reserve than without, because a
+       generator that is still wet is still a heat sink and boils faster. The
+       end-of-window level measures that feedback, not the reserve.
+     - AT THE GATE, not above it. The level being held at exactly SG_DRY is
+       the "starts on low level, not on being armed" rule doing its job. */
+  { const at15=efw=>{ const s=set({sg:1}); run(s,10);
+      for(const id in s.tankByp) s.tankByp[id]=!efw; M.combatHit('feed');
+      s.scrammed=true; s.rodDem=1; s.load=s.loadDem=0.05;
+      run(s,15);
+      const t=M.tankIds().find(id=>M.tanks()[id].auto==='sglow');
+      return {lvl:M.sglMin(s), left:t?s.tank[t]:100}; };
+    const offR=at15(false), onR=at15(true);
+    const off=offR.lvl, on=onR.lvl;
+    if(!(on > off+0.5)) bad('EMERG FEED refills nothing: level sits at '+off.toFixed(2)+' without it and '+on.toFixed(2)+' with it');
+    else if(!(onR.left < 90)) bad('EMERG FEED held the level without spending any of its own tank: '+onR.left.toFixed(1)+' % left');
+    else console.log('  EMERG FEED holds a hit plant at '+on.toFixed(2)+' % where it sits at '+off.toFixed(2)+
+                     ' % without it, and it pays for it out of its own tank ('+onR.left.toFixed(0)+' % left, from 100)');
   }
 
   /* INJECTION - the boil-dry difference must come from SGT.water and nothing
@@ -3191,40 +3347,56 @@ console.log('\n=== SECONDARY INVENTORY ===');
      same kilograms the generators are counted in - which is what makes the
      conservation check below possible at all. */
   { const s=set({}); run(s,300);
-    if(Math.abs(s.hotwell-50) > 1e-9)
-      bad('an undamaged plant does not hold its hotwell still: 50 -> '+s.hotwell.toFixed(6)+
+    if(Math.abs(HW(s)-50) > 1e-9)
+      bad('an undamaged plant does not hold its hotwell still: 50 -> '+HW(s).toFixed(6)+
           ' over 300 s - steam raised and feedwater returned are not cancelling');
     else console.log('  a closed secondary holds its hotwell at 50.000000 % for 300 s - what boils out comes back');
   }
-  /* CONSERVATION, and the reason the hotwell is worth having at all. Water
-     that leaves a generator has to arrive somewhere. Both sides are measured
-     in the same kg (one generator's SGT.water against sgCount() of them), so
-     this is an equality and not a correlation. */
+  /* CONSERVATION, and the reason the secondary inventory is worth having at
+     all. Water that leaves a generator has to arrive somewhere.
+
+     THE WHOLE SIDE, not just one pair. The emergency reserve is a tank on
+     this side too, and its water goes through the generator and ends up in
+     the hotwell exactly like the generator's own - so a balance drawn round
+     the generator and the hotwell alone reads the reserve's contribution as
+     water arriving from nowhere. Measured on exactly that mistake: 21463 kg
+     out of the generator against 40713 kg into the hotwell, the difference
+     being the reserve emptying itself.
+
+     Everything is in the same kg (sgMass() and tankKg()), so this is an
+     equality and not a correlation: with nothing overflowing and no dump
+     valve open, the TOTAL cannot move at all. */
   { const s=set({}); run(s,10);
-    const g=M.sgIds()[0], l0=M.sgLvl(s,g), h0=s.hotwell;
-    M.combatHit('feed'); run(s,120);
-    const lost=(l0-M.sgLvl(s,g))/100*SGT[M.D().sg].water*1000;        // kg out of the generator
-    const gained=(s.hotwell-h0)/100*M.sgIds().length*SGT[M.D().sg].water*1000;
-    if(!(lost>1000)) bad('the feed hit moved almost no water at all ('+lost.toFixed(0)+' kg) - nothing to conserve');
-    else if(Math.abs(lost-gained)/lost > 0.01)
-      bad('the secondary does not conserve water: '+lost.toFixed(0)+' kg left the generator and '+
-          gained.toFixed(0)+' kg arrived in the hotwell');
-    else console.log('  the secondary conserves: '+lost.toFixed(0)+' kg left the generator and '+
-          gained.toFixed(0)+' kg arrived in the hotwell, to '+
-          (100*Math.abs(lost-gained)/lost).toFixed(3)+' %');
+    const genKg=st=>{ let m=0; for(const g of M.sgIds()) m += M.sgLvl(st,g)/100*SGT[M.D().sg].water*1000; return m; };
+    const tankKgOf=st=>{ let m=0;
+      for(const id of M.tankIds()) if(M.tanks()[id].side==='secondary') m += st.tank[id]/100*M.tankKg(id);
+      return m; };
+    const total=st=>genKg(st)+tankKgOf(st);
+    const t0=total(s), g0=genKg(s);
+    M.combatHit('feed'); run(s,90);
+    const moved=Math.abs(g0-genKg(s)), err=Math.abs(total(s)-t0);
+    if(!(moved>1000)) bad('the feed hit moved almost no water at all ('+moved.toFixed(0)+' kg) - nothing to conserve');
+    else if(HWO(s)>0 || HW(s)>=100)
+      bad('the hotwell overflowed inside the conservation window - this window has to be one where nothing leaves the plant');
+    else if(err/moved > 0.01)
+      bad('the secondary does not conserve water: '+moved.toFixed(0)+' kg left the generators and the books are '+
+          err.toFixed(0)+' kg out');
+    else console.log('  the secondary conserves as ONE closed system: '+moved.toFixed(0)+
+          ' kg left the generators, every kg of it is still on the secondary side, total out by '+
+          (100*err/Math.max(t0,1)).toFixed(4)+' %');
   }
   /* A TUBE RUPTURE IS A LEAK INTO THE SECONDARY, so the secondary total GROWS
      and the water ends up here. This is the operational problem the game could
      not pose before: the hotwell fills and has to go somewhere. */
-  { const s=set({}); run(s,10); const h0=s.hotwell;
+  { const s=set({}); run(s,10); const h0=HW(s);
     M.combatHit('sg0'); run(s,200);
-    if(!(s.hotwell > h0+10))
-      bad('a tube rupture does not fill the hotwell: '+h0.toFixed(1)+' -> '+s.hotwell.toFixed(1)+
+    if(!(HW(s) > h0+10))
+      bad('a tube rupture does not fill the hotwell: '+h0.toFixed(1)+' -> '+HW(s).toFixed(1)+
           ' % - primary water is crossing into the secondary and going nowhere');
-    else if(!(s.hotOver > 0))
-      bad('the hotwell reached '+s.hotwell.toFixed(1)+' % and overflowed nothing - a clamp that swallows a rupture reports nothing');
-    else console.log('  a tube rupture fills the hotwell '+h0.toFixed(0)+' -> '+s.hotwell.toFixed(0)+
-          ' % and then overflows it at '+s.hotOver.toFixed(0)+' kg/s');
+    else if(!(HWO(s) > 0))
+      bad('the hotwell reached '+HW(s).toFixed(1)+' % and overflowed nothing - a clamp that swallows a rupture reports nothing');
+    else console.log('  a tube rupture fills the hotwell '+h0.toFixed(0)+' -> '+HW(s).toFixed(0)+
+          ' % and then overflows it at '+HWO(s).toFixed(0)+' kg/s');
     set({});
   }
   /* THE OPERATOR'S ANSWER. A hotwell that only ever overflowed posed the
@@ -3233,28 +3405,28 @@ console.log('\n=== SECONDARY INVENTORY ===');
      plant and the feed pumps lose the water they live on. */
   { const s=set({}); run(s,10);
     M.combatHit('sg0'); run(s,200);
-    if(!(s.hotOver > 0)) bad('the SGTR did not overflow the hotwell - nothing for the dump to answer');
+    if(!(HWO(s) > 0)) bad('the SGTR did not overflow the hotwell - nothing for the dump to answer');
     else {
-      const full=s.hotwell;
-      M.act('hotDump'); run(s,120);
-      if(!(s.hotwell < full-10) || s.hotOver > 0)
-        bad('HOTWELL DUMP did not empty it: '+full.toFixed(1)+' -> '+s.hotwell.toFixed(1)+
-            ' %, still overflowing at '+s.hotOver.toFixed(0)+' kg/s');
+      const full=HW(s);
+      for(const t of M.hostedTankIds()) M.act('tankDump',t); run(s,120);
+      if(!(HW(s) < full-10) || HWO(s) > 0)
+        bad('HOTWELL DUMP did not empty it: '+full.toFixed(1)+' -> '+HW(s).toFixed(1)+
+            ' %, still overflowing at '+HWO(s).toFixed(0)+' kg/s');
       else console.log('  HOTWELL DUMP answers a tube rupture: '+full.toFixed(0)+' -> '+
-            s.hotwell.toFixed(0)+' % and the overflow stops');
+            HW(s).toFixed(0)+' % and the overflow stops');
     }
     /* and it never refuses a bad order */
     const h=set({}); run(h,10); const g0=M.sglMin(h);
-    M.act('hotDump'); run(h,120);
+    for(const t of M.hostedTankIds()) M.act('tankDump',t); run(h,120);
     /* Not "it empties": it settles where the dump balances what the closed
        loop still condenses back, and that point is BELOW HOT_NPSH - so the
        feed pumps are on tapered suction and the generator is losing water.
        That is the cost, and the game charges it without ever refusing. */
-    if(!(h.hotwell < HOT_NPSH_A && M.sglMin(h) < g0-1))
-      bad('HOTWELL DUMP on a healthy plant left '+h.hotwell.toFixed(1)+' % with the generator at '+
+    if(!(HW(h) < HOT_NPSH_A && M.sglMin(h) < g0-1))
+      bad('HOTWELL DUMP on a healthy plant left '+HW(h).toFixed(1)+' % with the generator at '+
           M.sglMin(h).toFixed(1)+' (from '+g0.toFixed(1)+') - the game refused a bad order');
     else console.log('  ...and it never refuses a bad order: dumped on a healthy plant it settles at '+
-          h.hotwell.toFixed(1)+' %, under the '+HOT_NPSH_A+' % suction limit, and the generator falls '+
+          HW(h).toFixed(1)+' %, under the '+HOT_NPSH_A+' % suction limit, and the generator falls '+
           g0.toFixed(1)+' -> '+M.sglMin(h).toFixed(1)+' %');
     set({});
   }

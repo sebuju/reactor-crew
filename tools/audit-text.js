@@ -92,7 +92,7 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'pipeNetwork,pipeWaypoints,nearestOn,placePart,addFit,removePart,removeFit,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
  'FXR:()=>FXR,fxReset,porvRate,reliefRate,reliefFullRate,SPILL_FULL:()=>SPILL_FULL,'+
- 'SGTR_RATE:()=>SGTR_RATE,TANK:()=>TANK,primaryRelief,'+
+ 'SGTR_RATE:()=>SGTR_RATE,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,primaryRelief,'+
  'setLayer:(k,v)=>{LAYERS[k].on=v;}};')();
 global.__viewOn=()=>M.vOn();
 
@@ -389,7 +389,7 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
   const want={
     'core:breach': cl((S.spillBy['break:core']||0)/M.SPILL_FULL(),0,1),
     'core:boil'  : cl(S.vf/0.6,0,1),
-    'hpi:hpi'    : cl((S.injRate||0)/M.TANK().hpi.rate(),0,1),
+    'hpi:inj'    : cl(((S.tankRate&&S.tankRate.hpi)||0)/M.tankRateRef('hpi'),0,1),
   };
   want[hurt+':sgtr'] = cl((S.sgtrBy['sgtr:'+hurt]||0)/M.SGTR_RATE(),0,1);
   const off=Object.keys(want).filter(k=>!near(f[k],want[k]));
