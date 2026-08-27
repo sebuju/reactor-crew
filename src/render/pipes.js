@@ -42,25 +42,16 @@ const PIPE_NAME={hot:"HOT LEG",cold:"COLD LEG",steam:"MAIN STEAM",feed:"FEEDWATE
                  hpi:"HP INJECTION",surge:"SURGE LINE",exh:"EXHAUST",
                  relief:"RELIEF HEADER",user:"UNCLASSIFIED PIPE"};
 const PIPE_VAPOUR={steam:1,exh:1};              // kinds that carry vapour, not liquid
-/* ── EVERY JUNCTION IS ONE LINE, NOT ONE TABLE ROW EACH ──
-   The kind carries the junction's own generated id ("xtie:"+id), because any
-   number of them can open and shut independently and each therefore needs
-   its own flow integral. Nothing else in this file wants to know WHICH one:
-   one name, one colour, one full scale, one unit between all of them.
-   Written as a prefix test rather than a table keyed by id, so placing or
-   removing a junction never touches this file - there is no fixed count to
-   run a loop over any more. The "xtie" spelling is kept from the fixed-slot
-   cross-ties this replaced, on purpose: it is the one string every lookup
-   below already knew how to fall back on. */
+/* EVERY RUN'S OWN NAME AND COLOUR, off its kind and nothing else. There used
+   to be a prefix case here for "xtie:"+id - a fitting's own branch run, one
+   generated kind per fitting, which no table could enumerate. A fitting is a
+   BOX now: its own edge is inside it, it has no polyline, and the runs either
+   side of it are ordinary runs wearing ordinary kinds. */
 /* named pipeLabel, not pipeName: src/data/pipenet.js declares its own
    pipeName() for a placed-pipe part's own id, a different concept (and a
    global collision if this file used the same name). */
-const pipeLabel=k=>k.startsWith("xtie")?"CROSS-TIE":PIPE_NAME[k];
-/* a junction joins two cold legs and carries what they carry - PC[k] is
-   undefined for any "xtie:"+id kind, since pipeColours() cannot enumerate
-   every id that exists, so every reader of the colour table falls back
-   through this rather than through a pre-populated key for each one. */
-const pipeCol=(PC,k)=>PC[k]||(k.startsWith("xtie")?PC.cold:C.ink2);
+const pipeLabel=k=>PIPE_NAME[k];
+const pipeCol=(PC,k)=>PC[k]||C.ink2;
 
 /* Line width follows the run's own BORE, never its kind - a 0.25-bore
    injection line and a 0.30-bore surge line are not the same pipe as a
@@ -322,8 +313,7 @@ function pipeFmt(v){
    until Stage 6 - keeps the flat, plant-wide design rate this file always
    gave that KIND while there is nothing solved to read instead; that
    fallback is a DEFAULT-PICKER, not a permission, and it is also what a
-   hot/cold/xtie run falls back to before commission() has run, same as
-   before. */
+   hot/cold run falls back to before commission() has run, same as before. */
 /* NO FLAT FULL-SCALE TABLE ANY MORE. It read {steam:96, exh:96, feed:96} -
    three invented numbers that looked exactly like measurements, on the three
    kinds nothing was forcing. Feedwater is SOLVED now and has a real reference
@@ -347,13 +337,12 @@ function pipeFullScale(key,k){
   if(runTankId(key,k)) return 120;
   const ref=P.netRefByRun[key];
   if(ref) return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
-  /* A TAP-ENDED RUN has one end and so no reference of its own; the surge
-     line is the only one on a stock plant. Its FLOW is real (the tick reads
-     that very edge for the level integral), so it keeps a scale - taken off
-     the loop's own reference rather than the 72 that used to be written here,
-     which was a number with nothing behind it. */
+  /* A run with no reference of its own. Every run is port to port now, so
+     runEnds() answers for all of them and this is only reached before
+     commission() has run - or on a run the reference sweep found carrying
+     nothing at all. */
   if(!ends) return 0.02*84*Math.max(0.05,P.feff0);
-  return k.startsWith("xtie") ? 60 : 84*Math.max(0.05,P.feff0);   // DEFAULT
+  return 84*Math.max(0.05,P.feff0);   // DEFAULT
 }
 const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
 
@@ -409,10 +398,9 @@ function pipeUnit(key,k){
    for every node the primary reaches, built from the runs that touch it -
    the same array buoyH() trusts for density - so this reads that instead of
    re-deciding a run's own thermal side. Read off the run's OWN graph edge
-   (net.edges, matched by key), never runEnds()+coreFold(): a cross-tie's key
-   ("xtie:f0") has no second half for runEnds() to split, but its edge's u/v
-   are the real tap nodes either way, and those already carry NT_COLD off
-   whichever cold leg they split - so a junction needs no case of its own.
+   (net.edges, matched by key), never runEnds()+coreFold(): the edge already
+   holds the two node indices the build resolved, so nothing here has to
+   re-derive them from a key.
 
    Three runs read a node this array also tags but carry no CORE CARRYOVER
    of their own, and are excluded by name - the one kind read this function

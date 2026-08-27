@@ -140,70 +140,43 @@ function warnFor(id){
 }
 
 /* right-click, held still and released: add or remove - see .claude/CLAUDE.md */
-function ctxResolveDesign(p,extra){
-  /* A TAP DRAG THAT LANDED. Both ends are already places the player pointed
-     at, so this menu is not about the pixel under the cursor at all - it asks
-     the one thing the gesture cannot: which fitting these two taps are. Ahead
-     of the view test for that reason: the pair is settled whatever the release
-     point resolves to, and it is the release point that opened this menu. */
-  if(extra && extra.tapPair) return {x:p.x,y:p.y,tapPair:extra.tapPair};
+function ctxResolveDesign(p){
   const pt=vIn(p)?vPt(p):null;
   if(!pt) return null;
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
-  const part=partAt([pt.x,pt.y]);   // layout.js - the same lookup the port drag's drop test uses
-  const net=pipeNetwork();
-  let fitting=null;
-  for(const fid in D.fit){ const j=D.fit[fid];
-    const jp=juncPt(net,j.aKey,j.aT);
-    if(jp && Math.hypot(jp.pt[0]-pt.x,jp.pt[1]-pt.y)<10){ fitting=fid; break; } }
-  let tapKey=null, tapT=null, runRid=null, tapK=null;
-  // Stage 1 makes every run an edge, tappable, hittable and able to spill -
-  // the surge line included, so it is no longer excluded here. What is kept
-  // is a UI decision, not a physics one: tapping a fitting's own branch
-  // (xtie:*) is not a plant a right-click should offer to build, because the
-  // result would be a tee spliced onto a tee rather than onto a real run.
-  if(!part && !fitting) for(const r of net){
-    if(!r.key || r.k.startsWith("xtie")) continue; // LABEL: a UI choice (no tee-on-a-tee), not a network permission
-    const near=nearestOn(r.pts,[pt.x,pt.y]);
-    // tapK: the run's kind, kept ONLY as a label for the context menu's
-    // header (Stage 7a) - never read to decide what the run may do.
-    if(near.d<8){ tapKey=r.key; tapT=near.t; runRid=r.rid||null; tapK=r.k; break; }
+  const part=partAt([pt.x,pt.y]);   // layout.js - the same lookup the part drag's drop test uses
+  /* WHICH RUN IS UNDER THE CURSOR, and nothing about where along it. A
+     fitting is placed in a CELL now, so the only thing a right-click on a
+     pipe can still offer is DISCONNECT - and that is a question about the
+     RUN, not about a point on it. The fraction (nearestOn()) and the two
+     different "did I hit a pipe" reaches went with the tap shape. */
+  let runRid=null, runK=null;
+  if(!part) for(const r of pipeNetwork()){
+    if(!r.key || !r.rid) continue;
+    if(nearRun(r.pts,[pt.x,pt.y]) < CELL*0.85){ runRid=r.rid; runK=r.k; break; }
   }
-  return {x:p.x,y:p.y,cell:{gx,gy},part,fitting,tapKey,tapT,tapK,runRid};
+  return {x:p.x,y:p.y,cell:{gx,gy},part,runRid,runK};
+}
+/* HOW FAR A POINT IS FROM A POLYLINE. All that is left of nearestOn(): the
+   fraction along the run it also returned was only ever for a tap, and a
+   fitting does not sit a fraction along anything any more. */
+function nearRun(pts,p){
+  let bd=1e9;
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1], b=pts[i];
+    const dx=b[0]-a[0], dy=b[1]-a[1], L=dx*dx+dy*dy;
+    const t = L? clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L,0,1) : 0;
+    bd=Math.min(bd, Math.hypot(a[0]+dx*t-p[0], a[1]+dy*t-p[1]));
+  }
+  return bd;
 }
 // Stage 7a: the menu header names the thing it is ABOUT - a part, a run, a
 // fitting, or the plant itself for a bare cell. Never a menu item, so it
 // carries no fn and cannot be clicked - see drawCtxMenu() (core/ui.js).
 function ctxTitleDesign(hit){
-  if(hit.fitting) return FITNAME[D.fit[hit.fitting].mode]+" "+hit.fitting.toUpperCase();
   if(hit.part) return partName(hit.part);
-  if(hit.tapKey!=null) return pipeLabel(hit.tapK)||"PIPE";
+  if(hit.runRid) return pipeLabel(hit.runK)||"PIPE";
   return "PLANT";
-}
-/* WHICH RUN THE PLAYER JUST POINTED AT, and where along it. This is a
-   RESOLVER, not a picker: the point is one the player aimed, and the only
-   question is which polyline it landed on. That is the whole difference from
-   nearestRunOfLoop(), which this replaces - that one took a point the player
-   chose for the NEAR end and searched a whole loop for a far end nobody had
-   pointed at.
-   `skip` keeps a tee off its own host run: a tee spliced onto the run it
-   already taps is a tee on itself, not a cross-tie. Untargeted clicks return
-   null, which the caller treats as a cancel - there is nothing to refuse. */
-function nearestRunTo(pt,skip){
-  let best=null, bd=1e9;
-  for(const r of pipeNetwork()){
-    if(!r.key || r.key===skip || r.k.startsWith("xtie")) continue;
-    const near=nearestOn(r.pts,pt);
-    // rid as well as key: a TAP run stores the D.run id it lands on (plus its
-    // kind as the fallback), so a caller authoring one needs both.
-    if(near.d<bd){ bd=near.d; best={key:r.key,t:near.t,rid:r.rid||null}; }
-  }
-  /* ONE reach for "did I hit a pipe", shared by the tap drag and the
-     right-click menu, for the same reason and to the same feel: a drop is
-     aimed with a mouse, not with a caret. 12 plant units was the first guess
-     and it is about 1.9 SCREEN pixels at fit zoom - a target nobody can hit,
-     which is most of why the tap handle read as missing entirely. */
-  return bd<=CELL*0.85 ? best : null;     // aimed at a pipe, not at empty deck
 }
 /* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
    decides - a click on a component offers REMOVE, one item, about that
@@ -213,20 +186,6 @@ function nearestRunTo(pt,skip){
    fittableList()'s FIT side survives on the bare-cell fallback below - a
    part that is not yet fitted has no box on the grid to click. */
 function ctxItemsDesign(hit){
-  /* WHICH FITTING, and nothing else - both taps are settled. Every row here
-     builds the identical geometry and differs only in `mode`, which is what
-     makes this a type question rather than a placement one. A branch throttle
-     is on the list because it is the same two taps too, and until now it could
-     not be authored at all: the in-line offer passes a null far end. */
-  if(hit.tapPair){ const t=hit.tapPair;
-    return [
-      {label:"TEE",             fn:()=>{ addFit('tee',t.aKey,t.aT,t.bKey,t.bT); }},
-      {label:"RELIEF VALVE",    fn:()=>{ addFit('relief',t.aKey,t.aT,t.bKey,t.bT,PIPE_BORE.relief); }},
-      {label:"THROTTLE, BRANCH",fn:()=>{ addFit('throttle',t.aKey,t.aT,t.bKey,t.bT); }},
-    ];
-  }
-  if(hit.fitting)
-    return [{label:"REMOVE", fn:()=>{ removeFit(hit.fitting); }}];
   if(hit.part){
     // a FITTABLE slot's part exists on the grid only while it IS fitted
     // (cont/turb/cond), so clicking it can only ever mean REMOVE.
@@ -234,41 +193,21 @@ function ctxItemsDesign(hit){
     if(f) return f.get()
       ? [{label:"REMOVE", fn:()=>{ f.set(false); }}]
       : [{label:"ADD "+f.label, fn:()=>{ f.set(true); }}];
-    // Every tank is an instance the player added, so every tank can be taken
-    // away again - including the three the stock plant ships with. Zero tanks
-    // is a legal plant. Everything else that can go is whatever was PLACED -
-    // asked of the placed list (isPlaced(), layout.js), never of the id.
-    if(hit.part.role==="tank" || isPlaced(hit.part.id))
+    // Every tank and every fitting is an instance the player added, so every
+    // one can be taken away again - including the ones the stock plant ships
+    // with. Zero of either is a legal plant. Everything else that can go is
+    // whatever was PLACED - asked of the placed list (isPlaced(), layout.js),
+    // never of the id.
+    if(hit.part.role==="tank" || hit.part.role==="fitting" || isPlaced(hit.part.id))
       return [{label:"REMOVE", fn:()=>{ removePart(hit.part.id); }}];
     return [];   // a base component (core, rods, pzr...) offers no menu at all
   }
-  if(hit.tapKey!=null){
-    // a run under the cursor: disconnect it outright, or splice something
-    // onto it - a pipe, not a component, so "exactly one" does not apply
-    // here (Stage 7a is only about REMOVE).
-    const items=[];
-    if(hit.runRid) items.push({label:"DISCONNECT", fn:()=>{ removeRun(hit.runRid); }});
-    // a throttle needs nothing beyond the one tap it sits on - it can splice
-    // straight into the run it's on, so it is always on offer here, even on
-    // a single-loop plant with no second run to tie to
-    items.push({label:"ADD THROTTLE HERE", fn:()=>{ addFit('throttle',hit.tapKey,hit.tapT,null,null); }});
-    /* NO RELIEF VALVE OFFER HERE, and no tee. Both need a SECOND tap, and this
-       menu knew only the one under the cursor - so it picked the far end
-       itself: reliefHeaderKey() found the first run of kind "relief" on the
-       plant and dropped the discharge at exactly t=0.5 along it, a point
-       nobody chose. Drag a tap onto the pipe you mean instead
-       (pipeTapHandles(), plant.js) and the menu that opens on the drop asks
-       only WHICH fitting it is. Nothing about the old behaviour is lost:
-       fitBKey() still re-resolves a relief valve's far tap every frame, and a
-       valve whose discharge reaches no tank still vents into the room. */
-    /* NO TEE AND NO SURGE-LINE OFFER HERE EITHER, for the same reason there is
-       no CONNECT offer: both are DRAWN now. A tee is pulled out of the square
-       riding the pipe under the pointer and dropped on the pipe you mean; a
-       surge line is a PORT drag - out of the pressurizer's own nozzle - let go
-       over the pipe you want it to tap. The menu row this replaces still chose
-       which run of the right kind to land on and left the fraction along it to
-       the router, so half the geometry was authored by nobody. */
-    return items;
+  if(hit.runRid){
+    /* A RUN UNDER THE CURSOR, and one offer. Splicing something INTO it is
+       not a menu row any more: a fitting is a box, so you place it in a cell
+       and draw two runs to it. What the menu still owns is the one question
+       no gesture asks - take this pipe out. */
+    return [{label:"DISCONNECT", fn:()=>{ removeRun(hit.runRid); }}];
   }
   // a genuinely bare cell: nothing is under the cursor, so no REMOVE
   // belongs here - only offers that create or connect something.
@@ -281,6 +220,12 @@ function ctxItemsDesign(hit){
          and how it is plumbed are set afterwards on its own panel. Not gated
          on a count - four tanks is a legal plant. */
       items.push({label:"ADD TANK HERE", fn:()=>{ addTank(gx,gy); }});
+      /* ONE ENTRY, no submenu of kinds - the same argument ADD TANK HERE
+         makes. It places the single default fitting config (FIT_DEFAULT,
+         pipenet.js); whether it is a tee, a throttle or a relief valve is a
+         knob on its own panel afterwards, because all three are one box in
+         one cell and only the mode differs. */
+      items.push({label:"ADD VALVE HERE", fn:()=>{ addFitting(gx,gy); }});
       items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
         placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
           grp:"pump",tip:"A spare coolant pump, placed where you put it. Right-click a free port to CONNECT it - unplumbed, it does nothing at all.",
@@ -708,21 +653,6 @@ function dbRailBuild(rail,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
-  /* A fitting is not in LAY.parts, so it never had a panel - which is why a
-     relief valve's setpoints had nowhere to be set. One well per fitting,
-     built from paramsForFit() exactly the way a component's is built from
-     paramsFor(). The rail is rebuilt whenever the fitting set changes (LAY is
-     rebuilt on checkSig(), layout.js), so this list cannot go stale. */
-  const fits=[];
-  for(const fid in D.fit){
-    const B=paramsForFit(fid); if(!B.length||B.plain) continue;
-    const name=FITNAME[D.fit[fid].mode]+" "+fid.toUpperCase();
-    const well=KIT.well({title:name}); rail.appendChild(well.el);
-    const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
-    railPick(well,[fid],name);
-    watch.add(well.el);
-    fits.push({fid,well,body,on:null});
-  }
   const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
   // one switch per LAYERS entry, built once per rail rebuild - see
@@ -730,7 +660,7 @@ function dbRailBuild(rail,watch){
   // calls: a layer switch is not redrawn per screen, it is drawn once.
   const layers=KIT.well({title:"LAYERS"}); rail.appendChild(layers.el);
   layerSwitches(layers.body);
-  return {panels,fits,results,review};
+  return {panels,results,review};
 }
 /* the rail scrolls to a newly selected panel ONCE, on the frame sel changes -
    every frame would fight the user's own scrolling */
@@ -755,13 +685,6 @@ function dbRailSync(state){
     if(!railSeen(h.well.el) && !(on&&moved)) continue;
     const cur=paramsFor(LAY.parts.find(q=>q.id===h.p.id)||h.p);
     dbPanelSync(h.body,cur);
-  }
-  for(const h of state.fits){
-    const on=h.fid===sel;
-    if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
-    if(on && moved) KIT.reveal(h.well.el,"start");
-    if(!railSeen(h.well.el) && !(on&&moved)) continue;
-    dbPanelSync(h.body,paramsForFit(h.fid));
   }
   { const rd=benchResultsData();
     const body=state.results.body;
@@ -839,7 +762,7 @@ function drawDesign(){
   const vw = railBox ? Math.max(200, railBox.x) : W;
   drawPlant(vy,null,vh,0,vw);
   { const st=DB&&DB.state;
-    const h = st && (st.panels.find(o=>o.ids.includes(sel)) || st.fits.find(o=>o.fid===sel));
+    const h = st && st.panels.find(o=>o.ids.includes(sel));
     if(h) leaderLine(h.well.el,DB.rail); }
   drawCtxMenu();
 }

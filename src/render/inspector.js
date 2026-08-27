@@ -297,6 +297,7 @@ function paramsFor(p){
      normal design path, so designSig() sees it and the plant re-commissions.
      FLUID_IDS/AUTO_IDS are read off the tables themselves, so adding a
      substance or an opening rule adds an entry here for free. */
+  else if(p.role==="fitting") return paramsForFit(id);
   else if(p.role==="tank"){
     const t=()=>D.tanks[id];
     const acc=(f)=>({get:()=>t()[f], set:v=>{ t()[f]=v; }});
@@ -355,24 +356,30 @@ function paramsFor(p){
 }
 
 /* ══ WHAT A FITTING LETS YOU SET ══
-   paramsFor()'s sibling, same block kinds, same consumer - a fitting is not in
-   LAY.parts, which is the only reason it had nowhere to put a control. Only a
-   relief valve has anything to adjust: its lift and reseat pressures are
-   MECHANICAL, chosen when it is built, so they live in D.fit beside the tap and
-   never on S. The arming switch is the opposite - it is worked during a
-   transient - and lives on the valve's own canvas strip (fitStrip(), plant.js).
-   A tee and a throttle have no design-time setting at all; their whole
-   behaviour is the position the operator gives them. */
+   A branch of paramsFor(), reached the way a tank's panel is: WHAT it is
+   (mode) and how big it is (bore) are the design, and the position it is
+   worked to is not. A relief valve's lift and reseat pressures are MECHANICAL,
+   chosen when it is built, so they live in D.fittings and never on S; the
+   arming switch is the opposite - it is worked during a transient - and lives
+   on the valve's own control strip (ctlFor(), plant.js). */
 function paramsForFit(fid){
-  const B=[], j=D.fit[fid]; if(!j) return B;
+  const B=[], j=D.fittings[fid]; if(!j) return B;
   const P0=ARCH[D.arch].P0*D.pdes;
+  const MODE_IDS=["tee","throttle","relief"];
+  B.push({kind:"optlist",title:"FITTING",base:0,
+    key:{get:()=>MODE_IDS.indexOf(j.mode), set:i=>{ j.mode=MODE_IDS[i]; }},
+    tip:"What this fitting IS. All three are the same box in the same cell - a tee is a plain junction with no gate at all, a throttle is a valve you work by hand, and a relief valve works itself off a setpoint.",
+    items:[{name:"TEE",tip:"A junction. Four faces, one node, no gate: it costs the line nothing and closes nothing."},
+           {name:"THROTTLE",tip:"A valve you set and it holds. Wide open it costs the line nothing at all; shut it is a real break in the pipe."},
+           {name:"RELIEF VALVE",tip:"Lifts on its own at its own setpoint and blows the line down through whatever is piped behind it. Leave its outlet unpiped and it vents straight into the room."}]});
+  B.push({kind:"slider",title:"BORE",step:.05,min:.1,max:1,
+    key:{get:()=>j.bore, set:v=>{ j.bore=v; }},
+    fmt:v=>v.toFixed(2)+" x",
+    tip:"How big the valve is, relative to a full-bore loop leg. A wide relief valve vents faster; a wide throttle costs less when it is open. It is steel either way, so it is on the mass budget.",
+    massFn:v=>FIT_MASS*(v/FIT_BORE0)});
   const sld=(title,tip,key,min,max,fmt,step)=>B.push({kind:"slider",title,tip,key,min,max,fmt,step});
   const rdo=(title,tip,val)=>B.push({kind:"readout",title,tip,val});
-  if(j.mode!=="relief"){
-    B.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS. This fitting is worked from the plant view."});
-    B.plain=true;
-    return B;
-  }
+  if(j.mode!=="relief") return B;
   sld("LIFT PRESSURE",
     "The pressure this valve opens itself at, as a multiple of the loop's design pressure. Low and it lifts on every transient and spends its stick chances early; high and pressure climbs further before anything vents, toward a vessel that bursts at about 122%.",
     {get:()=>reliefSet(fid).lift,
@@ -390,9 +397,12 @@ function paramsForFit(fid){
   /* Nothing showed this before, so a relief tank sited across the plant cost
      vent rate silently. It is a commissioned figure - it reads the routed
      branch pipe - so the bench shows the length that drives it instead. */
-  rdo("BRANCH LENGTH","How far this valve has to vent to reach the relief tank. A short, fat run vents faster; a long one is a relief path that cannot keep up with the transient it was fitted for.",
-    ()=>{ const r=(pipeNetwork()||[]).find(q=>q.key==="xtie:"+fid);
-          return r? plen(r.pts).toFixed(1)+" m" : "unrouted"; });
+  /* WHERE THE DISCHARGE ACTUALLY GOES, asked of the drawing. A valve whose
+     outlet reaches no tank is not broken - it vents into the room, which is a
+     real design and the bench NAMES it rather than refusing it. */
+  rdo("DISCHARGES TO","Where what this valve passes ends up. Pipe its outlet to a tank and the discharge is caught; leave it unpiped and it goes straight into the compartment, which is activity in the air the crew is breathing.",
+    ()=>{ const t=P&&P.net&&P.net.fitTarget&&P.net.fitTarget[fid];
+          return t ? ((D.tanks[t]&&D.tanks[t].name)||t.toUpperCase()) : "THE ROOM"; });
   return B;
 }
 

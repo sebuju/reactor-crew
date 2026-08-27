@@ -345,6 +345,31 @@ function drawSym(p,x,y,w,h,ink,L){
        It leaves the box on purpose: a release is the one thing on this plant
        that does not stay inside the component it came from. */
     if(L) fxSteam(cx,Y+2,W*.7,fxEase(id+":rel",clamp(L.release/10,0,1)),C.amber,91);
+  } else if(p.role==="fitting"){
+    /* ONE BRANCH FOR EVERY FITTING, and the symbol is the whole of it. The
+       glyph used to be drawn on the pipe at the fitting's own tap, because a
+       fitting had no box; it has one now, so it draws where every other
+       machine draws and "a fitting's glyph survives commissioning" holds BY
+       CONSTRUCTION rather than by a per-mode branch remembering to.
+       reliefBowtie() is the live state (shut / passing / blocked) and
+       fitGlyph() the bare shape the bench shows - one drawing either way. */
+    const mode=fitModeOf(id);
+    if(mode==="relief" && L) reliefBowtie(cx,y+h/2,16,11,L,id);
+    else fitGlyph(cx,y+h/2,16,11,mode,ink);
+    /* WHAT THIS VALVE IS PASSING, drawn instead of typed, at the valve, and
+       judged against this fitting's OWN fully-open rate (reliefFullRate(),
+       pipenet.js) so the plume can never show a rate the sim is not
+       performing. Per fitting, so two relief valves are two plumes.
+       IT IS DRAWN WHETHER OR NOT THE VALVE IS PIPED, deliberately: this
+       depicts what the VALVE is passing, not what reaches the room. Where the
+       discharge goes is a separate question the tick asks separately
+       (net.fitTarget, step.js). Gating the plume on that was tried and is
+       wrong - audit-text.js pins the plume against the tick's own vent term
+       AND pins that it shrinks as the receiving tank fills on back pressure,
+       both of which are claims about a valve that IS piped. */
+    if(L && mode==="relief")
+      fxSteam(cx,y+4,W*.7,fxEase(id+":porv",
+        clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
   } else if(p.role==="tank"){
     /* ONE BRANCH FOR EVERY TANK. What is LEFT in it, not a full tank forever -
        a tank that has finished injecting is empty, and drawing it brimming is
@@ -674,8 +699,37 @@ function ctlFor(p,live,split){
      tip:(pri?"COOLANT PUMPS - "+pumpTip()
             :"THIS PUMP ONLY - what it is told to deliver. It answers for itself: a pump that is not in a coolant loop is not part of the coolant order.")}]];
   }
-  // a fitting has no box, so no control strip - its valve is drawn on the
-  // pipe itself, see pipeFitMarks() below
+  /* ══ A FITTING'S OWN HANDLES, ON ITS OWN PLINTH ══
+     They used to float in the pipe margin on a hand-rolled strip with its own
+     width and row count (FITSTRIP_W, fitStripRect()), because a fitting had
+     no box to bolt one to. It has one now, so this is an ordinary ctlFor()
+     row set and the boxless special case is gone with the three constants
+     that served it. A TEE gets nothing at all, and that is the point of a
+     tee: a junction has no gate, so there is nothing to work. */
+  if(p.role==="fitting"){
+    const mode=fitModeOf(p.id);
+    if(mode==="tee") return null;
+    if(mode==="throttle") return [[
+      {kind:"sld",flex:1,val:()=>(S.valve[p.id]??1)*100,min:()=>0,max:()=>100,
+       dem:()=>(S.valveDem[p.id]??1)*100,
+       fmt:v=>v.toFixed(0)+" %",set:v=>{ act("valveDem",p.id,v/100); },
+       tip:"THROTTLE - how far this valve stands open. Wide open it costs the line nothing at all; shut, it is a real break in the pipe, the same as a valve shut anywhere else."}]];
+    /* One row per handle, and they are NOT side by side: two switches this
+       narrow lose their labels before they lose their state, and these two
+       are not read at a glance the same way. BLOCK is a COMMAND and stays a
+       button; the arm is an arming switch and is drawn by armRow(), the one
+       that draws every other arming switch on the plant. */
+    return [
+     [{kind:"btn",flex:1,danger:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
+       on:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
+       text:()=>(S.reliefBlocked&&S.reliefBlocked[p.id])?"BLOCKED":"BLOCK",
+       fn:()=>{ act("porvBlockOf",p.id); },
+       tip:"BLOCK VALVE - your last defence against a relief valve that lifts and will not reseat. Shutting it stops the leak and gives this relief path up for the rest of the run."}],
+     [{kind:"arm",flex:1,label:()=>AUTOSYS.porv.label,
+       on:()=>!porvLive(p.id), fn:()=>{ act("porvByp",p.id); },
+       title:()=>AUTOSYS.porv.name+"  [ "+(porvLive(p.id)?"ARMED":"BYPASSED")+" ]",
+       tip:"Whether THIS valve may lift by itself at its own setpoint. Bypass it and this one stays shut while every other relief valve goes on working - which is how you defeat one valve without giving up the relief path."}]];
+  }
   switch(p.id){
     // GANGED holds exactly three rows, measured against the default plant's grid
     case "rods": {
@@ -867,7 +921,6 @@ function pipeGrip(x,y,rid,pt){
 }
 function pipeGrips(runs){
   for(const r of runs){
-    if(r.wp===false) continue;   // surge/xtie: not steerable, on purpose - see layout.js
     for(const p of r.wps) pipeGrip(p.x,p.y,r.rid,p);
     for(const leg of r.legs){ const g=legGrip(leg); if(g) pipeGrip(g.x,g.y,r.rid,null); }
   }
@@ -912,229 +965,41 @@ function frame2(p){ const r=prect(p); frame(r.x,r.y,r.w,r.h,C.amber); }
    player never saw and could not aim. That is the same fault the CONNECT
    offer was deleted for, and this is the same answer: draw it.
 
-   ONE handle, riding the pipe under the pointer, rather than a peg per run -
-   the bench is already a pegboard's worth of nozzles and waypoint grips, and
-   a tap can be taken anywhere along a run, so a fixed set of them would be
-   both noisier and less aimable than the point you are already pointing at.
-   Bench only, like pipeGrips() and pipePorts(): where a pipe runs, whether it
-   exists, and what is spliced into it are all bench questions. */
-const TAPG=9;
-function pipeTapHandles(runs){
-  const d = ui.drag&&ui.drag.type==="tap" ? ui.drag : null;   // LABEL: a DRAG kind, not a run's kind
-  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null;
-  const src = d ? juncPt(runs,d.key,d.t) : null;
-  const to  = d&&ptr ? nearestRunTo([ptr.x,ptr.y],d.key) : null;
-  const toPt = to ? juncPt(runs,to.key,to.t) : null;
-  // the handle you can start from: wherever the pointer is sitting on a pipe
-  const hovRun = !d&&ptr ? nearestRunTo([ptr.x,ptr.y],null) : null;
-  if(hovRun){ const hp=juncPt(runs,hovRun.key,hovRun.t);
-    if(hp){ const [x,y]=hp.pt;
-      /* THE BOX FOLLOWS THE POINTER; THE MARK FOLLOWS THE PIPE. They are not
-         the same place - the handle exists whenever the cursor is within
-         reach of a run, so the cursor can be CELL*0.85 away from the point on
-         the pipe, while the box is TAPG across. Pinning the box to the pipe
-         made this unpressable: you press where your hand is, and at fit zoom
-         a 9-unit box is under two SCREEN pixels, so the handle drew and could
-         not be grabbed. The MARK still belongs on the pipe, because that is
-         where the tap will actually land. */
-      push({x:ptr.x-TAPG/2,y:ptr.y-TAPG/2,w:TAPG,h:TAPG,type:"tap",key:hovRun.key,t:hovRun.t});
-      fillRect(x-2.5,y-2.5,5,5,C.bright);
-      frame(x-TAPG/2,y-TAPG/2,TAPG,TAPG,C.edge2);
-      TIP(ptr.x-TAPG/2,ptr.y-TAPG/2,TAPG,TAPG,"TAP  ·  "+(pipeLabel(hovRun.key.split(":")[0])||"PIPE"),
-        "Drag onto another pipe and a fitting is spliced between the two points you pointed at - a tee, a relief valve or a branch throttle, asked when you let go. Drop it on empty space and nothing is built."); }}
-  if(src){ const [x,y]=src.pt;
-    fillRect(x-2.5,y-2.5,5,5,C.amber);
-    frame(x-TAPG/2,y-TAPG/2,TAPG,TAPG,C.amber);
-    if(toPt){ const [bx,by]=toPt.pt; fillRect(bx-2.5,by-2.5,5,5,C.green);
-      frame(bx-TAPG/2,by-TAPG/2,TAPG,TAPG,C.green); }
-    /* the same rubber band the port drag uses, and for the same reason: green
-       once it has somewhere to land, amber while it has not. */
-    if(ptr){ ctx.save(); ctx.setLineDash([4,4]);
-      ctx.beginPath(); ctx.moveTo(x,y);
-      ctx.lineTo(toPt?toPt.pt[0]:ptr.x, toPt?toPt.pt[1]:ptr.y);
-      ctx.strokeStyle=toPt?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
-      ctx.restore(); } }
-}
-
-// a fitting has no box or control strip, so its glyph is drawn straight on
-// the tapped point - fixed in position. Both screens draw a mark so a
-// placed fitting is findable to remove even before it's live: bench gets a
-// dim dot, control room the live control - a bowtie() valve for a tee (open
-// or shut is all it has), the same slider() every other actuator on the
-// plant uses for a throttle (a position, not a toggle - see FIT.throttle,
-// pipenet.js). One function for both, mode-driven, the same way LAYERS picks
-// a row instead of every screen growing its own switch on the type.
-/* ── A FITTING'S OWN CONTROL STRIP ──
-   A fitting has no box, so it has no plinth to bolt a strip to - and ctlStrip()
-   never needed one. It takes a plain rect, so the two handles a relief valve
-   has get sited in the same pipe margin the meters already float in: under the
-   glyph and its margin tag when that is clear of every component, over it when
-   it is not, decided by the ONE boxClear() test the meters use (pipes.js). */
-// the same 4 px ctlStrip() puts BETWEEN cells, used between the rows, so a
-// stacked strip and a side-by-side one are spaced by one number
-const FITSTRIP_W=34, FITSTRIP_ROWS=2;
-function fitStripRect(x,y){
-  const w=FITSTRIP_W, h=FITSTRIP_ROWS*BTN_H+(FITSTRIP_ROWS-1)*CTL_STRIP_GAP;
-  const sx=Math.round(x-w/2), below=Math.round(y+20);
-  return boxClear(sx,below,w,h) ? {x:sx,y:below,w,h}
-                                : {x:sx,y:Math.round(y-20-h),w,h};
-}
-function fitStrip(fid,x,y,L){
-  const r=fitStripRect(x,y), blkd=L.reliefBlocked[fid];
-  /* One row per handle, the same stack a component's strip makes - side by
-     side, two switches this narrow lose their labels before they lose their
-     state, and these two are not read at a glance the same way. BLOCK is a
-     COMMAND and stays a button; the arm is an arming switch and is drawn by the
-     one that draws every other arming switch on the plant. */
-  ctlStrip([
-    {kind:"btn",flex:1,danger:()=>blkd,on:()=>blkd,text:()=>blkd?"BLOCKED":"BLOCK",
-     fn:()=>{ act("porvBlockOf",fid); },
-     tip:"BLOCK VALVE - your last defence against a relief valve that lifts and will not reseat. Shutting it stops the leak and gives this relief path up for the rest of the run."}
-  ], r.x,r.y,r.w,BTN_H);
-  /* lit off porvLive(), not the valve's own flag: the master switch defeats it
-     too, and a row reading AUTO green while nothing can lift would be the panel
-     lying about the one thing it is there to say. */
-  const live=porvLive(fid);
-  armRow(r.x,r.y+BTN_H+CTL_STRIP_GAP,r.w,BTN_H,{
-    label:AUTOSYS.porv.label, fit:true, lit:!live,
-    fn:()=>{ act("porvByp",fid); },
-    title:AUTOSYS.porv.name+"  [ "+(live?"ARMED":"BYPASSED")+" ]",
-    tip:"Whether THIS valve may lift by itself at its own setpoint. Bypass it and this one stays shut while every other relief valve goes on working - which is how you defeat one valve without giving up the relief path."+
-        (L.byp.porv?"  The master switch is bypassed as well, so nothing lifts until that is armed again.":"")});
-}
-/* WHERE EACH FITTING'S GLYPH LANDED THIS FRAME. A fitting is not in LAY.parts,
-   so leaderLine() has no rect to run a leader from and the rail could point at
-   a component but never at a valve. Refilled from nothing on every draw, the
-   same standing pipeDrop (pipes.js) has: a view cache, never state, so a tap
-   whose part moved cannot leave a leader hanging in the air. */
-const fitPt={};
+/* ══ WHAT A FITTING STILL DRAWS ON THE PIPEWORK ══
+   Almost nothing, now that it is a component: the box, the symbol, the name
+   and the control strip are all the ordinary component loop's job. What is
+   left is the two READINGS that belong beside the valve rather than inside
+   it - a relief valve's margin to its own lift point, and a throttle's share
+   of the loop's head. Both are numbers a box has no room for. */
 function pipeFitMarks(L,net){
-  const fits = L? P.fit : D.fit;
-  for(const k in fitPt) delete fitPt[k];
-  for(const id in fits){
-    const j=fits[id], jp=juncPt(net,j.aKey,j.aT);
-    if(!jp) continue;                    // host run gone (part removed)
-    const [x,y]=jp.pt;
-    fitPt[id]={x,y};
-    // a selected fitting is marked the way a selected component is - it is the
-    // other half of "clicking it brings its panel up"
-    if(sel===id) frame(x-9,y-9,18,18,C.amber);
-    const removeHint = L?"":" Right-click it to remove.";
-    const isTee = j.mode==="tee", isRel = j.mode==="relief";
-    const la=loopOfKey(j.aKey), lb=j.bKey?loopOfKey(j.bKey):null, tied=la!=null&&lb!=null&&la!==lb;
-    const tipBody = isRel
-      ? (L
-          ? "A relief valve on this line, venting to the RELIEF TANK. It lifts on its own at its OWN setpoint and does not reseat until pressure is back below its own reseat point; a shorter run to the tank vents faster. Its two switches are under it: BLOCK is the whole answer to a valve that lifts and will not reseat, and it costs you this relief path for the rest of the run; AUTO/BYP decides whether this one valve may lift by itself."
-          : "A relief valve on this line, venting to the RELIEF TANK. Its lift and reseat pressures are set on its own panel in the rail - the gap between them is the deadband that stops it chattering. A shorter run to the tank vents faster."+removeHint)
-      : !isTee
-      ? (j.bKey
-          ? "A throttle wired between two runs, worked like a variable cross-tie - shut it costs nothing extra to the pipe, wide open it passes freely, and every position between chokes it down."+removeHint
-          : "A throttle spliced straight into this run. Wide open it costs the pipe nothing at all; closed, it is a real break in the line, same as a shut valve anywhere else."+removeHint)
-      : tied
-        ? "Bridges loop "+(la+1)+" and loop "+(lb+1)+
-          (L?". Open, they share whatever their pumps are still delivering, so a pump you lose on one is propped up by the other. Shut, each loop keeps its own water - which is what you want the moment one starts leaking, because an open junction will drain the good loop into the bad one. It moves the instant you press it."
-            :removeHint)
-        : "A tie between two points on the plant that are not both loop legs, so it moves nothing between loops."+removeHint;
-    if(L){
-      /* Each mode gets its own branch, because each has its own handle. Before
-         that was true, a relief fitting fell through to the throttle case below
-         and drew a live slider over S.valve[id] - a key seeded for throttles
-         ONLY (resetPlant(), step.js), so the position read undefined and every
-         drag was refused by ACT.valveDem. A control that draws, invites a drag
-         and does nothing is worse than no control, and it was on the stock
-         plant. */
-      if(isRel){
-        /* The glyph SELECTS, the way clicking a component does - that is what
-           brings this valve's own rail panel up. It used to be the block valve
-           as well, an undiscoverable click that was the only way in; the two
-           handles are labelled switches on the strip below now, and one control
-           in two places is how the two start disagreeing about what a click
-           does. */
-        const set=reliefSet(id);
-        /* WHAT THIS VALVE IS PASSING, drawn instead of typed, at the valve. It
-           is judged against this fitting's OWN fully-open rate
-           (reliefFullRate() - display only, pipenet.js), so the plume can never
-           show a rate the sim is not performing. Per fitting, not per plant:
-           two relief valves are two plumes, each off its own rate, where the
-           single copy this replaces could only ever depict one of them.
-           Under the glyph, so the bowtie stays readable through it.
-
-           IT IS DRAWN WHETHER OR NOT THE VALVE IS PIPED, deliberately. This
-           depicts WHAT THE VALVE IS PASSING, not what reaches the room - a
-           valve discharging into a relief tank is still a valve blowing down
-           the loop, and that is the thing the operator has to see. Where the
-           discharge GOES is a separate question the tick asks separately
-           (net.fitTarget, step.js: only a vent that reaches no tank is charged
-           to s.release and s.inv). Gating the plume on that was tried and is
-           wrong: audit-text.js pins the plume against the tick's own vent term
-           AND pins that it SHRINKS as the receiving tank fills on back
-           pressure - both of which are claims about a valve that is piped. */
-        fxSteam(x,y-8,10,fxEase(id+":porv",
-          clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
-        const wd = push({x:x-7,y:y-7,w:14,h:14,type:"btn",fn:()=>{ sel=id; }});
-        reliefBowtie(x,y,14,10,L,id);
-        if(hov(wd)) frame(x-8,y-8,16,16,C.bright);
-        /* How far pressure still has to climb before this valve lifts itself,
-           signed, in the units the pressurizer's own gauge reads. A relief
-           valve is the one instrument on the plant whose whole job is a
-           THRESHOLD, and it was the only one not saying where that threshold
-           was - the operator had a valve that would either be shut or already
-           venting, with nothing in between to watch. Negative means pressure
-           is past the setpoint: armed, it is lifting; bypassed or blocked,
-           that is the number telling you nothing is going to. Against THIS
-           valve's own lift point, never a plant-wide constant. */
-        const marg = P.P0*set.lift - L.P;
-        pipeTag(x,y+9, (marg>=0?"+":"")+marg.toFixed(2)+" MPa",
-                marg<0?C.red : marg<P.P0*0.02?C.amber : C.ink2);
-        TIP(x-7,y-7,14,24,"RELIEF VALVE",tipBody+
-          "  It lifts at "+(P.P0*set.lift).toFixed(2)+" MPa and does not reseat until "+
-          (P.P0*set.reseat).toFixed(2)+" MPa - the gap is what stops it chattering on the setpoint. "+
-          "The figure under it is how much pressure is left before it lifts.");
-        fitStrip(id,x,y,L);
-      } else if(isTee){
-        const open=S.juncOpen[id];
-        const wd=push({x:x-7,y:y-7,w:14,h:14,type:"btn",fn:()=>{ sel=id; act("junc",id); }});
-        fitGlyph(x,y,14,10,"tee", open?C.green:(hov(wd)?C.bright:C.metal));
-        TIP(x-7,y-7,14,14,"JUNCTION VALVE",tipBody);
-      } else {
-        /* THE GLYPH SURVIVES COMMISSIONING. Every other fitting keeps its
-           mark on the operate screen - a relief valve draws its bowtie, a tee
-           draws its own glyph - and the throttle was the one that did not: it
-           drew the slider and nothing else, so a valve you had placed and
-           aimed vanished from the drawing the moment you left the bench, and
-           the only thing left saying a fitting was there at all was a bare
-           slider floating on the pipe. Above the slider, the same stack the
-           relief valve uses (mark, then handle, then reading below). */
-        fitGlyph(x,y-11,14,10,j.mode,C.metal);
-        // no room for a control strip here, so the position lives on the
-        // same compact drag-slider every other actuator uses - a one-cell
-        // width, hover-only readout, exactly like a narrow control strip row
-        slider(x,y,28,S.valve[id],0,1,{th:10,tw:6,dem:S.valveDem[id],
-          fmt:v=>(v*100).toFixed(0)+"%", fn:v=>act("valveDem",id,v)});
-        /* The differential is what a throttle is FOR. Position says what you
-           asked for; only the drop says what it cost, and without it the knob
-           is one whose effect has to be inferred from a flow meter three
-           components away. Off the solve's own node heads (netDrops()), as a
-           share of the whole loop's head, so it is comparable between a long
-           leg and a short one. */
-        const dk = j.bKey? "xtie:"+id : j.aKey;
-        if(pipeDrop[dk]!=null)
-          pipeTag(x,y+9,(pipeDrop[dk]*100).toFixed(0)+"% dP",
-                  pipeDrop[dk]>0.5?C.amber:C.ink2);
-        TIP(x-14,y-17,28,36,"THROTTLE VALVE",tipBody+
-          (pipeDrop[dk]!=null? "  It is eating "+(pipeDrop[dk]*100).toFixed(0)+
-            " % of the loop's whole pump head; that is the differential across it." : ""));
-      }
-    } else {
-      // the bench glyph SELECTS. Without it a fitting could be reached from the
-      // rail and never from the drawing, which is the opposite of the rule
-      // every component on this screen already follows.
-      const wd=push({x:x-7,y:y-7,w:14,h:14,type:"btn",fn:()=>{ sel=id; }});
-      fitGlyph(x,y,14,10,j.mode, hov(wd)?C.bright:C.metal);
-      // the bench draws the plinth empty, the way a component's strip is drawn
-      // empty here, so nothing on the drawing jumps size on commissioning
-      if(isRel){ const r=fitStripRect(x,y); fillRect(r.x,r.y,r.w,r.h,C.panel); }
-      TIP(x-7,y-9,14,16,FITNAME[j.mode],tipBody);
+  if(!L) return;                      // both readings are live figures
+  for(const p of LAY.parts){
+    if(p.role!=="fitting") continue;
+    const id=p.id, mode=fitModeOf(id), r=prect(p), cx=r.x+r.w/2;
+    if(mode==="relief"){
+      /* HOW FAR PRESSURE STILL HAS TO CLIMB before this valve lifts itself,
+         signed, in the units the pressurizer's own gauge reads. A relief
+         valve is the one instrument on the plant whose whole job is a
+         THRESHOLD, and it was the only one not saying where that threshold
+         was. Negative means pressure is past the setpoint: armed, it is
+         lifting; bypassed or blocked, that is the number telling you nothing
+         is going to. Against THIS valve's own lift point, never a plant-wide
+         constant. */
+      const marg = P.P0*reliefSet(id).lift - L.P;
+      pipeTag(cx, r.y-4, (marg>=0?"+":"")+marg.toFixed(2)+" MPa",
+              marg<0?C.red : marg<P.P0*0.02?C.amber : C.ink2);
+    } else if(mode==="throttle"){
+      /* THE DIFFERENTIAL IS WHAT A THROTTLE IS FOR. Position says what you
+         asked for; only the drop says what it cost, and without it the knob
+         is one whose effect has to be inferred from a flow meter three
+         components away. Off the solve's own node heads (netDrops()), as a
+         share of the whole loop's head, so it is comparable between a long
+         leg and a short one. Its own edge, named once (fitEdgeKey(),
+         pipenet.js), never a run key spelled out here. */
+      const dk = fitEdgeKey(id);
+      if(pipeDrop[dk]!=null)
+        pipeTag(cx, r.y-4, (pipeDrop[dk]*100).toFixed(0)+"% dP",
+                pipeDrop[dk]>0.5?C.amber:C.ink2);
     }
   }
 }
@@ -1375,6 +1240,9 @@ function readoutsFor(p,s){
     const g=(c&&typeof c==="object")?c:null;
     R.push([k,v, g?bandCol(g):(c||C.cyan), tip, g, bar]);
   };
+  // a fitting is a part like any other, and what it is worth watching depends
+  // on its mode rather than on its id - see readoutsForFit() below
+  if(p.role==="fitting") return readoutsForFit(id,s);
   if(id==="core"){
     add("POWER",(s.n*100).toFixed(1)+" %",
       band(s.n*100,0,150,[[110,C.green,"NORMAL"],[150,C.red,"OVERPOWER"]],
@@ -1664,20 +1532,18 @@ function readoutsFor(p,s){
 }
 
 /* ══ WHAT A FITTING IS WORTH WATCHING ══
-   readoutsFor()'s sibling, same row shape, same consumer (fieldRowsSync()) -
-   because a fitting is a thing on the plant with state, and the only reason it
-   had no panel was that the rails were built from LAY.parts and a fitting is
-   not in it. Every row addresses THIS fitting: the six relief rows that used
-   to sit on the pressurizer could only ever describe primaryRelief(), so a
-   second or third valve was invisible to the panel that claimed to report it.
-   Readout only - the control-room rail holds no controls, by design. The
-   handles live on the valve's own strip (fitStrip(), above). */
+   A branch of readoutsFor(), not a sibling of it: a fitting is a PART now, so
+   the rail that is built from LAY.parts reaches it like every other machine,
+   and the second function this used to be existed only because it could not.
+   Every row addresses THIS fitting - the six relief rows that used to sit on
+   the pressurizer could only ever describe primaryRelief(), so a second or
+   third valve was invisible to the panel that claimed to report it. */
 function readoutsForFit(fid,s){
-  const j=P.fit[fid]; if(!j) return [];
+  const mode=fitModeOf(fid);
   const R=[], add=(k,v,c,tip)=>{ const g=(c&&typeof c==="object")?c:null;
     R.push([k,v, g?bandCol(g):(c||C.cyan), tip, g, null]); };
-  const dk = j.mode==="relief" ? null : (j.bKey? "xtie:"+fid : j.aKey);
-  if(j.mode==="relief"){
+  const dk = mode==="throttle" ? fitEdgeKey(fid) : null;
+  if(mode==="relief"){
     const set=reliefSet(fid);
     const open = !!s.reliefOpen[fid] && !s.reliefBlocked[fid];
     const blkd = !!s.reliefBlocked[fid], byp = !!s.porvByp[fid];
@@ -1704,10 +1570,11 @@ function readoutsForFit(fid,s){
     add("AUTO RELIEF", byp?"bypassed":autoState("porv").toLowerCase(),
         (autoLive("porv")&&!byp)?C.green:C.amber,
       "Whether THIS valve may lift by itself. Bypassing one valve leaves the others working; bypassing the master leaves nothing venting at all.");
-  } else if(j.mode==="tee"){
-    const open=!!s.juncOpen[fid];
-    add("JUNCTION",open?"OPEN":"shut",open?C.green:C.ink2,
-      "Open, the two runs it bridges share whatever their pumps are still delivering. Shut, each keeps its own water - which is what you want the moment one starts leaking.");
+  } else if(mode==="tee"){
+    /* A TEE HAS NOTHING TO REPORT. It is one node with four faces - no gate,
+       no position, no state at all - so it gets no rows and the rail hides
+       its panel, exactly as it does for a component with nothing to say. */
+    return R;
   } else {
     add("POSITION",(s.valve[fid]*100).toFixed(0)+" %",
       band(s.valve[fid]*100,0,100,[[1,C.ink2,"SHUT"],[100,C.green,"OPEN"]],{dp:0}),
@@ -1803,16 +1670,14 @@ function leaderAnchor(part){
    is under it; dashed, so it never reads as one more pipe. */
 function leaderLine(panelEl,railEl){
   const part=LAY&&LAY.parts.find(q=>q.id===sel);
-  // a fitting has no rect, only the point its glyph was drawn at this frame
-  const tap=part?null:fitPt[sel];
-  if((!part&&!tap)||!panelEl||!railEl) return;
+  if(!part||!panelEl||!railEl) return;
   const r=hostRect(railEl), q=hostRect(panelEl);
   if(r.w<2||r.h<2||q.h<1) return;                 // rail unlaid, or a panel hidden by display:none
   const pad=3, vx0=VIEW.x+pad, vx1=VIEW.x+VIEW.w-pad, vy0=VIEW.y+pad, vy1=VIEW.y+VIEW.h-pad;
   if(vx1<=vx0||vy1<=vy0) return;
   // clamped, not culled: panned off the plant, the leader pins to the viewport
   // edge and still says which way the component went
-  const s0 = tap? vScr({x:tap.x+9,y:tap.y}) : vScr(leaderAnchor(part));
+  const s0 = vScr(leaderAnchor(part));
   const sx=clamp(s0.x,vx0,vx1), sy=clamp(s0.y,vy0,vy1);
   // scrolled away, the leader takes the first turn only and then runs clean off
   // the top or bottom of the canvas, so it reads as continuing to a panel that
@@ -1977,14 +1842,11 @@ function drawPlant(y0,L,vh,vx,vw){
   if(L) pipeBreaks(L);
   layerPass("over",L);          // instruments and annotations, on top of the machines
   /* ORDER IS PRIORITY: the hit test takes the LAST widget pushed. The tap
-     handle rides the pointer, so it covers whatever is under the hand
-     wherever a pipe is near - which is exactly where the waypoint grips and
-     the nozzles are. It goes FIRST so both of them win the press: steering a
-     run and starting a run are aimed at marks that sit still, and losing
-     either to a splice you did not ask for is worse than having to move a few
-     pixels off a corner to splice one. */
-  if(!L){ pipeTapHandles(NET);          // what is spliced into a pipe...
-          pipeGrips(NET);               // ...where it runs...
+     the tap handle that used to ride the pointer here is gone with the tap
+     shape: a fitting is placed in a CELL now, so nothing has to be aimed at a
+     fraction along a pipe and nothing competes with the waypoint grips or the
+     nozzles for the press. */
+  if(!L){ pipeGrips(NET);               // where a run runs...
           pipePorts(NET.usage||{}); }   // ...and whether it runs at all
   pipeFitMarks(L,NET);
   for(const t of tags) t();     // every name and value, over the pipework

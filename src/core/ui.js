@@ -115,14 +115,9 @@ const ctxAdd=o=>{ CTX.push(o); return o; };
 const ctxFor=()=>CTX.find(o=>!o.sc||o.sc===screen);
 
 let ctxMenu=null;
-/* `extra` is what a GESTURE already decided, handed to the resolver so the
-   menu can be about that instead of about the pixel under the cursor. One
-   caller: a tap drag that has both its endpoints and needs only to be told
-   WHICH fitting to build. Geometry is dragged, type is menued - the menu
-   never chooses a place, and the drag never chooses a kind. */
-function openCtxMenu(p, extra){
+function openCtxMenu(p){
   const R=ctxFor();
-  ctxMenu = R ? R.resolve(p, extra) : null;
+  ctxMenu = R ? R.resolve(p) : null;
 }
 // dressed like drawTip()'s box - a drop shadow and a ground darker than any
 // panel - so it reads as a popup rather than one more pane of ordinary chrome.
@@ -135,8 +130,8 @@ function drawCtxMenu(){
   const R=ctxFor();
   const items = R ? R.items(ctxMenu) : [];
   if(!items.length){ ctxMenu=null; return; }
-  // the header names the thing the menu is ABOUT (a part, a run, a fitting,
-  // or the plant itself for a bare cell) - see registries' optional title().
+  // the header names the thing the menu is ABOUT (a part, a run, or the plant
+  // itself for a bare cell) - see registries' optional title().
   // It is never a row: no push(), so it cannot be clicked, and its own fill
   // keeps it from reading as one.
   const title = R && R.title ? R.title(ctxMenu) : "";
@@ -165,7 +160,7 @@ function drawCtxMenu(){
    D.name is not declared in design.js (which this file does not own) - it is
    created lazily, here, by the one writer. Keyed by part id, so a rename
    rides designSig() (JSON.stringify(D)+...), the recording head and the save
-   format for free - the same trick D.fit and D.run already use - and the
+   format for free - the same trick D.fittings and D.run already use - and the
    stock plant's signature does not move until a rename actually happens:
    nothing here writes D.name until setPartName() is handed a real string.
    partName() is the ONE reader - audit-dom.js source-scans the files that
@@ -463,14 +458,6 @@ function uiDown(e){
           return; }
       } else { pt={x:w.x+w.w/2,y:w.y+w.h/2}; L.push(pt); }
       ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
-    /* A TEE IS PULLED OUT OF A PIPE, exactly as a run is pulled out of a port.
-       It used to be a menu row per OTHER LOOP with the far end picked by
-       proximity - so a one-loop plant was offered no tee at all, and the far
-       end was a guess the player never saw, which is the same fault the old
-       CONNECT offer was deleted for. Holding the run KEY and the fraction,
-       never the pixel: pipeNetwork() re-routes every polyline each frame, so a
-       stored point would be off the pipe the moment anything upstream moves. */
-    else if(w.type==="tap"){ ui.drag={type:"tap",key:w.key,t:w.t,v:w.v}; }
     else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
     return; }
   // nothing under the pointer: a click on bare deck deselects, rather than
@@ -548,19 +535,6 @@ function uiUp(e){
     if(d.mode==="pipe" && d.over && d.pair)
       addRun(d.part.id,d.pair.fa,d.over.id,d.pair.fb);
     else if(d.mode==="move" && (d.gx!==d.sx||d.gy!==d.sy)) moveTo(d.part,d.gx,d.gy);
-  }
-  /* THE SAME RESOLUTION, one step down: a tap dropped on another run gives a
-     fitting BOTH its ends, and the menu that opens on the drop asks only
-     which fitting it is. A tee and a relief valve are the same geometry -
-     two taps - so the drag cannot tell them apart and must not try; what it
-     refuses to do is pick either end itself. Dropping on nothing is a cancel,
-     not an error, identical standing to the port drag above. */
-  if(d&&d.type==="tap"){
-    const p=uiPt(e.currentTarget||cv,e), q=vIn(p)?vPt(p):null;
-    const far = q && nearestRunTo([q.x,q.y],d.key);
-    ui.drag=null;                                  // the menu must not see a live drag
-    if(far) openCtxMenu(local(e),{tapPair:{aKey:d.key,aT:d.t,bKey:far.key,bT:far.t}});
-    return;
   }
   ui.drag=null;
 }

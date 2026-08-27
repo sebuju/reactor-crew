@@ -367,20 +367,6 @@ function crRailBuild(rail,watch){
     watch.add(well.el);
     panels.push({p,well,body,on:null,empty:null});
   }
-  /* A fitting gets a panel here too, off readoutsForFit() - READOUT ONLY, the
-     way every panel in this rail is. Its handles are on the valve itself
-     (fitStrip(), plant.js), because a fitting has no component box to mount a
-     control strip on and this rail has never held a control. */
-  const fits = P? P.fit : {};        // the rail is built once before commissioning too
-  for(const fid in fits){
-    const name=FITNAME[fits[fid].mode]+" "+fid.toUpperCase();
-    const well=KIT.well({title:name});
-    railPick(well,[fid],name);
-    const body=KIT.el("div","cr-panel-body"); well.body.appendChild(body);
-    rail.appendChild(well.el);
-    watch.add(well.el);
-    panels.push({fid,well,body,on:null,empty:null});
-  }
   return panels;
 }
 /* see dbRailSync() - reveal on the frame sel changes, never every frame */
@@ -393,14 +379,14 @@ function crRailSync(panels){
        run - so it is asked once per rail and the rail is rebuilt when P moves.
        Asking it every frame meant building the table just to throw it away. */
     if(h.empty) continue;
-    const on = (h.fid||h.p.id)===sel;
+    const on = h.p.id===sel;
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     const first = h.empty===null;
     if(!first && !railSeen(h.well.el) && !(on&&moved)) continue;
     // a rename does not touch P, so this rail's build trigger (Pfit) never
     // fires for it - re-read the name every sync, guarded no-ops either way
-    if(h.p){ const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm); }
-    const rows = h.fid? readoutsForFit(h.fid,S) : readoutsFor(h.p,S);
+    { const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm); }
+    const rows = readoutsFor(h.p,S);
     if(first){ h.empty=!rows.length; KIT.show(h.well.el,rows.length>0); }
     if(!rows.length) continue;
     if(on && moved) KIT.reveal(h.well.el,"start");
