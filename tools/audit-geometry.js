@@ -209,8 +209,17 @@ const juncChecks=[];
    EXACT, not a fraction. The old guard was "under 5%", which left 21 swept
    positions of unexplained slack for a regression to hide in - the same hole
    audit-text's ceilings were tightened to close. If this number moves, find
-   what moved it. */
-const WP_OTHER_BASE=86;   // exact measured baseline - see the note above
+   what moved it.
+
+   86 -> 18 when feedwater moved off the generator's "b" face onto its own
+   "r" face - in design.js for loop 0, and in loopgen.js for loops 1..3, which
+   had been left building the old shape. Those runs used to cross the board
+   from the right-hand plant to a generator's UNDERSIDE, through the lanes the
+   cold leg and the branches tapped off it already own; landing on the near
+   face instead, they cross almost nothing. A fall here is the routing getting
+   out of its own way, not a weakened check - the sweep, the pairing and the
+   672 positions are all unchanged. */
+const WP_OTHER_BASE=18;   // exact measured baseline - see the note above
 const wpSpots=[];
 for(let x=8;x<=760;x+=24) for(let y=104;y<=600;y+=24) wpSpots.push([x,y]);
 makeLoops(M,2); M.commission();

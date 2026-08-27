@@ -233,21 +233,21 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
            coldA0:{a:"sg0", af:"b",b:"pump0",bf:"t",k:"cold", bore:1},
            coldB0:{a:"pump0",af:"b",b:"core",bf:"b",k:"cold", bore:1},
            steam0:{a:"sg0", af:"t",b:"turb",bf:"t",k:"steam",bore:1},
-           feedD0:{a:"feed",af:null,b:"sg0",bf:"b",k:"feed",bore:1},
+           feedD0:{a:"feed",af:"t", b:"sg0",bf:"r",k:"feed",bore:1},
            /* tapK: what this tap is ABOUT, so it survives the run it names being
               deleted and redrawn - see pipeNetwork() (layout.js). */
            surge :{a:"pzr", af:"b",tap:"hot0",tapK:"hot", k:"surge", bore:.30},
            exh   :{a:"turb",af:"b",b:"cond",bf:"t",k:"exh",  bore:1},
-           feedS :{a:"cond",af:"r",b:"feed",bf:null,k:"feed", bore:1},
+           feedS :{a:"cond",af:"r",b:"feed",bf:"b",  k:"feed", bore:1},
            hpi   :{a:"hpi", af:null,b:"core",bf:"b",k:"hpi",  bore:.25},
            relief:{a:"pzr", af:null,b:"reltk",bf:null,k:"relief",bore:.20},
-           /* The EFW tank's own line. It lands on sg0's "b" face, which is
-              THE SAME NODE the cold leg lands on - which is exactly why this
-              tank is side:"secondary" and gets no fixed pressure: a fixed
-              node there would make it a second HPI injecting into the
-              primary. As a pendant leaf with nothing fixed past this one
-              edge, KCL forces exactly zero current through it. */
-           efwF  :{a:"efw",af:null,b:"sg0",bf:"b",k:"feed",bore:.5},
+           /* The EFW tank's own line, onto the generator's SECONDARY face.
+              It used to land on "b" - the same node the cold leg lands on -
+              so a fixed node behind it would have injected into the primary.
+              That collision is gone; what keeps this a pendant leaf now is
+              only the side contract (see pipenet.js), and KCL still forces
+              exactly zero current through it until that contract changes. */
+           efwF  :{a:"efw",af:null,b:"sg0",bf:"r",k:"feed",bore:.5},
          }};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can

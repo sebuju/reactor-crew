@@ -299,7 +299,7 @@ const ROLE = {
   pzr:   {internal:null, head:false, fixed:{type:"datum", face:"b"}, fold:null, mu:0.65, sgtr:false,
           ports:{"*":2}, thermal:"none"},                     // surge always "b"; relief's own face is dynamic (face(pzr,rt)) and could coincide
   sg:    {internal:{a:"l", b:"b", kind:"comp"}, head:false, fixed:null, fold:null, mu:0.60, sgtr:true,
-          ports:{l:1, b:2, t:1}, thermal:"transfer"},
+          ports:{l:1, b:1, t:1, r:2}, thermal:"transfer"},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
   pump:  {internal:{a:"t", b:"b", kind:"pump"}, head:true, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{t:1, b:1}, thermal:"none"},
   turb:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
@@ -307,7 +307,7 @@ const ROLE = {
   cond:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:1, r:1}, thermal:"sink"},
   feed:  {internal:null, head:false, fixed:null, fold:null, mu:0.82, sgtr:false,
-          ports:{"*":5}, thermal:"none"},                     // its own two links pick a face dynamically (face(fp,sg)/face(fp,cd)) - measured total at 4 loops, not a per-face number this role ever declares
+          ports:{b:1, t:4}, thermal:"none"},                  // PINNED, not dynamic: an internal b<->t edge is only correct if the runs land on b and t, and face() resolved those off wherever cond happened to sit
   ctrl:  {internal:null, head:false, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none"},
   cont:  {internal:null, head:false, fixed:null, fold:null, mu:0.30, sgtr:false,

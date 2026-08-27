@@ -36,7 +36,10 @@ function makeLoops(M, n){
     D.run["coldA"+i]={a:"sg"+i, af:"b",b:"pump"+i,bf:"t",k:"cold", bore:1};
     D.run["coldB"+i]={a:"pump"+i,af:"b",b:"core",bf:"b",k:"cold", bore:1};
     D.run["steam"+i]={a:"sg"+i, af:"t",b:"turb",bf:"t",k:"steam",bore:1};
-    D.run["feedD"+i]={a:"feed",af:null,b:"sg"+i,bf:"b",k:"feed",bore:1};
+    // "r", not "b": the generator's secondary feed face, mirroring feedD0 in
+    // design.js. Left on "b" this helper builds a plant whose loops 1..3 still
+    // land feedwater on the PRIMARY cold-leg node while loop 0 does not.
+    D.run["feedD"+i]={a:"feed",af:"t", b:"sg"+i,bf:"r",k:"feed",bore:1};
   }
 }
 module.exports={makeLoops};
