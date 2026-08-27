@@ -23,6 +23,7 @@ function resize(){
   cv.style.width=cssW+"px"; cv.style.height=(bodyH*sc)+"px";
   cv.width=Math.round(W*sc*dpr); cv.height=Math.round(bodyH*sc*dpr);
   ctx.setTransform(sc*dpr,0,0,sc*dpr,0,-TOPBAR_H*sc*dpr);
+  uiDirty();                       // resizing the backing store clears it
 }
 addEventListener("resize",resize);
 

@@ -2,9 +2,21 @@
 /* frame loop and boot */
 
 let prev=performance.now();
+/* THE SLOWEST THE SCREEN MAY BE WRONG FOR. uiDirty() (core/ui.js) catches
+   every hand movement and simFrame() reports every tick, which between them
+   is every reason the picture changes - but "every reason" is a claim, and
+   this is what it costs to be wrong about it: a quarter second, at a quarter
+   of one frame's work per second. */
+const IDLE_MS=250;
+let lastDraw=-1e9;
 function tick(now){
   let dt=(now-prev)/1000; prev=now; dt=Math.min(dt,.25);
-  simFrame(dt);
+  const stepped=simFrame(dt);
+  // taken unconditionally: short-circuiting behind `stepped` would leave the
+  // flag set through a whole run and spend it on the first still frame after
+  const want=uiTakeDirty();
+  if(!stepped && !want && now-lastDraw<IDLE_MS){ requestAnimationFrame(tick); return; }
+  lastDraw=now;
   fillRect(0,0,W,H,C.bg);
   ctx.fillStyle=gridPat; ctx.fillRect(0,TOPBAR_H,W,H-TOPBAR_H);
   ui.widgets=[]; ui.tips=[];

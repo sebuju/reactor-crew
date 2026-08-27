@@ -696,18 +696,23 @@ function simTick(){
   step(0.02);
   if(S.tick % SAMP_TICKS === 0) sample();
 }
+/* Returns whether the plant MOVED this frame. main.js paints on that, so the
+   answer has to come from here rather than be re-derived from screen and
+   TR.paused - those two say what the loop is meant to be doing, not what it
+   actually got done. */
 function simFrame(dt){
-  if(!P || !SIMSCREEN[screen]){ simAcc=0; return; }
+  if(!P || !SIMSCREEN[screen]){ simAcc=0; return false; }
   /* a scenario draining takes the whole frame: it is already stepping the
      plant on its own budget, and letting the live accumulator step it too
      would run the run at two speeds at once. */
-  if(scnBusy()){ simAcc=0; scnDrain(); return; }
+  if(scnBusy()){ simAcc=0; scnDrain(); return true; }
   if(TR.paused){
     /* paused still honours a single-step, and still keyframes - otherwise a
        plant nudged forward one tick at a time would never lay one down */
     simAcc=0;
-    while(TR.step1>0){ TR.step1--; if(!recPlay()) break; simTick(); }
-    recTick(); return;
+    let k=0;
+    while(TR.step1>0){ TR.step1--; if(!recPlay()) break; simTick(); k++; }
+    recTick(); return k>0;
   }
   simAcc += dt * TR.rate;
   let n=0;
@@ -722,6 +727,7 @@ function simFrame(dt){
   }
   if(n>=TICK_CAP) simAcc=0;
   recTick();                       // once a frame, after the ticks it covers
+  return n>0;
 }
 const trRate=r=>{ TR.rate=r; TR.paused=false; };
 const trPause=()=>{ TR.paused=!TR.paused; };

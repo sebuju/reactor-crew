@@ -560,6 +560,23 @@ function uiPt(el,e){ return el._uiLocal? el._uiLocal(e) : local(e); }
    measured at forever - and findTip() is a pure function of that point, so the
    canvas tooltip went on describing whatever the hand had last passed over
    while the hand was somewhere else entirely. */
+/* ══ THE FRAME LOOP IS EVENT-DRIVEN, AND THE EVENT IS "A HAND MOVED" ══
+   Nothing on the bench animates itself: every fx rate resolves to 0 without a
+   live plant, and no dashed line offsets. So a still hand means an identical
+   picture, sixty times a second, and the loop can simply not paint it.
+   What may NOT be done is enumerate the paths that change the drawing - a
+   rail slider, the lattice pen, a layer switch and a context menu all write
+   outside act(), and a list of them is a list that rots. Any raw input
+   anywhere marks the canvas instead, in the CAPTURE phase so a handler that
+   stops propagation cannot also stop the repaint. main.js owns the floor that
+   covers whatever this still misses. */
+let uiWants=true;
+const uiDirty=()=>{ uiWants=true; };
+const uiTakeDirty=()=>{ const w=uiWants; uiWants=false; return w; };
+if(typeof document!=="undefined" && document.addEventListener)
+  for(const ev of ["pointerdown","pointermove","pointerup","pointercancel","wheel","keydown","focusin","scroll"])
+    document.addEventListener(ev,uiDirty,{capture:true,passive:true});
+
 function uiBind(el){
   el.addEventListener("pointerdown",uiDown);
   el.addEventListener("pointermove",uiMove);
