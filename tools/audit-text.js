@@ -534,6 +534,7 @@ console.log('\n=== TEXT COLLIDING WITH OTHER TEXT ON THE SAME LINE ===');
 // next to, not just the one collision it was written to describe.
 const DOSE_TAG=/^\d+\.\d\dx$/;              // radPart(): r.toFixed(2)+"x"
 const CELL_FIGURE=/^(\d+\.\d\d|·)$/;   // radNumbers(): r.toFixed(2), or "·" below RAD_FLOOR
+const ARM_STATE=/^(AUTO|BYP)$/;             // armRow(): its own state word, and nothing else
 const RAD_SCREEN=/^(rad|radwreck|purityOn):/;   // both shapes below need a radiation layer switched on
 // Every ceiling here is dominated by the 120-tick layer-purity sweep further
 // down this file ('purityOn:0'..'119', the only sweep that leaves every
@@ -555,6 +556,23 @@ const COLLISION_ALLOW=[
     test:(a,b)=>RAD_SCREEN.test(a.screen) &&
                 ((a.t==='UPPER DECK / HULL' && DOSE_TAG.test(b.t)) ||
                  (b.t==='UPPER DECK / HULL' && DOSE_TAG.test(a.t))) },
+  { reason:"radNumbers() (the CELL DOSE layer, radn) prints a figure in every "+
+           "cell it believes is EMPTY, and its own test for that is the part "+
+           "occupancy grid - so it knows about MACHINES and nothing else. A "+
+           "FITTING has no cell and never will (a junction is a tap, not a "+
+           "component), so a relief valve's own arm row, drawn on the pipe it "+
+           "sits on, is invisible to that test and the two land on the same "+
+           "line. It surfaced when the feedwater pump gained a control strip "+
+           "of its own: a strip makes that row's BAND taller (ctlBands(), "+
+           "plant.js), every row's height is re-shared, and the valve's arm "+
+           "settled 2px onto the cell figure beside it. Only visible with CELL "+
+           "DOSE switched on, and that layer ships off. Scoped to armRow()'s "+
+           "own two state words against radNumbers()'s own figure shape - not "+
+           "to whatever happens to sit next to a number.",
+    ceil:122,
+    test:(a,b)=>RAD_SCREEN.test(a.screen) &&
+                ((CELL_FIGURE.test(a.t) && ARM_STATE.test(b.t)) ||
+                 (CELL_FIGURE.test(b.t) && ARM_STATE.test(a.t))) },
 ];
 { let n=0;
   // keyed on the array index, not the ~500-char reason string: two entries

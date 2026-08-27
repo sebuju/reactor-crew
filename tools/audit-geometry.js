@@ -4,7 +4,7 @@ const S=require('./bundle').bundle();
 
 // routing is emergent from component positions, so this has to run the code,
 // not just read it
-const M=require('./bundle').headless('{pipeNetwork,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,reliefRate,reliefHeaderKey,nozzleEnds,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,packVal,unpackVal,designSig,face,placePart,removePart}');
+const M=require('./bundle').headless('{pipeNetwork,pipeAnchors,pipeAnchorTick,pipeStackBoxes,commission,pipeWaypoints,D:()=>D,P:()=>P,S:()=>S,addFit,removeFit,juncPt,nearestOn,moveTo,LAY:()=>LAY,reliefRate,reliefHeaderKey,nozzleEnds,retraces,hittableRunKeys,netFlowK,ROLE:()=>ROLE,radMu,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,packVal,unpackVal,designSig,face,placePart,removePart}');
 // Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
 // same way a player builds one, through placed parts and real D.run entries.
 const {makeLoops}=require('./loopgen');
@@ -758,9 +758,13 @@ const kindBehaveChecks=[];
    rather than trusted: drawSym()'s own per-part id ladder is ART and is
    named as an exemption in src/render/plant.js itself (not just missed by
    the regex above, which only reaches `.k`/`.kind`, never `.id`); and
-   pipeRuns()/drawPlant() hiding the HPI run while S.hpi is off is a VIEW
-   declutter, never a permission - proven here by showing the edge itself is
-   shut (g<=0) exactly when the filter would hide it. */
+   and a shut tank's own injection edge is really shut. That second one used
+   to be the proof that pipeRuns()/drawPlant() hiding the HPI run was a VIEW
+   declutter rather than a permission. THE DECLUTTER IS GONE - a line that is
+   there and shut is the answer to "is my injection lined up", and a pipe that
+   vanishes with its valve teaches an operator that a shut valve has no pipe
+   behind it. The check stands, because the claim underneath it is the one
+   that mattered all along: shut is g<=0, in the graph, whatever is drawn. */
 const kindViewChecks=[];
 {
   const fsV=require('fs'), pathV=require('path');
@@ -777,10 +781,51 @@ const kindViewChecks=[];
   const hpiEdge=net.edges.find(e=>e.key && e.key.startsWith('hpi:'));
   const s=M.S(); s.hpi=false;
   const gOff=hpiEdge? hpiEdge.g(s) : null;
-  kindViewChecks.push(['a hidden HPI run is always a shut edge', !!hpiEdge && gOff<=0,
-    hpiEdge? `S.hpi=false (the condition pipeRuns()/drawPlant() hide the run on) gives the hpi edge g=${gOff} (<=0 required)`
+  kindViewChecks.push(['a shut injection tank is a shut edge', !!hpiEdge && gOff<=0,
+    hpiEdge? `a shut injection tank gives the hpi edge g=${gOff} (<=0 required) - the run is still drawn, and still reads 0`
             : 'no hpi edge on this plant - cannot test']);
   makeLoops(M,4); M.commission();
+}
+
+/* ══════════ EVERY RUN SHOWS EVERY VALUE IT HAS, AND NO TWO SMEAR ══════════
+   The three suppressors that used to keep this readable are deleted: one flow
+   meter per KIND, a per-layer clash test that dropped the loser, and a filter
+   that hid an injection run whose tank was shut. What replaced them is a
+   per-frame ALLOCATOR (pipeAnchors(), pipes.js) - every run is offered several
+   points along its own polyline and takes the first clear of the machines and
+   of every reading already placed. So the property to pin is not "one label
+   per kind" any more, it is: EVERY run got a place, and no two places overlap.
+   Swept 1..4 loops, because the crowded case is the four-loop plant and that
+   is exactly the one the old bucket was hiding. */
+{
+  for(const n of [1,2,3,4]){
+    makeLoops(M,n); M.commission();
+    const runs=M.pipeNetwork();
+    M.pipeAnchorTick();
+    const anch=M.pipeAnchors(runs);
+    const missing=runs.filter(r=>!anch[r.key]).map(r=>r.key);
+    let worst=null;
+    /* THE BOXES THE ALLOCATOR ACTUALLY RESERVED, not a copy of its geometry
+       written out again here - a mirror of STACK_W/STACK_H in this file would
+       be a second source for the same rectangle and would drift off the first
+       the day either constant moved. It already had: measured against a 64x33
+       guess this reported three overlaps the allocator never made. */
+    const boxes=M.pipeStackBoxes();
+    for(let i=0;i<boxes.length;i++) for(let j=i+1;j<boxes.length;j++){
+      const a=boxes[i], b=boxes[j];
+      const ov=Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x);
+      const oy=Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y);
+      if(ov>1 && oy>1 && (!worst||ov*oy>worst.area))
+        worst={a:a.key,b:b.key,area:ov*oy,ov,oy};
+    }
+    kindViewChecks.push([n+' loop(s): every run gets a reading place', missing.length===0,
+      missing.length? missing.length+' run(s) got none: '+missing.slice(0,4).join(', ')
+                    : runs.length+' run(s), '+runs.length+' places']);
+    kindViewChecks.push([n+' loop(s): no two reading places overlap', !worst,
+      worst? worst.a+' and '+worst.b+' overlap by '+worst.ov.toFixed(0)+'x'+worst.oy.toFixed(0)+'px'
+           : 'checked every pair']);
+  }
+  makeLoops(M,1); M.commission();
 }
 
 /* ══════════ ROLE: A PART ROLE IS A ROW (Stage 2) ══════════

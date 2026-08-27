@@ -12,6 +12,8 @@ const M=require('./bundle').headless(
  'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
  'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,addRun,removeRun,fittableList,'+
+ 'primaryPump,pumpIds,flowPri,flowDemPri,secGensOf,secondaryNode,tankSide,crossTies,'+
+ 'loopKg,hotMass,turbCount,condCount,roleAlive,mwE,'+
  'loopOf,loopOfKey,loopPumpCap,portRoom,nearestFreePort,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
  'addTapRun,runKindFor,pzrPlumbed,datumPart,designBlocked,designIssues,'+
  'nearestRunTo,juncPt,D_fit:()=>D.fit,'+
@@ -57,6 +59,20 @@ const set=o=>{
   makeLoops(M, loops||1);
   M.commission(); return M.S();
 };
+/* ORDER EVERY PUMP, actual and demand together, the way a case that wants a
+   plant already running at a given speed means it. s.flow/s.flowDem were one
+   global pair and are a map per part id now (s.flowBy/s.flowDemBy), so a bare
+   `s.flow = 0.05` is a write nothing reads - it would leave every pump at
+   rated and quietly turn a low-flow case into a healthy one. Actual AND
+   demand, because these cases mean "already there", not "on its way". */
+const setFlow=(s,v)=>{ for(const id in s.flowDemBy){ s.flowDemBy[id]=v; s.flowBy[id]=v; } return s; };
+/* ...and the coolant pumps alone, for a case about the CORE's own flow. */
+const setPriFlow=(s,v)=>{ for(const id in s.flowDemBy) if(M.primaryPump(id)){ s.flowDemBy[id]=v; s.flowBy[id]=v; } return s; };
+/* DEMAND ONLY, for a case that means "order them there and watch them get
+   there". A pump coasts (FLOW_TAU_COAST), and a case about the low-flow trip
+   needs that coast - drive the actual to zero as well and DNBR collapses in
+   the same tick and a different trip fires first. */
+const setPriDem=(s,v)=>{ for(const id in s.flowDemBy) if(M.primaryPump(id)) s.flowDemBy[id]=v; return s; };
 const run=(s,secs)=>{ for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) break; } return s; };
 
 let fails=0;
@@ -121,12 +137,12 @@ console.log('  no annunciator lit at rest, every architecture');
   console.log(`  boron dump + bypass: melt=${s.melt} breach=${s.breach} at t=${s.t.toFixed(0)}s`);
 }
 { const s=set({arch:2}); run(s,10);
-  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05; run(s,400);   // power collapses, xenon burns out, then it runs away
+  s.byp.rps=true; setPriFlow(s,0.05); run(s,400);   // power collapses, xenon burns out, then it runs away
   if(!s.melt) bad('RBMK low flow + bypass did not melt the core');
   console.log(`  RBMK low flow + bypass: melt=${s.melt} dmg=${s.dmg.toFixed(0)}`);
 }
 { const s=set({arch:5}); run(s,10);
-  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05; run(s,300);
+  s.byp.rps=true; setPriFlow(s,0.05); run(s,300);
   if(s.melt) bad('HTGR melted on low flow + bypass; it is meant to survive');
   console.log(`  HTGR low flow + bypass: melt=${s.melt} dmg=${s.dmg.toFixed(0)}`);
 }
@@ -143,19 +159,19 @@ for(const spares of [0,1,2]){
   for(let i=0;i<spares;i++) added.push(M.placePart(n=>
     ({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9+i,y:5,col:'#57d38c',grp:'loop0',tip:'t',loop:0})));
   M.commission(); const s=M.S(); run(s,10);
-  s.flowDem=0;
+  setPriDem(s,0);
   for(let i=0;i<120*50 && !s.scrammed && !s.breach;i++) M.step(0.02);
   const floor=M.P().flowMin;
   if(!/LOW FLOW/.test(s.trip)) bad(`pumps commanded to zero with ${spares} spare(s) tripped on "${s.trip}", expected LOW FLOW`);
-  if(s.flow>floor*1.05) bad(`pumps commanded to zero tripped at ${(s.flow*100).toFixed(1)}%, nowhere near the ${(floor*100).toFixed(0)}% floor`);
-  console.log(`  pumps to zero, ${spares} spare(s): trip="${s.trip}" at flow=${(s.flow*100).toFixed(1)}% dnbr=${s.dnbr.toFixed(2)}`);
+  if(M.flowPri(s)>floor*1.05) bad(`pumps commanded to zero tripped at ${(M.flowPri(s)*100).toFixed(1)}%, nowhere near the ${(floor*100).toFixed(0)}% floor`);
+  console.log(`  pumps to zero, ${spares} spare(s): trip="${s.trip}" at flow=${(M.flowPri(s)*100).toFixed(1)}% dnbr=${s.dnbr.toFixed(2)}`);
   for(const p of added) M.removePart(p.id);
 }
 /* Buoyancy removes heat but hardly moves the water, so it buys no DNBR. Stopping
    the pumps with the protection defeated must destroy the core, not settle into a
    comfortable low-power hum with more thermal margin than the plant had running. */
-{ const s=set({}); run(s,10); s.byp.rps=true; s.flowDem=0; run(s,180);
-  if(s.flow>0.01) bad(`pumps commanded to zero coasted to ${(s.flow*100).toFixed(1)}%, not to a stop`);
+{ const s=set({}); run(s,10); s.byp.rps=true; setPriDem(s,0); run(s,180);
+  if(M.flowPri(s)>0.01) bad(`pumps commanded to zero coasted to ${(M.flowPri(s)*100).toFixed(1)}%, not to a stop`);
   if(!s.melt) bad(`pumps stopped with RPS bypassed left the core intact: dmg=${s.dmg.toFixed(0)} dnbr=${s.dnbr.toFixed(2)}`);
   if(s.dnbr>M.P().dnbr0) bad(`stopping the pumps IMPROVED DNBR to ${s.dnbr.toFixed(2)} from a rated ${M.P().dnbr0.toFixed(2)}`);
   console.log(`  pumps to zero, RPS bypassed: n=${(s.n*100).toFixed(1)}% nat=${(s.nat*100).toFixed(1)}% Tf=${s.Tf.toFixed(0)}K dnbr=${s.dnbr.toFixed(2)} dmg=${s.dmg.toFixed(1)} melt=${s.melt}`);
@@ -300,7 +316,7 @@ console.log('\n=== THE ROD DRIVES ARE A TARGET, AND THEY RIDE THE HEAD ===');
 console.log('\n=== NO FREE COOLING, NO FREE TRIP RESET ===');
 { const s=set({rps:false, bkp:0, chim:0}); run(s,10);
   M.D().autorod=false; M.P().autorod=false;
-  s.flow=0; s.flowDem=0; s.blackout=true; s.bkpLost=true;                    // nothing turning, nothing to turn it
+  setPriFlow(s,0); s.blackout=true; s.bkpLost=true;                    // nothing turning, nothing to turn it
   const feff=[];
   for(let i=0;i<600*50;i++){ M.step(0.02); if(i%2500===0) feff.push(s.n); }
   if(s.dmg===0 && s.n>0.30) bad(`total loss of flow settled at ${(s.n*100).toFixed(0)}% with no damage`);
@@ -430,36 +446,48 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
      and neither hands a particular plant anything. Turning either into a
      survival dial would be putting the floor back under a different name.
 
-     900 s of patience, offsite power cut once the plant has settled. Measured:
-       NONE     melt at 302 s, VESSEL RUPTURE at 361 s, dmg 100
-       BATTERY  survives, no damage, trips on LOW DNBR
-       DIESEL   survives, no damage, never trips at all
+     1200 s of patience, offsite power cut once the plant has settled. Measured:
+       NONE     generator dry at 0.17 %, inventory 0 %, dmg 31.2, then 100 by 4500 s
+       BATTERY  survives, no damage, generator held at 50 %, trips on LOW DNBR
+       DIESEL   survives, no damage, generator held at 50 %, never trips at all
 
-     HOW it is lost, because the obvious guess is wrong and two attempts to
-     break this check by flooring the flow proved it: buoyancy carries decay
-     heat perfectly well. For 250 s DNBR CLIMBS, to 9.2, and fuel temperature
-     falls to 604 K. What ends it is SUBCOOLING. Pressure decays with Tavg
-     while the core's own rise grows as the flow drops (s.coreDT, step.js), the
-     hot leg reaches saturation, the loop boils, DNBR collapses to 0.41 inside
-     one sample, and the vessel bursts a minute later. A flow floor does not
+     HOW IT IS LOST CHANGED, and the change is the point. The window was 900 s
+     and the claim was "NONE melts at 302 s". That melt was an OVER-COOLING
+     excursion: feedwater was an algebraic term that owed nothing to power, so
+     a plant with no supply at all went on feeding its generator right through
+     the blackout, the primary was chilled by a heat sink nothing was paying
+     for, moderator feedback took power to 25 % and the fuel went. Feedwater is
+     a solved flow through a real pump now and that pump is on the same
+     switchboard as the coolant pumps (supplyK(), step.js), so with no supply
+     there is no feedwater: the generator boils dry in about 900 s, the core
+     has nowhere to put decay heat, pressure climbs, the relief path passes the
+     whole inventory overboard and the fuel goes that way instead. Slower, and
+     for the reason a real station blackout is dangerous.
+     So this asks for the LOSS, not for one particular ending inside a window
+     that was only ever long enough for the excursion. A flow floor does not
      save it and should not be reached for; the thing that saves it is a supply
      that keeps a pump turning.
      Asserted as an ORDERING as well as three outcomes - whatever the numbers
      do, a bigger supply may never do worse than a smaller one. */
   const sbo = bkp => { const s=set({bkp}); run(s,60); s.blackout=true;
     let meltT=null;
-    for(let i=0;i<50*900;i++){ M.step(0.02); if(s.melt&&meltT===null) meltT=s.t-60; }
-    return {melt:s.melt, dmg:s.dmg, meltT, trip:s.trip, scrammed:s.scrammed}; };
+    for(let i=0;i<50*1200;i++){ M.step(0.02); if(s.melt&&meltT===null) meltT=s.t-60; }
+    return {melt:s.melt, dmg:s.dmg, meltT, trip:s.trip, scrammed:s.scrammed,
+            inv:s.inv, sgl:M.sglMin(s)}; };
   const none=sbo(0), batt=sbo(1), dies=sbo(2);
-  if(!none.melt)
-    bad(`no backup power rode a 900 s station blackout out undamaged (dmg=${none.dmg.toFixed(1)}) - the loop never lost subcooling, so the supply you buy costs mass and buys nothing`);
+  if(!(none.dmg > 0))
+    bad(`no backup power rode a 1200 s station blackout out undamaged (dmg=${none.dmg.toFixed(1)}) - the supply you buy costs mass and buys nothing`);
+  if(!(none.sgl < 25) || !(none.inv < 50))
+    bad(`no backup power kept its heat sink through a blackout: generator at ${none.sgl.toFixed(1)} %, inventory ${none.inv.toFixed(1)} % - with no supply there is no feed pump, so neither should survive`);
   if(batt.melt) bad(`a battery bank melted the core in a blackout at t=${batt.meltT&&batt.meltT.toFixed(0)}s - half pump flow is meant to be enough`);
   if(dies.melt) bad(`diesels melted the core in a blackout at t=${dies.meltT&&dies.meltT.toFixed(0)}s - full pump power is meant to be enough`);
+  if(!(batt.sgl > 45) || !(dies.sgl > 45))
+    bad(`a backup supply did not keep the feed pump turning: BATTERY generator at ${batt.sgl.toFixed(1)} %, DIESEL at ${dies.sgl.toFixed(1)} %`);
   if(!(none.dmg > batt.dmg) || !(batt.dmg >= dies.dmg))
     bad(`a bigger supply did not do better: NONE ${none.dmg.toFixed(0)}% damage, BATTERY ${batt.dmg.toFixed(0)}%, DIESEL ${dies.dmg.toFixed(0)}%`);
   if(dies.scrammed) bad(`diesels still tripped the plant in a blackout: ${dies.trip}`);
-  console.log(`  station blackout, 900 s: NONE melts at ${none.meltT===null?'-':none.meltT.toFixed(0)+'s'},`+
-              ` BATTERY survives (${batt.dmg.toFixed(0)}% damage, "${batt.trip}"),`+
+  console.log(`  station blackout, 1200 s: NONE loses its generator (${none.sgl.toFixed(1)} %) and its inventory (${none.inv.toFixed(0)} %) for ${none.dmg.toFixed(0)}% damage,`+
+              ` BATTERY survives (${batt.dmg.toFixed(0)}% damage, generator at ${batt.sgl.toFixed(0)} %, "${batt.trip}"),`+
               ` DIESEL survives untripped`);
 }
 { /* the bench sells diesels as full pump power, so a blackout on diesels must
@@ -470,13 +498,13 @@ console.log('\n=== EVERY AUTOMATIC SYSTEM IS BYPASSABLE ===');
     const added=[]; for(let i=0;i<spares;i++) added.push(M.placePart(n=>
       ({id:'pumpX'+n,name:'RCP SPARE',w:1,h:1,x:9+i,y:5,col:'#57d38c',grp:'loop0',tip:'t',loop:0})));
     M.commission(); const s=M.S(); run(s,10); s.blackout=true; run(s,60);
-    if(s.scrammed) bad(`diesels fitted with ${spares} spare(s) still tripped in a blackout: ${s.trip} at flow ${(s.flow*100).toFixed(0)}%`);
-    if(s.flow<0.95) bad(`diesels hold only ${(s.flow*100).toFixed(0)}% flow in a blackout, bench promised full pump power`);
+    if(s.scrammed) bad(`diesels fitted with ${spares} spare(s) still tripped in a blackout: ${s.trip} at flow ${(M.flowPri(s)*100).toFixed(0)}%`);
+    if(M.flowPri(s)<0.95) bad(`diesels hold only ${(M.flowPri(s)*100).toFixed(0)}% flow in a blackout, bench promised full pump power`);
     for(const p of added) M.removePart(p.id);
   }
   const s=set({bkp:1}); run(s,10); s.blackout=true; run(s,60);
-  if(Math.abs(s.flow-0.5)>0.03) bad(`battery bank holds ${(s.flow*100).toFixed(0)}% flow in a blackout, bench promised half`);
-  console.log(`  BACKUP: diesels hold full flow through a blackout, battery holds ${(s.flow*100).toFixed(0)}%`);
+  if(Math.abs(M.flowPri(s)-0.5)>0.03) bad(`battery bank holds ${(M.flowPri(s)*100).toFixed(0)}% flow in a blackout, bench promised half`);
+  console.log(`  BACKUP: diesels hold full flow through a blackout, battery holds ${(M.flowPri(s)*100).toFixed(0)}%`);
 }
 
 /* ══════════ RELIEF: THE VENT IS THE SOLVED EDGE FLOW, AND REDUNDANCY COSTS ══════════
@@ -910,7 +938,7 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
      three. Off partName(), so a tank the player RENAMED is logged under the
      name they gave it rather than its internal id. */
   const s2=set({}); s2.P=2.0;
-  for(const id of M.tankIds()) if(D.tanks[id].side==='primary' && !s2.tankOpen[id]) M.act('tankOpen',id);
+  for(const id of M.tankIds()) if(M.tankSide(id)==='primary' && !s2.tankOpen[id]) M.act('tankOpen',id);
   run(s2,20);
   const injLine=M.LOG().find(e=>e.msg==='INJECTING');
   if(!injLine) bad('three primary tanks opened against a 2 MPa loop and nothing logged INJECTING');
@@ -1701,7 +1729,7 @@ console.log('\n=== A SEVERED RUN NEVER PRODUCES NaN, ANY ARCHITECTURE ===');
     if(!keys.length) continue;
     for(const key of keys) M.combatHit('pipe:'+key);   // sever everything the graph prices for this plant
     run(s,30);
-    const nums={n:s.n,Tf:s.Tf,dnbr:s.dnbr,flow:s.flow,nat:s.nat,P:s.P,Tavg:s.Tavg,k:M.netFlowK(s)};
+    const nums={n:s.n,Tf:s.Tf,dnbr:s.dnbr,flow:M.flowPri(s),nat:s.nat,P:s.P,Tavg:s.Tavg,k:M.netFlowK(s)};
     const bad_=Object.keys(nums).filter(k=>!isFinite(nums[k]));
     if(bad_.length) bad(`${ARCH[a].id}: severing every hittable run left ${bad_.join(',')} non-finite`);
   }
@@ -1710,7 +1738,7 @@ console.log('\n=== A SEVERED RUN NEVER PRODUCES NaN, ANY ARCHITECTURE ===');
 
 /* ══════════ THE PROTECTION SYSTEM MEASURES FLOW, IT DOES NOT READ THE DIAL ══════════
    A hole this feature OPENED and then closed. LOW FLOW used to trip on
-   s.flow, the pump demand - and before an in-line valve existed, demand and
+   the pump demand - and before an in-line valve existed, demand and
    delivery could not diverge, so nothing was wrong with that. A throttle can
    restrict a run, and a severed run can cut it outright, so a player could
    shut every valve on the primary with the pumps still commanded to 100% and
@@ -1731,10 +1759,10 @@ console.log('\n=== LOW FLOW TRIPS ON DELIVERED FLOW, NOT THE PUMP DIAL ===');
     bad(`shutting every valve on the primary did not trip LOW FLOW (trip="${s.trip}", delivered ${s.flowNet.toFixed(3)} vs floor ${floor.toFixed(3)})`);
   /* THE SENTINEL. Not decoration: this is the exact condition the OLD trip
      read, and it is still above the floor - so if anyone points LOW FLOW back
-     at s.flow, the case above stops tripping and this line says why. */
-  else if(!(s.flow>floor))
+     at the demand, the case above stops tripping and this line says why. */
+  else if(!(M.flowPri(s)>floor))
     bad('the pump dial fell below the floor too, so this case no longer proves the trip reads the delivered figure');
-  else console.log(`  every valve shut, pumps still ordered to ${(s.flow*100).toFixed(0)}%: delivered ${(s.flowNet*100).toFixed(1)}% is under the ${(floor*100).toFixed(0)}% floor and "${s.trip}" fires - the dial alone would have missed it`);
+  else console.log(`  every valve shut, pumps still ordered to ${(M.flowPri(s)*100).toFixed(0)}%: delivered ${(s.flowNet*100).toFixed(1)}% is under the ${(floor*100).toFixed(0)}% floor and "${s.trip}" fires - the dial alone would have missed it`);
   M.removeFit(th);
 }
 
@@ -2071,7 +2099,7 @@ console.log('\n=== A SNAPSHOT IS THE WHOLE PLANT ===');
      dose at the moment of the snapshot, which is precisely the state that
      lives on s.repair/s.dose/s.repRate/s.crewDose read together. */
   const okD=trip('mid-accident with a repair party out',{},s=>{
-    s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
+    s.byp.rps=true; setPriFlow(s,0.05);
     W.combatHit('rods'); W.repairStart('rods');
   });
   if(okD) console.log('  a plant mid-accident with a repair party taking dose round-trips bit-for-bit too');
@@ -2678,7 +2706,7 @@ console.log('\n=== RADIATION IS LIVE, NOT A COMMISSIONING-TIME NUMBER ===');
      accumulate after that, and reading the instant melt latches is a race,
      not a measurement. */
   const s=set({}); run(s,10);
-  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
+  s.byp.rps=true; setPriFlow(s,0.05);
   let ticks=0; while(!s.melt && !s.breach && ticks<50*300){ M.step(0.02); ticks++; }
   if(!s.melt) bad('flow-kill + RPS bypass did not reach core melt inside 300 s of fault time; nothing to check the live field against');
   if(s.dmg<=25) bad(`core melted at only dmg=${s.dmg.toFixed(1)}%, expected well past 25%`);
@@ -2717,7 +2745,7 @@ console.log('\n=== RADIATION IS LIVE, NOT A COMMISSIONING-TIME NUMBER ===');
      has knocked down to half of it. Subtracting the wrong baseline gives a
      negative excess, which is how this was caught. */
   const doseAt=cont=>{ const s=set({cont,contFit:true}); run(s,10);
-    s.byp.rps=true; s.flow=0.42; s.flowDem=0.42;
+    s.byp.rps=true; setPriFlow(s,0.42);
     for(let i=0;i<50*40;i++) M.step(0.02);
     if(s.melt) bad(`the containment case's own fault melted the core before its sample - it can no longer measure what it exists to measure`);
     if(s.dmg<10) bad(`the containment case's own fault only reached ${s.dmg.toFixed(1)}% damage - there is no release to tell two containments apart by`);
@@ -2800,7 +2828,7 @@ console.log('\n=== DOSE HAS TEETH: A HOT FIELD SLOWS A REPAIR PARTY, IT NEVER RE
      unlike COOL above it is only checked against the ratio below, not against
      the tick. */
   const hot=set({cont:0, contFit:true}); run(hot,10);
-  hot.byp.rps=true; hot.flow=0.50; hot.flowDem=0.50;
+  hot.byp.rps=true; setPriFlow(hot,0.50);
   while(hot.t<10 && !hot.melt) M.step(0.02);
   if(hot.melt) bad('the no-containment fault reached melt before this case could even dispatch a party into it');
   M.repairStart('core');
@@ -2834,7 +2862,7 @@ console.log('\n=== THE REPAIR PARTY CAN BE SPENT, AND IT IS PERMANENT ===');
      and left there - the accident this game is actually built to let happen,
      not an injected number. */
   const s=set({cont:0, contFit:true}); run(s,10);
-  s.byp.rps=true; s.flow=0.05; s.flowDem=0.05;
+  s.byp.rps=true; setPriFlow(s,0.05);
   let mt=0; while(!s.melt && mt<50*300) { M.step(0.02); mt++; }
   if(!s.melt) bad('setup fault did not reach melt before this case could show a spent party');
   const spot=hotSpot(s);
@@ -3088,18 +3116,45 @@ console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
     M.moveTo(sg1, sg1.x, y1); M.moveTo(sg0, sg0.x, y0); M.commission();
   }
 
-  { /* A BREAK BREAKS THE INVARIANT, CORRECTLY. Said out loud because someone
-       will later find a sweep that does not hold and "fix" it. A second fixed
-       node - containment behind a hole - is driven by an ABSOLUTE difference
-       between the loop and containment, and that does not scale with head at
-       all. Scaling every head therefore genuinely changes the split between
-       what goes round the loop and what goes out of the hole. */
-    const vals=[0.5,1,2].map(k=>{ M.setHeadK(k); const t=set({loops:2});
-      t.coreDT=25; t.dmgParts=['pipe:hot:corer-sg0l']; return M.netFlowK(t); });
+  { /* A BREAK IS AN ABSOLUTE REFERENCE, NOT A HEAD. Said out loud because
+       someone will later find a sweep that does not hold and "fix" it. A
+       second fixed node - containment behind a hole - is driven by an ABSOLUTE
+       difference between the loop and containment, so it does not scale with
+       head at all, while pumped circulation is homogeneous in head by
+       construction. Scaling every head therefore genuinely changes the SPLIT
+       between what goes round the loop and what goes out of the hole, and that
+       split is what this pins.
+
+       Asked of SPILL, deliberately, not of netFlowK. netFlowK is core inflow
+       over P.netRef and setHeadK re-commissions, so both scale together and the
+       ratio is flat to the last bit - measured, 0.451198051775 at every head
+       from 0.5x to 4x. On this damage case the hole never enters the counted
+       inflow at all: with sg0's hot leg cut, loop 0's COLD leg reverses and the
+       core drains backwards out of the opening, which netCoreFracOf counts as
+       spill rather than inflow, leaving only loop 1's own pumped circulation
+       counted. Read against netFlowK this passed solely because the feedwater
+       pump's discharge shared a node with both cold legs and bridged the two
+       loops, so loop 1's inflow picked up the containment term; giving the
+       generator its own feed face removed that accident. The claim was always
+       about spill, so it is asked of spill. */
+    const meas=k=>{ M.setHeadK(k); const t=set({loops:2});
+      t.coreDT=25; t.dmgParts=['pipe:hot:corer-sg0l'];
+      const byRun={}, outs={}; M.netFlowK(t,byRun,null,outs);
+      return {spill:outs.spill, circ:Math.abs(byRun['hot:corer-sg1l']||0)}; };
+    const lo=meas(0.5), mid=meas(1), hi=meas(2);
     M.setHeadK(1); set({loops:2});
-    const drift=Math.max(...vals)-Math.min(...vals);
-    if(!(drift>1e-9)) bad(`a BREACHED plant stayed head-invariant (${drift}) - the break is not a second fixed node, it is still a blockage`);
-    console.log(`  a break correctly breaks head-invariance: ${drift.toExponential(2)} across a 4x head sweep, because a hole is driven by an absolute difference`);
+    if(!(lo.spill>0)) bad('a BREACHED plant spilled nothing - the break is not a second fixed node, it is still a blockage');
+    /* the control: an intact loop's circulation IS head, so it must double
+       when head doubles. Without this the spill claim below is unfalsifiable -
+       a sweep that moved nothing at all would satisfy it. */
+    for(const [a,b,n] of [[lo,mid,'0.5x->1x'],[mid,hi,'1x->2x']])
+      if(Math.abs(b.circ/a.circ-2)>0.01)
+        bad(`doubling head ${n} moved the intact loop's circulation by ${(b.circ/a.circ).toFixed(4)}x, not 2x - pumped flow is not homogeneous in head, so this case cannot test the break`);
+    if(Math.abs(hi.spill/lo.spill-1)>0.1)
+      bad(`a 4x head sweep moved the break flow ${(hi.spill/lo.spill).toFixed(3)}x (${lo.spill.toFixed(3)} -> ${hi.spill.toFixed(3)}) - a hole is being priced as a head, not as an absolute difference`);
+    const split=(lo.spill/lo.circ)/(hi.spill/hi.circ);
+    if(!(split>3)) bad(`a 4x head sweep moved the loop/hole split only ${split.toFixed(2)}x - head is not changing where the water goes`);
+    console.log(`  a break is absolute, not a head: over a 4x sweep circulation goes ${lo.circ.toFixed(2)} -> ${hi.circ.toFixed(2)} (x${(hi.circ/lo.circ).toFixed(2)}) while the hole passes ${lo.spill.toFixed(2)} -> ${hi.spill.toFixed(2)}, moving the split ${split.toFixed(1)}x`);
   }
 
   { /* A SEVERED PIPE LEAKS. Against HEAD this failed hard: cutting a primary
@@ -3296,8 +3351,7 @@ console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
   // PART: names a part on the grid, counted off LAY.parts or D.fit, never a
   // D flag. MEASURED: a lattice/layout fact, not a toggle at all. EXCEPTION:
   // a flag that sizes or upgrades a part whose own EXISTENCE is already
-  // tracked elsewhere (contFit/turbFit/condFit gate the box itself in
-  // buildLayout());
+  // tracked elsewhere (contFit gates the box itself in buildLayout());
   // rps/autorod/scram/chan/foll/nbank/pdes/pzr/chim are quality or size
   // dials on core/rods/pzr/ctrl, which are always on the grid) - listed by
   // name, not inferred, so a NEW flag-only term can never hide in this set.
@@ -3311,13 +3365,21 @@ console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
        does. A widening of the PART set, not a weakening: it still resolves to
        boxes on the grid, just to a variable number of them. */
     'tankMass()',
+    /* COUNTED, off LAY.parts, so these MOVED here out of EXCEPTION - which is
+       the point of Stage 9 and the third time this set has grown the same
+       way. They were '(D.turbFit?D.turb*50:0)' and '(D.condFit?D.condCap*40:0)':
+       a flag saying "there is one, or there is none", multiplied by that one
+       machine's size dial. A turbine is a box on the grid now and a second one
+       costs a second one. Removing the two exception entries is a
+       STRENGTHENING - the flags can no longer buy their way past this rule. */
+    'turbCount()*D.turb*50', 'condCount()*D.condCap*40',
     'Object.keys(D.fit).length*FIT_MASS']);
   const MEASURED=new Set(['coreMass','layMass','latMass()']);
   const EXCEPTION=new Set(['a.mass','f.mass','SCRAM[D.scram].mass','CHAN[D.chan].mass',
     '(D.contFit?CONT[D.cont].mass:0)','BKP[D.bkp].mass',
     '(D.pdes-1)*220','(D.pzr-1)*45','D.chim*38',
     '(D.rps?55:0)','FOLL[D.foll].mass','(D.nbank-4)*9',
-    '(D.autorod?26:0)','(D.turbFit?D.turb*50:0)','(D.condFit?D.condCap*40:0)']);
+    '(D.autorod?26:0)']);
   const classify=(designSrc)=>{
     const src=stripComments(designSrc);
     const m=/const mass\s*=([\s\S]*?);/.exec(src);
@@ -3357,7 +3419,7 @@ console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
        the tank not being there, and nothing here names it: what makes a tank
        emergency feed is that it is on the secondary and opens itself on low
        generator level. */
-    const efwIds=()=>M.tankIds().filter(id=>M.tanks()[id].side==='secondary' && M.tanks()[id].auto==='sglow');
+    const efwIds=()=>M.tankIds().filter(id=>M.tankSide(id)==='secondary' && M.tanks()[id].auto==='sglow');
     const on=stockFig({});
     const nOn=efwIds().length;
     const off=stockFig({}, ()=>{ for(const id of efwIds()) delete M.tanks()[id]; });
@@ -3526,17 +3588,98 @@ const HWO = s => { let q=0; for(const id of M.hostedTankIds()) q += (s.tankOver&
    not fixed".
 
    Nothing pinned s.sgl or P.graceK before this block existed. */
+console.log('\n=== THE SECONDARY IS A REAL CIRCUIT ===');
+{ /* A FITTING ON A FEED LINE DOES SOMETHING NOW. FIT has always been generic -
+     three modes, each a g(s,id,bore,len) closure, none of them testing a run's
+     kind - and pipenet.js has built an edge for every run since the four
+     permission lists were deleted. So a throttle on a feed run already
+     registered, routed, drew and animated. It carried exactly zero, because
+     the feed run carried exactly zero. This is the difference. */
+  const s0=set({});
+  const feedKey=Object.keys(M.P().net.byKey).find(k=>k.indexOf('feed:')===0 && k.indexOf('-sg')>0);
+  if(!feedKey) bad('no feed run on the stock plant to put a throttle on - this case proves nothing');
+  else {
+    const kg=t=>{ const by={}; M.netFlowK(t,by); return M.invRate(by[feedKey]||0)/100*M.loopKg(); };
+    run(s0,120);
+    const open=kg(s0);
+    const fid=M.addFit('throttle',feedKey,0.5,null,null,M.PIPE_BORE().relief);
+    M.commission(); const t=M.S(); run(t,120);
+    /* a throttle at x<=0 removes the edge outright - the same "shut is absent"
+       identity every other shut edge in this graph has - and in between it is
+       an additive equivalent length. */
+    t.valve[fid]=1;    const wide=kg(t);
+    t.valve[fid]=0.15; const part=kg(t);
+    t.valve[fid]=0;    const shut=kg(t);
+    M.removeFit(fid); M.commission();
+    if(!(Math.abs(wide/open-1)<0.02))
+      bad('a wide-open throttle on the feed line moved it '+(wide/open).toFixed(3)+'x ('+open.toFixed(0)+' -> '+wide.toFixed(0)+' kg/s) - a valve at full open must cost exactly nothing');
+    else if(!(part < wide*0.9))
+      bad('throttling the feed line to 15 % delivered '+part.toFixed(0)+' kg/s against '+wide.toFixed(0)+' wide open - the fitting is on a run that carries nothing');
+    else if(!(Math.abs(shut)<1e-6))
+      bad('a SHUT throttle still passed '+shut.toFixed(3)+' kg/s of feedwater - shut has to be an absent edge');
+    else console.log('  a throttle on the feed line is a real valve: '+wide.toFixed(0)+' kg/s wide open (exactly what no valve gives), '+part.toFixed(0)+' at 15 %, exactly 0 shut');
+  }
+}
+{ /* AND IT BUSTS THE FACTORISATION, because a valve position is a change to A
+     and not just to b. A stale factorisation would answer the OLD plant's
+     question with the new plant's demand - a wrong number, not a crash, which
+     is the only kind of bug worth pinning this way. */
+  set({});
+  const feedKey=Object.keys(M.P().net.byKey).find(k=>k.indexOf('feed:')===0 && k.indexOf('-sg')>0);
+  if(feedKey){
+    const fid=M.addFit('throttle',feedKey,0.5,null,null,M.PIPE_BORE().relief);
+    M.commission(); const t=M.S(); run(t,10);
+    t.valve[fid]=1;   M.netFlowK(t); const sig1=M.P().net.AfSig;
+    t.valve[fid]=0.2; M.netFlowK(t); const sig2=M.P().net.AfSig;
+    M.removeFit(fid); M.commission();
+    if(sig1===sig2) bad('moving a throttle on a FEED run did not bust the factorisation signature - the secondary would be solved against a stale one');
+    else console.log('  moving that throttle busts the factorisation cache, exactly as one on a hot leg does');
+  }
+}
+{ /* A CROSS-TIE BETWEEN THE TWO SIDES IS REACHABLE NOW, and the game does not
+     refuse it - it carries it out and shows the cost. The bench NAMES it
+     (crossTies(), layout.js) and the solve prices it, because every run is an
+     edge. Both halves are checked: a stock plant must be clean, or the warning
+     is noise nobody will read. */
+  set({});
+  if(M.crossTies().length)
+    bad('the stock plant reports '+M.crossTies().length+' primary/secondary cross-tie(s) - it has none, so this predicate is crying wolf');
+  const before=M.designIssues().length;
+  const rid=M.addRun('core','r','sg0','r');       // straight into the shell, round the tubes
+  M.commission();
+  const named=M.designIssues().length>before && M.crossTies().length>0;
+  const t=M.S(); run(t,20);
+  const moved=Math.abs(M.sglMin(t)-50)>0.5 || Math.abs(t.inv-100)>0.01;
+  M.removeRun(rid); M.commission();
+  if(!named) bad('a pipe drawn from the core straight into a generator shell raised no design warning - the bench has to name it');
+  else if(!moved) bad('a primary/secondary cross-tie changed nothing at all in 20 s - it is being drawn but not priced');
+  else console.log('  a cross-tie is allowed, named at the bench and priced by the solve: the generator level and the loop inventory both move');
+}
 console.log('\n=== SECONDARY INVENTORY ===');
 { const SGT=M.SGT();
   /* The whole re-pin argument in one check: the feed controller holds the
      setpoint exactly, so an undamaged plant's sgWet is exactly 1, so heat
      removal is bit-identical to what it was before the secondary had a mass
      balance at all. Every other figure this auditor pins rests on this one. */
+  /* MEASURED AFTER THE VALVE HAS STROKED, and asked as "it is not moving"
+     rather than "it equals 50 at one instant". Feedwater is a SOLVED flow
+     through a regulating valve now, and that valve starts wide open, so the
+     first second or so genuinely over-feeds while it strokes to its working
+     point - about 1 % on a 7 t once-through unit. The level's own restoring
+     term walks that back out over FEED_TAU and it is gone: measured, the
+     once-through unit reads 50.000000002 at 600 s, 49.9999999994 at 900 s and
+     50.00000000004 at 1200 s - so 600 s is still inside the stroke's tail and
+     the window starts at 900 s. Pinning one instant against 1e-9 was pinning
+     the tail of that stroke; pinning that it does not move pins the claim,
+     which is that steam raised and feedwater returned cancel. The tolerance
+     is unchanged - it is the QUESTION that moved. */
   let held=[];
-  for(const sg of [0,1]){ const s=set({sg}); run(s,600);
-    if(Math.abs(M.sglMin(s)-50) > 1e-9) held.push(SGT[sg].name+' drifted to '+M.sglMin(s).toFixed(6)); }
+  for(const sg of [0,1]){ const s=set({sg}); run(s,900);
+    const a=M.sglMin(s); run(s,300); const b=M.sglMin(s);
+    if(Math.abs(b-a) > 1e-9) held.push(SGT[sg].name+' moved '+(b-a).toExponential(2)+' between 900 s and 1200 s');
+    else if(Math.abs(b-50) > 1e-6) held.push(SGT[sg].name+' settled at '+b.toFixed(6)+', not at the setpoint'); }
   if(held.length) bad('an undamaged plant does not hold the feed setpoint: '+held.join('; '));
-  else console.log('  an undamaged plant holds 50.000000 % for 600 s on both generator types - sgWet is exactly 1, so removal is untouched');
+  else console.log('  an undamaged plant settles at 50.000000 % and then does not move at all between 900 s and 1200 s, on both generator types - sgWet is exactly 1, so removal is untouched');
 
   /* MEMORY. The old level was a pure function of (heat, load) with no dt in
      it, so two plants alike in everything but their level history collapsed
@@ -3601,30 +3744,38 @@ console.log('\n=== SECONDARY INVENTORY ===');
      an emergency pump feeding a healthy generator would overfill it (measured
      at 82 % on a once-through unit before the gate went in).
 
-     THREE THINGS CHANGED ABOUT THIS MEASUREMENT, and each is a consequence of
-     the reserve being a real tank rather than a fraction of rated steam:
-     - AFTER A TRIP, with the load actually shed. Its own tooltip says decay
-       heat is what it is for, and a 1200 MW generator at full power boils a
-       whole reserve away in about three seconds. That is not a bug in the
-       tank, it is the size of the machine.
-     - WHILE THE TANK STILL HAS WATER (15 s). Past that the reserve is spent
-       and the level settles wherever the crippled main feed balances the
-       steam - and it settles LOWER with the reserve than without, because a
-       generator that is still wet is still a heat sink and boils faster. The
-       end-of-window level measures that feedback, not the reserve.
-     - AT THE GATE, not above it. The level being held at exactly SG_DRY is
-       the "starts on low level, not on being armed" rule doing its job. */
-  { const at15=efw=>{ const s=set({sg:1}); run(s,10);
+     MEASURED AT POWER, not after a trip, and that is a re-aim rather than a
+     loosening. It used to be measured after a trip because the reserve was an
+     algebraic term with no pressure behind it: a hit feed pump lost the plant
+     a flat fraction of rated steam, so at full power the reserve was gone in
+     about three seconds and only a shed load left a window to measure in.
+     Feedwater is solved now, so a hit pump is a pump at a quarter of its own
+     DRIVE and the network decides what that delivers - which after a trip is
+     easily enough, because a quarter of a feed pump comfortably feeds a
+     scrammed plant. That is correct, and it leaves the trip case with nothing
+     to prove. At POWER it has everything to prove: the crippled pump cannot
+     keep up, the generator falls away, and the reserve is what stops it.
+
+     THE RESERVE IS A REAL TANK ON A REAL EDGE. Until feedwater was solved it
+     had neither a gas charge nor a pump (D.tanks.efw, design.js) and it cost
+     nothing, because its line hung off a boundary and carried exactly zero
+     current whatever it was charged to. Given a real edge it delivered exactly
+     nothing until it was given a real pump, which is the honest version of the
+     same tank.
+
+     AT THE GATE, not above it. The level being held at exactly SG_DRY is the
+     "starts on low level, not on being armed" rule doing its job. */
+  { const at=efw=>{ const s=set({sg:0}); run(s,10);
       for(const id in s.tankByp) s.tankByp[id]=!efw; M.combatHit('feed');
-      s.scrammed=true; s.rodDem=1; s.load=s.loadDem=0.05;
-      run(s,15);
+      run(s,60);
       const t=M.tankIds().find(id=>M.tanks()[id].auto==='sglow');
       return {lvl:M.sglMin(s), left:t?s.tank[t]:100}; };
-    const offR=at15(false), onR=at15(true);
+    const offR=at(false), onR=at(true);
     const off=offR.lvl, on=onR.lvl;
     if(!(on > off+0.5)) bad('EMERG FEED refills nothing: level sits at '+off.toFixed(2)+' without it and '+on.toFixed(2)+' with it');
     else if(!(onR.left < 90)) bad('EMERG FEED held the level without spending any of its own tank: '+onR.left.toFixed(1)+' % left');
-    else console.log('  EMERG FEED holds a hit plant at '+on.toFixed(2)+' % where it sits at '+off.toFixed(2)+
+    else if(Math.abs(on-25) > 2) bad('EMERG FEED did not hold the generator AT its own gate: '+on.toFixed(2)+' % against SG_DRY of 25 %');
+    else console.log('  EMERG FEED holds a hit plant at '+on.toFixed(2)+' % - its own SG_DRY gate - where it falls to '+off.toFixed(2)+
                      ' % without it, and it pays for it out of its own tank ('+onR.left.toFixed(0)+' % left, from 100)');
   }
 
@@ -3705,11 +3856,20 @@ console.log('\n=== SECONDARY INVENTORY ===');
      thing CLAUDE.md says is not there. It is a MASS balance instead, in the
      same kilograms the generators are counted in - which is what makes the
      conservation check below possible at all. */
-  { const s=set({}); run(s,300);
-    if(Math.abs(HW(s)-50) > 1e-9)
-      bad('an undamaged plant does not hold its hotwell still: 50 -> '+HW(s).toFixed(6)+
-          ' over 300 s - steam raised and feedwater returned are not cancelling');
-    else console.log('  a closed secondary holds its hotwell at 50.000000 % for 300 s - what boils out comes back');
+  /* Same argument as the setpoint check above: asked as "it is not moving",
+     after the feed regulating valve has stroked. The hotwell has no restoring
+     term of its own, so the generator's startup stroke shows up here as a
+     dip - measured, 49.999976 at 300 s - and it comes back only because the
+     secondary IS closed and the generator's own level walks back to setpoint,
+     which is the very thing this check is about. Measured: 49.999999999985 at
+     600 s, 50.000000000063 at 900 s. Tolerance unchanged. */
+  { const s=set({}); run(s,600); const at600=HW(s); run(s,300);
+    if(Math.abs(HW(s)-at600) > 1e-9)
+      bad('an undamaged plant does not hold its hotwell still: '+at600.toFixed(9)+' -> '+HW(s).toFixed(9)+
+          ' between 600 s and 900 s - steam raised and feedwater returned are not cancelling');
+    else if(Math.abs(HW(s)-50) > 1e-6)
+      bad('an undamaged plant settled its hotwell at '+HW(s).toFixed(6)+' %, not at 50 - the secondary is not closed');
+    else console.log('  a closed secondary settles its hotwell at 50.000000 % and then does not move at all between 600 s and 900 s - what boils out comes back');
   }
   /* CONSERVATION, and the reason the secondary inventory is worth having at
      all. Water that leaves a generator has to arrive somewhere.
@@ -3728,11 +3888,20 @@ console.log('\n=== SECONDARY INVENTORY ===');
   { const s=set({}); run(s,10);
     const genKg=st=>{ let m=0; for(const g of M.sgIds()) m += M.sgLvl(st,g)/100*SGT[M.D().sg].water*1000; return m; };
     const tankKgOf=st=>{ let m=0;
-      for(const id of M.tankIds()) if(M.tanks()[id].side==='secondary') m += st.tank[id]/100*M.tankKg(id);
+      for(const id of M.tankIds()) if(M.tankSide(id)==='secondary') m += st.tank[id]/100*M.tankKg(id);
       return m; };
     const total=st=>genKg(st)+tankKgOf(st);
     const t0=total(s), g0=genKg(s);
-    M.combatHit('feed'); run(s,90);
+    /* 30 s, not 90. The window has to be one where nothing LEAVES the plant,
+       and it no longer is at 90 s: the emergency reserve is a solved tank on
+       a real edge now, so it genuinely empties itself into the generator and
+       out into the hotwell, and a hotwell holding 1.5x a generator's own
+       charge cannot take that whole charge back AND a full reserve on top of
+       what it already had. It overflows at about 45 s, which is water really
+       leaving - correct behaviour, and the reason the dump valve exists, but
+       not something a conservation window can contain. 30 s still moves
+       11,112 kg out of the generators, eleven times what this asks for. */
+    M.combatHit('feed'); run(s,30);
     const moved=Math.abs(g0-genKg(s)), err=Math.abs(total(s)-t0);
     if(!(moved>1000)) bad('the feed hit moved almost no water at all ('+moved.toFixed(0)+' kg) - nothing to conserve');
     else if(HWO(s)>0 || HW(s)>=100)
