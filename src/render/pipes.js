@@ -32,8 +32,15 @@
 
 /* s.flowPos is keyed by the same strings pipeNetwork() uses for its runs, so there is
    no kind -> key table to keep in step with anything. */
+/* `relief` and `user` are named here too. The stock plant ships a relief
+   header and it drew grey and nameless for as long as it has existed - a
+   pipe the palette did not know about, on the reference layout. `user` keeps
+   the grey deliberately (see pipeCol below) but stops being anonymous: grey
+   means "belongs to no system", and a player who drew it is owed that
+   sentence rather than a blank tooltip. */
 const PIPE_NAME={hot:"HOT LEG",cold:"COLD LEG",steam:"MAIN STEAM",feed:"FEEDWATER",
-                 hpi:"HP INJECTION",surge:"SURGE LINE",exh:"EXHAUST"};
+                 hpi:"HP INJECTION",surge:"SURGE LINE",exh:"EXHAUST",
+                 relief:"RELIEF HEADER",user:"UNCLASSIFIED PIPE"};
 const PIPE_VAPOUR={steam:1,exh:1};              // kinds that carry vapour, not liquid
 /* ── EVERY JUNCTION IS ONE LINE, NOT ONE TABLE ROW EACH ──
    The kind carries the junction's own generated id ("xtie:"+id), because any
@@ -76,7 +83,12 @@ function pipeColours(L){
   const Th = L? L.Tavg+15*heat : 598, Tc = L? L.Tavg-15*heat : 568;
   return { hot: L?lerpC("#5aa9d6","#ff5a45",(Th-520)/110):"#c8735e",
            cold:L?lerpC("#5aa9d6","#ff5a45",(Tc-520)/110):"#5aa9d6",
-           surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2" };
+           surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2",
+           /* a relief header stands shut and carries nothing until something
+              lifts, so it is drawn cold and quiet - but drawn as ITSELF, not
+              through pipeCol()'s unknown-kind grey. `user` is the only kind
+              left with no row, and that is the point: grey IS the reading. */
+           relief:"#7a6f9a" };
 }
 
 /* ══════════ polyline geometry ══════════

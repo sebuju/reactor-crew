@@ -409,6 +409,20 @@ function tankP(s,id){
    the solve consumes - the line is a real resist(bore,length) edge and this
    is only what that model measures at full differential against containment. */
 const tankRateRef = id => (D.tanks[id] && D.tanks[id].pump) ? 1.6 : 2.6;
+/* ══ IS THIS TANK INJECTING, OR IS THAT A FLOAT ══
+   A solved edge on a balanced plant returns the difference of two large
+   numbers, so a tank sitting shut against a loop at full pressure reads
+   +1e-17 one tick and -1e-17 the next. Against a bare `q > 0` that is a tank
+   injecting, half the time, forever: measured, the event log filled with 240
+   INJECTING lines in 180 s on a plant where nothing was open and inventory
+   never left 100.00 %. It was not only noise in the log - the same test adds
+   half a pressure-programme step to Pdem, so an idle plant's pressure demand
+   was being nudged every other tick by a rounding error.
+
+   Judged against the tank's OWN full-scale rate, so this is a fraction and
+   not a hidden absolute: eleven orders of magnitude above the noise and six
+   below anything a player could see move. */
+const tankInjecting = (id, q) => q > 1e-6 * tankRateRef(id);
 /* ══ THE CHECK VALVE IS A MODE, NOT A NAME ══
    An injection line does not run backwards. A non-return valve is a DIODE,
    and this solve is LINEAR - a gate that depends on the answer cannot be
@@ -1700,7 +1714,18 @@ function netField(s, byDrop, byP){
    The one place a flow becomes a percentage, so a break, an injection and a
    vent are all charged against s.inv through the same conversion instead of
    three unrelated rates. */
-const invRate = q => 100*q/(P.netRef*LOOP_TRANSIT);
+/* P.netRef IS NOT ALWAYS POSITIVE, and commission()'s claim that it is "by
+   construction" was true only while every plant had loop legs. Disconnect
+   both of them on the bench - two DISCONNECTs, a gesture the player has - and
+   the reference circulation is exactly 0, because there is no circuit. That
+   made this 0/0: measured, s.lvl, s.inv, s.rho and nine more fields went
+   non-finite on the FIRST tick, and the plant then sat at a NaN temperature
+   forever rather than cooking, which is the one thing a sealed core must do.
+
+   0 is the honest answer, not a papered-over one: with no path out of the
+   vessel there is no loop for a flow to be a percentage OF. Nothing that has
+   a loop can reach this branch, so no plant with a circuit moves by a float. */
+const invRate = q => { const ref = P.netRef*LOOP_TRANSIT; return ref > 0 ? 100*q/ref : 0; };
 /* ══ THERMAL EXPANSION IS A SOURCE, NOT A CORRELATION (Stage 6c) ══
    The inverse of invRate(): a rate in % of loop inventory per second, back
    into the current the solve is written in. One conversion, both directions.

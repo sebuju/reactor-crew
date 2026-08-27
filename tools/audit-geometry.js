@@ -1085,7 +1085,7 @@ const runDataChecks=[];
   // scanned across the whole bundle: a name reappearing anywhere is the
   // guess coming back, whatever calls it.
   {
-    const banned=['nearestLoop','farTapForLoop'];
+    const banned=['nearestLoop','farTapForLoop','nearestRunOfLoop'];
     const nameHits=name=>{ const re=new RegExp('\\b'+name+'\\b'); const hits=[];
       for(const f of scriptPathsD()){
         const raw=fsD.readFileSync(pathD.join(ROOTD,f),'utf8');
@@ -1102,7 +1102,7 @@ const runDataChecks=[];
     // fault injection: prove the scan actually goes red, same idiom as
     // every other "X no longer exists" check above
     const stockDB=fsD.readFileSync(pathD.join(ROOTD,'src/screens/design-bench.js'),'utf8');
-    const anchorDB='function ctxResolveDesign(p){';
+    const anchorDB='function ctxResolveDesign(p,extra){';
     const faultedDB=stockDB.replace(anchorDB, 'function nearestLoop(gx,gy){ return 0; }\r\n'+anchorDB);
     if(faultedDB===stockDB){
       runDataChecks.push(['inject: nearestLoop() reappears', false, 'the fault-injection anchor text was not found - update it, this proves nothing while it silently no-ops']);

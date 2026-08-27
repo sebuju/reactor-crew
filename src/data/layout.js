@@ -683,9 +683,9 @@ function plen(pts){ let L=0;
    picks up the HPI INJECTION line, so a relief valve would quietly discharge
    into the injection tank, up the pipe that is supposed to be feeding the core.
    A player who wants a new tank to catch the discharge authors the header for
-   it - CONNECT RELIEF HEADER, on the tank's own right-click menu
-   (design-bench.js), which writes the same k:"relief" entry the stock plant
-   ships with. */
+   it by drawing the pipe: pressurizer to primary tank is the one pair
+   runKindFor() calls "relief", so the port drag writes the same entry the
+   stock plant ships with. */
 function reliefHeaderKey(net){
   const r=net.find(x=>x.k==="relief");   // LABEL: a run KIND, and the one place it decides anything
   return r?r.key:null;
@@ -693,7 +693,17 @@ function reliefHeaderKey(net){
 // Where a fitting's far tap actually lands this frame. Only relief re-resolves;
 // a tee or a branch throttle taps two runs the player chose, and moving one out
 // from under it is a real answer, not a rename to paper over.
+/* THE TAP THE PLAYER AIMED AT, and the header only as a FALLBACK. A relief
+   valve used to have its far end overwritten every frame with
+   reliefHeaderKey() - the first run of kind "relief" on the plant - so a
+   discharge dropped onto a particular pipe was discarded the moment it was
+   drawn, and two valves could not discharge into two different places.
+   The fallback survives because it earns its keep on a run whose target has
+   been DELETED: that is what lets plumbing a tank back in later land the
+   discharge without touching the fitting, which audit-physics pins. It is
+   only reached when the stored key routes nowhere this frame. */
 function fitBKey(net,j){
+  if(j.bKey && net.some(r=>r.key===j.bKey)) return j.bKey;
   return j.mode==="relief" ? reliefHeaderKey(net) : j.bKey;
 }
 
@@ -941,6 +951,12 @@ const RUN_KIND={
   "core|sg":"hot", "pump|sg":"cold", "core|pump":"cold",
   "sg|turb":"steam", "cond|turb":"exh",
   "feed|sg":"feed", "cond|feed":"feed",
+  /* A pipe between the pressurizer and any primary machine IS a surge line -
+     the vessel has exactly one connection to the loop and that is what it is
+     called. Without these rows a hand-drawn pressurizer line came out
+     k:"user": grey, unnamed, bore 1 instead of PIPE_BORE.surge, and with no
+     KIND_TEMP hot tag - a working connection wearing no name. */
+  "core|pzr":"surge", "pzr|sg":"surge", "pump|pzr":"surge",
 };
 function runKindFor(aId,bId){
   const A=LAY.parts.find(q=>q.id===aId), B=LAY.parts.find(q=>q.id===bId);
@@ -966,46 +982,118 @@ function addRun(aId,af,bId,bf,bore=1,k){
   return rid;
 }
 function removeRun(rid){ delete D.run[rid]; }
-/* Is there a tank on the board a relief valve could discharge into? Any
-   PRIMARY tank will do - "the relief tank" is not a kind of thing, it is
-   whichever tank you happened to plumb the relief header to.
-
-   Off ROLE and `side`, never p.id. This was referenced from design-bench.js and never written -
-   right-clicking a pipe on the bench threw "hasRelief is not defined" and
-   took the whole frame with it, because ctxItemsDesign() runs inside the draw
-   (drawCtxMenu -> drawDesign -> tick). No auditor opens that menu. */
-function hasRelief(){
-  return LAY.parts.some(p => primaryTank(p.id));
+/* THE OTHER SHAPE A RUN CAN HAVE: one that lands on another RUN instead of on
+   a port. The stock surge line is the only entry that has ever been written
+   this way, and nothing in the UI could produce one - so deleting D.run.surge
+   was permanent, and the stock plant was the one plant the bench could not
+   build. `tapK` rather than the rid alone for the same reason the stock entry
+   carries it: the run it names may be deleted and drawn again, and WHICH run
+   of that kind it lands on is a routing decision (pipeNetwork()), not a
+   design one. */
+function addTapRun(aId,af,tapRid,tapK,k,bore=1){
+  const rid="usr"+(runSeq++);
+  D.run[rid]={a:aId,af,tap:tapRid,tapK,k,bore};
+  return rid;
 }
-// is this part id a tank on the PRIMARY side - the one predicate for "could
-// catch a relief discharge", asked by hasRelief() and by reliefHeaderKey()'s
-// own fallback, which were about to state it twice
+/* THE PART THAT FIXES THE LOOP'S PRESSURE, or null - the same ROLE question
+   netBuild() takes its datum node from, asked once here so the bench and
+   pzrPlumbed() do not each spell it out. Never the id "pzr". */
+function datumPart(){
+  return LAY.parts.find(q=>{ const R=ROLE[q.role]; return R && R.fixed && R.fixed.type==="datum"; }) || null;
+}
+/* Is this part id a tank on the PRIMARY side - the one predicate for "could
+   catch a relief discharge". Any primary tank will do: "the relief tank" is
+   not a kind of thing, it is whichever tank you happened to plumb the relief
+   header to. Off ROLE and `side`, never p.id. */
 function primaryTank(id){
   const p=LAY.parts.find(q=>q.id===id);
   return !!(p && p.role==="tank" && D.tanks[id] && D.tanks[id].side==="primary");
 }
 
+/* WHICH PARTS A WALK OVER D.run REACHES FROM ONE PART - the design-time
+   answer to "is this wired to that", asked with no net, no solve and no S,
+   which is all the bench ever has. Any run counts, any kind: a run is a run.
+
+   A TAP RUN IS A LINK TOO. It lands on another run rather than on a port, so
+   it joins its own part to BOTH ends of whatever it lands on - skip it and
+   the stock pressurizer, which hangs off the hot leg by a tap, reads as
+   wired to nothing. Resolved by rid first and by `tapK` second, the same
+   two-step pipeNetwork() routes a tap with, so a hot leg deleted and drawn
+   again does not silently unplumb what taps it.
+
+   `blocks` marks a part the walk may REACH but never CROSS - pzrLive()'s
+   "reached, never crossed" rule (pipenet.js), made design-shaped: a tank is
+   a pressure boundary, so a path that goes in one of its nozzles and out the
+   other is not a path. Omitted, nothing blocks and this is pure wiring. */
+function runReach(fromId, blocks){
+  const id=k=>LAY.parts.find(q=>q.id===k);
+  const host=e=>{
+    const h=D.run[e.tap];
+    if(h && !h.tap) return h;
+    if(!e.tapK) return null;
+    for(const rid in D.run){ const o=D.run[rid]; if(o!==e && !o.tap && o.k===e.tapK) return o; }
+    return null;   // nothing of that kind on the plant either: the tap hangs
+  };
+  /* A FACE THE PART HAS NO PORT ON IS NOT A CONNECTION. netBuild() names a
+     node `partId+face` and folds only the faces ROLE declares, so a run to an
+     undeclared face lands on a node nothing else touches - a dangling stub
+     that draws like a pipe and conducts to nowhere. No gesture can author one
+     (handles are drawn per declared face, plant.js), but D can be edited
+     directly, and without this the bench read such a run as plumbed while the
+     solve did not. `null` means "resolve live" and is always legal. */
+  const portOK=(pid,face)=>{
+    if(face==null) return true;
+    const p=id(pid), R=p&&ROLE[p.role];
+    return !!R && (R.ports["*"]!==undefined || R.ports[face]!==undefined);
+  };
+  const link=[];
+  for(const rid in D.run){
+    const e=D.run[rid];
+    if(!portOK(e.a,e.af)) continue;
+    if(e.tap){ const h=host(e); if(h) link.push([e.a,h.a],[e.a,h.b]); continue; }
+    if(!portOK(e.b,e.bf)) continue;
+    link.push([e.a,e.b]);
+  }
+  const seen=new Set([fromId]), stack=[fromId];
+  while(stack.length){
+    const u=stack.pop(), pu=id(u);
+    if(u!==fromId && blocks && pu && blocks(pu)) continue;
+    for(const [a,b] of link){
+      const v = a===u ? b : b===u ? a : null;
+      if(v===null || seen.has(v) || !id(v)) continue;
+      seen.add(v); stack.push(v);
+    }
+  }
+  return seen;
+}
 /* A soft, honest "nothing removes heat" warning (design.js's derived()) -
    topological only, off D.run alone: Stage 6 is what would let this READ
    the loop, so today it can only ask whether anything that COULD reject
-   heat is wired to the primary at all. Any run counts, any kind - Stage 1's
-   rule again, a run is a run. */
+   heat is wired to the primary at all. Nothing blocks: heat crosses a tank
+   as happily as it crosses anything else. */
 function hasHeatSink(){
   const id=k=>LAY.parts.find(q=>q.id===k);
-  const core=id("core"); if(!core) return true;   // no core, no claim to make
-  const seen=new Set(["core"]), stack=["core"];
-  while(stack.length){
-    const u=stack.pop();
-    for(const rid in D.run){
-      const e=D.run[rid]; if(e.tap) continue;
-      const a=id(e.a), b=id(e.b); if(!a||!b) continue;
-      if(a.id===u && !seen.has(b.id)){ seen.add(b.id); stack.push(b.id); }
-      else if(b.id===u && !seen.has(a.id)){ seen.add(a.id); stack.push(a.id); }
-    }
-  }
-  for(const pid of seen){ const p=id(pid), R=p&&ROLE[p.role];
+  if(!id("core")) return true;   // no core, no claim to make
+  for(const pid of runReach("core")){ const p=id(pid), R=p&&ROLE[p.role];
     if(R && (R.thermal==="sink"||R.thermal==="transfer")) return true; }
   return false;
+}
+/* IS THE PRESSURIZER PLUMBED TO THE LOOP AT ALL - the bench's design-time
+   half of pzrLive() (pipenet.js), which the tick asks off the solved network
+   instead. The bench cannot ask that one: it has no commissioned P and no S,
+   and pzrLive() needs both (P.Pcont, every valve position). So this asks the
+   WIRING, and the two agree on the only case a designer can be at fault for
+   - no pipe reaches the vessel. They differ on an operating decision, a
+   valve shut on a line that is drawn, which is not a design fault and must
+   not raise a design warning.
+
+   Off ROLE.fixed.type==="datum", never the id "pzr", for the same reason
+   netBuild() takes its datum node that way. */
+function pzrPlumbed(){
+  const pz=datumPart();
+  if(!pz) return true;                              // no pressurizer: nothing to disconnect
+  if(!LAY.parts.find(q=>q.id==="core")) return true;
+  return runReach("core", p=>p.role==="tank").has(pz.id);
 }
 // BACKUP PWR ghosts rather than vanishes: NONE is a real dropdown choice
 // (mass 0) that still occupies its cell, because it's a three-way quality
@@ -1121,6 +1209,12 @@ function layoutMetrics(){
   for(const q of P_) if(q.role==="sg") loopTop=Math.min(loopTop,q.y);
   const pzrOK = pz ? pz.y<=loopTop : true;
   const pzrK  = pzrOK ? 1 : 0.45;
+  /* WIRED, which is a weaker condition than "highest point" and was the one
+     nobody checked - so the bench refused a subtle bad design and waved
+     through an impossible one. It costs the plant nothing here: pzrK is
+     elevation only, and what an unplumbed vessel actually costs is decided
+     in the tick, off the solved network (pzrLive(), pipenet.js). */
+  const pzrConn = pzrPlumbed();
   /* Metres above the core, per TANK - measured, not a clamped multiplier on
      an injection rate that no longer exists. Elevation is LIVE for a tank
      like every other node's: it enters the solve as the static head of the
@@ -1149,7 +1243,7 @@ function layoutMetrics(){
      one steam generator from another, and can tell a shut valve from an open
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
-  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,tankZ,injZ:injZ===null?0:injZ,radK,peak,
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
 }

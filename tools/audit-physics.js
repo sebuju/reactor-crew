@@ -9,10 +9,12 @@ const {execFileSync}=require('child_process');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,resetTrip,S:()=>S,P:()=>P,D:()=>D,'+
  'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
- 'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,AUTOROD_LO,AUTOROD_HI,'+
+ 'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
  'pumpCap,totalPumpCap,placePart,removePart,addFit,removeFit,addRun,removeRun,fittableList,'+
  'loopOf,loopOfKey,loopPumpCap,portRoom,nearestFreePort,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
+ 'addTapRun,runKindFor,pzrPlumbed,datumPart,designBlocked,designIssues,'+
+ 'nearestRunTo,juncPt,D_fit:()=>D.fit,'+
  'pipeNetwork,act,ctxItemsDesign,'+
  'LAT:()=>LAT,LQ,LIX,latDefault,latRevolve,latWarn,LM:()=>LM,'+
  'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW,'+
@@ -21,7 +23,7 @@ const M=require('./bundle').headless(
  'primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,reliefRate,reliefFullRate,PIPE_BORE:()=>PIPE_BORE,'+
  'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,autoLive,AUTOSYS:()=>AUTOSYS,'+
  'paramsForFit,readoutsForFit,SGT:()=>SGT,sgCount,invRate,tankPoolPct,tankRuleAny,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,'+
- 'sgIds,sglMin,sgLvl,sgShare,netExpSurge,secP,BETA_W,LVL_K}');
+ 'sgIds,sglMin,sgLvl,sgShare,netExpSurge,secP,BETA_W,LVL_K,LOG:()=>LOG}');
 const {makeLoops}=require('./loopgen');
 const HOT_NPSH_A=10;   // mirrors step.js's own HOT_NPSH - the suction taper this block asserts against
 const D=M.D(), ARCH=M.ARCH(), FUEL=M.FUEL(), SCRAM=M.SCRAM(), ANN=M.ANN();
@@ -615,6 +617,313 @@ console.log('\n=== RELIEF: ONE PATH, THREE PATHS, NO PATH ===');
     bad(`restoring the surge line left pressure at ${sBack.P.toFixed(3)} MPa, not back on programme`);
   console.log(`  surge line deleted: P ${pCut.toFixed(3)} MPa after 60 s (was 15.521 unfixed); restored: P ${sBack.P.toFixed(3)} MPa and netFlowK bit-identical at ${kBack}`);
 }
+
+console.log('\n=== STUPID PIPE LAYOUTS ===');
+/* Every case here is a plant a player can now draw by hand, so every case
+   here is a plant that has to answer for itself. Two questions run through
+   all of them: does the bench SAY the right thing (warn, never refuse), and
+   does the plant DO the right thing once it is built anyway.
+
+   The figures are recorded off the stock plant in the same process rather
+   than written in as literals - the point is a comparison, not a constant. */
+{ /* ══ THE REFERENCE PLANT IS REPRODUCIBLE THROUGH THE UI ══
+     Delete a run, draw it again through the SAME entry point the bench uses,
+     and every pinned figure must come back BIT-IDENTICAL. This is the whole
+     "you cannot rebuild the stock plant" complaint made mechanical, and it
+     is stronger than a tolerance: a redrawn hot leg either is the stock hot
+     leg or it is a different plant wearing its name.
+
+     The surge line is the case that could not be made at all - it is the one
+     TAP-shaped entry in D.run, and until addTapRun() existed no gesture
+     produced that shape, so deleting it was permanent. */
+  const fig=()=>{ M.commission(); const s=M.S();
+    return {k:M.netFlowK(s), n:s.n, Tf:s.Tf, dnbr:s.dnbr, flowK:M.P().flowK, dose:M.P().dose}; };
+  const same=(a,b)=>Object.keys(a).every(k=>a[k]===b[k]);
+  const show=o=>`netFlowK ${o.k} n ${o.n} Tf ${o.Tf}`;
+
+  set({}); const REF=fig();
+
+  delete D.run.hot0;
+  M.addRun("core","r","sg0","l");
+  const redrawnHot=fig();
+  if(!same(REF,redrawnHot))
+    bad(`a hot leg deleted and drawn again is not the stock hot leg:\n      ${show(REF)}\n      ${show(redrawnHot)}`);
+
+  set({});
+  delete D.run.surge;
+  { const pz=M.datumPart(), face=M.ROLE()[pz.role].fixed.face;
+    const hostRid=Object.keys(D.run).find(r=>D.run[r].k==="hot");
+    M.addTapRun(pz.id, face, hostRid, "hot", "surge", M.PIPE_BORE().surge); }
+  const redrawnSurge=fig();
+  if(!same(REF,redrawnSurge))
+    bad(`a surge line deleted and tapped on again is not the stock surge line:\n      ${show(REF)}\n      ${show(redrawnSurge)}`);
+  if(!M.pzrLive(M.P().net, M.S()))
+    bad('a hand-tapped surge line does not read as plumbed');
+  console.log(`  hot leg and surge line deleted and redrawn through the bench: every figure bit-identical (netFlowK ${REF.k}, Tf ${REF.Tf})`);
+}
+{ /* ══ A HAND-DRAWN PRESSURIZER LINE IS A SURGE LINE ══
+     Port to port rather than tapped, which is the OTHER thing a player can
+     draw. It is a different plant from the stock one - a different route,
+     so a different length - so this asks that it WORKS, not that it matches:
+     the kind is named, the vessel reads plumbed, and pressure sits on
+     programme instead of falling away. Before the RUN_KIND rows it came out
+     k:"user" - grey, unnamed, bore 1 instead of PIPE_BORE.surge. */
+  set({});
+  if(M.runKindFor("pzr","core")!=="surge")
+    bad(`a pipe drawn from the pressurizer to the core is kind "${M.runKindFor("pzr","core")}", not "surge"`);
+  delete D.run.surge;
+  const pz=M.datumPart(), face=M.ROLE()[pz.role].fixed.face;
+  M.addRun(pz.id, face, "core", "r");
+  M.commission();
+  if(!M.pzrLive(M.P().net, M.S()))
+    bad('a pressurizer plumbed straight to the core by hand still reads as unplumbed');
+  if(!M.pzrPlumbed()) bad('the bench does not see a hand-drawn surge line the solve does see');
+  const s=M.S(); run(s,60);
+  if(!(Math.abs(s.P-M.P().P0) < 0.5))
+    bad(`a hand-drawn surge line left pressure at ${s.P.toFixed(3)} MPa, not on programme`);
+  console.log(`  pressurizer drawn straight to the core by hand: kind "surge", plumbed, P ${s.P.toFixed(3)} MPa on programme`);
+}
+{ /* ══ A PIPE TO A FACE THAT HAS NO PORT IS A PIPE TO NOWHERE ══
+     netBuild() names a node `partId+face`, so a run to a face ROLE never
+     declared lands on a node nothing else touches. No gesture can draw one -
+     handles come off the declared faces - but D can be edited directly, by a
+     save file, a recording head or a test. What matters is that the BENCH and
+     the SOLVE agree about it: before this, pzrPlumbed() counted the run and
+     pzrLive() did not, so the bench would have called an unplumbed vessel
+     wired. The core is the case that bites, because it declares only r and b. */
+  set({});
+  delete D.run.surge;
+  D.run.bogus={a:"pzr",af:"b",b:"core",bf:"t",k:"surge",bore:0.30};
+  M.layoutMetrics();
+  if(M.pzrPlumbed()) bad('a run to a face the core has no port on reads as plumbed on the bench');
+  M.commission();
+  if(M.pzrLive(M.P().net, M.S()))
+    bad('a run to a face the core has no port on reads as plumbed in the solve');
+  console.log('  a surge line drawn to a face the core has no port on: unplumbed on the bench and in the solve, and they agree');
+}
+{ /* ══ THE BENCH WARNS AND NEVER REFUSES ══
+     pzrPlumbed() (layout.js) is the DESIGN-TIME half of pzrLive(): the bench
+     has no commissioned P and no S, so it asks the wiring rather than the
+     solve. The two must agree on the case a designer can be at fault for.
+     And the warning must stay SOFT - the game carries out a bad order and
+     shows the cost, so an unplumbed pressurizer has to remain buildable. */
+  set({});
+  if(!M.pzrPlumbed()) bad('the STOCK plant reads its pressurizer as unwired - pzrPlumbed() misses a tap run');
+
+  delete D.run.surge; M.layoutMetrics();
+  if(M.pzrPlumbed()) bad('the surge line was deleted and the bench still reads the pressurizer as wired');
+  if(M.designBlocked()) bad('an unplumbed pressurizer BLOCKS the design - it must warn, never refuse');
+  const issues=M.designIssues().filter(w=>/pressurizer/i.test(w[1]) && /no pipe/i.test(w[1]));
+  if(issues.length!==1) bad(`an unplumbed pressurizer raised ${issues.length} warnings, expected exactly 1`);
+  else if(issues[0][0]!=="SOFT") bad(`the unplumbed-pressurizer warning is ${issues[0][0]}, must be SOFT`);
+  else if(issues[0][2]!=="pzr") bad('the unplumbed-pressurizer warning names no component, so no dot lights on the vessel');
+  M.commission();
+  if(M.pzrLive(M.P().net, M.S()))
+    bad('the bench and the solve disagree: pzrPlumbed() says no, pzrLive() says yes');
+  console.log('  unplumbed pressurizer: exactly one SOFT warning on the vessel, design still buildable, bench and solve agree');
+}
+{ /* ══ A TANK IS A BOUNDARY, NOT A WAY HOME ══
+     The relief header runs from the vessel to a tank fixed at its own gas
+     pressure. That is a dead end - pressure does not propagate across a
+     boundary - so a pressurizer wired ONLY that way is unplumbed, and the
+     bench has to say so rather than counting pipes. This is what makes
+     pzrPlumbed() a reachability test with the same stopping rule pzrLive()
+     has, and not a "does any run name the pressurizer" lookup. */
+  set({});
+  delete D.run.surge; M.layoutMetrics();
+  if(!D.run.relief) bad('the relief header is gone, so this case proves nothing');
+  if(M.pzrPlumbed())
+    bad('a pressurizer reachable only through a tank reads as wired - the walk crossed a pressure boundary');
+  M.commission();
+  if(M.pzrLive(M.P().net, M.S()))
+    bad('the solve crossed a tank too, so the two halves agree for the wrong reason');
+  console.log('  pressurizer left on its relief header alone: unplumbed on the bench and in the solve');
+}
+{ /* ══ A KIND IS A LABEL, NEVER A PERMISSION ══
+     Stage 1's rule, asked of the grey pipe itself. A pair of roles RUN_KIND
+     has no row for comes out k:"user" - no colour, no name, no PIPE_BORE row
+     - and the question is whether that label costs it its edge. It must not:
+     a kind decides bore, colour, name and loop bookkeeping, never whether
+     current flows.
+
+     Measured as a CHANGE in the solve rather than as "an edge exists", so
+     this reads the physics and not the data structure: a second path from the
+     core to the generator is a parallel conductance, so the drop across the
+     loop must fall. netFlowK cannot see it - it is normalised against this
+     plant's OWN reference, so it is exactly 1 for any undamaged plant. */
+  set({});
+  const drop=()=>M.netPressures(M.S()).core;    // keyed by node NAME, and the folded core is "core"
+  const before=drop();
+  const rid=M.addRun("core","r","cond","t");     // no RUN_KIND row for core|cond
+  if(D.run[rid].k!=="user")
+    bad(`a core-to-condenser pipe is kind "${D.run[rid].k}", expected the unlabelled "user"`);
+  M.commission();
+  const s=M.S(); run(s,60);
+  if(!isFinite(s.n) || !isFinite(s.Tf) || !isFinite(M.netFlowK(s)))
+    bad('an unlabelled pipe solved to a non-finite answer');
+  if(drop()===before)
+    bad('an unlabelled "user" pipe changed nothing in the solve - a kind gated the edge');
+  console.log(`  an unlabelled "user" pipe is a real edge: core node ${before.toFixed(4)} -> ${drop().toFixed(4)} MPa, plant still finite`);
+}
+{ /* ══ NO WAY OUT OF THE CORE ══
+     Delete both loop legs and leave everything else standing - DISCONNECT,
+     twice, a gesture the bench has. The bench must say so (hasHeatSink), and
+     the core must COOK: a plant that sailed through this is exactly what a
+     correlation for natural circulation used to buy.
+
+     This is also the only plant that drives P.netRef to exactly 0, which is
+     what invRate() (pipenet.js) divides by. Before that guard, this case did
+     not survive and did not melt either - twelve fields of S went non-finite
+     on the FIRST tick and the core then sat at a NaN temperature forever.
+     s.perV is deliberately Infinity (the reactor period at rest, see
+     store.js), so it is the one field excluded from the sweep rather than a
+     tolerance being applied to all of them. */
+  set({});
+  for(const rid in D.run) if(["hot","cold"].includes(D.run[rid].k)) delete D.run[rid];
+  M.layoutMetrics();
+  if(M.hasHeatSink()) bad('every loop leg deleted and the bench still finds a heat sink');
+  M.commission();
+  if(M.P().netRef!==0)
+    bad(`a plant with no loop legs has a reference circulation of ${M.P().netRef}, so this case no longer covers the 0/0`);
+  const s=M.S(); run(s,300);
+  const nf=Object.keys(s).filter(k=>k!=="perV" && typeof s[k]==="number" && !isFinite(s[k]));
+  if(nf.length) bad(`a plant with no loop legs went non-finite in ${nf.length} field(s): ${nf.join(', ')}`);
+  if(!s.melt && !s.breach)
+    bad(`a core with no pipe out of it reached ${s.Tf.toFixed(0)} K in 300 s and survived`);
+  console.log(`  every loop leg deleted: no heat sink on the bench, P.netRef exactly 0, no field non-finite, core melts at ${s.Tf.toFixed(0)} K`);
+}
+{ /* ══ A SECOND PIPE IN PARALLEL IS MORE PIPE, NOT A CRASH ══
+     The one stupid layout that is not a fault: a player who draws a second
+     hot leg beside the first has built two hot legs. Two parallel
+     conductances carry more than one, and the answer stays finite - a
+     duplicate edge between the same two nodes is the case a Laplacian
+     assembled by hand gets wrong most easily.
+
+     Measured on P.netRef, the ABSOLUTE reference flow. netFlowK is the wrong
+     instrument here and would have passed a broken answer: it is normalised
+     against this plant's own reference, so it reads exactly 1 for ANY
+     undamaged plant, including one with twice the pipe. */
+  set({}); const q1=M.P().netRef;
+  M.addRun("core","r","sg0","l");
+  M.commission();
+  const q2=M.P().netRef;
+  if(!isFinite(q2)) bad('a second hot leg in parallel made P.netRef non-finite');
+  if(!(q2 > q1)) bad(`a second hot leg in parallel did not raise reference flow: ${q1} -> ${q2}`);
+  if(M.netFlowK(M.S())!==1)
+    bad(`a second hot leg left an undamaged plant off its own reference: netFlowK ${M.netFlowK(M.S())}`);
+  const s=M.S(); run(s,60);
+  if(s.melt || s.breach) bad('a second hot leg in parallel destroyed the plant');
+  console.log(`  a second hot leg drawn in parallel: P.netRef ${q1.toFixed(4)} -> ${q2.toFixed(4)} (+${(100*(q2/q1-1)).toFixed(1)}%), netFlowK still exactly 1`);
+}
+{ /* ══ A DEAD LEG DOES NOT RESCALE THE WHOLE PLANT'S ANIMATION ══
+     Place a spare steam generator and plumb it to the core with no return
+     path - a half-finished second loop, which is what a plant looks like
+     between the first run and the last. That leg is a hot leg by kind and by
+     role but it carries ~1e-15, and `P.netRefRun` is the ONE scale every
+     packet's speed is divided by, so counting its zero in the mean sped the
+     whole plant's flow animation up 24% for a pipe that moves no water.
+
+     Pinned on `P.netRefRun` because that is the number the lie was told with:
+     it must be exactly the LIVE legs' own mean, computed here independently
+     of how commission() computes it. */
+  set({});
+  const hot=k=>k.startsWith("hot:")||k.startsWith("cold:");
+  const sg=M.placePart(n=>({id:"sgX"+n,name:"STEAM GEN SPARE",w:1,h:2,x:11,y:3,
+    col:"#5fd2e2",grp:"sg",tip:"t",role:"sg"}));
+  M.addRun("core","r",sg.id,"l");
+  M.commission();
+  const refs=Object.keys(M.P().netRefByRun).filter(hot).map(k=>M.P().netRefByRun[k]);
+  const dead=refs.filter(v=>v<1e-6), live=refs.filter(v=>v>=1e-6);
+  if(dead.length!==1)
+    bad(`expected exactly one dead loop leg to test against, found ${dead.length} of ${refs.length}`);
+  const want=live.reduce((a,b)=>a+b,0)/live.length;
+  if(M.P().netRefRun!==want)
+    bad(`a leg that carries nothing is in the animation scale: netRefRun ${M.P().netRefRun} against the live legs' own mean ${want}`);
+  console.log(`  a spare generator plumbed with no return path carries ${dead[0].toExponential(1)} and stays OUT of the animation scale (${M.P().netRefRun.toFixed(4)}, the ${live.length} live legs' own mean)`);
+  M.removePart(sg.id);
+}
+{ /* ══ A TEE IS DRAWN, NOT PICKED ══
+     Both ends are points the player pointed at, resolved through
+     nearestRunTo() - the same call uiUp() makes when a tap drag is released.
+     What this replaces listed one menu row per OTHER LOOP and chose the far
+     end by proximity, so the stock single-loop plant could not be given a tee
+     at all and on a bigger plant the far end was a guess nobody aimed.
+
+     The near end is asserted too, not just the far one: a resolver that
+     quietly re-snapped the start would be the same fault wearing a new name. */
+  set({});
+  const hotRun=M.pipeNetwork().find(r=>r.k==="hot");
+  const coldRun=M.pipeNetwork().find(r=>r.k==="cold");
+  const aim=M.juncPt(M.pipeNetwork(),coldRun.key,0.4);      // a point the "player" pointed at
+  if(!aim) bad('could not resolve a point on a cold leg to aim at');
+  else {
+    const far=M.nearestRunTo([aim.pt[0],aim.pt[1]],hotRun.key);
+    if(!far || far.key!==coldRun.key)
+      bad(`a point on the cold leg resolved to ${far&&far.key}, not to ${coldRun.key}`);
+    const before=Object.keys(M.D_fit()).length;
+    M.addFit('tee',hotRun.key,0.5,far.key,far.t);
+    const ids=Object.keys(M.D_fit());
+    if(ids.length!==before+1) bad('an aimed tee created no fitting');
+    else { const j=M.D_fit()[ids[ids.length-1]];
+      if(j.mode!=="tee")      bad(`the tap drag built a ${j.mode}, not a tee`);
+      if(j.aKey!==hotRun.key) bad(`the tee's near end moved off the run it was pulled from: ${j.aKey}`);
+      if(j.bKey!==coldRun.key)bad(`the tee landed on ${j.bKey}, not the run that was pointed at`);
+      if(Math.abs(j.bT-0.4)>0.02)
+        bad(`the tee's far end snapped to ${j.bT.toFixed(3)} along the run, not the 0.400 that was aimed at`);
+      M.commission();
+      if(!isFinite(M.netFlowK(M.S()))) bad('a hand-drawn tee made netFlowK non-finite');
+      console.log(`  a tee on a ONE-loop plant, both ends aimed: ${j.aKey} @${j.aT.toFixed(2)} -> ${j.bKey} @${j.bT.toFixed(2)}`);
+    }
+  }
+}
+{ /* Dropping a tap on empty deck builds nothing, and that is a CANCEL rather
+     than a refusal - identical standing to the port drag, which treats a drop
+     on nothing the same way. The reach is what makes it a cancel and not a
+     wild guess at the nearest pipe on the plant. */
+  set({});
+  const hotRun=M.pipeNetwork().find(r=>r.k==="hot");
+  if(M.nearestRunTo([-9999,-9999],hotRun.key)!==null)
+    bad('a tap dropped far from any pipe still resolved to one - the reach limit is gone');
+  console.log('  a tap dropped on empty deck resolves to nothing: a cancel, not a guess');
+}
+{ /* ══ AN IDLE PLANT WRITES NOTHING IN THE LOG, AND EVERY LINE NAMES ITS MACHINE ══
+     THE ONE THAT SHIPPED. A solved tank edge on a balanced plant is the
+     difference of two large numbers, so a shut tank at full pressure reads
+     +1e-17 one tick and -1e-17 the next. Against a bare `q > 0` that is a
+     tank injecting, half the time, forever: MEASURED, 240 INJECTING lines in
+     180 s on a plant where nothing was open and inventory never left
+     100.00 %. The same `inj > 0` also adds half a pressure-programme step to
+     Pdem, so this was a rounding error steering the pressure demand.
+
+     Pinned as "the log is quiet", not as "injRate is small": the log is where
+     it was visible, and a threshold that silenced only the message while the
+     physics kept flickering would pass a narrower check. */
+  const s=set({}); run(s,180);
+  const noise=M.LOG().filter(e=>e.msg!=='PLANT AT POWER');
+  if(noise.length)
+    bad(`an untouched plant wrote ${noise.length} log line(s) in 180 s: ${[...new Set(noise.map(e=>e.msg))].join(', ')}`);
+  if(s.injRate!==0)
+    bad(`an untouched plant reads injRate ${s.injRate.toExponential(3)}, not exactly 0`);
+
+  /* AND THE MESSAGE NAMES THE MACHINE. "A tank is pushing water into the
+     loop" is a sentence about a plant that has one tank; this plant has
+     three. Off partName(), so a tank the player RENAMED is logged under the
+     name they gave it rather than its internal id. */
+  const s2=set({}); s2.P=2.0;
+  for(const id of M.tankIds()) if(D.tanks[id].side==='primary' && !s2.tankOpen[id]) M.act('tankOpen',id);
+  run(s2,20);
+  const injLine=M.LOG().find(e=>e.msg==='INJECTING');
+  if(!injLine) bad('three primary tanks opened against a 2 MPa loop and nothing logged INJECTING');
+  else {
+    const named=M.tankIds().filter(id=>injLine.why.includes(D.tanks[id].name));
+    if(!named.length)
+      bad(`the INJECTING line names no tank: "${injLine.why}"`);
+    if(!/\d\.\d\d %\/s/.test(injLine.why))
+      bad(`the INJECTING line carries no rate: "${injLine.why}"`);
+    console.log(`  an untouched plant logs nothing in 180 s (was 240 INJECTING lines); a real injection names it: "${injLine.why.slice(0,64)}..."`);
+  }
+}
+set({});
 { /* the vent is the solved edge flow, read straight off reliefRate()
      (pipenet.js) - sever the fitting's own branch pipe (pipeExtraLen ->
      Infinity -> FIT.relief.g's own isFinite(len) gate -> 0, same idiom
