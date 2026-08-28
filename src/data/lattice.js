@@ -113,12 +113,38 @@ const latEqR=()=>{
    tightening it takes coolant away. That is how pitch moves the spectrum with
    no correction term written anywhere; the old aM*(2-D.pitch) was this,
    guessed. A moderator slot is a solid block: no fuel and no coolant in it. */
-const LAT_FUELFRAC=0.33;
+/* ── THE BUNDLE HAS PINS ──
+   A Westinghouse 17x17 rod: 9.5 mm clad outside diameter, 0.57 mm of clad, on
+   a 12.6 mm square rod pitch. Three real numbers, and every fraction below is
+   arithmetic off them rather than a typed volume fraction:
+
+     LAT_FUELFRAC  pellet area over rod-pitch area   - what the FUEL is
+     LAT_RODFRAC   clad area over the same           - what displaces COOLANT
+
+   Those two used to be one number, 0.33, which is why the water a rod pushes
+   out of the way was the pellet's own volume. Both are shares of the REFERENCE
+   cell, because a bundle is still a fixed object: the box holds (LAT_P0/ROD_P)^2
+   rods whatever pitch the assemblies are laid on. */
+const ROD_D=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
+const ROD_DP=ROD_D-2*ROD_CLAD;
+const LAT_FUELFRAC=Math.PI/4*(ROD_DP/ROD_P)*(ROD_DP/ROD_P);
+const LAT_RODFRAC =Math.PI/4*(ROD_D /ROD_P)*(ROD_D /ROD_P);
+/* One bundle's hydraulics, at the pitch actually drawn. aHeat is per METRE of
+   height, so a caller multiplies by the core height it measured. Opening the
+   lattice adds flow area without adding rod surface, which is the pitch
+   dependence the typed XSUB_AR it replaces could not express. */
+function latBundle(){
+  const nRod=(LAT_P0/ROD_P)*(LAT_P0/ROD_P);
+  const aFlow=Math.max(0, LAT.pitch*LAT.pitch - LAT_RODFRAC*LAT_P0*LAT_P0);
+  const aHeat=nRod*Math.PI*ROD_D;
+  return {nRod, aFlow, aHeat, dh:aHeat>0 ? 4*aFlow/aHeat : 0};
+}
 function latVols(){
   let nF=0,nM=0;
   for(let q=0;q<LQ*LQ;q++){ const s=LAT.slot[q]; if(s===L_MOD) nM++; else if(s) nF++; }
-  const cell=LAT.pitch*LAT.pitch, bundle=LAT_FUELFRAC*LAT_P0*LAT_P0;
-  return {nF,nM,fuel:nF*bundle,cool:nF*Math.max(0,cell-bundle),mod:nM*cell};
+  const cell=LAT.pitch*LAT.pitch, p0=LAT_P0*LAT_P0;
+  return {nF,nM,fuel:nF*LAT_FUELFRAC*p0,
+          cool:nF*Math.max(0,cell-LAT_RODFRAC*p0),mod:nM*cell};
 }
 /* Moderating volume over fuel volume, the two contributors scaled by their own
    materials. `voided` stands the coolant down, which is the whole of what a
@@ -427,7 +453,10 @@ function latMass(){
   /* lid and floor: a disc over the whole core, one cell of height each */
   const disc=Math.PI*Math.pow((XNR+LAT.reflR)*dr,2);
   m+=disc*dz*(LAT.reflT+LAT.reflB)*rf.dens;
-  /* the clusters themselves - a channel is about 6% of its ring by volume */
+  /* the clusters themselves - a channel is about 6% of its ring by volume.
+     GAME BALANCE, not measured: the bundle has rod pitches now, so this could
+     be counted off guide tube positions the way LAT_RODFRAC is. It is a mass
+     figure only, so nothing physical reads it. */
   for(const c of LM.chan) m+=ringA(c.i)*LAT.len*0.06*ABSORB[LAT.abs].dens;
   /* the moderator blocks you drew, weighed the same way the reflector is:
      whole cells, at the density of what you packed them with */
