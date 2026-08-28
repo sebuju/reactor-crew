@@ -366,6 +366,11 @@ function latAct(u,v,shift){
   } else if(LATPEN.plan==="pois"){
     if(!latFuel(q)) return;
     LAT.slot[q]=LAT.slot[q]===L_POIS?L_FUEL:L_POIS;
+  } else if(LATPEN.plan==="zone"){
+    if(!latFuel(q)) return;
+    const nv=shift?0:(LAT.zone[q]+1)%LAT_NZ;
+    if(LAT.zone[q]===nv) return;
+    LAT.zone[q]=nv;
   } else if(LATPEN.plan==="rod"){
     if(!latFuel(q)) return;
     const nv=LAT.rod[q]===LATPEN.bank?-1:LATPEN.bank;
@@ -423,7 +428,12 @@ function latPlan(x,y,w,h){
     }
     const col=s===L_POIS?"#12303c":"#4a3208", ink=s===L_POIS?C.blue:C.amber;
     fillRect(X+1,Y+1,cs-2,cs-2,col);
-    frame(X+1,Y+1,cs-2,cs-2,lerpC(col,ink,.42));
+    const zn=LAT.zone[q];
+    frame(X+1,Y+1,cs-2,cs-2,zn? C.cyan : lerpC(col,ink,.42));
+    // a zone is a rim, not a fill: the flux dot and the poison colour still own
+    // the middle of the slot, and zone one draws nothing at all
+    if(zn) txt(String(zn+1),X+cs-2.5,Y+7,
+      {size:6,weight:700,align:"right",color:C.cyan});
     const r=cs*.30*Math.sqrt(clamp(latSlotPhi(u,v,ph),.04,1));
     ctx.beginPath(); ctx.arc(X+cs/2,Y+cs/2,r,0,7);
     ctx.fillStyle=ink; ctx.globalAlpha=s===L_POIS?.9:.55; ctx.fill(); ctx.globalAlpha=1;
@@ -475,6 +485,8 @@ const LATPEN_CORE=[
    "Lay an assembly, or lift one out. Every square is four assemblies in the finished core, because the axis runs along the corner of the first slot. Rated power, core diameter and H/D are all counted off this, so an outer square is worth far more than an inner one - it carries a bigger annulus."],
   ["POISON","pois",
    "Swap an assembly between plain fuel and one carrying burnable poison pins. Poison holds down fresh excess reactivity that would otherwise be held by boron, and unlike boron it is graded: put it where the flux peaks and it flattens the core. It only works on a slot that already has fuel in it."],
+  ["ZONE","zone",
+   "Put an assembly into a different LOADING ZONE. Each zone that has slots in it gets its own FUEL row above, so you can load fresh high-enrichment fuel on the rim and burnt fuel toward the centre - which is how a real core is loaded, and the main way of flattening peaking without spending poison. Click cycles a slot through the three zones, SHIFT puts it back to zone one. It only works on a slot that already has fuel in it."],
   ["MODERATOR","mod",
    "Pack a slot with a block of moderator instead of an assembly. It makes no power and it costs you the fuel that was there, and in exchange the neutrons in this core are slowed down. That is the whole of the void coefficient: if the coolant does the moderating, boiling it off shuts the core down; if these blocks do, the coolant is only a poison and boiling it off ADDS power. A block is core material, so the fuel either side of it is still one reactor."],
 ];
@@ -613,6 +625,13 @@ const LATREAD=[
    "How tall the fuel column is. Drawn in the section with the LENGTH pen, not set here."],
   ["REFLECTOR CELLS",()=>LAT.reflR+" rim / "+LAT.reflT+" lid / "+LAT.reflB+" floor",
    "How many cells of reflector are packed on each face. Painted in the section with the REFLECTOR pen. Leave the floor bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
+  ["CORE MEAN EXCESS",()=>fuelBlend().excess.toFixed(0)+" pcm",
+   "The excess reactivity of the loading, blended by fuel volume over the zones you painted. Zoning does not change this - it moves reactivity from one ring to another, which is what flattens peaking."],
+  ["DELAYED FRACTION",()=>fuelBlend().beta.toFixed(0)+" pcm",
+   "Beta for the core as loaded. Mixing MOX into a uranium core lands this between the two, and it is the distance to prompt criticality.",
+   ()=>fuelBlend().beta<450?"var(--c-amber)":null],
+  ["FUEL DAMAGE LIMIT",()=>fuelBlend().tdmg.toFixed(0)+" K",
+   "Where the fuel starts taking damage. It is the WORST fuel in the core, not the average one: melt is a local event, so one zone of metallic fuel cannot hide behind four of ceramic."],
   ["MODERATION RATIO",()=>modRatio().toFixed(2),
    "Moderating volume over fuel volume, counted off the drawing: the coolant between the assemblies plus any blocks you packed, each scaled by how well its own material slows a neutron. This one number decides prompt lifetime, the moderator coefficient, the void coefficient and how much enrichment it takes to go critical at all. Near zero is a FAST core."],
   ["PROMPT LIFETIME",()=>(derived().Lam*1e6).toFixed(2)+" us",
