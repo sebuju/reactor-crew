@@ -525,7 +525,9 @@ const KIT = (function(){
       return {row, mark, mass};
     });
     let lastSel = -1;
-    function set(sel, deltas){
+    // `bad` is a row this design cannot commission on. It is DIMMED, not
+    // disabled: the bench warns and never refuses, so the click still lands.
+    function set(sel, deltas, bad){
       if(sel !== lastSel){
         rows.forEach((r, i) => {
           const on = i === sel;
@@ -539,8 +541,9 @@ const KIT = (function(){
         if(r.mass.textContent !== t) r.mass.textContent = t;
         r.mass.classList.toggle("min", deltas[i] < 1);
       });
+      if(bad) rows.forEach((r, i) => r.row.classList.toggle("bad", !!bad[i]));
     }
-    set(opts.sel != null ? opts.sel : -1, opts.deltas);
+    set(opts.sel != null ? opts.sel : -1, opts.deltas, opts.bad);
     return {el: root, set};
   }
 
@@ -557,15 +560,16 @@ const KIT = (function(){
       return {c, mass};
     });
     let lastSel = -1;
-    function set(sel, deltas){
+    function set(sel, deltas, bad){
       if(sel !== lastSel){ cells.forEach((c, i) => c.c.classList.toggle("on", i === sel)); lastSel = sel; }
       if(deltas) cells.forEach((c, i) => {
         const t = "+" + deltas[i].toFixed(0) + "t";
         if(c.mass.textContent !== t) c.mass.textContent = t;
         c.mass.classList.toggle("min", deltas[i] < 1);
       });
+      if(bad) cells.forEach((c, i) => c.c.classList.toggle("bad", !!bad[i]));
     }
-    set(opts.sel != null ? opts.sel : -1, opts.deltas);
+    set(opts.sel != null ? opts.sel : -1, opts.deltas, opts.bad);
     return {el: root, set};
   }
 

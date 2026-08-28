@@ -186,22 +186,14 @@ function paramsFor(p){
      this panel (they are a gang, dbRailBuild()) and there is exactly one plan,
      with every pen on it. Two boxes on the plant, one panel - clicking either
      brings this up. */
-  /* ══ BUY, START FROM, DRAW, READ, FIT THE DRIVES, VERDICT ══
-     The old order had you drawing before you had chosen what you were drawing
-     with, presets UNDER the drawing they are meant to seed, and materials in
-     three different places. Every block below is the same block it was; only
-     the order changed, and blockSig() keys the rail's rebuild on kind+title so
+  /* ══ PRESETS, BUY, DRAW, READ, FIT THE DRIVES, VERDICT ══
+     A PRESET COMES FIRST BECAUSE IT WRITES WHAT IS UNDER IT: archPreset() buys
+     every material on the panel, so below them it overwrote the rows you had
+     just picked. blockSig() keys the rail's rebuild on kind+title, so
      reordering costs nothing. */
   if(id==="core"){
     B.gang="reactor"; B.gangPlain=true;
-    B.push({kind:"rule",title:"MATERIALS",
-      tip:"Everything the core is MADE of, in one place. None of it is a shape - what you draw with these is the next block down."});
-    opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.","cool",COOLANT);
-    opt("FUEL","Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density.","fuel",FUEL);
-    opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.","mod",MODER);
-    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.","refl",LATREFL);
-    opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
-    B.push({kind:"rule",title:"START FROM",
+    B.push({kind:"rule",title:"PRESETS",
       tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself."});
     B.push({kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>archPreset(i)}))});
     B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(i)}))});
@@ -210,10 +202,18 @@ function paramsFor(p){
         (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
             :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
       fn:()=>{ latLayBanks(n); latRevolve(); }}))});
-    B.push({kind:"rule",title:"DRAW",
-      tip:"One pen bar governing two canvases: the PLAN is the core looking down, the SECTION is the same core in elevation. Everything about the shape of this reactor is drawn on one of them."});
-    B.push({kind:"lattools",tools:LATPEN_CORE.concat(LATPEN_RODS,LATPEN_SEC)});
+    opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.","cool",COOLANT);
+    opt("FUEL","Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density.","fuel",FUEL);
+    opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.","mod",MODER);
+    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.","refl",LATREFL);
+    opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
+    B.push({kind:"lattools",pen:"plan",title:"RADIAL PLAN",
+      tools:LATPEN_CORE.concat(LATPEN_RODS),
+      tip:"A quarter of the core seen from above - the r axis of the solve, revolved about the corner of the first slot. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."});
     B.push({kind:"latplan"});
+    B.push({kind:"lattools",pen:"sec",title:"AXIAL SECTION",
+      tools:LATPEN_SEC,
+      tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."});
     B.push({kind:"latsection"});
     B.push({kind:"rule",title:"MEASURED",
       tip:"Every number on this list is an OUTPUT of the drawing above. Not one of them is a value you can set - if you want one of them to move, move the drawing."});
@@ -221,8 +221,6 @@ function paramsFor(p){
        columns, so a row can move between them without changing shape. */
     B.push({kind:"readlist",rows:()=>LATREAD.concat(LATREAD_RODS)
       .map(r=>[r[0],r[1](),r[3]?r[3]():null,r[2]])});
-    B.push({kind:"rule",title:"ROD DRIVES",
-      tip:"The control rod drive mechanisms, bolted to the vessel head. Everything below this line belongs to them, not to the fuel: what drives the clusters in, and how they are worked. They ride on the head and move with the reactor, which is why they share this panel."});
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
     tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. It only ever drives the bank inside the travel band you set below; you can always override it.","autorod",26);

@@ -11,8 +11,15 @@ const blockAcc = key => typeof key==="string"
 /* What the plant would weigh with this block set to that value. It has to
    WRITE the value to ask, so it puts it back - through the same accessor, so
    a nested key is restored as exactly as a flat one. */
-function massWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
-  const m=derived().mass; a.set(o); return m; }
+function massWith(key,i){ return optWith(key,i).mass; }
+/* Mass AND whether that pick would refuse to commission, off ONE derived():
+   an option list already paid for a solve per row to price it, so asking the
+   same solve for its verdict costs nothing. A HARD warning is what
+   benchReview() reads to block commissioning, so it is the honest test of
+   "you cannot have this one" - and the row is dimmed, never disabled. */
+function optWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
+  const d=derived(), r={mass:d.mass, bad:d.warn.some(w=>w[0]==="HARD")};
+  a.set(o); return r; }
 
 /* Nameplate pump capacity vs what a loop's own ceiling will ever pass right
    now - netFlowK()'s per-group min(groupSize,up) clamp (pipenet.js), read
@@ -306,7 +313,10 @@ keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.active="select"; }}
    swaps the ctx the shared primitives (fillRect/txt/frame/dot...) write to. Not
    on #cv: the rail is opaque and paints over it, so anything drawn there would
    be both invisible and unclickable - see hostPaint() in plant.js. */
-const LATPEN={tool:"fuel",bank:0,hover:null,last:null};
+/* ONE PEN PER SURFACE. A pen bar governs the canvas it stands over: `plan` is
+   the pens that author r, `sec` the pens that author z. A single shared pen
+   meant five of the six left the other canvas inert. */
+const LATPEN={plan:"fuel",sec:"len",bank:0,hover:null,last:null};
 
 function latRingPhi(){
   const T=corePredict(derived()), phi=T.phiCold, r=new Float64Array(XNR);
@@ -332,24 +342,20 @@ function latShare(u,v,ph){
     if(LAT.slot[LIX(a,b)]) tot+=latSlotPhi(a,b,ph);
   return tot>1e-9? latSlotPhi(u,v,ph)/(4*tot) : 0;
 }
-/* One pen bar over two canvases, so the plan has to stand down for a pen that
-   belongs to the section - and the section for a pen that belongs to the plan.
-   Each act() names the tools it owns rather than falling through to a default. */
 function latAct(u,v,shift){
-  if(LATPEN.tool==="refl"||LATPEN.tool==="len") return;
   const q=LIX(u,v);
-  if(LATPEN.tool==="mod"){
+  if(LATPEN.plan==="mod"){
     const nv=shift?L_EMPTY:(LAT.slot[q]===L_MOD?L_FUEL:L_MOD);
     if(LAT.slot[q]===nv) return;
     LAT.slot[q]=nv; if(nv!==L_FUEL) LAT.rod[q]=-1;
-  } else if(LATPEN.tool==="fuel"){
+  } else if(LATPEN.plan==="fuel"){
     const nv=shift?L_EMPTY:(LAT.slot[q]?L_EMPTY:L_FUEL);
     if(LAT.slot[q]===nv) return;
     LAT.slot[q]=nv; if(!nv) LAT.rod[q]=-1;
-  } else if(LATPEN.tool==="pois"){
+  } else if(LATPEN.plan==="pois"){
     if(!latFuel(q)) return;
     LAT.slot[q]=LAT.slot[q]===L_POIS?L_FUEL:L_POIS;
-  } else if(LATPEN.tool==="rod"){
+  } else if(LATPEN.plan==="rod"){
     if(!latFuel(q)) return;
     const nv=LAT.rod[q]===LATPEN.bank?-1:LATPEN.bank;
     if(LAT.rod[q]===nv) return;
@@ -411,7 +417,7 @@ function latPlan(x,y,w,h){
     ctx.beginPath(); ctx.arc(X+cs/2,Y+cs/2,r,0,7);
     ctx.fillStyle=ink; ctx.globalAlpha=s===L_POIS?.9:.55; ctx.fill(); ctx.globalAlpha=1;
     if(rod>=0){
-      const on=LATPEN.tool==="rod"&&LATPEN.bank===rod;
+      const on=LATPEN.plan==="rod"&&LATPEN.bank===rod;
       fillRect(X+3,Y+3,cs-6,cs-6,on?C.amber:C.metal);
       txt(String(rod+1),X+cs/2,Y+cs/2+3,
         {size:7.5,weight:700,align:"center",color:C.well});
@@ -490,12 +496,12 @@ function latSecGeom(x,y,w,h){
 }
 function latSectionAct(G,pt,shift){
   const rr=Math.abs(pt.x-G.CX)/G.K, zz=(G.CY-pt.y)/G.K;
-  if(LATPEN.tool==="len"){
+  if(LATPEN.sec==="len"){
     const nv=clamp(zz,LAT_LEN_MIN,LAT_LEN_MAX);
     if(Math.abs(nv-LAT.len)<1e-9) return;
     LAT.len=nv; latRevolve(); return;
   }
-  if(LATPEN.tool!=="refl") return;
+  if(LATPEN.sec!=="refl") return;
   const dr=LM.dr, dz=LM.dz, halfW=(XNR-0.5)*dr;
   let face=null, k=0;
   if(zz>LAT.len){ face="reflT"; k=Math.ceil((zz-LAT.len)/dz); }
@@ -540,9 +546,6 @@ function latSection(x,y,w,h){
     }
   }
   frame(CX-halfW,CY-colH,2*halfW,colH,C.edge);
-  // the length handle: a bar on the top of the fuel column, live under the pen
-  const on=LATPEN.tool==="len";
-  fillRect(CX-halfW,CY-colH-1.6,2*halfW,3.2,on?C.amber:C.rail);
   ctx.save(); ctx.setLineDash([9,3,2,3]);
   line(CX,gy,CX,CY,C.rail,1); line(gx,CY,gx+gw,CY,C.rail,1);
   ctx.restore();
@@ -552,11 +555,25 @@ function latSection(x,y,w,h){
   const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
     latSectionAct(G,pt,e&&e.shiftKey);
   }});
-  fitTxt(hov(wd)
+  /* THE COLUMN TOP IS A HANDLE, NOT A PEN: with a plan pen up latSectionAct()
+     returned at its first line and the whole section was inert. Grabbed by its
+     OFFSET, and stood down only under the REFLECTOR pen, whose first lid cell
+     is the same band of picture. */
+  let grab=null;
+  const hw=LATPEN.sec==="refl" ? {x:-1e4,y:-1e4,w:0,h:0}
+    : push({x:CX-halfW-4,y:CY-colH-6,w:2*halfW+8,h:12,type:"paint",fn:pt=>{
+    if(grab===null) grab=(CY-colH)-pt.y;
+    const nv=clamp((CY-(pt.y+grab))/K,LAT_LEN_MIN,LAT_LEN_MAX);
+    if(Math.abs(nv-LAT.len)<1e-9) return;
+    LAT.len=nv; latRevolve();
+  }});
+  const lit=LATPEN.sec==="len"||hov(hw)||ui.drag===hw;
+  fillRect(CX-halfW,CY-colH-1.6,2*halfW,3.2,lit?C.amber:C.rail);
+  fitTxt(hov(wd)||hov(hw)
       ? "LEN "+LAT.len.toFixed(2)+" m  H/D "+D.hd.toFixed(2)+
         "  RIM "+LAT.reflR+"  LID "+LAT.reflT+"  FLOOR "+LAT.reflB
       : "ELEVATION / DRAG THE TOP FOR LENGTH, PAINT THE FACES",
-    gx,gy+gh+11,gw,{size:6.5,sp:.3,color:hov(wd)?C.amber:C.ink2});
+    gx,gy+gh+11,gw,{size:6.5,sp:.3,color:hov(wd)||hov(hw)?C.amber:C.ink2});
 }
 const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, and how many cells of reflector are packed on the rim, the lid and the floor. Use the LENGTH pen and drag the top of the column; use the REFLECTOR pen and click a cell outside a face to pack it out to there, SHIFT to lift it back. Core H/D is what the two canvases make between them.";
 const LATPEN_SEC=[
@@ -620,9 +637,9 @@ function paramBlockMk(block){
       const ol=KIT.optList(block.items,{onSelect:i=>a.set(block.base+i)});
       root.appendChild(ol.el);
       return {el:root,sync(){
-        const deltas=block.items.map((_,i)=>massWith(block.key,block.base+i));
-        const lo=Math.min(...deltas);
-        ol.set(a.get()-block.base, deltas.map(v=>v-lo));
+        const q=block.items.map((_,i)=>optWith(block.key,block.base+i));
+        const lo=Math.min(...q.map(v=>v.mass));
+        ol.set(a.get()-block.base, q.map(v=>v.mass-lo), q.map(v=>v.bad));
       }};
     }
     case "segsel": {
@@ -632,9 +649,9 @@ function paramBlockMk(block){
       const ss=KIT.segSel(block.labels,{onSelect:i=>a.set(block.base+i)});
       root.appendChild(ss.el);
       return {el:root,sync(){
-        const deltas=block.labels.map((_,i)=>massWith(block.key,block.base+i));
-        const lo=Math.min(...deltas);
-        ss.set(a.get()-block.base, deltas.map(v=>v-lo));
+        const q=block.labels.map((_,i)=>optWith(block.key,block.base+i));
+        const lo=Math.min(...q.map(v=>v.mass));
+        ss.set(a.get()-block.base, q.map(v=>v.mass-lo), q.map(v=>v.bad));
       }};
     }
     case "slider": {
@@ -685,11 +702,15 @@ function paramBlockMk(block){
       const root=KIT.el("div","db-bulkrow");
       const lab=KIT.el("span","db-bulkrow-lab"); lab.textContent=block.label;
       root.appendChild(lab);
+      // a GRID, not a wrapping flex row: every preset is one column wide, so a
+      // row that wraps leaves the odd ones the same size as the rest
+      const cells=KIT.el("div","db-bulkrow-btns");
       for(const it of block.items){
         const b=KIT.button(it.name,{size:6.5,onClick:it.fn});
         KIT.tip(b.el,it.name,it.tip);
-        root.appendChild(b.el);
+        cells.appendChild(b.el);
       }
+      root.appendChild(cells);
       return {el:root,sync(){}};
     }
     case "rule": {
@@ -697,30 +718,36 @@ function paramBlockMk(block){
       if(block.tip) KIT.tip(r.el,block.title,block.tip);
       return {el:r.el,sync(){}};
     }
+    // block.pen names which surface's pen this bar sets, and the bar stands
+    // directly over that surface's canvas
     case "lattools": {
-      const root=KIT.el("div","db-block");
-      const r=KIT.rule("PEN"); root.appendChild(r.el);
-      KIT.tip(r.el,"PEN","What clicking on the plan does. Every tool is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross.");
+      const pen=block.pen, root=KIT.el("div","db-block");
+      const r=KIT.rule(block.title); root.appendChild(r.el);
+      KIT.tip(r.el,block.title,block.tip);
       const row=KIT.el("div","db-toolrow");
+      /* PICKING A PEN CHANGES NO DESIGN, so dbRailSync()'s signature gate never
+         reaches this block's sync() - the bar stayed lit on the last pen until
+         something was actually drawn. The click lights its own button. */
+      const lit=()=>{
+        if(!block.tools.some(t=>t[1]===LATPEN[pen])) LATPEN[pen]=block.tools[0][1];
+        btns.forEach(o=>o.b.set({on:LATPEN[pen]===o.k}));
+        const showBank=LATPEN[pen]==="rod";
+        KIT.show(bankRow,showBank);
+        if(showBank) bankBtns.forEach((bt,i)=>bt.set({on:LATPEN.bank===i}));
+      };
       const btns=block.tools.map(t=>{
-        const b=KIT.button(t[0],{size:7,onClick:()=>{ LATPEN.tool=t[1]; }});
+        const b=KIT.button(t[0],{size:7,onClick:()=>{ LATPEN[pen]=t[1]; lit(); }});
         KIT.tip(b.el,t[0]+" PEN",t[2]); row.appendChild(b.el); return {b,k:t[1]};
       });
       root.appendChild(row);
       const bankRow=KIT.el("div","db-bankrow");
       const bankBtns=[0,1,2,3].map(b=>{
-        const bt=KIT.button("BANK "+(b+1),{size:6.5,onClick:()=>{ LATPEN.bank=b; }});
+        const bt=KIT.button("BANK "+(b+1),{size:6.5,onClick:()=>{ LATPEN.bank=b; lit(); }});
         KIT.tip(bt.el,"BANK "+(b+1),"Which bank the clusters you draw belong to. Draw clusters at different radii into different banks and you can lean the flux; put them all in one and there is nothing to lean against.");
         bankRow.appendChild(bt.el); return bt;
       });
       root.appendChild(bankRow);
-      return {el:root,sync(){
-        if(!block.tools.some(t=>t[1]===LATPEN.tool)) LATPEN.tool=block.tools[0][1];
-        btns.forEach(o=>o.b.set({on:LATPEN.tool===o.k}));
-        const showBank=LATPEN.tool==="rod";
-        KIT.show(bankRow,showBank);
-        if(showBank) bankBtns.forEach((bt,i)=>bt.set({on:LATPEN.bank===i}));
-      }};
+      return {el:root,sync:lit};
     }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas");

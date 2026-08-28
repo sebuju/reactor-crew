@@ -132,18 +132,20 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-note{margin:0;font-size:var(--t8-5);color:var(--c-ink2);line-height:1.4}
 /* six reactor presets and six pens do not fit one rail-wide line, and a row
    that overflows loses its last button entirely - so both rows wrap */
-.db-bulkrow{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.db-bulkrow{display:flex;align-items:center;gap:4px}
 .db-bulkrow-lab{font-size:var(--t6-5);letter-spacing:.7px;text-transform:uppercase;color:var(--c-ink2)}
-.db-bulkrow .kit-btn{flex:1 1 auto}
+.db-bulkrow-btns{flex:1 1 auto;display:grid;gap:4px;
+  grid-template-columns:repeat(auto-fit,minmax(46px,1fr))}
 .db-toolrow,.db-bankrow{display:flex;gap:4px;flex-wrap:wrap}
 .db-toolrow .kit-btn,.db-bankrow .kit-btn{flex:1 1 auto}
 /* paints into its OWN bitmap via hostPaint() and takes its own pointer events
    via uiForward() - the rail is opaque, so anything drawn on #cv under it is
    invisible and unclickable */
 .db-latplan-canvas{display:block;width:100%;aspect-ratio:1/1;background:transparent}
-/* the section is the same core in elevation, so it is as wide as the rail and
-   only as tall as it needs to be - a square box here would waste half the rail */
-.db-latsection-canvas{display:block;width:100%;aspect-ratio:5/4;background:transparent}
+/* THE BOX FOLLOWS SEC_W/SEC_H (design-bench.js), or the fixed metric scale is
+   pinned by the SHORT axis and the core is drawn two thirds the size it could be
+   in a box two thirds full of margin - plus the readout strip under the grid */
+.db-latsection-canvas{display:block;width:100%;aspect-ratio:4/5;background:transparent}
 .db-readlist{margin-top:2px}
 .db-mass{font-size:var(--t8-5)}
 .db-mass-val{font-size:var(--t7-5);color:var(--c-ink2);margin-top:4px}

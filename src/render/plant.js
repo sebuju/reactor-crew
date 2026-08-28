@@ -714,7 +714,10 @@ function benchCell(c){
   if(!c.k){                          // momentary: nothing to set, so it draws dead
     o.fn=()=>{}; o.set=()=>{};
     o.on=()=>false; o.danger=()=>false;
-    if(c.kind==="sld"){ o.val=()=>0; o.dem=null; o.min=c.min; o.max=c.max; }
+    /* `bench` is for the one control whose starting position is COMMISSIONED
+       rather than chosen: boron is solved to make the drawn core critical, so
+       the bench must read the design's own figure or it draws clean water. */
+    if(c.kind==="sld"){ o.val=c.bench||(()=>0); o.dem=null; o.min=c.min; o.max=c.max; o.inert=true; }
     return o;
   }
   if(c.kind==="sld"){
@@ -887,7 +890,7 @@ function ctlFor(p,live,split){
         direction it moves. A slider() scale is allowed to run either way - see
         the ordered clamp in the drag handler in core/ui.js. */
      [{kind:"sld",flex:1,val:()=>S.boron,min:()=>0,max:()=>-6000,step:10,
-       dem:()=>S.boronDem,
+       dem:()=>S.boronDem,bench:()=>derived().boronOp,
        fmt:v=>v.toFixed(0)+" pcm",set:v=>{ act("boronDem",v); },
        tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}],
      /* the same demand the slider writes, in fixed bites. A poison you can only
@@ -979,7 +982,7 @@ function ctlStrip(list,x,y,w,h){
     const dan = c.danger? c.danger() : false, on = c.on? c.on() : false;
     if(c.kind==="sld"){ // LABEL: a control-strip WIDGET kind (slider vs button), unrelated to a pipe run's kind
       slider(cx,y+h/2,cw,c.val(),c.min(),c.max(),
-        {th:h,tw:7,fmt:c.fmt,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
+        {th:h,tw:7,fmt:c.fmt,inert:c.inert,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
          marks:c.marks?c.marks():null,
          fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
     } else if(c.kind==="arm"){   // LABEL: the same control-strip WIDGET kind, unrelated to a pipe run's kind

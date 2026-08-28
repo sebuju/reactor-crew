@@ -108,6 +108,9 @@
 .kit-optlist-mass{font-size:var(--t8);color:var(--c-ink2)}
 .kit-optlist-row.on .kit-optlist-mass{color:var(--c-amber)}
 .kit-optlist-mass.min{color:var(--c-green)}
+/* a pick this design cannot commission on - dimmed, and still clickable */
+.kit-optlist-row.bad,.kit-segsel-cell.bad{color:var(--c-ink2);opacity:.45}
+.kit-optlist-row.bad.on,.kit-segsel-cell.bad.on{opacity:.75;color:var(--c-red)}
 
 .kit-segsel{display:flex;gap:4px}
 .kit-segsel-cell{flex:1 1 0;flex-direction:column;align-items:center;justify-content:center;height:39px}

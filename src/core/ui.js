@@ -310,7 +310,10 @@ function slider(x,y,w,val,min,max,o){
   const tW=w-rw;
   // the widget is the TRACK, not the row - otherwise clicking the number
   // would slam the value to whatever the number's own x means
-  const wd=push({x,y:y-th/2-2,w:tW,h:th+4,type:"sld",min,max,fn:o.fn,
+  // o.inert: a READING, not a control - it registers no widget at all, so it
+  // cannot be hovered, previewed or dragged, and it wears C.ink2 throughout
+  const wd = o.inert ? {x,w:tW,val,pv:null}
+    : push({x,y:y-th/2-2,w:tW,h:th+4,type:"sld",min,max,fn:o.fn,
                  cy:y,val,tw_});     // cy/val/tw_ are what the drag handler needs
   // clamp t, or a value outside the range draws the indicator off its own
   // track. o.dem is what you asked for (may lag behind with a rate limit);
@@ -331,7 +334,7 @@ function slider(x,y,w,val,min,max,o){
   // value once dragging (hov() already stands down for that). Converted
   // through ptIn() like any plant widget, or the preview hairline would land
   // wherever the raw PAGE pointer is, far from the track at fit scale.
-  const pp = ptIn(wd,ui.ptr);
+  const pp = o.inert ? null : ptIn(wd,ui.ptr);
   /* THE PREVIEW HAS NO DEAD ZONE. It used to stand down within a thumb-width
      of the indicator, because pressing there GRABS instead of jumping - but
      that is exactly the neighbourhood a fine adjustment lives in, so the one
@@ -351,7 +354,7 @@ function slider(x,y,w,val,min,max,o){
     // an unlit cell is a dark slot (C.well), not the old #152125 grey, which
     // was close enough to the plinth a control strip sits on to wash out
     let col = past?"#240b08":C.well;                                          // not there
-    if(c<=lo)      col = (past&&viol)?C.red:"#2f7d8c";                        // there
+    if(c<=lo)      col = o.inert?"#2b3338":(past&&viol)?C.red:"#2f7d8c";      // there
     else if(c<=hi) col = (past&&(viol||violD))?"#5c2a1c"
                                               :(rising?"#5a4415":"#1d3a41");  // on its way
     fillRect(x+i*cw,by,cw-1.3,bh,col);
@@ -370,11 +373,11 @@ function slider(x,y,w,val,min,max,o){
   if(wd.pv!=null) fillRect(Math.round(pp.x),t0,1,hh,"#7a5a18");  // where a click lands
   // a hairline in a cut, not a plate - the old 10px thumb covered an eighth
   // of an 84px track; the cut keeps 1px of amber readable against a lit cell
-  const cx=Math.round(clamp(x+t*tW,x+1,x+tW-1));
+  const cx=Math.round(clamp(x+t*tW,x+1,x+tW-1)), ind=o.inert?C.ink2:C.amber;
   fillRect(cx-1,t0,3,hh,C.bg);       // the cut, so 1 unit of amber survives a lit cell
-  fillRect(cx,t0,1,hh,C.amber);      // the indicator itself
-  fillRect(cx-2,t0,5,1,C.amber);     // serifs, 1 unit tall - they mark the ends, not the value
-  fillRect(cx-2,t1-1,5,1,C.amber);
+  fillRect(cx,t0,1,hh,ind);          // the indicator itself
+  fillRect(cx-2,t0,5,1,ind);         // serifs, 1 unit tall - they mark the ends, not the value
+  fillRect(cx-2,t1-1,5,1,ind);
   // demand is an ORDER, not a position, so it rides above the track as a
   // caret with a 3-unit serif against the indicator's 5
   if(o.dem!=null && Math.abs(dem-t)>.002){
@@ -382,7 +385,7 @@ function slider(x,y,w,val,min,max,o){
     fillRect(dx,t0,1,4,C.amber); fillRect(dx-1,t0,3,1,C.amber);
   }
   if(rw){ const r=sldRead(wd,o.fmt);
-    txt(r.s,x+w,midBase(t0,hh,6.5),Object.assign({},ro,{align:"right",color:r.col})); }
+    txt(r.s,x+w,midBase(t0,hh,6.5),Object.assign({},ro,{align:"right",color:o.inert?C.ink2:r.col})); }
   // a one-cell component has no room for a track AND a number, so there it's
   // hover-only, standing in the half of the track the pointer isn't in
   else if(o.fmt && wd.pv!=null){
@@ -640,8 +643,12 @@ function uiBind(el){
   el.addEventListener("pointerdown",uiDown);
   el.addEventListener("pointermove",uiMove);
   el.addEventListener("pointerup",uiUp);
-  ["pointercancel","pointerleave"].forEach(ev=>
-    el.addEventListener(ev,()=>{ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty();}));
+  // A LEAVE IS NOT A CANCEL WHILE A HAND IS DOWN: the capture keeps delivering,
+  // but Chrome fires pointerleave on the boundary, killing any drag that crossed
+  // its own box - the lattice pens and the section's LENGTH drag, every time
+  el.addEventListener("pointercancel",()=>{ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty();});
+  el.addEventListener("pointerleave",()=>{ if(ui.drag) return;
+    ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); });
 }
 uiBind(cv);
 function uiForward(el,toLocal){
