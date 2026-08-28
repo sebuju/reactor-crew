@@ -139,11 +139,22 @@ function warnFor(id){
   return w.some(q=>q[0]==="HARD")?C.red:C.amber;
 }
 
-/* right-click, held still and released: add or remove - see .claude/CLAUDE.md */
+// which port a plant-space point lands on, or null - the same small square
+// PORTG (plant.js) draws a mark in
+function portHit(pt){
+  for(const pid in D.ports){ const [x,y]=portPos(pid);
+    if(Math.abs(pt[0]-x)<=PORTG/2 && Math.abs(pt[1]-y)<=PORTG/2) return pid; }
+  return null;
+}
+/* right-click, held still and released: add or remove - see .claude/CLAUDE.md
+   A PORT under the cursor wins over everything else it happens to sit on -
+   see uiDown()'s own right-click split (core/ui.js): a quick tap never
+   reaches this at all, only a held-and-released or a drag does. */
 function ctxResolveDesign(p){
   const pt=vIn(p)?vPt(p):null;
   if(!pt) return null;
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
+  const port=portHit([pt.x,pt.y]);
   const part=partAt([pt.x,pt.y]);   // layout.js - the same lookup the part drag's drop test uses
   /* WHICH RUN IS UNDER THE CURSOR, and nothing about where along it. A
      fitting is placed in a CELL now, so the only thing a right-click on a
@@ -151,11 +162,11 @@ function ctxResolveDesign(p){
      RUN, not about a point on it. The fraction (nearestOn()) and the two
      different "did I hit a pipe" reaches went with the tap shape. */
   let runRid=null, runK=null;
-  if(!part) for(const r of pipeNetwork()){
+  if(!port && !part) for(const r of pipeNetwork()){
     if(!r.key || !r.rid) continue;
     if(nearRun(r.pts,[pt.x,pt.y]) < CELL*0.85){ runRid=r.rid; runK=r.k; break; }
   }
-  return {x:p.x,y:p.y,cell:{gx,gy},part,runRid,runK};
+  return {x:p.x,y:p.y,cell:{gx,gy},port,part,runRid,runK};
 }
 /* HOW FAR A POINT IS FROM A POLYLINE. All that is left of nearestOn(): the
    fraction along the run it also returned was only ever for a tap, and a
@@ -174,6 +185,8 @@ function nearRun(pts,p){
 // fitting, or the plant itself for a bare cell. Never a menu item, so it
 // carries no fn and cannot be clicked - see drawCtxMenu() (core/ui.js).
 function ctxTitleDesign(hit){
+  if(hit.port){ const pt=D.ports[hit.port], p=LAY.parts.find(q=>q.id===pt.p);
+    return (p?partName(p):"")+" PORT"; }
   if(hit.part) return partName(hit.part);
   if(hit.runRid) return pipeLabel(hit.runK)||"PIPE";
   return "PLANT";
@@ -186,6 +199,18 @@ function ctxTitleDesign(hit){
    fittableList()'s FIT side survives on the bare-cell fallback below - a
    part that is not yet fitted has no box on the grid to click. */
 function ctxItemsDesign(hit){
+  /* DECISION 2: right-click held-and-released spells the modes out in words -
+     the toggle (uiUp(), core/ui.js) is the same act with no reading. One row
+     per mode, plus REMOVE PORT, which takes the port's own pipe with it
+     (removePort(), layout.js) exactly as removing a part takes its runs. */
+  if(hit.port){
+    const pt=D.ports[hit.port], p=LAY.parts.find(q=>q.id===pt.p);
+    const IN=p&&portPath(p,pt.f), items=[];
+    if(IN) for(const nm of [IN.na,IN.nb])
+      items.push({label:nm, fn:()=>{ portMode(hit.port,nm); }});
+    items.push({label:"REMOVE PORT", fn:()=>{ removePort(hit.port); }});
+    return items;
+  }
   if(hit.part){
     // a FITTABLE slot's part exists on the grid only while it IS fitted
     // (cont/turb/cond), so clicking it can only ever mean REMOVE.
@@ -228,7 +253,7 @@ function ctxItemsDesign(hit){
       items.push({label:"ADD VALVE HERE", fn:()=>{ addFitting(gx,gy); }});
       items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
         placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
-          grp:"pump",tip:"A spare coolant pump, placed where you put it. Right-click a free port to CONNECT it - unplumbed, it does nothing at all.",
+          grp:"pump",tip:"A spare coolant pump, placed where you put it. Hover an edge to place a port, then click it to draw a pipe - unplumbed, it does nothing at all.",
           role:"pump"}));
       }});
       /* Stage 3b: no D.loops++ - that used to conjure a generator, a pump
@@ -238,7 +263,7 @@ function ctxItemsDesign(hit){
          and does nothing at all until wired up through CONNECT. */
       items.push({label:"ADD STEAM GENERATOR HERE", fn:()=>{
         placePart(n=>({id:"sgX"+n,name:"STEAM GEN SPARE",w:1,h:2,x:gx,y:gy,col:"#5fd2e2",
-          grp:"sg",tip:"An additional steam generator, placed where you put it. Right-click a free port to CONNECT it - unplumbed, it does nothing at all.",
+          grp:"sg",tip:"An additional steam generator, placed where you put it. Hover an edge to place a port, then click it to draw a pipe - unplumbed, it does nothing at all.",
           role:"sg"}));
       }});
       /* A SECOND TURBINE AND A SECOND CONDENSER. Both used to be one part,
@@ -251,25 +276,25 @@ function ctxItemsDesign(hit){
          still warns about it; these are the extra ones. */
       items.push({label:"ADD TURBINE HERE", fn:()=>{
         placePart(n=>({id:"turbX"+n,name:"TURBINE SPARE",w:3,h:1,x:gx,y:gy,col:"#f0a830",
-          grp:"sec",tip:"An additional turbine, placed where you put it. It swallows its own share of steam and carries its own share of the load - lose one of two and you lose half the output, not all of it. Right-click a free port to CONNECT it.",
+          grp:"sec",tip:"An additional turbine, placed where you put it. It swallows its own share of steam and carries its own share of the load - lose one of two and you lose half the output, not all of it. Hover an edge to place a port, then click it to draw a pipe.",
           role:"turb"}));
       }});
       items.push({label:"ADD CONDENSER HERE", fn:()=>{
         placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:3,h:1,x:gx,y:gy,col:"#5aa9d6",
-          grp:"sec",tip:"An additional condenser, placed where you put it. It is heat sink and it is where the feed pumps draw from, so a second one is a second place for both. Right-click a free port to CONNECT it.",
+          grp:"sec",tip:"An additional condenser, placed where you put it. It is heat sink and it is where the feed pumps draw from, so a second one is a second place for both. Hover an edge to place a port, then click it to draw a pipe.",
           role:"cond"}));
       }});
     }
   }
-  /* NO CONNECT OFFER HERE. It used to pick the nearest free port to the click
-     and then the nearest free port to THAT, so the plant a right-click built
-     was decided by two guesses the player never saw and could not aim. A run
-     is drawn now: pull it out of a port square and drop it on the machine you
-     mean (pipePorts(), plant.js). Both ends are chosen by the hand, so there
-     is nothing left here for a default-picker to get wrong. */
+  /* NO CONNECT OFFER HERE. A pipe is laid by clicking a port and clicking
+     where it ends (ui.lay, core/ui.js) - both ends are the hand's, chosen in
+     the room, so there is nothing left here for a menu row to pick for it. */
   return items;
 }
 ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign, title:ctxTitleDesign});
+// ESC CANCELS A PIPE IN FLIGHT - same standing right-click-with-nothing-left
+// has (uiDown, core/ui.js), just reachable with no corner to drop first.
+keyAdd({k:"Escape", sc:"design", lab:"CANCEL", fn:()=>{ ui.lay=null; }});
 
 /* ─────────────── THE FUEL LATTICE, IN PLAN (canvas - genuinely graphical) ───────────────
    Drawn into its OWN <canvas> in the CORE and RODS panels by hostPaint(), which

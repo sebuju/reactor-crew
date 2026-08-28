@@ -196,6 +196,33 @@ function wpDrop(rid,pt){
   L.splice(i,1);
   if(!L.length) delete e0.wp;
 }
+// the pipe's own end, right now - the port it started from, or the last
+// corner it has picked up since. [x,y], to match portPos()'s own shape.
+function layLastPt(){
+  const n=ui.lay.pts.length;
+  return n ? [ui.lay.pts[n-1].x,ui.lay.pts[n-1].y] : portPos(ui.lay.pa);
+}
+// WHICH AXIS LEADS: the raw click only ever picks that, never the exact
+// point - the corner keeps whichever of `last`'s coordinates the click did
+// NOT move further from, so the new leg is horizontal or vertical, never
+// both.
+function laySnap(last,click){
+  const dx=Math.abs(click.x-last[0]), dy=Math.abs(click.y-last[1]);
+  return dx>=dy ? {x:wpSnap(click.x),y:last[1]} : {x:last[0],y:wpSnap(click.y)};
+}
+// THE LAST LEG ARRIVES SQUARE TO THE TARGET PORT'S FACE, the same standing
+// every other leg already has - a finish is a click on a PORT, not on a
+// point the hand chose, so nothing upstream had the chance to square it.
+// One elbow, inserted only if the last point and the target do not already
+// share an axis; `vb` (arriving vertically, a t/b face) decides which
+// coordinate the elbow borrows from the target and which from the last
+// point, so the FINAL leg lands on the axis that face expects.
+function layFinish(pts,targetPos,vb){
+  const last = pts.length ? [pts[pts.length-1].x,pts[pts.length-1].y] : layLastPt();
+  if(Math.abs(last[0]-targetPos[0])<0.5 || Math.abs(last[1]-targetPos[1])<0.5) return pts;
+  const elbow = vb ? {x:targetPos[0],y:last[1]} : {x:last[0],y:targetPos[1]};
+  return pts.concat([elbow]);
+}
 
 let touchTip=null, isTouch=false;
 // g is an optional band(): the scale the value in this region lives on, so
@@ -433,33 +460,60 @@ function uiDown(e){
   // pans, right pressed-and-released without moving opens the ADD/REMOVE menu
   // instead (see pointerup)
   if(e.button===2){
+    // RIGHT CLICK WHILE LAYING drops the last corner, or cancels outright
+    // once none are left - takes priority over anything under the hand.
+    if(ui.lay){ if(ui.lay.pts.length) ui.lay.pts.pop(); else ui.lay=null; return; }
     // a waypoint is taken out where it lives, not through the deck menu: the
     // menu is addressed at a CELL and a waypoint is a point on a run
     const w=hitAt(p);
     if(w&&w.type==="pipewp"&&w.pt){ wpDrop(w.rid,w.pt); return; }
+    /* A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU (REMOVE PORT / mode rows,
+       resolved by design-bench.js's own ctx registry) - there is no quick-tap
+       toggle any more, so a right click never silently flips the mode. */
+    if(w&&w.type==="port"){
+      ui.drag={type:"portr"};
+      return; }
     if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y,sx:p.x,sy:p.y,moved:false};
     return; }
   isTouch = e.pointerType==="touch" || e.pointerType==="pen";
   if(isTouch){ const t=findTip(p);
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
   const w=hitAt(p);
+  /* ══ LAYING A PIPE INTERCEPTS EVERY CLICK ══
+     Whatever is under the hand, a click while ui.lay is live is about the
+     pipe in flight, never about the thing it happens to land on - so this is
+     asked before the ordinary per-widget dispatch below, not folded into it.
+     An EMPTY port or a ghost FINISHES the pipe (a ghost mints its port
+     first); anything else drops a corner at the click point. Starting a run
+     from and finishing it on the SAME port is refused - that is a pipe with
+     one end, not a run.
+     A CORNER IS AXIS-ALIGNED TO WHAT CAME BEFORE IT, ALWAYS - the whole
+     plant is drawn square (plen() sums |dx|+|dy|, every stroke joins at a
+     right angle) and a free-floating click would draw a diagonal leg that
+     costs less pipe than it is, in a straight line nothing else on the board
+     draws. laySnap() below is what buys that: the raw click only ever picks
+     WHICH axis leads, never the exact point, so every leg this hand draws is
+     square by construction and never merely by luck. */
+  if(ui.lay){
+    const q0=vIn(p)?vPt(p):p;
+    if(w&&w.type==="port"&&w.pid!==ui.lay.pa&&portRunCount(w.pid)===0){
+      const B=D.ports[w.pid];
+      addRunPorts(ui.lay.pa,w.pid,undefined,layFinish(ui.lay.pts,portPos(w.pid),B.f==="t"||B.f==="b"));
+      ui.lay=null; return; }
+    if(w&&w.type==="ghostport"){
+      const pid=addPort(w.p,w.f);
+      if(pid) addRunPorts(ui.lay.pa,pid,undefined,layFinish(ui.lay.pts,portPos(pid),w.f==="t"||w.f==="b"));
+      ui.lay=null; return; }
+    ui.lay.pts.push(laySnap(layLastPt(),q0));
+    return;
+  }
   // nothing under the pointer: a click on bare deck deselects, rather than
   // leaving whatever was picked last lit with nothing on screen to justify it
   if(!w){ sel=null; return; }
   const q=ptIn(w,p);
-    /* ONE GESTURE, AND THE DROP DECIDES WHAT IT WAS. Press anywhere on a
-       box and drag: let go over another component and you have laid a pipe,
-       let go over free deck and you have moved the part. No mode, no
-       modifier (dead on touch), no press-and-hold (invisible), no 8-unit
-       edge band (~1.9 screen pixels at fit zoom). It is unambiguous because
-       dropping a part ON another part is already illegal - groupFits()
-       refuses it - so the new rule spends a gesture that did nothing. */
     if(w.type==="part"){ sel=w.part.id;
       // a commissioned plant is welded down: selectable, not movable; a
       // pinned part rides its parent, so it's selectable but never draggable
-      // the face is read WHERE THE HAND PRESSED, once, and never searched for
-      // again - press near the pump's bottom edge and the pipe leaves the
-      // pump's bottom edge
       if(screen==="design" && !w.part.pin){ const g=gridPt([q.x,q.y]);
         ui.drag={type:"part",part:w.part,
           // WHERE IN THE PART THE HAND TOOK HOLD, in CELLS. It was a pixel
@@ -469,17 +523,19 @@ function uiDown(e){
           // nearly two rows clear of the hand. In cells the grab is bounded by
           // the part's own size and the same spot stays under the pointer.
           ox:g.x-w.part.x, oy:g.y-w.part.y,
-          sx:w.part.x, sy:w.part.y, mode:"move", gx:w.part.x, gy:w.part.y,
-          over:null, fa:faceAt(w.part,g.x,g.y), fb:null, v:w.v}; } }
+          sx:w.part.x, sy:w.part.y, gx:w.part.x, gy:w.part.y, v:w.v}; } }
     else if(w.type==="sld"){ ui.drag=w;
       const onThumb=Math.abs(q.x-w.tx)<=w.tw_/2+3;
       w.gv = onThumb ? w.val : valFrom(w,q.x);    // gv is the running command value
       w.gx = q.x; w.gx0 = q.x; w.moved = false;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
-    // a port mark is pushed after its own box, so it takes the press before
-    // the part drag can - which is the whole reason it is drawn at all
-    else if(w.type==="port"){ portFlip(w.pid,w.face); }
+    // LEFT CLICK A PORT STARTS LAYING A PIPE FROM IT. A port mark is pushed
+    // after its own box, so it takes the press before a part drag can.
+    else if(w.type==="port"){ ui.lay={pa:w.pid,pts:[]}; }
+    // LEFT CLICK THE GHOST PLACES A BARE PORT - no pipe follows unless the
+    // next click starts one, the same as any other existing port.
+    else if(w.type==="ghostport"){ addPort(w.p,w.f); }
     // the drag holds the stored waypoint OBJECT, never its index - the list
     // is re-sorted by distance on every read, so an index would renumber
     // under the hand
@@ -494,33 +550,21 @@ function uiDown(e){
       ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
   else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
 }
-/* WHERE THE GESTURE IS, ASKED ONCE. The release used to inherit whatever the
-   last pointermove had decided, and a release carries no move of its own - so
-   a drop the browser delivered without one, or a hand a pixel off the target
-   box, committed the OTHER half of the gesture: the part jumped to the cell
-   beside the machine it was being piped to, using a gx/gy left over from
-   crossing the deck to get there. The drop decides what the gesture was, so
-   the drop is what gets measured. */
+/* WHERE THE GESTURE IS, ASKED ONCE. A part drag is a MOVE now and only a
+   move - GEOMETRY IS DRAGGED, TYPE IS MENUED means the box-to-box pipe gone,
+   the same box drag is unambiguous whatever it lands on. The release used to
+   inherit whatever the last pointermove had decided; a release carries no
+   move of its own, so the drop is measured here rather than trusted to have
+   been measured already. */
 function partDragTo(d,q){
-  const g=gridPt([q.x,q.y]), over=partAt([q.x,q.y]);
-  // ...and the group is not a pipe target. Excluding only d.part let the
-  // reactor's own pinned rod drives claim the drop, and ROLE.rods declares no
-  // ports, so dragging the reactor up resolved to a pipe that could not be
-  // laid and a move that was never reached.
-  if(over && !moveCells(d.part,0,0).some(c=>c.q===over)){
-    // the far face is read where the hand IS, so it follows the pointer round
-    // the box it is over - the same question the press already answered
-    d.mode="pipe"; d.over=over; d.fb=faceAt(over,g.x,g.y);
-  } else {
-    d.mode="move"; d.over=null; d.fb=null;
-    /* THE PART'S TOP-LEFT UNDER THE HAND, SNAPPED, AND ALL OF IT IN CELLS. It
-       was a CELL/2 pixel lead against rowAt(), which is only a half-cell where
-       every row is CELL tall - and BANDS is set on the bench too, because the
-       bench reserves each strip's room. Rows there run 46..203 px, so leaving
-       one downward cost 23+band px and upward 23, and a part dropped on free
-       deck landed a row off. gridPt() normalises by each row's own height. */
-    d.gx=Math.round(g.x-d.ox); d.gy=Math.round(g.y-d.oy);
-  }
+  const g=gridPt([q.x,q.y]);
+  /* THE PART'S TOP-LEFT UNDER THE HAND, SNAPPED, AND ALL OF IT IN CELLS. It
+     was a CELL/2 pixel lead against rowAt(), which is only a half-cell where
+     every row is CELL tall - and BANDS is set on the bench too, because the
+     bench reserves each strip's room. Rows there run 46..203 px, so leaving
+     one downward cost 23+band px and upward 23, and a part dropped on free
+     deck landed a row off. gridPt() normalises by each row's own height. */
+  d.gx=Math.round(g.x-d.ox); d.gy=Math.round(g.y-d.oy);
 }
 function uiMove(e){
   const tgt=e.currentTarget||cv;
@@ -569,13 +613,12 @@ function uiUp(e){
   // right button held and released without dragging the plant is a click,
   // which on the design bench opens the ADD/REMOVE menu
   if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
-  /* WHERE THE ONE GESTURE COMMITS. Released over another component it is a
-     RUN; released over free deck it is a MOVE, and moveTo() is still the only
-     way a part changes position - it is just called once, here, instead of at
-     pointer rate. addRun() is a D edit and not an act(), the same standing it
-     has always had (see addRun(), layout.js). A drop that resolves to nothing
-     - a machine with every port taken, a cell the part does not fit - is a
-     cancel, not an error, so there is no refusal to report. */
+  // A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU, dragged or not - see uiDown().
+  if(d&&d.type==="portr"&&e.button===2) openCtxMenu(local(e));
+  /* WHERE THE MOVE COMMITS. moveTo() is still the only way a part changes
+     position - it is just called once, here, instead of at pointer rate. A
+     drop that resolves to nothing (off the grid, on top of another machine)
+     is a cancel, not an error, so there is no refusal to report. */
   if(d&&d.type==="part"){
     const p=uiPt(e.currentTarget||cv,e);
     // ...but only off a point the plant actually covers. The press took the
@@ -584,10 +627,7 @@ function uiUp(e){
     // aimed at. Out of view, the last in-view sample stands, which is the cell
     // the ghost was last drawn on.
     if(!d.v || vIn(p)) partDragTo(d, d.v?vPt(p):p);
-    if(d.mode==="pipe" && d.over && d.fa && d.fb
-       && portRoom(d.part)[d.fa] && portRoom(d.over)[d.fb])
-      addRun(d.part.id,d.fa,d.over.id,d.fb);
-    else if(d.mode==="move" && (d.gx!==d.sx||d.gy!==d.sy)) moveTo(d.part,d.gx,d.gy);
+    if(d.gx!==d.sx||d.gy!==d.sy) moveTo(d.part,d.gx,d.gy);
   }
   ui.drag=null;
 }

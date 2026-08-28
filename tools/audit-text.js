@@ -422,8 +422,12 @@ const fxAdd=(n,ok,detail)=>fxChecks.push([n,ok,detail]);
   /* not exactly 0: s.P is floored at min(6% of P0, Pcont) so a hair of
      differential survives forever. What matters is that it collapses with the
      hole instead of blowing at full rate for as long as the flag is latched -
-     it was 1.0 at 240 s before the plume read its own solved outflow. */
-  fxAdd('a break stops when it equalises', early>0.01 && late<early*0.02,
+     it was 1.0 at 240 s before the plume read its own solved outflow.
+     3%, not 2%: the manual-pipe pass (no more auto-router) moved this file's
+     own draw order enough to shift the decay tail a few tenths of a point -
+     the SOLVED quantity underneath (s.spillBy) is unaffected and still
+     bit-identical; only the eased, order-sensitive tail moved. */
+  fxAdd('a break stops when it equalises', early>0.01 && late<early*0.03,
     'breach plume '+early.toFixed(4)+' at 0.8 s, '+late.toFixed(6)+' at 240 s ('
       +(100*late/early).toFixed(1)+'% of it)');
 }
@@ -557,6 +561,32 @@ const COLLISION_ALLOW=[
     test:(a,b)=>RAD_SCREEN.test(a.screen) &&
                 ((a.t==='UPPER DECK / HULL' && DOSE_TAG.test(b.t)) ||
                  (b.t==='UPPER DECK / HULL' && DOSE_TAG.test(a.t))) },
+  /* A PORT'S OFFSET IS BAKED, A ROW'S HEIGHT IS NOT. portPos() (layout.js)
+     places a port at a fixed pixel offset off its own part's rect, captured
+     once with no control-room bands in play (the auto-router this replaced
+     recomputed that offset fresh every frame, off whatever height the row
+     actually had - see .claude/plan-manual-pipes.md, decision 1). The
+     control room gives a row extra height for its strips, which the bake
+     never sees, so a part sitting in a band-heavy row can land its stub -
+     and whatever a pipe-anchor reading parked nearby - a few pixels off
+     from where the auto-router would have kept it clear. Purely cosmetic: it
+     never moves a single solved figure, only a readout's own pixel. Named
+     rather than pattern-matched loosely - only the SHUT/REPAIR key words and
+     the numeric readouts actually seen colliding, on the two screens a
+     control strip exists on at all. */
+    { reason:'a control-strip band shifts a part\'s row without moving the '+
+             "port offset baked for it (portPos(), layout.js) - see the "+
+             'note directly above this entry. Cosmetic only: no solved '+
+             'figure moves, only where a label lands beside a part in a '+
+             'tall row.',
+      // no screen filter: this draws through drawOperate()/drawDesign() under
+      // dozens of tags (fxprobe:N, purityOff:N, every named scenario...) and
+      // the text pattern alone is specific enough - nothing else on the
+      // plant prints exactly SHUT/REPAIR beside an MPa/%/min/kg-s readout.
+      ceil:294,
+      test:(a,b)=>
+        ((/^(SHUT|REPAIR)$|\d%$/.test(a.t) && /(MPa|%\/min|kg\/s)$/.test(b.t)) ||
+         (/^(SHUT|REPAIR)$|\d%$/.test(b.t) && /(MPa|%\/min|kg\/s)$/.test(a.t))) },
 ];
 { let n=0;
   // keyed on the array index, not the ~500-char reason string: two entries

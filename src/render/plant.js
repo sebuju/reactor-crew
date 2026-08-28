@@ -96,14 +96,21 @@ const pipeNozzleHalf = bore => pipeWidth(bore)*1.4;
    so a port never disappears into the pipe on it. */
 const portCol=(p,f)=>{ const IN=portPath(p,f);
   return !IN ? C.metal : IN.a===f ? C.cyan : C.green; };
+// THE JOINT ITSELF - a small flanged rectangle standing proud of the shell,
+// its long axis across the bore and its short axis the direction it faces.
+// Shared by a piped run's own end (pipeNozzles()) and a bare port with
+// nothing piped to it yet (drawPortMarks()) - a port IS this mark, piped or
+// not, so a fresh one reads as placed the instant it exists.
+function drawNozzle(px,py,flat,bore,col){
+  const half=pipeNozzleHalf(bore), deep=2.5;   // how far it stands proud of the shell
+  const bx=flat?deep:half, by=flat?half:deep;
+  fillRect(px-bx-1,py-by-1,2*bx+2,2*by+2,PIPE_CASE);
+  fillRect(px-bx,py-by,2*bx,2*by,col);
+}
 function pipeNozzles(NET){
   for(const r of NET){
-    const half=pipeNozzleHalf(runBore(r));
-    const deep=2.5;                   // how far it stands proud of the shell
     for(const e of nozzleEnds(r)){
-      const bx=e.flat?deep:half, by=e.flat?half:deep;
-      fillRect(e.p[0]-bx-1,e.p[1]-by-1,2*bx+2,2*by+2,PIPE_CASE);
-      fillRect(e.p[0]-bx,e.p[1]-by,2*bx,2*by,
+      drawNozzle(e.p[0],e.p[1],e.flat,runBore(r),
         portCol(e.end==="a"?r.a:r.b, e.end==="a"?r.sa:r.sb));
     }
   }
@@ -920,7 +927,7 @@ function pipeGrip(pt,rid){
   fillRect(pt.x-2.5,pt.y-2.5,5,5,C.amber);
   if(hv) frame(pt.x-WPG/2,pt.y-WPG/2,WPG,WPG,C.amber);
   TIP(pt.x-WPG/2,pt.y-WPG/2,WPG,WPG,"PIPE WAYPOINT",
-    "A point you told this run to pass through. Drag it to move it, or right-click to take it out and hand that stretch of pipe back to the automatic route.");
+    "A corner you put in this run. Drag it to move it, or right-click to take it out - the pipe straightens between the corners on either side.");
 }
 function pipeGrips(runs){
   for(const r of runs) for(const p of r.wps) pipeGrip(p,r.rid);
@@ -935,33 +942,99 @@ function pipeLines(runs){
     if(w<=WPL&&h<=WPL) continue;                 // a zero-length segment is a corner artefact
     push({x,y,w,h,type:"pipewp",rid:r.rid,pt:null});
     TIP(x,y,w,h,"PIPE ROUTE",
-      "Double-click anywhere on this run to pin a waypoint there, then drag it wherever you want the pipe to go. It is still the same router doing the work - a run with a waypoint on it is two runs end to end.");
+      "Double-click anywhere on this run to add a corner there, then drag it wherever you want the pipe to go.");
   }
 }
-/* ══ THE RUBBER BAND OF THE ONE GESTURE ══
-   There are no nozzle handles any more. Thirty 9-unit squares turned the
-   bench into a pegboard, and the run they authored was aimed at a handle on
-   the far machine that the hand could not find at fit zoom - so the whole
-   gesture now starts on the COMPONENT BOX and ends on another one, and the
-   only thing left to draw is the proposal in between.
-   Dashed and thin on purpose - it is a proposal, not a run: the router has
-   not been asked yet, and what it lays will be square where this is straight.
-   BOTH ends are now the hand's: faceAt() reads the face where the press
-   landed and the face the pointer is over, so the band walks between the two
-   nozzles the router will actually use. Green once both ends resolve, amber
-   while they do not, which is the whole of what this gesture needs to say. */
-function pipePorts(usage){
-  const d = ui.drag&&ui.drag.type==="part"&&ui.drag.mode==="pipe" ? ui.drag : null;
-  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null;
-  if(!d||!ptr) return;
-  const ok = d.fa && d.fb && d.over && portRoom(d.part,usage)[d.fa] && portRoom(d.over,usage)[d.fb];
-  const a = d.fa ? port(d.part,d.fa) : prectMid(d.part);
-  const b = ok ? port(d.over,d.fb) : [ptr.x,ptr.y];
-  frame2(d.part); if(d.over) frame2(d.over);
-  ctx.save(); ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(a[0],a[1]);
-  ctx.lineTo(b[0],b[1]);
-  ctx.strokeStyle=ok?C.green:C.amber; ctx.lineWidth=1.5; ctx.stroke();
+/* ══ THE GHOST PORT ══
+   Hover a component, and the face nearest the hand shows where a NEW port
+   would land - a preview of addPort(), never a placement of its own. Not
+   drawn while laying a pipe onto somewhere else, or a ghost belonging to the
+   machine on the far side of the room would flicker under a hand that is
+   really aiming at the FINISH port under discussion. It draws over the box
+   it stands on, so it is pushed with the box - see plantPortLayer(). */
+const GHOSTG=8;
+function ghostPort(){
+  if(ui.drag && ui.drag.type!=="lay") return null;
+  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return null;
+  const p = partAt([ptr.x,ptr.y]); if(!p) return null;
+  const g = gridPt([ptr.x,ptr.y]), f = faceAt(p,g.x,g.y);
+  if(!f) return null;
+  return {p,f};
+}
+function drawGhostPort(){
+  const g = ghostPort(); if(!g) return;
+  const [x,y]=ghostPortPos(g.p.id,g.f);
+  const bx=x-GHOSTG/2, by=y-GHOSTG/2;
+  const wd=push({x:bx,y:by,w:GHOSTG,h:GHOSTG,type:"ghostport",p:g.p.id,f:g.f});
+  const hv=hov(wd);
+  ctx.save(); ctx.globalAlpha=hv?0.9:0.45;
+  ctx.strokeStyle=C.green; ctx.lineWidth=1.3; ctx.setLineDash([2,2]);
+  ctx.strokeRect(bx,by,GHOSTG,GHOSTG);
+  ctx.restore();
+  TIP(bx,by,GHOSTG,GHOSTG,"NEW PORT",
+    ui.lay ? "Click to place a port here and finish the pipe on it."
+           : "Click to place a port here. A port exists with nothing piped to it until you draw a pipe from it.");
+}
+/* ══ AN EXISTING PORT ══
+   One mark PER PORT (never per pipe, never per face) - a port is its own
+   object now, so a face carrying two of them draws two marks side by side
+   instead of one mark claiming to speak for both. Left click starts laying
+   a pipe from here (or finishes one already in flight); right click toggles
+   its mode; held-and-released opens the REMOVE PORT / mode menu
+   (design-bench.js's own ctx registry). */
+function drawPortMarks(){
+  // ONE WORD PER (part, face), never one per port sharing it: two ports on
+  // one face carrying the same side (both SUCT, say) would otherwise stack
+  // an identical label on top of itself, close enough to read as one smear.
+  // The box and the press are still drawn per PORT - each is its own place
+  // to click - only the text is deduped.
+  const seenWord={};
+  for(const pid in D.ports){
+    const port=D.ports[pid], p=LAY.parts.find(q=>q.id===port.p); if(!p) continue;
+    const [x,y]=portPos(pid), bx=x-PORTG/2, by=y-PORTG/2;
+    const IN=portPath(p,port.f), col=IN ? (IN.a===port.f?C.cyan:C.green) : C.metal;
+    const n=portRunCount(pid);
+    // A PIPED PORT'S NOZZLE IS DRAWN BY THE RUN (pipeNozzles()), landing on
+    // this exact point. A BARE port has no run to draw it, so it draws its
+    // own here - the same mark, not a placeholder for it - which is what
+    // makes a fresh port read as placed before any pipe reaches it.
+    if(!n) drawNozzle(x,y,port.f==="l"||port.f==="r",1,col);
+    const wd=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid});
+    const laying = ui.lay && ui.lay.pa===pid;
+    if(hov(wd)||laying) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
+    if(laying) frame(bx,by,PORTG,PORTG,C.amber);
+    const word = IN ? (port.m || IN.na) : null;
+    const wk=p.id+port.f+word;
+    if(word && !seenWord[wk]){ seenWord[wk]=1; txt(word,x+8,y+2.5,{size:6.5,color:col,align:"left",sp:.4}); }
+    const nm=partName(p), longWord=IN&&portWord(p,port.f,true);
+    TIP(bx,by,PORTG,PORTG, (longWord?longWord+" - ":"")+nm,
+      (n? "Carries "+n+" pipe"+(n===1?"":"s")+". " : "Nothing is piped to this port yet. ")+
+      (ui.lay ? "Click to finish the pipe here."
+       : "Click to draw a pipe from here."+(IN?" Right-click to change which side of "+nm+" this is.":"")));
+  }
+}
+/* ══ LAYING A PIPE ══
+   ui.lay = {pa, pts} while a pipe is mid-draw: pa is the port it started
+   from, pts the corners placed so far (see ui.js). Drawn as a solid line to
+   the last corner and a dashed preview from there to the hand - the same
+   "proposal, not a pipe yet" dashing the old box-to-box band used. */
+function drawLayPreview(){
+  if(!ui.lay) return;
+  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return;
+  const a=portPos(ui.lay.pa), pts=[a].concat(ui.lay.pts.map(w=>[w.x,w.y]));
+  ctx.save();
+  if(pts.length>1){
+    ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
+    ctx.strokeStyle=C.amber; ctx.lineWidth=1.5; ctx.stroke();
+  }
+  // the SNAPPED corner a click would actually drop (laySnap(), core/ui.js) -
+  // never the raw diagonal to the pointer, or the preview would promise a
+  // leg the click cannot draw
+  const last=pts[pts.length-1], next=laySnap(last,ptr);
+  ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(last[0],last[1]); ctx.lineTo(next.x,next.y);
+  ctx.strokeStyle=C.amber; ctx.lineWidth=1.5; ctx.stroke();
   ctx.restore();
 }
 /* ══ WHERE A DRAGGED MACHINE WOULD LAND ══
@@ -974,7 +1047,7 @@ function pipePorts(usage){
    will not. Red is the whole reason a drop is refused: off the grid, or on top
    of another machine. Reads gx/gy and writes nothing. */
 function partGhost(){
-  const d = ui.drag&&ui.drag.type==="part"&&ui.drag.mode==="move" ? ui.drag : null;
+  const d = ui.drag&&ui.drag.type==="part" ? ui.drag : null;
   if(!d || (d.gx===d.sx && d.gy===d.sy)) return;
   const cells=moveCells(d.part,d.gx,d.gy), ok=groupFits(cells);
   ctx.save(); ctx.setLineDash([4,4]);
@@ -983,74 +1056,12 @@ function partGhost(){
     frame(r.x,r.y,r.w,r.h, ok?C.green:C.red); }
   ctx.restore();
 }
-/* ══ THE PORTS THAT MOVE SAY SO, AND THEY ARE THE ONLY TARGETS ══
-   Every run end is a port and pipeNozzles() above has already coloured all
-   of them. What this adds is the LABEL and the press, and only where
-   portPath() says there is a side to choose - a pump, a generator, a
-   throttle. The reactor, the pressurizer, a tee and a tank are one node, so
-   they wear their metal joint and offer nothing: clicking one would ask it
-   to be where it already is. That is what keeps this a handful of targets
-   instead of the thirty that made a pegboard of the bench.
-   Pushed AFTER the component loop so the mark wins the hit test over the box
-   it sits on; a press that moves is still a drag, because a click is only a
-   click when the pointer never left. */
+// Pushed after the component loop, so a mark wins the hit test over the box
+// it sits on. Only where portPath() says there is a side to choose (a pump,
+// a generator, a throttle) does a port carry a mode label at all - the
+// reactor, the pressurizer, a tee and a tank are one node and wear their
+// plain colour with nothing to click FOR beyond starting a pipe.
 const PORTG=9;
-function pipePortMarks(runs){
-  const seen={};
-  for(const r of runs){ if(!r.rid) continue;
-    for(const e of nozzleEnds(r)){
-      const p = e.end==="a" ? r.a : r.b, f = e.end==="a" ? r.sa : r.sb;
-      const IN=portPath(p,f), [x,y]=e.p, col=portCol(p,f), n=portEnds(p.id,f).length;
-      const bx=x-PORTG/2, by=y-PORTG/2;
-      /* NO OUTLINE ON ANYTHING. The coloured joint pipeNozzles() already drew
-         IS the port; a box round it said nothing the colour did not, and it
-         was drawn once a PORT while the joint is drawn once a PIPE - so a
-         face carrying two runs (the reactor's bottom takes the cold leg and
-         the HPI line) wore two joints and one box, which reads as some ports
-         having a border and some not.
-         A port with no side to choose still says whose it is, per PIPE, and
-         still takes NO widget: a hit target that does nothing would eat the
-         press that starts a pipe drag, and twenty of those is the pegboard
-         this bench already threw out once. */
-      if(!IN){
-        TIP(bx,by,PORTG,PORTG,partName(p)+" PORT",
-          "Where this pipe joins "+partName(p)+", carrying "+n+" pipe"+(n===1?"":"s")+
-          ". This machine is one vessel - every port on it is the same water, so "+
-          "there is no side to move a pipe to.");
-        continue;
-      }
-      // ONE label and ONE target a PORT, not one a pipe: four cold legs
-      // reaching a pump's suction are four pipes on one place, and drawing
-      // the place four times stacked its own label on itself
-      const k=p.id+f; if(seen[k]) continue; seen[k]=1;
-      const w=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid:p.id,face:f});
-      if(hov(w)) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
-      // clear of the pipe, never along it: a horizontal run's joint takes its
-      // label above, a vertical run's takes it to the right
-      const lx = e.flat ? x : x+8, ly = e.flat ? y-7 : y+2.5;
-      txt(portWord(p,f),lx,ly,{size:6.5,color:col,align:e.flat?"center":"left",sp:.4});
-      const word=portWord(p,f,true), other=portWord(p,portOther(IN,f),true);
-      TIP(bx,by,PORTG,PORTG,word+" - "+partName(p),
-        "The "+word+" of "+partName(p)+", carrying "+n+" pipe"+(n===1?"":"s")+
-        ". Click it to move "+(n===1?"that pipe":"them all")+" to the "+other+
-        ". Both of a pump's pipes on one side is a pump plumbed into itself, "+
-        "and it drives nothing.");
-    } }
-}
-// the centre of a part's box, for a band that has no port to leave from yet
-function prectMid(p){ const r=prect(p); return [r.x+r.w/2, r.y+r.h/2]; }
-// both ends of the gesture are lit, so it is plain WHICH two machines are
-// about to be joined - the handles used to say this one nozzle at a time
-function frame2(p){ const r=prect(p); frame(r.x,r.y,r.w,r.h,C.amber); }
-
-/* ══ EVERY PIPE IS A HANDLE YOU CAN PULL A TEE OUT OF ══
-   The same gesture pipePorts() gives a component, one level down: grab the
-   square, drop it on the pipe you mean, and the two points you pointed at are
-   the two ends of the tee. It replaces a menu that listed one row per OTHER
-   LOOP and then chose the far end by proximity - so a single-loop plant was
-   offered no tee at all, and on a bigger one the far end was a guess the
-   player never saw and could not aim. That is the same fault the CONNECT
-   offer was deleted for, and this is the same answer: draw it.
 
 /* ══ WHAT A FITTING STILL DRAWS ON THE PIPEWORK ══
    Almost nothing, now that it is a component: the box, the symbol, the name
@@ -1936,8 +1947,9 @@ function drawPlant(y0,L,vh,vx,vw){
      nozzles for the press. */
   if(!L){ partGhost();                  // where a machine would land...
           pipeGrips(NET);               // ...where a run runs...
-          pipePortMarks(NET);           // ...which side of a machine it is on...
-          pipePorts(NET.usage||{}); }   // ...and whether it runs at all
+          drawPortMarks();              // ...every port already placed...
+          drawGhostPort();              // ...where the next one would go...
+          drawLayPreview(); }           // ...and the pipe now being drawn
   pipeFitMarks(L,NET);
   for(const t of tags) t();     // every name and value, over the pipework
   viewOn=false; ctx.restore();

@@ -81,7 +81,7 @@ function spliceFitting(M, runKey, mode, cell){
   const D = M.D();
   const r = M.pipeNetwork().find(x => x.key === runKey);
   if(!r || !r.rid) throw new Error("spliceFitting: no run keyed " + runKey);
-  const e = D.run[r.rid], a = e.a, af = e.af, b = e.b, bf = e.bf;
+  const ends = M.runEndsOf(r.rid), a = ends.a, af = ends.af, b = ends.b, bf = ends.bf;
   M.removeRun(r.rid);
   const fid = M.addFitting(cell[0], cell[1]);
   D.fittings[fid].mode = mode;

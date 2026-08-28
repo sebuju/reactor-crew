@@ -12,10 +12,10 @@ const M=require('./bundle').headless(
  'ARCH:()=>ARCH,FUEL:()=>FUEL,SCRAM:()=>SCRAM,ANN:()=>ANN,manualScram,combatHit,LAY:()=>LAY,moveTo,'+
  'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
- 'pumpCap,totalPumpCap,placePart,removePart,addFitting,addRun,removeRun,fittableList,'+
+ 'pumpCap,totalPumpCap,placePart,removePart,addFitting,addRun,addRunPorts,addPort,removePort,portMove,removeRun,fittableList,'+
  'primaryPump,pumpIds,flowPri,flowDemPri,secGensOf,secondaryNode,tankSide,crossTies,'+
  'loopKg,hotMass,turbCount,condCount,roleAlive,mwE,'+
- 'loopOf,loopOfKey,loopPumpCap,portRoom,faceAt,portPath,portWord,portFlip,portEnds,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
+ 'loopOf,loopOfKey,loopPumpCap,faceAt,portPath,portWord,portMode,portModeNext,portPos,runEndsOf,portRunCount,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
  'runKindFor,buildStockPlumbing,pzrPlumbed,datumPart,designBlocked,designIssues,'+
  'fitModeOf,fitEdgeKey,fittingMass,FIT_MASS,FIT_BORE0,fitTies,fitLoops,resist,NET_COMP_LEN,'+
  'pipeNetwork,act,ctxItemsDesign,'+
@@ -55,8 +55,8 @@ const BASE=JSON.parse(JSON.stringify(D));
 /* FIND A STOCK RUN. Every run is minted usrN now, so a case that means "the
    hot leg" or "the surge line" has to say which one it means: the pair of
    parts it joins, or the kind it carries where the plant has only one. */
-const ridOf=(a,b)=>Object.keys(D.run).find(r=>{ const e=D.run[r];
-  return (e.a===a&&e.b===b)||(e.a===b&&e.b===a); });
+const ridOf=(a,b)=>Object.keys(D.run).find(r=>{ const ends=M.runEndsOf(r);
+  return ends && ((ends.a===a&&ends.b===b)||(ends.a===b&&ends.b===a)); });
 const ridOfKind=k=>Object.keys(D.run).find(r=>D.run[r].k===k);
 /* THE HOT LEG OF LOOP i, by the generator it reaches. Loop 0's is two runs
    through the surge tee now, so the literal "hot:corer-sg0l" names a run no
@@ -66,8 +66,8 @@ const hotKeyOf=i=>{ const r=M.pipeNetwork().find(x=>x.k==='hot'&&x.key.indexOf('
 /* A RELIEF VALVE'S OWN OUTLET, by what it connects rather than by kind: BOTH
    runs either side of the valve are kind "relief", so "the first relief run"
    is as likely to be the line INTO it as the discharge out of it. */
-const outRidOf=fid=>Object.keys(D.run).find(r=>{ const e=D.run[r];
-  return (e.a===fid&&e.b==='reltk')||(e.b===fid&&e.a==='reltk'); });
+const outRidOf=fid=>Object.keys(D.run).find(r=>{ const ends=M.runEndsOf(r);
+  return ends && ((ends.a===fid&&ends.b==='reltk')||(ends.b===fid&&ends.a==='reltk')); });
 const outKeyOf=fid=>{ const rid=outRidOf(fid);
   const r=M.pipeNetwork().find(x=>x.rid===rid); return r&&r.key; };
 /* ══ PLACING A FITTING, THE WAY A PLAYER DOES ══
@@ -735,10 +735,15 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
    than written in as literals - the point is a comparison, not a constant. */
 { /* ══ THE REFERENCE PLANT IS REPRODUCIBLE THROUGH THE UI ══
      Delete a run, draw it again through the SAME entry point the bench uses,
-     and every pinned figure must come back BIT-IDENTICAL. This is the whole
-     "you cannot rebuild the stock plant" complaint made mechanical, and it
-     is stronger than a tolerance: a redrawn hot leg either is the stock hot
-     leg or it is a different plant wearing its name.
+     and every pinned figure must come back CLOSE - not bit-identical any
+     more, and that relaxation is itself the finding this pass makes: the
+     auto-router that used to recompute one true pixel geometry from any
+     authoring order is gone (GEOMETRY IS DRAGGED now), so addRun() with no
+     corners of its own falls back to the plainest possible dogleg
+     (simpleRoute(), layout.js), never the exact baked pixels
+     buildStockPlumbing() ships. The claim that survives is the one that
+     matters: a redrawn run is a WORKING run, physically equivalent to the
+     one it replaces, not a diagram that happens to overlay it exactly.
 
      The surge line is the case that used to be unmakeable, twice over: it was
      the one TAP-shaped entry in D.run and no gesture produced that shape, and
@@ -746,10 +751,11 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
      runs through a TEE COMPONENT now, so deleting the whole arrangement -
      the box and all three legs - and building it again out of ADD VALVE HERE
      plus three drags is the strongest form this claim has ever taken: not "a
-     tap run redraws identically" but "a whole component does". */
+     tap run redraws identically" but "a whole component does, closely enough
+     to still be the same plant". */
   const fig=()=>{ M.commission(); const s=M.S();
     return {k:M.netFlowK(s), n:s.n, Tf:s.Tf, dnbr:s.dnbr, flowK:M.P().flowK, dose:M.P().dose}; };
-  const same=(a,b)=>Object.keys(a).every(k=>a[k]===b[k]);
+  const same=(a,b)=>Object.keys(a).every(k=>Math.abs(a[k]-b[k])<=Math.abs(a[k])*0.01);
   const show=o=>`netFlowK ${o.k} n ${o.n} Tf ${o.Tf}`;
 
   set({}); const REF=fig();
@@ -823,32 +829,28 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
   if(M.portWord(at("pump0"),"t") !== "SUCT" || M.portWord(at("pump0"),"b") !== "DISCH")
     bad('the RCP does not label its two sides SUCT and DISCH');
   if(M.portWord(at("pump0"),"t",true) !== "SUCTION") bad('a port has no spoken name');
-  const sucRid=()=>M.portEnds("pump0","t").map(x=>x[0]).join(),
-        disRid=()=>M.portEnds("pump0","b").map(x=>x[0]).join();
-  const suc0=sucRid(), dis0=disRid();
-  if(!suc0 || !dis0 || suc0===dis0)
-    bad(`the stock RCP does not carry one run a side: SUCT ${suc0} DISCH ${dis0}`);
-  /* A FLIP IS AN EXCHANGE, SO THE TWO SIDES CAN NEVER BECOME ONE. Moving
-     instead put the discharge run onto a suction that already had one: both
-     ends on a single node, the head edge a dead-end stub, the two ports
-     reading as CONNECTED - the very fault the toggle exists to show. */
-  if(!M.portFlip("pump0","b")) bad("the RCP's discharge port refused to flip");
+  const portAt=(id,f)=>Object.keys(D.ports).find(pid=>D.ports[pid].p===id&&D.ports[pid].f===f);
+  const sucPid=portAt("pump0","t"), disPid=portAt("pump0","b");
+  if(!sucPid || !disPid || M.portRunCount(sucPid)!==1 || M.portRunCount(disPid)!==1)
+    bad(`the stock RCP does not carry one run a side: SUCT ${sucPid&&M.portRunCount(sucPid)} DISCH ${disPid&&M.portRunCount(disPid)}`);
+  /* THE PORT MOVES, THE PIPE DOES NOT. There is no flip any more: a port is
+     one placed object, not a face-wide slot with a partner to exchange with,
+     so dragging one to another face is remove-there-add-here (portMove(),
+     layout.js) and takes its own pipe with it, the same standing
+     removePort() already has. Moving the suction port onto the discharge
+     face must tear the suction pipe off - not pile it onto the discharge's
+     own - and a pump with one whole side torn off drives nothing. */
+  if(!M.portMove(sucPid,"pump0","b")) bad("the RCP's suction port refused to move");
   M.commission();
-  if(sucRid()!==dis0 || disRid()!==suc0)
-    bad(`flipping a port did not EXCHANGE the two sides: SUCT ${sucRid()} DISCH ${disRid()}`);
-  /* And a pump piped backwards drives nothing, because netCoreFracOf() counts
-     core INFLOW only (`if(qin > 0)`, pipenet.js) - so a reversed loop reads as
-     no circulation rather than as circulation the other way round. That is a
-     property of the reference, pinned here because this toggle is now the one
-     gesture that can reach it. */
+  if(M.portRunCount(sucPid)!==0)
+    bad('a moved port kept the pipe it had before the move - portMove() must take it, like removePort()');
+  if(M.portRunCount(disPid)!==1)
+    bad("moving the suction port changed the discharge port's own pipe count");
   if(M.P().netRef > REF.net*1e-6)
-    bad(`an RCP with its two pipes exchanged still circulates: netRef ${M.P().netRef}`);
-  if(!M.portFlip("pump0","t")) bad("the RCP's suction port refused to flip back");
-  M.commission();
-  if(sucRid()!==suc0 || disRid()!==dis0)
-    bad('flipping a port back did not put both runs where they started');
+    bad(`an RCP with its suction pipe torn off still circulates: netRef ${M.P().netRef}`);
+  set({});
   if(M.P().netRef !== REF.net)
-    bad(`flipping a port there and back is not bit-identical: ${REF.net} -> ${M.P().netRef}`);
+    bad(`a fresh stock plant after the move is not bit-identical: ${REF.net} -> ${M.P().netRef}`);
   /* And a port with nothing to choose does not offer a choice: the reactor
      folds r and b onto one node, so both its faces are the same water and a
      click would be asking it to be where it already is. */
@@ -1650,40 +1652,22 @@ console.log('\n=== A PLACED PART CONTRIBUTES NOTHING UNTIL IT IS PLUMBED ===');
   console.log(`  plumbed spare: loopPumpCap(0) ${baseCap} -> ${capOn}, netFlowK both running ${(both*100).toFixed(1)}% (want ${(baseline*100).toFixed(1)}%, unchanged)`);
   console.log(`  original pump lost: ${(noSpareLost*100).toFixed(1)}% with no spare -> ${(withSpareLost*100).toFixed(1)}% with the spare plumbed in (the loop bought back)`);
 }
-{ /* a port already carrying its capacity refuses a second pipe - ROLE.ports
-     plus portRoom()'s one documented spare (PORT_SPARE, layout.js), which is
-     the same ceiling the bench's own port handles read.
-
-     THE CONDITION IS BUILT, NOT ASSUMED. This used to lean on the stock plant
-     happening to spend the pressurizer's whole "*":2 budget on surge + relief,
-     so it needed nothing built. That coincidence is gone the moment a design
-     is allowed to be added to at all, and a check resting on a coincidence
-     reports on the coincidence. Runs are added to the pressurizer until it
-     reads full instead - which asserts the strictly stronger thing, that the
-     ceiling is FINITE and enforced at all - and one is then taken away again,
-     which is what proves the refusal tracks OCCUPANCY rather than "a
-     pressurizer isn't a pump" or any other judgement about what the part is
-     for: the same part, the same role, answering differently only because the
-     count changed. */
+{ /* NO PORT CEILING ANY MORE. portRoom()/PORT_SPARE are gone with the
+     N-per-face router: a port is a place a gesture puts down, one at a time,
+     and there is no count anywhere refusing a second one on the same face -
+     ROLE.ports survives only as a FACE WHITELIST (which faces a role may
+     ever carry a port on at all, portFaceOK(), layout.js). What replaces
+     "the ceiling is enforced" is the opposite, equally load-bearing claim:
+     nothing stops a face from carrying as many ports as a hand wants to put
+     there, and every one of them still solves. */
   set({loops:1}); M.commission();
-  const pzr=M.LAY().parts.find(q=>q.id==='pzr');
-  const free=p=>Object.values(M.portRoom(p)).some(v=>v);
   const added=[];
-  const CAP_SANE=12;                          // a ceiling that never arrives is the failure, not a hang
-  while(free(pzr) && added.length<CAP_SANE){
-    added.push(M.addRun('pzr','t','core','t'));
-    M.commission();
-  }
-  const fullRoom=M.portRoom(pzr);
-  if(Object.values(fullRoom).some(v=>v))
-    bad(`pzr ports still read free after ${added.length} extra run(s): ${JSON.stringify(fullRoom)} - the ROLE.ports ceiling is not enforced at all`);
-  M.removeRun(added.pop()); M.commission();
-  const openRoom=M.portRoom(pzr);
-  const anyFreeOpen=Object.values(openRoom).some(v=>v);
+  for(let i=0;i<6;i++){ added.push(M.addRun('pzr','t','core','r')); M.commission(); }
+  const finite=Number.isFinite(M.netFlowK(M.S()));
   for(const rid of added) M.removeRun(rid);
   M.commission();
-  if(!anyFreeOpen) bad(`freeing one of pzr's "*" slots still reads full: ${JSON.stringify(openRoom)}`);
-  console.log(`  pzr ports: full after ${added.length+1} run(s) land there (${JSON.stringify(fullRoom)}), free the moment one is removed (${JSON.stringify(openRoom)}) - occupancy, not purpose`);
+  if(!finite) bad(`6 extra runs piled onto pzr's "t" face broke the solve - a port count should never be load-bearing there`);
+  console.log(`  pzr "t" face carries ${added.length} extra runs beside its own two - no ceiling, no refusal, netFlowK finite=${finite}`);
 }
 
 /* ══════════ A STEAM GENERATOR IS A PLACED PART, D.loops IS GONE ══════════
@@ -3451,7 +3435,11 @@ console.log('\n=== PRESSURE IS A PLACE, NOT A NUMBER ===');
     for(const id of ids){ s.valve[id]=0; s.valveDem[id]=0; }
     s.byp.rps=true;
     for(let i=0;i<50*400 && !s.melt;i++) M.step(0.02);
-    if(!(M.netFlowK(s)===0)) bad(`every primary valve shut still gave netFlowK=${M.netFlowK(s)}, expected exactly 0`);
+    /* A SOLVED QUANTITY NEVER MEETS A BARE ZERO EITHER - the same rule as a
+       bare >0 (pipenet.js's own comment): a shut network is a difference of
+       large numbers, so balanced reads ~1e-17, not literally 0. The floor is
+       a fraction of netFlowK's own O(1) scale, nowhere near real flow. */
+    if(!(Math.abs(M.netFlowK(s))<1e-9)) bad(`every primary valve shut still gave netFlowK=${M.netFlowK(s)}, expected ~0`);
     if(!s.melt) bad(`every primary valve on the plant shut and the core did not melt (dmg=${s.dmg.toFixed(0)}%) - it is being cooled through pipes that are welded shut`);
     console.log(`  shut every primary valve: netFlowK exactly 0, nat ${s.nat.toFixed(3)}, and the core melts (dmg ${s.dmg.toFixed(0)}%)`);
     set({});
@@ -3681,17 +3669,17 @@ console.log('\n=== ONE TANK. NO KINDS, NO PRESETS, NO SPECIAL CASES ===');
    named system: it is TANK_DEFAULT with two knobs turned. */
 const boronPlant=(n)=>{
   const s=set({});
-  const ids=[];
+  const ids=[], rids=[];
   for(let i=0;i<n;i++){
     const id=M.addTank(0, 1+i);
     const t=M.tanks()[id];
     t.fluid='borated'; t.check=true; t.auto='manual';
     t.pump={p:11.0,bus:'bkp'}; t.gas=null;
-    M.D().run['bor'+i]={a:id,af:null,b:'core',bf:'b',k:'boron'};
+    rids.push(M.addRun(id,null,'core','b','boron'));
     ids.push(id);
   }
   M.commission();
-  return {s:M.S(), ids};
+  return {s:M.S(), ids, rids};
 };
 /* Depressurised, so a tank charged above the loop actually delivers - the
    whole mechanic, and the thing an instant 4000 pcm never had to obey. */
@@ -3725,11 +3713,11 @@ const dumpWorth=(n,secs)=>{
 { /* A TANK WITH NO RUN TO IT DELIVERS NOTHING, visibly and in the solve -
      the same rule Stage 5a proved for relief. Disconnect the boron tank's
      own line into the core and demand no run reaches its node at all. */
-  const {s,ids}=boronPlant(1); run(s,5);
+  const {s,ids,rids}=boronPlant(1); run(s,5);
   const nid=ids[0];
   const before=M.pipeNetwork().some(r=>r.key.indexOf(nid)>=0);
   if(!before) bad('the boron tank is on the grid but its own run never routed - nothing to disconnect for this check');
-  M.removeRun('bor0'); M.commission();
+  M.removeRun(rids[0]); M.commission();
   const after=M.pipeNetwork().some(r=>r.key.indexOf(nid)>=0);
   if(after) bad('removing the run left one still reaching the boron tank\'s own node');
   else console.log('  a disconnected boron tank routes no run at all - DISCONNECT is a real removal, not a cosmetic one');
@@ -3754,12 +3742,12 @@ const dumpWorth=(n,secs)=>{
   const before=fig();
   const T=M.tanks(), old=Object.keys(T), ren={};
   for(let i=0;i<old.length;i++) ren['zz'+i]=T[old[i]];
-  /* the runs that pointed at them have to follow - a run names a PART, and
-     renaming a part without its pipe is renaming half a plant */
-  const R=M.D().run;
-  for(let i=0;i<old.length;i++) for(const k in R){
-    if(R[k].a===old[i]) R[k].a='zz'+i;
-    if(R[k].b===old[i]) R[k].b='zz'+i;
+  /* the PORTS that sat on them have to follow - a run names two ports, and a
+     port names a PART (D.ports[pid].p), so renaming a part without its own
+     ports is renaming half a plant. */
+  const Ports=M.D().ports;
+  for(let i=0;i<old.length;i++) for(const pid in Ports){
+    if(Ports[pid].p===old[i]) Ports[pid].p='zz'+i;
   }
   for(const k of old) delete T[k];
   Object.assign(T, ren);
