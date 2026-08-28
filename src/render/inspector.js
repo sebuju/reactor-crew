@@ -203,7 +203,18 @@ function paramsFor(p){
             :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
       fn:()=>{ latLayBanks(n); latRevolve(); }}))});
     opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.","cool",COOLANT);
-    opt("FUEL","Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density.","fuel",FUEL);
+    /* One FUEL row per loading zone that has fuel in it. The setter must
+       latMeasure() itself: an optlist is not a lattice edit, so nothing else
+       would re-blend densK into D.power. */
+    {
+      const zs=latZonesUsed(), one=zs.length<2;
+      for(const z of zs)
+        opt(one?"FUEL":"FUEL ZONE "+(z+1),
+          "Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density."+
+          (one?" Paint zones on the plan below and this becomes one row per zone, which is how a real core is loaded."
+              :" This row loads the slots you painted as zone "+(z+1)+". The core's beta, density and excess are the blend; its melt limit is the WORST fuel in it."),
+          {get:()=>zoneFuelOf(z), set:v=>{ D.zoneFuel[z]=v; latMeasure(); }},FUEL);
+    }
     opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.","mod",MODER);
     seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.","refl",LATREFL);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
@@ -244,11 +255,15 @@ function paramsFor(p){
   else if(id==="pzr"){
     sld("DESIGN PRESSURE","Loop pressure as a multiple of this coolant's nominal. Higher raises the boiling point, so it buys thermal margin and resists voiding, but the vessel gets much heavier and a breach more violent.","pdes",.7,1.25,v=>(v*COOLANT[D.cool].P0).toFixed(1)+" MPa",.05,v=>(v-0.7)*220);
     sld("PRESSURIZER VOLUME","Size of the steam bubble. A big pressurizer damps pressure swings so the relief valve rarely lifts. A small one is light but pressure whips around on every load change.","pzr",.5,2,v=>v.toFixed(2)+" x",.05,v=>(v-0.5)*45);
+    sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.","chim",0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
     note("Pressure is what keeps the rest of the loop liquid. Every design choice here trades vessel mass against how much boiling margin you carry.");
   }
   else if(p.role==="sg"){
-    seg_("COOLANT LOOPS","Parallel primary loops. More loops means losing one costs a smaller share of your flow, and each pipe is smaller so a break is less severe.","loops",["1","2","3","4"],1);
-    opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast.","sg",SGT);
+    opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
+        {get:()=>sgTypeOf(id),set:v=>{ D.sgType[id]=v; }},SGT);
+    B.push({kind:"readlist",rows:()=>{ const r=sgRowOf(id); return [
+      ["SECONDARY WATER",r.water.toFixed(0)+" t",null,"What is in THIS shell at 100 % level. It is what goes on removing heat after the feedwater stops, and it is the whole of the difference between the two types."],
+      ["SHELL MASS",r.mass.toFixed(0)+" t",null,"The steel of this machine. It is charged once per generator drawn, so a second one costs a second one."]]; }});
     /* MEASURED, not the label this used to carry: a placed tank and pump
        (layout.js) piped to the generator, but the flow itself is not solved
        until the secondary conserves water - so what this buys today is the
@@ -258,12 +273,14 @@ function paramsFor(p){
        degrees cooler than off, and P.graceK does not move for it. */
     note("Emergency feedwater is a TANK, not a fitting on this pump: add one, set it to the secondary side and give it the LOW SG LEVEL rule. Its arm switch lives on the tank.");
     note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
-    B.gang="sg";
   }
   else if(p.role==="ihx"){
+    sld("EXCHANGER SIZE","How much tube area this exchanger has, and how much intermediate coolant stands behind it. A big one gives back some of the shell temperature the second stage costs you, and it is a bigger flywheel after a trip. It is also the heaviest single thing you can buy per tonne of benefit.",
+        {get:()=>ihxSizeOf(id),set:v=>{ D.ihxSize[id]=v; }},
+        0,1,v=>(ihxCap(v)*100).toFixed(0)+" % capacity",.05,v=>ihxCap(v)*IHX_MASS);
     B.push({kind:"readlist",rows:()=>{ const served=ihxSgs(id); return [
       ["FEEDS",served.length?nameList(served):"nothing",null,"Which generators this exchanger heats. It is whatever is on the loop you spliced it into - splice it in with a hot leg and a cold leg, exactly like a generator."],
-      ["EXCHANGER MASS",IHX_MASS.toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
+      ["EXCHANGER MASS",(ihxCap(ihxSizeOf(id))*IHX_MASS).toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
     note("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats the generators on its loop, so a tube rupture in one of those generators leaks THIS loop's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
     note("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
   }
@@ -283,15 +300,21 @@ function paramsFor(p){
         :"Piped to nothing that reaches a core or a generator. It develops its own head and pools capacity with nobody - draw a run from it, or right-click the plant to remove it.");
   }
   else if(p.role==="turb"){
-    sld("TURBINE SIZE","How many stages the machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.","turb",0,1,v=>(COOLANT[D.cool].eff*(0.92+0.16*v)*100).toFixed(1)+" % gross",.05,v=>v*50);
-    B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
+    sld("TURBINE SIZE","How many stages THIS machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. Every turbine is sized on its own, so a big machine and a small one is a legal fleet. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.",
+        {get:()=>turbSizeOf(id),set:v=>{ D.turbSize[id]=v; }},
+        0,1,v=>(COOLANT[D.cool].eff*(0.92+0.16*v)*100).toFixed(1)+" % gross",.05,v=>v*TURB_MASS);
+    B.push({kind:"readlist",rows:()=>{ const d=derived(), sz=turbSizeOf(id); return [
+      ["THIS MACHINE",(turbSwallow(sz)*100).toFixed(0)+" % swallow",null,"What this turbine on its own can take, as a share of rated steam. The plant's ceiling below is every turbine's share added up."],
       ["RATED OUTPUT",(D.power*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
       ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room. Overpower is not free reach: it is turbine you paid mass for."]]; }});
     note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat. Right-click the plant to remove it - no turbine, no electricity.");
   }
   else if(p.role==="cond"){
-    sld("CONDENSER SIZE","The heat sink, and it sets two things at once. It caps how much steam can be dumped straight past a tripped turbine, so a generous unit absorbs a scram without the relief valve ever lifting. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat.","condCap",0,1,v=>(20+60*v).toFixed(0)+" % dump",.05,v=>v*40);
+    sld("CONDENSER SIZE","The heat sink, and it sets two things at once. It caps how much steam can be dumped straight past a tripped turbine, so a generous unit absorbs a scram without the relief valve ever lifting. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. This slider sizes THIS unit; a second condenser is sized on its own.",
+        {get:()=>condSizeOf(id),set:v=>{ D.condSize[id]=v; }},
+        0,1,v=>(20+60*v).toFixed(0)+" % dump",.05,v=>v*COND_MASS);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
+      ["THIS MACHINE",(condDuty(condSizeOf(id))*100).toFixed(0)+" % duty",null,"What this unit on its own condenses, as a share of rated steam. The plant figure below is every condenser's duty added up."],
       ["CONDENSING CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",null,"How much steam this unit turns back into water. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
       ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, shown here so the mismatch is visible from either component."]]; }});
     B.push({kind:"note",dyn:()=>{ const d=derived();
@@ -350,18 +373,33 @@ function paramsFor(p){
     B.push({kind:"toggle",title:"PRESSURISED BY PUMPS",mass:12,
       key:{get:()=>!!t().pump, set:v=>{ t().pump = v?{p:11.0,bus:"bkp"}:null; }},
       tip:"A set of pumps holds a steady pressure until the tank is dry - and dies with the bus, so a blackout kills it. Off, the tank is passive: whatever gas charge you give it below is all it has, which is exactly why a passive tank is the one injection path a blackout does not kill."});
+    sld("PUMP PRESSURE","What the pumps hold at. It has to beat whatever it is injecting against: a tank set below loop pressure cannot deliver a drop until the loop comes down to it.",
+      {get:()=>t().pump?t().pump.p:0, set:v=>{ if(t().pump) t().pump.p=v; }},
+      0.5,20,v=>v.toFixed(1)+" MPa",0.5);
     B.push({kind:"toggle",title:"GAS CHARGE",mass:8,
       key:{get:()=>!!t().gas, set:v=>{ t().gas = v?{p0:4.5,frac:0.35}:null; }},
       tip:"A cover gas above the liquid. It is what makes the pressure mean anything: a vented tank never pressurises, so it can have no back-pressure and no rupture disc. It expands as a source empties and is compressed as a sink fills."});
     sld("CHARGE PRESSURE","What the gas holds at the commissioning level. It falls as a source drains and rises as a sink fills - that taper is the whole difference between an accumulator and a pump.",
       {get:()=>t().gas?t().gas.p0:0, set:v=>{ if(t().gas) t().gas.p0=v; }},
       0.05,15,v=>v.toFixed(2)+" MPa",0.05);
+    sld("GAS SPACE","How much of the tank is gas rather than liquid. A big space holds its pressure up as the tank drains, so the flow tapers late; a small one collapses as soon as it starts moving.",
+      {get:()=>t().gas?t().gas.frac:0, set:v=>{ if(t().gas) t().gas.frac=v; }},
+      0.05,0.8,v=>(v*100).toFixed(0)+" %",0.05);
     B.push({kind:"toggle",title:"CHECK VALVE",mass:4,
       key:acc("check"),
       tip:"A non-return valve on the tank's own line. With one, the tank can only ever push OUT - which is what makes it a source. Without one it fills as readily as it drains, which is what makes it a sink."});
     B.push({kind:"toggle",title:"RUPTURE DISC",mass:2,
       key:{get:()=>!!t().burst, set:v=>{ t().burst = v?{at:1.4,drain:6.0,rel:0.004}:null; }},
       tip:"A disc that lets go once the tank is full enough to push its gas past the setpoint. Past that the tank is an opening to containment and what was in it is on the floor. This is the TMI-2 sequence, and it does not reseat."});
+    sld("DISC SETPOINT","The pressure the disc lets go at. Set it high and the tank takes more before it fails; set it too high and the tank itself is the weaker part.",
+      {get:()=>t().burst?t().burst.at:0, set:v=>{ if(t().burst) t().burst.at=v; }},
+      0.2,6,v=>v.toFixed(1)+" MPa",0.1);
+    sld("DISC DRAIN RATE","How fast the tank empties once the disc has gone. It is a hole, not a valve, so this is the size of the hole.",
+      {get:()=>t().burst?t().burst.drain:0, set:v=>{ if(t().burst) t().burst.drain=v; }},
+      1,20,v=>v.toFixed(1)+" %/s",0.5);
+    sld("DISC RELEASE","What each point of level dumped costs in release. It follows what is in the tank - clean water is nearly free and contaminated water is not.",
+      {get:()=>t().burst?t().burst.rel:0, set:v=>{ if(t().burst) t().burst.rel=v; }},
+      0,0.02,v=>v.toFixed(3),0.001);
     B.push({kind:"optlist",title:"OPENS ITSELF ON",key:{get:()=>AUTO_IDS.indexOf(t().auto),
         set:i=>{ t().auto=AUTO_IDS[i]; }},base:0,
       tip:"When this tank lines itself up without being asked. The operator's own valve is always there beside it - this only ever OPENS, it never overrides a switch.",
