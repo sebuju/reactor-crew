@@ -581,7 +581,7 @@ function liveColor(p,s){
     case p.id==="pzr": return pColor(s.P);
     // an undersized condenser quietly takes output back off you; say so on
     // the diagram, or the only place it shows is an inspector nobody opened
-    case p.role==="turb": return condPen(s)<0.98 ? C.amber : C.cyan;
+    case p.role==="turb": return condP(s)>COND_P0*1.5 ? C.amber : C.cyan;
     default: return C.cyan;
   }
 }
@@ -1462,15 +1462,32 @@ function readoutsFor(p,s){
        node an SGTR leaks into is fixed at "the same expression the STEAM PRESS
        row prints", and this row printed its own copy - which stopped being the
        same expression the moment Stage 6b gave each generator its own. */
-    add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",null,
-      "Pressure on the secondary side of THIS generator. It follows how hard the turbine is drawing on it and how much water is left in it - a unit boiling dry raises less steam and falls back toward the condenser, which is also what slows a ruptured tube down.");
+    /* The lid is a PLACED BOX now, so there is no plant-wide set point left to
+       quote: this asks the drawing which valves reach this shell, the same
+       question step() asks, and names them. None fitted is a real answer. */
+    { const vents = reliefSecIds().filter(fid => shellsOf(fid).indexOf(id)>=0);
+      add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",null,
+        "Pressure on the secondary side of THIS generator, and it is what saturation says about the shell temperature below - not a formula about load. Steam raised faster than it can get away puts it up; "+
+        (vents.length
+          ? vents.map(fid => nameOf(fid)+" lifts at "+(reliefRefP(fid)*reliefSet(fid).lift).toFixed(1)+" MPa").join(", ")+"."
+          : "nothing is fitted to let it out, so it climbs until the shell bursts at "+sgBurstP().toFixed(1)+" MPa.")); }
+    add("SHELL TEMP",sgTemp(s,id).toFixed(0)+" K",null,
+      "The temperature of the water and steam in this shell. Heat crosses the tubes on the gap between this and the primary, so a shell that heats up stops cooling the core.");
+    add("STEAM RAISED",(s.steamBy&&s.steamBy[id]||0).toFixed(0)+" kg/s",null,
+      "What this generator is boiling off. What actually leaves down the steam line is below - the difference stays in the shell and puts the pressure up.");
+    add("STEAM OUT",(s.steamTo&&s.steamTo[id]||0).toFixed(0)+" kg/s",
+      (s.sgVentBy&&s.sgVentBy[id]>0)?C.red:null,
+      "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go.");
     add("T-HOT IN",Th.toFixed(0)+" K",null,
       "Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out.");
     add("T-COLD OUT",Tc.toFixed(0)+" K",null,
       "Coolant going back to the core, after the generator has taken its heat.");
-    add("HEAT REMOVED",(Math.min(s.n,s.load)*P.rated).toFixed(0)+" MWt",null,
-      "Heat actually leaving the primary loop. It is the LOWER of what the core makes and what the turbine will take.");
+    add("HEAT REMOVED",((s.steamBy&&s.steamBy[id]||0)*H_FG/1000).toFixed(0)+" MWt",null,
+      "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
     add.apply(null,rowNat(s));
+    add("SHELL",(s.sgBurst&&s.sgBurst[id])?"BURST":"intact",
+        (s.sgBurst&&s.sgBurst[id])?C.red:C.green,
+      "The secondary pressure boundary. It bursts at "+sgBurstP().toFixed(1)+" MPa, and nothing stops it getting there except a relief valve you placed. Burst, it is open to atmosphere: it will not hold pressure again and it stops cooling its loop the moment it is empty.");
     add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
       "The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment.");
   } else if(id.startsWith("pump")){
@@ -1601,8 +1618,10 @@ function readoutsFor(p,s){
         s.dmgParts.includes(id)?C.red:C.green,
       "The main feedwater pump. Destroyed, the generator boils dry unless emergency feed picks it up.");
   } else if(p.role==="cond"){
-    add("T-HOT",Th.toFixed(0)+" K",null,
-      "Steam temperature arriving at the condenser.");
+    add("BACK PRESS",condP(s).toFixed(4)+" MPa",condP(s)>COND_P0*1.5?C.amber:null,
+      "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators.");
+    add("COND TEMP",tsatSec(condP(s)).toFixed(0)+" K",null,
+      "How hot the condensing steam is. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
     /* The tanks this machine hosts - a tank with no cell of its own has no
@@ -1645,24 +1664,43 @@ function readoutsForFit(fid,s){
     const set=reliefSet(fid);
     const open = !!s.reliefOpen[fid] && !s.reliefBlocked[fid];
     const blkd = !!s.reliefBlocked[fid], byp = !!s.porvByp[fid];
-    add("LIFT SETPOINT",(P.P0*set.lift).toFixed(2)+" MPa",null,
+    /* WHICH PRESSURE THIS VALVE IS ABOUT is asked of the drawing, not assumed
+       to be the primary's: a valve placed on a steam line lifts on its shell.
+       reliefRefP()/reliefAtP() (step.js) are the same pair the tick lifts on,
+       so this panel cannot quote a set point the valve does not use. */
+    const sec = shellsOf(fid).length>0, refP = reliefRefP(fid), atP = reliefAtP(s,fid);
+    add("PROTECTS",sec?nameList(shellsOf(fid)):"PRIMARY LOOP",null,
+      sec?"The steam generator shells this valve can reach on the steam side. It lifts on the worst of them, which is what a valve on a common header actually sees."
+         :"This valve is on the primary. It lifts on loop pressure and vents inventory through its own branch.");
+    add("LIFT SETPOINT",(refP*set.lift).toFixed(2)+" MPa",null,
       "Where THIS valve opens on its own. It has an 18% chance of sticking open every single time it lifts.");
-    add("RESEAT SETPOINT",(P.P0*set.reseat).toFixed(2)+" MPa",null,
+    add("RESEAT SETPOINT",(refP*set.reseat).toFixed(2)+" MPa",null,
       "Where it shuts again. The gap up to the lift point is its deadband - narrow it and the valve cycles on the setpoint instead of lifting once and clearing it. Both are set at the design bench.");
     // scale is a share of THIS plant's pressure (a sodium loop runs at 0.2
     // MPa); the 0.3 MPa NEAR LIFT line stays absolute and can sit off the end
     // on a low-pressure plant, honestly saying it's always close to lifting
-    const mlLo=Math.min(-0.1,-P.P0*.04), mlHi=Math.max(0.4,P.P0*.12);
-    const marg = P.P0*set.lift - s.P;
+    const mlLo=Math.min(-0.1,-refP*.04), mlHi=Math.max(0.4,refP*.12);
+    const marg = refP*set.lift - atP;
     add("MARGIN TO LIFT",marg.toFixed(2)+" MPa",
       band(marg,mlLo,mlHi,[[0.3,C.amber,"NEAR LIFT"],[mlHi,C.cyan,"CLEAR"]],{dp:2}),
       "How much pressure is left before this valve lifts by itself. Negative means it is passing right now.");
     add("PORV",open?"PASSING":"shut", open?C.red:C.green,
       "The valve itself. PASSING means coolant is leaving the loop through it, whether you asked or not.");
-    const rate=reliefRate(s,fid), full=reliefFullRate(s,fid);
-    add("RELIEF FLOW",rate.toFixed(2)+" %/s",
-      band(rate,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:2}),
-      "Coolant leaving the loop through this valve, as a share of the whole loop every second - the network's own solved flow through this valve's branch, not a fixed reference rate. A short, fat run to the tank vents faster than a long, thin one.");
+    /* Each side counts in its OWN currency: the primary in % of loop inventory
+       a second, the secondary in kg/s of steam, because that is what the two
+       balances are written in and a shared unit would be a made-up conversion. */
+    if(sec){
+      const kg=(s.reliefSteam&&s.reliefSteam[fid])||0;
+      const full=SG_RELIEF_CAP*ratedSteam()*fitBore(fid)*fitBore(fid);
+      add("RELIEF FLOW",kg.toFixed(0)+" kg/s",
+        band(kg,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:0}),
+        "Steam leaving this generator to atmosphere through this valve. It goes over the side and the water in it does not come back, so a shell held on its valve boils itself dry. What it can pass is set by its BORE - undersize it and the shell bursts anyway.");
+    } else {
+      const rate=reliefRate(s,fid), full=reliefFullRate(s,fid);
+      add("RELIEF FLOW",rate.toFixed(2)+" %/s",
+        band(rate,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:2}),
+        "Coolant leaving the loop through this valve, as a share of the whole loop every second - the network's own solved flow through this valve's branch, not a fixed reference rate. A short, fat run to the tank vents faster than a long, thin one.");
+    }
     add("BLOCK VALVE",blkd?"SHUT":"open",blkd?C.red:C.green,
       "Your last defence against this valve sticking open. Shutting it stops the leak and gives this relief path up for good.");
     add("AUTO RELIEF", byp?"bypassed":autoState("porv").toLowerCase(),

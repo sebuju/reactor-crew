@@ -210,6 +210,12 @@ function pipeRunP(r){
   if(!ends) return null;
   const a=pipeP[coreFold(ends[0])], b=pipeP[coreFold(ends[1])];
   if(a===undefined||b===undefined) return null;
+  /* NOT FLOORED AT ZERO, and that was a mistake worth naming: clamping it
+     printed a suction line whose water column has broken as a tidy 0 kPa,
+     which reads as a perfect vacuum - a confident wrong number in place of a
+     fault. A negative absolute pressure is the field saying the liquid there
+     cannot hold itself up and would flash, and that is exactly what a
+     condensate pump mounted above its own hotwell gets. Let it say so. */
   return (a+b)/2;
 }
 /* Subcooling on a run: how far the water in it is below its own local boiling
@@ -220,7 +226,19 @@ function pipeRunSc(r,L){
   const pr=pipeRunP(r);
   if(pr===null) return null;
   const ends=runEnds(r.key,r.k);
-  return tsat(pr) - (netTempAt(L,coreFold(ends[0])) + netTempAt(L,coreFold(ends[1])))/2;
+  /* THE SECONDARY BOILS ON THE WATER CURVE, and it is the same mistake secP()
+     used to make: tsat() is the PRIMARY coolant's curve, anchored on whatever
+     that architecture boils at, and asking it about a steam line read -12 K of
+     subcooling on a healthy plant. A VAPOUR run is saturated by definition -
+     that is what makes it vapour - so it reads exactly 0 rather than a
+     difference between two numbers that are the same one. */
+  const a=coreFold(ends[0]), b=coreFold(ends[1]);
+  if(r.k==="steam" || r.k==="exh") return 0;
+  /* Asked of the UNFOLDED node ids, because nodeGraph().primary is keyed on
+     partId+face - coreFold() collapses "corer" to "core", which that map has
+     never heard of, and every primary run then read as secondary. */
+  const sat = (secondaryNode(ends[0]) && secondaryNode(ends[1])) ? tsatSec(pr) : tsat(pr);
+  return sat - (netTempAt(L,a) + netTempAt(L,b))/2;
 }
 let pipeT=null, pipeDt=0;
 /* a browser frame at 16x carries ~0.27 s of plant time - PIPE_DTMAX is what a frame
@@ -308,21 +326,14 @@ function pipeFmt(v){
    metered in inventory, not mass; the surge line has no second port of its
    own to solve a reference for at all (runEnds() returns null - it drops
    onto another run's pipe, see pipenet.js's own comment on that). Everything
-   else that genuinely has no reference yet - main steam, exhaust and
-   feedwater, because nothing forces flow through the secondary in the graph
-   until Stage 6 - keeps the flat, plant-wide design rate this file always
-   gave that KIND while there is nothing solved to read instead; that
-   fallback is a DEFAULT-PICKER, not a permission, and it is also what a
-   hot/cold run falls back to before commission() has run, same as before. */
-/* NO FLAT FULL-SCALE TABLE ANY MORE. It read {steam:96, exh:96, feed:96} -
-   three invented numbers that looked exactly like measurements, on the three
-   kinds nothing was forcing. Feedwater is SOLVED now and has a real reference
-   like every other run, so its row deleted itself. Steam and exhaust do not:
-   this solver knows incompressible liquid, a turbine turns a pressure drop
-   into work, and neither of those is going to change without the heat model.
-   So they get NO NUMBER AND NO PACKETS rather than a confident 96 - which is
-   a real loss on the diagram and the point of losing it. A missing reading
-   reads as missing; an invented one reads as a measurement. */
+   else - a hot/cold run before commission() has given it a reference - keeps
+   the flat design rate this file always gave that KIND; that fallback is a
+   DEFAULT-PICKER, not a permission. */
+/* NO FLAT FULL-SCALE TABLE. It read {steam:96, exh:96, feed:96} - three
+   invented numbers that looked exactly like measurements, on the three kinds
+   nothing was forcing. All three have a real one now: feedwater off its own
+   solved reference, steam and exhaust off steamScale() (step.js), which is the
+   same figure the tick normalises the packet integral on. */
 /* Which TANK's own node this run lands on, or null - mirroring netBuild()'s
    own test, off the node NAMES it wrote back (P.net.tankNid) rather than off
    a face string or a tank id anything here could recognise. */
@@ -334,6 +345,9 @@ function runTankId(key,k){
 }
 function pipeFullScale(key,k){
   const ends=runEnds(key,k);
+  /* A steam run's integral is already normalised on rated steam in step(), so
+     100 % is the same 84 every other run's reference lands on. */
+  if(k==="steam"||k==="exh") return 84;
   if(runTankId(key,k)) return 120;
   const ref=P.netRefByRun[key];
   if(ref) return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
@@ -344,6 +358,7 @@ function pipeFullScale(key,k){
   if(!ends) return 0.02*84*Math.max(0.05,P.feff0);
   return 84*Math.max(0.05,P.feff0);   // DEFAULT
 }
+
 const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
 
 /* ── what a run actually carries, in a unit that exists ──
@@ -371,10 +386,9 @@ const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
    own (runEnds() returns null) to hang a reference off at all, and is sized
    at 2% of a flat hot leg exactly as it always was, because its real driver
    (thermal expansion) is not in the solve yet - see Stage 6c. What is left
-   - main steam, feedwater, exhaust, and a hot/cold/xtie run before
-   commission() has given it a reference - keeps the flat design figure this
-   file always gave it, a DEFAULT-PICKER read off the kind ONLY when there is
-   genuinely nothing solved to read instead. */
+   - main steam and the exhaust - reads step()'s own solved kg/s instead, and
+   a hot/cold/xtie run before commission() has given it a reference keeps the
+   flat design figure this file always gave it. */
 function pipeUnit(key,k){
   const per=Math.max(1,P.loops);
   const loop=P.rated*1000/(5.5*30)/per;        // kg/s through an average primary loop
@@ -388,9 +402,14 @@ function pipeUnit(key,k){
   const ref=P.netRefByRun[key];
   if(ref) return {nom:loop*(ref/Math.max(1e-6,P.netRefRun)), u:"kg/s"};
   if(!ends) return {nom:loop*0.02, u:"kg/s"};   // a tap-ended run - see pipeFullScale
-  /* NULL, not a guess. Nothing in this sim forces steam or exhaust, so there
-     is no rate to print and this hands back nothing at all - the caller draws
-     no meter and no packets. `stm` was that guess and it is gone with it. */
+  /* ── THE STEAM LINES GET THEIR NUMBER BACK ──
+     They read null for as long as nothing solved a steam rate. step() solves
+     one per generator now, so the honest answer is no longer "nothing": a
+     steam run carries what its OWN generator is raising, and the exhaust
+     carries the whole of what actually got away. A generator raising steam it
+     cannot send reads a moving needle on the shell and 0 kg/s on the line,
+     which is the two fields being separate. */
+  if(k==="steam"||k==="exh") return {nom:steamScale(k), u:"kg/s"};
   return null;
 }
 /* how two-phase a line is, 0..1 - off the FLUID AT THE RUN'S OWN ENDS, not

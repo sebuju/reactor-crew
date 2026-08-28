@@ -123,6 +123,11 @@ function layoutWarnings(M){ const w=[];
      price, draw and never mention. */
   for(const id of (M.sgNoSteam||[]))
     w.push(["SOFT","This steam generator has no steam path to a turbine that can exhaust. It boils into a closed vessel, so it takes no heat out of its loop at all.",id]);
+  /* THERE IS NO INVISIBLE LID. A shell with nothing fitted to relieve it
+     bursts, so the bench says so - and still builds it, because refusing is
+     not what this bench does. */
+  for(const id of (M.sgNoRelief||[]))
+    w.push(["SOFT","No relief valve is fitted anywhere on this generator's steam side. Nothing will let the pressure go if the steam cannot get away, and the shell bursts at 1.5x its design pressure. Place a fitting on the steam line and set it to RELIEF.",id]);
   if(M.turbConn!==undefined && M.turbConn<1)
     w.push(["SOFT","A turbine is not in a complete steam circuit - it needs a generator feeding it AND a condenser to exhaust into. Unpiped, it makes no electricity.","turb"]);
   for(const id of (M.feedNoSg||[]))

@@ -114,9 +114,17 @@ function layerRunLine(runs, slot, val, col, fmt){
    this plant reads pressure against. Blue is well under the design point,
    amber is over it, red is where the relief valve is about to talk. */
 const pressCol = v => { const p0=Math.max(0.1,P.P0);
-  return v>=p0*1.06?C.red : v>=p0?C.amber : v<p0*0.55?C.blue : C.cyan; };
-const pressLayer = (d,L) => layerRunLine(d.runs, 1, pipeRunP, pressCol,
-                                         v=>v.toFixed(2)+" MPa");
+  /* AT OR BELOW ZERO ABSOLUTE THERE IS NO LIQUID LEFT TO BE AT A PRESSURE.
+     Red at both ends, because a line that cannot hold its own column up is as
+     broken as one about to lift a relief valve. */
+  return v<=0?C.red : v>=p0*1.06?C.red : v>=p0?C.amber : v<p0*0.55?C.blue : C.cyan; };
+/* A CONDENSER UNDER VACUUM IS NOT ZERO. Two decimals of MPa is the right
+   precision for a 15 MPa loop and prints the whole secondary low-pressure end
+   as "0.00", which reads as a missing measurement rather than a small one - so
+   below a tenth of an MPa the same number is printed in kPa. One quantity, one
+   place, two units, the way any gauge with a useful range is marked. */
+const pressFmt = v => Math.abs(v)<0.1 ? (v*1000).toFixed(0)+" kPa" : v.toFixed(2)+" MPa";
+const pressLayer = (d,L) => layerRunLine(d.runs, 1, pipeRunP, pressCol, pressFmt);
 /* Coloured by MARGIN, not by value: what matters about subcooling is how close
    to zero it is, because zero is where the water in that pipe stops being
    water - which is where a pump loses its head and where the loop stops
