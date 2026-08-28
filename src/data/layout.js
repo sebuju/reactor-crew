@@ -5,6 +5,25 @@
 // thing that says how big a cell really is. Audited by doubling CELL and
 // running audit-physics.js, which passed unchanged.
 const GW=16, GH=9, CELL=46, GX=12, MPC=1.4;   // metres per cell
+/* ══ WHAT A MACHINE IS CALLED ══
+   The player's own name for a part, kept on D so it rides designSig(), the
+   recording head and the save format for free. partName() is the ONE reader -
+   audit-dom.js source-scans the UI files for a raw p.name read and fails the
+   build if one survives.
+   DATA, not display: it reads D and touches nothing on the page, and step()'s
+   event log names the machine it is talking about - so living in core/ui.js
+   put it outside the sim-only subset and the worker threw on the first log
+   line that named a part. */
+const NAME_CAP=24;
+function partName(p){
+  const n=(D.name&&D.name[p.id]||"").trim();
+  return n?n.slice(0,NAME_CAP):p.name;
+}
+function setPartName(id,str){
+  const t=(str||"").trim().slice(0,NAME_CAP);
+  if(t){ if(!D.name) D.name={}; D.name[id]=t; }
+  else if(D.name) delete D.name[id];
+}
 let GY=100;                                   // grid top, set each frame by the layout section
 let LAY=null, layFit="", sel="core", layMass=0;
 // parts optionally present at a FIXED slot: buildLayout() gates add() on
@@ -991,6 +1010,28 @@ function squareLegs(pts){
   }
   return out;
 }
+/* A POINT ON ITS OWN STRAIGHT LINE IS NOT A CORNER. squareLegs() guarantees
+   each leg is axis-aligned; it does not notice that three points in a row can
+   share an axis, and every one of those draws a corner the pipe does not turn
+   at. The stock plant carried four - the core's hot leg, the exhaust, the cold
+   leg back from the pump and the injection line - each a waypoint spent on
+   nothing and a kink where the run should read straight.
+   Removing one is provably free: the polyline through it and the polyline
+   without it are the same line, so plen() and every figure taken off it are
+   identical. Here rather than in the stock table, because a hand-drawn pipe
+   can produce the same thing and deserves the same answer. */
+function unbend(pts){
+  if(pts.length<3) return pts;
+  const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){
+    const a=out[out.length-1], b=pts[i], c=pts[i+1];
+    const flat=Math.abs(a[1]-b[1])<=0.5 && Math.abs(b[1]-c[1])<=0.5;
+    const vert=Math.abs(a[0]-b[0])<=0.5 && Math.abs(b[0]-c[0])<=0.5;
+    if(!(flat||vert)) out.push(b);
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
 function plen(pts){ let L=0;
   for(let i=1;i<pts.length;i++) L+=Math.abs(pts[i][0]-pts[i-1][0])+Math.abs(pts[i][1]-pts[i-1][1]);
   return L/CELL*MPC; }
@@ -1015,7 +1056,7 @@ function pipeNetwork(){
     if(!a || !b) continue;               // this entry's part is not on the grid this frame
     const pA=portPos(e.pa), pB=portPos(e.pb);
     const wp=e.wp||[];
-    const pts=dedupe(squareLegs([pA].concat(wp.map(w=>[w.x,w.y])).concat([pB])));
+    const pts=unbend(dedupe(squareLegs([pA].concat(wp.map(w=>[w.x,w.y])).concat([pB]))));
     // a KIND is not an identity: every loop's hot leg is kind "hot" (one
     // animated line), but a waypoint belongs to ONE physical run, so each
     // gets its own stable key from both ends and both faces

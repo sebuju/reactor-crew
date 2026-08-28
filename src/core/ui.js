@@ -168,16 +168,10 @@ function drawCtxMenu(){
    nothing here writes D.name until setPartName() is handed a real string.
    partName() is the ONE reader - audit-dom.js source-scans the files that
    build this UI for a raw p.name read and fails the build if one survives. */
-const NAME_CAP=24;
-function partName(p){
-  const n=(D.name&&D.name[p.id]||"").trim();
-  return n?n.slice(0,NAME_CAP):p.name;
-}
-function setPartName(id,str){
-  const t=(str||"").trim().slice(0,NAME_CAP);
-  if(t){ if(!D.name) D.name={}; D.name[id]=t; }
-  else if(D.name) delete D.name[id];
-}
+/* partName()/setPartName() live in layout.js. They read and write D.name and
+   touch nothing on the page, and the SIM names its own machines now - an event
+   log line calls partName(), so a copy here left the worker (which loads no UI
+   file at all) throwing on the first log line that named a part. */
 
 const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
 
