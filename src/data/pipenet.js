@@ -262,11 +262,44 @@ const secLoad = (s, id) => {
   const n = Object.keys(s.sgShare).length, w = s.sgShare[id];
   return (n>0 && w!==undefined) ? l*n*w : l;
 };
-const secP = (s, id) => {
+/* ══ THE SECONDARY IS WATER, WHATEVER THE PRIMARY IS ══
+   tsat()/psat() in step.js is the PRIMARY coolant's curve, anchored on that
+   architecture's own boiling point - sodium at 1150 K, salt at 1700 K. The
+   shell is full of water on every plant, so it gets its own curve, anchored on
+   the stock secondary: saturated steam at 6.9 MPa is 558 K, same 0.10 exponent
+   the primary curve uses. It inverts in one line, which is what lets the shell
+   be a pot: temperature in, pressure out.
+   The exponent is fitted across the range this plant actually uses rather than
+   copied off the primary curve: 6.9 MPa/558 K and 0.01 MPa/319 K are both real
+   steam-table points, and 0.10 could not hold both - it put a condenser under
+   vacuum at 290 K, which is colder than the river it rejects into. */
+const SEC_P0=6.9, SEC_T0=558, SEC_N=0.0855;
+const tsatSec = p => SEC_T0*Math.pow(Math.max(p,1e-4)/SEC_P0,SEC_N);
+const psatSec = T => SEC_P0*Math.pow(Math.max(T,1)/SEC_T0,1/SEC_N);
+
+/* THE FALLBACK ONLY. A shell with a temperature of its own is a saturated pot
+   and secP() reads that; this is what a caller with no live S gets - the design
+   bench, layoutMetrics(), a tick-zero seed. */
+const secPTarget = (s, id) => {
   const base = P.P0*0.45*Math.pow(Math.max(secLoad(s,id),.05),.25);
   const fill = (id===undefined || !s.sglBy || s.sglBy[id]===undefined)
              ? 1 : clamp(s.sglBy[id]/SG_DRY,0,1);
   return COND_P0 + (base-COND_P0)*fill;
+};
+/* ══ THE SHELL IS A SATURATED POT ══
+   Pressure is not a formula about load any more: it is what saturation says
+   about the shell temperature step() integrates (s.sgTBy). Trapped steam
+   raises it, which the old formula could not represent at all - it fell by
+   half while the generator boiled into a closed vessel. */
+const secP = (s, id) => {
+  /* A BURST SHELL IS AN OPENING. It cannot hold pressure again whatever its
+     temperature says, so it sits at the room's - the same anchor a break and a
+     vent already relax to. Read here rather than at each caller, because every
+     one of them (the feed pumps' fixed node, the SGTR differential, the panel)
+     is asking the same question. */
+  if(id!==undefined && s.sgBurst && s.sgBurst[id]) return P.Pcont;
+  const T = id!==undefined && s.sgTBy ? s.sgTBy[id] : undefined;
+  return T===undefined ? secPTarget(s,id) : Math.max(COND_P0, psatSec(T));
 };
 // rated leak, in % of loop inventory per second, at the design differential -
 // the flat rate this used to run at, kept as the scale and turned into a
@@ -530,11 +563,10 @@ const tankLive = (s,id) =>
    secondary's own low-pressure sink, the same role containment plays for a
    break, so it gets the same treatment: one constant, fitted once and stated
    as such (the RAD_K/BREAK_K idiom), never scaled by load or derived from
-   condPen() - that formula prices an EFFICIENCY penalty, not a pressure, and
-   CLAUDE.md is explicit that the secondary is priced, not solved. A real
-   condenser holds vacuum, well below containment; this is the low end of
-   that range; a case for exactness has not been made, only for a real
-   anchor instead of a rounding artefact. */
+   a load formula. It is the FLOOR now rather than the whole answer - condP()
+   (step.js) solves the condenser's own saturation pressure and can only sit
+   above this - which is the best vacuum the plant can pull. A condenser with
+   margin sits exactly on it, which is why nothing anchored here moved. */
 const COND_P0 = 0.01;
 
 /* THE DRIVE A FEEDWATER PUMP DEVELOPS, in MPa, ON TOP of the standing
@@ -839,7 +871,7 @@ const nodeT = (net, i, s) => {
    pressure) printed subcooling around -235 K on the PRESSURE layer -
    measured, not a guess - because tsat() of a real ~0.01 MPa condenser
    pressure was compared against a Tavg left over from the primary loop. */
-const condDisplayT = () => tsat(COND_P0);
+const condDisplayT = () => tsatSec(COND_P0);
 
 /* The temperature at a node, asked by id - the same hot/cold split the
    buoyancy heads consume, so density and subcooling can never disagree about
@@ -1377,6 +1409,26 @@ function netBuild(){
      array, and ONLY this array, feeds buoyH() (via nodeT()) - it must stay
      exactly what it always was, or the isothermal invariant (every static
      head identically 0 at s.coreDT=0, audit-physics.js) breaks. */
+  /* WHICH NODES ARE FULL OF VAPOUR, and it is STRUCTURAL: a node every edge
+     touching it reaches by a steam or exhaust run is a steam space. Nothing
+     is named - place a fitting in the steam line and its two sides are steam
+     spaces too, because the runs reaching them are. A node with no edge at
+     all is not one. DISPLAY ONLY: this decides whether a readout takes a
+     water column back off, never what the solve carries, so net2.tag and
+     buoyH() are untouched by it. */
+  net2.vapour = new Uint8Array(net2.n);
+  { const any = new Uint8Array(net2.n);
+    net2.vapour.fill(1);
+    for(const ed of edges){
+      /* A BREAK, A VENT AND A TUBE LEAK ARE HOLES, NOT CONTENTS. They hang off
+         every run alike and say nothing about what is inside it, so a hole in
+         the exhaust line must not make it read as full of water. */
+      if(ed.kind==="break" || ed.kind==="vent" || ed.kind==="sgtr") continue;
+      any[ed.u]=1; any[ed.v]=1;
+      if(ed.kind!=="steam" && ed.kind!=="exh"){
+        net2.vapour[ed.u]=0; net2.vapour[ed.v]=0; }
+    }
+    for(let i=0;i<net2.n;i++) if(!any[i]) net2.vapour[i]=0; }
   net2.tag = new Uint8Array(net2.n);
   for(const ed of edges){
     const b = KIND_TEMP[ed.kind] || 0; // DEFAULT: fluid-side guess by kind, until Stage 6 solves one
@@ -1539,7 +1591,15 @@ function pzrLive(net, s){
   return false;
 }
 function netFixed(net, s){
-  const f = {}, p0 = phiRef(net, s), rd = rhoDatum(s)*G_MPA;
+  const f = {}, p0 = phiRef(net, s), rd0 = rhoDatum(s)*G_MPA;
+  /* THE DATUM COLUMN A NODE ACTUALLY HAS. The solve carries piezometric head
+     (phi = p + rho*g*z) for a network that used to be liquid throughout. A
+     STEAM SPACE HAS NO COLUMN: three metres of exhaust line is worth 19 kPa of
+     water and essentially nothing of steam, and 19 kPa is twice the whole
+     pressure the condenser sits at. net.vapour is the structural answer to
+     which nodes those are, and it must be read HERE as well as at the readout
+     or the two disagree by exactly that column. */
+  const rdz = i => net.vapour[i] ? 0 : rd0*net.z[i];
   f[net.pzrNode] = 0;
   /* CONTAINMENT, one node per opening, always fixed and usually attached to
      nothing: its edge's g is 0 until that break happens, so netAssemble skips
@@ -1550,7 +1610,7 @@ function netFixed(net, s){
      a break still busts that cache, which is the thing that matters: a fresh
      break solved against the intact plant's factors is a wrong answer, not a
      crash. */
-  for(const i of net.cont) f[i] = P.Pcont + rd*net.z[i] - p0;
+  for(const i of net.cont) f[i] = P.Pcont + rdz(i) - p0;
   /* Every TANK's own node is fixed at the pressure its own gas space is
      holding. That is the whole of 2h and 2j: injection is then the SOLVED
      flow through the tank's one edge against the loop it is fighting, so a
@@ -1559,19 +1619,24 @@ function netFixed(net, s){
      Fixed whether or not the edge is open - an isolated node costs nothing
      and keeps the fixed SET constant, so the factorisation cache keys on the
      valve instead of on a set that changes shape. */
-  for(const id in net.tankNode) f[net.tankNode[id]] = tankP(s,id) + rd*net.z[net.tankNode[id]] - p0;
+  for(const id in net.tankNode) f[net.tankNode[id]] = tankP(s,id) + rdz(net.tankNode[id]) - p0;
   /* the secondary side of each steam generator - a boundary, not a solve.
      Fixes the synthetic sgtr node AND, since Stage 1, the generator's own
      real steam port (net.secT) at the identical pressure - one formula, two
      places it is physically true. */
-  net.sec.forEach((i,k)=>{ f[i] = secP(s, net.sgtrParts[k]) + rd*net.z[i] - p0; });
-  net.secT.forEach((i,k)=>{ f[i] = secP(s, net.secTParts[k]) + rd*net.z[i] - p0; });
+  net.sec.forEach((i,k)=>{ f[i] = secP(s, net.sgtrParts[k]) + rdz(i) - p0; });
+  net.secT.forEach((i,k)=>{ f[i] = secP(s, net.secTParts[k]) + rdz(i) - p0; });
   /* the condenser's own two ports, fixed at COND_P0 - the secondary's low-
      pressure sink, the same role P.Pcont plays for a break. Constant, so
      nothing here needs to enter netFactored()'s live signature beyond what
      Object.keys(fixed) already carries: the SET only changes when the net
      itself is rebuilt (a different plant), never tick to tick. */
-  for(const k in net.condNode) f[net.condNode[k]] = COND_P0 + rd*net.z[net.condNode[k]] - p0;
+  /* LIVE, not a constant: the condenser solves its own saturation pressure now
+     (condP, step.js). A fixed node's VALUE is safe for the factorisation cache
+     - only conductances enter netFactored()'s signature - so this may move
+     every tick without busting it. */
+  { const pc = condP(s);
+    for(const k in net.condNode) f[net.condNode[k]] = pc + rdz(net.condNode[k]) - p0; }
   net.fixedNow = f;   // for a head that has to read another fixed node - see the secPumps pass
   return f;
 }
@@ -1633,7 +1698,8 @@ function netFactored(net, s, fixed){
   if(!net.Af || net.AfSig !== sig){
     const A = new Float64Array(net.n*net.n);
     netAssemble(net.edges, net.n, fixed, s, A, new Float64Array(net.n));
-    net.Af = netFactor(A, net.n);
+    net.Afdeg = new Uint8Array(net.n);
+    net.Af = netFactor(A, net.n, net.Afdeg);
     net.AfSig = sig;
   }
   return net.Af;
@@ -1666,8 +1732,27 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
   /* phi -> p: the datum column comes off here, once, so every reader of the
      field gets a real pressure in MPa and nothing downstream has to know the
      solve worked in piezometric head at all. */
+  /* phi -> p, and TWO things this must not print.
+     A NODE WITH NO PATH TO GROUND HAS NO PRESSURE. netFactor()'s pivot guard
+     decoupled it and handed back whatever b left there; printing that is the
+     "large, plausible-looking wrong number" this file already refuses
+     elsewhere. Shut a valve in the steam line and the turbine inlet is exactly
+     that node. Fixed nodes are never dropped - netUnfix() has just written
+     their known value over b, so a trivially-degenerate row there is not a
+     missing answer, it is the answer.
+     A STEAM LINE HAS NO WATER COLUMN IN IT. The solve carries piezometric head
+     for a network that was all liquid, so taking the datum back off leaves a
+     full column's worth of head on a pipe full of vapour - measured, 19 kPa
+     over the three metres between the turbine and the condenser, which is
+     twice the condenser's whole pressure and printed the exhaust line as 0
+     while the condenser it runs into read 10 kPa. Steam is about a thirtieth
+     the density, so on a vapour node the column is not there. */
   if(byP){ const rd = rhoDatum(s)*G_MPA, p0 = phiRef(net, s);
-    for(let i=0;i<net.n;i++) byP[net.nodes[i]] = b[i] + p0 - rd*net.z[i]; }
+    const deg = net.Afdeg;
+    for(let i=0;i<net.n;i++){
+      if(deg && deg[i] && fixed[i]===undefined){ delete byP[net.nodes[i]]; continue; }
+      byP[net.nodes[i]] = b[i] + p0 - (net.vapour[i] ? 0 : rd*net.z[i]);
+    } }
   const q = new Float64Array(net.edges.length);
   netFlows(net.edges, b, fixed, q, s);
   /* b IS the solved PRESSURE at every node, in MPa, once netSubst() has run

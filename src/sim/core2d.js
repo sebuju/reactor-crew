@@ -38,7 +38,39 @@ const XTILTZ=0.30;
    file that is fitted to the old bench rather than read off the drawing. */
 const XRODW0=2600;
 let XABS0=null;
-const XDRY=0.015;    // the least cooling the fuel-temperature correlation will assume
+/* ── THE PIN AS A HEAT BALANCE ──
+   XTAU_F is the fuel pin's own time constant, seconds: heat capacity over film
+   conductance at rated flow. It is the same 4 s the correlation this replaces
+   lagged by, so a pin that IS being cooled answers exactly as it always did -
+   what changes is that a pin that is NOT being cooled now has nowhere for the
+   heat to go and climbs on its own heat capacity until it melts. XDRY, the 320
+   scale, the 1+4*void fudge, the 3200 cap and the pk2 normalisation are all
+   gone with it: a balance does not need any of them.
+   XHFG is the primary coolant's latent heat, kJ/kg, and it exists only to turn
+   enthalpy above saturation into quality. Water's, and used for every family
+   because only the water families can reach saturation at all in this game -
+   sodium boils at 1150 K, salt at 1700 and helium not at all, and all three
+   run hundreds of kelvin below it. */
+const XTAU_F=4, XHFG=1500;
+/* Drift flux: quality to void fraction. C0 is the concentration parameter (the
+   steam runs up the middle of the channel faster than the mean) and XRVL is
+   the density ratio of steam to water at these conditions. Standard
+   correlation between two REAL quantities, which is what separates it from the
+   lump rescale it replaces: 1 % quality is 15 % void, which is what a boiling
+   channel actually does. */
+const XC0=1.13, XRVL=0.05;
+/* ── CROSS-FLOW ──
+   A core is not fourteen sealed pipes. An open lattice mixes hard between
+   assemblies, so a hot channel's ENTHALPY RISE is far flatter than its power:
+   a real PWR runs Fq near 2.5 with an enthalpy-rise hot channel factor near
+   1.55, and this one number is the whole of the difference between those two.
+   Without it the centre ring of the stock core - flux 2.14 against a core mean
+   of 1 - takes twice the average rise, boils at 83 % power and locks into its
+   own voiding runaway at rest, which is not what the plant it is modelling
+   does. The PELLET is not mixed: it really does make its own local power. */
+const XMIX=0.55;
+const driftFlux = x => { const q=clamp(x,0,1);
+  return q<=0 ? 0 : clamp(q/(XC0*(q+(1-q)*XRVL)), 0, 1); };
 
 /* volume weights: ring i is an annulus, so it is worth 2i+1 unit cells */
 const ringW=new Float64Array(XNR), nodeW=new Float64Array(XNN);
@@ -306,6 +338,26 @@ function coreReset(s){
              -P.nPen[i]; }
   coreSolve(P,s.phi,s.nRho,60);
   s.fq=nodePeak(s.phi).v;
+  /* ── THE ONE CONSTANT THE PIN BALANCE IS FITTED WITH ──
+     P.pinUA is the film conductance of the whole core at rated flow, and it is
+     read off the settled shape at ONE anchor: the flux-weighted mean fuel
+     temperature of a plant at rest is P.TfRef, which is the figure Doppler,
+     the HIGH FUEL TEMP trip and the damage threshold were every one of them
+     calibrated against. That is where pk2 went - absorbed once, here, into a
+     commissioning constant, instead of being applied every tick to stop a
+     power-proportional guess double-counting its own peak. A balance has no
+     such problem; a flux-weighted mean is just a flux-weighted mean.
+     P.condK is inside it, which is what its name always claimed: a
+     conductivity, not a scale on a guess. */
+  { let pk2=0; for(let k=0;k<XNN;k++) pk2+=nodeW[k]*s.phi[k]*s.phi[k];
+    const film0=Math.pow(Math.max(P.flowK,.02),0.8);
+    const heat0=s.n*0.935+s.decay;
+    P.pinUA=heat0*P.rated*1000*Math.max(pk2,1e-6)
+           /(film0*Math.max(P.TfRef-P.Tref,1)*P.condK);
+    /* and start every pellet where that balance puts it, or tick one is a
+       transient nobody caused */
+    const qhat=heat0*P.rated*1000/P.pinUA;
+    for(let k=0;k<XNN;k++) s.nTf[k]=s.nTc[k]+qhat*s.phi[k]/film0; }
 }
 
 /* Flux-weighted worth of the bank exactly where it is standing. resetPlant()
@@ -323,7 +375,7 @@ function coreRodWorth(s){
    step() has already worked out the loop conditions; this spends them node by
    node and hands back the flux-weighted reactivity that point kinetics needs.
    The field it leaves behind is what the renderer draws. */
-function coreStep(s,dt,feff,heat,sat,vLeak,mflux){
+function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   /* Where the banks stand is settled by the rod drives in step(), through
      rodBanks(). This function only reads it. */
 
@@ -339,55 +391,75 @@ function coreStep(s,dt,feff,heat,sat,vLeak,mflux){
     for(let i=0;i<XNR;i++) s.chW[i]/=Math.max(tot,1e-6);
   }
 
-  const Tcold=s.Tavg-15*heat;
   rodShape(P,s,s.nCov,s.nFol);
-  /* Fuel temperature rises with LOCAL power, so the hot node genuinely runs
-     hotter - that is the whole point, and DNBR and damage need it. But
-     Doppler is felt flux-weighted, and weighting a power-proportional rise by
-     power again would double-count the peak and make every core far more
-     self-limiting than the plant it was calibrated against. Normalising by
-     the mean square keeps the flux-weighted effective fuel temperature equal
-     to the lumped one, and keeps the spread around it. */
-  let pk2=0; for(let k=0;k<XNN;k++) pk2+=nodeW[k]*s.phi[k]*s.phi[k];
-  pk2=Math.max(pk2,1e-6);
+  /* ── THE RISE FIRST, THEN WHERE IT SITS ──
+     T-AVG IS THE AVERAGE, and that has to hold every tick or the model eats
+     itself: the rise responds to power inside one tick, so hanging the channel
+     inlet off LAST tick's rise leaves the flux-weighted mean coolant
+     temperature moving with power at -45 pcm/K, prompt. Measured: the plant
+     oscillated tick to tick and diverged in a quarter of a second. Computing
+     the rise first and centring the channel on s.Tavg makes the mean exactly
+     s.Tavg whatever the rise is, which is what the split it replaces asserted
+     by construction and what the word AVERAGE means.
+     Capped, because past this the channel is boiling rather than getting
+     hotter and the number stops being a temperature rise - it is buoyancy's
+     one input and a floored flow would otherwise hand it thousands of kelvin. */
+  const mixK=new Float64Array(XNR);
+  { let raw=0;
+    for(let i=0;i<XNR;i++){
+      let ringP=0; for(let j=0;j<XNZ;j++) ringP+=s.phi[XIX(i,j)];
+      ringP=Math.max(ringP/XNZ,1e-6);
+      mixK[i]=(1+(ringP-1)*(1-XMIX))/ringP;       // cross-flow, and it conserves
+      raw += ringW[i]*heat*CORE_DT0*ringP*mixK[i]/Math.max(flowFrac,1e-3);
+    }
+    s.coreDT=clamp(raw,0,CORE_DT_MAX); }
+  const Tcold=s.Tavg-s.coreDT/2;
+  /* ── ENTHALPY UP A CHANNEL, AND THE PELLET AS A BALANCE ──
+     Both of these used to be correlations wearing a field's clothes. Node
+     coolant temperature was Tcold + 30*heat*frac, an imposed axial shape with
+     no flow in it; fuel temperature was a 320 K scale over a made-up cooling
+     fraction. They are two halves of one sentence now: the power in a node
+     goes into the water going past it, and what is left over is in the pellet.
 
+     qhat is the core's power in the units the pin balance wants - kelvin of
+     film difference per unit of flux - so P.pinUA never appears again below.
+     dTn is the rise one node of a channel carrying its own share of RATED flow
+     takes at rated power, so an undamaged core at rest lands exactly where the
+     correlation left it. */
+  const qhat  = heat*P.rated*1000/Math.max(P.pinUA,1e-9);
+  const ff    = Math.max(flowFrac, 1e-3);
+  const hSat  = CP_W*sat;                    // enthalpy at saturation, kJ/kg
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
-    /* XDRY is the smallest cooling the correlation will pretend exists. It used
-       to be 0.10 in the fuel-temperature line below, which quietly capped an
-       uncovered core at a few tens of kelvin above its coolant and made a dry
-       core impossible to damage. It never binds on a plant that has water. */
-    const fRing=Math.max(feff*s.chW[i],XDRY);
-    let ringP=0; for(let j=0;j<XNZ;j++) ringP+=s.phi[XIX(i,j)];
-    ringP=Math.max(ringP,1e-6);
-    /* Rise across THIS channel. The core-average rise is already paid for by
-       feff in the heat balance, so what matters here is only how this channel
-       compares to its neighbours - divide by absolute flow too and every
-       channel runs hot at part load. */
-    const dTch=30*heat/Math.max(s.chW[i],0.05);
-    let below=0, vCh=0;
+    const chan=Math.max(s.chW[i],1e-3);
+    /* This channel's own flow, as a share of what it would carry at rated: the
+       heat has to go into the water actually in THIS channel, which is the
+       whole of the voiding-channel runaway. */
+    const dTn=heat*CORE_DT0*mixK[i]/(XNZ*ff*chan);   // K of rise per node at phi = 1
+    /* and the flux past the pin in this channel, which is a different question
+       from how much water is passing - see s.hotFlow */
+    const film0=Math.pow(Math.max(mflux*chan,0),0.8);
+    let h=CP_W*Tcold;
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), pw=s.phi[k];
-      /* how much of this channel's heat is already in the water by level j -
-         the top of a channel is always its hot end */
-      const frac=(below+pw/2)/ringP; below+=pw;
-      s.nTc[k]=Tcold+dTch*frac;
+      const dh=CP_W*dTn*pw;                  // this node's own enthalpy rise
+      const hMid=h+dh/2; h+=dh;              // the node sits at its own midpoint
+      /* Subcooled water gets hotter; saturated water gets steamier. Quality
+         only ever increases going up a heated channel, which falls out of
+         carrying the enthalpy rather than being asserted. */
+      if(hMid<=hSat) s.nTc[k]=hMid/CP_W;
+      else         { s.nTc[k]=sat; }
+      s.nVt[k]=hMid<=hSat ? 0 : driftFlux((hMid-hSat)/XHFG);
 
-      /* Steam quality only ever increases going up a heated channel: water
-         that boiled at level 3 is still steam at level 7. Carrying the
-         running value up the channel is what makes a boiling channel void
-         along its whole top half instead of in one node. */
-      const boil=clamp((s.nTc[k]-(sat-3))/14,0,1);
-      vCh=Math.max(vCh,clamp(boil*clamp(s.n*pw/fRing,0,2.5)*0.5,0,1));
-      s.nVt[k]=vCh;
-
-      /* UO2 melts at about 3120 K. Past that the pellet is a puddle and its
-         "temperature" stops being a number the plant can act on, so the
-         correlation is capped there rather than being allowed to report the
-         six thousand kelvin that dividing by a dry channel produces. */
-      const TfT=Math.min(3200, s.nTc[k]+320*P.condK*((s.n*0.935+s.decay)*pw/pk2)/fRing
-                *(1+4.0*s.nV[k]));
-      s.nTf[k]+=(TfT-s.nTf[k])*dt/4;
+      /* THE PELLET IS A HEAT BALANCE. Power in, film out, and the film
+         collapses when the node goes dry - so a dry node has nowhere to put
+         its heat and climbs on its own heat capacity until it melts, which is
+         the real accident and was not reachable at all while a cap and a floor
+         stood between the two. The clamp is numerical headroom well past melt,
+         not a modelling choice. */
+      const film=film0*(1-clamp(s.nV[k],0,1));
+      s.nTf[k]=clamp(s.nTf[k]
+        + (qhat*pw - film*(s.nTf[k]-s.nTc[k]))*dt/XTAU_F, 0, 6000);
 
       /* local xenon on local flux. A node running hard burns its own poison
          away while a quiet one keeps making more, and the difference is a
@@ -406,26 +478,15 @@ function coreStep(s,dt,feff,heat,sat,vLeak,mflux){
     }
   }
 
-  /* The field decides WHERE steam is; the 0-D correlation still decides HOW
-     MUCH, because that is the number every trip, alarm and coefficient in
-     this plant was calibrated against. A lumped core treats the whole volume
-     as sitting at hot-leg temperature, which a real one never does, so the
-     raw field always averages lower - scale it back onto the calibrated mean
-     and the shape survives with the magnitude intact. The pin is by volume,
-     because s.vf is a volume average and every threshold reads that. */
-  { const Th=s.Tavg+15*heat;
-    const vLump=clamp(clamp((Th-(sat-3))/14,0,1)
-                *clamp(heat/Math.max(feff,.10),0,2.5)*0.5,0,1);
-    let raw=0; for(let k=0;k<XNN;k++) raw+=nodeW[k]*s.nVt[k];
-    const sc=raw>1e-4 ? clamp(vLump/raw,0,6) : (vLump>1e-4?6:0);
-    for(let k=0;k<XNN;k++){
-      /* A void fraction is a fraction: a node can be all steam and no more.
-         vLeak runs past 1 on purpose - s.vf uses the overshoot to say HOW far
-         past empty the loop is - but the node field is a real fraction, and
-         letting 3.8 through here multiplied fuel temperature by seventeen. */
-      const vT=clamp(Math.max(Math.min(s.nVt[k]*sc,1),vLeak),0,1);
-      s.nV[k]+=(vT-s.nV[k])*dt/1.5;
-    }
+  /* THE RESCALE IS GONE. s.vf was a 0-D correlation with the field's shape
+     painted on it (sc = vLump/raw); it is the volume-weighted mean of a real
+     field now, and so is nothing else. A void fraction is still a fraction -
+     vLeak runs past 1 on purpose, so s.vf can say HOW far past empty the loop
+     is, but a node cannot be more than all steam. The 1.5 s lag stays: that is
+     transport, not calibration. */
+  for(let k=0;k<XNN;k++){
+    const vT=clamp(Math.max(s.nVt[k],vLeak),0,1);
+    s.nV[k]+=(vT-s.nV[k])*dt/1.5;
   }
 
   coreSolve(P,s.phi,s.nRho);
@@ -454,7 +515,8 @@ function coreStep(s,dt,feff,heat,sat,vLeak,mflux){
   /* The hot channel is what burns out, not the core average - and burnout is a
      question of how fast the water is moving past the pin, not of how much heat
      left the loop. Those two are the same number while the pumps are running and
-     nothing like it once they stop, so this reads mass flux, never feff. */
+     nothing like it once they stop, so this reads mass flux, never the
+     enthalpy rise. */
   s.hotFlow=Math.max(mflux*s.chW[s.hotRing],0.02);
   return o;
 }

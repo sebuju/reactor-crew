@@ -42,12 +42,20 @@ const NET_EPS = 1e-9;
 // what makes the rest of that block's internal flows (e.g. a head source
 // between two nodes that are floating together) solve correctly instead of
 // silently discarding half the block's history.
-function netFactor(A, n){
+// WHICH NODES THE GUARD BELOW HAD TO DECOUPLE, and it is worth handing back
+// rather than throwing away: a node with no remaining path to ground gets an
+// arbitrary potential out of the solve, and a caller that PRINTS potentials
+// has to know that so it can print nothing instead. Shut a valve in the steam
+// line and the turbine inlet is exactly this case - measured, it read 15.5 MPa
+// on a pipe full of steam, which is a plausible-looking wrong number and the
+// worst kind. Index is node index; allocated once per factorisation.
+function netFactor(A, n, deg){
   for(let k=0;k<n;k++){
     const d = A[k*n+k];
     if(!(d > NET_EPS)){
       A[k*n+k] = 1;
       for(let j=k+1;j<n;j++){ A[k*n+j]=0; A[j*n+k]=0; }
+      if(deg) deg[k] = 1;
       continue;
     }
     for(let i=k+1;i<n;i++){

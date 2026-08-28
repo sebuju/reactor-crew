@@ -538,6 +538,22 @@ const turbPiped=()=>{ const ids=LAY.parts.filter(p=>p.role==="turb").map(p=>p.id
 const sgSteams=id=>{ const sh=shellFaces().find(s=>s.id===id);
   if(!sh) return true;                       // no shell to ask of: not a machine this gates
   const c=secCircuitOf(id,[id+sh.steam]); return c.turb&&c.sink; };
+/* WHICH SHELLS A PART IS EXPOSED TO, off the drawing and never stored - the
+   question a relief valve on the secondary has to be able to ask, because
+   which pressure it lifts on is where it was PLACED.
+   Walked with every shell cut at its FEED end, the same cut secCircuitOf()
+   makes and for the same reason: the secondary is a loop, so an uncut walk
+   comes back round the feedwater train and a valve on the condensate line
+   reads as though it were sitting on the steam header.
+   Empty means the part is on the primary, or on the cold side of the
+   secondary - and a relief valve there is protecting nothing that is boiling. */
+function shellsOf(pid){
+  const G=nodeGraph(), cut={}, out=[];
+  for(const sh of shellFaces()) cut[sh.id+sh.feed]=1;
+  for(const n of (G.nodesOf[pid]||[]))
+    for(const g of secGensFromNode(n,cut)) if(out.indexOf(g)<0) out.push(g);
+  return out;
+}
 // which loop a PART pools capacity with, or null if the walk
 // above never reaches it from any generator - never read as "is it plumbed
 // at all" (netBuild()'s own port-usage check answers that, off net.usage).
@@ -1524,6 +1540,11 @@ function layoutMetrics(){
      neither side of the plant. */
   const turbConn  = turbPiped();
   const sgNoSteam = P_.filter(p=>p.role==="sg" && !sgSteams(p.id)).map(p=>p.id);
+  /* A SHELL WITH NO RELIEF PATH. There is no invisible lid on this plant: a
+     generator that cannot get rid of the steam it is raising bursts, so
+     whether anything is fitted to take it is a design question and belongs on
+     the bench. Off the drawing, like every other warning here. */
+  const sgNoRelief = P_.filter(p=>p.role==="sg" && !reliefsOnShell(p.id)).map(p=>p.id);
   const feedNoSg  = P_.filter(p=>roleHead(p.role) && !primaryPump(p.id)
                                  && !secGensOf(p.id).length).map(p=>p.id);
   /* Metres above the core, per TANK - measured, not a clamped multiplier on
@@ -1555,7 +1576,7 @@ function layoutMetrics(){
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
   BANDS=bands0;
-  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,feedNoSg,tankZ,injZ:injZ===null?0:injZ,radK,peak,
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,feedNoSg,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
 }
