@@ -265,20 +265,26 @@ const secLoad = (s, id) => {
   const n = Object.keys(s.sgShare).length, w = s.sgShare[id];
   return (n>0 && w!==undefined) ? l*n*w : l;
 };
+/* ══ ONE SATURATION CURVE, PER FLUID, NOT PER SIDE ══
+   The same power law was written twice with different anchors. A curve is
+   {p0,T0,n} plus the floor its own argument is clamped at; a fluid owns one.
+   The primary's rides the architecture (P.sat, built in commission()) because
+   its anchor moves with D.pdes; water's is a constant and lives here. */
+const satT = (c,p) => c.T0*Math.pow(Math.max(p,c.pFloor)/c.p0, c.n);
+const satP = (c,T) => c.p0*Math.pow(Math.max(T,c.TFloor)/c.T0, 1/c.n);
+
 /* ══ THE SECONDARY IS WATER, WHATEVER THE PRIMARY IS ══
-   tsat()/psat() in step.js is the PRIMARY coolant's curve, anchored on that
-   architecture's own boiling point - sodium at 1150 K, salt at 1700 K. The
-   shell is full of water on every plant, so it gets its own curve, anchored on
-   the stock secondary: saturated steam at 6.9 MPa is 558 K, same 0.10 exponent
-   the primary curve uses. It inverts in one line, which is what lets the shell
-   be a pot: temperature in, pressure out.
+   The PRIMARY curve is anchored on that architecture's own boiling point -
+   sodium at 1150 K, salt at 1700 K. The shell is full of water on every plant,
+   so it gets its own anchors: saturated steam at 6.9 MPa is 558 K. It inverts,
+   which is what lets the shell be a pot: temperature in, pressure out.
    The exponent is fitted across the range this plant actually uses rather than
    copied off the primary curve: 6.9 MPa/558 K and 0.01 MPa/319 K are both real
    steam-table points, and 0.10 could not hold both - it put a condenser under
    vacuum at 290 K, which is colder than the river it rejects into. */
-const SEC_P0=6.9, SEC_T0=558, SEC_N=0.0855;
-const tsatSec = p => SEC_T0*Math.pow(Math.max(p,1e-4)/SEC_P0,SEC_N);
-const psatSec = T => SEC_P0*Math.pow(Math.max(T,1)/SEC_T0,1/SEC_N);
+const SAT_WATER = {p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1};
+const tsatSec = p => satT(SAT_WATER, p);
+const psatSec = T => satP(SAT_WATER, T);
 
 /* THE FALLBACK ONLY. A shell with a temperature of its own is a saturated pot
    and secP() reads that; this is what a caller with no live S gets - the design

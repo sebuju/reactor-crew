@@ -43,6 +43,7 @@ function commission(){
      Ahead of the network below, not after it: rhoAt() measures density about
      this temperature, and netCoreFrac0() solves the plant before this
      function returns. */
+  P.sat   = {p0:P.P0, T0:P.tsat0, n:a.satN, pFloor:.05};  // this coolant's saturation curve
   P.Tref  = Math.min(583, P.tsat0-35);                 // coolant program temp, subcooled by design
   /* The pipe network: netFlowK() (pipenet.js) is what feeds pumpK below now,
      not a capacity-counting formula. netRef is the valves-shut (as
@@ -1032,7 +1033,7 @@ const DEC_L=[.0994,.00477,4.11e-4,2.19e-5];     // 1/s
    So the trim walks at the bank rate divided by that span - derived, not typed,
    or the two drift apart the next time the span is retuned. */
 const TILT_RATE=ROD_RATE/XTILTZ;
-const tsat=p=>P.tsat0*Math.pow(Math.max(p,.05)/P.P0,.10);
+const tsat=p=>satT(P.sat,p);
 /* The coolant temperature programme: where T-avg is meant to sit for the load
    the turbine is drawing. One function, because the rod controller walks to it,
    the steam dump trims to it, the TAVG DEV tile judges against it and the panel
