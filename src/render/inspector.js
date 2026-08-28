@@ -186,19 +186,45 @@ function paramsFor(p){
      this panel (they are a gang, dbRailBuild()) and there is exactly one plan,
      with every pen on it. Two boxes on the plant, one panel - clicking either
      brings this up. */
+  /* ══ BUY, START FROM, DRAW, READ, FIT THE DRIVES, VERDICT ══
+     The old order had you drawing before you had chosen what you were drawing
+     with, presets UNDER the drawing they are meant to seed, and materials in
+     three different places. Every block below is the same block it was; only
+     the order changed, and blockSig() keys the rail's rebuild on kind+title so
+     reordering costs nothing. */
   if(id==="core"){
     B.gang="reactor"; B.gangPlain=true;
-    B.push({kind:"latplan"});
-    B.push({kind:"lattools",tools:LATPEN_CORE.concat(LATPEN_RODS)});
-    B.push({kind:"latdimrack"});
-    opt("REACTOR TYPE","The coolant and moderator family. Sets power density, operating pressure, grace time and the sign of the void coefficient. It also decides how much heat a given lattice makes: the same assemblies rate differently in a different family.","arch",ARCH);
+    B.push({kind:"rule",title:"MATERIALS",
+      tip:"Everything the core is MADE of, in one place. None of it is a shape - what you draw with these is the next block down."});
+    opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.","cool",COOLANT);
     opt("FUEL","Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density.","fuel",FUEL);
-    B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(i)}))});
-    B.push({kind:"readlist",rows:()=>LATREAD.map(r=>[r[0],r[1](),null,r[2]])});
-    B.push({kind:"rule",title:"ROD DRIVES",
-      tip:"The control rod drive mechanisms, bolted to the vessel head. Everything below this line belongs to them, not to the fuel: what drives the clusters in, what they are made of, and how the banks are grouped. They ride on the head and move with the reactor, which is why they share this panel."});
-    opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
+    opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.","mod",MODER);
+    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.","refl",LATREFL);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
+    B.push({kind:"rule",title:"START FROM",
+      tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself."});
+    B.push({kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>archPreset(i)}))});
+    B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(i)}))});
+    B.push({kind:"bulkrow",label:"SPREAD",items:[1,2,3,4].map(n=>({name:String(n),
+      tip:"Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
+        (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
+            :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
+      fn:()=>{ latLayBanks(n); latRevolve(); }}))});
+    B.push({kind:"rule",title:"DRAW",
+      tip:"One pen bar governing two canvases: the PLAN is the core looking down, the SECTION is the same core in elevation. Everything about the shape of this reactor is drawn on one of them."});
+    B.push({kind:"lattools",tools:LATPEN_CORE.concat(LATPEN_RODS,LATPEN_SEC)});
+    B.push({kind:"latplan"});
+    B.push({kind:"latsection"});
+    B.push({kind:"rule",title:"MEASURED",
+      tip:"Every number on this list is an OUTPUT of the drawing above. Not one of them is a value you can set - if you want one of them to move, move the drawing."});
+    /* ONE list, one mapper. LATREAD and LATREAD_RODS carry the same four
+       columns, so a row can move between them without changing shape. */
+    B.push({kind:"readlist",rows:()=>LATREAD.concat(LATREAD_RODS)
+      .map(r=>[r[0],r[1](),r[3]?r[3]():null,r[2]])});
+    B.push({kind:"rule",title:"ROD DRIVES",
+      tip:"The control rod drive mechanisms, bolted to the vessel head. Everything below this line belongs to them, not to the fuel: what drives the clusters in, and how they are worked. They ride on the head and move with the reactor, which is why they share this panel."});
+    opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
+    opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
     tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. It only ever drives the bank inside the travel band you set below; you can always override it.","autorod",26);
     /* THE BAND THE CONTROLLER WORKS IN, as two handles rather than two
        constants. AUTOSYS.rod's own tooltip has always promised "the travel
@@ -211,21 +237,14 @@ function paramsFor(p){
     B.push({kind:"slider",title:"AUTO ROD IN LIMIT",key:"arHi",min:0,max:1,step:.01,
       when:()=>D.autorod, fmt:v=>(v*100).toFixed(0)+" %",
       tip:"The furthest IN the controller may drive the bank on its own. Deeper insertion buys it more authority and costs thermal margin, because a deep bank peaks the power. Set it at or below the out limit and the band closes to nothing, which parks the controller where it stands."});
-    opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
     B.push({kind:"sdmnote"});
-    B.push({kind:"bulkrow",label:"SPREAD",items:[1,2,3,4].map(n=>({name:String(n),
-      tip:"Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
-        (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
-            :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
-      fn:()=>{ latLayBanks(n); latRevolve(); }}))});
-    B.push({kind:"readlist",rows:()=>LATREAD_RODS.map(r=>[r[0],r[1](),r[3]?r[3]():null,r[2]])});
   }
   /* No blocks of its own: every one of them is on the reactor panel above,
      and this marks the drives as the second member of that gang so clicking
      the drives on the plant brings the same panel up. */
   else if(id==="rods"){ B.gang="reactor"; B.gangPlain=true; }
   else if(id==="pzr"){
-    sld("DESIGN PRESSURE","Loop pressure as a multiple of this coolant's nominal. Higher raises the boiling point, so it buys thermal margin and resists voiding, but the vessel gets much heavier and a breach more violent.","pdes",.7,1.25,v=>(v*ARCH[D.arch].P0).toFixed(1)+" MPa",.05,v=>(v-0.7)*220);
+    sld("DESIGN PRESSURE","Loop pressure as a multiple of this coolant's nominal. Higher raises the boiling point, so it buys thermal margin and resists voiding, but the vessel gets much heavier and a breach more violent.","pdes",.7,1.25,v=>(v*COOLANT[D.cool].P0).toFixed(1)+" MPa",.05,v=>(v-0.7)*220);
     sld("PRESSURIZER VOLUME","Size of the steam bubble. A big pressurizer damps pressure swings so the relief valve rarely lifts. A small one is light but pressure whips around on every load change.","pzr",.5,2,v=>v.toFixed(2)+" x",.05,v=>(v-0.5)*45);
     note("Pressure is what keeps the rest of the loop liquid. Every design choice here trades vessel mass against how much boiling margin you carry.");
   }
@@ -259,7 +278,7 @@ function paramsFor(p){
         :"Piped to nothing that reaches a core or a generator. It develops its own head and pools capacity with nobody - draw a run from it, or right-click the plant to remove it.");
   }
   else if(p.role==="turb"){
-    sld("TURBINE SIZE","How many stages the machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.","turb",0,1,v=>(ARCH[D.arch].eff*(0.92+0.16*v)*100).toFixed(1)+" % gross",.05,v=>v*50);
+    sld("TURBINE SIZE","How many stages the machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.","turb",0,1,v=>(COOLANT[D.cool].eff*(0.92+0.16*v)*100).toFixed(1)+" % gross",.05,v=>v*50);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
       ["RATED OUTPUT",(D.power*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
       ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room. Overpower is not free reach: it is turbine you paid mass for."]]; }});
@@ -364,7 +383,7 @@ function paramsFor(p){
    on the valve's own control strip (ctlFor(), plant.js). */
 function paramsForFit(fid){
   const B=[], j=D.fittings[fid]; if(!j) return B;
-  const P0=ARCH[D.arch].P0*D.pdes;
+  const P0=COOLANT[D.cool].P0*D.pdes;
   const MODE_IDS=["tee","throttle","relief"];
   B.push({kind:"optlist",title:"FITTING",base:0,
     key:{get:()=>MODE_IDS.indexOf(j.mode), set:i=>{ j.mode=MODE_IDS[i]; }},
