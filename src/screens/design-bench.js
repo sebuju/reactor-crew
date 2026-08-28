@@ -595,7 +595,7 @@ function latSection(x,y,w,h){
   fitTxt(hov(wd)||hov(hw)
       ? "LEN "+LAT.len.toFixed(2)+" m  H/D "+D.hd.toFixed(2)+
         "  RIM "+LAT.reflR+"  LID "+LAT.reflT+"  FLOOR "+LAT.reflB
-      : "ELEVATION / DRAG THE TOP FOR LENGTH, PAINT THE FACES",
+      : "ELEVATION / DRAG TOP, PAINT FACES",
     gx,gy+gh+11,gw,{size:6.5,sp:.3,color:hov(wd)||hov(hw)?C.amber:C.ink2});
 }
 const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, and how many cells of reflector are packed on the rim, the lid and the floor. Use the LENGTH pen and drag the top of the column; use the REFLECTOR pen and click a cell outside a face to pack it out to there, SHIFT to lift it back. Core H/D is what the two canvases make between them.";
