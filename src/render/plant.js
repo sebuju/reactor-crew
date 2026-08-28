@@ -1125,7 +1125,7 @@ function drawPortMarks(){
     if(!piped) drawNozzle(x,y,f==="l"||f==="r",1,col);
     const wd=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid});
     if(hov(wd)) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
-    const word = IN ? (port.m || IN.na) : null;
+    const word = portWord(p,f);
     const wk=p.id+f+word;
     /* A PLATE UNDER THE WORD. It is drawn in the same margin the pipework runs
        through, so on a dense grid it landed on top of a pipe and read as part
@@ -1139,7 +1139,7 @@ function drawPortMarks(){
     const nm=partName(p), longWord=IN&&portWord(p,f,true);
     TIP(bx,by,PORTG,PORTG, (longWord?longWord+" - ":"")+nm,
       (piped? "A pipe is landed on it. " : "Nothing is piped to this port yet. ")+
-      "Click to take it away."+(IN?" Right-click to change which side of "+nm+" this is.":""));
+      "Click to take it away."+(IN?" Which side of "+nm+" it is on is the FACE it stands beside, so move it by taking it away and placing it on the other face.":""));
   }
 }
 /* ══ THE RUN NOW BEING DRAGGED ══

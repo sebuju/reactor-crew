@@ -875,16 +875,33 @@ function pipeDamage(L){
     fillRect(r.x+2,r.y+2,r.w-4,r.h-4,C.red);
   }
 }
-/* EVERY PIPE CELL NO CONNECTION CLAIMS. Dashed and dead-coloured, because it
-   is pipe that is really there and really carries nothing - a cell laid into
-   thin air, or a run whose two ends butt rather than join. */
+/* EVERY PIPE CELL NO CONNECTION CLAIMS, AND WHICH WAY IT OPENS. Dead-coloured,
+   because it is pipe that is really there and really carries nothing - a cell
+   laid into thin air, or a run whose two ends butt rather than join. The box
+   alone said only THAT it carries nothing, so the one question the player then
+   has - which way is this thing pointing, and is that why it will not join -
+   had no answer on screen and the wheel looked inert. The path is drawn from
+   the same PIPE_SHAPE rows the trace walks, so the picture cannot disagree
+   with what pipeExit() thinks the cell is. */
 function pipeLoose(L){
   const own=pipeMap().cellOwner;
-  ctx.save(); ctx.setLineDash([3,3]); ctx.strokeStyle=C.ink2; ctx.lineWidth=1.5;
+  ctx.save(); ctx.strokeStyle=C.ink2; ctx.lineCap="butt"; ctx.lineJoin="round";
   for(const k in D.pipes){
     if(own[k]) continue;
-    const i=k.indexOf(","), r=grect(+k.slice(0,i), +k.slice(i+1), 1, 1);
-    ctx.strokeRect(r.x+3,r.y+3,r.w-6,r.h-6);
+    const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
+    const cell=D.pipes[k], sh=PIPE_SHAPE[cell.s];
+    const r=grect(x,y,1,1), cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
+    if(sh){ ctx.lineWidth=3;
+      for(const pr of sh.paths){
+        const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
+        ctx.beginPath();
+        ctx.moveTo(cx+DIRV[a][0]*h, cy+DIRV[a][1]*h);
+        ctx.lineTo(cx,cy);
+        ctx.lineTo(cx+DIRV[b][0]*h, cy+DIRV[b][1]*h);
+        ctx.stroke();
+      } }
+    ctx.save(); ctx.setLineDash([3,3]); ctx.lineWidth=1.5;
+    ctx.strokeRect(r.x+3,r.y+3,r.w-6,r.h-6); ctx.restore();
   }
   ctx.restore();
 }
