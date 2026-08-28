@@ -396,16 +396,16 @@ function recHead(){
    loudly and visibly, because the alternative is a verdict about a plant you
    did not design, which is the worst thing this feature could possibly do.
 
-   D.run (Stage 3a's CONNECT/DISCONNECT, layout.js's addRun()/removeRun()) is
-   NOT part of that gap - it rides the `D: snapVal(D)` line above exactly like
-   D.fittings and D.tanks do, because it lives on D rather than in
-   placedParts. What it does NOT do is go through act(): addRun()/removeRun()
-   are called straight from the context menu, the same as addFitting() and
-   removePart() already are, so a connect or a disconnect is not a recorded, scrubbable INPUT on
-   the tape - a replay only ever sees it because the head it started from
-   already had it, never at the tick the player actually made it. Giving D
-   edits their own place in ACT is real work nobody has asked for in this
-   pass; this states the gap rather than papering over it. */
+   D.pipes, D.ports and D.start are NOT part of that gap - they ride the
+   `D: snapVal(D)` line above exactly like D.fittings and D.tanks do, because
+   they live on D rather than in placedParts. What they do NOT do is go through
+   act(): laying a pipe, placing a port and moving a bench control are design
+   edits, the same as addFitting() and removePart() already are, so none of
+   them is a recorded, scrubbable INPUT on the tape - a replay only ever sees
+   them because the head it started from already had them, never at the tick
+   the player actually made the edit. Giving D edits their own place in ACT is
+   real work nobody has asked for; this states the gap rather than papering
+   over it. */
 function recApplyHead(h){
   Object.assign(D, snapVal(h.D));
   LAT.slot.set(h.lat.slot); LAT.rod.set(h.lat.rod);

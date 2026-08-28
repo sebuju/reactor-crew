@@ -156,13 +156,19 @@ function commission(){
    these can be switched off from the panel, including the ones that only ever
    help you. Each system is mounted on exactly one component, and that is where
    its bypass switch is drawn. */
+/* WHETHER A SYSTEM WAS FITTED IS A DESIGN QUESTION, so it must be answerable
+   with no commissioned plant at all - the bench draws these switches too now
+   (a bypass is a STARTING POSITION, see D.start). P is the commissioned copy
+   of exactly these D fields, so it is preferred when there is one and D is the
+   fallback, the same standing secPTarget() has for a caller with no live S. */
+const autoCfg = () => P || D;
 const AUTOSYS={
   rps:{part:"ctrl",label:"RPS",ann:"RPS BYPASS",name:"PROTECTION SYSTEM",
-    fit:()=>P.rps,
+    fit:()=>autoCfg().rps,
     tip:"Reactor Protection System. Armed, it scrams the core on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core.",
     warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
   rod:{part:"rods",label:"AUTO ROD",ann:"ROD AUTO BYP",name:"AUTOMATIC ROD CONTROL",
-    fit:()=>P.autorod,
+    fit:()=>autoCfg().autorod,
     tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band the rod drives were commissioned with - widen that band at the design bench and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
     warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
   /* Not hosted on the pressurizer. The pressurizer has not owned a relief
@@ -221,7 +227,7 @@ const AUTOSYS={
     tip:"Holds each steam generator at its own level setpoint by throttling its feed regulating valve. Bypass it and the valves stop where they are - you feed by hand, on the pump's own demand.",
     warn:"Feedwater is on manual. Every regulating valve is frozen where it stands and the generators will drift off setpoint."},
   bkp:{part:"bkp",label:"BACKUP",ann:"BACKUP PWR BYP",name:"BACKUP POWER",
-    fit:()=>P.backup>0,
+    fit:()=>(P?P.backup:D.bkp)>0,
     tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
     warn:"The backup supply will not pick up the pumps. A blackout now leaves natural circulation only."},
 };
@@ -557,23 +563,25 @@ const dmgFx = id => {
 function combatHit(id){
   const s=S;
   const canHit = q => q.grp!=="shield" && fitted(q) && !s.dmgParts.includes(q.id);
-  const canHitRun = key => !s.dmgParts.includes("pipe:"+key);
   let p;
   if(id!==undefined && id!==null){
-    /* a run is named "pipe:"+its own net key, never a raw key on its own -
+    /* a pipe cell is named "pipe:"+x+","+y, never a raw cell key on its own -
        so an id that names a fitting or a component can never accidentally
-       resolve as a run, and vice versa */
+       resolve as a pipe, and vice versa */
     if(typeof id==="string" && id.indexOf("pipe:")===0){
-      const key=id.slice(5);
-      if(!P.net.byKey[key] || !canHitRun(key)) return;
-      p=pipePart(key);
+      if(s.dmgParts.includes(id)) return;
+      p=dmgPart(id);
+      if(!p) return;
     } else {
       p=LAY.parts.find(q=>q.id===id);
       if(!p||!canHit(p)) return;
     }
   } else {
     const parts=LAY.parts.filter(canHit);
-    const runs=hittableRunKeys(P.net).filter(canHitRun).map(pipePart);
+    /* ONE TARGET PER PIPE CELL. A longer run really is more exposed pipe for a
+       stray round to find, and that survives BETTER than it did: a long
+       connection is literally more targets rather than one fatter one. */
+    const runs=pipeCellIds().filter(k=>!s.dmgParts.includes(k)).map(dmgPart).filter(Boolean);
     const targets=parts.concat(runs);
     if(!targets.length) return;
     /* the layout talking, part and run alike: a cell on the hull edge is
@@ -869,7 +877,7 @@ const ratedSteam=()=>P.rated*1000/H_FG;
    same number - the rule every other run already keeps. */
 const steamScale=k=>k==="exh" ? ratedSteam() : ratedSteam()/Math.max(1,sgCount());
 /* ══ WHICH WAY ALONG THE PIPE THE STEAM ACTUALLY GOES ══
-   A run's key names its two ends in a CANONICAL order (addRunPorts sorts by
+   A run's key names its two ends in a CANONICAL order (pipeMap() sorts by
    part id, then face) so the key is the same string whichever end a hand drew
    from. That order is not the flow order and has no reason to be: "cond" sorts
    before "turb", so the exhaust's canonical direction is condenser to turbine
@@ -1035,19 +1043,23 @@ const tsat=p=>P.tsat0*Math.pow(Math.max(p,.05)/P.P0,.10);
    keep following it. */
 const tProg=s=>P.Tref-18 + ((s.scrammed && autoLive("runback")) ? 0 : 18*s.load);
 
+/* ONE PUMP'S OWN STARTING SPEED. A coolant pump answers the plant-wide lever,
+   so the bench sets one number for all of them; any other pump answers only
+   for itself - the same two spans ctlFor()'s own slider already has. */
+const pumpStart = id => primaryPump(id) ? startOf("flowDem",1) : startOf(id+":pumpDem",1);
 function resetPlant(){
-  const x0=RODX0;
+  const x0=startOf("rodCommon",RODX0);
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
-     load:1,loadDem:1,flowNet:1,P:P.P0,lvl:54,inv:100,
+     load:startOf("loadDem",1),loadDem:startOf("loadDem",1),flowNet:1,P:P.P0,lvl:54,inv:100,
      /* ONE DEMAND AND ONE ACTUAL PER PUMP, keyed by part id like s.sglBy and
         s.tank[id] - REFILLED by step(), never rebuilt. There is one pump role
         now, so one global speed would be the odd control out: what a coolant
         pump is told and what a feedwater pump is told are different orders to
         different machines that happen to share a role. Demand starts equal to
         actual, which is the rule every actuator on this plant owes. */
-     flowBy:Object.fromEntries(pumpIds().map(id=>[id,1])),
-     flowDemBy:Object.fromEntries(pumpIds().map(id=>[id,1])),
+     flowBy:Object.fromEntries(pumpIds().map(id=>[id,pumpStart(id)])),
+     flowDemBy:Object.fromEntries(pumpIds().map(id=>[id,pumpStart(id)])),
      /* one level per generator, keyed by part id like s.sgtrBy - REFILLED by
         step(), never rebuilt, so a renderer may hold it across frames */
      sglBy:Object.fromEntries(sgIds().map(id=>[id,SGL_SET])),
@@ -1093,17 +1105,17 @@ function resetPlant(){
      reliefOpen:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      reliefAuto:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      reliefStuck:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
-     reliefBlocked:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
+     reliefBlocked:Object.fromEntries(reliefFitIds().map(k=>[k,!!startOf(k+":porvBlock",false)])),
      reliefArm:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
      /* per-valve arming, seeded for RELIEF fittings only - a throttle has no
         automatic behaviour to defeat, and a phantom key here is a
         phantom key in every snapshot taken from now on. */
-     porvByp:Object.fromEntries(reliefFitIds().map(k=>[k,false])),
+     porvByp:Object.fromEntries(reliefFitIds().map(k=>[k,!!startOf(k+":porvByp",false)])),
      dmg:0,fatigue:0,dnbr:P.dnbr0,rho:0,voidTh:0,cav:0,vf:0,
      /* the groups start in equilibrium with commissioning power, or the plant
         would spend its first minutes breeding heat it should already have */
      dec:DEC_A.map(a=>a*P.n0), decay:DEC_A.reduce((t,a)=>t+a,0)*P.n0,
-     byp:Object.fromEntries(AUTOKEYS.map(k=>[k,false])),
+     byp:Object.fromEntries(AUTOKEYS.map(k=>[k,!!startOf("byp:"+k,false)])),
      breach:false,melt:false,trip:"",
      ev:{}, blackout:false, nat:0, release:0,
      /* EVERY tank, four plain objects keyed by tank id - so snapVal() takes
@@ -1118,9 +1130,9 @@ function resetPlant(){
                     not reseat, and what was in the tank is on the floor.
           tankOver  what it is spilling past full, kg/s - a readout */
      tank:Object.fromEntries(tankIds().map(k=>[k,D.tanks[k].level])),
-     tankOpen:Object.fromEntries(tankIds().map(k=>[k,false])),
-     tankDump:Object.fromEntries(tankIds().map(k=>[k,false])),
-     tankByp:Object.fromEntries(tankIds().map(k=>[k,false])),
+     tankOpen:Object.fromEntries(tankIds().map(k=>[k,!!startOf(k+":tankOpen",false)])),
+     tankDump:Object.fromEntries(tankIds().map(k=>[k,!!startOf(k+":tankDump",false)])),
+     tankByp:Object.fromEntries(tankIds().map(k=>[k,!!startOf(k+":tankByp",false)])),
      burstBy:Object.fromEntries(tankIds().map(k=>[k,false])),
      tankOver:{},
      /* what each tank's own edge is carrying, % of loop inventory per second,
@@ -1145,9 +1157,9 @@ function resetPlant(){
         all (valveLeq(1) is exactly 0), so a spliced valve nobody touches
         moves no pinned figure. */
      valve:Object.fromEntries(Object.keys(P.fittings).filter(k=>P.fittings[k].mode==="throttle")
-       .map(k=>[k, fitTies(k)?0:1])),
+       .map(k=>[k, startOf(k+":valve", fitTies(k)?0:1)])),
      valveDem:Object.fromEntries(Object.keys(P.fittings).filter(k=>P.fittings[k].mode==="throttle")
-       .map(k=>[k, fitTies(k)?0:1])),
+       .map(k=>[k, startOf(k+":valve", fitTies(k)?0:1)])),
      arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
@@ -1230,6 +1242,17 @@ function resetPlant(){
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
   coreReset(S);
+  /* THE PER-BANK STARTING POSITIONS, after coreReset() - that is what
+     allocates the P.NB-sized arrays, so nothing bank-shaped can be seeded
+     before it. Each falls back to the common position, so an untouched design
+     is bit-identical to the ganged plant this replaces. */
+  for(let b=0;b<P.NB;b++){
+    S.rodZ[b] = S.rodZDem[b] = startOf("rodBank:"+b, x0);
+    S.bankAuto[b] = !startOf("bankAuto:"+b, false);
+  }
+  { let m=0; for(let b=0;b<P.NB;b++) m+=S.rodZ[b];
+    S.rodPos = S.rodDem = m/P.NB; }
+  S.tilt = S.tiltDem = startOf("tiltDem",0);
   S.boron = S.boron0 = -(P.excess+coreRodWorth(S)-P.KXE*P.X0);
   S.boronDem = S.boron;                 // start on demand, or it walks off commissioning
   /* THE SIM DOES NOT REQUIRE A DISPLAY. pipeReset()/fxReset() clear the pipe
@@ -1248,7 +1271,9 @@ function step(dt){
   /* Settle the node graph for this tick and hold it. Nothing below redraws the
      plant, and ~85 readers ask for it - see nodeGraph(), layout.js. The hold is
      dropped on the last line of this function, so it never outlives the tick. */
-  nodeGraphHold(false); nodeGraph(); nodeGraphHold(true);
+  nodeGraphHold(false); pipeMapHold(false);
+  pipeTrace(); pipeMap(); nodeGraph();
+  nodeGraphHold(true); pipeMapHold(true);
 
   /* ── control rods ──
      T-avg error alone is two integrations away from rod position, so on a
@@ -1609,7 +1634,7 @@ function step(dt){
        toward containment - the SAME anchor a real break already uses, and
        deliberately the same approximation rather than a saturation curve the
        tick does not carry (see the plan in docs/). It is reachability, not a
-       D.run lookup, so shutting every valve between the core and the vessel is
+       stored run list, so shutting every valve between the core and the vessel is
        exactly as disconnected as cutting the line. Level already behaved:
        netExpSurge() has always returned zero with no surge line. */
     const pzrOn = pzrLive(P.net, s);
@@ -2402,7 +2427,7 @@ function step(dt){
      turning while the sim is paused, and would not replay. Driven by LOAD -
      the pumps answer flow, the turbine answers the draw. */
   s.spinT=(s.spinT+360*dt*Math.min(s.load,1.5))%360;
-  nodeGraphHold(false);
+  nodeGraphHold(false); pipeMapHold(false);
 }
 /* One pressure colour, for every readout that shows pressure. Both thresholds are
    the annunciator's own, so a gauge can never disagree with the alarm beside it:
