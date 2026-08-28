@@ -1630,9 +1630,10 @@ function layoutMetrics(){
   let head=0, n=0;
   for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
-  let pipe=0, sec=0, dead=0;
+  let pipe=0, sec=0, dead=0, pmass=0;
   for(const r of pipeNetwork()){
     const L=r.L;
+    pmass += L * runMassPerM(r);
     /* A relief line is a DEAD LEG: it sits shut behind its valve and carries
        no flow until something lifts, so its water is not moving and adds no
        inertia to a loop transient. It still has to be built and hung, so it
@@ -1718,7 +1719,11 @@ function layoutMetrics(){
   for(const q of P_){ const t=q.role==="tank" && D.tanks[q.id];
     if(t && tankSide(q.id)==="primary" && t.check) injZ = injZ===null ? tankZ[q.id] : Math.min(injZ, tankZ[q.id]); }
 
-  const mass = (pipe+sec+dead)*1.6 + P_.filter(p=>p.grp==="shield").length*30;
+  // pmass, not (pipe+sec+dead)*1.6: a metre of pipe is priced by its bore and
+  // by what is inside it (runMassPerM(), pipenet.js), so a low-pressure loop
+  // is lighter and an exotic-alloy one is not. Fitted to leave the stock PWR
+  // exactly where the flat rate had it.
+  const mass = pmass + P_.filter(p=>p.grp==="shield").length*30;
   layMass = mass;
   /* natK is gone. Buoyancy is an edge head in the pipe network now
      (pipenet.js), so the thermosiphon is solved off exactly the geometry

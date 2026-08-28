@@ -32,6 +32,37 @@ const PIPE_BORE = {hot:1, cold:1, surge:.30, hpi:.25, relief:.20, boron:.20};
    directly, or the fallback lives in two places and can disagree. */
 const runBore = r => PIPE_BORE[r.k] !== undefined ? PIPE_BORE[r.k] : 1; // DEFAULT: PIPE_BORE picks a starting bore, never gates an edge's existence
 
+/* WHAT A METRE OF PIPE WEIGHS, and it is a MASS term only - nothing here may
+   ever reach a conductance, or PIPE_K stops cancelling.
+
+   layMass used to charge a flat 1.6 t/m over every run, so a 0.2 MPa sodium
+   line and a 15.5 MPa water line weighed the same and choosing a coolant was
+   free outside the core. It is now length x bore x rate: bore because wall
+   area follows diameter, and rate because pressure and material decide the
+   wall.
+
+   PIPE_WALL_P0 is the wall you build whatever the pressure - a pipe has a
+   minimum schedule for handling, support and thermal shock, so the pressure
+   term is a FLOOR PLUS P0 and never approaches zero. A bare P0 would price
+   an atmospheric loop at a seventy-seventh of a PWR's, which is not a thin
+   wall, it is no pipe at all.
+
+   The SECONDARY is water whatever the primary is (tsatSec(), below), so it is
+   priced at its own fixed rate and a sodium plant's steam lines are ordinary
+   steel. PIPE_MASS_K is fitted ONCE, so the stock PWR's layMass does not
+   move off the flat 1.6 t/m it read before: 23.52 primary metre-bores at
+   21.5 plus 52.27 secondary at 13.0. */
+const PIPE_WALL_P0 = 6;
+const PIPE_MASS_K  = 0.111514;
+const SEC_RATE     = 13.0;
+// every kind that carries the primary coolant. Wider than layoutMetrics()'s
+// `pipe` bucket on purpose: that one asks what is in the LOOP hydraulically,
+// so a shut relief leg is dead there, and it still holds sodium.
+const PRIMARY_K = {hot:1, cold:1, surge:1, hpi:1, relief:1, boron:1};
+const pipeWallK   = c => c.pipeK * (PIPE_WALL_P0 + c.P0);
+const runMassPerM = r => PIPE_MASS_K * runBore(r) *
+  (PRIMARY_K[r.k] ? pipeWallK(COOLANT[D.cool]) : SEC_RATE);
+
 // A coolant pump's developed head at rated speed, in MPa, before
 // loopPumpCap() scales it for what is actually installed. Fitted once and
 // stated as such - the RAD_K / BREAK_K idiom - at the head a real
