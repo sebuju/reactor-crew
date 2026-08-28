@@ -63,7 +63,7 @@ const CH={
 const CHVIEW={
  pwr :{rng:()=>[0,125],                     warn:()=>[(1.10+0.22*P.rpsm)*100]},
  dnbr:{rng:()=>[0,Math.max(3,P.dnbr0*1.3)], warn:()=>[1.30, 1.18-0.16*P.rpsm]},
- tf  :{rng:()=>[300,2000],                  warn:()=>[1500, 1600+280*P.rpsm]},
+ tf  :{rng:()=>[300,Math.max(2000,P.tdmg+700)], warn:()=>[P.tdmg, P.tdmg+100+280*P.rpsm]},
  tavg:{rng:()=>[P.Tref-60,P.Tref+60]},
  th  :{rng:()=>[P.Tref-40,P.Tref+80]},
  tc  :{rng:()=>[P.Tref-80,P.Tref+40]},

@@ -1407,9 +1407,9 @@ function readoutsFor(p,s){
         {dp:2,lim:trip(1.18-0.16*m,"TRIP")}),
       "How far the fuel is from a steam film that stops cooling it. Over 1.30 is comfortable; 1.00 damages fuel.");
     add("FUEL TEMP",s.Tf.toFixed(0)+" K",
-      band(s.Tf,300,2200,[[1500,C.cyan,"NORMAL"],[2200,C.red,"FAILING"]],
-        {dp:0,lim:trip(1600+280*m,"TRIP")}),
-      "Temperature inside the pellets. Past 1500 K the cladding starts to fail, and that damage is permanent.");
+      band(s.Tf,300,Math.max(2200,P.tdmg+700),[[P.tdmg,C.cyan,"NORMAL"],[Math.max(2200,P.tdmg+700),C.red,"FAILING"]],
+        {dp:0,lim:trip(P.tdmg+100+280*m,"TRIP")}),
+      "Temperature inside the pellets. Past "+P.tdmg.toFixed(0)+" K the cladding starts to fail, and that damage is permanent.");
     add("PEAK Fq",s.fq.toFixed(2),
       band(s.fq,1,5,[[3.2,C.cyan,"FLAT"],[5,C.amber,"PEAKED"]],{dp:2}),
       "How much hotter the hottest spot is than the core average. 1.00 is perfectly flat; past 3.2 one channel is doing far too much of the work.");
@@ -1432,7 +1432,7 @@ function readoutsFor(p,s){
       // any damage at all is the bad zone, so the good one is a sliver - the
       // strip saying honestly that this scale has no safe stretch
       band(s.dmg,0,100,[[1e-9,C.cyan,"NONE"],[100,C.red,"CLAD FAILED"]],{dp:0}),
-      "Cladding that has already failed, and it is permanent. It grows whenever DNBR drops under 1.00 or the fuel passes 1500 K.");
+      "Cladding that has already failed, and it is permanent. It grows whenever DNBR drops under 1.00 or the fuel passes "+P.tdmg.toFixed(0)+" K.");
     add.apply(null,rowFat(s));
     R.push({sec:"REACTIVITY"});
     // the picture first, the eight numbers it is a picture OF underneath

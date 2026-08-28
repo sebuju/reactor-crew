@@ -27,7 +27,7 @@ const HELP=[
  ["d","SUBCOOLING","How far the hot leg sits below boiling at current pressure. Your honest inventory indicator: it collapses toward zero before anything else admits the loop is voiding."],
  ["d","PZR LEVEL","Water level in the pressurizer. This gauge can lie. When the core voids, steam pushes water up the surge line and level reads high while the loop empties."],
  ["d","INVENTORY","How much water is actually in the loop. A real plant has no such instrument; it is shown here for training and would be hidden in the shipping build."],
- ["d","FUEL TEMP","Average centreline temperature, driving Doppler feedback. Past 1500 K the fuel takes damage regardless of DNBR."],
+ ["d","FUEL TEMP","Average centreline temperature, driving Doppler feedback. Past the damage temperature of the fuel you picked, it takes damage regardless of DNBR. The FUEL TEMP gauge says where that is."],
  ["h","CONTROLS"],
  ["d","CONTROL BANK","Rod insertion. Fast, but it travels at only 1.2 percent per second, and deep insertion raises power peaking which quietly eats DNBR."],
  ["d","COOLANT PUMPS","Primary flow. Raising it buys thermal margin; dropping it heats the fuel and pushes power down through Doppler."],

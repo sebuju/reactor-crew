@@ -44,7 +44,12 @@ function commission(){
      this temperature, and netCoreFrac0() solves the plant before this
      function returns. */
   P.sat   = {p0:P.P0, T0:P.tsat0, n:a.satN, pFloor:.05};  // this coolant's saturation curve
-  P.Tref  = Math.min(583, P.tsat0-35);                 // coolant program temp, subcooled by design
+  P.Tref  = Math.min(a.Tref, P.tsat0-35);              // coolant program temp, subcooled by design
+  /* Numerical headroom, never behaviour: a clamp a healthy plant can reach is
+     a modelling decision wearing a guard's clothes, and the old flat 500/1000
+     was water's band applied to a salt plant at 922 K. */
+  P.Tmin  = P.Tref - 350;
+  P.Tmax  = P.tsat0 + 400;
   /* The pipe network: netFlowK() (pipenet.js) is what feeds pumpK below now,
      not a capacity-counting formula. netRef is the valves-shut (as
      commissioned), no-damage reference flow every later tick becomes a
@@ -138,7 +143,8 @@ function commission(){
      plant sits on COND_P0 with margin in hand and an undersized one does not. */
   P.hTurb   = H_FG/Math.max(.05, 1-Math.pow(COND_P0/(P.P0*0.45),TURB_GAM));
   P.condUA  = P.rated*1000*(1-P.eff)/Math.max(5, tsatSec(COND_P0)-T_CW)*P.condCap;
-  P.TfRef = P.Tref + 320*P.condK*P.n0/Math.max(P.feff0,.10);
+  P.tdmg  = f.tdmg;
+  P.TfRef = P.Tref + a.dTf*P.condK*P.n0/Math.max(P.feff0,.10);
   P.X0    = (P.gI+P.gX)*P.n0/(P.lamX+P.sig*P.n0);      // xenon equilibrium at that power
   coreConst(P,d);                        // the core as a place: mesh, coupling, rods
   P.dsig = designSig();                 // what this plant was built from
@@ -717,7 +723,7 @@ function tripCause(){
   if(s.n>1.10+0.22*m)                       return "HIGH FLUX";
   if(s.dnbr<1.18-0.16*m)                    return "LOW DNBR";
   if(s.P>P.P0*(1.06+0.07*m))                return "HIGH PRESSURE";
-  if(s.Tf>1600+280*m)                       return "HIGH FUEL TEMP";
+  if(s.Tf>P.tdmg+100+280*m)                 return "HIGH FUEL TEMP";
   if(s.flowNet<P.flowMin*1.02 && s.heat>0.3) return "LOW FLOW";
   if(s.P<P.P0*0.86)                         return "LOW PRESSURE";
   if(s.vf>0.30)                             return "CORE VOID";
@@ -1620,7 +1626,7 @@ function step(dt){
   }
   const removal = qTot/(P.rated*1000);
   s.dTavg = (heat-removal)*1.8/P.graceK;               // K/s, for the rod controller's lead term
-  s.Tavg = clamp(s.Tavg + s.dTavg*dt, 500, 1000);
+  s.Tavg = clamp(s.Tavg + s.dTavg*dt, P.Tmin, P.Tmax);
 
   /* ── pressure: hot loop pressurises, relief valve lifts, vessel can burst ──
      The pressurizer only sets pressure while the loop is a closed boundary. Once
@@ -2176,7 +2182,7 @@ function step(dt){
 
   /* ── damage ── */
   if(s.dnbr<1)     s.dmg+= (1-s.dnbr)*22*dt;
-  if(s.Tf>1500)    s.dmg+= (s.Tf-1500)*0.012*dt;
+  if(s.Tf>P.tdmg)  s.dmg+= (s.Tf-P.tdmg)*0.012*dt;
   if(s.dmg>0) s.dmg=Math.min(100,s.dmg);
   if(!s.melt && s.dmg>=60){ s.melt=true; s.trip="CORE MELT"; }
   if(s.melt && !P.catcher){ s.inv-=0.35*dt; s.fatigue=Math.min(100,s.fatigue+1.6*dt); }
