@@ -221,7 +221,7 @@ const D={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
             measured from, so it is a commissioning decision and lives here
             rather than as two constants nobody could see or move. commission()
             carries it to P and resetPlant() to S, like every other tune. */
-         arLo:0.20, arHi:0.50,
+         arLo:0.10, arHi:0.70,
          cont:1,contFit:true,catcher:false,bkp:1,
          turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fittings:{},
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
