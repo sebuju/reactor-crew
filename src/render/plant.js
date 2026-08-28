@@ -251,7 +251,7 @@ function drawSym(p,x,y,w,h,ink,L){
        elsewhere on the drawing doing nothing visible - and with two relief
        valves fitted it could only ever depict one of them. It is drawn at each
        valve's own tap now, off that valve's own rate (pipeFitMarks()). */
-  } else if(id.startsWith("sg")){
+  } else if(p.role==="sg"){
     shell(()=>{ ctx.moveTo(X,Y+12); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
       ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); });
     ctx.save(); ctx.beginPath(); ctx.rect(X,Y+12,W,Hh-12); ctx.clip();
@@ -575,7 +575,7 @@ function liveValue(p,s){
     case p.id==="core":  return (s.n*100).toFixed(0)+"%";
     case p.id==="rods":  return (s.rodPos*100).toFixed(0)+"%";
     case p.id==="pzr":   return s.P.toFixed(1)+" MPa";
-    case p.id.startsWith("sg"):   return sgLvl(s,p.id).toFixed(0)+"%";
+    case p.role==="sg":          return sgLvl(s,p.id).toFixed(0)+"%";
     case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
     case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
     case p.role==="cond": return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
@@ -1499,7 +1499,7 @@ function readoutsFor(p,s){
        two did not exist. They are readoutsForFit() rows now, one panel per
        valve; the pressurizer keeps the four numbers that are genuinely its
        own. audit-geometry scans this branch to keep it that way. */
-  } else if(id.startsWith("sg")){
+  } else if(p.role==="sg"){
     add.apply(null,rowSgl(s,id));
     /* secP(), not a second copy of its formula: CLAUDE.md's rule is that the
        node an SGTR leaks into is fixed at "the same expression the STEAM PRESS
@@ -1533,7 +1533,7 @@ function readoutsFor(p,s){
       "The secondary pressure boundary. It bursts at "+sgBurstP().toFixed(1)+" MPa, and nothing stops it getting there except a relief valve you placed. Burst, it is open to atmosphere: it will not hold pressure again and it stops cooling its loop the moment it is empty.");
     add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
       "The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment.");
-  } else if(id.startsWith("pump")){
+  } else if(primaryPump(id)){
     /* s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow
        (tripCause(), step.js), so a gauge on the pump SETTING would sit at
        100% NORMAL, with its own trip mark on a number that no longer causes
@@ -1556,9 +1556,9 @@ function readoutsFor(p,s){
       band(s.cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
       "Vapour forming at the pump inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well.");
     add.apply(null,rowNat(s));
-    add("PUMPS LOST",s.dmgParts.filter(k=>k.startsWith("pump")).length+" / "+
-        LAY.parts.filter(q=>q.id.startsWith("pump")).length,
-        s.dmgParts.some(k=>k.startsWith("pump"))?C.red:C.green,
+    const coolant = LAY.parts.filter(q=>primaryPump(q.id)).map(q=>q.id);
+    add("PUMPS LOST",s.dmgParts.filter(k=>coolant.indexOf(k)>=0).length+" / "+coolant.length,
+        s.dmgParts.some(k=>coolant.indexOf(k)>=0)?C.red:C.green,
       "How many of your coolant pumps have been destroyed, out of how many you paid for.");
   } else if(p.role==="turb"){
     add("LOAD",(s.load*100).toFixed(1)+" %",null,

@@ -1580,7 +1580,11 @@ function step(dt){
      temperature programme has to keep following that load: the loop is still
      being drained of heat by a machine that should have shed it. */
   const Tprog = tProg(s);
-  const feedOK = !s.dmgParts.includes("feed");
+  /* EVERY FEED PUMP STILL STANDING, asked of the DRAWING - a pump reaching a
+     generator's shell (secGensOf(), layout.js), never the stock pump's id
+     "feed". Delete that pump and place your own and this read OK forever;
+     place two and losing one read nothing at all. */
+  const feedOK = pumpIds().every(id => !secGensOf(id).length || !s.dmgParts.includes(id));
   /* A secondary reserve that is armed adds a small dump while the reactor is
      scrammed, which is what runs the loop a few degrees cooler after a trip.
      It asks the TANKS, not a system row - and reads identically on a stock

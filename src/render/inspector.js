@@ -229,7 +229,7 @@ function paramsFor(p){
     sld("PRESSURIZER VOLUME","Size of the steam bubble. A big pressurizer damps pressure swings so the relief valve rarely lifts. A small one is light but pressure whips around on every load change.","pzr",.5,2,v=>v.toFixed(2)+" x",.05,v=>(v-0.5)*45);
     note("Pressure is what keeps the rest of the loop liquid. Every design choice here trades vessel mass against how much boiling margin you carry.");
   }
-  else if(id.startsWith("sg")){
+  else if(p.role==="sg"){
     seg_("COOLANT LOOPS","Parallel primary loops. More loops means losing one costs a smaller share of your flow, and each pipe is smaller so a break is less severe.","loops",["1","2","3","4"],1);
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast.","sg",SGT);
     /* MEASURED, not the label this used to carry: a placed tank and pump
