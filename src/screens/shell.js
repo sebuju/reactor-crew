@@ -61,10 +61,53 @@ function shellInit(){
       if(k==="design" && P && S && !scnArmed() && REC.mode==="live") resetPlant();
       /* pause on the way in, unless a run or a replay is already flying */
       if(k==="scenario"&&!scnArmed()) TR.paused=true;
+      // a menu about a bench part must not outlive the bench
+      ctxClose();
       screen=k; layout();
     });
   }
   shellInitTooltip();
+  shellInitCtxMenu();
+}
+
+/* THE RIGHT-CLICK MENU, IN HTML. Built on OPEN and torn down on close, not
+   rebuilt every frame the way the painted one was - items(hit) is a pure
+   function of a hit that cannot change while the box is up, so once is right
+   and once a frame was only ever what an immediate-mode canvas costs.
+   No frame on the box: an amber outline is the plant's SELECTED tone, and a
+   menu wearing it read as one more selected thing on a deck that already has
+   one. That, and the ground darker than any panel, live in style.css now. */
+function shellInitCtxMenu(){
+  const box=document.getElementById("ctxmenu");
+  if(!box) return;
+  ctxSuppress(box);
+  ctxHide=()=>{ box.textContent=""; KIT.show(box,false); };
+  ctxShow=hit=>{
+    const R=hit&&ctxFor(), items=R?R.items(hit):[];
+    // an empty menu is NO menu: the painted one opened and blinked shut on the
+    // next draw, which read as a click that had not registered
+    if(!items.length){ ctxClose(); return; }
+    box.textContent="";
+    /* the header names the thing the menu is ABOUT (a part, a run, or the plant
+       itself for a bare cell) - see the registries' optional title(). It is
+       never a row: not a button, so it cannot be clicked or focused. */
+    const title=R.title?R.title(hit):"";
+    if(title){ const h=KIT.el("div","ctx-title"); h.textContent=title; box.appendChild(h); }
+    for(const it of items)
+      box.appendChild(KIT.button(it.label,{flat:true,
+        onClick:()=>{ it.fn(); ctxClose(); uiDirty(); }}).el);
+    KIT.show(box,true);
+    // clamped at BOTH ends: the painted menu clamped right and bottom only, so
+    // a tall menu near the foot of the window ran off the top instead
+    const r=box.getBoundingClientRect();
+    box.style.left=Math.max(4,Math.min(hit.cx, innerWidth -r.width -4))+"px";
+    box.style.top =Math.max(4,Math.min(hit.cy, innerHeight-r.height-4))+"px";
+  };
+  // a press anywhere else shuts it; uiDown() covers the canvas, this covers the
+  // rails and the topbar, which the canvas never hears about
+  document.addEventListener("pointerdown",e=>{
+    if(!e.target.closest("#ctxmenu")) ctxClose();
+  },true);
 }
 
 const SCNTIP_ON="Say what the reactor is FOR. Lay out a timeline of what will happen to it - load changes, battle damage, a blackout - and the limits it has to hold while they do. RUN flies it with nobody at the panel and says PASS or FAIL and which limit broke. Unlike CONTROL, opening this never rebuilds a plant that is already running.";
@@ -93,16 +136,24 @@ function shellSync(){
   shellEls.dot.style.visibility=Math.floor(performance.now()/500)%2?"visible":"hidden";
 }
 
+/* ONE TOOLTIP, TWO SOURCES. A rail control is a DOM node and carries its own
+   data-tip-title; a canvas widget is not one and cannot, so the canvas keeps the
+   hit test (tipHover(), core/ui.js) and hands the answer here. Everything after
+   that - the box, the wrap, the band, the placement - is the same code either
+   way, which is the whole point: there used to be two tooltips, and only one of
+   them could be styled by the stylesheet. */
+let tipSync=()=>{};
 function shellInitTooltip(){
   const tip=document.getElementById("tip");
   if(!tip) return;
-  let cur=null, curRail=null;
-  const show=el=>{ cur=el; curRail=railOf(el);
+  let cur=null, curRail=null, owner=null, cvKey=null, bar=null;
+  const show=el=>{ cur=el; curRail=railOf(el); owner="html";
     tip.innerHTML=`<b>${el.dataset.tipTitle||""}</b><p>${el.dataset.tipBody||""}</p>`;
+    bar=null;
     KIT.show(tip,true);
     const b=el.getBoundingClientRect();
     if(curRail) place(b.top+b.height/2); else placeBy(b); };
-  const hide=()=>{ cur=null; curRail=null; KIT.show(tip,false); };
+  const hide=()=>{ cur=null; curRail=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
   document.addEventListener("pointerover",e=>{
     const el=e.target.closest("[data-tip-title]");
     if(el && el!==cur) show(el);
@@ -115,8 +166,8 @@ function shellInitTooltip(){
      read control by control, so a box that follows the hand is a box sitting on
      top of the next control you were going to read - and the rails are where
      the hand spends the whole session. It stands just OUTSIDE whichever rail is
-     on screen and only tracks the pointer vertically, which is the same
-     decision drawTip() already made for the canvas.
+     on screen and only tracks the pointer vertically - the same decision
+     placeView() below makes for a tip that came off the plant.
      Measured, not a constant: the rail is a fixed CSS width today, but a
      hard-coded 340 here would be a second copy of that number in a second
      file. */
@@ -136,4 +187,61 @@ function shellInitTooltip(){
     tip.style.top=y+"px";
   };
   document.addEventListener("pointermove",e=>{ if(cur&&curRail) place(e.clientY); });
+
+  /* PARKED bottom-right OF THE PLANT VIEW, not carried on the pointer. A box
+     that follows the hand is a box between the hand and whatever it is reaching
+     for, and on the plant that is the component it just described. Parked, it
+     never covers the thing being read, it never flips sides mid-sentence, and
+     touch and mouse get the same answer.
+     The VIEW box and not the canvas: the rails are opaque and sit ON the canvas,
+     so the canvas corner is underneath one of them and a box parked there is a
+     box nobody can read. viewRectCss() is exactly the room the rails leave. */
+  let viewAt="";
+  const placeView=()=>{
+    const v=viewRectCss(), r=tip.getBoundingClientRect();
+    const x=Math.max(4,Math.min(v.right-r.width-6, innerWidth-r.width-4));
+    const y=Math.max(4,Math.min(v.bottom-r.height-6,innerHeight-r.height-4));
+    const at=x+","+y; if(at===viewAt) return; viewAt=at;
+    tip.style.left=x+"px"; tip.style.top=y+"px";
+  };
+  // the shape of the scale, not its value: a live needle goes through set()
+  const barSig=g=>!g?"":[g.lo,g.hi,g.dp,g.zones.map(z=>z[0]).join(","),
+                         (g.lim||[]).map(L=>L[0]+L[1]).join(",")].join("|");
+  const buildCanvas=t=>{
+    const g=t.g;
+    viewAt="";                       // a new box is a new size, so re-park it
+    tip.textContent="";
+    const head=KIT.el("div","tip-head");
+    const b=KIT.el("b"); b.textContent=t.title||""; head.appendChild(b);
+    if(g){
+      /* the verdict and setpoint ride on the title row rather than under the
+         strip - the strip already carries three, and below it costs a line */
+      const z=bandZone(g);
+      const zs=KIT.el("span","tip-verdict"); zs.textContent=z[2]; zs.style.color=z[1];
+      head.appendChild(zs);
+      for(const L of (g.lim||[])){
+        const ls=KIT.el("span","tip-lim"); ls.textContent=L[1]+" "+L[0].toFixed(g.dp);
+        head.appendChild(ls);
+      }
+    }
+    tip.appendChild(head);
+    const p=KIT.el("p"); p.textContent=t.body||""; tip.appendChild(p);
+    // the same mapping inspector.js makes off a band(): one scale widget, one CSS
+    bar = g ? KIT.band({lo:g.lo,hi:g.hi,zones:g.zones,dp:g.dp,lim:g.lim,v:g.v}) : null;
+    if(bar) tip.appendChild(bar.el);
+  };
+  /* Called once a frame. The HTML source WINS when it has one: a rail sits on
+     top of the canvas, so a pointer inside a rail control is not over the plant
+     however the canvas hit test reads. */
+  tipSync=()=>{
+    if(owner==="html") return;
+    const t=tipHover();
+    if(!t){ if(owner==="canvas") hide(); return; }
+    const key=[t.title||"",t.body||"",barSig(t.g)].join("␟");
+    if(key!==cvKey || owner!=="canvas"){
+      cvKey=key; owner="canvas"; buildCanvas(t); KIT.show(tip,true);
+    }
+    if(bar) bar.set(t.g.v);
+    placeView();
+  };
 }

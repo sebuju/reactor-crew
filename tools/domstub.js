@@ -169,7 +169,7 @@ function install(opts){
   /* Every id index.html carries that the source looks up. Missing one does not
      fail loudly - it hands back null and the screen quietly half-builds - so
      the list is asserted against the real index.html by audit-dom.js. */
-  const IDS = ['cv','stage','topbar','tip','clock','clock-dot','plant-line',
+  const IDS = ['cv','stage','topbar','tip','ctxmenu','clock','clock-dot','plant-line',
                'help-doc','scr-operate','scr-design','scr-scenario'];
   const mounts = {};
   for(const id of IDS){ const n = node('div'); n.attrs.id = id; mounts[id] = n; }
@@ -190,6 +190,10 @@ function install(opts){
     querySelectorAll(sel){ let out = []; for(const k in mounts) out = out.concat(find(mounts[k],sel)); return out; },
   };
   global.window = global;
+  // the tooltip and the context menu clamp themselves against the window, so a
+  // stub with no window size cannot place either of them
+  global.innerWidth = opts.winW || 1200;
+  global.innerHeight = opts.winH || 900;
   global.devicePixelRatio = opts.dpr || 1;
   let wall = 1000;
   global.performance = opts.clock ? {now:()=>(wall+=17)} : {now:()=>1000};

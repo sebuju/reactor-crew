@@ -86,7 +86,6 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'setScnSel:v=>scnSel=v,setScnPlay:v=>scnPlay=v,setScnVerd:v=>scnVerd=v,GESTKEYS:()=>GESTKEYS,'+
  'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,P:()=>P,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
  'setDmg:v=>S.dmgParts=v,'+
- 'drawTip,forceTip:t=>{isTouch=true;touchTip=Object.assign({},t,{until:1e15});},'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
  'pipeNetwork,buildStockPlumbing,placePart,addFitting,addRun,removeRun,removePart,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
@@ -96,15 +95,12 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
 global.__viewOn=()=>M.vOn();
 
 function cap(name,fn){ CUR=name; M.ui().widgets=[]; M.ui().tips=[]; try{fn();}catch(e){console.log('ERR',name,e.message);} }
-// a tooltip only draws on hover, so it has to be forced; each is captured
-// alone since only one is ever on screen and two together would report a
-// stacking order as a collision
-function capTips(tag){
-  // indexed, not titled: several boxes can share a title (e.g. CONDENSER),
-  // which would otherwise drop them into one collision bucket
-  M.ui().tips.slice().forEach((t,i)=>
-    cap(tag+i+':'+(t.title||'?'),()=>{ M.forceTip(t); M.drawTip(); }));
-}
+/* THE TOOLTIP IS HTML NOW, so this auditor - which measures canvas ink against
+   a fake 2d context - can no longer see it at all. capTips() is gone with it.
+   The check it made (every tip's text fits its box and collides with nothing)
+   belongs to audit-dom.js, which already reads DOM text, and is NOT made
+   anywhere today. TIP() still registers the hit rects, so ui().tips is still
+   the list to walk when that check is rebuilt on the other side. */
 // recTick() runs directly because nothing in the sim calls the recorder; each
 // warmUp() is also a fresh plant, so a root opens and the branch picker has
 // something to draw in every sweep
@@ -126,7 +122,7 @@ function sweep(tag){
      shut is a draw path that never runs. Walk them: closed, then one at a time.
      Miss this and six panels go unaudited the day they stop being stacked. */
   M.setScreen('operate');
-  M.ovlSet(null); cap(tag+'plant',M.drawOperate); capTips(tag+'plant:');
+  M.ovlSet(null); cap(tag+'plant',M.drawOperate);
   /* Each overlay is captured ALONE, not on top of the plant. It is opaque and
      it covers what is behind it, so auditing the two together reports the grid
      labels underneath as collisions - which is the auditor describing a
@@ -137,7 +133,7 @@ function sweep(tag){
   // drawScenario() must run before EACH drawOverlay(), not once before the
   // loop: it is what calls vBox() and sets the rectangle the overlay docks into
   M.setScreen('scenario');
-  M.ovlSet(null); cap(tag+'scn',M.drawScenario); capTips(tag+'scn:');
+  M.ovlSet(null); cap(tag+'scn',M.drawScenario);
   for(const o of M.OVL()){ M.ovlSet(o.k); cap(tag+'scnovl:'+o.k,M.drawOverlay); }
   M.ovlSet(null);
 }
@@ -252,7 +248,7 @@ warmUp();
   // (recTick() runs before every draw) but is still a branch a throw can hide in
   { const c=M.REC().cur; M.REC().cur=-1;
     M.setScreen('operate'); M.ovlSet(null);
-    cap('notape:plant',M.drawOperate); capTips('notape:plant:');
+    cap('notape:plant',M.drawOperate);
     M.REC().cur=c; }
 }
 

@@ -24,7 +24,7 @@ function tick(now){
   else if(screen==="operate") drawOperate();
   else if(screen==="scenario") drawScenario();
   else drawHelp();   // HELP is HTML now; the branch stays so an unbranched tab still falls somewhere
-  drawTip();
+  tipSync();
   ui.prev=ui.widgets;
   requestAnimationFrame(tick);
 }

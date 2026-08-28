@@ -409,9 +409,10 @@ if(!wide.err){
        tapKey:null, so the whole run-tap branch - throttle, relief valve, tee -
        had no coverage at all. It shipped a call to hasRelief(), which was
        never written, and right-clicking any pipe on the bench threw
-       "hasRelief is not defined". That takes the FRAME with it, not just the
-       menu: ctxItemsDesign() runs inside the draw (drawCtxMenu -> drawDesign
-       -> tick), so the bench stops rendering entirely.
+       "hasRelief is not defined". It took the FRAME with it back when the menu
+       was painted and ctxItemsDesign() ran inside the draw; the menu is HTML
+       and built on the right-click now, so the same fault costs the menu only -
+       which is still a bench gesture that does nothing and says nothing.
 
        Asserted as "it returns a usable menu", not as an exact item list - the
        offers legitimately depend on how many loops the plant has. What is
@@ -550,9 +551,10 @@ const FAULTS = [
   ['a hosted label drawn outside its box', 'hosted text stays in its box',
    s => s.replace('txt("REACTIVITY BALANCE",L,y+8,', 'txt("REACTIVITY BALANCE",L,y-400,')],
   /* THE CLASS THAT SHIPPED. hasRelief() was called from ctxItemsDesign() and
-     never written, so right-clicking any pipe on the bench threw and took the
-     frame with it - ctxItemsDesign() runs INSIDE the draw (drawCtxMenu ->
-     drawDesign -> tick), and no auditor opened that menu.
+     never written, so right-clicking any pipe on the bench threw, and no
+     auditor opened that menu. It took the frame with it then, because the menu
+     was painted and ctxItemsDesign() ran INSIDE the draw; it is HTML now and
+     runs on the click, so the same fault costs the gesture rather than the page.
      The name it renames has had to move twice, each time because the helper
      it named was deleted - hasRelief(), then juncPt(). What matters is only
      that the injected call is reached from ctxItemsDesign() itself, which is

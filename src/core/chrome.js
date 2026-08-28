@@ -122,34 +122,6 @@ function bandZone(g,v){
 }
 const bandCol=g=>g.col||bandZone(g)[1];
 
-// drawn from y-6 to y+25, so a caller reserving BAND_H gets the bar top at y
-// with nothing spilling
-const BAND_H=30;
-function bandBar(x,y,w,g){
-  const span=(g.hi-g.lo)||1, at=v=>x+clamp((v-g.lo)/span,0,1)*w;
-  const num=v=>v.toFixed(g.dp);
-  const cells=Math.max(10,Math.round(w/5)), cw=w/cells, act=bandZone(g);
-  for(let i=0;i<cells;i++){
-    const z=bandZone(g,g.lo+span*(i+.5)/cells);
-    if(z!==act) ctx.globalAlpha=.26;
-    fillRect(x+i*cw,y,cw-1.3,7,z[1]);
-    ctx.globalAlpha=1;
-  }
-  if(g.lim) for(const L of g.lim) fillRect(at(L[0])-.5,y-4,1,15,C.red);
-  // drawn last, thicker than any limit mark, so the value is never hidden under one
-  const px=at(g.v);
-  fillRect(px-1,y-4,3,15,C.bright);
-  fillRect(px-3,y-6,7,2,C.bright);
-  // the scale covers the STEERED range; a scram runs DNBR/rho off the end on
-  // purpose — pegged and shown as a detached pip, not swallowed into a wider scale
-  if(g.v<g.lo||g.v>g.hi) fillRect(g.v>g.hi?px+4:px-7,y+2,3,3,C.bright);
-  // boundary labels within 18px of an end are dropped — the end label is the
-  // one that can't be inferred from the colour it separates
-  txt(num(g.lo),x,y+17,{size:6,sp:.5,color:C.ink2});
-  txt(num(g.hi),x+w,y+17,{size:6,sp:.5,align:"right",color:C.ink2});
-  g.zones.slice(0,-1).forEach((z,i)=>{
-    const bx=at(z[0]);
-    if(bx-x<18 || x+w-bx<18) return;
-    txt(num(z[0]),bx,y+17,{size:6,sp:.5,align:"center",color:g.zones[i+1][1]});
-  });
-}
+// the SCALE a band draws is KIT.band() (ui/kit.js) - one widget, in HTML, for
+// the inspector row and the tooltip alike. band()/bandZone()/bandCol above are
+// the model it reads, and they stay.

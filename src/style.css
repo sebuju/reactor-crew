@@ -97,3 +97,23 @@ body[data-screen="help"] #cv{display:none}
 #tip b{display:block;margin-bottom:4px;color:var(--c-bright);font-size:var(--t8);
   letter-spacing:1px;text-transform:uppercase}
 #tip p{margin:0}
+/* the title row: name on the left, the scale's verdict and its limits pushed to
+   the right, so a band tooltip costs no extra line */
+.tip-head{display:flex;align-items:baseline;gap:8px}
+.tip-head b{flex:1 1 auto;margin-bottom:4px}
+.tip-verdict,.tip-lim{flex:0 0 auto;font-size:var(--t7);letter-spacing:.5px}
+.tip-lim{color:var(--c-red)}
+#tip .kit-band{margin-top:6px}
+
+/* above #tip's 1000: a menu is opened deliberately and a tooltip is not.
+   A sibling of #stage, like #tip, because #stage clips and a menu opened near
+   an edge has to be allowed to stand outside it. */
+#ctxmenu{position:fixed;z-index:1001;display:block;min-width:150px;max-width:280px;
+  max-height:70vh;overflow:auto;padding:0;background:var(--c-well);
+  font-family:var(--mono);box-shadow:0 4px 14px rgba(0,0,0,.6)}
+.ctx-title{padding:5px 10px;background:var(--c-edge);color:var(--c-bright);
+  font-size:var(--t9);font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+  white-space:nowrap}
+#ctxmenu .kit-btn{display:block;width:100%;height:27px;font-size:var(--t10);
+  letter-spacing:1.4px;text-align:left;background:transparent;white-space:nowrap}
+#ctxmenu .kit-btn:hover{background:var(--c-panel-hi)}

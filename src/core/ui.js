@@ -18,6 +18,15 @@ const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
    reciprocal is what one screen pixel is worth here. */
 function cvK(){ const r=cv.getBoundingClientRect(); return r.width? r.width/W : 1; }
 const cvPx=()=>1/cvK();
+/* THE PLANT VIEW'S BOX, IN CLIENT PIXELS - the one door from VIEW into the space
+   an absolutely positioned HTML element lives in. Two callers park furniture on
+   the edge of the plant view (the ZOOM key and the tooltip) and a second copy of
+   this arithmetic would drift the moment the letterbox changed. */
+function viewRectCss(){
+  const rc=cv.getBoundingClientRect(), k=cvK();
+  return {left:rc.left+VIEW.x*k, top:rc.top+(VIEW.y-TOPBAR_H)*k,
+          right:rc.left+(VIEW.x+VIEW.w)*k, bottom:rc.top+(VIEW.y+VIEW.h-TOPBAR_H)*k};
+}
 let viewOn=false;                       // are widgets being pushed through it?
 /* ══ THE LETTERBOX, HALVED ══
    vFit() scales the plant to FIT its box, so unless the box happens to share the
@@ -75,6 +84,10 @@ const keyAdd=o=>{ KEYS.push(o); return o; };
 const keyList=()=>KEYS.filter(k=>!k.sc||k.sc===screen);
 addEventListener("keydown",e=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
+  /* AN OPEN MENU EATS THE FIRST ESCAPE. Not a KEYS row: the registry takes the
+     first match, so a row here would beat the bench's own Escape for good and
+     the tool could never be put down again. Menu first, then everything else. */
+  if(e.key==="Escape" && ctxMenu){ e.preventDefault(); ctxClose(); return; }
   const K=keyList().find(k=>k.k===e.key);
   if(K){ e.preventDefault(); K.fn(); }
 });
@@ -122,52 +135,23 @@ const ctxAdd=o=>{ CTX.push(o); return o; };
 const ctxFor=()=>CTX.find(o=>!o.sc||o.sc===screen);
 
 let ctxMenu=null;
-function openCtxMenu(p){
+/* THE MENU IS HTML - #ctxmenu, built by shell.js. What is left here is the
+   registry, the hit, and the gesture: resolve(p) still reads a LAYOUT point,
+   because that is the space the plant is drawn in, while cx/cy carry the
+   pointer's own client pixels, which is the space the box is placed in. No
+   conversion either way, and the cvPx() scaling the painted menu needed on
+   every single measurement is simply what a CSS pixel already means. */
+function openCtxMenu(p,e){
   const R=ctxFor();
   ctxMenu = R ? R.resolve(p) : null;
+  if(ctxMenu){ ctxMenu.cx=e.clientX; ctxMenu.cy=e.clientY; }
+  ctxShow(ctxMenu);
 }
-// dressed like drawTip()'s box - a drop shadow and a ground darker than any
-// panel - so it reads as a popup rather than one more pane of ordinary chrome.
-// No frame: an amber outline is the plant's SELECTED tone, and a menu wearing
-// it read as one more selected thing on a deck that already has one.
-// Width is the longest row plus padding, not a flat guess - a two-word bench
-// row and thirteen gesture names are not the same menu.
-function drawCtxMenu(){
-  if(!ctxMenu) return;
-  const R=ctxFor();
-  const items = R ? R.items(ctxMenu) : [];
-  if(!items.length){ ctxMenu=null; return; }
-  // the header names the thing the menu is ABOUT (a part, a run, or the plant
-  // itself for a bare cell) - see registries' optional title().
-  // It is never a row: no push(), so it cannot be clicked, and its own fill
-  // keeps it from reading as one.
-  const title = R && R.title ? R.title(ctxMenu) : "";
-  /* EVERY MEASUREMENT HERE IS SCREEN PIXELS. A menu is furniture, not plant:
-     drawn in flat layout units it was a tidy little list at 760 px wide and a
-     billboard at full screen. The HIT BOXES stay in layout units, because that
-     is the space push()/hov() work in - only the ink is converted. */
-  const k=cvPx();
-  const tf={size:7.5*k,sp:.6*k,caps:1}, hf={size:7*k,sp:1*k,caps:1,weight:700};
-  const rh=15*k, pad=8*k;
-  const hh = title ? 16*k : 0;
-  const w=clamp(Math.max(...items.map(it=>tw(it.label,tf)), title?tw(title,hf):0)+pad*2, 90*k, 220*k);
-  const h=hh+items.length*rh+6*k;
-  let x=Math.min(ctxMenu.x,W-4*k-w), y=Math.min(ctxMenu.y,H-4*k-h);
-  fillRect(x+3*k,y+3*k,w,h,"rgba(0,0,0,.6)");
-  fillRect(x,y,w,h,"#0b1215");
-  push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach whatever is under it
-  if(title){
-    fillRect(x,y,w,hh,C.edge);
-    txt(title,x+pad,y+hh-5*k,Object.assign({},hf,{color:C.bright}));
-  }
-  items.forEach((it,i)=>{
-    const iy=y+hh+3*k+i*rh;
-    const wd=push({x:x+2*k,y:iy,w:w-4*k,h:rh-1*k,type:"btn",fn:()=>{ it.fn(); ctxMenu=null; }});
-    const h_=hov(wd);
-    if(h_) fillRect(x+2*k,iy,w-4*k,rh-1*k,C.panelHi);
-    txt(it.label,x+pad,iy+rh-4*k,Object.assign({},tf,{color:h_?C.bright:C.ink}));
-  });
-}
+// set by shell.js; the default is what the headless bundle and the sim worker get
+let ctxShow=()=>{}, ctxHide=()=>{};
+// hides UNCONDITIONALLY: the box and the hit are two things, and a close that
+// only fires when the hit happens to be set is a close that can leave the box up
+function ctxClose(){ ctxMenu=null; ctxHide(); }
 
 /* ══ STAGE 8: A COMPONENT CARRIES THE NAME THE PLAYER GAVE IT ══
    D.name is not declared in design.js (which this file does not own) - it is
@@ -222,41 +206,15 @@ function findTip(p){
     if(q.x>=t.x&&q.x<=t.x+t.w&&q.y>=t.y&&q.y<=t.y+t.h) return t; }
   return null;
 }
-function drawTip(){
-  if(ui.drag) return;
-  let t=null;
-  if(isTouch){ if(touchTip && performance.now()<touchTip.until) t=touchTip; }
-  else t=findTip(ui.ptr);
-  if(!t) return;
-  const maxw=210, ob={size:7.5,color:C.ink};
-  const n=wrapCount(t.body,maxw,ob), bw=maxw+20, bh=21+n*10+(t.g?BAND_H:0);
-  /* PARKED bottom-right OF THE PLANT VIEW, not carried on the pointer. A box
-     that follows the hand is a box between the hand and whatever it is reaching
-     for, and on this screen that is the component it just described. Parked, it
-     never covers the thing being read, it never flips sides mid-sentence, and
-     touch and mouse get the same answer - which is why the old touch anchor is
-     gone with it.
-     The VIEW box and not the canvas: the rails are opaque and sit ON the canvas,
-     so the canvas corner is underneath one of them and a box parked there is a
-     box nobody can read. VIEW.x/w/y/h is exactly the room the rails leave. */
-  const bx=clamp(VIEW.x+VIEW.w-bw-6, 4, W-bw-4);
-  const by=clamp(VIEW.y+VIEW.h-bh-6, TOPBAR_H+4, H-bh-4);
-  fillRect(bx+3,by+3,bw,bh,"rgba(0,0,0,.6)");
-  fillRect(bx,by,bw,bh,"#0b1215"); frame(bx,by,bw,bh,C.amber);
-  txt(t.title,bx+11,by+12,{size:7,weight:700,sp:1.3,caps:1,color:C.amber});
-  wrap(t.body,bx+11,by+24,maxw,10,ob);
-  if(t.g){
-    // the verdict and setpoint ride on the title row rather than under the
-    // strip - the strip already carries three, and below it costs a line
-    const z=bandZone(t.g); let rx=bx+bw-11;
-    if(t.g.lim) for(const L of t.g.lim){
-      const s_=L[1]+" "+L[0].toFixed(t.g.dp);
-      txt(s_,rx,by+12,{size:6,sp:.7,align:"right",color:C.red});
-      rx-=tw(s_,{size:6,sp:.7})+7;
-    }
-    txt(z[2],rx,by+12,{size:6,sp:.9,align:"right",color:z[1]});
-    bandBar(bx+11,by+bh-BAND_H+8,maxw,t.g);
-  }
+/* WHICH TIP THE POINTER IS ON, and nothing else. The BOX is HTML - one #tip
+   element, styled by the stylesheet, presented by shell.js - so all that is
+   left here is the part a canvas widget cannot delegate: it is not a DOM node,
+   so it cannot carry the data-tip-title a rail control carries, and the hover
+   has to be resolved against the rects TIP() pushed. */
+function tipHover(){
+  if(ui.drag) return null;
+  if(isTouch) return (touchTip && performance.now()<touchTip.until) ? touchTip : null;
+  return findTip(ui.ptr);
 }
 
 /* ONE HEIGHT FOR EVERY KEY DRAWN ON THE CANVAS. A control strip cell, a bypass
@@ -434,7 +392,13 @@ function dblCheck(p,e){
   lastDown={t:now,x:p.x,y:p.y,button:e.button};
   return dbl;
 }
-cv.addEventListener("contextmenu",e=>{ if(!e.shiftKey) e.preventDefault(); });
+/* SHIFT+RIGHT IS THE BROWSER'S MENU; a bare right click is ours. Bound to a
+   NODE, not to #cv, because the plant is no longer the only thing standing
+   over the plant: an open #ctxmenu is a real element, so a second right click
+   landing on it never reached the canvas and the browser's own menu came up on
+   top of ours. Anything that covers the plant has to say this. */
+const ctxSuppress=el=>el&&el.addEventListener("contextmenu",e=>{ if(!e.shiftKey) e.preventDefault(); });
+ctxSuppress(cv);
 /* The three pointer handlers are named so uiForward() can bind them to a
    SECOND element. A widget hosted inside an opaque rail (the fuel lattice
    plan) sits over #cv but eats its events, so it has to feed the same
@@ -445,7 +409,7 @@ function uiDown(e){
   tgt.setPointerCapture(e.pointerId);
   const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
   e.dbl=dblCheck(p,e);
-  ctxMenu=null;
+  ctxClose();
   // shift+right is the browser's own menu, not a pan; right held-and-dragged
   // pans, right pressed-and-released without moving opens the ADD/REMOVE menu
   // instead (see pointerup)
@@ -578,9 +542,9 @@ function uiUp(e){
   if(d&&d.type==="sld"&&!d.moved) d.fn(valFrom(d,d.gx0));
   // right button held and released without dragging the plant is a click,
   // which on the design bench opens the ADD/REMOVE menu
-  if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e));
+  if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e),e);
   // A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU, dragged or not - see uiDown().
-  if(d&&d.type==="portr"&&e.button===2) openCtxMenu(local(e));
+  if(d&&d.type==="portr"&&e.button===2) openCtxMenu(local(e),e);
   /* WHERE THE MOVE COMMITS. moveTo() is still the only way a part changes
      position - it is just called once, here, instead of at pointer rate. A
      drop that resolves to nothing (off the grid, on top of another machine)
@@ -675,6 +639,9 @@ cv.addEventListener("wheel",e=>{
   if(screen==="scenario"){ e.preventDefault(); scnWheel(local(e),e.deltaY); return; }
   const p=local(e);
   e.preventDefault();
+  // the box is anchored to where the pointer WAS; the plant moves under it, so
+  // an open menu is stale the moment the view does anything
+  ctxClose();
   /* THE WHEEL ROTATES A PIPE CELL, and only there: with the pipe tool up and a
      cell actually under the pointer. Everywhere else it still zooms, which is
      what it does on every other screen and in every other tool. */
