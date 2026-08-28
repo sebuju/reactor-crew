@@ -128,7 +128,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* ─────────────── design bench ─────────────── */
 .db-head{grid-column:1;grid-row:1;pointer-events:auto;display:flex;align-items:center;
   justify-content:space-between;gap:8px;padding:6px 8px}
-.db-head-cap{font-size:var(--t8-5);color:var(--c-ink2)}
+.db-tools{display:flex;align-items:center;gap:4px}
 .db-rail{grid-column:2;grid-row:1/3;overflow-y:auto;pointer-events:auto;
   background:var(--c-panel);padding-top:6px;
   display:flex;flex-direction:column;gap:6px}

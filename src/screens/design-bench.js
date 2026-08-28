@@ -213,18 +213,13 @@ function ctxTitleDesign(hit){
    fittableList()'s FIT side survives on the bare-cell fallback below - a
    part that is not yet fitted has no box on the grid to click. */
 function ctxItemsDesign(hit){
-  /* DECISION 2: right-click held-and-released spells the modes out in words -
-     the toggle (uiUp(), core/ui.js) is the same act with no reading. One row
-     per mode, plus REMOVE PORT, which takes the port's own pipe with it
-     (removePort(), layout.js) exactly as removing a part takes its runs. */
-  if(hit.port){
-    const pt=D.ports[hit.port], p=LAY.parts.find(q=>q.id===pt.p);
-    const IN=p&&portPath(p,portFaceOf(hit.port)), items=[];
-    if(IN) for(const nm of [IN.na,IN.nb])
-      items.push({label:nm, fn:()=>{ portMode(hit.port,nm); }});
-    items.push({label:"REMOVE PORT", fn:()=>{ removePort(hit.port); }});
-    return items;
-  }
+  /* DECISION 2: a port's only offer is REMOVE PORT, which takes the port's own
+     pipe with it (removePort(), layout.js) exactly as removing a part takes
+     its runs. The SUCT/DISCH rows are gone: the FACE decides which side of an
+     internal path a port is on, so naming it was a label that could disagree
+     with the plumbing and change nothing. */
+  if(hit.port)
+    return [{label:"REMOVE PORT", fn:()=>{ removePort(hit.port); }}];
   if(hit.part){
     // a FITTABLE slot's part exists on the grid only while it IS fitted
     // (cont/turb/cond), so clicking it can only ever mean REMOVE.
@@ -834,18 +829,6 @@ function dbRailBuild(rail,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
-  /* ONE SWITCH PER TOOL, the same radio idiom layerSwitches() already uses:
-     each key manages its own state off the TOOL table, so there is nothing
-     here for a per-frame sync to keep in step with. */
-  const tools=KIT.well({title:"TOOLS"}); rail.appendChild(tools.el);
-  { const btns=[];
-    for(const t of TOOLS){
-      const b=KIT.button(t.label,{sunk:true, on:TOOL.active===t.id,
-        onClick:()=>{ TOOL.active=t.id; for(const q of btns) q.b.set({on:TOOL.active===q.id}); }});
-      b.el.classList.add("layer-switch");
-      KIT.tip(b.el, t.label, t.tip);
-      tools.body.appendChild(b.el); btns.push({id:t.id,b});
-    } }
   const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
   const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
@@ -967,11 +950,22 @@ function dbBuild(){
   if(!mount) return null;
   const root=KIT.el("div","db-root");
   const head=KIT.el("div","db-head");
-  const cap=KIT.el("span","db-head-cap");
-  cap.textContent="longitudinal section, looking to port / up is up / click a component to configure it, drag to move it";
+  /* ONE SWITCH PER TOOL, over the top-left of the plant it addresses. It lived
+     at the bottom of the rail, under every machine panel, which on a tall
+     plant is off-screen - a tool nobody can find is a tool the bench does not
+     have. Each key manages its own state off the TOOL table, so there is
+     nothing here for a per-frame sync to keep in step with. */
+  const tools=KIT.el("div","db-tools"), btns=[];
+  for(const t of TOOLS){
+    const b=KIT.button(t.label,{size:8, sunk:true, on:TOOL.active===t.id,
+      onClick:()=>{ TOOL.active=t.id; for(const q of btns) q.b.set({on:TOOL.active===q.id}); }});
+    b.el.classList.add("layer-switch");
+    KIT.tip(b.el, t.label, t.tip);
+    tools.appendChild(b.el); btns.push({id:t.id,b});
+  }
   const arr=KIT.button("AUTO-ARRANGE",{size:8,onClick:()=>{ LAY=null; layoutMetrics(); }});
   KIT.tip(arr.el,"AUTO-ARRANGE","Resets every component to its default position.");
-  head.append(cap,arr.el);
+  head.append(tools,arr.el);
   const rail=KIT.el("div","db-rail");
   root.append(head,rail);
   mount.appendChild(root);
