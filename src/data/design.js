@@ -131,45 +131,21 @@ const RODX0=.35;
    forgets the other. pumpSize and fit are not FITTABLE flags at all - a
    pump and a fitting are placed, not toggled, at a spot the player chose
    rather than a fixed slot - see PLACED PARTS and FITTINGS in layout.js. */
-/* ═══════════ D.run: THE PLANT'S OWN PLUMBING, DECLARED ═══════════
-   pipeNetwork() (layout.js) used to CONJURE every pipe on the plant from a
-   hard-coded topology - a generator was always between the core and a pump,
-   feed always came from the condenser, because a `link()` call said so in
-   imperative code nowhere near the tables that claim to own the plant. A run
-   is a thing that EXISTS now, not a thing a part implies: this is that
-   topology, moved onto D so it rides designSig(), the recording head and the
-   save format for free, the same trick D.tanks already relies on.
+/* ═══════════ D.pipes: THE PLANT'S OWN PLUMBING, CELL BY CELL ═══════════
+   There is no list of RUNS. A connection between two machines is not authored
+   at all - it is TRACED out of the cells and the ports (pipeMap(), layout.js)
+   and cached, which is what lets it be coloured when it is complete, listed in
+   a rail, and broken by a hit on any single cell along it.
 
-   One entry per run. `a`/`b` name the two PARTS; `af`/`bf` name the FACE
-   each leaves from, or null - null means "whichever face points at the
-   other end", resolved live by face() exactly as it always was. Face
-   selection is ROUTE, not topology - a part that moves still leaves from
-   whichever face makes sense, the same as `route()`/`port()` always
-   decided. `k` is the run's own label - it never gates whether the run is
-   an edge, a tap target, a hit target or a spill point (every run answers
-   yes to all four now); it only picks a default bore and a name.
+   D.pipes["x,y"] = {s:<shape>, r:<rotation 0..3>}. Cell-keyed, so a pipe cell's
+   identity IS its cell: no id allocator, no name, no mode, no stored bore, and
+   "one thing per cell" is a plain dictionary invariant. A run's bore is still
+   priced off its derived KIND (runBore(), pipenet.js); a fitting carries a real
+   per-instance bore, which is a different question.
 
-   EVERY RUN IS PORT TO PORT. There used to be a second shape - a `tap`
-   field instead of `b`/`bf`, landing on another RUN - and the surge line
-   was the one entry that wore it. The surge line is three ordinary runs
-   through a tee COMPONENT now, so the shape is gone and with it the
-   directional search, the SURGE_TAP node and the load-bearing declaration
-   order that came with them.
-
-   Authored for the ONE generator the stock plant ships with - "sg0"/"pump0",
-   the fixed slot buildLayout() (layout.js) still places unconditionally, the
-   same standing core/pzr/rods have. There is no D.loops any more: a second,
-   third or fourth generator is a PLACED part (ADD STEAM GENERATOR HERE,
-   design-bench.js) wired by hand through addRun()/CONNECT, exactly like a
-   spare pump - it gets its OWN entries in this same table, added by
-   addRun(), not a set of slots pre-declared here and waiting for a knob to
-   turn them on. pipeNetwork() still skips any entry whose part is not on
-   the grid this frame, which is what lets a design missing its generator
-   entirely still resolve to a sane (if unpiped) plant.
-
-   A run carries no stored bore: runBore() (pipenet.js) prices it off
-   PIPE_BORE[r.k], so a field here would be one nothing reads. D.fittings
-   carries a real per-instance bore, which is a different question. */
+   A generator, a pump or a spare turbine is a PLACED part wired by hand - it
+   gets ports and cells like anything else, and pipeNetwork() skips a
+   connection whose part is not on the grid this frame. */
 const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
@@ -184,17 +160,30 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fittings:{},
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
             runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
-            through the same addTank()/addFitting()/addRun() calls the bench
+            through the same addTank()/addFitting() calls and the same pipe tool the bench
             hands the player, so the reference plant IS the gestures. Two
             literals describing one plant is how the declared shape and the
             authored shape drift apart. */
-         /* D.ports[pid] = {p:<partId>, f:<face>, o:<offset along face, px>,
-            m:<mode>} - a port is a place a pipe may be finished on, not an
-            implicit consequence of a run landing on a face. See addPort()/
-            removePort()/portMove()/portMode() (layout.js). Additive only for
-            now: nothing reads D.ports yet - D.run still names a (part, face)
-            pair directly. */
-         tanks:{}, run:{}, ports:{}};
+         /* D.ports[pid] = {p:<partId>, dx, dy, m:<mode>} - a port is a CELL,
+            placed beside its machine, and dx/dy are its offset from that
+            machine's origin so it rides the machine for free. The FACE is
+            derived from the offset (portFaceOf(), layout.js) and never stored.
+            D.start[k] = a control's STARTING POSITION, the value the bench set
+            it to and the value resetPlant() seeds from. Absent means "whatever
+            resetPlant() hard-codes", which is what keeps an untouched design
+            commissioning bit-identically. */
+         tanks:{}, pipes:{}, ports:{}, start:{}};
+
+/* WHERE AN ACTUATOR STANDS THE MOMENT THE PLANT IS COMMISSIONED. Absent means
+   "whatever resetPlant() hard-codes", which is the whole safety net: an
+   untouched design commissions bit-identically, and only a bench control the
+   player actually moved changes anything.
+   ONE HELPER, read by BOTH the bench's own control cell (benchCell(),
+   render/plant.js) and resetPlant() (sim/step.js) - seeded in two places and
+   defaulted in neither, the same rule pzrPlumbed()/pzrLive() already follow, or
+   the bench shows one starting position and the plant commissions at another.
+   Here rather than in the renderer because the SIM reads it and loads no UI. */
+const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : fallback;
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides

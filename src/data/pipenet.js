@@ -217,7 +217,10 @@ const BREACH_BORE = 1.6;
 // INVENTORY, so a solved outflow, an injection and a vent are all charged to
 // s.inv in the same units through the same constant.
 const LOOP_TRANSIT = 12;
-const breakLive = (s, key) => !!(s.dmgParts && s.dmgParts.indexOf("pipe:"+key) >= 0);
+/* ONE HIT BREAKS ONE CELL. The id is "pipe:"+x+","+y - the "pipe:" prefix is
+   kept deliberately, so netFactored()'s cache signature and dmgFx()'s prefix
+   match (step.js) are both untouched by the move from whole runs to cells. */
+const cellBroken = (s, x, y) => !!(s.dmgParts && s.dmgParts.indexOf("pipe:"+x+","+y) >= 0);
 
 /* ══════════ A TUBE RUPTURE IS A DIFFERENTIAL LEAK ══════════
    An SGTR is THE pressure-difference leak: a primary at 15.5 MPa bleeding
@@ -644,12 +647,14 @@ const feedDrive = (s, pid) =>
 // which resist() carries straight through to an exact 0 (finite/Infinity is
 // 0, never NaN), so a severed run lands on the identical g<=0 path
 // netAssemble already omits a shut valve through - no second mechanism, no
-// new physics path. Reads s.dmgParts directly rather than a field of its
-// own: "pipe:"+key is exactly the id combatHit() pushes there, so DMGFX's
-// existing prefix match (step.js) is what hits and fixes it, and no new S
-// field is needed for the cloner to already know about.
-const pipeExtraLen = (s, key) =>
-  (key && s.dmgParts && s.dmgParts.indexOf("pipe:"+key) >= 0) ? Infinity : 0;
+// new physics path.
+// PER CELL now, and ANY broken cell severs the whole connection: a run is a
+// chain of cells and a hole anywhere along it is a hole in that run.
+const pipeExtraLen = (s, cells) => {
+  if(!cells) return 0;
+  for(const [x,y] of cells) if(cellBroken(s,x,y)) return Infinity;
+  return 0;
+};
 
 /* ══════════ FIT: one row per fitting BEHAVIOUR ══════════
    Same idiom as LAYERS (render/layers.js), DMGFX and AUTOSYS (sim/step.js):
@@ -803,9 +808,8 @@ const coreFold = raw => foldMap()[raw] || raw;
 
 /* ══════════ ELEVATION: A NODE IS A HEIGHT AS WELL AS A NAME ══════════
    Metres above the bottom of the grid, taken from the GRID (p.y and MPC),
-   NEVER from rowTop(): BANDS makes rows unequal on the control room and
-   equal on the bench, so a pixel-derived height would make the physics
-   depend on which screen happens to be open. A node is `partId+side`, so
+   NEVER from a pixel: elevation is a fact about the DESIGN, so it must not be
+   derived from anything the view happens to be doing. A node is `partId+side`, so
    the face it sits on is the height it sits at - a nozzle on the top face
    really is higher than one on the bottom, and that is what gives a
    component's own internal path (comp:, below) a height to span. */
@@ -974,6 +978,11 @@ function netBuild(){
      mechanism rather than two. */
   const contNode = tag => nodeIdx("cont:" + tag);
   const breakIds = [];
+  /* A containment node whose height is NOT its edge's other end - a break at a
+     pipe cell discharges at that cell, not at the machine the run happens to
+     terminate on. Collected here and applied in the elevation pass below,
+     which is where every other node's z is settled. */
+  const contZ = {};
 
   /* WHICH FITTINGS ARE ON THE PLANT, AND WHAT EACH ONE IS. A fitting is a
      PART, so this is a read of the drawing - it replaces ~150 lines that had
@@ -1008,24 +1017,24 @@ function netBuild(){
     const ends = runEnds(r.key, r.k);
     if(!ends) continue;
     const u = nodeIdx(coreFold(ends[0])), v = nodeIdx(coreFold(ends[1]));
-    const bore = runBore(r), L = plen(r.pts);
+    const bore = runBore(r), L = r.L;
     const tid = tankIdOf(ends[0]) || tankIdOf(ends[1]);
     if(tid){
       /* Valve, diode and "is there anything left to give", asked of EVERY
          tank by the same predicate - see tankLive(). Nothing here knows
          which tank this is. */
       edges.push({u, v,
-        g: s => tankLive(s,tid) ? injResist(bore, L + pipeExtraLen(s, r.key)) : 0,
+        g: s => tankLive(s,tid) ? injResist(bore, L + pipeExtraLen(s, r.cells)) : 0,
         h: 0, kind: r.k, key: r.key}); // LABEL: carried onto the edge for rendering/lookup, never re-compared here
       continue;
     }
     /* r.k is a LABEL, carried onto the edge so a renderer or
-       hittableRunKeys() can read it back; nothing here branches on it.
+       a renderer can read it back; nothing here branches on it.
        Always routed through throttled() with an empty id list, which is
        exactly resist(bore, L) - so an undamaged run is bit-identical to a
        plain number while still being LIVE against a hit that has not
        happened yet. */
-    edges.push({u, v, g: s => throttled(s, bore, L + pipeExtraLen(s, r.key), []),
+    edges.push({u, v, g: s => throttled(s, bore, L + pipeExtraLen(s, r.cells), []),
                 h: 0, kind: r.k, key: r.key});
   }
 
@@ -1192,32 +1201,27 @@ function netBuild(){
                 h: 0, kind: "vent", key: "vent:"+fid});   // LABEL: synthetic kind, for the z-pass below
   }
 
-  /* One break edge per (run, END) - a cut pipe has two open ends and both of
-     them spill, which a single edge could not say. Each gets a containment
-     node of its OWN, at its own elevation, so the break discharges where it
-     is rather than through a static column to somewhere else. An edge whose
-     break has not happened has g exactly 0, so netAssemble skips it entirely
-     and an unbroken plant's matrix is bit-identical to one built before break
-     edges existed - the same "shut and never built are the same edge" rule a
-     shut tee already relies on. contNode/breakIds themselves are hoisted to
-     the top of this function now - a relief fitting with no tank to land on
-     needs one too; see the branches loop, above. */
-  /* Every run whose two ends are both NAMED gets a break pair - which is
-     every run now, not the old four-kind subset (a severed relief header or
-     steam line used to not spill purely because this loop's own kind list
-     disagreed with the edge loop's; there is no list now, so it does).
-     Every run is port to port now, so runEnds() answers for all of them -
-     the two exclusions this used to carry (a branch fitting's own route, and
-     the surge line's tap end) were both the tap shape, and the tap shape is
-     gone. */
+  /* ══ THE BREAK HAPPENS AT THE HOLE ══
+     ONE CONTAINMENT NODE PER PIPE CELL, at that cell's own elevation, and one
+     break edge from each of the connection's two end nodes to it. The break
+     used to open at the run's ENDS, which put the plume at the machines and
+     the discharge at their height - a fudge this file's own comment admitted
+     to, and one a cell-keyed pipe simply does not need.
+     Every edge is g exactly 0 until that cell is hit, so netAssemble skips it
+     and an intact plant's matrix is bit-identical to one built before break
+     edges existed; and the node SET is constant, which is what netFixSig() and
+     the factorisation cache require. */
   for(const r of net){
     const ends = runEnds(r.key, r.k);
     if(!ends) continue;
-    const bore = runBore(r), g = BREAK_K*bore*bore, key = r.key;
-    for(const side of [0,1]){
-      const u = nodeIdx(coreFold(ends[side])), v = contNode(key+":"+(side?"b":"a"));
+    const bore = runBore(r), g = BREAK_K*bore*bore;
+    const ua = nodeIdx(coreFold(ends[0])), ub = nodeIdx(coreFold(ends[1]));
+    for(const [x,y] of r.cells){
+      const v = contNode("pipe:"+x+","+y);
       breakIds.push(v);
-      edges.push({u, v, g: s => breakLive(s, key) ? g : 0, h: 0, kind: "break", key: "break:"+key});
+      contZ[v] = zRow(y);                  // the hole's own elevation, not a machine's
+      for(const u of [ua,ub])
+        edges.push({u, v, g: s => cellBroken(s,x,y) ? g : 0, h: 0, kind: "break", key: "break:"+r.key});
     }
   }
   /* one tube-rupture edge per steam generator, from its own primary outlet to
@@ -1336,6 +1340,7 @@ function netBuild(){
      nowhere else to vent) - never a run's own declared kind. */
   for(const ed of edges) if(ed.kind === "break" || ed.kind === "sgtr" || ed.kind === "vent") net2.z[ed.v] = net2.z[ed.u]; // LABEL: synthetic edge kind this function invents
   for(const i of unplaced) net2.z[i] = zCore;   // set above if it is an opening; the core's height otherwise
+  for(const i in contZ) net2.z[i] = contZ[i];   // ...and a pipe-cell break is at the CELL, not at either machine
 
   /* The node the loop's pressure is fixed at - ROLE.fixed.kind==="datum" (the
      pressurizer, today; there must be at most one). A plant without one
@@ -1552,7 +1557,7 @@ const phiRef = (net, s) =>
   (s.P === undefined ? P.P0 : s.P) + rhoDatum(s)*G_MPA*net.z[net.pzrNode];
 /* ══ IS THE PRESSURIZER PLUMBED TO THE LOOP AT ALL ══
    Reachability from the core node to the datum node, over the edges the solve
-   would actually assemble (g>0) - never a D.run lookup. A shut valve, a severed
+   would actually assemble (g>0) - never a stored run list. A shut valve, a severed
    run and a run that was never drawn must all answer the same, which is the
    rule netAssemble already keeps: a shut branch is an absent branch.
 
@@ -1782,7 +1787,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
     /* SIGNED, along the edge's own u->v order, which is the run key's own
        canonical order. It used to be Math.abs(), and the packet animation read
        it: three of the stock plant's four primary runs then ran BACKWARDS,
-       because addRunPorts() canonicalises a key by sorting part ids and that
+       because pipeMap() canonicalises a key by sorting part ids and that
        order has no reason to be the flow order - "sg0" sorts before "tee0", so
        the hot leg's second half read sg0 to tee0 and drew water arriving at the
        surge tee from both sides at once. Every caller that wants a MAGNITUDE
@@ -2164,60 +2169,20 @@ function netFlowK(s, byRun, byP, outs){
   return isFinite(k) && k>=0 ? k : 0;
 }
 
-/* ══════════ A RUN AS A HITTABLE TARGET, AND A PLACE TO STAND ══════════
-   A run is not a part - no LAY.parts entry, so nothing hands combatHit() or
-   repairStart() (step.js) a p.x/p.y/p.w/p.h rectangle to reason about, or a
+/* ══════════ A PIPE CELL AS A HITTABLE TARGET, AND A PLACE TO STAND ══════════
+   A pipe cell is not a part - no LAY.parts entry, so nothing hands combatHit()
+   or repairStart() (step.js) a p.x/p.y/p.w/p.h rectangle to reason about, or a
    p.name to log. These give both the same shape a part already has: an id
-   ("pipe:"+the run's own key, so DMGFX's existing prefix match picks it up
-   for free - see step.js), a name, a footprint size for repairNeed(), and an
-   access flag built from the SAME freeAdj() (layout.js) ring test every
-   component already uses, just unioned over every cell the run's own
-   polyline crosses instead of one rectangle. */
-
-// Every run a player could have laid is hittable now - the old allowlist
-// (hot/cold/hpi) is gone, and so is the exclusion that used to sit
-// beside it for surge ("no source, no flow, nothing to sever"): surge has a
-// break pair of its own now too (netBuild(), above), so it belongs here.
-// What is still excluded is the SYNTHETIC kinds netBuild() itself invents,
-// never a run's own declared kind: "comp" is a component's own internal path
-// (sg tubes, pump casing) - hitting comp:sg0 would just be a second way to
-// hit the sg component itself, through a name the player never sees - and
-// "pump", "break", "sgtr" and "vent" are graph bookkeeping with no pipe on
-// the grid to stand next to. "fit" is a component's internal path too - a
-// fitting is a BOX now, so hitting it is hitting the part, exactly as
-// hitting comp:sg0 would only be a second way to hit the generator.
-const SYNTHETIC_KIND = {comp:1, fit:1, pump:1, break:1, sgtr:1, vent:1};
-function hittableRunKeys(net){
-  const keys=[];
-  for(const e of net.edges)
-    if(e.key && !SYNTHETIC_KIND[e.kind] && keys.indexOf(e.key)<0) keys.push(e.key); // LABEL: which edges are graph bookkeeping, not a run
-  return keys;
-}
-
-// The grid cells a routed polyline actually crosses, deduplicated - sampled
-// every half cell so a long straight leg cannot skip the cell in the middle
-// of it, the same risk plen() would run if it worked in cell units instead
-// of pixels.
-function pipeCells(pts){
-  const out=[], seen={};
-  const add=(gx,gy)=>{ if(gx<0||gy<0||gx>=GW||gy>=GH) return;
-    const k=gx+","+gy; if(!seen[k]){ seen[k]=1; out.push([gx,gy]); } };
-  for(let i=1;i<pts.length;i++){
-    const a=pts[i-1], b=pts[i], dx=b[0]-a[0], dy=b[1]-a[1];
-    const steps=Math.max(1,Math.ceil(Math.hypot(dx,dy)/(CELL/2)));
-    for(let t=0;t<=steps;t++)
-      add(Math.floor((a[0]+dx*t/steps-GX)/CELL), rowAt(a[1]+dy*t/steps));
-  }
-  if(!out.length && pts.length) add(Math.floor((pts[0][0]-GX)/CELL), rowAt(pts[0][1]));
-  return out;
-}
+   ("pipe:"+x+","+y, so DMGFX's existing prefix match picks it up for free -
+   see step.js), a name, a 1x1 footprint for repairNeed(), and an access flag
+   built from the SAME freeAdj() (layout.js) ring test every component uses. */
 
 // freeAdj() (layout.js) run per crossed cell and unioned, minus any cell
 // that is itself part of the run - standing "on" a leak is not standing
 // "beside" it, the same distinction freeAdj() already draws between a
 // part's own footprint and its ring.
 function pipeStandCells(cells){
-  const g=occupied(null), on={}, seen={}, out=[];
+  const g=occupied(null,{pipes:false}), on={}, seen={}, out=[];
   for(const [x,y] of cells) on[x+","+y]=1;
   for(const [x,y] of cells) for(const c of freeAdj({x,y,w:1,h:1},g)){
     const k=c[0]+","+c[1];
@@ -2232,49 +2197,56 @@ function pipeName(r){
   const kind = r.k.toUpperCase()+" LEG"; // LABEL: display name only
   return kind + (loop!=null ? " "+(loop+1) : "");
 }
+/* WHICH CONNECTIONS RUN THROUGH THIS CELL - a crossing belongs to two, so this
+   is a list. Used to name a broken cell after the pipe it cut. */
+const pipeCellRuns = (x,y) => pipeMap().cellOwner[x+","+y] || [];
 
 // The pseudo-part combatHit()/repairStart() (step.js) consume in place of a
 // LAY.parts entry - same shape (id, name, w, h, access) so repairNeed() and
-// the DMGFX log line need no second code path for a run. isRun tells
-// combatHit()'s weighted pick which scoring rule applies (runWgt() below,
-// never the part rule) without duck-typing on which fields happen to exist.
-function pipePart(key){
-  const r = P.net.byKey[key];
-  if(!r) return null;
-  const cells = pipeCells(r.pts), stand = pipeStandCells(cells);
-  return {id:"pipe:"+key, name:pipeName(r), w:cells.length, h:1,
+// the DMGFX log line need no second code path for a pipe. ONE CELL, so w and h
+// are 1: a hit breaks one cell of one run, and a longer run is simply more
+// targets for a stray round to find. isRun tells combatHit()'s weighted pick
+// which scoring rule applies without duck-typing on which fields exist.
+function pipeCellPart(x,y){
+  if(!D.pipes[x+","+y]) return null;
+  const cells=[[x,y]], stand=pipeStandCells(cells);
+  const keys=pipeCellRuns(x,y);
+  const nm = keys.length ? pipeName({key:keys[0], k:keys[0].split(":")[0]}) : "PIPE";
+  return {id:"pipe:"+x+","+y, name:nm, w:1, h:1,
           access: stand.length>0, cells, stand, isRun:true};
 }
 
 /* Anything s.dmgParts can hold, resolved to the one shape the repair path
-   reads: id, name, access. A run is not in LAY.parts, so every caller that
-   looked a damage id up directly got `undefined` for a pipe and quietly
-   rendered it as a raw id that could never be reached - which is how the
-   damage card came to promise NO ACCESS for a pipe a party was standing
-   next to. Three readers (the dispatcher, the dose rate, the damage card),
-   one resolver. */
+   reads: id, name, access. A pipe cell is not in LAY.parts, so every caller
+   that looked a damage id up directly got `undefined` for one and quietly
+   rendered it as a raw id that could never be reached. Three readers (the
+   dispatcher, the dose rate, the damage card), one resolver. */
 function dmgPart(id){
-  return (typeof id==="string" && id.indexOf("pipe:")===0)
-    ? (P.net && P.net.byKey[id.slice(5)] ? pipePart(id.slice(5)) : null)
-    : (LAY.parts.find(q=>q.id===id) || null);
+  if(typeof id!=="string" || id.indexOf("pipe:")!==0)
+    return LAY.parts.find(q=>q.id===id) || null;
+  const k=id.slice(5), i=k.indexOf(",");
+  return i<0 ? null : pipeCellPart(+k.slice(0,i), +k.slice(i+1));
 }
 
 // The two rates combatHit() (step.js) already weighs a component's own hull
 // cells by - a run gets no separate scale to fit, just this shared table.
 const HITW_BASE=0.15, HITW_HULL=1.6;
 
-// A run's own odds of being the thing an unaimed hit finds. The difference
-// from a part's own weight (step.js) is what the flat term multiplies: a
-// component pays HITW_BASE once per PART regardless of its footprint, but a
-// run's own length is the whole point of "give more pipe for a hit to find"
-// (design-bench.js) - so here it is paid once per CELL of pipe instead. A
-// long run really does cross more of the room a stray round can land in;
-// the hull bonus is unchanged, paid at the same rate per hull-ring cell.
+// ONE CELL'S own odds of being the thing an unaimed hit finds. A component
+// pays HITW_BASE once per PART regardless of its footprint; a pipe pays it
+// once per CELL, which is what "give more pipe for a hit to find"
+// (design-bench.js) means - and it survives better than it did, because a long
+// connection is now literally more targets rather than one fatter one. The
+// hull bonus is unchanged, paid at the same rate per hull-ring cell.
 function runWgt(cells){
   let w=0;
   for(const [x,y] of cells)
     w += HITW_BASE + (x===0||x===GW-1||y===0||y===GH-1 ? HITW_HULL : 0);
   return w;
+}
+// every pipe cell on the plant, as a hittable target
+function pipeCellIds(){
+  const out=[]; for(const k in D.pipes) out.push("pipe:"+k); return out;
 }
 
 /* ══════════════ THE REFERENCE PLANT, BUILT BY GESTURE ══════════════
@@ -2291,7 +2263,7 @@ function runWgt(cells){
    and PIPE_BORE, and pipenet.js loads after layout.js (index.html) - which
    is already why the relief seed lived here.
 
-   IDEMPOTENT: it clears D.run/D.tanks/D.fittings first, so calling it twice gives
+   IDEMPOTENT: it clears D.pipes/D.ports/D.tanks/D.fittings first, so calling it twice gives
    one plant and not two, and an auditor building an n-loop plant calls the
    same thing a RESET DESIGN button would.
 
@@ -2300,51 +2272,40 @@ function runWgt(cells){
    off the pair of ROLES, resolving a fitting end THROUGH the fitting. If a
    kind ever needs an explicit argument here, that is a missing RUN_KIND row
    and the row is the fix. */
-/* ══ THE STOCK PLANT'S GEOMETRY IS BAKED ══
-   addRun() below still authors the topology exactly as it always has - same
-   calls, same order - but a MANUAL run needs port offsets and corners, and
-   addRun()'s own fallback (simpleRoute(), layout.js) is a plain dogleg, not
-   the collision-avoiding router this plant's pinned physics figures were
-   measured against. So the numbers are baked: captured once, off the last
-   commit that still had the old router, at every loop count the bench
-   allows (see .claude/plan-manual-pipes.md, decision 1, and
-   tools/seed-ports.js, the one-shot seeder that produced this table). A run
-   is matched by its (kind, part, face) pair in EITHER order - addRun() no
-   longer canonicalises which end is "a", so the seed's own a/b order is not
-   guaranteed to survive - and matched in reverse, its offsets and corners
-   are swapped and reversed too, or the baked pipe would run backwards.
-   Never hand-edit this table: regenerate it. */
-const STOCK_GEOM = {1:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:0,ob:0,wp:[]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-12,ob:-17,wp:[[161,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:0,ob:0,wp:[[403,123],[633,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:0,ob:-12,wp:[[725,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:12,ob:17,wp:[[185,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},],2:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:-12,ob:-12,wp:[[265,341]]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-23,ob:-17,wp:[[150,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:17,ob:-12,wp:[[420,123],[621,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:-8,ob:-12,wp:[[717,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:0,ob:17,wp:[[173,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},{k:"hot",a:"core",sa:"r",b:"sg1",sb:"l",oa:12,ob:40,wp:[[357,365],[357,232]]},{k:"cold",a:"pump1",sa:"t",b:"sg1",sb:"b",oa:0,ob:0,wp:[[495,307]]},{k:"cold",a:"core",sa:"b",b:"pump1",sb:"b",oa:23,ob:-17,wp:[[196,453],[478,453]]},{k:"steam",a:"sg1",sa:"t",b:"turb",sb:"t",oa:17,ob:12,wp:[[512,115],[645,115]]},{k:"feed",a:"feed",sa:"t",b:"sg1",sb:"r",oa:8,ob:0,wp:[[733,192]]},],3:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:-23,ob:-17,wp:[[265,330],[265,336]]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-35,ob:-17,wp:[[138,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:17,ob:-23,wp:[[420,123],[610,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:-12,ob:-12,wp:[[713,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:-12,ob:17,wp:[[161,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},{k:"hot",a:"core",sa:"r",b:"sg1",sb:"l",oa:0,ob:40,wp:[[357,353],[357,232]]},{k:"cold",a:"pump1",sa:"t",b:"sg1",sb:"b",oa:0,ob:0,wp:[[495,307]]},{k:"cold",a:"core",sa:"b",b:"pump1",sb:"b",oa:12,ob:-17,wp:[[185,453],[478,453]]},{k:"steam",a:"sg1",sa:"t",b:"turb",sb:"t",oa:17,ob:0,wp:[[512,115],[633,115]]},{k:"feed",a:"feed",sa:"t",b:"sg1",sb:"r",oa:0,ob:0,wp:[[725,192]]},{k:"hot",a:"core",sa:"r",b:"sg2",sb:"l",oa:23,ob:40,wp:[[541,376],[541,232]]},{k:"cold",a:"pump2",sa:"t",b:"sg2",sb:"b",oa:0,ob:0,wp:[[587,261]]},{k:"cold",a:"core",sa:"b",b:"pump2",sb:"b",oa:35,ob:-17,wp:[[208,461],[570,461]]},{k:"steam",a:"sg2",sa:"t",b:"turb",sb:"t",oa:0,ob:23,wp:[[587,107],[656,107]]},{k:"feed",a:"feed",sa:"t",b:"sg2",sb:"r",oa:12,ob:8,wp:[[737,200]]},],4:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:-35,ob:-17,wp:[[265,318],[265,336]]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-46,ob:-17,wp:[[127,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:17,ob:-35,wp:[[420,123],[598,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:-14,ob:-12,wp:[[711,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:-23,ob:17,wp:[[150,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},{k:"hot",a:"core",sa:"r",b:"sg1",sb:"l",oa:-4,ob:0,wp:[[449,349],[449,192]]},{k:"cold",a:"pump1",sa:"t",b:"sg1",sb:"b",oa:0,ob:0,wp:[[495,307]]},{k:"cold",a:"core",sa:"b",b:"pump1",sb:"b",oa:0,ob:-17,wp:[[173,453],[478,453]]},{k:"steam",a:"sg1",sa:"t",b:"turb",sb:"t",oa:17,ob:-12,wp:[[512,115],[621,115]]},{k:"feed",a:"feed",sa:"t",b:"sg1",sb:"r",oa:-5,ob:0,wp:[[720,192]]},{k:"hot",a:"core",sa:"r",b:"sg2",sb:"l",oa:12,ob:40,wp:[[357,365],[357,232]]},{k:"cold",a:"pump2",sa:"t",b:"sg2",sb:"b",oa:0,ob:0,wp:[[587,261]]},{k:"cold",a:"core",sa:"b",b:"pump2",sb:"b",oa:23,ob:-17,wp:[[196,461],[570,461]]},{k:"steam",a:"sg2",sa:"t",b:"turb",sb:"t",oa:0,ob:12,wp:[[587,107],[645,107]]},{k:"feed",a:"feed",sa:"t",b:"sg2",sb:"r",oa:5,ob:8,wp:[[730,200]]},{k:"hot",a:"core",sa:"r",b:"sg3",sb:"l",oa:35,ob:40,wp:[[565,388],[565,232]]},{k:"cold",a:"pump3",sa:"t",b:"sg3",sb:"b",oa:0,ob:0,wp:[[679,261]]},{k:"cold",a:"core",sa:"b",b:"pump3",sb:"b",oa:46,ob:-17,wp:[[219,469],[662,469]]},{k:"steam",a:"sg3",sa:"t",b:"turb",sb:"t",oa:0,ob:35,wp:[[679,123],[668,123]]},{k:"feed",a:"feed",sa:"t",b:"sg3",sb:"r",oa:14,ob:16,wp:[[739,208]]},],};
-function bakeStockGeometry(loops){
-  const table=STOCK_GEOM[loops]; if(!table) return;
-  const used={};
-  for(const g of table){
-    let hit=null;
-    for(const rid in D.run){
-      if(used[rid]) continue;
-      const ends=runEndsOf(rid); if(!ends) continue;
-      if(ends.a===g.a && ends.af===g.sa && ends.b===g.b && ends.bf===g.sb){ hit={rid,rev:false}; break; }
-      if(ends.a===g.b && ends.af===g.sb && ends.b===g.a && ends.bf===g.sa){ hit={rid,rev:true}; break; }
-    }
-    if(!hit) continue;
-    used[hit.rid]=1;
-    const e=D.run[hit.rid];
-    const oa = hit.rev?g.ob:g.oa, ob = hit.rev?g.oa:g.ob;
-    D.ports[e.pa].o=oa; D.ports[e.pb].o=ob;
-    const wp=g.wp.map(([x,y])=>({x,y}));
-    e.wp = hit.rev ? wp.slice().reverse() : wp;
-  }
+/* ══ THE STOCK PLANT'S GEOMETRY IS PLACED, NOT BAKED ══
+   There is no table of pixel waypoints any more, and nothing to regenerate:
+   ports are CELLS and pipes are CELLS, so the reference plant is written the
+   way a hand would draw it - a port beside each nozzle, then a run of cells
+   between two of them. seedRun() is the one authoring call, and it does
+   exactly what the bench's own pipe drag does: step one cell out of each port,
+   dogleg between those two, and stamp the shapes (pipeLay(), layout.js).
+   `vias` are the corners a hand would have clicked, for the two runs whose
+   plainest dogleg would cross a machine. */
+function seedPort(partId,dx,dy){
+  const pid=addPortAt(partId,dx,dy);
+  if(pid==null) console.warn("stock port refused",partId,dx,dy);
+  return pid;
 }
-/* WHERE A GENERATOR'S SAFETY VALVE SITS: three cells to the right of its own
-   machine, on the top row, where its discharge is clear of the steam header
-   and of the relief tank. The last loop's would fall off the grid there, so it
-   sits directly above its generator instead - the two are the only cells that
-   are always free, and the rule picks between them rather than a table naming
-   four numbers. */
-const svCell = i => { const x=8+i*2; return x+3 < GW ? x+3 : x; };
+function seedRun(pa,pb,vFirst,vias){
+  if(pa==null||pb==null) return;
+  const ca=portCell(pa), cb=portCell(pb);
+  const da=portFaceOf(pa), db=portFaceOf(pb);
+  if(!ca||!cb||!da||!db) return;
+  const a1=[ca[0]+DIRV[da][0], ca[1]+DIRV[da][1]];
+  const b1=[cb[0]+DIRV[db][0], cb[1]+DIRV[db][1]];
+  if(a1[0]===cb[0] && a1[1]===cb[1]) return;   // shell to shell: a joint, no pipe
+  const stops=[a1].concat(vias||[]).concat([b1]);
+  let path=[a1];
+  for(let i=1;i<stops.length;i++)
+    path=path.concat(pipePath(path[path.length-1], stops[i], vFirst));
+  pipeLay(path, ca, cb);
+}
+/* WHERE A GENERATOR'S SAFETY VALVE SITS: one cell up and one along from its
+   own steam nozzle, where its discharge is clear of the header. */
+const svCell = i => [28+i*7, 1];
 function buildStockPlumbing(opt){
   const loops = (opt && opt.loops) || 1;
-  for(const rid in D.run)   delete D.run[rid];
+  for(const k   in D.pipes) delete D.pipes[k];
   for(const pid in D.ports) delete D.ports[pid];
   for(const id  in D.tanks) delete D.tanks[id];
   for(const id  in D.fittings) delete D.fittings[id];
@@ -2362,13 +2323,12 @@ function buildStockPlumbing(opt){
      A STARTING DESIGN, exactly like the default rod count - not code. Every
      field is the player's (see the tank contract above); nothing anywhere
      may ask which one of these is "the HPI tank", because there is no such
-     thing. There is a tank at (3,1), full of water, behind a check valve,
-     with a pump. Each starts from TANK_DEFAULT through mintTank() and is
-     then set the way its own bench panel would set it. */
+     thing. Each starts from TANK_DEFAULT through mintTank() and is then set
+     the way its own bench panel would set it. */
   const tank = (id,x,y,cfg) => { mintTank(id,x,y); Object.assign(D.tanks[id],cfg); };
   const fitting = (id,x,y,cfg) => { mintFitting(id,x,y); Object.assign(D.fittings[id],cfg); return id; };
 
-  tank("hpi",1,1,{ name:"HPI TANK", col:"#5aa9d6",
+  tank("hpi",1,19,{ name:"HPI TANK", col:"#5aa9d6",
     tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
     vol:65, level:100, fluid:"water",
     /* Pumped, and no nitrogen charge behind it - so it is worth exactly
@@ -2378,7 +2338,7 @@ function buildStockPlumbing(opt){
        a named one. */
     gas:null, pump:{p:11.0, bus:"bkp"}, check:true, auto:"manual", burst:null});
 
-  tank("reltk",7,0,{ name:"RELIEF TANK", col:"#8a6cd0",
+  tank("reltk",23,0,{ name:"RELIEF TANK", col:"#8a6cd0",
     tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
     vol:40, level:0, fluid:"contaminated",
     /* At rest the gas sits at containment pressure, which is what makes an
@@ -2388,20 +2348,14 @@ function buildStockPlumbing(opt){
     gas:{p0:0.15, frac:25/23}, pump:null, check:false, auto:"always",
     burst:{at:1.4, drain:6.0, rel:0.004}});
 
-  tank("efw",9,1,{ name:"EFW TANK", col:"#5aa9d6",
+  tank("efw",50,0,{ name:"EFW TANK", col:"#5aa9d6",
     tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
     vol:35, level:100, fluid:"condensate",
-    /* Its own pump, on the backup bus, at a real discharge pressure. It had
-       NEITHER a gas charge nor a pump until feedwater was solved, which cost
-       nothing while the reserve was an algebraic term - and delivered
-       exactly nothing the moment its line became a real edge against a
-       generator's own secP(). 8.0 MPa clears a generator's shell at any
-       level it can be needed at; what keeps it shut on a healthy plant is
-       its AUTORULE, not its pressure, because "starts on LOW GENERATOR
-       LEVEL, not on being armed" is a rule and not a coincidence of numbers.
-       Give it a `gas` and drop the pump and it becomes the one feedwater
-       path a blackout with no backup supply does not kill - a knob on THIS
-       tank, the same trade the injection tank offers. */
+    /* Its own pump, on the backup bus, at a real discharge pressure. 8.0 MPa
+       clears a generator's shell at any level it can be needed at; what keeps
+       it shut on a healthy plant is its AUTORULE, not its pressure, because
+       "starts on LOW GENERATOR LEVEL, not on being armed" is a rule and not a
+       coincidence of numbers. */
     gas:null, pump:{p:8.0, bus:"bkp"}, check:false, auto:"sglow", burst:null});
 
   /* No cell: a SECONDARY tank has no node, so it needs none, and the hotwell
@@ -2409,102 +2363,125 @@ function buildStockPlumbing(opt){
      inventing hydraulics the secondary does not have. */
   tank("hotwell",null,null,{ name:"HOTWELL", col:"#5aa9d6",
     tip:"Condensate returning from the condenser, and what the feed pumps draw on. A tube rupture puts primary water in here and it has to go somewhere.",
-    /* Half again what the generators themselves hold. It has to be able to
+    /* Half again what the generators themselves hold - it has to be able to
        take a generator's WHOLE charge back plus what an emergency reserve
-       pushes through it, or the answer to losing feedwater is to overflow
-       the condensate over the side - measured: at exactly one charge it hit
-       100 % and spilled, and emergency feed came out NET NEGATIVE. */
+       pushes through it, or the answer to losing feedwater is to overflow the
+       condensate over the side. */
     vol:150, level:50, fluid:"condensate",
     gas:null, pump:null, check:false, auto:"always", burst:null});
 
   /* ══ THE FITTINGS ══
-     Two boxes, and both of them used to be something else. The surge tee was
-     three hand-written special cases for a run that landed on another run;
-     the relief valve was a fraction along a pipe key, which went stale the
-     moment anything upstream of it moved. They are components in cells now,
-     with the same standing a tank has - hittable, repairable, blocking, and
-     deletable and re-placeable by gesture.
      A STARTING DESIGN, exactly like the tanks: every field is the player's,
      and nothing anywhere may ask which one of these is "the surge tee". */
-  const tee0 = fitting("tee0",6,5,{ name:"SURGE TEE", mode:"tee", bore:1,
+  const tee0 = fitting("tee0",20,14,{ name:"SURGE TEE", mode:"tee", bore:1,
     tip:"The junction where the pressurizer meets the loop. A tee costs nothing and closes nothing - it is one node with four faces." });
-  const rv0  = fitting("rv0",6,1,{ name:"RELIEF VALVE", mode:"relief", bore:PIPE_BORE.relief,
+  const rv0  = fitting("rv0",20,2,{ name:"RELIEF VALVE", mode:"relief", bore:PIPE_BORE.relief,
     tip:"Lifts on pressure and blows the loop down through whatever is piped behind it. Pipe its outlet to a tank, or it vents straight into the room." });
   /* ONE SAFETY VALVE PER GENERATOR, on its steam nozzle - a real plant has
      them per machine and so does this one. It is the SAME relief fitting the
      pressurizer has; what makes it a secondary valve is only where it was
-     placed, which is what shellsOf() (layout.js) reads back.
-     There is no invisible lid: a shell with nothing fitted to relieve it
-     bursts at SG_BURST_K x its design pressure, so the reference plant has to
-     carry the thing it teaches. The bore is what decides whether it can
-     actually hold the shell - measured, 0.30 bursts anyway and 0.55 holds -
-     and it is the player's to get wrong.
-     It taps the NOZZLE and is not spliced into the main steam line: a valve in
-     the line would be shut off with the line, which is the one case it exists
-     for. */
-  const sv0  = fitting("sv0",svCell(0),0,{ name:"SG SAFETY 1", mode:"relief", bore:0.55,
-    tip:"The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead." });
+     placed, which is what shellsOf() (layout.js) reads back. There is no
+     invisible lid: a shell with nothing fitted to relieve it bursts, so the
+     reference plant has to carry the thing it teaches. It taps the NOZZLE and
+     is not spliced into the main steam line: a valve in the line would be shut
+     off with the line, which is the one case it exists for. */
+  const svTip="The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead.";
+  const sv0  = fitting("sv0",svCell(0)[0],svCell(0)[1],{ name:"SG SAFETY 1", mode:"relief", bore:0.55, tip:svTip });
 
-  /* ══ THE RUNS ══
-     Order matters, and it is the order a hand would draw them in: port()
-     spreads N pipes along a face into N slots in the order D.run carries
-     them, so re-ordering this list re-routes the plant. */
-  addRun("core","r",tee0,"l");
-  addRun(tee0,"t","sg0","l");
-  addRun("sg0","b","pump0","t");
-  addRun("pump0","b","core","b");
-  addRun("sg0","t","turb","t");
-  addRun("feed","t","sg0","r");
-  /* THE SURGE LINE, and it is an ordinary run: the pressurizer's own drop
-     onto the TOP of the tee. Onto "t" rather than "b" because a surge line
-     comes DOWN into the junction - measured, "b" routes under the hot leg
-     and back up for 230 px against 129, which is a loop seal nobody drew. */
-  addRun("pzr","b",tee0,"t");
-  addRun("turb","b","cond","t");
-  addRun("cond","r","feed","b");
-  addRun("hpi",null,"core","b");
-  /* THE RELIEF PATH, and it is two ordinary runs through a valve. It was one
-     run plus a fitting tapped onto it at a measured 0.9 along its length;
-     the valve is a box in the line now, so where it sits is where it is
-     drawn. Its outlet reaching a tank is what makes the discharge land in
-     that tank rather than in the room, and that is asked of the graph
-     (net.fitTarget) rather than stored. */
-  addRun("pzr",null,rv0,"l");
-  addRun(rv0,"r","reltk",null);
-  /* The EFW tank's own line, onto the generator's SECONDARY face. It used to
-     land on "b" - the same node the cold leg lands on - so a fixed node
-     behind it would have injected into the primary. That collision is gone;
-     what keeps this a pendant leaf now is only the side contract, and KCL
-     still forces exactly zero current through it until that contract
-     changes. */
-  addRun("efw",null,"sg0","r");
-  /* The safety valve's own tap off the steam nozzle. A dead end on purpose:
-     what it passes goes to atmosphere, because the steam side carries no
-     solved hydraulics to carry it anywhere else. */
-  addRun("sg0","t",sv0,"b");
+  buildLayout();                     // the boxes have to be on the grid before a port can sit beside one
+
+  /* ══ THE PORTS AND THE RUNS ══
+     Order matters only in one place: a run laid over an existing straight at
+     right angles becomes a CROSS, so the line that goes through is laid first
+     and the line that crosses it second. */
+  /* THE CORE'S OWN NOZZLES, one cell apart along the faces its ROLE
+     whitelists - the hot legs up the right side, the injection line and every
+     cold return along the bottom. Spread rather than stacked, because a port
+     is a CELL now and two of them cannot share one. */
+  const coreHot  = i => seedPort("core",9,1+2*i);
+  const coreCold = i => seedPort("core",2+2*i,12);
+  const pCoreHot  = coreHot(0);
+  const pCoreHpi  = seedPort("core",0,12);
+  const pCoreCold = coreCold(0);
+  const pPzrSurge = seedPort("pzr",1,6);
+  const pPzrRel   = seedPort("pzr",3,1);
+  const pTeeL     = seedPort(tee0,-1,0);
+  const pTeeT     = seedPort(tee0,0,-1);
+  const pTeeR     = seedPort(tee0,1,0);
+  const pRvL      = seedPort(rv0,-1,0);
+  const pRvR      = seedPort(rv0,1,0);
+  const pRelTk    = seedPort("reltk",-1,2);
+  const pHpi      = seedPort("hpi",3,2);
+  const pEfw      = seedPort("efw",-1,2);
+  const pTurbT    = seedPort("turb",0,-1);
+  const pTurbB    = seedPort("turb",0,7);
+  const pCondT    = seedPort("cond",0,-1);
+  const pCondR    = seedPort("cond",9,1);
+  // one discharge nozzle per generator, one cell apart, and the suction below
+  const feedT     = i => seedPort("feed",i,-1);
+  const pFeedT    = feedT(0);
+  const pFeedB    = seedPort("feed",1,5);
+
+  const sgPorts = i => ({
+    l:     seedPort("sg"+i,-1,1),
+    b:     seedPort("sg"+i,1,6),
+    steam: seedPort("sg"+i,1,-1),
+    sv:    seedPort("sg"+i,2,-1),
+    feed:  seedPort("sg"+i,3,4),
+    efw:   seedPort("sg"+i,3,2),
+  });
+  const g0 = sgPorts(0);
+  const pPump0T = seedPort("pump0",1,-1);
+  const pPump0B = seedPort("pump0",1,5);
+  const pSv0    = seedPort(sv0,0,1);
+
+  seedRun(pCoreHot, pTeeL);                       // the hot leg out of the vessel
+  seedRun(pTeeR, g0.l, true);                     // ...and up into the generator
+  seedRun(g0.b, pPump0T, true);                   // cold leg down to the pump
+  seedRun(pPump0B, pCoreCold, false, [[27,26],[8,26]]);   // ...and back along the bilge
+  seedRun(pHpi, pCoreHpi, true);                  // injection, onto the same face
+  seedRun(pPzrSurge, pTeeT);                      // the surge line, down onto the tee
+  seedRun(pPzrRel, pRvL);                         // relief: vessel to valve...
+  seedRun(pRvR, pRelTk);                          // ...and valve to tank
+  seedRun(g0.steam, pTurbT);                      // main steam - laid BEFORE the two lines that cross it
+  seedRun(g0.sv, pSv0, true);                     // the safety valve's own nozzle tap
+  seedRun(pTurbB, pCondT, true);                  // exhaust
+  seedRun(pCondR, pFeedB, false, [[56,33],[31,33]]);      // condensate, along the keel
+  seedRun(pFeedT, g0.feed, true);                        // feedwater straight up to the shell
+  seedRun(pEfw, g0.efw);                          // the reserve's own line onto the same shell
 
   /* ══ LOOPS 1..3 ══
      Exactly what ADD STEAM GENERATOR HERE plus a pipe drag builds: a placed
-     generator, a placed pump, and five ordinary runs. */
+     generator, a placed pump, their own ports and six ordinary runs. Each loop
+     is given its OWN lane - its own row above the generators for the steam
+     line, its own column down to the turbine, its own row along the bilge for
+     the cold return - because two horizontal runs sharing a row would merge
+     into one line rather than crossing. There are three clear bilge rows and
+     three spare feed nozzles, so a FOURTH loop lays what it can and leaves the
+     rest dangling, which the bench's own PIPES rail then says out loud. */
+  // one bilge row and one steam column per loop, so two horizontals never
+  // share a row (they would MERGE into one line rather than crossing)
+  const COLD_ROW=[26,27,28,29], STEAM_COL=[46,50,51,52];
   for(let i=1;i<loops;i++){
-    placePart(() => ({id:"sg"+i, name:"STEAM GEN "+(i+1), w:1, h:2, x:8+i*2, y:1,
+    placePart(() => ({id:"sg"+i, name:"STEAM GEN "+(i+1), w:3, h:6, x:26+i*7, y:5,
       col:"#5fd2e2", grp:"loop"+i, tip:"", role:"sg"}));
-    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:1, h:1, x:8+i*2, y:6,
+    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:3, h:5, x:26+i*7, y:18,
       col:"#57d38c", grp:"loop"+i, tip:"", role:"pump"}));
-    addRun("core","r","sg"+i,"l");
-    addRun("sg"+i,"b","pump"+i,"t");
-    addRun("pump"+i,"b","core","b");
-    addRun("sg"+i,"t","turb","t");
-    // "r", not "b": the generator's secondary feed face, mirroring loop 0.
-    // Left on "b" this lands feedwater on the PRIMARY cold-leg node.
-    addRun("feed","t","sg"+i,"r");
-    // and its own safety valve, exactly as loop 0 carries one
-    const svi = fitting("sv"+i,svCell(i),0,{ name:"SG SAFETY "+(i+1), mode:"relief", bore:0.55,
-      tip:"The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead." });
-    addRun("sg"+i,"t",svi,"b");
+    const svi = fitting("sv"+i,svCell(i)[0],svCell(i)[1],
+      { name:"SG SAFETY "+(i+1), mode:"relief", bore:0.55, tip:svTip });
+    buildLayout();
+    const g = sgPorts(i);
+    const pT = seedPort("pump"+i,1,-1), pB = seedPort("pump"+i,1,5);
+    const pSv = seedPort(svi,0,1);
+    const row = 3-i, col = STEAM_COL[i], bilge = COLD_ROW[i];
+    seedRun(coreHot(i), g.l, true);
+    seedRun(g.b, pT, true);
+    seedRun(pB, coreCold(i), false, [[27+i*7,bilge],[8+2*i,bilge]]);
+    seedRun(g.steam, seedPort("turb",3+i,-1), true, [[27+i*7,row],[col,row]]);
+    seedRun(g.sv, pSv, true);
+    seedRun(feedT(i), g.feed, true, [[30+i,16-i],[30+i*7,16-i]]);
   }
 
-  bakeStockGeometry(loops);
   buildLayout();
 }
 buildStockPlumbing();
