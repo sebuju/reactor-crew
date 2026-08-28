@@ -1236,6 +1236,9 @@ function netBuild(){
         else edge.h = li!=null
           ? (s => PUMP_H0 * loopPumpCap(li, s.dmgParts) * (s.capScale ? (s.capScale[li]??1) : 1)
                           * flowOf(s, p.id)
+                          /* 0.8 is GAME BALANCE: a fully vapour-bound pump is
+                             still turning, so it keeps a fifth of its head
+                             rather than none. Nothing measured says a fifth. */
                           * (1 - 0.8*((s.cavP && s.cavP[li]) || 0)))
           : (s => PUMP_H0 * pumpCap(pumpSizeOf(p.id)) * flowOf(s, p.id));
       }

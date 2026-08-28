@@ -4,6 +4,8 @@
 /* ═══════════════ SIM ═══════════════ */
 let P=null,S=null;
 function commission(){
+  /* K is the XENON CLOCK: a deliberate 400x time compression, so a scram costs
+     ~3 min of lockout rather than ~20 h. Game balance, and the central mechanic. */
   const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
@@ -43,8 +45,14 @@ function commission(){
      Ahead of the network below, not after it: rhoAt() measures density about
      this temperature, and netCoreFrac0() solves the plant before this
      function returns. */
-  P.sat   = {p0:P.P0, T0:P.tsat0, n:a.satN, pFloor:.05};  // this coolant's saturation curve
-  P.Tref  = Math.min(a.Tref, P.tsat0-35);              // coolant program temp, subcooled by design
+  P.sat   = {p0:P.P0, T0:P.tsat0, n:coolSatN(a), pFloor:.05};
+  P.hfg   = a.hfg;                                     // THIS coolant's latent heat, kJ/kg
+  /* A PLANT MAY COMMISSION SATURATED. The ceiling used to be tsat0-35, a hard
+     35 K of subcooling with no derivation, and it is why no reactor here could
+     be a BWR: the COOLANT row already says Tref 559 against tsat 559 and this
+     line overruled it. Saturation itself is the ceiling now - past it the
+     programme is superheat, which this model has no enthalpy for. */
+  P.Tref  = Math.min(a.Tref, P.tsat0);
   /* Numerical headroom, never behaviour: a clamp a healthy plant can reach is
      a modelling decision wearing a guard's clothes, and the old flat 500/1000
      was water's band applied to a salt plant at 922 K. */
@@ -107,6 +115,7 @@ function commission(){
       if((k.startsWith("hot:")||k.startsWith("cold:")) && Math.abs(P.netRefByRun[k]) > 1e-9*big){
         sum+=Math.abs(P.netRefByRun[k]); n++; }
     P.netRefRun = n ? sum/n : 0; }
+  /* xenon burnout, sigma*phi at rated flux, in units of the decay constant. */
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = a.P0>3 ? 1.22 : 4.0;
@@ -165,6 +174,16 @@ function commission(){
      typed 0.30 against a solved quantity - it is the one row of RPS_CH left
      that had no reference of its own. */
   P.vf0 = S.vf;
+  /* and what W-3 has to be worth for this plant to read the margin its coolant
+     row sells at the condition it COMMISSIONS in - see dnbrOf(). All five of
+     W-3's inputs come off one real step, because the hot node's quality is
+     walked inside coreStep() and cannot be had from outside it; the step is
+     then thrown away and the plant commissions on a fresh reset. */
+  P.dnbrK = 1;
+  step(0.02);
+  P.dnbrK = P.dnbr0/Math.max(S.dnbr,1e-9);
+  resetPlant();
+  S.dnbr  = P.dnbr0;
   screen="operate"; layout();
 }
 /* ══════════ THE AUTOMATIC SYSTEMS ══════════
@@ -444,7 +463,7 @@ const condCap_ = () => hotMass()*CP_W + hotMass()*0.6*CP_STEEL;
    the same anchor as everything else on this side: at design shell pressure
    against design condenser pressure it is exactly H_FG, so the machine you
    bought does what it always did and only backpressure moves it. */
-const TURB_GAM=0.19;
+const TURB_GAM=0.19;                 // (gamma-1)/gamma for steam
 const turbDh = (ps,pc) =>
   P.hTurb*(1-Math.pow(clamp(pc/Math.max(ps,1e-4),0,1),TURB_GAM));
 
@@ -745,7 +764,9 @@ const RPS_CH=[
   ["LOW FLOW","FLOW",           -1, P_=>P_.flowMin*1.02,             s=>s.flowNet, s=>s.heat>0.3],
   ["LOW PRESSURE","PRESSURE",   -1, P_=>P_.P0*0.86,                  s=>s.P],
   ["CORE VOID","VOID",          +1, (P_,m)=>Math.max(.30,P_.vf0+.20)+.15*m, s=>s.vf],
-  ["LOW SUBCOOLING","SUBCOOL",  -1, ()=>3,                           s=>s.sc],
+  /* 3 K absolute, or 3 K below what this plant was COMMISSIONED subcooled by -
+     whichever is lower. A plant designed saturated has no 3 K to lose. */
+  ["LOW SUBCOOLING","SUBCOOL",  -1, P_=>Math.min(3,P_.sc0-3),        s=>s.sc],
 ];
 /* `slack` shifts the setpoint toward the plant, so 0 is the real limit and
    RPS_NEAR is the warning band. Proportional, because every setpoint on the
@@ -1048,6 +1069,45 @@ const CAV_SPAN=12;
 // the leak, in % of inventory per second, that takes the pressurizer's
 // authority away entirely - a pinhole barely touches it, a LOCA ends it
 const PZR_LOSE=2.0;
+/* ── DNBR OFF A PUBLISHED CORRELATION ──
+   What stood here was five invented exponents over a hand-picked peaking
+   factor of 2.66: hotFlow^.6, (p/P0)^.3, (sc/20)^.4. W-3 (Tong, 1967) is the
+   correlation the industry actually uses for this, and after the bundle got
+   pins there is nothing left to invent - it wants real heat flux, real mass
+   flux, quality, hydraulic diameter and pressure, and all five are measured.
+
+   The paper's coefficients are in the paper's units, so the conversion happens
+   once at the door and nowhere else: psia, lb/hr/ft2, inches, BTU/lb, and an
+   answer in BTU/hr/ft2. W3_LIM is the correlation's OWN validity range, not a
+   guard invented here - past it the first bracket's exponential runs away and
+   the answer stops being W-3 at all. The stock water families all land inside
+   it: 15.5 MPa is 2248 psia, the stock bundle is 0.46 in, and rated G is
+   2.0e6 lb/hr/ft2. A sodium or salt plant at 0.2 MPa does NOT, and is
+   evaluated at the low edge - see the known gaps. */
+const W3_P=145.038, W3_G=737.338, W3_D=39.3701, W3_Q=3.15459, W3_H=2.326;
+const W3_LIM={p:[1000,2300], g:[1.0,5.0], d:[0.2,0.7], x:[-0.15,0.15]};
+function dnbW3(pMPa,gSI,x,dhM,dhSub){
+  const p=clamp(pMPa*W3_P,W3_LIM.p[0],W3_LIM.p[1]);
+  const g=clamp(gSI*W3_G/1e6,W3_LIM.g[0],W3_LIM.g[1]);
+  const de=clamp(dhM*W3_D,W3_LIM.d[0],W3_LIM.d[1]);
+  const q=clamp(x,W3_LIM.x[0],W3_LIM.x[1]);
+  const hs=Math.max(dhSub,0)/W3_H;
+  return 1e6*W3_Q
+    *((2.022-4.302e-4*p)+(0.1722-9.84e-5*p)*Math.exp((18.177-4.129e-3*p)*q))
+    *((0.1484-1.596*q+0.1729*q*Math.abs(q))*g+1.037)
+    *(1.157-0.869*q)
+    *(0.2664+0.8357*Math.exp(-3.151*de))
+    *(0.8258+7.94e-4*hs);
+}
+/* W-3 gives the SHAPE; the COOLANT row's own dnbr column still gives the
+   LEVEL, which is the one thing about thermal margin that was never a shape
+   you could draw. P.dnbrK is the P.pinUA idiom: solved once in commission()
+   so that this plant at RATED power and RATED mass flux reads exactly
+   P.dnbr0. One helper, because the anchor and the tick must not drift. */
+function dnbrOf(s,heat,gShare,x,dhSub){
+  const qHot=Math.max(heat*P.rated*1e6/Math.max(P.aHeat,1e-6)*Math.max(s.fq,1e-3),1);
+  return P.dnbrK*dnbW3(s.pCore,Math.max(P.G0*gShare,1e-3),x,P.dh,dhSub)/qHot;
+}
 /* The core's temperature rise at RATED flow and rated heat, in K. It is the
    SIZING figure now, not the answer: coreStep() integrates enthalpy up each
    channel and hands back what the channels actually did, and this is what says
@@ -1312,11 +1372,14 @@ function resetPlant(){
      actually sits 1400 K below saturation. They are derived from the state this
      function just built, by the same expressions step() uses, so the readouts
      and P.sc0 are right on tick zero instead of after the first tick. */
-  S.heat = S.n*.935 + S.decay;
+  S.heat = S.n*PROMPT_F + S.decay;
   /* the rated-flow value of the same expression the tick uses - a plant on
      tick zero is at rated flow by construction, so its rise is coreDTRated()
      even though s.coreDT has not walked up to it yet */
   S.sc   = tsat(S.P) - (S.Tavg + coreDTRated(S.heat)/2);
+  /* the same subcooling read as a thermodynamic quality, which is the currency
+     W-3 asks in - negative on a subcooled plant, positive on a saturated one */
+  S.xHot = -CP_W*S.sc/P.hfg;
   /* The shell starts where the old formula put it, so nothing pinned against a
      plant at rest moves. From here it is an integral. */
   for(const id of sgIds()) S.sgTBy[id] = tsatSec(secPTarget(S,id));
@@ -1482,7 +1545,7 @@ function step(dt){
       d += s.dec[i];
     }
     s.decay = d; }
-  const heat = s.n*0.935 + s.decay;
+  const heat = s.n*PROMPT_F + s.decay;
 
 
   /* runFlow is filled by netFlowK() with this tick's real per-run flow -
@@ -1749,7 +1812,11 @@ function step(dt){
     s.ihxQBy[id] = qIn; qTot += qIn;
   }
   const removal = qTot/(P.rated*1000);
-  s.dTavg = (heat-removal)*1.8/P.graceK;               // K/s, for the rod controller's lead term
+  /* THE LOOP'S HEAT CAPACITY, not a typed 1.8. What is not removed goes into
+     the water that is there: loopKg()*CP_W, both of which already exist and
+     both of which follow the plant. graceK stays on top of it - that column is
+     bought game balance and says so. */
+  s.dTavg = (heat-removal)*P.rated*1000/(loopKg()*CP_W)/P.graceK;   // K/s
   s.Tavg = clamp(s.Tavg + s.dTavg*dt, P.Tmin, P.Tmax);
 
   /* ── pressure: hot loop pressurises, relief valve lifts, vessel can burst ──
@@ -1937,7 +2004,13 @@ function step(dt){
      the whole-core aggregates of a field, not lumps in their own right. */
   /* the core boils at ITS OWN pressure, not at the pressurizer's */
   const sat = tsat(s.pCore), Th = s.Tavg + s.coreDT/2;
-  const vLeak = Math.max(0,(95-s.inv)/25);
+  /* WHAT IS LEFT OF THE INVENTORY IS WHERE THE STEAM IS. A fixed volume that
+     has lost mass is a mixture, and the void fraction of that mixture falls
+     straight out of the two densities: (1 - m/m0)/(1 - rvl). The typed
+     (95-inv)/25 said the same thing with the wrong slope and a 5 % dead band,
+     and it could not say that a depressurising loop voids further for the
+     same mass lost - which is exactly what rvl carries. */
+  const vLeak = Math.max(0,(1-s.inv/100)/Math.max(1-satRvl(s.pCore),1e-3));
   const nod = coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac);
   s.voidTh = s.vNode;
   /* A MEASUREMENT OF THE FIELD, plus the one thing the field cannot say. The
@@ -2308,9 +2381,7 @@ function step(dt){
   /* Peaking is the measured peak of the flux field, and the flow that counts
      is the flow through the channel that peak sits in - a starved channel can
      dry out while the core average still looks comfortable. */
-  const subF=clamp(sc/20,.08,1.3);
-  s.dnbr=P.dnbr0*Math.pow(s.hotFlow,.6)*Math.pow(s.pCore/P.P0,.3)*Math.pow(subF,.4)
-        /Math.max(.02,heat*(s.fq/2.66));
+  s.dnbr=dnbrOf(s,heat,s.hotFlow,s.xHot,CP_W*(sat-(s.Tavg-s.coreDT/2)));
 
   /* ── damage ── */
   if(s.dnbr<1)     s.dmg+= (1-s.dnbr)*22*dt;

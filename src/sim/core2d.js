@@ -18,12 +18,15 @@ const XIX=(i,j)=>i*XNZ+j;
 
 /* Six sweeps warm-started from last tick lands well inside a percent, because
    the shape barely moves in 20 ms. Cold starts sweep properly instead. */
+/* SOR_OM is the conventional over-relaxation factor for a mesh this shape. */
 const SOR_SWEEPS=6, SOR_OM=1.5;
 
-/* The three numbers here are fitted rather than derived. XCOUP sets how
-   tightly a node talks to its neighbours, and so how far a local disturbance
-   travels before the rest of the core notices. XPG is how hard burnable
-   poison grades toward the centre. XRINF is how many rings one bank reaches. */
+/* The three numbers here are fitted rather than derived, AND THEY WERE FITTED
+   AGAINST NO STATED TARGET - that is the honest label, not a derivation.
+   XCOUP sets how tightly a node talks to its neighbours, and so how far a
+   local disturbance travels before the rest of the core notices. XPG is how
+   hard burnable poison grades toward the centre. XRINF is how many rings one
+   bank reaches. Each wants an anchor of its own; none has one yet. */
 const XCOUP=1.0, XPG=0.9, XRINF=2.2;
 /* How far apart the tilt trim can stand the innermost and outermost banks, as a
    share of core height. Measured, not picked: the radial offset a load transient
@@ -46,12 +49,11 @@ let XABS0=null;
    heat to go and climbs on its own heat capacity until it melts. XDRY, the 320
    scale, the 1+4*void fudge, the 3200 cap and the pk2 normalisation are all
    gone with it: a balance does not need any of them.
-   XHFG is the primary coolant's latent heat, kJ/kg, and it exists only to turn
-   enthalpy above saturation into quality. Water's, and used for every family
-   because only the water families can reach saturation at all in this game -
-   sodium boils at 1150 K, salt at 1700 and helium not at all, and all three
-   run hundreds of kelvin below it. */
-const XTAU_F=4, XHFG=1500;
+   The latent heat that turns enthalpy above saturation into quality is the
+   COOLANT row's own hfg now (P.hfg, T.hfg), not water's 1500 applied to every
+   family - the quality term divided sodium by water's latent heat and the
+   whole of Stage D's channel weight reads that quality. */
+const XTAU_F=4;
 /* Drift flux: quality to void fraction. C0 is the concentration parameter (the
    steam runs up the middle of the channel faster than the mean) and rvl is
    the density ratio of steam to water, which is satRvl(pressure) now rather
@@ -97,12 +99,15 @@ const XMIX0=0.55, XMIX_MAX=0.85;
    point, never W/m2 or kg/m2s. But the ratio collapses - q"/(G*cp) is the core
    rise times the flow area over the heated area - so both anchor on ONE
    geometric ratio of a fuel bundle, which is the P.pinUA idiom, and CORE_DT0
-   inside them makes both scale per plant. XSUB_AR is a real PWR: 4.75 m2 of
-   flow area against 5566 m2 of rod surface. The low branch is that bundle's
-   0.0022*q"*D/k at rated, 28.3 K of departure subcooling against the high
-   branch's 4.3 K, so a plant at rated is on the high branch as it should be
-   and the two cross near 15 % flow. */
-const XSUB_AR=8.53e-4, XSUB_LO_DT=28.3;
+   inside them makes both scale per plant. Both ratios are MEASURED off the
+   drawn bundle now (latBundle(), lattice.js): the flow-to-heated area ratio
+   was one real PWR written down as XSUB_AR, and the low branch's 28.3 K was
+   that same bundle's 0.0022*q"*D/k evaluated once. Neither carried the pitch,
+   the core height or the power density of the plant being commissioned, and
+   all three belong in it. SZ_LO is Saha-Zuber's own coefficient; K_COOL is the
+   coolant's conductivity in W/m/K at the film. A plant at rated is on the high
+   branch as it should be and the two still cross at low flow. */
+const SZ_LO=0.0022, K_COOL=0.54;
 /* Levy's profile fit: thermodynamic quality in, TRUE quality out. It is
    defined only ABOVE departure - below it the expression does not decay to
    zero, it goes to 1 and then to NaN, which is a sodium core at rest reading
@@ -116,6 +121,12 @@ const subQual = (xe,xd) => {
 };
 const driftFlux = (x,rvl) => { const q=clamp(x,0,1);
   return q<=0 ? 0 : clamp(q/(XC0*(q+(1-q)*rvl)), 0, 1); };
+/* driftFlux run backwards, algebraically exact. The parallel-channel weight
+   wants QUALITY and the field carries void, and recovering it here costs one
+   divide and no second array on S. */
+const voidQual = (v,rvl) => { const q=clamp(v,0,1);
+  const den=1-q*XC0*(1-rvl);
+  return den>1e-6 ? clamp(q*XC0*rvl/den, 0, 1) : 1; };
 
 /* volume weights: ring i is an annulus, so it is worth 2i+1 unit cells */
 const ringW=new Float64Array(XNR), nodeW=new Float64Array(XNN);
@@ -149,6 +160,10 @@ function coreConst(T,d){
   /* migration length against node size gives the coupling. A tight lattice
      under-moderates, which lengthens it and binds the core together; an open
      lattice lets one corner of the core drift on its own. */
+  /* The migration length. 0.21 is chosen so a stock water lattice reads 7.6 cm,
+     against light water's real ~6 cm, and the square root is how M scales with
+     lattice spacing. FITTED SHAPE, real magnitude - it is not read off the
+     drawing the way modRatio() is, and it could be. */
   const Lm=0.21*Math.sqrt(D.pitch);
   T.cz=XCOUP*Math.pow(Lm/(Math.max(T.coreHgt,.05)/XNZ),2);
   T.cr=XCOUP*Math.pow(Lm/(Math.max(T.coreDia,.05)/2/XNR),2);
@@ -160,14 +175,24 @@ function coreConst(T,d){
     /* the denominator is latVols()'s own cool term with the reference pitch put
        back in, so at pitch 1.0x the two are the same expression on the same
        operands and the ratio is exactly 1 - not 1 to within a rounding */
-    const open0=v.nF*(LAT_P0*LAT_P0 - LAT_FUELFRAC*LAT_P0*LAT_P0);
+    const open0=v.nF*(LAT_P0*LAT_P0 - LAT_RODFRAC*LAT_P0*LAT_P0);
     const solid=(v.nF+v.nM)>0 ? v.nM/(v.nF+v.nM) : 0;
     T.mix=open0>0 ? clamp(XMIX0*(v.cool/open0)*(1-solid), 0, XMIX_MAX) : 0; }
 
-  /* departure quality at the RATED point, one branch each - see XSUB_AR. Both
+  /* departure quality at the RATED point, one branch each - see SZ_LO. Both
      are magnitudes; the sign goes on where they are used. */
-  T.xSub  = 154*CP_W*CORE_DT0*XSUB_AR/XHFG;
-  T.xSubLo= CP_W*XSUB_LO_DT/XHFG;
+  { const B=latBundle(), hgt=Math.max(T.coreHgt,.05), hfg=COOLANT[D.cool].hfg;
+    T.hfg = hfg;
+    T.dh = B.dh;                                   // Stages D and F both read it
+    const nF=latVols().nF;
+    T.aHeat=4*nF*B.aHeat*hgt;                      // whole core rod surface, m2
+    T.aFlow=4*nF*B.aFlow;                          // whole core flow area, m2
+    /* rated mass flux, kg/m2/s: what the core carries when it is taking
+       CORE_DT0 of rise at rated power. W-3 wants a real G, not a share. */
+    T.G0=(T.rated||D.power)*1000/(CP_W*CORE_DT0)/Math.max(T.aFlow,1e-9);
+    const qpp=(T.rated||D.power)*1e6/Math.max(T.aHeat,1e-6);
+    T.xSub  = 154*CP_W*CORE_DT0*(B.aFlow/(B.aHeat*hgt))/hfg;
+    T.xSubLo= CP_W*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
   /* the reflector stops being a flat pcm bonus and starts reflecting: the
      share of what leaks out of an edge node that finds its way back in, per
@@ -386,7 +411,7 @@ function coreReset(s){
   s.rodZDem=new Float64Array(P.NB).fill(s.rodPos);
   s.bankAuto=new Array(P.NB).fill(true);
   s.tilt=0; s.tiltDem=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
-  s.hotFlow=1; s.tipRho=0;
+  s.hotFlow=1; s.tipRho=0; s.xHot=0;
   for(let k=0;k<XNN;k++){
     s.xI[k]=P.gI*P.n0/P.lamI; s.xX[k]=P.X0;
     s.nTc[k]=P.Tref; s.nTf[k]=P.TfRef;
@@ -412,7 +437,7 @@ function coreReset(s){
      conductivity, not a scale on a guess. */
   { let pk2=0; for(let k=0;k<XNN;k++) pk2+=nodeW[k]*s.phi[k]*s.phi[k];
     const film0=Math.pow(Math.max(P.flowK,.02),0.8);
-    const heat0=s.n*0.935+s.decay;
+    const heat0=s.n*PROMPT_F+s.decay;
     P.pinUA=heat0*P.rated*1000*Math.max(pk2,1e-6)
            /(film0*Math.max(P.TfRef-P.Tref,1)*P.condK);
     /* and start every pellet where that balance puts it, or tick one is a
@@ -442,11 +467,21 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
 
   /* ── parallel channels: steam costs pressure drop, so a voiding channel
         loses the very flow it needed to stop voiding. That runaway is what
-        the Chernobyl test walked into, and a one-number core cannot host it. */
-  { let tot=0;
+        the Chernobyl test walked into, and a one-number core cannot host it.
+
+        The STRENGTH of it used to be a typed 8 against void. It is the
+        homogeneous two-phase friction multiplier now, phi2 = 1 + x*(1/rvl-1),
+        and channels at equal pressure drop carry w proportional to
+        1/sqrt(phi2) - the same shape, with the gain published rather than
+        picked. Two things the 8 could not say fall out: it reads QUALITY,
+        which is what the multiplier is defined on, and it reads rvl, so a
+        depressurising core loses channel flow harder because the two
+        densities have closed on each other. */
+  { const rvl=satRvl(s.pCore), rq=1/Math.max(rvl,1e-6)-1;
+    let tot=0;
     for(let i=0;i<XNR;i++){
-      let v=0; for(let j=0;j<XNZ;j++) v+=s.nV[XIX(i,j)];
-      s.chW[i]=1/Math.sqrt(1+8*(v/XNZ));
+      let x=0; for(let j=0;j<XNZ;j++) x+=voidQual(s.nV[XIX(i,j)],rvl);
+      s.chW[i]=1/Math.sqrt(1+rq*(x/XNZ));
       tot+=s.chW[i]*ringW[i];
     }
     for(let i=0;i<XNR;i++) s.chW[i]/=Math.max(tot,1e-6);
@@ -491,6 +526,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   const ff    = Math.max(flowFrac, 1e-3);
   const hSat  = CP_W*sat;                    // enthalpy at saturation, kJ/kg
   const rvl   = satRvl(s.pCore);             // the core boils at ITS OWN pressure
+  let xHot=-1e9;                             // the highest thermodynamic quality anywhere
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
     const chan=Math.max(s.chW[i],1e-3);
@@ -520,7 +556,9 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          core making no heat at all cannot divide by zero. */
       const q2=Math.max(heat*pw,0);
       const xd=-Math.max(Math.min(P.xSub*q2/gCh, P.xSubLo*q2), 1e-6);
-      s.nVt[k]=driftFlux(subQual((hMid-hSat)/XHFG, xd), rvl);
+      const xe=(hMid-hSat)/P.hfg;
+      if(xe>xHot) xHot=xe;                   // W-3 asks for the WORST node, not the mean
+      s.nVt[k]=driftFlux(subQual(xe, xd), rvl);
 
       /* THE PELLET IS A HEAT BALANCE. Power in, film out, and the film
          collapses when the node goes dry - so a dry node has nowhere to put
@@ -553,12 +591,21 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      painted on it (sc = vLump/raw); it is the volume-weighted mean of a real
      field now, and so is nothing else. A void fraction is still a fraction -
      vLeak runs past 1 on purpose, so s.vf can say HOW far past empty the loop
-     is, but a node cannot be more than all steam. The 1.5 s lag stays: that is
-     transport, not calibration. */
-  for(let k=0;k<XNN;k++){
-    const vT=clamp(Math.max(s.nVt[k],vLeak),0,1);
-    s.nV[k]+=(vT-s.nV[k])*dt/1.5;
-  }
+     is, but a node cannot be more than all steam.
+
+     The lag is TRANSPORT, and it is now measured as transport: the time a
+     parcel takes to cross the core, core height over the coolant's own
+     velocity, G/rho. It used to be a typed 1.5 s with no length and no
+     velocity behind it, and it could not say the one thing that matters -
+     a coasting pump moves water slower, so the void it makes arrives slower.
+     Bounded well either side of anything a plant reaches; a stopped pump
+     would otherwise divide by zero. */
+  { const v=Math.max(mflux,1e-3)*P.G0/Math.max(rhoAt(s.Tavg),1);
+    const tau=clamp(Math.max(P.coreHgt,.05)/Math.max(v,1e-3),0.1,60);
+    for(let k=0;k<XNN;k++){
+      const vT=clamp(Math.max(s.nVt[k],vLeak),0,1);
+      s.nV[k]+=(vT-s.nV[k])*dt/tau;
+    } }
 
   coreSolve(P,s.phi,s.nRho);
 
@@ -589,5 +636,6 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      nothing like it once they stop, so this reads mass flux, never the
      enthalpy rise. */
   s.hotFlow=Math.max(mflux*s.chW[s.hotRing],0.02);
+  s.xHot=xHot;
   return o;
 }
