@@ -188,12 +188,16 @@ const TOOLS=[
   {id:"select", label:"SELECT",
    tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to put a port there, and click the port again to take it away."},
   {id:"pipe", label:"PIPE",
-   tip:"Drag to lay a run of pipe cells. It follows the drag, turning where the drag turns. Right-click a cell to take it out; roll the wheel over one to rotate it."},
+   tip:"Drag to lay a run of pipe cells. It follows the drag, turning where the drag turns. Click a bare cell to fill it and click a laid one to turn it a quarter, which the wheel also does. Hold the right button and sweep to take cells out. A cell drawn dashed and grey is pipe that joins nothing yet."},
 ];
 // which cell a plant-space point lands on, in grid units - what every tool
 // gesture is addressed at, since a tool paints CELLS and never pixels
 const cellAt=pt=>[Math.floor((pt.x-GX)/CELL), rowAt(pt.y)];
 const cellSame=(a,b)=>!!a&&!!b&&a[0]===b[0]&&a[1]===b[1];
+// take the pipe cell under a plant point out, if there is one. One helper,
+// because the press and the drag that follows it must lift the same thing.
+function pipeLift(pt){ const c=cellAt(pt), k=c[0]+","+c[1];
+  if(D.pipes[k]){ delete D.pipes[k]; buildLayout(); } }
 
 let touchTip=null, isTouch=false;
 // g is an optional band(): the scale the value in this region lives on, so
@@ -417,12 +421,16 @@ function uiDown(e){
     const w=hitAt(p);
     /* RIGHT CLICK WITH THE PIPE TOOL LIFTS A CELL, where it lives rather than
        through the deck menu - the menu is addressed at a cell and this already
-       is. A cell nothing owns is simply nothing to lift. */
+       is. HELD, it lifts every cell it is dragged over, the mirror of the left
+       button laying them: taking a wrong run out one careful click at a time
+       was the slowest gesture on the bench. A cell nothing owns is simply
+       nothing to lift, and the drag stands whether or not the first one was. */
     if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
-      const c=cellAt(vPt(p)), k=c[0]+","+c[1];
-      if(D.pipes[k]){ delete D.pipes[k]; buildLayout(); return; }
+      ui.drag={type:"pipeerase", v:1};
+      pipeLift(vPt(p));
+      return;
     }
-    /* A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU (REMOVE PORT / mode rows,
+    /* A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU (REMOVE PORT,
        resolved by design-bench.js's own ctx registry) - there is no quick-tap
        toggle any more, so a right click never silently flips the mode. */
     if(w&&w.type==="port"){
@@ -441,7 +449,10 @@ function uiDown(e){
      release, the same convention the part drag already keeps. */
   if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
     const c=cellAt(vPt(p));
-    ui.drag={type:"pipedraw", cells:[c], v:1};
+    // `had` is what turns a click on a cell that is ALREADY pipe into a
+    // rotate rather than a lay - decided at the press, because the drag may
+    // yet lay across it and the answer must not change under the hand.
+    ui.drag={type:"pipedraw", cells:[c], v:1, had:!!D.pipes[pipeKey(c[0],c[1])]};
     return;
   }
   // nothing under the pointer: a click on bare deck deselects, rather than
@@ -508,6 +519,7 @@ function uiMove(e){
         while(x!==c[0]){ x+=Math.sign(c[0]-x); d.cells.push([x,y]); }
         while(y!==c[1]){ y+=Math.sign(c[1]-y); d.cells.push([x,y]); }
       } }
+    else if(d.type==="pipeerase") pipeLift(q);
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
       // integrate rather than re-derive, so moving away from the track
@@ -554,7 +566,12 @@ function uiUp(e){
      and stopped rather than being left as a stub with one end. */
   if(d&&d.type==="pipedraw"){
     const c=d.cells;
-    if(c.length===1) pipeLay(c, [c[0][0]-1,c[0][1]], [c[0][0]+1,c[0][1]]);
+    // A CLICK ON A CELL THAT IS ALREADY PIPE TURNS IT. The wheel does the same
+    // thing, and a wheel is not a gesture every hand reaches for - a cell
+    // pointing the wrong way is the commonest reason a run does not join, so
+    // the fix is on the button the player is already holding.
+    if(c.length===1 && d.had) pipeTurn(c[0][0],c[0][1],1);
+    else if(c.length===1) pipeLay(c, [c[0][0]-1,c[0][1]], [c[0][0]+1,c[0][1]]);
     else pipeLay(c, [2*c[0][0]-c[1][0], 2*c[0][1]-c[1][1]],
                     [2*c[c.length-1][0]-c[c.length-2][0], 2*c[c.length-1][1]-c[c.length-2][1]]);
     buildLayout();
@@ -646,8 +663,8 @@ cv.addEventListener("wheel",e=>{
      cell actually under the pointer. Everywhere else it still zooms, which is
      what it does on every other screen and in every other tool. */
   if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
-    const c=cellAt(vPt(p)), k=c[0]+","+c[1], cell=D.pipes[k];
-    if(cell){ cell.r=(cell.r+(e.deltaY>0?1:3))%4; buildLayout(); return; }
+    const c=cellAt(vPt(p));
+    if(pipeTurn(c[0],c[1],e.deltaY>0?1:-1)){ buildLayout(); return; }
   }
   // anywhere on the canvas, not just over the plant - the page doesn't
   // scroll any more, so there's nothing else for the wheel to do. Holds the

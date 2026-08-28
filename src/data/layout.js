@@ -73,7 +73,7 @@ const fittingSig=()=>{ let out="";
    offset (portFaceOf()) and so is already in here. */
 const portSig=()=>{ let out="";
   for(const id in D.ports){ const p=D.ports[id];
-    out += "|"+id+":"+p.p+":"+p.dx+","+p.dy+":"+p.m; }
+    out += "|"+id+":"+p.p+":"+p.dx+","+p.dy; }
   return out; };
 /* EVERY PIPE CELL, in key order - a pipe is cell-keyed data (D.pipes), so its
    own identity IS its cell and this is the whole of it. Joined into
@@ -711,7 +711,7 @@ function portAtCell(x,y){
    machine - and the face falls out of it. Refuses a cell the role does not
    whitelist, a cell already carrying a port, and a cell something else is
    standing in. */
-function addPortAt(partId,dx,dy,mode){
+function addPortAt(partId,dx,dy){
   const p=partOf(partId); if(!p) return null;
   const f=faceOfOffset(p,dx,dy); if(!f || !portFaceOK(partId,f)) return null;
   const x=p.x+dx, y=p.y+dy;
@@ -719,7 +719,7 @@ function addPortAt(partId,dx,dy,mode){
   if(portAtCell(x,y)) return null;
   if(occupied(null,{ports:false})[y][x]) return null;
   const pid=freePid();
-  D.ports[pid]={p:partId, dx, dy, m:mode||null};
+  D.ports[pid]={p:partId, dx, dy};
   return pid;
 }
 /* REMOVING A PORT LEAVES ITS PIPE WHERE IT IS. There is nothing to delete: a
@@ -728,18 +728,6 @@ function addPortAt(partId,dx,dy,mode){
 function removePort(pid){
   delete D.ports[pid];
   buildLayout();
-}
-// RIGHT CLICK A PORT TOGGLES ITS MODE; THE PORT DOES NOT MOVE. `m` is a
-// LABEL only - which of portPath()'s two names (SUCT/DISCH, HOT/COLD...)
-// this port is called - never a second, hidden node identity: the face
-// alone already decides which internal path and which side of it a port is
-// on (portPath()/coreFold()), so there is nothing left for a mode to gate.
-// A part whose face has no such choice (portPath() returns null - a tee, a
-// tank, the core) leaves m permanently null.
-function portMode(pid,mode){
-  const p=D.ports[pid]; if(!p) return false;
-  p.m=mode;
-  return true;
 }
 
 /* ══════════ A PIPE IS A CELL, AND ONE CELL IS ONE THING ══════════
@@ -790,6 +778,50 @@ function pipeShapeFor(fa,fb){
 }
 const pipeDirOf=(a,b)=>{ const dx=b[0]-a[0], dy=b[1]-a[1];
   return dx>0?"r" : dx<0?"l" : dy>0?"b" : dy<0?"t" : null; };
+/* EVERY STATE A CELL CAN BE PUT IN BY HAND, in one order. Turning `r` alone
+   walks a turn round four corners and a straight between two, and NEVER
+   between the two shapes - so a corner the drag guessed wrong could not be
+   made a straight at all, whatever it was clicked or wheeled with. The cycle
+   is the whole set instead: both straights, four corners, the crossing. One
+   table, because the click and the wheel must step the same states.
+   Rotations that repeat a state are left out - a straight has two, a cross
+   one - or the gesture would appear to stick. */
+const PIPE_CYCLE=[
+  {s:"straight",r:0}, {s:"straight",r:1},
+  {s:"turn",r:0}, {s:"turn",r:1}, {s:"turn",r:2}, {s:"turn",r:3},
+  {s:"cross",r:0},
+];
+// step a cell through PIPE_CYCLE, or null if there is no pipe there. The
+// current state is matched on the FACES it opens, so a cell written with a
+// redundant rotation (straight r2) still finds its place in the list.
+function pipeTurn(x,y,step){
+  const k=pipeKey(x,y), c=D.pipes[k]; if(!c) return null;
+  const faces=q=>{ const sh=PIPE_SHAPE[q.s]; if(!sh) return "";
+    return sh.paths.map(pr=>[rotFace(pr[0],q.r),rotFace(pr[1],q.r)].sort().join("")).sort().join("|"); };
+  const now=faces(c);
+  let i=PIPE_CYCLE.findIndex(q=>faces(q)===now);
+  if(i<0) i=0;
+  const n=PIPE_CYCLE[((i+step)%PIPE_CYCLE.length+PIPE_CYCLE.length)%PIPE_CYCLE.length];
+  D.pipes[k]={s:n.s, r:n.r};
+  return D.pipes[k];
+}
+/* WHAT A CAP SHOULD OPEN ONTO: the neighbouring cell that is already open on
+   the face pointing back at this one - a port whose face names it, or a pipe
+   cell whose own path ends there. `hint` is the caller's own guess and WINS if
+   it is joinable, so a deliberate cap is never moved; `skip` is the cell the
+   other end of the run already took, so a one-cell run cannot answer with the
+   same neighbour twice. */
+function pipeJoinCell(c,hint,skip){
+  const at=f=>{ const x=c[0]+DIRV[f][0], y=c[1]+DIRV[f][1];
+    if(skip && skip[0]===x && skip[1]===y) return null;
+    const pid=portAtCell(x,y);
+    if(pid) return portFaceOf(pid)===OPP[f] ? [x,y] : null;
+    return pipeExit(pipeKey(x,y),OPP[f]) ? [x,y] : null; };
+  const hf=hint && pipeDirOf(c,hint);
+  if(hf && at(hf)) return hint;
+  for(const f in DIRV){ const n=at(f); if(n) return n; }
+  return null;
+}
 /* LAY A RUN OF CELLS along an ordered path, stamping a straight where it goes
    on and a turn where it changes direction. `from` and `to` are the cells
    OUTSIDE each end (the two ports, or nothing) - they only ever supply the
@@ -797,6 +829,37 @@ const pipeDirOf=(a,b)=>{ const dx=b[0]-a[0], dy=b[1]-a[1];
    a straight becomes a CROSS where the new path runs across it, which is the
    one case D.pipes was given two paths for. */
 function pipeLay(path,from,to){
+  /* A RUN THAT ENDS BESIDE SOMETHING OPEN ENDS AT IT. `from`/`to` are the
+     caller's guess at which way the two caps open, and the bench's guess is
+     the run's own axis extrapolated - so a one-cell drag was always capped
+     l-r, and re-laying a single cell taken out of a VERTICAL run stamped a
+     horizontal stub that joined neither neighbour. Dragging across a port's
+     face capped the same way and the trace found a butt end. That is the whole
+     of "connecting two parts is random": the joint depended on which way the
+     hand happened to move first, which nothing on screen says. */
+  const pa=pipeJoinCell(path[0],from); if(pa) from=pa;
+  const pz=pipeJoinCell(path[path.length-1],to,pa); if(pz) to=pz;
+  /* ONE JOINT AND OPEN GROUND: CARRY ON STRAIGHT. A single cell with a
+     neighbour on one side only still had the l-r guess on the other, so the
+     first of a two-cell gap in a vertical run came out an elbow - and an elbow
+     is not open on the face the second cell then needed. Filling a gap one
+     click at a time laid two corners facing away from each other and joined
+     nothing. Mirroring the joint is the only answer that lets the next click
+     land. */
+  const mir=(c,n)=>[2*c[0]-n[0], 2*c[1]-n[1]];
+  if(path.length===1){
+    if(pa && !pz) to=mir(path[0],pa);
+    else if(pz && !pa) from=mir(path[0],pz);
+    /* NOTHING ADJACENT AT ALL: read the axis off what is one cell FURTHER out.
+       The middle of a three-cell gap touches only the other two holes, so it
+       had no joint to read and came out horizontal whatever run it belonged
+       to - filling a gap from the middle then left two cells that could not
+       join it. */
+    else if(!pa && !pz)
+      for(const f in DIRV){ const c=path[0];
+        if(!pipeExit(pipeKey(c[0]+DIRV[f][0]*2, c[1]+DIRV[f][1]*2), OPP[f])) continue;
+        from=[c[0]+DIRV[f][0], c[1]+DIRV[f][1]]; to=mir(c,from); break; }
+  }
   // ONE THING PER CELL: a machine's box and a port are already something, so a
   // pipe simply does not go there. Asked with pipes OUT, because an existing
   // pipe cell IS a legal thing to lay across (that is what a crossing is).
