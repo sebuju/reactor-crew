@@ -6,7 +6,7 @@ let P=null,S=null;
 function commission(){
   const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
-     lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:a.Lam,
+     lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
      aF:a.aF, aM:d.aM, aV:d.aV, P0:d.P0, tsat0:a.tsat*Math.pow(D.pdes,.25),
      rated:D.power, dnbr0:d.dnbr, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      /* The trip floor used to be a flat number per PUMPS[D.pumps] tier. It now

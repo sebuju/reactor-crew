@@ -27,8 +27,13 @@
    that order lives. */
 
 const LQ=10;                     // quarter-plan slots per side
-const L_EMPTY=0, L_FUEL=1, L_POIS=2;
+/* L_MOD is a slot holding a moderator BLOCK instead of an assembly. It is core
+   material - it is walked through, it is inside the envelope the mesh spans,
+   and it is weighed - but it is NOT fuel, so every count that means "there is
+   fuel here" has to ask latFuel() rather than test the slot for non-zero. */
+const L_EMPTY=0, L_FUEL=1, L_POIS=2, L_MOD=3;
 const LIX=(u,v)=>u*LQ+v;
+const latFuel=q=>LAT.slot[q]===L_FUEL||LAT.slot[q]===L_POIS;
 
 /* The design point the stock lattice is sized to. Everything else about the
    reactor is drawn; these two only fix what "pitch 1.0x" means, so that a
@@ -90,11 +95,44 @@ let latRev=0;                    // bumped whenever the lattice changes
    outer ring, which is what the albedo boundary is there to smear anyway, and
    every ring comes back essentially full. Do not "simplify" this back to the
    corner radius; audit-physics.js will trip on the split-lean block if you do,
-   and that is the failure telling you about it. */
+   and that is the failure telling you about it.
+
+   It spans every OCCUPIED slot, fuel or moderator, because the envelope the
+   mesh has to cover is the core - a graphite block between two assemblies is
+   inside the reactor, not outside it. What is fuel and what is not is a
+   separate question, asked per ring by latRevolve(). */
 const latEqR=()=>{
   let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
   return Math.sqrt(4*n/Math.PI)*LAT.pitch;
 };
+
+/* ── WHAT IS IN THE LATTICE, BY VOLUME ──
+   The one measurement Stage 2's whole moderation model reads. A fuel BUNDLE
+   is a fixed object - LAT_FUELFRAC of the REFERENCE cell, not of the cell it
+   sits in - so opening the pitch adds coolant around the same fuel and
+   tightening it takes coolant away. That is how pitch moves the spectrum with
+   no correction term written anywhere; the old aM*(2-D.pitch) was this,
+   guessed. A moderator slot is a solid block: no fuel and no coolant in it. */
+const LAT_FUELFRAC=0.33;
+function latVols(){
+  let nF=0,nM=0;
+  for(let q=0;q<LQ*LQ;q++){ const s=LAT.slot[q]; if(s===L_MOD) nM++; else if(s) nF++; }
+  const cell=LAT.pitch*LAT.pitch, bundle=LAT_FUELFRAC*LAT_P0*LAT_P0;
+  return {nF,nM,fuel:nF*bundle,cool:nF*Math.max(0,cell-bundle),mod:nM*cell};
+}
+/* Moderating volume over fuel volume, the two contributors scaled by their own
+   materials. `voided` stands the coolant down, which is the whole of what a
+   void coefficient asks. */
+const modRatio=voided=>{ const v=latVols(); if(v.fuel<=0) return 0;
+  return ((voided?0:v.cool*COOLANT[D.cool].modK)+v.mod*MODER[D.mod].modK)/v.fuel; };
+/* How much of the moderation the COOLANT provides. 1 in a PWR, near 0 in a
+   graphite core - and it is what decides whether voiding is a loss or a gain. */
+const modCoolShare=()=>{ const v=latVols();
+  const c=v.cool*COOLANT[D.cool].modK, m=v.mod*MODER[D.mod].modK;
+  return (c+m)>1e-12? c/(c+m) : 0; };
+/* Coolant absorption per unit fuel: what voiding gives BACK. */
+const modAbs=()=>{ const v=latVols();
+  return v.fuel>0? v.cool*COOLANT[D.cool].absK/v.fuel : 0; };
 
 /* ── the reference pitch ──
    Solved against VOLUME, so a stock lattice lands on the stock reactor:
@@ -107,7 +145,7 @@ const LAT_P0=(function(){
   let n=0;
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
     if(Math.hypot(u+.5,v+.5)<=LAT_R0) n++;
-  const dens=ARCH[0].dens*FUEL[1].densK*(1.15-0.15*1.0);
+  const dens=COOLANT[0].dens*FUEL[1].densK*(1.15-0.15*1.0);
   return Math.cbrt((LAT_MW0/dens)/(8*n*Math.sqrt(4*n/Math.PI)*LAT_HD0));
 })();
 
@@ -169,8 +207,8 @@ function latLayBanks(nb){
     for(const th of [Math.PI/9, Math.PI*7/18]){
       let u=clamp(Math.round(rr*Math.cos(th)-.5),0,LQ-1);
       let v=clamp(Math.round(rr*Math.sin(th)-.5),0,LQ-1);
-      for(let g=0;g<LQ && !LAT.slot[LIX(u,v)];g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
-      if(LAT.slot[LIX(u,v)]) LAT.rod[LIX(u,v)]=b;
+      for(let g=0;g<LQ && !latFuel(LIX(u,v));g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
+      if(latFuel(LIX(u,v))) LAT.rod[LIX(u,v)]=b;
     }
   }
 }
@@ -206,14 +244,69 @@ function latPreset(i){
   const q=LATPRE[i][1];
   LAT.pitch=q.pk*LAT_P0;
   latLayFuel(q.r,q.poi);
+  latLayMod(q.every||0);
+  latLayBanks(q.nb);
+  LAT.len=2*latEqR()*q.hd;
+  LAT.reflR=LAT.reflT=LAT.reflB=q.refl;
+  latRevolve();
+}
+/* ── packing moderator between the assemblies ──
+   `every` is how many slots out of every N become a block: 0 lays none, 2 is
+   a checkerboard, 3 is one in three. Run AFTER latLayFuel(), which has just
+   filled the disc, so the blocks displace fuel rather than sit outside it.
+   Fixed dither, not random, for the same reason latLayFuel()'s poison is: a
+   preset has to be the same reactor every time it is laid. */
+function latLayMod(every){
+  if(!every) return;
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
+    const q=LIX(u,v);
+    if(!LAT.slot[q]) continue;
+    if((u+v)%every===0){ LAT.slot[q]=L_MOD; LAT.rod[q]=-1; }
+  }
+}
+/* ── WHOLE REACTORS YOU CAN START FROM ──
+   REACTOR TYPE used to be a list you picked from, and picking it set thirteen
+   numbers. It is these six rows now, and every one of them is a DRAWING: pick
+   the coolant, pick the block material, set the pitch, lay the fuel, pack the
+   moderator, spread the banks. What made an RBMK an RBMK - a positive void
+   coefficient - is not in this table at all; it comes out of the graphite the
+   preset lays and the water it leaves between it.
+
+   Same contract LATPRE carries, with one difference stated in as many words:
+   this one DOES buy, because the coolant and the moderator are what it is
+   choosing. It does not touch the fuel, the reflector or the absorber. */
+const ARCHPRE=[
+ ["PWR",{cool:0,mod:0,pk:1.00,r:LAT_R0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:0},
+  "A tight water lattice at 15.5 MPa, no solid moderator: the water between the assemblies is the moderator, so voiding it takes the moderation away and the core shuts itself down. The reference plant, and what every figure in this game was calibrated against."],
+ ["BWR",{cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
+  "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
+ ["RBMK",{cool:2,mod:0,pk:1.10,r:LAT_R0,hd:0.85,poi:LAT_POIG,refl:1,nb:4,every:3},
+  "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn."],
+ ["SFR",{cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
+  "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
+ ["MSR",{cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
+  "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the void coefficient is mildly negative. No pressure anywhere and almost no xenon pit."],
+ ["HTGR",{cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
+  "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
+];
+function archPreset(i){
+  const q=ARCHPRE[i][1];
+  D.cool=q.cool; D.mod=q.mod;
+  LAT.pitch=q.pk*LAT_P0;
+  latLayFuel(q.r,q.poi);
+  latLayMod(q.every);
   latLayBanks(q.nb);
   LAT.len=2*latEqR()*q.hd;
   LAT.reflR=LAT.reflT=LAT.reflB=q.refl;
   latRevolve();
 }
 
-const latCount=()=>{               // assemblies in the WHOLE core, not the quarter
-  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
+const latCount=()=>{               // FUEL assemblies in the WHOLE core, not the quarter
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(latFuel(q)) n++;
+  return 4*n;
+};
+const latModCount=()=>{
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]===L_MOD) n++;
   return 4*n;
 };
 
@@ -237,13 +330,13 @@ function latRevolve(){
   const p=LAT.pitch, rEq=latEqR();
   latRev++;
   if(rEq<=0 || p<=0){
-    LM={dr:.1,dz:.1,frac:new Float64Array(XNR),poi:new Float64Array(XNR),
+    LM={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),poi:new Float64Array(XNR),
         nPen:new Float64Array(XNR).fill(LAT_NF),chan:[],bankR:[(XNR-1)/2],NB:1,
         dia:0,hgt:0,vol:0,nAsm:0,laid:0};
     return LM;
   }
   const dr=rEq/XNR, patch=(p/LAT_SS)*(p/LAT_SS);
-  const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR);
+  const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR), modA=new Float64Array(XNR);
   const rodN=[]; for(let i=0;i<XNR;i++) rodN.push({});
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
     const s=LAT.slot[LIX(u,v)]; if(!s) continue;
@@ -251,12 +344,13 @@ function latRevolve(){
     for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++){
       const r=Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p);
       const i=Math.min(XNR-1,Math.floor(r/dr));
+      if(s===L_MOD){ modA[i]+=patch; continue; }
       fuelA[i]+=patch;
       if(s===L_POIS) poisA[i]+=patch;
       if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1;
     }
   }
-  const frac=new Float64Array(XNR), poi=new Float64Array(XNR);
+  const frac=new Float64Array(XNR), poi=new Float64Array(XNR), occ=new Float64Array(XNR);
   const nPen=new Float64Array(XNR);
   let vol=0;
   for(let i=0;i<XNR;i++){
@@ -265,8 +359,13 @@ function latRevolve(){
     const ring=Math.PI*((i+1)*(i+1)-i*i)*dr*dr;
     frac[i]=clamp(4*fuelA[i]/ring,0,1);
     poi[i]=LAT_POIPIN*(fuelA[i]>1e-9? poisA[i]/fuelA[i] : 0);
-    /* a ring half full of fuel is half a hole, and the deficit is linear */
-    nPen[i]=LAT_NF*(1-frac[i]);
+    /* A ring half full of fuel is half a hole, and the deficit is linear - but
+       a MODERATOR block is not a hole. nPen stands for "no source here", and
+       a graphite block has no source and excellent moderation, so it is core
+       material the ring is made of rather than a gap in it. Book it against
+       occupancy; book power against fuel alone. */
+    occ[i]=clamp(4*(fuelA[i]+modA[i])/ring,0,1);
+    nPen[i]=LAT_NF*(1-occ[i]);
     vol+=ring*LAT.len*frac[i];
   }
   /* one channel per ring that has a cluster in it, on that ring's own bank */
@@ -281,9 +380,9 @@ function latRevolve(){
   const bankR=bank.filter(a=>a&&a.length).map(a=>a.reduce((s,v)=>s+v,0)/a.length);
   if(!bankR.length) bankR.push((XNR-1)/2);
 
-  let laid=0;                       // the area actually laid out, for the audit
-  for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) laid++;
-  LM={dr, dz:LAT.len/XNZ, frac, poi, nPen, chan, bankR, NB:bankR.length,
+  let laid=0;                       // the FUEL area actually laid out, for the audit
+  for(let q=0;q<LQ*LQ;q++) if(latFuel(q)) laid++;
+  LM={dr, dz:LAT.len/XNZ, frac, occ, poi, nPen, chan, bankR, NB:bankR.length,
       dia:2*rEq, hgt:LAT.len, vol, nAsm:4*laid, laid:4*laid*p*p*LAT.len};
   latMeasure();
   return LM;
@@ -295,7 +394,7 @@ function latRevolve(){
 function latMeasure(){
   const M=LM;
   D.pitch=LAT.pitch/LAT_P0;
-  const dens=ARCH[D.arch].dens*FUEL[D.fuel].densK*(1.15-0.15*D.pitch);
+  const dens=COOLANT[D.cool].dens*FUEL[D.fuel].densK*(1.15-0.15*D.pitch);
   D.power=M.vol*dens;              // MW over kW/L is m3 exactly
   D.hd=M.dia>1e-6? M.hgt/M.dia : 1;
   D.nbank=M.NB;
@@ -326,6 +425,9 @@ function latMass(){
   m+=disc*dz*(LAT.reflT+LAT.reflB)*rf.dens;
   /* the clusters themselves - a channel is about 6% of its ring by volume */
   for(const c of LM.chan) m+=ringA(c.i)*LAT.len*0.06*ABSORB[LAT.abs].dens;
+  /* the moderator blocks you drew, weighed the same way the reflector is:
+     whole cells, at the density of what you packed them with */
+  m+=latVols().mod*4*LAT.len*MODER[D.mod].dens;
   return m;
 }
 
@@ -333,10 +435,13 @@ function latMass(){
    Same [SEV, sentence] shape derived().warn uses, so the two concatenate. */
 function latWarn(){
   const w=[], M=LM||latRevolve();
-  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
-  if(!n){ w.push(["HARD","There is no fuel in this core at all."]); return w; }
-  /* the fuel has to be one piece: an island across a water gap is a second
-     reactor with one set of rods between them */
+  let n=0, nf=0;
+  for(let q=0;q<LQ*LQ;q++){ if(LAT.slot[q]) n++; if(latFuel(q)) nf++; }
+  if(!nf){ w.push(["HARD","There is no fuel in this core at all."]); return w; }
+  /* The core has to be one piece: an island across a water gap is a second
+     reactor with one set of rods between them. The walk crosses MODERATOR
+     slots, because a graphite block between two assemblies couples them - it
+     is the gap with nothing in it that splits a core. */
   const seen=new Uint8Array(LQ*LQ), q=[];
   for(let i=0;i<LQ*LQ&&!q.length;i++) if(LAT.slot[i]){ q.push(i); seen[i]=1; }
   let head=0, reach=1;
@@ -350,7 +455,7 @@ function latWarn(){
       seen[j]=1; reach++; q.push(j);
     }
   }
-  if(reach<n) w.push(["HARD","There are "+((n-reach)*4)+" assemblies that no other assembly touches. A core split by a water gap is two reactors with one set of rods between them."]);
+  if(reach<n) w.push(["HARD","There are "+((n-reach)*4)+" slots that nothing else in the core touches. A core split by a water gap is two reactors with one set of rods between them."]);
   if(!M.chan.length) w.push(["HARD","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is."]);
   if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with."]);
   if(D.power<400||D.power>2400) w.push(["SOFT","This lattice rates "+D.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for."]);

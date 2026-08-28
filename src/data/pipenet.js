@@ -62,7 +62,7 @@ function setHeadK(v){ HEAD_K = v; }
 // Gravity, in MPa per (kg/m^3 x metre): 9.81 Pa per kg/m^3 per metre, over
 // 1e6 Pa/MPa. The one place the unit conversion happens.
 const G_MPA = 9.81e-6;
-// ARCH's `dens` is the coolant family's density on a scale where pressurised
+// COOLANT's `dens` is the coolant family's density on a scale where pressurised
 // water is 100, so RHO_K turns it into kg/m^3 (PWR -> 700, hot water at
 // 300 C). RHO_BETA is the linear expansion coefficient about P.Tref - the
 // only thing buoyancy actually consumes, because the loop's static heads

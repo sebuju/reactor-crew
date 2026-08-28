@@ -229,7 +229,7 @@ function coreFq(T,x){
    exactly when the lattice does. */
 let fqSig=null, fqVal=null;
 function corePredict(d){
-  const sig=[D.arch,D.fuel,D.refl,D.poison,D.pitch,D.hd,D.power,
+  const sig=[D.cool,D.mod,D.fuel,D.refl,D.poison,D.pitch,D.hd,D.power,
              D.rodw,D.nbank,D.foll,latRev].join(",");
   if(sig!==fqSig){ fqSig=sig; fqVal=coreConst({},d); }
   return fqVal;

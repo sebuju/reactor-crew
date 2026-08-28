@@ -2,31 +2,60 @@
 /* design parameters and the derived() model */
 
 /* ═══════════════ DESIGN DATA ═══════════════ */
-const ARCH=[
+/* ── WHAT THE FLUID IS ──
+   This used to be ARCH, a REACTOR TYPE: thirteen columns that decided the
+   whole feel of the plant, moderation included, off one list row. The three
+   columns that said how MODERATED the core is - aM, aV and Lam - have left,
+   because moderation is a property of the drawing and derived() measures it
+   off the lattice now (modRatio(), lattice.js). What is left is the coolant
+   itself: what pressure it wants, where it boils, how much heat a litre of
+   the core makes, how well it slows a neutron and how much it eats.
+
+   modK is moderating power per unit volume against light water, absK the
+   same for absorption. They are the only two new columns, and they are what
+   makes voiding a graphite core ADD reactivity while voiding a water core
+   removes it - one expression, not a hand-typed +1500.
+
+   xe and dnbr stay bought on purpose: MSR's 0.15 xenon is online gas
+   stripping and SFR's 3.20 DNBR is sodium's boiling margin. Neither is a
+   shape you can draw. */
+const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
-  P0:15.5,tsat:618,satN:.10,Lam:2.0e-5,aF:-2.8,aM:-45,aV:-900,dens:100,grace:1.0,dnbr:1.85,xe:1.0,flowMin:.30,eff:.33,
+  P0:15.5,tsat:618,satN:.10,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,xe:1.0,flowMin:.30,eff:.33,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
-  P0:7.0,tsat:559,satN:.10,Lam:2.0e-5,aF:-2.8,aM:-38,aV:-1400,dens:95,grace:0.9,dnbr:1.55,xe:1.0,flowMin:.30,eff:.33,
+  P0:7.0,tsat:559,satN:.10,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,xe:1.0,flowMin:.30,eff:.33,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
- {id:"LWGR",name:"GRAPHITE + WATER", tie:"RBMK-1000", mass:410,
-  P0:6.9,tsat:558,satN:.10,Lam:2.2e-5,aF:-1.6,aM:-8,aV:+1500,dens:55,grace:1.2,dnbr:1.60,xe:1.0,flowMin:.30,eff:.31,
-  good:"Cheap fuel, refuels online, huge core inertia",
-  bad:"POSITIVE void coefficient - voiding adds power"},
- {id:"SFR", name:"SODIUM FAST", tie:"EBR-II / BN-800", mass:210,
-  P0:0.2,tsat:1150,satN:.10,Lam:4.0e-7,aF:-1.2,aM:-12,aV:+400,dens:280,grace:6.0,dnbr:3.20,xe:0.85,flowMin:.20,eff:.40,
+ {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
+  P0:6.9,tsat:558,satN:.10,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,xe:1.0,flowMin:.30,eff:.31,
+  good:"Cheap fuel, refuels online, boils in the channel itself",
+  bad:"Lay graphite around it and the water is a poison, not a moderator"},
+ {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
+  P0:0.2,tsat:1150,satN:.10,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,xe:0.85,flowMin:.20,eff:.40,
   good:"Atmospheric pressure, very light, huge boiling margin",
-  bad:"Positive void in a big core; sodium burns on water contact"},
+  bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
-  P0:0.2,tsat:1700,satN:.10,Lam:3.0e-5,aF:-3.5,aM:-60,aV:-300,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,eff:.44,
+  P0:0.2,tsat:1700,satN:.10,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,eff:.44,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
- {id:"HTGR",name:"HELIUM PEBBLE BED", tie:"HTR-PM", mass:520,
-  P0:7.0,tsat:2000,satN:.10,Lam:5.0e-5,aF:-4.5,aM:-20,aV:0,dens:6,grace:40,dnbr:2.60,xe:1.0,flowMin:.15,eff:.42,
-  good:"Cannot melt. Grace time in hours, not seconds",
-  bad:"Six kW per litre - enormous for the power it makes"},
+ {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,
+  P0:7.0,tsat:2000,satN:.10,aF:-4.5,modK:0,absK:0,dens:6,grace:40,dnbr:2.60,xe:1.0,flowMin:.15,eff:.42,
+  good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
+  bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
+];
+/* ── WHAT YOU PACK BETWEEN THE ASSEMBLIES ──
+   A moderator slot is a lattice slot with a block in it instead of fuel, laid
+   with the same pen. modK is against light water; dens is what latMass()
+   weighs the blocks you drew. */
+const MODER=[
+ {name:"GRAPHITE",modK:.95,dens:1.70,
+  note:"The classic solid moderator. Slows neutrons well over many collisions, so a graphite core is large and dilute - and the water in it becomes a net absorber, which is what makes a channel-water graphite plant void POSITIVE."},
+ {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,
+  note:"Better than graphite per litre and it multiplies neutrons on top, so a smaller core reaches the same spectrum. Heavy for what it is, and it pushes the void coefficient positive the same way the reflector does."},
+ {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,
+  note:"Hydrogen locked into a solid: the densest moderation you can lay, so a very compact thermal core is possible. It is also the heaviest, and hydrogen leaves it if it gets hot enough."},
 ];
 const FUEL=[
  {name:"UO2  3.2% LEU",beta:680,excess:4200,densK:.85,condK:1.0,mass:0,
@@ -113,7 +142,7 @@ const BKP=[
  {name:"BATTERY BANK",bk:.5,mass:22,note:"Keeps one pump turning at half speed through a blackout."},
  {name:"DIESEL GENERATORS",bk:1.0,mass:58,note:"Full pump power independent of the plant. Heavy, and one more thing to maintain."},
 ];
-ARCH.forEach(a=>a.note=a.tie+". "+a.good+", but "+a.bad.replace(/^[A-Z]/,c=>c.toLowerCase())+".");
+COOLANT.forEach(a=>a.note=a.tie+". "+a.good+", but "+a.bad.replace(/^[A-Z]/,c=>c.toLowerCase())+".");
 const BUDGET=1500;
 /* Where the control bank stands at commissioning. The plant is boronated to be
    critical here, the shutdown margin is measured from here, and resetPlant()
@@ -146,7 +175,7 @@ const RODX0=.35;
    A generator, a pump or a spare turbine is a PLACED part wired by hand - it
    gets ports and cells like anything else, and pipeNetwork() skips a
    connection whose part is not on the grid this frame. */
-const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
+const D={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
          /* How far the temperature controller may walk the bank on its own,
@@ -197,7 +226,7 @@ const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : f
    zero, which is what the bench warning is about. Efficiency itself is a
    property of the STEAM, not of how many machines take it, so only the
    ceilings below are counted. */
-const grossEff  = () => ARCH[D.arch].eff * (0.92 + 0.16*D.turb);
+const grossEff  = () => COOLANT[D.cool].eff * (0.92 + 0.16*D.turb);
 /* How much steam the turbine can swallow, and how much the condenser can turn
    back into water. They are separate on purpose: overload past the condenser and
    the output is there but the backpressure eats it. */
@@ -209,8 +238,37 @@ const condCeil  = () => condCount() * (0.85 + 0.35*D.condCap);
    threshold, read by both the bench warning and the condenser panel prose. */
 const condShort_ = () => loadCeil() - condCeil() > 0.26;
 
+/* ══════════ HOW MODERATED THIS CORE IS ══════════
+   Three numbers that used to be columns of the REACTOR TYPE list. They are
+   measured off the drawing instead, out of the one ratio modRatio()
+   (lattice.js) reports: moderating volume over fuel volume.
+
+   modTherm() turns that ratio into how thermal the spectrum is - 0 is a bare
+   fast core, 1 is fully thermalised - and everything below hangs off it.
+
+   aV is the prize and it is three terms, not a typed number:
+     - voiding takes the COOLANT's share of the moderation away, so the
+       spectrum hardens by whatever modTherm() loses. Negative in water.
+     - the coolant is also an ABSORBER, and taking an absorber out is
+       positive. In a graphite core that term is the whole story, which is
+       where RBMK's +1500 comes from.
+     - a spectrum that is already fast hardens further on voiding, which is
+       positive too and is why a sodium core is positive without any graphite.
+   AV_MOD/AV_ABS/AV_FAST are solved together against the PWR, LWGR and SFR
+   rows the old table carried; they are the plan's one fitted shape.
+
+   critK is the second: with no moderator the fission cross-section collapses,
+   so a fast core needs far more excess reactivity to reach critical. It is
+   normalised on CRIT_REF - the moderation a stock water lattice has - so a
+   well-moderated core reads exactly 1 and buys the fuel it paid for. */
+const MOD_HALF=1.0, LAM_FAST=4.0e-7, LAM_TH=8.0e-5;
+const AV_MOD=3715, AV_ABS=783, AV_FAST=660, AM_K=67;
+const CRIT_H=0.04, CRIT_REF=2/3;
+const modTherm = mr => mr/(mr+MOD_HALF);
+const critK = mth => Math.min(1,(mth/(mth+CRIT_H))*((CRIT_REF+CRIT_H)/CRIT_REF));
+
 function derived(){
-  const a=ARCH[D.arch],f=FUEL[D.fuel],rf=REFL[D.refl];
+  const a=COOLANT[D.cool],f=FUEL[D.fuel],rf=REFL[D.refl];
   const dens=a.dens*f.densK*(1.15-0.15*D.pitch);
   const coreMass=D.power/dens*22*(0.8+0.2*D.hd);
   /* latMass() replaces two table entries that used to stand in for drawn
@@ -245,9 +303,15 @@ function derived(){
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + turbCount()*D.turb*50 + condCount()*D.condCap*40
     + layMass + latMass();
-  const aM=a.aM*(2-D.pitch), aV=a.aV+900*(D.pitch-1)+rf.dV;
+  /* MEASURED, not bought. The pitch correction the old line carried
+     (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already
+     inside modRatio() - it is how much coolant sits between the assemblies. */
+  const mr=modRatio(), mth=modTherm(mr), Lam=LAM_FAST*Math.pow(LAM_TH/LAM_FAST,mth);
+  const aM=-AM_K*mth*modCoolShare();
+  const aV=AV_MOD*(modTherm(modRatio(true))-mth)+AV_ABS*modAbs()
+          +AV_FAST*Math.pow(1-mth,3)+rf.dV;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
-  const excess=f.excess+rf.dRho-D.poison-leak;
+  const excess=f.excess*critK(mth)+rf.dRho-D.poison-leak;
   /* DNBR no longer rises 5.25% per generator for free. Flow is SOLVED (the
      pipe network, pipenet.js), so thermal margin already follows what is
      actually built and piped - a count sitting on top of that would be a
@@ -298,7 +362,7 @@ function derived(){
   const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
   const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
-  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,excess,dnbr,Fq,xeW,core,
+  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,Lam,mr,mth,excess,dnbr,Fq,xeW,core,
     boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0:a.P0*D.pdes,
@@ -310,6 +374,13 @@ function derived(){
       if(sdmB<200) w.push(["HARD","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
       else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin.","rods"]);
       if(boronOp<-6000) w.push(["HARD","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment.","core"]);
+      /* THE SAME QUESTION FROM THE OTHER SIDE. boronOp is what the chemical
+         system has to hold DOWN to sit critical at the commissioning bank
+         position; positive means it would have to hold the core UP, and
+         nothing can. A fast core reaches this on low-enriched fuel because
+         critK collapses with the moderation - which is the consequence the
+         spectrum was always supposed to carry and never did. */
+      else if(boronOp>0) w.push(["HARD","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank at its commissioning position. There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
       if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop.","core"]);
       if(aM>0) w.push(["SOFT","Positive moderator coefficient. The lattice is over-moderated: heating the coolant raises power instead of lowering it.","core"]);
       if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power.","core"]);
