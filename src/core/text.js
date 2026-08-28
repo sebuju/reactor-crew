@@ -45,7 +45,10 @@ function fitTxt(s,x,y,maxw,o){
    box; there is no honest way to trim it. */
 function clipTxt(s,x,y,maxw,o){
   o=o||{};
-  const size=fitStep(s,maxw,o);
+  /* o.step:false cuts WITHOUT walking the ladder first. For a set of labels
+     that must all read as one class - every machine's name on the plant - a
+     stepped-down one is a different kind of label, not a narrower one. */
+  const size = o.step===false ? (o.size||10) : fitStep(s,maxw,o);
   let t=String(s);
   if(tw(t,Object.assign({},o,{size}))>maxw){
     const per=Math.max(1e-6,tw("M",Object.assign({},o,{size})));

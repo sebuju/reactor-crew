@@ -18,7 +18,7 @@ function tick(now){
   if(!stepped && !want && now-lastDraw<IDLE_MS){ requestAnimationFrame(tick); return; }
   lastDraw=now;
   fillRect(0,0,W,H,C.bg);
-  ctx.fillStyle=gridPat; ctx.fillRect(0,TOPBAR_H,W,H-TOPBAR_H);
+  gridDots(0,TOPBAR_H,W,H-TOPBAR_H);
   ui.widgets=[]; ui.tips=[];
   if(screen==="design") drawDesign();
   else if(screen==="operate") drawOperate();

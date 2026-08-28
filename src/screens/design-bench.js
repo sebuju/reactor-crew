@@ -987,6 +987,7 @@ function drawDesign(){
   const vh=Math.max(120,H-vy);
   const vw = railBox ? Math.max(200, railBox.x) : W;
   drawPlant(vy,null,vh,0,vw);
+  zoomKeySync(DB&&DB.root);
   { const st=DB&&DB.state;
     const h = st && st.panels.find(o=>o.ids.includes(sel));
     if(h) leaderLine(h.well.el,DB.rail); }

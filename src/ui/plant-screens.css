@@ -6,6 +6,11 @@
 body[data-screen="operate"] #scr-operate,
 body[data-screen="design"] #scr-design{pointer-events:none}
 
+/* the plant view's zoom key. Placed off VIEW by zoomKeySync() (render/plant.js)
+   so it tracks the rails, but sized in px like every other control. */
+.plant-zoom{position:absolute;z-index:2;pointer-events:auto;height:20px;padding:0 8px;
+  letter-spacing:.6px;white-space:nowrap}
+
 .cr-root,.db-root{position:absolute;display:grid;
   grid-template-rows:auto 1fr;pointer-events:none}
 /* the top inset clears the transport strip, which trBuild() mounts on operate

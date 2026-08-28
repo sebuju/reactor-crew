@@ -533,6 +533,7 @@ function drawOperate(){
   const vx = vitBox ? vitBox.x+vitBox.w : 0;
   const vw = (railBox ? Math.max(200, railBox.x) : W) - vx;
   drawPlant(vy,S,vh,vx,vw);
+  zoomKeySync(CR&&CR.root);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }
 }

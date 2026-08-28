@@ -10,6 +10,14 @@ const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9},ptrHost:null,host
 function hostScope(el){ ui.host=el; }
 
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
+/* ══ CSS PIXELS, ON A CANVAS MEASURED IN LAYOUT UNITS ══
+   #cv stretches W layout units across the stage, so everything drawn on it
+   grows with the window. That is right for the PLANT and wrong for anything
+   that is furniture - a menu, a key, a leader to an HTML rail - because those
+   sit among HTML type that is plain px. cvK() is CSS px per layout unit; its
+   reciprocal is what one screen pixel is worth here. */
+function cvK(){ const r=cv.getBoundingClientRect(); return r.width? r.width/W : 1; }
+const cvPx=()=>1/cvK();
 let viewOn=false;                       // are widgets being pushed through it?
 /* ══ THE LETTERBOX, HALVED ══
    vFit() scales the plant to FIT its box, so unless the box happens to share the
@@ -134,24 +142,30 @@ function drawCtxMenu(){
   // It is never a row: no push(), so it cannot be clicked, and its own fill
   // keeps it from reading as one.
   const title = R && R.title ? R.title(ctxMenu) : "";
-  const tf={size:7.5,sp:.6,caps:1}, hf={size:7,sp:1,caps:1,weight:700}, rh=15, pad=8;
-  const hh = title ? 16 : 0;
-  const w=clamp(Math.max(...items.map(it=>tw(it.label,tf)), title?tw(title,hf):0)+pad*2, 90, 220);
-  const h=hh+items.length*rh+6;
-  let x=Math.min(ctxMenu.x,W-4-w), y=Math.min(ctxMenu.y,H-4-h);
-  fillRect(x+3,y+3,w,h,"rgba(0,0,0,.6)");
+  /* EVERY MEASUREMENT HERE IS SCREEN PIXELS. A menu is furniture, not plant:
+     drawn in flat layout units it was a tidy little list at 760 px wide and a
+     billboard at full screen. The HIT BOXES stay in layout units, because that
+     is the space push()/hov() work in - only the ink is converted. */
+  const k=cvPx();
+  const tf={size:7.5*k,sp:.6*k,caps:1}, hf={size:7*k,sp:1*k,caps:1,weight:700};
+  const rh=15*k, pad=8*k;
+  const hh = title ? 16*k : 0;
+  const w=clamp(Math.max(...items.map(it=>tw(it.label,tf)), title?tw(title,hf):0)+pad*2, 90*k, 220*k);
+  const h=hh+items.length*rh+6*k;
+  let x=Math.min(ctxMenu.x,W-4*k-w), y=Math.min(ctxMenu.y,H-4*k-h);
+  fillRect(x+3*k,y+3*k,w,h,"rgba(0,0,0,.6)");
   fillRect(x,y,w,h,"#0b1215");
   push({x,y,w,h,type:"btn"});   // catcher - blank menu area does not reach whatever is under it
   if(title){
     fillRect(x,y,w,hh,C.edge);
-    txt(title,x+pad,y+hh-5,Object.assign({},hf,{color:C.bright}));
+    txt(title,x+pad,y+hh-5*k,Object.assign({},hf,{color:C.bright}));
   }
   items.forEach((it,i)=>{
-    const iy=y+hh+3+i*rh;
-    const wd=push({x:x+2,y:iy,w:w-4,h:rh-1,type:"btn",fn:()=>{ it.fn(); ctxMenu=null; }});
+    const iy=y+hh+3*k+i*rh;
+    const wd=push({x:x+2*k,y:iy,w:w-4*k,h:rh-1*k,type:"btn",fn:()=>{ it.fn(); ctxMenu=null; }});
     const h_=hov(wd);
-    if(h_) fillRect(x+2,iy,w-4,rh-1,C.panelHi);
-    txt(it.label,x+pad,iy+rh-4,Object.assign({},tf,{color:h_?C.bright:C.ink}));
+    if(h_) fillRect(x+2*k,iy,w-4*k,rh-1*k,C.panelHi);
+    txt(it.label,x+pad,iy+rh-4*k,Object.assign({},tf,{color:h_?C.bright:C.ink}));
   });
 }
 

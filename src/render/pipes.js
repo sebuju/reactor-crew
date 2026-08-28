@@ -607,6 +607,10 @@ function pipeStackLine(x,y,slot,label,col){
    open air can still drop the line below it inside a component, which is how the
    hot-leg reading ended up under a damage badge. */
 const PIPE_DIAL_R=10;
+/* WHERE THE PRESSURIZER'S OWN DIAL SITS, off the top of its BOX. One helper
+   because valueBase() (plant.js) hangs the pressure figure under the dial: two
+   copies of the offset and the number lands on the glass. */
+const PZR_DIAL_CY=boxY=>boxY+PIPE_DIAL_R+26;
 /* Is this rectangle clear of every component box? The one test a widget that
    floats in the pipe margin - a meter, a fitting's control strip - uses to
    decide where it may sit, so two of them cannot disagree about what "in the
@@ -783,10 +787,13 @@ function pipeVessel(L){
   if(!p || !fitted(p) || L.dmgParts.includes("pzr")) return;
   const R=prect(p), r=PIPE_DIAL_R;
   const fr=pipeDisplay("pzrP", L.P/Math.max(0.1,P.P0));
-  /* low enough to sit in the steam space rather than over the water. It used to
-     be dodging a relief bowtie on the very top of the shell too; that valve is a
-     fitting now and is drawn at its own tap (pipeFitMarks()). */
-  const cx=Math.round(R.x+R.w/2), cy=Math.round(R.y+r+16);
+  /* low enough to sit in the steam space rather than over the water, and clear
+     of the shell's own crown: the box carries a name row before drawSym() even
+     starts, so the old offset put the top of the dial outside the vessel it is
+     bolted to. It used to be dodging a relief bowtie on the very top of the
+     shell too; that valve is a fitting now and is drawn at its own tap
+     (pipeFitMarks()). */
+  const cx=Math.round(R.x+R.w/2), cy=Math.round(PZR_DIAL_CY(R.y));
   /* The vessel gauge shows ONE plant pressure, so it can only mark one valve;
      the primary is the honest choice, and it follows that valve's own dialled
      setpoint rather than a constant every relief valve used to share. */

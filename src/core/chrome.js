@@ -92,11 +92,21 @@ function badge(x,y,col){
   ctx.strokeStyle="#0a0f0e"; ctx.lineWidth=1; ctx.stroke();
   txt("!",x,y+4,{size:8,weight:700,align:"center",color:"#180404"});
 }
-// baked once into a pattern rather than drawn every frame
+/* baked once into a pattern rather than drawn every frame. The pitch is the
+   PLANT grid's and the pattern is anchored on the grid's own corner, so a dot
+   lands on every cell corner at any zoom instead of forming a second, finer
+   grid that drifts against the one it is behind. Built lazily: CELL loads
+   after this file. */
 let gridPat=null;
-(function(){ const g=document.createElement("canvas"); g.width=g.height=8;
-  const c=g.getContext("2d"); c.fillStyle="rgba(120,180,190,.075)"; c.fillRect(0,0,1,1);
-  gridPat=ctx.createPattern(g,"repeat"); })();
+function gridDots(x,y,w,h){
+  if(!gridPat){ const g=document.createElement("canvas"); g.width=g.height=CELL;
+    const c=g.getContext("2d"); c.fillStyle="rgba(120,180,190,.075)"; c.fillRect(0,0,1,1);
+    gridPat=ctx.createPattern(g,"repeat"); }
+  const s=VIEW.s||1, o=vScr({x:GX,y:GY});
+  if(gridPat.setTransform && typeof DOMMatrix!=="undefined")
+    gridPat.setTransform(new DOMMatrix().translateSelf(o.x,o.y).scaleSelf(s));
+  ctx.fillStyle=gridPat; ctx.fillRect(x,y,w,h);
+}
 
 // o.col is the one escape hatch: reactor POWER is coloured off DNBR rather
 // than its own value, since 89% power with a steam film on the pins isn't a
