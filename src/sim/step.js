@@ -90,13 +90,16 @@ function commission(){
      to the largest reference on this plant, so it cannot become a hidden
      absolute scale. A plant whose legs all carry flow keeps every one of
      them, which is why no stock figure moves. */
+  /* MAGNITUDES. P.netRefByRun is signed (see netCoreFracOf) and a scale has no
+     direction - a leg carrying the reference flow the other way round is still
+     carrying it. */
   { let big=0;
     for(const k in P.netRefByRun)
-      if(k.startsWith("hot:")||k.startsWith("cold:")) big=Math.max(big,P.netRefByRun[k]);
+      if(k.startsWith("hot:")||k.startsWith("cold:")) big=Math.max(big,Math.abs(P.netRefByRun[k]));
     let sum=0, n=0;
     for(const k in P.netRefByRun)
-      if((k.startsWith("hot:")||k.startsWith("cold:")) && P.netRefByRun[k] > 1e-9*big){
-        sum+=P.netRefByRun[k]; n++; }
+      if((k.startsWith("hot:")||k.startsWith("cold:")) && Math.abs(P.netRefByRun[k]) > 1e-9*big){
+        sum+=Math.abs(P.netRefByRun[k]); n++; }
     P.netRefRun = n ? sum/n : 0; }
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
@@ -865,6 +868,24 @@ const ratedSteam=()=>P.rated*1000/H_FG;
    the meter prints it as a full scale, so the digits and the packets read the
    same number - the rule every other run already keeps. */
 const steamScale=k=>k==="exh" ? ratedSteam() : ratedSteam()/Math.max(1,sgCount());
+/* ══ WHICH WAY ALONG THE PIPE THE STEAM ACTUALLY GOES ══
+   A run's key names its two ends in a CANONICAL order (addRunPorts sorts by
+   part id, then face) so the key is the same string whichever end a hand drew
+   from. That order is not the flow order and has no reason to be: "cond" sorts
+   before "turb", so the exhaust's canonical direction is condenser to turbine
+   and driving its packets positive ran them backwards up their own pipe.
+   The primary runs get away with it by luck - core before tee0, pump0 before
+   sg0 - and nothing noticed while the secondary carried no rate at all.
+   +1 means the steam runs the way the key reads. A steam run leaves its
+   GENERATOR; the exhaust arrives at the SINK. */
+const isSink = id => { const p=LAY.parts.find(q=>q.id===id);
+  return !!p && ROLE[p.role] && ROLE[p.role].thermal==="sink"; };
+function steamDir(key,k){
+  const ends = runEnds(key,k); if(!ends) return 1;
+  const pid = n => n.slice(0,-1);
+  if(k==="exh") return isSink(pid(ends[1])) ? 1 : -1;
+  return (S && S.steamTo && S.steamTo[pid(ends[0])]!==undefined) ? 1 : -1;
+}
 /* What the shell is designed to sit at, where a relief valve set to this
    plant's default lifts, and where the shell itself lets go. */
 const sgDesignP=()=>P.P0*0.45;
@@ -2336,13 +2357,16 @@ function step(dt){
      prints as its full scale. This is a THERMAL rate, not a hydraulic one: the
      steam runs still carry no solved pressure drop, and that is a different
      claim from the one being made here. */
+  /* SIGNED, so the packets run the way the steam does and not the way the key
+     happens to read - see steamDir(). */
   const steamRun = key => {
-    const ends = runEnds(key, P.net.byKey[key].k);
+    const k = P.net.byKey[key].k, ends = runEnds(key,k);
     if(!ends) return 0;
-    for(const n of ends){ const id=n.slice(0,-1);
-      if(s.steamTo && s.steamTo[id]!==undefined) return s.steamTo[id]; }
-    let t=0; for(const id in (s.steamTo||{})) t+=s.steamTo[id];
-    return t;                                  // the exhaust: all of it, at one machine
+    let q = 0;
+    if(k==="exh"){ for(const id in (s.steamTo||{})) q += s.steamTo[id]; }
+    else for(const n of ends){ const id=n.slice(0,-1);
+      if(s.steamTo && s.steamTo[id]!==undefined){ q = s.steamTo[id]; break; } }
+    return q*steamDir(key,k);
   };
   for(const key in d){
     const r = P.net.byKey[key];

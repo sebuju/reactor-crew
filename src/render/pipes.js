@@ -349,7 +349,8 @@ function pipeFullScale(key,k){
      100 % is the same 84 every other run's reference lands on. */
   if(k==="steam"||k==="exh") return 84;
   if(runTankId(key,k)) return 120;
-  const ref=P.netRefByRun[key];
+  /* a FULL SCALE has no direction - P.netRefByRun is signed now */
+  const ref=Math.abs(P.netRefByRun[key]);
   if(ref) return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
   /* A run with no reference of its own. Every run is port to port now, so
      runEnds() answers for all of them and this is only reached before
@@ -399,8 +400,14 @@ function pipeUnit(key,k){
      tank's delivery on another tank's line. */
   const tid=runTankId(key,k);
   if(tid) return {nom:Math.abs((S.tankRate&&S.tankRate[tid])||0)*60, u:"%/min"};
-  const ref=P.netRefByRun[key];
-  if(ref) return {nom:loop*(ref/Math.max(1e-6,P.netRefRun)), u:"kg/s"};
+  /* WHICH WAY THIS RUN IS MEANT TO CARRY: the sign of its own REFERENCE flow -
+     the plant as commissioned, undamaged, valves wide. A key's canonical order
+     is two part ids sorted and says nothing about it, so without this three of
+     the four stock primary runs read as running backwards while doing exactly
+     what they were built to do. */
+  const sref=P.netRefByRun[key], ref=Math.abs(sref);
+  if(ref) return {nom:loop*(ref/Math.max(1e-6,P.netRefRun)), u:"kg/s",
+                  dir:sref<0?-1:1};
   if(!ends) return {nom:loop*0.02, u:"kg/s"};   // a tap-ended run - see pipeFullScale
   /* ── THE STEAM LINES GET THEIR NUMBER BACK ──
      They read null for as long as nothing solved a steam rate. step() solves
@@ -409,7 +416,11 @@ function pipeUnit(key,k){
      carries the whole of what actually got away. A generator raising steam it
      cannot send reads a moving needle on the shell and 0 kg/s on the line,
      which is the two fields being separate. */
-  if(k==="steam"||k==="exh") return {nom:steamScale(k), u:"kg/s"};
+  /* `dir` is the run's own DESIGN direction along the key's canonical order.
+     The needle judges "backwards" against that, not against the order two part
+     ids happened to sort in - see steamDir() (step.js). */
+  if(k==="steam"||k==="exh")
+    return {nom:steamScale(k), u:"kg/s", dir:steamDir(key,k)};
   return null;
 }
 /* how two-phase a line is, 0..1 - off the FLUID AT THE RUN'S OWN ENDS, not
@@ -716,15 +727,18 @@ function pipeMeters(runs,L){
     const sp=pipeSpd[key]||0, fr=pipeDisplay(key,pipeFrac(key,k,sp));
     const mag=pipeFmt(Math.abs(fr)*un.nom);
     /* the same three states the needle used to carry, in the ink instead:
-       stagnant, backwards, over its rating. */
-    const dead=Math.abs(fr)<0.008, over=fr>1.001, back=fr<-0.008;
+       stagnant, backwards, over its rating. Judged against the run's own
+       DESIGN direction (un.dir), because a key's canonical order is two part
+       ids sorted and says nothing about which way the fluid is meant to go. */
+    const fd=fr*(un.dir||1);
+    const dead=Math.abs(fd)<0.008, over=fd>1.001, back=fd<-0.008;
     pipeStackLine(a.x,a.y,0,(back?"-":"")+mag+" "+un.u,
                   dead?C.ink2:over?C.red:back?C.amber:pipeCol(PC,k));
     /* three things the solve can actually say, kept as three sentences rather than
        one number doing all three jobs: how much, which way, and against what. No
        pressure/dP reading here - a fitting's node potentials never left pipenet.js. */
     TIP(a.x-STACK_W/2,stackY(a.y,0),STACK_W,STACK_H,pipeLabel(k)+"  FLOW METER",
-      mag+" "+un.u+" - "+Math.abs(Math.round(fr*100))+
+      mag+" "+un.u+" - "+Math.abs(Math.round(fd*100))+
       " % of what this run carries as commissioned, undamaged, valves wide."+
       (over?" It is being pushed past what it was built for."
        :back?" It is running backwards."
