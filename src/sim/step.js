@@ -715,20 +715,47 @@ function setSplit(on){
       "The banks are being driven back together at "+(ROD_RATE*100).toFixed(1)+" %/s. They are still split until they arrive, and a scram overrides this at any point.");
   }
 }
-/* The eight conditions the protection system watches, in one place. The RPS
-   asks this when it decides to trip; the trip reset asks the same list before
-   it will agree to clear, so you cannot reset out of a hazard that is still on. */
-function tripCause(){
+/* ══ THE EIGHT PROTECTION CHANNELS, AS ONE TABLE ══
+   Each row is a name, the ONE WORD a banner has room for, which way the limit
+   points (+1 trips above it, -1 below), the setpoint as a function of the
+   margin knob, the measurement, and an optional gate.
+
+   A table because there are three readers now and they must not drift: the RPS
+   itself, the trip reset (which refuses to clear a condition still standing),
+   and tripNear(), which asks the SAME comparison a few per cent early so the
+   plant can shout before the latch drops rather than after. Written as eight
+   `if`s, "about to trip" would have been a second, hand-copied ladder. */
+const RPS_NEAR=0.03;                        // how close to a setpoint counts as "about to"
+const RPS_CH=[
+  ["HIGH FLUX","FLUX",          +1, (P_,m)=>1.10+0.22*m,             s=>s.n],
+  ["LOW DNBR","DNBR",           -1, (P_,m)=>1.18-0.16*m,             s=>s.dnbr],
+  ["HIGH PRESSURE","PRESSURE",  +1, (P_,m)=>P_.P0*(1.06+0.07*m),     s=>s.P],
+  ["HIGH FUEL TEMP","FUEL",     +1, (P_,m)=>P_.tdmg+100+280*m,       s=>s.Tf],
+  ["LOW FLOW","FLOW",           -1, P_=>P_.flowMin*1.02,             s=>s.flowNet, s=>s.heat>0.3],
+  ["LOW PRESSURE","PRESSURE",   -1, P_=>P_.P0*0.86,                  s=>s.P],
+  ["CORE VOID","VOID",          +1, ()=>0.30,                        s=>s.vf],
+  ["LOW SUBCOOLING","SUBCOOL",  -1, ()=>3,                           s=>s.sc],
+];
+/* `slack` shifts the setpoint toward the plant, so 0 is the real limit and
+   RPS_NEAR is the warning band. Proportional, because every setpoint on the
+   table is a positive quantity and a flat offset would mean something
+   different on each one. */
+function rpsHit(slack){
   const s=S, m=P.rpsm;
-  if(s.n>1.10+0.22*m)                       return "HIGH FLUX";
-  if(s.dnbr<1.18-0.16*m)                    return "LOW DNBR";
-  if(s.P>P.P0*(1.06+0.07*m))                return "HIGH PRESSURE";
-  if(s.Tf>P.tdmg+100+280*m)                 return "HIGH FUEL TEMP";
-  if(s.flowNet<P.flowMin*1.02 && s.heat>0.3) return "LOW FLOW";
-  if(s.P<P.P0*0.86)                         return "LOW PRESSURE";
-  if(s.vf>0.30)                             return "CORE VOID";
-  if(s.sc<3)                                return "LOW SUBCOOLING";
-  return "";
+  for(const [name,word,dir,thr,val,gate] of RPS_CH){
+    if(gate && !gate(s)) continue;
+    const t=thr(P,m)*(1-dir*slack);
+    if(dir>0 ? val(s)>t : val(s)<t) return {name,word};
+  }
+  return null;
+}
+function tripCause(){ const h=rpsHit(0); return h?h.name:""; }
+/* The one word for a plant that has NOT tripped yet but is inside the band.
+   Null once it actually trips - at that point the latch owns the picture. */
+function tripNear(){
+  if(S.scrammed || rpsHit(0)) return null;
+  const h=rpsHit(RPS_NEAR);
+  return h?h.word:null;
 }
 
 /* Why a reset would be refused right now, or "" if it would clear. The button
@@ -861,6 +888,11 @@ const FREG_RATE=1.0, FREG_MAX=4, FREG_SPAN=10;
    It was already the threshold the mimic's dry-out pulse and the LOW banner
    used; making removal read the same number is what closes the loop. */
 const SG_DRY=25;          // %
+/* The second step of the same alarm. SG_DRY is the tubes starting to uncover -
+   recoverable, and the plant says so in amber. This is most of the bundle in
+   steam with the core still making heat, and it reads red. Two numbers on one
+   ladder, so the banner and the tile cannot disagree about which step it is on. */
+const SG_DRY_LO=10;       // %
 /* What a tank's overboard dump valve passes, in % of that tank per second.
    Sized off the plant it serves rather than picked: at the stock plant's steam
    rate it empties a full hotwell in about a minute, which is fast enough to
@@ -1057,7 +1089,7 @@ const pumpStart = id => primaryPump(id) ? startOf("flowDem",1) : startOf(id+":pu
 function resetPlant(){
   const x0=startOf("rodCommon",RODX0);
   S={n:P.n0,C:P.bet.map((b,i)=>b*P.n0/(P.LAM*P.lam[i])),I:P.gI*P.n0/P.lamI,X:P.X0,
-     Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,scrammed:false,
+     Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,rodBand:false,scrammed:false,
      load:startOf("loadDem",1),loadDem:startOf("loadDem",1),flowNet:1,P:P.P0,lvl:54,inv:100,
      /* ONE DEMAND AND ONE ACTUAL PER PUMP, keyed by part id like s.sglBy and
         s.tank[id] - REFILLED by step(), never rebuilt. There is one pump role
@@ -1299,8 +1331,20 @@ function step(dt){
      the two setters clamp against each other. */
   const rodLo=clamp(s.arLo,0,1), rodHi=clamp(Math.max(s.arHi,s.arLo),0,1);
 
-  if(!s.split && bankAutoLive(0))                 // ganged: one controller, one bank
-    s.rodDem=clamp(s.rodDem+rodErr, rodLo, rodHi);
+  /* THE CONTROLLER OUT OF AUTHORITY. Set where the clamp actually bites, not
+     inferred from the position afterwards: a bank parked on the band edge with
+     T-avg on programme is obeying, and only a bank being pushed further into
+     the stop is a controller that cannot do its job. The half-kelvin gate is
+     what keeps it off during the ordinary hunt across the setpoint. */
+  s.rodBand=false;
+  const pinned=(want,got)=>{
+    if(Math.abs(want-got)>1e-9 && Math.abs(s.Tavg-tProg(s))>0.5) s.rodBand=true; };
+
+  if(!s.split && bankAutoLive(0)){                // ganged: one controller, one bank
+    const want=s.rodDem+rodErr;
+    s.rodDem=clamp(want, rodLo, rodHi);
+    pinned(want,s.rodDem);
+  }
 
   /* ── ganging the banks back together ──
      The banks are driven together, never teleported: rodBanks() would otherwise
@@ -1322,7 +1366,9 @@ function step(dt){
        loop genuinely gets slower. That is the cost of taking banks off auto,
        and it is emergent rather than charged. */
     for(let b=0;b<P.NB;b++)
-      if(bankAutoLive(b)) s.rodZDem[b]=clamp(s.rodZDem[b]+rodErr, rodLo, rodHi);
+      if(bankAutoLive(b)){ const want=s.rodZDem[b]+rodErr;
+        s.rodZDem[b]=clamp(want, rodLo, rodHi);
+        pinned(want,s.rodZDem[b]); }
   }
 
   /* A latched trip owns every bank, ganged or split, auto or manual. The slider
@@ -2509,6 +2555,19 @@ const ANN=[
   "A steam generator is over its design shell pressure. If a relief valve is fitted it is passing steam to atmosphere, and the water going with it is not coming back. If one is NOT fitted, the shell bursts at 1.5x design. Find what is stopping the steam: a shut steam line, a drowned or isolated condenser, or a turbine that is not passing.","sg"],
  ["SG SHELL BURST","red",s=>sgIds().some(id=>s.sgBurst&&s.sgBurst[id]),
   "A secondary shell has ruptured. It is open to atmosphere, it will not hold pressure again, and it stops cooling its loop the moment it is empty. If those tubes were leaking, what is going out of the hole is primary water.","sg"],
+ /* The two steps of boiling a shell dry, on the same numbers the mimic's own
+    banner and the removal term read. Plant-wide, like every other row here:
+    the lamp says "here", the board says "what". */
+ ["SG LEVEL LO","amber",s=>sgIds().some(id=>sgLvl(s,id)<SG_DRY),
+  "A steam generator is below "+SG_DRY+"% and its tubes are starting to uncover. That generator is losing its grip on the core. Feed it - check the feed pump, the regulating valve and the hotwell before you assume the pump has failed.","sg"],
+ ["SG DRY","red",s=>sgIds().some(id=>sgLvl(s,id)<SG_DRY_LO),
+  "A steam generator is below "+SG_DRY_LO+"%. Most of the bundle is in steam and that loop is not cooling the core any more. If every generator reads this, the only heat sink left is what leaks out of the boundary.","sg"],
+ ["HOTWELL FULL","red",s=>condFrac(s)<1,
+  "The hotwell is above "+HOT_FLOOD+"% and the water in it is drowning the tubes that do the condensing. The condenser is losing capacity as it fills, so backpressure rises, the turbine takes less steam, and the shells pressurise behind it. Drain it or stop putting water into it.","cond"],
+ ["ROD AT LIMIT","amber",s=>s.rodBand,
+  "The automatic rod controller is asking for rod travel the commissioned band will not give it, and coolant temperature is off programme because of it. It has no authority left in that direction. Move load, move boron, or widen the band at the design bench - the band is not a safety limit, it is how much room the controller was given.","rods"],
+ ["NEAR TRIP","amber",()=>!!tripNear(),
+  "A protection setpoint is within "+(RPS_NEAR*100).toFixed(0)+"% of tripping the reactor. The component itself names which one. This is a warning, not the trip: nothing has latched yet and the condition is still yours to clear.","core"],
  ["HI AREA RAD","amber",s=>s.doseRate>RAD_HI,
   "The control room is reading above 1x background. That number is set both by what has failed on the plant and by where you put the shielding at the bench - a well-shielded control room can sit this out through a release that would light this tile instantly on a poorly sited one. A repair party out on the plant right now is being spent while this is lit, faster the closer the job sits to whatever is shining.","ctrl"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
@@ -2531,6 +2590,11 @@ const ANN=[
    and it would be a lie to point at one loop. Red beats amber beats blue; a
    tile with no component at all (BLACKOUT is the only one) lights nothing. */
 const annHost = h => typeof h==="function" ? h() : h;
+/* IS THIS NAMED TILE LIT. The mimic shouts some of these across the component
+   they belong to, and a banner drawn off its own copy of the threshold is a
+   second protection system that drifts from the board silently. One reader,
+   one predicate, so the box and the tile are the same claim. */
+const annLit = name => { const a=ANN.find(r=>r[0]===name); return !!a && !!a[2](S); };
 function annLamp(id){
   let best=null;
   for(const a of ANN){
