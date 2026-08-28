@@ -69,9 +69,13 @@ const ABSORB=[
    note:"A third more worth per cluster, and it takes decades of irradiation without complaint. Heavy - and margin bought from fewer, stronger clusters is margin concentrated in fewer things that can jam."},
 ];
 
+/* A slot's ZONE is an index, never an enrichment: the loading pattern is
+   drawn and the fuel row it means is menued, one row per zone. */
+const LAT_NZ=3;
 const LAT={
   slot:new Uint8Array(LQ*LQ),
   rod:new Int8Array(LQ*LQ),      // -1 none, else bank 0..3
+  zone:new Uint8Array(LQ*LQ),    // loading zone 0..LAT_NZ-1, 0 everywhere by default
   pitch:0,                       // assembly pitch, metres
   len:0,                         // active fuel length, metres
   reflR:1, reflT:1, reflB:1,     // reflector thickness per face, cells
@@ -185,7 +189,10 @@ const LAT_P0=(function(){
    Neither of them revolves. The caller does, once, when it has finished
    changing things. */
 function latLayFuel(r0,poig){
-  LAT.slot.fill(L_EMPTY); LAT.rod.fill(-1);
+  /* A preset rewrites the drawing, so it puts every slot back into zone one -
+     and the fuel the other zones were loaded with goes with them, or the
+     preset would describe a reactor its own row does not. */
+  LAT.slot.fill(L_EMPTY); LAT.rod.fill(-1); LAT.zone.fill(0); D.zoneFuel={};
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
     if(Math.hypot(u+.5,v+.5)<=r0) LAT.slot[LIX(u,v)]=L_FUEL;
   /* Poison graded toward the centre, because that is where the flux peaks -
@@ -332,6 +339,14 @@ const latCount=()=>{               // FUEL assemblies in the WHOLE core, not the
   let n=0; for(let q=0;q<LQ*LQ;q++) if(latFuel(q)) n++;
   return 4*n;
 };
+/* Which loading zones have any fuel in them at all - the panel puts up one
+   FUEL row per zone that does, so an unzoned core still shows one menu. */
+const latZonesUsed=()=>{
+  const seen=[];
+  for(let z=0;z<LAT_NZ;z++)
+    for(let q=0;q<LQ*LQ;q++) if(latFuel(q)&&LAT.zone[q]===z){ seen.push(z); break; }
+  return seen.length? seen : [0];
+};
 const latModCount=()=>{
   let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]===L_MOD) n++;
   return 4*n;
@@ -353,12 +368,41 @@ const latModCount=()=>{
    the error under two tenths of a per cent. audit-physics.js asserts the
    revolved volume against the volume laid out, so it cannot quietly drift. */
 const LAT_SS=16;
+const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float64Array(XNR)); return a; };
+
+/* ── the loading pattern, blended back into one FUEL row ──
+   derived() exports the row wholesale as d.f, so substituting one synthesized
+   object here updates beta, excess, densK, condK, mass and tdmg for every
+   reader at once. Weighting is fuel VOLUME, which is what excess, densK and
+   mass are all stated per - beta ought strictly to be fission-rate weighted,
+   and the difference is second order.
+
+   tdmg is the exception and it is a MINIMUM, not a mean: melt is a local
+   event, so one ring of metallic fuel cannot hide behind four of ceramic. */
+const FUEL_BLEND=["beta","excess","densK","condK","mass"];
+function fuelBlend(){
+  if(!LM) latRevolve();
+  const zt=LM.zTot; let tot=0;
+  for(let z=0;z<LAT_NZ;z++) tot+=zt[z];
+  const f0=FUEL[zoneFuelOf(0)];
+  if(!(tot>1e-9)) return f0;
+  const o={name:f0.name,note:f0.note,tdmg:Infinity};
+  for(const k of FUEL_BLEND){
+    let a=0; for(let z=0;z<LAT_NZ;z++) a+=zt[z]/tot*FUEL[zoneFuelOf(z)][k];
+    o[k]=a;
+  }
+  for(let z=0;z<LAT_NZ;z++) if(zt[z]>1e-9) o.tdmg=Math.min(o.tdmg,FUEL[zoneFuelOf(z)].tdmg);
+  if(!isFinite(o.tdmg)) o.tdmg=f0.tdmg;
+  return o;
+}
+
 function latRevolve(){
   const p=LAT.pitch, rEq=latEqR();
   latRev++;
   if(rEq<=0 || p<=0){
     LM={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),poi:new Float64Array(XNR),
         nPen:new Float64Array(XNR).fill(LAT_NF),chan:[],bankR:[(XNR-1)/2],NB:1,
+        zfrac:latZeroZones(),zTot:new Float64Array(LAT_NZ),
         dia:0,hgt:0,vol:0,nAsm:0,laid:0};
     // an empty core still has to be MEASURED: poiG is built nowhere else, and
     // without it every solve off a fuel-free lattice reads undefined[0]
@@ -367,15 +411,17 @@ function latRevolve(){
   }
   const dr=rEq/XNR, patch=(p/LAT_SS)*(p/LAT_SS);
   const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR), modA=new Float64Array(XNR);
+  const zoneA=latZeroZones();
   const rodN=[]; for(let i=0;i<XNR;i++) rodN.push({});
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
     const s=LAT.slot[LIX(u,v)]; if(!s) continue;
-    const rod=LAT.rod[LIX(u,v)];
+    const rod=LAT.rod[LIX(u,v)], zn=Math.min(LAT_NZ-1,LAT.zone[LIX(u,v)]);
     for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++){
       const r=Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p);
       const i=Math.min(XNR-1,Math.floor(r/dr));
       if(s===L_MOD){ modA[i]+=patch; continue; }
       fuelA[i]+=patch;
+      zoneA[zn][i]+=patch;
       if(s===L_POIS) poisA[i]+=patch;
       if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1;
     }
@@ -398,6 +444,14 @@ function latRevolve(){
     nPen[i]=LAT_NF*(1-occ[i]);
     vol+=ring*LAT.len*frac[i];
   }
+  /* Each zone's share of each ring's FUEL, and the fuel each zone holds
+     altogether. Both come off the loop above with no second walk: zfrac is the
+     shape enrRho is built from, zTot the weight fuelBlend() blends by. */
+  const zfrac=latZeroZones(), zTot=new Float64Array(LAT_NZ);
+  for(let z=0;z<LAT_NZ;z++) for(let i=0;i<XNR;i++){
+    zfrac[z][i]= fuelA[i]>1e-9? zoneA[z][i]/fuelA[i] : 0;
+    zTot[z]+=zoneA[z][i];
+  }
   /* one channel per ring that has a cluster in it, on that ring's own bank */
   const chan=[];
   for(let i=0;i<XNR;i++){
@@ -412,7 +466,7 @@ function latRevolve(){
 
   let laid=0;                       // the FUEL area actually laid out, for the audit
   for(let q=0;q<LQ*LQ;q++) if(latFuel(q)) laid++;
-  LM={dr, dz:LAT.len/XNZ, frac, occ, poi, nPen, chan, bankR, NB:bankR.length,
+  LM={dr, dz:LAT.len/XNZ, frac, occ, poi, nPen, chan, bankR, NB:bankR.length, zfrac, zTot,
       dia:2*rEq, hgt:LAT.len, vol, nAsm:4*laid, laid:4*laid*p*p*LAT.len};
   latMeasure();
   return LM;
@@ -424,7 +478,8 @@ function latRevolve(){
 function latMeasure(){
   const M=LM;
   D.pitch=LAT.pitch/LAT_P0;
-  const dens=COOLANT[D.cool].dens*FUEL[D.fuel].densK*(1.15-0.15*D.pitch);
+  const fb=fuelBlend();
+  const dens=COOLANT[D.cool].dens*fb.densK*(1.15-0.15*D.pitch);
   D.power=M.vol*dens;              // MW over kW/L is m3 exactly
   D.hd=M.dia>1e-6? M.hgt/M.dia : 1;
   D.nbank=M.NB;
@@ -435,6 +490,17 @@ function latMeasure(){
   const g=new Float64Array(XNR);
   for(let i=0;i<XNR;i++) g[i]= pm>1e-9? M.poi[i]/pm : 1;
   M.poiG=g;
+  /* enrRho keeps the same contract poiG does, one rank down: a ring's own
+     excess reactivity MINUS the core mean, so it is zero-mean by construction
+     and a single-zone core reads exactly 0 in every ring. Feed the raw ring
+     excess in instead and the whole core's reactivity is counted twice. */
+  const er=new Float64Array(XNR);
+  for(let i=0;i<XNR;i++){
+    let e=0,w=0;
+    for(let z=0;z<LAT_NZ;z++){ e+=M.zfrac[z][i]*FUEL[zoneFuelOf(z)].excess; w+=M.zfrac[z][i]; }
+    er[i]= w>1e-9? e/w-fb.excess : 0;
+  }
+  M.enrRho=er;
 }
 
 /* ── what the drawing weighs ──
@@ -503,7 +569,7 @@ function latWarn(){
 /* Reflector thickness is not a D field, so JSON.stringify(D) cannot see it
    change. designSig() asks this as well, or moving a face would leave the
    commissioned plant quietly out of date with the bench. */
-const latSig=()=>LAT.slot.join("")+"|"+LAT.rod.join("")+"|"+
+const latSig=()=>LAT.slot.join("")+"|"+LAT.rod.join("")+"|"+LAT.zone.join("")+"|"+
   [LAT.pitch,LAT.len,LAT.reflR,LAT.reflT,LAT.reflB,LAT.abs].join(",");
 
 /* ── thickness to albedo ──

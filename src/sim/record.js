@@ -360,6 +360,7 @@ function recHead(){
   return recFreeze({
     D        : snapVal(D),
     lat      : {slot:Array.from(LAT.slot), rod:Array.from(LAT.rod),
+                zone:Array.from(LAT.zone),
                 pitch:LAT.pitch, len:LAT.len,
                 reflR:LAT.reflR, reflT:LAT.reflT, reflB:LAT.reflB, abs:LAT.abs},
     latSig   : latSig(),
@@ -409,6 +410,7 @@ function recHead(){
 function recApplyHead(h){
   Object.assign(D, snapVal(h.D));
   LAT.slot.set(h.lat.slot); LAT.rod.set(h.lat.rod);
+  LAT.zone.set(h.lat.zone||new Uint8Array(LQ*LQ));
   LAT.pitch=h.lat.pitch; LAT.len=h.lat.len;
   LAT.reflR=h.lat.reflR; LAT.reflT=h.lat.reflT; LAT.reflB=h.lat.reflB; LAT.abs=h.lat.abs;
   latRevolve();                       // rebuilds LM and the D fields the lattice measures
