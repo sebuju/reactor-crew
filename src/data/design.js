@@ -188,7 +188,13 @@ const D={arch:0,fuel:1,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
             hands the player, so the reference plant IS the gestures. Two
             literals describing one plant is how the declared shape and the
             authored shape drift apart. */
-         tanks:{}, run:{}};
+         /* D.ports[pid] = {p:<partId>, f:<face>, o:<offset along face, px>,
+            m:<mode>} - a port is a place a pipe may be finished on, not an
+            implicit consequence of a run landing on a face. See addPort()/
+            removePort()/portMove()/portMode() (layout.js). Additive only for
+            now: nothing reads D.ports yet - D.run still names a (part, face)
+            pair directly. */
+         tanks:{}, run:{}, ports:{}};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides

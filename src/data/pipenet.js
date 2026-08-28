@@ -2195,9 +2195,45 @@ function runWgt(cells){
    off the pair of ROLES, resolving a fitting end THROUGH the fitting. If a
    kind ever needs an explicit argument here, that is a missing RUN_KIND row
    and the row is the fix. */
+/* ══ THE STOCK PLANT'S GEOMETRY IS BAKED ══
+   addRun() below still authors the topology exactly as it always has - same
+   calls, same order - but a MANUAL run needs port offsets and corners, and
+   addRun()'s own fallback (simpleRoute(), layout.js) is a plain dogleg, not
+   the collision-avoiding router this plant's pinned physics figures were
+   measured against. So the numbers are baked: captured once, off the last
+   commit that still had the old router, at every loop count the bench
+   allows (see .claude/plan-manual-pipes.md, decision 1, and
+   tools/seed-ports.js, the one-shot seeder that produced this table). A run
+   is matched by its (kind, part, face) pair in EITHER order - addRun() no
+   longer canonicalises which end is "a", so the seed's own a/b order is not
+   guaranteed to survive - and matched in reverse, its offsets and corners
+   are swapped and reversed too, or the baked pipe would run backwards.
+   Never hand-edit this table: regenerate it. */
+const STOCK_GEOM = {1:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:0,ob:0,wp:[[265,353]]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-12,ob:-17,wp:[[161,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:0,ob:0,wp:[[403,123],[633,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:0,ob:-12,wp:[[725,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[[633,353]]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:12,ob:17,wp:[[185,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},],2:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:-12,ob:-12,wp:[[265,341]]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-23,ob:-17,wp:[[150,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:17,ob:-12,wp:[[420,123],[621,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:-8,ob:-12,wp:[[717,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[[633,353]]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:0,ob:17,wp:[[173,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},{k:"hot",a:"core",sa:"r",b:"sg1",sb:"l",oa:12,ob:40,wp:[[357,365],[357,232]]},{k:"cold",a:"pump1",sa:"t",b:"sg1",sb:"b",oa:0,ob:0,wp:[[495,307]]},{k:"cold",a:"core",sa:"b",b:"pump1",sb:"b",oa:23,ob:-17,wp:[[196,453],[478,453]]},{k:"steam",a:"sg1",sa:"t",b:"turb",sb:"t",oa:17,ob:12,wp:[[512,115],[645,115]]},{k:"feed",a:"feed",sa:"t",b:"sg1",sb:"r",oa:8,ob:0,wp:[[733,192]]},],3:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:-23,ob:-17,wp:[[265,330],[265,336]]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-35,ob:-17,wp:[[138,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:17,ob:-23,wp:[[420,123],[610,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:-12,ob:-12,wp:[[713,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[[633,353]]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:-12,ob:17,wp:[[161,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},{k:"hot",a:"core",sa:"r",b:"sg1",sb:"l",oa:0,ob:40,wp:[[357,353],[357,232]]},{k:"cold",a:"pump1",sa:"t",b:"sg1",sb:"b",oa:0,ob:0,wp:[[495,307]]},{k:"cold",a:"core",sa:"b",b:"pump1",sb:"b",oa:12,ob:-17,wp:[[185,453],[478,453]]},{k:"steam",a:"sg1",sa:"t",b:"turb",sb:"t",oa:17,ob:0,wp:[[512,115],[633,115]]},{k:"feed",a:"feed",sa:"t",b:"sg1",sb:"r",oa:0,ob:0,wp:[[725,192]]},{k:"hot",a:"core",sa:"r",b:"sg2",sb:"l",oa:23,ob:40,wp:[[541,376],[541,232]]},{k:"cold",a:"pump2",sa:"t",b:"sg2",sb:"b",oa:0,ob:0,wp:[[587,261]]},{k:"cold",a:"core",sa:"b",b:"pump2",sb:"b",oa:35,ob:-17,wp:[[208,461],[570,461]]},{k:"steam",a:"sg2",sa:"t",b:"turb",sb:"t",oa:0,ob:23,wp:[[587,107],[656,107]]},{k:"feed",a:"feed",sa:"t",b:"sg2",sb:"r",oa:12,ob:8,wp:[[737,200]]},],4:[{k:"hot",a:"core",sa:"r",b:"tee0",sb:"l",oa:-35,ob:-17,wp:[[265,318],[265,336]]},{k:"hot",a:"sg0",sa:"l",b:"tee0",sb:"t",oa:0,ob:-8,wp:[[303,192]]},{k:"cold",a:"pump0",sa:"t",b:"sg0",sb:"b",oa:0,ob:0,wp:[[403,307]]},{k:"cold",a:"core",sa:"b",b:"pump0",sb:"b",oa:-46,ob:-17,wp:[[127,445],[386,445]]},{k:"steam",a:"sg0",sa:"t",b:"turb",sb:"t",oa:17,ob:-35,wp:[[420,123],[598,123]]},{k:"feed",a:"feed",sa:"t",b:"sg0",sb:"r",oa:-14,ob:-12,wp:[[711,180]]},{k:"surge",a:"pzr",sa:"b",b:"tee0",sb:"t",oa:17,ob:8,wp:[[282,261],[319,261]]},{k:"exh",a:"cond",sa:"t",b:"turb",sb:"b",oa:0,ob:0,wp:[[633,353]]},{k:"feed",a:"cond",sa:"r",b:"feed",sb:"b",oa:0,ob:0,wp:[[725,445]]},{k:"hpi",a:"core",sa:"b",b:"hpi",sb:"b",oa:-23,ob:17,wp:[[150,453],[98,453]]},{k:"relief",a:"pzr",sa:"r",b:"rv0",sb:"l",oa:0,ob:0,wp:[]},{k:"relief",a:"reltk",sa:"b",b:"rv0",sb:"r",oa:0,ob:0,wp:[[357,169]]},{k:"feed",a:"efw",sa:"l",b:"sg0",sb:"r",oa:17,ob:12,wp:[]},{k:"hot",a:"core",sa:"r",b:"sg1",sb:"l",oa:-4,ob:0,wp:[[449,349],[449,192]]},{k:"cold",a:"pump1",sa:"t",b:"sg1",sb:"b",oa:0,ob:0,wp:[[495,307]]},{k:"cold",a:"core",sa:"b",b:"pump1",sb:"b",oa:0,ob:-17,wp:[[173,453],[478,453]]},{k:"steam",a:"sg1",sa:"t",b:"turb",sb:"t",oa:17,ob:-12,wp:[[512,115],[621,115]]},{k:"feed",a:"feed",sa:"t",b:"sg1",sb:"r",oa:-5,ob:0,wp:[[720,192]]},{k:"hot",a:"core",sa:"r",b:"sg2",sb:"l",oa:12,ob:40,wp:[[357,365],[357,232]]},{k:"cold",a:"pump2",sa:"t",b:"sg2",sb:"b",oa:0,ob:0,wp:[[587,261]]},{k:"cold",a:"core",sa:"b",b:"pump2",sb:"b",oa:23,ob:-17,wp:[[196,461],[570,461]]},{k:"steam",a:"sg2",sa:"t",b:"turb",sb:"t",oa:0,ob:12,wp:[[587,107],[645,107]]},{k:"feed",a:"feed",sa:"t",b:"sg2",sb:"r",oa:5,ob:8,wp:[[730,200]]},{k:"hot",a:"core",sa:"r",b:"sg3",sb:"l",oa:35,ob:40,wp:[[565,388],[565,232]]},{k:"cold",a:"pump3",sa:"t",b:"sg3",sb:"b",oa:0,ob:0,wp:[[679,261]]},{k:"cold",a:"core",sa:"b",b:"pump3",sb:"b",oa:46,ob:-17,wp:[[219,469],[662,469]]},{k:"steam",a:"sg3",sa:"t",b:"turb",sb:"t",oa:0,ob:35,wp:[[679,123],[668,123]]},{k:"feed",a:"feed",sa:"t",b:"sg3",sb:"r",oa:14,ob:16,wp:[[739,208]]},],};
+function bakeStockGeometry(loops){
+  const table=STOCK_GEOM[loops]; if(!table) return;
+  const used={};
+  for(const g of table){
+    let hit=null;
+    for(const rid in D.run){
+      if(used[rid]) continue;
+      const ends=runEndsOf(rid); if(!ends) continue;
+      if(ends.a===g.a && ends.af===g.sa && ends.b===g.b && ends.bf===g.sb){ hit={rid,rev:false}; break; }
+      if(ends.a===g.b && ends.af===g.sb && ends.b===g.a && ends.bf===g.sa){ hit={rid,rev:true}; break; }
+    }
+    if(!hit) continue;
+    used[hit.rid]=1;
+    const e=D.run[hit.rid];
+    const oa = hit.rev?g.ob:g.oa, ob = hit.rev?g.oa:g.ob;
+    D.ports[e.pa].o=oa; D.ports[e.pb].o=ob;
+    const wp=g.wp.map(([x,y])=>({x,y}));
+    e.wp = hit.rev ? wp.slice().reverse() : wp;
+  }
+}
 function buildStockPlumbing(opt){
   const loops = (opt && opt.loops) || 1;
   for(const rid in D.run)   delete D.run[rid];
+  for(const pid in D.ports) delete D.ports[pid];
   for(const id  in D.tanks) delete D.tanks[id];
   for(const id  in D.fittings) delete D.fittings[id];
   /* Loops 1..3's generators and pumps are PLACED parts, so they survive a
@@ -2334,6 +2370,7 @@ function buildStockPlumbing(opt){
     addRun("feed","t","sg"+i,"r");
   }
 
+  bakeStockGeometry(loops);
   buildLayout();
 }
 buildStockPlumbing();
