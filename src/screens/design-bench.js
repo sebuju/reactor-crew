@@ -413,7 +413,7 @@ function latPlan(x,y,w,h){
   ctx.restore();
 
   const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
-    const u=Math.floor((pt.x-gx)/cs), v=LQ-1-Math.floor((pt.y-gy)/cs);
+    const u=Math.floor((pt.x-gx)/cs), v=Math.floor((gy+gh-pt.y)/cs);
     if(u<0||u>=LQ||v<0||v>=LQ) return;
     const id=u+","+v; if(id===LATPEN.last) return;
     LATPEN.last=id; latAct(u,v,e&&e.shiftKey);
@@ -421,7 +421,7 @@ function latPlan(x,y,w,h){
   // clear only OUR hover: the other plan's is not ours to stand down
   if(hov0&&hov0.host===me) LATPEN.hover=null;
   if(hov(wd)){
-    const u=Math.floor((ui.ptr.x-gx)/cs), v=LQ-1-Math.floor((ui.ptr.y-gy)/cs);
+    const u=Math.floor((ui.ptr.x-gx)/cs), v=Math.floor((gy+gh-ui.ptr.y)/cs);
     if(u>=0&&u<LQ&&v>=0&&v<LQ) LATPEN.hover={host:me,u,v};
   }
   if(!ui.drag) LATPEN.last=null;
