@@ -150,6 +150,13 @@ function layoutWarnings(M){ const w=[];
      primary water too - so a count would report more pipes than the designer
      drew. The fault is that the two sides are joined at all. */
   if(crossTies().length) w.push(["SOFT","The primary side is piped into a generator's shell, going round its tubes. Whatever is in one side will end up in the other: primary water into the steam, and steam pressure into the loop.",null]);
+  /* ONE ROW PER PART IN LIMBO, so the review panel names the machine and
+     warnFor() can put the red dot on it. HARD: two machines in the same cells
+     is not a plant anybody could build, and every occupancy question below -
+     repair access, exposure, where a nozzle may sit - answers nonsense while
+     it is true. It is drawn, not refused, so the fix is to drag it out. */
+  for(const p of LAY.parts.filter(q=>q.limbo))
+    w.push(["HARD",partName(p)+" is standing where it does not fit - on another machine, or off the grid. Drag it clear.",p.id]);
   if(M.access<1) w.push(["HARD","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
   if(M.exposure>0.3) w.push(["SOFT","Over 30% of the plant sits in hull cells. Expect to lose something every time you are hit.",null]);
   if(sgCount()>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both.",null]);
@@ -189,7 +196,7 @@ function ctxResolveDesign(p){
 }
 // Stage 7a: the menu header names the thing it is ABOUT - a part, a run, a
 // fitting, or the plant itself for a bare cell. Never a menu item, so it
-// carries no fn and cannot be clicked - see drawCtxMenu() (core/ui.js).
+// carries no fn and cannot be clicked - see shellInitCtxMenu() (screens/shell.js).
 function ctxTitleDesign(hit){
   if(hit.port){ const pt=D.ports[hit.port], p=LAY.parts.find(q=>q.id===pt.p);
     return (p?partName(p):"")+" PORT"; }
@@ -256,27 +263,36 @@ function ctxItemsDesign(hit){
          config (TANK_DEFAULT, pipenet.js); what goes in it, what is behind it
          and how it is plumbed are set afterwards on its own panel. Not gated
          on a count - four tanks is a legal plant. */
-      items.push({label:"ADD TANK HERE", fn:()=>{ addTank(gx,gy); }});
-      /* ONE ENTRY, no submenu of kinds - the same argument ADD TANK HERE
+      items.push({label:"ADD TANK", fn:()=>{ addTank(gx,gy); }});
+      /* ONE ENTRY, no submenu of kinds - the same argument ADD TANK
          makes. It places the single default fitting config (FIT_DEFAULT,
          pipenet.js); whether it is a tee, a throttle or a relief valve is a
          knob on its own panel afterwards, because all three are one box in
          one cell and only the mode differs. */
-      items.push({label:"ADD VALVE HERE", fn:()=>{ addFitting(gx,gy); }});
-      items.push({label:"ADD SPARE PUMP HERE", fn:()=>{
-        placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:1,h:1,x:gx,y:gy,col:"#57d38c",
+      items.push({label:"ADD VALVE", fn:()=>{ addFitting(gx,gy); }});
+      items.push({label:"ADD SPARE PUMP", fn:()=>{
+        placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:3,h:5,x:gx,y:gy,col:"#57d38c",
           grp:"pump",tip:"A spare coolant pump, placed where you put it. Hover an edge to place a port, then click it to draw a pipe - unplumbed, it does nothing at all.",
           role:"pump"}));
       }});
       /* Stage 3b: no D.loops++ - that used to conjure a generator, a pump
          and four routed runs in one act. This adds exactly the ONE part it
-         names, the same standing ADD SPARE PUMP HERE already has; it pays
+         names, the same standing ADD SPARE PUMP already has; it pays
          its own SGT[D.sg].mass (derived(), design.js) the moment it exists,
          and does nothing at all until wired up through CONNECT. */
-      items.push({label:"ADD STEAM GENERATOR HERE", fn:()=>{
-        placePart(n=>({id:"sgX"+n,name:"STEAM GEN SPARE",w:1,h:2,x:gx,y:gy,col:"#5fd2e2",
+      items.push({label:"ADD STEAM GENERATOR", fn:()=>{
+        placePart(n=>({id:"sgX"+n,name:"STEAM GEN SPARE",w:3,h:6,x:gx,y:gy,col:"#5fd2e2",
           grp:"sg",tip:"An additional steam generator, placed where you put it. Hover an edge to place a port, then click it to draw a pipe - unplumbed, it does nothing at all.",
           role:"sg"}));
+      }});
+      /* A SECOND TRANSFER STAGE, and it is a part like any other - spliced
+         into a loop with a hot leg and a cold leg, exactly the way a generator
+         is. Nothing here declares which generators it feeds: that is the loop
+         it lands on (ihxSgs(), layout.js), asked of the drawing. */
+      items.push({label:"ADD HEAT EXCHANGER", fn:()=>{
+        placePart(n=>({id:"ihxX"+n,name:"INTERMEDIATE HX",w:3,h:4,x:gx,y:gy,col:"#9ec96f",
+          grp:"sg",tip:"An intermediate heat exchanger. Splice it into a loop and the generators on that loop are heated by IT rather than by the core, so primary coolant never reaches the secondary. Two stages in series cost a temperature drop, and the exchanger is heavy.",
+          role:"ihx"}));
       }});
       /* A SECOND TURBINE AND A SECOND CONDENSER. Both used to be one part,
          present or absent, and every reader that priced or gated them read
@@ -286,13 +302,13 @@ function ctxItemsDesign(hit){
          made that move. The STOCK unit stays behind its own fittable
          checkbox, so "no turbine at all" is still a legal design and the bench
          still warns about it; these are the extra ones. */
-      items.push({label:"ADD TURBINE HERE", fn:()=>{
-        placePart(n=>({id:"turbX"+n,name:"TURBINE SPARE",w:3,h:1,x:gx,y:gy,col:"#f0a830",
+      items.push({label:"ADD TURBINE", fn:()=>{
+        placePart(n=>({id:"turbX"+n,name:"TURBINE SPARE",w:9,h:7,x:gx,y:gy,col:"#f0a830",
           grp:"sec",tip:"An additional turbine, placed where you put it. It swallows its own share of steam and carries its own share of the load - lose one of two and you lose half the output, not all of it. Hover an edge to place a port, then click it to draw a pipe.",
           role:"turb"}));
       }});
-      items.push({label:"ADD CONDENSER HERE", fn:()=>{
-        placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:3,h:1,x:gx,y:gy,col:"#5aa9d6",
+      items.push({label:"ADD CONDENSER", fn:()=>{
+        placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:9,h:5,x:gx,y:gy,col:"#5aa9d6",
           grp:"sec",tip:"An additional condenser, placed where you put it. It is heat sink and it is where the feed pumps draw from, so a second one is a second place for both. Hover an edge to place a port, then click it to draw a pipe.",
           role:"cond"}));
       }});
@@ -455,8 +471,8 @@ function latPlan(x,y,w,h){
   else fitTxt(latCount()+" ASSEMBLIES / DOT IS FLUX",
       gx,gy+gh+11,gw,{size:6.5,sp:.5,color:C.ink2});
 }
-/* the canvas TIP() is no use here: drawTip() paints it on #cv, under the rail.
-   The HTML #tip is position:fixed and clears everything. */
+/* a rail control is a DOM node, so it carries its own data-tip-title and the
+   canvas TIP() is not needed: same box either way (shellInitTooltip). */
 const LATPLAN_TIP="The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius.";
 
 const LATPEN_CORE=[
@@ -991,5 +1007,4 @@ function drawDesign(){
   { const st=DB&&DB.state;
     const h = st && st.panels.find(o=>o.ids.includes(sel));
     if(h) leaderLine(h.well.el,DB.rail); }
-  drawCtxMenu();
 }

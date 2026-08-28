@@ -133,7 +133,13 @@ function commission(){
   { const n = Math.max(1, sgCount());
     const dT0 = Math.max(5, P.Tref - tsatSec(P.P0*0.45));
     P.sgUA = (P.n0*P.rated*1000)/(n*Math.pow(Math.max(P.flowK,.02),UA_FLOW)*dT0);
-    P.swallow = P.n0*P.rated*1000/H_FG; }
+    P.swallow = P.n0*P.rated*1000/H_FG;
+    /* The second stage is priced off the first and not off a second anchor:
+       what an exchanger is worth is a MULTIPLE of the generator behind it, so a
+       plant that buys one keeps the same rest point and pays for the extra
+       stage in shell temperature. Per generator, like P.sgUA - the tick
+       multiplies by how many that exchanger actually feeds. */
+    P.ihxUA = P.sgUA*IHX_UA; }
   /* ── AND THE SAME ANCHOR FOR THE OTHER TWO MACHINES ──
      P.hTurb makes the enthalpy drop across design shell pressure to design
      condenser pressure exactly H_FG, so a turbine at its design point does the
@@ -873,6 +879,19 @@ const SG_BURST_K=1.5;
 const SG_RELIEF_CAP=3.0;
 /* Dittus-Boelter: the tube-side film goes as flow^0.8. PHYSICAL, not fitted. */
 const UA_FLOW=0.8;
+/* ── AND THE SAME POT ONE STAGE EARLIER ──
+   IHX_UA is what one intermediate exchanger's tubes are worth against the
+   generator it feeds. Bigger, because the temperature difference it has to
+   work across is the one it just gave away - a real intermediate exchanger is
+   oversized for exactly that reason. In series the pair is worth
+   1/(1/IHX_UA + 1) of the generator alone, so buying a second stage costs
+   OUTPUT rather than temperature: the rods hold Tavg on programme either way,
+   and the shell simply sits colder. IHX_HOLD is the intermediate coolant it
+   carries, which with its own steel (IHX_MASS, layout.js) is the pot's heat
+   capacity - and the reason a second stage is also a second flywheel. */
+const IHX_UA=2.5;
+const IHX_HOLD=90;        // t of intermediate coolant
+const ihxHeatCap=()=>IHX_HOLD*1000*CP_W + IHX_MASS*1000*CP_STEEL;
 const FEED_TAU=30;        // s, how fast feedwater walks a level error out
 /* THE FEED REGULATING VALVE, one generator's own. FREG_RATE is how fast it
    strokes, in MPa of back-pressure per second at full error - a valve, not an
@@ -965,6 +984,22 @@ const sgFill=(s,id)=>{ const v=s.sglBy&&s.sglBy[id];
    bench, a tick-zero seed - gets the fallback curve's answer instead. */
 const sgTemp=(s,id)=>{ const v=s&&s.sgTBy&&s.sgTBy[id];
   return v===undefined ? tsatSec(secPTarget(s,id)) : v; };
+/* ONE exchanger's own intermediate temperature, K. No entry yet is a pot that
+   has not been seeded, and a pot at loop temperature is what it seeds to. */
+const ihxTemp=(s,id)=>{ const v=s&&s.ihxTBy&&s.ihxTBy[id];
+  return v===undefined ? (s?s.Tavg:0) : v; };
+/* WHAT THIS GENERATOR'S TUBES ARE HEATED BY - the core's own coolant, unless
+   an intermediate exchanger stands in front of it, when it is that exchanger's
+   pot. ONE reader, so the heat term, the readout and the T-HOT row cannot
+   disagree about which stage a generator is on. */
+const sgHot=(s,id)=>{ const h=ihxOf(id); return h ? ihxTemp(s,h) : s.Tavg; };
+/* IS WHAT IS IN THESE TUBES THE CORE'S OWN WATER? An intermediate exchanger is
+   a BARRIER, and that is the whole reason the real machines exist: behind one,
+   a tube rupture leaks the exchanger's coolant into the shell and costs no
+   release at all. It still costs INVENTORY - the loop it drains is still a
+   loop this plant needs to cool the core with - so only the activity is
+   bought, which is exactly what the barrier is. */
+const sgActive = id => !ihxOf(id);
 /* The pot's heat capacity: the water actually in it plus the steel round it. */
 const sgHeatCap=(s,id)=>SGT[D.sg].water*1000*(sgLvl(s,id)/100)*CP_W
                       + SGT[D.sg].mass*1000*CP_STEEL;
@@ -1118,6 +1153,10 @@ function resetPlant(){
         curve - so tick zero is bit-identical to the formula this replaces.
         REFILLED by step(), never rebuilt: a renderer holds them across frames. */
      sgTBy:{}, steamBy:{}, steamTo:{}, steamWk:{},
+     /* AND THE SAME TWO FIELDS ONE STAGE EARLIER, per intermediate exchanger:
+        the temperature its pot is sitting at, and what is crossing into it.
+        Seeded below off the loop's own temperature. REFILLED by step(). */
+     ihxTBy:{}, ihxQBy:{},
      /* kg/s a generator's own relief valves are passing - a readout, refilled */
      sgVentBy:{},
      /* and whether its shell has let go. LATCHED, like a rupture disc: a burst
@@ -1276,6 +1315,12 @@ function resetPlant(){
   /* The shell starts where the old formula put it, so nothing pinned against a
      plant at rest moves. From here it is an integral. */
   for(const id of sgIds()) S.sgTBy[id] = tsatSec(secPTarget(S,id));
+  /* The pot starts between the two stages it stands between, which is where a
+     settled plant puts it anyway - starting it at Tavg would hand a generator
+     the whole primary temperature for one tick and kick a transient nobody
+     caused, the same argument s.coreDT's own seed makes. */
+  for(const id of ihxIds())
+    S.ihxTBy[id] = S.Tavg - (S.Tavg - tsatSec(secPTarget(S,ihxSgs(id)[0])))/(1+IHX_UA);
   S.condT = tsatSec(COND_P0);
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
@@ -1662,13 +1707,41 @@ function step(dt){
      the difference closes. */
   const nSG = Math.max(1, Object.keys(sgW).length);
   const filmK = (1-0.85*Math.min(vNow,1));
-  const sgQBy = {};
+  const sgQBy = {}, ihxFl = {};
   let qTot = 0;
   for(const id in sgW){
     const fl = Math.max(driven*wet*sgW[id]*nSG, 0.02);
+    /* sgHot(), not s.Tavg: with an intermediate exchanger in front of it this
+       generator is heated by that exchanger's pot, and the primary temperature
+       is a stage away. Every other term is a property of THESE tubes and does
+       not care which stage feeds them. */
     const q  = P.sgUA*Math.pow(fl,UA_FLOW)*sgFill(s,id)*filmK
-             * Math.max(0, s.Tavg - sgTemp(s,id));
-    sgQBy[id] = q; qTot += q;
+             * Math.max(0, sgHot(s,id) - sgTemp(s,id));
+    sgQBy[id] = q;
+    /* HEAT LEAVING THE CORE IS WHAT CROSSES THE FIRST STAGE, never the second.
+       With an exchanger in front, the primary gives its heat to the pot and the
+       pot gives it to the shell - charging the core with the shell's own
+       crossing would spend the stage that is storing it. */
+    const h = ihxOf(id);
+    if(h) ihxFl[h] = (ihxFl[h]||0) + fl;
+    else qTot += q;
+  }
+  /* ── THE POT BETWEEN THE TWO STAGES ──
+     The shell's own sentence said once earlier: in on a temperature difference
+     across a conductance, out with whatever the shells behind it are taking,
+     and the difference is stored. One more integrator and no new mechanism.
+     REFILLED, never rebuilt - a renderer holds these across frames. */
+  for(const id in s.ihxTBy) if(!ihxSgs(id).length) delete s.ihxTBy[id];
+  for(const id in s.ihxQBy) delete s.ihxQBy[id];
+  for(const id of ihxIds()){
+    const served = ihxSgs(id); if(!served.length) continue;
+    const fl = Math.max((ihxFl[id]||0)/served.length, 0.02);
+    const qIn = P.ihxUA*served.length*Math.pow(fl,UA_FLOW)*filmK
+              * Math.max(0, s.Tavg - ihxTemp(s,id));
+    let qOut = 0; for(const g of served) qOut += sgQBy[g]||0;
+    if(s.ihxTBy[id]===undefined) s.ihxTBy[id]=s.Tavg;
+    s.ihxTBy[id] = clamp(s.ihxTBy[id] + (qIn-qOut)/ihxHeatCap()*dt, P.Tmin, P.Tmax);
+    s.ihxQBy[id] = qIn; qTot += qIn;
   }
   const removal = qTot/(P.rated*1000);
   s.dTavg = (heat-removal)*1.8/P.graceK;               // K/s, for the rod controller's lead term
@@ -1837,7 +1910,13 @@ function step(dt){
     for(const k in s.sgtrBy) if(!(k in sby)) delete s.sgtrBy[k];
     for(const k in sby) s.sgtrBy[k] = Math.max(0, invRate(sby[k]));
     s.inv -= leak*dt;
-    if(leak>0) s.release = Math.min(100, s.release + (leak/0.30)*0.02*P.dose*dt); }
+    /* CHARGED PER GENERATOR, not off the aggregate: what costs release is the
+       share of the leak coming out of tubes that hold the core's own water
+       (sgActive()), and a plant can have one generator behind an exchanger and
+       one not. The whole leak still comes off inventory above. */
+    let hot = 0;
+    for(const k in s.sgtrBy) if(sgActive(k.slice(5))) hot += s.sgtrBy[k];
+    if(hot>0) s.release = Math.min(100, s.release + (hot/0.30)*0.02*P.dose*dt); }
   const burst = P.P0*(P.burstK - 0.0028*s.fatigue);   // fatigue weakens the vessel
   /* asked at the VESSEL, not at the pressurizer: what bursts a vessel is the
      pressure inside it, and hanging the pressurizer high genuinely puts the
@@ -2139,8 +2218,10 @@ function step(dt){
     /* A ruptured generator on its safety valve is putting primary water in the
        sky. Charged at the SGTR scale already used below, times the share of
        this machine's steam that is going overboard rather than to the
-       condenser - clean unless these tubes are the ones that failed. */
-    if(vent>0 && sgtrLive(s,id)){
+       condenser - clean unless these tubes are the ones that failed, and clean
+       anyway behind an intermediate exchanger (sgActive()), where what crossed
+       into this shell was never the core's water. */
+    if(vent>0 && sgtrLive(s,id) && sgActive(id)){
       const shr = vent/Math.max(steamTo+vent,1e-9);
       s.release = Math.min(100, s.release
         + shr*(Math.max(0,s.sgtrRate)/SGTR_RATE)*0.02*P.dose*dt); }

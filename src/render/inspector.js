@@ -260,6 +260,13 @@ function paramsFor(p){
     note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
     B.gang="sg";
   }
+  else if(p.role==="ihx"){
+    B.push({kind:"readlist",rows:()=>{ const served=ihxSgs(id); return [
+      ["FEEDS",served.length?nameList(served):"nothing",null,"Which generators this exchanger heats. It is whatever is on the loop you spliced it into - splice it in with a hot leg and a cold leg, exactly like a generator."],
+      ["EXCHANGER MASS",IHX_MASS.toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
+    note("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats the generators on its loop, so a tube rupture in one of those generators leaks THIS loop's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
+    note("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
+  }
   else if(roleHead(p.role)){
     const key={get:()=>pumpSizeOf(id),set:v=>{ D.pumpSize[id]=v; }};
     B.push({kind:"slider",title:"PUMP SIZE",key,min:0,max:1,step:.05,

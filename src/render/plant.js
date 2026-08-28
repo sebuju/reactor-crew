@@ -315,6 +315,16 @@ function drawSym(p,x,y,w,h,ink,L){
         banner(word,cx,X+1,Y+11,W-2,Hh-12,
                (ruptured||lv<SG_DRY_LO)?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
     }
+  } else if(p.role==="ihx"){
+    /* A SHELL-AND-TUBE VESSEL WITH NO STEAM SPACE, so it is drawn full and it
+       has no level: what is inside it is liquid all the way up on both sides,
+       which is the one visible difference between this and the kettle above. */
+    shell(()=>{ ctx.moveTo(X,Y+5); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+5);
+      ctx.lineTo(X+W,Y+Hh-5); ctx.quadraticCurveTo(cx,Y+Hh+4,X,Y+Hh-5); ctx.closePath(); });
+    ctx.beginPath();
+    for(let i=1;i<=3;i++){ const yy=Y+5+(Hh-10)*i/4;
+      ctx.moveTo(X+4,yy); ctx.lineTo(X+W-4,yy); }
+    ctx.strokeStyle=ink; ctx.lineWidth=1.2; ctx.stroke();
   } else if(roleHead(p.role)){
     const r=Math.min(W,Hh)/2-1, cy=y+h/2;
     shell(()=>ctx.arc(cx,cy,r,0,7));
@@ -611,6 +621,7 @@ function liveValue(p,s){
     case p.id==="rods":  return (s.rodPos*100).toFixed(0)+"%";
     case p.id==="pzr":   return s.P.toFixed(1)+" MPa";
     case p.role==="sg":          return sgLvl(s,p.id).toFixed(0)+"%";
+    case p.role==="ihx":         return ihxTemp(s,p.id).toFixed(0)+" K";
     case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
     case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
     case p.role==="cond": return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
@@ -1577,10 +1588,16 @@ function readoutsFor(p,s){
     add("STEAM OUT",(s.steamTo&&s.steamTo[id]||0).toFixed(0)+" kg/s",
       (s.sgVentBy&&s.sgVentBy[id]>0)?C.red:null,
       "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go.");
-    add("T-HOT IN",Th.toFixed(0)+" K",null,
-      "Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out.");
-    add("T-COLD OUT",Tc.toFixed(0)+" K",null,
-      "Coolant going back to the core, after the generator has taken its heat.");
+    /* WHAT HEATS THESE TUBES, off the same sgHot() the heat term reads. With an
+       intermediate exchanger in front there is no core coolant in this machine
+       at all, and no T-COLD either: the intermediate loop's own rise is not a
+       number this model carries. */
+    { const h=ihxOf(id);
+      add(h?"INTER IN":"T-HOT IN",(h?ihxTemp(s,h):Th).toFixed(0)+" K",null,
+        h?"Intermediate coolant arriving from "+nameOf(h)+". The core's own coolant never reaches this machine."
+         :"Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out.");
+      if(!h) add("T-COLD OUT",Tc.toFixed(0)+" K",null,
+        "Coolant going back to the core, after the generator has taken its heat."); }
     add("HEAT REMOVED",((s.steamBy&&s.steamBy[id]||0)*H_FG/1000).toFixed(0)+" MWt",null,
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
     add.apply(null,rowNat(s));
@@ -1588,7 +1605,20 @@ function readoutsFor(p,s){
         (s.sgBurst&&s.sgBurst[id])?C.red:C.green,
       "The secondary pressure boundary. It bursts at "+sgBurstP().toFixed(1)+" MPa, and nothing stops it getting there except a relief valve you placed. Burst, it is open to atmosphere: it will not hold pressure again and it stops cooling its loop the moment it is empty.");
     add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
-      "The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment.");
+      sgActive(id)
+        ?"The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment."
+        :"The barrier between the intermediate loop and the secondary. What is in these tubes came from "+nameOf(ihxOf(id))+", not from the core, so a rupture here costs coolant and no activity at all - that is what the exchanger is for.");
+  } else if(p.role==="ihx"){
+    const served=ihxSgs(id);
+    add("INTER TEMP",ihxTemp(s,id).toFixed(0)+" K",null,
+      "The temperature of the intermediate coolant in this exchanger. Heat crosses into it on the gap between this and the primary, and out of it on the gap between this and every shell it feeds - so it sits between the two, and it is what those generators see instead of the core.");
+    add("T-HOT IN",Th.toFixed(0)+" K",null,
+      "Primary coolant arriving from the core. The gap between this and INTER TEMP is what this exchanger is passing.");
+    add("HEAT CROSSED",(((s.ihxQBy&&s.ihxQBy[id])||0)/1000).toFixed(0)+" MWt",null,
+      "Heat crossing these tubes out of the primary. It is a conductance times a temperature difference, exactly like the generator behind it - two stages in series, and each one costs a temperature drop.");
+    add("FEEDS",served.length?nameList(served):"nothing",
+        served.length?null:C.amber,
+      "Which generators are heated by this exchanger. It is the loop it is spliced into, asked of the drawing - an exchanger on no loop with no generator behind it heats nothing at all.");
   } else if(primaryPump(id)){
     /* s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow
        (tripCause(), step.js), so a gauge on the pump SETTING would sit at
@@ -2063,6 +2093,13 @@ function drawPlant(y0,L,vh,vx,vw){
     else if(!p.access && p.grp!=="shield" && fit) badge(x+w-9,y+12,C.amber);
     if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
     if(!L && fit && !dmgd){ const wc=warnFor(p.id); if(wc) dot(x+6,y+8,8,wc); }   // bench has no alarm lamp
+    /* A PART IN LIMBO KEEPS THE MARK THE DROP PREVIEW GAVE IT. Same dash, same
+       red, same wash as partGhost() paints under the hand: the picture that
+       said "this will not fit" and the picture that says "this does not fit"
+       are one picture, so letting go changes nothing except that it is now
+       true. Over the symbol, not under it - it is a verdict on the box. */
+    if(p.limbo){ ctx.save(); ctx.setLineDash([4,4]);
+      fillRect(x,y,w,h,"rgba(255,90,69,.10)"); frame(x,y,w,h,C.red); ctx.restore(); }
     const v = L&&fit ? liveValue(p,L) : null;
     /* THE NAME MOVED INSIDE THE BOX, onto its own top row - it used to sit in
        the margin above, in the same lane a pipe and its fittings run through,
@@ -2150,7 +2187,7 @@ function zoomKeySync(mount){
   if(b.textContent!==want) b.textContent=want;
   b.title=(z?"FIT THE WHOLE PLANT":"ZOOM IN")+
     "\nThe plant view pans and zooms. Roll the wheel over it to zoom about the pointer, hold the RIGHT button to drag the plant about, and this key jumps between the whole plant and a close look at whatever component is selected.";
-  const rc=cv.getBoundingClientRect(), mr=mount.getBoundingClientRect(), k=cvK();
-  b.style.right=Math.max(0,mr.right-(rc.left+(VIEW.x+VIEW.w)*k)+6)+"px";
-  b.style.top  =Math.max(0,rc.top-mr.top+(VIEW.y-TOPBAR_H)*k+6)+"px";
+  const v=viewRectCss(), mr=mount.getBoundingClientRect();
+  b.style.right=Math.max(0,mr.right-v.right+6)+"px";
+  b.style.top  =Math.max(0,v.top-mr.top+6)+"px";
 }

@@ -86,8 +86,9 @@ const laySrcSig=()=>checkSig()+tankSig()+fittingSig()+portSig()+pipeSig();
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
 // at the end of buildLayout()) or it would vanish whenever an unrelated
-// FITTABLE flag flipped. A placed part that no longer fits is dropped from
-// that one rebuild, not deleted - it reappears once the conflict clears.
+// FITTABLE flag flipped. A placed part that does not fit is not dropped - it
+// is marked (p.limbo) and drawn red, because a part nobody can see is a part
+// nobody can drag back out.
 let placedParts=[], placeSeq=0;
 /* The one way anything outside this file replaces the placed set wholesale -
    a recording head putting its own plant back on the board (recApplyHead()).
@@ -326,7 +327,7 @@ const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
    leg on the core side is still that loop's leg - leave `fitting` off this
    list and loopOfKey() answers null for it, which silently costs the loop a
    leg in P.netRefRun's scale and in every per-loop question the tick asks. */
-const LOOP_ROLE={core:1, sg:1, pump:1, fitting:1};
+const LOOP_ROLE={core:1, sg:1, ihx:1, pump:1, fitting:1};
 /* THE WALK IS OVER NODES, NOT PARTS. It used to link two PARTS whenever a run
    joined them, which was only ever right while every part was a single
    through-path: a steam generator carries two that do not meet (tubes and the
@@ -605,6 +606,17 @@ function shellsOf(pid){
 // above never reaches it from any generator - never read as "is it plumbed
 // at all" (netBuild()'s own port-usage check answers that, off net.usage).
 const loopOf = id => { const v=loopMap().partLoop[id]; return v===undefined?null:v; };
+const ihxIds=()=>LAY.parts.filter(p=>p.role==="ihx").map(p=>p.id);
+const ihxCount=()=>ihxIds().length;
+const IHX_MASS=95;                     // t, the exchanger and the intermediate loop behind it
+/* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
+   exchanger feeds. Both are the LOOP, asked of loopMap() and never of a name.
+   No exchanger and the generator is heated by the core's own coolant, which is
+   every plant that did not buy one. */
+const ihxOf=sgId=>{ const L=loopOf(sgId); if(L===null) return null;
+  const p=LAY.parts.find(q=>q.role==="ihx" && loopOf(q.id)===L); return p?p.id:null; };
+const ihxSgs=id=>{ const L=loopOf(id); return L===null ? []
+  : LAY.parts.filter(q=>q.role==="sg" && loopOf(q.id)===L).map(q=>q.id); };
 // loop i's own pumps, undamaged, summed by capacity - what netFlowK()'s
 // per-group ceiling (pipenet.js) reads per loop before any open junction
 // groups loops together. Off loopOf(), never a stored p.loop.
@@ -1010,6 +1022,19 @@ const ROLE = {
      even though the conductance between them is. */
   sg:    {internal:[{a:"l", b:"b", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", vap:"b", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer"},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
+  /* A SECOND TRANSFER STAGE, and ONE internal path - the primary one. What an
+     intermediate exchanger moves heat INTO is a pot with a temperature
+     (s.ihxTBy, step.js), not a hydraulic circuit: the same standing the steam
+     side already has, where the runs carry a thermal rate and no solved
+     pressure drop. Every generator on its own loop takes its hot-side
+     temperature from that pot instead of from Tavg.
+     ONE internal path and FOUR faces, folded the way a valve body is: t onto l
+     and b onto r, so the exchanger plumbs vertically or horizontally with no
+     rotation knob to get wrong. It is spliced into a leg, so both ends are the
+     same leg and neither is a nozzle of its own. */
+  ihx:   {internal:[{a:"l", b:"r", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}], fixed:null,
+          fold:{t:"l", b:"r"}, mu:0.60, sgtr:false,
+          ports:{l:2, r:2, t:2, b:2}, thermal:"transfer"},
   /* ONE PUMP. There is no feedwater pump role: what makes a pump a feedwater
      pump is where it is piped, which the graph already answers (primaryPump()
      above). ports is the usual MEASUREMENT across every pump on the stock
@@ -1086,7 +1111,7 @@ function buildLayout(){
     "Sets loop pressure. It has to sit high - the steam bubble must stay at the top of the loop.","pzr");
   // ONE generator, ONE pump - the stock loadout, exactly like every other
   // fixed-slot part above. There is no knob for how many of these exist:
-  // an additional generator is a PLACED part (ADD STEAM GENERATOR HERE,
+  // an additional generator is a PLACED part (ADD STEAM GENERATOR,
   // design-bench.js), wired by hand through Stage 3a's CONNECT, the same
   // way a spare pump already is. Loop membership is read off the run graph
   // (loopOf(), above), not stored.
@@ -1121,14 +1146,30 @@ function buildLayout(){
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.","bkp");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",3,3,18+3*i,30,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
-  // placed parts merge in last, checked straight against A (not groupFits(),
-  // which reads the global LAY.parts - still the PRE-rebuild layout here)
-  for(const p of placedParts){
-    let ok = p.x>=0 && p.y>=0 && p.x+p.w<=GW && p.y+p.h<=GH;
-    if(ok) for(const q of A) if(p.x<q.x+q.w && p.x+p.w>q.x && p.y<q.y+q.h && p.y+p.h>q.y){ ok=false; break; }
-    if(ok) A.push(p);
-  }
+  for(const p of placedParts) A.push(p);
+  /* ══ A PART IN A BAD SPOT STAYS ON THE DRAWING ══
+     An overlapping or out-of-bounds part used to be dropped from LAY.parts
+     here, which made it invisible, un-hittable and un-draggable while still
+     costing its mass - the player had put something down and the bench had
+     silently eaten it. It is MARKED instead: it draws, it is red, it can be
+     picked up and moved out again, and it is a HARD objection until it is
+     (layoutWarnings(), design-bench.js), so a plant with one cannot be
+     commissioned. The bench warns; it never refuses.
+     Marked over ALL of A, not just placedParts: moveTo() no longer refuses
+     either, so a fixed part, a tank or a fitting can be dragged into the same
+     hole and has to answer for it the same way. */
+  markLimbo(A);
   LAY={parts:A}; layFit=laySrcSig();
+}
+/* ONE PASS, TWO CALLERS. buildLayout() runs it on the set it just built, and
+   moveTo() runs it again on LAY.parts - a move does not change laySrcSig(), so
+   nothing rebuilds after a drop and a mark left to the rebuild alone would be
+   the answer to where the part USED to be: red on a part now standing clear,
+   and nothing on the one it just landed on. */
+function markLimbo(A){
+  for(const p of A)
+    p.limbo = p.x<0 || p.y<0 || p.x+p.w>GW || p.y+p.h>GH ||
+              A.some(q=>q!==p && p.x<q.x+q.w && p.x+p.w>q.x && p.y<q.y+q.h && p.y+p.h>q.y);
 }
 /* EVERY ROW IS EXACTLY CELL TALL, ON BOTH SCREENS. BANDS is gone with the
    reserve dance that fed it: a machine now declares the cells its own controls
@@ -1290,6 +1331,9 @@ function portWord(p,f,long){ const IN=portPath(p,f); if(!IN) return null;
 const RUN_VAPOUR={steam:1, exh:1};
 const RUN_KIND={
   "core|sg":"hot", "pump|sg":"cold", "core|pump":"cold",
+  // an exchanger is spliced INTO the loop, so every run reaching it is still
+  // the leg it was: hot on the way out of the core, cold on the way back
+  "core|ihx":"hot", "ihx|sg":"hot", "ihx|pump":"cold", "ihx|pzr":"surge",
   "sg|turb":"steam", "cond|turb":"exh",
   // the condenser is on nobody's primary, so a pump drawn to it is drawing
   // feedwater whatever else it is plumbed to
@@ -1593,10 +1637,15 @@ function groupFits(cells){
    the group is going. */
 const moveCells=(p,nx,ny)=>[{q:p,x:nx,y:ny}].concat(
   pinnedTo(p).map(q=>({q,x:nx+q.pin.dx,y:ny+q.pin.dy})));
+/* A DROP IS NEVER REFUSED. groupFits() is still asked - by partGhost(), which
+   colours the landing preview red - but it no longer vetoes the move: a part
+   dropped where it does not fit lands there, draws red, and blocks
+   commissioning until it is moved out (p.limbo, buildLayout()). A refused drop
+   was a gesture that did nothing and said nothing, and the part it refused to
+   move was the one the player was looking at. */
 function moveTo(p,nx,ny){
   if(p.pin) return false;
   const cells=moveCells(p,nx,ny);
-  if(!groupFits(cells)) return false;
   /* A tank is rebuilt from D.tanks on every buildLayout(), so its cell has to
      land back there or the move is undone by the next unrelated rebuild.
      moveTo() is the ONLY way a part changes position, so this is the one
@@ -1604,6 +1653,7 @@ function moveTo(p,nx,ny){
   for(const {q,x,y} of cells){ q.x=x; q.y=y;
     if(D.tanks[q.id])    D.tanks[q.id].cell=[x,y];
     if(D.fittings[q.id]) D.fittings[q.id].cell=[x,y]; }
+  markLimbo(LAY.parts);
   return true;
 }
 // every cell a party could stand in beside p and still be working ON p - not
@@ -1698,6 +1748,10 @@ function layoutMetrics(){
      whether anything is fitted to take it is a design question and belongs on
      the bench. Off the drawing, like every other warning here. */
   const sgNoRelief = P_.filter(p=>p.role==="sg" && !reliefsOnShell(p.id)).map(p=>p.id);
+  /* AN EXCHANGER ON NO LOOP HEATS NOTHING. It is spliced into a loop or it is
+     a box: with no generator behind it there is nothing for its pot to feed,
+     and with no loop at all it is not even in the primary. */
+  const ihxIdle   = P_.filter(p=>p.role==="ihx" && !ihxSgs(p.id).length).map(p=>p.id);
   const feedNoSg  = P_.filter(p=>roleHead(p.role) && !primaryPump(p.id)
                                  && !secGensOf(p.id).length).map(p=>p.id);
   /* Metres above the core, per TANK - measured, not a clamped multiplier on
@@ -1732,7 +1786,7 @@ function layoutMetrics(){
      one steam generator from another, and can tell a shut valve from an open
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
-  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,feedNoSg,tankZ,injZ:injZ===null?0:injZ,radK,peak,
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,ihxIdle,feedNoSg,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
 }

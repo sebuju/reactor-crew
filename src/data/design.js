@@ -320,6 +320,7 @@ function derived(){
     + partMass("catcher") + tankMass() + fittingMass()
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + turbCount()*D.turb*50 + condCount()*D.condCap*40
+    + ihxCount()*IHX_MASS
     + layMass + latMass();
   /* MEASURED, not bought. The pitch correction the old line carried
      (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already
