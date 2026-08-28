@@ -2393,9 +2393,14 @@ function step(dt){
     const k = P.net.byKey[key].k, ends = runEnds(key,k);
     if(!ends) return 0;
     let q = 0;
+    /* A STEAM RUN THAT REACHES A FITTING IS A RELIEF BRANCH, and what it
+       carries is what that generator is VENTING - not the whole of what it
+       raised, which is what reading the same book as the main steam line
+       would have it claim. */
+    const book = ends.some(n=>isFitting(n.slice(0,-1))) ? s.sgVentBy : s.steamTo;
     if(k==="exh"){ for(const id in (s.steamTo||{})) q += s.steamTo[id]; }
     else for(const n of ends){ const id=n.slice(0,-1);
-      if(s.steamTo && s.steamTo[id]!==undefined){ q = s.steamTo[id]; break; } }
+      if(book && book[id]!==undefined){ q = book[id]; break; } }
     return q*steamDir(key,k);
   };
   for(const key in d){

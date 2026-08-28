@@ -1008,7 +1008,7 @@ const ROLE = {
      `a` is the INLET on a shell path - the feed regulating valve's own head
      is signed off it (netBuild()), so the two faces are not interchangeable
      even though the conductance between them is. */
-  sg:    {internal:[{a:"l", b:"b", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
+  sg:    {internal:[{a:"l", b:"b", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", vap:"b", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer"},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
   /* ONE PUMP. There is no feedwater pump role: what makes a pump a feedwater
      pump is where it is piped, which the graph already answers (primaryPump()
@@ -1061,7 +1061,7 @@ const ROLE = {
      rotation knob to get wrong.
      ports is 2 a face: a fitting is a spool piece, and two runs a face is
      what lets one sit in-line and still be branched off. */
-  fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true, na:"A", nb:"B", la:"SIDE A", lb:"SIDE B"}], fixed:null,
+  fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true, vap:"ab", na:"A", nb:"B", la:"SIDE A", lb:"SIDE B"}], fixed:null,
           fold:p=>fitModeOf(p.id)==="tee" ? ["l","r","t","b"] : {t:"l", b:"r"},
           mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none"},
 };
@@ -1284,6 +1284,10 @@ function portWord(p,f,long){ const IN=portPath(p,f); if(!IN) return null;
    and goes stale the moment anything at either end changes, which is the only
    thing the old re-naming loop existed to paper over. A pair with no row is
    "user" - grey and unnamed on purpose, and it still conducts. */
+/* WHICH KINDS CARRY VAPOUR RATHER THAN LIQUID. One table: net.vapour
+   (pipenet.js) marks the nodes a run of one of these reaches, and pipes.js
+   draws off the same row. */
+const RUN_VAPOUR={steam:1, exh:1};
 const RUN_KIND={
   "core|sg":"hot", "pump|sg":"cold", "core|pump":"cold",
   "sg|turb":"steam", "cond|turb":"exh",
@@ -1339,19 +1343,29 @@ function throughFitting(id,avoid,seen){
   }
   return branch;
 }
+/* A FITTING THAT LEADS NOWHERE IS ITSELF THE END OF THE RUN. A relief valve
+   venting to the room has nothing beyond it, so the walk answers null - and
+   the pipe reaching it came out "user", which left a generator's own steam
+   nozzle carrying an unclassified fluid and stopped net.vapour ever calling
+   it a steam space. What the line reaches is the valve. */
+const partOrNull=id=>LAY.parts.find(q=>q.id===id)||null;
 function runKindFor(aId,bId,af,bf){
-  const A=throughFitting(aId,bId), B=throughFitting(bId,aId);
+  const A=throughFitting(aId,bId)||partOrNull(aId), B=throughFitting(bId,aId)||partOrNull(bId);
   if(!A||!B) return "user";
-  /* A PUMP IS A PUMP; WHICH SIDE OF A GENERATOR IT LANDS ON NAMES THE PIPE.
+  /* WHICH SIDE OF A GENERATOR THE RUN LANDS ON NAMES THE PIPE.
      There is no feedwater-pump role left to key the table on, so "pump|sg"
      alone cannot tell a cold leg from a feedwater line - the FACE tells it,
      and it is the same fact the solve reads: a generator's shell is the part
-     of it the core cannot reach. Faces unknown (an older caller), fall
-     through to the table and get a cold leg, which is what the pair used to
-     mean on its own. */
-  if(A.role==="sg" !== (B.role==="sg") && (A.role==="pump" || B.role==="pump")){
-    const g = A.role==="sg" ? A : B, f = A.role==="sg" ? af : bf;
-    if(f!=null && !nodeGraph().primary[g.id+f]) return "feed";
+     of it the core cannot reach. On the shell, water goes IN and steam comes
+     OUT, so what the far end IS decides which: a pump or a tank is putting
+     feedwater in, and anything else - a turbine, a safety valve - is taking
+     steam out. Faces unknown (an older caller), fall through to the table and
+     get a cold leg, which is what the pair used to mean on its own. */
+  if((A.role==="sg") !== (B.role==="sg")){
+    const g = A.role==="sg" ? A : B, f = A.role==="sg" ? af : bf,
+          o = A.role==="sg" ? B : A;
+    if(f!=null && !nodeGraph().primary[g.id+f])
+      return (o.role==="pump" || o.role==="tank") ? "feed" : "steam";
   }
   /* A TANK'S LINE IS NAMED BY WHAT IT REACHES, not by which tank it is - there
      is no such thing as "the relief tank" or "the HPI tank", only a tank with a
@@ -1365,6 +1379,16 @@ function runKindFor(aId,bId,af,bf){
     return o.role==="pzr" ? "relief" : "hpi";
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
+}
+/* WHICH END OF THIS RUN IS A DEAD END, or null. A fitting with nothing on its
+   far side TERMINATES the run - a safety valve on the steam header, a relief
+   valve venting to the room - and that is the same question runKindFor() above
+   already asks to name the KIND. Handing the machine back lets a view name the
+   RUN after it, so a branch off the header is not itself called MAIN STEAM. */
+function runDeadEnd(aId,bId){
+  if(isFitting(aId) && !throughFitting(aId,bId)) return partOrNull(aId);
+  if(isFitting(bId) && !throughFitting(bId,aId)) return partOrNull(bId);
+  return null;
 }
 /* ══ WHICH LOOPS A FITTING JOINS ══
    The loops of the RUNS that reach it, deduplicated. Two answers come off

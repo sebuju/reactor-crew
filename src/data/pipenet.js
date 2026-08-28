@@ -896,6 +896,16 @@ function netTempAt(s, nid){
   return nodeT(net, i, s);
 }
 
+/* Is this node a steam space? net2.vapour's structural answer, asked by node
+   id so a view never has to test a run's kind name. A node this graph does not
+   carry is not one - the same default the no-edge case above takes. */
+function netVapourAt(nid){
+  const net = P && P.net;
+  if(!net || !net.vapour) return false;
+  const i = net.index[nid];
+  return i !== undefined && !!net.vapour[i];
+}
+
 /* Static head across an edge, in MPa - the weight of the fluid column between
    its two ends, and the whole of buoyancy. netFlows() computes
    Q = g*(p_u - p_v + h), so a positive h drives u->v; fluid falls, so the
@@ -1084,6 +1094,11 @@ function netBuild(){
     if(ua === ub) continue;
     const edge = {u: ua, v: ub,
                   g: resist(1,NET_COMP_LEN), h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b};
+    /* WHICH OF THIS PATH'S OWN FACES SITS IN A STEAM SPACE - see net2.vapour
+       below. Per FACE and not per edge, because a generator's shell path is
+       water at the feed nozzle and steam at the steam nozzle, and one answer
+       for the whole edge could only ever be wrong at one end. */
+    if(IN.vap){ edge.vapU = IN.vap.indexOf("a")>=0; edge.vapV = IN.vap.indexOf("b")>=0; }
     /* ── THE GATED PATH: A FITTING IS ITS OWN VALVE ──
        Every other component's internal path is a flat length of steel; a
        fitting's is whatever FIT[mode] says it is, priced off its own bore.
@@ -1421,12 +1436,12 @@ function netBuild(){
      exactly what it always was, or the isothermal invariant (every static
      head identically 0 at s.coreDT=0, audit-physics.js) breaks. */
   /* WHICH NODES ARE FULL OF VAPOUR, and it is STRUCTURAL: a node every edge
-     touching it reaches by a steam or exhaust run is a steam space. Nothing
-     is named - place a fitting in the steam line and its two sides are steam
-     spaces too, because the runs reaching them are. A node with no edge at
-     all is not one. DISPLAY ONLY: this decides whether a readout takes a
-     water column back off, never what the solve carries, so net2.tag and
-     buoyH() are untouched by it. */
+     touching it reaches through vapour is a steam space. Nothing is named -
+     place a fitting in the steam line and its two sides are steam spaces too,
+     because a fitting declares BOTH its faces transparent and the runs either
+     side of it are what answer. A node with no edge at all is not one.
+     This decides whether a datum column comes off a node (netFixed(), and the
+     readout that has to agree with it), never what an edge conducts. */
   net2.vapour = new Uint8Array(net2.n);
   { const any = new Uint8Array(net2.n);
     net2.vapour.fill(1);
@@ -1436,8 +1451,11 @@ function netBuild(){
          the exhaust line must not make it read as full of water. */
       if(ed.kind==="break" || ed.kind==="vent" || ed.kind==="sgtr") continue;
       any[ed.u]=1; any[ed.v]=1;
-      if(ed.kind!=="steam" && ed.kind!=="exh"){
-        net2.vapour[ed.u]=0; net2.vapour[ed.v]=0; }
+      // a run answers off its KIND (RUN_VAPOUR); a path through a component
+      // answers per FACE, off the row that declared it (vapU/vapV, above)
+      const k = RUN_VAPOUR[ed.kind];
+      if(!(ed.vapU || k)) net2.vapour[ed.u]=0;
+      if(!(ed.vapV || k)) net2.vapour[ed.v]=0;
     }
     for(let i=0;i<net2.n;i++) if(!any[i]) net2.vapour[i]=0; }
   net2.tag = new Uint8Array(net2.n);

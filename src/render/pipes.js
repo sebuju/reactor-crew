@@ -41,7 +41,6 @@
 const PIPE_NAME={hot:"HOT LEG",cold:"COLD LEG",steam:"MAIN STEAM",feed:"FEEDWATER",
                  hpi:"HP INJECTION",surge:"SURGE LINE",exh:"EXHAUST",
                  relief:"RELIEF HEADER",user:"UNCLASSIFIED PIPE"};
-const PIPE_VAPOUR={steam:1,exh:1};              // kinds that carry vapour, not liquid
 /* EVERY RUN'S OWN NAME AND COLOUR, off its kind and nothing else. There used
    to be a prefix case here for "xtie:"+id - a fitting's own branch run, one
    generated kind per fitting, which no table could enumerate. A fitting is a
@@ -50,7 +49,15 @@ const PIPE_VAPOUR={steam:1,exh:1};              // kinds that carry vapour, not 
 /* named pipeLabel, not pipeName: src/data/pipenet.js declares its own
    pipeName() for a placed-pipe part's own id, a different concept (and a
    global collision if this file used the same name). */
-const pipeLabel=k=>PIPE_NAME[k];
+/* A RUN'S NAME IS ITS KIND'S, UNLESS IT DEAD-ENDS AT A MACHINE THAT HAS ONE.
+   A branch off the steam header to a safety valve IS a steam line and is
+   priced as one, but calling it MAIN STEAM claims it is the header. Named
+   after what it goes to instead, through partName() - so a renamed valve
+   renames its own pipe, the same rule the event log already keeps. */
+const pipeLabel=(k,key)=>{
+  const c = key && pipeMap().byKey[key], t = c && runDeadEnd(c.a, c.b);
+  return t ? partName(t) : PIPE_NAME[k];
+};
 const pipeCol=(PC,k)=>PC[k]||C.ink2;
 
 /* Line width follows the run's own BORE, never its kind - a 0.25-bore
@@ -222,6 +229,12 @@ function pipeRunP(r){
    point. The same two questions asked at the same place - tsat() of the
    pressure HERE against the temperature HERE - which is the whole argument
    for a field instead of a number. */
+/* A run is a steam line because BOTH ITS ENDS ARE STEAM SPACES - net.vapour,
+   built from the runs and component paths touching each node - never because
+   its kind is spelt "steam". Splice a fitting into the steam line and the runs
+   either side of it answer yes with nothing named. */
+const runVapour = ends =>
+  !!ends && netVapourAt(coreFold(ends[0])) && netVapourAt(coreFold(ends[1]));
 function pipeRunSc(r,L){
   const pr=pipeRunP(r);
   if(pr===null) return null;
@@ -233,7 +246,7 @@ function pipeRunSc(r,L){
      that is what makes it vapour - so it reads exactly 0 rather than a
      difference between two numbers that are the same one. */
   const a=coreFold(ends[0]), b=coreFold(ends[1]);
-  if(r.k==="steam" || r.k==="exh") return 0;
+  if(runVapour(ends)) return 0;
   /* Asked of the UNFOLDED node ids, because nodeGraph().primary is keyed on
      partId+face - coreFold() collapses "corer" to "core", which that map has
      never heard of, and every primary run then read as secondary. */
@@ -347,7 +360,7 @@ function pipeFullScale(key,k){
   const ends=runEnds(key,k);
   /* A steam run's integral is already normalised on rated steam in step(), so
      100 % is the same 84 every other run's reference lands on. */
-  if(k==="steam"||k==="exh") return 84;
+  if(runVapour(ends)) return 84;
   if(runTankId(key,k)) return 120;
   /* a FULL SCALE has no direction - P.netRefByRun is signed now */
   const ref=Math.abs(P.netRefByRun[key]);
@@ -419,7 +432,7 @@ function pipeUnit(key,k){
   /* `dir` is the run's own DESIGN direction along the key's canonical order.
      The needle judges "backwards" against that, not against the order two part
      ids happened to sort in - see steamDir() (step.js). */
-  if(k==="steam"||k==="exh")
+  if(runVapour(ends))
     return {nom:steamScale(k), u:"kg/s", dir:steamDir(key,k)};
   return null;
 }
@@ -441,16 +454,16 @@ function pipeUnit(key,k){
    SHARES its discharge node with a cold leg (sg0b - see pipenet.js's own
    note on that collision) and would misread the leg's own tag as its own.
    Steam and exhaust are genuinely past the turbine - no primary tag reaches
-   them at all yet (Stage 6) - and read PIPE_VAPOUR instead. */
+   them at all yet (Stage 6) - and read RUN_VAPOUR instead. */
 const PIPE_NO_CARRYOVER={hpi:1,surge:1,feed:1};                   // DEFAULT: liquid regardless of what node they land on
 function pipeSteam(r,L){
-  if(PIPE_NO_CARRYOVER[r.k]) return PIPE_VAPOUR[r.k]?1:0;    // DEFAULT: no core-carryover signal for these yet - see the comment above
+  if(PIPE_NO_CARRYOVER[r.k]) return RUN_VAPOUR[r.k]?1:0;    // DEFAULT: no core-carryover signal for these yet - see the comment above
   const net=P.net;
   let tag=0;
   if(net) for(const ed of net.edges) if(ed.key===r.key) tag = tag||net.tag[ed.u]||net.tag[ed.v];
   if(tag===NT_HOT)  return clamp(L.vf*1.6,0,1);
   if(tag===NT_COLD) return clamp((L.vf-0.25)*1.6,0,1);
-  return PIPE_VAPOUR[r.k]?1:0;                                    // DEFAULT: no tag reaches this run yet
+  return RUN_VAPOUR[r.k]?1:0;                                    // DEFAULT: no tag reaches this run yet
 }
 
 /* ══════════ the packets ══════════ */
@@ -737,7 +750,7 @@ function pipeMeters(runs,L){
     /* three things the solve can actually say, kept as three sentences rather than
        one number doing all three jobs: how much, which way, and against what. No
        pressure/dP reading here - a fitting's node potentials never left pipenet.js. */
-    TIP(a.x-STACK_W/2,stackY(a.y,0),STACK_W,STACK_H,pipeLabel(k)+"  FLOW METER",
+    TIP(a.x-STACK_W/2,stackY(a.y,0),STACK_W,STACK_H,pipeLabel(k,key)+"  FLOW METER",
       mag+" "+un.u+" - "+Math.abs(Math.round(fd*100))+
       " % of what this run carries as commissioned, undamaged, valves wide."+
       (over?" It is being pushed past what it was built for."

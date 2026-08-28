@@ -188,7 +188,7 @@ function ctxTitleDesign(hit){
     return (p?partName(p):"")+" PORT"; }
   if(hit.part) return partName(hit.part);
   if(hit.pipe){ const keys=pipeMap().cellOwner[hit.pipe];
-    return (keys && pipeLabel(keys[0].split(":")[0])) || "PIPE"; }
+    return (keys && pipeLabel(keys[0].split(":")[0], keys[0])) || "PIPE"; }
   return "PLANT";
 }
 /* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
@@ -714,7 +714,7 @@ function pipeRailSync(well){
   const M=pipeMap();
   const rows=M.conns.map(c=>{
     const a=LAY.parts.find(q=>q.id===c.a), b=LAY.parts.find(q=>q.id===c.b);
-    return [(pipeLabel(c.k)||"PIPE"),
+    return [(pipeLabel(c.k,c.key)||"PIPE"),
             (a?partName(a):c.a)+" ⇒ "+(b?partName(b):c.b),
             c.L.toFixed(1)+" m"];
   });
