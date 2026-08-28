@@ -317,6 +317,19 @@ const SAT_WATER = {p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1};
 const tsatSec = p => satT(SAT_WATER, p);
 const psatSec = T => satP(SAT_WATER, T);
 
+/* ══ STEAM OVER WATER, AT THE PRESSURE IT IS ACTUALLY AT ══
+   The density ratio drift flux reads (core2d.js). It was a typed 0.05, which is
+   the ratio at 6.9 MPa - so a PWR sitting at 15.5, where it is really 0.17, was
+   making three times the void per unit of quality on the one plant every figure
+   in this repo is pinned against. Two real steam-table points, 7 MPa/0.049 and
+   15.5 MPa/0.172, interpolated in the distance left to the critical point,
+   which is the variable that actually collapses the two densities together.
+   It reaches 1 at 20 MPa on its own; the floor under the base is numerical
+   headroom past critical, where the power has no real value at all. */
+const RVL_PC=22.06, RVL_A=0.049, RVL_B=0.6827, RVL_N=-1.512;
+const satRvl = p =>
+  Math.min(1, RVL_A*Math.pow(Math.max(1-p/RVL_PC, 1e-3)/RVL_B, RVL_N));
+
 /* THE FALLBACK ONLY. A shell with a temperature of its own is a saturated pot
    and secP() reads that; this is what a caller with no live S gets - the design
    bench, layoutMetrics(), a tick-zero seed. */
