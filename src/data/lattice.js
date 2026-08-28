@@ -272,26 +272,27 @@ function latLayMod(every){
    coefficient - is not in this table at all; it comes out of the graphite the
    preset lays and the water it leaves between it.
 
-   Same contract LATPRE carries, with one difference stated in as many words:
-   this one DOES buy, because the coolant and the moderator are what it is
-   choosing. It does not touch the fuel, the reflector or the absorber. */
+   A REACTOR IS EVERY VALUE ON ITS PANEL, so this row buys all of them: the
+   coolant, the fuel, the block and reflector materials, the absorber, the
+   scram system and the rod follower. LATPRE is the one that only redraws. */
 const ARCHPRE=[
- ["PWR",{cool:0,mod:0,pk:1.00,r:LAT_R0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:0},
+ ["PWR",{fuel:1,rmat:1,abs:1,scram:1,foll:0,cool:0,mod:0,pk:1.00,r:LAT_R0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:0},
   "A tight water lattice at 15.5 MPa, no solid moderator: the water between the assemblies is the moderator, so voiding it takes the moderation away and the core shuts itself down. The reference plant, and what every figure in this game was calibrated against."],
- ["BWR",{cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
+ ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
   "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
- ["RBMK",{cool:2,mod:0,pk:1.10,r:LAT_R0,hd:0.85,poi:LAT_POIG,refl:1,nb:4,every:3},
+ ["RBMK",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:2,mod:0,pk:1.10,r:LAT_R0,hd:0.85,poi:LAT_POIG,refl:1,nb:4,every:3},
   "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn."],
- ["SFR",{cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
+ ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
- ["MSR",{cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
+ ["MSR",{fuel:1,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
   "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the void coefficient is mildly negative. No pressure anywhere and almost no xenon pit."],
- ["HTGR",{cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
+ ["HTGR",{fuel:1,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
   "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
 ];
 function archPreset(i){
   const q=ARCHPRE[i][1];
-  D.cool=q.cool; D.mod=q.mod;
+  D.cool=q.cool; D.mod=q.mod; D.fuel=q.fuel; D.refl=q.rmat;
+  D.scram=q.scram; D.foll=q.foll; LAT.abs=q.abs;
   LAT.pitch=q.pk*LAT_P0;
   latLayFuel(q.r,q.poi);
   latLayMod(q.every);
@@ -333,6 +334,9 @@ function latRevolve(){
     LM={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),poi:new Float64Array(XNR),
         nPen:new Float64Array(XNR).fill(LAT_NF),chan:[],bankR:[(XNR-1)/2],NB:1,
         dia:0,hgt:0,vol:0,nAsm:0,laid:0};
+    // an empty core still has to be MEASURED: poiG is built nowhere else, and
+    // without it every solve off a fuel-free lattice reads undefined[0]
+    latMeasure();
     return LM;
   }
   const dr=rEq/XNR, patch=(p/LAT_SS)*(p/LAT_SS);
