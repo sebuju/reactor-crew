@@ -53,12 +53,14 @@ let XABS0=null;
    run hundreds of kelvin below it. */
 const XTAU_F=4, XHFG=1500;
 /* Drift flux: quality to void fraction. C0 is the concentration parameter (the
-   steam runs up the middle of the channel faster than the mean) and XRVL is
-   the density ratio of steam to water at these conditions. Standard
-   correlation between two REAL quantities, which is what separates it from the
-   lump rescale it replaces: 1 % quality is 15 % void, which is what a boiling
-   channel actually does. */
-const XC0=1.13, XRVL=0.05;
+   steam runs up the middle of the channel faster than the mean) and rvl is
+   the density ratio of steam to water, which is satRvl(pressure) now rather
+   than a typed number - the two densities close on each other as the loop
+   approaches critical, and a plant that depressurises makes far more void per
+   unit of quality than one that does not. Standard correlation between two
+   REAL quantities, which is what separates it from the lump rescale it
+   replaces. */
+const XC0=1.13;
 /* ── CROSS-FLOW ──
    A core is not fourteen sealed pipes. An open lattice mixes hard between
    assemblies, so a hot channel's ENTHALPY RISE is far flatter than its power:
@@ -67,10 +69,53 @@ const XC0=1.13, XRVL=0.05;
    Without it the centre ring of the stock core - flux 2.14 against a core mean
    of 1 - takes twice the average rise, boils at 83 % power and locks into its
    own voiding runaway at rest, which is not what the plant it is modelling
-   does. The PELLET is not mixed: it really does make its own local power. */
-const XMIX=0.55;
-const driftFlux = x => { const q=clamp(x,0,1);
-  return q<=0 ? 0 : clamp(q/(XC0*(q+(1-q)*XRVL)), 0, 1); };
+   does. The PELLET is not mixed: it really does make its own local power.
+
+   It is MEASURED now, in coreConst(), off the same drawing modRatio() reads.
+   XMIX0 is what a reference bundle cell mixes, which is the 0.55 that used to
+   be the whole of this constant; open area per bundle scales it, and a
+   moderator BLOCK is a wall, which is exactly the thing that stops cross-flow.
+   The ceiling is 0.85 and not 1: at 1 the expression below collapses to
+   1/ringP, every channel takes the identical rise whatever its power, and the
+   voiding-channel runaway - the point of the whole field - stops existing. A
+   wide lattice must not be able to buy its way out of that. */
+const XMIX0=0.55, XMIX_MAX=0.85;
+/* ── SUBCOOLED BOILING ──
+   Void used to be exactly zero until the BULK reached saturation, which is a
+   dead band the plant does not have: nucleate boiling departs the wall while
+   the bulk is still subcooled, and a PWR hot channel carries a few percent
+   void at the top with the bulk below saturation the whole way.
+
+   Saha-Zuber says where it departs, and it has TWO branches. The high-Peclet
+   one is 154*q"/(G*cp), and it is the only one carrying 1/G - alone it sends a
+   coasting pump's channel to full void in a single tick. Below Pe 70000 the
+   correlation switches to 0.0022*q"*D/k, which has no G in it at all, so the
+   smaller of the two magnitudes is the published answer and not a clamp bolted
+   over a blow-up.
+
+   Neither can be applied literally: this file carries shares of the rated
+   point, never W/m2 or kg/m2s. But the ratio collapses - q"/(G*cp) is the core
+   rise times the flow area over the heated area - so both anchor on ONE
+   geometric ratio of a fuel bundle, which is the P.pinUA idiom, and CORE_DT0
+   inside them makes both scale per plant. XSUB_AR is a real PWR: 4.75 m2 of
+   flow area against 5566 m2 of rod surface. The low branch is that bundle's
+   0.0022*q"*D/k at rated, 28.3 K of departure subcooling against the high
+   branch's 4.3 K, so a plant at rated is on the high branch as it should be
+   and the two cross near 15 % flow. */
+const XSUB_AR=8.53e-4, XSUB_LO_DT=28.3;
+/* Levy's profile fit: thermodynamic quality in, TRUE quality out. It is
+   defined only ABOVE departure - below it the expression does not decay to
+   zero, it goes to 1 and then to NaN, which is a sodium core at rest reading
+   full void and taking s.nRho with it. The guard is the correlation's own
+   domain, and it also bounds the exponent: past it xe/xd can never be large
+   and positive, so the exp cannot overflow. */
+const subQual = (xe,xd) => {
+  if(xe<=xd) return 0;
+  const E=Math.exp(xe/xd-1);
+  return (xe-xd*E)/(1-xd*E);
+};
+const driftFlux = (x,rvl) => { const q=clamp(x,0,1);
+  return q<=0 ? 0 : clamp(q/(XC0*(q+(1-q)*rvl)), 0, 1); };
 
 /* volume weights: ring i is an annulus, so it is worth 2i+1 unit cells */
 const ringW=new Float64Array(XNR), nodeW=new Float64Array(XNN);
@@ -107,6 +152,22 @@ function coreConst(T,d){
   const Lm=0.21*Math.sqrt(D.pitch);
   T.cz=XCOUP*Math.pow(Lm/(Math.max(T.coreHgt,.05)/XNZ),2);
   T.cr=XCOUP*Math.pow(Lm/(Math.max(T.coreDia,.05)/2/XNR),2);
+
+  /* CROSS-FLOW, off the same measurement. Open area around ONE bundle against
+     the same area at the reference pitch, so a stock lattice reads 1 by
+     construction and needs no snapshot of a stock core to compare against. */
+  { const v=latVols();
+    /* the denominator is latVols()'s own cool term with the reference pitch put
+       back in, so at pitch 1.0x the two are the same expression on the same
+       operands and the ratio is exactly 1 - not 1 to within a rounding */
+    const open0=v.nF*(LAT_P0*LAT_P0 - LAT_FUELFRAC*LAT_P0*LAT_P0);
+    const solid=(v.nF+v.nM)>0 ? v.nM/(v.nF+v.nM) : 0;
+    T.mix=open0>0 ? clamp(XMIX0*(v.cool/open0)*(1-solid), 0, XMIX_MAX) : 0; }
+
+  /* departure quality at the RATED point, one branch each - see XSUB_AR. Both
+     are magnitudes; the sign goes on where they are used. */
+  T.xSub  = 154*CP_W*CORE_DT0*XSUB_AR/XHFG;
+  T.xSubLo= CP_W*XSUB_LO_DT/XHFG;
 
   /* the reflector stops being a flat pcm bonus and starts reflecting: the
      share of what leaks out of an edge node that finds its way back in, per
@@ -409,7 +470,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
     for(let i=0;i<XNR;i++){
       let ringP=0; for(let j=0;j<XNZ;j++) ringP+=s.phi[XIX(i,j)];
       ringP=Math.max(ringP/XNZ,1e-6);
-      mixK[i]=(1+(ringP-1)*(1-XMIX))/ringP;       // cross-flow, and it conserves
+      mixK[i]=(1+(ringP-1)*(1-P.mix))/ringP;      // cross-flow, and it conserves
       raw += ringW[i]*heat*CORE_DT0*ringP*mixK[i]/Math.max(flowFrac,1e-3);
     }
     s.coreDT=clamp(raw,0,CORE_DT_MAX); }
@@ -429,6 +490,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   const qhat  = heat*P.rated*1000/Math.max(P.pinUA,1e-9);
   const ff    = Math.max(flowFrac, 1e-3);
   const hSat  = CP_W*sat;                    // enthalpy at saturation, kJ/kg
+  const rvl   = satRvl(s.pCore);             // the core boils at ITS OWN pressure
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
     const chan=Math.max(s.chW[i],1e-3);
@@ -439,6 +501,9 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
     /* and the flux past the pin in this channel, which is a different question
        from how much water is passing - see s.hotFlow */
     const film0=Math.pow(Math.max(mflux*chan,0),0.8);
+    /* the same water as a MASS FLUX rather than a film - Saha-Zuber's G, and
+       the one branch of it that divides by it */
+    const gCh=Math.max(mflux*chan,1e-3);
     let h=CP_W*Tcold;
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), pw=s.phi[k];
@@ -449,7 +514,13 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          carrying the enthalpy rather than being asserted. */
       if(hMid<=hSat) s.nTc[k]=hMid/CP_W;
       else         { s.nTc[k]=sat; }
-      s.nVt[k]=hMid<=hSat ? 0 : driftFlux((hMid-hSat)/XHFG);
+      /* VOID STARTS BEFORE THE BULK DOES. xe is the thermodynamic quality and
+         is negative while subcooled; xd is where vapour first detaches, off
+         whichever Saha-Zuber branch this channel is actually on. Floored so a
+         core making no heat at all cannot divide by zero. */
+      const q2=Math.max(heat*pw,0);
+      const xd=-Math.max(Math.min(P.xSub*q2/gCh, P.xSubLo*q2), 1e-6);
+      s.nVt[k]=driftFlux(subQual((hMid-hSat)/XHFG, xd), rvl);
 
       /* THE PELLET IS A HEAT BALANCE. Power in, film out, and the film
          collapses when the node goes dry - so a dry node has nowhere to put

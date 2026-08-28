@@ -160,6 +160,11 @@ function commission(){
      on an HTGR - a fixed scale would peg four of the six architectures full and
      say nothing. P.dnbr0 is the same idea and was already here. */
   P.sc0 = S.sc;
+  /* and what it VOIDS by at rest, for the same reason. Subcooled boiling means
+     rest void need not be zero, so the CORE VOID trip cannot go on reading a
+     typed 0.30 against a solved quantity - it is the one row of RPS_CH left
+     that had no reference of its own. */
+  P.vf0 = S.vf;
   screen="operate"; layout();
 }
 /* ══════════ THE AUTOMATIC SYSTEMS ══════════
@@ -739,7 +744,7 @@ const RPS_CH=[
   ["HIGH FUEL TEMP","FUEL",     +1, (P_,m)=>P_.tdmg+100+280*m,       s=>s.Tf],
   ["LOW FLOW","FLOW",           -1, P_=>P_.flowMin*1.02,             s=>s.flowNet, s=>s.heat>0.3],
   ["LOW PRESSURE","PRESSURE",   -1, P_=>P_.P0*0.86,                  s=>s.P],
-  ["CORE VOID","VOID",          +1, ()=>0.30,                        s=>s.vf],
+  ["CORE VOID","VOID",          +1, (P_,m)=>Math.max(.30,P_.vf0+.20)+.15*m, s=>s.vf],
   ["LOW SUBCOOLING","SUBCOOL",  -1, ()=>3,                           s=>s.sc],
 ];
 /* `slack` shifts the setpoint toward the plant, so 0 is the real limit and
