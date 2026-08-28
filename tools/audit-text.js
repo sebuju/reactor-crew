@@ -3,8 +3,8 @@
 const fs=require('fs'), path=require('path');
 const {ROOT,spliceFitting,tieFitting}=require('./bundle');
 const src=require('./bundle').bundle();
-// Stage 3b: D.loops is gone from src/ - an n-loop test plant is built the
-// same way a player builds one, through placed parts and real D.run entries.
+// D.loops is gone from src/ - an n-loop test plant is built the same way a
+// player builds one, through placed parts, placed ports and laid pipe cells.
 
 const TEXTS=[], RECTS=[];
 function mkctx(){
@@ -87,7 +87,7 @@ const M=new Function(src.replace(/layoutMetrics\(\); layout\(\); requestAnimatio
  'ui:()=>ui,setScreen:v=>screen=v,S:()=>S,P:()=>P,D:()=>D,setSplit,setSel:v=>sel=v,parts:()=>LAY.parts,'+
  'setDmg:v=>S.dmgParts=v,'+
  'TSCALE:()=>TSCALE,OVL:()=>ovlList(),ovlSet:v=>ovlOpen=v,vOn:()=>viewOn,'+
- 'pipeNetwork,buildStockPlumbing,placePart,addFitting,addRun,removeRun,removePart,'+
+ 'pipeNetwork,pipeMap,buildLayout,buildStockPlumbing,placePart,addFitting,addPortAt,seedRun,removePart,LAY:()=>LAY,'+
  'REC:()=>REC,TR:()=>TR,simTick,recTick,recBranch,seek,'+
  'FXR:()=>FXR,fxReset,porvRate,reliefRate,reliefFullRate,SPILL_FULL:()=>SPILL_FULL,'+
  'SGTR_RATE:()=>SGTR_RATE,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,primaryRelief,'+
@@ -185,13 +185,6 @@ M.setSel('core');
   // to take the spare back out before the block's other fields are restored
   M.removePart(spare.id);
   M.buildStockPlumbing({loops:1}); M.D().pumpSize=PS0; warmUp(); M.setSel('core'); }
-
-// a steered pipe: two waypoints draw five grips where a plain run draws one
-{ warmUp();
-  const rid=M.pipeNetwork().find(r=>r.k==='hot').rid;   // a waypoint lives on the RUN now
-  M.D().run[rid].wp=[{x:400,y:500},{x:200,y:300}];
-  sweep('wp:');
-  delete M.D().run[rid].wp; warmUp(); }
 
 // every component broken at once: the worst case for repair keys and STATUS rows
 warmUp(); M.setDmg(M.parts().map(p=>p.id)); sweep('alldmg:');

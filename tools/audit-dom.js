@@ -32,8 +32,20 @@
    Everything below is arithmetic, and the browser is still the only thing that
    can answer the other question. */
 const fs = require('fs'), path = require('path');
-const {ROOT, bundle, scriptPaths} = require('./bundle');
+const {ROOT, bundle, scriptPaths, portOnFace} = require('./bundle');
 const domstub = require('./domstub');
+
+/* PLUMB TWO MACHINES THE WAY THE BENCH DOES: a port on each face, then the
+   pipe between them. Hands back the undo, because a run is not an object to
+   delete any more - what was laid is the cells that were not there before. */
+function plumb(M, aId, aFace, bId, bFace, vFirst){
+  const D = M.D(), before = Object.keys(D.pipes);
+  const pa = portOnFace(M, aId, aFace), pb = portOnFace(M, bId, bFace);
+  M.seedRun(pa, pb, vFirst);
+  const laid = Object.keys(D.pipes).filter(k => before.indexOf(k) < 0);
+  return () => { for(const k of laid) delete D.pipes[k];
+                 M.removePort(pa); M.removePort(pb); };
+}
 
 const EXPORTS = '{commission,step,sample,act,recTick,recRoot,resetPlant,combatHit,'+
   'crSync,dbSync,trSync,trBuild,drawOperate,drawDesign,drawScenario,'+
@@ -50,7 +62,7 @@ const EXPORTS = '{commission,step,sample,act,recTick,recRoot,resetPlant,combatHi
   /* Stage 9 (gauge half) test hooks: place and plumb a spare pump exactly the
      way CONNECT does, then read pumpGauge() straight - the shared primitive
      the PUMP CAPACITY row and, later, the pump panel both build on. */
-  'placePart,removePart,addRun,removeRun,pumpGauge,'+
+  'placePart,removePart,addPortAt,removePort,seedRun,buildLayout,pipeMap,pumpGauge,'+
   /* the tank hooks: one component, added and configured per instance */
   'addTank,tanks:()=>D.tanks,tankIds}';
 
@@ -430,15 +442,15 @@ if(!wide.err){
        it opened on the drop ("which fitting are these two taps?"), and whether
        the 9-unit handle it started from could actually be grabbed at fit zoom.
        Neither gesture exists. A fitting is placed in a CELL, so what has to be
-       reachable is ADD VALVE HERE on a bare cell - the same offer ADD TANK
-       HERE already is, and the same failure mode: a row that is not on the
+       reachable is ADD VALVE on a bare cell - the same offer ADD TANK
+       already is, and the same failure mode: a row that is not on the
        menu is a component the player cannot build at all. */
     let cellItems=null, cellErr=null;
     try { cellItems = M.ctxItemsDesign({part:null,runRid:null,cell:{gx:13,gy:0}}); }
     catch(e){ cellErr = e.message; }
     const cellLabels = cellItems ? cellItems.map(i=>i.label) : [];
-    add('a bare cell offers ADD VALVE HERE',
-        !cellErr && cellLabels.includes('ADD VALVE HERE') && cellLabels.includes('ADD TANK HERE'),
+    add('a bare cell offers ADD VALVE',
+        !cellErr && cellLabels.includes('ADD VALVE') && cellLabels.includes('ADD TANK'),
         cellErr ? 'threw: '+cellErr : cellLabels.length+' item(s): '+cellLabels.join(', '));
   }
 
@@ -467,9 +479,11 @@ if(!wide.err){
     add('the PUMP CAPACITY row exists', base != null,
         base ? 'renders "'+base+'" on a stock plant' : 'no row titled PUMP CAPACITY in the RESULTS panel');
 
-    const sp = M.placePart(n => ({id:'pumpX'+n, name:'RCP SPARE', w:1, h:1, x:9, y:5,
+    const sp = M.placePart(n => ({id:'pumpX'+n, name:'RCP SPARE', w:1, h:1, x:23, y:26,
       col:'#57d38c', tip:'A spare coolant pump.', role:'pump'}));
-    const r1 = M.addRun(sp.id,'t','core','b'), r2 = M.addRun(sp.id,'b','sg0','b');
+    // in the bilge lane, where its two legs have clear ground to run in
+    M.buildLayout();
+    const lift1 = plumb(M, sp.id,'t','sg0','b', true), lift2 = plumb(M, sp.id,'b','core','b', false);
     M.commission();
     const plumbed = rowVal();
     const g3 = M.pumpGauge();
@@ -479,7 +493,7 @@ if(!wide.err){
         ' - row now reads "'+plumbed+'" (was "'+base+'")');
 
     const g4 = M.pumpGauge(['pump0']);
-    M.removeRun(r1); M.removeRun(r2); M.removePart(sp.id); M.commission();
+    lift1(); lift2(); M.removePart(sp.id); M.commission();
     const g5 = M.pumpGauge(['pump0']);
     add('losing the original pump: the spare hands the loop back', g4.delivered >= g3.delivered - 1e-9 &&
         g5.delivered < g4.delivered - 1e-9,
@@ -711,9 +725,11 @@ for(const [what, guard, patch] of FAULTS){
   } else try{
     const {M} = boot(patch, {box:{width:320, height:190}});
     M.commission();
-    const sp = M.placePart(n => ({id:'pumpX'+n, name:'RCP SPARE', w:1, h:1, x:9, y:5,
+    const sp = M.placePart(n => ({id:'pumpX'+n, name:'RCP SPARE', w:1, h:1, x:23, y:26,
       col:'#57d38c', tip:'A spare coolant pump.', role:'pump'}));
-    M.addRun(sp.id,'t','core','b'); M.addRun(sp.id,'b','sg0','b');
+    // in the bilge lane, where its two legs have clear ground to run in
+    M.buildLayout();
+    plumb(M, sp.id,'t','sg0','b', true); plumb(M, sp.id,'b','core','b', false);
     M.commission();
     const g = M.pumpGauge();
     const caught = !(g.installed > g.delivered + 1e-9);

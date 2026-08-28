@@ -62,40 +62,58 @@ function headless(exportSrc, opts){
    A fitting used to be a fraction along a pipe key, so an auditor could
    place one in a single addFit(mode, aKey, aT, bKey, bT) call. It is a
    COMPONENT in a grid CELL now, and placing one is three gestures: put the
-   box down, draw a run to it, draw a run from it. That is more honest and it
-   is also three lines at ~40 call sites, which is exactly the kind of
-   duplication that drifts - so both shapes are written ONCE, here, beside
-   headless(), which is the only module every auditor already loads.
+   box down, place a port beside each machine, drag the pipe. That is more
+   honest and it is also several lines at ~40 call sites, which is exactly the
+   kind of duplication that drifts - so both shapes are written ONCE, here,
+   beside headless(), which is the only module every auditor already loads.
 
-   These build nothing the bench cannot: addFitting(), addRun() and
-   removeRun() are the same calls the context menu and the part drag make.
-   M is a headless() export bag and must carry D, pipeNetwork, addFitting,
-   addRun and removeRun.
+   These build nothing the bench cannot: addFitting(), addPortAt() and
+   pipeLay() are the same calls the context menu and the pipe drag make, and
+   seedPort()/seedRun() are the stock seeder's own two wrappers over them.
+   M is a headless() export bag and must carry D, LAY, pipeMap, buildLayout,
+   addFitting, seedPort and seedRun.
 
    spliceFitting: cut a RUN and put a fitting in the middle of it. The two
-   halves keep the original run's own end faces, so the plant is the plant it
+   halves keep the original run's own end PORTS, so the plant is the plant it
    was with a box in the line.
-   tieFitting: a fitting between two PORTS on two different machines - what a
-   cross-tie is, now that nothing can tap a pipe mid-run. */
+   tieFitting: a fitting between two machines - what a cross-tie is, now that
+   nothing can tap a pipe mid-run. */
+// the first cell of `face` addPortAt() will take: a face is many cells wide,
+// and which of them is free depends on what was plumbed there first
+function portOnFace(M, partId, face){
+  const p = M.LAY().parts.find(q => q.id === partId);
+  if(!p) return null;
+  const n = (face === "t" || face === "b") ? p.w : p.h;
+  for(let i = 0; i < n; i++){
+    const dx = face === "l" ? -1 : face === "r" ? p.w : i;
+    const dy = face === "t" ? -1 : face === "b" ? p.h : i;
+    const pid = M.addPortAt(partId, dx, dy);
+    if(pid != null) return pid;
+  }
+  return null;
+}
 function spliceFitting(M, runKey, mode, cell){
   const D = M.D();
-  const r = M.pipeNetwork().find(x => x.key === runKey);
-  if(!r || !r.rid) throw new Error("spliceFitting: no run keyed " + runKey);
-  const ends = M.runEndsOf(r.rid), a = ends.a, af = ends.af, b = ends.b, bf = ends.bf;
-  M.removeRun(r.rid);
+  const r = M.pipeMap().byKey[runKey];
+  if(!r) throw new Error("spliceFitting: no run keyed " + runKey);
+  // the cells go and the two PORTS stay: what is left is that same pair of
+  // nozzles with nothing between them, which is what a cut line looks like
+  for(const [x, y] of r.cells) delete D.pipes[x + "," + y];
   const fid = M.addFitting(cell[0], cell[1]);
   D.fittings[fid].mode = mode;
-  M.addRun(a, af, fid, "l");
-  M.addRun(fid, "r", b, bf);
+  M.buildLayout();
+  M.seedRun(r.pa, M.addPortAt(fid, -1, 0));
+  M.seedRun(M.addPortAt(fid, 1, 0), r.pb);
   return fid;
 }
 function tieFitting(M, aId, aFace, bId, bFace, mode, cell){
   const D = M.D();
   const fid = M.addFitting(cell[0], cell[1]);
   D.fittings[fid].mode = mode;
-  M.addRun(aId, aFace, fid, "l");
-  M.addRun(fid, "r", bId, bFace);
+  M.buildLayout();
+  M.seedRun(portOnFace(M, aId, aFace), M.addPortAt(fid, -1, 0));
+  M.seedRun(M.addPortAt(fid, 1, 0), portOnFace(M, bId, bFace));
   return fid;
 }
 
-module.exports = { ROOT, scriptPaths, bundle, headless, spliceFitting, tieFitting };
+module.exports = { ROOT, scriptPaths, bundle, headless, portOnFace, spliceFitting, tieFitting };
