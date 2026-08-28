@@ -211,6 +211,10 @@ function coreConst(T,d){
   T.poiG=M.poiG; T.poison=D.poison;
   /* and a ring the lattice did not fill is a ring with no source in it */
   T.nPen=M.nPen;
+  /* the loading pattern, as a zero-mean per-ring reactivity: FUEL[].excess is
+     already stated in pcm of core-average excess, so the coefficient is 1 and
+     there is no constant to fit */
+  T.enrRho=M.enrRho;
   /* how full of fuel each ring actually is. The solver only needs the penalty
      above; the RENDERER needs the fraction, because a hole you drew should be
      a hole you can still see while you are operating the thing. */
@@ -294,7 +298,8 @@ function coreFq(T,x){
   const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
   rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    rho[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)-T.nPen[i]; }
+    rho[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)-T.nPen[i]
+          +T.enrRho[i]; }
   coreSolve(T,phi,rho,60);
   T.phiCold=phi;
   return nodePeak(phi).v;
@@ -315,8 +320,11 @@ function coreFq(T,x){
    exactly when the lattice does. */
 let fqSig=null, fqVal=null;
 function corePredict(d){
+  /* D.zoneFuel is here for the same reason latRev is: picking a zone's fuel
+     off the menu is not a lattice edit, so latRev does not move, and a row
+     that happens not to move D.power would leave the readout one edit behind. */
   const sig=[D.cool,D.mod,D.fuel,D.refl,D.poison,D.pitch,D.hd,D.power,
-             D.rodw,D.nbank,D.foll,latRev].join(",");
+             D.rodw,D.nbank,D.foll,latRev,JSON.stringify(D.zoneFuel)].join(",");
   if(sig!==fqSig){ fqSig=sig; fqVal=coreConst({},d); }
   return fqVal;
 }
@@ -421,7 +429,7 @@ function coreReset(s){
   rodShape(P,s,s.nCov,s.nFol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
     s.nRho[k]=-P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]-P.poison*(P.poiG[i]-1)
-             -P.nPen[i]; }
+             -P.nPen[i]+P.enrRho[i]; }
   coreSolve(P,s.phi,s.nRho,60);
   s.fq=nodePeak(s.phi).v;
   /* ── THE ONE CONSTANT THE PIN BALANCE IS FITTED WITH ──
@@ -583,7 +591,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
                +P.aV*s.nV[k]-P.KXE*s.xX[k]
                -P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]
                -P.poison*(P.poiG[i]-1)
-               -P.nPen[i];
+               -P.nPen[i]+P.enrRho[i];
     }
   }
 
