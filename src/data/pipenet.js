@@ -504,10 +504,22 @@ const tankRuleAny = (s,side) => tankIds().some(id =>
    test would weld it shut at commissioning. A checked tank cannot reach that
    second clause anyway (the diode already demands the loop be BELOW it), so
    this is exactly the old HPI gate for a checked tank and a real capability
-   for an unchecked one. */
+   for an unchecked one.
+   BUT ONLY FOR A TANK YOU CAN FILL: you cannot backfill a tank through its own
+   discharge pump, so a PUMPED tank is its pump - water left, and a bus to turn
+   it. Without that split the clause asked s.pCore, the PRIMARY pressure, of a
+   secondary tank: the stock EFW pump sits at 8.0 against a generator at 6.9,
+   so 15.5 > 8.0 stood true forever and an EMPTY tank went on feeding - the
+   solve holds a tank as a PRESSURE, and this predicate is the only thing that
+   ever turns that pressure off. Measured: level frozen at 24.77 % and 84 %
+   power ten minutes after the tank read 0.00. It also read live with the pump's
+   bus dead, where tankP is 0 - a hole to vacuum that drained a generator in
+   30 s against 60 s+ shut, while the tank's own level never moved. Both are one
+   fault: the predicate disagreed with the pressure it was gating. */
 const tankLive = (s,id) =>
   tankOpen(s,id) && tankCheckOpen(s,id) &&
-  (tankLvl(s,id) > 0 || (s.pCore !== undefined && s.pCore > tankP(s,id)));
+  (D.tanks[id].pump ? (tankLvl(s,id) > 0 && tankPumpLive(s))
+                    : (tankLvl(s,id) > 0 || (s.pCore !== undefined && s.pCore > tankP(s,id))));
 
 /* ══════════ GROUNDING THE SECONDARY ══════════
    Stage 1 makes steam/feed/exh real edges, which reach nodes (condt, condr,

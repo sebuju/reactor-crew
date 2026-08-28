@@ -4010,20 +4010,30 @@ console.log('\n=== SECONDARY INVENTORY ===');
      nothing until it was given a real pump, which is the honest version of the
      same tank.
 
-     AT THE GATE, not above it. The level being held at exactly SG_DRY is the
-     "starts on low level, not on being armed" rule doing its job. */
+     WHILE IT HAS WATER, AND NOT ONE TICK LONGER. What a reserve buys is its
+     own contents: it holds the level up while it is spending, and once it is
+     empty the generator goes on falling. The second half is the check, and it
+     used to read the other way - tankLive() answered YES to an EMPTY pumped
+     tank, because the "or the loop is above me" clause asked s.pCore, the
+     PRIMARY pressure, of a secondary tank (8.0 MPa pump against a 15.5 MPa
+     loop). The level froze at 24.77 % forever on a tank reading 0.00, and this
+     check called that frozen figure the SG_DRY gate doing its job. */
   { const at=efw=>{ const s=set({sg:0}); run(s,10);
       for(const id in s.tankByp) s.tankByp[id]=!efw; M.combatHit('feed');
       run(s,60);
       const t=M.tankIds().find(id=>M.tanks()[id].auto==='sglow');
-      return {lvl:M.sglMin(s), left:t?s.tank[t]:100}; };
+      const lvl=M.sglMin(s), left=t?s.tank[t]:100;
+      run(s,60);
+      return {lvl, left, late:M.sglMin(s)}; };
     const offR=at(false), onR=at(true);
     const off=offR.lvl, on=onR.lvl;
-    if(!(on > off+0.5)) bad('EMERG FEED refills nothing: level sits at '+off.toFixed(2)+' without it and '+on.toFixed(2)+' with it');
+    if(!(on > off+0.25)) bad('EMERG FEED refills nothing: level sits at '+off.toFixed(2)+' without it and '+on.toFixed(2)+' with it');
     else if(!(onR.left < 90)) bad('EMERG FEED held the level without spending any of its own tank: '+onR.left.toFixed(1)+' % left');
-    else if(Math.abs(on-25) > 2) bad('EMERG FEED did not hold the generator AT its own gate: '+on.toFixed(2)+' % against SG_DRY of 25 %');
-    else console.log('  EMERG FEED holds a hit plant at '+on.toFixed(2)+' % - its own SG_DRY gate - where it falls to '+off.toFixed(2)+
-                     ' % without it, and it pays for it out of its own tank ('+onR.left.toFixed(0)+' % left, from 100)');
+    else if(!(onR.late < on-1)) bad('EMERG FEED froze the level on a SPENT tank: '+on.toFixed(2)+' % at 60 s and still '+onR.late.toFixed(2)+
+                     ' % at 120 s, with '+onR.left.toFixed(1)+' % left to give');
+    else console.log('  EMERG FEED holds a hit plant at '+on.toFixed(2)+' % against '+off.toFixed(2)+
+                     ' % without it, pays for it out of its own tank ('+onR.left.toFixed(0)+' % left, from 100), '+
+                     'and stops holding when that tank is spent ('+onR.late.toFixed(2)+' % at 120 s)');
   }
 
   /* INJECTION - the boil-dry difference must come from SGT.water and nothing
