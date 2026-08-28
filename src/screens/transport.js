@@ -23,10 +23,10 @@ function trBind(sc,k){
 }
 keyAdd({k:" ", sc:"operate",  lab:"PAUSE", fn:trPause});
 keyAdd({k:" ", sc:"scenario", lab:"PAUSE", fn:trPause});
-const TR_RATES = [["1",1,"1X"],["2",4,"4X"],["3",16,"16X"]];
-for(const [key,r] of TR_RATES){
-  keyAdd({k:key, sc:"operate",  lab:r+"x", fn:()=>trRate(r)});
-  keyAdd({k:key, sc:"scenario", lab:r+"x", fn:()=>trRate(r)});
+const TR_RATES = [["1",1,"1X"],["2",4,"4X"],["3",16,"16X"],["4",Infinity,"MAX"]];
+for(const [key,r,lab] of TR_RATES){
+  keyAdd({k:key, sc:"operate",  lab, fn:()=>trRate(r)});
+  keyAdd({k:key, sc:"scenario", lab, fn:()=>trRate(r)});
 }
 /* "," and "." are the frame-back/frame-forward pair every editing tool binds,
    and they sit next to each other under the same finger. */

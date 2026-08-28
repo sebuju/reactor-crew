@@ -73,7 +73,9 @@ function shellSync(){
   const line=P?`${P.id}  ${pad(P.rated.toFixed(0),4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`:"NO CORE COMMISSIONED";
   if(shellEls.plantLine.textContent!==line){ shellEls.plantLine.textContent=line;
     shellEls.plantLine.classList.toggle("idle",!P); }
-  const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7);
+  /* ONE string, so the sim time and the rate it is advancing at cannot be
+     written out of step with each other - they are two readings of one moment. */
+  const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7)+" / "+pad(Math.round(TR.sps),4)+" TPS";
   if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
   shellEls.dot.style.visibility=Math.floor(performance.now()/500)%2?"visible":"hidden";
 }

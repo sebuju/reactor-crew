@@ -683,8 +683,13 @@ function recPlay(){
    TR is NOT on S. How fast you are watching is not a property of the reactor,
    so it must not be snapshotted, scrubbed or replayed - a recording made at
    16x plays back at whatever rate you are sitting at now. */
-const TR = {rate:1, paused:false, step1:0};
+const TR = {rate:1, paused:false, step1:0, sps:0};
 const TICK_CAP  = 48;
+/* MAX is a TIME budget, not a multiplier: there is no rate that owes it ticks,
+   it simply steps until the frame's share of milliseconds is spent. The cap is
+   what leaves the browser room to paint and to answer the hand. */
+const TR_MAX_MS = 12;
+const trNow = () => (typeof performance!=="undefined" ? performance.now() : Date.now());
 const SIMSCREEN = {operate:1, scenario:1};
 let simAcc = 0;
 
@@ -695,12 +700,22 @@ function simTick(){
   scnDue(S.tick);
   step(0.02);
   if(S.tick % SAMP_TICKS === 0) sample();
+  spsN++;
+}
+/* Counted here and not in simFrame() so a scenario drain, which steps the plant
+   on its own budget, is in the figure too. Averaged over a window: a frame's own
+   tick count divided by a frame's own dt is a number that never settles. */
+let spsN=0, spsT=0;
+function spsFrame(dt){
+  spsT += dt;
+  if(spsT>=0.5){ TR.sps = spsN/spsT; spsN=0; spsT=0; }
 }
 /* Returns whether the plant MOVED this frame. main.js paints on that, so the
    answer has to come from here rather than be re-derived from screen and
    TR.paused - those two say what the loop is meant to be doing, not what it
    actually got done. */
 function simFrame(dt){
+  spsFrame(dt);
   if(!P || !SIMSCREEN[screen]){ simAcc=0; return false; }
   /* a scenario draining takes the whole frame: it is already stepping the
      plant on its own budget, and letting the live accumulator step it too
@@ -713,6 +728,18 @@ function simFrame(dt){
     let k=0;
     while(TR.step1>0){ TR.step1--; if(!recPlay()) break; simTick(); k++; }
     recTick(); return k>0;
+  }
+  if(TR.rate===Infinity){
+    /* no accumulator at all: an unbounded rate owes an unbounded number of
+       ticks, so the debt is meaningless and carrying it would only shed it. */
+    simAcc=0;
+    const t0=trNow(); let m=0;
+    while(trNow()-t0 < TR_MAX_MS){
+      if(!recPlay()){ TR.paused=true; break; }
+      simTick(); m++;
+    }
+    recTick();
+    return m>0;
   }
   simAcc += dt * TR.rate;
   let n=0;
