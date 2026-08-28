@@ -28,6 +28,15 @@ const RAD_BREACH=3.0, RAD_DMG=0.06, RAD_MELT=4.0, RAD_SGTR=1.2, RAD_AIR=0.05;
 // RAD_DMG against a tank level (0..100, step.js) rather than fitted against a
 // pinned dose the way RAD_K was.
 const RAD_TANK=0.03;
+/* PER PIPE CELL of primary, for a coolant the fuel is dissolved in
+   (COOLANT[].fuelInCoolant - molten salt, and nothing else). Additive at its
+   own constant like RAD_TANK: RAD_K is NOT re-fitted for it, and a water
+   plant never reaches it at all, so P.dose for a PWR does not move.
+   0.01 against the core's 1.0 means the stock plant's ~80 cells of primary
+   shine like most of another core, spread along the loop instead of sitting
+   at one point - which is the whole claim, that an MSR's circuit is hot and
+   not just its vessel. */
+const RAD_PIPE=0.01;
 const RAD_HI=1.0, RAD_FLOOR=0.02, RAD_CEIL=3;
 
 // Keyed on WHAT the component IS - ROLE.mu (layout.js), never on p.grp or
@@ -87,7 +96,9 @@ function radKernel(g,cx,cy){
    all, but they are always in LAY.parts. */
 let radCache=null, radCacheSig="";
 function radGeom(){
-  const sig=laySig();
+  // pipeSig() as well: the primary circuit is a source now (K.pipe, below),
+  // so laying a cell of pipe moves the field the same way sliding a shield does
+  const sig=laySig()+"|"+pipeSig();
   if(radCache && radCacheSig===sig) return radCache;
   const g=occupied(null), core=LAY.parts.find(p=>p.id==="core"), cc=cen(core);
   const K={core:radKernel(g,cc.x,cc.y), sg:[], tank:[],
@@ -102,6 +113,24 @@ function radGeom(){
   for(const p of LAY.parts) if(p.role==="tank"){
     const c=cen(p); K.tank.push({id:p.id, k:radKernel(g,c.x,c.y)});
   }
+  /* ONE SUMMED KERNEL over every cell of primary pipe, not one kernel per
+     cell: a hundred kernels would be a hundred terms in radSolve()'s inner
+     loop every frame, and every one of them casts the same strength, so they
+     can be added once at build time instead. More metres of primary is more
+     source, deliberately unnormalised - that is what makes siting a salt
+     plant's pipework a design problem.
+     LAZY, because building it is ~80 DDA sweeps and only a fuel-in-coolant
+     plant ever asks. A water plant pays nothing, and the getter caches onto
+     K so a salt plant pays once per arrangement, not once per frame. */
+  let pk=null;
+  Object.defineProperty(K,"pipe",{get(){
+    if(pk) return pk;
+    pk=new Float64Array(GW*GH);
+    for(const r of pipeNetwork()){ if(!PRIMARY_K[r.k]||!r.cells) continue;
+      for(const [x,y] of r.cells){ const k=radKernel(g,x+0.5,y+0.5);
+        for(let i=0;i<pk.length;i++) pk[i]+=k[i]; } }
+    return pk;
+  }});
   radCache=K; radCacheSig=sig;
   return K;
 }
@@ -116,7 +145,7 @@ function radGeom(){
    term is 1 by fiat - that is what makes P.dose a purely geometric number,
    comparable across every architecture regardless of rated power. */
 function radSrc(L){
-  if(!L) return {core:1, sg:0, air:0};
+  if(!L) return {core:1, sg:0, air:0, pipe:pipeSrc(1)};
   /* contRel and catcher are COMMISSIONING facts and live on P, never on S -
      reading them off the live state instead returned undefined, which made
      s.doseRate NaN the instant fuel failed and every readout downstream with
@@ -139,15 +168,22 @@ function radSrc(L){
           // compartment's air, not sitting at a point inside it that a wall
           // can stand between; a shield stops a ray from a source, not a gas
           // the room is already full of.
-          air:RAD_AIR*L.release};
+          air:RAD_AIR*L.release,
+          pipe:pipeSrc(L.n)};
 }
+// In a molten salt plant the fuel is DISSOLVED in the coolant, so the whole
+// primary circuit shines and it shines with power, not with damage. Every
+// other coolant reads 0 and never touches K.pipe at all.
+const pipeSrc = n => COOLANT[D.cool].fuelInCoolant ? RAD_PIPE*n : 0;
 
 function radSolve(K,q){
   const f=new Float64Array(GW*GH);
+  const Kp = q.pipe ? K.pipe : null;   // asking for it is what builds it
   for(let i=0;i<f.length;i++){
     let v=q.air + q.core*K.core[i];
     if(q.sg) for(const k of K.sg) v+=q.sg*k[i];
     if(q.tank) for(const t of K.tank){ const w=q.tank[t.id]; if(w) v+=w*t.k[i]; }
+    if(q.pipe) v+=q.pipe*Kp[i];
     f[i]=v;
   }
   return f;

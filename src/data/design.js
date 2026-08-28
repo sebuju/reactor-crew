@@ -46,7 +46,7 @@ const COOLANT=[
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
-  P0:0.2,pipeK:2.40,tsat:1700,satN:.10,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,eff:.44,
+  P0:0.2,pipeK:2.40,fuelInCoolant:true,tsat:1700,satN:.10,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,eff:.44,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,
