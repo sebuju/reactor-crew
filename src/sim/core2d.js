@@ -411,7 +411,7 @@ function coreReset(s){
   s.rodZDem=new Float64Array(P.NB).fill(s.rodPos);
   s.bankAuto=new Array(P.NB).fill(true);
   s.tilt=0; s.tiltDem=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
-  s.hotFlow=1; s.tipRho=0; s.xHot=0;
+  s.hotFlow=1; s.tipRho=0; s.xHot=0; s.TfHot=P.TfRef;
   for(let k=0;k<XNN;k++){
     s.xI[k]=P.gI*P.n0/P.lamI; s.xX[k]=P.X0;
     s.nTc[k]=P.Tref; s.nTf[k]=P.TfRef;
@@ -611,7 +611,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
 
   /* ── what the rest of the sim gets back ── */
   const o={dop:0,mod:0,vd:0,xe:0,rod:0,tip:0};
-  let X=0,I=0,V=0,Tf=0,top=0,bot=0,inn=0,out=0;
+  let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
     const k=XIX(i,j), v=nodeW[k], w=v*s.phi[k];
     /* flux weighted: a poisoned corner of a dead core does not get a vote */
@@ -622,6 +622,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
     o.rod+=w*-P.rodA*s.nCov[k];
     o.tip+=w*P.tipRho*s.nFol[k];
     X+=v*s.xX[k]; I+=v*s.xI[k]; V+=v*s.nV[k]; Tf+=w*s.nTf[k];
+    if(s.nTf[k]>TfH) TfH=s.nTf[k];
     if(j>=XNZ/2) top+=w; else bot+=w;
     if(i< XNR/2)  inn+=w; else out+=w;
   }
@@ -629,7 +630,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   s.fq=hot.v; s.hotRing=hot.i; s.hotLev=hot.j;
   s.ao=(top-bot)/Math.max(top+bot,1e-6);
   s.ro=(inn-out)/Math.max(inn+out,1e-6);
-  s.X=X; s.I=I; s.Tf=Tf; s.vNode=V; s.tipRho=o.tip;
+  s.X=X; s.I=I; s.Tf=Tf; s.TfHot=TfH; s.vNode=V; s.tipRho=o.tip;
   /* The hot channel is what burns out, not the core average - and burnout is a
      question of how fast the water is moving past the pin, not of how much heat
      left the loop. Those two are the same number while the pumps are running and

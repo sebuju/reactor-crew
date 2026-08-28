@@ -10,7 +10,7 @@ function commission(){
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
      aF:a.aF, aM:d.aM, aV:d.aV, P0:d.P0, tsat0:a.tsat*Math.pow(D.pdes,.25),
-     rated:D.power, dnbr0:d.dnbr, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
+     rated:D.power, dnbr0:d.dnbr, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      /* The trip floor used to be a flat number per PUMPS[D.pumps] tier. It now
         scales with pump capacity actually on the grid: +.15 for every full
         unit of capacity bought beyond the bare minimum (one pump per
@@ -1082,8 +1082,8 @@ const PZR_LOSE=2.0;
    guard invented here - past it the first bracket's exponential runs away and
    the answer stops being W-3 at all. The stock water families all land inside
    it: 15.5 MPa is 2248 psia, the stock bundle is 0.46 in, and rated G is
-   2.0e6 lb/hr/ft2. A sodium or salt plant at 0.2 MPa does NOT, and is
-   evaluated at the low edge - see the known gaps. */
+   2.0e6 lb/hr/ft2. A sodium or salt plant at 0.2 MPa does not, and no longer
+   asks - see dnbrOf(). */
 const W3_P=145.038, W3_G=737.338, W3_D=39.3701, W3_Q=3.15459, W3_H=2.326;
 const W3_LIM={p:[1000,2300], g:[1.0,5.0], d:[0.2,0.7], x:[-0.15,0.15]};
 function dnbW3(pMPa,gSI,x,dhM,dhSub){
@@ -1099,12 +1099,34 @@ function dnbW3(pMPa,gSI,x,dhM,dhSub){
     *(0.2664+0.8357*Math.exp(-3.151*de))
     *(0.8258+7.94e-4*hs);
 }
-/* W-3 gives the SHAPE; the COOLANT row's own dnbr column still gives the
+/* ── ONE MARGIN LAW PER FAMILY ──
+   DNB is not the limit for a fluid that cannot boil. Sodium at 0.2 MPa sits
+   430 K below saturation and a real SFR is designed against BOILING ONSET;
+   helium never boils at all and a real gas core is designed against FUEL
+   TEMPERATURE. Feeding either to a clamped W-3 gave them water's shape in
+   pressure - the answer read plausible and stopped moving. So P.dnbLaw picks
+   the law off what the fluid IS (COOLANT, design.js) and each law is a margin
+   ratio of the same currency: what the core could stand over what it is doing.
+
+   boil is measured end to end - the hot channel's rise is s.coreDT peaked by
+   s.fq, and the room it has is how far the inlet sits below saturation, so
+   losing flow, raising power or depressurising all cut it directly.
+   temp is the same shape against the fuel's own damage temperature, which
+   P.tdmg already carries and the damage block already reads.
+
+   W-3 gives the SHAPE; the COOLANT row's own dnbr column still gives the
    LEVEL, which is the one thing about thermal margin that was never a shape
    you could draw. P.dnbrK is the P.pinUA idiom: solved once in commission()
    so that this plant at RATED power and RATED mass flux reads exactly
-   P.dnbr0. One helper, because the anchor and the tick must not drift. */
+   P.dnbr0 - and it anchors all three laws, so no plant's rest point moves.
+   One helper, because the anchor and the tick must not drift. */
 function dnbrOf(s,heat,gShare,x,dhSub){
+  if(P.dnbLaw==="boil")
+    return P.dnbrK*(dhSub/CP_W)/Math.max(s.coreDT*s.fq,1e-3);
+  if(P.dnbLaw==="temp"){
+    const Tin=s.Tavg-s.coreDT/2;
+    return P.dnbrK*Math.max(P.tdmg-Tin,0)/Math.max(s.TfHot-Tin,1e-3);
+  }
   const qHot=Math.max(heat*P.rated*1e6/Math.max(P.aHeat,1e-6)*Math.max(s.fq,1e-3),1);
   return P.dnbrK*dnbW3(s.pCore,Math.max(P.G0*gShare,1e-3),x,P.dh,dhSub)/qHot;
 }
