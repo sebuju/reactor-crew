@@ -14,7 +14,11 @@ function frame(x,y,w,h,c){
   ctx.strokeStyle=c; ctx.lineWidth=1;
   ctx.strokeRect(Math.round(x)+.5,Math.round(y)+.5,Math.round(w)-1,Math.round(h)-1); }
 function rr(x,y,w,h,r){                 // rounded-rect path (no roundRect in older engines)
-  r=Math.min(r||0,w/2,h/2);
+  // FLOORED AT 0: a box that has been squeezed to a negative size hands
+  // Math.min a negative half-side, and arcTo THROWS on a negative radius -
+  // which takes the whole frame down from wherever it was in the draw. A
+  // radius is never meaningfully negative, so this is the primitive's job.
+  r=Math.max(0,Math.min(r||0,w/2,h/2));
   ctx.moveTo(x+r,y);
   ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
   ctx.arcTo(x,y+h,x,y,r);     ctx.arcTo(x,y,x+w,y,r);

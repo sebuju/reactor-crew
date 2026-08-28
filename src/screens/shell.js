@@ -46,6 +46,19 @@ function shellInit(){
       /* an unchanged design keeps the plant that is already running */
       if(k==="operate"&&(!P||P.dsig!==designSig())){ commission(); return; }
       if(k==="scenario"&&!P) commission();
+      /* ══ LEAVING THE CONTROL ROOM RESETS THE PLANT ══
+         The one-way rule the bench controls depend on: a control-room session
+         writes S through act(), the bench writes D.start directly, and nothing
+         crosses. So going back to the bench must put the plant back where it
+         was commissioned, or the bench would be sitting beside a plant that
+         has drifted away from every starting position it shows.
+         resetPlant(), not commission(): the network, P.netRef and the
+         reference solve are properties of the DESIGN, and re-deriving them on
+         a screen change would be work with no answer attached. If the design
+         then changes, the P.dsig test above recommissions on the way back.
+         Two things must survive it - a flying scenario run or replay, and a
+         recording head that has put its own plant on the board. */
+      if(k==="design" && P && S && !scnArmed() && REC.mode==="live") resetPlant();
       /* pause on the way in, unless a run or a replay is already flying */
       if(k==="scenario"&&!scnArmed()) TR.paused=true;
       screen=k; layout();
@@ -55,7 +68,7 @@ function shellInit(){
 }
 
 const SCNTIP_ON="Say what the reactor is FOR. Lay out a timeline of what will happen to it - load changes, battle damage, a blackout - and the limits it has to hold while they do. RUN flies it with nobody at the panel and says PASS or FAIL and which limit broke. Unlike CONTROL, opening this never rebuilds a plant that is already running.";
-const OPTIP_ON="The live control room. Opening it commissions the current design. Run the plant, push it past its limits, and repair it when it bites back. Change anything on the bench and the unit is rebuilt from scratch the next time you come back here.";
+const OPTIP_ON="The live control room. Opening it commissions the current design. Run the plant, push it past its limits, and repair it when it bites back. Visiting the bench puts the plant back where it was commissioned, and changing anything there rebuilds the unit from scratch the next time you come back here.";
 const LOCKTIP="Locked until you clear the blocking issues on the design bench.";
 
 function shellSync(){

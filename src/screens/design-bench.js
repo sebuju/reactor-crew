@@ -162,9 +162,8 @@ function warnFor(id){
 // which port a plant-space point lands on, or null - the same small square
 // PORTG (plant.js) draws a mark in
 function portHit(pt){
-  for(const pid in D.ports){ const [x,y]=portPos(pid);
-    if(Math.abs(pt[0]-x)<=PORTG/2 && Math.abs(pt[1]-y)<=PORTG/2) return pid; }
-  return null;
+  const gx=Math.floor((pt[0]-GX)/CELL), gy=rowAt(pt[1]);
+  return portAtCell(gx,gy);
 }
 /* right-click, held still and released: add or remove - see .claude/CLAUDE.md
    A PORT under the cursor wins over everything else it happens to sit on -
@@ -176,30 +175,10 @@ function ctxResolveDesign(p){
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
   const port=portHit([pt.x,pt.y]);
   const part=partAt([pt.x,pt.y]);   // layout.js - the same lookup the part drag's drop test uses
-  /* WHICH RUN IS UNDER THE CURSOR, and nothing about where along it. A
-     fitting is placed in a CELL now, so the only thing a right-click on a
-     pipe can still offer is DISCONNECT - and that is a question about the
-     RUN, not about a point on it. The fraction (nearestOn()) and the two
-     different "did I hit a pipe" reaches went with the tap shape. */
-  let runRid=null, runK=null;
-  if(!port && !part) for(const r of pipeNetwork()){
-    if(!r.key || !r.rid) continue;
-    if(nearRun(r.pts,[pt.x,pt.y]) < CELL*0.85){ runRid=r.rid; runK=r.k; break; }
-  }
-  return {x:p.x,y:p.y,cell:{gx,gy},port,part,runRid,runK};
-}
-/* HOW FAR A POINT IS FROM A POLYLINE. All that is left of nearestOn(): the
-   fraction along the run it also returned was only ever for a tap, and a
-   fitting does not sit a fraction along anything any more. */
-function nearRun(pts,p){
-  let bd=1e9;
-  for(let i=1;i<pts.length;i++){
-    const a=pts[i-1], b=pts[i];
-    const dx=b[0]-a[0], dy=b[1]-a[1], L=dx*dx+dy*dy;
-    const t = L? clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L,0,1) : 0;
-    bd=Math.min(bd, Math.hypot(a[0]+dx*t-p[0], a[1]+dy*t-p[1]));
-  }
-  return bd;
+  // a pipe is a CELL, so "which pipe is under the cursor" is one lookup and
+  // not a distance to a polyline
+  const pipe = (!port && !part && D.pipes[gx+","+gy]) ? gx+","+gy : null;
+  return {x:p.x,y:p.y,cell:{gx,gy},port,part,pipe};
 }
 // Stage 7a: the menu header names the thing it is ABOUT - a part, a run, a
 // fitting, or the plant itself for a bare cell. Never a menu item, so it
@@ -208,7 +187,8 @@ function ctxTitleDesign(hit){
   if(hit.port){ const pt=D.ports[hit.port], p=LAY.parts.find(q=>q.id===pt.p);
     return (p?partName(p):"")+" PORT"; }
   if(hit.part) return partName(hit.part);
-  if(hit.runRid) return pipeLabel(hit.runK)||"PIPE";
+  if(hit.pipe){ const keys=pipeMap().cellOwner[hit.pipe];
+    return (keys && pipeLabel(keys[0].split(":")[0])) || "PIPE"; }
   return "PLANT";
 }
 /* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
@@ -225,7 +205,7 @@ function ctxItemsDesign(hit){
      (removePort(), layout.js) exactly as removing a part takes its runs. */
   if(hit.port){
     const pt=D.ports[hit.port], p=LAY.parts.find(q=>q.id===pt.p);
-    const IN=p&&portPath(p,pt.f), items=[];
+    const IN=p&&portPath(p,portFaceOf(hit.port)), items=[];
     if(IN) for(const nm of [IN.na,IN.nb])
       items.push({label:nm, fn:()=>{ portMode(hit.port,nm); }});
     items.push({label:"REMOVE PORT", fn:()=>{ removePort(hit.port); }});
@@ -247,12 +227,17 @@ function ctxItemsDesign(hit){
       return [{label:"REMOVE", fn:()=>{ removePart(hit.part.id); }}];
     return [];   // a base component (core, rods, pzr...) offers no menu at all
   }
-  if(hit.runRid){
-    /* A RUN UNDER THE CURSOR, and one offer. Splicing something INTO it is
-       not a menu row any more: a fitting is a box, so you place it in a cell
-       and draw two runs to it. What the menu still owns is the one question
-       no gesture asks - take this pipe out. */
-    return [{label:"DISCONNECT", fn:()=>{ removeRun(hit.runRid); }}];
+  if(hit.pipe){
+    /* A PIPE CELL UNDER THE CURSOR. The whole connection is what a player
+       usually means, so both offers are here - one cell, or every cell the
+       walk through this one reaches. */
+    const keys=pipeMap().cellOwner[hit.pipe]||[];
+    const items=[{label:"REMOVE CELL", fn:()=>{ delete D.pipes[hit.pipe]; buildLayout(); }}];
+    if(keys.length) items.push({label:"REMOVE RUN", fn:()=>{
+      for(const key of keys){ const c=pipeMap().byKey[key]; if(!c) continue;
+        for(const [x,y] of c.cells) delete D.pipes[x+","+y]; }
+      buildLayout(); }});
+    return items;
   }
   // a genuinely bare cell: nothing is under the cursor, so no REMOVE
   // belongs here - only offers that create or connect something.
@@ -306,15 +291,15 @@ function ctxItemsDesign(hit){
       }});
     }
   }
-  /* NO CONNECT OFFER HERE. A pipe is laid by clicking a port and clicking
-     where it ends (ui.lay, core/ui.js) - both ends are the hand's, chosen in
-     the room, so there is nothing left here for a menu row to pick for it. */
+  /* NO CONNECT OFFER HERE. A pipe is laid cell by cell with the PIPE tool and
+     a port is placed by clicking the cell beside a machine, so there is
+     nothing left here for a menu row to pick for it. */
   return items;
 }
 ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign, title:ctxTitleDesign});
-// ESC CANCELS A PIPE IN FLIGHT - same standing right-click-with-nothing-left
-// has (uiDown, core/ui.js), just reachable with no corner to drop first.
-keyAdd({k:"Escape", sc:"design", lab:"CANCEL", fn:()=>{ ui.lay=null; }});
+// ESC PUTS THE TOOL BACK - the one way out of a mode, and the same key that
+// used to cancel a pipe in flight
+keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.active="select"; }});
 
 /* ─────────────── THE FUEL LATTICE, IN PLAN (canvas - genuinely graphical) ───────────────
    Drawn into its OWN <canvas> in the CORE and RODS panels by hostPaint(), which
@@ -698,6 +683,19 @@ function dbRailBuild(rail,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
+  /* ONE SWITCH PER TOOL, the same radio idiom layerSwitches() already uses:
+     each key manages its own state off the TOOL table, so there is nothing
+     here for a per-frame sync to keep in step with. */
+  const tools=KIT.well({title:"TOOLS"}); rail.appendChild(tools.el);
+  { const btns=[];
+    for(const t of TOOLS){
+      const b=KIT.button(t.label,{sunk:true, on:TOOL.active===t.id,
+        onClick:()=>{ TOOL.active=t.id; for(const q of btns) q.b.set({on:TOOL.active===q.id}); }});
+      b.el.classList.add("layer-switch");
+      KIT.tip(b.el, t.label, t.tip);
+      tools.body.appendChild(b.el); btns.push({id:t.id,b});
+    } }
+  const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
   const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
   // one switch per LAYERS entry, built once per rail rebuild - see
@@ -705,7 +703,40 @@ function dbRailBuild(rail,watch){
   // calls: a layer switch is not redrawn per screen, it is drawn once.
   const layers=KIT.well({title:"LAYERS"}); rail.appendChild(layers.el);
   layerSwitches(layers.body);
-  return {panels,results,review};
+  return {panels,results,review,pipes};
+}
+/* ══ WHAT IS ACTUALLY CONNECTED ══
+   One row per traced connection - from, to, and how long it is - plus a line
+   for every pipe cell that reaches nothing. This is the whole point of tracing
+   rather than authoring: "is this joined up" becomes a question the bench can
+   answer and print, instead of a thing the player has to read off the picture. */
+function pipeRailSync(well){
+  const M=pipeMap();
+  const rows=M.conns.map(c=>{
+    const a=LAY.parts.find(q=>q.id===c.a), b=LAY.parts.find(q=>q.id===c.b);
+    return [(pipeLabel(c.k)||"PIPE"),
+            (a?partName(a):c.a)+" ⇒ "+(b?partName(b):c.b),
+            c.L.toFixed(1)+" m"];
+  });
+  const loose=M.orphan.length, dead=M.dangling.filter(d=>d.cells.length).length;
+  const sig=rows.map(r=>r.join("/")).join("|")+"|"+loose+"|"+dead;
+  const body=well.body;
+  if(body._sig===sig) return;
+  body._sig=sig; body.innerHTML="";
+  if(!rows.length){ const p=KIT.el("p","db-review-ok");
+    p.textContent="NOTHING IS PIPED UP"; body.appendChild(p); }
+  for(const r of rows){
+    const row=KIT.el("div","db-pipe-row");
+    const k=KIT.el("span","db-pipe-kind"); k.textContent=r[0];
+    const n=KIT.el("span","db-pipe-ends"); n.textContent=r[1];
+    const l=KIT.el("span","db-pipe-len");  l.textContent=r[2];
+    row.append(k,n,l); body.appendChild(row);
+  }
+  const warn=t=>{ const row=KIT.el("div","db-review-row warn");
+    const tag=KIT.el("span","db-review-tag"); tag.textContent="WARN";
+    const s=KIT.el("span"); s.textContent=t; row.append(tag,s); body.appendChild(row); };
+  if(dead)  warn(dead+" pipe run"+(dead===1?"":"s")+" reach a port at one end and nothing at the other.");
+  if(loose) warn(loose+" pipe cell"+(loose===1?"":"s")+" belong to no run at all.");
 }
 /* the rail scrolls to a newly selected panel ONCE, on the frame sel changes -
    every frame would fight the user's own scrolling */
@@ -743,6 +774,7 @@ function dbRailSync(state){
     dbPanelSync(h.body,cur);
   }
   if(!fresh) return;
+  pipeRailSync(state.pipes);
   { const rd=benchResultsData();
     const body=state.results.body;
     if(!body.firstChild){

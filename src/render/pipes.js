@@ -827,21 +827,46 @@ function pipeFlow(L){
    because the flow driving it does. The two ends share one key and one rate:
    they are one hole in one run, seen from both sides. */
 function pipeBreaks(L){
-  if(!L || !L.spillBy) return;
-  for(const r of pipeRuns(L)){
-    const q=L.spillBy["break:"+r.key];
+  if(!L || !L.spillBy || !L.dmgParts) return;
+  for(const id of L.dmgParts){
+    if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
+    const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
+    const x=+k.slice(0,i), y=+k.slice(i+1);
+    /* The rate is the CONNECTION's, because that is what the solve prices, but
+       the plume is drawn AT THE CELL - which is the whole of what the break
+       nodes bought. A crossing belongs to two runs; take the worse of them. */
+    let q=0;
+    for(const key of pipeCellRuns(x,y)) q=Math.max(q, L.spillBy["break:"+key]||0);
     if(!(q>0)) continue;
-    /* q is the RUN's total, both ends together, and each end is drawn at that
-       scale rather than at half of it - the two plumes are one hole seen from
-       both sides, and halving each would draw a full-bore guillotine as two
-       wisps. */
-    const rate=clamp(q/SPILL_FULL,0,1);
-    const g=pipeGeom(r.pts);
-    if(!g.len) continue;
-    const a=g.segs[0], z=g.segs[g.segs.length-1];
-    fxSteam(a.x, a.y, 22, fxEase("brk:"+r.key+":a", rate), "#ffd0c4", 29);
-    fxSteam(z.x+z.dx*z.L, z.y+z.dy*z.L, 22, fxEase("brk:"+r.key+":b", rate), "#ffd0c4", 29);
+    const [px,py]=cellPos(x,y);
+    fxSteam(px, py, 22, fxEase("brk:"+k, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29);
   }
+}
+/* A BROKEN CELL IS A GAP IN THE PIPE, cut over the stroke that runs through
+   it. Per CELL, because that is what a hit takes out now - the run either side
+   of it is still there, and drawing the whole connection red would say the
+   opposite. */
+function pipeDamage(L){
+  if(!L || !L.dmgParts) return;
+  for(const id of L.dmgParts){
+    if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
+    const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
+    const r=grect(+k.slice(0,i), +k.slice(i+1), 1, 1);
+    fillRect(r.x+2,r.y+2,r.w-4,r.h-4,C.red);
+  }
+}
+/* EVERY PIPE CELL NO CONNECTION CLAIMS. Dashed and dead-coloured, because it
+   is pipe that is really there and really carries nothing - a cell laid into
+   thin air, or a run whose two ends butt rather than join. */
+function pipeLoose(L){
+  const own=pipeMap().cellOwner;
+  ctx.save(); ctx.setLineDash([3,3]); ctx.strokeStyle=C.ink2; ctx.lineWidth=1.5;
+  for(const k in D.pipes){
+    if(own[k]) continue;
+    const i=k.indexOf(","), r=grect(+k.slice(0,i), +k.slice(i+1), 1, 1);
+    ctx.strokeRect(r.x+3,r.y+3,r.w-6,r.h-6);
+  }
+  ctx.restore();
 }
 
 /* The FLOW METERS layer's draw pass (LAYERS.flow, render/layers.js). It is a

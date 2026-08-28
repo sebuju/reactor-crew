@@ -17,13 +17,9 @@
    for free (partyCells() only ever names free cells); radc is the one layer
    that is SUPPOSED to land on a component - see its own comment below.
 
-   ROW GEOMETRY IS rowTop(Y) / rowTop(Y+1)-rowTop(Y), NEVER Y*CELL. The
-   control room gives some rows extra height at the bottom for a control
-   strip (BANDS, set in layout.js), so row pitch is constant only on the
-   design bench. A Y*CELL layer sits on the grid lines there and drifts
-   further off them row by row down the control room - invisible on the
-   screen someone tested, wrong on the one they didn't. Columns have no such
-   band, so X stays a flat GX+X*CELL throughout this file. */
+   ROW GEOMETRY IS rowTop(Y), which is a flat GY+Y*CELL on both screens now: a
+   machine declares the cells its own controls need, so no row is stretched to
+   fit a strip and no layer can drift off the grid lines it is drawn against. */
 
 /* THE ZONE TABLE IS THE READOUT.
    Five bands, not a gradient. A survey map has steps: you read "this cell is

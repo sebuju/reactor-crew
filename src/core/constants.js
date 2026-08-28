@@ -16,6 +16,12 @@ const C = {
   ink:"#9fb4b9", ink2:"#5d7378", bright:"#dff0f3",
   amber:"#f0a830", cyan:"#5fd2e2", red:"#ff5a45", green:"#57d38c",
   blue:"#5aa9d6", metal:"#6d8f98",
+  /* THE TWO SIDES OF A PORT'S OWN INTERNAL PATH, named once so the nozzle, its
+     word and its tooltip cannot drift apart. Not amber (amber IS the
+     selection), not red (a side is not an alarm), and no longer CYAN: the cold
+     leg's blue and a generator's own cyan are both on the pipework a port sits
+     on, so an inlet wearing cyan vanished into the run it was capping. */
+  portA:"#e58cf5", portB:"#57d38c",
   xe:"#2a1f3a", graph:"#8a6a4a",
   /* selected fills, the near-black inks that go on top of a bright fill, and
      the two banner grounds. Here rather than in a stylesheet so there is still

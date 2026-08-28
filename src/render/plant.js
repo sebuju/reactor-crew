@@ -94,8 +94,10 @@ const pipeNozzleHalf = bore => pipeWidth(bore)*1.4;
    rather than as a side. Not red either - a side is not an alarm. Cyan and
    green are the two live inks left, and neither is the cold leg's own blue,
    so a port never disappears into the pipe on it. */
-const portCol=(p,f)=>{ const IN=portPath(p,f);
-  return !IN ? C.metal : IN.a===f ? C.cyan : C.green; };
+// takes the part ID, because that is what a run carries - portPath() wants the
+// PART, and handing it the string made every nozzle on the plant read C.metal
+const portCol=(id,f)=>{ const IN=portPath(LAY.parts.find(q=>q.id===id),f);
+  return !IN ? C.metal : IN.a===f ? C.portA : C.portB; };
 // THE JOINT ITSELF - a small flanged rectangle standing proud of the shell,
 // its long axis across the bore and its short axis the direction it faces.
 // Shared by a piped run's own end (pipeNozzles()) and a bare port with
@@ -407,7 +409,18 @@ function drawSym(p,x,y,w,h,ink,L){
     const lv = L ? tankLvl(L,id) : D.tanks[id].level;
     const rate = L ? ((L.tankRate&&L.tankRate[id])||0) : 0;
     const src = !(tankSide(id)==="primary" && !D.tanks[id].check);
-    tank(X,Y+2,W,Hh-4,6, lv/100,
+    /* ══ A PRESSURISED TANK IS A PRESSURE VESSEL, AND IT LOOKS LIKE ONE ══
+       What decides whether a tank can push at all is whether anything is
+       BEHIND it - a gas charge or a pump (tankP(), pipenet.js) - and that was
+       invisible: an accumulator and an open header drew the identical box, so
+       the one knob that says "this will inject in a blackout" could only be
+       read off the panel. A vessel that holds pressure gets a second, inset
+       hoop and domed ends; an open tank keeps the plain shell it always had. */
+    if(tankHeld(id) && W>10 && Hh>16){
+      ctx.beginPath(); rr(X+2.5,Y+4.5,W-5,Hh-9,7);
+      ctx.strokeStyle=ink; ctx.lineWidth=1; ctx.globalAlpha=.55; ctx.stroke(); ctx.globalAlpha=1;
+    }
+    tank(X,Y+2,W,Hh-4,tankHeld(id)?9:3, lv/100,
       rate>0 ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
             : (lv>=90 ? C.red : lv>0  ? C.amber : C.blue));
@@ -642,7 +655,7 @@ const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, 
 function tankCtl(id){
   const t=()=>D.tanks[id]||{}, rule=()=>AUTORULE[t().auto];
   const valve=
-    {kind:"btn",flex:1,on:()=>S.tankOpen[id],text:()=>S.tankOpen[id]?"OPEN":"SHUT",
+    {kind:"btn",flex:1,k:id+":tankOpen",def:false,words:["SHUT","OPEN"],on:()=>S.tankOpen[id],text:()=>S.tankOpen[id]?"OPEN":"SHUT",
      fn:()=>{ act("tankOpen",id); },
      tip:"TANK VALVE - lines this tank up with what it is piped to. It is "
        +(tankSide(id)==="primary"
@@ -654,9 +667,15 @@ function tankCtl(id){
        something else needs. A sink (a primary tank with no non-return valve,
        which is what a vent header discharges into) is a tank you WANT empty,
        so an empty one lighting up red said the opposite of the truth. */
-    {kind:"btn",flex:1,on:()=>S.tankDump[id],
-     danger:()=>!(tankSide(id)==="primary" && !t().check) && tankLvl(S,id)<HOT_NPSH,
-     text:()=>S.tankDump[id]?"DUMPING":"DUMP",
+    /* THE WORD DOES NOT CHANGE, THE GROUND DOES. It used to read DUMPING while
+       it ran, which does not fit a key this narrow - it was cut to "DUMPI" and
+       read as a different control. A dump valve is a two-state thing like every
+       other valve on the plant, so it says what it IS and lets the fill say
+       whether it is doing it. */
+    {kind:"btn",flex:1,k:id+":tankDump",def:false,words:["DUMP","DUMP"],on:()=>S.tankDump[id],
+     danger:()=>S.tankDump[id] ||
+       (!(tankSide(id)==="primary" && !t().check) && tankLvl(S,id)<HOT_NPSH),
+     text:()=>"DUMP",
      fn:()=>{ act("tankDump",id); },
      tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."};
   /* THE SAME SWITCH a system's bypass row is, so it goes through the same
@@ -665,7 +684,7 @@ function tankCtl(id){
      up in the colour every other arming switch on the plant uses for DEFEATED,
      and the one that had been bypassed sat dark. */
   const arm=
-    {kind:"arm",flex:1,label:()=>rule()?rule().label:"AUTO",on:()=>S.tankByp[id],
+    {kind:"arm",flex:1,k:id+":tankByp",def:false,name:"TANK AUTO",label:()=>rule()?rule().label:"AUTO",on:()=>S.tankByp[id],
      fn:()=>{ act("tankByp",id); },
      title:()=>"TANK AUTO  [ "+(S.tankByp[id]?"BYPASSED":"ARMED")+" ]",
      tip:"AUTO / BYP - whether this tank's own rule ("+(rule()?rule().label:"none")
@@ -673,6 +692,48 @@ function tankCtl(id){
   const hasRule = t().auto && t().auto!=="manual" && t().auto!=="always";
   return hasRule ? [[valve,dump],[arm]] : [[valve,dump]];
 }
+/* ══════════ THE STARTING POSITION IS DESIGN DATA ══════════
+   D.start[k] is where an actuator STANDS the moment you enter the control
+   room. ctlFor() below stays the one table - it already declares every control
+   in the game - so the only thing added to a row is a KEY and the value that
+   key falls back to. A cell with no `k` is MOMENTARY (SCRAM, RST, +/-B,
+   REPAIR): there is no such thing as a starting position for a button that
+   DOES something, and one field decides it rather than a list somebody has to
+   maintain.
+   startOf() itself lives in design.js, beside D.start - resetPlant() reads it
+   too and the sim loads no renderer at all. */
+/* THE BENCH WRITES D.start DIRECTLY, never act(). ACT is the one input
+   dispatch and recAct() runs before every apply, so a design edit going
+   through it would land on the tape as a crew action - the same standing every
+   other bench edit already has. A control-room session never writes D.start
+   and the bench never writes S: nothing crosses, so the bench cannot show
+   drift, because it is not reading the thing that drifted. */
+function benchCell(c){
+  const o=Object.assign({},c);
+  const sc=c.sc||1;
+  if(!c.k){                          // momentary: nothing to set, so it draws dead
+    o.fn=()=>{}; o.set=()=>{};
+    o.on=()=>false; o.danger=()=>false;
+    if(c.kind==="sld"){ o.val=()=>0; o.dem=null; o.min=c.min; o.max=c.max; }
+    return o;
+  }
+  if(c.kind==="sld"){
+    o.val=()=>startOf(c.k,c.def)*sc; o.dem=()=>startOf(c.k,c.def)*sc;
+    o.set=v=>{ D.start[c.k]=(c.step?Math.round(v/c.step)*c.step:v)/sc; };
+    o.mark=c.mark; o.marks=null;
+  } else {
+    const on=()=>!!startOf(c.k,c.def);
+    o.on=on; o.danger=()=>false;
+    if(c.words) o.text=()=>c.words[on()?1:0];
+    if(c.label) o.label=c.label;
+    // an arming switch states its own heading, and the LIVE one reads S to do
+    // it - so the bench gets the same sentence built off the starting position
+    if(c.kind==="arm") o.title=()=>(c.name||"")+"  [ "+(on()?"BYPASSED":"ARMED")+" ]";
+    o.fn=()=>{ D.start[c.k]=!on(); };
+  }
+  return o;
+}
+const ctlBench=rows=>rows&&rows.map(r=>r.map(benchCell));
 function ctlFor(p,live,split){
   if(p.role==="tank") return tankCtl(p.id);
   /* ONE LOAD LEVER, on the FIRST turbine. There can be more than one now, and
@@ -682,7 +743,9 @@ function ctlFor(p,live,split){
   if(p.role==="turb"){
     if(LAY.parts.find(q=>q.role==="turb")!==p) return null;
     return [
-     [{kind:"sld",flex:1,val:()=>S.load*100,min:()=>0,max:()=>P.loadMax*100,dem:()=>S.loadDem*100,
+     // P.loadMax is the commissioned copy of derived().loadMax; the bench has
+     // no P, so it asks the DESIGN - the same fallback pumpFloor() already has
+     [{kind:"sld",flex:1,k:"loadDem",def:1,sc:100,val:()=>S.load*100,min:()=>0,max:()=>(P?P.loadMax:derived().loadMax)*100,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}],
      // the same 5% bite the rod strip takes, against the same demand the
@@ -714,7 +777,7 @@ function ctlFor(p,live,split){
   if(roleHead(p.role)){
     const pri = primaryPump(p.id);
     return [[
-    {kind:"sld",flex:1,val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
+    {kind:"sld",flex:1,k:pri?"flowDem":p.id+":pumpDem",def:1,sc:100,val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
      dem:()=>(pri?flowDemPri(S):(S.flowDemBy[p.id]??1))*100,
      mark:()=>pri?pumpFloor()*100:null,markLo:true,
      fmt:v=>v.toFixed(0)+" %",
@@ -733,7 +796,7 @@ function ctlFor(p,live,split){
     const mode=fitModeOf(p.id);
     if(mode==="tee") return null;
     if(mode==="throttle") return [[
-      {kind:"sld",flex:1,val:()=>(S.valve[p.id]??1)*100,min:()=>0,max:()=>100,
+      {kind:"sld",flex:1,k:p.id+":valve",def:1,sc:100,val:()=>(S.valve[p.id]??1)*100,min:()=>0,max:()=>100,
        dem:()=>(S.valveDem[p.id]??1)*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("valveDem",p.id,v/100); },
        tip:"THROTTLE - how far this valve stands open. Wide open it costs the line nothing at all; shut, it is a real break in the pipe, the same as a valve shut anywhere else."}]];
@@ -743,12 +806,22 @@ function ctlFor(p,live,split){
        button; the arm is an arming switch and is drawn by armRow(), the one
        that draws every other arming switch on the plant. */
     return [
-     [{kind:"btn",flex:1,danger:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
+     /* OPEN / SHUT, the same two words every other valve on the plant wears -
+        it said BLOCK / BLOCKED, which is an ACTION and a STATE in one control
+        and matched nothing else on the board. What the key reports is where the
+        block valve stands, and shutting it is what gives the relief path up. */
+     [{kind:"btn",flex:1,k:p.id+":porvBlock",def:false,words:["OPEN","SHUT"],
+       danger:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
        on:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
-       text:()=>(S.reliefBlocked&&S.reliefBlocked[p.id])?"BLOCKED":"BLOCK",
+       text:()=>(S.reliefBlocked&&S.reliefBlocked[p.id])?"SHUT":"OPEN",
        fn:()=>{ act("porvBlockOf",p.id); },
        tip:"BLOCK VALVE - your last defence against a relief valve that lifts and will not reseat. Shutting it stops the leak and gives this relief path up for the rest of the run."}],
-     [{kind:"arm",flex:1,label:()=>AUTOSYS.porv.label,
+     /* NO LABEL. The switch is mounted ON the valve, so naming the system
+        again beside it read "PORV AUTO  AUTO" - the state word twice. Every
+        other arming switch on the plant that has no room for a label already
+        draws the state alone (armRow(), below); this one just has no label to
+        drop. */
+     [{kind:"arm",flex:1,k:p.id+":porvByp",def:false,name:AUTOSYS.porv.name,label:()=>"",
        on:()=>!porvLive(p.id), fn:()=>{ act("porvByp",p.id); },
        title:()=>AUTOSYS.porv.name+"  [ "+(porvLive(p.id)?"ARMED":"BYPASSED")+" ]",
        tip:"Whether THIS valve may lift by itself at its own setpoint. Bypass it and this one stays shut while every other relief valve goes on working - which is how you defeat one valve without giving up the relief path."}]];
@@ -759,7 +832,7 @@ function ctlFor(p,live,split){
       // the master control is the same row in both modes - setCommon() in
       // step.js is the only thing that carries it out
       const MASTER=[
-       {kind:"sld",flex:1,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
+       {kind:"sld",flex:1,k:"rodCommon",def:RODX0,sc:100,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
         /* Only while the controller is actually driving: a band drawn for a
            system that is bypassed or was never fitted is two marks describing
            nobody. autoLive() is the one predicate for that. */
@@ -777,10 +850,10 @@ function ctlFor(p,live,split){
        {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("rodCommon",pctStep(S.rodDem,1,0,1)); },
         tip:"INSERT 5% - drives the whole stack five percent of core height further in, onto the nearest 5% mark. Deeper insertion removes reactivity and raises power peaking, which eats thermal margin."}];
       const bankRow=b=>[
-       {kind:"btn",flex:1,on:()=>!S.bankAuto[b],text:()=>S.bankAuto[b]?"AUT":"MAN",
+       {kind:"btn",flex:1,k:"bankAuto:"+b,def:false,words:["AUT","MAN"],on:()=>!S.bankAuto[b],text:()=>S.bankAuto[b]?"AUT":"MAN",
         fn:()=>{ act("bankAuto",b); },
         tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank stops answering the controller, but it still answers you: its own slider and the master both still move it. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
-       {kind:"sld",flex:2.8,val:()=>S.rodZ[b]*100,min:()=>0,max:()=>100,
+       {kind:"sld",flex:2.8,k:"rodBank:"+b,def:RODX0,sc:100,val:()=>S.rodZ[b]*100,min:()=>0,max:()=>100,
         dem:()=>S.rodZDem[b]*100,
         fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",set:v=>{ act("rodBank",b,v/100); },
         tip:"BANK "+(b+1)+" - insertion of this bank alone. While the banks are split these per-bank demands are the tilt handle: standing one bank against another is the whole of how you answer a radial xenon tilt here. A bank left on MANUAL is not answering the temperature controller at all, and the fewer banks on AUTO, the less rod worth is left to answer the same error - the loop gets slower, not just smaller."}];
@@ -801,7 +874,7 @@ function ctlFor(p,live,split){
        ROD_TRIP_ROW,
        /* the ganged handle on a radial xenon tilt: it stands the inner banks
           against the outer ones instead of moving the whole bank together */
-       [{kind:"sld",flex:2.8,val:()=>S.tilt,min:()=>-1,max:()=>1,dem:()=>S.tiltDem,
+       [{kind:"sld",flex:2.8,k:"tiltDem",def:0,val:()=>S.tilt,min:()=>-1,max:()=>1,dem:()=>S.tiltDem,
          fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{ act("tiltDem",v); },
          tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. Full travel takes "+(1/TILT_RATE).toFixed(0)+" s because the drives moving it are the drives that move the bank. It is your tilt handle only while the banks are ganged - split them and each bank's own demand takes over."},
         {kind:"btn",flex:1,text:()=>"SPL",
@@ -832,23 +905,32 @@ function ctlFor(p,live,split){
   return null;
 }
 
+/* HOW MUCH OF THE BOX THE CONTROLS TAKE. A machine declares enough cells to
+   hold its own row set (buildLayout(), layout.js), so this is a measurement of
+   the strip and never a reservation the grid has to stretch for - BANDS and
+   ctlBands() are gone with the rows they used to grow.
+   Still the WORST of the two rod modes, never the current one: ganging and
+   splitting must not resize the plant under the operator. */
 function stripH(p,live){
   if(!fitted(p)) return 0;
-  // reserve the WORST of the modes, never the current one - ganging/splitting
-  // must not resize the plant under the operator; unused rows are empty plinth
+  /* A FITTING IS THE ONE MACHINE TOO SMALL TO HOLD ITS OWN CONTROLS. It is one
+     cell - a third of everything else - by design, so its handles hang in the
+     margin BELOW the box instead of standing on it (see the component loop),
+     the same margin pipeFitMarks() already writes its reading into above. It
+     therefore reserves nothing INSIDE the box. */
+  if(p.role==="fitting") return 0;
   const rows=m=>{ const c=ctlFor(p,live,m); return c? c.length : 0; };
   const n=Math.max(rows(false),rows(true)), bh=autoOn(p.id)? CTL_H : 0;
-  if(!n && !bh) return 0;   // nothing to mount, nothing to stand on (no plinth)
+  if(!n && !bh) return 0;
   return n*CTL_H + bh + STRIP_PAD;
 }
-function ctlBands(live){
-  const b=new Array(GH).fill(0);
-  for(const p of LAY.parts){
-    const r=p.y+p.h-1;                       // the strip sits in the LAST row it spans
-    if(r>=0&&r<GH) b[r]=Math.max(b[r],stripH(p,live));
-  }
-  return b;
-}
+/* HOW WIDE A FITTING'S OWN MARGIN STRIP IS. Wider than its one cell, because a
+   key needs a word on it and a cell is 16 px - but exactly as wide as ONE KEY
+   on an ordinary three-cell component strip, which is what a tank's SHUT/DUMP
+   pair beside it already draws at. Derived from that, never a second literal:
+   a flat 64 made a four-letter valve key three times the width of the
+   four-letter tank key next to it. */
+const FITSTRIP_W=(TANK_W0*CELL - 8 - 4)/2;
 
 /* ONE ARMING SWITCH, TWO HOSTS. A system's bypass row on a component plinth and
    a relief valve's own arm on its strip are the SAME control - a label, a state
@@ -867,18 +949,24 @@ function armRow(x,y,w,h,o){
   // a narrow host loses the LABEL before the state (its name is already printed
   // beside it); centred, not stuck to the bottom edge
   const bl=midBase(y,h,6.5);
-  if(w >= tw(o.label,t)+tw(st,t)+10){
+  // no label at all: the state word takes the whole switch, which is the same
+  // shape a host too narrow for both already falls through to
+  if(o.label && w >= tw(o.label,t)+tw(st,t)+10){
     txt(o.label,x+3,bl,{size:6.5,sp:.3,color:o.fit?C.ink2:"#3c4c47"});
     txt(st,x+w-3,bl,{size:6.5,sp:.3,align:"right",color:col});
   } else txt(st,x+w/2,bl,{size:6.5,sp:.3,align:"center",color:col});
   TIP(x,y,w,h,o.title,o.tip);
 }
-function bypRow(k,x,y,w,h){
-  const A=AUTOSYS[k], fit=autoFit(k);
+// `bench` draws the same switch against D.start instead of S - what this
+// system is ARMED OR BYPASSED as the moment the plant is commissioned.
+function bypRow(k,x,y,w,h,bench){
+  const A=AUTOSYS[k], fit=autoFit(k), sk="byp:"+k;
   // no `if(fit)` guard: autoToggle() already refuses an unfitted system, so
   // this stays a dead (`none`, no hover) switch rather than a second refusal
-  armRow(x,y,w,h,{label:A.label,fit,lit:fit&&S.byp[k],fn:()=>{ act("byp",k); },
-    title:A.name+"  [ "+autoState(k)+" ]",
+  const lit = bench ? !!startOf(sk,false) : (fit&&S.byp[k]);
+  armRow(x,y,w,h,{label:A.label,fit,lit,
+    fn: bench ? ()=>{ D.start[sk]=!startOf(sk,false); } : ()=>{ act("byp",k); },
+    title:A.name+"  [ "+(bench?(lit?"BYPASSED":"ARMED"):autoState(k))+" ]",
     tip:A.tip+(fit?"":"  None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")});
 }
 
@@ -906,135 +994,97 @@ function ctlStrip(list,x,y,w,h){
   }
 }
 
-// a pipe is steered by grabbing a point it must pass through and dropping it
-// elsewhere - the same two-point router just runs twice, so there is no
-// freehand drawing and no separate pathfinder to keep in step with it.
-// Bench only: where a pipe runs feeds the mass/friction the plant is
-// commissioned with, so the control room operates what was built rather than
-// reshaping it. Grips are pushed AFTER the components so one lying over a
-// vessel is still grabbable (hit test takes the LAST widget pushed).
-const WPG=9;                          // the grab box; a grip has to be findable at fit scale
-const WPL=9;                          // how close to the line a double-click counts as on it
-/* THERE IS ONE KIND OF POINT ON A PIPE. A grip is a waypoint the player set,
-   and the way to set one is to double-click the LINE - which is also the
-   biggest target on the drawing. The automatic corners used to be pushed as
-   grips of their own, so the same idea wore two names, two colours and two
-   tooltips, and the grey one marked a point the router owned and would move
-   out from under the hand anyway. */
-function pipeGrip(pt,rid){
-  const wd=push({x:pt.x-WPG/2,y:pt.y-WPG/2,w:WPG,h:WPG,type:"pipewp",rid,pt});
-  const hv=hov(wd);
-  fillRect(pt.x-2.5,pt.y-2.5,5,5,C.amber);
-  if(hv) frame(pt.x-WPG/2,pt.y-WPG/2,WPG,WPG,C.amber);
-  TIP(pt.x-WPG/2,pt.y-WPG/2,WPG,WPG,"PIPE WAYPOINT",
-    "A corner you put in this run. Drag it to move it, or right-click to take it out - the pipe straightens between the corners on either side.");
-}
-function pipeGrips(runs){
-  for(const r of runs) for(const p of r.wps) pipeGrip(p,r.rid);
-}
-// pushed with the pipes, UNDER the machines: a run passing behind a vessel
-// belongs to the vessel, and a waypoint could not be dropped inside one anyway
-function pipeLines(runs){
-  for(const r of runs) for(let i=1;i<r.pts.length;i++){
-    const [x0,y0]=r.pts[i-1], [x1,y1]=r.pts[i];
-    const x=Math.min(x0,x1)-WPL/2, y=Math.min(y0,y1)-WPL/2;
-    const w=Math.abs(x1-x0)+WPL, h=Math.abs(y1-y0)+WPL;
-    if(w<=WPL&&h<=WPL) continue;                 // a zero-length segment is a corner artefact
-    push({x,y,w,h,type:"pipewp",rid:r.rid,pt:null});
-    TIP(x,y,w,h,"PIPE ROUTE",
-      "Double-click anywhere on this run to add a corner there, then drag it wherever you want the pipe to go.");
-  }
-}
 /* ══ THE GHOST PORT ══
-   Hover a component, and the face nearest the hand shows where a NEW port
-   would land - a preview of addPort(), never a placement of its own. Not
-   drawn while laying a pipe onto somewhere else, or a ghost belonging to the
-   machine on the far side of the room would flicker under a hand that is
-   really aiming at the FINISH port under discussion. It draws over the box
-   it stands on, so it is pushed with the box - see plantPortLayer(). */
-const GHOSTG=8;
+   Hover a cell beside a machine and it shows where a port would land - a
+   preview of addPortAt(), never a placement of its own. The hand names the
+   CELL now, not a face: the face falls out of which side of the box the cell
+   is on (faceOfOffset(), layout.js). */
+const GHOSTG=CELL-4;
 function ghostPort(){
-  if(ui.drag && ui.drag.type!=="lay") return null;
+  if(ui.drag) return null;
+  if(TOOL.active!=="select") return null;
   const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return null;
-  const p = partAt([ptr.x,ptr.y]); if(!p) return null;
-  const g = gridPt([ptr.x,ptr.y]), f = faceAt(p,g.x,g.y);
-  if(!f) return null;
-  return {p,f};
+  const g = gridPt([ptr.x,ptr.y]);
+  const gx=Math.floor(g.x), gy=Math.floor(g.y);
+  if(gx<0||gy<0||gx>=GW||gy>=GH) return null;
+  if(portAtCell(gx,gy)) return null;
+  if(occupied(null,{ports:false})[gy][gx]) return null;
+  /* Whichever machine this cell is on the shell of. A cell can only ever be
+     beside one, because a cell is one thing and so is a footprint. */
+  for(const p of LAY.parts){
+    const dx=gx-p.x, dy=gy-p.y;
+    const f=faceOfOffset(p,dx,dy);
+    if(f && portFaceOK(p.id,f)) return {p, dx, dy, f, gx, gy};
+  }
+  return null;
 }
 function drawGhostPort(){
   const g = ghostPort(); if(!g) return;
-  const [x,y]=ghostPortPos(g.p.id,g.f);
+  const [x,y]=cellPos(g.gx,g.gy);
   const bx=x-GHOSTG/2, by=y-GHOSTG/2;
-  const wd=push({x:bx,y:by,w:GHOSTG,h:GHOSTG,type:"ghostport",p:g.p.id,f:g.f});
+  const wd=push({x:bx,y:by,w:GHOSTG,h:GHOSTG,type:"ghostport",p:g.p.id,dx:g.dx,dy:g.dy});
   const hv=hov(wd);
   ctx.save(); ctx.globalAlpha=hv?0.9:0.45;
   ctx.strokeStyle=C.green; ctx.lineWidth=1.3; ctx.setLineDash([2,2]);
   ctx.strokeRect(bx,by,GHOSTG,GHOSTG);
   ctx.restore();
   TIP(bx,by,GHOSTG,GHOSTG,"NEW PORT",
-    ui.lay ? "Click to place a port here and finish the pipe on it."
-           : "Click to place a port here. A port exists with nothing piped to it until you draw a pipe from it.");
+    "Click to put a port here. A port is where a pipe may be terminated - lay the pipe itself with the PIPE tool.");
 }
 /* ══ AN EXISTING PORT ══
-   One mark PER PORT (never per pipe, never per face) - a port is its own
-   object now, so a face carrying two of them draws two marks side by side
-   instead of one mark claiming to speak for both. Left click starts laying
-   a pipe from here (or finishes one already in flight); right click toggles
-   its mode; held-and-released opens the REMOVE PORT / mode menu
-   (design-bench.js's own ctx registry). */
+   One mark PER PORT, and a port is a CELL: a face carrying two of them draws
+   two marks a cell apart rather than one mark claiming to speak for both.
+   Left click takes it away again; right click held-and-released opens the
+   mode menu (design-bench.js's own ctx registry). */
+const PORTG=CELL-4;
 function drawPortMarks(){
-  // ONE WORD PER (part, face), never one per port sharing it: two ports on
-  // one face carrying the same side (both SUCT, say) would otherwise stack
-  // an identical label on top of itself, close enough to read as one smear.
-  // The box and the press are still drawn per PORT - each is its own place
-  // to click - only the text is deduped.
+  // ONE WORD PER (part, face), never one per port sharing it: two ports on one
+  // face carrying the same side would otherwise stack an identical label on
+  // top of itself. The mark and the press are still per PORT.
   const seenWord={};
+  const owner=pipeMap().cellOwner;
   for(const pid in D.ports){
     const port=D.ports[pid], p=LAY.parts.find(q=>q.id===port.p); if(!p) continue;
-    const [x,y]=portPos(pid), bx=x-PORTG/2, by=y-PORTG/2;
-    const IN=portPath(p,port.f), col=IN ? (IN.a===port.f?C.cyan:C.green) : C.metal;
-    const n=portRunCount(pid);
+    const f=portFaceOf(pid), c=portCell(pid); if(!f||!c) continue;
+    const [x,y]=cellPos(c[0],c[1]), bx=x-PORTG/2, by=y-PORTG/2;
+    const IN=portPath(p,f), col=IN ? (IN.a===f?C.portA:C.portB) : C.metal;
     // A PIPED PORT'S NOZZLE IS DRAWN BY THE RUN (pipeNozzles()), landing on
-    // this exact point. A BARE port has no run to draw it, so it draws its
-    // own here - the same mark, not a placeholder for it - which is what
-    // makes a fresh port read as placed before any pipe reaches it.
-    if(!n) drawNozzle(x,y,port.f==="l"||port.f==="r",1,col);
+    // this exact point. A BARE port draws its own here - the same mark, not a
+    // placeholder for it - so a fresh port reads as placed before any pipe
+    // reaches it. Asked of the CELL the pipe would occupy, never of a run
+    // count, so two connections sharing a port cannot double-draw the joint.
+    const out=[c[0]+DIRV[f][0], c[1]+DIRV[f][1]];
+    const piped=!!owner[out[0]+","+out[1]];
+    if(!piped) drawNozzle(x,y,f==="l"||f==="r",1,col);
     const wd=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid});
-    const laying = ui.lay && ui.lay.pa===pid;
-    if(hov(wd)||laying) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
-    if(laying) frame(bx,by,PORTG,PORTG,C.amber);
+    if(hov(wd)) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
     const word = IN ? (port.m || IN.na) : null;
-    const wk=p.id+port.f+word;
-    if(word && !seenWord[wk]){ seenWord[wk]=1; txt(word,x+8,y+2.5,{size:6.5,color:col,align:"left",sp:.4}); }
-    const nm=partName(p), longWord=IN&&portWord(p,port.f,true);
+    const wk=p.id+f+word;
+    /* A PLATE UNDER THE WORD. It is drawn in the same margin the pipework runs
+       through, so on a dense grid it landed on top of a pipe and read as part
+       of it. The plate is the plant's own ground, not a tint, so the word sits
+       on the board rather than on whatever happened to be behind it. */
+    if(word && !seenWord[wk]){ seenWord[wk]=1;
+      const t={size:6.5,sp:.4}, ww=tw(word,t);
+      fillRect(x+6,y-3.5,ww+4,10,C.well);
+      frame(x+6,y-3.5,ww+4,10,C.edge);
+      txt(word,x+8,y+2.5,{size:6.5,color:col,align:"left",sp:.4}); }
+    const nm=partName(p), longWord=IN&&portWord(p,f,true);
     TIP(bx,by,PORTG,PORTG, (longWord?longWord+" - ":"")+nm,
-      (n? "Carries "+n+" pipe"+(n===1?"":"s")+". " : "Nothing is piped to this port yet. ")+
-      (ui.lay ? "Click to finish the pipe here."
-       : "Click to draw a pipe from here."+(IN?" Right-click to change which side of "+nm+" this is.":"")));
+      (piped? "A pipe is landed on it. " : "Nothing is piped to this port yet. ")+
+      "Click to take it away."+(IN?" Right-click to change which side of "+nm+" this is.":""));
   }
 }
-/* ══ LAYING A PIPE ══
-   ui.lay = {pa, pts} while a pipe is mid-draw: pa is the port it started
-   from, pts the corners placed so far (see ui.js). Drawn as a solid line to
-   the last corner and a dashed preview from there to the hand - the same
-   "proposal, not a pipe yet" dashing the old box-to-box band used. */
-function drawLayPreview(){
-  if(!ui.lay) return;
-  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return;
-  const a=portPos(ui.lay.pa), pts=[a].concat(ui.lay.pts.map(w=>[w.x,w.y]));
-  ctx.save();
-  if(pts.length>1){
-    ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
-    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
-    ctx.strokeStyle=C.amber; ctx.lineWidth=1.5; ctx.stroke();
+/* ══ THE RUN NOW BEING DRAGGED ══
+   The cells the release would stamp, dashed - a proposal, not a pipe yet, the
+   same dashing every other preview on this bench uses. */
+function drawPipePreview(){
+  const d=ui.drag; if(!d || d.type!=="pipedraw") return;
+  ctx.save(); ctx.globalAlpha=0.55;
+  for(const [x,y] of d.cells){
+    const r=grect(x,y,1,1);
+    fillRect(r.x+2,r.y+2,r.w-4,r.h-4,C.amber);
   }
-  // the SNAPPED corner a click would actually drop (laySnap(), core/ui.js) -
-  // never the raw diagonal to the pointer, or the preview would promise a
-  // leg the click cannot draw
-  const last=pts[pts.length-1], next=laySnap(last,ptr);
-  ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(last[0],last[1]); ctx.lineTo(next.x,next.y);
-  ctx.strokeStyle=C.amber; ctx.lineWidth=1.5; ctx.stroke();
   ctx.restore();
 }
 /* ══ WHERE A DRAGGED MACHINE WOULD LAND ══
@@ -1056,13 +1106,6 @@ function partGhost(){
     frame(r.x,r.y,r.w,r.h, ok?C.green:C.red); }
   ctx.restore();
 }
-// Pushed after the component loop, so a mark wins the hit test over the box
-// it sits on. Only where portPath() says there is a side to choose (a pump,
-// a generator, a throttle) does a port carry a mode label at all - the
-// reactor, the pressurizer, a tee and a tank are one node and wear their
-// plain colour with nothing to click FOR beyond starting a pipe.
-const PORTG=9;
-
 /* ══ WHAT A FITTING STILL DRAWS ON THE PIPEWORK ══
    Almost nothing, now that it is a component: the box, the symbol, the name
    and the control strip are all the ordinary component loop's job. What is
@@ -1849,7 +1892,6 @@ function leaderLine(panelEl,railEl){
    canvas never draws under a docked panel. */
 function drawPlant(y0,L,vh,vx,vw){
   PLANT_LM=layoutMetrics(); GY=y0;
-  BANDS = ctlBands(!!L);
   layerTick();                                     // one memo/frame - see layers.js
   /* one clock/frame, and it is the PLANT's - so pause freezes every effect and
      16x runs them sixteen times over. The bench has no plant to take a time
@@ -1884,6 +1926,10 @@ function drawPlant(y0,L,vh,vx,vw){
   // (concentric radii) so a pipe bends rather than folds
   const PC=pipeColours(L), NET=pipeNetwork();
   pipeFieldRefresh(L);          // one solve read per frame, shared by every gauge and both pressure layers
+  /* A CELL THAT NO CONNECTION CLAIMS IS DRAWN, AND DRAWN AS WHAT IT IS. It is
+     pipe on the grid either way; what it is not is a connection, and dashed
+     grey is that said in the picture rather than only in the rail. */
+  pipeLoose(L);
   for(const pass of [0,1]) for(const r of NET){
     if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key,r.k); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter, pinned in tools/audit-geometry.js - see pipeRuns() (pipes.js)
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
@@ -1895,7 +1941,7 @@ function drawPlant(y0,L,vh,vx,vw){
     ctx.stroke();
   }
   ctx.lineJoin="miter";
-  if(!L) pipeLines(NET);        // the line itself is where a waypoint is made
+  if(L) pipeDamage(L);          // the red gap at each broken cell, over the stroke it cuts
   if(L) pipeFlow(L);
   // over the pipes, under the machines - the one seam a layer can paint
   // without landing on a value tag, a control strip or a bypass row, because
@@ -1910,9 +1956,12 @@ function drawPlant(y0,L,vh,vx,vw){
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
     const fit = fitted(p), live = L && fit;
-    const ctl = live ? ctlFor(p,true,S.split) : null;
-    // the strip is a property of the DESIGN: the bench reserves the room and
-    // draws the plinth empty, so nothing jumps in size when you commission
+    /* ══ A CONTROL IS THE MACHINE, NOT A STRIP MOUNTED ON ONE ══
+       So it is DRAWN ON THE BENCH TOO, and what a bench control sets is the
+       STARTING POSITION - where that actuator stands the moment you enter the
+       control room (D.start, benchCell() above). The bench used only to
+       reserve the room and draw an empty plinth. */
+    const ctl = fit ? (live ? ctlFor(p,true,S.split) : ctlBench(ctlFor(p,false,false))) : null;
     const byk = fit ? autoOn(p.id) : null,
           bh  = byk? CTL_H : 0,
           sh  = stripH(p,live), sy = y+h-sh;
@@ -1922,25 +1971,20 @@ function drawPlant(y0,L,vh,vx,vw){
     // the renderer should not rely on combatHit() never targeting one
     const dmgd = L && fit && L.dmgParts.includes(p.id);
     const ink = !fit?"#3c4c47" : dmgd?C.red : on?C.amber : (hov(wd)||drag)?C.bright : C.metal;
-    const plinth = sh>0, py = sy+1-STRIP_PAD, pb = y+h-2;
-    if(plinth) fillRect(x+2,y+2,w-4,h-4,C.panel);
+    /* ONE GROUND FOR EVERY BOX ON THE BOARD, and no second surface on top of
+       it: the plinth is gone, because there is no second OBJECT. A control
+       strip is part of the machine, so it stands on the machine's own panel. */
+    const nameH = h>CELL ? 10 : 0;                 // the top row inside the box, where the name lives
+    if(fit) fillRect(x+2,y+2,w-4,h-4,C.panel);
     if(on) fillRect(x+1,y+1,w-2,h-2,"rgba(240,168,48,.07)");
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
-    if(fit) drawSym(p,x,y,w,h-sh-(plinth?4:0),ink,L);
-    if(plinth) fillRect(x+2,py,w-4,pb-py,C.panelHi);   // tone, not a line, marks the plinth
-    /* The bypass row used to get its own C.well band cut out of the plinth, so
-       that defeating a safety system would not read as just another switch. It
-       read as a black box with a key trapped in it instead, unrelated to the
-       controls above it. The distinction it was buying is already carried by
-       the switch itself - green AUTO against amber BYP, plus a board tile and a
-       lamp - so the band is gone and the row stands on the plinth like every
-       other row on the strip. */
+    if(fit) drawSym(p,x,y+nameH,w,h-sh-nameH,ink,L);
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red);
       // a wrecked machine that is still energised. It dies down as the repair
       // party gets on top of it, so the effect tracks the work, not just the hit
       fxSparks(x+4,y+4,w-8,h-sh-8,fxEase(p.id+":dmg",L.repair&&L.repair.id===p.id?
         1-clamp(L.repair.t/L.repair.need,0,1):1),C.red);
-      const symH=h-sh-(plinth?4:0);   // centred on the SYMBOL, not the whole component
+      const symH=h-sh;              // centred on the SYMBOL, not the whole component
       const busy=L.repair&&L.repair.id===p.id, kw=Math.min(w-16,86), kx=x+(w-kw)/2;
       button(kx,y+symH/2-9,kw,BTN_H,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
              :p.access?"REPAIR":"NO ACCESS",
@@ -1949,28 +1993,33 @@ function drawPlant(y0,L,vh,vx,vw){
     else if(!p.access && p.grp!=="shield" && fit) badge(x+w-9,y+12,C.amber);
     if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
     if(!L && fit && !dmgd){ const wc=warnFor(p.id); if(wc) dot(x+6,y+8,8,wc); }   // bench has no alarm lamp
-    const v0 = L&&fit ? liveValue(p,L) : null, v = (ctl&&p.h<2)? null : v0;
-    const nm = (v0&&!v)? partName(p)+"  "+v0 : partName(p);
-    const tb = plinth ? sy-6 : sy-3;
-    /* Held back to a last pass, below. A name and a value sit OUTSIDE their
-       own box, in the same margin a pipe and its fittings run through, so a
-       glyph landing on one buried the reading it was covering - the relief
-       tank's level went under the very valve that fills it. The reading wins:
-       a fitting is a thing you can find by looking, a number is not. Only the
-       drawing waits; the TIP below still registers in loop order, because
-       findTip() matches backwards and a deferred one would swallow the
-       tooltip of every control mounted on this same box. */
+    const v = L&&fit ? liveValue(p,L) : null;
+    /* THE NAME MOVED INSIDE THE BOX, onto its own top row - it used to sit in
+       the margin above, in the same lane a pipe and its fittings run through,
+       so a glyph landing on one buried it. The LIVE VALUE still waits for the
+       last pass, because a number is the one thing a pipe must not cover. */
+    if(fit && nameH) fitTxt(partName(p),x+4,y+nameH-2,w-8,
+      {size:6.5,sp:.4,color:on?C.amber:C.ink2});
     tags.push(()=>{
-      tag(nm,x+w/2,tb-(v?11:1),6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
-      if(v) tag(v,x+w/2,tb,8,0,dmgd?C.red:liveColor(p,L));
+      if(!nameH) tag(partName(p),x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
+      if(v) tag(v,x+w/2,y+h+9,8,0,dmgd?C.red:liveColor(p,L));
       if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
     });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
     TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
       p.tip+(p.access||p.grp==="shield"?"":"  It is boxed in on every side - nobody could reach it to repair it."));
-    if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+6,sy+i*CTL_H+1,w-12,BTN_H));
-    if(byk && live) bypRow(byk,x+6,y+h-STRIP_PAD-bh+1,w-12,BTN_H);
+    /* A fitting's strip hangs BELOW its one cell, centred on it, because the
+       cell has no room for it; every other machine declares the cells its own
+       controls need and stands them inside its own box. */
+    if(ctl && p.role==="fitting"){
+      const fw=FITSTRIP_W, fx=x+w/2-fw/2;
+      ctl.forEach((row,i)=>ctlStrip(row,fx,y+h+3+i*CTL_H,fw,BTN_H));
+    }
+    else if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+4,sy+i*CTL_H+1,w-8,BTN_H));
+    // ...and the arming switch is a starting position too - that is the RPS
+    // bypass case: commission with protection already defeated if you mean to.
+    if(byk && fit) bypRow(byk,x+4,y+h-STRIP_PAD-bh+1,w-8,BTN_H,!live);
   }
   pipeNozzles(NET);             // the joint, over the shell it lands on
   /* the break plumes go down BEFORE the layer pass, because a plume is behind
@@ -1984,10 +2033,9 @@ function drawPlant(y0,L,vh,vx,vw){
      fraction along a pipe and nothing competes with the waypoint grips or the
      nozzles for the press. */
   if(!L){ partGhost();                  // where a machine would land...
-          pipeGrips(NET);               // ...where a run runs...
           drawPortMarks();              // ...every port already placed...
           drawGhostPort();              // ...where the next one would go...
-          drawLayPreview(); }           // ...and the pipe now being drawn
+          drawPipePreview(); }          // ...and the run now being dragged
   pipeFitMarks(L,NET);
   for(const t of tags) t();     // every name and value, over the pipework
   viewOn=false; ctx.restore();

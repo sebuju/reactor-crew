@@ -438,6 +438,13 @@ function crBuild(){
   // one switch per LAYERS entry, built once - see layerSwitches() in
   // render/layers.js. A layer manages its own "on" state on click, so there
   // is nothing here for crSync() to keep in step with every frame.
+  /* EVERY CONNECTION THE PLANT WAS COMMISSIONED WITH, and whether it is still
+     carrying anything. Off P.net.byKey - the FROZEN commissioning snapshot, not
+     a live re-trace - so this lists the plant that is running rather than the
+     drawing on the bench. */
+  const cnxD=KIT.el("details","cr-op"); const cnxS=KIT.el("summary"); cnxS.textContent="PIPING";
+  const cnxBody=KIT.el("div","cr-cnx"); cnxD.append(cnxS,cnxBody); ops.appendChild(cnxD);
+
   const lyrD=KIT.el("details","cr-op"); const lyrS=KIT.el("summary"); lyrS.textContent="LAYERS";
   const lyrBody=KIT.el("div","cr-lyr"); lyrD.append(lyrS,lyrBody); ops.appendChild(lyrD);
   layerSwitches(lyrBody);
@@ -446,8 +453,28 @@ function crBuild(){
 
   mount.appendChild(root);
   return {root,vitals,vitalRows,alarms,banner,rail,
-    trend:{box:trendBox,cvs:{}},logList,dmgList,faults,compRail,panels:null,Pfit:null,
+    trend:{box:trendBox,cvs:{}},logList,dmgList,faults,cnx:cnxBody,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
+}
+/* ONE ROW PER COMMISSIONED CONNECTION: what it joins, what it is carrying, and
+   whether a hit anywhere along it has cut it. BROKEN is asked of the CELLS, so
+   the panel and the solve can never disagree about what broken means -
+   pipeExtraLen() (pipenet.js) reads exactly the same list. */
+function crCnxSync(body){
+  if(!P||!P.net||!S) return;
+  const keys=Object.keys(P.net.byKey);
+  const rows=keys.map(k=>{ const r=P.net.byKey[k];
+    return {k, name:pipeName(r), len:r.L, cut:pipeExtraLen(S,r.cells)===Infinity};
+  });
+  const sig=rows.map(r=>r.k+(r.cut?"!":"")).join("|");
+  if(body._sig===sig) return;
+  body._sig=sig; body.innerHTML="";
+  for(const r of rows){
+    const row=KIT.el("div","cr-cnx-row"+(r.cut?" cut":""));
+    const n=KIT.el("span","cr-cnx-name"); n.textContent=r.name;
+    const s=KIT.el("span","cr-cnx-state"); s.textContent=r.cut?"SEVERED":r.len.toFixed(1)+" m";
+    row.append(n,s); body.appendChild(row);
+  }
 }
 function crSync(){
   if(!CR) return;
@@ -457,6 +484,7 @@ function crSync(){
   crLogSync(CR.logList);
   crDamageSync(CR.dmgList);
   crFaultsSync(CR.faults);
+  crCnxSync(CR.cnx);
   if(CR.Pfit!==P){
     if(CR.watch) CR.watch.free();
     CR.watch=railWatch(CR.rail);
@@ -495,8 +523,16 @@ function drawOperate(){
   const railBox=CR? hostRect(CR.rail) : null;
   const vy = stripBox ? stripBox.y+stripBox.h : TOPBAR_H;
   const vh=Math.max(120,H-vy);
-  const vw = railBox ? Math.max(200, railBox.x) : W;
-  drawPlant(vy,S,vh,0,vw);
+  /* THE VITALS PANEL IS OPAQUE, SO THE PLANT MAY NOT BE DRAWN UNDER IT. It was
+     measured on the right (the component rail) and not on the left, which was
+     survivable only while nothing tall stood in the top-left corner - the rod
+     drives are twelve cells tall now, so the whole rod strip sat behind the
+     panel, invisible AND unclickable. Measured, never reserved, the same rule
+     the strip above already follows. */
+  const vitBox = CR? hostRect(CR.vitals) : null;
+  const vx = vitBox ? vitBox.x+vitBox.w : 0;
+  const vw = (railBox ? Math.max(200, railBox.x) : W) - vx;
+  drawPlant(vy,S,vh,vx,vw);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }
 }

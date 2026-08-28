@@ -8,10 +8,6 @@
    hosts needs it to tell its own per-host state apart. */
 const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9},ptrHost:null,host:null};
 function hostScope(el){ ui.host=el; }
-const WPSNAP=8;
-// the gutter the rest of the plant is measured in, so two waypoints placed by
-// hand on one line land on one line
-const wpSnap=v=>Math.round(v/WPSNAP)*WPSNAP;
 
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
 let viewOn=false;                       // are widgets being pushed through it?
@@ -163,7 +159,7 @@ function drawCtxMenu(){
    D.name is not declared in design.js (which this file does not own) - it is
    created lazily, here, by the one writer. Keyed by part id, so a rename
    rides designSig() (JSON.stringify(D)+...), the recording head and the save
-   format for free - the same trick D.fittings and D.run already use - and the
+   format for free - the same trick D.fittings and D.tanks already use - and the
    stock plant's signature does not move until a rename actually happens:
    nothing here writes D.name until setPartName() is handed a real string.
    partName() is the ONE reader - audit-dom.js source-scans the files that
@@ -184,39 +180,22 @@ const hitAt=p=>{
     if(w.host===ui.ptrHost&&inside(w,ptIn(w,p))) return w; }
   return null;
 };
-function wpDrop(rid,pt){
-  const e0=D.run[rid], L=e0&&e0.wp; if(!L) return;
-  const i=L.indexOf(pt); if(i<0) return;
-  L.splice(i,1);
-  if(!L.length) delete e0.wp;
-}
-// the pipe's own end, right now - the port it started from, or the last
-// corner it has picked up since. [x,y], to match portPos()'s own shape.
-function layLastPt(){
-  const n=ui.lay.pts.length;
-  return n ? [ui.lay.pts[n-1].x,ui.lay.pts[n-1].y] : portPos(ui.lay.pa);
-}
-// WHICH AXIS LEADS: the raw click only ever picks that, never the exact
-// point - the corner keeps whichever of `last`'s coordinates the click did
-// NOT move further from, so the new leg is horizontal or vertical, never
-// both.
-function laySnap(last,click){
-  const dx=Math.abs(click.x-last[0]), dy=Math.abs(click.y-last[1]);
-  return dx>=dy ? {x:wpSnap(click.x),y:last[1]} : {x:last[0],y:wpSnap(click.y)};
-}
-// THE LAST LEG ARRIVES SQUARE TO THE TARGET PORT'S FACE, the same standing
-// every other leg already has - a finish is a click on a PORT, not on a
-// point the hand chose, so nothing upstream had the chance to square it.
-// One elbow, inserted only if the last point and the target do not already
-// share an axis; `vb` (arriving vertically, a t/b face) decides which
-// coordinate the elbow borrows from the target and which from the last
-// point, so the FINAL leg lands on the axis that face expects.
-function layFinish(pts,targetPos,vb){
-  const last = pts.length ? [pts[pts.length-1].x,pts[pts.length-1].y] : layLastPt();
-  if(Math.abs(last[0]-targetPos[0])<0.5 || Math.abs(last[1]-targetPos[1])<0.5) return pts;
-  const elbow = vb ? {x:targetPos[0],y:last[1]} : {x:last[0],y:targetPos[1]};
-  return pts.concat([elbow]);
-}
+/* ══ THE TOOL TABLE ══
+   One module-level object, modelled on LATPEN (design-bench.js), and the one
+   thing a bench gesture asks before it does anything else. Only one tool is
+   ever active; more will follow, so the table is the extension point rather
+   than a boolean somebody has to remember to clear. */
+const TOOL={active:"select"};
+const TOOLS=[
+  {id:"select", label:"SELECT",
+   tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to put a port there, and click the port again to take it away."},
+  {id:"pipe", label:"PIPE",
+   tip:"Drag to lay a run of pipe cells. It follows the drag, turning where the drag turns. Right-click a cell to take it out; roll the wheel over one to rotate it."},
+];
+// which cell a plant-space point lands on, in grid units - what every tool
+// gesture is addressed at, since a tool paints CELLS and never pixels
+const cellAt=pt=>[Math.floor((pt.x-GX)/CELL), rowAt(pt.y)];
+const cellSame=(a,b)=>!!a&&!!b&&a[0]===b[0]&&a[1]===b[1];
 
 let touchTip=null, isTouch=false;
 // g is an optional band(): the scale the value in this region lives on, so
@@ -454,13 +433,14 @@ function uiDown(e){
   // pans, right pressed-and-released without moving opens the ADD/REMOVE menu
   // instead (see pointerup)
   if(e.button===2){
-    // RIGHT CLICK WHILE LAYING drops the last corner, or cancels outright
-    // once none are left - takes priority over anything under the hand.
-    if(ui.lay){ if(ui.lay.pts.length) ui.lay.pts.pop(); else ui.lay=null; return; }
-    // a waypoint is taken out where it lives, not through the deck menu: the
-    // menu is addressed at a CELL and a waypoint is a point on a run
     const w=hitAt(p);
-    if(w&&w.type==="pipewp"&&w.pt){ wpDrop(w.rid,w.pt); return; }
+    /* RIGHT CLICK WITH THE PIPE TOOL LIFTS A CELL, where it lives rather than
+       through the deck menu - the menu is addressed at a cell and this already
+       is. A cell nothing owns is simply nothing to lift. */
+    if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
+      const c=cellAt(vPt(p)), k=c[0]+","+c[1];
+      if(D.pipes[k]){ delete D.pipes[k]; buildLayout(); return; }
+    }
     /* A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU (REMOVE PORT / mode rows,
        resolved by design-bench.js's own ctx registry) - there is no quick-tap
        toggle any more, so a right click never silently flips the mode. */
@@ -473,32 +453,14 @@ function uiDown(e){
   if(isTouch){ const t=findTip(p);
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
   const w=hitAt(p);
-  /* ══ LAYING A PIPE INTERCEPTS EVERY CLICK ══
-     Whatever is under the hand, a click while ui.lay is live is about the
-     pipe in flight, never about the thing it happens to land on - so this is
-     asked before the ordinary per-widget dispatch below, not folded into it.
-     An EMPTY port or a ghost FINISHES the pipe (a ghost mints its port
-     first); anything else drops a corner at the click point. Starting a run
-     from and finishing it on the SAME port is refused - that is a pipe with
-     one end, not a run.
-     A CORNER IS AXIS-ALIGNED TO WHAT CAME BEFORE IT, ALWAYS - the whole
-     plant is drawn square (plen() sums |dx|+|dy|, every stroke joins at a
-     right angle) and a free-floating click would draw a diagonal leg that
-     costs less pipe than it is, in a straight line nothing else on the board
-     draws. laySnap() below is what buys that: the raw click only ever picks
-     WHICH axis leads, never the exact point, so every leg this hand draws is
-     square by construction and never merely by luck. */
-  if(ui.lay){
-    const q0=vIn(p)?vPt(p):p;
-    if(w&&w.type==="port"&&w.pid!==ui.lay.pa&&portRunCount(w.pid)===0){
-      const B=D.ports[w.pid];
-      addRunPorts(ui.lay.pa,w.pid,undefined,layFinish(ui.lay.pts,portPos(w.pid),B.f==="t"||B.f==="b"));
-      ui.lay=null; return; }
-    if(w&&w.type==="ghostport"){
-      const pid=addPort(w.p,w.f);
-      if(pid) addRunPorts(ui.lay.pa,pid,undefined,layFinish(ui.lay.pts,portPos(pid),w.f==="t"||w.f==="b"));
-      ui.lay=null; return; }
-    ui.lay.pts.push(laySnap(layLastPt(),q0));
+  /* ══ A TOOL PRE-EMPTS EVERY CLICK ══
+     With the pipe tool up, a press on the plant is about the pipe, never
+     about whatever box it happens to land on - so this is asked before the
+     ordinary per-widget dispatch below. Nothing is committed until the
+     release, the same convention the part drag already keeps. */
+  if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
+    const c=cellAt(vPt(p));
+    ui.drag={type:"pipedraw", cells:[c], v:1};
     return;
   }
   // nothing under the pointer: a click on bare deck deselects, rather than
@@ -524,24 +486,12 @@ function uiDown(e){
       w.gx = q.x; w.gx0 = q.x; w.moved = false;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
-    // LEFT CLICK A PORT STARTS LAYING A PIPE FROM IT. A port mark is pushed
-    // after its own box, so it takes the press before a part drag can.
-    else if(w.type==="port"){ ui.lay={pa:w.pid,pts:[]}; }
-    // LEFT CLICK THE GHOST PLACES A BARE PORT - no pipe follows unless the
-    // next click starts one, the same as any other existing port.
-    else if(w.type==="ghostport"){ addPort(w.p,w.f); }
-    // the drag holds the stored waypoint OBJECT, never its index - the list
-    // is re-sorted by distance on every read, so an index would renumber
-    // under the hand
-    else if(w.type==="pipewp"){
-      const e0=D.run[w.rid]; if(!e0) return;
-      let pt=w.pt;
-      // no pt = the press landed on the LINE, which pins a waypoint where the
-      // hand is - but only on a double-click, or every brush past a pipe
-      // would bend it
-      if(!pt){ if(!e.dbl) return;
-        pt={x:wpSnap(q.x),y:wpSnap(q.y)}; (e0.wp||(e0.wp=[])).push(pt); }
-      ui.drag={type:"pipewp",pt,sx:q.x,sy:q.y,px:pt.x,py:pt.y,v:w.v}; }
+    // A PORT IS A TOGGLE: click the mark to take it away again. Its mark is
+    // pushed after its own box, so it takes the press before a part drag can.
+    else if(w.type==="port"){ removePort(w.pid); }
+    // ...and the ghost places one. There is nothing to follow it with: a pipe
+    // is laid with the pipe tool, cell by cell.
+    else if(w.type==="ghostport"){ addPortAt(w.p,w.dx,w.dy); buildLayout(); }
   else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
 }
 /* WHERE THE GESTURE IS, ASKED ONCE. A part drag is a MOVE now and only a
@@ -552,12 +502,8 @@ function uiDown(e){
    been measured already. */
 function partDragTo(d,q){
   const g=gridPt([q.x,q.y]);
-  /* THE PART'S TOP-LEFT UNDER THE HAND, SNAPPED, AND ALL OF IT IN CELLS. It
-     was a CELL/2 pixel lead against rowAt(), which is only a half-cell where
-     every row is CELL tall - and BANDS is set on the bench too, because the
-     bench reserves each strip's room. Rows there run 46..203 px, so leaving
-     one downward cost 23+band px and upward 23, and a part dropped on free
-     deck landed a row off. gridPt() normalises by each row's own height. */
+  // THE PART'S TOP-LEFT UNDER THE HAND, SNAPPED, AND ALL OF IT IN CELLS - so
+  // the same spot stays under the pointer whatever the part's size
   d.gx=Math.round(g.x-d.ox); d.gy=Math.round(g.y-d.oy);
 }
 function uiMove(e){
@@ -570,8 +516,17 @@ function uiMove(e){
        and - now that the same drag can end as a pipe - would have walked the
        part across the board on the way to the machine you were aiming at. */
     if(d.type==="part") partDragTo(d,q);
-    else if(d.type==="pipewp"){
-      d.pt.x=wpSnap(d.px+(q.x-d.sx)); d.pt.y=wpSnap(d.py+(q.y-d.sy)); }
+    /* THE RUN FOLLOWS THE DRAG, cell by cell: every cell between the last one
+       committed and the pointer joins the list, walking one axis at a time, so
+       the pipe turns where the drag turns. Only the list is built here -
+       pipeLay() runs on release, because nothing is committed until then. */
+    else if(d.type==="pipedraw"){
+      const c=cellAt(q), last=d.cells[d.cells.length-1];
+      if(!cellSame(c,last) && c[0]>=0 && c[1]>=0 && c[0]<GW && c[1]<GH){
+        let [x,y]=last;
+        while(x!==c[0]){ x+=Math.sign(c[0]-x); d.cells.push([x,y]); }
+        while(y!==c[1]){ y+=Math.sign(c[1]-y); d.cells.push([x,y]); }
+      } }
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
       // integrate rather than re-derive, so moving away from the track
@@ -613,6 +568,16 @@ function uiUp(e){
      position - it is just called once, here, instead of at pointer rate. A
      drop that resolves to nothing (off the grid, on top of another machine)
      is a cancel, not an error, so there is no refusal to report. */
+  /* THE RUN COMMITS ON RELEASE. `from` and `to` are the cells either side of
+     the drag, so the first and last cell open toward where the hand started
+     and stopped rather than being left as a stub with one end. */
+  if(d&&d.type==="pipedraw"){
+    const c=d.cells;
+    if(c.length===1) pipeLay(c, [c[0][0]-1,c[0][1]], [c[0][0]+1,c[0][1]]);
+    else pipeLay(c, [2*c[0][0]-c[1][0], 2*c[0][1]-c[1][1]],
+                    [2*c[c.length-1][0]-c[c.length-2][0], 2*c[c.length-1][1]-c[c.length-2][1]]);
+    buildLayout();
+  }
   if(d&&d.type==="part"){
     const p=uiPt(e.currentTarget||cv,e);
     // ...but only off a point the plant actually covers. The press took the
@@ -689,6 +654,13 @@ cv.addEventListener("wheel",e=>{
   if(screen==="scenario"){ e.preventDefault(); scnWheel(local(e),e.deltaY); return; }
   const p=local(e);
   e.preventDefault();
+  /* THE WHEEL ROTATES A PIPE CELL, and only there: with the pipe tool up and a
+     cell actually under the pointer. Everywhere else it still zooms, which is
+     what it does on every other screen and in every other tool. */
+  if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
+    const c=cellAt(vPt(p)), k=c[0]+","+c[1], cell=D.pipes[k];
+    if(cell){ cell.r=(cell.r+(e.deltaY>0?1:3))%4; buildLayout(); return; }
+  }
   // anywhere on the canvas, not just over the plant - the page doesn't
   // scroll any more, so there's nothing else for the wheel to do. Holds the
   // plant point under the pointer still (or the middle, off-plant).
