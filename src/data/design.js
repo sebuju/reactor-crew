@@ -177,7 +177,14 @@ const SGT=[
    exactly 1.0, so every trip and coefficient calibrated against that plant is
    untouched. Only ONCE-THROUGH moves, 0.68 -> 0.60, and it moves onto a figure
    the design already states in tonnes instead of a fitted multiplier. */
-const sgInertiaK = () => SGT[D.sg].mass / SGT[0].mass;
+/* The MEAN over the generators drawn, never the sum: both readers are
+   plant-wide flywheel terms over the whole primary, so a four-generator plant
+   reading 4.0 would re-price every trip. The WATER half is already per
+   instance in hotMass(), so nothing is charged twice. With no generators
+   drawn - which the bench must answer - it falls back to the scalar row. */
+const sgInertiaK = () => { let n=0,m=0;
+  for(const p of LAY.parts) if(p.role==="sg"){ m+=sgRowOf(p.id).mass; n++; }
+  return (n?m/n:SGT[D.sg].mass) / SGT[0].mass; };
 const CONT=[
  {name:"NONE",rel:1.0,mass:0,note:"No containment. Any fuel damage releases directly to the environment, and to your crew."},
  {name:"SUPPRESSION POOL",rel:.25,mass:40,note:"Compact pool that condenses released steam. Holds most of a release, and can be overwhelmed by a large break."},
@@ -221,7 +228,11 @@ const RODX0=.35;
    A generator, a pump or a spare turbine is a PLACED part wired by hand - it
    gets ports and cells like anything else, and pipeNetwork() skips a
    connection whose part is not on the grid this frame. */
-const D={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
+/* zoneFuel[z] is the FUEL row the ZONE pen's zone z is loaded with; D.fuel is
+   zone 0's fallback, so an unzoned core is every slot in zone 0 and reads
+   exactly as it always did. `??`, never `||`, or a legitimate zone 0 fails. */
+const zoneFuelOf = z => D.zoneFuel[z] ?? D.fuel;
+const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
          /* How far the temperature controller may walk the bank on its own,
@@ -233,6 +244,10 @@ const D={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          arLo:0.10, arHi:0.70,
          cont:1,contFit:true,catcher:false,bkp:1,
          turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fittings:{},
+         /* PER-INSTANCE SIZES, keyed by part id, exactly as pumpSize is. The
+            scalar above each of them is the FALLBACK, so a design that never
+            touched a box commissions bit-identically. */
+         turbSize:{},condSize:{},sgType:{},ihxSize:{},
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
             runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
             through the same addTank()/addFitting() calls and the same pipe tool the bench
@@ -266,18 +281,27 @@ const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : f
    previews it and commission() bakes it; two formulas would drift apart.
    The multiplier is centred on 1.0 so the default turbine delivers exactly the
    architecture's own figure. */
-/* COUNTED. D.turb sizes ONE machine; how many of them there are is read off
+/* COUNTED, and each machine carries its own size (turbSizeOf(), layout.js -
+   D.turb is only what an untouched box falls back to); how many there are is read off
    the grid (turbCount(), layout.js), so a second turbine buys a second
    machine's swallow rather than nothing at all - and no turbine is exactly
    zero, which is what the bench warning is about. Efficiency itself is a
    property of the STEAM, not of how many machines take it, so only the
    ceilings below are counted. */
-const grossEff  = () => COOLANT[D.cool].eff * (0.92 + 0.16*D.turb);
+/* SWALLOW-WEIGHTED, because efficiency is a property of the STEAM and the
+   steam is split by what each machine can take. A big turbine swallows
+   proportionally more of it and so carries proportionally more of the
+   efficiency; a plain mean would let one tiny machine drag a big one down for
+   free. Uniform sizes collapse to today's value exactly. */
+const grossEff  = () => { let w=0,e=0;
+  for(const p of LAY.parts) if(p.role==="turb"){
+    const sz=turbSizeOf(p.id), k=turbSwallow(sz); w+=k; e+=k*(0.92+0.16*sz); }
+  return COOLANT[D.cool].eff * (w>0 ? e/w : 0.92+0.16*D.turb); };
 /* How much steam the turbine can swallow, and how much the condenser can turn
    back into water. They are separate on purpose: overload past the condenser and
    the output is there but the backpressure eats it. */
-const loadCeil  = () => turbCount() * (1.05 + 0.40*D.turb);
-const condCeil  = () => condCount() * (0.85 + 0.35*D.condCap);
+const loadCeil  = () => totalTurbSwallow();
+const condCeil  = () => totalCondDuty();
 /* When the pair is mismatched enough to matter. A condenser is normally sized for
    about full load and a brief overload is bought with backpressure, so a gap is
    not a fault - only a gap wide enough to cost roughly 15% of output is. One
@@ -314,7 +338,10 @@ const modTherm = mr => mr/(mr+MOD_HALF);
 const critK = mth => Math.min(1,(mth/(mth+CRIT_H))*((CRIT_REF+CRIT_H)/CRIT_REF));
 
 function derived(){
-  const a=COOLANT[D.cool],f=FUEL[D.fuel],rf=REFL[D.refl];
+  /* fuelBlend() (lattice.js) is the loading pattern collapsed into one row.
+     d.f is exported wholesale, so every downstream reader of beta, excess,
+     densK, condK, mass and tdmg follows from this one substitution. */
+  const a=COOLANT[D.cool],f=fuelBlend(),rf=REFL[D.refl];
   const dens=a.dens*f.densK*(1.15-0.15*D.pitch);
   const coreMass=D.power/dens*22*(0.8+0.2*D.hd);
   /* latMass() replaces two table entries that used to stand in for drawn
@@ -332,23 +359,23 @@ function derived(){
   /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
      layout.js - sums pumpCap() over every "pump"+ part, static and placed
      alike), replacing the old flat PUMPS[D.pumps] tier. Every generator on
-     the grid costs SGT[D.sg].mass of its own (sgCount(), layout.js) - the
+     the grid costs its OWN type's steel (totalSgMass(), layout.js) - the
      old D.loops*34 flat lump priced neither the pump (totalPumpCap() already
-     does) nor the generator (SGT[D.sg].mass was only ever charged once for
-     the whole plant); a 4-loop plant used to carry one generator's steel.
+     does) nor the generator (one generator's steel was only ever charged once
+     for the whole plant); a 4-loop plant used to carry one generator's steel.
      fittingMass() charges per fitting INSTANCE off its own bore, the same
      way tankMass() charges per tank - a spool piece and a valve body, so a
      tee is not free redundancy and a full-bore one is not free either. */
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
-    +totalPumpCap()*PUMP_MASS+sgCount()*SGT[D.sg].mass+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
+    +totalPumpCap()*PUMP_MASS+totalSgMass()+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
     +coreMass + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
     /* Every term here names a BOX on the grid. tankMass() charges per tank
        INSTANCE, off its own vol, so four tanks cost four tanks and there is
        no flag anywhere pricing a system with nothing drawn behind it. */
     + partMass("catcher") + tankMass() + fittingMass()
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
-    + (D.autorod?26:0) + turbCount()*D.turb*50 + condCount()*D.condCap*40
-    + ihxCount()*IHX_MASS
+    + (D.autorod?26:0) + totalTurbMass() + totalCondMass()
+    + totalIhxMass()
     + layMass + latMass();
   /* MEASURED, not bought. The pitch correction the old line carried
      (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already

@@ -29,7 +29,7 @@ function commission(){
      noise:CHAN[D.chan].noise, id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:D.pzr*L.pzrK,
-     flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*D.condCap,
+     flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*condSizeMean(),
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi,
      catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
      fittings:JSON.parse(JSON.stringify(D.fittings)),
@@ -917,7 +917,10 @@ const UA_FLOW=0.8;
    capacity - and the reason a second stage is also a second flywheel. */
 const IHX_UA=2.5;
 const IHX_HOLD=90;        // t of intermediate coolant
-const ihxHeatCap=()=>IHX_HOLD*1000*CP_W + IHX_MASS*1000*CP_STEEL;
+/* A bigger exchanger is a bigger flywheel as well as a bigger conductance, so
+   the size scales the coolant it holds and the steel round it together. */
+const ihxHeatCap=id=>{ const k=ihxCap(ihxSizeOf(id));
+  return k*IHX_HOLD*1000*CP_W + k*IHX_MASS*1000*CP_STEEL; };
 const FEED_TAU=30;        // s, how fast feedwater walks a level error out
 /* THE FEED REGULATING VALVE, one generator's own. FREG_RATE is how fast it
    strokes, in MPa of back-pressure per second at full error - a valve, not an
@@ -951,7 +954,7 @@ const HOT_DUMP=1.6;
    Re-derive: LVL_K = 0.9/(100*BETA_W). A real PWR is nearer 7.5. */
 const LVL_K = 0.9/(100*BETA_W);
 /* Kilograms of secondary water at 100 % level in ONE generator. */
-const sgMass=()=>SGT[D.sg].water*1000;
+const sgMassOf=id=>sgRowOf(id).water*1000;
 /* Rated steam for the WHOLE plant, kg/s - the sizing figure every secondary
    rate is a fraction of. */
 const ratedSteam=()=>P.rated*1000/H_FG;
@@ -995,7 +998,9 @@ const loopKg=()=>P.rated*1000/(CP_W*CORE_DT0)*LOOP_TRANSIT;
    are the yardstick - a condenser hotwell holds roughly what the generators
    it feeds do - so this needs no constant of its own and follows the
    generator type the player actually bought. */
-const hotMass=()=>Math.max(1, sgCount()*SGT[D.sg].water*1000);
+const hotMass=()=>{ let m=0;
+  for(const id of sgIds()) m+=sgRowOf(id).water*1000;
+  return Math.max(1,m); };
 /* Every generator on the plant, by id, in LAY order. s.sglBy is keyed on
    these and so is every reader - a level belongs to a machine, not to the
    plant, which is the whole of the per-generator half of Stage 6a. */
@@ -1027,8 +1032,8 @@ const sgHot=(s,id)=>{ const h=ihxOf(id); return h ? ihxTemp(s,h) : s.Tavg; };
    bought, which is exactly what the barrier is. */
 const sgActive = id => !ihxOf(id);
 /* The pot's heat capacity: the water actually in it plus the steel round it. */
-const sgHeatCap=(s,id)=>SGT[D.sg].water*1000*(sgLvl(s,id)/100)*CP_W
-                      + SGT[D.sg].mass*1000*CP_STEEL;
+const sgHeatCap=(s,id)=>sgRowOf(id).water*1000*(sgLvl(s,id)/100)*CP_W
+                      + sgRowOf(id).mass*1000*CP_STEEL;
 /* ONE generator's level as a number, for a reader that wants to print it.
    Defaults to SGL_SET rather than 0 for a generator with no entry yet - a
    bench with no sim running draws a half-full kettle, not an empty one. */
@@ -1826,11 +1831,11 @@ function step(dt){
   for(const id of ihxIds()){
     const served = ihxSgs(id); if(!served.length) continue;
     const fl = Math.max((ihxFl[id]||0)/served.length, 0.02);
-    const qIn = P.ihxUA*served.length*Math.pow(fl,UA_FLOW)*filmK
+    const qIn = P.ihxUA*ihxCap(ihxSizeOf(id))*served.length*Math.pow(fl,UA_FLOW)*filmK
               * Math.max(0, s.Tavg - ihxTemp(s,id));
     let qOut = 0; for(const g of served) qOut += sgQBy[g]||0;
     if(s.ihxTBy[id]===undefined) s.ihxTBy[id]=s.Tavg;
-    s.ihxTBy[id] = clamp(s.ihxTBy[id] + (qIn-qOut)/ihxHeatCap()*dt, P.Tmin, P.Tmax);
+    s.ihxTBy[id] = clamp(s.ihxTBy[id] + (qIn-qOut)/ihxHeatCap(id)*dt, P.Tmin, P.Tmax);
     s.ihxQBy[id] = qIn; qTot += qIn;
   }
   const removal = qTot/(P.rated*1000);
@@ -2123,7 +2128,7 @@ function step(dt){
      REFILLED, never rebuilt, the same rule s.spillBy and s.sgtrBy carry: a
      renderer holds this object across frames, so a fresh one each tick would
      leave the mimic drawing a generator that is no longer on the plant. */
-  const M = sgMass(), ids = sgIds();
+  const ids = sgIds();
   for(const id in s.sglBy) if(!sgW.hasOwnProperty(id)) delete s.sglBy[id];
   for(const id in s.fregBy) if(!sgW.hasOwnProperty(id)) delete s.fregBy[id];
   /* ── WHERE FEEDWATER COMES FROM ──
@@ -2204,7 +2209,11 @@ function step(dt){
   for(const id in s.steamTo)  delete s.steamTo[id];
   for(const id in s.steamWk)  delete s.steamWk[id];
   for(const id in s.sgVentBy) delete s.sgVentBy[id];
-  if(M > 0) for(const id of ids){
+  if(ids.length) for(const id of ids){
+    /* THIS MACHINE'S OWN SECONDARY WATER. Hoisted out of the loop it made a
+       mixed fleet integrate every level against the first machine's charge -
+       the once-through unit would never have run dry. */
+    const M = sgMassOf(id); if(M<=0) continue;
     if(s.sglBy[id]===undefined) s.sglBy[id]=SGL_SET;                 // a generator placed mid-run starts full
     if(s.sgTBy[id]===undefined) s.sgTBy[id]=tsatSec(secPTarget(s,id));
     if(s.sgBurst[id]===undefined) s.sgBurst[id]=false;

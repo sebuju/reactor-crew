@@ -275,6 +275,41 @@ const sgCount=()=>LAY.parts.filter(p=>p.role==="sg").length;
    standing a spare pump and a spare generator already have. */
 const turbCount=()=>LAY.parts.filter(p=>p.role==="turb").length;
 const condCount=()=>LAY.parts.filter(p=>p.role==="cond").length;
+/* ══════════ AND EVERY ONE OF THEM IS ITS OWN MACHINE ══════════
+   The same move D.pumpSize made, three more times: a turbine, a condenser and
+   a generator are PLACED parts, so a plant with two of them was two copies of
+   one decision. The scalar knob survives as the fallback (?? and never ||, or
+   a legitimately zero size becomes the default), so an untouched design and
+   every preset commission bit-identically. */
+const turbSizeOf=id=>D.turbSize[id]??D.turb;
+const turbSwallow=size=>1.05+0.40*size;
+const TURB_MASS=50;                    // t, at size 1
+const totalTurbSwallow=()=>{ let c=0;
+  for(const p of LAY.parts) if(p.role==="turb") c+=turbSwallow(turbSizeOf(p.id));
+  return c; };
+const totalTurbMass=()=>{ let m=0;
+  for(const p of LAY.parts) if(p.role==="turb") m+=turbSizeOf(p.id)*TURB_MASS;
+  return m; };
+const condSizeOf=id=>D.condSize[id]??D.condCap;
+const condDuty=size=>0.85+0.35*size;
+const COND_MASS=40;                    // t, at size 1
+const totalCondDuty=()=>{ let c=0;
+  for(const p of LAY.parts) if(p.role==="cond") c+=condDuty(condSizeOf(p.id));
+  return c; };
+const totalCondMass=()=>{ let m=0;
+  for(const p of LAY.parts) if(p.role==="cond") m+=condSizeOf(p.id)*COND_MASS;
+  return m; };
+/* The dump ceiling is count-INDEPENDENT today (P.bypass, step.js), so it takes
+   the mean and not the sum; P.condUA reads the sum, so rejection does scale
+   with count. That asymmetry is the existing model and is not changed here. */
+const condSizeMean=()=>{ let n=0,c=0;
+  for(const p of LAY.parts) if(p.role==="cond"){ c+=condSizeOf(p.id); n++; }
+  return n?c/n:D.condCap; };
+const sgTypeOf=id=>D.sgType[id]??D.sg;
+const sgRowOf=id=>SGT[sgTypeOf(id)];
+const totalSgMass=()=>{ let m=0;
+  for(const p of LAY.parts) if(p.role==="sg") m+=sgRowOf(p.id).mass;
+  return m; };
 /* WHAT SHARE OF THEM IS STILL WORKING. mwE() used to ask
    s.dmgParts.includes("turb") - a NAME test, and with two turbines a hit on
    one would have zeroed the plant's whole output. A share, so losing one of
@@ -609,6 +644,15 @@ const loopOf = id => { const v=loopMap().partLoop[id]; return v===undefined?null
 const ihxIds=()=>LAY.parts.filter(p=>p.role==="ihx").map(p=>p.id);
 const ihxCount=()=>ihxIds().length;
 const IHX_MASS=95;                     // t, the exchanger and the intermediate loop behind it
+/* HOW BIG THIS EXCHANGER IS. Mirrors pumpCap() deliberately, so the default
+   0.5 is exactly 1.0 and a plant that never touched the slider is unmoved.
+   The size is a multiplier on the INSTANCE - P.ihxUA is still priced off
+   P.sgUA, so the second stage still has no anchor of its own. */
+const ihxSizeOf=id=>D.ihxSize[id]??0.5;
+const ihxCap=size=>0.7+0.6*size;
+const totalIhxMass=()=>{ let m=0;
+  for(const p of LAY.parts) if(p.role==="ihx") m+=ihxCap(ihxSizeOf(p.id))*IHX_MASS;
+  return m; };
 /* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
    exchanger feeds. Both are the LOOP, asked of loopMap() and never of a name.
    No exchanger and the generator is heated by the core's own coolant, which is
