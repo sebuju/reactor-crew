@@ -371,7 +371,7 @@ for(const f of VIEW_FILES){
    one place allowed to ask, so every solve entry point is banned from the
    layer files outright and allowed in pipes.js only inside that function. */
 const SOLVER_NAMES=['netPressures','netDrops','netField','netFlowK',
-                   'netCoreFracOf','netFactored','netSolve','netSubst'];
+                   'netCoreFracOf','netFactored','netSolve','netSubst','netSubstFree'];
 /* Comments stripped first, or the sentence explaining WHY a layer must not
    solve would itself trip the check that says so. */
 const blank=t=>t.replace(/[^\n]/g,' ');   // same length, same lines, no content

@@ -48,7 +48,8 @@ const NET_EPS = 1e-9;
 // has to know that so it can print nothing instead. Shut a valve in the steam
 // line and the turbine inlet is exactly this case - measured, it read 15.5 MPa
 // on a pipe full of steam, which is a plausible-looking wrong number and the
-// worst kind. Index is node index; allocated once per factorisation.
+// worst kind. Index is MATRIX row, which a compacting caller (netFactored,
+// pipenet.js) scatters back to node index.
 function netFactor(A, n, deg){
   for(let k=0;k<n;k++){
     const d = A[k*n+k];
@@ -134,10 +135,18 @@ function netSolve(A, x, n){
    measured at 18% of a sim tick, twice a tick, for an answer nobody read.
    `null`/omitted still means "make me one", because that is what a caller
    assembling a matrix to factor wants; only an explicit `false` skips it. */
-function netAssemble(edges, n, fixed, s, A, b, src){
+/* `row`/`m` COMPACT THE SYSTEM, and it costs nothing: only a free node is
+   ever written, so a fixed one occupies a row and a column of exact zeros. On
+   a four-loop plant that is 276 of 312 nodes, and a dense elimination pays m^3
+   for them. `row` maps node index -> matrix row (a fixed node's entry is never
+   read) and `m` is the resulting width; A and b are then m-sized, and the
+   caller scatters the answer back to node index. Omitted, the matrix is the
+   whole network exactly as before. */
+function netAssemble(edges, n, fixed, s, A, b, src, row, m){
   const wantA = A !== false;
-  if(wantA) A = A || new Float64Array(n*n);
-  b = b || new Float64Array(n);
+  if(!row) m = n;
+  if(wantA) A = A || new Float64Array(m*m);
+  b = b || new Float64Array(m);
   if(wantA) A.fill(0);
   b.fill(0);
   for(let e=0;e<edges.length;e++){
@@ -148,17 +157,18 @@ function netAssemble(edges, n, fixed, s, A, b, src){
     const u = ed.u, v = ed.v;
     const pu = fixed[u], pv = fixed[v];
     const gu = pu === undefined, gv = pv === undefined;
+    const ru = row ? row[u] : u, rv = row ? row[v] : v;
     if(wantA){
-      if(gu) A[u*n+u] += g;
-      if(gv) A[v*n+v] += g;
-      if(gu && gv){ A[u*n+v] -= g; A[v*n+u] -= g; }
+      if(gu) A[ru*m+ru] += g;
+      if(gv) A[rv*m+rv] += g;
+      if(gu && gv){ A[ru*m+rv] -= g; A[rv*m+ru] -= g; }
     }
-    if(gu) b[u] -= g*h;
-    if(gv) b[v] += g*h;
-    if(gu && !gv) b[u] += g*pv;
-    if(gv && !gu) b[v] += g*pu;
+    if(gu) b[ru] -= g*h;
+    if(gv) b[rv] += g*h;
+    if(gu && !gv) b[ru] += g*pv;
+    if(gv && !gu) b[rv] += g*pu;
   }
-  if(src) for(let i=0;i<n;i++) if(fixed[i]===undefined && src[i]) b[i] += src[i];
+  if(src) for(let i=0;i<n;i++) if(fixed[i]===undefined && src[i]) b[row?row[i]:i] += src[i];
   return { A, b };
 }
 

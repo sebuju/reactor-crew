@@ -1707,13 +1707,45 @@ function netFactored(net, s, fixed){
      nothing about it for A to depend on. */
   + '|' + tankIds().filter(id=>net.tankNode[id]!==undefined).map(id=>tankLive(s,id)?'1':'0').join('');
   if(!net.Af || net.AfSig !== sig){
-    const A = new Float64Array(net.n*net.n);
-    netAssemble(net.edges, net.n, fixed, s, A, new Float64Array(net.n));
+    /* ══ A FIXED NODE IS NOT IN THE MATRIX AT ALL ══
+       netAssemble never writes a fixed node's row, its column or its b entry -
+       a fixed value reaches the system through its free neighbours' b and
+       nowhere else. So every fixed node contributes one zero pivot the guard
+       then decouples, and a DENSE elimination pays for it as if it were real:
+       276 of 312 nodes on a four-loop plant, most of them containment nodes
+       for breaks that have not happened.
+       Compacting to the free rows is exact rather than an approximation -
+       there is nothing in those rows to drop. The fixed SET is already in the
+       signature above, so this index is cached with the factors it belongs to
+       and a break opening rebuilds both together. */
+    const free = [];
+    for(let i=0;i<net.n;i++) if(fixed[i]===undefined) free.push(i);
+    const nf = free.length, row = new Int32Array(net.n);
+    for(let a=0;a<nf;a++) row[free[a]] = a;
+    net.Affree = Int32Array.from(free); net.Afrow = row; net.Afn = nf;
+    const degC = new Uint8Array(nf);
+    net.Af = netFactor(
+      netAssemble(net.edges, net.n, fixed, s, null, null, null, row, nf).A, nf, degC);
+    /* Scattered back to node index, because every reader of it is - and a
+       fixed node stays 0, which is what its reader already required: the byP
+       loop asks about deg only where fixed[i] is undefined. */
     net.Afdeg = new Uint8Array(net.n);
-    net.Af = netFactor(A, net.n, net.Afdeg);
+    for(let a=0;a<nf;a++) net.Afdeg[free[a]] = degC[a];
     net.AfSig = sig;
   }
   return net.Af;
+}
+/* Gather the free rows out of a full-length b, substitute against the
+   compacted factors, and scatter the answer back - so nothing downstream has
+   to know the matrix is smaller than the network. A fixed node lands at 0,
+   exactly where netSubst() used to leave it. */
+function netSubstFree(net, x){
+  const free = net.Affree, nf = net.Afn, c = new Float64Array(nf);
+  for(let a=0;a<nf;a++) c[a] = x[free[a]];
+  netSubst(net.Af, c, nf);
+  x.fill(0);
+  for(let a=0;a<nf;a++) x[free[a]] = c[a];
+  return x;
 }
 
 /* Assembles a fresh b for THIS s (cheap, O(n^2)), then substitutes against
@@ -1735,10 +1767,10 @@ function netFactored(net, s, fixed){
    on, so that is the number the animation should show. */
 function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
   const fixed = netFixed(net, s);
-  const Af = netFactored(net, s, fixed);
+  netFactored(net, s, fixed);
   const b = new Float64Array(net.n);
   netAssemble(net.edges, net.n, fixed, s, false, b);
-  netSubst(Af, b, net.n);
+  netSubstFree(net, b);
   netUnfix(b, fixed);
   /* phi -> p: the datum column comes off here, once, so every reader of the
      field gets a real pressure in MPa and nothing downstream has to know the
@@ -2029,10 +2061,9 @@ function netExpSurge(net, s){
   const src = expSrc(net, s);
   if(!src || !net.surgeKey) return 0;
   const fixed = netFixed(net, s);
-  const Af = netFactored(net, s, fixed);
-  const x = src.slice();
-  for(let i=0;i<net.n;i++) if(fixed[i]!==undefined) x[i]=0;   // a fixed node's delta is 0 by definition
-  netSubst(Af, x, net.n);
+  netFactored(net, s, fixed);
+  const x = src.slice();   // a fixed node's delta is 0 by definition, and the gather never reads one
+  netSubstFree(net, x);
   let q = 0;
   for(const ed of net.edges){
     if(ed.key !== net.surgeKey) continue;
