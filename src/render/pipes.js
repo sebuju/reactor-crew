@@ -77,7 +77,7 @@ const pipeWidth = bore => clamp(2.75+1.25*bore, 2, 5);
 /* The one pipe colour table. drawPlant() strokes the run with it and the packets are
    drawn in it, so a packet can never be a different colour from its own pipe. */
 function pipeColours(L){
-  const heat = L? L.n*.935+L.decay : 0;
+  const heat = L? L.n*PROMPT_F+L.decay : 0;
   const Th = L? L.Tavg+15*heat : 598, Tc = L? L.Tavg-15*heat : 568;
   return { hot: L?lerpC("#5aa9d6","#ff5a45",(Th-520)/110):"#c8735e",
            cold:L?lerpC("#5aa9d6","#ff5a45",(Tc-520)/110):"#5aa9d6",

@@ -2,14 +2,14 @@
 /* trend history ring buffers */
 
 /* ═══════════════ TREND HISTORY ═══════════════ */
-const HT = s => s.Tavg + 15*(s.n*0.935 + s.decay);
+const HT = s => s.Tavg + 15*(s.n*PROMPT_F + s.decay);
 const CH={
  pwr :{lab:"POWER",        u:"%",  col:"#57d38c", f:s=>s.n*100},
  dnbr:{lab:"DNBR",         u:"",   col:"#f0a830", f:s=>s.dnbr},
  tf  :{lab:"FUEL TEMP",    u:"K",  col:"#ff5a45", f:s=>s.Tf},
  tavg:{lab:"T-AVG",        u:"K",  col:"#5fd2e2", f:s=>s.Tavg},
  th  :{lab:"T-HOT",        u:"K",  col:"#ffa07a", f:s=>HT(s)},
- tc  :{lab:"T-COLD",       u:"K",  col:"#5aa9d6", f:s=>s.Tavg-15*(s.n*.935+s.decay)},
+ tc  :{lab:"T-COLD",       u:"K",  col:"#5aa9d6", f:s=>s.Tavg-15*(s.n*PROMPT_F+s.decay)},
  prs :{lab:"PRESSURE",     u:"MPa",col:"#a98cf0", f:s=>s.P},
  sub :{lab:"SUBCOOLING",   u:"K",  col:"#5fd2e2", f:s=>tsat(s.P)-HT(s)},
  lvl :{lab:"PZR LEVEL",    u:"%",  col:"#c8d8dc", f:s=>s.lvl},

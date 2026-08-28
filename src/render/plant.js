@@ -615,7 +615,7 @@ function banner(word,cx,x,y,w,h,col,ty){
 const porvRate = s => { const fid=primaryRelief(); return fid ? reliefRate(s,fid) : 0; };
 
 function liveValue(p,s){
-  const H_=s.Tavg+15*(s.n*.935+s.decay);
+  const H_=s.Tavg+15*(s.n*PROMPT_F+s.decay);
   switch(true){
     case p.id==="core":  return (s.n*100).toFixed(0)+"%";
     case p.id==="rods":  return (s.rodPos*100).toFixed(0)+"%";
@@ -1435,7 +1435,7 @@ function rhoViz(x,y,w,h){
 }
 const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. The trace is the last minute of it against its own zero.";
 function readoutsFor(p,s){
-  const heat=s.n*.935+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
+  const heat=s.n*PROMPT_F+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
   const id=p.id, R=[], m=P.rpsm;
   // a setpoint only exists while something is watching it: no mark drawn with
   // no protection fitted or bypassed - the overpower mechanic as a picture

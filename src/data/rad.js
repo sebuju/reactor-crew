@@ -21,6 +21,10 @@
 // the auditor block) rather than picking a rounder one.
 const RAD_K = 7.1583;
 
+/* Source strengths against the core's own 1.0 (radSrc(null)), and every one of
+   them is GAME BALANCE picked to make a hazard readable, not a measured yield:
+   a breached vessel shines 3x the intact core, a melt 4x, a ruptured tube 1.2x,
+   damage 0.06 per unit, and RAD_AIR is the unshielded airborne floor. */
 const RAD_BREACH=3.0, RAD_DMG=0.06, RAD_MELT=4.0, RAD_SGTR=1.2, RAD_AIR=0.05;
 // A fresh constant, not a re-derivation of an existing figure: nothing
 // documented depends on its exact value, only on the tank getting hotter as
@@ -151,7 +155,7 @@ function radSrc(L){
      s.doseRate NaN the instant fuel failed and every readout downstream with
      it. A source term asks the design what it was built with and the state
      only what it is doing. */
-  return {core:(L.n*0.935+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*P.contRel
+  return {core:(L.n*PROMPT_F+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*P.contRel
               + (L.melt&&!P.catcher?RAD_MELT:0),
           sg: L.sgtr?RAD_SGTR:0,
           /* EVERY tank, at its own strength: how much is in it times how
