@@ -332,17 +332,25 @@ function latShare(u,v,ph){
     if(LAT.slot[LIX(a,b)]) tot+=latSlotPhi(a,b,ph);
   return tot>1e-9? latSlotPhi(u,v,ph)/(4*tot) : 0;
 }
+/* One pen bar over two canvases, so the plan has to stand down for a pen that
+   belongs to the section - and the section for a pen that belongs to the plan.
+   Each act() names the tools it owns rather than falling through to a default. */
 function latAct(u,v,shift){
+  if(LATPEN.tool==="refl"||LATPEN.tool==="len") return;
   const q=LIX(u,v);
-  if(LATPEN.tool==="fuel"){
+  if(LATPEN.tool==="mod"){
+    const nv=shift?L_EMPTY:(LAT.slot[q]===L_MOD?L_FUEL:L_MOD);
+    if(LAT.slot[q]===nv) return;
+    LAT.slot[q]=nv; if(nv!==L_FUEL) LAT.rod[q]=-1;
+  } else if(LATPEN.tool==="fuel"){
     const nv=shift?L_EMPTY:(LAT.slot[q]?L_EMPTY:L_FUEL);
     if(LAT.slot[q]===nv) return;
     LAT.slot[q]=nv; if(!nv) LAT.rod[q]=-1;
   } else if(LATPEN.tool==="pois"){
-    if(!LAT.slot[q]) return;
+    if(!latFuel(q)) return;
     LAT.slot[q]=LAT.slot[q]===L_POIS?L_FUEL:L_POIS;
-  } else {
-    if(!LAT.slot[q]) return;
+  } else if(LATPEN.tool==="rod"){
+    if(!latFuel(q)) return;
     const nv=LAT.rod[q]===LATPEN.bank?-1:LATPEN.bank;
     if(LAT.rod[q]===nv) return;
     LAT.rod[q]=nv;
@@ -390,6 +398,12 @@ function latPlan(x,y,w,h){
     const X=gx+u*cs, Y=gy+gh-(v+1)*cs, q=LIX(u,v);
     const s=LAT.slot[q], rod=LAT.rod[q];
     if(!s){ fillRect(X+cs/2-1,Y+cs/2-1,2,2,"#1b2c33"); continue; }
+    if(s===L_MOD){
+      fillRect(X+1,Y+1,cs-2,cs-2,"#2a2622");
+      frame(X+1,Y+1,cs-2,cs-2,C.graph);
+      hatch(X+2,Y+2,cs-4,cs-4,C.graph,.55);
+      continue;
+    }
     const col=s===L_POIS?"#12303c":"#4a3208", ink=s===L_POIS?C.blue:C.amber;
     fillRect(X+1,Y+1,cs-2,cs-2,col);
     frame(X+1,Y+1,cs-2,cs-2,lerpC(col,ink,.42));
@@ -444,6 +458,8 @@ const LATPEN_CORE=[
    "Lay an assembly, or lift one out. Every square is four assemblies in the finished core, because the axis runs along the corner of the first slot. Rated power, core diameter and H/D are all counted off this, so an outer square is worth far more than an inner one - it carries a bigger annulus."],
   ["POISON","pois",
    "Swap an assembly between plain fuel and one carrying burnable poison pins. Poison holds down fresh excess reactivity that would otherwise be held by boron, and unlike boron it is graded: put it where the flux peaks and it flattens the core. It only works on a slot that already has fuel in it."],
+  ["MODERATOR","mod",
+   "Pack a slot with a block of moderator instead of an assembly. It makes no power and it costs you the fuel that was there, and in exchange the neutrons in this core are slowed down. That is the whole of the void coefficient: if the coolant does the moderating, boiling it off shuts the core down; if these blocks do, the coolant is only a poison and boiling it off ADDS power. A block is core material, so the fuel either side of it is still one reactor."],
 ];
 const LATPEN_RODS=[
   ["CLUSTER","rod",
@@ -451,15 +467,103 @@ const LATPEN_RODS=[
 ];
 
 const LATREFL=["NONE","STEEL","BERYL","GRAPH"];
-const LATDIMS=[
-  ["ACTIVE LENGTH","len",0.6,5.0,v=>v.toFixed(2)+" m",
-   "How tall the fuel column is. Against the diameter the lattice revolves to, this is the core's H/D."],
-  ["RIM REFLECTOR","reflR",0,3,v=>v.toFixed(1)+" cells",
-   "Reflector thickness around the side of the core. One cell is worth most of what a reflector has to give and the two after it are diminishing returns - but every one of them is weighed."],
-  ["LID REFLECTOR","reflT",0,3,v=>v.toFixed(1)+" cells",
-   "Reflector over the top. Its own face with its own albedo, so a bare lid leaks whatever the rim happens to be doing."],
-  ["FLOOR REFLECTOR","reflB",0,3,v=>v.toFixed(1)+" cells",
-   "Reflector under the core. Leave it bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
+
+/* ─────────────── THE CORE IN SECTION (canvas, the second host) ───────────────
+   The sim is 2-D (r, z) and the plan authors only r. This is z: the fuel
+   column's height and the reflector on each of its three faces, which were
+   four sliders and are now a drawing. It goes through the SAME hostForward()
+   + hostPaint() door latPlan() uses - there is one host-canvas mechanism.
+
+   The scale is METRIC and FIXED, not fitted to the core. That is what makes
+   the ACTIVE LENGTH drag track the pointer: a fitted scale would rescale the
+   picture under the hand that is dragging it. */
+const SEC_W=5.0, SEC_H=5.8;        // metres of section the canvas shows
+const SEC_FLOOR=0.55;              // metres of room left under the core for the floor band
+const LAT_LEN_MIN=0.6, LAT_LEN_MAX=5.0;
+/* THE HIT TEST AND THE DRAW READ THIS, and nothing else works out where the
+   core is. Anchoring one off a copy of the other is the bug this bench has
+   already shipped once. */
+function latSecGeom(x,y,w,h){
+  const gx=x+3, gy=y+3, gw=w-6, gh=h-19;
+  const K=Math.min(gw/SEC_W, gh/SEC_H);
+  return {gx,gy,gw,gh,K,CX:gx+gw/2,CY:gy+gh-SEC_FLOOR*K};
+}
+function latSectionAct(G,pt,shift){
+  const rr=Math.abs(pt.x-G.CX)/G.K, zz=(G.CY-pt.y)/G.K;
+  if(LATPEN.tool==="len"){
+    const nv=clamp(zz,LAT_LEN_MIN,LAT_LEN_MAX);
+    if(Math.abs(nv-LAT.len)<1e-9) return;
+    LAT.len=nv; latRevolve(); return;
+  }
+  if(LATPEN.tool!=="refl") return;
+  const dr=LM.dr, dz=LM.dz, halfW=(XNR-0.5)*dr;
+  let face=null, k=0;
+  if(zz>LAT.len){ face="reflT"; k=Math.ceil((zz-LAT.len)/dz); }
+  else if(zz<0){ face="reflB"; k=Math.ceil(-zz/dz); }
+  else if(rr>halfW){ face="reflR"; k=Math.ceil((rr-halfW)/dr); }
+  if(!face) return;
+  const nv=clamp(shift?k-1:k,0,LAT_REFLMAX);
+  if(LAT[face]===nv) return;
+  LAT[face]=nv; latRevolve();
+}
+function latSection(x,y,w,h){
+  const G=latSecGeom(x,y,w,h), {gx,gy,gw,gh,K,CX,CY}=G;
+  const dr=LM.dr, dz=LM.dz, cw=dr*K, ch=dz*K, NC=XNR*2-1;
+  const halfW=(XNR-0.5)*dr*K, colH=LAT.len*K;
+  fillRect(gx,gy,gw,gh,C.well);
+  ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,gw,gh); ctx.clip();
+
+  // the reflector band, at the thickness each face was given, in the tone of
+  // the material bought - the same REFLC row the control room's section uses
+  const rc=REFLC[D.refl];
+  if(rc){
+    const bt=LAT.reflT*ch, bb=LAT.reflB*ch, br=LAT.reflR*cw;
+    ctx.globalAlpha=.30;
+    if(br>0){ fillRect(CX-halfW-br,CY-colH-bt,br,colH+bt+bb,rc);
+              fillRect(CX+halfW,CY-colH-bt,br,colH+bt+bb,rc); }
+    if(bt>0) fillRect(CX-halfW,CY-colH-bt,2*halfW,bt,rc);
+    if(bb>0) fillRect(CX-halfW,CY,2*halfW,bb,rc);
+    ctx.globalAlpha=1;
+  }
+  /* The fuel column, mirrored about the centreline exactly the way
+     coreField() does it (plant.js), so the bench section and the control
+     room's section are the same picture of the same core. */
+  for(let c=0;c<NC;c++){
+    const i=Math.abs(c-(XNR-1)), cx=CX+(c-(XNR-1))*cw-cw/2;
+    const ff=clamp(LM.frac[i],0,1), oo=clamp(LM.occ[i],0,1);
+    for(let j=0;j<XNZ;j++){
+      const cy=CY-(j+1)*ch;
+      if(oo<.02){ fillRect(cx+cw/2-1,cy+ch/2-1,2,2,"#1b2c33"); continue; }
+      if(ff>.02){ ctx.globalAlpha=.20+.55*ff; fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.amber); }
+      if(oo-ff>.02){ ctx.globalAlpha=.20+.55*(oo-ff); fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.graph); }
+      ctx.globalAlpha=1;
+    }
+  }
+  frame(CX-halfW,CY-colH,2*halfW,colH,C.edge);
+  // the length handle: a bar on the top of the fuel column, live under the pen
+  const on=LATPEN.tool==="len";
+  fillRect(CX-halfW,CY-colH-1.6,2*halfW,3.2,on?C.amber:C.rail);
+  ctx.save(); ctx.setLineDash([9,3,2,3]);
+  line(CX,gy,CX,CY,C.rail,1); line(gx,CY,gx+gw,CY,C.rail,1);
+  ctx.restore();
+  ctx.restore();
+  frame(gx,gy,gw,gh,C.edge);
+
+  const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
+    latSectionAct(G,pt,e&&e.shiftKey);
+  }});
+  fitTxt(hov(wd)
+      ? "LEN "+LAT.len.toFixed(2)+" m  H/D "+D.hd.toFixed(2)+
+        "  RIM "+LAT.reflR+"  LID "+LAT.reflT+"  FLOOR "+LAT.reflB
+      : "ELEVATION / DRAG THE TOP FOR LENGTH, PAINT THE FACES",
+    gx,gy+gh+11,gw,{size:6.5,sp:.3,color:hov(wd)?C.amber:C.ink2});
+}
+const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, and how many cells of reflector are packed on the rim, the lid and the floor. Use the LENGTH pen and drag the top of the column; use the REFLECTOR pen and click a cell outside a face to pack it out to there, SHIFT to lift it back. Core H/D is what the two canvases make between them.";
+const LATPEN_SEC=[
+  ["REFLECTOR","refl",
+   "Pack reflector onto a face of the core, in the section. Click the cell you want the band to reach and the face is filled out to it; hold SHIFT to take a cell back off. One cell is worth most of what a reflector has to give and the two after it are diminishing returns - but every one of them is weighed on the mass budget."],
+  ["LENGTH","len",
+   "Drag the top of the fuel column to set the active length. Against the diameter the plan revolves to, this is the core's H/D - and a tall narrow core leaks harder at both ends while a squat one leaks at the rim."],
 ];
 
 const LATREAD=[
@@ -475,6 +579,21 @@ const LATREAD=[
    "The equal-area diameter of the fuel you laid out."],
   ["ASSEMBLIES",()=>String(latCount()),
    "How many fuel assemblies the core has. The plan shows a quarter of them."],
+  ["MODERATOR BLOCKS",()=>String(latModCount()),
+   "How many slots you packed with solid moderator instead of fuel. They make no power and they are on the mass budget, and in a helium or sodium core they are the only moderation there is."],
+  ["ACTIVE LENGTH",()=>LAT.len.toFixed(2)+" m",
+   "How tall the fuel column is. Drawn in the section with the LENGTH pen, not set here."],
+  ["REFLECTOR CELLS",()=>LAT.reflR+" rim / "+LAT.reflT+" lid / "+LAT.reflB+" floor",
+   "How many cells of reflector are packed on each face. Painted in the section with the REFLECTOR pen. Leave the floor bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
+  ["MODERATION RATIO",()=>modRatio().toFixed(2),
+   "Moderating volume over fuel volume, counted off the drawing: the coolant between the assemblies plus any blocks you packed, each scaled by how well its own material slows a neutron. This one number decides prompt lifetime, the moderator coefficient, the void coefficient and how much enrichment it takes to go critical at all. Near zero is a FAST core."],
+  ["PROMPT LIFETIME",()=>(derived().Lam*1e6).toFixed(2)+" us",
+   "How long a neutron generation lasts, in microseconds. A thermal core is tens of microseconds and forgiving; a fast core is fractions of one, and every reactivity mistake arrives that much faster."],
+  ["VOID COEFFICIENT",()=>derived().aV.toFixed(0)+" pcm",
+   "What steam in the core is worth. Negative means voiding shuts the reactor down. Positive means voiding ADDS power, and nothing in the code decides that - it falls out of whether the coolant is the moderator or only an absorber sitting in somebody else's moderator.",
+   ()=>derived().aV>0?"var(--c-amber)":null],
+  ["MODERATOR COEFF",()=>derived().aM.toFixed(0)+" pcm/K",
+   "What heating the coolant is worth. It is the negative feedback that makes the plant follow load by itself, and it is only as strong as the share of the moderation the coolant actually provides."],
 ];
 const LATREAD_RODS=[
   ["CONTROL BANK WORTH",()=>D.rodw.toFixed(0)+" pcm",
@@ -603,28 +722,17 @@ function paramBlockMk(block){
         if(showBank) bankBtns.forEach((bt,i)=>bt.set({on:LATPEN.bank===i}));
       }};
     }
-    case "latdimrack": {
-      const root=KIT.el("div","db-block");
-      const r=KIT.rule("SECTION"); root.appendChild(r.el);
-      KIT.tip(r.el,"SECTION","The core in ELEVATION, where the plan above is the core looking down. How tall the fuel column is, and how much reflector is packed around the sides, the lid and the floor. Everything here is dimensioned in the section, so it decides core H/D and where the flux leaks away - the plan decides how wide the core is, this decides what shape it revolves to.");
-      const refl=KIT.segSel(LATREFL,{onSelect:i=>{ D.refl=i; }});
-      root.appendChild(refl.el);
-      const rows=LATDIMS.map(d=>{
-        const sl=KIT.sliderRow({title:d[0],min:d[2],max:d[3],step:(d[3]-d[2])/200,fmt:d[4],tip:d[5],
-          onChange:v=>{ LAT[d[1]]=clamp(v,d[2],d[3]); latRevolve(); }});
-        root.appendChild(sl.el);
-        return {sl,d};
-      });
-      return {el:root,sync(){
-        refl.set(D.refl);
-        rows.forEach(({sl,d})=>sl.set(LAT[d[1]],null));
-      }};
-    }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas");
       KIT.tip(cv2,"FUEL LATTICE / QUARTER PLAN",LATPLAN_TIP);
       hostForward(cv2);
       return {el:cv2,sync(){}};   // painted by dbSync() via hostPaint(), not here
+    }
+    case "latsection": {
+      const cv2=KIT.el("canvas","db-latsection-canvas");
+      KIT.tip(cv2,"THE CORE / SECTION",LATSECTION_TIP);
+      hostForward(cv2);
+      return {el:cv2,sync(){}};
     }
     default: return {el:KIT.el("div"),sync(){}};
   }
@@ -743,7 +851,7 @@ function pipeRailSync(well){
 let dbLastSel=null, dbPanelSig=null;
 /* PRICING AN OPTION WRITES THE DESIGN, so an ungated sync is not merely a
    wasted read. massWith() sets D[key] to ask what the plant would weigh, and
-   D.arch/D.fuel/D.foll are in corePredict()'s cache key while __abs re-runs
+   D.cool/D.fuel/D.foll are in corePredict()'s cache key while __abs re-runs
    latRevolve() - so every option list burned a full core solve per option,
    every frame, 5.6 ms of it on the reactor panel alone. designSig() is the
    signature five other caches here already key on, and costs 0.017 ms. */
@@ -838,6 +946,7 @@ function dbSync(){
   /* the fuel lattice plan is genuinely graphical and stays canvas - but its own
      canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */
   document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>hostPaint(cv2,latPlan));
+  document.querySelectorAll("#scr-design .db-latsection-canvas").forEach(cv2=>hostPaint(cv2,latSection));
 }
 if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
 
