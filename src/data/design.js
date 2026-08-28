@@ -2,6 +2,10 @@
 /* design parameters and the derived() model */
 
 /* ═══════════════ DESIGN DATA ═══════════════ */
+/* Prompt fission energy fraction: the rest arrives as decay heat, which is why
+   DEC_A sums to 6.4 %. One constant, because two copies drift. */
+const PROMPT_F=0.935;
+
 /* ── WHAT THE FLUID IS ──
    This used to be ARCH, a REACTOR TYPE: thirteen columns that decided the
    whole feel of the plant, moderation included, off one list row. The three
@@ -19,8 +23,8 @@
    Tref is what this coolant is PROGRAMMED at and dTf how far a pin sits above
    it at rated power - a film question, so sodium's 150 K and helium's 600 K are
    the same expression answering different fluids. commission() keeps
-   tsat0-35 as the CEILING on Tref, never as the value, or every high
-   temperature family runs at water's 583 K.
+   saturation as the CEILING on Tref, never as the value, so BWR's 559 against
+   559 commissions SATURATED and every high temperature family keeps its own.
 
    xe and dnbr stay bought on purpose: MSR's 0.15 xenon is online gas
    stripping and SFR's 3.20 DNBR is sodium's boiling margin. Neither is a
@@ -36,30 +40,45 @@
    diameter. runBore() is untouched - a coolant may not move a conductance. */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
-  P0:15.5,pipeK:1.00,tsat:618,satN:.10,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,xe:1.0,flowMin:.30,eff:.33,
+  P0:15.5,pipeK:1.00,tsat:618,hfg:967,mmol:.018,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,xe:1.0,flowMin:.30,eff:.33,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
-  P0:7.0,pipeK:1.00,tsat:559,satN:.10,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,xe:1.0,flowMin:.30,eff:.33,
+  P0:7.0,pipeK:1.00,tsat:559,hfg:1505,mmol:.018,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,xe:1.0,flowMin:.30,eff:.33,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
-  P0:6.9,pipeK:1.00,tsat:558,satN:.10,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,xe:1.0,flowMin:.30,eff:.31,
+  P0:6.9,pipeK:1.00,tsat:558,hfg:1512,mmol:.018,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,xe:1.0,flowMin:.30,eff:.31,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
-  P0:0.2,pipeK:2.00,tsat:1150,satN:.10,Tref:723,dTf:150,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,xe:0.85,flowMin:.20,eff:.40,
+  P0:0.2,pipeK:2.00,tsat:1150,hfg:4260,mmol:.02299,Tref:723,dTf:150,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,xe:0.85,flowMin:.20,eff:.40,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
-  P0:0.2,pipeK:2.40,fuelInCoolant:true,tsat:1700,satN:.10,Tref:922,dTf:200,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,eff:.44,
+  P0:0.2,pipeK:2.40,fuelInCoolant:true,tsat:1700,hfg:4500,mmol:.0433,Tref:922,dTf:200,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,xe:0.15,flowMin:.20,eff:.44,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,
-  P0:7.0,pipeK:2.60,tsat:2000,satN:.10,Tref:773,dTf:600,aF:-4.5,modK:0,absK:0,dens:6,grace:40,dnbr:2.60,xe:1.0,flowMin:.15,eff:.42,
+  P0:7.0,pipeK:2.60,tsat:2000,hfg:20.9,mmol:.004,satN:.10,Tref:773,dTf:600,aF:-4.5,modK:0,absK:0,dens:6,grace:40,dnbr:2.60,xe:1.0,flowMin:.15,eff:.42,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
 ];
+/* ── A FLUID'S OWN SATURATION CURVE ──
+   satN used to be a typed .10 on every row: one curve shape for water, sodium,
+   salt and helium. It is Clausius-Clapeyron about that fluid's own boiling
+   point now - dlnT/dlnp = R*T/(hfg*M) - off the hfg and mmol columns beside it.
+   satT() is a power law over a decade of pressure rather than the local slope,
+   so ONE anchor turns the slope into the exponent, fitted on water against the
+   SAT_WATER curve psatSec() already carries. SATN_REF is that curve's own
+   point spelled out: 6.9 MPa, 558 K, 1512 kJ/kg, 18 g/mol.
+   A row may still carry satN and override the lot. Helium does, because it is
+   supercritical everywhere in this game - its tsat is a ceiling saying NEVER,
+   not a boiling point, and C-C about a fiction produces a fiction. */
+const R_GAS=8.314, SATN_REF={tsat:558,hfg:1512,mmol:.018};
+const ccSlope = x => R_GAS*x.tsat/(x.hfg*1000*x.mmol);
+const coolSatN = a => a.satN!=null
+  ? a.satN : SAT_WATER.n*ccSlope(a)/ccSlope(SATN_REF);
 /* ── WHAT YOU PACK BETWEEN THE ASSEMBLIES ──
    A moderator slot is a lattice slot with a block in it instead of fuel, laid
    with the same pen. modK is against light water; dens is what latMass()
