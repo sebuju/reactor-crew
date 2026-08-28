@@ -291,13 +291,32 @@ function runback(s){ if(autoLive("runback")) s.load=s.loadDem=Math.min(s.load,0.
    electricity. Nothing in removal, tProg or the trip logic reads them, which is
    why the whole physics invariant set survives untouched. */
 
+/* Level at which a condenser's tubes start to drown in their own condensate.
+   The top-end twin of HOT_NPSH (pipenet.js), which is where a feed pump loses
+   suction: one tank, two ends, and the middle of it costs nothing. */
+const HOT_FLOOD=90;       // %
+/* HOW MUCH HEAT SINK THERE ACTUALLY IS RIGHT NOW. P.condCap is what was
+   BOUGHT. A condenser only condenses because it can drain, so a hotwell that
+   has filled up drowns the tubes doing the work and takes the capacity with
+   them - which is why "the turbine went on exhausting into a full condenser
+   for nothing" was possible at all: the hotwell had ONE reader in the whole
+   build (a red OVERFLOW label) and no physics read it anywhere.
+   Off the POOL, not one tank, so two condensers are two hotwells behaving as
+   one - the same tankPoolPct() every other reserve question asks. Exactly 1
+   below HOT_FLOOD, so a healthy plant is bit-identical. */
+const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
+  return clamp((100 - tankPoolPct(s,h))/(100-HOT_FLOOD), 0, 1); };
 /* Condenser backpressure. The unit is sized for a set fraction of rated steam.
    Push more through it than it can condense and exhaust pressure climbs, which
    costs the turbine work - so an undersized heat sink hands back the overload
-   you paid mass for. */
+   you paid mass for.
+   The 0.6 floor is what an OVERLOADED condenser still gives back; a DROWNED one
+   is a different question and has no floor, so the flooded fraction multiplies
+   the answer rather than sitting inside it. */
 function condPen(s){
-  const ex = Math.max(0, Math.min(s.n,s.load) - P.condCap);
-  return Math.max(0.6, 1 - 2.2*ex*ex);
+  const f = condFrac(s);
+  const ex = Math.max(0, Math.min(s.n,s.load) - P.condCap*f);
+  return Math.max(0.6, 1 - 2.2*ex*ex) * f;
 }
 
 /* Gross electrical output. The steam that reaches the turbine is the smaller of
@@ -313,8 +332,10 @@ function condPen(s){
    is what redundancy is FOR, and the reason it was worth paying mass for was
    invisible while a flag stood in for a count. No turbine or no condenser at
    all is still exactly 0, and still a legal design the bench warns about. */
+/* turbPiped() multiplies roleAlive rather than replacing it: broken and never
+   piped up are different questions, and a machine can be both. */
 const mwE   = s => Math.min(s.n,s.load)*P.rated*P.eff*condPen(s)
-  * roleAlive("turb",s.dmgParts) * roleAlive("cond",s.dmgParts);
+  * roleAlive("turb",s.dmgParts) * roleAlive("cond",s.dmgParts) * turbPiped();
 const mwRej = s => Math.min(s.n,s.load)*P.rated - mwE(s);
 /* A scram is the same act from the diagram and from the inspector, and the
    turbine runback that rides along with it is defeatable, so it lives here. */
@@ -1328,9 +1349,22 @@ function step(dt){
      so it cannot also be an input to it. REFILLED, never rebuilt. */
   for(const k in s.sgShare) if(!sgW.hasOwnProperty(k)) delete s.sgShare[k];
   for(const k in sgW) s.sgShare[k] = sgW[k];
-  let sgWet = 0; for(const id in sgW) sgWet += sgW[id]*sgFill(s,id);
+  /* sgSteams() rides INSIDE the weighted sum, not beside it: it is the same
+     question sgFill asks - is this machine still a heat sink - about the same
+     machine, so it must carry the same flow weight. A generator with nowhere
+     to send its steam costs its OWN loop's share and not a turn more. */
+  let sgWet = 0; for(const id in sgW) sgWet += sgW[id]*sgFill(s,id)*(sgSteams(id)?1:0);
   if(!sgIds().length) sgWet = 1;              // no generator: stopped by having no heat path, not by a level
-  const feff = driven * wet * enth * sgWet;   // no water on either side, no removal
+  /* AND THE FAR END OF THE SECONDARY HAS TO TAKE IT. condFrac is plant-wide -
+     one condensate pool serving every generator - so it multiplies feff rather
+     than riding inside sgWet's per-machine sum. Without it a drowned condenser
+     went on condensing every kilogram anyway: the generator boiled at full rate
+     into a sink with no capacity, the condensate came back to a hotwell that was
+     already full, and the overflow was thrown over the side. The books closed
+     and the plant was still consuming its own water for nothing. There is no
+     secondary relief in this model, so steam that cannot be condensed cannot
+     leave - it stops the boiling instead, and the heat stays in the core. */
+  const feff = driven * wet * enth * sgWet * condFrac(s);   // no water on either side, and nowhere to reject it, no removal
   /* Buoyancy flow is a heat-REMOVAL fraction, not a velocity. It gets away with
      moving very little water because that water comes back much colder, so the
      temperature rise across the core does the work the flow rate is not doing.

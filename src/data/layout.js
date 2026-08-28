@@ -488,6 +488,56 @@ function secGensOf(pid){
     for(const g of secGensFromNode(n)) if(!out.includes(g)) out.push(g);
   return out;
 }
+/* EVERY GENERATOR SHELL, AS A FEED END AND A STEAM END. The shell is the
+   internal path with BOTH ends on the secondary - the same test netBuild()
+   uses to find it - and it declares FEED then STEAM in that order. */
+const shellFaces=()=>{ const out=[];
+  for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R||!R.sgtr||!R.internal) continue;
+    for(const IN of (Array.isArray(R.internal)?R.internal:[R.internal]))
+      if(secondaryNode(p.id+IN.a) && secondaryNode(p.id+IN.b))
+        out.push({id:p.id, feed:IN.a, steam:IN.b}); }
+  return out; };
+/* WHAT IS IN THIS MACHINE'S OWN STEAM CIRCUIT - is there a machine to take the
+   steam, and anywhere to reject it.
+   WALKED WITH EVERY SHELL CUT AT ITS FEED END, and that is the whole of it: the
+   secondary is a LOOP - sg to turbine to condenser to feed pump and back to the
+   shell - so plain connectivity can NEVER see a severed steam line, because the
+   walk just goes round the other way up the feedwater train. Measured: cutting
+   the stock steam run left turbPiped() reading 1. Cutting each shell at its feed
+   end leaves the steam half of the loop, which is the half being asked about.
+   A turbine and a condenser declare no internal path, so the "still one vessel"
+   pass above folds their faces together and steam-in and exhaust-out are one
+   walk. NOT filtered by G.primary: a cross-tie IS a path, crossTies() already
+   names it, and one pipe drawn round the tubes must not read as every machine
+   on the plant unplumbed. */
+let secCircCache=null, secCircFor=null;
+function secCircuitOf(pid, seeds){
+  const G=nodeGraph();
+  if(secCircFor!==G){ secCircCache={}; secCircFor=G; }
+  const key=pid+"|"+(seeds?seeds.join(","):"");
+  if(secCircCache[key]) return secCircCache[key];
+  const cut={}; for(const sh of shellFaces()) cut[sh.id+sh.feed]=1;
+  const seen=G.reach(seeds||G.nodesOf[pid]||[], cut), out={sg:false, turb:false, sink:false};
+  for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R) continue;
+    if(!(G.nodesOf[p.id]||[]).some(n=>seen[n])) continue;
+    if(p.role==="sg")      out.sg=true;
+    if(p.role==="turb")    out.turb=true;
+    if(R.thermal==="sink") out.sink=true; }
+  return (secCircCache[key]=out);
+}
+/* WHAT SHARE OF THE TURBINES IS ACTUALLY IN A STEAM CIRCUIT. The same move as
+   roleAlive(), and a second factor beside it rather than a replacement: that
+   one asks whether a machine is BROKEN, this one whether it was ever piped up,
+   and a machine can be both. One unpiped of two costs half. */
+const turbPiped=()=>{ const ids=LAY.parts.filter(p=>p.role==="turb").map(p=>p.id);
+  if(!ids.length) return 0;
+  return ids.filter(id=>{ const c=secCircuitOf(id); return c.sg&&c.sink; }).length/ids.length; };
+/* CAN THIS GENERATOR SEND ITS STEAM ANYWHERE. A shell with no path to a
+   turbine that can exhaust is raising steam into a closed vessel, so it takes
+   no heat out of its own loop. Per machine, the standing sgFill() has. */
+const sgSteams=id=>{ const sh=shellFaces().find(s=>s.id===id);
+  if(!sh) return true;                       // no shell to ask of: not a machine this gates
+  const c=secCircuitOf(id,[id+sh.steam]); return c.turb&&c.sink; };
 // which loop a PART pools capacity with, or null if the walk
 // above never reaches it from any generator - never read as "is it plumbed
 // at all" (netBuild()'s own port-usage check answers that, off net.usage).
@@ -1468,6 +1518,14 @@ function layoutMetrics(){
      elevation only, and what an unplumbed vessel actually costs is decided
      in the tick, off the solved network (pzrLive(), pipenet.js). */
   const pzrConn = pzrPlumbed();
+  /* The steam half of the same question pzrConn asks of the surge line: WIRED,
+     which nothing checked, so the bench waved through a plant whose turbine was
+     a decoration. A pump that is on no loop and reaches no shell is piped to
+     neither side of the plant. */
+  const turbConn  = turbPiped();
+  const sgNoSteam = P_.filter(p=>p.role==="sg" && !sgSteams(p.id)).map(p=>p.id);
+  const feedNoSg  = P_.filter(p=>roleHead(p.role) && !primaryPump(p.id)
+                                 && !secGensOf(p.id).length).map(p=>p.id);
   /* Metres above the core, per TANK - measured, not a clamped multiplier on
      an injection rate that no longer exists. Elevation is LIVE for a tank
      like every other node's: it enters the solve as the static head of the
@@ -1497,7 +1555,7 @@ function layoutMetrics(){
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
   BANDS=bands0;
-  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,tankZ,injZ:injZ===null?0:injZ,radK,peak,
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,feedNoSg,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     flowK: 1/(1+0.006*pipe),
     inertiaK: 1+0.012*(pipe+sec)};
 }

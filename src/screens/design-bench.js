@@ -112,6 +112,16 @@ function layoutWarnings(M){ const w=[];
      happen SILENTLY, which is what it did until this row existed. */
   if(!M.pzrConn) w.push(["SOFT","No pipe reaches the pressurizer. It holds nothing: loop pressure will drift off programme and stay there.","pzr"]);
   if(!M.pzrOK) w.push(["SOFT","The pressurizer is not the highest point of the primary loop. Its steam bubble cannot form properly, so pressure damping drops to 45%.","pzr"]);
+  /* The same standing pzrConn has, for the other half of the plant. A steam
+     circuit is a generator, a turbine and somewhere to reject the heat; miss
+     any one of the three and the machines are decorations the bench used to
+     price, draw and never mention. */
+  for(const id of (M.sgNoSteam||[]))
+    w.push(["SOFT","This steam generator has no steam path to a turbine that can exhaust. It boils into a closed vessel, so it takes no heat out of its loop at all.",id]);
+  if(M.turbConn!==undefined && M.turbConn<1)
+    w.push(["SOFT","A turbine is not in a complete steam circuit - it needs a generator feeding it AND a condenser to exhaust into. Unpiped, it makes no electricity.","turb"]);
+  for(const id of (M.feedNoSg||[]))
+    w.push(["SOFT","This pump is on no loop and reaches no generator shell. It is piped to neither side of the plant and moves nothing.",id]);
   if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all.",null]);
   /* A HYDRAULIC SHORT BETWEEN THE TWO SIDES, named and not refused. The tubes
      are the only crossing a plant is meant to have; a pipe drawn round them
