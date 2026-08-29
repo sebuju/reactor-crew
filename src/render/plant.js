@@ -1178,11 +1178,16 @@ function drawPortMarks(){
        through, so on a dense grid it landed on top of a pipe and read as part
        of it. The plate is the plant's own ground, not a tint, so the word sits
        on the board rather than on whatever happened to be behind it. */
+    // BESIDE THE NOZZLE, which sits on the shell and not in the port cell's
+    // middle - a fixed offset to the right named the wrong side of a machine.
     if(word && !seenWord[wk]){ seenWord[wk]=1;
-      const t={size:6.5,sp:.4}, ww=tw(word,t);
-      fillRect(x+6,y-3.5,ww+4,10,C.well);
-      frame(x+6,y-3.5,ww+4,10,C.edge);
-      txt(word,x+8,y+2.5,{size:6.5,color:col,align:"left",sp:.4}); }
+      const t={size:6.5,sp:.4}, pw=tw(word,t)+4, ph=10, [fx,fy]=DIRV[f];
+      const [nx,ny]=portPos(pid);
+      const px = fx ? nx+fx*3-(fx<0?pw:0) : nx-pw/2;
+      const py = fy ? ny+fy*3-(fy<0?ph:0) : ny-ph/2;
+      fillRect(px,py,pw,ph,C.well);
+      frame(px,py,pw,ph,C.edge);
+      txt(word,px+2,py+6.5,{size:6.5,color:col,align:"left",sp:.4}); }
     const nm=partName(p), longWord=IN&&portWord(p,f,true);
     TIP(bx,by,PORTG,PORTG, (longWord?longWord+" - ":"")+nm,
       (piped? "A pipe is landed on it. " : "Nothing is piped to this port yet. ")+
@@ -1822,8 +1827,7 @@ function readoutsFor(p,s){
   } else if(id==="rods"){
     add("BANK POSITION",(s.rodPos*100).toFixed(1)+" %",null,
       "Where the bank stands. 100% is fully inserted, and the rods bite hardest around mid-travel rather than evenly.");
-    add("BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",
-        Math.abs(s.rodDem-s.rodPos)>.005?C.amber:C.ink2,
+    add("BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",null,
       "Where you have asked the bank to go. The drives walk to it at "+(ROD_RATE*100).toFixed(1)+" %/s, so this leads the position every time you move the slider.");
     add("WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm",null,
       "What the bank is worth where it actually stands, solved on the live flux. Move a cluster inward at the bench and this changes.");
@@ -2049,8 +2053,8 @@ function readoutsFor(p,s){
   } else if(p.role==="cond"){
     add("BACK PRESS",condP(s).toFixed(4)+" MPa",condP(s)>COND_P0*1.5?C.amber:null,
       "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators.");
-    add("COND TEMP",tsatSec(condP(s)).toFixed(0)+" K",null,
-      "How hot the condensing steam is. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
+    add("COND TEMP",s.condT.toFixed(0)+" K",null,
+      "How hot the water in this machine actually is. It moves below the vacuum floor, where BACK PRESS cannot: a condenser with margin sits on that floor and this is what says how much margin. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
     /* The tanks this machine hosts - a tank with no cell of its own has no
