@@ -14,11 +14,11 @@ const blockAcc = key => typeof key==="string"
 function massWith(key,i){ return optWith(key,i).mass; }
 /* Mass AND whether that pick would refuse to commission, off ONE derived():
    an option list already paid for a solve per row to price it, so asking the
-   same solve for its verdict costs nothing. A HARD warning is what
-   benchReview() reads to block commissioning, so it is the honest test of
-   "you cannot have this one" - and the row is dimmed, never disabled. */
+   same solve for its verdict costs nothing. A RED warning is a fault the bench
+   names in red, so it is the honest test of "you do not want this one" - and
+   the row is dimmed, never disabled. */
 function optWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
-  const d=derived(), r={mass:d.mass, bad:d.warn.some(w=>w[0]==="HARD")};
+  const d=derived(), r={mass:d.mass, bad:d.warn.some(warnRed)};
   a.set(o); return r; }
 
 /* Nameplate pump capacity vs what a loop's own ceiling will ever pass right
@@ -157,20 +157,20 @@ function layoutWarnings(M){ const w=[];
      it is true. It is drawn, not refused, so the fix is to drag it out. */
   for(const p of LAY.parts.filter(q=>q.limbo))
     w.push(["HARD",partName(p)+" is standing where it does not fit - on another machine, or off the grid. Drag it clear.",p.id]);
-  if(M.access<1) w.push(["HARD","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
+  if(M.access<1) w.push(["RED","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
   if(M.exposure>0.3) w.push(["SOFT","Over 30% of the plant sits in hull cells. Expect to lose something every time you are hit.",null]);
   if(sgCount()>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both.",null]);
   return w;
 }
 
-function designIssues(d,M){ return (d||derived()).warn.concat(layoutWarnings(M||layoutMetrics())); }
-function designBlocked(d,M){ return designIssues(d,M).some(w=>w[0]==="HARD"); }
+function designIssues(d,M){ return (d||derived()).warn.concat(latWarn(),layoutWarnings(M||layoutMetrics())); }
+function designBlocked(d,M){ return designIssues(d,M).some(warnHard); }
 function warnFor(id){
   const p=LAY.parts.find(q=>q.id===id);
   if(p && !p.access && p.grp!=="shield") return C.red;
   const w=designIssues(null,PLANT_LM).filter(q=>q[2]===id);
   if(!w.length) return null;
-  return w.some(q=>q[0]==="HARD")?C.red:C.amber;
+  return w.some(warnRed)?C.red:C.amber;
 }
 
 // which port a plant-space point lands on, or null - the same small square
@@ -953,8 +953,8 @@ function dbRailSync(state){
       if(!rv.issues.length){ const ok=KIT.el("p","db-review-ok");
         ok.textContent="NO OBJECTIONS - THIS PLANT IS INTERNALLY CONSISTENT"; list.appendChild(ok); }
       for(const w of rv.issues){
-        const row=KIT.el("div","db-review-row "+(w[0]==="HARD"?"hard":"warn"));
-        const tag=KIT.el("span","db-review-tag"); tag.textContent=w[0]==="HARD"?"BLOCK":"WARN";
+        const row=KIT.el("div","db-review-row "+(warnRed(w)?"red":"warn"));
+        const tag=KIT.el("span","db-review-tag"); tag.textContent=warnHard(w)?"BLOCK":"WARN";
         const txt2=KIT.el("span"); txt2.textContent=w[1];
         row.append(tag,txt2); list.appendChild(row);
       }

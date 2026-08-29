@@ -395,7 +395,10 @@ function crRailSync(panels){
        the way the lattice plan does on the bench - see hostPaint() and
        rhoViz(). fieldRowsBuild() hands the canvas back on the container, so
        this never searches the screen for it. */
-    const v=h.body._viz; if(v&&v.rho) hostPaint(v.rho,rhoViz);
+    const v=h.body._viz;
+    if(v&&v.rho) hostPaint(v.rho,rhoViz);
+    if(v&&v.heat) hostPaint(v.heat,heatViz);
+    if(v&&v.dmg) hostPaint(v.dmg,dmgViz);
   }
 }
 

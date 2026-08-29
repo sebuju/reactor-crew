@@ -524,15 +524,33 @@ function coreDraw(x,y,w,h,V){
   coreField(fx,fy,fw,fh,V);
 }
 
+/* THE MIRRORED COLUMN ARITHMETIC LIVES HERE AND NOWHERE ELSE.
+   A revolved core draws 2*XNR-1 columns for XNR rings, level 0 at the bottom,
+   and two widgets need exactly that: the core symbol on the plant and the
+   damage map in the panel. Anchoring one off a copy of the other is the bug
+   latSecGeom() exists to prevent, and it has already shipped once here.
+   latSection() is deliberately NOT folded in - its scale is metric and fixed
+   for a stated reason, and that is a separate argument. */
+function coreCellGeom(x,y,w,h){
+  const NC=XNR*2-1, cw=w/NC, ch=h/XNZ;
+  return {NC,cw,ch, rMax:Math.max(0,Math.min(cw,ch)*0.44),
+    ring:c=>Math.abs(c-(XNR-1)),
+    cx:c=>x+(c+.5)*cw, cy:j=>y+h-(j+.5)*ch};
+}
 function coreField(x,y,w,h,V){
   // a negative box must not throw - this runs inside the frame loop and one
   // bad frame takes the whole plant with it
   if(w<=0||h<=0) return;
-  const NC=XNR*2-1, cw=w/NC, ch=h/XNZ, rMax=Math.max(0,Math.min(cw,ch)*0.44);
+  const g=coreCellGeom(x,y,w,h), NC=g.NC, cw=g.cw, ch=g.ch, rMax=g.rMax;
   for(let c=0;c<NC;c++){
-    const i=Math.abs(c-(XNR-1));
+    const i=g.ring(c);
     for(let j=0;j<XNZ;j++){
-      const k=XIX(i,j), cx=x+(c+.5)*cw, cy=y+h-(j+.5)*ch;   // level 0 at the bottom
+      const k=XIX(i,j), cx=g.cx(c), cy=g.cy(j);
+      /* THE DAMAGE WASH IS THE SUBSTRATE, so it is drawn FIRST - before the
+         xenon rect, which has to keep reading as an overlay on top of it. */
+      if(V.nDmg){ const st=fuelStage(V,k);
+        if(st>0){ ctx.globalAlpha=.16+.16*st;
+          fillRect(cx-cw/2,cy-ch/2,cw,ch,FAIL[st].col()); ctx.globalAlpha=1; } }
       if(V.xX){ const a=clamp(V.xX[k]/Math.max(V.X0,1e-9)*.34,0,.6);
         if(a>.02){ ctx.globalAlpha=a; fillRect(cx-cw/2,cy-ch/2,cw,ch,C.xe); ctx.globalAlpha=1; } }
       const t=V.nTf? clamp((V.nTf[k]-V.TfRef)/620,0,1) : 0;
@@ -545,9 +563,20 @@ function coreField(x,y,w,h,V){
       const ff=V.frac? clamp(V.frac[i],0,1) : 1;
       if(ff<.985){ ctx.globalAlpha=.12+.88*ff;
         if(ff<.3) fillRect(cx-1,cy-1,2,2,"#1b2c33"); }   // an empty slot, as in the plan
-      ctx.beginPath(); ctx.arc(cx,cy,r,0,7);
-      if(V.nV && V.nV[k]>.12){ ctx.strokeStyle=col; ctx.lineWidth=Math.max(.7,r*.55); ctx.stroke(); }
-      else { ctx.fillStyle=col; ctx.fill(); }
+      /* MELT IS A SQUARE, never a stroke: void already owns stroke-vs-fill on
+         this dot, and reusing it would make a voided node and a failed one the
+         same picture. A square says the rod geometry is gone, which is
+         unambiguous at four pixels. */
+      if(V.nMelt && V.nMelt[k]>0){ fillRect(cx-r,cy-r,r*2,r*2,col); }
+      else {
+        ctx.beginPath(); ctx.arc(cx,cy,r,0,7);
+        if(V.nV && V.nV[k]>.12){ ctx.strokeStyle=col; ctx.lineWidth=Math.max(.7,r*.55); ctx.stroke(); }
+        else { ctx.fillStyle=col; ctx.fill(); }
+        // a burst pin: one short slash through the dot, on its own channel
+        if(V.nDmg && V.nDmg[k]>0){
+          ctx.beginPath(); ctx.moveTo(cx-r,cy+r); ctx.lineTo(cx+r,cy-r);
+          ctx.strokeStyle=C.bg; ctx.lineWidth=Math.max(.6,r*.35); ctx.stroke(); }
+      }
       ctx.globalAlpha=1;
       // drawn bright rather than red: colour already means margin, and a mark
       // that changed colour with the thing it marks would say it twice
@@ -561,7 +590,7 @@ function coreField(x,y,w,h,V){
   for(let b=0;b<V.NB;b++){
     const ins=V.rodZ? clamp(V.rodZ[b],0,1) : .35, tip=XNZ*(1-ins);
     for(const sg of [-1,1]){
-      const cx=x+((XNR-1)+sg*V.bankR[b]+.5)*cw, yTip=y+h-tip*ch;
+      const cx=g.cx((XNR-1)+sg*V.bankR[b]), yTip=y+h-tip*ch;
       if(yTip>y) fillRect(cx-.9,y,1.8,yTip-y,C.metal);              // absorber
       const yF=Math.min(y+h,yTip+V.tipLen*ch);
       if(V.tipLen>0 && yF>yTip)                                     // follower
@@ -1434,6 +1463,215 @@ function rhoViz(x,y,w,h){
   }
 }
 const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. The trace is the last minute of it against its own zero.";
+/* [label, HEATBAL/s key, tip, colour]. The same one-table arrangement RHO_ROWS
+   has, and for the same reason: the ledger rows and the bar segments read it,
+   so a term cannot be one colour in the picture and another in the list.
+   SOURCES ONLY - the sinks are generated off the machines that are actually
+   fitted (heatSinks()), never typed here. */
+const HEAT_ROWS=[
+ ["PROMPT FISSION","prompt","Heat from the chain reaction itself. It follows power instantly and it is the only term a scram takes away.",()=>C.red],
+ ["DECAY 7 s","d0","Short-lived fission products, half-life about 7 seconds. The first thing to fade after a trip, and the largest of the four while it lasts.",()=>C.amber],
+ ["DECAY 145 s","d1","Fission products with a half-life around 145 seconds. This is most of what is still cooking the core two minutes after a scram.",()=>C.graph],
+ ["DECAY 28 min","d2","Half-life about 28 minutes. Long after the plant looks shut down, this is still worth around one per cent of rated power.",()=>C.metal],
+ ["DECAY 8.8 h","d3","Half-life about 8.8 hours. On any timescale this ship cares about it is a floor that never goes away - the heat you must keep removing forever.",()=>C.bright],
+];
+/* Sink rows off the drawing. A generator behind an intermediate exchanger does
+   NOT charge the core - the exchanger's pot does, and it is the pot's crossing
+   that step() puts into qTot. Same split, asked the same way, so these rows sum
+   to `removal` exactly rather than to something that looks like it. */
+function heatSinks(){
+  const out=[], rated=P?P.rated*1000:0;
+  if(!rated) return out;
+  for(const id of ihxIds()){
+    if(!ihxSgs(id).length) continue;
+    out.push({lab:nameOf(id),v:(S.ihxQBy[id]||0)/rated,col:C.cyan,
+      tip:"Heat crossing this intermediate exchanger, out of the core and into its pot. The generators behind it are a stage further on."});
+  }
+  for(const id of sgIds()){
+    if(ihxOf(id)) continue;
+    out.push({lab:nameOf(id),v:(HEATBAL.sgQBy[id]||0)/rated,col:C.green,
+      tip:"Heat this generator is taking out of the core. It goes to zero when the tubes uncover, and a core with no sink at all keeps heating on decay heat alone."});
+  }
+  return out;
+}
+/* full deflection of a heat ledger bar, share of rated power */
+const HEAT_BAR=0.10;
+
+/* ═══════════ WHAT THE CORE IS MAKING, AND WHETHER IT IS LEAVING ═══════════
+   The chain reaction is not the heat. A scrammed core still makes decay heat on
+   four clocks that no control on this ship touches, and POWER says nothing
+   about it - the panel reads 4 % while the core makes 6.6 %. Three registers,
+   the same three rhoViz() uses:
+
+     THE BALANCE - one stacked bar about zero. Everything the core is MAKING
+     stacks right, everything a generator or an exchanger is TAKING stacks left,
+     both on one scale, so the longer arm is the side that is winning. A plant
+     whose generators have boiled dry draws an empty left arm, which is the
+     whole picture in one glance.
+
+     THE NET - s.dTavg as a needle about zero, in K/s. That is the number which
+     answers "am I cooling down", and it is the line the bar is a decomposition
+     of.
+
+     THE LAST MINUTE - T-avg, the integral of that needle. A balance can read
+     near zero and still be sitting 80 K high. */
+function heatViz(x,y,w,h){
+  const s=S; if(!s) return;
+  const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
+  const rated=P?P.rated:0;
+
+  const src=HEAT_ROWS.map(r=>({lab:r[0],
+    v:r[1]==="prompt"?HEATBAL.prompt:(s.dec[+r[1][1]]||0), col:r[3]()}));
+  const snk=heatSinks();
+  let made=0,rem=0;
+  for(const t of src) made+=Math.max(0,t.v);
+  for(const t of snk) rem+=Math.max(0,t.v);
+  // additive headroom, continuous in the total - see the scale note in rhoViz()
+  const full=Math.max(made,rem,0.005)+0.06;
+
+  const KCOL=3, kall=src.concat(snk), krows=Math.ceil(kall.length/KCOL);
+  const slack=Math.max(0,h-(88+krows*8));
+  const gap=Math.min(6,slack*.14), grow=Math.min(4,slack*.07);
+
+  txt("HEAT BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
+  txt("+/-"+(full*100).toFixed(0)+" % rated",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
+
+  const by=y+13+gap, bh=14+grow;
+  fillRect(L,by,R-L,bh,C.well);
+  const seg=(list,dir)=>{
+    let acc=0;
+    for(const t of list){
+      const m=Math.max(0,t.v); if(m<=0) continue;
+      const a=cx+dir*(acc/full)*span, b=cx+dir*((acc+m)/full)*span;
+      const x0=Math.min(a,b), wd=Math.abs(b-a);
+      fillRect(x0,by,Math.max(.6,wd),bh,t.col);
+      if(wd>tw(t.lab,{size:6,sp:.4})+6)
+        txt(t.lab,(a+b)/2,by+bh/2+2,{size:6,sp:.4,align:"center",color:C.inkOnLit});
+      acc+=m;
+    }
+  };
+  seg(snk,-1); seg(src,1);
+  frame(L,by,R-L,bh,C.edge);
+  fillRect(cx,by-2,1,bh+4,C.bright);
+  fitTxt("REMOVED "+(rem*100).toFixed(1)+"%",cx-4,by+bh+8,span-6,{size:6,sp:.5,align:"right",color:C.green});
+  fitTxt((made*100).toFixed(1)+"% MADE",cx+4,by+bh+8,span-6,{size:6,sp:.5,color:C.red});
+
+  const kw=(R-L)/KCOL, ky=by+bh+13+gap;
+  kall.forEach((t,i)=>{
+    const kx=L+(i%KCOL)*kw, kyy=ky+((i/KCOL)|0)*8;
+    fillRect(kx,kyy,4,4,t.col);
+    fitTxt(t.lab,kx+6,kyy+4,kw-8,{size:6,sp:.2,color:C.ink2});
+  });
+
+  /* ── the net, in K/s ── */
+  const ny=ky+krows*8+5+gap, nh=13+grow;
+  const dT=s.dTavg||0, dSpan=Math.max(.5,Math.abs(dT)*1.2);
+  const atN=v=>cx+clamp(v/dSpan,-1,1)*span;
+  fillRect(L,ny+nh/2,R-L,1,C.edge2);
+  const nx=atN(dT);
+  const nCol = dT>.15? C.red : dT<-.05? C.blue : Math.abs(dT)<.01? C.green : C.amber;
+  fillRect(Math.min(cx,nx),ny+nh/2-2,Math.max(1,Math.abs(nx-cx)),4,nCol);
+  fillRect(nx-1,ny-2,3,nh+4,nCol);
+  fillRect(cx,ny-2,1,nh+4,C.bright);
+  txt((dT>=0?"+":"")+dT.toFixed(3)+" K/s",L,ny+nh+8,{size:6.5,sp:.6,color:nCol});
+  txt(rated?(made*rated).toFixed(0)+" MWt MADE":"NOT COMMISSIONED",R,ny+nh+8,
+    {size:6,sp:.6,align:"right",color:C.ink2});
+
+  /* ── the last minute of T-avg: the integral of the needle above ── */
+  const ty=ny+nh+12+gap, th=Math.max(16,y+h-ty-2);
+  fillRect(L,ty,R-L,th,C.well); frame(L,ty,R-L,th,C.edge);
+  const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
+  if(N>2){
+    let lo=Infinity,hi2=-Infinity;
+    for(let i=0;i<N;i++){ const v=chAt("tavg",hlen-N+i); if(v<lo)lo=v; if(v>hi2)hi2=v; }
+    let sp2=hi2-lo; if(sp2<1) { const mid=(hi2+lo)/2; lo=mid-.5; sp2=1; }
+    lo-=sp2*.1; sp2*=1.2;
+    ctx.beginPath(); ctx.strokeStyle=C.cyan; ctx.lineWidth=1.2;
+    for(let i=0;i<N;i++){
+      const X=L+1+(i/(N-1))*(R-L-2), Y=ty+th-((chAt("tavg",hlen-N+i)-lo)/sp2)*th;
+      i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);
+    }
+    ctx.stroke();
+    txt("T-AVG -"+(N*SAMP_TICKS*0.02).toFixed(0)+"s",L+3,ty+th-3,{size:6,color:C.ink2});
+    txt("NOW",R-3,ty+th-3,{size:6,align:"right",color:C.ink2});
+  } else {
+    txt("COLLECTING DATA",cx,ty+th/2+2,{size:7,sp:1.4,align:"center",color:C.ink2});
+  }
+}
+/* ═══════════ WHERE THE CORE IS HURT ═══════════
+   FUEL DAMAGE is one percentage, and a percentage cannot say the one thing an
+   operator needs: WHICH PART. A centre channel with its clad gone and a
+   uniformly warm core read the same number, and they are not the same
+   accident. Two registers:
+
+     THE MAP - the 14x10 field revolved to 27 columns, each cell coloured by
+     the worst thing that has happened to it, with the node carrying the least
+     thermal margin ringed. It is the same geometry the reactor symbol draws,
+     off the same coreCellGeom(), so a cell in one is a cell in the other.
+
+     THE LEDGER - what share of the core is in each stage, as one stacked bar,
+     with the legend generated from FAIL. Adding a stage is adding a row there.
+
+   Drawn through hostPaint(), so x,y start at 0,0 - see the note on HOST_K. */
+function dmgViz(x,y,w,h){
+  const s=S; if(!s||!s.nDmg) return;
+  const L=x+2, R=x+w-2;
+
+  txt("FUEL DAMAGE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
+  txt(s.dmg.toFixed(1)+" % CLAD",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
+
+  /* the map takes whatever is left after the ledger and its legend, so the row
+     can be made taller or shorter without either register overflowing */
+  const krows=Math.ceil(FAIL.length/2);
+  const foot=26+krows*8;
+  const my=y+13, mh=Math.max(30,y+h-my-foot);
+  fillRect(L,my,R-L,mh,C.well);
+  const g=coreCellGeom(L,my,R-L,mh);
+  for(let c=0;c<g.NC;c++){
+    const i=g.ring(c);
+    for(let j=0;j<XNZ;j++){
+      const k=XIX(i,j), cx=g.cx(c), cy=g.cy(j), st=fuelStage(s,k);
+      if(st>0){ ctx.globalAlpha=.35+.2*st;
+        fillRect(cx-g.cw/2,cy-g.ch/2,g.cw-.5,g.ch-.5,FAIL[st].col());
+        ctx.globalAlpha=1; }
+      // a ring the lattice never filled has no fuel to hurt, and says so
+      const ff=P&&P.frac?clamp(P.frac[i],0,1):1;
+      if(ff<.3) fillRect(cx-1,cy-1,2,2,C.edge2);
+    }
+  }
+  /* the least margin anywhere, ringed - it is where the NEXT cell to fail is,
+     which is the only forward-looking thing this picture has to say */
+  { const cx=g.cx((XNR-1)+s.dnbrRing), cy=g.cy(s.dnbrLev);
+    ctx.beginPath(); ctx.arc(cx,cy,Math.min(g.cw,g.ch)*.42,0,7);
+    ctx.strokeStyle=C.bright; ctx.lineWidth=.8; ctx.globalAlpha=.8;
+    ctx.stroke(); ctx.globalAlpha=1; }
+  frame(L,my,R-L,mh,C.edge);
+  txt("MIN NODE DNBR "+s.dnbrMin.toFixed(2)+" @ R"+s.dnbrRing+"/EL"+s.dnbrLev,
+    L+3,my+mh-3,{size:6,sp:.4,color:C.ink2});
+
+  /* ── the ledger ── */
+  const st=fuelStages(s), by=my+mh+6, bh=12;
+  fillRect(L,by,R-L,bh,C.well);
+  let acc=0;
+  for(let q=0;q<FAIL.length;q++){
+    const f=st[q]; if(f<=0) continue;
+    const a=L+acc*(R-L), b=L+(acc+f)*(R-L);
+    fillRect(a,by,Math.max(.6,b-a),bh,FAIL[q].col());
+    if(b-a>tw(FAIL[q].lab,{size:6,sp:.4})+6)
+      txt(FAIL[q].lab,(a+b)/2,by+bh/2+2,{size:6,sp:.4,align:"center",color:C.inkOnLit});
+    acc+=f;
+  }
+  frame(L,by,R-L,bh,C.edge);
+  const kw=(R-L)/2, ky=by+bh+9;
+  FAIL.forEach((f,q)=>{
+    const kx=L+(q%2)*kw, kyy=ky+((q/2)|0)*8;
+    fillRect(kx,kyy,4,4,f.col());
+    fitTxt(f.lab+"  "+(st[q]*100).toFixed(1)+"%",kx+6,kyy+4,kw-8,
+      {size:6,sp:.2,color:C.ink2});
+  });
+}
+const DMGVIZ_TIP="Where the core is hurt, cell by cell, on the same picture the reactor symbol draws. Amber is cladding that has burst, red is cladding the steam has eaten through, and the pale cells are fuel that is actually molten. The ring marks the node with the least thermal margin left - that is where the next failure happens. Under it, what share of the core is in each stage.";
+const HEATVIZ_TIP="The core's whole heat balance. Everything it is MAKING stacks right - prompt fission plus four groups of decay heat on their own clocks - and everything a generator or exchanger is TAKING stacks left, both on one scale, so the longer arm is the side that is winning. A scram takes the prompt segment away and nothing else, which is why a shut-down core still needs a sink. Under it the net as K/s on T-avg, and the last minute of T-avg itself.";
 function readoutsFor(p,s){
   const heat=s.n*PROMPT_F+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
   const id=p.id, R=[], m=P.rpsm;
@@ -1469,7 +1707,10 @@ function readoutsFor(p,s){
     add("DNBR",s.dnbr.toFixed(2),
       band(s.dnbr,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],
         {dp:2,lim:trip(1.18-0.16*m,"TRIP")}),
-      "How far the fuel is from a steam film that stops cooling it. Over 1.30 is comfortable; 1.00 damages fuel.");
+      "How far the fuel is from a steam film that stops cooling it. Over 1.30 is comfortable; 1.00 damages fuel. This is the hot-channel figure, and it is the one the protection system trips on.");
+    add("MIN NODE DNBR",s.dnbrMin.toFixed(2)+"  R"+s.dnbrRing+"/EL"+s.dnbrLev,
+      band(s.dnbrMin,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],{dp:2}),
+      "The same margin asked of every mesh node separately, and the worst answer, with where it is. It reads the enthalpy actually carried to that node rather than a peaking factor, so it will not agree with DNBR above and is not meant to. Nothing trips on it - it is what the damage map is looking at.");
     add("FUEL TEMP",s.Tf.toFixed(0)+" K",
       band(s.Tf,300,Math.max(2200,P.tdmg+700),[[P.tdmg,C.cyan,"NORMAL"],[Math.max(2200,P.tdmg+700),C.red,"FAILING"]],
         {dp:0,lim:trip(P.tdmg+100+280*m,"TRIP")}),
@@ -1492,12 +1733,30 @@ function readoutsFor(p,s){
     add("BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
         Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2,
       "Where you have asked boron to go. It borates at "+BOR_IN+" pcm/s and only dilutes at "+BOR_OUT+", so poisoning yourself is the fast direction.");
+    add("PEAK CLAD",s.TcladHot.toFixed(0)+" K",
+      band(s.TcladHot,300,1600,[[1000,C.cyan,"NORMAL"],[1600,C.red,"FAILING"]],{dp:0}),
+      "The hottest cladding anywhere in the core. This is the number every kind of fuel failure turns on, and it is not the fuel temperature above: while water is going past the rods the cladding sits close to the coolant, and the moment a node goes dry it climbs to meet the pellet.");
     add("FUEL DAMAGE",s.dmg.toFixed(1)+" %",
       // any damage at all is the bad zone, so the good one is a sliver - the
       // strip saying honestly that this scale has no safe stretch
       band(s.dmg,0,100,[[1e-9,C.cyan,"NONE"],[100,C.red,"CLAD FAILED"]],{dp:0}),
-      "Cladding that has already failed, and it is permanent. It grows whenever DNBR drops under 1.00 or the fuel passes "+P.tdmg.toFixed(0)+" K.");
+      "Cladding that has already burst, counted over the whole core, and it is permanent. A rod bursts when its cladding gets hot while the loop pressure is below the gas sealed inside it - so a depressurised core fails its fuel hundreds of degrees earlier than one still at pressure.");
+    add("OXIDISED",(s.oxMax*100).toFixed(1)+" %",
+      band(s.oxMax*100,0,100,[[17,C.cyan,"WITHIN LIMIT"],[100,C.red,"THROUGH"]],{dp:0}),
+      "How much of the cladding wall the steam has burnt away at the worst node, as a share of its thickness. 17% is the licensing limit for a real plant. At 100% there is no cladding left there at all.");
+    add("MOLTEN",(s.meltFrac*100).toFixed(1)+" %",
+      band(s.meltFrac*100,0,100,[[1e-9,C.cyan,"NONE"],[100,C.red,"MELTING"]],
+        {dp:0,lim:[[MELT_LATCH*100,"MELT"]]}),
+      "Fuel that is actually liquid, by volume. Cladding has to fail before a pellet can melt, so this can never run ahead of FUEL DAMAGE. Past "+(MELT_LATCH*100).toFixed(0)+"% the plant latches CORE MELT.");
+    add("OXIDATION HEAT",(s.qOx*100).toFixed(2)+" %",
+      s.qOx>s.n*PROMPT_F?C.red:s.qOx>0?C.amber:C.ink2,
+      "Heat the burning cladding is making, as a share of rated. When this passes what the chain reaction is making, the reaction feeds itself and nothing on this ship can stop it.");
+    add("HYDROGEN",s.h2.toFixed(1)+" kg",
+        s.h2>0?C.amber:C.ink2,
+      "Hydrogen made by steam burning the cladding. It is not modelled as burning here - no explosion, no containment pressure - but it is a direct measure of how much cladding has gone.");
     add.apply(null,rowFat(s));
+    R.push({sec:"FUEL DAMAGE"});
+    R.push({viz:"dmg",tip:DMGVIZ_TIP,title:"FUEL DAMAGE"});
     R.push({sec:"REACTIVITY"});
     // the picture first, the eight numbers it is a picture OF underneath
     R.push({viz:"rho",tip:RHOVIZ_TIP,title:"REACTIVITY BALANCE"});
@@ -1509,6 +1768,24 @@ function readoutsFor(p,s){
       add(r[0],(v>=0?"+":"")+v.toFixed(0),col,r[2],
         {f:clamp(v/RHO_BAR,-1,1),full:RHO_BAR,
          m:lim&&lim.map(q=>clamp(q/RHO_BAR,-1,1))});
+    }
+    R.push({sec:"HEAT BALANCE"});
+    R.push({viz:"heat",tip:HEATVIZ_TIP,title:"HEAT BALANCE"});
+    { const hbar=v=>({f:clamp(v/HEAT_BAR,-1,1),full:HEAT_BAR});
+      for(const r of HEAT_ROWS){
+        const v = r[1]==="prompt" ? HEATBAL.prompt : (s.dec[+r[1][1]]||0);
+        add(r[0],(v*100).toFixed(2)+" %",C.amber,r[2],hbar(v));
+      }
+      add("TOTAL MADE",(HEATBAL.heat*100).toFixed(2)+" %",C.red,
+        "Everything the core is making, chain reaction and decay heat together. This is the number that heats the coolant, and POWER above is only its first term.",hbar(HEATBAL.heat));
+      for(const t of heatSinks())
+        add(t.lab,(t.v*100).toFixed(2)+" %",t.col,t.tip,hbar(t.v));
+      add("TOTAL REMOVED",(HEATBAL.removal*100).toFixed(2)+" %",
+        HEATBAL.removal<HEATBAL.heat*.5?C.red:C.green,
+        "Everything leaving the core through the generators and any exchangers in front of them. Relief valves and breaks cost inventory and pressure, not T-avg, so they are not on this side.",hbar(HEATBAL.removal));
+      add("NET ON T-AVG",(s.dTavg>=0?"+":"")+s.dTavg.toFixed(3)+" K/s",
+        s.dTavg>.15?C.red:s.dTavg<-.05?C.blue:C.green,
+        "What the difference is doing to the loop temperature right now. Positive is heating up, negative is cooling down, and zero is a plant in balance.");
     }
   } else if(id==="rods"){
     add("BANK POSITION",(s.rodPos*100).toFixed(1)+" %",null,

@@ -112,7 +112,7 @@ function shellInitCtxMenu(){
 
 const SCNTIP_ON="Say what the reactor is FOR. Lay out a timeline of what will happen to it - load changes, battle damage, a blackout - and the limits it has to hold while they do. RUN flies it with nobody at the panel and says PASS or FAIL and which limit broke. Unlike CONTROL, opening this never rebuilds a plant that is already running.";
 const OPTIP_ON="The live control room. Opening it commissions the current design. Run the plant, push it past its limits, and repair it when it bites back. Visiting the bench puts the plant back where it was commissioned, and changing anything there rebuilds the unit from scratch the next time you come back here.";
-const LOCKTIP="Locked until you clear the blocking issues on the design bench.";
+const LOCKTIP="Locked while a machine is standing where it does not fit. Drag it clear on the design bench.";
 
 function shellSync(){
   helpSync();

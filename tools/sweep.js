@@ -85,9 +85,9 @@ const os = require("os");
    derived() only, no commission - and because keeping it in one place stops
    the workers and the report disagreeing about what "buildable" counted. */
 function cases(){
-  const M = require("./bundle").headless("{derived,D:()=>D,ARCH:()=>ARCH,FUEL:()=>FUEL}");
+  const M = require("./bundle").headless("{derived,warnRed,D:()=>D,ARCH:()=>ARCH,FUEL:()=>FUEL}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
-  const ok = o => { Object.assign(D, BASE, o); return !M.derived().warn.some(w=>w[0]==="HARD"); };
+  const ok = o => { Object.assign(D, BASE, o); return !M.derived().warn.some(M.warnRed); };
   const nA = M.ARCH().length, nF = M.FUEL().length;
   const out = [];
   for(let a=0;a<nA;a++) for(let f=0;f<nF;f++){

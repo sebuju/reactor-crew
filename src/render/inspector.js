@@ -175,7 +175,7 @@ function paramsFor(p){
   const note=(text,color)=>B.push({kind:"note",text,color});
 
   if(!p.access && p.grp!=="shield")
-    note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, and the unit cannot be commissioned like this.","var(--c-red)");
+    note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, so it is lost for good the moment it is damaged.","var(--c-red)");
 
   /* ONE PANEL FOR THE REACTOR AND ITS DRIVES. They were two, and each carried
      its OWN copy of the lattice plan - the same canvas twice, over one shared

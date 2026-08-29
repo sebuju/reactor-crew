@@ -120,6 +120,8 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* four registers in one column. At 176 every seam sat at its minimum and the
    trace was a 29-unit sliver - see the slack note in rhoViz(). */
 .insp-viz-rho{height:240px}
+.insp-viz-heat{height:240px}
+.insp-viz-dmg{height:240px}
 .insp-stat{display:grid;grid-template-columns:1fr 60px 60px;align-items:center;gap:6px;padding:2px 0}
 .insp-stat-lab{font-size:var(--t7);letter-spacing:.5px;color:var(--c-ink2);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
@@ -157,7 +159,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-stats{display:flex;flex-direction:column;gap:2px;margin-top:6px}
 .db-review-row{display:flex;gap:8px;padding:3px 0;font-size:var(--t8-5)}
 .db-review-tag{flex:0 0 auto;font-weight:700}
-.db-review-row.hard{color:var(--c-red)}
+.db-review-row.red{color:var(--c-red)}
 .db-review-row.warn{color:var(--c-amber)}
 .db-review-ok{font-size:var(--t8-5);color:var(--c-green)}
 .kit-well.blocked{outline:1px solid var(--c-red);outline-offset:-1px}
