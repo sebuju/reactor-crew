@@ -786,10 +786,9 @@ function setSplit(on){
    plant can shout before the latch drops rather than after. Written as eight
    `if`s, "about to trip" would have been a second, hand-copied ladder.
 
-   THE LOW DNBR CHANNEL READS s.dnbr AND NOTHING ELSE. s.dnbrMin is the node
-   field's own answer and it is a READOUT: wiring it in here would change the
-   protection system on every plant in the game in one line, and re-pin every
-   figure measured against the trip at the same time. */
+   THE LOW DNBR CHANNEL TRIPS ON THE NODE MINIMUM, because s.dnbr IS the node
+   minimum - a protection system watching anything but the worst point in the
+   field is watching a number no pin lives at. */
 const RPS_NEAR=0.03;                        // how close to a setpoint counts as "about to"
 const RPS_CH=[
   ["HIGH FLUX","FLUX",          +1, (P_,m)=>1.10+0.22*m,             s=>s.n],
@@ -1173,22 +1172,19 @@ function dnbW3(pMPa,gSI,x,dhM,dhSub){
    One helper, because the anchor and the tick must not drift.
 
    It takes an ARGUMENT BUNDLE rather than reading s.coreDT/s.fq/s.TfHot off
-   state, because margin is now asked TWICE with different arguments: once for
-   the plant, off the peak scalars, exactly as before (marginCore); and once
-   per NODE from inside coreStep()'s loop, where that node's own rise, flux,
-   channel flow and quality are all live (marginNode). Two builders and no
-   third - the laws stay in one place and neither caller reaches past it.
+   state, because margin is asked PER NODE from inside coreStep()'s loop, where
+   that node's own rise, flux, channel flow and quality are all live
+   (marginNode). One builder - the laws stay in one place and no caller reaches
+   past it.
      law    which of the three                       dhSub inlet subcooling, kJ/kg
      dT     the rise the hot channel took, K         Tin   channel inlet, K
      Tf     fuel temperature to judge, K             q     heat flux, W/m2
      g      mass flux, kg/m2/s                       x     thermodynamic quality
      p      core pressure, MPa
 
-   THE END STATE IS THE NODE MINIMUM. s.dnbr and s.dnbrMin are kept apart today
-   only because the auditor refit has not happened: moving the quantity the RPS
-   trips on, the LO DNBR tile lights on and every pinned figure is measured
-   against, all in the same change that introduces the field, would leave
-   nothing able to say which number moved for a good reason. */
+   THE PLANT'S MARGIN IS THE NODE MINIMUM, and s.dnbr IS s.dnbrMin. DNB is a
+   local event, so a plant figure that is not the worst point in the field is
+   not a margin at all. */
 function dnbrOf(m){
   if(m.law==="boil")
     return P.dnbrK*(m.dhSub/CP_W)/Math.max(m.dT,1e-3);
@@ -1227,16 +1223,7 @@ function dnbrOf(m){
 const DNB_FILM=0.10, DNB_SPAN=0.15;
 const dnbFilmK = d =>
   P.dryout ? DNB_FILM+(1-DNB_FILM)*clamp((d-1)/DNB_SPAN,0,1) : 1;
-/* The PLANT's margin, off the peak scalars - the same five operands the old
-   positional dnbrOf() was called with, in the same arithmetic, so this number
-   does not move by a bit. */
-function marginCore(s,heat,sat){
-  return dnbrOf({law:P.dnbLaw, dhSub:CP_W*(sat-(s.Tavg-s.coreDT/2)),
-    dT:s.coreDT*s.fq, Tin:s.Tavg-s.coreDT/2, Tf:s.TfHot,
-    q:heat*P.rated*1e6/Math.max(P.aHeat,1e-6)*Math.max(s.fq,1e-3),
-    g:P.G0*s.hotFlow, x:s.xHot, p:s.pCore});
-}
-/* ONE NODE's margin, called from inside coreStep()'s loop. Every operand is a
+/* THE NODE's margin, called from inside coreStep()'s loop. Every operand is a
    local that loop already had, so nothing new is measured - the loop simply
    stops throwing it away. `rise` in particular is the enthalpy actually
    carried to this node rather than the core rise peaked by a FLUX factor,
@@ -1661,9 +1648,6 @@ function resetPlant(){
      tick zero is at rated flow by construction, so its rise is coreDTRated()
      even though s.coreDT has not walked up to it yet */
   S.sc   = tsat(S.P) - (S.Tavg + coreDTRated(S.heat)/2);
-  /* the same subcooling read as a thermodynamic quality, which is the currency
-     W-3 asks in - negative on a subcooled plant, positive on a saturated one */
-  S.xHot = -CP_W*S.sc/P.hfg;
   /* The shell starts where the old formula put it, so nothing pinned against a
      plant at rest moves. From here it is an integral. */
   for(const id of sgIds()) S.sgTBy[id] = tsatSec(secPTarget(S,id));
@@ -2715,10 +2699,11 @@ function step(dt){
   s.n=Math.max(s.n,1e-9);
 
   /* ── thermal margin ── */
-  /* Peaking is the measured peak of the flux field, and the flow that counts
-     is the flow through the channel that peak sits in - a starved channel can
-     dry out while the core average still looks comfortable. */
-  s.dnbr=marginCore(s,heat,sat);
+  /* DNBR IS LOCAL, so the plant's margin is the MINIMUM over the field and
+     nothing else. What stood here evaluated W-3 at a state that exists at no
+     point in the core: the peak node's flux against the exit node's quality,
+     which on a boiling plant read 0.93 while no node was under 1.39. */
+  s.dnbr=s.dnbrMin;
 
   /* ── damage: the consequences, not the integration ──
      s.dmg, s.meltFrac, s.oxMax and s.h2 were all settled by coreStep() above,

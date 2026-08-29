@@ -440,7 +440,7 @@ function coreReset(s){
   s.rodZDem=new Float64Array(P.NB).fill(s.rodPos);
   s.bankAuto=new Array(P.NB).fill(true);
   s.tilt=0; s.tiltDem=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
-  s.hotFlow=1; s.tipRho=0; s.xHot=0; s.TfHot=P.TfRef;
+  s.hotFlow=1; s.tipRho=0; s.TfHot=P.TfRef;
   /* the aggregates the field hands back, and the readouts that go with them.
      s.h2 is the only integral here; the rest are re-measured every tick. */
   s.h2=0; s.meltFrac=0; s.oxMax=0; s.qOx=0; s.TcladHot=P.Tref;
@@ -598,7 +598,6 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   const ff    = Math.max(flowFrac, 1e-3);
   const hSat  = CP_W*sat;                    // enthalpy at saturation, kJ/kg
   const rvl   = satRvl(s.pCore);             // the core boils at ITS OWN pressure
-  let xHot=-1e9;                             // the highest thermodynamic quality anywhere
   /* what the damage pass hands back: the worst node margin and where, the
      hottest clad, the deepest oxide, and the hydrogen this tick made. None of
      the margins are STORED - a node margin field is a pure function of this
@@ -636,7 +635,6 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
       const q2=Math.max(heat*pw,0);
       const xd=-Math.max(Math.min(P.xSub*q2/gCh, P.xSubLo*q2), 1e-6);
       const xe=(hMid-hSat)/P.hfg;
-      if(xe>xHot) xHot=xe;                   // W-3 asks for the WORST node, not the mean
       s.nVt[k]=driftFlux(subQual(xe, xd), rvl);
 
       /* ── HOW THIS NODE IS FAILING ──
@@ -644,9 +642,8 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          MEASURED here rather than peaked: the rise is the enthalpy actually
          carried to this node, which closes the stated gap where the boil law
          was reading a flux peaking factor in place of an enthalpy-rise one.
-         s.dnbr keeps its own hot-channel arithmetic (marginCore(), step.js) -
-         the two are not meant to agree, and they are kept apart deliberately
-         while the auditors are unfit. */
+         The minimum this pass finds IS s.dnbr (step.js): the plant has no
+         second margin arithmetic left to disagree with. */
       const dnb=marginNode(s,heat,pw,hMid/CP_W-Tcold,Tcold,s.nTf[k],
                            mflux*chan,xe,dhSub);
       if(dnb<dnbLo){ dnbLo=dnb; dnbK=k; }
@@ -783,7 +780,6 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      nothing like it once they stop, so this reads mass flux, never the
      enthalpy rise. */
   s.hotFlow=Math.max(mflux*s.chW[s.hotRing],0.02);
-  s.xHot=xHot;
   /* ── WHAT THE DAMAGE PASS LEFT BEHIND ──
      nodeW already sums to 1, so the two aggregates are plain volume means and
      s.dmg keeps its old meaning and its old range exactly. s.oxMax is stated
