@@ -157,7 +157,13 @@ function commission(){
      duty rejects rated duty at COND_DT0, so duty divides the terminal
      difference and an undersized machine sits hotter for the same heat. */
   P.hTurb   = H_FG/Math.max(.05, 1-Math.pow(condPDes()/(P.P0*0.45),TURB_GAM));
-  P.condUA  = P.rated*1000*(1-P.eff)/COND_DT0*P.condCap;
+  /* The circulating water flow, as a heat capacity rate: what it takes to
+     carry rated rejection away on CW_RISE of temperature rise. It rides the
+     condenser slider with everything else the machine is, so eps comes out
+     CW_RISE/COND_DT0 whatever was bought and the design terminal difference is
+     unmoved - the range is still the duty dividing it. */
+  P.cwC     = P.rated*1000*(1-P.eff)/CW_RISE*P.condCap;
+  P.condUA  = P.cwC*Math.log(COND_DT0/(COND_DT0-CW_RISE));
   P.tdmg  = f.tdmg; P.tmelt = f.tmelt;
   /* whether this fluid puts a steam atmosphere on hot clad at all - sodium,
      salt and helium never oxidise a rod, so their whole oxidation path is one
@@ -457,6 +463,23 @@ const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
    condenser is rejecting comes out of this tick's steam balance, so it cannot
    also be an input to it. */
 const T_CW=293;           // K, circulating water inlet
+/* ── AND THE CIRCULATING WATER IS A MACHINE, NOT A RESERVOIR ──
+   UA against a constant is the m-dot -> infinity limit of the real exchanger:
+   with a finite circulating water flow Q = mdot*CP_W*eps*(condT - T_CW) and
+   eps = 1 - e^(-UA/(mdot*CP_W)), and letting the flow grow gives UA*(condT -
+   T_CW) back exactly. So the old expression was not wrong, it was the limiting
+   case - with no outlet temperature, no pumps and no way to fail.
+   CW_RISE is the design temperature rise across a real surface condenser's
+   circulating water, and it is the ONE new number: the flow is derived from it
+   at commissioning and rides the condenser slider, exactly as the duty and the
+   dump already do. At full flow eps is CW_RISE/COND_DT0 by construction, so a
+   healthy plant reads the design terminal difference it always did. */
+const CW_RISE=10;         // K, circulating water rise at the design point
+/* HOW MUCH CIRCULATING WATER IS ACTUALLY MOVING. The pumps are big and sit on
+   the main board, so a blackout stops them dead - which replaces the old flat
+   `blackout ? 0.25` on condK, a factor that pretended a quarter of the flow
+   survived with nothing turning it. */
+const cwK = s => s.blackout ? 0 : 1;
 /* The terminal temperature difference a condenser bought at rated duty runs
    at, K - a real surface condenser figure, and the anchor P.condUA is fitted
    on. It is what gives the machine a RANGE: duty is a divisor here, so a
@@ -468,13 +491,12 @@ const COND_DT0=13;
    does the work P.eff prices and every departure is the condenser's doing. */
 const condPDes = () => psatSec(T_CW + COND_DT0);
 /* How much condenser there actually IS right now. Bought capacity, minus what
-   is broken, minus tubes drowned in their own condensate, minus the
-   circulating water pumps when the switchboard is dead - a blackout is the one
-   way this plant had of losing them and it used to cost nothing. It may be
-   exactly 0: nothing divides by it, and a wrecked condenser rejecting nothing
-   at all is the answer, not a division by zero. */
-const condK = s => Math.max(0, roleAlive("cond",s.dmgParts)*condFrac(s)
-                              * (s.blackout?0.25:1));
+   is broken, minus tubes drowned in their own condensate. The circulating
+   water has LEFT this expression - it is a flow now (cwK, above), on the other
+   side of the exchanger, where losing it takes the sink away instead of
+   scaling a conductance. It may be exactly 0: nothing divides by it, and a
+   wrecked condenser rejecting nothing at all is the answer. */
+const condK = s => Math.max(0, roleAlive("cond",s.dmgParts)*condFrac(s));
 /* THE CONDENSER IS A POT TOO, and for the same reason the shell is: a machine
    that cannot reject has to be able to sit there getting hotter with nothing
    flowing through it. Priced off the same q/UA balance at rest, so the steady
@@ -489,11 +511,29 @@ const condK = s => Math.max(0, roleAlive("cond",s.dmgParts)*condFrac(s)
    which pressure the turbine exhausts against. */
 const exhOpen = s => !!(P && P.net && (P.net.steamBreaks||[]).some(bk =>
   bk.exh && bk.cells.some(([x,y])=>cellBroken(s,x,y))));
-const condP = s => Math.max(exhOpen(s) ? P.Pcont : 0,
+/* A CONDENSER IS NOT A PRESSURE VESSEL. Past atmospheric it relieves, and it
+   does not get its vacuum back: the air is in, and there is no pump on this
+   plant that pulls it out again. Latched, and it is the end of the heat sink -
+   the steam backs up into the shells and they go to their safeties. */
+const COND_ATM=0.101;     // MPa, and the pressure a lost condenser sits at
+/* The exhaust pressure a turbine will not tolerate - a real figure, and about
+   four times rated rejection, so no healthy plant is anywhere near it. */
+const TURB_TRIP_P=0.02;   // MPa
+const condP = s => Math.max(exhOpen(s) ? P.Pcont : 0, s.condLost ? COND_ATM : 0,
   s.condT===undefined ? COND_P0 : Math.max(COND_P0, psatSec(s.condT)));
 /* What it is actually getting rid of, kW - the only place rejection is
-   computed, so the readout and the balance cannot disagree. */
-const condRej = s => Math.max(0, P.condUA*condK(s)*((s.condT||T_CW)-T_CW));
+   computed, so the readout and the balance cannot disagree. The effectiveness
+   form: no circulating water is exactly no rejection, and a condenser running
+   on part flow loses more than the flow it lost, because eps rises but the
+   capacity rate it multiplies falls faster. */
+const cwC = s => P.cwC*cwK(s);
+const condRej = s => { const c = cwC(s);
+  if(!(c>0)) return 0;
+  return Math.max(0, c*(1-Math.exp(-P.condUA*condK(s)/c))*((s.condT||T_CW)-T_CW)); };
+/* WHERE THE HEAT ACTUALLY WENT: the temperature the circulating water leaves
+   at. A readout, and the one number that says the sink is finite. */
+const cwOut = s => { const c = cwC(s);
+  return c>0 ? T_CW + condRej(s)/c : (s.condT||T_CW); };
 /* Water and metal in the condenser, kJ/K. The hotwell it drains into is the
    yardstick the plant already sizes it by. */
 const condCap_ = () => hotMass()*CP_W + hotMass()*0.6*CP_STEEL;
@@ -798,6 +838,26 @@ function setSplit(on){
    THE LOW DNBR CHANNEL TRIPS ON THE NODE MINIMUM, because s.dnbr IS the node
    minimum - a protection system watching anything but the worst point in the
    field is watching a number no pin lives at. */
+/* The steam dump's proportional gain, share of rated steam per kelvin of
+   programme error - fitted for a SCRAM, where the error is tens of kelvin. */
+const DUMP_K=0.02;
+/* ── AND ON A STEAM PLANT THE BYPASS IS A PRESSURE REGULATOR ──
+   MEASURED: on a flat programme a BWR taking a load step to 70 % lifts its
+   shell safeties in 12 s while Tavg has moved 0.03 K, and no gain closes that
+   - 0.02, 0.1, 0.5, 2 and 10 per kelvin all lift the valves, because the fault
+   is on the SHELL and the primary is the one thing still fine. A real BWR
+   bypass is driven by the steam-line pressure regulator, and this is that
+   machine. The band is DERIVED: wide open by the time the lowest safety valve
+   actually drawn on this plant would lift, so the staging a real plant has -
+   regulator first, safeties last - falls out of where the valves were set. At
+   rest every shell sits BELOW its design pressure, so the term clamps to
+   exactly 0 and nothing at full load can have moved. */
+const sgBypBand = () => { let k=PORV_LIFT0;
+  for(const fid of reliefSecIds()) k=Math.min(k, reliefSet(fid).lift);
+  return Math.max(0.005, k-1); };
+const sgOverFrac = s => { let k=0;
+  for(const id of sgIds()) k=Math.max(k, secP(s,id)/sgDesignP()-1);
+  return k; };
 const RPS_NEAR=0.03;                        // how close to a setpoint counts as "about to"
 const RPS_CH=[
   ["HIGH FLUX","FLUX",          +1, (P_,m)=>1.10+0.22*m,             s=>s.n],
@@ -1455,8 +1515,15 @@ const tsat=p=>satT(P.sat,p);
    those lights the alarm on every plant that is not a PWR. Through a trip the
    runback takes the load off, so the programme drops to its no-load point; with
    the runback bypassed the turbine is still drawing, and the programme has to
-   keep following it. */
-const tProg=s=>P.Tref-18 + ((s.scrammed && autoLive("runback")) ? 0 : 18*s.load);
+   keep following it.
+   A PLANT WHOSE PRESSURE IS ITS SATURATION TEMPERATURE HAS A FLAT PROGRAMME.
+   The 18 K slope is a PWR's, and it is right there because a pressurizer holds
+   the pressure up independently; under P.steam the same slope is 2.6 MPa of
+   blowdown against a LOW PRESSURE setpoint 0.98 MPa below the design point. A
+   real BWR holds its dome near 7 MPa at every load. At full load the two
+   expressions give the same number, so no rest point moves. */
+const tProg=s=>(s.scrammed && autoLive("runback")) ? P.Tref-18
+             : P.steam ? P.Tref : P.Tref-18 + 18*s.load;
 
 /* ONE PUMP'S OWN STARTING SPEED. A coolant pump answers the plant-wide lever,
    so the bench sets one number for all of them; any other pump answers only
@@ -1536,6 +1603,10 @@ function resetPlant(){
      dec:DEC_A.map(a=>a*P.n0), decay:DEC_A.reduce((t,a)=>t+a,0)*P.n0,
      byp:Object.fromEntries(AUTOKEYS.map(k=>[k,!!startOf("byp:"+k,false)])),
      breach:false,melt:false,trip:"",
+     /* Both LATCHED, and both about the same number: the turbine's stop valve
+        once exhaust pressure got away from it, and the condenser once it went
+        past atmospheric and relieved. */
+     turbTrip:false, condLost:false,
      ev:{}, blackout:false, nat:0, release:0,
      /* EVERY tank, four plain objects keyed by tank id - so snapVal() takes
         them for free and adding a tank adds an entry to each rather than a
@@ -2037,7 +2108,21 @@ function step(dt){
      scrammed, which is what runs the loop a few degrees cooler after a trip.
      It asks the TANKS, not a system row - and reads identically on a stock
      plant, where exactly one tank carries a rule. */
-  const dump = s.scrammed ? clamp((s.Tavg-Tprog)*0.02,0,P.bypass)*(feedOK?1:.25)+(tankRuleAny(s,"secondary")?0.08:0) : 0;
+  /* ── THE BYPASS IS LIVE AT PART LOAD ON A STEAM PLANT ──
+     A real turbine bypass is open whenever the governor is closing, not only
+     after a trip: BWR ~25 % of rated steam, PWR steam dump ~40 %. Waiting for
+     a scram left a load reduction with nowhere to put the surplus but a shell
+     safety valve, which discharges to atmosphere and takes the shell's water
+     with it. The proportional term and its P.bypass ceiling are unchanged, and
+     at rest the error is exactly 0 so nothing at full load moved.
+     THE RESERVE'S FLAT 0.08 STAYS SCRAM-GATED: it is proportional to nothing,
+     and a permanent 8 % dump on every plant with a secondary reserve would be
+     a machine nobody can see. */
+  const dumpLive = s.scrammed || P.steam;
+  const dumpT = clamp((s.Tavg-Tprog)*DUMP_K,0,P.bypass);
+  const dumpP = P.steam ? clamp(sgOverFrac(s)/sgBypBand(),0,1)*P.bypass : 0;
+  const dump = dumpLive ? Math.max(dumpT,dumpP)*(feedOK?1:.25)
+                        + ((s.scrammed && tankRuleAny(s,"secondary"))?0.08:0) : 0;
   const vNow = clamp(s.vf,0,1.5);
   /* ── HEAT CROSSES ON A TEMPERATURE DIFFERENCE ──
      `removal` was (s.load+dump)*feff: a DEMAND multiplied by penalty factors.
@@ -2445,7 +2530,20 @@ function step(dt){
      heat side just made: the flag leaves the output path and becomes a stop
      valve, so the steam backs up behind it instead of vanishing. The dump goes
      round the turbine straight to the condenser, so it does not care. */
-  const passK = clamp(roleAlive("turb",s.dmgParts)*turbPiped(), 0, 1);
+  /* ── AND THE TWO THINGS BACKPRESSURE DOES WHEN IT GETS AWAY ──
+     Latched here, ahead of the stop valve, because both of them ARE the stop
+     valve's answer. A turbine will not run against 0.02 MPa of exhaust - the
+     real figure, and about four times rated rejection - and a condenser past
+     atmospheric has relieved and lost its vacuum for good. Neither resets:
+     there is no pump on this plant that pulls the air back out, and the
+     turbine trip is a latch until somebody rebuilds the plant. */
+  if(!s.condLost && condP(s) >= COND_ATM){ s.condLost = true;
+    logE("alarm","CONDENSER VACUUM LOST",
+      "The condenser has reached atmospheric pressure and relieved. It is open to the room, it will not hold vacuum again, and it has stopped being a heat sink. The steam has nowhere to go but the generators' safety valves."); }
+  if(!s.turbTrip && condP(s) > TURB_TRIP_P){ s.turbTrip = true;
+    logE("alarm","TURBINE TRIP",
+      "Exhaust pressure past what the machine will run against. The stop valve is shut. The reactor is still making heat and the turbine is no longer taking any of it."); }
+  const passK = clamp(roleAlive("turb",s.dmgParts)*turbPiped()*(s.turbTrip?0:1), 0, 1);
   const perSG = Math.max(1, ids.length);
   const swWork = s.load*passK*P.swallow/perSG;
   const swDump = dump*P.swallow/perSG;
@@ -2544,7 +2642,7 @@ function step(dt){
        which is what makes a condenser losing its vacuum back the steam up
        instead of costing an efficiency factor. Nowhere to send it at all
        (secCircuitOf, off the drawing) passes nothing. */
-    const gate = (sgSteams(id) && !s.sgBurst[id]) ? Math.sqrt(Math.max(0,
+    const gate = (sgSteams(id) && !s.sgBurst[id] && !s.condLost) ? Math.sqrt(Math.max(0,
       1-Math.pow(clamp(pCond/Math.max(shellP,1e-4),0,1),2))) : 0;
     const ratio = shellP/sgDesignP();
     const steamWk = Math.max(0, swWork*ratio*gate);
@@ -2654,10 +2752,15 @@ function step(dt){
      nothing to reject and the pool has nothing to return. Plant-level,
      because the condenser IS one pot and pCond one backpressure: a plant with
      two turbines and one exhaust cut loses both. Named in the gaps. */
-  const retK = exhOpen(s) ? 0 : 1;
+  const retK = (exhOpen(s) || s.condLost) ? 0 : 1;
+  /* The 900 K clamp is gone: it was a silent ceiling on a pot that had no
+     other way to fail, and the failure is a real one now. What bounds it
+     instead is the machine - a relieved condenser is boiling at atmospheric,
+     so it sits on that saturation temperature and no higher. */
   { const qIn = Math.max(0, boiled*retK*H_FG - workKW);
     s.condT += (qIn - condRej(s))/Math.max(1, condCap_())*dt;
-    s.condT = clamp(s.condT, T_CW, 900); }
+    s.condT = Math.max(s.condT, T_CW);
+    if(s.condLost) s.condT = Math.min(s.condT, tsatSec(COND_ATM)); }
   /* WHICH POOL PAID FOR IT. The reserve's share is its own tanks' solved
      outflow - the same qTankBy every primary tank is already charged through,
      asked of the secondary ones for the first time - and the circuit paid for
@@ -3083,6 +3186,10 @@ const ANN=[
   "A steam generator is below "+SG_DRY_LO+"%. Most of the bundle is in steam and that loop is not cooling the core any more. If every generator reads this, the only heat sink left is what leaks out of the boundary.","sg"],
  ["HOTWELL FULL","red",s=>condFrac(s)<1,
   "The hotwell is above "+HOT_FLOOD+"% and the water in it is drowning the tubes that do the condensing. The condenser is losing capacity as it fills, so backpressure rises, the turbine takes less steam, and the shells pressurise behind it. Drain it or stop putting water into it.","cond"],
+ ["TURBINE TRIP","red",s=>!!s.turbTrip,
+  "Exhaust pressure got past what the machine will run against, so the stop valve is shut and the turbine is passing no steam. The reactor is still making heat. Find the heat sink: circulating water, a drowned hotwell, or a condenser that has been hit.","turb"],
+ ["COND VACUUM LOST","red",s=>!!s.condLost,
+  "The condenser reached atmospheric pressure and relieved. It is open to the room, it will not hold vacuum again, and it has stopped being a heat sink. Everything the generators raise now goes out of their safety valves, and the water goes with it.","cond"],
  ["ROD AT LIMIT","amber",s=>s.rodBand,
   "The automatic rod controller is asking for rod travel the commissioned band will not give it, and coolant temperature is off programme because of it. It has no authority left in that direction. Move load, move boron, or widen the band at the design bench - the band is not a safety limit, it is how much room the controller was given.","rods"],
  ["NEAR TRIP","amber",()=>!!tripNear(),

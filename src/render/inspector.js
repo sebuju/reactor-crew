@@ -348,12 +348,12 @@ function paramsFor(p){
     note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
   }
   else if(p.role==="cond"){
-    sld("CONDENSER SIZE","The heat sink, and it sets two things at once. It caps how much steam can be dumped straight past a tripped turbine, so a generous unit absorbs a scram without the relief valve ever lifting. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. This slider sizes THIS unit; a second condenser is sized on its own.",
+    sld("CONDENSER SIZE","The heat sink, and it sets three things at once. It caps how much steam can be dumped straight past the turbine, so a generous unit follows a load change and absorbs a scram without a relief valve ever lifting. It sizes the circulating water flow with it, so a bigger machine also has more water moving through it. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. This slider sizes THIS unit; a second condenser is sized on its own.",
         {get:()=>condSizeOf(id),set:v=>{ D.condSize[id]=v; }},
         0,1,v=>(condDump(v)*100).toFixed(0)+" % dump",.05,v=>condDuty(v)*COND_MASS);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
       ["CONDENSING DUTY",(condDuty(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit on its own condenses, as a share of rated steam. The plant figure below is every condenser's duty added up."],
-      ["DUMP CAPACITY",(condDump(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit will take straight past a tripped turbine. One slider sets both this and the duty above, so a generous unit absorbs a scram AND condenses a bigger draw."],
+      ["DUMP CAPACITY",(condDump(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit will take straight past the turbine. On a plant that boils in its own core the bypass is open whenever the governor is closing, so this is what lets it follow a load change without a safety valve lifting; on a subcooled plant it opens on a scram. One slider sets both this and the duty above."],
       ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",null,"Every condenser on the plant added up. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
       ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, shown here so the mismatch is visible from either component."]]; }});
     B.push({kind:"note",dyn:()=>{ const d=derived();

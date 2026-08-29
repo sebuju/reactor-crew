@@ -2057,6 +2057,12 @@ function readoutsFor(p,s){
       "How hot the water in this machine actually is. It moves below the vacuum floor, where BACK PRESS cannot: a condenser with margin sits on that floor and this is what says how much margin. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
+    add("CW OUTLET",cwOut(s).toFixed(0)+" K",cwOut(s)>T_CW+CW_RISE*1.5?C.amber:null,
+      "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" K of rise, and a machine working harder than it was bought for sends it out hotter.");
+    add("CIRC WATER",s.blackout?"STOPPED":"running",s.blackout?C.red:C.green,
+      "The circulating water pumps. They sit on the main board, so a blackout stops them dead - and with no water moving there is no heat sink at all, whatever the condenser itself is worth.");
+    add("VACUUM",s.condLost?"LOST":"holding",s.condLost?C.red:C.green,
+      "Whether this machine still holds a vacuum. Past atmospheric it relieves, the air is in, and it does not come back: the condenser stops being a heat sink for good and the steam backs up into the generators.");
     /* The tanks this machine hosts - a tank with no cell of its own has no
        panel of its own either, so it reports here, on the component it lives
        inside. One row per hosted tank. */

@@ -306,7 +306,8 @@ const totalTurbMass=()=>{ let m=0;
   return m; };
 const condSizeOf=id=>D.condSize[id]??D.condCap;
 const condDuty=size=>0.30+1.45*size;
-/* Steam this unit will take straight past a tripped turbine. P.bypass and the
+/* Steam this unit will take straight past the turbine - on a load change as
+   well as on a trip, since the bypass became a live machine. P.bypass and the
    bench label are the two readers and each carried the literal. */
 const condDump=size=>1.00*size;
 const COND_MASS=20;                    // t, at condDuty()==1
@@ -317,8 +318,10 @@ const totalCondMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="cond") m+=condDuty(condSizeOf(p.id))*COND_MASS;
   return m; };
 /* The dump ceiling is count-INDEPENDENT today (P.bypass, step.js), so it takes
-   the mean and not the sum; P.condUA reads the sum, so rejection does scale
-   with count. That asymmetry is the existing model and is not changed here. */
+   the mean and not the sum; P.condUA reads the sum, and so does the
+   circulating water flow P.cwC that is anchored against it, so rejection does
+   scale with count. That asymmetry is the existing model and is not changed
+   here - the circulating water picked the SUM, with rejection. */
 const condSizeMean=()=>{ let n=0,c=0;
   for(const p of LAY.parts) if(p.role==="cond"){ c+=condSizeOf(p.id); n++; }
   return n?c/n:D.condCap; };
