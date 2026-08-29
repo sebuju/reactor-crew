@@ -1261,27 +1261,28 @@ function pipeFitMarks(L,net){
 
 // readoutsFor() is DATA - rows of [key,value,colour,tip,band,signedBar] - the
 // ONE description of what a component is worth watching, consumed by the
-// control room's HTML rail (fieldRowsSync() in inspector.js). Four numbers
-// show up on more than one component; their band and sentence are written
-// ONCE here so two readouts cannot describe the same quantity two ways.
+/* control room's HTML rail (fieldRowsSync() in inspector.js).
+   A PLANT-WIDE NUMBER BELONGS TO ONE PANEL. The rail builds a well per PART, so
+   a row about the whole plant printed on an instanced panel is printed once per
+   instance - four generators meant four NAT CIRCs. Each of these now has a
+   single singleton home (INVENTORY/FATIGUE/NAT CIRC on the reactor); they stay
+   helpers because the band and the sentence are still written once. */
 const rowInv=s=>["INVENTORY",s.inv.toFixed(1)+" %",
   band(s.inv,80,100,[[95,C.red,"LEAKING"],[100,C.blue,"FULL"]],{dp:0}),
   "How much water is actually in the loop. A whole loop sits at 100%; under 95% you are losing it somewhere."];
 const rowFat=s=>["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",
   band(s.fatigue,0,100,[[50,C.cyan,"SOUND"],[100,C.amber,"WORN"]],{dp:0}),
   "Permanent metal damage from cold water hitting hot steel, mostly from emergency injection. It never resets, and the vessel bursts lower for every point of it."];
-/* THIS generator's level when a generator is asking, the driest on the plant
-   when the feed panel is - the feed system is one system serving all of them,
-   and the one worth showing is the one closest to uncovering. It printed the
-   same global number on every panel until Stage 6a split s.sglBy per machine. */
-const rowSgl=(s,id)=>{ const v=id?sgLvl(s,id):sglMin(s), n=sgIds().length;
-  return [id?"SG LEVEL":(n>1?"SG LEVEL (LOWEST)":"SG LEVEL"),v.toFixed(1)+" %",
+/* A LEVEL IS THIS GENERATOR'S. The plant-wide sglMin() form is gone: the rail
+   carries one well per part, so an aggregate printed on the feed panel stood
+   beside the per-machine rows it was a minimum of. */
+const rowSgl=(s,id)=>{ const v=sgLvl(s,id);
+  return ["SG LEVEL",v.toFixed(1)+" %",
   band(v,0,100,[[25,C.red,"LOW"],[100,C.cyan,"NORMAL"]],{dp:0}),
   "Water in the steam generator. Under 25% it is boiling dry and the core is losing its heat sink."]; };
-// same s.nat used to be coloured three different ways on three components;
-// shared here, as a percentage of RATED loop flow - the solved thermosiphon
-// is a real flow now, so it is scaled against the same 100% every other flow
-// readout uses instead of against a correlation's own ceiling
+// as a percentage of RATED loop flow - the solved thermosiphon is a real flow
+// now, so it is scaled against the same 100% every other flow readout uses
+// instead of against a correlation's own ceiling
 const rowNat=s=>["NAT CIRC",(s.nat*100).toFixed(0)+" %",
   band(s.nat*100,0,20,
     [[2,C.ink2,"NONE"],[20,C.green,"ESTABLISHED"]],{dp:0}),
@@ -1731,11 +1732,27 @@ function readoutsFor(p,s){
     add("AX / RAD OFFSET",(s.ao*100).toFixed(0)+" / "+(s.ro*100).toFixed(0)+" %",
         Math.abs(s.ao)>.35||Math.abs(s.ro)>.35?C.amber:C.cyan,
       "How far the flux leans up-down and in-out from centred. Past 35% either way the peak has moved somewhere you did not design for.");
-    add("VOID",s.vf.toFixed(2),
+    add("VOID FRACTION",s.vf.toFixed(2),
       band(s.vf,0,.6,[[.15,C.cyan,"LIQUID"],[.6,C.red,"BOILING"]],
         {dp:2,lim:trip(.30,"TRIP")}),
       "Share of the coolant that has turned to steam. Steam carries heat away far worse than water, and in a graphite core it adds reactivity as well.");
     add.apply(null,rowInv(s));
+    /* s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow
+       (tripCause(), step.js), so a gauge on the pump SETTING would sit at
+       100% NORMAL, with its own trip mark on a number that no longer causes
+       the trip, right up to the moment the plant tripped. It reads here rather
+       than on a pump because it is one number about the CORE and there are
+       many pumps - and the trip it carries is a reactor trip. */
+    add("CORE FLOW",(s.flowNet*100).toFixed(1)+" %",
+      band(s.flowNet*100,0,110,[[P.flowMin*100,C.red,"STARVED"],[110,C.cyan,"NORMAL"]],
+        {dp:0,lim:trip(P.flowMin*102,"TRIP")}),
+      "Coolant actually reaching the core, which is what the protection system trips on - not what the pumps were told to do. A shut valve or a severed run shows up here and nowhere else.");
+    add("DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %",null,
+      "The least flow this pump set still delivers after damage. It rises with how much spare pump capacity you actually placed on the grid, beyond one pump per loop.");
+    add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
+      band(s.hotFlow*100,0,110,[[80,C.amber,"STARVED"],[110,C.cyan,"FED"]],{dp:0}),
+      "Flow in the WORST channel, not the average. A voiding channel loses the flow it needed to stop voiding, and that runaway is why the core is a place and not a number.");
+    add.apply(null,rowNat(s));
     // BORON and XENON aren't stated here: they're reactivity terms, so the
     // ledger below says them (with direction) instead of two rows quoting one number
     add("BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
@@ -1806,14 +1823,9 @@ function readoutsFor(p,s){
       "How long a full insertion takes on a trip. You bought this at the bench, and faster gear is heavier gear.");
     add("TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green,
       "Whether a trip is latched in. While it is, the drives are pinned fully inserted whatever the slider says.");
-    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2,T_TRIP);
     add("RESET WOULD",!s.scrammed?"n/a":resetVeto()?"REFUSE":"clear",
         !s.scrammed?C.ink2:resetVeto()?C.red:C.green,
       "What the trip reset would do if you pressed it now. Armed protection holds a veto for as long as a trip condition is still standing; bypass it and the latch clears on your word alone.");
-    add("NET RHO",s.rho.toFixed(0)+" pcm",
-      band(s.rho,-800,800,[[-50,C.amber,"FALLING"],[50,C.green,"STEADY"],[800,C.amber,"RISING"]],
-        {dp:0,lim:[[P.BETA*1e5,"PROMPT"]]}),
-      "Everything pushing the reactor up or down, added together. Zero is steady power; past your fuel's beta nothing can stop it in time.");
     add("TILT TRIM",(s.tilt>=0?"+":"")+s.tilt.toFixed(2),
       band(s.tilt,-.3,.3,[[-.05,C.amber,"LEANING"],[.05,C.ink2,"CENTRED"],[.3,C.amber,"LEANING"]],{dp:2}),
       "How far the banks are leaned against each other to shape the flux. Live in GANG only - SPLIT stands it down, because two things cannot own the same spacing.");
@@ -1882,7 +1894,6 @@ function readoutsFor(p,s){
         "Coolant going back to the core, after the generator has taken its heat."); }
     add("HEAT REMOVED",((s.steamBy&&s.steamBy[id]||0)*H_FG/1000).toFixed(0)+" MWt",null,
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
-    add.apply(null,rowNat(s));
     add("SHELL",(s.sgBurst&&s.sgBurst[id])?"BURST":"intact",
         (s.sgBurst&&s.sgBurst[id])?C.red:C.green,
       "The secondary pressure boundary. It bursts at "+sgBurstP().toFixed(1)+" MPa, and nothing stops it getting there except a relief valve you placed. Burst, it is open to atmosphere: it will not hold pressure again and it stops cooling its loop the moment it is empty.");
@@ -1902,32 +1913,25 @@ function readoutsFor(p,s){
         served.length?null:C.amber,
       "Which generators are heated by this exchanger. It is the loop it is spliced into, asked of the drawing - an exchanger on no loop with no generator behind it heats nothing at all.");
   } else if(primaryPump(id)){
-    /* s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow
-       (tripCause(), step.js), so a gauge on the pump SETTING would sit at
-       100% NORMAL, with its own trip mark on a number that no longer causes
-       the trip, right up to the moment the plant tripped. Shut every throttle
-       and that is exactly what it did. The two are equal to the bit on an
-       undamaged, unthrottled plant, which is why nothing re-pins. */
-    add("FLOW",(s.flowNet*100).toFixed(1)+" %",
-      band(s.flowNet*100,0,110,[[P.flowMin*100,C.red,"STARVED"],[110,C.cyan,"NORMAL"]],
-        {dp:0,lim:trip(P.flowMin*102,"TRIP")}),
-      "Coolant actually reaching the core, which is what the protection system trips on - not what the pumps were told to do. A shut valve or a severed run shows up here and nowhere else.");
-    add("FLOW DEMAND",(flowDemPri(s)*100).toFixed(1)+" %",
-        Math.abs(flowDemPri(s)-s.flowNet)>.005?C.amber:C.ink2,
-      "Where you have asked the pumps to go. Delivery lags it by "+FLOW_TAU+" s, by "+FLOW_TAU_COAST+" s while coasting down in a blackout, and falls short of it for good if the water has nowhere to go.");
-    add("DESIGN FLOOR",(P.flowMin*100).toFixed(0)+" %",null,
-      "The least flow this pump set still delivers after damage. It rises with how much spare pump capacity you actually placed on the grid, beyond one pump per loop.");
-    add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
-      band(s.hotFlow*100,0,110,[[80,C.amber,"STARVED"],[110,C.cyan,"FED"]],{dp:0}),
-      "Flow in the WORST channel, not the average. A voiding channel loses the flow it needed to stop voiding, and that runaway is why the core is a place and not a number.");
-    add("CAVITATION",(s.cav*100).toFixed(0)+" %",
-      band(s.cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
-      "Vapour forming at the pump inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well.");
-    add.apply(null,rowNat(s));
-    const coolant = LAY.parts.filter(q=>primaryPump(q.id)).map(q=>q.id);
-    add("PUMPS LOST",s.dmgParts.filter(k=>coolant.indexOf(k)>=0).length+" / "+coolant.length,
-        s.dmgParts.some(k=>coolant.indexOf(k)>=0)?C.red:C.green,
-      "How many of your coolant pumps have been destroyed, out of how many you paid for.");
+    /* A PUMP PANEL IS ABOUT THIS PUMP. The rail carries one well per part, so
+       the plant-wide flow ledger that used to stand here was reprinted once per
+       pump - four wells quoting one s.flowNet. Delivered core flow and the hot
+       channel are the CORE's numbers and say so from the reactor's panel; what
+       is left is per-instance, which is the standing s.flowBy/s.flowDemBy have
+       had since every control became per-instance. */
+    const li=loopOf(id), cav=(s.cavP&&li!=null&&s.cavP[li])||0;
+    add("PUMP SPEED",(flowOf(s,id)*100).toFixed(1)+" %",
+      band(flowOf(s,id)*100,0,110,[[5,C.red,"STOPPED"],[110,C.cyan,"RUNNING"]],{dp:0}),
+      "How fast THIS pump is actually turning. It is not what reaches the core: a shut valve downstream leaves this at 100% and starves the core anyway. CORE FLOW on the reactor panel is that number.");
+    add("SPEED DEMAND",((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)*100).toFixed(1)+" %",
+        Math.abs((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)-flowOf(s,id))>.005?C.amber:C.ink2,
+      "Where you have asked THIS pump to go. The main slider writes every pump at once; this pump's own strip writes only this one. Delivery lags it by "+FLOW_TAU+" s, and by "+FLOW_TAU_COAST+" s while coasting down in a blackout.");
+    add("CAVITATION",(cav*100).toFixed(0)+" %",
+      band(cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
+      "Vapour forming at this pump's own inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well. A loop with two pumps reads the worse of them, because that is the one the head loss costs.");
+    add("PUMP",s.dmgParts.includes(id)?"DESTROYED":"running",
+        s.dmgParts.includes(id)?C.red:C.green,
+      "Whether this pump survived. Destroyed, it turns no more, and the loop is on whatever the others and buoyancy can carry.");
   } else if(p.role==="turb"){
     add("LOAD",(s.load*100).toFixed(1)+" %",null,
       "How hard the turbine is drawing steam. This is the demand the reactor spends its whole time trying to follow.");
@@ -1998,7 +2002,6 @@ function readoutsFor(p,s){
       "It lets go at "+t.burst.at.toFixed(2)+" MPa. Past that the tank is an opening to containment: it drains onto the floor and what was in it is in the air, not behind a wall. This is the TMI-2 sequence, and a burst disc does not reseat.");
     if(s.tankOver&&s.tankOver[id]>0) add("OVERFLOW",s.tankOver[id].toFixed(0)+" kg/s",C.red,
       "It is full and cannot take any more. This is leaving the plant, and after a tube rupture it is primary water.");
-    if(tankSide(id)==="primary"){ add.apply(null,rowInv(s)); add.apply(null,rowFat(s)); }
   } else if(id==="cont"){
     add("RELEASE",s.release.toFixed(2)+" %",
       band(s.release,0,10,[[1,C.cyan,"CONTAINED"],[10,C.red,"RELEASING"]],{dp:2}),
@@ -2016,12 +2019,10 @@ function readoutsFor(p,s){
       "Share of pump flow your backup supply can still turn. Everything above this has to come from buoyancy.");
     add("SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green,
       "Whether the backup set itself survived. A hit here means a blackout is natural circulation and nothing else.");
-    add.apply(null,rowNat(s));
   /* A PUMP THAT FEEDS A GENERATOR'S SHELL - asked of the drawing (secGensOf(),
      layout.js), never of the id "feed". There is one pump role, so which
      panel a pump gets is a question about where it is piped. */
   } else if(roleHead(p.role) && secGensOf(id).length){
-    add.apply(null,rowSgl(s));
     { const arm=tankRuleAny(s,"secondary"), any=secTankIds().some(id=>D.tanks[id].auto!=="always"&&D.tanks[id].auto!=="manual");
       add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
         "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time."); }

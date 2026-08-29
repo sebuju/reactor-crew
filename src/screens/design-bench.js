@@ -901,7 +901,8 @@ let dbLastSel=null, dbPanelSig=null;
    every frame, 5.6 ms of it on the reactor panel alone. designSig() is the
    signature five other caches here already key on, and costs 0.017 ms. */
 function dbRailSync(state){
-  const moved = sel!==dbLastSel; dbLastSel=sel;
+  // see railSelfPick() - a pick made on a panel's own title bar does not scroll
+  const moved = sel!==dbLastSel && !railSelfPick(); dbLastSel=sel;
   const sig=designSig()+"|"+sel, fresh=sig!==dbPanelSig; dbPanelSig=sig;
   for(const h of state.panels){
     const on=h.ids.includes(sel);

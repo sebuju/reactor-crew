@@ -148,14 +148,17 @@ let tipSync=()=>{};
 function shellInitTooltip(){
   const tip=document.getElementById("tip");
   if(!tip) return;
-  let cur=null, curRail=null, owner=null, cvKey=null, bar=null;
-  const show=el=>{ cur=el; curRail=railOf(el); owner="html";
+  let cur=null, curRail=null, curGroup=null, owner=null, cvKey=null, bar=null;
+  const show=el=>{ cur=el; curRail=railOf(el); curGroup=el.closest(".cr-group"); owner="html";
     tip.innerHTML=`<b>${el.dataset.tipTitle||""}</b><p>${el.dataset.tipBody||""}</p>`;
     bar=null;
     KIT.show(tip,true);
     const b=el.getBoundingClientRect();
-    if(curRail) place(b.top+b.height/2); else placeBy(b); };
-  const hide=()=>{ cur=null; curRail=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
+    const a=curRail?null:vitalsAnchor();
+    if(a) placeAnchor(a);
+    else if(curRail) place(curGroup?curGroup.getBoundingClientRect().top:b.top+b.height/2, !!curGroup);
+    else placeBy(b); };
+  const hide=()=>{ cur=null; curRail=null; curGroup=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
   document.addEventListener("pointerover",e=>{
     const el=e.target.closest("[data-tip-title]");
     if(el && el!==cur) show(el);
@@ -174,10 +177,23 @@ function shellInitTooltip(){
      hard-coded 340 here would be a second copy of that number in a second
      file. */
   const railOf=el=>{ const r=el.closest(".db-rail,.cr-rail,.scn-rail"); return r&&r.offsetParent?r:null; };
-  const place=clientY=>{
+  /* ONE PARK SPOT WHENEVER THE VITALS PANEL IS UP - off its right edge, top on
+     its top. A RAIL CONTROL IS NOT ON IT: a rail keeps its own seat beside
+     itself, or reading the rail throws the box across the window. */
+  const vitalsAnchor=()=>{ const v=document.querySelector(".cr-vitals");
+    return v&&v.offsetParent?v.getBoundingClientRect():null; };
+  const placeAnchor=b=>{
+    const gap=8, r=tip.getBoundingClientRect();
+    tip.style.left=Math.max(4,Math.min(b.right+gap, innerWidth-r.width-4))+"px";
+    tip.style.top=Math.max(4,Math.min(b.top, innerHeight-r.height-4))+"px";
+  };
+  /* atTop = the y IS the top of the box: a control inside a group is read as
+     part of that group, so its tip sits level with the group and holds still
+     while the hand walks down the rows. */
+  const place=(clientY,atTop)=>{
     const gap=12, r=tip.getBoundingClientRect();
     const x=Math.max(4, curRail.getBoundingClientRect().left-gap-r.width);
-    const y=Math.max(4, Math.min(clientY-r.height/2, innerHeight-r.height-4));
+    const y=Math.max(4, Math.min(atTop?clientY:clientY-r.height/2, innerHeight-r.height-4));
     tip.style.left=x+"px"; tip.style.top=y+"px";
   };
   /* A control outside any rail gets its tooltip on its OWN box - parking that one
@@ -188,7 +204,7 @@ function shellInitTooltip(){
     tip.style.left=Math.max(4, Math.min(b.left, innerWidth-r.width-4))+"px";
     tip.style.top=y+"px";
   };
-  document.addEventListener("pointermove",e=>{ if(cur&&curRail) place(e.clientY); });
+  document.addEventListener("pointermove",e=>{ if(cur&&curRail&&!curGroup) place(e.clientY); });
 
   /* PARKED bottom-right OF THE PLANT VIEW, not carried on the pointer. A box
      that follows the hand is a box between the hand and whatever it is reaching
@@ -200,6 +216,9 @@ function shellInitTooltip(){
      box nobody can read. viewRectCss() is exactly the room the rails leave. */
   let viewAt="";
   const placeView=()=>{
+    const a=vitalsAnchor();
+    if(a){ const at="v"+a.right+","+a.top+","+tip.offsetHeight;
+      if(at===viewAt) return; viewAt=at; placeAnchor(a); return; }
     const v=viewRectCss(), r=tip.getBoundingClientRect();
     const x=Math.max(4,Math.min(v.right-r.width-6, innerWidth-r.width-4));
     const y=Math.max(4,Math.min(v.bottom-r.height-6,innerHeight-r.height-4));

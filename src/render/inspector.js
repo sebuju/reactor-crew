@@ -24,11 +24,20 @@ const cssCol=c=>c?(C2VAR[c]||c):"";
    drawing, which is hard for the parts that are small or behind something.
    Both rails call this, because two rails with a copy each is how the two
    would end up disagreeing about what a title bar does. */
+/* WHERE THE PICK CAME FROM, because the two rails answer it the same way: a
+   selection made on the DRAWING has to scroll the rail to the panel, and a
+   selection made ON that panel's own title bar must not - the panel is already
+   under the pointer, and scrolling it to the top pulled it out from under the
+   click that made it. Held as the id rather than a flag so a stale one cannot
+   swallow the next canvas pick; the sync clears it on the frame it reads it. */
+let railPickId=null;
+const railSelfPick=()=>{ const self = railPickId!==null && railPickId===sel;
+  railPickId=null; return self; };
 function railPick(well,ids,name){
   if(!well.head) return well;
   well.head.classList.add("kit-rule-pick");
   well.el._pickId=ids[0];
-  well.head.addEventListener("click",()=>{ sel=ids[0]; });
+  well.head.addEventListener("click",()=>{ sel=ids[0]; railPickId=ids[0]; });
   KIT.tip(well.head,name||"",
     "Click to select this component. It lights up on the plant, and a leader runs from it to this panel.");
   return well;
@@ -124,7 +133,7 @@ function fieldRowsBuild(container,rows){
        wrong: #00ffff goes in and rgb(0, 255, 255) comes out, so the guard never
        held and those rows repainted on every frame. Same cache the kit keeps
        for a cell's fill (kit.js). */
-    out.push({key:row[0],val,bar,barKind,txt:null,col:null,lim:row[4]?row[4].lim:null});
+    out.push({key:row[0],el,val,bar,barKind,txt:null,col:null,lim:row[4]?row[4].lim:null});
   }
   container._viz=viz;
   return out;
@@ -141,7 +150,23 @@ function fieldRowsSync(container,rows){
     if(!H||row.sec||row.viz) continue;
     if(H.txt!==row[1]){ H.val.textContent=row[1]; H.txt=row[1]; }
     const col=cssCol(row[2]);
-    if(H.col!==col){ H.val.style.color=col; H.col=col; }
+    if(H.col!==col){
+      H.val.style.color=col;
+      /* THE ROW CARRIES ITS OWN SEVERITY, so the master caution and the rail
+         panel it was copied from are washed by the same rule off the same
+         fact. Written here rather than by either caller: two of them setting
+         it is how the copy and the original end up disagreeing.
+         A LEDGER TERM IS EXEMPT, and row[5] is the test. A centre-zero bar is
+         what makes a row a term in a balance - the reactivity stack and the
+         heat stack - and there the colour is the KEY to the picture beside it,
+         not a verdict: fuel is red and decay is amber whatever the plant is
+         doing. Washing those painted eight permanent alarm stripes onto a
+         healthy reactor panel. */
+      const sev = row[5] ? null : row[2];
+      H.el.classList.toggle("red",sev===C.red);
+      H.el.classList.toggle("amber",sev===C.amber);
+      H.col=col;
+    }
     if(H.barKind==="band"){ H.bar.set(row[4].v); H.lim=row[4].lim; }
     else if(H.barKind==="sig") H.bar.set(row[5].f,row[5].m,col);
   }

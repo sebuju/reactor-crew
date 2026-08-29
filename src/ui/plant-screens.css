@@ -19,9 +19,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-root{inset:0;grid-template-columns:1fr 340px}
 
 /* ─────────────── control room ─────────────── */
-/* the two balances stand under the bars and the trends, so this panel is now
-   taller than the window on a short screen: it scrolls, bar hidden, the way the
-   component rail does. Nothing inside may squash - a flex child that shrinks
+/* the two balances make this panel taller than the window on a short screen,
+   so it scrolls, bar hidden, the way the component rail does. Nothing inside
+   may squash - a flex child that shrinks
    hands hostPaint() a box its picture was not laid out for.
    ALIGN-SELF:START IS LOAD-BEARING. A scroll container's minimum size is zero,
    so stretched into the grid's auto row it collapsed to 9 px against the rail
@@ -29,12 +29,15 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    instead, capped by max-height. */
 .cr-vitals{grid-column:1;grid-row:1;pointer-events:auto;display:flex;flex-direction:column;
   width:300px;margin:4px 0 0 4px;padding:4px 0;background:var(--c-panel);border:1px solid var(--c-edge);
-  align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none}
+  align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none; z-index: 1;}
 .cr-vitals::-webkit-scrollbar{display:none}
 .cr-vitals>*{flex:0 0 auto}
 /* 8px of side padding puts these on the same left edge the vital rows keep.
-   Two classes because .insp-viz sets its own padding further down the file. */
-.insp-viz.cr-viz{border-top:1px solid var(--c-edge);padding:4px 8px 6px;box-sizing:border-box}
+   Two classes because .insp-viz sets its own padding further down the file.
+   The seam between two of them is 12px of nothing - no line, and no gap above
+   the first, so it only ever separates two pictures that are both there. */
+.insp-viz.cr-viz{padding:0 8px 6px;box-sizing:border-box}
+.insp-viz.cr-viz+.insp-viz.cr-viz{margin-top:12px}
 /* the first track is the plot dot: reserved whether or not it is lit, so
    turning a channel on does not shift the six labels sideways */
 .cr-vital{display:grid;grid-template-columns:7px 84px 1fr 58px;align-items:center;gap:6px;
@@ -53,6 +56,48 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-trends{display:block}
 .cr-trend-canvas{display:block;width:100%;height:96px;background:transparent;
   border-top:1px solid var(--c-edge)}
+
+/* MASTER CAUTION - see crCautBuild(). LAST in the vitals panel, so a caution
+   arriving grows the panel downward and never moves a balance somebody is
+   reading. A dismissed line is gone; a line whose reading has RECOVERED is
+   still here, dimmed, because it has not been answered yet. */
+.cr-caut{display:block;margin-top:12px;border-top:1px solid var(--c-edge)}
+.cr-caut-head{display:flex;align-items:center;gap:8px;padding:5px 8px 4px;
+  font-size:var(--t7);letter-spacing:1.2px;text-transform:uppercase;color:var(--c-ink2)}
+.cr-caut-title{flex:1 1 auto;min-width:0}
+/* HELD, NOT REMOVED: hidden by visibility so the count never moves when the
+   last answered caution goes - see crCautSync() */
+.cr-caut-clear{flex:0 0 auto;padding:0 5px;line-height:1.5;letter-spacing:1px}
+.cr-caut-clear.off{visibility:hidden}
+/* the rows are the RAIL'S rows - fieldRowsSync() builds them, so value, colour
+   and band all come for free. Only two things are added here: they are
+   clickable, and one whose reading has recovered is dimmed. */
+.cr-caut-body{padding:0 8px 6px}
+.cr-caut-body .insp-row{cursor:pointer;margin: 2px -4px 0px -4px; }
+/* THE WASH IS WHAT THE READING IS DOING NOW, and it is the SAME rule in the
+   rail as in the master caution - fieldRowsSync() puts the class on off the
+   row's own colour, so a caution and the panel it was copied from cannot look
+   different. Mixed with transparent, not with the panel, so a row keeps reading
+   correctly whatever it sits on. Nominal has no wash and needs no rule - bare
+   is also what an answered caution looks like. */
+.cr-caut-body .insp-row.red,.cr-panel-body .insp-row.red{
+  background:color-mix(in srgb,var(--c-red) 12%,transparent)}
+.cr-caut-body .insp-row.amber,.cr-panel-body .insp-row.amber{
+  background:color-mix(in srgb,var(--c-amber) 12%,transparent)}
+/* the label steps up one notch on a washed row - ink, not bright: a caption in
+   ink2 over a tint is the first thing to disappear, but full white would make
+   the caption louder than the value, and the value is the verdict. Same step a
+   plotted vital's label takes. */
+.cr-caut-body .insp-row.red .insp-row-lab,.cr-panel-body .insp-row.red .insp-row-lab,
+.cr-caut-body .insp-row.amber .insp-row-lab,.cr-panel-body .insp-row.amber .insp-row-lab{
+  color:var(--c-ink)}
+/* HOVER MUST NOT TOUCH THE BACKGROUND, because the background is the severity:
+   swapping it for a hover colour threw away the one thing the row was saying.
+   An inset shadow lightens whatever is already there - bare, amber or red alike
+   - and paints over the background but under the text; the outline is drawn
+   inside the box, so nothing shifts by a pixel when the pointer arrives. */
+.cr-caut-body .insp-row:hover{outline:1px solid var(--c-edge2);outline-offset:-1px;
+  box-shadow:inset 0 0 0 999px color-mix(in srgb,var(--c-bright) 8%,transparent)}
 
 /* BOTTOM-ANCHORED: the stack grows upward out of the corner, so a row lighting
    up never pushes the rows already being read off their line. */
@@ -86,11 +131,29 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-rail{grid-column:2;grid-row:1/3;overflow-y:auto;pointer-events:auto;
   background:var(--c-panel);padding-top:6px;scrollbar-width:none}
 .cr-rail::-webkit-scrollbar{display:none}
+/* A SIDE OF THE PLANT, COLLAPSIBLE - see crRailBuild(). It reads as a heading
+   rather than as a well: no box of its own, so the panels inside keep the
+   rail's own left edge and the shut group is one line. The summary marker is
+   the only thing that says it opens. */
+.cr-group{}
+.cr-group:first-child{margin-top:0}
+/* ONE ROW, ALWAYS. The alarm text after the name is as long as the machine
+   names in it, so the heading clips rather than wrapping onto a second line and
+   pushing the whole rail down. No flex here on purpose: any display but the
+   default takes the disclosure marker away, and the marker is the only thing
+   that says the heading opens. */
+.cr-group>summary{cursor:pointer;padding:4px 4px 5px;
+  font-size:var(--t8);letter-spacing:1.6px;text-transform:uppercase;color:var(--c-ink2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cr-group[open]>summary{color:var(--c-bright)}
+.cr-group>summary:hover{color:var(--c-bright)}
+/* what is red under the lid - see crRailAlert(). The heading goes red with it,
+   so the colour carries at a glance and the text says which machine. */
+.cr-group.alarm>summary,.cr-group.alarm[open]>summary{color:var(--c-red)}
+.cr-group.caution>summary,.cr-group.caution[open]>summary{color:var(--c-amber)}
+.cr-group-alert{color:inherit;letter-spacing:.8px}
+.cr-group-alert:not(:empty){margin-left:8px}
 .cr-ops{margin-bottom:8px}
-.cr-op{background:var(--c-well);border:1px solid var(--c-edge);margin-bottom:4px}
-.cr-op>summary{cursor:pointer;padding:5px 8px;font-size:var(--t7-5);letter-spacing:1.4px;
-  text-transform:uppercase;color:var(--c-ink2)}
-.cr-op[open]>summary{color:var(--c-amber)}
 .cr-log,.cr-dmg,.cr-flt{padding:6px 8px 8px}
 .cr-empty{font-size:var(--t8);letter-spacing:1px;color:var(--c-ink2);text-align:center;margin:8px 0}
 .cr-log-row{padding:4px 0;border-top:1px solid var(--c-edge)}
@@ -111,7 +174,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-dmg-dose{font-size:var(--t7);margin-top:2px}
 .cr-flt .kit-btn{display:block;width:100%;margin-bottom:4px}
 
-.cr-comp-rail{display:flex;flex-direction:column;gap:6px}
+.cr-comp-rail{display:flex;flex-direction:column;}
 /* the well has no border any more, so its two states are outlines - which cost
    no layout, so nothing shifts by 2px when a panel is picked */
 .kit-well.on{outline:1px solid var(--c-amber-soft);outline-offset:-2px}
@@ -120,8 +183,8 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* a grid, not a flex row: the bar needs a line of its own, and only an explicit
    track puts every value in one column. fit-content() caps the label where a
    max-width on the item used to. */
-.insp-row{display:grid;grid-template-columns:fit-content(52%) minmax(0,1fr);
-  align-items:center;column-gap:8px;row-gap:2px;padding:1px 0}
+.insp-row{display:grid;grid-template-columns: 1fr auto;
+  align-items:center;column-gap:8px;row-gap:2px;padding:1px 4px; transition: 200ms background-color;}
 .insp-row-lab{font-size:var(--t7);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .insp-row-val{font-size:var(--t8-5);text-align:right;white-space:nowrap;
@@ -185,6 +248,10 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* the control room's own copy, off the COMMISSIONED network */
 .cr-cnx{padding:6px 8px 8px}
 .cr-cnx-row{display:flex;gap:6px;justify-content:space-between;padding:2px 0;font-size:var(--t8)}
-.cr-cnx-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cr-cnx-state{flex:0 0 auto;color:var(--c-ink2)}
+/* a run's NAME is a label, so it reads as one - the same ink2 every caption in
+   this rail keeps, leaving the colour to the verdict beside it */
+.cr-cnx-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-ink2)}
+/* the state is a VERDICT, so it carries a verdict's colour: a run still
+   carrying is green, the same green every "intact" reads in on a panel */
+.cr-cnx-state{flex:0 0 auto;color:var(--c-green)}
 .cr-cnx-row.cut .cr-cnx-name,.cr-cnx-row.cut .cr-cnx-state{color:var(--c-red)}
