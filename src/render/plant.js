@@ -1168,7 +1168,7 @@ function drawPortMarks(){
     // count, so two connections sharing a port cannot double-draw the joint.
     const out=[c[0]+DIRV[f][0], c[1]+DIRV[f][1]];
     const piped=!!owner[out[0]+","+out[1]];
-    if(!piped) drawNozzle(x,y,f==="l"||f==="r",1,col);
+    if(!piped){ const [nx,ny]=portPos(pid); drawNozzle(nx,ny,f==="l"||f==="r",1,col); }
     const wd=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid});
     if(hov(wd)) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
     const word = portWord(p,f);

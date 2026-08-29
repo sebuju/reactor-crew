@@ -1320,9 +1320,13 @@ const prect=p=>grect(p.x,p.y,p.w,p.h);
 // the CENTRE of a cell, in plant pixels - what a port's mark, a pipe corner
 // and a nozzle are all placed on, so the three can never land a pixel apart
 const cellPos=(x,y)=>[GX+(x+0.5)*CELL, rowTop(y)+CELL/2];
+// A NOZZLE SITS ON THE SHELL, not in the middle of the port cell - half a
+// cell of bare board between a machine and its own joint read as unconnected.
 function portPos(pid){
-  const c=portCell(pid);
-  return c ? cellPos(c[0],c[1]) : [0,0];
+  const c=portCell(pid), f=portFaceOf(pid);
+  if(!c||!f) return [0,0];
+  const [x,y]=cellPos(c[0],c[1]);
+  return [x-DIRV[f][0]*CELL/2, y-DIRV[f][1]*CELL/2];
 }
 
 /* the face of p that points at q - a nozzle should be on the side the pipe comes from,
