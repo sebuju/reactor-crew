@@ -52,6 +52,13 @@
 <script src="src/sim/record.js"></script>
 <script src="src/sim/scenario.js"></script>
 <script src="src/screens/shell.js"></script>
+<!-- BEFORE design-bench.js, not after it: the bench builds its DOM at script
+     eval time (DB=dbBuild()) and dbBuild() calls railBlank() from here. A
+     browser runs these as separate scripts, so a later one is simply not
+     defined yet - and the bench lost its whole rail. tools/bundle.js
+     concatenates the list into ONE function body, where the declaration hoists
+     over the call, so no auditor could see it. -->
+<script src="src/render/inspector.js"></script>
 <script src="src/screens/design-bench.js"></script>
 <script src="src/render/chart.js"></script>
 <script src="src/render/fx.js"></script>
@@ -59,7 +66,6 @@
 <script src="src/render/rad.js"></script>
   <script src="src/render/layers.js"></script>
   <script src="src/render/plant.js"></script>
-<script src="src/render/inspector.js"></script>
 <script src="src/screens/transport.js"></script>
 <script src="src/screens/control-room.js"></script>
 <script src="src/screens/scenario.js"></script>
