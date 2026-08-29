@@ -317,13 +317,31 @@ const KIT = (function(){
     const loLbl = el("span", "kit-band-lo"); loLbl.textContent = lo.toFixed(dp);
     const hiLbl = el("span", "kit-band-hi"); hiLbl.textContent = hi.toFixed(dp);
     root.appendChild(loLbl); root.appendChild(hiLbl);
-    zones.slice(0, -1).forEach((z, i) => {
+    const zlbls = zones.slice(0, -1).map((z, i) => {
       const lbl = el("span", "kit-band-zlabel");
       lbl.textContent = z[0].toFixed(dp);
       lbl.style.left = at(z[0]) + "%";
       lbl.style.color = zones[i + 1][1];
       root.appendChild(lbl);
+      return {e: lbl, x: at(z[0])};
     });
+
+    /* a zone label sits at its own value, so two close boundaries land on the
+       same pixels - measured against the ends and each other, and the one
+       further right loses. Widths are only knowable once the panel has a width */
+    function fitLabels(){
+      const W = root.clientWidth;
+      if(!W || !root.getBoundingClientRect) return;
+      const wOf = e => { show(e, true); return e.getBoundingClientRect().width; };
+      const boxes = [[0, wOf(loLbl)], [W - wOf(hiLbl), W]];
+      for(const z of zlbls){
+        const w = wOf(z.e), c = W * z.x / 100, a = c - w / 2, b = c + w / 2;
+        if(boxes.some(o => a < o[1] + 2 && o[0] < b + 2)) show(z.e, false);
+        else boxes.push([a, b]);
+      }
+    }
+    fitLabels();
+    if(typeof ResizeObserver === "function") new ResizeObserver(fitLabels).observe(root);
 
     let lastV = null;
     function set(v){

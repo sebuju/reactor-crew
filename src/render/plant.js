@@ -1383,7 +1383,7 @@ function rhoViz(x,y,w,h){
      would hunt its last digits on a plant that is standing still. 50 pcm is under
      a per cent of any axis this widget draws, so the caption is round and steady
      and still describes the bar under it. */
-  txt("+/-"+(Math.round(full/50)*50).toFixed(0)+" pcm",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
+  txt("+/-"+(Math.round(full/50)*50).toFixed(0)+" pcm",R,y+8,{size:7,sp:.6,align:"right",color:C.bright});
 
   /* ── the balance ── */
   const by=y+13+gap, bh=14+grow;
@@ -1453,7 +1453,7 @@ function rhoViz(x,y,w,h){
       ctx.fillStyle=nCol; ctx.fill(); ctx.restore();
     }
   }
-  txt((s.rho>=0?"+":"")+s.rho.toFixed(0)+" pcm NET",L,ny+nh+8,{size:6.5,sp:.6,color:nCol});
+  txt((s.rho>=0?"+":"")+s.rho.toFixed(0)+" pcm NET",L,ny+nh+8,{size:7,sp:.6,color:nCol});
   txt("BETA "+beta.toFixed(0),R,ny+nh+8,{size:6,sp:.6,align:"right",color:C.ink2});
 
   /* ── the last minute of it ── */
@@ -1558,7 +1558,7 @@ function heatViz(x,y,w,h){
   const gap=Math.min(6,slack*.14), grow=Math.min(4,slack*.07);
 
   txt("HEAT BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
-  txt("+/-"+(full*100).toFixed(0)+" % rated",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
+  txt("+/-"+(full*100).toFixed(0)+" % rated",R,y+8,{size:7,sp:.6,align:"right",color:C.bright});
 
   const by=y+13+gap, bh=14+grow;
   fillRect(L,by,R-L,bh,C.well);
@@ -1597,7 +1597,7 @@ function heatViz(x,y,w,h){
   fillRect(Math.min(cx,nx),ny+nh/2-2,Math.max(1,Math.abs(nx-cx)),4,nCol);
   fillRect(nx-1,ny-2,3,nh+4,nCol);
   fillRect(cx,ny-2,1,nh+4,C.bright);
-  txt((dT>=0?"+":"")+dT.toFixed(3)+" K/s",L,ny+nh+8,{size:6.5,sp:.6,color:nCol});
+  txt((dT>=0?"+":"")+dT.toFixed(3)+" K/s",L,ny+nh+8,{size:7,sp:.6,color:nCol});
   txt(rated?(made*rated).toFixed(0)+" MWt MADE":"NOT COMMISSIONED",R,ny+nh+8,
     {size:6,sp:.6,align:"right",color:C.ink2});
 
@@ -1699,10 +1699,15 @@ function readoutsFor(p,s){
   // on its mode rather than on its id - see readoutsForFit() below
   if(p.role==="fitting") return readoutsForFit(id,s);
   if(id==="core"){
+    /* POWER IS COLOURED BY POWER. It used to be forced red whenever DNBR fell
+       under 1.30, which put a red 85 % on the panel - a number reading NORMAL
+       against its own band and its own trip mark, in the colour that means
+       overpower. The margin has its own row directly below and its own caution;
+       borrowing this one's colour said it twice and lied once. */
     add("POWER",(s.n*100).toFixed(1)+" %",
       band(s.n*100,0,150,[[110,C.green,"NORMAL"],[150,C.red,"OVERPOWER"]],
-        {dp:0,lim:trip((1.10+0.22*m)*100,"FLUX"),col:s.dnbr<1.3?C.red:null}),
-      "Heat the core is making, as a share of what it is rated for. The real ceiling is DNBR, not this number.");
+        {dp:0,lim:trip((1.10+0.22*m)*100,"FLUX")}),
+      "Heat the core is making, as a share of what it is rated for. This is the chain reaction alone - decay heat is on top of it, and TOTAL MADE below is the two together. The real ceiling is DNBR, not this number.");
     add("THERMAL",(s.n*P.rated).toFixed(0)+" MWt",null,
       "The same power in megawatts of heat: the rating times the share above.");
     { const per=period(), fin=isFinite(per)&&Math.abs(per)<999;
@@ -1798,7 +1803,12 @@ function readoutsFor(p,s){
         const v = r[1]==="prompt" ? HEATBAL.prompt : (s.dec[+r[1][1]]||0);
         add(r[0],(v*100).toFixed(2)+" %",C.amber,r[2],hbar(v));
       }
-      add("TOTAL MADE",(HEATBAL.heat*100).toFixed(2)+" %",C.red,
+      /* NOT RED. In the PICTURE red is what the core makes, and that is fine
+         there - the stack is a key, not a verdict. In a column of readouts red
+         means trouble, and 85 % made is a plant running normally, sitting two
+         rows above FUEL DAMAGE and reading like a fault. The balance keeps its
+         colour; the number reads as the total it is. */
+      add("TOTAL MADE",(HEATBAL.heat*100).toFixed(2)+" %",C.bright,
         "Everything the core is making, chain reaction and decay heat together. This is the number that heats the coolant, and POWER above is only its first term.",hbar(HEATBAL.heat));
       for(const t of heatSinks())
         add(t.lab,(t.v*100).toFixed(2)+" %",t.col,t.tip,hbar(t.v));
@@ -1993,7 +2003,14 @@ function readoutsFor(p,s){
     add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
       "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
     if(tankSide(id)==="primary"){
-      add("RATE",rate.toFixed(2)+" %/s",rate>0?C.cyan:rate<0?C.amber:null,
+      /* THE COLOUR READS THE PRINTED NUMBER, not the solved one. A bare sign
+         test on a solved quantity is exactly the thing this codebase does not
+         do: the network returns a difference of large numbers, so a shut tank
+         sits at -1e-17 and the row printed a perfectly still "-0.00 %/s" in
+         amber. Rounding first makes the colour and the digits agree by
+         construction, and -0 is folded onto 0 so the sign cannot survive it. */
+      const shown=Math.round(rate*100)/100 || 0;
+      add("RATE",shown.toFixed(2)+" %/s",shown>0?C.cyan:shown<0?C.amber:null,
         "What this tank's own line is carrying, positive out. Not a setting: it is what the tank wins against the pressure in the loop, so it is near zero at full pressure and surges once the primary comes down. Negative means the loop is filling it.");
       add("HEAD",((P.lay&&P.lay.tankZ&&P.lay.tankZ[id])||0).toFixed(1)+" m",null,
         "How high this tank stands above the core. It is real static head in the solve: mount it high and it drains in fast, mount it level with the core and it barely trickles.");
@@ -2164,16 +2181,24 @@ function hostRect(el){
    Because that space starts at 0,0 it OVERLAPS the plant's numerically, which
    is why push()/hov() are scoped by host - see hostScope()/ui.ptrHost. */
 const HOST_K=1.5;
-function hostLocal(el,e){ const r=el.getBoundingClientRect();
-  return {x:(e.clientX-r.left)/HOST_K, y:(e.clientY-r.top)/HOST_K}; }
+const hostDpr=()=>(typeof devicePixelRatio==="number"&&devicePixelRatio)||1;
+/* THE LAYOUT UNIT IS A WHOLE NUMBER OF DEVICE PIXELS, WHICH IS WHY IT IS NOT
+   EXACTLY HOST_K. At 125% Windows scaling dpr is 1.25, so a flat HOST_K put the
+   transform on 1.875 device pixels per unit and every hairline this kit draws -
+   a zero line, a bar frame, a needle - was spread across two of them. Rounding
+   the DEVICE scale and reading the unit back off it costs a few per cent of
+   size and buys a picture that is actually on the pixel grid. */
+const hostK=()=>{ const d=hostDpr(); return Math.max(1,Math.round(d*HOST_K))/d; };
+function hostLocal(el,e){ const r=el.getBoundingClientRect(), k=hostK();
+  return {x:(e.clientX-r.left)/k, y:(e.clientY-r.top)/k}; }
 function hostForward(el){ uiForward(el, e=>hostLocal(el,e)); }
 function hostPaint(el,draw){
   const box=el.getBoundingClientRect();
   if(box.width<4||box.height<4) return;
-  const dpr=(typeof devicePixelRatio==="number"&&devicePixelRatio)||1;
+  const dpr=hostDpr(), k=hostK();
   const bw=Math.max(1,Math.round(box.width*dpr)), bh=Math.max(1,Math.round(box.height*dpr));
   if(el.width!==bw||el.height!==bh){ el.width=bw; el.height=bh; }
-  const c=el.getContext("2d"), s=dpr*HOST_K, w=box.width/HOST_K, h=box.height/HOST_K;
+  const c=el.getContext("2d"), s=dpr*k, w=box.width/k, h=box.height/k;
   c.setTransform(s,0,0,s,0,0);
   c.clearRect(0,0,w,h);
   const prev=ctx; ctx=c; hostScope(el);
@@ -2358,8 +2383,11 @@ function drawPlant(y0,L,vh,vx,vw){
     // the top row inside the box, where the name lives. Deep enough to clear
     // the box's own border and leave air above the caps.
     const nameH = h>CELL ? 14 : 0;
-    if(fit) fillRect(x+2,y+2,w-4,h-4,C.panel);
-    if(on) fillRect(x+1,y+1,w-2,h-2,"rgba(240,168,48,.07)");
+    // THE PANEL IS THE FOOTPRINT, to the pixel: a 2px inset left the grid line
+    // showing inside the machine's own cells, so a box read one size and
+    // occupied another.
+    if(fit) fillRect(x,y,w,h,C.panel);
+    if(on) fillRect(x,y,w,h,"rgba(240,168,48,.07)");
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
     if(fit) drawSym(p,x,y+nameH,w,h-sh-nameH,ink,L);
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red);
