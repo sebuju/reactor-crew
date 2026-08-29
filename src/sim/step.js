@@ -181,6 +181,15 @@ function commission(){
      on an HTGR - a fixed scale would peg four of the six architectures full and
      say nothing. P.dnbr0 is the same idea and was already here. */
   P.sc0 = S.sc;
+  /* ── AND WHETHER THIS LOOP HAS A STEAM SPACE OF ITS OWN ──
+     A pressurizer is a heater programme holding a SUBCOOLED loop; a loop whose
+     hot leg is already at saturation does not need one, because it is its own
+     steam space and saturation is what sets its pressure. Asked of the plant
+     rather than of a family name, and asked of the same measurement P.sc0
+     already is: at or above saturation means there is steam in the loop.
+     Miles from the sign change on every preset (-12.7 K on a BWR, -4.7 on an
+     RBMK, +22 on a PWR, +414 on an SFR), so this is not a coincidence test. */
+  P.steam = P.sc0 <= 0;
   /* and what it VOIDS by at rest, for the same reason. Subcooled boiling means
      rest void need not be zero, so the CORE VOID trip cannot go on reading a
      typed 0.30 against a solved quantity - it is the one row of RPS_CH left
@@ -2109,20 +2118,34 @@ function step(dt){
      relief valve's own gate there) can read it either way. */
   let vented = 0;
   if(!s.breach){
-    /* A PRESSURIZER WITH NO PIPE TO THE LOOP SETS NOTHING. Unplumbed it is a
-       vessel welded shut beside the plant: no surge line means no steam bubble
-       anywhere in the loop, so nothing is holding pressure up and it relaxes
-       toward containment - the SAME anchor a real break already uses, and
-       deliberately the same approximation rather than a saturation curve the
-       tick does not carry (see the plan in docs/). It is reachability, not a
-       stored run list, so shutting every valve between the core and the vessel is
-       exactly as disconnected as cutting the line. Level already behaved:
-       netExpSurge() has always returned zero with no surge line. */
-    const pzrOn = pzrLive(P.net, s);
-    const Pdem = pzrOn
-      ? P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (inj>0?0.5*P.pRise:0)
-      : P.Pcont;
-    s.P += (Pdem-s.P)*(0.30/P.pzrK)*(pzrOn?pzrAuth:1)*dt;
+    /* ── A BOILING PRIMARY IS A SATURATED POT, AND THE POT IS THE BOUNDARY ──
+       The loop already IS a pot: s.dTavg is heat in against heat out over the
+       water that is there (loopKg()*CP_W), the identical balance the shell
+       integrates. What was missing was the second half of the shell's sentence
+       - pressure is what SATURATION says about that temperature. So boiling
+       finally pressurises, and a plant that has a steam space of its own does
+       not care whether a pressurizer is plumbed to it or even fitted.
+       As a RATE, off the curve's own derivative, for two reasons: the loop
+       commissions a few kelvin below its saturation point (RBMK programmes 550
+       against tsat 558), so the absolute curve would re-anchor every plant off
+       its own design pressure; and every hole in the plant - the blowdown term
+       below, a relief valve, a break - goes on moving s.P exactly as it did. */
+    if(P.steam) s.P += satSlope(P.sat, s.P)*s.dTavg*dt;
+    else {
+      /* A PRESSURIZER WITH NO PIPE TO THE LOOP SETS NOTHING. Unplumbed it is a
+         vessel welded shut beside the plant: no surge line means no steam bubble
+         anywhere in a SUBCOOLED loop, so nothing is holding pressure up and it
+         relaxes toward containment - the SAME anchor a real break already uses.
+         It is reachability, not a stored run list, so shutting every valve
+         between the core and the vessel is exactly as disconnected as cutting
+         the line. Level already behaved: netExpSurge() has always returned zero
+         with no surge line. */
+      const pzrOn = pzrLive(P.net, s);
+      const Pdem = pzrOn
+        ? P.P0 + (s.Tavg-P.Tref)*(0.17/P.pzrK)*(P.P0/15.5)*P.pRise + (inj>0?0.5*P.pRise:0)
+        : P.Pcont;
+      s.P += (Pdem-s.P)*(0.30/P.pzrK)*(pzrOn?pzrAuth:1)*dt;
+    }
     /* Every relief path rolls its own die, on its own lift - three redundant
        valves are three independent chances to stick, not one. Each fitting
        is otherwise the identical machine the single PORV always was: an

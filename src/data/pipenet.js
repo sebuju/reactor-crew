@@ -303,6 +303,9 @@ const secLoad = (s, id) => {
    its anchor moves with D.pdes; water's is a constant and lives here. */
 const satT = (c,p) => c.T0*Math.pow(Math.max(p,c.pFloor)/c.p0, c.n);
 const satP = (c,T) => c.p0*Math.pow(Math.max(T,c.TFloor)/c.T0, 1/c.n);
+// dp/dT along that same curve, exact rather than differenced - a boiling
+// primary is pressurised by its own temperature rate (step.js)
+const satSlope = (c,p) => Math.max(p,c.pFloor)/(c.n*satT(c,p));
 
 /* ══ THE SECONDARY IS WATER, WHATEVER THE PRIMARY IS ══
    The PRIMARY curve is anchored on that architecture's own boiling point -
