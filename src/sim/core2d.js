@@ -639,14 +639,6 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
       if(xe>xHot) xHot=xe;                   // W-3 asks for the WORST node, not the mean
       s.nVt[k]=driftFlux(subQual(xe, xd), rvl);
 
-      /* THE PELLET IS A HEAT BALANCE. Power in, film out, and the film
-         collapses when the node goes dry - so a dry node has nowhere to put
-         its heat and climbs on its own heat capacity until it melts, which is
-         the real accident and was not reachable at all while a cap and a floor
-         stood between the two. The clamp is numerical headroom well past melt,
-         not a modelling choice. */
-      const film=film0*(1-clamp(s.nV[k],0,1));
-
       /* ── HOW THIS NODE IS FAILING ──
          Everything below runs on locals the loop already had. The margin is
          MEASURED here rather than peaked: the rise is the enthalpy actually
@@ -655,11 +647,22 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          s.dnbr keeps its own hot-channel arithmetic (marginCore(), step.js) -
          the two are not meant to agree, and they are kept apart deliberately
          while the auditors are unfit. */
+      const dnb=marginNode(s,heat,pw,hMid/CP_W-Tcold,Tcold,s.nTf[k],
+                           mflux*chan,xe,dhSub);
+      if(dnb<dnbLo){ dnbLo=dnb; dnbK=k; }
+
+      /* THE PELLET IS A HEAT BALANCE. Power in, film out, and the film
+         collapses when the node goes dry - so a dry node has nowhere to put
+         its heat and climbs on its own heat capacity until it melts, which is
+         the real accident and was not reachable at all while a cap and a floor
+         stood between the two. The clamp is numerical headroom well past melt,
+         not a modelling choice. Void is not the only way to lose the film:
+         dnbFilmK() (step.js) is departure itself, which is why the margin is
+         measured first. */
+      const film=film0*(1-clamp(s.nV[k],0,1))*dnbFilmK(dnb);
+
       const Tcl=s.nTc[k]+(s.nTf[k]-s.nTc[k])*P.gSolid/(P.gSolid+film);
       if(Tcl>TclH) TclH=Tcl;
-      { const d=marginNode(s,heat,pw,hMid/CP_W-Tcold,Tcold,s.nTf[k],
-                           mflux*chan,xe,dhSub);
-        if(d<dnbLo){ dnbLo=d; dnbK=k; } }
 
       /* ── OXIDATION, AND THE HEAT IT MAKES ──
          Squared thickness, closed form, so the step is exact and needs no

@@ -163,6 +163,9 @@ function commission(){
      salt and helium never oxidise a rod, so their whole oxidation path is one
      false here rather than a temperature that happens never to be reached */
   P.oxid  = !!a.oxid;
+  /* whether departure from nucleate boiling is a thing that can happen to
+     this fluid's fuel at all - see dnbFilmK() */
+  P.dryout= a.dnbLaw!=="temp" && !a.fuelInCoolant;
   P.TfRef = P.Tref + a.dTf*P.condK*P.n0/Math.max(P.feff0,.10);
   P.X0    = (P.gI+P.gX)*P.n0/(P.lamX+P.sig*P.n0);      // xenon equilibrium at that power
   coreConst(P,d);                        // the core as a place: mesh, coupling, rods
@@ -1193,6 +1196,37 @@ function dnbrOf(m){
     return P.dnbrK*Math.max(P.tdmg-m.Tin,0)/Math.max(m.Tf-m.Tin,1e-3);
   return P.dnbrK*dnbW3(m.p,Math.max(m.g,1e-3),m.x,P.dh,m.dhSub)/Math.max(m.q,1);
 }
+/* ── AND WHAT LOSING THE MARGIN COSTS ──
+   DNBR was computed, displayed and tripped on and then thrown away: crossing
+   1.0 bought the player nothing, because the pellet's film conductance
+   (core2d.js) degraded on VOID alone. The chain the damage block tells -
+   margin lost, film collapses, clad climbs to the pellet, balloons, bursts -
+   was missing its first link, so a core could sit at DNBR 0.77 with the clad
+   still bolted to the coolant temperature and take no damage at all.
+
+   The ONSET is physics: DNBR 1.0 is what departure means, and the ramp is
+   priced on the node's own margin, which carries P.dnbrK, so 1.0 means the
+   same departure on every family. DNB_FILM is physics too, roughly - past
+   departure the wall is blanketed and the coefficient falls by about an order
+   of magnitude, and that residual share is what is left.
+
+   DNB_SPAN IS NOT PHYSICS AND IS NOT DERIVED. A real post-CHF transition is a
+   wall-superheat problem, not a band on a margin ratio; the width exists so a
+   hard switch at 1.0 cannot chatter against the lagged void and flow this loop
+   already reads, which is the BURST_SPAN/CAV_SPAN idiom. The VALUE was chosen
+   against the presets: no plant's rest-point node minimum may sit on the ramp,
+   and RBMK binds it at 1.25, so the ceiling goes below that with room to spare.
+   0.25 passes too and leaves RBMK 0.004 clear, which is noise rather than
+   margin. Replacing this with a superheat criterion in the film term is the
+   real fix and would delete the constant.
+
+   P.dryout is which families departure is a real event for. Helium never
+   boils, so a film that collapses is a fiction there; MSR's fuel is IN the
+   coolant, so it has no film to lose either, and it is already receiving a
+   burst and a melt it should not - this does not deepen that hole. */
+const DNB_FILM=0.10, DNB_SPAN=0.15;
+const dnbFilmK = d =>
+  P.dryout ? DNB_FILM+(1-DNB_FILM)*clamp((d-1)/DNB_SPAN,0,1) : 1;
 /* The PLANT's margin, off the peak scalars - the same five operands the old
    positional dnbrOf() was called with, in the same arithmetic, so this number
    does not move by a bit. */
