@@ -232,7 +232,13 @@ const tankMass=()=>{ let m=0;
 // centres the turbine multiplier so a default pump matches the old
 // always-fitted one. D.pumpSize is keyed by id, static or placed alike.
 const pumpSizeOf=id=>D.pumpSize[id]??0.5;
-const pumpCap=size=>0.7+0.6*size;
+/* EVERY CAPACITY SPAN IS CENTRED ON ITS DEFAULT, AND BOTH ENDS ARE REAL.
+   These used to read 0.7+0.6*size and its family: the floor of every one of
+   them was still a machine that kept up, so the slider chose between adequate
+   and slightly better and the answer was always max. The midpoint is
+   unchanged, so a default plant commissions bit-identically - what moved is
+   that the bottom is now a machine that fails. */
+const pumpCap=size=>0.25+1.50*size;
 const PUMP_MASS=50;                    // t, at pumpCap()==1 (default size)
 /* IS THIS A PRIMARY PUMP? There is one pump role, so the question cannot be
    asked of a name or of a second role - it is asked of the GRAPH, exactly
@@ -282,22 +288,33 @@ const condCount=()=>LAY.parts.filter(p=>p.role==="cond").length;
    a legitimately zero size becomes the default), so an untouched design and
    every preset commission bit-identically. */
 const turbSizeOf=id=>D.turbSize[id]??D.turb;
-const turbSwallow=size=>1.05+0.40*size;
-const TURB_MASS=50;                    // t, at size 1
+const turbSwallow=size=>0.45+1.60*size;
+/* What this machine does to the heat, as a multiplier on the coolant's own
+   eff. One expression, because grossEff() (design.js) and the bench slider's
+   own label both price it and had a copy each. */
+const turbEff=size=>0.70+0.60*size;
+/* MASS IS PRICED OFF CAPACITY, NEVER OFF SLIDER POSITION - the pump and the
+   exchanger already did, and the turbine and the condenser charged for where
+   the handle sat instead, so widening their spans handed out the extra machine
+   for nothing. */
+const TURB_MASS=20;                    // t, at turbSwallow()==1
 const totalTurbSwallow=()=>{ let c=0;
   for(const p of LAY.parts) if(p.role==="turb") c+=turbSwallow(turbSizeOf(p.id));
   return c; };
 const totalTurbMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="turb") m+=turbSizeOf(p.id)*TURB_MASS;
+  for(const p of LAY.parts) if(p.role==="turb") m+=turbSwallow(turbSizeOf(p.id))*TURB_MASS;
   return m; };
 const condSizeOf=id=>D.condSize[id]??D.condCap;
-const condDuty=size=>0.85+0.35*size;
-const COND_MASS=40;                    // t, at size 1
+const condDuty=size=>0.30+1.45*size;
+/* Steam this unit will take straight past a tripped turbine. P.bypass and the
+   bench label are the two readers and each carried the literal. */
+const condDump=size=>1.00*size;
+const COND_MASS=20;                    // t, at condDuty()==1
 const totalCondDuty=()=>{ let c=0;
   for(const p of LAY.parts) if(p.role==="cond") c+=condDuty(condSizeOf(p.id));
   return c; };
 const totalCondMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="cond") m+=condSizeOf(p.id)*COND_MASS;
+  for(const p of LAY.parts) if(p.role==="cond") m+=condDuty(condSizeOf(p.id))*COND_MASS;
   return m; };
 /* The dump ceiling is count-INDEPENDENT today (P.bypass, step.js), so it takes
    the mean and not the sum; P.condUA reads the sum, so rejection does scale
@@ -670,7 +687,7 @@ const IHX_MASS=95;                     // t, the exchanger and the intermediate 
    The size is a multiplier on the INSTANCE - P.ihxUA is still priced off
    P.sgUA, so the second stage still has no anchor of its own. */
 const ihxSizeOf=id=>D.ihxSize[id]??0.5;
-const ihxCap=size=>0.7+0.6*size;
+const ihxCap=size=>0.25+1.50*size;
 const totalIhxMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="ihx") m+=ihxCap(ihxSizeOf(p.id))*IHX_MASS;
   return m; };

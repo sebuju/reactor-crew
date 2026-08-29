@@ -304,8 +304,8 @@ const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : f
    free. Uniform sizes collapse to today's value exactly. */
 const grossEff  = () => { let w=0,e=0;
   for(const p of LAY.parts) if(p.role==="turb"){
-    const sz=turbSizeOf(p.id), k=turbSwallow(sz); w+=k; e+=k*(0.92+0.16*sz); }
-  return COOLANT[D.cool].eff * (w>0 ? e/w : 0.92+0.16*D.turb); };
+    const sz=turbSizeOf(p.id), k=turbSwallow(sz); w+=k; e+=k*turbEff(sz); }
+  return COOLANT[D.cool].eff * (w>0 ? e/w : turbEff(D.turb)); };
 /* How much steam the turbine can swallow, and how much the condenser can turn
    back into water. They are separate on purpose: overload past the condenser and
    the output is there but the backpressure eats it. */
@@ -313,7 +313,7 @@ const loadCeil  = () => totalTurbSwallow();
 const condCeil  = () => totalCondDuty();
 /* When the pair is mismatched enough to matter. A condenser is normally sized for
    about full load and a brief overload is bought with backpressure, so a gap is
-   not a fault - only a gap wide enough to cost roughly 15% of output is. One
+   not a fault - only a gap wide enough to cost real output is. One
    threshold, read by both the bench warning and the condenser panel prose. */
 const condShort_ = () => loadCeil() - condCeil() > 0.26;
 
@@ -473,7 +473,7 @@ function derived(){
       if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
       else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
       if(loadMax<1.10) w.push(["SOFT","The turbine draws at most "+(loadMax*100).toFixed(0)+"% of rated. In combat the reactor will be able to make power this machine cannot take.","turb"]);
-      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Overload past the condenser and backpressure takes output back off you, while the reactor goes on making the heat.","cond"]);
+      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
       if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);
       if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);

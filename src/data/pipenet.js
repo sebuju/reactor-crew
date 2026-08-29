@@ -623,9 +623,12 @@ const tankLive = (s,id) =>
    as such (the RAD_K/BREAK_K idiom), never scaled by load or derived from
    a load formula. It is the FLOOR now rather than the whole answer - condP()
    (step.js) solves the condenser's own saturation pressure and can only sit
-   above this - which is the best vacuum the plant can pull. A condenser with
-   margin sits exactly on it, which is why nothing anchored here moved. */
-const COND_P0 = 0.01;
+   above this - which is the best vacuum the plant can pull. It is the AIR
+   IN-LEAKAGE limit and nothing else, so it sits BELOW the design point
+   (COND_DT0, step.js) rather than on it: fitted onto the design point, every
+   healthy condenser pinned to it and the whole slider was worth 1% of output.
+   Only a bought-oversized unit reaches it now. */
+const COND_P0 = 0.004;
 
 /* THE DRIVE A FEEDWATER PUMP DEVELOPS, in MPa, ON TOP of the standing
    difference between the two fixed nodes it spans (see the secPumps pass in
@@ -930,7 +933,7 @@ const nodeT = (net, i, s) => {
    pressure) printed subcooling around -235 K on the PRESSURE layer -
    measured, not a guess - because tsat() of a real ~0.01 MPa condenser
    pressure was compared against a Tavg left over from the primary loop. */
-const condDisplayT = () => tsatSec(COND_P0);
+const condDisplayT = () => T_CW + COND_DT0;
 
 /* The temperature at a node, asked by id - the same hot/cold split the
    buoyancy heads consume, so density and subcooling can never disagree about

@@ -29,7 +29,7 @@ function commission(){
      noise:CHAN[D.chan].noise, id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:D.pzr*L.pzrK,
-     flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:.20+.60*condSizeMean(),
+     flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:condDump(condSizeMean()),
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi,
      catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
      fittings:JSON.parse(JSON.stringify(D.fittings)),
@@ -154,10 +154,10 @@ function commission(){
      condenser pressure exactly H_FG, so a turbine at its design point does the
      work P.eff always priced and only backpressure can move it.
      P.condUA is what the condenser you BOUGHT is worth: a unit sized at rated
-     duty rejects rated duty at the design terminal difference, so the stock
-     plant sits on COND_P0 with margin in hand and an undersized one does not. */
-  P.hTurb   = H_FG/Math.max(.05, 1-Math.pow(COND_P0/(P.P0*0.45),TURB_GAM));
-  P.condUA  = P.rated*1000*(1-P.eff)/Math.max(5, tsatSec(COND_P0)-T_CW)*P.condCap;
+     duty rejects rated duty at COND_DT0, so duty divides the terminal
+     difference and an undersized machine sits hotter for the same heat. */
+  P.hTurb   = H_FG/Math.max(.05, 1-Math.pow(condPDes()/(P.P0*0.45),TURB_GAM));
+  P.condUA  = P.rated*1000*(1-P.eff)/COND_DT0*P.condCap;
   P.tdmg  = f.tdmg; P.tmelt = f.tmelt;
   /* whether this fluid puts a steam atmosphere on hot clad at all - sodium,
      salt and helium never oxidise a rod, so their whole oxidation path is one
@@ -444,7 +444,17 @@ const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
    s.condT is fed forward, the same lag s.cavP and s.sgShare carry: what the
    condenser is rejecting comes out of this tick's steam balance, so it cannot
    also be an input to it. */
-const T_CW=300;           // K, circulating water inlet
+const T_CW=293;           // K, circulating water inlet
+/* The terminal temperature difference a condenser bought at rated duty runs
+   at, K - a real surface condenser figure, and the anchor P.condUA is fitted
+   on. It is what gives the machine a RANGE: duty is a divisor here, so a
+   half-size unit sits twice as far above the cooling water and pays for it in
+   backpressure, and an oversized one runs down onto COND_P0 and stops. */
+const COND_DT0=13;
+/* The backpressure the plant was DESIGNED for - the design point, not the
+   vacuum floor. P.hTurb is anchored here, so a turbine at its design point
+   does the work P.eff prices and every departure is the condenser's doing. */
+const condPDes = () => psatSec(T_CW + COND_DT0);
 /* How much condenser there actually IS right now. Bought capacity, minus what
    is broken, minus tubes drowned in their own condensate, minus the
    circulating water pumps when the switchboard is dead - a blackout is the one
@@ -1629,7 +1639,7 @@ function resetPlant(){
      caused, the same argument s.coreDT's own seed makes. */
   for(const id of ihxIds())
     S.ihxTBy[id] = S.Tavg - (S.Tavg - tsatSec(secPTarget(S,ihxSgs(id)[0])))/(1+IHX_UA);
-  S.condT = tsatSec(COND_P0);
+  S.condT = T_CW + COND_DT0;
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
