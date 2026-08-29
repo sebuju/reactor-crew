@@ -470,7 +470,7 @@ if(!wide.err){
     const {M} = boot(null, {box:{width:320, height:190}});
     M.setScreen('design');
     const rowVal = () => { M.dbSync();
-      const row = [...M.DB().rail.querySelectorAll('.insp-stat')]
+      const row = [...M.DB().root.querySelectorAll('.insp-stat')]
         .find(r => r.querySelector('.insp-stat-lab').textContent === 'PUMP CAPACITY');
       return row ? row.querySelector('.insp-stat-val').textContent : null;
     };

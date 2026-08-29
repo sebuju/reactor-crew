@@ -6,7 +6,7 @@
 .kit-hide{display:none !important}
 
 .kit-well{background:var(--c-panel)}
-.kit-well-body{padding:8px 10px}
+.kit-well-body{padding:8px 4px}
 
 .kit-rule{display:flex;align-items:center;gap:7px;margin:0 0 6px;
   color:var(--kit-rule-color,var(--c-ink2));font-size:var(--t8);

@@ -175,10 +175,10 @@ const LAYERS={
   /* live:true, unlike the four radiation layers above. A dose rate is a real
      answer on an uncommissioned arrangement; a pressure is not - there is no
      plant to have one yet, and inventing one would be a lie dressed as data. */
-  press:{label:"PRESSURE",    seam:"over",  data:"press", live:true, on:true,
+  press:{label:"PRESSURE",    seam:"over",  data:"press", live:true, on:false,
         draw:pressLayer,
         tip:"The pressure in every run, in MPa. Pressure is a place, not a number: it is highest at a pump's discharge, lowest at its suction, and it falls across every metre of pipe and every throttle in between. Turn this on to see where the head your pumps make actually goes."},
-  subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:true,
+  subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
         draw:subcLayer,
         tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},
   /* The flow readings and the pressurizer's own dial. They were drawn
@@ -188,7 +188,7 @@ const LAYERS={
      pressurizer's dial, which is bigger than a line of text and so goes down
      over the stack rather than under it. Not the break plumes - drawPlant()
      draws those before the pass, because an effect is not an instrument. */
-  flow: {label:"FLOW METERS", seam:"over",  data:null,    live:true, on:true,
+  flow: {label:"FLOW METERS", seam:"over",  data:null,    live:true, on:false,
         draw:(d,L)=>pipeGauges(L),
         tip:"The top line of every run's readings: what that run is carrying, in kg/s - and the pressurizer's own pressure dial. The figure goes amber and takes a minus sign when a run reverses, and red when it is being pushed past its rating."},
 };

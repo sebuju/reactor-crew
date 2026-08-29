@@ -822,8 +822,8 @@ function dbNameWell(p){
   return well;
 }
 /* one panel per component (or gang) */
-function dbRailBuild(rail,watch){
-  rail.innerHTML="";
+function dbRailBuild(rail,vitals,watch){
+  rail.innerHTML=""; vitals.innerHTML="";
   const panels=[], gangs={};
   for(const p of LAY.parts){
     const B=paramsFor(p); if(!B.length&&!B.gang || B.plain) continue;
@@ -849,8 +849,10 @@ function dbRailBuild(rail,watch){
     panels.push(h);
   }
   const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
-  const results=KIT.well({title:"RESULTS"}); rail.appendChild(results.el);
-  const review=KIT.well({title:"DESIGN REVIEW"}); rail.appendChild(review.el);
+  /* the verdict on the design stands over the plant it judges, not at the foot
+     of a rail the player has to scroll past every machine to reach */
+  const results=KIT.well({title:"RESULTS"}); vitals.appendChild(results.el);
+  const review=KIT.well({title:"DESIGN REVIEW"}); vitals.appendChild(review.el);
   // one switch per LAYERS entry, built once per rail rebuild - see
   // layerSwitches() in render/layers.js. The SAME helper the control room
   // calls: a layer switch is not redrawn per screen, it is drawn once.
@@ -988,16 +990,17 @@ function dbBuild(){
   head.append(tools,arr.el);
   const rail=KIT.el("div","db-rail");
   railBlank(rail);
-  root.append(head,rail);
+  const vitals=KIT.el("div","db-vitals");
+  root.append(head,vitals,rail);
   mount.appendChild(root);
-  return {root,head,rail,state:null,watch:null};
+  return {root,head,rail,vitals,state:null,watch:null};
 }
 function dbSync(){
   if(!DB) return;
   if(DB.rail._layFit!==LAY) {
     if(DB.watch) DB.watch.free();
     DB.watch=railWatch(DB.rail);
-    DB.state=dbRailBuild(DB.rail,DB.watch); DB.rail._layFit=LAY;
+    DB.state=dbRailBuild(DB.rail,DB.vitals,DB.watch); DB.rail._layFit=LAY;
     dbPanelSig=null;                // new DOM, so the old signature says nothing about it
   }
   dbRailSync(DB.state);
@@ -1016,8 +1019,12 @@ function drawDesign(){
   const headBox=DB? hostRect(DB.head) : null;
   const vy = headBox? headBox.y+headBox.h : TOPBAR_H;
   const vh=Math.max(120,H-vy);
-  const vw = railBox ? Math.max(200, railBox.x) : W;
-  drawPlant(vy,null,vh,0,vw);
+  // the verdict panel is opaque, so measure it on the left the way drawOperate()
+  // measures the vitals panel
+  const vitBox = DB? hostRect(DB.vitals) : null;
+  const vx = vitBox ? vitBox.x+vitBox.w : 0;
+  const vw = (railBox ? Math.max(200, railBox.x) : W) - vx;
+  drawPlant(vy,null,vh,vx,vw);
   zoomKeySync(DB&&DB.root);
   { const st=DB&&DB.state;
     const h = st && st.panels.find(o=>o.ids.includes(sel));

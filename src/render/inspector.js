@@ -339,26 +339,27 @@ function paramsFor(p){
   else if(p.role==="turb"){
     sld("TURBINE SIZE","How many stages THIS machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. Every turbine is sized on its own, so a big machine and a small one is a legal fleet. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.",
         {get:()=>turbSizeOf(id),set:v=>{ D.turbSize[id]=v; }},
-        0,1,v=>(COOLANT[D.cool].eff*(0.92+0.16*v)*100).toFixed(1)+" % gross",.05,v=>v*TURB_MASS);
+        0,1,v=>(COOLANT[D.cool].eff*turbEff(v)*100).toFixed(1)+" % gross",.05,v=>turbSwallow(v)*TURB_MASS);
     B.push({kind:"readlist",rows:()=>{ const d=derived(), sz=turbSizeOf(id); return [
-      ["THIS MACHINE",(turbSwallow(sz)*100).toFixed(0)+" % swallow",null,"What this turbine on its own can take, as a share of rated steam. The plant's ceiling below is every turbine's share added up."],
+      ["STEAM SWALLOW",(turbSwallow(sz)*100).toFixed(0)+" %",null,"What this turbine on its own can take, as a share of rated steam. The plant's ceiling below is every turbine's share added up."],
+      ["EFFICIENCY",(COOLANT[D.cool].eff*turbEff(sz)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. One slider sets both this and the swallow above, so a bigger machine takes more steam AND makes more of it."],
       ["RATED OUTPUT",(D.power*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
       ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room. Overpower is not free reach: it is turbine you paid mass for."]]; }});
-    note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat. Right-click the plant to remove it - no turbine, no electricity.");
+    note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
   }
   else if(p.role==="cond"){
     sld("CONDENSER SIZE","The heat sink, and it sets two things at once. It caps how much steam can be dumped straight past a tripped turbine, so a generous unit absorbs a scram without the relief valve ever lifting. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. This slider sizes THIS unit; a second condenser is sized on its own.",
         {get:()=>condSizeOf(id),set:v=>{ D.condSize[id]=v; }},
-        0,1,v=>(20+60*v).toFixed(0)+" % dump",.05,v=>v*COND_MASS);
+        0,1,v=>(condDump(v)*100).toFixed(0)+" % dump",.05,v=>condDuty(v)*COND_MASS);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
-      ["THIS MACHINE",(condDuty(condSizeOf(id))*100).toFixed(0)+" % duty",null,"What this unit on its own condenses, as a share of rated steam. The plant figure below is every condenser's duty added up."],
-      ["CONDENSING CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",null,"How much steam this unit turns back into water. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
+      ["CONDENSING DUTY",(condDuty(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit on its own condenses, as a share of rated steam. The plant figure below is every condenser's duty added up."],
+      ["DUMP CAPACITY",(condDump(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit will take straight past a tripped turbine. One slider sets both this and the duty above, so a generous unit absorbs a scram AND condenses a bigger draw."],
+      ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",null,"Every condenser on the plant added up. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
       ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, shown here so the mismatch is visible from either component."]]; }});
     B.push({kind:"note",dyn:()=>{ const d=derived();
-      return {text:(d.condShort
-        ?"This condenser is far smaller than the turbine can overload to. Sustained overpower will hand a large part of itself straight back as backpressure."
-        :"Condenser is matched to the turbine. A brief overload costs little or nothing.")
-        +" Right-click the plant to remove it - the turbine has nowhere to exhaust to without one.",
+      return {text:d.condShort
+        ?"This condenser is far smaller than the turbine can draw. It runs hotter for the same heat, so the exhaust pressure climbs and the output falls with it - a unit at a third of duty gives back roughly a tenth of the plant's electricity at rest, before any overload."
+        :"Condenser is matched to the turbine. A brief overload costs little or nothing, and a bigger unit runs down onto the vacuum limit and stops paying.",
         color:d.condShort?"var(--c-amber)":null}; }});
   }
   else if(id==="ctrl"){

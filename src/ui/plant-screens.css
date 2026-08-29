@@ -177,7 +177,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-comp-rail{display:flex;flex-direction:column;}
 /* the well has no border any more, so its two states are outlines - which cost
    no layout, so nothing shifts by 2px when a panel is picked */
-.kit-well.on{outline:1px solid var(--c-amber-soft);outline-offset:-2px}
+.kit-well.on > .kit-rule-head{background: color-mix(in srgb, var(--c-amber) 12%, transparent);}
 
 /* ─────────────── shared: label+value(+band) row, RESULTS stat row ─────────────── */
 /* a grid, not a flex row: the bar needs a line of its own, and only an explicit
@@ -208,6 +208,16 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-head{grid-column:1;grid-row:1;pointer-events:auto;display:flex;align-items:center;
   justify-content:space-between;gap:8px;padding:6px 8px}
 .db-tools{display:flex;align-items:center;gap:4px}
+/* RESULTS and DESIGN REVIEW float over the top-left of the plant, the seat
+   .cr-vitals keeps on the control room - and for the same reason it is sized by
+   its own content and capped: a scroll container stretched into a grid row
+   collapses to nothing. Row 2, so the tool bar keeps the corner. */
+.db-vitals{grid-column:1;grid-row:2;pointer-events:auto;display:flex;flex-direction:column;gap:6px;
+  width:300px;margin:0 0 0 4px;background:var(--c-panel);border:1px solid var(--c-edge);
+  align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none;z-index:1}
+.db-vitals::-webkit-scrollbar{display:none}
+.db-vitals:empty{display:none}
+.db-vitals>*{flex:0 0 auto}
 .db-rail{grid-column:2;grid-row:1/3;overflow-y:auto;pointer-events:auto;
   background:var(--c-panel);padding-top:6px;
   display:flex;flex-direction:column;gap:6px}
@@ -232,9 +242,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-latsection-canvas{display:block;width:100%;aspect-ratio:4/5;background:transparent}
 .db-readlist{margin-top:2px}
 .db-mass{font-size:var(--t8-5)}
-.db-mass-val{font-size:var(--t7-5);color:var(--c-ink2);margin-top:4px}
+.db-mass-val{font-size:var(--t8-5);color:var(--c-ink2);margin-top:4px}
 .db-stats{display:flex;flex-direction:column;gap:2px;margin-top:6px}
-.db-review-row{display:flex;gap:8px;padding:3px 0;font-size:var(--t8-5)}
+.db-review-row{display:flex;gap:8px;padding:3px 0;font-size:var(--t10)}
 .db-review-tag{flex:0 0 auto;font-weight:700}
 .db-review-row.red{color:var(--c-red)}
 .db-review-row.warn{color:var(--c-amber)}
