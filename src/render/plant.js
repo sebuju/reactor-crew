@@ -2051,13 +2051,23 @@ function readoutsFor(p,s){
         s.dmgParts.includes(id)?C.red:C.green,
       "The main feedwater pump. Destroyed, the generator boils dry unless emergency feed picks it up.");
   } else if(p.role==="cond"){
-    add("BACK PRESS",condP(s).toFixed(4)+" MPa",condP(s)>COND_P0*1.5?C.amber:null,
-      "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators.");
+    /* BANDED AGAINST THE LIMIT IT PRECEDES, not against the vacuum floor.
+       COND_P0*1.5 was 0.006 MPa: a healthy plant rests at 0.0056 and a plant
+       built on the smallest condenser rests at 0.0155, which is 78 % of the
+       way to the turbine trip - so the amber came on at commissioning and
+       never moved again, and there was no red step at all before the latch. */
+    add("BACK PRESS",condP(s).toFixed(4)+" MPa",
+      band(condP(s),0,TURB_TRIP_P,[[TURB_TRIP_P*0.5,C.cyan,"NORMAL"],
+        [TURB_TRIP_P*0.8,C.amber,"HIGH"],[Infinity,C.red,"NEAR TRIP"]],
+        {dp:4,lim:TURB_TRIP_P}),
+      "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators. At "+TURB_TRIP_P+" MPa the stop valve shuts, and that trip does not reset. Cutting LOAD will not save it: the bypass sends that steam to this same condenser, and dumping rejects MORE heat than generating, because none of it leaves as electricity. Cut reactor power.");
     add("COND TEMP",s.condT.toFixed(0)+" K",null,
       "How hot the water in this machine actually is. It moves below the vacuum floor, where BACK PRESS cannot: a condenser with margin sits on that floor and this is what says how much margin. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
-    add("CW OUTLET",cwOut(s).toFixed(0)+" K",cwOut(s)>T_CW+CW_RISE*1.5?C.amber:null,
+    add("CW OUTLET",cwOut(s).toFixed(0)+" K",
+      band(cwOut(s),T_CW,T_CW+CW_RISE*3,[[T_CW+CW_RISE*1.6,C.cyan,"NORMAL"],
+        [T_CW+CW_RISE*2.5,C.amber,"HIGH"],[Infinity,C.red,"HOT"]],{dp:0}),
       "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" K of rise, and a machine working harder than it was bought for sends it out hotter.");
     add("CIRC WATER",s.blackout?"STOPPED":"running",s.blackout?C.red:C.green,
       "The circulating water pumps. They sit on the main board, so a blackout stops them dead - and with no water moving there is no heat sink at all, whatever the condenser itself is worth.");
