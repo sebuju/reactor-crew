@@ -27,10 +27,22 @@ const cssCol=c=>c?(C2VAR[c]||c):"";
 function railPick(well,ids,name){
   if(!well.head) return well;
   well.head.classList.add("kit-rule-pick");
+  well.el._pickId=ids[0];
   well.head.addEventListener("click",()=>{ sel=ids[0]; });
   KIT.tip(well.head,name||"",
     "Click to select this component. It lights up on the plant, and a leader runs from it to this panel.");
   return well;
+}
+/* The mirror of "a click on bare deck deselects": a rail is as much of the
+   screen as the canvas is, so a click in it that lands anywhere but the
+   selected panel drops the selection too. Bubbles, so railPick()'s own handler
+   has already moved `sel` by the time this asks - which is why it compares
+   against the well under the pointer rather than remembering the old id. */
+function railBlank(rail){
+  rail.addEventListener("click",e=>{
+    const w=e.target.closest&&e.target.closest(".kit-well");
+    if(!w || w._pickId!==sel) sel=null;
+  });
 }
 
 /* ══ A RAIL ONLY SYNCS THE PANELS YOU CAN SEE ══

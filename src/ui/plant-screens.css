@@ -19,8 +19,22 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-root{inset:0;grid-template-columns:1fr 340px}
 
 /* ─────────────── control room ─────────────── */
+/* the two balances stand under the bars and the trends, so this panel is now
+   taller than the window on a short screen: it scrolls, bar hidden, the way the
+   component rail does. Nothing inside may squash - a flex child that shrinks
+   hands hostPaint() a box its picture was not laid out for.
+   ALIGN-SELF:START IS LOAD-BEARING. A scroll container's minimum size is zero,
+   so stretched into the grid's auto row it collapsed to 9 px against the rail
+   spanning both rows - the whole panel vanished. Sized by its own content
+   instead, capped by max-height. */
 .cr-vitals{grid-column:1;grid-row:1;pointer-events:auto;display:flex;flex-direction:column;
-  width:300px;margin:4px 0 0 4px;padding:4px 0;background:var(--c-panel);border:1px solid var(--c-edge)}
+  width:300px;margin:4px 0 0 4px;padding:4px 0;background:var(--c-panel);border:1px solid var(--c-edge);
+  align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none}
+.cr-vitals::-webkit-scrollbar{display:none}
+.cr-vitals>*{flex:0 0 auto}
+/* 8px of side padding puts these on the same left edge the vital rows keep.
+   Two classes because .insp-viz sets its own padding further down the file. */
+.insp-viz.cr-viz{border-top:1px solid var(--c-edge);padding:4px 8px 6px;box-sizing:border-box}
 /* the first track is the plot dot: reserved whether or not it is lit, so
    turning a channel on does not shift the six labels sideways */
 .cr-vital{display:grid;grid-template-columns:7px 84px 1fr 58px;align-items:center;gap:6px;
@@ -116,7 +130,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .insp-row:hover{background:var(--c-panel-hi)}
 /* a genuinely graphical row: its own bitmap, painted by the screen through
    hostPaint() - see fieldRowsBuild() and rhoViz() */
-.insp-viz{display:block;width:100%;background:transparent}
+.insp-viz{display:block;width:100%;background:transparent; padding: 6px 0px;}
 /* four registers in one column. At 176 every seam sat at its minimum and the
    trace was a 29-unit sliver - see the slack note in rhoViz(). */
 .insp-viz-rho{height:240px}

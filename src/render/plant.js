@@ -1127,6 +1127,23 @@ function drawGhostPort(){
   TIP(bx,by,GHOSTG,GHOSTG,"NEW PORT",
     "Click to put a port here. A port is where a pipe may be terminated - lay the pipe itself with the PIPE tool.");
 }
+/* ══ THE AIM MARK ══
+   With the aimed hit up, what the next click would wreck - hitAimAt() is the
+   one resolver, so the outline can never name a machine the press would miss.
+   Bare deck draws nothing, because a click there only puts the tool back. */
+function drawHitAim(){
+  if(TOOL.active!=="hit"||ui.drag) return;
+  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return;
+  const id = hitAimAt(ptr); if(!id) return;
+  const p = dmgPart(id); if(!p) return;
+  let bx,by,bw,bh;
+  if(p.isRun){ const [x,y]=cellPos(p.cells[0][0],p.cells[0][1]);
+    bx=x-CELL/2; by=y-CELL/2; bw=bh=CELL; }
+  else { const r=prect(p); bx=r.x; by=r.y; bw=r.w; bh=r.h; }
+  ctx.save(); ctx.strokeStyle=C.red; ctx.lineWidth=1.6; ctx.setLineDash([3,3]);
+  ctx.strokeRect(bx,by,bw,bh);
+  ctx.restore();
+}
 /* ══ AN EXISTING PORT ══
    One mark PER PORT, and a port is a CELL: a face carrying two of them draws
    two marks a cell apart rather than one mark claiming to speak for both.
@@ -1438,29 +1455,34 @@ function rhoViz(x,y,w,h){
   txt("BETA "+beta.toFixed(0),R,ny+nh+8,{size:6,sp:.6,align:"right",color:C.ink2});
 
   /* ── the last minute of it ── */
-  const ty=ny+nh+12+gap, th=Math.max(16,y+h-ty-2);
+  vizTrace(L,R,ny+nh+12+gap,Math.max(16,y+h-(ny+nh+12+gap)-2),"rho",C.amber,0,"");
+}
+/* ══ THE LAST MINUTE, ABOUT A ZERO THAT DOES NOT MOVE ══
+   Both balances end in the same picture, so it is one function - and the ZERO
+   LINE IS THE MIDDLE OF THE BOX, always. An auto-scaled window put the line
+   wherever the last minute happened to sit, so a trace that had not crossed
+   zero read as if it were sitting on it. The span is the worst excursion either
+   way, so the trace moves ABOUT the line and the line never moves.
+   `zero` is what that quantity's own nothing is: 0 pcm for reactivity, the
+   commissioned T-avg for temperature. */
+function vizTrace(L,R,ty,th,ch,col,zero,lab){
   fillRect(L,ty,R-L,th,C.well); frame(L,ty,R-L,th,C.edge);
   const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
-  if(N>2){
-    let lo=Infinity,hi2=-Infinity;
-    for(let i=0;i<N;i++){ const v=chAt("rho",hlen-N+i); if(v<lo)lo=v; if(v>hi2)hi2=v; }
-    lo=Math.min(lo,0); hi2=Math.max(hi2,0);
-    let sp2=hi2-lo; if(sp2<1e-6) sp2=1;
-    lo-=sp2*.1; sp2*=1.2;
-    const zy=ty+th-((0-lo)/sp2)*th;
-    ctx.save(); ctx.setLineDash([2,3]);
-    line(L+1,zy,R-1,zy,C.edge2,1); ctx.restore();
-    ctx.beginPath(); ctx.strokeStyle=C.amber; ctx.lineWidth=1.2;
-    for(let i=0;i<N;i++){
-      const X=L+1+(i/(N-1))*(R-L-2), Y=ty+th-((chAt("rho",hlen-N+i)-lo)/sp2)*th;
-      i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);
-    }
-    ctx.stroke();
-    txt("-"+(N*SAMP_TICKS*0.02).toFixed(0)+"s",L+3,ty+th-3,{size:6,color:C.ink2});
-    txt("NOW",R-3,ty+th-3,{size:6,align:"right",color:C.ink2});
-  } else {
-    txt("COLLECTING DATA",cx,ty+th/2+2,{size:7,sp:1.4,align:"center",color:C.ink2});
+  if(N<=2){ txt("COLLECTING DATA",(L+R)/2,ty+th/2+2,{size:7,sp:1.4,align:"center",color:C.ink2}); return; }
+  let dev=0;
+  for(let i=0;i<N;i++) dev=Math.max(dev,Math.abs(chAt(ch,hlen-N+i)-zero));
+  const half=Math.max(dev*1.2,1e-6);
+  const zy=ty+th/2;
+  ctx.save(); ctx.setLineDash([2,3]);
+  line(L+1,zy,R-1,zy,C.edge2,1); ctx.restore();
+  ctx.beginPath(); ctx.strokeStyle=col; ctx.lineWidth=1.2;
+  for(let i=0;i<N;i++){
+    const X=L+1+(i/(N-1))*(R-L-2), Y=zy-((chAt(ch,hlen-N+i)-zero)/half)*(th/2-1);
+    i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);
   }
+  ctx.stroke();
+  txt(lab+"-"+(N*SAMP_TICKS*0.02).toFixed(0)+"s",L+3,ty+th-3,{size:6,color:C.ink2});
+  txt("NOW",R-3,ty+th-3,{size:6,align:"right",color:C.ink2});
 }
 const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. The trace is the last minute of it against its own zero.";
 /* [label, HEATBAL/s key, tip, colour]. The same one-table arrangement RHO_ROWS
@@ -1577,26 +1599,11 @@ function heatViz(x,y,w,h){
   txt(rated?(made*rated).toFixed(0)+" MWt MADE":"NOT COMMISSIONED",R,ny+nh+8,
     {size:6,sp:.6,align:"right",color:C.ink2});
 
-  /* ── the last minute of T-avg: the integral of the needle above ── */
-  const ty=ny+nh+12+gap, th=Math.max(16,y+h-ty-2);
-  fillRect(L,ty,R-L,th,C.well); frame(L,ty,R-L,th,C.edge);
-  const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
-  if(N>2){
-    let lo=Infinity,hi2=-Infinity;
-    for(let i=0;i<N;i++){ const v=chAt("tavg",hlen-N+i); if(v<lo)lo=v; if(v>hi2)hi2=v; }
-    let sp2=hi2-lo; if(sp2<1) { const mid=(hi2+lo)/2; lo=mid-.5; sp2=1; }
-    lo-=sp2*.1; sp2*=1.2;
-    ctx.beginPath(); ctx.strokeStyle=C.cyan; ctx.lineWidth=1.2;
-    for(let i=0;i<N;i++){
-      const X=L+1+(i/(N-1))*(R-L-2), Y=ty+th-((chAt("tavg",hlen-N+i)-lo)/sp2)*th;
-      i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);
-    }
-    ctx.stroke();
-    txt("T-AVG -"+(N*SAMP_TICKS*0.02).toFixed(0)+"s",L+3,ty+th-3,{size:6,color:C.ink2});
-    txt("NOW",R-3,ty+th-3,{size:6,align:"right",color:C.ink2});
-  } else {
-    txt("COLLECTING DATA",cx,ty+th/2+2,{size:7,sp:1.4,align:"center",color:C.ink2});
-  }
+  /* ── the last minute of T-avg: the integral of the needle above ──
+     Temperature's zero is the plant's own commissioned T-avg, so the centre
+     line means "where this loop was built to sit". */
+  const ty=ny+nh+12+gap;
+  vizTrace(L,R,ty,Math.max(16,y+h-ty-2),"tavg",C.cyan,P?P.Tref:0,"T-AVG ");
 }
 /* ═══════════ WHERE THE CORE IS HURT ═══════════
    FUEL DAMAGE is one percentage, and a percentage cannot say the one thing an
@@ -1623,7 +1630,7 @@ function dmgViz(x,y,w,h){
   /* the map takes whatever is left after the ledger and its legend, so the row
      can be made taller or shorter without either register overflowing */
   const krows=Math.ceil(FAIL.length/2);
-  const foot=26+krows*8;
+  const foot=34+krows*8;
   const my=y+13, mh=Math.max(30,y+h-my-foot);
   fillRect(L,my,R-L,mh,C.well);
   const g=coreCellGeom(L,my,R-L,mh);
@@ -1631,9 +1638,9 @@ function dmgViz(x,y,w,h){
     const i=g.ring(c);
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), cx=g.cx(c), cy=g.cy(j), st=fuelStage(s,k);
-      if(st>0){ ctx.globalAlpha=.35+.2*st;
-        fillRect(cx-g.cw/2,cy-g.ch/2,g.cw-.5,g.ch-.5,FAIL[st].col());
-        ctx.globalAlpha=1; }
+      ctx.globalAlpha=st>0?.35+.2*st:.18;
+      fillRect(cx-g.cw/2,cy-g.ch/2,g.cw-.5,g.ch-.5,FAIL[st].col());
+      ctx.globalAlpha=1;
       // a ring the lattice never filled has no fuel to hurt, and says so
       const ff=P&&P.frac?clamp(P.frac[i],0,1):1;
       if(ff<.3) fillRect(cx-1,cy-1,2,2,C.edge2);
@@ -1647,10 +1654,10 @@ function dmgViz(x,y,w,h){
     ctx.stroke(); ctx.globalAlpha=1; }
   frame(L,my,R-L,mh,C.edge);
   txt("MIN NODE DNBR "+s.dnbrMin.toFixed(2)+" @ R"+s.dnbrRing+"/EL"+s.dnbrLev,
-    L+3,my+mh-3,{size:6,sp:.4,color:C.ink2});
+    L,my+mh+8,{size:6,sp:.4,color:C.ink2});
 
   /* ── the ledger ── */
-  const st=fuelStages(s), by=my+mh+6, bh=12;
+  const st=fuelStages(s), by=my+mh+14, bh=12;
   fillRect(L,by,R-L,bh,C.well);
   let acc=0;
   for(let q=0;q<FAIL.length;q++){
@@ -1755,11 +1762,10 @@ function readoutsFor(p,s){
         s.h2>0?C.amber:C.ink2,
       "Hydrogen made by steam burning the cladding. It is not modelled as burning here - no explosion, no containment pressure - but it is a direct measure of how much cladding has gone.");
     add.apply(null,rowFat(s));
-    R.push({sec:"FUEL DAMAGE"});
     R.push({viz:"dmg",tip:DMGVIZ_TIP,title:"FUEL DAMAGE"});
-    R.push({sec:"REACTIVITY"});
-    // the picture first, the eight numbers it is a picture OF underneath
-    R.push({viz:"rho",tip:RHOVIZ_TIP,title:"REACTIVITY BALANCE"});
+    /* the two balances draw in the VITALS panel (crBuild()) - they are read
+       against the plant, not against the reactor's own rail. The numbers they
+       are a picture OF stay here. */
     for(const r of RHO_ROWS){
       const v = r[1]==="net" ? s.rho : s.parts[r[1]];
       const col = r[1]==="net" ? (Math.abs(v)<50?C.green:(v<0?C.blue:C.red))
@@ -1769,8 +1775,6 @@ function readoutsFor(p,s){
         {f:clamp(v/RHO_BAR,-1,1),full:RHO_BAR,
          m:lim&&lim.map(q=>clamp(q/RHO_BAR,-1,1))});
     }
-    R.push({sec:"HEAT BALANCE"});
-    R.push({viz:"heat",tip:HEATVIZ_TIP,title:"HEAT BALANCE"});
     { const hbar=v=>({f:clamp(v/HEAT_BAR,-1,1),full:HEAT_BAR});
       for(const r of HEAT_ROWS){
         const v = r[1]==="prompt" ? HEATBAL.prompt : (s.dec[+r[1][1]]||0);
@@ -2430,6 +2434,7 @@ function drawPlant(y0,L,vh,vx,vw){
           drawGhostPort();              // ...where the next one would go...
           drawPipePreview(); }          // ...and the run now being dragged
   pipeFitMarks(L,NET);
+  if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
   for(const t of tags) t();     // every name and value, over the pipework
   viewOn=false; ctx.restore();
 

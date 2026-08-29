@@ -61,8 +61,10 @@ function shellInit(){
       if(k==="design" && P && S && !scnArmed() && REC.mode==="live") resetPlant();
       /* pause on the way in, unless a run or a replay is already flying */
       if(k==="scenario"&&!scnArmed()) TR.paused=true;
-      // a menu about a bench part must not outlive the bench
+      // a menu about a bench part must not outlive the bench, and neither does
+      // a tool: every one of them addresses one screen's plant
       ctxClose();
+      TOOL.active="select";
       screen=k; layout();
     });
   }

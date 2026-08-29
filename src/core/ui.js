@@ -185,10 +185,14 @@ const hitAt=p=>{
    than a boolean somebody has to remember to clear. */
 const TOOL={active:"select"};
 const TOOLS=[
-  {id:"select", label:"SELECT",
+  {id:"select", sc:"design", label:"SELECT",
    tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to put a port there, and click the port again to take it away."},
-  {id:"pipe", label:"PIPE",
+  {id:"pipe", sc:"design", label:"PIPE",
    tip:"Drag to lay a run of pipe cells. It follows the drag, turning where the drag turns. Click a bare cell to fill it and click a laid one to turn it a quarter, which the wheel also does. Hold the right button and sweep to take cells out. A cell drawn dashed and grey is pipe that joins nothing yet."},
+  /* The FAULTS panel carries this one rather than a tool bar, so it is on the
+     table for the pre-emption branch and the aim mark, not for a switch. */
+  {id:"hit", sc:"operate", label:"AIMED COMBAT HIT",
+   tip:"Click a machine or a pipe cell to take the hit THERE. One click, then the tool puts itself back; a click on bare deck cancels it."},
 ];
 // which cell a plant-space point lands on, in grid units - what every tool
 // gesture is addressed at, since a tool paints CELLS and never pixels
@@ -198,6 +202,17 @@ const cellSame=(a,b)=>!!a&&!!b&&a[0]===b[0]&&a[1]===b[1];
 // because the press and the drag that follows it must lift the same thing.
 function pipeLift(pt){ const c=cellAt(pt), k=c[0]+","+c[1];
   if(D.pipes[k]){ delete D.pipes[k]; buildLayout(); } }
+/* WHAT THE AIMED HIT IS ON, resolved once: the press and the mark that
+   previews it read the same answer, or the picture and the damage would name
+   different machines. A machine's whole footprint is the target, a pipe cell is
+   a target of its own (combatHit() prices them that way too), and null is bare
+   deck. */
+function hitAimAt(pt){
+  const p=partAt([pt.x,pt.y]);
+  if(p) return p.id;
+  const c=cellAt(pt), k=pipeKey(c[0],c[1]);
+  return D.pipes[k] ? "pipe:"+k : null;
+}
 
 let touchTip=null, isTouch=false;
 // g is an optional band(): the scale the value in this region lives on, so
@@ -447,6 +462,17 @@ function uiDown(e){
      about whatever box it happens to land on - so this is asked before the
      ordinary per-widget dispatch below. Nothing is committed until the
      release, the same convention the part drag already keeps. */
+  /* AN AIMED HIT PRE-EMPTS THE SAME WAY, and it goes through act() like every
+     other input, so a tape and a scenario carry it. A control strip standing
+     over the plant is not a target: the press is not spent on it, and the tool
+     stays up for the machine the hand was aiming at. */
+  if(screen==="operate" && TOOL.active==="hit" && vIn(p)){
+    const aim=hitAimAt(vPt(p));
+    if(!aim && w) return;
+    TOOL.active="select";
+    if(aim) act("hit",aim);
+    return;
+  }
   if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
     const c=cellAt(vPt(p));
     // `had` is what turns a click on a cell that is ALREADY pipe into a

@@ -975,7 +975,7 @@ function dbBuild(){
      have. Each key manages its own state off the TOOL table, so there is
      nothing here for a per-frame sync to keep in step with. */
   const tools=KIT.el("div","db-tools"), btns=[];
-  for(const t of TOOLS){
+  for(const t of TOOLS.filter(t=>t.sc==="design")){
     const b=KIT.button(t.label,{size:8, sunk:true, on:TOOL.active===t.id,
       onClick:()=>{ TOOL.active=t.id; for(const q of btns) q.b.set({on:TOOL.active===q.id}); }});
     b.el.classList.add("layer-switch");
@@ -986,6 +986,7 @@ function dbBuild(){
   KIT.tip(arr.el,"AUTO-ARRANGE","Resets every component to its default position.");
   head.append(tools,arr.el);
   const rail=KIT.el("div","db-rail");
+  railBlank(rail);
   root.append(head,rail);
   mount.appendChild(root);
   return {root,head,rail,state:null,watch:null};

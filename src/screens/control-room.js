@@ -31,6 +31,11 @@ function crVitalsData(){
     u:-s.parts.xe/3200, col:-s.parts.xe>3200?"var(--c-blue)":"var(--c-cyan)",
     tip:"Xenon-135 poison. The mark is 3200 pcm, about where the pit costs you more reactivity than the rods have left to give."}];
 }
+/* the balances the vitals panel draws under its six bars, in draw order */
+const CR_VIZ=[
+ {k:"rho", title:"REACTIVITY BALANCE", tip:RHOVIZ_TIP,  draw:rhoViz},
+ {k:"heat",title:"HEAT BALANCE",       tip:HEATVIZ_TIP, draw:heatViz},
+];
 function crVitalsBuild(container){
   const rows=[];
   for(let i=0;i<6;i++){
@@ -322,6 +327,10 @@ function crDamageSync(list){
   });
 }
 
+// ESC PUTS THE TOOL BACK, the same key and the same one way out of a mode the
+// bench has
+keyAdd({k:"Escape", sc:"operate", lab:"SELECT", fn:()=>{ TOOL.active="select"; }});
+
 function crFaultsBuild(container){
   const scram=(l,o)=>KIT.button(l,o);
   const porv=scram("STUCK PORV",{onClick:()=>act("porvStick")});
@@ -332,8 +341,12 @@ function crFaultsBuild(container){
   KIT.tip(load.el,"LOAD STEP","Slams turbine demand to the turbine's own ceiling instantly.");
   const reset=scram("RESET PLANT",{onClick:()=>act("reset")});
   KIT.tip(reset.el,"RESET PLANT","Returns the reactor to steady 100% power with all faults cleared. Keeps your current design.");
-  const hit=scram("COMBAT HIT",{onClick:()=>act("hit")});
-  KIT.tip(hit.el,"COMBAT HIT","Takes a hit somewhere in the engineering space, weighted toward the hull.");
+  const hit=scram("RANDOM COMBAT HIT",{onClick:()=>act("hit")});
+  KIT.tip(hit.el,"RANDOM COMBAT HIT","Takes a hit somewhere in the engineering space, weighted toward the hull.");
+  /* The aimed hit is a TOOL, not a button that damages on the press: the target
+     is a machine on the plant, so it is picked on the plant. */
+  const aim=scram("AIMED COMBAT HIT",{onClick:()=>{ TOOL.active = TOOL.active==="hit"?"select":"hit"; }});
+  KIT.tip(aim.el,"AIMED COMBAT HIT",TOOLS.find(t=>t.id==="hit").tip);
   const black=scram("STATION BLACKOUT",{onClick:()=>act("blackout")});
   KIT.tip(black.el,"STATION BLACKOUT","Cuts main power to the coolant pumps.");
   /* Opens EVERY tank that could poison the loop, off what is in them. It is a
@@ -341,13 +354,14 @@ function crFaultsBuild(container){
      latch behind it any more, because a tank that is empty is empty. */
   const boron=scram("EMERGENCY BORON",{danger:true,
     onClick:()=>{ for(const id of boronTankIds()) if(!S.tankOpen[id]) act("tankOpen",id); }});
-  container.append(porv.el,jam.el,load.el,reset.el,hit.el,black.el,boron.el);
-  return {porv,jam,load,reset,hit,black,boron};
+  container.append(porv.el,jam.el,load.el,reset.el,hit.el,aim.el,black.el,boron.el);
+  return {porv,jam,load,reset,hit,aim,black,boron};
 }
 function crFaultsSync(h){
   if(!P) return;
   h.porv.set({on:reliefAnyStuck(S)});
   h.jam.set({on:S.rodJam});
+  h.aim.set({on:TOOL.active==="hit"});
   h.load.set({label:"LOAD STEP "+(P.loadMax*100).toFixed(0)+"%"});
   h.black.set({on:S.blackout});
   const bt=boronTankIds(), spent=bt.length>0 && bt.every(id=>S.tank[id]<=0);
@@ -391,13 +405,11 @@ function crRailSync(panels){
     if(!rows.length) continue;
     if(on && moved) KIT.reveal(h.well.el,"start");
     fieldRowsSync(h.body,rows);
-    /* the reactivity balance is genuinely graphical and keeps its own canvas,
-       the way the lattice plan does on the bench - see hostPaint() and
-       rhoViz(). fieldRowsBuild() hands the canvas back on the container, so
-       this never searches the screen for it. */
+    /* the damage map is genuinely graphical and keeps its own canvas, the way
+       the lattice plan does on the bench - see hostPaint() and dmgViz().
+       fieldRowsBuild() hands the canvas back on the container, so this never
+       searches the screen for it. */
     const v=h.body._viz;
-    if(v&&v.rho) hostPaint(v.rho,rhoViz);
-    if(v&&v.heat) hostPaint(v.heat,heatViz);
     if(v&&v.dmg) hostPaint(v.dmg,dmgViz);
   }
 }
@@ -411,6 +423,15 @@ function crBuild(){
   const vitalRows=crVitalsBuild(vitals);
   const trendBox=KIT.el("div","cr-trends");   // one canvas per plotted channel
   vitals.appendChild(trendBox);
+  /* THE TWO BALANCES ARE VITALS, NOT COMPONENT READOUTS. They are the whole
+     plant's account of itself, so they belong beside the six bars rather than
+     behind a click on the reactor. Same canvas arrangement a rail widget uses -
+     the panel is opaque, so each draws into its own <canvas> (hostPaint()). */
+  const viz={};
+  for(const b of CR_VIZ){
+    const c=KIT.el("canvas","insp-viz insp-viz-"+b.k+" cr-viz");
+    KIT.tip(c,b.title,b.tip); vitals.appendChild(c); viz[b.k]=c;
+  }
 
   const alarmsWrap=KIT.el("div","cr-alarms");
   const alarmsHead=KIT.el("div","cr-alarms-head");
@@ -425,6 +446,7 @@ function crBuild(){
   const banner=KIT.el("div","cr-banner"); root.appendChild(banner);
 
   const rail=KIT.el("div","cr-rail"); root.appendChild(rail);
+  railBlank(rail);
 
   const ops=KIT.el("div","cr-ops"); rail.appendChild(ops);
 
@@ -455,7 +477,7 @@ function crBuild(){
   const compRail=KIT.el("div","cr-comp-rail"); rail.appendChild(compRail);
 
   mount.appendChild(root);
-  return {root,vitals,vitalRows,alarms,banner,rail,
+  return {root,vitals,vitalRows,viz,alarms,banner,rail,
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,cnx:cnxBody,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
@@ -482,6 +504,7 @@ function crCnxSync(body){
 function crSync(){
   if(!CR) return;
   crVitalsSync(CR.vitalRows);
+  for(const b of CR_VIZ) hostPaint(CR.viz[b.k],b.draw);
   crAlarmsSync(CR.alarms);
   crTrendSync(CR.trend);
   crLogSync(CR.logList);
