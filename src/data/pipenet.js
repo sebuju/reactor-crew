@@ -412,7 +412,12 @@ const AUTORULE = {
      tank's own edge could ask about honestly. A rule, not a special case -
      any tank may be given it. */
   always: {label:"ALWAYS OPEN",       live:()=>true},
-  sglow:  {label:"LOW SG LEVEL",      live:s=>sglMin(s) < SG_DRY},
+  /* TWO SETPOINTS, because a feed train runs to a level. It starts below
+     SG_DRY and keeps running until SG_EFW_OFF, off what it decided last tick
+     (s.tankAuto, refilled by step()) - one setpoint parked the plant on its
+     own threshold and re-alarmed on every wobble there. */
+  sglow:  {label:"LOW SG LEVEL",      live:(s,id)=>sglMin(s) <
+             ((s.tankAuto && s.tankAuto[id]) ? SG_EFW_OFF : SG_DRY)},
   plow:   {label:"LOW LOOP PRESSURE", live:s=>s.P < P.P0*0.55},
 };
 
@@ -571,7 +576,7 @@ const tankOpen = (s,id) => {
      rather than as one flag over a named system */
   if(s.tankByp && s.tankByp[id]) return false;
   const r = AUTORULE[D.tanks[id].auto];
-  return !!(r && r.live(s));
+  return !!(r && r.live(s,id));
 };
 /* A tank that opens itself, and has not been bypassed. This is what
    "emergency feedwater is armed" MEANS now - there is no such system, there

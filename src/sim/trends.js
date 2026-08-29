@@ -80,7 +80,7 @@ const CHVIEW={
  prs :{rng:()=>[P.P0*0.70,P.P0*1.25],       warn:()=>[P.P0*0.86, P.P0*(1.06+0.07*P.rpsm)]},
  sub :{rng:()=>[0,Math.max(40,P.sc0*1.4)],  warn:()=>[8,3]},
  lvl :{rng:()=>[0,100],                     warn:()=>[78]},
- sgl :{rng:()=>[0,100],                     warn:()=>[SG_DRY]},
+ sgl :{rng:()=>[0,100],                     warn:()=>[SG_LOW]},
  hot :{rng:()=>[0,100]},
  inv :{rng:()=>[60,102],                    warn:()=>[95]},
  flow:{rng:()=>[0,120],                     warn:()=>[P.flowMin*100]},

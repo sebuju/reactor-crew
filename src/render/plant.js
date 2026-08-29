@@ -294,7 +294,7 @@ function drawSym(p,x,y,w,h,ink,L){
       /* boiling dry, on the same 25% the SG LEVEL band calls LOW. This is the
          core losing its heat sink, and it had no picture at all - the level
          fill alone drops quietly and says nothing about what that costs. */
-      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",sgLvl(L,id)<25?1-wet*.7:0),1.5);
+      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",sgLvl(L,id)<SG_DRY?1-wet*.7:0),1.5);
       /* ruptured tubes: primary water crossing into the secondary side, which
          is activity going straight past containment. Drawn rising off the
          bundle itself, where the leak is - and on THIS generator's own solved
@@ -308,10 +308,11 @@ function drawSym(p,x,y,w,h,ink,L){
       // sat high, in the steam space: the middle of a generator is where the
       // flow gauge on its own steam line lands
       const ruptured = sgtrLive(L, id), lv=sgLvl(L,id);
-      // DRYING is the tubes starting to uncover and is recoverable; DRY is most
-      // of the bundle in steam. Same two constants the board's own tiles read.
-      const word = ruptured?"RUPTURED" : lv<SG_DRY_LO?"DRY" : "DRYING";
-      if(ruptured||lv<SG_DRY)
+      // Three steps of one ladder, on the same constants the board's tiles read:
+      // LOW is the warning, DRYING is the tubes starting to uncover and is
+      // recoverable, DRY is most of the bundle in steam.
+      const word = ruptured?"RUPTURED" : lv<SG_DRY_LO?"DRY" : lv<SG_DRY?"DRYING" : "LOW";
+      if(ruptured||lv<SG_LOW)
         banner(word,cx,X+1,Y+11,W-2,Hh-12,
                (ruptured||lv<SG_DRY_LO)?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
     }

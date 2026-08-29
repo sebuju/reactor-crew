@@ -963,6 +963,17 @@ const SG_DRY=25;          // %
    steam with the core still making heat, and it reads red. Two numbers on one
    ladder, so the banner and the tile cannot disagree about which step it is on. */
 const SG_DRY_LO=10;       // %
+/* THE ALARM COMES FIRST, THE PUMP SECOND. This used to be SG_DRY as well, so
+   emergency feedwater could not start without lighting its own alarm in the
+   same tick - the board called DRYING for one frame and latched a master
+   caution for a level the plant was already fixing. A warning ahead of the
+   automatic action is the real ladder. */
+const SG_LOW=35;          // %
+/* WHERE EMERGENCY FEEDWATER STOPS. A feed train runs to a LEVEL, not to a
+   switch point: shutting again the instant the start setpoint is cleared parks
+   the plant on its own threshold, and every wobble there re-alarms. Above
+   SG_LOW, or the restore would hand the board straight back its alarm. */
+const SG_EFW_OFF=40;      // %
 /* What a tank's overboard dump valve passes, in % of that tank per second.
    Sized off the plant it serves rather than picked: at the stock plant's steam
    rate it empties a full hotwell in about a minute, which is fast enough to
@@ -1503,6 +1514,10 @@ function resetPlant(){
      tankByp:Object.fromEntries(tankIds().map(k=>[k,!!startOf(k+":tankByp",false)])),
      burstBy:Object.fromEntries(tankIds().map(k=>[k,false])),
      tankOver:{},
+     /* what each tank's own AUTORULE decided last tick. A rule with two
+        setpoints has to know whether it is already running, and this is the
+        only place that memory can live - on S, so it rides a snapshot. */
+     tankAuto:Object.fromEntries(tankIds().map(k=>[k,false])),
      /* what each tank's own edge is carrying, % of loop inventory per second,
         tank-out-positive - a readout, REFILLED never rebuilt, because a
         renderer holds it across frames to meter that tank's own line */
@@ -2205,6 +2220,13 @@ function step(dt){
     s.inv += dPct;
     const bw = FLUID[t.fluid].boron;
     if(bw && dPct>0){ s.boron -= bw*dPct; s.boronDem -= bw*dPct; }
+  }
+  /* EACH RULE'S OWN STATE, fed forward like s.cavP and s.fregBy: this tick's
+     answer is what the next tick's hysteresis reads, so nothing asking
+     tankOpen() during a tick can see the rule change under it. */
+  for(const id of tankIds()){
+    const r = AUTORULE[D.tanks[id].auto];
+    s.tankAuto[id] = !!(r && r.live(s,id));
   }
   if(inj>0) s.fatigue += 0.35*dt*clamp(inj/1.6,0,2);
   /* ── a tube rupture, at whatever the differential says ──
@@ -3003,8 +3025,8 @@ const ANN=[
  /* The two steps of boiling a shell dry, on the same numbers the mimic's own
     banner and the removal term read. Plant-wide, like every other row here:
     the lamp says "here", the board says "what". */
- ["SG LEVEL LO","amber",s=>sgIds().some(id=>sgLvl(s,id)<SG_DRY),
-  "A steam generator is below "+SG_DRY+"% and its tubes are starting to uncover. That generator is losing its grip on the core. Feed it - check the feed pump, the regulating valve and the hotwell before you assume the pump has failed.","sg"],
+ ["SG LEVEL LO","amber",s=>sgIds().some(id=>sgLvl(s,id)<SG_LOW),
+  "A steam generator is below "+SG_LOW+"% and falling. Nothing is uncovered yet: this is the warning ahead of it, and emergency feedwater does not start until "+SG_DRY+"%. Feed it - check the feed pump, the regulating valve and the hotwell before you assume the pump has failed.","sg"],
  ["SG DRY","red",s=>sgIds().some(id=>sgLvl(s,id)<SG_DRY_LO),
   "A steam generator is below "+SG_DRY_LO+"%. Most of the bundle is in steam and that loop is not cooling the core any more. If every generator reads this, the only heat sink left is what leaks out of the boundary.","sg"],
  ["HOTWELL FULL","red",s=>condFrac(s)<1,
