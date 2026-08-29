@@ -1038,6 +1038,9 @@ function netBuild(){
      mechanism rather than two. */
   const contNode = tag => nodeIdx("cont:" + tag);
   const breakIds = [];
+  // the steam-side holes, for the shell balance step() runs - cells to ask
+  // cellBroken() of, and the bore and shells that price what one passes
+  const steamBreaks = [];
   /* A containment node whose height is NOT its edge's other end - a break at a
      pipe cell discharges at that cell, not at the machine the run happens to
      terminate on. Collected here and applied in the elevation pass below,
@@ -1279,17 +1282,37 @@ function netBuild(){
      and an intact plant's matrix is bit-identical to one built before break
      edges existed; and the node SET is constant, which is what netFixSig() and
      the factorisation cache require. */
+  // two steam walks per shell, hoisted: neither set depends on the run
+  const shellIds = shellFaces().map(sh => sh.id), steamSeen = {}, headSeen = {};
+  for(const id of shellIds){ steamSeen[id] = steamNodesOf(id); headSeen[id] = steamNodesOf(id, true); }
   for(const r of net){
     const ends = runEnds(r.key, r.k);
     if(!ends) continue;
     const bore = runBore(r), g = BREAK_K*bore*bore;
+    /* WHICH SIDE OF THE TUBES THE HOLE IS ON, asked of the drawing and never
+       of a run's name: both ends secondary is secondary water, so a hit on a
+       feed line costs condensate, not primary inventory. A cross-tie has one
+       primary end and stays primary - it can drain the loop. */
+    const sec = secondaryNode(ends[0]) && secondaryNode(ends[1]);
+    /* ...AND WHETHER IT STANDS IN A SHELL'S STEAM (steamNodesOf(), layout.js).
+       What leaves through such a hole is STEAM, so it is charged at the shell
+       it belongs to (step.js, secHole) and not here - this network prices
+       liquid, and steam is a density this solve does not carry. Empty for the
+       condensate side, which is why a feed line still answers `sec` alone. */
+    const shells = sec ? shellIds.filter(id => steamSeen[id][ends[0]] || steamSeen[id][ends[1]]) : [];
+    const steam = shells.length > 0;
+    /* PAST THE TURBINE IT IS EXHAUST, and exhaust is not shell steam: it sits
+       in the condenser's vacuum, so a hole there lets air IN rather than
+       steam out. Two different accidents, priced apart in step(). */
+    const exh = steam && !shells.some(id => headSeen[id][ends[0]] || headSeen[id][ends[1]]);
+    if(steam) steamBreaks.push({cells: r.cells, bore, shells, exh});
     const ua = nodeIdx(coreFold(ends[0])), ub = nodeIdx(coreFold(ends[1]));
     for(const [x,y] of r.cells){
       const v = contNode("pipe:"+x+","+y);
       breakIds.push(v);
       contZ[v] = zRow(y);                  // the hole's own elevation, not a machine's
       for(const u of [ua,ub])
-        edges.push({u, v, g: s => cellBroken(s,x,y) ? g : 0, h: 0, kind: "break", key: "break:"+r.key});
+        edges.push({u, v, g: s => cellBroken(s,x,y) ? g : 0, h: 0, kind: "break", sec, steam, key: "break:"+r.key});
     }
   }
   /* one tube-rupture edge per steam generator, from its own primary outlet to
@@ -1372,6 +1395,7 @@ function netBuild(){
 
   const net2 = {nodes, index, edges, core: coreNode, n: nodes.length, byKey, fitIds, fitMode,
                 cont: breakIds, sec: sgtrIds, secT: secTIds, sgtrParts, secTParts, fitTarget,
+                steamBreaks,
                 /* the surge run's own key, resolved once here rather than
                    re-found by a string scan every tick - step()'s level
                    integral reads this run's solved flow out of runFlow */
@@ -1884,7 +1908,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
   // every node a TANK row landed on - hoisted once so the core-flow test
   // below is a Set lookup, not a rebuilt object per edge
   const tankNodes = new Set(Object.values(net.tankNode));
-  let core = 0, spill = 0;
+  let core = 0, spill = 0, spillSec = 0;
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
     /* SIGNED, along the edge's own u->v order, which is the run key's own
@@ -1916,7 +1940,12 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
     }
     if(byDrop && ed.key) byDrop[ed.key] = span>0 ? Math.abs(b[ed.u]-b[ed.v])/span : 0;
     if(ed.kind === "break"){ // LABEL: synthetic edge kind this function invents
-      spill += Math.abs(q[e]);
+      /* charged to the side the hole is on (ed.sec/ed.steam, netBuild) - the
+         plume is still booked in outs.by whichever side it is, because a hole
+         is a hole. A steam-side hole is charged at its shell instead, so it
+         is counted in NEITHER sum here: what leaves it is steam, and this
+         solve carries one density. */
+      if(!ed.steam){ if(ed.sec) spillSec += Math.abs(q[e]); else spill += Math.abs(q[e]); }
       /* per OPENING, because an effect has to be drawn where its own hole is:
          a severed run's two ends share one key and sum, the vessel has its
          own. This is what stops the breach plume being a boolean at the
@@ -1999,7 +2028,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
       }
     }
   }
-  if(outs) outs.spill = spill;
+  if(outs){ outs.spill = spill; outs.spillSec = spillSec; }
   return core;
 }
 

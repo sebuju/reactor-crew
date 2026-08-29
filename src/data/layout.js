@@ -618,6 +618,27 @@ const turbPiped=()=>{ const ids=LAY.parts.filter(p=>p.role==="turb").map(p=>p.id
 /* CAN THIS GENERATOR SEND ITS STEAM ANYWHERE. A shell with no path to a
    turbine that can exhaust is raising steam into a closed vessel, so it takes
    no heat out of its own loop. Per machine, the standing sgFill() has. */
+/* WHICH NODES STAND IN THIS SHELL'S STEAM. Seeded at the shell's own STEAM
+   face - sgSteams()'s seed - and cut at every shell's FEED face AND at the
+   CONDENSER, because past the condenser it is condensate. The feed cut alone
+   is not enough here: the secondary is a loop, so a walk off the steam header
+   arrives at the feedwater train the long way round and a condensate line
+   reads as though it were full of steam.
+   CUT THE TURBINE TOO and what is left is the HEADER, at shell pressure. The
+   difference between the two walks is the exhaust - everything the steam
+   reaches only by going through a machine that took work out of it - and the
+   two sit at pressures three orders of magnitude apart, so nothing may price
+   them together. */
+function steamNodesOf(sgId, cutTurb){
+  const G=nodeGraph(), sh=shellFaces().find(s=>s.id===sgId);
+  if(!sh) return {};
+  const cut={};
+  for(const s2 of shellFaces()) cut[s2.id+s2.feed]=1;
+  for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R) continue;
+    if(R.thermal==="sink" || (cutTurb && p.role==="turb"))
+      for(const n of (G.nodesOf[p.id]||[])) cut[n]=1; }
+  return G.reach([sgId+sh.steam], cut);
+}
 const sgSteams=id=>{ const sh=shellFaces().find(s=>s.id===id);
   if(!sh) return true;                       // no shell to ask of: not a machine this gates
   const c=secCircuitOf(id,[id+sh.steam]); return c.turb&&c.sink; };

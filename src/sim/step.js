@@ -460,7 +460,15 @@ const condK = s => Math.max(0, roleAlive("cond",s.dmgParts)*condFrac(s)
    end. It is fed forward one tick (s.condT is state), the same lag s.cavP and
    s.coreDT carry, and it needs no filter of its own because the thermal mass
    IS the filter. */
-const condP = s => s.condT===undefined ? COND_P0 : Math.max(COND_P0, psatSec(s.condT));
+/* IS THE EXHAUST OPEN TO THE ROOM. A severed exhaust run (net.steamBreaks,
+   pipenet.js) sits in the vacuum, so what a hole there passes is air going
+   IN - the accident is the backpressure, not a vent. One predicate, because
+   the work term, the readouts and the stop valve all have to agree about
+   which pressure the turbine exhausts against. */
+const exhOpen = s => !!(P && P.net && (P.net.steamBreaks||[]).some(bk =>
+  bk.exh && bk.cells.some(([x,y])=>cellBroken(s,x,y))));
+const condP = s => Math.max(exhOpen(s) ? P.Pcont : 0,
+  s.condT===undefined ? COND_P0 : Math.max(COND_P0, psatSec(s.condT)));
 /* What it is actually getting rid of, kW - the only place rejection is
    computed, so the readout and the balance cannot disagree. */
 const condRej = s => Math.max(0, P.condUA*condK(s)*((s.condT||T_CW)-T_CW));
@@ -1796,6 +1804,12 @@ function step(dt){
     for(const k in s.spillBy) if(!(k in by)) delete s.spillBy[k];
     for(const k in by) s.spillBy[k] = invRate(by[k]); }
   s.spillRate = spill;
+  /* A HOLE IN THE SECONDARY SPILLS SECONDARY WATER. Kept apart from `spill`
+     at the edge (ed.sec, pipenet.js) because everything below charges spill
+     to s.inv and blows the pressurizer bubble down with it - which is how a
+     hit on the condensate line used to drain the primary. Kilograms, the
+     currency the condensate balance counts in. */
+  const spillSecKg = invRate(netOut.spillSec||0)/100*loopKg();
   /* ── injection: what the tank actually pushed, against the loop it is
      fighting ── s.hpi stays the operator's on/off. What goes is the idea that
      switching it on means a RATE: a loop at full pressure takes almost
@@ -2362,6 +2376,11 @@ function step(dt){
   const perSG = Math.max(1, ids.length);
   const swWork = s.load*passK*P.swallow/perSG;
   const swDump = dump*P.swallow/perSG;
+  /* ── A HOLE IN THE EXHAUST BREAKS THE VACUUM, IT DOES NOT VENT A SHELL ──
+     condP() carries it (exhOpen(), above), so the enthalpy drop, the stop
+     valve and the MWe readout all price the same backpressure. What still
+     crosses the turbine goes to the room instead of to the hotwell (`retK`
+     below), so the condensate does not come back either. */
   const pCond  = condP(s);
   /* ── THE SHELL'S RELIEF VALVES, AND THEY ARE PLACED BOXES ──
      Identical machine to the primary's: its own bore, its own set point, its
@@ -2395,6 +2414,25 @@ function step(dt){
     for(const id of shells)
       (secVent[id]||(secVent[id]=[])).push({fid, cap:
         SG_RELIEF_CAP*ratedSteam()*b*b*Math.max(0, secP(s,id)-P.Pcont)/span});
+  }
+  /* ── A SEVERED STEAM LINE IS AN OPENING ON THE SHELL BEHIND IT ──
+     Same shape as a valve's capacity and deliberately so: a hole passing
+     steam is what a relief valve is, minus the set point and minus the
+     reseat. It is priced against the shell's DESIGN pressure because a hole
+     has no lift point of its own, and off the RUN's bore, so a severed main
+     steam line dumps more than a full-bore valve and a small tap dumps less.
+     Kept out of secVent because that list is split back over the valves that
+     earned it (s.reliefSteam, per fitting) and a hole is no fitting - it
+     raises the shell's total capacity and nothing prints it as a valve.
+     WHY HERE AND NOT IN THE NETWORK: the steam side carries no solved
+     hydraulics, so the mass is taken where its pressure actually lives. */
+  const secHole = {};                     // per shell: kg/s the holes on it offer
+  for(const bk of (P.net.steamBreaks||[])){
+    if(bk.exh || !bk.cells.some(([x,y])=>cellBroken(s,x,y))) continue;
+    const span = Math.max(0.05, sgDesignP()-P.Pcont);
+    for(const id of bk.shells)
+      secHole[id] = (secHole[id]||0) + SG_RELIEF_CAP*ratedSteam()*bk.bore*bk.bore
+                                       *Math.max(0, secP(s,id)-P.Pcont)/span;
   }
   let boiled = 0, fedTot = 0, fedCirc = 0, fedRes = 0;   // kg/s, summed for the mass balance below
   let sgVented = 0, workKW = 0;                          // relief valves, and shaft work
@@ -2446,6 +2484,7 @@ function step(dt){
        full-bore valve would and does not reseat. */
     let cap = 0; for(const v of (secVent[id]||[])) cap += v.cap;
     if(s.sgBurst[id]) cap = SG_RELIEF_CAP*ratedSteam();      // a hole, not a valve
+    cap += secHole[id]||0;                                   // a severed steam line is another
     const vent = Math.min(cap, lvl/100*M/Math.max(dt,1e-9));
     /* WHAT EACH VALVE IS ACTUALLY PASSING, not what it offered - the shell can
        only give up the water that is in it, and the panel has to print the
@@ -2537,7 +2576,13 @@ function step(dt){
      tick (measured: a destroyed condenser oscillated between passing rated
      steam and none). COND_TAU is the shell and tubes it has to warm up first,
      which is why the lag is a property and not a filter. */
-  { const qIn = Math.max(0, boiled*H_FG - workKW);
+  /* WHAT ACTUALLY GOT BACK. Steam crossing a turbine that is exhausting to
+     the room reaches neither the condenser nor the hotwell - so the pot has
+     nothing to reject and the pool has nothing to return. Plant-level,
+     because the condenser IS one pot and pCond one backpressure: a plant with
+     two turbines and one exhaust cut loses both. Named in the gaps. */
+  const retK = exhOpen(s) ? 0 : 1;
+  { const qIn = Math.max(0, boiled*retK*H_FG - workKW);
     s.condT += (qIn - condRej(s))/Math.max(1, condCap_())*dt;
     s.condT = clamp(s.condT, T_CW, 900); }
   /* WHICH POOL PAID FOR IT. The reserve's share is its own tanks' solved
@@ -2561,7 +2606,7 @@ function step(dt){
 
      A RESERVE is one-way: what leaves it does not come back. */
   { const sgtrKg = Math.max(0, s.sgtrRate)/100*loopKg();
-    const netKg = boiled - fedCirc + sgtrKg;
+    const netKg = boiled*retK - fedCirc + sgtrKg - spillSecKg;
     const circCap = (()=>{ let c=0; for(const id of circ) c+=tankKg(id); return c; })();
     for(const id in s.tankOver) delete s.tankOver[id];
     for(const id of secTankIds()){
