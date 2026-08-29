@@ -155,8 +155,14 @@ function radSrc(L){
      s.doseRate NaN the instant fuel failed and every readout downstream with
      it. A source term asks the design what it was built with and the state
      only what it is doing. */
+  /* The melt term takes HOW MUCH is molten instead of a latch. A fully molten
+     core shines exactly what it always did, so nothing re-pins - what moved is
+     the approach to it, where a core 3 % molten and one 90 % molten used to be
+     the same picture. RAD_DMG and RAD_MELT both keep their exact meanings, and
+     s.melt stays the latch for the banner, the trend and the event log: latch
+     for the story, field for the physics. */
   return {core:(L.n*PROMPT_F+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*P.contRel
-              + (L.melt&&!P.catcher?RAD_MELT:0),
+              + (!P.catcher?RAD_MELT*L.meltFrac:0),
           sg: L.sgtr?RAD_SGTR:0,
           /* EVERY tank, at its own strength: how much is in it times how
              active what is in it IS (FLUID.act). Water, borated water and

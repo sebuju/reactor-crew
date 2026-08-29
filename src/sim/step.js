@@ -158,10 +158,19 @@ function commission(){
      plant sits on COND_P0 with margin in hand and an undersized one does not. */
   P.hTurb   = H_FG/Math.max(.05, 1-Math.pow(COND_P0/(P.P0*0.45),TURB_GAM));
   P.condUA  = P.rated*1000*(1-P.eff)/Math.max(5, tsatSec(COND_P0)-T_CW)*P.condCap;
-  P.tdmg  = f.tdmg;
+  P.tdmg  = f.tdmg; P.tmelt = f.tmelt;
+  /* whether this fluid puts a steam atmosphere on hot clad at all - sodium,
+     salt and helium never oxidise a rod, so their whole oxidation path is one
+     false here rather than a temperature that happens never to be reached */
+  P.oxid  = !!a.oxid;
   P.TfRef = P.Tref + a.dTf*P.condK*P.n0/Math.max(P.feff0,.10);
   P.X0    = (P.gI+P.gX)*P.n0/(P.lamX+P.sig*P.n0);      // xenon equilibrium at that power
   coreConst(P,d);                        // the core as a place: mesh, coupling, rods
+  /* the zirconium in the core, kg, MEASURED off the drawing: the rod surface
+     coreConst() just computed times the wall thickness that was drawn. Same
+     currency the ECR is in, so hydrogen against oxide thickness against
+     consumed metal is one identity rather than three estimates. */
+  P.cladKg = ZR_RHO*P.aHeat*ROD_CLAD;
   P.dsig = designSig();                 // what this plant was built from
   resetPlant();
   /* What THIS plant is subcooled by when nobody has touched it. The vital bar
@@ -754,7 +763,12 @@ function setSplit(on){
    itself, the trip reset (which refuses to clear a condition still standing),
    and tripNear(), which asks the SAME comparison a few per cent early so the
    plant can shout before the latch drops rather than after. Written as eight
-   `if`s, "about to trip" would have been a second, hand-copied ladder. */
+   `if`s, "about to trip" would have been a second, hand-copied ladder.
+
+   THE LOW DNBR CHANNEL READS s.dnbr AND NOTHING ELSE. s.dnbrMin is the node
+   field's own answer and it is a READOUT: wiring it in here would change the
+   protection system on every plant in the game in one line, and re-pin every
+   figure measured against the trip at the same time. */
 const RPS_NEAR=0.03;                        // how close to a setpoint counts as "about to"
 const RPS_CH=[
   ["HIGH FLUX","FLUX",          +1, (P_,m)=>1.10+0.22*m,             s=>s.n],
@@ -1124,17 +1138,188 @@ function dnbW3(pMPa,gSI,x,dhM,dhSub){
    you could draw. P.dnbrK is the P.pinUA idiom: solved once in commission()
    so that this plant at RATED power and RATED mass flux reads exactly
    P.dnbr0 - and it anchors all three laws, so no plant's rest point moves.
-   One helper, because the anchor and the tick must not drift. */
-function dnbrOf(s,heat,gShare,x,dhSub){
-  if(P.dnbLaw==="boil")
-    return P.dnbrK*(dhSub/CP_W)/Math.max(s.coreDT*s.fq,1e-3);
-  if(P.dnbLaw==="temp"){
-    const Tin=s.Tavg-s.coreDT/2;
-    return P.dnbrK*Math.max(P.tdmg-Tin,0)/Math.max(s.TfHot-Tin,1e-3);
-  }
-  const qHot=Math.max(heat*P.rated*1e6/Math.max(P.aHeat,1e-6)*Math.max(s.fq,1e-3),1);
-  return P.dnbrK*dnbW3(s.pCore,Math.max(P.G0*gShare,1e-3),x,P.dh,dhSub)/qHot;
+   One helper, because the anchor and the tick must not drift.
+
+   It takes an ARGUMENT BUNDLE rather than reading s.coreDT/s.fq/s.TfHot off
+   state, because margin is now asked TWICE with different arguments: once for
+   the plant, off the peak scalars, exactly as before (marginCore); and once
+   per NODE from inside coreStep()'s loop, where that node's own rise, flux,
+   channel flow and quality are all live (marginNode). Two builders and no
+   third - the laws stay in one place and neither caller reaches past it.
+     law    which of the three                       dhSub inlet subcooling, kJ/kg
+     dT     the rise the hot channel took, K         Tin   channel inlet, K
+     Tf     fuel temperature to judge, K             q     heat flux, W/m2
+     g      mass flux, kg/m2/s                       x     thermodynamic quality
+     p      core pressure, MPa
+
+   THE END STATE IS THE NODE MINIMUM. s.dnbr and s.dnbrMin are kept apart today
+   only because the auditor refit has not happened: moving the quantity the RPS
+   trips on, the LO DNBR tile lights on and every pinned figure is measured
+   against, all in the same change that introduces the field, would leave
+   nothing able to say which number moved for a good reason. */
+function dnbrOf(m){
+  if(m.law==="boil")
+    return P.dnbrK*(m.dhSub/CP_W)/Math.max(m.dT,1e-3);
+  if(m.law==="temp")
+    return P.dnbrK*Math.max(P.tdmg-m.Tin,0)/Math.max(m.Tf-m.Tin,1e-3);
+  return P.dnbrK*dnbW3(m.p,Math.max(m.g,1e-3),m.x,P.dh,m.dhSub)/Math.max(m.q,1);
 }
+/* The PLANT's margin, off the peak scalars - the same five operands the old
+   positional dnbrOf() was called with, in the same arithmetic, so this number
+   does not move by a bit. */
+function marginCore(s,heat,sat){
+  return dnbrOf({law:P.dnbLaw, dhSub:CP_W*(sat-(s.Tavg-s.coreDT/2)),
+    dT:s.coreDT*s.fq, Tin:s.Tavg-s.coreDT/2, Tf:s.TfHot,
+    q:heat*P.rated*1e6/Math.max(P.aHeat,1e-6)*Math.max(s.fq,1e-3),
+    g:P.G0*s.hotFlow, x:s.xHot, p:s.pCore});
+}
+/* ONE NODE's margin, called from inside coreStep()'s loop. Every operand is a
+   local that loop already had, so nothing new is measured - the loop simply
+   stops throwing it away. `rise` in particular is the enthalpy actually
+   carried to this node rather than the core rise peaked by a FLUX factor,
+   which is the conservatism CLAUDE.md names in the boil law. */
+function marginNode(s,heat,pw,rise,Tin,Tf,gShare,x,dhSub){
+  return dnbrOf({law:P.dnbLaw, dhSub, dT:rise, Tin, Tf,
+    q:heat*P.rated*1e6/Math.max(P.aHeat,1e-6)*Math.max(pw,1e-3),
+    g:P.G0*gShare, x, p:s.pCore});
+}
+/* ══════════ HOW FUEL FAILS, IN STAGES ══════════
+   What stood here was two literals growing one scalar out of the core AVERAGE
+   fuel temperature and a single hot-channel DNBR:
+
+     if(s.dnbr<1)    s.dmg += (1-s.dnbr)*22*dt;
+     if(s.Tf>P.tdmg) s.dmg += (s.Tf-P.tdmg)*0.012*dt;
+
+   A centre channel melting and a uniformly warm core read identically, and
+   40 % was a mood rather than a count of pins. Both rates are DELETED rather
+   than renamed, because each was standing in for a path this model can now
+   walk: margin is lost, the film collapses, the clad climbs to the pellet, it
+   balloons against its own fill gas and it bursts. The RATE is an outcome now.
+
+   Damage is three per-node fields (s.nDmg, s.nOx, s.nMelt - core2d.js), all
+   three monotonic integrals, and A STAGE IS DERIVED off them and never stored
+   - the same rule runKindFor() and sgActive() keep. Monotonic buys three
+   things at once: "permanent" is a property of the integrator rather than a
+   Math.min bolted on, a restore lands exactly where the snapshot was, and the
+   ordering below is enforceable.
+
+   s.dmg and s.melt survive unchanged as the aggregates, so the trends, both
+   ev() milestones, the ANN tile, the vessel hatch, radSrc() and scnLimit() all
+   keep reading exactly the numbers they read before. */
+const FAIL=[
+ {k:"intact",lab:"INTACT",    col:()=>C.cyan},
+ {k:"burst", lab:"CLAD BURST",col:()=>C.amber},
+ {k:"oxid",  lab:"OXIDISED",  col:()=>C.red},
+ {k:"molten",lab:"FUEL MELT", col:()=>C.bright},
+];
+/* ── WHAT EACH STAGE PUTS PAST THE FUEL BOUNDARY ──
+   One coefficient used to do this for every kind of failure at once, and it
+   was wrong in a nameable way: a burst clad vents the GAP and then stops,
+   which NUREG-1465 puts at a few per cent of the volatile inventory, while a
+   molten pellet releases the volatiles themselves at 25-35 %. Two orders of
+   magnitude apart, and 0.004 was their geometric mean wearing one number's
+   clothes.
+   REL_GAP is the ANCHOR and is fitted, not published: it is exactly the old
+   0.004*100, so a core that is 100 % burst and 0 % molten releases at today's
+   rate to the bit. The other two are the published RATIOS above it - the same
+   split W-3 has, where the correlation gives the shape and a bought column
+   gives the level. */
+const REL_GAP=0.40, REL_OX=0.80, REL_MELT=2.40;
+const RELK={intact:0, burst:REL_GAP, oxid:REL_OX, molten:REL_MELT};
+/* ── WHEN A ROD BURSTS ──
+   Ballooning is a hoop stress question, not a temperature one: the rod is
+   pressurised with helium at fabrication, that pressure rises with absolute
+   clad temperature, and what bursts it is the DIFFERENCE against the loop.
+   That is why a depressurised core fails its clad hundreds of kelvin lower
+   than one still at pressure, and why a plant that holds pressure gets no
+   ballooning at all - two behaviours this model could not tell apart while the
+   criterion was a flat P.tdmg.
+     P_FILL/T_FILL  the as-built helium charge, 2.2 MPa cold
+     BURST_R        mean radius over wall, so hoop stress is BURST_R*dP
+   BURST_LO/BURST_HI are NUREG-0630's fast-ramp burst curve reduced to its two
+   ends and interpolated in log stress - A FIT to a published SHAPE, not the
+   published correlation, and it is the first thing to replace if this reads
+   wrong. BURST_TAU is a fit too and says what it is: real ballooning and
+   rupture take seconds, not one tick, and BURST_SPAN is the transition width
+   that keeps the criterion from being a cliff - the same idiom CAV_SPAN has. */
+const P_FILL=2.2, T_FILL=300, BURST_R=(ROD_D/2-ROD_CLAD)/ROD_CLAD;
+const BURST_LO={sig:20,T:1477}, BURST_HI={sig:140,T:1030};
+const BURST_TAU=8, BURST_SPAN=50;
+function burstT(dP){
+  const sig=BURST_R*Math.max(dP,0);
+  if(sig<=BURST_LO.sig) return BURST_LO.T;
+  const f=Math.log(sig/BURST_LO.sig)/Math.log(BURST_HI.sig/BURST_LO.sig);
+  return Math.max(BURST_HI.T, BURST_LO.T-(BURST_LO.T-BURST_HI.T)*f);
+}
+/* ── ZIRCALOY-STEAM OXIDATION ──
+   The prize, and the thing that made TMI and Fukushima what they were: past
+   about 1500 K of clad this term makes more heat than the decay heat that
+   started it, and nothing on the plant can switch it off.
+
+   Parabolic, and integrated on the SQUARE in closed form:
+     nOx = sqrt(nOx^2 + A*exp(-B/T)*dt)
+   The differential form divides by the thickness and blows up at zero. The
+   squared form is exact over the step, unconditionally stable and monotonic by
+   construction, and it needs no floor.
+
+   TWO correlations with a domain switch, the same standing W3_LIM has - a
+   correlation's own stated range, never a guard invented here. Cathcart-Pawel
+   is the measurement and is stated to 1773 K; Baker-Just is the CONSERVATIVE
+   licensing correlation above it, and is the one the 17 % ECR limit is defined
+   against in the first place. Both are quoted here as rate constants on OXIDE
+   THICKNESS SQUARED, in m2/s, which is the conversion that has to be got right:
+     CP  0.02252 cm2/s * exp(-35890/(1.987*T))  ->  2.252e-6 m2/s, B = 18063 K
+     BJ  3.3e7 (mg/cm2)^2/s * exp(-45500/(1.987*T)), divided by (1000*ZR_RHO/1e3)^2
+         to reach metal thickness and multiplied by ZR_PBR^2 to reach oxide
+         ->  1.867e-4 m2/s, B = 22899 K
+   OX_T0 is the real onset - zircaloy oxidation is a corrosion below about
+   800 C and a reaction above it - and it is also what makes this term EXACTLY
+   zero at every preset's commissioning point rather than merely small there.
+   That matters more than it looks: commission() runs one real step() to solve
+   P.dnbrK, so a term that is only ALMOST zero at rest anchors the whole plant
+   against a core that was quietly burning, and the reset afterwards wipes the
+   evidence. OX_VMIN is a fit and a small one: metal under liquid water is not
+   at 1073 K, but the gate should say so rather than rely on the temperature to
+   imply it.
+
+   DELIBERATELY NOT MODELLED: steam starvation. Real oxidation in a blocked
+   channel runs out of steam and self-limits, and that needs a per-channel steam
+   mass balance this solver does not carry - the "unless it is heavy to compute"
+   clause, invoked out loud rather than quietly. */
+const OX_CP={a:2.252e-6,b:18063}, OX_BJ={a:1.867e-4,b:22899}, OX_TSW=1850;
+const OX_VMIN=0.02, OX_T0=1073;
+const oxRate = T => { const c = T<OX_TSW ? OX_CP : OX_BJ;
+  return c.a*Math.exp(-c.b/Math.max(T,300)); };
+/* ── HOW MUCH WALL IS LEFT ──
+   ECR is equivalent clad reacted: the metal the oxide ate, over the 0.57 mm
+   that was drawn. 0.17 is 10 CFR 50.46's licensing limit and is where a node
+   stops being merely burst and starts being OXIDISED; 1.0 is no metal left at
+   all, and a node with no clad has nothing holding pellet geometry, so that is
+   the second way nDmg reaches 1. Both are measured off the drawing. */
+const OX_ECR_FAIL=0.17;
+const ecrOf = ox => ox/ZR_PBR/ROD_CLAD;
+/* ── MELT WITHOUT A RATE FIT ──
+   A node at tmelt absorbs power WITHOUT rising until its latent heat is paid,
+   and then rises again. That is one accumulator, one fewer fitted rate, and
+   the melt plateau comes free - the same move as "void is quality, s.vf is a
+   MEASUREMENT". FUSE_DT is that latent heat expressed as the temperature rise
+   it displaces: UO2's 277 kJ/kg of fusion over its ~0.33 kJ/kg/K specific heat
+   at temperature, both real. A node cannot melt before its clad has failed,
+   which is physically true and makes s.meltFrac <= s.dmg/100 a THEOREM. */
+const FUSE_DT=840;
+/* CORE MELT latches on a quarter of the fuel volume actually molten. The 60 it
+   replaces was 60 % of a scalar that meant clad failure, which is a different
+   quantity - and because melt cannot outrun burst, this makes "dmg > 25 at
+   melt" true by construction rather than by coincidence. */
+const MELT_LATCH=0.25;
+/* What a melting core costs with no catcher under it: inventory in % per
+   second and vessel fatigue in points per second, both the literals they
+   replace, and both scaled by HOW MUCH is molten rather than switched on by a
+   latch. A core 3 % molten and one 90 % molten used to cost the same. */
+const MELT_INV=0.35, MELT_FAT=1.6;
+/* the hydrogen milestone, kg. A stock core carries ~8 t of zircaloy and would
+   yield ~370 kg fully burnt, so this is a few per cent of the wall gone. */
+const H2_EV=20;
 /* The core's temperature rise at RATED flow and rated heat, in K. It is the
    SIZING figure now, not the answer: coreStep() integrates enthalpy up each
    channel and hands back what the channels actually did, and this is what says
@@ -1193,6 +1378,11 @@ const radWorkK = r => 1/(1+Math.max(0,r-RAD_SLOW)/RAD_SLOW);
    simply a floor that never goes away. */
 const DEC_A=[.0299,.0212,.00947,.00380];        // share of rated power per group
 const DEC_L=[.0994,.00477,4.11e-4,2.19e-5];     // 1/s
+/* step()'s own heat balance, published for the ledger to draw - not a second
+   derivation of it, and not on S: it is a pure function of S, resolved fresh
+   every tick, the same standing display smoothing and the solved network have.
+   sgQBy is REFILLED, never rebuilt - a renderer holds the reference. */
+const HEATBAL={prompt:0,decay:0,heat:0,removal:0,dTavg:0,sgQBy:{}};
 /* A tilt of 1.0 stands the innermost bank XTILTZ of core height clear of the
    outermost, and the drives that do it are the same drives that move the bank.
    So the trim walks at the bank rate divided by that span - derived, not typed,
@@ -1843,7 +2033,12 @@ function step(dt){
      the water that is there: loopKg()*CP_W, both of which already exist and
      both of which follow the plant. graceK stays on top of it - that column is
      bought game balance and says so. */
+  HEATBAL.prompt=s.n*PROMPT_F; HEATBAL.decay=s.decay;
+  HEATBAL.heat=heat; HEATBAL.removal=removal;
+  for(const id in HEATBAL.sgQBy) if(!(id in sgQBy)) delete HEATBAL.sgQBy[id];
+  for(const id in sgQBy) HEATBAL.sgQBy[id]=sgQBy[id];
   s.dTavg = (heat-removal)*P.rated*1000/(loopKg()*CP_W)/P.graceK;   // K/s
+  HEATBAL.dTavg=s.dTavg;
   s.Tavg = clamp(s.Tavg + s.dTavg*dt, P.Tmin, P.Tmax);
 
   /* ── pressure: hot loop pressurises, relief valve lifts, vessel can burst ──
@@ -2412,15 +2607,21 @@ function step(dt){
   /* Peaking is the measured peak of the flux field, and the flow that counts
      is the flow through the channel that peak sits in - a starved channel can
      dry out while the core average still looks comfortable. */
-  s.dnbr=dnbrOf(s,heat,s.hotFlow,s.xHot,CP_W*(sat-(s.Tavg-s.coreDT/2)));
+  s.dnbr=marginCore(s,heat,sat);
 
-  /* ── damage ── */
-  if(s.dnbr<1)     s.dmg+= (1-s.dnbr)*22*dt;
-  if(s.Tf>P.tdmg)  s.dmg+= (s.Tf-P.tdmg)*0.012*dt;
-  if(s.dmg>0) s.dmg=Math.min(100,s.dmg);
-  if(!s.melt && s.dmg>=60){ s.melt=true; s.trip="CORE MELT"; }
-  if(s.melt && !P.catcher){ s.inv-=0.35*dt; s.fatigue=Math.min(100,s.fatigue+1.6*dt); }
-  if(s.dmg>0) s.release=Math.min(100,s.release+s.dmg*0.004*P.contRel*P.dose*dt);
+  /* ── damage: the consequences, not the integration ──
+     s.dmg, s.meltFrac, s.oxMax and s.h2 were all settled by coreStep() above,
+     node by node. What is left here is what a hurt core COSTS, and every one
+     of these is continuous in how much of the core is hurt rather than a step
+     on a latch: a core 3 % molten and one 90 % molten used to pay the same
+     inventory, the same fatigue and the same release. */
+  if(!s.melt && s.meltFrac>=MELT_LATCH){ s.melt=true; s.trip="CORE MELT"; }
+  if(s.meltFrac>0 && !P.catcher){
+    s.inv-=MELT_INV*s.meltFrac*dt;
+    s.fatigue=Math.min(100,s.fatigue+MELT_FAT*s.meltFrac*dt); }
+  { const st=fuelStages(s); let rel=0;
+    for(let q=0;q<FAIL.length;q++) rel+=st[q]*RELK[FAIL[q].k];
+    if(rel>0) s.release=Math.min(100,s.release+rel*P.contRel*P.dose*dt); }
 
   /* ── radiation: a live field, not a commissioning-time number ──
      Placed here rather than with the demand walks at the top of the tick:
@@ -2525,8 +2726,19 @@ function step(dt){
     ()=>"Thermal shock has embrittled the vessel. Its burst pressure is now "+burst.toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+".",1);
   ev("brk",s.breach,"alarm","VESSEL RUPTURE",
     ()=>"The pressure vessel failed at "+s.P.toFixed(1)+" MPa. Coolant is leaving faster than anything can replace it. Unrecoverable.",1);
+  /* A RATIO, not a threshold: the moment the metal makes more heat than the
+     chain reaction does is the moment nothing on the plant can turn it off,
+     and it is the TMI and Fukushima moment. Stated against fission power, so
+     it self-scales across every plant size on the bench rather than pinning a
+     megawatt figure a small core could never reach. */
+  ev("ox",s.qOx>s.n*PROMPT_F,"alarm","CLAD OXIDATION SELF-SUSTAINING",
+    ()=>"Steam is burning the cladding faster than the reactor is making heat: "+
+        (s.qOx*100).toFixed(1)+"% of rated against "+(s.n*PROMPT_F*100).toFixed(1)+
+        "% from fission. Nothing on this ship switches that reaction off - it stops when the metal is gone.",1);
+  ev("h2",s.h2>H2_EV,"alarm","HYDROGEN IN THE PRIMARY",
+    ()=>"Over "+H2_EV+" kg of hydrogen has come off the cladding. It is not modelled as burning, but it is not water and it does not carry heat.",1);
   ev("melt",s.melt,"alarm","CORE MELT",
-    "Over 60% of the fuel has failed and the core is melting. Unrecoverable.",1);
+    ()=>"A quarter of the fuel is molten and "+s.dmg.toFixed(0)+"% of the cladding has failed. Unrecoverable.",1);
 
   if(s.repair){
     /* Advanced by radWorkK(s.repRate)*dt, never plain dt: a hot field does not
@@ -2727,7 +2939,7 @@ const ANN=[
  ["BLACKOUT","amber",s=>s.blackout,
   "Main power to the coolant pumps is lost. Flow is now limited to your backup power supply plus whatever natural circulation the core geometry generates.",null],
  ["CORE MELT","red",s=>s.melt,
-  "More than 60% of the fuel has failed and the core is melting. Unrecoverable. Reset the plant.","core"],
+  "A quarter of the fuel is molten. Unrecoverable. Reset the plant.","core"],
  /* appended after every existing entry so no earlier tile's index moves.
     Reads s.doseRate, the LIVE field at the crew's own seat - not P.dose,
     the as-built figure the bench quotes. What lit it is both what has
@@ -2758,6 +2970,13 @@ const ANN=[
   "A protection setpoint is within "+(RPS_NEAR*100).toFixed(0)+"% of tripping the reactor. The component itself names which one. This is a warning, not the trip: nothing has latched yet and the condition is still yours to clear.","core"],
  ["HI AREA RAD","amber",s=>s.doseRate>RAD_HI,
   "The control room is reading above 1x background. That number is set both by what has failed on the plant and by where you put the shielding at the bench - a well-shielded control room can sit this out through a release that would light this tile instantly on a poorly sited one. A repair party out on the plant right now is being spent while this is lit, faster the closer the job sits to whatever is shining.","ctrl"],
+ /* Appended at the very end, after every existing entry, because help.js
+    numbers the tiles by array index - inserting these beside FUEL DMG where
+    they belong by subject would renumber every tile from 3 onward. */
+ ["CLAD OXIDATION","red",s=>s.qOx>0&&s.qOx>s.n*PROMPT_F,
+  "Steam is burning the zirconium cladding, and it is now making more heat than the chain reaction is. This reaction feeds itself: the hotter the metal gets the faster it burns, and no rod, no pump and no valve on this ship stops it. It ends when the cladding is gone. It also makes hydrogen.","core"],
+ ["FUEL MELT","red",s=>s.meltFrac>0,
+  "Fuel pellets somewhere in the core are liquid. This is past cladding failure - the fuel itself has gone, and the damage map on the reactor panel says which part of the core. CORE MELT latches when a quarter of it is molten.","core"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
   AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn,

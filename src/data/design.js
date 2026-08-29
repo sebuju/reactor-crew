@@ -39,6 +39,11 @@ const PROMPT_F=0.935;
    are anchored to the dnbr column above by the same P.dnbrK, so no plant's
    rest point moves - only the shape off it.
 
+   oxid says this fluid puts a STEAM ATMOSPHERE on hot clad, so zircaloy
+   oxidation is reachable. It is a separate column from dnbLaw on purpose:
+   that one names a thermal limit, and one column cannot mean two things.
+   Present only where it is true, the way fuelInCoolant is.
+
    pipeK is what a metre of the PRIMARY is made of, against carbon steel at
    1.00, and it is spent per metre DRAWN (pipeWallK(), pipenet.js) - never as
    a flat lump on this row, which is the ARCH column this table exists to
@@ -49,15 +54,15 @@ const PROMPT_F=0.935;
    diameter. runBore() is untouched - a coolant may not move a conductance. */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
-  P0:15.5,pipeK:1.00,tsat:618,hfg:967,mmol:.018,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,dnbLaw:"w3",xe:1.0,flowMin:.30,eff:.33,
+  P0:15.5,pipeK:1.00,tsat:618,hfg:967,mmol:.018,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
-  P0:7.0,pipeK:1.00,tsat:559,hfg:1505,mmol:.018,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,dnbLaw:"w3",xe:1.0,flowMin:.30,eff:.33,
+  P0:7.0,pipeK:1.00,tsat:559,hfg:1505,mmol:.018,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
-  P0:6.9,pipeK:1.00,tsat:558,hfg:1512,mmol:.018,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,dnbLaw:"w3",xe:1.0,flowMin:.30,eff:.31,
+  P0:6.9,pipeK:1.00,tsat:558,hfg:1512,mmol:.018,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.31,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
@@ -102,17 +107,21 @@ const MODER=[
 ];
 /* tdmg is where THIS fuel starts taking damage, in K, and the RPS trips a
    fixed 100 K above it. It is a property of the fuel, not a fraction of a
-   melting point: metal fuel runs cool and fails early, ceramic runs hot. */
+   melting point: metal fuel runs cool and fails early, ceramic runs hot.
+   tmelt is the PELLET's melting point and is a separate, much higher number -
+   real UO2 melts near 3120 K and a U-Zr alloy near 1400 K, so the distance
+   between clad failure and pellet melt is enormous on one fuel and almost
+   nothing on the other. That distance is what the staged damage field spends. */
 const FUEL=[
- {name:"UO2  3.2% LEU",beta:680,excess:4200,densK:.85,condK:1.0,tdmg:1500,mass:0,
+ {name:"UO2  3.2% LEU",beta:680,excess:4200,densK:.85,condK:1.0,tdmg:1500,tmelt:3120,mass:0,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
- {name:"UO2  4.9% LEU",beta:650,excess:5200,densK:1.0,condK:1.0,tdmg:1500,mass:8,
+ {name:"UO2  4.9% LEU",beta:650,excess:5200,densK:1.0,condK:1.0,tdmg:1500,tmelt:3120,mass:8,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",beta:640,excess:8200,densK:1.4,condK:1.0,tdmg:1500,mass:-18,
+ {name:"UO2 19.7% HEU",beta:640,excess:8200,densK:1.4,condK:1.0,tdmg:1500,tmelt:3120,mass:-18,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
- {name:"MOX PLUTONIUM",beta:300,excess:6500,densK:1.6,condK:1.0,tdmg:1450,mass:-12,
+ {name:"MOX PLUTONIUM",beta:300,excess:6500,densK:1.6,condK:1.0,tdmg:1450,tmelt:3050,mass:-12,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
- {name:"U-ZR METALLIC",beta:640,excess:6000,densK:1.85,condK:.55,tdmg:1150,mass:-25,
+ {name:"U-ZR METALLIC",beta:640,excess:6000,densK:1.85,condK:.55,tdmg:1150,tmelt:1400,mass:-25,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
 ];
 /* dens is what latMass() weighs the drawn band with. The old flat `mass`
@@ -444,17 +453,17 @@ function derived(){
        per-component warning circle - null when no single component owns it
        (a whole-design figure like mass or shutdown margin). */
     warn:(()=>{const w=[];
-      if(mass>BUDGET) w.push(["HARD","Over the "+BUDGET+" t mass budget by "+(mass-BUDGET).toFixed(0)+" t.",null]);
-      if(sdmB<200) w.push(["HARD","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
+      if(mass>BUDGET) w.push(["RED","Over the "+BUDGET+" t mass budget by "+(mass-BUDGET).toFixed(0)+" t.",null]);
+      if(sdmB<200) w.push(["RED","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
       else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin.","rods"]);
-      if(boronOp<-6000) w.push(["HARD","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment.","core"]);
+      if(boronOp<-6000) w.push(["RED","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment.","core"]);
       /* THE SAME QUESTION FROM THE OTHER SIDE. boronOp is what the chemical
          system has to hold DOWN to sit critical at the commissioning bank
          position; positive means it would have to hold the core UP, and
          nothing can. A fast core reaches this on low-enriched fuel because
          critK collapses with the moderation - which is the consequence the
          spectrum was always supposed to carry and never did. */
-      else if(boronOp>0) w.push(["HARD","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank at its commissioning position. There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
+      else if(boronOp>0) w.push(["RED","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank at its commissioning position. There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
       if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop.","core"]);
       if(aM>0) w.push(["SOFT","Positive moderator coefficient. The lattice is over-moderated: heating the coolant raises power instead of lowering it.","core"]);
       if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power.","core"]);
@@ -475,3 +484,9 @@ function derived(){
       if(!hasHeatSink()) w.push(["SOFT","This design has no heat sink. Nothing wired to the primary loop removes heat from it.",null]);
       return w;})()};
 }
+
+/* Three severities, one predicate each. HARD is the only one that refuses to
+   commission - a machine standing where it does not fit answers every other
+   question nonsense. RED is a fault the bench draws in red and still builds. */
+const warnHard=w=>w[0]==="HARD";
+const warnRed=w=>w[0]==="HARD"||w[0]==="RED";

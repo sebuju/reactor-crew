@@ -130,6 +130,20 @@ const latEqR=()=>{
    cell, because a bundle is still a fixed object: the box holds (LAT_P0/ROD_P)^2
    rods whatever pitch the assemblies are laid on. */
 const ROD_D=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
+/* ── WHAT THE CLAD IS MADE OF ──
+   Four real properties of zircaloy, and they sit here rather than on a FUEL or
+   COOLANT row because there is exactly ONE clad in this game: 0.57 mm of
+   zirconium, drawn above, and the player cannot buy another. A cladZr column
+   would be selling a kind nothing draws. If a bench clad menu is ever added,
+   THAT is when these become a table.
+     ZR_RHO  density, kg/m3
+     ZR_PBR  Pilling-Bedworth ratio: the oxide occupies 1.56x the volume of the
+             metal it ate, so a metre of oxide costs 1/1.56 of a metre of wall
+     ZR_QOX  reaction enthalpy, J per kg of zirconium burnt - the exothermic
+             term that makes clad oxidation a runaway rather than a corrosion
+     ZR_H2   stoichiometric hydrogen, kg per kg of zirconium:
+             Zr + 2 H2O -> ZrO2 + 2 H2, so 2*2.016/91.22 */
+const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442;
 const ROD_DP=ROD_D-2*ROD_CLAD;
 const LAT_FUELFRAC=Math.PI/4*(ROD_DP/ROD_P)*(ROD_DP/ROD_P);
 const LAT_RODFRAC =Math.PI/4*(ROD_D /ROD_P)*(ROD_D /ROD_P);
@@ -377,22 +391,27 @@ const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float6
    mass are all stated per - beta ought strictly to be fission-rate weighted,
    and the difference is second order.
 
-   tdmg is the exception and it is a MINIMUM, not a mean: melt is a local
-   event, so one ring of metallic fuel cannot hide behind four of ceramic. */
+   tdmg and tmelt are the exception and they are MINIMA, not means: failure is
+   a local event, so one ring of metallic fuel cannot hide behind four of
+   ceramic. */
 const FUEL_BLEND=["beta","excess","densK","condK","mass"];
+const FUEL_MIN=["tdmg","tmelt"];
 function fuelBlend(){
   if(!LM) latRevolve();
   const zt=LM.zTot; let tot=0;
   for(let z=0;z<LAT_NZ;z++) tot+=zt[z];
   const f0=FUEL[zoneFuelOf(0)];
   if(!(tot>1e-9)) return f0;
-  const o={name:f0.name,note:f0.note,tdmg:Infinity};
+  const o={name:f0.name,note:f0.note};
   for(const k of FUEL_BLEND){
     let a=0; for(let z=0;z<LAT_NZ;z++) a+=zt[z]/tot*FUEL[zoneFuelOf(z)][k];
     o[k]=a;
   }
-  for(let z=0;z<LAT_NZ;z++) if(zt[z]>1e-9) o.tdmg=Math.min(o.tdmg,FUEL[zoneFuelOf(z)].tdmg);
-  if(!isFinite(o.tdmg)) o.tdmg=f0.tdmg;
+  for(const k of FUEL_MIN){
+    o[k]=Infinity;
+    for(let z=0;z<LAT_NZ;z++) if(zt[z]>1e-9) o[k]=Math.min(o[k],FUEL[zoneFuelOf(z)][k]);
+    if(!isFinite(o[k])) o[k]=f0[k];
+  }
   return o;
 }
 
@@ -536,7 +555,7 @@ function latWarn(){
   const w=[], M=LM||latRevolve();
   let n=0, nf=0;
   for(let q=0;q<LQ*LQ;q++){ if(LAT.slot[q]) n++; if(latFuel(q)) nf++; }
-  if(!nf){ w.push(["HARD","There is no fuel in this core at all."]); return w; }
+  if(!nf){ w.push(["RED","There is no fuel in this core at all.","core"]); return w; }
   /* The core has to be one piece: an island across a water gap is a second
      reactor with one set of rods between them. The walk crosses MODERATOR
      slots, because a graphite block between two assemblies couples them - it
@@ -554,15 +573,15 @@ function latWarn(){
       seen[j]=1; reach++; q.push(j);
     }
   }
-  if(reach<n) w.push(["HARD","There are "+((n-reach)*4)+" slots that nothing else in the core touches. A core split by a water gap is two reactors with one set of rods between them."]);
-  if(!M.chan.length) w.push(["HARD","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is."]);
-  if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with."]);
-  if(D.power<400||D.power>2400) w.push(["SOFT","This lattice rates "+D.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for."]);
-  if(D.hd<.5||D.hd>2.5) w.push(["SOFT","H/D of "+D.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make."]);
-  if(D.pitch<.6||D.pitch>1.8) w.push(["SOFT","Assembly pitch "+(LAT.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble."]);
+  if(reach<n) w.push(["RED","There are "+((n-reach)*4)+" slots that nothing else in the core touches. A core split by a water gap is two reactors with one set of rods between them.","core"]);
+  if(!M.chan.length) w.push(["RED","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is.","rods"]);
+  if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with.","rods"]);
+  if(D.power<400||D.power>2400) w.push(["SOFT","This lattice rates "+D.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for.","core"]);
+  if(D.hd<.5||D.hd>2.5) w.push(["SOFT","H/D of "+D.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make.","core"]);
+  if(D.pitch<.6||D.pitch>1.8) w.push(["SOFT","Assembly pitch "+(LAT.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble.","core"]);
   const bare=[[LAT.reflR,"rim"],[LAT.reflT,"lid"],[LAT.reflB,"floor"]].filter(z=>z[0]<0.5);
   if(bare.length) w.push(["SOFT","Bare "+bare.map(z=>z[1]).join(" and ")+
-    ". Neutrons that leave that face are gone. A single ring of reflector is worth most of what a reflector has to give."]);
+    ". Neutrons that leave that face are gone. A single ring of reflector is worth most of what a reflector has to give.","core"]);
   return w;
 }
 

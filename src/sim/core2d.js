@@ -54,6 +54,10 @@ let XABS0=null;
    family - the quality term divided sodium by water's latent heat and the
    whole of Stage D's channel weight reads that quality. */
 const XTAU_F=4;
+/* The reference clad rise above coolant at rated power, kelvin - what P.gSolid
+   is fitted against in coreReset(). Real: a PWR rod's outer surface runs about
+   30 K above the water going past it. */
+const CLAD_DT0=30;
 /* Drift flux: quality to void fraction. C0 is the concentration parameter (the
    steam runs up the middle of the channel faster than the mean) and rvl is
    the density ratio of steam to water, which is satRvl(pressure) now rather
@@ -334,11 +338,13 @@ function corePredict(d){
    bench and the panel cannot drift apart. */
 function coreView(L){
   if(L && L.phi) return {phi:L.phi,nV:L.nV,xX:L.xX,nTf:L.nTf,rodZ:L.rodZ,
+    nDmg:L.nDmg,nOx:L.nOx,nMelt:L.nMelt,
     bankR:P.bankR,NB:P.NB,tipLen:P.tipLen,tipRho:P.tipRho,TfRef:P.TfRef,X0:P.X0,
     dia:P.coreDia,hgt:P.coreHgt,frac:P.frac,peak:{i:L.hotRing,j:L.hotLev},
     reflR:P.reflR,reflT:P.reflT,reflB:P.reflB,reflMat:P.reflMat};
   const T=corePredict(derived());
   return {phi:T.phiCold,nV:null,xX:null,nTf:null,rodZ:null,
+    nDmg:null,nOx:null,nMelt:null,
     bankR:T.bankR,NB:T.NB,tipLen:T.tipLen,tipRho:T.tipRho,TfRef:0,X0:1,
     dia:T.coreDia,hgt:T.coreHgt,frac:T.frac,peak:nodePeak(T.phiCold),
     reflR:T.reflR,reflT:T.reflT,reflB:T.reflB,reflMat:T.reflMat};
@@ -410,6 +416,21 @@ function coreReset(s){
   s.nV  =new Float64Array(XNN); s.nRho=new Float64Array(XNN);
   s.nVt =new Float64Array(XNN);
   s.nCov=new Float64Array(XNN); s.nFol=new Float64Array(XNN);
+  /* ── HOW THE FUEL IS HURT, NODE BY NODE ──
+     Three MONOTONIC integrals, and a stage is derived off them rather than
+     stored (fuelStage(), below). Monotonic buys three things at once:
+     "permanent" is a property of the integrator instead of a Math.min bolted
+     onto a scalar, a restore lands exactly where the snapshot was, and the
+     ordering - no melt before burst - is enforceable at the integrator.
+     Float64Array specifically, because snapVal() (record.js) accepts scalar,
+     Float64Array, Array or plain object and THROWS on anything else.
+       nDmg   fraction of the pins at this node that have burst, 0..1
+       nOx    oxide grown on an average pin here, metres. A NODE MEAN, so it
+              cannot tell a uniformly thin node from a half-consumed one - as
+              coarse as the mesh, the same limit s.TfHot has.
+       nMelt  fraction of the pellet melted, 0..1 */
+  s.nDmg=new Float64Array(XNN); s.nOx=new Float64Array(XNN);
+  s.nMelt=new Float64Array(XNN);
   s.chW =new Float64Array(XNR).fill(1);
   /* Every P.NB-sized allocation lives here, because a bench change to nbank
      re-runs coreConst() and then resetPlant() -> coreReset(), so sizes can
@@ -420,6 +441,10 @@ function coreReset(s){
   s.bankAuto=new Array(P.NB).fill(true);
   s.tilt=0; s.tiltDem=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
   s.hotFlow=1; s.tipRho=0; s.xHot=0; s.TfHot=P.TfRef;
+  /* the aggregates the field hands back, and the readouts that go with them.
+     s.h2 is the only integral here; the rest are re-measured every tick. */
+  s.h2=0; s.meltFrac=0; s.oxMax=0; s.qOx=0; s.TcladHot=P.Tref;
+  s.dnbrMin=P.dnbr0; s.dnbrRing=0; s.dnbrLev=0;
   for(let k=0;k<XNN;k++){
     s.xI[k]=P.gI*P.n0/P.lamI; s.xX[k]=P.X0;
     s.nTc[k]=P.Tref; s.nTf[k]=P.TfRef;
@@ -448,10 +473,49 @@ function coreReset(s){
     const heat0=s.n*PROMPT_F+s.decay;
     P.pinUA=heat0*P.rated*1000*Math.max(pk2,1e-6)
            /(film0*Math.max(P.TfRef-P.Tref,1)*P.condK);
+    /* ── AND WHERE THE CLAD SITS INSIDE THAT DROP ──
+       There is no clad node in this model: `film` above is the WHOLE pellet-
+       to-coolant conductance, so nothing here knows the clad's temperature -
+       and every failure criterion worth having is about the clad, not the
+       pellet. A stock HTGR rests at 1373 K of pellet against UO2's tdmg of
+       1500, so hanging a criterion on the pellet would put the helium core one
+       step from failing at commissioning.
+
+       So the drop is split in series: a FIXED solid conductance (pellet, gap
+       and clad wall) and the LIVE film. P.gSolid is fitted ONCE here, in the
+       P.pinUA idiom, against a stated reference clad rise - and CLAD_DT0 is
+       real, 30 K is what a PWR rod's outside sits above its coolant at power.
+       The whole point is what happens away from that anchor: as the film
+       collapses on a dry node the split goes to 1 and the clad rides at the
+       pellet's own temperature, which is the only reason a clad criterion can
+       fire at all. IT IS A FIT AND IT SAYS SO; if a single linear split ever
+       reads wrong, the replacement is a real two-node pellet/clad balance,
+       not a second coefficient here. */
+    const r=clamp(CLAD_DT0/Math.max(P.TfRef-P.Tref,1),.01,.6);
+    P.gSolid=r*film0/(1-r);
     /* and start every pellet where that balance puts it, or tick one is a
        transient nobody caused */
     const qhat=heat0*P.rated*1000/P.pinUA;
     for(let k=0;k<XNN;k++) s.nTf[k]=s.nTc[k]+qhat*s.phi[k]/film0; }
+}
+
+/* ── A STAGE IS DERIVED, NEVER STORED ──
+   One predicate over the three integrals, ordered worst first, and it is the
+   ONLY place a node is named. FAIL (step.js) is the table it indexes; adding a
+   stage is adding a row there and a branch here, and nothing else in the game
+   branches on a stage id at all. */
+function fuelStage(s,k){
+  if(s.nMelt[k]>0) return 3;
+  if(ecrOf(s.nOx[k])>=OX_ECR_FAIL) return 2;
+  if(s.nDmg[k]>0) return 1;
+  return 0;
+}
+/* How much of the core is in each stage, by volume. The release term and the
+   panel both read this, so a picture and a consequence cannot disagree. */
+function fuelStages(s){
+  const o=new Float64Array(FAIL.length);
+  for(let k=0;k<XNN;k++) o[fuelStage(s,k)]+=nodeW[k];
+  return o;
 }
 
 /* Flux-weighted worth of the bank exactly where it is standing. resetPlant()
@@ -535,6 +599,13 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   const hSat  = CP_W*sat;                    // enthalpy at saturation, kJ/kg
   const rvl   = satRvl(s.pCore);             // the core boils at ITS OWN pressure
   let xHot=-1e9;                             // the highest thermodynamic quality anywhere
+  /* what the damage pass hands back: the worst node margin and where, the
+     hottest clad, the deepest oxide, and the hydrogen this tick made. None of
+     the margins are STORED - a node margin field is a pure function of this
+     tick, so it is resolved fresh and thrown away, exactly as the radiation
+     field is. Only the integrals go on S. */
+  let dnbLo=1e30, dnbK=0, TclH=0, ecrH=0, h2=0, oxP=0;
+  const dhSub=CP_W*(sat-Tcold);
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
     const chan=Math.max(s.chW[i],1e-3);
@@ -575,8 +646,72 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          stood between the two. The clamp is numerical headroom well past melt,
          not a modelling choice. */
       const film=film0*(1-clamp(s.nV[k],0,1));
-      s.nTf[k]=clamp(s.nTf[k]
-        + (qhat*pw - film*(s.nTf[k]-s.nTc[k]))*dt/XTAU_F, 0, 6000);
+
+      /* ── HOW THIS NODE IS FAILING ──
+         Everything below runs on locals the loop already had. The margin is
+         MEASURED here rather than peaked: the rise is the enthalpy actually
+         carried to this node, which closes the stated gap where the boil law
+         was reading a flux peaking factor in place of an enthalpy-rise one.
+         s.dnbr keeps its own hot-channel arithmetic (marginCore(), step.js) -
+         the two are not meant to agree, and they are kept apart deliberately
+         while the auditors are unfit. */
+      const Tcl=s.nTc[k]+(s.nTf[k]-s.nTc[k])*P.gSolid/(P.gSolid+film);
+      if(Tcl>TclH) TclH=Tcl;
+      { const d=marginNode(s,heat,pw,hMid/CP_W-Tcold,Tcold,s.nTf[k],
+                           mflux*chan,xe,dhSub);
+        if(d<dnbLo){ dnbLo=d; dnbK=k; } }
+
+      /* ── OXIDATION, AND THE HEAT IT MAKES ──
+         Squared thickness, closed form, so the step is exact and needs no
+         floor at zero. A BURST pin has steam on both faces, so the growth
+         doubles - one multiply, and it is what makes the runaway accelerate
+         rather than merely continue. */
+      let qOx=0;
+      if(P.oxid && Tcl>OX_T0 && s.nV[k]>OX_VMIN && ecrOf(s.nOx[k])<1){
+        const o0=s.nOx[k];
+        /* clamped at the wall it is eating, or one step of a runaway steps
+           straight past it and ECR - which the readout states as a percentage
+           of the drawn thickness - reads over 100 % */
+        s.nOx[k]=Math.min(ZR_PBR*ROD_CLAD,
+          Math.sqrt(o0*o0+oxRate(Tcl)*(1+s.nDmg[k])*dt));
+        /* the metal that oxide ate, as a mass and as the power that freed it.
+           nodeW cancels: a node's own power in the balance's currency is
+           W/(nodeW[k]*P.pinUA), and this node's share of the rod surface is
+           P.aHeat*nodeW[k]. Getting that cancellation wrong one way makes the
+           term invisible and the other way melts every water core in a tick. */
+        const dm=ZR_RHO*(s.nOx[k]-o0)/ZR_PBR*P.aHeat*nodeW[k];
+        h2 += ZR_H2*dm;
+        qOx = ZR_QOX*dm/(1000*dt*nodeW[k]*Math.max(P.pinUA,1e-9));
+      }
+      { const e=ecrOf(s.nOx[k]); if(e>ecrH) ecrH=e; }
+      oxP+=qOx*nodeW[k];
+
+      let Tn=s.nTf[k]+(qhat*pw+qOx-film*(s.nTf[k]-s.nTc[k]))*dt/XTAU_F;
+      /* ── MELT IS PAID FOR IN LATENT HEAT ──
+         A node at tmelt absorbs power WITHOUT rising until its heat of fusion
+         is bought, and then rises again, so the melt plateau falls out instead
+         of being a rate. It cannot start before the clad has failed, which is
+         physically true and is what makes s.meltFrac <= s.dmg/100 a theorem
+         rather than a coincidence the melt latch relies on. */
+      if(Tn>P.tmelt && s.nDmg[k]>=1 && s.nMelt[k]<1){
+        const room=(1-s.nMelt[k])*FUSE_DT, paid=Math.min(Tn-P.tmelt,room);
+        s.nMelt[k]=Math.min(1,s.nMelt[k]+paid/FUSE_DT);
+        Tn=P.tmelt+(Tn-P.tmelt-paid);
+      }
+      s.nTf[k]=clamp(Tn,0,6000);
+
+      /* ── AND WHETHER IT HAS BURST ──
+         Two ways in, and both are measured: the clad balloons out against its
+         own fill gas past burstT()'s stress curve, or the oxide has eaten the
+         whole wall and there is no clad left to hold anything. Clamped at 1 at
+         the integrator, because the aggregate is a PERCENTAGE and six readers
+         lie at once if it ever runs past. */
+      if(ecrOf(s.nOx[k])>=1) s.nDmg[k]=1;
+      else {
+        const dP=P_FILL*Tcl/T_FILL-s.pCore, tb=burstT(dP);
+        if(Tcl>tb) s.nDmg[k]=Math.min(1,
+          s.nDmg[k]+clamp((Tcl-tb)/BURST_SPAN,0,1)*dt/BURST_TAU);
+      }
 
       /* local xenon on local flux. A node running hard burns its own poison
          away while a quiet one keeps making more, and the difference is a
@@ -646,5 +781,19 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      enthalpy rise. */
   s.hotFlow=Math.max(mflux*s.chW[s.hotRing],0.02);
   s.xHot=xHot;
+  /* ── WHAT THE DAMAGE PASS LEFT BEHIND ──
+     nodeW already sums to 1, so the two aggregates are plain volume means and
+     s.dmg keeps its old meaning and its old range exactly. s.oxMax is stated
+     as ECR rather than metres because that is the number the licensing limit
+     is written in and the only one a reader can judge. */
+  let dm=0, mf=0;
+  for(let k=0;k<XNN;k++){ dm+=nodeW[k]*s.nDmg[k]; mf+=nodeW[k]*s.nMelt[k]; }
+  s.dmg=Math.min(100,100*dm); s.meltFrac=mf;
+  s.h2+=h2; s.oxMax=ecrH; s.TcladHot=TclH;
+  /* what the metal is making, as a share of rated - the one number that says
+     whether this is corrosion or a runaway, and the comparison the event log
+     puts it against is the chain reaction's own output */
+  s.qOx=oxP*P.pinUA/Math.max(P.rated*1000,1e-9);
+  s.dnbrMin=dnbLo; s.dnbrRing=(dnbK/XNZ)|0; s.dnbrLev=dnbK%XNZ;
   return o;
 }

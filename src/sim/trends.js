@@ -36,12 +36,22 @@ const CH={
  cav :{lab:"CAVITATION",   u:"",   col:"#f0a830", f:s=>s.cav},
  nat :{lab:"NAT CIRC",     u:"%",  col:"#57d38c", f:s=>s.nat*100},
  rel :{lab:"RELEASE",      u:"%",  col:"#ff5a45", f:s=>s.release},
+ /* Decay heat is simulated and was printed nowhere. It is the heat that does
+    not go away with the chain reaction, so it needs its own trace beside POWER. */
+ dec :{lab:"DECAY HEAT",   u:"%",  col:"#ff9a5a", f:s=>s.decay*100},
  /* Both cost the tape nothing: a trend ring is rebuilt from S every time,
     never recorded (see the header comment above), so these two are free the
     same way every other channel here is - they read s.doseRate/s.crewDose,
     which are themselves derived fresh every tick and never stored either. */
  rad :{lab:"AREA DOSE",  u:"x", col:"#c8d8dc", f:s=>s.doseRate},
  cdos:{lab:"WATCH DOSE", u:"%", col:"#8fa9ae", f:s=>s.crewDose},
+ /* APPENDED, and dmg above is neither renamed nor repurposed: a scenario limit
+    names a trend key by STRING, so moving one silently changes what a saved
+    scenario asserts. These three are what the staged damage field can say and
+    the old scalar could not. */
+ mlt :{lab:"FUEL MOLTEN",u:"%", col:"#ff9a5a", f:s=>s.meltFrac*100},
+ h2  :{lab:"HYDROGEN",   u:"kg",col:"#a98cf0", f:s=>s.h2},
+ dnbm:{lab:"MIN NODE DNBR",u:"",col:"#f0a830", f:s=>s.dnbrMin},
 };
 /* ══ HOW A CHANNEL IS DRAWN, NOT WHAT IT IS ══
    A trend used to scale itself to whatever it happened to contain, and that is
@@ -88,8 +98,14 @@ const CHVIEW={
  cav :{rng:()=>[0,1],                       warn:()=>[0.15]},
  nat :{rng:()=>[0,25]},
  rel :{rng:()=>[0,100]},
+ dec :{rng:()=>[0,8]},
  rad :{rng:()=>[0,2]},
  cdos:{rng:()=>[0,100]},
+ mlt :{rng:()=>[0,100],                     warn:()=>[MELT_LATCH*100]},
+ /* full scale is the whole clad inventory burnt, so the trace says what
+    fraction of the core's zirconium has gone rather than a picked ceiling */
+ h2  :{rng:()=>[0,Math.max(50,P.cladKg*ZR_H2)], warn:()=>[H2_EV]},
+ dnbm:{rng:()=>[0,Math.max(2.6,P.dnbr0*1.3)],   warn:()=>[1]},
 };
 
 /* ══ THE LATCHES LIVE BESIDE THE CHANNELS, NOT IN THEM ══
