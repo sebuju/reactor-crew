@@ -119,6 +119,13 @@ const LOCKTIP="Locked while a machine is standing where it does not fit. Drag it
 function shellSync(){
   helpSync();
   if(!shellEls) return;
+  /* THE SAME WINDOW A FRAME TAKES - see laySettle() (layout.js). This runs on
+     its own 10 Hz interval rather than inside a frame, so it had no settled
+     graph of its own: designBlocked() walks the whole plant, and every reader
+     it passed through rebuilt four signature strings to prove a cache nothing
+     had touched. Measured in Chrome as the single largest allocator on the
+     bench. Nothing below writes D or LAY. */
+  laySettle();
   const blocked=designBlocked();
   for(const btn of shellEls.tabs){
     const k=btn.dataset.screen, on=screen===k,
@@ -136,6 +143,7 @@ function shellSync(){
   const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7)+" / "+pad(Math.round(TR.sps),4)+" TPS";
   if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
   shellEls.dot.style.visibility=Math.floor(performance.now()/500)%2?"visible":"hidden";
+  layRelease();
 }
 
 /* ONE TOOLTIP, TWO SOURCES. A rail control is a DOM node and carries its own

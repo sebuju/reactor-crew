@@ -163,7 +163,23 @@ function layoutWarnings(M){ const w=[];
   return w;
 }
 
-function designIssues(d,M){ return (d||derived()).warn.concat(latWarn(),layoutWarnings(M||layoutMetrics())); }
+/* ONE LIST PER PASS. warnFor() below asks for this once per PART to pull out
+   that part's own rows, so the whole review - derived(), the lattice warnings
+   and a crossTies() walk - was being run twenty-odd times a frame, and again
+   at 10 Hz from shellSync(). Cached on layPass() (layout.js), which is the
+   same window the node graph is settled in, so it cannot outlive a frame or a
+   tick and D cannot move under it. Only the no-argument form: a caller that
+   hands in its own `d` is asking about a plant that is not on the board (the
+   inspector's preview), and that is nobody else's answer. */
+let dbIssues=null, dbIssuesPass=0;
+function designIssues(d,M){
+  if(d) return d.warn.concat(latWarn(),layoutWarnings(M||layoutMetrics()));
+  const p=layPass();                      // 0 = outside a window, so not cacheable
+  if(p && dbIssuesPass===p) return dbIssues;
+  const out=derived().warn.concat(latWarn(),layoutWarnings(M||layoutMetrics()));
+  if(p){ dbIssues=out; dbIssuesPass=p; }
+  return out;
+}
 function designBlocked(d,M){ return designIssues(d,M).some(warnHard); }
 function warnFor(id){
   const p=partOf(id);

@@ -435,16 +435,37 @@ const LOOP_ROLE={core:1, sg:1, ihx:1, pump:1, fitting:1};
    go stale under them. */
 let nodeGraphCache=null, nodeGraphSig="", nodeGraphHeld=false;
 const nodeGraphHold=on=>{ nodeGraphHeld=!!on && !!nodeGraphCache; };
-/* THE WINDOW ITSELF, so the two passes that take it cannot disagree about what
-   "settled" means: a tick (step()) and a frame (tick(), main.js). Neither
-   writes D.pipes, D.ports or LAY - every gesture that does is a pointer
-   handler, and one cannot run inside either. layoutMetrics() is NOT in here: a
-   frame calls it anyway and a tick must not, or every tick would pay
-   laySrcSig() to be told the drawing has not moved. */
-const laySettle=()=>{ nodeGraphHold(false); pipeMapHold(false); netPassDrop();
+/* THE WINDOW ITSELF, so the three passes that take it cannot disagree about
+   what "settled" means: a tick (step()), a frame (tick(), main.js) and the
+   10 Hz rail sync (shellSync(), shell.js). None of them writes D.pipes,
+   D.ports or LAY - every gesture that does is a pointer handler, and one
+   cannot run inside any of them. layoutMetrics() is NOT in here: a frame calls
+   it anyway and a tick must not, or every tick would pay laySrcSig() to be
+   told the drawing has not moved. */
+/* COUNTED, so windows may nest. simTick() takes one around the whole tick
+   INCLUDING sample(), and step() takes one of its own inside it - and it was
+   step()'s closing release that dropped the outer one, leaving the trend
+   sampler to rebuild four signature strings every fifth tick for nothing. */
+let layDepth=0;
+/* AND NUMBERED. Anything that is a pure function of the plant FOR THE LENGTH
+   OF ONE PASS caches against this instead of against a signature: it moves on
+   every settle AND every release, so an answer can never be read back in a
+   pass it was not computed in. A signature would be the very cost being
+   avoided; a tick counter would stand still on a paused plant. */
+let layPassN=0;
+/* ZERO OUTSIDE A WINDOW, and that is the safety: a click handler is the one
+   thing that DOES move D, and two of them can run back to back with no frame
+   between. Answering 0 there means "not cacheable", so an answer can only ever
+   be reused inside the settled pass that computed it. */
+const layPass=()=>layDepth?layPassN:0;
+const laySettle=()=>{ if(layDepth++) return;
+  layPassN++;
+  nodeGraphHold(false); pipeMapHold(false); netPassDrop();
   pipeTrace(); pipeMap(); nodeGraph();
   nodeGraphHold(true); pipeMapHold(true); };
-const layRelease=()=>{ nodeGraphHold(false); pipeMapHold(false); netPassDrop(); };
+const layRelease=()=>{ if(layDepth>0 && --layDepth) return;
+  layDepth=0; layPassN++;
+  nodeGraphHold(false); pipeMapHold(false); netPassDrop(); };
 function nodeGraph(){
   if(nodeGraphHeld) return nodeGraphCache;
   // fittingSig() too: a fitting's MODE decides both its fold and whether its
@@ -1553,6 +1574,12 @@ function unbend(pts){
    of that shape. `rid` is the key, `wps` is empty (there are no draggable
    corners any more), `cells` is the run itself and `L` its length. */
 function pipeNetwork(){
+  /* On the graph (graphSlot()) AND on GY, which is the one piece of view the
+     points are measured off - it moves on a resize and nothing else here does.
+     Rebuilt per call, this was five copies of every run per frame plus one per
+     tick; nothing writes to a run, so one copy serves every reader. */
+  const slot=graphSlot("pipeNetwork"), was=slot.get(1);
+  if(was && was.gy===GY) return was.net;
   const net=[], usage={};
   const tally=(pid,f)=>{ usage[pid+f]=(usage[pid+f]||0)+1; };
   for(const c of pipeMap().conns){
@@ -1561,9 +1588,10 @@ function pipeNetwork(){
     /* One point per cell, plus both port cells, with the collinear points
        dropped - so a straight leg is one stroke and a bend is a round join,
        exactly as a hand-drawn polyline used to give. */
-    const pts=unbend([portPos(c.pa)]
-      .concat(c.cells.map(([x,y])=>cellPos(x,y)))
-      .concat([portPos(c.pb)]));
+    const raw=[portPos(c.pa)];
+    for(let i=0;i<c.cells.length;i++){ const cl=c.cells[i]; raw.push(cellPos(cl[0],cl[1])); }
+    raw.push(portPos(c.pb));
+    const pts=unbend(raw);
     // pa/pb are the two PORT ids this run lands on. Carried because each port
     // now has its own isolation valve (s.portShut) and the run's edge has to
     // ask about them - a node name is partId+face and cannot name one of two
@@ -1579,6 +1607,7 @@ function pipeNetwork(){
   // reaching it" test reads this, and so does a relief fitting's own vent
   // target: an orphaned port must read exactly like no port at all.
   net.usage=usage;
+  slot.set(1,{gy:GY, net});
   return net;
 }
 // which part a plant-space point lands in, or null - the grid lookup the

@@ -705,8 +705,13 @@ function simTick(){
      recPlay() uses: an act stamped tick T is applied by the step that
      carries the plant past T, so a live run and a replay of it agree. */
   scnDue(S.tick);
+  /* The window step() takes, widened to cover sample() too - see laySettle()
+     (layout.js). The trend channels ask the drawing the same questions the
+     tick does, and outside the window every one of them re-proves the cache. */
+  laySettle();
   step(0.02);
   if(S.tick % SAMP_TICKS === 0) sample();
+  layRelease();
   spsN++;
 }
 /* Counted here and not in simFrame() so a scenario drain, which steps the plant

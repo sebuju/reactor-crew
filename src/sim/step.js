@@ -1855,6 +1855,16 @@ function resetPlant(){
   logE("info","PLANT AT POWER",
     P.name+" commissioned at "+P.rated.toFixed(0)+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
 }
+/* THE THREE RUNS WITH A CORRELATION OF THEIR OWN became TWO. `feed` is gone
+   from here: feedwater is a solved flow through a real pump now, so the
+   packets on it move on that run's own answer like every hot leg's do, and
+   driving them off s.load was the animation showing a rate the sim was not
+   performing - the exact fault audit-text.js already pins against the vent
+   plume. hpi and surge keep theirs because both are tagged hot/cold for
+   BUOYANCY rather than for circulation, so their tagged flow is not what
+   the pipe carries. Out here rather than in step(): it is a constant, and one
+   built per tick is one built two thousand times a second at max rate. */
+const PIPE_CORR={hpi:1,surge:1};
 function step(dt){
   const s=S; s.t+=dt; s.tick++;
   /* Settle the node graph for this tick and hold it. Nothing below redraws the
@@ -3269,15 +3279,6 @@ function step(dt){
      Clamped below the hot leg's 1.24 - it is a small line and must not outrun it. */
   const surgeFlow = sp*wet*clamp(-s.dLvl*0.07-(reliefAnyOpen(s)?0.75:0),-1.2,1.2);
   const runRatio = key => P.netRefRun>0 ? (runFlow[key]||0)/P.netRefRun : 0;
-  /* THE THREE RUNS WITH A CORRELATION OF THEIR OWN became TWO. `feed` is gone
-     from here: feedwater is a solved flow through a real pump now, so the
-     packets on it move on that run's own answer like every hot leg's do, and
-     driving them off s.load was the animation showing a rate the sim was not
-     performing - the exact fault audit-text.js already pins against the vent
-     plume. hpi and surge keep theirs because both are tagged hot/cold for
-     BUOYANCY rather than for circulation, so their tagged flow is not what
-     the pipe carries. */
-  const PIPE_CORR={hpi:1,surge:1};
   /* AND STEAM AND EXHAUST GET THEIR RATE BACK. They stood still for as long as
      nothing solved one; step() solves a kg/s per generator now, so the packets
      run on it - normalised on steamScale(), which is the same figure the meter

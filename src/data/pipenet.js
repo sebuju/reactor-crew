@@ -210,6 +210,9 @@ const valveLeq = x => x>=1 ? 0 : VALVE_LEQ*(1/Math.max(x,VALVE_XMIN)**2 - 1);
 // on) so the "wide open costs nothing, shut removes the edge" rule is
 // written once. Any one throttle at x<=0 cuts the whole edge, same as a
 // shut tee: a valve is a real break in the pipe, not a small leak.
+// "no gate in this path" - shared, because a literal here is one array per
+// edge per solve to say the same nothing
+const NO_GATES = [];
 const throttled = (s, bore, L, ids) => {
   let Ltot = L;
   for(const fid of ids){
@@ -251,7 +254,25 @@ const LOOP_TRANSIT = 12;
 /* ONE HIT BREAKS ONE CELL. The id is "pipe:"+x+","+y - the "pipe:" prefix is
    kept deliberately, so netFactored()'s cache signature and dmgFx()'s prefix
    match (step.js) are both untouched by the move from whole runs to cells. */
-const cellBroken = (s, x, y) => !!(s.dmgParts && s.dmgParts.indexOf("pipe:"+x+","+y) >= 0);
+/* THE BROKEN CELLS, AS A SET OF PACKED COORDINATES. This is asked once per
+   pipe cell per edge per solve, and it used to build the key string "pipe:x,y"
+   for every one of those and then walk s.dmgParts looking for it. Rebuilt when
+   that array is REPLACED or GROWS, which is the whole of how it ever changes:
+   a hit pushes to it and a repair filters it into a new one. */
+const cellPack = (x,y) => x*4096 + y;
+let brokeArr=null, brokeLen=-1, brokeSet=null;
+const cellBroken = (s, x, y) => {
+  const d = s.dmgParts;
+  if(!d || !d.length) return false;
+  if(brokeArr!==d || brokeLen!==d.length){
+    brokeSet = new Set();
+    for(let i=0;i<d.length;i++){ const id=d[i];
+      if(id.lastIndexOf("pipe:",0)!==0) continue;
+      const c = id.indexOf(",",5);
+      brokeSet.add(cellPack(+id.slice(5,c), +id.slice(c+1))); }
+    brokeArr=d; brokeLen=d.length; }
+  return brokeSet.has(cellPack(x,y));
+};
 /* ══ EVERY PORT HAS A VALVE IN IT ══
    A nozzle on a real vessel carries an isolation valve at the shell, and it is
    the first thing a watch reaches for when a run has to be cut out. So it is
@@ -731,9 +752,11 @@ const feedDrive = (s, pid) =>
 // new physics path.
 // PER CELL now, and ANY broken cell severs the whole connection: a run is a
 // chain of cells and a hole anywhere along it is a hole in that run.
+/* Indexed rather than destructured: this is asked once per pipe edge per
+   solve, and `for(const [x,y] of cells)` walks TWO iterators a cell. */
 const pipeExtraLen = (s, cells) => {
   if(!cells) return 0;
-  for(const [x,y] of cells) if(cellBroken(s,x,y)) return Infinity;
+  for(let i=0;i<cells.length;i++){ const c=cells[i]; if(cellBroken(s,c[0],c[1])) return Infinity; }
   return 0;
 };
 
@@ -1142,7 +1165,7 @@ function netBuild(){
        exactly resist(bore, L) - so an undamaged run is bit-identical to a
        plain number while still being LIVE against a hit that has not
        happened yet. */
-    edges.push({u, v, g: s => runPortsOpen(s,r) ? throttled(s, bore, L + pipeExtraLen(s, r.cells), []) : 0,
+    edges.push({u, v, g: s => runPortsOpen(s,r) ? throttled(s, bore, L + pipeExtraLen(s, r.cells), NO_GATES) : 0,
                 h: 0, kind: r.k, key: r.key});
   }
 

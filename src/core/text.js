@@ -2,21 +2,58 @@
 /* monospace text measuring and drawing */
 
 /* ─────────────── text ─────────────── */
-function fnt(o){ return `${o.weight===700?"bold ":""}${o.size||10}px ${MONO}`; }
+/* TWO STRINGS PER DRAWN STRING, and there are hundreds of those a frame - so
+   both are built once per distinct value and handed back. The scale is a
+   dozen steps and letter-spacing a handful, so these tables settle in the
+   first frame; the guard is there because nothing STOPS a caller passing an
+   arbitrary size, not because one is expected to. */
+const FNT_CACHE=new Map(), SP_CACHE=new Map();
+function fnt(o){
+  const size=(o&&o.size)||10, bold=!!(o&&o.weight===700), key=bold?-size:size;
+  let f=FNT_CACHE.get(key);
+  if(f===undefined){ if(FNT_CACHE.size>256) FNT_CACHE.clear();
+    f=(bold?"bold ":"")+size+"px "+MONO; FNT_CACHE.set(key,f); }
+  return f;
+}
+function spPx(sp){
+  let s=SP_CACHE.get(sp);
+  if(s===undefined){ if(SP_CACHE.size>256) SP_CACHE.clear();
+    s=sp+"px"; SP_CACHE.set(sp,s); }
+  return s;
+}
 function txt(s,x,y,o){
   o=o||{}; s=o.caps?String(s).toUpperCase():String(s);
   ctx.font=fnt(o); ctx.fillStyle=o.color||C.ink;
   ctx.textAlign=o.align||"left"; ctx.textBaseline="alphabetic";
-  try{ctx.letterSpacing=(o.sp||0)+"px";}catch(e){}
+  try{ctx.letterSpacing=spPx(o.sp||0);}catch(e){}
   ctx.fillText(s,x,y);
   try{ctx.letterSpacing="0px";}catch(e){}
 }
+/* A WIDTH IS A PURE FUNCTION OF (font, letter-spacing, string), and MONO is a
+   system stack - nothing loads late and changes an answer under us. So each
+   distinct label is measured once: measureText() is a call across into the
+   renderer that hands back a TextMetrics OBJECT, and the mimic asked for
+   ninety of those a frame to be told what it was told last frame. Measured in
+   Chrome, not inferred. Keyed in three levels, so the lookup itself builds no
+   key string; the transform on the canvas does not enter it, which is why one
+   table can serve every hosted context. */
+const TW_BY_SIZE=new Map();
+function twSlot(size,bold,sp){
+  const k=bold?-size:size;
+  let bySp=TW_BY_SIZE.get(k); if(!bySp){ bySp=new Map(); TW_BY_SIZE.set(k,bySp); }
+  let m=bySp.get(sp);         if(!m){ m=new Map(); bySp.set(sp,m); }
+  return m;
+}
 function tw(s,o){
   o=o||{}; s=o.caps?String(s).toUpperCase():String(s);
+  const sp=o.sp||0, m=twSlot(o.size||10, o.weight===700, sp);
+  const hit=m.get(s); if(hit!==undefined) return hit;
   ctx.font=fnt(o);
-  try{ctx.letterSpacing=(o.sp||0)+"px";}catch(e){}
+  try{ctx.letterSpacing=spPx(sp);}catch(e){}
   const w=ctx.measureText(s).width;
   try{ctx.letterSpacing="0px";}catch(e){}
+  if(m.size>8192) m.clear();
+  m.set(s,w);
   return w;
 }
 /* The documented type scale, largest first. fitTxt() walks it, so a shrunk label
@@ -49,19 +86,23 @@ function clipTxt(s,x,y,maxw,o){
      that must all read as one class - every machine's name on the plant - a
      stepped-down one is a different kind of label, not a narrower one. */
   const size = o.step===false ? (o.size||10) : fitStep(s,maxw,o);
+  const q=Object.assign({},o,{size});     // one clone, read three times
   let t=String(s);
-  if(tw(t,Object.assign({},o,{size}))>maxw){
-    const per=Math.max(1e-6,tw("M",Object.assign({},o,{size})));
+  if(tw(t,q)>maxw){
+    const per=Math.max(1e-6,tw("M",q));
     t=t.slice(0,Math.max(1,Math.floor(maxw/per)));
   }
-  txt(t,x,y,Object.assign({},o,{size}));
+  txt(t,x,y,q);
   return size;
 }
 /* the step fitTxt would use, without drawing - so clipTxt can ask the same
    question and there is still one walk of the ladder */
 function fitStep(s,maxw,o){
   const want=(o&&o.size)||10;
-  for(const t of TSCALE) if(t<=want && tw(s,Object.assign({},o,{size:t}))<=maxw) return t;
+  // ONE clone for the whole walk, its size moved between steps: a fresh
+  // object per rung was twelve of them per label per frame
+  const q=Object.assign({},o);
+  for(const t of TSCALE){ q.size=t; if(t<=want && tw(s,q)<=maxw) return t; }
   return TSCALE[TSCALE.length-1];
 }
 function wrap(s,x,y,maxw,lh,o){

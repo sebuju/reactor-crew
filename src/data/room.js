@@ -309,11 +309,12 @@ const roomPlumeFor = (cells, kgps) => roomPlume(cells,
    share this, or the gas would collect where the heat never went. */
 function roomSpread(F, cells, kgps, amount){
   if(!(amount > 0) || !cells.length) return;
-  const got = roomPlumeFor(cells, kgps);
+  // the plume is roomQ[0..n) - see roomPlume(), which hands back a COUNT
+  const n = roomPlumeFor(cells, kgps);
   let w = 0;
-  for(const i of got) w += 1/(1+roomRing[i]);
+  for(let k=0;k<n;k++) w += 1/(1+roomRing[roomQ[k]]);
   const q = amount/w;
-  for(const i of got) F[i] += q/(1+roomRing[i]);
+  for(let k=0;k<n;k++){ const i=roomQ[k]; F[i] += q/(1+roomRing[i]); }
 }
 const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
 /* THE CELLS A PLUME REACHES, breadth-first out of the opening. Deterministic
@@ -321,23 +322,29 @@ const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
    what a snapshot round trip requires of it. It crosses an occupied cell:
    this is a gas filling a compartment, not a ray, and a machine is a
    deflector rather than a seal. */
+/* THE QUEUE, THE MARK AND THE HEAD ARE ALL MODULE STATE, and the answer is a
+   COUNT rather than a view. This runs once per opening per tick and used to
+   hand back a fresh subarray built over a fresh closure, which is two objects
+   a tick to describe cells that are already sitting in roomQ. */
 let roomSeen = null, roomQ = null, roomRing = null, roomPlumeGen = 0;
+let roomMark = 0, roomTail = 0;
+const roomPush = (j, r) => { roomSeen[j] = roomMark; roomRing[j] = r; roomQ[roomTail++] = j; };
 function roomPlume(cells, n){
   const N = GW*GH;
   if(!roomSeen){ roomSeen = new Int32Array(N); roomQ = new Int32Array(N);
                  roomRing = new Int32Array(N); }
-  const mark = ++roomPlumeGen;
-  let head = 0, tail = 0;
-  const push = (j, r) => { roomSeen[j] = mark; roomRing[j] = r; roomQ[tail++] = j; };
-  for(const i of cells) if(roomSeen[i] !== mark) push(i, 0);
-  while(head < tail && tail < n){
+  roomMark = ++roomPlumeGen;
+  const mark = roomMark;
+  let head = 0; roomTail = 0;
+  for(const i of cells) if(roomSeen[i] !== mark) roomPush(i, 0);
+  while(head < roomTail && roomTail < n){
     const i = roomQ[head++], X = i%GW, Y = (i/GW)|0, r = roomRing[i]+1;
-    if(Y>0)      { const j=i-GW; if(roomSeen[j]!==mark && tail<n) push(j, r); }
-    if(X>0)      { const j=i-1;  if(roomSeen[j]!==mark && tail<n) push(j, r); }
-    if(X<GW-1)   { const j=i+1;  if(roomSeen[j]!==mark && tail<n) push(j, r); }
-    if(Y<GH-1)   { const j=i+GW; if(roomSeen[j]!==mark && tail<n) push(j, r); }
+    if(Y>0)      { const j=i-GW; if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
+    if(X>0)      { const j=i-1;  if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
+    if(X<GW-1)   { const j=i+1;  if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
+    if(Y<GH-1)   { const j=i+GW; if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
   }
-  return roomQ.subarray(0, tail);
+  return roomTail;
 }
 // what a kilogram of secondary steam is worth to the room, above ambient
 // water: the feed-to-steam rise the shell already charged, plus the feedwater
