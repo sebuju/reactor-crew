@@ -40,23 +40,59 @@ const ROOM_MIX = 0.35;
 const ROOM_UP = 3.0;
 // a machine is a wall. What crosses an occupied cell, as a fraction.
 const ROOM_BLOCK = 0.12;
-/* K - a NUMERICAL CEILING, not a behaviour. A severed steam line puts
-   hundreds of megawatts into a few cells and the explicit integrator would
-   run to infinity in a second; nothing on this plant survives half of this,
-   so no player ever sees the clamp act as a rule. */
-const ROOM_TMAX = 2500;
+/* K - A RUNAWAY GUARD. It is NOT deleted, because an explicit stencil with no
+   ceiling at all is one bad source term away from spreading Infinity across
+   the whole grid, and it is not the old 2500 either: that was fitted to a
+   compartment of 1.045 kJ/K cells and the integrator genuinely did run away
+   against a 1.6 GW release. ROOM_CGAME took the stiffness out - lifted, a
+   severed steam line peaks at 9686 K and a severed hot leg at 17210 K, both
+   FINITE - so this is set clear of the worst of them and no longer acts at
+   all. It is priced against ROOM_CGAME: a smaller compartment capacity raises
+   those peaks, so lowering that constant means re-measuring this one. */
+const ROOM_TMAX = 20000;
+/* K - what the ship was BUILT at, and what the compartment starts at. It was
+   T_CW, the condenser's cooling water, only because the plant sat in water
+   that was both. It is no longer a boundary: the skin RADIATES, so where the
+   hull settles is measured rather than declared. */
+const T_HULL = 293;
+/* THE SKIN IS A RADIATING SURFACE, NOT A CLAMP. It was held at T_HULL for
+   ever, which is an infinite sink and the one thing space has not got - it
+   also meant the compartment could never run cold and that the ventilation
+   unit was arguing with a boundary condition it could not beat. 0.85 is a
+   painted metal hull, the same real figure RADCOAT's default coating carries;
+   ONE number, because there is one skin and the player cannot buy another.
+   It radiates against T_SPACE exactly as the panels do - the difference is
+   that a panel is fed by the condenser and this is fed by whatever the
+   compartment air can conduct to it, which is what makes it finite. */
+const HULL_EMIS = 0.85;
+// m^2 of skin ONE OUTWARD FACE of a hull cell carries - pure geometry: the
+// cell is MPC wide and the compartment is ROOM_DEPTH deep.
+const HULL_FACE_A = MPC*ROOM_DEPTH;
 
-// kJ/K of air in one cell, and m^2 of machine surface one cell of footprint
-// is worth. Both pure geometry, so both are constants rather than a lookup.
-const ROOM_C = MPC*MPC*ROOM_DEPTH*ROOM_RHO*ROOM_CP;
-const ROOM_HK = ROOM_H*MPC*MPC/1000;      // kW/K, one cell of hot surface
+/* WHAT THE COMPARTMENT ABSORBS PER KELVIN. The air alone is 2.13 MJ/K
+   against releases measured in gigawatts, so a severed steam line took the
+   room from ambient to the ceiling in three seconds and there was no accident
+   to play. ROOM_CGAME is BOUGHT BALANCE and stands in for the term this model
+   does not carry - the ship's structure, and the condensation on it, which is
+   what actually swallows a steam release in a real compartment. It scales the
+   SOURCE side only: the transport conductance g0 is priced off ROOM_C as
+   well, so the stencil divides it straight back out and the explicit
+   stability limit does not move. Not applied to ROOM_MOL or ROOM_MAIR - those
+   are real air, and a hydrogen concentration is a real fraction. It does not
+   move the settling point, only how long the room takes to reach it - which
+   is why it is priced against the ambient field as much as against a jet. */
+const ROOM_CGAME = 50;
+const ROOM_C = MPC*MPC*ROOM_DEPTH*ROOM_RHO*ROOM_CP*ROOM_CGAME;
+// kW/K, one cell of hot surface - m^2 of machine surface one cell of
+// footprint is worth, pure geometry rather than a lookup
+const ROOM_HK = ROOM_H*MPC*MPC/1000;
 /* WHAT ONE VENTILATION UNIT MOVES, in kg of compartment air per second - a
    RATED MACHINE, not a UA fitted to make a number come out. 50 kg/s is about
    40 m^3/s, which is a marine engine-room ventilation SET rather than one
    fan - and the box is 3x3, so a set is what it is. Against the 2132 kg of
    air this compartment holds, one of them turns the whole room over in
    43 seconds. What it removes is that mass times its own temperature rise
-   above the sea outside, AT THE CELLS IT IS STANDING IN - so where it is put
+   above the hull outside, AT THE CELLS IT IS STANDING IN - so where it is put
    decides what it is worth, which is the whole reason it is a box on the grid
    and not a checkbox. A bigger footprint buys nothing: the set is rated, not
    the hole it sits in. Measured worth on the hottest preset (MSR, 9.4 K of
@@ -76,8 +112,45 @@ function partTemp(s, p){
   if(p.role === "sg")   return s.sgTBy[p.id];
   if(p.role === "ihx")  return s.ihxTBy[p.id];
   if(p.role === "cond") return s.condT;
+  if(p.role === "radiator") return s.radT;
   return s.Tavg;                          // thermal:"source" - the vessel itself
 }
+/* ══ AND WHAT ITS SKIN IS AT, WHICH IS A DIFFERENT QUESTION ══
+   partTemp() is what a machine CONTAINS. This is the metal between that and
+   the air, and it is the thing that actually fails: s.partT[id], integrated
+   on S beside s.roomT for the same reason - a skin with no memory is not a
+   skin. It closed three holes at once.
+
+     - The room used to be fed by the CONTENTS directly, so a machine gave
+       heat away and never lost any. Every pot is charged now (s.skinQ, spent
+       in step.js), so heat comes from somewhere.
+     - The damage criterion used to compare the AIR against tsurv, so a box
+       cooked the instant the air did and every machine on the plant died in
+       the same tick. It compares the metal now, and the metal has mass.
+     - A machine that moves no heat had no surface at all and was invisible to
+       the field. It is thermal mass standing in the room like everything else.
+
+   ROOM_SKIN_TAU is BOUGHT BALANCE and says so - it is how long a skin takes
+   to follow the air around it, written as a time rather than dressed up as a
+   steel mass it is not. SKIN_PROC_K is the process side against the air side:
+   at 20 a skin sits within 5 % of its own contents while the room is near
+   ambient, so nothing measured at rest moves, and the heat the room receives
+   is exactly the heat the contents give up. */
+const ROOM_SKIN_TAU = 45;                 // s, skin against the air
+const SKIN_PROC_K = 20;                   // contents-side conductance / air-side
+const skinCap = n => ROOM_SKIN_TAU*n*ROOM_HK;         // kJ/K
+const partSkin = (s, p) => { const v = s && s.partT && s.partT[p.id];
+  return v === undefined ? (partTemp(s, p) ?? T_HULL) : v; };
+// what the CONTENTS of this machine are losing through their own skin, kW -
+// one tick old at the pots, the s.coreDT idiom, because the room is stepped
+// after them
+const skinQOf = (s, id) => (s.skinQ && s.skinQ[id]) || 0;
+// summed over every machine of one ROLE whose contents are a single pot - the
+// vessel, the condenser and the radiator fleet each share one, so each is
+// charged once for the whole set
+const skinQRole = (s, role) => { let q = 0;
+  for(const p of LAY.parts) if(p.role === role) q += skinQOf(s, p.id);
+  return q; };
 /* ...AND WHAT A RUN IS AT, by KIND, for the same reason. A pipe is not a part
    and has no role, so it cannot go through partTemp(); a run's kind is
    already the one thing that names what is inside it. A kind with no row here
@@ -104,12 +177,18 @@ function roomGeom(){
   if(roomCache && roomCacheSig === sig) return roomCache;
   const N = GW*GH;
   const occ = new Uint8Array(N);
-  const parts = [], runs = [], hull = new Uint8Array(N);
+  const parts = [], runs = [], hull = new Uint8Array(N), face = new Uint8Array(N);
   const g = occupied(null, {pipes:false, ports:false});
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
     const i = Y*GW+X;
     if(g[Y][X]) occ[i] = 1;
     if(hullCell(X,Y)) hull[i] = 1;
+    /* HOW MUCH SKIN THIS CELL HAS. A corner carries two faces and radiates
+       twice as hard, which is geometry rather than a special case - the same
+       DIRV walk radLive() makes, and hullCell() answering true off-grid is
+       what makes an edge cell count exactly one. */
+    if(hull[i]) for(const f in DIRV){ const d = DIRV[f];
+      if(hullCell(X+d[0],Y+d[1])) face[i]++; }
   }
   for(const p of LAY.parts){
     const cells = [];
@@ -143,7 +222,7 @@ function roomGeom(){
     if(Y<GH-1){ const b = g0*blk(i)*blk(i+GW);
       gUp[i] = b*ROOM_UP; gDn[i] = b; }
   }
-  roomCache = {occ, hull, parts, runs, shellValves, gx, gUp, gDn};
+  roomCache = {occ, hull, face, parts, runs, shellValves, gx, gUp, gDn};
   roomCacheSig = sig;
   return roomCache;
 }
@@ -187,37 +266,51 @@ const ROOM_MAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO;   // kg of air in one cell
 const roomPlumeFor = (cells, kgps) => roomPlume(cells,
   clamp(Math.round(kgps*ROOM_ENTRAIN*ROOM_JET_TAU/ROOM_MAIR), cells.length, GW*GH));
 
-function roomJet(src, cells, kW, kgps){
-  if(!(kW > 0) || !cells.length) return;
+/* WHAT A PLUME DELIVERS, AND WHERE. A PLUME IS NOT WELL MIXED: this was flat
+   over every cell the flood reached, so the cell at the opening and one
+   twenty cells away got the same kilowatt - and a release big enough to size
+   its plume at the whole compartment warmed all 2040 cells by the same 127 K
+   in ONE tick, which is a break with no place at all. Measured on a severed
+   hot leg: the break cell read +126.83 and the far corner +126.82. The weight
+   is 1/(1+ring), off the breadth-first ring the cell was reached on, so the
+   opening is the hot end and the far side is a draught. Heat and hydrogen
+   share this, or the gas would collect where the heat never went. */
+function roomSpread(F, cells, kgps, amount){
+  if(!(amount > 0) || !cells.length) return;
   const got = roomPlumeFor(cells, kgps);
-  const q = kW/got.length;
-  for(const i of got) src[i] += q;
+  let w = 0;
+  for(const i of got) w += 1/(1+roomRing[i]);
+  const q = amount/w;
+  for(const i of got) F[i] += q/(1+roomRing[i]);
 }
+const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
 /* THE CELLS A PLUME REACHES, breadth-first out of the opening. Deterministic
    by construction - one fixed neighbour order, one queue, no dice - which is
    what a snapshot round trip requires of it. It crosses an occupied cell:
    this is a gas filling a compartment, not a ray, and a machine is a
    deflector rather than a seal. */
-let roomSeen = null, roomQ = null, roomPlumeGen = 0;
+let roomSeen = null, roomQ = null, roomRing = null, roomPlumeGen = 0;
 function roomPlume(cells, n){
   const N = GW*GH;
-  if(!roomSeen){ roomSeen = new Int32Array(N); roomQ = new Int32Array(N); }
+  if(!roomSeen){ roomSeen = new Int32Array(N); roomQ = new Int32Array(N);
+                 roomRing = new Int32Array(N); }
   const mark = ++roomPlumeGen;
   let head = 0, tail = 0;
-  for(const i of cells) if(roomSeen[i] !== mark){ roomSeen[i] = mark; roomQ[tail++] = i; }
+  const push = (j, r) => { roomSeen[j] = mark; roomRing[j] = r; roomQ[tail++] = j; };
+  for(const i of cells) if(roomSeen[i] !== mark) push(i, 0);
   while(head < tail && tail < n){
-    const i = roomQ[head++], X = i%GW, Y = (i/GW)|0;
-    if(Y>0)      { const j=i-GW; if(roomSeen[j]!==mark && tail<n){ roomSeen[j]=mark; roomQ[tail++]=j; } }
-    if(X>0)      { const j=i-1;  if(roomSeen[j]!==mark && tail<n){ roomSeen[j]=mark; roomQ[tail++]=j; } }
-    if(X<GW-1)   { const j=i+1;  if(roomSeen[j]!==mark && tail<n){ roomSeen[j]=mark; roomQ[tail++]=j; } }
-    if(Y<GH-1)   { const j=i+GW; if(roomSeen[j]!==mark && tail<n){ roomSeen[j]=mark; roomQ[tail++]=j; } }
+    const i = roomQ[head++], X = i%GW, Y = (i/GW)|0, r = roomRing[i]+1;
+    if(Y>0)      { const j=i-GW; if(roomSeen[j]!==mark && tail<n) push(j, r); }
+    if(X>0)      { const j=i-1;  if(roomSeen[j]!==mark && tail<n) push(j, r); }
+    if(X<GW-1)   { const j=i+1;  if(roomSeen[j]!==mark && tail<n) push(j, r); }
+    if(Y<GH-1)   { const j=i+GW; if(roomSeen[j]!==mark && tail<n) push(j, r); }
   }
   return roomQ.subarray(0, tail);
 }
 // what a kilogram of secondary steam is worth to the room, above ambient
 // water: the feed-to-steam rise the shell already charged, plus the feedwater
-// it was raised from sitting above the sea outside.
-const roomSteamH = () => H_FG + CP_W*(T_FEED - T_CW);
+// it was raised from sitting above the hull outside.
+const roomSteamH = () => H_FG + CP_W*(T_FEED - T_HULL);
 
 /* ══ THE TICK ══
    Sources, transport, sink - in that order, once, explicitly. Nothing here
@@ -228,16 +321,27 @@ function roomStep(s, dt){
   const src = roomSrc, d = roomD;
   src.fill(0);
 
-  /* ── hot surfaces ──
-     Signed, so a cell hotter than the machine standing in it gives heat BACK
-     and the term is its own negative feedback. Stage 1 is deliberately
-     one-way: the room takes this heat and the machine does not lose it, so a
-     plant at rest is bit-identical to one with no room at all. */
+  /* ── hot surfaces, and they are TWO-WAY now ──
+     Contents -> skin -> air, and every arrow runs both ways: a room hotter
+     than a machine heats it, and what the room gets is booked against the pot
+     it came out of (s.skinQ, spent at each pot in step.js). A machine that
+     moves no heat has no contents term and is pure thermal mass. */
+  const live = {};
   for(const q of G.parts){
-    const Tp = partTemp(s, q.p);
-    if(Tp === null || !isFinite(Tp)) continue;
-    for(const i of q.cells) src[i] += ROOM_HK*(Tp - T[i]);
+    const id = q.p.id, n = q.cells.length, Tp = partTemp(s, q.p);
+    const proc = Tp !== null && isFinite(Tp);
+    live[id] = 1;
+    if(s.partT[id] === undefined) s.partT[id] = proc ? Tp : T_HULL;
+    const Ts = s.partT[id];
+    let air = 0;
+    for(const i of q.cells) air += T[i];
+    const qProc = proc ? n*ROOM_HK*SKIN_PROC_K*(Tp - Ts) : 0;
+    s.skinQ[id] = qProc;
+    s.partT[id] = clamp(Ts + (qProc + ROOM_HK*(air - n*Ts))/skinCap(n)*dt,
+                        T_SPACE, ROOM_TMAX);
+    for(const i of q.cells) src[i] += ROOM_HK*(Ts - T[i]);
   }
+  for(const id in s.partT) if(!live[id]){ delete s.partT[id]; delete s.skinQ[id]; }
   for(const r of G.runs){
     const Tp = ROOM_RUN_T[r.k](s);
     if(!isFinite(Tp)) continue;
@@ -269,18 +373,18 @@ function roomStep(s, dt){
     roomJet(src, cellsOf(id), hole*roomSteamH(), hole);
   }
   /* The primary side, as LIQUID: hot water leaving a hole flashes, and its
-     sensible heat above the sea outside is what the room gets. One conversion
+     sensible heat above the hull outside is what the room gets. One conversion
      out of invRate()'s % of loop inventory, the same bridge loopKg() is
      everywhere else. */
   const kgOf = rate => Math.max(0, rate)/100*loopKg();
   for(const fid in s.reliefVent){
     if(tgt[fid] || out[fid]) continue;
     const kg = kgOf(s.reliefVent[fid]);
-    roomJet(src, cellsOf(fid), kg*CP_W*(s.Tavg - T_CW), kg);
+    roomJet(src, cellsOf(fid), kg*CP_W*(s.Tavg - T_HULL), kg);
   }
   for(const k in s.spillBy){
     const kg = kgOf(s.spillBy[k]);
-    roomJet(src, roomOpenCells(s, G, k), kg*CP_W*(s.Tavg - T_CW), kg);
+    roomJet(src, roomOpenCells(s, G, k), kg*CP_W*(s.Tavg - T_HULL), kg);
   }
 
   /* ── the machines whose whole job is getting heat out of the building ──
@@ -289,8 +393,13 @@ function roomStep(s, dt){
      its hull. */
   if(!s.blackout) for(const q of G.parts){
     if(q.p.role !== "vent" || s.dmgParts.indexOf(q.p.id) >= 0) continue;
+    /* Against T_HULL, and that is now a STATED reading rather than a leftover:
+       there is no atmosphere to blow this compartment's air into, so the set
+       is moving it to the rest of the ship - which sits at what the ship was
+       built at - and drawing the same mass back. Vent it overboard instead
+       and it is mass loss, which this model does not carry. */
     const ua = ROOM_VENT_KGS*ROOM_CP/q.cells.length;
-    for(const i of q.cells) src[i] -= ua*(T[i] - T_CW);
+    for(const i of q.cells) src[i] -= ua*(T[i] - T_HULL);
   }
 
   /* ── transport ──
@@ -308,16 +417,21 @@ function roomStep(s, dt){
     const q = (dT > 0 ? G.gUp[i] : G.gDn[i])*dT;    // positive: heat rising into i
     d[i] += q; d[j] -= q;
   }
-  for(let i=0;i<N;i++) T[i] = clamp(T[i] + d[i]/ROOM_C*dt, T_CW, ROOM_TMAX);
-
   /* ── the sink ──
-     THE HULL RING IS HELD AT AMBIENT. A fixed boundary, exactly as every
-     containment node is fixed at P.Pcont in the pressure solve, and the
-     second physical meaning a hull cell now carries: today it is only "more
-     likely to be shot". T_CW is the sea the plant sits in, which is the same
-     water the condenser draws on - one fewer typed constant, and the right
-     number. */
-  for(let i=0;i<N;i++) if(G.hull[i]) T[i] = T_CW;
+     THE SKIN RADIATES. It was a Dirichlet clamp at T_HULL - an infinite sink,
+     which is the one thing a ship in space has not got. Stefan-Boltzmann, the
+     same law and the same T_SPACE the panels use; what makes it FINITE is
+     that the only thing feeding it is what the air can conduct to it. Folded
+     into the same explicit step as the transport, so the hull is an ordinary
+     cell with one extra term rather than a second pass that could disagree
+     with it - and the term is stable by a factor of eighteen at dt=0.02 even
+     at ROOM_TMAX, where dQ/dT is 4Q/T.
+     Floored at T_SPACE, not at T_HULL: a compartment colder than the ship was
+     built at is a legal answer now, and a measured one. */
+  { const k = HULL_EMIS*SIGMA*HULL_FACE_A/1000;      // kW per K^4 per face
+    for(let i=0;i<N;i++) if(G.face[i])
+      d[i] -= k*G.face[i]*(Math.pow(T[i],4) - Math.pow(T_SPACE,4)); }
+  for(let i=0;i<N;i++) T[i] = clamp(T[i] + d[i]/ROOM_C*dt, T_SPACE, ROOM_TMAX);
 
   roomH2Step(s, dt, G);
 
@@ -375,9 +489,7 @@ function roomH2Step(s, dt, G){
       const m = Math.min(s.h2, s.h2*f);
       s.h2 -= m;
       // the same plume the heat went into, off the same opening at the same rate
-      const got = roomPlumeFor(cells, Math.max(0, rate)/100*loopKg());
-      const q = m/got.length;
-      for(const i of got) H[i] += q;
+      roomSpread(H, cells, Math.max(0, rate)/100*loopKg(), m);
     };
     const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
     for(const k in s.spillBy) put(roomOpenCells(s, G, k), s.spillBy[k]);
@@ -448,7 +560,7 @@ function roomAt(s, p){
   let v = 0;
   for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
     if(X>=0&&X<GW&&Y>=0&&Y<GH) v = Math.max(v, s.roomT[Y*GW+X]);
-  return v || T_CW;
+  return v || T_HULL;
 }
 // the hydrogen concentration in a cell, as a volume fraction - the readout
 // behind the flammability layer, off the same expression the ignition test
@@ -456,10 +568,10 @@ function roomAt(s, p){
 const roomH2Frac = (s,i) => { const n = s.roomH2[i]/H2_MMOL;
   return n > 0 ? n/(ROOM_MOL + n) : 0; };
 // WHICH MACHINES ARE OVER THEIR OWN LIMIT, off the same roomAt() and the same
-// ROLE.tsurv the damage integral reads - so the alarm and the failure cannot
+// partTsurv() the damage integral reads - so the alarm and the failure cannot
 // name two different sets of machines.
-const roomOverIds = s => LAY.parts.filter(p => { const l = ROLE[p.role] && ROLE[p.role].tsurv;
-  return l && fitted(p) && roomAt(s,p) > l; }).map(p => p.id);
+const roomOverIds = s => LAY.parts.filter(p => { const l = partTsurv(p);
+  return l && fitted(p) && partSkin(s,p) > l; }).map(p => p.id);
 const roomH2Peak = s => { let v = 0;
   for(let i=0;i<s.roomH2.length;i++){ const f = roomH2Frac(s,i); if(f > v) v = f; }
   return v; };
