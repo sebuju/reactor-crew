@@ -936,7 +936,7 @@ const nodeT = (net, i, s) => {
    pressure) printed subcooling around -235 K on the PRESSURE layer -
    measured, not a guess - because tsat() of a real ~0.01 MPa condenser
    pressure was compared against a Tavg left over from the primary loop. */
-const condDisplayT = () => T_CW + COND_DT0;
+const condDisplayT = () => RAD_TDES + COND_DT0;
 
 /* The temperature at a node, asked by id - the same hot/cold split the
    buoyancy heads consume, so density and subcooling can never disagree about
