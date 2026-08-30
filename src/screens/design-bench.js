@@ -310,6 +310,14 @@ function ctxItemsDesign(hit){
           grp:"safety",tip:"Pulls compartment air overboard. It is the only thing on the plant besides the hull that takes heat OUT of the room, and it is on the main board - a blackout leaves the room with nothing but its own steel. Nothing to plumb.",
           role:"vent"}));
       }});
+      /* THE ONLY WAY HEAT LEAVES THE SHIP, and the same idiom again: placed,
+         no ports, nothing to plumb. Where it goes decides whether it works at
+         all - it has to reach the skin. */
+      items.push({label:"ADD RADIATOR", fn:()=>{
+        placePart(n=>({id:"radX"+n,name:"RADIATOR SPARE",w:5,h:3,x:gx,y:gy,col:"#b8c4cf",
+          grp:"sec",tip:"An additional radiating panel. It must have a face on the skin: walled in it sheds NOTHING, the condenser climbs, and the turbine trips inside two minutes. Area buys overload headroom and costs mass. Nothing to plumb.",
+          role:"radiator"}));
+      }});
       items.push({label:"ADD CONDENSER", fn:()=>{
         placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:9,h:5,x:gx,y:gy,col:"#5aa9d6",
           grp:"sec",tip:"An additional condenser, placed where you put it. It is heat sink and it is where the feed pumps draw from, so a second one is a second place for both. Hover an edge to place a port, then click it to draw a pipe.",
