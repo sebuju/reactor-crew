@@ -187,13 +187,16 @@ const LAYERS={
   subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
         draw:subcLayer,
         tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},
-  /* THE THREE ROOM LAYERS. src/render/room.js has the draw functions and the
-     band table; this table only says where each goes down and what it starts
-     as. `live:true` on all three, unlike the four radiation layers: a dose
-     rate is a real answer on an uncommissioned arrangement and a room
-     temperature is not, because a room is only hot once machines are running
-     in it. The bench skips them.
-     All three ship OFF, the same argument every radiation layer makes: a
+  /* THE FIVE ROOM LAYERS - ONE PER FIELD ON S, and that is the rule rather
+     than a count: s.roomT, s.roomH2, s.roomO2 and s.roomP are all places, so
+     all four are askable, and PART TEMP is the per-machine reading off the
+     first of them. src/render/room.js has the draw functions and the band
+     tables; this table only says where each goes down and what it starts as.
+     `live:true` on all five, unlike the four radiation layers: a dose rate is
+     a real answer on an uncommissioned arrangement and a room temperature is
+     not, because a room is only hot once machines are running in it. The
+     bench skips them.
+     All five ship OFF, the same argument every radiation layer makes: a
      survey is asked OF the plant, and answering it unbidden would make the
      first look at the machines a look at an overlay. */
   roomz:{label:"ROOM HEAT",  seam:"under", data:"room", live:true, on:false,
@@ -201,7 +204,13 @@ const LAYERS={
         tip:"Air temperature in every cell of the compartment, as a survey map: five bands from AMBIENT to UNTENABLE. Heat is a place. It comes off every hot surface, it comes in a flood out of anything venting steam into the room instead of into a tank, a machine is a WALL to it, and the only sink is the hull - so a compact plant runs hotter than a spread-out one. The band edges are the machines' own limits, not round numbers."},
   roomh:{label:"H2 CLOUD",   seam:"under", data:"room", live:true, on:false,
         draw:roomH2Layer,
-        tip:"Where the hydrogen off the cladding has ended up. It leaves the primary with the steam, at whatever hole the steam left through, and then it is a gas in a room. Red is at or over 4% by volume - the flammability limit - and a red cell over 773 K lights itself with no spark. This is the Fukushima sequence, drawn."},
+        tip:"Where the hydrogen off the cladding has ended up. It leaves the primary with the steam, at whatever hole the steam left through, and then it is a gas fourteen times lighter than air, collecting under the deckhead of a SEALED compartment - the only thing that takes it out again is the ventilation set, or a fire. Red is at or over 4% by volume; amber and moving is a flame front, and how fast it crosses a cell is a property of the mixture. This is the Fukushima sequence, drawn."},
+  roomo:{label:"OXYGEN",     seam:"under", data:"room", live:true, on:false,
+        draw:roomO2Layer,
+        tip:"What is left in each cell to burn WITH. It draws DEPLETION only - a cell holding what air actually holds prints nothing, because the question is where a fire has eaten its own air. Blue and labelled is under 5% by volume, the limiting oxygen concentration: nothing ignites there whatever else is in it, which is how a sealed corner smothers its own fire and leaves the hydrogen unburnt."},
+  roomp:{label:"BLAST",      seam:"under", data:"room", live:true, on:false,
+        draw:roomPLayer,
+        tip:"Overpressure above ambient, in kPa, banded against the machines' own limits rather than round numbers: 15 takes a radiator panel, 20 a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel. It is a FLASH - the compartment relieves itself in about half a second - so this says where a bang was and for roughly as long as it lasted. A blast is instantaneous: a machine either survives the peak its own cells saw or it does not."},
   roomc:{label:"PART TEMP",  seam:"over",  data:"room", live:true, on:false,
         draw:roomPart,
         tip:"What each machine is standing in, in kelvin, coloured against what THAT machine was built for. The room field says the compartment is hot; this says which box is about to be damaged by it. Structure - shielding, containment, the core catcher - prints nothing, because a room temperature is not how any of them fails."},
