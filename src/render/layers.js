@@ -196,34 +196,42 @@ const LAYERS={
      a real answer on an uncommissioned arrangement and a room temperature is
      not, because a room is only hot once machines are running in it. The
      bench skips them.
-     All five ship OFF, the same argument every radiation layer makes: a
-     survey is asked OF the plant, and answering it unbidden would make the
-     first look at the machines a look at an overlay. */
+     THREE OF THE FIVE SHIP OFF, and the two that do not are the two that draw
+     NOTHING on a healthy plant. That is the whole test, and it is a better one
+     than "a survey is asked OF the plant": ROOM HEAT, OXYGEN and PART TEMP
+     paint every cell or every box the moment they are on, so leaving them on
+     would make the first look at the machines a look at an overlay - the same
+     argument every radiation layer makes. H2 CLOUD and BLAST paint nothing at
+     all until there is hydrogen in the room or a bang in it, and both are
+     events you cannot answer if you find out about them by remembering to ask.
+     A layer that is silent until it matters is an ANNUNCIATOR, and an
+     annunciator is not switched on when you want the alarm. */
   roomz:{label:"ROOM HEAT",  seam:"under", data:"room", live:true, on:false,
         draw:roomZones,
         tip:"Air temperature in every cell of the compartment, as a survey map: five bands from AMBIENT to UNTENABLE. Heat is a place. It comes off every hot surface, it comes in a flood out of anything venting steam into the room instead of into a tank, a machine is a WALL to it, and the only sink is the hull - so a compact plant runs hotter than a spread-out one. The band edges are the machines' own limits, not round numbers."},
-  roomh:{label:"H2 CLOUD",   seam:"under", data:"room", live:true, on:false,
+  roomh:{label:"H2 CLOUD",   seam:"under", data:"room", live:true, on:true,
         draw:roomH2Layer,
         tip:"Where the hydrogen off the cladding has ended up. It leaves the primary with the steam, at whatever hole the steam left through, and then it is a gas fourteen times lighter than air, collecting under the deckhead of a SEALED compartment - the only thing that takes it out again is the ventilation set, or a fire. Red is at or over 4% by volume; amber and moving is a flame front, and how fast it crosses a cell is a property of the mixture. This is the Fukushima sequence, drawn."},
   roomo:{label:"OXYGEN",     seam:"under", data:"room", live:true, on:false,
         draw:roomO2Layer,
         tip:"What is left in each cell to burn WITH. It draws DEPLETION only - a cell holding what air actually holds prints nothing, because the question is where a fire has eaten its own air. Blue and labelled is under 5% by volume, the limiting oxygen concentration: nothing ignites there whatever else is in it, which is how a sealed corner smothers its own fire and leaves the hydrogen unburnt."},
-  roomp:{label:"BLAST",      seam:"under", data:"room", live:true, on:false,
+  roomp:{label:"BLAST",      seam:"under", data:"room", live:true, on:true,
         draw:roomPLayer,
-        tip:"Overpressure above ambient, in kPa, banded against the machines' own limits rather than round numbers: 15 takes a radiator panel, 20 a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel. It is a FLASH - the compartment relieves itself in about half a second - so this says where a bang was and for roughly as long as it lasted. A blast is instantaneous: a machine either survives the peak its own cells saw or it does not."},
+        tip:"Overpressure above ambient, in kPa, banded against the machines' own limits rather than round numbers: 15 takes a radiator panel, 20 a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel. The compartment relieves itself in about half a second, so this is a PEAK HOLD, the way a real blast gauge is: it shows the worst each cell has ever seen and bleeds it away over the next few seconds. The cells the wave is actually in pulse. A blast is instantaneous: a machine either survives the peak its own cells saw or it does not."},
   roomc:{label:"PART TEMP",  seam:"over",  data:"room", live:true, on:false,
         draw:roomPart,
         tip:"What each machine is standing in, in kelvin, coloured against what THAT machine was built for. The room field says the compartment is hot; this says which box is about to be damaged by it. Structure - shielding, containment, the core catcher - prints nothing, because a room temperature is not how any of them fails."},
-  /* The flow readings and the pressurizer's own dial. They were drawn
-     unconditionally, outside the table, which made them the one thing on the
-     plant nobody could turn off - and left two of the three pipe instruments
-     switchable and the third not. Last in the table on purpose: it carries the
-     pressurizer's dial, which is bigger than a line of text and so goes down
-     over the stack rather than under it. Not the break plumes - drawPlant()
-     draws those before the pass, because an effect is not an instrument. */
+  /* The flow readings, and ONLY those. The pressurizer's dial used to ride
+     this switch too and does not any more: a flow meter is one of three
+     readings on a run and belongs on the same switch as the other two, while
+     the dial is the only instrument the plant's own pressure has and is not on
+     a run at all - so turning the pipe labels off blanked the one gauge with
+     nothing standing in for it. pipeVessel() is drawn unconditionally by
+     drawPlant(), at this exact seam. Not the break plumes either - those go
+     down before the pass, because an effect is not an instrument. */
   flow: {label:"FLOW METERS", seam:"over",  data:null,    live:true, on:false,
-        draw:(d,L)=>pipeGauges(L),
-        tip:"The top line of every run's readings: what that run is carrying, in kg/s - and the pressurizer's own pressure dial. The figure goes amber and takes a minus sign when a run reverses, and red when it is being pushed past its rating."},
+        draw:(d,L)=>pipeMeters(pipeRuns(L),L),
+        tip:"The top line of every run's readings: what that run is carrying, in kg/s. The figure goes amber and takes a minus sign when a run reverses, and red when it is being pushed past its rating. The pressurizer's own dial is not on this switch - it is the only gauge that plant pressure has, so it is always drawn."},
 };
 const LAYER_ORDER=Object.keys(LAYERS);
 

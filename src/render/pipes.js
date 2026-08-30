@@ -813,8 +813,8 @@ function pipeVessel(L){
    THE SPLIT IS THE POINT. Fluid is inside a pipe, and a pipe runs BEHIND the plant, so
    pipeFlow() goes down before the components and a packet disappears under a vessel
    the way it should. An instrument is bolted to the outside of the thing it measures,
-   so pipeGauges() goes down after them - drawn first, the pressurizer gauge was simply
-   painted over by the pressurizer. */
+   so pipeMeters() and pipeVessel() go down after them - drawn first, the pressurizer
+   gauge was simply painted over by the pressurizer. */
 /* NOTHING IS HIDDEN. This used to drop an injection run whose tank was not
    live - a VIEW declutter on the argument that an idle line nobody has
    commanded on is not worth drawing. It is worth drawing: a line that is
@@ -872,7 +872,23 @@ function pipeDamage(L){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
     const r=grect(+k.slice(0,i), +k.slice(i+1), 1, 1);
-    fillRect(r.x+2,r.y+2,r.w-4,r.h-4,C.red);
+    const cx=r.x+r.w/2, cy=r.y+r.h/2;
+    /* THE STROKE IS TAKEN OUT, not painted over. A flat red square read as a
+       marker dropped ON the pipe - a label, and one an alpha layer washed out -
+       while the thing being said is that the pipe is NOT THERE any more. So the
+       cell is cut back to the deck, hatched, framed, and the tear is drawn
+       across it; and it sparks, the same decoration a wrecked machine wears. */
+    fillRect(r.x+1,r.y+1,r.w-2,r.h-2,C.well);
+    hatch(r.x+1,r.y+1,r.w-2,r.h-2,C.red,.5);
+    frame(r.x+1,r.y+1,r.w-2,r.h-2,C.red);
+    ctx.save();
+    ctx.strokeStyle=C.red; ctx.lineWidth=2; ctx.lineCap="round"; ctx.lineJoin="miter";
+    ctx.beginPath();
+    ctx.moveTo(r.x+2,cy-6); ctx.lineTo(cx+3,cy-2);
+    ctx.lineTo(cx-3,cy+2);  ctx.lineTo(r.x+r.w-2,cy+6);
+    ctx.stroke();
+    ctx.restore();
+    fxSparks(r.x+2,r.y+2,r.w-4,r.h-4,0.5,C.red);
   }
 }
 /* EVERY PIPE CELL NO CONNECTION CLAIMS, AND WHICH WAY IT OPENS. Dead-coloured,
@@ -906,15 +922,3 @@ function pipeLoose(L){
   ctx.restore();
 }
 
-/* The FLOW METERS layer's draw pass (LAYERS.flow, render/layers.js). It is a
-   layer like the pressure and subcooling readings beside it now: three
-   instruments, three switches, one rail. Outside every clip, and over every
-   component - an instrument is bolted to the OUTSIDE of the thing it reads.
-   pipeBreaks() is NOT in here and must not be: a break plume is an effect, not
-   an instrument, and switching the meters off must not switch off the picture
-   of a hole in the plant. drawPlant() draws it before this pass, so a plume is
-   behind a dial rather than over it. */
-function pipeGauges(L){
-  pipeMeters(pipeRuns(L),L);
-  pipeVessel(L);
-}

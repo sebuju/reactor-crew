@@ -756,13 +756,31 @@ function crCnxSync(body){
   const rows=keys.map(k=>{ const r=P.net.byKey[k];
     return {k, name:pipeName(r), cut:pipeExtraLen(S,r.cells)===Infinity};
   });
-  const sig=rows.map(r=>r.k+(r.cut?"!":"")).join("|");
+  /* AND EVERY NOZZLE'S OWN VALVE, under the same heading. A port valve is
+     piping, not a component: it is what cuts a run out, so it belongs beside
+     the list of runs and nowhere else. Every port is listed, open ones
+     included - the question the list answers is "what is lined up", and a
+     list of only the shut ones cannot be read as an answer to that. */
+  const PS=S.portShut||{};
+  const ports=Object.keys(PS).map(pid=>({pid, name:portLabel(pid), shut:!!PS[pid]}))
+    .sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
+  const sig=rows.map(r=>r.k+(r.cut?"!":"")).join("|")
+    +"//"+ports.map(p=>p.pid+(p.shut?"!":"")).join("|");
   if(body._sig===sig) return;
   body._sig=sig; body.innerHTML="";
   for(const r of rows){
     const row=KIT.el("div","cr-cnx-row"+(r.cut?" cut":""));
     const n=KIT.el("span","cr-cnx-name"); n.textContent=r.name;
     const s=KIT.el("span","cr-cnx-state"); s.textContent=r.cut?"SEVERED":"intact";
+    row.append(n,s); body.appendChild(row);
+  }
+  if(!ports.length) return;
+  const head=KIT.el("div","cr-cnx-sub"); head.textContent="PORT VALVES";
+  body.appendChild(head);
+  for(const pv of ports){
+    const row=KIT.el("div","cr-cnx-row"+(pv.shut?" shut":""));
+    const n=KIT.el("span","cr-cnx-name"); n.textContent=pv.name;
+    const s=KIT.el("span","cr-cnx-state"); s.textContent=pv.shut?"SHUT":"open";
     row.append(n,s); body.appendChild(row);
   }
 }

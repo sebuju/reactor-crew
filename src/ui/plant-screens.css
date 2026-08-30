@@ -265,3 +265,10 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    carrying is green, the same green every "intact" reads in on a panel */
 .cr-cnx-state{flex:0 0 auto;color:var(--c-green)}
 .cr-cnx-row.cut .cr-cnx-name,.cr-cnx-row.cut .cr-cnx-state{color:var(--c-red)}
+/* a port valve the watch has SHUT is not a fault, so it is not red: it is a
+   thing somebody did on purpose, and amber is what this board says that in */
+.cr-cnx-row.shut .cr-cnx-name,.cr-cnx-row.shut .cr-cnx-state{color:var(--c-amber)}
+/* the ports are a second list under the runs, so they get a rule over them
+   rather than a second heading - the group is still PIPING */
+.cr-cnx-sub{margin-top:6px;padding-top:4px;border-top:1px solid var(--c-edge);
+  font-size:var(--t8);letter-spacing:.08em;color:var(--c-ink2)}

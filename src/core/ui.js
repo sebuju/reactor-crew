@@ -172,6 +172,16 @@ const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
 const push=w=>{ if(viewOn) w.v=1; w.host=ui.host; ui.widgets.push(w); return w; };
 const inside=(w,p)=>!!p&&p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
 const hov=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr))&&!ui.drag;
+/* THE SAME TEST WITHOUT THE DRAG GATE. hov() goes false on any press, which is
+   right for a highlight and wrong for a region that decides whether a control
+   is DRAWN AT ALL - a strip that vanished the moment its own slider was
+   grabbed would take the slider with it. */
+const hovHold=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr));
+/* IS THE SLIDER NOW BEING DRAGGED ONE OF THIS REGION'S OWN? ui.drag IS the
+   slider's widget, so the question is asked of its RECT and not of the pointer,
+   which a geared drag deliberately carries far away from the track. */
+const sldIn=r=>{ const d=ui.drag;
+  return !!(d&&d.type==="sld"&&d.x>=r.x-2&&d.x<=r.x+r.w+2&&d.y>=r.y-2&&d.y<=r.y+r.h+2); };
 // the ONE hit test: last widget pushed wins, and it answers for either button
 const hitAt=p=>{
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
@@ -507,6 +517,10 @@ function uiDown(e){
     // A PORT IS A TOGGLE: click the mark to take it away again. Its mark is
     // pushed after its own box, so it takes the press before a part drag can.
     else if(w.type==="port"){ removePort(w.pid); }
+    // ...and on a COMMISSIONED plant the same cell is the valve inside that
+    // nozzle. Nothing is placed or taken away in the control room: the plant is
+    // welded down, so all a port has left to offer is its own handle.
+    else if(w.type==="portv"){ act("portShut",w.pid); }
     // ...and the ghost places one. There is nothing to follow it with: a pipe
     // is laid with the pipe tool, cell by cell.
     else if(w.type==="ghostport"){ addPortAt(w.p,w.dx,w.dy); buildLayout(); }

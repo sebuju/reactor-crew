@@ -98,26 +98,43 @@ const pipeNozzleHalf = bore => pipeWidth(bore)*1.4;
    rather than as a side. Not red either - a side is not an alarm. Cyan and
    green are the two live inks left, and neither is the cold leg's own blue,
    so a port never disappears into the pipe on it. */
-// takes the part ID, because that is what a run carries - portPath() wants the
-// PART, and handing it the string made every nozzle on the plant read C.metal
-const portCol=(id,f)=>{ const IN=portPath(LAY.parts.find(q=>q.id===id),f);
-  return !IN ? C.metal : IN.a===f ? C.portA : C.portB; };
+/* Addressed by PORT, not by (part, face): two ports can share a face, and only
+   one of them may have its isolation valve shut.
+   RED IS THAT VALVE, and it is the one exception to the rule above. A shut
+   valve is a fact about the PORT, so it is said by colouring the port rather
+   than by parking a second glyph beside one - a nozzle is what a port looks
+   like, piped or not. Every pass reads this - pipeNozzles(), the control
+   room's hover - so one port cannot be red in one pass and green in the next.
+   Takes the live state rather than reaching for S: the bench draws nozzles too
+   and must never colour one off the last run's valve positions. */
+function portColOf(pid,L){
+  if(L && L.portShut && L.portShut[pid]) return C.red;
+  const q=D.ports[pid]; if(!q) return C.metal;
+  const f=portFaceOf(pid), IN=portPath(LAY.parts.find(p=>p.id===q.p), f);
+  return !IN ? C.metal : IN.a===f ? C.portA : C.portB;
+}
 // THE JOINT ITSELF - a small flanged rectangle standing proud of the shell,
 // its long axis across the bore and its short axis the direction it faces.
 // Shared by a piped run's own end (pipeNozzles()) and a bare port with
 // nothing piped to it yet (drawPortMarks()) - a port IS this mark, piped or
 // not, so a fresh one reads as placed the instant it exists.
-function drawNozzle(px,py,flat,bore,col){
+// THE RECT THE JOINT OCCUPIES, so a caller that has to point AT one is working
+// off the same four numbers the draw does instead of guessing them off CELL.
+function nozzleRect(px,py,flat,bore){
   const half=pipeNozzleHalf(bore), deep=2.5;   // how far it stands proud of the shell
   const bx=flat?deep:half, by=flat?half:deep;
-  fillRect(px-bx-1,py-by-1,2*bx+2,2*by+2,PIPE_CASE);
-  fillRect(px-bx,py-by,2*bx,2*by,col);
+  return {x:px-bx-1, y:py-by-1, w:2*bx+2, h:2*by+2};
 }
-function pipeNozzles(NET){
+function drawNozzle(px,py,flat,bore,col){
+  const r=nozzleRect(px,py,flat,bore);
+  fillRect(r.x,r.y,r.w,r.h,PIPE_CASE);
+  fillRect(r.x+1,r.y+1,r.w-2,r.h-2,col);
+}
+function pipeNozzles(NET,L){
   for(const r of NET){
     for(const e of nozzleEnds(r)){
       drawNozzle(e.p[0],e.p[1],e.flat,runBore(r),
-        portCol(e.end==="a"?r.a:r.b, e.end==="a"?r.sa:r.sb));
+        portColOf(e.end==="a"?r.pa:r.pb, L));
     }
   }
 }
@@ -153,6 +170,10 @@ function drawSym(p,x,y,w,h,ink,L){
     path(); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
   };
   const id=p.id;
+  // WRECKED MACHINERY DOES NOT TURN, and it is asked once here rather than at
+  // each moving symbol - the fan already stood still and the pump and the
+  // turbine went on spinning through their own destruction
+  const dead = !!(L && L.dmgParts.includes(id));
   if(id==="core"){
     shell(()=>{ ctx.moveTo(X,Y+10); ctx.quadraticCurveTo(cx,Y-6,X+W,Y+10);
       ctx.lineTo(X+W,Y+Hh-10); ctx.quadraticCurveTo(cx,Y+Hh+6,X,Y+Hh-10); ctx.closePath(); });
@@ -329,14 +350,17 @@ function drawSym(p,x,y,w,h,ink,L){
   } else if(roleHead(p.role)){
     const r=Math.min(W,Hh)/2-1, cy=y+h/2;
     shell(()=>ctx.arc(cx,cy,r,0,7));
-    ctx.save(); ctx.translate(cx,cy); if(L) ctx.rotate(L.spin*Math.PI/180);
+    // a wrecked pump is not turning. s.spin is one integral for every pump on
+    // the plant, so the stall angle comes off the id (fxIdPhase(), fx.js)
+    ctx.save(); ctx.translate(cx,cy);
+    if(L) ctx.rotate((dead?fxIdPhase(id)*360:L.spin)*Math.PI/180);
     ctx.beginPath(); ctx.moveTo(-r*.45,-r*.55); ctx.lineTo(r*.7,0); ctx.lineTo(-r*.45,r*.55);
     ctx.closePath(); ctx.fillStyle=ink; ctx.fill(); ctx.restore();
     if(L&&L.cav>.15){ ctx.beginPath(); ctx.arc(cx,cy,r+3,0,7); ctx.strokeStyle=C.amber;
       ctx.lineWidth=1.5; ctx.setLineDash([3,3]); ctx.stroke(); ctx.setLineDash([]); }
     // vapour flashing at the inlet, small and violent, not a kettle - on the same
     // 0..0.6 the CAVITATION readout's band uses
-    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",clamp(L.cav/.6,0,1)),C.amber,"chan");
+    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",dead?0:clamp(L.cav/.6,0,1)),C.amber,"chan");
   } else if(p.role==="turb"){
     shell(()=>{ ctx.moveTo(X,Y+3); ctx.lineTo(X+W,Y-2); ctx.lineTo(X+W,Y+Hh+2);
       ctx.lineTo(X,Y+Hh-3); ctx.closePath(); });
@@ -362,7 +386,8 @@ function drawSym(p,x,y,w,h,ink,L){
       ctx.lineTo(cx+Math.cos(a+.26)*r1,cyT+Math.sin(a+.26)*r1);
       ctx.stroke(); }
     ctx.restore();
-    ctx.save(); ctx.translate(cx,cyT); ctx.rotate((L?L.spinT:0)*Math.PI/180);
+    ctx.save(); ctx.translate(cx,cyT);
+    ctx.rotate((L?(dead?fxIdPhase(id)*360:L.spinT):0)*Math.PI/180);
     ctx.strokeStyle=ink; ctx.lineWidth=2.2; ctx.lineCap="round"; // ROTOR - turns
     for(let i=0;i<6;i++){ const a=i*1.0472;
       ctx.beginPath();
@@ -460,7 +485,7 @@ function drawSym(p,x,y,w,h,ink,L){
        of lead is the one confusion worth a dozen lines. Dead in a blackout,
        and it says so by standing still. */
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
-    const r=Math.min(W,Hh-4)/2-3, a=L&&!L.blackout&&!L.dmgParts.includes(id)?fxClock()*2.2:0;
+    const r=Math.min(W,Hh-4)/2-3, a=L&&!L.blackout&&!dead?fxClock()*2.2:0;
     ctx.save(); ctx.translate(cx,y+h/2); ctx.rotate(a);
     ctx.strokeStyle=ink; ctx.lineWidth=1.5;
     for(let i=0;i<3;i++){ ctx.rotate(Math.PI*2/3);
@@ -492,10 +517,15 @@ function drawSym(p,x,y,w,h,ink,L){
       ctx.beginPath(); rr(X+2.5,Y+4.5,W-5,Hh-9,7);
       ctx.strokeStyle=ink; ctx.lineWidth=1; ctx.globalAlpha=.55; ctx.stroke(); ctx.globalAlpha=1;
     }
+    /* NEITHER TEST IS A BARE COMPARISON WITH ZERO. Both the rate and the level
+       come off the solve, so both sit on ±1e-15 at rest - tankInjecting() and
+       tankWet() (pipenet.js) are the two floors, and they are the SAME ones the
+       sim judges by, so the picture and the plant cannot disagree about whether
+       a tank is delivering or holding anything. */
     tank(X,Y+2,W,Hh-4,tankHeld(id)?9:3, lv/100,
-      rate>0 ? C.cyan
+      tankInjecting(id,rate) ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
-            : (lv>=90 ? C.red : lv>0  ? C.amber : C.blue));
+            : (lv>=90 ? C.red : tankWet(lv) ? C.amber : C.blue));
     /* Cold water going down the line. The safe act with the long bill, and
        worth seeing that it is still running - every second of it ages the
        vessel whether or not anybody is looking at FATIGUE. On what the tank is
@@ -681,7 +711,11 @@ function liveValue(p,s){
     case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
     case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
     case p.role==="cond": return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
-    case p.id==="bkp":   return s.blackout?"LOAD":"rdy";
+    /* null, not "rdy": a standby set that is standing by is the ordinary case
+       and printing a word for it was ink saying nothing. The PLACE stays - the
+       tag simply is not drawn when there is no value - so the REPAIR key still
+       has its anchor and a future reading has somewhere to land. */
+    case p.id==="bkp":   return s.blackout?"LOAD":null;
     case p.id==="cont":  return s.release.toFixed(1)+"%";
     case p.id==="ctrl":  return s.dose.toFixed(0)+"%";
     /* ONE ROW FOR EVERY TANK. A burst disc first, because a tank that is an
@@ -857,6 +891,26 @@ function benchCell(c){
   return o;
 }
 const ctlBench=rows=>rows&&rows.map(r=>r.map(benchCell));
+/* ══ WHAT THIS MACHINE IS STOOD DOWN AS, IN ONE WORD ══
+   Null when there is nothing to say, which is the ordinary case. It exists
+   because a valve's handles are put away until the hand is on the box: a shut
+   block valve, a bypassed arm or a lifted relief is a fact about the plant and
+   must not go away with the control that set it, so it is said in the NAME,
+   which is always drawn. One function, or the mimic and the rail would grow two
+   vocabularies for the same four states. */
+function partStateWord(p){
+  if(p.role==="fitting"){
+    const mode=fitModeOf(p.id);
+    if(mode==="relief")
+      return S.reliefBlocked[p.id] ? "BLOCKED"
+           : S.reliefOpen[p.id]    ? "OPEN"
+           : !porvLive(p.id)       ? "BYP" : null;
+    if(mode==="throttle") return (S.valve[p.id]??1)<0.005 ? "SHUT" : null;
+    return null;
+  }
+  const k=autoOn(p.id);
+  return k && autoFit(k) && S.byp[k] ? "BYP" : null;
+}
 function ctlFor(p,live,split){
   if(p.role==="tank") return tankCtl(p.id);
   /* ONE LOAD LEVER, on the FIRST turbine. There can be more than one now, and
@@ -1177,15 +1231,24 @@ function drawHitAim(){
    Left click takes it away again; right click held-and-released opens the
    mode menu (design-bench.js's own ctx registry). */
 const PORTG=CELL-4;
+/* ONE WALK OVER THE PORTS, taken by both passes. The bench's placement marks
+   and the control room's isolation valves ask the same three questions of
+   every port - which part, which face, which cell - and a port whose part is
+   off the grid or whose cell is gone is skipped by both for the same reason. */
+function eachPort(fn){
+  for(const pid in D.ports){
+    const port=D.ports[pid], p=LAY.parts.find(q=>q.id===port.p); if(!p) continue;
+    const f=portFaceOf(pid), c=portCell(pid); if(!f||!c) continue;
+    fn(pid,p,f,c);
+  }
+}
 function drawPortMarks(){
   // ONE WORD PER (part, face), never one per port sharing it: two ports on one
   // face carrying the same side would otherwise stack an identical label on
   // top of itself. The mark and the press are still per PORT.
   const seenWord={};
   const owner=pipeMap().cellOwner;
-  for(const pid in D.ports){
-    const port=D.ports[pid], p=LAY.parts.find(q=>q.id===port.p); if(!p) continue;
-    const f=portFaceOf(pid), c=portCell(pid); if(!f||!c) continue;
+  eachPort((pid,p,f,c)=>{
     const [x,y]=cellPos(c[0],c[1]), bx=x-PORTG/2, by=y-PORTG/2;
     const IN=portPath(p,f), col=IN ? (IN.a===f?C.portA:C.portB) : C.metal;
     // A PIPED PORT'S NOZZLE IS DRAWN BY THE RUN (pipeNozzles()), landing on
@@ -1218,7 +1281,62 @@ function drawPortMarks(){
     TIP(bx,by,PORTG,PORTG, (longWord?longWord+" - ":"")+nm,
       (piped? "A pipe is landed on it. " : "Nothing is piped to this port yet. ")+
       "Click to take it away."+(IN?" Which side of "+nm+" it is on is the FACE it stands beside, so move it by taking it away and placing it on the other face.":""));
-  }
+  });
+}
+/* ══ THE ISOLATION VALVE IN EVERY PORT, ON THE RUNNING PLANT ══
+   The control room's half of the same walk. Nothing is drawn for a port that
+   is open, deliberately: every nozzle on the board has one of these, so
+   marking them all would be marking nothing, and what the eye has to find is
+   the handful that are SHUT - and a SHUT PORT IS A RED PORT. The valve is a
+   fact about the nozzle, so it is said by colouring the nozzle (portColOf(),
+   above), not by parking a second glyph beside it: a mark that is not the port
+   is a mark you then have to associate with one.
+   ══ THE RING IS THE JOINT'S OWN CASING ══
+   nozzleRect(), the same four numbers drawNozzle() paints its dark casing on -
+   not the port's cell, and not arithmetic on CELL. A port is DRAWN on the
+   shell, so the cell it is filed under is a half cell away from the picture,
+   and a row on this grid is not CELL tall either. The ring lands exactly on
+   that casing: the mark is the port lighting up, not a box drawn near one.
+   The BORE is the run's, so a fat joint gets a ring its own size.
+   THE HIT BOX IS BIGGER THAN THE MARK, and that is deliberate - a joint is
+   about ten pixels across and a target that small is a fight, so the press is
+   taken PORT_RING clear of it all round. This is the one place on the mimic
+   where the two differ, and it errs the only way it may: everything the mark
+   covers is pressable.
+   The ring is AMBER, the board's one selection colour, so pointing at a port
+   reads the same as pointing at anything else; and it is DEFERRED to the last
+   pass (portRing, below) because a joint sits on a shell with pipework, value
+   tags and layer annotations landing all around it - drawn in place, the mark
+   went under the next thing painted.
+   A press goes through act("portShut") like any other input - see uiDown(). */
+const PORT_RING=2;              // how far past the joint a press still counts
+/* ONE PORT IS HOVERED AT A TIME, so this is a rect and not a list. Set here,
+   spent by drawPlant() after every tag has gone down. */
+let portRing=null;
+function drawPortValves(L){
+  portRing=null;
+  // the bore each joint was drawn at, off the runs that land on it - the same
+  // figure pipeNozzles() hands drawNozzle(), so the ring cannot be a size the
+  // joint is not. A port with nothing piped to it drew itself at bore 1.
+  const bore={};
+  for(const r of pipeNetwork()){ const b=runBore(r);
+    bore[r.pa]=Math.max(bore[r.pa]||0,b); bore[r.pb]=Math.max(bore[r.pb]||0,b); }
+  eachPort((pid,p,f,c)=>{
+    const shut=!portOpen(L,pid);
+    const col=portColOf(pid,L);
+    const [nx,ny]=portPos(pid);
+    const nr=nozzleRect(nx,ny,f==="l"||f==="r",bore[pid]||1);
+    const r={x:nr.x-PORT_RING, y:nr.y-PORT_RING,
+             w:nr.w+2*PORT_RING, h:nr.h+2*PORT_RING};
+    const wd=push({x:r.x,y:r.y,w:r.w,h:r.h,type:"portv",pid});
+    if(hov(wd)) portRing=nr;
+    /* A port nothing is piped to has no run to draw its joint (pipeNozzles()),
+       so it draws its own - the same mark, in the same colour, which is now
+       red. Piped or not, a shut valve looks the same. */
+    if(shut) drawNozzle(nx,ny,f==="l"||f==="r",bore[pid]||1,col);
+    TIP(r.x,r.y,r.w,r.h, portLabel(pid)+"  [ "+(shut?"SHUT":"OPEN")+" ]",
+      "The isolation valve in this nozzle. Every port has one, it costs nothing, and it commissions open. Shutting it takes the run landed here out of the network entirely - which is how a leak is cut out of a live plant, and equally how a loop is starved by mistake. Click to work it.");
+  });
 }
 /* ══ THE RUN NOW BEING DRAGGED ══
    The cells the release would stamp, dashed - a proposal, not a pipe yet, the
@@ -2449,7 +2567,13 @@ function drawPlant(y0,L,vh,vx,vw){
     // `fit &&`, or a NOT FITTED tag would draw a REPAIR key across itself -
     // the renderer should not rely on combatHit() never targeting one
     const dmgd = L && fit && L.dmgParts.includes(p.id);
-    const ink = !fit?"#3c4c47" : dmgd?C.red : on?C.amber : (hov(wd)||drag)?C.bright : C.metal;
+    const hovd = hov(wd)||drag;
+    const ink = !fit?"#3c4c47" : dmgd?C.red : on?C.amber : hovd?C.bright : C.metal;
+    /* WHAT THIS MACHINE IS STOOD DOWN AS, in one word, or null. It goes in the
+       NAME, because a defeated valve is a fact about the machine that has to
+       survive its own handles being put away - see the hover gate on the
+       fitting strip below. */
+    const stw = live ? partStateWord(p) : null;
     /* ONE GROUND FOR EVERY BOX ON THE BOARD, and no second surface on top of
        it: the plinth is gone, because there is no second OBJECT. A control
        strip is part of the machine, so it stands on the machine's own panel. */
@@ -2463,18 +2587,13 @@ function drawPlant(y0,L,vh,vx,vw){
     if(on) fillRect(x,y,w,h,"rgba(240,168,48,.07)");
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
     if(fit) drawSym(p,x,y+nameH,w,h-sh-nameH,ink,L);
-    if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); badge(x+w-9,y+12,C.red);
+    if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); cornerTab(x+w,y,9,C.red);
       // a wrecked machine that is still energised. It dies down as the repair
       // party gets on top of it, so the effect tracks the work, not just the hit
       fxSparks(x+4,y+4,w-8,h-sh-8,fxEase(p.id+":dmg",L.repair&&L.repair.id===p.id?
         1-clamp(L.repair.t/L.repair.need,0,1):1),C.red);
-      const symH=h-sh;              // centred on the SYMBOL, not the whole component
-      const busy=L.repair&&L.repair.id===p.id, kw=Math.min(w-16,86), kx=x+(w-kw)/2;
-      button(kx,y+symH/2-9,kw,BTN_H,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
-             :p.access?"REPAIR":"NO ACCESS",
-        {sunk:1,on:busy,danger:!p.access,size:7,sp:.8,fn:()=>act("repair",p.id)});
     }
-    else if(!p.access && p.grp!=="shield" && fit) badge(x+w-9,y+12,C.amber);
+    else if(!p.access && p.grp!=="shield" && fit) cornerTab(x+w,y,9,C.amber);
     if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
     if(!L && fit && !dmgd){ const wc=warnFor(p.id); if(wc) dot(x+6,y+8,8,wc); }   // bench has no alarm lamp
     /* A PART IN LIMBO KEEPS THE MARK THE DROP PREVIEW GAVE IT. Same dash, same
@@ -2492,17 +2611,34 @@ function drawPlant(y0,L,vh,vx,vw){
     // clipTxt with the ladder off, not fitTxt: a narrow machine used to get a
     // 6px name beside its neighbour's 6.5px one, which reads as a different
     // kind of label rather than as a shorter box
-    if(fit && nameH) clipTxt(partName(p),x+w/2,y+nameH-3,w-8,
-      {size:6.5,sp:.4,step:false,align:"center",color:on?C.amber:C.ink2});
-    const vb = v!=null ? valueBase(p,x,y,w,h,sh,nameH) : null;
+    const nmw=partName(p)+(stw?"  "+stw:"");
+    if(fit && nameH) clipTxt(nmw,x+w/2,y+nameH-3,w-8,
+      {size:6.5,sp:.4,step:false,align:"center",color:stw?C.amber:(on?C.amber:C.ink2)});
+    // asked whether or not there is a value to print: the PLACE is a property
+    // of the machine, and the REPAIR key below stands in it too
+    const vb = fit ? valueBase(p,x,y,w,h,sh,nameH) : null;
+    /* WHERE THE REPAIR KEY STANDS: exactly where this machine's own value tag
+       does, in the last pass, so it covers whatever is drawn over the box
+       rather than being covered by it - a key you cannot press is worse than no
+       key. A machine with no value tag of its own (the rod drives) has no
+       anchor either, so the middle of its symbol is the fallback. */
+    const rb = vb!=null ? vb : y+nameH+(h-sh-nameH)/2+3;
+    const busy = dmgd && L.repair && L.repair.id===p.id;
+    // ON HOVER, or while a party is on it: the progress figure is the only
+    // report of a job in hand that stands on the machine itself
+    const showRep = dmgd && (hovd||busy);
     tags.push(()=>{
-      if(!nameH) tag(partName(p),x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(on?C.amber:C.ink2));
+      if(!nameH) tag(nmw,x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(stw?C.amber:(on?C.amber:C.ink2)));
       /* THE VALUE WEARS ITS MACHINE'S WORST ALARM, and grey when there is
          nothing wrong. Not a second opinion: annLamp() is the SAME table and
          the SAME predicate as the lamp already drawn on this box, so the number
          and the lamp cannot say different things about one component. */
-      if(v!=null && vb!=null)
+      if(v!=null && vb!=null && !showRep)
         tag(v,x+w/2,vb,8,0,dmgd?C.red:(annLamp(p.id)||(on?C.amber:C.ink2)));
+      if(showRep){ const kw=Math.min(w-8,86), kx=x+(w-kw)/2;
+        button(kx,rb-11,kw,BTN_H,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
+               :p.access?"REPAIR":"NO ACCESS",
+          {sunk:1,on:busy,danger:!p.access,size:7,sp:.8,fn:()=>act("repair",p.id)}); }
       if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
     });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
@@ -2512,21 +2648,42 @@ function drawPlant(y0,L,vh,vx,vw){
     /* A fitting's strip hangs BELOW its one cell, centred on it, because the
        cell has no room for it; every other machine declares the cells its own
        controls need and stands them inside its own box. */
+    /* ...AND IT IS PUT AWAY UNTIL THE HAND IS ON IT. A valve's handles hang in
+       the pipe margin, outside its own box, so on a dense grid a dozen of them
+       were a permanent thicket of keys standing over the pipework they belong
+       to. What the valve IS stood down as never depended on them: that is in
+       the name (stw, above), which is always drawn. Selection holds it open
+       too, so a valve worked from the rail keeps its strip. */
     if(ctl && p.role==="fitting"){
       const fw=FITSTRIP_W, fx=x+w/2-fw/2;
-      ctl.forEach((row,i)=>ctlStrip(row,fx,y+h+3+i*CTL_H,fw,BTN_H));
+      const sr={x:fx,y:y+h,w:fw,h:3+ctl.length*CTL_H,v:1,host:ui.host};
+      if(hovd||on||hovHold(sr)||sldIn(sr))
+        ctl.forEach((row,i)=>ctlStrip(row,fx,y+h+3+i*CTL_H,fw,BTN_H));
     }
     else if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+4,sy+i*CTL_H+1,w-8,BTN_H));
     // ...and the arming switch is a starting position too - that is the RPS
     // bypass case: commission with protection already defeated if you mean to.
     if(byk && fit) bypRow(byk,x+4,y+h-STRIP_PAD-bh+1,w-8,BTN_H,!live);
   }
-  pipeNozzles(NET);             // the joint, over the shell it lands on
+  pipeNozzles(NET,L);           // the joint, over the shell it lands on
+  /* ...and the valves in those joints, AFTER the component loop. A joint
+     STRADDLES a shell - half of it stands on the machine - so pushed before
+     the machines, the machine's own box took every press landing on the inner
+     half and a port could only be worked by aiming at its outer half. ORDER IS
+     PRIORITY (see below): the port is the smaller, more specific target, so it
+     goes last. */
+  if(L) drawPortValves(L);
   /* the break plumes go down BEFORE the layer pass, because a plume is behind
      a dial and not over it - and because an effect is not an instrument: the
      FLOW METERS switch must not be able to switch off the picture of a hole. */
   if(L) pipeBreaks(L);
   layerPass("over",L);          // instruments and annotations, on top of the machines
+  /* THE PRESSURIZER'S DIAL IS NOT A LAYER. It rode the FLOW METERS switch, and
+     that switch is about the three readings a RUN carries; this gauge is not on
+     a run at all, and it is the only instrument plant pressure has - turning
+     the pipe labels off left the one number the whole plant turns on with
+     nothing standing in for it. Same seam, no switch. */
+  if(L) pipeVessel(L);
   /* ORDER IS PRIORITY: the hit test takes the LAST widget pushed. The tap
      the tap handle that used to ride the pointer here is gone with the tap
      shape: a fitting is placed in a CELL now, so nothing has to be aimed at a
@@ -2539,6 +2696,18 @@ function drawPlant(y0,L,vh,vx,vw){
   pipeFitMarks(L,NET);
   if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
   for(const t of tags) t();     // every name and value, over the pipework
+  // ...and the hovered port's ring last of all: it marks a joint the pipework,
+  // the tags and the layers all draw across (drawPortValves(), above)
+  /* strokeRect and not frame(): frame() rounds the rect and then takes a pixel
+     off the width, so its right and bottom edges sit a pixel INSIDE the box it
+     was handed and its left and top do not. On a box the size of a room that is
+     invisible; on a 2px gap round a joint it is half the gap, and the ring came
+     out lopsided. Here the inset is half a line width on every side, so the
+     four gaps are equal by construction. */
+  if(portRing){ const r=portRing;
+    ctx.strokeStyle=C.amber; ctx.lineWidth=1;
+    ctx.strokeRect(r.x+.5,r.y+.5,r.w-1,r.h-1);
+    portRing=null; }
   viewOn=false; ctx.restore();
 
   return VIEW.y+VIEW.h;
