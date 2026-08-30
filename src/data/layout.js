@@ -352,6 +352,13 @@ const PART_MASS={catcher:66, vent:34};
    a role-level charge would hand out every unit after the first for nothing,
    which is the same trap widening a capacity slider's span had. */
 const partMass=role=>LAY.parts.filter(p=>p.role===role).length*(PART_MASS[role]||0);
+/* WHERE THIS BOX GIVES UP, K - the ONE door, because a radiator's coating
+   scales it per instance and two readers asking ROLE.tsurv directly would
+   disagree with the panel that sold the coating. null is structure: a shield
+   and a containment wall do not fail this way. */
+const partTsurv=p=>{ const l=ROLE[p.role]&&ROLE[p.role].tsurv;
+  if(!l) return null;
+  return p.role==="radiator" ? l*radCoatOf(p.id).tsurvK : l; };
 /* ══════════ LOOP MEMBERSHIP COMES OFF THE GRAPH ══════════
    p.loop used to be a STORED field - set once, off nearestLoop() (a
    Euclidean-distance guess) for a placed spare and off a literal index for a
@@ -699,6 +706,68 @@ const ihxCap=size=>0.25+1.50*size;
 const totalIhxMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="ihx") m+=ihxCap(ihxSizeOf(p.id))*IHX_MASS;
   return m; };
+/* ══════════ THE RADIATOR ══════════
+   This is a space game: there is nothing to reject into, so waste heat leaves
+   the ship as photons and nothing else. The panel is a pot (s.radT, step.js)
+   and a footprint, in the shield/catcher/vent idiom - no ports, no run, no
+   network presence.
+   IT MUST SEE SPACE. A panel with no perimeter cell facing the skin radiates
+   exactly nothing and still warms the room, and the predicate is hullCell(),
+   the same one a safety valve's stack discharge asks. */
+/* t per m^2 at massK 1, and it is priced against RAD_AREA_CELL rather than
+   off a real panel: the area is a scale lie of order 10^5, so a real kg/m^2
+   would charge the ship ten thousand times its own mass. The stock pair comes
+   out at 122 t, which is the weight of one more condenser. */
+const RAD_MASS_M2=6.5e-5;
+/* Emissivity is real; the mass and survival columns are what make each row a
+   trade rather than a strictly better coating. */
+const RADCOAT=[
+  ["BARE METAL",              {emis:0.30, massK:0.85, tsurvK:1.15}],
+  ["WHITE PAINT",             {emis:0.85, massK:1.00, tsurvK:1.00}],
+  ["HIGH-EMISSIVITY CERAMIC", {emis:0.94, massK:1.35, tsurvK:0.80}],
+];
+const radIds=()=>LAY.parts.filter(p=>p.role==="radiator").map(p=>p.id);
+const radCount=()=>radIds().length;
+const radSizeOf=id=>D.radSize[id]??0.5;
+const radCap=size=>0.25+1.50*size;     // the pumpCap()/ihxCap() span
+const radCoatOf=id=>RADCOAT[D.radCoat[id]??1][1];
+/* THE ONE FUDGE IN THIS FEATURE, and it is bought balance in graceK's sense.
+   A grid cell is MPC^2 = 0.218 m^2; rejecting ~690 MW at a playable panel
+   temperature needs of order 10^6 m^2, so this lies by about 10^5. The ship's
+   scale already does (a 60-cell hull is 28 m and holds a 1 GW reactor) - this
+   is the same lie, not a new one. Set once off the stock plant's rated
+   rejection at RAD_TDES; do NOT tune it afterwards to recover output. */
+const RAD_AREA_CELL=62468;             // m^2 of panel one grid cell is worth
+/* Does this panel see space at all - at least one cell of its own footprint
+   with an outward neighbour on the skin. hullCell() answers true off-grid, so
+   a panel sitting ON the hull ring passes on its own cells. */
+const radLive=id=>{ const p=partOf(id); if(!p) return false;
+  for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
+    for(const f in DIRV){ const d=DIRV[f];
+      if(hullCell(X+d[0],Y+d[1])) return true; }
+  return false; };
+const radArea=id=>{ const p=partOf(id);
+  return (p && radLive(id)) ? radCap(radSizeOf(id))*p.w*p.h*RAD_AREA_CELL : 0; };
+/* Mass rides the CAPACITY and the coating, never the slider position - the
+   rule every other capacity slider on this plant already follows. A blind
+   panel still weighs what it weighs. */
+/* WHAT THE PANELS CAN SHED PER KELVIN^4 - one expression, because the tick,
+   the bench readout and the bench warning all price the same fleet and a
+   second copy would drift. W/K^4. */
+const totalRadEA=()=>{ let k=0;
+  for(const p of LAY.parts) if(p.role==="radiator")
+    k+=radCoatOf(p.id).emis*radArea(p.id);
+  return k*SIGMA; };
+/* WHERE THE PANELS WOULD SIT at a stated rejection, kW - the number the bench
+   needs to size a radiator without commissioning anything. Infinity when
+   there is no panel that can see space, which is the honest answer. */
+const radTAt=qkW=>{ const k=totalRadEA();
+  return k>0 ? Math.pow(qkW*1000/k + Math.pow(T_SPACE,4), 0.25) : Infinity; };
+const totalRadMass=()=>{ let m=0;
+  for(const p of LAY.parts) if(p.role==="radiator")
+    m+=radCap(radSizeOf(p.id))*p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(p.id).massK;
+  return m; };
+
 /* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
    exchanger feeds. Both are the LOOP, asked of loopMap() and never of a name.
    No exchanger and the generator is heated by the core's own coolant, which is
@@ -1240,13 +1309,21 @@ const ROLE = {
      shield/catcher idiom: a footprint and an effect, no network presence at
      all, no ports and no run. What it does is one term in the room's own
      source pass (roomStep(), src/data/room.js) - a sink at the cells it
-     stands in, against the sea outside. It sits on the MAIN BOARD, so it is
+     stands in, against the hull outside. It sits on the MAIN BOARD, so it is
      worth exactly nothing in a blackout, which is the same argument condK()'s
      circulating water makes and the reason the room is a survival problem
      rather than a purchase. It has bearings and a motor, so it has a tsurv of
      its own: the machine that keeps the room cool is in the room. */
   vent:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:400},
+  /* THE ONLY WAY HEAT LEAVES THIS SHIP. A pot on the hull, in the same idiom:
+     a footprint and an effect, nothing to plumb. thermal:"sink" because it IS
+     a surface at s.radT (partTemp(), room.js), so an inboard panel rejects
+     nothing and cooks the compartment instead. tsurv is scaled per instance
+     by the coating (RADCOAT), which is why the ceramic row is the fragile
+     one. */
+  radiator:{internal:null, fixed:null, fold:null, mu:0.35, sgtr:false,
+          ports:{}, thermal:"sink", tsurv:520},
   /* ONE ROLE FOR EVERY FITTING. There is no kind: a tee, a branch throttle
      and a relief valve differ by `mode` on the instance (D.fittings), never
      by role - the same move that turned five tank-shaped things into one
@@ -1318,6 +1395,11 @@ function buildLayout(){
   for(const p of fittingParts()) A.push(p);
   add("bkp","BACKUP PWR",3,5,56,11,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.","bkp");
+  /* THE SHIP'S ONLY HEAT SINK, on the bottom hull beside the condenser. Two
+     of them rather than one because a radiator is what gets shot, and the
+     hull ring is already ten times more likely to be hit. */
+  for(let i=0;i<2;i++) add("rad"+i,"RADIATOR "+(i+1),5,3,44+6*i,30,"#b8c4cf","sec",
+    "A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. Select it for area and coating.","radiator");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",3,3,18+3*i,30,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
   for(const p of placedParts) A.push(p);
