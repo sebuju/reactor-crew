@@ -28,6 +28,17 @@ function fxHash(i){
   h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
+/* A STOPPED ROTOR STANDS WHERE IT STOPPED, and not at zero: the shaft angles on
+   this plant are ONE integral shared by every machine of a kind (s.spin,
+   s.spinT), so freezing them all at 0 would park a row of wrecked pumps in
+   perfect formation and read as deliberate. A hash of the id is a fixed,
+   arbitrary angle per machine - the same one every frame, and on a headless
+   draw too. Returns turns, 0..1. */
+function fxIdPhase(id){
+  let h=0;
+  for(let i=0;i<id.length;i++) h=Math.imul(h^id.charCodeAt(i),0x01000193);
+  return fxHash(h>>>0);
+}
 /* ══ THE CLOCK IS THE PLANT'S, NOT THE WALL'S ══
    Steam off a relief valve is the plant doing something, so it has to stop when
    the plant stops and run sixteen times over at 16x - a wall clock did neither,
