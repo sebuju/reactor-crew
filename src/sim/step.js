@@ -456,18 +456,24 @@ const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
    An ISOLATED condenser, a FLOODED one and an OVERLOADED one are then one
    behaviour - rejection down, pressure up, enthalpy drop down, steam backs up,
    the shell pressurises - with no factor naming any of the three.
-   T_CW is the cooling water it draws on. COND_P0 stays as the FLOOR: it is the
-   best vacuum the plant can pull, and a condenser with margin sits on it, which
-   is what keeps a healthy plant bit-identical to the constant this replaces.
+   RAD_TDES is the sink it was DESIGNED for. COND_P0 stays as the FLOOR: it is
+   the best vacuum the plant can pull, and a condenser with margin sits on it.
    s.condT is fed forward, the same lag s.cavP and s.sgShare carry: what the
    condenser is rejecting comes out of this tick's steam balance, so it cannot
    also be an input to it. */
-const T_CW=293;           // K, circulating water inlet
+/* K - THE CANONICAL REFERENCE SINK, and it anchors P.hTurb, P.cwC, P.condUA
+   and condPDes() and nothing else. It is NOT the sink the plant has - that is
+   s.radT, off the panels actually drawn. Point these anchors at s.radT and a
+   terrible radiator would move the design point with it and cost nothing.
+   Derived backwards from a real turbine figure, never chosen to preserve
+   output: tsatSec(TURB_TRIP_P) is 338.6 K, less an 18.6 K working margin puts
+   the condenser at 320 K at rated, less COND_DT0 puts the radiator here. */
+const RAD_TDES=307;
 /* ── AND THE CIRCULATING WATER IS A MACHINE, NOT A RESERVOIR ──
    UA against a constant is the m-dot -> infinity limit of the real exchanger:
-   with a finite circulating water flow Q = mdot*CP_W*eps*(condT - T_CW) and
+   with a finite circulating water flow Q = mdot*CP_W*eps*(condT - RAD_TDES) and
    eps = 1 - e^(-UA/(mdot*CP_W)), and letting the flow grow gives UA*(condT -
-   T_CW) back exactly. So the old expression was not wrong, it was the limiting
+   RAD_TDES) back exactly. So the old expression was not wrong, it was the limiting
    case - with no outlet temperature, no pumps and no way to fail.
    CW_RISE is the design temperature rise across a real surface condenser's
    circulating water, and it is the ONE new number: the flow is derived from it
@@ -489,7 +495,7 @@ const COND_DT0=13;
 /* The backpressure the plant was DESIGNED for - the design point, not the
    vacuum floor. P.hTurb is anchored here, so a turbine at its design point
    does the work P.eff prices and every departure is the condenser's doing. */
-const condPDes = () => psatSec(T_CW + COND_DT0);
+const condPDes = () => psatSec(RAD_TDES + COND_DT0);
 /* How much condenser there actually IS right now. Bought capacity, minus what
    is broken, minus tubes drowned in their own condensate. The circulating
    water has LEFT this expression - it is a flow now (cwK, above), on the other
@@ -529,14 +535,36 @@ const condP = s => Math.max(exhOpen(s) ? P.Pcont : 0, s.condLost ? COND_ATM : 0,
 const cwC = s => P.cwC*cwK(s);
 const condRej = s => { const c = cwC(s);
   if(!(c>0)) return 0;
-  return Math.max(0, c*(1-Math.exp(-P.condUA*condK(s)/c))*((s.condT||T_CW)-T_CW)); };
+  const cold = s.radT===undefined ? RAD_TDES : s.radT;
+  return Math.max(0, c*(1-Math.exp(-P.condUA*condK(s)/c))*((s.condT||cold)-cold)); };
 /* WHERE THE HEAT ACTUALLY WENT: the temperature the circulating water leaves
    at. A readout, and the one number that says the sink is finite. */
-const cwOut = s => { const c = cwC(s);
-  return c>0 ? T_CW + condRej(s)/c : (s.condT||T_CW); };
+const cwOut = s => { const c = cwC(s), cold = s.radT===undefined ? RAD_TDES : s.radT;
+  return c>0 ? cold + condRej(s)/c : (s.condT||cold); };
 /* Water and metal in the condenser, kJ/K. The hotwell it drains into is the
    yardstick the plant already sizes it by. */
 const condCap_ = () => hotMass()*CP_W + hotMass()*0.6*CP_STEEL;
+/* ══ THE SINK IS A RADIATOR, AND IT IS THE ONLY WAY HEAT LEAVES THIS SHIP ══
+   Two pots in series now: s.sgTBy -> s.condT -> s.radT -> space. Stefan-
+   Boltzmann exact, because the T^4 IS the gameplay: rejection goes as the
+   fourth power, so s.radT goes as Q^(1/4) and the overload a plant can take
+   is (ceiling/RAD_TDES)^4 - a number nobody types and panel area buys.
+   Fed forward one tick, the same lag s.condT and s.coreDT carry. */
+const SIGMA=5.670374419e-8;            // W/m^2/K^4, published
+const T_SPACE=3;                       // K - and (T^4 - T_SPACE^4) is T^4 to 12 digits
+/* Summed PER INSTANCE, so two panels with different coatings are two answers.
+   A dead or a blind panel contributes exactly zero: radArea() already returns
+   0 for one that cannot see space. kW, like every other rate in this file. */
+const radRejOf = (s,id) => (s.dmgParts.indexOf(id)>=0) ? 0
+  : Math.max(0, radCoatOf(id).emis*SIGMA*radArea(id)
+      * (Math.pow(s.radT,4) - Math.pow(T_SPACE,4))/1000);
+const radRej = s => { let w=0;
+  for(const p of LAY.parts) if(p.role==="radiator") w += radRejOf(s,p.id);
+  return w; };
+/* The transport loop's own water and metal, kJ/K - condCap_()'s idiom, off the
+   same yardstick, because a second mass figure would be a second thing to
+   drift. */
+const radCap_ = () => hotMass()*CP_W + hotMass()*0.6*CP_STEEL;
 /* THE ENTHALPY THE TURBINE ACTUALLY GETS, off the pressure ratio across it -
    the two pressures being SOLVED now rather than pinned. P.hTurb is fitted at
    the same anchor as everything else on this side: at design shell pressure
@@ -628,6 +656,9 @@ const DMGFX={
     hit:s=>s.load=s.loadDem=0.05, fix:null},
   feed:{msg:"FEED PUMP HIT",
     why:"Feedwater down to a quarter. The steam generator will boil dry if this is not fixed.",
+    hit:null, fix:null},
+  radiator:{msg:"RADIATOR PANEL HIT",
+    why:"That panel sheds nothing now. The ship's heat sink is whatever is left of the others, so the condenser climbs and the turbine trips on backpressure.",
     hit:null, fix:null},
   ctrl:{msg:"INSTRUMENT CABINET HIT",
     why:"Sensor channels lost. Every reading on the panel is now far less trustworthy.",
@@ -1585,6 +1616,9 @@ function resetPlant(){
         saturation pressure of. Starts on the design vacuum, which is where the
         balance below puts it on a healthy plant anyway. */
      condT:0,
+     // the radiator panel's own temperature, K - the sink the plant HAS, as
+     // against RAD_TDES, the sink its machinery was designed for
+     radT:0,
      /* last tick's void and inventory, so the two halves of the level that are
         still correlations can be differentiated into rates - the expansion
         half is the solve's own surge flow and needs no memory of its own */
@@ -1733,15 +1767,20 @@ function resetPlant(){
         that arrived has to still be here next tick, and a field with no
         memory leaves nothing for a cooling machine to remove. See
         src/data/room.js for why that difference is the whole design.
-        The room starts at ambient, which is the sea the plant sits in. */
-     roomT:new Float64Array(GW*GH).fill(T_CW), roomH2:new Float64Array(GW*GH),
+        The room starts at ambient, which is the hull the plant sits in. */
+     roomT:new Float64Array(GW*GH).fill(T_HULL), roomH2:new Float64Array(GW*GH),
      /* how far each machine is through being cooked by its own cell, 0..1 -
         MONOTONIC while it is over its limit, and cleared when a party fixes
         it, or a repair in a room still cooking would be undone the same tick
         it finished. Keyed by part id, refilled never rebuilt. */
      roomHurt:{},
+     /* THE SKIN OF EACH MACHINE, K, and what its contents are giving up
+        through it, kW. Seeded by roomStep() off partTemp() on the first tick
+        rather than here: what a machine contains is not known until the pots
+        exist. Keyed by part id, refilled never rebuilt. */
+     partT:{}, skinQ:{},
      // readouts: the hottest cell, where it is, and what burned this tick
-     roomMax:T_CW, roomMaxAt:-1, roomBurn:0,
+     roomMax:T_HULL, roomMaxAt:-1, roomBurn:0,
      spin:0,spinT:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
   /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
      new run picks a seed, and from there every die comes off s.rng, so the run
@@ -1767,7 +1806,7 @@ function resetPlant(){
      caused, the same argument s.coreDT's own seed makes. */
   for(const id of ihxIds())
     S.ihxTBy[id] = S.Tavg - (S.Tavg - tsatSec(secPTarget(S,ihxSgs(id)[0])))/(1+IHX_UA);
-  S.condT = T_CW + COND_DT0;
+  S.radT = RAD_TDES; S.condT = RAD_TDES + COND_DT0;
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
@@ -2207,7 +2246,7 @@ function step(dt){
               * Math.max(0, s.Tavg - ihxTemp(s,id));
     let qOut = 0; for(const g of served) qOut += sgQBy[g]||0;
     if(s.ihxTBy[id]===undefined) s.ihxTBy[id]=s.Tavg;
-    s.ihxTBy[id] = clamp(s.ihxTBy[id] + (qIn-qOut)/ihxHeatCap(id)*dt, P.Tmin, P.Tmax);
+    s.ihxTBy[id] = clamp(s.ihxTBy[id] + (qIn-qOut-skinQOf(s,id))/ihxHeatCap(id)*dt, P.Tmin, P.Tmax);
     s.ihxQBy[id] = qIn; qTot += qIn;
   }
   const removal = qTot/(P.rated*1000);
@@ -2219,7 +2258,12 @@ function step(dt){
   HEATBAL.heat=heat; HEATBAL.removal=removal;
   for(const id in HEATBAL.sgQBy) if(!(id in sgQBy)) delete HEATBAL.sgQBy[id];
   for(const id in sgQBy) HEATBAL.sgQBy[id]=sgQBy[id];
-  s.dTavg = (heat-removal)*P.rated*1000/(loopKg()*CP_W)/P.graceK;   // K/s
+  /* AND WHAT THE VESSEL GIVES THE ROOM. The compartment used to be heated by
+     the loop for nothing; the skin books it (skinQOf, room.js) and the loop
+     pays it here. One tick old, the s.coreDT idiom - roomStep() runs after
+     this. At rest it is tens of kilowatts against a gigawatt. */
+  s.dTavg = (heat-removal)*P.rated*1000/(loopKg()*CP_W)/P.graceK
+          - skinQRole(s,"core")/(loopKg()*CP_W);                    // K/s
   HEATBAL.dTavg=s.dTavg;
   s.Tavg = clamp(s.Tavg + s.dTavg*dt, P.Tmin, P.Tmax);
 
@@ -2761,7 +2805,7 @@ function step(dt){
        and no heat sink at all a few seconds later, once it is dry. */
     s.sgTBy[id] = s.sgBurst[id] ? tsatSec(P.Pcont)
       : Math.max(T_FEED*0.5,
-          s.sgTBy[id] + ((sgQBy[id]||0) - outKg*H_FG - qFeed)/C*dt);
+          s.sgTBy[id] + ((sgQBy[id]||0) - outKg*H_FG - qFeed - skinQOf(s,id))/C*dt);
     boiled += steamTo; fedTot += fed_; sgVented += vent;
     /* A ruptured generator on its safety valve is putting primary water in the
        sky. Charged at the SGTR scale already used below, times the share of
@@ -2791,10 +2835,17 @@ function step(dt){
      other way to fail, and the failure is a real one now. What bounds it
      instead is the machine - a relieved condenser is boiling at atmospheric,
      so it sits on that saturation temperature and no higher. */
-  { const qIn = Math.max(0, boiled*retK*H_FG - workKW);
-    s.condT += (qIn - condRej(s))/Math.max(1, condCap_())*dt;
-    s.condT = Math.max(s.condT, T_CW);
-    if(s.condLost) s.condT = Math.min(s.condT, tsatSec(COND_ATM)); }
+  { const qIn = Math.max(0, boiled*retK*H_FG - workKW), rej = condRej(s);
+    s.condT += (qIn - rej - skinQRole(s,"cond"))
+               /Math.max(1, condCap_())*dt;
+    s.condT = Math.max(s.condT, s.radT);
+    if(s.condLost) s.condT = Math.min(s.condT, tsatSec(COND_ATM));
+    /* NO RADIATOR SELF-LIMITS WITHOUT A CAP. Area 0 is radRej 0, so s.radT
+       climbs until it meets s.condT and condRej goes to 0 on its own
+       (condT - radT) term; the condenser then relieves and the chain stops
+       itself. Floored at T_SPACE - a panel cannot radiate below the sky. */
+    s.radT += (rej - radRej(s) - skinQRole(s,"radiator"))/Math.max(1, radCap_())*dt;
+    s.radT = Math.max(s.radT, T_SPACE); }
   /* WHICH POOL PAID FOR IT. The reserve's share is its own tanks' solved
      outflow - the same qTankBy every primary tank is already charged through,
      asked of the secondary ones for the first time - and the circuit paid for
@@ -2936,11 +2987,11 @@ function step(dt){
      temperature is not how they fail. */
   { const live={};
     for(const p of LAY.parts){
-      const lim = ROLE[p.role] && ROLE[p.role].tsurv;
+      const lim = partTsurv(p);
       if(!lim || !fitted(p)) continue;
       live[p.id]=1;
       if(s.dmgParts.indexOf(p.id) >= 0){ s.roomHurt[p.id]=0; continue; }
-      const over = clamp((roomAt(s,p)-lim)/ROOM_DMG_SPAN, 0, 1);
+      const over = clamp((partSkin(s,p)-lim)/ROOM_DMG_SPAN, 0, 1);
       if(over <= 0) continue;
       const h = (s.roomHurt[p.id]||0) + over*dt/ROOM_DMG_TAU;
       s.roomHurt[p.id] = h;
@@ -2953,8 +3004,9 @@ function step(dt){
          worker's own subset, and this line runs inside a scenario run. The
          same choice repairStart() makes, for the same reason. */
       logE("alarm","HEAT DAMAGE / "+fx.msg,
-        p.name+" has been cooked by the compartment it is standing in - "+
-        roomAt(s,p).toFixed(0)+" K against the "+lim+" K it was built for. "+fx.why+
+        p.name+" has been cooked by the compartment it is standing in - its own metal is at "+
+        partSkin(s,p).toFixed(0)+" K against the "+lim+" K it was built for, in air at "+
+        roomAt(s,p).toFixed(0)+" K. "+fx.why+
         "  Fixing it while the room is still this hot only buys the same seconds again.");
     }
     for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
@@ -3311,6 +3363,13 @@ const ANN=[
   "A machine somewhere on the plant is standing in air hotter than it was built for, and it is being cooked at a rate you can watch. Heat is a place: it comes off every hot surface, it comes in a flood out of anything venting steam into the room rather than into a tank, it collects where a compact layout gives it nowhere to go, and the only sink is the hull. Find what is putting heat in, or fit something that takes it out.","ctrl"],
  ["H2 FLAMMABLE","red",s=>roomH2Peak(s)>=H2_LFL,
   "Hydrogen off the cladding has escaped the primary with the steam and is now over 4% by volume somewhere in the compartment. Above 773 K it lights itself - no spark needed - and it burns at 120 MJ per kilogram into the room it is standing in. This is the Fukushima sequence.","ctrl"],
+ /* Appended, like every row above it. The panels ARE the heat sink out here,
+    so this tile is the one that says the chain has come apart at the far end
+    rather than in the plant. */
+ ["NO HEAT SINK","red",s=>!radIds().some(id=>radLive(id)&&s.dmgParts.indexOf(id)<0),
+  "Nothing on this ship is radiating. Every panel is destroyed, or walled in where it cannot see the skin, or there is no panel at all. Heat leaves this ship as light or it does not leave. The condenser will climb until it loses vacuum and the turbine trips, and after that the generators go to their safety valves.","cond"],
+ ["PANEL OVERTEMP","amber",s=>s.radT>tsatSec(TURB_TRIP_P)-COND_DT0,
+  "The radiator is running hot enough that the condenser behind it is close to the pressure the turbine will not exhaust against. Rejection goes as the fourth power of panel temperature, so the last few kelvin cost far more than the first: cut reactor power, or accept the trip.","cond"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
   AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn,
