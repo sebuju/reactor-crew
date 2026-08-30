@@ -89,16 +89,18 @@ function roomH2Layer(data,L){
   }
 }
 
-/* what THIS machine is standing in, against what THIS machine was built for -
-   the triage number, and the reason the layer sits at the "over" seam: the
-   reading has to be ON the box it is about. A role with no tsurv is structure
+/* THIS MACHINE'S OWN METAL, against what THIS machine was built for - the
+   triage number, and the reason the layer sits at the "over" seam: the
+   reading has to be ON the box it is about. It is the skin (partSkin(),
+   room.js) and not the air, because the skin has mass: a box lags the room it
+   stands in, and it is the box that fails. A role with no tsurv is structure
    and prints nothing, which is the honest answer rather than a zero. */
 function roomPart(data,L){
   if(!L) return;
   for(const p of LAY.parts){
-    const lim=ROLE[p.role] && ROLE[p.role].tsurv;
+    const lim=partTsurv(p);
     if(!lim || !fitted(p)) continue;
-    const v=roomAt(L,p), {x,y,w}=prect(p);
+    const v=partSkin(L,p), {x,y,w}=prect(p);
     txt(v.toFixed(0)+"K", x+w/2, y+20,
       {size:8, align:"center", color:v>lim?C.red:v>lim-40?C.amber:C.ink2});
   }
