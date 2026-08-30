@@ -441,6 +441,20 @@ function drawSym(p,x,y,w,h,ink,L){
     if(L && mode==="relief")
       fxSteam(cx,y+4,W*.7,fxEase(id+":porv",
         clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
+  } else if(p.role==="vent"){
+    /* A FAN AND A DUCT OUT. It gets a branch of its own rather than falling
+       through to the hatched fallback, because that fallback is what a SHIELD
+       draws - and a machine that takes heat out of the room reading as a block
+       of lead is the one confusion worth a dozen lines. Dead in a blackout,
+       and it says so by standing still. */
+    shell(()=>ctx.rect(X,Y+2,W,Hh-4));
+    const r=Math.min(W,Hh-4)/2-3, a=L&&!L.blackout&&!L.dmgParts.includes(id)?fxClock()*2.2:0;
+    ctx.save(); ctx.translate(cx,y+h/2); ctx.rotate(a);
+    ctx.strokeStyle=ink; ctx.lineWidth=1.5;
+    for(let i=0;i<3;i++){ ctx.rotate(Math.PI*2/3);
+      ctx.beginPath(); ctx.moveTo(0,0); ctx.quadraticCurveTo(r*.7,-r*.4,r,0); ctx.stroke(); }
+    ctx.restore();
+    line(cx,y+2,cx,y-2,ink,1.5);
   } else if(p.role==="tank"){
     /* ONE BRANCH FOR EVERY TANK. What is LEFT in it, not a full tank forever -
        a tank that has finished injecting is empty, and drawing it brimming is
@@ -2059,7 +2073,7 @@ function readoutsFor(p,s){
     add("BACK PRESS",condP(s).toFixed(4)+" MPa",
       band(condP(s),0,TURB_TRIP_P,[[TURB_TRIP_P*0.5,C.cyan,"NORMAL"],
         [TURB_TRIP_P*0.8,C.amber,"HIGH"],[Infinity,C.red,"NEAR TRIP"]],
-        {dp:4,lim:TURB_TRIP_P}),
+        {dp:4,lim:[[TURB_TRIP_P,"TRIP"]]}),
       "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators. At "+TURB_TRIP_P+" MPa the stop valve shuts, and that trip does not reset. Cutting LOAD will not save it: the bypass sends that steam to this same condenser, and dumping rejects MORE heat than generating, because none of it leaves as electricity. Cut reactor power.");
     add("COND TEMP",s.condT.toFixed(0)+" K",null,
       "How hot the water in this machine actually is. It moves below the vacuum floor, where BACK PRESS cannot: a condenser with margin sits on that floor and this is what says how much margin. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");

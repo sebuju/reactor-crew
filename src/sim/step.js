@@ -1363,6 +1363,14 @@ const RELK={intact:0, burst:REL_GAP, oxid:REL_OX, molten:REL_MELT};
    that keeps the criterion from being a cliff - the same idiom CAV_SPAN has. */
 const P_FILL=2.2, T_FILL=300, BURST_R=(ROD_D/2-ROD_CLAD)/ROD_CLAD;
 const BURST_LO={sig:20,T:1477}, BURST_HI={sig:140,T:1030};
+/* ── AND THE SAME PAIR FOR A MACHINE STANDING IN A HOT ROOM ──
+   ROLE.tsurv (layout.js) is where each machine gives up; these two are the
+   RAMP and the TIME, the identical BURST_SPAN/BURST_TAU idiom, so a part
+   sitting exactly on its own limit cannot chatter in and out of the damage
+   list. Neither is a published figure and neither pretends to be: a real
+   answer is a thermal mass and a failure mechanism per component, which is a
+   plan of its own. */
+const ROOM_DMG_SPAN=60, ROOM_DMG_TAU=25;
 const BURST_TAU=8, BURST_SPAN=50;
 function burstT(dP){
   const sig=BURST_R*Math.max(dP,0);
@@ -1712,6 +1720,28 @@ function resetPlant(){
      /* every opening on the plant and what it is passing - refilled, never
         rebuilt, so a renderer holding it never reads a stale object */
      spillBy:{}, spillRate:0,
+     /* what each PRIMARY relief fitting is passing, % of loop inventory per
+        second - the secondary's own s.reliefSteam already existed and this is
+        its primary twin. A readout, refilled never rebuilt. It exists because
+        a stuck-open PORV venting into the room is the TMI-2 sequence and the
+        room had no way to ask what that valve was passing. */
+     reliefVent:{},
+     /* ══ THE ROOM ══
+        Two fields on S, in the s.nDmg/s.nOx/s.nMelt shape: kelvin of air in
+        every cell, and kilograms of hydrogen in every cell. They are STATE,
+        unlike the radiation field, which is solved fresh every tick - heat
+        that arrived has to still be here next tick, and a field with no
+        memory leaves nothing for a cooling machine to remove. See
+        src/data/room.js for why that difference is the whole design.
+        The room starts at ambient, which is the sea the plant sits in. */
+     roomT:new Float64Array(GW*GH).fill(T_CW), roomH2:new Float64Array(GW*GH),
+     /* how far each machine is through being cooked by its own cell, 0..1 -
+        MONOTONIC while it is over its limit, and cleared when a party fixes
+        it, or a repair in a room still cooking would be undone the same tick
+        it finished. Keyed by part id, refilled never rebuilt. */
+     roomHurt:{},
+     // readouts: the hottest cell, where it is, and what burned this tick
+     roomMax:T_CW, roomMaxAt:-1, roomBurn:0,
      spin:0,spinT:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
   /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
      new run picks a seed, and from there every die comes off s.rng, so the run
@@ -2108,21 +2138,22 @@ function step(dt){
      scrammed, which is what runs the loop a few degrees cooler after a trip.
      It asks the TANKS, not a system row - and reads identically on a stock
      plant, where exactly one tank carries a rule. */
-  /* ── THE BYPASS IS LIVE AT PART LOAD ON A STEAM PLANT ──
+  /* ── THE BYPASS IS LIVE AT PART LOAD ON EVERY PLANT ──
      A real turbine bypass is open whenever the governor is closing, not only
-     after a trip: BWR ~25 % of rated steam, PWR steam dump ~40 %. Waiting for
-     a scram left a load reduction with nowhere to put the surplus but a shell
-     safety valve, which discharges to atmosphere and takes the shell's water
-     with it. The proportional term and its P.bypass ceiling are unchanged, and
-     at rest the error is exactly 0 so nothing at full load moved.
+     after a trip: BWR ~25 % of rated steam, PWR steam dump ~40 %. The fix
+     above only ever landed for boiling plants: on a subcooled one dumpT was
+     computed and thrown away, measured sitting at 0.22 unread while the shell
+     safeties lifted and cooked the compartment. The rest-point error is
+     exactly 0 on all six presets, so the clamp gives a literal 0 at full load.
+     dumpP stays P.steam-gated - a PWR atmospheric dump has a pressure mode,
+     but that is a second machine with its own signal and band.
      THE RESERVE'S FLAT 0.08 STAYS SCRAM-GATED: it is proportional to nothing,
      and a permanent 8 % dump on every plant with a secondary reserve would be
      a machine nobody can see. */
-  const dumpLive = s.scrammed || P.steam;
   const dumpT = clamp((s.Tavg-Tprog)*DUMP_K,0,P.bypass);
   const dumpP = P.steam ? clamp(sgOverFrac(s)/sgBypBand(),0,1)*P.bypass : 0;
-  const dump = dumpLive ? Math.max(dumpT,dumpP)*(feedOK?1:.25)
-                        + ((s.scrammed && tankRuleAny(s,"secondary"))?0.08:0) : 0;
+  const dump = Math.max(dumpT,dumpP)*(feedOK?1:.25)
+             + ((s.scrammed && tankRuleAny(s,"secondary"))?0.08:0);
   const vNow = clamp(s.vf,0,1.5);
   /* ── HEAT CROSSES ON A TEMPERATURE DIFFERENCE ──
      `removal` was (s.load+dump)*feff: a DEMAND multiplied by penalty factors.
@@ -2252,8 +2283,10 @@ function step(dt){
        already uses: what has left the loop is loose in the compartment's
        air, not behind a wall the tank would have been. */
     let ventLoose = 0;
+    for(const fid in s.reliefVent) delete s.reliefVent[fid];
     for(const fid of reliefPriIds()){
       const set=reliefSet(fid);
+      s.reliefVent[fid]=0;
       if(!s.reliefOpen[fid] && porvLive(fid) && s.P > reliefRefP(fid)*set.lift){
         s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
         s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
@@ -2266,6 +2299,7 @@ function step(dt){
       const rate = Math.max(0, invRate((netOut.reliefBy && netOut.reliefBy[fid]) || 0));
       const q = rate*dt;
       vented += q;
+      s.reliefVent[fid]=rate;
       /* A fitting that reaches a TANK fills nothing HERE: that tank's own
          node carries the identical current, and the level loop below charges
          it off the solve (qTankBy). Adding it a second time here would
@@ -2869,6 +2903,62 @@ function step(dt){
        someone is standing, and nobody is standing anywhere. */
     s.repRate  = s.repair ? repairRadRate(f, s.repair.id) : 0; }
 
+  /* ── the room: heat is a place too ──
+     Beside the radiation block and for the same reason - both are fields over
+     the same grid, both are read by a layer, and both want this tick's
+     accident settled before they answer. The ONE difference is that this one
+     is state: see s.roomT's own note in resetPlant() and the header of
+     src/data/room.js.
+     It reads the openings the block above already booked (s.spillBy,
+     s.sgVentBy, s.reliefSteam, s.reliefVent) and writes nothing back into the
+     plant except through the damage path below, which is the whole of what
+     "the room bites" means. */
+  roomStep(s, dt);
+  /* ONE LINE FOR AN EXPLOSION, NOT ONE FOR A FLAME. A compartment already
+     over the ignition temperature burns whatever crosses the flammability
+     limit the tick it crosses it, which is a steady diffusion flame and is
+     real - but it is a CONDITION, and the H2 FLAMMABLE tile is what says so.
+     What earns a line in the log is a charge that had time to collect first.
+     Measured: a severed hot leg on an oxidising core burns 20-60 g a tick at
+     the limit and would have written the same alarm every two seconds. */
+  if(s.roomBurn > H2_BURN_EV)
+    logE("alarm","HYDROGEN DEFLAGRATION",
+      s.roomBurn.toFixed(1)+" kg of hydrogen has burned in the compartment, "+
+      (s.roomBurn*H2_LHV/1000).toFixed(0)+" MJ of it into the air. It came off the cladding, left the loop with the steam, collected where the hot air collects and found something hot enough to light it. Nothing was needed but the heat that was already there.");
+  /* ── and what standing in it costs a machine ──
+     s.dmgParts gets its SECOND WRITER. Until now combatHit() was the only one
+     in all of src/, and no failure anywhere read a value at a part's own grid
+     position - which is exactly what a field is for. A ramp rather than a
+     switch, integrated rather than tripped, so a machine cooks over seconds
+     and the picture has time to say so.
+     A shield, a containment wall and a core catcher declare no tsurv: they
+     are structure, they have no electronics and no bearings, and a
+     temperature is not how they fail. */
+  { const live={};
+    for(const p of LAY.parts){
+      const lim = ROLE[p.role] && ROLE[p.role].tsurv;
+      if(!lim || !fitted(p)) continue;
+      live[p.id]=1;
+      if(s.dmgParts.indexOf(p.id) >= 0){ s.roomHurt[p.id]=0; continue; }
+      const over = clamp((roomAt(s,p)-lim)/ROOM_DMG_SPAN, 0, 1);
+      if(over <= 0) continue;
+      const h = (s.roomHurt[p.id]||0) + over*dt/ROOM_DMG_TAU;
+      s.roomHurt[p.id] = h;
+      if(h < 1) continue;
+      s.roomHurt[p.id]=0;
+      s.dmgParts.push(p.id);
+      const fx=dmgFx(p.id);
+      if(fx.hit) fx.hit(s);
+      /* p.name, not partName(): src/core/ui.js is deliberately outside the
+         worker's own subset, and this line runs inside a scenario run. The
+         same choice repairStart() makes, for the same reason. */
+      logE("alarm","HEAT DAMAGE / "+fx.msg,
+        p.name+" has been cooked by the compartment it is standing in - "+
+        roomAt(s,p).toFixed(0)+" K against the "+lim+" K it was built for. "+fx.why+
+        "  Fixing it while the room is still this hot only buys the same seconds again.");
+    }
+    for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
+
   /* ── reactor protection system: trips unless it was never fitted, or is defeated ── */
   if(!s.scrammed && rpsLive()){
     const why=tripCause();
@@ -2924,6 +3014,16 @@ function step(dt){
      PUMP CAVITATION or PRIMARY OVERPRESSURE clear themselves above. */
   ev("hirad",s.doseRate>RAD_HI,"warn","HIGH RADIATION IN THE SPACE",
     ()=>"The crew's own seat is reading "+s.doseRate.toFixed(2)+"x background. A party out on the plant right now is taking "+(s.repRate*RAD_DOSE_K).toFixed(3)+" dose a second at the job it is standing next to.");
+  /* Beside HIGH RADIATION IN THE SPACE and not latched, for the identical
+     reason: the room cools once whatever was venting into it stops, and an
+     operator who has just shut a valve needs to watch the number come down. */
+  { const hotIds = roomOverIds(s);
+    ev("hiroom",hotIds.length>0,"alarm","EQUIPMENT OVER TEMPERATURE",
+      ()=>nameList(hotIds)+" "+isAre(hotIds)+" standing in air hotter than "+
+          (hotIds.length>1?"they were":"it was")+" built for. The compartment peaks at "+
+          s.roomMax.toFixed(0)+" K. Nothing in there survives it indefinitely - find what is putting heat into the room."); }
+  ev("h2room",roomH2Peak(s)>=H2_LFL,"alarm","HYDROGEN IN THE COMPARTMENT",
+    "Hydrogen off the cladding has left the primary with the steam and is now above its flammability limit somewhere in the room. It needs no spark, only something hot enough - and there is a great deal in there that is.");
   ev("pit",-s.parts.xe>3200,"info","XENON PIT",
     "Xenon-135 past 3200 pcm. Raising power may be physically impossible until it decays, whatever you do with the rods.");
   ev("jam",s.rodJam,"alarm","CONTROL RODS NOT RESPONDING",
@@ -2958,7 +3058,7 @@ function step(dt){
         (s.qOx*100).toFixed(1)+"% of rated against "+(s.n*PROMPT_F*100).toFixed(1)+
         "% from fission. Nothing on this ship switches that reaction off - it stops when the metal is gone.",1);
   ev("h2",s.h2>H2_EV,"alarm","HYDROGEN IN THE PRIMARY",
-    ()=>"Over "+H2_EV+" kg of hydrogen has come off the cladding. It is not modelled as burning, but it is not water and it does not carry heat.",1);
+    ()=>"Over "+H2_EV+" kg of hydrogen has come off the cladding. It is not water and it does not carry heat - and the moment any of it leaves the loop it is a flammable gas in the compartment, at 4% by volume and 773 K.",1);
   ev("melt",s.melt,"alarm","CORE MELT",
     ()=>"A quarter of the fuel is molten and "+s.dmg.toFixed(0)+"% of the cladding has failed. Unrecoverable.",1);
 
@@ -3203,6 +3303,14 @@ const ANN=[
   "Steam is burning the zirconium cladding, and it is now making more heat than the chain reaction is. This reaction feeds itself: the hotter the metal gets the faster it burns, and no rod, no pump and no valve on this ship stops it. It ends when the cladding is gone. It also makes hydrogen.","core"],
  ["FUEL MELT","red",s=>s.meltFrac>0,
   "Fuel pellets somewhere in the core are liquid. This is past cladding failure - the fuel itself has gone, and the damage map on the reactor panel says which part of the core. CORE MELT latches when a quarter of it is molten.","core"],
+ /* Appended, like every row above them - help.js numbers the tiles by array
+    index, so a row that belongs beside FUEL DMG by subject still goes on the
+    end. Hosted on the CONTROL cabinet: the room is a plant-wide fact and the
+    cabinet is where the plant-wide facts already light (NO RPS, HI AREA RAD). */
+ ["HI ROOM TEMP","red",s=>roomOverIds(s).length>0,
+  "A machine somewhere on the plant is standing in air hotter than it was built for, and it is being cooked at a rate you can watch. Heat is a place: it comes off every hot surface, it comes in a flood out of anything venting steam into the room rather than into a tank, it collects where a compact layout gives it nowhere to go, and the only sink is the hull. Find what is putting heat in, or fit something that takes it out.","ctrl"],
+ ["H2 FLAMMABLE","red",s=>roomH2Peak(s)>=H2_LFL,
+  "Hydrogen off the cladding has escaped the primary with the steam and is now over 4% by volume somewhere in the compartment. Above 773 K it lights itself - no spark needed - and it burns at 120 MJ per kilogram into the room it is standing in. This is the Fukushima sequence.","ctrl"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
   AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn,

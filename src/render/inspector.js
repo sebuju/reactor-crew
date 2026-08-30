@@ -500,9 +500,10 @@ function paramsForFit(fid){
   /* WHERE THE DISCHARGE ACTUALLY GOES, asked of the drawing. A valve whose
      outlet reaches no tank is not broken - it vents into the room, which is a
      real design and the bench NAMES it rather than refusing it. */
-  rdo("DISCHARGES TO","Where what this valve passes ends up. Pipe its outlet to a tank and the discharge is caught; leave it unpiped and it goes straight into the compartment, which is activity in the air the crew is breathing.",
+  rdo("DISCHARGES TO","Where what this valve passes ends up. Pipe its outlet to a tank and the discharge is caught. Stand it against the skin and the discharge goes outside, which spares the compartment but is still a release. Leave it inboard and unpiped and it goes straight into the air the crew is breathing.",
     ()=>{ const t=P&&P.net&&P.net.fitTarget&&P.net.fitTarget[fid];
-          return t ? ((D.tanks[t]&&D.tanks[t].name)||t.toUpperCase()) : "THE ROOM"; });
+          if(t) return (D.tanks[t]&&D.tanks[t].name)||t.toUpperCase();
+          return (P&&P.net&&P.net.fitVentOut&&P.net.fitVentOut[fid]) ? "ATMOSPHERE" : "THE ROOM"; });
   return B;
 }
 

@@ -381,7 +381,7 @@ function derived(){
     /* Every term here names a BOX on the grid. tankMass() charges per tank
        INSTANCE, off its own vol, so four tanks cost four tanks and there is
        no flag anywhere pricing a system with nothing drawn behind it. */
-    + partMass("catcher") + tankMass() + fittingMass()
+    + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + totalTurbMass() + totalCondMass()
     + totalIhxMass()

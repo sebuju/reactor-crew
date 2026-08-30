@@ -345,8 +345,13 @@ const roleAlive=(role,dmg)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p
    where a term that only ever gated a checkbox before now names one. Every
    tank left this table for tankMass() (above), which charges per instance
    off the instance's own vol rather than one flat figure per name. */
-const PART_MASS={catcher:66};
-const partMass=role=>LAY.parts.some(p=>p.role===role)?PART_MASS[role]:0;
+const PART_MASS={catcher:66, vent:34};
+/* PER INSTANCE, not per role. It reads identically for the catcher, which is
+   a singleton by construction (D.catcher is one checkbox), and it is the only
+   honest answer for a machine the bench will place as many of as you like -
+   a role-level charge would hand out every unit after the first for nothing,
+   which is the same trap widening a capacity slider's span had. */
+const partMass=role=>LAY.parts.filter(p=>p.role===role).length*(PART_MASS[role]||0);
 /* ══════════ LOOP MEMBERSHIP COMES OFF THE GRAPH ══════════
    p.loop used to be a STORED field - set once, off nearestLoop() (a
    Euclidean-distance guess) for a placed spare and off a literal index for a
@@ -827,6 +832,9 @@ function removePort(pid){
 const ROT={l:"t",t:"r",r:"b",b:"l"};
 const OPP={l:"r",r:"l",t:"b",b:"t"};
 const DIRV={l:[-1,0],r:[1,0],t:[0,-1],b:[0,1]};
+/* <= and >= so an off-grid neighbour answers true: the skin and beyond it are
+   the same side of the wall, which is what lets a face test ask this directly. */
+const hullCell=(x,y)=>x<=0||y<=0||x>=GW-1||y>=GH-1;
 const rotFace=(f,n)=>{ for(let i=0;i<((n%4)+4)%4;i++) f=ROT[f]; return f; };
 /* One row per SHAPE, and adding a shape is adding a row. A cross carries TWO
    paths that are never joined, which is the whole of why a crossing needs no
@@ -1142,14 +1150,21 @@ function pipeMap(){
                whose faces are read as one pool rather than four separate
                ones (the tank-side end of relief, which picks its own face).
      thermal   "source"|"transfer"|"sink"|"none" - adds heat, moves it from
-               primary to secondary, rejects it, or neither. DECLARED ONLY
-               this pass: the heat model behind it is Stage 6, and nothing in
-               the tick reads this field yet. */
+               primary to secondary, rejects it, or neither. It is READ now,
+               by partTemp() (src/data/room.js): a role that moves no heat has
+               no surface for the room field to take heat off, and nothing
+               invents a temperature for a box that never said it had one.
+     tsurv     K the machine survives in the AIR AROUND IT - electronics give
+               up near 340, motors and bearings near 400, wet pressure parts
+               far higher. Read by the room's damage integral (step.js) and by
+               nothing else. NULL for structure: a shield, a containment wall
+               and a core catcher have no electronics and no bearings, and a
+               room temperature is not how any of them fails. */
 const ROLE = {
   core:  {internal:null, fixed:null, fold:["r","b"], mu:0.50, sgtr:false,
-          ports:{r:4, b:5}, thermal:"source"},
+          ports:{r:4, b:5}, thermal:"source", tsurv:1200},
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none"},
+          ports:{}, thermal:"none", tsurv:450},
   /* ONE VESSEL, ONE NODE. The pressurizer declares no internal path - it is a
      boundary, not a through-path - and that used to mean the SOLVE treated a
      pipe on its bottom and a pipe on its side as two unconnected nodes, while
@@ -1161,7 +1176,7 @@ const ROLE = {
      internal PATH - there is still no resistance through a pressurizer, and
      nothing here makes it a leg of the loop. */
   pzr:   {internal:null, fixed:{type:"datum", face:"b"}, fold:["t","b","l","r"], mu:0.65, sgtr:false,
-          ports:{"*":2}, thermal:"none"},
+          ports:{"*":2}, thermal:"none", tsurv:800},
   /* TWO internal paths that do not meet: the tubes (l<->b, primary) and the
      shell around them (r<->t, secondary). The only way across is the sgtr
      edge, which is a LEAK and is built as one.
@@ -1169,7 +1184,7 @@ const ROLE = {
      is signed off it (netBuild()), so the two faces are not interchangeable
      even though the conductance between them is. */
   sg:    {internal:[{a:"l", b:"b", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", vap:"b", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
-          ports:{l:1, b:1, t:1, r:2}, thermal:"transfer"},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
+          ports:{l:1, b:1, t:1, r:2}, thermal:"transfer", tsurv:800},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
   /* A SECOND TRANSFER STAGE, and ONE internal path - the primary one. What an
      intermediate exchanger moves heat INTO is a pot with a temperature
      (s.ihxTBy, step.js), not a hydraulic circuit: the same standing the steam
@@ -1182,7 +1197,7 @@ const ROLE = {
      same leg and neither is a nozzle of its own. */
   ihx:   {internal:[{a:"l", b:"r", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}], fixed:null,
           fold:{t:"l", b:"r"}, mu:0.60, sgtr:false,
-          ports:{l:2, r:2, t:2, b:2}, thermal:"transfer"},
+          ports:{l:2, r:2, t:2, b:2}, thermal:"transfer", tsurv:800},
   /* ONE PUMP. There is no feedwater pump role: what makes a pump a feedwater
      pump is where it is piped, which the graph already answers (primaryPump()
      above). ports is the usual MEASUREMENT across every pump on the stock
@@ -1192,25 +1207,25 @@ const ROLE = {
      the runs land on t and b, and face() used to resolve those off wherever
      cond happened to sit. */
   pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"SUCT", nb:"DISCH", la:"SUCTION", lb:"DISCHARGE"}, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{t:4, b:1}, thermal:"none"},
+          ports:{t:4, b:1}, thermal:"none", tsurv:400},
   turb:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
-          ports:{t:4, b:1}, thermal:"none"},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
+          ports:{t:4, b:1}, thermal:"none", tsurv:420},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
   cond:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
-          ports:{t:1, r:1}, thermal:"sink"},
+          ports:{t:1, r:1}, thermal:"sink", tsurv:400},
   ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none"},
+          ports:{}, thermal:"none", tsurv:340},
   cont:  {internal:null, fixed:null, fold:null, mu:0.30, sgtr:false,
-          ports:{}, thermal:"none"},
+          ports:{}, thermal:"none", tsurv:null},
   /* ONE ROLE FOR EVERY TANK. There is no kind: what a tank is made of, what
      is behind it and what it is plumbed to are per-instance config
      (D.tanks), never a role. mu is a tank of liquid, which shields rather
      better than bare equipment and rather worse than a wall. */
   tank:  {internal:null, fixed:{type:"tank"}, fold:null, mu:0.65, sgtr:false,
-          ports:{"*":1}, thermal:"none"},
+          ports:{"*":1}, thermal:"none", tsurv:420},
   bkp:   {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none"},
+          ports:{}, thermal:"none", tsurv:350},
   shield:{internal:null, fixed:null, fold:null, mu:0.18, sgtr:false,
-          ports:{}, thermal:"none"},
+          ports:{}, thermal:"none", tsurv:null},
   /* A structure with mass that used to be a checkbox and nothing on the
      grid. It gets no `fixed` - the run each one carries
      (the traced connection) lands on a node that is ALREADY reachable from the
@@ -1220,7 +1235,18 @@ const ROLE = {
      current through it, so it cannot move a single other pressure or flow
      in the solve. */
   catcher: {internal:null, fixed:null, fold:null, mu:0.55, sgtr:false,
-          ports:{}, thermal:"none"},                          // a structure, not a network part - no run, no ports, no exception needed
+          ports:{}, thermal:"none", tsurv:null},                          // a structure, not a network part - no run, no ports, no exception needed
+  /* A MACHINE WHOSE WHOLE JOB IS GETTING HEAT OUT OF THE BUILDING, in the
+     shield/catcher idiom: a footprint and an effect, no network presence at
+     all, no ports and no run. What it does is one term in the room's own
+     source pass (roomStep(), src/data/room.js) - a sink at the cells it
+     stands in, against the sea outside. It sits on the MAIN BOARD, so it is
+     worth exactly nothing in a blackout, which is the same argument condK()'s
+     circulating water makes and the reason the room is a survival problem
+     rather than a purchase. It has bearings and a motor, so it has a tsurv of
+     its own: the machine that keeps the room cool is in the room. */
+  vent:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
+          ports:{}, thermal:"none", tsurv:400},
   /* ONE ROLE FOR EVERY FITTING. There is no kind: a tee, a branch throttle
      and a relief valve differ by `mode` on the instance (D.fittings), never
      by role - the same move that turned five tank-shaped things into one
@@ -1236,7 +1262,7 @@ const ROLE = {
      what lets one sit in-line and still be branched off. */
   fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true, vap:"ab", na:"A", nb:"B", la:"SIDE A", lb:"SIDE B"}], fixed:null,
           fold:p=>fitModeOf(p.id)==="tee" ? ["l","r","t","b"] : {t:"l", b:"r"},
-          mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none"},
+          mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none", tsurv:600},
 };
 // what a fitting IS, asked of the instance and never of the role - the one
 // reader for the fold above and for every branch in the draw and the solve

@@ -302,6 +302,14 @@ function ctxItemsDesign(hit){
           grp:"sec",tip:"An additional turbine, placed where you put it. It swallows its own share of steam and carries its own share of the load - lose one of two and you lose half the output, not all of it. Hover an edge to place a port, then click it to draw a pipe.",
           role:"turb"}));
       }});
+      /* The machine the room field creates a reason for. A structure with no
+         network presence at all, the shield/catcher idiom - it is placed and
+         it has an effect, and there is nothing to plumb. */
+      items.push({label:"ADD VENTILATION UNIT", fn:()=>{
+        placePart(n=>({id:"ventX"+n,name:"VENT UNIT",w:3,h:3,x:gx,y:gy,col:"#8fb8c4",
+          grp:"safety",tip:"Pulls compartment air overboard. It is the only thing on the plant besides the hull that takes heat OUT of the room, and it is on the main board - a blackout leaves the room with nothing but its own steel. Nothing to plumb.",
+          role:"vent"}));
+      }});
       items.push({label:"ADD CONDENSER", fn:()=>{
         placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:9,h:5,x:gx,y:gy,col:"#5aa9d6",
           grp:"sec",tip:"An additional condenser, placed where you put it. It is heat sink and it is where the feed pumps draw from, so a second one is a second place for both. Hover an edge to place a port, then click it to draw a pipe.",
