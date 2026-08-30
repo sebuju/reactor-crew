@@ -191,6 +191,11 @@ const ACT = {
      component that is not part of it. */
   tankByp  : {lab:"TANK AUTO",    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankByp[id]?"ARMED":"BYPASSED"),
               apply:(s,id)=>{ if(s.tankByp[id]!==undefined) s.tankByp[id]=!s.tankByp[id]; }},
+  /* ONE ISOLATION VALVE PER PORT, worked by clicking the nozzle on the mimic.
+     Guarded exactly like ACT.tankOpen: a tape naming a port this design never
+     had is a no-op, not a phantom key on S. */
+  portShut : {lab:"PORT VALVE",   log:pid=>portLabel(pid)+" "+(S.portShut[pid]?"OPENED":"SHUT"),
+              apply:(s,pid)=>{ if(s.portShut[pid]!==undefined) s.portShut[pid]=!s.portShut[pid]; }},
   tankDump : {lab:"TANK DUMP",    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" DUMP "+(S.tankDump[id]?"SHUT":"OPEN"),
               apply:(s,id)=>{ if(s.tankDump[id]!==undefined) s.tankDump[id]=!s.tankDump[id]; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},

@@ -252,6 +252,16 @@ const LOOP_TRANSIT = 12;
    kept deliberately, so netFactored()'s cache signature and dmgFx()'s prefix
    match (step.js) are both untouched by the move from whole runs to cells. */
 const cellBroken = (s, x, y) => !!(s.dmgParts && s.dmgParts.indexOf("pipe:"+x+","+y) >= 0);
+/* ══ EVERY PORT HAS A VALVE IN IT ══
+   A nozzle on a real vessel carries an isolation valve at the shell, and it is
+   the first thing a watch reaches for when a run has to be cut out. So it is
+   not a design choice and it costs nothing to fit: every port has one, and
+   every one of them commissions OPEN, which is why a plant nobody touches
+   solves bit-identically to one with no port valves at all.
+   SHUT IS AN ABSENT EDGE, never a large resistance - the same rule the gated
+   fittings keep, and what netAssemble's g<=0 skip is there for. */
+const portOpen    = (s, pid) => !(s.portShut && s.portShut[pid]);
+const runPortsOpen = (s, r)  => portOpen(s, r.pa) && portOpen(s, r.pb);
 
 /* ══════════ A TUBE RUPTURE IS A DIFFERENTIAL LEAK ══════════
    An SGTR is THE pressure-difference leak: a primary at 15.5 MPa bleeding
@@ -524,6 +534,16 @@ const tankPoolPct = (s,list) => { let c=0, m=0;
   return c>0 ? 100*m/c : 0; };
 const tankFluid = id => FLUID[D.tanks[id].fluid] || FLUID.water;
 const tankLvl   = (s,id) => (s.tank && s.tank[id] !== undefined) ? s.tank[id] : D.tanks[id].level;
+/* ══ IS THERE ANYTHING IN IT, OR IS THAT THE INTEGRATOR'S OWN DUST ══
+   tankInjecting()'s argument, one quantity over: a level is integrated from a
+   SOLVED rate, so a tank at rest sits at ±1e-15 rather than at 0 and a bare
+   `lvl > 0` answers both ways on alternate frames. Measured on a relief tank
+   taking its first water: the mimic flashed between the empty colour and the
+   holding colour every frame. The floor is a fraction of the level's OWN
+   reference, which for a percentage is 100. Takes the VALUE, not (s,id), so
+   the bench asks it of D.tanks[id].level through the same door. */
+const TANK_LVL_EPS = 0.05;                    // % of full
+const tankWet   = lvl => lvl > TANK_LVL_EPS;
 /* A pump dies with its bus; a gas charge does not. A tank with neither reads
    zero, which is exactly what a pumped tank with no nitrogen behind it is
    worth in a blackout - and the whole of why an accumulator is worth buying. */
@@ -1098,7 +1118,7 @@ function netBuild(){
          tank by the same predicate - see tankLive(). Nothing here knows
          which tank this is. */
       edges.push({u, v,
-        g: s => tankLive(s,tid) ? injResist(bore, L + pipeExtraLen(s, r.cells)) : 0,
+        g: s => (tankLive(s,tid) && runPortsOpen(s,r)) ? injResist(bore, L + pipeExtraLen(s, r.cells)) : 0,
         h: 0, kind: r.k, key: r.key}); // LABEL: carried onto the edge for rendering/lookup, never re-compared here
       continue;
     }
@@ -1108,7 +1128,7 @@ function netBuild(){
        exactly resist(bore, L) - so an undamaged run is bit-identical to a
        plain number while still being LIVE against a hit that has not
        happened yet. */
-    edges.push({u, v, g: s => throttled(s, bore, L + pipeExtraLen(s, r.cells), []),
+    edges.push({u, v, g: s => runPortsOpen(s,r) ? throttled(s, bore, L + pipeExtraLen(s, r.cells), []) : 0,
                 h: 0, kind: r.k, key: r.key});
   }
 
@@ -1792,6 +1812,12 @@ function netFactored(net, s, fixed){
      the pipe on the grid were still the one it was before: a wrong answer,
      not a crash, so it is checked every call exactly like the other two. */
   + '|' + (s.dmgParts ? s.dmgParts.filter(k => k.indexOf("pipe:")===0).join(',') : '')
+  /* and a port valve is the fifth: shutting one takes its run's edge out of A
+     entirely (runPortsOpen(), above), which is the same class of change a
+     severed cell is and has to bust the factorisation the same way. Only the
+     SHUT ones are named, so a plant nobody has isolated anything on adds an
+     empty field and keeps its key. */
+  + '|' + (s.portShut ? Object.keys(s.portShut).filter(k => s.portShut[k]).join(',') : '')
   /* the fixed SET is the fourth live input to A. A break appearing puts a
      second known pressure into the matrix, not just into b, so reusing last
      tick's factors would solve the broken plant against the intact one's -

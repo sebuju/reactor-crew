@@ -1696,6 +1696,12 @@ function resetPlant(){
        .map(k=>[k, startOf(k+":valve", fitTies(k)?0:1)])),
      valveDem:Object.fromEntries(Object.keys(P.fittings).filter(k=>P.fittings[k].mode==="throttle")
        .map(k=>[k, startOf(k+":valve", fitTies(k)?0:1)])),
+     /* ONE ISOLATION VALVE PER PORT, and every one of them commissions OPEN.
+        There is no starting position for these: they are the watch's own
+        emergency handles, fitted with the nozzle, bought with the nozzle, and
+        a plant nobody has isolated anything on is bit-identical to one with no
+        port valves at all (portOpen(), pipenet.js). */
+     portShut:Object.fromEntries(Object.keys(D.ports).map(k=>[k,false])),
      arGain:AUTOROD_GAIN, arLead:AUTOROD_LEAD, arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
@@ -3299,6 +3305,13 @@ function step(dt){
   for(const key in d){
     const r = P.net.byKey[key];
     if(!r) continue;                           // a design change left a stale key
+    /* A SHUT PORT VALVE IS A SHUT VALVE, AND THAT HAS TO REACH THE PICTURE.
+       Most runs get it for free - their rate IS the solve's and netBuild()
+       already dropped the edge - but the steam lines read a thermal book
+       (s.steamTo) and hpi/surge read a correlation, so all four would go on
+       counting up through a valve nobody has open, and the meter, which
+       differentiates this integral, would print the flow to match. */
+    if(!runPortsOpen(s,r)) continue;
     if(r.k==="steam"||r.k==="exh"){
       d[key] += sp*1.4*steamRun(key)/Math.max(1e-6, steamScale(r.k));
       continue;

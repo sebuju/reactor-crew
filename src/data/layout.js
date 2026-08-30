@@ -916,6 +916,7 @@ function removePort(pid){
    as machine floor in layoutMetrics()'s exposure ratio. */
 const ROT={l:"t",t:"r",r:"b",b:"l"};
 const OPP={l:"r",r:"l",t:"b",b:"t"};
+const FACE_NAME={l:"LEFT", r:"RIGHT", t:"TOP", b:"BOTTOM"};
 const DIRV={l:[-1,0],r:[1,0],t:[0,-1],b:[0,1]};
 /* <= and >= so an off-grid neighbour answers true: the skin and beyond it are
    the same side of the wall, which is what lets a face test ask this directly. */
@@ -1542,8 +1543,13 @@ function pipeNetwork(){
     const pts=unbend([portPos(c.pa)]
       .concat(c.cells.map(([x,y])=>cellPos(x,y)))
       .concat([portPos(c.pb)]));
+    // pa/pb are the two PORT ids this run lands on. Carried because each port
+    // now has its own isolation valve (s.portShut) and the run's edge has to
+    // ask about them - a node name is partId+face and cannot name one of two
+    // ports sharing that face.
     net.push({k:c.k, key:c.key, rid:c.key, cells:c.cells, L:c.L,
                pts, wps:[], wp:true, nz:[true,true],
+               pa:c.pa, pb:c.pb,
                a:a.id, sa:c.sa, b:b.id, sb:c.sb});
     tally(a.id,c.sa); tally(b.id,c.sb);
   }
@@ -1597,6 +1603,16 @@ function portPath(p,f){
    about which side they are describing. */
 function portWord(p,f,long){ const IN=portPath(p,f); if(!IN) return null;
   return IN.a===f ? (long?IN.la:IN.na) : (long?IN.lb:IN.nb); }
+/* THE SPOKEN NAME OF ONE PORT: its machine, and which side of it. One helper,
+   so the log line, the rail row and the tooltip cannot describe the same
+   nozzle three ways. A face with no side to be on falls back to the face
+   letter, which is what the drawing already calls it. */
+function portLabel(pid){
+  const port=D.ports[pid]; if(!port) return pid;
+  const p=LAY.parts.find(q=>q.id===port.p); if(!p) return pid;
+  const f=portFaceOf(pid);
+  return partName(p)+" "+((f&&portWord(p,f,true))||FACE_NAME[f]||pid);
+}
 /* ══ THE KIND OF A CONNECTION, READ OFF WHAT THE TWO ENDS ARE ══
    One table, keyed on the unordered pair of ROLES - never on a part id, which
    is the same rule every other decision in this file already meets. A kind is
