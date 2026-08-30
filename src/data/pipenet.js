@@ -1272,13 +1272,23 @@ function netBuild(){
      length - the choke is the valve's own gate, in series with it. */
   const reliefContNode = fid => { const i = contNode("relief:"+fid); breakIds.push(i); return i; };
   const faceUse = (fid, faces) => faces.reduce((n,f) => n + ((net.usage && net.usage[fid+f]) || 0), 0);
-  const openSide = {};
+  /* WHERE the open side points, asked in the same loop that decides WHICH side
+     is open so the two cannot disagree. A valve whose open face is against the
+     skin discharges outside instead of into the compartment - the sky every
+     real secondary safety has and this grid otherwise lacks. It is a second
+     question, not a third value of fitTarget: a tank CATCHES a discharge, the
+     skin lets it GO, and only the tank keeps it out of s.release. */
+  const openSide = {}, fitVentOut = {};
+  const OPENF = {l:["l","t"], r:["r","b"]};
   for(const fid of fitIds){
     if(fitMode[fid] !== "relief") continue;
     const inU = faceUse(fid, ["l","t"]), outU = faceUse(fid, ["r","b"]);
     if(!!inU === !!outU) continue;            // piped both sides, or plumbed to nothing at all
-    const open = nodeIdx(fid + (outU ? "l" : "r"));
+    const side = outU ? "l" : "r";
+    const open = nodeIdx(fid + side);
     openSide[fid] = open;
+    const q = byId[fid];
+    fitVentOut[fid] = !!q && OPENF[side].some(f => hullCell(q.x+DIRV[f][0], q.y+DIRV[f][1]));
     edges.push({u: open, v: reliefContNode(fid), g: resist(D.fittings[fid].bore, NET_COMP_LEN),
                 h: 0, kind: "vent", key: "vent:"+fid});   // LABEL: synthetic kind, for the z-pass below
   }
@@ -1405,7 +1415,7 @@ function netBuild(){
   }
 
   const net2 = {nodes, index, edges, core: coreNode, n: nodes.length, byKey, fitIds, fitMode,
-                cont: breakIds, sec: sgtrIds, secT: secTIds, sgtrParts, secTParts, fitTarget,
+                cont: breakIds, sec: sgtrIds, secT: secTIds, sgtrParts, secTParts, fitTarget, fitVentOut,
                 steamBreaks,
                 /* the surge run's own key, resolved once here rather than
                    re-found by a string scan every tick - step()'s level
@@ -2443,8 +2453,25 @@ function seedRun(pa,pb,vFirst,vias){
   pipeLay(path, ca, cb);
 }
 /* WHERE A GENERATOR'S SAFETY VALVE SITS: one cell up and one along from its
-   own steam nozzle, where its discharge is clear of the header. */
+   own steam nozzle, where its discharge is clear of the header. y=1 is not
+   cosmetic - the open face is then against the hull, so what lifts goes
+   outside (fitVentOut, above). The same valve moved inboard cooks the engine
+   room, and that is geometry rather than a setting. */
 const svCell = i => [28+i*7, 1];
+/* ══ A NOZZLE GOES ON THE MIDDLE OF THE FACE FIRST, THEN OUTWARD ══
+   `n` cells of face, nozzle `i`, `step` cells apart. The stock plant used to
+   count from index 0 on every face it touched, so a one-loop plant - the one
+   everybody actually looks at - had its main steam line leaving the top-LEFT
+   corner of a nine-cell turbine and its condensate leaving the corner of the
+   condenser. That reads as a pipe that missed the machine. Centre-first
+   fixes the picture for one loop without giving up the room a four-loop plant
+   needs, because the spread is the same spread walked out from the middle
+   instead of in from the edge.
+   Nothing about this is a hydraulic decision: WHICH face a nozzle is on still
+   is (a hot leg leaves high, a cold return comes back low), and that is why
+   only the along-face index moved. */
+const faceMid = (n, i, step) => { const k = step || 1;
+  return Math.floor((n-1)/2) + (i%2 ? -k*Math.ceil(i/2) : k*Math.ceil(i/2)); };
 function buildStockPlumbing(opt){
   const loops = (opt && opt.loops) || 1;
   for(const k   in D.pipes) delete D.pipes[k];
@@ -2490,7 +2517,11 @@ function buildStockPlumbing(opt){
     gas:{p0:0.15, frac:25/23}, pump:null, check:false, auto:"always",
     burst:{at:1.4, drain:6.0, rel:0.004}});
 
-  tank("efw",50,0,{ name:"EFW TANK", col:"#5aa9d6",
+  /* MOVED OFF THE TURBINE'S OWN COLUMN. It used to sit at x=50, which is
+     exactly where the main steam line drops once that nozzle is on the middle
+     of the turbine's nine-cell top face instead of on its corner - and a
+     blocked cell is not a warning, it is a run that silently fails to lay. */
+  tank("efw",55,0,{ name:"EFW TANK", col:"#5aa9d6",
     tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
     vol:35, level:100, fluid:"condensate",
     /* Its own pump, on the backup bus, at a real discharge pressure. 8.0 MPa
@@ -2527,7 +2558,7 @@ function buildStockPlumbing(opt){
      reference plant has to carry the thing it teaches. It taps the NOZZLE and
      is not spliced into the main steam line: a valve in the line would be shut
      off with the line, which is the one case it exists for. */
-  const svTip="The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead.";
+  const svTip="The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead. It stands against the skin, so what it blows goes outside; move it inboard and the same steam lands in the engine room.";
   const sv0  = fitting("sv0",svCell(0)[0],svCell(0)[1],{ name:"SG SAFETY 1", mode:"relief", bore:0.55, tip:svTip });
 
   buildLayout();                     // the boxes have to be on the grid before a port can sit beside one
@@ -2541,7 +2572,10 @@ function buildStockPlumbing(opt){
      cold return along the bottom. Spread rather than stacked, because a port
      is a CELL now and two of them cannot share one. */
   const coreHot  = i => seedPort("core",9,1+2*i);
-  const coreCold = i => seedPort("core",2+2*i,12);
+  // centred on the vessel's own floor, two cells apart - the injection line
+  // keeps the corner (dx 0), which is why the spread starts one step in
+  const coreCold = i => seedPort("core",faceMid(9,i,2),12);
+  const coreBilge = i => 6+faceMid(9,i,2);      // the cell that return lands under
   const pCoreHot  = coreHot(0);
   const pCoreHpi  = seedPort("core",0,12);
   const pCoreCold = coreCold(0);
@@ -2555,12 +2589,13 @@ function buildStockPlumbing(opt){
   const pRelTk    = seedPort("reltk",-1,2);
   const pHpi      = seedPort("hpi",3,2);
   const pEfw      = seedPort("efw",-1,2);
-  const pTurbT    = seedPort("turb",0,-1);
-  const pTurbB    = seedPort("turb",0,7);
-  const pCondT    = seedPort("cond",0,-1);
-  const pCondR    = seedPort("cond",9,1);
+  const turbT     = i => seedPort("turb",faceMid(9,i),-1);
+  const pTurbT    = turbT(0);
+  const pTurbB    = seedPort("turb",faceMid(9,0),7);
+  const pCondT    = seedPort("cond",faceMid(9,0),-1);
+  const pCondR    = seedPort("cond",9,faceMid(5,0));
   // one discharge nozzle per generator, one cell apart, and the suction below
-  const feedT     = i => seedPort("feed",i,-1);
+  const feedT     = i => seedPort("feed",faceMid(3,i),-1);
   const pFeedT    = feedT(0);
   const pFeedB    = seedPort("feed",1,5);
 
@@ -2580,7 +2615,7 @@ function buildStockPlumbing(opt){
   seedRun(pCoreHot, pTeeL);                       // the hot leg out of the vessel
   seedRun(pTeeR, g0.l, true);                     // ...and up into the generator
   seedRun(g0.b, pPump0T, true);                   // cold leg down to the pump
-  seedRun(pPump0B, pCoreCold, false, [[27,26],[8,26]]);   // ...and back along the bilge
+  seedRun(pPump0B, pCoreCold, false, [[27,26],[coreBilge(0),26]]);   // ...and back along the bilge
   seedRun(pHpi, pCoreHpi, true);                  // injection, onto the same face
   seedRun(pPzrSurge, pTeeT);                      // the surge line, down onto the tee
   seedRun(pPzrRel, pRvL);                         // relief: vessel to valve...
@@ -2618,8 +2653,8 @@ function buildStockPlumbing(opt){
     const row = 3-i, col = STEAM_COL[i], bilge = COLD_ROW[i];
     seedRun(coreHot(i), g.l, true);
     seedRun(g.b, pT, true);
-    seedRun(pB, coreCold(i), false, [[27+i*7,bilge],[8+2*i,bilge]]);
-    seedRun(g.steam, seedPort("turb",3+i,-1), true, [[27+i*7,row],[col,row]]);
+    seedRun(pB, coreCold(i), false, [[27+i*7,bilge],[coreBilge(i),bilge]]);
+    seedRun(g.steam, turbT(i), true, [[27+i*7,row],[col,row]]);
     seedRun(g.sv, pSv, true);
     seedRun(feedT(i), g.feed, true, [[30+i,16-i],[30+i*7,16-i]]);
   }
