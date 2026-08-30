@@ -818,10 +818,24 @@ const FIT = {
    it to charge s.inv/s.tank/s.release; the panel and the plume (plant.js)
    read the identical call, so neither can print a rate the sim is not
    performing. */
+/* ONE SOLVE PER DRAWN FRAME, not one per valve. The solve fills reliefBy for
+   EVERY fitting at once, and the mimic asks two or three of them plus the
+   panel - each of which was assembling and factorising the whole network again
+   for one row of the answer.
+   ONLY INSIDE A FRAME, and that is the whole of the argument: S is frozen for
+   the length of a paint and is not frozen anywhere else. A tick moves it every
+   line, and an auditor pushes a tank up and asks again on the same object - so
+   a cache that spanned either would answer for a plant that has moved on. It
+   is keyed on the state it was solved against as well, because a replay frame
+   draws a snapshot beside the live plant. */
+let reliefOuts=null, reliefOutsFor=null, netPassLive=false;
+const netPassStart=()=>{ netPassLive=true;  reliefOuts=null; reliefOutsFor=null; };
+const netPassDrop =()=>{ netPassLive=false; reliefOuts=null; reliefOutsFor=null; };
 function reliefRate(s, fid){
   if(!(P && P.net)) return 0;
-  const o = {};
-  netCoreFracOf(P.net, s, null, null, null, null, o);
+  let o = (netPassLive && reliefOutsFor===s) ? reliefOuts : null;
+  if(!o){ o={}; netCoreFracOf(P.net, s, null, null, null, null, o);
+    if(netPassLive){ reliefOuts=o; reliefOutsFor=s; } }
   const q = o.reliefBy && o.reliefBy[fid];
   return q ? Math.max(0, invRate(q)) : 0;
 }
@@ -866,13 +880,13 @@ function runEnds(key, kind){
 // (layout.js, ROLE.fold) beside the row that makes it true; this is just the
 // lookup, cached on the arrangement (laySig()) since it is asked once per
 // edge and the set of folding parts never changes mid-frame.
-let foldCache=null, foldCacheSig="";
 function foldMap(){
-  // fittingSig() as well as laySig(): a fitting's fold depends on its MODE,
-  // and a mode change moves no part, so an arrangement-only key would hand
-  // back a tee's single node for a valve that now has two.
-  const sig=laySig()+fittingSig();
-  if(foldCache && foldCacheSig===sig) return foldCache;
+  /* On the graph (graphSlot(), layout.js) rather than on laySig()+fittingSig():
+     both of those are terms of the graph's own key, so the graph's identity
+     answers the same question - including the one an arrangement-only key got
+     wrong, a tee's single node handed back for a valve that now has two -
+     without rebuilding two strings once per edge to ask it. */
+  const slot=graphSlot("foldMap"), was=slot.get(1); if(was) return was;
   const m={};
   for(const p of LAY.parts){
     const f=foldFacesOf(p); if(!f) continue;
@@ -882,7 +896,7 @@ function foldMap(){
     if(Array.isArray(f)) for(const face of f) m[p.id+face]=p.id;
     else for(const face in f) m[p.id+face]=p.id+f[face];
   }
-  foldCache=m; foldCacheSig=sig;
+  slot.set(1,m);
   return m;
 }
 const coreFold = raw => foldMap()[raw] || raw;
@@ -2401,7 +2415,7 @@ function pipeCellPart(x,y){
    dispatcher, the dose rate, the damage card), one resolver. */
 function dmgPart(id){
   if(typeof id!=="string" || id.indexOf("pipe:")!==0)
-    return LAY.parts.find(q=>q.id===id) || null;
+    return partOf(id) || null;
   const k=id.slice(5), i=k.indexOf(",");
   return i<0 ? null : pipeCellPart(+k.slice(0,i), +k.slice(i+1));
 }

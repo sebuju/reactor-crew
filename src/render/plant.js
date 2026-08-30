@@ -110,7 +110,7 @@ const pipeNozzleHalf = bore => pipeWidth(bore)*1.4;
 function portColOf(pid,L){
   if(L && L.portShut && L.portShut[pid]) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
-  const f=portFaceOf(pid), IN=portPath(LAY.parts.find(p=>p.id===q.p), f);
+  const f=portFaceOf(pid), IN=portPath(partOf(q.p), f);
   return !IN ? C.metal : IN.a===f ? C.portA : C.portB;
 }
 // THE JOINT ITSELF - a small flanged rectangle standing proud of the shell,
@@ -1237,7 +1237,7 @@ const PORTG=CELL-4;
    off the grid or whose cell is gone is skipped by both for the same reason. */
 function eachPort(fn){
   for(const pid in D.ports){
-    const port=D.ports[pid], p=LAY.parts.find(q=>q.id===port.p); if(!p) continue;
+    const port=D.ports[pid], p=partOf(port.p); if(!p) continue;
     const f=portFaceOf(pid), c=portCell(pid); if(!f||!c) continue;
     fn(pid,p,f,c);
   }
@@ -2256,7 +2256,7 @@ function readoutsFor(p,s){
     if(lim) R.push(["SKIN TEMP",partSkin(s,p).toFixed(0)+" K",
       band(partSkin(s,p),T_HULL,lim*1.2,[[lim*0.85,C.cyan,"COOL"],
         [lim,C.amber,"HOT"],[Infinity,C.red,"COOKING"]],{dp:0,lim:[[lim,"LIMIT"]]}),
-      "The temperature of this machine's own casing, against the "+lim+" K it was built for. It has mass, so it lags the air around it - that lag is the time you have to fix whatever is heating the room. Past the limit it cooks, and what it is standing in is the ROOM HEAT layer."]); }
+      "The temperature of this machine's own casing, against the "+lim+" K it was built for. It has mass, so it lags the air around it - that lag is the time you have to fix whatever is heating the room. Past the limit it cooks, and what it is standing in is the AIR TEMP layer."]); }
   /* ONE damage row. Every role used to print its own DESTROYED line under
      this one, saying the same thing twice off the same s.dmgParts test; the
      consequence they carried comes off DMGFX, which is the table that already
@@ -2433,7 +2433,7 @@ function leaderAnchor(part){
    It stops at the rail's left edge because the rail is opaque and the canvas
    is under it; dashed, so it never reads as one more pipe. */
 function leaderLine(panelEl,railEl){
-  const part=LAY&&LAY.parts.find(q=>q.id===sel);
+  const part=LAY&&partOf(sel);
   if(!part||!panelEl||!railEl) return;
   const r=hostRect(railEl), q=hostRect(panelEl);
   if(r.w<2||r.h<2||q.h<1) return;                 // rail unlaid, or a panel hidden by display:none
@@ -2550,6 +2550,13 @@ function drawPlant(y0,L,vh,vx,vw){
   layerPass("under",L);
 
   const tags=[];                // drawn last - see the push below
+  /* A FITTING'S HOVER STRIP IS DEFERRED WITH THEM, and for a harder reason
+     than a name is: it hangs outside its own box, in the pipe margin, so drawn
+     in place the next machine's panel, the joints, the layers and every value
+     tag painted over its keys. A key you cannot see is a key you cannot press.
+     Deferred, it is also pushed LAST, and the hit test takes the last widget -
+     so the strip wins the press it is standing on. */
+  const hovCtl=[];
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
     const fit = fitted(p), live = L && fit;
@@ -2658,7 +2665,10 @@ function drawPlant(y0,L,vh,vx,vw){
       const fw=FITSTRIP_W, fx=x+w/2-fw/2;
       const sr={x:fx,y:y+h,w:fw,h:3+ctl.length*CTL_H,v:1,host:ui.host};
       if(hovd||on||hovHold(sr)||sldIn(sr))
-        ctl.forEach((row,i)=>ctlStrip(row,fx,y+h+3+i*CTL_H,fw,BTN_H));
+        hovCtl.push(()=>{
+          // its own ground, or the pipework it hangs over reads through the keys
+          fillRect(fx,y+h,fw,3+ctl.length*CTL_H,C.panel);
+          ctl.forEach((row,i)=>ctlStrip(row,fx,y+h+3+i*CTL_H,fw,BTN_H)); });
     }
     else if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+4,sy+i*CTL_H+1,w-8,BTN_H));
     // ...and the arming switch is a starting position too - that is the RPS
@@ -2696,6 +2706,7 @@ function drawPlant(y0,L,vh,vx,vw){
   pipeFitMarks(L,NET);
   if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
   for(const t of tags) t();     // every name and value, over the pipework
+  for(const c of hovCtl) c();   // ...and a valve's handles over the names too
   // ...and the hovered port's ring last of all: it marks a joint the pipework,
   // the tags and the layers all draw across (drawPortValves(), above)
   /* strokeRect and not frame(): frame() rounds the rect and then takes a pixel
@@ -2713,35 +2724,39 @@ function drawPlant(y0,L,vh,vx,vw){
   return VIEW.y+VIEW.h;
 }
 
-/* ══ THE ZOOM KEY IS HTML, AND IT IS THE ONLY CHROME ON THE PLANT THAT IS ══
-   It is a control, not a picture: everything the canvas draws grows with the
+/* ══ THE KEYS ARE HTML, AND THEY ARE THE ONLY CHROME ON THE PLANT THAT IS ══
+   They are controls, not pictures: everything the canvas draws grows with the
    window, which is right for the plant and wrong for a key sitting among rail
-   type that is plain px. So it is a real <button> in the screen's own mount,
-   placed off VIEW each frame in CSS px.
+   type that is plain px. So they are real <button>s in the screen's own mount,
+   placed off VIEW each frame in CSS px - one strip, so the LAYERS menu and the
+   zoom key cannot drift apart or be placed twice.
 
-   One key, not two: at fit the only useful move is in, and zoomed in the only
-   move is all the way back out. Reads FIT whenever off 1 in either direction,
-   since the view zooms out past fit too. */
+   One ZOOM key, not two: at fit the only useful move is in, and zoomed in the
+   only move is all the way back out. Reads FIT whenever off 1 in either
+   direction, since the view zooms out past fit too. */
 const zoomedIn=()=>Math.abs(VIEW.z-1)>0.001;
 function zoomToggle(){
   if(zoomedIn()){ VIEW.z=1; VIEW.ox=VIEW.oy=0; VIEW.s=VIEW.fit; }
-  else { const p=LAY.parts.find(q=>q.id===sel), r=p&&prect(p);
+  else { const p=partOf(sel), r=p&&prect(p);
     vZoom(1.8, r? r.x+r.w/2 : GX+GW*CELL/2, r? r.y+r.h/2 : GY+gridH()/2); }
   uiDirty();
 }
 function zoomKeySync(mount){
   if(!mount) return;
-  let b=mount.querySelector(".plant-zoom");
-  if(!b){ b=document.createElement("button");
-    b.className="kit-btn kit-btn-sunk plant-zoom";
-    b.addEventListener("click",zoomToggle);
-    mount.appendChild(b); }
+  let keys=mount.querySelector(".plant-keys");
+  if(!keys){ keys=document.createElement("div"); keys.className="plant-keys";
+    const nb=document.createElement("button");
+    nb.className="kit-btn kit-btn-sunk plant-zoom";
+    nb.addEventListener("click",zoomToggle);
+    keys.append(layerMenu().el, nb);
+    mount.appendChild(keys); }
+  const b=keys.querySelector(".plant-zoom");
   const z=zoomedIn();
   const want=z?"FIT "+VIEW.z.toFixed(1)+"X":"ZOOM";
   if(b.textContent!==want) b.textContent=want;
   b.title=(z?"FIT THE WHOLE PLANT":"ZOOM IN")+
     "\nThe plant view pans and zooms. Roll the wheel over it to zoom about the pointer, hold the RIGHT button to drag the plant about, and this key jumps between the whole plant and a close look at whatever component is selected.";
   const v=viewRectCss(), mr=mount.getBoundingClientRect();
-  b.style.right=Math.max(0,mr.right-v.right+6)+"px";
-  b.style.top  =Math.max(0,v.top-mr.top+6)+"px";
+  keys.style.right=Math.max(0,mr.right-v.right+6)+"px";
+  keys.style.top  =Math.max(0,v.top-mr.top+6)+"px";
 }

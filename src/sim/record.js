@@ -150,7 +150,7 @@ const ACT = {
      row is replayed in there. Same choice, and the same reason, as the repair
      dispatch line in step.js. */
   pumpDem  : {lab:"PUMP DEMAND",  cont:true,
-              log:(id,v)=>{ const p=LAY.parts.find(q=>q.id===id);
+              log:(id,v)=>{ const p=partOf(id);
                 return (p?p.name:id)+" TO "+(v*100).toFixed(0)+" %"; },
               apply:(s,id,v)=>{ if(s.flowDemBy[id]!==undefined) s.flowDemBy[id]=v; }},
   rodCommon: {lab:"ROD DEMAND",   cont:true, log:v=>(v*100).toFixed(1)+" %", apply:(s,v)=>{ setCommon(v); }},
@@ -423,7 +423,7 @@ function recApplyHead(h){
      board yet has nothing for that loop to move. buildLayout() runs inside
      this, so LAY is the head's own plant by the time the loop starts. */
   setPlacedParts(h.placed || []);
-  for(const q of h.parts){ const p=LAY.parts.find(x=>x.id===q.id); if(p){ p.x=q.x; p.y=q.y; } }
+  for(const q of h.parts){ const p=partOf(q.id); if(p){ p.x=q.x; p.y=q.y; } }
   layoutMetrics();
   return designSig() === h.dsig;
 }

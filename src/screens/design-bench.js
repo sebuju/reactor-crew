@@ -166,7 +166,7 @@ function layoutWarnings(M){ const w=[];
 function designIssues(d,M){ return (d||derived()).warn.concat(latWarn(),layoutWarnings(M||layoutMetrics())); }
 function designBlocked(d,M){ return designIssues(d,M).some(warnHard); }
 function warnFor(id){
-  const p=LAY.parts.find(q=>q.id===id);
+  const p=partOf(id);
   if(p && !p.access && p.grp!=="shield") return C.red;
   const w=designIssues(null,PLANT_LM).filter(q=>q[2]===id);
   if(!w.length) return null;
@@ -198,7 +198,7 @@ function ctxResolveDesign(p){
 // fitting, or the plant itself for a bare cell. Never a menu item, so it
 // carries no fn and cannot be clicked - see shellInitCtxMenu() (screens/shell.js).
 function ctxTitleDesign(hit){
-  if(hit.port){ const pt=D.ports[hit.port], p=LAY.parts.find(q=>q.id===pt.p);
+  if(hit.port){ const pt=D.ports[hit.port], p=partOf(pt.p);
     return (p?partName(p):"")+" PORT"; }
   if(hit.part) return partName(hit.part);
   if(hit.pipe){ const keys=pipeMap().cellOwner[hit.pipe];
@@ -869,11 +869,6 @@ function dbRailBuild(rail,vitals,watch){
      of a rail the player has to scroll past every machine to reach */
   const results=KIT.well({title:"RESULTS"}); vitals.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); vitals.appendChild(review.el);
-  // one switch per LAYERS entry, built once per rail rebuild - see
-  // layerSwitches() in render/layers.js. The SAME helper the control room
-  // calls: a layer switch is not redrawn per screen, it is drawn once.
-  const layers=KIT.well({title:"LAYERS"}); rail.appendChild(layers.el);
-  layerSwitches(layers.body);
   return {panels,results,review,pipes};
 }
 /* ══ WHAT IS ACTUALLY CONNECTED ══
@@ -884,7 +879,7 @@ function dbRailBuild(rail,vitals,watch){
 function pipeRailSync(well){
   const M=pipeMap();
   const rows=M.conns.map(c=>{
-    const a=LAY.parts.find(q=>q.id===c.a), b=LAY.parts.find(q=>q.id===c.b);
+    const a=partOf(c.a), b=partOf(c.b);
     return [(pipeLabel(c.k,c.key)||"PIPE"),
             (a?partName(a):c.a)+" ⇒ "+(b?partName(b):c.b),
             c.L.toFixed(1)+" m"];
@@ -942,7 +937,7 @@ function dbRailSync(state){
     // scrolling is not a design change, so a panel arriving on screen has to
     // ask for its first sync itself - the signature cannot know it moved
     if(!fresh && !shown) continue;
-    const cur=paramsFor(LAY.parts.find(q=>q.id===h.p.id)||h.p);
+    const cur=paramsFor(partOf(h.p.id)||h.p);
     dbPanelSync(h.body,cur);
   }
   if(!fresh) return;
@@ -997,7 +992,7 @@ function dbBuild(){
   for(const t of TOOLS.filter(t=>t.sc==="design")){
     const b=KIT.button(t.label,{size:8, sunk:true, on:TOOL.active===t.id,
       onClick:()=>{ TOOL.active=t.id; for(const q of btns) q.b.set({on:TOOL.active===q.id}); }});
-    b.el.classList.add("layer-switch");
+    b.el.classList.add("tool-switch");
     KIT.tip(b.el, t.label, t.tip);
     tools.appendChild(b.el); btns.push({id:t.id,b});
   }

@@ -17,6 +17,10 @@ function tick(now){
   const want=uiTakeDirty();
   if(!stepped && !want && now-lastDraw<IDLE_MS){ requestAnimationFrame(tick); return; }
   lastDraw=now;
+  // the drawing cannot move inside a frame - see laySettle() (layout.js).
+  // layoutMetrics() itself is NOT called here: drawPlant() calls it, and it
+  // walks the plant a dozen ways that all want to be inside the window.
+  layFresh(); laySettle(); netPassStart();
   fillRect(0,0,W,H,C.bg);
   gridDots(0,TOPBAR_H,W,H-TOPBAR_H);
   ui.widgets=[]; ui.tips=[];
@@ -26,6 +30,7 @@ function tick(now){
   else drawHelp();   // HELP is HTML now; the branch stays so an unbranched tab still falls somewhere
   tipSync();
   ui.prev=ui.widgets;
+  layRelease();
   requestAnimationFrame(tick);
 }
 

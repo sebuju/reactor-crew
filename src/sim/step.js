@@ -360,7 +360,7 @@ const rpsState = ()=> autoState("rps");
    a part, so it needs no second branch. Module level, because the event log is
    not the only thing that names a machine any more. */
 const nameOf = id => {
-  const p = LAY.parts.find(q=>q.id===id);
+  const p = partOf(id);
   return p ? partName(p) : id.toUpperCase();
 };
 const nameList = ids => ids.map(nameOf).join(", ");
@@ -693,7 +693,7 @@ const DMGANY={msg:"EQUIPMENT HIT", why:"A component has been knocked out.", hit:
    prefix before (pump0, sg0) has a role of the same name, so nothing else
    moves. */
 const dmgFx = id => {
-  const p = LAY.parts.find(q=>q.id===id);
+  const p = partOf(id);
   return (p && DMGFX[p.role]) || DMGFX[id]
       || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(k))] || DMGANY;
 };
@@ -720,7 +720,7 @@ function combatHit(id){
       p=dmgPart(id);
       if(!p) return;
     } else {
-      p=LAY.parts.find(q=>q.id===id);
+      p=partOf(id);
       if(!p||!canHit(p)) return;
     }
   } else {
@@ -1118,7 +1118,7 @@ const steamScale=k=>k==="exh" ? ratedSteam() : ratedSteam()/Math.max(1,sgCount()
    sg0 - and nothing noticed while the secondary carried no rate at all.
    +1 means the steam runs the way the key reads. A steam run leaves its
    GENERATOR; the exhaust arrives at the SINK. */
-const isSink = id => { const p=LAY.parts.find(q=>q.id===id);
+const isSink = id => { const p=partOf(id);
   return !!p && ROLE[p.role] && ROLE[p.role].thermal==="sink"; };
 function steamDir(key,k){
   const ends = runEnds(key,k); if(!ends) return 1;
@@ -1860,9 +1860,7 @@ function step(dt){
   /* Settle the node graph for this tick and hold it. Nothing below redraws the
      plant, and ~85 readers ask for it - see nodeGraph(), layout.js. The hold is
      dropped on the last line of this function, so it never outlives the tick. */
-  nodeGraphHold(false); pipeMapHold(false);
-  pipeTrace(); pipeMap(); nodeGraph();
-  nodeGraphHold(true); pipeMapHold(true);
+  laySettle();
 
   /* ── control rods ──
      T-avg error alone is two integrations away from rod position, so on a
@@ -3343,7 +3341,7 @@ function step(dt){
      turning while the sim is paused, and would not replay. Driven by LOAD -
      the pumps answer flow, the turbine answers the draw. */
   s.spinT=(s.spinT+360*dt*Math.min(s.load,1.5))%360;
-  nodeGraphHold(false); pipeMapHold(false);
+  layRelease();
 }
 /* One pressure colour, for every readout that shows pressure. Both thresholds are
    the annunciator's own, so a gauge can never disagree with the alarm beside it:

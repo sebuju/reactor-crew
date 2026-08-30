@@ -5,11 +5,20 @@
    inside one gets its own <canvas> - see hostPaint() in render/plant.js. */
 body[data-screen="operate"] #scr-operate,
 body[data-screen="design"] #scr-design{pointer-events:none}
-
-/* the plant view's zoom key. Placed off VIEW by zoomKeySync() (render/plant.js)
-   so it tracks the rails, but sized in px like every other control. */
-.plant-zoom{position:absolute;z-index:2;pointer-events:auto;height:20px;padding:0 8px;
-  letter-spacing:.6px;white-space:nowrap}
+/* the plant view's keys - LAYERS and zoom. Placed off VIEW by zoomKeySync()
+   (render/plant.js) so they track the rails, but sized in px like every other
+   control. One absolutely-placed strip; the keys inside it lay out normally. */
+.plant-keys{position:absolute;z-index:2;pointer-events:auto;display:flex;align-items:flex-start;gap:4px}
+.plant-zoom,.plant-layers-key{height:20px;padding:0 8px;letter-spacing:.6px;white-space:nowrap}
+/* the menu hangs UNDER its own key and out of flow, so opening it never moves
+   the zoom key beside it */
+.plant-layers{position:relative}
+.plant-layers-menu{position:absolute;top:24px;left:0;min-width:132px;padding:6px;
+  background:var(--c-panel);border:1px solid var(--c-edge);
+  display:flex;flex-direction:column;gap:3px;max-height:70vh;overflow-y:auto}
+.plant-layers-menu .kit-rule{margin:4px 0 2px}
+.plant-layers-menu .kit-rule:first-child{margin-top:0}
+.plant-layers-menu .layer-switch{justify-content:flex-start;text-align:left}
 
 .cr-root,.db-root{position:absolute;display:grid;
   grid-template-rows:auto 1fr;pointer-events:none}

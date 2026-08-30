@@ -309,15 +309,16 @@ if(!wide.err){
         hs.length ? hs.length+' canvas(es), '+hs.reduce((a,h)=>a+h.n,0)+' primitives - '+what
                   : 'NO CANVAS with this class was ever painted - '+what);
   }
-
-  /* a layer with no switch on the rail has no way to be turned off, so both
-     rails must carry exactly one per entry in the registry - not more (a
-     leftover from a deleted layer), not fewer (a layer nobody can reach). */
+  /* a layer with no switch in the menu has no way to be turned off, so both
+     screens must carry exactly one per entry in the registry - not more (a
+     leftover from a deleted layer), not fewer (a layer nobody can reach).
+     Counted inside the menu the plant view hangs off its LAYERS key, which is
+     where they moved to from the rails. */
   {
     const want = wide.M.LAYER_ORDER().length;
-    const crN = wide.M.CR().rail.querySelectorAll('.layer-switch').length;
-    const dbN = wide.M.DB().rail.querySelectorAll('.layer-switch').length;
-    add('every layer has a switch, on both rails', crN===want && dbN===want,
+    const sw = s => wide.M[s]().root.querySelectorAll('.plant-layers-menu .layer-switch').length;
+    const crN = sw('CR'), dbN = sw('DB');
+    add('every layer has a switch, on both screens', crN===want && dbN===want,
         'control room: '+crN+'/'+want+' switches, design bench: '+dbN+'/'+want);
   }
 

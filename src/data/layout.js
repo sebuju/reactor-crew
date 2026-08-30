@@ -254,7 +254,7 @@ const PUMP_MASS=50;                    // t, at pumpCap()==1 (default size)
    which is every role but one. */
 const roleHead=role=>{ const R=ROLE[role]; if(!R||!R.internal) return false;
   return (Array.isArray(R.internal)?R.internal:[R.internal]).some(IN=>IN.head); };
-const primaryPump=id=>{ const p=LAY.parts.find(q=>q.id===id);
+const primaryPump=id=>{ const p=partOf(id);
   return !!p && roleHead(p.role) && loopOf(id)!==null; };
 /* EVERY PUMP ON THE GRID, in LAY order - the set s.flowBy/s.flowDemBy are
    keyed on, counted and never named, exactly like sgIds(). */
@@ -435,6 +435,16 @@ const LOOP_ROLE={core:1, sg:1, ihx:1, pump:1, fitting:1};
    go stale under them. */
 let nodeGraphCache=null, nodeGraphSig="", nodeGraphHeld=false;
 const nodeGraphHold=on=>{ nodeGraphHeld=!!on && !!nodeGraphCache; };
+/* THE WINDOW ITSELF, so the two passes that take it cannot disagree about what
+   "settled" means: a tick (step()) and a frame (tick(), main.js). Neither
+   writes D.pipes, D.ports or LAY - every gesture that does is a pointer
+   handler, and one cannot run inside either. layoutMetrics() is NOT in here: a
+   frame calls it anyway and a tick must not, or every tick would pay
+   laySrcSig() to be told the drawing has not moved. */
+const laySettle=()=>{ nodeGraphHold(false); pipeMapHold(false); netPassDrop();
+  pipeTrace(); pipeMap(); nodeGraph();
+  nodeGraphHold(true); pipeMapHold(true); };
+const layRelease=()=>{ nodeGraphHold(false); pipeMapHold(false); netPassDrop(); };
 function nodeGraph(){
   if(nodeGraphHeld) return nodeGraphCache;
   // fittingSig() too: a fitting's MODE decides both its fold and whether its
@@ -443,7 +453,6 @@ function nodeGraph(){
   // ports, so both are what this graph is built from.
   const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig();
   if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
-  const id=k=>LAY.parts.find(q=>q.id===k);
   const adj={}, nodesOf={};
   const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
   const link=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b); (adj[b]||(adj[b]=[])).push(a); };
@@ -465,7 +474,7 @@ function nodeGraph(){
      "still one vessel" pass below, and loopMap(), tankSide() and secGensOf()
      all read that graph. */
   for(const c of pipeTrace().conns){
-    const a=id(c.a), b=id(c.b); if(!a||!b) continue;
+    const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
     note(a.id,c.sa); note(b.id,c.sb);
     link(a.id+c.sa, b.id+c.sb);
   }
@@ -510,15 +519,22 @@ function nodeGraph(){
   nodeGraphCache={adj, nodesOf, primary, reach}; nodeGraphSig=sig;
   return nodeGraphCache;
 }
-/* Keyed on the node graph's own IDENTITY, not on a second signature: this is
-   a pure function of that graph, and re-deriving the signature here would
-   rebuild that signature twice per call on a hot path (loopOf() is asked once per
-   pump per solve). */
-let loopMapCache=null, loopMapFor=null;
-function loopMap(){
+/* ══ AN ANSWER IS ONLY AS OLD AS THE GRAPH IT WAS READ OFF ══
+   Keyed on the node graph's own IDENTITY, never on a second signature: these
+   are pure functions of that graph, and re-deriving the signature per call
+   would rebuild four strings to be told nothing had moved. A WeakMap, so a
+   superseded graph takes its answers with it and nothing has to remember to
+   invalidate anything. One named slot per question. */
+const graphMaps=new WeakMap();
+function graphSlot(name){
   const G=nodeGraph();
-  if(loopMapCache && loopMapFor===G) return loopMapCache;
-  const partLoop={};
+  let m=graphMaps.get(G); if(!m){ m=new Map(); graphMaps.set(G,m); }
+  let s=m.get(name);      if(!s){ s=new Map(); m.set(name,s); }
+  return s;
+}
+function loopMap(){
+  const s=graphSlot("loopMap"), was=s.get(1); if(was) return was;
+  const G=nodeGraph(), partLoop={};
   // seeded off ROLE.sg parts directly, in LAY.parts' own order - counted,
   // never named: a generator is a placed part now (Stage 3b), not a fixed
   // "sg"+i slot buildLayout() conjured for i<D.loops.
@@ -558,8 +574,8 @@ function loopMap(){
     claim(p,i,true);
   }
   for(const {p,i} of seeded) claim(p,i,false);
-  loopMapCache={partLoop, n:nextLoop}; loopMapFor=G;
-  return loopMapCache;
+  const out={partLoop, n:nextLoop}; s.set(1,out);
+  return out;
 }
 /* WHICH GENERATORS' SHELLS THIS PUMP FEEDS - the whole of "is this a feedwater
    pump", asked of the drawing. A generator's secondary node is simply one of
@@ -586,9 +602,8 @@ function secGensFromNode(node, cut){
    itself look innocent. */
 function crossTies(){
   const G=nodeGraph(), out=[];
-  const id=k=>LAY.parts.find(q=>q.id===k);
   for(const c of pipeMap().conns){
-    const a=id(c.a), b=id(c.b); if(!a||!b) continue;
+    const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
     const na=a.id+c.sa, nb=b.id+c.sb;
     if(!G.adj[na] || !G.adj[nb]) continue;
     /* Cut the run, then ask BOTH sides where they are - and ask the second
@@ -622,11 +637,16 @@ function secGensOf(pid){
 /* EVERY GENERATOR SHELL, AS A FEED END AND A STEAM END. The shell is the
    internal path with BOTH ends on the secondary - the same test netBuild()
    uses to find it - and it declares FEED then STEAM in that order. */
-const shellFaces=()=>{ const out=[];
+// on the graph (graphSlot()): secondaryNode() reads it, and shellsOf() walks
+// this list once per shell per relief valve per frame
+const shellFaces=()=>{
+  const slot=graphSlot("shellFaces"), was=slot.get(1); if(was) return was;
+  const out=[];
   for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R||!R.sgtr||!R.internal) continue;
     for(const IN of (Array.isArray(R.internal)?R.internal:[R.internal]))
       if(secondaryNode(p.id+IN.a) && secondaryNode(p.id+IN.b))
         out.push({id:p.id, feed:IN.a, steam:IN.b}); }
+  slot.set(1,out);
   return out; };
 /* WHAT IS IN THIS MACHINE'S OWN STEAM CIRCUIT - is there a machine to take the
    steam, and anywhere to reject it.
@@ -843,7 +863,7 @@ const fittingMass=()=>{ let m=0;
    The FACE is derived from that offset and never stored, so the two can never
    disagree. */
 function freePid(){ let n=0; while(D.ports["prt"+n]) n++; return "prt"+n; }
-const partOf=id=>LAY.parts.find(q=>q.id===id)||null;
+const partOf=id=>(LAY&&LAY.byId.get(id))||null;
 /* WHICH SIDE OF THE PART THIS PORT IS ON. Exactly one of dx/dy is outside the
    footprint and that one names it - a port is never both. */
 function portFaceOf(pid){
@@ -1438,7 +1458,9 @@ function buildLayout(){
      either, so a fixed part, a tank or a fitting can be dragged into the same
      hole and has to answer for it the same way. */
   markLimbo(A);
-  LAY={parts:A}; layFit=laySrcSig();
+  // byId is built here and nowhere else: LAY.parts is only ever replaced whole
+  const byId=new Map(); for(const p of A) byId.set(p.id,p);
+  LAY={parts:A, byId}; layFit=laySrcSig();
 }
 /* ONE PASS, TWO CALLERS. buildLayout() runs it on the set it just built, and
    moveTo() runs it again on LAY.parts - a move does not change laySrcSig(), so
@@ -1531,11 +1553,10 @@ function unbend(pts){
    of that shape. `rid` is the key, `wps` is empty (there are no draggable
    corners any more), `cells` is the run itself and `L` its length. */
 function pipeNetwork(){
-  const id=k=>LAY.parts.find(q=>q.id===k);
   const net=[], usage={};
   const tally=(pid,f)=>{ usage[pid+f]=(usage[pid+f]||0)+1; };
   for(const c of pipeMap().conns){
-    const a=id(c.a), b=id(c.b);
+    const a=partOf(c.a), b=partOf(c.b);
     if(!a || !b) continue;               // this connection's part is not on the grid this frame
     /* One point per cell, plus both port cells, with the collinear points
        dropped - so a straight leg is one stroke and a bend is a round join,
@@ -1609,7 +1630,7 @@ function portWord(p,f,long){ const IN=portPath(p,f); if(!IN) return null;
    letter, which is what the drawing already calls it. */
 function portLabel(pid){
   const port=D.ports[pid]; if(!port) return pid;
-  const p=LAY.parts.find(q=>q.id===port.p); if(!p) return pid;
+  const p=partOf(port.p); if(!p) return pid;
   const f=portFaceOf(pid);
   return partName(p)+" "+((f&&portWord(p,f,true))||FACE_NAME[f]||pid);
 }
@@ -1653,7 +1674,7 @@ const RUN_KIND={
    k:"user", loopOfKey() loses loop 0, P.netRefRun loses its scale, and what
    you see is grey pipes that still conduct. Same move a tank already gets
    below, for the same reason. */
-const isFitting=id=>{ const p=LAY.parts.find(q=>q.id===id); return !!p && p.role==="fitting"; };
+const isFitting=id=>{ const p=partOf(id); return !!p && p.role==="fitting"; };
 /* `avoid` is the OTHER end of the run being named, and leaving it out is the
    whole of the bug this had first: asked what is on the far side of a tee
    spliced into the hot leg, the walk went straight back down the run it was
@@ -1670,7 +1691,7 @@ const isFitting=id=>{ const p=LAY.parts.find(q=>q.id===id); return !!p && p.role
    is. */
 const FIT_BRANCH_ROLE={pzr:1, tank:1};
 function throughFitting(id,avoid,seen){
-  const p=LAY.parts.find(q=>q.id===id);
+  const p=partOf(id);
   if(!p || p.role!=="fitting") return p||null;
   seen=seen||{}; if(seen[id]) return null; seen[id]=1;
   // pipeTrace(), never pipeMap(): naming a connection is what calls this, so
@@ -1690,9 +1711,8 @@ function throughFitting(id,avoid,seen){
    the pipe reaching it came out "user", which left a generator's own steam
    nozzle carrying an unclassified fluid and stopped net.vapour ever calling
    it a steam space. What the line reaches is the valve. */
-const partOrNull=id=>LAY.parts.find(q=>q.id===id)||null;
 function runKindFor(aId,bId,af,bf){
-  const A=throughFitting(aId,bId)||partOrNull(aId), B=throughFitting(bId,aId)||partOrNull(bId);
+  const A=throughFitting(aId,bId)||partOf(aId), B=throughFitting(bId,aId)||partOf(bId);
   if(!A||!B) return "user";
   /* WHICH SIDE OF A GENERATOR THE RUN LANDS ON NAMES THE PIPE.
      There is no feedwater-pump role left to key the table on, so "pump|sg"
@@ -1728,8 +1748,8 @@ function runKindFor(aId,bId,af,bf){
    already asks to name the KIND. Handing the machine back lets a view name the
    RUN after it, so a branch off the header is not itself called MAIN STEAM. */
 function runDeadEnd(aId,bId){
-  if(isFitting(aId) && !throughFitting(aId,bId)) return partOrNull(aId);
-  if(isFitting(bId) && !throughFitting(bId,aId)) return partOrNull(bId);
+  if(isFitting(aId) && !throughFitting(aId,bId)) return partOf(aId);
+  if(isFitting(bId) && !throughFitting(bId,aId)) return partOf(bId);
   return null;
 }
 /* ══ WHICH LOOPS A FITTING JOINS ══
@@ -1789,23 +1809,28 @@ function datumPart(){
      under. It has no edge either, so there is nothing for it to be the
      primary or secondary OF. */
 const hostPartOf = () => LAY.parts.find(p=>ROLE[p.role] && ROLE[p.role].thermal==="sink") || null;
+// on the graph (graphSlot()): netCoreFracOf() asks this once per EDGE per solve
 function tankSide(id){
   const t=D.tanks && D.tanks[id]; if(!t) return null;
-  const G=nodeGraph();
+  const G=nodeGraph(), slot=graphSlot("tankSide");
+  const hit=slot.get(id); if(hit!==undefined) return hit;
   const sideOfNodes = ns => !ns || !ns.length ? null
     : (ns.some(n=>G.primary[n]) ? "primary" : "secondary");
+  let out;
   if(!t.cell){ const h=hostPartOf();
     /* no host on the grid at all: a hosted tank is still not something the
        core can reach, so it is secondary rather than nothing. */
-    return (h && sideOfNodes(G.nodesOf[h.id])) || "secondary"; }
-  return sideOfNodes(G.nodesOf[id]);
+    out = (h && sideOfNodes(G.nodesOf[h.id])) || "secondary"; }
+  else out = sideOfNodes(G.nodesOf[id]);
+  slot.set(id,out);
+  return out;
 }
 /* Is this part id a tank on the PRIMARY side - the one predicate for "could
    catch a relief discharge". Any primary tank will do: "the relief tank" is
    not a kind of thing, it is whichever tank you happened to plumb the relief
    header to. Off ROLE and the graph, never p.id. */
 function primaryTank(id){
-  const p=LAY.parts.find(q=>q.id===id);
+  const p=partOf(id);
   return !!(p && p.role==="tank" && tankSide(id)==="primary");
 }
 
@@ -1818,7 +1843,6 @@ function primaryTank(id){
    a pressure boundary, so a path that goes in one of its nozzles and out the
    other is not a path. Omitted, nothing blocks and this is pure wiring. */
 function runReach(fromId, blocks){
-  const id=k=>LAY.parts.find(q=>q.id===k);
   /* A FACE THE PART HAS NO PORT ON IS NOT A CONNECTION. netBuild() names a
      node `partId+face` and folds only the faces ROLE declares, so a run to an
      undeclared face lands on a node nothing else touches - a dangling stub
@@ -1828,7 +1852,7 @@ function runReach(fromId, blocks){
      solve did not. `null` means "resolve live" and is always legal. */
   const portOK=(pid,face)=>{
     if(face==null) return true;
-    const p=id(pid), R=p&&ROLE[p.role];
+    const p=partOf(pid), R=p&&ROLE[p.role];
     return !!R && (R.ports["*"]!==undefined || R.ports[face]!==undefined);
   };
   const link=[];
@@ -1839,11 +1863,11 @@ function runReach(fromId, blocks){
   }
   const seen=new Set([fromId]), stack=[fromId];
   while(stack.length){
-    const u=stack.pop(), pu=id(u);
+    const u=stack.pop(), pu=partOf(u);
     if(u!==fromId && blocks && pu && blocks(pu)) continue;
     for(const [a,b] of link){
       const v = a===u ? b : b===u ? a : null;
-      if(v===null || seen.has(v) || !id(v)) continue;
+      if(v===null || seen.has(v) || !partOf(v)) continue;
       seen.add(v); stack.push(v);
     }
   }
@@ -1855,9 +1879,8 @@ function runReach(fromId, blocks){
    heat is wired to the primary at all. Nothing blocks: heat crosses a tank
    as happily as it crosses anything else. */
 function hasHeatSink(){
-  const id=k=>LAY.parts.find(q=>q.id===k);
-  if(!id("core")) return true;   // no core, no claim to make
-  for(const pid of runReach("core")){ const p=id(pid), R=p&&ROLE[p.role];
+  if(!partOf("core")) return true;   // no core, no claim to make
+  for(const pid of runReach("core")){ const p=partOf(pid), R=p&&ROLE[p.role];
     if(R && (R.thermal==="sink"||R.thermal==="transfer")) return true; }
   return false;
 }
@@ -1875,7 +1898,7 @@ function hasHeatSink(){
 function pzrPlumbed(){
   const pz=datumPart();
   if(!pz) return true;                              // no pressurizer: nothing to disconnect
-  if(!LAY.parts.find(q=>q.id==="core")) return true;
+  if(!partOf("core")) return true;
   return runReach("core", p=>p.role==="tank").has(pz.id);
 }
 // BACKUP PWR ghosts rather than vanishes: NONE is a real dropdown choice
@@ -1892,11 +1915,18 @@ const pinnedTo=p=>LAY.parts.filter(q=>q.pin&&q.pin.to===p.id);
    must not land on its own pipework, and a port is a real object in a cell);
    freeAdj() wants pipes OUT, because a machine ringed by the pipes it needs
    would otherwise block its own repair and so block commissioning. */
+/* On the graph (graphSlot()) - this grid is built from exactly what that graph
+   is built from (LAY.parts, D.ports, D.pipes), and a frame asks for the whole
+   of it a dozen times. Only the SKIPLESS grid: a skip is a what-if about a
+   part standing somewhere else, so it is nobody's shared answer. No caller
+   writes to the grid it is handed. */
 function occupied(skip,opt){
   const off = skip ? (Array.isArray(skip)?skip:[skip]) : [];
   const wantPipes = !opt || opt.pipes!==false;
   const wantPorts = !opt || opt.ports!==false;
-  const g=Array.from({length:GH},()=>new Array(GW).fill(null));
+  const slot=graphSlot("occupied"), key=(wantPipes?"p":"-")+(wantPorts?"o":"-");
+  if(!skip){ const hit=slot.get(key); if(hit) return hit; }
+  const g=new Array(GH); for(let Y=0;Y<GH;Y++) g[Y]=new Array(GW).fill(null);
   for(const p of LAY.parts){ if(off.includes(p)) continue;
     for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
       if(X>=0&&X<GW&&Y>=0&&Y<GH) g[Y][X]=p; }
@@ -1910,6 +1940,7 @@ function occupied(skip,opt){
     const i=k.indexOf(","), X=+k.slice(0,i), Y=+k.slice(i+1);
     if(X>=0&&X<GW&&Y>=0&&Y<GH && !g[Y][X]) g[Y][X]={id:"pipe:"+k, pipe:true};
   }
+  if(!skip) slot.set(key,g);
   return g;
 }
 // all of a group is tested before any of it moves, so it never half-lands.
@@ -1972,9 +2003,13 @@ function freeAdj(p,g){
   }
   return out;
 }
+/* IS THE BOARD THE ONE D DESCRIBES. Split out of layoutMetrics() because a
+   frame has to ask it BEFORE laySettle(): settle first and the window would
+   hold a graph read off the board the player has just left. */
+const layFresh=()=>{ if(!LAY||layFit!==laySrcSig()) buildLayout(); };
 function layoutMetrics(){
-  if(!LAY||layFit!==laySrcSig()) buildLayout();
-  const P_=LAY.parts, id=k=>P_.find(q=>q.id===k), core=id("core"), cc=cen(core);
+  layFresh();
+  const P_=LAY.parts, core=partOf("core"), cc=cen(core);
   let head=0, n=0;
   for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
@@ -2024,7 +2059,7 @@ function layoutMetrics(){
     sep=Math.min(sep,Math.abs(a.x-b.x)+Math.abs(a.y-b.y));
   }
   // the steam bubble has to sit at the top of the loop, and the accumulator drains downhill
-  const pz=id("pzr");
+  const pz=partOf("pzr");
   let loopTop=core.y;
   for(const q of P_) if(q.role==="sg") loopTop=Math.min(loopTop,q.y);
   const pzrOK = pz ? pz.y<=loopTop : true;

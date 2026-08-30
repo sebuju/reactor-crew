@@ -104,9 +104,9 @@ function radGeom(){
   // so laying a cell of pipe moves the field the same way sliding a shield does
   const sig=laySig()+"|"+pipeSig();
   if(radCache && radCacheSig===sig) return radCache;
-  const g=occupied(null), core=LAY.parts.find(p=>p.id==="core"), cc=cen(core);
+  const g=occupied(null), core=partOf("core"), cc=cen(core);
   const K={core:radKernel(g,cc.x,cc.y), sg:[], tank:[],
-           crew:LAY.parts.find(p=>p.id==="ctrl")||core};
+           crew:partOf("ctrl")||core};
   for(const p of LAY.parts) if(p.role==="sg"){
     const c=cen(p); K.sg.push(radKernel(g,c.x,c.y));
   }

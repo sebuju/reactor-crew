@@ -648,6 +648,7 @@ const hit=(a,b)=>a.x+a.w>b.x && a.x<b.x+b.w && a.y+a.h>b.y && a.y<b.y+b.h;
    enough to get out of a neighbour's way on a crowded plant, near enough that
    it is plainly THAT pipe's reading and not the next one's. */
 const STACK_OFF=STACK_H+2;
+const STACK_STEPS=[0,1,-1,2,-2,3,-3];
 function pipeRunSpots(r){
   const out=[];
   for(const q of pipeGeom(r.pts).segs){
@@ -664,7 +665,7 @@ function pipeRunSpots(r){
     for(let i=0;i<n;i++){
       const t = n===1 ? 0.5 : 0.5 + (i%2?1:-1)*Math.ceil(i/2)/(n+1);
       const x=q.x+q.dx*q.L*t, y=q.y+q.dy*q.L*t;
-      for(const o of [0,1,-1,2,-2,3,-3])
+      for(const o of STACK_STEPS)
         out.push({L:q.L, x:x+px*STACK_OFF*o, y:y+py*STACK_OFF*o, key:r.key,
                   fits:q.L>=STACK_MIN_L, off:Math.abs(o)});
     }
@@ -684,12 +685,15 @@ function pipeAnchors(runs){
   /* longest run first: a main leg has the most to say and the fewest places
      to say it, and letting a stub take the good spot first is what produced
      the smears this replaces. */
-  const order=runs.slice().sort((a,b)=>{
-    const la=Math.max(...pipeRunSpots(a).map(s=>s.L),0);
-    const lb=Math.max(...pipeRunSpots(b).map(s=>s.L),0);
-    return lb-la; });
+  /* Every run's spots are priced ONCE. The comparator used to build both
+     sides' lists on each comparison and throw them away, so an n-run plant
+     built that list O(n log n) times over and then a final time per run. */
+  const spotsBy=new Map(), longest=new Map();
+  for(const r of runs){ const sp=pipeRunSpots(r); spotsBy.set(r,sp);
+    let m=0; for(const s of sp) if(s.L>m) m=s.L; longest.set(r,m); }
+  const order=runs.slice().sort((a,b)=>longest.get(b)-longest.get(a));
   for(const r of order){
-    const spots=pipeRunSpots(r);
+    const spots=spotsBy.get(r);
     if(!spots.length) continue;
     /* SCORED, not first-past-the-post. A ranked search that took the first
        clear candidate and otherwise fell back to spots[0] left three
@@ -783,7 +787,7 @@ function pipeMeters(runs,L){
    of the relief bowtie at the very top of the shell, and it does cover a band of the
    level column - the same trade the flow meters make against their own pipes. */
 function pipeVessel(L){
-  const p=LAY.parts.find(q=>q.id==="pzr");
+  const p=partOf("pzr");
   if(!p || !fitted(p) || L.dmgParts.includes("pzr")) return;
   const R=prect(p), r=PIPE_DIAL_R;
   const fr=pipeDisplay("pzrP", L.P/Math.max(0.1,P.P0));

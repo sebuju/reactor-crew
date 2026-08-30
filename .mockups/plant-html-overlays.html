@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MOCKUP: Kit-Well Overlays on Plant View</title>
+<style>
+:root{
+  --mono:ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace;
+  --c-bg:#080c0e;--c-panel:#0e1518;--c-panel-hi:#142126;--c-well:#060a0b;
+  --c-edge:#1d2f35;--c-edge2:#2c464e;--c-rail:#33525b;
+  --c-ink:#9fb4b9;--c-ink2:#5d7378;--c-bright:#dff0f3;
+  --c-amber:#f0a830;--c-cyan:#5fd2e2;--c-red:#ff5a45;--c-green:#57d38c;
+  --c-blue:#5aa9d6;--c-metal:#6d8f98;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden;background:var(--c-bg);color:var(--c-ink);font-family:var(--mono)}
+body{display:flex;flex-direction:column}
+#topbar{flex:0 0 auto;display:flex;align-items:center;gap:16px;height:36px;padding:0 12px;
+  background:var(--c-panel);border-bottom:1px solid var(--c-edge);z-index:10}
+#topbar b{color:var(--c-amber);font-size:11px;letter-spacing:3px}
+#topbar span{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--c-ink2)}
+#hint{margin-left:auto;font-size:9px;color:var(--c-ink2);letter-spacing:1px}
+#stage{position:relative;flex:1;overflow:hidden;cursor:default}
+canvas#cv{display:block;position:absolute;inset:0;width:100%;height:100%}
+#overlay{position:absolute;inset:0;pointer-events:none;z-index:2}
+#leaders{position:absolute;inset:0;pointer-events:none;z-index:1}
+#leaders line{stroke:var(--c-amber);stroke-width:1;stroke-dasharray:4 3;opacity:.4}
+
+.kit-well{position:absolute;background:var(--c-panel);pointer-events:auto;
+  font-family:var(--mono);width:160px;
+  box-shadow:0 2px 10px rgba(0,0,0,.6);z-index:2}
+.kit-rule-head{padding:5px 8px 4px;background:var(--c-edge);font-size:9px;font-weight:700;
+  letter-spacing:1.6px;text-transform:uppercase;color:var(--c-bright);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kit-well-body{padding:5px 4px}
+
+.insp-row{display:grid;grid-template-columns:1fr auto;align-items:center;
+  column-gap:6px;row-gap:1px;padding:1px 3px;font-size:8px;line-height:1.4}
+.insp-row-lab{letter-spacing:.4px;text-transform:uppercase;color:var(--c-ink2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:7px}
+.insp-row-val{text-align:right;white-space:nowrap;font-size:8px}
+.insp-row .kit-band,.insp-row .kit-seg{grid-column:1/-1}
+.insp-row.red{background:rgba(255,90,69,.12)}.insp-row.red .insp-row-lab{color:var(--c-ink)}
+.insp-row.amber{background:rgba(240,168,48,.12)}.insp-row.amber .insp-row-lab{color:var(--c-ink)}
+
+.kit-band{position:relative;height:32px;padding-top:2px;overflow:hidden}
+.kit-band svg{display:block;width:100%;height:14px}
+.kit-band .cell-dim{opacity:.22}
+.kit-band .lim{stroke:var(--c-red);stroke-width:1;vector-effect:non-scaling-stroke}
+.kit-band .needle{stroke:var(--c-bright);stroke-width:2.5;vector-effect:non-scaling-stroke}
+.kit-band .cap{stroke:var(--c-bright);stroke-width:5;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.kit-band .lo,.kit-band .hi{position:absolute;top:16px;font-size:7px;
+  letter-spacing:.4px;color:var(--c-ink2);white-space:nowrap}
+.kit-band .lo{left:0}.kit-band .hi{right:0}
+
+.kit-seg{position:relative;height:14px}
+.kit-seg-signed{height:28px;padding-top:2px}
+.kit-seg svg{display:block;width:100%;height:100%}
+.kit-seg .mid{stroke:var(--c-rail);stroke-width:1;vector-effect:non-scaling-stroke}
+.kit-seg .cell-dim{opacity:.22}
+.kit-seg .lo,.kit-seg .hi{position:absolute;top:16px;font-size:7px;
+  letter-spacing:.4px;color:var(--c-ink2)}
+.kit-seg .lo{left:0}.kit-seg .hi{right:0}
+
+.insp-viz{display:block;width:100%;height:120px;background:var(--c-well);border:1px solid var(--c-edge)}
+.kit-rule{display:flex;align-items:center;gap:5px;margin:4px 0 2px;
+  color:var(--c-ink2);font-size:7px;letter-spacing:1.5px;text-transform:uppercase;white-space:nowrap}
+.kit-rule::after{content:"";flex:1;height:1px;background:var(--c-edge2)}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <b>MOCKUP</b>
+  <span>Kit-well overlays on plant canvas</span>
+  <span id="hint">scroll to zoom &middot; right-drag to pan</span>
+</div>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <svg id="leaders"></svg>
+  <div id="overlay"></div>
+</div>
+<script>
+"use strict";
+
+/* ═══ GRID ═══ */
+const GW=60,GH=34,CELL=16,GX=12,GY=80;
+const gridW=GW*CELL,gridH=GH*CELL;
+
+const C={
+  bg:"#080c0e",panel:"#0e1518",well:"#060a0b",
+  edge:"#1d2f35",edge2:"#2c464e",rail:"#33525b",
+  ink:"#9fb4b9",ink2:"#5d7378",bright:"#dff0f3",
+  amber:"#f0a830",cyan:"#5fd2e2",red:"#ff5a45",green:"#57d38c",
+  blue:"#5aa9d6",metal:"#6d8f98",
+};
+
+/* ═══ MACHINES ═══ */
+const M=[
+  {id:"core",  n:"REACTOR",      gx:6,  gy:13, gw:9,  gh:12, col:"#ff5a45"},
+  {id:"rods",  n:"ROD DRIVES",   gx:6,  gy:0,  gw:9,  gh:13, col:"#c8d8dc"},
+  {id:"pzr",   n:"PRESSURIZER",  gx:15, gy:1,  gw:3,  gh:6,  col:"#a98cf0"},
+  {id:"sg0",   n:"STEAM GEN 1",  gx:26, gy:5,  gw:3,  gh:6,  col:"#5fd2e2"},
+  {id:"pump0", n:"RCP 1",        gx:26, gy:18, gw:3,  gh:5,  col:"#57d38c"},
+  {id:"turb",  n:"TURBINE",      gx:46, gy:11, gw:9,  gh:7,  col:"#f0a830"},
+  {id:"cond",  n:"CONDENSER",    gx:46, gy:24, gw:9,  gh:5,  col:"#5aa9d6"},
+  {id:"feed",  n:"FEED PUMP",    gx:30, gy:18, gw:3,  gh:5,  col:"#5aa9d6"},
+  {id:"ctrl",  n:"CONTROL",      gx:0,  gy:30, gw:6,  gh:4,  col:"#cfc9b8"},
+  {id:"cont",  n:"CONTAINMENT",  gx:10, gy:30, gw:6,  gh:3,  col:"#8fa9ae"},
+  {id:"bkp",   n:"BACKUP PWR",   gx:56, gy:11, gw:3,  gh:5,  col:"#57d38c"},
+  {id:"shld0", n:"SHIELD 1",     gx:18, gy:30, gw:3,  gh:3,  col:"#6d8f98"},
+  {id:"shld1", n:"SHIELD 2",     gx:21, gy:30, gw:3,  gh:3,  col:"#6d8f98"},
+  {id:"shld2", n:"SHIELD 3",     gx:24, gy:30, gw:3,  gh:3,  col:"#6d8f98"},
+  {id:"rad0",  n:"RADIATOR 1",   gx:44, gy:30, gw:5,  gh:3,  col:"#b8c4cf"},
+  {id:"rad1",  n:"RADIATOR 2",   gx:50, gy:30, gw:5,  gh:3,  col:"#b8c4cf"},
+];
+function mPx(m){return{x:GX+m.gx*CELL,y:GY+m.gy*CELL,w:m.gw*CELL,h:m.gh*CELL};}
+
+/* ═══ READOUTS ═══ */
+const R={
+  core:[
+    {l:"POWER",v:"85.3 %",c:C.cyan,band:{lo:0,hi:150,dp:0,zones:[[110,C.green,"NORMAL"],[150,C.red,"OVERPOWER"]],v:.57}},
+    {l:"THERMAL",v:"2800 MWt"},
+    {l:"DNBR",v:"1.42",c:C.cyan,band:{lo:.8,hi:2.6,dp:2,zones:[[1,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[2.6,C.cyan,"SAFE"]],v:.35}},
+    {l:"FUEL TEMP",v:"892 K",c:C.cyan,band:{lo:300,hi:2200,dp:0,zones:[[1600,C.cyan,"NORMAL"],[2200,C.red,"FAILING"]],v:.36}},
+    {l:"CORE FLOW",v:"98.2 %",c:C.cyan,band:{lo:0,hi:110,dp:0,zones:[[70,C.red,"STARVED"],[110,C.cyan,"NORMAL"]],v:.93}},
+    {sec:"REACTIVITY BALANCE"},
+    {l:"FUEL",v:"+3200",c:C.red,seg:{signed:false,full:4000,f:.8}},
+    {l:"DECAY",v:"+480",c:C.amber,seg:{signed:false,full:4000,f:.12}},
+    {l:"XENON",v:"-1200",c:C.blue,seg:{signed:false,full:4000,f:-.3}},
+    {l:"BORON",v:"-2400",c:C.blue,seg:{signed:false,full:4000,f:-.6}},
+    {l:"RODS",v:"-800",c:C.metal,seg:{signed:false,full:4000,f:-.2}},
+    {l:"NET",v:"-200",c:C.green,seg:{signed:false,full:4000,f:-.05}},
+    {viz:"rho"},
+    {sec:"HEAT BALANCE"},
+    {viz:"heat"},
+    {sec:"FUEL DAMAGE"},
+    {viz:"dmg"},
+  ],
+  rods:[
+    {l:"BANK POSITION",v:"62.0 %",c:C.cyan,band:{lo:0,hi:100,dp:0,zones:[[30,C.cyan,"LOW"],[70,C.cyan,"NOMINAL"],[100,C.cyan,"FULL"]],v:.62}},
+    {l:"BANK DEMAND",v:"62.0 %",c:C.cyan},
+    {l:"WORTH HERE",v:"840 pcm"},
+    {l:"DRIVES",v:"answering",c:C.green},
+    {l:"SCRAM TIME",v:"3.2 s"},
+    {l:"TRIP LATCH",v:"clear",c:C.green},
+    {l:"TILT TRIM",v:"+0.00",c:C.cyan,band:{lo:-.3,hi:.3,dp:2,zones:[[-.05,C.amber,"LEANING"],[.05,C.ink2,"CENTRED"],[.3,C.amber,"LEANING"]],v:0}},
+    {l:"SHUTDOWN MGN",v:"1400 pcm",c:C.cyan,band:{lo:-3000,hi:3000,dp:0,zones:[[200,C.red,"THIN"],[3000,C.green,"AMPLE"]],v:.47}},
+  ],
+  pzr:[
+    {l:"PRESSURE",v:"15.51 MPa",c:C.cyan,band:{lo:12.4,hi:17.8,dp:2,zones:[[14.5,C.amber,"LOW"],[16.3,C.cyan,"NORMAL"],[17.8,C.red,"HIGH"]],v:.58}},
+    {l:"LEVEL",v:"62.3 %",c:C.cyan,band:{lo:0,hi:100,dp:0,zones:[[78,C.cyan,"NORMAL"],[100,C.amber,"HIGH"]],v:.62}},
+    {l:"SUBCOOLING",v:"32.4 K",c:C.cyan,band:{lo:0,hi:60,dp:0,zones:[[8,C.red,"SATURATED"],[60,C.cyan,"SUBCOOLED"]],v:.54}},
+    {l:"SAT TEMP",v:"610 K"},
+  ],
+  sg0:[
+    {l:"STEAM PRESS",v:"6.89 MPa"},
+    {l:"SHELL TEMP",v:"558 K",c:C.cyan},
+    {l:"STEAM RAISED",v:"142 kg/s"},
+    {l:"HEAT REMOVED",v:"324 MWt"},
+    {l:"T-HOT IN",v:"592 K"},
+    {l:"T-COLD OUT",v:"548 K"},
+    {l:"SHELL",v:"intact",c:C.green},
+    {l:"TUBES",v:"intact",c:C.green},
+  ],
+  pump0:[
+    {l:"PUMP SPEED",v:"98.1 %",c:C.cyan,band:{lo:0,hi:110,dp:0,zones:[[5,C.red,"STOPPED"],[110,C.cyan,"RUNNING"]],v:.89}},
+    {l:"SPEED DEMAND",v:"100.0 %",c:C.cyan},
+    {l:"CAVITATION",v:"0 %",c:C.green,band:{lo:0,hi:60,dp:0,zones:[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],v:0}},
+  ],
+  turb:[
+    {l:"LOAD",v:"85.0 %",c:C.cyan},
+    {l:"LOAD DEMAND",v:"85.0 %",c:C.cyan},
+    {l:"ELECTRICAL",v:"920 MWe"},
+    {l:"STEAM DUMP",v:"0 %",c:C.green},
+    {l:"RUNBACK",v:"armed",c:C.green},
+  ],
+  cond:[
+    {l:"BACK PRESS",v:"0.0056 MPa",c:C.cyan,band:{lo:0,hi:.015,dp:4,zones:[[.003,C.cyan,"NORMAL"],[.012,C.amber,"HIGH"],[.015,C.red,"NEAR TRIP"]],v:.37}},
+    {l:"COND TEMP",v:"298 K",c:C.cyan},
+    {l:"HEAT REJECTED",v:"1840 MWt"},
+    {l:"DROWNED TUBES",v:"0 %",c:C.green,band:{lo:0,hi:100,dp:0,zones:[[1,C.cyan,"CLEAR"],[25,C.amber,"FLOODING"],[100,C.red,"DROWNED"]],v:0}},
+  ],
+  feed:[{l:"EMERG FEED",v:"armed",c:C.green}],
+  ctrl:[
+    {l:"RPS",v:"live",c:C.green},
+    {l:"LAST TRIP",v:"none"},
+    {l:"PARTY DOSE",v:"12.3 %",c:C.cyan,band:{lo:0,hi:100,dp:0,zones:[[50,C.cyan,"LOW"],[100,C.red,"HIGH"]],v:.12}},
+    {l:"DOSE RATE",v:"0.08 x",c:C.green,band:{lo:0,hi:1,dp:2,zones:[[.15,C.cyan,"CLEAN"],[.5,C.amber,"ELEVATED"],[1,C.red,"DANGEROUS"]],v:.08}},
+    {l:"EVENTS",v:"0"},
+  ],
+  cont:[
+    {l:"RELEASE",v:"0.00 %",c:C.green,band:{lo:0,hi:10,dp:2,zones:[[1,C.cyan,"CONTAINED"],[10,C.red,"RELEASING"]],v:0}},
+    {l:"VESSEL",v:"intact",c:C.green},
+  ],
+  bkp:[{l:"BLACKOUT",v:"no",c:C.green},{l:"CAPACITY",v:"100 %"}],
+  shld0:[],shld1:[],shld2:[],
+  rad0:[
+    {l:"PANEL TEMP",v:"342 K",c:C.cyan,band:{lo:240,hi:380,dp:0,zones:[[290,C.cyan,"NORMAL"],[350,C.amber,"HOT"],[380,C.red,"NO SINK"]],v:.52}},
+    {l:"SHEDS",v:"48 MWt"},
+    {l:"CAN SHED",v:"YES",c:C.green},
+  ],
+  rad1:[
+    {l:"PANEL TEMP",v:"338 K",c:C.cyan,band:{lo:240,hi:380,dp:0,zones:[[290,C.cyan,"NORMAL"],[350,C.amber,"HOT"],[380,C.red,"NO SINK"]],v:.49}},
+    {l:"SHEDS",v:"51 MWt"},
+    {l:"CAN SHED",v:"YES",c:C.green},
+  ],
+};
+
+/* ═══ WIDGET BUILDERS ═══ */
+const NB=40;
+function ns(tag,cls){const e=document.createElementNS("http://www.w3.org/2000/svg",tag);if(cls)e.setAttribute("class",cls);return e;}
+
+function buildBand(b){
+  if(!b)return null;
+  const el=document.createElement("div");el.className="kit-band";
+  const svg=ns("svg");svg.setAttribute("viewBox","0 0 100 15");svg.setAttribute("preserveAspectRatio","none");
+  const cw=100/NB;
+  let needleZi=0;
+  for(let z=0;z<b.zones.length;z++) if(b.v>=b.zones[z][0]) needleZi=z;
+  for(let i=0;i<NB;i++){
+    const zv=b.lo+(b.hi-b.lo)*(i/NB);
+    let zi=0;for(let z=0;z<b.zones.length;z++) if(zv>=b.zones[z][0]) zi=z;
+    const r=ns("rect");
+    r.setAttribute("x",i*cw);r.setAttribute("y",4);r.setAttribute("width",cw*.8);r.setAttribute("height",7);
+    r.style.fill=b.zones[zi][1];
+    if(zi!==needleZi) r.setAttribute("class","cell-dim");
+    svg.appendChild(r);
+  }
+  if(b.lim) for(const l of b.lim){
+    const lv=((l[0]-b.lo)/(b.hi-b.lo))*100;
+    const ln=ns("line","lim");ln.setAttribute("x1",lv);ln.setAttribute("x2",lv);ln.setAttribute("y1",0);ln.setAttribute("y2",15);
+    svg.appendChild(ln);
+  }
+  const nv=Math.max(0,Math.min(100,((b.v-b.lo)/(b.hi-b.lo))*100));
+  const nd=ns("line","needle");nd.setAttribute("x1",nv);nd.setAttribute("x2",nv);nd.setAttribute("y1",2);nd.setAttribute("y2",13);svg.appendChild(nd);
+  const cp=ns("line","cap");cp.setAttribute("x1",nv);cp.setAttribute("x2",nv);cp.setAttribute("y1",7);cp.setAttribute("y2",7);svg.appendChild(cp);
+  el.appendChild(svg);
+  const lo=document.createElement("span");lo.className="lo";lo.textContent=b.lo;el.appendChild(lo);
+  const hi=document.createElement("span");hi.className="hi";hi.textContent=b.hi;el.appendChild(hi);
+  for(const z of b.zones){
+    if(!z[2])continue;
+    const zl=document.createElement("span");
+    const leftPct=((z[0]-b.lo)/(b.hi-b.lo))*100;
+    zl.style.cssText=`position:absolute;left:${leftPct}%;transform:translateX(-50%);font-size:6px;color:${C.ink2};letter-spacing:.3px;white-space:nowrap`;
+    zl.textContent=z[2];el.appendChild(zl);
+  }
+  const zoneEls=[...el.querySelectorAll("span:not(.lo):not(.hi)")];
+  const rows=[];
+  for(const zl of zoneEls){
+    const estW=zl.textContent.length*3.5;
+    const leftPct=parseFloat(zl.style.left);
+    const leftPx=leftPct/100*100;
+    let placed=false;
+    for(let r=0;r<rows.length;r++){
+      if(leftPx-estW/2>=rows[r]){
+        rows[r]=leftPx+estW/2;zl.style.top=(16+r*8)+"px";placed=true;break;
+      }
+    }
+    if(!placed){zl.style.top=(16+rows.length*8)+"px";rows.push(leftPx+estW/2);}
+  }
+  for(const zl of zoneEls) zl._baseRow=(parseInt(zl.style.top)-16)/8;
+  return el;
+}
+
+function buildSeg(s){
+  if(!s)return null;
+  const el=document.createElement("div");el.className="kit-seg"+(s.signed?" kit-seg-signed":"");
+  const svg=ns("svg");svg.setAttribute("viewBox","0 0 100 15");svg.setAttribute("preserveAspectRatio","none");
+  const half=s.signed?NB/2:NB;const cw=100/NB;
+  if(s.signed){const m=ns("line","mid");m.setAttribute("x1",50);m.setAttribute("x2",50);m.setAttribute("y1",0);m.setAttribute("y2",15);svg.appendChild(m);}
+  const from=s.signed?NB/2:0;const cnt=Math.round(Math.abs(s.f)*half);const dir=s.f>=0?1:-1;
+  for(let i=0;i<NB;i++){
+    const r=ns("rect");
+    r.setAttribute("x",i*cw);r.setAttribute("y",s.signed?2:4);r.setAttribute("width",cw*.8);r.setAttribute("height",s.signed?11:7);
+    let lit=s.signed?(dir>0?(i>=from&&i<from+cnt):(i<from&&i>=from-cnt)):(i<cnt);
+    r.style.fill=s.signed?(lit?(s.f>=0?C.red:C.blue):C.well):(lit?C.cyan:C.well);
+    if(!lit)r.setAttribute("class","cell-dim");
+    svg.appendChild(r);
+  }
+  el.appendChild(svg);
+  if(s.full!=null){
+    const lo=document.createElement("span");lo.className="lo";lo.textContent="-"+s.full;el.appendChild(lo);
+    const hi=document.createElement("span");hi.className="hi";hi.textContent="+"+s.full;el.appendChild(hi);
+  }
+  return el;
+}
+
+/* ═══ VIZ PAINTERS ═══ */
+function paintViz(cv2,type){
+  const dpr=devicePixelRatio||1;
+  const rc=cv2.getBoundingClientRect();
+  if(rc.width<4||rc.height<4)return;
+  cv2.width=rc.width*dpr;cv2.height=rc.height*dpr;
+  const c=cv2.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);
+  const w=rc.width,h=rc.height;
+  c.fillStyle=C.well;c.fillRect(0,0,w,h);
+  c.strokeStyle=C.edge;c.lineWidth=1;c.strokeRect(.5,.5,w-1,h-1);
+  c.textAlign="left";c.textBaseline="top";
+
+  if(type==="rho"){
+    const items=[{l:"FUEL",v:.8,c:C.red},{l:"DECAY",v:.12,c:C.amber},{l:"XENON",v:-.3,c:C.blue},{l:"BORON",v:-.6,c:C.blue},{l:"RODS",v:-.2,c:C.metal}];
+    const bY=8,bH=14,cx=w/2;
+    c.fillStyle=C.edge2;c.fillRect(10,bY,w-20,bH);c.fillStyle=C.bright;c.fillRect(cx-.5,bY,1,bH);
+    let rx=cx;
+    for(const it of items){if(it.v>0){const bw=it.v*(w/2-15);c.fillStyle=it.c;c.globalAlpha=.7;c.fillRect(rx,bY,bw,bH);c.globalAlpha=1;c.strokeStyle=C.edge;c.strokeRect(rx,bY,bw,bH);rx+=bw;}}
+    rx=cx;
+    for(const it of items){if(it.v<0){const bw=Math.abs(it.v)*(w/2-15);rx-=bw;c.fillStyle=it.c;c.globalAlpha=.7;c.fillRect(rx,bY,bw,bH);c.globalAlpha=1;c.strokeStyle=C.edge;c.strokeRect(rx,bY,bw,bH);}}
+    c.font="7px monospace";let ky=bY+bH+6;
+    for(let i=0;i<items.length;i++){const it=items[i],col=i%4,row=Math.floor(i/4),kx=10+col*(w-20)/4;c.fillStyle=it.c;c.globalAlpha=.8;c.fillRect(kx,ky+row*14,6,6);c.globalAlpha=1;c.fillStyle=C.ink2;c.fillText(it.l,kx+10,ky+row*14);}
+    const nY=ky+Math.ceil(items.length/4)*14+8;
+    c.fillStyle=C.edge2;c.fillRect(10,nY,w-20,8);c.fillStyle=C.bright;c.fillRect(cx-.5,nY,1,8);
+    c.fillStyle=C.green;c.fillRect(cx-1,nY,2,8);c.fillStyle=C.ink2;c.font="6px monospace";c.fillText("NET RHO -200 pcm",10,nY+10);
+    const tY=nY+16,tH=h-tY-4;
+    if(tH>20){c.fillStyle=C.well;c.fillRect(10,tY,w-20,tH);c.strokeStyle=C.edge;c.strokeRect(10,tY,w-20,tH);c.strokeStyle=C.edge2;c.setLineDash([2,2]);c.beginPath();c.moveTo(10,tY+tH/2);c.lineTo(w-10,tY+tH/2);c.stroke();c.setLineDash([]);c.strokeStyle=C.amber;c.lineWidth=1;c.beginPath();for(let x=10;x<w-10;x++){const t=(x-10)/(w-20),y=tY+tH/2+Math.sin(t*12+.5)*tH*.15;x===10?c.moveTo(x,y):c.lineTo(x,y);}c.stroke();}
+  } else if(type==="heat"){
+    const bY=8,bH=14,cx=w/2;
+    c.fillStyle=C.edge2;c.fillRect(10,bY,w-20,bH);c.fillStyle=C.bright;c.fillRect(cx-.5,bY,1,bH);
+    let rx=cx;
+    [{v:.6,c:C.red},{v:.15,c:C.amber},{v:.08,c:C.amber}].forEach(s=>{const bw=s.v*(w/2-15);c.fillStyle=s.c;c.globalAlpha=.7;c.fillRect(rx,bY,bw,bH);c.globalAlpha=1;c.strokeStyle=C.edge;c.strokeRect(rx,bY,bw,bH);rx+=bw;});
+    rx=cx;
+    [{v:-.4,c:C.cyan},{v:-.3,c:C.cyan},{v:-.05,c:C.metal}].forEach(s=>{const bw=Math.abs(s.v)*(w/2-15);rx-=bw;c.fillStyle=s.c;c.globalAlpha=.7;c.fillRect(rx,bY,bw,bH);c.globalAlpha=1;c.strokeStyle=C.edge;c.strokeRect(rx,bY,bw,bH);});
+    c.fillStyle=C.bright;c.fillRect(cx-1,bY,2,bH);
+    const nY=bY+bH+6;
+    c.fillStyle=C.edge2;c.fillRect(10,nY,w-20,8);c.fillStyle=C.bright;c.fillRect(cx-.5,nY,1,8);
+    c.fillStyle=C.green;c.fillRect(cx,nY,2,8);c.fillStyle=C.ink2;c.font="6px monospace";c.fillText("dT/dt +0.003 K/s",10,nY+10);
+    const tY=nY+16,tH=h-tY-4;
+    if(tH>20){c.fillStyle=C.well;c.fillRect(10,tY,w-20,tH);c.strokeStyle=C.edge;c.strokeRect(10,tY,w-20,tH);c.strokeStyle=C.cyan;c.lineWidth=1;c.beginPath();for(let x=10;x<w-10;x++){const t=(x-10)/(w-20),y=tY+tH/2-Math.sin(t*8)*tH*.2;x===10?c.moveTo(x,y):c.lineTo(x,y);}c.stroke();}
+  } else if(type==="dmg"){
+    const cols=14,rows=10,cW=(w-20)/cols,cH=(h-30)/rows;
+    c.fillStyle=C.ink2;c.font="6px monospace";c.fillText("FUEL DAMAGE MAP",10,4);
+    for(let r=0;r<rows;r++)for(let cc=0;cc<cols;cc++){const d=Math.sin(r*7+cc*3)*.5+.5;c.fillStyle=d>.7?C.red:d>.5?C.amber:C.cyan;c.globalAlpha=d>.7?.5:d>.5?.35:.1;c.fillRect(10+cc*cW+1,12+r*cH+1,cW-2,cH-2);}
+    c.globalAlpha=1;c.strokeStyle=C.bright;c.lineWidth=1;c.strokeRect(10+5*cW+2,12+3*cH+2,cW-4,cH-4);
+    const ly=h-12;
+    c.globalAlpha=.6;c.fillStyle=C.cyan;c.fillRect(10,ly,(w-20)*.85,5);c.fillStyle=C.amber;c.fillRect(10+(w-20)*.85,ly,(w-20)*.1,5);c.fillStyle=C.red;c.fillRect(10+(w-20)*.95,ly,(w-20)*.05,5);c.globalAlpha=1;
+    c.fillStyle=C.ink2;c.font="5px monospace";c.fillText("INTACT 85%",10,ly+7);
+  }
+}
+
+/* ═══ BUILD DOM ONCE ═══ */
+const PW=160;
+const GAP=8;
+const overlay=document.getElementById("overlay");
+const leaderSvg=document.getElementById("leaders");
+const panelEls={};
+
+function buildPanel(m){
+  const well=document.createElement("div");well.className="kit-well";
+  const head=document.createElement("div");head.className="kit-rule-head";head.textContent=m.n;well.appendChild(head);
+  const body=document.createElement("div");body.className="kit-well-body";well.appendChild(body);
+  const rows=[];
+  const cached={_head:head,_body:body,_rows:[],_labs:[],_vals:[],_bands:[],_bandSvgs:[],_bandLim:[],_bandZone:[],_segs:[],_segSvgs:[],_segLim:[],_rules:[],_viz:[]};
+  for(const row of(R[m.id]||[])){
+    if(row.sec){const r=document.createElement("div");r.className="kit-rule";r.textContent=row.sec;body.appendChild(r);rows.push({t:"sec",el:r});cached._rules.push(r);continue;}
+    if(row.viz){const cv2=document.createElement("canvas");cv2.className="insp-viz";cv2._vizType=row.viz;body.appendChild(cv2);rows.push({t:"viz",el:cv2,v:row.viz});cached._viz.push(cv2);continue;}
+    const el=document.createElement("div");el.className="insp-row";
+    if(row.c===C.red)el.classList.add("red");else if(row.c===C.amber)el.classList.add("amber");
+    const lab=document.createElement("span");lab.className="insp-row-lab";lab.textContent=row.l;
+    const val=document.createElement("span");val.className="insp-row-val";val.textContent=row.v;if(row.c)val.style.color=row.c;
+    el.append(lab,val);
+    cached._rows.push(el);cached._labs.push(lab);cached._vals.push(val);
+    if(row.band){const b=buildBand(row.band);if(b){el.appendChild(b);cached._bands.push(b);const sv=b.querySelector("svg");if(sv)cached._bandSvgs.push(sv);for(const lo of b.querySelectorAll(".lo,.hi"))cached._bandLim.push(lo);for(const zl of b.querySelectorAll(".kit-band > span:not(.lo):not(.hi)"))cached._bandZone.push(zl);}}
+    if(row.seg){const s=buildSeg(row.seg);if(s){el.appendChild(s);cached._segs.push(s);const sv=s.querySelector("svg");if(sv)cached._segSvgs.push(sv);for(const lo of s.querySelectorAll(".lo,.hi"))cached._segLim.push(lo);}}
+    body.appendChild(el);rows.push({t:"row",el});
+  }
+  overlay.appendChild(well);
+  panelEls[m.id]={well,rows,...cached};
+}
+for(const m of M)buildPanel(m);
+
+/* ═══ MACHINE BANDS ═══ */
+const bandM={left:[],right:[],top:[],bot:[]};
+for(const m of M){
+  const r=mPx(m),rows=R[m.id]||[];
+  if(!rows.length)continue;
+  const cx=r.x+r.w/2;
+  if(cx<GX+gridW*.4) bandM.left.push(m);
+  else if(cx>GX+gridW*.6) bandM.right.push(m);
+  else if(r.y<GY+gridH/2) bandM.top.push(m);
+  else bandM.bot.push(m);
+}
+
+/* ═══ LEADER LINES ═══ */
+const leaderEls={};
+for(const m of M){
+  if(!R[m.id]||!R[m.id].length)continue;
+  const line=document.createElementNS("http://www.w3.org/2000/svg","line");
+  leaderSvg.appendChild(line);leaderEls[m.id]=line;
+}
+
+/* ═══ PAN & ZOOM ═══ */
+const VIEW={z:1,s:1,fit:1,ox:0,oy:0};
+let dragging=false,dragLx=0,dragLy=0;
+const ctx=cv.getContext("2d");
+
+function cW(){return GX+gridW+40;}
+function cH(){return GY+gridH+200;}
+
+function computeScreenOffset(vw,vh){
+  const s=VIEW.s;
+  return{
+    ox:(vw-cW()*s)/2+VIEW.ox*s,
+    oy:(vh-cH()*s)/2+VIEW.oy*s
+  };
+}
+
+function syncTransform(){
+  const dpr=devicePixelRatio||1;
+  const rc=stage.getBoundingClientRect();
+  const vw=rc.width,vh=rc.height;
+  VIEW.fit=Math.min(vw/cW(),vh/cH());
+  VIEW.s=VIEW.fit*VIEW.z;
+  const s=VIEW.s;
+  const off=computeScreenOffset(vw,vh);
+
+  ctx.setTransform(s*dpr,0,0,s*dpr,off.ox*dpr,off.oy*dpr);
+
+  // 1. set all panel CSS sizes (positions will be set after measuring)
+  for(const id in panelEls){
+    const c=panelEls[id],el=c.well;
+    el.style.width=Math.round(PW*s)+"px";
+    el.style.fontSize=Math.round(8*s)+"px";el.style.lineHeight="1.4";
+    c._head.style.fontSize=Math.round(9*s)+"px";
+    c._head.style.padding=`${5*s}px ${8*s}px ${4*s}px`;
+    c._body.style.padding=`${5*s}px ${4*s}px`;
+    for(const ch of c._rows){ch.style.fontSize=Math.round(8*s)+"px";ch.style.padding=`${1*s}px ${3*s}px`;ch.style.columnGap=Math.round(6*s)+"px";}
+    for(const ch of c._labs)ch.style.fontSize=Math.round(7*s)+"px";
+    for(const ch of c._vals)ch.style.fontSize=Math.round(8*s)+"px";
+    for(const ch of c._bands){ch.style.height=Math.round(32*s)+"px";ch.style.paddingTop=Math.round(2*s)+"px";}
+    for(const ch of c._bandSvgs)ch.style.height=Math.round(14*s)+"px";
+    for(const ch of c._bandLim){ch.style.fontSize=Math.round(7*s)+"px";ch.style.top=Math.round(16*s)+"px";}
+    for(const ch of c._bandZone){ch.style.fontSize=Math.round(6*s)+"px";ch.style.top=Math.round((16+(ch._baseRow||0)*8)*s)+"px";}
+    for(const ch of c._segs)ch.style.height=Math.round(ch.classList.contains("kit-seg-signed")?28*s:14*s)+"px";
+    for(const ch of c._segSvgs)ch.style.height="100%";
+    for(const ch of c._segLim){ch.style.fontSize=Math.round(7*s)+"px";ch.style.top=Math.round(ch.parentElement.classList.contains("kit-seg-signed")?16*s:14*s)+"px";}
+    for(const ch of c._rules)ch.style.fontSize=Math.round(7*s)+"px";
+    for(const ch of c._viz)ch.style.height=Math.round(120*s)+"px";
+  }
+
+  // 2. force layout, then measure heights and position panels
+  for(const side of ["left","right","top","bot"]){
+    const list=bandM[side];
+    if(!list.length)continue;
+    if(side==="left"||side==="right"){
+      let y=10;
+      const bx=side==="left"?GX-PW-20:GX+gridW+20;
+      for(const m of list){
+        const ph=panelEls[m.id].well.offsetHeight;
+        panelEls[m.id].well.style.left=(off.ox+bx*s)+"px";
+        panelEls[m.id].well.style.top=(off.oy+y*s)+"px";
+        y+=ph/s+GAP;
+      }
+    } else {
+      let x=side==="top"?GX+40:GX;
+      const py=side==="top"?10:GY+gridH+15;
+      for(const m of list){
+        panelEls[m.id].well.style.left=(off.ox+x*s)+"px";
+        panelEls[m.id].well.style.top=(off.oy+py*s)+"px";
+        x+=PW+GAP;
+      }
+    }
+  }
+
+  // 3. leader lines
+  leaderSvg.setAttribute("viewBox",`0 0 ${vw} ${vh}`);
+  for(const id in leaderEls){
+    const m=M.find(mm=>mm.id===id);if(!m)continue;
+    const mr=mPx(m);
+    const mc={x:off.ox+(mr.x+mr.w/2)*s,y:off.oy+(mr.y+mr.h/2)*s};
+    const ph=panelEls[id]?panelEls[id].well.offsetHeight:100;
+    const pp=panelEls[id]?panelEls[id].well:{};
+    const pcLeft=parseFloat(pp.style.left)||0;
+    const pcTop=parseFloat(pp.style.top)||0;
+    const pc={x:pcLeft+PW*s/2,y:pcTop+ph/2};
+    leaderEls[id].setAttribute("x1",mc.x);leaderEls[id].setAttribute("y1",mc.y);
+    leaderEls[id].setAttribute("x2",pc.x);leaderEls[id].setAttribute("y2",pc.y);
+  }
+}
+
+function drawCanvas(){
+  const dpr=devicePixelRatio||1;
+  const rc=stage.getBoundingClientRect();
+  cv.width=rc.width*dpr;cv.height=rc.height*dpr;
+  cv.style.width=rc.width+"px";cv.style.height=rc.height+"px";
+  ctx.setTransform(VIEW.s*dpr,0,0,VIEW.s*dpr,
+    ((rc.width-cW()*VIEW.s)/2+VIEW.ox*VIEW.s)*dpr,
+    ((rc.height-cH()*VIEW.s)/2+VIEW.oy*VIEW.s)*dpr);
+  ctx.fillStyle=C.bg;ctx.fillRect(-10,-10,cW()+20,cH()+20);
+  ctx.fillStyle="#0a0f12";ctx.fillRect(GX,GY,gridW,gridH);
+  ctx.strokeStyle="rgba(120,180,190,.06)";ctx.lineWidth=1/VIEW.s;
+  for(let i=0;i<=GW;i++){ctx.beginPath();ctx.moveTo(GX+i*CELL,GY);ctx.lineTo(GX+i*CELL,GY+gridH);ctx.stroke();}
+  for(let i=0;i<=GH;i++){ctx.beginPath();ctx.moveTo(GX,GY+i*CELL);ctx.lineTo(GX+gridW,GY+i*CELL);ctx.stroke();}
+  ctx.strokeStyle=C.edge2;ctx.lineWidth=1.5/VIEW.s;ctx.strokeRect(GX,GY,gridW,gridH);
+  ctx.textAlign="center";ctx.textBaseline="middle";
+  for(const m of M){
+    const r=mPx(m);
+    ctx.fillStyle=m.col+"22";ctx.fillRect(r.x,r.y,r.w,r.h);
+    ctx.strokeStyle=m.col+"88";ctx.lineWidth=1/VIEW.s;ctx.strokeRect(r.x+.5,r.y+.5,r.w-1,r.h-1);
+    ctx.fillStyle=m.col;ctx.font=`bold ${Math.min(8,r.w/10)}px ui-monospace,monospace`;
+    let lb=m.n;if(ctx.measureText(lb).width>r.w-6)lb=lb.replace(/ [0-9]+$/,"");
+    ctx.fillText(lb,r.x+r.w/2,r.y+r.h/2);
+  }
+}
+
+function paintAllViz(){
+  for(const id in panelEls){
+    const p=panelEls[id];
+    for(const cv of p._viz){
+      const rc=cv.getBoundingClientRect();
+      if(rc.width>=4&&rc.height>=4) paintViz(cv,cv._vizType);
+    }
+  }
+}
+
+let rafPending=false;
+function scheduleDraw(){if(!rafPending){rafPending=true;requestAnimationFrame(()=>{rafPending=false;fullDraw();});}}
+
+function fullDraw(){
+  syncTransform();
+  drawCanvas();
+  paintAllViz();
+}
+
+/* ═══ EVENTS ═══ */
+cv.addEventListener("wheel",e=>{e.preventDefault();VIEW.z=Math.max(.3,Math.min(5,VIEW.z*Math.exp(-e.deltaY*.0015)));scheduleDraw();},{passive:false});
+cv.addEventListener("contextmenu",e=>e.preventDefault());
+cv.addEventListener("mousedown",e=>{if(e.button===2){dragging=true;dragLx=e.clientX;dragLy=e.clientY;cv.style.cursor="grabbing";}});
+window.addEventListener("mousemove",e=>{
+  if(!dragging)return;
+  VIEW.ox+=(e.clientX-dragLx)/VIEW.s;VIEW.oy+=(e.clientY-dragLy)/VIEW.s;
+  dragLx=e.clientX;dragLy=e.clientY;
+  scheduleDraw();
+});
+window.addEventListener("mouseup",e=>{if(e.button===2){dragging=false;cv.style.cursor="default";}});
+
+fullDraw();
+window.addEventListener("resize",fullDraw);
+</script>
+</body>
+</html>

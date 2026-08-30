@@ -382,7 +382,7 @@ function crFaultsSync(h){
    A part with no node at all is either bolted to one that has (the rod drives
    ride the reactor) or carries nothing at all (protection, containment). */
 /* ONE COLLAPSIBLE, used by the rail's groups and by the LOG/REPAIR/FAULTS/
-   PIPING/LAYERS stack above them. They were two <details> with two looks in
+   PIPING stack above them. They were two <details> with two looks in
    one scroller, which read as two different kinds of thing; they are the same
    kind of thing. EVERY ONE STARTS SHUT: the rail is then a list of the plant's
    sides, one line each, and picking a machine on the drawing opens the group it
@@ -401,7 +401,7 @@ function crCollapse(label){
 function crRailGroup(p){
   const li=loopOf(p.id); if(li!=null) return "loop"+li;
   const G=nodeGraph(), ns=G.nodesOf[p.id]||[];
-  if(!ns.length) return p.pin&&p.pin.to ? crRailGroup(LAY.parts.find(q=>q.id===p.pin.to)||p) : "support";
+  if(!ns.length) return p.pin&&p.pin.to ? crRailGroup(partOf(p.pin.to)||p) : "support";
   return ns.some(n=>G.primary[n]) ? "primary" : "secondary";
 }
 /* MACHINES THAT SHARE A SIDE STAND TOGETHER, in the order the coolant meets
@@ -716,14 +716,6 @@ function crBuild(){
   const fltD=crCollapse("FAULTS");
   const fltBody=KIT.el("div","cr-flt"); fltD.appendChild(fltBody); ops.appendChild(fltD);
   const faults=crFaultsBuild(fltBody);
-
-  // one switch per LAYERS entry, built once - see layerSwitches() in
-  // render/layers.js. A layer manages its own "on" state on click, so there
-  // is nothing here for crSync() to keep in step with every frame.
-  const lyrD=crCollapse("LAYERS");
-  const lyrBody=KIT.el("div","cr-lyr"); lyrD.appendChild(lyrBody); ops.appendChild(lyrD);
-
-  layerSwitches(lyrBody);
 
   const compRail=KIT.el("div","cr-comp-rail"); rail.appendChild(compRail);
 

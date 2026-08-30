@@ -24,10 +24,25 @@ function rr(x,y,w,h,r){                 // rounded-rect path (no roundRect in ol
   ctx.arcTo(x,y+h,x,y,r);     ctx.arcTo(x,y,x+w,y,r);
   ctx.closePath();
 }
+/* PACKED, AND THE ANSWER IS SHARED. This is asked once per core node per
+   frame, and the obvious spelling - two parsed arrays, a map and a join -
+   allocated five objects to hand back a string the previous node had usually
+   already produced. Same arithmetic, same output; both tables are caches of
+   pure functions and are cleared rather than grown without bound. */
+const LERP_HEX=new Map(), LERP_RGB=new Map();
+const hexPack=c=>{ let v=LERP_HEX.get(c);
+  if(v===undefined){ v=parseInt(c.slice(1,7),16); LERP_HEX.set(c,v); }
+  return v; };
 const lerpC=(a,b,t)=>{ t=clamp(t,0,1);
-  const h=c=>[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)];
-  const A=h(a),B=h(b);
-  return `rgb(${A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(",")})`; };
+  const A=hexPack(a), B=hexPack(b);
+  const r=Math.round((A>>16&255)+((B>>16&255)-(A>>16&255))*t),
+        g=Math.round((A>>8 &255)+((B>>8 &255)-(A>>8 &255))*t),
+        u=Math.round((A    &255)+((B    &255)-(A    &255))*t);
+  const key=(r<<16)|(g<<8)|u;
+  let s=LERP_RGB.get(key);
+  if(s===undefined){ if(LERP_RGB.size>4096) LERP_RGB.clear();
+    s="rgb("+r+","+g+","+u+")"; LERP_RGB.set(key,s); }
+  return s; };
 function chip(x,y,col){ fillRect(x,y,6,6,col); }
 // same signature as chip(): top-left x/y + size, so a caller picks the shape
 // without touching where anything sits

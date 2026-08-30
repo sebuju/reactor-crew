@@ -6,7 +6,7 @@
    key trick: all three layers below name "room", so the geometry is walked
    once a frame however many of them are on.
 
-   ROOM HEAT   (roomz, under) - the banded fill, the survey map for heat.
+   AIR TEMP    (roomz, under) - the banded fill, the survey map for heat.
    H2 CLOUD    (roomh, under) - where the hydrogen is, and where it will burn.
    OXYGEN      (roomo, under) - what is left to burn WITH. Depletion only.
    BLAST       (roomp, under) - overpressure, against the machines' own limits.

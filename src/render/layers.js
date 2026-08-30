@@ -166,25 +166,25 @@ const subcLayer = (d,L) => layerRunLine(d.runs, 2, r => pipeRunSc(r,L), subcCol,
    a plant you cannot read - and the flow meters were never a layer in the
    first place, they were simply always drawn. */
 const LAYERS={
-  radz:{label:"RAD ZONES",    seam:"under", data:"rad", live:false, on:false,
+  radz:{group:"RADIATION", label:"RAD ZONES",    seam:"under", data:"rad", live:false, on:false,
         draw:radZones,
         tip:"Area dose rate as a survey map: five bands from CLEAR to EXCLUSION, hard edges between them. Turn this on to see the shape of the hazard, not just a number for it. It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
-  radn:{label:"CELL DOSE",    seam:"under", data:"rad", live:false, on:false,
+  radn:{group:"RADIATION", label:"CELL DOSE",    seam:"under", data:"rad", live:false, on:false,
         draw:radNumbers,
         tip:"The dose rate printed in every grid cell, same units the bench already quotes. 144 numbers is a lot of ink for a glance - ask for it when you need the exact figure rather than the band. It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
-  radp:{label:"REPAIR CELLS", seam:"under", data:"rad", live:false, on:false,
+  radp:{group:"RADIATION", label:"REPAIR CELLS", seam:"under", data:"rad", live:false, on:false,
         draw:radCells,
         tip:"Every cell a repair party could actually stand in to work a job. Turn this on before you send anyone anywhere - it is the answer to \"where can I put a body\", not just \"how hot is it here\". It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
-  radc:{label:"PART DOSE",    seam:"over",  data:"rad", live:false, on:false,
+  radc:{group:"RADIATION", label:"PART DOSE",    seam:"over",  data:"rad", live:false, on:false,
         draw:radPart,
         tip:"What each machine costs to reach, from the coldest free cell beside it - the triage number - the figure you read before deciding who goes to fix what. It ships OFF, and that is stated here rather than only in the table above: a radiation survey is asked OF the plant, and answering it unbidden would make the first look at the machines a look at an overlay."},
   /* live:true, unlike the four radiation layers above. A dose rate is a real
      answer on an uncommissioned arrangement; a pressure is not - there is no
      plant to have one yet, and inventing one would be a lie dressed as data. */
-  press:{label:"PRESSURE",    seam:"over",  data:"press", live:true, on:false,
+  press:{group:"PLUMBING", label:"PRESSURE",    seam:"over",  data:"press", live:true, on:false,
         draw:pressLayer,
         tip:"The pressure in every run, in MPa. Pressure is a place, not a number: it is highest at a pump's discharge, lowest at its suction, and it falls across every metre of pipe and every throttle in between. Turn this on to see where the head your pumps make actually goes."},
-  subc: {label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
+  subc: {group:"PLUMBING", label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
         draw:subcLayer,
         tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},
   /* THE FIVE ROOM LAYERS - ONE PER FIELD ON S, and that is the rule rather
@@ -198,7 +198,7 @@ const LAYERS={
      bench skips them.
      THREE OF THE FIVE SHIP OFF, and the two that do not are the two that draw
      NOTHING on a healthy plant. That is the whole test, and it is a better one
-     than "a survey is asked OF the plant": ROOM HEAT, OXYGEN and PART TEMP
+     than "a survey is asked OF the plant": AIR TEMP, OXYGEN and PART TEMP
      paint every cell or every box the moment they are on, so leaving them on
      would make the first look at the machines a look at an overlay - the same
      argument every radiation layer makes. H2 CLOUD and BLAST paint nothing at
@@ -206,19 +206,19 @@ const LAYERS={
      events you cannot answer if you find out about them by remembering to ask.
      A layer that is silent until it matters is an ANNUNCIATOR, and an
      annunciator is not switched on when you want the alarm. */
-  roomz:{label:"ROOM HEAT",  seam:"under", data:"room", live:true, on:false,
+  roomz:{group:"COMPARTMENT", label:"AIR TEMP",    seam:"under", data:"room", live:true, on:false,
         draw:roomZones,
         tip:"Air temperature in every cell of the compartment, as a survey map: five bands from AMBIENT to UNTENABLE. Heat is a place. It comes off every hot surface, it comes in a flood out of anything venting steam into the room instead of into a tank, a machine is a WALL to it, and the only sink is the hull - so a compact plant runs hotter than a spread-out one. The band edges are the machines' own limits, not round numbers."},
-  roomh:{label:"H2 CLOUD",   seam:"under", data:"room", live:true, on:true,
+  roomh:{group:"COMPARTMENT", label:"H2 CLOUD",   seam:"under", data:"room", live:true, on:true,
         draw:roomH2Layer,
         tip:"Where the hydrogen off the cladding has ended up. It leaves the primary with the steam, at whatever hole the steam left through, and then it is a gas fourteen times lighter than air, collecting under the deckhead of a SEALED compartment - the only thing that takes it out again is the ventilation set, or a fire. Red is at or over 4% by volume; amber and moving is a flame front, and how fast it crosses a cell is a property of the mixture. This is the Fukushima sequence, drawn."},
-  roomo:{label:"OXYGEN",     seam:"under", data:"room", live:true, on:false,
+  roomo:{group:"COMPARTMENT", label:"OXYGEN",     seam:"under", data:"room", live:true, on:false,
         draw:roomO2Layer,
         tip:"What is left in each cell to burn WITH. It draws DEPLETION only - a cell holding what air actually holds prints nothing, because the question is where a fire has eaten its own air. Blue and labelled is under 5% by volume, the limiting oxygen concentration: nothing ignites there whatever else is in it, which is how a sealed corner smothers its own fire and leaves the hydrogen unburnt."},
-  roomp:{label:"BLAST",      seam:"under", data:"room", live:true, on:true,
+  roomp:{group:"COMPARTMENT", label:"BLAST",      seam:"under", data:"room", live:true, on:true,
         draw:roomPLayer,
         tip:"Overpressure above ambient, in kPa, banded against the machines' own limits rather than round numbers: 15 takes a radiator panel, 20 a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel. The compartment relieves itself in about half a second, so this is a PEAK HOLD, the way a real blast gauge is: it shows the worst each cell has ever seen and bleeds it away over the next few seconds. The cells the wave is actually in pulse. A blast is instantaneous: a machine either survives the peak its own cells saw or it does not."},
-  roomc:{label:"PART TEMP",  seam:"over",  data:"room", live:true, on:false,
+  roomc:{group:"COMPARTMENT", label:"PART TEMP",  seam:"over",  data:"room", live:true, on:false,
         draw:roomPart,
         tip:"What each machine is standing in, in kelvin, coloured against what THAT machine was built for. The room field says the compartment is hot; this says which box is about to be damaged by it. Structure - shielding, containment, the core catcher - prints nothing, because a room temperature is not how any of them fails."},
   /* The flow readings, and ONLY those. The pressurizer's dial used to ride
@@ -229,7 +229,7 @@ const LAYERS={
      nothing standing in for it. pipeVessel() is drawn unconditionally by
      drawPlant(), at this exact seam. Not the break plumes either - those go
      down before the pass, because an effect is not an instrument. */
-  flow: {label:"FLOW METERS", seam:"over",  data:null,    live:true, on:false,
+  flow: {group:"PLUMBING", label:"FLOW METERS", seam:"over",  data:null,    live:true, on:false,
         draw:(d,L)=>pipeMeters(pipeRuns(L),L),
         tip:"The top line of every run's readings: what that run is carrying, in kg/s. The figure goes amber and takes a minus sign when a run reverses, and red when it is being pushed past its rating. The pressurizer's own dial is not on this switch - it is the only gauge that plant pressure has, so it is always drawn."},
 };
@@ -265,20 +265,52 @@ function layerPass(seam, L){
 }
 
 function layerToggle(k){ LAYERS[k].on=!LAYERS[k].on; }
+/* ══ ONE MENU, HUNG OFF THE PLANT VIEW BESIDE THE ZOOM KEY ══
+   Both screens call this from zoomKeySync() (render/plant.js) rather than
+   hand-roll a button per layer, the same reason there is one AUTOSYS and one
+   bypRow() rather than a copy per system. A layer with no switch here has no
+   way to be turned off, so audit-dom.js counts exactly LAYER_ORDER.length of
+   them on both screens.
 
-/* One switch per layer, built into whatever rail container a screen hands
-   in - control room and design bench both call this rather than hand-roll a
-   button per layer, the same reason there is one AUTOSYS and one bypRow()
-   rather than a copy per system. A layer with no switch here has no way to
-   be turned off, so audit-dom.js counts exactly LAYER_ORDER.length of these
-   on both screens' rails. */
-function layerSwitches(container){
-  for(const k of LAYER_ORDER){
-    const l=LAYERS[k];
-    const b=KIT.button(l.label, {sunk:true, on:l.on,
-      onClick:()=>{ layerToggle(k); b.set({on:l.on}); }});
-    b.el.classList.add("layer-switch");
-    KIT.tip(b.el, l.label, l.tip);
-    container.appendChild(b.el);
+   It lives over the plant and not on the rail because a layer paints the
+   PLANT: the switch and the thing it switches are now the same glance, and
+   neither rail has to be scrolled past every machine to reach one.
+
+   The headings are read OFF the entries, in LAYER_ORDER, so a new layer joins
+   its group by naming it - there is no second table of groups to keep in step
+   with the first. */
+function layerMenu(){
+  const wrap=KIT.el("div","plant-layers");
+  const menu=KIT.el("div","plant-layers-menu kit-hide");
+  const key=KIT.button("LAYERS",{sunk:true});
+  key.el.classList.add("plant-layers-key");
+  KIT.tip(key.el,"LAYERS","Every overlay the plant view can draw, grouped by what it surveys. A layer is a view and never a fact: switching one on changes nothing about the plant, only what you are shown of it.");
+  /* GROUPED BY GROUP, not by where the entry sits in LAYER_ORDER - that order
+     is the DRAW order and FLOW METERS is last in it, so a single walk printed
+     PLUMBING twice with the room layers between the halves. */
+  for(const group of LAYER_ORDER.map(k=>LAYERS[k].group).filter((g,i,a)=>a.indexOf(g)===i)){
+    menu.appendChild(KIT.rule(group).el);
+    for(const k of LAYER_ORDER){
+      const l=LAYERS[k];
+      if(l.group!==group) continue;
+      const b=KIT.button(l.label, {sunk:true, on:l.on,
+        onClick:()=>{ layerToggle(k); b.set({on:l.on}); }});
+      b.el.classList.add("layer-switch");
+      KIT.tip(b.el, l.label, l.tip);
+      menu.appendChild(b.el);
+    }
   }
+  /* ONE HANDLER OPENS AND SHUTS IT, and it is the document's, not the key's -
+     the same idiom the context menu uses (shell.js). A press anywhere but
+     inside the menu shuts it, including on the key, so the plant under it
+     never loses the first click aimed past it. A key with its own click
+     handler could not do this: the press would shut the menu and the click
+     would reopen it. Captured, because the plant is a canvas and swallows
+     presses that land on it. */
+  document.addEventListener("pointerdown", e => {
+    if(menu.contains(e.target)) return;
+    const open=key.el.contains(e.target)&&menu.classList.contains("kit-hide");
+    KIT.show(menu,open); key.set({on:open}); }, true);
+  wrap.append(key.el,menu);
+  return {el:wrap};
 }
