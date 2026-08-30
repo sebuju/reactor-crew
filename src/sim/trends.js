@@ -51,6 +51,8 @@ const CH={
     the old scalar could not. */
  mlt :{lab:"FUEL MOLTEN",u:"%", col:"#ff9a5a", f:s=>s.meltFrac*100},
  h2  :{lab:"HYDROGEN",   u:"kg",col:"#a98cf0", f:s=>s.h2},
+ // what the gas did when it lit, rather than how much of it there is
+ rp  :{lab:"ROOM PRESSURE",u:"kPa",col:"#ff6a6a", f:s=>s.roomPMax},
  dnbm:{lab:"MIN NODE DNBR",u:"",col:"#f0a830", f:s=>s.dnbrMin},
  /* the sink the ship actually has. Everything else on this list is about
     making heat or moving it; this is the one channel about getting rid of it,
@@ -109,6 +111,10 @@ const CHVIEW={
  /* full scale is the whole clad inventory burnt, so the trace says what
     fraction of the core's zirconium has gone rather than a picked ceiling */
  h2  :{rng:()=>[0,Math.max(50,P.cladKg*ZR_H2)], warn:()=>[H2_EV]},
+ /* the two limits that are machines rather than round numbers: the weakest
+    thing on the plant and the strongest, so the trace says which of them the
+    blast has already passed. */
+ rp  :{rng:()=>[0,900], warn:()=>[15, 200]},
  dnbm:{rng:()=>[0,Math.max(2.6,P.dnbr0*1.3)],   warn:()=>[1]},
  /* pinned to the two real ceilings rather than a picked span: the design
     sink, then the panel temperature at which the condenser reaches the
