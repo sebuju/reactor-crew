@@ -371,6 +371,18 @@ function drawSym(p,x,y,w,h,ink,L){
       ctx.stroke(); }
     ctx.restore();
     dot(cx-2,cyT-2,4,ink);                                     // the hub
+  } else if(p.role==="radiator"){
+    // fins, and they radiate: the ticks fade with how far the panel sits above
+    // the sky rather than being decoration
+    const hot=clamp((((L&&L.radT)||RAD_TDES)-RAD_TDES)/60,0,1);
+    // PANEL TEMP on the box, not only in the well
+    if(hot>0) fillRect(X,Y,W,Hh,"rgba(255,150,90,"+(0.06+0.30*hot).toFixed(2)+")");
+    for(let i=1;i<W/7;i++) fillRect(X+i*7,Y+3,2,Hh-6,"rgba(184,196,207,.55)");
+    ctx.save(); ctx.strokeStyle="rgba(255,150,90,"+(0.15+0.55*hot).toFixed(2)+")";
+    ctx.lineWidth=1;
+    for(let i=0;i<4;i++){ const yy=Y+Hh*0.2+i*Hh*0.2;
+      ctx.beginPath(); ctx.moveTo(X+3,yy); ctx.lineTo(X+W-3,yy); ctx.stroke(); }
+    ctx.restore();
   } else if(p.role==="cond"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     for(let i=1;i<7;i++) fillRect(X+i*(W/7),Y+5,1,Hh-10,"rgba(140,170,178,.45)");
@@ -1957,9 +1969,6 @@ function readoutsFor(p,s){
     add("CAVITATION",(cav*100).toFixed(0)+" %",
       band(cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
       "Vapour forming at this pump's own inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well. A loop with two pumps reads the worse of them, because that is the one the head loss costs.");
-    add("PUMP",s.dmgParts.includes(id)?"DESTROYED":"running",
-        s.dmgParts.includes(id)?C.red:C.green,
-      "Whether this pump survived. Destroyed, it turns no more, and the loop is on whatever the others and buoyancy can carry.");
   } else if(p.role==="turb"){
     add("LOAD",(s.load*100).toFixed(1)+" %",null,
       "How hard the turbine is drawing steam. This is the demand the reactor spends its whole time trying to follow.");
@@ -2052,8 +2061,6 @@ function readoutsFor(p,s){
       "Whether main power to the coolant pumps has gone. Test it from the FAULTS panel before you ever need to know.");
     add("CAPACITY",(P.backup*100).toFixed(0)+" %",null,
       "Share of pump flow your backup supply can still turn. Everything above this has to come from buoyancy.");
-    add("SUPPLY",s.bkpLost?"DESTROYED":"available",s.bkpLost?C.red:C.green,
-      "Whether the backup set itself survived. A hit here means a blackout is natural circulation and nothing else.");
   /* A PUMP THAT FEEDS A GENERATOR'S SHELL - asked of the drawing (secGensOf(),
      layout.js), never of the id "feed". There is one pump role, so which
      panel a pump gets is a question about where it is piped. */
@@ -2061,9 +2068,18 @@ function readoutsFor(p,s){
     { const arm=tankRuleAny(s,"secondary"), any=secTankIds().some(id=>D.tanks[id].auto!=="always"&&D.tanks[id].auto!=="manual");
       add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
         "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time."); }
-    add("FEED PUMP",s.dmgParts.includes(id)?"DESTROYED":"running",
-        s.dmgParts.includes(id)?C.red:C.green,
-      "The main feedwater pump. Destroyed, the generator boils dry unless emergency feed picks it up.");
+  } else if(p.role==="radiator"){
+    /* The LIVE half of the radiator panel - the bench has no S, so PANEL TEMP
+       and what this one is actually shedding can only be said here. */
+    add("PANEL TEMP",s.radT.toFixed(0)+" K",
+      band(s.radT,RAD_TDES*0.7,tsatSec(COND_ATM)-COND_DT0,
+        [[RAD_TDES,C.cyan,"NORMAL"],[tsatSec(TURB_TRIP_P)-COND_DT0,C.amber,"HOT"],
+         [Infinity,C.red,"NO SINK"]],{dp:0,lim:[[RAD_TDES,"DESIGN"]]}),
+      "How hot the panels are running. Every panel on the ship is one pot, so this is the sink the whole plant has. Design is "+RAD_TDES+" K at rated rejection; rejection goes as the FOURTH power of this, so a modest overload costs little and a large one costs the turbine.");
+    add("THIS PANEL SHEDS",(radRejOf(s,id)/1000).toFixed(0)+" MWt",null,
+      "What this one panel is radiating. Blind or destroyed, it is zero and the rest of the fleet carries the whole load.");
+    add("CAN SHED",radLive(id)?"YES":"NO",radLive(id)?C.green:C.red,
+      "Whether this panel has a face on the skin. Walled in, it sheds nothing and warms the compartment instead.");
   } else if(p.role==="cond"){
     /* BANDED AGAINST THE LIMIT IT PRECEDES, not against the vacuum floor.
        COND_P0*1.5 was 0.006 MPa: a healthy plant rests at 0.0056 and a plant
@@ -2080,9 +2096,22 @@ function readoutsFor(p,s){
     add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
     add("CW OUTLET",cwOut(s).toFixed(0)+" K",
-      band(cwOut(s),T_CW,T_CW+CW_RISE*3,[[T_CW+CW_RISE*1.6,C.cyan,"NORMAL"],
-        [T_CW+CW_RISE*2.5,C.amber,"HIGH"],[Infinity,C.red,"HOT"]],{dp:0}),
+      band(cwOut(s),RAD_TDES,RAD_TDES+CW_RISE*3,[[RAD_TDES+CW_RISE*1.6,C.cyan,"NORMAL"],
+        [RAD_TDES+CW_RISE*2.5,C.amber,"HIGH"],[Infinity,C.red,"HOT"]],{dp:0}),
       "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" K of rise, and a machine working harder than it was bought for sends it out hotter.");
+    /* THE CHAIN, END TO END. All of these were computed and none was visible,
+       and the radiator makes the last two the whole story: two pots in series,
+       so an operator has to be able to see which one is failing. */
+    add("TERMINAL DIFF",(s.condT-s.radT).toFixed(0)+" K",
+      band(s.condT-s.radT,0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
+        [COND_DT0*2,C.amber,"WIDE"],[Infinity,C.red,"FOULED"]],{dp:0}),
+      "How far this machine sits above the radiator it rejects into. Design is "+COND_DT0+" K at rated duty; a small or a drowned condenser sits further above for the same heat, and pays for it in backpressure.");
+    add("DROWNED TUBES",((1-condFrac(s))*100).toFixed(0)+" %",
+      band((1-condFrac(s))*100,0,100,[[1,C.cyan,"CLEAR"],[25,C.amber,"FLOODING"],[Infinity,C.red,"DROWNED"]],{dp:0}),
+      "How much of the tube bundle is standing in its own condensate. A hotwell that has filled up takes the capacity with it, which is how a turbine ends up exhausting into a full condenser for nothing.");
+    add("REJECTS INTO",radCount()?nameList(radIds().filter(radLive)) || "nothing that can shed":"nothing",
+      radCount()&&radIds().some(radLive)?C.green:C.red,
+      "Where the heat finally goes. It leaves as light, off the panels, and a panel that cannot see the skin is not in this list.");
     add("CIRC WATER",s.blackout?"STOPPED":"running",s.blackout?C.red:C.green,
       "The circulating water pumps. They sit on the main board, so a blackout stops them dead - and with no water moving there is no heat sink at all, whatever the condenser itself is worth.");
     add("VACUUM",s.condLost?"LOST":"holding",s.condLost?C.red:C.green,
@@ -2097,15 +2126,25 @@ function readoutsFor(p,s){
       if(s.tankOver&&s.tankOver[tid]>0) add(D.tanks[tid].name+" OVERFLOW",s.tankOver[tid].toFixed(0)+" kg/s",C.red,
         "It is full and cannot take any more. This water is leaving the plant, and after a tube rupture it is primary water.");
     }
-    add("CONDENSER",s.dmgParts.includes(id)?"DESTROYED":"in service",
-        s.dmgParts.includes(id)?C.red:C.green,
-      "The heat sink itself. Destroyed, the steam has nowhere to condense and the loop has nowhere to put its heat.");
   }
   // shielding has nothing to report, and neither has a component never
   // bought - the grid already draws the dashed outline and NOT FITTED itself
   if(!R.length||!fitted(p)) return [];
-  if(s.dmgParts.includes(p.id)) R.unshift(["STATUS","DAMAGED",C.red,
-    "This component has taken a hit. Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
+  /* WHAT THIS BOX'S OWN METAL IS AT, on every machine that can fail this way.
+     The room field says the compartment is hot; this says whether the machine
+     has caught up with it yet, and it is the number the damage integral
+     reads. */
+  { const lim=partTsurv(p);
+    if(lim) R.push(["SKIN TEMP",partSkin(s,p).toFixed(0)+" K",
+      band(partSkin(s,p),T_HULL,lim*1.2,[[lim*0.85,C.cyan,"COOL"],
+        [lim,C.amber,"HOT"],[Infinity,C.red,"COOKING"]],{dp:0,lim:[[lim,"LIMIT"]]}),
+      "The temperature of this machine's own casing, against the "+lim+" K it was built for. It has mass, so it lags the air around it - that lag is the time you have to fix whatever is heating the room. Past the limit it cooks, and what it is standing in is the ROOM HEAT layer."]); }
+  /* ONE damage row. Every role used to print its own DESTROYED line under
+     this one, saying the same thing twice off the same s.dmgParts test; the
+     consequence they carried comes off DMGFX, which is the table that already
+     owns what a hit means. */
+  if(s.dmgParts.includes(p.id)) R.unshift(["STATUS","DESTROYED",C.red,
+    "This component has taken a hit. "+dmgFx(p.id).why+" Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
   if(!p.access && p.grp!=="shield") R.unshift(["ACCESS","BLOCKED",C.red,
     "Your layout walls this in on every side, so no repair party can ever reach it. It stays broken for the rest of the run."]);
   return R;
