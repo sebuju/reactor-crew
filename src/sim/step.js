@@ -1769,6 +1769,20 @@ function resetPlant(){
         src/data/room.js for why that difference is the whole design.
         The room starts at ambient, which is the hull the plant sits in. */
      roomT:new Float64Array(GW*GH).fill(T_HULL), roomH2:new Float64Array(GW*GH),
+     /* AND THREE MORE, in the same shape and for the same reason. Oxygen is
+        what makes "how violently" an answer rather than a curve somebody
+        picked, so it is seeded at what air actually holds; the flame is how
+        far a front has crossed each cell; the pressure is what breaks things.
+        They are declared HERE and nowhere else - the snapshot cloner throws
+        on anything it does not know, and a field left in a module global is
+        exactly what that throw exists to catch. */
+     roomO2:new Float64Array(GW*GH).fill(ROOM_O2_0),
+     roomFlame:new Float64Array(GW*GH), roomP:new Float64Array(GW*GH),
+     /* ONE EVENT PER EXPLOSION, not one per tick. A front at the flammability
+        limit crawls for minutes and would never trip a per-tick gate, so the
+        charge, the peak and what it took are accumulated while anything is
+        burning and the line is written when the last flame goes out. */
+     burnEv:{kg:0, p:0, blast:0, ids:[]},
      /* how far each machine is through being cooked by its own cell, 0..1 -
         MONOTONIC while it is over its limit, and cleared when a party fixes
         it, or a repair in a room still cooking would be undone the same tick
@@ -1780,7 +1794,7 @@ function resetPlant(){
         exist. Keyed by part id, refilled never rebuilt. */
      partT:{}, skinQ:{},
      // readouts: the hottest cell, where it is, and what burned this tick
-     roomMax:T_HULL, roomMaxAt:-1, roomBurn:0,
+     roomMax:T_HULL, roomMaxAt:-1, roomBurnOn:0, roomPMax:0,
      spin:0,spinT:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
   /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
      new run picks a seed, and from there every die comes off s.rng, so the run
@@ -2965,17 +2979,70 @@ function step(dt){
      plant except through the damage path below, which is the whole of what
      "the room bites" means. */
   roomStep(s, dt);
+  /* ── and what the BLAST costs, which is a different question from the heat ──
+     s.dmgParts gets its THIRD writer. INSTANTANEOUS, not integrated: a blast
+     is not a cooking, so it borrows nothing from ROOM_DMG_TAU and a machine
+     either survives the peak its own cells saw or it does not. Structure
+     declares no pburst and is exempt exactly as it is exempt from tsurv; the
+     hull and the keel are grid cells rather than parts, so nothing here even
+     asks about them. A severed pipe cell is one array push and the existing
+     break path takes over from there. */
+  { /* THE BANG IS ITS OWN EVENT. The lines below name what it BROKE and the
+       deflagration line at the end says what the whole passage cost, but an
+       explosion is a thing that happened at a moment and neither of those is
+       reported at that moment - a blast that breaks nothing wrote no line at
+       all. Latched on s.burnEv so it fires once per passage, at the peak that
+       first threatens the weakest machine on this plant. */
+    if(!s.burnEv.blast && s.roomPMax >= minPburst()){
+      s.burnEv.blast = 1;
+      logE("alarm","EXPLOSION IN THE COMPARTMENT",
+        "A hydrogen charge has gone off - "+s.roomPMax.toFixed(0)+
+        " kPa above ambient, against the "+minPburst().toFixed(0)+
+        " kPa the weakest machine on this plant is built for. The compartment relieves itself in about half a second, so what it costs is decided now.");
+    }
+    for(const p of LAY.parts){
+      const lim = partPburst(p);
+      if(!lim || !fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
+      if(roomPAt(s,p) < lim) continue;
+      s.dmgParts.push(p.id);
+      s.burnEv.ids.push(p.name);
+      const fx = dmgFx(p.id);
+      if(fx.hit) fx.hit(s);
+      logE("alarm","BLAST DAMAGE / "+fx.msg,
+        p.name+" has been wrecked by a hydrogen explosion in the compartment - "+
+        roomPAt(s,p).toFixed(0)+" kPa against the "+lim+" kPa it was built for. "+fx.why);
+    }
+    for(const k in D.pipes){
+      const id = "pipe:"+k;
+      if(s.dmgParts.indexOf(id) >= 0) continue;
+      const c = k.indexOf(",");
+      const x = +k.slice(0,c), y = +k.slice(c+1);
+      if(s.roomP[y*GW+x] < PIPE_PBURST) continue;
+      s.dmgParts.push(id);
+      s.burnEv.ids.push("the run at "+k);
+      const fx = dmgFx(id);
+      logE("alarm","BLAST DAMAGE / "+fx.msg, "A hydrogen explosion has cut the pipe at "+k+". "+fx.why);
+    }
+  }
   /* ONE LINE FOR AN EXPLOSION, NOT ONE FOR A FLAME. A compartment already
      over the ignition temperature burns whatever crosses the flammability
-     limit the tick it crosses it, which is a steady diffusion flame and is
-     real - but it is a CONDITION, and the H2 FLAMMABLE tile is what says so.
-     What earns a line in the log is a charge that had time to collect first.
-     Measured: a severed hot leg on an oxidising core burns 20-60 g a tick at
-     the limit and would have written the same alarm every two seconds. */
-  if(s.roomBurn > H2_BURN_EV)
-    logE("alarm","HYDROGEN DEFLAGRATION",
-      s.roomBurn.toFixed(1)+" kg of hydrogen has burned in the compartment, "+
-      (s.roomBurn*H2_LHV/1000).toFixed(0)+" MJ of it into the air. It came off the cladding, left the loop with the steam, collected where the hot air collects and found something hot enough to light it. Nothing was needed but the heat that was already there.");
+     limit as it crosses it, which is a steady diffusion flame and is real -
+     but it is a CONDITION, and the H2 FLAMMABLE tile is what says so. What
+     earns a line in the log is a charge that had time to collect first.
+     LATCHED, because the front is the whole point: a limit mixture crawls at
+     0.05 m/s and burns 20-60 g a tick, so a per-tick gate never fired for the
+     slow case and fired every two seconds for the standing one. The line goes
+     out when the last flame does, and it says what the whole passage cost. */
+  if(!s.roomBurnOn && s.burnEv.kg > 0){
+    if(s.burnEv.kg > H2_BURN_EV)
+      logE("alarm","HYDROGEN DEFLAGRATION",
+        s.burnEv.kg.toFixed(1)+" kg of hydrogen has burned in the compartment, "+
+        (s.burnEv.kg*H2_LHV/1000).toFixed(0)+" MJ of it into the air, peaking at "+
+        s.burnEv.p.toFixed(0)+" kPa. "+
+        (s.burnEv.ids.length ? "It took "+s.burnEv.ids.join(", ")+". " : "Nothing was broken by it. ")+
+        "It came off the cladding, left the loop with the steam, collected under the deckhead and found something hot enough to light it. Nothing was needed but the heat that was already there.");
+    s.burnEv = {kg:0, p:0, blast:0, ids:[]};
+  }
   /* ── and what standing in it costs a machine ──
      s.dmgParts gets its SECOND WRITER. Until now combatHit() was the only one
      in all of src/, and no failure anywhere read a value at a part's own grid

@@ -31,9 +31,11 @@ const ROOM_H = 6;
 /* m^2/s - THE ONE FIT IN THIS FILE, and the one place a number here was
    chosen rather than looked up. It stands in for every transport mechanism a
    diffusion stencil cannot express. Explicit stability caps it at
-   MPC^2/(dt*(2+ROOM_UP+1)) ~ 1.8 m^2/s at dt=0.02; this sits a fifth of the
-   way to that, so no substepping is needed and raising it past the cap is
-   never the answer - substep it the way the kinetics does instead. */
+   MPC^2/(dt*(2+up+1)), and the BINDING bias is H2_UP rather than ROOM_UP now
+   that a gas brings its own: 0.63 m^2/s at dt=0.02 against the 1.8 the heat
+   pass alone allowed. This still sits well inside it, so no substepping is
+   needed, and raising it past the cap is never the answer - substep it the
+   way the kinetics does instead. */
 const ROOM_MIX = 0.35;
 // hot air rises: the conductance up out of a cell against the one down into
 // it. One constant, the BUOY_LIN idiom - a bias, not a correlation.
@@ -82,7 +84,17 @@ const HULL_FACE_A = MPC*ROOM_DEPTH;
    move the settling point, only how long the room takes to reach it - which
    is why it is priced against the ambient field as much as against a jet. */
 const ROOM_CGAME = 50;
-const ROOM_C = MPC*MPC*ROOM_DEPTH*ROOM_RHO*ROOM_CP*ROOM_CGAME;
+/* TWO CAPACITIES, SIDE BY SIDE, AND THAT IS DELIBERATE. ROOM_CAIR is the REAL
+   air in one cell and ROOM_C is that air plus the ballast above. Every slow
+   source - a hot surface, a steam jet, a fan - heats at ROOM_C, because
+   ROOM_CGAME's whole argument is that structure and condensation swallow a
+   release over SECONDS. A DEFLAGRATION IS OVER IN MILLISECONDS and the steel
+   has no time to take any of it, so a burn heats at ROOM_CAIR - the same
+   constant read the other way round, not an exception to it. Divide the bang
+   by fifty and a stoichiometric cell is a warm draught: +70 K where the real
+   figure is +2900. */
+const ROOM_CAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO*ROOM_CP;
+const ROOM_C = ROOM_CAIR*ROOM_CGAME;
 // kW/K, one cell of hot surface - m^2 of machine surface one cell of
 // footprint is worth, pure geometry rather than a lookup
 const ROOM_HK = ROOM_H*MPC*MPC/1000;
@@ -190,11 +202,16 @@ function roomGeom(){
     if(hull[i]) for(const f in DIRV){ const d = DIRV[f];
       if(hullCell(X+d[0],Y+d[1])) face[i]++; }
   }
+  /* WHICH MACHINE IS STANDING IN THIS CELL, walked once here. The ignition
+     test asks it of every cell every tick and a scan over LAY.parts per cell
+     is a grid-sized loop inside a grid-sized loop. Last one wins, which is
+     the same answer occupied() gives an overlap. */
+  const own = new Int32Array(N).fill(-1);
   for(const p of LAY.parts){
     const cells = [];
     for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
       if(X>=0&&X<GW&&Y>=0&&Y<GH) cells.push(Y*GW+X);
-    if(cells.length) parts.push({p, cells});
+    if(cells.length){ for(const i of cells) own[i] = parts.length; parts.push({p, cells}); }
   }
   for(const r of pipeNetwork()){
     if(!ROOM_RUN_T[r.k] || !r.cells) continue;
@@ -222,7 +239,22 @@ function roomGeom(){
     if(Y<GH-1){ const b = g0*blk(i)*blk(i+GW);
       gUp[i] = b*ROOM_UP; gDn[i] = b; }
   }
-  roomCache = {occ, hull, face, parts, runs, shellValves, gx, gUp, gDn};
+  /* WHAT A CLUTTERED BAY DOES TO A FLAME. Obstacle-generated turbulence is
+     the one mechanism a laminar burning velocity cannot express, and it is
+     what takes a real compartment deflagration towards detonation. Off the
+     occ array the stencil already built, so a plant drawn tight accelerates
+     its own flame - a consequence of the drawing rather than a number. */
+  const turb = new Float64Array(N);
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X;
+    let n = 0;
+    if(X>0 && occ[i-1]) n++;
+    if(X<GW-1 && occ[i+1]) n++;
+    if(Y>0 && occ[i-GW]) n++;
+    if(Y<GH-1 && occ[i+GW]) n++;
+    turb[i] = 1 + H2_TURB*n/4;
+  }
+  roomCache = {occ, face, own, turb, parts, runs, shellValves, gx, gUp, gDn};
   roomCacheSig = sig;
   return roomCache;
 }
@@ -466,6 +498,12 @@ function roomOpenCells(s, G, key){
    NOT published is ROOM_DEPTH, which sets the air a cell holds and therefore
    every concentration here - see its own note above. */
 const H2_LFL = 0.04;                      // volume fraction in air
+/* THE UPPER limit, and it is the half nobody expects: a cell of nearly pure
+   hydrogen is the SAFE one, because there is no air left in it to burn. It
+   used to light at any fraction above the LFL, so the richest cell of a
+   release - the one at the opening - was also the most violent, which is
+   backwards. */
+const H2_UFL = 0.75;
 const H2_IGN = 773;                       // K
 const H2_LHV = 120000;                    // kJ/kg
 const H2_MMOL = 0.002016, AIR_MMOL = 0.02896;   // kg/mol
@@ -475,10 +513,89 @@ const H2_BURN_EV = 1.0;
 // moles of air in one cell - the denominator every concentration divides by
 const ROOM_MOL = MPC*MPC*ROOM_DEPTH*ROOM_RHO/AIR_MMOL;
 
+/* OXYGEN IS A FIELD, AND IT IS THE HONEST ANSWER TO "HOW VIOLENTLY".
+   s.roomO2 is s.roomH2's exact shape and idiom - kilograms per cell, on S,
+   refilled never rebuilt - and it deletes the alternative, which was a
+   violence curve somebody picked. Combustion is capped at 2 H2 : 1 O2, so a
+   rich cell burns weakly because there is no air in it, the peak lands at
+   29.6 vol% on its own arithmetic with no constant naming it, and a sealed
+   corner smothers its own fire, which is a real thing that happens in real
+   compartments. It diffuses on the same stencil with NO buoyancy bias: O2 is
+   32 against air's 29 and goes nowhere in particular. */
+const O2_FRAC0 = 0.2095;                  // volume fraction of dry air
+const O2_MMOL = 0.032;                    // kg/mol
+const O2_LOC = 0.05;                      // limiting oxygen concentration for H2 in air
+// kg of O2 one cell holds at ambient, and what the ventilation set puts back
+const ROOM_O2_0 = O2_FRAC0*ROOM_MOL*O2_MMOL;
+// kg of oxygen a kilogram of hydrogen wants: 2 H2 + O2 -> 2 H2O, arithmetic
+const O2_PER_H2 = O2_MMOL/(2*H2_MMOL);
+/* HYDROGEN'S OWN BUOYANCY, against air's ROOM_UP = 3.0. It is fourteen times
+   lighter than air, so it collects at the DECKHEAD - which is where it
+   exploded at Fukushima and where it exploded at TMI-2 - and sharing hot
+   air's bias put the gas where the heat was instead. The molar mass ratio IS
+   the bias rather than a second typed number. Checked against the explicit
+   stability cap: (2+up+1)*ROOM_MIX/MPC^2*dt < 1 allows about 28 at dt=0.02
+   and this is 14.4, so there is a factor of two in hand. If it ever wants
+   more, SUBSTEP it - the rule ROOM_MIX already carries. */
+const H2_UP = AIR_MMOL/H2_MMOL;
+
+/* THE FLAME IS A FRONT, NOT A FLOOD FILL.
+   H2_SL is the laminar burning velocity against hydrogen fraction,
+   published, and it IS the "how easily and how violently" axis the whole
+   feature is about: a cell is MPC = 0.467 m, so a limit mixture takes about
+   nine seconds to cross one and a stoichiometric one takes a sixth of a
+   second. A lean charge crawls and is harmless; a near-stoichiometric charge
+   runs and wrecks the plant. Nothing decides which - the mixture does. */
+const H2_SL = [[0.04,0.05],[0.10,0.40],[0.20,1.30],[0.30,2.60],
+               [0.40,3.00],[0.60,1.60],[0.75,0.30]];
+function h2Sl(f){
+  if(f <= H2_SL[0][0] || f >= H2_SL[H2_SL.length-1][0]) return 0;
+  for(let k=1;k<H2_SL.length;k++){ const x1 = H2_SL[k][0], y1 = H2_SL[k][1],
+                                   x0 = H2_SL[k-1][0], y0 = H2_SL[k-1][1];
+    if(f <= x1) return y0 + (y1-y0)*(f-x0)/(x1-x0); }
+  return 0;
+}
+/* BOUGHT, AND IT SAYS SO. What a laminar velocity cannot express is
+   obstacle-generated turbulence, which is the mechanism that takes a real
+   compartment deflagration towards detonation. Applied off the occ array in
+   roomGeom(), so a cluttered plant accelerates its own flame. */
+const H2_TURB = 4;
+/* AND OVERPRESSURE IS WHAT ACTUALLY BREAKS THINGS.
+   Constant-volume combustion off the SAME q the heat term uses, so the two
+   cannot disagree about how big the bang was. There is no detonation switch
+   and there must not be one: deflagration and detonation are the two ends of
+   one axis here - burning velocity against relief time - and a stoichiometric
+   cell lands near the real adiabatic isochoric figure while a limit mixture
+   lands nowhere at all.
+   ROOM_P_TAU is BOUGHT, the CAV_SPAN idiom: how fast the compartment relieves
+   itself, and the entire reason a slow flame is harmless and a fast one is
+   not. It and H2_TURB are the two numbers to hold still while measuring
+   anything else. */
+const ROOM_P0 = 101.3;                    // kPa, ambient
+const ROOM_P_TAU = 0.5;                   // s
+
+/* WHETHER A CELL CAN BURN AT ALL - three tests, read off the same
+   roomH2Frac() the layer draws, so a cell cannot draw as safe and burn. */
+const roomFlam = (s,i) => { const f = roomH2Frac(s,i);
+  return f >= H2_LFL && f <= H2_UFL && roomO2Frac(s,i) >= O2_LOC; };
+/* WHAT LIGHTS IT - three sources, ONE predicate. The middle one closes a real
+   hole: air at 500 K standing against a 900 K generator shell did not light
+   before, and the metal is what the gas actually touches. The third is a
+   wrecked box sparking, at ANY temperature. partSkin() is already the one
+   door the damage integral reads. */
+function roomIgnites(s, G, i){
+  if(s.roomT[i] >= H2_IGN) return true;
+  const k = G.own[i];
+  if(k < 0) return false;
+  const p = G.parts[k].p;
+  return partSkin(s, p) >= H2_IGN || s.dmgParts.indexOf(p.id) >= 0;
+}
+
 function roomH2Step(s, dt, G){
-  const N = GW*GH, H = s.roomH2;
-  s.roomBurn = 0;
-  /* ── it leaves with what leaves ──
+  const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame, Pr = s.roomP;
+  const T = s.roomT;
+  s.roomBurnOn = 0;
+  /* it leaves with what leaves.
      Hydrogen is IN the primary, so the share of it that escapes this tick is
      the share of the primary that escapes this tick. One expression, at every
      opening, because an opening is an opening. */
@@ -499,45 +616,97 @@ function roomH2Step(s, dt, G){
       put(q ? q.cells : [], s.reliefVent[fid]);
     }
   }
-  /* ── and it is a gas in a room ──
-     Diffused on the SAME stencil the heat is, which is what makes a plume
-     collect where the hot air collects rather than under it. */
-  roomDiffuse(H, G, dt);
-
-  /* ── deflagration ──
-     A cell over the LFL and over auto-ignition burns, and it lights every
-     flammable cell it touches in the same tick (the flood is the flame
-     front). The energy is bounded by the hydrogen: this consumes what it
-     burns, so a cell cannot fire twice off one charge. It CANNOT fire at any
-     preset's rest point, because s.h2 is exactly zero there and nothing has
-     put a gram of it in the room. */
-  const T = s.roomT, lit = [];
-  const flam = i => H[i] > 0 && (H[i]/H2_MMOL)/(ROOM_MOL + H[i]/H2_MMOL) >= H2_LFL;
-  for(let i=0;i<N;i++) if(flam(i) && T[i] >= H2_IGN) lit.push(i);
-  if(!lit.length) return;
-  const seen = new Uint8Array(N);
-  for(const i of lit) seen[i] = 1;
-  let burned = 0;
-  while(lit.length){
-    const i = lit.pop();
-    burned += H[i];
-    T[i] = Math.min(ROOM_TMAX, T[i] + H[i]*H2_LHV/ROOM_C);
-    H[i] = 0;
-    const X = i%GW, Y = (i/GW)|0;
-    const nb = [];
-    if(X>0) nb.push(i-1); if(X<GW-1) nb.push(i+1);
-    if(Y>0) nb.push(i-GW); if(Y<GH-1) nb.push(i+GW);
-    for(const j of nb) if(!seen[j] && flam(j)){ seen[j] = 1; lit.push(j); }
+  /* THE VENTILATION SET EXCHANGES GAS, NOT JUST HEAT. Its own comment already
+     said it moves compartment air against the rest of the ship rather than
+     dumping it overboard, so it carries the gas both ways: hydrogen out,
+     oxygen back in, at the same rate expression the heat term uses. With the
+     hull sealed this is the ONLY removal path that is not a fire, which is
+     what finally prices the fan - a second job that is not a temperature. */
+  if(!s.blackout) for(const q of G.parts){
+    if(q.p.role !== "vent" || s.dmgParts.indexOf(q.p.id) >= 0) continue;
+    const f = Math.min(1, ROOM_VENT_KGS/q.cells.length/ROOM_MAIR*dt);
+    for(const i of q.cells){ H[i] -= H[i]*f; O[i] += (ROOM_O2_0 - O[i])*f; }
   }
-  s.roomBurn = burned;
+  /* and it is a gas in a room.
+     ONE stencil, two biases. Hydrogen carries its own H2_UP and collects at
+     the deckhead; oxygen is heavier than air by a hair and carries none. */
+  roomDiffuse(H, G, dt, H2_UP);
+  roomDiffuse(O, G, dt, 1);
+
+  /* DEFLAGRATION.
+     s.roomFlame is how far the front has crossed each cell, 0..1, the s.nDmg
+     idiom: on S, monotonic through one passage, cleared when the cell is
+     spent. A cell lights when it is flammable and something ignites it, it
+     advances at its own mixture's burning velocity times what the clutter
+     around it does, it consumes hydrogen and oxygen in proportion to that
+     advance, and it lights its flammable neighbours once the front has
+     crossed. Nothing latches: the flame dies where fuel or oxygen leaves the
+     window. At the limit this is the standing diffusion flame the old flood
+     fill produced, which is a tile and not a log line. */
+  for(let i=0;i<N;i++)
+    if(Fl[i] <= 0 && H[i] > 0 && roomFlam(s,i) && roomIgnites(s,G,i)) Fl[i] = 1e-6;
+  let burned = 0, on = 0, pmax = 0;
+  for(let i=0;i<N;i++){
+    let q = 0;
+    if(Fl[i] > 0){
+      if(!roomFlam(s,i)) Fl[i] = 0;
+      else {
+        const adv = Math.min(1, h2Sl(roomH2Frac(s,i))*G.turb[i]*dt/MPC);
+        /* THE ADVANCE CONSUMES THE DEFICIENT REACTANT, not the fuel with the
+           oxygen clamped on afterwards. Written the other way round first,
+           and it put the peak in the wrong place: a rich cell burnt a
+           fraction of a bigger charge and so released MORE per tick than a
+           stoichiometric one, which is backwards. This way the peak lands at
+           29.6 vol% on its own arithmetic and nothing names it. */
+        const m = Math.min(H[i], O[i]/O2_PER_H2)*adv;
+        if(m > 0){
+          H[i] -= m; O[i] -= m*O2_PER_H2;
+          burned += m; q = m*H2_LHV;
+          // THE BURN HEATS AT ROOM_CAIR - see its own note at the top of this
+          // file. A deflagration is over before the steel knows about it.
+          T[i] = Math.min(ROOM_TMAX, T[i] + q/ROOM_CAIR);
+        }
+        const nf = Math.min(1, Fl[i] + adv);
+        if(nf >= 1 && Fl[i] < 1){
+          const X = i%GW, Y = (i/GW)|0;
+          const nb = [];
+          if(X>0) nb.push(i-1); if(X<GW-1) nb.push(i+1);
+          if(Y>0) nb.push(i-GW); if(Y<GH-1) nb.push(i+GW);
+          for(const j of nb) if(Fl[j] <= 0 && roomFlam(s,j)) Fl[j] = 1e-6;
+        }
+        Fl[i] = nf;
+        on++;
+      }
+    }
+    /* dP/dt = P0*(q/CAIR)/T_HULL - P/tau: the gas law at constant volume
+       against a compartment that leaks, off the SAME q the heat term spent so
+       the two cannot disagree about how big the bang was. The denominator is
+       AMBIENT and not the cell's running temperature: P0/T_HULL is rho*R, so
+       this expression is identically (gamma-1)*q/V and constant-volume
+       pressure rise has no temperature in it at all. Divide by the live T
+       instead and the sum telescopes to a logarithm - the second half of a
+       burn is priced cheaper than the first, and a stoichiometric cell lands
+       at 96 kPa where the real adiabatic isochoric figure is eight times
+       ambient. Every cell relieves whether it burned or not. */
+    const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CAIR)/T_HULL : 0) - Pr[i]/ROOM_P_TAU*dt;
+    Pr[i] = p > 0 ? p : 0;
+    if(Pr[i] > pmax) pmax = Pr[i];
+  }
+  s.roomBurnOn = on; s.roomPMax = pmax;
+  /* ONE EVENT PER EXPLOSION. A front crawling at 0.05 m/s never trips a
+     per-tick gate, so the charge is accumulated while anything is burning and
+     step.js writes the line when the last flame goes out. */
+  if(burned > 0 || on){ s.burnEv.kg += burned;
+    if(pmax > s.burnEv.p) s.burnEv.p = pmax; }
 }
 
-/* ONE STENCIL, TWO FIELDS. The heat pass above walks it inline because it
-   also carries the sources; this is the same walk for a field that has none,
-   and writing it twice is how the two would start disagreeing about which way
-   is up. Conserving: nothing leaves except at the hull, where a gas escapes
-   the same way heat does. */
-function roomDiffuse(F, G, dt){
+/* ONE STENCIL, TWO GASES. The heat pass above walks it inline because it also
+   carries the sources; this is the same walk for a field that has none, and
+   writing it twice is how the two would start disagreeing about which way is
+   up. The BIAS is an argument, so hydrogen and oxygen share the walk and
+   still rise at their own rates. Conserving, and CLOSED: nothing leaves the
+   grid at all, because the skin is sealed metal. */
+function roomDiffuse(F, G, dt, up){
   const N = roomScratch(), d = roomD2;
   d.fill(0);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW-1;X++){
@@ -545,12 +714,27 @@ function roomDiffuse(F, G, dt){
     d[i] -= q; d[i+1] += q;
   }
   for(let Y=0;Y<GH-1;Y++) for(let X=0;X<GW;X++){
-    const i = Y*GW+X, j = i+GW, dF = F[j]-F[i];
-    const q = (dF > 0 ? G.gUp[i] : G.gDn[i])*dF/ROOM_C;
+    /* A DRIFT, NOT A FASTER DIFFUSION. The heat pass above switches the
+       conductance on the SIGN of the difference, which makes a hot cell empty
+       upward quickly - but its equilibrium is still flat, because the flux
+       vanishes when the difference does. Written that way first and measured:
+       a charge released at the deck was uniform over all 34 rows in 60 s,
+       where the whole claim is that hydrogen collects under the DECKHEAD and
+       stays there. Priced off the amount in each cell rather than off the
+       difference, the flux vanishes at F[i] = up*F[j] instead - an
+       exponential profile with a scale height, which is what a light gas in a
+       compartment actually does. up = 1 is exactly the old symmetric pass, so
+       oxygen is untouched. j is BELOW i on this grid. */
+    const i = Y*GW+X, j = i+GW;
+    const q = G.gDn[i]*(up*F[j] - F[i])/ROOM_C;
     d[i] += q; d[j] -= q;
   }
   for(let i=0;i<N;i++) F[i] = Math.max(0, F[i] + d[i]*dt);
-  for(let i=0;i<N;i++) if(G.hull[i]) F[i] = 0;
+  /* THE HULL IS SEALED. `if(G.hull[i]) F[i] = 0` stood here and was correct
+     while the ring was a Dirichlet clamp at ambient - but the skin RADIATES
+     now, and it is metal. Hydrogen was escaping to space through an intact
+     wall and could never accumulate. The stencil is edge-based and already
+     conserving, so no-flux is the default and nothing replaces the line. */
 }
 
 /* THE WORST CELL a machine is standing in - radAt()'s own shape, and the
@@ -562,11 +746,22 @@ function roomAt(s, p){
     if(X>=0&&X<GW&&Y>=0&&Y<GH) v = Math.max(v, s.roomT[Y*GW+X]);
   return v || T_HULL;
 }
+// the same question of the blast, and the same shape, for the damage writer
+// in step.js. A blast is instantaneous, so this is a peak and not an integral.
+function roomPAt(s, p){
+  let v = 0;
+  for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
+    if(X>=0&&X<GW&&Y>=0&&Y<GH) v = Math.max(v, s.roomP[Y*GW+X]);
+  return v;
+}
 // the hydrogen concentration in a cell, as a volume fraction - the readout
 // behind the flammability layer, off the same expression the ignition test
 // uses so a cell cannot draw as safe and burn.
 const roomH2Frac = (s,i) => { const n = s.roomH2[i]/H2_MMOL;
   return n > 0 ? n/(ROOM_MOL + n) : 0; };
+// and the oxygen's, off the SAME denominator - the hydrogen displaces air, so
+// a rich cell is oxygen-poor by arithmetic rather than by a second rule
+const roomO2Frac = (s,i) => s.roomO2[i]/O2_MMOL/(ROOM_MOL + s.roomH2[i]/H2_MMOL);
 // WHICH MACHINES ARE OVER THEIR OWN LIMIT, off the same roomAt() and the same
 // partTsurv() the damage integral reads - so the alarm and the failure cannot
 // name two different sets of machines.
