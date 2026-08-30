@@ -52,6 +52,10 @@ const CH={
  mlt :{lab:"FUEL MOLTEN",u:"%", col:"#ff9a5a", f:s=>s.meltFrac*100},
  h2  :{lab:"HYDROGEN",   u:"kg",col:"#a98cf0", f:s=>s.h2},
  dnbm:{lab:"MIN NODE DNBR",u:"",col:"#f0a830", f:s=>s.dnbrMin},
+ /* the sink the ship actually has. Everything else on this list is about
+    making heat or moving it; this is the one channel about getting rid of it,
+    and it is the slowest pot on the plant. */
+ radt:{lab:"PANEL TEMP",  u:"K", col:"#b8c4cf", f:s=>s.radT},
 };
 /* ══ HOW A CHANNEL IS DRAWN, NOT WHAT IT IS ══
    A trend used to scale itself to whatever it happened to contain, and that is
@@ -106,6 +110,11 @@ const CHVIEW={
     fraction of the core's zirconium has gone rather than a picked ceiling */
  h2  :{rng:()=>[0,Math.max(50,P.cladKg*ZR_H2)], warn:()=>[H2_EV]},
  dnbm:{rng:()=>[0,Math.max(2.6,P.dnbr0*1.3)],   warn:()=>[1]},
+ /* pinned to the two real ceilings rather than a picked span: the design
+    sink, then the panel temperature at which the condenser reaches the
+    turbine's trip pressure. */
+ radt:{rng:()=>[200,tsatSec(COND_ATM)-COND_DT0],
+       warn:()=>[RAD_TDES, tsatSec(TURB_TRIP_P)-COND_DT0]},
 };
 
 /* ══ THE LATCHES LIVE BESIDE THE CHANNELS, NOT IN THEM ══
