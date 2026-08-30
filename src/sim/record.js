@@ -340,6 +340,20 @@ function actDo(k, a){ actLog(k, a); ACT[k].apply(S, ...a); }
 const REC_MAX_ROOTS = 8;      // whole runs kept; the 9th evicts the oldest lineage
 const REC_MAX_KEYS  = 900;    // keyframes across the whole forest, ~9.5 MB of plant
 const KF_TICKS      = 250;    // 5 sim-seconds between keyframes, before thinning
+/* ══ A KEYFRAME IS PRICED IN WALL TIME, SO ITS SPACING FOLLOWS THE RATE ══
+   KF_TICKS is a SIM-time gap. At 1x that is one snapshot every five seconds of
+   your life; at 3500 ticks a second it is fourteen a second, each a clone of
+   the whole of S that is KEPT - measured at ~600 B per tick against the 152 B
+   the tick itself allocates, and unlike the tick's own garbage it survives into
+   old space. That is what the frame spikes on a fast run are.
+   So the gap is stretched to hold the cost per WALL second roughly flat, capped
+   at 4x. What it buys back is scrub cost: up to 20 sim-seconds re-derived
+   instead of 5, which is about a second of re-simulation. Keyframes are a cache
+   and may always be thrown away (recEvict()), so this trades one against the
+   other and touches nothing a recording has to be able to reproduce. */
+const KF_PER_SEC = 2, KF_MAX_STRETCH = 4;
+const kfSpan = t => KF_TICKS * t.thin *
+  clamp(Math.round(TR.sps/KF_PER_SEC/KF_TICKS), 1, KF_MAX_STRETCH);
 
 const REC = { roots:[], takes:[], cur:0, mode:"live", keyCount:0 };
 
@@ -537,7 +551,7 @@ function recTick(){
   if(S.tick >= t.nextKey){
     t.keys.push({tick:S.tick, S:snapS(S), lg:LOG.slice(), ei:t.evs.length});
     REC.keyCount++;
-    t.nextKey = S.tick + KF_TICKS*t.thin;
+    t.nextKey = S.tick + kfSpan(t);
     if(REC.keyCount > REC_MAX_KEYS) recEvict();
   }
 }
@@ -690,12 +704,30 @@ function recPlay(){
    TR is NOT on S. How fast you are watching is not a property of the reactor,
    so it must not be snapshotted, scrubbed or replayed - a recording made at
    16x plays back at whatever rate you are sitting at now. */
-const TR = {rate:1, paused:false, step1:0, sps:0};
+const TR = {rate:1, paused:false, step1:0, sps:0, vldSeen:null, vldHit:null};
+/* VLD is MAX with a stop condition and no picture. The alarms already lit when
+   it starts are the ones you signed off, so only a tile that was NOT lit then
+   halts the run - and the halt is a drop to 1x, so the plant is still running
+   when you look up. Not a rate: nothing owes it ticks. */
+const TR_VLD = "vld";
+const trAnnSet = () => { const o=Object.create(null); for(const a of ANN) if(a[2](S)) o[a[0]]=1; return o; };
+/* ASKED INSIDE THE TICK'S OWN WINDOW - see laySettle() (layout.js). Half the
+   board asks the drawing, and between two ticks the window is shut: measured at
+   199 us cold against 9 us settled, on a tick that costs 476 us. */
+const trVldCheck = () => { for(const a of ANN) if(!TR.vldSeen[a[0]] && a[2](S)){ TR.vldHit=a[0]; return; } };
+/* the one predicate for "the screen is deliberately stale" - main.js skips the
+   frame on it and shellSync() keeps only the clock. */
+const trQuiet = () => TR.rate===TR_VLD && !TR.paused && !!P && !!SIMSCREEN[screen];
 const TICK_CAP  = 48;
 /* MAX is a TIME budget, not a multiplier: there is no rate that owes it ticks,
    it simply steps until the frame's share of milliseconds is spent. The cap is
    what leaves the browser room to paint and to answer the hand. */
 const TR_MAX_MS = 12;
+/* VLD paints nothing, so the room MAX leaves for the paint is room it can
+   spend. It is barely longer than MAX because the frame is no longer paced by
+   the screen either (nextFrame(), main.js): the loop comes straight back, so a
+   longer budget buys almost no share and costs the hand its answer. */
+const TR_VLD_MS = 16;
 const trNow = () => (typeof performance!=="undefined" ? performance.now() : Date.now());
 const SIMSCREEN = {operate:1, scenario:1};
 let simAcc = 0;
@@ -711,6 +743,7 @@ function simTick(){
   laySettle();
   step(0.02);
   if(S.tick % SAMP_TICKS === 0) sample();
+  if(TR.vldSeen && !TR.vldHit) trVldCheck();
   layRelease();
   spsN++;
 }
@@ -729,6 +762,10 @@ function spsFrame(dt){
 function simFrame(dt){
   spsFrame(dt);
   if(!P || !SIMSCREEN[screen]){ simAcc=0; return false; }
+  /* once a frame, whether or not one is painted: the ticks below read the
+     cached design signatures and this is the pass that proves them (layFresh(),
+     layout.js). A VLD run paints nothing and would otherwise never ask. */
+  layFresh();
   /* a scenario draining takes the whole frame: it is already stepping the
      plant on its own budget, and letting the live accumulator step it too
      would run the run at two speeds at once. */
@@ -741,14 +778,21 @@ function simFrame(dt){
     while(TR.step1>0){ TR.step1--; if(!recPlay()) break; simTick(); k++; }
     recTick(); return k>0;
   }
-  if(TR.rate===Infinity){
+  if(TR.rate===Infinity||TR.rate===TR_VLD){
     /* no accumulator at all: an unbounded rate owes an unbounded number of
        ticks, so the debt is meaningless and carrying it would only shed it. */
     simAcc=0;
-    const t0=trNow(); let m=0;
-    while(trNow()-t0 < TR_MAX_MS){
+    const vld=TR.rate===TR_VLD;
+    if(vld && !TR.vldSeen) TR.vldSeen=trAnnSet();   // armed here, so the stash is the plant one tick before the run
+    const t0=trNow(), budget=vld?TR_VLD_MS:TR_MAX_MS; let m=0;
+    while(trNow()-t0 < budget){
       if(!recPlay()){ TR.paused=true; break; }
       simTick(); m++;
+      if(TR.vldHit){
+        logE("warn","VALIDATION RUN HALTED / "+TR.vldHit,
+          "A tile that was not lit when the validation run started has come up, so the run has dropped back to 1x with the plant still going.");
+        trRate(1); break;
+      }
     }
     recTick();
     return m>0;
@@ -768,9 +812,13 @@ function simFrame(dt){
   recTick();                       // once a frame, after the ticks it covers
   return n>0;
 }
-const trRate=r=>{ TR.rate=r; TR.paused=false; };
+const trRate=r=>{ TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=null; };
 const trPause=()=>{ TR.paused=!TR.paused; };
-const trStep=()=>{ TR.paused=true; TR.step1++; };
+/* shift is ten, on both keys and both buttons: one 0.02 s tick is the right
+   grain to look at and the wrong grain to travel in. */
+const TR_STEP_BIG=10;
+const trStepN = e => e&&e.shiftKey ? TR_STEP_BIG : 1;
+const trStep=e=>{ TR.paused=true; TR.step1+=trStepN(e); };
 /* ── BACKWARDS IS A SEEK, NOT AN UN-STEP ──
    A tick cannot be undone: step() is not invertible and nothing keeps the state
    it overwrote. So one tick back is one tick of SCRUB - restore the nearest
@@ -780,7 +828,7 @@ const trStep=()=>{ TR.paused=true; TR.step1++; };
    tick, so stepping back over a fork point lands on the parent by itself.
    A queued forward step is dropped - it was ordered before you changed your
    mind about which way you were going, and firing it after would cancel this. */
-const trStepBack=()=>{ TR.paused=true; TR.step1=0; if(S) seek(REC.cur, S.tick-1); };
+const trStepBack=e=>{ TR.paused=true; TR.step1=0; if(S) seek(REC.cur, S.tick-trStepN(e)); };
 
 /* THE KEYSTROKES LIVE WITH THE STRIP THAT DRAWS THEM, in transport.js. They
    were here first, next to the functions they call, and that put a UI

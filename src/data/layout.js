@@ -44,7 +44,19 @@ const fittableList=()=>[
      four rows here and they were one component wearing four names. */
 ];
 const checkOf=id=>fittableList().find(f=>f.id===id).get();
-const checkSig=()=>fittableList().map(f=>f.get()?1:0).join("");
+/* ══ A SIGNATURE IS BUILT ONCE PER EDIT, NOT ONCE PER TICK ══
+   Every cache below proves itself against one of these strings, and simTick()
+   opens its own layout window - so a running plant rebuilt 2.7 kB of string
+   three thousand times a second to be told nothing had changed. Measured at
+   80 us of a 496 us tick.
+   Cached against DGEN (design.js) now; sigFresh() is the raw pass that keeps
+   the contract honest and layFresh() runs it once a frame. See dTouch(). */
+const SIGS=[];
+const sigMemo = build => { let g=-1, v=null;
+  const f = () => (g===DGEN ? v : (v=build(), g=DGEN, v));
+  f.raw = build; SIGS.push(f); return f; };
+const sigFresh = () => { for(const f of SIGS) if(f.raw()!==f()){ dTouch(); return; } };
+const checkSig=sigMemo(()=>fittableList().map(f=>f.get()?1:0).join(""));
 /* WHAT buildLayout() READS, all of it. It used to be checkSig() alone, which
    was true only while every part was either always there or behind a
    checkbox. A tank is neither: it is an instance, and its id and its cell
@@ -52,36 +64,36 @@ const checkSig=()=>fittableList().map(f=>f.get()?1:0).join("");
    and editing D.tanks directly - a rename, a tank moved, a tank the bench
    just reconfigured - leaves LAY holding parts that no longer exist, and the
    runs pointing at them silently stop routing. */
-const tankSig=()=>{ let out="";
+const tankSig=sigMemo(()=>{ let out="";
   for(const id in D.tanks){ const t=D.tanks[id], c=t.cell;
     // vol too: a tank's BOX SIZE follows it (tankW/tankH), so a slider on its
     // own panel changes what stands on the grid, not just what it holds
     out += "|"+id+":"+(c?c[0]+","+c[1]:"-")+":"+t.vol; }
-  return out; };
+  return out; });
 /* A FITTING IS A PART TOO, so the same argument tankSig() makes applies: its
    id and its cell decide what box goes on the board, and its MODE decides
    which faces are one node (foldFacesOf()). Leave any of the three out and a
    direct D.fittings edit leaves LAY holding a box that no longer exists. */
-const fittingSig=()=>{ let out="";
+const fittingSig=sigMemo(()=>{ let out="";
   for(const id in D.fittings){ const f=D.fittings[id], c=f.cell;
     out += "|"+id+":"+(c?c[0]+","+c[1]:"-")+":"+f.mode; }
-  return out; };
+  return out; });
 /* A PORT'S id, part, offset and mode all decide what's on the board - same
    argument tankSig()/fittingSig() make. A port OCCUPIES A CELL now, so this
    is not merely additive: a port placed or moved changes what occupied()
    stamps and so what groupFits() will refuse. The FACE is derived from the
    offset (portFaceOf()) and so is already in here. */
-const portSig=()=>{ let out="";
+const portSig=sigMemo(()=>{ let out="";
   for(const id in D.ports){ const p=D.ports[id];
     out += "|"+id+":"+p.p+":"+p.dx+","+p.dy; }
-  return out; };
+  return out; });
 /* EVERY PIPE CELL, in key order - a pipe is cell-keyed data (D.pipes), so its
    own identity IS its cell and this is the whole of it. Joined into
    laySrcSig() so laying a pipe invalidates buildLayout()'s occupancy the same
    way placing a tank does. */
-const pipeSig=()=>{ let out="";
+const pipeSig=sigMemo(()=>{ let out="";
   for(const k in D.pipes){ const c=D.pipes[k]; out += "|"+k+":"+c.s+":"+c.r; }
-  return out; };
+  return out; });
 const laySrcSig=()=>checkSig()+tankSig()+fittingSig()+portSig()+pipeSig();
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
@@ -1410,6 +1422,7 @@ const ROLE = {
 const fitModeOf=id=>(D.fittings[id]&&D.fittings[id].mode)||"tee";
 
 function buildLayout(){
+  dTouch();          // LAY.parts is about to be a different list, and every gesture that edits D lands here
   const A=[], add=(id,name,w,h,x,y,col,grp,tip,role)=>{ const p={id,name,w,h,x,y,col,grp,tip,role}; A.push(p); return p; };
   /* ══ A MACHINE IS BIG ENOUGH TO HOLD ITS OWN CONTROLS ══
      BANDS is gone: the control room used to stretch a grid ROW to make room
@@ -2011,6 +2024,7 @@ function moveTo(p,nx,ny){
   for(const {q,x,y} of cells){ q.x=x; q.y=y;
     if(D.tanks[q.id])    D.tanks[q.id].cell=[x,y];
     if(D.fittings[q.id]) D.fittings[q.id].cell=[x,y]; }
+  dTouch();                        // moves a part without rebuilding LAY - see dTouch() (design.js)
   markLimbo(LAY.parts);
   return true;
 }
@@ -2035,7 +2049,12 @@ function freeAdj(p,g){
 /* IS THE BOARD THE ONE D DESCRIBES. Split out of layoutMetrics() because a
    frame has to ask it BEFORE laySettle(): settle first and the window would
    hold a graph read off the board the player has just left. */
-const layFresh=()=>{ if(!LAY||layFit!==laySrcSig()) buildLayout(); };
+/* sigFresh() FIRST, and this is the one place that runs it: it is the raw pass
+   that catches a design edit nobody declared with dTouch(), so the cached
+   signatures below cannot answer for a board the player has already changed.
+   Both a painted frame and simFrame() call this, so a validation run - which
+   paints nothing at all - is checked on exactly the same schedule. */
+const layFresh=()=>{ sigFresh(); if(!LAY||layFit!==laySrcSig()) buildLayout(); };
 function layoutMetrics(){
   layFresh();
   const P_=LAY.parts, core=partOf("core"), cc=cen(core);
@@ -2156,7 +2175,9 @@ function layoutMetrics(){
 // the board, live parts only (no D fields, no lattice). rad.js's kernel
 // cache keys on exactly this - a shield sliding one cell invalidates it, a
 // bench slider that leaves every part where it stood does not.
-const laySig = () => LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";");
+// LAY is null before the first buildLayout(), and sigFresh() asks every
+// signature on a frame that may be that one
+const laySig = sigMemo(() => LAY ? LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";") : "");
 
 /* PER-TABLE SIGNATURES, not JSON.stringify(D). ~150 D.pipes entries lengthen
    that string a long way, and dbPanelSig compares it every frame - it was

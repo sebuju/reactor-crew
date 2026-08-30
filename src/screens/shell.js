@@ -116,9 +116,19 @@ const SCNTIP_ON="Say what the reactor is FOR. Lay out a timeline of what will ha
 const OPTIP_ON="The live control room. Opening it commissions the current design. Run the plant, push it past its limits, and repair it when it bites back. Visiting the bench puts the plant back where it was commissioned, and changing anything there rebuilds the unit from scratch the next time you come back here.";
 const LOCKTIP="Locked while a machine is standing where it does not fit. Drag it clear on the design bench.";
 
+/* ONE string, so the sim time and the rate it is advancing at cannot be
+   written out of step with each other - they are two readings of one moment. */
+function shellClock(){
+  const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7)+" / "+pad(Math.round(TR.sps),4)+" TPS";
+  if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
+}
 function shellSync(){
   helpSync();
   if(!shellEls) return;
+  /* a validation run keeps this one reading and nothing else - see trQuiet()
+     (record.js). designBlocked() below walks the whole plant, and that walk is
+     the frame the run is trying to spend on the sim. */
+  if(trQuiet()){ shellClock(); return; }
   /* THE SAME WINDOW A FRAME TAKES - see laySettle() (layout.js). This runs on
      its own 10 Hz interval rather than inside a frame, so it had no settled
      graph of its own: designBlocked() walks the whole plant, and every reader
@@ -138,10 +148,7 @@ function shellSync(){
   const line=P?`${P.id}  ${pad(P.rated.toFixed(0),4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`:"NO CORE COMMISSIONED";
   if(shellEls.plantLine.textContent!==line){ shellEls.plantLine.textContent=line;
     shellEls.plantLine.classList.toggle("idle",!P); }
-  /* ONE string, so the sim time and the rate it is advancing at cannot be
-     written out of step with each other - they are two readings of one moment. */
-  const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7)+" / "+pad(Math.round(TR.sps),4)+" TPS";
-  if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
+  shellClock();
   shellEls.dot.style.visibility=Math.floor(performance.now()/500)%2?"visible":"hidden";
   layRelease();
 }

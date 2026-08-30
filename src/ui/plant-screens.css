@@ -37,7 +37,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    spanning both rows - the whole panel vanished. Sized by its own content
    instead, capped by max-height. */
 .cr-vitals{grid-column:1;grid-row:1;pointer-events:auto;display:flex;flex-direction:column;
-  width:300px;margin:4px 0 0 4px;padding:4px 0;background:var(--c-panel);border:1px solid var(--c-edge);
+  width:300px;margin:4px 0 0 4px;padding:4px 0;background:var(--c-panel);
   align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none; z-index: 1;}
 .cr-vitals::-webkit-scrollbar{display:none}
 .cr-vitals>*{flex:0 0 auto}
@@ -222,7 +222,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    its own content and capped: a scroll container stretched into a grid row
    collapses to nothing. Row 2, so the tool bar keeps the corner. */
 .db-vitals{grid-column:1;grid-row:2;pointer-events:auto;display:flex;flex-direction:column;gap:6px;
-  width:300px;margin:0 0 0 4px;background:var(--c-panel);border:1px solid var(--c-edge);
+  width:300px;margin:0 0 0 4px;background:var(--c-panel);
   align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none;z-index:1}
 .db-vitals::-webkit-scrollbar{display:none}
 .db-vitals:empty{display:none}

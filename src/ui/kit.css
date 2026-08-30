@@ -7,6 +7,7 @@
 
 .kit-well{background:var(--c-panel)}
 .kit-well-body{padding:8px 4px}
+.db-vitals .kit-well-body{padding:8px 6px;}
 
 .kit-rule{display:flex;align-items:center;gap:7px;margin:0 0 6px;
   color:var(--kit-rule-color,var(--c-ink2));font-size:var(--t8);
@@ -16,11 +17,12 @@
 /* the rule a well() builds for its own title. It sits OUTSIDE .kit-well-body,
    so it carries its own padding, and since the well lost its border this bar
    is what delimits the panel - and what .on/.blocked colour. */
-.kit-rule-head{margin:0;padding:6px 10px 5px;background:var(--c-edge);
+.kit-rule-head{margin:0;padding:6px 4px 5px;background:var(--c-edge);
   font-size:var(--t9);font-weight:700;letter-spacing:1.8px;
   color:var(--kit-rule-color,var(--c-bright));
   overflow:hidden;text-overflow:ellipsis}
 .kit-rule-head::after{display:none}
+.db-vitals .kit-rule-head {padding: 6px 8px;}
 /* THE HEADING IS THE NAME FIELD - see rule()'s `edit` in kit.js. It has to
    read as the heading it replaced, so it inherits the bar's own type and
    carries no box until the pointer is on it. */

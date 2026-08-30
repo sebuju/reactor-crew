@@ -9,13 +9,30 @@ let prev=performance.now();
    of one frame's work per second. */
 const IDLE_MS=250;
 let lastDraw=-1e9;
+/* requestAnimationFrame IS A QUEUE FOR THE SCREEN. It hands the loop back on a
+   vsync boundary whether or not anything was painted, so a run that draws
+   nothing still waited for the monitor and idled a third of every frame.
+   A message port has no boundary and, unlike setTimeout, no 4 ms clamp on a
+   nested timer - the loop comes back as soon as the task queue is empty, which
+   still leaves the hand and the clock their turn between frames.
+   Built on the first quiet frame and not at load: an open port holds the node
+   event loop open, and the headless bundle runs this file and expects to end. */
+let trPump = null;
+const nextFrame = () => {
+  if(!trQuiet()){ requestAnimationFrame(tick); return; }
+  if(!trPump){ trPump = new MessageChannel(); trPump.port1.onmessage = () => tick(performance.now()); }
+  trPump.port2.postMessage(0);
+};
 function tick(now){
   let dt=(now-prev)/1000; prev=now; dt=Math.min(dt,.25);
   const stepped=simFrame(dt);
   // taken unconditionally: short-circuiting behind `stepped` would leave the
   // flag set through a whole run and spend it on the first still frame after
   const want=uiTakeDirty();
-  if(!stepped && !want && now-lastDraw<IDLE_MS){ requestAnimationFrame(tick); return; }
+  // a validation run buys its speed here: the whole frame goes to the sim and
+  // the canvas holds whatever it last painted - see trQuiet() (record.js)
+  if(trQuiet()){ nextFrame(); return; }
+  if(!stepped && !want && now-lastDraw<IDLE_MS){ nextFrame(); return; }
   lastDraw=now;
   // the drawing cannot move inside a frame - see laySettle() (layout.js).
   // layoutMetrics() itself is NOT called here: drawPlant() calls it, and it
@@ -31,7 +48,7 @@ function tick(now){
   tipSync();
   ui.prev=ui.widgets;
   layRelease();
-  requestAnimationFrame(tick);
+  nextFrame();
 }
 
 storeProbe();   // fired once, never awaited - see storeProbe() in data/store.js

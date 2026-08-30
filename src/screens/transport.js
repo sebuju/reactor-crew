@@ -23,7 +23,7 @@ function trBind(sc,k){
 }
 keyAdd({k:" ", sc:"operate",  lab:"PAUSE", fn:trPause});
 keyAdd({k:" ", sc:"scenario", lab:"PAUSE", fn:trPause});
-const TR_RATES = [["1",1,"1X"],["2",4,"4X"],["3",16,"16X"],["4",Infinity,"MAX"]];
+const TR_RATES = [["1",1,"1X"],["2",4,"4X"],["3",16,"16X"],["4",Infinity,"MAX"],["5",TR_VLD,"VLD"]];
 for(const [key,r,lab] of TR_RATES){
   keyAdd({k:key, sc:"operate",  lab, fn:()=>trRate(r)});
   keyAdd({k:key, sc:"scenario", lab, fn:()=>trRate(r)});
@@ -49,6 +49,8 @@ function trBuild(sc){
   const rate = KIT.segSel(TR_RATES.map(r=>r[2]),
     {onSelect:i=>trBind(sc,TR_RATES[i][0]).fn()});
   rate.el.classList.add("trs-rate");
+  KIT.tip(rate.el.children[TR_RATES.findIndex(r=>r[1]===TR_VLD)],"VLD / VALIDATION RUN",
+    "Runs as fast as MAX and stops drawing the plant while it does, so the whole frame goes into the sim - only the clock and the tick counter in the topbar keep moving. The alarms already lit when you start it are stashed; the first tile that was NOT lit then drops the run back to 1x and hands the plant back to you.");
 
   const stepBack = KIT.button("STEP -",{sunk:1,onClick:trBind(sc,",").fn,
     tip:"Puts the plant back one 0.02 s tick and leaves it paused. It is a scrub, not an undo: the tick is re-derived from the last keyframe, so it is exact but it costs more than stepping forward, and it puts you in REPLAY the same way dragging the bar does."});
@@ -263,6 +265,9 @@ function trSync(h){
   h.pause.set({label:TR.paused?"PLAY":"PAUSE", on:TR.paused});
   h.rate.set(TR_RATES.findIndex(r=>r[1]===TR.rate));
   h.modeEl.classList.toggle("replay", REC.mode==="replay");
+  /* the strip says which rate is running and then goes still with the rest of
+     the screen - see trQuiet() (record.js). */
+  if(trQuiet()) return;
 
   const many = REC.takes.filter(Boolean).length>1;
   h.takesBtn.el.classList.toggle("hide", !many);

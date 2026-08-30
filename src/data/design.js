@@ -241,6 +241,20 @@ const RODX0=.35;
    zone 0's fallback, so an unzoned core is every slot in zone 0 and reads
    exactly as it always did. `??`, never `||`, or a legitimate zone 0 fails. */
 const zoneFuelOf = z => D.zoneFuel[z] ?? D.fuel;
+/* ══ THE DESIGN GENERATION. BUMP IT WHEN YOU EDIT A DESIGN TABLE ══
+   The signature strings every layout cache proves itself against (pipeSig() and
+   the four beside it, layout.js) are cached against this number, because a tick
+   opens its own window and was rebuilding all of them 3000 times a second.
+   THE CONTRACT: anything that writes D.pipes, D.ports, D.fittings, D.tanks, a
+   FITTABLE flag or a part's x,y calls dTouch(). buildLayout() and moveTo()
+   already do, which covers every gesture that goes through them. A direct field
+   write from an inspector panel does not - so sigFresh() (layout.js) rebuilds
+   every signature raw once a frame and bumps this by itself when it finds a
+   change nobody declared. A missed dTouch() therefore costs one frame of stale
+   drawing, never a wrong plant. Over-bumping costs a rebuild and nothing else:
+   if you are not sure, bump. */
+let DGEN=0;
+const dTouch=()=>{ DGEN++; };
 const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
          pdes:1.0,pzr:1.0,chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
