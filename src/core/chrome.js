@@ -80,17 +80,23 @@ function hatch(x,y,w,h,col,a){
   for(let i=-h;i<w;i+=7){ ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
   ctx.restore();
 }
-// blinks on the same 900ms rhythm as the annunciator tile, so both read as one signal
+/* blinks on the same 900ms rhythm as the annunciator tile, so both read as one
+   signal - off the PLANT's clock (fxClock(), fx.js), not the wall's, so a
+   paused board stops flashing along with everything else it draws. */
 function lamp(x,y,col){
   ctx.beginPath(); ctx.arc(x,y,4,0,7);
-  ctx.fillStyle = (col===C.red && performance.now()%900<450) ? "#5a1109" : col;
+  ctx.fillStyle = (col===C.red && (fxClock()*1000)%900<450) ? "#5a1109" : col;
   ctx.fill();
 }
-function badge(x,y,col){
-  ctx.beginPath(); ctx.moveTo(x,y-8); ctx.lineTo(x+8,y+5); ctx.lineTo(x-8,y+5);
+/* THE ATTENTION MARK IS A FOLDED CORNER, not an icon. A triangle with a "!" in
+   it was a second visual language on a board that otherwise says everything
+   with colour and a plate; at 16 px the glyph was mush and the outline fought
+   the box's own frame. This is flush to the corner it marks, so it reads as
+   the BOX being flagged rather than as a sticker dropped on it. (x, y) is the
+   box's top-right corner. */
+function cornerTab(x,y,s,col){
+  ctx.beginPath(); ctx.moveTo(x-s,y); ctx.lineTo(x,y); ctx.lineTo(x,y+s);
   ctx.closePath(); ctx.fillStyle=col; ctx.fill();
-  ctx.strokeStyle="#0a0f0e"; ctx.lineWidth=1; ctx.stroke();
-  txt("!",x,y+4,{size:8,weight:700,align:"center",color:"#180404"});
 }
 /* baked once into a pattern rather than drawn every frame. The pitch is the
    PLANT grid's and the pattern is anchored on the grid's own corner, so a dot
