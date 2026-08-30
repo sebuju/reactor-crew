@@ -119,17 +119,56 @@ const BLASTZ=[
   {t:120, col:C.red,   lab:"MACHINES",a:0.34},
   {t:1e9, col:C.red,   lab:"PIPEWORK",a:0.48},
 ];
+const blastOf = v => { for(let k=0;k<BLASTZ.length;k++) if(v<BLASTZ[k].t) return k;
+                       return BLASTZ.length-1; };
+/* ══ A BLAST IS OVER BEFORE ANYONE CAN LOOK AT IT ══
+   s.roomP relieves on ROOM_P_TAU, half a second, and that is the physics and
+   stays the physics - but it left this layer reading as permanently empty:
+   the whole picture existed for about a dozen frames and was gone. So the
+   layer is a PEAK HOLD, which is what a real blast gauge is - the highest
+   value each cell has ever seen, bled away slowly for the eye.
+   DISPLAY STATE, so it is not on S: the same standing the damped meters in
+   pipes.js have, and for the same reason - it is a picture of the last few
+   seconds, not a fact about the plant. It runs off the PLANT's clock, so it
+   freezes with a paused board, and a clock that has gone backwards is a reset
+   or a scrub, which throws the hold away. */
+let blastPk=null, blastT=0;
+const BLAST_HOLD=9;                       // s for a held peak to bleed to nothing
+function blastHold(L){
+  const N=GW*GH;
+  if(!blastPk || blastPk.length!==N) blastPk=new Float64Array(N);
+  const now=fxClock();
+  if(now<blastT) blastPk.fill(0);
+  const dt=clamp(now-blastT,0,0.25); blastT=now;
+  const k=Math.exp(-dt/BLAST_HOLD);
+  for(let i=0;i<N;i++){
+    const v=L.roomP[i], held=blastPk[i]*k;
+    blastPk[i] = v>held ? v : held;
+  }
+  return blastPk;
+}
 function roomPLayer(data,L){
   if(!L) return;
+  const pk=blastHold(L);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
-      const v=L.roomP[Y*GW+X];
+      const i=Y*GW+X, v=pk[i];
       if(v<BLASTZ[0].t) continue;
-      let z=BLASTZ.length-1;
-      for(let k=0;k<BLASTZ.length;k++) if(v<BLASTZ[k].t){ z=k; break; }
-      ctx.globalAlpha=BLASTZ[z].a; fillRect(GX+X*CELL,y,CELL,h,BLASTZ[z].col); ctx.globalAlpha=1;
-      if(z>=3) txt(v.toFixed(0), GX+X*CELL+CELL/2, y+h-3,
+      const z=blastOf(v), Z=BLASTZ[z], x0=GX+X*CELL;
+      ctx.globalAlpha=Z.a; fillRect(x0,y,CELL,h,Z.col); ctx.globalAlpha=1;
+      /* THE FRONT ITSELF, over the held picture: a cell the wave is in RIGHT
+         NOW breathes, so the half-second the bang lasts is still visible as an
+         event rather than only as a stain left behind by one. */
+      if(L.roomP[i]>=BLASTZ[0].t) fxPulse(x0,y,CELL,h,Z.col,1,4);
+      // the two bands that cost machines are hatched, so they are told apart
+      // from the two that only rattle them without reading a number off either
+      if(z>=3) hatch(x0,y,CELL,h,Z.col,.35);
+      // the boundary of the damaged region, drawn as an edge rather than left
+      // as a change of wash - the same argument roomZones() makes
+      if(X<GW-1 && blastOf(pk[i+1])!==z) fillRect(x0+CELL-1,y,1,h,Z.col);
+      if(Y<GH-1 && blastOf(pk[i+GW])!==z) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
+      if(z>=3) txt(v.toFixed(0), x0+CELL/2, y+h-3,
                    {size:8, align:"center", color:C.red});
     }
   }
