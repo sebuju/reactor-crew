@@ -256,7 +256,7 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
          /* PER-INSTANCE SIZES, keyed by part id, exactly as pumpSize is. The
             scalar above each of them is the FALLBACK, so a design that never
             touched a box commissions bit-identically. */
-         turbSize:{},condSize:{},sgType:{},ihxSize:{},
+         turbSize:{},condSize:{},sgType:{},ihxSize:{},radSize:{},radCoat:{},
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
             runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
             through the same addTank()/addFitting() calls and the same pipe tool the bench
@@ -384,7 +384,7 @@ function derived(){
     + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
     + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
     + (D.autorod?26:0) + totalTurbMass() + totalCondMass()
-    + totalIhxMass()
+    + totalIhxMass() + totalRadMass()
     + layMass + latMass();
   /* MEASURED, not bought. The pitch correction the old line carried
      (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already
@@ -482,6 +482,17 @@ function derived(){
          only (hasHeatSink(), layout.js): Stage 6 is what would let this warning
          read the loop rather than just its wiring. */
       if(!hasHeatSink()) w.push(["SOFT","This design has no heat sink. Nothing wired to the primary loop removes heat from it.",null]);
+      /* THE SHIP HAS NO SKY WITHOUT THESE. The bench warns; it never refuses
+         - the plant still runs, badly, exactly as it does with no containment.
+         radTAt() is the same expression the tick integrates against, so the
+         quoted temperature and the plant's own cannot disagree. */
+      if(!radCount()) w.push(["RED","No radiator on this ship. Nothing rejects the waste heat, so the condenser will climb until it loses vacuum and the turbine trips.","cond"]);
+      else {
+        const blind=radIds().filter(id=>!radLive(id));
+        for(const id of blind) w.push(["SOFT",partOf(id).name+" cannot see space. A panel with no face on the skin radiates nothing at all - move it against the hull, or it is dead weight and the plant loses the sink it was bought for.",id]);
+        const tr=radTAt(D.power*1000*(1-eff));   // kW, the unit radTAt() takes
+        if(tr>RAD_TDES+1) w.push(["SOFT","The panels are short of rated rejection: at full power they sit at "+tr.toFixed(0)+" K against a design "+RAD_TDES+" K, which puts the condenser near "+psatSec(Math.min(tr+COND_DT0,500)).toFixed(4)+" MPa of backpressure and the turbine gives part of its work back.","cond"]);
+      }
       return w;})()};
 }
 
