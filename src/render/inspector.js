@@ -355,12 +355,39 @@ function paramsFor(p){
       ["CONDENSING DUTY",(condDuty(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit on its own condenses, as a share of rated steam. The plant figure below is every condenser's duty added up."],
       ["DUMP CAPACITY",(condDump(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit will take straight past the turbine. On a plant that boils in its own core the bypass is open whenever the governor is closing, so this is what lets it follow a load change without a safety valve lifting; on a subcooled plant it opens on a scram. One slider sets both this and the duty above."],
       ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",null,"Every condenser on the plant added up. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
-      ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, shown here so the mismatch is visible from either component."]]; }});
+      ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, shown here so the mismatch is visible from either component."],
+      ["TERMINAL DIFFERENCE",COND_DT0+" K",null,"How far this machine sits above the sink it rejects into, at rated duty. Duty DIVIDES it: a half-size unit sits twice as far above the radiator for the same heat."],
+      ["DESIGN BACKPRESSURE",condPDes().toFixed(4)+" MPa",null,"The exhaust pressure the turbine was built for - the anchor every other figure on this side is priced against. It is a stated design point and a bad radiator does not move it."],
+      ["VACUUM FLOOR",COND_P0+" MPa",null,"The best vacuum this plant can ever pull, set by air leaking in and nothing else. An oversized condenser runs down onto this and stops paying."],
+      ["TURBINE TRIPS AT",TURB_TRIP_P+" MPa",null,"The exhaust pressure the last-stage blading will not take. The stop valve shuts, and it does not reset."],
+      ["VACUUM LOST AT",COND_ATM+" MPa",null,"Past atmospheric the condenser relieves and the air is in for good. This is the second failure, and it is the end of the heat sink."]]; }});
     B.push({kind:"note",dyn:()=>{ const d=derived();
       return {text:d.condShort
         ?"This condenser is far smaller than the turbine can draw. It runs hotter for the same heat, so the exhaust pressure climbs and the output falls with it - a unit at a third of duty gives back roughly a tenth of the plant's electricity at rest, before any overload."
         :"Condenser is matched to the turbine. A brief overload costs little or nothing, and a bigger unit runs down onto the vacuum limit and stops paying.",
         color:d.condShort?"var(--c-amber)":null}; }});
+  }
+  /* ══ THE ONLY WAY HEAT LEAVES THE SHIP ══
+     Design-time figures only: the bench has no S, so PANEL TEMPERATURE and
+     what a panel is actually shedding live on the control-room rail. AT RATED
+     is radTAt(), the same expression the tick integrates against, so the
+     bench and the plant cannot quote two different sinks. */
+  else if(p.role==="radiator"){
+    sld("PANEL AREA","How much radiating surface this panel carries. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom. It is the only heat sink on the ship and it is what gets shot.",
+        {get:()=>radSizeOf(id),set:v=>{ D.radSize[id]=v; }},
+        0,1,v=>(radCap(v)*100).toFixed(0)+" % area",.05,
+        v=>radCap(v)*p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(id).massK);
+    opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
+        {get:()=>D.radCoat[id]??1,set:v=>{ D.radCoat[id]=v; }},RADCOAT.map(r=>({name:r[0]})));
+    B.push({kind:"readlist",rows:()=>{ const d=derived(), live=radLive(id);
+      const tr=radTAt(D.power*(1-d.eff));
+      return [
+      ["CAN SHED",live?"YES":"NO",null,"A panel radiates only through the skin. One face of its own footprint against the hull is enough. Walled in on every side it sheds nothing at all: measured, the stock pair moved inboard trips the turbine in under two minutes and the plant makes no electricity."],
+      ["RADIATING AREA",live?(radArea(id)/1e6).toFixed(2)+" Mm²":"0",null,"This panel's own surface. Blind, it is zero however big the box is."],
+      ["EMISSIVITY",radCoatOf(id).emis.toFixed(2),null,"The share of a perfect black body's radiation this finish actually sheds, at the same temperature."],
+      ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."],
+      ["PANEL MASS",(radCap(radSizeOf(id))*p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(id).massK).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
+    note("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone.");
   }
   else if(id==="ctrl"){
     opt("INSTRUMENT CHANNELS","How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.","chan",CHAN);
