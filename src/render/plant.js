@@ -299,7 +299,13 @@ function drawSym(p,x,y,w,h,ink,L){
        valves fitted it could only ever depict one of them. It is drawn at each
        valve's own tap now, off that valve's own rate (pipeFitMarks()). */
   } else if(p.role==="sg"){
-    shell(()=>{ ctx.moveTo(X,Y+12); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
+    const burst = !!(L && L.sgBurst && L.sgBurst[id]);
+    // a burst shell is OPEN: the lid is torn instead of domed, so the boundary
+    // reads as gone from across the board and not only in the panel text
+    shell(()=>{ ctx.moveTo(X,Y+12);
+      if(burst){ const n=7; for(let i=1;i<=n;i++){ const t=i/n;
+          ctx.lineTo(X+W*t, Y+12-(1-Math.abs(2*t-1))*13 + (i%2?6:-4)); } }
+      else ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
       ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); });
     ctx.save(); ctx.beginPath(); ctx.rect(X,Y+12,W,Hh-12); ctx.clip();
     lvl(X,Y+12,W,Hh-12, L? sgLvl(L,id)/100 : .5, C.blue); ctx.restore();
@@ -328,14 +334,31 @@ function drawSym(p,x,y,w,h,ink,L){
          back, a ruptured one is primary water leaving past containment. */
       // sat high, in the steam space: the middle of a generator is where the
       // flow gauge on its own steam line lands
+      /* what the hole is actually passing, on the same scale step() gives it -
+         so it starts, scales and STOPS with the shell emptying */
+      if(burst) fxSteam(cx,Y+8,W*.75,
+        fxEase(id+":burst",clamp(((L.sgVentBy&&L.sgVentBy[id])||0)
+                                 /Math.max(SG_RELIEF_CAP*ratedSteam(),1e-9),0,1)),"#ffd0c4",67);
+      /* CLIMBING TOWARD THE BURST, not merely over design: the shell is the
+         only pressure boundary with no set point of its own, so the warning is
+         its own distance to the hole. Stands down once burst - by then the
+         pressure is atmosphere and the news is the plume. */
       const ruptured = sgtrLive(L, id), lv=sgLvl(L,id);
+      const pFrac = burst ? 0
+        : clamp((secP(L,id)-sgDesignP())/Math.max(sgBurstP()-sgDesignP(),1e-9),0,1);
+      fxPulse(X+2,Y+14,W-4,Hh-16,pFrac>SG_P_HI?C.red:C.amber,
+              fxEase(id+":press",pFrac>SG_P_WARN?pFrac:0),2.2);
       // Three steps of one ladder, on the same constants the board's tiles read:
       // LOW is the warning, DRYING is the tubes starting to uncover and is
       // recoverable, DRY is most of the bundle in steam.
-      const word = ruptured?"RUPTURED" : lv<SG_DRY_LO?"DRY" : lv<SG_DRY?"DRYING" : "LOW";
-      if(ruptured||lv<SG_LOW)
+      // BURST beats all three: the boundary is gone, so nothing about level is
+      // the news any more. HIGH PRESS sits under RUPTURED and over the level
+      // ladder - it has not happened yet, but a dry shell you can feed back.
+      const word = burst?"BURST" : ruptured?"RUPTURED" : pFrac>SG_P_WARN?"HIGH PRESS"
+                 : lv<SG_DRY_LO?"DRY" : lv<SG_DRY?"DRYING" : "LOW";
+      if(burst||ruptured||pFrac>SG_P_WARN||lv<SG_LOW)
         banner(word,cx,X+1,Y+11,W-2,Hh-12,
-               (ruptured||lv<SG_DRY_LO)?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
+               (burst||ruptured||lv<SG_DRY_LO||pFrac>SG_P_HI)?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
     }
   } else if(p.role==="ihx"){
     /* A SHELL-AND-TUBE VESSEL WITH NO STEAM SPACE, so it is drawn full and it
@@ -348,7 +371,11 @@ function drawSym(p,x,y,w,h,ink,L){
       ctx.moveTo(X+4,yy); ctx.lineTo(X+W-4,yy); }
     ctx.strokeStyle=ink; ctx.lineWidth=1.2; ctx.stroke();
   } else if(roleHead(p.role)){
-    const r=Math.min(W,Hh)/2-1, cy=y+h/2;
+    /* FLOORED, the same way the turbine's own rT is: a box shorter than the
+       5 px inset gives a NEGATIVE radius, and arc() throws on one. A two-cell
+       machine is a legal machine (the circulating water pump is one) and a
+       zoomed-out board makes every box short. */
+    const r=Math.max(6,Math.min(W,Hh)/2-1), cy=y+h/2;
     shell(()=>ctx.arc(cx,cy,r,0,7));
     // a wrecked pump is not turning. s.spin is one integral for every pump on
     // the plant, so the stall angle comes off the id (fxIdPhase(), fx.js)
@@ -2042,7 +2069,11 @@ function readoutsFor(p,s){
        quote: this asks the drawing which valves reach this shell, the same
        question step() asks, and names them. None fitted is a real answer. */
     { const vents = reliefSecIds().filter(fid => shellsOf(fid).indexOf(id)>=0);
-      add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",null,
+      add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",
+        band(secP(s,id),0,sgBurstP(),
+          [[sgDesignP()+(sgBurstP()-sgDesignP())*SG_P_WARN,C.green,"NORMAL"],
+           [sgDesignP()+(sgBurstP()-sgDesignP())*SG_P_HI,C.amber,"HIGH"],
+           [sgBurstP(),C.red,"NEAR BURST"]],{dp:2}),
         "Pressure on the secondary side of THIS generator, and it is what saturation says about the shell temperature below - not a formula about load. Steam raised faster than it can get away puts it up; "+
         (vents.length
           ? vents.map(fid => nameOf(fid)+" lifts at "+(reliefRefP(fid)*reliefSet(fid).lift).toFixed(1)+" MPa").join(", ")+"."
@@ -2303,8 +2334,10 @@ function readoutsForFit(fid,s){
        reliefRefP()/reliefAtP() (step.js) are the same pair the tick lifts on,
        so this panel cannot quote a set point the valve does not use. */
     const sec = shellsOf(fid).length>0, refP = reliefRefP(fid), atP = reliefAtP(s,fid);
-    add("PROTECTS",sec?nameList(shellsOf(fid)):"PRIMARY LOOP",null,
-      sec?"The steam generator shells this valve can reach on the steam side. It lifts on the worst of them, which is what a valve on a common header actually sees."
+    const iso = reliefIso(s,fid);
+    add("PROTECTS",sec?(iso?"ISOLATED":nameList(shellsLive(s,fid))):"PRIMARY LOOP",
+      iso?C.amber:null,
+      sec?"The steam generator shells this valve can reach on the steam side. It lifts on the worst of them, which is what a valve on a common header actually sees. A shut port valve on its branch cuts it off from all of them, and a valve that can see no shell can neither lift nor pass."
          :"This valve is on the primary. It lifts on loop pressure and vents inventory through its own branch.");
     add("LIFT SETPOINT",(refP*set.lift).toFixed(2)+" MPa",null,
       "Where THIS valve opens on its own. It has an 18% chance of sticking open every single time it lifts.");
