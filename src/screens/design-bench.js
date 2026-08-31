@@ -1029,9 +1029,20 @@ function dbBuild(){
     KIT.tip(b.el, t.label, t.tip);
     tools.appendChild(b.el); btns.push({id:t.id,b});
   }
-  const arr=KIT.button("AUTO-ARRANGE",{size:8,onClick:()=>{ LAY=null; layoutMetrics(); }});
-  KIT.tip(arr.el,"AUTO-ARRANGE","Resets every component to its default position.");
-  head.append(tools,arr.el);
+  /* WHOLE PLANTS, over the plant they replace. Not a panel row: a preset
+     rebuilds the loops, the tanks and every run, so it is about the bench and
+     not about whatever part happens to be selected. Designer-only for free -
+     db-head lives inside #scr-design. */
+  const pres=KIT.el("div","db-bulkrow");
+  const plab=KIT.el("span","db-bulkrow-lab"); plab.textContent="PLANT";
+  const pbtns=KIT.el("div","db-bulkrow-btns");
+  PLANTPRE.forEach((pr,i)=>{
+    const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); sel="core"; uiDirty(); }});
+    KIT.tip(b.el,pr[0],pr[2]);
+    pbtns.appendChild(b.el);
+  });
+  pres.append(plab,pbtns);
+  head.append(tools,pres);
   const rail=KIT.el("div","db-rail");
   railBlank(rail);
   const vitals=KIT.el("div","db-vitals");

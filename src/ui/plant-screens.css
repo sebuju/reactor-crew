@@ -217,6 +217,10 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-head{grid-column:1;grid-row:1;pointer-events:auto;display:flex;align-items:center;
   justify-content:space-between;gap:8px;padding:6px 8px}
 .db-tools{display:flex;align-items:center;gap:4px}
+/* the head is as wide as the window, so its preset row sizes to its own names
+   rather than to the rail's fixed grid track */
+.db-head .db-bulkrow{flex:0 1 auto}
+.db-head .db-bulkrow-btns{display:flex;flex-wrap:wrap}
 /* RESULTS and DESIGN REVIEW float over the top-left of the plant, the seat
    .cr-vitals keeps on the control room - and for the same reason it is sized by
    its own content and capped: a scroll container stretched into a grid row
