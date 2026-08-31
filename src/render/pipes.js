@@ -325,14 +325,11 @@ function pipeFmt(v){
    not the same pipe wearing two labels, so they no longer share one guessed number -
    each is judged against its own build.
 
-   P.netRefByRun is in the network solver's own units, not the diagram's px/s, so it
-   still has to be carried across into pipeSpd's units before it means anything to a
-   needle - that's what 84*feff0 is doing below. It is not a hand-tuned guess re-fitted
-   per kind any more (the old table had to be kept in sync with step()'s pipe-animation
-   rates by hand); it is the ONE calibration point where a run's own reference equals
-   the shared mean (P.netRefRun) and the two unit systems can be read off against each
-   other. Every run is then scaled off that single point by its own share,
-   ref/P.netRefRun, so nothing here has to change if step()'s per-run weighting ever does.
+   EVERY RUN IS NORMALISED ON ITSELF, so the full scale is the same 84 for all
+   of them and the unit conversion is gone: step() drives each run's integral at
+   its own share of its own reference, and P.netRefKg says what that reference
+   is worth in kilograms. Weighting by ref/P.netRefRun instead measured a
+   condensate line against the PRIMARY's mean leg - see pipeFullScale().
 
    Every run's dial now scales off ITS OWN reference the same way - not just
    hot/cold/a fitting branch - because Stage 1 makes every run an edge and
@@ -365,9 +362,12 @@ function pipeFullScale(key,k){
      100 % is the same 84 every other run's reference lands on. */
   if(runVapour(ends)) return 84;
   if(runTankId(key,k)) return 120;
-  /* a FULL SCALE has no direction - P.netRefByRun is signed now */
-  const ref=Math.abs(P.netRefByRun[key]);
-  if(ref) return 84*Math.max(0.05,P.feff0)*ref/Math.max(1e-6,P.netRefRun);
+  /* A RUN IS NORMALISED ON ITSELF, so 100 % is the same 84 for every run on
+     the plant - liquid, steam or exhaust. It used to be weighted by
+     ref/P.netRefRun, which measured a condensate line against the PRIMARY's
+     mean leg: the same kilograms drew packets nine times slower the moment
+     they were water, and the digit beside them read 20 % high. */
+  if(P.netRefByRun[key]) return 84;
   /* A run with no reference of its own. Every run is port to port now, so
      runEnds() answers for all of them and this is only reached before
      commission() has run - or on a run the reference sweep found carrying
@@ -390,12 +390,10 @@ const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
    between the loops that were built. Secondary: Q = m*dh, feedwater to saturated
    steam is about 1800 kJ/kg. Both are DESIGN figures, fixed at commissioning, never
    read off S - they only exist to give a dimensionless rate a unit.
-   Any run WITH a solved reference (P.netRefByRun[key], the same figure
-   pipeFullScale() now reads for everyone) is weighted by ref/P.netRefRun, so
-   a short loop's bigger nominal times its own (now correctly ~1.0) fraction
-   lands on its own real kg/s, not the plant's average pretending to be every
-   loop's - that covers hot, cold and a fitting branch today, and whatever
-   else earns a real reference later with no change here. Two runs are never
+   Any run WITH a solved reference reads P.netRefKg[key] - what THAT run
+   carries as commissioned, in kilograms - so its own fraction times its own
+   reference lands on its own real kg/s and no run is measured against
+   another's. Two runs are never
    mass flow at all and are picked out STRUCTURALLY, not by kind: a run
    landing on a TANK's own node (tid, mirroring netBuild()'s own test) is
    metered the way that tank is - HPI is INVENTORY per second, not mass, so
@@ -407,8 +405,12 @@ const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
    a hot/cold/xtie run before commission() has given it a reference keeps the
    flat design figure this file always gave it. */
 function pipeUnit(key,k){
+  /* THE FALLBACK ONLY, for a run with no solved reference of its own - the
+     surge line, and anything asked about before commission() has run. A heat
+     balance on the rated power: water at these conditions is about 5.5 kJ/kg/K
+     and the loop is drawn with a 30 K rise, shared between the loops built. */
   const per=Math.max(1,P.loops);
-  const loop=P.rated*1000/(5.5*30)/per;        // kg/s through an average primary loop
+  const loop=P.rated*1000/(5.5*30)/per;
   const ends=runEnds(key,k);
   /* A run landing on a tank's own node is metered the way that tank is -
      INVENTORY per second, not mass - and off THAT TANK'S own solved flow
@@ -420,10 +422,14 @@ function pipeUnit(key,k){
      the plant as commissioned, undamaged, valves wide. A key's canonical order
      is two part ids sorted and says nothing about it, so without this three of
      the four stock primary runs read as running backwards while doing exactly
-     what they were built to do. */
-  const sref=P.netRefByRun[key], ref=Math.abs(sref);
-  if(ref) return {nom:loop*(ref/Math.max(1e-6,P.netRefRun)), u:"kg/s",
-                  dir:sref<0?-1:1};
+     what they were built to do.
+     AND THE NOMINAL IS THAT SAME REFERENCE, IN KILOGRAMS (P.netRefKg, fitted
+     in commission()). It was a heat balance on the rated power - 5.5 kJ/kg/K
+     over a 30 K rise, shared between the loops - which is a design figure for
+     a PRIMARY leg and was being applied to the condensate line as well. */
+  const sref=P.netRefByRun[key];
+  if(sref) return {nom:(P.netRefKg&&P.netRefKg[key])||0, u:"kg/s",
+                   dir:sref<0?-1:1};
   if(!ends) return {nom:loop*0.02, u:"kg/s"};   // a tap-ended run - see pipeFullScale
   /* ── THE STEAM LINES GET THEIR NUMBER BACK ──
      They read null for as long as nothing solved a steam rate. step() solves
