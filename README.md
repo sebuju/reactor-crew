@@ -27,6 +27,13 @@ middle, per-component instrumentation in the rails on the right.
 
 ![Control room with rails open](screenshots/control-room-rails.png)
 
+### Scenario, transport, help
+
+A scenario is scripted gestures plus limits: the gestures are done to the plant you drew, and the
+limits are judged after the run off the trend archive, so a limit can be edited and the finished run
+re-judged without re-simulating a tick. The transport strip records, scrubs and forks takes of a run.
+Help is the in-page reference. No screenshots yet.
+
 ## What is solved
 
 ### Neutronics
@@ -72,6 +79,10 @@ middle, per-component instrumentation in the rails on the right.
 | Saturation curve | Clausius-Clapeyron per fluid, anchored once on the water steam table; a saturated hot leg pressurises off its own curve |
 | Cavitation | NPSH at each pump's own suction, not a scalar on total flow |
 | Breaks | Two choked-flow edges to a containment node; a tube rupture is a differential leak that stops at equalisation |
+| Connections | A port is a cell offset on its part, a pipe is a grid cell; `pipeTrace()` walks half-edges and finds the runs. There is no authored list of connections |
+| Circuits | A connected component of the node graph, numbered by the walk. Fluid, saturation curve and latent heat are properties of the circuit, not of a named loop |
+| Fittings | One box part with a `mode`: tee, throttle or relief valve. A gated path is an internal edge priced off that mode; a shut edge is simply absent from the matrix |
+| Machine sizes | Real quantities in their own units — kg/s of swallow, kW/K of duty, MPa of pump head, m³ of tank, mm of bore — each with a suggestion computed off the rest of the design |
 
 ### Secondary side
 
@@ -83,6 +94,15 @@ middle, per-component instrumentation in the rails on the right.
 | Steam swallowed | Stodola ellipse, `ṁ ∝ (P_s/P_des)·√(1 − (P_c/P_s)²)` |
 | Electrical output | Steam times an enthalpy drop off real backpressure |
 | Backpressure | Condenser as a second pot on its own terminal difference, floored at the air in-leakage limit |
+| Intermediate loop | A heat exchanger spliced into a leg, moving heat into a pot. It is also a barrier: a tube rupture behind one costs inventory and releases nothing |
+| Final heat rejection | The plant is in space, so the sink is radiator panels: area, coating and what is still unbroken set the temperature the condenser works against |
+
+### Compartment
+
+| Quantity | Method |
+|---|---|
+| Room temperature | A grid heat field fed by each machine's own skin loss and by whatever a break or a stuck relief valve vents into the room |
+| Hydrogen | Oxidation makes it, the field carries it, and above the lower flammability limit it burns at a laminar velocity the drawn clutter accelerates |
 
 ### Radiation
 
@@ -91,7 +111,8 @@ middle, per-component instrumentation in the rails on the right.
 | Dose at a cell | `1/r²` per ray, attenuated over the exact chord through every grid cell by what each component is made of — no line-of-sight test, attenuation is the test |
 | Airborne release | An unshielded floor on every cell |
 
-Reference plant at rest: 1198 MWt / 340 MWe, 85.7 % power, `Fq` 2.69, DNBR 1.71, 1343 t.
+Reference plant at 120 s, one loop: rated 1198 MWt, holding 86.2 % — 1032 MWt, 350 MWe,
+`Fq` 2.687, DNBR 1.700, `Tf` 904 K, 1477 t, no trip and zero damage.
 
 ## Gaps
 
@@ -110,8 +131,7 @@ Known and deliberate, roughly in order of how much they bite.
 | Neither non-water margin law is a published correlation | None exists for those families. Each is an honest ratio; the level each should sit at off its rest point is unverified. |
 | Pressurizer void and inventory are correlations | Not solved. |
 | The moderator coefficient is the coolant's only | A gas-cooled core reads exactly zero, though a real graphite stack has one. |
-| Every auditor under `tools/` is stale | The grid, layout and plumbing model changed at once; the auditors still call functions that no longer exist. |
-| The multi-loop reference plant is incomplete | Beyond one loop, some ports are refused and some runs dangle for want of a clear lane. |
+| The multi-loop reference plant is incomplete | At four loops the fourth generator, its pump and three safety valves are refused ports for want of a clear lane, and sit unpiped. |
 
 ## Layout
 
@@ -119,11 +139,13 @@ Known and deliberate, roughly in order of how much they bite.
 |---|---|
 | `index.html` | Page shell, DOM tree, and the only script load order. |
 | `src/core/` | Constants, text metrics, canvas primitives, hit testing. |
-| `src/data/` | Design parameters, grid layout, pipe network, lattice, radiation field. |
-| `src/sim/` | Nodal core, tick, linear solver, RNG, trends, log. |
+| `src/ui/` | The widget kit and one CSS file per screen. |
+| `src/data/` | Design parameters, grid layout, pipe network, lattice, radiation field, room heat field, save store. |
+| `src/sim/` | Nodal core, tick, linear solver, RNG, recording, scenarios, trends, log. |
 | `src/render/` | Plant view, pipe flow, overlay layers, inspector, charts. |
-| `src/screens/` | Screen state, design bench, control room. |
+| `src/screens/` | Screen state, design bench, control room, scenario, transport, help. |
 | `tools/` | Bundler, headless probes, auditors, optional static server. |
+| `docs/` | The plan written before each larger piece of work. |
 
 ## Running
 
@@ -137,6 +159,21 @@ Headless, no DOM:
 
 ```
 node tools/nodom-probe.js
+```
+
+Print what an arbitrary plant does — circuits, pots, node temperature, quality, holdup, flows. It
+carries no assertions, so nothing in it can fail:
+
+```
+node tools/probe.js --list
+node tools/probe.js stock
+```
+
+The auditors:
+
+```
+node tools/audit-text.js && node tools/audit-geometry.js && node tools/audit-dom.js
+node tools/audit-par.js
 ```
 
 ## Status
