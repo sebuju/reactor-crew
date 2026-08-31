@@ -280,7 +280,7 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
          condUA:{}, condDump:{},   // kW/K of condensing duty; kg/s of bypass
          sgUA:{}, ihxUA:{},   // kW/K per transfer stage
          pumpHead:{}, pumpFlow:{}, // MPa developed, at kg/s
-         sgType:{},radCoat:{},
+         sgType:{},radCoat:{},radArea:{},   // m2 of panel, per panel
          bore:{},             // mm, per run key - a pipe is a diameter
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
             runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
@@ -315,7 +315,7 @@ const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : f
    behind commissions it in the last one's hands. Emptied in place, never
    rebuilt: the bags are read through D and a reassignment strands a holder. */
 const DBAGS=["turbKgs","condUA","condDump","sgUA","ihxUA","pumpHead","pumpFlow",
-             "sgType","radCoat","bore","start"];
+             "sgType","radCoat","radArea","bore","start"];
 /* and the scalars, taken before anything can edit them. A whole-plant preset
    states a handful of them, so every one it does not state has to be back at
    its own default or the plant carries the last design's containment, its
@@ -539,7 +539,7 @@ function derived(){
       else {
         const blind=radIds().filter(id=>!radLive(id));
         for(const id of blind) w.push(["SOFT",partOf(id).name+" cannot see space. A panel with no face on the skin radiates nothing at all - move it against the hull, or it is dead weight and the plant loses the sink it was bought for.",id]);
-        const tr=radTAt(D.power*1000*(1-eff));   // kW, the unit radTAt() takes
+        const tr=radTRated(eff);
         if(tr>RAD_TDES+1) w.push(["SOFT","The panels are short of rated rejection: at full power they sit at "+tr.toFixed(0)+" K against a design "+RAD_TDES+" K, which puts the condenser near "+psatSec(Math.min(tr+COND_DT0,500)).toFixed(4)+" MPa of backpressure and the turbine gives part of its work back.","cond"]);
       }
       return w;})()};

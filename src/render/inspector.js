@@ -383,17 +383,19 @@ function paramsFor(p){
      is radTAt(), the same expression the tick integrates against, so the
      bench and the plant cannot quote two different sinks. */
   else if(p.role==="radiator"){
-    note("Panel area is the BOX. There is no size knob: drag the panel bigger on the grid and it radiates more, which is the only honest way a surface can grow. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom.");
+    num("RADIATING AREA","The surface this panel actually radiates from, in square metres. The box on the grid is a PICTURE of it, snapped to whole cells, so a small plant draws a small panel. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom. SUGGEST matches the fleet to this plant's own rejection at the design sink.",
+        {get:()=>radAreaOf(id),set:v=>{ D.radArea[id]=v; }},
+        "m²",0,()=>radAreaSuggest(id),v=>v*RAD_MASS_M2*radCoatOf(id).massK);
     opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
         {get:()=>D.radCoat[id]??1,set:v=>{ D.radCoat[id]=v; }},RADCOAT.map(r=>({name:r[0]})));
     B.push({kind:"readlist",rows:()=>{ const d=derived(), live=radLive(id);
-      const tr=radTAt(D.power*(1-d.eff));
+      const tr=radTRated(d.eff);
       return [
       ["CAN SHED",live?"YES":"NO",null,"A panel radiates only through the skin. One face of its own footprint against the hull is enough. Walled in on every side it sheds nothing at all: measured, the stock pair moved inboard trips the turbine in under two minutes and the plant makes no electricity."],
-      ["RADIATING AREA",live?(radArea(id)/1e6).toFixed(2)+" Mm²":"0",null,"This panel's own surface. Blind, it is zero however big the box is."],
+      ["SHEDDING",live?(radArea(id)/1e6).toFixed(2)+" Mm²":"0",null,"What this panel is worth as fitted. Blind, it is zero however big the box is."],
       ["EMISSIVITY",radCoatOf(id).emis.toFixed(2),null,"The share of a perfect black body's radiation this finish actually sheds, at the same temperature."],
       ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."],
-      ["PANEL MASS",(p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(id).massK).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
+      ["PANEL MASS",(radAreaOf(id)*RAD_MASS_M2*radCoatOf(id).massK).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
     note("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone.");
   }
   else if(id==="ctrl"){
