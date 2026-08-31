@@ -327,8 +327,13 @@ const ARCHPRE=[
   "A tight water lattice at 15.5 MPa, no solid moderator: the water between the assemblies is the moderator, so voiding it takes the moderation away and the core shuts itself down. The reference plant, and what every figure in this game was calibrated against."],
  ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
   "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
- ["RBMK",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:2,mod:0,pk:0.88,r:LAT_R0,hd:0.70,poi:LAT_POIG,refl:1,nb:4,every:3},
-  "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. Drawn squat, and with narrower channels than the real machine: open the pitch and the void coefficient climbs until the core hunts itself into a trip."],
+ /* THE ONE REACTOR THAT IS A RECTANGULAR STACK, so it is drawn over the whole
+    plan rather than as a disc inside it - a third of those slots are graphite
+    and the disc rated 176 MWt, well under the 400 the hull is drawn for. WIDE
+    and not tall: a longer channel boils further along itself, and at hd 1.2
+    this core settles under its own DNBR trip on the commissioning transient. */
+ ["RBMK",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:2,mod:0,pk:0.88,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3},
+  "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile with narrower channels than the real machine: open the pitch and the void coefficient climbs until the core hunts itself into a trip."],
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
  ["MSR",{fuel:1,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
