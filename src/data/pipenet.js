@@ -35,10 +35,11 @@ const boreK = kind => (PIPE_BORE_MM[kind] !== undefined ? PIPE_BORE_MM[kind] : B
    what a feed pump's head is actually spent on is its REGULATING TRAIN, and
    that is priced explicitly (FEED_LEN, above) rather than smuggled into a
    bore - so narrowing the pipe as well would charge the same restriction
-   twice and re-fit FEED_DP against it. Steam and exhaust carry no solved flow
-   at all (the solver knows liquid), so a bore for them would be a number with
-   nothing behind it. Full-bore, identical to hot/cold, until someone measures
-   one. Route every bore read through this resolver, never PIPE_BORE_MM[r.k]
+   twice and re-fit FEED_DP against it. Steam and exhaust DO carry a solved
+   flow now, but their bore is a MULTIPLIER on a per-kind anchor (vapPipeKv,
+   below) rather than a duct area: a real exhaust neck is a room and a real
+   main steam line is a pipe, and one figure here cannot be both.
+   Route every bore read through this resolver, never PIPE_BORE_MM[r.k]
    directly, or the fallback lives in two places and can disagree. */
 const runBoreMm = r => (D.bore && D.bore[r.key] !== undefined) ? D.bore[r.key]
                      : (PIPE_BORE_MM[r.k] !== undefined ? PIPE_BORE_MM[r.k] : BORE_REF);
@@ -730,6 +731,14 @@ const tankLive = (s,id) =>
   (D.tanks[id].pump ? (tankLvl(s,id) > 0 && tankPumpLive(s))
                     : (tankLvl(s,id) > 0 || (s.pCore !== undefined && s.pCore > tankP(s,id))));
 
+/* ══ AND THE CONDENSATE OUTLET IS A POOL, NOT A SOURCE ══
+   The same sentence tankLive() makes, asked of the hotwell: a pool with
+   nothing left in it cannot feed a pump. A condenser with no hosted tank has
+   no pool to run down and is unchanged, and so is a caller with no S - the
+   reference solve is a plant with a full hotwell by definition. */
+const condLive = s => { const h = hostedTankIds();
+  return !h.length || !s.tank || tankWet(tankPoolPct(s,h)); };
+
 /* ══════════ GROUNDING THE SECONDARY ══════════
    Stage 1 makes steam/feed/exh real edges, which reach nodes (condt, condr,
    and everything downstream of them) this graph never anchored before -
@@ -808,9 +817,13 @@ const flowMean = (s, map) => { const ids = pumpIds().filter(primaryPump);
   return t/ids.length; };
 const flowPri    = s => flowMean(s, s.flowBy);
 const flowDemPri = s => flowMean(s, s.flowDemBy);
+/* WHAT ANY PUMP IS TURNING AT: its own speed, less what a hit and a dead
+   switchboard cost it. A pump that serves no loop used to skip both - so a
+   circulating water pump could be destroyed and go on pushing. */
+const pumpDrive = (s, pid) =>
+  (s.dmgParts && s.dmgParts.indexOf(pid)>=0 ? FEED_HURT : 1) * supplyK(s) * flowOf(s, pid);
 const feedDrive = (s, pid) =>
-  (s.dmgParts && s.dmgParts.indexOf(pid)>=0 ? FEED_HURT : 1) * supplyK(s)
-  * clamp(circPoolPct(s)/HOT_NPSH, 0, 1) * flowOf(s, pid);
+  pumpDrive(s, pid) * clamp(circPoolPct(s)/HOT_NPSH, 0, 1);
 
 // A pipe hit (combatHit(), step.js) is a rupture, not a throttle: modelled as
 // ADDITIVE equivalent length on the SAME resist() every other run already
@@ -1276,19 +1289,18 @@ function netBuild(){
        plain number while still being LIVE against a hit that has not
        happened yet. */
     /* ══ AND A STEAM LINE CARRIES NO LIQUID ══
-       THE SOLVER KNOWS LIQUID. A vapour run (RUN_VAPOUR, layout.js) is a real
-       pipe with a bore and a mass, but what moves in it is settled by the
-       shell pots and the governor (steamTo, step.js), never here. Priced like
-       water it tied every generator's TOP together - and those nodes are
-       FIXED at their own shell's saturation pressure, so two shells a few
-       tenths of a MPa apart drove twenty times the primary's flow backwards
-       up the header into the cooler generator. One generator has no header
-       and never showed it.
+       THIS solver knows liquid. A vapour run is a real pipe with a bore and a
+       mass and it carries a real solved flow - in the VAPOUR network
+       (vapBuild/vapSolve, below), which is a different law and a different
+       matrix. Priced like water here it tied every generator's TOP together,
+       and those nodes are FIXED at their own shell's saturation pressure, so
+       two shells a few tenths of a MPa apart drove twenty times the primary's
+       flow backwards up the header into the cooler generator.
        g 0 rather than no edge at all: netAssemble already omits an edge that
-       cannot conduct, and the edge itself is what tells net2.vapour this node
-       is a steam space and what the meters and the packets are drawn off. */
+       cannot conduct, and this edge carries the SPEC (bore, length, cells) the
+       vapour build reads back off it. */
     if(RUN_VAPOUR[r.k]){
-      edges.push({u, v, g: 0, h: 0, kind: r.k, key: r.key});
+      edges.push({u, v, g: 0, h: 0, kind: r.k, key: r.key, vapBore: bore, vapLen: L, vapRun: r});
       continue;
     }
     edges.push({u, v, g: s => runPortsOpen(s,r) ? throttled(s, bore, L + pipeExtraLen(s, r.cells), NO_GATES) : 0,
@@ -1437,7 +1449,7 @@ function netBuild(){
                              still turning, so it keeps a fifth of its head
                              rather than none. Nothing measured says a fifth. */
                           * (1 - 0.8*((s.cavP && s.cavP[li]) || 0)))
-          : (s => PUMP_H0 * pumpCapOf(p.id) * flowOf(s, p.id));
+          : (s => PUMP_H0 * pumpCapOf(p.id) * pumpDrive(s, p.id));
       }
     }
     edges.push(edge);
@@ -1509,7 +1521,10 @@ function netBuild(){
        in the condenser's vacuum, so a hole there lets air IN rather than
        steam out. Two different accidents, priced apart in step(). */
     const exh = steam && !shells.some(id => headSeen[id][ends[0]] || headSeen[id][ends[1]]);
-    if(steam) steamBreaks.push({cells: r.cells, bore, shells, exh});
+    /* ends AND the run's own two port valves: which shells a hole is actually
+       blowing off is a LIVE question (holeShells(), step.js) and `shells` is
+       only ever its design-time superset - a shut port cannot add a shell. */
+    if(steam) steamBreaks.push({cells: r.cells, bore, shells, exh, ends, pa: r.pa, pb: r.pb});
     const ua = nodeIdx(coreFold(ends[0])), ub = nodeIdx(coreFold(ends[1]));
     for(const [x,y] of r.cells){
       const v = contNode("pipe:"+x+","+y);
@@ -1743,6 +1758,29 @@ function netBuild(){
     for(const f of faces) if((q.id+f) in index) net2.condNode[q.id+f] = index[q.id+f];
   }
 
+  /* ══ WHICH OF THOSE TWO ANCHORS IS THE POOL'S OWN DOOR ══
+     A surface condenser anchors both ends of its steam path. The `vap` end is
+     the saturated space the turbine exhausts against and is a true boundary;
+     the other end is where the hotwell drains out, and what crosses it is the
+     pool's own water and nothing else. Fixed still - the pressure is real and
+     the feed pump's suction sits on it - but BOOKED (outs.qCondBy) and SHUT
+     when the pool is empty, which is the tank contract and the only thing
+     that makes a fixed node an accounting entry rather than an invention.
+     Asked of the declaration, never of a face name: a sink with no anchored
+     vapour side (a radiator) names no outlet and is untouched. */
+  net2.condOutNode = {};
+  for(const q of LAY.parts){
+    const R = ROLE[q.role];
+    if(!R || R.thermal !== "sink" || !R.internal) continue;
+    for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+      if(!IN.anch || !IN.vap) continue;
+      const liq = IN.vap.indexOf("a")>=0 ? "b" : "a";
+      if(IN.anch.indexOf(liq)<0) continue;
+      const nid = q.id + IN[liq];
+      if(nid in index) net2.condOutNode[index[nid]] = q.id;
+    }
+  }
+
   /* ══ AN EDGE BETWEEN TWO FIXED NODES IS NOT AN EDGE ══
      Both ends are boundary conditions, so nothing about the plant decides what
      crosses it - only the elevation between two numbers somebody else set,
@@ -1754,6 +1792,21 @@ function netBuild(){
     for(let i=edges.length-1;i>=0;i--)
       if(fixed[net2.name[edges[i].u]] !== undefined && fixed[net2.name[edges[i].v]] !== undefined)
         edges.splice(i,1); }
+
+  /* Every edge reaching a condensate outlet carries the pool's water, so it
+     answers to the pool: gated on condLive() and signed onto the condenser it
+     belongs to. Applied to the ASSEMBLED edges rather than in the run loop, so
+     a tapped segment or an internal path landing on that node is caught by the
+     same line. Positive is OUT of the condenser, the tank convention. */
+  for(const ed of edges){
+    const cu = net2.condOutNode[ed.u], cv = net2.condOutNode[ed.v];
+    if(cu === undefined && cv === undefined) continue;
+    ed.condOf  = cu !== undefined ? cu : cv;
+    ed.condOut = cu !== undefined ? 1 : -1;
+    const g0 = ed.g;
+    ed.g = typeof g0 === "function" ? (s => condLive(s) ? g0(s) : 0)
+                                    : (s => condLive(s) ? g0 : 0);
+  }
 
   /* Which side of the loop each node sits on, built from the RUNS that touch
      it so no component has to be named. A node the hot legs reach is hot, one
@@ -1858,6 +1911,8 @@ function netBuild(){
     }
   }
 
+  net2.vap = vapBuild(net2, index, edges, fitIds, fitMode, secTIds, secTParts);
+
   /* Every edge's head gains its static term alongside whatever source pushed
      it. Done here, once, rather than at each push site: buoyancy is a property
      of an edge's two ends, so writing it into the pump's own closure and the
@@ -1931,6 +1986,173 @@ function pzrLive(net, s){
     if(a) for(let i=0;i<a.length;i++){ const v=a[i]; if(!seen[v]){ seen[v]=1; stack.push(v); } }
   }
   return false;
+}
+/* ══════════ THE VAPOUR SIDE IS ITS OWN NETWORK ══════════
+   TWO NETWORKS, NEVER ONE GRAPH. The pressures are in the same units and the
+   laws are not: water goes as the DIFFERENCE of two pressures and steam goes
+   as the difference of their SQUARES, and it CHOKES - past a critical ratio a
+   restriction passes what the upstream pressure alone says and the downstream
+   pressure stops mattering at all. A generator is the BOUNDARY between the
+   two, not a path across it, so the liquid matrix never sees a vapour node
+   and this one never sees a liquid one.
+   The solver is still linear, so the compressible law arrives as a
+   CONDUCTANCE re-evaluated each tick off last tick's field (s.vapP) - the
+   same shape FIT[mode].g already uses for a valve, and never a second
+   solver. */
+const VAP_RCRIT  = 0.55;    // critical pressure ratio for steam - past it a restriction is choked
+/* ── WHAT A LINE OF THIS KIND IS SIZED FOR ──
+   An engineer sizes a duct for the flow it must pass AT THE PRESSURE IT RUNS
+   AT, which is the whole reason a turbine's main steam line is a pipe and its
+   exhaust neck is a room: the same kilograms at a two-hundredth of the density
+   want two hundred times the area. The grid draws both one cell wide and the
+   bore table is one figure for every steam run, so the ANCHOR is stated per
+   kind here and the drawn bore is a multiplier on it. An absolute choked mass
+   flux was tried first and is wrong for exactly this reason - it read the
+   schematic bore as a real duct and choked the exhaust at 0.79 MPa.
+   VAP_LINE is how many times rated a full-bore line passes: the pipe is not
+   meant to be the restriction, the governor is, but halve the bore and it
+   starts to be one. */
+const VAP_LINE   = 8;
+const VAP_FRIC   = 0.02;    // Darcy friction factor, so a long line is worth less than a short one
+/* The differential a conductance is floored on, as a fraction of the pressure
+   it is a fraction OF - never an absolute, and never a bare zero: w/dp goes to
+   infinity as the two ends equalise, which is the one way this shape can blow
+   up. */
+const VAP_DPMIN  = 0.02;
+const vapW = (kv, pu, pv) => {
+  if(!(kv>0) || !(pu>0)) return 0;
+  const r = clamp(pv/pu, 0, 1);
+  return kv*pu*Math.sqrt(Math.max(0, 1 - Math.max(r,VAP_RCRIT)*Math.max(r,VAP_RCRIT)));
+};
+/* THE FLOOR IS ON THE DIFFERENTIAL, NOT ON THE ANSWER, and it has to be
+   applied to BOTH ends of the ratio: priced at the real dp over a floored one,
+   an edge whose two ends had equalised read a conductance of exactly 0 - so
+   the node decoupled, dropped to nothing, and re-equalised next tick. A dead
+   end pulsed between the header's pressure and zero. */
+const vapG = (kv, pa, pb) => {
+  const pu = Math.max(pa,pb), pv = Math.min(pa,pb);
+  const dp = Math.max(pu-pv, VAP_DPMIN*Math.max(pu,1e-4));
+  return vapW(kv, pu, pu-dp)/dp;
+};
+const vapRefP = kind => kind==="exh" ? condPDes() : sgDesignP();
+const vapPipeKv = (kind, bore, L) =>
+  VAP_LINE*P.steamRef/Math.max(vapW(1, vapRefP(kind), 0), 1e-9)
+  * bore*bore/Math.sqrt(1 + VAP_FRIC*L/Math.max(bore*BORE_REF/1000, 0.05));
+
+/* Built once with the net it belongs to. Its NODES are the liquid net's own
+   node numbers, so a reader that has one has the other, and its EDGES are the
+   vapour runs (which the liquid solve already carries at g 0, deliberately),
+   every gate spliced into them, and every machine that declares a vapPath. */
+function vapBuild(net2, index, edges, fitIds, fitMode, secTIds, secTParts){
+  const ve = [];
+  for(const ed of edges) if(ed.vapBore !== undefined)
+    ve.push({u:ed.u, v:ed.v, key:ed.key, kind:ed.kind, bore:ed.vapBore, len:ed.vapLen, run:ed.vapRun});
+  /* A VALVE IN THE STEAM LINE IS THE MAIN STEAM ISOLATION VALVE, and it is
+     the ordinary fitting the bench already hands you - shut it and that
+     generator's shell pressurises onto its own safety, which is the accident
+     the machine exists for. Off the same l/r pair the liquid gate uses, so a
+     valve plumbed vertically is the same valve. */
+  for(const fid of fitIds){
+    if(fitMode[fid] !== "throttle") continue;
+    const a = index[fid+"l"], b = index[fid+"r"];
+    if(a === undefined || b === undefined || !net2.vapour[a] || !net2.vapour[b]) continue;
+    ve.push({u:a, v:b, key:fitEdgeKey(fid), fit:fid});
+  }
+  for(const p of LAY.parts){
+    const R = ROLE[p.role]; if(!R || !R.vapPath) continue;
+    const a = index[p.id+R.vapPath.a], b = index[p.id+R.vapPath.b];
+    if(a === undefined || b === undefined) continue;
+    ve.push({u:a, v:b, key:"vap:"+p.id, machine:p.id, work:!!R.vapPath.work});
+  }
+  /* THE BOUNDARIES: every generator's own steam nozzle, at the saturation
+     pressure its shell pot is sitting at, and every condensing volume, at the
+     backpressure it is holding. Exactly the two nodes the liquid net already
+     fixes for the same physical reason - a shell and a condenser are places
+     where a pressure is KNOWN, not solved. */
+  const src = [], srcPart = [], sink = [];
+  const used = [], mark = new Uint8Array(net2.n);
+  for(const e of ve){ mark[e.u]=1; mark[e.v]=1; }
+  for(let i=0;i<net2.n;i++) if(mark[i]) used.push(i);
+  for(let k=0;k<secTIds.length;k++) if(mark[secTIds[k]]){
+    src.push(secTIds[k]); srcPart.push(secTParts[k]); }
+  for(const nid in net2.condNode){ const i = net2.condNode[nid];
+    if(mark[i] && net2.vapour[i]) sink.push(i); }
+  return {edges:ve, src, srcPart, sink, used, n:net2.n, name:net2.name};
+}
+/* ONE SOLVE OF THE STEAM SIDE, in kg/s and MPa - no datum column, because a
+   steam space has none. `open` carries what each machine's own gate is doing
+   this tick (step() owns the governor and the bypass); everything else is on
+   the drawing. */
+function vapSolve(s, open){
+  const V = P.net && P.net.vap;
+  if(!V || !V.edges.length || !V.src.length) return null;
+  const n = V.n, ne = V.edges.length;
+  const fx = new Float64Array(n), isFx = new Uint8Array(n);
+  for(let k=0;k<V.src.length;k++){ fx[V.src[k]] = secP(s, V.srcPart[k]); isFx[V.src[k]] = 1; }
+  const pc = condP(s);
+  for(const i of V.sink){ fx[i] = pc; isFx[i] = 1; }
+  if(!s.vapP) s.vapP = {};
+  const pl = new Float64Array(n);
+  for(const i of V.used){ const v = s.vapP[V.name[i]];
+    pl[i] = isFx[i] ? fx[i] : (v===undefined ? pc : v); }
+  const g = new Float64Array(ne), kv = new Float64Array(ne), kw = new Float64Array(ne);
+  for(let e=0;e<ne;e++){ const ed = V.edges[e];
+    let k = 0, w = 0;
+    if(ed.run){ k = runPortsOpen(s, ed.run)
+      ? vapPipeKv(ed.kind, ed.bore, ed.len + pipeExtraLen(s, ed.run.cells)) : 0; }
+    else if(ed.fit){ k = vapPipeKv("steam", D.fittings[ed.fit].bore, NET_COMP_LEN)
+      * clamp((s.valve && s.valve[ed.fit]!==undefined) ? s.valve[ed.fit] : 1, 0, 1); }
+    else if(ed.machine){ const o = (open && open[ed.machine]) || {};
+      w = Math.max(0, o.work||0); k = w + Math.max(0, o.dump||0); }
+    kv[e] = k; kw[e] = w;
+    g[e] = vapG(k, pl[ed.u], pl[ed.v]);
+  }
+  const row = new Int32Array(n), free = [];
+  for(const i of V.used) if(!isFx[i]){ row[i] = free.length; free.push(i); }
+  const nf = free.length;
+  const b = new Float64Array(nf);
+  if(nf){
+    const A = new Float64Array(nf*nf);
+    for(let e=0;e<ne;e++){ const gg = g[e]; if(!(gg>0)) continue;
+      const u = V.edges[e].u, v = V.edges[e].v;
+      if(isFx[u] && isFx[v]) continue;
+      if(isFx[u]){ const c=row[v]; A[c*nf+c]+=gg; b[c]+=gg*fx[u]; }
+      else if(isFx[v]){ const a=row[u]; A[a*nf+a]+=gg; b[a]+=gg*fx[v]; }
+      else { const a=row[u], c=row[v];
+        A[a*nf+a]+=gg; A[c*nf+c]+=gg; A[a*nf+c]-=gg; A[c*nf+a]-=gg; } }
+    netFactor(A, nf); netSubst(A, b, nf);
+  }
+  const p = new Float64Array(n);
+  for(const i of V.used) p[i] = isFx[i] ? fx[i] : b[row[i]];
+  for(const k in s.vapP) delete s.vapP[k];
+  for(const i of V.used) s.vapP[V.name[i]] = p[i];
+  /* WHAT EACH SHELL IS ACTUALLY PASSING - the sum over its own node's edges,
+     signed out of the shell. Negative is steam arriving from a hotter machine
+     down the same header, which is a real thing a common header does and
+     which the old plant-level demand share could not represent at all. */
+  /* kg/s per run key, SIGNED along that key's own canonical order. On S and
+     refilled, never rebuilt, because a renderer holds it across frames - the
+     same standing s.spillBy and s.sgtrBy carry. It is the steam side's answer
+     to runFlow, and it is what the meters and the packets read. */
+  if(!s.vapQ) s.vapQ = {};
+  const out = {}, byKey = s.vapQ;
+  for(const k in byKey) delete byKey[k];
+  let work = 0, workP = 0, sink = 0;
+  const q = new Float64Array(ne);
+  for(let e=0;e<ne;e++) q[e] = g[e]>0 ? g[e]*(p[V.edges[e].u]-p[V.edges[e].v]) : 0;
+  for(let e=0;e<ne;e++){ const ed = V.edges[e];
+    if(ed.key) byKey[ed.key] = (byKey[ed.key]||0) + q[e];
+    /* the share of a machine's path that crossed the WHEELS rather than the
+       bypass around them: one edge, two gates, and only one of them does work */
+    if(ed.machine && kv[e]>0 && kw[e]>0){
+      work += q[e]*kw[e]/kv[e]; workP += p[ed.u]*Math.abs(q[e])*kw[e]/kv[e]; }
+    for(const i of V.sink) if(ed.u===i) sink -= q[e]; else if(ed.v===i) sink += q[e];
+  }
+  for(let k=0;k<V.src.length;k++){ const i = V.src[k]; let f = 0;
+    for(let e=0;e<ne;e++){ const ed = V.edges[e];
+      if(ed.u===i) f += q[e]; else if(ed.v===i) f -= q[e]; }
+    out[V.srcPart[k]] = f; }
+  return {out, byKey, work, sink, pIn: work>1e-9 ? workP/Math.abs(work) : pc, p};
 }
 function netFixed(net, s){
   const f = {}, p0 = phiRef(net, s), rd0 = rhoDatum(s)*G_MPA;
@@ -2042,7 +2264,11 @@ function netFactored(net, s, fixed){
      real edge now, and it is a live g exactly like any other tank's. A tank
      with no cell has no node and so adds no bit, which is right - there is
      nothing about it for A to depend on. */
-  + '|' + tankIds().filter(id=>net.tankNode[id]!==undefined).map(id=>tankLive(s,id)?'1':'0').join('');
+  + '|' + tankIds().filter(id=>net.tankNode[id]!==undefined).map(id=>tankLive(s,id)?'1':'0').join('')
+  /* the hotwell running dry shuts the condensate edge, which is a change to A
+     exactly as a tank running dry is. One bit for the plant - the pool is one
+     pool (hostedTankIds()), so there is no per-condenser answer to give. */
+  + '|' + (condLive(s)?'1':'0');
   if(!net.Af || net.AfSig !== sig){
     /* ══ A FIXED NODE IS NOT IN THE MATRIX AT ALL ══
        netAssemble never writes a fixed node's row, its column or its b entry -
@@ -2186,6 +2412,14 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
         by[tid3] = (by[tid3]||0) + (tu !== undefined ? q[e] : -q[e]);
       }
     }
+    /* SIGNED, PER CONDENSER, POSITIVE OUT OF THE POOL - the tank line above,
+       asked of the condensate outlet. This is the ONE charge against the
+       hotwell (step.js); anything else charging it would make the pipe and
+       the pool two separate stories about the same water. */
+    if(outs && ed.condOf !== undefined){
+      const by = outs.qCondBy || (outs.qCondBy = {});
+      by[ed.condOf] = (by[ed.condOf]||0) + ed.condOut*q[e];
+    }
     if(byDrop && ed.key) byDrop[ed.key] = span>0 ? Math.abs(b[ed.u]-b[ed.v])/span : 0;
     if(ed.kind === "break"){ // LABEL: synthetic edge kind this function invents
       /* charged to the side the hole is on (ed.sec/ed.steam, netBuild) - the
@@ -2303,7 +2537,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
 // before P.net is necessarily the last thing it assigned. byLoop/byRun, if
 // given, are filled the same way netCoreFracOf fills them - this is
 // P.netRefByLoop's and P.netRefByRun's own producer.
-const netCoreFrac0 = (net, byLoop, byRun) => {
+const netCoreFrac0 = (net, byLoop, byRun, freg, outs) => {
   /* THE REFERENCE STATE, stated rather than inherited. It is ISOTHERMAL
      (coreDT 0), so buoyancy in it is exactly zero and netRef stays what it
      has always been: a purely geometric figure that prices this plant's
@@ -2313,15 +2547,20 @@ const netCoreFrac0 = (net, byLoop, byRun) => {
      so an undamaged plant nobody has run still reads exactly 1 - and once it
      is hot, the buoyancy it develops is real extra flow that a geometric
      reference must NOT contain. Pump speed is rated, because that is what
-     "as commissioned" means for a pump. */
-  const s = {dmgParts:[], capScale:{}, valve:{}, flow:1, Tavg:P.Tref, coreDT:0, P:P.P0};
+     "as commissioned" means for a pump. `freg` is the one thing a caller may
+     state instead: a feed regulating valve commissions WIDE and then walks
+     itself onto the level it holds, so what that valve is worth is a question
+     about the plant's rated feed rather than about this reference's own
+     geometry - commission() (step.js) is the only caller that answers it. */
+  const s = {dmgParts:[], capScale:{}, valve:{}, flow:1, Tavg:P.Tref, coreDT:0, P:P.P0,
+             fregBy: freg || {}};
   for(const fid of net.fitIds) if(net.fitMode[fid]==="throttle")
     s.valve[fid] = fitTies(fid) ? 0 : 1;
   for(let i=0;i<P.loops;i++){
     const up = loopPumpCap(i, []);
     s.capScale[i] = up>1 ? 1/up : 1;
   }
-  return netCoreFracOf(net, s, byLoop, byRun);
+  return netCoreFracOf(net, s, byLoop, byRun, null, null, outs);
 };
 
 /* Head lost across every edge, as a fraction of pump discharge. Read-only and
@@ -2894,14 +3133,26 @@ function buildStockPlumbing(opt){
      runs down into it and the two are their own connected component - which is
      all "COOLING" means. The second panel ships as a SPARE with no nozzle: it
      still radiates, because radArea() is geometry, and the bench can pipe it.
-     There is no circulating-water pump in the stock loadout, so the circuit
-     solves at zero flow: legal, and exactly what a plant that never bought one
-     should read. */
+     The circulating water pump stands in that line, so the circuit solves at a
+     real flow: pull it off the drawing and the condenser rejects nothing,
+     which is what a plant with nothing turning its cooling water reads. */
   const pCondCwO  = seedPort("cond",-1,4);
-  const pRad0L    = seedPort("rad0",-1,1);
-  const pRad0R    = seedPort("rad0",5,1);
-  const pRad1L    = seedPort("rad1",-1,1);
-  const pRad1R    = seedPort("rad1",5,1);
+  const pCwpT     = seedPort("cwp",1,-1);
+  const pCwpB     = seedPort("cwp",1,2);
+  /* The panel's TOP face, not its left: ROLE.radiator folds t onto l, so it is
+     the same node, and the pump stands directly over it - two ports facing
+     each other across a cell boundary are a joint and need no pipe. */
+  /* OFF THE PANEL'S OWN BOX, never off the stock ship's. A panel states an
+     AREA now and the drawing snaps to it (radW()/radH(), layout.js), so a
+     small plant's panel is a small box - and a nozzle authored at the stock
+     5x3's far corner lands outside it. Measured: WINDSCALE's rad1 refused
+     both its ports, which is a plant with no heat sink at all. */
+  const radBox    = id => { const p=partOf(id); return {w:p?p.w:1, h:p?p.h:1}; };
+  const rad0      = radBox("rad0"), rad1 = radBox("rad1");
+  const pRad0T    = seedPort("rad0",faceMid(rad0.w,0),-1);
+  const pRad0R    = seedPort("rad0",rad0.w,faceMid(rad0.h,0));
+  const pRad1L    = seedPort("rad1",-1,faceMid(rad1.h,0));
+  const pRad1R    = seedPort("rad1",rad1.w,faceMid(rad1.h,0));
   const pCondCwI  = seedPort("cond",4,5);
   // one discharge nozzle per generator - the pump is as wide as it has loops
   const feedT     = i => seedPort("feed",i,-1);
@@ -2944,7 +3195,8 @@ function buildStockPlumbing(opt){
   seedRun(pCondR, pFeedB, false, [[AFT+10,KEEL],[FEEDX,KEEL]]);   // condensate, along the keel
   /* AFT OF THE LAST PUMP, so it never meets a bilge run: the engine room moves
      back with the loop count and the cold returns do not. */
-  seedRun(pCondCwO, pRad0L, false, [[AFT-2,29],[AFT-12,29]]);   // circulating water out to the first panel
+  seedRun(pCondCwO, pCwpT, false, [[AFT-2,28],[AFT-2,24],[AFT-8,24]]);   // condenser water side, up and forward into the pump's suction
+  seedRun(pCwpB, pRad0T);                                       // and the pump stands on the first panel - a joint, no pipe
   seedRun(pRad0R, pRad1L);                        // ...through the second, in series...
   seedRun(pRad1R, pCondCwI);                      // ...and back into the condenser's water side
 
