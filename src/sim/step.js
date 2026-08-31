@@ -25,6 +25,10 @@ function commission(){
         layout's own inertia, and the SG half of it is sgInertiaK(), the one
         helper derived() reads too. */
      excess:d.excess, flowMin:clamp(0.30+0.15*(totalPumpCap()-sgCount()),0.15,0.75),
+     /* WHAT ONE OF THIS PLANT'S OWN DESIGN PUMPS IS WORTH, so netFlowK()'s
+        capacity ceiling can be a fraction of the machine the plant needs
+        rather than of a 1200 MW reference nobody small can reach. */
+     pumpCapRef:Math.max(1e-6, pumpFlowSuggest()/PUMP_FLOW_REF),
      graceK:Math.pow(a.grace*sgInertiaK(),.6)*L.inertiaK,
      noise:CHAN[D.chan].noise, id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
@@ -153,6 +157,14 @@ function commission(){
        being only the core's rating. The dT0 above is still what the SUGGESTION
        is anchored on, and it is where an untouched plant lands. */
     P.sgUA = totalSgUA()/n;
+    /* AND EACH MACHINE'S OWN, because the heat term is per generator and was
+       reading the plant MEAN: every shell got the same tubes while the flow
+       through them was its own loop's, so the loop carrying 48 % of the water
+       put it through 33 % of the tube area and settled over its own safety
+       valve. P.sgUA stays the mean - it is what the second stage is priced
+       off (P.ihxUA) - and one generator, or n identical ones, read the same
+       number from either. */
+    P.sgUABy = Object.fromEntries(sgIds().map(id=>[id, sgUAOf(id)]));
     P.steamRef = plantSteam();
     P.swallow  = totalTurbKgs(); }
   /* ── AND THE SAME ANCHOR FOR THE OTHER TWO MACHINES ──
@@ -909,9 +921,23 @@ const sgOverFrac = s => { let k=0;
   for(const id of sgIds()) k=Math.max(k, secP(s,id)/sgDesignP()-1);
   return k; };
 const RPS_NEAR=0.03;                        // how close to a setpoint counts as "about to"
+/* The share of its own commissioned margin a plant is allowed to lose before
+   the DNBR channel drops, and the floor no protection system may be set
+   under: DNBR 1.0 IS departure (dnbrOf()), so a setpoint below it protects
+   nothing at all. */
+const DNBR_TRIP_K=0.72, DNBR_ONSET=1.02;
 const RPS_CH=[
   ["HIGH FLUX","FLUX",          +1, (P_,m)=>1.10+0.22*m,             s=>s.n],
-  ["LOW DNBR","DNBR",           -1, (P_,m)=>1.18-0.16*m,             s=>s.dnbr],
+  /* The PWR setpoint, or a fixed fraction under what THIS plant commissions
+     at - whichever is lower, and never under departure itself. Same argument
+     LOW SUBCOOLING and CORE VOID below already carry: a boiling channel
+     commissions at 1.44 where a pressurised one commissions at 1.76, so a
+     flat 1.124 left an RBMK three per cent of margin and tripped it on its
+     own settling transient with nobody aboard. min(), so no plant that used
+     to hold this channel can start failing it, and the stock PWR is exactly
+     the number it always was. */
+  ["LOW DNBR","DNBR",           -1, (P_,m)=>Math.max(DNBR_ONSET,
+                                       Math.min(1.18-0.16*m, P_.dnbr0*DNBR_TRIP_K)), s=>s.dnbr],
   ["HIGH PRESSURE","PRESSURE",  +1, (P_,m)=>P_.P0*(1.06+0.07*m),     s=>s.P],
   ["HIGH FUEL TEMP","FUEL",     +1, (P_,m)=>P_.tdmg+100+280*m,       s=>s.Tf],
   ["LOW FLOW","FLOW",           -1, P_=>P_.flowMin*1.02,             s=>s.flowNet, s=>s.heat>0.3],
@@ -1133,7 +1159,8 @@ const ratedSteam=()=>P.rated*1000/H_FG;
    plant's for the exhaust. The tick normalises the packet integral on it and
    the meter prints it as a full scale, so the digits and the packets read the
    same number - the rule every other run already keeps. */
-const steamScale=k=>k==="exh" ? ratedSteam() : ratedSteam()/Math.max(1,sgCount());
+const steamScale=(key,k)=>k==="exh" ? ratedSteam()
+  : ratedSteam()*Math.max(1,steamFeeders(key,k).length)/Math.max(1,sgCount());
 /* ══ WHICH WAY ALONG THE PIPE THE STEAM ACTUALLY GOES ══
    A run's key names its two ends in a CANONICAL order (pipeMap() sorts by
    part id, then face) so the key is the same string whichever end a hand drew
@@ -1146,12 +1173,101 @@ const steamScale=k=>k==="exh" ? ratedSteam() : ratedSteam()/Math.max(1,sgCount()
    GENERATOR; the exhaust arrives at the SINK. */
 const isSink = id => { const p=partOf(id);
   return !!p && ROLE[p.role] && ROLE[p.role].thermal==="sink"; };
+/* ══ AND A HEADER RUN HAS A GENERATOR AT NEITHER END ══
+   Tee to tee is the main steam header, and "does end 0 raise steam" answers
+   no for both ends, so every one of them read backwards - along with the run
+   that hands the header to the turbine, which is a tee at one end and the
+   machine at the other. Asked STRUCTURALLY instead, the way crossTies() asks
+   its own question: cut this run and see which side can still reach a machine
+   that swallows steam. That side is downstream. Nothing is named and no
+   ordering is stored - a header re-plumbed backwards on the bench answers the
+   new drawing. */
+const swallowsSteam = pid => { const p=partOf(pid);
+  return !!p && (p.role==="turb" || isSink(pid)); };
+function steamSide(node, cut){
+  const G=nodeGraph(), seen=G.reach((G.adj[node]||[]).filter(v=>!cut[v]), cut);
+  return LAY.parts.some(p=>swallowsSteam(p.id) && (G.nodesOf[p.id]||[]).some(n=>seen[n]));
+}
 function steamDir(key,k){
   const ends = runEnds(key,k); if(!ends) return 1;
   const pid = n => n.slice(0,-1);
   if(k==="exh") return isSink(pid(ends[1])) ? 1 : -1;
-  return (S && S.steamTo && S.steamTo[pid(ends[0])]!==undefined) ? 1 : -1;
+  // a run ON a generator leaves it, whichever end the key happens to sort first
+  if(S && S.steamTo){
+    if(S.steamTo[pid(ends[0])]!==undefined) return 1;
+    if(S.steamTo[pid(ends[1])]!==undefined) return -1;
+  }
+  /* A TAP DISCHARGES INTO ITS DEAD END, and the reach test below would say the
+     opposite: the header side is the side that reaches the turbine, but a
+     safety valve hanging off it passes steam OUT. runDeadEnd() (layout.js) is
+     the same predicate that already keeps a branch from being named MAIN
+     STEAM, asked here for the direction it implies. */
+  const de = runDeadEnd(pid(ends[0]), pid(ends[1]));
+  if(de) return de.id===pid(ends[1]) ? 1 : -1;
+  const cut={}; cut[ends[0]]=1; cut[ends[1]]=1;
+  if(steamSide(ends[1],cut)) return 1;
+  if(steamSide(ends[0],cut)) return -1;
+  return 1;
 }
+/* ══ WHOSE STEAM PASSES THIS RUN ══
+   A HEADER ACCUMULATES. The segment nearest the turbine carries every
+   generator behind it and the segment at the far end carries one, so "this
+   run carries one machine's worth" was a one-generator plant's answer wearing
+   a plant-wide name. Asked the same structural way steamDir() asks its own:
+   cut the run, and the generators still reachable from the UPSTREAM side are
+   the ones whose steam has to get past this point.
+   A dead-ended branch is not a header segment at all - it is a valve on one
+   shell, so it books that shell's VENT, and which shell is shellsOf(), the
+   same predicate that decides a valve is a secondary one.
+   Memoised on the graph window: it is a fact about the drawing, and the
+   drawing cannot change while the plant runs. */
+function steamBook(key,k){
+  const slot=graphSlot("steamFeed"), was=slot.get(key); if(was) return was;
+  const ends=runEnds(key,k), pid=n=>n.slice(0,-1);
+  let out;
+  if(k==="exh" || !ends) out={gens:sgIds(), taps:reliefSecIds(), vent:false};
+  else {
+    const de = runDeadEnd(pid(ends[0]), pid(ends[1]));
+    if(de) out = {gens:shellsOf(de.id), taps:[de.id], vent:true};
+    else {
+      /* ON THE STEAM SIDE ONLY, and that is the whole of why nodeGraph()'s own
+         reach() cannot answer it: the secondary is ONE circuit - shell, steam
+         line, turbine, condenser, feed line, back into every other shell - so
+         a walk that may leave the steam lines arrives at every generator on
+         the plant from anywhere. This one crosses vapour runs and nothing
+         else, treats a fitting as transparent (its faces are one box) and
+         STOPS at a generator, which is where steam is made rather than
+         passed. */
+      const adj={}, add=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b);
+                                 (adj[b]||(adj[b]=[])).push(a); };
+      const up = steamDir(key,k)>0 ? ends[0] : ends[1];
+      const byPart={}, note=n=>(byPart[pid(n)]||(byPart[pid(n)]=[])).push(n);
+      note(up);
+      for(const r of pipeNetwork()){
+        if(!RUN_VAPOUR[r.k] || r.key===key) continue;
+        const e=runEnds(r.key,r.k); if(!e) continue;
+        add(e[0],e[1]); note(e[0]); note(e[1]);
+      }
+      for(const p in byPart) if(isFitting(p))
+        for(let i=1;i<byPart[p].length;i++) add(byPart[p][0],byPart[p][i]);
+      const seen={}, st=[up]; seen[up]=1;
+      while(st.length){ const n=st.pop();
+        if(pid(n)!==pid(up) && sgIds().indexOf(pid(n))>=0) continue;   // a generator is a terminus
+        for(const m of (adj[n]||[])) if(!seen[m]){ seen[m]=1; st.push(m); } }
+      const on = id => Object.keys(seen).some(n=>pid(n)===id);
+      const gens = sgIds().filter(on);
+      out = {gens: gens.length ? gens : (sgIds().indexOf(pid(up))>=0 ? [pid(up)] : []),
+             /* AND THE VALVES THAT HAVE ALREADY TAKEN THEIR SHARE. Steam that
+                left through a safety valve upstream of this point is not in
+                this pipe any more, and without the subtraction a tee with a
+                valve on it passed out more than came in - the whole plant's
+                steam down the header AND the same steam again out the stack. */
+             taps: reliefSecIds().filter(on), vent:false};
+    }
+  }
+  slot.set(key,out); return out;
+}
+const steamFeeders=(key,k)=>steamBook(key,k).gens;
 /* What the shell is designed to sit at, where a relief valve set to this
    plant's default lifts, and where the shell itself lets go. */
 const sgDesignP=()=>P.P0*0.45;
@@ -2438,7 +2554,7 @@ function step(dt){
        generator is heated by that exchanger's pot, and the primary temperature
        is a stage away. Every other term is a property of THESE tubes and does
        not care which stage feeds them. */
-    const q  = P.sgUA*Math.pow(fl,UA_FLOW)*sgFill(s,id)*filmK
+    const q  = ((P.sgUABy && P.sgUABy[id]) || P.sgUA)*Math.pow(fl,UA_FLOW)*sgFill(s,id)*filmK
              * Math.max(0, sgHot(s,id) - sgTemp(s,id));
     sgQBy[id] = q;
     /* HEAT LEAVING THE CORE IS WHAT CROSSES THE FIRST STAGE, never the second.
@@ -2846,8 +2962,19 @@ function step(dt){
      the widget - a recording, a scenario or a damaged fleet can all ask for
      more than is fitted. */
   const swTot  = Math.min(s.load*P.steamRef, P.swallow);
-  const swWork = swTot*passK/perSG;
-  const swDump = dump*P.steamRef/perSG;
+  /* ── AND THE HEADER SHARES IT OUT BY WHAT IS RAISED, NOT BY HEAD COUNT ──
+     One header, one demand, and each generator supplies the steam it is
+     actually boiling - which is the whole of what tying shells together does.
+     Split 1/n instead, a loop carrying 48 % of the water was asked to pass
+     33 % of the steam, trapped the rest, climbed over its own safety valve
+     and pulsed the secondary inventory overboard until the hotwell was empty
+     and the busiest generator starved. One generator is 1 and n equal ones
+     are 1/n each, so nothing pinned moves; a plant raising nothing at all
+     falls back on the head count rather than dividing by zero. */
+  let qTotSg = 0; for(const id of ids) qTotSg += Math.max(sgQBy[id]||0, 0);
+  const swShare = id => qTotSg > 1e-6 ? Math.max(sgQBy[id]||0,0)/qTotSg : 1/perSG;
+  const swWork = swTot*passK;
+  const swDump = dump*P.steamRef;
   /* ── A HOLE IN THE EXHAUST BREAKS THE VACUUM, IT DOES NOT VENT A SHELL ──
      condP() carries it (exhOpen(), above), so the enthalpy drop, the stop
      valve and the MWe readout all price the same backpressure. What still
@@ -2946,8 +3073,9 @@ function step(dt){
     const gate = (sgSteams(id) && !s.sgBurst[id] && !s.condLost) ? Math.sqrt(Math.max(0,
       1-Math.pow(clamp(pCond/Math.max(shellP,1e-4),0,1),2))) : 0;
     const ratio = shellP/sgDesignP();
-    const steamWk = Math.max(0, swWork*ratio*gate);
-    const steamTo = steamWk + Math.max(0, swDump*ratio*gate);
+    const sh = swShare(id);
+    const steamWk = Math.max(0, swWork*sh*ratio*gate);
+    const steamTo = steamWk + Math.max(0, swDump*sh*ratio*gate);
     /* WHAT ITS OWN VALVES ARE PASSING, and never more water than is in there.
        Both the mass and its latent heat leave the balance, so a generator held
        on its valves uncovers its own tubes - which is the accident that makes
@@ -3481,16 +3609,29 @@ function step(dt){
   const steamRun = key => {
     const k = P.net.byKey[key].k, ends = runEnds(key,k);
     if(!ends) return 0;
+    /* A DEAD-ENDED BRANCH IS A RELIEF BRANCH, and what it carries is what its
+       own shell is VENTING - not what that shell raised. Asked of the shape
+       of the run (runDeadEnd) and not of "does either end happen to be a
+       fitting", which on a plant with a header was every main steam run
+       there is: all of them booked the vent, and the whole steam line read
+       0 kg/s whenever nothing was lifting. */
+    /* ══ WHAT PASSES THIS POINT, AND IT HAS TO BALANCE AT A TEE ══
+       A generator sends everything that LEAVES its shell up its own nozzle -
+       what the governor takes AND what its safety valve is blowing - and the
+       valve's share leaves at the tee. Booking the main line on the governor
+       alone made a tee pass out more than came in: the nozzle read the
+       turbine's demand, the header read it again and the stack read the vent
+       on top of both. A dead-ended branch carries its own valve's vent and
+       nothing else. */
+    const b = steamBook(key,k);
     let q = 0;
-    /* A STEAM RUN THAT REACHES A FITTING IS A RELIEF BRANCH, and what it
-       carries is what that generator is VENTING - not the whole of what it
-       raised, which is what reading the same book as the main steam line
-       would have it claim. */
-    const book = ends.some(n=>isFitting(n.slice(0,-1))) ? s.sgVentBy : s.steamTo;
-    if(k==="exh"){ for(const id in (s.steamTo||{})) q += s.steamTo[id]; }
-    else for(const n of ends){ const id=n.slice(0,-1);
-      if(book && book[id]!==undefined){ q = book[id]; break; } }
-    return q*steamDir(key,k);
+    if(b.vent){ for(const fid of b.taps) q += (s.reliefSteam && s.reliefSteam[fid]) || 0; }
+    else {
+      for(const id of b.gens) q += ((s.steamTo && s.steamTo[id]) || 0)
+                                 + ((s.sgVentBy && s.sgVentBy[id]) || 0);
+      for(const fid of b.taps) q -= (s.reliefSteam && s.reliefSteam[fid]) || 0;
+    }
+    return Math.max(0,q)*steamDir(key,k);
   };
   for(const key in d){
     const r = P.net.byKey[key];
@@ -3503,7 +3644,7 @@ function step(dt){
        differentiates this integral, would print the flow to match. */
     if(!runPortsOpen(s,r)) continue;
     if(r.k==="steam"||r.k==="exh"){
-      d[key] += sp*1.4*steamRun(key)/Math.max(1e-6, steamScale(r.k));
+      d[key] += sp*1.4*steamRun(key)/Math.max(1e-6, steamScale(key,r.k));
       continue;
     }
     if(PIPE_CORR[r.k]){                        // DEFAULT: see the comment above
