@@ -276,8 +276,18 @@ const tankMass=()=>{ let m=0;
    also the suggestion; the reference flow is the loop's own inventory over the
    time it takes to go round once. */
 const pumpHeadSuggest = () => PUMP_H0;
-// rated heat over what one kelvin of core rise costs: the loop's own mass flow
-const pumpFlowSuggest = () => RATED_KW()/(CP_W*CORE_DT0);
+/* rated heat over what one kelvin of core rise costs: the loop's own mass
+   flow - and there is ONE core, so the LOOPS share it. A four-loop plant
+   whose pumps were each sized for the whole core circulated four times what
+   the core was drawn for, over-cooled the fuel and walked its own rod
+   controller into a flux trip inside two seconds.
+   Divided by loops and never by PUMPS: two pumps in one loop are redundancy,
+   not half a loop each, and dividing by the head count made buying a spare
+   shrink the machine it was standing in for. A pump piped somewhere else is
+   on nobody's loop and gets the whole figure. */
+const pumpFlowSuggest = id => { const n = id===undefined || primaryPump(id)
+    ? Math.max(1, loopMap().n) : 1;
+  return RATED_KW()/(CP_W*CORE_DT0*n); };
 /* ══ A SUGGESTION FILLS THE FIELD. IT IS NOT THE FIELD ══
    These were `?? xSuggest()` - a LIVE default, recomputed from the rest of the
    plant on every read. That is a hidden reference, and it is the same one Job 2
@@ -291,7 +301,7 @@ const pumpFlowSuggest = () => RATED_KW()/(CP_W*CORE_DT0);
    afterwards. SUGGEST on the panel re-derives it on demand, which is the whole
    of what a reference to start from should do. */
 const bake = (bag, id, mk) => { const v = bag[id];
-  return v === undefined ? (bag[id] = mk()) : v; };
+  return v === undefined ? (bag[id] = mk(id)) : v; };
 const pumpHead = id => bake(D.pumpHead, id, pumpHeadSuggest);
 const pumpFlow = id => bake(D.pumpFlow, id, pumpFlowSuggest);
 /* WHAT THIS PUMP IS WORTH AGAINST THE REFERENCE MACHINE. The network is
@@ -917,6 +927,12 @@ const IHX_HOLD_PER_UA= 7.6e-4;         // t of intermediate coolant per kW/K
    had none of its own; an exchanger states its UA in kW/K now, and the 2.5 is
    what the bench SUGGESTS - a second stage worth two and a half times the
    generator in front of it - which is a recommendation and not a law. */
+/* EQUAL MACHINES ON EQUAL SLOTS. Sizing each generator to its own loop's
+   flow has been tried and is WRONG: more tubes on the busy loop move more
+   heat into that shell, and a shell's pressure is its own pot, so it widened
+   the very spread it was meant to close. Measured, 3 loops: 7.17/6.03/5.28
+   MPa against 7.37/6.62/6.28 for equal machines. A designer builds equal
+   loops; what the plant does with unequal ones is the plant's answer. */
 const sgUASuggest = () => { const n=Math.max(1,sgCount());
   const dT0=Math.max(5, COOLANT[D.cool].Tref - tsatSec(COOLANT[D.cool].P0*0.45));
   return (n0Ref()*RATED_KW())/(n*Math.pow(Math.max(layoutMetrics().flowK,.02),UA_FLOW)*dT0); };
@@ -1727,11 +1743,16 @@ const prect=p=>grect(p.x,p.y,p.w,p.h);
 const cellPos=(x,y)=>[GX+(x+0.5)*CELL, rowTop(y)+CELL/2];
 // A NOZZLE SITS ON THE SHELL, not in the middle of the port cell - half a
 // cell of bare board between a machine and its own joint read as unconnected.
+const PORT_PROUD=3.5;
 function portPos(pid){
-  const c=portCell(pid), f=portFaceOf(pid);
+  const q=D.ports[pid], c=portCell(pid), f=portFaceOf(pid);
   if(!c||!f) return [0,0];
   const [x,y]=cellPos(c[0],c[1]);
-  return [x-DIRV[f][0]*CELL/2, y-DIRV[f][1]*CELL/2];
+  const p=partOf(q.p);
+  // a fitting's box is one cell of glyph, so a joint drawn astride its edge
+  // lands ON the symbol - stand it clear instead
+  const out=p&&p.role==="fitting" ? PORT_PROUD : 0;
+  return [x-DIRV[f][0]*(CELL/2-out), y-DIRV[f][1]*(CELL/2-out)];
 }
 
 /* the face of p that points at q - a nozzle should be on the side the pipe comes from,
@@ -1893,7 +1914,12 @@ const RUN_KIND={
   // an exchanger is spliced INTO the loop, so every run reaching it is still
   // the leg it was: hot on the way out of the core, cold on the way back
   "core|ihx":"hot", "ihx|sg":"hot", "ihx|pump":"cold", "ihx|pzr":"surge",
-  "sg|turb":"steam", "cond|turb":"exh",
+  /* AND GENERATOR TO GENERATOR IS THE MAIN STEAM HEADER. Without this row the
+     header between two shells resolved sg|sg, matched nothing and came out
+     k:"user" - grey, unnamed, full bore, and solved as a WATER pipe between
+     two fixed shell nodes. A single-loop plant has no such run, which is why
+     it took a second generator to see it. */
+  "sg|turb":"steam", "sg|sg":"steam", "cond|turb":"exh",
   // the condenser is on nobody's primary, so a pump drawn to it is drawing
   // feedwater whatever else it is plumbed to
   "cond|pump":"feed",
@@ -2273,6 +2299,17 @@ function layoutMetrics(){
   for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
   let pipe=0, sec=0, dead=0, pmass=0;
+  /* ══ AND THE SAME METRES, LOOP BY LOOP ══
+     `pipe` is the whole plant's primary run and cannot answer how well it
+     CIRCULATES: loops are in PARALLEL, so a second one is a second path and
+     not another kilometre of the first. Summed into one bucket it read as
+     series, and every loop a designer added derated the plant that bought it
+     - a four-loop ship suggested a turbine two thirds the size of a one-loop
+     ship's off the same core. Charged by loopMap(), the same walk the solve
+     itself is judged per loop against; a primary run on no loop (the surge
+     line, an injection leg, a cross-tie) is shared and is split over them. */
+  const LM=loopMap(), nLoop=Math.max(1,LM.n), loopL=new Array(nLoop).fill(0);
+  let sharedL=0;
   for(const r of pipeNetwork()){
     const L=r.L;
     pmass += L * runMassPerM(r);
@@ -2285,7 +2322,10 @@ function layoutMetrics(){
     if(r.k==="relief") dead+=L;
     // a cross-tie is a parallel branch, not another metre of loop, so it pays
     // mass/inertia with the secondary runs and never slows the pumps down
-    else if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi") pipe+=L; else sec+=L;
+    else if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi"){ pipe+=L;
+      const li = LM.partLoop[r.a] ?? LM.partLoop[r.b];
+      if(li===undefined) sharedL+=L; else loopL[li]+=L; }
+    else sec+=L;
   }
 
   const hull=p=>{ let k=0; for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
@@ -2371,6 +2411,17 @@ function layoutMetrics(){
   // exactly where the flat rate had it.
   const mass = pmass + P_.filter(p=>p.grp==="shield").length*30;
   layMass = mass;
+  /* ══ WHAT THE PLANT CIRCULATES, AND IT IS A MEAN ══
+     Loops are in PARALLEL and they SHARE the core's one flow, so each pump is
+     a share of it (pumpFlowSuggest()) and each loop carries its own share
+     against its own friction: n conductances in parallel, each driven by 1/n
+     of the head, is the MEAN of them. Summed as one long pipe instead - which
+     is what the total metre count was - every loop a designer added derated
+     the plant that bought it, and a four-loop ship suggested a turbine two
+     thirds the size of a one-loop ship's off the same core. A single loop is
+     the same arithmetic it always was. */
+  const loopK = loopL.map(L=>1/(1+0.006*(L+sharedL/nLoop)));
+  const flowK = loopK.reduce((a,k)=>a+k,0)/nLoop;
   /* natK is gone. Buoyancy is an edge head in the pipe network now
      (pipenet.js), so the thermosiphon is solved off exactly the geometry
      `head` measures instead of being predicted from it by a second formula
@@ -2379,7 +2430,7 @@ function layoutMetrics(){
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
   return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,ihxIdle,feedNoSg,tankZ,injZ:injZ===null?0:injZ,radK,peak,
-    flowK: 1/(1+0.006*pipe),
+    flowK,
     inertiaK: 1+0.012*(pipe+sec)};
 }
 // The arrangement half of designSig(): id + grid position of every part on
