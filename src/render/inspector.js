@@ -335,7 +335,7 @@ function paramsFor(p){
         "MPa",2,()=>pumpHeadSuggest(),()=>pumpCapOf(id)*PUMP_MASS);
     num("RATED FLOW","The mass of coolant this pump moves per second at that head. Head and flow together are the machine: a pump running at its own rated point has nothing spare to lend.",
         {get:()=>pumpFlow(id),set:v=>{ D.pumpFlow[id]=v; }},
-        "kg/s",0,()=>pumpFlowSuggest(),()=>0);
+        "kg/s",0,()=>pumpFlowSuggest(id),()=>0);
     /* WHAT THIS PUMP IS FOR, off the drawing rather than off its id. There is
        one pump role: a coolant pump is a pump the loop walk reaches from a
        generator, a feed pump is one that reaches a generator's SHELL, and a
