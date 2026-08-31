@@ -446,7 +446,7 @@ function coreReset(s){
   s.h2=0; s.meltFrac=0; s.oxMax=0; s.qOx=0; s.TcladHot=P.Tref;
   s.dnbrMin=P.dnbr0; s.dnbrRing=0; s.dnbrLev=0;
   for(let k=0;k<XNN;k++){
-    s.xI[k]=P.gI*P.n0/P.lamI; s.xX[k]=P.X0;
+    s.xI[k]=ioEq(P.n0); s.xX[k]=P.X0;
     s.nTc[k]=P.Tref; s.nTf[k]=P.TfRef;
   }
   /* settle the shape once, properly, so the first tick does not start from a
@@ -457,6 +457,16 @@ function coreReset(s){
              -P.nPen[i]+P.enrRho[i]; }
   coreSolve(P,s.phi,s.nRho,60);
   s.fq=nodePeak(s.phi).v;
+  /* ══ AND THE POISON IS THE NODE'S OWN, NOT THE CORE MEAN ══
+     P.X0 is the equilibrium of the AVERAGE node, and the flux is peaked - so a
+     flat field is over-poisoned exactly where the flux is highest, and the
+     reactivity is flux-weighted. The difference burns out on its own: measured
+     on WINDSCALE, +106 pcm in ten seconds at the 400x xenon clock, which the
+     rod controller answered and rode into the flux trip with nobody touching a
+     control. Seeded HERE rather than above because it needs the settled shape,
+     which the solve on the line before is what produces. */
+  for(let k=0;k<XNN;k++){ const fl=P.n0*s.phi[k];
+    s.xI[k]=ioEq(fl); s.xX[k]=xeEq(fl); }
   /* ── THE ONE CONSTANT THE PIN BALANCE IS FITTED WITH ──
      P.pinUA is the film conductance of the whole core at rated flow, and it is
      read off the settled shape at ONE anchor: the flux-weighted mean fuel
@@ -469,7 +479,20 @@ function coreReset(s){
      P.condK is inside it, which is what its name always claimed: a
      conductivity, not a scale on a guess. */
   { let pk2=0; for(let k=0;k<XNN;k++) pk2+=nodeW[k]*s.phi[k]*s.phi[k];
-    const film0=Math.pow(Math.max(P.flowK,.02),0.8);
+    /* AT THE FILM THIS PLANT ACTUALLY HAS. P.flowK alone is the film at
+       s.flowNet exactly 1 - the ISOTHERMAL reference, with no buoyancy in it -
+       and what coreStep() prices the pellet against every tick is
+       mflux = P.flowK * s.flowNet. On a pressurised plant those agree to a
+       percent. On one whose buoyancy is a real fraction of its drive they do
+       not: WINDSCALE circulates at 1.46 times reference, so its pellets
+       commissioned 200 K above the balance the tick then held them to, and the
+       1400 pcm of Doppler that unwound as they cooled ran it onto its flux
+       trip in under a second. Anchoring HERE keeps every calibrated figure
+       intact - the mean pellet of a plant at rest is still exactly P.TfRef, so
+       Doppler, the fuel trip and the damage threshold all still read against
+       the number they were fitted against, and S.boron's balance still lands
+       on critical. */
+    const film0=Math.pow(Math.max(P.flowK*(s.flowNet||1),.02),0.8);
     const heat0=s.n*PROMPT_F+s.decay;
     P.pinUA=heat0*P.rated*1000*Math.max(pk2,1e-6)
            /(film0*Math.max(P.TfRef-P.Tref,1)*P.condK);
