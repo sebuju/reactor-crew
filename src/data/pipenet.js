@@ -2663,12 +2663,6 @@ function seedRun(pa,pb,vFirst,vias){
     path=path.concat(pipePath(path[path.length-1], stops[i], vFirst));
   pipeLay(path, ca, cb);
 }
-/* WHERE A GENERATOR'S SAFETY VALVE SITS: one cell up and one along from its
-   own steam nozzle, where its discharge is clear of the header. y=1 is not
-   cosmetic - the open face is then against the hull, so what lifts goes
-   outside (fitVentOut, above). The same valve moved inboard cooks the engine
-   room, and that is geometry rather than a setting. */
-const svCell = i => [28+i*7, 1];
 /* ══ A NOZZLE GOES ON THE MIDDLE OF THE FACE FIRST, THEN OUTWARD ══
    `n` cells of face, nozzle `i`, `step` cells apart. The stock plant used to
    count from index 0 on every face it touched, so a one-loop plant - the one
@@ -2685,6 +2679,11 @@ const faceMid = (n, i, step) => { const k = step || 1;
   return Math.floor((n-1)/2) + (i%2 ? -k*Math.ceil(i/2) : k*Math.ceil(i/2)); };
 function buildStockPlumbing(opt){
   const loops = (opt && opt.loops) || 1;
+  /* THE HULL THIS PLANT NEEDS. The engine room stands aft of the last loop
+     (buildLayout()), so a four-loop reference plant is a longer ship - and it
+     says so here rather than leaving its own turbine standing outside the
+     skin. The player may still drag it either way afterwards. */
+  D.gw = 60 + 7*(loops-1); D.gh = 34;
   for(const k   in D.pipes) delete D.pipes[k];
   for(const pid in D.ports) delete D.ports[pid];
   for(const id  in D.tanks) delete D.tanks[id];
@@ -2728,12 +2727,13 @@ function buildStockPlumbing(opt){
     gas:{p0:0.15, frac:25/23}, pump:null, check:false, auto:"always",
     burst:{at:1.4, drain:6.0, rel:0.004}});
 
-  /* MOVED OFF THE TURBINE'S OWN COLUMN. It used to sit at x=50, which is
-     exactly where the main steam line drops once that nozzle is on the middle
-     of the turbine's nine-cell top face instead of on its corner - and a
-     blocked cell is not a warning, it is a run that silently fails to lay. */
-  tank("efw",55,0,{ name:"EFW TANK", col:"#5aa9d6",
-    tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
+  /* BESIDE THE FEED PUMP, TIED INTO THE FEEDWATER LINE. It used to have its own
+     nozzle on generator 1 and its own line across the ship, which is a lane
+     every added loop needs and a second nozzle in the one gap that has no room
+     for one. On the line it reaches whatever the feed pump reaches - which is
+     what an emergency feedwater tie IS. */
+  tank("efw",26+7*loops+Math.max(3,loops)+1,18,{ name:"EFW TANK", col:"#5aa9d6",
+    tip:"Independent feedwater reserve and pump, tied into the feedwater line. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
     vol:19, level:100, fluid:"condensate",
     /* Its own pump, on the backup bus, at a real discharge pressure. 8.0 MPa
        clears a generator's shell at any level it can be needed at; what keeps
@@ -2770,8 +2770,43 @@ function buildStockPlumbing(opt){
      is not spliced into the main steam line: a valve in the line would be shut
      off with the line, which is the one case it exists for. */
   const svTip="The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead. It stands against the skin, so what it blows goes outside; move it inboard and the same steam lands in the engine room.";
-  const sv0  = fitting("sv0",svCell(0)[0],svCell(0)[1],{ name:"SG SAFETY 1", mode:"relief", bore:0.55, tip:svTip });
 
+  /* ══ EVERY LOOP'S MACHINERY, THEN EVERY LOOP'S PLUMBING ══
+     Loop 0 used to be laid first and the rest bolted on afterwards, which is
+     why its own main steam line ran down the row every other loop needed and
+     an added generator could not reach the turbine at all. The generators and
+     the pumps go on the board FIRST - so buildLayout() knows how far aft the
+     engine room stands - and then one pass lays the same six runs per loop. */
+  const X = i => 26+7*i;                     // a loop's own column
+  const AFT = 46+7*(loops-1), FEEDX = 26+7*loops;
+  for(let i=1;i<loops;i++){
+    placePart(() => ({id:"sg"+i, name:"STEAM GEN "+(i+1), w:3, h:6, x:X(i), y:5,
+      col:"#5fd2e2", grp:"loop"+i, tip:"", role:"sg"}));
+    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:3, h:5, x:X(i), y:18,
+      col:"#57d38c", grp:"loop"+i, tip:"", role:"pump"}));
+  }
+  /* ══ ONE MAIN STEAM HEADER, ONE TEE PER GENERATOR ══
+     A line per generator cannot be drawn: the safety valves must stand on the
+     top hull, so they own the two rows a second and third steam lane would
+     need. A header is what the real machine has anyway, and it is built out of
+     the fitting the bench already hands you. The tee stands two rows over its
+     own generator, so its BOTTOM port faces the steam nozzle across a cell
+     boundary - two ports facing each other are a joint and need no pipe - and
+     its TOP port carries the safety valve the same way. */
+  // where the emergency reserve meets the feedwater line, one cell forward of
+  // the feed pump's own column so it is on the lane whatever the loop count
+  const efwtee = fitting("efwtee", FEEDX, 12, { name:"EFW TIE", mode:"tee", bore:boreK("feed"),
+    tip:"Where the emergency reserve meets the feedwater line. A tee closes nothing: the reserve waits behind its own check valve until the line pressure falls under it." });
+  const mstee=[], svf=[];
+  for(let i=0;i<loops;i++){
+    mstee[i]=fitting("mstee"+i, X(i)+1, 2, { name:"STEAM TEE "+(i+1), mode:"tee", bore:boreK("steam"),
+      tip:"Where this generator's steam meets the main header, and where its safety valve stands." });
+    /* ONE CELL CLEAR OF THE TEE, not against it: two ports in adjacent cells
+       are a joint only when they FACE each other, and this valve's own port
+       looks along the hull rather than down at the tee. The cell between them
+       is the tap. */
+    svf[i]=fitting("sv"+i, X(i)+3, 0, { name:"SG SAFETY "+(i+1), mode:"relief", bore:0.55, tip:svTip });
+  }
   buildLayout();                     // the boxes have to be on the grid before a port can sit beside one
 
   /* ══ THE PORTS AND THE RUNS ══
@@ -2782,14 +2817,37 @@ function buildStockPlumbing(opt){
      whitelists - the hot legs up the right side, the injection line and every
      cold return along the bottom. Spread rather than stacked, because a port
      is a CELL now and two of them cannot share one. */
-  const coreHot  = i => seedPort("core",9,1+2*i);
-  // centred on the vessel's own floor, two cells apart - the injection line
-  // keeps the corner (dx 0), which is why the spread starts one step in
+  /* ONE ROW PER LOOP, ADJACENT. Two cells apart put loop 3's hot leg on row 20,
+     which is the pumps' own band - a lane that cannot be laid at all. Adjacent
+     rows give four lanes between the vessel and the pumps, and the run is what
+     needs the room, not the nozzle. */
+  /* ══ ONE LANE PER RUN, AND THE TABLE IS THE PROOF ══
+     Between the shells and the pumps there are seven rows, and eight lines
+     want one: four hot legs and four feedwater lines. Row 14 carries two
+     because loop 0's hot leg is three cells long and stops at the surge tee,
+     west of where any feed line begins - the one legal overlap on the board.
+     A lane that shares a row with anything else MERGES with it, which is how a
+     hot leg came to land on a generator's feedwater nozzle.
+     FEED_ROW starts at 12: row 11 carries every generator's own cold-leg
+     nozzle, and a lane laid across a port cell stops dead at it. */
+  /* loop 3 leaves the vessel at its FLOOR: row 13 is blocked at one cell by
+     the surge tee's own nozzle, and one port cell stops a lane as dead as a
+     machine does. */
+  const HOT_ROW =[14,15,16,24];      // out of the vessel, east to its own riser
+  const HOT_COL =[null,29,36,43];    // the gap forward of the generator
+  const FEED_ROW=[12,14,16,15];      // from the feed pump, west to its own riser
+  const feedCol = i => X(i)+5;       // the column it climbs, two clear of the shell
+  const COLD_ROW=[26,27,28,29];      // one bilge row per loop
+  const KEEL=GH-1;
+  const coreHot  = i => seedPort("core",9,HOT_ROW[i]-13);
+  // centred on the vessel's own floor, two cells apart
   const coreCold = i => seedPort("core",faceMid(9,i,2),12);
   const coreBilge = i => 6+faceMid(9,i,2);      // the cell that return lands under
   const pCoreHot  = coreHot(0);
-  const pCoreHpi  = seedPort("core",0,12);
-  const pCoreCold = coreCold(0);
+  /* dx 1, not the corner: the fourth cold return IS the corner (faceMid spreads
+     4,2,6,0), and two ports cannot share a cell - so a four-loop plant used to
+     lose its injection line to its own last loop. */
+  const pCoreHpi  = seedPort("core",1,12);
   const pPzrSurge = seedPort("pzr",1,6);
   const pPzrRel   = seedPort("pzr",3,1);
   const pTeeL     = seedPort(tee0,-1,0);
@@ -2799,9 +2857,9 @@ function buildStockPlumbing(opt){
   const pRvR      = seedPort(rv0,1,0);
   const pRelTk    = seedPort("reltk",-1,2);
   const pHpi      = seedPort("hpi",3,2);
-  const pEfw      = seedPort("efw",-1,2);
-  const turbT     = i => seedPort("turb",faceMid(9,i),-1);
-  const pTurbT    = turbT(0);
+  const pEfw      = seedPort("efw",0,-1);      // out of the top, up and along into the tie
+  // ONE steam nozzle, because there is one main steam HEADER - see the tees below
+  const pTurbT    = seedPort("turb",4,-1);
   const pTurbB    = seedPort("turb",faceMid(9,0),7);
   const pCondT    = seedPort("cond",faceMid(9,0),-1);
   const pCondR    = seedPort("cond",9,faceMid(5,0));
@@ -2818,76 +2876,126 @@ function buildStockPlumbing(opt){
   const pRad1L    = seedPort("rad1",-1,1);
   const pRad1R    = seedPort("rad1",5,1);
   const pCondCwI  = seedPort("cond",4,5);
-  // one discharge nozzle per generator, one cell apart, and the suction below
-  const feedT     = i => seedPort("feed",faceMid(3,i),-1);
-  const pFeedT    = feedT(0);
-  const pFeedB    = seedPort("feed",1,5);
+  // one discharge nozzle per generator - the pump is as wide as it has loops
+  const feedT     = i => seedPort("feed",i,-1);
+  /* dx 0, not the middle: the condensate rises in this port's OWN column, and
+     the middle of the pump is exactly the column the cooling water has to turn
+     down in on its way to the panels - two runs, one corner, and the second
+     one silently butts. */
+  const pFeedB    = seedPort("feed",0,5);
 
+  /* THE HOT NOZZLE SITS LOW ON AN ADDED LOOP. ROLE.sg gives the primary ONE
+     left-face port, so the run has to reach that cell and no other - and the
+     cell beside the shell's top is reachable only up the column the feed line
+     rises in, which merges the two. Low, the hot leg comes in along the row
+     under the generators, which is the one band nothing else crosses. */
+  /* THE HOT NOZZLE SITS LOW ON AN ADDED LOOP. ROLE.sg gives the primary ONE
+     left-face port, so the run has to reach that cell and no other - and the
+     cell beside the shell's top is reachable only up the column the feed line
+     rises in, which merges the two. Low, the hot leg comes in along the row
+     under the generators, which is the one band nothing else crosses.
+     Loop 0 keeps the high nozzle: its hot leg arrives from the surge tee. */
   const sgPorts = i => ({
     l:     seedPort("sg"+i,-1,1),
     b:     seedPort("sg"+i,1,6),
     steam: seedPort("sg"+i,1,-1),
-    sv:    seedPort("sg"+i,2,-1),
-    feed:  seedPort("sg"+i,3,4),
-    efw:   seedPort("sg"+i,3,2),
+    feed:  seedPort("sg"+i,3,0),
   });
-  const g0 = sgPorts(0);
-  const pPump0T = seedPort("pump0",1,-1);
-  const pPump0B = seedPort("pump0",1,5);
-  const pSv0    = seedPort(sv0,0,1);
-
+  /* ══ ONE LANE PER RUN, AND THE TABLE IS THE PROOF ══
+     Between the shells and the pumps there are seven rows, and eight lines
+     want one: four hot legs and four feedwater lines. Row 14 carries two
+     because loop 0's hot leg is three cells long and stops at the surge tee,
+     west of where any feed line begins - the one legal overlap on the board.
+     A lane that shares a row with anything else MERGES with it, which is how a
+     hot leg came to land on a generator's feedwater nozzle. */
   seedRun(pCoreHot, pTeeL);                       // the hot leg out of the vessel
-  seedRun(pTeeR, g0.l, true);                     // ...and up into the generator
-  seedRun(g0.b, pPump0T, true);                   // cold leg down to the pump
-  seedRun(pPump0B, pCoreCold, false, [[27,26],[coreBilge(0),26]]);   // ...and back along the bilge
-  seedRun(pHpi, pCoreHpi, true);                  // injection, onto the same face
   seedRun(pPzrSurge, pTeeT);                      // the surge line, down onto the tee
   seedRun(pPzrRel, pRvL);                         // relief: vessel to valve...
   seedRun(pRvR, pRelTk);                          // ...and valve to tank
-  seedRun(g0.steam, pTurbT);                      // main steam - laid BEFORE the two lines that cross it
-  seedRun(g0.sv, pSv0, true);                     // the safety valve's own nozzle tap
+  seedRun(pHpi, pCoreHpi, true);                  // injection, onto the vessel's floor
   seedRun(pTurbB, pCondT, true);                  // exhaust
-  seedRun(pCondR, pFeedB, false, [[56,33],[31,33]]);      // condensate, along the keel
-  seedRun(pFeedT, g0.feed, true);                        // feedwater straight up to the shell
-  seedRun(pEfw, g0.efw);                          // the reserve's own line onto the same shell
-  /* down to row 29 and along it, NOT row 28: COLD_ROW below hands loop 2 that
-     row for its own cold return, and two runs sharing a row merge. */
-  seedRun(pCondCwO, pRad0L, false, [[44,29],[34,29]]);   // circulating water out to the first panel
+  seedRun(pCondR, pFeedB, false, [[AFT+10,KEEL],[FEEDX,KEEL]]);   // condensate, along the keel
+  /* AFT OF THE LAST PUMP, so it never meets a bilge run: the engine room moves
+     back with the loop count and the cold returns do not. */
+  seedRun(pCondCwO, pRad0L, false, [[AFT-2,29],[AFT-12,29]]);   // circulating water out to the first panel
   seedRun(pRad0R, pRad1L);                        // ...through the second, in series...
   seedRun(pRad1R, pCondCwI);                      // ...and back into the condenser's water side
 
-  /* ══ LOOPS 1..3 ══
-     Exactly what ADD STEAM GENERATOR HERE plus a pipe drag builds: a placed
-     generator, a placed pump, their own ports and six ordinary runs. Each loop
-     is given its OWN lane - its own row above the generators for the steam
-     line, its own column down to the turbine, its own row along the bilge for
-     the cold return - because two horizontal runs sharing a row would merge
-     into one line rather than crossing. There are three clear bilge rows and
-     three spare feed nozzles, so a FOURTH loop lays what it can and leaves the
-     rest dangling, which the bench's own PIPES rail then says out loud. */
-  // one bilge row and one steam column per loop, so two horizontals never
-  // share a row (they would MERGE into one line rather than crossing)
-  const COLD_ROW=[26,27,28,29], STEAM_COL=[46,50,51,52];
-  for(let i=1;i<loops;i++){
-    placePart(() => ({id:"sg"+i, name:"STEAM GEN "+(i+1), w:3, h:6, x:26+i*7, y:5,
-      col:"#5fd2e2", grp:"loop"+i, tip:"", role:"sg"}));
-    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:3, h:5, x:26+i*7, y:18,
-      col:"#57d38c", grp:"loop"+i, tip:"", role:"pump"}));
-    const svi = fitting("sv"+i,svCell(i)[0],svCell(i)[1],
-      { name:"SG SAFETY "+(i+1), mode:"relief", bore:0.55, tip:svTip });
-    buildLayout();
+  /* ══ ONE PASS, ONE LOOP AT A TIME ══
+     Six runs each, and the same six whether the loop is the fixed slot or a
+     placed pair - which is what makes "the bench can rebuild this, gesture for
+     gesture" true of a four-loop plant and not just of the reference one. */
+  const pTieL = seedPort(efwtee,-1,0), pTieR = seedPort(efwtee,1,0), pTieB = seedPort(efwtee,0,1);
+  let prevTeeR = null;
+  for(let i=0;i<loops;i++){
     const g = sgPorts(i);
     const pT = seedPort("pump"+i,1,-1), pB = seedPort("pump"+i,1,5);
-    const pSv = seedPort(svi,0,1);
-    const row = 3-i, col = STEAM_COL[i], bilge = COLD_ROW[i];
-    seedRun(coreHot(i), g.l, true);
+    const teeB = seedPort(mstee[i],0,1), teeT = seedPort(mstee[i],0,-1);
+    const teeL = i? seedPort(mstee[i],-1,0) : null;
+    const teeR = seedPort(mstee[i],1,0);
+    const pSv  = seedPort(svf[i],-1,0);
+    // primary: vessel to shell, shell to pump, pump back along its own bilge row
+    if(i) seedRun(coreHot(i), g.l, false, [[HOT_COL[i],HOT_ROW[i]],[HOT_COL[i],6]]);
+    else  seedRun(pTeeR, g.l, true);
     seedRun(g.b, pT, true);
-    seedRun(pB, coreCold(i), false, [[27+i*7,bilge],[coreBilge(i),bilge]]);
-    seedRun(g.steam, turbT(i), true, [[27+i*7,row],[col,row]]);
-    seedRun(g.sv, pSv, true);
-    seedRun(feedT(i), g.feed, true, [[30+i,16-i],[30+i*7,16-i]]);
+    seedRun(pB, coreCold(i), false, [[X(i)+1,COLD_ROW[i]],[coreBilge(i),COLD_ROW[i]]]);
+    // secondary: the nozzle faces the tee's own port across one cell - a joint,
+    // no pipe - and so does the safety valve above it
+    seedRun(g.steam, teeB);
+    seedRun(teeT, pSv);
+    if(prevTeeR) seedRun(prevTeeR, teeL);         // ...and the header, tee to tee
+    prevTeeR = teeR;
+    /* LOOP 0'S FEED LINE IS THE ONE THE RESERVE IS TIED INTO, so it is two
+       runs through the tie rather than one straight through it. */
+    if(i) seedRun(feedT(i), g.feed, false, [[FEEDX+i,FEED_ROW[i]],[feedCol(i),FEED_ROW[i]],[feedCol(i),5]]);
+    else { seedRun(feedT(0), pTieB);
+           seedRun(pTieL, g.feed, false, [[feedCol(0),FEED_ROW[0]],[feedCol(0),5]]); }
   }
+  // the header's aft end, down onto the turbine's one steam nozzle
+  seedRun(prevTeeR, pTurbT, false, [[AFT+4,2]]);
+  seedRun(pEfw, pTieR, false, [[FEEDX+Math.max(3,loops)+1,12]]);   // the reserve, up and into the tie
 
   buildLayout();
 }
 buildStockPlumbing();
+
+/* ══ WHOLE PLANTS YOU CAN START FROM ══
+   ARCHPRE buys a reactor and redraws its core; this buys the SHIP around it.
+   Every field below is either a plain D write a bench panel already makes or a
+   call the bench already has - archPreset(), latPreset(), buildStockPlumbing()
+   - so a preset cannot describe a plant the player could not have built.
+
+   It lives here rather than in lattice.js for the reason buildStockPlumbing()
+   does: it is mostly plumbing. archPreset() resolves at CALL time, so lattice.js
+   loading after this file (index.html) costs nothing.
+
+   `lat` is only ever given to a family that lays no moderator blocks - latPreset()
+   does not call latLayMod(), so handing it to RBMK or HTGR would quietly take
+   the graphite back out. */
+const PLANTPRE=[
+ ["NUSCALE",{loops:1,arch:0,lat:1,d:{cont:1,bkp:1,sg:0,pzr:0.8,chim:0.5}},
+  "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
+ ["BWR/4",{loops:2,arch:1,d:{cont:1,bkp:1,sg:0,pzr:0.7,chim:0.4}},
+  "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
+ ["BN-600",{loops:3,arch:3,d:{cont:2,bkp:2,sg:1,pzr:0.6,chim:0.4}},
+  "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it."],
+ ["EPR",{loops:4,arch:0,lat:2,d:{cont:2,bkp:2,catcher:true,sg:0,pzr:1.3,chim:0.3}},
+  "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
+ ["RBMK-1000",{loops:2,arch:2,d:{cont:0,bkp:1,sg:1,pzr:1.0,chim:0.3}},
+  "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. Boiling the water ADDS reactivity here, so the plant hunts itself and the slow rods arrive late."],
+ ["MSRE",{loops:1,arch:4,d:{cont:1,bkp:1,sg:1,pzr:0.5,chim:0.6}},
+  "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
+ ["WINDSCALE",{loops:1,arch:5,d:{cont:0,bkp:0,sg:1,pzr:0.5,chim:0.2},
+   tanks:{hpi:{gas:null,pump:null,vol:12},reltk:{vol:8},efw:{vol:5}}},
+  "A graphite pile with no containment, no backup power and an injection tank that has nothing behind it to push with. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, lift the relief and the tank is full, and the water you would inject with will not move. Fly it to see what the safeguards on every other preset are FOR."],
+];
+function plantPreset(i){
+  const q=PLANTPRE[i][1];
+  archPreset(q.arch);                    // buys the materials and redraws the core
+  if(q.lat!=null) latPreset(q.lat);
+  Object.assign(D,q.d);
+  buildStockPlumbing({loops:q.loops});   // tears the old loops down and lays the new ones
+  for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);
+  dTouch();
+  LAY=null; layoutMetrics();             // re-fit the arrangement once, not per gesture
+}
