@@ -1275,6 +1275,22 @@ function netBuild(){
        exactly resist(bore, L) - so an undamaged run is bit-identical to a
        plain number while still being LIVE against a hit that has not
        happened yet. */
+    /* ══ AND A STEAM LINE CARRIES NO LIQUID ══
+       THE SOLVER KNOWS LIQUID. A vapour run (RUN_VAPOUR, layout.js) is a real
+       pipe with a bore and a mass, but what moves in it is settled by the
+       shell pots and the governor (steamTo, step.js), never here. Priced like
+       water it tied every generator's TOP together - and those nodes are
+       FIXED at their own shell's saturation pressure, so two shells a few
+       tenths of a MPa apart drove twenty times the primary's flow backwards
+       up the header into the cooler generator. One generator has no header
+       and never showed it.
+       g 0 rather than no edge at all: netAssemble already omits an edge that
+       cannot conduct, and the edge itself is what tells net2.vapour this node
+       is a steam space and what the meters and the packets are drawn off. */
+    if(RUN_VAPOUR[r.k]){
+      edges.push({u, v, g: 0, h: 0, kind: r.k, key: r.key});
+      continue;
+    }
     edges.push({u, v, g: s => runPortsOpen(s,r) ? throttled(s, bore, L + pipeExtraLen(s, r.cells), NO_GATES) : 0,
                 h: 0, kind: r.k, key: r.key});
   }
@@ -2512,7 +2528,18 @@ function netFlowK(s, byRun, byP, outs){
        ceiling of exactly zero, which would clamp natural circulation out of
        existence: the plant would be back to a floor that ignores the plant,
        just at 0 instead of 0.24. */
-    const ceil = ref>0 ? (Math.min(group.length, up)/group.length) * ref : 0;
+    /* AND A LOOP'S SHARE IS A SHARE OF ITS OWN PLANT'S PUMP. Capacity 1 was
+       the REFERENCE machine - 7250 kg/s, a 1200 MW plant's coolant pump - so
+       "one unit per loop in the group" asked every loop to push a full-size
+       plant's water. A 55 MWt pile buys the pump a 55 MWt pile needs and was
+       clamped to 4.6 % of its own reference flow on its first tick, which is
+       an instant LOW FLOW trip on a plant nobody had touched; four pumps
+       sized for a quarter each did the same thing to a four-loop plant.
+       P.pumpCapRef is what ONE of this plant's own design pumps is worth, so
+       an untouched plant of any size is exactly 1 here and only a machine the
+       designer shrank can clamp anything. */
+    const capRef = P.pumpCapRef > 0 ? P.pumpCapRef : 1;
+    const ceil = ref>0 ? Math.min(1, up*n/(group.length*capRef)) * ref : 0;
     total += Math.min(raw, ceil + nat);
     natTot += nat;
   }
@@ -2991,11 +3018,20 @@ const PLANTPRE=[
 ];
 function plantPreset(i){
   const q=PLANTPRE[i][1];
+  /* THE LAST PLANT'S FIGURES ARE NOT THIS ONE'S. Machine sizes and control
+     positions are per-instance on D (designForget(), design.js) and outlive a
+     rebuild, so without this a preset commissioned on the previous preset's
+     generators, pumps and rod position. */
+  designForget();
   archPreset(q.arch);                    // buys the materials and redraws the core
   if(q.lat!=null) latPreset(q.lat);
   Object.assign(D,q.d);
   buildStockPlumbing({loops:q.loops});   // tears the old loops down and lays the new ones
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);
+  /* WHERE THIS PLANT'S CONTROLS STAND WHEN IT COMMISSIONS, in the one place a
+     bench control writes (D.start). Absent is not "no opinion" - it is the
+     stock PWR's opinion, which is not a gas pile's. */
+  Object.assign(D.start, q.start||{});
   dTouch();
   LAY=null; layoutMetrics();             // re-fit the arrangement once, not per gesture
 }
