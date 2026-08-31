@@ -203,6 +203,7 @@ function pipeFieldRefresh(L){
      seam contract in layers.js made true rather than merely written down:
      `under` "never lands on a value tag". */
   pipeAnchorTick();
+  pipeStackTick();
   pipeAnchors(pipeRuns(L));
   if(!L) return;
   netField(L, pipeDrop, pipeP);
@@ -435,7 +436,7 @@ function pipeUnit(key,k){
      The needle judges "backwards" against that, not against the order two part
      ids happened to sort in - see steamDir() (step.js). */
   if(runVapour(ends))
-    return {nom:steamScale(k), u:"kg/s", dir:steamDir(key,k)};
+    return {nom:steamScale(key,k), u:"kg/s", dir:steamDir(key,k)};
   return null;
 }
 /* how two-phase a line is, 0..1 - off the FLUID AT THE RUN'S OWN ENDS, not
@@ -569,28 +570,59 @@ function pipeTag(x,yTop,label,col){
      slot 1   PRESSURE     MPa
      slot 2   SUBCOOLING   K of margin
 
-   The three are INDEPENDENT: each is still its own layer with its own switch,
-   each colours itself off its own value, and a slot whose layer is off simply
-   leaves a gap rather than shuffling the others - a reading that moves line
-   when a neighbour is switched off is a reading you have to find again.
-   Slot 1 sits exactly where the pressure reading has always sat, so the line
-   the whole plant's text was laid out around does not move.
+   The three are INDEPENDENT: each is still its own layer with its own switch
+   and each colours itself off its own value. A SLOT IS AN ORDER, NOT A ROW -
+   the block holds only the readings that are on, packed and centred on the
+   pipe, so switching a layer off shortens the label rather than punching a
+   band of empty plate through the middle of it.
 
    The one round face left on the plant is the pressurizer's (pipeVessel), and
    that is bolted to a vessel rather than to a pipe. */
 const STACK_H=10;                         // one line of 6.5px ink and its plate
-const stackY = (y,slot) => y-20+slot*STACK_H;
-/* NOT pipeTag(): a tag's plate is as wide as its own string, so three of them
-   stacked gave three different widths and a ragged block with the pipe showing
-   through at each step. Every line of a stack takes the SAME width, and the
-   plate is one pixel taller than the line so the next plate starts under it
-   rather than beside it - butting two plates edge to edge leaves a hairline of
-   pipe between them wherever the view transform lands them on a half pixel. */
+/* THE BLOCK IS CENTRED ON THE ANCHOR, so it reads as that pipe's label
+   whatever it ends up holding. Slot 0 used to be pinned 20px above the point
+   and the rest hung off it, which centred a four-line stack and left a
+   one-line one floating clear of the pipe it belonged to. */
+const stackTop = (y,n) => Math.round(y-(n*STACK_H)/2);
+/* ══ ONE PLATE PER STACK, LINE-BROKEN ══
+   NOT pipeTag(), and not a plate per line either. Every reading on a run is a
+   line of the SAME rectangle: the readings are collected as they are produced
+   - each layer still draws at its own seam - and the rectangle goes down once,
+   under all of them, in one final pass. Four plates butted edge to edge left a
+   hairline of pipe between them wherever the view transform landed one on a
+   half pixel, and a slot whose layer was off punched a hole clean through the
+   block. Collected by ANCHOR POINT, which is what a stack is: every line of
+   one run is handed the same x,y. */
 const STACK_W=48;
+let stackInk=new Map();
+function pipeStackTick(){ stackInk=new Map(); }
 function pipeStackLine(x,y,slot,label,col){
-  const yT=stackY(y,slot);
-  fillRect(x-STACK_W/2,yT,STACK_W,STACK_H+1,C.bg);
-  txt(label,x,yT+8,{size:6.5,sp:.4,align:"center",color:col});
+  const k=x+","+y;
+  let e=stackInk.get(k);
+  if(!e) stackInk.set(k, e={x,y,lines:[]});
+  e.lines.push({slot,label,col});
+}
+/* The last thing the plant draws. A stack that has stood down for a hovered
+   neighbour collected nothing and so has no plate either - an empty rectangle
+   is a reading you then have to go and look for. */
+function pipeStackFlush(){
+  for(const e of stackInk.values()){
+    const ls=e.lines.slice().sort((a,b)=>a.slot-b.slot);
+    if(!ls.length) continue;
+    /* SLOT IS AN ORDER, NOT A ROW. The lines are PACKED: a switched-off layer
+       takes its line out of the block rather than leaving a band of empty
+       plate where its reading would have been. */
+    const n=ls.length, top=stackTop(e.y,n);
+    /* no spare pixel on the plate and no hand-picked baseline: the plate is
+       exactly its lines and each line is centred in its own band by cap
+       height (midBase()), which is where every other centred string on the
+       board is put. The +1 and the +8 were for butted plates and are what
+       left the block reading half a pixel low. */
+    fillRect(e.x-STACK_W/2, top, STACK_W, n*STACK_H, C.bg);
+    ls.forEach((l,i)=>txt(l.label, e.x, midBase(top+i*STACK_H,STACK_H,6.5),
+      {size:6.5,sp:.4,align:"center",color:l.col}));
+  }
+  stackInk.clear();
 }
 
 /* Where a run's readings go: the middle of a STRAIGHT stretch of it, so a
@@ -625,7 +657,36 @@ function boxClear(x,y,w,h){
    more: a run shorter than this still gets its readings, it just has fewer
    places to put them. */
 const STACK_MIN_L=2*PIPE_DIAL_R+6;
-const stackBox=(x,y)=>({x:x-STACK_W/2, y:stackY(y,0), w:STACK_W, h:3*STACK_H});
+const stackBox=(x,y,n)=>({x:x-STACK_W/2, y:stackTop(y,n||STACK_N), w:STACK_W, h:(n||STACK_N)*STACK_H});
+/* ══ A FITTING'S READING IS A LINE OF ITS PIPE'S STACK ══
+   A relief valve's margin and a throttle's share of the head used to be
+   pipeTag()s parked over the valve's own box, which is where its NAME already
+   is: two plates of different widths in one cell, and neither the allocator
+   nor boxClear() knew either was there. They are plumbing readings like the
+   other three, so they go in the same rectangle at slot 3 and the allocator
+   keeps that line clear like the rest.
+   ONE ANSWER, asked here by the allocator (which must reserve the fourth
+   line) and by pipeFitMarks() (which draws into it) - two answers and the
+   reading lands in a box nobody kept clear. Lowest key, so it does not depend
+   on the placement it is an input to. */
+const STACK_N=3;                          // lines every run carries
+const fitPidPart=pid=>{ const q=D.ports[pid]; return q?q.p:null; };
+const fitReads=p=>p.role==="fitting" &&
+  (fitModeOf(p.id)==="relief"||fitModeOf(p.id)==="throttle");
+function fitRunKey(fid,runs){
+  let best=null;
+  for(const r of runs){
+    if(fitPidPart(r.pa)!==fid && fitPidPart(r.pb)!==fid) continue;
+    if(best===null||r.key<best) best=r.key;
+  }
+  return best;
+}
+function fitStackKeys(runs){
+  const set=new Set();
+  for(const p of LAY.parts){ if(!fitReads(p)) continue;
+    const k=fitRunKey(p.id,runs); if(k!==null) set.add(k); }
+  return set;
+}
 const hit=(a,b)=>a.x+a.w>b.x && a.x<b.x+b.w && a.y+a.h>b.y && a.y<b.y+b.h;
 /* ══ EVERY RUN SHOWS EVERY VALUE IT HAS, AND NONE IT DOES NOT ══
    This used to hand out ONE anchor per KIND, so four hot legs shared one flow
@@ -690,6 +751,8 @@ function pipeAnchors(runs){
   /* Every run's spots are priced ONCE. The comparator used to build both
      sides' lists on each comparison and throw them away, so an n-run plant
      built that list O(n log n) times over and then a final time per run. */
+  const fitKeys=fitStackKeys(runs);
+  const slots=r=>fitKeys.has(r.key)?STACK_N+1:STACK_N;
   const spotsBy=new Map(), longest=new Map();
   for(const r of runs){ const sp=pipeRunSpots(r); spotsBy.set(r,sp);
     let m=0; for(const s of sp) if(s.L>m) m=s.L; longest.set(r,m); }
@@ -708,7 +771,7 @@ function pipeAnchors(runs){
        always the plain midpoint at zero cost. */
     let pick=null, bestCost=Infinity;
     for(const sp of spots){
-      const bx=stackBox(sp.x,sp.y);
+      const bx=stackBox(sp.x,sp.y,slots(r));
       let over=0;
       for(const t of taken){
         const ox=Math.min(bx.x+bx.w,t.x+t.w)-Math.max(bx.x,t.x);
@@ -722,7 +785,7 @@ function pipeAnchors(runs){
       if(cost<bestCost){ bestCost=cost; pick=sp; if(!cost) break; }
     }
     out[r.key]=pick;
-    { const bx=stackBox(pick.x,pick.y); bx.key=r.key; taken.push(bx); }
+    { const bx=stackBox(pick.x,pick.y,slots(r)); bx.key=r.key; taken.push(bx); }
   }
   anchorCache=out; anchorBoxes=taken;
   return out;
@@ -794,7 +857,7 @@ function pipeMeters(runs,L){
     /* three things the solve can actually say, kept as three sentences rather than
        one number doing all three jobs: how much, which way, and against what. No
        pressure/dP reading here - a fitting's node potentials never left pipenet.js. */
-    TIP(a.x-STACK_W/2,stackY(a.y,0),STACK_W,STACK_H,pipeLabel(k,key)+"  FLOW METER",
+    TIP(a.x-STACK_W/2,stackTop(a.y,STACK_N),STACK_W,STACK_N*STACK_H,pipeLabel(k,key)+"  FLOW METER",
       mag+" "+un.u+" - "+Math.abs(Math.round(fd*100))+
       " % of what this run carries as commissioned, undamaged, valves wide."+
       (over?" It is being pushed past what it was built for."
