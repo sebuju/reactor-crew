@@ -505,7 +505,7 @@ function drawSym(p,x,y,w,h,ink,L){
        red as a relief tank about to burst. */
     const lv = L ? tankLvl(L,id) : D.tanks[id].level;
     const rate = L ? ((L.tankRate&&L.tankRate[id])||0) : 0;
-    const src = !(tankSide(id)==="primary" && !D.tanks[id].check);
+    const src = !(tankPrimary(id) && !D.tanks[id].check);
     /* ══ A PRESSURISED TANK IS A PRESSURE VESSEL, AND IT LOOKS LIKE ONE ══
        What decides whether a tank can push at all is whether anything is
        BEHIND it - a gas charge or a pump (tankP(), pipenet.js) - and that was
@@ -812,7 +812,7 @@ function tankCtl(id){
     {kind:"btn",flex:1,k:id+":tankOpen",def:false,words:["SHUT","OPEN"],on:()=>S.tankOpen[id],text:()=>S.tankOpen[id]?"OPEN":"SHUT",
      fn:()=>{ act("tankOpen",id); },
      tip:"TANK VALVE - lines this tank up with what it is piped to. It is "
-       +(tankSide(id)==="primary"
+       +(tankPrimary(id)
          ? "a solved flow: full loop pressure against a tank charged below it delivers exactly nothing, and a depressurised loop takes a surge."
          : "drawn on by the feed pumps.")
        +"  Its automatic rule is "+(rule()?rule().label:"none")+", which opens it without you."};
@@ -828,7 +828,7 @@ function tankCtl(id){
        whether it is doing it. */
     {kind:"btn",flex:1,k:id+":tankDump",def:false,words:["DUMP","DUMP"],on:()=>S.tankDump[id],
      danger:()=>S.tankDump[id] ||
-       (!(tankSide(id)==="primary" && !t().check) && tankLvl(S,id)<HOT_NPSH),
+       (!(tankPrimary(id) && !t().check) && tankLvl(S,id)<HOT_NPSH),
      text:()=>"DUMP",
      fn:()=>{ act("tankDump",id); },
      tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."};
@@ -920,9 +920,13 @@ function ctlFor(p,live,split){
   if(p.role==="turb"){
     if(LAY.parts.find(q=>q.role==="turb")!==p) return null;
     return [
-     // P.loadMax is the commissioned copy of derived().loadMax; the bench has
-     // no P, so it asks the DESIGN - the same fallback pumpFloor() already has
-     [{kind:"sld",flex:1,k:"loadDem",def:1,sc:100,val:()=>S.load*100,min:()=>0,max:()=>(P?P.loadMax:derived().loadMax)*100,dem:()=>S.loadDem*100,
+     /* ALWAYS THE DESIGN'S OWN CEILING, never the commissioned copy. `P ?
+        P.loadMax : ...` was meant to fall back on the bench, but P exists on
+        the bench too - it is the LAST plant commissioned - so a designer
+        resizing this turbine watched the strip keep the old machine's reach.
+        A running plant cannot edit its design (designBlocked()), so the two
+        agree there and there is nothing left for the branch to choose. */
+     [{kind:"sld",flex:1,k:"loadDem",def:1,sc:100,val:()=>S.load*100,min:()=>0,max:()=>derived().loadMax*100,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}],
      // the same 5% bite the rod strip takes, against the same demand the
@@ -2135,7 +2139,7 @@ function readoutsFor(p,s){
     add("TANK LEVEL",tankLvl(s,id).toFixed(1)+" %",
       /* the same source/sink question the symbol asks, so the bar and the box
          can never disagree about whether full is good news */
-      (tankSide(id)==="primary" && !t.check)
+      (tankPrimary(id) && !t.check)
         ? band(tankLvl(s,id),0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1})
         : band(tankLvl(s,id),0,100,[[15,C.red,"LOW"],[100,C.cyan,"FULL"]],{dp:1}),
       "How much is left in it. It is not an infinite reservoir - run it dry and there is nothing behind it, and fill it past 100 % and what will not fit leaves the plant.");
@@ -2147,7 +2151,7 @@ function readoutsFor(p,s){
           : "Nothing is holding this tank up. With neither a pump nor a gas charge it sits at zero and can only ever be filled.");
     add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
       "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
-    if(tankSide(id)==="primary"){
+    if(tankPrimary(id)){
       /* THE COLOUR READS THE PRINTED NUMBER, not the solved one. A bare sign
          test on a solved quantity is exactly the thing this codebase does not
          do: the network returns a difference of large numbers, so a shut tank
@@ -2183,7 +2187,7 @@ function readoutsFor(p,s){
      layout.js), never of the id "feed". There is one pump role, so which
      panel a pump gets is a question about where it is piped. */
   } else if(roleHead(p.role) && secGensOf(id).length){
-    { const arm=tankRuleAny(s,"secondary"), any=secTankIds().some(id=>D.tanks[id].auto!=="always"&&D.tanks[id].auto!=="manual");
+    { const arm=tankRuleAny(s,tankSecondary), any=secTankIds().some(id=>D.tanks[id].auto!=="always"&&D.tanks[id].auto!=="manual");
       add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
         "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time."); }
   } else if(p.role==="radiator"){

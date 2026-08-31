@@ -13,7 +13,7 @@ const M=require('./bundle').headless(
  'setSplit,setCommon,bankAutoLive,tProg,ROD_RATE,AUTOROD_GAIN,AUTOROD_LEAD,'+
  'seedRng,srand,roll,DICE:()=>DICE,'+
  'pumpCap,totalPumpCap,placePart,removePart,addFitting,addRun,addRunPorts,addPort,removePort,portMove,removeRun,fittableList,'+
- 'primaryPump,pumpIds,flowPri,flowDemPri,secGensOf,secondaryNode,tankSide,crossTies,'+
+ 'primaryPump,pumpIds,flowPri,flowDemPri,secGensOf,secondaryNode,tankCircuit,tankPrimary,tankSecondary,crossTies,selfRuns,'+
  'loopKg,hotMass,turbCount,condCount,roleAlive,mwE,'+
  'loopOf,loopOfKey,loopPumpCap,faceAt,portPath,portWord,portMode,portModeNext,portPos,runEndsOf,portRunCount,hasHeatSink,pzrLive,ROLE:()=>ROLE,'+
  'runKindFor,buildStockPlumbing,pzrPlumbed,datumPart,designBlocked,designIssues,'+
@@ -23,7 +23,7 @@ const M=require('./bundle').headless(
  'layoutMetrics,radAt,radSolve,radGeom,radSrc,radPeak,RAD_HI,repairStart,radWorkK,RAD_SLOW,'+
  'netBuild,netFlowK,setPipeK,setPumpH0,setHeadK,netPressures,netDrops,'+
  'VALVE_RATE,hittableRunKeys,pipeCells,pipePart,'+
- 'primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,reliefRate,reliefFullRate,PIPE_BORE:()=>PIPE_BORE,'+
+ 'primaryRelief,reliefFitIds,reliefAnyOpen,reliefAnyStuck,reliefRate,reliefFullRate,PIPE_BORE_MM:()=>PIPE_BORE_MM,boreK,'+
  'reliefSet,porvLive,PORV_LIFT0,PORV_RESEAT0,autoLive,AUTOSYS:()=>AUTOSYS,'+
  'paramsForFit,readoutsForFit,SGT:()=>SGT,sgCount,invRate,tankPoolPct,tankRuleAny,tanks:()=>D.tanks,FLUID:()=>FLUID,AUTORULE:()=>AUTORULE,tankLvl,tankP,tankLive,tankOpen,tankIds,tankKg,tankRateRef,tankFluid,hostedTankIds,boronTankIds,addTank,'+
  'sgIds,sglMin,sgLvl,sgShare,netExpSurge,secP,BETA_W,LVL_K,LOG:()=>LOG}');
@@ -1116,7 +1116,7 @@ console.log('\n=== STUPID PIPE LAYOUTS ===');
      three. Off partName(), so a tank the player RENAMED is logged under the
      name they gave it rather than its internal id. */
   const s2=set({}); s2.P=2.0;
-  for(const id of M.tankIds()) if(M.tankSide(id)==='primary' && !s2.tankOpen[id]) M.act('tankOpen',id);
+  for(const id of M.tankIds()) if(M.tankPrimary(id) && !s2.tankOpen[id]) M.act('tankOpen',id);
   run(s2,20);
   const injLine=M.LOG().find(e=>e.msg==='INJECTING');
   if(!injLine) bad('three primary tanks opened against a 2 MPa loop and nothing logged INJECTING');
@@ -3642,7 +3642,7 @@ console.log('\n=== STAGE 5D: A SYSTEM WITH MASS IS A PART, NOT A CHECKBOX ===');
        the tank not being there, and nothing here names it: what makes a tank
        emergency feed is that it is on the secondary and opens itself on low
        generator level. */
-    const efwIds=()=>M.tankIds().filter(id=>M.tankSide(id)==='secondary' && M.tanks()[id].auto==='sglow');
+    const efwIds=()=>M.tankIds().filter(id=>M.tankSecondary(id) && M.tanks()[id].auto==='sglow');
     const on=stockFig({});
     const nOn=efwIds().length;
     const off=stockFig({}, ()=>{ for(const id of efwIds()) delete M.tanks()[id]; });
@@ -4145,7 +4145,7 @@ console.log('\n=== SECONDARY INVENTORY ===');
   { const s=set({}); run(s,10);
     const genKg=st=>{ let m=0; for(const g of M.sgIds()) m += M.sgLvl(st,g)/100*SGT[M.D().sg].water*1000; return m; };
     const tankKgOf=st=>{ let m=0;
-      for(const id of M.tankIds()) if(M.tankSide(id)==='secondary') m += st.tank[id]/100*M.tankKg(id);
+      for(const id of M.tankIds()) if(M.tankSecondary(id)) m += st.tank[id]/100*M.tankKg(id);
       return m; };
     const total=st=>genKg(st)+tankKgOf(st);
     const t0=total(s), g0=genKg(s);

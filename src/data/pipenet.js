@@ -14,12 +14,22 @@ let PIPE_K = 0.006;
 // scales as 1/bore^2, so a narrow branch (HPI, relief) chokes itself down
 // without needing a PIPE_K of its own. relief is every relief fitting's own
 // bore - see FIT.relief and reliefFullRate() below.
-const PIPE_BORE = {hot:1, cold:1, surge:.30, hpi:.25, relief:.20, boron:.20};
-/* This table is now a set of DEFAULTS, not permissions: every run carries
+/* ══ A BORE IS A DIAMETER, IN MILLIMETRES ══
+   These were dimensionless ratios, so no run had a VOLUME anywhere: bore was
+   a number, r.L was metres, and nothing multiplied them into cubic metres. A
+   real bore gives every run a holdup. 750 mm is a real hot-leg inside
+   diameter for a plant this size and it is the reference every conductance
+   was linearised about, so runBore() below still hands back exactly what it
+   handed back. */
+const BORE_REF = 750;
+const PIPE_BORE_MM = {hot:750, cold:750, cw:750, surge:225, hpi:187.5, relief:150, boron:150};
+/* A FITTING'S bore is still a fraction of the reference run it sits in, so
+   this is the one conversion between the two - never a second table. */
+const boreK = kind => (PIPE_BORE_MM[kind] !== undefined ? PIPE_BORE_MM[kind] : BORE_REF)/BORE_REF;
+/* This table is a set of DEFAULTS, not permissions: every run carries
    conductance whether or not its kind has a row here (see netBuild()'s single
-   edge loop, below) - PIPE_BORE only ever picks the STARTING bore a fresh run
-   of that kind gets, the seam Stage 3a overrides once bore becomes the
-   player's own choice, same as D.pumpSize already is.
+   edge loop, below) - PIPE_BORE_MM only ever picks the STARTING bore a fresh
+   run of that kind gets, and D.bore[key] is the player's own choice.
    steam, feed and exh still have no row, and that is now a decision rather
    than an omission. A feedwater line really is narrower than a hot leg, but
    what a feed pump's head is actually spent on is its REGULATING TRAIN, and
@@ -28,9 +38,30 @@ const PIPE_BORE = {hot:1, cold:1, surge:.30, hpi:.25, relief:.20, boron:.20};
    twice and re-fit FEED_DP against it. Steam and exhaust carry no solved flow
    at all (the solver knows liquid), so a bore for them would be a number with
    nothing behind it. Full-bore, identical to hot/cold, until someone measures
-   one. Route every bore read through this resolver, never PIPE_BORE[r.k]
+   one. Route every bore read through this resolver, never PIPE_BORE_MM[r.k]
    directly, or the fallback lives in two places and can disagree. */
-const runBore = r => PIPE_BORE[r.k] !== undefined ? PIPE_BORE[r.k] : 1; // DEFAULT: PIPE_BORE picks a starting bore, never gates an edge's existence
+const runBoreMm = r => (D.bore && D.bore[r.key] !== undefined) ? D.bore[r.key]
+                     : (PIPE_BORE_MM[r.k] !== undefined ? PIPE_BORE_MM[r.k] : BORE_REF);
+// DEFAULT: PIPE_BORE_MM picks a starting bore, never gates an edge's existence
+const runBore = r => runBoreMm(r)/BORE_REF;
+/* THE HOLDUP OF A RUN, m^3 - the thing a dimensionless bore could never give.
+   r.L is metres, so this is the cylinder and nothing else. */
+const runVol = r => Math.PI/4*Math.pow(runBoreMm(r)/1000, 2)*r.L;
+/* ══ AND EVERY MACHINE STATES ITS HOLDUP ══
+   m^3 of fluid. A node with no volume is a node with no time constant, and
+   carrying an enthalpy along the flows needs one everywhere. Stated where the
+   machine already states it - a tank IS cubic metres, a generator's shell is
+   its own water charge - and taken off the BOX otherwise, which is the same
+   honesty the radiator's area has: a bigger machine holds more.
+   PART_VOL_CELL is the ship's own scale and is a free parameter, like
+   RAD_AREA_CELL beside it. */
+const PART_VOL_CELL = 0.35;
+function partVol(pid){
+  const p = partOf(pid); if(!p) return 0;
+  if(p.role === "tank") return Math.max(0.1, (D.tanks[pid]||{vol:0}).vol);
+  if(p.role === "sg")   return Math.max(0.1, sgRowOf(pid).water);
+  return Math.max(0.1, p.w*p.h*PART_VOL_CELL);
+}
 
 /* WHAT A METRE OF PIPE WEIGHS, and it is a MASS term only - nothing here may
    ever reach a conductance, or PIPE_K stops cancelling.
@@ -347,9 +378,50 @@ const satSlope = (c,p) => Math.max(p,c.pFloor)/(c.n*satT(c,p));
    copied off the primary curve: 6.9 MPa/558 K and 0.01 MPa/319 K are both real
    steam-table points, and 0.10 could not hold both - it put a condenser under
    vacuum at 290 K, which is colder than the river it rejects into. */
-const SAT_WATER = {p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1};
-const tsatSec = p => satT(SAT_WATER, p);
-const psatSec = T => satP(SAT_WATER, T);
+/* A CURVE WITHOUT ITS OWN hfg IS HALF A FLUID. 1510 kJ/kg is feedwater to
+   saturated steam at these anchors, and it was a separate constant in step.js
+   that nothing tied to the curve it belonged to. */
+/* cp is CP_W (step.js) on BOTH curves, because that is the one specific heat
+   this model already prices every loop's inventory at (loopKg()*CP_W). A curve
+   with a cp of its own that disagreed with the pot integrating against it
+   would be two answers to one question. */
+const SAT_WATER = {p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1, hfg:1510, cp:5.5};
+/* ══ ENTHALPY, ON THE CURVE THE CIRCUIT ACTUALLY CARRIES ══
+   Specific enthalpy, kJ/kg, measured from H_DATUM. Three straight lines: a
+   subcooled liquid rising at cp, a flat two-phase shelf that costs hfg to
+   cross, and superheat rising at cp again. That is enough to MIX honestly -
+   which is the whole point - without a steam table this game has no use for.
+   satH()/satHg() are the two ends of the shelf at a stated pressure. */
+const H_DATUM = 273.15;
+const satH  = (c,p) => c.cp*(satT(c,p) - H_DATUM);
+const satHg = (c,p) => satH(c,p) + c.hfg;
+// what a fluid at this temperature is worth, taken as liquid: the seed and
+// the way a pot's temperature enters the field
+const hOfT  = (c,T) => c.cp*(T - H_DATUM);
+/* And back. Below the shelf and above it a temperature is what the enthalpy
+   says; ON the shelf every enthalpy is the same temperature, which is exactly
+   what saturation means. */
+const tOfH  = (c,p,h) => { const hf=satH(c,p);
+  if(h <= hf) return H_DATUM + h/c.cp;
+  const hg=hf+c.hfg;
+  return h >= hg ? satT(c,p) + (h-hg)/c.cp : satT(c,p); };
+/* STEAM QUALITY - the share of the mass that is vapour. Below the shelf it is
+   0, above it 1, and in between it is where on the shelf you are. Nobody
+   declares this anywhere: it falls out of what flowed in. */
+const xOfH  = (c,p,h) => { const hf=satH(c,p);
+  return clamp((h-hf)/c.hfg, 0, 1); };
+/* ══ A FLUID IS A PROPERTY OF THE CIRCUIT ══
+   These two used to read SAT_WATER unconditionally, which is the sentence "the
+   secondary is water, whatever the primary is". They take a CIRCUIT INDEX now
+   and this is the one place that answers it: the core's circuit rides the
+   architecture (P.sat, built in commission()), and every other circuit is
+   water until something says otherwise. No argument still means water, so a
+   caller that genuinely has no circuit to hand reads what it always read. */
+const satOfCirc = ci => (ci!==null && ci!==undefined && ci>=0 &&
+  ci===nodeGraph().coreCirc && typeof P!=="undefined" && P && P.sat) ? P.sat : SAT_WATER;
+const tsatSec = (p, ci) => satT(satOfCirc(ci), p);
+const psatSec = (T, ci) => satP(satOfCirc(ci), T);
+const hfgOfCirc = ci => satOfCirc(ci).hfg;
 
 /* ══ STEAM OVER WATER, AT THE PRESSURE IT IS ACTUALLY AT ══
    The density ratio drift flux reads (core2d.js). It was a typed 0.05, which is
@@ -386,7 +458,7 @@ const secP = (s, id) => {
      is asking the same question. */
   if(id!==undefined && s.sgBurst && s.sgBurst[id]) return P.Pcont;
   const T = id!==undefined && s.sgTBy ? s.sgTBy[id] : undefined;
-  return T===undefined ? secPTarget(s,id) : Math.max(COND_P0, psatSec(T));
+  return T===undefined ? secPTarget(s,id) : Math.max(COND_P0, psatSec(T, id===undefined?undefined:shellCirc(id)));
 };
 // rated leak, in % of loop inventory per second, at the design differential -
 // the flat rate this used to run at, kept as the scale and turned into a
@@ -506,10 +578,16 @@ const AUTORULE = {
              would be inventing hydraulics the secondary does not have. */
 /* NO `side` ROW. Which side a tank is on is not config and never was a choice
    the designer should have been asked to make - it is read off the runs
-   (tankSide(), layout.js). A new tank starts connected to nothing and is on
+   (tankCircuit(), layout.js). A new tank starts connected to nothing and is on
    no side at all until somebody draws a pipe to it. */
+/* ══ A TANK'S SIZE IS A VOLUME, m^3 ══
+   `vol` was a PERCENTAGE of whichever side's reference inventory the tank
+   happened to be plumbed to, so the same tank changed size when somebody
+   moved its pipe. It is cubic metres now and it is the same number wherever
+   it is piped. */
+const TANK_RHO = 1000;                 // kg/m^3 - cold water, which is what a tank holds
 const TANK_DEFAULT = {
-  vol:40, level:100, fluid:"water",
+  vol:35, level:100, fluid:"water",
   gas:{p0:4.5, frac:0.35}, pump:null, check:true, auto:"manual", burst:null,
 };
 /* ══ ONE FITTING. No kinds, no presets, no special cases ══
@@ -528,7 +606,7 @@ const FIT_DEFAULT = {
   tip:"A fitting in the pipe. Say what it is on its own panel - a tee that joins two lines, a throttle you can close, or a relief valve that lifts on pressure.",
 };
 const tankIds   = () => Object.keys(D.tanks);
-const secTankIds= () => tankIds().filter(id=>tankSide(id)==="secondary");
+const secTankIds= () => tankIds().filter(id=>tankSecondary(id));
 /* A tank with no cell has no box on the grid and no node - which is what a
    SECONDARY tank is allowed to be. It is HOSTED: the hotwell lives inside the
    condenser it condenses into, and the condenser draws it. */
@@ -537,15 +615,11 @@ const hostedTankIds = () => tankIds().filter(id=>!D.tanks[id].cell);
    Zero of them is a legal plant; four is a legal plant, and four of them are
    worth four times one. */
 const boronTankIds = () => tankIds().filter(id=>
-  tankSide(id)==="primary" && tankFluid(id).boron>0);
-/* A tank's capacity in the units its OWN side counts in: % of loop inventory
-   for the primary (invRate()'s currency), kilograms for the secondary. One
-   conversion per side, so a solved flow reaches a level and a mass balance
-   without either side inventing a second one. */
-/* A tank in NEITHER component - placed, piped to nothing - is priced in the
-   loop's own currency: it is not the secondary's water either, and a scale it
-   has to have has to be something. */
-const tankKg = id => D.tanks[id].vol/100*(tankSide(id)==="secondary" ? hotMass() : loopKg());
+  tankPrimary(id) && tankFluid(id).boron>0);
+/* Kilograms, off the tank's own volume and nothing about where it is piped.
+   There is one currency now: a tank on no circuit at all holds exactly what a
+   tank of that size holds. */
+const tankKg = id => D.tanks[id].vol*TANK_RHO;
 /* Several tanks lined up together behave as one tank of their combined size.
    Two questions, one answer: how much is in the pool, and how full it is. */
 const tankPoolKg = (s,list) => { let m=0;
@@ -630,8 +704,8 @@ const tankRuleLive = (s,id) => {
   const a = D.tanks[id].auto;
   return a!=="manual" && a!=="always" && !(s.tankByp && s.tankByp[id]);
 };
-const tankRuleAny = (s,side) => tankIds().some(id =>
-  tankSide(id)===side && tankRuleLive(s,id));
+const tankRuleAny = (s,pick) => tankIds().some(id =>
+  (!pick || pick(id)) && tankRuleLive(s,id));
 /* Can this tank's own edge carry anything at all? Valve, diode, and one more:
    an EMPTY tank has nothing to give. Stated as "or the loop is above me", not
    as a bare level test, because a tank at 0 with the loop above it can still
@@ -923,6 +997,33 @@ function foldMap(){
   return m;
 }
 const coreFold = raw => foldMap()[raw] || raw;
+/* WHICH CIRCUIT A NODE IS ON. The graph is keyed on partId+face and a FOLDED
+   node is the bare part id, so the face is stripped only when the whole name
+   is not itself a part. Cached on the graph, because the advection sweep asks
+   it once per node per tick. */
+function circOfNode(nid){
+  const G=nodeGraph(), slot=graphSlot("circOfNode");
+  const hit=slot.get(nid); if(hit!==undefined) return hit;
+  let c=G.circuit[nid];
+  if(c===undefined){
+    const p=partOf(nid) || partOf(nid.slice(0,-1));
+    if(p) for(const n of (G.nodesOf[p.id]||[])){ if(n===nid || n.slice(0,-1)===p.id){ c=G.circuit[n]; break; } }
+  }
+  if(c===undefined) c=-1;
+  slot.set(nid,c); return c;
+}
+/* WHICH RUNS CAN CARRY NOTHING. Both ends fold onto the SAME node, so there is
+   no potential difference across the pipe and never can be. Legal to draw and
+   the bench only says so; a run between two DIFFERENT faces of one part is a
+   recirculation line and is not this. */
+function selfRuns(){
+  const out=[];
+  for(const c of pipeMap().conns){
+    const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
+    if(coreFold(a.id+c.sa) === coreFold(b.id+c.sb)) out.push(c.key);
+  }
+  return out;
+}
 
 /* ══════════ ELEVATION: A NODE IS A HEIGHT AS WELL AS A NAME ══════════
    Metres above the bottom of the grid, taken from the GRID (p.y and MPC),
@@ -969,43 +1070,39 @@ const NT_HOT = 1, NT_COLD = 2;
    stands. See condDisplayT()/condTag below for how the condenser side is
    grounded, by NODE rather than by kind. */
 const KIND_TEMP = {hot: NT_HOT, surge: NT_HOT, cold: NT_COLD, hpi: NT_COLD};
-const nodeT = (net, i, s) => {
-  const t = net.tag[i], dt = s.coreDT || 0;
-  return t === NT_HOT ? s.Tavg + dt/2 : t === NT_COLD ? s.Tavg - dt/2 : s.Tavg;
-};
 
-/* The condenser side of the secondary - condensate near its own saturation
-   point, not the primary loop's Tavg. Deliberately kept OUT of net.tag/
-   nodeT(): those two feed buoyH(), and the isothermal invariant (audit-
-   physics.js) requires EVERY static head identically 0 when s.coreDT is 0,
-   at ANY elevation - a fixed, s.Tavg-independent constant sitting in that
-   path would manufacture a static head on these edges regardless, even
-   though none of them can carry current (each is a dead end off a fixed
-   node - see net2.condNode). This is DISPLAY ONLY: netTempAt() consults it
-   before nodeT(), nothing in the solve ever does. Tagged by NODE (below, in
-   netBuild(), flood-filled outward from net2.condNode so it can reach turbb
-   and feedb without a kind check that would also catch feedl-sg0b - see the
-   "feed" gap in KIND_TEMP's own comment). A CONSTANT rather than
-   tsat(secP(s)): every one of these nodes is on the condenser's side of the
-   turbine, at the plant's one low-pressure sink, so one saturation figure
-   serves all of them until Stage 6 solves a real one. Before this existed, a
-   severed-looking run here (nothing grounded its TEMPERATURE, only its
-   pressure) printed subcooling around -235 K on the PRESSURE layer -
-   measured, not a guess - because tsat() of a real ~0.01 MPa condenser
-   pressure was compared against a Tavg left over from the primary loop. */
-const condDisplayT = () => RAD_TDES + COND_DT0;
 
-/* The temperature at a node, asked by id - the same hot/cold split the
-   buoyancy heads consume, so density and subcooling can never disagree about
-   how hot a leg is. A node this graph does not carry sits at Tavg, which is
-   what "somewhere in the loop, unspecified" means. */
+/* ══ THE FIELD, READ BACK ══
+   Every node carries an ENTHALPY now (s.hBy, advected in step()), so a
+   temperature is what that enthalpy says at that node's own pressure on that
+   circuit's own curve. It used to be a two-state tag: every "hot" node in the
+   plant read one number and every "cold" node another, so a tee joining steam
+   and water was not mis-modelled, it was not representable.
+   A node the field has not reached yet sits at Tavg, which is what "somewhere
+   in the loop, unspecified" means and what the seed writes anyway. */
+const netSatOf = nid => satOfCirc(circOfNode(nid));
+function netHAt(s, nid){
+  const h = s.hBy && s.hBy[nid];
+  return h === undefined ? hOfT(netSatOf(nid), s.Tavg===undefined?P.Tref:s.Tavg) : h;
+}
+/* FLOORED AT THE PLANT'S OWN VACUUM. The solve carries PIEZOMETRIC head, so a
+   pump's suction node legitimately sits below every pressure a gauge would
+   print, and asking the saturation curve about 1e-4 MPa put a condensate line
+   at 215 K - a phase reading off a number that is not a pressure. COND_P0 is
+   the best vacuum this plant can ever pull and is the same floor secP()
+   already applies. */
+function netPAt(s, nid){
+  const f = s.pBy && s.pBy[nid];
+  return Math.max(COND_P0, f === undefined ? (s.P===undefined?P.P0:s.P) : f);
+}
 function netTempAt(s, nid){
-  const net = P && P.net;
-  if(!net) return s.Tavg;
-  const i = net.index[nid];
-  if(i === undefined) return s.Tavg;
-  if(net.condTag && net.condTag[i]) return condDisplayT(); // DISPLAY ONLY - never read by buoyH()
-  return nodeT(net, i, s);
+  const c = netSatOf(nid);
+  return tOfH(c, netPAt(s,nid), netHAt(s,nid));
+}
+/* Steam quality at a node, 0..1 - computed, never declared. */
+function netQualAt(s, nid){
+  const c = netSatOf(nid);
+  return xOfH(c, netPAt(s,nid), netHAt(s,nid));
 }
 
 /* Is this node a steam space? net2.vapour's structural answer, asked by node
@@ -1046,11 +1143,16 @@ function netVapourAt(nid){
    elevation and so cannot drive anything. netPressures() takes the column
    back off, which is what makes a vessel hung below the pressurizer read
    HIGHER than it. */
+/* ONE TICK OLD, deliberately - the field is advected along the flows this
+   solve produces, so it cannot also be an input to it. The same s.coreDT
+   idiom every other feed-forward in this sim uses. A plant whose nodes have
+   all equilibrated reads dT identically 0 at every elevation, which is the
+   isothermal property the auditor pins. */
 const buoyH = (net, ed, s) => {
   const dz = net.z[ed.u] - net.z[ed.v];
   if(dz === 0) return 0;
-  const dT = (nodeT(net, ed.u, s) + nodeT(net, ed.v, s))/2
-           - (s.Tavg === undefined ? P.Tref : s.Tavg);
+  const T0 = s.Tavg === undefined ? P.Tref : s.Tavg;
+  const dT = (netTempAt(s, net.name[ed.u]) + netTempAt(s, net.name[ed.v]))/2 - T0;
   if(dT === 0) return 0;
   return -BUOY_PER_K*BUOY_LIN*dT * G_MPA * dz;
 };
@@ -1148,6 +1250,14 @@ function netBuild(){
     const ends = runEnds(r.key, r.k);
     if(!ends) continue;
     const u = nodeIdx(coreFold(ends[0])), v = nodeIdx(coreFold(ends[1]));
+    /* A SELF-CONNECTION IS LEGAL AND MUST BE INERT. A run from a face back to
+       itself is placeable and unguarded, and the edge only cancelled to zero
+       because the arithmetic happened to - never rely on a solved quantity
+       landing on exactly zero. The skip that used to live only on the internal
+       paths below is asked of EVERY edge here. A run between two DIFFERENT
+       faces of one part is not this case: it is a recirculation line, a real
+       machine, and it stays and solves. */
+    if(u === v) continue;
     const bore = runBore(r), L = r.L;
     const tid = tankIdOf(ends[0]) || tankIdOf(ends[1]);
     if(tid){
@@ -1311,7 +1421,7 @@ function netBuild(){
                              still turning, so it keeps a fifth of its head
                              rather than none. Nothing measured says a fifth. */
                           * (1 - 0.8*((s.cavP && s.cavP[li]) || 0)))
-          : (s => PUMP_H0 * pumpCap(pumpSizeOf(p.id)) * flowOf(s, p.id));
+          : (s => PUMP_H0 * pumpCapOf(p.id) * flowOf(s, p.id));
       }
     }
     edges.push(edge);
@@ -1571,11 +1681,63 @@ function netBuild(){
      "condr" outright and so could only ever see a part called `cond`. Off
      ROLE.thermal === "sink", the same declared field hostPartOf() reads, never
      an id. */
+  /* AND THE ANCHOR IS THE CONDENSING VOLUME, not the whole machine. A surface
+     condenser says which of its paths holds that volume (`anch`); its
+     circulating-water side is ordinary plumbing, and a radiator is no anchor
+     at all - it sheds heat, it does not hold a saturated space. Fixing every
+     face of every sink drove a real flow round a dead-ended cooling circuit,
+     because two fixed nodes with different elevations are a pump. A sink that
+     declares no path is one node and is taken whole, exactly as before. */
+  /* ══ HOLDUP, PER NODE ══
+     A part's own volume shared over the nodes it actually has, plus half of
+     each run that lands on it - the ordinary staggered split, so no cubic
+     metre is counted twice and none is lost. Floored, because a node with
+     zero volume would divide by zero in the advection sweep and because a
+     machine nobody piped still has water in it. */
+  // index the other way: the advection sweep and buoyH() both address nodes
+  // by NAME, because that is what survives a snapshot (snapVal(), record.js)
+  net2.name = new Array(net2.n);
+  for(const nid in index) net2.name[index[nid]] = nid;
+  net2.vol = new Float64Array(net2.n);
+  { const nodesOfPart = {};
+    // a FOLDED node is the bare part id (the core's plenum, a tee), so ask
+    // for the whole name first and only then strip a face off it
+    const partOfNodeV = nid => byId[nid] || partOfNode(nid);
+    for(const nid in index){ const q = partOfNodeV(nid);
+      if(q) (nodesOfPart[q.id] || (nodesOfPart[q.id] = [])).push(index[nid]); }
+    for(const pid in nodesOfPart){ const list = nodesOfPart[pid], v = partVol(pid)/list.length;
+      for(const i of list) net2.vol[i] += v; }
+    for(const r of net){ const ends = runEnds(r.key, r.k); if(!ends) continue;
+      const u = index[coreFold(ends[0])], v = index[coreFold(ends[1])];
+      const half = runVol(r)/2;
+      if(u !== undefined) net2.vol[u] += half;
+      if(v !== undefined) net2.vol[v] += half; }
+    for(let i=0;i<net2.n;i++) if(!(net2.vol[i] > 1e-3)) net2.vol[i] = 1e-3; }
+
   net2.condNode = {};
   for(const q of LAY.parts){
-    if(!ROLE[q.role] || ROLE[q.role].thermal !== "sink") continue;
-    for(const f of ["t","r","l","b"]) if((q.id+f) in index) net2.condNode[q.id+f] = index[q.id+f];
+    const R = ROLE[q.role];
+    if(!R || R.thermal !== "sink") continue;
+    const faces = [];
+    if(R.internal){ for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+      if(!IN.anch) continue;
+      if(IN.anch.indexOf("a")>=0) faces.push(IN.a);
+      if(IN.anch.indexOf("b")>=0) faces.push(IN.b); } }
+    else faces.push("t","r","l","b");
+    for(const f of faces) if((q.id+f) in index) net2.condNode[q.id+f] = index[q.id+f];
   }
+
+  /* ══ AN EDGE BETWEEN TWO FIXED NODES IS NOT AN EDGE ══
+     Both ends are boundary conditions, so nothing about the plant decides what
+     crosses it - only the elevation between two numbers somebody else set,
+     which showed up as tens of thousands of kilograms a second circulating
+     inside the condenser and swamping the enthalpy sweep. It carried no
+     information before this stage either: the two faces were one folded node
+     and there was no edge at all. */
+  { const fixed = net2.condNode;
+    for(let i=edges.length-1;i>=0;i--)
+      if(fixed[net2.name[edges[i].u]] !== undefined && fixed[net2.name[edges[i].v]] !== undefined)
+        edges.splice(i,1); }
 
   /* Which side of the loop each node sits on, built from the RUNS that touch
      it so no component has to be named. A node the hot legs reach is hot, one
@@ -1607,34 +1769,20 @@ function netBuild(){
       if(!(ed.vapV || k)) net2.vapour[ed.v]=0;
     }
     for(let i=0;i<net2.n;i++) if(!any[i]) net2.vapour[i]=0; }
+/* ══ net2.tag IS A LABEL NOW, AND ONLY A LABEL ══
+     It used to be the plant's only answer to "how hot is it here", flooded
+     onto nodes off the run KIND and read by nodeT() and through it by
+     buoyancy. Every one of those readers is gone: a node carries a real
+     enthalpy (s.hBy) and buoyH() reads the temperature that enthalpy says.
+     What is left is a direction and animation label - which side of the core
+     a run leaves by - and that IS a property of the kind, so it stays keyed
+     on one. Nothing in the heat balance may read it again. */
   net2.tag = new Uint8Array(net2.n);
   for(const ed of edges){
-    const b = KIND_TEMP[ed.kind] || 0; // DEFAULT: fluid-side guess by kind, until Stage 6 solves one
+    const b = KIND_TEMP[ed.kind] || 0;
     if(b){ net2.tag[ed.u] |= b; net2.tag[ed.v] |= b; }
   }
   for(let i=0;i<net2.n;i++) if(net2.tag[i] === (NT_HOT|NT_COLD)) net2.tag[i] = 0;
-  /* condTag is a SEPARATE, DISPLAY-ONLY map - see condDisplayT()'s own
-     comment for why it cannot live in net2.tag. Flood-filled exactly one hop
-     out from the condenser's own two ports, along whatever edge reaches them
-     (turbb via the exhaust run, feedb via the feed-suction run). One hop
-     ONLY, and that is now a deliberate limit rather than a free consequence:
-     the turbine is still a dead end, but a feed pump carries a casing edge
-     like any other pump, so a second hop would run up the discharge and put
-     condenser temperature on the generator's shell. What is wanted here is
-     the cold end of the condenser, not the whole secondary.
-     Skips any node net2.tag already claims, which is what keeps this
-     from ever reaching sg0b - the feed run that shares it (feedl-sg0b) is a
-     SEPARATE run from the one condr connects to (condr-feedb), so nodes
-     grown from condNode never touch it, but the guard is kept anyway rather
-     than relying on that staying true. */
-  net2.condTag = {};
-  { const seeds=[]; for(const k in net2.condNode) seeds.push(net2.condNode[k]);
-    for(const i of seeds) net2.condTag[i] = true;
-    for(const ed of edges){
-      if(seeds.indexOf(ed.u)>=0 && net2.tag[ed.v]===0) net2.condTag[ed.v] = true;
-      else if(seeds.indexOf(ed.v)>=0 && net2.tag[ed.u]===0) net2.condTag[ed.u] = true;
-    } }
-
   /* ── WHAT A FEEDWATER PUMP HAS TO BEAT ──
      Two parts, and only the second is the pump doing anything. The first is
      the standing difference between the two FIXED nodes the pump spans - a
@@ -2562,7 +2710,7 @@ function buildStockPlumbing(opt){
 
   tank("hpi",1,19,{ name:"HPI TANK", col:"#5aa9d6",
     tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
-    vol:65, level:100, fluid:"water",
+    vol:57, level:100, fluid:"water",
     /* Pumped, and no nitrogen charge behind it - so it is worth exactly
        nothing in a blackout. Give it a `gas` and drop the pump and it is a
        passive accumulator, which is the one injection path a blackout does
@@ -2572,7 +2720,7 @@ function buildStockPlumbing(opt){
 
   tank("reltk",23,0,{ name:"RELIEF TANK", col:"#8a6cd0",
     tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
-    vol:40, level:0, fluid:"contaminated",
+    vol:35, level:0, fluid:"contaminated",
     /* At rest the gas sits at containment pressure, which is what makes an
        empty tank cost the relief path exactly nothing. frac is 25/23 because
        the law this replaces compressed at 0.92 per unit level, and
@@ -2586,7 +2734,7 @@ function buildStockPlumbing(opt){
      blocked cell is not a warning, it is a run that silently fails to lay. */
   tank("efw",55,0,{ name:"EFW TANK", col:"#5aa9d6",
     tip:"Independent feedwater reserve and pump, piped straight to the generator. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
-    vol:35, level:100, fluid:"condensate",
+    vol:19, level:100, fluid:"condensate",
     /* Its own pump, on the backup bus, at a real discharge pressure. 8.0 MPa
        clears a generator's shell at any level it can be needed at; what keeps
        it shut on a healthy plant is its AUTORULE, not its pressure, because
@@ -2603,7 +2751,7 @@ function buildStockPlumbing(opt){
        take a generator's WHOLE charge back plus what an emergency reserve
        pushes through it, or the answer to losing feedwater is to overflow the
        condensate over the side. */
-    vol:150, level:50, fluid:"condensate",
+    vol:83, level:50, fluid:"condensate",
     gas:null, pump:null, check:false, auto:"always", burst:null});
 
   /* ══ THE FITTINGS ══
@@ -2611,7 +2759,7 @@ function buildStockPlumbing(opt){
      and nothing anywhere may ask which one of these is "the surge tee". */
   const tee0 = fitting("tee0",20,14,{ name:"SURGE TEE", mode:"tee", bore:1,
     tip:"The junction where the pressurizer meets the loop. A tee costs nothing and closes nothing - it is one node with four faces." });
-  const rv0  = fitting("rv0",20,2,{ name:"RELIEF VALVE", mode:"relief", bore:PIPE_BORE.relief,
+  const rv0  = fitting("rv0",20,2,{ name:"RELIEF VALVE", mode:"relief", bore:boreK("relief"),
     tip:"Lifts on pressure and blows the loop down through whatever is piped behind it. Pipe its outlet to a tank, or it vents straight into the room." });
   /* ONE SAFETY VALVE PER GENERATOR, on its steam nozzle - a real plant has
      them per machine and so does this one. It is the SAME relief fitting the
@@ -2657,6 +2805,19 @@ function buildStockPlumbing(opt){
   const pTurbB    = seedPort("turb",faceMid(9,0),7);
   const pCondT    = seedPort("cond",faceMid(9,0),-1);
   const pCondR    = seedPort("cond",9,faceMid(5,0));
+  /* THE COOLING CIRCUIT. A panel is plumbed now, so the condenser's water side
+     runs down into it and the two are their own connected component - which is
+     all "COOLING" means. The second panel ships as a SPARE with no nozzle: it
+     still radiates, because radArea() is geometry, and the bench can pipe it.
+     There is no circulating-water pump in the stock loadout, so the circuit
+     solves at zero flow: legal, and exactly what a plant that never bought one
+     should read. */
+  const pCondCwO  = seedPort("cond",-1,4);
+  const pRad0L    = seedPort("rad0",-1,1);
+  const pRad0R    = seedPort("rad0",5,1);
+  const pRad1L    = seedPort("rad1",-1,1);
+  const pRad1R    = seedPort("rad1",5,1);
+  const pCondCwI  = seedPort("cond",4,5);
   // one discharge nozzle per generator, one cell apart, and the suction below
   const feedT     = i => seedPort("feed",faceMid(3,i),-1);
   const pFeedT    = feedT(0);
@@ -2689,6 +2850,11 @@ function buildStockPlumbing(opt){
   seedRun(pCondR, pFeedB, false, [[56,33],[31,33]]);      // condensate, along the keel
   seedRun(pFeedT, g0.feed, true);                        // feedwater straight up to the shell
   seedRun(pEfw, g0.efw);                          // the reserve's own line onto the same shell
+  /* down to row 29 and along it, NOT row 28: COLD_ROW below hands loop 2 that
+     row for its own cold return, and two runs sharing a row merge. */
+  seedRun(pCondCwO, pRad0L, false, [[44,29],[34,29]]);   // circulating water out to the first panel
+  seedRun(pRad0R, pRad1L);                        // ...through the second, in series...
+  seedRun(pRad1R, pCondCwI);                      // ...and back into the condenser's water side
 
   /* ══ LOOPS 1..3 ══
      Exactly what ADD STEAM GENERATOR HERE plus a pipe drag builds: a placed

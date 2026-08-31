@@ -11,15 +11,8 @@ const blockAcc = key => typeof key==="string"
 /* What the plant would weigh with this block set to that value. It has to
    WRITE the value to ask, so it puts it back - through the same accessor, so
    a nested key is restored as exactly as a flat one. */
-function massWith(key,i){ return optWith(key,i).mass; }
-/* Mass AND whether that pick would refuse to commission, off ONE derived():
-   an option list already paid for a solve per row to price it, so asking the
-   same solve for its verdict costs nothing. A RED warning is a fault the bench
-   names in red, so it is the honest test of "you do not want this one" - and
-   the row is dimmed, never disabled. */
-function optWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
-  const d=derived(), r={mass:d.mass, bad:d.warn.some(warnRed)};
-  a.set(o); return r; }
+function massWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
+  const m=derived().mass; a.set(o); return m; }
 
 /* Nameplate pump capacity vs what a loop's own ceiling will ever pass right
    now - netFlowK()'s per-group min(groupSize,up) clamp (pipenet.js), read
@@ -150,6 +143,11 @@ function layoutWarnings(M){ const w=[];
      primary water too - so a count would report more pipes than the designer
      drew. The fault is that the two sides are joined at all. */
   if(crossTies().length) w.push(["SOFT","The primary side is piped into a generator's shell, going round its tubes. Whatever is in one side will end up in the other: primary water into the steam, and steam pressure into the loop.",null]);
+  /* A run whose two ends are the SAME node. It is drawn, it costs mass, and no
+     pressure difference across it is possible - so it can never carry
+     anything. The bench warns; it never refuses. A run between two different
+     faces of one machine is a recirculation line and is not this. */
+  if(selfRuns().length) w.push(["SOFT",selfRuns().length===1?"One run goes from a nozzle straight back to the same one. Both ends are the same point in the plant, so no pressure can ever push anything along it - it costs mass and carries nothing.":selfRuns().length+" runs go from a nozzle straight back to the same one. Both ends of each are the same point in the plant, so nothing can ever flow along them - they cost mass and carry nothing.",null]);
   /* ONE ROW PER PART IN LIMBO, so the review panel names the machine and
      warnFor() can put the red dot on it. HARD: two machines in the same cells
      is not a plant anybody could build, and every occupancy question below -
@@ -699,9 +697,9 @@ function paramBlockMk(block){
       const ol=KIT.optList(block.items,{onSelect:i=>a.set(block.base+i)});
       root.appendChild(ol.el);
       return {el:root,sync(){
-        const q=block.items.map((_,i)=>optWith(block.key,block.base+i));
-        const lo=Math.min(...q.map(v=>v.mass));
-        ol.set(a.get()-block.base, q.map(v=>v.mass-lo), q.map(v=>v.bad));
+        const q=block.items.map((_,i)=>massWith(block.key,block.base+i));
+        const lo=Math.min(...q);
+        ol.set(a.get()-block.base, q.map(v=>v-lo));
       }};
     }
     case "segsel": {
@@ -711,9 +709,9 @@ function paramBlockMk(block){
       const ss=KIT.segSel(block.labels,{onSelect:i=>a.set(block.base+i)});
       root.appendChild(ss.el);
       return {el:root,sync(){
-        const q=block.labels.map((_,i)=>optWith(block.key,block.base+i));
-        const lo=Math.min(...q.map(v=>v.mass));
-        ss.set(a.get()-block.base, q.map(v=>v.mass-lo), q.map(v=>v.bad));
+        const q=block.labels.map((_,i)=>massWith(block.key,block.base+i));
+        const lo=Math.min(...q);
+        ss.set(a.get()-block.base, q.map(v=>v-lo));
       }};
     }
     case "slider": {
@@ -726,6 +724,25 @@ function paramBlockMk(block){
         KIT.show(row.el,!(b.when&&!b.when()));
         const v=get();
         row.set(v,null,b.massFn?b.massFn(v)-b.massFn(block.min):undefined);
+      }};
+    }
+    /* A MACHINE'S OWN QUANTITY, in its own units. A slider is still right for a
+       genuine fraction of its own travel - a rod, a valve, a demand - so only
+       "how big is this machine" comes here. It never clamps: the SUGGEST
+       affordance fills the field with a value matched to the rest of the
+       design, and the designer is free to ignore it. */
+    case "num": {
+      const a=blockAcc(block.key);
+      const root=KIT.el("div","db-block");
+      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
+      const n=KIT.numInput({unit:block.unit,dp:block.dp,tip:block.tip,title:block.title,
+        suggest:block.suggest, onChange:v=>a.set(v)});
+      root.appendChild(n.el);
+      const mass=KIT.el("span","kit-sliderrow-mass"); root.appendChild(mass);
+      return {el:root,sync(b){
+        KIT.show(root,!(b.when&&!b.when()));
+        n.set(a.get());
+        KIT.setText(mass, b.massFn ? b.massFn(a.get()).toFixed(0)+" t" : "");
       }};
     }
     case "readout": {

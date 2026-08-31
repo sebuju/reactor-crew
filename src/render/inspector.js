@@ -207,6 +207,8 @@ function paramsFor(p){
     items:items.map(o=>({name:o.name,tip:o.note||o.tip||""}))});
   const seg_=(title,tip,key,labels,base)=>B.push({kind:"segsel",title,tip,key,labels,base:base||0});
   const sld=(title,tip,key,min,max,fmt,step,massFn)=>B.push({kind:"slider",title,tip,key,min,max,fmt,step,massFn});
+  // a MACHINE'S OWN QUANTITY, in its own units - see the "num" block (design-bench.js)
+  const num=(title,tip,key,unit,dp,suggest,massFn)=>B.push({kind:"num",title,tip,key,unit,dp,suggest,massFn});
   const rdo=(title,tip,val)=>B.push({kind:"readout",title,tip,val});
   const tog=(title,tip,key,mass)=>B.push({kind:"toggle",title,tip,key,mass});
   const note=(text,color)=>B.push({kind:"note",text,color});
@@ -298,6 +300,12 @@ function paramsFor(p){
   else if(p.role==="sg"){
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
         {get:()=>sgTypeOf(id),set:v=>{ D.sgType[id]=v; }},SGT);
+    /* The type row says how much water is in it; this says how fast heat
+       crosses the tubes. They were one figure and they are not the same
+       question - a big-inventory shell with poor tubes is a real machine. */
+    num("TRANSFER COEFFICIENT","How fast heat crosses this generator's tubes, in kilowatts per kelvin. Buy more and the same core raises hotter steam at a smaller temperature difference; buy less and the primary runs hotter for the same power. SUGGEST matches it to this core at its own rated power.",
+        {get:()=>sgUAOf(id),set:v=>{ D.sgUA[id]=v; }},
+        "kW/K",0,()=>sgUASuggest(),()=>0);
     B.push({kind:"readlist",rows:()=>{ const r=sgRowOf(id); return [
       ["SECONDARY WATER",r.water.toFixed(0)+" t",null,"What is in THIS shell at 100 % level. It is what goes on removing heat after the feedwater stops, and it is the whole of the difference between the two types."],
       ["SHELL MASS",r.mass.toFixed(0)+" t",null,"The steel of this machine. It is charged once per generator drawn, so a second one costs a second one."]]; }});
@@ -312,20 +320,22 @@ function paramsFor(p){
     note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
   }
   else if(p.role==="ihx"){
-    sld("EXCHANGER SIZE","How much tube area this exchanger has, and how much intermediate coolant stands behind it. A big one gives back some of the shell temperature the second stage costs you, and it is a bigger flywheel after a trip. It is also the heaviest single thing you can buy per tonne of benefit.",
-        {get:()=>ihxSizeOf(id),set:v=>{ D.ihxSize[id]=v; }},
-        0,1,v=>(ihxCap(v)*100).toFixed(0)+" % capacity",.05,v=>ihxCap(v)*IHX_MASS);
+    num("TRANSFER COEFFICIENT","How fast heat crosses this exchanger's tubes, in kilowatts per kelvin of temperature difference. A big one gives back some of the shell temperature the second stage costs you, and it is a bigger flywheel after a trip. It is also the heaviest single thing you can buy per tonne of benefit. SUGGEST matches it to the generators in front of it.",
+        {get:()=>ihxUAOf(id),set:v=>{ D.ihxUA[id]=v; }},
+        "kW/K",0,()=>ihxUASuggest(),v=>v*IHX_T_PER_UA);
     B.push({kind:"readlist",rows:()=>{ const served=ihxSgs(id); return [
       ["FEEDS",served.length?nameList(served):"nothing",null,"Which generators this exchanger heats. It is whatever is on the loop you spliced it into - splice it in with a hot leg and a cold leg, exactly like a generator."],
-      ["EXCHANGER MASS",(ihxCap(ihxSizeOf(id))*IHX_MASS).toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
+      ["EXCHANGER MASS",(ihxUAOf(id)*IHX_T_PER_UA).toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
     note("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats the generators on its loop, so a tube rupture in one of those generators leaks THIS loop's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
     note("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
   }
   else if(roleHead(p.role)){
-    const key={get:()=>pumpSizeOf(id),set:v=>{ D.pumpSize[id]=v; }};
-    B.push({kind:"slider",title:"PUMP SIZE",key,min:0,max:1,step:.05,
-      fmt:v=>(pumpCap(v)*100).toFixed(0)+" % capacity",massFn:v=>pumpCap(v)*PUMP_MASS,
-      tip:"How much this pump can carry on its own. Bigger costs more mass, but it is also what a junction actually shares with a neighbouring loop if you tie the two together - a pump running at its own rated point has nothing spare to lend."});
+    num("DEVELOPED HEAD","The pressure rise this pump makes at its rated flow, in megapascals. It is what pushes coolant round against the pipe run, and it is half of what a junction shares with a neighbouring loop if you tie the two together.",
+        {get:()=>pumpHead(id),set:v=>{ D.pumpHead[id]=v; }},
+        "MPa",2,()=>pumpHeadSuggest(),()=>pumpCapOf(id)*PUMP_MASS);
+    num("RATED FLOW","The mass of coolant this pump moves per second at that head. Head and flow together are the machine: a pump running at its own rated point has nothing spare to lend.",
+        {get:()=>pumpFlow(id),set:v=>{ D.pumpFlow[id]=v; }},
+        "kg/s",0,()=>pumpFlowSuggest(),()=>0);
     /* WHAT THIS PUMP IS FOR, off the drawing rather than off its id. There is
        one pump role: a coolant pump is a pump the loop walk reaches from a
        generator, a feed pump is one that reaches a generator's SHELL, and a
@@ -337,25 +347,25 @@ function paramsFor(p){
         :"Piped to nothing that reaches a core or a generator. It develops its own head and pools capacity with nobody - draw a run from it, or right-click the plant to remove it.");
   }
   else if(p.role==="turb"){
-    sld("TURBINE SIZE","How many stages THIS machine has. A big turbine turns more of the heat into electricity and can swallow a bigger overload, but it is heavy. Every turbine is sized on its own, so a big machine and a small one is a legal fleet. The percentage is what this reactor's steam conditions plus this machine actually deliver together, so changing the reactor makes the same slider read differently.",
-        {get:()=>turbSizeOf(id),set:v=>{ D.turbSize[id]=v; }},
-        0,1,v=>(COOLANT[D.cool].eff*turbEff(v)*100).toFixed(1)+" % gross",.05,v=>turbSwallow(v)*TURB_MASS);
-    B.push({kind:"readlist",rows:()=>{ const d=derived(), sz=turbSizeOf(id); return [
-      ["STEAM SWALLOW",(turbSwallow(sz)*100).toFixed(0)+" %",null,"What this turbine on its own can take, as a share of rated steam. The plant's ceiling below is every turbine's share added up."],
-      ["EFFICIENCY",(COOLANT[D.cool].eff*turbEff(sz)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. One slider sets both this and the swallow above, so a bigger machine takes more steam AND makes more of it."],
+    num("STEAM SWALLOW","The mass of steam this machine takes per second, wide open. It is what the turbine IS - efficiency follows from it and is not a second thing to buy. Every turbine is sized on its own, so a big machine and a small one is a legal fleet. SUGGEST matches it to the steam this plant will actually raise.",
+        {get:()=>turbKgs(id),set:v=>{ D.turbKgs[id]=v; }},
+        "kg/s",0,()=>turbKgsSuggest(),v=>v*TURB_T_PER_KGS);
+    B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
+      ["EFFICIENCY",(COOLANT[D.cool].eff*turbEffOf(id)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. It is DERIVED from the swallow above, by the law that isentropic efficiency rises slowly with machine size - a set ten times bigger is a few points better, not twice as good."],
       ["RATED OUTPUT",(D.power*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
-      ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room. Overpower is not free reach: it is turbine you paid mass for."]]; }});
+      ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room, as a share of the steam this plant raises at full power. A matched machine reads 100 %. Overpower is not free reach: it is turbine you paid mass for."]]; }});
     note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
   }
   else if(p.role==="cond"){
-    sld("CONDENSER SIZE","The heat sink, and it sets three things at once. It caps how much steam can be dumped straight past the turbine, so a generous unit follows a load change and absorbs a scram without a relief valve ever lifting. It sizes the circulating water flow with it, so a bigger machine also has more water moving through it. It also sets how much steam you can condense at full draw: overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. This slider sizes THIS unit; a second condenser is sized on its own.",
-        {get:()=>condSizeOf(id),set:v=>{ D.condSize[id]=v; }},
-        0,1,v=>(condDump(v)*100).toFixed(0)+" % dump",.05,v=>condDuty(v)*COND_MASS);
+    num("CONDENSING DUTY","How fast heat crosses this condenser's tubes, in kilowatts per kelvin. It is what the machine IS: it sets how much steam you can condense at full draw, and it sizes the circulating water flow with it. Overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. SUGGEST matches it to this plant's rated rejection.",
+        {get:()=>condUA(id),set:v=>{ D.condUA[id]=v; }},
+        "kW/K",0,()=>condUASuggest(),v=>v*COND_T_PER_UA);
+    num("DUMP CAPACITY","The steam this unit will take straight past the turbine, per second. On a plant that boils in its own core the bypass is open whenever the governor is closing, so this is what lets it follow a load change without a safety valve lifting; on a subcooled plant it opens on a scram.",
+        {get:()=>condDump(id),set:v=>{ D.condDump[id]=v; }},
+        "kg/s",0,()=>condDumpSuggest(),()=>0);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
-      ["CONDENSING DUTY",(condDuty(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit on its own condenses, as a share of rated steam. The plant figure below is every condenser's duty added up."],
-      ["DUMP CAPACITY",(condDump(condSizeOf(id))*100).toFixed(0)+" %",null,"What this unit will take straight past the turbine. On a plant that boils in its own core the bypass is open whenever the governor is closing, so this is what lets it follow a load change without a safety valve lifting; on a subcooled plant it opens on a scram. One slider sets both this and the duty above."],
-      ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of rated",null,"Every condenser on the plant added up. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
-      ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, shown here so the mismatch is visible from either component."],
+      ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of full-load duty",null,"Every condenser on the plant added up, against the heat this plant actually rejects at full power. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
+      ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, on the same basis as the row above, so the mismatch is visible from either component."],
       ["TERMINAL DIFFERENCE",COND_DT0+" K",null,"How far this machine sits above the sink it rejects into, at rated duty. Duty DIVIDES it: a half-size unit sits twice as far above the radiator for the same heat."],
       ["DESIGN BACKPRESSURE",condPDes().toFixed(4)+" MPa",null,"The exhaust pressure the turbine was built for - the anchor every other figure on this side is priced against. It is a stated design point and a bad radiator does not move it."],
       ["VACUUM FLOOR",COND_P0+" MPa",null,"The best vacuum this plant can ever pull, set by air leaking in and nothing else. An oversized condenser runs down onto this and stops paying."],
@@ -373,10 +383,7 @@ function paramsFor(p){
      is radTAt(), the same expression the tick integrates against, so the
      bench and the plant cannot quote two different sinks. */
   else if(p.role==="radiator"){
-    sld("PANEL AREA","How much radiating surface this panel carries. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom. It is the only heat sink on the ship and it is what gets shot.",
-        {get:()=>radSizeOf(id),set:v=>{ D.radSize[id]=v; }},
-        0,1,v=>(radCap(v)*100).toFixed(0)+" % area",.05,
-        v=>radCap(v)*p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(id).massK);
+    note("Panel area is the BOX. There is no size knob: drag the panel bigger on the grid and it radiates more, which is the only honest way a surface can grow. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom.");
     opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
         {get:()=>D.radCoat[id]??1,set:v=>{ D.radCoat[id]=v; }},RADCOAT.map(r=>({name:r[0]})));
     B.push({kind:"readlist",rows:()=>{ const d=derived(), live=radLive(id);
@@ -386,7 +393,7 @@ function paramsFor(p){
       ["RADIATING AREA",live?(radArea(id)/1e6).toFixed(2)+" Mm²":"0",null,"This panel's own surface. Blind, it is zero however big the box is."],
       ["EMISSIVITY",radCoatOf(id).emis.toFixed(2),null,"The share of a perfect black body's radiation this finish actually sheds, at the same temperature."],
       ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."],
-      ["PANEL MASS",(radCap(radSizeOf(id))*p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(id).massK).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
+      ["PANEL MASS",(p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(id).massK).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
     note("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone.");
   }
   else if(id==="ctrl"){
@@ -426,11 +433,11 @@ function paramsFor(p){
        legal, silent lie. tankSide() reads it off the runs instead
        (layout.js), so there is one fact and it comes from the pipe you drew.
        This row is a READOUT now, and it says "not connected" honestly. */
-    B.push({kind:"readlist",rows:()=>{ const sd=tankSide(id);
-      return [["PLUMBED TO", sd? sd.toUpperCase() : "NOTHING", sd?null:C.amber,
-        sd==="primary" ? "This tank has a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure."
-        : sd==="secondary" ? "This tank is on the far side of the generator tubes: it answers to the generator's own secondary pressure, not to the loop's."
-        : "Nothing is piped to this tank, so it is on no side at all - it has no edge, it can deliver nothing, and it is counted by nothing. Draw a run from it."]]; }});
+    B.push({kind:"readlist",rows:()=>{ const ci=tankCircuit(id);
+      return [["PLUMBED TO", ci===null ? "NOTHING" : circName(ci), ci===null?C.amber:null,
+        ci===null ? "Nothing is piped to this tank, so it is on no circuit at all - it has no edge, it can deliver nothing, and it is counted by nothing. Draw a run from it."
+        : tankPrimary(id) ? "This tank has a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure."
+        : "This tank is on the far side of a heat exchanger: it answers to that circuit's own pressure, not to the core loop's."]]; }});
     sld("CAPACITY","How big it is, as a share of whichever side you piped it into. It costs mass in proportion, and it is what turns a solved flow into a level.",
       acc("vol"),5,100,v=>v.toFixed(0)+" %",5,v=>v*0.4);
     sld("FILL AT COMMISSIONING","How full it starts. A source ships full; a tank meant to catch something ships empty, and its gas charge is set at whatever level you leave here.",

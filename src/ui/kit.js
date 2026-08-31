@@ -526,6 +526,49 @@ const KIT = (function(){
     return {el: root, input, set, get, setPlaceholder};
   }
 
+  /* textInput()'s sibling, for a MACHINE'S OWN QUANTITY - kg/s, kW/K, MPa,
+     m^3. It parses, it carries a unit suffix, and it REVERTS on garbage
+     rather than writing a NaN into the design. It never clamps and it has no
+     range: an absurd turbine is a legal design that performs accordingly and
+     blows the mass budget, which is the designer's problem.
+     `suggest` is the one affordance - it fills the field with a value matched
+     to the rest of the plant. It never limits and it is never applied on its
+     own. */
+  function numInput(opts){
+    opts = opts || {};
+    const root = el("div", "kit-numinput");
+    const t = textInput({bare: true, cls: "kit-numinput-input",
+                         tip: opts.tip, title: opts.title,
+                         onChange: v => commit(v, false)});
+    root.appendChild(t.el);
+    if(opts.unit){ const u = el("span", "kit-numinput-unit"); u.textContent = opts.unit;
+                   root.appendChild(u); }
+    let sug = null;
+    if(opts.suggest){
+      sug = el("button", "kit-numinput-suggest", {type: "button"});
+      sug.textContent = "SUGGEST";
+      sug.addEventListener("click", () => {
+        const v = opts.suggest();
+        if(v == null || !isFinite(v)) return;
+        show(v); if(opts.onChange) opts.onChange(v);
+      });
+      root.appendChild(sug);
+    }
+    let live = null;
+    const dp = opts.dp === undefined ? 2 : opts.dp;
+    const show = v => { live = v; t.set(v == null ? "" : (+v).toFixed(dp)); };
+    function commit(str, force){
+      const v = parseFloat(String(str).replace(/[^0-9eE+\-.]/g, ""));
+      // REVERT, never clamp: an unreadable field is not a new value
+      if(!isFinite(v)){ if(force) show(live); return; }
+      live = v; if(opts.onChange) opts.onChange(v);
+    }
+    t.input.addEventListener("blur", () => commit(t.input.value, true));
+    if(opts.tip) tip(root, opts.title || "", opts.tip);
+    if(opts.val != null) show(opts.val);
+    return {el: root, set: show, get: () => live};
+  }
+
   function optList(items, opts){
     opts = opts || {};
     const root = el("div", "kit-optlist");
@@ -543,9 +586,7 @@ const KIT = (function(){
       return {row, mark, mass};
     });
     let lastSel = -1;
-    // `bad` is a row this design cannot commission on. It is DIMMED, not
-    // disabled: the bench warns and never refuses, so the click still lands.
-    function set(sel, deltas, bad){
+    function set(sel, deltas){
       if(sel !== lastSel){
         rows.forEach((r, i) => {
           const on = i === sel;
@@ -559,9 +600,8 @@ const KIT = (function(){
         if(r.mass.textContent !== t) r.mass.textContent = t;
         r.mass.classList.toggle("min", deltas[i] < 1);
       });
-      if(bad) rows.forEach((r, i) => r.row.classList.toggle("bad", !!bad[i]));
     }
-    set(opts.sel != null ? opts.sel : -1, opts.deltas, opts.bad);
+    set(opts.sel != null ? opts.sel : -1, opts.deltas);
     return {el: root, set};
   }
 
@@ -578,16 +618,15 @@ const KIT = (function(){
       return {c, mass};
     });
     let lastSel = -1;
-    function set(sel, deltas, bad){
+    function set(sel, deltas){
       if(sel !== lastSel){ cells.forEach((c, i) => c.c.classList.toggle("on", i === sel)); lastSel = sel; }
       if(deltas) cells.forEach((c, i) => {
         const t = "+" + deltas[i].toFixed(0) + "t";
         if(c.mass.textContent !== t) c.mass.textContent = t;
         c.mass.classList.toggle("min", deltas[i] < 1);
       });
-      if(bad) cells.forEach((c, i) => c.c.classList.toggle("bad", !!bad[i]));
     }
-    set(opts.sel != null ? opts.sel : -1, opts.deltas, opts.bad);
+    set(opts.sel != null ? opts.sel : -1, opts.deltas);
     return {el: root, set};
   }
 
@@ -647,6 +686,6 @@ const KIT = (function(){
   }
 
   return {el, tip, setText, setStyle, show, well, rule, reveal, chip, dot, seg, segSigned,
-    segMark, band, lamp, badge, hatch, button, slider, textInput, optList, segSel, sliderRow,
+    segMark, band, lamp, badge, hatch, button, slider, textInput, numInput, optList, segSel, sliderRow,
     readout, toggle};
 })();

@@ -40,7 +40,7 @@
    sentence rather than a blank tooltip. */
 const PIPE_NAME={hot:"HOT LEG",cold:"COLD LEG",steam:"MAIN STEAM",feed:"FEEDWATER",
                  hpi:"HP INJECTION",surge:"SURGE LINE",exh:"EXHAUST",
-                 relief:"RELIEF HEADER",user:"UNCLASSIFIED PIPE"};
+                 relief:"RELIEF HEADER",cw:"CIRCULATING WATER",user:"UNCLASSIFIED PIPE"};
 /* EVERY RUN'S OWN NAME AND COLOUR, off its kind and nothing else. There used
    to be a prefix case here for "xtie:"+id - a fitting's own branch run, one
    generated kind per fitting, which no table could enumerate. A fitting is a
@@ -66,7 +66,7 @@ const pipeCol=(PC,k)=>PC[k]||C.ink2;
    line has to track what was actually built. Linear through the two widths
    this file always drew: the narrowest stock default (relief, 0.20) at 3px,
    a full 1.0 bore (hot/cold, and the fallback runBore() itself uses for any
-   kind PIPE_BORE has no row for) at 4px. Every bore between them - a
+   kind PIPE_BORE_MM has no row for) at 4px. Every bore between them - a
    0.55-bore cross-tie, a 0.25-bore HPI line - draws a width between them
    instead of being lumped into whichever side of a boolean it used to fall
    on. Casing half-width and fluid line width were always the same number
@@ -81,7 +81,7 @@ function pipeColours(L){
   const Th = L? L.Tavg+15*heat : 598, Tc = L? L.Tavg-15*heat : 568;
   return { hot: L?lerpC("#5aa9d6","#ff5a45",(Th-520)/110):"#c8735e",
            cold:L?lerpC("#5aa9d6","#ff5a45",(Tc-520)/110):"#5aa9d6",
-           surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2",
+           surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2", cw:"#5aa9d6",
            /* a relief header stands shut and carries nothing until something
               lifts, so it is drawn cold and quiet - but drawn as ITSELF, not
               through pipeCol()'s unknown-kind grey. `user` is the only kind
@@ -247,10 +247,12 @@ function pipeRunSc(r,L){
      difference between two numbers that are the same one. */
   const a=coreFold(ends[0]), b=coreFold(ends[1]);
   if(runVapour(ends)) return 0;
-  /* Asked of the UNFOLDED node ids, because nodeGraph().primary is keyed on
-     partId+face - coreFold() collapses "corer" to "core", which that map has
-     never heard of, and every primary run then read as secondary. */
-  const sat = (secondaryNode(ends[0]) && secondaryNode(ends[1])) ? tsatSec(pr) : tsat(pr);
+  /* THE CIRCUIT'S OWN CURVE, and the run's own MEASURED temperature. This used
+     to pick between two curves off which side of the tubes the run was on and
+     then subtract a two-state tag; both halves are real now - the fluid is a
+     property of the circuit and the temperature is what the enthalpy at those
+     two nodes says. */
+  const sat = satT(satOfCirc(circOfNode(a)), pr);
   return sat - (netTempAt(L,a) + netTempAt(L,b))/2;
 }
 let pipeT=null, pipeDt=0;

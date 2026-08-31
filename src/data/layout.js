@@ -27,7 +27,7 @@ function setPartName(id,str){
   else if(D.name) delete D.name[id];
 }
 let GY=100;                                   // grid top, set each frame by the layout section
-let LAY=null, layFit="", sel="core", layMass=0;
+let LAY=null, layFit="", layBuiltSig=null, sel="core", layMass=0;
 // parts optionally present at a FIXED slot: buildLayout() gates add() on
 // get(), layoutMetrics() rebuilds when any of it changes, and the right-click
 // menu is generated from it. A part placed at a slot of the player's choosing
@@ -107,6 +107,7 @@ let placedParts=[], placeSeq=0;
    Copied in, not aliased, so the head stays frozen. */
 function setPlacedParts(list){
   placedParts = (list||[]).map(p=>({...p}));
+  layBuiltSig=null;   // fresh objects: LAY must hold THESE, or moveTo() writes to a copy the next rebuild throws away
   buildLayout();
 }
 /* ANYTHING THE PLAYER ADDED, THE PLAYER CAN REMOVE. The bench used to ask
@@ -236,22 +237,48 @@ const foldFacesOf=p=>{ const R=ROLE[p.role]; if(!R||!R.fold) return null;
    cost four tanks and a bigger tank costs more - replacing four flat
    per-name figures (PART_MASS.reltk/efw/boroninj and D.accum's own +45 t)
    that between them priced the stock plant at exactly what this does. */
-const TANK_T_PER_VOL=0.4;
+/* t per m^3 - structure, and the water it is full of at the ship's own mass
+   scale. A free parameter: it is what the four stock tanks used to weigh, per
+   cubic metre, and nothing derives it. */
+const TANK_T_PER_M3=0.5;
 const tankMass=()=>{ let m=0;
-  for(const id in D.tanks) if(D.tanks[id].cell) m+=TANK_T_PER_VOL*D.tanks[id].vol;
+  for(const id in D.tanks) if(D.tanks[id].cell) m+=TANK_T_PER_M3*D.tanks[id].vol;
   return m; };
-// pump capacity from size (0..1, default .5), centred the way grossEff()
-// centres the turbine multiplier so a default pump matches the old
-// always-fitted one. D.pumpSize is keyed by id, static or placed alike.
-const pumpSizeOf=id=>D.pumpSize[id]??0.5;
-/* EVERY CAPACITY SPAN IS CENTRED ON ITS DEFAULT, AND BOTH ENDS ARE REAL.
-   These used to read 0.7+0.6*size and its family: the floor of every one of
-   them was still a machine that kept up, so the slider chose between adequate
-   and slightly better and the answer was always max. The midpoint is
-   unchanged, so a default plant commissions bit-identically - what moved is
-   that the bottom is now a machine that fails. */
-const pumpCap=size=>0.25+1.50*size;
-const PUMP_MASS=50;                    // t, at pumpCap()==1 (default size)
+/* ══ A PUMP IS A HEAD AND A FLOW ══
+   It was one 0..1 slider around a hidden reference. A pump is two real
+   numbers: the head it develops, MPa, and the flow it develops it at, kg/s.
+   PUMP_H0 is the reference head the network was linearised about, so it is
+   also the suggestion; the reference flow is the loop's own inventory over the
+   time it takes to go round once. */
+const pumpHeadSuggest = () => PUMP_H0;
+// rated heat over what one kelvin of core rise costs: the loop's own mass flow
+const pumpFlowSuggest = () => RATED_KW()/(CP_W*CORE_DT0);
+/* ══ A SUGGESTION FILLS THE FIELD. IT IS NOT THE FIELD ══
+   These were `?? xSuggest()` - a LIVE default, recomputed from the rest of the
+   plant on every read. That is a hidden reference, and it is the same one Job 2
+   set out to delete wearing different clothes: an unset turbine had no swallow
+   of its own, so editing the CORE moved it, and editing the pipe run moved it
+   again. A designer setting a value on one machine must never be setting a
+   value on another.
+   So the suggestion is BAKED on first read and the machine owns it from then
+   on. The number is identical to what the live default produced, so nothing
+   about an untouched design moves; what changes is that it stops moving
+   afterwards. SUGGEST on the panel re-derives it on demand, which is the whole
+   of what a reference to start from should do. */
+const bake = (bag, id, mk) => { const v = bag[id];
+  return v === undefined ? (bag[id] = mk()) : v; };
+const pumpHead = id => bake(D.pumpHead, id, pumpHeadSuggest);
+const pumpFlow = id => bake(D.pumpFlow, id, pumpFlowSuggest);
+/* WHAT THIS PUMP IS WORTH AGAINST THE REFERENCE MACHINE. The network is
+   linearised about PUMP_H0 at PUMP_FLOW_REF, so the developed head an edge
+   sees is head*(flow/PUMP_FLOW_REF) - a bigger pump at the same head still
+   pushes more, which is what a capacity meant.
+   BOTH ANCHORS ARE ABSOLUTE. This asked pumpFlowSuggest() for the second one,
+   which reads the CORE's rating - so editing the reactor silently resized
+   every pump on the ship. A pump is a pump wherever it is fitted. */
+const PUMP_FLOW_REF = 7250;            // kg/s, a reference coolant pump duty
+const pumpCapOf = id => (pumpHead(id)/PUMP_H0)*(pumpFlow(id)/PUMP_FLOW_REF);
+const PUMP_MASS=50;                    // t per (head x flow), at the reference machine
 /* IS THIS A PRIMARY PUMP? There is one pump role, so the question cannot be
    asked of a name or of a second role - it is asked of the GRAPH, exactly
    like loop membership itself: a pump the flood fill can trace to a generator
@@ -279,7 +306,7 @@ const pumpIds=()=>LAY.parts.filter(p=>roleHead(p.role)).map(p=>p.id);
 // this total, so counting a feedwater pump would raise the trip floor of a
 // plant whose coolant flow it cannot touch.
 const totalPumpCap=()=>{ let c=0;
-  for(const p of LAY.parts) if(primaryPump(p.id)) c+=pumpCap(pumpSizeOf(p.id));
+  for(const p of LAY.parts) if(primaryPump(p.id)) c+=pumpCapOf(p.id);
   return c; };
 // how many steam generators are on the grid right now - the fact D.loops
 // used to fake as an input. Every reader that priced or counted "loops"
@@ -299,49 +326,115 @@ const condCount=()=>LAY.parts.filter(p=>p.role==="cond").length;
    one decision. The scalar knob survives as the fallback (?? and never ||, or
    a legitimately zero size becomes the default), so an untouched design and
    every preset commission bit-identically. */
-const turbSizeOf=id=>D.turbSize[id]??D.turb;
-const turbSwallow=size=>0.45+1.60*size;
-/* What this machine does to the heat, as a multiplier on the coolant's own
-   eff. One expression, because grossEff() (design.js) and the bench slider's
-   own label both price it and had a copy each. */
-const turbEff=size=>0.70+0.60*size;
-/* MASS IS PRICED OFF CAPACITY, NEVER OFF SLIDER POSITION - the pump and the
-   exchanger already did, and the turbine and the condenser charged for where
-   the handle sat instead, so widening their spans handed out the extra machine
-   for nothing. */
-const TURB_MASS=20;                    // t, at turbSwallow()==1
-const totalTurbSwallow=()=>{ let c=0;
-  for(const p of LAY.parts) if(p.role==="turb") c+=turbSwallow(turbSizeOf(p.id));
+/* ══ A MACHINE STATES A REAL QUANTITY, IN ITS OWN UNITS ══
+   Every one of these was a 0..1 slider around a hidden reference - a turbine
+   was 0.45+1.60*size, and the designer could not say what machine they were
+   building. The field is the ENGINEERING QUANTITY now, and there is no span
+   to be inside of: an absurd number is a legal design that performs
+   accordingly and blows the mass budget.
+
+   THE DEFAULT IS THE SUGGESTION. `?? xSuggest()` and never a baked figure:
+   the suggestion is computed from the rest of the design, so an untouched
+   plant commissions on the number the old slider midpoint stood for - exactly,
+   with no anchor written down - and the SUGGEST affordance on the bench fills
+   the field from the same function. It suggests; it never limits. */
+/* Off D.power and layoutMetrics(), NEVER derived() - derived() prices mass,
+   mass prices these machines, and a suggestion that asked derived() would ask
+   itself. */
+const RATED_KW = () => D.power*1000;
+/* ══ A READOUT MAY NOT MOVE THE PLANT ══
+   layoutMetrics() calls layFresh(), which is PASS bookkeeping - so asking it
+   from a readout re-dated the per-pass caches mid-tick and the trajectory
+   drifted in the sixth figure depending on whether anybody had drawn a panel
+   that frame. Measured: with mwE() called every 50 s the stock plant landed on
+   a different Tavg from the same seed. Cached on the arrangement's own
+   signature, so a design edit still re-measures and a running plant - which
+   cannot edit its design (designBlocked()) - measures once. */
+let n0Sig=null, n0Val=1;
+const n0Ref = () => { const sg=laySrcSig()+"|"+pipeSig();
+  if(sg!==n0Sig){ n0Sig=sg; n0Val=Math.min(1, layoutMetrics().flowK); }
+  return n0Val; };
+/* ══ WHAT THIS PLANT ACTUALLY MAKES AT FULL POWER ══
+   Rated heat is what the CORE is worth; this is what comes out of it, limited
+   by what the pipe run and the pump head can carry. Every machine downstream
+   is sized against THIS and judged against it, because a turbine matched to a
+   rating its own loop cannot deliver is a turbine nobody would build.
+   Getting this wrong is not a label bug: loadCeil() below gates the control
+   room's load slider, and measuring a machine against `rated` while sizing it
+   against `n0*rated` made that ceiling read back the PIPE RUN's flow limit -
+   exactly flowK, to the last digit - with a turbine's name on it. */
+const plantSteam = () => n0Ref()*RATED_KW()/SAT_WATER.hfg;          // kg/s raised
+const plantDuty  = () => n0Ref()*RATED_KW()*(1-COOLANT[D.cool].eff); // kW rejected
+/* What one turbine swallows wide open, kg/s. A designer sizes a set for the
+   boiler in front of it, so the suggestion is all of what that boiler raises -
+   and a machine that reaches past it is overload the designer chose to buy. */
+const turbKgsSuggest = () => plantSteam();
+const turbKgs = id => bake(D.turbKgs, id, turbKgsSuggest);
+const totalTurbKgs = () => { let c=0;
+  for(const p of LAY.parts) if(p.role==="turb") c+=turbKgs(p.id);
   return c; };
+/* ══ EFFICIENCY IS DERIVED, NEVER ENTERED ══
+   It was a second slider (0.70+0.60*size) that let a designer buy a small
+   machine and a big machine's efficiency. Isentropic efficiency rises with
+   size and it rises SLOWLY - a set ten times bigger is a few points better,
+   not twice as good - so the law is logarithmic in swallow, anchored at 1.00
+   on the reference machine. A multiplier on the coolant's own cycle
+   efficiency, which is what the old span was too.
+   TURB_EFF_K=0.13 puts a tenth-size set at 0.70 and a triple at 1.14; the cap
+   is where a real steam cycle stops, about 39 % gross on water. */
+/* TURB_EFF_REF is an ABSOLUTE machine size - roughly a 400 MWe set - and not
+   the plant's own steam. Efficiency is a property of how big the turbine IS,
+   so a designer editing the core must not be editing this; anchored on the
+   suggestion it moved every time the reactor did. */
+const TURB_EFF_K=0.13, TURB_EFF_MAX=1.18, TURB_EFF_MIN=0.55, TURB_EFF_REF=680;
+const turbEffOf = id => { const k=turbKgs(id);
+  if(!(k>0)) return TURB_EFF_MIN;
+  return clamp(1 + TURB_EFF_K*Math.log(k/TURB_EFF_REF), TURB_EFF_MIN, TURB_EFF_MAX); };
+/* t per kg/s of swallow. NO CAP: a 5 GW set weighs what it weighs and blows
+   the mass budget, which is the designer's problem and not this table's. */
+const TURB_T_PER_KGS=0.0369;
 const totalTurbMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="turb") m+=turbSwallow(turbSizeOf(p.id))*TURB_MASS;
+  for(const p of LAY.parts) if(p.role==="turb") m+=turbKgs(p.id)*TURB_T_PER_KGS;
   return m; };
-const condSizeOf=id=>D.condSize[id]??D.condCap;
-const condDuty=size=>0.30+1.45*size;
-/* Steam this unit will take straight past the turbine - on a load change as
-   well as on a trip, since the bypass became a live machine. P.bypass and the
-   bench label are the two readers and each carried the literal. */
-const condDump=size=>1.00*size;
-const COND_MASS=20;                    // t, at condDuty()==1
-const totalCondDuty=()=>{ let c=0;
-  for(const p of LAY.parts) if(p.role==="cond") c+=condDuty(condSizeOf(p.id));
+/* A condenser is a heat exchanger, so what it IS is a UA, kW/K. The
+   suggestion is the unit that rejects the reference plant's waste heat across
+   the design terminal difference on the design circulating-water rise. */
+/* ...and the condenser is sized the same way: the unit that rejects what this
+   plant actually rejects at full power, across the design terminal difference
+   on the design circulating-water rise. Same basis as the turbine, so the two
+   ceilings condShort_() compares are like for like. */
+const condUASuggest = () => (plantDuty()/CW_RISE)
+                            * Math.log(COND_DT0/(COND_DT0-CW_RISE));
+const condUA = id => bake(D.condUA, id, condUASuggest);
+/* Steam this unit will take straight past the turbine, kg/s - on a load change
+   as well as on a trip, since the bypass became a live machine. */
+const condDumpSuggest = () => 0.5*turbKgsSuggest();
+const condDump = id => bake(D.condDump, id, condDumpSuggest);
+const COND_T_PER_UA=1.626e-4;          // t per kW/K
+const totalCondUA=()=>{ let c=0;
+  for(const p of LAY.parts) if(p.role==="cond") c+=condUA(p.id);
   return c; };
 const totalCondMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="cond") m+=condDuty(condSizeOf(p.id))*COND_MASS;
+  for(const p of LAY.parts) if(p.role==="cond") m+=condUA(p.id)*COND_T_PER_UA;
   return m; };
-/* The dump ceiling is count-INDEPENDENT today (P.bypass, step.js), so it takes
-   the mean and not the sum; P.condUA reads the sum, and so does the
-   circulating water flow P.cwC that is anchored against it, so rejection does
-   scale with count. That asymmetry is the existing model and is not changed
-   here - the circulating water picked the SUM, with rejection. */
-const condSizeMean=()=>{ let n=0,c=0;
-  for(const p of LAY.parts) if(p.role==="cond"){ c+=condSizeOf(p.id); n++; }
-  return n?c/n:D.condCap; };
+/* The dump ceiling is count-INDEPENDENT (P.bypass, step.js), so it takes the
+   mean and not the sum; P.condUA reads the sum, and so does the circulating
+   water flow anchored against it, so rejection does scale with count. That
+   asymmetry is the existing model. */
+const condDumpMean=()=>{ let n=0,c=0;
+  for(const p of LAY.parts) if(p.role==="cond"){ c+=condDump(p.id); n++; }
+  return n?c/n:0; };            // no condenser is no dump, not a suggested one
 const sgTypeOf=id=>D.sgType[id]??D.sg;
 const sgRowOf=id=>SGT[sgTypeOf(id)];
 const totalSgMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="sg") m+=sgRowOf(p.id).mass;
   return m; };
+/* A generator carries its own transfer coefficient as well as its tonnage -
+   the tonnage says how much water is in it, the UA says how fast heat crosses
+   the tubes, and they were one figure. */
+const totalSgUA=()=>{ let c=0;
+  for(const p of LAY.parts) if(p.role==="sg") c+=sgUAOf(p.id);
+  return c; };
 /* WHAT SHARE OF THEM IS STILL WORKING. mwE() used to ask
    s.dmgParts.includes("turb") - a NAME test, and with two turbines a hit on
    one would have zeroed the plant's whole output. A share, so losing one of
@@ -433,7 +526,7 @@ const LOOP_ROLE={core:1, sg:1, ihx:1, pump:1, fitting:1};
    Node = partId+face, exactly the key netBuild() indexes on, so this graph and
    the solve's graph are the same drawing read twice. */
 /* THE KEY COST MORE THAN THE ANSWER. A tick asks for this graph ~85 times -
-   tankSide, loopMap, secGensFromNode and secGensOf all want it - and the exact
+   tankCircuit, loopMap, secGensFromNode and secGensOf all want it - and the exact
    signature below was rebuilt for every one of them, at 2.9 us a call to
    stringify eleven runs. Measured: 58% of one sim tick spent proving a cache
    was still valid, against a walk that is nearly free.
@@ -504,7 +597,7 @@ function nodeGraph(){
   }
   /* CONNECTIONS, never D.ports. An unplumbed port contributes no node - give
      it one and a steam generator's tubes fold onto its shell through the
-     "still one vessel" pass below, and loopMap(), tankSide() and secGensOf()
+     "still one vessel" pass below, and loopMap(), tankCircuit() and secGensOf()
      all read that graph. */
   for(const c of pipeTrace().conns){
     const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
@@ -543,13 +636,22 @@ function nodeGraph(){
         if(noGate && gate[gateKey(u,v)]) continue;
         seen[v]=1; stack.push(v); } }
     return seen; };
-  /* PRIMARY IS THE COMPONENT CONTAINING THE CORE. Not a side field, not a
-     kind: the one structural fact the drawing already carries. A plant with no
-     core on the grid has no primary at all, and every node is secondary by
-     this definition - which is honest, there is nothing for them to be the
-     primary OF. */
-  const primary = reach(nodesOf.core||[]);
-  nodeGraphCache={adj, nodesOf, primary, reach}; nodeGraphSig=sig;
+  /* ══ A CIRCUIT IS A CONNECTED COMPONENT, AND NOTHING MORE ══
+     No hop count, no distance from the core, no ordering. A chain of
+     exchangers, a ring, two cores, a radiator tied back into the core - all
+     just components. The core's circuit is a LOOKUP (coreCirc), never a rank,
+     and it is -1 on a plant with no core: honest, there is nothing for the
+     rest to be the primary OF. Walked over every node the graph knows, so a
+     part piped to nothing still gets its own index rather than falling out. */
+  const circuit={}; let nCirc=0;
+  const allNodes=[]; for(const pid in nodesOf) for(const n of nodesOf[pid]) allNodes.push(n);
+  for(const n of allNodes){ if(circuit[n]!==undefined) continue;
+    const seen=reach([n]); const i=nCirc++;
+    for(const m in seen) circuit[m]=i; }
+  const coreSeed = (nodesOf.core||[])[0];
+  const coreCirc = coreSeed===undefined ? -1 : circuit[coreSeed];
+  const inCore = n => circuit[n]===coreCirc && coreCirc>=0;
+  nodeGraphCache={adj, nodesOf, circuit, nCirc, coreCirc, inCore, reach}; nodeGraphSig=sig;
   return nodeGraphCache;
 }
 /* ══ AN ANSWER IS ONLY AS OLD AS THE GRAPH IT WAS READ OFF ══
@@ -594,7 +696,7 @@ function loopMap(){
   const cut={}; for(const n of (G.nodesOf.core||[])) cut[n]=1;
   const seeded=[];
   const claim=(p,i,noGate)=>{
-    const seen=G.reach((G.nodesOf[p.id]||[]).filter(n=>G.primary[n]), cut, noGate);
+    const seen=G.reach((G.nodesOf[p.id]||[]).filter(n=>G.inCore(n)), cut, noGate);
     for(const q of LAY.parts){
       if(!LOOP_ROLE[q.role] || q.id==="core" || partLoop[q.id]!==undefined) continue;
       if((G.nodesOf[q.id]||[]).some(n=>seen[n])) partLoop[q.id]=i;
@@ -616,10 +718,10 @@ function loopMap(){
    into that shell, whatever it is called and whatever anyone declared. */
 function secGensFromNode(node, cut){
   const G=nodeGraph();
-  if(G.primary[node]) return [];
+  if(G.inCore(node)) return [];
   const seen=G.reach([node], cut);
   return LAY.parts.filter(p=>p.role==="sg" &&
-    (G.nodesOf[p.id]||[]).some(n=>seen[n] && !G.primary[n])).map(p=>p.id);
+    (G.nodesOf[p.id]||[]).some(n=>seen[n] && !G.inCore(n))).map(p=>p.id);
 }
 /* WHICH RUNS SHORT THE TWO SIDES TOGETHER. A run with one end the core can
    reach and one it cannot is a hydraulic path from the primary straight into
@@ -646,21 +748,36 @@ function crossTies(){
        to nothing at all, which is not the same thing as being on the far side
        of a generator's tubes. */
     const cut={}; cut[na]=1; cut[nb]=1;
-    const pri=G.reach(G.nodesOf.core||[], cut);
-    const seeds=[];
-    for(const q of LAY.parts) if(ROLE[q.role] && ROLE[q.role].sgtr)
-      for(const n of (G.nodesOf[q.id]||[])) if(!pri[n] && !cut[n]) seeds.push(n);
-    const sec=G.reach(seeds, cut);
-    const at=n=>(G.adj[n]||[]);
-    const inPri=n=>at(n).some(v=>pri[v]), inSec=n=>at(n).some(v=>sec[v]);
-    if((inPri(na)&&inSec(nb)) || (inPri(nb)&&inSec(na))) out.push(c.key);
+    /* LABELLED PER END, never into one bucket. Reaching every shell from one
+       seed set merged two independent secondary circuits, so a tie into shell
+       A and a tie into shell B read as the same finding. Each end is walked
+       on its own and the PAIR OF CIRCUIT INDICES is what comes back. */
+    const side=n=>G.reach((G.adj[n]||[]).filter(v=>!cut[v]), cut);
+    const A=side(na), B=side(nb);
+    if(Object.keys(A).some(n=>B[n])) continue;
+    const holds=(seen,pid)=>(G.nodesOf[pid]||[]).some(n=>seen[n]);
+    const hasCore=seen=>holds(seen,"core");
+    const shellOf=seen=>{ const q=LAY.parts.find(q=>ROLE[q.role] && ROLE[q.role].sgtr && holds(seen,q.id));
+      return q?q.id:null; };
+    let far=null;
+    if(hasCore(A)) far=shellOf(B);
+    else if(hasCore(B)) far=shellOf(A);
+    if(!far) continue;
+    out.push({key:c.key, a:"core", b:far});
   }
   return out;
 }
 /* IS THIS NODE ON THE SECONDARY? One question, one answer, one place - the
    core cannot reach it. Every caller that used to want a `side` field wants
    this instead. */
-const secondaryNode=node=>!nodeGraph().primary[node];
+const secondaryNode=node=>!nodeGraph().inCore(node);
+/* WHICH CIRCUIT A TRANSFER STAGE'S FAR SIDE IS ON. A generator has nodes on
+   two of them, so "the circuit this machine is on" has no answer - the SHELL's
+   does, and it is the one the core cannot reach. -1 when nothing is piped to
+   it, which reads as water and is what an unplumbed shell always was. */
+const shellCirc=pid=>{ const G=nodeGraph();
+  const n=(G.nodesOf[pid]||[]).find(x=>!G.inCore(x));
+  return n===undefined ? -1 : G.circuit[n]; };
 function secGensOf(pid){
   const G=nodeGraph(), out=[];
   for(const n of (G.nodesOf[pid]||[]))
@@ -691,7 +808,7 @@ const shellFaces=()=>{
    end leaves the steam half of the loop, which is the half being asked about.
    A turbine and a condenser declare no internal path, so the "still one vessel"
    pass above folds their faces together and steam-in and exhaust-out are one
-   walk. NOT filtered by G.primary: a cross-tie IS a path, crossTies() already
+   walk. NOT filtered by circuit: a cross-tie IS a path, crossTies() already
    names it, and one pipe drawn round the tubes must not read as every machine
    on the plant unplumbed. */
 let secCircCache=null, secCircFor=null;
@@ -765,15 +882,24 @@ function shellsOf(pid){
 const loopOf = id => { const v=loopMap().partLoop[id]; return v===undefined?null:v; };
 const ihxIds=()=>LAY.parts.filter(p=>p.role==="ihx").map(p=>p.id);
 const ihxCount=()=>ihxIds().length;
-const IHX_MASS=95;                     // t, the exchanger and the intermediate loop behind it
-/* HOW BIG THIS EXCHANGER IS. Mirrors pumpCap() deliberately, so the default
-   0.5 is exactly 1.0 and a plant that never touched the slider is unmoved.
-   The size is a multiplier on the INSTANCE - P.ihxUA is still priced off
-   P.sgUA, so the second stage still has no anchor of its own. */
-const ihxSizeOf=id=>D.ihxSize[id]??0.5;
-const ihxCap=size=>0.25+1.50*size;
+/* PER kW/K, absolute. These were priced as a RATIO against the live
+   suggestion, so an exchanger's mass and its heat capacity both moved when the
+   core did. */
+const IHX_T_PER_UA   = 8.0e-4;         // t per kW/K - vessel, tubes, intermediate loop
+const IHX_HOLD_PER_UA= 7.6e-4;         // t of intermediate coolant per kW/K
+/* ══ EVERY EXCHANGER PRICES ITS OWN TRANSFER COEFFICIENT ══
+   IHX_UA=2.5 is gone. It existed so a second stage had SOME anchor when it
+   had none of its own; an exchanger states its UA in kW/K now, and the 2.5 is
+   what the bench SUGGESTS - a second stage worth two and a half times the
+   generator in front of it - which is a recommendation and not a law. */
+const sgUASuggest = () => { const n=Math.max(1,sgCount());
+  const dT0=Math.max(5, COOLANT[D.cool].Tref - tsatSec(COOLANT[D.cool].P0*0.45));
+  return (n0Ref()*RATED_KW())/(n*Math.pow(Math.max(layoutMetrics().flowK,.02),UA_FLOW)*dT0); };
+const ihxUASuggest = () => sgUASuggest()*2.5;
+const sgUAOf  = id => bake(D.sgUA,  id, sgUASuggest);
+const ihxUAOf = id => bake(D.ihxUA, id, ihxUASuggest);
 const totalIhxMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="ihx") m+=ihxCap(ihxSizeOf(p.id))*IHX_MASS;
+  for(const p of LAY.parts) if(p.role==="ihx") m+=ihxUAOf(p.id)*IHX_T_PER_UA;
   return m; };
 /* ══════════ THE RADIATOR ══════════
    This is a space game: there is nothing to reject into, so waste heat leaves
@@ -797,8 +923,11 @@ const RADCOAT=[
 ];
 const radIds=()=>LAY.parts.filter(p=>p.role==="radiator").map(p=>p.id);
 const radCount=()=>radIds().length;
-const radSizeOf=id=>D.radSize[id]??0.5;
-const radCap=size=>0.25+1.50*size;     // the pumpCap()/ihxCap() span
+/* ══ D.radSize IS DELETED ══
+   A multiplier on top of drawn geometry is exactly the hidden reference this
+   job removes: draw a bigger panel to get more panel. A radiator's area is its
+   footprint and nothing else. RADCOAT stays - a coating is a material, not a
+   size. */
 const radCoatOf=id=>RADCOAT[D.radCoat[id]??1][1];
 /* THE ONE FUDGE IN THIS FEATURE, and it is bought balance in graceK's sense.
    A grid cell is MPC^2 = 0.218 m^2; rejecting ~690 MW at a playable panel
@@ -816,7 +945,7 @@ const radLive=id=>{ const p=partOf(id); if(!p) return false;
       if(hullCell(X+d[0],Y+d[1])) return true; }
   return false; };
 const radArea=id=>{ const p=partOf(id);
-  return (p && radLive(id)) ? radCap(radSizeOf(id))*p.w*p.h*RAD_AREA_CELL : 0; };
+  return (p && radLive(id)) ? p.w*p.h*RAD_AREA_CELL : 0; };
 /* Mass rides the CAPACITY and the coating, never the slider position - the
    rule every other capacity slider on this plant already follows. A blind
    panel still weighs what it weighs. */
@@ -834,7 +963,7 @@ const radTAt=qkW=>{ const k=totalRadEA();
   return k>0 ? Math.pow(qkW*1000/k + Math.pow(T_SPACE,4), 0.25) : Infinity; };
 const totalRadMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="radiator")
-    m+=radCap(radSizeOf(p.id))*p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(p.id).massK;
+    m+=p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(p.id).massK;
   return m; };
 
 /* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
@@ -855,7 +984,7 @@ function loopPumpCap(i,dmg){
     // in any group, so primaryPump() here would only ask loopOf() twice on a
     // path the solve walks once per pump per tick.
     if(!roleHead(p.role)) continue;
-    if(loopOf(p.id)===i && !dmg.includes(p.id)) c+=pumpCap(pumpSizeOf(p.id));
+    if(loopOf(p.id)===i && !dmg.includes(p.id)) c+=pumpCapOf(p.id);
   }
   return c;
 }
@@ -1355,8 +1484,16 @@ const ROLE = {
           ports:{t:4, b:1}, thermal:"none", tsurv:400, pburst:70},
   turb:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:4, b:1}, thermal:"none", tsurv:420, pburst:70},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
-  cond:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
-          ports:{t:1, r:1}, thermal:"sink", tsurv:400, pburst:35},
+  /* TWO internal paths that do not meet, the same declaration ROLE.sg makes -
+     because that is what a surface condenser IS. The steam side takes the
+     exhaust in at t and gives condensate back at r; the water side (l<->b) is
+     the circulating water, and the only crossing is the tube wall, which is
+     heat and not an edge. Declaring them costs the exhaust a real component
+     resistance where the old single folded node gave it none. */
+  cond:  {internal:[{a:"t", b:"r", kind:"comp", vap:"a", anch:"ab", na:"EXH", nb:"COND", la:"EXHAUST", lb:"CONDENSATE"},
+                    {a:"l", b:"b", kind:"comp", na:"CW IN", nb:"CW OUT", la:"CIRC WATER IN", lb:"CIRC WATER OUT"}],
+          fixed:null, fold:null, mu:0.82, sgtr:false,
+          ports:{t:1, r:1, l:1, b:2}, thermal:"sink", tsurv:400, pburst:35},
   ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:340, pburst:20},
   cont:  {internal:null, fixed:null, fold:null, mu:0.30, sgtr:false,
@@ -1398,8 +1535,15 @@ const ROLE = {
      nothing and cooks the compartment instead. tsurv is scaled per instance
      by the coating (RADCOAT), which is why the ceramic row is the fragile
      one. */
-  radiator:{internal:null, fixed:null, fold:null, mu:0.35, sgtr:false,
-          ports:{}, thermal:"sink", tsurv:520, pburst:15},
+  /* PLUMBED, not a footprint with an effect. A panel is a heat exchanger with
+     space on one side, so it carries coolant like every other one: ONE
+     internal path, folded the way a valve body is (t->l, b->r) so it splices
+     into a cooling leg however it is oriented. What happens at the far end -
+     radiating to T_SPACE - is still not a flow path and never becomes an edge.
+     Space is not a node. */
+  radiator:{internal:{a:"l", b:"r", kind:"comp", na:"IN", nb:"OUT", la:"COOLANT IN", lb:"COOLANT OUT"},
+          fixed:null, fold:{t:"l", b:"r"}, mu:0.35, sgtr:false,
+          ports:{"*":2}, thermal:"sink", tsurv:520, pburst:15},
   /* ONE ROLE FOR EVERY FITTING. There is no kind: a tee, a branch throttle
      and a relief valve differ by `mode` on the instance (D.fittings), never
      by role - the same move that turned five tank-shaped things into one
@@ -1475,7 +1619,12 @@ function buildLayout(){
   /* THE SHIP'S ONLY HEAT SINK, on the bottom hull beside the condenser. Two
      of them rather than one because a radiator is what gets shot, and the
      hull ring is already ten times more likely to be hit. */
-  for(let i=0;i<2;i++) add("rad"+i,"RADIATOR "+(i+1),5,3,44+6*i,30,"#b8c4cf","sec",
+  /* SPACED, not shoulder to shoulder. Sitting directly under the condenser
+     they had no usable nozzle at all: every top face looked into the
+     condenser's floor, the outer faces looked at the keel and the hull, and
+     the two inner faces faced each other. A panel is plumbed now, so it needs
+     a free cell on two sides, and this is where they fit. */
+  for(let i=0;i<2;i++) add("rad"+i,"RADIATOR "+(i+1),5,3,36+8*i,30,"#b8c4cf","sec",
     "A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. Select it for area and coating.","radiator");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",3,3,18+3*i,30,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
@@ -1492,9 +1641,19 @@ function buildLayout(){
      either, so a fixed part, a tank or a fitting can be dragged into the same
      hole and has to answer for it the same way. */
   markLimbo(A);
+  /* A REBUILD THAT LANDS ON THE SAME BOARD KEEPS THE OLD OBJECT. Half a dozen
+     caches - the bench rail above all - key on LAY IDENTITY to mean "the board
+     changed", and massWith() (design-bench.js) writes D to price an option row
+     and puts it back, so laySrcSig() moved twice per priced row. That rebuilt
+     the whole rail from scratch every frame off a board nothing had touched. */
+  const sig=A.map(p=>[p.id,p.name,p.w,p.h,p.x,p.y,p.col,p.grp,p.role,p.tip,p.limbo?1:0,
+    p.pin?p.pin.to+","+p.pin.dx+","+p.pin.dy:""].join("|")).join(";");
+  layFit=laySrcSig();
+  if(LAY && layBuiltSig===sig) return;
+  layBuiltSig=sig;
   // byId is built here and nowhere else: LAY.parts is only ever replaced whole
   const byId=new Map(); for(const p of A) byId.set(p.id,p);
-  LAY={parts:A, byId}; layFit=laySrcSig();
+  LAY={parts:A, byId};
 }
 /* ONE PASS, TWO CALLERS. buildLayout() runs it on the set it just built, and
    moveTo() runs it again on LAY.parts - a move does not change laySrcSig(), so
@@ -1699,10 +1858,13 @@ const RUN_KIND={
   // the condenser is on nobody's primary, so a pump drawn to it is drawing
   // feedwater whatever else it is plumbed to
   "cond|pump":"feed",
+  // the circulating-water side: a condenser rejecting into a panel, and a pump
+  // pushing that water round. It is not feedwater and it is not exhaust.
+  "cond|radiator":"cw", "pump|radiator":"cw", "radiator|radiator":"cw",
   /* A pipe between the pressurizer and any primary machine IS a surge line -
      the vessel has exactly one connection to the loop and that is what it is
      called. Without these rows a hand-drawn pressurizer line came out
-     k:"user": grey, unnamed, bore 1 instead of PIPE_BORE.surge, and with no
+     k:"user": grey, unnamed, full bore instead of the surge line's, and with no
      KIND_TEMP hot tag - a working connection wearing no name. */
   "core|pzr":"surge", "pzr|sg":"surge", "pump|pzr":"surge",
 };
@@ -1768,7 +1930,7 @@ function runKindFor(aId,bId,af,bf){
   if((A.role==="sg") !== (B.role==="sg")){
     const g = A.role==="sg" ? A : B, f = A.role==="sg" ? af : bf,
           o = A.role==="sg" ? B : A;
-    if(f!=null && !nodeGraph().primary[g.id+f])
+    if(f!=null && !nodeGraph().inCore(g.id+f))
       return (o.role==="pump" || o.role==="tank") ? "feed" : "steam";
   }
   /* A TANK'S LINE IS NAMED BY WHAT IT REACHES, not by which tank it is - there
@@ -1852,28 +2014,33 @@ function datumPart(){
      primary or secondary OF. */
 const hostPartOf = () => LAY.parts.find(p=>ROLE[p.role] && ROLE[p.role].thermal==="sink") || null;
 // on the graph (graphSlot()): netCoreFracOf() asks this once per EDGE per solve
-function tankSide(id){
+function tankCircuit(id){
   const t=D.tanks && D.tanks[id]; if(!t) return null;
-  const G=nodeGraph(), slot=graphSlot("tankSide");
+  const G=nodeGraph(), slot=graphSlot("tankCircuit");
   const hit=slot.get(id); if(hit!==undefined) return hit;
-  const sideOfNodes = ns => !ns || !ns.length ? null
-    : (ns.some(n=>G.primary[n]) ? "primary" : "secondary");
+  const circOfNodes = ns => !ns || !ns.length ? null : G.circuit[ns[0]];
   let out;
   if(!t.cell){ const h=hostPartOf();
     /* no host on the grid at all: a hosted tank is still not something the
-       core can reach, so it is secondary rather than nothing. */
-    out = (h && sideOfNodes(G.nodesOf[h.id])) || "secondary"; }
-  else out = sideOfNodes(G.nodesOf[id]);
+       core can reach, so it is off the core's circuit rather than nothing. */
+    const c=h && circOfNodes(G.nodesOf[h.id]);
+    out = c===null || c===undefined || c===false ? -1 : c; }
+  else out = circOfNodes(G.nodesOf[id]);
   slot.set(id,out);
   return out;
 }
+// "on the core's circuit" - what every old tankSide()==="primary" test meant
+const tankPrimary = id => { const c=tankCircuit(id);
+  return c!==null && c>=0 && c===nodeGraph().coreCirc; };
+// connected somewhere, but not to the core's circuit
+const tankSecondary = id => { const c=tankCircuit(id); return c!==null && !tankPrimary(id); };
 /* Is this part id a tank on the PRIMARY side - the one predicate for "could
    catch a relief discharge". Any primary tank will do: "the relief tank" is
    not a kind of thing, it is whichever tank you happened to plumb the relief
    header to. Off ROLE and the graph, never p.id. */
 function primaryTank(id){
   const p=partOf(id);
-  return !!(p && p.role==="tank" && tankSide(id)==="primary");
+  return !!(p && p.role==="tank" && tankPrimary(id));
 }
 
 /* WHICH PARTS A WALK OVER THE CONNECTIONS REACHES FROM ONE PART - the design-time
@@ -2152,7 +2319,7 @@ function layoutMetrics(){
      there is nothing to warn about, and 0 is the honest answer. */
   let injZ = null;
   for(const q of P_){ const t=q.role==="tank" && D.tanks[q.id];
-    if(t && tankSide(q.id)==="primary" && t.check) injZ = injZ===null ? tankZ[q.id] : Math.min(injZ, tankZ[q.id]); }
+    if(t && tankPrimary(q.id) && t.check) injZ = injZ===null ? tankZ[q.id] : Math.min(injZ, tankZ[q.id]); }
 
   // pmass, not (pipe+sec+dead)*1.6: a metre of pipe is priced by its bore and
   // by what is inside it (runMassPerM(), pipenet.js), so a low-pressure loop

@@ -281,3 +281,47 @@ function shellInitTooltip(){
     placeView();
   };
 }
+
+/* ══ NAMES ARE A VIEW, NEVER A FACT ══
+   The physics has no vocabulary left: a circuit is a connected component with
+   an index and nothing else. The player still needs words, so this turns an
+   index into a name out of WHAT IS ON IT. A circuit may match several - a
+   direct cycle is primary and secondary at once - and this picks one, in a
+   fixed order, so it can never return two. Nothing in src/sim/ or src/data/
+   may read it: the same standing a layer has. */
+function circNames(){
+  const G=nodeGraph();
+  const partsOn=[]; for(let i=0;i<G.nCirc;i++) partsOn.push([]);
+  for(const p of LAY.parts){
+    const ns=G.nodesOf[p.id]||[]; const seen={};
+    for(const n of ns){ const c=G.circuit[n];
+      if(c===undefined || seen[c]) continue; seen[c]=1; partsOn[c].push(p); }
+  }
+  /* A CIRCUIT NOBODY DREW A PIPE TO is one machine standing on its own - a
+     spare panel, a generator waiting to be plumbed. It gets a name of its own
+     rather than the name of whatever it would be if it were connected, or the
+     rail lists two COOLING groups and one of them is a box in a corner. */
+  const piped={};
+  for(const c of pipeTrace().conns){
+    const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
+    piped[G.circuit[a.id+c.sa]]=1; piped[G.circuit[b.id+c.sb]]=1;
+  }
+  const raw=[];
+  for(let i=0;i<G.nCirc;i++){
+    const has=r=>partsOn[i].some(p=>p.role===r);
+    raw.push(!piped[i] ? "UNPIPED"
+      : i===G.coreCirc ? "PRIMARY"
+      : has("radiator") ? "COOLING"
+      : has("turb") ? "SECONDARY"
+      : "INTERMEDIATE");
+  }
+  // a name earned twice is numbered, in index order, so it is still one name
+  const seen={}, total={};
+  for(const n of raw) total[n]=(total[n]||0)+1;
+  return raw.map(n=>{ seen[n]=(seen[n]||0)+1;
+    return total[n]>1 ? n+" "+seen[n] : n; });
+}
+function circName(ci){
+  if(ci===null || ci===undefined || ci<0) return "UNCONNECTED";
+  return circNames()[ci] || "UNCONNECTED";
+}

@@ -266,11 +266,19 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
             carries it to P and resetPlant() to S, like every other tune. */
          arLo:0.10, arHi:0.70,
          cont:1,contFit:true,catcher:false,bkp:1,
-         turb:.5,turbFit:true,condCap:.5,condFit:true,pumpSize:{},fittings:{},
-         /* PER-INSTANCE SIZES, keyed by part id, exactly as pumpSize is. The
-            scalar above each of them is the FALLBACK, so a design that never
-            touched a box commissions bit-identically. */
-         turbSize:{},condSize:{},sgType:{},ihxSize:{},radSize:{},radCoat:{},
+         turbFit:true,condFit:true,fittings:{},
+         /* ══ PER-INSTANCE QUANTITIES, IN REAL UNITS, KEYED BY PART ID ══
+            EMPTY means "whatever this design suggests" - the suggestion is
+            computed off the rest of the plant (layout.js), so an untouched
+            design commissions on the figure the old slider midpoint stood for
+            without that figure being written down anywhere. A typed number
+            sticks: nothing here clamps, reverts or ranges. */
+         turbKgs:{},          // kg/s of steam a turbine swallows wide open
+         condUA:{}, condDump:{},   // kW/K of condensing duty; kg/s of bypass
+         sgUA:{}, ihxUA:{},   // kW/K per transfer stage
+         pumpHead:{}, pumpFlow:{}, // MPa developed, at kg/s
+         sgType:{},radCoat:{},
+         bore:{},             // mm, per run key - a pipe is a diameter
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
             runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
             through the same addTank()/addFitting() calls and the same pipe tool the bench
@@ -304,13 +312,12 @@ const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : f
    previews it and commission() bakes it; two formulas would drift apart.
    The multiplier is centred on 1.0 so the default turbine delivers exactly the
    architecture's own figure. */
-/* COUNTED, and each machine carries its own size (turbSizeOf(), layout.js -
-   D.turb is only what an untouched box falls back to); how many there are is read off
-   the grid (turbCount(), layout.js), so a second turbine buys a second
-   machine's swallow rather than nothing at all - and no turbine is exactly
-   zero, which is what the bench warning is about. Efficiency itself is a
-   property of the STEAM, not of how many machines take it, so only the
-   ceilings below are counted. */
+/* COUNTED, and each machine carries its own swallow in kg/s (turbKgs(),
+   layout.js); how many there are is read off the grid (turbCount()), so a
+   second turbine buys a second machine's swallow rather than nothing at all -
+   and no turbine is exactly zero, which is what the bench warning is about.
+   Efficiency itself is a property of the STEAM, not of how many machines take
+   it, so only the ceilings below are counted. */
 /* SWALLOW-WEIGHTED, because efficiency is a property of the STEAM and the
    steam is split by what each machine can take. A big turbine swallows
    proportionally more of it and so carries proportionally more of the
@@ -318,13 +325,23 @@ const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : f
    free. Uniform sizes collapse to today's value exactly. */
 const grossEff  = () => { let w=0,e=0;
   for(const p of LAY.parts) if(p.role==="turb"){
-    const sz=turbSizeOf(p.id), k=turbSwallow(sz); w+=k; e+=k*turbEff(sz); }
-  return COOLANT[D.cool].eff * (w>0 ? e/w : turbEff(D.turb)); };
+    const k=turbKgs(p.id); w+=k; e+=k*turbEffOf(p.id); }
+  return COOLANT[D.cool].eff * (w>0 ? e/w : 1); };
 /* How much steam the turbine can swallow, and how much the condenser can turn
    back into water. They are separate on purpose: overload past the condenser and
    the output is there but the backpressure eats it. */
-const loadCeil  = () => totalTurbSwallow();
-const condCeil  = () => totalCondDuty();
+/* Both as a share of WHAT THIS PLANT ACTUALLY MAKES - never of the core's
+   rating, which the loop may not be able to carry. A matched machine reads
+   exactly 1.00 and anything above it is overload somebody bought. The
+   quantities themselves are kg/s and kW/K and live on the machines; these two
+   are the only place a ratio is taken, and they take it against the same
+   reference so condShort_() below compares like with like. */
+const loadCeil  = () => totalTurbKgs()/Math.max(1e-9, plantSteam());
+/* A RATIO, never a value. condUASuggest() is the UA this plant NEEDS, so this
+   asks "does the condenser fitted match the plant it is fitted to" - which is
+   a question about fit and is meant to move when either side changes. Nothing
+   a machine OWNS is derived here. */
+const condCeil  = () => totalCondUA()/Math.max(1e-9, condUASuggest());
 /* When the pair is mismatched enough to matter. A condenser is normally sized for
    about full load and a brief overload is bought with backpressure, so a gap is
    not a fault - only a gap wide enough to cost real output is. One
@@ -380,7 +397,7 @@ function derived(){
      "never fitted" price and warn identically without saying so twice. */
   const contRel=D.contFit?CONT[D.cont].rel:1;
   /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
-     layout.js - sums pumpCap() over every "pump"+ part, static and placed
+     layout.js - sums pumpCapOf() over every pump part, static and placed
      alike), replacing the old flat PUMPS[D.pumps] tier. Every generator on
      the grid costs its OWN type's steel (totalSgMass(), layout.js) - the
      old D.loops*34 flat lump priced neither the pump (totalPumpCap() already
@@ -486,8 +503,8 @@ function derived(){
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
       if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
       else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
-      if(loadMax<1.10) w.push(["SOFT","The turbine draws at most "+(loadMax*100).toFixed(0)+"% of rated. In combat the reactor will be able to make power this machine cannot take.","turb"]);
-      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
+      if(loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
+      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% of full-load duty but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
       if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);
       if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);

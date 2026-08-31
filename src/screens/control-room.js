@@ -402,7 +402,7 @@ function crRailGroup(p){
   const li=loopOf(p.id); if(li!=null) return "loop"+li;
   const G=nodeGraph(), ns=G.nodesOf[p.id]||[];
   if(!ns.length) return p.pin&&p.pin.to ? crRailGroup(partOf(p.pin.to)||p) : "support";
-  return ns.some(n=>G.primary[n]) ? "primary" : "secondary";
+  return "circ"+G.circuit[ns[0]];
 }
 /* MACHINES THAT SHARE A SIDE STAND TOGETHER, in the order the coolant meets
    them: the primary that every loop shares, then the loops, then the secondary,
@@ -418,14 +418,22 @@ function crRailBuild(rail,watch){
   }
   const loops=Array.from(byGroup.keys()).filter(k=>k.startsWith("loop"))
     .sort((a,b)=>+a.slice(4) - +b.slice(4));
-  const order=["primary"].concat(loops,["secondary","support"]).filter(k=>byGroup.has(k));
+  /* CIRCUITS ARE INDEXED, so the rail lists them in index order rather than in
+     a two-name bucket. The core's own circuit leads, because that is where the
+     heat comes from; support is last, because it carries none. */
+  const G0=nodeGraph();
+  const circs=Array.from(byGroup.keys()).filter(k=>k.startsWith("circ"))
+    .sort((a,b)=>{ const x=+a.slice(4), y=+b.slice(4);
+      return (x===G0.coreCirc?-1:0)-(y===G0.coreCirc?-1:0) || x-y; });
+  const order=circs.slice(0,1).concat(loops, circs.slice(1), ["support"]).filter(k=>byGroup.has(k));
   /* a loop is a PRIMARY loop - it is seeded off a generator and walked over
      primary nodes only - and on a one-loop plant its number says nothing.
      SUPPORT is the last group: what is left carries no coolant at all. The
      control room, the containment, the backup set and the shielding do not
      move heat, they hold the reactor up, so the heading names the JOB rather
      than the building it happens to be in. */
-  const label=k=>k==="support"?"SUPPORT":k==="primary"?"PRIMARY":k==="secondary"?"SECONDARY"
+  const label=k=>k==="support"?"SUPPORT"
+    :k.startsWith("circ")?circName(+k.slice(4))
     :loops.length>1?"PRIMARY LOOP "+(+k.slice(4)+1):"PRIMARY LOOP";
   /* A GROUP IS A crCollapse() - shut, like every other one. A shut group leaves
      its panels in the DOM but out of view, which the rail already handles:
