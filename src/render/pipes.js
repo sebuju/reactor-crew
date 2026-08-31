@@ -730,6 +730,39 @@ function pipeAnchors(runs){
 /* One run's own point, for a caller that has a run rather than the list. The
    allocator above has already decided it for this frame. */
 function pipeRunAnchor(r){ return (anchorCache && anchorCache[r.key]) || pipeRunSpots(r)[0] || null; }
+
+/* ══ ONE RUN IN FOCUS ══
+   With every run carrying a stack, a busy plant is a wall of numbers and there
+   is no way to ask which figure belongs to which pipe. Hovering answers it by
+   standing the others down for as long as the pointer is there - the readings
+   are all still one keystroke away, which is the difference between this and
+   the silent declutters pipeAnchors() replaced.
+   AND IT ANSWERS THE QUESTION THE OTHER WAY TOO: with the layers off, hovering
+   a pipe puts that one run's readings up (layerPass(), layers.js). Asking a
+   single pipe what it is carrying is not the same request as surveying the
+   whole plant, and it should not cost switching the survey on.
+   Resolved fresh each frame and spent the same one, so it lives beside the
+   allocator rather than on S - the standing portRing (plant.js) has. */
+let pipeHov=null;
+const pipeHovOn = () => LAYERS.press.on||LAYERS.subc.on||LAYERS.flow.on;
+/* The one predicate both label paths ask: layerRunLine() places slots 1 and 2,
+   pipeMeters() slot 0, and they must not disagree about which run is showing. */
+const pipeHovShow = key => !pipeHov || pipeHov===key;
+function pipeHovResolve(){
+  pipeHov=null;
+  if(ui.drag || !vIn(ui.ptr)) return;
+  const p=vPt(ui.ptr);
+  /* THE LABEL FIRST, because a label draws over the pipes: under a stack the
+     answer is that stack, even where a foreign run passes beneath it. Only
+     while a layer is on - the allocator hands out a box for every run whatever
+     is switched on, and a box with no ink in it is not something to hover. */
+  if(pipeHovOn()){ const boxes=pipeStackBoxes();
+    for(let i=boxes.length-1;i>=0;i--){ const b=boxes[i];
+      if(p.x>=b.x&&p.x<b.x+b.w&&p.y>=b.y&&p.y<b.y+b.h){ pipeHov=b.key; return; } } }
+  const c=cellAt(p), keys=pipeCellRuns(c[0],c[1]);
+  if(keys.length) pipeHov=keys[keys.length-1];   // a crossing cell owns two: last wins, as hitAt() does
+}
+
 function pipeMeters(runs,L){
   const best=pipeAnchors(runs), PC=pipeColours(L);
   /* ONE METER PER RUN, and every run that has a number gets one. It used to be
@@ -743,6 +776,7 @@ function pipeMeters(runs,L){
      the honesty rule going the other way - a run pipeUnit() has no scale for
      gets no number at all, below. */
   for(const r of runs){
+    if(!pipeHovShow(r.key)) continue;        // a hidden reading keeps no TIP either - see pipeHovResolve()
     const a=best[r.key]; if(!a) continue;
     const k=r.k, key=r.key;
     const un=pipeUnit(key,k);

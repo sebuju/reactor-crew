@@ -109,6 +109,7 @@ function layerRunLine(runs, slot, val, col, fmt){
      missing. */
   const anch=pipeAnchors(runs);
   for(const r of runs){
+    if(!pipeHovShow(r.key)) continue;   // one run in focus while the pointer is on it - pipeHovResolve() (pipes.js)
     const v=val(r);
     if(v===null||v===undefined||!isFinite(v)) continue;
     const a=anch[r.key];
@@ -257,7 +258,14 @@ function layerData(id, L){
 function layerPass(seam, L){
   for(const k of LAYER_ORDER){
     const l=LAYERS[k];
-    if(!l.on || l.seam!==seam || (l.live && !L)) continue;
+    /* A HOVERED RUN DRAWS ITS OWN READINGS WITH THE SWITCH OFF. The three
+       PLUMBING rows are gauges on the pipework rather than a survey painted
+       over it, so pointing at one pipe is enough to ask that pipe what it is
+       doing. It puts NOTHING extra on the picture: pipeHovShow() (pipes.js)
+       is already the filter, and it passes exactly the run under the pointer.
+       The switch still decides what is drawn unasked, which is what a switch
+       on this menu means. */
+    if((!l.on && !(l.group==="PLUMBING" && pipeHov)) || l.seam!==seam || (l.live && !L)) continue;
     ctx.save();
     l.draw(layerData(l.data, L), L);
     ctx.restore();

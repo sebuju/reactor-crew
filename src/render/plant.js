@@ -2542,6 +2542,7 @@ function drawPlant(y0,L,vh,vx,vw){
   // (concentric radii) so a pipe bends rather than folds
   const PC=pipeColours(L), NET=pipeNetwork();
   pipeFieldRefresh(L);          // one solve read per frame, shared by every gauge and both pressure layers
+  pipeHovResolve();             // AFTER it: the label boxes it asks about are allocated in there
   /* A CELL THAT NO CONNECTION CLAIMS IS DRAWN, AND DRAWN AS WHAT IT IS. It is
      pipe on the grid either way; what it is not is a connection, and dashed
      grey is that said in the picture rather than only in the rail. */
@@ -2552,6 +2553,13 @@ function drawPlant(y0,L,vh,vx,vw){
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";
     const w = pipeWidth(runBore(r));
+    /* THE OUTLINE, around the casing rather than inside it, so the highlight is
+       the pipe's own shape and needs no second geometry. Drawn from EITHER end
+       of the hover - pointing at the pipe and pointing at its label are the same
+       pairing asked from the two sides, and with the layers off the outline is
+       the only thing tying the readings that appeared to the run they are on. */
+    if(!pass && pipeHov===r.key){
+      ctx.lineWidth=2*w+3; ctx.strokeStyle=C.amber; ctx.stroke(); }
     ctx.lineWidth = pass? w : 2*w;
     ctx.strokeStyle = pass? pipeCol(PC,r.k) : PIPE_CASE;
     ctx.stroke();
