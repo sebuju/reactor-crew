@@ -1269,8 +1269,7 @@ function drawPortMarks(){
     const wk=p.id+f+word;
     /* A PLATE UNDER THE WORD. It is drawn in the same margin the pipework runs
        through, so on a dense grid it landed on top of a pipe and read as part
-       of it. The plate is the plant's own ground, not a tint, so the word sits
-       on the board rather than on whatever happened to be behind it. */
+       of it. */
     // BESIDE THE NOZZLE, which sits on the shell and not in the port cell's
     // middle - a fixed offset to the right named the wrong side of a machine.
     if(word && !seenWord[wk]){ seenWord[wk]=1;
@@ -1278,8 +1277,9 @@ function drawPortMarks(){
       const [nx,ny]=portPos(pid);
       const px = fx ? nx+fx*3-(fx<0?pw:0) : nx-pw/2;
       const py = fy ? ny+fy*3-(fy<0?ph:0) : ny-ph/2;
-      fillRect(px,py,pw,ph,C.well);
-      frame(px,py,pw,ph,C.edge);
+      // the same plate every other label on the board wears (tag()), not a
+      // solid well: an opaque box in the pipe margin reads as a component
+      fillRect(px,py,pw,ph,"rgba(6,10,11,.88)");
       txt(word,px+2,py+6.5,{size:6.5,color:col,align:"left",sp:.4}); }
     const nm=partName(p), longWord=IN&&portWord(p,f,true);
     TIP(bx,by,PORTG,PORTG, (longWord?longWord+" - ":"")+nm,
@@ -1381,6 +1381,16 @@ function partGhost(){
    of the loop's head. Both are numbers a box has no room for. */
 function pipeFitMarks(L,net){
   if(!L) return;                      // both readings are live figures
+  const anch=pipeAnchors(net);
+  /* SLOT 3 OF THE RUN'S OWN STACK, never a plate of this reading's own over
+     the valve's box - that is where the valve's NAME is. fitRunKey() is the
+     one answer the allocator already reserved the line against. A valve with
+     no pipe on it at all has no stack to write into and keeps its own tag. */
+  const put=(id,label,col,cx,yTop)=>{
+    const key=fitRunKey(id,net), a=key!==null && anch[key];
+    if(!a){ pipeTag(cx,yTop,label,col); return; }
+    if(pipeHovShow(key)) pipeStackLine(a.x,a.y,3,label,col);
+  };
   for(const p of LAY.parts){
     if(p.role!=="fitting") continue;
     const id=p.id, mode=fitModeOf(id), r=prect(p), cx=r.x+r.w/2;
@@ -1394,8 +1404,8 @@ function pipeFitMarks(L,net){
          is going to. Against THIS valve's own lift point, never a plant-wide
          constant. */
       const marg = P.P0*reliefSet(id).lift - L.P;
-      pipeTag(cx, r.y-4, (marg>=0?"+":"")+marg.toFixed(2)+" MPa",
-              marg<0?C.red : marg<P.P0*0.02?C.amber : C.ink2);
+      put(id, (marg>=0?"+":"")+marg.toFixed(2)+" MPa",
+          marg<0?C.red : marg<P.P0*0.02?C.amber : C.ink2, cx, r.y+1);
     } else if(mode==="throttle"){
       /* THE DIFFERENTIAL IS WHAT A THROTTLE IS FOR. Position says what you
          asked for; only the drop says what it cost, and without it the knob
@@ -1406,8 +1416,8 @@ function pipeFitMarks(L,net){
          pipenet.js), never a run key spelled out here. */
       const dk = fitEdgeKey(id);
       if(pipeDrop[dk]!=null)
-        pipeTag(cx, r.y-4, (pipeDrop[dk]*100).toFixed(0)+"% dP",
-                pipeDrop[dk]>0.5?C.amber:C.ink2);
+        put(id, (pipeDrop[dk]*100).toFixed(0)+"% dP",
+            pipeDrop[dk]>0.5?C.amber:C.ink2, cx, r.y+1);
     }
   }
 }
@@ -2731,6 +2741,7 @@ function drawPlant(y0,L,vh,vx,vw){
           drawGhostPort();              // ...where the next one would go...
           drawPipePreview(); }          // ...and the run now being dragged
   pipeFitMarks(L,NET);
+  pipeStackFlush();             // every run reading, one plate per stack
   if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
   for(const t of tags) t();     // every name and value, over the pipework
   for(const c of hovCtl) c();   // ...and a valve's handles over the names too
