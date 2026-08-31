@@ -309,6 +309,21 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
    Here rather than in the renderer because the SIM reads it and loads no UI. */
 const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : fallback;
 
+/* EVERY PER-INSTANCE FIGURE ON D, IN ONE LIST. A suggestion is BAKED on first
+   read (bake(), layout.js), so a figure left behind from the last design
+   prices the next plant off the last one's core - and a control position left
+   behind commissions it in the last one's hands. Emptied in place, never
+   rebuilt: the bags are read through D and a reassignment strands a holder. */
+const DBAGS=["turbKgs","condUA","condDump","sgUA","ihxUA","pumpHead","pumpFlow",
+             "sgType","radCoat","bore","start"];
+/* and the scalars, taken before anything can edit them. A whole-plant preset
+   states a handful of them, so every one it does not state has to be back at
+   its own default or the plant carries the last design's containment, its
+   protection setpoints and its rod worth. */
+const DSCAL=Object.fromEntries(Object.entries(D).filter(([,v])=>typeof v!=="object"));
+const designForget=()=>{ for(const b of DBAGS) for(const k in D[b]) delete D[b][k];
+  Object.assign(D,DSCAL); };
+
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
    how much of that ceiling you actually capture. One function, because the bench
