@@ -18,7 +18,7 @@ const M=require('./bundle').headless(
  'buildLayout,buildStockPlumbing,latDefault,pipeMap,pipeNetwork,nodeGraph,'+
  'crossTies,selfRuns,designIssues,loopMap,tankCircuit,tankPrimary,tankIds,tankKg,'+
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
- 'sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
+ 'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol}');
 
 const D=M.D();
@@ -82,7 +82,13 @@ function dump(s,label){
   const flow={};
   M.netFlowK(s, flow);
   for(const r of M.pipeNetwork())
-    row(r.k+" "+r.key.slice(0,40), flow[r.key]===undefined?"-":f(flow[r.key],4));
+    row(r.k+" "+r.key.slice(0,40), (s.vapQ && s.vapQ[r.key]!==undefined)
+      ? f(s.vapQ[r.key],2)+" kg/s"
+      : (flow[r.key]===undefined ? "-"
+         : f(Math.sign(flow[r.key])*M.netKgs(flow[r.key]),2)+" kg/s"));
+  console.log(" STEAM   MPa");
+  for(const nm in (s.vapP||{})) row(nm, f(s.vapP[nm],4));
+  row("turbine", f(s.turbWk,2)+" kg/s at "+f(s.turbP,4)+" MPa");
 
   console.log(" DESIGN");
   const issues=M.designIssues?M.designIssues():[];
