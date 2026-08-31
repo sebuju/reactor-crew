@@ -77,7 +77,7 @@ function layoutStats(M){
   ["PRIMARY PIPE RUN",M.pipe.toFixed(1)+" m",clamp(M.pipe/60,0,1),M.pipe>40?C.amber:C.green,
    "Total hot and cold leg length. Long runs add friction so your pumps deliver less flow, and give more pipe for a hit to find. They also add coolant mass, which is thermal inertia in your favour."],
   ["FLOW PENALTY",((1-M.flowK)*100).toFixed(0)+" %",1-M.flowK,(1-M.flowK)>.2?C.amber:C.green,
-   "Pumping loss from pipe friction. A short straight run from reactor to steam generator costs nothing; a sprawling layout quietly caps the flow you can ever achieve."],
+   "Pumping loss from pipe friction. A short straight run from reactor to steam generator costs nothing; a sprawling layout quietly caps the flow you can ever achieve. Loops share the core's flow, so this is what the AVERAGE loop costs: a second loop does not buy flow, and a sprawling one still spends it."],
   ["PUMP CAPACITY",G.delivered.toFixed(1)+" / "+G.installed.toFixed(1)+" pumps",
    G.installed>0?clamp(G.delivered/G.installed,0,1):1,
    G.delivered<G.installed-1e-9?C.amber:C.green,
