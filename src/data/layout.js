@@ -549,7 +549,7 @@ const minPburst=()=>LAY.parts.reduce((m,p)=>{ const v=partPburst(p);
 /* A FITTING IS IN THE LOOP IT SITS IN. Splice a tee into a hot leg and the
    leg on the core side is still that loop's leg - leave `fitting` off this
    list and loopOfKey() answers null for it, which silently costs the loop a
-   leg in P.netRefRun's scale and in every per-loop question the tick asks. */
+   leg in every per-loop question the tick asks. */
 const LOOP_ROLE={core:1, sg:1, ihx:1, pump:1, fitting:1};
 /* THE WALK IS OVER NODES, NOT PARTS. It used to link two PARTS whenever a run
    joined them, which was only ever right while every part was a single
@@ -614,7 +614,7 @@ function nodeGraph(){
   // ports, so both are what this graph is built from.
   const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig();
   if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
-  const adj={}, nodesOf={};
+  const adj={}, nodesOf={}, runPorts={};
   const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
   const link=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b); (adj[b]||(adj[b]=[])).push(a); };
   /* WHICH INTERNAL LINKS ARE A GATE. A valve's own path is a link this graph
@@ -638,6 +638,12 @@ function nodeGraph(){
     const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
     note(a.id,c.sa); note(b.id,c.sb);
     link(a.id+c.sa, b.id+c.sb);
+    /* THE TWO PORT VALVES THIS LINK IS BEHIND. Per undirected pair and a LIST,
+       because two runs may join the same pair of faces and the link survives
+       while either one of them is still open - portDead() below is the reader,
+       and it is the only way a state-free graph can be asked a live question. */
+    const rk=gateKey(a.id+c.sa, b.id+c.sb);
+    (runPorts[rk]||(runPorts[rk]=[])).push([c.pa, c.pb]);
   }
   /* A COMPONENT THAT DECLARES NO PATH IS STILL ONE VESSEL. ROLE.internal says
      what the SOLVE carries through a part, and a pressurizer declares none -
@@ -663,12 +669,17 @@ function nodeGraph(){
     if(Array.isArray(f)){ for(let i=1;i<f.length;i++) link(p.id+f[0], p.id+f[i]); }
     else for(const face in f) link(p.id+face, p.id+f[face]);
   }
-  const reach=(seeds,cut,noGate)=>{ const seen={}, stack=[];
+  /* `dead` is an EDGE cut, keyed the same way `gate` is: a shut port takes its
+     run out of the drawing, and a node cut cannot say that - one face may
+     carry two ports and cutting the node would take the other run with it. */
+  const reach=(seeds,cut,noGate,dead)=>{ const seen={}, stack=[];
     for(const n of seeds) if(!seen[n]){ seen[n]=1; stack.push(n); }
     while(stack.length){ const u=stack.pop();
       for(const v of (adj[u]||[])){
         if(seen[v] || (cut && cut[v])) continue;
-        if(noGate && gate[gateKey(u,v)]) continue;
+        const k=(noGate||dead) ? gateKey(u,v) : null;
+        if(noGate && gate[k]) continue;
+        if(dead && dead[k]) continue;
         seen[v]=1; stack.push(v); } }
     return seen; };
   /* ══ A CIRCUIT IS A CONNECTED COMPONENT, AND NOTHING MORE ══
@@ -686,7 +697,7 @@ function nodeGraph(){
   const coreSeed = (nodesOf.core||[])[0];
   const coreCirc = coreSeed===undefined ? -1 : circuit[coreSeed];
   const inCore = n => circuit[n]===coreCirc && coreCirc>=0;
-  nodeGraphCache={adj, nodesOf, circuit, nCirc, coreCirc, inCore, reach}; nodeGraphSig=sig;
+  nodeGraphCache={adj, nodesOf, runPorts, circuit, nCirc, coreCirc, inCore, reach}; nodeGraphSig=sig;
   return nodeGraphCache;
 }
 /* ══ AN ANSWER IS ONLY AS OLD AS THE GRAPH IT WAS READ OFF ══
@@ -751,10 +762,31 @@ function loopMap(){
    pump", asked of the drawing. A generator's secondary node is simply one of
    its nodes the core cannot reach; a pump that reaches one is pushing water
    into that shell, whatever it is called and whatever anyone declared. */
-function secGensFromNode(node, cut){
+/* ══ THE DRAWING, WITH EVERY SHUT PORT VALVE TAKEN OUT OF IT ══
+   nodeGraph() is a fact about the drawing and cannot carry state, so a live
+   question is asked by handing its reach() an EDGE cut instead - the same
+   "a shut branch is an absent branch" rule netAssemble's g<=0 skip keeps for
+   the solve, which is how the primary's relief valve already respects a shut
+   port for free. A run is dead only when BOTH its ports cannot pass, and a
+   pair of faces joined by two runs stays live while either one is open.
+   Cached on the graph window against the shut set itself: shellsLive() is
+   asked once per relief valve per tick and the walk is not the cost, the
+   rebuild is. */
+function portDead(s){
+  const shut = s && s.portShut; if(!shut) return null;
+  let sig=""; for(const k in shut) if(shut[k]) sig+=k+",";
+  if(!sig) return null;
+  const slot=graphSlot("portDead"), was=slot.get(sig); if(was) return was;
+  const G=nodeGraph(), out={};
+  for(const k in G.runPorts)
+    if(G.runPorts[k].every(([a,b])=>shut[a]||shut[b])) out[k]=1;
+  slot.set(sig,out);
+  return out;
+}
+function secGensFromNode(node, cut, dead){
   const G=nodeGraph();
   if(G.inCore(node)) return [];
-  const seen=G.reach([node], cut);
+  const seen=G.reach([node], cut, false, dead);
   return LAY.parts.filter(p=>p.role==="sg" &&
     (G.nodesOf[p.id]||[]).some(n=>seen[n] && !G.inCore(n))).map(p=>p.id);
 }
@@ -813,6 +845,19 @@ const secondaryNode=node=>!nodeGraph().inCore(node);
 const shellCirc=pid=>{ const G=nodeGraph();
   const n=(G.nodesOf[pid]||[]).find(x=>!G.inCore(x));
   return n===undefined ? -1 : G.circuit[n]; };
+/* IS THIS PUMP TURNING A HEAT SINK'S OWN WATER? Asked of the drawing, like
+   secGensOf(): a pump sharing a circuit with a radiator is a circulating water
+   pump, whatever it is called, and it is on neither loop by design. */
+const sinkPump=pid=>{ const G=nodeGraph();
+  const cs=(G.nodesOf[pid]||[]).map(n=>G.circuit[n]);
+  if(!cs.length) return false;
+  /* A SINK WITH ONE PATH THROUGH IT, so this is the panel and never the
+     condenser: the condenser has a node on the secondary too, and asking about
+     it would wave through any spare pump left on the condensate line. */
+  for(const p of LAY.parts){ const R=ROLE[p.role];
+    if(!R || R.thermal!=="sink" || Array.isArray(R.internal)) continue;
+    for(const n of (G.nodesOf[p.id]||[])) if(cs.indexOf(G.circuit[n])>=0) return true; }
+  return false; };
 function secGensOf(pid){
   const G=nodeGraph(), out=[];
   for(const n of (G.nodesOf[pid]||[]))
@@ -882,7 +927,7 @@ const turbPiped=()=>{ const ids=LAY.parts.filter(p=>p.role==="turb").map(p=>p.id
    reaches only by going through a machine that took work out of it - and the
    two sit at pressures three orders of magnitude apart, so nothing may price
    them together. */
-function steamNodesOf(sgId, cutTurb){
+function steamNodesOf(sgId, cutTurb, dead){
   const G=nodeGraph(), sh=shellFaces().find(s=>s.id===sgId);
   if(!sh) return {};
   const cut={};
@@ -890,7 +935,7 @@ function steamNodesOf(sgId, cutTurb){
   for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R) continue;
     if(R.thermal==="sink" || (cutTurb && p.role==="turb"))
       for(const n of (G.nodesOf[p.id]||[])) cut[n]=1; }
-  return G.reach([sgId+sh.steam], cut);
+  return G.reach([sgId+sh.steam], cut, false, dead);
 }
 const sgSteams=id=>{ const sh=shellFaces().find(s=>s.id===id);
   if(!sh) return true;                       // no shell to ask of: not a machine this gates
@@ -903,12 +948,16 @@ const sgSteams=id=>{ const sh=shellFaces().find(s=>s.id===id);
    comes back round the feedwater train and a valve on the condensate line
    reads as though it were sitting on the steam header.
    Empty means the part is on the primary, or on the cold side of the
-   secondary - and a relief valve there is protecting nothing that is boiling. */
-function shellsOf(pid){
+   secondary - and a relief valve there is protecting nothing that is boiling.
+   `dead` (portDead(), above) is optional and it is a LIVE question, never the
+   classification one: WHICH side of the plant a valve is on is a fact about
+   the drawing and must not change under a hand on a port valve, or shutting
+   one would turn a shell's safety valve into a primary one. */
+function shellsOf(pid, dead){
   const G=nodeGraph(), cut={}, out=[];
   for(const sh of shellFaces()) cut[sh.id+sh.feed]=1;
   for(const n of (G.nodesOf[pid]||[]))
-    for(const g of secGensFromNode(n,cut)) if(out.indexOf(g)<0) out.push(g);
+    for(const g of secGensFromNode(n,cut,dead)) if(out.indexOf(g)<0) out.push(g);
   return out;
 }
 // which loop a PART pools capacity with, or null if the walk
@@ -964,11 +1013,6 @@ const RADCOAT=[
 ];
 const radIds=()=>LAY.parts.filter(p=>p.role==="radiator").map(p=>p.id);
 const radCount=()=>radIds().length;
-/* ══ D.radSize IS DELETED ══
-   A multiplier on top of drawn geometry is exactly the hidden reference this
-   job removes: draw a bigger panel to get more panel. A radiator's area is its
-   footprint and nothing else. RADCOAT stays - a coating is a material, not a
-   size. */
 const radCoatOf=id=>RADCOAT[D.radCoat[id]??1][1];
 /* THE ONE FUDGE IN THIS FEATURE, and it is bought balance in graceK's sense.
    A grid cell is MPC^2 = 0.218 m^2; rejecting ~690 MW at a playable panel
@@ -977,6 +1021,15 @@ const radCoatOf=id=>RADCOAT[D.radCoat[id]??1][1];
    is the same lie, not a new one. Set once off the stock plant's rated
    rejection at RAD_TDES; do NOT tune it afterwards to recover output. */
 const RAD_AREA_CELL=62468;             // m^2 of panel one grid cell is worth
+const SIGMA=5.670374419e-8;            // W/m^2/K^4, published
+const T_SPACE=3;                       // K - and (T^4 - T_SPACE^4) is T^4 to 12 digits
+/* K - THE CANONICAL REFERENCE SINK. It anchors P.hTurb, P.cwC, P.condUA and
+   condPDes() (step.js) and the area a panel suggests, and nothing else. It is
+   NOT the sink the plant has - that is s.radT, off the panels actually fitted.
+   Derived backwards from a real turbine figure, never chosen to preserve
+   output: tsatSec(TURB_TRIP_P) is 338.6 K, less an 18.6 K working margin puts
+   the condenser at 320 K at rated, less COND_DT0 puts the radiator here. */
+const RAD_TDES=307;
 /* Does this panel see space at all - at least one cell of its own footprint
    with an outward neighbour on the skin. hullCell() answers true off-grid, so
    a panel sitting ON the hull ring passes on its own cells. */
@@ -985,8 +1038,36 @@ const radLive=id=>{ const p=partOf(id); if(!p) return false;
     for(const f in DIRV){ const d=DIRV[f];
       if(hullCell(X+d[0],Y+d[1])) return true; }
   return false; };
+/* ══ A PANEL STATES ITS AREA, AND THE BOX IS A PICTURE OF IT ══
+   The footprint WAS the area, which meant a 55 MW pile carried the 1200 MW
+   ship's panels - the boxes are drawn by buildLayout() and no design could
+   say otherwise. Measured on WINDSCALE: the fleet shed 802 MW at the design
+   sink for a plant making 32, the panels settled at 140 K, and the condenser
+   ran at a vacuum the steam side was never sized for, so the secondary pulled
+   more heat than the core could make at any load and the plant could not hold
+   its temperature programme at all.
+   So the area is the QUANTITY, in m2, like every other machine on this plant,
+   and the drawing SNAPS to whole cells to represent it - tankW()/tankH()'s
+   idiom exactly. RAD_AREA_CELL stops being the area and becomes the scale of
+   the picture. */
+const RAD_N=2;                         // the panels buildLayout() always draws
+const radSrcCount=()=>RAD_N+placedParts.filter(p=>p.role==="radiator").length;
+/* ONE panel's share of what this plant has to reject, at the sink the
+   condenser was priced against. Off D.power and the coolant's own efficiency,
+   never derived() - the suggestion prices the panel and mass prices the
+   design, so asking derived() here would ask itself. */
+const radAreaSuggest=id=>RATED_KW()*1000*(1-COOLANT[D.cool].eff)
+  /(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4))/radSrcCount();
+const radAreaOf=id=>D.radArea[id]??radAreaSuggest(id);
 const radArea=id=>{ const p=partOf(id);
-  return (p && radLive(id)) ? p.w*p.h*RAD_AREA_CELL : 0; };
+  return (p && radLive(id)) ? radAreaOf(id) : 0; };
+/* THE BOX, in whole cells - NEAREST, with a floor of one. Rounding up put the
+   stock ship's 15.03 cells into a 16-cell box, which is a fourth row of panel
+   nobody asked for: the drawing has to snap to the area, never the area to the
+   drawing. Shaped on the 5x3 the stock ship has always had. */
+const radBoxCells=id=>clamp(Math.round(radAreaOf(id)/RAD_AREA_CELL),1,60);
+const radW=id=>clamp(Math.round(Math.sqrt(radBoxCells(id)*5/3)),1,11);
+const radH=id=>Math.max(1,Math.ceil(radBoxCells(id)/radW(id)));
 /* Mass rides the CAPACITY and the coating, never the slider position - the
    rule every other capacity slider on this plant already follows. A blind
    panel still weighs what it weighs. */
@@ -1002,9 +1083,13 @@ const totalRadEA=()=>{ let k=0;
    there is no panel that can see space, which is the honest answer. */
 const radTAt=qkW=>{ const k=totalRadEA();
   return k>0 ? Math.pow(qkW*1000/k + Math.pow(T_SPACE,4), 0.25) : Infinity; };
+/* WHERE THIS SHIP'S PANELS SIT AT FULL POWER - the rating less what leaves as
+   electricity. Written once because the unit is the trap: the inspector was
+   handing radTAt() megawatts and quoting the stock plant at 55 K. */
+const radTRated=eff=>radTAt(D.power*1000*(1-eff));
 const totalRadMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="radiator")
-    m+=p.w*p.h*RAD_AREA_CELL*RAD_MASS_M2*radCoatOf(p.id).massK;
+    m+=radAreaOf(p.id)*RAD_MASS_M2*radCoatOf(p.id).massK;
   return m; };
 
 /* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
@@ -1523,7 +1608,14 @@ const ROLE = {
      cond happened to sit. */
   pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"SUCT", nb:"DISCH", la:"SUCTION", lb:"DISCHARGE"}, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{t:4, b:1}, thermal:"none", tsurv:400, pburst:70},
-  turb:  {internal:null, fixed:null, fold:null, mu:0.82, sgtr:false,
+  /* ── AND ONE PATH THAT IS NOT IN THE LIQUID MATRIX ──
+     `vapPath` is the machine's own steam path, read by the VAPOUR network
+     (vapBuild(), pipenet.js) and by nothing else: a liquid `internal` here
+     would tie the main steam line to the exhaust through a resistance the
+     water solve has no business pricing. `work` says the steam does shaft
+     work crossing it, which is what tells the bypass around it apart from
+     the wheels themselves. */
+  turb:  {internal:null, vapPath:{a:"t", b:"b", work:true}, fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:4, b:1}, thermal:"none", tsurv:420, pburst:70},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
   /* TWO internal paths that do not meet, the same declaration ROLE.sg makes -
      because that is what a surface condenser IS. The steam side takes the
@@ -1679,7 +1771,20 @@ function buildLayout(){
      condenser's floor, the outer faces looked at the keel and the hull, and
      the two inner faces faced each other. A panel is plumbed now, so it needs
      a free cell on two sides, and this is where they fit. */
-  for(let i=0;i<2;i++) add("rad"+i,"RADIATOR "+(i+1),5,3,AFT-10+8*i,BOT,"#b8c4cf","sec",
+  /* ── AND SOMETHING HAS TO TURN THE CIRCULATING WATER ──
+     The condenser rejects into a loop, and a loop with nothing pushing it
+     carries nothing. It stood as a boolean on the heat balance for a long
+     time: the panels were plumbed, the runs solved at a trickle of buoyancy,
+     and the rejection read full duty anyway. It is a pump like every other
+     pump now - hit it, or lose the board it feeds off, and the sink goes. */
+  add("cwp","CIRC WATER PUMP",3,2,AFT-9,BOT-4,"#5aa9d6","sec",
+    "Turns the circulating water between the condenser and the panels. Nothing else moves it: lose this pump and the condenser stops rejecting, whatever area is fitted.","pump");
+  /* ON THE KEEL, not at a fixed top edge. The box follows the panel's area
+     now, so a short one hung from the old y had no cell against the skin at
+     all and radLive() read it as blind - which is the whole heat sink gone,
+     silently, on every plant small enough to need less panel. */
+  for(let i=0;i<RAD_N;i++) add("rad"+i,"RADIATOR "+(i+1),radW("rad"+i),radH("rad"+i),
+      AFT-10+8*i,BOT+3-radH("rad"+i),"#b8c4cf","sec",
     "A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. Select it for area and coating.","radiator");
   for(let i=0;i<3;i++) add("shld"+i,"SHIELD",3,3,18+3*i,BOT,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
@@ -1940,7 +2045,7 @@ const RUN_KIND={
    fitting's own runs to the nearest machine that is not one, and the table
    below then reads the pair it always read.
    Get this wrong and the failure is QUIET: three stock runs come out
-   k:"user", loopOfKey() loses loop 0, P.netRefRun loses its scale, and what
+   k:"user", loopOfKey() loses loop 0, and what
    you see is grey pipes that still conduct. Same move a tank already gets
    below, for the same reason. */
 const isFitting=id=>{ const p=partOf(id); return !!p && p.role==="fitting"; };
@@ -2385,7 +2490,7 @@ function layoutMetrics(){
      and with no loop at all it is not even in the primary. */
   const ihxIdle   = P_.filter(p=>p.role==="ihx" && !ihxSgs(p.id).length).map(p=>p.id);
   const feedNoSg  = P_.filter(p=>roleHead(p.role) && !primaryPump(p.id)
-                                 && !secGensOf(p.id).length).map(p=>p.id);
+                                 && !secGensOf(p.id).length && !sinkPump(p.id)).map(p=>p.id);
   /* Metres above the core, per TANK - measured, not a clamped multiplier on
      an injection rate that no longer exists. Elevation is LIVE for a tank
      like every other node's: it enters the solve as the static head of the
