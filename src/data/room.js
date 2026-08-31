@@ -264,7 +264,10 @@ function roomGeom(){
    a snapshot that does not carry it loses nothing. */
 let roomSrc = null, roomD = null, roomD2 = null;
 const roomScratch = () => { const N = GW*GH;
-  if(!roomSrc){ roomSrc = new Float64Array(N); roomD = new Float64Array(N); roomD2 = new Float64Array(N); }
+  // re-cut on N, not on first call: the hull is draggable, so a buffer kept
+  // from a smaller ship is short of the field it is handed
+  if(!roomSrc || roomSrc.length !== N){
+    roomSrc = new Float64Array(N); roomD = new Float64Array(N); roomD2 = new Float64Array(N); }
   return N; };
 
 /* ══ A JET IS A PLUME, NOT A POINT ══

@@ -2522,6 +2522,21 @@ function drawPlant(y0,L,vh,vx,vw){
   txt("FWD BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
   ctx.save(); ctx.translate(GX+GW*CELL-7,GY+GHp/2); ctx.rotate(Math.PI/2);
   txt("AFT BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
+  /* THE HULL IS DRAGGED BY ITS OWN WALLS, and only the two that can move
+     without renumbering every cell under them: a pipe is keyed by its cell, so
+     growing off the bow or the deck would have to rewrite D.pipes and every
+     fixed slot's literal. Bench only - a commissioned ship is welded. */
+  if(!L){
+    const grab=(x,y,w,h,edge,title,body)=>{
+      const wd=push({x,y,w,h,type:"hull",edge});
+      fillRect(x,y,w,h, hov(wd)?C.amber:"#3a2a22");
+      TIP(x,y,w,h,title,body);
+    };
+    grab(GX+GW*CELL-3, GY+GHp*0.25, 6, GHp*0.5, "r", "AFT BULKHEAD",
+      "Drag it aft to make the ship longer, forward to make it shorter. Every machine standing outside the hull is marked and blocks commissioning until it is dragged back in.");
+    grab(GX+GW*CELL*0.25, GY+GHp-3, GW*CELL*0.5, 6, "b", "KEEL",
+      "Drag it down to make the ship deeper, up to make it shallower. Every machine standing outside the hull is marked and blocks commissioning until it is dragged back in.");
+  }
 
   // dark casing, then the coloured fluid line inside it, both round-jointed
   // (concentric radii) so a pipe bends rather than folds

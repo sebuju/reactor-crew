@@ -6,7 +6,29 @@
 // MPC is a third of what it was, so a cell is a third of the machine it used
 // to be; on top of that the hull itself is bigger, because a plant laid out
 // cell by cell needs lanes for its own pipework as well as room for its boxes.
-const GW=60, GH=34, CELL=16, GX=12, MPC=1.4/3;   // metres per cell
+/* THE HULL IS A DESIGN DECISION, not a constant: D.gw/D.gh say how many cells
+   long and deep the ship is, and GW/GH are that pair resolved. Everything reads
+   the bare names it always did, so gridSync() below is the ONE writer - a
+   second one would let a cached Float64Array(GW*GH) outlive the grid it was
+   sized for. GRID_MIN/GRID_MAX are the drag's stops and nothing else: a hull
+   too small for its own machines marks them limbo (buildLayout()) and says so,
+   which is the bench warning rather than a refusal to resize. */
+let GW=60, GH=34;
+const CELL=16, GX=12, MPC=1.4/3;   // metres per cell
+const GRID_MIN=[30,20], GRID_MAX=[96,60];
+const gridClamp=(w,h)=>[Math.max(GRID_MIN[0],Math.min(GRID_MAX[0],Math.round(w))),
+                        Math.max(GRID_MIN[1],Math.min(GRID_MAX[1],Math.round(h)))];
+function gridSync(){ const [w,h]=gridClamp(D.gw,D.gh);
+  if(w!==GW||h!==GH){ GW=w; GH=h; } }
+/* ONE WALL, TO THE CELL THE HAND IS OVER. The bow and the deck do not move:
+   D.pipes is CELL-KEYED and every fixed slot is a literal, so growing off
+   x=0 would mean rewriting both to mean the same ship. */
+function gridDrag(edge,c){
+  if(!c) return;
+  const [w,h]=gridClamp(edge==="r"?c[0]+1:D.gw, edge==="b"?c[1]+1:D.gh);
+  if(w===D.gw && h===D.gh) return;
+  D.gw=w; D.gh=h; buildLayout();
+}
 /* ══ WHAT A MACHINE IS CALLED ══
    The player's own name for a part, kept on D so it rides designSig(), the
    recording head and the save format for free. partName() is the ONE reader -
@@ -94,7 +116,10 @@ const portSig=sigMemo(()=>{ let out="";
 const pipeSig=sigMemo(()=>{ let out="";
   for(const k in D.pipes){ const c=D.pipes[k]; out += "|"+k+":"+c.s+":"+c.r; }
   return out; });
-const laySrcSig=()=>checkSig()+tankSig()+fittingSig()+portSig()+pipeSig();
+// the hull's own size is in here: every grid-sized cache (the radiation field's
+// Float64Array(GW*GH), the room's geometry) proves itself against this string
+const gridSig=sigMemo(()=>"|g"+D.gw+"x"+D.gh);
+const laySrcSig=()=>checkSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig();
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
 // at the end of buildLayout()) or it would vanish whenever an unrelated
@@ -1567,6 +1592,7 @@ const fitModeOf=id=>(D.fittings[id]&&D.fittings[id].mode)||"tee";
 
 function buildLayout(){
   dTouch();          // LAY.parts is about to be a different list, and every gesture that edits D lands here
+  gridSync();        // the hull may have been dragged since the last pass
   const A=[], add=(id,name,w,h,x,y,col,grp,tip,role)=>{ const p={id,name,w,h,x,y,col,grp,tip,role}; A.push(p); return p; };
   /* ══ A MACHINE IS BIG ENOUGH TO HOLD ITS OWN CONTROLS ══
      BANDS is gone: the control room used to stretch a grid ROW to make room
@@ -1591,22 +1617,35 @@ function buildLayout(){
     "Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival.","sg");
   add("pump0","RCP 1",3,5,26,18,"#57d38c","loop0",
     "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.","pump");
-  if(checkOf("turb")) add("turb","TURBINE",9,7,46,11,"#f0a830","sec",
+  /* ══ THE ENGINE ROOM STANDS AFT OF THE LAST LOOP ══
+     A four-loop plant used to put its fourth generator and its fourth pump
+     inside the turbine, because these four slots were literals fitted around
+     ONE loop. AFT is where the machinery space begins: the last generator's
+     column plus a lane, so a one-loop ship is laid out exactly as before and
+     every added loop pushes the engine room back rather than into itself.
+     The hull does not follow by itself - drag it (or let a preset set D.gw),
+     and anything that no longer fits is marked. */
+  const nsg = 1 + placedParts.filter(p=>p.role==="sg").length;
+  const AFT = 46 + 7*(nsg-1);
+  const FEEDX = 26 + 7*nsg;      // aft of the last coolant pump, forward of the turbine
+  const BOT = GH-4;              // the bottom rank of hull-mounted parts
+  if(checkOf("turb")) add("turb","TURBINE",9,7,AFT,11,"#f0a830","sec",
     "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.","turb");
-  if(checkOf("cond")) add("cond","CONDENSER",9,5,46,24,"#5aa9d6","sec",
+  if(checkOf("cond")) add("cond","CONDENSER",9,5,AFT,24,"#5aa9d6","sec",
     "Rejects waste heat. Bulky, and it wants to be near the hull.","cond");
-  add("feed","FEED PUMP",3,5,30,18,"#5aa9d6","sec",
+  // as many discharge nozzles as there are generators to feed
+  add("feed","FEED PUMP",Math.max(3,nsg),5,FEEDX,18,"#5aa9d6","sec",
     "Returns water to the steam generator. Lose it and the heat sink boils dry.","pump");
-  add("ctrl","CONTROL",6,4,0,30,"#cfc9b8","crew",
+  add("ctrl","CONTROL",6,4,0,BOT,"#cfc9b8","crew",
     "Where your crew sits. Distance and shielding from the reactor set the dose they take.","ctrl");
-  if(checkOf("cont")) add("cont","CONTAINMENT",6,3,10,30,"#8fa9ae","safety",
+  if(checkOf("cont")) add("cont","CONTAINMENT",6,3,10,BOT,"#8fa9ae","safety",
     "The barrier between damaged fuel and your crew. Select it for containment type and the core catcher.","cont");
   // Stage 5d: a structure, not a flag - it occupies real floor space under
   // the vessel rather than costing 66 t for nothing on the grid at all.
   // ports:{} (ROLE.catcher) - it carries no run and needs none; "is the core
   // sitting over the catcher" is a geometric question with a geometric
   // answer now, exactly like "is the pressurizer the highest point".
-  if(D.catcher) add("catcher","CORE CATCHER",3,3,6,30,"#5a4a3a","safety",
+  if(D.catcher) add("catcher","CORE CATCHER",3,3,6,BOT,"#5a4a3a","safety",
     "A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher");
   /* EVERY TANK ON THE PLANT, from D.tanks and nothing else - no conditional
      add(), no seeded placedParts entry, no checkbox. Zero tanks is a legal
@@ -1614,7 +1653,7 @@ function buildLayout(){
      what a secondary tank with no node means (the hotwell). */
   for(const p of tankParts()) A.push(p);
   for(const p of fittingParts()) A.push(p);
-  add("bkp","BACKUP PWR",3,5,56,11,"#57d38c","safety",
+  add("bkp","BACKUP PWR",3,5,AFT+10,11,"#57d38c","safety",
     "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.","bkp");
   /* THE SHIP'S ONLY HEAT SINK, on the bottom hull beside the condenser. Two
      of them rather than one because a radiator is what gets shot, and the
@@ -1624,9 +1663,9 @@ function buildLayout(){
      condenser's floor, the outer faces looked at the keel and the hull, and
      the two inner faces faced each other. A panel is plumbed now, so it needs
      a free cell on two sides, and this is where they fit. */
-  for(let i=0;i<2;i++) add("rad"+i,"RADIATOR "+(i+1),5,3,36+8*i,30,"#b8c4cf","sec",
+  for(let i=0;i<2;i++) add("rad"+i,"RADIATOR "+(i+1),5,3,AFT-10+8*i,BOT,"#b8c4cf","sec",
     "A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. Select it for area and coating.","radiator");
-  for(let i=0;i<3;i++) add("shld"+i,"SHIELD",3,3,18+3*i,30,"#6d8f98","shield",
+  for(let i=0;i<3;i++) add("shld"+i,"SHIELD",3,3,18+3*i,BOT,"#6d8f98","shield",
     "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
   for(const p of placedParts) A.push(p);
   /* ══ A PART IN A BAD SPOT STAYS ON THE DRAWING ══
@@ -2205,11 +2244,16 @@ function moveTo(p,nx,ny){
 // pipework must not be able to wall it in and block its own repair.
 function freeAdj(p,g){
   const out=[];
+  /* A MACHINE'S OWN NOZZLE DOES NOT WALL IT IN. A four-way tee carries a port
+     on every face by construction, so counting its own ports as walls said
+     that every correctly plumbed junction on the plant was unreachable - and
+     the bench said so in red on every plant with more than one loop. */
+  const own = c => c && c.port && D.ports[c.id] && D.ports[c.id].p===p.id;
   for(let X=p.x-1;X<=p.x+p.w;X++) for(let Y=p.y-1;Y<=p.y+p.h;Y++){
     if(X<0||Y<0||X>=GW||Y>=GH) continue;
     const inside = X>=p.x&&X<p.x+p.w&&Y>=p.y&&Y<p.y+p.h;
     const edge = (X<p.x||X>=p.x+p.w)!==(Y<p.y||Y>=p.y+p.h);
-    if(!inside && edge && !g[Y][X]) out.push([X,Y]);
+    if(!inside && edge && (!g[Y][X] || own(g[Y][X]))) out.push([X,Y]);
   }
   return out;
 }

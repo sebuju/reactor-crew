@@ -205,7 +205,7 @@ const BKP=[
  {name:"DIESEL GENERATORS",bk:1.0,mass:58,note:"Full pump power independent of the plant. Heavy, and one more thing to maintain."},
 ];
 COOLANT.forEach(a=>a.note=a.tie+". "+a.good+", but "+a.bad.replace(/^[A-Z]/,c=>c.toLowerCase())+".");
-const BUDGET=1500;
+const BUDGET=3000;
 /* Where the control bank stands at commissioning. The plant is boronated to be
    critical here, the shutdown margin is measured from here, and resetPlant()
    starts the bank here - one number, because three copies of it would drift. */
@@ -265,6 +265,9 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
             rather than as two constants nobody could see or move. commission()
             carries it to P and resetPlant() to S, like every other tune. */
          arLo:0.10, arHi:0.70,
+         /* THE HULL, in grid cells. Dragged from its own edges on the bench
+            (gridDrag(), layout.js); GW/GH are these two resolved. */
+         gw:60, gh:34,
          cont:1,contFit:true,catcher:false,bkp:1,
          turbFit:true,condFit:true,fittings:{},
          /* ══ PER-INSTANCE QUANTITIES, IN REAL UNITS, KEYED BY PART ID ══

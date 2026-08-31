@@ -524,6 +524,9 @@ function uiDown(e){
     // ...and the ghost places one. There is nothing to follow it with: a pipe
     // is laid with the pipe tool, cell by cell.
     else if(w.type==="ghostport"){ addPortAt(w.p,w.dx,w.dy); buildLayout(); }
+    // the hull's own wall. Committed as it moves rather than on release: the
+    // ship IS the preview, and there is no ghost outline a wall could wear
+    else if(w.type==="hull") ui.drag={type:"hull",edge:w.edge,v:w.v};
   else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
 }
 /* WHERE THE GESTURE IS, ASKED ONCE. A part drag is a MOVE now and only a
@@ -559,6 +562,7 @@ function uiMove(e){
         while(x!==c[0]){ x+=Math.sign(c[0]-x); d.cells.push([x,y]); }
         while(y!==c[1]){ y+=Math.sign(c[1]-y); d.cells.push([x,y]); }
       } }
+    else if(d.type==="hull") gridDrag(d.edge, cellAt(q));
     else if(d.type==="pipeerase") pipeLift(q);
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
