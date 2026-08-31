@@ -145,9 +145,20 @@ function shellSync(){
     if(k==="operate") btn.dataset.tipBody = dis?LOCKTIP:OPTIP_ON;
     else if(k==="scenario") btn.dataset.tipBody = dis?LOCKTIP:SCNTIP_ON;
   }
-  const line=P?`${P.id}  ${pad(P.rated.toFixed(0),4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`:"NO CORE COMMISSIONED";
+  /* ══ THE PLANT ON THE BOARD, NOT THE ONE THAT WAS COMMISSIONED ══
+     P is the commissioned plant and does not move when the DESIGN does, so
+     loading a whole-plant preset - a different reactor, a different rating -
+     left the topbar printing the machine before it. The same signature gate
+     the OPERATE tab uses (P.dsig against designSig()) decides which one is
+     being looked at, and an uncommissioned design reads off derived() rather
+     than saying NO CORE about a core that is drawn. */
+  const fresh = P && P.dsig===designSig();
+  let line;
+  if(fresh) line=`${P.id}  ${pad(P.rated.toFixed(0),4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`;
+  else { const d=derived();
+    line=`${d.a.id}  ${pad(D.power.toFixed(0),4)} MWt  ${pad((D.power*d.eff).toFixed(0),4)} MWe`; }
   if(shellEls.plantLine.textContent!==line){ shellEls.plantLine.textContent=line;
-    shellEls.plantLine.classList.toggle("idle",!P); }
+    shellEls.plantLine.classList.toggle("idle",!fresh); }
   shellClock();
   shellEls.dot.style.visibility=Math.floor(performance.now()/500)%2?"visible":"hidden";
   layRelease();
