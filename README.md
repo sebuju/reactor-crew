@@ -172,7 +172,7 @@ node tools/probe.js stock
 The auditors:
 
 ```
-node tools/audit-text.js && node tools/audit-geometry.js && node tools/audit-dom.js
+node tools/audit-geometry.js && node tools/audit-dom.js
 node tools/audit-par.js
 ```
 
