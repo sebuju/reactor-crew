@@ -534,7 +534,7 @@ const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
    also be an input to it. */
 /* K - THE CANONICAL REFERENCE SINK, and it anchors P.hTurb, P.cwC, P.condUA
    and condPDes() and nothing else. It is NOT the sink the plant has - that is
-   s.radT, off the panels actually drawn. Point these anchors at s.radT and a
+   s.radTBy, off the panels actually drawn. Point these anchors at a real panel and a
    terrible radiator would move the design point with it and cost nothing.
    Derived backwards from a real turbine figure, never chosen to preserve
    output: tsatSec(TURB_TRIP_P) is 338.6 K, less an 18.6 K working margin puts
@@ -621,13 +621,17 @@ const condP = s => Math.max(exhOpen(s) ? P.Pcont : 0, s.condLost ? COND_ATM : 0,
    on part flow loses more than the flow it lost, because eps rises but the
    capacity rate it multiplies falls faster. */
 const cwC = s => P.cwC*cwK(s);
+/* THE COLD SIDE IS THE WATER ARRIVING, never a panel's temperature. Wiring it
+   to s.radT made the condenser reject into whichever panels the plant owned
+   whether or not one drop of water ran between them, which is the same
+   by-role-name coupling that left a panel spliced anywhere else inert. */
 const condRej = s => { const c = cwC(s);
   if(!(c>0)) return 0;
-  const cold = s.radT===undefined ? RAD_TDES : s.radT;
+  const cold = s.cwInT===undefined ? RAD_TDES : s.cwInT;
   return Math.max(0, c*(1-Math.exp(-P.condUA*condK(s)/c))*((s.condT||cold)-cold)); };
 /* WHERE THE HEAT ACTUALLY WENT: the temperature the circulating water leaves
    at. A readout, and the one number that says the sink is finite. */
-const cwOut = s => { const c = cwC(s), cold = s.radT===undefined ? RAD_TDES : s.radT;
+const cwOut = s => { const c = cwC(s), cold = s.cwInT===undefined ? RAD_TDES : s.cwInT;
   return c>0 ? cold + condRej(s)/c : (s.condT||cold); };
 /* ══ ONE POT ══
    Every thermal store in this sim is the same integrator: a temperature, a
@@ -643,24 +647,37 @@ const potStep = (T, cap, qIn, qOut, skin, dt, lo, hi) =>
    yardstick the plant already sizes it by. */
 const condCap_ = () => hotMass()*CP_W + hotMass()*0.6*CP_STEEL;
 /* ══ THE SINK IS A RADIATOR, AND IT IS THE ONLY WAY HEAT LEAVES THIS SHIP ══
-   Two pots in series now: s.sgTBy -> s.condT -> s.radT -> space. Stefan-
-   Boltzmann exact, because the T^4 IS the gameplay: rejection goes as the
-   fourth power, so s.radT goes as Q^(1/4) and the overload a plant can take
-   is (ceiling/RAD_TDES)^4 - a number nobody types and panel area buys.
-   Fed forward one tick, the same lag s.condT and s.coreDT carry. */
-/* Summed PER INSTANCE, so two panels with different coatings are two answers.
-   A dead or a blind panel contributes exactly zero: radArea() already returns
+   The chain is PLUMBED, end to end: whatever pot heats a circuit, the water in
+   that circuit carries it, and a panel standing in that water hands it to
+   space. On the stock ship that reads s.sgTBy -> s.condT -> circulating water
+   -> s.radTBy -> space; splice a panel into a cold leg instead and the first
+   two hops are simply not there. Stefan-Boltzmann exact, because the T^4 IS
+   the gameplay: rejection goes as the fourth power, so a panel sits at Q^(1/4)
+   and the overload a plant can take is (ceiling/RAD_TDES)^4 - a number nobody
+   types and panel area buys.
+   PER INSTANCE, like every other machine's pot: two panels on two circuits are
+   two temperatures, and one global figure could only ever answer for one of
+   them. Fed forward one tick, the same lag s.condT and s.coreDT carry. */
+const radTOf = (s,id) => { const v = s && s.radTBy && s.radTBy[id];
+  return v===undefined ? RAD_TDES : v; };
+/* The hottest panel on the ship - what an annunciator and a single-figure
+   readout are actually asking, and the one that trips first. */
+const radTMax = s => { let t = -Infinity;
+  for(const p of LAY.parts) if(p.role==="radiator") t = Math.max(t, radTOf(s,p.id));
+  return isFinite(t) ? t : RAD_TDES; };
+/* A dead or a blind panel contributes exactly zero: radArea() already returns
    0 for one that cannot see space. kW, like every other rate in this file. */
 const radRejOf = (s,id) => (s.dmgParts.indexOf(id)>=0) ? 0
   : Math.max(0, radCoatOf(id).emis*SIGMA*radArea(id)
-      * (Math.pow(s.radT,4) - Math.pow(T_SPACE,4))/1000);
+      * (Math.pow(radTOf(s,id),4) - Math.pow(T_SPACE,4))/1000);
 const radRej = s => { let w=0;
   for(const p of LAY.parts) if(p.role==="radiator") w += radRejOf(s,p.id);
   return w; };
-/* The transport loop's own water and metal, kJ/K - condCap_()'s idiom, off the
-   same yardstick, because a second mass figure would be a second thing to
-   drift. */
-const radCap_ = () => hotMass()*CP_W + hotMass()*0.6*CP_STEEL;
+/* THIS PANEL's own metal and the water it holds, kJ/K - ihxHeatCap()'s idiom.
+   It used to be the condenser's hotwell, which was the honest figure while the
+   fleet was one pot fed by that machine and is the wrong yardstick entirely
+   now that a panel is plumbed to whatever the player ran a pipe to. */
+const radCap_ = id => radMass(id)*1000*CP_STEEL + partVol(id)*1000*CP_W;
 /* THE ENTHALPY THE TURBINE ACTUALLY GETS, off the pressure ratio across it -
    the two pressures being SOLVED now rather than pinned. P.hTurb is fitted at
    the same anchor as everything else on this side: at design shell pressure
@@ -1409,6 +1426,24 @@ function advectSrc(s){
     }
   }
   for(const id of ihxIds()) add(id+"l", -((s.ihxQBy&&s.ihxQBy[id])||0));
+  /* A SINK IS A BARRIER TOO. A condenser gives its rejection to the water on
+     its OTHER side - the path that declares no anchor, cwKeys()' own predicate
+     - so the circulating water leaves hotter than it arrived instead of being
+     pinned to the pot behind it. Split over the condensers there ARE, because
+     condRej() prices the fleet. */
+  { const n = condCount();
+    if(n) for(const p of LAY.parts){ const R=ROLE[p.role];
+      if(!R || R.thermal !== "sink" || !Array.isArray(R.internal)) continue;
+      for(const IN of R.internal){ if(IN.anch) continue;
+        add(coreFold(p.id+IN.a), condRej(s)/n/2);
+        add(coreFold(p.id+IN.b), condRej(s)/n/2); } } }
+  /* AND A PANEL TAKES HEAT OUT OF WHATEVER IS RUNNING THROUGH IT, wherever
+     that is. This is the whole of "a heat sink cools what it is plumbed to":
+     the panel used to ANCHOR these nodes to its own temperature, which showed
+     cold water leaving it while removing not one joule from anything. */
+  { const IN = ROLE.radiator.internal;
+    for(const id of radIds()){ const q = (s.radQBy && s.radQBy[id]) || 0;
+      add(coreFold(id+IN.a), -q/2); add(coreFold(id+IN.b), -q/2); } }
   return src;
 }
 /* ══ WHERE A POT MEETS THE FIELD ══
@@ -1420,25 +1455,45 @@ function advectSrc(s){
    transport keeps the shape. Anchoring a loop-mean at one node, or shifting a
    circuit that holds a boiler at one end and a condenser at the other, are
    both wrong and both were tried. */
+/* TWO MAPS, AND THE DIFFERENCE IS LOAD-BEARING. `hold` is pinned every tick:
+   the field must read that node off the pot. `seed` only says what a circuit's
+   water was sitting at before anything flowed - what an EMPTY field is filled
+   from. A machine that has a real heat term needs the second and must not have
+   the first, or the pot reads its own answer back out of the field; a panel
+   was both at once, which is how it came to show cold water leaving it while
+   taking nothing out of anything. Seed is a superset of hold by construction. */
 function advectAnchors(s){
-  const a = {};
-  const put = (pid, T) => { if(T === undefined || !isFinite(T)) return;
-    for(const f of ["t","r","b","l"]){ const n = coreFold(pid+f);
-      if(P.net.index[n] !== undefined) a[n] = T; } };
+  const hold = {}, seed = {};
+  const at = (m, pid, faces, T) => { if(T === undefined || !isFinite(T)) return;
+    for(const f of faces){ const n = coreFold(pid+f);
+      if(P.net.index[n] !== undefined) m[n] = T; } };
+  const FACES = ["t","r","b","l"];
   for(const id of sgIds()){
     // the SHELL only: the tubes are primary water and belong to the loop mean
-    for(const f of ["t","r","b","l"]){ const n = coreFold(id+f);
-      if(P.net.index[n] !== undefined && secondaryNode(id+f)) a[n] = s.sgTBy[id]; }
+    for(const f of FACES){ const n = coreFold(id+f);
+      if(P.net.index[n] !== undefined && secondaryNode(id+f))
+        hold[n] = seed[n] = s.sgTBy[id]; }
   }
-  for(const p of LAY.parts) if(ROLE[p.role] && ROLE[p.role].thermal === "sink")
-    put(p.id, p.role === "radiator" ? s.radT : s.condT);
+  /* A SINK HOLDS ONLY THE PATH THAT DECLARES AN ANCHOR (IN.anch) - a
+     condenser's STEAM side is the pot, and its circulating water is fluid like
+     anything else. Every sink still SEEDS all of its faces, or a cooling
+     circuit with no pot pinned on it falls back to s.Tavg and commissions with
+     the primary's mean in it: 23 % steam at the CW pump, a buoyancy column
+     that cancels its own pump, and no flow left to wash the seed out. */
+  for(const p of LAY.parts){ const R=ROLE[p.role];
+    if(!R || R.thermal !== "sink") continue;
+    const T = partTemp(s,p); if(T === undefined || !isFinite(T)) continue;
+    at(seed, p.id, FACES, T);
+    for(const IN of (Array.isArray(R.internal) ? R.internal : []))
+      if(IN.anch) at(hold, p.id, [IN.a, IN.b], T);
+  }
   /* A TANK IS STORAGE, AND STORAGE IS COLD. It sits on one line with nothing
      going through it, so the transport never reaches it and it kept whatever
      the commissioning seed left there - a reserve of condensate reading 583 K
      and nine per cent steam. What is in a tank is what was put in it, at
      T_FEED, and it is a pot of its own rather than part of any circuit's. */
-  for(const id of tankIds()) put(id, T_FEED);
-  return a;
+  for(const id of tankIds()){ at(hold, id, FACES, T_FEED); at(seed, id, FACES, T_FEED); }
+  return {hold, seed};
 }
 /* HOW MANY TIMES THE COURANT GUARD BIT LAST TICK - a node too small for the
    flow through it, which the clamp below turns into "it simply equilibrates
@@ -1456,7 +1511,7 @@ function advectStep(s, dt, runFlow){
      re-commissioned under it. */
   for(const k in h) if(net.index[k] === undefined) delete h[k];
 
-  const src = advectSrc(s), anch = advectAnchors(s);
+  const src = advectSrc(s), A = advectAnchors(s), anch = A.hold;
   const G = nodeGraph();
   /* ══ A NODE STARTS AT ITS OWN CIRCUIT'S TEMPERATURE ══
      s.Tavg is the PRIMARY's mean and nothing else's, so seeding every node
@@ -1468,8 +1523,8 @@ function advectStep(s, dt, runFlow){
      that has one and no answer at all for the core's, where the loop mean IS
      the temperature. */
   { const sum = {}, cnt = {};
-    for(const nm in anch){ const c = circOfNode(nm);
-      sum[c] = (sum[c]||0) + anch[nm]; cnt[c] = (cnt[c]||0) + 1; }
+    for(const nm in A.seed){ const c = circOfNode(nm);
+      sum[c] = (sum[c]||0) + A.seed[nm]; cnt[c] = (cnt[c]||0) + 1; }
     for(let i=0;i<net.n;i++){ const nm = net.name[i];
       if(h[nm] !== undefined) continue;
       const c = circOfNode(nm);
@@ -2082,9 +2137,12 @@ function resetPlant(){
         saturation pressure of. Starts on the design vacuum, which is where the
         balance below puts it on a healthy plant anyway. */
      condT:0,
-     // the radiator panel's own temperature, K - the sink the plant HAS, as
-     // against RAD_TDES, the sink its machinery was designed for
-     radT:0,
+     /* EACH PANEL's own temperature, K - the sink the plant HAS, as against
+        RAD_TDES, the sink its machinery was designed for - and what each is
+        pulling out of the water in it, kW. Per instance because a panel cools
+        the circuit it is plumbed to and two panels need not be on one.
+        REFILLED by step(), never rebuilt. */
+     radTBy:{}, radQBy:{},
      /* last tick's void and inventory, so the two halves of the level that are
         still correlations can be differentiated into rates - the expansion
         half is the solve's own surge flow and needs no memory of its own */
@@ -2120,6 +2178,10 @@ function resetPlant(){
      /* the cooling circuit's solved flow, fed forward like s.cavP - starts on
         the commissioned reference, so tick zero rejects at the design duty */
      cwFlow:P.cwRef||0,
+     /* and the temperature that water arrives at, K - fed forward the same
+        tick, because what the condenser rejects is what warms the water whose
+        temperature decides what it can reject */
+     cwInT:RAD_TDES,
      /* EVERY tank, four plain objects keyed by tank id - so snapVal() takes
         them for free and adding a tank adds an entry to each rather than a
         field to S. Nothing here knows what any of these tanks IS.
@@ -2313,9 +2375,19 @@ function resetPlant(){
      a 55 MW pile carrying a 1200 MW ship's panels commissioned 800 MW above
      what it rejects and dumped the difference out of the pot's own stored
      heat in the first ten seconds. radTAt() is the bench's own expression. */
-  { const t0 = radTAt(P.rated*P.n0*(1-P.eff)*1000);
-    S.radT = isFinite(t0) ? t0 : RAD_TDES; }
-  S.condT = S.radT + COND_DT0;
+  /* ONE temperature over the fleet, because at rest every panel sits at the
+     one where the fleet sheds the load: rejection is emis*area*T^4, so a
+     common T is the solution whatever the mix of coatings and sizes. */
+  { const t0 = radTAt(P.rated*P.n0*(1-P.eff)*1000), t = isFinite(t0) ? t0 : RAD_TDES;
+    for(const id in S.radTBy) if(!partOf(id)) delete S.radTBy[id];
+    for(const id of radIds()) S.radTBy[id] = t;
+    /* AT REST A PANEL TAKES OUT WHAT IT SHEDS. Seeded, not left at 0: the
+       transport is settled below with these terms live, and a panel absorbing
+       nothing while the condenser pushed its full rejection into the same
+       water commissioned the cooling circuit ten kelvin hot. */
+    for(const id of radIds()) S.radQBy[id] = radRejOf(S,id);
+    S.cwInT = t;
+    S.condT = t + COND_DT0; }
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
@@ -2560,6 +2632,12 @@ function step(dt){
   /* WHAT THE CIRCULATING WATER IS ACTUALLY DOING, off this tick's own solve -
      the condenser's heat balance below reads it through cwK(). */
   s.cwFlow = cwFlowOf(runFlow);
+  /* THIS RUN AGAINST ITS OWN REFERENCE, signed. 1.0 is what it was built to
+     carry; the direction is the solve's. Up here rather than beside the pipe
+     animation that first needed it, because the panels' heat balance asks the
+     same question of the same tick's solve. */
+  const runRatio = key => { const r = Math.abs(P.netRefByRun[key]||0);
+    return r > 1e-9 ? (runFlow[key]||0)/r : 0; };
   /* ── the break: a hole with a place and a size, not a schedule ──
      The solved outflow through every opening on the plant, charged to
      inventory through the one flow-to-inventory conversion. Where the break
@@ -2834,6 +2912,36 @@ function step(dt){
     s.ihxTBy[id] = potStep(s.ihxTBy[id], ihxHeatCap(id), qIn, qOut, skinQOf(s,id), dt, P.Tmin, P.Tmax);
     s.ihxQBy[id] = qIn; qTot += qIn;
   }
+  /* ══ AND A PANEL COOLS WHAT IT IS PLUMBED TO ══
+     The same conductance-times-a-difference every other exchanger on this
+     plant is, against the water ARRIVING at it - which end that is comes off
+     the solve's own sign and never off a face label, because ROLE.radiator
+     folds t onto l and the stock drawing already names its condenser's water
+     nozzles the other way round from ROLE.cond's.
+     WHERE THE HEAT IS DEBITED IS THE CIRCUIT. On the core's, this is removal,
+     exactly as a generator's crossing is; on any other, the water it chilled
+     was warmed by a pot that has already been charged for it (a condenser
+     rejecting into its circulating water), and charging that heat twice is
+     what a second book always does. inCore() is the one predicate. */
+  { const G = nodeGraph(), IN = ROLE.radiator.internal, key = k => "comp:"+k+":"+IN.a+IN.b;
+    for(const id in s.radTBy) if(!partOf(id)) { delete s.radTBy[id]; delete s.radQBy[id]; }
+    for(const id of radIds()){
+      /* NO COMMISSIONED FLOW THROUGH IT, NO DUTY - cwK()'s own guard, and it
+         is not optional. A panel hung off a loop on one line solves at 1e-14
+         of reference, which is a difference of large numbers and not a flow;
+         let it take the 0.02 stagnant floor every exchanger with a real
+         circuit through it takes and a dead leg reads 176 MW of sink. */
+      const ref = Math.abs(P.netRefByRun[key(id)]||0);
+      const r = runRatio(key(id));
+      const nIn = coreFold(id + (r >= 0 ? IN.a : IN.b));
+      const fl = Math.max(Math.abs(r), 0.02);
+      if(s.radTBy[id]===undefined) s.radTBy[id] = RAD_TDES;
+      const q = (s.dmgParts.indexOf(id)>=0 || !radLive(id) || !(ref > 1e-9)) ? 0
+        : radUAOf(id)*Math.pow(fl,UA_FLOW)*(1-0.85*clamp(netQualAt(s,nIn),0,1))
+          * Math.max(0, netTempAt(s,nIn) - s.radTBy[id]);
+      s.radQBy[id] = q;
+      if(G.inCore(nIn)) qTot += q;
+    } }
   const removal = qTot/(P.rated*1000);
   /* THE LOOP'S HEAT CAPACITY, not a typed 1.8. What is not removed goes into
      the water that is there: loopKg()*CP_W, both of which already exist and
@@ -3488,14 +3596,28 @@ function step(dt){
      other way to fail, and the failure is a real one now. What bounds it
      instead is the machine - a relieved condenser is boiling at atmospheric,
      so it sits on that saturation temperature and no higher. */
-  { const qIn = Math.max(0, boiled*retK*H_FG - workKW), rej = condRej(s);
-    s.condT = potStep(s.condT, condCap_(), qIn, rej, skinQRole(s,"cond"), dt, s.radT);
-    if(s.condLost) s.condT = Math.min(s.condT, tsatSec(COND_ATM));
-    /* NO RADIATOR SELF-LIMITS WITHOUT A CAP. Area 0 is radRej 0, so s.radT
-       climbs until it meets s.condT and condRej goes to 0 on its own
-       (condT - radT) term; the condenser then relieves and the chain stops
-       itself. Floored at T_SPACE - a panel cannot radiate below the sky. */
-    s.radT = potStep(s.radT, radCap_(), rej, radRej(s), skinQRole(s,"radiator"), dt, T_SPACE); }
+  { const qIn = Math.max(0, boiled*retK*H_FG - workKW);
+    s.condT = potStep(s.condT, condCap_(), qIn, condRej(s), skinQRole(s,"cond"), dt, s.cwInT);
+    if(s.condLost) s.condT = Math.min(s.condT, tsatSec(COND_ATM)); }
+  /* NO RADIATOR SELF-LIMITS WITHOUT A CAP. Area 0 is radRej 0, so the panel
+     climbs until it meets the water arriving and its own duty goes to 0 on the
+     (Tin - Tpanel) term; whatever pot is behind that water then backs up and
+     the chain stops itself. Floored at T_SPACE - a panel cannot radiate below
+     the sky. IN is what it took out of its own coolant this tick, so the two
+     ends of this pot are both the plant's and neither is a role name. */
+  for(const id of radIds())
+    s.radTBy[id] = potStep(s.radTBy[id], radCap_(id), s.radQBy[id]||0,
+      radRejOf(s,id), skinQOf(s,id), dt, T_SPACE);
+  /* AND THE WATER ARRIVING AT THE CONDENSER, off the field the panels have
+     just chilled. Fed forward one tick, the s.cwFlow idiom directly above it:
+     what this machine rejects is what warms the water whose temperature
+     decides what it can reject. */
+  { const R = ROLE.cond, ids = LAY.parts.filter(p=>p.role==="cond").map(p=>p.id);
+    let t = 0, n = 0;
+    for(const id of ids) for(const IN of R.internal){ if(IN.anch) continue;
+      const key = "comp:"+id+":"+IN.a+IN.b, r = runRatio(key);
+      t += netTempAt(s, coreFold(id + (r >= 0 ? IN.a : IN.b))); n++; }
+    if(n) s.cwInT = t/n; }
   /* WHAT THE RESERVE PAID FOR, off its own tanks' solved outflow - the same
      qTankBy every primary tank is already charged through, asked of the
      secondary ones. One-way: what leaves a reserve does not come back. */
@@ -3671,6 +3793,35 @@ function step(dt){
       logE("alarm","BLAST DAMAGE / "+fx.msg, "A hydrogen explosion has cut the pipe at "+k+". "+fx.why);
     }
   }
+  /* ── AND WHAT ITS OWN CONTENTS COST ──
+     The block above is the ROOM pushing IN. This is the plant pushing OUT, and
+     nothing on this machine has ever been asked it: a thin space panel spliced
+     into a 15.5 MPa primary held it for free, and a sink priced against a
+     307 K condenser then shed 1.7 GW off the hot leg for nothing.
+     THE CIRCUIT'S PRESSURE, NEVER netPAt(). The solve carries PIEZOMETRIC head
+     - a pump's suction node sits below any gauge and its discharge above one -
+     so a shell rating compared against it is two different quantities meeting.
+     What a gauge would print is what the circuit is HELD at, and inCore() is
+     the one predicate that says which circuit a node is on.
+     A part with no rating is exempt, exactly as it is exempt from tsurv. */
+  { const G = nodeGraph();
+  for(const p of LAY.parts){
+    const lim = partPdes(p);
+    if(!lim || !fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
+    let pk = 0, seen = false;
+    for(const f of ["t","r","b","l"]){ const n = coreFold(p.id+f);
+      if(P.net.index[n] === undefined) continue;
+      seen = true;
+      pk = Math.max(pk, G.inCore(n) ? s.P : condP(s));
+    }
+    if(!seen || pk < lim) continue;
+    s.dmgParts.push(p.id);
+    const fx = dmgFx(p.id);
+    if(fx.hit) fx.hit(s);
+    logE("alarm","SHELL FAILURE / "+fx.msg,
+      p.name+" has burst. It is holding "+pk.toFixed(1)+" MPa against the "+
+      lim.toFixed(1)+" MPa its own shell is built for. "+fx.why);
+  } }
   /* ONE LINE FOR AN EXPLOSION, NOT ONE FOR A FLAME. A compartment already
      over the ignition temperature burns whatever crosses the flammability
      limit as it crosses it, which is a steady diffusion flame and is real -
@@ -3911,10 +4062,6 @@ function step(dt){
      pulls loop water the other way, up into the pressurizer and out of the top.
      Clamped below the hot leg's 1.24 - it is a small line and must not outrun it. */
   const surgeFlow = sp*wet*clamp(-s.dLvl*0.07-(reliefAnyOpen(s)?0.75:0),-1.2,1.2);
-  /* THIS RUN AGAINST ITS OWN REFERENCE, signed. 1.0 is what it was built to
-     carry; the direction is the solve's. */
-  const runRatio = key => { const r = Math.abs(P.netRefByRun[key]||0);
-    return r > 1e-9 ? (runFlow[key]||0)/r : 0; };
   /* AND STEAM AND EXHAUST READ A SOLVED HYDRAULIC RATE, like every liquid run
      already does - normalised on steamScale(), which is the same figure the
      meter prints as its full scale. */
@@ -4085,7 +4232,7 @@ const ANN=[
     rather than in the plant. */
  ["NO HEAT SINK","red",s=>!radIds().some(id=>radLive(id)&&s.dmgParts.indexOf(id)<0),
   "Nothing on this ship is radiating. Every panel is destroyed, or walled in where it cannot see the skin, or there is no panel at all. Heat leaves this ship as light or it does not leave. The condenser will climb until it loses vacuum and the turbine trips, and after that the generators go to their safety valves.","cond"],
- ["PANEL OVERTEMP","amber",s=>s.radT>tsatSec(TURB_TRIP_P)-COND_DT0,
+ ["PANEL OVERTEMP","amber",s=>radTMax(s)>tsatSec(TURB_TRIP_P)-COND_DT0,
   "The radiator is running hot enough that the condenser behind it is close to the pressure the turbine will not exhaust against. Rejection goes as the fourth power of panel temperature, so the last few kelvin cost far more than the first: cut reactor power, or accept the trip.","cond"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
