@@ -252,7 +252,12 @@ function tipHover(){
    to each other read as different kinds of control. The height is still passed
    in, because a caller sometimes has to fill a rect it does not own; what it
    passes is this. */
-const BTN_H=14;
+/* A KEY'S ORDINARY HEIGHT and the smallest it may compact to before a strip
+   gives up and drops a name row instead - rungs 4 and 5 of the degradation
+   ladder (ctlStrip(), plant.js). BTN_TXT_PAD is the air either side of a
+   label inside its own key, and it is what fitStep() measures against, so a
+   label never sits hard against the edge of the box it names. */
+const BTN_H=14, BTN_H_MIN=10, BTN_TXT_PAD=5;
 /* THE FILL UNDER A KEY, BY STATE, IN ONE PLACE. An arming switch draws its own
    two-part label so it cannot go through button() whole - and while it also
    picked its own fill, it sat at the PLINTH tone while every key beside it sat
@@ -280,9 +285,19 @@ function button(x,y,w,h,label,o){
   // o.flat is o.sunk's sibling for a SELECTED key that must also lose its
   // outline (the bench's pen/preset keys, whose amber fill+type already say it)
   if(!o.sunk && !o.flat) frame(x,y,w,h,col);
-  txt(label,x+w/2,midBase(y,h,o.size||9),{size:o.size||9,weight:o.danger?700:o.weight,
-      sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
-      color:o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)});
+  /* ══ A KEY'S LABEL STEPS DOWN BEFORE IT IS CUT ══
+     This was a bare txt(), so a label too wide for its key simply overflowed
+     it - and that overflow is the whole reason a machine's box carried a
+     width floor. clipTxt() walks TSCALE (core/text.js) exactly as every other
+     fitted label on the plant does, and only cuts once the smallest rung
+     still will not fit. `sp` is dropped with the size, because letter
+     spacing is the first thing worth losing. */
+  const q={size:o.size||9,weight:o.danger?700:o.weight,
+           sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
+           color:o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)};
+  const inner=Math.max(2,w-BTN_TXT_PAD);
+  if(tw(label,q)>inner && q.sp>0) q.sp=0;
+  clipTxt(label,x+w/2,midBase(y,h,fitStep(label,inner,q)),inner,q);
   return wd;
 }
 // while the pointer is over the track, the readout shows what a click WOULD
@@ -490,6 +505,17 @@ function uiDown(e){
     // yet lay across it and the answer must not change under the hand.
     ui.drag={type:"pipedraw", cells:[c], v:1, had:!!D.pipes[pipeKey(c[0],c[1])]};
     return;
+  }
+  /* ══ A PIPE IS PICKED THE WAY A MACHINE IS ══
+     A run has no widget in the hit list - it is a polyline, not a box - so it
+     is resolved off the CELL under the pointer, the same answer pipeHovResolve()
+     already gives the hover. It is tried only where nothing else was hit, so a
+     machine or a port standing on the same cell still wins. The run KEY goes
+     into `sel`: a key always contains a colon and a part id never does, so
+     every partOf(sel) reader already answers null for one. */
+  if(!w && screen==="design" && vIn(p) && typeof pipeCellRuns==="function"){
+    const c=cellAt(vPt(p)), keys=pipeCellRuns(c[0],c[1]);
+    if(keys.length){ sel=keys[keys.length-1]; return; }   // a crossing cell owns two: last wins, as hitAt() does
   }
   // nothing under the pointer: a click on bare deck deselects, rather than
   // leaving whatever was picked last lit with nothing on screen to justify it
