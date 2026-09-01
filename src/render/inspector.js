@@ -386,6 +386,9 @@ function paramsFor(p){
     num("RADIATING AREA","The surface this panel actually radiates from, in square metres. The box on the grid is a PICTURE of it, snapped to whole cells, so a small plant draws a small panel. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom. SUGGEST matches the fleet to this plant's own rejection at the design sink.",
         {get:()=>radAreaOf(id),set:v=>{ D.radArea[id]=v; }},
         "m²",0,()=>radAreaSuggest(id),v=>v*RAD_MASS_M2*radCoatOf(id).massK);
+    num("COOLANT SIDE","How fast the water going through this panel can hand its heat to the surface, in kilowatts per kelvin. AREA decides what the panel can radiate; this decides what its tubes can collect, and a panel plumbed to nothing collects nothing whatever either figure says. SUGGEST carries this panel's own design rejection on a "+RAD_DT0+" K approach.",
+        {get:()=>radUAOf(id),set:v=>{ D.radUA[id]=v; }},
+        "kW/K",0,()=>radUASuggest(id));
     opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
         {get:()=>D.radCoat[id]??1,set:v=>{ D.radCoat[id]=v; }},RADCOAT.map(r=>({name:r[0]})));
     B.push({kind:"readlist",rows:()=>{ const d=derived(), live=radLive(id);
@@ -395,8 +398,8 @@ function paramsFor(p){
       ["SHEDDING",live?(radArea(id)/1e6).toFixed(2)+" Mm²":"0",null,"What this panel is worth as fitted. Blind, it is zero however big the box is."],
       ["EMISSIVITY",radCoatOf(id).emis.toFixed(2),null,"The share of a perfect black body's radiation this finish actually sheds, at the same temperature."],
       ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."],
-      ["PANEL MASS",(radAreaOf(id)*RAD_MASS_M2*radCoatOf(id).massK).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
-    note("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone.");
+      ["PANEL MASS",radMass(id).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
+    note("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone. So is an unplumbed one: a panel cools the water running through it, so where you pipe it is what it cools.");
   }
   else if(id==="ctrl"){
     opt("INSTRUMENT CHANNELS","How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.","chan",CHAN);
