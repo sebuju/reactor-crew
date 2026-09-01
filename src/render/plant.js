@@ -85,8 +85,16 @@ function nozzleEnds(r){
    the pipe rather than being the pipe's own outline - the same ratio the old
    two-value table (4 or 5.5, against a casing half of 3 or 4) always kept,
    generalised off pipeWidth() (pipes.js) so a nozzle tracks the run's own
-   bore exactly as the pipe it joins does. */
-const pipeNozzleHalf = bore => pipeWidth(bore)*1.4;
+   bore exactly as the pipe it joins does.
+   ...and it stops at the CELL, TWO pixels short of it. nozzleRect() adds a
+   pixel either side of this half-width, so 6 leaves the arithmetic gap of one
+   pixel - and that pixel is the one the deck's grid dot stands in
+   (gridDots(), chrome.js: a 1x1 mark at each cell's top-left corner). Filled
+   on the leading side and bare on the trailing one, a joint measuring 1 / 1
+   READS flush against its own cell on one side only. 5 leaves two, so the gap
+   survives the dot on both. */
+const NOZZLE_HALF_MAX = 5;
+const pipeNozzleHalf = bore => Math.min(pipeWidth(bore)*1.4, NOZZLE_HALF_MAX);
 /* WHICH SIDE OF A MACHINE A NOZZLE IS ON, IN COLOUR. The joint was flat
    C.metal, which is the truth for a vessel that is one node and a lie for a
    pump: its suction and its discharge are different water, and a plant with
@@ -120,10 +128,20 @@ function portColOf(pid,L){
 // not, so a fresh one reads as placed the instant it exists.
 // THE RECT THE JOINT OCCUPIES, so a caller that has to point AT one is working
 // off the same four numbers the draw does instead of guessing them off CELL.
+/* ...AND IT IS CENTRED ON THE DECK IT SHOWS, NOT ON THE CELL. The deck's grid
+   dot (gridDots(), chrome.js) is a 1x1 mark at every cell's TOP-LEFT corner,
+   so a joint centred in its cell leaves 2 px of gap at each end of its long
+   axis of which the leading one is 1 px dot + 1 px deck and the trailing one
+   is 2 px of deck. Measured off the picture that is 1 against 2, and it reads
+   as the joint being shoved against the near edge - which is exactly what it
+   was reported as, twice. Half the dot back the other way and the two gaps
+   show the same 1.5 px of bare deck. */
+const GRID_DOT=1;
 function nozzleRect(px,py,flat,bore){
   const half=pipeNozzleHalf(bore), deep=2.5;   // how far it stands proud of the shell
   const bx=flat?deep:half, by=flat?half:deep;
-  return {x:px-bx-1, y:py-by-1, w:2*bx+2, h:2*by+2};
+  const sx=flat?0:GRID_DOT/2, sy=flat?GRID_DOT/2:0;   // along the LONG axis only
+  return {x:px-bx-1+sx, y:py-by-1+sy, w:2*bx+2, h:2*by+2};
 }
 function drawNozzle(px,py,flat,bore,col){
   const r=nozzleRect(px,py,flat,bore);
@@ -580,8 +598,10 @@ function drawSym(p,x,y,w,h,ink,L){
        the one knob that says "this will inject in a blackout" could only be
        read off the panel. A vessel that holds pressure gets a second, inset
        hoop and domed ends; an open tank keeps the plain shell it always had. */
-    if(tankHeld(id) && W>10 && Hh>16){
-      ctx.beginPath(); rr(X+2.5,Y+4.5,W-5,Hh-9,7);
+    // the shell fills the footprint, one clear pixel in from the grid line
+    const TX=x+1, TY=y+1, TW=w-2, TH=h-2;
+    if(tankHeld(id) && TW>10 && TH>16){
+      ctx.beginPath(); rr(TX+2.5,TY+2.5,TW-5,TH-5,7);
       ctx.strokeStyle=ink; ctx.lineWidth=1; ctx.globalAlpha=.55; ctx.stroke(); ctx.globalAlpha=1;
     }
     /* NEITHER TEST IS A BARE COMPARISON WITH ZERO. Both the rate and the level
@@ -589,7 +609,7 @@ function drawSym(p,x,y,w,h,ink,L){
        tankWet() (pipenet.js) are the two floors, and they are the SAME ones the
        sim judges by, so the picture and the plant cannot disagree about whether
        a tank is delivering or holding anything. */
-    tank(X,Y+2,W,Hh-4,tankHeld(id)?9:3, lv/100,
+    tank(TX,TY,TW,TH,tankHeld(id)?9:3, lv/100,
       tankInjecting(id,rate) ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
             : (lv>=90 ? C.red : tankWet(lv) ? C.amber : C.blue));
@@ -599,16 +619,16 @@ function drawSym(p,x,y,w,h,ink,L){
        ACTUALLY pushing against its own rating, never on the operator's switch:
        injection is a solved flow, and a tank at 4.5 MPa against a loop at 15.5
        delivers exactly nothing. */
-    if(L) fxJet(cx,Y+Hh-3,W*.35,
+    if(L) fxJet(cx,TY+TH-3,TW*.35,
       fxEase(id+":inj",clamp(rate/tankRateRef(id),0,1)),C.cyan,0,1,71);
     /* the rupture disc, which is what the gas space above the water is FOR.
        Burst, the tank is an opening to containment and its contents are on the
        floor - so it stops being a tank and says so. */
-    if(L&&L.burstBy&&L.burstBy[id]) hatch(X+1,Y+3,W-2,Hh-6,C.red,.55);
+    if(L&&L.burstBy&&L.burstBy[id]) hatch(TX+1,TY+1,TW-2,TH-2,C.red,.55);
     /* OVERPRESSURE, ON THE VESSEL IT IS ABOUT - the pressurizer's own branch
        carried this, and the pressurizer is a tank now. */
     if(L&&tankHold(id)&&annLit("HI PRESS"))
-      banner("HI PRESS",cx,X,Y,W,Hh,C.red,Y+Hh-7);
+      banner("HI PRESS",cx,TX,TY,TW,TH,C.red,TY+TH-7);
   } else if(id==="bkp"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink);
@@ -2722,6 +2742,7 @@ function drawPlant(y0,L,vh,vx,vw){
   ctx.lineJoin="miter";
   if(L) pipeDamage(L);          // the red gap at each broken cell, over the stroke it cuts
   if(L) pipeFlow(L);
+  pipeSizeLabels(NET);          // over the packets: a size is a fact, not decoration
   // over the pipes, under the machines - the one seam a layer can paint
   // without landing on a value tag, a control strip or a bypass row, because
   // every one of those belongs to the component loop that runs after this.
@@ -2781,7 +2802,13 @@ function drawPlant(y0,L,vh,vx,vw){
     // stripPlan()'s last rung takes the room it needs even where there is
     // none, so the symbol can be asked for a negative rectangle - it is
     // simply not drawn then, rather than drawn inside out
-    if(fit && h-sh-nameH > 0) drawSym(p,x,y+nameH,w,h-sh-nameH,ink,L);
+    /* A TANK IS ITS BOX. Its shell is the one glyph whose SIZE is the design
+       figure (tankW()/tankH() off `vol`), so shrinking it by the name row and
+       the strip drew a vessel a cell smaller than the one the player bought.
+       It takes the whole footprint and the name and the keys stand ON it. */
+    const symFull = p.role==="tank";
+    if(fit && (symFull || h-sh-nameH > 0))
+      drawSym(p, x, symFull?y:y+nameH, w, symFull?h:h-sh-nameH, ink, L);
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); cornerTab(x+w,y,9,C.red);
       // a wrecked machine that is still energised. It dies down as the repair
       // party gets on top of it, so the effect tracks the work, not just the hit

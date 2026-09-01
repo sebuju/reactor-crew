@@ -69,8 +69,22 @@ const pipeCol=(PC,k)=>PC[k]||C.ink2;
    at fit zoom resolves exactly when the player zooms in. 187.5 and 225 mm are
    not tellable apart at fit zoom - that is the limit, stated rather than
    papered over. */
-const PIPE_PX = 11;
-const pipeWidth = bore => clamp(PIPE_PX*bore, 2.2, 11);
+/* THE CEILING IS THE JOINT, WHICH IS THE CELL. A run ends in a nozzle and a
+   nozzle is a FLANGE: it has to stand proud of the pipe it caps, or the joint
+   is a stripe across a pipe of the same width and reads as nothing at all. So
+   the budget across a 16 px cell is spent once, outwards:
+       12  the joint, 2 clear pixels each side of the cell (NOZZLE_HALF_MAX,
+           plant.js - two, not one, because the deck's grid dot stands in one)
+       10  the casing at its widest: PIPE_W_MAX + 2*WALL_PX's own ceiling,
+           leaving the flange a pixel proud on each side
+        6  the bore
+   PIPE_PX follows the ceiling: at 11 px per unit bore a 750 mm leg already
+   pinned it, so every ordinary run drew at max and the number the player set
+   could only be read downward. At 3.75 a full-bore leg is mid-scale and it
+   takes about 1200 mm to reach the top. */
+const PIPE_W_MAX = 6;
+const PIPE_PX = 3.75;
+const pipeWidth = bore => clamp(PIPE_PX*bore, 2.2, PIPE_W_MAX);
 /* ══ AND THE CASING IS THE WALL ══
    The casing was hardcoded at 2*w, so every pipe's wall read as half its own
    bore. It is the real millimetres now (runWallMm(), pipenet.js). WALL_PX is
@@ -78,7 +92,7 @@ const pipeWidth = bore => clamp(PIPE_PX*bore, 2.2, 11);
    scale already tells, named out loud: a real 70 mm wall on a 750 mm bore is
    one pixel at true scale, and one pixel cannot be read. */
 const WALL_PX = 0.09;
-const pipeWallPx = r => clamp(runWallMm(r)*WALL_PX, 0.6, 3);
+const pipeWallPx = r => clamp(runWallMm(r)*WALL_PX, 0.6, 2);   // 2, so bore+2 walls stays inside the joint that caps it
 
 /* The one pipe colour table. drawPlant() strokes the run with it and the packets are
    drawn in it, so a packet can never be a different colour from its own pipe. */
@@ -477,8 +491,25 @@ function pipeSteam(r,L){
 
 /* ══════════ the packets ══════════ */
 const PIPE_RUNWAY=60;
+/* ══ A WIDE PIPE CARRIES MORE PACKETS, NOT BIGGER ONES ══
+   THE PACKET IS NOT THE BORE. Stroking a slug at the pipe's own width meant a
+   wide run's packet was wide by construction, and a round cap adds half that
+   width at EACH end - so on a 5.6 px bore the shortest slug drawable was a
+   5.6 px circle. That is the one white ball: not a stream at all, one blob per
+   run, and no length short enough could break it up.
+   The slug has its own width (PIPE_SLUG_W, capped, so it stays a stream and
+   never a lane beside another one) and its own length, both flat; what the
+   bore buys is HOW MANY - the pitch is per hundred pixels of pipe, and that
+   count is linear in the bore. Wide run: a dense file of small packets down
+   the middle of a fat tube. Narrow run: the same packets, further apart. */
+const PIPE_SLUG_W=3;            // px across, whatever the bore - the cap is what made a ball
+const PIPE_SLUG_LEN=3;          // px along, before its two caps
+const PIPE_SLUG_PER100=2.2;     // slugs per 100 px per px of bore
 function pipeSlugs(g,ph,sp,col,w,st){
-  const gap=26+st*10, len=13-st*5, moving=Math.min(1,Math.abs(sp)/8);
+  const body=Math.min(w,PIPE_SLUG_W)-(st>0.5?0.8:0);
+  const len=PIPE_SLUG_LEN*(1-st*0.3);
+  const gap=Math.max((len+body)*1.3, 100/(PIPE_SLUG_PER100*Math.max(w,0.5)))*(1+st*0.4);
+  const moving=Math.min(1,Math.abs(sp)/8);
   /* the bore is always there, so a stalled line is still a line */
   ctx.save(); ctx.globalAlpha=0.22; ctx.lineCap="square"; ctx.lineJoin="round";
   ctx.lineWidth=w; ctx.strokeStyle=col;
@@ -486,19 +517,41 @@ function pipeSlugs(g,ph,sp,col,w,st){
   ctx.restore();
 
   ctx.save(); ctx.lineCap="round"; ctx.lineJoin="round";
-  const body=w-(st>0.5?1:0);
   let s=((ph%gap)+gap)%gap-gap;
   for(; s<g.len; s+=gap){
-    ctx.lineWidth=body;
-    ctx.globalAlpha=(0.35+0.65*moving)*(1-st*0.45);
-    ctx.strokeStyle=col;
+    /* ══ AND THEY ARE NOT ALL ON THE CENTRELINE ══
+       Every slug rode the same line at the same size, so a file of them read
+       as one dashed stroke rather than as packets in a pipe. Each gets its own
+       place across the bore and its own size, off a hash of WHICH packet it is
+       - identity, not loop position, so the offset travels with the packet
+       instead of shimmering as the train slides past. There is only room to
+       move where the bore is wider than the packet, which is exactly where the
+       stack looked worst. */
+    const id=Math.round((ph-s)/gap), h=Math.imul(id^0x9e37,2654435761)>>>0;
+    const r1=((h>>>8)&1023)/1023, r2=((h>>>18)&255)/255;
+    const sz=body*(0.7+0.4*r2), off=(r1-0.5)*Math.max(0,w-sz-0.6);
+    const at=pipeAt(g,clamp(s,0,g.len));
+    ctx.save(); ctx.translate(-at.dy*off, at.dx*off);
+    /* A PACKET IS LIGHTER THAN ITS OWN PIPE, or it is not a packet. The run is
+       already stroked solid in `col` by drawPlant(), so a slug painted the
+       same colour on top of it differed only in alpha and disappeared - the
+       train was there all along (the geometry counts 18 of them on the feed
+       line) and the only thing the eye could find was the white leading tip.
+       A tint toward the palette's own bright is the contrast, so the packets
+       read as fluid moving through the line rather than as the line. */
+    ctx.lineWidth=sz;
+    ctx.globalAlpha=(0.55+0.45*moving)*(1-st*0.3);
+    ctx.strokeStyle=lerpC(col,C.bright,0.55);
     if(pipeSub(g,s,s+len)) ctx.stroke();
     /* the leading face: which way it points is the whole message. It fades across a
        nozzle rather than popping on at it - see pipeEdge(). */
-    ctx.lineWidth=w-1.6;
-    ctx.globalAlpha=0.62*moving*(1-st*0.4)*pipeEdge(g,s+len);
+    ctx.lineCap="butt";                       // round here is a second cap on a cap
+    ctx.lineWidth=sz*0.6;
+    ctx.globalAlpha=0.75*moving*(1-st*0.4)*pipeEdge(g,s+len);
     ctx.strokeStyle=C.bright;
-    if(pipeSub(g,s+len-2.2,s+len)) ctx.stroke();
+    if(pipeSub(g,s+Math.max(0,len-1.4),s+len)) ctx.stroke();
+    ctx.lineCap="round";
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -939,6 +992,59 @@ function pipeHoldDial(L, id){
    has no pipe behind it. The run was always real, solved and hittable
    underneath; only the picture lied. */
 const pipeRuns = L => pipeNetwork();
+
+/* ══ A RUN STATES ITS SIZE AND WHAT IT HOLDS, ON ITSELF ══
+   Bore and pressure were only ever on the PIPE RUN panel, so they could be
+   read for one run at a time and never compared. The second word is what the
+   run CARRIES (runDesignP), not its wall: the wall is already the picture -
+   it is the casing drawn round the bore - while the pressure behind it is
+   drawn nowhere and is what decides whether that wall is enough. TWO
+   words, because they are two quantities: joined into one string they could
+   only be placed where a single straight leg was long enough for both, so a
+   run that bends printed nothing. Split, they take a leg each.
+   INSIDE the tube, sized to the BORE and laid along the pipe - a vertical leg
+   reads turned a quarter turn, the same rule portWordDraw() keeps for a joint
+   on a side face. Sizing to the bore is what keeps the ink off the casing,
+   which is the wall and is a reading of its own.
+   Dark ink, because the tube is a bright fill - C.inkOnLit is the palette's
+   own ink for that ground, the same one a port's word already uses.
+   Scaled, never clipped: a short leg gets a small word rather than half of a
+   big one, and the size is in plant units, so zoom resolves it. */
+const PIPE_LAB_PAD=1.1;         // clear pixels between the word and the casing
+/* WHERE THE TWO WORDS GO - one per straight leg where the run has two worth
+   using, both on the one leg where it has not, each carrying the room it may
+   spend along the pipe so neither is sized off length it has not got. */
+function pipeLabSpots(g){
+  const at=(q,t)=>({x:q.x+q.dx*t, y:q.y+q.dy*t, dx:q.dx, dy:q.dy});
+  const segs=g.segs.slice().sort((a,b)=>b.L-a.L);
+  if(!segs.length) return [];
+  const q=segs[0];
+  if(segs.length<2 || segs[1].L < q.L*0.45)
+    return [{p:at(q,q.L/3), room:q.L/3}, {p:at(q,q.L*2/3), room:q.L/3}];
+  return [{p:at(q,q.L/2), room:q.L*0.9},
+          {p:at(segs[1],segs[1].L/2), room:segs[1].L*0.9}];
+}
+function pipeSizeLabels(NET){
+  const REF=10, o0={size:REF,sp:0};
+  for(const r of NET){
+    const g=pipeGeom(r.pts); if(!g.len) continue;
+    const w=pipeWidth(runBore(r));
+    const p=runDesignP(r);
+    const words=[Math.round(runBoreMm(r))+" mm",
+                 (p>=10?p.toFixed(1):p.toFixed(2))+" MPa"];
+    const spots=pipeLabSpots(g);
+    for(let i=0;i<spots.length && i<words.length;i++){
+      const word=words[i], sp=spots[i];
+      const sz=Math.min(w-PIPE_LAB_PAD, REF*sp.room/Math.max(tw(word,o0),1e-6));
+      if(!(sz>0.8)) continue;
+      const vert=Math.abs(sp.p.dx)<Math.abs(sp.p.dy);
+      ctx.save(); ctx.translate(sp.p.x, sp.p.y);
+      if(vert) ctx.rotate(-Math.PI/2);
+      txt(word,0,sz*0.36,{size:sz,sp:0,align:"center",color:C.inkOnLit});
+      ctx.restore();
+    }
+  }
+}
 
 function pipeFlow(L){
   pipeRate(L);
