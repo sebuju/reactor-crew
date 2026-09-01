@@ -2954,6 +2954,9 @@ function buildStockPlumbing(opt){
   for(const pid in D.ports) delete D.ports[pid];
   for(const id  in D.tanks) delete D.tanks[id];
   for(const id  in D.fittings) delete D.fittings[id];
+  // and every part goes back to the cell THIS loop count lays it at: a stored
+  // cell is a drag on the plant being torn down, not on the one being built
+  for(const id  in D.cells) delete D.cells[id];
   /* Loops 1..3's generators and pumps are PLACED parts, so they survive a
      rebuild of D and have to be torn down by hand - the same sweep
      makeLoops() did, for the same reason. Loop 0's sg0/pump0 are fixed slots
@@ -2962,6 +2965,24 @@ function buildStockPlumbing(opt){
   for(let i=1;i<=3;i++){
     if(placed("sg"+i))   removePart("sg"+i);
     if(placed("pump"+i)) removePart("pump"+i);
+  }
+  /* ══ MEASURE THE BOXES THIS PLANT HAS, NOT THE LAST ONE'S ══
+     Every nozzle below is an OFFSET taken off a part's own w/h, and a box
+     follows a real quantity - radW()/radH() off panel area, tankW()/tankH()
+     off volume. plantPreset() has just called designForget() and written this
+     plant's figures, so LAY is one plant out of date until something rebuilds
+     it: seeded against the previous ship, a panel's far-face nozzle landed
+     inside the new panel and its cooling runs were dropped in silence. */
+  buildLayout();
+  /* ══ THE STOCK SHIELDING ══
+     Three blocks between the reactor and the control room, placed exactly the
+     way ADD SHIELD places one - so they can be dragged, and taken away again,
+     like anything else the player put down. */
+  for(let i=0;i<3;i++){
+    if(placed("shld"+i)) removePart("shld"+i);
+    placePart(() => ({id:"shld"+i, name:"SHIELD", w:3, h:3, x:18+3*i, y:D.gh-4,
+      col:"#6d8f98", grp:"shield", role:"shield",
+      tip:"A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access."}));
   }
 
   /* ══ THE TANKS ══
@@ -3048,7 +3069,7 @@ function buildStockPlumbing(opt){
   for(let i=1;i<loops;i++){
     placePart(() => ({id:"sg"+i, name:"STEAM GEN "+(i+1), w:3, h:6, x:X(i), y:5,
       col:"#5fd2e2", grp:"loop"+i, tip:"", role:"sg"}));
-    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:3, h:5, x:X(i), y:18,
+    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:0, h:0, x:X(i), y:18,
       col:"#57d38c", grp:"loop"+i, tip:"", role:"pump"}));
   }
   /* ══ ONE MAIN STEAM HEADER, ONE TEE PER GENERATOR ══
@@ -3137,8 +3158,11 @@ function buildStockPlumbing(opt){
      real flow: pull it off the drawing and the condenser rejects nothing,
      which is what a plant with nothing turning its cooling water reads. */
   const pCondCwO  = seedPort("cond",-1,4);
-  const pCwpT     = seedPort("cwp",1,-1);
-  const pCwpB     = seedPort("cwp",1,2);
+  /* SUCTION ON THE RIGHT FACE, not the top: the emergency feedwater tank
+     stands over this pump's own columns, so a top nozzle has no cell. ROLE.pump
+     folds r onto t, so this is the same suction node either way. */
+  const pCwpR     = seedPort("cwp",partOf("cwp").w,faceMid(partOf("cwp").h,0));
+  const pCwpB     = seedPort("cwp",1,partOf("cwp").h);
   /* The panel's TOP face, not its left: ROLE.radiator folds t onto l, so it is
      the same node, and the pump stands directly over it - two ports facing
      each other across a cell boundary are a joint and need no pipe. */
@@ -3149,18 +3173,31 @@ function buildStockPlumbing(opt){
      both its ports, which is a plant with no heat sink at all. */
   const radBox    = id => { const p=partOf(id); return {w:p?p.w:1, h:p?p.h:1}; };
   const rad0      = radBox("rad0"), rad1 = radBox("rad1");
-  const pRad0T    = seedPort("rad0",faceMid(rad0.w,0),-1);
+  /* THE COLUMN THE PUMP IS STANDING IN, not the middle of the panel's own top
+     face. The joint below is two nozzles meeting across a cell boundary, and
+     the panel's width follows its AREA - so faceMid() put the nozzle under the
+     pump on a five-wide stock panel and one cell clear of it on a three-wide
+     small-plant one, which is the whole cooling circuit gone with nothing said.
+     Clamped onto the face, so a panel narrower than the offset still gets a
+     legal nozzle and seedRun() lays real pipe to reach it. */
+  const pRad0T    = seedPort("rad0",
+    clamp((partOf("cwp").x+1)-partOf("rad0").x, 0, rad0.w-1), -1);
   const pRad0R    = seedPort("rad0",rad0.w,faceMid(rad0.h,0));
   const pRad1L    = seedPort("rad1",-1,faceMid(rad1.h,0));
   const pRad1R    = seedPort("rad1",rad1.w,faceMid(rad1.h,0));
-  const pCondCwI  = seedPort("cond",4,5);
+  /* ONE COLUMN AFT OF THE SECOND PANEL, never a literal 4. The return comes up
+     the panel's own right-hand column, so a nozzle standing over that column
+     has the run climbing through the cell it starts in - which is what a wider
+     panel did to it. Reads back the stock 4 to the cell. */
+  const pCondCwI  = seedPort("cond",
+    clamp((partOf("rad1").x+rad1.w+1)-partOf("cond").x, 0, partOf("cond").w-1), 5);
   // one discharge nozzle per generator - the pump is as wide as it has loops
   const feedT     = i => seedPort("feed",i,-1);
   /* dx 0, not the middle: the condensate rises in this port's OWN column, and
      the middle of the pump is exactly the column the cooling water has to turn
      down in on its way to the panels - two runs, one corner, and the second
      one silently butts. */
-  const pFeedB    = seedPort("feed",0,5);
+  const pFeedB    = seedPort("feed",0,partOf("feed").h);
 
   /* THE HOT NOZZLE SITS LOW ON AN ADDED LOOP. ROLE.sg gives the primary ONE
      left-face port, so the run has to reach that cell and no other - and the
@@ -3195,7 +3232,12 @@ function buildStockPlumbing(opt){
   seedRun(pCondR, pFeedB, false, [[AFT+10,KEEL],[FEEDX,KEEL]]);   // condensate, along the keel
   /* AFT OF THE LAST PUMP, so it never meets a bilge run: the engine room moves
      back with the loop count and the cold returns do not. */
-  seedRun(pCondCwO, pCwpT, false, [[AFT-2,28],[AFT-2,24],[AFT-8,24]]);   // condenser water side, up and forward into the pump's suction
+  /* THE ROW IS THE CONDENSER'S OWN, not a literal 28: a taller panel moves
+     the pump, and a run pinned to the old row climbed through the cell the
+     pump now stands in. The suction is on the pump's right face, so the run
+     comes forward along its own row and needs no second corner. */
+  { const cd=partOf("cond");
+    seedRun(pCondCwO, pCwpR, false, [[AFT-2,cd.y+cd.h-1]]); }   // condenser water side, up and forward into the pump's suction
   seedRun(pCwpB, pRad0T);                                       // and the pump stands on the first panel - a joint, no pipe
   seedRun(pRad0R, pRad1L);                        // ...through the second, in series...
   seedRun(pRad1R, pCondCwI);                      // ...and back into the condenser's water side
@@ -3208,7 +3250,7 @@ function buildStockPlumbing(opt){
   let prevTeeR = null;
   for(let i=0;i<loops;i++){
     const g = sgPorts(i);
-    const pT = seedPort("pump"+i,1,-1), pB = seedPort("pump"+i,1,5);
+    const pT = seedPort("pump"+i,1,-1), pB = seedPort("pump"+i,1,partOf("pump"+i).h);
     const teeB = seedPort(mstee[i],0,1), teeT = seedPort(mstee[i],0,-1);
     const teeL = i? seedPort(mstee[i],-1,0) : null;
     const teeR = seedPort(mstee[i],1,0);
