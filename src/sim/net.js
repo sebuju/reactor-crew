@@ -142,7 +142,11 @@ function netSolve(A, x, n){
    read) and `m` is the resulting width; A and b are then m-sized, and the
    caller scatters the answer back to node index. Omitted, the matrix is the
    whole network exactly as before. */
-function netAssemble(edges, n, fixed, s, A, b, src, row, m){
+/* `touch` is which nodes an edge that actually CONDUCTS this pass landed on.
+   Pure bookkeeping over the same loop and the same g - the caller cannot ask
+   it afterwards without evaluating every edge's conductance a second time, and
+   a second evaluation is a second answer. */
+function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch){
   const wantA = A !== false;
   if(!row) m = n;
   if(wantA) A = A || new Float64Array(m*m);
@@ -155,6 +159,7 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m){
     if(!(g > 0)) continue;
     const h = typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0);
     const u = ed.u, v = ed.v;
+    if(touch){ touch[u]=1; touch[v]=1; }
     const pu = fixed[u], pv = fixed[v];
     const gu = pu === undefined, gv = pv === undefined;
     const ru = row ? row[u] : u, rv = row ? row[v] : v;
