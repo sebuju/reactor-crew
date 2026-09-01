@@ -5,7 +5,8 @@ const {headless} = require('./bundle.js');
 const H = headless(`({S:()=>S, P:()=>P, D, LAY, ARCHPRE, archPreset, commission, resetPlant,
   simTick, roomH2Frac, roomO2Frac, roomAt, GW, GH, MPC, ROOM_MOL, H2_MMOL, O2_MMOL,
   ROOM_O2_0, snapS, restoreS, combatHit, ACT, act, buildLayout, layoutMetrics,
-  ROOM_CAIR, ROOM_C, H2_LFL, partSkin, partPburst, PIPE_PBURST, H2_UP, mwE, condP, partTsurv})`);
+  ROOM_CAIR, ROOM_C, H2_LFL, partSkin, partPburst, PIPE_PBURST, H2_UP, mwE, condP, partTsurv,
+  radTMax})`);
 
 const arg = process.argv[2] || "rest";
 
@@ -23,7 +24,7 @@ if(arg === "rest"){
     boot(k); run(120);
     const s = H.S(), P = H.P();
     console.log([k, f(s.n), f(s.TfAvg||s.Tf,2), f(s.dnbr), f(s.n*P.rated,1), f(H.mwE(s),1),
-      f(s.condT,2), f(H.condP(s),5), f(s.radT,2), f(s.roomMax,5), f(s.h2,6),
+      f(s.condT,2), f(H.condP(s),5), f(H.radTMax(s),2), f(s.roomMax,5), f(s.h2,6),
       f(s.roomPMax,6), s.roomBurnOn].join("  "));
   }
 }

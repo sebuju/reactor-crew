@@ -58,11 +58,13 @@ function dump(s,label){
   row("Tavg K",f(s.Tavg,2)); row("P MPa",f(s.P,4));
   row("inventory %",f(s.inv,2)); row("pzr level %",f(s.lvl,2));
   row("core MW",f(s.fq*(s.P0mw||0),2)||"-"); row("electric MW",f(M.mwE(s),2));
-  row("cond T K",f(s.condT,2)); row("rad T K",f(s.radT,2));
+  row("cond T K",f(s.condT,2)); row("cw in K",f(s.cwInT,2));
   row("release",f(s.release,5)); row("breach",!!s.breach);
 
   console.log(" POTS");
   for(const id in (s.ihxTBy||{})) row("ihx "+id+" K",f(s.ihxTBy[id],2));
+  for(const id in (s.radTBy||{}))
+    row("rad "+id, "T "+f(s.radTBy[id],2)+"  takes "+f((s.radQBy[id]||0)/1000,1)+" MW");
   for(const id of M.sgIds()) row("sg "+id, "T "+f(s.sgTBy&&s.sgTBy[id],2)+"  lvl "+f(M.sgLvl(s,id),1)+"  P "+f(M.secP(s,id),4));
 
   console.log(" TANKS");
