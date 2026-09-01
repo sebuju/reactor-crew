@@ -904,54 +904,80 @@ function dbRailBuild(rail,vitals,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
-  const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
-  /* ══ AND THE RUN YOU PICKED ══
+  /* ══ AND THE RUN YOU PICKED, IN THE SAME WELL ══
      A run is not a part, so it gets no per-panel well of its own in the loop
-     above - there is one well, and it shows whichever run is selected. Picked
-     from a row in PIPES or by clicking the pipe on the drawing; both write
-     `sel`, which is the same selection every machine already uses. */
-  const run=KIT.well({title:"PIPE RUN"}); rail.appendChild(run.el);
-  const runBody=KIT.el("div","db-panel-body"); run.body.appendChild(runBody);
-  watch.add(run.el);
+     above. It gets the foot of PIPES: the list of what is joined up and the
+     size of the one you picked out of it are the same subject, and two wells
+     put the answer a scroll away from the question. Picked from a row here or
+     by clicking the pipe on the drawing; both write `sel`, which is the same
+     selection every machine already uses. */
+  const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
+  const pipeList=KIT.el("div","db-pipe-list"); pipes.body.appendChild(pipeList);
+  const runBody=KIT.el("div","db-panel-body"); pipes.body.appendChild(runBody);
+  watch.add(pipes.el);
   /* the verdict on the design stands over the plant it judges, not at the foot
      of a rail the player has to scroll past every machine to reach */
   const results=KIT.well({title:"RESULTS"}); vitals.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); vitals.appendChild(review.el);
-  return {panels,results,review,pipes,run,runBody};
+  return {panels,results,review,pipesWell:pipes,pipeList,runBody};
 }
 /* ══ WHAT IS ACTUALLY CONNECTED ══
    One row per traced connection - from, to, and how long it is - plus a line
    for every pipe cell that reaches nothing. This is the whole point of tracing
    rather than authoring: "is this joined up" becomes a question the bench can
    answer and print, instead of a thing the player has to read off the picture. */
-function pipeRailSync(well){
+function pipeRailSync(body,wellEl){
   const M=pipeMap();
+  /* THE SIZE IS IN THE LIST, not only on the panel under it: bore and wall are
+     what the player sets, and one run at a time on a panel is no way to see
+     that one leg is half the width of the one it feeds. Off the run itself
+     (runOfKey), so a row and the panel below cannot disagree. */
   const rows=M.conns.map(c=>{
-    const a=partOf(c.a), b=partOf(c.b);
+    const a=partOf(c.a), b=partOf(c.b), r=runOfKey(c.key);
     return [(pipeLabel(c.k,c.key)||"PIPE"),
             (a?partName(a):c.a)+" ⇒ "+(b?partName(b):c.b),
-            c.L.toFixed(1)+" m", c.key];
+            c.L.toFixed(1), r?Math.round(runBoreMm(r)):"-",
+            r?runWallMm(r).toFixed(0):"-", c.key];
   });
   const loose=M.orphan.length, dead=M.dangling.filter(d=>d.cells.length).length;
   // sel is in the signature: a row lights when it is the picked one, so the
   // list has to rebuild when the pick moves
   const sig=rows.map(r=>r.join("/")).join("|")+"|"+loose+"|"+dead+"|"+sel;
-  const body=well.body;
   if(body._sig===sig) return;
-  body._sig=sig; body.innerHTML="";
+  body._sig=sig; body.innerHTML=""; body._rows={};
   if(!rows.length){ const p=KIT.el("p","db-review-ok");
     p.textContent="NOTHING IS PIPED UP"; body.appendChild(p); }
+  /* ONE GRID, so a column is a column. Five spans per row against one template
+     (db-pipe-row, plant-screens.css) - the head carries the units, so no cell
+     below has to repeat them. */
+  const cells=(row,vals)=>{
+    const CLS=["db-pipe-kind","db-pipe-ends","db-pipe-len","db-pipe-bore","db-pipe-wall"];
+    vals.forEach((v,i)=>{ const s=KIT.el("span",CLS[i]); s.textContent=v; row.appendChild(s); });
+  };
+  if(rows.length){
+    const head=KIT.el("div","db-pipe-row db-pipe-head");
+    cells(head,["RUN","FROM ⇒ TO","m","BORE mm","WALL mm"]);
+    body.appendChild(head);
+  }
   for(const r of rows){
-    const row=KIT.el("div","db-pipe-row"+(sel===r[3]?" on":""));
-    const k=KIT.el("span","db-pipe-kind"); k.textContent=r[0];
-    const n=KIT.el("span","db-pipe-ends"); n.textContent=r[1];
-    const l=KIT.el("span","db-pipe-len");  l.textContent=r[2];
-    row.append(k,n,l); body.appendChild(row);
-    // THE ROW IS THE PICK, the same way a panel's title bar is (railPick,
-    // inspector.js): a list of everything piped up is also the way to get at
-    // a run that is hard to click on a crowded drawing.
-    row.addEventListener("click",()=>{ sel=r[3]; uiDirty(); });
-    KIT.tip(row,r[0],"Click to select this run. Its bore and its wall are on the PIPE RUN panel below, and it lights up on the drawing.");
+    const row=KIT.el("div","db-pipe-row"+(sel===r[5]?" on":""));
+    cells(row,[r[0],r[1],r[2],r[3],r[4]]);
+    body.appendChild(row); body._rows[r[5]]=row;
+    /* THE ROW IS THE PICK - the way at a run that is hard to click on a
+       crowded drawing. Three things, and the third is why it never worked:
+       railBlank() (inspector.js) drops the selection on any rail click that
+       does not land in the well whose _pickId IS the selection, and it BUBBLES
+       - so this handler set `sel` and railBlank cleared it again a moment
+       later, every time. PIPES is the panel for whichever run is picked, so it
+       carries that run as its _pickId, set here rather than at the next sync
+       because railBlank asks before any sync runs.
+       railPickId is the same flag a panel's own title bar sets: a pick made IN
+       the rail must not scroll the rail out from under the hand that made it. */
+    row.addEventListener("click",()=>{
+      sel=r[5]; railPickId=r[5];
+      if(wellEl) wellEl._pickId=r[5];
+      uiDirty(); });
+    KIT.tip(row,r[0],"Click to select this run. Its bore and its wall are at the foot of this panel, and it lights up on the drawing.");
   }
   const warn=t=>{ const row=KIT.el("div","db-review-row warn");
     const tag=KIT.el("span","db-review-tag"); tag.textContent="WARN";
@@ -996,16 +1022,26 @@ function dbRailSync(state){
     dbPanelSync(h.body,cur);
   }
   if(!fresh) return;
-  pipeRailSync(state.pipes);
+  pipeRailSync(state.pipeList,state.pipesWell.el);
+  /* AND THE WELL OWNS THE PICKED RUN. Same reason as the row's own handler:
+     railBlank() clears a selection whose well does not claim it, so working
+     the BORE field on a run picked off the drawing would have dropped the run
+     the field belongs to. */
+  state.pipesWell.el._pickId = isRunKey(sel) ? sel : null;
   /* THE SELECTED RUN'S OWN PANEL. Its own two number fields go through
      dbPanelSync() exactly as a machine's do, so a run is configured with the
      same widgets, the same SUGGEST and the same mass hint as everything else
      on the board. Nothing picked is a real state and says so. */
   { const r = isRunKey(sel) ? sel : null;
-    state.run.setName(r ? (pipeLabel(pipeMap().byKey[r].k, r)||"PIPE RUN") : "PIPE RUN");
-    KIT.show(state.run.el, true);
-    dbPanelSync(state.runBody, r ? paramsForRun(r)
-      : [{kind:"note",text:"No run picked. Click a pipe on the drawing, or a row in PIPES above, to set its bore and its wall."}]); }
+    dbPanelSync(state.runBody, r
+      ? [{kind:"rule",title:pipeLabel(pipeMap().byKey[r].k, r)||"PIPE RUN"}].concat(paramsForRun(r))
+      : [{kind:"note",text:"No run picked. Click a pipe on the drawing, or a row above, to set its bore and its wall."}]);
+    // A PICK MADE ON THE DRAWING BRINGS UP THE PANEL, the same way a machine's
+    // does - the whole well, "start", not the row inside it: the fields the
+    // pick was made to reach are at its FOOT, and scrolling the row to the top
+    // leaves them below the fold. A pick made in the rail scrolls nothing
+    // (railPickId, on the row's own click).
+    if(r && moved) KIT.reveal(state.pipesWell.el,"start"); }
   { const rd=benchResultsData();
     const body=state.results.body;
     if(!body.firstChild){
