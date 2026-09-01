@@ -54,27 +54,27 @@ const PROMPT_F=0.935;
    diameter. runBore() is untouched - a coolant may not move a conductance. */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
-  P0:15.5,pipeK:1.00,tsat:618,hfg:967,mmol:.018,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,
+  P0:15.5,pipeK:1.00,col:"#5aa9d6",tsat:618,hfg:967,mmol:.018,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
-  P0:7.0,pipeK:1.00,tsat:559,hfg:1505,mmol:.018,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,
+  P0:7.0,pipeK:1.00,col:"#5aa9d6",tsat:559,hfg:1505,mmol:.018,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
-  P0:6.9,pipeK:1.00,tsat:558,hfg:1512,mmol:.018,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.31,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",tsat:558,hfg:1512,mmol:.018,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.31,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
-  P0:0.2,pipeK:2.00,tsat:1150,hfg:4260,mmol:.02299,Tref:723,dTf:150,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,dnbLaw:"boil",xe:0.85,flowMin:.20,eff:.40,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,mmol:.02299,Tref:723,dTf:150,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,dnbLaw:"boil",xe:0.85,flowMin:.20,eff:.40,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
-  P0:0.2,pipeK:2.40,fuelInCoolant:true,tsat:1700,hfg:4500,mmol:.0433,Tref:922,dTf:200,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.44,
+  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,mmol:.0433,Tref:922,dTf:200,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.44,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,
-  P0:7.0,pipeK:2.60,tsat:2000,hfg:20.9,mmol:.004,satN:.10,Tref:773,dTf:600,aF:-4.5,modK:0,absK:0,dens:6,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.42,
+  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,mmol:.004,satN:.10,Tref:773,dTf:600,aF:-4.5,modK:0,absK:0,dens:6,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.42,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
 ];
@@ -166,9 +166,27 @@ const CHAN=[
    Re-derive by measuring boil-dry time at full load, M*H_FG/Q. At four
    generators (Q = 299 MWt each) that is 278 s U-tube and 35 s once-through -
    "minutes" and "almost as fast", the two claims the notes make. */
+/* ══ A GENERATOR IS A SHELL AND A TUBE BUNDLE, AND THEY ARE PRICED APART ══
+   `mass` was one tonnage per TYPE, so a shell built for 7 MPa and one built
+   for 15 weighed the same and buying transfer coefficient was free steel.
+   It is two terms now (sgSteelT(), layout.js):
+
+     the SHELL follows its own water charge as a vessel, at the wall its
+     design pressure needs - the same Barlow relation every pipe, tank and the
+     reactor vessel already pay;
+     the TUBE BUNDLE follows the UA it was bought for, the idiom
+     IHX_T_PER_UA already uses on the exchanger.
+
+   `tube` is what the BUNDLE weighs, in tonnes, and it stays a flat figure per
+   type - see sgTubeT() (layout.js) for the measurement that says why pricing
+   it off UA is wrong here. Fitted so an untouched plant weighs exactly what
+   the flat figure gave it: 70 t U-tube and 42 t once-through, less each
+   shell's own 6.7 t and 0.9 t at the stock design pressure. The two types
+   stay as far apart as they were, and the difference now sits where it
+   physically is - a once-through does the same duty in a far smaller shell. */
 const SGT=[
- {name:"U-TUBE",water:55,mass:70,note:"Large secondary water inventory acts as a heat sink for minutes after feedwater is lost. Heavy and slow to respond."},
- {name:"ONCE-THROUGH",water:7,mass:42,note:"Very little water in it, so it responds instantly to load changes and boils dry almost as fast. Light."},
+ {name:"U-TUBE",water:55,tube:63.3,note:"Large secondary water inventory acts as a heat sink for minutes after feedwater is lost. Heavy and slow to respond."},
+ {name:"ONCE-THROUGH",water:7,tube:41.1,note:"Very little water in it, so it responds instantly to load changes and boils dry almost as fast. Light."},
 ];
 /* The generator's contribution to the PRIMARY's thermal inertia, and the ONE
    place it is decided: derived() here and commission() in step.js both read
@@ -191,9 +209,15 @@ const SGT=[
    reading 4.0 would re-price every trip. The WATER half is already per
    instance in hotMass(), so nothing is charged twice. With no generators
    drawn - which the bench must answer - it falls back to the scalar row. */
+/* THE REFERENCE IS THE STOCK U-TUBE'S OWN TOTAL, which SGT[0].mass used to
+   BE. It is two terms now, so the figure is written here once rather than
+   read off a row that no longer carries it - and it is what keeps a stock
+   plant reading exactly 1.0, so every trip calibrated against that plant is
+   untouched. */
+const SG_MASS_REF = 70;
 const sgInertiaK = () => { let n=0,m=0;
-  for(const p of LAY.parts) if(p.role==="sg"){ m+=sgRowOf(p.id).mass; n++; }
-  return (n?m/n:SGT[D.sg].mass) / SGT[0].mass; };
+  for(const p of LAY.parts) if(p.role==="sg"){ m+=sgSteelT(p.id); n++; }
+  return (n?m/n:SG_MASS_REF) / SG_MASS_REF; };
 const CONT=[
  {name:"NONE",rel:1.0,mass:0,note:"No containment. Any fuel damage releases directly to the environment, and to your crew."},
  {name:"SUPPRESSION POOL",rel:.25,mass:40,note:"Compact pool that condenses released steam. Holds most of a release, and can be overwhelmed by a large break."},
@@ -253,11 +277,27 @@ const zoneFuelOf = z => D.zoneFuel[z] ?? D.fuel;
    change nobody declared. A missed dTouch() therefore costs one frame of stale
    drawing, never a wrong plant. Over-bumping costs a rebuild and nothing else:
    if you are not sure, bump. */
+/* ══ THE ROD DRIVES, AS TWO REAL QUANTITIES ══
+   ROD_SPD0 is the reference drive: 1.2 % of travel a second, an 83 s stroke.
+   ROD_BANK_T is what one bank's gear weighs, and it prices BOTH of the things
+   a bank costs - another bank, and a faster motor on every bank there is. The
+   second is charged as a DELTA off the reference speed, the same way the bank
+   count is charged off four, so an untouched design weighs exactly what it
+   always did. */
+const ROD_SPD0=0.012, ROD_BANK_T=9;
 let DGEN=0;
 const dTouch=()=>{ DGEN++; };
 const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
-         pdes:1.0,pzr:1.0,chim:.3,sg:0,
+         chim:.3,sg:0,
          scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
+         /* HOW FAST THE DRIVES WALK, fraction of travel per second, and it is a
+            REAL QUANTITY like every other machine size on this ship. It was a
+            constant in step.js, so every plant got a 83 s stroke whatever it
+            was worth to it - and a fast core that answers a rod before you have
+            finished moving it wants a faster motor than a graphite pile does.
+            A motor that strokes twice as fast is twice the machine, so it costs
+            ROD_BANK_T a bank on top of the bank's own gear (mass, below). */
+         rodSpd:ROD_SPD0,
          /* How far the temperature controller may walk the bank on its own,
             as fractions inserted. Not a safety limit - it is what stops the
             controller wandering off the position the shutdown margin was
@@ -281,7 +321,9 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
          sgUA:{}, ihxUA:{},   // kW/K per transfer stage
          pumpHead:{}, pumpFlow:{}, // MPa developed, at kg/s
          sgType:{},radCoat:{},radArea:{},radUA:{},   // m2 of panel, and kW/K of its coolant side
+         sgDesP:{},           // MPa - what each generator's own shell is built to hold
          bore:{},             // mm, per run key - a pipe is a diameter
+         wall:{},             // mm, per run key - and it has a thickness, which is its rating and its mass
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
             runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
             through the same addTank()/addFitting() calls and the same pipe tool the bench
@@ -404,8 +446,19 @@ function derived(){
      d.f is exported wholesale, so every downstream reader of beta, excess,
      densK, condK, mass and tdmg follows from this one substitution. */
   const a=COOLANT[D.cool],f=fuelBlend(),rf=REFL[D.refl];
+  /* THE PRIMARY'S SETPOINT, MPa, and it belongs to a MACHINE now: whichever
+     hold tank stands on the core's circuit states it, and a plant with none
+     is suggested its coolant family's own working pressure. D.pdes was a
+     dimensionless 0.7-1.25x multiplier - the last hidden-reference span on
+     the bench - and one machine's slider set physical properties of every
+     other machine on the plant. pdesK is what the terms that genuinely scale
+     with "how far above nominal is this design" read instead, so raising the
+     setpoint still costs saturation temperature and DNBR margin, off a real
+     pressure rather than off a number with no units. */
+  const P0=holdSetP(nodeGraph().coreCirc), pdesK=P0/a.P0;
   const dens=a.dens*f.densK*(1.15-0.15*D.pitch);
   const coreMass=D.power/dens*22*(0.8+0.2*D.hd);
+  const vesselMass=vesselShellMass(P0,a);
   /* latMass() replaces two table entries that used to stand in for drawn
      things: the reflector's flat catalogue figure, and a rod-worth surcharge
      that priced a number rather than the clusters that made it. Both are now
@@ -429,13 +482,22 @@ function derived(){
      way tankMass() charges per tank - a spool piece and a valve body, so a
      tee is not free redundancy and a full-bore one is not free either. */
   const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
-    +totalPumpCap()*PUMP_MASS+totalSgMass()+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
-    +coreMass + (D.pdes-1)*220 + (D.pzr-1)*45 + D.chim*38
+    +totalPumpMass()+totalSgMass()+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
+    /* THE VESSEL WEIGHS ITS OWN WALL. (D.pdes-1)*220 was a delta off a
+       dimensionless multiplier - no wall, no diameter, and worth nothing at
+       all at the nominal it was measured from. The vessel is a cylinder with
+       a real bore and the wall Barlow says it needs at the setpoint it is
+       actually held at (wallSuggestMm(), pipenet.js), so raising pressure
+       costs steel because steel is what it costs.
+       (D.pzr-1)*45 is gone outright: the pressurizer is a tank and tankMass()
+       already weighs it. */
+    +coreMass + vesselMass + D.chim*38
     /* Every term here names a BOX on the grid. tankMass() charges per tank
        INSTANCE, off its own vol, so four tanks cost four tanks and there is
        no flag anywhere pricing a system with nothing drawn behind it. */
     + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
-    + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*9
+    + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*ROD_BANK_T
+    + D.nbank*ROD_BANK_T*(D.rodSpd/ROD_SPD0-1)
     + (D.autorod?26:0) + totalTurbMass() + totalCondMass()
     + totalIhxMass() + totalRadMass()
     + layMass + latMass();
@@ -460,7 +522,7 @@ function derived(){
      count now reads the identical 0.95, where the old table gave a 4-loop
      plant 1.10. DNBR is read off s.dnbr (step.js) at run time, off the real
      solved flow, for anything beyond this fitted baseline. */
-  const dnbr=a.dnbr*(.55+.45*D.pitch)*Math.pow(D.pdes,.35)*0.95;
+  const dnbr=a.dnbr*(.55+.45*D.pitch)*Math.pow(pdesK,.35)*0.95;
   /* peaking is no longer a curve fitted to H/D: it is the peak of the flux
      shape this core actually settles into, solved on the nodal mesh */
   const core=corePredict({dens,rf});
@@ -501,7 +563,7 @@ function derived(){
   return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,Lam,mr,mth,excess,dnbr,Fq,xeW,core,
     boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
-    beta:f.beta,scram:SCRAM[D.scram].rate,P0:a.P0*D.pdes,
+    beta:f.beta,scram:SCRAM[D.scram].rate,P0,
     /* Third element is the component the warning is ABOUT, for the bench's
        per-component warning circle - null when no single component owns it
        (a whole-design figure like mass or shutdown margin). */
