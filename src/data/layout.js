@@ -27,6 +27,7 @@ function gridDrag(edge,c){
   if(!c) return;
   const [w,h]=gridClamp(edge==="r"?c[0]+1:D.gw, edge==="b"?c[1]+1:D.gh);
   if(w===D.gw && h===D.gh) return;
+  freezeCells();                  // the hull moves, the machinery does not
   D.gw=w; D.gh=h; buildLayout();
 }
 /* ══ WHAT A MACHINE IS CALLED ══
@@ -150,6 +151,7 @@ function placePart(mk){
    tank, and the new one inherited the dead one's plumbing. */
 function removePart(id){
   delete D.tanks[id];
+  delete D.cells[id];   // ids are reused on purpose, so a dead part's cell must not be inherited by the next one
   /* NO fitting->fitting cascade. A fitting left with no runs is a valve
      you can re-plumb, exactly as a tank with no runs is. */
   delete D.fittings[id];
@@ -312,8 +314,24 @@ const pumpFlow = id => bake(D.pumpFlow, id, pumpFlowSuggest);
    which reads the CORE's rating - so editing the reactor silently resized
    every pump on the ship. A pump is a pump wherever it is fitted. */
 const PUMP_FLOW_REF = 7250;            // kg/s, a reference coolant pump duty
-const pumpCapOf = id => (pumpHead(id)/PUMP_H0)*(pumpFlow(id)/PUMP_FLOW_REF);
+const pumpCap = (head,flow) => (head/PUMP_H0)*(flow/PUMP_FLOW_REF);
+const pumpCapOf = id => pumpCap(pumpHead(id), pumpFlow(id));
 const PUMP_MASS=50;                    // t per (head x flow), at the reference machine
+/* ══ A BIGGER PUMP IS A BIGGER BOX ══
+   Every pump's size used to be a literal typed beside its own add() - 3x5 for
+   a coolant pump, 3x2 for the circulating water one - so the two numbers a
+   pump actually states said nothing about the machine on the board, and a
+   pump nobody had sized read as a fitting. Same standing tankW()/tankH() has
+   off `vol` and radW()/radH() have off area. Not to scale, monotonic, floored
+   at 3x3 so the control strip always fits.
+   OFF THE STORED FIGURES, never pumpCapOf(): the box is read inside
+   buildLayout(), and pumpFlowSuggest() asks loopMap() - which is built on the
+   board this pass exists to replace. An unset pump is the reference machine,
+   which is the 3x5 every fixed slot used to have written down. */
+const pumpBoxCap = id => pumpCap(D.pumpHead[id] ?? PUMP_H0, D.pumpFlow[id] ?? PUMP_FLOW_REF);
+const PUMP_W0=3, PUMP_BOX_H0=3;
+const pumpW = id => clamp(PUMP_W0 + Math.floor(pumpBoxCap(id)/1.5), 3, 5);
+const pumpH = id => clamp(PUMP_BOX_H0 + Math.round(2*pumpBoxCap(id)), 3, 8);
 /* IS THIS A PRIMARY PUMP? There is one pump role, so the question cannot be
    asked of a name or of a second role - it is asked of the GRAPH, exactly
    like loop membership itself: a pump the flood fill can trace to a generator
@@ -505,6 +523,24 @@ const partTsurv=p=>{ const l=ROLE[p.role]&&ROLE[p.role].tsurv;
    disagree. null is structure, exactly as it is above. */
 const partPburst=p=>{ const l=ROLE[p.role]&&ROLE[p.role].pburst;
   return l || null; };
+/* ══ AND WHAT ITS OWN SHELL IS BUILT FOR, MPa ══
+   partPburst() above is the ROOM pushing IN - a hydrogen blast, in kPa - and
+   until now nothing on this plant was ever asked what the pressure INSIDE it
+   was doing. So a thin space panel spliced into a 15.5 MPa primary held it for
+   nothing, which is the one thing a radiating panel cannot do, and a heat sink
+   priced against a 307 K condenser became a free 1.7 GW sink on the hot leg.
+   ONLY THE MACHINE THAT STATES ONE. Every pressure boundary on this plant was
+   bought for this plant, so rating them off the coolant's own P0 said nothing
+   and cost everything: measured, it burst the core, both generators and the
+   pump on MSRE at rest, because the solve carries PIEZOMETRIC head - pump
+   discharge and elevation included - and that is not a figure a shell rating
+   may be compared with. What IS comparable is the pressure the CIRCUIT is
+   held at, which is a gauge reading, and the only machine here with a rating
+   its own circuit can exceed is the panel. The condenser is absent on purpose:
+   s.condLost is already that machine's answer and a second would be a second
+   table. */
+const partPdes=p=>{ const l=ROLE[p.role]&&ROLE[p.role].pdes;
+  return l || 0; };
 // kPa a run gives up at. A pipe cell is not a part and has no role, so it
 // cannot go through partPburst() - the ROOM_RUN_T idiom one file over.
 const PIPE_PBURST=120;
@@ -612,7 +648,10 @@ function nodeGraph(){
   // own internal link is a gate, and a mode change moves no part and no cell.
   // pipeSig()+portSig(): a connection is TRACED out of the cells and the
   // ports, so both are what this graph is built from.
-  const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig();
+  // gridSig(): everything hung off this graph's slot (graphSlot()) includes the
+  // GW x GH occupancy array, and a resize no longer moves any part - so laySig()
+  // alone handed a shrunk or grown hull the grid of the old one.
+  const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig()+gridSig();
   if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
   const adj={}, nodesOf={}, runPorts={};
   const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
@@ -993,9 +1032,10 @@ const totalIhxMass=()=>{ let m=0;
   return m; };
 /* ══════════ THE RADIATOR ══════════
    This is a space game: there is nothing to reject into, so waste heat leaves
-   the ship as photons and nothing else. The panel is a pot (s.radT, step.js)
-   and a footprint, in the shield/catcher/vent idiom - no ports, no run, no
-   network presence.
+   the ship as photons and nothing else. The panel is a pot (s.radTBy, step.js)
+   fed by the WATER IN IT, so where it is plumbed is the whole of what it
+   cools - a panel spliced into a cold leg chills that leg, and one on the
+   condenser's circulating water chills that.
    IT MUST SEE SPACE. A panel with no perimeter cell facing the skin radiates
    exactly nothing and still warms the room, and the predicate is hullCell(),
    the same one a safety valve's stack discharge asks. */
@@ -1025,7 +1065,7 @@ const SIGMA=5.670374419e-8;            // W/m^2/K^4, published
 const T_SPACE=3;                       // K - and (T^4 - T_SPACE^4) is T^4 to 12 digits
 /* K - THE CANONICAL REFERENCE SINK. It anchors P.hTurb, P.cwC, P.condUA and
    condPDes() (step.js) and the area a panel suggests, and nothing else. It is
-   NOT the sink the plant has - that is s.radT, off the panels actually fitted.
+   NOT the sink the plant has - that is s.radTBy, off the panels actually fitted.
    Derived backwards from a real turbine figure, never chosen to preserve
    output: tsatSec(TURB_TRIP_P) is 338.6 K, less an 18.6 K working margin puts
    the condenser at 320 K at rated, less COND_DT0 puts the radiator here. */
@@ -1058,16 +1098,33 @@ const radSrcCount=()=>RAD_N+placedParts.filter(p=>p.role==="radiator").length;
    design, so asking derived() here would ask itself. */
 const radAreaSuggest=id=>RATED_KW()*1000*(1-COOLANT[D.cool].eff)
   /(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4))/radSrcCount();
-const radAreaOf=id=>D.radArea[id]??radAreaSuggest(id);
+/* BAKED ON FIRST READ, like every other per-instance figure on this plant
+   (bake(), pumpHead(), ihxUAOf()). A bare `??` re-asked the SUGGESTION every
+   frame, and radAreaSuggest() divides the plant's rejection by the number of
+   panels - so placing a third panel silently shrank the two already on the
+   drawing, boxes and all. A suggestion prices a machine when it is bought; it
+   is not a figure that may move under one already fitted. */
+const radAreaOf=id=>bake(D.radArea, id, radAreaSuggest);
 const radArea=id=>{ const p=partOf(id);
   return (p && radLive(id)) ? radAreaOf(id) : 0; };
-/* THE BOX, in whole cells - NEAREST, with a floor of one. Rounding up put the
+/* ══ AND A PANEL IS A HEAT EXCHANGER ON ITS COOLANT SIDE ══
+   The area says what it can radiate; this says how fast the water going
+   through it can hand that heat over. Both are needed, and only one of them
+   used to exist: the panel was a pot wired to the condenser by role name, so
+   what it was plumbed to changed nothing at all.
+   RAD_DT0 is the approach the tubes are BOUGHT at - coolant in, less panel -
+   the same standing COND_DT0 has one machine downstream. */
+const RAD_DT0=8;
+const radUASuggest=id=>radCoatOf(id).emis*SIGMA*radAreaOf(id)
+  *Math.pow(RAD_TDES,4)/1000/RAD_DT0;
+const radUAOf=id=>bake(D.radUA, id, radUASuggest);
+/* THE BOX, in whole cells - NEAREST, with a floor of 2x2. Rounding up put the
    stock ship's 15.03 cells into a 16-cell box, which is a fourth row of panel
    nobody asked for: the drawing has to snap to the area, never the area to the
    drawing. Shaped on the 5x3 the stock ship has always had. */
-const radBoxCells=id=>clamp(Math.round(radAreaOf(id)/RAD_AREA_CELL),1,60);
-const radW=id=>clamp(Math.round(Math.sqrt(radBoxCells(id)*5/3)),1,11);
-const radH=id=>Math.max(1,Math.ceil(radBoxCells(id)/radW(id)));
+const radBoxCells=id=>clamp(Math.round(radAreaOf(id)/RAD_AREA_CELL),4,60);
+const radW=id=>clamp(Math.round(Math.sqrt(radBoxCells(id)*5/3)),2,11);
+const radH=id=>Math.max(2,Math.ceil(radBoxCells(id)/radW(id)));
 /* Mass rides the CAPACITY and the coating, never the slider position - the
    rule every other capacity slider on this plant already follows. A blind
    panel still weighs what it weighs. */
@@ -1087,9 +1144,9 @@ const radTAt=qkW=>{ const k=totalRadEA();
    electricity. Written once because the unit is the trap: the inspector was
    handing radTAt() megawatts and quoting the stock plant at 55 K. */
 const radTRated=eff=>radTAt(D.power*1000*(1-eff));
+const radMass=id=>radAreaOf(id)*RAD_MASS_M2*radCoatOf(id).massK;   // t
 const totalRadMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="radiator")
-    m+=radAreaOf(p.id)*RAD_MASS_M2*radCoatOf(p.id).massK;
+  for(const p of LAY.parts) if(p.role==="radiator") m+=radMass(p.id);
   return m; };
 
 /* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
@@ -1152,12 +1209,19 @@ const fittingMass=()=>{ let m=0;
    disagree. */
 function freePid(){ let n=0; while(D.ports["prt"+n]) n++; return "prt"+n; }
 const partOf=id=>(LAY&&LAY.byId.get(id))||null;
-/* WHICH SIDE OF THE PART THIS PORT IS ON. Exactly one of dx/dy is outside the
-   footprint and that one names it - a port is never both. */
+/* WHICH SIDE OF THE PART THIS PORT IS ON, off faceOfOffset() and nothing else.
+   It used to answer with its own chain of tests, whose last branch was a bare
+   `else "b"` - so an offset that is on NO face, which is what a port becomes
+   the moment its part grows past it, came back as a bottom nozzle sitting
+   inside the machine. Its runs then traced against a face the drawing does not
+   have and were dropped in silence: measured, four of the six presets
+   commissioned with no circulating water at all and the condenser rejected
+   full duty into a loop that was not there. NULL is the honest answer and
+   every caller already asks. */
 function portFaceOf(pid){
   const q=D.ports[pid]; if(!q) return null;
   const p=partOf(q.p); if(!p) return null;
-  return q.dx<0?"l" : q.dx>=p.w?"r" : q.dy<0?"t" : "b";
+  return faceOfOffset(p,q.dx,q.dy);
 }
 // the grid cell a port occupies, or null if its part has left the board
 function portCell(pid){
@@ -1606,8 +1670,15 @@ const ROLE = {
      is PINNED rather than dynamic: an internal t<->b edge is only correct if
      the runs land on t and b, and face() used to resolve those off wherever
      cond happened to sit. */
-  pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"SUCT", nb:"DISCH", la:"SUCTION", lb:"DISCHARGE"}, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{t:4, b:1}, thermal:"none", tsurv:400, pburst:70},
+  // IN/OUT on the nozzle, SUCTION/DISCHARGE in the tooltip: the short name is
+  // a LABEL sized to sit inside the joint, and every other machine's says
+  // which way the water is going in the same two words
+  /* ONE path, folded the way a valve body is - r onto t and l onto b - so a
+     pump splices into a horizontal leg with no rotation knob: suction on the
+     right, discharge on the left, the same direction the vertical box has. */
+  pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"IN", nb:"OUT", la:"SUCTION", lb:"DISCHARGE"},
+          fixed:null, fold:{r:"t", l:"b"}, mu:0.75, sgtr:false,
+          ports:{t:4, b:1, r:4, l:1}, thermal:"none", tsurv:400, pburst:70},
   /* ── AND ONE PATH THAT IS NOT IN THE LIQUID MATRIX ──
      `vapPath` is the machine's own steam path, read by the VAPOUR network
      (vapBuild(), pipenet.js) and by nothing else: a liquid `internal` here
@@ -1624,7 +1695,14 @@ const ROLE = {
      heat and not an edge. Declaring them costs the exhaust a real component
      resistance where the old single folded node gave it none. */
   cond:  {internal:[{a:"t", b:"r", kind:"comp", vap:"a", anch:"ab", na:"EXH", nb:"COND", la:"EXHAUST", lb:"CONDENSATE"},
-                    {a:"l", b:"b", kind:"comp", na:"CW IN", nb:"CW OUT", la:"CIRC WATER IN", lb:"CIRC WATER OUT"}],
+                    /* b IS THE INLET AND l IS THE OUTLET, and it was declared
+                       the other way round. Measured on the stock plant:
+                       comp:cond:lb solves at -16 705 kg/s, so the water runs
+                       b->l, and the field agrees - 297.4 K in at the bottom
+                       and 301.0 K out at the left, a 3.6 K rise across the
+                       machine. Every other component on this circuit declares
+                       its inlet as `a`; this one labelled its outlet CW IN. */
+                    {a:"b", b:"l", kind:"comp", na:"CW IN", nb:"CW OUT", la:"CIRC WATER IN", lb:"CIRC WATER OUT"}],
           fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:1, r:1, l:1, b:2}, thermal:"sink", tsurv:400, pburst:35},
   ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
@@ -1664,7 +1742,7 @@ const ROLE = {
           ports:{}, thermal:"none", tsurv:400, pburst:20},
   /* THE ONLY WAY HEAT LEAVES THIS SHIP. A pot on the hull, in the same idiom:
      a footprint and an effect, nothing to plumb. thermal:"sink" because it IS
-     a surface at s.radT (partTemp(), room.js), so an inboard panel rejects
+     a surface at s.radTBy (partTemp(), room.js), so an inboard panel rejects
      nothing and cooks the compartment instead. tsurv is scaled per instance
      by the coating (RADCOAT), which is why the ceramic row is the fragile
      one. */
@@ -1676,7 +1754,7 @@ const ROLE = {
      Space is not a node. */
   radiator:{internal:{a:"l", b:"r", kind:"comp", na:"IN", nb:"OUT", la:"COOLANT IN", lb:"COOLANT OUT"},
           fixed:null, fold:{t:"l", b:"r"}, mu:0.35, sgtr:false,
-          ports:{"*":2}, thermal:"sink", tsurv:520, pburst:15},
+          ports:{"*":2}, thermal:"sink", tsurv:520, pburst:15, pdes:1.0},
   /* ONE ROLE FOR EVERY FITTING. There is no kind: a tee, a branch throttle
      and a relief valve differ by `mode` on the instance (D.fittings), never
      by role - the same move that turned five tank-shaped things into one
@@ -1697,11 +1775,36 @@ const ROLE = {
 // what a fitting IS, asked of the instance and never of the role - the one
 // reader for the fold above and for every branch in the draw and the solve
 const fitModeOf=id=>(D.fittings[id]&&D.fittings[id].mode)||"tee";
+/* ══ WHICH EDGE A STORED CELL IS ══
+   Top-left for every part, because that is what a footprint is - EXCEPT a
+   radiator, which is the one part whose height is a knob (radH(), off area).
+   Anchored by its top, growing a panel walks its face off the skin, which is
+   the whole heat sink gone for a reason nobody moved. It is stored by its
+   BOTTOM edge, so area grows upward and the face stays where it was put.
+   One pair, read by add() and written by moveTo()/freezeCells(). */
+const cellStore=(role,y,h)=>role==="radiator" ? y+h : y;
+const cellTop  =(role,h,v)=>role==="radiator" ? v-h : v;
+/* ══ PIN EVERY PART WHERE IT STANDS ══
+   Half the fixed slots are laid off GH/GW - the keel rank, the engine room -
+   so resizing the hull carried the machinery with it. The hull is what the
+   drag moves; a machine left outside the new one is marked limbo and says so,
+   which is the same answer the bench gives any other bad cell. */
+function freezeCells(){
+  if(!LAY) buildLayout();
+  for(const p of LAY.parts) if(!p.pin) D.cells[p.id]=[p.x, cellStore(p.role,p.y,p.h)];
+}
 
 function buildLayout(){
   dTouch();          // LAY.parts is about to be a different list, and every gesture that edits D lands here
   gridSync();        // the hull may have been dragged since the last pass
-  const A=[], add=(id,name,w,h,x,y,col,grp,tip,role)=>{ const p={id,name,w,h,x,y,col,grp,tip,role}; A.push(p); return p; };
+  /* THE LITERAL x,y BELOW IS A DEFAULT, NEVER A POSITION. A fixed-slot part is
+     rebuilt from nothing on every trigger, so a dragged one snapped back to
+     its literal the next time an unrelated edit rebuilt the board - the same
+     failure D.tanks[].cell already answers for a tank. D.cells is that one
+     answer for every part, written by moveTo() and read here. */
+  const A=[], add=(id,name,w,h,x,y,col,grp,tip,role)=>{ const c=D.cells[id];
+    if(c){ x=c[0]; y=cellTop(role,h,c[1]); }
+    const p={id,name,w,h,x,y,col,grp,tip,role}; A.push(p); return p; };
   /* ══ A MACHINE IS BIG ENOUGH TO HOLD ITS OWN CONTROLS ══
      BANDS is gone: the control room used to stretch a grid ROW to make room
      for a strip that would not fit in a 46 px box, so no row was CELL tall and
@@ -1723,7 +1826,7 @@ function buildLayout(){
   // (loopOf(), above), not stored.
   add("sg0","STEAM GEN 1",3,6,26,5,"#5fd2e2","loop0",
     "Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival.","sg");
-  add("pump0","RCP 1",3,5,26,18,"#57d38c","loop0",
+  add("pump0","RCP 1",0,0,26,18,"#57d38c","loop0",
     "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.","pump");
   /* ══ THE ENGINE ROOM STANDS AFT OF THE LAST LOOP ══
      A four-loop plant used to put its fourth generator and its fourth pump
@@ -1741,8 +1844,9 @@ function buildLayout(){
     "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.","turb");
   if(checkOf("cond")) add("cond","CONDENSER",9,5,AFT,24,"#5aa9d6","sec",
     "Rejects waste heat. Bulky, and it wants to be near the hull.","cond");
-  // as many discharge nozzles as there are generators to feed
-  add("feed","FEED PUMP",Math.max(3,nsg),5,FEEDX,18,"#5aa9d6","sec",
+  // a floor of as many discharge nozzles as there are generators to feed; the
+  // box itself follows the pump's own head and flow (pumpW()/pumpH())
+  add("feed","FEED PUMP",nsg,0,FEEDX,18,"#5aa9d6","sec",
     "Returns water to the steam generator. Lose it and the heat sink boils dry.","pump");
   add("ctrl","CONTROL",6,4,0,BOT,"#cfc9b8","crew",
     "Where your crew sits. Distance and shielding from the reactor set the dose they take.","ctrl");
@@ -1777,7 +1881,19 @@ function buildLayout(){
      time: the panels were plumbed, the runs solved at a trickle of buoyancy,
      and the rejection read full duty anyway. It is a pump like every other
      pump now - hit it, or lose the board it feeds off, and the sink goes. */
-  add("cwp","CIRC WATER PUMP",3,2,AFT-9,BOT-4,"#5aa9d6","sec",
+  /* FOUR ROWS ABOVE THE PANEL'S OWN TOP, never a fixed row. The joint below it
+     is two nozzles meeting across a cell boundary, so it needs exactly one
+     free row each: at a fixed y a four-row panel put its top nozzle in the
+     same cell as the pump's bottom one, one refused the other, and the whole
+     cooling circuit went with it. BOT-5 on the stock three-row panel, to the
+     cell - so the row is read off the pump's OWN box (pumpH()), which is a
+     knob now, and not off a literal that was true of a two-row pump only.
+     IT KEEPS ITS COLUMN, and takes its suction on the RIGHT FACE instead: a
+     full-height pump standing here reaches up into the emergency feedwater
+     tank's rows, so a top nozzle has no cell to stand in and the whole cooling
+     circuit was refused in silence. ROLE.pump folds r onto t, so the right
+     face IS the suction - and the discharge stays a joint over the panel. */
+  add("cwp","CIRC WATER PUMP",0,0,AFT-9,BOT+1-radH("rad0")-pumpH("cwp"),"#5aa9d6","sec",
     "Turns the circulating water between the condenser and the panels. Nothing else moves it: lose this pump and the condenser stops rejecting, whatever area is fitted.","pump");
   /* ON THE KEEL, not at a fixed top edge. The box follows the panel's area
      now, so a short one hung from the old y had no cell against the skin at
@@ -1786,9 +1902,22 @@ function buildLayout(){
   for(let i=0;i<RAD_N;i++) add("rad"+i,"RADIATOR "+(i+1),radW("rad"+i),radH("rad"+i),
       AFT-10+8*i,BOT+3-radH("rad"+i),"#b8c4cf","sec",
     "A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. Select it for area and coating.","radiator");
-  for(let i=0;i<3;i++) add("shld"+i,"SHIELD",3,3,18+3*i,BOT,"#6d8f98","shield",
-    "A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.","shield");
+  /* NO SHIELD SLOTS HERE. Shielding is PLACED (ADD SHIELD, design-bench.js)
+     and so can be taken away again like every other part the player put down;
+     the stock three are seeded by buildStockPlumbing() (pipenet.js), which is
+     the same gesture written out. */
   for(const p of placedParts) A.push(p);
+  /* EVERY PUMP'S BOX IS DERIVED HERE, and nowhere else - a fixed slot and a
+     placed spare alike, so a size stored at placement cannot outlive the
+     figures it was drawn from. The w/h an add() states is a FLOOR: the feed
+     pump needs one discharge cell per generator whatever it is rated at. */
+  for(const p of A) if(roleHead(p.role)){
+    p.w=Math.max(pumpW(p.id), p.w); p.h=Math.max(pumpH(p.id), p.h); }
+  /* A PINNED PART IS DERIVED, NEVER STORED. Its parent may have been dragged
+     since the last rebuild (D.cells), and the literal beside its own add() is
+     the parent's ORIGINAL cell plus the offset. */
+  for(const p of A) if(p.pin){ const t=A.find(q=>q.id===p.pin.to);
+    if(t){ p.x=t.x+p.pin.dx; p.y=t.y+p.pin.dy; } }
   /* ══ A PART IN A BAD SPOT STAYS ON THE DRAWING ══
      An overlapping or out-of-bounds part used to be dropped from LAY.parts
      here, which made it invisible, un-hittable and un-draggable while still
@@ -1813,7 +1942,44 @@ function buildLayout(){
   layBuiltSig=sig;
   // byId is built here and nowhere else: LAY.parts is only ever replaced whole
   const byId=new Map(); for(const p of A) byId.set(p.id,p);
+  portReanchor(byId);
   LAY={parts:A, byId};
+}
+/* ══ A PORT RIDES ITS PART'S ORIGIN; IT HAS TO RIDE THE BOX AS WELL ══
+   A machine's box follows a real quantity now - tankW()/tankH() off `vol`,
+   radW()/radH() off area - so growing one SWALLOWS its own far-face nozzles:
+   a port at dx=w is the right face of a five-wide panel and the inside of a
+   six-wide one. The offset is still the only thing stored and the face is
+   still derived; what this does is move the offset back onto the SAME face of
+   the new box, keeping its position along that face.
+   THE OLD BOX IS THE HISTORY, and buildLayout() already has it - LAY has not
+   been replaced yet when this runs. Nothing is written down that was not
+   written down before. Only ever called where the board actually changed,
+   because the signature gate above has already returned otherwise. */
+function portReanchor(byId){
+  if(!LAY) return;
+  // off the NEW boxes, never portCell(): that reads LAY, which is still the
+  // board this pass exists to leave behind
+  const key=pid=>{ const q=D.ports[pid], p=byId.get(q.p);
+    return p ? (p.x+q.dx)+","+(p.y+q.dy) : null; };
+  const taken={};
+  for(const pid in D.ports){ const k=key(pid); if(k) taken[k]=pid; }
+  for(const pid in D.ports){
+    const q=D.ports[pid], was=LAY.byId.get(q.p), now=byId.get(q.p);
+    if(!was || !now || (was.w===now.w && was.h===now.h)) continue;
+    const f=faceOfOffset(was,q.dx,q.dy);
+    if(!f || faceOfOffset(now,q.dx,q.dy)===f) continue;
+    const dy=clamp(q.dy,0,now.h-1), dx=clamp(q.dx,0,now.w-1);
+    const to = f==="l" ? [-1,dy] : f==="r" ? [now.w,dy]
+             : f==="t" ? [dx,-1] : [dx,now.h];
+    /* A COLLISION IS LEFT ADRIFT, not resolved. Two nozzles clamped onto one
+       cell is a plant nobody drew, and portFaceOf() now says null for the one
+       that did not move - which reads as the dead nozzle it is. */
+    const k=(now.x+to[0])+","+(now.y+to[1]);
+    if(taken[k] && taken[k]!==pid) continue;
+    delete taken[key(pid)];
+    taken[k]=pid; q.dx=to[0]; q.dy=to[1];
+  }
 }
 /* ONE PASS, TWO CALLERS. buildLayout() runs it on the set it just built, and
    moveTo() runs it again on LAY.parts - a move does not change laySrcSig(), so
@@ -1974,7 +2140,13 @@ const roleIns=p=>{ const R=ROLE[p.role]; if(!R||!R.internal) return [];
   return Array.isArray(R.internal)?R.internal:[R.internal]; };
 function portPath(p,f){
   if(!p||f==null) return null;
-  const IN=roleIns(p).find(q=>q.a===f||q.b===f);
+  /* MATCHED ON THE NODE, never on the face letter. ROLE.radiator folds t onto
+     l and b onto r, so a nozzle on a panel's top face IS its coolant inlet -
+     and comparing letters said it was neither end of any path, which drew it
+     grey and left it with no word at all. coreFold() is already the one
+     authority here (see below); it just was not asked first. */
+  const nf=coreFold(p.id+f);
+  const IN=roleIns(p).find(q=>coreFold(p.id+q.a)===nf||coreFold(p.id+q.b)===nf);
   // ...and a path whose two ends FOLD onto one node is not a choice either.
   // The role says a fitting has an l<->r path, but the fold is per INSTANCE:
   // a tee is one node and a throttle is two, so asking the role alone offered
@@ -1988,8 +2160,15 @@ function portPath(p,f){
    nozzle on the grid, and a tooltip has room to say SUCTION rather than
    SUCT. One helper, because the mark and its tooltip must never disagree
    about which side they are describing. */
+/* WHICH END OF ITS MACHINE'S OWN PATH A FACE IS - "a", "b" or null, and the
+   ONE place that decides it. The word, the nozzle colour and the tooltip all
+   asked it separately with a bare `IN.a===f`, which is the same folded-face
+   mistake in three copies. */
+function portEnd(p,f){ const IN=portPath(p,f); if(!IN) return null;
+  const nf=coreFold(p.id+f);
+  return coreFold(p.id+IN.a)===nf ? "a" : coreFold(p.id+IN.b)===nf ? "b" : null; }
 function portWord(p,f,long){ const IN=portPath(p,f); if(!IN) return null;
-  return IN.a===f ? (long?IN.la:IN.na) : (long?IN.lb:IN.nb); }
+  return portEnd(p,f)==="a" ? (long?IN.la:IN.na) : (long?IN.lb:IN.nb); }
 /* THE SPOKEN NAME OF ONE PORT: its machine, and which side of it. One helper,
    so the log line, the rail row and the tooltip cannot describe the same
    nozzle three ways. A face with no side to be on falls back to the face
@@ -2359,6 +2538,7 @@ function moveTo(p,nx,ny){
      moveTo() is the ONLY way a part changes position, so this is the one
      place that has to know it. */
   for(const {q,x,y} of cells){ q.x=x; q.y=y;
+    D.cells[q.id]=[x, cellStore(q.role,y,q.h)];   // a fixed slot is rebuilt from a literal, so the cell has to live on D - see add() (buildLayout())
     if(D.tanks[q.id])    D.tanks[q.id].cell=[x,y];
     if(D.fittings[q.id]) D.fittings[q.id].cell=[x,y]; }
   dTouch();                        // moves a part without rebuilding LAY - see dTouch() (design.js)
