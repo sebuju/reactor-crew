@@ -91,7 +91,7 @@ const tankSig=sigMemo(()=>{ let out="";
   for(const id in D.tanks){ const t=D.tanks[id], c=t.cell;
     // vol too: a tank's BOX SIZE follows it (tankW/tankH), so a slider on its
     // own panel changes what stands on the grid, not just what it holds
-    out += "|"+id+":"+(c?c[0]+","+c[1]:"-")+":"+t.vol; }
+    out += "|"+id+":"+(c?c[0]+","+c[1]:"-")+":"+t.vol+":"+(t.aspect||1); }
   return out; });
 /* A FITTING IS A PART TOO, so the same argument tankSig() makes applies: its
    id and its cell decide what box goes on the board, and its MODE decides
@@ -120,7 +120,15 @@ const pipeSig=sigMemo(()=>{ let out="";
 // the hull's own size is in here: every grid-sized cache (the radiation field's
 // Float64Array(GW*GH), the room's geometry) proves itself against this string
 const gridSig=sigMemo(()=>"|g"+D.gw+"x"+D.gh);
-const laySrcSig=()=>checkSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig();
+/* A RUN'S OWN BORE AND WALL, both in millimetres, keyed by run key. Here and
+   NOT in D_SCALARS(), which JSON-stringifies whole and is a measured 5.6 ms
+   hot spot. Neither has a writer yet - they are the hooks runBoreMm() and
+   runWallMm() already read, and a run panel is what is missing. */
+const boreSig=sigMemo(()=>{ let out="";
+  for(const k in (D.bore||{})) out += "|b"+k+":"+D.bore[k];
+  for(const k in (D.wall||{})) out += "|w"+k+":"+D.wall[k];
+  return out; });
+const laySrcSig=()=>checkSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig();
 // buildLayout() throws LAY.parts away and rebuilds it from nothing on every
 // trigger, so a PLACED part lives outside that construction (merged back in
 // at the end of buildLayout()) or it would vanish whenever an unrelated
@@ -192,29 +200,36 @@ function addTank(x,y){
    NOT: it stays one cell, a third the size of everything else, and its handles
    hang in the margin below it. */
 const FIT_W=1, FIT_H=1;
-/* ══ A BIGGER TANK IS A BIGGER BOX ══
-   `vol` is % of reference inventory, and it is already what the tank COSTS
-   (tankMass()) and what it DELIVERS - but every tank drew the same size, so
-   the one number the player actually tunes was invisible on the board. Not to
-   scale: a 4x tank is not 4x the cells, or one big reserve would swallow the
-   deck. Monotonic, so bigger always reads bigger.
-   WIDTH ONLY GROWS FOR A LARGE ONE - three cells is what the SHUT/DUMP row
-   needs, so that is the floor and every tank the size of the stock set keeps
-   it. */
-// FIVE CELLS IS THE FLOOR, not three: a tank carries a name row and up to two
-// control rows, and a shorter box leaves drawSym() a negative rectangle.
-const TANK_W0=3, TANK_H0=4;
-const tankW = vol => clamp(TANK_W0 + Math.floor(vol/70), 3, 5);
-const tankH = vol => clamp(TANK_H0 + Math.round(vol/25), 5, 10);
+/* TANK_W0 survives as FITSTRIP_W's own reference (plant.js) - a fitting's
+   margin strip is half a stock tank's width - and no longer as a footprint.
+   TANK_H0 is gone: a box's floor is DERIVED now (tankFloorH), not typed. */
+const TANK_W0=3;
+/* ══ THE BOX IS THE VOLUME ══
+   Two independent clamped ramps were not an area at all, and tankW's upper
+   clamp of 5 was unreachable (vol maxes at 100, giving 4). Area follows
+   volume and an ASPECT knob says what shape that area is - round, wide or
+   tall. TANK_VOL_CELL is fitted ONCE against the stock HPI tank (57 m^3 into
+   its present 3x6 = 18 cells), the PART_VOL_CELL/RAD_AREA_CELL idiom: a
+   stated free parameter. It is deliberately NOT PART_VOL_CELL (0.35), which
+   prices a MACHINE's holdup where the box is mostly machine - applied here a
+   57 m^3 tank would be 163 cells, bigger than the reactor.
+   VOLUME STAYS EXACT: partVol() still returns D.tanks[id].vol. The box is the
+   DISPLAY of volume, so the footprint rounds and the cubic metres do not. */
+const TANK_VOL_CELL=3.2;
+const tankAspect = id => { const t=D.tanks&&D.tanks[id];
+  return clamp((t&&t.aspect)||1, 0.25, 4); };
+const tankCells = vol => Math.max(4, Math.round(Math.max(vol,0)/TANK_VOL_CELL));
+const tankW = (vol,a) => Math.max(2, Math.round(Math.sqrt(tankCells(vol)*(a||1))));
+const tankH = (vol,a) => Math.max(2, Math.ceil(tankCells(vol)/tankW(vol,a)));
 /* IS THERE ANYTHING BEHIND THIS TANK - a gas charge or a pump. The one
    predicate for "it can push at all", read by the drawing (a pressure vessel
    gets its own hoop and domed ends) and by nothing else; tankP() is what
    actually prices it. */
-const tankHeld = id => { const t=D.tanks&&D.tanks[id]; return !!t && !!(t.gas || t.pump); };
+const tankHeld = id => { const t=D.tanks&&D.tanks[id]; return !!t && !!(t.gas || t.pump || t.hold); };
 const tankParts=()=>{
   const out=[];
   for(const id in D.tanks){ const t=D.tanks[id]; if(!t.cell) continue;
-    out.push({id, name:t.name, w:tankW(t.vol), h:tankH(t.vol), x:t.cell[0], y:t.cell[1], col:t.col,
+    out.push({id, name:t.name, w:tankW(t.vol,tankAspect(id)), h:tankH(t.vol,tankAspect(id)), x:t.cell[0], y:t.cell[1], col:t.col,
               grp:"safety", tip:t.tip, role:"tank"}); }
   return out;
 };
@@ -264,12 +279,38 @@ const foldFacesOf=p=>{ const R=ROLE[p.role]; if(!R||!R.fold) return null;
    cost four tanks and a bigger tank costs more - replacing four flat
    per-name figures (PART_MASS.reltk/efw/boroninj and D.accum's own +45 t)
    that between them priced the stock plant at exactly what this does. */
-/* t per m^3 - structure, and the water it is full of at the ship's own mass
-   scale. A free parameter: it is what the four stock tanks used to weigh, per
-   cubic metre, and nothing derives it. */
-const TANK_T_PER_M3=0.5;
+/* ══ A TANK WEIGHS ITS OWN SHELL ══
+   TANK_T_PER_M3 was 0.5 t/m^3 flat, so an atmospheric water butt and a
+   15.5 MPa pressurizer cost the same per cubic metre. It is surface area x
+   wall x steel now, off the same Barlow relation a pipe uses (wallSuggestMm,
+   pipenet.js) - so a vessel that holds more pressure is thicker and heavier
+   because it is thicker, not because a table said so. Sphere-equivalent
+   surface: a tank is drawn as a cylinder with domed ends and this is the one
+   figure that needs no aspect knob to be honest. */
+const tankAreaM2=vol=>Math.PI*Math.pow(6*Math.max(vol,0.1)/Math.PI,2/3);
+/* `vol` is an argument, not always the tank's own: the CAPACITY slider asks
+   what a candidate size would weigh before anything is written. */
+const tankVolOf=(id,vol)=>Math.max(vol===undefined?D.tanks[id].vol:vol, 0.1);
+const tankWallMm=(id,vol)=>
+  wallSuggestMm(Math.cbrt(6*tankVolOf(id,vol)/Math.PI)*1000,   // equivalent diameter, mm
+                tankDesignP(id), null);
+/* ══ AND THEN A TENTH OF IT, FOR GAMEPLAY ══
+   NOT physics, and it is the only number in this file that is not. The
+   geometry above is right - a 57 m^3 vessel at 15.5 MPa really is about
+   150 t of steel - and at full scale the four stock tanks came to 407 t
+   against a 3000 t budget, so buying a reserve cost more than the reactor and
+   every design converged on the same answer: do not fit one. A tenth puts
+   tankage back where the rest of the ship's mass scale already sits, and it
+   is applied HERE, once, on the finished figure - so the wall, the rating and
+   the picture all stay the real quantities they are, and only the bill is
+   scaled. Move it and nothing but the budget moves. */
+const TANK_MASS_GAME_K=0.1;
+// t, per tank, the ONE expression - the CAPACITY row's mass hint reads this
+// too, so the bench cannot quote a price the design does not pay
+const tankMassOf=(id,vol)=>tankAreaM2(tankVolOf(id,vol))*(tankWallMm(id,vol)/1000)
+                         *STEEL_RHO/1000*TANK_MASS_GAME_K;
 const tankMass=()=>{ let m=0;
-  for(const id in D.tanks) if(D.tanks[id].cell) m+=TANK_T_PER_M3*D.tanks[id].vol;
+  for(const id in D.tanks) if(D.tanks[id].cell) m+=tankMassOf(id);
   return m; };
 /* ══ A PUMP IS A HEAD AND A FLOW ══
    It was one 0..1 slider around a hidden reference. A pump is two real
@@ -277,7 +318,66 @@ const tankMass=()=>{ let m=0;
    PUMP_H0 is the reference head the network was linearised about, so it is
    also the suggestion; the reference flow is the loop's own inventory over the
    time it takes to go round once. */
-const pumpHeadSuggest = () => PUMP_H0;
+/* WHAT THIS PUMP HAS TO BEAT, asked of the drawing and never of a kind. A
+   pump inside one closed circuit only fights the pipe run, which is PUMP_H0;
+   a pump whose circuit also carries a BOUNDARY - a generator's shell at its
+   design pressure, a condenser at its own vacuum - has to lift water from the
+   lowest of those to the highest before a drop moves, exactly as a real
+   feedwater pump does. Nobody declares which it is: pipe a spare pump from
+   the condenser to a shell and the same walk suggests it a feed pump's head.
+   PUMP_H0 rides on top of the standing term as the friction margin, so a
+   coolant pump is untouched. */
+const boundP = (pid, node) => { const p = partOf(pid); const R = p && ROLE[p.role];
+  if(!R) return null;
+  if(R.sgtr && secondaryNode(node)) return sgDesignP(pid);
+  if(R.thermal === "sink") return COND_P0;
+  return null; };
+/* ══ AND NEVER MORE DIFFERENTIAL THAN ITS CIRCUIT CAN HOLD ══
+   PUMP_H0 is a friction figure and it was flat, so a sodium or salt loop whose
+   pressurizer holds 0.20 MPa was suggested a machine that develops three times
+   the loop's whole absolute pressure - and its suction went below vacuum:
+   MSR's read -0.0130 MPa at every sample, which is not a pressure water or
+   salt has. A pump cannot develop more differential than the circuit it sits
+   in can stand at its suction, so the suggestion stops there.
+   ONLY WHERE THE LEVEL IS PINNED. A circuit with no hold on it floats to sit
+   its own lowest node at the pressure the ship holds (netCoreFracOf, pipenet.js),
+   so it accommodates whatever its pump develops and there is nothing to cap -
+   which is why the cooling loop's pump is untouched. */
+const pumpHeadSuggest = id => {
+  if(id === undefined) return PUMP_H0;
+  const b = pumpBounds(id);
+  const h0 = b.hold === null ? PUMP_H0 : Math.min(PUMP_H0, b.hold);
+  return h0 + (b.hi === null ? 0 : (b.hi - b.lo)*PUMP_MARGIN);
+};
+/* WHAT BOUNDARIES THIS PUMP'S OWN CIRCUIT CARRIES - the ONE walk, because the
+   head suggestion and the flow suggestion below ask the same question of the
+   same drawing and two copies of it would drift. `shell` is whether one of
+   them is a generator's secondary side, which is the whole of what makes a
+   pump a FEED pump (CLAUDE.md: asked of the drawing, never stored). */
+function pumpBounds(id){
+  const G = nodeGraph(), ci = (G.nodesOf[id]||[]).map(n=>G.circuit[n]);
+  let hi = null, lo = null, shell = false, hold = null;
+  /* the setpoint of this pump's own circuit, where anything holds one - the
+     ceiling on the head above, and asked on the same walk for the same reason
+     the boundaries are */
+  for(const c of ci) if(holdOnCirc(c).length){ hold = holdSetP(c); break; }
+  for(const pid in G.nodesOf) for(const n of G.nodesOf[pid]){
+    if(ci.indexOf(G.circuit[n]) < 0) continue;
+    const q = boundP(pid, n); if(q === null) continue;
+    const p = partOf(pid), R = p && ROLE[p.role];
+    if(R && R.sgtr && secondaryNode(n)) shell = true;
+    if(hi === null || q > hi) hi = q;
+    if(lo === null || q < lo) lo = q;
+  }
+  return {hi, lo, shell, hold};
+}
+/* HOW FAR OVER THE VESSEL IT FEEDS a pump is suggested at. A machine sized to
+   exactly the pressure it is pushing against delivers nothing, and its
+   regulating valve has no authority to throttle: real feedwater pumps are
+   bought at about a third above drum pressure and this is that number. It
+   multiplies the STANDING term only, so a pump inside one circuit - every
+   coolant pump - is untouched. */
+const PUMP_MARGIN = 1.35;
 /* rated heat over what one kelvin of core rise costs: the loop's own mass
    flow - and there is ONE core, so the LOOPS share it. A four-loop plant
    whose pumps were each sized for the whole core circulated four times what
@@ -285,11 +385,25 @@ const pumpHeadSuggest = () => PUMP_H0;
    controller into a flux trip inside two seconds.
    Divided by loops and never by PUMPS: two pumps in one loop are redundancy,
    not half a loop each, and dividing by the head count made buying a spare
-   shrink the machine it was standing in for. A pump piped somewhere else is
-   on nobody's loop and gets the whole figure. */
-const pumpFlowSuggest = id => { const n = id===undefined || primaryPump(id)
-    ? Math.max(1, loopMap().n) : 1;
-  return RATED_KW()/(CP_W*CORE_DT0*n); };
+   shrink the machine it was standing in for.
+   ══ EXCEPT THAT A FEED PUMP MOVES WHAT THE BOILER BOILS ══
+   One figure for every pump handed a FEEDWATER pump the core's own
+   circulation - seven thousand kilograms a second where the boiler evaporates
+   eight hundred - so the stock feed pump was nine times the machine it needed
+   to be, and it was 835 t of a 935 t pump bill.
+   It is NOT a machine asked what it is FOR - that is the mistake the comment
+   above warns about. It is the DRAWING asked what this pump's own circuit
+   carries, the identical walk the head suggestion makes (pumpBounds): a
+   circuit with a generator's secondary side on it is a feedwater circuit, and
+   what crosses it is steam. FEED_LEN (pipenet.js) is re-fitted against this,
+   because the pump's swallow IS its edge conductance and the two cannot move
+   apart. */
+const pumpFlowSuggest = id => {
+  const n = Math.max(1, loopMap().n);
+  if(id !== undefined && pumpBounds(id).shell)
+    return RATED_KW()/(SAT_WATER.hfg*n);      // rated heat over latent heat: kg/s of steam
+  return RATED_KW()/(SAT_WATER.cp*CORE_DT0*n);
+};
 /* ══ A SUGGESTION FILLS THE FIELD. IT IS NOT THE FIELD ══
    These were `?? xSuggest()` - a LIVE default, recomputed from the rest of the
    plant on every read. That is a hidden reference, and it is the same one Job 2
@@ -306,17 +420,33 @@ const bake = (bag, id, mk) => { const v = bag[id];
   return v === undefined ? (bag[id] = mk(id)) : v; };
 const pumpHead = id => bake(D.pumpHead, id, pumpHeadSuggest);
 const pumpFlow = id => bake(D.pumpFlow, id, pumpFlowSuggest);
-/* WHAT THIS PUMP IS WORTH AGAINST THE REFERENCE MACHINE. The network is
-   linearised about PUMP_H0 at PUMP_FLOW_REF, so the developed head an edge
-   sees is head*(flow/PUMP_FLOW_REF) - a bigger pump at the same head still
-   pushes more, which is what a capacity meant.
+/* WHAT THIS PUMP IS WORTH AGAINST THE REFERENCE MACHINE - a MASS and a BOX,
+   and nothing the solve reads. The head an edge develops is the machine's own
+   MPa and the flow it swallows is its own casing bore (netBuild()), so this
+   is no longer a multiplier standing between the two figures and the physics.
    BOTH ANCHORS ARE ABSOLUTE. This asked pumpFlowSuggest() for the second one,
    which reads the CORE's rating - so editing the reactor silently resized
    every pump on the ship. A pump is a pump wherever it is fitted. */
 const PUMP_FLOW_REF = 7250;            // kg/s, a reference coolant pump duty
 const pumpCap = (head,flow) => (head/PUMP_H0)*(flow/PUMP_FLOW_REF);
 const pumpCapOf = id => pumpCap(pumpHead(id), pumpFlow(id));
-const PUMP_MASS=50;                    // t per (head x flow), at the reference machine
+/* ══ AND A PUMP'S MASS IS SUBLINEAR IN ITS DUTY ══
+   PUMP_MASS was charged straight against capacity, so mass went as head x
+   flow with no ceiling at all - and a feedwater pump develops sixteen times a
+   coolant pump's head, so the stock one alone came to 835 t of a 935 t pump
+   bill, and asking a shell to hold a real 17 MPa priced its feed pump at
+   nearly two thousand tonnes. That is not a heavy machine, it is a model with
+   no top to it, and it is what blocked the generator's design pressure from
+   being derived at all.
+   Real equipment does not scale that way: mass goes as roughly the 0.6 power
+   of duty - the published six-tenths rule, the same exponent process plant is
+   costed by, and the reason a pump twice the duty is nowhere near twice the
+   machine. PUMP_MASS is unchanged and is still what the REFERENCE machine
+   weighs, because 1^0.6 is 1. */
+const PUMP_MASS=50;                    // t at the reference machine (cap 1)
+const PUMP_SCALE_N=0.6;                // the six-tenths rule, published
+const pumpMass = cap => PUMP_MASS*Math.pow(Math.max(cap,0), PUMP_SCALE_N);
+const pumpMassOf = id => pumpMass(pumpCapOf(id));
 /* ══ A BIGGER PUMP IS A BIGGER BOX ══
    Every pump's size used to be a literal typed beside its own add() - 3x5 for
    a coolant pump, 3x2 for the circulating water one - so the two numbers a
@@ -328,10 +458,30 @@ const PUMP_MASS=50;                    // t per (head x flow), at the reference 
    buildLayout(), and pumpFlowSuggest() asks loopMap() - which is built on the
    board this pass exists to replace. An unset pump is the reference machine,
    which is the 3x5 every fixed slot used to have written down. */
-const pumpBoxCap = id => pumpCap(D.pumpHead[id] ?? PUMP_H0, D.pumpFlow[id] ?? PUMP_FLOW_REF);
-const PUMP_W0=3, PUMP_BOX_H0=3;
-const pumpW = id => clamp(PUMP_W0 + Math.floor(pumpBoxCap(id)/1.5), 3, 5);
-const pumpH = id => clamp(PUMP_BOX_H0 + Math.round(2*pumpBoxCap(id)), 3, 8);
+/* ══ AND THE BOX IS THE CASING, WHICH IS THE BORE ══
+   It was head x flow, so a feed pump - which develops sixteen times a coolant
+   pump's head because it pushes into a shell - grew to 5x8 the moment
+   anything BAKED its head, ran off the bottom of the grid, stood on the first
+   radiator and walked its own nozzles off the pipe they were drawn to. The
+   plant was un-commissionable and nothing said why, because a probe that
+   never re-lays out after commission() cannot see it.
+   A pump's BOX is its casing and its casing is its swallow; the head is
+   inside it and is drawn nowhere. So the box follows FLOW alone - stable
+   through commissioning, because flow is what a pump is bought by and not
+   what its circuit turns out to demand. pumpCapOf() still prices MASS off
+   both, which is right: a high-head machine is heavy without being wide. */
+/* FLOORED AT THE REFERENCE MACHINE, so a pump box only ever GROWS. A feed
+   pump's casing is genuinely small beside a coolant pump's - it passes 790
+   kg/s against 7 300 - and letting the box follow that took it to 3x3, which
+   dropped its own discharge nozzles off the face they were seeded on (a
+   four-loop plant needs four rows of them). The floor is what the nozzles and
+   the control strip need, which is the same rule every machine's box already
+   states; the volute above it is the only part that is worth drawing. */
+const pumpBoxCap = id => Math.max(1, (D.pumpFlow[id] ?? PUMP_FLOW_REF)/PUMP_FLOW_REF);
+// the floor and the ceiling of a pump box, in cells
+const PUMP_W0=3, PUMP_BOX_H0=3, PUMP_W_MAX=5, PUMP_H_MAX=8;
+const pumpW = id => clamp(PUMP_W0 + Math.floor(pumpBoxCap(id)/1.5), PUMP_W0, PUMP_W_MAX);
+const pumpH = id => clamp(PUMP_BOX_H0 + Math.round(2*pumpBoxCap(id)), PUMP_BOX_H0, PUMP_H_MAX);
 /* IS THIS A PRIMARY PUMP? There is one pump role, so the question cannot be
    asked of a name or of a second role - it is asked of the GRAPH, exactly
    like loop membership itself: a pump the flood fill can trace to a generator
@@ -346,6 +496,13 @@ const pumpH = id => clamp(PUMP_BOX_H0 + Math.round(2*pumpBoxCap(id)), 3, 8);
    which is every role but one. */
 const roleHead=role=>{ const R=ROLE[role]; if(!R||!R.internal) return false;
   return (Array.isArray(R.internal)?R.internal:[R.internal]).some(IN=>IN.head); };
+/* WHERE A PUMP DRAWS ON - the casing path's own `a` face, folded, because a
+   pump spliced into a horizontal leg takes suction on `r` and has no node
+   called "t" at all. One door, so the head, the cavitation reading and the
+   panel cannot disagree about which end is the suction. */
+const pumpSucNode=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return id;
+  const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
+  return IN ? coreFold(id+IN.a) : id; };
 const primaryPump=id=>{ const p=partOf(id);
   return !!p && roleHead(p.role) && loopOf(id)!==null; };
 /* EVERY PUMP ON THE GRID, in LAY order - the set s.flowBy/s.flowDemBy are
@@ -354,12 +511,26 @@ const pumpIds=()=>LAY.parts.filter(p=>roleHead(p.role)).map(p=>p.id);
 // roleHead(), not p.id.startsWith("pump") - what MAKES something a
 // pump for capacity purposes is that its role puts head into the loop,
 // the identical test netBuild() gates its own head edge on.
-// ...and then primaryPump(), because that head has to reach the CORE for this
-// book to be about it: flowMin (step.js) prices the RPS low-flow floor off
-// this total, so counting a feedwater pump would raise the trip floor of a
-// plant whose coolant flow it cannot touch.
+// EVERY pump the ship carries, because this is what it WEIGHS (design.js) and
+// a machine on the drawing is a machine you bought wherever it is piped.
 const totalPumpCap=()=>{ let c=0;
-  for(const p of LAY.parts) if(primaryPump(p.id)) c+=pumpCapOf(p.id);
+  for(const p of LAY.parts) if(roleHead(p.role)) c+=pumpCapOf(p.id);
+  return c; };
+/* MASS IS NOT THE SUM OF THE CAPACITY. It is the sum of each machine's own
+   sublinear mass (pumpMass), so three small pumps and one big one weigh what
+   they each weigh - summing capacity first and scaling once would price a
+   plant's redundancy as if it were one enormous machine. */
+const totalPumpMass=()=>{ let m=0;
+  for(const p of LAY.parts) if(roleHead(p.role)) m+=pumpMassOf(p.id);
+  return m; };
+// ...and the pumps on the CORE's own circuit, which is a different book: the
+// RPS low-flow floor (flowMin, step.js) is about the water going past the
+// fuel, so a pump that cannot reach it must not raise the trip setpoint.
+// Asked of the circuit (inCore()), never of primaryPump().
+const corePump=id=>{ const p=partOf(id); if(!p||!roleHead(p.role)) return false;
+  const G=nodeGraph(); return (G.nodesOf[id]||[]).some(n=>G.inCore(n)); };
+const corePumpCap=()=>{ let c=0;
+  for(const p of LAY.parts) if(corePump(p.id)) c+=pumpCapOf(p.id);
   return c; };
 // how many steam generators are on the grid right now - the fact D.loops
 // used to fake as an input. Every reader that priced or counted "loops"
@@ -417,7 +588,22 @@ const n0Ref = () => { const sg=laySrcSig()+"|"+pipeSig();
    against `n0*rated` made that ceiling read back the PIPE RUN's flow limit -
    exactly flowK, to the last digit - with a turbine's name on it. */
 const plantSteam = () => n0Ref()*RATED_KW()/SAT_WATER.hfg;          // kg/s raised
-const plantDuty  = () => n0Ref()*RATED_KW()*(1-COOLANT[D.cool].eff); // kW rejected
+/* ══ THE EFFICIENCY THIS PLANT REACHES, NOT THE ONE ITS COOLANT ALLOWS ══
+   The COOLANT row is a CEILING and grossEff() is the share of it the fitted
+   turbine captures - and every sink on the ship used to be sized against the
+   ceiling while the plant rejected against the capture. On the stock helium
+   ship the two are 0.42 and 0.249, so its panels and its condenser were bought
+   29.5 % small and it commissioned at twice its design backpressure.
+   grossEff() cannot be asked here: it walks LAY.parts, and this is read while
+   LAY is being built. So the SET IS THE ONE THIS CORE WOULD BE GIVEN - the
+   same log law at the steam the rating raises - which needs neither the
+   arrangement nor n0Ref(), and lands within 1.5 % of grossEff() on all six
+   families instead of within 30 %. It is a SIZING figure: what the machine
+   actually captures is still grossEff(), off the turbine actually fitted. */
+const ratedEff = () => COOLANT[D.cool].eff
+  * clamp(1 + TURB_EFF_K*Math.log(RATED_KW()/SAT_WATER.hfg/TURB_EFF_REF),
+          TURB_EFF_MIN, TURB_EFF_MAX);
+const plantDuty  = () => n0Ref()*RATED_KW()*(1-ratedEff());          // kW rejected
 /* What one turbine swallows wide open, kg/s. A designer sizes a set for the
    boiler in front of it, so the suggestion is all of what that boiler raises -
    and a machine that reaches past it is overload the designer chose to buy. */
@@ -479,8 +665,33 @@ const condDumpMean=()=>{ let n=0,c=0;
   return n?c/n:0; };            // no condenser is no dump, not a suggested one
 const sgTypeOf=id=>D.sgType[id]??D.sg;
 const sgRowOf=id=>SGT[sgTypeOf(id)];
+/* ══ THE SHELL WEIGHS ITS OWN WALL - C3, ON THE SECOND-BIGGEST VESSEL ══
+   The type's water charge as a vessel, at the wall its own design pressure
+   needs, on the same tenth scale every tank is priced at (TANK_MASS_GAME_K -
+   gameplay, stated where it is defined). Raise a generator's design pressure
+   and its shell costs steel, which is the whole of what C3 asks.
+   sgShellT and sgTubeT are separate on purpose: they answer two different
+   questions and were one number, so buying transfer coefficient used to be
+   free and holding more pressure used to cost nothing. */
+const sgShellT = id => { const r=sgRowOf(id);
+  const d=Math.cbrt(6*Math.max(r.water,0.1)/Math.PI)*1000;
+  return tankAreaM2(r.water)*(wallSuggestMm(d, sgDesignP(id), null)/1000)
+         *STEEL_RHO/1000*TANK_MASS_GAME_K; };
+/* ══ AND THE BUNDLE IS A FLAT TONNAGE PER TYPE - DELIBERATELY ══
+   Pricing it off UA (IHX_T_PER_UA's idiom) is the obvious move and it is
+   wrong here, measured: sgUASuggest() divides by a dT0 that FLOORS at 5 K,
+   and a BWR's programme sits on its own saturation point - so it is suggested
+   218 000 kW/K against a PWR's 47 000, and steel priced off that put 294 t of
+   tube on a plant whose whole generator weighed 70. The floor is a stand-in
+   for a secondary design this model does not have, and hanging a mass term on
+   it prices the stand-in. So the SHELL follows pressure, which is real
+   geometry, and the bundle stays what the type states. */
+const sgTubeT  = id => sgRowOf(id).tube;
+// NOT sgMassOf(): step.js already owns that name for the WATER in the shell,
+// in kg. This is the STEEL, in tonnes - two quantities, two names.
+const sgSteelT = id => sgShellT(id)+sgTubeT(id);
 const totalSgMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="sg") m+=sgRowOf(p.id).mass;
+  for(const p of LAY.parts) if(p.role==="sg") m+=sgSteelT(p.id);
   return m; };
 /* A generator carries its own transfer coefficient as well as its tonnage -
    the tonnage says how much water is in it, the UA says how fast heat crosses
@@ -516,12 +727,17 @@ const partMass=role=>LAY.parts.filter(p=>p.role===role).length*(PART_MASS[role]|
    and a containment wall do not fail this way. */
 const partTsurv=p=>{ const l=ROLE[p.role]&&ROLE[p.role].tsurv;
   if(!l) return null;
-  return p.role==="radiator" ? l*radCoatOf(p.id).tsurvK : l; };
+  if(p.role==="radiator") return l*radCoatOf(p.id).tsurvK;
+  // a tank states its own, the RADCOAT idiom: a heavy vessel is not the same
+  // machine as a water butt and the role can only carry one figure
+  if(p.role==="tank" && D.tanks[p.id] && D.tanks[p.id].tsurv) return D.tanks[p.id].tsurv;
+  return l; };
 /* AND WHERE IT GIVES UP TO A BLAST, kPa - partTsurv()'s mirror and the ONE
    door for the same reason: two readers asking ROLE.pburst directly is how
    the damage writer and any panel that ever prints it would come to
    disagree. null is structure, exactly as it is above. */
 const partPburst=p=>{ const l=ROLE[p.role]&&ROLE[p.role].pburst;
+  if(p.role==="tank" && D.tanks[p.id] && D.tanks[p.id].pburst) return D.tanks[p.id].pburst;
   return l || null; };
 /* ══ AND WHAT ITS OWN SHELL IS BUILT FOR, MPa ══
    partPburst() above is the ROOM pushing IN - a hydrogen blast, in kPa - and
@@ -557,8 +773,8 @@ const minPburst=()=>LAY.parts.reduce((m,p)=>{ const v=partPburst(p);
    stock pump - and every reader trusted it forever after. That is exactly
    the frozen-pixel bug a stored tap pixel used to be, one level up: a pump
    connected to a loop by PROXIMITY is not connected to it at all. Measured
-   consequence: place a spare pump nobody ever piped in and loopPumpCap(0)
-   doubled anyway, purely because the spare's `.loop` happened to read 0.
+   consequence: place a spare pump nobody ever piped in and the loop's pumped
+   capacity doubled anyway, purely because the spare's `.loop` read 0.
 
    loopMap() answers it off the drawing instead, structurally: nodeGraph()
    below, flood-filled outward from every generator's PRIMARY nodes. Only a
@@ -884,19 +1100,6 @@ const secondaryNode=node=>!nodeGraph().inCore(node);
 const shellCirc=pid=>{ const G=nodeGraph();
   const n=(G.nodesOf[pid]||[]).find(x=>!G.inCore(x));
   return n===undefined ? -1 : G.circuit[n]; };
-/* IS THIS PUMP TURNING A HEAT SINK'S OWN WATER? Asked of the drawing, like
-   secGensOf(): a pump sharing a circuit with a radiator is a circulating water
-   pump, whatever it is called, and it is on neither loop by design. */
-const sinkPump=pid=>{ const G=nodeGraph();
-  const cs=(G.nodesOf[pid]||[]).map(n=>G.circuit[n]);
-  if(!cs.length) return false;
-  /* A SINK WITH ONE PATH THROUGH IT, so this is the panel and never the
-     condenser: the condenser has a node on the secondary too, and asking about
-     it would wave through any spare pump left on the condensate line. */
-  for(const p of LAY.parts){ const R=ROLE[p.role];
-    if(!R || R.thermal!=="sink" || Array.isArray(R.internal)) continue;
-    for(const n of (G.nodesOf[p.id]||[])) if(cs.indexOf(G.circuit[n])>=0) return true; }
-  return false; };
 function secGensOf(pid){
   const G=nodeGraph(), out=[];
   for(const n of (G.nodesOf[pid]||[]))
@@ -1021,8 +1224,57 @@ const IHX_HOLD_PER_UA= 7.6e-4;         // t of intermediate coolant per kW/K
    the very spread it was meant to close. Measured, 3 loops: 7.17/6.03/5.28
    MPa against 7.37/6.62/6.28 for equal machines. A designer builds equal
    loops; what the plant does with unequal ones is the plant's answer. */
+/* ══ A GENERATOR STATES THE PRESSURE ITS SHELL IS BUILT FOR, MPa ══
+   It was P.P0*0.45 written out at six sites - the secondary's design ANCHOR
+   smuggled into the primary's setpoint, so raising the primary silently
+   re-rated every shell on the plant and no machine anywhere stated what it
+   was built to hold. It is a real quantity on the instance now, with the old
+   expression left standing as the SUGGESTION: an untouched plant commissions
+   on exactly the figure the multiplier used to give.
+   ══ AND THE SUGGESTION IS WHAT THIS GENERATOR ACTUALLY BOILS AT ══
+   It was P.P0*0.45 - a share of the PRIMARY'S PRESSURE, the last stand-in on
+   the steam side, and a low-pressure primary made nonsense of it: a sodium
+   loop at 0.2 MPa was suggested a 0.09 MPa steam side - a boiler barely above
+   the condenser - on a plant whose coolant leaves the core at 723 K.
+   A generator does not care what pressure is on the other side of its tubes.
+   It cares what TEMPERATURE is, and it boils its own water SG_APPROACH below
+   that. So the suggestion is saturation at (coolant programme less the
+   approach): a real quantity in real units, and the same sentence for every
+   fluid.
+
+   SG_APPROACH is the temperature difference across the tubes at rated - a
+   real 25 K for a large steam generator. SG_P_MAX is water's own ceiling: a
+   high-temperature core would boil water past its critical point, where this
+   curve means nothing and no drum boiler exists, so it caps at what a real
+   high-pressure steam plant is built for. Read off the COOLANT row, never P,
+   so the bench and the tick cannot disagree and there is no commissioning
+   order to get wrong. */
+const SG_APPROACH = 25, SG_P_MAX = 17.0, SG_P_MIN = 0.2;
+const sgDesPSuggest = () =>
+  clamp(psatSec(COOLANT[D.cool].Tref - SG_APPROACH), SG_P_MIN, SG_P_MAX);
+/* `?? xSuggest()`, NEVER bake(). bake() WRITES the suggestion into D the
+   first time anything asks, which is right for a figure the player is
+   expected to tune and wrong for one that was derived every frame until now:
+   the boot-time layoutMetrics() baked a PWR's 6.975 MPa, and then choosing
+   sodium left every shell still rated for pressurised water. This suggests
+   and does not write, which is what the contract actually says. */
+const sgDesPOf = id => D.sgDesP[id] ?? sgDesPSuggest();
+/* THE PLANT-WIDE FIGURE, for the anchors that are about the steam side as a
+   whole rather than about one shell - the turbine's enthalpy drop, the header,
+   the UA fit. The MEAN, so a single-generator plant is exactly its own shell
+   and a mixed plant is not silently rated at its strongest machine. */
+function sgDesignP(id){
+  if(id !== undefined) return sgDesPOf(id);
+  const ids = sgIds();
+  if(!ids.length) return sgDesPSuggest();
+  let p = 0; for(const q of ids) p += sgDesPOf(q);
+  return p/ids.length;
+}
 const sgUASuggest = () => { const n=Math.max(1,sgCount());
-  const dT0=Math.max(5, COOLANT[D.cool].Tref - tsatSec(COOLANT[D.cool].P0*0.45));
+  /* THE SAME DOOR THE TICK READS. This carried its own copy of the old
+     expression with D.pdes left out of it, so the bench and the tick had
+     already drifted apart about the one number both fit against. */
+  const dT0=Math.max(5, COOLANT[D.cool].Tref - tsatSec(sgDesignP()));
   return (n0Ref()*RATED_KW())/(n*Math.pow(Math.max(layoutMetrics().flowK,.02),UA_FLOW)*dT0); };
 const ihxUASuggest = () => sgUASuggest()*2.5;
 const sgUAOf  = id => bake(D.sgUA,  id, sgUASuggest);
@@ -1096,7 +1348,7 @@ const radSrcCount=()=>RAD_N+placedParts.filter(p=>p.role==="radiator").length;
    condenser was priced against. Off D.power and the coolant's own efficiency,
    never derived() - the suggestion prices the panel and mass prices the
    design, so asking derived() here would ask itself. */
-const radAreaSuggest=id=>RATED_KW()*1000*(1-COOLANT[D.cool].eff)
+const radAreaSuggest=id=>RATED_KW()*1000*(1-ratedEff())
   /(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4))/radSrcCount();
 /* BAKED ON FIRST READ, like every other per-instance figure on this plant
    (bake(), pumpHead(), ihxUAOf()). A bare `??` re-asked the SUGGESTION every
@@ -1157,20 +1409,6 @@ const ihxOf=sgId=>{ const L=loopOf(sgId); if(L===null) return null;
   const p=LAY.parts.find(q=>q.role==="ihx" && loopOf(q.id)===L); return p?p.id:null; };
 const ihxSgs=id=>{ const L=loopOf(id); return L===null ? []
   : LAY.parts.filter(q=>q.role==="sg" && loopOf(q.id)===L).map(q=>q.id); };
-// loop i's own pumps, undamaged, summed by capacity - what netFlowK()'s
-// per-group ceiling (pipenet.js) reads per loop before any open junction
-// groups loops together. Off loopOf(), never a stored p.loop.
-function loopPumpCap(i,dmg){
-  let c=0;
-  for(const p of LAY.parts){
-    // loopOf()===i already says "primary" - a pump with no loop index is not
-    // in any group, so primaryPump() here would only ask loopOf() twice on a
-    // path the solve walks once per pump per tick.
-    if(!roleHead(p.role)) continue;
-    if(loopOf(p.id)===i && !dmg.includes(p.id)) c+=pumpCapOf(p.id);
-  }
-  return c;
-}
 // a run's key is "kind:aIdFace-bIdFace" (or "kind:aIdFace" for a tap, which
 // has no loop identity of its own - stripped by the missing '-'). Off the
 // SAME graph loopOf() reads, never a regex on the kind prefix or on "sg"/
@@ -1195,7 +1433,7 @@ function loopOfKey(key){
    which priced a 0.20 m relief valve and a full-bore tee alike. FIT_BORE0 mirrors
    FIT_DEFAULT.bore (pipenet.js, which loads after this file), so a valve
    left at the default still costs exactly the 16 t the flat charge did. */
-const FIT_MASS=16, FIT_BORE0=0.55;
+const FIT_MASS=16, FIT_BORE0=412.5;   // mm, the default valve - the reference the mass is per
 const fittingMass=()=>{ let m=0;
   for(const id in D.fittings) m += FIT_MASS*(D.fittings[id].bore/FIT_BORE0);
   return m; };
@@ -1579,13 +1817,15 @@ function pipeMap(){
                sides a click moves a run's end between (portPath(), below).
                On the row that declares the two faces, because the row that
                owns them is the row that can name them.
-     head      true if the internal edge above also carries a pump's head
-               (PUMP_H0 * loopPumpCap(loopOf(p.id),...) * ...). Requires
-               `internal`; loop membership is read off the run graph
-               (loopOf(), above), never a stored field.
-     fixed     {type:"datum",face} - exactly one part's node, on `face`, is
-               where the loop's own piezometric zero is anchored (net2.pzrNode
-               falls back to the core when no part declares this).
+     head      true if the internal edge above also carries a pump's head -
+               its OWN stated MPa, at its own speed, less its own cavitation
+               (netBuild()). Requires `internal`; the path's a face is the
+               SUCTION and b the discharge, which is the casing and is the
+               only thing that says which way it pushes.
+     fixed     There is no "datum" any more: which node a component's
+               piezometric zero sits at is decided per SOLVE (netRef(),
+               pipenet.js) off whichever HOLD TANK is live at the time, and
+               falls back to the core when there is none.
                {type:"tank"} - every node ANY part with this role reaches is
                priced by D.tanks[part.id], off whatever face pipeNetwork()
                actually routed there this frame - never a stored face name.
@@ -1629,18 +1869,6 @@ const ROLE = {
           ports:{r:4, b:5}, thermal:"source", tsurv:1200, pburst:200},
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:450, pburst:35},
-  /* ONE VESSEL, ONE NODE. The pressurizer declares no internal path - it is a
-     boundary, not a through-path - and that used to mean the SOLVE treated a
-     pipe on its bottom and a pipe on its side as two unconnected nodes, while
-     nodeGraph() (which answers "which side is this on") had already been
-     taught the opposite in as many words: they are plainly the same water.
-     The two disagreed, and it cost: the stock relief valve now sits between
-     the vessel and the tank, and against two separate nodes it was a dead-end
-     that vented nothing whatever its own gate said. Folding is not an
-     internal PATH - there is still no resistance through a pressurizer, and
-     nothing here makes it a leg of the loop. */
-  pzr:   {internal:null, fixed:{type:"datum", face:"b"}, fold:["t","b","l","r"], mu:0.65, sgtr:false,
-          ports:{"*":2}, thermal:"none", tsurv:800, pburst:200},
   /* TWO internal paths that do not meet: the tubes (l<->b, primary) and the
      shell around them (r<->t, secondary). The only way across is the sgtr
      edge, which is a LEAK and is built as one.
@@ -1662,14 +1890,11 @@ const ROLE = {
   ihx:   {internal:[{a:"l", b:"r", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}], fixed:null,
           fold:{t:"l", b:"r"}, mu:0.60, sgtr:false,
           ports:{l:2, r:2, t:2, b:2}, thermal:"transfer", tsurv:800, pburst:200},
-  /* ONE PUMP. There is no feedwater pump role: what makes a pump a feedwater
-     pump is where it is piped, which the graph already answers (primaryPump()
-     above). ports is the usual MEASUREMENT across every pump on the stock
-     plant at 1..4 loops - t carries one suction leg on a coolant pump and one
-     discharge per generator on a feed pump, so 4 is the measured most, and it
-     is PINNED rather than dynamic: an internal t<->b edge is only correct if
-     the runs land on t and b, and face() used to resolve those off wherever
-     cond happened to sit. */
+  /* ONE PUMP, and ONE HEAD LAW (netBuild()). There is no feedwater pump role:
+     what makes a pump a feedwater pump is where it is piped, and it develops
+     the same MPa it would develop anywhere else. Four nozzles a face, because
+     a pump on a four-loop plant feeds four generators off its discharge and
+     the same face group may carry the whole set. */
   // IN/OUT on the nozzle, SUCTION/DISCHARGE in the tooltip: the short name is
   // a LABEL sized to sit inside the joint, and every other machine's says
   // which way the water is going in the same two words
@@ -1678,7 +1903,7 @@ const ROLE = {
      right, discharge on the left, the same direction the vertical box has. */
   pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"IN", nb:"OUT", la:"SUCTION", lb:"DISCHARGE"},
           fixed:null, fold:{r:"t", l:"b"}, mu:0.75, sgtr:false,
-          ports:{t:4, b:1, r:4, l:1}, thermal:"none", tsurv:400, pburst:70},
+          ports:{t:4, b:4, r:4, l:4}, thermal:"none", tsurv:400, pburst:70},
   /* ── AND ONE PATH THAT IS NOT IN THE LIQUID MATRIX ──
      `vapPath` is the machine's own steam path, read by the VAPOUR network
      (vapBuild(), pipenet.js) and by nothing else: a liquid `internal` here
@@ -1713,8 +1938,14 @@ const ROLE = {
      is behind it and what it is plumbed to are per-instance config
      (D.tanks), never a role. mu is a tank of liquid, which shields rather
      better than bare equipment and rather worse than a wall. */
-  tank:  {internal:null, fixed:{type:"tank"}, fold:null, mu:0.65, sgtr:false,
-          ports:{"*":1}, thermal:"none", tsurv:420, pburst:100},
+  /* ONE VESSEL, ONE NODE - a tank's faces are plainly the same water, so they
+     fold like the core's plenum. A one-port tank is unaffected, and a HOLD
+     tank (the pressurizer) needs the second port its surge line and its
+     relief header ask for. Widening a port count is safe: portFaceOK() is a
+     whitelist, not a ceiling. tsurv/pburst are the ROLE's floor and a heavy
+     vessel states its own through partTsurv()/partPburst(). */
+  tank:  {internal:null, fixed:{type:"tank"}, fold:["t","b","l","r"], mu:0.65, sgtr:false,
+          ports:{"*":2}, thermal:"none", tsurv:420, pburst:100},
   bkp:   {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:350, pburst:20},
   shield:{internal:null, fixed:null, fold:null, mu:0.18, sgtr:false,
@@ -1816,8 +2047,6 @@ function buildLayout(){
   add("rods","ROD DRIVES",9,13,6,0,"#c8d8dc","core",
     "Control rod drive mechanisms, bolted to the vessel head. They ride on the head and move with the reactor - you site the reactor, not the drives. Select for scram gear, bank worth and emergency poison.","rods")
     .pin={to:"core",dx:0,dy:-13};
-  add("pzr","PRESSURIZER",3,6,15,1,"#a98cf0","primary",
-    "Sets loop pressure. It has to sit high - the steam bubble must stay at the top of the loop.","pzr");
   // ONE generator, ONE pump - the stock loadout, exactly like every other
   // fixed-slot part above. There is no knob for how many of these exist:
   // an additional generator is a PLACED part (ADD STEAM GENERATOR,
@@ -1844,9 +2073,16 @@ function buildLayout(){
     "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.","turb");
   if(checkOf("cond")) add("cond","CONDENSER",9,5,AFT,24,"#5aa9d6","sec",
     "Rejects waste heat. Bulky, and it wants to be near the hull.","cond");
-  // a floor of as many discharge nozzles as there are generators to feed; the
-  // box itself follows the pump's own head and flow (pumpW()/pumpH())
-  add("feed","FEED PUMP",nsg,0,FEEDX,18,"#5aa9d6","sec",
+  /* ══ AND IT STANDS BELOW WHAT IT DRAWS ON ══
+     A pump takes suction on the face its casing says (ROLE.pump), and static
+     head is real in the solve - so a feed pump hung level with the turbine had
+     to LIFT its own condensate nine metres out of a condenser sitting at
+     0.008 MPa, pulled its own suction below zero and cavitated on a plant
+     nobody had touched. It sits under the condenser's outlet instead, which is
+     where a real one is and for the identical reason. The box follows the
+     pump's own head and flow (pumpW()/pumpH()); the discharge nozzles are on
+     its side now, so the generator count no longer floors its WIDTH. */
+  add("feed","FEED PUMP",3,0,FEEDX,GH-5,"#5aa9d6","sec",
     "Returns water to the steam generator. Lose it and the heat sink boils dry.","pump");
   add("ctrl","CONTROL",6,4,0,BOT,"#cfc9b8","crew",
     "Where your crew sits. Distance and shielding from the reactor set the dose they take.","ctrl");
@@ -2197,7 +2433,7 @@ const RUN_KIND={
   "core|sg":"hot", "pump|sg":"cold", "core|pump":"cold",
   // an exchanger is spliced INTO the loop, so every run reaching it is still
   // the leg it was: hot on the way out of the core, cold on the way back
-  "core|ihx":"hot", "ihx|sg":"hot", "ihx|pump":"cold", "ihx|pzr":"surge",
+  "core|ihx":"hot", "ihx|sg":"hot", "ihx|pump":"cold",
   /* AND GENERATOR TO GENERATOR IS THE MAIN STEAM HEADER. Without this row the
      header between two shells resolved sg|sg, matched nothing and came out
      k:"user" - grey, unnamed, full bore, and solved as a WATER pipe between
@@ -2210,12 +2446,6 @@ const RUN_KIND={
   // the circulating-water side: a condenser rejecting into a panel, and a pump
   // pushing that water round. It is not feedwater and it is not exhaust.
   "cond|radiator":"cw", "pump|radiator":"cw", "radiator|radiator":"cw",
-  /* A pipe between the pressurizer and any primary machine IS a surge line -
-     the vessel has exactly one connection to the loop and that is what it is
-     called. Without these rows a hand-drawn pressurizer line came out
-     k:"user": grey, unnamed, full bore instead of the surge line's, and with no
-     KIND_TEMP hot tag - a working connection wearing no name. */
-  "core|pzr":"surge", "pzr|sg":"surge", "pump|pzr":"surge",
 };
 /* ══ A FITTING IS TRANSPARENT TO NAMING ══
    A tee spliced into the hot leg leaves two runs where there was one, and
@@ -2242,7 +2472,7 @@ const isFitting=id=>{ const p=partOf(id); return !!p && p.role==="fitting"; };
    line BRANCHES to; anything else is what the line CONTINUES as, so a
    continuation is preferred and the branch is only taken when it is all there
    is. */
-const FIT_BRANCH_ROLE={pzr:1, tank:1};
+const FIT_BRANCH_ROLE={tank:1};
 function throughFitting(id,avoid,seen){
   const p=partOf(id);
   if(!p || p.role!=="fitting") return p||null;
@@ -2287,11 +2517,20 @@ function runKindFor(aId,bId,af,bf){
      pipe drawn somewhere. On the primary side the pressurizer end makes it a
      relief header and anything else makes it an injection line; on the
      secondary side a tank feeds what it is piped to. */
-  const t = A.role==="tank"? A : B.role==="tank"? B : null;
+  /* A HOLD TANK IS PREFERRED AS THE FAR END, never as the tank being named:
+     between a relief tank and the pressurizer both ends are tanks, and taking
+     the first would name the same header two ways depending on which id sorted
+     first. */
+  const isT = q => q.role==="tank";
+  const t = (isT(A) && !tankHold(A.id)) ? A : (isT(B) && !tankHold(B.id)) ? B
+          : isT(A) ? A : isT(B) ? B : null;
   if(t){
     const o = t===A? B : A;
     if(!primaryTank(t.id)) return "feed";
-    return o.role==="pzr" ? "relief" : "hpi";
+    /* The line that reaches the vessel authoring this circuit's pressure IS
+       the surge line - the one connection a hold tank has to the loop. */
+    if(tankHold(t.id)) return "surge";
+    return (isT(o) && tankHold(o.id)) ? "relief" : "hpi";
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
 }
@@ -2336,12 +2575,15 @@ function fitLoops(id){
   return out;
 }
 const fitTies=id=>fitLoops(id).length>1;
-/* THE PART THAT FIXES THE LOOP'S PRESSURE, or null - the same ROLE question
-   netBuild() takes its datum node from, asked once here so the bench and
-   pzrPlumbed() do not each spell it out. Never the id "pzr". */
-function datumPart(){
-  return LAY.parts.find(q=>{ const R=ROLE[q.role]; return R && R.fixed && R.fixed.type==="datum"; }) || null;
-}
+/* ══ A PRESSURIZER IS A TANK WHOSE GAS SPACE IS CONTROLLED ══
+   `hold` is the whole of it: a knob on the instance, exactly like `pump` or
+   `gas`. Nothing branches on an id, so a second hold tank on a second circuit
+   is a legal design rather than a bug. */
+const tankHold  = id => { const t=D.tanks&&D.tanks[id]; return !!(t && t.hold); };
+const holdTankIds = () => tankIds().filter(tankHold);
+/* Every hold tank standing on one circuit. More than one is a design the
+   bench warns about and the solve demotes all but the first (netRef()). */
+const holdOnCirc = ci => holdTankIds().filter(id=>tankCircuit(id)===ci);
 /* ══ WHICH SIDE A TANK IS ON IS A QUESTION FOR THE DRAWING ══
    `side` was a field the designer set, on a control labelled "PLUMBED TO" -
    which asked the player to declare what the plumbing already said, and let
@@ -2451,14 +2693,25 @@ function hasHeatSink(){
    valve shut on a line that is drawn, which is not a design fault and must
    not raise a design warning.
 
-   Off ROLE.fixed.type==="datum", never the id "pzr", for the same reason
-   netBuild() takes its datum node that way. */
-function pzrPlumbed(){
-  const pz=datumPart();
-  if(!pz) return true;                              // no pressurizer: nothing to disconnect
-  if(!partOf("core")) return true;
-  return runReach("core", p=>p.role==="tank").has(pz.id);
+   Asked of a HOLD TANK and of the circuit it stands on, never of an id: the
+   seed is the lowest-id non-tank part on that circuit, so a hold tank on the
+   secondary is checked against the secondary's own machinery. */
+function seedPart(ci){
+  if(ci===nodeGraph().coreCirc && partOf("core")) return "core";
+  const G=nodeGraph();
+  const cand=LAY.parts.filter(p=>p.role!=="tank" &&
+    (G.nodesOf[p.id]||[]).some(n=>G.circuit[n]===ci)).map(p=>p.id).sort();
+  return cand[0] || null;
 }
+function holdPlumbed(tid){
+  const ci=tankCircuit(tid);
+  if(ci===null || ci===undefined) return false;     // piped to nothing at all
+  const from=seedPart(ci);
+  if(!from) return false;                           // a vessel with nothing but boundaries around it
+  return runReach(from, p=>p.role==="tank").has(tid);
+}
+// every hold tank on the plant is wired, or there is none to be wired
+const pzrPlumbed = () => holdTankIds().every(holdPlumbed);
 // BACKUP PWR ghosts rather than vanishes: NONE is a real dropdown choice
 // (mass 0) that still occupies its cell, because it's a three-way quality
 // dial (NONE/BATTERY/DIESEL), not an add/remove part like fittableList()'s
@@ -2643,10 +2896,11 @@ function layoutMetrics(){
     sep=Math.min(sep,Math.abs(a.x-b.x)+Math.abs(a.y-b.y));
   }
   // the steam bubble has to sit at the top of the loop, and the accumulator drains downhill
-  const pz=partOf("pzr");
   let loopTop=core.y;
   for(const q of P_) if(q.role==="sg") loopTop=Math.min(loopTop,q.y);
-  const pzrOK = pz ? pz.y<=loopTop : true;
+  // asked of every hold tank on the plant - the lowest one decides, because a
+  // bubble that cannot form anywhere is what costs the damping
+  const pzrOK = holdTankIds().every(id=>{ const q=partOf(id); return !q || q.y<=loopTop; });
   const pzrK  = pzrOK ? 1 : 0.45;
   /* WIRED, which is a weaker condition than "highest point" and was the one
      nobody checked - so the bench refused a subtle bad design and waved
@@ -2669,8 +2923,19 @@ function layoutMetrics(){
      a box: with no generator behind it there is nothing for its pot to feed,
      and with no loop at all it is not even in the primary. */
   const ihxIdle   = P_.filter(p=>p.role==="ihx" && !ihxSgs(p.id).length).map(p=>p.id);
-  const feedNoSg  = P_.filter(p=>roleHead(p.role) && !primaryPump(p.id)
-                                 && !secGensOf(p.id).length && !sinkPump(p.id)).map(p=>p.id);
+  /* A PUMP WITH NOTHING ON ITS DISCHARGE. Direction is the casing now, so
+     this is a question about the drawing and not about what the pump is for:
+     whatever the b face folds onto (fold, ROLE.pump) is where the water
+     leaves, and a face with no run on it pushes into a blank plate. It
+     replaces feedNoSg, which fired only for a pump that was neither primary
+     nor feed nor sink - three kinds, none of them a fact about the plumbing. */
+  const pumpNoDis = P_.filter(p=>{
+    if(!roleHead(p.role)) return false;
+    const R=ROLE[p.role], IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
+    const f=R.fold||{}, faces=[IN.b].concat(Object.keys(f).filter(k=>f[k]===IN.b));
+    const use=pipeNetwork().usage||{};
+    return !faces.some(face=>use[p.id+face]>0);
+  }).map(p=>p.id);
   /* Metres above the core, per TANK - measured, not a clamped multiplier on
      an injection rate that no longer exists. Elevation is LIVE for a tank
      like every other node's: it enters the solve as the static head of the
@@ -2714,7 +2979,7 @@ function layoutMetrics(){
      one steam generator from another, and can tell a shut valve from an open
      one. `head` stays: it is what the bench shows, and it is now what
      actually drives the thing it is named after. */
-  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,ihxIdle,feedNoSg,tankZ,injZ:injZ===null?0:injZ,radK,peak,
+  return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,ihxIdle,pumpNoDis,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     flowK,
     inertiaK: 1+0.012*(pipe+sec)};
 }
