@@ -124,7 +124,7 @@ function partTemp(s, p){
   if(p.role === "sg")   return s.sgTBy[p.id];
   if(p.role === "ihx")  return s.ihxTBy[p.id];
   if(p.role === "cond") return s.condT;
-  if(p.role === "radiator") return s.radT;
+  if(p.role === "radiator") return s.radTBy[p.id];
   return s.Tavg;                          // thermal:"source" - the vessel itself
 }
 /* ══ AND WHAT ITS SKIN IS AT, WHICH IS A DIFFERENT QUESTION ══
