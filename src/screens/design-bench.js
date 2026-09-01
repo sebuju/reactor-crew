@@ -280,7 +280,7 @@ function ctxItemsDesign(hit){
          one cell and only the mode differs. */
       items.push({label:"ADD VALVE", fn:()=>{ addFitting(gx,gy); }});
       items.push({label:"ADD SPARE PUMP", fn:()=>{
-        placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:3,h:5,x:gx,y:gy,col:"#57d38c",
+        placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:0,h:0,x:gx,y:gy,col:"#57d38c",
           grp:"pump",tip:"A spare coolant pump, placed where you put it. Hover an edge to place a port, then click it to draw a pipe - unplumbed, it does nothing at all.",
           role:"pump"}));
       }});
@@ -324,13 +324,21 @@ function ctxItemsDesign(hit){
           grp:"safety",tip:"Pulls compartment air overboard. It is the only thing on the plant besides the hull that takes heat OUT of the room, and it is on the main board - a blackout leaves the room with nothing but its own steel. Nothing to plumb.",
           role:"vent"}));
       }});
-      /* THE ONLY WAY HEAT LEAVES THE SHIP, and the same idiom again: placed,
-         no ports, nothing to plumb. Where it goes decides whether it works at
-         all - it has to reach the skin. */
+      /* THE ONLY WAY HEAT LEAVES THE SHIP. Two things decide whether it works
+         at all and they are asked of different pictures: it has to reach the
+         SKIN, and it has to be PLUMBED to something worth cooling. */
       items.push({label:"ADD RADIATOR", fn:()=>{
         placePart(n=>({id:"radX"+n,name:"RADIATOR SPARE",w:5,h:3,x:gx,y:gy,col:"#b8c4cf",
-          grp:"sec",tip:"An additional radiating panel. It must have a face on the skin: walled in it sheds NOTHING, the condenser climbs, and the turbine trips inside two minutes. Area buys overload headroom and costs mass. Nothing to plumb.",
+          grp:"sec",tip:"An additional radiating panel. It must have a face on the skin: walled in it sheds NOTHING, the condenser climbs, and the turbine trips inside two minutes. It must also be PLUMBED, because it cools the water going through it and nothing else - splice it into the circulating water, or into any other loop you want heat taken out of. Area buys overload headroom and costs mass.",
           role:"radiator"}));
+      }});
+      /* Structure with no network presence, the same idiom the vent unit and
+         the core catcher are: it is placed, it has an effect, and the three the
+         stock plant ships with are placed by exactly this call. */
+      items.push({label:"ADD SHIELD", fn:()=>{
+        placePart(n=>({id:"shldX"+n,name:"SHIELD",w:3,h:3,x:gx,y:gy,col:"#6d8f98",
+          grp:"shield",tip:"A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.",
+          role:"shield"}));
       }});
       items.push({label:"ADD CONDENSER", fn:()=>{
         placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:9,h:5,x:gx,y:gy,col:"#5aa9d6",
