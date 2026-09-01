@@ -234,7 +234,11 @@ function paramsFor(p){
     B.gang="reactor"; B.gangPlain=true;
     B.push({kind:"rule",title:"PRESETS",
       tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself."});
-    B.push({kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>archPreset(i)}))});
+    /* designForget() FIRST, the same order plantPreset() keeps: a family change
+       moves the rating by 30x, and every machine figure already baked was
+       priced off the family before it - a helium plant kept a PWR's 937 000 m2
+       of panel and its 6.9 MPa shell. */
+    B.push({kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>{ designForget(); archPreset(i); }}))});
     B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(i)}))});
     B.push({kind:"bulkrow",label:"SPREAD",items:[1,2,3,4].map(n=>({name:String(n),
       tip:"Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
@@ -254,6 +258,9 @@ function paramsFor(p){
               :" This row loads the slots you painted as zone "+(z+1)+". The core's beta, density and excess are the blend; its melt limit is the WORST fuel in it."),
           {get:()=>zoneFuelOf(z), set:v=>{ D.zoneFuel[z]=v; latMeasure(); }},FUEL);
     }
+    // a feature of the VESSEL, which is what its own tooltip already said -
+    // it never belonged on the pressurizer's panel
+    sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.","chim",0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
     opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.","mod",MODER);
     seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.","refl",LATREFL);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
@@ -272,6 +279,9 @@ function paramsFor(p){
     B.push({kind:"readlist",rows:()=>LATREAD.concat(LATREAD_RODS)
       .map(r=>[r[0],r[1](),r[3]?r[3]():null,r[2]])});
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
+    num("ROD DRIVE SPEED","How fast the drives walk the bank under normal control, as a percentage of full travel every second - the reference drive strokes end to end in 83 s. A fast core answers a rod before you have finished moving it and wants a motor to match; a graphite pile does not. It does NOT touch the scram, which drops on the system above. A motor that strokes twice as fast is twice the machine, and the mass hint is what that costs on every bank you have.",
+        {get:()=>D.rodSpd*100, set:v=>{ D.rodSpd=v/100; dTouch(); }},
+        "%/s",2,()=>ROD_SPD0*100,v=>D.nbank*ROD_BANK_T*(v/100/ROD_SPD0-1));
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
     tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. It only ever drives the bank inside the travel band you set below; you can always override it.","autorod",26);
     /* THE BAND THE CONTROLLER WORKS IN, as two handles rather than two
@@ -291,12 +301,6 @@ function paramsFor(p){
      and this marks the drives as the second member of that gang so clicking
      the drives on the plant brings the same panel up. */
   else if(id==="rods"){ B.gang="reactor"; B.gangPlain=true; }
-  else if(id==="pzr"){
-    sld("DESIGN PRESSURE","Loop pressure as a multiple of this coolant's nominal. Higher raises the boiling point, so it buys thermal margin and resists voiding, but the vessel gets much heavier and a breach more violent.","pdes",.7,1.25,v=>(v*COOLANT[D.cool].P0).toFixed(1)+" MPa",.05,v=>(v-0.7)*220);
-    sld("PRESSURIZER VOLUME","Size of the steam bubble. A big pressurizer damps pressure swings so the relief valve rarely lifts. A small one is light but pressure whips around on every load change.","pzr",.5,2,v=>v.toFixed(2)+" x",.05,v=>(v-0.5)*45);
-    sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.","chim",0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
-    note("Pressure is what keeps the rest of the loop liquid. Every design choice here trades vessel mass against how much boiling margin you carry.");
-  }
   else if(p.role==="sg"){
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
         {get:()=>sgTypeOf(id),set:v=>{ D.sgType[id]=v; }},SGT);
@@ -306,9 +310,14 @@ function paramsFor(p){
     num("TRANSFER COEFFICIENT","How fast heat crosses this generator's tubes, in kilowatts per kelvin. Buy more and the same core raises hotter steam at a smaller temperature difference; buy less and the primary runs hotter for the same power. SUGGEST matches it to this core at its own rated power.",
         {get:()=>sgUAOf(id),set:v=>{ D.sgUA[id]=v; }},
         "kW/K",0,()=>sgUASuggest(),()=>0);
+    num("DESIGN PRESSURE","What THIS shell is built to hold, in megapascals. It is what the safety valve lifts against, what the shell bursts a fifth above, and the pressure the turbine's enthalpy drop is taken from - so buying a higher one raises the steam this generator can make and everything downstream has to take it. SUGGEST is a share of the primary's own setpoint, which is where an untouched plant sits.",
+        {get:()=>sgDesPOf(id),set:v=>{ D.sgDesP[id]=v; }},
+        "MPa",2,()=>sgDesPSuggest(),()=>0);
     B.push({kind:"readlist",rows:()=>{ const r=sgRowOf(id); return [
+      ["SHELL BURSTS AT",sgBurstP(id).toFixed(2)+" MPa",null,"Where the shell itself lets go, off the design pressure above. Nothing stops it getting there except a relief valve you placed on its steam nozzle."],
       ["SECONDARY WATER",r.water.toFixed(0)+" t",null,"What is in THIS shell at 100 % level. It is what goes on removing heat after the feedwater stops, and it is the whole of the difference between the two types."],
-      ["SHELL MASS",r.mass.toFixed(0)+" t",null,"The steel of this machine. It is charged once per generator drawn, so a second one costs a second one."]]; }});
+      ["SHELL STEEL",sgShellT(id).toFixed(1)+" t",null,"The pressure shell itself, off its own water charge as a vessel at the wall its design pressure needs. Raise the pressure above and this goes up with it."],
+      ["TUBE BUNDLE",sgTubeT(id).toFixed(1)+" t",null,"The tubes, priced off the transfer coefficient you bought. A bigger UA is more tube, and more tube is more steel."]]; }});
     /* MEASURED, not the label this used to carry: a placed tank and pump
        (layout.js) piped to the generator, but the flow itself is not solved
        until the secondary conserves water - so what this buys today is the
@@ -330,10 +339,10 @@ function paramsFor(p){
     note("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
   }
   else if(roleHead(p.role)){
-    num("DEVELOPED HEAD","The pressure rise this pump makes at its rated flow, in megapascals. It is what pushes coolant round against the pipe run, and it is half of what a junction shares with a neighbouring loop if you tie the two together.",
+    num("DEVELOPED HEAD","The pressure rise this pump makes at its rated flow, in megapascals. It is what pushes water from the SUCTION face to the DISCHARGE face and nothing else decides which way it goes - so a pump has to beat whatever pressure stands on the far side before a drop moves. SUGGEST asks the drawing what that is.",
         {get:()=>pumpHead(id),set:v=>{ D.pumpHead[id]=v; }},
-        "MPa",2,()=>pumpHeadSuggest(),()=>pumpCapOf(id)*PUMP_MASS);
-    num("RATED FLOW","The mass of coolant this pump moves per second at that head. Head and flow together are the machine: a pump running at its own rated point has nothing spare to lend.",
+        "MPa",2,()=>pumpHeadSuggest(id),()=>pumpMassOf(id));
+    num("RATED FLOW","The mass of coolant this pump moves per second at that head. Head and flow together are the machine: the flow is the bore of the casing, so a bigger pump passes more water for the same head.",
         {get:()=>pumpFlow(id),set:v=>{ D.pumpFlow[id]=v; }},
         "kg/s",0,()=>pumpFlowSuggest(id),()=>0);
     /* WHAT THIS PUMP IS FOR, off the drawing rather than off its id. There is
@@ -443,8 +452,25 @@ function paramsFor(p){
         ci===null ? "Nothing is piped to this tank, so it is on no circuit at all - it has no edge, it can deliver nothing, and it is counted by nothing. Draw a run from it."
         : tankPrimary(id) ? "This tank has a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure."
         : "This tank is on the far side of a heat exchanger: it answers to that circuit's own pressure, not to the core loop's."]]; }});
-    sld("CAPACITY","How big it is, as a share of whichever side you piped it into. It costs mass in proportion, and it is what turns a solved flow into a level.",
-      acc("vol"),5,100,v=>v.toFixed(0)+" %",5,v=>v*0.4);
+    /* CUBIC METRES, and it always was: tankKg() is vol*TANK_RHO and partVol()
+       hands it back as holdup. The row said "%" and quoted 0.4 t/m^3 against
+       tankMass()'s 0.5 - two units and two prices for one number. It is a real
+       quantity in its own units now, and the mass hint is the mass term. */
+    sld("CAPACITY","How big it is, in cubic metres. It costs the steel of a shell that size at the pressure it has to hold, and it is what turns a solved flow into a level.",
+      acc("vol"),5,100,v=>v.toFixed(0)+" m3",5,v=>tankMassOf(id,v));
+    sld("ASPECT","What SHAPE that volume is on the grid, width against height. The area is the volume either way - this only decides whether it stands as a tall column or lies as a wide drum, and a shape that fits the deck you have is worth having.",
+      {get:()=>tankAspect(id), set:v=>{ t().aspect=v; }},
+      0.25,4,v=>v.toFixed(2)+" w:h",0.25);
+    /* ══ A PRESSURIZER IS A TANK WHOSE GAS SPACE IS CONTROLLED ══
+       Two rows, and there is no pressurizer part any more. Put one on a second
+       circuit and that circuit gets its own pressure. */
+    B.push({kind:"toggle",title:"PRESSURE CONTROL",mass:0,
+      key:{get:()=>!!t().hold, set:v=>{ t().hold = v?{p:null}:null; }},
+      tip:"Make this vessel hold the pressure of whatever circuit it is piped to. Its gas charge stops being consulted - that is what CONTROLLED means - and its line becomes the surge line, ordinary pipe carrying the loop both ways. One per circuit: a second one on the same circuit is demoted and warned about."});
+    sld("SETPOINT","The pressure this vessel holds its circuit at. Higher raises the boiling point, so it buys thermal margin and resists voiding - and every machine on the circuit needs the wall to take it, which is steel.",
+      {get:()=>t().hold?(t().hold.p||holdSetP(tankCircuit(id))):0,
+       set:v=>{ if(t().hold) t().hold.p=v; }},
+      0.2,22,v=>v.toFixed(1)+" MPa",0.1);
     sld("FILL AT COMMISSIONING","How full it starts. A source ships full; a tank meant to catch something ships empty, and its gas charge is set at whatever level you leave here.",
       acc("level"),0,100,v=>v.toFixed(0)+" %",5);
     B.push({kind:"toggle",title:"PRESSURISED BY PUMPS",mass:12,
@@ -501,9 +527,46 @@ function paramsFor(p){
    chosen when it is built, so they live in D.fittings and never on S; the
    arming switch is the opposite - it is worked during a transient - and lives
    on the valve's own control strip (ctlFor(), plant.js). */
+/* ══ A RUN IS A MACHINE TOO, AND IT HAS A PANEL ══
+   D.bore and D.wall have been hooks with no writer: runBoreMm()/runWallMm()
+   read them and nothing ever set one, so a pipe was the last thing on the
+   plant whose own size the player could not state. It is not a PART - it has
+   no box and no id in LAY - so it is addressed by its RUN KEY, which is the
+   name pipeMap() gives it and the name every other reader already uses.
+   `sel` carries that key: a run key always contains a colon and a part id
+   never does, so the two selection spaces cannot collide and every
+   partOf(sel) reader already answers null for one. */
+const runOfKey = key => pipeNetwork().find(r=>r.key===key) || null;
+const isRunKey = k => typeof k==="string" && k.indexOf(":")>=0 && !!runOfKey(k);
+function paramsForRun(key){
+  const B=[], r=runOfKey(key); if(!r) return B;
+  const num=(title,tip,k,unit,dp,suggest,massFn)=>B.push({kind:"num",title,tip,key:k,unit,dp,suggest,massFn});
+  /* MASS IS PER METRE OF THIS RUN, so the hint prices the change the slider
+     would actually make rather than a metre of pipe in the abstract. */
+  const massAt=(bore,wall)=>shellTPerM(bore,wall)*r.L;
+  num("BORE","How wide this run is, inside the pipe. It is the whole of what the run conducts: a narrow leg is a real restriction and a wide one costs steel and holds more water. SUGGEST is what a run of this kind ships at.",
+      {get:()=>runBoreMm(r), set:v=>{ D.bore[r.key]=v; dTouch(); }},
+      "mm",0,()=>boreMm(r.k),v=>massAt(v,runWallMm(r)));
+  num("WALL","How thick the steel is. It is what the run is RATED for and it is what the run weighs - the two are the same number seen from either end. SUGGEST is the thickness this bore needs at the pressure this run actually carries.",
+      {get:()=>runWallMm(r), set:v=>{ D.wall[r.key]=v; dTouch(); }},
+      "mm",1,()=>wallSuggestMm(runBoreMm(r), runDesignP(r), PRIMARY_K[r.k]?COOLANT[D.cool]:null),
+      v=>massAt(runBoreMm(r),v));
+  B.push({kind:"readlist",rows:()=>{
+    const c=pipeMap().byKey[r.key], a=c&&partOf(c.a), b=c&&partOf(c.b);
+    const rate=runRating(r), held=runDesignP(r);
+    return [
+      ["RUNS FROM",(a?partName(a):"?")+" ⇒ "+(b?partName(b):"?"),null,
+       "The two machines this run joins. It is traced off the pipe you drew, never authored - move either machine and this follows."],
+      ["LENGTH",r.L.toFixed(1)+" m",null,"How far it actually goes, cell by cell. Length is resistance and it is mass."],
+      ["HOLDS",runVol(r).toFixed(2)+" m3",null,"The water standing in it, off the bore and the length. A node with volume has a time constant, which is why a long fat leg is slow to change temperature."],
+      ["CARRIES",held.toFixed(2)+" MPa",null,"The pressure this run is actually asked to hold - its circuit's own setpoint, or the shell design pressure on the secondary."],
+      ["RATED FOR",rate.toFixed(2)+" MPa",rate<held?C.red:null,
+       "What the wall above will take, off the published hoop-stress relation. Under what it carries, this pipe is the thing that lets go first."],
+      ["MASS",massAt(runBoreMm(r),runWallMm(r)).toFixed(1)+" t",null,"What this run weighs: the shell it is, at the wall it has, over the length it runs."]]; }});
+  return B;
+}
 function paramsForFit(fid){
   const B=[], j=D.fittings[fid]; if(!j) return B;
-  const P0=COOLANT[D.cool].P0*D.pdes;
   const MODE_IDS=["tee","throttle","relief"];
   B.push({kind:"optlist",title:"FITTING",base:0,
     key:{get:()=>MODE_IDS.indexOf(j.mode), set:i=>{ j.mode=MODE_IDS[i]; }},
@@ -511,28 +574,39 @@ function paramsForFit(fid){
     items:[{name:"TEE",tip:"A junction. Four faces, one node, no gate: it costs the line nothing and closes nothing."},
            {name:"THROTTLE",tip:"A valve you set and it holds. Wide open it costs the line nothing at all; shut it is a real break in the pipe."},
            {name:"RELIEF VALVE",tip:"Lifts on its own at its own setpoint and blows the line down through whatever is piped behind it. Leave its outlet unpiped and it vents straight into the room."}]});
-  B.push({kind:"slider",title:"BORE",step:.05,min:.1,max:1,
+  /* MILLIMETRES, like the pipe it sits in. It was 0.1-1 "x" of a full-bore
+     leg, so a valve and its own line stated the same quantity in two units.
+     boreK()/fitBoreK() (pipenet.js) are the one conversion into the solve. */
+  B.push({kind:"slider",title:"BORE",step:BORE_REF/20,min:BORE_REF/10,max:BORE_REF*1.5,
     key:{get:()=>j.bore, set:v=>{ j.bore=v; }},
-    fmt:v=>v.toFixed(2)+" x",
-    tip:"How big the valve is, relative to a full-bore loop leg. A wide relief valve vents faster; a wide throttle costs less when it is open. It is steel either way, so it is on the mass budget.",
+    fmt:v=>v.toFixed(0)+" mm",
+    tip:"How wide the valve is. A wide relief valve vents faster; a wide throttle costs the line less when it is open. It is steel either way, so it is on the mass budget.",
     massFn:v=>FIT_MASS*(v/FIT_BORE0)});
   const sld=(title,tip,key,min,max,fmt,step)=>B.push({kind:"slider",title,tip,key,min,max,fmt,step});
   const rdo=(title,tip,val)=>B.push({kind:"readout",title,tip,val});
   if(j.mode!=="relief") return B;
+  /* MEGAPASCALS, not a multiple. They were fractions of reliefRefP(), so the
+     number on the panel was not the number on the valve and moving the
+     circuit's setpoint moved every relief valve on the plant with it. The
+     span is this valve's own reference either side, so a 0.2 MPa sodium loop
+     and a 15.5 MPa water one both get a slider they can work in. */
+  const dp = v => v<1 ? v.toFixed(3) : v.toFixed(2);
+  const lo = reliefRefP(fid)*0.9, hi = reliefRefP(fid)*1.35;
+  const stp = Math.max(0.005, +(reliefRefP(fid)*0.01).toFixed(3));
   sld("LIFT PRESSURE",
-    "The pressure this valve opens itself at, as a multiple of the loop's design pressure. Low and it lifts on every transient and spends its stick chances early; high and pressure climbs further before anything vents, toward a vessel that bursts at about 122%.",
+    "The pressure this valve opens itself at. Low and it lifts on every transient and spends its stick chances early; high and pressure climbs further before anything vents, toward a vessel that bursts at about 122% of what it holds.",
     {get:()=>reliefSet(fid).lift,
      // the deadband is dragged down with the lift point, or a valve dialled
      // low would end up reseating above its own lift and chatter every tick
-     set:v=>{ j.lift=v; if(reliefSet(fid).reseat > v-0.01) j.reseat=+(v-0.01).toFixed(2); }},
-    1.02,1.20,v=>(v*P0).toFixed(2)+" MPa",.01);
+     set:v=>{ j.lift=v; if(reliefSet(fid).reseat > v-stp) j.reseat=v-stp; }},
+    lo,hi,v=>dp(v)+" MPa",stp);
   sld("RESEAT PRESSURE",
     "The pressure it shuts again at. The gap up to the lift point is the deadband, and it is what stops the valve chattering on its own setpoint - it cannot be dragged above the lift point, because a valve that reseats above where it lifts has no shut state at all.",
     {get:()=>reliefSet(fid).reseat,
-     set:v=>{ j.reseat=Math.min(v, +(reliefSet(fid).lift-0.01).toFixed(2)); }},
-    1.00,1.19,v=>(v*P0).toFixed(2)+" MPa",.01);
+     set:v=>{ j.reseat=Math.min(v, reliefSet(fid).lift-stp); }},
+    lo,hi,v=>dp(v)+" MPa",stp);
   rdo("DEADBAND","How far pressure has to fall, once this valve has lifted, before it shuts again. A wide band lifts once and clears the transient; a narrow one cycles.",
-    ()=>{ const r=reliefSet(fid); return ((r.lift-r.reseat)*P0).toFixed(2)+" MPa"; });
+    ()=>{ const r=reliefSet(fid); return dp(r.lift-r.reseat)+" MPa"; });
   /* Nothing showed this before, so a relief tank sited across the plant cost
      vent rate silently. It is a commissioned figure - it reads the routed
      branch pipe - so the bench shows the length that drives it instead. */

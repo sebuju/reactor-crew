@@ -60,27 +60,38 @@ const pipeLabel=(k,key)=>{
 };
 const pipeCol=(PC,k)=>PC[k]||C.ink2;
 
-/* Line width follows the run's own BORE, never its kind - a 0.25-bore
-   injection line and a 0.30-bore surge line are not the same pipe as a
-   1.0-bore hot leg, and once bore is a player choice (Stage 3a) the drawn
-   line has to track what was actually built. Linear through the two widths
-   this file always drew: the narrowest stock default (relief, 0.20) at 3px,
-   a full 1.0 bore (hot/cold, and the fallback runBore() itself uses for any
-   kind PIPE_BORE_MM has no row for) at 4px. Every bore between them - a
-   0.55-bore cross-tie, a 0.25-bore HPI line - draws a width between them
-   instead of being lumped into whichever side of a boolean it used to fall
-   on. Casing half-width and fluid line width were always the same number
-   drawn two ways (thin?6:8)/2 === thin?3:4 - kept that way here too, one
-   value instead of two that happened to agree. */
-const pipeWidth = bore => clamp(2.75+1.25*bore, 2, 5);
+/* ══ AND IT IS LINEAR IN REAL DIAMETER NOW ══
+   2.75+1.25*bore put the whole 150-750 mm range inside ONE pixel, so the
+   number a player sets was invisible on the board. Linear off the bore, with
+   a visibility floor and a ceiling that still clears a 16 px cell once the
+   casing is round it. Deliberately NOT quantised into classes: the plant is
+   drawn in grid units and then ctx.scale(VIEW.s), so a half-pixel difference
+   at fit zoom resolves exactly when the player zooms in. 187.5 and 225 mm are
+   not tellable apart at fit zoom - that is the limit, stated rather than
+   papered over. */
+const PIPE_PX = 11;
+const pipeWidth = bore => clamp(PIPE_PX*bore, 2.2, 11);
+/* ══ AND THE CASING IS THE WALL ══
+   The casing was hardcoded at 2*w, so every pipe's wall read as half its own
+   bore. It is the real millimetres now (runWallMm(), pipenet.js). WALL_PX is
+   a STATED display exaggeration - the RAD_AREA_CELL idiom, a lie the ship's
+   scale already tells, named out loud: a real 70 mm wall on a 750 mm bore is
+   one pixel at true scale, and one pixel cannot be read. */
+const WALL_PX = 0.09;
+const pipeWallPx = r => clamp(runWallMm(r)*WALL_PX, 0.6, 3);
 
 /* The one pipe colour table. drawPlant() strokes the run with it and the packets are
    drawn in it, so a packet can never be a different colour from its own pipe. */
 function pipeColours(L){
   const heat = L? L.n*PROMPT_F+L.decay : 0;
   const Th = L? L.Tavg+15*heat : 598, Tc = L? L.Tavg-15*heat : 568;
-  return { hot: L?lerpC("#5aa9d6","#ff5a45",(Th-520)/110):"#c8735e",
-           cold:L?lerpC("#5aa9d6","#ff5a45",(Tc-520)/110):"#5aa9d6",
+  /* ══ AND THE PRIMARY IS THE COLOUR OF WHAT IS IN IT ══
+     The cold end of the lerp was a hardcoded water blue, so a sodium plant's
+     primary drew water. It is the coolant family's own hue now; the
+     temperature lerp stays and simply lerps about that hue instead. */
+  const cc = (COOLANT[D.cool] && COOLANT[D.cool].col) || "#5aa9d6";
+  return { hot: L?lerpC(cc,"#ff5a45",(Th-520)/110):"#c8735e",
+           cold:L?lerpC(cc,"#ff5a45",(Tc-520)/110):cc,
            surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2", cw:"#5aa9d6",
            /* a relief header stands shut and carries nothing until something
               lifts, so it is drawn cold and quiet - but drawn as ITSELF, not
@@ -445,34 +456,23 @@ function pipeUnit(key,k){
     return {nom:steamScale(key,k), u:"kg/s", dir:steamDir(key,k)};
   return null;
 }
-/* how two-phase a line is, 0..1 - off the FLUID AT THE RUN'S OWN ENDS, not
-   its name. net.tag (pipenet.js) already answers hot-side/cold-side/neither
-   for every node the primary reaches, built from the runs that touch it -
-   the same array buoyH() trusts for density - so this reads that instead of
-   re-deciding a run's own thermal side. Read off the run's OWN graph edge
-   (net.edges, matched by key), never runEnds()+coreFold(): the edge already
-   holds the two node indices the build resolved, so nothing here has to
-   re-derive them from a key.
-
-   Three runs read a node this array also tags but carry no CORE CARRYOVER
-   of their own, and are excluded by name - the one kind read this function
-   keeps, because nothing solved distinguishes "cold" from "fresh, never
-   went through the core" yet: HPI and the surge line are cold/hot by
-   BUOYANCY (KIND_TEMP tags them so on purpose, for density) but are a
-   tank's or a pressurizer's own water, not recirculating core water; feed
-   SHARES its discharge node with a cold leg (sg0b - see pipenet.js's own
-   note on that collision) and would misread the leg's own tag as its own.
-   Steam and exhaust are genuinely past the turbine - no primary tag reaches
-   them at all yet (Stage 6) - and read RUN_VAPOUR instead. */
-const PIPE_NO_CARRYOVER={hpi:1,surge:1,feed:1};                   // DEFAULT: liquid regardless of what node they land on
+/* ══ HOW TWO-PHASE A LINE IS, 0..1 - OFF WHAT IS ACTUALLY IN IT ══
+   This read net.tag, a DIRECTION label, plus a PIPE_NO_CARRYOVER name table
+   whose own comment said nothing solved distinguished the cases. Something
+   does: netQualAt() is the quality the enthalpy field carries at a node, and
+   it answers exactly this question at the run's own ends. The name table is
+   gone with it - a surge line reads liquid because its water IS liquid, not
+   because it was listed.
+   Read off the run's OWN graph edge (net.edges, matched by key), never
+   runEnds()+coreFold(): the edge already holds the two node indices the build
+   resolved. */
 function pipeSteam(r,L){
-  if(PIPE_NO_CARRYOVER[r.k]) return RUN_VAPOUR[r.k]?1:0;    // DEFAULT: no core-carryover signal for these yet - see the comment above
   const net=P.net;
-  let tag=0;
-  if(net) for(const ed of net.edges) if(ed.key===r.key) tag = tag||net.tag[ed.u]||net.tag[ed.v];
-  if(tag===NT_HOT)  return clamp(L.vf*1.6,0,1);
-  if(tag===NT_COLD) return clamp((L.vf-0.25)*1.6,0,1);
-  return RUN_VAPOUR[r.k]?1:0;                                    // DEFAULT: no tag reaches this run yet
+  if(!net) return RUN_VAPOUR[r.k]?1:0;
+  let x=0, seen=false;
+  for(const ed of net.edges) if(ed.key===r.key){
+    x = Math.max(x, netQualAt(L,net.name[ed.u]), netQualAt(L,net.name[ed.v])); seen=true; }
+  return seen ? clamp(x,0,1) : (RUN_VAPOUR[r.k]?1:0);
 }
 
 /* ══════════ the packets ══════════ */
@@ -891,11 +891,16 @@ function pipeMeters(runs,L){
    symbol, and printing it twice is how two readings start disagreeing. It sits clear
    of the relief bowtie at the very top of the shell, and it does cover a band of the
    level column - the same trade the flow meters make against their own pipes. */
-function pipeVessel(L){
-  const p=partOf("pzr");
-  if(!p || !fitted(p) || L.dmgParts.includes("pzr")) return;
+/* ONE GAUGE PER HOLD TANK, on the vessel it is bolted to and reading the
+   pressure THAT vessel holds - never the id "pzr" and never s.P, so a second
+   pressurizer on a second circuit gets its own dial saying its own number. */
+function pipeVessel(L){ for(const id of holdTankIds()) pipeHoldDial(L, id); }
+function pipeHoldDial(L, id){
+  const p=partOf(id);
+  if(!p || !fitted(p) || L.dmgParts.includes(id)) return;
+  const ci=tankCircuit(id), pv=loopP(L,ci), set=holdSetP(ci);
   const R=prect(p), r=PIPE_DIAL_R;
-  const fr=pipeDisplay("pzrP", L.P/Math.max(0.1,P.P0));
+  const fr=pipeDisplay(id+":P", pv/Math.max(0.1,set));
   /* low enough to sit in the steam space rather than over the water, and clear
      of the shell's own crown: the box carries a name row before drawSym() even
      starts, so the old offset put the top of the dial outside the vessel it is
@@ -906,11 +911,13 @@ function pipeVessel(L){
   /* The vessel gauge shows ONE plant pressure, so it can only mark one valve;
      the primary is the honest choice, and it follows that valve's own dialled
      setpoint rather than a constant every relief valve used to share. */
-  const lift=reliefSet(primaryRelief()).lift;
+  // the dial is a FRACTION of this vessel's own setpoint, and the valve now
+  // states an absolute MPa, so it is divided into the same scale the needle is on
+  const fid=primaryRelief(), lift=fid ? reliefSet(fid).lift/Math.max(set,1e-6) : Infinity;
   pipeDial(cx,cy,r,fr,C.cyan,null,{lim:lift,max:1.35});
-  TIP(cx-r,cy-r,2*r,2*r,"PRESSURIZER  PRESSURE",
-    L.P.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+P.P0.toFixed(1)+
-    " MPa design point. Level "+L.lvl.toFixed(0)+" %."+
+  TIP(cx-r,cy-r,2*r,2*r,partName(p).toUpperCase()+"  PRESSURE",
+    pv.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+set.toFixed(1)+
+    " MPa setpoint. Level "+tankLvl(L,id).toFixed(0)+" %."+
     (fr>lift?"  It is past the relief valve setpoint."
             :reliefAnyOpen(L)?"  The relief valve is passing.":""));
 }
