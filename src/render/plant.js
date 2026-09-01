@@ -314,34 +314,6 @@ function drawSym(p,x,y,w,h,ink,L){
       banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red,Y+9);
     else if(L&&annLit("ROD AT LIMIT"))
       banner("ROD AT LIMIT",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.amber,Y+9);
-  } else if(id==="pzr"){
-    /* the shell takes the WHOLE symbol box, starting straight under the name
-       row. The 8 px it used to give away at the top was headroom for a relief
-       bowtie that is a fitting now and drawn at its own tap, so all it left
-       was a short vessel with a gap over it. */
-    const pz=()=>rr(X,Y,W,Hh,W/2.6);
-    shell(pz);
-    ctx.save(); ctx.beginPath(); pz(); ctx.clip();
-    lvl(X,Y,W,Hh, L? L.lvl/100 : .54, C.blue); ctx.restore();
-    ctx.beginPath(); pz(); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
-    /* OVERPRESSURE, ON THE VESSEL IT IS ABOUT. Off the board's own tile, not a
-       second copy of the setpoint. Pinned to the foot of the shell: the dial
-       and the pressure figure already own the middle of it. */
-    if(L&&annLit("HI PRESS"))
-      banner("HI PRESS",cx,X,Y,W,Hh,C.red,Y+Hh-7);
-    /* No bowtie here, and no plume either. A relief valve is a FITTING now,
-       with a tap of its own and a glyph drawn at it (pipeFitMarks()) - the
-       stock one sits on the hot leg, not on this shell. Drawing a second copy
-       on the mimic put the same valve on screen twice, in the corner that
-       already carries the tank, its label, its level and this vessel's own
-       pressure dial. It also lied on a plant with no relief path left at all.
-       The plume went with it for the same reason it was drawn in the first
-       place: it is the RELIEF FLOW readout drawn instead of typed, and a
-       readout belongs on the instrument it is about. On this shell it said a
-       valve somewhere was passing something, while the valve itself sat
-       elsewhere on the drawing doing nothing visible - and with two relief
-       valves fitted it could only ever depict one of them. It is drawn at each
-       valve's own tap now, off that valve's own rate (pipeFitMarks()). */
   } else if(p.role==="sg"){
     const burst = !!(L && L.sgBurst && L.sgBurst[id]);
     // a burst shell is OPEN: the lid is torn instead of domed, so the boundary
@@ -389,7 +361,7 @@ function drawSym(p,x,y,w,h,ink,L){
          pressure is atmosphere and the news is the plume. */
       const ruptured = sgtrLive(L, id), lv=sgLvl(L,id);
       const pFrac = burst ? 0
-        : clamp((secP(L,id)-sgDesignP())/Math.max(sgBurstP()-sgDesignP(),1e-9),0,1);
+        : clamp((secP(L,id)-sgDesignP(id))/Math.max(sgBurstP(id)-sgDesignP(id),1e-9),0,1);
       fxPulse(X+2,Y+14,W-4,Hh-16,pFrac>SG_P_HI?C.red:C.amber,
               fxEase(id+":press",pFrac>SG_P_WARN?pFrac:0),2.2);
       // Three steps of one ladder, on the same constants the board's tiles read:
@@ -548,8 +520,17 @@ function drawSym(p,x,y,w,h,ink,L){
        reliefBowtie() is the live state (shut / passing / blocked) and
        fitGlyph() the bare shape the bench shows - one drawing either way. */
     const mode=fitModeOf(id);
-    if(mode==="relief" && L) reliefBowtie(cx,y+h/2,16,11,L,id);
-    else fitGlyph(cx,y+h/2,16,11,mode,ink);
+    /* ══ AND IT IS DRAWN AT ITS OWN BORE ══
+       A fitting states millimetres now, like the pipe it sits in, and the
+       glyph was one fixed size - so the one number a player sets on a valve
+       could be read off the panel and nowhere else. The box is the CASING and
+       the opening is the BORE, which is the same sentence the pipe stroke
+       makes (pipeWidth()/pipeWallPx(), pipes.js) drawn front-on. Floored so a
+       hair-bore valve is still a shape, and capped to the cell it stands in. */
+    const fw=clamp(pipeWidth(fitBoreK(id))*1.5, 7, W-2),
+          fh=clamp(fw*11/16, 5, Hh-4);
+    if(mode==="relief" && L) reliefBowtie(cx,y+h/2,fw,fh,L,id);
+    else fitGlyph(cx,y+h/2,fw,fh,mode,ink);
     /* WHAT THIS VALVE IS PASSING, drawn instead of typed, at the valve, and
        judged against this fitting's OWN fully-open rate (reliefFullRate(),
        pipenet.js) so the plume can never show a rate the sim is not
@@ -624,6 +605,10 @@ function drawSym(p,x,y,w,h,ink,L){
        Burst, the tank is an opening to containment and its contents are on the
        floor - so it stops being a tank and says so. */
     if(L&&L.burstBy&&L.burstBy[id]) hatch(X+1,Y+3,W-2,Hh-6,C.red,.55);
+    /* OVERPRESSURE, ON THE VESSEL IT IS ABOUT - the pressurizer's own branch
+       carried this, and the pressurizer is a tank now. */
+    if(L&&tankHold(id)&&annLit("HI PRESS"))
+      banner("HI PRESS",cx,X,Y,W,Hh,C.red,Y+Hh-7);
   } else if(id==="bkp"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink);
@@ -791,7 +776,7 @@ function liveValue(p,s){
   switch(true){
     case p.id==="core":  return (s.n*100).toFixed(0)+"%";
     case p.id==="rods":  return (s.rodPos*100).toFixed(0)+"%";
-    case p.id==="pzr":   return s.P.toFixed(1)+" MPa";
+    // a hold tank reports the pressure it is holding; every other tank a level
     case p.role==="sg":          return sgLvl(s,p.id).toFixed(0)+"%";
     case p.role==="ihx":         return ihxTemp(s,p.id).toFixed(0)+" K";
     case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
@@ -806,7 +791,9 @@ function liveValue(p,s){
     case p.id==="ctrl":  return s.dose.toFixed(0)+"%";
     /* ONE ROW FOR EVERY TANK. A burst disc first, because a tank that is an
        opening to containment is not reporting a level any more. */
-    case p.role==="tank": return s.burstBy[p.id] ? "BURST" : tankLvl(s,p.id).toFixed(0)+"%";
+    case p.role==="tank": return s.burstBy[p.id] ? "BURST"
+      : tankHold(p.id) ? loopP(s,tankCircuit(p.id)).toFixed(1)+" MPa"
+      : tankLvl(s,p.id).toFixed(0)+"%";
     default: return null;
   }
 }
@@ -841,7 +828,11 @@ function valueBase(p,x,y,w,h,sh,nameH){
 
 // mirrors commission()'s formula (step.js) because ctlFor() is also called on
 // the bench, before any plant is commissioned and P is still null
-const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(totalPumpCap()-sgCount()),0.15,0.75);
+const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(corePumpCap()-sgCount()),0.15,0.75);
+/* Tank level under which a pump drawing on it is in trouble. A WARNING
+   threshold and nothing else: what actually costs a pump its head is its own
+   suction going to vapour (s.cavP, step.js), measured at the machine. */
+const SUC_LOW=10;
 const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The pumps can be stopped completely: the red line on the track is the "+(pumpFloor()*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
 // rows, not a flat list: a slider sharing 30px with two buttons is 3.3% of
 // rod travel per pixel, unusable
@@ -888,10 +879,12 @@ const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, 
    buttons on three different components - HPI's INJECT, the reactor's
    one-shot BORON DUMP and the condenser's HOTWELL DUMP - reading three
    different pieces of state. */
-/* TWO ROWS, not three buttons. A tank is one cell wide and three labels
-   collide in it - measured, not guessed (audit-text.js counts them). The arm
-   switch goes on its own row, and only for a tank that HAS a rule to arm:
-   a manual tank has nothing to defeat. */
+/* TWO ROWS, not three buttons - and what decides that is no longer the box's
+   old fixed width. The valve and the dump are ONE row because they are one
+   decision about the same line; if the box is too narrow to hold them side by
+   side, ctlStrip() stacks them (ctlRowStacks()) and stripPlan() has already
+   reserved the height for it. The arm switch goes on its own row, and only
+   for a tank that HAS a rule to arm: a manual tank has nothing to defeat. */
 function tankCtl(id){
   const t=()=>D.tanks[id]||{}, rule=()=>AUTORULE[t().auto];
   const valve=
@@ -914,10 +907,10 @@ function tankCtl(id){
        whether it is doing it. */
     {kind:"btn",flex:1,k:id+":tankDump",def:false,words:["DUMP","DUMP"],on:()=>S.tankDump[id],
      danger:()=>S.tankDump[id] ||
-       (!(tankPrimary(id) && !t().check) && tankLvl(S,id)<HOT_NPSH),
+       (!(tankPrimary(id) && !t().check) && tankLvl(S,id)<SUC_LOW),
      text:()=>"DUMP",
      fn:()=>{ act("tankDump",id); },
-     tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+HOT_NPSH+"%."};
+     tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+SUC_LOW+"%."};
   /* THE SAME SWITCH a system's bypass row is, so it goes through the same
      armRow() - green ARMED against amber BYPASSED. Drawn as an ordinary key it
      inherited button()'s `on` amber, so a tank whose rule was still armed lit
@@ -1046,11 +1039,14 @@ function ctlFor(p,live,split){
     return [[
     {kind:"sld",flex:1,k:pri?"flowDem":p.id+":pumpDem",def:1,sc:100,val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
      dem:()=>(pri?flowDemPri(S):(S.flowDemBy[p.id]??1))*100,
-     mark:()=>pri?pumpFloor()*100:null,markLo:true,
+     /* THE MARK IS THE TRIP, so it stands on any pump the CORE's own circuit
+        carries - the low-flow setpoint is about the water going past the fuel
+        and about nothing else. */
+     mark:()=>corePump(p.id)?pumpFloor()*100:null,markLo:true,
      fmt:v=>v.toFixed(0)+" %",
      set:v=>{ pri ? act("flowDem",v/100) : act("pumpDem",p.id,v/100); },
      tip:(pri?"COOLANT PUMPS - "+pumpTip()
-            :"THIS PUMP ONLY - what it is told to deliver. It answers for itself: a pump that is not in a coolant loop is not part of the coolant order.")}]];
+            :"THIS PUMP ONLY - what it is told to deliver. It develops its own head at its own speed, exactly like the coolant pumps; what it does not answer to is their one lever.")}]];
   }
   /* ══ A FITTING'S OWN HANDLES, ON ITS OWN PLINTH ══
      They used to float in the pipe margin on a hand-rolled strip with its own
@@ -1143,7 +1139,7 @@ function ctlFor(p,live,split){
           against the outer ones instead of moving the whole bank together */
        [{kind:"sld",flex:2.8,k:"tiltDem",def:0,val:()=>S.tilt,min:()=>-1,max:()=>1,dem:()=>S.tiltDem,
          fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{ act("tiltDem",v); },
-         tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. Full travel takes "+(1/TILT_RATE).toFixed(0)+" s because the drives moving it are the drives that move the bank. It is your tilt handle only while the banks are ganged - split them and each bank's own demand takes over."},
+         tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. Full travel takes "+(1/tiltRate()).toFixed(0)+" s because the drives moving it are the drives that move the bank. It is your tilt handle only while the banks are ganged - split them and each bank's own demand takes over."},
         {kind:"btn",flex:1,text:()=>"SPL",
          fn:()=>{ act("split",true); },
          tip:"SPLIT BANKS - stops driving the banks as one and gives each its own demand. Splitting is bumpless by construction: every bank simply adopts where it already stands. From there the tilt slider stands down, the per-bank sliders are your tilt handle, and any bank you switch to MANUAL stops answering the temperature controller."}]];
@@ -1178,19 +1174,51 @@ function ctlFor(p,live,split){
    ctlBands() are gone with the rows they used to grow.
    Still the WORST of the two rod modes, never the current one: ganging and
    splitting must not resize the plant under the operator. */
-function stripH(p,live){
-  if(!fitted(p)) return 0;
+/* ══ THE STRIP COMPACTS TO THE BOX; NOTHING IS EVER HIDDEN ══
+   The 3x5 floor a machine used to carry existed because the strip had ONE
+   size: name row 14 + CTL_H 17 + STRIP_PAD 4 is 35 px against 32 in a
+   two-cell box, so drawSym() got a negative rectangle - the failure
+   layout.js's own comment names. So the STRIP gives way instead of the box
+   growing, down a ladder every rung of which already exists:
+
+     letter spacing -> font step   inside button() (core/ui.js)
+     key height     BTN_H -> BTN_H_MIN, an argument button() always took
+     name row       dropped, which a one-cell box already did
+
+   Nothing is hidden and nothing gates on hover: every rung only makes a
+   control SMALLER, never absent. Read by the draw AND by anything that asks
+   how much room the strip took, so the two cannot disagree about a box the
+   way stripH() and the draw's own nameH used to. */
+const SYM_MIN=8;                 // px drawSym() needs to draw anything at all
+function stripPlan(p,live){
+  const boxH=p.h*CELL, none={sh:0,keyH:BTN_H,nameH:boxH>CELL?14:0};
+  if(!fitted(p)) return none;
   /* A FITTING IS THE ONE MACHINE TOO SMALL TO HOLD ITS OWN CONTROLS. It is one
      cell - a third of everything else - by design, so its handles hang in the
      margin BELOW the box instead of standing on it (see the component loop),
      the same margin pipeFitMarks() already writes its reading into above. It
      therefore reserves nothing INSIDE the box. */
-  if(p.role==="fitting") return 0;
-  const rows=m=>{ const c=ctlFor(p,live,m); return c? c.length : 0; };
-  const n=Math.max(rows(false),rows(true)), bh=autoOn(p.id)? CTL_H : 0;
-  if(!n && !bh) return 0;
-  return n*CTL_H + bh + STRIP_PAD;
+  if(p.role==="fitting") return none;
+  /* A ROW THAT WILL STACK COSTS ITS OWN KEYS IN HEIGHT. ctlStrip() decides to
+     stack off the width it is given, so this has to ask the same question of
+     the same width or the box reserves one row for something that draws
+     three. */
+  const inner=p.w*CELL-8;
+  const rows=m=>{ const c=ctlFor(p,live,m); if(!c) return 0;
+    let n=0; for(const row of c) n += ctlRowSpan(row,inner);
+    return n; };
+  const n=Math.max(rows(false),rows(true)) + (autoOn(p.id)?1:0);
+  if(!n) return none;
+  for(const keyH of [BTN_H, BTN_H_MIN])
+    for(const nameH of [none.nameH, 0]){
+      const sh=n*(keyH+CTL_STRIP_GAP)+STRIP_PAD;
+      if(boxH-sh-nameH >= SYM_MIN) return {sh,keyH,nameH};
+    }
+  // even the tightest rung overflows: take it anyway and let the box read as
+  // full of keys, which is honest - a machine with more controls than shell
+  return {sh:n*(BTN_H_MIN+CTL_STRIP_GAP)+STRIP_PAD, keyH:BTN_H_MIN, nameH:0};
 }
+const stripH=(p,live)=>stripPlan(p,live).sh;
 /* HOW WIDE A FITTING'S OWN MARGIN STRIP IS. Wider than its one cell, because a
    key needs a word on it and a cell is 16 px - but exactly as wide as ONE KEY
    on an ordinary three-cell component strip, which is what a tank's SHUT/DUMP
@@ -1237,28 +1265,49 @@ function bypRow(k,x,y,w,h,bench){
     tip:A.tip+(fit?"":"  None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")});
 }
 
+/* A key narrower than this cannot hold even a stepped-down four-letter label,
+   so the row STACKS instead of squeezing - rung 3 of the ladder (stripPlan).
+   Measured against the shortest label the strip actually ships (SHUT), not
+   guessed. */
+const CTL_KEY_MIN=22, CTL_GAP=4;
+/* ══ TWO KEYS SIDE BY SIDE BECOME TWO STACKED KEYS ══
+   Rung 3, and the ONE predicate for it - stripPlan() must reserve the height
+   this decision costs, so both have to ask the same question of the same
+   width. Sliders never stack: a slider is a TRACK, and a short track is
+   unusable in a way a short label is not. */
+const ctlRowStacks=(list,w)=>list.length>1 && !list.some(c=>c.kind==="sld")
+  && (w-CTL_GAP*(list.length-1))/list.length < CTL_KEY_MIN;
+const ctlRowSpan=(list,w)=>ctlRowStacks(list,w) ? list.length : 1;
 function ctlStrip(list,x,y,w,h){
-  const gap=4, tot=list.reduce((a,c)=>a+c.flex,0);
+  const gap=CTL_GAP, tot=list.reduce((a,c)=>a+c.flex,0);
+  const stack = ctlRowStacks(list,w);
   const span=(w-gap*(list.length-1))/tot;
-  let cx=x;
+  const rowH=stack ? (h-(list.length-1))/list.length : h;
+  let cx=x, cy=y;
   for(const c of list){
-    const cw=span*c.flex;
-    const dan = c.danger? c.danger() : false, on = c.on? c.on() : false;
-    if(c.kind==="sld"){ // LABEL: a control-strip WIDGET kind (slider vs button), unrelated to a pipe run's kind
-      slider(cx,y+h/2,cw,c.val(),c.min(),c.max(),
-        {th:h,tw:7,fmt:c.fmt,inert:c.inert,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
-         marks:c.marks?c.marks():null,
-         fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
-    } else if(c.kind==="arm"){   // LABEL: the same control-strip WIDGET kind, unrelated to a pipe run's kind
-      // armRow() states its own tooltip, so this row skips ctlStrip's below
-      armRow(cx,y,cw,h,{label:c.label(),fit:true,lit:on,fn:c.fn,title:c.title(),tip:c.tip});
-    } else {
-      // a narrow box loses its letter spacing before it loses its label
-      button(cx,y,cw,h,c.text(),{danger:dan,on:on,sunk:true,size:6.5,sp:cw<30?0:.5,fn:c.fn});
-    }
-    if(c.kind!=="arm") TIP(cx,y,cw,h,c.tip.split(" - ")[0],c.tip);   // LABEL: widget kind again, not a run kind
-    cx+=cw+gap;
+    const cw=stack ? w : span*c.flex;
+    ctlKey(c, cx, stack?cy:y, cw, stack?rowH:h);
+    if(stack) cy+=rowH+1; else cx+=cw+gap;
   }
+}
+// ONE KEY, wherever the row decided to put it - so a stacked row and a
+// side-by-side one are the same three widgets and not two copies of them
+function ctlKey(c,x,y,w,h){
+  const dan = c.danger? c.danger() : false, on = c.on? c.on() : false;
+  if(c.kind==="sld"){ // LABEL: a control-strip WIDGET kind (slider vs button), unrelated to a pipe run's kind
+    slider(x,y+h/2,w,c.val(),c.min(),c.max(),
+      {th:h,tw:7,fmt:c.fmt,inert:c.inert,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
+       marks:c.marks?c.marks():null,
+       fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
+  } else if(c.kind==="arm"){   // LABEL: the same control-strip WIDGET kind, unrelated to a pipe run's kind
+    // armRow() states its own tooltip, so this row skips ctlStrip's below
+    armRow(x,y,w,h,{label:c.label(),fit:true,lit:on,fn:c.fn,title:c.title(),tip:c.tip});
+  } else {
+    // a narrow box loses its letter spacing before it loses its size, and its
+    // size before its label - button() walks the rest of that ladder itself
+    button(x,y,w,h,c.text(),{danger:dan,on:on,sunk:true,size:6.5,sp:w<30?0:.5,fn:c.fn});
+  }
+  if(c.kind!=="arm") TIP(x,y,w,h,c.tip.split(" - ")[0],c.tip);   // LABEL: widget kind again, not a run kind
 }
 
 /* ══ THE GHOST PORT ══
@@ -1482,9 +1531,9 @@ function pipeFitMarks(L,net){
          lifting; bypassed or blocked, that is the number telling you nothing
          is going to. Against THIS valve's own lift point, never a plant-wide
          constant. */
-      const marg = P.P0*reliefSet(id).lift - L.P;
+      const marg = reliefSet(id).lift - reliefAtP(L,id);
       put(id, (marg>=0?"+":"")+marg.toFixed(2)+" MPa",
-          marg<0?C.red : marg<P.P0*0.02?C.amber : C.ink2, cx, r.y+1);
+          marg<0?C.red : marg<reliefRefP(id)*0.02?C.amber : C.ink2, cx, r.y+1);
     } else if(mode==="throttle"){
       /* THE DIFFERENTIAL IS WHAT A THROTTLE IS FOR. Position says what you
          asked for; only the drop says what it cost, and without it the knob
@@ -2065,7 +2114,7 @@ function readoutsFor(p,s){
     add("BANK POSITION",(s.rodPos*100).toFixed(1)+" %",null,
       "Where the bank stands. 100% is fully inserted, and the rods bite hardest around mid-travel rather than evenly.");
     add("BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",null,
-      "Where you have asked the bank to go. The drives walk to it at "+(ROD_RATE*100).toFixed(1)+" %/s, so this leads the position every time you move the slider.");
+      "Where you have asked the bank to go. The drives walk to it at "+(rodRate()*100).toFixed(1)+" %/s, so this leads the position every time you move the slider.");
     add("WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm",null,
       "What the bank is worth where it actually stands, solved on the live flux. Move a cluster inward at the bench and this changes.");
     add("DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green,
@@ -2086,31 +2135,6 @@ function readoutsFor(p,s){
     add("SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",
       band(P.sdm,-3000,3000,[[200,C.red,"THIN"],[3000,C.green,"AMPLE"]],{dp:0}),
       "How firmly the bank ALONE holds this core down once it cools and the xenon decays. Usually negative, and that is what boron is for.");
-  } else if(id==="pzr"){
-    add("PRESSURE",s.P.toFixed(2)+" MPa",
-      band(s.P,P.P0*.80,P.P0*1.15,
-        [[P.P0*0.935,C.amber,"LOW"],[P.P0*1.05,C.cyan,"NORMAL"],[P.P0*1.15,C.red,"HIGH"]],
-        {dp:2,lim:rpsLive()?[[P.P0*(1.06+0.07*m),"HI"],[P.P0*0.86,"LO"]]:null}),
-      "Loop pressure. It sets the temperature the coolant boils at, so every megapascal here is thermal margin.");
-    add("LEVEL",s.lvl.toFixed(1)+" %",
-      band(s.lvl,0,100,[[78,C.cyan,"NORMAL"],[100,C.amber,"HIGH"]],{dp:0}),
-      "Water level in the pressurizer. Level RISING while pressure falls is a stuck relief valve - the trap that wrecked Three Mile Island.");
-    // measured off the plant like DNBR's scale: a helium core sits 1400 K
-    // below boiling, water only 22, so a fixed ceiling would peg one or squash
-    // the other. The 8 K SATURATED line stays absolute regardless.
-    const scHi=Math.max(60,(P.tsat0-P.Tref)*1.25);
-    add("SUBCOOLING",sc.toFixed(1)+" K",
-      band(sc,0,scHi,[[8,C.red,"SATURATED"],[scHi,C.cyan,"SUBCOOLED"]],
-        {dp:0,lim:trip(3,"TRIP")}),
-      "Degrees below boiling in the hot leg. The honest leak indicator: it collapses before anything else admits the loop is voiding.");
-    add("SAT TEMP",tsat(s.P).toFixed(0)+" K",null,
-      "The temperature the coolant would boil at, at the pressure it is held to right now.");
-    /* Six rows about the relief valve used to live here, and every one of them
-       resolved to the FIRST relief fitting placed - so on a plant with three
-       relief valves this panel described one of them and pretended the other
-       two did not exist. They are readoutsForFit() rows now, one panel per
-       valve; the pressurizer keeps the four numbers that are genuinely its
-       own. audit-geometry scans this branch to keep it that way. */
   } else if(p.role==="sg"){
     add.apply(null,rowSgl(s,id));
     /* secP(), not a second copy of its formula: CLAUDE.md's rule is that the
@@ -2122,14 +2146,14 @@ function readoutsFor(p,s){
        question step() asks, and names them. None fitted is a real answer. */
     { const vents = reliefSecIds().filter(fid => shellsOf(fid).indexOf(id)>=0);
       add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",
-        band(secP(s,id),0,sgBurstP(),
-          [[sgDesignP()+(sgBurstP()-sgDesignP())*SG_P_WARN,C.green,"NORMAL"],
-           [sgDesignP()+(sgBurstP()-sgDesignP())*SG_P_HI,C.amber,"HIGH"],
-           [sgBurstP(),C.red,"NEAR BURST"]],{dp:2}),
+        band(secP(s,id),0,sgBurstP(id),
+          [[sgDesignP(id)+(sgBurstP(id)-sgDesignP(id))*SG_P_WARN,C.green,"NORMAL"],
+           [sgDesignP(id)+(sgBurstP(id)-sgDesignP(id))*SG_P_HI,C.amber,"HIGH"],
+           [sgBurstP(id),C.red,"NEAR BURST"]],{dp:2}),
         "Pressure on the secondary side of THIS generator, and it is what saturation says about the shell temperature below - not a formula about load. Steam raised faster than it can get away puts it up; "+
         (vents.length
-          ? vents.map(fid => nameOf(fid)+" lifts at "+(reliefRefP(fid)*reliefSet(fid).lift).toFixed(1)+" MPa").join(", ")+"."
-          : "nothing is fitted to let it out, so it climbs until the shell bursts at "+sgBurstP().toFixed(1)+" MPa.")); }
+          ? vents.map(fid => nameOf(fid)+" lifts at "+reliefSet(fid).lift.toFixed(1)+" MPa").join(", ")+"."
+          : "nothing is fitted to let it out, so it climbs until the shell bursts at "+sgBurstP(id).toFixed(1)+" MPa.")); }
     add("SHELL TEMP",sgTemp(s,id).toFixed(0)+" K",null,
       "The temperature of the water and steam in this shell. Heat crosses the tubes on the gap between this and the primary, so a shell that heats up stops cooling the core.");
     add("STEAM RAISED",(s.steamBy&&s.steamBy[id]||0).toFixed(0)+" kg/s",null,
@@ -2151,7 +2175,7 @@ function readoutsFor(p,s){
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
     add("SHELL",(s.sgBurst&&s.sgBurst[id])?"BURST":"intact",
         (s.sgBurst&&s.sgBurst[id])?C.red:C.green,
-      "The secondary pressure boundary. It bursts at "+sgBurstP().toFixed(1)+" MPa, and nothing stops it getting there except a relief valve you placed. Burst, it is open to atmosphere: it will not hold pressure again and it stops cooling its loop the moment it is empty.");
+      "The secondary pressure boundary. It bursts at "+sgBurstP(id).toFixed(1)+" MPa, and nothing stops it getting there except a relief valve you placed. Burst, it is open to atmosphere: it will not hold pressure again and it stops cooling its loop the moment it is empty.");
     add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
       sgActive(id)
         ?"The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment."
@@ -2167,14 +2191,14 @@ function readoutsFor(p,s){
     add("FEEDS",served.length?nameList(served):"nothing",
         served.length?null:C.amber,
       "Which generators are heated by this exchanger. It is the loop it is spliced into, asked of the drawing - an exchanger on no loop with no generator behind it heats nothing at all.");
-  } else if(primaryPump(id)){
+  } else if(roleHead(p.role)){
     /* A PUMP PANEL IS ABOUT THIS PUMP. The rail carries one well per part, so
        the plant-wide flow ledger that used to stand here was reprinted once per
        pump - four wells quoting one s.flowNet. Delivered core flow and the hot
        channel are the CORE's numbers and say so from the reactor's panel; what
        is left is per-instance, which is the standing s.flowBy/s.flowDemBy have
        had since every control became per-instance. */
-    const li=loopOf(id), cav=(s.cavP&&li!=null&&s.cavP[li])||0;
+    const cav=(s.cavP&&s.cavP[id])||0;
     add("PUMP SPEED",(flowOf(s,id)*100).toFixed(1)+" %",
       band(flowOf(s,id)*100,0,110,[[5,C.red,"STOPPED"],[110,C.cyan,"RUNNING"]],{dp:0}),
       "How fast THIS pump is actually turning. It is not what reaches the core: a shut valve downstream leaves this at 100% and starves the core anyway. CORE FLOW on the reactor panel is that number.");
@@ -2183,7 +2207,18 @@ function readoutsFor(p,s){
       "Where you have asked THIS pump to go. The main slider writes every pump at once; this pump's own strip writes only this one. Delivery lags it by "+FLOW_TAU+" s, and by "+FLOW_TAU_COAST+" s while coasting down in a blackout.");
     add("CAVITATION",(cav*100).toFixed(0)+" %",
       band(cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
-      "Vapour forming at this pump's own inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well. A loop with two pumps reads the worse of them, because that is the one the head loss costs.");
+      "Vapour forming at THIS pump's own inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well. Every pump reads its own suction: two pumps on one loop can be in different trouble, and a feedwater pump is the one a real plant loses this way.");
+    add("DEVELOPED HEAD",pumpHead(id).toFixed(2)+" MPa",null,
+      "The pressure rise this machine makes at rated speed. It is what the solve is given: what the pump actually delivers is that head against whatever the plumbing and the pressure on the far side cost it.");
+    /* A TANK READOUT, on the box that draws on the tank - not a pump control.
+       It stands here because it is this pump's own suction that a reserve
+       lining itself up is about, and it is asked of the DRAWING (secGensOf(),
+       layout.js), which is a name and never a fact the physics reads. */
+    if(secGensOf(id).length){
+      const arm=tankRuleAny(s,tankSecondary), any=secTankIds().some(tid=>D.tanks[tid].auto!=="always"&&D.tanks[tid].auto!=="manual");
+      add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
+        "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time.");
+    }
   } else if(p.role==="turb"){
     add("LOAD",(s.load*100).toFixed(1)+" %",null,
       "How hard the turbine is drawing steam. This is the demand the reactor spends its whole time trying to follow.");
@@ -2226,6 +2261,31 @@ function readoutsFor(p,s){
        config and its own solved flow, so the same rows describe an
        accumulator, a boron tank, a relief tank and a hotwell. */
     const t=D.tanks[id], fl=tankFluid(id), rate=(s.tankRate&&s.tankRate[id])||0;
+    /* ══ AND A HOLD TANK LEADS WITH WHAT IT HOLDS ══
+       The four rows the pressurizer's own branch used to carry, asked of the
+       CIRCUIT this vessel stands on rather than of s.P - so a second hold tank
+       on a second circuit prints its own numbers and not the primary's. */
+    if(t.hold){
+      const ci=tankCircuit(id), pv=loopP(s,ci), set=holdSetP(ci);
+      const scH=(s.scBy && s.scBy[ci]!==undefined) ? s.scBy[ci] : s.sc;
+      add("PRESSURE",pv.toFixed(2)+" MPa",
+        band(pv,set*.80,set*1.15,
+          [[set*0.935,C.amber,"LOW"],[set*1.05,C.cyan,"NORMAL"],[set*1.15,C.red,"HIGH"]],
+          {dp:2,lim:rpsLive()?[[set*(1.06+0.07*m),"HI"],[set*0.86,"LO"]]:null}),
+        "The pressure this vessel holds its circuit at. It sets the temperature the coolant boils at, so every megapascal here is thermal margin.");
+      // measured off the plant like DNBR's scale: a helium core sits 1400 K
+      // below boiling, water only 22, so a fixed ceiling would peg one or
+      // squash the other. The 8 K SATURATED line stays absolute regardless.
+      const scHi=Math.max(60,(P.tsat0-P.Tref)*1.25);
+      add("SUBCOOLING",scH.toFixed(1)+" K",
+        band(scH,0,scHi,[[8,C.red,"SATURATED"],[scHi,C.cyan,"SUBCOOLED"]],
+          {dp:0,lim:trip(3,"TRIP")}),
+        "Degrees below boiling at this vessel. The honest leak indicator: it collapses before anything else admits the loop is voiding.");
+      add("SAT TEMP",tsatSec(pv,ci).toFixed(0)+" K",null,
+        "The temperature the coolant would boil at, at the pressure it is held to right now.");
+      add("SETPOINT",set.toFixed(2)+" MPa",C.ink2,
+        "What this vessel is asked to hold. Set it on the bench; the plant walks its programme about this figure.");
+    }
     add("CONTENTS",fl.label.toLowerCase()+", "+fl.temp.toFixed(0)+" K",null,
       "What is in this tank. Activity and reactivity worth follow from this and from nothing else"
       +(fl.boron?" - a tank of this is worth "+fl.boron+" pcm for every 1 % of loop inventory it pushes in.":"."));
@@ -2276,13 +2336,6 @@ function readoutsFor(p,s){
       "Whether main power to the coolant pumps has gone. Test it from the FAULTS panel before you ever need to know.");
     add("CAPACITY",(P.backup*100).toFixed(0)+" %",null,
       "Share of pump flow your backup supply can still turn. Everything above this has to come from buoyancy.");
-  /* A PUMP THAT FEEDS A GENERATOR'S SHELL - asked of the drawing (secGensOf(),
-     layout.js), never of the id "feed". There is one pump role, so which
-     panel a pump gets is a question about where it is piped. */
-  } else if(roleHead(p.role) && secGensOf(id).length){
-    { const arm=tankRuleAny(s,tankSecondary), any=secTankIds().some(id=>D.tanks[id].auto!=="always"&&D.tanks[id].auto!=="manual");
-      add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
-        "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time."); }
   } else if(p.role==="radiator"){
     /* The LIVE half of the radiator panel - the bench has no S, so PANEL TEMP
        and what this one is actually shedding can only be said here. */
@@ -2393,15 +2446,15 @@ function readoutsForFit(fid,s){
       iso?C.amber:null,
       sec?"The steam generator shells this valve can reach on the steam side. It lifts on the worst of them, which is what a valve on a common header actually sees. A shut port valve on its branch cuts it off from all of them, and a valve that can see no shell can neither lift nor pass."
          :"This valve is on the primary. It lifts on loop pressure and vents inventory through its own branch.");
-    add("LIFT SETPOINT",(refP*set.lift).toFixed(2)+" MPa",null,
+    add("LIFT SETPOINT",set.lift.toFixed(2)+" MPa",null,
       "Where THIS valve opens on its own. It has an 18% chance of sticking open every single time it lifts.");
-    add("RESEAT SETPOINT",(refP*set.reseat).toFixed(2)+" MPa",null,
+    add("RESEAT SETPOINT",set.reseat.toFixed(2)+" MPa",null,
       "Where it shuts again. The gap up to the lift point is its deadband - narrow it and the valve cycles on the setpoint instead of lifting once and clearing it. Both are set at the design bench.");
     // scale is a share of THIS plant's pressure (a sodium loop runs at 0.2
     // MPa); the 0.3 MPa NEAR LIFT line stays absolute and can sit off the end
     // on a low-pressure plant, honestly saying it's always close to lifting
     const mlLo=Math.min(-0.1,-refP*.04), mlHi=Math.max(0.4,refP*.12);
-    const marg = refP*set.lift - atP;
+    const marg = set.lift - atP;
     add("MARGIN TO LIFT",marg.toFixed(2)+" MPa",
       band(marg,mlLo,mlHi,[[0.3,C.amber,"NEAR LIFT"],[mlHi,C.cyan,"CLEAR"]],{dp:2}),
       "How much pressure is left before this valve lifts by itself. Negative means it is passing right now.");
@@ -2412,7 +2465,7 @@ function readoutsForFit(fid,s){
        balances are written in and a shared unit would be a made-up conversion. */
     if(sec){
       const kg=(s.reliefSteam&&s.reliefSteam[fid])||0;
-      const full=SG_RELIEF_CAP*ratedSteam()*fitBore(fid)*fitBore(fid);
+      const full=SG_RELIEF_CAP*ratedSteam()*fitBoreK(fid)*fitBoreK(fid);
       add("RELIEF FLOW",kg.toFixed(0)+" kg/s",
         band(kg,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:0}),
         "Steam leaving this generator to atmosphere through this valve. It goes over the side and the water in it does not come back, so a shell held on its valve boils itself dry. What it can pass is set by its BORE - undersize it and the shell bursts anyway.");
@@ -2649,15 +2702,20 @@ function drawPlant(y0,L,vh,vx,vw){
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";
-    const w = pipeWidth(runBore(r));
+    // BORE is the fluid line's width and WALL is the casing beyond it. The two
+    // were one number drawn twice, because until now there was nothing to tell
+    // them apart - a run states both in millimetres now.
+    const w = pipeWidth(runBore(r)), cw = w + 2*pipeWallPx(r);
     /* THE OUTLINE, around the casing rather than inside it, so the highlight is
        the pipe's own shape and needs no second geometry. Drawn from EITHER end
        of the hover - pointing at the pipe and pointing at its label are the same
        pairing asked from the two sides, and with the layers off the outline is
        the only thing tying the readings that appeared to the run they are on. */
-    if(!pass && pipeHov===r.key){
-      ctx.lineWidth=2*w+3; ctx.strokeStyle=C.amber; ctx.stroke(); }
-    ctx.lineWidth = pass? w : 2*w;
+    // ...and the SELECTED run keeps that outline whether or not the pointer is
+    // on it, which is the same thing a selected machine's box already does
+    if(!pass && (pipeHov===r.key || sel===r.key)){
+      ctx.lineWidth=cw+3; ctx.strokeStyle=C.amber; ctx.stroke(); }
+    ctx.lineWidth = pass? w : cw;
     ctx.strokeStyle = pass? pipeCol(PC,r.k) : PIPE_CASE;
     ctx.stroke();
   }
@@ -2691,8 +2749,9 @@ function drawPlant(y0,L,vh,vx,vw){
        reserve the room and draw an empty plinth. */
     const ctl = fit ? (live ? ctlFor(p,true,S.split) : ctlBench(ctlFor(p,false,false))) : null;
     const byk = fit ? autoOn(p.id) : null,
-          bh  = byk? CTL_H : 0,
-          sh  = stripH(p,live), sy = y+h-sh;
+          plan= stripPlan(p,live), keyH = plan.keyH, pitch = keyH+CTL_STRIP_GAP,
+          bh  = byk? pitch : 0,
+          sh  = plan.sh, sy = y+h-sh;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
     // `fit &&`, or a NOT FITTED tag would draw a REPAIR key across itself -
@@ -2710,14 +2769,19 @@ function drawPlant(y0,L,vh,vx,vw){
        strip is part of the machine, so it stands on the machine's own panel. */
     // the top row inside the box, where the name lives. Deep enough to clear
     // the box's own border and leave air above the caps.
-    const nameH = h>CELL ? 14 : 0;
+    // WHAT THE STRIP LEFT (stripPlan): the name row is the ladder's last rung,
+    // so this is read off the same plan the keys are drawn from
+    const nameH = plan.nameH;
     // THE PANEL IS THE FOOTPRINT, to the pixel: a 2px inset left the grid line
     // showing inside the machine's own cells, so a box read one size and
     // occupied another.
     if(fit) fillRect(x,y,w,h,C.panel);
     if(on) fillRect(x,y,w,h,"rgba(240,168,48,.07)");
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
-    if(fit) drawSym(p,x,y+nameH,w,h-sh-nameH,ink,L);
+    // stripPlan()'s last rung takes the room it needs even where there is
+    // none, so the symbol can be asked for a negative rectangle - it is
+    // simply not drawn then, rather than drawn inside out
+    if(fit && h-sh-nameH > 0) drawSym(p,x,y+nameH,w,h-sh-nameH,ink,L);
     if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); cornerTab(x+w,y,9,C.red);
       // a wrecked machine that is still energised. It dies down as the repair
       // party gets on top of it, so the effect tracks the work, not just the hit
@@ -2787,17 +2851,31 @@ function drawPlant(y0,L,vh,vx,vw){
        too, so a valve worked from the rail keeps its strip. */
     if(ctl && p.role==="fitting"){
       const fw=FITSTRIP_W, fx=x+w/2-fw/2;
-      const sr={x:fx,y:y+h,w:fw,h:3+ctl.length*CTL_H,v:1,host:ui.host};
+      /* THE SAME LADDER EVERY OTHER STRIP WALKS. A fitting's handles hang in
+         the margin rather than inside its one cell, so nothing here is
+         squeezed by a BOX - but the strip is only FITSTRIP_W wide, which is
+         one key on an ordinary component, so a two-key row stacks here for
+         exactly the reason it stacks anywhere. Asked of ctlRowSpan(), the one
+         predicate, so the ground drawn under the keys is the height the keys
+         actually take. */
+      let sh2=3; for(const row of ctl) sh2 += ctlRowSpan(row,fw)*CTL_H;
+      const sr={x:fx,y:y+h,w:fw,h:sh2,v:1,host:ui.host};
       if(hovd||on||hovHold(sr)||sldIn(sr))
         hovCtl.push(()=>{
           // its own ground, or the pipework it hangs over reads through the keys
-          fillRect(fx,y+h,fw,3+ctl.length*CTL_H,C.panel);
-          ctl.forEach((row,i)=>ctlStrip(row,fx,y+h+3+i*CTL_H,fw,BTN_H)); });
+          fillRect(fx,y+h,fw,sh2,C.panel);
+          let ry=y+h+3;
+          for(const row of ctl){ const sp=ctlRowSpan(row,fw);
+            ctlStrip(row,fx,ry,fw,sp*CTL_H-CTL_STRIP_GAP); ry+=sp*CTL_H; } });
     }
-    else if(ctl) ctl.forEach((row,i)=>ctlStrip(row,x+4,sy+i*CTL_H+1,w-8,BTN_H));
+    // a STACKED row is as many rows tall as it has keys, and stripPlan()
+    // reserved exactly that - both ask ctlRowSpan() of the same width
+    else if(ctl){ let ry=sy+1;
+      for(const row of ctl){ const sp=ctlRowSpan(row,w-8);
+        ctlStrip(row,x+4,ry,w-8,sp*pitch-CTL_STRIP_GAP); ry+=sp*pitch; } }
     // ...and the arming switch is a starting position too - that is the RPS
     // bypass case: commission with protection already defeated if you mean to.
-    if(byk && fit) bypRow(byk,x+4,y+h-STRIP_PAD-bh+1,w-8,BTN_H,!live);
+    if(byk && fit) bypRow(byk,x+4,y+h-STRIP_PAD-bh+1,w-8,keyH,!live);
   }
   pipeNozzles(NET,L);           // the joint, over the shell it lands on
   /* ...and the valves in those joints, AFTER the component loop. A joint
