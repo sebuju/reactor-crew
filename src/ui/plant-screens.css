@@ -264,12 +264,24 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-review-ok{font-size:var(--t8-5);color:var(--c-green)}
 .kit-well.blocked{outline:1px solid var(--c-red);outline-offset:-1px}
 /* one row per TRACED connection - kind, the two machines it joins, its length */
-.db-pipe-row{display:flex;gap:6px;align-items:baseline;padding:2px 0;font-size:var(--t8);cursor:pointer}
+/* ONE TEMPLATE, so every run's numbers stand in the same columns - a flex row
+   sized each cell to its own text, and a 750 mm bore landed under the run
+   beside it's length */
+.db-pipe-row{display:grid;grid-template-columns:4.2em minmax(0,1fr) 2.6em 3.2em 3.2em;
+  gap:6px;align-items:baseline;padding:2px 0;font-size:var(--t8);cursor:pointer}
+.db-pipe-head{cursor:default;color:var(--c-ink2);font-size:var(--t7);
+  border-bottom:1px solid var(--c-panel-hi);padding-bottom:3px;margin-bottom:2px}
+.db-pipe-row.db-pipe-head:hover{background:none}
+.db-pipe-head .db-pipe-kind{color:var(--c-ink2);font-weight:400}
+.db-pipe-bore,.db-pipe-wall{text-align:right;color:var(--c-ink);font-variant-numeric:tabular-nums}
 .db-pipe-row:hover{background:var(--c-panel-hi)}
-.db-pipe-row.on{background:var(--c-panel-hi);box-shadow:inset 2px 0 0 var(--c-amber)}
-.db-pipe-kind{flex:0 0 4.2em;color:var(--c-cyan);font-weight:700}
-.db-pipe-ends{flex:1 1 auto;color:var(--c-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.db-pipe-len{flex:0 0 auto;color:var(--c-ink2)}
+/* the SAME selection every list on the board wears (kit-optlist-row.on) - a
+   picked run was the one row with a colour of its own plus an edge stripe */
+.db-pipe-row.on{background:var(--c-on-amber);color:var(--c-amber)}
+.db-pipe-row.on > span{color:var(--c-amber)}
+.db-pipe-kind{color:var(--c-cyan);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.db-pipe-ends{color:var(--c-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.db-pipe-len{color:var(--c-ink2);text-align:right}
 /* the control room's own copy, off the COMMISSIONED network */
 .cr-cnx{padding:6px 8px 8px}
 .cr-cnx-row{display:flex;gap:6px;justify-content:space-between;padding:2px 0;font-size:var(--t8)}
