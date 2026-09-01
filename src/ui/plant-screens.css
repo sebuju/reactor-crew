@@ -264,7 +264,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-review-ok{font-size:var(--t8-5);color:var(--c-green)}
 .kit-well.blocked{outline:1px solid var(--c-red);outline-offset:-1px}
 /* one row per TRACED connection - kind, the two machines it joins, its length */
-.db-pipe-row{display:flex;gap:6px;align-items:baseline;padding:2px 0;font-size:var(--t8)}
+.db-pipe-row{display:flex;gap:6px;align-items:baseline;padding:2px 0;font-size:var(--t8);cursor:pointer}
+.db-pipe-row:hover{background:var(--c-panel-hi)}
+.db-pipe-row.on{background:var(--c-panel-hi);box-shadow:inset 2px 0 0 var(--c-amber)}
 .db-pipe-kind{flex:0 0 4.2em;color:var(--c-cyan);font-weight:700}
 .db-pipe-ends{flex:1 1 auto;color:var(--c-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .db-pipe-len{flex:0 0 auto;color:var(--c-ink2)}

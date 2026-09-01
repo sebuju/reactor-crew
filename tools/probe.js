@@ -101,15 +101,16 @@ function dump(s,label){
 
 /* ══ CASES ══ disposable. Add one, read it, delete it. */
 const CASES={
-  stock(){ const s=withPlant(null); run(s,600); dump(s,"stock plant, 1 loop"); },
-  loops4(){ const s=withPlant(null,{loops:4}); run(s,600); dump(s,"stock plant, 4 loops"); },
+  stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
+  loops4(){ const s=withPlant(null,{loops:4}); run(s,PSEC); dump(s,"stock plant, 4 loops"); },
   selfrun(){ const s=withPlant(M=>{
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
       M.seedRun(a,b); });
       run(s,120); dump(s,"a run from a machine back to itself"); },
 };
 
-const args=process.argv.slice(2);
+const args=process.argv.slice(2).filter(a=>!/^--secs=/.test(a));
+const PSEC=+((process.argv.find(a=>/^--secs=/.test(a))||"").split("=")[1])||600;
 if(args[0]==="--list"){ console.log(Object.keys(CASES).join("\n")); process.exit(0); }
 const pick=args.length?args:["stock"];
 for(const k of pick){
