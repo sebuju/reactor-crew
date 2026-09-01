@@ -1131,7 +1131,9 @@ const autorodTune = () => { const lag=autorodLag();
    bigger motor and the mass budget says so. The tilt trim and the reganging
    walk are both derived from it, so retuning the drives cannot leave one of
    the three behind. P.scram replaces it on a trip. */
-const rodRate = () => P.rodRate;
+// P is null on the bench, where ctlFor()'s tilt tip asks for it; commission()
+// copies the same D.rodSpd into P, so the two answers cannot differ
+const rodRate = () => P ? P.rodRate : D.rodSpd;
 /* actuator rates. Boration is charging-pump flow; dilution has to displace loop
    inventory, so it is slower. Poisoning yourself is easy, getting back out is not. */
 const BOR_IN=60, BOR_OUT=35;            // pcm/s toward more / less boron
