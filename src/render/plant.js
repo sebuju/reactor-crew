@@ -111,7 +111,7 @@ function portColOf(pid,L){
   if(L && L.portShut && L.portShut[pid]) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
   const f=portFaceOf(pid), IN=portPath(partOf(q.p), f);
-  return !IN ? C.metal : IN.a===f ? C.portA : C.portB;
+  return !IN ? C.metal : portEnd(partOf(q.p),f)==="a" ? C.portA : C.portB;
 }
 // THE JOINT ITSELF - a small flanged rectangle standing proud of the shell,
 // its long axis across the bore and its short axis the direction it faces.
@@ -129,6 +129,50 @@ function drawNozzle(px,py,flat,bore,col){
   const r=nozzleRect(px,py,flat,bore);
   fillRect(r.x,r.y,r.w,r.h,PIPE_CASE);
   fillRect(r.x+1,r.y+1,r.w-2,r.h-2,col);
+}
+/* ══ THE BORE EACH JOINT IS DRAWN AT, AND THE RECT THAT FOLLOWS FROM IT ══
+   ONE answer, because three passes were each working it out: pipeNozzles()
+   asked the run, the control room's valve ring built its own map, and the
+   bench's own mark assumed a bore of 1 for every port on the board - so a
+   900 mm main steam nozzle drew at the size of a drain on one screen and full
+   size on the other, and the word sitting in it was centred on the port's CELL,
+   which is neither shape. A port with nothing piped to it IS a bore of 1: that
+   is the only case with no run to ask. */
+function portBores(){
+  const b={};
+  for(const r of pipeNetwork()){ const v=runBore(r);
+    b[r.pa]=Math.max(b[r.pa]||0,v); b[r.pb]=Math.max(b[r.pb]||0,v); }
+  return b;
+}
+const portFlat = f => f==="l"||f==="r";
+function portNozzleRect(pid,f,bore){
+  const [nx,ny]=portPos(pid);
+  return nozzleRect(nx,ny,portFlat(f),bore||1);
+}
+/* ══ AND THE WORD LIES ALONG THE JOINT ══
+   A nozzle on a side face is TALL AND NARROW and one on a top or bottom face
+   is WIDE AND SLIM, so a single upright label could only ever suit half of
+   them. Turned a quarter turn on the side faces, every word gets its own
+   joint's LONG axis to spend and they all size by one rule.
+   SCALED, never clipped: clipTxt() truncates and a cut label is a different
+   label. It gets small, and that is the trade - the COLOUR already says which
+   side of the machine this is, and the word is there to be zoomed into.
+   DARK ON THE JOINT, because the joint is a FILL: C.inkOnLit is the palette's
+   own near-black for exactly this - ink that goes on top of a bright ground.
+   White was tried and is wrong; a mid-tone fill wants dark ink, not light.
+   PORT_WORD_PAD is a clear pixel on every side, so the word never touches the
+   casing it is standing on. */
+const PORT_WORD_PAD=1;
+function portWordDraw(pid,f,word,r){
+  const vert=portFlat(f), REF=10, pad=2*PORT_WORD_PAD;
+  const long=(vert?r.h:r.w)-pad, short=(vert?r.w:r.h)-pad;
+  const sz=Math.min(short, REF*long/Math.max(tw(word,{size:REF,sp:0}),1e-6));
+  if(!(sz>0.5)) return;
+  ctx.save();
+  ctx.translate(r.x+r.w/2, r.y+r.h/2);
+  if(vert) ctx.rotate(-Math.PI/2);
+  txt(word,0,sz*0.36,{size:sz,color:C.inkOnLit,align:"center",sp:0});
+  ctx.restore();
 }
 function pipeNozzles(NET,L){
   for(const r of NET){
@@ -424,17 +468,32 @@ function drawSym(p,x,y,w,h,ink,L){
     ctx.restore();
     dot(cx-2,cyT-2,4,ink);                                     // the hub
   } else if(p.role==="radiator"){
+    /* A BLIND PANEL IS DRAWN BLIND. radLive() is false and radArea() is
+       already exactly 0, so this machine is doing nothing at all - and the
+       only thing that used to say so was a SOFT line in the bench's warning
+       list and a 8px dot the control room does not draw. The picture is where
+       the mistake was made, so the verdict goes on the box: dead fins, no
+       radiating ticks, and the amber hatch every other "this is not working"
+       verdict on this canvas already uses. It reads on BOTH screens, because
+       drawSym() is the one door and neither screen has a second one. */
+    const blind=!radLive(p.id);
     // fins, and they radiate: the ticks fade with how far the panel sits above
     // the sky rather than being decoration
-    const hot=clamp((((L&&L.radT)||RAD_TDES)-RAD_TDES)/60,0,1);
+    const hot=blind?0:clamp((radTOf(L,p.id)-RAD_TDES)/60,0,1);
     // PANEL TEMP on the box, not only in the well
     if(hot>0) fillRect(X,Y,W,Hh,"rgba(255,150,90,"+(0.06+0.30*hot).toFixed(2)+")");
-    for(let i=1;i<W/7;i++) fillRect(X+i*7,Y+3,2,Hh-6,"rgba(184,196,207,.55)");
-    ctx.save(); ctx.strokeStyle="rgba(255,150,90,"+(0.15+0.55*hot).toFixed(2)+")";
-    ctx.lineWidth=1;
-    for(let i=0;i<4;i++){ const yy=Y+Hh*0.2+i*Hh*0.2;
-      ctx.beginPath(); ctx.moveTo(X+3,yy); ctx.lineTo(X+W-3,yy); ctx.stroke(); }
-    ctx.restore();
+    for(let i=1;i<W/7;i++) fillRect(X+i*7,Y+3,2,Hh-6,
+      blind?"rgba(184,196,207,.18)":"rgba(184,196,207,.55)");
+    if(!blind){ ctx.save(); ctx.strokeStyle="rgba(255,150,90,"+(0.15+0.55*hot).toFixed(2)+")";
+      ctx.lineWidth=1;
+      for(let i=0;i<4;i++){ const yy=Y+Hh*0.2+i*Hh*0.2;
+        ctx.beginPath(); ctx.moveTo(X+3,yy); ctx.lineTo(X+W-3,yy); ctx.stroke(); }
+      ctx.restore(); }
+    else { hatch(X,Y,W,Hh,C.amber,.22); frame(X,Y,W,Hh,C.amber);
+      // BLIND, not "NO VIEW OF SPACE": clipTxt() TRUNCATES, and a cut label is
+      // a different label. The tip and the rail carry the sentence.
+      clipTxt("BLIND",X+W/2,Y+Hh/2+2,W-6,
+        {size:6.5,sp:.6,step:false,align:"center",color:C.amber}); }
   } else if(p.role==="cond"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     for(let i=1;i<7;i++) fillRect(X+i*(W/7),Y+5,1,Hh-10,"rgba(140,170,178,.45)");
@@ -1274,14 +1333,11 @@ function eachPort(fn){
   }
 }
 function drawPortMarks(){
-  // ONE WORD PER (part, face), never one per port sharing it: two ports on one
-  // face carrying the same side would otherwise stack an identical label on
-  // top of itself. The mark and the press are still per PORT.
-  const seenWord={};
-  const owner=pipeMap().cellOwner;
+  const owner=pipeMap().cellOwner, bore=portBores();
   eachPort((pid,p,f,c)=>{
     const [x,y]=cellPos(c[0],c[1]), bx=x-PORTG/2, by=y-PORTG/2;
-    const IN=portPath(p,f), col=IN ? (IN.a===f?C.portA:C.portB) : C.metal;
+    const IN=portPath(p,f), col=IN ? (portEnd(p,f)==="a"?C.portA:C.portB) : C.metal;
+    const nr=portNozzleRect(pid,f,bore[pid]);
     // A PIPED PORT'S NOZZLE IS DRAWN BY THE RUN (pipeNozzles()), landing on
     // this exact point. A BARE port draws its own here - the same mark, not a
     // placeholder for it - so a fresh port reads as placed before any pipe
@@ -1289,25 +1345,17 @@ function drawPortMarks(){
     // count, so two connections sharing a port cannot double-draw the joint.
     const out=[c[0]+DIRV[f][0], c[1]+DIRV[f][1]];
     const piped=!!owner[out[0]+","+out[1]];
-    if(!piped){ const [nx,ny]=portPos(pid); drawNozzle(nx,ny,f==="l"||f==="r",1,col); }
+    if(!piped){ const [nx,ny]=portPos(pid); drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col); }
     const wd=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid});
-    if(hov(wd)) fillRect(bx+2,by+2,PORTG-4,PORTG-4,col);
+    // the JOINT lights up, not a square drawn near it - drawPortValves()' own
+    // rule, and the same rect it rings
+    if(hov(wd)) fillRect(nr.x+1,nr.y+1,nr.w-2,nr.h-2,col);
+    /* ONE WORD PER NOZZLE, IN THE NOZZLE. It used to be a plate in the margin
+       deduped to one per FACE, so a turbine's four steam nozzles carried a
+       single label sitting on the first of them - and the plate landed in the
+       lane the pipework runs through and read as a component. */
     const word = portWord(p,f);
-    const wk=p.id+f+word;
-    /* A PLATE UNDER THE WORD. It is drawn in the same margin the pipework runs
-       through, so on a dense grid it landed on top of a pipe and read as part
-       of it. */
-    // BESIDE THE NOZZLE, which sits on the shell and not in the port cell's
-    // middle - a fixed offset to the right named the wrong side of a machine.
-    if(word && !seenWord[wk]){ seenWord[wk]=1;
-      const t={size:6.5,sp:.4}, pw=tw(word,t)+4, ph=10, [fx,fy]=DIRV[f];
-      const [nx,ny]=portPos(pid);
-      const px = fx ? nx+fx*3-(fx<0?pw:0) : nx-pw/2;
-      const py = fy ? ny+fy*3-(fy<0?ph:0) : ny-ph/2;
-      // the same plate every other label on the board wears (tag()), not a
-      // solid well: an opaque box in the pipe margin reads as a component
-      fillRect(px,py,pw,ph,"rgba(6,10,11,.88)");
-      txt(word,px+2,py+6.5,{size:6.5,color:col,align:"left",sp:.4}); }
+    if(word) portWordDraw(pid,f,word,nr);
     const nm=partName(p), longWord=IN&&portWord(p,f,true);
     TIP(bx,by,PORTG,PORTG, (longWord?longWord+" - ":"")+nm,
       (piped? "A pipe is landed on it. " : "Nothing is piped to this port yet. ")+
@@ -1346,17 +1394,14 @@ const PORT_RING=2;              // how far past the joint a press still counts
 let portRing=null;
 function drawPortValves(L){
   portRing=null;
-  // the bore each joint was drawn at, off the runs that land on it - the same
-  // figure pipeNozzles() hands drawNozzle(), so the ring cannot be a size the
-  // joint is not. A port with nothing piped to it drew itself at bore 1.
-  const bore={};
-  for(const r of pipeNetwork()){ const b=runBore(r);
-    bore[r.pa]=Math.max(bore[r.pa]||0,b); bore[r.pb]=Math.max(bore[r.pb]||0,b); }
+  // the bore each joint was drawn at, off the runs that land on it - portBores()
+  // is the one answer, so the ring cannot be a size the joint is not
+  const bore=portBores();
   eachPort((pid,p,f,c)=>{
     const shut=!portOpen(L,pid);
     const col=portColOf(pid,L);
     const [nx,ny]=portPos(pid);
-    const nr=nozzleRect(nx,ny,f==="l"||f==="r",bore[pid]||1);
+    const nr=portNozzleRect(pid,f,bore[pid]);
     const r={x:nr.x-PORT_RING, y:nr.y-PORT_RING,
              w:nr.w+2*PORT_RING, h:nr.h+2*PORT_RING};
     const wd=push({x:r.x,y:r.y,w:r.w,h:r.h,type:"portv",pid});
@@ -1364,7 +1409,14 @@ function drawPortValves(L){
     /* A port nothing is piped to has no run to draw its joint (pipeNozzles()),
        so it draws its own - the same mark, in the same colour, which is now
        red. Piped or not, a shut valve looks the same. */
-    if(shut) drawNozzle(nx,ny,f==="l"||f==="r",bore[pid]||1,col);
+    if(shut) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col);
+    /* AND THE WORD, on the running plant too. drawPortMarks() is the BENCH's
+       pass and runs behind `if(!L)`, so every nozzle on the control room was
+       unnamed - which is the screen where knowing a pump's suction from its
+       discharge actually decides something. portWordDraw() is the one
+       primitive, so the two screens cannot label a joint differently. */
+    const word=portWord(p,f);
+    if(word) portWordDraw(pid,f,word,nr);
     TIP(r.x,r.y,r.w,r.h, portLabel(pid)+"  [ "+(shut?"SHUT":"OPEN")+" ]",
       "The isolation valve in this nozzle. Every port has one, it costs nothing, and it commissions open. Shutting it takes the run landed here out of the network entirely - which is how a leak is cut out of a live plant, and equally how a loop is starved by mistake. Click to work it.");
   });
@@ -2234,13 +2286,15 @@ function readoutsFor(p,s){
   } else if(p.role==="radiator"){
     /* The LIVE half of the radiator panel - the bench has no S, so PANEL TEMP
        and what this one is actually shedding can only be said here. */
-    add("PANEL TEMP",s.radT.toFixed(0)+" K",
-      band(s.radT,RAD_TDES*0.7,tsatSec(COND_ATM)-COND_DT0,
+    add("PANEL TEMP",radTOf(s,id).toFixed(0)+" K",
+      band(radTOf(s,id),RAD_TDES*0.7,tsatSec(COND_ATM)-COND_DT0,
         [[RAD_TDES,C.cyan,"NORMAL"],[tsatSec(TURB_TRIP_P)-COND_DT0,C.amber,"HOT"],
          [Infinity,C.red,"NO SINK"]],{dp:0,lim:[[RAD_TDES,"DESIGN"]]}),
-      "How hot the panels are running. Every panel on the ship is one pot, so this is the sink the whole plant has. Design is "+RAD_TDES+" K at rated rejection; rejection goes as the FOURTH power of this, so a modest overload costs little and a large one costs the turbine.");
+      "How hot THIS panel is running - its own pot, because a panel cools whatever it is plumbed to and two panels need not be on the same circuit. Design is "+RAD_TDES+" K at rated rejection; rejection goes as the FOURTH power of this, so a modest overload costs little and a large one costs the turbine.");
     add("THIS PANEL SHEDS",(radRejOf(s,id)/1000).toFixed(0)+" MWt",null,
       "What this one panel is radiating. Blind or destroyed, it is zero and the rest of the fleet carries the whole load.");
+    add("TAKING FROM WATER",((s.radQBy[id]||0)/1000).toFixed(0)+" MWt",null,
+      "What this panel is pulling out of the coolant running through it. Piped to nothing, or with nothing turning that coolant, it is zero however much area the panel has - a radiator is a heat exchanger first and a surface second.");
     add("CAN SHED",radLive(id)?"YES":"NO",radLive(id)?C.green:C.red,
       "Whether this panel has a face on the skin. Walled in, it sheds nothing and warms the compartment instead.");
   } else if(p.role==="cond"){
@@ -2265,10 +2319,10 @@ function readoutsFor(p,s){
     /* THE CHAIN, END TO END. All of these were computed and none was visible,
        and the radiator makes the last two the whole story: two pots in series,
        so an operator has to be able to see which one is failing. */
-    add("TERMINAL DIFF",(s.condT-s.radT).toFixed(0)+" K",
-      band(s.condT-s.radT,0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
+    add("TERMINAL DIFF",(s.condT-s.cwInT).toFixed(0)+" K",
+      band(s.condT-s.cwInT,0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
         [COND_DT0*2,C.amber,"WIDE"],[Infinity,C.red,"FOULED"]],{dp:0}),
-      "How far this machine sits above the radiator it rejects into. Design is "+COND_DT0+" K at rated duty; a small or a drowned condenser sits further above for the same heat, and pays for it in backpressure.");
+      "How far this machine sits above the water arriving to cool it. Design is "+COND_DT0+" K at rated duty; a small or a drowned condenser sits further above for the same heat, and pays for it in backpressure.");
     add("DROWNED TUBES",((1-condFrac(s))*100).toFixed(0)+" %",
       band((1-condFrac(s))*100,0,100,[[1,C.cyan,"CLEAR"],[25,C.amber,"FLOODING"],[Infinity,C.red,"DROWNED"]],{dp:0}),
       "How much of the tube bundle is standing in its own condensate. A hotwell that has filled up takes the capacity with it, which is how a turbine ends up exhausting into a full condenser for nothing.");
