@@ -280,7 +280,7 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
          condUA:{}, condDump:{},   // kW/K of condensing duty; kg/s of bypass
          sgUA:{}, ihxUA:{},   // kW/K per transfer stage
          pumpHead:{}, pumpFlow:{}, // MPa developed, at kg/s
-         sgType:{},radCoat:{},radArea:{},   // m2 of panel, per panel
+         sgType:{},radCoat:{},radArea:{},radUA:{},   // m2 of panel, and kW/K of its coolant side
          bore:{},             // mm, per run key - a pipe is a diameter
          /* NO STOCK PLUMBING DECLARED HERE. The tanks, the fittings and the
             runs are BUILT - buildStockPlumbing() (pipenet.js) lays them
@@ -296,6 +296,10 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
             it to and the value resetPlant() seeds from. Absent means "whatever
             resetPlant() hard-codes", which is what keeps an untouched design
             commissioning bit-identically. */
+         /* D.cells[partId] = [x,y] - where the player DRAGGED a part to. A
+            fixed slot's x,y in buildLayout() is only the default it commissions
+            at, so without this a move survived exactly until the next rebuild. */
+         cells:{},
          tanks:{}, pipes:{}, ports:{}, start:{}};
 
 /* WHERE AN ACTUATOR STANDS THE MOMENT THE PLANT IS COMMISSIONED. Absent means
@@ -315,7 +319,7 @@ const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : f
    behind commissions it in the last one's hands. Emptied in place, never
    rebuilt: the bags are read through D and a reassignment strands a holder. */
 const DBAGS=["turbKgs","condUA","condDump","sgUA","ihxUA","pumpHead","pumpFlow",
-             "sgType","radCoat","radArea","bore","start"];
+             "sgType","radCoat","radArea","radUA","bore","start"];
 /* and the scalars, taken before anything can edit them. A whole-plant preset
    states a handful of them, so every one it does not state has to be back at
    its own default or the plant carries the last design's containment, its
