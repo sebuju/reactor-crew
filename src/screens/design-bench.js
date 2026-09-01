@@ -14,27 +14,6 @@ const blockAcc = key => typeof key==="string"
 function massWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
   const m=derived().mass; a.set(o); return m; }
 
-/* Nameplate pump capacity vs what a loop's own ceiling will ever pass right
-   now - netFlowK()'s per-group min(groupSize,up) clamp (pipenet.js), read
-   here as-commissioned: every cross-tie starts shut (resetPlant()), so each
-   loop is its own singleton group and the clamp is just min(1,up) per loop.
-   totalPumpCap() is damage-blind by construction (LAY.parts carries no
-   damage), so it is exactly "what you built"; the per-loop sum is exactly
-   "what a healthy loop's ceiling lets through", with dmg (default none - the
-   bench has no damage) taking the pumps a live caller lost out of it. One
-   function for both readouts, so a spare pump cannot be explained one way on
-   the bench and a different way on the pump panel.
-   Approximate for a MULTI-loop plant with unequal loop lengths: this treats
-   every loop's ceiling as worth the same 1.0, where netFlowK() weights each
-   loop by its own P.netRefByLoop. Exact for the single-loop stock case. */
-function pumpGauge(dmg){
-  dmg = dmg || [];
-  const {n} = loopMap();
-  let delivered = 0;
-  for(let i=0;i<n;i++) delivered += Math.min(1, loopPumpCap(i, dmg));
-  return {installed: totalPumpCap(), delivered, n};
-}
-
 function planStats(d){ return [
   ["POWER DENSITY",d.dens.toFixed(0)+" kW/L",clamp(d.dens/320,0,1),C.cyan,
    "Power per litre of core. Higher means a smaller, lighter reactor, and less material to soak up heat when cooling fails."],
@@ -70,7 +49,6 @@ function planStats(d){ return [
    "How much you can believe your own gauges. Single-channel readings visibly jitter and a failed sensor is undetectable."],
 ];}
 function layoutStats(M){
- const G=pumpGauge();
  return [
   ["THERMOSIPHON HEAD",M.head.toFixed(1)+" cells",clamp((M.head+1)/4,0,1),M.head<0.5?C.amber:C.green,
    "How far the steam generators sit above the reactor. Hot water rises into them and cold water falls back with no pumps at all. Raise the generators and a blackout stops being fatal."],
@@ -78,10 +56,9 @@ function layoutStats(M){
    "Total hot and cold leg length. Long runs add friction so your pumps deliver less flow, and give more pipe for a hit to find. They also add coolant mass, which is thermal inertia in your favour."],
   ["FLOW PENALTY",((1-M.flowK)*100).toFixed(0)+" %",1-M.flowK,(1-M.flowK)>.2?C.amber:C.green,
    "Pumping loss from pipe friction. A short straight run from reactor to steam generator costs nothing; a sprawling layout quietly caps the flow you can ever achieve. Loops share the core's flow, so this is what the AVERAGE loop costs: a second loop does not buy flow, and a sprawling one still spends it."],
-  ["PUMP CAPACITY",G.delivered.toFixed(1)+" / "+G.installed.toFixed(1)+" pumps",
-   G.installed>0?clamp(G.delivered/G.installed,0,1):1,
-   G.delivered<G.installed-1e-9?C.amber:C.green,
-   "What a spare pump actually buys, right now. A loop's ceiling only ever passes one healthy pump's worth, however many more you plumb into it - so DELIVERED sits under INSTALLED the moment a spare is connected, and that is the ceiling doing its job, not a wasted pump. It does nothing to this number until the day a pump on that loop is damaged or destroyed, when it is what brings DELIVERED straight back instead of leaving the loop starved."],
+  ["PUMP CAPACITY",corePumpCap().toFixed(1)+" / "+totalPumpCap().toFixed(1)+" pumps",
+   totalPumpCap()>0?clamp(corePumpCap()/totalPumpCap(),0,1):1,C.cyan,
+   "How much pump is on the CORE's own circuit, against every pump on the ship. Each one develops its own stated head, so a second pump on a loop is real extra flow and not a spare that buys nothing - and the pumps that are not on this number are turning the feedwater and the cooling water, which are two other circuits doing two other jobs."],
   ["COOLANT INERTIA",((M.inertiaK-1)*100).toFixed(0)+" % grace",clamp((M.inertiaK-1)*3,0,1),C.cyan,
    "Extra water in long pipe runs takes longer to heat, so transients develop more slowly and you get more time to react. The one genuine reward for a spread-out layout."],
   ["HULL EXPOSURE",(M.exposure*100).toFixed(0)+" %",M.exposure,M.exposure>.2?C.red:C.green,
@@ -115,8 +92,30 @@ function layoutWarnings(M){ const w=[];
      out and shows the cost - so an unplumbed pressurizer commissions, runs
      and loses its pressure, and that is the lesson. What it must not do is
      happen SILENTLY, which is what it did until this row existed. */
-  if(!M.pzrConn) w.push(["SOFT","No pipe reaches the pressurizer. It holds nothing: loop pressure will drift off programme and stay there.","pzr"]);
-  if(!M.pzrOK) w.push(["SOFT","The pressurizer is not the highest point of the primary loop. Its steam bubble cannot form properly, so pressure damping drops to 45%.","pzr"]);
+  for(const id of holdTankIds()){ if(holdPlumbed(id)) continue;
+    w.push(["SOFT","No pipe reaches "+partName(partOf(id))+". It holds nothing: the pressure of the circuit it stands on will drift off programme and stay there.",id]); }
+  /* ══ WHAT A HOLD TANK CAN BE WRONG ABOUT ══
+     All soft: the bench warns and never refuses. Two on one circuit is the
+     case netRef() demotes; a check valve on a surge line is a one-way line
+     that cannot surge; a vessel alone on its circuit is holding nothing. */
+  { const byCirc={};
+    for(const id of holdTankIds()){ const t=D.tanks[id], ci=tankCircuit(id);
+      (byCirc[ci]||(byCirc[ci]=[])).push(id);
+      if(t.check) w.push(["SOFT",partName(partOf(id))+" holds pressure through a check valve. A surge line carries the loop both ways - a one-way line is not one.",id]);
+      if(!holdPlumbed(id)) continue;
+      if(ci===null||ci===undefined||ci<0)
+        w.push(["SOFT",partName(partOf(id))+" is on no circuit. It holds nothing at all.",id]); }
+    /* A SETPOINT ABOVE WHAT THE WEAKEST THING ON THE CIRCUIT WILL TAKE. Every
+       wall on the plant is a real thickness now, so this is a comparison and
+       not a rule of thumb. */
+    for(const ci of holdCircs()){ const set=holdSetP(ci), lim=plantRating(ci);
+      if(lim>0 && set>lim) w.push(["SOFT","The "+circName(ci).toLowerCase()+" is held at "+
+        set.toFixed(1)+" MPa and the thinnest wall on it is built for "+lim.toFixed(1)+
+        " MPa. Something on that circuit lets go before the relief valve does. Widen the wall or drop the setpoint.",
+        holdOnCirc(ci)[0]||null]); }
+    for(const ci in byCirc) if(byCirc[ci].length>1)
+      w.push(["SOFT","More than one vessel is set to hold "+circName(+ci)+". Only the first is used; the rest run as ordinary tanks.",byCirc[ci][1]]); }
+  if(!M.pzrOK) w.push(["SOFT","A pressure vessel is not the highest point of its loop. Its steam bubble cannot form properly, so pressure damping drops to 45%.",holdTankIds()[0]||null]);
   /* The same standing pzrConn has, for the other half of the plant. A steam
      circuit is a generator, a turbine and somewhere to reject the heat; miss
      any one of the three and the machines are decorations the bench used to
@@ -130,8 +129,8 @@ function layoutWarnings(M){ const w=[];
     w.push(["SOFT","No relief valve is fitted anywhere on this generator's steam side. Nothing will let the pressure go if the steam cannot get away, and the shell bursts at 1.5x its design pressure. Place a fitting on the steam line and set it to RELIEF.",id]);
   if(M.turbConn!==undefined && M.turbConn<1)
     w.push(["SOFT","A turbine is not in a complete steam circuit - it needs a generator feeding it AND a condenser to exhaust into. Unpiped, it makes no electricity.","turb"]);
-  for(const id of (M.feedNoSg||[]))
-    w.push(["SOFT","This pump is on no loop and reaches no generator shell. It is piped to neither side of the plant and moves nothing.",id]);
+  for(const id of (M.pumpNoDis||[]))
+    w.push(["SOFT","Nothing is piped to this pump's DISCHARGE. A pump pushes the way its casing is cast - suction on one face, discharge on the other - so it is pushing into a blank plate and moves nothing. Draw a run from the discharge, or turn the pump round.",id]);
   if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all.",null]);
   /* A HYDRAULIC SHORT BETWEEN THE TWO SIDES, named and not refused. The tubes
      are the only crossing a plant is meant to have; a pipe drawn round them
@@ -906,11 +905,19 @@ function dbRailBuild(rail,vitals,watch){
     panels.push(h);
   }
   const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
+  /* ══ AND THE RUN YOU PICKED ══
+     A run is not a part, so it gets no per-panel well of its own in the loop
+     above - there is one well, and it shows whichever run is selected. Picked
+     from a row in PIPES or by clicking the pipe on the drawing; both write
+     `sel`, which is the same selection every machine already uses. */
+  const run=KIT.well({title:"PIPE RUN"}); rail.appendChild(run.el);
+  const runBody=KIT.el("div","db-panel-body"); run.body.appendChild(runBody);
+  watch.add(run.el);
   /* the verdict on the design stands over the plant it judges, not at the foot
      of a rail the player has to scroll past every machine to reach */
   const results=KIT.well({title:"RESULTS"}); vitals.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); vitals.appendChild(review.el);
-  return {panels,results,review,pipes};
+  return {panels,results,review,pipes,run,runBody};
 }
 /* ══ WHAT IS ACTUALLY CONNECTED ══
    One row per traced connection - from, to, and how long it is - plus a line
@@ -923,21 +930,28 @@ function pipeRailSync(well){
     const a=partOf(c.a), b=partOf(c.b);
     return [(pipeLabel(c.k,c.key)||"PIPE"),
             (a?partName(a):c.a)+" ⇒ "+(b?partName(b):c.b),
-            c.L.toFixed(1)+" m"];
+            c.L.toFixed(1)+" m", c.key];
   });
   const loose=M.orphan.length, dead=M.dangling.filter(d=>d.cells.length).length;
-  const sig=rows.map(r=>r.join("/")).join("|")+"|"+loose+"|"+dead;
+  // sel is in the signature: a row lights when it is the picked one, so the
+  // list has to rebuild when the pick moves
+  const sig=rows.map(r=>r.join("/")).join("|")+"|"+loose+"|"+dead+"|"+sel;
   const body=well.body;
   if(body._sig===sig) return;
   body._sig=sig; body.innerHTML="";
   if(!rows.length){ const p=KIT.el("p","db-review-ok");
     p.textContent="NOTHING IS PIPED UP"; body.appendChild(p); }
   for(const r of rows){
-    const row=KIT.el("div","db-pipe-row");
+    const row=KIT.el("div","db-pipe-row"+(sel===r[3]?" on":""));
     const k=KIT.el("span","db-pipe-kind"); k.textContent=r[0];
     const n=KIT.el("span","db-pipe-ends"); n.textContent=r[1];
     const l=KIT.el("span","db-pipe-len");  l.textContent=r[2];
     row.append(k,n,l); body.appendChild(row);
+    // THE ROW IS THE PICK, the same way a panel's title bar is (railPick,
+    // inspector.js): a list of everything piped up is also the way to get at
+    // a run that is hard to click on a crowded drawing.
+    row.addEventListener("click",()=>{ sel=r[3]; uiDirty(); });
+    KIT.tip(row,r[0],"Click to select this run. Its bore and its wall are on the PIPE RUN panel below, and it lights up on the drawing.");
   }
   const warn=t=>{ const row=KIT.el("div","db-review-row warn");
     const tag=KIT.el("span","db-review-tag"); tag.textContent="WARN";
@@ -983,6 +997,15 @@ function dbRailSync(state){
   }
   if(!fresh) return;
   pipeRailSync(state.pipes);
+  /* THE SELECTED RUN'S OWN PANEL. Its own two number fields go through
+     dbPanelSync() exactly as a machine's do, so a run is configured with the
+     same widgets, the same SUGGEST and the same mass hint as everything else
+     on the board. Nothing picked is a real state and says so. */
+  { const r = isRunKey(sel) ? sel : null;
+    state.run.setName(r ? (pipeLabel(pipeMap().byKey[r].k, r)||"PIPE RUN") : "PIPE RUN");
+    KIT.show(state.run.el, true);
+    dbPanelSync(state.runBody, r ? paramsForRun(r)
+      : [{kind:"note",text:"No run picked. Click a pipe on the drawing, or a row in PIPES above, to set its bore and its wall."}]); }
   { const rd=benchResultsData();
     const body=state.results.body;
     if(!body.firstChild){
