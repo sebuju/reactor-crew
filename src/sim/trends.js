@@ -57,7 +57,7 @@ const CH={
  /* the sink the ship actually has. Everything else on this list is about
     making heat or moving it; this is the one channel about getting rid of it,
     and it is the slowest pot on the plant. */
- radt:{lab:"PANEL TEMP",  u:"K", col:"#b8c4cf", f:s=>s.radT},
+ radt:{lab:"PANEL TEMP",  u:"K", col:"#b8c4cf", f:s=>radTMax(s)},
 };
 /* ══ HOW A CHANNEL IS DRAWN, NOT WHAT IT IS ══
    A trend used to scale itself to whatever it happened to contain, and that is
