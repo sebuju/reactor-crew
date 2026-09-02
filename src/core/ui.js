@@ -202,7 +202,7 @@ const TOOLS=[
   /* The FAULTS panel carries this one rather than a tool bar, so it is on the
      table for the pre-emption branch and the aim mark, not for a switch. */
   {id:"hit", sc:"operate", label:"AIMED COMBAT HIT",
-   tip:"Click a machine or a pipe cell to take the hit THERE. One click, then the tool puts itself back; a click on bare deck cancels it."},
+   tip:"Click a machine, a port or a pipe cell to take the hit THERE. One click, then the tool puts itself back; a click on bare deck cancels it."},
 ];
 // which cell a plant-space point lands on, in grid units - what every tool
 // gesture is addressed at, since a tool paints CELLS and never pixels
@@ -214,13 +214,16 @@ function pipeLift(pt){ const c=cellAt(pt), k=c[0]+","+c[1];
   if(D.pipes[k]){ delete D.pipes[k]; buildLayout(); } }
 /* WHAT THE AIMED HIT IS ON, resolved once: the press and the mark that
    previews it read the same answer, or the picture and the damage would name
-   different machines. A machine's whole footprint is the target, a pipe cell is
-   a target of its own (combatHit() prices them that way too), and null is bare
-   deck. */
+   different machines. A machine's whole footprint is the target, a port and a
+   pipe cell are each a target of their own (combatHit() prices them that way
+   too), and null is bare deck. */
 function hitAimAt(pt){
   const p=partAt([pt.x,pt.y]);
   if(p) return p.id;
-  const c=cellAt(pt), k=pipeKey(c[0],c[1]);
+  const c=cellAt(pt);
+  const pid=portAtCell(c[0],c[1]);
+  if(pid) return "port:"+pid;
+  const k=pipeKey(c[0],c[1]);
   return D.pipes[k] ? "pipe:"+k : null;
 }
 
@@ -276,12 +279,12 @@ function btnFill(o,hovered){
   return hovered ? (o.sunk?C.edge2:C.panelHi) : base;
 }
 function button(x,y,w,h,label,o){
-  o=o||{}; const wd=push({x,y,w,h,type:"btn",fn:o.fn});
-  const h_=hov(wd);
+  o=o||{}; const wd=o.inert?{x,y,w,h}:push({x,y,w,h,type:"btn",fn:o.fn});
+  const h_=!o.inert && hov(wd);
   // o.sunk is a borderless key: tone alone reads the shape, so it draws no
   // frame (boxing every key in a 46px component read as a cage)
-  const col = o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
-  fillRect(x,y,w,h, btnFill(o,h_));
+  const col = o.inert ? "#3c4c47" : o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
+  fillRect(x,y,w,h, o.inert?C.panel:btnFill(o,h_));
   // o.flat is o.sunk's sibling for a SELECTED key that must also lose its
   // outline (the bench's pen/preset keys, whose amber fill+type already say it)
   if(!o.sunk && !o.flat) frame(x,y,w,h,col);
@@ -292,9 +295,9 @@ function button(x,y,w,h,label,o){
      fitted label on the plant does, and only cuts once the smallest rung
      still will not fit. `sp` is dropped with the size, because letter
      spacing is the first thing worth losing. */
-  const q={size:o.size||9,weight:o.danger?700:o.weight,
+  const q={size:o.size||9,weight:(!o.inert&&o.danger)?700:o.weight,
            sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
-           color:o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)};
+           color:o.inert?"#3c4c47":o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)};
   let inner=Math.max(2,w-BTN_TXT_PAD);
   if(tw(label,q)>inner && q.sp>0) q.sp=0;
   /* A NARROW KEY GIVES UP ITS AIR BEFORE IT GIVES UP A LETTER. BTN_TXT_PAD is
