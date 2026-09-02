@@ -1598,17 +1598,22 @@ function advectAnchors(s){
     for(const IN of (Array.isArray(R.internal) ? R.internal : []))
       if(IN.anch) at(hold, p.id, [IN.a, IN.b], T);
   }
-  /* A TANK IS STORAGE, AND STORAGE IS COLD. It sits on one line with nothing
-     going through it, so the transport never reaches it and it kept whatever
-     the commissioning seed left there - a reserve of condensate reading 583 K
-     and nine per cent steam. What is in a tank is what was put in it, at
-     T_FEED, and it is a pot of its own rather than part of any circuit's. */
+  /* A TANK IS STORAGE, AND STORAGE IS WHAT IS IN IT. It sits on one line with
+     nothing going through it, so the transport never reaches it and it kept
+     whatever the commissioning seed left there - a reserve of condensate
+     reading 583 K and nine per cent steam. What is in a tank is what was put
+     in it, at the temperature its own FLUID states (the same figure its panel
+     prints), and it is a pot of its own rather than part of any circuit's.
+     T_FEED stood here and is the plant's feedwater, not this vessel's: a
+     vented reserve seeded at 490 K is 100 K over its own saturation, so the
+     pump drawing on it cavitated on tick one against a tank that was full. */
   /* A HOLD TANK IS NOT STORAGE. Its water is the circuit's own - a surge line
      carries the loop both ways - so it is left to the transport and takes the
      loop's temperature, which is also what the subcooling instrument standing
      on it is asking about. */
   for(const id of tankIds()){ if(D.tanks[id].hold) continue;
-    at(hold, id, FACES, T_FEED); at(seed, id, FACES, T_FEED); }
+    const T = tankFluid(id).temp;
+    at(hold, id, FACES, T); at(seed, id, FACES, T); }
   return {hold, seed};
 }
 /* HOW MANY TIMES THE COURANT GUARD BIT LAST TICK - a node too small for the
@@ -2107,6 +2112,26 @@ const coreDTRated = heat => CORE_DT0*heat;
    secondary mass balance through it. It was a local inside advectStep() while
    the pipe meters were normalising on a per-KIND nominal of their own. */
 const netKgs = q => Math.abs(invRate(q))/100*loopKg();
+/* ══ THE INVENTORY LEDGER ══
+   Every kilogram of water the plant holds, and every named way one leaves. A
+   tick that does not close has lost or invented water, and the residual is the
+   term nobody wrote down. A DEV INVARIANT: it warns, it never throws - killing
+   a player's run over a book-keeping slip is worse than the slip.
+   A HOLD TANK IS NOT A STORE. Its level is s.lvl, which netExpSurge() moves on
+   thermal expansion rather than on mass, so booking it would open the ledger
+   every time the loop warmed up. It is a pressure boundary; the water in it is
+   already the loop's. An `inf` tank is not a store either - its level never
+   moves (see the level loops below), so it is a boundary and books as a term. */
+const LEDGER_EPS = 1e-7;               // fraction of M0 - a solved quantity never meets a bare compare
+const ledgerKg = s => { let m = (s.inv||0)/100*loopKg();
+  for(const id of tankIds()){ const t=D.tanks[id];
+    if(!t.inf && !t.hold) m += (s.tank&&s.tank[id]!==undefined?s.tank[id]:t.level)/100*tankKg(id); }
+  for(const id in s.sglBy){ const M=sgMassOf(id); if(M>0) m += s.sglBy[id]/100*M; }
+  for(const id in s.sgSteamBy) m += s.sgSteamBy[id];
+  return m; };
+const ledgerOut = s => { let k=0; for(const n in s.massOut) k += s.massOut[n]; return k; };
+// kg out of the plant, by name. Negative is a boundary feeding it.
+const book = (s,name,kg) => { if(kg) s.massOut[name] = (s.massOut[name]||0) + kg; };
 /* ══ EQUILIBRIUM IODINE AND XENON AT A FLUX ══
    Written once and asked three times: of the core average (P.X0), of the
    kinetics seed, and of each NODE in coreReset(), which is the only one of the
@@ -2209,7 +2234,15 @@ const turbShare = s => P.steamRef>0 ? (s.turbWk||0)/P.steamRef : 0;
 /* ONE PUMP'S OWN STARTING SPEED. A coolant pump answers the plant-wide lever,
    so the bench sets one number for all of them; any other pump answers only
    for itself - the same two spans ctlFor()'s own slider already has. */
-const pumpStart = id => primaryPump(id) ? startOf("flowDem",1) : startOf(id+":pumpDem",1);
+/* AND A STANDBY TRAIN COMMISSIONS STOPPED. Asked of the DRAWING (pumpStandby),
+   never written into D.start: a preset's designForgetBags() clears that bag
+   AFTER buildStockPlumbing() has run, so a starting position stated there is
+   silently dropped and the machine comes up at rated. A default is derived,
+   like every other suggestion on this plant, and any reserve pump the player
+   pipes up behaves the same way without a row anywhere. */
+const pumpDem0 = id => pumpStandby(id) ? 0 : 1;
+const pumpStart = id => primaryPump(id) ? startOf("flowDem",1)
+                                        : startOf(id+":pumpDem", pumpDem0(id));
 const loadStart = () => Math.min(startOf("loadDem",1), P.loadMax);
 function resetPlant(){
   const x0=startOf("rodCommon",RODX0);
@@ -2354,6 +2387,10 @@ function resetPlant(){
      tankByp:Object.fromEntries(tankIds().map(k=>[k,!!startOf(k+":tankByp",false)])),
      burstBy:Object.fromEntries(tankIds().map(k=>[k,false])),
      tankOver:{},
+     /* THE LEDGER'S OWN BOOK, kg out of the plant by named term - plain
+        numbers, so snapVal() takes it, and cumulative, so a tick differences
+        it rather than clearing it. */
+     massOut:{}, massRes:0, massWarn:false,
      /* what each tank's own AUTORULE decided last tick. A rule with two
         setpoints has to know whether it is already running, and this is the
         only place that memory can live - on S, so it rides a snapshot. */
@@ -2640,6 +2677,8 @@ function resetPlant(){
 const PIPE_CORR={hpi:1,surge:1};
 function step(dt){
   const s=S; s.t+=dt; s.tick++;
+  if(!s.massOut) s.massOut={};
+  const ledgM0 = ledgerKg(s), ledgO0 = ledgerOut(s);
   /* Settle the node graph for this tick and hold it. Nothing below redraws the
      plant, and ~85 readers ask for it - see nodeGraph(), layout.js. The hold is
      dropped on the last line of this function, so it never outlives the tick. */
@@ -2968,6 +3007,13 @@ function step(dt){
     const live = {};
     for(const id of pumpIds()){ live[id]=1;
       if(s.flowDemBy[id]===undefined) s.flowDemBy[id]=1;             // a pump placed mid-run arrives at rated
+      /* A STANDBY PUMP RUNS WHEN ITS OWN RESERVE IS LINED UP. The tank's rule
+         is already the one door answering "is the emergency feedwater armed",
+         so the pump follows the VALVE rather than carrying a second rule - and
+         s.tankByp defeats both with one switch. Asked of the drawing
+         (pumpResOf), so any pump piped onto a reserve behaves this way. */
+      { const r = pumpResOf(id);
+        if(r.length) s.flowDemBy[id] = r.some(t=>tankOpen(s,t)) ? 1 : 0; }
       if(s.flowBy[id]===undefined) s.flowBy[id]=s.flowDemBy[id];
       s.flowBy[id] += (supplyK(s)*s.flowDemBy[id] - s.flowBy[id])*k; }
     for(const id in s.flowBy) if(!live[id]){ delete s.flowBy[id]; delete s.flowDemBy[id]; } }
@@ -3259,6 +3305,7 @@ function step(dt){
       }
     }
     s.inv -= ventLoose;
+    book(s,"reliefRoom", ventLoose/100*loopKg());
   }
   /* THE RUPTURE DISC, on any tank fitted with one. At TMI-2 it burst and put
      primary coolant on the containment floor, and this game already teaches
@@ -3282,10 +3329,12 @@ function step(dt){
     if(s.burstBy[tid] && s.tank[tid] > 0){
       const out = Math.min(s.tank[tid], b.drain*dt);
       s.tank[tid] -= out;
+      book(s,"burstDisc", out/100*tankKg(tid));
       s.release = Math.min(100, s.release + out*b.rel*tankFluid(tid).act*P.dose*dt);
     }
   }
   s.inv -= spill*dt;
+  book(s,"spillPri", spill*dt/100*loopKg());
   /* THE PRESSURIZER'S BUBBLE BLOWS DOWN AT A RATE SET BY HOW MUCH IS ACTUALLY
      LEAVING - a pinhole depressurises slowly and a guillotine violently,
      which one number could not tell apart, and a relief valve passing a
@@ -3331,7 +3380,12 @@ function step(dt){
     // INEXHAUSTIBLE: the level does not move, so what it delivers or swallows
     // is not limited by what it holds. The inventory book still balances -
     // the plant loses or gains exactly what crossed the edge.
-    if(!t.inf) s.tank[id] = clamp(s.tank[id] - dPct/100*loopKg()/tankKg(id)*100, 0, 100);
+    if(!t.inf){ const raw = s.tank[id] - dPct/100*loopKg()/tankKg(id)*100;
+      s.tank[id] = clamp(raw, 0, 100);
+      book(s,"tankClampPri", (raw - s.tank[id])/100*tankKg(id)); }
+    // an INEXHAUSTIBLE tank is a boundary, so what crossed its edge came from
+    // outside the plant's books - negative is the plant being fed
+    else book(s,"boundaryTank", -dPct/100*loopKg());
     s.inv += dPct;
     const bw = FLUID[t.fluid].boron;
     if(bw && dPct>0){ s.boron -= bw*dPct; s.boronDem -= bw*dPct; }
@@ -3368,7 +3422,8 @@ function step(dt){
      core above the gauge that reports it */
   if(!s.breach && s.pCore > burst){ s.breach=true; s.trip="VESSEL RUPTURE"; }
   s.P = clamp(s.P, Math.min(P.P0*0.06,P.Pcont), P.P0*1.6);
-  s.inv = clamp(s.inv,0,100);
+  { const raw = s.inv; s.inv = clamp(s.inv,0,100);
+    book(s,"invClamp", (raw - s.inv)/100*loopKg()); }
 
   /* ── the core as a place: shape, hot channel, local boiling, local xenon ──
      This is where boiling actually happens now. It happens in particular
@@ -3495,10 +3550,6 @@ function step(dt){
   const circ = [], res = [];
   for(const id of secTankIds())
     (D.tanks[id].auto === "always" ? circ : res).push(id);
-  const poolKg = list => tankPoolKg(s,list);
-  /* A reserve is open only if its own rule says so, and only if that rule has
-     not been bypassed on that tank - tankOpen() asks both. */
-  const resOpen = res.filter(id=>tankOpen(s,id));
   /* ── WHAT THE FAR END WILL SWALLOW ──
      The governor is a stop valve, not a wish: what passes it goes as the shell
      pressure behind it, so a shell that blows down passes less and recovers.
@@ -3605,7 +3656,7 @@ function step(dt){
       secHole[id] = (secHole[id]||0) + SG_RELIEF_CAP*ratedSteam()*bk.bore*bk.bore
                                        *Math.max(0, secP(s,id)-P.Pcont)/span;
   }
-  let boiled = 0, fedRes = 0;   // kg/s, summed for the mass balance below
+  let boiled = 0;               // kg/s, summed for the mass balance below
   /* WHAT THE SOLVE MOVED THAT THE SHELL COULD NOT ACTUALLY GIVE. The vapour
      network answers off pressure alone; a shell whose steam space is empty
      has nothing to send whatever its pressure says, and the shortfall is
@@ -3682,7 +3733,10 @@ function step(dt){
     const outSteam = steamTo*k;
     vent *= k;
     starve += steamTo - outSteam;
-    s.sgSteamBy[id] = Math.max(0, ms + (steamOut - outSteam - vent - cond)*dt);
+    { const rawS = ms + (steamOut - outSteam - vent - cond)*dt;
+      s.sgSteamBy[id] = Math.max(0, rawS);
+      book(s,"sgSteamClamp", rawS - s.sgSteamBy[id]); }
+    book(s,"sgVent", vent*dt);            // a safety valve blows to atmosphere and the water goes with it
     /* WHAT EACH VALVE IS ACTUALLY PASSING, not what it offered - the shell can
        only give up the water that is in it, and the panel has to print the
        number the tick caused. */
@@ -3742,6 +3796,7 @@ function step(dt){
     const raw = lvl + 100*(fed-boilNet)/M*dt;
     s.sglBy[id] = clamp(raw, 0, 100);
     const fed_ = fed - (raw - s.sglBy[id])*M/100/Math.max(dt,1e-9);
+    book(s,"sgClamp", (raw - s.sglBy[id])/100*M);
     /* ── THE SHELL'S OWN ENERGY BALANCE ──
        In across the tubes, out with the steam that left, and the sensible heat
        of the water that is NET accumulating - the replacement water is already
@@ -3793,6 +3848,7 @@ function step(dt){
      Booked here, in the one currency the rest of this balance counts in, so
      the secondary's books close whatever is broken. */
   s.condVent = Math.max(0, boiled*(1-retK));
+  book(s,"condVent", s.condVent*dt);
   if(s.condVent > 0 && !s.condVentSeen){ s.condVentSeen = true;
     logE("warn","STEAM GOING OVERBOARD",
       "The turbine bypass is passing steam into a machine that is open to atmosphere, and the water going with it does not come back. The hotwell is draining and no valve on the plant is open."); }
@@ -3832,12 +3888,14 @@ function step(dt){
       const key = "comp:"+id+":"+IN.a+IN.b, r = runRatio(key);
       t += netTempAt(s, coreFold(id + (r >= 0 ? IN.a : IN.b))); n++; }
     if(n) s.cwInT = t/n; }
-  /* WHAT THE RESERVE PAID FOR, off its own tanks' solved outflow - the same
-     qTankBy every primary tank is already charged through, asked of the
-     secondary ones. One-way: what leaves a reserve does not come back. */
-  { let k=0;
-    for(const id of resOpen) k += Math.max(0, invRate((netOut.qTankBy && netOut.qTankBy[id])||0)/100*loopKg());
-    fedRes = k; }
+  /* ══ AND A RESERVE IS METERED AGAINST ITSELF ══
+     Its OWN solved edge, signed, exactly the way every primary tank is already
+     charged - not a share of one pool figure clamped at zero. Clamped, a
+     reserve being BACKFILLED off the feedwater line read as delivering
+     nothing, and the condensate the pool paid for went nowhere the books
+     could see: measured, 1 600 kg/s vanishing for as long as the tie stood
+     open. Tank-out-positive, so `in` is the negation. */
+  const resKg = id => -invRate((netOut.qTankBy && netOut.qTankBy[id])||0)/100*loopKg();
   /* ══ AND WHAT THE HOTWELL PAID FOR IS THE CONDENSATE LINE ══
      Not what the generators swallowed. The condenser's outlet is a FIXED node
      - the feed pump's suction sits on its pressure and has to - so whatever
@@ -3873,18 +3931,25 @@ function step(dt){
          the hotwell with primary water, and it never refuses: open it on a
          healthy plant and you dump the condensate the feed pumps need. */
       const dumped = s.tankDump[id] ? HOT_DUMP*Math.min(s.tank[id],100)/100 : 0;   // %/s
-      /* Every tank in a pool moves together, in proportion to how much of
-         that pool it is - so two hotwells behave as one hotwell of their
-         combined size and neither drains first. */
-      const inKg = circ.indexOf(id)>=0 ? netKg*cap/Math.max(circCap,1e-9)
-                                       : -fedRes*(s.tank[id]/100*cap)/Math.max(poolKg(resOpen),1e-9);
+      /* Every tank in the CIRCUIT moves with the pool, in proportion to how
+         much of it it is - so two hotwells behave as one hotwell of their
+         combined size and neither drains first. A RESERVE is its own edge and
+         nobody else's (resKg). */
+      const inKg = circ.indexOf(id)>=0 ? netKg*cap/Math.max(circCap,1e-9) : resKg(id);
       const raw = s.tank[id] + (100*(inKg||0)/cap - dumped)*dt;
       /* Past full it overflows, and the overflow is gone - a tank that
          silently clamped would swallow a tube rupture's whole inventory and
          report nothing. What overflows an SGTR's hotwell is contaminated. */
       if(raw > 100) s.tankOver[id] = (raw-100)/100*cap/Math.max(dt,1e-9);          // kg/s
-      if(!D.tanks[id].inf) s.tank[id] = clamp(raw, 0, 100);
+      if(!D.tanks[id].inf){ s.tank[id] = clamp(raw, 0, 100);
+        book(s,"tankClampSec", (raw - s.tank[id])/100*cap);
+        book(s,"tankDump", dumped*dt/100*cap); }
+      // an INEXHAUSTIBLE pool is a boundary: its level does not move, so what
+      // the plant handed it left the books entirely
+      else book(s,"boundaryTank", (inKg||0)*dt);
     }
+    // a hole in the secondary is a named opening; the pool it drains is above
+    if(circ.length) book(s,"spillSec", spillSecKg*dt);
   }
 
   /* ── reactivity ── */
@@ -3939,6 +4004,7 @@ function step(dt){
   if(!s.melt && s.meltFrac>=MELT_LATCH){ s.melt=true; s.trip="CORE MELT"; }
   if(s.meltFrac>0 && !P.catcher){
     s.inv-=MELT_INV*s.meltFrac*dt;
+    book(s,"melt", MELT_INV*s.meltFrac*dt/100*loopKg());
     s.fatigue=Math.min(100,s.fatigue+MELT_FAT*s.meltFrac*dt); }
   { const st=fuelStages(s); let rel=0;
     for(let q=0;q<FAIL.length;q++) rel+=st[q]*RELK[FAIL[q].k];
@@ -4363,6 +4429,14 @@ function step(dt){
      turbine - the pumps answer flow, the turbine answers the draw. */
   s.spinV=360*mflux;
   s.spinTV=360*Math.min(s.load,1.5);
+  /* ══ AND THE BOOKS HAVE TO CLOSE ══
+     What the stores lost this tick, less what the named terms say left. */
+  { const res = (ledgM0 - ledgerKg(s)) - (ledgerOut(s) - ledgO0);
+    s.massRes = res;
+    if(Math.abs(res) > LEDGER_EPS*Math.max(ledgM0,1) && !s.massWarn){
+      s.massWarn = true;
+      console.warn("[ledger] tick "+s.tick+": "+res.toFixed(3)+" kg unattributed of "
+        +ledgM0.toFixed(0)+" kg", JSON.parse(JSON.stringify(s.massOut))); } }
   layRelease();
 }
 /* One pressure colour, for every readout that shows pressure. Both thresholds are
