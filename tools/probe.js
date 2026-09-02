@@ -101,6 +101,14 @@ function dump(s,label){
 /* ══ CASES ══ disposable. Add one, read it, delete it. */
 const CASES={
   stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
+  quad(){
+    const i=M.PLANTPRE().findIndex(p=>p[0]==="QUAD");
+    M.plantPreset(i); M.buildLayout(); M.commission();
+    const s=M.S(); run(s,PSEC); dump(s,"QUAD - 4 units, 2 sets");
+    console.log(" COUNTS  parts "+M.LAY().parts.length+"  turb "+M.turbCount()+
+      "  cond "+M.condCount()+"  rad "+M.radIds().length+
+      "  grid "+M.D().gw+"x"+M.D().gh);
+  },
   /* A BLANK GRID. Nothing is placed at all: no core, no turbine, no panels.
      It must commission, run and read as nothing rather than throw. */
   blank(){

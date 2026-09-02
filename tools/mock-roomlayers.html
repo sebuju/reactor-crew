@@ -1,0 +1,200 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>room layer mockups - scars, the live blast, the cloud</title>
+<style>
+  body{background:#080c0e;color:#9fb4b9;font:12px ui-monospace,Menlo,monospace;margin:16px}
+  h1{font-size:13px;color:#dff0f3;font-weight:400;margin:0 0 10px}
+  p{max-width:940px;line-height:1.5}
+  #read{position:fixed;right:16px;top:16px;background:#0e1518;border:1px solid #2c464e;padding:6px 10px;color:#dff0f3}
+</style>
+<h1>ROOM LAYER MOCKUPS &mdash; SCARS: the bang fades, the mark stays</h1>
+<p>Row 1 is the reference: the locked violet hydrogen layer, the live blast wash, and both together.
+Row 2 is the SCAR on its own &mdash; three past blasts plus the live one, as a permanent high-water mark.
+Row 3 is the whole picture: scar, live blast, cloud, over three fake machines. No figure is printed on
+any grid. Hover a cell for the numbers.</p>
+<div id="read">&mdash;</div>
+<canvas id="c" width="1180" height="1060"></canvas>
+<script>
+"use strict";
+const C={bg:"#080c0e",panel:"#0e1518",edge:"#1d2f35",edge2:"#2c464e",ink:"#9fb4b9",ink2:"#5d7378",
+         bright:"#dff0f3",amber:"#f0a830",cyan:"#5fd2e2",red:"#ff5a45",green:"#57d38c",blue:"#5aa9d6",
+         redHi:"#ff7d6c",metal:"#6d8f98",h2:"#9a86c4",
+         /* SOOT. Warm and very dark, against a cool dark panel - a burnt cell has to
+            read as burnt rather than as a hole cut in the picture. */
+         soot:"#2b1c15", sootHi:"#4a2f22"};
+const cv=document.getElementById("c"), ctx=cv.getContext("2d");
+const GW=14, GH=12, CELL=18, PW=GW*CELL, PH=GH*CELL, PADX=40, PADY=52, GAPX=52, GAPY=100;
+
+const H2=new Float64Array(GW*GH), FLAME=new Float64Array(GW*GH),
+      PK=new Float64Array(GW*GH), SCAR=new Float64Array(GW*GH);
+const LFL=0.04, BLAST_LO=15;
+(function seed(){
+  const blast=(cx,cy,peak,spread,F)=>{
+    for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+      const v=peak*Math.exp(-((X-cx)*(X-cx)+(Y-cy)*(Y-cy))/spread), i=Y*GW+X;
+      if(v>F[i]) F[i]=v;
+    }
+  };
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
+    H2[Y*GW+X]=0.085*Math.exp(-((X-9.2)*(X-9.2)+(Y-2.4)*(Y-2.4)*2.2)/14);
+  [[6,3],[7,3],[7,2],[8,3]].forEach(c=>FLAME[c[1]*GW+c[0]]=0.55+0.4*Math.random());
+  blast(7.5,4.0,300,9.5,PK);                       // the one happening now
+  SCAR.set(PK);
+  blast(2.5,8.0,150,7.0,SCAR);                     // and three it has already had
+  blast(11.5,9.5,90,5.0,SCAR);
+  blast(4.0,1.5,45,4.0,SCAR);
+})();
+/* three fake machines, only so the scar can be judged against plant rather
+   than against an empty grid */
+const BOXES=[{x:2,y:6,w:3,h:3,n:"PUMP"},{x:6,y:7,w:4,h:4,n:"COND"},{x:10,y:8,w:3,h:3,n:"RAD"}];
+
+const BLASTZ=[{t:20,col:C.blue,lab:"PANELS"},{t:70,col:C.green,lab:"CABINETS"},
+              {t:120,col:C.amber,lab:"MACHINES"},{t:200,col:C.red,lab:"PIPEWORK"},
+              {t:1e9,col:C.redHi,lab:"VESSELS"}];
+const BA=[0.10,0.16,0.24,0.34,0.48];
+const bandOf=v=>{for(let k=0;k<BLASTZ.length;k++) if(v<BLASTZ[k].t) return k; return 4;};
+
+const R=(x,y,w,h,col,a)=>{ctx.globalAlpha=a==null?1:a;ctx.fillStyle=col;ctx.fillRect(x,y,w,h);ctx.globalAlpha=1;};
+function T(s,x,y,col,size,align){ctx.fillStyle=col||C.ink;ctx.font=(size||10)+"px ui-monospace,Menlo,monospace";
+  ctx.textAlign=align||"left";ctx.fillText(s,x,y);ctx.textAlign="left";}
+function hatch(x,y,w,h,col,a,step,dir){
+  ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();
+  ctx.globalAlpha=a;ctx.strokeStyle=col;ctx.lineWidth=1;ctx.beginPath();
+  for(let i=-h;i<w+h;i+=step){ctx.moveTo(x+i,y);ctx.lineTo(x+i+(dir<0?-h:h),y+h);}
+  ctx.stroke();ctx.restore();ctx.globalAlpha=1;
+}
+const rnd=i=>{let h=Math.imul(i^0x9e37,0x85eb)>>>0;return ((h^h>>>15)>>>0)/4294967296;};
+// how burnt a cell is, 0..1, from the worst overpressure it has ever seen
+const scarF=v=>v<BLAST_LO?0:Math.min(1,(v-BLAST_LO)/(240-BLAST_LO));
+
+function boxes(gx,gy){
+  for(const b of BOXES){
+    const x=gx+b.x*CELL, y=gy+b.y*CELL, w=b.w*CELL, h=b.h*CELL;
+    R(x,y,w,h,C.panel); R(x,y,w,h,C.metal,0.16);
+    ctx.strokeStyle=C.metal;ctx.globalAlpha=0.7;ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,h-1);ctx.globalAlpha=1;
+    T(b.n,x+w/2,y+h/2+3,C.ink2,8,"center");
+  }
+}
+
+/* the locked hydrogen layer: violet wash, one hard line at the flammable limit */
+function h2Edge(gx,gy){
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i=Y*GW+X, f=H2[i], x0=gx+X*CELL, y0=gy+Y*CELL;
+    if(FLAME[i]>0){R(x0,y0,CELL,CELL,C.amber,0.30+0.45*FLAME[i]);continue;}
+    if(f<=0.002) continue;
+    R(x0,y0,CELL,CELL,C.h2,Math.min(0.40,0.08+0.34*(f/LFL)));
+  }
+  ctx.strokeStyle=C.h2;ctx.lineWidth=2;ctx.globalAlpha=1;
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i=Y*GW+X, x0=gx+X*CELL, y0=gy+Y*CELL, in0=H2[i]>=LFL;
+    if(in0) hatch(x0,y0,CELL,CELL,C.h2,0.45,4,1);
+    if(X<GW-1 && in0!==(H2[i+1]>=LFL)){ctx.beginPath();ctx.moveTo(x0+CELL,y0);ctx.lineTo(x0+CELL,y0+CELL);ctx.stroke();}
+    if(Y<GH-1 && in0!==(H2[i+GW]>=LFL)){ctx.beginPath();ctx.moveTo(x0,y0+CELL);ctx.lineTo(x0+CELL,y0+CELL);ctx.stroke();}
+  }
+  ctx.globalAlpha=1;ctx.lineWidth=1;
+}
+/* the LIVE blast: the wash, and nothing in the cell */
+function blWash(gx,gy){
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i=Y*GW+X, v=PK[i]; if(v<BLAST_LO) continue;
+    const z=bandOf(v);
+    R(gx+X*CELL,gy+Y*CELL,CELL,CELL,BLASTZ[z].col,BA[z]);
+  }
+}
+
+/* SCAR 1: SOOT. A flat warm-dark fill, depth is the worst peak that cell saw */
+function scarSoot(gx,gy){
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i=Y*GW+X, f=scarF(SCAR[i]); if(!f) continue;
+    R(gx+X*CELL,gy+Y*CELL,CELL,CELL,C.soot,0.25+0.65*f);
+  }
+}
+/* SCAR 2: SOOT + GRAIN. The same fill with debris in it, so a burnt bay reads
+   as a surface rather than as a flat wash. */
+function scarGrain(gx,gy){
+  scarSoot(gx,gy);
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i=Y*GW+X, f=scarF(SCAR[i]); if(f<0.08) continue;
+    const x0=gx+X*CELL, y0=gy+Y*CELL, n=Math.round(2+6*f);
+    for(let k=0;k<n;k++){
+      const px=x0+1+rnd(i*53+k*7)*(CELL-2), py=y0+1+rnd(i*911+k*13)*(CELL-2);
+      ctx.globalAlpha=0.20+0.45*rnd(i*17+k);
+      ctx.fillStyle = rnd(i*29+k)>0.72 ? C.sootHi : "#0a0705";
+      ctx.fillRect(px,py,1,1);
+    }
+    ctx.globalAlpha=1;
+  }
+}
+/* SCAR 3: SOOT + RIM. The fill plus a dull charred edge, so the crater has an
+   outline rather than fading out. */
+function scarRim(gx,gy){
+  scarSoot(gx,gy);
+  const on=i=>scarF(SCAR[i])>0.02;
+  ctx.strokeStyle=C.sootHi;ctx.lineWidth=1;ctx.globalAlpha=0.9;
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i=Y*GW+X, x0=gx+X*CELL, y0=gy+Y*CELL, in0=on(i);
+    if(X<GW-1 && in0!==on(i+1)){ctx.beginPath();ctx.moveTo(x0+CELL-.5,y0);ctx.lineTo(x0+CELL-.5,y0+CELL);ctx.stroke();}
+    if(Y<GH-1 && in0!==on(i+GW)){ctx.beginPath();ctx.moveTo(x0,y0+CELL-.5);ctx.lineTo(x0+CELL,y0+CELL-.5);ctx.stroke();}
+  }
+  ctx.globalAlpha=1;
+}
+
+/* the seam order: machines, then the scar (it is on the deck), then the live
+   blast over it, then the cloud on top */
+const full=scar=>(gx,gy)=>{boxes(gx,gy);scar(gx,gy);blWash(gx,gy);h2Edge(gx,gy);};
+
+const PANELS=[
+  {t:"REF / H2 ONLY",    s:"locked: violet wash, one line at 4 %",      f:h2Edge,   kind:"h2"},
+  {t:"REF / BLAST ONLY", s:"live wash, five bands, no marks",           f:blWash,   kind:"bl"},
+  {t:"REF / BOTH",       s:"only the hydrogen draws a line",            f:(g,y)=>{blWash(g,y);h2Edge(g,y);}, kind:"both"},
+  {t:"SCAR 1 / SOOT",    s:"flat burn, depth is the worst peak",        f:scarSoot, kind:"scar"},
+  {t:"SCAR 2 / GRAIN",   s:"burn plus debris speckle",                  f:scarGrain,kind:"scar"},
+  {t:"SCAR 3 / RIM",     s:"burn plus a charred edge round the crater", f:scarRim,  kind:"scar"},
+  {t:"FULL 1 / SOOT",    s:"machines, scar, live blast, cloud",         f:full(scarSoot), kind:"full"},
+  {t:"FULL 2 / GRAIN",   s:"machines, scar, live blast, cloud",         f:full(scarGrain),kind:"full"},
+  {t:"FULL 3 / RIM",     s:"machines, scar, live blast, cloud",         f:full(scarRim),  kind:"full"},
+];
+const panelXY=n=>[PADX+(n%3)*(PW+GAPX), PADY+Math.floor(n/3)*(PH+GAPY)];
+function legend(x,y,kind){
+  const rows = kind==="bl" ? BLASTZ.map(z=>[z.col,z.lab])
+    : kind==="h2" ? [[C.h2,"GAS"],[C.h2,"FLAMMABLE"],[C.amber,"BURNING"]]
+    : kind==="scar" ? [[C.soot,"BURNT"],[C.sootHi,"HEAVILY BURNT"]]
+    : BLASTZ.map(z=>[z.col,z.lab]).concat([[C.h2,"H2"],[C.sootHi,"SCAR"]]);
+  let cx=x, cy=y;
+  for(const row of rows){
+    const w=17+row[1].length*5.6;
+    if(cx-x+w>PW){cx=x;cy+=12;}
+    R(cx,cy-7,8,8,row[0],0.85);T(row[1],cx+11,cy,C.ink2,9);cx+=w;
+  }
+}
+function draw(){
+  R(0,0,cv.width,cv.height,C.bg);
+  PANELS.forEach((p,n)=>{
+    const xy=panelXY(n), gx=xy[0], gy=xy[1];
+    T(p.t,gx,gy-24,C.bright,11); T(p.s,gx,gy-11,C.ink2,9);
+    R(gx,gy,PW,PH,C.panel);
+    ctx.strokeStyle=C.edge;ctx.lineWidth=1;
+    for(let X=0;X<=GW;X++){ctx.beginPath();ctx.moveTo(gx+X*CELL+.5,gy);ctx.lineTo(gx+X*CELL+.5,gy+PH);ctx.stroke();}
+    for(let Y=0;Y<=GH;Y++){ctx.beginPath();ctx.moveTo(gx,gy+Y*CELL+.5);ctx.lineTo(gx+PW,gy+Y*CELL+.5);ctx.stroke();}
+    p.f(gx,gy);
+    ctx.strokeStyle=C.edge2;ctx.strokeRect(gx+.5,gy+.5,PW,PH);
+    legend(gx,gy+PH+18,p.kind);
+  });
+}
+draw();
+cv.addEventListener("mousemove",e=>{
+  const r=cv.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+  const out=document.getElementById("read");
+  for(let n=0;n<PANELS.length;n++){
+    const xy=panelXY(n), gx=xy[0], gy=xy[1];
+    if(mx<gx||my<gy||mx>=gx+PW||my>=gy+PH) continue;
+    const X=Math.floor((mx-gx)/CELL), Y=Math.floor((my-gy)/CELL), i=Y*GW+X;
+    out.textContent = "H2 "+(H2[i]*100).toFixed(1)+" %"+(FLAME[i]>0?" BURNING":"")
+      + "   LIVE "+PK[i].toFixed(0)+" kPa"
+      + "   WORST EVER "+SCAR[i].toFixed(0)+" kPa"
+      + (SCAR[i]>=BLAST_LO?" "+BLASTZ[bandOf(SCAR[i])].lab:"");
+    return;
+  }
+  out.textContent="—";
+});
+</script>

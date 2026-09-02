@@ -1,0 +1,302 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fire mockups - six ways to draw a burning compartment</title>
+<style>
+  body{background:#080c0e;color:#9fb4b9;font:12px ui-monospace,Menlo,monospace;margin:16px}
+  h1{font-size:13px;color:#dff0f3;font-weight:400;margin:0 0 8px}
+  p{max-width:980px;line-height:1.5;margin:0 0 10px}
+  button{background:#0e1518;color:#dff0f3;border:1px solid #2c464e;padding:4px 10px;font:12px ui-monospace,Menlo,monospace;margin-right:6px}
+</style>
+<h1>FIRE MOCKUPS &mdash; SIX WAYS TO DRAW THE SAME BURNING COMPARTMENT</h1>
+<p>One synthetic fire, six renderers, same fake plant under each. The burn spreads from a seed and
+cells burn out behind the front, so every panel shows a fringe and a spent middle at once. Nothing
+here is physics &mdash; it is a moving flame field, so the LOOK is the only thing under test.</p>
+<div>
+  <button id="pause">PAUSE</button>
+  <button id="relight">RELIGHT</button>
+  <button id="size">SIZE: BIG</button>
+</div>
+<canvas id="c" width="1420" height="900"></canvas>
+<script>
+"use strict";
+const C={bg:"#080c0e",panel:"#0e1518",edge:"#1d2f35",edge2:"#2c464e",ink:"#9fb4b9",ink2:"#5d7378",
+         bright:"#dff0f3",amber:"#f0a830",red:"#ff5a45",redHi:"#ff7d6c",metal:"#6d8f98",
+         h2:"#a48ad6",fire:"#fff3d0",fire2:"#ffd27a",smoke:"#6a6560"};
+const cv=document.getElementById("c"), ctx=cv.getContext("2d");
+const GW=26, GH=16, CELL=16, PW=GW*CELL, PH=GH*CELL, PADX=24, PADY=54, GAPX=40, GAPY=92;
+const N=GW*GH;
+
+/* ══ THE FAKE PLANT, so a fire is judged against machines and not against black ══ */
+const BOXES=[{x:2,y:8,w:4,h:5,n:"PUMP"},{x:9,y:9,w:6,h:5,n:"CONDENSER"},
+             {x:18,y:8,w:5,h:6,n:"RADIATOR"},{x:10,y:1,w:6,h:4,n:"REACTOR"}];
+const OCC=new Uint8Array(N);
+for(const b of BOXES) for(let y=b.y;y<b.y+b.h;y++) for(let x=b.x;x<b.x+b.w;x++) OCC[y*GW+x]=1;
+
+/* ══ THE FLAME FIELD. FL is how far the front has crossed a cell, 0..1; a cell
+   that has been alight for its own lifetime goes out, so the fire is a moving
+   ring with spent ground behind it. AGE carries how long it has burned, which
+   is what the colour rides on. ══ */
+const FL=new Float64Array(N), AGE=new Float64Array(N), DONE=new Uint8Array(N);
+let big=1;
+function relight(){
+  FL.fill(0); AGE.fill(0); DONE.fill(0);
+  const seed = big ? [7*GW+13, 9*GW+5, 6*GW+20] : [7*GW+13];
+  for(const i of seed) FL[i]=0.01;
+}
+const LIFE=2.6;                            // s a cell burns before it is spent
+function burnStep(dt){
+  for(let i=0;i<N;i++){
+    if(FL[i]<=0 || DONE[i]) continue;
+    AGE[i]+=dt;
+    const adv=dt/0.55;
+    const nf=Math.min(1,FL[i]+adv);
+    if(nf>=1 && FL[i]<1){
+      const X=i%GW, Y=(i/GW)|0, nb=[];
+      if(X>0)nb.push(i-1); if(X<GW-1)nb.push(i+1);
+      if(Y>0)nb.push(i-GW); if(Y<GH-1)nb.push(i+GW);
+      for(const j of nb) if(!FL[j] && !DONE[j] && !OCC[j] && (big||Math.random()<0.75)) FL[j]=0.01;
+    }
+    FL[i]=nf;
+    if(AGE[i]>LIFE){ FL[i]=0; DONE[i]=1; }
+  }
+  let live=0; for(let i=0;i<N;i++) if(FL[i]>0) live++;
+  if(!live) relight();
+}
+// how hot a cell reads, 0..1 - hottest just after it lights, cooling as it spends
+const heatOf=i=>{ if(FL[i]<=0) return 0;
+  const a=AGE[i]/LIFE; return Math.max(0, Math.min(1, (1-a)*0.7+FL[i]*0.5)); };
+
+/* ══ helpers ══ */
+let T=0;
+const hash=i=>{let h=Math.imul(i^0x9e3779b9,0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);
+               return ((h^(h>>>16))>>>0)/4294967296;};
+const R=(x,y,w,h,col,a)=>{ctx.globalAlpha=a==null?1:a;ctx.fillStyle=col;ctx.fillRect(x,y,w,h);ctx.globalAlpha=1;};
+function TX(s,x,y,col,size,align){ctx.fillStyle=col||C.ink;ctx.font=(size||10)+"px ui-monospace,Menlo,monospace";
+  ctx.textAlign=align||"left";ctx.fillText(s,x,y);ctx.textAlign="left";}
+const alphaC=(c,a)=>{const v=parseInt(c.slice(1),16);
+  return "rgba("+(v>>16&255)+","+(v>>8&255)+","+(v&255)+","+Math.max(0,Math.min(1,a)).toFixed(3)+")";};
+const FIRECOL=[C.red,C.amber,C.fire2,C.fire];
+const colOf=h=>FIRECOL[Math.min(3,Math.floor(h*4))];
+
+/* ══ 1. PIXEL BLOBS - what is in the game today: soft discs, added together,
+   composited at 8 plant-pixels to the pixel and blown back up hard. ══ */
+let SPR=null;
+function sprites(){
+  if(SPR) return SPR;
+  SPR=FIRECOL.map(col=>{
+    const d=48, k=document.createElement("canvas"); k.width=k.height=d;
+    const c=k.getContext("2d"), g=c.createRadialGradient(d/2,d/2,0,d/2,d/2,d/2);
+    g.addColorStop(0,alphaC(col,0.95)); g.addColorStop(0.45,alphaC(col,0.45));
+    g.addColorStop(1,alphaC(col,0)); c.fillStyle=g; c.fillRect(0,0,d,d); return k;
+  });
+  return SPR;
+}
+let BUF=null, BCTX=null;
+function lowbuf(px){
+  const w=Math.ceil(PW/px), h=Math.ceil(PH/px);
+  if(!BUF){ BUF=document.createElement("canvas"); BCTX=BUF.getContext("2d"); }
+  if(BUF.width!==w||BUF.height!==h){ BUF.width=w; BUF.height=h; }
+  BCTX.setTransform(1,0,0,1,0,0); BCTX.clearRect(0,0,w,h);
+  BCTX.globalCompositeOperation="lighter";
+  return {c:BCTX,w,h};
+}
+function drawBlobs(gx,gy){
+  const px=8, b=lowbuf(px), sp=sprites();
+  for(let i=0;i<N;i++){
+    const hv=heatOf(i); if(hv<=0) continue;
+    const X=i%GW, Y=(i/GW)|0;
+    const fk=0.66+0.34*Math.sin(T*2.4*6.28+hash(i)*6.28);
+    const r=CELL*(1.15+0.35*hash(i+77))*(0.72+0.28*fk)/px;
+    const cx=((X+0.5)*CELL+(hash(i+211)-0.5)*CELL*0.4)/px;
+    const cy=((Y+0.5)*CELL+(hash(i+733)-0.5)*CELL*0.4)/px;
+    b.c.globalAlpha=Math.round(Math.min(0.85,(0.30+0.55*hv)*fk)*3)/3;
+    b.c.drawImage(sp[Math.min(3,Math.floor(hv*4))],cx-r,cy-r,r*2,r*2);
+  }
+  const sm=ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(BUF,gx,gy,b.w*px,b.h*px);
+  ctx.imageSmoothingEnabled=sm;
+}
+
+/* ══ 2. DOOM FIRE - the 1993 trick. A coarse heat buffer, seeded at the bottom
+   of every burning cell, propagating UPWARD with a random cool and a random
+   sideways slip. Nothing is drawn per cell at all: the fire is its own little
+   simulation and the cells only feed it. ══ */
+const DPX=6, DW=Math.ceil(PW/DPX), DH=Math.ceil(PH/DPX);
+const DOOM=new Uint8Array(DW*DH);
+const DPAL=[[0,0,0,0],[40,10,6,0.30],[92,20,8,0.55],[150,38,10,0.72],[196,70,14,0.82],
+            [232,120,26,0.90],[244,168,48,0.94],[252,214,120,0.97],[255,243,208,1]];
+function doomStep(){
+  // seed: the bottom row of pixels inside any burning cell is the fuel bed
+  for(let i=0;i<N;i++){
+    const hv=heatOf(i); if(hv<=0) continue;
+    const X=i%GW, Y=(i/GW)|0;
+    const py=Math.min(DH-1, Math.floor(((Y+1)*CELL-1)/DPX));
+    const x0=Math.floor(X*CELL/DPX), x1=Math.ceil((X+1)*CELL/DPX);
+    for(let x=x0;x<x1;x++) DOOM[py*DW+x]=Math.max(DOOM[py*DW+x], Math.round(4+4*hv));
+  }
+  for(let y=1;y<DH;y++) for(let x=0;x<DW;x++){
+    const src=y*DW+x, v=DOOM[src];
+    if(v<=0){ DOOM[src-DW]=0; continue; }
+    const slip=(Math.random()*3)|0, dx=slip-1;
+    const nx=Math.max(0,Math.min(DW-1,x+dx));
+    DOOM[(y-1)*DW+nx]=Math.max(0, v-((Math.random()*2)|0));
+  }
+}
+function drawDoom(gx,gy){
+  for(let y=0;y<DH;y++) for(let x=0;x<DW;x++){
+    const v=DOOM[y*DW+x]; if(!v) continue;
+    const p=DPAL[Math.min(DPAL.length-1,v)];
+    ctx.globalAlpha=p[3]; ctx.fillStyle="rgb("+p[0]+","+p[1]+","+p[2]+")";
+    ctx.fillRect(gx+x*DPX,gy+y*DPX,DPX,DPX); ctx.globalAlpha=1;
+  }
+}
+
+/* ══ 3. DITHERED BANDS - no soft anything. An intensity field is banded into
+   four steps and each step is drawn through a 4x4 ordered dither, which is how
+   an eight-colour machine drew a gradient. It is the same argument the survey
+   layers already make, one field over. ══ */
+const BAYER=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+function drawDither(gx,gy){
+  const px=4, w=Math.ceil(PW/px), h=Math.ceil(PH/px);
+  for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+    // intensity from the cells around this pixel - a cheap, blocky blur
+    const fx=(x*px)/CELL, fy=(y*px)/CELL;
+    const X=Math.floor(fx), Y=Math.floor(fy);
+    let v=0;
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+      const xx=X+dx, yy=Y+dy; if(xx<0||yy<0||xx>=GW||yy>=GH) continue;
+      const hv=heatOf(yy*GW+xx); if(hv<=0) continue;
+      const d=Math.hypot(fx-(xx+0.5),fy-(yy+0.5));
+      v+=hv*Math.max(0,1-d/1.6);
+    }
+    v*=0.55+0.45*Math.sin(T*3.1*6.28+hash(x*31+y*7)*6.28);
+    if(v<=0.04) continue;
+    const lvl=Math.min(3.99, v*3.4);
+    const base=Math.floor(lvl), frac=lvl-base;
+    const on=frac*16 > BAYER[y&3][x&3];
+    const col=FIRECOL[Math.min(3, base+(on?1:0))];
+    if(base===0 && !on) continue;
+    R(gx+x*px,gy+y*px,px,px,col,0.85);
+  }
+}
+
+/* ══ 4. FLAME TONGUES - a cell throws two or three chunky tongues that rise out
+   of it and die. The fire has a DIRECTION, which none of the others do, and it
+   is drawn in the same hard little rectangles as the plant. ══ */
+function drawTongues(gx,gy){
+  const px=4;
+  for(let i=0;i<N;i++){
+    const hv=heatOf(i); if(hv<=0) continue;
+    const X=i%GW, Y=(i/GW)|0;
+    const n=1+Math.round(hv*2);
+    for(let k=0;k<n;k++){
+      const seed=i*7+k*131;
+      const ph=(T*(0.7+0.5*hash(seed))+hash(seed+9))%1;
+      const bx=gx+X*CELL+Math.floor(hash(seed+3)*(CELL-px));
+      const tall=Math.round((CELL*(0.5+1.4*hv))*(0.35+0.65*(1-ph))/px);
+      for(let s=0;s<tall;s++){
+        const up=s/Math.max(1,tall-1);
+        const y=gy+(Y+1)*CELL-px-(s*px)-Math.round(ph*CELL*1.2);
+        const lvl=Math.min(3,Math.floor((hv*(1-up*0.8))*4.2));
+        if(lvl<0) continue;
+        const wob=Math.round(Math.sin((T*4+up*3+hash(seed)*6.28))*px*up);
+        R(bx+wob,y,px,px,FIRECOL[lvl],0.85);
+      }
+    }
+  }
+}
+
+/* ══ 5. SPRITE FLAMES - one authored 8x8 flame, three frames, stamped in every
+   burning cell at its own phase and scale. The most "drawn by hand" of the six
+   and the only one whose shape is a decision rather than an accident. ══ */
+const FRAMES=[
+  ["...11...","..1221..","..1231..",".123321.",".123321.","12333321","12333321",".133331."],
+  ["..11....","..122...",".12321..",".123321.","12333321","12333321",".1333331",".133331."],
+  ["...11...","...122..","..12321.","..12332.",".1233321","12333321","12333331",".133331."],
+];
+const SPRCOL={"1":C.red,"2":C.amber,"3":C.fire2};
+function drawSprites(gx,gy){
+  for(let i=0;i<N;i++){
+    const hv=heatOf(i); if(hv<=0) continue;
+    const X=i%GW, Y=(i/GW)|0;
+    const f=FRAMES[Math.floor((T*9+hash(i)*3)%FRAMES.length)];
+    const px=Math.max(1,Math.round(CELL*(0.55+0.45*hv)/8));
+    const w=px*8, ox=gx+X*CELL+Math.round((CELL-w)/2), oy=gy+(Y+1)*CELL-px*8;
+    for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+      const ch=f[r][c]; if(ch===".") continue;
+      let col=SPRCOL[ch];
+      if(hv>0.75 && ch==="3") col=C.fire;
+      if(hv<0.35 && ch==="3") col=C.amber;
+      R(ox+c*px, oy+r*px, px, px, col, 0.90);
+    }
+  }
+}
+
+/* ══ 6. EMBER SCATTER - no shape at all. Coarse pixels lit at a density that is
+   the heat, so the fire is a texture that thins out at the edge. Cheapest, and
+   the closest in spirit to the sparks and hatching already on the board. ══ */
+function drawEmbers(gx,gy){
+  const px=4, per=Math.round(CELL/px);
+  for(let i=0;i<N;i++){
+    const hv=heatOf(i); if(hv<=0) continue;
+    const X=i%GW, Y=(i/GW)|0;
+    for(let a=0;a<per;a++) for(let b=0;b<per;b++){
+      const s=i*97+a*13+b;
+      const tw=0.5+0.5*Math.sin(T*5*6.28+hash(s)*6.28);
+      const v=hv*(0.35+0.9*hash(s+5))*tw;
+      if(v<0.22) continue;
+      R(gx+X*CELL+a*px, gy+Y*CELL+b*px, px, px, FIRECOL[Math.min(3,Math.floor(v*4))], 0.9);
+    }
+  }
+}
+
+/* ══ the panels ══ */
+const PANELS=[
+  {t:"1 / PIXEL BLOBS",   s:"todays build: soft discs added, then blown up hard", f:drawBlobs},
+  {t:"2 / DOOM FIRE",     s:"a heat buffer rising and cooling, the 1993 trick",   f:drawDoom},
+  {t:"3 / DITHERED BANDS",s:"four steps through an ordered dither, no soft edge", f:drawDither},
+  {t:"4 / FLAME TONGUES", s:"chunky tongues rising out of each burning cell",     f:drawTongues},
+  {t:"5 / SPRITE FLAMES", s:"one authored 8x8 flame, three frames, stamped",      f:drawSprites},
+  {t:"6 / EMBER SCATTER", s:"lit pixels at a density that IS the heat",           f:drawEmbers},
+];
+const panelXY=n=>[PADX+(n%3)*(PW+GAPX), PADY+Math.floor(n/3)*(PH+GAPY)];
+function plant(gx,gy){
+  R(gx,gy,PW,PH,C.panel);
+  ctx.strokeStyle=C.edge; ctx.lineWidth=1;
+  for(let X=0;X<=GW;X++){ctx.beginPath();ctx.moveTo(gx+X*CELL+.5,gy);ctx.lineTo(gx+X*CELL+.5,gy+PH);ctx.stroke();}
+  for(let Y=0;Y<=GH;Y++){ctx.beginPath();ctx.moveTo(gx,gy+Y*CELL+.5);ctx.lineTo(gx+PW,gy+Y*CELL+.5);ctx.stroke();}
+  ctx.strokeStyle=C.metal; ctx.globalAlpha=0.5; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(gx+4*CELL,gy+3*CELL); ctx.lineTo(gx+22*CELL,gy+3*CELL);
+  ctx.moveTo(gx+13*CELL,gy+3*CELL); ctx.lineTo(gx+13*CELL,gy+9*CELL); ctx.stroke();
+  ctx.globalAlpha=1; ctx.lineWidth=1;
+  for(const b of BOXES){
+    const x=gx+b.x*CELL,y=gy+b.y*CELL,w=b.w*CELL,h=b.h*CELL;
+    R(x,y,w,h,C.panel); R(x,y,w,h,C.metal,0.16);
+    ctx.strokeStyle=C.metal; ctx.globalAlpha=0.7; ctx.strokeRect(x+.5,y+.5,w-1,h-1); ctx.globalAlpha=1;
+    TX(b.n,x+w/2,y+h/2+3,C.ink2,8,"center");
+  }
+  // the spent ground, so a fire that has passed leaves something behind
+  for(let i=0;i<N;i++) if(DONE[i])
+    R(gx+(i%GW)*CELL, gy+((i/GW)|0)*CELL, CELL, CELL, "#2b1c15", 0.55);
+}
+let paused=0, last=0;
+function frame(ts){
+  const dt=Math.min(0.05,(ts-last)/1000||0.016); last=ts;
+  if(!paused){ T+=dt; burnStep(dt); doomStep(); }
+  R(0,0,cv.width,cv.height,C.bg);
+  PANELS.forEach((p,n)=>{
+    const xy=panelXY(n), gx=xy[0], gy=xy[1];
+    TX(p.t,gx,gy-24,C.bright,11); TX(p.s,gx,gy-11,C.ink2,9);
+    ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,PW,PH); ctx.clip();
+    plant(gx,gy); p.f(gx,gy);
+    ctx.restore();
+    ctx.strokeStyle=C.edge2; ctx.strokeRect(gx+.5,gy+.5,PW,PH);
+  });
+  requestAnimationFrame(frame);
+}
+document.getElementById("pause").onclick=e=>{paused=!paused; e.target.textContent=paused?"RUN":"PAUSE";};
+document.getElementById("relight").onclick=relight;
+document.getElementById("size").onclick=e=>{big=!big; e.target.textContent="SIZE: "+(big?"BIG":"SMALL"); relight();};
+relight();
+requestAnimationFrame(frame);
+</script>
