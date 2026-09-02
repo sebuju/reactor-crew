@@ -35,10 +35,16 @@ const shim = 'let screen="operate"; function layout(){}';
 const src = [shim].concat(files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8'))).join('\n');
 
 const M = new Function(src +
-  '; return {commission,latDefault,layoutMetrics,scnRun,scnClone,SCNPRE:()=>SCNPRE};')();
+  '; return {commission,latDefault,layoutMetrics,buildStockPlumbing,scnRun,scnClone,' +
+  'LAY:()=>LAY,SCNPRE:()=>SCNPRE};')();
 
 M.layoutMetrics();
 M.latDefault();
+/* THE SHIP HAS TO BE BUILT. D ships as a BLANK GRID - nothing is on it because
+   the code put it there - so this used to fly an empty plant and report a
+   healthy sample count for a reactor that was not there. */
+M.buildStockPlumbing();
+if (!M.LAY().parts.length) throw new Error('the stock plant built nothing');
 M.commission();
 const r = M.scnRun(M.scnClone(M.SCNPRE()[0]));
 if (!r.take.trN) throw new Error('the run recorded nothing');

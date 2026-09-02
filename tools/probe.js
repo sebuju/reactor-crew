@@ -14,7 +14,7 @@
 const {portOnFace,spliceFitting,tieFitting}=require('./bundle');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
- 'placePart,removePart,addFitting,addTank,addPortAt,seedPort,seedRun,pipeLay,'+
+ 'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,addPortAt,seedPort,seedRun,pipeLay,'+
  'buildLayout,buildStockPlumbing,latDefault,pipeMap,pipeNetwork,nodeGraph,'+
  'crossTies,selfRuns,designIssues,loopMap,tankCircuit,tankPrimary,tankIds,tankKg,'+
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
@@ -25,11 +25,9 @@ const M=require('./bundle').headless(
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
 
-/* WHAT A CASE PLACED, TAKEN BACK DOWN AFTERWARDS. placedParts is module state
-   and buildStockPlumbing() only re-syncs the generators and pumps it owns, so
-   without this every case contaminates the next one. */
+/* THE STOCK SHIP, THEN WHATEVER THE CASE ADDS. D goes back to the blank grid
+   first, so no case can contaminate the next one. */
 function withPlant(build, opts){
-  const before=M.LAY().parts.map(p=>p.id);
   Object.assign(D,JSON.parse(JSON.stringify(BASE)));
   M.latDefault();
   M.buildStockPlumbing({loops:(opts&&opts.loops)||1});
@@ -103,6 +101,42 @@ function dump(s,label){
 /* ══ CASES ══ disposable. Add one, read it, delete it. */
 const CASES={
   stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
+  /* A BLANK GRID. Nothing is placed at all: no core, no turbine, no panels.
+     It must commission, run and read as nothing rather than throw. */
+  blank(){
+    Object.assign(D,JSON.parse(JSON.stringify(BASE)));
+    M.latDefault(); M.buildLayout(); M.commission();
+    const s=M.S(); run(s,PSEC); dump(s,"blank grid");
+    console.log(" COUNTS  parts "+M.LAY().parts.length+
+      "  turb "+M.turbCount()+"  cond "+M.condCount()+"  rad "+M.radIds().length);
+  },
+  /* NO COUNT ANYWHERE SAYS HOW MANY TO ADD. Two condensers and three panels
+     on an otherwise stock ship, and the counts are read off the drawing. */
+  counts(){
+    const s=withPlant(M=>{
+      M.addMachine("cond",2,2); M.addMachine("radiator",2,8);
+      M.addMachine("radiator",2,12); M.addMachine("turb",40,2);
+    });
+    run(s,1);
+    console.log("\n── counts ──");
+    console.log(" turb "+M.turbCount()+"  cond "+M.condCount()+"  rad "+M.radIds().length);
+    for(const p of M.LAY().parts) if(["turb","cond","radiator","pump","sg"].includes(p.role))
+      console.log("  "+p.id.padEnd(10)+M.partName(p));
+  },
+  /* A REACTOR COMES WITH ITS ROD DRIVES AND GOES WITH THEM. Place one, place
+     a second, take each away by a different end of the pair. */
+  rides(){
+    Object.assign(D,JSON.parse(JSON.stringify(BASE)));
+    M.latDefault(); M.buildLayout();
+    const say=t=>console.log("  "+t.padEnd(30)+
+      (M.LAY().parts.map(p=>p.id).join(" ") || "(nothing)"));
+    console.log("\n── a rider rides ──");
+    say("blank grid");
+    M.addMachine("core",6,13);  say("ADD REACTOR");
+    M.addMachine("core",30,13); say("ADD REACTOR again");
+    M.removePart("rods2");      say("REMOVE on the 2nd's drives");
+    M.removePart("core1");      say("REMOVE on the 1st reactor");
+  },
   loops4(){ const s=withPlant(null,{loops:4}); run(s,PSEC); dump(s,"stock plant, 4 loops"); },
   /* Every whole-plant preset, flown, printing what it does and what stopped
      it. Disposable and assertion-free like every case here. */
