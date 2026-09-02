@@ -203,7 +203,7 @@ const tankH = (vol,a) => Math.max(2, Math.ceil(tankCells(vol)/tankW(vol,a)));
    predicate for "it can push at all", read by the drawing (a pressure vessel
    gets its own hoop and domed ends) and by nothing else; tankP() is what
    actually prices it. */
-const tankHeld = id => { const t=D.tanks&&D.tanks[id]; return !!t && !!(t.gas || t.pump || t.hold); };
+const tankHeld = id => { const t=D.tanks&&D.tanks[id]; return !!t && !!(t.gas || t.hold); };
 const tankParts=()=>{
   const out=[];
   for(const id in D.tanks){ const t=D.tanks[id]; if(!t.cell) continue;
@@ -356,6 +356,39 @@ function pumpBounds(id){
   // a panel spliced into a cold leg does not make a coolant pump a cw pump
   return {hi, lo, shell, hold, cool: panel && !core};
 }
+/* ══ WHAT THIS PUMP DRAWS ON ══
+   A walk FROM the suction node, over the connections, stopping AT a tank
+   without crossing it - runReach()'s "reached, never crossed" rule, asked of
+   nodes because a part-level walk goes straight through a generator's tube
+   wall. A second pump stops it too: what is behind another machine is that
+   machine's suction, not this one's. Nothing is named - pipe any spare pump
+   onto a reserve and the same walk makes it a reserve pump. */
+function pumpResOf(id){
+  // on the graph (graphSlot()): the solve's own cache signature asks this of
+  // every pump on the plant, so the walk must not be paid per tick
+  const slot=graphSlot("pumpRes"), was=slot.get(id); if(was) return was;
+  const G=nodeGraph(), suc=pumpSucNode(id), out=[];
+  const partAt=n=>partOf(n) || partOf(n.slice(0,-1));
+  const seen={}, stack=[];
+  // the SUCTION face group only: crossing this pump's own casing would put its
+  // discharge side, and everything on it, in its own suction line
+  for(const n of (G.nodesOf[id]||[])) if(coreFold(n)===suc){ seen[n]=1; stack.push(n); }
+  while(stack.length){ const u=stack.pop();
+    for(const v of (G.adj[u]||[])){ if(seen[v]) continue;
+      const p=partAt(v); if(!p || p.id===id) continue;
+      seen[v]=1;
+      if(p.role==="tank"){ if(!out.includes(p.id)) out.push(p.id); continue; }
+      /* A suction line may have valves and tees in it. Anything else in it is
+         another MACHINE, and what stands behind another machine is that
+         machine's suction and not this one's - without the stop, a coolant
+         pump walked through the vessel and read the pressurizer as its
+         reserve, and every pump on the ship was sized off a tank. */
+      if(p.role!=="fitting") continue;
+      stack.push(v); } }
+  slot.set(id,out);
+  return out;
+}
+const RESERVE_T = 600;                 // s a reserve is sized to hold the plant up over
 /* HOW FAR OVER THE VESSEL IT FEEDS a pump is suggested at. A machine sized to
    exactly the pressure it is pushing against delivers nothing, and its
    regulating valve has no authority to throttle: real feedwater pumps are
@@ -391,6 +424,15 @@ const pumpFlowSuggest = id => {
      against 900 kg/s of evaporation and its shells emptied on the first
      transient. Two feed pumps on that circuit are redundancy, the same
      sentence the loop count makes above. */
+  /* ══ AND A RESERVE PUMP IS SIZED BY ITS RESERVE ══
+     A pump that draws on a tank cannot pass more than the tank holds, and how
+     long it has to hold the plant up is the only figure a reserve has. Asked
+     of the SUCTION and never of the circuit: the feed pump and the emergency
+     feed pump share circuit 1, so a circuit-level question cannot tell them
+     apart. Sized off the boiler instead, an emergency feed pump is bought at
+     636 kg/s where the machine it stands in for is 31.7. */
+  if(id !== undefined){ const r = pumpResOf(id);
+    if(r.length) return r.reduce((m,t)=>m+tankKg(t),0)/RESERVE_T; }
   if(id !== undefined && pumpBounds(id).shell)
     return RATED_KW()/steamRise();            // rated heat over the feed-to-steam rise: kg/s of steam
   /* ══ AND CIRCULATING WATER CARRIES THE REJECTION, NOT THE CORE ══
@@ -504,6 +546,10 @@ const roleHead=role=>{ const R=ROLE[role]; if(!R||!R.internal) return false;
 const pumpSucNode=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return id;
   const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
   return IN ? coreFold(id+IN.a) : id; };
+// AND WHERE IT PUSHES INTO - the same door, the casing path's own `b` face
+const pumpDisNode=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return id;
+  const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
+  return IN ? coreFold(id+IN.b) : id; };
 /* AND WHAT THAT PATH IS CALLED IN THE SOLVE - fitEdgeKey()'s idiom for a
    pump. The reference (derived()) and the tick (step()) both read this pump's
    own swallow off it, and a second spelling of the key is a second answer. */
@@ -2500,6 +2546,12 @@ const isFitting=id=>{ const p=partOf(id); return !!p && p.role==="fitting"; };
    continuation is preferred and the branch is only taken when it is all there
    is. */
 const FIT_BRANCH_ROLE={tank:1};
+/* AND A RESERVE TRAIN IS A BRANCH, the same as the tank behind it - a pump
+   drawing on a reserve (pumpResOf) is that tank's discharge, not a
+   continuation of the line it ties into. Without it the stock feedwater line
+   was named off whichever leg of the tie sorted first and came out grey. */
+const fitBranch = q => !!FIT_BRANCH_ROLE[q.role]
+  || (roleHead(q.role) && pumpResOf(q.id).length > 0);
 /* `out.face` comes back with the face at the machine ANSWERED, which is not
    the face the run being named lands on: a line into a generator's feed
    nozzle through a tee lands on the TEE, and asked about the generator with
@@ -2518,7 +2570,7 @@ function throughFitting(id,avoid,seen,out){
     if(out) out.face = undefined;
     const q=throughFitting(o,avoid,seen,out); if(!q) continue;
     const f = out && out.face!==undefined ? out.face : (c.a===o ? c.sa : c.sb);
-    if(!FIT_BRANCH_ROLE[q.role]){ if(out) out.face = f; return q; }
+    if(!fitBranch(q)){ if(out) out.face = f; return q; }
     if(!branch){ branch=q; branchFace=f; }
   }
   if(out) out.face = branch ? branchFace : undefined;
@@ -2571,6 +2623,14 @@ function runKindFor(aId,bId,af,bf){
     return (isT(o) && tankHold(o.id)) ? "relief" : "hpi";
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
+}
+/* THE RUN JOINING TWO PARTS, by key - or null. There is no list of runs to go
+   stale, so this asks the traced connections, which is where a run's identity
+   lives. */
+function runBetween(a,b){
+  for(const c of pipeMap().conns)
+    if((c.a===a&&c.b===b)||(c.a===b&&c.b===a)) return c.key;
+  return null;
 }
 /* WHICH END OF THIS RUN IS A DEAD END, or null. A fitting with nothing on its
    far side TERMINATES the run - a safety valve on the steam header, a relief
