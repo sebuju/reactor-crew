@@ -240,12 +240,10 @@ const RODX0=.35;
    revolve. Everything still reads them the way it always did; nothing writes
    them but the measurement. refl is still yours - you pick the material, the
    drawing decides how much of it there is. */
-/* contFit/turbFit/condFit: is the part on the grid at all - see fittableList()
-   in layout.js. Decoupled from cont/turb/condCap, which still say what TYPE
-   or how good a one you would buy if you fitted it, so unfitting one never
-   forgets the other. pumpSize and fit are not FITTABLE flags at all - a
-   pump and a fitting are placed, not toggled, at a spot the player chose
-   rather than a fixed slot - see PLACED PARTS and FITTINGS in layout.js. */
+/* THERE IS NO "IS IT FITTED" FLAG. Whether a containment, a turbine or a
+   condenser is on the plant is whether one was PLACED (D.machines, layout.js);
+   `cont` still says what TYPE you would buy, so removing one never forgets
+   the other. Every box on the board is an instance in a dictionary on D. */
 /* ═══════════ D.pipes: THE PLANT'S OWN PLUMBING, CELL BY CELL ═══════════
    There is no list of RUNS. A connection between two machines is not authored
    at all - it is TRACED out of the cells and the ports (pipeMap(), layout.js)
@@ -308,8 +306,7 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
          /* THE HULL, in grid cells. Dragged from its own edges on the bench
             (gridDrag(), layout.js); GW/GH are these two resolved. */
          gw:60, gh:34,
-         cont:1,contFit:true,catcher:false,bkp:1,
-         turbFit:true,condFit:true,fittings:{},
+         cont:1,bkp:1,fittings:{},
          /* ══ PER-INSTANCE QUANTITIES, IN REAL UNITS, KEYED BY PART ID ══
             EMPTY means "whatever this design suggests" - the suggestion is
             computed off the rest of the plant (layout.js), so an untouched
@@ -338,10 +335,12 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
             it to and the value resetPlant() seeds from. Absent means "whatever
             resetPlant() hard-codes", which is what keeps an untouched design
             commissioning bit-identically. */
-         /* D.cells[partId] = [x,y] - where the player DRAGGED a part to. A
-            fixed slot's x,y in buildLayout() is only the default it commissions
-            at, so without this a move survived exactly until the next rebuild. */
-         cells:{},
+         /* D.machines[id] = {kind, cell:[x,y]} - every machine on the plant,
+            the same shape D.tanks and D.fittings already have. A BLANK GRID is
+            the default: nothing is on the ship because the code put it there.
+            The stock ship is a preset (PLANTPRE, pipenet.js), and it is built
+            out of the same gestures the bench hands the player. */
+         machines:{}, name:{},
          tanks:{}, pipes:{}, ports:{}, start:{}};
 
 /* WHERE AN ACTUATOR STANDS THE MOMENT THE PLANT IS COMMISSIONED. Absent means
@@ -373,6 +372,13 @@ const DSCAL=Object.fromEntries(Object.entries(D).filter(([,v])=>typeof v!=="obje
    meantime. Same emptied-in-place rule: a reassignment strands a holder. */
 const designForgetBags=()=>{ for(const b of DBAGS) for(const k in D[b]) delete D[b][k]; };
 const designForget=()=>{ designForgetBags(); Object.assign(D,DSCAL); };
+/* BACK TO THE BLANK GRID. DSCAL is every scalar as it shipped, so everything
+   left is a TABLE and D ships with every one of them empty - which is why this
+   needs no list to keep up to date. Emptied in place, like the bags. */
+const designClear=()=>{
+  for(const k in D) if(typeof D[k]==="object") for(const j in D[k]) delete D[k][j];
+  Object.assign(D,DSCAL);
+};
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
@@ -469,12 +475,12 @@ function derived(){
      weighed - volume times density, ring by ring - and a single ring of real
      steel round a real core comes to rather more than the 28 t the option list
      sold. That gap is a finding, not a rounding error. */
-  /* A part fittableList() (layout.js) can remove is not on the grid at all when
-     unfit, so it charges no mass either - the same "not there" the box on the
-     plant already draws. contRel folds the same fallback into the one number
-     the warning below and commission()'s contRel both read, so NONE and
-     "never fitted" price and warn identically without saying so twice. */
-  const contRel=D.contFit?CONT[D.cont].rel:1;
+  /* ASKED OF THE DRAWING, the same pass step.js already makes for the core
+     catcher. A containment nobody placed is not on the grid at all, so it
+     charges no mass either - and NONE and "never placed" price and warn
+     identically without saying so twice. */
+  const contFit=LAY.parts.some(p=>p.role==="cont");
+  const contRel=contFit?CONT[D.cont].rel:1;
   /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
      layout.js - sums pumpCapOf() over every pump part, static and placed
      alike), replacing the old flat PUMPS[D.pumps] tier. Every generator on
@@ -485,26 +491,40 @@ function derived(){
      fittingMass() charges per fitting INSTANCE off its own bore, the same
      way tankMass() charges per tank - a spool piece and a valve body, so a
      tee is not free redundancy and a full-bore one is not free either. */
-  const mass=a.mass+f.mass+SCRAM[D.scram].mass+CHAN[D.chan].mass
-    +totalPumpMass()+totalSgMass()+(D.contFit?CONT[D.cont].mass:0)+BKP[D.bkp].mass
-    /* THE VESSEL WEIGHS ITS OWN WALL. (D.pdes-1)*220 was a delta off a
-       dimensionless multiplier - no wall, no diameter, and worth nothing at
-       all at the nominal it was measured from. The vessel is a cylinder with
-       a real bore and the wall Barlow says it needs at the setpoint it is
-       actually held at (wallSuggestMm(), pipenet.js), so raising pressure
-       costs steel because steel is what it costs.
-       (D.pzr-1)*45 is gone outright: the pressurizer is a tank and tankMass()
-       already weighs it. */
-    +coreMass + vesselMass + D.chim*38
-    /* Every term here names a BOX on the grid. tankMass() charges per tank
-       INSTANCE, off its own vol, so four tanks cost four tanks and there is
-       no flag anywhere pricing a system with nothing drawn behind it. */
-    + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
-    + (D.rps?55:0) + FOLL[D.foll].mass + (D.nbank-4)*ROD_BANK_T
+  /* ══ THE REACTOR IS ONE MACHINE, AND IT IS ON THE BOARD OR IT IS NOT ══
+     THE VESSEL WEIGHS ITS OWN WALL. (D.pdes-1)*220 was a delta off a
+     dimensionless multiplier - no wall, no diameter, and worth nothing at
+     all at the nominal it was measured from. The vessel is a cylinder with
+     a real bore and the wall Barlow says it needs at the setpoint it is
+     actually held at (wallSuggestMm(), pipenet.js), so raising pressure
+     costs steel because steel is what it costs.
+     (D.pzr-1)*45 is gone outright: the pressurizer is a tank and tankMass()
+     already weighs it.
+     The fuel, its cladding, the coolant, the vessel round it, the chimney over
+     it, the reflector drawn beside it and the drives on its head are all ONE
+     machine - so a ship with no vessel carries none of it. The lattice is a
+     DRAWING (latMeasure(), lattice.js) and it exists whether or not anything
+     stands on the arrangement grid; a drawing weighs nothing. Automatic rod
+     control rides the drives (AUTOSYS.rod, step.js), so it goes with them. */
+  const reactorMass = !roleOf("core") ? 0 :
+      a.mass + f.mass + SCRAM[D.scram].mass + CHAN[D.chan].mass
+    + coreMass + vesselMass + D.chim*38 + latMass()
+    + FOLL[D.foll].mass + (D.nbank-4)*ROD_BANK_T
     + D.nbank*ROD_BANK_T*(D.rodSpd/ROD_SPD0-1)
-    + (D.autorod?26:0) + totalTurbMass() + totalCondMass()
+    + (D.autorod?26:0);
+  /* EVERY TERM HERE NAMES A BOX ON THE GRID, and now every one of them means
+     it. tankMass() charges per tank INSTANCE, off its own vol, so four tanks
+     cost four tanks; the protection system is a cabinet at the control
+     station and the supply is its own box, so neither is priced with nothing
+     drawn behind it. */
+  const mass=reactorMass
+    +totalPumpMass()+totalSgMass()+(contFit?CONT[D.cont].mass:0)
+    +(roleOf("bkp")?BKP[D.bkp].mass:0)
+    + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
+    + (roleOf("ctrl")&&D.rps?55:0)
+    + totalTurbMass() + totalCondMass()
     + totalIhxMass() + totalRadMass()
-    + layMass + latMass();
+    + layMass;
   /* MEASURED, not bought. The pitch correction the old line carried
      (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already
      inside modRatio() - it is how much coolant sits between the assemblies. */
@@ -591,7 +611,7 @@ function derived(){
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
       if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
       else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
-      if(loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
+      if(turbCount() && loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
       if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% of full-load duty but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
       if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);
