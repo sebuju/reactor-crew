@@ -367,8 +367,12 @@ const DBAGS=["turbKgs","condUA","condDump","sgUA","ihxUA","pumpHead","pumpFlow",
    its own default or the plant carries the last design's containment, its
    protection setpoints and its rod worth. */
 const DSCAL=Object.fromEntries(Object.entries(D).filter(([,v])=>typeof v!=="object"));
-const designForget=()=>{ for(const b of DBAGS) for(const k in D[b]) delete D[b][k];
-  Object.assign(D,DSCAL); };
+/* THE BAGS ALONE. A caller that has just WRITTEN the scalars it wants cannot
+   use designForget(), which puts them back - and the derived bags still have to
+   go, because bake() will have filled them from a half-built design in the
+   meantime. Same emptied-in-place rule: a reassignment strands a holder. */
+const designForgetBags=()=>{ for(const b of DBAGS) for(const k in D[b]) delete D[b][k]; };
+const designForget=()=>{ designForgetBags(); Object.assign(D,DSCAL); };
 
 /* Gross cycle efficiency. The reactor sets the ceiling - a 1700 K salt loop can
    drive a far better cycle than a 559 K boiler - and the turbine you buy decides
