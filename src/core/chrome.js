@@ -30,8 +30,14 @@ function rr(x,y,w,h,r){                 // rounded-rect path (no roundRect in ol
    already produced. Same arithmetic, same output; both tables are caches of
    pure functions and are cleared rather than grown without bound. */
 const LERP_HEX=new Map(), LERP_RGB=new Map();
+/* lerpC's own output is an rgb() string, so a colour lerped twice - which is
+   every temperature-tinted pipe - parsed as NaN and packed as black. */
 const hexPack=c=>{ let v=LERP_HEX.get(c);
-  if(v===undefined){ v=parseInt(c.slice(1,7),16); LERP_HEX.set(c,v); }
+  if(v===undefined){
+    if(c.charCodeAt(0)===35) v=parseInt(c.slice(1,7),16);
+    else { const n=c.match(/\d+/g)||[0,0,0]; v=(+n[0]<<16)|(+n[1]<<8)|(+n[2]); }
+    LERP_HEX.set(c,v);
+  }
   return v; };
 const lerpC=(a,b,t)=>{ t=clamp(t,0,1);
   const A=hexPack(a), B=hexPack(b);
