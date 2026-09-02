@@ -768,6 +768,7 @@ const TANK_RHO = 1000;                 // kg/m^3 - cold water, which is what a t
    own, through partTsurv()/partPburst(). */
 const TANK_DEFAULT = {
   vol:35, level:100, fluid:"water",
+  // pump is {bus, p MPa, q kg/s} - a head AND a swallow, q optional (tankPumpQSuggest)
   gas:{p0:4.5, frac:0.35}, pump:null, check:true, auto:"manual", burst:null,
   hold:null, tsurv:null, pburst:null, aspect:1,
   /* INEXHAUSTIBLE - a level that never moves, so the tank is an infinite
@@ -834,6 +835,13 @@ const tankWet   = lvl => lvl > TANK_LVL_EPS;
    zero, which is exactly what a pumped tank with no nitrogen behind it is
    worth in a blackout - and the whole of why an accumulator is worth buying. */
 const tankPumpLive = s => !s.blackout || (!s.bkpLost && autoLive("bkp"));
+/* WHAT A TANK'S PUMP CAN SWALLOW, kg/s. It SUGGESTS - a reserve is sized by how long it has
+   to last, so the default empties its own vessel over TANK_PUMP_T; state `q` on the instance
+   and that stands instead. Never baked: the vessel's volume is a figure the player moves. */
+const TANK_PUMP_T = 600;                     // s a reserve is sized to deliver over
+const tankPumpQSuggest = id => tankKg(id)/TANK_PUMP_T;
+const tankPumpQ = id => { const p = D.tanks[id] && D.tanks[id].pump;
+  return p ? (p.q ?? tankPumpQSuggest(id)) : 0; };
 function tankP(s,id){
   const t = D.tanks[id];
   if(!t) return 0;
@@ -891,7 +899,7 @@ const tankCheckOpen = (s, id) =>
    tank's own edge could ask about honestly - so a tank with no check valve
    and no gas charge of its own to fight is one this can never gate. */
 const tankOpen = (s,id) => {
-  if(s.tankOpen && s.tankOpen[id]) return true;
+  if(s.refOpen || (s.tankOpen && s.tankOpen[id])) return true;
   /* the operator may defeat the RULE without touching the valve - the same
      "fitted, then armed" pair every automatic system answers, per tank
      rather than as one flag over a named system */
@@ -968,6 +976,32 @@ const COND_P0 = 0.004;
    of vapour is still turning, so it keeps a fifth of its head rather than
    none. Nothing measured says a fifth. */
 const CAV_DERATE = 0.8;
+/* ══ A PUMP HAS A HEAD-FLOW CURVE, AND IT IS WHY IT CANNOT RUN OUT ══
+   Shutoff head is (1+PUMP_DROOP) of the machine's stated duty head, the head
+   falls linearly with what it is passing, and it is exactly the stated head at
+   the stated flow - so a plant sitting at its duty point is bit-identical and
+   the reference solve, which has no flow to read yet, seeds on that point.
+   Past duty the head goes with the flow and reaches zero at 1+1/PUMP_DROOP of
+   rated, which is the runout a real machine has and this one had none of: the
+   BN-600 feed pump passed 320 times its rated flow against nothing but its own
+   casing.
+   s.pumpQBy is LAGGED one tick, and it must be - a head that depended on this
+   tick's answer would be part of the question - the same standing s.cavP has,
+   and it is smoothed for the same reason that one is. */
+const PUMP_DROOP = 0.25;
+const pumpQOf = (s, pid) => (s && s.pumpQBy && s.pumpQBy[pid]!==undefined)
+  ? s.pumpQBy[pid] : pumpFlow(pid);
+const pumpCurve = (s, pid) => Math.max(0,
+  1 + PUMP_DROOP*(1 - pumpQOf(s,pid)/Math.max(pumpFlow(pid),1e-9)));
+/* THE CASING IS THE MACHINE'S OWN CHARACTERISTIC, and every machine with a head has one:
+   an ideal head source in series with a resistance IS a linear head-flow curve - shutoff
+   head at no flow, falling as it passes more - which is what stops a real machine running
+   out. Priced off the RATIO the machine states, head per rated kg/s, against the reference
+   machine's own, so the runout multiple is the same everywhere instead of scaling with
+   head. A TANK's pump is one of these too: given a head and no swallow it was an unlimited
+   source, and a 19 t reserve referenced 8965 kg/s - enough to empty itself in two seconds. */
+const pumpCasingG = (h, q) =>
+  resist(1, NET_COMP_LEN*(PUMP_FLOW_REF/Math.max(q,1e-9))*(h/PUMP_H0));
 /* ONE PUMP'S OWN SPEED, 0..1 - its ACTUAL, walked toward its own demand by
    step() with its own inertia. 1 when there is no S to ask, because the
    reference solve (netCoreFrac0) runs on a synthetic state and the reference
@@ -1084,13 +1118,18 @@ const pipeExtraLen = (s, cells) => {
    branch RUN a fitting used to own once carried. Written here, beside the table whose modes it
    prices, so a reader cannot drift from the builder. */
 const fitEdgeKey = fid => "comp:" + fid + ":lr";
+/* ONE DOOR, because netFactored()'s signature reads this too: spelled out in both places, a
+   gate and the cache key it busts can disagree and the solve reuses factors taken with the
+   valve shut - a wrong answer, not a crash. s.refOpen stands a DEMAND gate open (see
+   netCoreFrac0); a valve blocked in is not one waiting to be asked. */
+const reliefLive = (s,id) => !!((s.refOpen || (s.reliefOpen && s.reliefOpen[id]))
+                             && !(s.reliefBlocked && s.reliefBlocked[id]));
 const FIT = {
   throttle:{
     g:(s,id,bore,len)=>throttled(s,bore,len,[id]),
   },
   relief:{
-    g:(s,id,bore,len)=>(s.reliefOpen && s.reliefOpen[id] && !(s.reliefBlocked && s.reliefBlocked[id]) && isFinite(len))
-      ? BREAK_K*bore*bore : 0,
+    g:(s,id,bore,len)=>(reliefLive(s,id) && isFinite(len)) ? BREAK_K*bore*bore : 0,
   },
 };
 
@@ -1469,8 +1508,15 @@ function netBuild(){
          FEED_LEN was fitted to stop exactly that. Resolved at build time - a
          design fact, so it stays out of the cache signature. */
       const tk = D.tanks[tid] && D.tanks[tid].hold ? resist : injResist;
+      /* IN SERIES WITH ITS OWN CASING, where the tank has a pump - the machine's swallow,
+         priced the same way a ROLE.pump's is. Off the STATED head, so it is a design fact
+         and stays out of the cache signature exactly as `tk` above does. */
+      const tp = D.tanks[tid] && D.tanks[tid].pump;
+      const gc = tp ? pumpCasingG(tp.p, tankPumpQ(tid)) : 0;
       edges.push({u, v,
-        g: s => (tankLive(s,tid) && runPortsOpen(s,r)) ? tk(bore, L + pipeExtraLen(s, r.cells)) : 0,
+        g: s => { if(!(tankLive(s,tid) && runPortsOpen(s,r))) return 0;
+                  const gp = tk(bore, L + pipeExtraLen(s, r.cells));
+                  return tp ? gp*gc/(gp+gc) : gp; },
         h: 0, kind: r.k, key: r.key}); // LABEL: carried onto the edge for rendering/lookup, never re-compared here
       continue;
     }
@@ -1600,13 +1646,20 @@ function netBuild(){
          tally the bench's own "is this port free" check reads. */
       const routed = net.usage && (net.usage[p.id+"t"]||net.usage[p.id+"b"]||net.usage[p.id+"l"]||net.usage[p.id+"r"]);
       if(routed) edge.h = s => pumpHead(p.id) * pumpDrive(s, p.id)
+                               * pumpCurve(s, p.id)
                                * (1 - CAV_DERATE*cavOf(s, p.id));
-      /* AND THE RATED FLOW IS THE CASING. It used to be a dimensionless
-         multiplier on the head (pumpCap()), which is a machine stating the
-         same quantity twice; a pump that swallows more is a wider path
-         through the same box, so it is priced as equivalent length here and
-         the head above is the machine's own MPa and nothing else. */
-      edge.g = resist(1, NET_COMP_LEN*PUMP_FLOW_REF/Math.max(pumpFlow(p.id),1e-9));
+      /* ══ AND THE CASING IS THE PUMP'S OWN CHARACTERISTIC ══
+         An ideal head source in series with a resistance IS a linear head-flow
+         curve - shutoff head at no flow, falling as it passes more - which is
+         what a real machine has and what stops one running out. The resistance
+         is therefore priced off the RATIO the machine states, head per rated
+         kg/s, against the reference machine's own: the runout multiple is then
+         the same for every pump on the grid instead of scaling with head.
+         Priced off flow alone it did not: the 23.5 MPa / 345 kg/s feed pump
+         passed 21 700 kg/s on commissioning, emptied the hotwell in a second,
+         cavitated, and the generators then pushed water backwards down the
+         feed line into it. */
+      edge.g = pumpCasingG(pumpHead(p.id), pumpFlow(p.id));
     }
     edges.push(edge);
     }
@@ -2446,7 +2499,7 @@ function netFactored(net, s, fixed){
     /* relief is a mode too now, gated on S.reliefOpen/S.reliefBlocked rather
        than S.valve - either crossing changes A, so both enter the signature
        exactly like a throttle's own position does. */
-    if(mode==="relief") return (s.reliefOpen && s.reliefOpen[fid] && !(s.reliefBlocked && s.reliefBlocked[fid])) ? '1' : '0';
+    if(mode==="relief") return reliefLive(s,fid) ? '1' : '0';
     return String(s.valve && s.valve[fid]);   // throttle
   }).join('|')
   /* pipe damage is a third live input the edges above read (beside
@@ -2798,7 +2851,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
 // before P.net is necessarily the last thing it assigned. byLoop/byRun, if
 // given, are filled the same way netCoreFracOf fills them - this is
 // P.netRefByLoop's and P.netRefByRun's own producer.
-const netCoreFrac0 = (net, byLoop, byRun, freg, outs) => {
+const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
   /* THE REFERENCE STATE, stated rather than inherited. It is ISOTHERMAL
      (coreDT 0), so buoyancy in it is exactly zero and netRef stays what it
      has always been: a purely geometric figure that prices this plant's
@@ -2808,13 +2861,21 @@ const netCoreFrac0 = (net, byLoop, byRun, freg, outs) => {
      so an undamaged plant nobody has run still reads exactly 1 - and once it
      is hot, the buoyancy it develops is real extra flow that a geometric
      reference must NOT contain. Pump speed is rated, because that is what
-     "as commissioned" means for a pump. `freg` is the one thing a caller may
-     state instead: a feed regulating valve commissions WIDE and then walks
-     itself onto the level it holds, so what that valve is worth is a question
-     about the plant's rated feed rather than about this reference's own
-     geometry - commission() (step.js) is the only caller that answers it. */
-  const s = {dmgParts:[], valve:{}, flow:1, Tavg:P.Tref, coreDT:0, P:P.P0,
-             fregBy: freg || {}};
+     "as commissioned" means for a pump. `pCore` is the pressure the line
+     above already names, spelled the way tankLive() and tankCheckOpen() read
+     it - left undefined they were asked about a plant with no pressure in it.
+     `over` is EVERY field a caller may state instead of that default, one
+     door rather than a positional per question. `fregBy`: a feed regulating
+     valve commissions WIDE and then walks itself onto the level it holds, so
+     what that valve is worth is a question about the plant's rated feed
+     rather than about this reference's own geometry. `pumpQBy`: a pump sits
+     on its own head-flow curve (pumpCurve()) at the flow it is actually
+     developing; left out, the reference priced every pump at its duty head
+     while the plant one tick later derated to what it really passes, so cwK()
+     read 0.42 on MSRE against a flow the plant could never have. `refOpen`:
+     see the scale reference in commission(). */
+  const s = Object.assign({dmgParts:[], valve:{}, flow:1, Tavg:P.Tref,
+                           coreDT:0, P:P.P0, pCore:P.P0}, over);
   for(const fid of net.fitIds) if(net.fitMode[fid]==="throttle")
     s.valve[fid] = fitTies(fid) ? 0 : 1;
   return netCoreFracOf(net, s, byLoop, byRun, null, null, outs);
@@ -3537,8 +3598,8 @@ const PLANTPRE=[
  ["MSRE",{loops:1,arch:4,d:{cont:1,bkp:1,sg:1,pzr:0.5,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
  ["WINDSCALE",{loops:1,arch:5,d:{cont:0,bkp:0,sg:1,pzr:0.5,chim:0.2},
-   tanks:{hpi:{gas:null,pump:null,vol:12},reltk:{vol:8},efw:{vol:5}}},
-  "A graphite pile with no containment, no backup power and an injection tank that has nothing behind it to push with. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, lift the relief and the tank is full, and the water you would inject with will not move. Fly it to see what the safeguards on every other preset are FOR."],
+   drop:["hpi","rv0","reltk"], tanks:{efw:{vol:5}}},
+  "A graphite pile with no containment, no backup power, no injection water and no relief valve on the loop. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, overpressure the loop and nothing lifts, and there is nothing to inject with at all. Fly it to see what the safeguards on every other preset are FOR."],
 ];
 function plantPreset(i){
   const q=PLANTPRE[i][1];
@@ -3551,11 +3612,9 @@ function plantPreset(i){
   if(q.lat!=null) latPreset(q.lat);
   Object.assign(D,q.d);
   buildStockPlumbing({loops:q.loops});   // tears the old loops down and lays the new ones
+  // BEFORE the tank writes: a dropped machine has no knobs left to set
+  for(const id of (q.drop||[])) removePartRuns(id);
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);
-  /* WHERE THIS PLANT'S CONTROLS STAND WHEN IT COMMISSIONS, in the one place a
-     bench control writes (D.start). Absent is not "no opinion" - it is the
-     stock PWR's opinion, which is not a gas pile's. */
-  Object.assign(D.start, q.start||{});
   /* ══ A FIGURE BAKED OFF A HALF-BUILT CORE IS NOT THIS PLANT'S ══
      designForget() at the top is not enough. archPreset() redraws the core in
      stages - lay the fuel, pack the moderator, spread the banks, THEN set the
@@ -3583,4 +3642,12 @@ function plantPreset(i){
      then the design is final. That is what `?? xSuggest()` would give for free
      and what bake() cannot. */
   designForgetBags();
+  /* WHERE THIS PLANT'S CONTROLS STAND WHEN IT COMMISSIONS, in the one place a
+     bench control writes (D.start). AFTER the bags, because start IS a bag:
+     written above it, a preset's own starting positions were cleared by the
+     line that clears the machine sizes.
+     Every preset commissions with protection DEFEATED, so a plant runs its
+     faults out instead of tripping on the first one; a row may still arm it. */
+  D.start["byp:rps"] = true;
+  Object.assign(D.start, q.start||{});
 }
