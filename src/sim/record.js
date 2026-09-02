@@ -388,14 +388,10 @@ function recHead(){
        thermosiphon head, exposure - so a tape without them replays into a
        different reactor. */
     parts    : LAY ? LAY.parts.map(p => ({id:p.id, x:p.x, y:p.y})) : [],
-    /* The parts the player PLACED, whole - id, role, size, cell, everything
-       add() would have given them - because `parts` above can only move a
-       part that the rebuild already created. Without this a design with a
-       spare pump on it rebuilt into a plant that never had one, and
-       recApplyHead() could only report the mismatch, never fix it. Tanks are
-       NOT here: they live in D.tanks, which the D line above already carries
-       whole, which is the point of a tank being one object rather than two. */
-    placed   : snapVal(placedParts),
+    /* NO `placed` LINE. Machines live in D.machines, which the D line above
+       already carries whole - the same standing tanks and fittings have, and
+       the whole point of a machine being one object rather than two halves
+       that can disagree. */
     dsig     : designSig(),
     seed     : S ? S.seed : 0,
   });
@@ -417,8 +413,8 @@ function recHead(){
    did not design, which is the worst thing this feature could possibly do.
 
    D.pipes, D.ports and D.start are NOT part of that gap - they ride the
-   `D: snapVal(D)` line above exactly like D.fittings and D.tanks do, because
-   they live on D rather than in placedParts. What they do NOT do is go through
+   `D: snapVal(D)` line above exactly like D.machines, D.fittings and D.tanks
+   do, because they live on D. What they do NOT do is go through
    act(): laying a pipe, placing a port and moving a bench control are design
    edits, the same as addFitting() and removePart() already are, so none of
    them is a recorded, scrubbable INPUT on the tape - a replay only ever sees
@@ -433,10 +429,9 @@ function recApplyHead(h){
   LAT.pitch=h.lat.pitch; LAT.len=h.lat.len;
   LAT.reflR=h.lat.reflR; LAT.reflT=h.lat.reflT; LAT.reflB=h.lat.reflB; LAT.abs=h.lat.abs;
   latRevolve();                       // rebuilds LM and the D fields the lattice measures
-  /* Before the cell restore below, because a placed part that is not on the
-     board yet has nothing for that loop to move. buildLayout() runs inside
-     this, so LAY is the head's own plant by the time the loop starts. */
-  setPlacedParts(h.placed || []);
+  /* The head's own machinery came back with D above, so the board is already
+     this plant's; the cell restore below only moves what is on it. */
+  buildLayout();
   for(const q of h.parts){ const p=partOf(q.id); if(p){ p.x=q.x; p.y=q.y; } }
   layoutMetrics();
   return designSig() === h.dsig;
@@ -704,17 +699,22 @@ function recPlay(){
    TR is NOT on S. How fast you are watching is not a property of the reactor,
    so it must not be snapshotted, scrubbed or replayed - a recording made at
    16x plays back at whatever rate you are sitting at now. */
-const TR = {rate:1, paused:false, step1:0, sps:0, vldSeen:null, vldHit:null};
+const TR = {rate:1, paused:false, step1:0, sps:0, vldSeen:null, vldHit:null, vldRev:0};
 /* VLD is MAX with a stop condition and no picture. The alarms already lit when
    it starts are the ones you signed off, so only a tile that was NOT lit then
    halts the run - and the halt is a drop to 1x, so the plant is still running
    when you look up. Not a rate: nothing owes it ticks. */
 const TR_VLD = "vld";
-const trAnnSet = () => { const o=Object.create(null); for(const a of ANN) if(a[2](S)) o[a[0]]=1; return o; };
-/* ASKED INSIDE THE TICK'S OWN WINDOW - see laySettle() (layout.js). Half the
-   board asks the drawing, and between two ticks the window is shut: measured at
-   199 us cold against 9 us settled, on a tick that costs 476 us. */
-const trVldCheck = () => { for(const a of ANN) if(!TR.vldSeen[a[0]] && a[2](S)){ TR.vldHit=a[0]; return; } };
+const trAnnSet = () => { const o=Object.create(null); for(const k in S.annOn) if(S.annOn[k]) o[k]=1; return o; };
+/* NOT A SWEEP. The tick keeps the lit set and counts its transitions
+   (annStep(), step.js), so a run whose board is standing still costs one
+   integer compare a tick here instead of 42 predicates, half of which walk the
+   drawing. The diff only runs on the ticks the board actually moved. */
+const trVldCheck = () => {
+  if(S.annRev===TR.vldRev) return;
+  TR.vldRev=S.annRev;
+  for(const k in S.annOn) if(S.annOn[k] && !TR.vldSeen[k]){ TR.vldHit=k; return; }
+};
 /* the one predicate for "the screen is deliberately stale" - main.js skips the
    frame on it and shellSync() keeps only the clock. */
 const trQuiet = () => TR.rate===TR_VLD && !TR.paused && !!P && !!SIMSCREEN[screen];
@@ -788,7 +788,8 @@ function simFrame(dt){
        ticks, so the debt is meaningless and carrying it would only shed it. */
     simAcc=0;
     const vld=TR.rate===TR_VLD;
-    if(vld && !TR.vldSeen) TR.vldSeen=trAnnSet();   // armed here, so the stash is the plant one tick before the run
+    // armed here, so the stash is the plant one tick before the run
+    if(vld && !TR.vldSeen){ TR.vldSeen=trAnnSet(); TR.vldRev=S.annRev; }
     const t0=trNow(), budget=vld?TR_VLD_MS:TR_MAX_MS; let m=0;
     while(trNow()-t0 < budget){
       if(!recPlay()){ TR.paused=true; break; }
@@ -834,7 +835,7 @@ function simFrame(dt){
   recTick();                       // once a frame, after the ticks it covers
   return n>0;
 }
-const trRate=r=>{ TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=null; };
+const trRate=r=>{ TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=null; TR.vldRev=0; };
 const trPause=()=>{ TR.paused=!TR.paused; };
 /* shift is ten, on both keys and both buttons: one 0.02 s tick is the right
    grain to look at and the wrong grain to travel in. */

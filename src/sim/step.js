@@ -34,7 +34,12 @@ function commission(){
      condK:f.condK, pzrK:holdDampK()*L.pzrK,
      flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi, rodRate:D.rodSpd,
-     catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:D.contFit?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
+     /* IS THERE A VESSEL FOR THE FUEL TO BE IN. The lattice is drawn on its
+        own surface, so D.power and every reactivity term above exist whether
+        or not a reactor stands on the arrangement grid - see the kinetics
+        block in step(). */
+     vessel:!!roleOf("core"),
+     catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:LAY.parts.some(p=>p.role==="cont")?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
      fittings:JSON.parse(JSON.stringify(D.fittings)),
      loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237,
@@ -318,11 +323,11 @@ function commission(){
    fallback, the same standing secPTarget() has for a caller with no live S. */
 const autoCfg = () => P || D;
 const AUTOSYS={
-  rps:{part:"ctrl",label:"RPS",ann:"RPS BYPASS",name:"PROTECTION SYSTEM",
+  rps:{part:()=>roleId("ctrl"),label:"RPS",ann:"RPS BYPASS",name:"PROTECTION SYSTEM",
     fit:()=>autoCfg().rps,
     tip:"Reactor Protection System. Armed, it scrams the core on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core.",
     warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
-  rod:{part:"rods",label:"AUTO ROD",ann:"ROD AUTO BYP",name:"AUTOMATIC ROD CONTROL",
+  rod:{part:()=>roleId("rods"),label:"AUTO ROD",ann:"ROD AUTO BYP",name:"AUTOMATIC ROD CONTROL",
     fit:()=>autoCfg().autorod,
     tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band the rod drives were commissioned with - widen that band at the design bench and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
     warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
@@ -350,7 +355,7 @@ const AUTOSYS={
     lit:s=>reliefFitIds().length>0 && (s.byp.porv || reliefFitIds().some(fid=>s.porvByp[fid])),
     tip:"Lifts each relief valve at its own setpoint, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
     warn:"The relief valve will not lift. An overpressure now ends at the vessel, not at the valve."},
-  runback:{part:"turb",label:"RUNBACK",ann:"RUNBACK BYP",name:"TURBINE RUNBACK",
+  runback:{part:()=>roleId("turb"),label:"RUNBACK",ann:"RUNBACK BYP",name:"TURBINE RUNBACK",
     fit:()=>true,
     tip:"Drops turbine load to 5% the instant the reactor trips, so the turbine cannot draw heat out of a shut-down core. Bypass it and load stays wherever you left it right through a scram.",
     warn:"A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop."},
@@ -381,7 +386,7 @@ const AUTOSYS={
     fit:()=>pumpIds().some(id=>secGensOf(id).length>0),
     tip:"Holds each steam generator at its own level setpoint by throttling its feed regulating valve. Bypass it and the valves stop where they are - you feed by hand, on the pump's own demand.",
     warn:"Feedwater is on manual. Every regulating valve is frozen where it stands and the generators will drift off setpoint."},
-  bkp:{part:"bkp",label:"BACKUP",ann:"BACKUP PWR BYP",name:"BACKUP POWER",
+  bkp:{part:()=>roleId("bkp"),label:"BACKUP",ann:"BACKUP PWR BYP",name:"BACKUP POWER",
     fit:()=>(P?P.backup:D.bkp)>0,
     tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
     warn:"The backup supply will not pick up the pumps. A blackout now leaves natural circulation only."},
@@ -2321,6 +2326,10 @@ function resetPlant(){
         past atmospheric and relieved. */
      turbTrip:false, condLost:false,
      ev:{}, blackout:false, nat:0, release:0,
+     /* the board's own lit set, refilled never rebuilt, and a count of every
+        tile transition it has seen. Beside s.ev because it is the same kind of
+        thing: a fact the tick establishes once and everything else reads. */
+     annOn:{}, annRev:0,
      /* the cooling circuit's solved flow, fed forward like s.cavP - starts on
         the commissioned reference, so tick zero rejects at the design duty */
      cwFlow:P.cwRef||0,
@@ -2491,7 +2500,8 @@ function resetPlant(){
      partT:{}, skinQ:{},
      // readouts: the hottest cell, where it is, and what burned this tick
      roomMax:T_HULL, roomMaxAt:-1, roomBurnOn:0, roomPMax:0,
-     spin:0,spinT:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
+     // how fast the two shafts are turning, deg/s - see step()'s own note
+     spinV:0,spinTV:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
   /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
      new run picks a seed, and from there every die comes off s.rng, so the run
      replays from its own seed. Rolling inside step() instead would put numbers
@@ -2502,7 +2512,11 @@ function resetPlant(){
      actually sits 1400 K below saturation. They are derived from the state this
      function just built, by the same expressions step() uses, so the readouts
      and P.sc0 are right on tick zero instead of after the first tick. */
-  seedPower(S, P.n0);
+  /* AND A PLANT WITH NO VESSEL COMMISSIONS COLD. Seeded at P.n0 it started
+     with a full core's worth of decay heat in the chains and spent the next
+     hour shedding heat no reactor had made. Zero is not a special case - it is
+     seedPower() asked for the power this plant is actually at. */
+  seedPower(S, P.vessel ? P.n0 : 0);
   /* the rated-flow value of the same expression the tick uses - a plant on
      tick zero is at rated flow by construction, so its rise is coreDTRated()
      even though s.coreDT has not walked up to it yet */
@@ -2604,6 +2618,10 @@ function resetPlant(){
      something is being drawn - a headless runner (the auditors, a scenario
      run) loads no renderer at all. The guard is the honest shape of that: ask
      whether there is a display before telling it the clock moved. */
+  /* the board is swept on a cadence from here on, so tick zero has to be swept
+     by hand or a plant commissioned with a tile already lit reads blank until
+     the fifth tick */
+  laySettle(); annStep(S); layRelease();
   LOG=[]; initHist();
   if(typeof pipeReset==="function") pipeReset();
   if(typeof fxReset==="function") fxReset();
@@ -2872,7 +2890,7 @@ function step(dt){
      A readout, like s.sc and s.heat beside it - a pure function of the rest
      of S, on S because the panel prints it and a snapshot must carry what
      the panel was showing. */
-  s.pCore = pAt("core");
+  s.pCore = pAt(roleId("core"));
   /* ══ AND NOW THE FIELD ══ after the pressures are settled and before the
      SGTR, the feed train and the relief valves read a temperature anywhere. */
   { for(const k in s.pBy) if(pField[k] === undefined) delete s.pBy[k];
@@ -3386,7 +3404,7 @@ function step(dt){
      "pzrb", and never one number for a plant that has two of them. REFILLED,
      never rebuilt - the s.sglBy idiom - and s.sc stays the PRIMARY's entry,
      which is the key the trip and the panel already address. */
-  for(const ci of holdCircs()) s.scBy[ci] = scAt(holdOnCirc(ci)[0] || "core");
+  for(const ci of holdCircs()) s.scBy[ci] = scAt(holdOnCirc(ci)[0] || roleId("core"));
   const sc = s.scBy[nodeGraph().coreCirc];
   s.heat = heat; s.sc = sc;              // tripCause() reads these outside the tick
   /* What a flow meter in the loop would actually read, as opposed to what the
@@ -3875,6 +3893,22 @@ function step(dt){
   p.tip=nod.tip; p.bor=s.boron;
   s.rho=P.excess+p.rod+p.dop+p.mod+p.xe+p.bor+p.vd+p.tip;
 
+  /* ══ FUEL THAT IS NOT IN A VESSEL IS NOT A REACTOR ══
+     The lattice is its own drawing, so a plant with nothing on the arrangement
+     grid still had a rating, an excess reactivity and a full set of feedback
+     terms - and it made 134 MWt out of nothing, tripped itself and lit the
+     board. There is no criticality without the machine: the population and its
+     precursors are pinned at zero, and the decay chain above washes out on its
+     own because it is driven by s.n. Nothing here refuses to commission - a
+     blank grid is a legal plant, and this is what one does.
+     P.vessel and not a live ask: a machine cannot be placed on a running
+     plant, and a design edit re-commissions. */
+  /* AT THE SAME FLOOR THE KINETICS ALREADY KEEPS, never a bare 0: the nodal
+     core divides by the power it is given, so an exact zero put a NaN into
+     every pellet temperature and the reactivity panel read NaN pcm. 1e-9 of
+     1200 MWt is a microwatt, which is what every readout downstream prints. */
+  if(!P.vessel){ s.n=1e-9; for(let i=0;i<6;i++) s.C[i]=0; }
+  else {
   const h=dt/4, rk=s.rho*1e-5;
   for(let k=0;k<4;k++){
     let num=0,den=0;
@@ -3887,6 +3921,7 @@ function step(dt){
     for(let i=0;i<6;i++) s.C[i]=(s.C[i]+h*P.bet[i]/P.LAM*s.n)/(1+h*P.lam[i]);
   }
   s.n=Math.max(s.n,1e-9);
+  }
 
   /* ── thermal margin ── */
   /* DNBR IS LOCAL, so the plant's margin is the MINIMUM over the field and
@@ -4174,6 +4209,9 @@ function step(dt){
     ()=>"Over "+H2_EV+" kg of hydrogen has come off the cladding. It is not water and it does not carry heat - and the moment any of it leaves the loop it is a flammable gas in the compartment, at 4% by volume and 773 K.",1);
   ev("melt",s.melt,"alarm","CORE MELT",
     ()=>"A quarter of the fuel is molten and "+s.dmg.toFixed(0)+"% of the cladding has failed. Unrecoverable.",1);
+  /* here, beside the event latches, because it is the same pass over the same
+     plant and both want the settled window step() is holding open */
+  if(s.tick % ANN_TICKS === 0) annStep(s);
 
   if(s.repair){
     /* Advanced by radWorkK(s.repRate)*dt, never plain dt: a hot field does not
@@ -4317,12 +4355,14 @@ function step(dt){
       d[key]+=sp*runRatio(key)*(tag?wet:1)*1.4;
     }
   }
-  s.spin=(s.spin+360*dt*mflux)%360;
-  /* the turbine's own shaft angle. It is on S beside the pump's for the same
-     reason the pump's is: an angle integrated in the renderer would keep
-     turning while the sim is paused, and would not replay. Driven by LOAD -
-     the pumps answer flow, the turbine answers the draw. */
-  s.spinT=(s.spinT+360*dt*Math.min(s.load,1.5))%360;
+  /* THE SHAFTS STATE A RATE, NOT AN ANGLE. Both used to be an angle kept %360
+     and the drawing differenced two of them, which carries no direction at all
+     once a frame is worth more than half a turn - at MAX the pumps jittered in
+     place. A rate cannot be ambiguous, and it still stops dead with the sim,
+     which is the whole reason the angle was on S. Driven by LOAD on the
+     turbine - the pumps answer flow, the turbine answers the draw. */
+  s.spinV=360*mflux;
+  s.spinTV=360*Math.min(s.load,1.5);
   layRelease();
 }
 /* One pressure colour, for every readout that shows pressure. Both thresholds are
@@ -4343,7 +4383,9 @@ const ANN=[
   "Pressurizer water level above 78%. Either the loop genuinely has too much water in it, or steam forming in the core is pushing water up into the pressurizer while the loop actually empties. Check subcooling to tell which.","pzr"],
  ["LO SUBCOOL","red",s=>s.sc<8,
   "Less than 8 degrees of margin before the coolant boils. This is the alarm that does not lie about inventory. If this is lit and pressurizer level looks fine, believe this one.","pzr"],
- ["TAVG DEV","amber",s=>Math.abs(s.Tavg-tProg(s))>4,
+ /* P.vessel first: "the reactor and the turbine are not in balance" is not a
+    thing that can be true of a ship with no reactor on it. */
+ ["TAVG DEV","amber",s=>P.vessel && Math.abs(s.Tavg-tProg(s))>4,
   "Average coolant temperature is more than 4 K away from where it should be for the current load. The reactor and the turbine are not in balance: one is making more heat than the other is taking.","rods"],
  ["XENON PIT","blue",s=>-s.parts.xe>3200,
   "Xenon-135 has built up past 3200 pcm of negative reactivity. This poison eats neutrons, and until it decays you may physically be unable to restart or raise power no matter how far you pull the rods.","core"],
@@ -4450,16 +4492,33 @@ const ANN=[
    and it would be a lie to point at one loop. Red beats amber beats blue; a
    tile with no component at all (BLACKOUT is the only one) lights nothing. */
 const annHost = h => typeof h==="function" ? h() : h;
+/* ══ THE BOARD IS SWEPT ONCE, BY THE TICK, AND NOWHERE ELSE ══
+   Thirteen of these rows walk the drawing, and every reader used to re-run the
+   whole table: annLamp() alone is 42 predicates per part per frame, twice, and
+   trVldCheck() was another 42 per tick with no picture to show for them. So the
+   tick establishes the lit set and everything else reads it - the same move
+   s.ev already is, and the same reason it is on S.
+
+   s.annRev counts TRANSITIONS, so anything watching for "a tile moved" watches
+   one integer instead of the table. EVERY FIFTH TICK, aligned with the trend
+   sampler: a tile that lights and clears inside 0.1 s of plant time is under
+   the grain of anything the board reports, and this is a picture of the plant
+   rather than a protection system - tripCause() is the one that must not miss. */
+const ANN_TICKS=5;
+function annStep(s){
+  const on=s.annOn;
+  for(const a of ANN){ const v=a[2](s)?1:0; if(on[a[0]]!==v){ on[a[0]]=v; s.annRev++; } }
+}
 /* IS THIS NAMED TILE LIT. The mimic shouts some of these across the component
    they belong to, and a banner drawn off its own copy of the threshold is a
    second protection system that drifts from the board silently. One reader,
    one predicate, so the box and the tile are the same claim. */
-const annLit = name => { const a=ANN.find(r=>r[0]===name); return !!a && !!a[2](S); };
+const annLit = name => !!(S && S.annOn[name]);
 function annLamp(id){
   let best=null;
   for(const a of ANN){
     const host = annHost(a[4]);
-    if(!host || !id.startsWith(host) || !a[2](S)) continue;
+    if(!host || !id.startsWith(host) || !S.annOn[a[0]]) continue;
     if(a[1]==="red") return C.red;
     if(a[1]==="amber") best=C.amber;
     else if(!best) best=C.blue;

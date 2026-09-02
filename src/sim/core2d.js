@@ -493,7 +493,14 @@ function coreReset(s){
        the number they were fitted against, and S.boron's balance still lands
        on critical. */
     const film0=Math.pow(Math.max(P.flowK*(s.flowNet||1),.02),0.8);
-    const heat0=s.n*PROMPT_F+s.decay;
+    /* ON THE DESIGN'S OWN REST POINT, never on the seeded state. This is a fit
+       for the PIN - a property of the machine, not of the power it happens to
+       be at - and a plant commissioned shut down (no vessel on the drawing, so
+       seedPower() seeds it cold) made pinUA zero, qhat 0/0, and put a NaN in
+       every pellet temperature and every Doppler term. Identical to
+       s.n/s.decay for any plant seeded at P.n0, which is every plant that has
+       a reactor on it. */
+    const heat0=P.n0*(PROMPT_F+DEC_A.reduce((t,a)=>t+a,0));
     P.pinUA=heat0*P.rated*1000*Math.max(pk2,1e-6)
            /(film0*Math.max(P.TfRef-P.Tref,1)*P.condK);
     /* ── AND WHERE THE CLAD SITS INSIDE THAT DROP ──
@@ -518,7 +525,12 @@ function coreReset(s){
     P.gSolid=r*film0/(1-r);
     /* and start every pellet where that balance puts it, or tick one is a
        transient nobody caused */
-    const qhat=heat0*P.rated*1000/P.pinUA;
+    /* THE FIT IS AT THE REST POINT; THE PELLETS START AT THE POWER THIS PLANT
+       IS ACTUALLY SEEDED AT. Two different quantities that were sharing one
+       name: a plant seeded shut down still had every pellet placed at full
+       power, 340 K above its own coolant. Identical for any plant seeded at
+       P.n0, which is every plant that has a reactor on it. */
+    const qhat=(s.n*PROMPT_F+s.decay)*P.rated*1000/P.pinUA;
     for(let k=0;k<XNN;k++) s.nTf[k]=s.nTc[k]+qhat*s.phi[k]/film0; }
 }
 
