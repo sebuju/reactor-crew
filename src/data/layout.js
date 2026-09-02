@@ -21,13 +21,13 @@ const gridClamp=(w,h)=>[Math.max(GRID_MIN[0],Math.min(GRID_MAX[0],Math.round(w))
 function gridSync(){ const [w,h]=gridClamp(D.gw,D.gh);
   if(w!==GW||h!==GH){ GW=w; GH=h; } }
 /* ONE WALL, TO THE CELL THE HAND IS OVER. The bow and the deck do not move:
-   D.pipes is CELL-KEYED and every fixed slot is a literal, so growing off
-   x=0 would mean rewriting both to mean the same ship. */
+   D.pipes is CELL-KEYED, so growing off x=0 would mean rewriting every pipe
+   cell to mean the same ship. Nothing is frozen first - every box on the
+   board stores its own cell, so the machinery does not ride the hull. */
 function gridDrag(edge,c){
   if(!c) return;
   const [w,h]=gridClamp(edge==="r"?c[0]+1:D.gw, edge==="b"?c[1]+1:D.gh);
   if(w===D.gw && h===D.gh) return;
-  freezeCells();                  // the hull moves, the machinery does not
   D.gw=w; D.gh=h; buildLayout();
 }
 /* ══ WHAT A MACHINE IS CALLED ══
@@ -50,23 +50,9 @@ function setPartName(id,str){
   else if(D.name) delete D.name[id];
 }
 let GY=100;                                   // grid top, set each frame by the layout section
-let LAY=null, layFit="", layBuiltSig=null, sel="core", layMass=0;
-// parts optionally present at a FIXED slot: buildLayout() gates add() on
-// get(), layoutMetrics() rebuilds when any of it changes, and the right-click
-// menu is generated from it. A part placed at a slot of the player's choosing
-// (spare pump, junction) doesn't fit this shape - see PLACED PARTS below.
-const fittableList=()=>[
-  {id:"cont", label:"CONTAINMENT",         get:()=>D.contFit, set:v=>{D.contFit=v;}},
-  {id:"turb", label:"TURBINE",             get:()=>D.turbFit, set:v=>{D.turbFit=v;}},
-  {id:"cond", label:"CONDENSER",           get:()=>D.condFit, set:v=>{D.condFit=v;}},
-  {id:"catcher",  label:"CORE CATCHER",        get:()=>D.catcher,  set:v=>{D.catcher=v;}},
-  /* NO TANK ROW HERE, and that is the point. A tank is not a checkbox that
-     upgrades or conjures a named system - it is a component you ADD, as many
-     as you like, and configure per instance (D.tanks, design.js). PASSIVE
-     ACCUMULATOR, EMERGENCY FEEDWATER, BORON INJECTION and RELIEF TANK were
-     four rows here and they were one component wearing four names. */
-];
-const checkOf=id=>fittableList().find(f=>f.id===id).get();
+// sel starts null: a blank grid has nothing on it to be selected, and every
+// partOf(sel) reader already answers null for a key that names no part
+let LAY=null, layFit="", layBuiltSig=null, sel=null, layMass=0;
 /* ══ A SIGNATURE IS BUILT ONCE PER EDIT, NOT ONCE PER TICK ══
    Every cache below proves itself against one of these strings, and simTick()
    opens its own layout window - so a running plant rebuilt 2.7 kB of string
@@ -79,10 +65,16 @@ const sigMemo = build => { let g=-1, v=null;
   const f = () => (g===DGEN ? v : (v=build(), g=DGEN, v));
   f.raw = build; SIGS.push(f); return f; };
 const sigFresh = () => { for(const f of SIGS) if(f.raw()!==f()){ dTouch(); return; } };
-const checkSig=sigMemo(()=>fittableList().map(f=>f.get()?1:0).join(""));
-/* WHAT buildLayout() READS, all of it. It used to be checkSig() alone, which
-   was true only while every part was either always there or behind a
-   checkbox. A tank is neither: it is an instance, and its id and its cell
+/* EVERY MACHINE ON THE PLANT - the same argument tankSig() makes, and for the
+   same reason: a machine's id, its KIND and its cell decide what box goes on
+   the board, so a direct D.machines edit leaves LAY holding a part that no
+   longer exists. */
+const machineSig=sigMemo(()=>{ let out="";
+  for(const id in D.machines){ const m=D.machines[id], c=m.cell;
+    out += "|"+id+":"+m.kind+":"+(c?c[0]+","+c[1]:"-")+":"+(m.on||""); }
+  return out; });
+/* WHAT buildLayout() READS, all of it. Every box on the board is an
+   INSTANCE, and its id and its cell
    are the two things that decide what box goes on the board. Leave them out
    and editing D.tanks directly - a rename, a tank moved, a tank the bench
    just reconfigured - leaves LAY holding parts that no longer exist, and the
@@ -128,57 +120,32 @@ const boreSig=sigMemo(()=>{ let out="";
   for(const k in (D.bore||{})) out += "|b"+k+":"+D.bore[k];
   for(const k in (D.wall||{})) out += "|w"+k+":"+D.wall[k];
   return out; });
-const laySrcSig=()=>checkSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig();
-// buildLayout() throws LAY.parts away and rebuilds it from nothing on every
-// trigger, so a PLACED part lives outside that construction (merged back in
-// at the end of buildLayout()) or it would vanish whenever an unrelated
-// FITTABLE flag flipped. A placed part that does not fit is not dropped - it
-// is marked (p.limbo) and drawn red, because a part nobody can see is a part
-// nobody can drag back out.
-let placedParts=[], placeSeq=0;
-/* The one way anything outside this file replaces the placed set wholesale -
-   a recording head putting its own plant back on the board (recApplyHead()).
-   Copied in, not aliased, so the head stays frozen. */
-function setPlacedParts(list){
-  placedParts = (list||[]).map(p=>({...p}));
-  layBuiltSig=null;   // fresh objects: LAY must hold THESE, or moveTo() writes to a copy the next rebuild throws away
-  buildLayout();
-}
-/* ANYTHING THE PLAYER ADDED, THE PLAYER CAN REMOVE. The bench used to ask
-   whether an id started with "pumpX" or "sgX", which is a name test deciding
-   what a part IS - the exact smell four stages went to delete. Ask the list
-   that actually knows. */
-const isPlaced=id=>placedParts.some(p=>p.id===id);
-function placePart(mk){
-  const p=mk(placeSeq++); placedParts.push(p); buildLayout(); return p;
-}
+const laySrcSig=()=>machineSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig();
 /* REMOVING A PART TAKES ITS PIPES WITH IT. It used to leave them behind,
    which was survivable only while ids were never reused - and they are, on
    purpose (addTank()/addFitting() take the lowest free slot, which is what
    makes the "rename every id" audit mean anything). Delete tank2, add a
    tank, and the new one inherited the dead one's plumbing. */
 function removePart(id){
+  /* TAKING A RIDER OFF TAKES ITS HOST OFF. The rod drives are bolted to the
+     vessel head: there is no plant with drives and no reactor, so REMOVE on
+     either one is the same gesture on the same machine. */
+  const m0=D.machines[id];
+  if(m0 && m0.on && D.machines[m0.on]) return removePart(m0.on);
+  /* ...and taking a host off takes everything bolted to it with it. The host's
+     own entry goes FIRST, or the rider's redirect above finds it still there
+     and the two send each other round for ever. */
+  delete D.machines[id];
+  for(const rid in D.machines) if(D.machines[rid].on===id) removePart(rid);
   delete D.tanks[id];
-  delete D.cells[id];   // ids are reused on purpose, so a dead part's cell must not be inherited by the next one
   /* NO fitting->fitting cascade. A fitting left with no runs is a valve
      you can re-plumb, exactly as a tank with no runs is. */
   delete D.fittings[id];
+  if(D.name) delete D.name[id];   // ids are reused on purpose, so a dead part's name must not be inherited by the next one
   // a port belongs to the component - remove the component and its ports
   // (and whatever they carried) go with it, exactly like a tank's runs do.
   for(const pid in D.ports) if(D.ports[pid].p===id) removePort(pid);
-  placedParts=placedParts.filter(p=>p.id!==id);
   buildLayout();
-}
-/* The bench's own REMOVE leaves a run's cells and the far nozzle behind, which
-   is right for a part the player is re-plumbing and wrong for one a preset
-   never bought - an unowned line reads as plumbing that failed to connect. */
-function removePartRuns(id){
-  for(const c of pipeMap().conns){
-    if(c.a!==id && c.b!==id) continue;
-    for(const [x,y] of c.cells) delete D.pipes[x+","+y];
-    delete D.ports[c.pa]; delete D.ports[c.pb];
-  }
-  removePart(id);
 }
 /* ══════════ ADDING A TANK IS ADDING A TANK ══════════
    ONE default config (TANK_DEFAULT, pipenet.js), not a menu of four kinds.
@@ -203,8 +170,8 @@ function addTank(x,y){
   let n=1; while(D.tanks["tank"+n]) n++;
   return mintTank("tank"+n,x,y);
 }
-/* Tanks are neither add()ed statically nor placedParts: they are read from
-   D.tanks, which is where their whole configuration already lives, so a tank
+/* Tanks are read from D.tanks, exactly as a machine is read from D.machines:
+   that is where their whole configuration already lives, so a tank
    is one object and not two halves that can disagree. A tank with no `cell`
    is a SECONDARY tank with no node and no box - the hotwell. */
 /* A TANK CARRIES A CONTROL ROW, SO IT IS A MACHINE-SIZED BOX. A FITTING DOES
@@ -770,9 +737,8 @@ const roleAlive=(role,dmg)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p
    tank left this table for tankMass() (above), which charges per instance
    off the instance's own vol rather than one flat figure per name. */
 const PART_MASS={catcher:66, vent:34};
-/* PER INSTANCE, not per role. It reads identically for the catcher, which is
-   a singleton by construction (D.catcher is one checkbox), and it is the only
-   honest answer for a machine the bench will place as many of as you like -
+/* PER INSTANCE, not per role. It is the only honest answer for a machine the
+   bench will place as many of as you like -
    a role-level charge would hand out every unit after the first for nothing,
    which is the same trap widening a capacity slider's span had. */
 const partMass=role=>LAY.parts.filter(p=>p.role===role).length*(PART_MASS[role]||0);
@@ -1207,8 +1173,11 @@ function secCircuitOf(pid, seeds){
    roleAlive(), and a second factor beside it rather than a replacement: that
    one asks whether a machine is BROKEN, this one whether it was ever piped up,
    and a machine can be both. One unpiped of two costs half. */
+// NO TURBINE IS NOT AN UNPIPED TURBINE - this is the share of the machines
+// on the board that are in a whole steam circuit, and none of none is all of
+// them. "There is no turbine at all" is its own warning (derived()).
 const turbPiped=()=>{ const ids=LAY.parts.filter(p=>p.role==="turb").map(p=>p.id);
-  if(!ids.length) return 0;
+  if(!ids.length) return 1;
   return ids.filter(id=>{ const c=secCircuitOf(id); return c.sg&&c.sink; }).length/ids.length; };
 /* CAN THIS GENERATOR SEND ITS STEAM ANYWHERE. A shell with no path to a
    turbine that can exhaust is raising steam into a closed vessel, so it takes
@@ -1408,8 +1377,14 @@ const radLive=id=>{ const p=partOf(id); if(!p) return false;
    and the drawing SNAPS to whole cells to represent it - tankW()/tankH()'s
    idiom exactly. RAD_AREA_CELL stops being the area and becomes the scale of
    the picture. */
-const RAD_N=2;                         // the panels buildLayout() always draws
-const radSrcCount=()=>RAD_N+placedParts.filter(p=>p.role==="radiator").length;
+/* HOW MANY PANELS ARE ON THE DRAWING - a count is an answer, never an input.
+   It was a fixed 2 plus whatever had been placed, so the plant carried two
+   panels no design could state and none could take away. */
+/* OFF D.machines AND NOT OFF LAY.parts: a panel's BOX follows its area, so
+   this is asked from inside buildLayout() - before there is a drawing to ask. */
+const radSrcCount=()=>{ let n=0;
+  for(const id in D.machines) if(machRole(id)==="radiator") n++;
+  return Math.max(1,n); };
 /* ONE panel's share of what this plant has to reject, at the sink the
    condenser was priced against. Off D.power and the coolant's own efficiency,
    never derived() - the suggestion prices the panel and mass prices the
@@ -1513,6 +1488,12 @@ const fittingMass=()=>{ let m=0;
    disagree. */
 function freePid(){ let n=0; while(D.ports["prt"+n]) n++; return "prt"+n; }
 const partOf=id=>(LAY&&LAY.byId.get(id))||null;
+/* THE FIRST MACHINE OF A ROLE ON THE DRAWING, or null. An id literal is a
+   NAME TEST - the smell this codebase keeps deleting - and a blank grid has
+   none of any of them, so a reader that wants "the control station" or "the
+   vessel" asks the drawing and must answer for getting nothing back. */
+const roleOf=role=>(LAY&&LAY.parts.find(p=>p.role===role))||null;
+const roleId=role=>{ const p=roleOf(role); return p?p.id:null; };
 /* WHICH SIDE OF THE PART THIS PORT IS ON, off faceOfOffset() and nothing else.
    It used to answer with its own chain of tests, whose last branch was a bare
    `else "b"` - so an offset that is on NO face, which is what a port becomes
@@ -2078,146 +2059,126 @@ const fitModeOf=id=>(D.fittings[id]&&D.fittings[id].mode)||"tee";
    Anchored by its top, growing a panel walks its face off the skin, which is
    the whole heat sink gone for a reason nobody moved. It is stored by its
    BOTTOM edge, so area grows upward and the face stays where it was put.
-   One pair, read by add() and written by moveTo()/freezeCells(). */
+   One pair, read by machineParts() and written by moveTo(). */
 const cellStore=(role,y,h)=>role==="radiator" ? y+h : y;
 const cellTop  =(role,h,v)=>role==="radiator" ? v-h : v;
-/* ══ PIN EVERY PART WHERE IT STANDS ══
-   Half the fixed slots are laid off GH/GW - the keel rank, the engine room -
-   so resizing the hull carried the machinery with it. The hull is what the
-   drag moves; a machine left outside the new one is marked limbo and says so,
-   which is the same answer the bench gives any other bad cell. */
-function freezeCells(){
-  if(!LAY) buildLayout();
-  for(const p of LAY.parts) if(!p.pin) D.cells[p.id]=[p.x, cellStore(p.role,p.y,p.h)];
+/* ══════════ MACHINE: one row per KIND of machine, and the count is an answer ══════════
+   The same table D.tanks and D.fittings already stand on, for everything else
+   that has a box. There were four mechanisms deciding whether a machine
+   exists - a literal add() in buildLayout(), a checkbox on D, a count in code
+   (two panels) and a placed part - and only the last one is the game. This is the
+   one that is left: a machine is an entry in D.machines, minted from a row
+   here, and how many there are is however many are in the table.
+   `num` is whether the kind carries an ORDINAL. A name is read off the
+   drawing (buildLayout()), never stored, so RADIATOR 2 is the second panel
+   on the board and stays the second panel when the first one goes.
+   `rides` is a kind that is BOLTED TO another one - the rod drives sit on the
+   vessel head. It is minted with its host and removed with it, it is never
+   offered on its own, and dx/dy are where it stands relative to it. A machine
+   that cannot exist by itself is not a machine you place. */
+const MACHINE={
+  core:{role:"core", w:9, h:12, col:"#ff5a45", grp:"core", name:"REACTOR",
+    tip:"The vessel and the fuel inside it. Select it to choose the coolant family, the fuel, the lattice and the core shape."},
+  rods:{role:"rods", w:9, h:13, col:"#c8d8dc", grp:"core", name:"ROD DRIVES",
+    rides:"core", dx:0, dy:-13,
+    tip:"Control rod drive mechanisms, bolted to the vessel head. They ride on the head and move with the reactor - you site the reactor, not the drives. Select for scram gear, bank worth and emergency poison."},
+  sg:{role:"sg", w:3, h:6, col:"#5fd2e2", grp:"sg", name:"STEAM GEN", num:true,
+    tip:"Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival."},
+  pump:{role:"pump", w:0, h:0, col:"#57d38c", grp:"pump", name:"RCP", num:true,
+    tip:"A coolant pump. What it is FOR is asked of the drawing: pipe it from a condenser to a generator's shell and the same machine is a feed pump. Keep it low and reachable - it is the component most likely to need a repair under fire."},
+  ihx:{role:"ihx", w:3, h:4, col:"#9ec96f", grp:"sg", name:"HEAT EXCHANGER", num:true,
+    tip:"An intermediate heat exchanger. Splice it into a loop and the generators on that loop are heated by IT rather than by the core, so primary coolant never reaches the secondary. Two stages in series cost a temperature drop, and the exchanger is heavy."},
+  turb:{role:"turb", w:9, h:7, col:"#f0a830", grp:"sec", name:"TURBINE", num:true,
+    tip:"Draws the ship's load. It swallows its own share of steam and carries its own share of it - lose one of two and you lose half the output, not all of it. Select it to size the steam dump that absorbs a turbine trip."},
+  cond:{role:"cond", w:9, h:5, col:"#5aa9d6", grp:"sec", name:"CONDENSER", num:true,
+    tip:"Rejects waste heat, and it is where the feed pumps draw from. Bulky, and it wants to be near the hull."},
+  radiator:{role:"radiator", w:5, h:3, col:"#b8c4cf", grp:"sec", name:"RADIATOR", num:true,
+    tip:"A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. It must also be PLUMBED, because it cools the water going through it and nothing else. Select it for area and coating."},
+  ctrl:{role:"ctrl", w:6, h:4, col:"#cfc9b8", grp:"crew", name:"CONTROL",
+    tip:"Where your crew sits. Distance and shielding from the reactor set the dose they take."},
+  cont:{role:"cont", w:6, h:3, col:"#8fa9ae", grp:"safety", name:"CONTAINMENT",
+    tip:"The barrier between damaged fuel and your crew. Select it for containment type."},
+  catcher:{role:"catcher", w:3, h:3, col:"#5a4a3a", grp:"safety", name:"CORE CATCHER",
+    tip:"A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained."},
+  bkp:{role:"bkp", w:3, h:5, col:"#57d38c", grp:"safety", name:"BACKUP PWR",
+    tip:"Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull."},
+  shield:{role:"shield", w:3, h:3, col:"#6d8f98", grp:"shield", name:"SHIELD", num:true,
+    tip:"A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access."},
+  vent:{role:"vent", w:3, h:3, col:"#8fb8c4", grp:"safety", name:"VENT UNIT", num:true,
+    tip:"Pulls compartment air overboard. It is the only thing on the plant besides the hull that takes heat OUT of the room, and it is on the main board - a blackout leaves the room with nothing but its own steel. Nothing to plumb."},
+};
+const machRow  = id => { const m=D.machines[id]; return (m && MACHINE[m.kind]) || null; };
+const machRole = id => { const M=machRow(id); return M ? M.role : null; };
+/* A BOX FOLLOWS A REAL QUANTITY WHERE THE MACHINE STATES ONE. A panel's is
+   its area and a pump's is its swallow; every other kind states its floor in
+   its own row. The pump pass runs in buildLayout(), because pumpW() asks the
+   graph and the graph is built on the board this is assembling. */
+const machineH = (id,M) => M.role==="radiator" ? radH(id) : M.h;
+const machineW = (id,M) => M.role==="radiator" ? radW(id) : M.w;
+/* mintMachine() is the one place a machine is built; addMachine() is the
+   GESTURE on top of it and picks the lowest free slot id, because the bench
+   never asks a player to name one. Same split addTank()/mintTank() has, and
+   buildStockPlumbing() (pipenet.js) names its own for the same reason: a
+   machine id carries no meaning whatsoever. */
+function mintMachine(id,kind,x,y){
+  const M=MACHINE[kind];
+  D.machines[id]={kind, cell:[x,y]};
+  D.machines[id].cell=[x, cellStore(M.role, y, machineH(id,M))];
+  /* WHAT IS BOLTED TO THIS ONE COMES WITH IT. A reactor with no rod drives is
+     not a machine anybody could build, so placing one places both - and the
+     rider's id is the host's own suffix on the rider's kind, so core -> rods
+     and core1 -> rods1 without a second counter to disagree with the first. */
+  for(const rk in MACHINE) if(MACHINE[rk].rides===kind){
+    const rid=rk+id.slice(kind.length);
+    D.machines[rid]={kind:rk, cell:[x,y+MACHINE[rk].dy], on:id};
+  }
+  buildLayout(); return id;
+}
+/* A RIDER IS NOT PLACED AND IS NOT COUNTED - it is part of what it rides. */
+const machRides = kind => !!MACHINE[kind].rides;
+function addMachine(kind,x,y){
+  let n=1; while(D.machines[kind+n]) n++;
+  return mintMachine(kind+n,kind,x,y);
+}
+/* EVERY MACHINE ON THE PLANT, from D.machines and nothing else - the same
+   pass tankParts() and fittingParts() already are. Zero machines is a legal
+   plant: it reads as a ship with nothing on it, which is what it is. */
+function machineParts(){
+  const out=[];
+  for(const id in D.machines){ const m=D.machines[id], M=MACHINE[m.kind]; if(!M||!m.cell) continue;
+    const h=machineH(id,M);
+    const p={id, kind:m.kind, name:M.name, w:machineW(id,M), h,
+             x:m.cell[0], y:cellTop(M.role,h,m.cell[1]),
+             col:M.col, grp:M.grp, tip:M.tip, role:M.role};
+    if(M.rides && m.on) p.pin={to:m.on, dx:M.dx, dy:M.dy};
+    out.push(p);
+  }
+  return out;
 }
 
 function buildLayout(){
   dTouch();          // LAY.parts is about to be a different list, and every gesture that edits D lands here
   gridSync();        // the hull may have been dragged since the last pass
-  /* THE LITERAL x,y BELOW IS A DEFAULT, NEVER A POSITION. A fixed-slot part is
-     rebuilt from nothing on every trigger, so a dragged one snapped back to
-     its literal the next time an unrelated edit rebuilt the board - the same
-     failure D.tanks[].cell already answers for a tank. D.cells is that one
-     answer for every part, written by moveTo() and read here. */
-  const A=[], add=(id,name,w,h,x,y,col,grp,tip,role)=>{ const c=D.cells[id];
-    if(c){ x=c[0]; y=cellTop(role,h,c[1]); }
-    const p={id,name,w,h,x,y,col,grp,tip,role}; A.push(p); return p; };
-  /* ══ A MACHINE IS BIG ENOUGH TO HOLD ITS OWN CONTROLS ══
-     BANDS is gone: the control room used to stretch a grid ROW to make room
-     for a strip that would not fit in a 46 px box, so no row was CELL tall and
-     nothing could say "y*CELL". A machine declares the cells it needs instead
-     - a pump is 3x5 because one slider row plus its name is what a pump has to
-     carry - and every row is exactly CELL tall on both screens. */
-  add("core","REACTOR",9,12,6,13,"#ff5a45","core",
-    "The vessel and the fuel inside it. Select it to choose the coolant family, the fuel, the lattice and the core shape.","core");
-  add("rods","ROD DRIVES",9,13,6,0,"#c8d8dc","core",
-    "Control rod drive mechanisms, bolted to the vessel head. They ride on the head and move with the reactor - you site the reactor, not the drives. Select for scram gear, bank worth and emergency poison.","rods")
-    .pin={to:"core",dx:0,dy:-13};
-  // ONE generator, ONE pump - the stock loadout, exactly like every other
-  // fixed-slot part above. There is no knob for how many of these exist:
-  // an additional generator is a PLACED part (ADD STEAM GENERATOR,
-  // design-bench.js), wired by hand through Stage 3a's CONNECT, the same
-  // way a spare pump already is. Loop membership is read off the run graph
-  // (loopOf(), above), not stored.
-  add("sg0","STEAM GEN 1",3,6,26,5,"#5fd2e2","loop0",
-    "Raise this ABOVE the reactor and hot water rises into it unaided. That height difference is your blackout survival.","sg");
-  add("pump0","RCP 1",0,0,26,18,"#57d38c","loop0",
-    "Coolant pump. Keep it low and reachable - it is the component most likely to need a repair under fire.","pump");
-  /* ══ THE ENGINE ROOM STANDS AFT OF THE LAST LOOP ══
-     A four-loop plant used to put its fourth generator and its fourth pump
-     inside the turbine, because these four slots were literals fitted around
-     ONE loop. AFT is where the machinery space begins: the last generator's
-     column plus a lane, so a one-loop ship is laid out exactly as before and
-     every added loop pushes the engine room back rather than into itself.
-     The hull does not follow by itself - drag it (or let a preset set D.gw),
-     and anything that no longer fits is marked. */
-  const nsg = 1 + placedParts.filter(p=>p.role==="sg").length;
-  const AFT = 46 + 7*(nsg-1);
-  const FEEDX = 26 + 7*nsg;      // aft of the last coolant pump, forward of the turbine
-  const BOT = GH-4;              // the bottom rank of hull-mounted parts
-  if(checkOf("turb")) add("turb","TURBINE",9,7,AFT,11,"#f0a830","sec",
-    "Draws the ship's load. Select it to size the steam dump that absorbs a turbine trip.","turb");
-  if(checkOf("cond")) add("cond","CONDENSER",9,5,AFT,24,"#5aa9d6","sec",
-    "Rejects waste heat. Bulky, and it wants to be near the hull.","cond");
-  /* ══ AND IT STANDS BELOW WHAT IT DRAWS ON ══
-     A pump takes suction on the face its casing says (ROLE.pump), and static
-     head is real in the solve - so a feed pump hung level with the turbine had
-     to LIFT its own condensate nine metres out of a condenser sitting at
-     0.008 MPa, pulled its own suction below zero and cavitated on a plant
-     nobody had touched. It sits under the condenser's outlet instead, which is
-     where a real one is and for the identical reason. The box follows the
-     pump's own head and flow (pumpW()/pumpH()); the discharge nozzles are on
-     its side now, so the generator count no longer floors its WIDTH. */
-  add("feed","FEED PUMP",3,0,FEEDX,GH-5,"#5aa9d6","sec",
-    "Returns water to the steam generator. Lose it and the heat sink boils dry.","pump");
-  add("ctrl","CONTROL",6,4,0,BOT,"#cfc9b8","crew",
-    "Where your crew sits. Distance and shielding from the reactor set the dose they take.","ctrl");
-  if(checkOf("cont")) add("cont","CONTAINMENT",6,3,10,BOT,"#8fa9ae","safety",
-    "The barrier between damaged fuel and your crew. Select it for containment type and the core catcher.","cont");
-  // Stage 5d: a structure, not a flag - it occupies real floor space under
-  // the vessel rather than costing 66 t for nothing on the grid at all.
-  // ports:{} (ROLE.catcher) - it carries no run and needs none; "is the core
-  // sitting over the catcher" is a geometric question with a geometric
-  // answer now, exactly like "is the pressurizer the highest point".
-  if(D.catcher) add("catcher","CORE CATCHER",3,3,6,BOT,"#5a4a3a","safety",
-    "A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher");
-  /* EVERY TANK ON THE PLANT, from D.tanks and nothing else - no conditional
-     add(), no seeded placedParts entry, no checkbox. Zero tanks is a legal
-     plant; four is a legal plant. A tank with no cell has no box, which is
-     what a secondary tank with no node means (the hotwell). */
+  /* ONE MECHANISM. Every box on the board is an instance in a dictionary on
+     D - machines, tanks, fittings - so nothing here asks whether a part is a
+     slot, a checkbox or a placed spare, and there is no count in this file
+     saying how many of anything to draw. */
+  const A=machineParts();
   for(const p of tankParts()) A.push(p);
   for(const p of fittingParts()) A.push(p);
-  add("bkp","BACKUP PWR",3,5,AFT+10,11,"#57d38c","safety",
-    "Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull.","bkp");
-  /* THE SHIP'S ONLY HEAT SINK, on the bottom hull beside the condenser. Two
-     of them rather than one because a radiator is what gets shot, and the
-     hull ring is already ten times more likely to be hit. */
-  /* SPACED, not shoulder to shoulder. Sitting directly under the condenser
-     they had no usable nozzle at all: every top face looked into the
-     condenser's floor, the outer faces looked at the keel and the hull, and
-     the two inner faces faced each other. A panel is plumbed now, so it needs
-     a free cell on two sides, and this is where they fit. */
-  /* ── AND SOMETHING HAS TO TURN THE CIRCULATING WATER ──
-     The condenser rejects into a loop, and a loop with nothing pushing it
-     carries nothing. It stood as a boolean on the heat balance for a long
-     time: the panels were plumbed, the runs solved at a trickle of buoyancy,
-     and the rejection read full duty anyway. It is a pump like every other
-     pump now - hit it, or lose the board it feeds off, and the sink goes. */
-  /* FOUR ROWS ABOVE THE PANEL'S OWN TOP, never a fixed row. The joint below it
-     is two nozzles meeting across a cell boundary, so it needs exactly one
-     free row each: at a fixed y a four-row panel put its top nozzle in the
-     same cell as the pump's bottom one, one refused the other, and the whole
-     cooling circuit went with it. BOT-5 on the stock three-row panel, to the
-     cell - so the row is read off the pump's OWN box (pumpH()), which is a
-     knob now, and not off a literal that was true of a two-row pump only.
-     IT KEEPS ITS COLUMN, and takes its suction on the RIGHT FACE instead: a
-     full-height pump standing here reaches up into the emergency feedwater
-     tank's rows, so a top nozzle has no cell to stand in and the whole cooling
-     circuit was refused in silence. ROLE.pump folds r onto t, so the right
-     face IS the suction - and the discharge stays a joint over the panel. */
-  add("cwp","CIRC WATER PUMP",0,0,AFT-9,BOT+1-radH("rad0")-pumpH("cwp"),"#5aa9d6","sec",
-    "Turns the circulating water between the condenser and the panels. Nothing else moves it: lose this pump and the condenser stops rejecting, whatever area is fitted.","pump");
-  /* ON THE KEEL, not at a fixed top edge. The box follows the panel's area
-     now, so a short one hung from the old y had no cell against the skin at
-     all and radLive() read it as blind - which is the whole heat sink gone,
-     silently, on every plant small enough to need less panel. */
-  for(let i=0;i<RAD_N;i++) add("rad"+i,"RADIATOR "+(i+1),radW("rad"+i),radH("rad"+i),
-      AFT-10+8*i,BOT+3-radH("rad"+i),"#b8c4cf","sec",
-    "A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. Select it for area and coating.","radiator");
-  /* NO SHIELD SLOTS HERE. Shielding is PLACED (ADD SHIELD, design-bench.js)
-     and so can be taken away again like every other part the player put down;
-     the stock three are seeded by buildStockPlumbing() (pipenet.js), which is
-     the same gesture written out. */
-  for(const p of placedParts) A.push(p);
-  /* EVERY PUMP'S BOX IS DERIVED HERE, and nowhere else - a fixed slot and a
-     placed spare alike, so a size stored at placement cannot outlive the
-     figures it was drawn from. The w/h an add() states is a FLOOR: the feed
-     pump needs one discharge cell per generator whatever it is rated at. */
+  /* ══ A MACHINE'S NAME IS ITS KIND AND ITS NUMBER ══
+     Read off the drawing, in board order, exactly the way circNames() numbers
+     a circuit - so the second panel is RADIATOR 2 and becomes RADIATOR 1 when
+     the first one is taken off. Nothing is SPARE: whether a machine is
+     redundancy is read off the drawing, not written into its name.
+     partName() still lets the player's own name win. */
+  const nth={};
+  for(const p of A) if(p.kind && MACHINE[p.kind].num)
+    p.name = MACHINE[p.kind].name+" "+(nth[p.kind]=(nth[p.kind]||0)+1);
   for(const p of A) if(roleHead(p.role)){
     p.w=Math.max(pumpW(p.id), p.w); p.h=Math.max(pumpH(p.id), p.h); }
   /* A PINNED PART IS DERIVED, NEVER STORED. Its parent may have been dragged
-     since the last rebuild (D.cells), and the literal beside its own add() is
-     the parent's ORIGINAL cell plus the offset. */
+     since the last rebuild, so its own stored cell is never read. */
   for(const p of A) if(p.pin){ const t=A.find(q=>q.id===p.pin.to);
     if(t){ p.x=t.x+p.pin.dx; p.y=t.y+p.pin.dy; } }
   /* ══ A PART IN A BAD SPOT STAYS ON THE DRAWING ══
@@ -2228,9 +2189,9 @@ function buildLayout(){
      picked up and moved out again, and it is a HARD objection until it is
      (layoutWarnings(), design-bench.js), so a plant with one cannot be
      commissioned. The bench warns; it never refuses.
-     Marked over ALL of A, not just placedParts: moveTo() no longer refuses
-     either, so a fixed part, a tank or a fitting can be dragged into the same
-     hole and has to answer for it the same way. */
+     Marked over ALL of A: moveTo() no longer refuses either, so a machine, a
+     tank or a fitting can be dragged into the same hole and has to answer for
+     it the same way. */
   markLimbo(A);
   /* A REBUILD THAT LANDS ON THE SAME BOARD KEEPS THE OLD OBJECT. Half a dozen
      caches - the bench rail above all - key on LAY IDENTITY to mean "the board
@@ -2756,7 +2717,7 @@ function runReach(fromId, blocks){
    heat is wired to the primary at all. Nothing blocks: heat crosses a tank
    as happily as it crosses anything else. */
 function hasHeatSink(){
-  if(!partOf("core")) return true;   // no core, no claim to make
+  if(!roleOf("core")) return true;   // no core, no claim to make
   for(const pid of runReach("core")){ const p=partOf(pid), R=p&&ROLE[p.role];
     if(R && (R.thermal==="sink"||R.thermal==="transfer")) return true; }
   return false;
@@ -2774,7 +2735,7 @@ function hasHeatSink(){
    seed is the lowest-id non-tank part on that circuit, so a hold tank on the
    secondary is checked against the secondary's own machinery. */
 function seedPart(ci){
-  if(ci===nodeGraph().coreCirc && partOf("core")) return "core";
+  if(ci===nodeGraph().coreCirc && roleOf("core")) return "core";
   const G=nodeGraph();
   const cand=LAY.parts.filter(p=>p.role!=="tank" &&
     (G.nodesOf[p.id]||[]).some(n=>G.circuit[n]===ci)).map(p=>p.id).sort();
@@ -2790,9 +2751,9 @@ function holdPlumbed(tid){
 // every hold tank on the plant is wired, or there is none to be wired
 const pzrPlumbed = () => holdTankIds().every(holdPlumbed);
 // BACKUP PWR ghosts rather than vanishes: NONE is a real dropdown choice
-// (mass 0) that still occupies its cell, because it's a three-way quality
-// dial (NONE/BATTERY/DIESEL), not an add/remove part like fittableList()'s
-const fitted=p => p.id==="bkp" ? D.bkp>0 : true;
+// (mass 0) that still occupies its cell, because it is a three-way quality
+// dial (NONE/BATTERY/DIESEL) on a machine that IS on the board.
+const fitted=p => p.role==="bkp" ? D.bkp>0 : true;
 const cen=p=>({x:p.x+p.w/2,y:p.y+p.h/2});
 const pinnedTo=p=>LAY.parts.filter(q=>q.pin&&q.pin.to===p.id);
 /* WHAT IS STANDING IN EACH CELL. skip is one part or a whole group - a group
@@ -2868,7 +2829,7 @@ function moveTo(p,nx,ny){
      moveTo() is the ONLY way a part changes position, so this is the one
      place that has to know it. */
   for(const {q,x,y} of cells){ q.x=x; q.y=y;
-    D.cells[q.id]=[x, cellStore(q.role,y,q.h)];   // a fixed slot is rebuilt from a literal, so the cell has to live on D - see add() (buildLayout())
+    if(D.machines[q.id]) D.machines[q.id].cell=[x, cellStore(q.role,y,q.h)];
     if(D.tanks[q.id])    D.tanks[q.id].cell=[x,y];
     if(D.fittings[q.id]) D.fittings[q.id].cell=[x,y]; }
   dTouch();                        // moves a part without rebuilding LAY - see dTouch() (design.js)
@@ -2909,7 +2870,10 @@ function freeAdj(p,g){
 const layFresh=()=>{ sigFresh(); if(!LAY||layFit!==laySrcSig()) buildLayout(); };
 function layoutMetrics(){
   layFresh();
-  const P_=LAY.parts, core=partOf("core"), cc=cen(core);
+  /* A BLANK GRID HAS NO VESSEL, so every figure measured FROM one is measured
+     from the middle of the hull instead - and reads as nothing, which is what
+     it is. Nothing here refuses to answer. */
+  const P_=LAY.parts, core=roleOf("core"), cc=core?cen(core):{x:GW/2,y:GH/2};
   let head=0, n=0;
   for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
@@ -2955,7 +2919,7 @@ function layoutMetrics(){
     const ok=freeAdj(p,g).length>0;
     p.access=ok; if(ok) reach++;
   }
-  const access = tot? reach/tot : 0;
+  const access = tot? reach/tot : 1;   // nothing on the board is nothing walled in
 
   // Crew dose is not a correlation any more - it is the radiation field
   // (rad.js) read at the room the crew actually sit in. The old formula
@@ -2973,7 +2937,7 @@ function layoutMetrics(){
     sep=Math.min(sep,Math.abs(a.x-b.x)+Math.abs(a.y-b.y));
   }
   // the steam bubble has to sit at the top of the loop, and the accumulator drains downhill
-  let loopTop=core.y;
+  let loopTop=core?core.y:GH;
   for(const q of P_) if(q.role==="sg") loopTop=Math.min(loopTop,q.y);
   // asked of every hold tank on the plant - the lowest one decides, because a
   // bubble that cannot form anywhere is what costs the damping
@@ -3075,8 +3039,11 @@ const laySig = sigMemo(() => LAY ? LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join("
 const D_SCALARS=()=>{ const o={};
   for(const k in D) if(k!=="pipes" && k!=="ports" && k!=="tanks" && k!=="fittings") o[k]=D[k];
   return JSON.stringify(o); };
+// every knob on a tank or a fitting: laySrcSig() carries only what puts a box on
+// the board, so a lift point or a setpoint moved nothing the bench compares
+const D_PARTPARAM=()=>JSON.stringify(D.tanks)+"|"+JSON.stringify(D.fittings);
 // latSig() joins the key because most of what a lattice pen changes (a
 // reflector face, a cluster slot, active length) is NOT a D field - without
 // it a commissioned plant could go quietly out of date with the bench
-function designSig(){ return D_SCALARS()+laySrcSig()+"|"+latSig()+"|"
+function designSig(){ return D_SCALARS()+D_PARTPARAM()+laySrcSig()+"|"+latSig()+"|"
   +LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";"); }
