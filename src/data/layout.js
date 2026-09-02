@@ -10,14 +10,23 @@
    long and deep the ship is, and GW/GH are that pair resolved. Everything reads
    the bare names it always did, so gridSync() below is the ONE writer - a
    second one would let a cached Float64Array(GW*GH) outlive the grid it was
-   sized for. GRID_MIN/GRID_MAX are the drag's stops and nothing else: a hull
-   too small for its own machines marks them limbo (buildLayout()) and says so,
-   which is the bench warning rather than a refusal to resize. */
+   sized for. A hull too small for its own machines marks them limbo
+   (buildLayout()) and says so, which is the bench warning rather than a
+   refusal to resize.
+   ══ AND THERE IS NO MAXIMUM ══
+   There was a [96,60] stop, and it was a game cap wearing a correctness
+   costume: nothing is sized off the grid but the room and radiation fields
+   (Float64Array(GW*GH), refilled per commission), so a bigger hull costs
+   memory and frame time and buys no wrong answer anywhere. Those are the two
+   limits every other part of this plant already lives under - the same pair
+   that bounds how many reactors a ship may carry - and a stated number here
+   made the hull the one place the game said no on its own account. It refused
+   a four-unit station that was otherwise legal.
+   ONE CELL IS THE FLOOR, and that is arithmetic rather than design: a zero
+   grid is a Float64Array(0) and a divide by zero in every field pass. */
 let GW=60, GH=34;
 const CELL=16, GX=12, MPC=1.4/3;   // metres per cell
-const GRID_MIN=[30,20], GRID_MAX=[96,60];
-const gridClamp=(w,h)=>[Math.max(GRID_MIN[0],Math.min(GRID_MAX[0],Math.round(w))),
-                        Math.max(GRID_MIN[1],Math.min(GRID_MAX[1],Math.round(h)))];
+const gridClamp=(w,h)=>[Math.max(1,Math.round(w)), Math.max(1,Math.round(h))];
 function gridSync(){ const [w,h]=gridClamp(D.gw,D.gh);
   if(w!==GW||h!==GH){ GW=w; GH=h; } }
 /* ONE WALL, TO THE CELL THE HAND IS OVER. The bow and the deck do not move:
@@ -1783,6 +1792,84 @@ function pipePath(a,b,vFirst){
   }
   push(b[0],b[1]);
   return out;
+}
+/* ══ AND WHEN THE DOGLEG WALKS THROUGH A MACHINE, SEARCH ══
+   Every lane on the reference ship was hand-picked, and the comments above
+   them are a record of that: "one lane per run, and the table is the proof".
+   That works for one arrangement and for no other - stack a second unit on
+   the hull and its steam header runs straight through the next unit's
+   pressurizer, silently, because pipeLay() lays what it is given.
+   pipeRoute() is the answer to that: a shortest path over FREE cells with a
+   turn charged like four cells, so it comes out as plumbing rather than as a
+   snake, and it is deterministic. It is asked ONLY when the plain dogleg is
+   blocked, so every run that fits today is laid exactly where it was.
+   A pipe cell is passable STRAIGHT THROUGH and costs extra: that is a
+   crossing, which PIPE_SHAPE.cross already carries. A port cell is a wall -
+   two ports may not share a cell - except the two this run is joining. */
+const TURN_COST=4, CROSS_COST=6;
+function pathBlocked(path, ca, cb){
+  /* NEVER THE CACHED GRID. occupied() keys its cache on the node graph, and a
+     seed lays run after run without rebuilding one - so the cache answers
+     about the board as it stood several runs ago, and the check passes on a
+     lane the last run already took. */
+  const g=occupied([]);
+  const ends=[pipeKey(ca[0],ca[1]), pipeKey(cb[0],cb[1])];
+  /* ONE PIPE CELL IN A ROW IS A CROSSING; TWO IS A MERGE.
+     Crossing an existing run is legal and PIPE_SHAPE.cross carries it. Running
+     ALONG one for two cells or more is not a crossing at all - it is the same
+     lane twice, and the two runs become one line with no warning anywhere.
+     That is what stacked units did to their own feedwater risers: every unit
+     asked for the same column, and the second one silently joined the first
+     instead of reaching its own generator. */
+  let along=0;
+  for(const [x,y] of path){
+    if(x<0||y<0||x>=GW||y>=GH) return true;
+    if(ends.includes(pipeKey(x,y))) continue;
+    const o=g[y][x];
+    if(o && !o.pipe) return true;
+    along = (o && o.pipe) ? along+1 : 0;
+    if(along>1) return true;
+  }
+  return false;
+}
+function pipeRoute(a,b,ca,cb){
+  const g=occupied([]);            // fresh, for the reason pathBlocked() gives
+  const ends=[pipeKey(ca[0],ca[1]), pipeKey(cb[0],cb[1])];
+  const free=(x,y)=>{ if(x<0||y<0||x>=GW||y>=GH) return false;
+    if(ends.includes(pipeKey(x,y))) return false;
+    const o=g[y][x]; return !o || !!o.pipe; };
+  const isPipe=(x,y)=>{ const o=g[y][x]; return !!(o&&o.pipe); };
+  if(!free(a[0],a[1])&&!(a[0]===b[0]&&a[1]===b[1])) return null;
+  const DX=[1,-1,0,0], DY=[0,0,1,-1];
+  const key=(x,y,d)=>(y*GW+x)*5+d;
+  const best={}, prev={}, heap=[[0,a[0],a[1],4]];
+  let found=null;
+  while(heap.length){
+    heap.sort((p,q)=>p[0]-q[0]);
+    const [c,x,y,d]=heap.shift();
+    const k=key(x,y,d);
+    if(best[k]!==undefined && c>best[k]) continue;
+    if(x===b[0]&&y===b[1]){ found=k; break; }
+    for(let i=0;i<4;i++){
+      const nx=x+DX[i], ny=y+DY[i];
+      if(!free(nx,ny) && !(nx===b[0]&&ny===b[1])) continue;
+      // a crossing has to go straight through the cell it crosses
+      if(isPipe(nx,ny) && d!==4 && d!==i) continue;
+      let nc = c + 1 + (d!==4 && d!==i ? TURN_COST : 0) + (isPipe(nx,ny) ? CROSS_COST : 0);
+      const nk = key(nx,ny,i);
+      if(best[nk]===undefined || nc<best[nk]){ best[nk]=nc; prev[nk]=k; heap.push([nc,nx,ny,i]); }
+    }
+    if(best[k]===undefined) best[k]=c;
+  }
+  if(found===null) return null;
+  const out=[];
+  for(let k=found; k!==undefined; k=prev[k]){
+    const d=k%5, cell=(k-d)/5, x=cell%GW, y=(cell-x)/GW;
+    out.push([x,y]);
+    if(x===a[0]&&y===a[1]) break;
+  }
+  out.reverse();
+  return out.slice(1);              // the caller already holds the first cell
 }
 /* ══════════ THE TRACE: A CONNECTION IS FOUND, NEVER AUTHORED ══════════
    The traversal unit is a HALF-EDGE (cell, entering face). The walk starts at
