@@ -44,7 +44,14 @@ const DICE={
   porvStick:{p:0.18, act:"porvArm",
     what:"the relief valve fails to reseat after an automatic lift"},
   hitTarget:{p:null, act:"hit",
-    what:"which component a combat hit destroys - weighted toward the hull"}
+    what:"which component a combat hit destroys - weighted toward the hull"},
+  /* p:null, like the combat target: a run held past its wall WILL split, so
+     the die does not decide whether - it decides WHERE, uniformly along the
+     pipe, and a longer run therefore fails somewhere less predictable. The
+     act is `hit`, because a cell is a legal damage id ("pipe:x,y") and
+     "split it HERE" is exactly what a drill wants to stage. */
+  burstCell:{p:null, act:"hit",
+    what:"which cell of an overpressured run splits open"}
 };
 /* s.diceOff is the scenario's master switch: nothing rolls, so the only faults
    that happen are the ones the script asked for. It is on S rather than a

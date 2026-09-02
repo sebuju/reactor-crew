@@ -721,7 +721,9 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
       { const e=ecrOf(s.nOx[k]); if(e>ecrH) ecrH=e; }
       oxP+=qOx*nodeW[k];
 
-      let Tn=s.nTf[k]+(qhat*pw+qOx-film*(s.nTf[k]-s.nTc[k]))*dt/XTAU_F;
+      // at dt 0 the pellet's algebra is its own balance, so a commissioning pass seeds it at the film it will actually see
+      let Tn=dt>0 ? s.nTf[k]+(qhat*pw+qOx-film*(s.nTf[k]-s.nTc[k]))*dt/XTAU_F
+                  : s.nTc[k]+(qhat*pw+qOx)/Math.max(film,1e-9);
       /* ── MELT IS PAID FOR IN LATENT HEAT ──
          A node at tmelt absorbs power WITHOUT rising until its heat of fusion
          is bought, and then rises again, so the melt plateau falls out instead
@@ -758,6 +760,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
 
       s.nRho[k]=clamp(P.aF*(s.nTf[k]-P.TfRef),-6000,3000)
                +clamp(P.aM*(s.nTc[k]-P.Tref),-6000,2500)
+               +clamp(P.aX*(s.nTf[k]-P.TfRef)+P.aS*(s.nTc[k]-P.Tref),-6000,2500)
                +P.aV*s.nV[k]-P.KXE*s.xX[k]
                -P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]
                -P.poison*(P.poiG[i]-1)
@@ -788,13 +791,14 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   coreSolve(P,s.phi,s.nRho);
 
   /* ── what the rest of the sim gets back ── */
-  const o={dop:0,mod:0,vd:0,xe:0,rod:0,tip:0};
+  const o={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0};
   let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
     const k=XIX(i,j), v=nodeW[k], w=v*s.phi[k];
     /* flux weighted: a poisoned corner of a dead core does not get a vote */
     o.dop+=w*clamp(P.aF*(s.nTf[k]-P.TfRef),-6000,3000);
     o.mod+=w*clamp(P.aM*(s.nTc[k]-P.Tref),-6000,2500);
+    o.exp+=w*clamp(P.aX*(s.nTf[k]-P.TfRef)+P.aS*(s.nTc[k]-P.Tref),-6000,2500);
     o.vd +=w*P.aV*s.nV[k];
     o.xe +=w*-P.KXE*s.xX[k];
     o.rod+=w*-P.rodA*s.nCov[k];

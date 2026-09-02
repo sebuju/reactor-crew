@@ -127,6 +127,11 @@ const eqS = (a, b) => eqWhere(a, b) === null;
    on the same tick - see recAct(). A toggle is never `cont`: two toggles in one
    tick are a real pair of inputs and dropping one inverts the plant.
 
+   ── `part` ──
+   Names the machine this order is FOR, off the row's own arguments. A wrecked
+   one takes no orders (actDo() below); a row with no `part` is an order to the
+   plant rather than to a box - a scram, a blackout, a repair party.
+
    ── `rec:false` ──
    Marks a row that is not part of any tape. `reset` again, and for the same
    reason it is `sched:false`: it is the boundary BETWEEN two recordings, not an
@@ -149,17 +154,17 @@ const ACT = {
      worker deliberately excludes from the sim's own loaded subset, and an ACT
      row is replayed in there. Same choice, and the same reason, as the repair
      dispatch line in step.js. */
-  pumpDem  : {lab:"PUMP DEMAND",  cont:true,
+  pumpDem  : {lab:"PUMP DEMAND",  cont:true, part:id=>id,
               log:(id,v)=>{ const p=partOf(id);
                 return (p?p.name:id)+" TO "+(v*100).toFixed(0)+" %"; },
               apply:(s,id,v)=>{ if(s.flowDemBy[id]!==undefined) s.flowDemBy[id]=v; }},
-  rodCommon: {lab:"ROD DEMAND",   cont:true, log:v=>(v*100).toFixed(1)+" %", apply:(s,v)=>{ setCommon(v); }},
-  rodBank  : {lab:"BANK DEMAND",  cont:true, log:(b,v)=>"BANK "+(b+1)+" TO "+(v*100).toFixed(1)+" %",
+  rodCommon: {lab:"ROD DEMAND",   cont:true, part:()=>roleId("rods"), log:v=>(v*100).toFixed(1)+" %", apply:(s,v)=>{ setCommon(v); }},
+  rodBank  : {lab:"BANK DEMAND",  cont:true, part:()=>roleId("rods"), log:(b,v)=>"BANK "+(b+1)+" TO "+(v*100).toFixed(1)+" %",
               apply:(s,b,v)=>{ s.rodZDem[b]=v; }},
-  bankAuto : {lab:"BANK AUT/MAN", log:b=>"BANK "+(b+1)+" NOW "+(S.bankAuto[b]?"MANUAL":"AUTO"),
+  bankAuto : {lab:"BANK AUT/MAN", part:()=>roleId("rods"), log:b=>"BANK "+(b+1)+" NOW "+(S.bankAuto[b]?"MANUAL":"AUTO"),
               apply:(s,b)=>{ s.bankAuto[b]=!s.bankAuto[b]; }},
-  split    : {lab:"ROD MODE",     log:on=>on?"SPLIT":"GANG", apply:(s,on)=>{ setSplit(on); }},
-  tiltDem  : {lab:"TILT TRIM",    cont:true, log:v=>v.toFixed(2), apply:(s,v)=>{ s.tiltDem=v; }},
+  split    : {lab:"ROD MODE",     part:()=>roleId("rods"),     log:on=>on?"SPLIT":"GANG", apply:(s,on)=>{ setSplit(on); }},
+  tiltDem  : {lab:"TILT TRIM",    cont:true, part:()=>roleId("rods"), log:v=>v.toFixed(2), apply:(s,v)=>{ s.tiltDem=v; }},
   boronDem : {lab:"BORON DEMAND", cont:true, log:v=>v.toFixed(0)+" pcm", apply:(s,v)=>{ s.boronDem=v; }},
   /* logCoal, not cont: a load slider drag must collapse in the LOG the way a
      rod drag does, but `cont` is a fact about the TAPE and adding it here would
@@ -171,7 +176,7 @@ const ACT = {
      third relief path is worked through the fitting's own generic controls,
      not this one. No-op if the plant has none: a legal design choice (see
      the bench warning, design.js) cannot leave a phantom block valve on S. */
-  porvBlock: {lab:"PORV BLOCK",   log:()=>{ const fid=primaryRelief();
+  porvBlock: {lab:"PORV BLOCK",   part:()=>primaryRelief(),   log:()=>{ const fid=primaryRelief();
                 return (fid && S.reliefBlocked[fid])?"OPENED":"SHUT"; },
               apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
   /* ONE ACT FOR EVERY TANK'S VALVE, and it replaced three: HPI's on/off, the
@@ -180,7 +185,7 @@ const ACT = {
      refusal expressed by the physics instead of by a flag, and it can be shut
      again because a real valve can. Guarded like ACT.valveDem: a tape naming a
      tank this design never had is a no-op, not a phantom key on S. */
-  tankOpen : {lab:"TANK VALVE",   log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankOpen[id]?"SHUT":"OPEN"),
+  tankOpen : {lab:"TANK VALVE",   part:id=>id,   log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankOpen[id]?"SHUT":"OPEN"),
               apply:(s,id)=>{ if(s.tankOpen[id]!==undefined) s.tankOpen[id]=!s.tankOpen[id]; }},
   /* A tank's overboard dump. It is the answer to a tube rupture filling the
      hotwell with primary water, and it never refuses: open it on a healthy
@@ -189,14 +194,14 @@ const ACT = {
      for a tank the rule is the system and the tank is where the switch lives,
      so two reserves can be armed independently and neither hangs off a
      component that is not part of it. */
-  tankByp  : {lab:"TANK AUTO",    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankByp[id]?"ARMED":"BYPASSED"),
+  tankByp  : {lab:"TANK AUTO",    part:id=>id,    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" "+(S.tankByp[id]?"ARMED":"BYPASSED"),
               apply:(s,id)=>{ if(s.tankByp[id]!==undefined) s.tankByp[id]=!s.tankByp[id]; }},
   /* ONE ISOLATION VALVE PER PORT, worked by clicking the nozzle on the mimic.
      Guarded exactly like ACT.tankOpen: a tape naming a port this design never
      had is a no-op, not a phantom key on S. */
-  portShut : {lab:"PORT VALVE",   log:pid=>portLabel(pid)+" "+(S.portShut[pid]?"OPENED":"SHUT"),
+  portShut : {lab:"PORT VALVE",   part:pid=>"port:"+pid,   log:pid=>portLabel(pid)+" "+(S.portShut[pid]?"OPENED":"SHUT"),
               apply:(s,pid)=>{ if(s.portShut[pid]!==undefined) s.portShut[pid]=!s.portShut[pid]; }},
-  tankDump : {lab:"TANK DUMP",    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" DUMP "+(S.tankDump[id]?"SHUT":"OPEN"),
+  tankDump : {lab:"TANK DUMP",    part:id=>id,    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" DUMP "+(S.tankDump[id]?"SHUT":"OPEN"),
               apply:(s,id)=>{ if(s.tankDump[id]!==undefined) s.tankDump[id]=!s.tankDump[id]; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
   resetTrip: {lab:"TRIP RESET",   apply:(s)=>{ resetTrip(); }},
@@ -213,10 +218,10 @@ const ACT = {
      otherwise put a phantom key on S, and a phantom key on S is snapshotted,
      restored and compared like a real one. Scoped to mode==="relief" because
      S.porvByp carries keys for relief fittings only (resetPlant(), step.js). */
-  porvByp  : {lab:"PORV ARM",     log:fid=>fid.toUpperCase()+" "+(S.porvByp[fid]?"ARMED":"BYPASSED"),
+  porvByp  : {lab:"PORV ARM",     part:fid=>fid,     log:fid=>fid.toUpperCase()+" "+(S.porvByp[fid]?"ARMED":"BYPASSED"),
               apply:(s,fid)=>{ if(P.fittings[fid] && P.fittings[fid].mode==="relief")
                 s.porvByp[fid]=!s.porvByp[fid]; }},
-  porvBlockOf:{lab:"BLOCK VALVE", log:fid=>fid.toUpperCase()+" "+(S.reliefBlocked[fid]?"OPENED":"SHUT"),
+  porvBlockOf:{lab:"BLOCK VALVE", part:fid=>fid, log:fid=>fid.toUpperCase()+" "+(S.reliefBlocked[fid]?"OPENED":"SHUT"),
               apply:(s,fid)=>{ if(P.fittings[fid] && P.fittings[fid].mode==="relief")
                 s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
   /* A THROTTLE'S POSITION, and it is the ONE valve act. ACT.junc is gone with
@@ -230,7 +235,7 @@ const ACT = {
      and a phantom key on S is snapshotted, restored and compared like a real
      one. Scoped to mode==="throttle" because S.valveDem carries keys for a
      throttle only (resetPlant(), step.js). */
-  valveDem : {lab:"VALVE DEMAND", cont:true, log:(id,v)=>id.toUpperCase()+" TO "+(v*100).toFixed(0)+" %",
+  valveDem : {lab:"VALVE DEMAND", cont:true, part:id=>id, log:(id,v)=>id.toUpperCase()+" TO "+(v*100).toFixed(0)+" %",
               apply:(s,id,v)=>{ if(P.fittings[id] && P.fittings[id].mode==="throttle") s.valveDem[id]=v; }},
   /* nolog: repairStart() writes REPAIR PARTY DISPATCHED itself, and it is the
      one that knows whether the order was refused for want of access. */
@@ -308,7 +313,22 @@ function actLog(k, a){
     "Ordered from the panel" + (det ? ": " + det + "." : "."),
     coal ? "act:" + k + ":" + a.slice(0, -1).join(",") : null);
 }
-function actDo(k, a){ actLog(k, a); ACT[k].apply(S, ...a); }
+/* ══ A WRECKED MACHINE TAKES NO ORDERS ══
+   A destroyed pump still accepted a speed demand, a destroyed valve still
+   stroked and a wrecked rod drive still took the bank somewhere it could not
+   go - the panel greyed its keys out (ctlDead(), plant.js) while the act
+   underneath went through anyway, which is a board disagreeing with its own
+   plant. `part` on a row names the machine the order is FOR, off the row's own
+   arguments; wrecked, the order is not carried out and not logged.
+   IN actDo(), never in act(): a replay reaches the plant through actDo() too,
+   so the refusal has to be on the path both take or a tape would replay orders
+   the live run refused. The act is still RECORDED - the recording is the
+   input, and the same input meets the same refusal on the way past. */
+const actDead = (k, a) => { const f = ACT[k].part;
+  if(!f) return false;
+  const id = f(...a);
+  return !!id && S.dmgParts.indexOf(id) >= 0; };
+function actDo(k, a){ if(actDead(k, a)) return; actLog(k, a); ACT[k].apply(S, ...a); }
 
 /* ═══════════════ THE TAPE ═══════════════
    A recording is a FOREST, not a list. You play, you scrub back, you try it the

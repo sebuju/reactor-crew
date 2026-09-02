@@ -36,7 +36,8 @@ const boreK = kind => boreMm(kind)/BORE_REF;
    commissioned snapshot and D is the bench - the P?fallback:D idiom
    reliefSet() (step.js) uses, because a fitting resized after commissioning
    must not move the plant that is running. */
-const fitBoreMm = fid => { const f = (typeof P!=="undefined" && P) ? P.fittings : D.fittings;
+const fitBoreMm = fid => { if(BORE_NOM) return FIT_DEFAULT.bore;
+  const f = (typeof P!=="undefined" && P) ? P.fittings : D.fittings;
   return (f && f[fid] && f[fid].bore) || FIT_DEFAULT.bore; };
 const fitBoreK  = fid => fitBoreMm(fid)/BORE_REF;
 /* This table is a set of DEFAULTS, not permissions: every run carries
@@ -54,7 +55,17 @@ const fitBoreK  = fid => fitBoreMm(fid)/BORE_REF;
    main steam line is a pipe, and one figure here cannot be both.
    Route every bore read through this resolver, never PIPE_BORE_MM[r.k]
    directly, or the fallback lives in two places and can disagree. */
-const runBoreMm = r => (D.bore && D.bore[r.key] !== undefined) ? D.bore[r.key]
+/* ══ AND THE REFERENCE PLANT IS PIPED AT THE NOMINAL BORE ══
+   P.netRef used to be solved on the SAME pipes the plant is drawn with, so
+   every bore cancelled against itself: a cold leg narrowed 750 -> 300 mm
+   moved netFlowK by 2e-4 and the plant ran on regardless. The reference is
+   this plant's arrangement piped at the bore each run and each fitting SHIPS
+   at; deviating from it is what the solve then charges for. Layout, gates,
+   lengths and pumps are untouched by the flag, so everything except bore
+   still cancels exactly as before, and a plant nobody has re-bored reads 1. */
+let BORE_NOM = false;
+const withNomBore = fn => { BORE_NOM = true; try { return fn(); } finally { BORE_NOM = false; } };
+const runBoreMm = r => (!BORE_NOM && D.bore && D.bore[r.key] !== undefined) ? D.bore[r.key]
                      : (PIPE_BORE_MM[r.k] !== undefined ? PIPE_BORE_MM[r.k] : BORE_REF);
 // DEFAULT: PIPE_BORE_MM picks a starting bore, never gates an edge's existence
 const runBore = r => runBoreMm(r)/BORE_REF;
@@ -93,6 +104,7 @@ function partVol(pid){
    allowance - what PIPE_WALL_P0's own comment was already reaching for. */
 const STEEL_RHO = 7850;    // kg/m^3
 const STEEL_S   = 138;     // MPa allowable stress, carbon steel at temperature
+const STEEL_A   = 1.8e-5;  // 1/K linear expansion, austenitic steel
 const WALL_CORR = 3;       // mm of corrosion/handling allowance under any pressure
 // every kind that carries the primary coolant. Wider than layoutMetrics()'s
 // `pipe` bucket on purpose: that one asks what is in the LOOP hydraulically,
@@ -106,7 +118,21 @@ const wallSuggestMm = (boreMm, pMPa, c) =>
    pays for pressure at all is the whole of bug 1: pipeWallK() read the
    coolant NOMINAL, so raising design pressure bought the vessel 220 t and
    the pipes nothing. */
-const runDesignP = r => PRIMARY_K[r.k] ? holdSetP(nodeGraph().coreCirc) : sgDesignP();
+/* ══ AND A FEED LINE IS RATED FOR THE PUMP, NOT FOR THE SHELL ══
+   The secondary's number was the shell's design pressure alone, so the stock
+   condensate line was walled for 6.9 MPa while its own feed pump discharges
+   into that shell at 10.0 - it is the pump's head that the pipe between them
+   holds. Nothing noticed while a wall was only a mass; a run that BURSTS
+   (step.js) cut the stock plant's feed line in 4 s. The GREATER of the two,
+   never the sum: a feed pump's head is already the whole lift out of a
+   condenser at 0.01 MPa, so adding it to the shell counts that lift twice and
+   walls the condensate line at 16.8 MPa. Asked of the drawing (secGensOf())
+   like every other question about what a pump is for. */
+const feedHeadMax = () => { let h = 0;
+  for(const id of pumpIds()) if(secGensOf(id).length) h = Math.max(h, pumpHead(id));
+  return h; };
+const runDesignP = r => PRIMARY_K[r.k] ? holdSetP(nodeGraph().coreCirc)
+                                       : Math.max(sgDesignP(), feedHeadMax());
 const runWallMm = r => (D.wall && D.wall[r.key] !== undefined) ? D.wall[r.key]
                      : wallSuggestMm(runBoreMm(r), runDesignP(r),
                                      PRIMARY_K[r.k] ? COOLANT[D.cool] : null);
@@ -554,6 +580,14 @@ const holdSetP = ci => { const h = holdOnCirc(ci)[0];
    and never refuses, which is the rule the whole bench keeps. */
 const runRating = r => 2*(STEEL_S/((PRIMARY_K[r.k] ? COOLANT[D.cool].pipeK : 1)))
                      * Math.max(runWallMm(r)-WALL_CORR, 0) / Math.max(runBoreMm(r), 1);
+/* ══ AND WHERE IT ACTUALLY LETS GO ══
+   A rating is an ALLOWABLE stress with a margin already inside it, so a pipe
+   held past its rating is not a pipe that is open yet. The same sentence the
+   shell makes (SG_BURST_K, step.js) and the same figure, so the two pressure
+   boundaries on this plant do not each carry their own margin. Past this the
+   run is cut - one cell, the hole a hit makes (pipeBurst(), step.js). */
+const PIPE_BURST_K = 1.5;
+const runBurstP = r => runRating(r)*PIPE_BURST_K;
 const tankRating = id => 2*STEEL_S*Math.max(tankWallMm(id)-WALL_CORR, 0)
                        / Math.max(Math.cbrt(6*Math.max(D.tanks[id].vol,0.1)/Math.PI)*1000, 1);
 function plantRating(ci){
@@ -1686,6 +1720,22 @@ function netBuild(){
         ? s => pumpFwd(s, p.id) ? gc : 0
         : gc;
     }
+    /* ══ AND A WRECKED MACHINE PASSES NOTHING ══
+       Only a PUMP ever noticed being destroyed (it lost its head, above), so
+       water went on circulating through a condenser, a generator or a tank
+       that the board draws as torn open - two wrecks at the ends of a run and
+       a full flow between them. A wreck is not a length of pipe: its path is
+       gone. g<=0 is an ABSENT edge (netAssemble), so this is a break in the
+       line and never a large resistance, and a plant with nothing damaged
+       assembles exactly the matrix it did before.
+       The SHELL path of a ruptured generator goes with it - the leak is the
+       sgtr edge, built elsewhere, and it still reaches the primary face the
+       hot leg lands on, so a tube rupture still empties the loop into the
+       secondary with nothing flowing THROUGH the machine. */
+    { const g0 = edge.g, pid = p.id;
+      const dead = s => !!(s.dmgParts && s.dmgParts.indexOf(pid) >= 0);
+      edge.g = typeof g0 === "function" ? s => dead(s) ? 0 : g0(s)
+                                        : s => dead(s) ? 0 : g0; }
     edges.push(edge);
     }
   }
@@ -2403,7 +2453,7 @@ function vapSolve(s, open){
     for(let e=0;e<ne;e++){ const ed = V.edges[e];
       if(ed.u===i) f += q[e]; else if(ed.v===i) f -= q[e]; }
     out[V.srcPart[k]] = f; }
-  return {out, byKey, work, sink, pIn: work>1e-9 ? workP/Math.abs(work) : pc, p};
+  return {out, byKey, work, sink, pIn: work>1e-9 ? workP/Math.abs(work) : pc, p, kv};
 }
 /* ══ ONE REFERENCE FRAME PER COMPONENT ══
    phiRef() is the level ONE anchor sets, and it cancels out of every flow -
@@ -2515,9 +2565,7 @@ const netFixSig = fixed => Object.keys(fixed).join(',');
    be a silent wrong answer, not a crash - the signature is checked on every
    call rather than trusted once. A throttle's position is continuous, so its
    own term is the exact value rather than a '0'/'1' flag: ANY change to it
-   has to bust the cache, not just crossing some open/shut line. dmgParts
-   never enters A (only a pump's head b does), so it plays no part in the
-   signature. */
+   has to bust the cache, not just crossing some open/shut line. */
 function netFactored(net, s, fixed){
   const sig = net.fitIds.map(fid => {
     const mode = net.fitMode[fid];
@@ -2527,12 +2575,15 @@ function netFactored(net, s, fixed){
     if(mode==="relief") return reliefLive(s,fid) ? '1' : '0';
     return String(s.valve && s.valve[fid]);   // throttle
   }).join('|')
-  /* pipe damage is a third live input the edges above read (beside
-     S.reliefOpen and S.valve) - leave it out of the signature and a hit or a
-     repair reuses last tick's factorisation, solving the network as though
-     the pipe on the grid were still the one it was before: a wrong answer,
-     not a crash, so it is checked every call exactly like the other two. */
-  + '|' + (s.dmgParts ? s.dmgParts.filter(k => k.indexOf("pipe:")===0).join(',') : '')
+  /* DAMAGE is a third live input the edges above read (beside S.reliefOpen
+     and S.valve) - leave it out of the signature and a hit or a repair reuses
+     last tick's factorisation, solving the network as though the plant were
+     still the one it was before: a wrong answer, not a crash, so it is checked
+     every call exactly like the other two. THE WHOLE LIST, not the severed
+     cells alone: a wrecked machine's own internal path is gone now, so any
+     damage id can change A. It subsumes the ruptured-generator field this
+     used to carry separately. */
+  + '|' + (s.dmgParts ? s.dmgParts.join(',') : '')
   /* and a port valve is the fifth: shutting one takes its run's edge out of A
      entirely (runPortsOpen(), above), which is the same class of change a
      severed cell is and has to bust the factorisation the same way. Only the
@@ -2547,12 +2598,6 @@ function netFactored(net, s, fixed){
   /* a ruptured vessel opens a break edge the same way a severed run does, and
      unlike a severed run it is not in s.dmgParts */
   + '|' + (s.breach ? 'B' : '')
-  /* a ruptured generator opens an edge to its own secondary, and that is a
-     change to A, not to b - so it has to bust the factorisation too. Against
-     net.sgtrParts (ROLE[role].sgtr, built once in netBuild()), not a regex
-     on the id - a damage id is only ever "this part ruptured" for a part
-     whose role can rupture at all. */
-  + '|' + (s.dmgParts ? s.dmgParts.filter(k => net.sgtrParts.indexOf(k)>=0).join(',') : '')
   /* Every gate on every tank's own edge - the operator's valve, its auto
      rule, the diode and "is there anything left to give" - as ONE bit per
      tank, off the same tankLive() the edge itself is built from. Any of them
@@ -3072,8 +3117,9 @@ function netFlowK(s, byRun, byP, outs){
      assemble and one substitution, never a re-elimination. Object.create
      rather than a spread, so a tick allocates one object and not forty
      copied fields. */
-  const sNat = Object.create(s); sNat.flowScale = 0;
-  netCoreFracOf(P.net, sNat, natLoop);
+  // the commissioning settle asks hundreds of times and reads no NAT CIRC bar
+  if(!(outs && outs.noNat)){ const sNat = Object.create(s); sNat.flowScale = 0;
+    netCoreFracOf(P.net, sNat, natLoop); }
   let total = 0, natTot = 0;
   for(let i=0;i<n;i++){ total += byLoop[i]||0; natTot += natLoop[i]||0; }
   /* the share of this flow the plant is developing on its own, with no pump
@@ -3138,17 +3184,39 @@ function pipeCellPart(x,y){
           access: stand.length>0, cells, stand, isRun:true};
 }
 
+/* ══ AND A PORT IS A TARGET TOO ══
+   The one thing on the board a shot could not touch: a nozzle valve is the
+   first handle a watch reaches for when a run has to be cut out, and it could
+   never be the thing that fails. Same pseudo-part shape a pipe cell takes, so
+   the dispatcher, the dose rate, the damage card and the repair party need no
+   third code path - it occupies one cell, so it is one target and one small
+   job. What being wrecked MEANS is that it jams where it stands (ACT.portShut
+   refuses, record.js): a valve nobody can work is worse than a shut one. */
+function portCellPart(pid){
+  const c = (typeof portCell === "function") ? portCell(pid) : null;
+  if(!c) return null;
+  const cells=[c], stand=pipeStandCells(cells);
+  return {id:"port:"+pid, name:portLabel(pid), w:1, h:1,
+          access: stand.length>0, cells, stand, isRun:true, isPort:true};
+}
+const portIds = () => Object.keys(D.ports);
 /* Anything s.dmgParts can hold, resolved to the one shape the repair path
    reads: id, name, access. A pipe cell is not in LAY.parts, so every caller
    that looked a damage id up directly got `undefined` for one and quietly
    rendered it as a raw id that could never be reached. Three readers (the
    dispatcher, the dose rate, the damage card), one resolver. */
 function dmgPart(id){
-  if(typeof id!=="string" || id.indexOf("pipe:")!==0)
-    return partOf(id) || null;
+  if(typeof id !== "string") return partOf(id) || null;
+  if(id.indexOf("port:")===0) return portCellPart(id.slice(5));
+  if(id.indexOf("pipe:")!==0) return partOf(id) || null;
   const k=id.slice(5), i=k.indexOf(",");
   return i<0 ? null : pipeCellPart(+k.slice(0,i), +k.slice(i+1));
 }
+/* IS THIS PORT WRECKED - the one predicate, so the act that refuses, the
+   colour that says so and the list that reports it cannot disagree. NOT
+   portDead() (layout.js): that one is the set of nodes a SHUT valve kills,
+   which is a different question about the same box. */
+const portWrecked = (s,pid) => !!(s && s.dmgParts && s.dmgParts.indexOf("port:"+pid) >= 0);
 
 // The two rates combatHit() (step.js) already weighs a component's own hull
 // cells by - a run gets no separate scale to fit, just this shared table.
