@@ -230,7 +230,7 @@ function paramsFor(p){
      every material on the panel, so below them it overwrote the rows you had
      just picked. blockSig() keys the rail's rebuild on kind+title, so
      reordering costs nothing. */
-  if(id==="core"){
+  if(p.role==="core"){
     B.gang="reactor"; B.gangPlain=true;
     B.push({kind:"rule",title:"PRESETS",
       tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself."});
@@ -300,7 +300,7 @@ function paramsFor(p){
   /* No blocks of its own: every one of them is on the reactor panel above,
      and this marks the drives as the second member of that gang so clicking
      the drives on the plant brings the same panel up. */
-  else if(id==="rods"){ B.gang="reactor"; B.gangPlain=true; }
+  else if(p.role==="rods"){ B.gang="reactor"; B.gangPlain=true; }
   else if(p.role==="sg"){
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
         {get:()=>sgTypeOf(id),set:v=>{ D.sgType[id]=v; }},SGT);
@@ -410,7 +410,7 @@ function paramsFor(p){
       ["PANEL MASS",radMass(id).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
     note("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone. So is an unplumbed one: a panel cools the water running through it, so where you pipe it is what it cools.");
   }
-  else if(id==="ctrl"){
+  else if(p.role==="ctrl"){
     opt("INSTRUMENT CHANNELS","How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.","chan",CHAN);
     tog("REACTOR PROTECTION SYSTEM","The automatic trips. Fitted, it scrams the core on high flux, low DNBR, high or low pressure, high fuel temperature, low flow, core void or low subcooling. Leave it off and none of that happens: the reactor will run itself to destruction and wait for you to notice.","rps",55);
     B.push({kind:"slider",title:"RPS TRIP MARGIN",key:"rpsm",min:0,max:1,step:.05,
@@ -418,7 +418,7 @@ function paramsFor(p){
       tip:"How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error."});
     note("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure in RESULTS.");
   }
-  else if(id==="cont"){
+  else if(p.role==="cont"){
     opt("CONTAINMENT","What holds the radioactivity in when fuel fails. Sets how much of a release reaches your crew.","cont",CONT);
     tog("CORE CATCHER","A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher",PART_MASS.catcher);
     note("Containment does nothing for the reactor and everything for the people around it. It is pure insurance, and it is heavy. Right-click the plant to fit or remove it without opening this list.");
@@ -508,7 +508,7 @@ function paramsFor(p){
       tip:"When this tank lines itself up without being asked. The operator's own valve is always there beside it - this only ever OPENS, it never overrides a switch.",
       items:AUTO_IDS.map(a=>({name:AUTORULE[a].label,tip:""}))});
   }
-  else if(id==="bkp"){
+  else if(p.role==="bkp"){
     opt("BACKUP POWER","What keeps the coolant pumps turning when main power is lost. Test it with the Station Blackout fault in the control room.","bkp",BKP);
     note("With no backup, a blackout leaves you nothing but natural circulation - which is set by how high you put the steam generators and how tall you made the core.");
   }
@@ -623,10 +623,18 @@ function paramsForFit(fid){
 /* ══ THE TWO PLATES THAT BELONG TO THE WHOLE DESIGN ══
    RESULTS (what it adds up to) and REVIEW (what is wrong with it) point at no
    component - data only, built into HTML by design-bench.js. */
+/* ══ AND WITH NO REACTOR THERE IS NOTHING TO ADD UP ══
+   Every row here is a figure ABOUT a machine - power density, grace time,
+   shutdown margin, peaking, the pipe run, the crew's dose - and the lattice is
+   a DRAWING that exists whether or not a vessel stands on the arrangement
+   grid. A blank ship read a full plate of a plant nobody had built. The mass
+   line stays, because 0 t is the honest answer and the budget is still there
+   to be spent against. */
 function benchResultsData(){
-  const d=derived();
-  return {mass:d.mass,over:d.over,eq:(d.mass-layMass),ship:layMass,dens:d.dens,excess:d.excess,
-    stats:planStats(d).concat(layoutStats(PLANT_LM||layoutMetrics()))};
+  const d=derived(), core=!!roleOf("core");
+  return {mass:d.mass,over:d.over,eq:(d.mass-layMass),ship:layMass,
+    dens:core?d.dens:0, excess:core?d.excess:0,
+    stats:core?planStats(d).concat(layoutStats(PLANT_LM||layoutMetrics())):[]};
 }
 function benchReviewData(){
   const d=derived(), LM=PLANT_LM||layoutMetrics();

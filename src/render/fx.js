@@ -29,8 +29,8 @@ function fxHash(i){
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 /* A STOPPED ROTOR STANDS WHERE IT STOPPED, and not at zero: the shaft angles on
-   this plant are ONE integral shared by every machine of a kind (s.spin,
-   s.spinT), so freezing them all at 0 would park a row of wrecked pumps in
+   this plant are ONE rate shared by every machine of a kind (s.spinV,
+   s.spinTV), so freezing them all at 0 would park a row of wrecked pumps in
    perfect formation and read as deliberate. A hash of the id is a fixed,
    arbitrary angle per machine - the same one every frame, and on a headless
    draw too. Returns turns, 0..1. */

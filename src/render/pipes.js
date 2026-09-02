@@ -173,6 +173,53 @@ function pipeAt(g,s){
    smooth denominator swung the reading by tens of per cent every frame. S.t advances
    by exactly the step that moved the fluid, so the division is exact. */
 const pipeLast={}, pipeSpd={}, pipeShown={};
+/* ══ NYQUIST, NOT A SPEED LIMIT ══
+   Parcels are a repeating texture of period `per`, and so is a rotor with six
+   blades. The eye matches this frame's marks to the nearest ones in the last,
+   so an advance of more than HALF a period a frame is read as motion the other
+   way - the wagon wheel. The stock plant's feed lines space their parcels
+   7.6 px apart and reversed from 4x; the turbine rotor is 60 degrees of
+   symmetry against ~94 degrees a frame at 16x, and read -26. So the DISPLAY
+   phase advances by what the texture can carry, and `over` says by how much it
+   could not keep up.
+
+   IT TAKES AN ADVANCE, NEVER TWO SAMPLES OF AN ANGLE. A value kept %360 that
+   moves more than half a turn in a frame carries no direction at all - the
+   difference between two samples is then a coin toss, and clamping a coin toss
+   is a shaft jittering in place, which is what the pump did at MAX. So a shaft
+   hands over its RATE (s.spinV, deg/s) and the pipes hand over the distance
+   their own monotonic integral moved. Neither can be ambiguous.
+
+   ANSWERED ONCE A PASS, because this ADVANCES something. s.spin is one angle
+   for every pump on the plant, so a key asked once per box would step four
+   times in a four-pump frame and run the impellers at four times the rate.
+   Keyed on layPass() (layout.js), which is the same door everything else that
+   is a pure function of one pass uses, and which answers 0 - never cacheable -
+   outside a window.
+   Display state, so it is not on S and pipeReset() clears it. */
+const pipePh={}, pipeRaw={}, pipeOver={}, pipePass={}, pipeAdv={};
+function aliasStep(key,adv,per){
+  const pass=typeof layPass==="function"?layPass():0;
+  if(pass && pipePass[key]===pass) return {ph:pipePh[key], over:pipeOver[key], adv:pipeAdv[key]||0};
+  pipePass[key]=pass; pipeAdv[key]=adv;
+  pipePh[key]=(pipePh[key]||0)+clamp(adv,-per*0.4,per*0.4);
+  pipeOver[key]=clamp(Math.abs(adv)/(per/2)-1,0,1);
+  return {ph:pipePh[key], over:pipeOver[key], adv};
+}
+/* what a monotonic integral moved since the last pass, asked BEFORE the period
+   is chosen: a caller that can widen its own texture buys the speed back at
+   full brightness instead of losing it. */
+function aliasAdv(key,v){
+  const pass=typeof layPass==="function"?layPass():0;
+  if(pass && pipePass[key]===pass) return pipeAdv[key]||0;
+  const prev=pipeRaw[key]; pipeRaw[key]=v;
+  return prev===undefined ? 0 : v-prev;
+}
+const aliasRate=(key,rate,per)=>aliasStep(key,rate*pipeDt,per);
+/* PLANT seconds this frame - what a rate has to be multiplied by to become a
+   frame's travel. A caller that shapes its own advance needs it before it can
+   hand one over. */
+const frameDt=()=>pipeDt;
 /* This frame's head loss per run, off netDrops() (pipenet.js). Refilled once a
    frame and never stored on S, for the same reason the solve is not: it is a
    pure function of S, so a snapshot that carried it could only ever disagree
@@ -271,6 +318,11 @@ function pipeReset(){
   for(const k in pipeLast)  delete pipeLast[k];
   for(const k in pipeSpd)   delete pipeSpd[k];
   for(const k in pipeShown) delete pipeShown[k];
+  for(const k in pipePh)    delete pipePh[k];
+  for(const k in pipeRaw)   delete pipeRaw[k];
+  for(const k in pipeOver)  delete pipeOver[k];
+  for(const k in pipePass)  delete pipePass[k];
+  for(const k in pipeAdv)   delete pipeAdv[k];
   pipeT=null; pipeDt=0;
 }
 function pipeRate(s){
@@ -483,10 +535,26 @@ function pipeBubCol(col){
   }
   return v;
 }
-function pipeStream(g,ph,sp,col,w,st,seed){
+function pipeStream(g,key,ph0,sp,col,w,st,seed){
   const moving=Math.min(1,Math.abs(sp)/8);
-  /* the bore is always there, so a stalled line is still a line */
-  ctx.save(); ctx.globalAlpha=0.22; ctx.lineCap="square"; ctx.lineJoin="round";
+  /* a wide bore carries more of them, not bigger ones */
+  const gap0=Math.max(6,20-w*2.2)*(1+st*0.3), lim=w/2-PIPE_BUB_WALL;
+  /* A FAST RUN SPREADS ITS PARCELS OUT RATHER THAN DIMMING THEM. The period is
+     what sets the speed the texture can carry, so widening it is how the
+     picture buys the speed back - fewer marks, further apart, all of them at
+     full brightness and all of them still going the right way. Capped, or a
+     16x run empties into two dots. Dimming was tried first and it read as no
+     flow at all past 4x. */
+  const adv=aliasAdv(key,ph0);
+  const gap=gap0*clamp(Math.abs(adv)/(gap0*0.4),1,2.5);
+  /* THE PHASE IS THE ONE THE TEXTURE CAN CARRY - see aliasStep(). Everything
+     below reads it, including the parcel's identity and its wobble, or a mark
+     would be drawn somewhere its own number did not put it. */
+  const a=aliasStep(key,adv,gap), ph=a.ph;
+  /* and what it still could not carry is spent on the line: a run moving too
+     fast to resolve into parcels is a streak, which is what a fast flow looks
+     like on any real camera. */
+  ctx.save(); ctx.globalAlpha=0.22+0.18*a.over; ctx.lineCap="square"; ctx.lineJoin="round";
   ctx.lineWidth=w; ctx.strokeStyle=col;
   const any=pipeSub(g,0,g.len);
   if(any) ctx.stroke();
@@ -495,8 +563,6 @@ function pipeStream(g,ph,sp,col,w,st,seed){
   /* a stopped line carries no parcels: they fade out with the flow that drove them */
   if(moving<0.01) return;
 
-  /* a wide bore carries more of them, not bigger ones */
-  const gap=Math.max(6,20-w*2.2)*(1+st*0.3), lim=w/2-PIPE_BUB_WALL;
   ctx.save(); ctx.fillStyle=pipeBubCol(col);
   for(let s=((ph%gap)+gap)%gap-gap;s<g.len;s+=gap){
     const id=Math.round((ph-s)/gap)+(seed|0);
@@ -661,7 +727,7 @@ const PIPE_DIAL_R=10;
 /* WHERE THE PRESSURIZER'S OWN DIAL SITS, off the top of its BOX. One helper
    because valueBase() (plant.js) hangs the pressure figure under the dial: two
    copies of the offset and the number lands on the glass. */
-const PZR_DIAL_CY=boxY=>boxY+PIPE_DIAL_R+26;
+const PZR_DIAL_CY=boxY=>boxY+PIPE_DIAL_R+18;
 /* Is this rectangle clear of every component box? The one test a widget that
    floats in the pipe margin - a meter, a fitting's control strip - uses to
    decide where it may sit, so two of them cannot disagree about what "in the
@@ -991,10 +1057,15 @@ function pipeSizeLabels(NET){
     const words=[Math.round(runBoreMm(r))+" mm",
                  (p>=10?p.toFixed(1):p.toFixed(2))+" MPa"];
     const spots=pipeLabSpots(g);
-    for(let i=0;i<spots.length && i<words.length;i++){
+    const n=Math.min(spots.length, words.length);
+    /* ONE SCALE FOR BOTH WORDS: sized apart, the shorter word rode a whole
+       step bigger than its pair and the two read as separate labels. */
+    let sz=w-PIPE_LAB_PAD;
+    for(let i=0;i<n;i++)
+      sz=Math.min(sz, REF*spots[i].room/Math.max(tw(words[i],o0),1e-6));
+    if(!(sz>0.8)) continue;
+    for(let i=0;i<n;i++){
       const word=words[i], sp=spots[i];
-      const sz=Math.min(w-PIPE_LAB_PAD, REF*sp.room/Math.max(tw(word,o0),1e-6));
-      if(!(sz>0.8)) continue;
       const vert=Math.abs(sp.p.dx)<Math.abs(sp.p.dy);
       ctx.save(); ctx.translate(sp.p.x, sp.p.y);
       if(vert) ctx.rotate(-Math.PI/2);
@@ -1015,7 +1086,7 @@ function pipeFlow(L){
     /* L.flowPos and pipeSpd are keyed by the RUN (r.key), never the kind (r.k) - a
        kind has no entry of its own, so reading r.k here silently fed every packet
        phase 0 and every speed 0, whatever loop it was on. */
-    pipeStream(pipePad(g,PIPE_RUNWAY), L.flowPos[r.key]||0,
+    pipeStream(pipePad(g,PIPE_RUNWAY), r.key, L.flowPos[r.key]||0,
               pipeSpd[r.key]||0, pipeCol(PC,r.k), w, pipeSteam(r,L), pipeSeed(r.key));
     ctx.restore();
   }
