@@ -554,9 +554,10 @@ function uiDown(e){
     // ...and the ghost places one. There is nothing to follow it with: a pipe
     // is laid with the pipe tool, cell by cell.
     else if(w.type==="ghostport"){ addPortAt(w.p,w.dx,w.dy); buildLayout(); }
-    // the hull's own wall. Committed as it moves rather than on release: the
-    // ship IS the preview, and there is no ghost outline a wall could wear
-    else if(w.type==="hull") ui.drag={type:"hull",edge:w.edge,v:w.v};
+    /* the hull's own wall. NOTHING COMMITS UNTIL THE RELEASE: gridDrag() calls
+       buildLayout(), which at pointer rate re-laid the whole board for every
+       cell crossed. The wall wears a ghost outline while it moves (drawPlant). */
+    else if(w.type==="hull") ui.drag={type:"hull",edge:w.edge,v:w.v,gw:D.gw,gh:D.gh};
   else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
 }
 /* WHERE THE GESTURE IS, ASKED ONCE. A part drag is a MOVE now and only a
@@ -592,7 +593,8 @@ function uiMove(e){
         while(x!==c[0]){ x+=Math.sign(c[0]-x); d.cells.push([x,y]); }
         while(y!==c[1]){ y+=Math.sign(c[1]-y); d.cells.push([x,y]); }
       } }
-    else if(d.type==="hull") gridDrag(d.edge, cellAt(q));
+    else if(d.type==="hull"){ const c=cellAt(q);
+      if(c){ d.c=c; [d.gw,d.gh]=gridClamp(d.edge==="r"?c[0]+1:D.gw, d.edge==="b"?c[1]+1:D.gh); } }
     else if(d.type==="pipeerase") pipeLift(q);
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
@@ -660,6 +662,8 @@ function uiUp(e){
     if(!d.v || vIn(p)) partDragTo(d, d.v?vPt(p):p);
     if(d.gx!==d.sx||d.gy!==d.sy) moveTo(d.part,d.gx,d.gy);
   }
+  // THE WALL COMMITS ON RELEASE - one buildLayout() for the whole gesture
+  if(d&&d.type==="hull"&&d.c) gridDrag(d.edge,d.c);
   ui.drag=null;
 }
 /* the page canvas measures in layout units off local(); a hosted widget hands
