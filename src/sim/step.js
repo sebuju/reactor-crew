@@ -184,12 +184,12 @@ function commission(){
     P.swallow  = totalTurbKgs(); }
   /* ── AND THE SAME ANCHOR FOR THE OTHER TWO MACHINES ──
      P.hTurb makes the enthalpy drop across design shell pressure to design
-     condenser pressure exactly H_FG, so a turbine at its design point does the
+     condenser pressure exactly the feed-to-steam rise, so a turbine at its design point does the
      work P.eff always priced and only backpressure can move it.
      P.condUA is what the condenser you BOUGHT is worth: a unit sized at rated
      duty rejects rated duty at COND_DT0, so duty divides the terminal
      difference and an undersized machine sits hotter for the same heat. */
-  P.hTurb   = H_FG/Math.max(.05, 1-Math.pow(condPDes()/sgDesignP(),TURB_GAM));
+  P.hTurb   = steamRise()/Math.max(.05, 1-Math.pow(condPDes()/sgDesignP(),TURB_GAM));
   /* ── THE GOVERNOR VALVE, FITTED AT THE SAME ANCHOR ──
      Wide open, at design shell pressure against design backpressure, this
      machine passes exactly what it was bought to swallow. Every departure - a
@@ -679,7 +679,7 @@ const radCap_ = id => radMass(id)*1000*CP_STEEL + partVol(id)*1000*CP_W;
 /* THE ENTHALPY THE TURBINE ACTUALLY GETS, off the pressure ratio across it -
    the two pressures being SOLVED now rather than pinned. P.hTurb is fitted at
    the same anchor as everything else on this side: at design shell pressure
-   against design condenser pressure it is exactly H_FG, so the machine you
+   against design condenser pressure it is exactly the feed-to-steam rise, so the machine you
    bought does what it always did and only backpressure moves it. */
 const TURB_GAM=0.19;                 // (gamma-1)/gamma for steam
 const turbDh = (ps,pc) =>
@@ -989,7 +989,8 @@ const DUMP_K=0.02;
 const sgBypBand = () => { let k=PORV_LIFT_K;
   // AS A FRACTION of what each valve protects: the setpoints are absolute MPa
   // now, and this band is a share of the shell design pressure
-  for(const fid of reliefSecIds()) k=Math.min(k, reliefSet(fid).lift/Math.max(reliefRefP(fid),1e-6));
+  for(const fid of reliefSecIds())
+    k = Math.min(k, reliefSet(fid).lift/Math.max(reliefRefP(fid),1e-6));
   return Math.max(0.005, k-1); };
 const sgOverFrac = s => { let k=0;
   for(const id of sgIds()) k=Math.max(k, secP(s,id)/sgDesignP(id)-1);
@@ -1190,15 +1191,18 @@ const FLOW_TAU=5, FLOW_TAU_COAST=12;    // seconds
    Steam raised is heat removed over the latent heat, which is the only new
    physics here - the tick already computes `removal`, so this is a mass
    balance and not a second solve. */
-/* ══ LATENT HEAT IS THE CIRCUIT'S OWN ══
-   This was water's, hardcoded, and load-bearing in five places - so a
-   generator boiling helium was charged water's 1510 kJ/kg. It is asked of the
-   curve the shell's own circuit carries now (hfgOfCirc(), pipenet.js). H_FG
-   stays as the PLANT-LEVEL scale where there is no one shell to ask: sizing a
-   turbine's swallow at commissioning, and the condenser's own pot, which is
-   fed by every generator at once. */
-const hfgSg = id => hfgOfCirc(shellCirc(id));
-const H_FG=SAT_WATER.hfg;
+/* ══ WHAT A BOILER DUTY COSTS PER KILOGRAM IS THE RISE, NOT THE LATENT HEAT ══
+   Each kilogram of steam a shell sends away is a kilogram of feedwater that
+   arrived at T_FEED and had to be heated to saturation before any of it could
+   boil. So the shell's steam term, the condenser's heat in and both plant-level
+   steam scales are all the FEED-TO-STEAM RISE. They spent `hfg` on it - 1509 at
+   6.9 MPa where the rise is 1843, and 1622 at 17 MPa where hfg is 858 - because
+   four comments said the constant already spanned it. Asked of the shell's own
+   circuit at the shell's own PRESSURE, since neither quantity is a constant.
+   steamRise() (layout.js) is the same rise at the design point, for the plant-level anchors
+   that have no one shell to ask. */
+const riseSg = (id,p) => riseOfCirc(shellCirc(id), p);
+// (steamRise(), layout.js, is the one definition - see the block above)
 const SGL_SET=50;         // %, the level the feed controller holds
 /* ── THE SHELL AS A POT ──
    Steel is what is left of the shell's heat capacity once its water is counted
@@ -1207,11 +1211,9 @@ const SGL_SET=50;         // %, the level the feed controller holds
    why the small machine swings and the big one rides it out on one number
    instead of a fitted multiplier. */
 const CP_STEEL=0.5;       // kJ/kg/K
-/* Feedwater arrives at a real temperature, not at the shell's. Only the NET
-   water accumulating is charged sensible heat here - what boils off is charged
-   through H_FG, which already spans feedwater to steam, so charging both would
-   count the same kilogram twice. */
-const T_FEED=490;         // K
+/* T_FEED lives on the water curve now (pipenet.js) - it is a property of the
+   feed system, and layout.js is asked for plantSteam() before this file has
+   been evaluated. */
 /* WHERE A SHELL LETS GO. There is NO invisible lid on this plant: if nothing
    was fitted to take the steam, the shell takes it, and at this multiple of
    its design pressure it bursts. Latched, like a rupture disc and like the
@@ -1311,7 +1313,7 @@ const LVL_K = 0.9/(100*BETA_W);
 const sgMassOf=id=>sgRowOf(id).water*1000;
 /* Rated steam for the WHOLE plant, kg/s - the sizing figure every secondary
    rate is a fraction of. */
-const ratedSteam=()=>P.rated*1000/H_FG;
+const ratedSteam=()=>P.rated*1000/steamRise();
 /* 100 % on a steam line: one generator's worth for its own run, the whole
    plant's for the exhaust. The tick normalises the packet integral on it and
    the meter prints it as a full scale, so the digits and the packets read the
@@ -1713,14 +1715,18 @@ const sgLvl=(s,id)=>{ const v=s&&s.sglBy&&s.sglBy[id]; return v===undefined?SGL_
    water at the pressures these shells run at, and a vessel whose steam space
    at 100 % level is still 0.6 of the water volume - a level is read across a
    downcomer span, not across the whole drum. */
-const SG_RHO_W=740, SG_DOME=1.6;
+/* SG_RHO_W was 740 flat - saturated water at the 6.9 MPa anchor and 34 % heavy
+   at 17 MPa, where three families' shells sit. It is the curve's own liquid
+   density at the pressure the shell is actually at now (rhofOf(), pipenet.js). */
+const sgRhoW=(s,id)=>rhofOf(satOfCirc(shellCirc(id)), tsatSec(secP(s,id), shellCirc(id)));
+const SG_DOME=1.6;
 /* How fast the shell settles back onto saturation, s. The surplus condenses
    into the water below it and a deficit flashes off it; the term cancels
    inside the shell, so it moves no mass out of the plant at any rate. */
 const SG_FLASH_TAU=4;
-const sgSteamVol=(s,id)=>Math.max(0.1, sgMassOf(id)/SG_RHO_W*(SG_DOME-sgLvl(s,id)/100));
+const sgSteamVol=(s,id)=>Math.max(0.1, sgMassOf(id)/sgRhoW(s,id)*(SG_DOME-sgLvl(s,id)/100));
 /* What saturation permits in that space at the pressure the pot is sitting at. */
-const sgSteamEq=(s,id)=>sgSteamVol(s,id)*satRvl(secP(s,id))*SG_RHO_W;
+const sgSteamEq=(s,id)=>sgSteamVol(s,id)*satRvl(secP(s,id))*sgRhoW(s,id);
 const sgSteamKg=(s,id)=>{ const v=s&&s.sgSteamBy&&s.sgSteamBy[id];
   return v===undefined ? sgSteamEq(s,id) : v; };
 /* The driest generator on the plant. The trend, the annunciator and the feed
@@ -3532,8 +3538,12 @@ function step(dt){
     /* WHAT THIS MACHINE IS RAISING, and WHAT ACTUALLY LEAVES IT. The gap
        between them is trapped steam, and trapped steam is what the shell
        temperature below integrates - the whole of the bug this replaces. */
-    const steamOut = (sgQBy[id]||0)/hfgSg(id);                            // kg/s raised in THIS generator
     const shellP = secP(s,id);
+    /* The RISE, not the latent heat: a kilogram of steam is a kilogram of
+       feedwater heated from T_FEED and then boiled, and both halves cross
+       these tubes. */
+    const rise = riseSg(id, shellP);
+    const steamOut = (sgQBy[id]||0)/rise;                                 // kg/s raised in THIS generator
     /* ── AND IF NOTHING WAS FITTED TO TAKE IT, THE SHELL TAKES IT ──
        There is no lid that is not a placed box. Past this the shell is open to
        atmosphere: it flashes off what is in it, stops raising steam pressure
@@ -3643,17 +3653,18 @@ function step(dt){
     const fed_ = fed - (raw - s.sglBy[id])*M/100/Math.max(dt,1e-9);
     /* ── THE SHELL'S OWN ENERGY BALANCE ──
        In across the tubes, out with the steam that left, and the sensible heat
-       of the water that is NET accumulating - what boils is already charged
-       through H_FG, which spans feedwater to steam, so charging it twice would
-       cool a healthy generator for nothing. Pressure is what saturation says
-       about this temperature (secP, pipenet.js), not a formula about load. */
+       of the water that is NET accumulating - the replacement water is already
+       charged through `rise`, which really does span feedwater to steam, so
+       charging it twice would cool a healthy generator for nothing. Pressure is
+       what saturation says about this temperature (secP), not a formula about
+       load. */
     const C = Math.max(1, sgHeatCap(s,id));
     const qFeed = (fed_-boilNet)*CP_W*(s.sgTBy[id]-T_FEED);
     /* An OPEN pot boils at the room's pressure, whatever is still crossing the
        tubes into it - which is why a burst shell is a violent cooldown first
        and no heat sink at all a few seconds later, once it is dry. */
     s.sgTBy[id] = s.sgBurst[id] ? tsatSec(P.Pcont, shellCirc(id))
-      : potStep(s.sgTBy[id], C, sgQBy[id]||0, outKg*hfgSg(id) + qFeed, skinQOf(s,id), dt, T_FEED*0.5);
+      : potStep(s.sgTBy[id], C, sgQBy[id]||0, outKg*rise + qFeed, skinQOf(s,id), dt, T_FEED*0.5);
     boiled += outSteam;
     /* A ruptured generator on its safety valve is putting primary water in the
        sky. Charged at the SGTR scale already used below, times the share of
@@ -3708,7 +3719,7 @@ function step(dt){
      other way to fail, and the failure is a real one now. What bounds it
      instead is the machine - a relieved condenser is boiling at atmospheric,
      so it sits on that saturation temperature and no higher. */
-  { const qIn = Math.max(0, boiled*retK*H_FG - workKW);
+  { const qIn = Math.max(0, boiled*retK*steamRise() - workKW);
     s.condT = potStep(s.condT, condCap_(), qIn, condRej(s), skinQRole(s,"cond"), dt, s.cwInT);
     if(s.condLost) s.condT = Math.min(s.condT, tsatSec(COND_ATM)); }
   /* NO RADIATOR SELF-LIMITS WITHOUT A CAP. Area 0 is radRej 0, so the panel

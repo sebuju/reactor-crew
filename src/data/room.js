@@ -352,7 +352,7 @@ function roomPlume(cells, n){
 // what a kilogram of secondary steam is worth to the room, above ambient
 // water: the feed-to-steam rise the shell already charged, plus the feedwater
 // it was raised from sitting above the hull outside.
-const roomSteamH = () => H_FG + CP_W*(T_FEED - T_HULL);
+const roomSteamH = () => steamRise() + CP_W*(T_FEED - T_HULL);
 
 /* ══ THE TICK ══
    Sources, transport, sink - in that order, once, explicitly. Nothing here

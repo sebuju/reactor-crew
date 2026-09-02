@@ -401,7 +401,7 @@ const PUMP_MARGIN = 1.35;
 const pumpFlowSuggest = id => {
   const n = Math.max(1, loopMap().n);
   if(id !== undefined && pumpBounds(id).shell)
-    return RATED_KW()/(SAT_WATER.hfg*n);      // rated heat over latent heat: kg/s of steam
+    return RATED_KW()/(steamRise()*n);        // rated heat over the feed-to-steam rise: kg/s of steam
   return RATED_KW()/(SAT_WATER.cp*CORE_DT0*n);
 };
 /* ══ A SUGGESTION FILLS THE FIELD. IT IS NOT THE FIELD ══
@@ -418,8 +418,8 @@ const pumpFlowSuggest = id => {
    of what a reference to start from should do. */
 const bake = (bag, id, mk) => { const v = bag[id];
   return v === undefined ? (bag[id] = mk(id)) : v; };
-const pumpHead = id => bake(D.pumpHead, id, pumpHeadSuggest);
-const pumpFlow = id => bake(D.pumpFlow, id, pumpFlowSuggest);
+const pumpHead = id => D.pumpHead[id] ?? pumpHeadSuggest(id);
+const pumpFlow = id => D.pumpFlow[id] ?? pumpFlowSuggest(id);
 /* WHAT THIS PUMP IS WORTH AGAINST THE REFERENCE MACHINE - a MASS and a BOX,
    and nothing the solve reads. The head an edge develops is the machine's own
    MPa and the flow it swallows is its own casing bore (netBuild()), so this
@@ -587,7 +587,21 @@ const n0Ref = () => { const sg=laySrcSig()+"|"+pipeSig();
    room's load slider, and measuring a machine against `rated` while sizing it
    against `n0*rated` made that ceiling read back the PIPE RUN's flow limit -
    exactly flowK, to the last digit - with a turbine's name on it. */
-const plantSteam = () => n0Ref()*RATED_KW()/SAT_WATER.hfg;          // kg/s raised
+/* ══ WHAT ONE KILOGRAM OF STEAM COSTS THIS PLANT, kJ/kg ══
+   The FEED-TO-STEAM RISE at the design shell pressure - feedwater at T_FEED
+   heated to saturation and then boiled. It is NOT SAT_WATER.hfg, which is the
+   latent half only: 1509 against a real 1843 at 6.9 MPa, and against 1622 at
+   the 17 MPa a high-temperature family's shell is rated for. Every "kg/s of
+   steam" on the plant divides by this, so there is one of it.
+
+   OFF THE SUGGESTION, NEVER sgDesignP(): that walks the drawing (sgIds(), in
+   step.js) and this is asked during buildStockPlumbing(), at module load, when
+   step.js has not been evaluated - the same ReferenceError CORE_DT0 is placed
+   to avoid. sgDesPSuggest() needs only the COOLANT row, and what this replaces
+   was a flat constant that ignored design pressure altogether, so following
+   the suggestion is strictly closer to the plant than what was there. */
+const steamRise = () => hRise(SAT_WATER, sgDesPSuggest());
+const plantSteam = () => n0Ref()*RATED_KW()/steamRise();            // kg/s raised
 /* ══ THE EFFICIENCY THIS PLANT REACHES, NOT THE ONE ITS COOLANT ALLOWS ══
    The COOLANT row is a CEILING and grossEff() is the share of it the fitted
    turbine captures - and every sink on the ship used to be sized against the
@@ -599,16 +613,17 @@ const plantSteam = () => n0Ref()*RATED_KW()/SAT_WATER.hfg;          // kg/s rais
    same log law at the steam the rating raises - which needs neither the
    arrangement nor n0Ref(), and lands within 1.5 % of grossEff() on all six
    families instead of within 30 %. It is a SIZING figure: what the machine
-   actually captures is still grossEff(), off the turbine actually fitted. */
+   actually captures is still grossEff(), off the turbine actually fitted.
+   steamRise() is drawing-free for exactly this reason - see its own note. */
 const ratedEff = () => COOLANT[D.cool].eff
-  * clamp(1 + TURB_EFF_K*Math.log(RATED_KW()/SAT_WATER.hfg/TURB_EFF_REF),
+  * clamp(1 + TURB_EFF_K*Math.log(RATED_KW()/steamRise()/TURB_EFF_REF),
           TURB_EFF_MIN, TURB_EFF_MAX);
 const plantDuty  = () => n0Ref()*RATED_KW()*(1-ratedEff());          // kW rejected
 /* What one turbine swallows wide open, kg/s. A designer sizes a set for the
    boiler in front of it, so the suggestion is all of what that boiler raises -
    and a machine that reaches past it is overload the designer chose to buy. */
 const turbKgsSuggest = () => plantSteam();
-const turbKgs = id => bake(D.turbKgs, id, turbKgsSuggest);
+const turbKgs = id => D.turbKgs[id] ?? turbKgsSuggest(id);
 const totalTurbKgs = () => { let c=0;
   for(const p of LAY.parts) if(p.role==="turb") c+=turbKgs(p.id);
   return c; };
@@ -644,11 +659,11 @@ const totalTurbMass=()=>{ let m=0;
    ceilings condShort_() compares are like for like. */
 const condUASuggest = () => (plantDuty()/CW_RISE)
                             * Math.log(COND_DT0/(COND_DT0-CW_RISE));
-const condUA = id => bake(D.condUA, id, condUASuggest);
+const condUA = id => D.condUA[id] ?? condUASuggest(id);
 /* Steam this unit will take straight past the turbine, kg/s - on a load change
    as well as on a trip, since the bypass became a live machine. */
 const condDumpSuggest = () => 0.5*turbKgsSuggest();
-const condDump = id => bake(D.condDump, id, condDumpSuggest);
+const condDump = id => D.condDump[id] ?? condDumpSuggest(id);
 const COND_T_PER_UA=1.626e-4;          // t per kW/K
 const totalCondUA=()=>{ let c=0;
   for(const p of LAY.parts) if(p.role==="cond") c+=condUA(p.id);
@@ -673,9 +688,9 @@ const sgRowOf=id=>SGT[sgTypeOf(id)];
    sgShellT and sgTubeT are separate on purpose: they answer two different
    questions and were one number, so buying transfer coefficient used to be
    free and holding more pressure used to cost nothing. */
-const sgShellT = id => { const r=sgRowOf(id);
-  const d=Math.cbrt(6*Math.max(r.water,0.1)/Math.PI)*1000;
-  return tankAreaM2(r.water)*(wallSuggestMm(d, sgDesignP(id), null)/1000)
+const sgShellT = id => { const w=sgRowOf(id).water;
+  const d=Math.cbrt(6*Math.max(w,0.1)/Math.PI)*1000;
+  return tankAreaM2(w)*(wallSuggestMm(d, sgDesignP(id), null)/1000)
          *STEEL_RHO/1000*TANK_MASS_GAME_K; };
 /* ══ AND THE BUNDLE IS A FLAT TONNAGE PER TYPE - DELIBERATELY ══
    Pricing it off UA (IHX_T_PER_UA's idiom) is the obvious move and it is
@@ -1242,8 +1257,19 @@ const IHX_HOLD_PER_UA= 7.6e-4;         // t of intermediate coolant per kW/K
    approach): a real quantity in real units, and the same sentence for every
    fluid.
 
+   ══ THE CEILING IS NO LONGER A GUARD ON A BROKEN CURVE - AND IT HAS NOT MOVED ══
+   SG_P_MAX was 17.0 because the old two-anchor power law stopped meaning
+   anything above its 6.9 MPa anchor: it read 602.7 K at 17 MPa against a real
+   625.9. That reason is GONE - the curve is Antoine now and holds to 1.8 K to
+   the critical point, and hfgOf() takes latent heat to zero at tc.
+   It is still 17.0, and raising it was TRIED and backed out: at 20 MPa the
+   generator UA that dT0 implies grows enough that the core runs past its own
+   HIGH FLUX trip. Moving this needs the core/steam balance refitted with it,
+   which is a job of its own. Do not raise it on the curve argument alone -
+   that argument is settled and it is not the constraint.
+
    SG_APPROACH is the temperature difference across the tubes at rated - a
-   real 25 K for a large steam generator. SG_P_MAX is water's own ceiling: a
+   real 25 K for a large steam generator. The old note read: a
    high-temperature core would boil water past its critical point, where this
    curve means nothing and no drum boiler exists, so it caps at what a real
    high-pressure steam plant is built for. Read off the COOLANT row, never P,
@@ -1277,8 +1303,8 @@ const sgUASuggest = () => { const n=Math.max(1,sgCount());
   const dT0=Math.max(5, COOLANT[D.cool].Tref - tsatSec(sgDesignP()));
   return (n0Ref()*RATED_KW())/(n*Math.pow(Math.max(layoutMetrics().flowK,.02),UA_FLOW)*dT0); };
 const ihxUASuggest = () => sgUASuggest()*2.5;
-const sgUAOf  = id => bake(D.sgUA,  id, sgUASuggest);
-const ihxUAOf = id => bake(D.ihxUA, id, ihxUASuggest);
+const sgUAOf  = id => D.sgUA[id]  ?? sgUASuggest(id);
+const ihxUAOf = id => D.ihxUA[id] ?? ihxUASuggest(id);
 const totalIhxMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="ihx") m+=ihxUAOf(p.id)*IHX_T_PER_UA;
   return m; };
@@ -1356,7 +1382,7 @@ const radAreaSuggest=id=>RATED_KW()*1000*(1-ratedEff())
    panels - so placing a third panel silently shrank the two already on the
    drawing, boxes and all. A suggestion prices a machine when it is bought; it
    is not a figure that may move under one already fitted. */
-const radAreaOf=id=>bake(D.radArea, id, radAreaSuggest);
+const radAreaOf=id=>D.radArea[id] ?? radAreaSuggest(id);
 const radArea=id=>{ const p=partOf(id);
   return (p && radLive(id)) ? radAreaOf(id) : 0; };
 /* ══ AND A PANEL IS A HEAT EXCHANGER ON ITS COOLANT SIDE ══
@@ -1369,7 +1395,7 @@ const radArea=id=>{ const p=partOf(id);
 const RAD_DT0=8;
 const radUASuggest=id=>radCoatOf(id).emis*SIGMA*radAreaOf(id)
   *Math.pow(RAD_TDES,4)/1000/RAD_DT0;
-const radUAOf=id=>bake(D.radUA, id, radUASuggest);
+const radUAOf=id=>D.radUA[id] ?? radUASuggest(id);
 /* THE BOX, in whole cells - NEAREST, with a floor of 2x2. Rounding up put the
    stock ship's 15.03 cells into a 16-cell box, which is a fourth row of panel
    nobody asked for: the drawing has to snap to the area, never the area to the

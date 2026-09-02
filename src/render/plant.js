@@ -2191,7 +2191,7 @@ function readoutsFor(p,s){
          :"Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out.");
       if(!h) add("T-COLD OUT",Tc.toFixed(0)+" K",null,
         "Coolant going back to the core, after the generator has taken its heat."); }
-    add("HEAT REMOVED",((s.steamBy&&s.steamBy[id]||0)*H_FG/1000).toFixed(0)+" MWt",null,
+    add("HEAT REMOVED",((s.steamBy&&s.steamBy[id]||0)*riseSg(id,secP(s,id))/1000).toFixed(0)+" MWt",null,
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
     add("SHELL",(s.sgBurst&&s.sgBurst[id])?"BURST":"intact",
         (s.sgBurst&&s.sgBurst[id])?C.red:C.green,
