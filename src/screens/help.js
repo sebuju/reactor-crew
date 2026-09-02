@@ -90,11 +90,11 @@ function helpBuildAnnBoard(){
   return grid;
 }
 
-/* Board draws dark on an uncommissioned plant - a[2](S) must not run without S. */
+/* Board draws dark on an uncommissioned plant - there is no lit set without S. */
 function helpSync(){
   if(screen!=="help" || !helpAnnTiles) return;
   for(const {el,row} of helpAnnTiles){
-    const on=(P&&S)?row[2](S):false;
+    const on=!!(P&&S)&&annLit(row[0]);
     el.classList.toggle("lit",on);
     el.classList.toggle("red",row[1]==="red");
     el.classList.toggle("amber",row[1]==="amber");

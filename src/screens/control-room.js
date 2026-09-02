@@ -109,7 +109,7 @@ function crAlarmsBuild(container){
 function crAlarmsSync(al){
   let lit=0;
   for(const h of al.rows){
-    const on=h.a[2](S);
+    const on=annLit(h.a[0]);
     if(on) lit++;
     h.row.classList.toggle("lit",on);
     h.row.classList.toggle("red",on&&h.a[1]==="red");

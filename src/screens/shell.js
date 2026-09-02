@@ -154,7 +154,14 @@ function shellSync(){
      than saying NO CORE about a core that is drawn. */
   const fresh = P && P.dsig===designSig();
   let line;
-  if(fresh) line=`${P.id}  ${pad(P.rated.toFixed(0),4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`;
+  /* ══ AND THE RATING IS THE VESSEL'S, NOT THE LATTICE'S ══
+     D.power is measured off the fuel DRAWING (latMeasure(), lattice.js), which
+     exists whether or not a reactor stands on the arrangement grid - so a blank
+     ship advertised 1198 MWt and 395 MWe it had no machine to make. There is no
+     rating without the machine, and the bar says so rather than printing the
+     last plant's figures over an empty board. */
+  if(!roleOf("core")) line="NO REACTOR";
+  else if(fresh) line=`${P.id}  ${pad(P.rated.toFixed(0),4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`;
   else { const d=derived();
     line=`${d.a.id}  ${pad(D.power.toFixed(0),4)} MWt  ${pad((D.power*d.eff).toFixed(0),4)} MWe`; }
   if(shellEls.plantLine.textContent!==line){ shellEls.plantLine.textContent=line;

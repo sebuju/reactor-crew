@@ -169,11 +169,24 @@ function layoutWarnings(M){ const w=[];
    hands in its own `d` is asking about a plant that is not on the board (the
    inspector's preview), and that is nobody else's answer. */
 let dbIssues=null, dbIssuesPass=0;
+/* ══ WITHOUT A REACTOR THERE IS NOTHING TO REVIEW ══
+   Every figure derived().warn and latWarn() judge - shutdown margin, boron
+   demand, void, peaking, the turbine's share of the steam this plant raises -
+   is about a reactor, and the lattice is a DRAWING that exists whether or not
+   one is on the board. So a ship with nothing on it read nine warnings about a
+   machine nobody had placed. It says the one useful thing instead.
+   RED and never HARD: a blank grid commissions.
+   layoutWarnings() STAYS either way - those are objections about boxes that DO
+   exist, and one of them is the HARD that refuses a part standing in a bad
+   cell. Hiding that would let a broken arrangement commission. */
+const NO_CORE=[["RED","There is no reactor on this ship. Place one, and the rest of the design has something to be judged against.",null]];
 function designIssues(d,M){
-  if(d) return d.warn.concat(latWarn(),layoutWarnings(M||layoutMetrics()));
+  const lay=()=>layoutWarnings(M||layoutMetrics());
+  if(d) return roleOf("core") ? d.warn.concat(latWarn(),lay()) : NO_CORE.concat(lay());
   const p=layPass();                      // 0 = outside a window, so not cacheable
   if(p && dbIssuesPass===p) return dbIssues;
-  const out=derived().warn.concat(latWarn(),layoutWarnings(M||layoutMetrics()));
+  const out = roleOf("core") ? derived().warn.concat(latWarn(),lay())
+                             : NO_CORE.concat(lay());
   if(p){ dbIssues=out; dbIssuesPass=p; }
   return out;
 }
@@ -222,9 +235,7 @@ function ctxTitleDesign(hit){
    decides - a click on a component offers REMOVE, one item, about that
    part; a click on nothing offers no removal at all. The old shape built a
    fixed FIT/REMOVE prefix before it ever looked at hit, so right-clicking
-   dead space offered to remove equipment that was nowhere near the cursor.
-   fittableList()'s FIT side survives on the bare-cell fallback below - a
-   part that is not yet fitted has no box on the grid to click. */
+   dead space offered to remove equipment that was nowhere near the cursor. */
 function ctxItemsDesign(hit){
   /* DECISION 2: a port's only offer is REMOVE PORT, which takes the port's own
      pipe with it (removePort(), layout.js) exactly as removing a part takes
@@ -234,20 +245,16 @@ function ctxItemsDesign(hit){
   if(hit.port)
     return [{label:"REMOVE PORT", fn:()=>{ removePort(hit.port); }}];
   if(hit.part){
-    // a FITTABLE slot's part exists on the grid only while it IS fitted
-    // (cont/turb/cond), so clicking it can only ever mean REMOVE.
-    const f=fittableList().find(x=>x.id===hit.part.id);
-    if(f) return f.get()
-      ? [{label:"REMOVE", fn:()=>{ f.set(false); }}]
-      : [{label:"ADD "+f.label, fn:()=>{ f.set(true); }}];
-    // Every tank and every fitting is an instance the player added, so every
-    // one can be taken away again - including the ones the stock plant ships
-    // with. Zero of either is a legal plant. Everything else that can go is
-    // whatever was PLACED - asked of the placed list (isPlaced(), layout.js),
-    // never of the id.
-    if(hit.part.role==="tank" || hit.part.role==="fitting" || isPlaced(hit.part.id))
-      return [{label:"REMOVE", fn:()=>{ removePart(hit.part.id); }}];
-    return [];   // a base component (core, rods, pzr...) offers no menu at all
+    /* ANYTHING ON THE BOARD, THE PLAYER CAN TAKE OFF - there is one
+       mechanism now, so there is one offer. A machine, a tank and a fitting
+       are three dictionaries on D and nothing here asks which. A blank grid
+       is a legal plant: it reads as a ship with nothing on it.
+       A RIDER SAYS WHAT ACTUALLY GOES: the rod drives are bolted to the
+       vessel head, so removing them removes the reactor, and the row names it
+       rather than letting the player find out afterwards. */
+    const host=hit.part.pin && partOf(hit.part.pin.to);
+    return [{label:host?("REMOVE "+partName(host)):"REMOVE",
+             fn:()=>{ removePart(hit.part.id); }}];
   }
   if(hit.pipe){
     /* A PIPE CELL UNDER THE CURSOR. The whole connection is what a player
@@ -263,7 +270,7 @@ function ctxItemsDesign(hit){
   }
   // a genuinely bare cell: nothing is under the cursor, so no REMOVE
   // belongs here - only offers that create or connect something.
-  const items=fittableList().filter(f=>!f.get()).map(f=>({label:"ADD "+f.label, fn:()=>{ f.set(true); }}));
+  const items=[];
   if(hit.cell){
     const {gx,gy}=hit.cell;
     if(gx>=0 && gy>=0 && gx<GW && gy<GH){
@@ -278,72 +285,14 @@ function ctxItemsDesign(hit){
          knob on its own panel afterwards, because all three are one box in
          one cell and only the mode differs. */
       items.push({label:"ADD VALVE", fn:()=>{ addFitting(gx,gy); }});
-      items.push({label:"ADD SPARE PUMP", fn:()=>{
-        placePart(n=>({id:"pumpX"+n,name:"RCP SPARE",w:0,h:0,x:gx,y:gy,col:"#57d38c",
-          grp:"pump",tip:"A spare coolant pump, placed where you put it. Hover an edge to place a port, then click it to draw a pipe - unplumbed, it does nothing at all.",
-          role:"pump"}));
-      }});
-      /* Stage 3b: no D.loops++ - that used to conjure a generator, a pump
-         and four routed runs in one act. This adds exactly the ONE part it
-         names, the same standing ADD SPARE PUMP already has; it pays
-         its own SGT[D.sg].mass (derived(), design.js) the moment it exists,
-         and does nothing at all until wired up through CONNECT. */
-      items.push({label:"ADD STEAM GENERATOR", fn:()=>{
-        placePart(n=>({id:"sgX"+n,name:"STEAM GEN SPARE",w:3,h:6,x:gx,y:gy,col:"#5fd2e2",
-          grp:"sg",tip:"An additional steam generator, placed where you put it. Hover an edge to place a port, then click it to draw a pipe - unplumbed, it does nothing at all.",
-          role:"sg"}));
-      }});
-      /* A SECOND TRANSFER STAGE, and it is a part like any other - spliced
-         into a loop with a hot leg and a cold leg, exactly the way a generator
-         is. Nothing here declares which generators it feeds: that is the loop
-         it lands on (ihxSgs(), layout.js), asked of the drawing. */
-      items.push({label:"ADD HEAT EXCHANGER", fn:()=>{
-        placePart(n=>({id:"ihxX"+n,name:"INTERMEDIATE HX",w:3,h:4,x:gx,y:gy,col:"#9ec96f",
-          grp:"sg",tip:"An intermediate heat exchanger. Splice it into a loop and the generators on that loop are heated by IT rather than by the core, so primary coolant never reaches the secondary. Two stages in series cost a temperature drop, and the exchanger is heavy.",
-          role:"ihx"}));
-      }});
-      /* A SECOND TURBINE AND A SECOND CONDENSER. Both used to be one part,
-         present or absent, and every reader that priced or gated them read
-         that flag - so a hit on the one turbine zeroed the plant's output and
-         a second could not exist to carry it. They are COUNTED now
-         (turbCount()/condCount(), layout.js), the third time this codebase has
-         made that move. The STOCK unit stays behind its own fittable
-         checkbox, so "no turbine at all" is still a legal design and the bench
-         still warns about it; these are the extra ones. */
-      items.push({label:"ADD TURBINE", fn:()=>{
-        placePart(n=>({id:"turbX"+n,name:"TURBINE SPARE",w:9,h:7,x:gx,y:gy,col:"#f0a830",
-          grp:"sec",tip:"An additional turbine, placed where you put it. It swallows its own share of steam and carries its own share of the load - lose one of two and you lose half the output, not all of it. Hover an edge to place a port, then click it to draw a pipe.",
-          role:"turb"}));
-      }});
-      /* The machine the room field creates a reason for. A structure with no
-         network presence at all, the shield/catcher idiom - it is placed and
-         it has an effect, and there is nothing to plumb. */
-      items.push({label:"ADD VENTILATION UNIT", fn:()=>{
-        placePart(n=>({id:"ventX"+n,name:"VENT UNIT",w:3,h:3,x:gx,y:gy,col:"#8fb8c4",
-          grp:"safety",tip:"Pulls compartment air overboard. It is the only thing on the plant besides the hull that takes heat OUT of the room, and it is on the main board - a blackout leaves the room with nothing but its own steel. Nothing to plumb.",
-          role:"vent"}));
-      }});
-      /* THE ONLY WAY HEAT LEAVES THE SHIP. Two things decide whether it works
-         at all and they are asked of different pictures: it has to reach the
-         SKIN, and it has to be PLUMBED to something worth cooling. */
-      items.push({label:"ADD RADIATOR", fn:()=>{
-        placePart(n=>({id:"radX"+n,name:"RADIATOR SPARE",w:5,h:3,x:gx,y:gy,col:"#b8c4cf",
-          grp:"sec",tip:"An additional radiating panel. It must have a face on the skin: walled in it sheds NOTHING, the condenser climbs, and the turbine trips inside two minutes. It must also be PLUMBED, because it cools the water going through it and nothing else - splice it into the circulating water, or into any other loop you want heat taken out of. Area buys overload headroom and costs mass.",
-          role:"radiator"}));
-      }});
-      /* Structure with no network presence, the same idiom the vent unit and
-         the core catcher are: it is placed, it has an effect, and the three the
-         stock plant ships with are placed by exactly this call. */
-      items.push({label:"ADD SHIELD", fn:()=>{
-        placePart(n=>({id:"shldX"+n,name:"SHIELD",w:3,h:3,x:gx,y:gy,col:"#6d8f98",
-          grp:"shield",tip:"A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access.",
-          role:"shield"}));
-      }});
-      items.push({label:"ADD CONDENSER", fn:()=>{
-        placePart(n=>({id:"condX"+n,name:"CONDENSER SPARE",w:9,h:5,x:gx,y:gy,col:"#5aa9d6",
-          grp:"sec",tip:"An additional condenser, placed where you put it. It is heat sink and it is where the feed pumps draw from, so a second one is a second place for both. Hover an edge to place a port, then click it to draw a pipe.",
-          role:"cond"}));
-      }});
+      /* ONE ROW PER KIND OF MACHINE, off MACHINE (layout.js) and nothing
+         else - so adding a kind of machine is adding a row there, and no row
+         here can offer a machine the mint table cannot build. Nothing is
+         gated on a count, and nothing is SPARE: whether a second pump is
+         redundancy is read off the drawing. */
+      for(const kind in MACHINE) if(!machRides(kind))
+        items.push({label:"ADD "+MACHINE[kind].name,
+                    fn:()=>{ addMachine(kind,gx,gy); }});
     }
   }
   /* NO CONNECT OFFER HERE. A pipe is laid cell by cell with the PIPE tool and
@@ -1109,8 +1058,12 @@ function dbBuild(){
   const pres=KIT.el("div","db-bulkrow");
   const plab=KIT.el("span","db-bulkrow-lab"); plab.textContent="PLANT";
   const pbtns=KIT.el("div","db-bulkrow-btns");
+  // first, because it is what every preset is laid over
+  const rst=KIT.button("RESET",{size:8,onClick:()=>{ plantClear(); urlPreset(null); sel=null; uiDirty(); }});
+  KIT.tip(rst.el,"RESET","Takes the whole ship off the grid: every machine, tank, fitting, port and pipe, and the core back to the stock lattice. What is left is the blank grid a new design starts from, and it still commissions.");
+  pbtns.appendChild(rst.el);
   PLANTPRE.forEach((pr,i)=>{
-    const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); sel="core"; uiDirty(); }});
+    const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); urlPreset(i); sel=roleId("core"); uiDirty(); }});
     KIT.tip(b.el,pr[0],pr[2]);
     pbtns.appendChild(b.el);
   });
