@@ -32,16 +32,37 @@ function fitGlyph(cx,cy,w,h,mode,col){
   bowtie(cx,cy,w,h,col);
   if(mode==="tee") return;
   const t=cy-h/2;
-  line(cx,t,cx,t-3,col,1.3);                       // the stem a driven valve has
-  if(mode==="throttle") line(cx-4,t-3,cx+4,t-3,col,1.4);
-  else { line(cx-3,t-3,cx+3,t-6,col,1.2);          // a coil seen from the side
-         line(cx-3,t-6,cx+3,t-3,col,1.2); }
+  line(cx,t,cx,t-2,col,1.3);                       // the stem a driven valve has
+  if(mode==="throttle") line(cx-3,t-2,cx+3,t-2,col,1.4);   // the handwheel
+  else { line(cx-3,t-2,cx+3,t-4,col,1.2);          // a spring seen from the side
+         line(cx-3,t-4,cx+3,t-2,col,1.2); }
 }
+/* ══ A VALVE SAYS WHAT IT IS STOOD DOWN AS ON ITS OWN GLYPH ══
+   BLOCKED / BYPASSED / SHUT used to be a word appended to the valve's NAME,
+   which is a label in the pipe margin - so the state of the plumbing was read
+   off text stacked over the pipework rather than off the valve. Each state
+   has its own mark, and no two share one:
+     OPEN     the bowtie in red        (it is passing)
+     BLOCKED  a red bar lying across it (the path is given up)
+     BYPASSED an amber X over the body  (nothing will lift it by itself)
+     SHUT     a red bar standing up     (a throttle worked closed)
+   All four stand inside the valve's own cell - the marks are on the BODY,
+   never above the actuator, because there is no room up there. */
 function reliefBowtie(cx,cy,w,h,L,fid){
   const open = !!(L && fid && L.reliefOpen[fid] && !L.reliefBlocked[fid]);
   const blkd = !!(L && fid && L.reliefBlocked[fid]);
-  fitGlyph(cx,cy,w,h,"relief", open?C.red : blkd?C.dis : C.green);
+  const byp  = !!(L && fid && typeof porvLive==="function" && !porvLive(fid));
+  fitGlyph(cx,cy,w,h,"relief", open?C.red : (blkd||byp)?C.dis : C.green);
   if(blkd) line(cx-w/1.5,cy,cx+w/1.5,cy,C.red,1.6);
+  else if(byp){ const r=Math.max(w,h)/1.6;
+    line(cx-r,cy-r,cx+r,cy+r,C.amber,1.3); line(cx-r,cy+r,cx+r,cy-r,C.amber,1.3); }
+}
+/* A throttle worked shut: dead metal with the seat barred ACROSS the flow.
+   The bar stands UP, where a blocked relief valve's lies flat, so the two
+   never read as the same mark on a board carrying both. */
+function throttleShut(cx,cy,w,h){
+  fitGlyph(cx,cy,w,h,"throttle",C.dis);
+  line(cx,cy-h/1.5,cx,cy+h/1.5,C.red,1.6);
 }
 /* The casing colour, named once: the nozzle below has to be the same dark as
    the pipe it caps, or the joint reads as a different object bolted on. */
@@ -116,6 +137,9 @@ const pipeNozzleHalf = bore => Math.min(pipeWidth(bore)*1.4, NOZZLE_HALF_MAX);
    Takes the live state rather than reaching for S: the bench draws nozzles too
    and must never colour one off the last run's valve positions. */
 function portColOf(pid,L){
+  // WRECKED BEFORE SHUT: a jammed valve is not a valve position any more, and
+  // dead metal is what every other wrecked handle on this plant is drawn in
+  if(portWrecked(L,pid)) return C.dis;
   if(L && L.portShut && L.portShut[pid]) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
   const f=portFaceOf(pid), IN=portPath(partOf(q.p), f);
@@ -259,9 +283,14 @@ function spinVane(cx,cy,r,deg,dpf,col){
 }
 /* HOW BIG A FITTING'S GLYPH IS, off its own bore and its own box - asked by the
    draw AND by the reading that has to stand clear of it underneath. */
+/* THE WHOLE SYMBOL STANDS IN THE CELL, stem and spring included. boxW-12 on a
+   16 px cell is 4, so the clamp inverted and every valve drew a 4x2 body under
+   a 6 px actuator - a stalk with a speck on it, hanging out of the box it is
+   supposed to occupy. The budget is the CELL: 2 px of air each side, and the
+   actuator above the body is the 4 px that leaves. */
 function fitGlyphWH(id,boxW,boxH){
-  const fw=clamp(pipeWidth(fitBoreK(id))*1.5, 7, boxW-12);
-  return {fw, fh:clamp(fw*11/16, 5, boxH-14)};
+  const fw=clamp(pipeWidth(fitBoreK(id))*1.6, 8, Math.max(8, boxW-4));
+  return {fw, fh:clamp(fw*11/16, 5, Math.max(5, boxH-10))};
 }
 // ART EXEMPT: the id if/else chain below draws each part's own glyph - what
 // a component LOOKS like, never a network decision - so it is exempt from
@@ -617,6 +646,7 @@ function drawSym(p,x,y,w,h,ink,L){
        hair-bore valve is still a shape, and capped to the cell it stands in. */
     const {fw,fh}=fitGlyphWH(id,w,h);
     if(mode==="relief" && L) reliefBowtie(cx,y+h/2,fw,fh,L,id);
+    else if(mode==="throttle" && L && (L.valve[id]??1)<0.005) throttleShut(cx,y+h/2,fw,fh);
     else fitGlyph(cx,y+h/2,fw,fh,mode,ink);
     /* WHAT THIS VALVE IS PASSING, drawn instead of typed, at the valve, and
        judged against this fitting's OWN fully-open rate (reliefFullRate(),
@@ -1090,6 +1120,20 @@ function benchCell(c){
   return o;
 }
 const ctlBench=rows=>rows&&rows.map(r=>r.map(benchCell));
+/* ══ A WRECKED MACHINE ANSWERS NOTHING ══
+   Its handles still stroked and still logged an act - a destroyed pump took a
+   flow demand and a destroyed valve opened - which is the same lie its own
+   readout was telling before it was taken away. Every key goes dead and draws
+   dead; the REPAIR key is not in here, it is drawn over the value tag by the
+   component loop and is the one thing on the box that still works.
+   The same cell shape benchCell() makes, so the strip still measures and
+   still compacts - nothing is hidden, it just does not answer. */
+const deadCell=c=>{ const o=Object.assign({},c);
+  o.fn=()=>{}; o.set=()=>{}; o.on=()=>false; o.danger=()=>false;
+  if(c.kind==="sld") o.inert=true;
+  if(c.kind==="arm") o.label=c.label||(()=>"");
+  return o; };
+const ctlDead=rows=>rows&&rows.map(r=>r.map(deadCell));
 /* ══ WHAT THIS MACHINE IS STOOD DOWN AS, IN ONE WORD ══
    Null when there is nothing to say, which is the ordinary case. It exists
    because a valve's handles are put away until the hand is on the box: a shut
@@ -1213,19 +1257,16 @@ function ctlFor(p,live,split){
        tip:"Whether THIS valve may lift by itself at its own setpoint. Bypass it and this one stays shut while every other relief valve goes on working - which is how you defeat one valve without giving up the relief path."}]];
   }
   switch(p.role){
-    // GANGED holds exactly three rows, measured against the default plant's grid
     case "rods": {
-      // the master control is the same row in both modes - setCommon() in
-      // step.js is the only thing that carries it out
-      const MASTER=[
-       {kind:"sld",flex:1,k:"rodCommon",def:RODX0,sc:100,val:()=>S.rodPos*100,min:()=>0,max:()=>100,dem:()=>S.rodDem*100,
-        /* Only while the controller is actually driving: a band drawn for a
-           system that is bypassed or was never fitted is two marks describing
-           nobody. autoLive() is the one predicate for that. */
-        marks:()=>autoLive("rod")?[S.arLo*100,S.arHi*100]:null,
-        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("rodCommon",v/100); },
-        tip:"CONTROL BANK - moves the whole stack. Ganged that is one bank; split it carries every bank by the same amount, so the spread you set with the per-bank sliders is untouched, and it moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. Fast, but it travels at only 1.2%/s, and deep insertion raises power peaking, which eats thermal margin. While a trip is latched the bank stays in whatever you ask of it. The two amber marks are the travel band the automatic controller may move inside; they are drawn only while it is armed, and they never bind you."}];
-      /* The same demand the master slider writes, in fixed bites - the boron
+      /* ══ THERE IS NO MASTER SLIDER; THE BANKS ARE THE CONTROL ══
+         A ganged plant drew one CONTROL BANK slider and hid the banks, so the
+         handle you worked and the handles the plant has were two different
+         sets depending on a mode. Every bank is on the strip in both modes -
+         GANGING is what happens to an input, not which controls exist: a bank
+         moved while ganged goes through act("rodCommon") and carries all of
+         them, exactly as the master row did (setCommon(), step.js), so a
+         recording sees the same act it always did. */
+      /* The same demand a ganged bank writes, in fixed bites - the boron
          row's argument, for a control that is just as slow to drag: the bank
          travels at 1.2%/s, so a fine adjustment by hand is a fight with the
          gearing. Both keys go through act("rodCommon") like the slider, so a
@@ -1235,27 +1276,35 @@ function ctlFor(p,live,split){
         tip:"WITHDRAW 5% - takes the whole stack five percent of core height further out, onto the nearest 5% mark. Withdrawing adds reactivity, so power rises until the loop settles."},
        {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("rodCommon",pctStep(S.rodDem,1,0,1)); },
         tip:"INSERT 5% - drives the whole stack five percent of core height further in, onto the nearest 5% mark. Deeper insertion removes reactivity and raises power peaking, which eats thermal margin."}];
+      /* GANGED, a bank's slider IS the common one: same key, same reading,
+         same act - four handles onto one position, which is what a gang is.
+         Split, each addresses its own bank. */
       const bankRow=b=>[
        {kind:"btn",flex:1,k:"bankAuto:"+b,def:false,words:["AUT","MAN"],on:()=>!S.bankAuto[b],text:()=>S.bankAuto[b]?"AUT":"MAN",
         fn:()=>{ act("bankAuto",b); },
-        tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank stops answering the controller, but it still answers you: its own slider and the master both still move it. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
-       {kind:"sld",flex:2.8,k:"rodBank:"+b,def:RODX0,sc:100,val:()=>S.rodZ[b]*100,min:()=>0,max:()=>100,
-        dem:()=>S.rodZDem[b]*100,
-        fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",set:v=>{ act("rodBank",b,v/100); },
-        tip:"BANK "+(b+1)+" - insertion of this bank alone. While the banks are split these per-bank demands are the tilt handle: standing one bank against another is the whole of how you answer a radial xenon tilt here. A bank left on MANUAL is not answering the temperature controller at all, and the fewer banks on AUTO, the less rod worth is left to answer the same error - the loop gets slower, not just smaller."}];
+        tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank stops answering the controller, but it still answers you: its own slider still moves it, ganged or split. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
+       {kind:"sld",flex:2.8,k:split?"rodBank:"+b:"rodCommon",def:RODX0,sc:100,min:()=>0,max:()=>100,
+        val:()=>(split?S.rodZ[b]:S.rodPos)*100,
+        dem:()=>(split?S.rodZDem[b]:S.rodDem)*100,
+        /* Only while the controller is actually driving: a band drawn for a
+           system that is bypassed or was never fitted is two marks describing
+           nobody. autoLive() is the one predicate for that. */
+        marks:()=>autoLive("rod")?[S.arLo*100,S.arHi*100]:null,
+        fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",
+        set:v=>{ split ? act("rodBank",b,v/100) : act("rodCommon",v/100); },
+        tip:"BANK "+(b+1)+" - insertion of this bank. GANGED, moving it carries every bank by the same amount and the whole stack goes with it. SPLIT, it is this bank alone, and standing one bank against another is the whole of how you answer a radial xenon tilt here. It moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. The stack travels at only 1.2%/s. The two amber marks are the travel band the automatic controller may move inside; they are drawn only while it is armed, and they never bind you."}];
       if(split){
-        const rows=[MASTER, STEP, ROD_TRIP_ROW,
+        const rows=[STEP, ROD_TRIP_ROW,
          [{kind:"btn",flex:1,on:()=>S.reGang,
           text:()=>S.reGang?"GANGING..":"BANK GANG",
           /* already a no-op once the walk is running: setSplit() refuses to
              re-seed a gang it is in the middle of */
           fn:()=>{ act("split",false); },
-          tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close. The master slider still steers the walk while it runs."}]];
+          tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close. A bank slider still steers the walk while it runs."}]];
         for(let b=0;b<(live?P.NB:D.nbank);b++) rows.push(bankRow(b));
         return rows;
       }
-      return [
-       MASTER,
+      const rows=[
        STEP,
        ROD_TRIP_ROW,
        /* the ganged handle on a radial xenon tilt: it stands the inner banks
@@ -1266,6 +1315,8 @@ function ctlFor(p,live,split){
         {kind:"btn",flex:1,text:()=>"SPL",
          fn:()=>{ act("split",true); },
          tip:"SPLIT BANKS - stops driving the banks as one and gives each its own demand. Splitting is bumpless by construction: every bank simply adopts where it already stands. From there the tilt slider stands down, the per-bank sliders are your tilt handle, and any bank you switch to MANUAL stops answering the temperature controller."}]];
+      for(let b=0;b<(live?P.NB:D.nbank);b++) rows.push(bankRow(b));
+      return rows;
     }
     case "core": return [
      /* the scale runs 0 -> -6000, clean water at the LEFT: "+B" adds poison and
@@ -1727,7 +1778,8 @@ const T_TRIP="What tripped the plant most recently. It stays here after a reset,
 const RHO_ROWS=[
  ["RODS","rod","Negative reactivity from the inserted control rods. The deeper they go the stronger this gets, but not evenly: the rods bite hardest around mid-travel.",()=>C.metal],
  ["DOPPLER","dop","Feedback from hot fuel. As fuel heats it absorbs more neutrons, pushing power back down. Instant, automatic and always stabilising - this is what stops a runaway before a human could react.",()=>C.red],
- ["MODERATOR","mod","Feedback from coolant temperature. Hotter coolant is less dense and moderates neutrons less, so power drops. This is why the reactor follows turbine load on its own.",()=>C.cyan],
+ ["EXPANSION","exp","Feedback from hot metal growing. Hot fuel columns lengthen, the grid plate spreads the assemblies apart and the rod drivelines push the bank in - all of it leaks neutrons out. Small in a water core; in a fast core it is most of what holds the reactor down.",()=>C.ink2],
+ ["MODERATOR","mod","Feedback from moderator temperature, the coolant and any blocks packed between the assemblies. Hotter water is less dense and moderates neutrons less, so power drops. This is why the reactor follows turbine load on its own.",()=>C.cyan],
  ["XENON","xe","Xenon-135, a neutron poison that builds up after fission. It has memory: what you did minutes ago is still eating your reactivity now. Equilibrium sits near -2700; after a scram it deepens toward -4800 and locks you out of restarting.",()=>C.blue],
  ["BORON","bor","Poison dissolved in the coolant, and whatever you have dialled in on the boron control. Slow to change, but it is the only lever left once rods and temperature have run out.",()=>C.green],
  ["VOID","vd","Steam bubbles in the core. In a water design this is strongly negative and shuts the reactor down as it uncovers. In a graphite or sodium design it is POSITIVE, and voiding adds power instead.",()=>C.bright],
@@ -2878,7 +2930,7 @@ function drawPlant(y0,L,vh,vx,vw){
   ctx.lineJoin="miter";
   if(L) pipeDamage(L);          // the red gap at each broken cell, over the stroke it cuts
   if(L) pipeFlow(L);
-  pipeSizeLabels(NET);          // over the packets: a size is a fact, not decoration
+  pipeSizeLabels(NET,L);        // over the packets: a size is a fact, not decoration
   // over the pipes, under the machines - the one seam a layer can paint
   // without landing on a value tag, a control strip or a bypass row, because
   // every one of those belongs to the component loop that runs after this.
@@ -2904,23 +2956,24 @@ function drawPlant(y0,L,vh,vx,vw){
        STARTING POSITION - where that actuator stands the moment you enter the
        control room (D.start, benchCell() above). The bench used only to
        reserve the room and draw an empty plinth. */
-    const ctl = fit ? (live ? ctlFor(p,true,S.split) : ctlBench(ctlFor(p,false,false))) : null;
+    // `fit &&`, or a NOT FITTED tag would draw a REPAIR key across itself -
+    // the renderer should not rely on combatHit() never targeting one
+    const dmgd = live && L.dmgParts.includes(p.id);
+    const ctl = fit ? (live ? (dmgd ? ctlDead(ctlFor(p,true,S.split)) : ctlFor(p,true,S.split))
+                            : ctlBench(ctlFor(p,false,false))) : null;
     const byk = fit ? autoOn(p.id) : null,
           plan= stripPlan(p,live), keyH = plan.keyH, pitch = keyH+CTL_STRIP_GAP,
           bh  = byk? pitch : 0,
           sh  = plan.sh, sy = y+h-sh;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
-    // `fit &&`, or a NOT FITTED tag would draw a REPAIR key across itself -
-    // the renderer should not rely on combatHit() never targeting one
-    const dmgd = L && fit && L.dmgParts.includes(p.id);
     const hovd = hov(wd)||drag;
     const ink = !fit?"#3c4c47" : dmgd?C.red : hovd?C.bright : C.metal;
-    /* WHAT THIS MACHINE IS STOOD DOWN AS, in one word, or null. It goes in the
-       NAME, because a defeated valve is a fact about the machine that has to
-       survive its own handles being put away - see the hover gate on the
-       fitting strip below. */
-    const stw = live ? partStateWord(p) : null;
+    /* WHAT THIS MACHINE IS STOOD DOWN AS, in one word, or null. NOT a valve's:
+       a fitting says it on its own GLYPH now (reliefBowtie()/throttleShut()),
+       so the word is not stacked into a label lying over the pipework, and the
+       label itself can go away with the handles when the hand leaves. */
+    const stw = live && p.role!=="fitting" ? partStateWord(p) : null;
     /* ONE GROUND FOR EVERY BOX ON THE BOARD, and no second surface on top of
        it: the plinth is gone, because there is no second OBJECT. A control
        strip is part of the machine, so it stands on the machine's own panel. */
@@ -2952,7 +3005,12 @@ function drawPlant(y0,L,vh,vx,vw){
     }
     else if(!p.access && p.grp!=="shield" && fit) cornerTab(x+w,y,9,C.amber);
     if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
-    if(!L && fit && !dmgd){ const wc=warnFor(p.id); if(wc) dot(x+6,y+8,8,wc); }   // bench has no alarm lamp
+    /* THE BENCH'S OWN ALARM MARK - it has no lamp. It stood at x+6,y+8, which
+       is INSIDE the box on the name row: the name plate, a full-box symbol and
+       the selection frame all draw over that corner. It goes ABOVE the label,
+       in the margin over the box, and in the deferred pass so nothing lands on
+       top of it. */
+    const wdot = !L && fit && !dmgd ? warnFor(p.id) : null;
     /* A PART IN LIMBO KEEPS THE MARK THE DROP PREVIEW GAVE IT. Same dash, same
        red, same wash as partGhost() paints under the hand: the picture that
        said "this will not fit" and the picture that says "this does not fit"
@@ -2963,7 +3021,12 @@ function drawPlant(y0,L,vh,vx,vw){
     // selection is an OUTLINE: the box keeps its own ink, so a picked machine
     // still reads as the machine it is rather than as an amber silhouette
     if(on) frame(x,y,w,h,C.amber);
-    const v = L&&fit ? liveValue(p,L) : null;
+    /* A WRECKED MACHINE HAS NO READING. It printed its own value in red - a
+       destroyed pressurizer stood there stating 15.5 MPa through the hatching
+       that says it is not there any more - and an instrument on a machine
+       nobody can reach is not reporting anything. The box, the tear and the
+       REPAIR key are what it has to say. */
+    const v = L&&fit&&!dmgd ? liveValue(p,L) : null;
     /* THE NAME MOVED INSIDE THE BOX, onto its own top row - it used to sit in
        the margin above, in the same lane a pipe and its fittings run through,
        so a glyph landing on one buried it. The LIVE VALUE still waits for the
@@ -3002,7 +3065,15 @@ function drawPlant(y0,L,vh,vx,vw){
     // report of a job in hand that stands on the machine itself
     const showRep = dmgd && (hovd||busy);
     tags.push(()=>{
-      if(!nameH) tag(nmw,x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(stw?C.amber:(on?C.amber:C.ink2)));
+      /* A FITTING'S NAME IS PUT AWAY UNTIL THE HAND IS ON IT, on the same
+         terms as its handles: the label hangs in the pipe margin, outside the
+         box, so a dense grid carried a dozen of them permanently over the
+         pipework they belong to. What the valve is stood down as no longer
+         depends on the label at all - it is on the glyph. */
+      if(!nameH && (p.role!=="fitting" || hovd || on))
+        tag(nmw,x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(stw?C.amber:(on?C.amber:C.ink2)));
+      // the bench's alarm mark, over the label and last, so nothing buries it
+      if(wdot) dot(x+6,y-7,8,wdot);
       /* THE VALUE WEARS ITS MACHINE'S WORST ALARM, and grey when there is
          nothing wrong. Not a second opinion: annLamp() is the SAME table and
          the SAME predicate as the lamp already drawn on this box, so the number

@@ -256,7 +256,7 @@ function paramsFor(p){
           "Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density."+
           (one?" Paint zones on the plan below and this becomes one row per zone, which is how a real core is loaded."
               :" This row loads the slots you painted as zone "+(z+1)+". The core's beta, density and excess are the blend; its melt limit is the WORST fuel in it."),
-          {get:()=>zoneFuelOf(z), set:v=>{ D.zoneFuel[z]=v; latMeasure(); }},FUEL);
+          bagAcc(D.zoneFuel,z,()=>zoneFuelOf(z),latMeasure),FUEL);
     }
     // a feature of the VESSEL, which is what its own tooltip already said -
     // it never belonged on the pressurizer's panel
@@ -303,7 +303,7 @@ function paramsFor(p){
   else if(p.role==="rods"){ B.gang="reactor"; B.gangPlain=true; }
   else if(p.role==="sg"){
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
-        {get:()=>sgTypeOf(id),set:v=>{ D.sgType[id]=v; }},SGT);
+        bagAcc(D.sgType,id,()=>sgTypeOf(id)),SGT);
     /* The type row says how much water is in it; this says how fast heat
        crosses the tubes. They were one figure and they are not the same
        question - a big-inventory shell with poor tubes is a real machine. */
@@ -399,7 +399,7 @@ function paramsFor(p){
         {get:()=>radUAOf(id),set:v=>{ D.radUA[id]=v; }},
         "kW/K",0,()=>radUASuggest(id));
     opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
-        {get:()=>D.radCoat[id]??1,set:v=>{ D.radCoat[id]=v; }},RADCOAT.map(r=>({name:r[0]})));
+        bagAcc(D.radCoat,id,()=>D.radCoat[id]??1),RADCOAT.map(r=>({name:r[0]})));
     B.push({kind:"readlist",rows:()=>{ const d=derived(), live=radLive(id);
       const tr=radTRated(d.eff);
       return [
@@ -556,6 +556,8 @@ function paramsForRun(key){
       ["CARRIES",held.toFixed(2)+" MPa",null,"The pressure this run is actually asked to hold - its circuit's own setpoint, or the shell design pressure on the secondary."],
       ["RATED FOR",rate.toFixed(2)+" MPa",rate<held?C.red:null,
        "What the wall above will take, off the published hoop-stress relation. Under what it carries, this pipe is the thing that lets go first."],
+      ["BURSTS AT",runBurstP(r).toFixed(2)+" MPa",runBurstP(r)<held?C.red:null,
+       "Where this run actually splits open. A rating has its margin inside it, so a pipe held past the rating is not open yet - past this it is, at one cell, and it does not close again."],
       ["MASS",massAt(runBoreMm(r),runWallMm(r)).toFixed(1)+" t",null,"What this run weighs: the shell it is, at the wall it has, over the length it runs."]]; }});
   return B;
 }

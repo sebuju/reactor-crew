@@ -1048,14 +1048,20 @@ function pipeLabSpots(g){
   return [{p:at(q,q.L/2), room:q.L*0.9},
           {p:at(segs[1],segs[1].L/2), room:segs[1].L*0.9}];
 }
-function pipeSizeLabels(NET){
+/* A CUT RUN STATES NO PRESSURE. The MPa word is what this run is HELD AT, and
+   a run with a hole in it holds nothing - it stood there reading 15.5 MPa over
+   a pipe drawn as torn open two cells away. Its bore is still a fact, so that
+   word stays. Off L.dmgParts, the same set pipeDamage() draws the tear from. */
+const runCut = (r,L) => !!(L && L.dmgParts && L.dmgParts.length &&
+  r.cells && r.cells.some(([x,y]) => L.dmgParts.indexOf("pipe:"+x+","+y) >= 0));
+function pipeSizeLabels(NET,L){
   const REF=10, o0={size:REF,sp:0};
   for(const r of NET){
     const g=pipeGeom(r.pts); if(!g.len) continue;
     const w=pipeWidth(runBore(r));
     const p=runDesignP(r);
-    const words=[Math.round(runBoreMm(r))+" mm",
-                 (p>=10?p.toFixed(1):p.toFixed(2))+" MPa"];
+    const words=[Math.round(runBoreMm(r))+" mm"];
+    if(!runCut(r,L)) words.push((p>=10?p.toFixed(1):p.toFixed(2))+" MPa");
     const spots=pipeLabSpots(g);
     const n=Math.min(spots.length, words.length);
     /* ONE SCALE FOR BOTH WORDS: sized apart, the shorter word rode a whole
