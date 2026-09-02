@@ -827,6 +827,12 @@ const partPdes=p=>{ const l=ROLE[p.role]&&ROLE[p.role].pdes;
 // kPa a run gives up at. A pipe cell is not a part and has no role, so it
 // cannot go through partPburst() - the ROOM_RUN_T idiom one file over.
 const PIPE_PBURST=120;
+/* K the AIR AROUND a run may reach before the run gives up - partTsurv()'s
+   figure for something that has no role to state one, and the same reason
+   PIPE_PBURST exists. Higher than every machine but the vessel: a pipe is bare
+   steel with no bearings and no electronics in it, and what fails is the metal
+   itself. */
+const PIPE_TSURV=900;
 /* THE WEAKEST THING ACTUALLY DRAWN, kPa - what an overpressure has to reach
    before it is worth telling anyone about. DERIVED from the plant rather than
    typed, the sgBypBand() idiom: a compartment full of instrument cabinets is

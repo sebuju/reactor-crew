@@ -21,7 +21,7 @@ const PROMPT_F=0.935;
    removes it - one expression, not a hand-typed +1500.
 
    Tref is what this coolant is PROGRAMMED at and dTf how far a pin sits above
-   it at rated power - a film question, so sodium's 150 K and helium's 600 K are
+   it at rated power - the PELLET MEAN, so sodium's 500 K and helium's 600 K are
    the same expression answering different fluids. commission() keeps
    saturation as the CEILING on Tref, never as the value, so BWR's 559 against
    559 commissions SATURATED and every high temperature family keeps its own.
@@ -66,7 +66,7 @@ const COOLANT=[
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,mmol:.02299,Tref:723,dTf:150,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,dnbLaw:"boil",xe:0.85,flowMin:.20,eff:.40,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,mmol:.02299,Tref:723,dTf:500,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,dnbLaw:"boil",xe:0.85,flowMin:.20,eff:.40,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
@@ -96,13 +96,15 @@ const coolSatN = a => a.satN!=null
 /* ── WHAT YOU PACK BETWEEN THE ASSEMBLIES ──
    A moderator slot is a lattice slot with a block in it instead of fuel, laid
    with the same pen. modK is against light water; dens is what latMass()
-   weighs the blocks you drew. */
+   weighs the blocks you drew. aT is the block's own temperature coefficient,
+   pcm/K, at full share of a thermal spectrum: graphite in a channel lattice is
+   slightly positive, ZrH strongly negative (a TRIGA), BeO about nothing. */
 const MODER=[
- {name:"GRAPHITE",modK:.95,dens:1.70,
+ {name:"GRAPHITE",modK:.95,dens:1.70,aT:3,
   note:"The classic solid moderator. Slows neutrons well over many collisions, so a graphite core is large and dilute - and the water in it becomes a net absorber, which is what makes a channel-water graphite plant void POSITIVE."},
- {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,
+ {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,aT:0,
   note:"Better than graphite per litre and it multiplies neutrons on top, so a smaller core reaches the same spectrum. Heavy for what it is, and it pushes the void coefficient positive the same way the reflector does."},
- {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,
+ {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,aT:-12,
   note:"Hydrogen locked into a solid: the densest moderation you can lay, so a very compact thermal core is possible. It is also the heaviest, and hydrogen leaves it if it gets hot enough."},
 ];
 /* tdmg is where THIS fuel starts taking damage, in K, and the RPS trips a
@@ -111,17 +113,20 @@ const MODER=[
    tmelt is the PELLET's melting point and is a separate, much higher number -
    real UO2 melts near 3120 K and a U-Zr alloy near 1400 K, so the distance
    between clad failure and pellet melt is enormous on one fuel and almost
-   nothing on the other. That distance is what the staged damage field spends. */
+   nothing on the other. That distance is what the staged damage field spends.
+   alpha is linear expansion, 1/K: a hot column grows and leaks neutrons, and a
+   metal fuel grows nearly twice as much as an oxide, which is why the metal
+   fuelled fast reactors survived their own unprotected transients. */
 const FUEL=[
- {name:"UO2  3.2% LEU",beta:680,excess:4200,densK:.85,condK:1.0,tdmg:1500,tmelt:3120,mass:0,
+ {name:"UO2  3.2% LEU",beta:680,excess:4200,densK:.85,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
- {name:"UO2  4.9% LEU",beta:650,excess:5200,densK:1.0,condK:1.0,tdmg:1500,tmelt:3120,mass:8,
+ {name:"UO2  4.9% LEU",beta:650,excess:5200,densK:1.0,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",beta:640,excess:8200,densK:1.4,condK:1.0,tdmg:1500,tmelt:3120,mass:-18,
+ {name:"UO2 19.7% HEU",beta:640,excess:8200,densK:1.4,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
- {name:"MOX PLUTONIUM",beta:300,excess:6500,densK:1.6,condK:1.0,tdmg:1450,tmelt:3050,mass:-12,
+ {name:"MOX PLUTONIUM",beta:300,excess:6500,densK:1.6,condK:1.0,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
- {name:"U-ZR METALLIC",beta:640,excess:6000,densK:1.85,condK:.55,tdmg:1150,tmelt:1400,mass:-25,
+ {name:"U-ZR METALLIC",beta:640,excess:6000,densK:1.85,condK:.55,alpha:1.7e-5,tdmg:1150,tmelt:1400,mass:-25,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
 ];
 /* dens is what latMass() weighs the drawn band with. The old flat `mass`
@@ -263,6 +268,18 @@ const RODX0=.35;
    zone 0's fallback, so an unzoned core is every slot in zone 0 and reads
    exactly as it always did. `??`, never `||`, or a legitimate zone 0 fails. */
 const zoneFuelOf = z => D.zoneFuel[z] ?? D.fuel;
+/* ══ AN ABSENT BAG KEY IS NOT THE DEFAULT WRITTEN DOWN ══
+   massWith() (design-bench.js) prices an option row by writing the design and
+   putting back what it read, and what it read through a plain {get,set} is the
+   RESOLVED default - so merely drawing the rail minted D.zoneFuel[0],
+   D.sgType[sg0] and D.radCoat[rad0] and sigFresh() called that a design edit.
+   Commission off a URL (?preset=&tab=operate, url.js) and the bake happens
+   before any bench frame, so the first visit to the bench moved P.dsig and
+   recommissioned a plant nobody had touched. `raw` is the door back out: it
+   answers undefined for a key that is not there, and set() deletes on it. */
+const bagAcc = (bag,key,read,after) => ({
+  get:read, raw:()=>bag[key],
+  set:v=>{ if(v===undefined) delete bag[key]; else bag[key]=v; if(after) after(); }});
 /* ══ THE DESIGN GENERATION. BUMP IT WHEN YOU EDIT A DESIGN TABLE ══
    The signature strings every layout cache proves itself against (pipeSig() and
    the four beside it, layout.js) are cached against this number, because a tick
@@ -447,6 +464,12 @@ const condShort_ = () => loadCeil() - condCeil() > 0.26;
    well-moderated core reads exactly 1 and buys the fuel it paid for. */
 const MOD_HALF=1.0, LAM_FAST=4.0e-7, LAM_TH=8.0e-5;
 const AV_MOD=3715, AV_ABS=783, AV_FAST=660, AM_K=67;
+/* EXP_RHO is reactivity per unit core strain at a bare fast spectrum, pcm.
+   Fitted ONCE: BN-600's isothermal coefficient aM+aS lands near -3 pcm/K, the
+   published band for a large oxide sodium core (-1 to -3, radial growth the
+   largest term). Weighted by the same (1-mth)^3 aV carries, because leakage is
+   most of a fast core's balance and next to nothing of a thermal one's. */
+const EXP_RHO=42000;
 const CRIT_H=0.04, CRIT_REF=2/3;
 const modTherm = mr => mr/(mr+MOD_HALF);
 const critK = mth => Math.min(1,(mth/(mth+CRIT_H))*((CRIT_REF+CRIT_H)/CRIT_REF));
@@ -529,9 +552,21 @@ function derived(){
      (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already
      inside modRatio() - it is how much coolant sits between the assemblies. */
   const mr=modRatio(), mth=modTherm(mr), Lam=LAM_FAST*Math.pow(LAM_TH/LAM_FAST,mth);
-  const aM=-AM_K*mth*modCoolShare();
+  const sh=modShares(), fast=Math.pow(1-mth,3);
+  // coolant and blocks each carry their own coefficient over their share of the moderation
+  const aM=mth*(-AM_K*sh.cool+MODER[D.mod].aT*sh.block);
   const aV=AV_MOD*(modTherm(modRatio(true))-mth)+AV_ABS*modAbs()
-          +AV_FAST*Math.pow(1-mth,3)+rf.dV;
+          +AV_FAST*fast+rf.dV;
+  /* Expansion, off materials and geometry. aX: the fuel column lengthens, one
+     dimension, on the pellet's own temperature. aS: the grid plate grows in
+     AREA (two dimensions) and the rod driveline lengthens and pushes the bank
+     in, both on the coolant's temperature. The driveline needs no constant:
+     strain over one core height, priced by the bank's own S-curve slope at its
+     commissioning position. Its slow opposite, the vessel growing and lifting
+     the bank OUT, is not modelled. */
+  const driveline=-STEEL_A*D.rodw*(1-Math.cos(2*Math.PI*RODX0));
+  const aX=-EXP_RHO*fast*f.alpha;
+  const aS=-EXP_RHO*fast*STEEL_A*2+driveline;
   const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
   const excess=f.excess*critK(mth)+rf.dRho-D.poison-leak;
   /* DNBR no longer rises 5.25% per generator for free. Flow is SOLVED (the
@@ -570,7 +605,7 @@ function derived(){
        - the equilibrium xenon the plant was commissioned with decays away, and
          every pcm of that poison comes back as POSITIVE reactivity,
        - the fuel cools from operating temperature down to the coolant, and
-         Doppler hands that back too.
+         Doppler and the column's own contraction hand that back too.
      The old number was a polynomial in rod worth and the feedback coefficients
      that touched none of this. It sold margin that did not exist: a default PWR
      read +454 pcm and went critical again, bank fully inserted, about three
@@ -580,12 +615,16 @@ function derived(){
      reported twice: what the bank holds on its own, and what it holds with the
      chemical system driven to its 6000 pcm limit. The first is a warning, the
      second is the one that decides whether the design is buildable at all. */
-  const dopBack=Math.abs(a.aF)*320*f.condK;      // Doppler released as the fuel cools
+  // what the core gives back from zero to full power: every coefficient on the pellet, over its own rise
+  const pwrDef=(a.aF+aX)*a.dTf*f.condK;
+  const dopBack=-pwrDef;                         // released as the fuel cools to the coolant
   const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
   const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
-  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,Lam,mr,mth,excess,dnbr,Fq,xeW,core,
-    boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,
+  // trip backpressure over where this sink rests at full power: under 1 it trips at rest, under 1/DUMP_COND_K the dump is blocked
+  const condMargin=TURB_TRIP_P/Math.max(COND_P0, psatSec(condRest(plantDuty()).condT));
+  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr,Fq,xeW,core,
+    boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,condMargin,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0,
     /* Third element is the component the warning is ABOUT, for the bench's
@@ -604,7 +643,8 @@ function derived(){
          spectrum was always supposed to carry and never did. */
       else if(boronOp>0) w.push(["RED","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank at its commissioning position. There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
       if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop.","core"]);
-      if(aM>0) w.push(["SOFT","Positive moderator coefficient. The lattice is over-moderated: heating the coolant raises power instead of lowering it.","core"]);
+      if(aM>0) w.push(["SOFT","Positive moderator coefficient. Heating the moderator raises power instead of lowering it - an over-moderated lattice, or a graphite stack in one.","core"]);
+      if(pwrDef>-100) w.push(["SOFT","Power coefficient only "+pwrDef.toFixed(0)+" pcm from zero to full power. Almost nothing in the fuel pushes back when power rises; the rods and the coolant are all that hold it.","core"]);
       if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power.","core"]);
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
       if(contRel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew.","cont"]);
@@ -612,6 +652,7 @@ function derived(){
       if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
       else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
       if(turbCount() && loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
+      if(condMargin<1/DUMP_COND_K) w.push([condMargin<1?"RED":"SOFT","The sink rests at "+(TURB_TRIP_P/condMargin).toFixed(4)+" MPa of backpressure against a "+TURB_TRIP_P+" MPa turbine trip"+(condMargin<1?", so the turbine trips before anything has happened":", so the steam dump is blocked at rest: a load drop goes to the shell safeties and the water does not come back")+". Bigger panels or a bigger condenser buy the margin.","cond"]);
       if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% of full-load duty but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
       if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);

@@ -171,9 +171,10 @@ const modRatio=voided=>{ const v=latVols(); if(v.fuel<=0) return 0;
   return ((voided?0:v.cool*COOLANT[D.cool].modK)+v.mod*MODER[D.mod].modK)/v.fuel; };
 /* How much of the moderation the COOLANT provides. 1 in a PWR, near 0 in a
    graphite core - and it is what decides whether voiding is a loss or a gain. */
-const modCoolShare=()=>{ const v=latVols();
-  const c=v.cool*COOLANT[D.cool].modK, m=v.mod*MODER[D.mod].modK;
-  return (c+m)>1e-12? c/(c+m) : 0; };
+const modShares=()=>{ const v=latVols();
+  const c=v.cool*COOLANT[D.cool].modK, m=v.mod*MODER[D.mod].modK, t=c+m;
+  return t>1e-12? {cool:c/t,block:m/t} : {cool:0,block:0}; };
+const modCoolShare=()=>modShares().cool;
 /* Coolant absorption per unit fuel: what voiding gives BACK. */
 const modAbs=()=>{ const v=latVols();
   return v.fuel>0? v.cool*COOLANT[D.cool].absK/v.fuel : 0; };
@@ -399,7 +400,7 @@ const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float6
    tdmg and tmelt are the exception and they are MINIMA, not means: failure is
    a local event, so one ring of metallic fuel cannot hide behind four of
    ceramic. */
-const FUEL_BLEND=["beta","excess","densK","condK","mass"];
+const FUEL_BLEND=["beta","excess","densK","condK","alpha","mass"];
 const FUEL_MIN=["tdmg","tmelt"];
 function fuelBlend(){
   if(!LM) latRevolve();
