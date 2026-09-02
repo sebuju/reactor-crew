@@ -719,6 +719,11 @@ const trVldCheck = () => { for(const a of ANN) if(!TR.vldSeen[a[0]] && a[2](S)){
    frame on it and shellSync() keeps only the clock. */
 const trQuiet = () => TR.rate===TR_VLD && !TR.paused && !!P && !!SIMSCREEN[screen];
 const TICK_CAP  = 48;
+/* WHAT A FRAME IS WORTH, s. The rate multiplies this and nothing else, so 1x is
+   50 ticks a second of PLANT time at 60 frames a second of screen time, and it
+   stays 50 whatever the screen is actually managing. Nominal on purpose - a
+   measured frame period is the wall clock coming back in through the window. */
+const FRAME_DT = 1/60;
 /* MAX is a TIME budget, not a multiplier: there is no rate that owes it ticks,
    it simply steps until the frame's share of milliseconds is spent. The cap is
    what leaves the browser room to paint and to answer the hand. */
@@ -797,7 +802,18 @@ function simFrame(dt){
     recTick();
     return m>0;
   }
-  simAcc += dt * TR.rate;
+  /* ══ THE CLOCK IS TICKS AND A TARGET RATE, NEVER THE WALL ══
+     This was `simAcc += dt * TR.rate`, so plant time advanced at whatever the
+     browser felt like handing out. A backgrounded tab throttles rAF, dt then
+     arrives clamped at 0.25, and at 16x that is 200 ticks owed against a
+     48-tick budget - so the plant SILENTLY LOST time, and lost more of it the
+     faster you asked it to go. Two runs of the same plant at the same rate did
+     not land on the same second, which makes every timed reading a measurement
+     of the browser rather than of the reactor.
+     A frame now owes exactly what the TARGET rate says a frame owes, whenever
+     it arrives. Wall time is gone from the sim's advance entirely; a slow tab
+     takes longer in seconds and reaches the same plant. */
+  simAcc += FRAME_DT * TR.rate;
   let n=0;
   while(simAcc>=0.02 && n<TICK_CAP){
     /* recPlay() BEFORE the step, every tick: it re-applies the take's own
@@ -808,7 +824,13 @@ function simFrame(dt){
     simTick();
     simAcc-=0.02; n++;
   }
-  if(n>=TICK_CAP) simAcc=0;
+  /* THE DEBT IS CARRIED, NOT SHED. Shedding was the wall clock's fix for the
+     wall clock's problem: dt could ask for 200 ticks, so the backlog had to go
+     somewhere. A frame owes a fixed number now, so a backlog only ever means
+     this machine is slower than the rate asked for - and the honest answer to
+     that is to take longer, not to skip plant seconds nobody chose to skip.
+     Bounded so a tab left in the background does not come back owing an hour. */
+  if(simAcc > TICK_CAP*0.02) simAcc = TICK_CAP*0.02;
   recTick();                       // once a frame, after the ticks it covers
   return n>0;
 }
