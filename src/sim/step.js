@@ -84,7 +84,6 @@ function commission(){
   P.net    = netBuild();
   P.netRefByLoop = {};
   P.netRefByRun  = {};
-  P.netRef = netCoreFrac0(P.net, P.netRefByLoop, P.netRefByRun);
   /* ══ AND THE SECONDARY'S REFERENCE IS NOT A WIDE-OPEN VALVE ══
      A feed regulating valve commissions wide and walks itself shut against
      the level it is holding, so a reference taken with it wide open prices
@@ -94,34 +93,84 @@ function commission(){
      Taken instead at the flow the plant is BUILT to feed, by walking the same
      valve the controller walks against the same solve. Only the secondary
      moves: a regulating head sits on a shell edge and the primary shares no
-     node with it, so P.netRef - kept from the solve above - is untouched. */
-  { const want = ratedSteam()/Math.max(1,sgCount()), freg = {}, prev = {}, fedPrev = {};
+     node with it, so P.netRef - taken off the unregulated solve - is
+     untouched.
+     ══ AND EVERY PUMP ON ITS OWN CURVE ══
+     A head-flow curve (pumpCurve(), pipenet.js) makes a head depend on the
+     answer, so the two references close TOGETHER: a pump's swallow is read
+     off the REGULATED solve, because that is the plant that commissions, and
+     the valve is walked against the head that swallow leaves. Solved apart,
+     the feed pump was priced through a wide-open train at 46 times its rating,
+     came out with no head at all, and the plant commissioned with a dead feed
+     pump. kg/s needs P.netRef, which is why this cannot live inside the solve:
+     the conversion is what the solve is computing, so each pass converts on
+     its own answer. resetPlant() seeds s.pumpQBy from the result, so tick one
+     is the plant that was priced.
+     UNDER-RELAXED, because head falling with flow overshoots: a machine past
+     runout solves to no head, which solves to no flow, which restores full
+     head. Half a step a pass lands it. */
+  { const want = ratedSteam()/Math.max(1,sgCount());
     /* SECANT, not a rate-limited walk: the network is LINEAR in head, so one
        generator's flow is affine in its own valve and a handful of passes
        lands on the answer. The controller's own stroke rate is a property of a
        real valve moving in real time and has no business in a design-time
        reference - walked at that rate this cost 1.6 s of commissioning. */
     const fedOf = (outs,id) => invRate((outs.sgFeedBy && outs.sgFeedBy[id]) || 0)/100*loopKg();
-    for(const id of sgIds()){ freg[id] = 0; prev[id] = 1; }
-    { const o = {}; netCoreFrac0(P.net, null, null, prev, o);
-      for(const id of sgIds()) fedPrev[id] = fedOf(o,id); }
-    for(let i=0;i<30;i++){
-      const o = {}; netCoreFrac0(P.net, null, null, freg, o);
-      let worst = 0;
-      for(const id of sgIds()){
-        const fed = fedOf(o,id), slope = (fed - fedPrev[id])/((freg[id]-prev[id])||1e-9);
-        worst = Math.max(worst, Math.abs(fed-want)/Math.max(want, FREG_SPAN));
-        prev[id] = freg[id]; fedPrev[id] = fed;
-        freg[id] = clamp(freg[id] + (Math.abs(slope)>1e-9 ? (want-fed)/slope : 0), 0, fregMax(id));
+    P.pumpQRef = {};
+    for(const id of pumpIds()) P.pumpQRef[id] = pumpFlow(id);
+    for(let pass=0;pass<20;pass++){
+      P.netRefByRun = {};
+      P.netRef = netCoreFrac0(P.net, P.netRefByLoop, P.netRefByRun, {pumpQBy:P.pumpQRef});
+      const freg = {}, prev = {}, fedPrev = {};
+      for(const id of sgIds()){ freg[id] = 0; prev[id] = 1; }
+      { const o = {}; netCoreFrac0(P.net, null, null, {fregBy:prev, pumpQBy:P.pumpQRef}, o);
+        for(const id of sgIds()) fedPrev[id] = fedOf(o,id); }
+      for(let i=0;i<30;i++){
+        const o = {}; netCoreFrac0(P.net, null, null, {fregBy:freg, pumpQBy:P.pumpQRef}, o);
+        let worst = 0;
+        for(const id of sgIds()){
+          const fed = fedOf(o,id), slope = (fed - fedPrev[id])/((freg[id]-prev[id])||1e-9);
+          worst = Math.max(worst, Math.abs(fed-want)/Math.max(want, FREG_SPAN));
+          prev[id] = freg[id]; fedPrev[id] = fed;
+          freg[id] = clamp(freg[id] + (Math.abs(slope)>1e-9 ? (want-fed)/slope : 0), 0, fregMax(id));
+        }
+        if(worst < 1e-4) break;
       }
-      if(worst < 1e-4) break;
-    }
-    netCoreFrac0(P.net, null, P.netRefByRun, prev); }
+      P.netRefByRun = {};
+      netCoreFrac0(P.net, null, P.netRefByRun, {fregBy:prev, pumpQBy:P.pumpQRef});
+      P.fregRef = prev;
+      let moved = 0;
+      for(const id of pumpIds()){
+        const k = pumpEdgeKey(id); if(!k) continue;
+        const was = P.pumpQRef[id], now = Math.max(0, netKgs(P.netRefByRun[k]||0));
+        P.pumpQRef[id] = was + (now-was)*0.5;
+        moved = Math.max(moved, Math.abs(now-was)/Math.max(now, pumpFlow(id), 1e-9));
+      }
+      if(moved < 1e-3) break;
+    } }
   /* The cooling circuit's own reference, off the same solve - what this
      plant's circulating water pumps push through its condenser as
      commissioned. 0 is a plant with nothing turning that water, and cwK()
      reads it as no heat sink at all. */
   P.cwRef = cwFlowOf(P.netRefByRun);
+  /* ══ AND THE SCALE REFERENCE, FOR A LINE NOTHING HAS CALLED FOR YET ══
+     The solve above prices the plant AS COMMISSIONED, which is the right frame
+     for the physics and leaves every DEMAND gate shut - a standby tank's rule,
+     a relief valve. So the line behind one references exactly 0, runRatio()
+     divides by it, and its parcels stand still forever while the sim carries
+     real flow through it. Taken once more with those gates open (s.refOpen),
+     and copied back ONLY where the line had no scale at all: a run the plant
+     genuinely commissions with flow keeps its own figure, so the regulated
+     feed reference above is untouched. A cross-tie is not in this - its shut
+     position is how the plant is built, not a gate waiting to be asked.
+     IT IS THE COMMISSIONED PLANT WITH THE GATE OPEN, and nothing else moved:
+     the SAME regulated feed and the SAME pump swallows the block above closed
+     on. Left to their defaults the regulating valve stood wide, the feed pump
+     re-priced onto the unregulated train, and the EFW line referenced 37305
+     kg/s - five times the reactor's own hot leg. */
+  { const o = {}; netCoreFrac0(P.net, null, o,
+      {refOpen:1, fregBy:P.fregRef, pumpQBy:P.pumpQRef});
+    for(const k in P.netRefByRun) if(!P.netRefByRun[k] && o[k]) P.netRefByRun[k] = o[k]; }
   /* ══ AND EVERY RUN'S REFERENCE IN KILOGRAMS ══
      What this run carries as commissioned, kg/s. The meters used to normalise
      every liquid run on P.netRefRun - the mean of the HOT and COLD legs, a
@@ -1764,6 +1813,8 @@ const SPILL_FULL=8.0;
 const CAV_SPAN=12;
 // how long vapour takes to fill a pump's inlet, and to clear out of it again
 const CAV_TAU=1.5;
+// how fast a pump's own curve follows what it is passing (s.pumpQBy)
+const PUMP_Q_TAU=1.0;
 // the leak, in % of inventory per second, that takes the pressurizer's
 // authority away entirely - a pinhole barely touches it, a LOCA ends it
 const PZR_LOSE=2.0;
@@ -2352,6 +2403,11 @@ function resetPlant(){
         annunciator and the panel want. A plain object, so snapVal() takes it
         for free. */
      cavP:Object.fromEntries(pumpIds().map(id=>[id,0])),
+     /* AND ONE FLOW PER PUMP, kg/s, for its own head-flow curve (pumpCurve(),
+        pipenet.js). Seeded off the REFERENCE's own converged answer, so tick
+        one develops the head the plant was commissioned on rather than a duty
+        head nothing on this drawing produces. */
+     pumpQBy:Object.fromEntries(pumpIds().map(id=>[id,(P.pumpQRef&&P.pumpQRef[id])??pumpFlow(id)])),
      dose:0, crewDose:0, doseRate:P.dose, repRate:0, partySpent:false,
      bkpLost:false, dLvl:0,
      boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,xe:0,bor:0,vd:0,tip:0},
@@ -2867,6 +2923,23 @@ function step(dt){
       if(c>0.15) cavIds.push(id);
     }
     s.cav = worst; }
+  /* ── what each pump is actually passing, for its own head-flow curve ──
+     Off this tick's own solve, through the casing edge and no other: a pump
+     with a run on every face still has ONE swallow. Smoothed on the same
+     argument s.cavP is - a head that jumped with the flow it set would ring
+     tick to tick - and fed to next tick's solve. */
+  { for(const id in s.pumpQBy) if(!partOf(id)) delete s.pumpQBy[id];
+    const kq = Math.min(dt/PUMP_Q_TAU, 1);
+    for(const id of pumpIds()){
+      const k = pumpEdgeKey(id); if(!k) continue;
+      /* SIGNED, and floored at 0: netKgs() is a magnitude, so a pump being
+         pushed backwards read as an enormous forward flow, took its own head
+         off, and let itself be pushed harder - the reverse latched and the
+         generators emptied into the condenser. */
+      const q = runFlow[k] || 0;
+      const want = q > 0 ? netKgs(q) : 0;
+      if(s.pumpQBy[id]===undefined) s.pumpQBy[id]=want;
+      s.pumpQBy[id] += (want - s.pumpQBy[id])*kq; } }
   /* ── coolant flow: pumps have inertia ──
      Losing power does not stop a pump dead, it coasts. Blackout is the same lag
      with a longer time constant, so the grace time the brief promises is real. */
