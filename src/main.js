@@ -62,5 +62,6 @@ if(typeof document!=="undefined" && document.documentElement){
   shellInit();
   helpBuildDOM();
   shellSync();
-  setInterval(shellSync,100);
+  urlApply();
+  setInterval(()=>{ shellSync(); urlSync(); },100);
 }
