@@ -932,12 +932,16 @@ function pipeRailSync(body,wellEl){
      what the player sets, and one run at a time on a panel is no way to see
      that one leg is half the width of the one it feeds. Off the run itself
      (runOfKey), so a row and the panel below cannot disagree. */
+  /* the ends read in the run's OWN colour, off the same table the drawing
+     strokes it with, so the list and the picture cannot name two different
+     fluids for one run */
+  const PC=pipeColours(null);
   const rows=M.conns.map(c=>{
     const a=partOf(c.a), b=partOf(c.b), r=runOfKey(c.key);
     return [(pipeLabel(c.k,c.key)||"PIPE"),
             (a?partName(a):c.a)+" ⇒ "+(b?partName(b):c.b),
             c.L.toFixed(1), r?Math.round(runBoreMm(r)):"-",
-            r?runWallMm(r).toFixed(0):"-", c.key];
+            r?runWallMm(r).toFixed(0):"-", c.key, pipeCol(PC,c.k)];
   });
   const loose=M.orphan.length, dead=M.dangling.filter(d=>d.cells.length).length;
   // sel is in the signature: a row lights when it is the picked one, so the
@@ -950,9 +954,11 @@ function pipeRailSync(body,wellEl){
   /* ONE GRID, so a column is a column. Five spans per row against one template
      (db-pipe-row, plant-screens.css) - the head carries the units, so no cell
      below has to repeat them. */
-  const cells=(row,vals)=>{
+  const cells=(row,vals,endsCol)=>{
     const CLS=["db-pipe-kind","db-pipe-ends","db-pipe-len","db-pipe-bore","db-pipe-wall"];
-    vals.forEach((v,i)=>{ const s=KIT.el("span",CLS[i]); s.textContent=v; row.appendChild(s); });
+    vals.forEach((v,i)=>{ const s=KIT.el("span",CLS[i]); s.textContent=v;
+      if(i===1 && endsCol) s.style.color=endsCol;
+      row.appendChild(s); });
   };
   if(rows.length){
     const head=KIT.el("div","db-pipe-row db-pipe-head");
@@ -961,7 +967,7 @@ function pipeRailSync(body,wellEl){
   }
   for(const r of rows){
     const row=KIT.el("div","db-pipe-row"+(sel===r[5]?" on":""));
-    cells(row,[r[0],r[1],r[2],r[3],r[4]]);
+    cells(row,[r[0],r[1],r[2],r[3],r[4]],r[6]);
     body.appendChild(row); body._rows[r[5]]=row;
     /* THE ROW IS THE PICK - the way at a run that is hard to click on a
        crowded drawing. Three things, and the third is why it never worked:
