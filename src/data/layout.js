@@ -169,6 +169,17 @@ function removePart(id){
   placedParts=placedParts.filter(p=>p.id!==id);
   buildLayout();
 }
+/* The bench's own REMOVE leaves a run's cells and the far nozzle behind, which
+   is right for a part the player is re-plumbing and wrong for one a preset
+   never bought - an unowned line reads as plumbing that failed to connect. */
+function removePartRuns(id){
+  for(const c of pipeMap().conns){
+    if(c.a!==id && c.b!==id) continue;
+    for(const [x,y] of c.cells) delete D.pipes[x+","+y];
+    delete D.ports[c.pa]; delete D.ports[c.pb];
+  }
+  removePart(id);
+}
 /* ══════════ ADDING A TANK IS ADDING A TANK ══════════
    ONE default config (TANK_DEFAULT, pipenet.js), not a menu of four kinds.
    Everything that used to distinguish a boron tank from an accumulator from
@@ -356,20 +367,27 @@ const pumpHeadSuggest = id => {
    pump a FEED pump (CLAUDE.md: asked of the drawing, never stored). */
 function pumpBounds(id){
   const G = nodeGraph(), ci = (G.nodesOf[id]||[]).map(n=>G.circuit[n]);
-  let hi = null, lo = null, shell = false, hold = null;
+  let hi = null, lo = null, shell = false, hold = null, panel = false, core = false;
   /* the setpoint of this pump's own circuit, where anything holds one - the
      ceiling on the head above, and asked on the same walk for the same reason
      the boundaries are */
   for(const c of ci) if(holdOnCirc(c).length){ hold = holdSetP(c); break; }
   for(const pid in G.nodesOf) for(const n of G.nodesOf[pid]){
     if(ci.indexOf(G.circuit[n]) < 0) continue;
+    /* WHAT ELSE STANDS ON THIS CIRCUIT, asked before the boundary test: a
+       panel is no boundary at all, and it is what tells the circulating water
+       apart from the feedwater - both of them reach the condenser. */
+    const p0 = partOf(pid);
+    if(p0 && p0.role === "radiator") panel = true;
+    if(G.inCore(n)) core = true;
     const q = boundP(pid, n); if(q === null) continue;
     const p = partOf(pid), R = p && ROLE[p.role];
     if(R && R.sgtr && secondaryNode(n)) shell = true;
     if(hi === null || q > hi) hi = q;
     if(lo === null || q < lo) lo = q;
   }
-  return {hi, lo, shell, hold};
+  // a panel spliced into a cold leg does not make a coolant pump a cw pump
+  return {hi, lo, shell, hold, cool: panel && !core};
 }
 /* HOW FAR OVER THE VESSEL IT FEEDS a pump is suggested at. A machine sized to
    exactly the pressure it is pushing against delivers nothing, and its
@@ -400,8 +418,24 @@ const PUMP_MARGIN = 1.35;
    apart. */
 const pumpFlowSuggest = id => {
   const n = Math.max(1, loopMap().n);
+  /* AND A FEEDWATER CIRCUIT IS NOT DIVIDED BY THE LOOPS. There is one of it,
+     and every generator on it boils into it, so a pump sized at a loop's share
+     could not hold three generators up: BN-600's was bought for 345 kg/s
+     against 900 kg/s of evaporation and its shells emptied on the first
+     transient. Two feed pumps on that circuit are redundancy, the same
+     sentence the loop count makes above. */
   if(id !== undefined && pumpBounds(id).shell)
-    return RATED_KW()/(steamRise()*n);        // rated heat over the feed-to-steam rise: kg/s of steam
+    return RATED_KW()/steamRise();            // rated heat over the feed-to-steam rise: kg/s of steam
+  /* ══ AND CIRCULATING WATER CARRIES THE REJECTION, NOT THE CORE ══
+     Sized as a coolant pump it moved the core's own circulation divided by the
+     loops - 3 391 kg/s where BN-600 rejects 910 MW and needs 21 700 - so the
+     condenser ran at a quarter of the capacity rate it was priced for (cwK
+     0.23), backed up to 0.035 MPa against a 0.02 MPa trip, and tripped the
+     turbine on the way up to full power. The panels were never short: they
+     radiate more than they are handed and get COLDER as the plant loads. Same
+     basis as condUASuggest() - this plant's duty on the design rise. */
+  if(id !== undefined && pumpBounds(id).cool)
+    return plantDuty()/(SAT_WATER.cp*CW_RISE);
   return RATED_KW()/(SAT_WATER.cp*CORE_DT0*n);
 };
 /* ══ A SUGGESTION FILLS THE FIELD. IT IS NOT THE FIELD ══
@@ -503,6 +537,12 @@ const roleHead=role=>{ const R=ROLE[role]; if(!R||!R.internal) return false;
 const pumpSucNode=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return id;
   const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
   return IN ? coreFold(id+IN.a) : id; };
+/* AND WHAT THAT PATH IS CALLED IN THE SOLVE - fitEdgeKey()'s idiom for a
+   pump. The reference (derived()) and the tick (step()) both read this pump's
+   own swallow off it, and a second spelling of the key is a second answer. */
+const pumpEdgeKey=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return null;
+  const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
+  return IN ? "comp:"+id+":"+IN.a+IN.b : null; };
 const primaryPump=id=>{ const p=partOf(id);
   return !!p && roleHead(p.role) && loopOf(id)!==null; };
 /* EVERY PUMP ON THE GRID, in LAY order - the set s.flowBy/s.flowDemBy are
@@ -2499,20 +2539,28 @@ const isFitting=id=>{ const p=partOf(id); return !!p && p.role==="fitting"; };
    continuation is preferred and the branch is only taken when it is all there
    is. */
 const FIT_BRANCH_ROLE={tank:1};
-function throughFitting(id,avoid,seen){
+/* `out.face` comes back with the face at the machine ANSWERED, which is not
+   the face the run being named lands on: a line into a generator's feed
+   nozzle through a tee lands on the TEE, and asked about the generator with
+   the tee's own face the shell test below read the tube side and called a
+   feedwater line a cold leg. */
+function throughFitting(id,avoid,seen,out){
   const p=partOf(id);
   if(!p || p.role!=="fitting") return p||null;
   seen=seen||{}; if(seen[id]) return null; seen[id]=1;
   // pipeTrace(), never pipeMap(): naming a connection is what calls this, so
   // reading the NAMED map here would be the cycle the two halves exist to break
-  let branch=null;
+  let branch=null, branchFace;
   for(const c of pipeTrace().conns){
     const o = c.a===id ? c.b : c.b===id ? c.a : null;
     if(o==null || o===avoid) continue;
-    const q=throughFitting(o,avoid,seen); if(!q) continue;
-    if(!FIT_BRANCH_ROLE[q.role]) return q;
-    if(!branch) branch=q;
+    if(out) out.face = undefined;
+    const q=throughFitting(o,avoid,seen,out); if(!q) continue;
+    const f = out && out.face!==undefined ? out.face : (c.a===o ? c.sa : c.sb);
+    if(!FIT_BRANCH_ROLE[q.role]){ if(out) out.face = f; return q; }
+    if(!branch){ branch=q; branchFace=f; }
   }
+  if(out) out.face = branch ? branchFace : undefined;
   return branch;
 }
 /* A FITTING THAT LEADS NOWHERE IS ITSELF THE END OF THE RUN. A relief valve
@@ -2521,8 +2569,11 @@ function throughFitting(id,avoid,seen){
    nozzle carrying an unclassified fluid and stopped net.vapour ever calling
    it a steam space. What the line reaches is the valve. */
 function runKindFor(aId,bId,af,bf){
-  const A=throughFitting(aId,bId)||partOf(aId), B=throughFitting(bId,aId)||partOf(bId);
+  const oa={}, ob={};
+  const A=throughFitting(aId,bId,null,oa)||partOf(aId), B=throughFitting(bId,aId,null,ob)||partOf(bId);
   if(!A||!B) return "user";
+  if(oa.face!==undefined) af=oa.face;
+  if(ob.face!==undefined) bf=ob.face;
   /* WHICH SIDE OF A GENERATOR THE RUN LANDS ON NAMES THE PIPE.
      There is no feedwater-pump role left to key the table on, so "pump|sg"
      alone cannot tell a cold leg from a feedwater line - the FACE tells it,
