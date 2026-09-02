@@ -1134,18 +1134,34 @@ function pipeDamage(L){
        marker dropped ON the pipe - a label, and one an alpha layer washed out -
        while the thing being said is that the pipe is NOT THERE any more. So the
        cell is cut back to the deck, hatched, framed, and the tear is drawn
-       across it; and it sparks, the same decoration a wrecked machine wears. */
+       across it. It does NOT spark: a machine sparks, a length of pipe does
+       not, and the flicker was reading as the loudest thing on the board. */
     fillRect(r.x+1,r.y+1,r.w-2,r.h-2,C.well);
     hatch(r.x+1,r.y+1,r.w-2,r.h-2,C.red,.5);
     frame(r.x+1,r.y+1,r.w-2,r.h-2,C.red);
+    /* ...AND WHAT IS LEFT IS TWO STUB ENDS PULLED APART, on the cell's OWN
+       faces (PIPE_SHAPE, the same rows pipeExit() walks) - a zigzag lying
+       across the cell was one mark whichever way the line ran, so a broken
+       riser and a broken header drew identically and neither read as pipe. */
+    const cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s], faces=[];
+    if(sh) for(const pr of sh.paths) for(const f of pr){
+      const rf=rotFace(f,cell.r); if(faces.indexOf(rf)<0) faces.push(rf);
+    }
+    if(!faces.length) faces.push("l","r");
     ctx.save();
-    ctx.strokeStyle=C.red; ctx.lineWidth=2; ctx.lineCap="round"; ctx.lineJoin="miter";
-    ctx.beginPath();
-    ctx.moveTo(r.x+2,cy-6); ctx.lineTo(cx+3,cy-2);
-    ctx.lineTo(cx-3,cy+2);  ctx.lineTo(r.x+r.w-2,cy+6);
-    ctx.stroke();
+    ctx.strokeStyle=C.red; ctx.lineWidth=2; ctx.lineCap="butt"; ctx.lineJoin="miter";
+    const h=r.w/2, GAP=4;
+    for(const f of faces){
+      const dx=DIRV[f][0], dy=DIRV[f][1], px=-dy, py=dx;
+      const ex=cx+dx*GAP, ey=cy+dy*GAP;
+      ctx.beginPath();
+      ctx.moveTo(cx+dx*h, cy+dy*h);
+      ctx.lineTo(ex,ey);
+      // the lip, bent open across the bore on ONE side only - torn, not cut
+      ctx.lineTo(ex+px*2.5-dx*1.5, ey+py*2.5-dy*1.5);
+      ctx.stroke();
+    }
     ctx.restore();
-    fxSparks(r.x+2,r.y+2,r.w-4,r.h-4,0.5,C.red);
   }
 }
 /* EVERY PIPE CELL NO CONNECTION CLAIMS, AND WHICH WAY IT OPENS. Dead-coloured,

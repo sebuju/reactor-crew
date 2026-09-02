@@ -137,9 +137,11 @@ const pipeNozzleHalf = bore => Math.min(pipeWidth(bore)*1.4, NOZZLE_HALF_MAX);
    Takes the live state rather than reaching for S: the bench draws nozzles too
    and must never colour one off the last run's valve positions. */
 function portColOf(pid,L){
-  // WRECKED BEFORE SHUT: a jammed valve is not a valve position any more, and
-  // dead metal is what every other wrecked handle on this plant is drawn in
-  if(portWrecked(L,pid)) return C.dis;
+  // WRECKED BEFORE SHUT: a jammed valve is not a valve position any more. RED,
+  // like every other broken thing on the board - dead metal read as an ordinary
+  // unpiped nozzle, so the one port the player has to find looked like all of
+  // them. The X over it (drawPortValves()) is what parts it from a shut one.
+  if(portWrecked(L,pid)) return C.red;
   if(L && L.portShut && L.portShut[pid]) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
   const f=portFaceOf(pid), IN=portPath(partOf(q.p), f);
@@ -1129,8 +1131,7 @@ const ctlBench=rows=>rows&&rows.map(r=>r.map(benchCell));
    The same cell shape benchCell() makes, so the strip still measures and
    still compacts - nothing is hidden, it just does not answer. */
 const deadCell=c=>{ const o=Object.assign({},c);
-  o.fn=()=>{}; o.set=()=>{}; o.on=()=>false; o.danger=()=>false;
-  if(c.kind==="sld") o.inert=true;
+  o.fn=()=>{}; o.set=()=>{}; o.on=()=>false; o.danger=()=>false; o.inert=true;
   if(c.kind==="arm") o.label=c.label||(()=>"");
   return o; };
 const ctlDead=rows=>rows&&rows.map(r=>r.map(deadCell));
@@ -1412,12 +1413,12 @@ const FITSTRIP_W=(TANK_W0*CELL - 8 - 4)/2;
    is still doing its job. Drawn twice they drift, and the valve's copy is the
    one that ends up looking like a command button instead of an arming switch. */
 function armRow(x,y,w,h,o){
-  const wd=push({x,y,w,h,type:"btn",fn:o.fn});
-  const hv=o.fit&&hov(wd);
+  const wd=o.inert?{x,y,w,h}:push({x,y,w,h,type:"btn",fn:o.fn});
+  const hv=o.fit&&!o.inert&&hov(wd);
   // the SAME fill a sunk key gets, or this reads as a black box cut into the
   // strip instead of another key standing on it
   fillRect(x,y,w,h, btnFill({sunk:1,on:o.lit},hv));
-  const col = !o.fit?"#3c4c47" : o.lit?C.amber : C.green;
+  const col = (!o.fit||o.inert)?"#3c4c47" : o.lit?C.amber : C.green;
   const st  = !o.fit?"none" : o.lit?"BYP" : "AUTO";
   const t={size:6.5,sp:.3};
   // a narrow host loses the LABEL before the state (its name is already printed
@@ -1480,11 +1481,11 @@ function ctlKey(c,x,y,w,h){
        fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
   } else if(c.kind==="arm"){   // LABEL: the same control-strip WIDGET kind, unrelated to a pipe run's kind
     // armRow() states its own tooltip, so this row skips ctlStrip's below
-    armRow(x,y,w,h,{label:c.label(),fit:true,lit:on,fn:c.fn,title:c.title(),tip:c.tip});
+    armRow(x,y,w,h,{label:c.label(),fit:true,lit:on,inert:c.inert,fn:c.fn,title:c.title(),tip:c.tip});
   } else {
     // a narrow box loses its letter spacing before it loses its size, and its
     // size before its label - button() walks the rest of that ladder itself
-    button(x,y,w,h,c.text(),{danger:dan,on:on,sunk:true,size:6.5,sp:w<30?0:.5,fn:c.fn});
+    button(x,y,w,h,c.text(),{danger:dan,on:on,sunk:true,inert:c.inert,size:6.5,sp:w<30?0:.5,fn:c.fn});
   }
   if(c.kind!=="arm") TIP(x,y,w,h,c.tip.split(" - ")[0],c.tip);   // LABEL: widget kind again, not a run kind
 }
@@ -1627,6 +1628,7 @@ function drawPortValves(L){
   const bore=portBores();
   eachPort((pid,p,f,c)=>{
     const shut=!portOpen(L,pid);
+    const wreck=portWrecked(L,pid);
     const col=portColOf(pid,L);
     const [nx,ny]=portPos(pid);
     const nr=portNozzleRect(pid,f,bore[pid]);
@@ -1637,16 +1639,31 @@ function drawPortValves(L){
     /* A port nothing is piped to has no run to draw its joint (pipeNozzles()),
        so it draws its own - the same mark, in the same colour, which is now
        red. Piped or not, a shut valve looks the same. */
-    if(shut) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col);
+    if(shut||wreck) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col);
+    /* AND A WRECKED ONE WEARS AN X. Red alone is the SHUT valve, and the two
+       are not the same order at all: one is a position, the other is a nozzle
+       that will never take another. It stands in the WORD's place, because the
+       joint has room for one mark and which side of a pump a dead port was on
+       is not the thing to say about it. */
+    if(wreck){
+      ctx.save();
+      ctx.strokeStyle=C.inkOnLit; ctx.lineWidth=1.5; ctx.lineCap="butt";
+      const ix=nr.x+1.5, iy=nr.y+1.5, iw=nr.w-3, ih=nr.h-3;
+      ctx.beginPath();
+      ctx.moveTo(ix,iy); ctx.lineTo(ix+iw,iy+ih);
+      ctx.moveTo(ix+iw,iy); ctx.lineTo(ix,iy+ih);
+      ctx.stroke();
+      ctx.restore();
+    }
     /* AND THE WORD, on the running plant too. drawPortMarks() is the BENCH's
        pass and runs behind `if(!L)`, so every nozzle on the control room was
        unnamed - which is the screen where knowing a pump's suction from its
        discharge actually decides something. portWordDraw() is the one
        primitive, so the two screens cannot label a joint differently. */
-    const word=portWord(p,f);
+    const word=wreck?null:portWord(p,f);
     if(word) portWordDraw(pid,f,word,nr);
-    TIP(r.x,r.y,r.w,r.h, portLabel(pid)+"  [ "+(shut?"SHUT":"OPEN")+" ]",
-      "The isolation valve in this nozzle. Every port has one, it costs nothing, and it commissions open. Shutting it takes the run landed here out of the network entirely - which is how a leak is cut out of a live plant, and equally how a loop is starved by mistake. Click to work it.");
+    TIP(r.x,r.y,r.w,r.h, portLabel(pid)+"  [ "+(wreck?"WRECKED":shut?"SHUT":"OPEN")+" ]",
+      "The isolation valve in this nozzle. Every port has one, it costs nothing, and it commissions open. Shutting it takes the run landed here out of the network entirely - which is how a leak is cut out of a live plant, and equally how a loop is starved by mistake. "+(wreck?"This one is WRECKED: it is jammed where it stood and takes no orders until the repair party has it.":"Click to work it."));
   });
 }
 /* ══ THE RUN NOW BEING DRAGGED ══
@@ -2948,6 +2965,9 @@ function drawPlant(y0,L,vh,vx,vw){
      Deferred, it is also pushed LAST, and the hit test takes the last widget -
      so the strip wins the press it is standing on. */
   const hovCtl=[];
+  // own pass after the tags: the mark hangs above its box, into the cell of the
+  // machine above, so with that machine's tags it was buried by its neighbour
+  const wdots=[];
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
     const fit = fitted(p), live = L && fit;
@@ -2997,12 +3017,7 @@ function drawPlant(y0,L,vh,vx,vw){
     const symFull = p.role==="tank";
     if(fit && (symFull || h-sh-nameH > 0))
       drawSym(p, x, symFull?y:y+nameH, w, symFull?h:h-sh-nameH, ink, L);
-    if(dmgd){ hatch(x+3,y+3,w-6,h-6,C.red,.4); cornerTab(x+w,y,9,C.red);
-      // a wrecked machine that is still energised. It dies down as the repair
-      // party gets on top of it, so the effect tracks the work, not just the hit
-      fxSparks(x+4,y+4,w-8,h-sh-8,fxEase(p.id+":dmg",L.repair&&L.repair.id===p.id?
-        1-clamp(L.repair.t/L.repair.need,0,1):1),C.red);
-    }
+    if(dmgd) hatch(x+3,y+3,w-6,h-6,C.red,.4);
     else if(!p.access && p.grp!=="shield" && fit) cornerTab(x+w,y,9,C.amber);
     if(L&&fit){ const al=annLamp(p.id); if(al) lamp(x+10,y+11,al); }
     /* THE BENCH'S OWN ALARM MARK - it has no lamp. It stood at x+6,y+8, which
@@ -3011,6 +3026,7 @@ function drawPlant(y0,L,vh,vx,vw){
        in the margin over the box, and in the deferred pass so nothing lands on
        top of it. */
     const wdot = !L && fit && !dmgd ? warnFor(p.id) : null;
+    if(wdot) wdots.push(()=>dot(x+6,y-7,8,wdot));
     /* A PART IN LIMBO KEEPS THE MARK THE DROP PREVIEW GAVE IT. Same dash, same
        red, same wash as partGhost() paints under the hand: the picture that
        said "this will not fit" and the picture that says "this does not fit"
@@ -3072,8 +3088,6 @@ function drawPlant(y0,L,vh,vx,vw){
          depends on the label at all - it is on the glyph. */
       if(!nameH && (p.role!=="fitting" || hovd || on))
         tag(nmw,x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(stw?C.amber:(on?C.amber:C.ink2)));
-      // the bench's alarm mark, over the label and last, so nothing buries it
-      if(wdot) dot(x+6,y-7,8,wdot);
       /* THE VALUE WEARS ITS MACHINE'S WORST ALARM, and grey when there is
          nothing wrong. Not a second opinion: annLamp() is the SAME table and
          the SAME predicate as the lamp already drawn on this box, so the number
@@ -3146,6 +3160,11 @@ function drawPlant(y0,L,vh,vx,vw){
      a dial and not over it - and because an effect is not an instrument: the
      FLOW METERS switch must not be able to switch off the picture of a hole. */
   if(L) pipeBreaks(L);
+  /* ...and the compartment going up goes down at the same seam, for the same
+     two reasons: an effect is behind an instrument, and no menu switch may be
+     able to turn off the picture of an explosion. The BLAST layer is the
+     survey of what one LEFT; roomBurnFx() is the one happening. */
+  if(L) roomBurnFx(L);
   layerPass("over",L);          // instruments and annotations, on top of the machines
   /* THE PRESSURIZER'S DIAL IS NOT A LAYER. It rode the FLOW METERS switch, and
      that switch is about the three readings a RUN carries; this gauge is not on
@@ -3166,6 +3185,7 @@ function drawPlant(y0,L,vh,vx,vw){
   pipeStackFlush();             // every run reading, one plate per stack
   if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
   for(const t of tags) t();     // every name and value, over the pipework
+  for(const d of wdots) d();    // ...and every alarm mark over all of them
   for(const c of hovCtl) c();   // ...and a valve's handles over the names too
   // ...and the hovered port's ring last of all: it marks a joint the pipework,
   // the tags and the layers all draw across (drawPortValves(), above)

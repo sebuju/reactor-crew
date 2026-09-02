@@ -197,28 +197,32 @@ const LAYERS={
      a real answer on an uncommissioned arrangement and a room temperature is
      not, because a room is only hot once machines are running in it. The
      bench skips them.
-     THREE OF THE FIVE SHIP OFF, and the two that do not are the two that draw
+     FOUR OF THE FIVE SHIP OFF, and the one that does not is the one that draws
      NOTHING on a healthy plant. That is the whole test, and it is a better one
      than "a survey is asked OF the plant": AIR TEMP, OXYGEN and PART TEMP
      paint every cell or every box the moment they are on, so leaving them on
      would make the first look at the machines a look at an overlay - the same
-     argument every radiation layer makes. H2 CLOUD and BLAST paint nothing at
-     all until there is hydrogen in the room or a bang in it, and both are
-     events you cannot answer if you find out about them by remembering to ask.
-     A layer that is silent until it matters is an ANNUNCIATOR, and an
-     annunciator is not switched on when you want the alarm. */
+     argument every radiation layer makes. H2 CLOUD paints nothing at all until
+     there is hydrogen in the room, and that is an event you cannot answer if
+     you find out about it by remembering to ask: a layer that is silent until
+     it matters is an ANNUNCIATOR, and an annunciator is not switched on when
+     you want the alarm.
+     BLAST SHIPPED ON UNDER THAT SAME RULE AND HAS LEFT IT, because the reading
+     stopped being an event. It is the high-water mark now, so it paints for
+     the rest of the run over every cell that has ever been hurt - which is a
+     SURVEY of past damage, not an annunciator, and a survey is asked for. */
   roomz:{group:"COMPARTMENT", label:"AIR TEMP",    seam:"under", data:"room", live:true, on:false,
         draw:roomZones,
         tip:"Air temperature in every cell of the compartment, as a survey map: five bands from AMBIENT to UNTENABLE. Heat is a place. It comes off every hot surface, it comes in a flood out of anything venting steam into the room instead of into a tank, a machine is a WALL to it, and the only sink is the hull - so a compact plant runs hotter than a spread-out one. The band edges are the machines' own limits, not round numbers."},
   roomh:{group:"COMPARTMENT", label:"H2 CLOUD",   seam:"under", data:"room", live:true, on:true,
         draw:roomH2Layer,
-        tip:"Where the hydrogen off the cladding has ended up. It leaves the primary with the steam, at whatever hole the steam left through, and then it is a gas fourteen times lighter than air, collecting under the deckhead of a SEALED compartment - the only thing that takes it out again is the ventilation set, or a fire. Red is at or over 4% by volume; amber and moving is a flame front, and how fast it crosses a cell is a property of the mixture. This is the Fukushima sequence, drawn."},
+        tip:"Where the hydrogen off the cladding has ended up. It leaves the primary with the steam, at whatever hole the steam left through, and then it is a gas fourteen times lighter than air, collecting under the deckhead of a SEALED compartment - the only thing that takes it out again is the ventilation set, or a fire. VIOLET is the gas, and the hard violet line is the 4 % flammable limit: inside it, the room is a bomb waiting for something at 773 K. Amber and moving is a flame front, and how fast it crosses a cell is a property of the mixture. No figure is printed - point at a cell for the reading. This is the Fukushima sequence, drawn."},
   roomo:{group:"COMPARTMENT", label:"OXYGEN",     seam:"under", data:"room", live:true, on:false,
         draw:roomO2Layer,
         tip:"What is left in each cell to burn WITH. It draws DEPLETION only - a cell holding what air actually holds prints nothing, because the question is where a fire has eaten its own air. Blue and labelled is under 5% by volume, the limiting oxygen concentration: nothing ignites there whatever else is in it, which is how a sealed corner smothers its own fire and leaves the hydrogen unburnt."},
-  roomp:{group:"COMPARTMENT", label:"BLAST",      seam:"under", data:"room", live:true, on:true,
+  roomp:{group:"COMPARTMENT", label:"BLAST",      seam:"under", data:"room", live:true, on:false,
         draw:roomPLayer,
-        tip:"Overpressure above ambient, in kPa, banded against the machines' own limits rather than round numbers: 15 takes a radiator panel, 20 a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel. The compartment relieves itself in about half a second, so this is a PEAK HOLD, the way a real blast gauge is: it shows the worst each cell has ever seen and bleeds it away over the next few seconds. The cells the wave is actually in pulse. A blast is instantaneous: a machine either survives the peak its own cells saw or it does not."},
+        tip:"What a blast did to each cell, and it STAYS. Overpressure is banded against the machines' own limits rather than round numbers: 20 kPa takes a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel - blue, green, amber, red, bright red. The compartment relieves itself in about half a second, so what is drawn is the HIGH-WATER MARK: the worst each cell has ever seen, never fading, dark with soot in proportion to it and coloured by what that pressure was enough to break. A compartment that has been blown apart three times looks like it, and stays that way until something cleans it. The cells the wave is in right now pulse. No figure is printed - point at a cell for the reading."},
   roomc:{group:"COMPARTMENT", label:"PART TEMP",  seam:"over",  data:"room", live:true, on:false,
         draw:roomPart,
         tip:"What each machine is standing in, in kelvin, coloured against what THAT machine was built for. The room field says the compartment is hot; this says which box is about to be damaged by it. Structure - shielding, containment, the core catcher - prints nothing, because a room temperature is not how any of them fails."},
