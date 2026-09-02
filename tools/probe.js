@@ -19,7 +19,8 @@ const M=require('./bundle').headless(
  'crossTies,selfRuns,designIssues,loopMap,tankCircuit,tankPrimary,tankIds,tankKg,'+
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
  'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
- 'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol}');
+ 'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,'+
+ 'plantPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -103,6 +104,47 @@ function dump(s,label){
 const CASES={
   stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
   loops4(){ const s=withPlant(null,{loops:4}); run(s,PSEC); dump(s,"stock plant, 4 loops"); },
+  /* Every whole-plant preset, flown, printing what it does and what stopped
+     it. Disposable and assertion-free like every case here. */
+  presets(){
+    const PRE=M.PLANTPRE();
+    const only=(process.argv.find(a=>/^--pre=/.test(a))||"").split("=")[1];
+    const pick=only?only.split(",").map(Number):PRE.map((_,i)=>i);
+    console.log("\nname        MWe    Tavg    shell P / design  lift  burst   sgLvl  dmg   died");
+    for(const i of pick){
+      M.plantPreset(i); M.buildLayout(); M.commission();
+      const s=M.S(); s.diceOff=true;
+      let died="-", t=0;
+      for(let k=0;k<PSEC*50;k++){ M.step(0.02); t=k*0.02;
+        const id=M.sgIds()[0];
+        if(s.breach)                      { died="BREACH "+t.toFixed(0)+"s"; break; }
+        if(id&&s.sgBurst&&s.sgBurst[id])  { died="SG BURST "+t.toFixed(0)+"s"; break; }
+        if(s.turbTrip)                    { died="TURB TRIP "+t.toFixed(0)+"s"; break; }
+        if(s.condLost)                    { died="VACUUM "+t.toFixed(0)+"s"; break; }
+        if(s.scrammed)                    { died="SCRAM "+t.toFixed(0)+"s"; break; }
+        if(s.dmg>1)                       { died="DAMAGE "+t.toFixed(0)+"s"; break; } }
+      const id=M.sgIds()[0], dp=M.sgDesignP();
+      const sp=id?M.secP(s,id):0;
+      if(process.argv.some(a=>a==="--why")){
+        const P=M.P(), n=M.sgIds().length;
+        const dT0=P.Tref-M.tsatSec(dp), dTnow=s.Tavg-M.tsatSec(sp);
+        console.log("  "+PRE[i][0]+"  Tref "+f(P.Tref,1)+"  tsat(des) "+f(M.tsatSec(dp),1)+
+          "  dT0 "+f(dT0,1)+"  dTnow "+f(dTnow,1)+
+          "\n    sgUA "+f(P.sgUA,1)+"  flowK "+f(P.flowK,4)+"  n0 "+f(P.n0,4)+
+          "  n "+f(s.n,4)+"  rise "+f(M.steamRise(),0)+
+          "\n    qIn(fit) "+f(n*P.sgUA*Math.pow(P.flowK,0.8)*dT0/1000,1)+" MW"+
+          "  qIn(now) "+f(n*P.sgUA*Math.pow(P.flowK,0.8)*dTnow/1000,1)+" MW"+
+          "  rated*n0 "+f(P.n0*P.rated,1)+" MW"+
+          "\n    steamRef "+f(P.steamRef,1)+"  raised "+f(s.steamBy&&s.steamBy[id],1)+
+          "  left "+f(s.steamTo&&s.steamTo[id],1)+"  swallow "+f(P.swallow,1)+
+          "  load "+f(s.load,3));
+      }
+      console.log(PRE[i][0].padEnd(12)+f(M.mwE(s),0).padStart(6)+f(s.Tavg,1).padStart(8)+
+        (f(sp,3)+" /"+f(dp,2)).padStart(15)+f(sp/Math.max(dp,1e-9),3).padStart(7)+
+        f(M.sgLiftP(),2).padStart(6)+f(M.sgBurstP(id),2).padStart(7)+
+        (id?f(M.sgLvl(s,id),0):"-").padStart(7)+f(s.dmg,1).padStart(6)+"   "+died);
+    }
+  },
   selfrun(){ const s=withPlant(M=>{
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
       M.seedRun(a,b); });
