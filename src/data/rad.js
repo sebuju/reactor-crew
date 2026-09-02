@@ -104,9 +104,12 @@ function radGeom(){
   // so laying a cell of pipe moves the field the same way sliding a shield does
   const sig=laySig()+"|"+pipeSig();
   if(radCache && radCacheSig===sig) return radCache;
-  const g=occupied(null), core=partOf("core"), cc=cen(core);
+  /* A BLANK GRID HAS NEITHER VESSEL NOR CONTROL STATION. The field is still
+     solved - there is simply nothing shining and nowhere the crew stand, and
+     radSrc() answers 0 for a core that is not there. */
+  const g=occupied(null), core=roleOf("core"), cc=core?cen(core):{x:GW/2,y:GH/2};
   const K={core:radKernel(g,cc.x,cc.y), sg:[], tank:[],
-           crew:partOf("ctrl")||core};
+           crew:roleOf("ctrl")||core};
   for(const p of LAY.parts) if(p.role==="sg"){
     const c=cen(p); K.sg.push(radKernel(g,c.x,c.y));
   }
@@ -201,7 +204,10 @@ function radSolve(K,q){
 
 // The worst seat inside the component's own footprint, clamped so nothing
 // downstream ever has to defend against a value it was not written for.
+/* A PLACE THAT IS NOT ON THE DRAWING READS THE FLOOR. A blank grid has no
+   control station, so there is nowhere for the crew to take a dose. */
 function radAt(f,p){
+  if(!p) return RAD_FLOOR;
   let v=0;
   for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
     if(X>=0&&X<GW&&Y>=0&&Y<GH) v=Math.max(v,f[Y*GW+X]);

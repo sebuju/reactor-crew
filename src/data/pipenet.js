@@ -1226,12 +1226,15 @@ function foldMap(){
   slot.set(1,m);
   return m;
 }
-const coreFold = raw => foldMap()[raw] || raw;
+// A NODE THAT IS NOT THERE IS NOT A PLACE. A blank grid has no vessel, so a
+// reader that asks "at the core" is asking about nothing and gets nothing.
+const coreFold = raw => raw==null ? null : (foldMap()[raw] || raw);
 /* WHICH CIRCUIT A NODE IS ON. The graph is keyed on partId+face and a FOLDED
    node is the bare part id, so the face is stripped only when the whole name
    is not itself a part. Cached on the graph, because the advection sweep asks
    it once per node per tick. */
 function circOfNode(nid){
+  if(nid==null) return -1;
   const G=nodeGraph(), slot=graphSlot("circOfNode");
   const hit=slot.get(nid); if(hit!==undefined) return hit;
   let c=G.circuit[nid];
@@ -3183,45 +3186,79 @@ const faceMid = (n, i, step) => { const k = step || 1;
   return Math.floor((n-1)/2) + (i%2 ? -k*Math.ceil(i/2) : k*Math.ceil(i/2)); };
 function buildStockPlumbing(opt){
   const loops = (opt && opt.loops) || 1;
-  /* THE HULL THIS PLANT NEEDS. The engine room stands aft of the last loop
-     (buildLayout()), so a four-loop reference plant is a longer ship - and it
-     says so here rather than leaving its own turbine standing outside the
-     skin. The player may still drag it either way afterwards. */
+  /* THE HULL THIS PLANT NEEDS. The engine room stands aft of the last loop, so
+     a four-loop reference plant is a longer ship - and it says so here rather
+     than leaving its own turbine standing outside the skin. The player may
+     still drag it either way afterwards. */
   D.gw = 60 + 7*(loops-1); D.gh = 34;
+  /* WHAT THIS SHIP DOES NOT CARRY. A preset that placed an injection tank and
+     a relief valve and then took them off again had built a plant it did not
+     mean; this simply never places them, and every nozzle and run that would
+     have gone to one is skipped with it. */
+  const drop = new Set((opt && opt.drop) || []), has = id => !drop.has(id);
   for(const k   in D.pipes) delete D.pipes[k];
   for(const pid in D.ports) delete D.ports[pid];
   for(const id  in D.tanks) delete D.tanks[id];
   for(const id  in D.fittings) delete D.fittings[id];
-  // and every part goes back to the cell THIS loop count lays it at: a stored
-  // cell is a drag on the plant being torn down, not on the one being built
-  for(const id  in D.cells) delete D.cells[id];
-  /* Loops 1..3's generators and pumps are PLACED parts, so they survive a
-     rebuild of D and have to be torn down by hand - the same sweep
-     makeLoops() did, for the same reason. Loop 0's sg0/pump0 are fixed slots
-     buildLayout() places unconditionally and are never touched. */
-  const placed = id => LAY && LAY.parts.some(p => p.id === id);
-  for(let i=1;i<=3;i++){
-    if(placed("sg"+i))   removePart("sg"+i);
-    if(placed("pump"+i)) removePart("pump"+i);
-  }
-  /* ══ MEASURE THE BOXES THIS PLANT HAS, NOT THE LAST ONE'S ══
-     Every nozzle below is an OFFSET taken off a part's own w/h, and a box
-     follows a real quantity - radW()/radH() off panel area, tankW()/tankH()
-     off volume. plantPreset() has just called designForget() and written this
-     plant's figures, so LAY is one plant out of date until something rebuilds
-     it: seeded against the previous ship, a panel's far-face nozzle landed
-     inside the new panel and its cooling runs were dropped in silence. */
+  /* AND EVERY MACHINE, because a preset is the whole ship. There is no fixed
+     slot left for a rebuild to conjure back, so the plant being torn down goes
+     away completely and the one being built is placed gesture for gesture. */
+  for(const id  in D.machines) delete D.machines[id];
+  for(const id  in D.name)     delete D.name[id];
   buildLayout();
+
+  /* ══ THE MACHINERY, PLACED ══
+     Every box below goes on the board through mintMachine() - the same call
+     ADD MACHINE makes - so a preset cannot describe a plant the player could
+     not have built, and every one of them can be dragged or taken off again.
+     ORDER IS THE NAMING: an ordinal is read off the drawing in board order
+     (buildLayout()), so the coolant pumps are minted before the feed and
+     circulating water pumps and read RCP 1..n. */
+  const GHc=D.gh, BOT=GHc-4;
+  const X = i => 26+7*i;                     // a loop's own column
+  const AFT = 46+7*(loops-1), FEEDX = 26+7*loops;
+  mintMachine("core","core",6,13);   // and its rod drives, which ride the head
+  for(let i=0;i<loops;i++) mintMachine("sg"+i,"sg",X(i),5);
+  for(let i=0;i<loops;i++) mintMachine("pump"+i,"pump",X(i),18);
+  mintMachine("turb","turb",AFT,11);
+  mintMachine("cond","cond",AFT,24);
+  /* ══ AND IT STANDS BELOW WHAT IT DRAWS ON ══
+     A pump takes suction on the face its casing says (ROLE.pump), and static
+     head is real in the solve - so a feed pump hung level with the turbine had
+     to LIFT its own condensate nine metres out of a condenser sitting at
+     0.008 MPa, pulled its own suction below zero and cavitated on a plant
+     nobody had touched. It sits under the condenser's outlet instead, which is
+     where a real one is and for the identical reason. */
+  mintMachine("feed","pump",FEEDX,GHc-5);
+  setPartName("feed","FEED PUMP");
+  mintMachine("ctrl","ctrl",0,BOT);
+  if(has("cont")) mintMachine("cont","cont",10,BOT);
+  mintMachine("bkp","bkp",AFT+10,11);
+  /* ══ THE PANELS, ON THE KEEL ══
+     Two of them rather than one because a radiator is what gets shot, and the
+     hull ring is already ten times more likely to be hit - a STARTING DESIGN,
+     not a count in code. SPACED, not shoulder to shoulder: sitting directly
+     under the condenser they had no usable nozzle at all.
+     ANCHORED BY THE BOTTOM EDGE, which is what the cell stores for a panel
+     (cellStore()), so its face stays on the skin whatever area it is given. */
+  const radAt=(id,x)=>{ mintMachine(id,"radiator",x,0);
+    D.machines[id].cell=[x,BOT+3]; buildLayout(); };
+  radAt("rad0",AFT-10); radAt("rad1",AFT-2);
+  /* ── AND SOMETHING HAS TO TURN THE CIRCULATING WATER ──
+     The condenser rejects into a loop, and a loop with nothing pushing it
+     carries nothing. It is a pump like every other pump: hit it, or lose the
+     board it feeds off, and the sink goes.
+     FOUR ROWS ABOVE THE PANEL'S OWN TOP, never a fixed row. The joint below it
+     is two nozzles meeting across a cell boundary, so it needs exactly one
+     free row each. It KEEPS ITS COLUMN and takes its suction on the RIGHT
+     FACE: a full-height pump standing here reaches up into the reserve tank's
+     rows, so a top nozzle has no cell to stand in. */
+  mintMachine("cwp","pump",AFT-9,BOT+1-partOf("rad0").h-pumpH("cwp"));
+  setPartName("cwp","CIRC WATER PUMP");
   /* ══ THE STOCK SHIELDING ══
      Three blocks between the reactor and the control room, placed exactly the
-     way ADD SHIELD places one - so they can be dragged, and taken away again,
-     like anything else the player put down. */
-  for(let i=0;i<3;i++){
-    if(placed("shld"+i)) removePart("shld"+i);
-    placePart(() => ({id:"shld"+i, name:"SHIELD", w:3, h:3, x:18+3*i, y:D.gh-4,
-      col:"#6d8f98", grp:"shield", role:"shield",
-      tip:"A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access."}));
-  }
+     way ADD SHIELD places one. */
+  for(let i=0;i<3;i++) mintMachine("shld"+i,"shield",18+3*i,GHc-4);
 
   /* ══ THE TANKS ══
      A STARTING DESIGN, exactly like the default rod count - not code. Every
@@ -3231,8 +3268,14 @@ function buildStockPlumbing(opt){
      the way its own bench panel would set it. */
   // buildLayout AFTER the assign as well: a tank's BOX follows its `vol`, so
   // mintTank()'s own rebuild is against the default size, not this one's
-  const tank = (id,x,y,cfg) => { mintTank(id,x,y); Object.assign(D.tanks[id],cfg); buildLayout(); };
-  const fitting = (id,x,y,cfg) => { mintFitting(id,x,y); Object.assign(D.fittings[id],cfg); return id; };
+  const tank = (id,x,y,cfg) => { if(!has(id)) return null;
+    mintTank(id,x,y); Object.assign(D.tanks[id],cfg); buildLayout(); return id; };
+  const fitting = (id,x,y,cfg) => { if(!has(id)) return null;
+    mintFitting(id,x,y); Object.assign(D.fittings[id],cfg); return id; };
+  // a nozzle and a run are skipped with the machine they were going to: a
+  // line with one end missing is not a shorter line, it is no line
+  const port = (pid,dx,dy) => pid && partOf(pid) ? seedPort(pid,dx,dy) : null;
+  const run  = (a,b,...rest) => (a && b) ? seedRun(a,b,...rest) : null;
 
   tank("hpi",1,19,{ name:"HPI TANK", col:"#5aa9d6",
     tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
@@ -3247,8 +3290,9 @@ function buildStockPlumbing(opt){
      needs the next cell too, so how far out this stands follows its own
      WIDTH - which follows its volume now. Set after minting, because the box
      does not exist until the volume is on it. */
-  D.tanks.hpi.cell = [Math.max(0, partOf("core").x - partOf("hpi").w - 2), 19];
-  buildLayout();
+  if(D.tanks.hpi){
+    D.tanks.hpi.cell = [Math.max(0, partOf("core").x - partOf("hpi").w - 2), 19];
+    buildLayout(); }
 
   /* ══ THE PRESSURIZER IS A TANK ══
      `hold` and nothing else. It is minted through the same tank() helper as
@@ -3324,20 +3368,6 @@ function buildStockPlumbing(opt){
      off with the line, which is the one case it exists for. */
   const svTip="The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead. It stands against the skin, so what it blows goes outside; move it inboard and the same steam lands in the engine room.";
 
-  /* ══ EVERY LOOP'S MACHINERY, THEN EVERY LOOP'S PLUMBING ══
-     Loop 0 used to be laid first and the rest bolted on afterwards, which is
-     why its own main steam line ran down the row every other loop needed and
-     an added generator could not reach the turbine at all. The generators and
-     the pumps go on the board FIRST - so buildLayout() knows how far aft the
-     engine room stands - and then one pass lays the same six runs per loop. */
-  const X = i => 26+7*i;                     // a loop's own column
-  const AFT = 46+7*(loops-1), FEEDX = 26+7*loops;
-  for(let i=1;i<loops;i++){
-    placePart(() => ({id:"sg"+i, name:"STEAM GEN "+(i+1), w:3, h:6, x:X(i), y:5,
-      col:"#5fd2e2", grp:"loop"+i, tip:"", role:"sg"}));
-    placePart(() => ({id:"pump"+i, name:"RCP "+(i+1), w:0, h:0, x:X(i), y:18,
-      col:"#57d38c", grp:"loop"+i, tip:"", role:"pump"}));
-  }
   /* ══ ONE MAIN STEAM HEADER, ONE TEE PER GENERATOR ══
      A line per generator cannot be drawn: the safety valves must stand on the
      top hull, so they own the two rows a second and third steam lane would
@@ -3405,21 +3435,21 @@ function buildStockPlumbing(opt){
   /* dx 1, not the corner: the fourth cold return IS the corner (faceMid spreads
      4,2,6,0), and two ports cannot share a cell - so a four-loop plant used to
      lose its injection line to its own last loop. */
-  const pCoreHpi  = seedPort("core",1,12);
+  const pCoreHpi  = has("hpi") ? seedPort("core",1,12) : null;
   /* OFF THE VESSEL'S OWN BOX, never off the stock ship's - the same move the
      radiator nozzles already make. A tank's footprint follows its VOLUME now
      (tankW/tankH), so a nozzle authored at a literal 3x6 lands outside it. */
   const tankBox = id => { const p=partOf(id); return {w:p?p.w:1, h:p?p.h:1}; };
   const pzrB = tankBox("pzr"), relB = tankBox("reltk"), hpiB = tankBox("hpi");
   const pPzrSurge = seedPort("pzr",1,pzrB.h);
-  const pPzrRel   = seedPort("pzr",pzrB.w,1);
+  const pPzrRel   = has("rv0") ? seedPort("pzr",pzrB.w,1) : null;
   const pTeeL     = seedPort(tee0,-1,0);
   const pTeeT     = seedPort(tee0,0,-1);
   const pTeeR     = seedPort(tee0,1,0);
-  const pRvL      = seedPort(rv0,-1,0);
-  const pRvR      = seedPort(rv0,1,0);
-  const pRelTk    = seedPort("reltk",-1,clamp(2,0,relB.h-1));
-  const pHpi      = seedPort("hpi",hpiB.w,clamp(2,0,hpiB.h-1));
+  const pRvL      = port(rv0,-1,0);
+  const pRvR      = port(rv0,1,0);
+  const pRelTk    = port("reltk",-1,clamp(2,0,relB.h-1));
+  const pHpi      = port("hpi",hpiB.w,clamp(2,0,hpiB.h-1));
   const pEfw      = seedPort("efw",0,-1);      // out of the top, up and along into the tie
   // ONE steam nozzle, because there is one main steam HEADER - see the tees below
   const pTurbT    = seedPort("turb",4,-1);
@@ -3428,8 +3458,7 @@ function buildStockPlumbing(opt){
   const pCondR    = seedPort("cond",9,faceMid(5,0));
   /* THE COOLING CIRCUIT. A panel is plumbed now, so the condenser's water side
      runs down into it and the two are their own connected component - which is
-     all "COOLING" means. The second panel ships as a SPARE with no nozzle: it
-     still radiates, because radArea() is geometry, and the bench can pipe it.
+     all "COOLING" means. Both panels are in the line, in series.
      The circulating water pump stands in that line, so the circuit solves at a
      real flow: pull it off the drawing and the condenser rejects nothing,
      which is what a plant with nothing turning its cooling water reads. */
@@ -3505,9 +3534,9 @@ function buildStockPlumbing(opt){
      hot leg came to land on a generator's feedwater nozzle. */
   seedRun(pCoreHot, pTeeL);                       // the hot leg out of the vessel
   seedRun(pPzrSurge, pTeeT);                      // the surge line, down onto the tee
-  seedRun(pPzrRel, pRvL);                         // relief: vessel to valve...
-  seedRun(pRvR, pRelTk);                          // ...and valve to tank
-  seedRun(pHpi, pCoreHpi, true);                  // injection, onto the vessel's floor
+  run(pPzrRel, pRvL);                             // relief: vessel to valve...
+  run(pRvR, pRelTk);                              // ...and valve to tank
+  run(pHpi, pCoreHpi, true);                      // injection, onto the vessel's floor
   seedRun(pTurbB, pCondT, true);                  // exhaust
   /* condensate: aft of the machinery, down to the keel and forward into the
      feed pump's suction nozzle. The suction sits BELOW the condenser it draws
@@ -3569,7 +3598,9 @@ function buildStockPlumbing(opt){
 
   buildLayout();
 }
-buildStockPlumbing();
+/* NO CALL HERE. A BLANK GRID IS WHERE A NEW PLANT STARTS: nothing is on the
+   ship because the code put it there, and the stock ship is the first row of
+   PLANTPRE below - a preset like every other. */
 
 /* ══ WHOLE PLANTS YOU CAN START FROM ══
    ARCHPRE buys a reactor and redraws its core; this buys the SHIP around it.
@@ -3585,13 +3616,16 @@ buildStockPlumbing();
    does not call latLayMod(), so handing it to RBMK or HTGR would quietly take
    the graphite back out. */
 const PLANTPRE=[
+ ["STOCK PWR",{loops:1,arch:0,d:{cont:1,bkp:1,sg:0,chim:0.3}},
+  "The reference ship: one pressurised water loop, a pressurizer with a relief valve behind it, injection water, an emergency feedwater tie, a turbine, a condenser and two panels. Everything the other presets add or take away is measured against this."],
  ["NUSCALE",{loops:1,arch:0,lat:1,d:{cont:1,bkp:1,sg:0,pzr:0.8,chim:0.5}},
   "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
  ["BWR/4",{loops:2,arch:1,d:{cont:1,bkp:1,sg:0,pzr:0.7,chim:0.4}},
   "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
  ["BN-600",{loops:3,arch:3,d:{cont:2,bkp:2,sg:1,pzr:0.6,chim:0.4}},
   "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it."],
- ["EPR",{loops:4,arch:0,lat:2,d:{cont:2,bkp:2,catcher:true,sg:0,pzr:1.3,chim:0.3}},
+ ["EPR",{loops:4,arch:0,lat:2,d:{cont:2,bkp:2,sg:0,pzr:1.3,chim:0.3},
+   place:[["catcher","catcher",6,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
  ["RBMK-1000",{loops:2,arch:2,d:{cont:0,bkp:1,sg:1,pzr:1.0,chim:0.3}},
   "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. Boiling the water ADDS reactivity here, so the plant hunts itself and the slow rods arrive late."],
@@ -3611,9 +3645,13 @@ function plantPreset(i){
   archPreset(q.arch);                    // buys the materials and redraws the core
   if(q.lat!=null) latPreset(q.lat);
   Object.assign(D,q.d);
-  buildStockPlumbing({loops:q.loops});   // tears the old loops down and lays the new ones
-  // BEFORE the tank writes: a dropped machine has no knobs left to set
-  for(const id of (q.drop||[])) removePartRuns(id);
+  /* WHAT THIS SHIP IS, laid gesture for gesture. `drop` is handed to the
+     builder rather than run afterwards, so a preset without an injection tank
+     never places one - it does not place one and take it off again. */
+  buildStockPlumbing({loops:q.loops, drop:q.drop});
+  // and anything this ship carries that the stock one does not, placed the
+  // same way ADD MACHINE places it
+  for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);
   /* ══ A FIGURE BAKED OFF A HALF-BUILT CORE IS NOT THIS PLANT'S ══
      designForget() at the top is not enough. archPreset() redraws the core in
@@ -3650,4 +3688,13 @@ function plantPreset(i){
      faults out instead of tripping on the first one; a row may still arm it. */
   D.start["byp:rps"] = true;
   Object.assign(D.start, q.start||{});
+}
+/* THE EMPTY SHIP, which is the one plant no preset can describe: it is where a
+   new design starts, so it is the same call with nothing laid after it. */
+function plantClear(){
+  designClear();
+  latDefault();
+  dTouch();
+  LAY=null; layoutMetrics();
+  designForgetBags();
 }
