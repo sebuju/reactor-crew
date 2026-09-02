@@ -1157,8 +1157,11 @@ function ctlFor(p,live,split){
   if(roleHead(p.role)){
     const pri = primaryPump(p.id);
     return [[
-    {kind:"sld",flex:1,k:pri?"flowDem":p.id+":pumpDem",def:1,sc:100,val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
-     dem:()=>(pri?flowDemPri(S):(S.flowDemBy[p.id]??1))*100,
+    // the DEFAULT is the machine's own (pumpDem0, step.js), so the bench draws
+    // a standby train stopped rather than at rated
+    {kind:"sld",flex:1,k:pri?"flowDem":p.id+":pumpDem",def:pri?1:pumpDem0(p.id),sc:100,
+     val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
+     dem:()=>(pri?flowDemPri(S):(S.flowDemBy[p.id]??pumpDem0(p.id)))*100,
      /* THE MARK IS THE TRIP, so it stands on any pump the CORE's own circuit
         carries - the low-flow setpoint is about the water going past the fuel
         and about nothing else. */
@@ -2435,13 +2438,9 @@ function readoutsFor(p,s){
         : band(tankLvl(s,id),0,100,[[15,C.red,"LOW"],[100,C.cyan,"FULL"]],{dp:1}),
       "How much is left in it. It is not an infinite reservoir - run it dry and there is nothing behind it, and fill it past 100 % and what will not fit leaves the plant.");
     add("TANK PRESS",tankP(s,id).toFixed(2)+" MPa",null,
-      t.pump
-        ? "What the pumps behind it are holding. Steady until the tank is dry, and gone with the bus in a blackout - a tank with a gas charge instead is the one injection path a blackout does not kill."
-        : t.gas
-          ? "The gas charge behind the contents. It needs no electricity, so it still works in a blackout - and it moves as the level moves, because the gas is expanding or being compressed."
-          : "Nothing is holding this tank up. With neither a pump nor a gas charge it sits at zero and can only ever be filled.");
-    if(t.pump) add("PUMP RATING",tankPumpQ(id).toFixed(0)+" kg/s",null,
-      "What the pump behind this tank can actually swallow. Head alone would make it an unlimited source; this is what stops it running out, and it is why the line delivers what it does rather than whatever the pipe would pass. Unstated, it is sized to empty the vessel over "+TANK_PUMP_T+" s.");
+      t.gas
+        ? "The gas charge behind the contents. It needs no electricity, so it still works in a blackout - and it moves as the level moves, because the gas is expanding or being compressed."
+        : "Nothing is holding this tank up. It is vented to the compartment, so it sits at compartment pressure - anything that has to be pushed out of it needs a pump on the board.");
     add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
       "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
     if(tankPrimary(id)){
@@ -2787,7 +2786,12 @@ function drawPlant(y0,L,vh,vx,vw){
   /* the content box is the grid PLUS the elevation gutter, so the EL labels
      that stand outside the hull are inside what the view fits and cannot be
      clipped away by the letterbox. */
-  vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, GW*CELL+EL_GUT, GHp);
+  /* ...and while a wall is being dragged the content box covers the GHOST too:
+     the board is not re-laid until the release, so a hull growing past the
+     current grid would otherwise be drawn outside the clip. */
+  const dh=ui.drag&&ui.drag.type==="hull"?ui.drag:null;
+  const fitW=Math.max(GW,dh&&dh.gw||0)*CELL, fitH=Math.max(GHp,(dh&&dh.gh||0)*CELL);
+  vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, fitW+EL_GUT, fitH);
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   { const d=vPad();   // the halved letterbox - see vPad() in core/ui.js
@@ -2817,15 +2821,27 @@ function drawPlant(y0,L,vh,vx,vw){
      growing off the bow or the deck would have to rewrite D.pipes and every
      fixed slot's literal. Bench only - a commissioned ship is welded. */
   if(!L){
-    const grab=(x,y,w,h,edge,title,body)=>{
+    /* THE HANDLE IS PUT AWAY UNTIL THE HAND IS ON ITS OWN WALL - the same move
+       a valve's strip makes. The hit stays live either way: the zone is the
+       wall band the handle sits in, so nothing can be reached without it
+       showing first, and the drag survives the pointer leaving the band. */
+    const grab=(x,y,w,h,edge,zone,title,body)=>{
       const wd=push({x,y,w,h,type:"hull",edge});
-      fillRect(x,y,w,h, hov(wd)?C.amber:"#3a2a22");
+      const on = hovHold({...zone,v:1,host:ui.host}) || (ui.drag&&ui.drag.type==="hull"&&ui.drag.edge===edge);
+      if(on) fillRect(x,y,w,h, hov(wd)?C.amber:"#3a2a22");
       TIP(x,y,w,h,title,body);
     };
-    grab(GX+GW*CELL-3, GY+GHp*0.25, 6, GHp*0.5, "r", "AFT BULKHEAD",
+    grab(GX+GW*CELL-2, GY+GHp*0.35, 4, GHp*0.3, "r",
+      {x:GX+(GW-1)*CELL, y:GY, w:CELL, h:GHp}, "AFT BULKHEAD",
       "Drag it aft to make the ship longer, forward to make it shorter. Every machine standing outside the hull is marked and blocks commissioning until it is dragged back in.");
-    grab(GX+GW*CELL*0.25, GY+GHp-3, GW*CELL*0.5, 6, "b", "KEEL",
+    grab(GX+GW*CELL*0.35, GY+GHp-2, GW*CELL*0.3, 4, "b",
+      {x:GX, y:rowTop(GH-1), w:GW*CELL, h:GY+GHp-rowTop(GH-1)}, "KEEL",
       "Drag it down to make the ship deeper, up to make it shallower. Every machine standing outside the hull is marked and blocks commissioning until it is dragged back in.");
+    /* THE GHOST THE WALL WEARS WHILE IT MOVES. The board itself is not re-laid
+       until the release, so the size under the hand is drawn rather than built:
+       one rectangle, in cells the grid already knows how to measure. */
+    if(ui.drag&&ui.drag.type==="hull"){ const d=ui.drag;
+      frame(GX, GY, (d.gw||GW)*CELL, (d.gh||GH)*CELL, C.amber); }
   }
 
   // dark casing, then the coloured fluid line inside it, both round-jointed
