@@ -5,30 +5,8 @@
    Everything in here goes on top of that: the fluid moving inside the run, and the
    instruments that say how much of it is moving.
 
-   The pipes used to carry a marching dash. A dash reads as a dotted line rather than
-   as fluid, its gaps break a thin run into pieces, and at low flow it crawls in a way
-   that looks like a dropped frame. What moves now is a PACKET - a bolus of water
-   sliding down the bore with a bright leading face, so a parcel visibly leaves the
-   core and arrives at the boiler.
-
-   Nothing here invents a flow. S.flowPos[k] is how far the fluid in that line has
-   travelled, integrated by the sim at the real rate, so a packet stops exactly when
-   its fluid does and the meters differentiate that same number rather than restating
-   a formula from step().
-
-   Two rules that the whole file exists to keep:
-
-   A PACKET IS OCCLUDED AT A NOZZLE, NEVER RESIZED. Clamping a packet to the pipe's
-   own length made the arriving one grow from a dot and the leaving one shrink back to
-   one. So the geometry is extended past both nozzles (pipePad) and the drawing is
-   clipped to the pipe's real corridor (pipeClip): a packet is born whole out on the
-   runway and is simply cut off where the pipe ends.
-
-   ANYTHING SHORT FADES ACROSS THE BOUNDARY. A long packet crossing a nozzle grows out
-   over its own length, which reads as sliding. A 2px bright cap does not - it went
-   from nothing to full white in about three frames, and a near-white mark switching on
-   and off at a fixed spot, twice per packet, at both ends of every run, was the most
-   distracting thing on the diagram. pipeEdge() ramps it instead.                   */
+   Nothing here invents a flow. S.flowPos[k] is what the sim integrated at the real
+   rate; the texture and the meters both read that one number.                    */
 
 /* s.flowPos is keyed by the same strings pipeNetwork() uses for its runs, so there is
    no kind -> key table to keep in step with anything. */
@@ -159,15 +137,6 @@ function pipeClip(g,hw,ext){
   }
   ctx.clip();
 }
-function pipeAt(g,s){
-  s=clamp(s,0,g.len);
-  for(const q of g.segs) if(s<=q.s0+q.L){
-    const t=Math.max(0,s-q.s0);
-    return {x:q.x+q.dx*t,y:q.y+q.dy*t,dx:q.dx,dy:q.dy};
-  }
-  const q=g.segs[g.segs.length-1];
-  return {x:q.x+q.dx*q.L,y:q.y+q.dy*q.L,dx:q.dx,dy:q.dy};
-}
 /* build a path covering arc length a..b; false if nothing of it lands */
 function pipeSub(g,a,b){
   a=Math.max(0,a); b=Math.min(g.len,b);
@@ -183,11 +152,14 @@ function pipeSub(g,a,b){
   }
   return !first;
 }
-/* how far inside the pipe a point is: 0 at the nozzle, 1 once it is clear */
-const PIPE_FADE=14;
-function pipeEdge(g,s){
-  const a=g.pad||0, b=a+(g.core==null?g.len:g.core);
-  return clamp(Math.min(s-a, b-s)/PIPE_FADE, 0, 1);
+function pipeAt(g,s){
+  s=clamp(s,0,g.len);
+  for(const q of g.segs) if(s<=q.s0+q.L){
+    const t=Math.max(0,s-q.s0);
+    return {x:q.x+q.dx*t,y:q.y+q.dy*t,dx:q.dx,dy:q.dy};
+  }
+  const q=g.segs[g.segs.length-1];
+  return {x:q.x+q.dx*q.L,y:q.y+q.dy*q.L,dx:q.dx,dy:q.dy};
 }
 
 /* ══════════ how fast each line is running ══════════
@@ -489,69 +461,59 @@ function pipeSteam(r,L){
   return seen ? clamp(x,0,1) : (RUN_VAPOUR[r.k]?1:0);
 }
 
-/* ══════════ the packets ══════════ */
+/* ══════════ the bubbles ══════════ */
 const PIPE_RUNWAY=60;
-/* ══ A WIDE PIPE CARRIES MORE PACKETS, NOT BIGGER ONES ══
-   THE PACKET IS NOT THE BORE. Stroking a slug at the pipe's own width meant a
-   wide run's packet was wide by construction, and a round cap adds half that
-   width at EACH end - so on a 5.6 px bore the shortest slug drawable was a
-   5.6 px circle. That is the one white ball: not a stream at all, one blob per
-   run, and no length short enough could break it up.
-   The slug has its own width (PIPE_SLUG_W, capped, so it stays a stream and
-   never a lane beside another one) and its own length, both flat; what the
-   bore buys is HOW MANY - the pitch is per hundred pixels of pipe, and that
-   count is linear in the bore. Wide run: a dense file of small packets down
-   the middle of a fat tube. Narrow run: the same packets, further apart. */
-const PIPE_SLUG_W=3;            // px across, whatever the bore - the cap is what made a ball
-const PIPE_SLUG_LEN=3;          // px along, before its two caps
-const PIPE_SLUG_PER100=2.2;     // slugs per 100 px per px of bore
-function pipeSlugs(g,ph,sp,col,w,st){
-  const body=Math.min(w,PIPE_SLUG_W)-(st>0.5?0.8:0);
-  const len=PIPE_SLUG_LEN*(1-st*0.3);
-  const gap=Math.max((len+body)*1.3, 100/(PIPE_SLUG_PER100*Math.max(w,0.5)))*(1+st*0.4);
+const PIPE_BUB_WALL=0.35;       // px of bore left clear: a parcel touching the wall reads as a burr
+const pipeHash = k => Math.imul(k^0x9e3779b1,2654435761)>>>0;
+const pipeRnd = (k,sh,m) => ((pipeHash(k)>>>sh)&m)/m;
+const pipeSeed = key => { let a=0; for(let i=0;i<key.length;i++) a=Math.imul(a^key.charCodeAt(i),16777619); return a>>>0; };
+/* A PARCEL IS A FIXED STEP IN BRIGHTNESS, NOT A FIXED TINT. One 0.55 toward
+   bright was measured on the feed line's blue and is nearly nothing on a hot
+   leg; the tint is solved for the STEP instead, so every run parts from its own
+   colour by the same amount. Lighter is the reading everywhere except a pipe
+   already too pale to lighten - steam - which goes dark, and by HALF the step:
+   a dark mark on a pale line reads far louder than a pale one on a dark line,
+   so the same number down is a hole in the pipe rather than a parcel in it. */
+const PIPE_BUB_DL=0.20;   // the step the feed line already had, which reads right
+const PIPE_BUB_DARK=0.5;
+const PIPE_BUB_COL={};
+const pipeLum = col => { const p=hexPack(col);
+  return (0.299*(p>>16&255)+0.587*(p>>8&255)+0.114*(p&255))/255; };
+function pipeBubCol(col){
+  let v=PIPE_BUB_COL[col];
+  if(v===undefined){
+    const lum=pipeLum(col);
+    v=lum>0.75 ? lerpC(col,C.bg,    clamp(PIPE_BUB_DL*PIPE_BUB_DARK/(lum-pipeLum(C.bg)),0.08,0.85))
+               : lerpC(col,C.bright,clamp(PIPE_BUB_DL/(pipeLum(C.bright)-lum),0.35,0.9));
+    PIPE_BUB_COL[col]=v;
+  }
+  return v;
+}
+function pipeStream(g,ph,sp,col,w,st,seed){
   const moving=Math.min(1,Math.abs(sp)/8);
   /* the bore is always there, so a stalled line is still a line */
   ctx.save(); ctx.globalAlpha=0.22; ctx.lineCap="square"; ctx.lineJoin="round";
   ctx.lineWidth=w; ctx.strokeStyle=col;
-  if(pipeSub(g,0,g.len)) ctx.stroke();
+  const any=pipeSub(g,0,g.len);
+  if(any) ctx.stroke();
   ctx.restore();
+  if(!any) return;
 
-  ctx.save(); ctx.lineCap="round"; ctx.lineJoin="round";
-  let s=((ph%gap)+gap)%gap-gap;
-  for(; s<g.len; s+=gap){
-    /* ══ AND THEY ARE NOT ALL ON THE CENTRELINE ══
-       Every slug rode the same line at the same size, so a file of them read
-       as one dashed stroke rather than as packets in a pipe. Each gets its own
-       place across the bore and its own size, off a hash of WHICH packet it is
-       - identity, not loop position, so the offset travels with the packet
-       instead of shimmering as the train slides past. There is only room to
-       move where the bore is wider than the packet, which is exactly where the
-       stack looked worst. */
-    const id=Math.round((ph-s)/gap), h=Math.imul(id^0x9e37,2654435761)>>>0;
-    const r1=((h>>>8)&1023)/1023, r2=((h>>>18)&255)/255;
-    const sz=body*(0.7+0.4*r2), off=(r1-0.5)*Math.max(0,w-sz-0.6);
-    const at=pipeAt(g,clamp(s,0,g.len));
-    ctx.save(); ctx.translate(-at.dy*off, at.dx*off);
-    /* A PACKET IS LIGHTER THAN ITS OWN PIPE, or it is not a packet. The run is
-       already stroked solid in `col` by drawPlant(), so a slug painted the
-       same colour on top of it differed only in alpha and disappeared - the
-       train was there all along (the geometry counts 18 of them on the feed
-       line) and the only thing the eye could find was the white leading tip.
-       A tint toward the palette's own bright is the contrast, so the packets
-       read as fluid moving through the line rather than as the line. */
-    ctx.lineWidth=sz;
-    ctx.globalAlpha=(0.55+0.45*moving)*(1-st*0.3);
-    ctx.strokeStyle=lerpC(col,C.bright,0.55);
-    if(pipeSub(g,s,s+len)) ctx.stroke();
-    /* the leading face: which way it points is the whole message. It fades across a
-       nozzle rather than popping on at it - see pipeEdge(). */
-    ctx.lineCap="butt";                       // round here is a second cap on a cap
-    ctx.lineWidth=sz*0.6;
-    ctx.globalAlpha=0.75*moving*(1-st*0.4)*pipeEdge(g,s+len);
-    ctx.strokeStyle=C.bright;
-    if(pipeSub(g,s+Math.max(0,len-1.4),s+len)) ctx.stroke();
-    ctx.lineCap="round";
-    ctx.restore();
+  /* a wide bore carries more of them, not bigger ones */
+  const gap=Math.max(6,20-w*2.2)*(1+st*0.3), lim=w/2-PIPE_BUB_WALL;
+  ctx.save(); ctx.fillStyle=pipeBubCol(col);
+  for(let s=((ph%gap)+gap)%gap-gap;s<g.len;s+=gap){
+    const id=Math.round((ph-s)/gap)+(seed|0);
+    const r=clamp((0.45+0.55*pipeRnd(id,9,255))*w*0.42, 0.55, Math.max(0.55,lim));
+    /* THE PARCEL STAYS INSIDE THE BORE. The offset is priced off what the
+       radius leaves, never off the bore, or half of a fat one sits on the wall. */
+    const off=(pipeRnd(id,19,255)-0.5)*2*Math.max(0,lim-r);
+    /* and it surges: a parcel is in the fluid, not bolted to it. The wobble is
+       driven by ph, so it stops dead when the flow does. */
+    const d=s+Math.sin(ph*(0.05+0.03*pipeRnd(id,3,255))+id)*gap*0.12;
+    const at=pipeAt(g,clamp(d,0,g.len));
+    ctx.globalAlpha=(0.45+0.45*moving)*(0.55+0.45*pipeRnd(id,2,255))*(1-st*0.3);
+    ctx.beginPath(); ctx.arc(at.x-at.dy*off, at.y+at.dx*off, r, 0, 6.2832); ctx.fill();
   }
   ctx.restore();
 }
@@ -1057,8 +1019,8 @@ function pipeFlow(L){
     /* L.flowPos and pipeSpd are keyed by the RUN (r.key), never the kind (r.k) - a
        kind has no entry of its own, so reading r.k here silently fed every packet
        phase 0 and every speed 0, whatever loop it was on. */
-    pipeSlugs(pipePad(g,PIPE_RUNWAY), L.flowPos[r.key]||0,
-              pipeSpd[r.key]||0, pipeCol(PC,r.k), w, pipeSteam(r,L));
+    pipeStream(pipePad(g,PIPE_RUNWAY), L.flowPos[r.key]||0,
+              pipeSpd[r.key]||0, pipeCol(PC,r.k), w, pipeSteam(r,L), pipeSeed(r.key));
     ctx.restore();
   }
 }
