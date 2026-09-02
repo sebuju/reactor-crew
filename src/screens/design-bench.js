@@ -10,8 +10,10 @@ const blockAcc = key => typeof key==="string"
   ? {get:()=>D[key], set:v=>{ D[key]=v; }} : key;
 /* What the plant would weigh with this block set to that value. It has to
    WRITE the value to ask, so it puts it back - through the same accessor, so
-   a nested key is restored as exactly as a flat one. */
-function massWith(key,i){ const a=blockAcc(key), o=a.get(); a.set(i);
+   a nested key is restored as exactly as a flat one. `raw` where the accessor
+   has one (bagAcc(), design.js): restoring a resolved default MINTS a key that
+   was absent, and that is a design edit nobody made. */
+function massWith(key,i){ const a=blockAcc(key), o=a.raw?a.raw():a.get(); a.set(i);
   const m=derived().mass; a.set(o); return m; }
 
 function planStats(d){ return [
@@ -25,10 +27,14 @@ function planStats(d){ return [
    "How firmly the BANK ALONE holds the core down once it cools and the xenon decays. It is usually negative, and that is not a fault: the plant is commissioned critical with equilibrium xenon in it, so when that xenon decays after a trip its whole worth comes back as positive reactivity, and the fuel cooling hands back Doppler on top. Rods do not win that argument on a real plant either - boron does. Borate after every scram. The bench blocks a design only when full boration cannot hold it either."],
   ["THERMAL MARGIN",d.dnbr.toFixed(2)+" DNBR",clamp((d.dnbr-1)/2.5,0,1),d.dnbr<1.4?C.amber:C.green,
    "DNBR, the Departure from Nucleate Boiling Ratio: how far the fuel is from the point where cooling bubbles join into one insulating steam film. Sets your real overload ceiling, not the power rating."],
+  ["CONDENSER MARGIN",d.condMargin.toFixed(1)+"x",clamp((d.condMargin-1)/4,0,1),d.condMargin<1?C.red:d.condMargin<1/DUMP_COND_K?C.amber:C.green,
+   "How far the sink at rest sits under the turbine's backpressure trip. The steam dump is blocked below "+(1/DUMP_COND_K).toFixed(2)+"x, so a load drop then goes to the shell safeties instead of the condenser; below 1x the turbine trips before anything has happened."],
   ["VOID COEFFICIENT",(d.aV>0?"+":"")+d.aV.toFixed(0)+" pcm",clamp(Math.abs(d.aV)/1600,0,1),d.aV>0?C.red:C.blue,
    "What happens when steam forms in the core. Negative shuts the reactor down as it boils. Positive means boiling adds power, which adds boiling."],
   ["MODERATOR COEFF",d.aM.toFixed(0)+" pcm/K",clamp(Math.abs(d.aM)/70,0,1),d.aM>0?C.red:C.blue,
-   "Feedback from coolant temperature, set by your lattice pitch. Strongly negative makes the plant follow turbine load by itself."],
+   "Feedback from moderator temperature - the coolant, set by your lattice pitch, and any blocks packed in it. Strongly negative makes the plant follow turbine load by itself."],
+  ["POWER COEFFICIENT",d.pwrDef.toFixed(0)+" pcm",clamp(Math.abs(d.pwrDef)/1500,0,1),d.pwrDef>-100?C.red:C.blue,
+   "What the fuel gives back going from zero to full power: Doppler plus the fuel column's own expansion, over the pellet's rise above the coolant. The one number that says whether anything in the core stops a power rise by itself."],
   ["PEAKING FACTOR",d.Fq.toFixed(2)+" Fq",1-clamp((d.Fq-1.8)/1.2,0,1),d.Fq>2.6?C.amber:C.green,
    "How lopsided power is across the core. The hottest pin sets the limit for the whole reactor, so a flat core can run harder."],
   ["XENON PIT DEPTH",d.xeW.toFixed(0)+" pcm",clamp(d.xeW/2700,0,1),d.xeW<800?C.green:C.amber,
@@ -626,7 +632,10 @@ const LATREAD=[
    "What steam in the core is worth. Negative means voiding shuts the reactor down. Positive means voiding ADDS power, and nothing in the code decides that - it falls out of whether the coolant is the moderator or only an absorber sitting in somebody else's moderator.",
    ()=>derived().aV>0?"var(--c-amber)":null],
   ["MODERATOR COEFF",()=>derived().aM.toFixed(0)+" pcm/K",
-   "What heating the coolant is worth. It is the negative feedback that makes the plant follow load by itself, and it is only as strong as the share of the moderation the coolant actually provides."],
+   "What heating the moderator is worth: the coolant over its share of the moderation, and any blocks you packed over theirs, each at its own material's coefficient. It is the negative feedback that makes the plant follow load by itself."],
+  ["EXPANSION FEEDBACK",()=>{ const d=derived(); return d.aX.toFixed(2)+" / "+d.aS.toFixed(2)+" pcm/K"; },
+   "What hot metal growing is worth, fuel / structure. The fuel column lengthens with the pellet; the grid plate spreads the assemblies and the drivelines push the bank in with the coolant. Weighted by how fast the spectrum is, because leakage is most of a fast core's balance - it is why a sodium core with a positive void coefficient is stable at all.",
+   ()=>derived().aX+derived().aS>-0.5?"var(--c-amber)":null],
 ];
 const LATREAD_RODS=[
   ["CONTROL BANK WORTH",()=>D.rodw.toFixed(0)+" pcm",

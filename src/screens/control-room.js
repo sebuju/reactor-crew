@@ -762,10 +762,11 @@ function crCnxSync(body){
      included - the question the list answers is "what is lined up", and a
      list of only the shut ones cannot be read as an answer to that. */
   const PS=S.portShut||{};
-  const ports=Object.keys(PS).map(pid=>({pid, name:portLabel(pid), shut:!!PS[pid]}))
+  const ports=Object.keys(PS).map(pid=>({pid, name:portLabel(pid), shut:!!PS[pid],
+                                         dead:portWrecked(S,pid)}))
     .sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
   const sig=rows.map(r=>r.k+(r.cut?"!":"")).join("|")
-    +"//"+ports.map(p=>p.pid+(p.shut?"!":"")).join("|");
+    +"//"+ports.map(p=>p.pid+(p.shut?"!":"")+(p.dead?"x":"")).join("|");
   if(body._sig===sig) return;
   body._sig=sig; body.innerHTML="";
   for(const r of rows){
@@ -778,9 +779,11 @@ function crCnxSync(body){
   const head=KIT.el("div","cr-cnx-sub"); head.textContent="PORT VALVES";
   body.appendChild(head);
   for(const pv of ports){
-    const row=KIT.el("div","cr-cnx-row"+(pv.shut?" shut":""));
+    const row=KIT.el("div","cr-cnx-row"+(pv.dead?" cut":pv.shut?" shut":""));
     const n=KIT.el("span","cr-cnx-name"); n.textContent=pv.name;
-    const s=KIT.el("span","cr-cnx-state"); s.textContent=pv.shut?"SHUT":"open";
+    // a wrecked valve has no position to report - it is where it stood
+    const s=KIT.el("span","cr-cnx-state");
+    s.textContent=pv.dead?("JAMMED "+(pv.shut?"SHUT":"OPEN")):pv.shut?"SHUT":"open";
     row.append(n,s); body.appendChild(row);
   }
 }
