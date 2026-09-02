@@ -397,11 +397,23 @@ const secLoad = (s, id) => {
    {p0,T0,n} plus the floor its own argument is clamped at; a fluid owns one.
    The primary's rides the architecture (P.sat, built in commission()) because
    its anchor moves with the primary setpoint; water's is a constant and lives here. */
-const satT = (c,p) => c.T0*Math.pow(Math.max(p,c.pFloor)/c.p0, c.n);
-const satP = (c,T) => c.p0*Math.pow(Math.max(T,c.TFloor)/c.T0, 1/c.n);
+/* A CURVE MAY BE A POWER LAW OR AN ANTOINE, AND IT SAYS WHICH BY CARRYING A.
+   A two-anchor power law cannot hold water's shape: fitted at 0.01 and 6.9 MPa
+   it read 602.7 K at 17 MPa against a real 625.9, and 17 MPa is where every
+   high-temperature family's shell sits (SG_P_MAX). Antoine holds the whole
+   range to 1.8 K and still inverts in closed form, which is what lets the
+   shell be a pot. The primary curves stay the power law: each is anchored on
+   its own fluid's boiling point over a narrow span, and coolSatN() derives the
+   exponent from Clausius-Clapeyron. */
+const satT = (c,p) => c.A ? c.C + c.B/(c.A - Math.log(Math.max(p,c.pFloor)))
+                          : c.T0*Math.pow(Math.max(p,c.pFloor)/c.p0, c.n);
+const satP = (c,T) => c.A ? Math.exp(c.A - c.B/Math.max(T-c.C, 1))
+                          : c.p0*Math.pow(Math.max(T,c.TFloor)/c.T0, 1/c.n);
 // dp/dT along that same curve, exact rather than differenced - a boiling
 // primary is pressurised by its own temperature rate (step.js)
-const satSlope = (c,p) => Math.max(p,c.pFloor)/(c.n*satT(c,p));
+const satSlope = (c,p) => { const q = Math.max(p,c.pFloor);
+  if(!c.A) return q/(c.n*satT(c,q));
+  const d = Math.max(satT(c,q)-c.C, 1); return q*c.B/(d*d); };
 
 /* ══ THE SECONDARY IS WATER, WHATEVER THE PRIMARY IS ══
    The PRIMARY curve is anchored on that architecture's own boiling point -
@@ -412,14 +424,47 @@ const satSlope = (c,p) => Math.max(p,c.pFloor)/(c.n*satT(c,p));
    copied off the primary curve: 6.9 MPa/558 K and 0.01 MPa/319 K are both real
    steam-table points, and 0.10 could not hold both - it put a condenser under
    vacuum at 290 K, which is colder than the river it rejects into. */
-/* A CURVE WITHOUT ITS OWN hfg IS HALF A FLUID. 1510 kJ/kg is feedwater to
-   saturated steam at these anchors, and it was a separate constant in step.js
-   that nothing tied to the curve it belonged to. */
+/* A CURVE WITHOUT ITS OWN hfg IS HALF A FLUID. `hfg` is the LATENT HEAT at the
+   curve's own anchor - 1509 kJ/kg at 6.9 MPa, a steam-table figure. It used to
+   be documented as "feedwater to saturated steam", which is 1843 at that
+   anchor, and four call sites spent it as if it were. Both quantities exist
+   below and neither is the other: hfgOf() is latent, hRise() is the rise. */
 /* cp is CP_W (step.js) on BOTH curves, because that is the one specific heat
    this model already prices every loop's inventory at (loopKg()*CP_W). A curve
    with a cp of its own that disagreed with the pot integrating against it
-   would be two answers to one question. */
-const SAT_WATER = {p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1, hfg:1510, cp:5.5};
+   would be two answers to one question. It is water's value near the 6.9 MPa
+   anchor and is flat everywhere else, which is a real error at 17 MPa (5.5
+   against 8.6) and is NOT fixed here - it is aliased into the primary's own
+   inventory and the core's enthalpy walk, so it is a job of its own. */
+/* tc is the critical temperature, the one place latent heat and liquid density
+   both have to go to a known value; A/B/C are Antoine, fitted to the real
+   steam-table points at 0.004, 6.9 and 17 MPa. */
+const SAT_WATER = {A:9.844309, B:4174.5246, C:30.4331, tc:647.096,
+                   p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
+                   hfg:1509, rho:740, cp:5.5};
+/* WHERE FEEDWATER ARRIVES, K. It lives with the fluid rather than in step.js
+   for the reason CORE_DT0 below does: layout.js is asked for plantSteam()
+   during buildStockPlumbing(), at module load, when a const in step.js has not
+   been initialised yet - a real ReferenceError, not a style point. */
+const T_FEED = 490;
+/* ══ LATENT HEAT FALLS TO ZERO AT THE CRITICAL POINT ══
+   Watson's relation, published, with its own 0.38 exponent - the one thing a
+   flat 1509 could not do. It was 76 % high at 17 MPa and 38 % low at condenser
+   vacuum, both on the same constant. A curve with no tc has no second point to
+   fall to, so it keeps its scalar: the primary fluids state a real hfg per row
+   already (COOLANT, design.js) and none of them is asked near its own
+   critical point. */
+const WATSON = 0.38;
+const hfgOf = (c,T) => c.tc ? c.hfg*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), WATSON)
+                            : c.hfg;
+/* AND SO DOES THE DIFFERENCE BETWEEN THE TWO DENSITIES. Same shape, same
+   reason, and the exponent is the published critical one. 740 kg/m3 flat was
+   water at the 6.9 MPa anchor and 34 % heavy at 17 MPa, which sized every
+   shell's steam space off the wrong fluid. */
+const RHO_CRIT = 322, RHO_N = 0.35;
+const rhofOf = (c,T) => c.tc
+  ? RHO_CRIT + (c.rho-RHO_CRIT)*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), RHO_N)
+  : c.rho;
 /* THE CORE'S DESIGN TEMPERATURE RISE, K. It belongs with the fluid rather
    than in step.js because layout.js's pump-flow suggestion is asked during
    buildStockPlumbing(), at module load, when a const in step.js has not been
@@ -433,7 +478,14 @@ const CORE_DT0 = 30;
    satH()/satHg() are the two ends of the shelf at a stated pressure. */
 const H_DATUM = 273.15;
 const satH  = (c,p) => c.cp*(satT(c,p) - H_DATUM);
-const satHg = (c,p) => satH(c,p) + c.hfg;
+const satHg = (c,p) => satH(c,p) + hfgOf(c, satT(c,p));
+/* ══ WHAT IT COSTS TO TURN A KILOGRAM OF FEEDWATER INTO STEAM ══
+   Latent heat is NOT this and never was: at 6.9 MPa the rise is 1843 against a
+   latent 1509, and the gap is the sensible heat from T_FEED up to saturation.
+   Four call sites spent `hfg` on this question - the shell's steam term, the
+   condenser's heat in, plantSteam() and ratedSteam() - and the comment beside
+   each said the constant already spanned it. It did not. */
+const hRise = (c,p) => satHg(c,p) - hOfT(c, T_FEED);
 // what a fluid at this temperature is worth, taken as liquid: the seed and
 // the way a pot's temperature enters the field
 const hOfT  = (c,T) => c.cp*(T - H_DATUM);
@@ -442,13 +494,13 @@ const hOfT  = (c,T) => c.cp*(T - H_DATUM);
    what saturation means. */
 const tOfH  = (c,p,h) => { const hf=satH(c,p);
   if(h <= hf) return H_DATUM + h/c.cp;
-  const hg=hf+c.hfg;
+  const hg=hf+hfgOf(c, satT(c,p));
   return h >= hg ? satT(c,p) + (h-hg)/c.cp : satT(c,p); };
 /* STEAM QUALITY - the share of the mass that is vapour. Below the shelf it is
    0, above it 1, and in between it is where on the shelf you are. Nobody
    declares this anywhere: it falls out of what flowed in. */
 const xOfH  = (c,p,h) => { const hf=satH(c,p);
-  return clamp((h-hf)/c.hfg, 0, 1); };
+  return clamp((h-hf)/Math.max(hfgOf(c, satT(c,p)), 1e-6), 0, 1); };
 /* ══ A FLUID IS A PROPERTY OF THE CIRCUIT ══
    These two used to read SAT_WATER unconditionally, which is the sentence "the
    secondary is water, whatever the primary is". They take a CIRCUIT INDEX now
@@ -460,7 +512,12 @@ const satOfCirc = ci => (ci!==null && ci!==undefined && ci>=0 &&
   ci===nodeGraph().coreCirc && typeof P!=="undefined" && P && P.sat) ? P.sat : SAT_WATER;
 const tsatSec = (p, ci) => satT(satOfCirc(ci), p);
 const psatSec = (T, ci) => satP(satOfCirc(ci), T);
-const hfgOfCirc = ci => satOfCirc(ci).hfg;
+/* Latent heat on that circuit's own curve, at the pressure it is at - a
+   PRESSURE now, because latent heat is not a constant of a fluid. */
+const hfgOfCirc  = (ci,p) => { const c=satOfCirc(ci); return hfgOf(c, satT(c,p)); };
+/* And the feed-to-steam rise on the same curve. The shell and the condenser
+   want this one; nothing wants a bare hfg for a boiler duty. */
+const riseOfCirc = (ci,p) => hRise(satOfCirc(ci), p);
 /* ══ PRESSURE IS A PROPERTY OF THE CIRCUIT TOO ══
    The move satOfCirc() already made for fluid. s.P stays the PRIMARY's entry -
    it is a named key stored scenarios and recordings address, and holding the
@@ -3499,6 +3556,31 @@ function plantPreset(i){
      bench control writes (D.start). Absent is not "no opinion" - it is the
      stock PWR's opinion, which is not a gas pile's. */
   Object.assign(D.start, q.start||{});
+  /* ══ A FIGURE BAKED OFF A HALF-BUILT CORE IS NOT THIS PLANT'S ══
+     designForget() at the top is not enough. archPreset() redraws the core in
+     stages - lay the fuel, pack the moderator, spread the banks, THEN set the
+     length and revolve it - and anything asked for a machine size partway
+     through gets a rating off a core that is not finished. bake() WRITES on
+     first read, so that answer is then the design.
+     Measured on BN-600: every derived figure came out at 0.357 of its own
+     suggestion, off a ~600 MWt core that existed for part of one call, against
+     the 1679 MWt the preset actually builds. The turbine was bought to swallow
+     325 kg/s of the 909 kg/s its own boilers raise, loadCeil() clamped the load
+     slider to 36 %, the shells backed up, and all three boiled dry inside ten
+     seconds. Every pump was 2.8x small by the same factor.
+     The bags go again HERE, after the design is final and before anything is
+     allowed to read it. Scalars must NOT be reset with them - q.d has already
+     been applied - so this is the bags-only door. */
   dTouch();
   LAY=null; layoutMetrics();             // re-fit the arrangement once, not per gesture
+  /* ══ AND THE BAGS GO LAST, AFTER THE LAST THING THAT CAN BAKE ══
+     Clearing them BEFORE this line does nothing: layoutMetrics() bakes on the
+     very next statement, and n0Ref() caches on a signature dTouch() has only
+     just moved - so the refill lands on the same stale rating the clear was
+     meant to remove. Measured through the bench's own buttons: turbKgs came
+     back 260 kg/s against a suggestion of 846 with the clear one line higher.
+     Cleared here, nothing is baked at all until something reads it, and by
+     then the design is final. That is what `?? xSuggest()` would give for free
+     and what bake() cannot. */
+  designForgetBags();
 }
