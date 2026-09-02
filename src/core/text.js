@@ -95,6 +95,22 @@ function clipTxt(s,x,y,maxw,o){
   txt(t,x,y,q);
   return size;
 }
+/* A FIGURE THAT MUST LAND IN A BOX NARROWER THAN THE LADDER'S FLOOR. Steps
+   down first, then scales UNIFORMLY past it - a cut number is a different
+   number, so clipTxt() may not be used on one, and a horizontal-only squeeze
+   kept the full cap height in a box that had no room for it. */
+function squeezeTxt(s,cx,yBase,maxw,o){
+  const q=Object.assign({},o,{size:fitStep(s,maxw,o),align:"center"});
+  const w=tw(s,q);
+  // o.maxh is the CAP HEIGHT the caller has room for: a one-cell box runs out
+  // of height before it runs out of width, and only the caller knows what else
+  // stands in it
+  const kh = o.maxh ? o.maxh/(q.size*CAP) : 1;
+  if(w<=maxw && kh>=1){ txt(s,cx,yBase,q); return; }
+  const k=Math.min(maxw/w,kh);
+  ctx.save(); ctx.translate(cx,yBase); ctx.scale(k,k);
+  txt(s,0,0,q); ctx.restore();
+}
 /* the step fitTxt would use, without drawing - so clipTxt can ask the same
    question and there is still one walk of the ladder */
 function fitStep(s,maxw,o){
@@ -105,23 +121,23 @@ function fitStep(s,maxw,o){
   for(const t of TSCALE){ q.size=t; if(t<=want && tw(s,q)<=maxw) return t; }
   return TSCALE[TSCALE.length-1];
 }
-function wrap(s,x,y,maxw,lh,o){
-  const words=String(s).split(" "); let line="";
+/* THE ONE LINE BREAKER. A caller that draws the lines itself - a plated label
+   on a symbol - needs the same breaks the flowing text gets, and two copies of
+   this walk had already drifted into a count that disagreed with the draw. */
+function wrapLines(s,maxw,o){
+  const words=String(s).split(" "), out=[]; let line="";
   for(const wd of words){
     const t=line?line+" "+wd:wd;
-    if(tw(t,o)>maxw && line){ txt(line,x,y,o); y+=lh; line=wd; } else line=t;
+    if(tw(t,o)>maxw && line){ out.push(line); line=wd; } else line=t;
   }
-  if(line){ txt(line,x,y,o); y+=lh; }
+  if(line) out.push(line);
+  return out;
+}
+function wrap(s,x,y,maxw,lh,o){
+  for(const l of wrapLines(s,maxw,o)){ txt(l,x,y,o); y+=lh; }
   return y;
 }
-function wrapCount(s,maxw,o){
-  const words=String(s).split(" "); let line="",n=1;
-  for(const wd of words){
-    const t=line?line+" "+wd:wd;
-    if(tw(t,o)>maxw && line){ n++; line=wd; } else line=t;
-  }
-  return n;
-}
+const wrapCount=(s,maxw,o)=>Math.max(1,wrapLines(s,maxw,o).length);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const pad=(v,n)=>String(v).padStart(n," ");
 

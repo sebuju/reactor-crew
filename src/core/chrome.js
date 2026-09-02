@@ -49,6 +49,11 @@ const lerpC=(a,b,t)=>{ t=clamp(t,0,1);
   if(s===undefined){ if(LERP_RGB.size>4096) LERP_RGB.clear();
     s="rgb("+r+","+g+","+u+")"; LERP_RGB.set(key,s); }
   return s; };
+/* the same colour, carrying an alpha. A gradient stop takes ONE string, so a
+   caller cannot set globalAlpha and hand over a palette entry - it has to hand
+   over the alpha inside the colour. */
+const alphaC=(c,a)=>{ const v=hexPack(c);
+  return "rgba("+(v>>16&255)+","+(v>>8&255)+","+(v&255)+","+clamp(a,0,1).toFixed(3)+")"; };
 function chip(x,y,col){ fillRect(x,y,6,6,col); }
 // same signature as chip(): top-left x/y + size, so a caller picks the shape
 // without touching where anything sits

@@ -295,8 +295,12 @@ function button(x,y,w,h,label,o){
   const q={size:o.size||9,weight:o.danger?700:o.weight,
            sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
            color:o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)};
-  const inner=Math.max(2,w-BTN_TXT_PAD);
+  let inner=Math.max(2,w-BTN_TXT_PAD);
   if(tw(label,q)>inner && q.sp>0) q.sp=0;
+  /* A NARROW KEY GIVES UP ITS AIR BEFORE IT GIVES UP A LETTER. BTN_TXT_PAD is
+     a third of an 18px fitting key, which is what cut its OPEN to OPE. */
+  if(tw(label,Object.assign({},q,{size:TSCALE[TSCALE.length-1]}))>inner)
+    inner=Math.max(2,w-2);
   clipTxt(label,x+w/2,midBase(y,h,fitStep(label,inner,q)),inner,q);
   return wd;
 }
