@@ -801,6 +801,8 @@ function liveValue(p,s){
     case p.role==="ihx":         return ihxTemp(s,p.id).toFixed(0)+" K";
     case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
     case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
+    // what this panel is actually shedding, which is the only reason it is here
+    case p.role==="radiator": return (radRejOf(s,p.id)/1000).toFixed(0)+" MW";
     case p.role==="cond": return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
     /* null, not "rdy": a standby set that is standing by is the ordinary case
        and printing a word for it was ink saying nothing. The PLACE stays - the
@@ -841,6 +843,7 @@ function valueBase(p,x,y,w,h,sh,nameH){
     case p.id==="cont":
     case p.id==="bkp":
     case p.role==="cond":
+    case p.role==="radiator":
     case p.role==="tank": return mid;
     default: return y+h+9;
   }
@@ -2322,6 +2325,8 @@ function readoutsFor(p,s){
         : t.gas
           ? "The gas charge behind the contents. It needs no electricity, so it still works in a blackout - and it moves as the level moves, because the gas is expanding or being compressed."
           : "Nothing is holding this tank up. With neither a pump nor a gas charge it sits at zero and can only ever be filled.");
+    if(t.pump) add("PUMP RATING",tankPumpQ(id).toFixed(0)+" kg/s",null,
+      "What the pump behind this tank can actually swallow. Head alone would make it an unlimited source; this is what stops it running out, and it is why the line delivers what it does rather than whatever the pipe would pass. Unstated, it is sized to empty the vessel over "+TANK_PUMP_T+" s.");
     add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
       "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
     if(tankPrimary(id)){
@@ -2718,7 +2723,7 @@ function drawPlant(y0,L,vh,vx,vw){
      grey is that said in the picture rather than only in the rail. */
   pipeLoose(L);
   for(const pass of [0,1]) for(const r of NET){
-    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key,r.k); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter, pinned in tools/audit-geometry.js - see pipeRuns() (pipes.js)
+    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter, pinned in tools/audit-geometry.js - see pipeRuns() (pipes.js)
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";

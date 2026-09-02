@@ -344,21 +344,21 @@ function pipeFmt(v){
    nothing was forcing. All three have a real one now: feedwater off its own
    solved reference, steam and exhaust off steamScale() (step.js), which is the
    same figure the tick normalises the packet integral on. */
-/* Which TANK's own node this run lands on, or null - mirroring netBuild()'s
-   own test, off the node NAMES it wrote back (P.net.tankNid) rather than off
-   a face string or a tank id anything here could recognise. */
-function runTankId(key,k){
-  const ends=runEnds(key,k), N=P.net && P.net.tankNid;
-  if(!ends || !N) return null;
-  for(const id in N) if(N[id]===ends[0] || N[id]===ends[1]) return id;
-  return null;
+/* Which TANK this run ends on, or null. Off the run's own END PARTS, never off
+   P.net.tankNid: a tank's node carries no face and a run end does ("efw" against
+   "efwt"), so the string compare that used to stand here matched nothing on any
+   plant and every caller silently read null. A tank folds its faces onto one
+   node, so ending on the part IS ending on the node. */
+function runTankId(key){
+  const r = P.net && P.net.byKey[key];
+  if(!r) return null;
+  return D.tanks[r.a] ? r.a : D.tanks[r.b] ? r.b : null;
 }
 function pipeFullScale(key,k){
   const ends=runEnds(key,k);
   /* A steam run's integral is already normalised on rated steam in step(), so
      100 % is the same 84 every other run's reference lands on. */
   if(runVapour(ends)) return 84;
-  if(runTankId(key,k)) return 120;
   /* A RUN IS NORMALISED ON ITSELF, so 100 % is the same 84 for every run on
      the plant - liquid, steam or exhaust. It used to be weighted by
      ref/P.netRefRun, which measured a condensate line against the PRIMARY's
@@ -409,12 +409,6 @@ function pipeUnit(key,k){
   const per=Math.max(1,P.loops);
   const loop=P.rated*1000/(5.5*30)/per;
   const ends=runEnds(key,k);
-  /* A run landing on a tank's own node is metered the way that tank is -
-     INVENTORY per second, not mass - and off THAT TANK'S own solved flow
-     (S.tankRate), never a plant-wide injection total that would print one
-     tank's delivery on another tank's line. */
-  const tid=runTankId(key,k);
-  if(tid) return {nom:Math.abs((S.tankRate&&S.tankRate[tid])||0)*60, u:"%/min"};
   /* WHICH WAY THIS RUN IS MEANT TO CARRY: the sign of its own REFERENCE flow -
      the plant as commissioned, undamaged, valves wide. A key's canonical order
      is two part ids sorted and says nothing about it, so without this three of
@@ -498,6 +492,8 @@ function pipeStream(g,ph,sp,col,w,st,seed){
   if(any) ctx.stroke();
   ctx.restore();
   if(!any) return;
+  /* a stopped line carries no parcels: they fade out with the flow that drove them */
+  if(moving<0.01) return;
 
   /* a wide bore carries more of them, not bigger ones */
   const gap=Math.max(6,20-w*2.2)*(1+st*0.3), lim=w/2-PIPE_BUB_WALL;
@@ -512,7 +508,7 @@ function pipeStream(g,ph,sp,col,w,st,seed){
        driven by ph, so it stops dead when the flow does. */
     const d=s+Math.sin(ph*(0.05+0.03*pipeRnd(id,3,255))+id)*gap*0.12;
     const at=pipeAt(g,clamp(d,0,g.len));
-    ctx.globalAlpha=(0.45+0.45*moving)*(0.55+0.45*pipeRnd(id,2,255))*(1-st*0.3);
+    ctx.globalAlpha=0.9*moving*(0.55+0.45*pipeRnd(id,2,255))*(1-st*0.3);
     ctx.beginPath(); ctx.arc(at.x-at.dy*off, at.y+at.dx*off, r, 0, 6.2832); ctx.fill();
   }
   ctx.restore();
