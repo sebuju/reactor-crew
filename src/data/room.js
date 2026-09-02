@@ -586,8 +586,31 @@ const ROOM_P_TAU = 0.5;                   // s
 
 /* WHETHER A CELL CAN BURN AT ALL - three tests, read off the same
    roomH2Frac() the layer draws, so a cell cannot draw as safe and burn. */
-const roomFlam = (s,i) => { const f = roomH2Frac(s,i);
-  return f >= H2_LFL && f <= H2_UFL && roomO2Frac(s,i) >= O2_LOC; };
+const roomFlamOf = (f,fo2) => f >= H2_LFL && f <= H2_UFL && fo2 >= O2_LOC;
+const roomFlam = (s,i) => roomFlamOf(roomH2Frac(s,i), roomO2Frac(s,i));
+/* ══ WHAT THE FRONT IS BURNING INTO IS NOT THE CELL AVERAGE ══
+   A cell is 0.467 m and a front takes real time to cross one, so while it is
+   crossing, part of the cell is burnt and part is untouched - and the gas
+   AHEAD of the front is still at the mixture that lit. Averaging the two
+   diluted the unburnt gas with its own exhaust: a cell dropped below the
+   flammable limit halfway through its own passage, the flame went out before
+   the front ever reached the far face, and the neighbours were never lit. It
+   made every cloud burn ONE CELL and stop - a 30 % charge, the one that is
+   supposed to wreck the compartment, peaked at 398 kPa in a single cell and
+   went out. Measured, not guessed.
+   The unburnt share is (1 - roomFlame), and the fuel that is left is in it, so
+   the mixture there follows for free with no second field to carry. Floored,
+   because the last sliver of a spent cell is arithmetically pure hydrogen and
+   would quench itself on the RICH limit instead of simply running out. */
+const ROOM_FR_MIN = 0.1;
+const roomFrontU = (s,i) => Math.max(ROOM_FR_MIN, 1 - s.roomFlame[i]);
+const roomFrontFrac = (s,i) => { const n = s.roomH2[i]/H2_MMOL;
+  return n > 0 ? n/(ROOM_MOL*roomFrontU(s,i) + n) : 0; };
+const roomFrontO2 = (s,i) => s.roomO2[i]/O2_MMOL
+  /(ROOM_MOL*roomFrontU(s,i) + s.roomH2[i]/H2_MMOL);
+// and the same three tests against it - the continuation test, where roomFlam()
+// is the IGNITION test and a cell that has not lit yet answers both the same
+const roomFlamFront = (s,i) => roomFlamOf(roomFrontFrac(s,i), roomFrontO2(s,i));
 /* WHAT LIGHTS IT - three sources, ONE predicate. The middle one closes a real
    hole: air at 500 K standing against a 900 K generator shell did not light
    before, and the metal is what the gas actually touches. The third is a
@@ -603,7 +626,7 @@ function roomIgnites(s, G, i){
 
 function roomH2Step(s, dt, G){
   const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame, Pr = s.roomP;
-  const T = s.roomT;
+  const T = s.roomT, Pk = s.roomPPk;
   s.roomBurnOn = 0;
   /* it leaves with what leaves.
      Hydrogen is IN the primary, so the share of it that escapes this tick is
@@ -659,9 +682,9 @@ function roomH2Step(s, dt, G){
   for(let i=0;i<N;i++){
     let q = 0;
     if(Fl[i] > 0){
-      if(!roomFlam(s,i)) Fl[i] = 0;
+      if(!roomFlamFront(s,i)) Fl[i] = 0;
       else {
-        const adv = Math.min(1, h2Sl(roomH2Frac(s,i))*G.turb[i]*dt/MPC);
+        const adv = Math.min(1, h2Sl(roomFrontFrac(s,i))*G.turb[i]*dt/MPC);
         /* THE ADVANCE CONSUMES THE DEFICIENT REACTANT, not the fuel with the
            oxygen clamped on afterwards. Written the other way round first,
            and it put the peak in the wrong place: a rich cell burnt a
@@ -701,6 +724,13 @@ function roomH2Step(s, dt, G){
     const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CAIR)/T_HULL : 0) - Pr[i]/ROOM_P_TAU*dt;
     Pr[i] = p > 0 ? p : 0;
     if(Pr[i] > pmax) pmax = Pr[i];
+    /* AND THE MARK IT LEAVES. The pressure itself is gone in half a second,
+       so the only record of where a bay was blown apart was the damage list -
+       which names machines and cannot say that bare deck was in the wave.
+       Monotonic, on S rather than in the renderer, because "this compartment
+       has been blown up" is a fact about the run: it saves, it loads, and a
+       replay lands on the same battlefield. */
+    if(Pr[i] > Pk[i]) Pk[i] = Pr[i];
   }
   s.roomBurnOn = on; s.roomPMax = pmax;
   /* ONE EVENT PER EXPLOSION. A front crawling at 0.05 m/s never trips a
@@ -758,6 +788,13 @@ function roomAt(s, p){
 }
 // the same question of the blast, and the same shape, for the damage writer
 // in step.js. A blast is instantaneous, so this is a peak and not an integral.
+// and the worst it has EVER seen there, which is what the scar draws off
+function roomScarAt(s, p){
+  let v = 0;
+  for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
+    if(X>=0&&X<GW&&Y>=0&&Y<GH) v = Math.max(v, s.roomPPk[Y*GW+X]);
+  return v;
+}
 function roomPAt(s, p){
   let v = 0;
   for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)

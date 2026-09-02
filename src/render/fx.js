@@ -150,11 +150,11 @@ function fxBubbles(x, y, w, h, rate, col, style){
    energised. Deliberately sparse: this decorates damage, it never reports it. */
 function fxSparks(x, y, w, h, rate, col){
   if(rate < FX_MIN || w <= 0 || h <= 0) return;
-  const n = Math.max(1, fxN(rate, 5)), N = Math.ceil(n), t = fxClock();
+  const n = Math.max(1, fxN(rate, 5)), N = Math.ceil(n), t = fxClock(), k = 0;
   ctx.save();
   ctx.strokeStyle = col || C.amber; ctx.lineWidth = 1; ctx.lineCap = "round";
   for(let i = 0; i < N; i++){
-    const a = fxHash(i * 5 + 7), b = fxHash(i * 5 + 8), c = fxHash(i * 5 + 9);
+    const a = fxHash(i * 5 + 7 + k), b = fxHash(i * 5 + 8 + k), c = fxHash(i * 5 + 9 + k);
     // each spark is lit for a slice of its own cycle, so they never all flash together
     const ph = ((t * (1.4 + 2.2 * a) + b) % 1);
     if(ph > 0.13) continue;

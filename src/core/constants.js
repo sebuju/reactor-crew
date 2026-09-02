@@ -27,6 +27,18 @@ const C = {
      that is only ever saying "this end, not that one". Mid-tone, so the dark
      ink on top (C.inkOnLit) reads. */
   portA:"#9a86c4", portB:"#b59a6f",
+  /* THE COMPARTMENT'S OWN TWO READINGS, and they are on screen together.
+     h2 is a violet the blast bands do not use, so the cloud and the wave
+     cannot be read as one another; scar/scarHi are SOOT - warm and very dark
+     against a cool dark panel, so a burnt cell reads as burnt rather than as
+     a hole cut in the picture. */
+  h2:"#a48ad6", scar:"#2b1c15", scarHi:"#4a2f22",
+  /* AND WHAT IT LOOKS LIKE WHILE IT IS HAPPENING. Three tones off one axis -
+     gas temperature - so the fire is not a colour somebody picked: fire is a
+     stoichiometric front, fire2 is the same front a thousand kelvin cooler,
+     and amber and red below them are already on this table. smoke is the
+     steam the burn makes, which is what is left once it has cooled. */
+  fire:"#fff3d0", fire2:"#ffd27a", smoke:"#6a6560",
   xe:"#2a1f3a", graph:"#8a6a4a",
   /* selected fills, the near-black inks that go on top of a bright fill, and
      the two banner grounds. Here rather than in a stylesheet so there is still

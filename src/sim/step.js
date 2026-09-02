@@ -2647,6 +2647,11 @@ function resetPlant(){
         exactly what that throw exists to catch. */
      roomO2:new Float64Array(GW*GH).fill(ROOM_O2_0),
      roomFlame:new Float64Array(GW*GH), roomP:new Float64Array(GW*GH),
+     /* AND THE HIGH-WATER MARK OF THAT PRESSURE, never decayed and never
+        cleared - the scar. s.roomP relieves on ROOM_P_TAU, so it answers
+        "where is the wave" and cannot answer "where has this plant been
+        blown up", which is the question a room full of wreckage is asking. */
+     roomPPk:new Float64Array(GW*GH),
      /* ONE EVENT PER EXPLOSION, not one per tick. A front at the flammability
         limit crawls for minutes and would never trip a per-tick gate, so the
         charge, the peak and what it took are accumulated while anything is
@@ -4872,6 +4877,13 @@ const ANN=[
     cabinet is where the plant-wide facts already light (NO RPS, HI AREA RAD). */
  ["HI ROOM TEMP","red",s=>roomOverIds(s).length>0,
   "A machine somewhere on the plant is standing in air hotter than it was built for, and it is being cooked at a rate you can watch. Heat is a place: it comes off every hot surface, it comes in a flood out of anything venting steam into the room rather than into a tank, it collects where a compact layout gives it nowhere to go, and the only sink is the hull. Find what is putting heat in, or fit something that takes it out.","ctrl"],
+ /* AND WHETHER IT IS ALIGHT RIGHT NOW, which is a different question from
+    whether it COULD light and was not askable anywhere on the board: the fire
+    is drawn on the plant and nothing said it in words, so a compartment still
+    burning at the far end of a long accident looked the same as one that had
+    finished. s.roomBurnOn is the flame count the burn pass already keeps. */
+ ["H2 FIRE","red",s=>s.roomBurnOn>0,
+  "Hydrogen is burning in the compartment right now. It stops when the fuel runs out or the air does - a sealed room smothers its own fire - and until then it keeps heating the machines and raising the pressure that breaks them. The OXYGEN layer says which way it is going.","ctrl"],
  ["H2 FLAMMABLE","red",s=>roomH2Peak(s)>=H2_LFL,
   "Hydrogen off the cladding has escaped the primary with the steam and is now over 4% by volume somewhere in the compartment. Above 773 K it lights itself - no spark needed - and it burns at 120 MJ per kilogram into the room it is standing in. This is the Fukushima sequence.","ctrl"],
  /* Appended, like every row above it. The panels ARE the heat sink out here,
