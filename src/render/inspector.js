@@ -473,12 +473,6 @@ function paramsFor(p){
       0.2,22,v=>v.toFixed(1)+" MPa",0.1);
     sld("FILL AT COMMISSIONING","How full it starts. A source ships full; a tank meant to catch something ships empty, and its gas charge is set at whatever level you leave here.",
       acc("level"),0,100,v=>v.toFixed(0)+" %",5);
-    B.push({kind:"toggle",title:"PRESSURISED BY PUMPS",mass:12,
-      key:{get:()=>!!t().pump, set:v=>{ t().pump = v?{p:11.0,bus:"bkp"}:null; }},
-      tip:"A set of pumps holds a steady pressure until the tank is dry - and dies with the bus, so a blackout kills it. Off, the tank is passive: whatever gas charge you give it below is all it has, which is exactly why a passive tank is the one injection path a blackout does not kill."});
-    sld("PUMP PRESSURE","What the pumps hold at. It has to beat whatever it is injecting against: a tank set below loop pressure cannot deliver a drop until the loop comes down to it.",
-      {get:()=>t().pump?t().pump.p:0, set:v=>{ if(t().pump) t().pump.p=v; }},
-      0.5,20,v=>v.toFixed(1)+" MPa",0.5);
     B.push({kind:"toggle",title:"GAS CHARGE",mass:8,
       key:{get:()=>!!t().gas, set:v=>{ t().gas = v?{p0:4.5,frac:0.35}:null; }},
       tip:"A cover gas above the liquid. It is what makes the pressure mean anything: a vented tank never pressurises, so it can have no back-pressure and no rupture disc. It expands as a source empties and is compressed as a sink fills."});
