@@ -9,10 +9,11 @@
    Three instruments, and every one of them is an ordinary machine with an
    ordinary knob - there are no sandbox-only physics anywhere in src/:
 
-     SOURCE   a tank with `inf` and a pump, so it pushes at a stated MPa and
-              never runs down.
-     VOID     the same tank with almost nothing behind it, so whatever reaches
-              it leaves and it never fills.
+     SOURCE   a tank with `inf` and a gas charge, so it pushes at a stated MPa
+              and never runs down - its level cannot move, so the gas law is
+              exactly p0 and there is no drift in it at all.
+     VOID     the same tank at compartment pressure, so whatever reaches it
+              leaves and it never fills.
      CLAMP    a field of S written back every tick. This is the only thing
               here that is not a machine, and it is deliberately a DEBUG
               instrument rather than a component: pinning s.Tavg is not
@@ -46,13 +47,15 @@ const RIG = {
   tank(id, x, y, p, cfg){
     M.mintTank(id, x, y);
     Object.assign(D.tanks[id], {name:id.toUpperCase(), col:"#8fd18a", vol:100, level:50,
-      inf:true, check:false, auto:"always", gas:null, burst:null, hold:null,
-      pump:{p, bus:"main"}}, cfg||{});
+      inf:true, check:false, auto:"always", burst:null, hold:null,
+      gas:{p0:p, frac:0.35}}, cfg||{});
     M.buildLayout();
     return id;
   },
   source(id, x, y, p, cfg){ return RIG.tank(id, x, y, p, Object.assign({col:"#5fd2e2"}, cfg)); },
-  void_ (id, x, y, cfg){ return RIG.tank(id, x, y, 0.01, Object.assign({col:"#7a6f9a"}, cfg)); },
+  // a VOID is a place at COMPARTMENT pressure, not a vacuum - the same floor
+  // every vented vessel on the plant sits at
+  void_ (id, x, y, cfg){ return RIG.tank(id, x, y, 0.15, Object.assign({col:"#7a6f9a"}, cfg)); },
   // one nozzle on a face, and one run to another port - the two bench gestures
   port(id, dx, dy){ return M.seedPort(id, dx, dy); },
   run(a, b, vFirst){ return M.seedRun(a, b, vFirst); },
@@ -149,7 +152,7 @@ const PROFILES = {
            the same two gestures the bench's own click and drag make */
         const p = M.partOf("feed");
         R.tank("pzr2", p.x, Math.max(0,p.y-6), 0, {name:"SEC PRESSURIZER", col:"#a98cf0",
-          vol:40, level:50, inf:false, pump:null, hold:{p:7.5}});
+          vol:40, level:50, inf:false, gas:null, hold:{p:7.5}});
         const a = R.port("pzr2", 1, M.partOf("pzr2").h);
         const b = R.port("feed", 1, -1);
         R.run(a, b, true);
