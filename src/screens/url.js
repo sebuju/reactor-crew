@@ -43,7 +43,11 @@ function urlApply(){
    the param would drop a beat after every preset. */
 let urlPreI=null, urlPreGen=null, urlLast=null, urlWrite=true;
 
-function urlPreset(i){ urlPreI=i; urlPreGen=DGEN; }
+/* SETTLE FIRST: designForgetBags() empties the machine sizes at the end of
+   plantPreset(), so the next pass bakes them back and sigFresh() calls that a
+   design edit - DGEN moved twice under a preset nobody had touched yet, and
+   the param was dropped before the first sync could write it. */
+function urlPreset(i){ layFresh(); urlPreI=i; urlPreGen=DGEN; }
 
 function urlSync(){
   if(!urlWrite) return;
