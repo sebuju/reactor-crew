@@ -1663,7 +1663,7 @@ function steamBook(key,k){
       const byPart={}, note=n=>(byPart[pid(n)]||(byPart[pid(n)]=[])).push(n);
       note(up);
       for(const r of pipeNetwork()){
-        if(!RUN_VAPOUR[r.k] || r.key===key) continue;
+        if(edgeLaw(r) !== LAW_VAPOUR || r.key===key) continue;
         const e=runEnds(r.key,r.k); if(!e) continue;
         add(e[0],e[1]); note(e[0]); note(e[1]);
       }
@@ -3855,7 +3855,7 @@ function step(dt){
   s.injRate = inj;
   /* EVERY PRIMARY TANK, off its OWN solved edge - not just the one an
      operator used to be able to switch on. Tank-out-positive
-     (netCoreFracOf), so a tank being filled reads negative here and the same
+     (netReadEdges), so a tank being filled reads negative here and the same
      subtraction raises it: "the disc bursts" and "the tank runs dry" really
      are one range seen at two ends.
      What each one carries into the loop is charged to s.inv, and what its

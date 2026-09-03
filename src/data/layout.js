@@ -327,7 +327,7 @@ const boundP = (pid, node) => { const p = partOf(pid); const R = p && ROLE[p.rol
    salt has. A pump cannot develop more differential than the circuit it sits
    in can stand at its suction, so the suggestion stops there.
    ONLY WHERE THE LEVEL IS PINNED. A circuit with no hold on it floats to sit
-   its own lowest node at the pressure the ship holds (netCoreFracOf, pipenet.js),
+   its own lowest node at the pressure the ship holds (netReadP, pipenet.js),
    so it accommodates whatever its pump develops and there is nothing to cap -
    which is why the cooling loop's pump is untouched. */
 const pumpHeadSuggest = id => {
@@ -2612,6 +2612,18 @@ function portLabel(pid){
    (pipenet.js) marks the nodes a run of one of these reaches, and pipes.js
    draws off the same row. */
 const RUN_VAPOUR={steam:1, exh:1};
+/* ══ WHICH LAW PRICES THIS EDGE ══ THE SEAM, NAMED.
+   A run's physics is decided by its KIND, which is a LABEL used as a
+   PERMISSION - so a steam line cannot fill with water and a water line cannot
+   boil, and every time the plant needs one of those it gets a special case
+   instead. That is what a single-fluid solve is meant to delete, and this
+   exists so it replaces ONE function rather than a grep of four thousand
+   lines: netEdges(), the contents pass, the shell walk in step() and the pipe
+   renderer all ask here and nothing anywhere else reads RUN_VAPOUR.
+   Takes anything carrying a kind - a run states `k`, an assembled edge states
+   `kind`, and it is the same question about the same pipe. */
+const LAW_VAPOUR="vapour", LAW_LIQUID="liquid";
+const edgeLaw = e => RUN_VAPOUR[e.kind !== undefined ? e.kind : e.k] ? LAW_VAPOUR : LAW_LIQUID;
 const RUN_KIND={
   "core|sg":"hot", "pump|sg":"cold", "core|pump":"cold",
   // an exchanger is spliced INTO the loop, so every run reaching it is still
@@ -2812,7 +2824,7 @@ const holdOnCirc = ci => holdTankIds().filter(id=>tankCircuit(id)===ci);
      under. It has no edge either, so there is nothing for it to be the
      primary or secondary OF. */
 const hostPartOf = () => LAY.parts.find(p=>ROLE[p.role] && ROLE[p.role].thermal==="sink") || null;
-// on the graph (graphSlot()): netCoreFracOf() asks this once per EDGE per solve
+// on the graph (graphSlot()): netReadEdges() asks this once per EDGE per solve
 function tankCircuit(id){
   const t=D.tanks && D.tanks[id]; if(!t) return null;
   const G=nodeGraph(), slot=graphSlot("tankCircuit");

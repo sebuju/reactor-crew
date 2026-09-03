@@ -505,11 +505,11 @@ function pipeUnit(key,k){
    resolved. */
 function pipeSteam(r,L){
   const net=P.net;
-  if(!net) return RUN_VAPOUR[r.k]?1:0;
+  if(!net) return edgeLaw(r)===LAW_VAPOUR?1:0;
   let x=0, seen=false;
   for(const ed of net.edges) if(ed.key===r.key){
     x = Math.max(x, netQualAt(L,net.name[ed.u]), netQualAt(L,net.name[ed.v])); seen=true; }
-  return seen ? clamp(x,0,1) : (RUN_VAPOUR[r.k]?1:0);
+  return seen ? clamp(x,0,1) : (edgeLaw(r)===LAW_VAPOUR?1:0);
 }
 
 /* ══════════ the bubbles ══════════ */
