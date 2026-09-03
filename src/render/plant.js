@@ -2683,20 +2683,38 @@ function readoutsFor(p,s){
    Every row addresses THIS fitting - the six relief rows that used to sit on
    the pressurizer could only ever describe primaryRelief(), so a second or
    third valve was invisible to the panel that claimed to report it. */
+/* THE DESIGN HALF, ASKED ONCE PER EDIT. The rail builds this table twice a
+   frame for every fitting, and half of it - the mode, the shells this valve
+   can reach, the set points, the reference pressure, the edge key - cannot
+   move while the plant runs. The LIVE half stays computed on every call, and
+   that split is exactly the rule this panel already lives by: it may never
+   quote a set point the valve does not use. */
+const fitDesignMemo=new Map(); let fitDesignGen=-1;
+function fitDesign(fid){
+  if(fitDesignGen!==DGEN){ fitDesignMemo.clear(); fitDesignGen=DGEN; }
+  let d=fitDesignMemo.get(fid);
+  if(!d){ const mode=fitModeOf(fid);
+    d={mode, dk: mode==="throttle"?fitEdgeKey(fid):null,
+       set: mode==="relief"?reliefSet(fid):null,
+       shells: mode==="relief"?shellsOf(fid):null,
+       refP: mode==="relief"?reliefRefP(fid):0};
+    fitDesignMemo.set(fid,d); }
+  return d;
+}
 function readoutsForFit(fid,s){
-  const mode=fitModeOf(fid);
+  const DES=fitDesign(fid), mode=DES.mode;
   const R=[], add=(k,v,c,tip)=>{ const g=(c&&typeof c==="object")?c:null;
     R.push([k,v, g?bandCol(g):(c||C.cyan), tip, g, null]); };
-  const dk = mode==="throttle" ? fitEdgeKey(fid) : null;
+  const dk = DES.dk;
   if(mode==="relief"){
-    const set=reliefSet(fid);
+    const set=DES.set;
     const open = !!s.reliefOpen[fid] && !s.reliefBlocked[fid];
     const blkd = !!s.reliefBlocked[fid], byp = !!s.porvByp[fid];
     /* WHICH PRESSURE THIS VALVE IS ABOUT is asked of the drawing, not assumed
        to be the primary's: a valve placed on a steam line lifts on its shell.
        reliefRefP()/reliefAtP() (step.js) are the same pair the tick lifts on,
        so this panel cannot quote a set point the valve does not use. */
-    const sec = shellsOf(fid).length>0, refP = reliefRefP(fid), atP = reliefAtP(s,fid);
+    const sec = DES.shells.length>0, refP = DES.refP, atP = reliefAtP(s,fid);
     const iso = reliefIso(s,fid);
     add("PROTECTS",sec?(iso?"ISOLATED":nameList(shellsLive(s,fid))):"PRIMARY LOOP",
       iso?C.amber:null,
@@ -2888,6 +2906,64 @@ function leaderLine(panelEl,railEl){
   ctx.restore();
 }
 
+/* ══ THE HULL PICTURE IS A PURE FUNCTION OF THE HULL ══
+   The well, the 2040-cell border, ninety-odd grid lines, the frame, the EL
+   column and the four bulkhead words are decided by GW, GH, the grid top and
+   whether a plant is live - none of which a running plant can move. Painted
+   once into its own bitmap and blitted after that.
+   BAKED AT DEVICE SCALE AND BLITTED IN DEVICE SPACE, with the view's own
+   sub-pixel offset baked into the bitmap and the blit landing on a whole
+   device pixel, so the grid hairlines rasterise exactly where they did when
+   they were drawn straight onto the canvas. The offset is quantised to a
+   quarter pixel, or panning would rebuild it every frame for a difference
+   nothing can see. burnShakeAt() is in the transform this reads, so the deck
+   kick still moves the picture. */
+let backCv=null, backKey="";
+function plantBack(L,GHp,rowH){
+  const m=ctx.getTransform&&ctx.getTransform();
+  // the headless DOM has no bitmap to bake into, and a geometry audit must see
+  // these rectangles on the recorder it is reading
+  if(!m||!m.a){ plantBackPaint(L,GHp,rowH); return; }
+  const sc=m.a;
+  const x0=GX-EL_GUT, y0=GY, w=GW*CELL+EL_GUT, h=GHp;
+  const dx=m.a*x0+m.c*y0+m.e, dy=m.b*x0+m.d*y0+m.f;
+  const ix=Math.floor(dx), iy=Math.floor(dy);
+  const q=v=>Math.round(v*4)/4, fx=q(dx-ix), fy=q(dy-iy);
+  const key=[GW,GH,GY,sc.toFixed(4),fx,fy,L?1:0].join("|");
+  if(key!==backKey){
+    if(!backCv) backCv=document.createElement("canvas");
+    const bw=Math.ceil(w*sc)+2, bh=Math.ceil(h*sc)+2;
+    if(backCv.width!==bw||backCv.height!==bh){ backCv.width=bw; backCv.height=bh; }
+    const c=backCv.getContext("2d");
+    c.setTransform(1,0,0,1,0,0); c.clearRect(0,0,bw,bh);
+    c.setTransform(sc,0,0,sc, fx-x0*sc, fy-y0*sc);
+    const prev=ctx; ctx=c;
+    try{ plantBackPaint(L,GHp,rowH); } finally { ctx=prev; }
+    backKey=key;
+  }
+  ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+  ctx.drawImage(backCv,ix,iy); ctx.restore();
+}
+function plantBackPaint(L,GHp,rowH){
+  fillRect(GX,GY,GW*CELL,GHp,C.well);
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
+    if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,rowTop(Y),CELL,rowH(Y),"#1c1210");
+  const gl = L? "rgba(120,180,190,.03)" : "rgba(120,180,190,.05)";
+  for(let X=0;X<=GW;X++) fillRect(GX+X*CELL,GY,1,GHp,gl);
+  for(let Y=0;Y<=GH;Y++) fillRect(GX,rowTop(Y),GW*CELL,1,gl);
+  frame(GX,GY,GW*CELL,GHp,C.edge2);
+  // outside the hull: inside it they sat in the same band as the FWD BULKHEAD
+  // label and over the first column of cells
+  for(let Y=0;Y<GH;Y++)
+    txt("EL"+pad(GH-1-Y,1),GX-4,rowTop(Y)+11,{size:6.5,align:"right",color:"#2c4148"});
+  txt("KEEL / HULL",GX+GW*CELL/2,GY+GHp-6,{size:7,sp:1.6,align:"center",color:"#5a3128"});
+  txt("UPPER DECK / HULL",GX+GW*CELL/2,GY+12,{size:7,sp:1.6,align:"center",color:"#5a3128"});
+  ctx.save(); ctx.translate(GX+11,GY+GHp/2); ctx.rotate(-Math.PI/2);
+  txt("FWD BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
+  ctx.save(); ctx.translate(GX+GW*CELL-7,GY+GHp/2); ctx.rotate(Math.PI/2);
+  txt("AFT BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
+}
+
 /* vx/vw are the viewport's left edge and width - GX/(W-2*GX) by default, or
    whatever the caller's own HTML rail leaves clear of the plant, so the
    canvas never draws under a docked panel. */
@@ -2918,23 +2994,7 @@ function drawPlant(y0,L,vh,vx,vw){
   // and a bang in the compartment kicks the deck it happened on (room.js)
   { const k=burnShakeAt(); if(k) ctx.translate(burnShakeRnd()*k, burnShakeRnd()*k); }
   viewOn=true;
-  fillRect(GX,GY,GW*CELL,GHp,C.well);
-  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
-    if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,rowTop(Y),CELL,rowH(Y),"#1c1210");
-  const gl = L? "rgba(120,180,190,.03)" : "rgba(120,180,190,.05)";
-  for(let X=0;X<=GW;X++) fillRect(GX+X*CELL,GY,1,GHp,gl);
-  for(let Y=0;Y<=GH;Y++) fillRect(GX,rowTop(Y),GW*CELL,1,gl);
-  frame(GX,GY,GW*CELL,GHp,C.edge2);
-  // outside the hull: inside it they sat in the same band as the FWD BULKHEAD
-  // label and over the first column of cells
-  for(let Y=0;Y<GH;Y++)
-    txt("EL"+pad(GH-1-Y,1),GX-4,rowTop(Y)+11,{size:6.5,align:"right",color:"#2c4148"});
-  txt("KEEL / HULL",GX+GW*CELL/2,GY+GHp-6,{size:7,sp:1.6,align:"center",color:"#5a3128"});
-  txt("UPPER DECK / HULL",GX+GW*CELL/2,GY+12,{size:7,sp:1.6,align:"center",color:"#5a3128"});
-  ctx.save(); ctx.translate(GX+11,GY+GHp/2); ctx.rotate(-Math.PI/2);
-  txt("FWD BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
-  ctx.save(); ctx.translate(GX+GW*CELL-7,GY+GHp/2); ctx.rotate(Math.PI/2);
-  txt("AFT BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
+  plantBack(L,GHp,rowH);
   /* THE HULL IS DRAGGED BY ITS OWN WALLS, and only the two that can move
      without renumbering every cell under them: a pipe is keyed by its cell, so
      growing off the bow or the deck would have to rewrite D.pipes and every

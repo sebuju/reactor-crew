@@ -100,12 +100,52 @@ function segMark(x,y,w,h,frac,marks,col,signed){
     fillRect(mx-.5,y-2,1,h+4,C.rail);
   }
 }
+/* ONE FILL, NOT A LOOP OF STROKES. Three hundred of these a frame during an
+   accident, each clipping and stroking its own lines. The family drawn is
+   X+Y = 0 (mod 7) - which is what the phase term below spelled out: a line
+   through (x+i, y+h) at 45 degrees has X+Y = x+y+h+i, and i was stepped off
+   -((x+y+h) mod 7). That is a fact about the CANVAS and not about the rect,
+   which is why two hatched cells side by side read as one pattern, so it bakes
+   into a 7x7 tile pinned at the origin and every call is a fillRect.
+   Baked at device scale, so the diagonal is as crisp as the stroke it
+   replaces; one tile per colour, and per scale. */
+const HATCH_P=7;
+const ctxScale=()=>{ const m=ctx.getTransform&&ctx.getTransform();
+  return (m&&m.a) ? Math.max(0.05,Math.hypot(m.a,m.b)) : 0; };
+const hatchOK=()=>typeof DOMMatrix!=="undefined" && ctxScale()>0;
+function hatchPat(col){
+  const sc=ctxScale();
+  const key=col+"@"+sc.toFixed(3);
+  // per CONTEXT: hostPaint() swaps ctx for a rail's own bitmap, and a pattern
+  // belongs to the context that made it
+  const pats = ctx.__hatchPats || (ctx.__hatchPats=new Map());
+  let pat=pats.get(key);
+  if(!pat){ const n=Math.max(1,Math.round(HATCH_P*sc));
+    const g=document.createElement("canvas"); g.width=g.height=n;
+    const c=g.getContext("2d");
+    c.setTransform(n/HATCH_P,0,0,n/HATCH_P,0,0);
+    c.strokeStyle=col; c.lineWidth=1.4; c.lineCap="butt";
+    // the tile's own line plus its two neighbours, so the corners wrap
+    for(const k of [0,HATCH_P,2*HATCH_P]){
+      c.beginPath(); c.moveTo(k-HATCH_P,HATCH_P); c.lineTo(k+HATCH_P,-HATCH_P); c.stroke(); }
+    pat=ctx.createPattern(g,"repeat");
+    if(pat.setTransform && typeof DOMMatrix!=="undefined")
+      pat.setTransform(new DOMMatrix().scaleSelf(HATCH_P/n));
+    pats.set(key,pat); }
+  return pat;
+}
 function hatch(x,y,w,h,col,a){
-  ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
-  ctx.globalAlpha=a||.55; ctx.strokeStyle=col; ctx.lineWidth=1.4;
-  // phase anchored to the canvas, not to the rect, so two hatched cells side by side are one pattern
-  const P=7, ph=(((x+y+h)%P)+P)%P;
-  for(let i=P*Math.floor((ph-h)/P)-ph;i<w;i+=P){ ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
+  ctx.save();
+  ctx.globalAlpha=a||.55;
+  if(hatchOK()){ ctx.fillStyle=hatchPat(col); ctx.fillRect(x,y,w,h); }
+  else {
+    // no real 2-D context to bake into (the headless DOM): stroke it
+    ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+    ctx.strokeStyle=col; ctx.lineWidth=1.4;
+    const P=HATCH_P, ph=(((x+y+h)%P)+P)%P;
+    for(let i=P*Math.floor((ph-h)/P)-ph;i<w;i+=P){
+      ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
+  }
   ctx.restore();
 }
 /* blinks on the same 900ms rhythm as the annunciator tile, so both read as one

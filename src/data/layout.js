@@ -3042,8 +3042,24 @@ function freeAdj(p,g){
    Both a painted frame and simFrame() call this, so a validation run - which
    paints nothing at all - is checked on exactly the same schedule. */
 const layFresh=()=>{ sigFresh(); if(!LAY||layFit!==laySrcSig()) buildLayout(); };
+/* Every figure below is a fact about the DESIGN, and a running plant cannot
+   edit one - so a frame that walks the parts, the runs, loopMap(), freeAdj()
+   and the whole radiation field to be told nothing changed is the same waste
+   sigMemo() already answers elsewhere. Keyed on DGEN and taken AFTER
+   layFresh(), which is what proves the generation: buildLayout() and moveTo()
+   both dTouch(), so a rebuilt LAY.parts (whose p.access is undefined until
+   this runs) can never read a cached object. NOT sigMemo() itself - it pushes
+   into SIGS and sigFresh() compares with !==, so an object would read as an
+   edit every frame. */
+let lmGen=-1, lmVal=null;
 function layoutMetrics(){
   layFresh();
+  if(lmGen===DGEN && lmVal) return lmVal;
+  const out=layoutMeasure();
+  lmGen=DGEN; lmVal=out;
+  return out;
+}
+function layoutMeasure(){
   /* A BLANK GRID HAS NO VESSEL, so every figure measured FROM one is measured
      from the middle of the hull instead - and reads as nothing, which is what
      it is. Nothing here refuses to answer. */

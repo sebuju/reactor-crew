@@ -825,8 +825,16 @@ function pipeRunSpots(r){
      never gets an offset reading, and only a crowded one pays for it. */
   return out.sort((a,b)=>a.off-b.off);
 }
-let anchorCache=null, anchorBoxes=[];
-function pipeAnchorTick(){ anchorCache=null; anchorBoxes=[]; }
+/* KEPT ACROSS FRAMES, because every price below is GEOMETRY: the run's own
+   polyline, the machine boxes it must keep off (boxClear()), and which
+   fittings want a fourth line. Nothing here reads a live value, so the answer
+   moves when the DESIGN moves or when the grid top does - and both are in the
+   key. A frame on an unedited plant re-uses the allocation it made. */
+let anchorCache=null, anchorBoxes=[], anchorKey="";
+function pipeAnchorTick(){
+  const k=DGEN+"|"+GY;
+  if(k!==anchorKey){ anchorKey=k; anchorCache=null; anchorBoxes=[]; }
+}
 /* WHERE THE READINGS ARE THIS FRAME, for a layer that has to keep off them.
    One list, filled by the allocator below and by nothing else. */
 function pipeStackBoxes(){ return anchorBoxes; }
@@ -1059,14 +1067,23 @@ function pipeLabSpots(g){
    word stays. runHoled() (pipenet.js) is the SOLVE's own predicate, so a torn
    cell and a wrecked nozzle valve read the same here as they do there. */
 const runCut = (r,L) => !!(L && r.cells && runHoled(L,r));
-function pipeSizeLabels(NET,L){
-  const REF=10, o0={size:REF,sp:0};
-  for(const r of NET){
-    const g=pipeGeom(r.pts); if(!g.len) continue;
-    const w=pipeWidth(runBore(r));
-    const p=runDesignP(r);
+/* WHERE THE TWO WORDS GO, priced once per edit. The bore, the design pressure,
+   the straight stretches and the text metrics that size them are all design
+   facts; the ONE live input is whether the run is cut, which takes the MPa
+   word away, so that flag is part of each run's own key and nothing else is
+   re-measured when it flips. */
+const labPlan=new Map(); let labKey="";
+function pipeLabPlan(r,cut){
+  const k=DGEN+"|"+GY;
+  if(k!==labKey){ labKey=k; labPlan.clear(); }
+  let e=labPlan.get(r.key);
+  if(e && e.cut===cut) return e.items;
+  const REF=10, o0={size:REF,sp:0}, items=[];
+  const g=pipeGeom(r.pts);
+  if(g.len){
+    const w=pipeWidth(runBore(r)), p=runDesignP(r);
     const words=[Math.round(runBoreMm(r))+" mm"];
-    if(!runCut(r,L)) words.push((p>=10?p.toFixed(1):p.toFixed(2))+" MPa");
+    if(!cut) words.push((p>=10?p.toFixed(1):p.toFixed(2))+" MPa");
     const spots=pipeLabSpots(g);
     const n=Math.min(spots.length, words.length);
     /* ONE SCALE FOR BOTH WORDS: sized apart, the shorter word rode a whole
@@ -1074,15 +1091,19 @@ function pipeSizeLabels(NET,L){
     let sz=w-PIPE_LAB_PAD;
     for(let i=0;i<n;i++)
       sz=Math.min(sz, REF*spots[i].room/Math.max(tw(words[i],o0),1e-6));
-    if(!(sz>0.8)) continue;
-    for(let i=0;i<n;i++){
-      const word=words[i], sp=spots[i];
-      const vert=Math.abs(sp.p.dx)<Math.abs(sp.p.dy);
-      ctx.save(); ctx.translate(sp.p.x, sp.p.y);
-      if(vert) ctx.rotate(-Math.PI/2);
-      txt(word,0,sz*0.36,{size:sz,sp:0,align:"center",color:C.inkOnLit});
-      ctx.restore();
-    }
+    if(sz>0.8) for(let i=0;i<n;i++){ const sp=spots[i];
+      items.push({word:words[i], x:sp.p.x, y:sp.p.y,
+                  vert:Math.abs(sp.p.dx)<Math.abs(sp.p.dy), sz}); }
+  }
+  labPlan.set(r.key,{cut,items});
+  return items;
+}
+function pipeSizeLabels(NET,L){
+  for(const r of NET) for(const it of pipeLabPlan(r,runCut(r,L))){
+    ctx.save(); ctx.translate(it.x, it.y);
+    if(it.vert) ctx.rotate(-Math.PI/2);
+    txt(it.word,0,it.sz*0.36,{size:it.sz,sp:0,align:"center",color:C.inkOnLit});
+    ctx.restore();
   }
 }
 
@@ -1146,43 +1167,95 @@ function pipeBreaks(L){
    is still there, and reddening the whole connection would say the opposite.
    The run's OWN polyline, clipped to the cell, so a bend breaks as a bend and
    the picture cannot drift from the stroke it replaces. */
+/* THE PIECE OF THE POLYLINE THAT IS ACTUALLY IN THIS CELL. Stroking the whole
+   run behind a one-cell clip painted a main leg end to end twice per hole, so
+   ten holes on one run was twenty full-length strokes to show ten cells. The
+   path is cut to the cell grown by one casing width - a stroke reaches at most
+   half of that from its own centreline, joins included - so the pixels inside
+   the clip are the ones the full stroke would have laid down. */
+function pipeCellPath(pts,r,pad,keep){
+  const x0=r.x-pad, x1=r.x+r.w+pad, y0=r.y-pad, y1=r.y+r.h+pad;
+  if(!keep) ctx.beginPath();
+  let pen=false, any=false;
+  for(let j=1;j<pts.length;j++){
+    const ax=pts[j-1][0], ay=pts[j-1][1], bx=pts[j][0], by=pts[j][1];
+    const dx=bx-ax, dy=by-ay;
+    let t0=0, t1=1, ok=true;
+    for(const [d,p,lo,hi] of [[dx,ax,x0,x1],[dy,ay,y0,y1]]){
+      if(Math.abs(d)<1e-9){ if(p<lo||p>hi){ ok=false; break; } continue; }
+      let a=(lo-p)/d, b=(hi-p)/d; if(a>b){ const c=a; a=b; b=c; }
+      t0=Math.max(t0,a); t1=Math.min(t1,b);
+    }
+    if(!ok || t1<=t0){ pen=false; continue; }
+    if(!pen || t0>0){ ctx.moveTo(ax+dx*t0, ay+dy*t0); }
+    ctx.lineTo(ax+dx*t1, ay+dy*t1);
+    any=true; pen = t1>=1;
+  }
+  return any;
+}
+/* ONE CLIP PER RUN, NOT PER HOLE. A clip forces the rasteriser to start again,
+   and a hundred holes on a burning plant is a hundred of them for two short
+   strokes each. Every hole a run owns is collected first, the clip is the
+   union of THOSE CELLS, and the path is the union of the pieces of polyline
+   inside them - which lays the same paint down in the same order, because a
+   cell two runs cross still gets the first run's casing and bore before the
+   second's. */
 function pipeDamage(L){
   if(!L || !L.dmgParts) return;
-  const NET=pipeNetwork();
+  const NET=pipeNetwork(), byKey=new Map();
+  for(const q of NET) byKey.set(q.key,q);
+  const byRun=new Map(), loose=[];
   for(const id of L.dmgParts){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
     const x=+k.slice(0,i), y=+k.slice(i+1), r=grect(x,y,1,1);
-    ctx.save();
-    ctx.beginPath(); ctx.rect(r.x,r.y,r.w,r.h); ctx.clip();
-    ctx.lineCap="square"; ctx.lineJoin="round";
     let drew=false;
     for(const key of pipeCellRuns(x,y)){
-      const run=NET.find(q=>q.key===key); if(!run) continue;
-      const w=pipeWidth(runBore(run)), cw=w+2*pipeWallPx(run);
-      ctx.beginPath(); ctx.moveTo(run.pts[0][0],run.pts[0][1]);
-      for(let j=1;j<run.pts.length;j++) ctx.lineTo(run.pts[j][0],run.pts[j][1]);
+      if(!byKey.has(key)) continue;
+      drew=true;
+      let a=byRun.get(key); if(!a){ a=[]; byRun.set(key,a); }
+      a.push(r);
+    }
+    if(!drew) loose.push([k,r]);
+  }
+  ctx.save();
+  ctx.lineCap="square"; ctx.lineJoin="round";
+  for(const [key,cells] of byRun){
+    const run=byKey.get(key);
+    const w=pipeWidth(runBore(run)), cw=w+2*pipeWallPx(run);
+    ctx.save();
+    ctx.beginPath();
+    for(const r of cells) ctx.rect(r.x,r.y,r.w,r.h);
+    ctx.clip();
+    ctx.beginPath();
+    let any=false;
+    for(const r of cells) any = pipeCellPath(run.pts,r,cw,true) || any;
+    if(any){
       ctx.lineWidth=cw; ctx.strokeStyle=C.red; ctx.stroke();
       ctx.lineWidth=w;  ctx.strokeStyle=C.well; ctx.stroke();
-      drew=true;
-    }
-    /* A cell no connection claims has no polyline to borrow, so it takes the
-       one pipeLoose() draws it with - in red, because it is broken pipe. */
-    if(!drew){
-      const cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s];
-      const cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
-      if(sh){ ctx.strokeStyle=C.red; ctx.lineWidth=3;
-        for(const pr of sh.paths){
-          const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
-          ctx.beginPath();
-          ctx.moveTo(cx+DIRV[a][0]*h, cy+DIRV[a][1]*h);
-          ctx.lineTo(cx,cy);
-          ctx.lineTo(cx+DIRV[b][0]*h, cy+DIRV[b][1]*h);
-          ctx.stroke();
-        } }
     }
     ctx.restore();
   }
+  /* A cell no connection claims has no polyline to borrow, so it takes the
+     one pipeLoose() draws it with - in red, because it is broken pipe. */
+  for(const [k,r] of loose){
+    const cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s];
+    if(!sh) continue;
+    const cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(r.x,r.y,r.w,r.h); ctx.clip();
+    ctx.strokeStyle=C.red; ctx.lineWidth=3;
+    for(const pr of sh.paths){
+      const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
+      ctx.beginPath();
+      ctx.moveTo(cx+DIRV[a][0]*h, cy+DIRV[a][1]*h);
+      ctx.lineTo(cx,cy);
+      ctx.lineTo(cx+DIRV[b][0]*h, cy+DIRV[b][1]*h);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  ctx.restore();
 }
 /* EVERY PIPE CELL NO CONNECTION CLAIMS, AND WHICH WAY IT OPENS. Dead-coloured,
    because it is pipe that is really there and really carries nothing - a cell

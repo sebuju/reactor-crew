@@ -543,6 +543,29 @@ const burnFree=(occ,x,y)=>{
   if(X<0||Y<0||X>=GW||Y>=GH) return false;
   return !occ[Y*GW+X];
 };
+/* ══ THE BED IS ONE FILL PER SHADE, NOT ONE PER CELL ══
+   A compartment well alight lit half of 2040 cells, and every one of them set
+   globalAlpha, set a fill colour and painted a single rectangle - the whole of
+   the 1009 to 2249 fillRect jump a burn costs. The colour is already a ladder
+   of four; the alpha is banded to 1/32, which is finer than the screen can
+   show, and each bucket is one path and one fill. */
+const BED_A=32;
+const bedBy=new Map();
+function bedPush(col,a,x,y,w,h){
+  const k=col+"|"+Math.round(clamp(a,0,1)*BED_A);
+  let b=bedBy.get(k);
+  if(!b){ b={col, a:Math.round(clamp(a,0,1)*BED_A)/BED_A, r:[]}; bedBy.set(k,b); }
+  b.r.push(x,y,w,h);
+}
+function bedFlush(){
+  for(const b of bedBy.values()){
+    ctx.globalAlpha=b.a; ctx.fillStyle=b.col; ctx.beginPath();
+    for(let i=0;i<b.r.length;i+=4) ctx.rect(b.r[i],b.r[i+1],b.r[i+2],b.r[i+3]);
+    ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  bedBy.clear();
+}
 function roomBurnFx(s){
   if(!s.roomFlame) return;
   const T=s.roomT, Fl=s.roomFlame, Pr=s.roomP, N=Fl.length;
@@ -589,14 +612,15 @@ function roomBurnFx(s){
            the fire stopped looking like fire at all; what must not compete
            with the fireball is the glow a front has left behind, which is
            where the checkerboard came from. */
-        ctx.globalAlpha=Math.min(0.95, Math.max(fl>0?0.55:0, lit))*(fl>0?1:BED_DIM);
-        fillRect(x0+(CELL-iw)/2, y+(h-ih)/2, iw, ih, col); ctx.globalAlpha=1;
+        const al=Math.min(0.95, Math.max(fl>0?0.55:0, lit))*(fl>0?1:BED_DIM);
+        bedPush(col, al, x0+(CELL-iw)/2, y+(h-ih)/2, iw, ih);
       }
       // and the effects are BORN from the physics, never scheduled: a burning
       // cell feeds its BANG, weighted by the heat it is putting out
       if(fl>0) evFeed(evFor(i,N), i, clamp((T[i]-600)/1600,0,1), p);
     }
   }
+  bedFlush();                 // the whole bed, still under the events it feeds
   evStep(dt);
   for(const e of burnEvs) evFx(e,dt);
   burnParticles(dt);
