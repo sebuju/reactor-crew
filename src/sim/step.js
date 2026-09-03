@@ -770,8 +770,13 @@ const cwFlowOf = (m,id) => { let f=0;
 /* the solved pressure field, kept on S for next tick's readers (pumpFwd, the
    phase at a node) - REFILLED, never rebuilt */
 const keepPField = (s, pf) => {
-  for(const k in s.pBy) if(pf[k] === undefined) delete s.pBy[k];
-  for(const k in pf) s.pBy[k] = pf[k]; };
+  const net = P && P.net, by = s.pBy, has = Object.prototype.hasOwnProperty;
+  let n = 0, added = 0;
+  for(const k in pf){ if(!has.call(by, k)) added++; by[k] = pf[k]; n++; }
+  // net.pByN is by's key count after the last call on this same object, so a stale key is a count that does not add up
+  if(!net || net.pByObj !== by || net.pByN + added !== n)
+    for(const k in by) if(pf[k] === undefined) delete by[k];
+  if(net){ net.pByObj = by; net.pByN = n; } };
 /* THE WATER ARRIVING AT THE CONDENSER, off the field the panels have just
    chilled - the inlet face of each circulating water path, read along the
    solved flow's own direction. One expression for the tick and the seed. */
@@ -1087,12 +1092,17 @@ const dmgFx = id => {
    and a nozzle valve, which stand in the same air and take the same blast, so
    the heat loop and the blast loop walk one list rather than growing a third
    copy each time the board gains a per-cell target. */
+// cached for the length of one pass (layPass()): the heat loop and the blast loop both walk it every tick
+let hazCache = null, hazPass = -1;
 function cellHazards(){
+  const pn = layPass();
+  if(pn && hazPass === pn) return hazCache;
   const out=[];
   for(const k in D.pipes){ const c=k.indexOf(",");
     out.push({id:"pipe:"+k, x:+k.slice(0,c), y:+k.slice(c+1), what:"the run at "+k}); }
   for(const pid in D.ports){ const c=portCell(pid); if(!c) continue;
     out.push({id:"port:"+pid, x:c[0], y:c[1], what:"the "+portLabel(pid)+" nozzle valve"}); }
+  if(pn){ hazCache = out; hazPass = pn; }
   return out;
 }
 
@@ -1973,8 +1983,11 @@ function advectStep(s, dt, runFlow, edgeKg){
      deterministic function of LAY.parts at commission time and the design
      cannot change while operating, so a key that has gone means the plant was
      re-commissioned under it. */
-  for(const k in h) if(net.index[k] === undefined) delete h[k];
-  for(const k in mBy) if(net.index[k] === undefined) delete mBy[k];
+  // once per (net, field object): a key can only go stale when one of the two is replaced
+  if(net.advKeysH !== h || net.advKeysM !== mBy){
+    for(const k in h) if(net.index[k] === undefined) delete h[k];
+    for(const k in mBy) if(net.index[k] === undefined) delete mBy[k];
+    net.advKeysH = h; net.advKeysM = mBy; }
 
   const src = advectSrc(s), A = advectAnchors(s);
   const anch = Object.assign({}, A.hold);
@@ -3360,27 +3373,51 @@ function resetPlant(){
      the round is repeated until they agree. A pump that cannot make the flow
      at any position leaves its valve on the stop, which is the truth. */
   { const ids = sgIds();
+    // held for the same reason the shell walk and the settle hold it: a reading taken while the stores march is a state N ticks on, not a rest point
+    netHoldStore(true);
     const solveFeed = () => { const o = {noNat:true}, pf = {}; netFlowK(S, rf, pf, o);
       keepPField(S, pf); return o; };
-    const fedOf = id => { const o = solveFeed();
-      return (o.sgFeedBy && o.sgFeedBy[id]) || 0; };
-    for(let r=0;r<6 && ids.length;r++){
+    // read at the field's own fixed point, as the shell walk does: one solve relinearises the next, so a bracket on single solves never closed
+    const feedAt = () => { let was = null, by = {};
+      for(let k=0;k<30;k++){ const o = solveFeed(); by = o.sgFeedBy || {};
+        const now = ids.map(id => by[id]||0);
+        if(was && now.every((v,j) => Math.abs(v-was[j]) <= 1e-7*Math.max(Math.abs(v),1))) break;
+        was = now; }
+      return by; };
+    const fedOf = id => feedAt()[id] || 0;
+    // the governor's re-commissionings search from the last answer; P is rebuilt per commission, so a fresh plant never sees one
+    const seed = P.fregSeed || {};
+    for(let r=0;r<12 && ids.length;r++){
       let moved = 0;
       for(const id of ids){ const want = S.steamBy[id]||0; if(!(want > 0)) continue;
-        const was = S.fregBy[id], f = v => { S.fregBy[id] = v; return fedOf(id) - want; };
-        // regula falsi with the Illinois halving, on a bracket the valve's own stops give
-        let a = 0, fa = f(a), b = fregMax(id), fb = f(b), side = 0;
-        if(fa <= 0){ S.fregBy[id] = a; continue; }
-        if(fb >= 0){ S.fregBy[id] = b; continue; }
+        const was = S.fregBy[id], max = fregMax(id), tol = 1e-6*want,
+          f = v => { S.fregBy[id] = v; return fedOf(id) - want; };
+        const land = v => { S.fregBy[id] = v;
+          moved = Math.max(moved, Math.abs(v-was)/Math.max(max,1e-9)); };
+        let a = 0, fa, b = max, fb, side = 0;
+        const g = r ? was : seed[id];
+        if(g !== undefined){
+          // bracket outward from the guess: a valve near its balance is a few readings, not a search over its whole stroke
+          const f0 = f(g); if(Math.abs(f0) < tol){ land(g); continue; }
+          let d = 0.05*max;
+          if(f0 > 0){ a = g; fa = f0; b = Math.min(g+d, max); fb = f(b);
+            while(fb > 0 && b < max){ d *= 2; b = Math.min(b+d, max); fb = f(b); } }
+          else { b = g; fb = f0; a = Math.max(g-d, 0); fa = f(a);
+            while(fa < 0 && a > 0){ d *= 2; a = Math.max(a-d, 0); fa = f(a); } } }
+        else { fa = f(a); fb = f(b); }
+        if(fa <= 0){ land(a); continue; }
+        if(fb >= 0){ land(b); continue; }
+        // regula falsi with the Illinois halving
         for(let k=0;k<30;k++){
           const c = (a*fb - b*fa)/(fb - fa), fc = f(c);
-          if(Math.abs(fc) < 1e-6*want){ a = b = c; break; }
+          if(Math.abs(fc) < tol){ a = b = c; break; }
           if(fc > 0){ a = c; fa = fc; if(side === 1) fb /= 2; side = 1; }
           else       { b = c; fb = fc; if(side === -1) fa /= 2; side = -1; } }
-        S.fregBy[id] = (a+b)/2;
-        moved = Math.max(moved, Math.abs(S.fregBy[id]-was)/Math.max(fregMax(id),1e-9)); }
+        land((a+b)/2); }
       if(moved < 1e-5) break; }
+    P.fregSeed = Object.assign({}, S.fregBy);
     // the field, the pumps' own flows and the pressures at the valves as finally left, not at the last trial
+    netHoldStore(false);
     if(ids.length) solveFeed(); }
   layRelease();
   /* And the steam space holds saturated steam at the shell's own rest
@@ -5008,6 +5045,8 @@ function step(dt){
      are structure, they have no electronics and no bearings, and a
      temperature is not how they fail. */
   { const live={};
+    // the live set only serves the sweep at the end, which has nothing to sweep while no cell is hot
+    let track=false; for(const k in s.roomHurt){ track=true; break; }
     for(const p of LAY.parts){
       const lim = partTsurv(p);
       if(!lim || !fitted(p)) continue;
@@ -5040,7 +5079,7 @@ function step(dt){
        one. THE AIR, not a skin: what a run carries is its own fluid and is no
        measure of the fire around it. */
     for(const q of cellHazards()){
-      live[q.id] = 1;
+      if(track) live[q.id] = 1;
       if(s.dmgParts.indexOf(q.id) >= 0){ s.roomHurt[q.id]=0; continue; }
       const air = s.roomT[q.y*GW+q.x];
       const over = clamp((air-PIPE_TSURV)/ROOM_DMG_SPAN, 0, 1);
@@ -5055,7 +5094,7 @@ function step(dt){
         "The compartment has cooked "+q.what+" - air at "+
         air.toFixed(0)+" K against the "+PIPE_TSURV+" K it is good for. "+fx.why);
     }
-    for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
+    if(track) for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
 
   /* ── reactor protection system: trips unless it was never fitted, or is defeated ── */
   if(!s.scrammed && rpsLive()){
@@ -5286,8 +5325,7 @@ function step(dt){
       d[key] += r.k==="hpi" ? hpiFlow : surgeFlow;   // DEFAULT: which correlation
       continue;
     }
-    let tag=0;
-    for(const ed of P.net.edges) if(ed.key===key) tag = tag||P.net.tag[ed.u]||P.net.tag[ed.v];
+    const tag = P.net.tagByKey[key] || 0;
     /* HAVING A SOLVED REFERENCE is the test, not carrying a temperature tag.
        KIND_TEMP is about BUOYANCY and deliberately says nothing about the
        secondary (see its own comment), so gating the animation on it left the
