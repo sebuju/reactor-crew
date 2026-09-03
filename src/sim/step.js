@@ -2120,26 +2120,47 @@ function advectStep(s, dt, runFlow, edgeKg){
      somebody else's answer - and over what is CIRCULATING, because a stagnant
      reserve hanging off the loop is not going round. */
   if(G.coreCirc >= 0 && s.Tavg !== undefined){
-    let m = 0, hm = 0; const list = [];
+    let m = 0, hm = 0, pm = 0;
     for(let i=0;i<net.n;i++){ const nm = net.name[i];
       if(anch[nm] !== undefined || circOfNode(nm) !== G.coreCirc) continue;
-      /* OVER WHAT IS ACTUALLY CIRCULATING. s.Tavg is the mean of the water
-         going round, and a tank hanging off the loop on one line is not going
-         round - ninety cubic metres of stagnant reserve in the average pushed
-         every pipe in the plant above it, which cancelled most of the
-         buoyancy the profile was there to produce. */
-      if(!(inM[i] > 1e-9)) continue;
-      const mi = mBy[nm] !== undefined ? mBy[nm] : net.vol[i]*rho;
-      m += mi; hm += mi*h[nm]; list.push(nm);
+      /* OVER WHAT IS ACTUALLY CIRCULATING, AND MEMBERSHIP IS NOT A SWITCH.
+         s.Tavg is the mean of the water going round, and a tank hanging off
+         the loop on one line is not going round - ninety cubic metres of
+         stagnant reserve in the average pushed every pipe in the plant above
+         it, which cancelled most of the buoyancy the profile was there to
+         produce. Asked as `inflow > 1e-9` it was a bare > 0 on a solved
+         quantity sitting inside a feedback loop: the pressurizer's surge is
+         thermal breathing, about 0.02 kg/s, and its SIGN alternates tick to
+         tick, so 35 t joined and left the average on alternate ticks. That is
+         0.18 K of chatter, 8 pcm on the moderator term and 1 % on core power,
+         at the tick rate, integrated into primary pressure through s.dTavg.
+         THROUGH-FLOW, as a fraction of what this node passes as commissioned
+         (P.netRefThru): a dead end has inflow on half the ticks and
+         through-flow on none, so it scores zero on both and leaves for good,
+         and a leg slowing down fades out continuously instead of dropping. */
+      const ref = P.netRefThru && P.netRefThru[nm];
+      if(!(ref > 0)) continue;
+      const w = clamp(Math.min(inM[i], mOut[i])/ref, 0, 1);
+      if(!(w > 0)) continue;
+      const mi = w*(mBy[nm] !== undefined ? mBy[nm] : net.vol[i]*rho);
+      m += mi; hm += mi*h[nm]; pm += mi*netPAt(s, nm);
     }
     if(m > 0){
-      const c = satOfCirc(G.coreCirc), pm = netPAt(s, list[0]);
+      const c = satOfCirc(G.coreCirc);
       const was = s.Tavg;
-      s.Tavg = clamp(tOfH(c, pm, hm/m), P.Tmin, P.Tmax);
-      s.dTavg = dt > 0 ? (s.Tavg - was)/dt : 0;
-      if(globalThis.TAVGDBG) console.log("TAVG n="+list.length+" m="+m.toFixed(1)+
-        " hm/m="+(hm/m).toFixed(1)+" pm="+pm.toFixed(4)+" first="+list[0]+
-        " T="+s.Tavg.toFixed(6)+" | "+list.join(","));
+      /* AND AT THE MEAN PRESSURE OF THE SAME NODES. It read the pressure of
+         whichever node the loop reached first, which is array order and
+         nothing else. */
+      s.Tavg = clamp(tOfH(c, pm/m, hm/m), P.Tmin, P.Tmax);
+      /* ══ AND THE RATE IS FILTERED ══
+         A tick-to-tick difference of a read carries whatever noise the field
+         has at 50 Hz straight into primary pressure (satSlope and solidK both
+         integrate it) and into the rod controller's own derivative, which
+         divides it by dt again. One lag, written where the read is, so every
+         consumer sees the same rate. */
+      const raw = dt > 0 ? (s.Tavg - was)/dt : 0;
+      s.dTavg = isFinite(s.dTavg)
+        ? s.dTavg + (raw - s.dTavg)*Math.min(1, dt/TAVG_RATE_TAU) : raw;
     }
   }
 }
