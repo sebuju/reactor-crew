@@ -25,15 +25,26 @@
 "use strict";
 const { Worker, isMainThread, workerData, parentPort } = require("worker_threads");
 
-const SECS = 600;                       // how long a plant is left alone for
+/* how long a plant is left alone for. Overridable exactly as probe.js and the
+   sandbox are, so a run can be made to fit the 10 s script budget when what is
+   being checked is that the sweep RUNS rather than what it finds. */
+const SECS = Number(process.env.SWEEP_SECS) || 600;
 
 /* ══════════ worker: simulate one shard ══════════ */
 if(!isMainThread){
-  const M = require("./bundle").headless("{commission,step,derived,S:()=>S,D:()=>D}");
+  const M = require("./bundle").headless(
+    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,latDefault,buildLayout,buildStockPlumbing}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
 
-  /* the same two helpers audit-physics.js uses, for the same reasons */
-  const set = o => { Object.assign(D, BASE, o); M.commission(); return M.S(); };
+  /* the same two helpers audit-physics.js uses, for the same reasons.
+     THE GRID STARTS BLANK, so a case has to be BUILT before it can be
+     commissioned: the stock ship's own plumbing, then the architecture as a
+     PRESET (archPreset lays the lattice - there is no D.arch to type any
+     more), then whatever the case overrides. */
+  const set = o => { Object.assign(D, BASE);
+    M.latDefault(); M.buildStockPlumbing({loops:1});
+    M.archPreset(o.arch); delete o.arch;
+    Object.assign(D, o); M.buildLayout(); M.commission(); return M.S(); };
   const run = (s,secs) => { for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) break; } return s; };
 
   /* the end state, to more digits than any physics could survive being wrong in */
@@ -85,10 +96,15 @@ const os = require("os");
    derived() only, no commission - and because keeping it in one place stops
    the workers and the report disagreeing about what "buildable" counted. */
 function cases(){
-  const M = require("./bundle").headless("{derived,warnRed,D:()=>D,ARCH:()=>ARCH,FUEL:()=>FUEL}");
+  const M = require("./bundle").headless(
+    "{derived,warnRed,D:()=>D,ARCHPRE:()=>ARCHPRE,FUEL:()=>FUEL,archPreset,latDefault,buildLayout,buildStockPlumbing}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
-  const ok = o => { Object.assign(D, BASE, o); return !M.derived().warn.some(M.warnRed); };
-  const nA = M.ARCH().length, nF = M.FUEL().length;
+  const ok = o => { Object.assign(D, BASE);
+    M.latDefault(); M.buildStockPlumbing({loops:1});
+    M.archPreset(o.arch); const q = Object.assign({}, o); delete q.arch;
+    Object.assign(D, q); M.buildLayout();
+    return !M.derived().warn.some(M.warnRed); };
+  const nA = M.ARCHPRE().length, nF = M.FUEL().length;
   const out = [];
   for(let a=0;a<nA;a++) for(let f=0;f<nF;f++){
     const built = [0,1,2].filter(sc => ok({arch:a, fuel:f, scram:sc, autorod:true}));
