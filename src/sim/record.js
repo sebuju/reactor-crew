@@ -710,16 +710,18 @@ function recPlay(){
 
    TICK_CAP is a FRAME BUDGET and not a rate limit. At 60 Hz, 16x asks for
    about 13 ticks a frame, so the cap never bites in normal running. It exists
-   for the tab that was in the background: dt arrives clamped at 0.25, which is
-   200 ticks owed at 16x, and paying that debt in one frame blocks for long
-   enough that the next frame owes just as much again. The backlog is shed
-   instead - the plant loses time it was not being watched for, which is the
-   right thing to lose.
+   for the tab that was in the background: dt arrives clamped at 0.25 s, which
+   is 200 ticks owed at 16x, and paying that in one frame blocks for long
+   enough that the next frame owes just as much again. What is left over is the
+   BACKLOG, bounded at TR_DEBT_MAX below.
 
    TR is NOT on S. How fast you are watching is not a property of the reactor,
    so it must not be snapshotted, scrubbed or replayed - a recording made at
    16x plays back at whatever rate you are sitting at now. */
-const TR = {rate:1, paused:false, step1:0, sps:0, vldSeen:null, vldHit:null, vldRev:0};
+/* tickMs/tps/rateMax are trBench()'s answer - null until something has
+   measured this plant on this machine, which is "offer everything". */
+const TR = {rate:1, paused:false, step1:0, sps:0, vldSeen:null, vldHit:null, vldRev:0,
+            tickMs:null, tps:0, rateMax:Infinity};
 /* VLD is MAX with a stop condition and no picture. The alarms already lit when
    it starts are the ones you signed off, so only a tile that was NOT lit then
    halts the run - and the halt is a drop to 1x, so the plant is still running
@@ -739,11 +741,8 @@ const trVldCheck = () => {
    frame on it and shellSync() keeps only the clock. */
 const trQuiet = () => TR.rate===TR_VLD && !TR.paused && !!P && !!SIMSCREEN[screen];
 const TICK_CAP  = 48;
-/* WHAT A FRAME IS WORTH, s. The rate multiplies this and nothing else, so 1x is
-   50 ticks a second of PLANT time at 60 frames a second of screen time, and it
-   stays 50 whatever the screen is actually managing. Nominal on purpose - a
-   measured frame period is the wall clock coming back in through the window. */
-const FRAME_DT = 1/60;
+/* WHAT A BACKLOG MAY GROW TO, s of plant time - see the accumulator below. */
+const TR_DEBT_MAX = 0.5;
 /* MAX is a TIME budget, not a multiplier: there is no rate that owes it ticks,
    it simply steps until the frame's share of milliseconds is spent. The cap is
    what leaves the browser room to paint and to answer the hand. */
@@ -779,6 +778,57 @@ let spsN=0, spsT=0;
 function spsFrame(dt){
   spsT += dt;
   if(spsT>=0.5){ TR.sps = spsN/spsT; spsN=0; spsT=0; }
+}
+/* ══════════ WHAT THIS MACHINE CAN ACTUALLY HOLD ══════════
+   A rate is a PROMISE of plant seconds per second, and a big plant on a slow
+   machine cannot keep it: the frame owes 50*rate ticks and pays what it can,
+   so 1x silently ran at 33 TPS and 4x at 70 - faster, but nowhere near four
+   times. The strip may only offer a rate the tick cost says is reachable, so
+   the tick cost has to be MEASURED, on this plant, on this machine.
+   Measured on a SNAPSHOT and put back: the benchmark must leave the plant on
+   the tick it was commissioned on. S is the whole of sim state, so the clone
+   covers everything the ticks touched except LOG, which is trimmed by hand.
+   Not simTick(): the scenario, the trend sample and the TPS window are not
+   this measurement's business, and step() is what the cost is made of. */
+/* THE FIRST TICKS OF A RUN ARE NOT WHAT A RUN COSTS. commission() has taken
+   exactly one step(), so the tick is cold: measured 5.4 ms over the first five
+   and 2.7 over the next forty of the same plant. Timing the cold ones halves
+   every rate the strip then offers, so they are thrown away. */
+const TRB_WARM=6;
+/* ── THE CHEAPEST ROUND IS THE MEASUREMENT, NOT THE AVERAGE ──
+   Four measurements of one plant in one browser came back 2.95, 6.16, 2.51 and
+   7.06 ms: the spread is the machine's, not the plant's - a background tab, a
+   collection, another core taken away. An average carries every one of those
+   into the rate the strip then refuses to offer. The FASTEST round is the one
+   round nothing else was happening during, which is the cost of a tick. */
+const TRB_ROUNDS=5, TRB_PER=8;
+/* THE SHARE OF A SECOND THE TICKS MAY HAVE. MAX's own budget against a 60 Hz
+   frame - the rest is the paint and the hand. Refresh-independent on purpose:
+   priced off the frame period it would exceed 1 on a 120 Hz screen, which is
+   the loop promising more milliseconds a second than a second has. */
+const TRB_SHARE = TR_MAX_MS/(1000/60);
+function trBench(){
+  if(!P||!S){ TR.tickMs=null; TR.tps=0; TR.rateMax=Infinity; return; }
+  const snap=snapS(S), lg=LOG.length;
+  const tick=()=>{ laySettle(); step(0.02); layRelease(); };
+  for(let i=0;i<TRB_WARM;i++) tick();
+  let ms=Infinity;
+  for(let r=0;r<TRB_ROUNDS;r++){
+    const t0=trNow();
+    for(let i=0;i<TRB_PER;i++) tick();
+    const m=(trNow()-t0)/TRB_PER;
+    if(m<ms) ms=m;
+  }
+  restoreS(snap); LOG.length=lg;
+  // a clock with no resolution (a stubbed one, a hardened browser) measured nothing
+  if(!(ms>0)){ TR.tickMs=null; TR.tps=0; TR.rateMax=Infinity; return; }
+  TR.tickMs=ms;
+  TR.tps=TRB_SHARE*1000/ms;
+  TR.rateMax=TR.tps/50;
+  /* Names no rate: TR_RATES is the strip's table and lives in transport.js,
+     which the tape layer may not reach for (see the keystroke note below). */
+  console.log("BENCH  "+ms.toFixed(2)+" ms/tick, best of "+TRB_ROUNDS+" rounds of "+TRB_PER+" -> "+
+    TR.tps.toFixed(0)+" TPS sustainable, so "+TR.rateMax.toFixed(2)+"x is the fastest honest rate");
 }
 /* Returns whether the plant MOVED this frame. main.js paints on that, so the
    answer has to come from here rather than be re-derived from screen and
@@ -823,18 +873,19 @@ function simFrame(dt){
     recTick();
     return m>0;
   }
-  /* ══ THE CLOCK IS TICKS AND A TARGET RATE, NEVER THE WALL ══
-     This was `simAcc += dt * TR.rate`, so plant time advanced at whatever the
-     browser felt like handing out. A backgrounded tab throttles rAF, dt then
-     arrives clamped at 0.25, and at 16x that is 200 ticks owed against a
-     48-tick budget - so the plant SILENTLY LOST time, and lost more of it the
-     faster you asked it to go. Two runs of the same plant at the same rate did
-     not land on the same second, which makes every timed reading a measurement
-     of the browser rather than of the reactor.
-     A frame now owes exactly what the TARGET rate says a frame owes, whenever
-     it arrives. Wall time is gone from the sim's advance entirely; a slow tab
-     takes longer in seconds and reaches the same plant. */
-  simAcc += FRAME_DT * TR.rate;
+  /* ══ 4X IS FOUR SECONDS OF PLANT PER SECOND OF YOURS ══
+     A rate is a promise about the WALL, so the wall is what it is paid in.
+     This owed a fixed number of ticks per FRAME instead, which made the
+     promise depend on how many frames a second arrived: a 120 Hz screen ran 1X
+     at 2x, and a frame that overran its own period - drawing is not free -
+     delivered 4X as 3.3x, with no backlog to show for it because the shortfall
+     was never counted as one. Both are the same mistake, and it is fixed here
+     rather than by measuring the refresh, which only ever corrected the first.
+     Wall time therefore comes back in, and the two things it used to break are
+     handled where they belong: a run is a tape of TICKS and acts are stamped
+     in ticks, so a replay is unaffected by how fast anyone watched, and a
+     backgrounded tab is a dt of 0.25 s (main.js) against a bounded backlog. */
+  simAcc += dt * TR.rate;
   let n=0;
   while(simAcc>=0.02 && n<TICK_CAP){
     /* recPlay() BEFORE the step, every tick: it re-applies the take's own
@@ -845,13 +896,13 @@ function simFrame(dt){
     simTick();
     simAcc-=0.02; n++;
   }
-  /* THE DEBT IS CARRIED, NOT SHED. Shedding was the wall clock's fix for the
-     wall clock's problem: dt could ask for 200 ticks, so the backlog had to go
-     somewhere. A frame owes a fixed number now, so a backlog only ever means
-     this machine is slower than the rate asked for - and the honest answer to
-     that is to take longer, not to skip plant seconds nobody chose to skip.
-     Bounded so a tab left in the background does not come back owing an hour. */
-  if(simAcc > TICK_CAP*0.02) simAcc = TICK_CAP*0.02;
+  /* THE DEBT IS CARRIED, AND BOUNDED. A frame that ran long is paid off by the
+     frames after it, which is what makes a rate hold across a stutter. What it
+     may never do is grow without end: a machine that cannot hold the rate at
+     all would otherwise owe more every frame for as long as it is left, and
+     the half second here is the point where the honest answer is the TPS
+     readout going amber rather than an hour of plant nobody watched. */
+  if(simAcc > TR_DEBT_MAX) simAcc = TR_DEBT_MAX;
   recTick();                       // once a frame, after the ticks it covers
   return n>0;
 }

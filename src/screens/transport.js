@@ -23,11 +23,60 @@ function trBind(sc,k){
 }
 keyAdd({k:" ", sc:"operate",  lab:"PAUSE", fn:trPause});
 keyAdd({k:" ", sc:"scenario", lab:"PAUSE", fn:trPause});
-const TR_RATES = [["1",1,"1X"],["2",4,"4X"],["3",16,"16X"],["4",Infinity,"MAX"],["5",TR_VLD,"VLD"]];
-for(const [key,r,lab] of TR_RATES){
-  keyAdd({k:key, sc:"operate",  lab, fn:()=>trRate(r)});
-  keyAdd({k:key, sc:"scenario", lab, fn:()=>trRate(r)});
+/* ══ THE TWO MULTIPLIERS ARE THE MACHINE'S, NOT A TABLE'S ══
+   4X and 16X were written down, so on a plant whose tick costs more than a
+   frame can pay they were two buttons that lied: the accumulator owed more
+   ticks and the loop paid what it could, which is faster than 1X and nothing
+   like sixteen times it. trBench() (record.js) measures what a tick costs
+   here, so the FAST slot is that figure rounded, capped at 16 - past that what
+   you want is the frame budget rather than a rate, and that is MAX - and the
+   MIDDLE slot is half of it.
+   A slot with nothing to say is ABSENT rather than dimmed: a fast slot of 1x
+   is the 1X already on the strip, and so is a middle slot of 1x. */
+const TR_FAST_CAP=16;
+/* EVEN, AND ROUNDED DOWN. Down because a rate the machine cannot quite hold is
+   the whole fault this replaced - the measurement is a ceiling, never a target
+   to round up to. Even because the middle slot is half of it, and a half slot
+   should be a whole number of plant seconds too: 9.3x measured gives 8X and
+   4X, not 9X and 4.5X. */
+function trRateSlots(){
+  const fast = TR.tickMs===null ? TR_FAST_CAP
+             : Math.min(TR_FAST_CAP, Math.floor(TR.rateMax/2)*2);
+  if(!(fast>1)) return {mid:null, fast:null};
+  const mid = fast/2;
+  return {mid: mid>1?mid:null, fast};
 }
+/* half of an odd fast slot is a half, so a label may carry one decimal. */
+const trRateLab = v => v==null ? "" : v===Infinity ? "MAX" : v===TR_VLD ? "VLD"
+  : (Number.isInteger(v) ? v : v.toFixed(1))+"X";
+/* A KEY NAMES A SLOT, AND THE SLOT ANSWERS WITH WHAT IT HOLDS NOW - null when
+   it holds nothing, which is a key that does nothing and a cell that is not
+   drawn. Everything downstream (the strip, the deep link, the fit) asks here,
+   so there is one place that decides what this machine offers. */
+const TR_RATES = [["1",()=>1,"1X"],["2",()=>trRateSlots().mid,"MID RATE"],
+                  ["3",()=>trRateSlots().fast,"FAST RATE"],
+                  ["4",()=>Infinity,"MAX"],["5",()=>TR_VLD,"VLD"]];
+const trRateNow = () => TR_RATES.map(r=>r[1]());
+/* THE RATE IN YOUR HAND WHEN THE PLANT CHANGES UNDER IT. A deep link picks its
+   timescale before the prewarm it started has measured anything, and a design
+   edit can make the plant heavier while you sit at the fast slot. Called after
+   trBench(): the running rate lands on the fastest offer at or below it, so
+   the strip can never be running a rate it is not showing. */
+function trRateFit(){
+  if(typeof TR.rate!=="number" || !isFinite(TR.rate)) return;
+  const have=trRateNow().filter(v=>typeof v==="number"&&isFinite(v));
+  if(have.includes(TR.rate)) return;
+  const under=have.filter(v=>v<TR.rate);
+  const to=under.length?under[under.length-1]:1;
+  console.warn("TIMESCALE  this machine holds "+TR.rateMax.toFixed(1)+"x, so the run moves from "+
+    trRateLab(TR.rate)+" to "+trRateLab(to));
+  trRate(to);
+}
+TR_RATES.forEach((row,i)=>{
+  const fn=()=>{ const v=TR_RATES[i][1](); if(v!=null) trRate(v); };
+  keyAdd({k:row[0], sc:"operate",  lab:row[2], fn});
+  keyAdd({k:row[0], sc:"scenario", lab:row[2], fn});
+});
 /* "," and "." are the frame-back/frame-forward pair every editing tool binds,
    and they sit next to each other under the same finger. */
 for(const sc of ["operate","scenario"]){
@@ -46,10 +95,11 @@ function trBuild(sc){
   const pause = KIT.button("PAUSE",{sunk:1,onClick:trBind(sc," ").fn});
   pause.el.classList.add("trs-pause","trs-fixw");
 
-  const rate = KIT.segSel(TR_RATES.map(r=>r[2]),
-    {onSelect:i=>trBind(sc,TR_RATES[i][0]).fn()});
+  // labels are written by trRateOffer(); a slot's own answer is what it says
+  const rate = KIT.segSel(trRateNow().map(trRateLab),
+    {onSelect:i=>trBind(sc,TR_RATES[i][0]).fn()});   // the key's own fn, which is where the empty-slot test lives
   rate.el.classList.add("trs-rate");
-  KIT.tip(rate.el.children[TR_RATES.findIndex(r=>r[1]===TR_VLD)],"VLD / VALIDATION RUN",
+  KIT.tip(rate.el.children[TR_RATES.findIndex(r=>r[1]()===TR_VLD)],"VLD / VALIDATION RUN",
     "Runs as fast as MAX and stops drawing the plant while it does, so the whole frame goes into the sim - only the clock and the tick counter in the topbar keep moving. The alarms already lit when you start it are stashed; the first tile that was NOT lit then drops the run back to 1x and hands the plant back to you.");
 
   const stepBack = KIT.button("STEP -",{sunk:1,onClick:trBind(sc,",").fn,
@@ -134,7 +184,7 @@ function trBuild(sc){
 
   return {sc,root,pause,rate,stepBack,step,modeEl,notape,nameEl,forkEl,track,logLane,scrub,scrubHead,
     clock,takesBtn,picker,pickTree,blocks:[],forks:[],marks:[],
-    pickSig:null,parSig:null,forkSig:null};
+    pickSig:null,parSig:null,forkSig:null,rateSig:null};
 }
 
 /* ═══════════ THE EVENT LOG, ON THE SCRUB BAR ═══════════
@@ -250,6 +300,27 @@ function trPickerBuild(container,ids){
   }
 }
 
+/* Signature-gated on the offers themselves: they move once per commissioning
+   and this is a label write and a paragraph of tip text against a control that
+   changes on nothing else. */
+function trRateOffer(h){
+  const vals=trRateNow(), sig=vals.join(",");
+  if(sig===h.rateSig) return;
+  h.rateSig=sig;
+  vals.forEach((v,i)=>{
+    const cell=h.rate.el.children[i];
+    if(!cell) return;
+    KIT.show(cell, v!=null);
+    if(v==null || typeof v!=="number" || !isFinite(v)) return;
+    KIT.setText(cell.querySelector(".kit-segsel-name"), trRateLab(v));
+    KIT.tip(cell, trRateLab(v)+" / TIMESCALE",
+      trRateLab(v)+" is "+(v*50)+" ticks a second of plant time. "+(TR.tickMs===null
+        ? "Nothing has been commissioned yet, so this is the standing pair; the two multipliers become this machine's own the moment a plant is built."
+        : "This machine measures "+TR.tickMs.toFixed(1)+" ms a tick, so it holds about "+
+          TR.rateMax.toFixed(1)+"x - the two multipliers on this strip are that measurement, not a fixed pair."));
+  });
+}
+
 function trSync(h){
   if(!h) return;
   /* Both strips are synced on one interval, and only one screen is ever up.
@@ -263,7 +334,8 @@ function trSync(h){
   if(screen !== h.sc) return;
   const cur = recCur();
   h.pause.set({label:TR.paused?"PLAY":"PAUSE", on:TR.paused});
-  h.rate.set(TR_RATES.findIndex(r=>r[1]===TR.rate));
+  h.rate.set(trRateNow().findIndex(v=>v===TR.rate));
+  trRateOffer(h);
   h.modeEl.classList.toggle("replay", REC.mode==="replay");
   /* the strip says which rate is running and then goes still with the rest of
      the screen - see trQuiet() (record.js). */

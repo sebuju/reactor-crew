@@ -9,9 +9,11 @@ const urlSlug = s => String(s).toLowerCase().replace(/^[\d?]+\s+/,"")
 const urlTabRows  = () => [...document.querySelectorAll("#tabs .tab")]
   .map(btn => ({keys:[btn.dataset.screen, urlSlug(btn.textContent)], btn}));
 const urlPreRows  = () => PLANTPRE.map((p,i) => ({keys:[urlSlug(p[0])], i}));
-const urlRateRows = () => TR_RATES.map(r => {
-  const s = urlSlug(r[2]);
-  return {keys:[s, s.replace(/^(\d+)x$/,"$1")], v:r[1]};
+/* The multipliers are this machine's (trRateSlots(), transport.js), so the rows
+   are built off what the strip is offering NOW - "3-5" for a 3.5X slot. */
+const urlRateRows = () => trRateNow().filter(v=>v!=null).map(v => {
+  const s = urlSlug(trRateLab(v));
+  return {keys:[s, s.replace(/^([\d-]+)x$/,"$1")], v};
 });
 
 function urlApply(){
@@ -28,8 +30,16 @@ function urlApply(){
   // guard in shellInit() run exactly as they do under the hand
   const tb = pick("tab",urlTabRows());
   if(tb) tb.btn.click();
-  const ts = pick("timescale",urlRateRows());
-  if(ts) trRate(ts.v);
+  /* ══ A TIMESCALE IS A NUMBER, NOT A SLOT ══
+     The multipliers are measured per machine now, so a link written beside a
+     9X slot lands where there is none - and the tab click above only STARTS
+     the prewarm, so nothing has been measured by the time this runs either. A
+     plain number is taken as written and trRateFit() (transport.js) puts it on
+     an offer the moment the measurement exists. MAX and VLD still come off the
+     table, because neither is a number. */
+  const tsRaw = q.get("timescale"), tsNum = tsRaw && Number(tsRaw.replace(/x$/i,""));
+  if(tsNum>0) trRate(tsNum);
+  else { const ts = pick("timescale",urlRateRows()); if(ts) trRate(ts.v); }
 }
 
 /* ══ AND BACK OUT AGAIN ══
@@ -54,7 +64,7 @@ function urlSync(){
   const q=new URLSearchParams(location.search);
   const tb=urlTabRows().find(r=>r.btn.dataset.screen===screen);
   q.set("tab", tb?tb.keys[tb.keys.length-1]:screen);
-  const rt=urlRateRows().find(r=>r.v===TR.rate);
+  const rt=urlRateRows().find(r=>r.v===TR.rate);   // an unoffered rate writes no param
   if(rt) q.set("timescale",rt.keys[rt.keys.length-1]); else q.delete("timescale");
   if(urlPreI!=null && DGEN===urlPreGen) q.set("preset",urlPreRows()[urlPreI].keys[0]);
   else { urlPreI=null; q.delete("preset"); }
