@@ -3,7 +3,13 @@
 
 /* ═══════════════ SIM ═══════════════ */
 let P=null,S=null;
-function commission(){
+/* COMMISSIONING IS A GENERATOR, so the one caller that has a screen to keep
+   alive can drive it a slice at a time (prewarmStep(), screens/shell.js) while
+   every other caller drains it here and cannot tell. The yields are stage
+   boundaries with a fraction on them, never a rate limit: the body, its order
+   and its arithmetic are what they were, so a drained run is bit-identical. */
+function commission(){ const g=commissionGen(); while(!g.next().done); }
+function* commissionGen(){
   /* K is the XENON CLOCK: a deliberate 400x time compression, so a scram costs
      ~3 min of lockout rather than ~20 h. Game balance, and the central mechanic. */
   const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
@@ -86,10 +92,12 @@ function commission(){
      edge to that same anchor, so it does, and the whole reference solve came
      back NaN: netRef 0, and every figure derived from it with it. */
   P.Pcont = 0.15;
+  yield {frac:.01, stage:"PIPE NETWORK"};
   P.net    = netBuild();
   // the same net with every bore at its own nominal - the frame P.netRef is
   // taken in, and the only thing that differs between the two
   P.netNom = withNomBore(() => netBuild());
+  yield {frac:.03, stage:"PIPE NETWORK"};
   P.netRefByLoop = {};
   P.netRefByRun  = {};
   /* ══ AND THE SECONDARY'S REFERENCE IS NOT A WIDE-OPEN VALVE ══
@@ -140,6 +148,7 @@ function commission(){
        Per RUN the reference stays the drawn plant (P.netRefByRun, below) - a
        meter reads its own line against what that line actually carries. */
     for(let pass=0;pass<20;pass++){
+      yield {frac:.04+.06*pass/20, stage:"CIRCULATION"};
       P.netRefByRun = {};
       const nomRun = {};
       P.netRef = netCoreFrac0(P.netNom, P.netRefByLoop, nomRun, {pumpQBy:P.pumpQNom});
@@ -176,9 +185,12 @@ function commission(){
     } }
   /* The cooling circuit's own reference, off the same solve - what this
      plant's circulating water pumps push through its condenser as
-     commissioned. 0 is a plant with nothing turning that water, and cwK()
-     reads it as no heat sink at all. */
-  P.cwRef = cwFlowOf(P.netRefByRun);
+     commissioned. 0 is a machine with nothing turning that water, and cwKOf()
+     reads it as no heat sink at all. PER MACHINE, because the ratio is what
+     that machine's duty is scaled by and a fleet figure gave a starved unit
+     its neighbour's readings. */
+  P.cwRefBy = Object.fromEntries(condIds().map(id=>[id, cwFlowOf(P.netRefByRun,id)]));
+  yield {frac:.10, stage:"FLOW REFERENCES"};
   /* ══ AND THE SCALE REFERENCE, FOR A LINE NOTHING HAS CALLED FOR YET ══
      The solve above prices the plant AS COMMISSIONED, which is the right frame
      for the physics and leaves every DEMAND gate shut - a standby tank's rule,
@@ -213,6 +225,7 @@ function commission(){
   P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = a.P0>3 ? 1.22 : 4.0;
+  P.solidK = a.solidK;                                 // MPa/K of a sealed liquid: beta over compressibility
   P.feff0 = P.flowK;                                   // the share of rated flow this pipe run can carry
   P.n0    = Math.min(1, P.feff0);                      // power at which removal balances heat
   /* ── THE TWO SIZING FIGURES OF THE STEAM SIDE, FITTED AT ONE ANCHOR ──
@@ -280,7 +293,6 @@ function commission(){
      circulating water flow that goes with it, rather than the other way
      round. A plant with no condenser has a UA of exactly 0 and no flow. */
   P.condUA  = totalCondUA();
-  P.cwC     = P.condUA/Math.log(COND_DT0/(COND_DT0-CW_RISE));
   P.tdmg  = f.tdmg; P.tmelt = f.tmelt;
   /* whether this fluid puts a steam atmosphere on hot clad at all - sodium,
      salt and helium never oxidise a rod, so their whole oxidation path is one
@@ -291,6 +303,7 @@ function commission(){
   P.dryout= a.dnbLaw!=="temp" && !a.fuelInCoolant;
   P.TfRef = P.Tref + a.dTf*P.condK*P.n0/Math.max(P.feff0,.10);
   P.X0    = xeEq(P.n0);                                // xenon equilibrium at that power
+  yield {frac:.11, stage:"CORE MESH"};
   coreConst(P,d);                        // the core as a place: mesh, coupling, rods
   /* the zirconium in the core, kg, MEASURED off the drawing: the rod surface
      coreConst() just computed times the wall thickness that was drawn. Same
@@ -298,6 +311,7 @@ function commission(){
      consumed metal is one identity rather than three estimates. */
   P.cladKg = ZR_RHO*P.aHeat*ROD_CLAD;
   P.dsig = designSig();                 // what this plant was built from
+  yield {frac:.12, stage:"SETTLING"};
   P.dnbrK = 1; resetPlant();
   /* What THIS plant is subcooled by when nobody has touched it. The vital bar
      scales against it, because subcooling at rest is 22 K on a PWR and 1400 K
@@ -323,6 +337,7 @@ function commission(){
      W-3's inputs come off one real step, because the hot node's quality is
      walked inside coreStep() and cannot be had from outside it; the step is
      then thrown away and the plant commissions on a fresh reset. */
+  yield {frac:.35, stage:"TUBE FIT"};
   step(0.02);
   P.dnbrK = P.dnbr0/Math.max(S.dnbr,1e-9);
   /* AT THE FLOW THIS PLANT ACTUALLY CIRCULATES, the pinUA argument again:
@@ -353,6 +368,7 @@ function commission(){
      gate is read at. */
   { const ids=sgIds();
     for(let r=0;r<3;r++){ let k=0, to=0;
+      yield {frac:.38+.21*r, stage:"GOVERNOR"};
       if(P.turbKv>0) for(const id of ids){ k = Math.max(k, secP(S,id)/sgDesignP(id)); to += S.steamTo[id]||0; }
       k = (k>0 && S.turbWk>0) ? k*Math.max(to,S.turbWk)/S.turbWk : 1;
       if(r>0 && Math.abs(k-1) < 1e-3) break;
@@ -635,7 +651,7 @@ const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
    s.condT is fed forward, the same lag s.cavP and s.sgShare carry: what the
    condenser is rejecting comes out of this tick's steam balance, so it cannot
    also be an input to it. */
-/* K - THE CANONICAL REFERENCE SINK, and it anchors P.hTurb, P.cwC, P.condUA
+/* K - THE CANONICAL REFERENCE SINK, and it anchors P.hTurb, P.condUA
    and condPDes() and nothing else. It is NOT the sink the plant has - that is
    s.radTBy, off the panels actually drawn. Point these anchors at a real panel and a
    terrible radiator would move the design point with it and cost nothing.
@@ -669,12 +685,25 @@ const CW_RISE=10;         // K, circulating water rise at the design point
    volume - a surface condenser's water side, asked of ROLE and never of a
    name. A radiator declares one path and no anchor, so it is not one of
    these; it is what the water is being pushed THROUGH. */
-const cwKeys = () => { const o=[];
-  for(const p of LAY.parts){ const R=ROLE[p.role];
-    if(!R || R.thermal!=="sink" || !Array.isArray(R.internal)) continue;
-    for(const IN of R.internal) if(!IN.anch) o.push("comp:"+p.id+":"+IN.a+IN.b); }
+/* Every CONDENSER on the drawing, by id - a heat sink that holds a condensing
+   volume, which is an internal path declaring an ANCHOR (net.condNode's own
+   predicate). Asked of ROLE and never of a name. A radiator is a sink too and
+   declares no anchor, so it is not one of these - it is what the water a
+   condenser warmed is pushed through. Every condenser quantity below is keyed
+   on one of these, exactly as s.sgTBy is keyed on a generator. */
+const roleIntern = R => !R || !R.internal ? []
+  : (Array.isArray(R.internal) ? R.internal : [R.internal]);
+const condIds = () => LAY.parts.filter(p=>{ const R=ROLE[p.role];
+  return R && R.thermal==="sink" && roleIntern(R).some(IN=>IN.anch); }).map(p=>p.id);
+/* ONE MACHINE'S circulating water paths - the internal paths that declare no
+   anchor, carrying the face labels the solve's own sign picks between. */
+const cwPathsOf = id => { const p=partOf(id), R=p&&ROLE[p.role], o=[];
+  if(!R || R.thermal!=="sink") return o;
+  for(const IN of roleIntern(R)) if(!IN.anch)
+    o.push({key:"comp:"+id+":"+IN.a+IN.b, a:IN.a, b:IN.b});
   return o; };
-const cwFlowOf = m => { let f=0; for(const k of cwKeys()) f += Math.abs(m[k]||0); return f; };
+const cwFlowOf = (m,id) => { let f=0;
+  for(const q of cwPathsOf(id)) f += Math.abs(m[q.key]||0); return f; };
 /* the solved pressure field, kept on S for next tick's readers (pumpFwd, the
    phase at a node) - REFILLED, never rebuilt */
 const keepPField = (s, pf) => {
@@ -683,16 +712,24 @@ const keepPField = (s, pf) => {
 /* THE WATER ARRIVING AT THE CONDENSER, off the field the panels have just
    chilled - the inlet face of each circulating water path, read along the
    solved flow's own direction. One expression for the tick and the seed. */
-const cwInOf = (s, runFlow) => {
-  const R = ROLE.cond, ids = LAY.parts.filter(p=>p.role==="cond").map(p=>p.id);
+const cwInOf = (s, runFlow, id) => {
   let t = 0, n = 0;
-  for(const id of ids) for(const IN of R.internal){ if(IN.anch) continue;
-    const key = "comp:"+id+":"+IN.a+IN.b, ref = Math.abs(P.netRefByRun[key]||0);
-    const r = ref > 1e-9 ? (runFlow[key]||0)/ref : 0;
-    t += netTempAt(s, coreFold(id + (r >= 0 ? IN.a : IN.b))); n++; }
+  for(const q of cwPathsOf(id)){ const ref = Math.abs(P.netRefByRun[q.key]||0);
+    const r = ref > 1e-9 ? (runFlow[q.key]||0)/ref : 0;
+    t += netTempAt(s, coreFold(id + (r >= 0 ? q.a : q.b))); n++; }
   return n ? t/n : undefined; };
-const cwK = s => { if(!(P.cwRef>0)) return 0;
-  return clamp((s.cwFlow===undefined ? P.cwRef : s.cwFlow)/P.cwRef, 0, 2); };
+/* WHAT THE WATER ARRIVING AT THIS MACHINE IS AT, K - its own field reading,
+   with the design sink as the answer before the first tick has written one. */
+const cwInAt = (s,id) => { const v = s.cwInTBy && s.cwInTBy[id];
+  return v===undefined ? RAD_TDES : v; };
+/* THIS MACHINE'S OWN CIRCULATING WATER, against what THIS machine was
+   commissioned with. One plant-wide ratio measured a starved condenser
+   against the fleet's flow, so a second unit running at duty carried the
+   first one's readings. */
+const cwKOf = (s,id) => { const ref = (P.cwRefBy && P.cwRefBy[id]) || 0;
+  if(!(ref>0)) return 0;
+  const f = s.cwFlowBy && s.cwFlowBy[id];
+  return clamp((f===undefined ? ref : f)/ref, 0, 2); };
 /* The terminal temperature difference a condenser bought at rated duty runs
    at, K - a real surface condenser figure, and the anchor P.condUA is fitted
    on. It is what gives the machine a RANGE: duty is a divisor here, so a
@@ -721,7 +758,7 @@ const condRest = qkW => {
    side of the exchanger, where losing it takes the sink away instead of
    scaling a conductance. It may be exactly 0: nothing divides by it, and a
    wrecked condenser rejecting nothing at all is the answer. */
-const condK = s => Math.max(0, roleAlive("cond",s)*condFrac(s));
+const condKOf = (s,id) => partWrecked(s,id) ? 0 : condFrac(s);
 /* THE CONDENSER IS A POT TOO, and for the same reason the shell is: a machine
    that cannot reject has to be able to sit there getting hotter with nothing
    flowing through it. Priced off the same q/UA balance at rest, so the steady
@@ -746,24 +783,47 @@ const COND_ATM=0.101;     // MPa, and the pressure a lost condenser sits at
 const TURB_TRIP_P=0.02;   // MPa
 const condP = s => Math.max(exhOpen(s) ? P.Pcont : 0, s.condLost ? COND_ATM : 0,
   s.condT===undefined ? COND_P0 : Math.max(COND_P0, psatSec(s.condT)));
+/* THE MEAN OVER THE MACHINES THERE ARE, K - a readout, and what s.condT is
+   refilled from every tick. undefined on a plant with no condenser, which is
+   what leaves the seed standing rather than inventing a pot for a machine
+   nobody bought. */
+const condTMean = s => { const ids = condIds(); if(!ids.length) return undefined;
+  let t=0,n=0; for(const id of ids){ const v=condTOf(s,id);
+    if(v!==undefined){ t+=v; n++; } }
+  return n ? t/n : undefined; };
+const cwInMean = s => { const ids = condIds(); if(!ids.length) return undefined;
+  let t=0,n=0; for(const id of ids){ const v=s.cwInTBy&&s.cwInTBy[id];
+    if(v!==undefined){ t+=v; n++; } }
+  return n ? t/n : undefined; };
 /* What it is actually getting rid of, kW - the only place rejection is
    computed, so the readout and the balance cannot disagree. The effectiveness
    form: no circulating water is exactly no rejection, and a condenser running
    on part flow loses more than the flow it lost, because eps rises but the
    capacity rate it multiplies falls faster. */
-const cwC = s => P.cwC*cwK(s);
+const cwCOf = (s,id) => condUA(id)/Math.log(COND_DT0/(COND_DT0-CW_RISE))*cwKOf(s,id);
 /* THE COLD SIDE IS THE WATER ARRIVING, never a panel's temperature. Wiring it
    to s.radT made the condenser reject into whichever panels the plant owned
    whether or not one drop of water ran between them, which is the same
    by-role-name coupling that left a panel spliced anywhere else inert. */
-const condRej = s => { const c = cwC(s);
+/* ONE MACHINE'S OWN TEMPERATURE, K - its pot, or nothing before the first
+   tick has run one. */
+const condTOf = (s,id) => s.condTBy && s.condTBy[id];
+/* ...and the same question with an answer always: before the first tick has
+   run a pot, a condenser is at the water arriving at it. */
+const condTAt = (s,id) => { const v = condTOf(s,id);
+  return v===undefined ? cwInAt(s,id) : v; };
+const condRejOf = (s,id) => { const c = cwCOf(s,id);
   if(!(c>0)) return 0;
-  const cold = s.cwInT===undefined ? RAD_TDES : s.cwInT;
-  return Math.max(0, c*(1-Math.exp(-P.condUA*condK(s)/c))*((s.condT||cold)-cold)); };
+  const cold = cwInAt(s,id), T = condTOf(s,id);
+  return Math.max(0, c*(1-Math.exp(-condUA(id)*condKOf(s,id)/c))
+                     *((T===undefined?cold:T)-cold)); };
+const condRej = s => { let q=0; for(const id of condIds()) q += condRejOf(s,id); return q; };
 /* WHERE THE HEAT ACTUALLY WENT: the temperature the circulating water leaves
    at. A readout, and the one number that says the sink is finite. */
-const cwOut = s => { const c = cwC(s), cold = s.cwInT===undefined ? RAD_TDES : s.cwInT;
-  return c>0 ? cold + condRej(s)/c : (s.condT||cold); };
+const cwOutOf = (s,id) => { const c = cwCOf(s,id), cold = cwInAt(s,id), T = condTOf(s,id);
+  return c>0 ? cold + condRejOf(s,id)/c : (T===undefined?cold:T); };
+const cwOut = s => { const ids = condIds(); if(!ids.length) return RAD_TDES;
+  let t=0; for(const id of ids) t += cwOutOf(s,id); return t/ids.length; };
 /* ══ ONE POT ══
    Every thermal store in this sim is the same integrator: a temperature, a
    heat capacity, what goes in, what goes out, what the room takes, and the two
@@ -776,7 +836,8 @@ const potStep = (T, cap, qIn, qOut, skin, dt, lo, hi) =>
         lo===undefined ? -Infinity : lo, hi===undefined ? Infinity : hi);
 /* Water and metal in the condenser, kJ/K. The hotwell it drains into is the
    yardstick the plant already sizes it by. */
-const condCap_ = () => hotMass()*CP_W + hotMass()*0.6*CP_STEEL;
+const condCapOf = () => (hotMass()*CP_W + hotMass()*0.6*CP_STEEL)
+  / Math.max(1, condIds().length);
 /* ══ THE SINK IS A RADIATOR, AND IT IS THE ONLY WAY HEAT LEAVES THIS SHIP ══
    The chain is PLUMBED, end to end: whatever pot heats a circuit, the water in
    that circuit carries it, and a panel standing in that water hands it to
@@ -1687,12 +1748,8 @@ function advectSrc(s){
      - so the circulating water leaves hotter than it arrived instead of being
      pinned to the pot behind it. Split over the condensers there ARE, because
      condRej() prices the fleet. */
-  { const n = condCount();
-    if(n) for(const p of LAY.parts){ const R=ROLE[p.role];
-      if(!R || R.thermal !== "sink" || !Array.isArray(R.internal)) continue;
-      for(const IN of R.internal){ if(IN.anch) continue;
-        add(coreFold(p.id+IN.a), condRej(s)/n/2);
-        add(coreFold(p.id+IN.b), condRej(s)/n/2); } } }
+  { for(const id of condIds()){ const q = condRejOf(s,id);
+      for(const w of cwPathsOf(id)){ add(coreFold(id+w.a), q/2); add(coreFold(id+w.b), q/2); } } }
   /* AND A PANEL TAKES HEAT OUT OF WHATEVER IS RUNNING THROUGH IT, wherever
      that is. This is the whole of "a heat sink cools what it is plumbed to":
      the panel used to ANCHOR these nodes to its own temperature, which showed
@@ -2387,13 +2444,25 @@ const turbShare = s => P.steamRef>0 ? (s.turbWk||0)/P.steamRef : 0;
    property of the turbine and not of the widget. The BYPASS is a second gate
    on the same path and does no work; it is NOT passK-gated, because dumping
    is what a plant does after the turbine has tripped. */
+/* DAMAGE IS NOT IN THIS TABLE. It is a GOVERNOR: what each machine's own gate
+   is asked to do. Whether the machine is still there is the EDGE's question,
+   asked per instance in vapSolve() the way netBuild() already asks it of every
+   liquid path. roleAlive() is a role-wide FRACTION, so hitting one turbine of
+   two half-shut the other one as well - the same "the share is in the steam,
+   not in the machine" mistake mwE() was already cured of.
+   AND NEITHER IS THE PIPING. turbPiped() is the same kind of average and was
+   the same kind of gate here: a second machine nobody had connected to
+   anything closed the connected one to a half. Asked of the machine's OWN
+   circuit instead - a whole steam path is a generator at one end and a
+   condensing volume at the other - so a plant with one turbine is the
+   identical solve and a plant with two answers for each of them. The SHARE
+   stays where a share belongs: the bench's own readouts. */
 const vapOpenAt = (s, dump) => {
-  const passK = clamp(roleAlive("turb",s)*turbPiped()*(s.turbTrip?0:1), 0, 1);
   const swOpen = Math.min(s.load, P.swallow/Math.max(P.steamRef,1e-9));
   const o = {};
   for(const p of LAY.parts) if(ROLE[p.role] && ROLE[p.role].vapPath){
-    const alive = clamp(roleAlive(p.role,s), 0, 1);
-    o[p.id] = {work: P.turbKv*swOpen*passK, dump: P.turbKv*dump*alive}; }
+    const c = secCircuitOf(p.id), piped = (c.sg && c.sink) ? 1 : 0;
+    o[p.id] = {work: P.turbKv*swOpen*clamp(piped*(s.turbTrip?0:1),0,1), dump: P.turbKv*dump}; }
   return o; };
 
 /* ONE PUMP'S OWN STARTING SPEED. A coolant pump answers the plant-wide lever,
@@ -2425,6 +2494,11 @@ function resetPlant(){
         no hold tank gets no entry at all. */
      PBy:Object.fromEntries(holdCircs().filter(ci=>ci!==nodeGraph().coreCirc)
                                        .map(ci=>[ci,holdSetP(ci)])),
+     /* WHAT EACH HOLD TANK IS HOLDING, keyed by part id and REFILLED. It is
+        its own loop's pressure for as long as the tank is live and its own
+        the moment a valve cuts it off, which is what makes an isolated
+        pressurizer stop reading a pressure it is not connected to. */
+     holdPBy:Object.fromEntries(holdTankIds().map(id=>[id,holdSetP(tankCircuit(id))])),
      scBy:{},
      /* ONE DEMAND AND ONE ACTUAL PER PUMP, keyed by part id like s.sglBy and
         s.tank[id] - REFILLED by step(), never rebuilt. There is one pump role
@@ -2486,6 +2560,15 @@ function resetPlant(){
         saturation pressure of. Starts on the design vacuum, which is where the
         balance below puts it on a healthy plant anyway. */
      condT:0,
+     /* PER MACHINE, keyed by part id exactly like s.sgTBy - a condenser is a
+        machine and two of them need not be on the same cooling circuit, at the
+        same duty or even alive. s.condT above is the MEAN over these, refilled
+        every tick and read by everything that wants one figure for the plant.
+        Beside it, the other side of the same tubes: what the water arriving at
+        each machine is at, K, and what is actually running through it, kg/s -
+        both fed forward one tick, the s.cavP idiom. All three REFILLED, never
+        rebuilt. */
+     condTBy:{}, cwInTBy:{}, cwFlowBy:{},
      /* EACH PANEL's own temperature, K - the sink the plant HAS, as against
         RAD_TDES, the sink its machinery was designed for - and what each is
         pulling out of the water in it, kW. Per instance because a panel cools
@@ -2528,9 +2611,6 @@ function resetPlant(){
         tile transition it has seen. Beside s.ev because it is the same kind of
         thing: a fact the tick establishes once and everything else reads. */
      annOn:{}, annRev:0,
-     /* the cooling circuit's solved flow, fed forward like s.cavP - starts on
-        the commissioned reference, so tick zero rejects at the design duty */
-     cwFlow:P.cwRef||0,
      /* and the temperature that water arrives at, K - fed forward the same
         tick, because what the condenser rejects is what warms the water whose
         temperature decides what it can reject */
@@ -2759,7 +2839,8 @@ function resetPlant(){
        water commissioned the cooling circuit ten kelvin hot. */
     for(const id of radIds()) S.radQBy[id] = radRejOf(S,id);
     S.cwInT = r.cwIn;
-    S.condT = r.condT; }
+    S.condT = r.condT;
+    for(const id of condIds()){ S.cwInTBy[id] = r.cwIn; S.condTBy[id] = r.condT; } }
   /* Settle the flux shape first, then dial in the boron that actually makes
      THIS shape critical. Rod worth is emergent now, so a formula would leave
      the plant slightly off-critical and walk it into a trip nobody caused. */
@@ -2969,11 +3050,15 @@ function resetPlant(){
      the walk above sends it put it. Seeded on the estimate, the inlet read
      7 K colder than the field and the condenser's rejection halved on tick
      one (828 to 371 MW on BN-600). */
-  { const t = cwInOf(S, rf); if(t !== undefined) S.cwInT = t;
+  { const ids = condIds(), n = ids.length;
+    for(const id of ids){ const t = cwInOf(S, rf, id); if(t !== undefined) S.cwInTBy[id] = t; }
     let boiled = 0; for(const id of sgIds()) boiled += S.steamTo[id]||0;
-    const qIn = Math.max(0, boiled*steamRise() - S.turbWk*turbDh(S.turbP, condP(S))*P.eff);
-    const c = cwC(S), eps = c>0 ? 1-Math.exp(-P.condUA*condK(S)/c) : 0;
-    if(c>0 && eps>0) S.condT = S.cwInT + qIn/(c*eps); }
+    const qAll = Math.max(0, boiled*steamRise() - S.turbWk*turbDh(S.turbP, condP(S))*P.eff);
+    for(const id of ids){ const c = cwCOf(S,id),
+      eps = c>0 ? 1-Math.exp(-condUA(id)*condKOf(S,id)/c) : 0;
+      if(c>0 && eps>0) S.condTBy[id] = cwInAt(S,id) + qAll/n/(c*eps); }
+    const mi = cwInMean(S); if(mi !== undefined) S.cwInT = mi;
+    const mt = condTMean(S);  if(mt !== undefined) S.condT = mt; }
   /* THE SIM DOES NOT REQUIRE A DISPLAY. pipeReset()/fxReset() clear the pipe
      animation's and the ambient effects' smoothing, which only exist when
      something is being drawn - a headless runner (the auditors, a scenario
@@ -3171,8 +3256,9 @@ function step(dt){
   const netOut = {};
   const pumpK = netFlowK(s, runFlow, pField, netOut);
   /* WHAT THE CIRCULATING WATER IS ACTUALLY DOING, off this tick's own solve -
-     the condenser's heat balance below reads it through cwK(). */
-  s.cwFlow = cwFlowOf(runFlow);
+     the condenser's heat balance below reads it through cwKOf(). */
+  { for(const id in s.cwFlowBy) if(!partOf(id)) delete s.cwFlowBy[id];
+    for(const id of condIds()) s.cwFlowBy[id] = cwFlowOf(runFlow,id); }
   /* THIS RUN AGAINST ITS OWN REFERENCE, signed. 1.0 is what it was built to
      carry; the direction is the solve's. Up here rather than beside the pipe
      animation that first needed it, because the panels' heat balance asks the
@@ -3505,7 +3591,11 @@ function step(dt){
        generator is heated by that exchanger's pot, and the primary temperature
        is a stage away. Every other term is a property of THESE tubes and does
        not care which stage feeds them. */
-    const q  = sgQAt(s,id,fl,filmK);
+    /* AND ONLY IF THE PRIMARY STILL REACHES IT. The 0.02 floor is stagnant
+       water in tubes the loop is still connected to; isolate the generator
+       and there is no water crossing at all, which is what let a sealed
+       reactor cool down through shut ports. */
+    const q  = partOnCoreLoop(P.net,s,id) ? sgQAt(s,id,fl,filmK) : 0;
     sgQBy[id] = q;
     /* HEAT LEAVING THE CORE IS WHAT CROSSES THE FIRST STAGE, never the second.
        With an exchanger in front, the primary gives its heat to the pot and the
@@ -3542,11 +3632,11 @@ function step(dt){
      exactly as a generator's crossing is; on any other, the water it chilled
      was warmed by a pot that has already been charged for it (a condenser
      rejecting into its circulating water), and charging that heat twice is
-     what a second book always does. inCore() is the one predicate. */
-  { const G = nodeGraph(), IN = ROLE.radiator.internal, key = k => "comp:"+k+":"+IN.a+IN.b;
+     what a second book always does. The LIVE PIECE is the one predicate. */
+  { const IN = ROLE.radiator.internal, key = k => "comp:"+k+":"+IN.a+IN.b;
     for(const id in s.radTBy) if(!partOf(id)) { delete s.radTBy[id]; delete s.radQBy[id]; }
     for(const id of radIds()){
-      /* NO COMMISSIONED FLOW THROUGH IT, NO DUTY - cwK()'s own guard, and it
+      /* NO COMMISSIONED FLOW THROUGH IT, NO DUTY - cwKOf()'s own guard, and it
          is not optional. A panel hung off a loop on one line solves at 1e-14
          of reference, which is a difference of large numbers and not a flow;
          let it take the 0.02 stagnant floor every exchanger with a real
@@ -3560,7 +3650,11 @@ function step(dt){
         : radUAOf(id)*Math.pow(fl,UA_FLOW)*(1-0.85*clamp(netQualAt(s,nIn),0,1))
           * Math.max(0, netTempAt(s,nIn) - s.radTBy[id]);
       s.radQBy[id] = q;
-      if(G.inCore(nIn)) qTot += q;
+      /* THE LIVE PIECE, NEVER THE DRAWN CIRCUIT. inCore() is a fact about the
+         picture, so a panel behind a shut valve went on being debited against
+         the core it could not reach - the same mistake the relief valve made
+         about pressure and the generator about heat. */
+      if(pieceOf(P.net, s, nIn) === corePiece(P.net, s)) qTot += q;
     } }
   const removal = qTot/(P.rated*1000);
   /* THE LOOP'S HEAT CAPACITY, not a typed 1.8. What is not removed goes into
@@ -3619,11 +3713,30 @@ function step(dt){
          s.TavgBy exists to give it a real per-circuit source. */
       for(const ci of holdCircs()){
         const on = holdLive(P.net, s, ci), set = holdSetP(ci), now = loopP(s, ci);
+        /* SEALED SOLID LIQUID PUSHES ON THE WALL. No bubble and nowhere to go
+           (circSolid), so the expansion of what is trapped goes straight into
+           pressure at P.solidK MPa per kelvin and the vessel is what gives.
+           Only the primary has a temperature of its own to ride, so every
+           other sealed circuit simply holds where it is - the same limit the
+           programme below already states. */
+        if(!on && circSolid(P.net, s, ci)){
+          if(ci === nodeGraph().coreCirc) setLoopP(s, ci, now + P.solidK*s.dTavg*dt);
+          continue;
+        }
         const prog = ci === nodeGraph().coreCirc
           ? (s.Tavg-P.Tref)*set*PZR_PROG_K*P.pRise/P.pzrK + (inj>0?0.5*P.pRise:0) : 0;
         const Pdem = on ? set + prog : P.Pcont;
         setLoopP(s, ci, now + (Pdem-now)*(0.30/P.pzrK)*(on?pzrAuth:1)*dt);
       }
+    }
+    /* WHAT EACH HOLD TANK IS HOLDING. Live, it IS the loop and reads the
+       loop's own number; cut off, it keeps the last one it had - so the tick
+       a valve shuts the two are equal and only then do they diverge, which is
+       what lets netRef() anchor on the LIVE piece without any value jumping. */
+    for(const id of holdTankIds()){
+      const ci = tankCircuit(id);
+      if(ci === null || ci === undefined || ci < 0) continue;
+      if(holdLive(P.net, s, ci)) s.holdPBy[id] = loopP(s, ci);
     }
     /* Every relief path rolls its own die, on its own lift - three redundant
        valves are three independent chances to stick, not one. Each fitting
@@ -3650,12 +3763,16 @@ function step(dt){
     for(const fid of reliefPriIds()){
       const set=reliefSet(fid);
       s.reliefVent[fid]=0;
-      if(!s.reliefOpen[fid] && porvLive(fid) && s.P > set.lift){
+      /* AT THE VALVE, not plant-wide: a node name, resolved off the valve's
+         own edge, and pAt() falls back to s.P for a valve nothing routed -
+         which is the plant this test always described. */
+      const pv=(n=>n===null?s.P:pAt(n))(reliefNodeOf(P.net,fid));
+      if(!s.reliefOpen[fid] && porvLive(fid) && pv > set.lift){
         s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
         s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
         s.reliefArm[fid]=false;
       }
-      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && s.P < set.reseat){
+      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && pv < set.reseat){
         s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
       }
       if(!s.reliefOpen[fid] || s.reliefBlocked[fid]) continue;
@@ -3763,8 +3880,14 @@ function step(dt){
     // outside the plant's books - negative is the plant being fed
     else book(s,"boundaryTank", -dPct/100*loopKg());
     s.inv += dPct;
+    /* AND POISON ONLY REACHES A CORE IT IS PLUMBED TO. s.boron is the CORE's
+       concentration, so a borated tank emptying into an isolated leg fills
+       that leg and shuts nothing down; it waits there until something opens.
+       The inventory term above is not gated with it - what crossed the edge
+       left the tank either way, and where it went is Stage 4's question. */
     const bw = FLUID[t.fluid].boron;
-    if(bw && dPct>0){ s.boron -= bw*dPct; s.boronDem -= bw*dPct; }
+    if(bw && dPct>0 && partOnCoreLoop(P.net,s,id)){
+      s.boron -= bw*dPct; s.boronDem -= bw*dPct; }
   }
   /* EACH RULE'S OWN STATE, fed forward like s.cavP and s.fregBy: this tick's
      answer is what the next tick's hysteresis reads, so nothing asking
@@ -4234,9 +4357,20 @@ function step(dt){
      other way to fail, and the failure is a real one now. What bounds it
      instead is the machine - a relieved condenser is boiling at atmospheric,
      so it sits on that saturation temperature and no higher. */
-  { const qIn = Math.max(0, boiled*retK*steamRise() - workKW);
-    s.condT = potStep(s.condT, condCap_(), qIn, condRej(s), skinQRole(s,"cond"), dt, s.cwInT);
-    if(s.condLost) s.condT = Math.min(s.condT, tsatSec(COND_ATM)); }
+  /* ONE POT PER MACHINE. What the fleet is condensing is shared over the
+     machines that exist - the header mixes, so there is no per-condenser
+     answer to which steam went where - and each then sits where its OWN
+     circulating water and its OWN duty put it. The mean is what backpressure
+     is read off, so a single-condenser plant is bit-identical. */
+  { const ids = condIds(), n = ids.length;
+    for(const id in s.condTBy) if(!partOf(id)) delete s.condTBy[id];
+    if(n){ const qIn = Math.max(0, boiled*retK*steamRise() - workKW)/n;
+      for(const id of ids){
+        if(s.condTBy[id]===undefined) s.condTBy[id] = cwInAt(s,id);
+        s.condTBy[id] = potStep(s.condTBy[id], condCapOf(), qIn, condRejOf(s,id),
+          skinQOf(s,id), dt, cwInAt(s,id));
+        if(s.condLost) s.condTBy[id] = Math.min(s.condTBy[id], tsatSec(COND_ATM)); }
+      const m = condTMean(s); if(m !== undefined) s.condT = m; } }
   /* NO RADIATOR SELF-LIMITS WITHOUT A CAP. Area 0 is radRej 0, so the panel
      climbs until it meets the water arriving and its own duty goes to 0 on the
      (Tin - Tpanel) term; whatever pot is behind that water then backs up and
@@ -4246,10 +4380,13 @@ function step(dt){
   for(const id of radIds())
     s.radTBy[id] = potStep(s.radTBy[id], radCap_(id), s.radQBy[id]||0,
       radRejOf(s,id), skinQOf(s,id), dt, T_SPACE);
-  /* Fed forward one tick, the s.cwFlow idiom directly above it: what this
+  /* Fed forward one tick, the s.cwFlowBy idiom directly above it: what this
      machine rejects is what warms the water whose temperature decides what
      it can reject. */
-  { const t = cwInOf(s, runFlow); if(t !== undefined) s.cwInT = t; }
+  { for(const id in s.cwInTBy) if(!partOf(id)) delete s.cwInTBy[id];
+    for(const id of condIds()){ const t = cwInOf(s, runFlow, id);
+      if(t !== undefined) s.cwInTBy[id] = t; }
+    const m = cwInMean(s); if(m !== undefined) s.cwInT = m; }
   /* ══ AND A RESERVE IS METERED AGAINST ITSELF ══
      Its OWN solved edge, signed, exactly the way every primary tank is already
      charged - not a share of one pool figure clamped at zero. Clamped, a
@@ -4980,13 +5117,20 @@ function annStep(s){
    one predicate, so the box and the tile are the same claim. */
 const annLit = name => !!(S && S.annOn[name]);
 function annLamp(id){
-  let best=null;
-  for(const a of ANN){
-    const host = annHost(a[4]);
-    if(!host || !id.startsWith(host) || !S.annOn[a[0]]) continue;
-    if(a[1]==="red") return C.red;
-    if(a[1]==="amber") best=C.amber;
-    else if(!best) best=C.blue;
-  }
-  return best;
+  const a=annOnPart(id)[0];
+  return a ? annSevCol(a[1]) : null;
+}
+/* WHAT IS LIT ON ONE COMPONENT, as the rows themselves - annLamp()'s own walk
+   stopped one step earlier, before the answer is reduced to a colour. The
+   reactor is the one box with the height to print them, so it says WHAT as
+   well as "here"; everything else still carries the lamp alone. Red, then
+   amber, then blue, table order inside each - so the mimic and the board name
+   the same tiles in the same words. */
+const ANN_SEV={red:0,amber:1,blue:2};
+// read at CALL time: the sim-only subset has no palette at load (nodom-probe.js)
+const annSevCol = sev => sev==="red" ? C.red : sev==="amber" ? C.amber : C.blue;
+function annOnPart(id){
+  return ANN.filter(a=>{ const host=annHost(a[4]);
+      return host && id.startsWith(host) && S.annOn[a[0]]; })
+    .sort((a,b)=>ANN_SEV[a[1]]-ANN_SEV[b[1]]);
 }
