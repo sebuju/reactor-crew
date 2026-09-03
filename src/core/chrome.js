@@ -103,7 +103,9 @@ function segMark(x,y,w,h,frac,marks,col,signed){
 function hatch(x,y,w,h,col,a){
   ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
   ctx.globalAlpha=a||.55; ctx.strokeStyle=col; ctx.lineWidth=1.4;
-  for(let i=-h;i<w;i+=7){ ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
+  // phase anchored to the canvas, not to the rect, so two hatched cells side by side are one pattern
+  const P=7, ph=(((x+y+h)%P)+P)%P;
+  for(let i=P*Math.floor((ph-h)/P)-ph;i<w;i+=P){ ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
   ctx.restore();
 }
 /* blinks on the same 900ms rhythm as the annunciator tile, so both read as one

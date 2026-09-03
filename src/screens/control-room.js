@@ -515,8 +515,14 @@ function cautStep(id,r,name,base){
      stops being read. The VALUE is the test, so a new bypassable system needs
      nothing here. */
   const byp = r[1]==="bypassed";
+  /* A LEDGER TERM IS EXEMPT, and r[5] is the same test fieldRowsSync() washes
+     on: a centre-zero bar makes the colour a KEY to the picture beside it, not
+     a verdict - so withdrawing the bank turned its reactivity term amber and
+     the master caution reported the rods moving. MOVING is the other half: a
+     demand the machine is still walking to is the plant obeying. */
+  const bal = !!r[5], mov = MOVING.has(r[0]);
   // the baseline is this plant's own resting colours - see the caller
-  if(!col || byp || base.has(r[0])){
+  if(!col || byp || bal || mov || base.has(r[0])){
     /* A LATCHED CAUTION KEEPS UPDATING. The reading has recovered, so the row
        is no longer red - and showing it frozen at its worst would be a lie
        about the plant right now. It goes dim instead, and reads live. */
@@ -539,6 +545,10 @@ function cautStep(id,r,name,base){
 
    It stands UNDER the two balances rather than over them, so a caution arriving
    never moves a picture somebody is reading. */
+/* ONE CLEAR, two callers - the button and the AUTO toggle below it, which is
+   nothing more than that button pressed every frame. */
+let cautAuto=true;
+function cautClear(){ for(const [k,e] of CAUT) if(e.latch&&!e.live) CAUT.delete(k); }
 function crCautBuild(container){
   const wrap=KIT.el("div","cr-caut");
   const head=KIT.el("div","cr-caut-head");
@@ -549,9 +559,15 @@ function crCautBuild(container){
      that shoves the count sideways as the plant recovers is a button nobody can
      aim at. */
   const clr=KIT.button("CLEAR",{size:7,flat:true,tip:"Removes every caution whose reading has come back inside its limit. Anything still off-nominal stays.",
-    onClick:()=>{ for(const [k,e] of CAUT) if(e.latch&&!e.live) CAUT.delete(k); }});
+    onClick:cautClear});
   clr.el.classList.add("cr-caut-clear");
-  const h2=KIT.el("span","cr-caut-count"); head.append(h1,clr.el,h2);
+  /* AUTO presses CLEAR every frame, so a caution that recovers leaves on its
+     own and the list is only ever what the plant is still doing. It answers
+     nothing a live reading raised, because CLEAR does not. */
+  const auto=KIT.button("AUTO",{size:7,flat:true,on:cautAuto,tip:"Clears each caution by itself the moment its reading comes back inside its limit. Anything still off-nominal stays on the list.",
+    onClick:()=>{ cautAuto=!cautAuto; auto.set({on:cautAuto}); if(cautAuto) cautClear(); }});
+  auto.el.classList.add("cr-caut-auto");
+  const h2=KIT.el("span","cr-caut-count"); head.append(h1,clr.el,auto.el,h2);
   const body=KIT.el("div","cr-caut-body");
   wrap.append(head,body); container.appendChild(wrap);
   KIT.tip(wrap,"MASTER CAUTION",
@@ -573,6 +589,7 @@ function crCautBuild(container){
   return h;
 }
 function crCautSync(h){
+  if(cautAuto) cautClear();
   const keys=[], rows=[], on=[];
   for(const [k,e] of CAUT) if(e.latch){ keys.push(k); rows.push(e.row); on.push(e.live); }
   h.keys=keys;
@@ -738,14 +755,14 @@ function crBuild(){
   rail.appendChild(ops);
 
   mount.appendChild(root);
-  return {root,vitals,vitalRows,viz,alarms,banner,rail,
+  return {root,vitalRows,viz,alarms,banner,rail,
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,cnx:cnxBody,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
 /* ONE ROW PER COMMISSIONED CONNECTION: what it joins, what it is carrying, and
-   whether a hit anywhere along it has cut it. BROKEN is asked of the CELLS, so
+   whether a hit anywhere along it has cut it. BROKEN is asked of the SOLVE, so
    the panel and the solve can never disagree about what broken means -
-   pipeExtraLen() (pipenet.js) reads exactly the same list. */
+   runHoled() (pipenet.js) is that one predicate, nozzle valves included. */
 function crCnxSync(body){
   if(!P||!P.net||!S) return;
   const keys=Object.keys(P.net.byKey);
@@ -754,7 +771,7 @@ function crCnxSync(body){
      list can answer is whether the run is still carrying, so the metres are
      not shown and r.L is not read. */
   const rows=keys.map(k=>{ const r=P.net.byKey[k];
-    return {k, name:pipeName(r), cut:pipeExtraLen(S,r.cells)===Infinity};
+    return {k, name:pipeName(r), cut:runHoled(S,r)};
   });
   /* AND EVERY NOZZLE'S OWN VALVE, under the same heading. A port valve is
      piping, not a component: it is what cuts a run out, so it belongs beside
@@ -836,16 +853,13 @@ function drawOperate(){
   const railBox=CR? hostRect(CR.rail) : null;
   const vy = stripBox ? stripBox.y+stripBox.h : TOPBAR_H;
   const vh=Math.max(120,H-vy);
-  /* THE VITALS PANEL IS OPAQUE, SO THE PLANT MAY NOT BE DRAWN UNDER IT. It was
-     measured on the right (the component rail) and not on the left, which was
-     survivable only while nothing tall stood in the top-left corner - the rod
-     drives are twelve cells tall now, so the whole rod strip sat behind the
-     panel, invisible AND unclickable. Measured, never reserved, the same rule
-     the strip above already follows. */
-  const vitBox = CR? hostRect(CR.vitals) : null;
-  const vx = vitBox ? vitBox.x+vitBox.w : 0;
-  const vw = (railBox ? Math.max(200, railBox.x) : W) - vx;
-  drawPlant(vy,S,vh,vx,vw);
+  /* THE VITALS PANEL FLOATS, so the view runs under it - the standing the alarm
+     stack in the other corner has always had. Carving its width off the left
+     gave a panel that is often half the window deep a full-height column of
+     plant, and the plant then sat in the remaining slot rather than in its
+     frame. Pan it out from under the panel like anything else. */
+  const vw = (railBox ? Math.max(200, railBox.x) : W);
+  drawPlant(vy,S,vh,0,vw);
   zoomKeySync(CR&&CR.root);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }

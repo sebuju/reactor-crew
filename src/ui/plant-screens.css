@@ -28,17 +28,19 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-root{inset:0;grid-template-columns:1fr 340px}
 
 /* ─────────────── control room ─────────────── */
-/* the two balances make this panel taller than the window on a short screen,
-   so it scrolls, bar hidden, the way the component rail does. Nothing inside
-   may squash - a flex child that shrinks
-   hands hostPaint() a box its picture was not laid out for.
-   ALIGN-SELF:START IS LOAD-BEARING. A scroll container's minimum size is zero,
-   so stretched into the grid's auto row it collapsed to 9 px against the rail
-   spanning both rows - the whole panel vanished. Sized by its own content
-   instead, capped by max-height. */
-.cr-vitals{grid-column:1;grid-row:1;pointer-events:auto;display:flex;flex-direction:column;
-  width:300px;margin:4px 0 0 4px;padding:4px 0;background:var(--c-panel);
-  align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none; z-index: 1;}
+/* FLOATS OVER THE PLANT, the seat .cr-alarms already keeps in the other corner:
+   out of the grid entirely, so it holds no track open and the plant view is
+   measured as if it were not there. In a grid row it was as tall as the window
+   whatever it held, and drawOperate() then carved 300 px off the left of the
+   plant for a panel that may only be half that deep.
+   Sized by its own content and capped by max-height: a scroll container
+   stretched by a grid row collapses to nothing. Nothing inside may squash - a
+   flex child that shrinks hands hostPaint() a box its picture was not laid out
+   for. */
+.cr-vitals{position:absolute;left:4px;top:4px;pointer-events:auto;
+  display:flex;flex-direction:column;
+  width:300px;padding:4px 0;background:var(--c-panel);
+  max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none;z-index:1}
 .cr-vitals::-webkit-scrollbar{display:none}
 .cr-vitals>*{flex:0 0 auto}
 /* 8px of side padding puts these on the same left edge the vital rows keep.
@@ -76,7 +78,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-caut-title{flex:1 1 auto;min-width:0}
 /* HELD, NOT REMOVED: hidden by visibility so the count never moves when the
    last answered caution goes - see crCautSync() */
-.cr-caut-clear{flex:0 0 auto;padding:0 5px;line-height:1.5;letter-spacing:1px}
+.cr-caut-clear,.cr-caut-auto{flex:0 0 auto;padding:0 5px;line-height:1.5;letter-spacing:1px}
 .cr-caut-clear.off{visibility:hidden}
 /* the rows are the RAIL'S rows - fieldRowsSync() builds them, so value, colour
    and band all come for free. Only two things are added here: they are
