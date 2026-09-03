@@ -780,9 +780,17 @@ const totalSgUA=()=>{ let c=0;
    s.dmgParts.includes("turb") - a NAME test, and with two turbines a hit on
    one would have zeroed the plant's whole output. A share, so losing one of
    two costs half. */
-const roleAlive=(role,dmg)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p=>p.id);
+const roleAlive=(role,s)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p=>p.id);
   if(!ids.length) return 0;
-  return ids.filter(id=>!dmg||dmg.indexOf(id)<0).length/ids.length; };
+  return ids.filter(id=>!partWrecked(s,id)).length/ids.length; };
+/* ══ IS THIS THING WRECKED - THE ONE DOOR ══
+   Everything s.dmgParts can hold answers here: a machine, a tank, a fitting, a
+   pipe cell ("pipe:x,y") and a port ("port:pid"). It was an indexOf written
+   out at a dozen call sites, and a call site is a place to forget one - the
+   EFW tank went on injecting through its own wreck because tankLive() never
+   asked. Takes the live state, never S, so the reference solve and a replay
+   ask it the same way every other predicate in this file is asked. */
+const partWrecked=(s,id)=>!!(s && s.dmgParts && id && s.dmgParts.indexOf(id)>=0);
 /* A part whose mass is not already counted by some other measure
    (totalPumpCap(), sgCount(), latMass(), a fitting's own FIT_MASS) - one row
    per role, priced once if that role is anywhere on LAY.parts at all. Off
