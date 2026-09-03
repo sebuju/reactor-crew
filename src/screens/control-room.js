@@ -523,16 +523,34 @@ function cautStep(id,r,name,base){
   const bal = !!r[5], mov = MOVING.has(r[0]);
   // the baseline is this plant's own resting colours - see the caller
   if(!col || byp || bal || mov || base.has(r[0])){
-    /* A LATCHED CAUTION KEEPS UPDATING. The reading has recovered, so the row
-       is no longer red - and showing it frozen at its worst would be a lie
-       about the plant right now. It goes dim instead, and reads live. */
-    if(e){ e.live=false; e.since=-1; e.col=null; if(e.latch) e.row=cautRow(r,text); else CAUT.delete(key); }
+    /* A LATCHED CAUTION KEEPS UPDATING once the hold below has expired: the
+       reading has recovered, so the row is no longer red, and showing it frozen
+       at its worst would be a lie about the plant right now. It goes dim
+       instead, and reads live.
+       IT STAYS LIT FOR THE CALM WINDOW FIRST. Dimming on the tick the reading
+       came back put the flicker straight back: a value crossing its limit
+       twenty times a second made the line, its wash and its group heading
+       strobe, and holding only the DELETION did nothing about it. While held
+       the copy is frozen at the reading that raised it, because a line that
+       keeps its place and changes colour is the same flash. */
+    if(e){
+      if(e.calm==null) e.calm=performance.now();
+      const held = e.latch && performance.now()-e.calm < CAUT_CALM_MS;
+      e.since=-1;
+      if(!held){ e.live=false; e.col=null; if(e.latch) e.row=cautRow(r,text); else CAUT.delete(key); }
+      return held ? e : null;
+    }
     return null;
   }
   const t=S.tick;
   if(!e){ CAUT.set(key,{id,name,label:r[0],text,col,since:t,live:false,latch:false,row:cautRow(r,text)}); return null; }
   if(e.since<0 || e.since>t) e.since=t;      // fresh, or a snapshot scrubbed us backwards
   e.col=col; e.name=name; e.text=text; e.row=cautRow(r,text);
+  /* THE CALM WINDOW STARTS AGAIN EVERY TIME THE READING GOES BAD, not only when
+     it latches - a value flicking in and out of its limit is off-nominal again
+     before the ten ticks that re-raise it, so a clock left running swept the
+     line away while the plant was still misbehaving. */
+  e.calm=null;
   if(t-e.since>CAUT_TICKS){ e.latch=true; e.live=true; return e; }
   return null;
 }
@@ -547,8 +565,22 @@ function cautStep(id,r,name,base){
    never moves a picture somebody is reading. */
 /* ONE CLEAR, two callers - the button and the AUTO toggle below it, which is
    nothing more than that button pressed every frame. */
+/* AUTO HOLDS THE RECOVERED LINE FOR FIVE SECONDS OF THE CREW'S OWN TIME. Sweeping
+   it the moment the reading came back inside its limit made the list flash. In
+   TICKS the second shrank with the timescale - at 8x fifty ticks is an eighth
+   of a real second and it still flashed - so this one clock is the wall clock:
+   how long a line has to sit still to be readable is a fact about the person
+   reading it, not about the plant. Display state, so it is not on S. The crew's
+   own CLEAR waits for nothing. */
+const CAUT_CALM_MS=5000;
 let cautAuto=true;
-function cautClear(){ for(const [k,e] of CAUT) if(e.latch&&!e.live) CAUT.delete(k); }
+function cautClear(hold){
+  for(const [k,e] of CAUT){
+    if(!e.latch||e.live) continue;
+    if(hold && e.calm!=null && performance.now()-e.calm<CAUT_CALM_MS) continue;
+    CAUT.delete(k);
+  }
+}
 function crCautBuild(container){
   const wrap=KIT.el("div","cr-caut");
   const head=KIT.el("div","cr-caut-head");
@@ -559,13 +591,13 @@ function crCautBuild(container){
      that shoves the count sideways as the plant recovers is a button nobody can
      aim at. */
   const clr=KIT.button("CLEAR",{size:7,flat:true,tip:"Removes every caution whose reading has come back inside its limit. Anything still off-nominal stays.",
-    onClick:cautClear});
+    onClick:()=>cautClear()});
   clr.el.classList.add("cr-caut-clear");
   /* AUTO presses CLEAR every frame, so a caution that recovers leaves on its
      own and the list is only ever what the plant is still doing. It answers
      nothing a live reading raised, because CLEAR does not. */
-  const auto=KIT.button("AUTO",{size:7,flat:true,on:cautAuto,tip:"Clears each caution by itself the moment its reading comes back inside its limit. Anything still off-nominal stays on the list.",
-    onClick:()=>{ cautAuto=!cautAuto; auto.set({on:cautAuto}); if(cautAuto) cautClear(); }});
+  const auto=KIT.button("AUTO",{size:7,flat:true,on:cautAuto,tip:"Clears each caution by itself once its reading has been back inside its limit for five seconds. Anything still off-nominal stays on the list.",
+    onClick:()=>{ cautAuto=!cautAuto; auto.set({on:cautAuto}); if(cautAuto) cautClear(true); }});
   auto.el.classList.add("cr-caut-auto");
   const h2=KIT.el("span","cr-caut-count"); head.append(h1,clr.el,auto.el,h2);
   const body=KIT.el("div","cr-caut-body");
@@ -589,7 +621,7 @@ function crCautBuild(container){
   return h;
 }
 function crCautSync(h){
-  if(cautAuto) cautClear();
+  if(cautAuto) cautClear(true);
   const keys=[], rows=[], on=[];
   for(const [k,e] of CAUT) if(e.latch){ keys.push(k); rows.push(e.row); on.push(e.live); }
   h.keys=keys;
