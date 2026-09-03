@@ -327,7 +327,7 @@ function actLog(k, a){
 const actDead = (k, a) => { const f = ACT[k].part;
   if(!f) return false;
   const id = f(...a);
-  return !!id && S.dmgParts.indexOf(id) >= 0; };
+  return partWrecked(S,id); };
 function actDo(k, a){ if(actDead(k, a)) return; actLog(k, a); ACT[k].apply(S, ...a); }
 
 /* ═══════════════ THE TAPE ═══════════════

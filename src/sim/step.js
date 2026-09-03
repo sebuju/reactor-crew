@@ -721,7 +721,7 @@ const condRest = qkW => {
    side of the exchanger, where losing it takes the sink away instead of
    scaling a conductance. It may be exactly 0: nothing divides by it, and a
    wrecked condenser rejecting nothing at all is the answer. */
-const condK = s => Math.max(0, roleAlive("cond",s.dmgParts)*condFrac(s));
+const condK = s => Math.max(0, roleAlive("cond",s)*condFrac(s));
 /* THE CONDENSER IS A POT TOO, and for the same reason the shell is: a machine
    that cannot reject has to be able to sit there getting hotter with nothing
    flowing through it. Priced off the same q/UA balance at rest, so the steady
@@ -735,7 +735,7 @@ const condK = s => Math.max(0, roleAlive("cond",s.dmgParts)*condFrac(s));
    the work term, the readouts and the stop valve all have to agree about
    which pressure the turbine exhausts against. */
 const exhOpen = s => !!(P && P.net && (P.net.steamBreaks||[]).some(bk =>
-  bk.exh && bk.cells.some(([x,y])=>cellBroken(s,x,y))));
+  bk.exh && runHoled(s,bk)));
 /* A CONDENSER IS NOT A PRESSURE VESSEL. Past atmospheric it relieves, and it
    does not get its vacuum back: the air is in, and there is no pump on this
    plant that pulls it out again. Latched, and it is the end of the heat sink -
@@ -873,8 +873,15 @@ function manualScram(){
    five-loop plant. */
 const DMGFX={
   core:{msg:"REACTOR VESSEL HIT",
-    why:"A penetration in the vessel wall. Coolant is leaking and the metal is permanently damaged.",
-    hit:s=>{ s.inv-=6; s.fatigue=Math.min(100,s.fatigue+12); }, fix:null},
+    why:"A penetration in the vessel wall. The vessel is open to the compartment and emptying itself, and the metal is permanently damaged.",
+    /* A HOLE IN THE VESSEL IS THE HOLE THE PLANT ALREADY HAS. s.breach is the
+       opening netBuild() prices at BREACH_BORE and the solve meters, so a hit
+       vessel drains at whatever its own pressure and inventory say. It used to
+       take a flat 6 % of inventory once and then hold water forever, which is
+       a wound that stops bleeding. No fix: a breach is permanent, exactly as
+       the one an overpressure opens is. */
+    hit:s=>{ s.breach=true; if(!s.trip) s.trip="VESSEL RUPTURE";
+             s.fatigue=Math.min(100,s.fatigue+12); }, fix:null},
   rods:{msg:"ROD DRIVE HIT",
     why:"The drive mechanisms are wrecked. The bank is stuck where it stands and a scram will not move it. Boron is the only shutdown you have left.",
     /* AND THE ORDER IN FLIGHT DIES WITH THEM. The jam freezes where the rods
@@ -925,12 +932,15 @@ const DMGFX={
      pipeExtraLen()'s own comment for why that is additive resistance taken
      to its limit rather than a second mechanism. */
   /* A PORT IS A TARGET NOW (portCellPart(), pipenet.js). What being wrecked
-     MEANS for one is that it jams: ACT.portShut names it through `part`
-     (record.js) and the order is not carried out, so the valve stays exactly
-     where it stood. There is no hit/fix pair because there is no flag to set -
-     the damage id IS the state. */
+     MEANS for one is a HOLE: the valve body is the pressure boundary, so the
+     run standing on it is severed there and open to containment, exactly as a
+     broken pipe cell is (runHoled(), pipenet.js). It takes no orders either -
+     ACT.portShut names it through `part` (record.js) - but that is a
+     consequence of the body being gone, not the whole of the damage. There is
+     no hit/fix pair because there is no flag to set: the damage id IS the
+     state. */
   port:{msg:"NOZZLE VALVE HIT",
-    why:"That port's isolation valve is wrecked. It is jammed where it stood, so the run on it can no longer be cut out at the machine until a party has been out to it.",
+    why:"That port's isolation valve is wrecked. The valve body is open to the room, so the run landed on it is severed at the machine and spilling there, and it cannot be cut out until a party has been out to it.",
     hit:null, fix:null},
   pipe:{msg:"PRIMARY PIPE RUPTURE",
     why:"A primary run has been severed. It carries nothing round the loop any more, and both cut ends are now open to containment - the loop is losing coolant and pressure through them until something stops it.",
@@ -948,6 +958,19 @@ const dmgFx = id => {
   return DMGFX[id] || (p && DMGFX[p.role])
       || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(k))] || DMGANY;
 };
+
+/* EVERYTHING ON THE BOARD THAT IS ONE CELL AND NOT IN LAY.parts: a pipe cell
+   and a nozzle valve, which stand in the same air and take the same blast, so
+   the heat loop and the blast loop walk one list rather than growing a third
+   copy each time the board gains a per-cell target. */
+function cellHazards(){
+  const out=[];
+  for(const k in D.pipes){ const c=k.indexOf(",");
+    out.push({id:"pipe:"+k, x:+k.slice(0,c), y:+k.slice(c+1), what:"the run at "+k}); }
+  for(const pid in D.ports){ const c=portCell(pid); if(!c) continue;
+    out.push({id:"port:"+pid, x:c[0], y:c[1], what:"the "+portLabel(pid)+" nozzle valve"}); }
+  return out;
+}
 
 /* A hit is sim state and a scenario command, not a screen act, which is why it
    lives here rather than in control-room.js where the FAULTS button is.
@@ -1251,6 +1274,21 @@ const AUTOROD_TI=12;      // s, integral time - the old AUTOROD_LEAD, renamed to
    is what rings it. At Ti/4 SFR still swung n 0.24 to 1.00 over 150 s; at
    3Ti/4 it holds 0.76 to 0.87, and every other family is tighter too. */
 const AUTOROD_TD=9;       // s, derivative time
+/* ══ AND IT HAS A DEAD BAND, BECAUSE A ROD DRIVE IS NOT A SERVO ══
+   A real rod control system does not walk the bank for a tenth of a kelvin -
+   the drive is a stepping motor with a lockup, and the published Westinghouse
+   deadband is +-1.5 F. Without one the controller answers its own measurement
+   noise forever and the bank hunts on a plant that is otherwise on programme.
+   It is a fixed instrument figure, not a plant one, so the lag does NOT scale
+   it. Inside the band the whole law stands down: the velocity form has no
+   stored integral to wind, so a parked bank is simply a bank not moving. */
+const AUTOROD_DB=0.8;     // K, dead band on the error
+/* ══ AND THE RATE TERM IS FILTERED, BECAUSE IT IS DIFFERENCED AT 0.02 s ══
+   Td*(e-dot-dot) took a raw tick-to-tick difference of s.dTavg over dt, which
+   multiplies anything wobbling in the heat balance by 50. The textbook answer
+   is a first-order filter at Td/N; s.arDE carries the FILTERED rate, so it is
+   both the filter state and the previous value and no second key is needed. */
+const AUTOROD_N=8;        // derivative filter, Td/N
 /* ══ AND THE TUNE IS SCALED TO THE PLANT IT IS FITTED TO ══
    How fast T-avg answers at all, K/s at a full-power imbalance - s.dTavg's own
    expression, asked as a property rather than integrated. A graphite pile
@@ -2350,11 +2388,11 @@ const turbShare = s => P.steamRef>0 ? (s.turbWk||0)/P.steamRef : 0;
    on the same path and does no work; it is NOT passK-gated, because dumping
    is what a plant does after the turbine has tripped. */
 const vapOpenAt = (s, dump) => {
-  const passK = clamp(roleAlive("turb",s.dmgParts)*turbPiped()*(s.turbTrip?0:1), 0, 1);
+  const passK = clamp(roleAlive("turb",s)*turbPiped()*(s.turbTrip?0:1), 0, 1);
   const swOpen = Math.min(s.load, P.swallow/Math.max(P.steamRef,1e-9));
   const o = {};
   for(const p of LAY.parts) if(ROLE[p.role] && ROLE[p.role].vapPath){
-    const alive = clamp(roleAlive(p.role,s.dmgParts), 0, 1);
+    const alive = clamp(roleAlive(p.role,s), 0, 1);
     o[p.id] = {work: P.turbKv*swOpen*passK, dump: P.turbKv*dump*alive}; }
   return o; };
 
@@ -2667,6 +2705,9 @@ function resetPlant(){
         rather than here: what a machine contains is not known until the pots
         exist. Keyed by part id, refilled never rebuilt. */
      partT:{}, skinQ:{},
+     /* THE WALL OF EACH PIPE RUN, K - the same pot, keyed by run key, seeded
+        by roomStep() off what the run's live ends carry. */
+     runT:{},
      // readouts: the hottest cell, where it is, and what burned this tick
      roomMax:T_HULL, roomMaxAt:-1, roomBurnOn:0, roomPMax:0,
      // how fast the two shafts are turning, deg/s - see step()'s own note
@@ -2994,12 +3035,14 @@ function step(dt){
      that is an offset nobody asked for. A plant below its turbine's draw is
      bit-identical to one with no mismatch term at all. */
   /* THE ERROR THIS CONTROLLER IS ON, in kelvin, and the two differences the
-     velocity form needs. s.dTavg is the plant's own answer for the first one
-     and is exact; the second is differenced off it, which is why arDE is on S
-     and not recomputed from a temperature history nobody keeps. */
+     velocity form needs. s.dTavg is the plant's own answer for the first one;
+     what the law is driven on is that rate FILTERED (AUTOROD_N), and the second
+     difference falls out of the same filter step, which is why arDE is on S and
+     not recomputed from a temperature history nobody keeps. */
   const arE = clamp(s.Tavg-tProg(s) + TPROG_SPAN*Math.max(0, s.n - turbShare(s)), -6, 6);
-  const arDE = s.dTavg;
-  const rodErr = s.arKp*(arDE + arE/s.arTi + s.arTd*(arDE - s.arDE)/Math.max(dt,1e-9))*dt;
+  const arDE = s.arDE + Math.min(dt/Math.max(s.arTd/AUTOROD_N, dt), 1)*(s.dTavg - s.arDE);
+  const rodErr = Math.abs(arE) < AUTOROD_DB ? 0
+    : s.arKp*(arDE + arE/s.arTi + s.arTd*(arDE - s.arDE)/Math.max(dt,1e-9))*dt;
   s.arDE = arDE;
   /* The band is what stops the controller wandering off the position the
      shutdown margin was measured from. It is not a safety limit and the operator
@@ -3839,8 +3882,13 @@ function step(dt){
      is the network's only compliance - and -LVL_K times that is +0.09 %/s,
      exactly the 0.9 %/K the correlation carried. */
   const dExp = -LVL_K*invRate(netExpSurge(P.net, s));       // %/s, SOLVED
-  const dVoid = (s.vf - s.vf0)*60/Math.max(dt,1e-9);        // %/s, still a correlation
-  const dInv = (s.inv - s.inv0)*0.15/Math.max(dt,1e-9);     // %/s, still a correlation
+  /* AND THE TWO CORRELATIONS ARE BEHIND THE SAME VALVE. dExp is solved, so a
+     shut surge port zeroed it for free; void and inventory are differentiated
+     figures about the LOOP and went on filling an isolated vessel to 100 %.
+     Nothing crosses a shut line, so the level stands still. */
+  const surge = pzrLive(P.net, s);
+  const dVoid = surge ? (s.vf - s.vf0)*60/Math.max(dt,1e-9) : 0;    // %/s, still a correlation
+  const dInv = surge ? (s.inv - s.inv0)*0.15/Math.max(dt,1e-9) : 0; // %/s, still a correlation
   s.vf0 = s.vf; s.inv0 = s.inv;
   s.lvl = clamp(lvl0 + (dExp + dVoid + dInv)*dt, 0, 100);
   /* Void can only push water up the surge line while there is a loop to push it
@@ -3970,7 +4018,7 @@ function step(dt){
      volume. The mass is taken where its pressure actually lives. */
   const secHole = {};                     // per shell: kg/s the holes on it offer
   for(const bk of (P.net.steamBreaks||[])){
-    if(bk.exh || !bk.cells.some(([x,y])=>cellBroken(s,x,y))) continue;
+    if(bk.exh || !runHoled(s,bk)) continue;
     const span = Math.max(0.05, sgDesignP()-P.Pcont);
     for(const id of holeShells(s,bk))
       secHole[id] = (secHole[id]||0) + SG_RELIEF_CAP*ratedSteam()*bk.bore*bk.bore
@@ -4392,16 +4440,14 @@ function step(dt){
         p.name+" has been wrecked by a hydrogen explosion in the compartment - "+
         roomPAt(s,p).toFixed(0)+" kPa against the "+lim+" kPa it was built for. "+fx.why);
     }
-    for(const k in D.pipes){
-      const id = "pipe:"+k;
-      if(s.dmgParts.indexOf(id) >= 0) continue;
-      const c = k.indexOf(",");
-      const x = +k.slice(0,c), y = +k.slice(c+1);
-      if(s.roomP[y*GW+x] < PIPE_PBURST) continue;
-      s.dmgParts.push(id);
-      s.burnEv.ids.push("the run at "+k);
-      const fx = dmgFx(id);
-      logE("alarm","BLAST DAMAGE / "+fx.msg, "A hydrogen explosion has cut the pipe at "+k+". "+fx.why);
+    for(const q of cellHazards()){
+      if(s.dmgParts.indexOf(q.id) >= 0) continue;
+      if(s.roomP[q.y*GW+q.x] < PIPE_PBURST) continue;
+      s.dmgParts.push(q.id);
+      s.burnEv.ids.push(q.what);
+      const fx = dmgFx(q.id);
+      logE("alarm","BLAST DAMAGE / "+fx.msg,
+        "A hydrogen explosion has taken "+q.what+". "+fx.why);
     }
   }
   /* ── AND WHAT ITS OWN CONTENTS COST ──
@@ -4486,30 +4532,28 @@ function step(dt){
         "  Fixing it while the room is still this hot only buys the same seconds again.");
     }
     /* ── AND THE PIPEWORK COOKS TOO ──
-       The loop above walks LAY.parts, and a pipe cell is not one - so a
-       compartment hot enough to wreck every machine standing in it left the
-       runs threading through the same air untouched, and the blast branch
-       (above) was the only way a room could ever cut a pipe. PIPE_TSURV
-       (layout.js) is PIPE_PBURST's mirror, for the same reason: a run has no
-       role to state one. THE AIR, not a skin: what a run carries is its own
-       fluid and is no measure of the fire around it. */
-    for(const k in D.pipes){
-      const id = "pipe:"+k;
-      live[id] = 1;
-      if(s.dmgParts.indexOf(id) >= 0){ s.roomHurt[id]=0; continue; }
-      const c = k.indexOf(","), x = +k.slice(0,c), y = +k.slice(c+1);
-      const air = s.roomT[y*GW+x];
+       The loop above walks LAY.parts, and neither a pipe cell nor a nozzle
+       valve is one - so a compartment hot enough to wreck every machine
+       standing in it left them untouched, and the blast branch (above) was the
+       only way a room could ever take either. PIPE_TSURV (layout.js) is
+       PIPE_PBURST's mirror, for the same reason: neither has a role to state
+       one. THE AIR, not a skin: what a run carries is its own fluid and is no
+       measure of the fire around it. */
+    for(const q of cellHazards()){
+      live[q.id] = 1;
+      if(s.dmgParts.indexOf(q.id) >= 0){ s.roomHurt[q.id]=0; continue; }
+      const air = s.roomT[q.y*GW+q.x];
       const over = clamp((air-PIPE_TSURV)/ROOM_DMG_SPAN, 0, 1);
       if(over <= 0) continue;
-      const h = (s.roomHurt[id]||0) + over*dt/ROOM_DMG_TAU;
-      s.roomHurt[id] = h;
+      const h = (s.roomHurt[q.id]||0) + over*dt/ROOM_DMG_TAU;
+      s.roomHurt[q.id] = h;
       if(h < 1) continue;
-      s.roomHurt[id] = 0;
-      s.dmgParts.push(id);
-      const fx = dmgFx(id);
+      s.roomHurt[q.id] = 0;
+      s.dmgParts.push(q.id);
+      const fx = dmgFx(q.id);
       logE("alarm","HEAT DAMAGE / "+fx.msg,
-        "The run at "+k+" has been cooked by the compartment it passes through - air at "+
-        air.toFixed(0)+" K against the "+PIPE_TSURV+" K the pipe is good for. "+fx.why);
+        "The compartment has cooked "+q.what+" - air at "+
+        air.toFixed(0)+" K against the "+PIPE_TSURV+" K it is good for. "+fx.why);
     }
     for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
 
