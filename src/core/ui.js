@@ -88,6 +88,11 @@ addEventListener("keydown",e=>{
      first match, so a row here would beat the bench's own Escape for good and
      the tool could never be put down again. Menu first, then everything else. */
   if(e.key==="Escape" && ctxMenu){ e.preventDefault(); ctxClose(); return; }
+  /* AND A PREWARM EATS IT AHEAD OF EITHER. Same reason: the screen underneath
+     is still the bench or the scenario board, so its own Escape row would put
+     a tool down instead of stopping the commissioning nobody wants to wait
+     for. See prewarmCancel() (screens/shell.js). */
+  if(e.key==="Escape" && prewarmBusy()){ e.preventDefault(); prewarmCancel(); return; }
   const K=keyList().find(k=>k.k===e.key);
   if(K){ e.preventDefault(); K.fn(); }
 });

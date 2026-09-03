@@ -39,6 +39,8 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 #plant-line.idle{color:var(--c-amber)}
 #clock-row{display:flex;align-items:center;gap:4px}
 #clock{color:var(--c-ink2);font-size:var(--t8);letter-spacing:1px}
+/* running behind the rate it was asked for - the TPS beside it is the truth */
+#clock.slow{color:var(--c-amber)}
 #clock-dot{width:6px;height:7px;background:var(--c-amber)}
 
 #stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;
@@ -89,6 +91,21 @@ body[data-screen="help"] #cv{display:none}
 .ann-tile.lit .ann-num,.ann-tile.lit .ann-label{color:var(--c-well)}
 @keyframes ann-blink{0%,49%{opacity:1}50%,100%{opacity:.4}}
 .ann-tile.blink{animation:ann-blink 900ms steps(1,end) infinite}
+
+/* over the stage and under the topbar's z-order: the tabs stay live, because
+   picking another one is how a prewarm is cancelled */
+#prewarm{position:fixed;z-index:999;display:flex;align-items:center;justify-content:center;
+  left:0;right:0;top:40px;bottom:0;background:rgba(0,0,0,.55)}
+.pw-box{width:min(520px,70vw);padding:14px 16px;background:var(--c-panel);
+  border:1px solid var(--c-edge2);font-family:var(--mono);color:var(--c-ink);
+  box-shadow:0 4px 14px rgba(0,0,0,.5)}
+.pw-head{display:flex;align-items:baseline;gap:10px;font-size:var(--t9);letter-spacing:1.6px}
+.pw-title{color:var(--c-bright)}
+.pw-stage{flex:1 1 auto;color:var(--c-ink)}
+.pw-pct{flex:0 0 auto;color:var(--c-bright)}
+.pw-track{margin-top:8px;height:10px;background:var(--c-well);border:1px solid var(--c-edge)}
+.pw-fill{height:100%;width:0;background:var(--c-amber);transition:width 80ms linear}
+.pw-note{margin-top:8px;font-size:var(--t7);letter-spacing:.5px;color:var(--c-ink2)}
 
 #tip{position:fixed;z-index:1000;display:block;max-width:320px;padding:8px 10px;
   background:var(--c-panel);border:1px solid var(--c-edge2);color:var(--c-ink);

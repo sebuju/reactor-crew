@@ -36,6 +36,7 @@ function shellInit(){
     tabs,
     plantLine:document.getElementById("plant-line"),
     clock:document.getElementById("clock"),
+    clockRow:document.getElementById("clock-row"),
     dot:document.getElementById("clock-dot"),
   };
   for(const btn of tabs){
@@ -43,9 +44,12 @@ function shellInit(){
     btn.addEventListener("click",()=>{
       const dis=(k==="operate"||k==="scenario")&&designBlocked();
       if(dis) return;
+      /* ANOTHER TAB IS THE CANCEL. A prewarm holds no screen of its own, so
+         the tab that started it is the one gesture that must not restart it. */
+      if(prewarmBusy()){ if(k==="operate") return; prewarmCancel(); }
       /* an unchanged design keeps the plant that is already running */
-      if(k==="operate"&&(!P||P.dsig!==designSig())){ commission(); return; }
-      if(k==="scenario"&&!P) commission();
+      if(k==="operate"&&(!P||P.dsig!==designSig())){ prewarmStart(); return; }
+      if(k==="scenario"&&!P){ commission(); trBench(); trRateFit(); }
       /* ══ LEAVING THE CONTROL ROOM RESETS THE PLANT ══
          The one-way rule the bench controls depend on: a control-room session
          writes S through act(), the bench writes D.start directly, and nothing
@@ -119,8 +123,29 @@ const LOCKTIP="Locked while a machine is standing where it does not fit. Drag it
 /* ONE string, so the sim time and the rate it is advancing at cannot be
    written out of step with each other - they are two readings of one moment. */
 function shellClock(){
-  const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7)+" / "+pad(Math.round(TR.sps),4)+" TPS";
+  /* THE CLOCK IS THE RUNNING PLANT'S, so it is not on a screen where nothing
+     runs: the bench steps no ticks, so the reading is 0 TPS and 0.0x, and the
+     amber that says "behind the rate you asked for" was firing about a plant
+     nobody is watching. SIMSCREEN (record.js) is the same predicate simFrame()
+     already uses to decide whether to step at all. */
+  const live = !!SIMSCREEN[screen];
+  KIT.show(shellEls.clockRow, live);
+  if(!live) return;
+  /* ACHIEVED, NEVER ASKED FOR. Printing TR.rate here would be the button
+     reading itself back, which is the very thing the strip was already saying
+     and the very thing a plant too big to keep up cannot honour. 50 ticks a
+     second is one second of plant time, so the ticks the loop is ACTUALLY
+     getting are the timescale it is ACTUALLY running at - MAX and VLD have a
+     figure here for the first time, and 1X on a heavy plant reads 0.6x.
+     One decimal always, so the field does not change width as it moves. */
+  const ts = (TR.sps/50).toFixed(1)+"x";
+  const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7)+" / "+pad(Math.round(TR.sps),4)+" TPS / "+ts;
   if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
+  /* THE RATE IS A PROMISE AND THIS IS THE MEASUREMENT OF IT. Only a finite
+     rate promises anything - MAX and VLD run at whatever they get - and only
+     a running plant can be behind, so a pause is not slow. */
+  const owed = typeof TR.rate==="number" && isFinite(TR.rate) && !TR.paused && S;
+  shellEls.clock.classList.toggle("slow", !!owed && TR.sps < 50*TR.rate*0.9);
 }
 function shellSync(){
   helpSync();
@@ -171,18 +196,73 @@ function shellSync(){
   layRelease();
 }
 
+/* ══ COMMISSIONING, IN FRONT OF THE PLAYER ══
+   commission() is a second of network solves, and a tab that freezes is the one
+   thing a click that big must not look like. commissionGen() (sim/step.js) is
+   the same work with stage boundaries in it, driven here on a frame budget.
+   NOTHING IS PAINTED WHILE IT RUNS: a half-built P is not a plant and no
+   renderer may read one, so the last frame of the screen you left stays up
+   behind the bar - and the topbar is above it, because picking another tab is
+   the cancel. */
+const PREWARM_MS=24;
+let pwGen=null, pwEls=null, pwFrac=0, pwStage="";
+const prewarmBusy=()=>!!pwGen;
+function prewarmStart(){
+  tipHide(); ctxClose();
+  pwGen=commissionGen(); pwFrac=0; pwStage="";
+  prewarmSync(true);
+}
+/* A CANCELLED PREWARM LEAVES NO PLANT. commission() overwrites P on its first
+   statement, so the plant that was running is already gone by the first yield
+   and there is nothing to put back: the board is uncommissioned, and the tab
+   test above rebuilds it on the way back in. */
+function prewarmCancel(){
+  if(!pwGen) return;
+  pwGen=null; P=null; S=null;
+  prewarmSync(false); uiDirty();
+}
+function prewarmStep(){
+  if(!pwGen) return false;
+  const t0=performance.now();
+  do{
+    let r;
+    try{ r=pwGen.next(); }catch(e){ pwGen=null; prewarmSync(false); throw e; }
+    /* THE BENCHMARK IS PART OF COMMISSIONING, not of the sim: a rate is a
+       promise about this machine, so the plant that was just built is what it
+       has to be measured on. It runs on a snapshot and puts the plant back. */
+    if(r.done){ pwGen=null; trBench(); trRateFit(); prewarmSync(false); uiDirty(); return false; }
+    pwFrac=r.value.frac; pwStage=r.value.stage;
+  }while(performance.now()-t0<PREWARM_MS);
+  prewarmSync(true);
+  return true;
+}
+function prewarmSync(on){
+  if(!pwEls){
+    const box=typeof document!=="undefined" && document.getElementById("prewarm");
+    if(!box) return;
+    pwEls={box, stage:box.querySelector(".pw-stage"), pct:box.querySelector(".pw-pct"),
+           fill:box.querySelector(".pw-fill")};
+  }
+  KIT.show(pwEls.box,on);
+  if(!on) return;
+  pwEls.stage.textContent=pwStage;
+  pwEls.pct.textContent=Math.round(pwFrac*100)+"%";
+  pwEls.fill.style.width=(pwFrac*100).toFixed(1)+"%";
+}
+
 /* ONE TOOLTIP, TWO SOURCES. A rail control is a DOM node and carries its own
    data-tip-title; a canvas widget is not one and cannot, so the canvas keeps the
    hit test (tipHover(), core/ui.js) and hands the answer here. Everything after
    that - the box, the wrap, the band, the placement - is the same code either
    way, which is the whole point: there used to be two tooltips, and only one of
    them could be styled by the stylesheet. */
-let tipSync=()=>{};
+let tipSync=()=>{}, tipHide=()=>{};
 function shellInitTooltip(){
   const tip=document.getElementById("tip");
   if(!tip) return;
   let cur=null, curRail=null, curGroup=null, owner=null, cvKey=null, bar=null;
-  const show=el=>{ cur=el; curRail=railOf(el); curGroup=el.closest(".cr-group"); owner="html";
+  // nothing is hoverable while a prewarm is up: the box would stand on the bar
+  const show=el=>{ if(prewarmBusy()) return; cur=el; curRail=railOf(el); curGroup=el.closest(".cr-group"); owner="html";
     tip.innerHTML=`<b>${el.dataset.tipTitle||""}</b><p>${el.dataset.tipBody||""}</p>`;
     bar=null;
     KIT.show(tip,true);
@@ -192,6 +272,7 @@ function shellInitTooltip(){
     else if(curRail) place(curGroup?curGroup.getBoundingClientRect().top:b.top+b.height/2, !!curGroup);
     else placeBy(b); };
   const hide=()=>{ cur=null; curRail=null; curGroup=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
+  tipHide=hide;
   document.addEventListener("pointerover",e=>{
     const el=e.target.closest("[data-tip-title]");
     if(el && el!==cur) show(el);

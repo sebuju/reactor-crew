@@ -25,6 +25,9 @@ const nextFrame = () => {
 };
 function tick(now){
   let dt=(now-prev)/1000; prev=now; dt=Math.min(dt,.25);
+  // a prewarm owns the whole frame and paints nothing - see prewarmStep()
+  // (screens/shell.js). The sim cannot run either: P is half a plant.
+  if(prewarmStep()){ nextFrame(); return; }
   const stepped=simFrame(dt);
   // taken unconditionally: short-circuiting behind `stepped` would leave the
   // flag set through a whole run and spend it on the first still frame after
