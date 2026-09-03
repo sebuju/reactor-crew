@@ -38,6 +38,9 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 #plant-line{color:var(--c-cyan);font-size:var(--t8);letter-spacing:1px}
 #plant-line.idle{color:var(--c-amber)}
 #clock-row{display:flex;align-items:center;gap:4px}
+/* nothing is running, so there is nothing to read - the box stays, so the bar
+   beside it does not move */
+#clock-row.blank{visibility:hidden}
 #clock{color:var(--c-ink2);font-size:var(--t8);letter-spacing:1px}
 /* running behind the rate it was asked for - the TPS beside it is the truth */
 #clock.slow{color:var(--c-amber)}

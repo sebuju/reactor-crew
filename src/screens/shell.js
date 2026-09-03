@@ -128,9 +128,12 @@ function shellClock(){
      amber that says "behind the rate you asked for" was firing about a plant
      nobody is watching. SIMSCREEN (record.js) is the same predicate simFrame()
      already uses to decide whether to step at all. */
+  /* BLANK, not hidden: the row keeps its box, so the topbar beside it does not
+     shift every time you leave the control room. The string is still written
+     while it is blank, for the same reason - a stale one is a different width
+     and the bar would jump on the way back in. */
   const live = !!SIMSCREEN[screen];
-  KIT.show(shellEls.clockRow, live);
-  if(!live) return;
+  shellEls.clockRow.classList.toggle("blank", !live);
   /* ACHIEVED, NEVER ASKED FOR. Printing TR.rate here would be the button
      reading itself back, which is the very thing the strip was already saying
      and the very thing a plant too big to keep up cannot honour. 50 ticks a
@@ -144,7 +147,7 @@ function shellClock(){
   /* THE RATE IS A PROMISE AND THIS IS THE MEASUREMENT OF IT. Only a finite
      rate promises anything - MAX and VLD run at whatever they get - and only
      a running plant can be behind, so a pause is not slow. */
-  const owed = typeof TR.rate==="number" && isFinite(TR.rate) && !TR.paused && S;
+  const owed = live && typeof TR.rate==="number" && isFinite(TR.rate) && !TR.paused && S;
   shellEls.clock.classList.toggle("slow", !!owed && TR.sps < 50*TR.rate*0.9);
 }
 function shellSync(){
@@ -192,7 +195,9 @@ function shellSync(){
   if(shellEls.plantLine.textContent!==line){ shellEls.plantLine.textContent=line;
     shellEls.plantLine.classList.toggle("idle",!fresh); }
   shellClock();
-  shellEls.dot.style.visibility=Math.floor(performance.now()/500)%2?"visible":"hidden";
+  // the blink is written inline, so it must answer the blank row itself - an
+  // inline `visible` on the dot shows straight through a hidden parent
+  shellEls.dot.style.visibility=SIMSCREEN[screen]&&Math.floor(performance.now()/500)%2?"visible":"hidden";
   layRelease();
 }
 
