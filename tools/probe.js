@@ -61,6 +61,7 @@ function dump(s,label){
   row("release",f(s.release,5)); row("breach",!!s.breach);
 
   console.log(" POTS");
+  for(const id in (s.condTBy||{})) row("cond "+id+" K",f(s.condTBy[id],2)+"  cw in "+f(s.cwInTBy[id],2)+" K");
   for(const id in (s.ihxTBy||{})) row("ihx "+id+" K",f(s.ihxTBy[id],2));
   for(const id in (s.radTBy||{}))
     row("rad "+id, "T "+f(s.radTBy[id],2)+"  takes "+f((s.radQBy[id]||0)/1000,1)+" MW");
@@ -101,10 +102,10 @@ function dump(s,label){
 /* ══ CASES ══ disposable. Add one, read it, delete it. */
 const CASES={
   stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
-  quad(){
-    const i=M.PLANTPRE().findIndex(p=>p[0]==="QUAD");
+  dual(){
+    const i=M.PLANTPRE().findIndex(p=>p[0]==="DUAL");
     M.plantPreset(i); M.buildLayout(); M.commission();
-    const s=M.S(); run(s,PSEC); dump(s,"QUAD - 4 units, 2 sets");
+    const s=M.S(); run(s,PSEC); dump(s,"DUAL - 2 units, 1 set");
     console.log(" COUNTS  parts "+M.LAY().parts.length+"  turb "+M.turbCount()+
       "  cond "+M.condCount()+"  rad "+M.radIds().length+
       "  grid "+M.D().gw+"x"+M.D().gh);
