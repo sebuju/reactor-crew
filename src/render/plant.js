@@ -255,6 +255,10 @@ const spinRate=dpf=>{ const m=Math.abs(dpf);
   if(m<=SPIN_KNEE) return dpf;
   const k=SPIN_CAP-SPIN_KNEE;
   return (dpf<0?-1:1)*(SPIN_KNEE+k*(1-Math.exp(-(m-SPIN_KNEE)/k))); };
+/* fraction of rated this shaft turns at: its own drive, or the water pushed
+   through it - a stopped pump in a live loop windmills rather than standing. */
+const pumpSpinK = (s,id) => Math.max(pumpDrive(s,id),
+  pumpQOf(s,id)/Math.max((P.pumpQRef&&P.pumpQRef[id])||pumpFlow(id),1e-9));
 function spinVane(cx,cy,r,deg,dpf,col){
   const t=clamp((Math.abs(dpf)-SPIN_LO)/(SPIN_HI-SPIN_LO),0,1), a=deg*Math.PI/180;
   if(t<1){
@@ -527,12 +531,14 @@ function drawSym(p,x,y,w,h,ink,L){
        zoomed-out board makes every box short. */
     const r=Math.max(6,Math.min(W,Hh)/2-1), cy=y+h/2;
     shell(()=>ctx.arc(cx,cy,r,0,7));
-    // a wrecked pump is not turning. s.spinV is one rate for every pump on
-    // the plant, so the stall angle comes off the id (fxIdPhase(), fx.js)
+    // a wrecked pump is not turning. s.spinV is the PLANT's flux, so a pump
+    // ordered to 0 turned with the ones still running: the rate is that
+    // machine's own (pumpSpinK()), and the phase is keyed per pump because
+    // each now advances at its own rate
     // a still pump on the bench is drawn the same way a stalled one is, or the
     // box is an empty circle with nothing in it to say it is a pump
-    { const still = !L || dead, dpf = still?0:L.spinV*frameDt();
-      spinVane(cx,cy,r, !L?0 : dead?fxIdPhase(id)*360 : aliasStep("spin",spinRate(dpf),360).ph,
+    { const still = !L || dead, dpf = still?0:L.spinV*pumpSpinK(L,id)*frameDt();
+      spinVane(cx,cy,r, !L?0 : dead?fxIdPhase(id)*360 : aliasStep("spin:"+id,spinRate(dpf),360).ph,
                dpf, ink); }
     if(L&&L.cav>.15){ ctx.beginPath(); ctx.arc(cx,cy,r+3,0,7); ctx.strokeStyle=C.amber;
       ctx.lineWidth=1.5; ctx.setLineDash([3,3]); ctx.stroke(); ctx.setLineDash([]); }
