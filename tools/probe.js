@@ -20,7 +20,7 @@ const M=require('./bundle').headless(
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
  'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,'+
- 'plantPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
+ 'HEATBAL:()=>HEATBAL,plantPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -56,11 +56,7 @@ function dump(s,label){
   console.log(" PLANT");
   row("Tavg K",f(s.Tavg,2)); row("P MPa",f(s.P,4));
   row("inventory %",f(s.inv,2)); row("pzr level %",f(s.lvl,2));
-  /* THE TWO BOOKS, SIDE BY SIDE. The pool is what s.inv still says; the field
-     is every node's own mass added up. They are allowed to disagree until
-     s.inv becomes a read of the field. */
-  { let m=0; for(const k in s.mBy) m+=s.mBy[k];
-    row("node mass kg",f(m,1)); row("pool kg",f(s.inv/100*M.loopKg(),1)); }
+  { let m=0; for(const k in s.mBy) m+=s.mBy[k]; row("node mass kg",f(m,1)); }
   row("core MW",f(s.fq*(s.P0mw||0),2)||"-"); row("electric MW",f(M.mwE(s),2));
   row("cond T K",f(s.condT,2)); row("cw in K",f(s.cwInT,2));
   row("release",f(s.release,5)); row("breach",!!s.breach);
@@ -190,6 +186,19 @@ const CASES={
         f(M.sgLiftP(),2).padStart(6)+f(M.sgBurstP(id),2).padStart(7)+
         (id?f(M.sgLvl(s,id),0):"-").padStart(7)+f(s.dmg,1).padStart(6)+"   "+died);
     }
+  },
+  heat(){ const s=withPlant(null); const H=M.HEATBAL();
+    for(let i=0;i<50*40;i++) M.step(0.02); globalThis.TAVGDBG=1;
+    for(let i=0;i<6;i++) M.step(0.02); process.exit(0);
+    console.log("t  heat%  removal%  Tavg  P  sgP  sgQ  steamMW  radQ  elec  inv  lvl  clamps");
+    for(let i=0;i<PSEC*50;i++){ M.step(0.02);
+      if(i>=50*40&&i<50*40+30){ const id=M.sgIds()[0];
+        let rq=0; for(const k in s.radQBy) rq+=s.radQBy[k];
+        console.log([ (i/50).toFixed(2), (H.heat*100).toFixed(2), (H.removal*100).toFixed(2),
+          s.Tavg.toFixed(6), s.P.toFixed(3), (s.sgPBy[id]||0).toFixed(3),
+          ((H.sgQBy[id]||0)/1000).toFixed(1), (s.steamBy&&s.steamBy[id]||0).toFixed(1),
+          (rq/1000).toFixed(1), M.mwE(s).toFixed(1), s.inv.toFixed(2), s.lvl.toFixed(2),
+          M.advectClampCount(), s.dTavg.toFixed(5), s.arDE.toFixed(5), s.rodPos.toFixed(5), s.rho.toFixed(2), s.parts.xe.toFixed(1), s.parts.dop.toFixed(1), s.parts.mod.toFixed(1), s.parts.vd.toFixed(2), s.parts.exp.toFixed(2)].join("  ")); } }
   },
   selfrun(){ const s=withPlant(M=>{
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
