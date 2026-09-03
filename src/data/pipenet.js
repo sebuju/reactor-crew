@@ -131,8 +131,58 @@ const wallSuggestMm = (boreMm, pMPa, c) =>
 const feedHeadMax = () => { let h = 0;
   for(const id of pumpIds()) if(secGensOf(id).length) h = Math.max(h, pumpHead(id));
   return h; };
-const runDesignP = r => PRIMARY_K[r.k] ? holdSetP(nodeGraph().coreCirc)
-                                       : Math.max(sgDesignP(), feedHeadMax());
+/* ══ AND A PRIMARY RUN IS RATED FOR WHAT STANDS AT ITS OWN TWO ENDS ══
+   The circuit's setpoint was the whole answer, so the HPI line was walled for
+   the loop's 7 MPa while its own accumulator is charged to 11.0 - it split on
+   tick one of every BWR/4, BN-600, RBMK-1000 and MSRE commissioning, with no
+   fault injected, and the hole then drained the plant from the moment it was
+   built. Same mistake the feed line above already fixed, on the other side of
+   the tubes. Asked at the SAME two nodes the burst test reads (step.js), or
+   the wall and the thing that judges it disagree forever. A tank states
+   tankDesignP(); a pump adds its head at its DISCHARGE node and nowhere else,
+   because a suction is where a pump makes pressure LOWER. The setpoint stays
+   the floor, so nothing this already walled gets thinner.
+   ...AND A COLUMN OF COOLANT IS A PRESSURE TOO. The setpoint is only what
+   stands at the ANCHOR; a node below it carries the weight of everything
+   above as well, which is the same column netPressures() adds back to turn
+   the solve into megapascals. Invisible on water at 15.5 MPa - 19 m is
+   0.13 MPa - and decisive on sodium at 0.2, where the same column is 0.36 and
+   BN-600 cut its own hot legs on tick one. Against the TOP of the run's own
+   circuit, because the anchor is a solved quantity and this is asked with no
+   S: the highest node is the bound, so a wall is never sized short. */
+const circSetP = n => { const ci = circOfNode(n);
+  return (ci === null || ci === undefined) ? 0 : holdSetP(ci); };
+// on the graph (graphSlot(), layout.js): heights come off part cells, which
+// are already terms of that graph's own key, so no setpoint can stale this
+const circTopZ = ci => { const s = graphSlot("circTopZ"), was = s.get(ci);
+  if(was !== undefined) return was;
+  const G = nodeGraph(); let hi = -Infinity;
+  for(const pid in G.nodesOf) for(const n of G.nodesOf[pid]){
+    if(G.circuit[n] !== ci) continue;
+    const z = nodeZ(n); if(z !== null && z > hi) hi = z; }
+  s.set(ci, hi); return hi; };
+// the coolant's own density at its design point, kg/m^3 - what commission()
+// bakes P.rho0 from, asked of D so the bench gets the same answer with no P
+const rhoDesign = () => COOLANT[D.cool].dens*RHO_K;
+const colAt = n => { const ci = circOfNode(n);
+  if(ci === null || ci === undefined) return 0;
+  const z = nodeZ(n), top = circTopZ(ci);
+  return (z === null || !isFinite(top)) ? 0 : rhoDesign()*G_MPA*Math.max(top - z, 0); };
+const runDesignP = r => {
+  if(!PRIMARY_K[r.k]) return Math.max(sgDesignP(), feedHeadMax());
+  let p = holdSetP(nodeGraph().coreCirc);
+  const ends = runEnds(r.key, r.k);
+  if(!ends) return p;
+  // both ends at once, so the tank and pump walks below are per RUN and not
+  // per node - this is asked of every run every tick by the burst test
+  const at = new Set(ends.map(coreFold)), G = nodeGraph();
+  for(const n of at) p = Math.max(p, circSetP(n) + colAt(n));
+  for(const id of tankIds())
+    if((G.nodesOf[id]||[]).some(m => at.has(coreFold(m)))) p = Math.max(p, tankDesignP(id));
+  for(const id of pumpIds()){ const dis = pumpDisNode(id);
+    if(at.has(dis)) p = Math.max(p, circSetP(dis) + colAt(dis) + pumpHead(id)); }
+  return p;
+};
 const runWallMm = r => (D.wall && D.wall[r.key] !== undefined) ? D.wall[r.key]
                      : wallSuggestMm(runBoreMm(r), runDesignP(r),
                                      PRIMARY_K[r.k] ? COOLANT[D.cool] : null);
@@ -669,7 +719,7 @@ const SGTR_RATE = 0.30;
 // it was P.P0*0.55, a second fitted fraction that only ever meant "one minus
 // the 0.45", so the two could drift apart with nothing to catch it
 const sgtrG = () => (SGTR_RATE/100)*P.netRef*LOOP_TRANSIT/Math.max(holdSetP(nodeGraph().coreCirc)-sgDesignP(), 0.05);
-const sgtrLive = (s, id) => !!(s.dmgParts && s.dmgParts.indexOf(id) >= 0);
+const sgtrLive = (s, id) => partWrecked(s, id);
 
 /* ══════════ FLUID: a table of SUBSTANCES, not of components ══════════
    There is no such thing as "the HPI tank" any more. There is a tank, and
@@ -873,11 +923,22 @@ const tankWet   = lvl => lvl > TANK_LVL_EPS;
 function tankP(s,id){
   const t = D.tanks[id];
   if(!t) return 0;
+  const ci = tankCircuit(id);
   // CONTROLLED, so no gas law is consulted: a hold tank holds its circuit's
   // own setpoint, and the setpoint is what step() integrates
-  if(t.hold) return loopP(s, tankCircuit(id));
-  return Math.max(P.Pcont, !t.gas ? 0
-    : t.gas.p0*t.gas.frac/(t.gas.frac + (t.level - clamp(tankLvl(s,id),0,100))/100));
+  if(t.hold && s && P && P.net && holdLive(P.net, s, ci)) return loopP(s, ci);
+  /* ...AND AN ISOLATED HOLD TANK IS A GAS TANK. Cut off from its loop it is a
+     steam bubble in a shut vessel, which is the charge law every other tank
+     already answers on - so there is no second pressure model here, only a
+     charge the vessel states instead of one the player types: its setpoint at
+     its own design level. It used to go on printing loopP, so shutting the
+     surge port had the pressurizer follow the loop it was no longer on all the
+     way down to containment. */
+  const gas = t.gas || (t.hold
+    ? {p0: holdSetP(ci), frac: Math.max(0.01, (100-clamp(t.level,0,100))/100)} : null);
+  // a bubble squeezed to nothing is a divide by zero, and a gauge cannot print one
+  return Math.max(P.Pcont, !gas ? 0
+    : gas.p0*gas.frac/Math.max(0.01, gas.frac + (t.level - clamp(tankLvl(s,id),0,100))/100));
 }
 /* ══ WHAT THIS VESSEL'S OWN SHELL IS BUILT FOR, MPa ══
    The highest pressure the tank can see: what it holds itself, and what the
@@ -971,13 +1032,19 @@ const tankFillable = (s,id) => { const ci = tankCircuit(id);
   return ci !== null && ci !== undefined && ci >= 0 && loopP(s,ci) > tankP(s,id); };
 const tankSuction = id => pumpIds().some(p => pumpResOf(p).includes(id));
 const tankLive = (s,id) =>
+  /* A WRECKED TANK IS NOT A TANK. Every other component's internal edge is cut
+     by its own damage in netBuild(); a tank's edge is built here instead and
+     escaped that, so a destroyed reserve went on injecting exactly as it did
+     intact. Same one door (partWrecked(), layout.js) the rest of the plant
+     now asks. */
+  !partWrecked(s,id) && (
   /* A HOLD TANK IS LIVE WHENEVER IT IS OPEN, stated rather than left to the
      clause below - which answers correctly today by coincidence, not by
      saying anything true. Surge goes both ways by definition and there is no
      level at which the vessel stops being the plant's pressure boundary. */
   D.tanks[id].hold ? tankOpen(s,id) :
   tankOpen(s,id) && tankCheckOpen(s,id) &&
-  (tankWet(tankLvl(s,id)) || (!tankSuction(id) && tankFillable(s,id)));
+  (tankWet(tankLvl(s,id)) || (!tankSuction(id) && tankFillable(s,id))));
 
 /* ══ AND THE CONDENSATE OUTLET IS A POOL, NOT A SOURCE ══
    The same sentence tankLive() makes, asked of the hotwell: a pool with
@@ -1065,7 +1132,7 @@ const flowDemPri = s => flowMean(s, s.flowDemBy);
    switchboard is NOT here - a dead bus is already in s.flowBy's own target
    (step.js), so reading supplyK() again applied the blackout twice. */
 const pumpDrive = (s, pid) =>
-  (s.dmgParts && s.dmgParts.indexOf(pid)>=0 ? 0 : 1) * flowOf(s, pid);
+  (partWrecked(s, pid) ? 0 : 1) * flowOf(s, pid);
 /* HOW BADLY THIS PUMP'S OWN SUCTION IS BOILING, 0..1 - measured at its own
    suction node (step.js) and keyed by PUMP, so every pump on the grid can
    lose head to its own bad suction leg. */
@@ -1106,6 +1173,16 @@ const pipeExtraLen = (s, cells) => {
   for(let i=0;i<cells.length;i++){ const c=cells[i]; if(cellBroken(s,c[0],c[1])) return Infinity; }
   return 0;
 };
+/* A WRECKED NOZZLE VALVE IS A HOLE, NOT A JAM. The valve BODY is what failed,
+   and a valve body is the pressure boundary - so the run standing on it is
+   severed at the machine and open to containment there, which is the same
+   pair of consequences a broken pipe cell already carries. Jamming is what a
+   wrecked ACTUATOR does, and that is a different fault from a dead one.
+   Asked of anything carrying cells and its two ports - a run, and a
+   steamBreaks row, which is the same three fields. */
+const runHoled = (s, r) => pipeExtraLen(s, r.cells) === Infinity
+                        || portWrecked(s, r.pa) || portWrecked(s, r.pb);
+const runExtraLen = (s, r) => runHoled(s, r) ? Infinity : 0;
 
 /* ══════════ FIT: one row per fitting BEHAVIOUR ══════════
    Same idiom as LAYERS (render/layers.js), DMGFX and AUTOSYS (sim/step.js):
@@ -1316,6 +1393,17 @@ const zRow = row => (GH - row) * MPC;
 const zFace = (p, side) => side === "t" ? zRow(p.y)
                          : side === "b" ? zRow(p.y + p.h)
                          : zRow(p.y + p.h/2);
+/* AND WHICH HEIGHT A NAMED NODE IS AT. A FOLDED NODE IS THE BARE PART ID -
+   the core's single plenum, and a tee's four faces - so it is looked up whole
+   before the face is sliced off, or a node called "fit1" resolves as a part
+   called "fit" and silently sits wherever that box was placed. null is "no
+   part here"; both callers owe that case their own answer, and they give
+   different ones - netBuild() drops such a node at the core's height, the
+   wall walks past it. */
+const nodeZ = nid => { const whole = partOf(nid);
+  if(whole) return zFace(whole, "c");
+  const q = partOf(nid.slice(0, -1));
+  return q ? zFace(q, nid.slice(-1)) : null; };
 
 /* Node temperature. Every node the primary touches is on the hot side of the
    loop, the cold side, or (the folded core, a cross-tie between the two) in
@@ -1560,7 +1648,7 @@ function netBuild(){
       const tk = D.tanks[tid] && D.tanks[tid].hold ? resist : injResist;
       edges.push({u, v,
         g: s => (tankLive(s,tid) && runPortsOpen(s,r))
-                ? tk(bore, L + pipeExtraLen(s, r.cells)) : 0,
+                ? tk(bore, L + runExtraLen(s, r)) : 0,
         h: 0, kind: r.k, key: r.key}); // LABEL: carried onto the edge for rendering/lookup, never re-compared here
       continue;
     }
@@ -1585,7 +1673,7 @@ function netBuild(){
       edges.push({u, v, g: 0, h: 0, kind: r.k, key: r.key, vapBore: bore, vapLen: L, vapRun: r});
       continue;
     }
-    edges.push({u, v, g: s => runPortsOpen(s,r) ? throttled(s, bore, L + pipeExtraLen(s, r.cells), NO_GATES) : 0,
+    edges.push({u, v, g: s => runPortsOpen(s,r) ? throttled(s, bore, L + runExtraLen(s, r), NO_GATES) : 0,
                 h: 0, kind: r.k, key: r.key});
   }
 
@@ -1733,7 +1821,7 @@ function netBuild(){
        hot leg lands on, so a tube rupture still empties the loop into the
        secondary with nothing flowing THROUGH the machine. */
     { const g0 = edge.g, pid = p.id;
-      const dead = s => !!(s.dmgParts && s.dmgParts.indexOf(pid) >= 0);
+      const dead = s => partWrecked(s, pid);
       edge.g = typeof g0 === "function" ? s => dead(s) ? 0 : g0(s)
                                         : s => dead(s) ? 0 : g0; }
     edges.push(edge);
@@ -1810,12 +1898,48 @@ function netBuild(){
        only ever its design-time superset - a shut port cannot add a shell. */
     if(steam) steamBreaks.push({cells: r.cells, bore, shells, exh, ends, pa: r.pa, pb: r.pb});
     const ua = nodeIdx(coreFold(ends[0])), ub = nodeIdx(coreFold(ends[1]));
+    /* A MACHINE REACHES THE HOLE THROUGH ITS OWN NOZZLE VALVE. The break hung
+       off both ends unconditionally, so a severed line drained the vessel
+       through a valve the operator had already shut - the one move isolation
+       exists for. A WRECKED valve body is not isolation (runHoled(), above):
+       it passes, and discharges at its own cell besides. */
+    const endLive = (s, pid) => portOpen(s, pid) || portWrecked(s, pid);
+    /* AND AN EMPTY TANK POURS NOTHING OUT OF A SEVERED LINE. A non-hold tank's
+       node is FIXED at tankP (netFixed), so it has infinite inventory: the run
+       edge already asks tankLive(), the hole did not, and a reserve emptied to
+       0 % went on spilling at a constant rate for ever. INVENTORY only, never
+       the whole of tankLive(): a checked tank's diode is judged against the
+       LOOP, and a hole downstream of it is at containment - the check valve
+       opens on the break, which is the accident being played. */
+    /* A HOLD TANK IS NOT A STORE and its node is not fixed - it IS the loop,
+       so a severed surge line drains the plant through it whatever its level
+       reads. Only a tank the solve gives infinite inventory to is asked. */
+    const stock = nid => { const id = tankIdOf(nid);
+      return id && !(D.tanks[id] && D.tanks[id].hold) ? id : null; };
+    const tidA = stock(ends[0]), tidB = stock(ends[1]);
+    const endGive = (s, tid) => !tid || tankWet(tankLvl(s, tid));
+    const endsOf = r => [[ua, r.pa, tidA], [ub, r.pb, tidB]];
     for(const [x,y] of r.cells){
       const v = contNode("pipe:"+x+","+y);
       breakIds.push(v);
       contZ[v] = zRow(y);                  // the hole's own elevation, not a machine's
-      for(const u of [ua,ub])
-        edges.push({u, v, g: s => cellBroken(s,x,y) ? g : 0, h: 0, kind: "break", sec, steam, key: "break:"+r.key});
+      for(const [u,pid,tid] of endsOf(r))
+        edges.push({u, v, g: s => (cellBroken(s,x,y) && endLive(s,pid) && endGive(s,tid)) ? g : 0,
+                    h: 0, kind: "break", sec, steam, key: "break:"+r.key});
+    }
+    /* ...AND A WRECKED NOZZLE VALVE IS ONE MORE OPENING ON THE SAME RUN
+       (runHoled(), above), discharging at ITS OWN cell rather than at any pipe
+       cell - the same node-per-hole shape, so nothing downstream of here can
+       tell the two apart. */
+    for(const pid of [r.pa, r.pb]){
+      const c = portCell(pid); if(!c) continue;
+      const v = contNode("port:"+pid);
+      breakIds.push(v);
+      contZ[v] = zRow(c[1]);
+      for(const [u,end,tid] of endsOf(r))
+        edges.push({u, v, g: s => (portWrecked(s,pid) && (end === pid || endLive(s,end))
+                                   && endGive(s,tid)) ? g : 0,
+                    h: 0, kind: "break", sec, steam, key: "break:"+r.key});
     }
   }
   /* one tube-rupture edge per steam generator, from its own primary outlet to
@@ -1852,6 +1976,21 @@ function netBuild(){
     breakIds.push(v);
     edges.push({u: coreNode, v, g: s => s.breach ? BREAK_K*BREACH_BORE*BREACH_BORE : 0,
                 h: 0, kind: "break", key: "break:core"}); }
+  /* ══ A DESTROYED VESSEL EMPTIES ITSELF ══
+     A breach is a hole at the plenum's own height, so it spans no column and
+     stops the moment the loop reaches containment pressure - a wound that
+     stops bleeding with two thirds of the water still in. That is honest for
+     a pressure rupture and wrong for a vessel the board draws as torn open,
+     so a WRECKED one gets a second opening at its own FLOOR: the column above
+     it keeps pushing after the pressures have equalised and the loop empties.
+     Two edges rather than one moving node, because net.z is settled at build
+     time and damage is live. */
+  { const q = byId[roleId("core")];
+    if(q){ const v = contNode("core:floor");
+      breakIds.push(v);
+      contZ[v] = zFace(q, "b");
+      edges.push({u: coreNode, v, g: s => partWrecked(s, q.id) ? BREAK_K*BREACH_BORE*BREACH_BORE : 0,
+                  h: 0, kind: "break", key: "break:core"}); } }
 
   /* ══ WHICH TANK CATCHES THIS VALVE'S DISCHARGE ══
      step.js asks exactly one question of this: is there a tank to catch the
@@ -1912,20 +2051,10 @@ function netBuild(){
      it contributes no static head rather than a wrong one. */
   const coreP = byId.core;   // byId hoisted at the top of this function, for tankIdOf()
   const zCore = coreP ? zFace(coreP, "c") : 0;
-  /* A FOLDED NODE IS THE BARE PART ID - the core's single plenum, and a tee's
-     four faces. Looked up whole before the face is sliced off, or a node
-     called "fit1" resolves as a part called "fit" and the box silently sits
-     at the core's height whatever cell it was placed in. */
-  const partZ = nid => {
-    const whole = byId[nid];
-    if(whole) return zFace(whole, "c");
-    const q = byId[nid.slice(0, -1)];
-    return q ? zFace(q, nid.slice(-1)) : null;
-  };
   net2.z = new Float64Array(net2.n);
   const unplaced = [];
   for(let i=0;i<net2.n;i++){
-    const z = partZ(nodes[i]);
+    const z = nodeZ(nodes[i]);
     if(z === null) unplaced.push(i); else net2.z[i] = z;
   }
   /* a containment node sits at the height of the opening it is on the far
@@ -2246,20 +2375,22 @@ const phiRef = (net, s) =>
    leave at all (a steam tee is a free liquid node with no live liquid edge),
    and it made a plainly-plumbed secondary vessel read as disconnected.
 
-   A hold tank is LIVE when its own node reaches at least one FREE node. A
-   free node is a place the pressure is SOLVED, so touching one is exactly
-   what "this vessel is setting the level here" means. Every other path out of
-   it lands on another boundary, which absorbs whatever it is given and
-   propagates no pressure - the "reached, never crossed" rule this walk has
-   always kept, now asked from the other end and needing no exemption for its
-   own start.
-   It answers the primary identically: pzr -> the surge tee is a free node, so
-   the stock plant is live, and cutting the surge line or shutting any valve
-   in it leaves nothing but boundaries and it is not.
+   A hold tank is LIVE when the live piece it stands in IS A CIRCUIT - the
+   water in it has somewhere to go and come back from. "Reaches any free node"
+   was not that: a free node in a DEAD LEG is a stub the vessel pressurises
+   and nothing else, so shutting the surge port left the pressurizer reading
+   live through its own relief line, which is the one branch that cannot hold
+   a loop up. Measured on the stock ship: prt2 shut, live=true, and the
+   programme went on running.
 
-   Costs one pass over the edge list. Called once a tick from step(), not from
-   a layer - a layer must not solve, and this walks the same conductances a
-   solve would. */
+   A piece with a cycle in it is a piece flow can pass through; a tree hanging
+   off the vessel is a dead end however long it is. Counted over the FREE
+   nodes only - a boundary absorbs what it is given and propagates no pressure
+   ("reached, never crossed") - and over distinct node PAIRS, or two runs
+   between the same two faces would read as a loop.
+
+   Costs one pass over the edge list. Called once a tick from step() and once
+   per panel from tankP() - it walks conductances, it does not solve. */
 function holdLive(net, s, ci){
   const holds = holdOnCirc(ci);
   if(!holds.length) return true;                  // nothing on this circuit to disconnect
@@ -2274,18 +2405,23 @@ function holdLive(net, s, ci){
     (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
     (adj[ed.v] || (adj[ed.v] = [])).push(ed.u);
   }
+  // the seed is exempt from its own fixed test: a hold tank's node IS an anchor
   const seen = new Uint8Array(net.n), stack = [t];
-  seen[t] = 1;
+  let nodes = 1; seen[t] = 1;
   while(stack.length){
-    const u = stack.pop();
-    if(u !== t){
-      if(fixed[u] !== undefined) continue;         // reached, never crossed
-      return true;                                 // a solved node: it is setting this
-    }
-    const a = adj[u];
-    if(a) for(let i=0;i<a.length;i++){ const v=a[i]; if(!seen[v]){ seen[v]=1; stack.push(v); } }
+    const a = adj[stack.pop()];
+    if(a) for(let i=0;i<a.length;i++){ const v=a[i];
+      if(seen[v] || fixed[v] !== undefined) continue;   // reached, never crossed
+      seen[v] = 1; nodes++; stack.push(v); }
   }
-  return false;
+  const pairs = new Set();
+  for(let e=0;e<net.edges.length;e++){
+    const ed = net.edges[e];
+    if(!seen[ed.u] || !seen[ed.v] || ed.u === ed.v) continue;
+    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+    if(g > 0) pairs.add(ed.u < ed.v ? ed.u+"|"+ed.v : ed.v+"|"+ed.u);
+  }
+  return pairs.size >= nodes;
 }
 const pzrLive = (net, s) => holdLive(net, s, nodeGraph().coreCirc);
 /* ══════════ THE VAPOUR SIDE IS ITS OWN NETWORK ══════════
@@ -2400,7 +2536,7 @@ function vapSolve(s, open){
   for(let e=0;e<ne;e++){ const ed = V.edges[e];
     let k = 0, w = 0;
     if(ed.run){ k = runPortsOpen(s, ed.run)
-      ? vapPipeKv(ed.kind, ed.bore, ed.len + pipeExtraLen(s, ed.run.cells)) : 0; }
+      ? vapPipeKv(ed.kind, ed.bore, ed.len + runExtraLen(s, ed.run)) : 0; }
     else if(ed.fit){ k = vapPipeKv("steam", fitBoreK(ed.fit), NET_COMP_LEN)
       * clamp((s.valve && s.valve[ed.fit]!==undefined) ? s.valve[ed.fit] : 1, 0, 1); }
     else if(ed.machine){ const o = (open && open[ed.machine]) || {};
@@ -2608,6 +2744,11 @@ function netFactored(net, s, fixed){
      with no cell has no node and so adds no bit, which is right - there is
      nothing about it for A to depend on. */
   + '|' + tankIds().filter(id=>net.tankNode[id]!==undefined).map(id=>tankLive(s,id)?'1':'0').join('')
+  /* ...and one more bit each for "is there anything IN it", which the break
+     edges ask on their own (endGive(), netBuild): a tank can run dry while
+     tankLive() stays 1 on its fill clause, and that closes a hole. */
+  + '|' + tankIds().filter(id=>net.tankNode[id]!==undefined && !D.tanks[id].hold)
+            .map(id=>tankWet(tankLvl(s,id))?'1':'0').join('')
   /* the hotwell running dry shuts the condensate edge, which is a change to A
      exactly as a tank running dry is. One bit for the plant - the pool is one
      pool (hostedTankIds()), so there is no per-condenser answer to give. */
@@ -3190,8 +3331,9 @@ function pipeCellPart(x,y){
    never be the thing that fails. Same pseudo-part shape a pipe cell takes, so
    the dispatcher, the dose rate, the damage card and the repair party need no
    third code path - it occupies one cell, so it is one target and one small
-   job. What being wrecked MEANS is that it jams where it stands (ACT.portShut
-   refuses, record.js): a valve nobody can work is worse than a shut one. */
+   job. What being wrecked MEANS is a HOLE at that cell (runHoled(), above) -
+   a valve body is the pressure boundary - and no orders either (ACT.portShut
+   refuses, record.js), because the handle went with it. */
 function portCellPart(pid){
   const c = (typeof portCell === "function") ? portCell(pid) : null;
   if(!c) return null;
@@ -3216,7 +3358,7 @@ function dmgPart(id){
    colour that says so and the list that reports it cannot disagree. NOT
    portDead() (layout.js): that one is the set of nodes a SHUT valve kills,
    which is a different question about the same box. */
-const portWrecked = (s,pid) => !!(s && s.dmgParts && s.dmgParts.indexOf("port:"+pid) >= 0);
+const portWrecked = (s,pid) => partWrecked(s, "port:"+pid);
 
 // The two rates combatHit() (step.js) already weighs a component's own hull
 // cells by - a run gets no separate scale to fit, just this shared table.
