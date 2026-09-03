@@ -2113,6 +2113,9 @@ function advectStep(s, dt, runFlow, edgeKg){
       const was = s.Tavg;
       s.Tavg = clamp(tOfH(c, pm, hm/m), P.Tmin, P.Tmax);
       s.dTavg = dt > 0 ? (s.Tavg - was)/dt : 0;
+      if(globalThis.TAVGDBG) console.log("TAVG n="+list.length+" m="+m.toFixed(1)+
+        " hm/m="+(hm/m).toFixed(1)+" pm="+pm.toFixed(4)+" first="+list[0]+
+        " T="+s.Tavg.toFixed(6)+" | "+list.join(","));
     }
   }
 }
