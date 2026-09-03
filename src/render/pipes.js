@@ -257,7 +257,12 @@ function pipeFieldRefresh(L){
    run - one whose key names no second node, i.e. the surge line - so a caller
    draws nothing rather than a zero. Every run with two ends has an edge and
    two nodes, steam and feed included; runEnds() is the whole test. */
-function pipeRunP(r){
+function pipeRunP(r,L){
+  /* A CUT RUN HOLDS NOTHING. Its two ends are still nodes on a live circuit,
+     so the mean of them printed the reactor's own pressure on a length of pipe
+     lying open in the compartment. What is in it is at containment, which is
+     where every other opening on this plant sits. */
+  if(runCut(r,L)) return P.Pcont;
   const ends=runEnds(r.key,r.k);
   if(!ends) return null;
   const a=pipeP[coreFold(ends[0])], b=pipeP[coreFold(ends[1])];
@@ -281,7 +286,7 @@ function pipeRunP(r){
 const runVapour = ends =>
   !!ends && netVapourAt(coreFold(ends[0])) && netVapourAt(coreFold(ends[1]));
 function pipeRunSc(r,L){
-  const pr=pipeRunP(r);
+  const pr=pipeRunP(r,L);
   if(pr===null) return null;
   const ends=runEnds(r.key,r.k);
   /* THE SECONDARY BOILS ON THE WATER CURVE, and it is the same mistake secP()
@@ -974,7 +979,7 @@ function pipeMeters(runs,L){
 function pipeVessel(L){ for(const id of holdTankIds()) pipeHoldDial(L, id); }
 function pipeHoldDial(L, id){
   const p=partOf(id);
-  if(!p || !fitted(p) || L.dmgParts.includes(id)) return;
+  if(!p || !fitted(p) || partWrecked(L,id)) return;
   const ci=tankCircuit(id), pv=loopP(L,ci), set=holdSetP(ci);
   const R=prect(p), r=PIPE_DIAL_R;
   const fr=pipeDisplay(id+":P", pv/Math.max(0.1,set));
@@ -1051,9 +1056,9 @@ function pipeLabSpots(g){
 /* A CUT RUN STATES NO PRESSURE. The MPa word is what this run is HELD AT, and
    a run with a hole in it holds nothing - it stood there reading 15.5 MPa over
    a pipe drawn as torn open two cells away. Its bore is still a fact, so that
-   word stays. Off L.dmgParts, the same set pipeDamage() draws the tear from. */
-const runCut = (r,L) => !!(L && L.dmgParts && L.dmgParts.length &&
-  r.cells && r.cells.some(([x,y]) => L.dmgParts.indexOf("pipe:"+x+","+y) >= 0));
+   word stays. runHoled() (pipenet.js) is the SOLVE's own predicate, so a torn
+   cell and a wrecked nozzle valve read the same here as they do there. */
+const runCut = (r,L) => !!(L && r.cells && runHoled(L,r));
 function pipeSizeLabels(NET,L){
   const REF=10, o0={size:REF,sp:0};
   for(const r of NET){
@@ -1087,6 +1092,7 @@ function pipeFlow(L){
   for(const r of pipeRuns(L)){
     const g=pipeGeom(r.pts);
     if(!g.len) continue;
+    if(runCut(r,L)) continue;   // a severed run carries nothing: no packets over an empty bore
     const w=pipeWidth(runBore(r));
     ctx.save(); pipeClip(g,w,w/2);
     /* L.flowPos and pipeSpd are keyed by the RUN (r.key), never the kind (r.k) - a
@@ -1118,48 +1124,62 @@ function pipeBreaks(L){
     const [px,py]=cellPos(x,y);
     fxSteam(px, py, 22, fxEase("brk:"+k, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29);
   }
+  /* A WRECKED NOZZLE VALVE IS AN OPENING TOO (runHoled(), pipenet.js), and it
+     discharges at the JOINT rather than at a pipe cell - the one place on this
+     run where the picture and the solve's own node agree. */
+  for(const id of L.dmgParts){
+    if(typeof id!=="string" || id.indexOf("port:")!==0) continue;
+    const pid=id.slice(5);
+    let q=0;
+    for(const r of pipeNetwork()) if(r.pa===pid||r.pb===pid)
+      q=Math.max(q, L.spillBy["break:"+r.key]||0);
+    if(!(q>0)) continue;
+    const [px,py]=portPos(pid);
+    fxSteam(px, py, 22, fxEase("brk:"+id, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29);
+  }
 }
-/* A BROKEN CELL IS A GAP IN THE PIPE, cut over the stroke that runs through
-   it. Per CELL, because that is what a hit takes out now - the run either side
-   of it is still there, and drawing the whole connection red would say the
-   opposite. */
+/* A BROKEN CELL IS THE SAME LENGTH OF PIPE WITH ITS WALL GONE RED AND NOTHING
+   LEFT IN IT. One mark, and it is the pipe's own two parts said plainly: the
+   casing is what failed, so the casing is what turns red, and the bore is
+   painted back to the deck because a severed run carries nothing through here.
+   Per CELL, because that is what a hit takes out - the run either side of it
+   is still there, and reddening the whole connection would say the opposite.
+   The run's OWN polyline, clipped to the cell, so a bend breaks as a bend and
+   the picture cannot drift from the stroke it replaces. */
 function pipeDamage(L){
   if(!L || !L.dmgParts) return;
+  const NET=pipeNetwork();
   for(const id of L.dmgParts){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
-    const r=grect(+k.slice(0,i), +k.slice(i+1), 1, 1);
-    const cx=r.x+r.w/2, cy=r.y+r.h/2;
-    /* THE STROKE IS TAKEN OUT, not painted over. A flat red square read as a
-       marker dropped ON the pipe - a label, and one an alpha layer washed out -
-       while the thing being said is that the pipe is NOT THERE any more. So the
-       cell is cut back to the deck, hatched, framed, and the tear is drawn
-       across it. It does NOT spark: a machine sparks, a length of pipe does
-       not, and the flicker was reading as the loudest thing on the board. */
-    fillRect(r.x+1,r.y+1,r.w-2,r.h-2,C.well);
-    hatch(r.x+1,r.y+1,r.w-2,r.h-2,C.red,.5);
-    frame(r.x+1,r.y+1,r.w-2,r.h-2,C.red);
-    /* ...AND WHAT IS LEFT IS TWO STUB ENDS PULLED APART, on the cell's OWN
-       faces (PIPE_SHAPE, the same rows pipeExit() walks) - a zigzag lying
-       across the cell was one mark whichever way the line ran, so a broken
-       riser and a broken header drew identically and neither read as pipe. */
-    const cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s], faces=[];
-    if(sh) for(const pr of sh.paths) for(const f of pr){
-      const rf=rotFace(f,cell.r); if(faces.indexOf(rf)<0) faces.push(rf);
-    }
-    if(!faces.length) faces.push("l","r");
+    const x=+k.slice(0,i), y=+k.slice(i+1), r=grect(x,y,1,1);
     ctx.save();
-    ctx.strokeStyle=C.red; ctx.lineWidth=2; ctx.lineCap="butt"; ctx.lineJoin="miter";
-    const h=r.w/2, GAP=4;
-    for(const f of faces){
-      const dx=DIRV[f][0], dy=DIRV[f][1], px=-dy, py=dx;
-      const ex=cx+dx*GAP, ey=cy+dy*GAP;
-      ctx.beginPath();
-      ctx.moveTo(cx+dx*h, cy+dy*h);
-      ctx.lineTo(ex,ey);
-      // the lip, bent open across the bore on ONE side only - torn, not cut
-      ctx.lineTo(ex+px*2.5-dx*1.5, ey+py*2.5-dy*1.5);
-      ctx.stroke();
+    ctx.beginPath(); ctx.rect(r.x,r.y,r.w,r.h); ctx.clip();
+    ctx.lineCap="square"; ctx.lineJoin="round";
+    let drew=false;
+    for(const key of pipeCellRuns(x,y)){
+      const run=NET.find(q=>q.key===key); if(!run) continue;
+      const w=pipeWidth(runBore(run)), cw=w+2*pipeWallPx(run);
+      ctx.beginPath(); ctx.moveTo(run.pts[0][0],run.pts[0][1]);
+      for(let j=1;j<run.pts.length;j++) ctx.lineTo(run.pts[j][0],run.pts[j][1]);
+      ctx.lineWidth=cw; ctx.strokeStyle=C.red; ctx.stroke();
+      ctx.lineWidth=w;  ctx.strokeStyle=C.well; ctx.stroke();
+      drew=true;
+    }
+    /* A cell no connection claims has no polyline to borrow, so it takes the
+       one pipeLoose() draws it with - in red, because it is broken pipe. */
+    if(!drew){
+      const cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s];
+      const cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
+      if(sh){ ctx.strokeStyle=C.red; ctx.lineWidth=3;
+        for(const pr of sh.paths){
+          const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
+          ctx.beginPath();
+          ctx.moveTo(cx+DIRV[a][0]*h, cy+DIRV[a][1]*h);
+          ctx.lineTo(cx,cy);
+          ctx.lineTo(cx+DIRV[b][0]*h, cy+DIRV[b][1]*h);
+          ctx.stroke();
+        } }
     }
     ctx.restore();
   }

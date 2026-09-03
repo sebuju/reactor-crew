@@ -131,7 +131,7 @@ const pressCol = v => { const p0=Math.max(0.1,P.P0);
    below a tenth of an MPa the same number is printed in kPa. One quantity, one
    place, two units, the way any gauge with a useful range is marked. */
 const pressFmt = v => Math.abs(v)<0.1 ? (v*1000).toFixed(0)+" kPa" : v.toFixed(2)+" MPa";
-const pressLayer = (d,L) => layerRunLine(d.runs, 1, pipeRunP, pressCol, pressFmt);
+const pressLayer = (d,L) => layerRunLine(d.runs, 1, r => pipeRunP(r,L), pressCol, pressFmt);
 /* Coloured by MARGIN, not by value: what matters about subcooling is how close
    to zero it is, because zero is where the water in that pipe stops being
    water - which is where a pump loses its head and where the loop stops
