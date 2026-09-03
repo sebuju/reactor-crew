@@ -856,7 +856,7 @@ const TANK_DEFAULT = {
   hold:null, tsurv:null, pburst:null, aspect:1,
   /* INEXHAUSTIBLE - a level that never moves, so the tank is an infinite
      source or an infinite sink depending on what pressure is behind it. It is
-     a SANDBOX INSTRUMENT (tools/sandbox.js): the one honest way to isolate a
+     a SANDBOX INSTRUMENT (tools/sandbox/): the one honest way to isolate a
      piece of the plant is to give it a boundary that cannot run out. No
      inspector row, deliberately - it is not a machine anybody may buy. */
   inf:false,
@@ -1271,7 +1271,7 @@ const FIT = {
    pressure is one of the two potentials the Laplacian is solved against.
    reliefRate() is the one reader of a relief fitting's own vent, in the
    same %-of-loop-inventory-per-second units invRate() already gives a
-   break or an injection line - resolved fresh off netCoreFracOf(), never on
+   break or an injection line - resolved fresh off netSolve(), never on
    S, the same argument netDrops()/netPressures() make below. step.js reads
    it to charge s.inv/s.tank/s.release; the panel and the plume (plant.js)
    read the identical call, so neither can print a rate the sim is not
@@ -1292,7 +1292,7 @@ const netPassDrop =()=>{ netPassLive=false; reliefOuts=null; reliefOutsFor=null;
 function reliefRate(s, fid){
   if(!(P && P.net)) return 0;
   let o = (netPassLive && reliefOutsFor===s) ? reliefOuts : null;
-  if(!o){ o={}; netCoreFracOf(P.net, s, null, null, null, null, o);
+  if(!o){ o={}; netReadEdges(netSolve(P.net, s), null, null, null, o);
     if(netPassLive){ reliefOuts=o; reliefOutsFor=s; } }
   const q = o.reliefBy && o.reliefBy[fid];
   return q ? Math.max(0, invRate(q)) : 0;
@@ -1532,6 +1532,15 @@ function netVapourAt(nid){
    idiom every other feed-forward in this sim uses. A plant whose nodes have
    all equilibrated reads dT identically 0 at every elevation, which is the
    isothermal property the auditor pins. */
+/* A BREAK, A VENT AND A TUBE LEAK ARE HOLES. One predicate, because it is the
+   same rule in all four places that ask it - the fitTarget walk, the elevation
+   copy, the contents pass and the buoyancy pass - and a hole is an opening to
+   a PLACE, not a leg of a circuit. The literal was written out four times and
+   named in only one of them; the split makes that a cross-function hazard
+   rather than a local one. "break"/"vent"/"sgtr" are SYNTHETIC edge kinds
+   netEdges() itself invents, never a run's own declared kind. */
+const netHole = ed => ed.kind === "break" || ed.kind === "vent" || ed.kind === "sgtr";
+
 const buoyH = (net, ed, s) => {
   const dz = net.z[ed.u] - net.z[ed.v];
   if(dz === 0) return 0;
@@ -1547,7 +1556,27 @@ const buoyH = (net, ed, s) => {
    S.reliefOpen or S.valve (see the ROLE.internal loop below), which is
    exactly why netFactored() below has to key its cache on more than just
    this object. */
+/* THREE PASSES, AND BOTH BOUNDARIES ARE FORCED.
+   netEdges() builds every node and every edge; netMaps() derives every array
+   off them; netFinish() mutates the edge list and then walks it. Neither cut
+   is a matter of taste. The elevation pass copies z along break, vent and
+   sgtr edges and the fitTarget walk reads the whole edge list, so both need
+   EVERY edge to exist - that is the first. The condenser splice looks edges up
+   by node NAME, so net2.name must already be written, and everything after the
+   splice walks the post-splice list - that is the second.
+   Merging them back is legal and buys nothing: it restores exactly the
+   derive-then-mutate interleaving that made this hard to read, with the
+   name-before-splice trap unmarked. */
 function netBuild(){
+  const ctx = netEdges();
+  return netFinish(netMaps(ctx), ctx);
+}
+
+/* ══ PASS ONE: EVERY NODE AND EVERY EDGE ══
+   The runs, the internal paths, the relief vents, the breaks, the tube
+   ruptures and the vessel's own two openings. Nothing here reads a derived
+   array, which is what makes the cut clean in the other direction too. */
+function netEdges(){
   const net = pipeNetwork();
   const byKey = {};
   for(const r of net) byKey[r.key] = r;
@@ -1584,7 +1613,7 @@ function netBuild(){
   /* The core is a node like any other now, NOT the ground. Its pressure is an
      answer rather than a definition, which is the whole point of an absolute
      solve - hang the pressurizer higher and the vessel genuinely sits at a
-     higher pressure. netCoreFracOf() below identifies core flow by this index
+     higher pressure. netReadEdges() below identifies core flow by this index
      rather than by "touches ground", which is what it used to do. */
   const coreNode = nodeIdx("core");
 
@@ -1685,7 +1714,7 @@ function netBuild(){
        g 0 rather than no edge at all: netAssemble already omits an edge that
        cannot conduct, and this edge carries the SPEC (bore, length, cells) the
        vapour build reads back off it. */
-    if(RUN_VAPOUR[r.k]){
+    if(edgeLaw(r) === LAW_VAPOUR){
       edges.push({u, v, g: 0, h: 0, kind: r.k, key: r.key, vapBore: bore, vapLen: L, vapRun: r});
       continue;
     }
@@ -2008,6 +2037,27 @@ function netBuild(){
       edges.push({u: coreNode, v, g: s => partWrecked(s, q.id) ? BREAK_K*BREACH_BORE*BREACH_BORE : 0,
                   h: 0, kind: "break", key: "break:core"}); } }
 
+  /* tankIdOf spans all three passes and is DERIVED off the drawing, so it is
+     handed down rather than written a second time. */
+  return {runs: net, byKey, byId, partOfNode, tankIdOf, nodes, index, coreNode, edges,
+          breakIds, steamBreaks, contZ, fitIds, fitMode, openSide, fitVentOut,
+          sgtrIds, sgtrParts, secTIds, secTParts};
+}
+
+/* ══ PASS TWO: EVERY ARRAY DERIVED OFF THEM ══
+   Which tank catches which vent, the elevations, the holdup, the names, the
+   condenser's anchors. Read-only over the edge list this is handed - the one
+   thing it must not do is change it. */
+function netMaps(ctx){
+  const net = ctx.runs, byKey = ctx.byKey, byId = ctx.byId,
+        partOfNode = ctx.partOfNode, tankIdOf = ctx.tankIdOf,
+        nodes = ctx.nodes, index = ctx.index, coreNode = ctx.coreNode,
+        edges = ctx.edges, contZ = ctx.contZ, breakIds = ctx.breakIds,
+        steamBreaks = ctx.steamBreaks, fitIds = ctx.fitIds, fitMode = ctx.fitMode,
+        openSide = ctx.openSide, fitVentOut = ctx.fitVentOut,
+        sgtrIds = ctx.sgtrIds, sgtrParts = ctx.sgtrParts,
+        secTIds = ctx.secTIds, secTParts = ctx.secTParts;
+
   /* ══ WHICH TANK CATCHES THIS VALVE'S DISCHARGE ══
      step.js asks exactly one question of this: is there a tank to catch the
      vent at all, or is it going straight into the room. As a tap it was read
@@ -2025,7 +2075,7 @@ function netBuild(){
     const adjn = Array.from({length: nodes.length}, () => []);
     for(const ed of edges){
       if(ed.fit) continue;                                    // never cross another valve's own gate
-      if(ed.kind === "break" || ed.kind === "sgtr" || ed.kind === "vent") continue; // LABEL: synthetic edge kinds netBuild() itself invents, never a run's own
+      if(netHole(ed)) continue;                                // never a hole: a break, a vent and a tube leak lead nowhere a discharge can be caught
       adjn[ed.u].push(ed.v); adjn[ed.v].push(ed.u);
     }
     const walk = from => {
@@ -2078,7 +2128,7 @@ function netBuild(){
      "break"/"sgtr"/"vent" here are SYNTHETIC edge kinds this function itself
      invents (a containment stub, a tube-rupture leak, a relief valve with
      nowhere else to vent) - never a run's own declared kind. */
-  for(const ed of edges) if(ed.kind === "break" || ed.kind === "sgtr" || ed.kind === "vent") net2.z[ed.v] = net2.z[ed.u]; // LABEL: synthetic edge kind this function invents
+  for(const ed of edges) if(netHole(ed)) net2.z[ed.v] = net2.z[ed.u];
   for(const i of unplaced) net2.z[i] = zCore;   // set above if it is an opening; the core's height otherwise
   for(const i in contZ) net2.z[i] = contZ[i];   // ...and a pipe-cell break is at the CELL, not at either machine
 
@@ -2100,7 +2150,7 @@ function netBuild(){
      designSig() and a per-frame writeback there would churn it. */
   net2.tankNid = {};
   net2.tankNode = {};
-  /* the same map read the other way. netCoreFracOf() walks EDGES, not tanks,
+  /* the same map read the other way. netReadEdges() walks EDGES, not tanks,
      so without this it would have to scan every tank per edge to answer
      "which tank, if any, does this edge belong to" - and the answer has to
      be per-tank now that more than one tank can drain. */
@@ -2193,6 +2243,18 @@ function netBuild(){
     }
   }
 
+  return net2;
+}
+
+/* ══ PASS THREE: MUTATE THE EDGES, THEN WALK THEM ══
+   The condenser splice and the condensate gate CHANGE the edge list, and the
+   contents, buoyancy and component passes all read it afterwards - so the
+   order in here is load-bearing end to end. A spliced-out edge that survived
+   into the component pass would merge two components. */
+function netFinish(net2, ctx){
+  const edges = net2.edges, index = ctx.index, fitIds = ctx.fitIds,
+        fitMode = ctx.fitMode, secTIds = ctx.secTIds, secTParts = ctx.secTParts;
+
   /* ══ AN EDGE BETWEEN TWO FIXED NODES IS NOT AN EDGE ══
      Both ends are boundary conditions, so nothing about the plant decides what
      crosses it - only the elevation between two numbers somebody else set,
@@ -2234,11 +2296,6 @@ function netBuild(){
      side of it are what answer. A node with no edge at all is not one.
      This decides whether a datum column comes off a node (netFixed(), and the
      readout that has to agree with it), never what an edge conducts. */
-  /* A BREAK, A VENT AND A TUBE LEAK ARE HOLES. One list, because the two
-     passes that must skip them - contents, and static head - refuse them for
-     the one reason: a hole is an opening to a place, not a run between two
-     points of a circuit. */
-  const isHole = ed => ed.kind==="break" || ed.kind==="vent" || ed.kind==="sgtr";
   net2.vapour = new Uint8Array(net2.n);
   { const any = new Uint8Array(net2.n);
     net2.vapour.fill(1);
@@ -2246,11 +2303,11 @@ function netBuild(){
       /* A BREAK, A VENT AND A TUBE LEAK ARE HOLES, NOT CONTENTS. They hang off
          every run alike and say nothing about what is inside it, so a hole in
          the exhaust line must not make it read as full of water. */
-      if(isHole(ed)) continue;
+      if(netHole(ed)) continue;
       any[ed.u]=1; any[ed.v]=1;
-      // a run answers off its KIND (RUN_VAPOUR); a path through a component
+      // a run answers off its own LAW (edgeLaw); a path through a component
       // answers per FACE, off the row that declared it (vapU/vapV, above)
-      const k = RUN_VAPOUR[ed.kind];
+      const k = edgeLaw(ed) === LAW_VAPOUR;
       if(!(ed.vapU || k)) net2.vapour[ed.u]=0;
       if(!(ed.vapV || k)) net2.vapour[ed.v]=0;
     }
@@ -2301,7 +2358,7 @@ function netBuild(){
      same three kinds the vapour pass already refuses, for the same reason it
      refuses them: a hole is not contents, and it is not a leg either. */
   for(const ed of edges){
-    if(isHole(ed)) continue;
+    if(netHole(ed)) continue;
     const src = ed.h;
     ed.h = typeof src === 'function' ? s => (src(s) + buoyH(net2, ed, s))*HEAD_K
          : src ? s => (src + buoyH(net2, ed, s))*HEAD_K
@@ -2359,7 +2416,7 @@ function netBuild(){
    exactly uniform field, and 15.5 plus or minus one ulp against a conductance
    of 1e3 is a flow of 1e-12 where the answer is 0 - which is a thermosiphon
    manufactured out of rounding, at any elevation, on a dead plant. Every
-   pressure is recovered by adding this straight back (netCoreFracOf). */
+   pressure is recovered by adding this straight back (netReadP). */
 const phiRef = (net, s) =>
   (s.P === undefined ? P.P0 : s.P) + rhoDatum(s)*G_MPA*net.z[net.pzrNode];
 /* ══ IS THE PRESSURIZER PLUMBED TO THE LOOP AT ALL ══
@@ -2663,7 +2720,7 @@ function vapSolve(s, open){
    phiRef() is the level ONE anchor sets, and it cancels out of every flow -
    but it does not cancel in floating point, so a component with no anchor of
    its own keeps the plant's global value rather than an invented zero. p0[c]
-   is what netCoreFracOf() adds straight back; anchor[c] is the node fixed at
+   is what netReadP() adds straight back; anchor[c] is the node fixed at
    exactly p0[c], or -1 where the component has none. */
 /* ══ THE ANCHOR RULE, AS ONE PREDICATE ══
    A component is anchored at the lowest-index node in it that is a LIVE hold
@@ -2982,17 +3039,36 @@ function netDiverge(net, q, fixed){
         +" of "+qmax.toExponential(2));
   }
 }
-function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
+/* ══════════ SOLVING AND READING ARE TWO JOBS ══════════
+   netSolve() does the linear algebra and NOTHING else: fix, factor, assemble,
+   substitute, un-fix, and the flows that follow. It hands back one object -
+   the field, the per-edge flow, which nodes an edge that conducts reached, the
+   fixed map and the reference frame this solve was taken in - and every
+   readout in this file is a pure function of that object.
+
+   The frame is carried on the answer rather than left on `net.refNow`,
+   because netFixed() overwrites that on the next solve: a reader holding a
+   solve from before it would silently price the field in somebody else's
+   frame. Nothing else about netSolve is cached - a tick mutates s between
+   solves on purpose (the feed valve bisection, step.js), so an s-identity
+   cache would hand the second round the first round's answer. */
+function netSolve(net, s){
   const fixed = netFixed(net, s);
   netFactored(net, s, fixed);
   const b = new Float64Array(net.n);
   /* which nodes an edge that conducts actually reached this pass - the byP
-     block below needs it to tell a fixed node that is PINNING something from
+     reader needs it to tell a fixed node that is PINNING something from
      one hanging off a shut break, and the conductances are evaluated here. */
   const touch = new Uint8Array(net.n);
   netAssemble(net.edges, net.n, fixed, s, false, b, null, null, null, touch);
   netSubstFree(net, b);
   netUnfix(b, fixed);
+  const q = new Float64Array(net.edges.length);
+  netFlows(net.edges, b, fixed, q, s);
+  netDiverge(net, q, fixed);
+  return {net, s, b, q, fixed, touch, ref: net.refNow};
+}
+
   /* phi -> p: the datum column comes off here, once, so every reader of the
      field gets a real pressure in MPa and nothing downstream has to know the
      solve worked in piezometric head at all. */
@@ -3035,7 +3111,10 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
      The fixed nodes themselves are written in the ORIGINAL frame, because
      netFixed() built their values against it - that is what keeps a shut
      containment reading exactly P.Pcont on a component this has floated. */
-  if(byP){ const rd = rhoDatum(s)*G_MPA, ref = net.refNow;
+function netReadP(sol, byP){
+  if(!byP) return;
+  const net = sol.net, s = sol.s, b = sol.b, fixed = sol.fixed, touch = sol.touch, ref = sol.ref;
+  { const rd = rhoDatum(s)*G_MPA;
     const deg = net.Afdeg;
     const col = i => net.vapour[i] ? 0 : rd*net.z[i];
     const lo = new Float64Array(ref.nPiece).fill(Infinity);
@@ -3051,9 +3130,14 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
         ? P.Pcont - lo[c] : ref.p0[c];
       byP[net.nodes[i]] = b[i] + p0 - col(i);
     } }
-  const q = new Float64Array(net.edges.length);
-  netFlows(net.edges, b, fixed, q, s);
-  netDiverge(net, q, fixed);
+}
+
+/* WHAT EVERY EDGE OF THIS SOLVE CARRIED - the drops, the per-run and per-loop
+   flows, the spills, the tank and condensate books, and the core's own
+   circulation, which is the return value. Pure over a netSolve() answer: it
+   reads the field and the flows and writes only into the bags it was handed. */
+function netReadEdges(sol, byLoop, byRun, byDrop, outs){
+  const net = sol.net, s = sol.s, b = sol.b, q = sol.q, fixed = sol.fixed, ref = sol.ref;
   /* b IS the solved PRESSURE at every node, in MPa, once netSubst() has run
      and netUnfix() has written the known nodes back over it. The scale is
      the SPAN across the whole network, highest node to lowest - not the
@@ -3065,7 +3149,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
      see is re-fitted. */
   let pmax = -Infinity, pmin = Infinity;
   const isAnchor = new Uint8Array(net.n);
-  for(let c=0;c<net.refNow.nPiece;c++) if(net.refNow.anchor[c] >= 0) isAnchor[net.refNow.anchor[c]] = 1;
+  for(let c=0;c<ref.nPiece;c++) if(ref.anchor[c] >= 0) isAnchor[ref.anchor[c]] = 1;
   for(let i=0;i<net.n;i++){
     /* free nodes only: a containment node sits 15 MPa below the loop whether
        or not anything is open to it, and letting it into the span would
@@ -3231,7 +3315,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
 // commissioned.
 // Taken on the net just built, not P.net, because commission() calls this
 // before P.net is necessarily the last thing it assigned. byLoop/byRun, if
-// given, are filled the same way netCoreFracOf fills them - this is
+// given, are filled the same way netReadEdges fills them - this is
 // P.netRefByLoop's and P.netRefByRun's own producer.
 const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
   /* THE REFERENCE STATE, stated rather than inherited. It is ISOTHERMAL
@@ -3260,7 +3344,7 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
                            coreDT:0, P:P.P0, pCore:P.P0}, over);
   for(const fid of net.fitIds) if(net.fitMode[fid]==="throttle")
     s.valve[fid] = fitTies(fid) ? 0 : 1;
-  return netCoreFracOf(net, s, byLoop, byRun, null, null, outs);
+  return netReadEdges(netSolve(net, s), byLoop, byRun, null, outs);
 };
 
 /* Head lost across every edge, as a fraction of pump discharge. Read-only and
@@ -3274,7 +3358,7 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
    infer from a number three components away. */
 function netDrops(s){
   const o = {};
-  if(P && P.net) netCoreFracOf(P.net, s, null, null, o);
+  if(P && P.net) netReadEdges(netSolve(P.net, s), null, null, o, null);
   return o;
 }
 
@@ -3283,7 +3367,10 @@ function netDrops(s){
    the same substitution, so asking for them separately would solve the plant
    twice a frame for one set of numbers. */
 function netField(s, byDrop, byP){
-  if(P && P.net) netCoreFracOf(P.net, s, null, null, byDrop, byP);
+  if(!(P && P.net)) return;
+  const sol = netSolve(P.net, s);
+  netReadP(sol, byP);
+  netReadEdges(sol, null, null, byDrop, null);
 }
 
 /* What a solved network flow costs the loop, in % of inventory per second.
@@ -3366,7 +3453,7 @@ function netExpSurge(net, s){
    asking off-tick (a renderer between frames, an auditor). */
 function netPressures(s){
   const o = {};
-  if(P && P.net) netCoreFracOf(P.net, s, null, null, null, o);
+  if(P && P.net) netReadP(netSolve(P.net, s), o);
   return o;
 }
 
@@ -3386,13 +3473,13 @@ function netPressures(s){
    bug lives here, once, on the single scalar every caller consumes - never
    inside the solver itself.
 
-   byRun, if given, is filled by netCoreFracOf() with this tick's real
+   byRun, if given, is filled by netReadEdges() with this tick's real
    per-run flow - step()'s pipe-animation block reads it back, keyed off the
    same run keys pipeNetwork() hands out, so a throttled leg visibly slows
    instead of every loop showing the one pooled number this used to be. */
 function netFlowK(s, byRun, byP, outs){
   const n = P.loops, byLoop = {}, natLoop = {};
-  netCoreFracOf(P.net, s, byLoop, byRun, null, byP, outs);
+  { const sol = netSolve(P.net, s); netReadP(sol, byP); netReadEdges(sol, byLoop, byRun, null, outs); }
   /* The same plant with its pumps stopped: what it circulates on its own is
      a reading this function can take for free, because the network is linear
      in head and the factorisation depends on conductance alone - one
@@ -3401,7 +3488,7 @@ function netFlowK(s, byRun, byP, outs){
      copied fields. */
   // the commissioning settle asks hundreds of times and reads no NAT CIRC bar
   if(!(outs && outs.noNat)){ const sNat = Object.create(s); sNat.flowScale = 0;
-    netCoreFracOf(P.net, sNat, natLoop); }
+    netReadEdges(netSolve(P.net, sNat), natLoop, null, null, null); }
   let total = 0, natTot = 0;
   for(let i=0;i<n;i++){ total += byLoop[i]||0; natTot += natLoop[i]||0; }
   /* the share of this flow the plant is developing on its own, with no pump
