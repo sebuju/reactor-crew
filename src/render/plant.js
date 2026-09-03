@@ -374,10 +374,23 @@ function drawSym(p,x,y,w,h,ink,L){
        the others does. tripNear() names the channel in one word - the board's
        own tile says the rest. */
     const near = L && !L.breach && !L.scrammed && tripNear();
-    if(L&&(L.breach||L.scrammed))
-      banner(L.breach?"BREACHED":"SCRAM",cx,bx-2,by-2,bw+4,bh+4,C.red);
-    else if(near)
-      banner("TRIP: "+near,cx,bx-2,by-2,bw+4,bh+4,C.amber);
+    /* THE VESSEL IS BIG ENOUGH TO SAY ALL OF IT. Every other symbol picks one
+       word because it has room for one; stacking them here stops BREACHED from
+       hiding the melt underneath it, and lets the reactor carry its own lit
+       tiles as words (annOnPart(), step.js) instead of one lamp colour.
+       The three the mimic already owned lead, in its own shorter words - the
+       two latches because they are the end of the run and must not be the rows
+       that fall off the bottom, SCRAM because no tile is hosted here for it -
+       so their tiles are dropped from the list rather than said twice. NEAR
+       TRIP goes too: the row below names the channel, which the tile does not. */
+    const said={"VESSEL BREACH":1,"CORE MELT":1,"NEAR TRIP":1};
+    if(L) bannerRows([
+      L.breach && ["BREACHED",C.red],
+      L.melt && ["MELT",C.red],
+      L.scrammed && ["SCRAM",C.red],
+      ...annOnPart(id).filter(a=>!said[a[0]]).map(a=>[a[0],annSevCol(a[1])]),
+      near && ["TRIP: "+near,C.amber],
+    ],cx,bx-2,by-2,bw+4,bh+4);
   } else if(p.role==="rods"){
     shell(()=>ctx.rect(X+8,Y+2,W-16,Hh-10));
     /* the DRIVE MECHANISMS, not the rods. Where each bank stands is already
@@ -716,7 +729,11 @@ function drawSym(p,x,y,w,h,ink,L){
     tank(TX,TY,TW,TH,tankHeld(id)?9:3, lv/100,
       tankInjecting(id,rate) ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
-            : (lv>=90 ? C.red : tankWet(lv) ? C.amber : C.blue));
+            /* A SINK WARNS ON THE WAY UP, not on the last tenth. Amber was
+               tankWet() - any water at all - so a relief tank read alarming
+               the moment it took a drop and had nothing left to say between
+               that drop and its own disc. */
+            : (lv>=SINK_RED ? C.red : lv>SINK_AMB ? C.amber : C.blue));
     /* Cold water going down the line. The safe act with the long bill, and
        worth seeing that it is still running - every second of it ages the
        vessel whether or not anybody is looking at FATIGUE. On what the tank is
@@ -753,6 +770,8 @@ function drawSym(p,x,y,w,h,ink,L){
   }
 }
 
+/* A SINK TANK'S TWO WARNING LEVELS, % full. */
+const SINK_AMB=50, SINK_RED=75;
 const CORE_DIA_REF=2.9, CORE_HGT_REF=3.1, CORE_MIN=0.3;
 // NONE draws nothing; the other three borrow tones already meaning the right
 // thing elsewhere - steel is the rod-stem grey, graphite the follower brown,
@@ -885,24 +904,38 @@ function tag(s,cx,base,size,sp,col,maxw){
   txt(s,cx,base,{size:o.size,sp,align:"center",color:col});
 }
 
-/* THE component banner: one latched fault, said across the middle of the symbol
-   on its own plate, with a frame round the box it belongs to. STILL, never
-   flashing - every one of these is a state that sits there until somebody
-   clears it, and a permanent flash only teaches the eye to skip it.
+/* THE component banner: the latched faults, said across the middle of the
+   symbol on their own plates, with a frame round the box they belong to.
+   STILL, never flashing - every one of these is a state that sits there until
+   somebody clears it, and a permanent flash only teaches the eye to skip it.
    Every component with a fault to announce comes through here, so the fifth one
    cannot quietly invent a fifth look. */
-function banner(word,cx,x,y,w,h,col,ty){
-  frame(x,y,w,h,col);
+const BANNER_LH=capH(9)+7;
+/* Rows are [word,colour], WORST FIRST, and the frame takes the worst one's
+   colour. A symbol only says what fits in its own box, so the tail is dropped
+   rather than run over the machine below - which is why the order is the
+   caller's job and not a sort in here. */
+function bannerRows(rows,cx,x,y,w,h,ty){
+  rows=rows.filter(r=>r);
+  if(!rows.length) return;
+  const fit=Math.max(1,Math.floor((h-4)/BANNER_LH));
+  if(rows.length>fit) rows=rows.slice(0,fit);
+  frame(x,y,w,h,rows[0][1]);
   const mw=w-4;
-  /* letter spacing is the first thing to go. The ladder has a floor, so a
-     wide-tracked word on a narrow symbol steps all the way down to 6px and
-     STILL overruns - which is how RUPTURED came to sit on a pipe gauge two
-     cells away. Track it tight first, then shrink. */
-  const sp = tw(word,{size:9,sp:2})<=mw ? 2 : .3;
   // ty lets a caller lift the word off something already drawn across the
   // middle of its box; the frame is unaffected
-  tag(word,cx,ty!=null?ty:midBase(y,h,9),9,sp,col,mw);
+  let base=(ty!=null?ty:midBase(y,h,9))-BANNER_LH*(rows.length-1)/2;
+  for(const r of rows){
+    /* letter spacing is the first thing to go. The ladder has a floor, so a
+       wide-tracked word on a narrow symbol steps all the way down to 6px and
+       STILL overruns - which is how RUPTURED came to sit on a pipe gauge two
+       cells away. Track it tight first, then shrink. */
+    const sp = tw(r[0],{size:9,sp:2})<=mw ? 2 : .3;
+    tag(r[0],cx,base,9,sp,r[1],mw);
+    base+=BANNER_LH;
+  }
 }
+const banner=(word,cx,x,y,w,h,col,ty)=>bannerRows([[word,col]],cx,x,y,w,h,ty);
 
 /* What the pressurizer's OWN (primary) relief valve is passing, off the
    SOLVED edge flow (reliefRate(), pipenet.js) - the mimic draws one plume
@@ -2584,19 +2617,19 @@ function readoutsFor(p,s){
         [TURB_TRIP_P*0.8,C.amber,"HIGH"],[Infinity,C.red,"NEAR TRIP"]],
         {dp:4,lim:[[TURB_TRIP_P,"TRIP"]]}),
       "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators. At "+TURB_TRIP_P+" MPa the stop valve shuts, and that trip does not reset. Cutting LOAD will not save it: the bypass sends that steam to this same condenser, and dumping rejects MORE heat than generating, because none of it leaves as electricity. Cut reactor power.");
-    add("COND TEMP",s.condT.toFixed(0)+" K",null,
+    add("COND TEMP",condTAt(s,id).toFixed(0)+" K",null,
       "How hot the water in this machine actually is. It moves below the vacuum floor, where BACK PRESS cannot: a condenser with margin sits on that floor and this is what says how much margin. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
-    add("HEAT REJECTED",mwRej(s).toFixed(0)+" MWt",null,
+    add("HEAT REJECTED",(condRejOf(s,id)/1000).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
-    add("CW OUTLET",cwOut(s).toFixed(0)+" K",
-      band(cwOut(s),RAD_TDES,RAD_TDES+CW_RISE*3,[[RAD_TDES+CW_RISE*1.6,C.cyan,"NORMAL"],
+    add("CW OUTLET",cwOutOf(s,id).toFixed(0)+" K",
+      band(cwOutOf(s,id),RAD_TDES,RAD_TDES+CW_RISE*3,[[RAD_TDES+CW_RISE*1.6,C.cyan,"NORMAL"],
         [RAD_TDES+CW_RISE*2.5,C.amber,"HIGH"],[Infinity,C.red,"HOT"]],{dp:0}),
       "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" K of rise, and a machine working harder than it was bought for sends it out hotter.");
     /* THE CHAIN, END TO END. All of these were computed and none was visible,
        and the radiator makes the last two the whole story: two pots in series,
        so an operator has to be able to see which one is failing. */
-    add("TERMINAL DIFF",(s.condT-s.cwInT).toFixed(0)+" K",
-      band(s.condT-s.cwInT,0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
+    add("TERMINAL DIFF",(condTAt(s,id)-cwInAt(s,id)).toFixed(0)+" K",
+      band(condTAt(s,id)-cwInAt(s,id),0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
         [COND_DT0*2,C.amber,"WIDE"],[Infinity,C.red,"FOULED"]],{dp:0}),
       "How far this machine sits above the water arriving to cool it. Design is "+COND_DT0+" K at rated duty; a small or a drowned condenser sits further above for the same heat, and pays for it in backpressure.");
     add("DROWNED TUBES",((1-condFrac(s))*100).toFixed(0)+" %",
