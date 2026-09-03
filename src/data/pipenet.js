@@ -877,7 +877,13 @@ const FIT_DEFAULT = {
   tip:"A fitting in the pipe. Say what it is on its own panel - a tee that joins two lines, a throttle you can close, or a relief valve that lifts on pressure.",
 };
 const tankIds   = () => Object.keys(D.tanks);
-const secTankIds= () => tankIds().filter(id=>tankSecondary(id));
+/* A HOLD TANK IS NOT A STORE, AND THAT INCLUDES THIS POOL. Its level is s.lvl
+   - thermal expansion, not mass - so ledgerKg() does not count one, and the
+   condensate loop was handing a share of the pool to a vessel the books have
+   no column for: measured, a pressurizer whose surge line was deleted lands on
+   the secondary and took 0.025 kg of unattributed mass on tick 2. s.tank[id]
+   is a shadow copy for one, which tankLvl() already refuses to read. */
+const secTankIds= () => tankIds().filter(id=>tankSecondary(id) && !D.tanks[id].hold);
 /* A tank with no cell has no box on the grid and no node - which is what a
    SECONDARY tank is allowed to be. It is HOSTED: the hotwell lives inside the
    condenser it condenses into, and the condenser draws it. */
@@ -1306,6 +1312,16 @@ function reliefRate(s, fid){
    nuance too small to see against a rounding error. 0 for a fitting whose
    branch never routed - the same "not there" fallback every other reader of
    a missing run already uses. */
+/* WHERE A RELIEF VALVE IS STOOD, as a node name. A lift is about the pressure
+   AT THE VALVE, and a plant-wide scalar said otherwise: a valve behind a shut
+   port lifted on the reactor's own pressure and vented a branch that could not
+   see it. The upstream end of its own gated edge - null where nothing routed,
+   which the caller answers for. */
+function reliefNodeOf(net, fid){
+  for(let e=0;e<net.edges.length;e++)
+    if(net.edges[e].fit === fid) return net.name[net.edges[e].u];
+  return null;
+}
 function reliefFullRate(s, fid){
   if(!((P && P.fittings && P.fittings[fid]) || D.fittings[fid])) return 0;
   const bore = fitBoreK(fid);
@@ -2126,7 +2142,7 @@ function netBuild(){
   net2.name = new Array(net2.n);
   for(const nid in index) net2.name[index[nid]] = nid;
   net2.vol = new Float64Array(net2.n);
-  { const nodesOfPart = {};
+  { const nodesOfPart = net2.nodesOfPart = {};
     // a FOLDED node is the bare part id (the core's plenum, a tee), so ask
     // for the whole name first and only then strip a face off it
     const partOfNodeV = nid => byId[nid] || partOfNode(nid);
@@ -2424,6 +2440,51 @@ function holdLive(net, s, ci){
   return pairs.size >= nodes;
 }
 const pzrLive = (net, s) => holdLive(net, s, nodeGraph().coreCirc);
+
+/* ══ IS THIS CIRCUIT A SEALED SOLID VOLUME ══
+   Liquid that cannot expand pushes on the wall instead. Shut every port on a
+   hot loop and step() relaxed it toward containment, so a plant boiling itself
+   dry sat at 0.15 MPa and the vessel could never burst.
+   SOLID is: no hold tank holding a bubble in it (the caller has already asked
+   holdLive), and the live piece the loop stands in reaches no FIXED node -
+   nothing open, no tank, no condenser, no break. Walked FROM the loop's own
+   node for holdLive()'s reason: a free node down a dead leg is not somewhere
+   the water can actually go. */
+const circSeed = (net, ci) => {
+  for(let i=0;i<net.n;i++) if(net.compCirc[net.comp[i]] === ci) return i;
+  return -1; };
+function circSolid(net, s, ci){
+  const holds = holdOnCirc(ci);
+  const seed = ci === nodeGraph().coreCirc ? net.coreNode
+             : holds.length ? net.tankNode[holds[0]] : circSeed(net, ci);
+  if(seed === undefined || seed === null || seed < 0) return false;
+  /* AN ANCHOR IS A REFERENCE, NOT A BOUNDARY. netFixed() pins one node per
+     piece at exactly 0 to give the frame a level, and a sealed loop's own
+     anchor is its own node - counting that as somewhere the water can go said
+     every sealed loop was open. Only a real boundary counts: containment, a
+     tank, a shell, the condenser. */
+  const fixed = netFixed(net, s), ref = net.refNow;
+  const bound = i => fixed[i] !== undefined && ref.anchor[ref.of[i]] !== i;
+  if(bound(seed)) return false;
+  const adj = new Array(net.n);
+  for(let e=0;e<net.edges.length;e++){
+    const ed = net.edges[e];
+    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+    if(!(g > 0)) continue;
+    (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
+    (adj[ed.v] || (adj[ed.v] = [])).push(ed.u);
+  }
+  const seen = new Uint8Array(net.n), st = [seed];
+  seen[seed] = 1;
+  while(st.length){
+    const a = adj[st.pop()];
+    if(a) for(let i=0;i<a.length;i++){ const v = a[i];
+      if(bound(v)) return false;
+      if(seen[v]) continue;
+      seen[v] = 1; st.push(v); }
+  }
+  return true;
+}
 /* ══════════ THE VAPOUR SIDE IS ITS OWN NETWORK ══════════
    TWO NETWORKS, NEVER ONE GRAPH. The pressures are in the same units and the
    laws are not: water goes as the DIFFERENCE of two pressures and steam goes
@@ -2537,9 +2598,16 @@ function vapSolve(s, open){
     let k = 0, w = 0;
     if(ed.run){ k = runPortsOpen(s, ed.run)
       ? vapPipeKv(ed.kind, ed.bore, ed.len + runExtraLen(s, ed.run)) : 0; }
-    else if(ed.fit){ k = vapPipeKv("steam", fitBoreK(ed.fit), NET_COMP_LEN)
-      * clamp((s.valve && s.valve[ed.fit]!==undefined) ? s.valve[ed.fit] : 1, 0, 1); }
-    else if(ed.machine){ const o = (open && open[ed.machine]) || {};
+    /* ══ AND A WRECKED MACHINE PASSES NO STEAM EITHER ══
+       The liquid net gates every component's own internal edge on its damage
+       (netBuild(), above); this one never did, so a turbine the board draws as
+       torn open went on swallowing 541 kg/s and turning it into shaft work,
+       and a wrecked isolation valve went on holding whatever position it was
+       left in. Same one door (partWrecked()), same absent-edge result. */
+    else if(ed.fit){ k = partWrecked(s, ed.fit) ? 0
+      : vapPipeKv("steam", fitBoreK(ed.fit), NET_COMP_LEN)
+        * clamp((s.valve && s.valve[ed.fit]!==undefined) ? s.valve[ed.fit] : 1, 0, 1); }
+    else if(ed.machine){ const o = partWrecked(s, ed.machine) ? {} : (open && open[ed.machine]) || {};
       w = Math.max(0, o.work||0); k = w + Math.max(0, o.dump||0); }
     kv[e] = k; kw[e] = w;
     g[e] = vapG(k, pl[ed.u], pl[ed.v]);
@@ -2607,10 +2675,75 @@ function vapSolve(s, open){
    demoted to ordinary tanks. Letting both anchor fixes two nodes at the same
    pressure and different elevations, which is a manufactured thermosiphon of
    exactly the kind phiRef() exists to prevent. */
+/* ══ THE FRAME IS THE LIVE PIECE, NOT THE STRUCTURAL COMPONENT ══
+   A component is drawn once and never moves, which made a shut valve invisible
+   to the reference frame: an ISOLATED pressurizer went on being anchored at the
+   loop's own pressure, so a sealed reactor climbing to burst pushed its own
+   relief valve open through a port that was shut and vented into the relief
+   tank. Pieces are components over the LIVE edges, so isolation splits the
+   frame and each side carries what actually holds it up.
+   It cannot make a value JUMP, which is what kept this structural before: a
+   hold tank's own pressure tracks its loop for as long as it is live
+   (holdPOf), so the tick a valve shuts the two frames are equal and only then
+   diverge. */
+/* CACHED ON THE LIVE SIGNATURE the factorisation already builds: netFixed()
+   asks netRef() which asks this, and partOnCoreLoop() asks it once per
+   generator, so an uncached walk was several passes over the whole edge list
+   per tick for an answer that only moves when a gate does. */
+function netPieces(net, s){
+  if(net.pc && net.pcSig === netLiveSig(net, s)) return net.pc;
+  const of = new Int32Array(net.n).fill(-1);
+  const adj = new Array(net.n);
+  for(let e=0;e<net.edges.length;e++){
+    const ed = net.edges[e];
+    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+    if(!(g > 0)) continue;
+    (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
+    (adj[ed.v] || (adj[ed.v] = [])).push(ed.u);
+  }
+  let c = 0;
+  for(let i=0;i<net.n;i++){
+    if(of[i] >= 0) continue;
+    const st = [i]; of[i] = c;
+    while(st.length){ const a = adj[st.pop()];
+      if(a) for(let k=0;k<a.length;k++){ const v = a[k];
+        if(of[v] < 0){ of[v] = c; st.push(v); } } }
+    c++;
+  }
+  net.pcSig = netLiveSig(net, s);
+  return (net.pc = {of, n: c});
+}
+/* WHICH LIVE PIECE A NODE IS IN, by node NAME or index - the one reader
+   everything outside this file goes through. -1 for a node this plant has
+   not got. */
+function pieceOf(net, s, node){
+  const i = typeof node === "number" ? node : net.index[node];
+  return i === undefined ? -1 : netPieces(net, s).of[i];
+}
+/* THE PIECE THE CORE IS IN, which is what "still plumbed to the primary"
+   means for every gate below. */
+const corePiece = (net, s) => netPieces(net, s).of[net.coreNode];
+/* IS THIS MACHINE STILL PLUMBED TO THE CORE, over LIVE edges. A generator
+   behind a shut port went on cooling the loop at the stagnant-flow floor, so a
+   sealed reactor lost more heat than it made - the same mistake the relief
+   valve made about pressure, in the heat balance. */
+function partOnCoreLoop(net, s, id){
+  const list = net.nodesOfPart && net.nodesOfPart[id];
+  if(!list || !list.length) return false;
+  const pc = netPieces(net, s), c = pc.of[net.coreNode];
+  for(let k=0;k<list.length;k++) if(pc.of[list[k]] === c) return true;
+  return false;
+}
+/* WHAT A HOLD TANK IS HOLDING, which is its LOOP's pressure while it is live
+   and its own the moment it is not. step() writes it; anything asked before
+   the first tick falls back to the loop it is drawn on. */
+const holdPOf = (s, id) => (s.holdPBy && s.holdPBy[id] != null)
+  ? s.holdPBy[id] : loopP(s, tankCircuit(id));
 function netRef(net, s){
   const g = phiRef(net, s);
-  const p0 = new Float64Array(net.nComp).fill(g);
-  const anchor = new Int32Array(net.nComp).fill(-1);
+  const piece = netPieces(net, s);
+  const p0 = new Float64Array(piece.n).fill(g);
+  const anchor = new Int32Array(piece.n).fill(-1);
   const rd0 = rhoDatum(s)*G_MPA;
   /* p0 IS THE ANCHOR'S OWN ABSOLUTE PRESSURE PLUS ITS OWN COLUMN. That is the
      whole definition of the frame, so the anchor's fixed value is exactly 0
@@ -2620,20 +2753,20 @@ function netRef(net, s){
   for(const id of holdTankIds()){
     const i = net.tankNode[id];
     if(i === undefined || !tankLive(s,id)) continue;
-    const c = net.comp[i];
+    const c = piece.of[i];
     if(anchor[c] >= 0 && anchor[c] <= i) continue;
     anchor[c] = i;
-    p0[c] = loopP(s, net.compCirc[c]) + (net.vapour[i] ? 0 : rd0*net.z[i]);
+    p0[c] = holdPOf(s, id) + (net.vapour[i] ? 0 : rd0*net.z[i]);
   }
-  const c0 = net.comp[net.pzrNode];
+  const c0 = piece.of[net.pzrNode];
   if(c0 >= 0 && anchor[c0] < 0) anchor[c0] = net.pzrNode;   // p0 is already the global level
-  return {p0, anchor};
+  return {p0, anchor, of: piece.of, nPiece: piece.n};
 }
 function netFixed(net, s){
   const ref = netRef(net, s), rd0 = rhoDatum(s)*G_MPA;
   const f = {};
   net.refNow = ref;
-  const p0OF = i => ref.p0[net.comp[i]];
+  const p0OF = i => ref.p0[ref.of[i]];
   /* THE DATUM COLUMN A NODE ACTUALLY HAS. The solve carries piezometric head
      (phi = p + rho*g*z) for a network that used to be liquid throughout. A
      STEAM SPACE HAS NO COLUMN: three metres of exhaust line is worth 19 kPa of
@@ -2645,7 +2778,7 @@ function netFixed(net, s){
   /* EVERY COMPONENT'S ANCHOR, at its circuit's own setpoint plus its own
      column - which is exactly what p0 was built from, so this is 0 to the
      last bit and no special case is needed to make it one. */
-  for(let c=0;c<net.nComp;c++) if(ref.anchor[c] >= 0) f[ref.anchor[c]] = 0;
+  for(let c=0;c<ref.nPiece;c++) if(ref.anchor[c] >= 0) f[ref.anchor[c]] = 0;
   /* CONTAINMENT, one node per opening, always fixed and usually attached to
      nothing: its edge's g is 0 until that break happens, so netAssemble skips
      the edge and the node contributes exactly nothing. Keeping the SET
@@ -2702,8 +2835,12 @@ const netFixSig = fixed => Object.keys(fixed).join(',');
    call rather than trusted once. A throttle's position is continuous, so its
    own term is the exact value rather than a '0'/'1' flag: ANY change to it
    has to bust the cache, not just crossing some open/shut line. */
-function netFactored(net, s, fixed){
-  const sig = net.fitIds.map(fid => {
+/* ══ ONE LIVE SIGNATURE, READ BY BOTH THE FACTORISATION AND THE PIECES ══
+   Every conductance the edge list evaluates against S, as one string. The
+   factorisation adds the fixed SET to it; netPieces() cannot, because the
+   fixed set is built downstream of the pieces themselves. */
+function netLiveSig(net, s){
+  return net.fitIds.map(fid => {
     const mode = net.fitMode[fid];
     /* relief is a mode too now, gated on S.reliefOpen/S.reliefBlocked rather
        than S.valve - either crossing changes A, so both enter the signature
@@ -2726,11 +2863,6 @@ function netFactored(net, s, fixed){
      SHUT ones are named, so a plant nobody has isolated anything on adds an
      empty field and keeps its key. */
   + '|' + (s.portShut ? Object.keys(s.portShut).filter(k => s.portShut[k]).join(',') : '')
-  /* the fixed SET is the fourth live input to A. A break appearing puts a
-     second known pressure into the matrix, not just into b, so reusing last
-     tick's factors would solve the broken plant against the intact one's -
-     a wrong answer, not a crash. */
-  + '|' + netFixSig(fixed)
   /* a ruptured vessel opens a break edge the same way a severed run does, and
      unlike a severed run it is not in s.dmgParts */
   + '|' + (s.breach ? 'B' : '')
@@ -2756,6 +2888,15 @@ function netFactored(net, s, fixed){
   // and every standby train's own discharge check - one bit each, and a plant
   // with no standby pump adds none
   + '|' + pumpIds().filter(pumpStandby).map(id=>pumpFwd(s,id)?'1':'0').join('');
+}
+
+function netFactored(net, s, fixed){
+  const sig = netLiveSig(net, s)
+  /* the fixed SET is the fourth live input to A. A break appearing puts a
+     second known pressure into the matrix, not just into b, so reusing last
+     tick's factors would solve the broken plant against the intact one's -
+     a wrong answer, not a crash. */
+  + '|' + netFixSig(fixed);
   if(!net.Af || net.AfSig !== sig){
     /* ══ A FIXED NODE IS NOT IN THE MATRIX AT ALL ══
        netAssemble never writes a fixed node's row, its column or its b entry -
@@ -2897,15 +3038,15 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
   if(byP){ const rd = rhoDatum(s)*G_MPA, ref = net.refNow;
     const deg = net.Afdeg;
     const col = i => net.vapour[i] ? 0 : rd*net.z[i];
-    const lo = new Float64Array(net.nComp).fill(Infinity);
-    const free = new Uint8Array(net.nComp).fill(1);
-    for(let i=0;i<net.n;i++){ const c = net.comp[i];
+    const lo = new Float64Array(ref.nPiece).fill(Infinity);
+    const free = new Uint8Array(ref.nPiece).fill(1);
+    for(let i=0;i<net.n;i++){ const c = ref.of[i];
       if(fixed[i]!==undefined){ if(touch[i]) free[c]=0; continue; }
       if(deg && deg[i]) continue;
       const v = b[i] - col(i); if(v < lo[c]) lo[c] = v; }
     for(let i=0;i<net.n;i++){
       if(deg && deg[i] && fixed[i]===undefined){ delete byP[net.nodes[i]]; continue; }
-      const c = net.comp[i];
+      const c = ref.of[i];
       const p0 = (free[c] && fixed[i]===undefined && isFinite(lo[c]))
         ? P.Pcont - lo[c] : ref.p0[c];
       byP[net.nodes[i]] = b[i] + p0 - col(i);
@@ -2924,7 +3065,7 @@ function netCoreFracOf(net, s, byLoop, byRun, byDrop, byP, outs){
      see is re-fitted. */
   let pmax = -Infinity, pmin = Infinity;
   const isAnchor = new Uint8Array(net.n);
-  for(let c=0;c<net.nComp;c++) if(net.refNow.anchor[c] >= 0) isAnchor[net.refNow.anchor[c]] = 1;
+  for(let c=0;c<net.refNow.nPiece;c++) if(net.refNow.anchor[c] >= 0) isAnchor[net.refNow.anchor[c]] = 1;
   for(let i=0;i<net.n;i++){
     /* free nodes only: a containment node sits 15 MPa below the loop whether
        or not anything is open to it, and letting it into the span would
@@ -3112,7 +3253,7 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
      rather than about this reference's own geometry. `pumpQBy`: a pump sits
      on its own head-flow curve (pumpCurve()) at the flow it is actually
      developing; left out, the reference priced every pump at its duty head
-     while the plant one tick later derated to what it really passes, so cwK()
+     while the plant one tick later derated to what it really passes, so cwKOf()
      read 0.42 on MSRE against a flow the plant could never have. `refOpen`:
      see the scale reference in commission(). */
   const s = Object.assign({dmgParts:[], valve:{}, flow:1, Tavg:P.Tref,
@@ -3475,6 +3616,8 @@ function buildStockPlumbing(opt){
   const sets  = (opt && opt.sets)  || 1;
   const perSet = Math.max(1, Math.ceil(units/sets));
   const setOf  = u => Math.min(sets-1, Math.floor(u/perSet));
+  // the last set takes the remainder, so a set's own count is counted
+  const setUnits = s => { let n=0; for(let u=0;u<units;u++) if(setOf(u)===s) n++; return n; };
   const multi  = units>1 || sets>1;
   /* ══ A UNIT GETS ITS OWN BAND, NEVER A COLUMN BESIDE ANOTHER ══
      Two units side by side cannot be plumbed: the rod drives fill the rows
@@ -3535,6 +3678,9 @@ function buildStockPlumbing(opt){
   // always did - only further apart, band by band
   const AFT   = 46+7*(loops-1) + (multi?2:0);
   const FEEDX = 26+7*loops + (multi?2:0);
+  // the header riser's own column, forward of the engine room and aft of
+  // every loop - the lane a set's main steam already climbs to its turbine
+  const MSRX  = AFT-6;
   /* A SET'S OWN ROWS. On a single-band ship these are the literals the
      reference plant was drawn at; on a banded one the engine room is stacked
      inside its own band, aft of every unit that feeds it. */
@@ -3756,7 +3902,19 @@ function buildStockPlumbing(opt){
        is the tap. */
     svf[i]=fitting("sv"+li,"", uX(u,i)+3, oy+0, { name:"SG SAFETY "+(li+1), mode:"relief", bore:412.5, tip:svTip });
   }
-  UN[u] = {U, ox, oy, tee0, rv0, efwtee, mstee, svf};
+  /* ══ AND A SECOND UNIT MEETS THE FIRST IN THE RISER, NEVER TEE TO TEE ══
+     A unit's own header is laid along its band's top row, and that row is
+     blocked at every steam tee by the tee's own safety-valve and generator
+     nozzle cells - so a chain drawn from one band's tee to the next band's
+     had no lane and merged into the feedwater line at the generator nozzle
+     instead. Measured: it read as a shell boiling into a closed vessel.
+     One riser tee per unit in the aft lane, stacked, is the manifold a real
+     multi-unit station has and every leg of it is a lane nothing else wants. */
+  const mshdr = setUnits(setOf(u))>1
+    ? fitting("mshdr",U, MSRX, oy+2, { name:"STEAM HEADER "+(u+1), mode:"tee", bore:boreMm("steam"),
+        tip:"Where this unit's main steam joins the header its turbine is fed from. A tee closes nothing: lose a unit and the rest of the station keeps the machine turning." })
+    : null;
+  UN[u] = {U, ox, oy, tee0, rv0, efwtee, mstee, svf, mshdr};
   }
   buildLayout();                     // the boxes have to be on the grid before a port can sit beside one
 
@@ -3977,10 +4135,11 @@ function buildStockPlumbing(opt){
      Six runs each, and the same six whether the loop is the fixed slot or a
      placed pair - which is what makes "the bench can rebuild this, gesture for
      gesture" true of a four-loop plant and not just of the reference one. */
-  /* THE HEADER IS THE SET'S, NOT THE UNIT'S. Two units feeding one turbine
-     put both their generators on the same header, so the chain runs tee to tee
-     across the units of a set and only then aft onto that turbine's nozzle.
-     hdr[s] is the last tee laid on set s and nothing more. */
+  /* THE HEADER IS THE UNIT'S, AND THE RISER IS THE SET'S. A unit's generators
+     chain tee to tee along its own band; where a set carries more than one
+     unit, each band's aft end goes into that unit's riser tee and the risers
+     are stacked into one manifold below.
+     hdr[u] is the last tee laid on unit u and nothing more. */
   const hdr = [];
   for(let u=0;u<units;u++){
     const n=UN[u], s=setOf(u), t=ST[s], ox=n.ox, oy=n.oy;
@@ -3992,7 +4151,7 @@ function buildStockPlumbing(opt){
       const g = sgPorts(li);
       const pT = seedPort("pump"+li,1,-1), pB = seedPort("pump"+li,1,partOf("pump"+li).h);
       const teeB = seedPort(n.mstee[i],0,1), teeT = seedPort(n.mstee[i],0,-1);
-      const teeL = hdr[s]!=null ? seedPort(n.mstee[i],-1,0) : null;
+      const teeL = hdr[u]!=null ? seedPort(n.mstee[i],-1,0) : null;
       const teeR = seedPort(n.mstee[i],1,0);
       const pSv  = seedPort(n.svf[i],-1,0);
       // primary: vessel to shell, shell to pump, pump back along its own bilge row
@@ -4004,22 +4163,50 @@ function buildStockPlumbing(opt){
       // no pipe - and so does the safety valve above it
       seedRun(g.steam, teeB);
       seedRun(teeT, pSv);
-      if(hdr[s]) seedRun(hdr[s], teeL);         // ...and the header, tee to tee
-      hdr[s] = teeR;
+      if(hdr[u]) seedRun(hdr[u], teeL);         // ...and the header, tee to tee
+      hdr[u] = teeR;
       /* DOWN, WEST, UP: out of the discharge nozzle under the pump, along its own
          row below the coolant pumps, and up the same riser the loop's own column
          already reserves. THE FIRST LOOP OF A UNIT is the one that unit's reserve
          is tied into, so it is two runs through the tie standing in that riser
          rather than one straight through it. */
+      /* A UNIT IN ANOTHER BAND IS FED UNDER THE PUMP AND DOWN THE AFT LANE.
+         The feed pump stands in its set's own band, so a line dropped straight
+         down the tie's column arrives ON TOP of the tee and can never reach
+         the bottom port it feeds: it rerouted itself into the first unit's
+         riser and butted, and the second generator had no feedwater at all.
+         One lane and one crossing row per unit, so two units never share one. */
+      // ...and it lands BELOW its own tie, which is the face that tie is fed on
+      const land = partOf(n.efwtee).y+4;
+      const bandVias = oy===sOY(s) ? null
+        : [[FEEDX-3, FEED_ROW(s,k)], [FEEDX-3, land], [feedCol(u,i), land]];
       if(i) seedRun(t.feedL(k), g.feed, false,
-        [[feedCol(u,i),FEED_ROW(s,k)],[feedCol(u,i),5+oy]]);
-      else { seedRun(t.feedL(k), n.pTieB, false, [[feedCol(u,0),FEED_ROW(s,k)]]);
+        (bandVias||[]).concat([[feedCol(u,i),bandVias?land:FEED_ROW(s,k)],[feedCol(u,i),5+oy]]));
+      else { seedRun(t.feedL(k), n.pTieB, false,
+               bandVias || [[feedCol(u,0),FEED_ROW(s,k)]]);
              seedRun(n.pTieT, g.feed, false, [[feedCol(u,0),5+oy]]); }
     }
   }
-  // each header's aft end, down onto its own turbine's one steam nozzle
-  for(let s=0;s<sets;s++)
-    if(hdr[s]) seedRun(hdr[s], ST[s].pTurbT, false, [[AFT+4, 2+sOY(s)]]);
+  /* each header's aft end into its own riser tee, the risers into one another
+     down the lane, and the top of the manifold aft onto its turbine's one
+     steam nozzle. A set with one unit has no riser at all and its header goes
+     straight aft, which is the reference ship's own single run. */
+  for(let u=0;u<units;u++) if(UN[u].mshdr && hdr[u])
+    seedRun(hdr[u], seedPort(UN[u].mshdr,-1,0));
+  for(let u=0;u+1<units;u++) if(UN[u].mshdr && UN[u+1].mshdr && setOf(u)===setOf(u+1))
+    seedRun(seedPort(UN[u].mshdr,0,1), seedPort(UN[u+1].mshdr,0,-1));
+  for(let s=0;s<sets;s++){
+    const u0 = UN.findIndex((n,u)=>setOf(u)===s);
+    if(u0<0) continue;
+    const top = UN[u0].mshdr ? seedPort(UN[u0].mshdr,1,0) : hdr[u0];
+    if(!top) continue;
+    /* ON THE HULL ROW, NEVER THE HEADER'S OWN. A banded set stands its
+       turbine two rows under the top of its band, so the lane aft along the
+       header's row IS the steam nozzle's own cell - the run stopped one cell
+       short of it and the turbine read as unpiped. */
+    if(multi) seedRun(top, ST[s].pTurbT, true);
+    else      seedRun(top, ST[s].pTurbT, false, [[AFT+4, 2+sOY(s)]]);
+  }
   // the reserve, up out of its own tank into the pump beside it, and west
   // along its own row into the tie
   for(const n of UN){
@@ -4076,12 +4263,12 @@ const PLANTPRE=[
  ["WINDSCALE",{loops:1,arch:5,d:{cont:0,bkp:0,sg:1,pzr:0.5,chim:0.2},
    drop:["hpi","rv0","reltk"], tanks:{efw:{vol:5}}},
   "A graphite pile with no containment, no backup power, no injection water and no relief valve on the loop. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, overpressure the loop and nothing lifts, and there is nothing to inject with at all. Fly it to see what the safeguards on every other preset are FOR."],
- /* FOUR REACTORS AGAINST TWO TURBINES, and nothing about it is exotic: it is
-    the STOCK PWR's own gear four times over, on one hull. It is here to be
-    FLOWN AT, not admired - the cost of a fourth reactor is what it measures,
-    so every unit is the same small compact core and only the count varies. */
- ["QUAD",{units:4,sets:2,loops:1,arch:0,lat:1,d:{cont:1,bkp:1,sg:0,chim:0.3}},
-  "Four small identical pressurised units on one hull, one loop each, two units to a turbine. Nothing here is exotic: it is the STOCK PWR four times over, sharing one circulating water system the way a real multi-unit station shares its cooling. Fly it to see what four reactors cost to run - and trip a turbine to lose half the station instead of all of it."],
+ /* TWO REACTORS AGAINST ONE TURBINE, and nothing about it is exotic: it is
+    the STOCK PWR's own gear twice over, on one hull. It is here to be FLOWN
+    AT, not admired - the cost of a second reactor is what it measures, so
+    every unit is the same small compact core and only the count varies. */
+ ["DUAL",{units:2,sets:1,loops:1,arch:0,lat:1,d:{cont:1,bkp:1,sg:0,chim:0.3}},
+  "Two small identical pressurised units on one hull, one loop each, both feeding a single turbine. Nothing here is exotic: it is the STOCK PWR twice over, sharing one engine room and one circulating water system the way a real multi-unit station shares its cooling. Fly it to see what a second reactor costs to run - and trip a unit to lose half the steam into a turbine that is still carrying the whole load."],
 ];
 function plantPreset(i){
   const q=PLANTPRE[i][1];
