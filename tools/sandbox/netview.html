@@ -1,0 +1,194 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>reactor-crew &mdash; network viewer</title>
+<!-- ONE FILE, NO BUILD STEP, OPENS OFF THE FILESYSTEM - the same plain
+     script-tag idiom index.html uses. A trace is an assignment into NETTRACE
+     (tools/sandbox/trace.js) rather than JSON, because fetch() does not work
+     on file:// and this project has nothing to serve it with.
+
+     Open it with ?a=netStock&b=netStock+evt to load two traces out of out/,
+     or pick the two files by hand. IT PAINTS THE DIFFERENCE: identical is
+     grey, moved is red with the figure beside it. That is what this page is
+     FOR - a CSV diff can say a number moved, it cannot say which part of a
+     network moved. -->
+<style>
+  :root{ --bg:#0e1113; --ink:#cfd6da; --dim:#6b7780; --hot:#ff5a45; --cool:#5fd2e2; }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+            font:12px/1.4 ui-monospace,Consolas,monospace}
+  #bar{display:flex;gap:12px;align-items:center;padding:6px 10px;border-bottom:1px solid #232a2e;
+       flex-wrap:wrap}
+  #bar label{color:var(--dim)}
+  input[type=range]{width:340px}
+  #cv{display:block;width:100%;height:calc(100% - 88px)}
+  #legend{padding:4px 10px;color:var(--dim);border-top:1px solid #232a2e}
+  .tag{color:var(--ink)}
+  button{background:#1a2126;color:var(--ink);border:1px solid #2c3439;padding:3px 8px;cursor:pointer}
+</style>
+<div id="bar">
+  <span class="tag" id="ta">A: &mdash;</span>
+  <span class="tag" id="tb">B: &mdash;</span>
+  <label>A <input type="file" id="fa" accept=".js"></label>
+  <label>B <input type="file" id="fb" accept=".js"></label>
+  <label>t <input type="range" id="tt" min="0" max="0" value="0" step="1"></label>
+  <span id="tlab">0.0 s</span>
+  <button id="diff">DIFF: ON</button>
+  <label>show <select id="what"><option value="p">PRESSURE</option><option value="T">TEMPERATURE</option></select></label>
+</div>
+<canvas id="cv"></canvas>
+<div id="legend">node colour is the reading, edge width is flow, a dashed edge did not conduct. red = moved between A and B.</div>
+<script>
+var NETTRACE = {};
+</script>
+<script>
+"use strict";
+const cv = document.getElementById('cv'), g = cv.getContext('2d');
+let A = null, B = null, DIFF = true, TI = 0, WHAT = 'p';
+/* WHAT A DIFFERENCE IS WORTH. Below this two traces are the same trace: the
+   solve returns a difference of large numbers, so a structural split that
+   changed nothing still lands a few ulps apart. A fraction of the reading's
+   own scale, never a bare !==. */
+const EPS = 1e-9;
+
+const qs = new URLSearchParams(location.search);
+const loadByName = (name, slot) => new Promise(res => {
+  const s = document.createElement('script');
+  s.src = 'out/' + name + '.js';
+  s.onload = () => res(NETTRACE[name] || null);
+  s.onerror = () => res(null);
+  document.head.appendChild(s);
+});
+const loadFile = (f, slot) => { const r = new FileReader();
+  r.onload = () => { try{ (0,eval)(r.result); }catch(e){ alert(e.message); return; }
+    const k = Object.keys(NETTRACE).pop();
+    if(slot === 'a') A = NETTRACE[k]; else B = NETTRACE[k];
+    ready(); };
+  r.readAsText(f); };
+document.getElementById('fa').onchange = e => loadFile(e.target.files[0], 'a');
+document.getElementById('fb').onchange = e => loadFile(e.target.files[0], 'b');
+
+/* ══ WHERE A NODE STANDS ══
+   On its own grid cell where it has one, because that is the drawing the
+   player looks at. A synthetic node - a containment stub, a tube leak - has
+   no cell at all, so it is pushed out from the mean of its neighbours and
+   settled with a few rounds of plain repulsion. Deterministic: no random
+   seed anywhere, or two openings of one trace would not be comparable. */
+function layout(T){
+  const n = T.nodes.length, x = new Float64Array(n), y = new Float64Array(n), fixed = new Uint8Array(n);
+  for(let i=0;i<n;i++){ const a = T.nodes[i].at;
+    if(a){ x[i] = a[0] + a[2]/2; y[i] = a[1] + a[3]/2; fixed[i] = 1; } }
+  const adj = [];
+  for(let i=0;i<n;i++) adj.push([]);
+  for(const e of T.edges){ adj[e.u].push(e.v); adj[e.v].push(e.u); }
+  for(let i=0;i<n;i++) if(!fixed[i]){
+    let sx = 0, sy = 0, c = 0;
+    for(const j of adj[i]) if(fixed[j]){ sx += x[j]; sy += y[j]; c++; }
+    // no placed neighbour at all: park it on a ring, by index, so it is at
+    // least in the same place every time this page is opened
+    if(c){ x[i] = sx/c; y[i] = sy/c + 2; }
+    else { x[i] = 30 + 14*Math.cos(i), y[i] = 17 + 10*Math.sin(i); }
+  }
+  for(let pass=0;pass<60;pass++)
+    for(let i=0;i<n;i++){ if(fixed[i]) continue;
+      for(let j=0;j<n;j++){ if(j===i) continue;
+        const dx = x[i]-x[j], dy = y[i]-y[j], d2 = dx*dx+dy*dy;
+        if(d2 > 2.2 || d2 === 0) continue;
+        const d = Math.sqrt(d2) || 0.01, k = (1.5-d)/d*0.25;
+        x[i] += dx*k; y[i] += dy*k; } }
+  return {x, y};
+}
+
+/* THE TWO TRACES HAVE TO BE THE SAME PLANT. Node index is not a name, so a
+   diff across two different topologies would be nonsense dressed as evidence -
+   it says so and paints A alone instead. */
+const sameShape = (a, b) => !!a && !!b && a.nodes.length === b.nodes.length
+  && a.edges.length === b.edges.length
+  && a.nodes.every((q,i) => q.name === b.nodes[i].name);
+
+let LAY = null, SCALE = null;
+function ready(){
+  document.getElementById('ta').textContent = 'A: ' + (A ? A.name + '  ' + A.title : '—');
+  document.getElementById('tb').textContent = 'B: ' + (B ? B.name + '  ' + B.title : '—');
+  if(!A) return;
+  LAY = layout(A);
+  const tt = document.getElementById('tt');
+  tt.max = A.samples.length - 1; if(TI > tt.max) TI = 0; tt.value = TI;
+  // one scale for the whole run, so a slider drag is a picture of the plant
+  // changing and not of the palette changing
+  let lo = Infinity, hi = -Infinity, qm = 0;
+  for(const s of A.samples){
+    for(const v of s[WHAT]) if(v !== null){ if(v<lo) lo=v; if(v>hi) hi=v; }
+    for(const v of s.q) if(v !== null && Math.abs(v)>qm) qm = Math.abs(v);
+  }
+  SCALE = {lo, hi: hi>lo?hi:lo+1, qm: qm||1};
+  draw();
+}
+
+const ramp = f => { f = Math.max(0, Math.min(1, f));
+  const r = Math.round(60 + 195*f), b = Math.round(226 - 160*f);
+  return 'rgb(' + r + ',' + Math.round(120 + 40*(1-f)) + ',' + b + ')'; };
+
+function draw(){
+  const w = cv.clientWidth, h = cv.clientHeight, dpr = devicePixelRatio || 1;
+  cv.width = w*dpr; cv.height = h*dpr; g.setTransform(dpr,0,0,dpr,0,0);
+  g.fillStyle = '#0e1113'; g.fillRect(0,0,w,h);
+  if(!A){ g.fillStyle = '#6b7780'; g.fillText('no trace loaded', 14, 24); return; }
+  const sa = A.samples[TI], sb = (DIFF && sameShape(A,B) && B.samples[TI]) || null;
+  const xs = w/62, ys = h/36, k = Math.min(xs, ys);
+  const px = i => 10 + LAY.x[i]*k, py = i => 10 + LAY.y[i]*k;
+
+  for(let e=0;e<A.edges.length;e++){
+    const ed = A.edges[e], q = sa.q[e] || 0;
+    const moved = sb && Math.abs((sb.q[e]||0) - q) > EPS*Math.max(1, Math.abs(q));
+    g.beginPath();
+    g.moveTo(px(ed.u), py(ed.u)); g.lineTo(px(ed.v), py(ed.v));
+    g.lineWidth = 0.6 + 4*Math.abs(q)/SCALE.qm;
+    g.setLineDash(sa.on[e] ? [] : [3,3]);
+    g.strokeStyle = moved ? '#ff5a45' : (sa.on[e] ? '#4d5a62' : '#2b3237');
+    g.stroke(); g.setLineDash([]);
+    if(moved){
+      g.fillStyle = '#ff5a45'; g.font = '10px monospace';
+      g.fillText(((sb.q[e]||0) - q).toExponential(1),
+                 (px(ed.u)+px(ed.v))/2 + 3, (py(ed.u)+py(ed.v))/2 - 3);
+    }
+  }
+  for(let i=0;i<A.nodes.length;i++){
+    const v = sa[WHAT][i], nd = A.nodes[i];
+    const bv = sb ? sb[WHAT][i] : null;
+    const moved = sb && (v === null) !== (bv === null)
+      || (sb && v !== null && bv !== null && Math.abs(bv - v) > EPS*Math.max(1, Math.abs(v)));
+    g.beginPath(); g.arc(px(i), py(i), nd.fixed ? 5 : 3.5, 0, 7);
+    g.fillStyle = v === null ? '#2b3237'
+                : ramp((v - SCALE.lo)/(SCALE.hi - SCALE.lo));
+    g.fill();
+    g.lineWidth = moved ? 2 : 1;
+    g.strokeStyle = moved ? '#ff5a45' : (nd.vapour ? '#f0a830' : '#232a2e');
+    g.stroke();
+    if(moved){ g.fillStyle = '#ff5a45'; g.font = '10px monospace';
+      g.fillText(nd.name + ' ' + (v===null?'-':v) + '→' + (bv===null?'-':bv),
+                 px(i)+7, py(i)-6); }
+  }
+  g.fillStyle = '#6b7780'; g.font = '11px monospace';
+  const ev = A.events.filter(e => e.t <= sa.t).map(e => e.kind+' '+e.arg).join(', ');
+  g.fillText('t=' + sa.t + ' s' + (ev ? '   fired: ' + ev : ''), 12, h - 8);
+  if(B && !sameShape(A,B)){
+    g.fillStyle = '#ff5a45';
+    g.fillText('A and B are not the same plant - diff refused', 12, h - 24);
+  }
+}
+
+document.getElementById('tt').oninput = e => {
+  TI = +e.target.value;
+  document.getElementById('tlab').textContent = A ? A.samples[TI].t + ' s' : '';
+  draw(); };
+document.getElementById('diff').onclick = e => { DIFF = !DIFF;
+  e.target.textContent = 'DIFF: ' + (DIFF ? 'ON' : 'OFF'); draw(); };
+document.getElementById('what').onchange = e => { WHAT = e.target.value; ready(); };
+addEventListener('resize', draw);
+
+(async () => {
+  const a = qs.get('a'), b = qs.get('b');
+  if(a) A = await loadByName(a);
+  if(b) B = await loadByName(b);
+  ready();
+})();
+</script>
