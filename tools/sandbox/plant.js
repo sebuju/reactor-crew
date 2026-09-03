@@ -77,6 +77,9 @@ return {
         const t = R.fit(1, 6, "tee", "RIG TEE");
         R.run(R.port("srcA", 1, M.partOf("srcA").h), R.port(t, 0, -1), false);
         R.run(R.port(t, 0, 1), R.port("sinkA", 1, -1), false);
+        // a rig pipe is rated for what the rig pushes: 16 MPa split the line
+        // on the second tick and this profile read srcQ 12.65 against sinkQ -0.07
+        R.wall(60);
         clamp_("n", 0); clamp_("Tavg", 560);
         return {note:"reactor power and Tavg clamped: hydraulics only"};
       },

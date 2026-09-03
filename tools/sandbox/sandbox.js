@@ -109,7 +109,11 @@ const RIG = {
    solved against a held boundary. Dotted paths and one level of index only -
    "Tavg", "sgTBy.sg0". */
 let CLAMPS = [];
-const clampSet = (s, path, v) => {
+const clampSet = (s, path, val) => {
+  // a function value is read off S itself, so "hold these four nodes at
+  // whatever the first one is" is sayable without naming a number
+  const v = typeof val === "function" ? val(s) : val;
+  if(v === undefined) return;
   const i = path.indexOf(".");
   if(i < 0){ s[path] = v; return; }
   const o = s[path.slice(0,i)];
@@ -168,6 +172,13 @@ const colNet = {
     for(const ed of n.edges){ const g = typeof ed.g==="function"?ed.g(s):ed.g; if(g>0) c++; }
     return c; }},
   flowK: {dp:4, f:s=>M.netFlowK(s, null, null, {noNat:true})},
+  /* the biggest flow anywhere, kg/s. On a rig whose whole topology is one
+     ring that IS the ring's circulation, to a milligram a second - the floor
+     netDiverge() answers in. */
+  maxQ:  {dp:6, f:s=>{ const n=M.P().net; if(!n) return 0;
+    const sol = M.netSolve(n, s); let m = 0;
+    for(let e=0;e<sol.q.length;e++) if(Math.abs(sol.q[e]) > m) m = Math.abs(sol.q[e]);
+    return m; }},
 };
 
 const fmt = (v,dp) => (v===null||v===undefined||Number.isNaN(v)) ? ""

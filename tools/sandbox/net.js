@@ -1,4 +1,4 @@
-/* THE NETWORK LADDER - fourteen plants the pressure network is judged on.
+/* THE NETWORK LADDER - fifteen plants the pressure network is judged on.
 
    The first five make sense and are what a split of netBuild()/netSolve() has
    to leave unmoved. The other nine are plants nobody would build, and they are
@@ -289,6 +289,45 @@ return {
       },
       cols(){ return Object.assign(NETCOLS(),
         {sgtP:colNodeP(sgId+"t"), sgtT:colNodeT(sgId+"t"), tkQ:colTankQ("tkA")}); }};
+  },
+
+/* ── 15. THE ISOTHERMAL RING - THE STATIC HEAD'S OWN TOLERANCE ──
+   A3 gave up the piezometric datum and with it the guarantee that an
+   isothermal loop's static heads sum to exactly 0.0. staticH() is rho_bar*g*dz
+   at each edge's OWN two densities now, so a ring at one temperature closes
+   only as well as the density field does: pressure rises down the column,
+   density rises with it, and the two vertical legs no longer cancel term for
+   term. What is left over is a manufactured thermosiphon, and this is where it
+   is read. Twelve metres of column, four runs, no pump, no boundary and
+   nothing hot - maxQ is the whole of the circulation the field invented.
+   TOLERANCE: 1e-3 kg/s. A gram a second against the stock loop's 7572 kg/s is
+   the field's own rounding; anything above it is a current nothing drives.
+   MEASURED 4e-6 kg/s, steady from the first tick. */
+  netRing(){
+    let top = null, bot = null;
+    return {name:"a twelve metre isothermal ring - the circulation the density field invents",
+      build(R){
+        /* NO TWO EDGES ALIKE. A rectangle is the one shape that passes this
+           test for free: its two vertical legs span the same dz between the
+           same pair of densities, so they cancel term for term and the reading
+           is a symmetry rather than a property. Every corner is on its own row,
+           so all four runs carry a column and no two carry the same one. */
+        const a = top = R.fit(14, 4, "tee", "RING A"), b = R.fit(30, 10, "tee", "RING B"),
+              c = R.fit(30, 30, "tee", "RING C"), d = bot = R.fit(14, 24, "tee", "RING D"),
+              m = R.fit(22, 4, "tee", "RING M");
+        joinH(R, a, m); joinH(R, m, b); joinV(R, b, c); joinH(R, d, c); joinV(R, a, d);
+        /* AND IT HAS TO BE LIQUID. A ring with no boundary floats onto P.Pcont,
+           and 560 K at 0.15 MPa is superheated steam - a compressible column
+           whose two legs genuinely do not cancel, which is real physics and not
+           the property this profile is about. One hold tank puts the ring at a
+           pressurised plant's own level, where the fluid is water. */
+        R.tank("pzr", 21, 9, 0, {inf:false, gas:null, vol:40, level:50, hold:{p:15.5}});
+        joinV(R, m, "pzr");
+        return done(R, {note:"tolerance 1e-3 kg/s"});
+      },
+      cols(){ return Object.assign(NETCOLS(),
+        {maxQ:colNet.maxQ, topP:colNodeP(top), botP:colNodeP(bot),
+         topT:colNodeT(top), botT:colNodeT(bot)}); }};
   },
 };
 };
