@@ -137,11 +137,10 @@ const pipeNozzleHalf = bore => Math.min(pipeWidth(bore)*1.4, NOZZLE_HALF_MAX);
    Takes the live state rather than reaching for S: the bench draws nozzles too
    and must never colour one off the last run's valve positions. */
 function portColOf(pid,L){
-  // WRECKED BEFORE SHUT: a jammed valve is not a valve position any more. RED,
-  // like every other broken thing on the board - dead metal read as an ordinary
-  // unpiped nozzle, so the one port the player has to find looked like all of
-  // them. The X over it (drawPortValves()) is what parts it from a shut one.
-  if(portWrecked(L,pid)) return C.red;
+  // A WRECKED JOINT IS EMPTY, the same mark a broken pipe cell wears
+  // (pipeDamage(), pipes.js): the red is the WALL and the bore is deck, so the
+  // two halves of "it failed and it carries nothing" are said once each.
+  if(portWrecked(L,pid)) return C.well;
   if(L && L.portShut && L.portShut[pid]) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
   const f=portFaceOf(pid), IN=portPath(partOf(q.p), f);
@@ -169,9 +168,13 @@ function nozzleRect(px,py,flat,bore){
   const sx=flat?0:GRID_DOT/2, sy=flat?GRID_DOT/2:0;   // along the LONG axis only
   return {x:px-bx-1+sx, y:py-by-1+sy, w:2*bx+2, h:2*by+2};
 }
-function drawNozzle(px,py,flat,bore,col){
+/* THE WALL IS WHAT SAYS BROKEN, on a joint exactly as on a run: the casing
+   goes red and the bore keeps its own colour, so a wrecked port still reads
+   its valve position instead of surrendering it to the damage. */
+const portCasOf=(pid,L)=>portWrecked(L,pid)?C.red:PIPE_CASE;
+function drawNozzle(px,py,flat,bore,col,cas){
   const r=nozzleRect(px,py,flat,bore);
-  fillRect(r.x,r.y,r.w,r.h,PIPE_CASE);
+  fillRect(r.x,r.y,r.w,r.h,cas||PIPE_CASE);
   fillRect(r.x+1,r.y+1,r.w-2,r.h-2,col);
 }
 /* ══ THE BORE EACH JOINT IS DRAWN AT, AND THE RECT THAT FOLLOWS FROM IT ══
@@ -221,8 +224,8 @@ function portWordDraw(pid,f,word,r){
 function pipeNozzles(NET,L){
   for(const r of NET){
     for(const e of nozzleEnds(r)){
-      drawNozzle(e.p[0],e.p[1],e.flat,runBore(r),
-        portColOf(e.end==="a"?r.pa:r.pb, L));
+      const pid=e.end==="a"?r.pa:r.pb;
+      drawNozzle(e.p[0],e.p[1],e.flat,runBore(r),portColOf(pid,L),portCasOf(pid,L));
     }
   }
 }
@@ -329,7 +332,7 @@ function drawSym(p,x,y,w,h,ink,L){
   // WRECKED MACHINERY DOES NOT TURN, and it is asked once here rather than at
   // each moving symbol - the fan already stood still and the pump and the
   // turbine went on spinning through their own destruction
-  const dead = !!(L && L.dmgParts.includes(id));
+  const dead = partWrecked(L,id);
   if(p.role==="core"){
     shell(()=>{ ctx.moveTo(X,Y+10); ctx.quadraticCurveTo(cx,Y-6,X+W,Y+10);
       ctx.lineTo(X+W,Y+Hh-10); ctx.quadraticCurveTo(cx,Y+Hh+6,X,Y+Hh-10); ctx.closePath(); });
@@ -1639,7 +1642,7 @@ function drawPortValves(L){
     /* A port nothing is piped to has no run to draw its joint (pipeNozzles()),
        so it draws its own - the same mark, in the same colour, which is now
        red. Piped or not, a shut valve looks the same. */
-    if(shut||wreck) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col);
+    if(shut||wreck) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col,portCasOf(pid,L));
     /* AND A WRECKED ONE WEARS AN X. Red alone is the SHUT valve, and the two
        are not the same order at all: one is a position, the other is a nozzle
        that will never take another. It stands in the WORD's place, because the
@@ -1647,7 +1650,8 @@ function drawPortValves(L){
        is not the thing to say about it. */
     if(wreck){
       ctx.save();
-      ctx.strokeStyle=C.inkOnLit; ctx.lineWidth=1.5; ctx.lineCap="butt";
+      // red on the deck the empty bore now shows, not ink on a bright fill
+      ctx.strokeStyle=C.red; ctx.lineWidth=1.5; ctx.lineCap="butt";
       const ix=nr.x+1.5, iy=nr.y+1.5, iw=nr.w-3, ih=nr.h-3;
       ctx.beginPath();
       ctx.moveTo(ix,iy); ctx.lineTo(ix+iw,iy+ih);
@@ -2182,6 +2186,10 @@ function dmgViz(x,y,w,h){
 }
 const DMGVIZ_TIP="Where the core is hurt, cell by cell, on the same picture the reactor symbol draws. Amber is cladding that has burst, red is cladding the steam has eaten through, and the pale cells are fuel that is actually molten. The ring marks the node with the least thermal margin left - that is where the next failure happens. Under it, what share of the core is in each stage.";
 const HEATVIZ_TIP="The core's whole heat balance. Everything it is MAKING stacks right - prompt fission plus four groups of decay heat on their own clocks - and everything a generator or exchanger is TAKING stacks left, both on one scale, so the longer arm is the side that is winning. A scram takes the prompt segment away and nothing else, which is why a shut-down core still needs a sink. Under it the net as K/s on T-avg, and the last minute of T-avg itself.";
+/* A DEMAND IN TRANSIT IS NOT A CAUTION: amber says the machine is walking to
+   where it was asked, which is the plant obeying - cautStep() reads MOVING. */
+const MOVING=new Set(["BORON DEMAND","TILT DEMAND","SPEED DEMAND","LOAD DEMAND"]);
+const movingCol=(dem,act,tol)=>Math.abs(dem-act)>tol?C.amber:C.ink2;
 function readoutsFor(p,s){
   const heat=s.n*PROMPT_F+s.decay, Th=s.Tavg+15*heat, Tc=s.Tavg-15*heat, sc=tsat(s.P)-Th;
   const id=p.id, R=[], m=P.rpsm;
@@ -2262,7 +2270,7 @@ function readoutsFor(p,s){
     // BORON and XENON aren't stated here: they're reactivity terms, so the
     // ledger below says them (with direction) instead of two rows quoting one number
     add("BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
-        Math.abs(s.boronDem-s.boron)>20?C.amber:C.ink2,
+        movingCol(s.boronDem,s.boron,20),
       "Where you have asked boron to go. It borates at "+BOR_IN+" pcm/s and only dilutes at "+BOR_OUT+", so poisoning yourself is the fast direction.");
     add("PEAK CLAD",s.TcladHot.toFixed(0)+" K",
       band(s.TcladHot,300,1600,[[1000,C.cyan,"NORMAL"],[1600,C.red,"FAILING"]],{dp:0}),
@@ -2340,7 +2348,7 @@ function readoutsFor(p,s){
       band(s.tilt,-.3,.3,[[-.05,C.amber,"LEANING"],[.05,C.ink2,"CENTRED"],[.3,C.amber,"LEANING"]],{dp:2}),
       "How far the banks are leaned against each other to shape the flux. Live in GANG only - SPLIT stands it down, because two things cannot own the same spacing.");
     add("TILT DEMAND",(s.tiltDem>=0?"+":"")+s.tiltDem.toFixed(2),
-        Math.abs(s.tiltDem-s.tilt)>.01?C.amber:C.ink2,
+        movingCol(s.tiltDem,s.tilt,.01),
       "Where you have asked the tilt to go. It walks there at drive speed, so it leads the trim above.");
     add("SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",
       band(P.sdm,-3000,3000,[[200,C.red,"THIN"],[3000,C.green,"AMPLE"]],{dp:0}),
@@ -2413,7 +2421,7 @@ function readoutsFor(p,s){
       band(flowOf(s,id)*100,0,110,[[5,C.red,"STOPPED"],[110,C.cyan,"RUNNING"]],{dp:0}),
       "How fast THIS pump is actually turning. It is not what reaches the core: a shut valve downstream leaves this at 100% and starves the core anyway. CORE FLOW on the reactor panel is that number.");
     add("SPEED DEMAND",((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)*100).toFixed(1)+" %",
-        Math.abs((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)-flowOf(s,id))>.005?C.amber:C.ink2,
+        movingCol(s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1,flowOf(s,id),.005),
       "Where you have asked THIS pump to go. The main slider writes every pump at once; this pump's own strip writes only this one. Delivery lags it by "+FLOW_TAU+" s, and by "+FLOW_TAU_COAST+" s while coasting down in a blackout.");
     add("CAVITATION",(cav*100).toFixed(0)+" %",
       band(cav*100,0,60,[[15,C.cyan,"NONE"],[60,C.amber,"CAVITATING"]],{dp:0}),
@@ -2433,7 +2441,7 @@ function readoutsFor(p,s){
     add("LOAD",(s.load*100).toFixed(1)+" %",null,
       "How hard the turbine is drawing steam. This is the demand the reactor spends its whole time trying to follow.");
     add("LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
-        Math.abs(s.loadDem-s.load)>.005?C.amber:C.ink2,
+        movingCol(s.loadDem,s.load,.005),
       "Where you have set the load. The governor strokes there over about "+LOAD_TAU.toFixed(0)+" s.");
     add("ELECTRICAL",mwE(s).toFixed(0)+" MWe",null,
       "Electrical power the ship is actually getting. It is the lower of heat made and heat taken, priced by the machine you bought, and it is what a lost turbine or an undersized condenser takes straight off you.");
@@ -2476,7 +2484,12 @@ function readoutsFor(p,s){
        CIRCUIT this vessel stands on rather than of s.P - so a second hold tank
        on a second circuit prints its own numbers and not the primary's. */
     if(t.hold){
-      const ci=tankCircuit(id), pv=loopP(s,ci), set=holdSetP(ci);
+      const ci=tankCircuit(id), set=holdSetP(ci);
+      /* THE VESSEL'S OWN PRESSURE, not its circuit's. They are the same figure
+         while it is holding, and the moment a valve isolates it they are not -
+         printing loopP here had the pressurizer report the loop it had just
+         been cut off from. */
+      const pv=tankP(s,id), live=P.net?holdLive(P.net,s,ci):true;
       const scH=(s.scBy && s.scBy[ci]!==undefined) ? s.scBy[ci] : s.sc;
       add("PRESSURE",pv.toFixed(2)+" MPa",
         band(pv,set*.80,set*1.15,
@@ -2491,10 +2504,12 @@ function readoutsFor(p,s){
         band(scH,0,scHi,[[8,C.red,"SATURATED"],[scHi,C.cyan,"SUBCOOLED"]],
           {dp:0,lim:trip(3,"TRIP")}),
         "Degrees below boiling at this vessel. The honest leak indicator: it collapses before anything else admits the loop is voiding.");
-      add("SAT TEMP",tsatSec(pv,ci).toFixed(0)+" K",null,
+      add("SAT TEMP",tsatSec(loopP(s,ci),ci).toFixed(0)+" K",null,
         "The temperature the coolant would boil at, at the pressure it is held to right now.");
       add("SETPOINT",set.toFixed(2)+" MPa",C.ink2,
         "What this vessel is asked to hold. Set it on the bench; the plant walks its programme about this figure.");
+      add("CONTROL",live?"HOLDING":"ISOLATED",live?C.green:C.amber,
+        "Whether this vessel still reaches its circuit. Cut it off - a shut nozzle valve, a severed surge line - and it keeps its own bubble while the circuit it left has nothing holding it up.");
     }
     add("CONTENTS",fl.label.toLowerCase()+", "+fl.temp.toFixed(0)+" K",null,
       "What is in this tank. Activity and reactivity worth follow from this and from nothing else"
@@ -2506,7 +2521,7 @@ function readoutsFor(p,s){
         ? band(tankLvl(s,id),0,100,[[1,C.green,"CLEAN"],[100,C.red,"FULL"]],{dp:1})
         : band(tankLvl(s,id),0,100,[[15,C.red,"LOW"],[100,C.cyan,"FULL"]],{dp:1}),
       "How much is left in it. It is not an infinite reservoir - run it dry and there is nothing behind it, and fill it past 100 % and what will not fit leaves the plant.");
-    add("TANK PRESS",tankP(s,id).toFixed(2)+" MPa",null,
+    if(!t.hold) add("TANK PRESS",tankP(s,id).toFixed(2)+" MPa",null,
       t.gas
         ? "The gas charge behind the contents. It needs no electricity, so it still works in a blackout - and it moves as the level moves, because the gas is expanding or being compressed."
         : "Nothing is holding this tank up. It is vented to the compartment, so it sits at compartment pressure - anything that has to be pushed out of it needs a pump on the board.");
@@ -2621,7 +2636,7 @@ function readoutsFor(p,s){
      this one, saying the same thing twice off the same s.dmgParts test; the
      consequence they carried comes off DMGFX, which is the table that already
      owns what a hit means. */
-  if(s.dmgParts.includes(p.id)) R.unshift(["STATUS","DESTROYED",C.red,
+  if(partWrecked(s,p.id)) R.unshift(["STATUS","DESTROYED",C.red,
     "This component has taken a hit. "+dmgFx(p.id).why+" Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
   if(!p.access && p.grp!=="shield") R.unshift(["ACCESS","BLOCKED",C.red,
     "Your layout walls this in on every side, so no repair party can ever reach it. It stays broken for the rest of the run."]);
@@ -2867,6 +2882,8 @@ function drawPlant(y0,L,vh,vx,vw){
     ctx.translate(VIEW.x+d.x-(VIEW.cx+VIEW.ox)*VIEW.s,
                   VIEW.y+d.y-(VIEW.cy+VIEW.oy)*VIEW.s); }
   ctx.scale(VIEW.s,VIEW.s);
+  // and a bang in the compartment kicks the deck it happened on (room.js)
+  { const k=burnShakeAt(); if(k) ctx.translate(burnShakeRnd()*k, burnShakeRnd()*k); }
   viewOn=true;
   fillRect(GX,GY,GW*CELL,GHp,C.well);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
@@ -2941,12 +2958,18 @@ function drawPlant(y0,L,vh,vx,vw){
     if(!pass && (pipeHov===r.key || sel===r.key)){
       ctx.lineWidth=cw+3; ctx.strokeStyle=C.amber; ctx.stroke(); }
     ctx.lineWidth = pass? w : cw;
-    ctx.strokeStyle = pass? pipeCol(PC,r.k) : PIPE_CASE;
+    /* A SEVERED RUN IS DESTROYED ALONG ITS WHOLE LENGTH, not only in the cell
+       that failed: red casing and deck bore, the same two marks pipeDamage()
+       puts on the torn cell (runCut(), pipes.js). */
+    const cut = runCut(r,L);
+    ctx.strokeStyle = pass? (cut?C.well:pipeCol(PC,r.k)) : (cut?C.red:PIPE_CASE);
     ctx.stroke();
   }
   ctx.lineJoin="miter";
-  if(L) pipeDamage(L);          // the red gap at each broken cell, over the stroke it cuts
   if(L) pipeFlow(L);
+  // AFTER the packets: a broken cell is EMPTY, and a packet drawn over it
+  // would be the picture insisting the run still carries something there
+  if(L) pipeDamage(L);
   pipeSizeLabels(NET,L);        // over the packets: a size is a fact, not decoration
   // over the pipes, under the machines - the one seam a layer can paint
   // without landing on a value tag, a control strip or a bypass row, because
@@ -2978,7 +3001,7 @@ function drawPlant(y0,L,vh,vx,vw){
        reserve the room and draw an empty plinth. */
     // `fit &&`, or a NOT FITTED tag would draw a REPAIR key across itself -
     // the renderer should not rely on combatHit() never targeting one
-    const dmgd = live && L.dmgParts.includes(p.id);
+    const dmgd = live && partWrecked(L,p.id);
     const ctl = fit ? (live ? (dmgd ? ctlDead(ctlFor(p,true,S.split)) : ctlFor(p,true,S.split))
                             : ctlBench(ctlFor(p,false,false))) : null;
     const byk = fit ? autoOn(p.id) : null,
