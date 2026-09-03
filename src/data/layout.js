@@ -1039,9 +1039,18 @@ function nodeGraph(){
   for(const n of allNodes){ if(circuit[n]!==undefined) continue;
     const seen=reach([n]); const i=nCirc++;
     for(const m in seen) circuit[m]=i; }
-  const coreSeed = (nodesOf.core||[])[0];
+  /* EVERY VESSEL'S CIRCUIT IS A PRIMARY, and `nodesOf.core` was an id literal:
+     a second reactor's loop read as secondary, so its own generator declared a
+     steam end on the primary side and the shell read as boiling into a closed
+     vessel. coreCirc stays the FIRST vessel's, which is what a reader asking
+     for one index means by it. */
+  const cores = LAY.parts.filter(p=>p.role==="core");
+  const coreCircs={};
+  for(const p of cores) for(const n of (nodesOf[p.id]||[]))
+    if(circuit[n]!==undefined) coreCircs[circuit[n]]=1;
+  const coreSeed = cores.length ? (nodesOf[cores[0].id]||[])[0] : undefined;
   const coreCirc = coreSeed===undefined ? -1 : circuit[coreSeed];
-  const inCore = n => circuit[n]===coreCirc && coreCirc>=0;
+  const inCore = n => coreCircs[circuit[n]]===1;
   nodeGraphCache={adj, nodesOf, runPorts, circuit, nCirc, coreCirc, inCore, reach}; nodeGraphSig=sig;
   return nodeGraphCache;
 }
@@ -1419,7 +1428,7 @@ const radCoatOf=id=>RADCOAT[D.radCoat[id]??1][1];
 const RAD_AREA_CELL=62468;             // m^2 of panel one grid cell is worth
 const SIGMA=5.670374419e-8;            // W/m^2/K^4, published
 const T_SPACE=3;                       // K - and (T^4 - T_SPACE^4) is T^4 to 12 digits
-/* K - THE CANONICAL REFERENCE SINK. It anchors P.hTurb, P.cwC, P.condUA and
+/* K - THE CANONICAL REFERENCE SINK. It anchors P.hTurb, P.condUA and
    condPDes() (step.js) and the area a panel suggests, and nothing else. It is
    NOT the sink the plant has - that is s.radTBy, off the panels actually fitted.
    Derived backwards from a real turbine figure, never chosen to preserve
@@ -2159,7 +2168,7 @@ const ROLE = {
      all, no ports and no run. What it does is one term in the room's own
      source pass (roomStep(), src/data/room.js) - a sink at the cells it
      stands in, against the hull outside. It sits on the MAIN BOARD, so it is
-     worth exactly nothing in a blackout, which is the same argument condK()'s
+     worth exactly nothing in a blackout, which is the same argument condKOf()'s
      circulating water makes and the reason the room is a survival problem
      rather than a purchase. It has bearings and a motor, so it has a tsurv of
      its own: the machine that keeps the room cool is in the room. */
@@ -2892,22 +2901,26 @@ function hasHeatSink(){
    valve shut on a line that is drawn, which is not a design fault and must
    not raise a design warning.
 
-   Asked of a HOLD TANK and of the circuit it stands on, never of an id: the
-   seed is the lowest-id non-tank part on that circuit, so a hold tank on the
-   secondary is checked against the secondary's own machinery. */
-function seedPart(ci){
-  if(ci===nodeGraph().coreCirc && roleOf("core")) return "core";
-  const G=nodeGraph();
-  const cand=LAY.parts.filter(p=>p.role!=="tank" &&
-    (G.nodesOf[p.id]||[]).some(n=>G.circuit[n]===ci)).map(p=>p.id).sort();
-  return cand[0] || null;
-}
+   ASKED THE SAME SHAPE holdLive() ASKS, on the drawing instead of on the
+   solve: the piece the vessel stands in has to BE a circuit - a cycle water
+   can go round - and not a dead leg. "Some part on this circuit reaches it"
+   was not that, and it passed a pressurizer whose surge line had been deleted
+   and which was left hanging on its own relief valve: the bench said plumbed,
+   the plant read ISOLATED, and nothing on either screen said why. Counted
+   over distinct node PAIRS, or two runs between the same two faces read as a
+   loop. Every valve is open here, because a shut one is an operating decision
+   and not a design fault. */
 function holdPlumbed(tid){
   const ci=tankCircuit(tid);
   if(ci===null || ci===undefined) return false;     // piped to nothing at all
-  const from=seedPart(ci);
-  if(!from) return false;                           // a vessel with nothing but boundaries around it
-  return runReach(from, p=>p.role==="tank").has(tid);
+  const G=nodeGraph(), ns=G.nodesOf[tid];
+  if(!ns || !ns.length) return false;
+  const seen=G.reach(ns);
+  let nodes=0; for(const n in seen) nodes++;
+  const pairs=new Set();
+  for(const u in seen) for(const v of (G.adj[u]||[]))
+    if(seen[v] && u!==v) pairs.add(u<v?u+"|"+v:v+"|"+u);
+  return pairs.size>=nodes;
 }
 // every hold tank on the plant is wired, or there is none to be wired
 const pzrPlumbed = () => holdTankIds().every(holdPlumbed);
