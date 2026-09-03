@@ -3484,7 +3484,12 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
      way. Held, each shell is a fixed node at its own stated pressure, which
      is what this solve read before a shell had a compliance at all. */
   const was = netStoreHeld; netHoldStore(true);
-  try { return netReadEdges(netSolve(net, s), byLoop, byRun, null, outs); }
+  try { const sol = netSolve(net, s);
+        // the solved edge flows themselves, as netFlowK() hands them on: a run
+        // key is a label and a machine's internal path has none, so byRun
+        // cannot say what a NODE passes
+        if(outs) outs.edgeKg = sol.q;
+        return netReadEdges(sol, byLoop, byRun, null, outs); }
   finally { netHoldStore(was); }
 };
 
