@@ -1936,6 +1936,8 @@ function advectAnchors(s){
    flow through it, which the clamp below turns into "it simply equilibrates
    this tick" rather than an explicit blow-up. A READOUT, never on S: it is a
    fact about the arithmetic, not about the plant. */
+// seconds of lag on s.dTavg, the rate every pressure and controller term reads
+const TAVG_RATE_TAU = 0.5;
 /* ══ WHAT A BOOKED NODE HOLDS, kg ══
    A tank's level, a shell's water, a shell's steam space, a hotwell's pool -
    each one already has an integral and a place in ledgerKg(), and this is the
