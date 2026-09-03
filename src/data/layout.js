@@ -926,7 +926,7 @@ const LOOP_ROLE={core:1, sg:1, ihx:1, pump:1, fitting:1};
    bench, the exact signature is still the only answer, because a designer
    editing a paused plant leaves s.tick standing still and a tick number would
    go stale under them. */
-let nodeGraphCache=null, nodeGraphSig="", nodeGraphHeld=false;
+let nodeGraphCache=null, nodeGraphSig="", nodeGraphGen=-1, nodeGraphHeld=false;
 const nodeGraphHold=on=>{ nodeGraphHeld=!!on && !!nodeGraphCache; };
 /* THE WINDOW ITSELF, so the three passes that take it cannot disagree about
    what "settled" means: a tick (step()), a frame (tick(), main.js) and the
@@ -961,6 +961,8 @@ const layRelease=()=>{ if(layDepth>0 && --layDepth) return;
   nodeGraphHold(false); pipeMapHold(false); netPassDrop(); };
 function nodeGraph(){
   if(nodeGraphHeld) return nodeGraphCache;
+  // every term of sig is a sigMemo keyed on DGEN, so an unchanged DGEN is an unchanged sig
+  if(nodeGraphCache && nodeGraphGen===DGEN) return nodeGraphCache;
   // fittingSig() too: a fitting's MODE decides both its fold and whether its
   // own internal link is a gate, and a mode change moves no part and no cell.
   // pipeSig()+portSig(): a connection is TRACED out of the cells and the
@@ -969,6 +971,7 @@ function nodeGraph(){
   // GW x GH occupancy array, and a resize no longer moves any part - so laySig()
   // alone handed a shrunk or grown hull the grid of the old one.
   const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig()+gridSig();
+  nodeGraphGen=DGEN;
   if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
   const adj={}, nodesOf={}, runPorts={};
   const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
@@ -1068,15 +1071,13 @@ function nodeGraph(){
 /* ══ AN ANSWER IS ONLY AS OLD AS THE GRAPH IT WAS READ OFF ══
    Keyed on the node graph's own IDENTITY, never on a second signature: these
    are pure functions of that graph, and re-deriving the signature per call
-   would rebuild four strings to be told nothing had moved. A WeakMap, so a
+   would rebuild four strings to be told nothing had moved. On the graph itself, so a
    superseded graph takes its answers with it and nothing has to remember to
    invalidate anything. One named slot per question. */
-const graphMaps=new WeakMap();
 function graphSlot(name){
   const G=nodeGraph();
-  let m=graphMaps.get(G); if(!m){ m=new Map(); graphMaps.set(G,m); }
-  let s=m.get(name);      if(!s){ s=new Map(); m.set(name,s); }
-  return s;
+  const m=G.slots || (G.slots={});
+  return m[name] || (m[name]=new Map());
 }
 function loopMap(){
   const s=graphSlot("loopMap"), was=s.get(1); if(was) return was;
@@ -1210,10 +1211,13 @@ const secondaryNode=node=>!nodeGraph().inCore(node);
 const shellCirc=pid=>{ const G=nodeGraph();
   const n=(G.nodesOf[pid]||[]).find(x=>!G.inCore(x));
   return n===undefined ? -1 : G.circuit[n]; };
+// on the graph (graphSlot()): feedHeadMax() asks this of every pump per run per tick
 function secGensOf(pid){
+  const slot=graphSlot("secGensOf"), was=slot.get(pid); if(was) return was;
   const G=nodeGraph(), out=[];
   for(const n of (G.nodesOf[pid]||[]))
     for(const g of secGensFromNode(n)) if(!out.includes(g)) out.push(g);
+  slot.set(pid,out);
   return out;
 }
 /* EVERY GENERATOR SHELL, AS A FEED END AND A STEAM END. The shell is the
@@ -1309,10 +1313,14 @@ const sgSteams=id=>{ const sh=shellFaces().find(s=>s.id===id);
    the drawing and must not change under a hand on a port valve, or shutting
    one would turn a shell's safety valve into a primary one. */
 function shellsOf(pid, dead){
+  // on the graph (graphSlot()) when nothing is shut: a fact about the drawing, asked per valve per tick
+  const slot = dead ? null : graphSlot("shellsOf");
+  if(slot){ const was=slot.get(pid); if(was) return was; }
   const G=nodeGraph(), cut={}, out=[];
   for(const sh of shellFaces()) cut[sh.id+sh.feed]=1;
   for(const n of (G.nodesOf[pid]||[]))
     for(const g of secGensFromNode(n,cut,dead)) if(out.indexOf(g)<0) out.push(g);
+  if(slot) slot.set(pid,out);
   return out;
 }
 // which loop a PART pools capacity with, or null if the walk
