@@ -123,8 +123,13 @@ const wallSuggestMm = (boreMm, pMPa, c) =>
    condenser at 0.01 MPa, so adding it to the shell counts that lift twice and
    walls the condensate line at 16.8 MPa. Asked of the drawing (secGensOf())
    like every other question about what a pump is for. */
-const feedHeadMax = () => { let h = 0;
+// cached for the length of one pass (layPass()): the burst test asks it of every run every tick
+let feedHeadCache = 0, feedHeadPass = -1;
+const feedHeadMax = () => { const pn = layPass();
+  if(pn && feedHeadPass === pn) return feedHeadCache;
+  let h = 0;
   for(const id of pumpIds()) if(secGensOf(id).length) h = Math.max(h, pumpHead(id));
+  if(pn){ feedHeadCache = h; feedHeadPass = pn; }
   return h; };
 /* ══ AND A PRIMARY RUN IS RATED FOR WHAT STANDS AT ITS OWN TWO ENDS ══
    The circuit's setpoint was the whole answer, so the HPI line was walled for
@@ -387,9 +392,13 @@ function netDrySig(net, s){
 }
 function netFieldUpdate(net, s){
   const F = net.F;
-  for(let i=0;i<net.n;i++){ const nid = net.name[i];
-    F.p[i] = netPAt(s, nid); F.rho[i] = netRhoAt(s, nid); F.x[i] = netQualAt(s, nid);
-    F.wet[i] = netNodeDry(net, s, i, F.rho[i]) ? 0 : 1; }
+  const mx = MIX_SCRATCH;
+  // a node's curve is its circuit's, and a circuit is a fact about the net's own graph
+  const sat = net.satBy || (net.satBy = net.name.map(netSatOf));
+  for(let i=0;i<net.n;i++){ const nid = net.name[i], p = netPAt(s, nid);
+    mixState(sat[i], p, netHAt(s, nid), mx);
+    F.p[i] = p; F.rho[i] = mx.rho; F.x[i] = mx.x;
+    F.wet[i] = netNodeDry(net, s, i, mx.rho) ? 0 : 1; }
   /* THE STORE MOVES WITH THE FIELD, and it is built HERE so it cannot be built
      twice: the diagonal and its own C/dt*p_prev are two halves of one row, and
      netExpSurge() substitutes against a factorisation it did not take. F.gen
@@ -633,9 +642,15 @@ const satRvl = (c,p) =>
 const rhogOf = (c,T) => rhofOf(c,T)*satRvl(c, satP(c,T));
 /* WHAT A NODE HOLDING A MIXTURE WEIGHS, kg/m3 - the volume-weighted series law,
    which is what a quality means: x of the mass occupies x/rho_g of the volume. */
-const rhoMixOf = (c,p,h) => { const T = satT(c,p), x = xOfH(c,p,h);
-  const rf = rhofOf(c,T), rg = rhogOf(c,T);
-  return x<=0 ? rf : x>=1 ? rg : 1/((1-x)/rf + x/rg); };
+const H_DATUM = 273.15;
+// quality and mixture density off one saturation read - netFieldUpdate() asks both of every node
+const mixState = (c,p,h,out) => { const T = satT(c,p), hf = c.cp*(T - H_DATUM);
+  const x = clamp((h-hf)/Math.max(hfgOf(c,T), 1e-6), 0, 1), rf = rhofOf(c,T);
+  out.x = x;
+  out.rho = x<=0 ? rf : x>=1 ? rhogOf(c,T) : 1/((1-x)/rf + x/rhogOf(c,T));
+  return out; };
+const MIX_SCRATCH = {x:0, rho:0};
+const rhoMixOf = (c,p,h) => mixState(c,p,h,MIX_SCRATCH).rho;
 /* THE CORE'S DESIGN TEMPERATURE RISE, K. It belongs with the fluid rather
    than in step.js because layout.js's pump-flow suggestion is asked during
    buildStockPlumbing(), at module load, when a const in step.js has not been
@@ -647,7 +662,6 @@ const CORE_DT0 = 30;
    cross, and superheat rising at cp again. That is enough to MIX honestly -
    which is the whole point - without a steam table this game has no use for.
    satH()/satHg() are the two ends of the shelf at a stated pressure. */
-const H_DATUM = 273.15;
 const satH  = (c,p) => c.cp*(satT(c,p) - H_DATUM);
 const satHg = (c,p) => satH(c,p) + hfgOf(c, satT(c,p));
 /* ══ WHAT IT COSTS TO TURN A KILOGRAM OF FEEDWATER INTO STEAM ══
@@ -739,7 +753,14 @@ const runRating = r => 2*(STEEL_S/((PRIMARY_K[r.k] ? COOLANT[D.cool].pipeK : 1))
    boundaries on this plant do not each carry their own margin. Past this the
    run is cut - one cell, the hole a hit makes (pipeBurst(), step.js). */
 const PIPE_BURST_K = 1.5;
-const runBurstP = r => runRating(r)*PIPE_BURST_K;
+// cached for the length of one pass (layPass()) - a fact about the drawing, asked per run per tick
+let burstCache = {}, burstPass = -1;
+const runBurstP = r => { const pn = layPass();
+  if(pn && burstPass !== pn){ burstCache = {}; burstPass = pn; }
+  if(pn && burstCache[r.key] !== undefined) return burstCache[r.key];
+  const v = runRating(r)*PIPE_BURST_K;
+  if(pn) burstCache[r.key] = v;
+  return v; };
 const tankRating = id => 2*STEEL_S*Math.max(tankWallMm(id)-WALL_CORR, 0)
                        / Math.max(Math.cbrt(6*Math.max(D.tanks[id].vol,0.1)/Math.PI)*1000, 1);
 function plantRating(ci){
@@ -1470,7 +1491,7 @@ function foldMap(){
      answers the same question - including the one an arrangement-only key got
      wrong, a tee's single node handed back for a valve that now has two -
      without rebuilding two strings once per edge to ask it. */
-  const slot=graphSlot("foldMap"), was=slot.get(1); if(was) return was;
+  const G=nodeGraph(); if(G.fold) return G.fold;   // coreFold() asks this ~1000 times a tick
   const m={};
   for(const p of LAY.parts){
     const f=foldFacesOf(p); if(!f) continue;
@@ -1480,7 +1501,7 @@ function foldMap(){
     if(Array.isArray(f)) for(const face of f) m[p.id+face]=p.id;
     else for(const face in f) m[p.id+face]=p.id+f[face];
   }
-  slot.set(1,m);
+  G.fold=m;
   return m;
 }
 // A NODE THAT IS NOT THERE IS NOT A PLACE. A blank grid has no vessel, so a
@@ -2446,6 +2467,10 @@ function netFinish(net2, ctx){
     if(b){ net2.tag[ed.u] |= b; net2.tag[ed.v] |= b; }
   }
   for(let i=0;i<net2.n;i++) if(net2.tag[i] === (NT_HOT|NT_COLD)) net2.tag[i] = 0;
+  // per RUN KEY, for the animation's "is either end tagged" read (step.js)
+  net2.tagByKey = {};
+  for(const ed of edges) if(ed.key)
+    net2.tagByKey[ed.key] = net2.tagByKey[ed.key] || net2.tag[ed.u] || net2.tag[ed.v];
   // the same map net.secT carries, read the other way - netReadEdges() walks
   // EDGES and needs the shell a node belongs to, not the node a shell has
   net2.secTById = {};
@@ -2596,15 +2621,18 @@ function holdLive(net, s, ci){
   if(!holds.length) return true;                  // nothing on this circuit to disconnect
   const t = net.tankNode[holds[0]];
   if(t === undefined) return false;               // a vessel sitting there unplumbed
+  /* MEMOISED ON WHAT THE WALK READS: the live edge set (netPieces, one object
+     per signature) and the fixed SET, which beyond that signature only moves
+     with a burst shell or the commissioning hold. Asked once per solve by
+     every tank's own pressure, and the walk was the whole cost of tankP(). */
+  const pc = netPieces(net, s);
+  let bk = netStoreHeld ? 'H' : '';
+  if(s && s.sgBurst) for(const k in s.sgBurst) if(s.sgBurst[k]) bk += '|' + k;
+  if(net.hlPc !== pc || net.hlKey !== bk){ net.hlPc = pc; net.hlKey = bk; net.hl = {}; }
+  const was = net.hl[ci];
+  if(was !== undefined) return was;
   const fixed = netBounds(net, s);
-  const adj = new Array(net.n);
-  for(let e=0;e<net.edges.length;e++){
-    const ed = net.edges[e];
-    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
-    if(!(g > 0)) continue;
-    (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
-    (adj[ed.v] || (adj[ed.v] = [])).push(ed.u);
-  }
+  const adj = pc.adj, live = pc.live;
   // the seed is exempt from its own fixed test: a hold tank's node IS an anchor
   const seen = new Uint8Array(net.n), stack = [t];
   let nodes = 1; seen[t] = 1;
@@ -2617,11 +2645,10 @@ function holdLive(net, s, ci){
   const pairs = new Set();
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
-    if(!seen[ed.u] || !seen[ed.v] || ed.u === ed.v) continue;
-    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
-    if(g > 0) pairs.add(ed.u < ed.v ? ed.u+"|"+ed.v : ed.v+"|"+ed.u);
+    if(!live[e] || !seen[ed.u] || !seen[ed.v] || ed.u === ed.v) continue;
+    pairs.add(ed.u < ed.v ? ed.u+"|"+ed.v : ed.v+"|"+ed.u);
   }
-  return pairs.size >= nodes;
+  return (net.hl[ci] = pairs.size >= nodes);
 }
 const pzrLive = (net, s) => holdLive(net, s, nodeGraph().coreCirc);
 
@@ -2650,14 +2677,7 @@ function circSolid(net, s, ci){
   const fixed = netBounds(net, s), ref = net.refNow;
   const bound = i => fixed[i] !== undefined && ref.anchor[ref.of[i]] !== i;
   if(bound(seed)) return false;
-  const adj = new Array(net.n);
-  for(let e=0;e<net.edges.length;e++){
-    const ed = net.edges[e];
-    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
-    if(!(g > 0)) continue;
-    (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
-    (adj[ed.v] || (adj[ed.v] = [])).push(ed.u);
-  }
+  const adj = netPieces(net, s).adj;
   const seen = new Uint8Array(net.n), st = [seed];
   seen[seed] = 1;
   while(st.length){
@@ -2700,11 +2720,12 @@ function circSolid(net, s, ci){
 function netPieces(net, s){
   if(net.pc && net.pcSig === netLiveSig(net, s)) return net.pc;
   const of = new Int32Array(net.n).fill(-1);
-  const adj = new Array(net.n);
+  const adj = new Array(net.n), live = new Uint8Array(net.edges.length);
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
     const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
     if(!(g > 0)) continue;
+    live[e] = 1;
     (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
     (adj[ed.v] || (adj[ed.v] = [])).push(ed.u);
   }
@@ -2718,7 +2739,7 @@ function netPieces(net, s){
     c++;
   }
   net.pcSig = netLiveSig(net, s);
-  return (net.pc = {of, n: c});
+  return (net.pc = {of, n: c, adj, live});
 }
 /* WHICH LIVE PIECE A NODE IS IN, by node NAME or index - the one reader
    everything outside this file goes through. -1 for a node this plant has
@@ -2925,8 +2946,10 @@ function netStore(net, s){
      follows the charge law; what the row adds is how fast the vessel can be
      made to give it up. */
   for(const id in net.tankNode){
-    const i = net.tankNode[id], C = tankCapAt(s, id), p0 = tankP(s, id);
-    if(!(C > 0) || !isFinite(C) || !isFinite(p0)) continue;
+    const i = net.tankNode[id], C = tankCapAt(s, id);
+    if(!(C > 0) || !isFinite(C)) continue;          // before tankP(): a hold tank's is a graph walk
+    const p0 = tankP(s, id);
+    if(!isFinite(p0)) continue;
     cap[i] = C/NET_DT; src[i] = C/NET_DT*p0; pin[i] = 1;
     any = true;
   }
@@ -2952,6 +2975,16 @@ function netStore(net, s){
    reaches b, so it may move every tick for free; whether a node is fixed at
    all changes the MATRIX, so it has to bust the factorisation cache. */
 const netFixSig = fixed => Object.keys(fixed).join(',');
+// the same string, joined only when the SET moved: a per-node mask compare is exact and does not allocate
+function netFixSetSig(net, fixed){
+  const n = net.n, m = net.fixMaskNow || (net.fixMaskNow = new Uint8Array(n));
+  let same = !!net.fixMask;
+  for(let i=0;i<n;i++){ const b = fixed[i] === undefined ? 0 : 1;
+    m[i] = b; if(same && net.fixMask[i] !== b) same = false; }
+  if(same) return net.fixMaskSig;
+  net.fixMask = m.slice(); net.fixMaskSig = netFixSig(fixed);
+  return net.fixMaskSig;
+}
 
 /* Factors A once per DISTINCT combination of fitting state and caches it
    there. The cache key is a signature of every fitting's live state, not the
@@ -2966,7 +2999,22 @@ const netFixSig = fixed => Object.keys(fixed).join(',');
    Every conductance the edge list evaluates against S, as one string. The
    factorisation adds the fixed SET to it; netPieces() cannot, because the
    fixed set is built downstream of the pieces themselves. */
+// the two STRUCTURAL lists the signature walks, once per net: which tanks have a node, which pumps are standby trains
+const netSigLists = net => net.sigLists || (net.sigLists = {
+  tanks: tankIds().filter(id => net.tankNode[id] !== undefined),
+  pumps: pumpIds().filter(pumpStandby) });
 function netLiveSig(net, s){
+  // netSolve() reads s and never writes it, so inside one solve the string is built once (net.sigLock)
+  if(net.sigLock === s && net.sigLockV !== null) return net.sigLockV;
+  const v = netLiveSigOf(net, s);
+  if(net.sigLock === s) net.sigLockV = v;
+  return v;
+}
+function netLiveSigOf(net, s){
+  const L = netSigLists(net);
+  let tk = '', pm = '';
+  for(let i=0;i<L.tanks.length;i++) tk += tankLive(s, L.tanks[i]) ? '1' : '0';
+  for(let i=0;i<L.pumps.length;i++) pm += pumpFwd(s, L.pumps[i]) ? '1' : '0';
   return net.fitIds.map(fid => {
     const mode = net.fitMode[fid];
     /* relief is a mode too now, gated on S.reliefOpen/S.reliefBlocked rather
@@ -3002,7 +3050,7 @@ function netLiveSig(net, s){
      real edge now, and it is a live g exactly like any other tank's. A tank
      with no cell has no node and so adds no bit, which is right - there is
      nothing about it for A to depend on. */
-  + '|' + tankIds().filter(id=>net.tankNode[id]!==undefined).map(id=>tankLive(s,id)?'1':'0').join('')
+  + '|' + tk
   /* The per-tank "is there anything IN it" bits and the hotwell's own bit are
      gone with endGive() and condLive(): a tank node and a condenser node are
      nodes, and the run-dry hash below carries every node alike. */
@@ -3013,7 +3061,7 @@ function netLiveSig(net, s){
   + '|' + netDrySig(net, s)
   // and every standby train's own discharge check - one bit each, and a plant
   // with no standby pump adds none
-  + '|' + pumpIds().filter(pumpStandby).map(id=>pumpFwd(s,id)?'1':'0').join('')
+  + '|' + pm
   /* ...AND THE GOVERNOR, because the turbine's own path is an edge of this
      graph now and its C is a live gate: trip the machine with the dump shut
      and that edge is ABSENT, which splits the steam side into two pieces, and
@@ -3033,7 +3081,7 @@ function netFactored(net, s, fixed){
      second known pressure into the matrix, not just into b, so reusing last
      tick's factors would solve the broken plant against the intact one's -
      a wrong answer, not a crash. */
-  + '|' + netFixSig(fixed);
+  + '|' + netFixSetSig(net, fixed);
   if(!net.Af || net.AfSig !== sig){
     /* ══ A FIXED NODE IS NOT IN THE MATRIX AT ALL ══
        netAssemble never writes a fixed node's row, its column or its b entry -
@@ -3151,11 +3199,15 @@ function netDiverge(net, q, fixed, store, b){
    frame. Nothing else about netSolve is cached - a tick mutates s between
    solves on purpose (the feed valve bisection, step.js), so an s-identity
    cache would hand the second round the first round's answer. */
-function netSolve(net, s){
+function netSolve(net, s, keepField){
   /* THE LAW IS LINEARISED ABOUT LAST TICK'S FIELD, so the field is refreshed
      here and nowhere else - every conductance in the assembly and every flow
-     read back off it then price against ONE state of the plant. */
-  netFieldUpdate(net, s);
+     read back off it then price against ONE state of the plant. keepField is
+     the nat-circ re-solve (netFlowK): same s, pumps stopped in the HEAD only,
+     so the field, the store and the factorisation are all still the answer. */
+  net.sigLock = s; net.sigLockV = null;
+  try {
+  if(!keepField) netFieldUpdate(net, s);
   const fixed = netFixed(net, s);
   netFactored(net, s, fixed);
   const b = new Float64Array(net.n);
@@ -3171,6 +3223,7 @@ function netSolve(net, s){
   netFlows(net.edges, b, fixed, q, s);
   netDiverge(net, q, fixed, net.store, b);
   return {net, s, b, q, fixed, touch, ref: net.refNow, store: net.store};
+  } finally { net.sigLock = null; net.sigLockV = null; }
 }
 
   /* THE FIELD IS ALREADY PRESSURE, so there is nothing to take back off: the
@@ -3641,7 +3694,7 @@ function netFlowK(s, byRun, byP, outs){
      copied fields. */
   // the commissioning settle asks hundreds of times and reads no NAT CIRC bar
   if(!(outs && outs.noNat)){ const sNat = Object.create(s); sNat.flowScale = 0;
-    netReadEdges(netSolve(P.net, sNat), natLoop, null, null, null); }
+    netReadEdges(netSolve(P.net, sNat, true), natLoop, null, null, null); }
   let total = 0, natTot = 0;
   for(let i=0;i<n;i++){ total += byLoop[i]||0; natTot += natLoop[i]||0; }
   /* the share of this flow the plant is developing on its own, with no pump
