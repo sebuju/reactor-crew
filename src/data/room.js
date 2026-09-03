@@ -123,7 +123,7 @@ function partTemp(s, p){
   if(!R || R.thermal === "none") return null;
   if(p.role === "sg")   return s.sgTBy[p.id];
   if(p.role === "ihx")  return s.ihxTBy[p.id];
-  if(p.role === "cond") return s.condT;
+  if(p.role === "cond") return s.condTBy[p.id];
   if(p.role === "radiator") return s.radTBy[p.id];
   return s.Tavg;                          // thermal:"source" - the vessel itself
 }

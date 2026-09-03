@@ -99,7 +99,7 @@ function layoutWarnings(M){ const w=[];
      and loses its pressure, and that is the lesson. What it must not do is
      happen SILENTLY, which is what it did until this row existed. */
   for(const id of holdTankIds()){ if(holdPlumbed(id)) continue;
-    w.push(["SOFT","No pipe reaches "+partName(partOf(id))+". It holds nothing: the pressure of the circuit it stands on will drift off programme and stay there.",id]); }
+    w.push(["SOFT",partName(partOf(id))+" stands on a dead leg. Nothing goes round through it, so it holds nothing: the pressure of the circuit it stands on will drift off programme and stay there.",id]); }
   /* ══ WHAT A HOLD TANK CAN BE WRONG ABOUT ══
      All soft: the bench warns and never refuses. Two on one circuit is the
      case netRef() demotes; a check valve on a surge line is a one-way line
