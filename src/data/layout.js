@@ -341,7 +341,20 @@ const pumpHeadSuggest = id => {
    same drawing and two copies of it would drift. `shell` is whether one of
    them is a generator's secondary side, which is the whole of what makes a
    pump a FEED pump (CLAUDE.md: asked of the drawing, never stored). */
+/* CACHED FOR THE LENGTH OF ONE PASS (layPass()). It walks every node of every
+   part and both suggestions above ask it - 14 % of a tick for an answer that
+   is a fact about the drawing. Zero outside a settled window means "not
+   cacheable", so a bench click can never read a stale one. */
+let pumpBCache = {}, pumpBPass = -1;
 function pumpBounds(id){
+  const pn = layPass();
+  if(pn && pumpBPass !== pn){ pumpBCache = {}; pumpBPass = pn; }
+  if(pn && pumpBCache[id] !== undefined) return pumpBCache[id];
+  const b = pumpBoundsOf(id);
+  if(pn) pumpBCache[id] = b;
+  return b;
+}
+function pumpBoundsOf(id){
   const G = nodeGraph(), ci = (G.nodesOf[id]||[]).map(n=>G.circuit[n]);
   let hi = null, lo = null, shell = false, hold = null, panel = false, core = false;
   /* the setpoint of this pump's own circuit, where anything holds one - the
@@ -422,9 +435,7 @@ const PUMP_MARGIN = 1.35;
    above warns about. It is the DRAWING asked what this pump's own circuit
    carries, the identical walk the head suggestion makes (pumpBounds): a
    circuit with a generator's secondary side on it is a feedwater circuit, and
-   what crosses it is steam. FEED_LEN (pipenet.js) is re-fitted against this,
-   because the pump's swallow IS its edge conductance and the two cannot move
-   apart. */
+   what crosses it is steam. */
 const pumpFlowSuggest = id => {
   const n = Math.max(1, loopMap().n);
   /* AND A FEEDWATER CIRCUIT IS NOT DIVIDED BY THE LOOPS. There is one of it,
@@ -2107,13 +2118,13 @@ const ROLE = {
   pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"IN", nb:"OUT", la:"SUCTION", lb:"DISCHARGE"},
           fixed:null, fold:{r:"t", l:"b"}, mu:0.75, sgtr:false,
           ports:{t:4, b:4, r:4, l:4}, thermal:"none", tsurv:400, pburst:70},
-  /* ── AND ONE PATH THAT IS NOT IN THE LIQUID MATRIX ──
-     `vapPath` is the machine's own steam path, read by the VAPOUR network
-     (vapBuild(), pipenet.js) and by nothing else: a liquid `internal` here
-     would tie the main steam line to the exhaust through a resistance the
-     water solve has no business pricing. `work` says the steam does shaft
-     work crossing it, which is what tells the bypass around it apart from
-     the wheels themselves. */
+  /* ── AND ONE PATH THAT IS PRICED BY ITS GOVERNOR, NOT BY ITS STEEL ──
+     `vapPath` is the machine's own steam path. It is an ordinary edge of the
+     one network now (netEdges(), pipenet.js); what keeps it off `internal` is
+     that its resistance is the GATE and not the body, so it takes turbCOf()
+     rather than COMP_C. `work` says the steam does shaft work crossing it,
+     which is what tells the bypass around it apart from the wheels
+     themselves. */
   turb:  {internal:null, vapPath:{a:"t", b:"b", work:true}, fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:4, b:1}, thermal:"none", tsurv:420, pburst:70},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
   /* TWO internal paths that do not meet, the same declaration ROLE.sg makes -

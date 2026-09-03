@@ -584,7 +584,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
         which is what the multiplier is defined on, and it reads rvl, so a
         depressurising core loses channel flow harder because the two
         densities have closed on each other. */
-  { const rvl=satRvl(s.pCore), rq=1/Math.max(rvl,1e-6)-1;
+  { const rvl=satRvl(P.sat, s.pCore), rq=1/Math.max(rvl,1e-6)-1;
     let tot=0;
     for(let i=0;i<XNR;i++){
       let x=0; for(let j=0;j<XNZ;j++) x+=voidQual(s.nV[XIX(i,j)],rvl);
@@ -632,7 +632,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   const qhat  = heat*P.rated*1000/Math.max(P.pinUA,1e-9);
   const ff    = Math.max(flowFrac, 1e-3);
   const hSat  = CP_W*sat;                    // enthalpy at saturation, kJ/kg
-  const rvl   = satRvl(s.pCore);             // the core boils at ITS OWN pressure
+  const rvl   = satRvl(P.sat, s.pCore);             // the core boils at ITS OWN pressure
   /* what the damage pass hands back: the worst node margin and where, the
      hottest clad, the deepest oxide, and the hydrogen this tick made. None of
      the margins are STORED - a node margin field is a pure function of this
@@ -701,8 +701,11 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          floor at zero. A BURST pin has steam on both faces, so the growth
          doubles - one multiply, and it is what makes the runaway accelerate
          rather than merely continue. */
+      /* dt>0: a commissioning pass steps nothing, so the oxide grows by
+         exactly 0 and the power that freed it is 0/0 - a NaN in the pellet,
+         and through nRho in every reactivity term the plant has. */
       let qOx=0;
-      if(P.oxid && Tcl>OX_T0 && s.nV[k]>OX_VMIN && ecrOf(s.nOx[k])<1){
+      if(dt>0 && P.oxid && Tcl>OX_T0 && s.nV[k]>OX_VMIN && ecrOf(s.nOx[k])<1){
         const o0=s.nOx[k];
         /* clamped at the wall it is eating, or one step of a runaway steps
            straight past it and ECR - which the readout states as a percentage

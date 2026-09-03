@@ -146,7 +146,14 @@ function netSolve(A, x, n){
    Pure bookkeeping over the same loop and the same g - the caller cannot ask
    it afterwards without evaluating every edge's conductance a second time, and
    a second evaluation is a second answer. */
-function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch){
+/* `cap`, if given, is a per-node STORAGE conductance in kg/s per MPa - C/dt
+   for a node that can hold something, added to its own diagonal and nowhere
+   else. It is what turns a KCL row into a first-order lag: what arrives less
+   what leaves is what the node took in. The matching C/dt*p_prev goes in
+   through `src`, which is the existing hook and already the right shape - a
+   current appearing at a node rather than flowing to it. A fixed node absorbs
+   whatever it is given, so a store on one is a no-op and is skipped. */
+function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap){
   const wantA = A !== false;
   if(!row) m = n;
   if(wantA) A = A || new Float64Array(m*m);
@@ -173,6 +180,8 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch){
     if(gu && !gv) b[ru] += g*pv;
     if(gv && !gu) b[rv] += g*pu;
   }
+  if(wantA && cap) for(let i=0;i<n;i++) if(fixed[i]===undefined && cap[i] > 0){
+    const ri = row ? row[i] : i; A[ri*m+ri] += cap[i]; }
   if(src) for(let i=0;i<n;i++) if(fixed[i]===undefined && src[i]) b[row?row[i]:i] += src[i];
   return { A, b };
 }

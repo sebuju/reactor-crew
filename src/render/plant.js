@@ -721,18 +721,17 @@ function drawSym(p,x,y,w,h,ink,L){
       ctx.beginPath(); rr(TX+2.5,TY+2.5,TW-5,TH-5,7);
       ctx.strokeStyle=ink; ctx.lineWidth=1; ctx.globalAlpha=.55; ctx.stroke(); ctx.globalAlpha=1;
     }
-    /* NEITHER TEST IS A BARE COMPARISON WITH ZERO. Both the rate and the level
-       come off the solve, so both sit on ±1e-15 at rest - tankInjecting() and
-       tankWet() (pipenet.js) are the two floors, and they are the SAME ones the
-       sim judges by, so the picture and the plant cannot disagree about whether
-       a tank is delivering or holding anything. */
+    /* THE RATE IS NOT COMPARED WITH A BARE ZERO. It comes off the solve, so it
+       sits on ±1e-15 at rest - tankInjecting() (pipenet.js) is the floor, and
+       it is the SAME one the sim judges by, so the picture and the plant
+       cannot disagree about whether a tank is delivering. */
     tank(TX,TY,TW,TH,tankHeld(id)?9:3, lv/100,
       tankInjecting(id,rate) ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
-            /* A SINK WARNS ON THE WAY UP, not on the last tenth. Amber was
-               tankWet() - any water at all - so a relief tank read alarming
-               the moment it took a drop and had nothing left to say between
-               that drop and its own disc. */
+            /* A SINK WARNS ON THE WAY UP, not on the last tenth: amber used
+               to mean any water at all, so a relief tank read alarming the
+               moment it took a drop and had nothing left to say between that
+               drop and its own disc. */
             : (lv>=SINK_RED ? C.red : lv>SINK_AMB ? C.amber : C.blue));
     /* Cold water going down the line. The safe act with the long bill, and
        worth seeing that it is still running - every second of it ages the
