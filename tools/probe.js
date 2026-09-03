@@ -56,6 +56,11 @@ function dump(s,label){
   console.log(" PLANT");
   row("Tavg K",f(s.Tavg,2)); row("P MPa",f(s.P,4));
   row("inventory %",f(s.inv,2)); row("pzr level %",f(s.lvl,2));
+  /* THE TWO BOOKS, SIDE BY SIDE. The pool is what s.inv still says; the field
+     is every node's own mass added up. They are allowed to disagree until
+     s.inv becomes a read of the field. */
+  { let m=0; for(const k in s.mBy) m+=s.mBy[k];
+    row("node mass kg",f(m,1)); row("pool kg",f(s.inv/100*M.loopKg(),1)); }
   row("core MW",f(s.fq*(s.P0mw||0),2)||"-"); row("electric MW",f(M.mwE(s),2));
   row("cond T K",f(s.condT,2)); row("cw in K",f(s.cwInT,2));
   row("release",f(s.release,5)); row("breach",!!s.breach);
@@ -84,12 +89,10 @@ function dump(s,label){
   const flow={};
   M.netFlowK(s, flow);
   for(const r of M.pipeNetwork())
-    row(r.k+" "+r.key.slice(0,40), (s.vapQ && s.vapQ[r.key]!==undefined)
-      ? f(s.vapQ[r.key],2)+" kg/s"
-      : (flow[r.key]===undefined ? "-"
-         : f(Math.sign(flow[r.key])*M.netKgs(flow[r.key]),2)+" kg/s"));
+    row(r.k+" "+r.key.slice(0,40), flow[r.key]===undefined ? "-"
+        : f(Math.sign(flow[r.key])*M.netKgs(flow[r.key]),2)+" kg/s");
   console.log(" STEAM   MPa");
-  for(const nm in (s.vapP||{})) row(nm, f(s.vapP[nm],4));
+  for(const id of M.sgIds()) row(id+" shell", f(M.secP(s,id),4));
   row("turbine", f(s.turbWk,2)+" kg/s at "+f(s.turbP,4)+" MPa");
 
   console.log(" DESIGN");
