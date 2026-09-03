@@ -149,6 +149,7 @@ function* commissionGen(){
      UNDER-RELAXED, because head falling with flow overshoots: a machine past
      runout solves to no head, which solves to no flow, which restores full
      head. Half a step a pass lands it. */
+  let refOuts = {};
   { const want = ratedSteam()/Math.max(1,sgCount());
     /* SECANT, not a rate-limited walk: the network is LINEAR in head, so one
        generator's flow is affine in its own valve and a handful of passes
@@ -193,7 +194,8 @@ function* commissionGen(){
         if(worst < 1e-4) break;
       }
       P.netRefByRun = {};
-      netCoreFrac0(P.net, null, P.netRefByRun, {fregBy:prev, pumpQBy:P.pumpQRef});
+      refOuts = {};
+      netCoreFrac0(P.net, null, P.netRefByRun, {fregBy:prev, pumpQBy:P.pumpQRef}, refOuts);
       P.fregRef = prev;
       let moved = 0;
       for(const id of pumpIds()){
@@ -230,9 +232,29 @@ function* commissionGen(){
      on. Left to their defaults the regulating valve stood wide, the feed pump
      re-priced onto the unregulated train, and the EFW line referenced 37305
      kg/s - five times the reactor's own hot leg. */
+  const openOuts = {};
   { const o = {}; netCoreFrac0(P.net, null, o,
-      {refOpen:1, fregBy:P.fregRef, pumpQBy:P.pumpQRef});
+      {refOpen:1, fregBy:P.fregRef, pumpQBy:P.pumpQRef}, openOuts);
     for(const k in P.netRefByRun) if(!P.netRefByRun[k] && o[k]) P.netRefByRun[k] = o[k]; }
+  /* ══ AND WHAT EVERY NODE PASSES, kg/s ══
+     P.netRefByRun's own idiom asked of a NODE rather than of a run: half the
+     sum of every incident edge's reference flow, which is the through-flow at
+     a node the current merely passes through and exactly 0 at a dead end.
+     s.Tavg's membership test is a fraction of it (advectStep), so the
+     pressurizer - 35 t of hot water on a surge line whose only current is
+     thermal breathing - can never join the average on one tick and leave it
+     on the next.
+     The GREATER of the two references, the same copy-back the run scale above
+     makes: a line behind a demand gate carries nothing as commissioned and is
+     still a line the plant circulates through once the gate is asked for. */
+  P.netRefThru = {};
+  for(const o of [refOuts, openOuts]){
+    if(!o.edgeKg) continue;
+    const t = new Float64Array(P.net.n);
+    for(let e=0;e<P.net.edges.length;e++){ const ed = P.net.edges[e];
+      const m = netKgs(o.edgeKg[e]||0); t[ed.u] += m; t[ed.v] += m; }
+    for(let i=0;i<P.net.n;i++){ const nm = P.net.name[i];
+      if(!(P.netRefThru[nm] >= t[i]/2)) P.netRefThru[nm] = t[i]/2; } }
   /* ══ AND EVERY RUN'S REFERENCE IN KILOGRAMS ══
      What this run carries as commissioned, kg/s. The meters used to normalise
      every liquid run on P.netRefRun - the mean of the HOT and COLD legs, a
