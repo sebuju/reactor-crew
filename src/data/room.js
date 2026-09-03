@@ -163,20 +163,50 @@ const skinQOf = (s, id) => (s.skinQ && s.skinQ[id]) || 0;
 const skinQRole = (s, role) => { let q = 0;
   for(const p of LAY.parts) if(p.role === role) q += skinQOf(s, p.id);
   return q; };
-/* ...AND WHAT A RUN IS AT, by KIND, for the same reason. A pipe is not a part
-   and has no role, so it cannot go through partTemp(); a run's kind is
-   already the one thing that names what is inside it. A kind with no row here
-   (a user run, a cross-tie) carries no surface, which is the same "no
-   temperature invented" partTemp() gives an untyped box. */
-const ROOM_RUN_T = {
-  hot:  s => s.Tavg, cold: s => s.Tavg, surge: s => s.Tavg,
-  hpi:  s => s.Tavg, relief: s => s.Tavg,
-  steam: s => roomSgT(s), feed: s => T_FEED, exh: s => s.condT,
-};
-// the shells' mean, for a steam header that may reach several of them
-function roomSgT(s){ let t=0, n=0;
-  for(const id in s.sgTBy){ t+=s.sgTBy[id]; n++; }
-  return n ? t/n : T_FEED; }
+/* ...AND WHAT A RUN CARRIES, which is asked of the FLUID and never of the
+   run's NAME. A kind is a label, so a table off it stated s.Tavg for a line
+   the operator had shut and a hit had severed - the pipe went on cooking the
+   compartment out of a reactor it was no longer connected to, and a user run
+   carried nothing however hot it was. netTempAt() is the door the liquid
+   itself goes through. An end a SHUT valve cuts is not an end (the same
+   endLive() netBuild() prices the hole with), so a run with no live end holds
+   what it holds and cools - which is what an isolated line does. */
+function runFluidT(s, key){
+  const r = P.net && P.net.byKey && P.net.byKey[key];
+  if(!r) return null;
+  const ends = runEnds(key, r.k);
+  if(!ends) return null;
+  const pids = [r.pa, r.pb];
+  let t = 0, n = 0;
+  for(let i=0;i<2;i++){
+    const pid = pids[i];
+    if(pid && !(portOpen(s,pid) || portWrecked(s,pid))) continue;
+    const T = netTempAt(s, coreFold(ends[i]));
+    if(!isFinite(T)) continue;
+    t += T; n++;
+  }
+  return n ? t/n : null;
+}
+/* ...AND WHAT A BOX IS DISCHARGING, which is the DONOR node's water and not a
+   mean of its two sides: a valve's own outlet holds what it has already let
+   past, so averaging it in cools the jet by its own effect. The donor is the
+   higher pressure, the same upwind rule advectStep() moves enthalpy by.
+   s.Tavg said the reactor's mean whatever the valve was on. */
+function partFluidT(s, id){
+  const net = P.net;
+  if(!net || !net.index) return null;
+  let best = null, bp = -Infinity;
+  for(const face of ["t","r","b","l"]){
+    const nm = coreFold(id + face);
+    if(!nm || net.index[nm] === undefined) continue;
+    const p = netPAt(s, nm);
+    if(!(p > bp)) continue;
+    const T = netTempAt(s, nm);
+    if(!isFinite(T)) continue;
+    bp = p; best = T;
+  }
+  return best;
+}
 
 /* ══ GEOMETRY, MEMOISED ON THE ARRANGEMENT ══
    laySig()+pipeSig(), the same key radGeom() uses and for the same reason:
@@ -214,8 +244,8 @@ function roomGeom(){
     if(cells.length){ for(const i of cells) own[i] = parts.length; parts.push({p, cells}); }
   }
   for(const r of pipeNetwork()){
-    if(!ROOM_RUN_T[r.k] || !r.cells) continue;
-    runs.push({k:r.k, cells:r.cells.map(([x,y])=>y*GW+x)});
+    if(!r.cells) continue;
+    runs.push({key:r.key, cells:r.cells.map(([x,y])=>y*GW+x)});
   }
   /* WHICH VALVES ARE ON WHICH SHELL, walked once here rather than per tick:
      shellsOf() is a graph walk and the room asks it of every secondary relief
@@ -310,16 +340,29 @@ const roomPlumeFor = (cells, kgps) => roomPlume(cells,
    is 1/(1+ring), off the breadth-first ring the cell was reached on, so the
    opening is the hot end and the far side is a draught. Heat and hydrogen
    share this, or the gas would collect where the heat never went. */
-function roomSpread(F, cells, kgps, amount){
-  if(!(amount > 0) || !cells.length) return;
+function roomShare(cells, kgps, put){
+  if(!cells.length) return;
   // the plume is roomQ[0..n) - see roomPlume(), which hands back a COUNT
   const n = roomPlumeFor(cells, kgps);
   let w = 0;
   for(let k=0;k<n;k++) w += 1/(1+roomRing[roomQ[k]]);
-  const q = amount/w;
-  for(let k=0;k<n;k++){ const i=roomQ[k]; F[i] += q/(1+roomRing[i]); }
+  for(let k=0;k<n;k++){ const i=roomQ[k]; put(i, 1/(1+roomRing[i])/w); }
+}
+function roomSpread(F, cells, kgps, amount){
+  if(!(amount > 0)) return;
+  roomShare(cells, kgps, (i,f) => { F[i] += amount*f; });
 }
 const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
+/* WATER MIXES WITH THE AIR IT LANDS IN, AND IT IS A COOLING TERM ONCE THAT AIR
+   IS HOTTER THAN IT. Charged against T_HULL, a 310 K reserve emptying through
+   a severed line went on heating a compartment already at 350 K - a source
+   that can never change sign, so the room passed the temperature of the only
+   thing pouring into it. Each cell is charged on ITS OWN air, so the plume
+   both heats and cools and the room can only approach Tf. */
+function roomJetLiq(src, T, cells, kg, Tf){
+  if(!(kg > 0)) return;
+  roomShare(cells, kg, (i,f) => { src[i] += kg*f*CP_W*(Tf - T[i]); });
+}
 /* THE CELLS A PLUME REACHES, breadth-first out of the opening. Deterministic
    by construction - one fixed neighbour order, one queue, no dice - which is
    what a snapshot round trip requires of it. It crosses an occupied cell:
@@ -384,11 +427,25 @@ function roomStep(s, dt){
     for(const i of q.cells) src[i] += ROOM_HK*(Ts - T[i]);
   }
   for(const id in s.partT) if(!live[id]){ delete s.partT[id]; delete s.skinQ[id]; }
+  /* A RUN HAS A WALL TOO, and the same pot a machine's skin is: the contents
+     term is the fluid runFluidT() finds at its live ends, and a run with none
+     - shut in, or severed and drained - has no contents term at all and falls
+     to the air around it at its own time constant instead of pinning at the
+     reactor's mean forever. */
+  const liveRun = {};
   for(const r of G.runs){
-    const Tp = ROOM_RUN_T[r.k](s);
-    if(!isFinite(Tp)) continue;
-    for(const i of r.cells) src[i] += ROOM_HK*(Tp - T[i]);
+    const key = r.key, n = r.cells.length, Tf = runFluidT(s, key);
+    liveRun[key] = 1;
+    if(s.runT[key] === undefined) s.runT[key] = Tf === null ? T_HULL : Tf;
+    const Ts = s.runT[key];
+    let air = 0;
+    for(const i of r.cells) air += T[i];
+    const qProc = Tf === null ? 0 : n*ROOM_HK*SKIN_PROC_K*(Tf - Ts);
+    s.runT[key] = clamp(Ts + (qProc + ROOM_HK*(air - n*Ts))/skinCap(n)*dt,
+                        T_SPACE, ROOM_TMAX);
+    for(const i of r.cells) src[i] += ROOM_HK*(Ts - T[i]);
   }
+  for(const k in s.runT) if(!liveRun[k]) delete s.runT[k];
 
   /* ── released steam and released water ──
      Every one of these already carried a LOCATION; what they never had was a
@@ -414,19 +471,25 @@ function roomStep(s, dt){
     const hole = Math.max(0, s.sgVentBy[id] - byValve);
     roomJet(src, cellsOf(id), hole*roomSteamH(), hole);
   }
-  /* The primary side, as LIQUID: hot water leaving a hole flashes, and its
-     sensible heat above the hull outside is what the room gets. One conversion
-     out of invRate()'s % of loop inventory, the same bridge loopKg() is
-     everywhere else. */
+  /* The primary side, as LIQUID: hot water leaving a hole flashes, and it
+     mixes with the air where it lands. One conversion out of invRate()'s % of
+     loop inventory, the same bridge loopKg() is everywhere else. */
   const kgOf = rate => Math.max(0, rate)/100*loopKg();
   for(const fid in s.reliefVent){
     if(tgt[fid] || out[fid]) continue;
     const kg = kgOf(s.reliefVent[fid]);
-    roomJet(src, cellsOf(fid), kg*CP_W*(s.Tavg - T_HULL), kg);
+    const Tf = partFluidT(s, fid);
+    if(Tf === null) continue;
+    roomJetLiq(src, T, cellsOf(fid), kg, Tf);
   }
+  /* AND AT THE TEMPERATURE THE OPENING IS ACTUALLY PASSING. s.Tavg is the
+     primary's mean, so a reserve tank emptying through a severed line put the
+     reactor's heat into the room out of water that never came near it. */
   for(const k in s.spillBy){
     const kg = kgOf(s.spillBy[k]);
-    roomJet(src, roomOpenCells(s, G, k), kg*CP_W*(s.Tavg - T_HULL), kg);
+    const Tf = k === "break:core" ? s.Tavg : runFluidT(s, k.slice(6));
+    if(Tf === null) continue;
+    roomJetLiq(src, T, roomOpenCells(s, G, k), kg, Tf);
   }
 
   /* ── the machines whose whole job is getting heat out of the building ──
@@ -434,7 +497,7 @@ function roomStep(s, dt){
      It sits on the main board, so a blackout leaves the room with nothing but
      its hull. */
   if(!s.blackout) for(const q of G.parts){
-    if(q.p.role !== "vent" || s.dmgParts.indexOf(q.p.id) >= 0) continue;
+    if(q.p.role !== "vent" || partWrecked(s, q.p.id)) continue;
     /* Against T_HULL, and that is now a STATED reading rather than a leftover:
        there is no atmosphere to blow this compartment's air into, so the set
        is moving it to the rest of the ship - which sits at what the ship was
@@ -621,7 +684,7 @@ function roomIgnites(s, G, i){
   const k = G.own[i];
   if(k < 0) return false;
   const p = G.parts[k].p;
-  return partSkin(s, p) >= H2_IGN || s.dmgParts.indexOf(p.id) >= 0;
+  return partSkin(s, p) >= H2_IGN || partWrecked(s, p.id);
 }
 
 function roomH2Step(s, dt, G){
@@ -656,7 +719,7 @@ function roomH2Step(s, dt, G){
      hull sealed this is the ONLY removal path that is not a fire, which is
      what finally prices the fan - a second job that is not a temperature. */
   if(!s.blackout) for(const q of G.parts){
-    if(q.p.role !== "vent" || s.dmgParts.indexOf(q.p.id) >= 0) continue;
+    if(q.p.role !== "vent" || partWrecked(s, q.p.id)) continue;
     const f = Math.min(1, ROOM_VENT_KGS/q.cells.length/ROOM_MAIR*dt);
     for(const i of q.cells){ H[i] -= H[i]*f; O[i] += (ROOM_O2_0 - O[i])*f; }
   }
