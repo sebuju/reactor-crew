@@ -192,13 +192,13 @@ const pipeSrc = n => COOLANT[D.cool].fuelInCoolant ? RAD_PIPE*n : 0;
 function radSolve(K,q){
   const f=new Float64Array(GW*GH);
   const Kp = q.pipe ? K.pipe : null;   // asking for it is what builds it
-  for(let i=0;i<f.length;i++){
-    let v=q.air + q.core*K.core[i];
-    if(q.sg) for(const k of K.sg) v+=q.sg*k[i];
-    if(q.tank) for(const t of K.tank){ const w=q.tank[t.id]; if(w) v+=w*t.k[i]; }
-    if(q.pipe) v+=q.pipe*Kp[i];
-    f[i]=v;
-  }
+  // one pass per source, same summation order per cell as the per-cell form it replaces
+  const n=f.length, Kc=K.core, air=q.air, core=q.core;
+  for(let i=0;i<n;i++) f[i]=air + core*Kc[i];
+  if(q.sg) for(const k of K.sg){ const w=q.sg; for(let i=0;i<n;i++) f[i]+=w*k[i]; }
+  if(q.tank) for(const t of K.tank){ const w=q.tank[t.id]; if(!w) continue;
+    const k=t.k; for(let i=0;i<n;i++) f[i]+=w*k[i]; }
+  if(q.pipe){ const w=q.pipe; for(let i=0;i<n;i++) f[i]+=w*Kp[i]; }
   return f;
 }
 
