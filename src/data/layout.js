@@ -460,7 +460,7 @@ const pumpFlowSuggest = id => {
      basis as condUASuggest() - this plant's duty on the design rise. */
   if(id !== undefined && pumpBounds(id).cool)
     return plantDuty()/(SAT_WATER.cp*CW_RISE);
-  return RATED_KW()/(SAT_WATER.cp*CORE_DT0*n);
+  return RATED_KW()/(COOLANT[D.cool].cp*coreDT0()*n);
 };
 /* ══ A SUGGESTION FILLS THE FIELD. IT IS NOT THE FIELD ══
    These were `?? xSuggest()` - a LIVE default, recomputed from the rest of the
@@ -634,27 +634,15 @@ const condCount=()=>LAY.parts.filter(p=>p.role==="cond").length;
    mass prices these machines, and a suggestion that asked derived() would ask
    itself. */
 const RATED_KW = () => D.power*1000;
-/* ══ A READOUT MAY NOT MOVE THE PLANT ══
-   layoutMetrics() calls layFresh(), which is PASS bookkeeping - so asking it
-   from a readout re-dated the per-pass caches mid-tick and the trajectory
-   drifted in the sixth figure depending on whether anybody had drawn a panel
-   that frame. Measured: with mwE() called every 50 s the stock plant landed on
-   a different Tavg from the same seed. Cached on the arrangement's own
-   signature, so a design edit still re-measures and a running plant - which
-   cannot edit its design (designBlocked()) - measures once. */
-let n0Sig=null, n0Val=1;
-const n0Ref = () => { const sg=laySrcSig()+"|"+pipeSig();
-  if(sg!==n0Sig){ n0Sig=sg; n0Val=Math.min(1, layoutMetrics().flowK); }
-  return n0Val; };
-/* ══ WHAT THIS PLANT ACTUALLY MAKES AT FULL POWER ══
-   Rated heat is what the CORE is worth; this is what comes out of it, limited
-   by what the pipe run and the pump head can carry. Every machine downstream
-   is sized against THIS and judged against it, because a turbine matched to a
-   rating its own loop cannot deliver is a turbine nobody would build.
-   Getting this wrong is not a label bug: loadCeil() below gates the control
-   room's load slider, and measuring a machine against `rated` while sizing it
-   against `n0*rated` made that ceiling read back the PIPE RUN's flow limit -
-   exactly flowK, to the last digit - with a turbine's name on it. */
+/* ══ EVERY MACHINE DOWNSTREAM IS SIZED AT THE RATING ══
+   n0Ref() stood here: a typed 0.006 per metre of primary run, capped at 1,
+   that said how much of the rating the loop could carry - and it sized the
+   turbine, the condenser and the steam scale, and commission() seeded the
+   core's power off it. The solved reference is that figure now (P.n0,
+   step.js), and the bench cannot solve, so the suggestions are anchored on
+   the core's own rating: a designer buys the set for the boiler in front of
+   it, and a loop that turns out to carry less leaves the set a little large,
+   which is what loadCeil() then reads. */
 /* ══ WHAT ONE KILOGRAM OF STEAM COSTS THIS PLANT, kJ/kg ══
    The FEED-TO-STEAM RISE at the design shell pressure - feedwater at T_FEED
    heated to saturation and then boiled. It is NOT SAT_WATER.hfg, which is the
@@ -664,12 +652,12 @@ const n0Ref = () => { const sg=laySrcSig()+"|"+pipeSig();
 
    OFF THE SUGGESTION, NEVER sgDesignP(): that walks the drawing (sgIds(), in
    step.js) and this is asked during buildStockPlumbing(), at module load, when
-   step.js has not been evaluated - the same ReferenceError CORE_DT0 is placed
+   step.js has not been evaluated - the same ReferenceError coreDT0() is placed
    to avoid. sgDesPSuggest() needs only the COOLANT row, and what this replaces
    was a flat constant that ignored design pressure altogether, so following
    the suggestion is strictly closer to the plant than what was there. */
 const steamRise = () => hRise(SAT_WATER, sgDesPSuggest());
-const plantSteam = () => n0Ref()*RATED_KW()/steamRise();            // kg/s raised
+const plantSteam = () => RATED_KW()/steamRise();                    // kg/s raised
 /* ══ THE EFFICIENCY THIS PLANT REACHES, NOT THE ONE ITS COOLANT ALLOWS ══
    The COOLANT row is a CEILING and grossEff() is the share of it the fitted
    turbine captures - and every sink on the ship used to be sized against the
@@ -678,15 +666,15 @@ const plantSteam = () => n0Ref()*RATED_KW()/steamRise();            // kg/s rais
    29.5 % small and it commissioned at twice its design backpressure.
    grossEff() cannot be asked here: it walks LAY.parts, and this is read while
    LAY is being built. So the SET IS THE ONE THIS CORE WOULD BE GIVEN - the
-   same log law at the steam the rating raises - which needs neither the
-   arrangement nor n0Ref(), and lands within 1.5 % of grossEff() on all six
+   same log law at the steam the rating raises - which needs no
+   arrangement, and lands within 1.5 % of grossEff() on all six
    families instead of within 30 %. It is a SIZING figure: what the machine
    actually captures is still grossEff(), off the turbine actually fitted.
    steamRise() is drawing-free for exactly this reason - see its own note. */
 const ratedEff = () => COOLANT[D.cool].eff
   * clamp(1 + TURB_EFF_K*Math.log(RATED_KW()/steamRise()/TURB_EFF_REF),
           TURB_EFF_MIN, TURB_EFF_MAX);
-const plantDuty  = () => n0Ref()*RATED_KW()*(1-ratedEff());          // kW rejected
+const plantDuty  = () => RATED_KW()*(1-ratedEff());                  // kW rejected
 /* What one turbine swallows wide open, kg/s. A designer sizes a set for the
    boiler in front of it, so the suggestion is all of what that boiler raises -
    and a machine that reaches past it is overload the designer chose to buy. */
@@ -797,6 +785,8 @@ const roleAlive=(role,s)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p=>
    asked. Takes the live state, never S, so the reference solve and a replay
    ask it the same way every other predicate in this file is asked. */
 const partWrecked=(s,id)=>!!(s && s.dmgParts && id && s.dmgParts.indexOf(id)>=0);
+// WHAT took it, in one word - the label, the tooltip and the STATUS row
+const dmgWhyOf=(s,id)=>(s && s.dmgWhy && s.dmgWhy[id]) || "WRECKED";
 /* A part whose mass is not already counted by some other measure
    (totalPumpCap(), sgCount(), latMass(), a fitting's own FIT_MASS) - one row
    per role, priced once if that role is anywhere on LAY.parts at all. Off
@@ -1402,7 +1392,7 @@ const sgUASuggest = () => { const n=Math.max(1,sgCount());
      expression with D.pdes left out of it, so the bench and the tick had
      already drifted apart about the one number both fit against. */
   const dT0=Math.max(5, COOLANT[D.cool].Tref - tsatSec(sgDesignP()));
-  return (n0Ref()*RATED_KW())/(n*Math.pow(Math.max(layoutMetrics().flowK,.02),UA_FLOW)*dT0); };
+  return RATED_KW()/(n*dT0); };
 const ihxUASuggest = () => sgUASuggest()*2.5;
 const sgUAOf  = id => D.sgUA[id]  ?? sgUASuggest(id);
 const ihxUAOf = id => D.ihxUA[id] ?? ihxUASuggest(id);
@@ -2084,7 +2074,7 @@ function pipeMap(){
                and the keel are grid cells rather than parts, so they are
                exempt by construction and no exception is written for them. */
 const ROLE = {
-  core:  {internal:null, fixed:null, fold:["r","b"], mu:0.50, sgtr:false,
+  core:  {internal:null, fixed:null, fold:["r","b"], kEnd:2, mu:0.50, sgtr:false,
           ports:{r:4, b:5}, thermal:"source", tsurv:1200, pburst:200},
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:450, pburst:35},
@@ -2094,7 +2084,7 @@ const ROLE = {
      `a` is the INLET on a shell path - the feed regulating valve's own head
      is signed off it (netBuild()), so the two faces are not interchangeable
      even though the conductance between them is. */
-  sg:    {internal:[{a:"l", b:"b", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", vap:"b", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
+  sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", vap:"b", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer", tsurv:800, pburst:200},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
   /* A SECOND TRANSFER STAGE, and ONE internal path - the primary one. What an
      intermediate exchanger moves heat INTO is a pot with a temperature
@@ -2106,7 +2096,7 @@ const ROLE = {
      and b onto r, so the exchanger plumbs vertically or horizontally with no
      rotation knob to get wrong. It is spliced into a leg, so both ends are the
      same leg and neither is a nozzle of its own. */
-  ihx:   {internal:[{a:"l", b:"r", kind:"comp", na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}], fixed:null,
+  ihx:   {internal:[{a:"l", b:"r", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}], fixed:null,
           fold:{t:"l", b:"r"}, mu:0.60, sgtr:false,
           ports:{l:2, r:2, t:2, b:2}, thermal:"transfer", tsurv:800, pburst:200},
   /* ONE PUMP, and ONE HEAD LAW (netBuild()). There is no feedwater pump role:
@@ -3125,17 +3115,6 @@ function layoutMeasure(){
   for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
   let pipe=0, sec=0, dead=0, pmass=0;
-  /* ══ AND THE SAME METRES, LOOP BY LOOP ══
-     `pipe` is the whole plant's primary run and cannot answer how well it
-     CIRCULATES: loops are in PARALLEL, so a second one is a second path and
-     not another kilometre of the first. Summed into one bucket it read as
-     series, and every loop a designer added derated the plant that bought it
-     - a four-loop ship suggested a turbine two thirds the size of a one-loop
-     ship's off the same core. Charged by loopMap(), the same walk the solve
-     itself is judged per loop against; a primary run on no loop (the surge
-     line, an injection leg, a cross-tie) is shared and is split over them. */
-  const LM=loopMap(), nLoop=Math.max(1,LM.n), loopL=new Array(nLoop).fill(0);
-  let sharedL=0;
   for(const r of pipeNetwork()){
     const L=r.L;
     pmass += L * runMassPerM(r);
@@ -3148,9 +3127,7 @@ function layoutMeasure(){
     if(r.k==="relief") dead+=L;
     // a cross-tie is a parallel branch, not another metre of loop, so it pays
     // mass/inertia with the secondary runs and never slows the pumps down
-    else if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi"){ pipe+=L;
-      const li = LM.partLoop[r.a] ?? LM.partLoop[r.b];
-      if(li===undefined) sharedL+=L; else loopL[li]+=L; }
+    else if(r.k==="hot"||r.k==="cold"||r.k==="surge"||r.k==="hpi") pipe+=L;
     else sec+=L;
   }
 
@@ -3251,26 +3228,12 @@ function layoutMeasure(){
   // material over a real cell rather than 30 t a block.
   const mass = pmass + matMass();
   layMass = mass;
-  /* ══ WHAT THE PLANT CIRCULATES, AND IT IS A MEAN ══
-     Loops are in PARALLEL and they SHARE the core's one flow, so each pump is
-     a share of it (pumpFlowSuggest()) and each loop carries its own share
-     against its own friction: n conductances in parallel, each driven by 1/n
-     of the head, is the MEAN of them. Summed as one long pipe instead - which
-     is what the total metre count was - every loop a designer added derated
-     the plant that bought it, and a four-loop ship suggested a turbine two
-     thirds the size of a one-loop ship's off the same core. A single loop is
-     the same arithmetic it always was. */
-  const loopK = loopL.map(L=>1/(1+0.006*(L+sharedL/nLoop)));
-  const flowK = loopK.reduce((a,k)=>a+k,0)/nLoop;
-  /* natK is gone. Buoyancy is an edge head in the pipe network now
-     (pipenet.js), so the thermosiphon is solved off exactly the geometry
-     `head` measures instead of being predicted from it by a second formula
-     standing beside the solve - and unlike a correlation, the solve can tell
-     one steam generator from another, and can tell a shut valve from an open
-     one. `head` stays: it is what the bench shows, and it is now what
-     actually drives the thing it is named after. */
+  /* natK and flowK are gone. Buoyancy is an edge head in the pipe network
+     (pipenet.js) and what the loop carries against the rating is the solved
+     reference (P.flowK, commission()), so neither is predicted here by a
+     second formula standing beside the solve. `head` stays: it is what the
+     bench shows, and it is what actually drives the thing it is named after. */
   return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,ihxIdle,pumpNoDis,tankZ,injZ:injZ===null?0:injZ,radK,peak,
-    flowK,
     inertiaK: 1+0.012*(pipe+sec)};
 }
 // The arrangement half of designSig(): id + grid position of every part on
