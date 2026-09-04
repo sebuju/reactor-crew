@@ -63,7 +63,7 @@ function railBlank(rail){
    catching up.
 
    With no observer (headless) every panel counts as visible, because a gate
-   that skips the work would skip the auditor's coverage of it with it. */
+   that skips the work would skip every headless reader's coverage with it. */
 function railWatch(scroller){
   if(typeof IntersectionObserver!=="function") return {add(el){ el._vis=true; },free(){}};
   const io=new IntersectionObserver(es=>{ for(const e of es) e.target._vis=e.isIntersecting; },
@@ -553,6 +553,14 @@ function paramsForRun(key){
        "The two machines this run joins. It is traced off the pipe you drew, never authored - move either machine and this follows."],
       ["LENGTH",r.L.toFixed(1)+" m",null,"How far it actually goes, cell by cell. Length is resistance and it is mass."],
       ["HOLDS",runVol(r).toFixed(2)+" m3",null,"The water standing in it, off the bore and the length. A node with volume has a time constant, which is why a long fat leg is slow to change temperature."],
+      /* WHAT IS IN IT, in words. The meter above says kilograms a second and a
+         kilogram of wet steam is not a kilogram of water: this is the same
+         reading the pipe is drawn in (pipePhaseCol, pipes.js), stated. */
+      ["CARRYING",(()=>{ const q=pipePhase(r,S);
+        if(!q) return "NOTHING";
+        return Math.abs(q[0]-q[1])<0.02 ? pipePhaseWord((q[0]+q[1])/2)
+          : pipePhaseWord(q[0])+" to "+pipePhaseWord(q[1]); })(),null,
+       "The phase of what is actually in this run, at each of its own two ends - off the enthalpy field, never off what the run was drawn for. A run with no path in the network carries nothing and says so."],
       ["CARRIES",held.toFixed(2)+" MPa",null,"The pressure this run is actually asked to hold - its circuit's own setpoint, or the shell design pressure on the secondary."],
       ["RATED FOR",rate.toFixed(2)+" MPa",rate<held?C.red:null,
        "What the wall above will take, off the published hoop-stress relation. Under what it carries, this pipe is the thing that lets go first."],
