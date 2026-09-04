@@ -50,18 +50,24 @@ const NET_EPS = 1e-9;
 // on a pipe full of steam, which is a plausible-looking wrong number and the
 // worst kind. Index is MATRIX row, which a compacting caller (netFactored,
 // pipenet.js) scatters back to node index.
-function netFactor(A, n, deg){
+// `bw` is the HALF-BANDWIDTH of A under the caller's ordering: every non-zero
+// sits within bw of the diagonal, and LDL^T without pivoting creates no fill
+// outside that band, so both loops stop at k+bw instead of n. Omitted, the
+// band is the whole matrix and this is the dense elimination it always was.
+function netFactor(A, n, deg, bw){
+  const B = bw === undefined ? n : bw;
   for(let k=0;k<n;k++){
-    const d = A[k*n+k];
+    const d = A[k*n+k], lim = Math.min(n, k+B+1);
     if(!(d > NET_EPS)){
       A[k*n+k] = 1;
-      for(let j=k+1;j<n;j++){ A[k*n+j]=0; A[j*n+k]=0; }
+      for(let j=k+1;j<lim;j++){ A[k*n+j]=0; A[j*n+k]=0; }
       if(deg) deg[k] = 1;
       continue;
     }
-    for(let i=k+1;i<n;i++){
+    for(let i=k+1;i<lim;i++){
       const lik = A[i*n+k] / d;
-      for(let j=k+1;j<n;j++) A[i*n+j] -= lik*A[k*n+j];
+      if(lik === 0) continue;
+      for(let j=k+1;j<lim;j++) A[i*n+j] -= lik*A[k*n+j];
       A[i*n+k] = lik;
     }
   }
@@ -70,27 +76,22 @@ function netFactor(A, n, deg){
 
 // Solve using a factored A (from netFactor) in place: x holds b on entry,
 // p on exit. Forward-solve L y=b, divide by D, back-solve L^T z=y. O(n^2),
-// no allocation — this is the per-tick path when only b changed.
-function netSubst(A, x, n){
+// no allocation — this is the per-tick path when only b changed. Banded
+// like netFactor, on the same bw.
+function netSubst(A, x, n, bw){
+  const B = bw === undefined ? n : bw;
   for(let k=0;k<n;k++){
     let s = x[k];
-    for(let j=0;j<k;j++) s -= A[k*n+j]*x[j];
+    for(let j=Math.max(0,k-B);j<k;j++) s -= A[k*n+j]*x[j];
     x[k] = s;
   }
   for(let k=0;k<n;k++) x[k] /= A[k*n+k];
   for(let i=n-1;i>=0;i--){
-    let s = x[i];
-    for(let j=i+1;j<n;j++) s -= A[j*n+i]*x[j];
+    let s = x[i], lim = Math.min(n, i+B+1);
+    for(let j=i+1;j<lim;j++) s -= A[j*n+i]*x[j];
     x[i] = s;
   }
   return x;
-}
-
-// One-shot solve for callers that don't need to cache the factorization.
-// A is consumed as scratch; x holds b on entry, p on exit.
-function netSolve(A, x, n){
-  netFactor(A, n);
-  return netSubst(A, x, n);
 }
 
 // Builds A (n*n, row-major) and b (length n) from an edge list. Each edge is
