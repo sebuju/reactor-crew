@@ -1052,12 +1052,6 @@ function pctStep(cur,dir,lo,hi){
   const g=cur*100/PCT_STEP;
   return clamp((dir>0?Math.floor(g+PCT_EPS)+1:Math.ceil(g-PCT_EPS)-1)*PCT_STEP/100,lo,hi);
 }
-/* The strip's row PITCH: one key (BTN_H, core/ui.js) plus the 3 px of air
-   between two of them. The key's own height is never written here, or the strip
-   would go on reserving room for a size the button no longer draws at. */
-const CTL_STRIP_GAP=3;
-const CTL_H=BTN_H+CTL_STRIP_GAP;
-const STRIP_PAD=4;   // plinth inner margin, top and bottom, from one constant so they cannot drift apart
 const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, or two copies drift
   {kind:"btn",flex:1,danger:()=>true,text:()=>"SCRAM",
    fn:()=>{ act("scram"); },
@@ -1078,8 +1072,7 @@ const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, 
 /* TWO ROWS, not three buttons - and what decides that is no longer the box's
    old fixed width. The valve and the dump are ONE row because they are one
    decision about the same line; if the box is too narrow to hold them side by
-   side, ctlStrip() stacks them (ctlRowStacks()) and stripPlan() has already
-   reserved the height for it. The arm switch goes on its own row, and only
+   side, the panel wraps them. The arm switch goes on its own row, and only
    for a tank that HAS a rule to arm: a manual tank has nothing to defeat. */
 function tankCtl(id){
   const t=()=>D.tanks[id]||{}, rule=()=>AUTORULE[t().auto];
@@ -1107,8 +1100,8 @@ function tankCtl(id){
      text:()=>"DUMP",
      fn:()=>{ act("tankDump",id); },
      tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+SUC_LOW+"%."};
-  /* THE SAME SWITCH a system's bypass row is, so it goes through the same
-     armRow() - green ARMED against amber BYPASSED. Drawn as an ordinary key it
+  /* THE SAME SWITCH a system's bypass row is, so it is the same `arm` kind -
+     green ARMED against amber BYPASSED. Drawn as an ordinary key it
      inherited button()'s `on` amber, so a tank whose rule was still armed lit
      up in the colour every other arming switch on the plant uses for DEFEATED,
      and the one that had been bypassed sat dark. */
@@ -1199,7 +1192,7 @@ function partStateWord(p){
   const k=autoOn(p.id);
   return k && autoFit(k) && S.byp[k] ? "BYP" : null;
 }
-function ctlFor(p,live,split){
+function ctlBase(p,live,split){
   if(p.role==="tank") return tankCtl(p.id);
   /* ONE LOAD LEVER, on the FIRST turbine. There can be more than one now, and
      load demand is an order to the plant rather than to a machine - the same
@@ -1262,10 +1255,9 @@ function ctlFor(p,live,split){
   }
   /* ══ A FITTING'S OWN HANDLES, ON ITS OWN PLINTH ══
      They used to float in the pipe margin on a hand-rolled strip with its own
-     width and row count (FITSTRIP_W, fitStripRect()), because a fitting had
-     no box to bolt one to. It has one now, so this is an ordinary ctlFor()
-     row set and the boxless special case is gone with the three constants
-     that served it. A TEE gets nothing at all, and that is the point of a
+     width and row count, because a fitting had no box to bolt one to. It has
+     a panel of its own now, so this is an ordinary ctlFor() row set and the
+     boxless special case is gone with the constants that served it. A TEE gets nothing at all, and that is the point of a
      tee: a junction has no gate, so there is nothing to work. */
   if(p.role==="fitting"){
     const mode=fitModeOf(p.id);
@@ -1278,8 +1270,8 @@ function ctlFor(p,live,split){
     /* One row per handle, and they are NOT side by side: two switches this
        narrow lose their labels before they lose their state, and these two
        are not read at a glance the same way. BLOCK is a COMMAND and stays a
-       button; the arm is an arming switch and is drawn by armRow(), the one
-       that draws every other arming switch on the plant. */
+       button; the arm is an arming switch and wears the ARMED/BYPASSED state
+       every other arming switch on the plant wears. */
     return [
      /* OPEN / SHUT, the same two words every other valve on the plant wears -
         it said BLOCK / BLOCKED, which is an ACTION and a STATE in one control
@@ -1294,8 +1286,7 @@ function ctlFor(p,live,split){
      /* NO LABEL. The switch is mounted ON the valve, so naming the system
         again beside it read "PORV AUTO  AUTO" - the state word twice. Every
         other arming switch on the plant that has no room for a label already
-        draws the state alone (armRow(), below); this one just has no label to
-        drop. */
+        draws the state alone; this one just has no label to drop. */
      [{kind:"arm",flex:1,k:p.id+":porvByp",def:false,name:AUTOSYS.porv.name,label:()=>"",
        on:()=>!porvLive(p.id), fn:()=>{ act("porvByp",p.id); },
        title:()=>AUTOSYS.porv.name+"  [ "+(porvLive(p.id)?"ARMED":"BYPASSED")+" ]",
@@ -1387,153 +1378,32 @@ function ctlFor(p,live,split){
   return null;
 }
 
-/* HOW MUCH OF THE BOX THE CONTROLS TAKE. A machine declares enough cells to
-   hold its own row set (buildLayout(), layout.js), so this is a measurement of
-   the strip and never a reservation the grid has to stretch for - BANDS and
-   ctlBands() are gone with the rows they used to grow.
-   Still the WORST of the two rod modes, never the current one: ganging and
-   splitting must not resize the plant under the operator. */
-/* ══ THE STRIP COMPACTS TO THE BOX; NOTHING IS EVER HIDDEN ══
-   The 3x5 floor a machine used to carry existed because the strip had ONE
-   size: name row 14 + CTL_H 17 + STRIP_PAD 4 is 35 px against 32 in a
-   two-cell box, so drawSym() got a negative rectangle - the failure
-   layout.js's own comment names. So the STRIP gives way instead of the box
-   growing, down a ladder every rung of which already exists:
-
-     letter spacing -> font step   inside button() (core/ui.js)
-     key height     BTN_H -> BTN_H_MIN, an argument button() always took
-     name row       dropped, which a one-cell box already did
-
-   Nothing is hidden and nothing gates on hover: every rung only makes a
-   control SMALLER, never absent. Read by the draw AND by anything that asks
-   how much room the strip took, so the two cannot disagree about a box the
-   way stripH() and the draw's own nameH used to. */
-const SYM_MIN=8;                 // px drawSym() needs to draw anything at all
-function stripPlan(p,live){
-  const boxH=p.h*CELL, none={sh:0,keyH:BTN_H,nameH:boxH>CELL?14:0};
-  if(!fitted(p)) return none;
-  /* A FITTING IS THE ONE MACHINE TOO SMALL TO HOLD ITS OWN CONTROLS. It is one
-     cell - a third of everything else - by design, so its handles hang in the
-     margin BELOW the box instead of standing on it (see the component loop),
-     the same margin pipeFitMarks() already writes its reading into above. It
-     therefore reserves nothing INSIDE the box. */
-  if(p.role==="fitting") return none;
-  /* A TANK'S HANDLES ARE PUT AWAY UNTIL THE HAND IS ON IT (the component loop
-     draws them deferred, over the shell), so they reserve NOTHING - and its
-     name row is unconditional, because every label a tank carries stands on
-     its own shell rather than in the pipe margin above it. */
-  if(p.role==="tank") return {sh:0,keyH:BTN_H,nameH:14};
-  /* A ROW THAT WILL STACK COSTS ITS OWN KEYS IN HEIGHT. ctlStrip() decides to
-     stack off the width it is given, so this has to ask the same question of
-     the same width or the box reserves one row for something that draws
-     three. */
-  const inner=p.w*CELL-8;
-  const rows=m=>{ const c=ctlFor(p,live,m); if(!c) return 0;
-    let n=0; for(const row of c) n += ctlRowSpan(row,inner);
-    return n; };
-  const n=Math.max(rows(false),rows(true)) + (autoOn(p.id)?1:0);
-  if(!n) return none;
-  for(const keyH of [BTN_H, BTN_H_MIN])
-    for(const nameH of [none.nameH, 0]){
-      const sh=n*(keyH+CTL_STRIP_GAP)+STRIP_PAD;
-      if(boxH-sh-nameH >= SYM_MIN) return {sh,keyH,nameH};
-    }
-  // even the tightest rung overflows: take it anyway and let the box read as
-  // full of keys, which is honest - a machine with more controls than shell
-  return {sh:n*(BTN_H_MIN+CTL_STRIP_GAP)+STRIP_PAD, keyH:BTN_H_MIN, nameH:0};
+/* ══ AND THE ARMING SWITCH IS A CONTROL LIKE ANY OTHER ══
+   It used to be drawn by the component loop as a row of its own, one rung
+   below the strip - so with the strip gone it would have gone with it.
+   It is a row of ctlFor() instead, which is the one table, and it therefore
+   reaches the panel by the same door every other key does. An unfitted system
+   still gets its switch, drawn dead: there is nothing to arm, and saying so
+   is what the old `none` state on the box said. */
+function bypCell(k){
+  const A=AUTOSYS[k];
+  return {kind:"arm",flex:1,k:"byp:"+k,def:false,name:A.name,label:()=>A.label,
+    on:()=>autoFit(k)&&S.byp[k], inert:!autoFit(k),
+    fn:()=>{ act("byp",k); },
+    title:()=>A.name+"  [ "+autoState(k)+" ]",
+    tip:A.tip+(autoFit(k)?"":" None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")};
 }
-const stripH=(p,live)=>stripPlan(p,live).sh;
-/* HOW WIDE A FITTING'S OWN MARGIN STRIP IS. Wider than its one cell, because a
-   key needs a word on it and a cell is 16 px - but exactly as wide as ONE KEY
-   on an ordinary three-cell component strip, which is what a tank's SHUT/DUMP
-   pair beside it already draws at. Derived from that, never a second literal:
-   a flat 64 made a four-letter valve key three times the width of the
-   four-letter tank key next to it. */
-const FITSTRIP_W=(TANK_W0*CELL - 8 - 4)/2;
-
-/* ONE ARMING SWITCH, TWO HOSTS. A system's bypass row on a component plinth and
-   a relief valve's own arm on its strip are the SAME control - a label, a state
-   word, and the green/amber/dead palette that says whether something automatic
-   is still doing its job. Drawn twice they drift, and the valve's copy is the
-   one that ends up looking like a command button instead of an arming switch. */
-function armRow(x,y,w,h,o){
-  const wd=o.inert?{x,y,w,h}:push({x,y,w,h,type:"btn",fn:o.fn});
-  const hv=o.fit&&!o.inert&&hov(wd);
-  // the SAME fill a sunk key gets, or this reads as a black box cut into the
-  // strip instead of another key standing on it
-  fillRect(x,y,w,h, btnFill({sunk:1,on:o.lit},hv));
-  const col = (!o.fit||o.inert)?"#3c4c47" : o.lit?C.amber : C.green;
-  const st  = !o.fit?"none" : o.lit?"BYP" : "AUTO";
-  const t={size:6.5,sp:.3};
-  // a narrow host loses the LABEL before the state (its name is already printed
-  // beside it); centred, not stuck to the bottom edge
-  const bl=midBase(y,h,6.5);
-  // no label at all: the state word takes the whole switch, which is the same
-  // shape a host too narrow for both already falls through to
-  if(o.label && w >= tw(o.label,t)+tw(st,t)+10){
-    txt(o.label,x+3,bl,{size:6.5,sp:.3,color:o.fit?C.ink2:"#3c4c47"});
-    txt(st,x+w-3,bl,{size:6.5,sp:.3,align:"right",color:col});
-  } else txt(st,x+w/2,bl,{size:6.5,sp:.3,align:"center",color:col});
-  TIP(x,y,w,h,o.title,o.tip);
+function ctlFor(p,live,split){
+  const rows=ctlBase(p,live,split), k=autoOn(p.id);
+  if(!k) return rows;
+  return (rows||[]).concat([[bypCell(k)]]);
 }
-// `bench` draws the same switch against D.start instead of S - what this
-// system is ARMED OR BYPASSED as the moment the plant is commissioned.
-function bypRow(k,x,y,w,h,bench){
-  const A=AUTOSYS[k], fit=autoFit(k), sk="byp:"+k;
-  // no `if(fit)` guard: autoToggle() already refuses an unfitted system, so
-  // this stays a dead (`none`, no hover) switch rather than a second refusal
-  const lit = bench ? !!startOf(sk,false) : (fit&&S.byp[k]);
-  armRow(x,y,w,h,{label:A.label,fit,lit,
-    fn: bench ? ()=>{ D.start[sk]=!startOf(sk,false); } : ()=>{ act("byp",k); },
-    title:A.name+"  [ "+(bench?(lit?"BYPASSED":"ARMED"):autoState(k))+" ]",
-    tip:A.tip+(fit?"":" None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")});
-}
-
-/* A key narrower than this cannot hold even a stepped-down four-letter label,
-   so the row STACKS instead of squeezing - rung 3 of the ladder (stripPlan).
-   Measured against the shortest label the strip actually ships (SHUT), not
-   guessed. */
-const CTL_KEY_MIN=22, CTL_GAP=4;
-/* ══ TWO KEYS SIDE BY SIDE BECOME TWO STACKED KEYS ══
-   Rung 3, and the ONE predicate for it - stripPlan() must reserve the height
-   this decision costs, so both have to ask the same question of the same
-   width. Sliders never stack: a slider is a TRACK, and a short track is
-   unusable in a way a short label is not. */
-const ctlRowStacks=(list,w)=>list.length>1 && !list.some(c=>c.kind==="sld")
-  && (w-CTL_GAP*(list.length-1))/list.length < CTL_KEY_MIN;
-const ctlRowSpan=(list,w)=>ctlRowStacks(list,w) ? list.length : 1;
-function ctlStrip(list,x,y,w,h){
-  const gap=CTL_GAP, tot=list.reduce((a,c)=>a+c.flex,0);
-  const stack = ctlRowStacks(list,w);
-  const span=(w-gap*(list.length-1))/tot;
-  const rowH=stack ? (h-(list.length-1))/list.length : h;
-  let cx=x, cy=y;
-  for(const c of list){
-    const cw=stack ? w : span*c.flex;
-    ctlKey(c, cx, stack?cy:y, cw, stack?rowH:h);
-    if(stack) cy+=rowH+1; else cx+=cw+gap;
-  }
-}
-// ONE KEY, wherever the row decided to put it - so a stacked row and a
-// side-by-side one are the same three widgets and not two copies of them
-function ctlKey(c,x,y,w,h){
-  const dan = c.danger? c.danger() : false, on = c.on? c.on() : false;
-  if(c.kind==="sld"){ // LABEL: a control-strip WIDGET kind (slider vs button), unrelated to a pipe run's kind
-    slider(x,y+h/2,w,c.val(),c.min(),c.max(),
-      {th:h,tw:7,fmt:c.fmt,inert:c.inert,dem:c.dem?c.dem():null,mark:c.mark?c.mark():null,markLo:c.markLo,
-       marks:c.marks?c.marks():null,
-       fn:v=>c.set(c.step?Math.round(v/c.step)*c.step:v)});
-  } else if(c.kind==="arm"){   // LABEL: the same control-strip WIDGET kind, unrelated to a pipe run's kind
-    // armRow() states its own tooltip, so this row skips ctlStrip's below
-    armRow(x,y,w,h,{label:c.label(),fit:true,lit:on,inert:c.inert,fn:c.fn,title:c.title(),tip:c.tip});
-  } else {
-    // a narrow box loses its letter spacing before it loses its size, and its
-    // size before its label - button() walks the rest of that ladder itself
-    button(x,y,w,h,c.text(),{danger:dan,on:on,sunk:true,inert:c.inert,size:6.5,sp:w<30?0:.5,fn:c.fn});
-  }
-  if(c.kind!=="arm") TIP(x,y,w,h,c.tip.split(" - ")[0],c.tip);   // LABEL: widget kind again, not a run kind
-}
-
+/* THE NAME ROW, and it is all the box reserves now: every control stands in
+   the machine's own PANEL (ui/margin.js), so there is no strip to measure and
+   no ladder to compact one down. A tank's row is unconditional, because every
+   label a tank carries stands on its own shell rather than in the pipe margin
+   above it. */
+const nameRowH = p => (p.role==="tank" || p.h*CELL>CELL) ? 14 : 0;
 /* ══ THE GHOST PORT ══
    Hover a cell beside a machine and it shows where a port would land - a
    preview of addPortAt(), never a placement of its own. The hand names the
@@ -3208,33 +3078,19 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   roomCellTip(L);
 
   const tags=[];                // drawn last - see the push below
-  /* A FITTING'S HOVER STRIP IS DEFERRED WITH THEM, and for a harder reason
-     than a name is: it hangs outside its own box, in the pipe margin, so drawn
-     in place the next machine's panel, the joints, the layers and every value
-     tag painted over its keys. A key you cannot see is a key you cannot press.
-     Deferred, it is also pushed LAST, and the hit test takes the last widget -
-     so the strip wins the press it is standing on. */
-  const hovCtl=[];
   // own pass after the tags: the mark stands on the machine's own name row, so
   // it has to be painted after the name, the symbol and every tag on the box
   const wdots=[];
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
     const fit = fitted(p), live = L && fit;
-    /* ══ A CONTROL IS THE MACHINE, NOT A STRIP MOUNTED ON ONE ══
-       So it is DRAWN ON THE BENCH TOO, and what a bench control sets is the
-       STARTING POSITION - where that actuator stands the moment you enter the
-       control room (D.start, benchCell() above). The bench used only to
-       reserve the room and draw an empty plinth. */
-    // `fit &&`, or a NOT FITTED tag would draw a REPAIR key across itself -
-    // the renderer should not rely on combatHit() never targeting one
+    /* ══ A CONTROL IS ON THE MACHINE'S PANEL, NEVER ON THE DRAWING ══
+       Every key, slider and arming switch stands in the panel anchored beside
+       the box (ui/margin.js), which reads the same ctlFor() this loop used to
+       draw. So a machine reserves nothing but its NAME ROW, and the symbol -
+       the picture of the machine - gets the whole of the rest of the box. */
     const dmgd = live && partWrecked(L,p.id);
-    const ctl = fit ? (live ? (dmgd ? ctlDead(ctlFor(p,true,S.split)) : ctlFor(p,true,S.split))
-                            : ctlBench(ctlFor(p,false,false))) : null;
-    const byk = fit ? autoOn(p.id) : null,
-          plan= stripPlan(p,live), keyH = plan.keyH, pitch = keyH+CTL_STRIP_GAP,
-          bh  = byk? pitch : 0,
-          sh  = plan.sh, sy = y+h-sh;
+    const sh = 0;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
     const hovd = hov(wd)||drag;
@@ -3244,14 +3100,9 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
        so the word is not stacked into a label lying over the pipework, and the
        label itself can go away with the handles when the hand leaves. */
     const stw = live && p.role!=="fitting" ? partStateWord(p) : null;
-    /* ONE GROUND FOR EVERY BOX ON THE BOARD, and no second surface on top of
-       it: the plinth is gone, because there is no second OBJECT. A control
-       strip is part of the machine, so it stands on the machine's own panel. */
     // the top row inside the box, where the name lives. Deep enough to clear
     // the box's own border and leave air above the caps.
-    // WHAT THE STRIP LEFT (stripPlan): the name row is the ladder's last rung,
-    // so this is read off the same plan the keys are drawn from
-    const nameH = plan.nameH;
+    const nameH = nameRowH(p);
     // THE PANEL IS THE FOOTPRINT, to the pixel: a 2px inset left the grid line
     // showing inside the machine's own cells, so a box read one size and
     // occupied another.
@@ -3262,13 +3113,10 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     if(fit){ if(boxR){ boxPath(); ctx.fillStyle=C.panel; ctx.fill(); }
              else fillRect(x,y,w,h,C.panel); }
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
-    // stripPlan()'s last rung takes the room it needs even where there is
-    // none, so the symbol can be asked for a negative rectangle - it is
-    // simply not drawn then, rather than drawn inside out
     /* A TANK IS ITS BOX. Its shell is the one glyph whose SIZE is the design
-       figure (tankW()/tankH() off `vol`), so shrinking it by the name row and
-       the strip drew a vessel a cell smaller than the one the player bought.
-       It takes the whole footprint and the name and the keys stand ON it. */
+       figure (tankW()/tankH() off `vol`), so shrinking it by the name row drew
+       a vessel a cell smaller than the one the player bought. It takes the
+       whole footprint and the name stands ON it. */
     if(fit && (symFull || h-sh-nameH > 0))
       drawSym(p, x, symFull?y:y+nameH, w, symFull?h:h-sh-nameH, ink, L);
     if(dmgd) hatch(x+3,y+3,w-6,h-6,C.red,.4);
@@ -3382,49 +3230,6 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
         (p.access?"":"  [ NO ACCESS ]"),
       (L?opTipOf(p):p.tip)+(p.access?"":" It is boxed in on every side - nobody could reach it to repair it.")
         +(L?pipeThru(p,L):""));
-    /* A fitting's strip hangs BELOW its one cell, centred on it, because the
-       cell has no room for it; every other machine declares the cells its own
-       controls need and stands them inside its own box. */
-    /* ...AND IT IS PUT AWAY UNTIL THE HAND IS ON IT. A valve's handles hang in
-       the pipe margin, outside its own box, so on a dense grid a dozen of them
-       were a permanent thicket of keys standing over the pipework they belong
-       to. What the valve IS stood down as never depended on them: that is in
-       the name (stw, above), which is always drawn. Selection holds it open
-       too, so a valve worked from the rail keeps its strip. */
-    /* A TANK PUTS ITS HANDLES AWAY ON THE SAME TERMS, and for the same reason:
-       its shell IS its box, so a permanent strip stood on the one glyph whose
-       size is a design figure. They stand INSIDE the box (a tank's footprint is
-       its volume and may not be paid out to a margin) and are drawn deferred,
-       over the water, the hoops and the name. */
-    if(ctl && (p.role==="fitting"||p.role==="tank")){
-      const inBox = p.role==="tank";
-      const fw = inBox ? w-8 : FITSTRIP_W, fx = inBox ? x+4 : x+w/2-fw/2;
-      /* THE SAME LADDER EVERY OTHER STRIP WALKS. A fitting's handles hang in
-         the margin rather than inside its one cell, so nothing here is
-         squeezed by a BOX - but the strip is only FITSTRIP_W wide, which is
-         one key on an ordinary component, so a two-key row stacks here for
-         exactly the reason it stacks anywhere. Asked of ctlRowSpan(), the one
-         predicate, so the ground drawn under the keys is the height the keys
-         actually take. */
-      let sh2=3; for(const row of ctl) sh2 += ctlRowSpan(row,fw)*CTL_H;
-      const sy2 = inBox ? y+h-sh2-STRIP_PAD : y+h;
-      const sr={x:fx,y:sy2,w:fw,h:sh2,v:1,host:ui.host};
-      if(hovd||on||hovHold(sr)||sldIn(sr))
-        hovCtl.push(()=>{
-          // its own ground, or the pipework it hangs over reads through the keys
-          fillRect(fx,sy2,fw,sh2,C.panel);
-          let ry=sy2+3;
-          for(const row of ctl){ const sp=ctlRowSpan(row,fw);
-            ctlStrip(row,fx,ry,fw,sp*CTL_H-CTL_STRIP_GAP); ry+=sp*CTL_H; } });
-    }
-    // a STACKED row is as many rows tall as it has keys, and stripPlan()
-    // reserved exactly that - both ask ctlRowSpan() of the same width
-    else if(ctl){ let ry=sy+1;
-      for(const row of ctl){ const sp=ctlRowSpan(row,w-8);
-        ctlStrip(row,x+4,ry,w-8,sp*pitch-CTL_STRIP_GAP); ry+=sp*pitch; } }
-    // ...and the arming switch is a starting position too - that is the RPS
-    // bypass case: commission with protection already defeated if you mean to.
-    if(byk && fit) bypRow(byk,x+4,y+h-STRIP_PAD-bh+1,w-8,keyH,!live);
   }
   pipeNozzles(NET,L);           // the joint, over the shell it lands on
   /* ...and the valves in those joints, AFTER the component loop. A joint
@@ -3464,7 +3269,6 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
   for(const t of tags) t();     // every name and value, over the pipework
   for(const d of wdots) d();    // ...and every alarm mark over all of them
-  for(const c of hovCtl) c();   // ...and a valve's handles over the names too
   // ...and the hovered port's ring last of all: it marks a joint the pipework,
   // the tags and the layers all draw across (drawPortValves(), above)
   /* strokeRect and not frame(): frame() snaps to whole SCREEN pixels, which is
