@@ -81,8 +81,9 @@ const KIT = (function(){
   const BAND_VB_H = 15, BAND_CELLS = 40;
 
   /* THE one segment renderer. band(), seg(), segSigned() and slider() all draw
-     their cells here - real <rect>s that are lit or dimmed, never a solid fill
-     and never a second implementation of the same look.
+     their cells here - real <rect>s that are lit or dimmed, `solid` only butts
+     them because the gaps do not read at small pitch, and never a second
+     implementation of the same look.
 
      The viewBox is 0..100 wide and stretched to the caller's box, so cell width
      is proportional while a tick's stroke stays device-crisp (the ticks carry
@@ -96,11 +97,13 @@ const KIT = (function(){
     const svg = svgEl("svg", "kit-cells" + (opts.cls ? " " + opts.cls : ""));
     svg.setAttribute("viewBox", "0 0 100 " + vbH);
     svg.setAttribute("preserveAspectRatio", "none");
+    // butted cells still seam on a stretched viewBox - snapping the edges to the pixel grid is what closes them
+    if(opts.solid) svg.setAttribute("shape-rendering", "crispEdges");
     const step = 100 / n, cells = [];
     for(let i = 0; i < n; i++){
       const r = svgEl("rect", "kit-cell");
       r.setAttribute("x", i * step); r.setAttribute("y", y);
-      r.setAttribute("width", step * .8); r.setAttribute("height", h);
+      r.setAttribute("width", step * (opts.solid ? 1 : .8)); r.setAttribute("height", h);
       svg.appendChild(r); cells.push(r);
     }
     let lastKey = null;
@@ -211,7 +214,7 @@ const KIT = (function(){
     opts = opts || {};
     const cells = opts.cells || BAND_CELLS;
     const root = el("div", "kit-seg");
-    const strip = cellStrip({cells});
+    const strip = cellStrip({cells, solid: opts.solid});
     root.appendChild(strip.el);
     function set(frac, color){
       frac = Math.max(0, Math.min(1, frac));

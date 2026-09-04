@@ -11,11 +11,13 @@ function crVitalsData(){
         pLo=P.P0*0.86, pHi=P.P0*(1.06+0.07*m);
   const toward=(now,rest,lim)=> rest===lim ? 0 : (rest-now)/(rest-lim);
   return [
-   {lab:"REACTOR POWER",val:(s.n*100).toFixed(1),unit:"%",ch:"pwr",
+   // MEGAWATTS, like every other vital on this panel: the rating is a real
+   // quantity, so the share belongs in the sentence and not in the readout
+   {lab:"REACTOR POWER",val:(s.n*P.rated).toFixed(0),unit:"MWt",ch:"pwr",
     // coloured by POWER, not by margin - DNBR is the row directly below and
     // says it for itself; see the POWER row in readoutsFor()
-    u:s.n/nTrip, col:s.n>1.1?"var(--c-red)":"var(--c-green)",
-    tip:"Heat the core is making as a share of rated output. The bar fills toward the high-flux trip at "+(nTrip*100).toFixed(0)+"%; past that mark you are running on a bypassed protection system."},
+    u:s.n/nTrip, col:s.n>1.1?"var(--c-red)":s.n>1.05?"var(--c-amber)":"var(--c-green)",
+    tip:"Heat the chain reaction is making, out of the "+P.rated.toFixed(0)+" MWt this core is rated for - "+(s.n*100).toFixed(1)+"% of rating. The bar fills toward the high-flux trip at "+(nTrip*P.rated).toFixed(0)+" MWt; past that mark you are running on a bypassed protection system."},
    {lab:"DNBR",val:s.dnbr.toFixed(2),unit:"",ch:"dnbr",
     u:toward(s.dnbr,P.dnbr0,dTrip), col:s.dnbr<1?"var(--c-red)":s.dnbr<1.3?"var(--c-amber)":"var(--c-cyan)",
     tip:"Departure from Nucleate Boiling Ratio. The bar is the thermal margin you were commissioned with being spent: empty is the "+P.dnbr0.toFixed(2)+" you were built with, the mark is the trip at "+dTrip.toFixed(2)+"."},
@@ -24,14 +26,18 @@ function crVitalsData(){
     col:cssCol(pColor(s.P)),
     tip:"Primary loop pressure. The one vital where both directions are a trip - centred on "+P.P0.toFixed(2)+" MPa, marked at "+pLo.toFixed(2)+" low and "+pHi.toFixed(2)+" high."},
    {lab:"SUBCOOLING",val:sc.toFixed(1),unit:"K",ch:"sub",
-    u:toward(sc,P.sc0,3), col:sc<8?"var(--c-red)":"var(--c-cyan)",
+    // AMBER OFF THE PLANT'S OWN MARGIN. A fixed 20 K is water's whole
+    // commissioned subcooling (22 K on the stock plant), so it sat amber from
+    // tick one, and on a helium core it is a sliver 1400 K down the scale.
+    u:toward(sc,P.sc0,3),
+    col:sc<8?"var(--c-red)":sc<Math.max(10,P.sc0*.6)?"var(--c-amber)":"var(--c-cyan)",
     tip:"Degrees below boiling in the hot leg - the honest leak indicator. Commissioned "+P.sc0.toFixed(0)+" K subcooled, marked at the 3 K trip."},
    /* KILOGRAMS, because there ARE kilograms now: s.inv is a READ of
       invNodesKg() over the core piece's own nodes, so the vital states the
       quantity and keeps the share of the commissioned charge in the sentence
       under it. The bar stays proportional - a needle wants a span. */
    {lab:"INVENTORY",val:(invNodesKg(s)/1000).toFixed(1),unit:"t",ch:"inv",
-    u:(100-s.inv)/30, col:s.inv<95?"var(--c-red)":"var(--c-blue)",
+    u:(100-s.inv)/30, col:s.inv<95?"var(--c-red)":s.inv<98.5?"var(--c-amber)":"var(--c-blue)",
     tip:"How much water is actually in the loop, in tonnes. Commissioned with "+(P.invKg0/1000).toFixed(1)+" t, so this is "+s.inv.toFixed(1)+"% of the charge. Nothing trips on it, but under 95% the missing water starts taking heat removal with it."},
    {lab:"XENON",val:s.parts.xe.toFixed(0),unit:"pcm",ch:"xe",
     u:-s.parts.xe/3200, col:-s.parts.xe>3200?"var(--c-blue)":"var(--c-cyan)",
