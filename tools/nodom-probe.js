@@ -17,9 +17,9 @@
    than inspected: build the subset, commission a plant, run a real scenario,
    and require it to have recorded something.
 
-   It is a separate process on purpose. audit-geometry has stubbed document and
-   window on its own globals long before it gets here, and a test for their
-   absence has to actually be absent.
+   It is a separate process on purpose. Another tool in the same process may
+   have stubbed document and window on the globals long before it gets here,
+   and a test for their absence has to actually be absent.
 
    Usage:  node tools/nodom-probe.js        (prints the sample count, or throws) */
 const fs = require('fs'), path = require('path');

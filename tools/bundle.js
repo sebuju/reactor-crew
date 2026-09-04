@@ -1,5 +1,5 @@
 /* Single source of truth for "what code does the page actually run?".
-   Every auditor goes through this so none of them can drift from index.html. */
+   Every headless tool goes through this so none of them can drift from index.html. */
 const fs = require('fs'), path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 
@@ -9,8 +9,8 @@ function scriptPaths(){
 }
 
 /* every script concatenated in load order, exactly as the browser sees it.
-   Memoised: audit-geometry asks for the source and then for a headless plant,
-   which is nineteen files read twice to build one identical string. */
+   Memoised: a caller asking for the source and then for a headless plant is
+   nineteen files read twice to build one identical string. */
 let bundleSrc = null;
 function bundle(){
   if(bundleSrc === null)
@@ -20,7 +20,7 @@ function bundle(){
 
 /* Run the whole page headless.
 
-   The auditors that need to *execute* the plant (not just read its source) all need
+   A tool that needs to *execute* the plant (not just read its source) needs
    the same scaffolding: enough of a DOM and a 2d context for the render layer to
    construct without touching a screen, and the boot line replaced so the bundle
    initialises but never starts a frame loop we would then have to stop.
@@ -59,13 +59,13 @@ function headless(exportSrc, opts){
 }
 
 /* ══════════ PLACING A FITTING, THE WAY A PLAYER DOES ══════════
-   A fitting used to be a fraction along a pipe key, so an auditor could
+   A fitting used to be a fraction along a pipe key, so a caller could
    place one in a single addFit(mode, aKey, aT, bKey, bT) call. It is a
    COMPONENT in a grid CELL now, and placing one is three gestures: put the
    box down, place a port beside each machine, drag the pipe. That is more
    honest and it is also several lines at ~40 call sites, which is exactly the
    kind of duplication that drifts - so both shapes are written ONCE, here,
-   beside headless(), which is the only module every auditor already loads.
+   beside headless(), which is the only module every headless tool already loads.
 
    These build nothing the bench cannot: addFitting(), addPortAt() and
    pipeLay() are the same calls the context menu and the pipe drag make, and

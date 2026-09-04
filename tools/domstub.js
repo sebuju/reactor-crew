@@ -6,12 +6,11 @@
 
        if(typeof document!=="undefined" && document.documentElement) CR=crBuild();
 
-   So under the three auditors CR and DB are null, `crSync()`/`dbSync()` return
-   on their first line, and NOT ONE LINE of the HTML rail layer has ever been
-   executed by a check. That is most of the UI. Two crashes were sitting in it
-   at the time this was written - a widget reading a constant that had been
-   deleted, and a readout reading a field of P that does not exist - and both
-   were invisible to a full green run of all three auditors.
+   So under that document CR and DB are null, `crSync()`/`dbSync()` return
+   on their first line, and NOT ONE LINE of the HTML rail layer runs. That is
+   most of the UI. Two crashes were sitting in it at the time this was written -
+   a widget reading a constant that had been deleted, and a readout reading a
+   field of P that does not exist - and neither was reachable headless.
 
    ── WHAT IT IS NOT ──
    Not a browser. There is no CSS, no layout, no reflow, so it cannot answer
@@ -46,9 +45,7 @@ function install(opts){
     let tx=0, ty=0, sx=1, sy=1, rot=0; const stack=[];
     const size = () => parseFloat(st.font.match(/([\d.]+)px/)[1]);
     const sp   = () => parseFloat(st.letterSpacing) || 0;
-    /* 0.60 em per glyph is the same approximation audit-text.js uses. It is a
-       measurement of the mono stack, not a guess, and being shared means a
-       width judged here and a width judged there cannot disagree. */
+    /* 0.60 em per glyph is a measurement of the mono stack, not a guess. */
     const wOf  = t => String(t).length * (0.60*size() + sp());
     const rec  = o => { o.host = owner; draws.push(o); };
     return new Proxy(st, {
@@ -167,8 +164,7 @@ function install(opts){
   }
 
   /* Every id index.html carries that the source looks up. Missing one does not
-     fail loudly - it hands back null and the screen quietly half-builds - so
-     the list is asserted against the real index.html by audit-dom.js. */
+     fail loudly - it hands back null and the screen quietly half-builds. */
   const IDS = ['cv','stage','topbar','tip','ctxmenu','clock','clock-dot','plant-line',
                'help-doc','scr-operate','scr-design','scr-scenario'];
   const mounts = {};
@@ -201,7 +197,7 @@ function install(opts){
   global.addEventListener = () => {};
   global.removeEventListener = () => {};
   /* transport.js starts a 100 ms sync on load. Under a stub it would either
-     never fire or fire forever and hold the process open; the auditor drives
+     never fire or fire forever and hold the process open; the caller drives
      trSync() by hand instead, which is also the only way to say WHEN. */
   global.setInterval = () => 0;
   global.clearInterval = () => {};

@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /* The design sweep, spread across every core.
 
-   audit-physics.js asks one question of every plant the bench will let you
-   build: left alone, with automatic rod control fitted, does it trip itself?
-   That sweep is ~93% of everything the auditor does, and it was running on one
-   core out of twelve.
+   It asks one question of every plant the bench will let you build: left
+   alone, with automatic rod control fitted, does it trip itself? That is tens
+   of thousands of ticks per case, and it was running on one core out of twelve.
 
    Every case is independent - set() rewrites D wholesale from BASE and
    commission() rebuilds P and S from scratch, so nothing carries over - which
@@ -15,13 +14,11 @@
 
    This file is both halves. Run as the main thread it shards the work, waits,
    and writes the results to stdout as JSON; run as a worker it simulates its
-   own shard. audit-physics.js invokes it with execFileSync, so from the
-   auditor's point of view the sweep is still one blocking call in the middle
-   of a linear script, and the report still prints in case order however the
-   threads happened to finish.
+   own shard. The report prints in case order however the threads happened to
+   finish.
 
-   It reports raw data only. Every FAIL message is worded by audit-physics.js,
-   which is the file that owns what the sweep means. */
+   It reports raw data only and carries no assertions: a human reads what came
+   out and decides what it means. */
 "use strict";
 const { Worker, isMainThread, workerData, parentPort } = require("worker_threads");
 
@@ -36,8 +33,7 @@ if(!isMainThread){
     "{commission,step,derived,S:()=>S,D:()=>D,archPreset,latDefault,buildLayout,buildStockPlumbing}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
 
-  /* the same two helpers audit-physics.js uses, for the same reasons.
-     THE GRID STARTS BLANK, so a case has to be BUILT before it can be
+  /* THE GRID STARTS BLANK, so a case has to be BUILT before it can be
      commissioned: the stock ship's own plumbing, then the architecture as a
      PRESET (archPreset lays the lattice - there is no D.arch to type any
      more), then whatever the case overrides. */
@@ -68,8 +64,8 @@ if(!isMainThread){
      the bench; only the 30,000 ticks behind it are shared.
 
      `guard` is what keeps that from being a comment nobody rechecks: on one
-     group it simulates all three anyway and hands back the end states, so
-     audit-physics.js can assert they still match instead of trusting this. */
+     group it simulates all three anyway and hands back the end states, so a
+     reader can see whether they still match instead of trusting this. */
   const group = c => {
     const s = set({arch:c.a, fuel:c.f, scram:c.built[0], autorod:true});
     run(s, SECS);

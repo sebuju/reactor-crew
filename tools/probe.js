@@ -4,9 +4,8 @@
 
    There are no assertions here and there never will be. A committed suite of
    configurations would become a specification - two dozen things that must
-   stay true forever - and the model has to keep moving. The auditors keep
-   doing what they already do; this answers the questions they were never
-   written to ask, and a human reads the answer.
+   stay true forever - and the model has to keep moving. It prints, a human
+   reads the answer, and the case is thrown away.
 
    Usage:  node tools/probe.js [caseName ...]
            node tools/probe.js --list
