@@ -178,13 +178,13 @@ function statRowsBuild(container,stats){
   for(const st of stats){
     const el=KIT.el("div","insp-stat");
     const lab=KIT.el("span","insp-stat-lab"); lab.textContent=st[0];
-    const bar=KIT.seg({cells:20});
+    const bar=KIT.seg({cells:20, solid:true});
     const val=KIT.el("span","insp-stat-val"); val.textContent=st[1];
     el.append(lab,bar.el,val);
     bar.set(st[2],cssCol(st[3]));
     if(st[4]) KIT.tip(el,st[0],st[4]);
     container.appendChild(el);
-    out.push({val,bar});
+    out.push({val,bar,el});
   }
   return out;
 }
@@ -193,6 +193,8 @@ function statRowsSync(container,stats){
   if(sig!==container._sig){ container.innerHTML=""; container._h=statRowsBuild(container,stats); container._sig=sig; }
   stats.forEach((st,i)=>{ const H=container._h[i]; if(!H) return;
     if(H.val.textContent!==st[1]) H.val.textContent=st[1];
+    // the DRIVEN BY block carries live figures, so the tip is a sync and not a build
+    if(st[4]) KIT.tip(H.el,st[0],st[4]);
     H.bar.set(st[2],cssCol(st[3])); });
 }
 
@@ -213,7 +215,7 @@ function paramsFor(p){
   const tog=(title,tip,key,mass)=>B.push({kind:"toggle",title,tip,key,mass});
   const note=(text,color)=>B.push({kind:"note",text,color});
 
-  if(!p.access && p.grp!=="shield")
+  if(!p.access)
     note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, so it is lost for good the moment it is damaged.","var(--c-red)");
 
   /* ONE PANEL FOR THE REACTOR AND ITS DRIVES. They were two, and each carried
@@ -418,11 +420,6 @@ function paramsFor(p){
       tip:"How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error."});
     note("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure in RESULTS.");
   }
-  else if(p.role==="cont"){
-    opt("CONTAINMENT","What holds the radioactivity in when fuel fails. Sets how much of a release reaches your crew.","cont",CONT);
-    tog("CORE CATCHER","A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained.","catcher",PART_MASS.catcher);
-    note("Containment does nothing for the reactor and everything for the people around it. It is pure insurance, and it is heavy. Right-click the plant to fit or remove it without opening this list.");
-  }
   /* ══ ONE PANEL, EVERY TANK ══
      There is no menu of kinds anywhere in this game, and this is why: an
      accumulator, a boron tank, a relief tank and a hotwell are these eight
@@ -509,7 +506,7 @@ function paramsFor(p){
   else {
     note(p.tip);
     B.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS"});
-    B.plain = p.access || p.grp==="shield";
+    B.plain = p.access;
   }
   return B;
 }
@@ -635,12 +632,143 @@ function paramsForFit(fid){
    line stays, because 0 t is the honest answer and the budget is still there
    to be spent against. */
 function benchResultsData(){
-  const d=derived(), core=!!roleOf("core");
+  const d=derived(), core=!!roleOf("core"), M=PLANT_LM||layoutMetrics();
+  const stats=(core?planStats(d).concat(layoutStats(M)):[]).concat(containStats());
   return {mass:d.mass,over:d.over,eq:(d.mass-layMass),ship:layMass,
     dens:core?d.dens:0, excess:core?d.excess:0,
-    stats:core?planStats(d).concat(layoutStats(PLANT_LM||layoutMetrics())):[]};
+    // the row's tip and what DRIVES it are one string by the time a row is drawn
+    stats:stats.map(r=>[r[0],r[1],r[2],r[3],(r[4]||"")+statDrv(r[0],d,M)])};
+}
+/* ══ AND THE REGION A PLANT HAS APPEARS IN THE REVIEW ══
+   Not gated on a reactor, unlike every row above: a containment is a fact
+   about the drawing and it is a real answer on a ship with no vessel in it.
+   Nothing here is gated on a count either - two enclosures is a legal plant. */
+function containStats(){
+  const gs=matRegionsBounded();
+  if(!matCells().length) return [];
+  if(!gs.length) return [["CONTAINMENT","OPEN",0,C.red,
+    "Nothing painted on this ship encloses anything: every fill reaches the hull. The structure is shielding and there is no containment."]];
+  let lo=Infinity, at=null;
+  for(const g of gs) for(const i of g.wall){ const x=i%GW, y=(i/GW)|0, r=matRating(x,y);
+    if(r<lo){ lo=r; at=[x,y]; } }
+  const vol=gs.reduce((a,g)=>a+matRegVol(g),0);
+  return [
+    ["CONTAINMENT",gs.length===1?"SEALED":gs.length+" REGIONS SEALED",1,C.green,
+     "The fill came back bounded. A closed shape painted in a gas-tight material holds its gas, its heat and most of a release - and it stops doing all three the instant one cell of it is opened."],
+    ["CONTAINED VOLUME",vol.toFixed(0)+" m3",clamp(vol/4000,0,1),C.cyan,
+     "How much compartment is walled in. A bigger volume is slower to pressurise and much more expensive to wall, because a longer flat span needs a thicker wall to hold the same pressure."],
+    ["WEAKEST WALL",lo.toFixed(2)+" MPa"+(at?"  at "+at[0]+","+at[1]:""),clamp(lo/MAT_PDES,0,1),
+     lo<MAT_PDES?C.amber:C.green,
+     "What the poorest cell of the boundary will take, and where it is. It is the middle of the longest flat side, which is where a real flat-walled pressure boundary fails - draw the enclosure rounder and this figure rises with nothing else changing."]];
 }
 function benchReviewData(){
   const d=derived(), LM=PLANT_LM||layoutMetrics();
   return {issues:designIssues(d,LM),hard:designBlocked(d,LM)};
+}
+
+/* ══ A PAINTED CELL IS SELECTABLE, AND SO IS WHAT IT ENCLOSES ══
+   A cell is not a part, so it is addressed by its CELL KEY - "mat:x,y", which
+   carries a colon and a comma and so can collide with neither a part id nor a
+   run key. The panel states the CELL's own figures and its REGION's, because
+   standing on a wall is how you ask about the thing it encloses; the selection
+   is never a region index, which is derived and renumbers the moment the paint
+   changes. */
+const isMatKey = k => typeof k==="string" && k.indexOf("mat:")===0
+                   && !!matCell(+k.slice(4,k.indexOf(",")), +k.slice(k.indexOf(",")+1));
+const matKeyXY = k => { const i=k.indexOf(","); return [+k.slice(4,i), +k.slice(i+1)]; };
+function paramsForMat(key){
+  const B=[], [x,y]=matKeyXY(key);
+  if(!matCell(x,y)) return B;
+  const s = (typeof S!=="undefined") ? S : null, live = !!(s && s.roomP);
+  B.push({kind:"optlist",title:"MATERIAL",base:0,
+    /* IT ALSO LOADS THE BRUSH. Picking a material here is the only place one
+       is picked at all, so the next stroke lays what the player just chose -
+       otherwise every cell would have to be painted and then converted. */
+    key:{get:()=>MAT.findIndex(m=>m.id===matCell(x,y).m),
+         set:i=>{ matCell(x,y).m=MAT[i].id; matPen=MAT[i].id; buildLayout(); }},
+    tip:"What this cell is made of. Only a GAS-TIGHT material makes a closed shape a containment; the other two are shielding and nothing else.",
+    items:MAT.map(m=>({name:m.name, tip:m.tip}))});
+  /* APPLIED TO THE WHOLE REGION, not to the one cell: a wall with one thick
+     cell in it is not a thicker wall. The suggestion is Barlow at this cell's
+     own local span, which is what makes a long flat side ask for more steel
+     than a corner does. */
+  B.push({kind:"num",title:"THICKNESS",unit:"mm",dp:0,
+    tip:"How thick the wall is. It is what the cell is RATED for and it is what the cell weighs. SUGGEST is Barlow against the FLAT SPAN this cell is in the middle of - so a long straight wall asks for a thick one and a corner asks for almost nothing.",
+    key:{get:()=>matThick(x,y), set:v=>{ const g=matRegionAt(x,y);
+      if(g) for(const i of g.wall) (D.mat[(i%GW)+","+((i/GW)|0)]||{}).t=v;
+      else matCell(x,y).t=v;
+      buildLayout(); }},
+    suggest:()=>matThickSuggest(x,y),
+    massFn:v=>v/1000*MPC*ROOM_DEPTH*matRow(matCell(x,y).m).rho/1000});
+  B.push({kind:"readlist",rows:()=>{
+    const g=matRegionAt(x,y);
+    const rate=matRating(x,y), burst=matBurstP(x,y);
+    const rows=[
+      ["SPAN",(matSpan(x,y)*MPC).toFixed(1)+" m   arm "+(matSpanEff(x,y)*MPC).toFixed(1)+" m",null,
+       "The flat length of wall this cell lies in, and the ARM it actually stresses on - twice the distance to the nearer turn, because a turn is a support. Stress is p*R/t, so the arm IS the radius: a cell beside a corner has almost none, a cell at mid-span has the whole half-length, and a round enclosure turns everywhere and has no weak cell at all."],
+      ["RATED FOR",rate.toFixed(2)+" MPa",null,
+       "What this cell will take, off the published hoop-stress relation against its own span."],
+      ["BURSTS AT",burst.toFixed(2)+" MPa",null,
+       "Where it actually lets go. A rating has its margin inside it, so a wall held past the rating is not open yet."],
+      ["MASS",matCellMass(x,y).toFixed(2)+" t",null,"What this cell weighs: its thickness of its own material over one cell of hull."]];
+    if(!g){ rows.push(["ENCLOSES","NOTHING",C.ink2,
+      "This cell is not part of any closed shape. Every fill beside it reaches the hull, so it is shielding and never a containment."]);
+      return rows; }
+    /* THE WEAKEST CELL IS THE SINGLE MOST USEFUL LINE ON THIS PANEL: it names
+       the cell that will go, before it goes. */
+    let lo=Infinity, at=null;
+    for(const i of g.wall){ const X=i%GW, Y=(i/GW)|0, r=matRating(X,Y);
+      if(r<lo){ lo=r; at=[X,Y]; } }
+    const pr = live ? regionDP(s, g) : null;
+    const open = g.wall.filter(i=>s && matOpen(s, i%GW, (i/GW)|0)).length;
+    rows.push(
+      ["ENCLOSES",g.cells.length+" cells   "+matRegVol(g).toFixed(0)+" m3",null,
+       "How big the enclosed volume is. A big region is slow to pressurise and expensive to wall, because a longer span needs a thicker wall."],
+      ["WALL",g.wall.length+" cells   "+matRegPerim(g).toFixed(0)+" m",null,"How much wall there is round it."],
+      ["EQUIVALENT DIAMETER",matRegEqD(g).toFixed(1)+" m",null,"A circle of the same plan area. It is the figure the thickness suggestion is taken against."],
+      ["STATE",open?"OPEN AT "+open+" CELL"+(open>1?"S":""):"SEALED",open?C.red:C.green,
+       "Whether the boundary is still closed. A wrecked cell does not delete the compartment - it puts an ORIFICE in it, and the compartment then blows down through that hole at a rate set by how many cells are open and how much pressure is behind them. The seal drawn round the region on the plant goes the instant the first one opens."],
+      ["WEAKEST",at?at[0]+","+at[1]+"   "+lo.toFixed(2)+" MPa":"-",null,
+       "The cell of this wall with the least rating - the middle of its longest flat side. This is the cell that will go first, named before it goes."]);
+    if(pr!==null){
+      rows.push(["PRESSURE",pr.toFixed(3)+" MPa",pr>lo?C.red:null,
+        "What the region is holding ABOVE the ship outside it, off its own gas law: a closed volume at a temperature is at a pressure. A wall is judged on the difference across it, never on the absolute. An open region has none, because an open region is the ship."],
+      ["MARGIN",(lo*PIPE_BURST_K-pr).toFixed(3)+" MPa",(lo*PIPE_BURST_K-pr)<0?C.red:null,
+        "How far the region is from opening at its weakest cell. A real difference, not a ratio."]);
+      let Tm=0, h2=0, o2=1;
+      for(const i of g.cells){ Tm+=s.roomT[i];
+        h2=Math.max(h2, roomH2Frac(s,i)); o2=Math.min(o2, roomO2Frac(s,i)); }
+      Tm/=g.cells.length;
+      const burning=g.cells.some(i=>s.roomFlame[i]>0);
+      rows.push(["AIR TEMP",Tm.toFixed(0)+" K",null,"The mean air temperature over the region. It is what the pressure above follows from."],
+        ["HYDROGEN",(h2*100).toFixed(1)+" %",h2>=H2_LFL?C.red:null,
+         "The worst cell in the region. A sealed region cannot vent it, so a charge collects here and nowhere else - which is exactly why containments blow their own walls out."],
+        ["OXYGEN",(o2*100).toFixed(1)+" %"+(o2<O2_LOC?"  SMOTHERED":""),o2<O2_LOC?C.blue:null,
+         "What is left to burn with. A tight region cannot draw fresh air, so a fire in one eats its own and goes out with the hydrogen unburnt - until the wall opens."],
+        ["ATMOSPHERE",burning?"BURNING":(h2>=H2_LFL&&o2>=O2_LOC?"FLAMMABLE":"INERT"),
+         burning?C.red:(h2>=H2_LFL?C.amber:C.green),"One word for the three readings above."],
+        ["HELD BACK",((1-contRelAt(s,x,y))*100).toFixed(0)+" %",null,
+         "How much of a release leaving inside this region stays inside it. It is the weakest material on this wall, not a menu row - and it is zero the moment the wall opens."]);
+    }
+    /* WHAT IS STANDING ON ITS FLOOR, and what that has reached. A break inside
+       a containment does not vanish out of the book - it lands, it is a real
+       depth and it drowns what it touches - so both are read off the same
+       regionFlooded() the FLOODING layer draws from. */
+    if(live){ const f=regionFlooded(s,g);
+      if(f){ const line=f.bot+1-f.rows;
+        const wet=LAY.parts.filter(q=>matRegionOf(q)===g && q.y+q.h>line).map(q=>partName(q));
+        rows.push(["FLOODED TO",f.d.toFixed(1)+" m   "+(regionSump(s,g)/1000).toFixed(1)+" t",
+          f.d>0?C.blue:null,
+          "How deep the water discharged into this region is standing. It fills from the bottom cell up and it cannot pass the deckhead - what will not fit never enters the compartment's book at all."],
+          ["HOLDS",wet.length?wet.join(", "):"nothing yet",wet.length?C.red:null,
+           "What the water line has reached. A machine under it is drowned, and it takes the same red hatch every wrecked machine takes."]); } }
+    const inside=LAY.parts.filter(q=>matRegionOf(q)===g).map(q=>partName(q));
+    rows.push(["CONTAINS",inside.length?inside.join(", "):"nothing",null,
+      "The machines standing inside this region. They are what its pressure will crush and what its wall is holding the release of."],
+      /* THE WHOLE BOUNDARY'S MASS, beside the one cell's above: a wall is
+         bought by the ring and not by the cell the hand happens to be on. */
+      ["WALL MASS",g.wall.reduce((a,i)=>a+matCellMass(i%GW,(i/GW)|0),0).toFixed(1)+" t",null,
+       "What this whole boundary weighs, summed off the paint at its own thickness. A bigger enclosure has a longer flat span, a longer span needs a thicker wall, and this is where that is paid."]);
+    return rows; }});
+  return B;
 }
