@@ -899,7 +899,7 @@ const secP = (s, id) => {
      relax to. Read here rather than at each caller, because every one of them
      (the feed pumps' back pressure, the SGTR differential, the panel) is
      asking the same question. */
-  if(id!==undefined && sgOpen(s,id)) return P.Pcont;
+  if(id!==undefined && sgOpen(s,id)) return regionPAt(s, partOf(id));
   /* A CALLER WITH NO SHELL still gets an answer, and secPTarget() is what it
      is: the bench, layoutMetrics(), the tick-zero seed. It is the estimate a
      plant that has never run has of its own shell, and nothing with a live
@@ -1134,7 +1134,7 @@ function tankP(s,id){
   const gas = t.gas || (t.hold
     ? {p0: holdSetP(ci), frac: Math.max(0.01, (100-clamp(t.level,0,100))/100)} : null);
   // a bubble squeezed to nothing is a divide by zero, and a gauge cannot print one
-  return Math.max(P.Pcont, !gas ? 0
+  return Math.max(regionPAt(s, partOf(id)), !gas ? 0
     : gas.p0*gas.frac/Math.max(0.01, gas.frac + (t.level - clamp(tankLvl(s,id),0,100))/100));
 }
 /* ══ AND A GAS CHARGE IS A COMPLIANCE, NOT A FIXED PRESSURE ══
@@ -1155,7 +1155,7 @@ const tankStores = id => { const t = D.tanks[id];
   return !!t && !t.hold && !t.inf && !!t.gas; };
 const tankCapAt = (s,id) => { const t = D.tanks[id];
   if(!tankStores(id)) return 0;
-  const p = Math.max(tankP(s,id), P.Pcont);
+  const p = Math.max(tankP(s,id), regionPAt(s, partOf(id)));
   return tankKg(id)*t.gas.p0*t.gas.frac/(p*p); };
 /* ══ WHAT THIS VESSEL'S OWN SHELL IS BUILT FOR, MPa ══
    The highest pressure the tank can see: what it holds itself, and what the
@@ -1538,7 +1538,7 @@ function reliefNodeOf(net, fid){
 function reliefFullRate(s, fid){
   if(!((P && P.fittings && P.fittings[fid]) || D.fittings[fid])) return 0;
   const bore = fitBoreK(fid);
-  return Math.max(0, invRate(flowW(holeC(bore), P.rho0, P.P0, P.Pcont)));
+  return Math.max(0, invRate(flowW(holeC(bore), P.rho0, P.P0, regionPAt(s, partOf(fid)))));
 }
 
 // pipeNetwork() keys a routed run "kind:aIdSide-bIdSide" (see layout.js's
@@ -1833,6 +1833,11 @@ function netEdges(){
      terminate on. Collected here and applied in the elevation pass below,
      which is where every other node's z is settled. */
   const contZ = {};
+  /* AND ITS CELL, for the same reason and in the same place: a break at a pipe
+     cell lets go INTO whatever region that cell is in, and a break outside the
+     wall lets go into the ship. Without this every opening on the plant
+     discharged to one constant. */
+  const contCell = {};
 
   /* WHICH FITTINGS ARE ON THE PLANT, AND WHAT EACH ONE IS. A fitting is a
      PART, so this is a read of the drawing - it replaces ~150 lines that had
@@ -2095,7 +2100,10 @@ function netEdges(){
      A face GROUP, not a face: t folds onto l and b onto r, so a valve plumbed
      vertically is the same valve. The stub itself is an ordinary component
      length - the choke is the valve's own gate, in series with it. */
-  const reliefContNode = fid => { const i = contNode("relief:"+fid); breakIds.push(i); return i; };
+  const reliefContNode = fid => { const i = contNode("relief:"+fid); breakIds.push(i);
+    // it lets go where the VALVE stands, so it lets go into that valve's own region
+    const q = byId[fid]; if(q) contCell[i] = [q.x+((q.w/2)|0), q.y+((q.h/2)|0)];
+    return i; };
   const faceUse = (fid, faces) => faces.reduce((n,f) => n + ((net.usage && net.usage[fid+f]) || 0), 0);
   /* WHERE the open side points, asked in the same loop that decides WHICH side
      is open so the two cannot disagree. A valve whose open face is against the
@@ -2183,6 +2191,7 @@ function netEdges(){
       const v = contNode("pipe:"+x+","+y);
       breakIds.push(v);
       contZ[v] = zRow(y);                  // the hole's own elevation, not a machine's
+      contCell[v] = [x,y];
       for(const [u,pid,tid] of endsOf(r))
         edges.push({u, v, C: s => (cellBroken(s,x,y) && endLive(s,pid)) ? hC : 0,
                     h: 0, kind: "break", sec, steam, key: "break:"+r.key});
@@ -2196,6 +2205,7 @@ function netEdges(){
       const v = contNode("port:"+pid);
       breakIds.push(v);
       contZ[v] = zRow(c[1]);
+      contCell[v] = c;
       for(const [u,end,tid] of endsOf(r))
         edges.push({u, v, C: s => (portWrecked(s,pid) && (end === pid || endLive(s,end))
                                   ) ? hC : 0,
@@ -2255,8 +2265,9 @@ function netEdges(){
   /* the vessel's own opening. s.breach stays exactly the latched flag the
      board, the scenarios and tripCause() all read - what goes is the fixed
      2.4 %/s drain that ran at one rate forever whatever the operator did. */
-  { const v = contNode("core");
+  { const v = contNode("core"); const q0 = byId[roleId("core")];
     breakIds.push(v);
+    if(q0) contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
     edges.push({u: coreNode, v, C: s => s.breach ? holeC(BREACH_BORE) : 0,
                 h: 0, kind: "break", key: "break:core"}); }
   /* ══ A DESTROYED VESSEL EMPTIES ITSELF ══
@@ -2272,6 +2283,7 @@ function netEdges(){
     if(q){ const v = contNode("core:floor");
       breakIds.push(v);
       contZ[v] = zFace(q, "b");
+      contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
       edges.push({u: coreNode, v, C: s => partWrecked(s, q.id) ? holeC(BREACH_BORE) : 0,
                   h: 0, kind: "break", key: "break:core"}); } }
 
@@ -2290,6 +2302,7 @@ function netEdges(){
     const v = contNode("tank:"+id+":floor");
     breakIds.push(v);
     contZ[v] = zFace(q, "b");
+    contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
     edges.push({u: nodeIdx(id), v, C: s => partWrecked(s, id) ? holeC(BREACH_BORE) : 0,
                 h: 0, kind: "break", key: "break:"+id});
   }
@@ -2297,7 +2310,7 @@ function netEdges(){
   /* tankIdOf spans all three passes and is DERIVED off the drawing, so it is
      handed down rather than written a second time. */
   return {runs: net, byKey, byId, partOfNode, tankIdOf, nodes, index, coreNode, edges, F,
-          breakIds, steamBreaks, contZ, fitIds, fitMode, openSide, fitVentOut,
+          breakIds, steamBreaks, contZ, contCell, fitIds, fitMode, openSide, fitVentOut,
           sgtrIds, sgtrParts, secTIds, secTParts};
 }
 
@@ -2309,7 +2322,7 @@ function netMaps(ctx){
   const net = ctx.runs, byKey = ctx.byKey, byId = ctx.byId,
         partOfNode = ctx.partOfNode, tankIdOf = ctx.tankIdOf,
         nodes = ctx.nodes, index = ctx.index, coreNode = ctx.coreNode,
-        edges = ctx.edges, contZ = ctx.contZ, breakIds = ctx.breakIds,
+        edges = ctx.edges, contZ = ctx.contZ, contCell = ctx.contCell, breakIds = ctx.breakIds,
         steamBreaks = ctx.steamBreaks, fitIds = ctx.fitIds, fitMode = ctx.fitMode,
         openSide = ctx.openSide, fitVentOut = ctx.fitVentOut,
         sgtrIds = ctx.sgtrIds, sgtrParts = ctx.sgtrParts,
@@ -2359,7 +2372,7 @@ function netMaps(ctx){
   }
 
   const net2 = {nodes, index, edges, core: coreNode, n: nodes.length, byKey, fitIds, fitMode, F: ctx.F,
-                cont: breakIds, sec: sgtrIds, secT: secTIds, sgtrParts, secTParts, fitTarget, fitVentOut,
+                cont: breakIds, contCell, sec: sgtrIds, secT: secTIds, sgtrParts, secTParts, fitTarget, fitVentOut,
                 steamBreaks,
                 /* the surge run's own key, resolved once here rather than
                    re-found by a string scan every tick - step()'s level
@@ -2903,6 +2916,20 @@ function netRef(net, s){
   const anchor = new Int32Array(piece.n).fill(-1);
   return {p0, anchor, of: piece.of, nPiece: piece.n};
 }
+/* ══ WHERE A NODE STANDS, AND SO WHAT IT LETS GO TO ══
+   P.Pcont was one unconditional constant for the whole ship, so a break inside
+   a containment and the same break outside it were the same accident. It is
+   the ship's own compartment pressure now and nothing more; regionP()
+   (paint.js) is what a place is actually held at. A containment node already
+   knew its cell (net.contCell) and every other node stands in a machine. */
+const netCellOf = (net, i) => {
+  const c = net.contCell && net.contCell[i];
+  if(c) return c;
+  const p = net.partOfNode && net.partOfNode(net.name[i]);
+  return p ? [p.x+((p.w/2)|0), p.y+((p.h/2)|0)] : null;
+};
+const netPcont = (net, s, i) => { const c = netCellOf(net, i);
+  return c ? regionP(s, c[0], c[1]) : P.Pcont; };
 function netFixed(net, s){
   const ref = netRef(net, s);
   const f = {};
@@ -2922,7 +2949,7 @@ function netFixed(net, s){
      a break still busts that cache, which is the thing that matters: a fresh
      break solved against the intact plant's factors is a wrong answer, not a
      crash. */
-  for(const i of net.cont) f[i] = P.Pcont;
+  for(const i of net.cont) f[i] = netPcont(net, s, i);
   /* ══ AND WHILE THE STORE IS HELD, THE VESSEL IS THE REFERENCE ══
      The commissioning settle is not a time march, so every store stands down
      (netHoldStore) - and a pressurizer IS its own store now, so with nothing
@@ -2963,7 +2990,7 @@ function netFixed(net, s){
   net.sec.forEach((i,k)=>{ f[i] = secP(s, net.sgtrParts[k]); });
   net.secT.forEach((i,k)=>{ const id = net.secTParts[k];
     if(netStoreHeld) f[i] = secP(s, id);
-    else if(sgOpen(s,id)) f[i] = P.Pcont; });
+    else if(sgOpen(s,id)) f[i] = netPcont(net, s, i); });
   /* the condenser's own two ports, fixed at COND_P0 - the secondary's low-
      pressure sink, the same role P.Pcont plays for a break. Constant, so
      nothing here needs to enter netFactored()'s live signature beyond what
@@ -3470,7 +3497,7 @@ function netReadP(sol, byP){
          the ship holds - the expansion tank open to the compartment every
          closed cooling loop has. A shift cancels out of every flow, so nothing
          solved moves; only the absolute level, which had no answer before. */
-      const off = (free[c] && fixed[i]===undefined && isFinite(lo[c])) ? P.Pcont - lo[c] : 0;
+      const off = (free[c] && fixed[i]===undefined && isFinite(lo[c])) ? netPcont(net, s, i) - lo[c] : 0;
       byP[net.nodes[i]] = b[i] + off;
     } }
 }
@@ -3932,6 +3959,8 @@ const portIds = () => Object.keys(D.ports);
 function dmgPart(id){
   if(typeof id !== "string") return partOf(id) || null;
   if(id.indexOf("port:")===0) return portCellPart(id.slice(5));
+  if(id.indexOf("mat:")===0){ const k=id.slice(4), j=k.indexOf(",");
+    return j<0 ? null : matCellPart(+k.slice(0,j), +k.slice(j+1)); }
   if(id.indexOf("pipe:")!==0) return partOf(id) || null;
   const k=id.slice(5), i=k.indexOf(",");
   return i<0 ? null : pipeCellPart(+k.slice(0,i), +k.slice(i+1));
@@ -4069,6 +4098,12 @@ function buildStockPlumbing(opt){
      routes, and a set reaches its second unit down the aft columns where there
      is nothing at all. */
   const BAND=40;
+  /* ROW 0 OF A BAND IS THE WALL'S, AND THE ISLAND STANDS OFF IT. The drives
+     ride the vessel's head and stood ON row 0, so the containment's top run
+     was refused its own cells and the ring closed on the hull instead of on
+     itself. Every placement inside a unit is off this offset, so the island
+     moves as one piece and no run changes shape. */
+  const ISL=2;
   const uOX = u => 0;
   const uOY = u => u * BAND;
   const sOY = s => s * perSet * BAND;   // a set stands in the band of its first unit
@@ -4078,13 +4113,14 @@ function buildStockPlumbing(opt){
      is as wide as its widest band and as tall as its sets, and the player may
      still drag it either way afterwards. */
   if(multi){ D.gw = 60 + 7*(loops-1) + 12; D.gh = BAND*units; }
-  else     { D.gw = 60 + 7*(loops-1);      D.gh = 34; }
+  else     { D.gw = 60 + 7*(loops-1);      D.gh = 36; }
   /* WHAT THIS SHIP DOES NOT CARRY. A preset that placed an injection tank and
      a relief valve and then took them off again had built a plant it did not
      mean; this simply never places them, and every nozzle and run that would
      have gone to one is skipped with it. */
   const drop = new Set((opt && opt.drop) || []), has = id => !drop.has(id);
   for(const k   in D.pipes) delete D.pipes[k];
+  for(const k   in D.mat)   delete D.mat[k];      // structure is the ship's too - a preset is the whole ship
   for(const pid in D.ports) delete D.ports[pid];
   for(const id  in D.tanks) delete D.tanks[id];
   for(const id  in D.fittings) delete D.fittings[id];
@@ -4103,6 +4139,13 @@ function buildStockPlumbing(opt){
      (buildLayout()), so the coolant pumps are minted before the feed and
      circulating water pumps and read RCP 1..n. */
   const GHc=D.gh, BOT=GHc-4;
+  /* ══ ROW 0 OF EVERY BAND IS LEFT CLEAR ══
+     The reactor island stood ON the deckhead - the rod drives at row 0, the
+     relief tank beside them and the generator safety valve past that - so no
+     wall could ever be painted over it and the reference ship could not carry
+     the one containment every plant of its kind has. Everything in the top
+     band is one row down; every run is routed and every nozzle is an offset,
+     so nothing else had to move with them. */
   /* THE FIRST OF ANYTHING KEEPS THE BARE NAME. A machine id carries no meaning
      (mintMachine()), so this is only about the reference ship coming out of
      this pass with the identical dictionary it always had. */
@@ -4112,12 +4155,12 @@ function buildStockPlumbing(opt){
      steam tee needs a free cell on that side - and at the reference spacing
      that cell is the relief tank's last column. The reference ship never asked
      for the port, because its first tee has nothing to its west. */
-  const X  = i => (multi?28:26)+7*i;
+  const X  = i => 30+7*i;
   const uX = (u,i) => X(i) + uOX(u);         // ...and on the board
   // stacked units share their columns, so the engine room stands where it
   // always did - only further apart, band by band
   const AFT   = 46+7*(loops-1) + (multi?2:0);
-  const FEEDX = 26+7*loops + (multi?2:0);
+  const FEEDX = X(loops) - 2 + (multi?2:0);
   // the header riser's own column, forward of the engine room and aft of
   // every loop - the lane a set's main steam already climbs to its turbine
   const MSRX  = AFT-6;
@@ -4133,8 +4176,14 @@ function buildStockPlumbing(opt){
   // a set's condensate runs along its OWN band's floor, never the ship's
   const setKeel = s => multi ? sOY(s)+BAND-1 : GH-1;
   for(let u=0;u<units;u++){
-    const U=sfx(u), ox=uOX(u), oy=uOY(u);
-    mintMachine("core"+U,"core",6+ox,13+oy);   // and its rod drives, which ride the head
+    const U=sfx(u), ox=uOX(u), oy=uOY(u)+ISL;
+    /* ONE ROW OFF THE DECKHEAD, and that row is what a containment needs. The
+       drives ride the head (dy:-13, MACHINE.rods) and at y=13 they stood ON
+       the hull ring, so no wall could ever be painted over the reactor and the
+       reference ship could not be given the one containment it obviously has.
+       Everything below follows the machine, because every run is routed and
+       every nozzle is an offset. */
+    mintMachine("core"+U,"core",8+ox,13+oy);   // and its rod drives, which ride the head
     for(let i=0;i<loops;i++) mintMachine("sg"+(u*loops+i),"sg",uX(u,i),5+oy);
     for(let i=0;i<loops;i++) mintMachine("pump"+(u*loops+i),"pump",uX(u,i),18+oy);
   }
@@ -4153,7 +4202,6 @@ function buildStockPlumbing(opt){
     setPartName("feed"+S,"FEED PUMP");
   }
   mintMachine("ctrl","ctrl",0,BOT);
-  if(has("cont")) mintMachine("cont","cont",10,BOT);
   /* ON THE KEEL WHEN THERE IS MORE THAN ONE SET. It stands beside the turbine
      on the reference ship, and that is the row a banded ship's condenser puts
      its own cooling nozzle on - the backup supply landed on the condensate
@@ -4169,7 +4217,7 @@ function buildStockPlumbing(opt){
      (cellStore()), so its face stays on the skin whatever area it is given. */
   const radAt=(id,x)=>{ mintMachine(id,"radiator",x,0);
     D.machines[id].cell=[x,BOT+3]; buildLayout(); };
-  radAt("rad0",AFT-10); radAt("rad1",AFT-2);
+  radAt("rad0",AFT-7); radAt("rad1",AFT);
   /* ── AND SOMETHING HAS TO TURN THE CIRCULATING WATER ──
      The condenser rejects into a loop, and a loop with nothing pushing it
      carries nothing. It is a pump like every other pump: hit it, or lose the
@@ -4179,12 +4227,13 @@ function buildStockPlumbing(opt){
      free row each. It KEEPS ITS COLUMN and takes its suction on the RIGHT
      FACE: a full-height pump standing here reaches up into the reserve tank's
      rows, so a top nozzle has no cell to stand in. */
-  mintMachine("cwp","pump",AFT-9,BOT+1-partOf("rad0").h-pumpH("cwp"));
+  mintMachine("cwp","pump",AFT-6,BOT+1-partOf("rad0").h-pumpH("cwp"));
   setPartName("cwp","CIRC WATER PUMP");
-  /* ══ THE STOCK SHIELDING ══
-     Three blocks between the reactor and the control room, placed exactly the
-     way ADD SHIELD places one. */
-  for(let i=0;i<3;i++) mintMachine("shld"+i,"shield",18+3*i,GHc-4);
+  /* ══ THE STOCK SHIELDING, PAINTED ══
+     The same nine-by-three band of steel between the reactor and the control
+     room, laid the way the PAINT tool lays it - a shield is not a machine any
+     more, so there is nothing to mint. */
+  for(let X=18;X<27;X++) for(let Y=GHc-4;Y<GHc-1;Y++) matPaint(X,Y,"steel");
 
   /* ══ THE TANKS ══
      A STARTING DESIGN, exactly like the default rod count - not code. Every
@@ -4215,12 +4264,12 @@ function buildStockPlumbing(opt){
      cell for cell. */
   const UN=[];                       // one bag of ids per unit, for the runs below
   for(let u=0;u<units;u++){
-  const U=sfx(u), ox=uOX(u), oy=uOY(u);
+  const U=sfx(u), ox=uOX(u), oy=uOY(u)+ISL;
   // the reserve's own column - off X() so it follows the loop columns rather
   // than repeating their spacing, or a banded ship stands its pump on its tie
   // ...and it walks aft with its own tie, or a later unit stands its reserve
   // pump on the tee that pump is supposed to feed
-  const EFWX = ox + X(loops) + Math.max(3,loops) + 1 + (multi?u:0);
+  const EFWX = ox + X(loops) + Math.max(3,loops) + 2 + (multi?u:0);
 
   tank("hpi",U,ox+1,oy+19,{ name:"HPI TANK", col:"#5aa9d6",
     tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
@@ -4237,7 +4286,7 @@ function buildStockPlumbing(opt){
      WIDTH - which follows its volume now. Set after minting, because the box
      does not exist until the volume is on it. */
   if(D.tanks["hpi"+U]){
-    D.tanks["hpi"+U].cell = [Math.max(0, partOf("core"+U).x - partOf("hpi"+U).w - 2), oy+19];
+    D.tanks["hpi"+U].cell = [Math.max(0, partOf("core"+U).x - partOf("hpi"+U).w - 3), oy+19];
     buildLayout(); }
 
   /* ══ THE PRESSURIZER IS A TANK ══
@@ -4248,7 +4297,7 @@ function buildStockPlumbing(opt){
      tank's own idiom, so no new default is needed in resetPlant(); bypassing
      it from the control room isolates the vessel and the circuit relaxes to
      containment, which is a capability that falls out rather than a case. */
-  tank("pzr",U,ox+15,oy+1,{ name:"PRESSURIZER", col:"#a98cf0",
+  tank("pzr",U,ox+18,oy+1,{ name:"PRESSURIZER", col:"#a98cf0",
     tip:"Sets the pressure of the circuit it is piped to. It has to sit high - the steam bubble must stay at the top of the loop.",
     vol:50, level:54, fluid:"water",
     gas:null, check:false, auto:"always", burst:null,
@@ -4259,8 +4308,8 @@ function buildStockPlumbing(opt){
      valve and a catch tank authored at fixed columns collide the moment the
      vessel is a different width. Two ports may not share a cell, so each of
      the three stands one clear of the last. */
-  const PZR_W = partOf("pzr"+U).w, RV_X = ox+15+PZR_W+2, RELTK_X = RV_X+3;
-  tank("reltk",U,RELTK_X,oy+0,{ name:"RELIEF TANK", col:"#8a6cd0",
+  const PZR_W = partOf("pzr"+U).w, RV_X = ox+18+PZR_W+2, RELTK_X = RV_X+3;
+  tank("reltk",U,RELTK_X,oy+1,{ name:"RELIEF TANK", col:"#8a6cd0",
     tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
     vol:35, level:0, fluid:"contaminated",
     /* At rest the gas sits at containment pressure, which is what makes an
@@ -4275,7 +4324,7 @@ function buildStockPlumbing(opt){
      every added loop needs and a second nozzle in the one gap that has no room
      for one. On the line it reaches whatever the feed pump reaches - which is
      what an emergency feedwater tie IS. */
-  tank("efw",U,EFWX,oy+18,{ name:"EFW TANK", col:"#5aa9d6",
+  tank("efw",U,EFWX,oy+17,{ name:"EFW TANK", col:"#5aa9d6",
     tip:"Independent feedwater reserve, tied into the feedwater line through its own pump. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
     vol:19, level:100, fluid:"condensate",
     /* What PUSHES it is the machine standing beside it (efwp), not a field on
@@ -4336,11 +4385,31 @@ function buildStockPlumbing(opt){
     const li = u*loops+i;
     mstee[i]=fitting("mstee"+li,"", uX(u,i)+1, oy+2, { name:"STEAM TEE "+(li+1), mode:"tee", bore:boreMm("steam"),
       tip:"Where this generator's steam meets the main header, and where its safety valve stands." });
-    /* ONE CELL CLEAR OF THE TEE, not against it: two ports in adjacent cells
-       are a joint only when they FACE each other, and this valve's own port
-       looks along the hull rather than down at the tee. The cell between them
-       is the tap. */
-    svf[i]=fitting("sv"+li,"", uX(u,i)+3, oy+0, { name:"SG SAFETY "+(li+1), mode:"relief", bore:412.5, tip:svTip });
+  }
+  /* ══ AND THE SAFETY VALVES STAND OUTSIDE, ON THE SKIN ══
+     A valve blows overboard only where its open face is against the hull
+     (fitVentOut(), above), and it can no longer have that ON the generator:
+     the containment's own top run owns the deckhead row. So each one stands
+     aft of the wall on the skin, over its own tee spliced into the main steam
+     header - which is where a real main steam safety is, outside containment
+     and venting to the sky. What it needs from the drawing is the aft edge of
+     everything already placed in this unit, so the row is asked once here. */
+  let islX=-1e9;
+  for(const id of ["core"+U,"rods"+U,"pzr"+U,"reltk"+U,"rv0"+U,"tee0"+U,"efwtee"+U]
+        .concat(mstee.map(f=>f).filter(Boolean))
+        .concat(Array.from({length:loops},(_,i)=>"sg"+(u*loops+i)))){
+    const q=partOf(id); if(q) islX=Math.max(islX, q.x+q.w-1); }
+  const svtee=[];
+  /* CLEAR OF THE RISER LANE. On a station the unit's own manifold stands in
+     that lane, and a safety tee landing beside it is two fittings shoulder to
+     shoulder in the one column the manifold needs. */
+  let svBase = islX+5;
+  if(setUnits(setOf(u))>1 && svBase >= MSRX-2) svBase = MSRX-3;
+  for(let i=0;i<loops;i++){
+    const li=u*loops+i, cx=svBase+3*i;   // three, so two tees' own ports never want one cell
+    svtee[i]=fitting("svtee"+li,"", cx, oy+2, { name:"SAFETY TEE "+(li+1), mode:"tee", bore:boreMm("steam"),
+      tip:"Where this generator's safety valve taps the main steam header. A tee closes nothing." });
+    svf[i]=fitting("sv"+li,"", cx, uOY(u)+0, { name:"SG SAFETY "+(li+1), mode:"relief", bore:412.5, tip:svTip });
   }
   /* ══ AND A SECOND UNIT MEETS THE FIRST IN THE RISER, NEVER TEE TO TEE ══
      A unit's own header is laid along its band's top row, and that row is
@@ -4354,7 +4423,7 @@ function buildStockPlumbing(opt){
     ? fitting("mshdr",U, MSRX, oy+2, { name:"STEAM HEADER "+(u+1), mode:"tee", bore:boreMm("steam"),
         tip:"Where this unit's main steam joins the header its turbine is fed from. A tee closes nothing: lose a unit and the rest of the station keeps the machine turning." })
     : null;
-  UN[u] = {U, ox, oy, tee0, rv0, efwtee, mstee, svf, mshdr};
+  UN[u] = {U, ox, oy, tee0, rv0, efwtee, mstee, svtee, svf, mshdr};
   }
   buildLayout();                     // the boxes have to be on the grid before a port can sit beside one
 
@@ -4396,7 +4465,7 @@ function buildStockPlumbing(opt){
      the surge tee's own nozzle, and one port cell stops a lane as dead as a
      machine does. */
   const HOT_ROW =[14,15,16,24];      // out of the vessel, east to its own riser
-  const HOT_COL =[null,29,36,43];    // the gap forward of the generator
+  const HOT_COL = i => X(i)-4;       // the gap forward of the generator
   /* one lane per feed line, on the pump's own left face and walking UP as the
      loop index rises - the bilge rows walk DOWN, so a feed line and a cold
      return share a row only where the loop count puts them at opposite ends of
@@ -4407,7 +4476,10 @@ function buildStockPlumbing(opt){
      second unit's feed line merged into the first one's instead of reaching
      its own generator. A lane is a lane whoever wants it. */
   const feedCol = (u,i) => uX(u,i)+5+(multi?u:0);
-  const COLD_ROW=[26,27,28,29];      // one bilge row per loop
+  /* ONE BILGE ROW PER LOOP, OFF THE VESSEL'S OWN FLOOR. Literal rows walked
+     down the ship whenever the island moved, and the outermost loop's leg came
+     out under the panels with nothing to route through. */
+  const coldRow = (u,i) => { const c=partOf("core"+sfx(u)); return c.y+c.h+1+i; };
   const KEEL=GH-1;
   /* OFF THE VESSEL'S OWN BOX, never off the stock ship's - the same move the
      radiator nozzles already make. A tank's footprint follows its VOLUME now
@@ -4436,7 +4508,7 @@ function buildStockPlumbing(opt){
     n.pTeeR    = seedPort(n.tee0,1,0);
     n.pRvL     = port(n.rv0,-1,0);
     n.pRvR     = port(n.rv0,1,0);
-    n.pRelTk   = port("reltk"+U,-1,clamp(2,0,relB.h-1));
+    n.pRelTk   = port("reltk"+U,-1,clamp(1,0,relB.h-1));
     n.pHpi     = port("hpi"+U,hpiB.w,clamp(2,0,hpiB.h-1));
     n.pEfw     = partOf("efw"+U)  ? seedPort("efw"+U,0,-1) : null;   // out of the top, up into the pump's suction
     n.pEfwpSuc = partOf("efwp"+U) ? seedPort("efwp"+U,3,2) : null;   // r face -> folds onto t: SUCTION
@@ -4590,19 +4662,18 @@ function buildStockPlumbing(opt){
       const k  = (u%perSet)*loops+i;           // ...and its line's ordinal within its SET
       const g = sgPorts(li);
       const pT = seedPort("pump"+li,1,-1), pB = seedPort("pump"+li,1,partOf("pump"+li).h);
-      const teeB = seedPort(n.mstee[i],0,1), teeT = seedPort(n.mstee[i],0,-1);
+      const teeB = seedPort(n.mstee[i],0,1);
       const teeL = hdr[u]!=null ? seedPort(n.mstee[i],-1,0) : null;
       const teeR = seedPort(n.mstee[i],1,0);
-      const pSv  = seedPort(n.svf[i],-1,0);
+
       // primary: vessel to shell, shell to pump, pump back along its own bilge row
-      if(i) seedRun(n.coreHot(i), g.l, false, [[HOT_COL[i]+ox,HOT_ROW[i]+oy],[HOT_COL[i]+ox,6+oy]]);
+      if(i) seedRun(n.coreHot(i), g.l, false, [[HOT_COL(i)+ox,HOT_ROW[i]+oy],[HOT_COL(i)+ox,6+oy]]);
       else  seedRun(n.pTeeR, g.l, true);
       seedRun(g.b, pT, true);
-      seedRun(pB, n.coreCold(i), false, [[uX(u,i)+1,COLD_ROW[i]+oy],[n.coreBilge(i),COLD_ROW[i]+oy]]);
+      seedRun(pB, n.coreCold(i), false, [[uX(u,i)+1,coldRow(u,i)],[n.coreBilge(i),coldRow(u,i)]]);
       // secondary: the nozzle faces the tee's own port across one cell - a joint,
-      // no pipe - and so does the safety valve above it
+      // no pipe
       seedRun(g.steam, teeB);
-      seedRun(teeT, pSv);
       if(hdr[u]) seedRun(hdr[u], teeL);         // ...and the header, tee to tee
       hdr[u] = teeR;
       /* DOWN, WEST, UP: out of the discharge nozzle under the pump, along its own
@@ -4618,13 +4689,24 @@ function buildStockPlumbing(opt){
          One lane and one crossing row per unit, so two units never share one. */
       // ...and it lands BELOW its own tie, which is the face that tie is fed on
       const land = partOf(n.efwtee).y+4;
-      const bandVias = oy===sOY(s) ? null
+      const bandVias = oy-ISL===sOY(s) ? null
         : [[FEEDX-3, FEED_ROW(s,k)], [FEEDX-3, land], [feedCol(u,i), land]];
       if(i) seedRun(t.feedL(k), g.feed, false,
         (bandVias||[]).concat([[feedCol(u,i),bandVias?land:FEED_ROW(s,k)],[feedCol(u,i),5+oy]]));
       else { seedRun(t.feedL(k), n.pTieB, false,
                bandVias || [[feedCol(u,0),FEED_ROW(s,k)]]);
              seedRun(n.pTieT, g.feed, false, [[feedCol(u,0),5+oy]]); }
+    }
+    /* ══ AND THE HEADER GOES ON AFT THROUGH ITS SAFETY TEES ══
+       One per generator, spliced in the order the generators are, each with
+       its own riser up to a valve standing on the skin. The chain continues
+       from the last generator's tee, so a set with no containment lays the
+       identical line - the valves simply stand further aft than they used to. */
+    for(let i=0;i<loops;i++){
+      const st = n.svtee && n.svtee[i]; if(!st) continue;
+      if(hdr[u]) seedRun(hdr[u], seedPort(st,-1,0));
+      hdr[u] = seedPort(st,1,0);
+      seedRun(seedPort(st,0,-1), seedPort(n.svf[i],0,1));
     }
   }
   /* each header's aft end into its own riser tee, the risers into one another
@@ -4645,7 +4727,7 @@ function buildStockPlumbing(opt){
        header's row IS the steam nozzle's own cell - the run stopped one cell
        short of it and the turbine read as unpiped. */
     if(multi) seedRun(top, ST[s].pTurbT, true);
-    else      seedRun(top, ST[s].pTurbT, false, [[AFT+4, 2+sOY(s)]]);
+    else      seedRun(top, ST[s].pTurbT, false, [[AFT+4, 2+ISL+sOY(s)]]);
   }
   // the reserve, up out of its own tank into the pump beside it, and west
   // along its own row into the tie
@@ -4664,6 +4746,43 @@ function buildStockPlumbing(opt){
   buildLayout();
   for(const n of UN){ const suc = runBetween("efw"+n.U,"efwp"+n.U);
     if(suc) D.bore[suc] = 2*boreMm("feed"); }
+
+  /* ══ AND THE CONTAINMENT, LAST, BECAUSE IT IS PAINTED ROUND WHAT IS THERE ══
+     A closed ring per UNIT, in that unit's own band: the vessel, its drives,
+     the pressurizer, the relief valve and its tank, the generators and the
+     coolant pumps - the reactor island, and nothing aft of it. The turbine,
+     the condenser, the feed train, the panels, the control room and the supply
+     stand outside, which is the split a real station makes.
+     LAST of everything, because paint is refused a cell a machine, a tank or a
+     nozzle is standing in (occupied(), layout.js) and every one of those is
+     placed above. A pipe cell it may have: a run through the wall is a
+     PENETRATION, which is the whole reason the mechanism is not degenerate.
+     WHAT it is made of is the preset's own row - see PLANTPRE. A ship that
+     carries none paints none, and the fill then finds the hull and says so. */
+  /* ══ AND IT STANDS ONE CLEAR CELL OFF EVERY BOX ══
+     The ring used to be four literals, so a machine that grew with its own
+     duty ended up leaning on the wall - the drives on the deckhead run and the
+     safety valve on the aft one. It is the island's own bounding box plus two
+     now: one cell of air, then the wall. */
+  if(opt && opt.cont){
+    for(let u=0;u<units;u++){
+      const U=sfx(u), ids=["core"+U,"rods"+U,"pzr"+U,"reltk"+U,"rv0"+U,"tee0"+U,"efwtee"+U];
+      for(let i=0;i<loops;i++){ const li=u*loops+i;
+        ids.push("sg"+li,"pump"+li,"mstee"+li); }   // the safety valves stand outside, on the skin
+      let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+      for(const id of ids){ const p=partOf(id); if(!p) continue;
+        x0=Math.min(x0,p.x); x1=Math.max(x1,p.x+p.w-1);
+        y0=Math.min(y0,p.y); y1=Math.max(y1,p.y+p.h-1); }
+      if(x1<x0) continue;
+      x0=Math.max(0,x0-2); y0=Math.max(0,y0-2);
+      x1=Math.min(GW-1,x1+2); y1=Math.min(GH-1,y1+2);
+      for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++){
+        if(x!==x0 && x!==x1 && y!==y0 && y!==y1) continue;
+        matPaint(x,y,opt.cont.m);
+        if(opt.cont.t !== undefined && D.mat[x+","+y]) D.mat[x+","+y].t = opt.cont.t;
+      }
+    }
+  }
 
   buildLayout();
 }
@@ -4685,30 +4804,36 @@ function buildStockPlumbing(opt){
    does not call latLayMod(), so handing it to RBMK or HTGR would quietly take
    the graphite back out. */
 const PLANTPRE=[
- ["STOCK PWR",{loops:1,arch:0,d:{cont:1,bkp:1,sg:0,chim:0.3}},
+ ["STOCK PWR",{loops:1,arch:0,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.3}},
   "The reference ship: one pressurised water loop, a pressurizer with a relief valve behind it, injection water, an emergency feedwater tie, a turbine, a condenser and two panels. Everything the other presets add or take away is measured against this."],
- ["NUSCALE",{loops:1,arch:0,lat:1,d:{cont:1,bkp:1,sg:0,pzr:0.8,chim:0.5}},
+ ["NUSCALE",{loops:1,arch:0,lat:1,cont:{m:"liner"},d:{bkp:1,sg:0,pzr:0.8,chim:0.5}},
   "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
- ["BWR/4",{loops:2,arch:1,d:{cont:1,bkp:1,sg:0,pzr:0.7,chim:0.4}},
+ ["BWR/4",{loops:2,arch:1,cont:{m:"liner",t:20},d:{bkp:1,sg:0,pzr:0.7,chim:0.4}},
   "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
- ["BN-600",{loops:3,arch:3,d:{cont:2,bkp:2,sg:1,pzr:0.6,chim:0.4}},
+ ["BN-600",{loops:3,arch:3,cont:{m:"liner"},d:{bkp:2,sg:1,pzr:0.6,chim:0.4}},
   "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it."],
- ["EPR",{loops:4,arch:0,lat:2,d:{cont:2,bkp:2,sg:0,pzr:1.3,chim:0.3},
-   place:[["catcher","catcher",6,30]]},
+ ["EPR",{loops:4,arch:0,lat:2,cont:{m:"lined"},d:{bkp:2,sg:0,pzr:1.3,chim:0.3},
+   place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
- ["RBMK-1000",{loops:2,arch:2,d:{cont:0,bkp:1,sg:1,pzr:1.0,chim:0.3}},
+ ["RBMK-1000",{loops:2,arch:2,d:{bkp:1,sg:1,pzr:1.0,chim:0.3}},
   "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. Boiling the water ADDS reactivity here, so the plant hunts itself and the slow rods arrive late."],
- ["MSRE",{loops:1,arch:4,d:{cont:1,bkp:1,sg:1,pzr:0.5,chim:0.6}},
+ ["MSRE",{loops:1,arch:4,cont:{m:"lined"},d:{bkp:1,sg:1,pzr:0.5,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
- ["WINDSCALE",{loops:1,arch:5,d:{cont:0,bkp:0,sg:1,pzr:0.5,chim:0.2},
+ ["WINDSCALE",{loops:1,arch:5,d:{bkp:0,sg:1,pzr:0.5,chim:0.2},
    drop:["hpi","rv0","reltk"], tanks:{efw:{vol:5}}},
   "A graphite pile with no containment, no backup power, no injection water and no relief valve on the loop. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, overpressure the loop and nothing lifts, and there is nothing to inject with at all. Fly it to see what the safeguards on every other preset are FOR."],
  /* TWO REACTORS AGAINST ONE TURBINE, and nothing about it is exotic: it is
     the STOCK PWR's own gear twice over, on one hull. It is here to be FLOWN
     AT, not admired - the cost of a second reactor is what it measures, so
     every unit is the same small compact core and only the count varies. */
- ["DUAL",{units:2,sets:1,loops:1,arch:0,lat:1,d:{cont:1,bkp:1,sg:0,chim:0.3}},
-  "Two small identical pressurised units on one hull, one loop each, both feeding a single turbine. Nothing here is exotic: it is the STOCK PWR twice over, sharing one engine room and one circulating water system the way a real multi-unit station shares its cooling. Fly it to see what a second reactor costs to run - and trip a unit to lose half the steam into a turbine that is still carrying the whole load."],
+ /* NO CONTAINMENT, and it is the hull that refuses it. A unit's rod drives
+    stand against its own band's deckhead, so on the top band that deckhead is
+    the ship's skin and a wall can close against it - and on every band below,
+    the same row is open ship and the drives are a hole straight through it.
+    Two identical units where one is contained and one is not is a lie about
+    the symmetry, so this station carries neither. */
+ ["DUAL",{units:2,sets:1,loops:1,arch:0,lat:1,d:{bkp:1,sg:0,chim:0.3}},
+  "Two small identical pressurised units on one hull, one loop each, both feeding a single turbine, and NO containment on either - stacked this tight, the lower unit's rod drives stand in the row a wall would have to close along, so neither unit gets one. Nothing here is exotic: it is the STOCK PWR twice over, sharing one engine room and one circulating water system the way a real multi-unit station shares its cooling. Fly it to see what a second reactor costs to run - and trip a unit to lose half the steam into a turbine that is still carrying the whole load."],
 ];
 function plantPreset(i){
   const q=PLANTPRE[i][1];
@@ -4723,7 +4848,7 @@ function plantPreset(i){
   /* WHAT THIS SHIP IS, laid gesture for gesture. `drop` is handed to the
      builder rather than run afterwards, so a preset without an injection tank
      never places one - it does not place one and take it off again. */
-  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop});
+  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont});
   // and anything this ship carries that the stock one does not, placed the
   // same way ADD MACHINE places it
   for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);

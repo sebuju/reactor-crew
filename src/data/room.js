@@ -236,7 +236,15 @@ const openFluidH = (s, k) => k === "break:core" ? partFluidH(s, "core")
    never about what they are doing. */
 let roomCache = null, roomCacheSig = "";
 function roomGeom(){
-  const sig = laySig()+"|"+pipeSig();
+  /* matSig() as well: a gas-tight cell is a hole in the stencil, and painting
+     one is exactly as much of a change to this geometry as moving a machine.
+     AND THE DAMAGE, which is not a design fact and has to be in the key
+     A WALL IS ALWAYS A WALL, wrecked or not, so damage is NOT in this key: a
+     shot cell still separates and what crosses it goes through the ORIFICE
+     (roomHoleStep(), below) rather than through this stencil. That is what
+     makes "everything leaves through the hole" true by construction rather
+     than hoped for. */
+  const sig = laySig()+"|"+pipeSig()+matSig();
   if(roomCache && roomCacheSig === sig) return roomCache;
   const N = GW*GH;
   const occ = new Uint8Array(N);
@@ -282,7 +290,21 @@ function roomGeom(){
      through an occupied cell at either end - a machine is a wall, and this is
      what makes a compact plant hotter than a spread-out one. */
   const g0 = ROOM_MIX*ROOM_C/(MPC*MPC);   // kW/K between two open cells
-  const blk = i => occ[i] ? ROOM_BLOCK : 1;
+  /* ══ AND A GAS-TIGHT CELL IS EXACTLY ZERO ══
+     `blk` is a product over BOTH cells of a face and every field diffuses on
+     the three arrays below - temperature, hydrogen, oxygen and the flame front
+     - so zero here zeroes all four of that cell's faces, in both directions,
+     for all four fields, from one line. What leaves a region leaves through
+     the hole, and through nothing else; a breached cell is not tight, blk
+     returns to its ordinary value, and the stencil routes through it because
+     that is the only face with a conductance left. Nothing has to be told
+     where the hole is.
+     One predicate, matWall() (paint.js), so the fill and the stencil cannot
+     disagree about which cells are a boundary. */
+  const tight = new Uint8Array(N);
+  for(const k in (D.mat||{})){ const j=k.indexOf(","), X=+k.slice(0,j), Y=+k.slice(j+1);
+    if(X>=0&&X<GW&&Y>=0&&Y<GH && matWall(X,Y)) tight[Y*GW+X]=1; }
+  const blk = i => tight[i] ? 0 : (occ[i] ? ROOM_BLOCK : 1);
   const gx = new Float64Array(N), gUp = new Float64Array(N), gDn = new Float64Array(N);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
     const i = Y*GW+X;
@@ -305,7 +327,7 @@ function roomGeom(){
     if(Y<GH-1 && occ[i+GW]) n++;
     turb[i] = 1 + H2_TURB*n/4;
   }
-  roomCache = {occ, face, own, turb, parts, runs, shellValves, gx, gUp, gDn};
+  roomCache = {occ, tight, face, own, turb, parts, runs, shellValves, gx, gUp, gDn};
   roomCacheSig = sig;
   return roomCache;
 }
@@ -345,6 +367,33 @@ const ROOM_ENTRAIN = 25;                  // kg of room air per kg of discharge
 const ROOM_JET_TAU = 1.0;                 // s to entrain it
 const ROOM_MAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO;   // kg of air in one cell
 
+/* ══ THE COMPARTMENT HOLDS A REAL MASS OF GAS, AND THAT IS ITS PRESSURE ══
+   s.roomP used to be written by one term - the constant-volume heat of a
+   deflagration - and relieved by a flat half-second, so a sealed containment
+   at 300 kPa and one at 10 kPa emptied in exactly the same time and one wall
+   cell shot out emptied it exactly as fast as ten. Nothing was driven by the
+   difference and nothing was pushed through the hole.
+   s.roomM is kilograms of gas per cell. Pressure follows from it and the air's
+   own temperature by the ideal gas law, so every kilogram discharged into a
+   room raises the pressure there because the mass is really in it, and every
+   kilogram that leaves through a hole lowers it because it really left.
+   R_AIR is the published specific gas constant; at rest 1.2 kg/m3 and 293 K
+   come out at 0.1009 MPa, which is one atmosphere and is not a fit. */
+const R_AIR = 0.000287;                   // MPa*m3/(kg*K)
+const ROOM_VCELL = MPC*MPC*ROOM_DEPTH;    // m3 of one cell
+// absolute MPa, off a mass and a temperature - the ONE pressure read
+const roomPOf = (kg, vol, T) => kg*R_AIR*T/Math.max(vol, 1e-6);
+/* ══ AND THE ONE ORIFICE LAW, FOR ANY HOLE BETWEEN ANY TWO GAS VOLUMES ══
+   flowW() (pipenet.js) is the plant's single momentum relation - w = C*sqrt(2*
+   rho*dp) with C = Cd*A - and a hole in a compartment is the same hole as a
+   hole in a pipe. It is stated here as its own door, in SI, so anything that
+   opens a gas path can call it: a breached containment wall, a machine that
+   has been torn open and is venting its own contents into the room, a hull
+   penetration, a fan. Nothing about it knows what a containment is.
+   AREA in m2, PRESSURES in MPa absolute, DENSITY of the UPSTREAM gas. */
+const roomHoleKgs = (aM2, pUp, pDn, rhoUp) =>
+  flowW(ORIF_CD*Math.max(aM2,0), rhoUp, pUp, pDn);
+
 /* HOW BIG THE PLUME OFF THIS OPENING IS. One expression, because the heat and
    the hydrogen leave through the same hole at the same rate and must land in
    the same cells - two copies of it would let a compartment fill with gas
@@ -374,6 +423,15 @@ function roomSpread(F, cells, kgps, amount){
   roomShare(cells, kgps, (i,f) => { F[i] += amount*f; });
 }
 const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
+/* ══ AND WHAT A MACHINE PUTS INTO THE ROOM IS REALLY IN IT ══
+   Every one of these openings already carried a kg/s and a place; what it
+   never had was a MASS. A break venting into a sealed containment raised its
+   temperature and therefore its pressure, and the steam itself weighed
+   nothing - so the compartment could be filled and never fill up. The same
+   plume, the same cells, the same rate: this is the machinery half of the gas
+   law, and it is the door anything that vents into a compartment calls. */
+const roomAddGas = (s, cells, kg, kgps) =>
+  roomSpread(s.roomM, cells, kgps, kg);
 /* WATER MIXES WITH THE AIR IT LANDS IN, AND IT IS A COOLING TERM ONCE THAT AIR
    IS HOTTER THAN IT. Charged against T_HULL, a 310 K reserve emptying through
    a severed line went on heating a compartment already at 350 K - a source
@@ -485,6 +543,7 @@ function roomStep(s, dt){
   for(const fid in s.reliefSteam){
     if(tgt[fid] || out[fid]) continue;               // caught in a tank, or vented outside
     roomJet(src, cellsOf(fid), s.reliefSteam[fid]*roomSteamH(), s.reliefSteam[fid]);
+    roomAddGas(s, cellsOf(fid), s.reliefSteam[fid]*dt, s.reliefSteam[fid]);
   }
   /* A HOLE IS NOT A VALVE and has nowhere to be piped. What a shell vented
      past what its own valves passed is a burst shell or a severed steam line,
@@ -496,6 +555,7 @@ function roomStep(s, dt){
     for(const fid of (G.shellValves[id] || [])) byValve += s.reliefSteam[fid] || 0;
     const hole = Math.max(0, s.sgVentBy[id] - byValve);
     roomJet(src, cellsOf(id), hole*roomSteamH(), hole);
+    roomAddGas(s, cellsOf(id), hole*dt, hole);
   }
   /* The primary side, as LIQUID: hot water leaving a hole flashes, and it
      mixes with the air where it lands. One conversion out of invRate()'s % of
@@ -507,6 +567,7 @@ function roomStep(s, dt){
     const fl = partFluidH(s, fid);
     if(!fl) continue;
     roomJetLiq(src, T, cellsOf(fid), kg, fl.h, fl.c);
+    roomAddGas(s, cellsOf(fid), kg*dt, kg);
   }
   /* AND IN THE STATE THE OPENING IS ACTUALLY PASSING. s.Tavg is the primary's
      mean, so a reserve tank emptying through a severed line put the reactor's
@@ -515,7 +576,9 @@ function roomStep(s, dt){
     const kg = kgOf(s.spillBy[k]);
     const fl = openFluidH(s, k);
     if(!fl) continue;
-    roomJetLiq(src, T, roomOpenCells(s, G, k), kg, fl.h, fl.c);
+    { const oc = roomOpenCells(s, G, k);
+      roomJetLiq(src, T, oc, kg, fl.h, fl.c);
+      roomAddGas(s, oc, kg*dt, kg); }
   }
 
   /* ── the machines whose whole job is getting heat out of the building ──
@@ -565,6 +628,12 @@ function roomStep(s, dt){
   for(let i=0;i<N;i++) T[i] = clamp(T[i] + d[i]/ROOM_C*dt, T_SPACE, ROOM_TMAX);
 
   roomH2Step(s, dt, G);
+  /* ══ AND THEN WHAT CROSSES A BOUNDARY, AND WHAT THE SHIP LETS GO OF ══
+     After the diffusion, because the hole is the ONLY path between two volumes
+     and it must see what each of them actually holds this tick. */
+  roomCondense(s, dt);
+  roomHoleStep(s, dt);
+  roomShipLeak(s, dt);
 
   /* ── the readouts ── */
   { let mx = 0, at = -1;
@@ -716,6 +785,14 @@ function roomIgnites(s, G, i){
 function roomH2Step(s, dt, G){
   const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame, Pr = s.roomP;
   const T = s.roomT, Pk = s.roomPPk;
+  /* ══ WHAT EACH VOLUME IS AT, BEFORE ANYTHING BURNS IN IT ══
+     A closed volume holding a mass of gas at a temperature is at a pressure,
+     and that is the compartment's own figure - the one a containment holds and
+     a breach lets out. Read off the real kilograms (roomPOf()), so a discharge
+     raises it because the steam is really in there and a hole lowers it because
+     the gas really left. It was read off temperature alone, which could not
+     fall when anything escaped. The BLAST below rides on top of it. */
+  const pGauge = roomPGauge(s);
   s.roomBurnOn = 0;
   /* it leaves with what leaves.
      Hydrogen is IN the primary, so the share of it that escapes this tick is
@@ -748,7 +825,10 @@ function roomH2Step(s, dt, G){
   if(!s.blackout) for(const q of G.parts){
     if(q.p.role !== "vent" || partWrecked(s, q.p.id)) continue;
     const f = Math.min(1, ROOM_VENT_KGS/q.cells.length/ROOM_MAIR*dt);
-    for(const i of q.cells){ H[i] -= H[i]*f; O[i] += (ROOM_O2_0 - O[i])*f; }
+    // ...and the AIR with them: a fan that exchanges gas exchanges its mass,
+    // so a set running in a pressurised compartment brings it back down
+    for(const i of q.cells){ H[i] -= H[i]*f; O[i] += (ROOM_O2_0 - O[i])*f;
+      s.roomM[i] += (ROOM_MAIR - s.roomM[i])*f; }
   }
   /* and it is a gas in a room.
      ONE stencil, two biases. Hydrogen carries its own H2_UP and collects at
@@ -811,8 +891,19 @@ function roomH2Step(s, dt, G){
        burn is priced cheaper than the first, and a stoichiometric cell lands
        at 96 kPa where the real adiabatic isochoric figure is eight times
        ambient. Every cell relieves whether it burned or not. */
-    const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CAIR)/T_HULL : 0) - Pr[i]/ROOM_P_TAU*dt;
-    Pr[i] = p > 0 ? p : 0;
+    /* ══ AND IT RELAXES TOWARD THE COMPARTMENT, NOT TOWARD ZERO ══
+       ROOM_P_TAU is the half second a compartment takes to relieve a BANG. It
+       was applied to the whole of Pr, which was fine while a bang was the only
+       thing that ever wrote it - and wrong the moment the volume's own static
+       pressure was written here too, because then the static part decayed as
+       well: a four-hole breach and a ten-hole breach both read the half-second
+       tail of whatever the pressure WAS instead of what the volume is at now.
+       Only the EXCESS over the compartment's own pressure is a transient, so
+       only the excess relaxes. */
+    const gz = pGauge[i];
+    const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CAIR)/T_HULL : 0)
+              - Math.max(0, Pr[i]-gz)/ROOM_P_TAU*dt;
+    Pr[i] = Math.max(gz, p > 0 ? p : 0);
     if(Pr[i] > pmax) pmax = Pr[i];
     /* AND THE MARK IT LEAVES. The pressure itself is gone in half a second,
        so the only record of where a bay was blown apart was the damage list -
@@ -865,6 +956,177 @@ function roomDiffuse(F, G, dt, up){
      now, and it is metal. Hydrogen was escaping to space through an intact
      wall and could never accumulate. The stencil is edge-based and already
      conserving, so no-flux is the default and nothing replaces the line. */
+}
+
+/* ══ THE VOLUMES, THEIR PRESSURES, AND WHAT CROSSES BETWEEN THEM ══
+   The fill (matRegions(), paint.js) already says which cells are one connected
+   gas volume. Within a volume pressure equalises far faster than a tick - that
+   is what "one compartment" means - so each is LUMPED: one mass, one mean
+   temperature, one pressure. Between volumes there is nothing at all unless a
+   wall has been opened, and then there is exactly the orifice matHoles() found.
+   THIS IS WHY IT IS NOT A FACE-BY-FACE SOLVER. Sound crosses a 0.467 m cell in
+   1.4 ms against a 20 ms tick, so an explicit acoustic pass over every face is
+   unstable by a factor of fifteen and would buy nothing: the answer it would
+   converge to is the lumped one. */
+function roomVols(s){
+  const R = matRegions(), n = R.regions.length;
+  const M = new Float64Array(n), V = new Float64Array(n), MT = new Float64Array(n);
+  for(let i=0;i<GW*GH;i++){ const r = R.of[i]; if(r<0) continue;
+    const m = s.roomM[i];
+    M[r] += m; V[r] += ROOM_VCELL; MT[r] += m*s.roomT[i]; }
+  const T = new Float64Array(n), P = new Float64Array(n), RHO = new Float64Array(n);
+  for(let r=0;r<n;r++){
+    T[r] = M[r] > 0 ? MT[r]/M[r] : T_HULL;
+    RHO[r] = V[r] > 0 ? M[r]/V[r] : ROOM_RHO;
+    P[r] = roomPOf(M[r], V[r], T[r]);
+  }
+  return {R, n, M, V, T, P, RHO};
+}
+// kPa above ambient in every cell, off its own volume's mass and temperature -
+// one array, so the burn term and the damage sweeps read the same figure
+function roomPGauge(s){
+  const q = roomVols(s), g = new Float64Array(GW*GH);
+  for(let i=0;i<GW*GH;i++){ const r = q.R.of[i]; if(r<0) continue;
+    g[i] = Math.max(0, (q.P[r] - ROOM_P0/1000)*1000); }
+  return g;
+}
+/* ══ AND THE STEAM CONDENSES, WHICH IS WHAT ACTUALLY HOLDS A CONTAINMENT DOWN ══
+   Without this a compartment is a bottle: every kilogram a break puts into it
+   stays a gas forever, and a full-bore cold-leg break inside a 556 m3 region
+   reached 2 MPa and demolished its own wall - measured. A real containment's
+   pressure is limited by CONDENSATION, on its cold structure and in its pool,
+   and that is the whole reason a suppression pool exists.
+   The compartment is dry air plus vapour. The air is what it always held and
+   does not condense; the vapour cannot exceed its own saturation partial
+   pressure at the air's temperature, and what will not stay a gas becomes
+   water on the floor - so it goes into the SUMP, which is the book that already
+   holds standing water and already closes. Instant, not on a time constant:
+   condensing on a cold wall is fast against a tick, and any lag here would be a
+   fitted number standing in for a surface area nobody has drawn.
+   R_VAP is water's own specific gas constant, published. */
+const R_VAP = 0.0004615;                  // MPa*m3/(kg*K)
+function roomCondense(s, dt){
+  const q = roomVols(s);
+  for(let r=0;r<q.n;r++){
+    const g = q.R.regions[r], n = g.cells.length;
+    const air = ROOM_MAIR*n;
+    const vap = q.M[r] - air;
+    if(!(vap > 0)) continue;
+    // what the air at this temperature will hold as vapour, and no more
+    const cap = satP(SAT_WATER, q.T[r])*q.V[r]/(R_VAP*Math.max(q.T[r],1));
+    const drop = vap - cap;
+    if(!(drop > 0)) continue;
+    /* NO BOOK IS OPENED FOR IT, and that is deliberate. These kilograms left
+       the plant at the opening they left through and sumpStep() (step.js)
+       already put the ones that landed inside a region on that region's floor.
+       s.roomM is the compartment's GAS and is in no book at all, so what
+       condenses out of it simply stops being gas. Booked a second time here it
+       was counted twice - measured, 5 435 kg of residual on one break. */
+    const f = drop/q.M[r];
+    for(const i of g.cells) s.roomM[i] -= s.roomM[i]*f;
+  }
+}
+
+/* ══ THE BLOWDOWN ══
+   Every hole is priced by the SAME relation a break in a pipe is, at the two
+   volumes' own pressures and the donor's own density - so a big difference
+   blows hard, a small one seeps, and ten cells shot out pass ten times what one
+   does. What crosses carries what it is made of: the donor's hydrogen and
+   oxygen at the donor's own fractions, and its enthalpy, deposited in the cell
+   on the far side of the hole. That is decision 23 made true by construction -
+   the wall passes nothing at all (blk = 0), so the hole is the only path and
+   everything goes through it, at it, in whatever direction the pressures say.
+   LUMPED AFTERWARDS: what is left in a volume is shared over its own cells, so
+   a compartment has one pressure and the gas that arrived is not a lump sitting
+   at the doorway. Temperature is NOT levelled - that is the diffusion pass's
+   job and a room really does have hot corners. */
+function roomHoleStep(s, dt){
+  const holes = matHoles(s);
+  for(const k in s.holeQ) s.holeQ[k].q = 0;      // refilled, never rebuilt
+  if(!holes.length){ for(const k in s.holeQ) delete s.holeQ[k]; return; }
+  const q = roomVols(s);
+  /* HOW MANY HOLES JOIN THE SAME PAIR OF VOLUMES. The overshoot guard below is
+     a statement about the PAIR - do not push them past each other in one tick -
+     so with ten holes open each may only take a tenth of it. Without this the
+     guard is applied ten times over and the two volumes ring. The orifice term
+     itself is untouched, so area still scales: ten holes pass ten times what
+     one does right up until the balance is the limit. */
+  const share = {};
+  for(const h of holes){ const k = Math.min(h.a,h.b)+":"+Math.max(h.a,h.b);
+    share[k] = (share[k]||0)+1; }
+  for(const h of holes){
+    const up = q.P[h.a] >= q.P[h.b] ? h.a : h.b, dn = up === h.a ? h.b : h.a;
+    if(!(q.M[up] > 0)) continue;
+    const w = roomHoleKgs(h.area, q.P[up], q.P[dn], q.RHO[up]);
+    /* A HOLE MAY NOT PASS MORE THAN IS THERE, and it may not overshoot the
+       balance either: past half the difference in one tick the two volumes
+       swap places every tick and ring instead of settling. The same guard the
+       transport's own Courant blend is.
+       IN PRESSURE, NEVER IN DENSITY. Written as a density difference first and
+       measured: a hot region at equal pressure is LIGHTER than the cold ship,
+       so the guard went to zero while there was still 6 kPa across the wall and
+       a four-hole breach stalled sooner than a one-hole one. Solving p_up' =
+       p_dn' for the mass that crosses is the same gas law one line up. */
+    const kUp = q.T[up]/q.V[up], kDn = q.T[dn]/q.V[dn];
+    const even = Math.max(0, (q.P[up]-q.P[dn])/(R_AIR*(kUp+kDn)));
+    const nSh = share[Math.min(h.a,h.b)+":"+Math.max(h.a,h.b)] || 1;
+    const dm = Math.min(w*dt, q.M[up]*0.5, even*0.5/nSh);
+    if(!(dm > 0)) continue;
+    const f = dm/q.M[up];
+    // what leaves the donor volume, taken from every cell of it in proportion
+    const cUp = q.R.regions[up].cells, cDn = q.R.regions[dn].cells;
+    let h2=0, o2=0, en=0;
+    for(const i of cUp){ const take = s.roomM[i]*f;
+      s.roomM[i] -= take;
+      const fh = s.roomH2[i]*f, fo = s.roomO2[i]*f;
+      s.roomH2[i] -= fh; s.roomO2[i] -= fo;
+      h2 += fh; o2 += fo; en += take*ROOM_CP*s.roomT[i]; }
+    // ...and it arrives AT THE HOLE, in the cell on the far side of it
+    let land = -1;
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const X=h.x+dx, Y=h.y+dy;
+      if(X<0||X>=GW||Y<0||Y>=GH) continue;
+      if(q.R.of[Y*GW+X] === dn){ land = Y*GW+X; break; }
+    }
+    if(land < 0) land = cDn[0];
+    const was = s.roomM[land], now = was + dm;
+    s.roomT[land] = clamp((was*ROOM_CP*s.roomT[land] + en)/Math.max(now*ROOM_CP, 1e-9),
+                          T_SPACE, ROOM_TMAX);
+    s.roomM[land] = now;
+    s.roomH2[land] += h2; s.roomO2[land] += o2;
+    /* WHAT THIS HOLE IS ACTUALLY PASSING, kg/s, and WHICH WAY. The renderer
+       draws the jet off this rather than off a proxy, so the picture is the
+       flow: a big difference through one cell is a jet and a spent compartment
+       through ten is nothing at all. Refilled, never rebuilt - a renderer holds
+       the reference across frames. */
+    s.holeQ[h.x+","+h.y] = {q: dm/dt, to: land};
+  }
+  // a cell that is no longer a hole stops drawing one
+  for(const k in s.holeQ) if(!holes.some(h=>h.x+","+h.y===k)) delete s.holeQ[k];
+  /* AND EACH VOLUME IS ONE COMPARTMENT AGAIN. Redone off a fresh sum, because
+     the loop above moved mass between volumes and the totals it started with
+     are stale by exactly what crossed. */
+  { const R = q.R;
+    const M = new Float64Array(q.n), N = new Float64Array(q.n);
+    for(let i=0;i<GW*GH;i++){ const r=R.of[i]; if(r<0) continue; M[r]+=s.roomM[i]; N[r]++; }
+    for(let i=0;i<GW*GH;i++){ const r=R.of[i]; if(r<0) continue; s.roomM[i]=M[r]/N[r]; } }
+}
+/* ══ AND THE SHIP'S OWN COMPARTMENT LEAKS ══
+   A bounded region is sealed by construction and holds whatever is put in it.
+   The ship at large is not a sealed vessel - it is the rest of a hull with
+   doors, trunks and a ventilation system - and without this every kilogram of
+   steam ever released into it would raise its pressure for the rest of the run.
+   ROOM_P_TAU is the figure that has always stood for exactly this and it keeps
+   its exact meaning; what changed is that it now bleeds MASS back toward what
+   the compartment holds at rest rather than bleeding a pressure straight to
+   zero. It is air, not plant inventory, so no book is opened for it. */
+function roomShipLeak(s, dt){
+  const R = matRegions();
+  for(const g of R.regions){
+    if(g.bounded) continue;
+    const f = Math.min(1, dt/ROOM_P_TAU);
+    for(const i of g.cells) s.roomM[i] += (ROOM_MAIR - s.roomM[i])*f;
+  }
 }
 
 /* THE WORST CELL a machine is standing in - radAt()'s own shape, and the
