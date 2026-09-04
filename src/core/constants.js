@@ -51,7 +51,11 @@ const C = {
      enough from both its neighbours to be its own thing: C.green is a mint
      LAMP and C.amber is orange. Nothing on the plant is ever this colour, so a
      leader can never be mistaken for a reading about the plant. */
-  lead:"#a8bd45",
+  /* DIMMED. The hue is right and the LEVEL was not: at full chroma twenty
+     dashed lines across the mimic pulled the eye off the plant they annotate.
+     Same hue, taken down to a muted olive - still clear of C.rail, still
+     nothing else on the board, and now quiet enough to read past. */
+  lead:"#6e7a52",
   /* AND WHAT IT LOOKS LIKE WHILE IT IS HAPPENING. Three tones off one axis -
      gas temperature - so the fire is not a colour somebody picked: fire is a
      stoichiometric front, fire2 is the same front a thousand kelvin cooler,

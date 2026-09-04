@@ -292,7 +292,7 @@ function layerToggle(k){ LAYERS[k].on=!LAYERS[k].on; }
 /* ══ ONE MENU, HUNG OFF THE PLANT VIEW BESIDE THE ZOOM KEY ══
    Both screens call this from zoomKeySync() (render/plant.js) rather than
    hand-roll a button per layer, the same reason there is one AUTOSYS and one
-   bypRow() rather than a copy per system. A layer with no switch here has no
+   arming switch rather than a copy per system. A layer with no switch here has no
    way to be turned off, so both screens carry exactly LAYER_ORDER.length of them.
 
    It lives over the plant and not on the rail because a layer paints the

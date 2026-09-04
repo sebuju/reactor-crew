@@ -465,7 +465,7 @@ const AUTOSYS={
      part now (Stage 5a) and no longer answers "does a relief path exist" by
      its own presence, so this reads reliefFitIds() (the fittings
      themselves) instead: fit is not a flat true because with no relief
-     fitting placed there is no automatic relief to arm, and bypRow() draws
+     fitting placed there is no automatic relief to arm, and the switch draws
      that as a dead "none" the way it already does for an RPS nobody
      bought. */
   /* part:null - this system has NO component host. Every relief valve now
