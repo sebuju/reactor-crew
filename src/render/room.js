@@ -76,26 +76,31 @@ function roomZones(data){
   }
 }
 
-/* THE FIGURE THE CELLS NO LONGER PRINT. Two layers ship on together, so a
-   number in every cell was two numbers in every cell - and a survey map is
-   read as a shape, not digit by digit. The reading is still there, on the
-   pointer: ONE tip, for the ONE cell under the hand, off the same fields the
-   washes are drawn from. It states the compartment's whole story rather than
-   whichever layer happens to be up, because a cell is one place.
-   The pointer is mapped exactly as findTip() maps it (ptIn(), core/ui.js), or
-   a zoomed board would name a cell the hand is nowhere near. */
+/* ONE CELL, EVERY LAYER'S READING, ONE VALUE TO A ROW. The washes are read as
+   a shape, so the figures live on the pointer instead of in 2040 cells.
+   A ROW THAT WOULD READ ZERO IS NOT DRAWN: eight rows on every cell of an
+   undamaged ship were seven zeroes hiding the one temperature. The test is on
+   the ROUNDED figure, so nothing reads "0.0 %". Air temperature and oxygen are
+   unconditional - a compartment always has both, and 0 % oxygen is a finding
+   rather than an absence. */
 function roomCellTip(L){
   const p = viewOn ? (vIn(ui.ptr)?vPt(ui.ptr):null) : ui.ptr;
   if(!p) return;
   const X=Math.floor((p.x-GX)/CELL), Y=rowAt(p.y);
   if(X<0||X>=GW||Y<0||Y>=GH) return;
-  const i=Y*GW+X, f=roomH2Frac(L,i)*100, live=L.roomP[i], worst=L.roomPPk[i];
-  const band = worst>=BLAST_LO ? BLASTZ[blastOf(worst)].lab : "NONE";
-  TIP(GX+X*CELL, rowTop(Y), CELL, rowTop(Y+1)-rowTop(Y), "COMPARTMENT CELL",
-      "Hydrogen "+f.toFixed(1)+" % by volume"
-      +(L.roomFlame[i]>0 ? ", BURNING" : f>=H2_LFL*100 ? ", above the 4 % flammable limit" : "")
-      +". Overpressure now "+live.toFixed(0)+" kPa. Worst this cell has ever seen "
-      +worst.toFixed(0)+" kPa, which is the "+band+" band - and the soot is that figure.");
+  const i=Y*GW+X, rad=layerData("rad",L), r=rad.f[i], T=L.roomT[i],
+        live=L.roomP[i], worst=L.roomPPk[i];
+  const h2=roomH2Frac(L,i)*100, rows=[];
+  const row=(lab,s)=>rows.push(lab+s);
+  if(r>=0.005) row("DOSE         ",r.toFixed(2)+" x  "+ZONE[zoneOf(r)].lab);
+  row("AIR TEMP     ",T.toFixed(0)+" K  "+HEATZ[heatOf(T)].lab);
+  if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
+  row("OXYGEN       ",(roomO2Frac(L,i)*100).toFixed(1)+" %");
+  if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
+  if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
+  if(worst>=BLAST_LO) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
+  if(rad.cells.has(i)) row("REPAIR CELL  ","YES");
+  TIP(GX+X*CELL, rowTop(Y), CELL, rowTop(Y+1)-rowTop(Y), "CELL "+X+","+Y, rows.join("\n"));
 }
 
 /* THE ONE LINE THAT MATTERS ON THIS LAYER IS THE FLAMMABILITY LIMIT, so it is
@@ -134,19 +139,40 @@ function roomH2Layer(data,L){
     }
   }
   // and the limit itself, as an edge round the pocket that can burn
-  ctx.strokeStyle=C.h2; ctx.lineWidth=2;
+  ctx.strokeStyle=C.h2; ctx.lineWidth=1.2;
   const lit=i=>roomH2Frac(L,i)>=H2_LFL;
+  const segs=[], atCorner={}, px=X=>GX+X*CELL, py=Y=>rowTop(Y);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), y1=rowTop(Y+1);
     for(let X=0;X<GW;X++){
-      const i=Y*GW+X, x0=GX+X*CELL, on=lit(i);
-      if(on && !data.g[Y][X]) hatch(x0,y,CELL,y1-y,C.h2,0.22);
-      if(X<GW-1 && on!==lit(i+1)){
-        ctx.beginPath(); ctx.moveTo(x0+CELL,y); ctx.lineTo(x0+CELL,y1); ctx.stroke(); }
-      if(Y<GH-1 && on!==lit(i+GW)){
-        ctx.beginPath(); ctx.moveTo(x0,y1); ctx.lineTo(x0+CELL,y1); ctx.stroke(); }
+      const i=Y*GW+X, on=lit(i);
+      if(on && !data.g[Y][X]) hatch(GX+X*CELL,y,CELL,y1-y,C.h2,0.22);
+      if(X<GW-1 && on!==lit(i+1)) segs.push([X+1,Y,X+1,Y+1]);
+      if(Y<GH-1 && on!==lit(i+GW)) segs.push([X,Y+1,X+1,Y+1]);
     }
   }
+  for(const s of segs) for(const k of [s[0]+","+s[1], s[2]+","+s[3]]) (atCorner[k]=atCorner[k]||[]).push(s);
+  // exactly two edges meeting is a corner and is filleted; a tee or a loose end stays square
+  const R=Math.min(5,CELL*0.35), corner=k=>(atCorner[k]||[]).length===2;
+  const trim=(s,end)=>{
+    const ax=px(s[0]), ay=py(s[1]), bx=px(s[2]), by=py(s[3]);
+    const len=Math.hypot(bx-ax,by-ay)||1, r=Math.min(R,len*0.4);
+    const ux=(bx-ax)/len, uy=(by-ay)/len;
+    return end ? [bx-ux*(corner(s[2]+","+s[3])?r:0), by-uy*(corner(s[2]+","+s[3])?r:0)]
+               : [ax+ux*(corner(s[0]+","+s[1])?r:0), ay+uy*(corner(s[0]+","+s[1])?r:0)];
+  };
+  ctx.beginPath();
+  for(const s of segs){
+    const p0=trim(s,0), p1=trim(s,1);
+    ctx.moveTo(p0[0],p0[1]); ctx.lineTo(p1[0],p1[1]);
+  }
+  for(const k in atCorner){
+    if(!corner(k)) continue;
+    const cx=+k.split(",")[0], cy=+k.split(",")[1];
+    const e=atCorner[k].map(s=>trim(s, s[0]+","+s[1]===k?0:1));
+    ctx.moveTo(e[0][0],e[0][1]); ctx.quadraticCurveTo(px(cx),py(cy),e[1][0],e[1][1]);
+  }
+  ctx.stroke();
   ctx.lineWidth=1;
   roomCellTip(L);
 }
@@ -306,7 +332,9 @@ function burnReset(){ burnRings=[]; burnSparks=[]; burnSmoke=[]; burnEvs=[]; bur
    happening to instead of moving both. Floored, or a dead shake jitters the
    board for ever at a fifth of a pixel. */
 const burnShakeAt=()=>burnShake>0.2?burnShake:0;
-const burnShakeRnd=()=>(burnRnd()-0.5);
+/* off the PLANT's clock, not a fresh die: a per-frame roll kept jittering the
+   board while the sim was paused, and the amplitude alone froze. */
+const burnShakeRnd=k=>fxHash(Math.round(fxClock()*120)*2+k)-0.5;
 
 /* ══ ONE BANG IS ONE RECORD ══
    It opens on the first cell that burns, absorbs every cell that burns into
