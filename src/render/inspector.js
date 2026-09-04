@@ -33,6 +33,30 @@ const cssCol=c=>c?(C2VAR[c]||c):"";
 let railPickId=null;
 const railSelfPick=()=>{ const self = railPickId!==null && railPickId===sel;
   railPickId=null; return self; };
+
+/* ══ WHICH MACHINES BELONG TOGETHER, ASKED OF THE DRAWING ══
+   Its primary LOOP, else the CIRCUIT its own nodes sit on, else nothing at all
+   - a pinned part inherits its host's answer, because a rod drive belongs
+   wherever the vessel it is bolted to belongs. No name test and no table: a
+   machine's company is a fact about what it is plumbed to.
+   `panelGroupRank` is the ORDER those groups are read in, and it is the order
+   the coolant meets them: the primary every loop shares, then the loops, then
+   the other circuits, then what carries no coolant at all. Both are here
+   rather than beside one screen's rail because BOTH rails want them - the
+   control room stacks its wells by this and the margin panels group along an
+   edge by it (ui/margin.js). */
+function panelGroup(p){
+  const li=loopOf(p.id); if(li!=null) return "loop"+li;
+  const G=nodeGraph(), ns=G.nodesOf[p.id]||[];
+  if(!ns.length) return p.pin&&p.pin.to ? panelGroup(partOf(p.pin.to)||p) : "support";
+  return "circ"+G.circuit[ns[0]];
+}
+function panelGroupRank(k){
+  if(k==="support") return 3e6;
+  if(k.startsWith("loop")) return 1e6 + (+k.slice(4));
+  const n=+k.slice(4);
+  return n===nodeGraph().coreCirc ? 0 : 2e6 + n;
+}
 function railPick(well,ids,name){
   if(!well.head) return well;
   well.head.classList.add("kit-rule-pick");
@@ -260,6 +284,9 @@ function paramsFor(p){
               :" This row loads the slots you painted as zone "+(z+1)+". The core's beta, density and excess are the blend; its melt limit is the WORST fuel in it."),
           bagAcc(D.zoneFuel,z,()=>zoneFuelOf(z),latMeasure),FUEL);
     }
+    num("PIN DIAMETER","How fat one fuel pin is, on a fixed 12.6 mm rod pitch. It is the one dimension inside the assembly you can set, and it moves nearly everything: a thin pin has more surface per unit of fuel, so the hottest pin takes more power before it reaches its flux ceiling, and it stores less heat to carry into a melt when the flow stops. It also carries more clad, which eats neutrons, and leaves more water, which walks the moderation ratio to the right. A fat pin is the opposite trade in every line.",
+        {get:()=>rodD()*1000, set:v=>{ D.rodD=v/1000; latRevolve(); }},
+        "mm",1,()=>ROD_D0*1000);
     // a feature of the VESSEL, which is what its own tooltip already said -
     // it never belonged on the pressurizer's panel
     sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.","chim",0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
@@ -268,7 +295,7 @@ function paramsFor(p){
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
     B.push({kind:"lattools",pen:"plan",title:"RADIAL PLAN",
       tools:LATPEN_CORE.concat(LATPEN_RODS),
-      tip:"A quarter of the core seen from above - the r axis of the solve, revolved about the corner of the first slot. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."});
+      tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."});
     B.push({kind:"latplan"});
     B.push({kind:"lattools",pen:"sec",title:"AXIAL SECTION",
       tools:LATPEN_SEC,
@@ -676,6 +703,14 @@ function benchReviewData(){
 const isMatKey = k => typeof k==="string" && k.indexOf("mat:")===0
                    && !!matCell(+k.slice(4,k.indexOf(",")), +k.slice(k.indexOf(",")+1));
 const matKeyXY = k => { const i=k.indexOf(","); return [+k.slice(4,i), +k.slice(i+1)]; };
+/* THE PANEL IS NAMED FOR WHAT IT EDITS. A wall cell's fields carry the whole
+   seal, so a title reading one cell's coordinates named the wrong thing. */
+function matPanelTitle(key){
+  const [x,y]=matKeyXY(key), c=matCell(x,y);
+  if(!c) return "WALL";
+  const cs = matSealCells(x,y);
+  return matRow(c.m).name+"  "+(cs ? "SEAL  "+cs.length+" CELLS" : x+","+y);
+}
 function paramsForMat(key){
   const B=[], [x,y]=matKeyXY(key);
   if(!matCell(x,y)) return B;
@@ -688,20 +723,22 @@ function paramsForMat(key){
          set:i=>{ matCell(x,y).m=MAT[i].id; matPen=MAT[i].id; buildLayout(); }},
     tip:"What this cell is made of. Only a GAS-TIGHT material makes a closed shape a containment; the other two are shielding and nothing else.",
     items:MAT.map(m=>({name:m.name, tip:m.tip}))});
-  /* APPLIED TO THE WHOLE REGION, not to the one cell: a wall with one thick
-     cell in it is not a thicker wall. The suggestion is Barlow at this cell's
+  /* APPLIED TO THE WHOLE SEAL, not to the one cell and not to the region's own
+     `wall` either - that set is only what touches the volume, so a painted
+     box's four CORNERS kept whatever they were painted at. The suggestion is
+     Barlow at this cell's
      own local span, which is what makes a long flat side ask for more steel
      than a corner does. */
   B.push({kind:"num",title:"THICKNESS",unit:"mm",dp:0,
     tip:"How thick the wall is. It is what the cell is RATED for and it is what the cell weighs. SUGGEST is Barlow against the FLAT SPAN this cell is in the middle of - so a long straight wall asks for a thick one and a corner asks for almost nothing.",
-    key:{get:()=>matThick(x,y), set:v=>{ const g=matRegionAt(x,y);
-      if(g) for(const i of g.wall) (D.mat[(i%GW)+","+((i/GW)|0)]||{}).t=v;
+    key:{get:()=>matThick(x,y), set:v=>{ const cs=matSealCells(x,y);
+      if(cs) for(const i of cs) (D.mat[(i%GW)+","+((i/GW)|0)]||{}).t=v;
       else matCell(x,y).t=v;
       buildLayout(); }},
     suggest:()=>matThickSuggest(x,y),
     massFn:v=>v/1000*MPC*ROOM_DEPTH*matRow(matCell(x,y).m).rho/1000});
   B.push({kind:"readlist",rows:()=>{
-    const g=matRegionAt(x,y);
+    const g=matSealAt(x,y);
     const rate=matRating(x,y), burst=matBurstP(x,y);
     const rows=[
       ["SPAN",(matSpan(x,y)*MPC).toFixed(1)+" m   arm "+(matSpanEff(x,y)*MPC).toFixed(1)+" m",null,
@@ -747,7 +784,7 @@ function paramsForMat(key){
          "What is left to burn with. A tight region cannot draw fresh air, so a fire in one eats its own and goes out with the hydrogen unburnt - until the wall opens."],
         ["ATMOSPHERE",burning?"BURNING":(h2>=H2_LFL&&o2>=O2_LOC?"FLAMMABLE":"INERT"),
          burning?C.red:(h2>=H2_LFL?C.amber:C.green),"One word for the three readings above."],
-        ["HELD BACK",((1-contRelAt(s,x,y))*100).toFixed(0)+" %",null,
+        ["HELD BACK",((1-regionRel(s,g))*100).toFixed(0)+" %",null,
          "How much of a release leaving inside this region stays inside it. It is the weakest material on this wall, not a menu row - and it is zero the moment the wall opens."]);
     }
     /* WHAT IS STANDING ON ITS FLOOR, and what that has reached. A break inside

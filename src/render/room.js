@@ -117,7 +117,7 @@ function roomCellTip(L){
   { const m=matOf(X,Y);
     if(m){ row("WALL         ",m.name+"  "+matThick(X,Y).toFixed(1)+" mm"+(L&&matOpen(L,X,Y)?"  BREACHED":""));
            row("WALL RATING  ",(matRating(X,Y)*1000).toFixed(1)+" kPa   arm "+(matSpanEff(X,Y)*MPC).toFixed(1)+" m"); }
-    const g=matRegionAt(X,Y);
+    const g=matSealAt(X,Y);
     if(g){
       row("REGION       ",g.cells.length+" cells   "+matRegVol(g).toFixed(1)+" m3   "+(matSealed(L||null,g)?"SEALED":"OPEN"));
       if(L){ row("REGION PRESS ",(regionDP(L,g)*1000).toFixed(1)+" kPa");
@@ -349,6 +349,11 @@ const burnRnd=()=>{ burnSeed^=burnSeed<<13; burnSeed^=burnSeed>>>17; burnSeed^=b
                     return (burnSeed>>>0)/4294967296; };
 function burnReset(){ burnRings=[]; burnSparks=[]; burnSmoke=[]; burnEvs=[]; burnTouch=[];
                       flashT=0; burnShake=0; if(glowF) glowF.fill(0); }
+// a screen with no plant never steps this, so a live shake would kick for ever
+function burnIdle(){
+  if(burnShake||burnEvs.length||burnRings.length||burnSparks.length||burnSmoke.length) burnReset();
+  burnClk=0;
+}
 /* THE DECK KICKS, AND THE WHOLE BOARD DOES. drawPlant() applies it, because a
    shake inside this function would move the explosion off the plant it is
    happening to instead of moving both. Floored, or a dead shake jitters the

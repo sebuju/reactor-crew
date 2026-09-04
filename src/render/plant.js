@@ -2887,13 +2887,22 @@ const hostDpr=()=>(typeof devicePixelRatio==="number"&&devicePixelRatio)||1;
    the DEVICE scale and reading the unit back off it costs a few per cent of
    size and buys a picture that is actually on the pixel grid. */
 const hostK=()=>{ const d=hostDpr(); return Math.max(1,Math.round(d*HOST_K))/d; };
-function hostLocal(el,e){ const r=el.getBoundingClientRect(), k=hostK();
+/* A HOST CANVAS MAY STAND ON A SCALED PANEL, AND ITS PICTURE MAY NOT RESHAPE
+   WHEN IT DOES. A margin panel is scaled with the plant (ui/margin.js), so the
+   rect grew with the zoom while the type inside this canvas is drawn at a fixed
+   size - the lattice reflowed at every zoom step. offsetWidth is the LAYOUT box
+   and a transform never touches it, so the ratio between the two IS whatever
+   the panel is scaled by: the drawing is laid out in the layout box and only
+   its RESOLUTION follows the scale. 1 in a rail, where nothing is scaled. */
+const hostScale=el=>{ const o=el.offsetWidth;
+  return o>0 ? el.getBoundingClientRect().width/o : 1; };
+function hostLocal(el,e){ const r=el.getBoundingClientRect(), k=hostK()*hostScale(el);
   return {x:(e.clientX-r.left)/k, y:(e.clientY-r.top)/k}; }
 function hostForward(el){ uiForward(el, e=>hostLocal(el,e)); }
 function hostPaint(el,draw){
   const box=el.getBoundingClientRect();
   if(box.width<4||box.height<4) return;
-  const dpr=hostDpr(), k=hostK();
+  const dpr=hostDpr(), k=hostK()*hostScale(el);
   const bw=Math.max(1,Math.round(box.width*dpr)), bh=Math.max(1,Math.round(box.height*dpr));
   if(el.width!==bw||el.height!==bh){ el.width=bw; el.height=bh; }
   const c=el.getContext("2d"), s=dpr*k, w=box.width/k, h=box.height/k;
@@ -2909,28 +2918,73 @@ function hostPaint(el,draw){
    on the components that matter most the dashed leader set off along a pipe
    and read as one more branch of the plumbing for its first few pixels.
 
-   So: walk candidate points down the face and take the one furthest from any
+   So: walk candidate points along the face and take the one furthest from any
    pipe that actually lands on it. The middle is still FIRST in the list, so a
-   face with nothing on it is unchanged; the offsets alternate above and below
-   so a leader never has to travel far from where the eye expects it. */
+   face with nothing on it is unchanged; the offsets alternate either side of it
+   so a leader never has to travel far from where the eye expects it.
+
+   THE FACE IS A PARAMETER AND THE BOX IS A RECT, because "the right edge of a
+   part" was never the fact - it was true only while the one panel on the board
+   sat in a rail on the right. */
 const LEADER_SPOTS=[0.5,0.30,0.70,0.14,0.86];
 const LEADER_CLEAR=7;
-function leaderAnchor(part){
-  const a=prect(part), x=a.x+a.w;
+function leaderAnchor(a,face){
+  const flat = face==="t"||face==="b";           // the face runs left-right
+  const fx = face==="l"? a.x : a.x+a.w, fy = face==="t"? a.y : a.y+a.h;
+  const at = t => flat? {x:a.x+a.w*t, y:fy} : {x:fx, y:a.y+a.h*t};
   // every pipe vertex sitting on this face, whichever run it belongs to
-  const ys=[];
-  for(const r of pipeNetwork()) for(const q of r.pts)
-    if(Math.abs(q[0]-x)<=3 && q[1]>=a.y-2 && q[1]<=a.y+a.h+2) ys.push(q[1]);
-  if(!ys.length) return {x, y:a.y+a.h/2};
+  const on=[];
+  for(const r of pipeNetwork()) for(const q of r.pts){
+    if(flat){ if(Math.abs(q[1]-fy)<=3 && q[0]>=a.x-2 && q[0]<=a.x+a.w+2) on.push(q[0]); }
+    else    { if(Math.abs(q[0]-fx)<=3 && q[1]>=a.y-2 && q[1]<=a.y+a.h+2) on.push(q[1]); }
+  }
+  if(!on.length) return at(0.5);
   let best=null;
   for(const f of LEADER_SPOTS){
-    const y=a.y+a.h*f;
+    const p=at(f), v=flat?p.x:p.y;
     let d=Infinity;
-    for(const py of ys) d=Math.min(d,Math.abs(py-y));
-    if(d>=LEADER_CLEAR) return {x,y};
-    if(!best||d>best.d) best={x,y,d};
+    for(const q of on) d=Math.min(d,Math.abs(q-v));
+    if(d>=LEADER_CLEAR) return p;
+    if(!best||d>best.d) best={p,d};
   }
-  return {x:best.x, y:best.y};
+  return best.p;
+}
+
+/* ══ AND THE INK IS THE SAME INK WHEREVER THE PANEL IS ══
+   One polyline in LAYOUT space, rounded where it turns, with a square centred
+   on whichever ends are attached to something. Both leaders go through here.
+   SOLID. It was dashed so it could not read as one more pipe, and the two are
+   in no danger of being confused any more: a pipe is drawn in the colour of
+   what is in it at 2.2 units and up (pipeWidth), a leader is one grey unit.
+
+   THE INK UNIT IS THE CALLER'S, BECAUSE THE TWO LEADERS ARE IN DIFFERENT
+   SPACES. A leader to a RAIL has one end on the canvas and one on an HTML wall
+   that does not zoom, so its ink is CSS pixels - drawn at a flat lineWidth 1 it
+   read as a hairline at 760 px and as a fat dashed rope at full screen. A
+   leader to a MARGIN PANEL is in plant space at BOTH ends, so its ink is plant
+   units and it thins out as you zoom away exactly as a pipe does: pinned to a
+   pixel it was a hairline up close and a rope over a plant three cells wide.
+   The PATH is always in layout units; `ink` and `rad` say what a stroke unit
+   and a corner are worth in that same space. */
+const LEADER_RAD=8;
+function leaderStroke(pts,col,caps,ink,rad){
+  if(pts.length<2) return;
+  const k=ink;
+  ctx.save();
+  ctx.lineCap="square"; ctx.lineJoin="round";
+  ctx.strokeStyle=col; ctx.lineWidth=k;
+  // one path, not a line() per leg: a corner can only be rounded where the
+  // segments meet, and arcTo needs the run either side of it to do that
+  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length-1;i++){
+    const p=pts[i], a=pts[i-1], b=pts[i+1];
+    ctx.arcTo(p.x,p.y,b.x,b.y, Math.min(rad,
+      Math.hypot(p.x-a.x,p.y-a.y)/2, Math.hypot(b.x-p.x,b.y-p.y)/2));
+  }
+  const e=pts[pts.length-1]; ctx.lineTo(e.x,e.y);
+  ctx.stroke();
+  for(const c of caps||[]) fillRect(c.x-2*k,c.y-2*k,4*k,4*k,col);
+  ctx.restore();
 }
 
 /* the panels live in HTML rails now, so a selected component and the panel that
@@ -2948,7 +3002,7 @@ function leaderLine(panelEl,railEl){
   if(vx1<=vx0||vy1<=vy0) return;
   // clamped, not culled: panned off the plant, the leader pins to the viewport
   // edge and still says which way the component went
-  const s0 = vScr(leaderAnchor(part));
+  const s0 = vScr(leaderAnchor(prect(part),"r"));
   const sx=clamp(s0.x,vx0,vx1), sy=clamp(s0.y,vy0,vy1);
   // scrolled away, the leader takes the first turn only and then runs clean off
   // the top or bottom of the canvas, so it reads as continuing to a panel that
@@ -2958,31 +3012,14 @@ function leaderLine(panelEl,railEl){
   const ey=vis? ey0 : (ey0<r.y? TOPBAR_H : H);
   if(r.x-sx<8) return;                            // rail sits on the plant, no room to turn
   const gx=(sx+r.x)/2;                            // turn halfway across, not against the rail
-  // one path, not three line() calls: a corner can only be rounded where the
-  // segments meet, and arcTo needs the run either side of it to do that
-  const rad=Math.max(0,Math.min(8,Math.abs(gx-sx)/2,Math.abs(r.x-gx)/2,Math.abs(ey-sy)/2));
-  /* STROKE WEIGHT IS CSS PIXELS, NOT LAYOUT UNITS. The leader's two ends are a
-     canvas point and an HTML rail, and only one of those grows with the window -
-     drawn at a flat lineWidth 1 it read as a hairline at 760 px and as a fat
-     dashed rope at full screen. The PATH stays in layout space; only what is
-     measured in ink divides by the stage scale. */
-  const k=cvPx();
-  ctx.save();
-  ctx.lineCap="square"; ctx.lineJoin="round";
-  ctx.setLineDash([4*k,3*k]);
-  ctx.strokeStyle=C.amber; ctx.lineWidth=k;
-  ctx.beginPath(); ctx.moveTo(sx,sy);
-  if(Math.abs(sy-ey)<1) ctx.lineTo(vis?r.x:gx,sy);
-  else { ctx.arcTo(gx,sy,gx,ey,rad);
-    if(vis){ ctx.arcTo(gx,ey,r.x,ey,rad); ctx.lineTo(r.x,ey); } else ctx.lineTo(gx,ey); }
-  ctx.stroke();
-  ctx.setLineDash([]);
-  // a square at each end, so both read as attached rather than as a stray stroke.
-  // each is CENTRED on what it marks, so the rail one is half swallowed by the
-  // opaque rail and reads as slotted into its edge
-  fillRect(sx-2*k,sy-2*k,4*k,4*k,C.amber);
-  if(vis) fillRect(r.x-2*k,ey-2*k,4*k,4*k,C.amber);
-  ctx.restore();
+  const a={x:sx,y:sy}, b={x:vis?r.x:gx, y:ey};
+  const pts = Math.abs(sy-ey)<1 ? [a,b]
+    : vis ? [a,{x:gx,y:sy},{x:gx,y:ey},b] : [a,{x:gx,y:sy},b];
+  // a square at each end, so both read as attached rather than as a stray
+  // stroke. Each is CENTRED on what it marks, so the rail one is half swallowed
+  // by the opaque rail and reads as slotted into its edge - and a panel
+  // scrolled out of the rail gets none, because it is attached to nothing
+  leaderStroke(pts, C.amber, vis? [a,b] : [a], cvPx(), LEADER_RAD);
 }
 
 /* ══ THE HULL PICTURE IS A PURE FUNCTION OF THE HULL ══
@@ -3046,7 +3083,7 @@ function plantBackPaint(L,GHp,rowH){
 /* vx/vw are the viewport's left edge and width - GX/(W-2*GX) by default, or
    whatever the caller's own HTML rail leaves clear of the plant, so the
    canvas never draws under a docked panel. */
-function drawPlant(y0,L,vh,vx,vw){
+function drawPlant(y0,L,vh,vx,vw,padX,padY){
   PLANT_LM=layoutMetrics(); GY=y0;
   layerTick();                                     // one memo/frame - see layers.js
   /* one clock/frame, and it is the PLANT's - so pause freezes every effect and
@@ -3063,7 +3100,7 @@ function drawPlant(y0,L,vh,vx,vw){
      current grid would otherwise be drawn outside the clip. */
   const dh=ui.drag&&ui.drag.type==="hull"?ui.drag:null;
   const fitW=Math.max(GW,dh&&dh.gw||0)*CELL, fitH=Math.max(GHp,(dh&&dh.gh||0)*CELL);
-  vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, fitW+EL_GUT, fitH);
+  vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, fitW+EL_GUT, fitH, padX, padY);
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   // the letterbox, halved and then snapped to a device pixel - vOrigin() is
@@ -3405,7 +3442,7 @@ function drawPlant(y0,L,vh,vx,vw){
      two reasons: an effect is behind an instrument, and no menu switch may be
      able to turn off the picture of an explosion. The BLAST layer is the
      survey of what one LEFT; roomBurnFx() is the one happening. */
-  if(L) roomBurnFx(L);
+  if(L) roomBurnFx(L); else burnIdle();
   layerPass("over",L);          // instruments and annotations, on top of the machines
   /* THE PRESSURIZER'S DIAL IS NOT A LAYER. It rode the FLOW METERS switch, and
      that switch is about the three readings a RUN carries; this gauge is not on

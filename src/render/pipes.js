@@ -1506,6 +1506,24 @@ function matPaintDraw(L){
   if(!D.mat) return;
   ctx.save();
   const RG=matRegions();
+  /* A SEAL IS SELECTED, NOT A CELL - AND THE HIGHLIGHT IS THE SEAL'S OWN
+     SHAPE. A run outlines its casing rather than the cells it crosses; a wall
+     is the same picture, so the amber goes round the BAND, under it, and the
+     band's own opaque fill then covers every internal seam. A square drawn per
+     cell said "this cell", which is exactly what the panel does not edit. */
+  const selCells=(()=>{
+    if(typeof sel!=="string" || sel.indexOf("mat:")!==0) return null;
+    const j=sel.indexOf(","), x=+sel.slice(4,j), y=+sel.slice(j+1);
+    if(!matCell(x,y)) return null;
+    const cs=matSealCells(x,y);
+    return cs ? cs.map(i=>[i%GW,(i/GW)|0]) : [[x,y]]; })();
+  if(selCells){
+    ctx.save(); ctx.strokeStyle=C.amber; ctx.fillStyle=C.amber;
+    ctx.lineJoin="round"; ctx.lineWidth=3;
+    for(const c of selCells){ const r=grect(c[0],c[1],1,1);
+      matBandPath(r, matInFaces(RG,c[0],c[1]), matWallPx(c[0],c[1],r));
+      ctx.fill(); ctx.stroke(); }
+    ctx.restore(); }
   for(const k in D.mat){
     const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
     if(x<0||x>=GW||y<0||y>=GH) continue;
@@ -1548,8 +1566,6 @@ function matPaintDraw(L){
         const tx = hq.to%GW, ty = (hq.to/GW)|0;
         fxJet(r.x+r.w/2, r.y+r.h/2, r.w*0.8, fxEase("brw:"+k, clamp(hq.q/HOLE_FULL,0,1)),
               "#ffd0c4", Math.sign(tx-x), Math.sign(ty-y), 37); } }
-    if(sel==="mat:"+k){ ctx.strokeStyle=C.amber; ctx.lineWidth=2;
-      ctx.strokeRect(r.x+1,r.y+1,r.w-2,r.h-2); }
   }
   ctx.restore();
 }
