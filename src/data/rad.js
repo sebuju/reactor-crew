@@ -49,8 +49,13 @@ const RAD_HI=1.0, RAD_FLOOR=0.02, RAD_CEIL=3;
 // buildLayout() and the one placeable part, design-bench.js, carries one)
 // falls back to the same 0.75 ordinary equipment already reads, rather than
 // inventing a shield out of an unnamed part.
+/* PAINT FIRST, because it is the one thing in a cell that is there to stop a
+   ray. A painted cell may also be standing under a machine's box in the
+   occupancy grid, and the STRONGEST thing in the cell is what the ray meets. */
 function radMu(p){
   if(!p) return 1;
+  if(p.mat){ const i=p.id.indexOf(","), m=matOf(+p.id.slice(4,i), +p.id.slice(i+1));
+    if(m) return m.mu; }
   const R = ROLE[p.role];
   return (R && R.mu !== undefined) ? R.mu : 0.75; // DEFAULT: no role declared - see ROLE's own comment on why this must not read as a shield
 }
@@ -102,7 +107,9 @@ let radCache=null, radCacheSig="";
 function radGeom(){
   // pipeSig() as well: the primary circuit is a source now (K.pipe, below),
   // so laying a cell of pipe moves the field the same way sliding a shield does
-  const sig=laySig()+"|"+pipeSig();
+  // matSig() as well: painting a cell moves the field exactly the way sliding
+  // a shield used to, and it is the only way to move it now.
+  const sig=laySig()+"|"+pipeSig()+matSig();
   if(radCache && radCacheSig===sig) return radCache;
   /* A BLANK GRID HAS NEITHER VESSEL NOR CONTROL STATION. The field is still
      solved - there is simply nothing shining and nowhere the crew stand, and
@@ -153,18 +160,20 @@ function radGeom(){
    comparable across every architecture regardless of rated power. */
 function radSrc(L){
   if(!L) return {core:1, sg:0, air:0, pipe:pipeSrc(1)};
-  /* contRel and catcher are COMMISSIONING facts and live on P, never on S -
-     reading them off the live state instead returned undefined, which made
-     s.doseRate NaN the instant fuel failed and every readout downstream with
-     it. A source term asks the design what it was built with and the state
-     only what it is doing. */
+  /* THE VESSEL'S OWN CELL DECIDES WHAT ESCAPES IT. P.contRel was a
+     commissioning scalar off a menu row; contRelAt() is the same question
+     asked where the damaged fuel actually stands, so a reactor walled into a
+     bounded region shines less into the ship and one standing in the open
+     shines everything. It reads the LIVE fill, because a wall that has been
+     shot is not a wall any more - which is precisely the fact a commissioning
+     scalar could never carry. `catcher` is still a commissioning fact. */
   /* The melt term takes HOW MUCH is molten instead of a latch. A fully molten
      core shines exactly what it always did, so nothing re-pins - what moved is
      the approach to it, where a core 3 % molten and one 90 % molten used to be
      the same picture. RAD_DMG and RAD_MELT both keep their exact meanings, and
      s.melt stays the latch for the banner, the trend and the event log: latch
      for the story, field for the physics. */
-  return {core:(L.n*PROMPT_F+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*P.contRel
+  return {core:(L.n*PROMPT_F+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*contRelPart(L, roleOf("core"))
               + (!P.catcher?RAD_MELT*L.meltFrac:0),
           sg: L.sgtr?RAD_SGTR:0,
           /* EVERY tank, at its own strength: how much is in it times how
@@ -181,6 +190,12 @@ function radSrc(L){
           // compartment's air, not sitting at a point inside it that a wall
           // can stand between; a shield stops a ray from a source, not a gas
           // the room is already full of.
+          /* AIRBORNE IS A FLOOR ON EVERY CELL AND IS NOT SHIELDED - a shield
+             stops a ray from a source, not a gas the room is already full of.
+             It is a floor on the CREW'S OWN air, and s.release is now what got
+             past a wall rather than what a menu row said (contRelAt(),
+             paint.js), so the region is already inside this figure and masking
+             it to the region as well would charge the wall twice. */
           air:RAD_AIR*L.release,
           pipe:pipeSrc(L.n)};
 }
@@ -231,10 +246,11 @@ function radParty(f,p,g){
 }
 
 // The hottest cell any repair party could ever be asked to stand in, over
-// every non-shield component on the plant.
+// every component on the plant. Shielding is PAINT now, so there is no part to
+// skip: paint is not in LAY.parts, and freeAdj() already refuses its cells.
 function radPeak(f){
   const g=occupied(null); let v=RAD_FLOOR, who=null;
-  for(const p of LAY.parts){ if(p.grp==="shield") continue;
+  for(const p of LAY.parts){
     for(const c of freeAdj(p,g)){ const q=f[c[1]*GW+c[0]]; if(q>v){v=q;who=p;} } }
   return {v:clamp(v,RAD_FLOOR,RAD_CEIL), who};
 }
@@ -243,7 +259,7 @@ function radPeak(f){
 // can I send people" question, for a renderer to outline.
 function partyCells(){
   const g=occupied(null), s=new Set();
-  for(const p of LAY.parts){ if(p.grp==="shield") continue;
+  for(const p of LAY.parts){
     for(const c of freeAdj(p,g)) s.add(c[1]*GW+c[0]); }
   return s;
 }
