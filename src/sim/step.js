@@ -38,7 +38,7 @@ function* commissionGen(){
      noise:CHAN[D.chan].noise, id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:holdDampK()*L.pzrK,
-     flowK:L.flowK, dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
+     dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
      rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi, rodRate:D.rodSpd,
      /* IS THERE A VESSEL FOR THE FUEL TO BE IN. The lattice is drawn on its
         own surface, so D.power and every reactivity term above exist whether
@@ -62,7 +62,7 @@ function* commissionGen(){
   /* tc/pc/rhoc are this fluid's own critical point, off its COOLANT row: latent
      heat and both saturated densities fall to a known value there, and until
      they were carried here every fluid fell to water's. */
-  P.sat   = {p0:P.P0, T0:P.tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:CP_W,
+  P.sat   = {p0:P.P0, T0:P.tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV,
              tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:P.rho0, solidK:a.solidK};
   P.hfg   = a.hfg;                                     // THIS coolant's latent heat, kJ/kg
   /* A PLANT MAY COMMISSION SATURATED. The ceiling used to be tsat0-35, a hard
@@ -159,6 +159,24 @@ function* commissionGen(){
      runout solves to no head, which solves to no flow, which restores full
      head. Half a step a pass lands it. */
   let refOuts = {};
+  /* ══ WHAT THE LOOP CARRIES AGAINST WHAT THE CORE WAS DRAWN FOR ══
+     P.wRated is the flow the core takes coreDT0() of rise at in its own
+     coolant - the same figure pumpFlowSuggest() sizes the pumps to and
+     coreConst() turns into P.G0 - and P.flowK is the solved reference over it.
+     It was a typed 0.006 per metre of primary run (layoutMetrics), so the stock
+     plant held 84 % because a correlation said so while the solve stood beside
+     it saying 93. Every reader downstream - the commissioning power P.n0, the
+     pin film, the DNB mass flux, each shell's tube flow - is then the solve.
+     INSIDE THE LOOP, because the steam scale and the governor's gate follow
+     P.n0 and both are conductances this same loop evaluates (feedTrainC,
+     turbGate): set once outside it they would be the previous pass's plant. */
+  P.wRated = P.rated*1000/(P.sat.cp*coreDT0());
+  const refPower = () => {
+    P.flowK = P.netRef/P.wRated;
+    P.feff0 = P.flowK;
+    P.n0    = Math.min(1, P.flowK);
+    P.steamRef = P.n0*P.rated*1000/steamRise();
+    P.turbC = P.steamRef/Math.max(flowW(1, steamRhoDes(), sgDesignP(), condPDes()), 1e-9); };
   { const want = ratedSteam()/Math.max(1,sgCount());
     /* SECANT, not a rate-limited walk: the network is LINEAR in head, so one
        generator's flow is affine in its own valve and a handful of passes
@@ -186,6 +204,7 @@ function* commissionGen(){
       P.netRefByRun = {};
       const nomRun = {};
       P.netRef = netCoreFrac0(P.netNom, P.netRefByLoop, nomRun, {pumpQBy:P.pumpQNom});
+      refPower();
       netCoreFrac0(P.net, null, P.netRefByRun, {pumpQBy:P.pumpQRef});
       const freg = {}, prev = {}, fedPrev = {};
       for(const id of sgIds()){ freg[id] = 0; prev[id] = 1; }
@@ -281,8 +300,6 @@ function* commissionGen(){
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = a.P0>3 ? 1.22 : 4.0;
   P.solidK = a.solidK;                                 // MPa/K of a sealed liquid: beta over compressibility
-  P.feff0 = P.flowK;                                   // the share of rated flow this pipe run can carry
-  P.n0    = Math.min(1, P.feff0);                      // power at which removal balances heat
   /* ── THE TWO SIZING FIGURES OF THE STEAM SIDE, FITTED AT ONE ANCHOR ──
      The plant at rest is the anchor and both figures are read off it, so
      nothing pinned against a plant at rest moves.
@@ -427,12 +444,23 @@ function* commissionGen(){
        point moves with the gate again, so the full step converges in three;
        the damped one crawled geometrically and never met its own tolerance in
        ten, which cost seven whole re-commissionings per plant. */
+    /* AND A SECANT ON THE SECOND ROUND. The full step assumes the shell moves
+       in proportion to the gate, which is a choked gate into a fixed line. A
+       line with real losses answers less than that - measured, k walked 0.980,
+       0.989, 0.992, 0.994 and never met tolerance in six, each round a whole
+       settle - so from the second round the step is the secant of the two
+       last (ln turbC, ln k) pairs, which lands in three. */
+    let lnCw, lnKw;
     for(let r=0;r<6;r++){ let k=0, to=0;
       yield {frac:.38+.10*r, stage:"GOVERNOR"};
       if(P.turbC>0) for(const id of ids){ k = Math.max(k, secP(S,id)/sgDesignP(id)); to += S.steamTo[id]||0; }
       k = (k>0 && S.turbWk>0) ? k*Math.max(to,S.turbWk)/S.turbWk : 1;
-      if(r>0 && Math.abs(k-1) < 1e-3) break;
-      P.turbC *= k; resetPlant(); } }
+      if(r>0 && Math.abs(k-1) < 3e-3) break;
+      const lnC = Math.log(P.turbC), lnK = Math.log(k);
+      let step = lnK;
+      if(r>0){ const m = (lnK-lnKw)/(lnC-lnCw); if(m < -0.05 && m > -1.5 && isFinite(m)) step = -lnK/m; }
+      lnCw = lnC; lnKw = lnK;
+      P.turbC *= Math.exp(step); resetPlant(); } }
   S.dnbr  = P.dnbr0;
   screen="operate"; layout();
 }
@@ -1199,6 +1227,7 @@ function combatHit(id){
     p=targets[k];
   }
   s.dmgParts.push(p.id);
+  s.dmgWhy[p.id] = "HIT";
   const fx=dmgFx(p.id);
   if(fx.hit) fx.hit(s, p.id);
   logE("alarm","COMBAT DAMAGE / "+fx.msg, fx.why+
@@ -1492,7 +1521,7 @@ const AUTOROD_A0=44;                    // pcm/K, the same plant's whole feedbac
    obeys; it was loopKg()*CP_W over P.graceK, and both of those were water's
    figure with a fitted column making up the difference. */
 const tavgRate = () => { const c = satOfCirc(nodeGraph().coreCirc);
-  return P.rated*1000/(loopKg()*Math.max(c.cp || CP_W, 0.1)); };
+  return P.rated*1000/(loopKg()*c.cp); };
 const tempFb = () => Math.abs(P.aM+P.aS)+Math.abs(P.pwrDef)/Math.max(P.TfRef-P.Tref,1);
 /* ══ AND THE TIMES STRETCH WITH THE LAG, BECAUSE THE LAG IS WHAT THEY ARE ══
    AUTOROD_LAG is how many times slower than the reference plant this one's
@@ -1807,7 +1836,7 @@ const sgBurstP=id=>sgDesignP(id)*SG_BURST_K;
    balance below cannot disagree about whether there is a lid on it. */
 const sgOpen=(s,id)=>!!(s && ((s.sgBurst && s.sgBurst[id]) || partWrecked(s,id)));
 /* Specific heat of pressurised water at PWR conditions, kJ/kg/K. PHYSICAL,
-   not fitted. With CORE_DT0 it turns rated power into the loop's rated mass
+   not fitted. With coreDT0() it turns rated power into the loop's rated mass
    flow, and that is the one bridge between a flow in % of loop inventory -
    invRate()'s currency, which is what an SGTR leak is measured in - and a
    flow in kg/s, which is what the secondary mass balance counts. Without it
@@ -1821,7 +1850,7 @@ const sgOpen=(s,id)=>!!(s && ((s.sgBurst && s.sgBurst[id]) || partWrecked(s,id))
    same question - how much water is this loop - so there is one answer and
    not a fitted one beside a measured one. */
 const loopKg=()=>(P && P.invKg0 > 0) ? P.invKg0
-                : P.rated*1000/(CP_W*CORE_DT0)*LOOP_TRANSIT;
+                : P.rated*1000/(P.sat.cp*coreDT0())*LOOP_TRANSIT;
 /* ══ THE INVENTORY, READ OFF THE FIELD ══
    The core piece, less every node another book owns (netBooked) - a tank's
    level, a shell's water and its steam space are counted once each, by their
@@ -2584,7 +2613,7 @@ function dnbW3(pMPa,gSI,x,dhM,dhSub){
    not a margin at all. */
 function dnbrOf(m){
   if(m.law==="boil")
-    return P.dnbrK*(m.dhSub/CP_W)/Math.max(m.dT,1e-3);
+    return P.dnbrK*(m.dhSub/P.sat.cp)/Math.max(m.dT,1e-3);
   if(m.law==="temp")
     return P.dnbrK*Math.max(P.tdmg-m.Tin,0)/Math.max(m.Tf-m.Tin,1e-3);
   return P.dnbrK*dnbW3(m.p,Math.max(m.g,1e-3),m.x,P.dh,m.dhSub)/Math.max(m.q,1);
@@ -2700,6 +2729,21 @@ const BURST_LO={sig:20,T:1477}, BURST_HI={sig:140,T:1030};
    answer is a thermal mass and a failure mechanism per component, which is a
    plan of its own. */
 const ROOM_DMG_SPAN=60, ROOM_DMG_TAU=25;
+/* A SUSTAINED SQUEEZE IS NOT A BANG, so it gets the ramp rather than the
+   switch, and its own limit: pburst is a SHOCK rating and a machine takes far
+   more static pressure than blast pressure. The span is a FRACTION of that
+   limit because pburst runs 15 kPa to 120 across this board. Bought balance,
+   as ROOM_DMG_TAU is. */
+const ROOM_CRUSH_K=10, ROOM_CRUSH_SPAN=0.5, ROOM_CRUSH_TAU=60;
+// over the limit by a span, for a time constant - heat and overpressure both
+function hurtStep(bag, id, over, tau, dt){
+  if(!(over > 0)) return false;
+  const h = (bag[id]||0) + Math.min(over,1)*dt/tau;
+  bag[id] = h;
+  if(h < 1) return false;
+  bag[id] = 0;
+  return true;
+}
 const BURST_TAU=8, BURST_SPAN=50;
 function burstT(dP){
   const sig=burstR()*Math.max(dP,0);
@@ -2781,15 +2825,15 @@ const H2_EV=20;
    channel and hands back what the channels actually did, and this is what says
    how much water a rated channel carries. QMIN floors the flow it is divided
    by. CORE_DT_TAU is gone with the correlation - a lag existed to break an
-   algebraic loop there is no longer one of. CORE_DT_MAX stays: past it the
+   algebraic loop there is no longer one of. coreDTMax() stays: past it the
    channel is boiling rather than getting hotter, so the figure stops being a
    temperature rise, and buoyancy is the one thing that reads it. */
-// CORE_DT0 lives in pipenet.js: layout.js's pump-flow suggestion reads it, and
+// coreDT0() lives in pipenet.js: layout.js's pump-flow suggestion reads it, and
 // that runs at module load, where a const declared in this file is still in TDZ
-const CORE_DT_QMIN=0.004, CORE_DT_MAX=250;
+const CORE_DT_QMIN=0.004;
 // the rise at RATED flow, which is what a plant that has only just been
 // commissioned already has in it
-const coreDTRated = heat => CORE_DT0*heat;
+const coreDTRated = heat => coreDT0()*heat;
 /* ══ A SOLVED CURRENT IN KILOGRAMS ══
    THE SOLVE'S CURRENCY IS KILOGRAMS NOW, so this is a magnitude and nothing
    else. It used to be the one conversion out of an abstract current, priced
@@ -2890,6 +2934,7 @@ function sumpStep(s, dt){
       if(p.y + p.h <= line) continue;
       if(matRegionOf(p) !== g) continue;
       s.dmgParts.push(p.id);
+      s.dmgWhy[p.id] = "FLOODED";
       const fx = dmgFx(p.id);
       if(fx.hit) fx.hit(s, p.id);
       logE("alarm","FLOODING / "+fx.msg,
@@ -3323,7 +3368,7 @@ function resetPlant(){
         also what a plant already at power has in it: the rise is MEASURED up
         each channel now, so starting at zero would put the whole core 15 K
         cold for the first tick and kick a moderator transient nobody caused. */
-     coreDT:CORE_DT0*P.n0,
+     coreDT:coreDT0()*P.n0,
      /* the pressure in the vessel, MPa - a readout the tick fills, beside
         heat and sc, and no longer the same number as s.P */
      pCore:P.P0,
@@ -3386,7 +3431,7 @@ function resetPlant(){
         MONOTONIC while it is over its limit, and cleared when a party fixes
         it, or a repair in a room still cooking would be undone the same tick
         it finished. Keyed by part id, refilled never rebuilt. */
-     roomHurt:{},
+     roomHurt:{}, roomCrush:{}, dmgWhy:{},
      /* THE SKIN OF EACH MACHINE, K, and what its contents are giving up
         through it, kW. Seeded by roomStep() off partTemp() on the first tick
         rather than here: what a machine contains is not known until the pots
@@ -3489,7 +3534,7 @@ function resetPlant(){
     const sh = sgShare(byLoop), n = Math.max(1, sgIds().length), filmK = 1-0.85*Math.min(clamp(S.vf,0,1.5),1);
     for(const id in HEATBAL.sgQBy) if(!(id in sh)) delete HEATBAL.sgQBy[id];
     for(const id in sh){ S.sgShare[id] = sh[id];
-      HEATBAL.sgQBy[id] = sgQAt(S, id, Math.max(P.flowK*S.flowNet*sh[id]*n, 0.02), filmK); } };
+      HEATBAL.sgQBy[id] = sgQAt(S, id, Math.max(S.flowNet*sh[id]*n, 0.02), filmK); } };
   HEATBAL.heat = S.heat;
   /* WITH A PRESSURE FIELD, because the solve is keyed on last tick's: a
      standby train's check valve reads wide open until there is one
@@ -3609,7 +3654,7 @@ function resetPlant(){
         netFlowK(S, rf, pf, o); keepPField(S, pf);
         const by = o.sgSteamOutBy || {};
         const now = shells.map(id => by[id]||0);
-        if(was && now.every((v,j) => Math.abs(v-was[j]) <= 1e-9*Math.max(Math.abs(v),1))) break;
+        if(was && now.every((v,j) => Math.abs(v-was[j]) <= 1e-6*Math.max(Math.abs(v),1))) break;
         was = now; }
       last = o;
       const by = o.sgSteamOutBy || {};
@@ -3669,7 +3714,7 @@ function resetPlant(){
     const feedAt = () => { let was = null, by = {};
       for(let k=0;k<30;k++){ const o = solveFeed(); by = o.sgFeedBy || {};
         const now = ids.map(id => by[id]||0);
-        if(was && now.every((v,j) => Math.abs(v-was[j]) <= 1e-7*Math.max(Math.abs(v),1))) break;
+        if(was && now.every((v,j) => Math.abs(v-was[j]) <= 1e-4*Math.max(Math.abs(v),1))) break;
         was = now; }
       return by; };
     const fedOf = id => feedAt()[id] || 0;
@@ -4061,6 +4106,7 @@ function step(dt){
     const id = "pipe:"+c[0]+","+c[1];
     if(s.dmgParts.indexOf(id) >= 0) continue;
     s.dmgParts.push(id);
+    s.dmgWhy[id] = "BURST";
     const fx = dmgFx(id);
     logE("alarm","PIPE BURST / "+fx.msg,
       pipeName(r)+" has split at "+c[0]+","+c[1]+" - "+Math.max(pa,pb).toFixed(2)+
@@ -4093,6 +4139,7 @@ function step(dt){
             : tie[Math.min(tie.length-1, Math.floor(srand(s)*tie.length))];
     const id = "mat:"+c[0]+","+c[1];
     s.dmgParts.push(id);
+    s.dmgWhy[id] = "BURST";
     const fx = dmgFx(id);
     logE("alarm","CONTAINMENT FAILURE / "+fx.msg,
       "The wall at "+c[0]+","+c[1]+" has let go - "+(pReg*1000).toFixed(0)+
@@ -4289,13 +4336,19 @@ function step(dt){
 
      P.sgUA is fitted at ONE anchor - see commission(). A generator with nowhere
      to send its steam is no longer flagged: its shell simply heats to Tavg and
-     the difference closes. */
+     the difference closes.
+     THE TUBE FLOW IS AGAINST THE LOOP'S OWN REFERENCE (pumpK), never against
+     the rating the core was drawn for (P.flowK): a generator is bought for
+     the loop it stands in, and its UA (sgUASuggest) is quoted at the flow that
+     loop commissions with. Priced at P.flowK*pumpK a plant whose pumps ran
+     out to 1.5 times the design flow had shells 40 % over-able and held
+     Tref at 12 % over rated power. */
   const nSG = Math.max(1, Object.keys(sgW).length);
   const filmK = (1-0.85*Math.min(vNow,1));
   const sgQBy = {}, ihxFl = {};
   let qTot = 0;
   for(const id in sgW){
-    const fl = Math.max(driven*wet*sgW[id]*nSG, 0.02);
+    const fl = Math.max(pumpK*wet*sgW[id]*nSG, 0.02);
     /* sgHot(), not s.Tavg: with an intermediate exchanger in front of it this
        generator is heated by that exchanger's pot, and the primary temperature
        is a stage away. Every other term is a property of THESE tubes and does
@@ -5253,20 +5306,30 @@ function step(dt){
         " kPa above ambient, against the "+minPburst().toFixed(0)+
         " kPa the weakest machine on this plant is built for. The compartment relieves itself in about half a second, so what it costs is decided now.");
     }
+    const crushLive = {};
     for(const p of LAY.parts){
       const lim = partPburst(p);
-      if(!lim || !fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
-      if(roomPAt(s,p) < lim) continue;
-      s.dmgParts.push(p.id);
-      const fx = dmgFx(p.id);
-      if(fx.hit) fx.hit(s, p.id);
+      if(!lim || !fitted(p)) continue;
+      crushLive[p.id] = 1;
+      if(s.dmgParts.indexOf(p.id) >= 0){ s.roomCrush[p.id]=0; continue; }
+      const pk = roomPAt(s,p);
       /* THREE CAUSES REACH THIS ONE FIELD AND THEY ARE THREE DIFFERENT
          ACCIDENTS TO BE STANDING NEXT TO. A deflagration is instantaneous, one
          cell's peak, gone in half a second. A REGION HOLDING ITS OWN STEAM is
          sustained: it is still there, and it will take the next machine too.
          The old line named a hydrogen explosion, and a pump crushed by a
          containment was not in one. */
-      const blast = s.roomBurnOn || s.roomPMax >= roomPAt(s,p);
+      /* s.roomBurnOn AND NOTHING ELSE: s.roomPMax is the WHOLE GRID's peak, so
+         a test against a part's own cells is true by construction. Burning is
+         the only thing in this model that writes an instantaneous pressure. */
+      const blast = !!s.roomBurnOn;
+      const clim = lim*ROOM_CRUSH_K;
+      if(blast){ if(pk < lim) continue; s.roomCrush[p.id]=0; }
+      else if(!hurtStep(s.roomCrush, p.id, (pk-clim)/(clim*ROOM_CRUSH_SPAN), ROOM_CRUSH_TAU, dt)) continue;
+      s.dmgParts.push(p.id);
+      s.dmgWhy[p.id] = blast ? "BLAST" : "CRUSHED";
+      const fx = dmgFx(p.id);
+      if(fx.hit) fx.hit(s, p.id);
       // ...and only a blast is charged to the deflagration line, or a squeezed
       // pump would be listed among what an explosion took
       if(blast) s.burnEv.ids.push(p.name);
@@ -5274,29 +5337,35 @@ function step(dt){
         p.name+(blast
           ? " has been wrecked by a hydrogen explosion in the compartment - "
           : " has been crushed by the compartment it is standing in - ")+
-        roomPAt(s,p).toFixed(0)+" kPa against the "+lim+" kPa it was built for. "+
+        roomPAt(s,p).toFixed(0)+" kPa against the "+(blast?lim:clim)+" kPa it was built for. "+
         (blast ? "" : "This is not a bang: the region round it is holding that pressure, and it will take the next machine too until something relieves it. ")+fx.why);
     }
     for(const q of cellHazards()){
-      if(s.dmgParts.indexOf(q.id) >= 0) continue;
       /* A PAINTED CELL IS NOT HERE. A blast inside a region is a pressure the
          WALL sweep already sees - regionDP() reads the worst cell of the region
          - and it fails there against its own shape-rating with the die over the
          ties. Judged again in this loop it would be taken in board order, which
          beats the weakest cell to it every time. */
       if(q.lim) continue;
-      if(s.roomP[q.y*GW+q.x] < PIPE_PBURST) continue;
-      s.dmgParts.push(q.id);
-      const fx = dmgFx(q.id);
+      crushLive[q.id] = 1;
+      if(s.dmgParts.indexOf(q.id) >= 0){ s.roomCrush[q.id]=0; continue; }
+      const pk = s.roomP[q.y*GW+q.x];
       /* THE SAME THREE CAUSES, ONE LOOP DOWN. A pipe cell squeezed by a region
          holding its own steam was not in an explosion either, and this line
          said it was. */
-      const blast = s.roomBurnOn || s.roomPMax >= s.roomP[q.y*GW+q.x];
+      const blast = !!s.roomBurnOn;
+      const clim = PIPE_PBURST*ROOM_CRUSH_K;
+      if(blast){ if(pk < PIPE_PBURST) continue; s.roomCrush[q.id]=0; }
+      else if(!hurtStep(s.roomCrush, q.id, (pk-clim)/(clim*ROOM_CRUSH_SPAN), ROOM_CRUSH_TAU, dt)) continue;
+      s.dmgParts.push(q.id);
+      s.dmgWhy[q.id] = blast ? "BLAST" : "CRUSHED";
+      const fx = dmgFx(q.id);
       if(blast) s.burnEv.ids.push(q.what);
       logE("alarm",(blast?"BLAST DAMAGE / ":"OVERPRESSURE DAMAGE / ")+fx.msg,
         (blast ? "A hydrogen explosion has taken " : "Sustained overpressure in the compartment has taken ")+
         q.what+". "+fx.why);
     }
+    for(const id in s.roomCrush) if(!crushLive[id]) delete s.roomCrush[id];
   }
   /* ── AND WHAT ITS OWN CONTENTS COST ──
      The block above is the ROOM pushing IN. This is the plant pushing OUT, and
@@ -5321,6 +5390,7 @@ function step(dt){
     }
     if(!seen || pk < lim) continue;
     s.dmgParts.push(p.id);
+    s.dmgWhy[p.id] = "OVERPRESSURE";
     const fx = dmgFx(p.id);
     if(fx.hit) fx.hit(s, p.id);
     logE("alarm","SHELL FAILURE / "+fx.msg,
@@ -5363,13 +5433,9 @@ function step(dt){
       if(!lim || !fitted(p)) continue;
       live[p.id]=1;
       if(s.dmgParts.indexOf(p.id) >= 0){ s.roomHurt[p.id]=0; continue; }
-      const over = clamp((partSkin(s,p)-lim)/ROOM_DMG_SPAN, 0, 1);
-      if(over <= 0) continue;
-      const h = (s.roomHurt[p.id]||0) + over*dt/ROOM_DMG_TAU;
-      s.roomHurt[p.id] = h;
-      if(h < 1) continue;
-      s.roomHurt[p.id]=0;
+      if(!hurtStep(s.roomHurt, p.id, (partSkin(s,p)-lim)/ROOM_DMG_SPAN, ROOM_DMG_TAU, dt)) continue;
       s.dmgParts.push(p.id);
+      s.dmgWhy[p.id] = "COOKED";
       const fx=dmgFx(p.id);
       if(fx.hit) fx.hit(s, p.id);
       /* p.name, not partName(): src/core/ui.js is deliberately outside the
@@ -5393,13 +5459,9 @@ function step(dt){
       if(track) live[q.id] = 1;
       if(s.dmgParts.indexOf(q.id) >= 0){ s.roomHurt[q.id]=0; continue; }
       const air = s.roomT[q.y*GW+q.x];
-      const over = clamp((air-(q.lim||PIPE_TSURV))/ROOM_DMG_SPAN, 0, 1);
-      if(over <= 0) continue;
-      const h = (s.roomHurt[q.id]||0) + over*dt/ROOM_DMG_TAU;
-      s.roomHurt[q.id] = h;
-      if(h < 1) continue;
-      s.roomHurt[q.id] = 0;
+      if(!hurtStep(s.roomHurt, q.id, (air-(q.lim||PIPE_TSURV))/ROOM_DMG_SPAN, ROOM_DMG_TAU, dt)) continue;
       s.dmgParts.push(q.id);
+      s.dmgWhy[q.id] = "COOKED";
       const fx = dmgFx(q.id);
       logE("alarm","HEAT DAMAGE / "+fx.msg,
         "The compartment has cooked "+q.what+" - air at "+
@@ -5544,6 +5606,7 @@ function step(dt){
     } else if(s.repair.t >= s.repair.need){
       const k=s.repair.id;
       s.dmgParts = s.dmgParts.filter(q=>q!==k);
+      delete s.dmgWhy[k];
       /* the undo is the same row of DMGFX that did the damage, so a part can
          never be given an effect without also being given its reversal */
       const fix=dmgFx(k).fix; if(fix) fix(s, k);
