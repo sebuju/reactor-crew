@@ -3,7 +3,7 @@
    One mechanism for both screens; a second reader of readoutsFor()/ctlFor(),
    never a second table. */
 
-const MARGIN_W=268, MARGIN_GAP=6, MARGIN_PAD=30, MARGIN_ROWS=4;
+const MARGIN_W=268, MARGIN_GAP=6, MARGIN_PAD=30;
 /* A PANEL TOO TALL TO READ GETS MORE COLUMNS RATHER THAN A SECOND SCREEN OF
    HEIGHT - so its own MEASURED HEIGHT decides how many, and nothing here names
    a role. It was the BLOCK COUNT, which is not the same question: every tank
@@ -138,18 +138,6 @@ function marginKeyRect(h){
   return {x:x0, y:y0, w:Math.max(CELL,x1-x0), h:Math.max(CELL,y1-y0)};
 }
 
-// the head of the machine's own list - the table's order is the rank. Section
-// rules and canvas rows are left out; both need a panel with room.
-function marginRows(rows){
-  const out=[];
-  for(const r of rows){
-    if(!Array.isArray(r)) continue;
-    out.push(r);
-    if(out.length>=MARGIN_ROWS) break;
-  }
-  return out;
-}
-
 /* ctlFor() hands back fresh closures every frame, so a handler closes over the
    SLOT and the sync re-points it. `deep` asks a slider whether its range still
    holds - two closure calls per slider, so only when something could have
@@ -192,6 +180,9 @@ function marginCtlBuild(h,rows){
 }
 function marginCtlSync(h,live,deep){
   let rows=ctlFor(h.p,live,live&&S.split);
+  // a wrecked machine takes no orders, and the refusal is the sim's - these
+  // keys only have to stop LOOKING as though they would be answered
+  if(rows&&live&&partWrecked(S,h.p.id)) rows=ctlDead(rows);
   if(rows&&!live) rows=ctlBench(rows);
   if(!rows||!rows.length){ if(h.ctl) KIT.show(h.ctl,false); return; }
   if(!h.ctl){ h.ctl=KIT.el("div","margin-ctl"); h.well.body.appendChild(h.ctl); }
@@ -457,7 +448,12 @@ function marginSync(host,live){
     if(live){
       if(!h.vis && h.tf!==null) continue;
       const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
-      fieldRowsSync(h.body, marginRows(readoutsFor(h.p,S)));
+      fieldRowsSync(h.body, readoutsFor(h.p,S));
+      /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
+         canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
+         exactly as the rail does it (crRailSync). */
+      const vz=h.body._viz;
+      if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz);
     }else{
       if(!fresh) continue;
       const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
