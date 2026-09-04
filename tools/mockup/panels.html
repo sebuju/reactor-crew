@@ -1,0 +1,346 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MOCKUP - margin panels + single inspector</title>
+<style>
+:root{
+  --c-bg:#080c0e; --c-panel:#0e1518; --c-panel-hi:#142126; --c-well:#060a0b;
+  --c-edge:#1d2f35; --c-edge2:#2c464e; --c-rail:#33525b;
+  --c-ink:#9fb4b9; --c-ink2:#5d7378; --c-bright:#dff0f3;
+  --c-amber:#f0a830; --c-cyan:#5fd2e2; --c-red:#ff5a45; --c-green:#57d38c;
+  --c-blue:#5aa9d6; --c-metal:#6d8f98; --c-on-amber:#2a1f08; --c-dis:#2c3f45;
+  --t6:6px; --t7:7px; --t8:8px; --t9:9px; --t10:10px; --t11:11px;
+  --mono:ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--c-bg);color:var(--c-ink);
+  font-family:var(--mono);font-size:var(--t10)}
+#app{display:grid;grid-template-columns:1fr 264px;grid-template-rows:34px 1fr;height:100%}
+
+#top{grid-column:1/3;background:var(--c-panel);border-bottom:1px solid var(--c-edge);
+  display:flex;align-items:center;gap:14px;padding:0 10px;
+  font-size:var(--t9);letter-spacing:2px;text-transform:uppercase;color:var(--c-ink2)}
+#top b{color:var(--c-bright);font-weight:700;letter-spacing:2.4px}
+#top .sp{flex:1}
+#top label{display:flex;align-items:center;gap:6px;letter-spacing:1.4px}
+#top input[type=range]{width:90px;accent-color:var(--c-amber)}
+
+#stage{position:relative;overflow:hidden}
+#leads{position:absolute;inset:0;pointer-events:none}
+#board{position:absolute;background:
+  repeating-linear-gradient(0deg,var(--c-edge) 0 1px,transparent 1px 16px),
+  repeating-linear-gradient(90deg,var(--c-edge) 0 1px,transparent 1px 16px);
+  background-color:#0a1012;outline:1px solid var(--c-edge2)}
+#pipes{position:absolute;left:0;top:0;overflow:visible}
+
+.mach{position:absolute;border:1px solid var(--c-edge2);background:var(--c-panel-hi);
+  display:flex;align-items:center;justify-content:center;text-align:center;
+  font-size:var(--t7);letter-spacing:1px;color:var(--c-ink);cursor:pointer;
+  text-transform:uppercase;line-height:1.15;padding:2px}
+.mach:hover{border-color:var(--c-rail);color:var(--c-bright)}
+.mach.sel{border-color:var(--c-amber);color:var(--c-bright);background:#161d1a}
+
+.pan{position:absolute;background:var(--c-panel);border:1px solid var(--c-edge);
+  cursor:pointer;user-select:none}
+.pan:hover{border-color:var(--c-rail)}
+.pan.sel{border-color:var(--c-amber)}
+.pan .head{padding:3px 5px;background:var(--c-edge);color:var(--c-bright);
+  font-size:var(--t8);font-weight:700;letter-spacing:1.6px;text-transform:uppercase;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pan.sel .head{background:var(--c-amber);color:var(--c-on-amber)}
+.pan .body{padding:4px 5px 5px}
+.row{display:flex;justify-content:space-between;gap:8px;line-height:1.5;
+  font-size:var(--t8);letter-spacing:.6px;white-space:nowrap}
+.row .k{color:var(--c-ink2);text-transform:uppercase}
+.row .v{color:var(--c-bright)}
+.ctl{display:flex;gap:3px;margin-top:4px;flex-wrap:wrap;align-items:center}
+.btn{border:1px solid var(--c-edge2);background:var(--c-panel);color:var(--c-ink);
+  font:inherit;font-size:var(--t7);letter-spacing:1.2px;text-transform:uppercase;
+  padding:0 5px;height:15px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--c-rail);color:var(--c-bright)}
+.btn.on{background:var(--c-green);border-color:var(--c-green);color:#0f2018}
+.btn.trip{border-color:var(--c-red);color:var(--c-red)}
+.sld{position:relative;height:9px;flex:1 1 46px;min-width:34px;background:var(--c-well);
+  border:1px solid var(--c-edge2)}
+.sld i{position:absolute;top:1px;bottom:1px;left:1px;background:var(--c-cyan);display:block}
+
+.pan.lad1 .row.r3{display:none}
+.pan.lad2 .row.r3,.pan.lad2 .row.r2{display:none}
+.pan.lad2 .btn{font-size:var(--t6);padding:0 3px;height:13px}
+.pan.lad3 .body{display:none}
+.pan.lad3 .head{font-size:var(--t7);padding:2px 4px}
+
+#insp{background:var(--c-bg);border-left:1px solid var(--c-edge);
+  padding:8px;overflow:hidden}
+#insp .head{padding:5px 6px;background:var(--c-edge);color:var(--c-bright);
+  font-size:var(--t9);font-weight:700;letter-spacing:1.8px;text-transform:uppercase}
+#insp .sel-head{background:var(--c-amber);color:var(--c-on-amber)}
+#insp .well{background:var(--c-panel);margin-bottom:8px}
+#insp .body{padding:7px 7px 8px}
+#insp .row{font-size:var(--t9);line-height:1.7}
+.bar{height:9px;background:var(--c-well);position:relative;margin:2px 0 6px}
+.bar i{position:absolute;top:1px;bottom:1px;left:1px;display:block}
+.note{color:var(--c-ink2);font-size:var(--t8);line-height:1.5;letter-spacing:.4px}
+.lamp{display:inline-block;width:7px;height:7px;margin-right:5px}
+</style>
+
+<div id="app">
+  <div id="top">
+    <b>REACTOR CREW</b><span>MOCKUP &mdash; margin panels</span>
+    <span class="sp"></span>
+    <label>RING CROWDING <input id="lad" type="range" min="0" max="3" value="0"><span id="ladv">FULL</span></label>
+    <label><input id="leadTog" type="checkbox" checked> LEADERS</label>
+  </div>
+
+  <div id="stage">
+    <svg id="leads"></svg>
+    <div id="board"><svg id="pipes"></svg></div>
+  </div>
+
+  <div id="insp"></div>
+</div>
+
+<script>
+"use strict";
+const BW=440, BH=380;
+let ML=190, MT=130;                 // margins, recomputed to centre the board
+
+/* Side is written down here for a readable mockup. In the real thing it would
+   be the nearest edge, and the order along each side follows machine order. */
+const M=[
+ {id:"ctrl", n:"CONTROL",     x:24, y:40, w:56,h:34, s:"t",
+  v:[["MODE","AUTO"],["ROD BAND","0-84 %"],["ALARMS","0"]],
+  c:[["AUTO ROD","on"]]},
+ {id:"pzr",  n:"PRESSURIZER", x:206,y:52, w:32,h:58, s:"t",
+  v:[["PRESSURE","15.51 MPa"],["LEVEL","58 %"],["HEATERS","240 kW"]],
+  c:[["HEAT",""],["SPRAY",""]]},
+ {id:"core", n:"REACTOR",     x:186,y:150,w:68,h:92, s:"t",
+  v:[["POWER","1198 MWt"],["T-AVG","310.2 C"],["BANK D","62 %"]],
+  c:[["SCRAM","trip"],["sld",62]]},
+ {id:"sg1",  n:"STEAM GEN 1", x:96, y:142,w:40,h:78, s:"l",
+  v:[["SHELL P","6.21 MPa"],["STEAM","318 kg/s"],["LEVEL","51 %"]],
+  c:[["FEED","on"],["ISOL",""]]},
+ {id:"rcp1", n:"RCP 1",       x:100,y:258,w:32,h:30, s:"l",
+  v:[["FLOW","3786 kg/s"],["SPEED","100 %"],["NPSH","4.1 MPa"]],
+  c:[["RUN","on"],["sld",100]]},
+ {id:"sg2",  n:"STEAM GEN 2", x:304,y:142,w:40,h:78, s:"r",
+  v:[["SHELL P","6.19 MPa"],["STEAM","316 kg/s"],["LEVEL","50 %"]],
+  c:[["FEED","on"],["ISOL",""]]},
+ {id:"rcp2", n:"RCP 2",       x:308,y:258,w:32,h:30, s:"r",
+  v:[["FLOW","3781 kg/s"],["SPEED","100 %"],["NPSH","4.1 MPa"]],
+  c:[["RUN","on"],["sld",100]]},
+ {id:"turb", n:"TURBINE",     x:132,y:302,w:84,h:44, s:"b",
+  v:[["OUTPUT","412 MWe"],["SWALLOW","664 kg/s"],["SPEED","3000 rpm"]],
+  c:[["TRIP","trip"],["sld",84]]},
+ {id:"cond", n:"CONDENSER",   x:238,y:308,w:80,h:38, s:"b",
+  v:[["VACUUM","8.1 kPa"],["HOTWELL","62 %"],["CW FLOW","9120 kg/s"]],
+  c:[["DUMP",""]]},
+ {id:"rad",  n:"RADIATOR 1",  x:352,y:306,w:56,h:28, s:"b",
+  v:[["REJECT","88 MWt"],["AREA","1240 m2"],["SKIN","341 K"]],
+  c:[["ISOL",""]]}
+];
+
+/* What the INSPECTOR holds: the same rows, all of them, unranked. */
+const FULL={
+ core:{p:[["COOLANT","WATER"],["MODERATOR","LIGHT WATER"],["REFLECTOR","BERYLLIUM"],
+          ["FUEL","UO2"],["ENRICHMENT","4.20 %"],["PIN DIAMETER","9.5 mm"],
+          ["ACTIVE LENGTH","3.66 m"],["AUTOMATIC ROD CONTROL","ON"],["ROD BAND","0 - 84 %"]],
+       s:[["RATED POWER","1198 MWt",.72,"cyan"],["CORE DENSITY","104 kW/l",.61,"cyan"],
+          ["GRACE TIME","41 s",.34,"amber"],["REACTOR MASS","318 t",.55,"metal"]]},
+ pzr:{p:[["VOLUME","51 m3"],["ASPECT","2.4"],["HOLD SETPOINT","15.50 MPa"],
+         ["HEATER RATING","1530 kW"],["SPRAY RATING","14 MW"],["FLUID","WATER"]],
+      s:[["LEVEL","58 %",.58,"cyan"],["MARGIN TO LIFT","1.21 MPa",.44,"green"],
+         ["VESSEL MASS","46 t",.2,"metal"]]},
+ sg1:{p:[["DESIGN SHELL P","7.60 MPa"],["TUBE DUTY","21.4 MW/K"],["SHELL VOLUME","88 m3"],
+         ["APPROACH","25 K"],["FEED SOURCE","FEED PUMP 1"]],
+      s:[["STEAM RAISED","318 kg/s",.62,"cyan"],["SHELL MASS","231 t",.7,"metal"]]},
+ turb:{p:[["SWALLOW","664 kg/s"],["EFFICIENCY","34.4 % gross"],["STAGES","HP + 2 LP"]],
+       s:[["OUTPUT","412 MWe",.68,"amber"],["SET MASS","190 t",.5,"metal"]]}
+};
+const DEF={p:[["(mockup)","no detail authored"]],s:[]};
+
+let sel=null, lad=0, leadsOn=true;
+const stage=document.getElementById("stage"), board=document.getElementById("board");
+const leads=document.getElementById("leads"), insp=document.getElementById("insp");
+const px=n=>Math.round(n)+"px";
+const el=(t,c,h)=>{const e=document.createElement(t); if(c)e.className=c;
+  if(h!==undefined)e.innerHTML=h; return e;};
+
+const PIPE=[
+ ["#5fd2e2","254,196 304,196"], ["#5fd2e2","136,196 186,196"],
+ ["#ff5a45","116,220 116,258"], ["#ff5a45","324,220 324,258"],
+ ["#ff5a45","116,288 116,320 132,320"], ["#ff5a45","324,288 324,320 318,320"],
+ ["#5aa9d6","116,142 116,110 222,110"], ["#5aa9d6","324,142 324,110 238,110"],
+ ["#f0a830","176,220 176,302"], ["#f0a830","264,220 264,308"],
+ ["#5aa9d6","216,324 238,324"], ["#5aa9d6","318,326 352,320"]
+];
+/* The board sits in the middle and the margins are what is left over, floored
+   at what a panel plus its leader channel actually needs. */
+function centreBoard(){
+  ML=Math.max(PW+42, Math.round((stage.clientWidth -BW)/2));
+  MT=Math.max(112,    Math.round((stage.clientHeight-BH)/2));
+  board.style.left=px(ML); board.style.top=px(MT);
+  M.forEach(function(m){ if(!m.el) return;
+    m.el.style.left=px(ML+m.x); m.el.style.top=px(MT+m.y); });
+}
+function drawBoard(){
+  board.style.width=px(BW); board.style.height=px(BH);
+  const s=document.getElementById("pipes");
+  s.setAttribute("viewBox","0 0 "+BW+" "+BH);
+  s.style.width=BW+"px"; s.style.height=BH+"px";
+  s.innerHTML=PIPE.map(function(r){ return '<polyline points="'+r[1]+
+    '" fill="none" stroke="'+r[0]+'" stroke-width="2" opacity=".55"/>'; }).join("");
+}
+function drawMachines(){
+  M.forEach(function(m){
+    const d=el("div","mach",m.n);
+    d.style.width=px(m.w); d.style.height=px(m.h);
+    d.onclick=function(e){ e.stopPropagation(); pick(m.id); };
+    stage.appendChild(d); m.el=d;
+  });
+}
+
+const PW=152, PWH=176, GAP=8;
+function buildPanel(m){
+  const p=el("div","pan");
+  p.appendChild(el("div","head",m.n));
+  const b=el("div","body");
+  m.v.forEach(function(r,i){ b.appendChild(el("div","row r"+(i+1),
+    '<span class="k">'+r[0]+'</span><span class="v">'+r[1]+'</span>')); });
+  const c=el("div","ctl");
+  m.c.forEach(function(k){
+    if(k[0]==="sld"){ const s=el("div","sld"), i=el("i");
+      i.style.width=(k[1]*.9)+"%"; s.appendChild(i); c.appendChild(s); }
+    else c.appendChild(el("button","btn"+(k[1]?" "+k[1]:""),k[0]));
+  });
+  b.appendChild(c); p.appendChild(b);
+  p.onclick=function(e){ e.stopPropagation(); pick(m.id); };
+  stage.appendChild(p); m.pan=p;
+}
+
+/* ORDER ALONG THE SIDE FOLLOWS THE MACHINE ORDER, so leaders do not cross. */
+function layoutPanels(){
+  const bx=ML, by=MT, bx2=ML+BW, by2=MT+BH;
+  ["l","r","t","b"].forEach(function(side){
+    const wide=(side==="t"||side==="b");
+    const list=M.filter(function(m){ return m.s===side; })
+      .sort(function(a,b){ return wide ? a.x-b.x : a.y-b.y; });
+    let run=wide?bx-40:by-40;
+    list.forEach(function(m){
+      const p=m.pan, w=wide?PWH:PW;
+      p.style.width=px(w);
+      if(!wide){
+        p.style.left=px(side==="l" ? bx-w-26 : bx2+26);
+        const h=p.offsetHeight||70;
+        const want=by+m.y+m.h/2-h/2;
+        const top=Math.max(run, Math.min(want, by2-h));
+        p.style.top=px(top); run=top+h+GAP;
+      }else{
+        const want=bx+m.x+m.w/2-w/2;
+        const left=Math.max(run, Math.min(want, bx2-w));
+        p.style.left=px(left); run=left+w+GAP;
+        p.style.top=px(side==="t" ? Math.max(6, by-(p.offsetHeight||70)-26) : by2+26);
+      }
+    });
+  });
+}
+
+function drawLeads(){
+  leads.setAttribute("viewBox","0 0 "+stage.clientWidth+" "+stage.clientHeight);
+  if(!leadsOn){ leads.innerHTML=""; return; }
+  const s=stage.getBoundingClientRect();
+  let out="";
+  M.forEach(function(m){
+    const p=m.pan.getBoundingClientRect();
+    const pl=p.left-s.left, pt=p.top-s.top, pw=p.width, ph=p.height;
+    const mx=ML+m.x, my=MT+m.y, on=(sel===m.id);
+    let pts;
+    if(m.s==="l"||m.s==="r"){
+      const a=Math.round(m.s==="l"?pl+pw:pl), ay=Math.round(pt+ph/2);
+      const bxx=Math.round(m.s==="l"?mx:mx+m.w), byy=Math.round(my+m.h/2);
+      const ch=Math.round((a+bxx)/2);
+      pts=[[a,ay],[ch,ay],[ch,byy],[bxx,byy]];
+    }else{
+      const a=Math.round(pl+pw/2), ay=Math.round(m.s==="t"?pt+ph:pt);
+      const bxx=Math.round(mx+m.w/2), byy=Math.round(m.s==="t"?my:my+m.h);
+      const ch=Math.round((ay+byy)/2);
+      pts=[[a,ay],[a,ch],[bxx,ch],[bxx,byy]];
+    }
+    out+='<polyline points="'+pts.map(function(q){return q.join(",");}).join(" ")+
+      '" fill="none" stroke="'+(on?"#f0a830":"#33525b")+
+      '" stroke-width="1" stroke-dasharray="'+(on?"none":"3 3")+
+      '" opacity="'+(on?1:.75)+'"/>';
+  });
+  leads.innerHTML=out;
+}
+
+const COL={cyan:"#5fd2e2",amber:"#f0a830",metal:"#6d8f98",green:"#57d38c",red:"#ff5a45"};
+function statRow(parent,r){
+  parent.appendChild(el("div","row",'<span class="k">'+r[0]+
+    '</span><span class="v">'+r[1]+'</span>'));
+  const bar=el("div","bar"), i=el("i");
+  i.style.width="calc("+(r[2]*100)+"% - 2px)"; i.style.background=COL[r[3]];
+  bar.appendChild(i); parent.appendChild(bar);
+}
+function drawInsp(){
+  insp.innerHTML="";
+  if(!sel){
+    const w=el("div","well");
+    w.appendChild(el("div","head","DESIGN RESULTS"));
+    const b=el("div","body");
+    [["THERMAL POWER","1198 MWt",.72,"cyan"],["ELECTRIC","412 MWe",.68,"amber"],
+     ["PLANT MASS","934 t",.55,"metal"],["GRACE TIME","41 s",.34,"amber"],
+     ["CORE DENSITY","104 kW/l",.61,"cyan"]].forEach(function(r){ statRow(b,r); });
+    w.appendChild(b); insp.appendChild(w);
+    const r=el("div","well"); r.appendChild(el("div","head","REVIEW"));
+    const rb=el("div","body");
+    [["#57d38c","Shutdown margin holds with the worst bank stuck out."],
+     ["#f0a830","Feed pump is the only train; a trip takes the plant."],
+     ["#f0a830","Grace time is short for the decay heat this core makes."]]
+     .forEach(function(q){ const n=el("div","note",
+       '<span class="lamp" style="background:'+q[0]+'"></span>'+q[1]);
+       n.style.marginBottom="6px"; rb.appendChild(n); });
+    r.appendChild(rb); insp.appendChild(r);
+    insp.appendChild(el("div","note",
+      "Nothing selected, so this is the whole design. Pick a machine on the board "+
+      "or its margin panel and this becomes that machine's full detail."));
+    return;
+  }
+  const m=M.filter(function(x){return x.id===sel;})[0], f=FULL[sel]||DEF;
+  const w=el("div","well");
+  w.appendChild(el("div","head sel-head",m.n));
+  const b=el("div","body");
+  f.p.forEach(function(r){ b.appendChild(el("div","row",
+    '<span class="k">'+r[0]+'</span><span class="v">'+r[1]+'</span>')); });
+  w.appendChild(b); insp.appendChild(w);
+  if(f.s.length){
+    const sw=el("div","well"); sw.appendChild(el("div","head","RESULTS"));
+    const sb=el("div","body");
+    f.s.forEach(function(r){ statRow(sb,r); });
+    sw.appendChild(sb); insp.appendChild(sw);
+  }
+  insp.appendChild(el("div","note",
+    "The margin panel carries what MOVES and what you ACT ON. This carries what "+
+    "you SET and what you LOOK UP. One row table, ranked, two readers."));
+}
+
+function pick(id){ sel=(sel===id?null:id); sync(); }
+function sync(){
+  M.forEach(function(m){
+    m.el.classList.toggle("sel",sel===m.id);
+    m.pan.classList.toggle("sel",sel===m.id);
+    m.pan.classList.remove("lad1","lad2","lad3");
+    if(lad) m.pan.classList.add("lad"+lad);
+  });
+  centreBoard(); layoutPanels(); drawLeads(); drawInsp();
+}
+stage.onclick=function(){ sel=null; sync(); };
+document.getElementById("lad").oninput=function(e){
+  lad=+e.target.value;
+  document.getElementById("ladv").textContent=["FULL","TIGHT","TIGHTER","TICK"][lad];
+  sync(); };
+document.getElementById("leadTog").onchange=function(e){
+  leadsOn=e.target.checked; drawLeads(); };
+addEventListener("resize",sync);
+
+drawBoard(); drawMachines(); M.forEach(buildPanel); sync();
+</script>
