@@ -107,7 +107,7 @@ const XMIX0=0.55, XMIX_MAX=0.85;
    Neither can be applied literally: this file carries shares of the rated
    point, never W/m2 or kg/m2s. But the ratio collapses - q"/(G*cp) is the core
    rise times the flow area over the heated area - so both anchor on ONE
-   geometric ratio of a fuel bundle, which is the P.pinUA idiom, and CORE_DT0
+   geometric ratio of a fuel bundle, which is the P.pinUA idiom, and coreDT0()
    inside them makes both scale per plant. Both ratios are MEASURED off the
    drawn bundle now (latBundle(), lattice.js): the flow-to-heated area ratio
    was one real PWR written down as XSUB_AR, and the low branch's 28.3 K was
@@ -190,18 +190,18 @@ function coreConst(T,d){
 
   /* departure quality at the RATED point, one branch each - see SZ_LO. Both
      are magnitudes; the sign goes on where they are used. */
-  { const B=latBundle(), hgt=Math.max(T.coreHgt,.05), hfg=COOLANT[D.cool].hfg;
+  { const B=latBundle(), hgt=Math.max(T.coreHgt,.05), a=COOLANT[D.cool], hfg=a.hfg, cp=a.cp;
     T.hfg = hfg;
     T.dh = B.dh;                                   // Stages D and F both read it
     const nF=latVols().nF;
     T.aHeat=4*nF*B.aHeat*hgt;                      // whole core rod surface, m2
     T.aFlow=4*nF*B.aFlow;                          // whole core flow area, m2
     /* rated mass flux, kg/m2/s: what the core carries when it is taking
-       CORE_DT0 of rise at rated power. W-3 wants a real G, not a share. */
-    T.G0=(T.rated||D.power)*1000/(CP_W*CORE_DT0)/Math.max(T.aFlow,1e-9);
+       coreDT0() of rise at rated power, in THIS coolant. W-3 wants a real G, not a share. */
+    T.G0=(T.rated||D.power)*1000/(cp*coreDT0())/Math.max(T.aFlow,1e-9);
     const qpp=(T.rated||D.power)*1e6/Math.max(T.aHeat,1e-6);
-    T.xSub  = 154*CP_W*CORE_DT0*(B.aFlow/(B.aHeat*hgt))/hfg;
-    T.xSubLo= CP_W*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
+    T.xSub  = 154*cp*coreDT0()*(B.aFlow/(B.aHeat*hgt))/hfg;
+    T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
   /* the reflector stops being a flat pcm bonus and starts reflecting: the
      share of what leaks out of an edge node that finds its way back in, per
@@ -649,9 +649,9 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
       let ringP=0; for(let j=0;j<XNZ;j++) ringP+=s.phi[XIX(i,j)];
       ringP=Math.max(ringP/XNZ,1e-6);
       mixK[i]=(1+(ringP-1)*(1-P.mix))/ringP;      // cross-flow, and it conserves
-      raw += ringW[i]*heat*CORE_DT0*ringP*mixK[i]/Math.max(flowFrac,1e-3);
+      raw += ringW[i]*heat*coreDT0()*ringP*mixK[i]/Math.max(flowFrac,1e-3);
     }
-    s.coreDT=clamp(raw,0,CORE_DT_MAX); }
+    s.coreDT=clamp(raw,0,coreDTMax()); }
   const Tcold=s.Tavg-s.coreDT/2;
   /* ── ENTHALPY UP A CHANNEL, AND THE PELLET AS A BALANCE ──
      Both of these used to be correlations wearing a field's clothes. Node
@@ -667,7 +667,8 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      correlation left it. */
   const qhat  = heat*P.rated*1000/Math.max(P.pinUA,1e-9);
   const ff    = Math.max(flowFrac, 1e-3);
-  const hSat  = CP_W*sat;                    // enthalpy at saturation, kJ/kg
+  const cp    = P.sat.cp, dT0 = coreDT0();
+  const hSat  = cp*sat;                      // enthalpy at saturation, kJ/kg
   const rvl   = satRvl(P.sat, s.pCore);             // the core boils at ITS OWN pressure
   /* what the damage pass hands back: the worst node margin and where, the
      hottest clad, the deepest oxide, and the hydrogen this tick made. None of
@@ -675,29 +676,29 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      tick, so it is resolved fresh and thrown away, exactly as the radiation
      field is. Only the integrals go on S. */
   let dnbLo=1e30, dnbK=0, TclH=0, ecrH=0, h2=0, oxP=0;
-  const dhSub=CP_W*(sat-Tcold);
+  const dhSub=cp*(sat-Tcold);
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
     const chan=Math.max(s.chW[i],1e-3);
     /* This channel's own flow, as a share of what it would carry at rated: the
        heat has to go into the water actually in THIS channel, which is the
        whole of the voiding-channel runaway. */
-    const dTn=heat*CORE_DT0*mixK[i]/(XNZ*ff*chan);   // K of rise per node at phi = 1
+    const dTn=heat*dT0*mixK[i]/(XNZ*ff*chan);        // K of rise per node at phi = 1
     /* and the flux past the pin in this channel, which is a different question
        from how much water is passing - see s.hotFlow */
     const film0=Math.pow(Math.max(mflux*chan,0),0.8);
     /* the same water as a MASS FLUX rather than a film - Saha-Zuber's G, and
        the one branch of it that divides by it */
     const gCh=Math.max(mflux*chan,1e-3);
-    let h=CP_W*Tcold;
+    let h=cp*Tcold;
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), pw=s.phi[k];
-      const dh=CP_W*dTn*pw;                  // this node's own enthalpy rise
+      const dh=cp*dTn*pw;                    // this node's own enthalpy rise
       const hMid=h+dh/2; h+=dh;              // the node sits at its own midpoint
       /* Subcooled water gets hotter; saturated water gets steamier. Quality
          only ever increases going up a heated channel, which falls out of
          carrying the enthalpy rather than being asserted. */
-      if(hMid<=hSat) s.nTc[k]=hMid/CP_W;
+      if(hMid<=hSat) s.nTc[k]=hMid/cp;
       else         { s.nTc[k]=sat; }
       /* VOID STARTS BEFORE THE BULK DOES. xe is the thermodynamic quality and
          is negative while subcooled; xd is where vapour first detaches, off
@@ -715,7 +716,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          was reading a flux peaking factor in place of an enthalpy-rise one.
          The minimum this pass finds IS s.dnbr (step.js): the plant has no
          second margin arithmetic left to disagree with. */
-      const dnb=marginNode(s,heat,pw,hMid/CP_W-Tcold,Tcold,s.nTf[k],
+      const dnb=marginNode(s,heat,pw,hMid/cp-Tcold,Tcold,s.nTf[k],
                            mflux*chan,xe,dhSub);
       if(dnb<dnbLo){ dnbLo=dnb; dnbK=k; }
 
