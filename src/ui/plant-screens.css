@@ -40,9 +40,22 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-vitals{position:absolute;left:4px;top:4px;pointer-events:auto;
   display:flex;flex-direction:column;
   width:300px;padding:4px 0;background:var(--c-panel);
-  max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none;z-index:1}
+  /* CAPPED AGAINST ITS OWN PARENT, never against the window. .cr-root is inset
+     below the topbar AND below the transport strip, so 100vh less a typed 44px
+     overhung the screen by the strip's own height - measured 916px of panel in
+     an 878px window. The 4px it keeps at the top, and 8px at the bottom: a
+     panel flush with the window edge reads as cut off. */
+  max-height:calc(100% - 12px);overflow-y:auto;scrollbar-width:none;z-index:1}
 .cr-vitals::-webkit-scrollbar{display:none}
 .cr-vitals>*{flex:0 0 auto}
+/* THE CAUTION LIST IS WHAT GIVES WAY. Everything above it is an instrument with
+   a laid-out picture in it - six bars and two hosted canvases - and squashing
+   one hands hostPaint() a box it was not drawn for, so the list is the only
+   child allowed to shrink, and it does it by SCROLLING its own rows rather than
+   by losing them. The panel keeps overflow-y:auto as the last resort, for a
+   window too short to hold even the fixed part. */
+.cr-vitals>.cr-caut{flex:0 1 auto;min-height:0;display:flex;flex-direction:column}
+.cr-vitals>.cr-caut>.cr-caut-body{flex:1 1 auto;min-height:0;overflow-y:auto}
 /* 8px of side padding puts these on the same left edge the vital rows keep.
    Two classes because .insp-viz sets its own padding further down the file.
    The seam between two of them is 12px of nothing - no line, and no gap above
@@ -73,7 +86,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    reading. A dismissed line is gone; a line whose reading has RECOVERED is
    still here, dimmed, because it has not been answered yet. */
 .cr-caut{display:block;margin-top:12px;border-top:1px solid var(--c-edge)}
-.cr-caut-head{display:flex;align-items:center;gap:8px;padding:5px 8px 4px;
+.cr-caut-head{display:flex;flex:0 0 auto;align-items:center;gap:8px;padding:5px 8px 4px;
   font-size:var(--t7);letter-spacing:1.2px;text-transform:uppercase;color:var(--c-ink2)}
 .cr-caut-title{flex:1 1 auto;min-width:0}
 /* HELD, NOT REMOVED: hidden by visibility so the count never moves when the

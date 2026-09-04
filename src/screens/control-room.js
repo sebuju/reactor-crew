@@ -26,9 +26,13 @@ function crVitalsData(){
    {lab:"SUBCOOLING",val:sc.toFixed(1),unit:"K",ch:"sub",
     u:toward(sc,P.sc0,3), col:sc<8?"var(--c-red)":"var(--c-cyan)",
     tip:"Degrees below boiling in the hot leg - the honest leak indicator. Commissioned "+P.sc0.toFixed(0)+" K subcooled, marked at the 3 K trip."},
-   {lab:"INVENTORY",val:s.inv.toFixed(1),unit:"%",ch:"inv",
+   /* KILOGRAMS, because there ARE kilograms now: s.inv is a READ of
+      invNodesKg() over the core piece's own nodes, so the vital states the
+      quantity and keeps the share of the commissioned charge in the sentence
+      under it. The bar stays proportional - a needle wants a span. */
+   {lab:"INVENTORY",val:(invNodesKg(s)/1000).toFixed(1),unit:"t",ch:"inv",
     u:(100-s.inv)/30, col:s.inv<95?"var(--c-red)":"var(--c-blue)",
-    tip:"How much water is actually in the loop. Nothing trips on it, but under 95% the missing water starts taking heat removal with it."},
+    tip:"How much water is actually in the loop, in tonnes. Commissioned with "+(P.invKg0/1000).toFixed(1)+" t, so this is "+s.inv.toFixed(1)+"% of the charge. Nothing trips on it, but under 95% the missing water starts taking heat removal with it."},
    {lab:"XENON",val:s.parts.xe.toFixed(0),unit:"pcm",ch:"xe",
     u:-s.parts.xe/3200, col:-s.parts.xe>3200?"var(--c-blue)":"var(--c-cyan)",
     tip:"Xenon-135 poison. The mark is 3200 pcm, about where the pit costs you more reactivity than the rods have left to give."}];
@@ -458,9 +462,6 @@ function crRailBuild(rail,watch){
      whichever group the standing selection sat in. Adopting it here makes the
      first frame a no-move; a real pick after that still opens its group. */
   crLastSel=sel;
-  // a rebuild is a NEW PLANT (the rail is rebuilt when P moves), and a caution
-  // raised by the last one is about machines that may not even be fitted here
-  CAUT.clear();
   crHeadsDone=false;
   return panels;
 }
@@ -504,8 +505,37 @@ const cautCol=c=>c===C.red?"red":c===C.amber?"amber":null;
    LABEL differs: it is given the machine's name, because out of its panel a
    bare "STEAM OUT" belongs to nothing. */
 const cautRow=(r,text)=>[text,r[1],r[2],r[3],r[4],r[5]];
-function cautStep(id,r,name,base){
+/* THE READING HAS COME BACK - or it is not there to read any more. One branch,
+   two callers, because a row that vanished is not a row still off-nominal: the
+   hold, the dimming and the deletion are the same in both cases. `r` is null
+   when there is no row left to copy, and the frozen one stands. */
+function cautCalm(key,e,r,text){
+  if(e.calm==null) e.calm=performance.now();
+  const held = e.latch && performance.now()-e.calm < CAUT_CALM_MS;
+  e.since=-1;
+  if(held) return e;
+  e.live=false; e.col=null;
+  if(!e.latch) CAUT.delete(key);
+  else if(r) e.row=cautRow(r,text);
+  return null;
+}
+/* A ROW NOBODY STEPPED IS NOT A ROW STILL READING BAD. STATUS DESTROYED leaves
+   the panel the moment the machine is repaired or the plant is reset, and an
+   entry nothing steps was never cooled: it stayed live for ever, so the crew
+   could neither clear it nor dismiss it. */
+function cautSweep(seen){
+  for(const [k,e] of CAUT) if(!seen.has(k)) cautCalm(k,e,null,null);
+}
+/* EVERY CAUTION BELONGS TO ONE RUN. plantGen (step.js) moves on every
+   resetPlant() - a recommission, a scenario run, the bench putting the plant
+   back - and a caution raised by the last run is about a machine that may not
+   even be fitted here. A SCRUB is not a reset, so a latched caution survives
+   one, which is what the snapshot branch in cautStep() is for. */
+let cautGen=-1;
+function cautRun(){ if(cautGen!==plantGen){ cautGen=plantGen; CAUT.clear(); } }
+function cautStep(id,r,name,base,seen){
   const key=id+"|"+r[0], col=cautCol(r[2]), e=CAUT.get(key);
+  if(seen) seen.add(key);
   const text=name+": "+r[0];
   /* A BYPASS IS NOT A CAUTION. autoState() reads BYPASSED and every row that
      prints it is amber, which is right on the machine's own panel - it is a
@@ -533,14 +563,7 @@ function cautStep(id,r,name,base){
        strobe, and holding only the DELETION did nothing about it. While held
        the copy is frozen at the reading that raised it, because a line that
        keeps its place and changes colour is the same flash. */
-    if(e){
-      if(e.calm==null) e.calm=performance.now();
-      const held = e.latch && performance.now()-e.calm < CAUT_CALM_MS;
-      e.since=-1;
-      if(!held){ e.live=false; e.col=null; if(e.latch) e.row=cautRow(r,text); else CAUT.delete(key); }
-      return held ? e : null;
-    }
-    return null;
+    return e ? cautCalm(key,e,r,text) : null;
   }
   const t=S.tick;
   if(!e){ CAUT.set(key,{id,name,label:r[0],text,col,since:t,live:false,latch:false,row:cautRow(r,text)}); return null; }
@@ -668,7 +691,9 @@ function crRailSync(panels){
   // a pick made IN the rail already has the panel under the pointer, so the
   // scroll it used to trigger threw the thing just clicked off the screen
   const moved = sel!==crLastSel && !railSelfPick(); crLastSel=sel;
+  cautRun();
   const red=new Map();                      // head -> the labels reading red
+  const seen=new Set();                     // every caution key stepped this pass
   for(const h of panels){
     /* whether a panel has anything to report is a question about the DESIGN -
        readoutsFor() answers [] on fitted(p), p.grp and P, all frozen for the
@@ -697,7 +722,7 @@ function crRailSync(panels){
       let hit=null;
       for(const r of rows){
         if(!Array.isArray(r)) continue;
-        const e=cautStep(h.p.id, r, nm, h.base);
+        const e=cautStep(h.p.id, r, nm, h.base, seen);
         if(e && e.live && h.head) (hit||(hit=[])).push(e);
       }
       if(hit && h.head){ const a=red.get(h.head); if(a) a.push.apply(a,hit); else red.set(h.head,hit); }
@@ -717,6 +742,7 @@ function crRailSync(panels){
     const v=h.body._viz;
     if(v&&v.dmg) hostPaint(v.dmg,dmgViz);
   }
+  cautSweep(seen);
   crRailAlert(panels,red);
 }
 
