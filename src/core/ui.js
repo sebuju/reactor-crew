@@ -73,10 +73,16 @@ function vXf(){ const m=ctx.getTransform&&ctx.getTransform();
 const vDevK=()=>vXf().k;
 function vSnapS(s){ const k=vDevK(); return Math.max(1,Math.floor(CELL*s*k))/(CELL*k); }
 function vScale(z){ VIEW.z=z; VIEW.s=vSnapS(VIEW.fit*z); }
-function vFit(x,y,w,h,cx,cy,cw,ch){
+/* `padX`/`padY` are layout units the FIT gives up and the BOX does not - room
+   reserved around the plant for something that stands beside it (the margin
+   panels, ui/margin.js). Taken off the view box instead, the clip below shrinks
+   with it and the drawing is cut in a band inside the canvas; taken off the fit,
+   the plant is simply drawn smaller and vPad() centres it in the slack. */
+function vFit(x,y,w,h,cx,cy,cw,ch,padX,padY){
   vBox(x,y,w,h);
   VIEW.cx=cx; VIEW.cy=cy; VIEW.cw=cw; VIEW.ch=ch;
-  VIEW.fit=Math.min(w/Math.max(cw,1), h/Math.max(ch,1));
+  const fw=Math.max(40,w-(padX||0)), fh=Math.max(40,h-(padY||0));
+  VIEW.fit=Math.min(fw/Math.max(cw,1), fh/Math.max(ch,1));
   vScale(VIEW.z);
 }
 /* ══ PUT PLANT POINT `a` UNDER SCREEN POINT (sx,sy) ══
@@ -503,6 +509,20 @@ ctxSuppress(cv);
    plan) sits over #cv but eats its events, so it has to feed the same
    hit-test loop itself - local() is measured off #cv either way, so the
    coordinates match the boxes hostPaint() let it push. */
+/* ══ A DRAG BELONGS TO THE SURFACE IT STARTED ON ══
+   The one door onto ui.drag, so a gesture cannot be started without saying
+   where. It is the same fact push() already stamps on a widget - a drag simply
+   never carried it. Every host measures in its OWN space and they overlap
+   numerically (see ptrHost at the top of this file), so a move arriving from a
+   different surface is not a bigger or smaller number, it is a number about
+   somewhere else. The PAN is what showed it: a move delivered by a hosted
+   lattice canvas mid-pan fed hostLocal()'s panel-relative x straight into
+   VIEW.ox, which moved the panel, which grew the next reading - a feedback
+   loop, measured at VIEW.ox 3.7e7 after a couple of seconds of dragging across
+   the reactor's panel. Not written at the foot of uiDown(): four of its
+   branches return early, and a stamp they skip is a drag uiMove() then refuses
+   for ever. */
+const dragOn=d=>{ d.host=ui.ptrHost; ui.drag=d; return d; };
 function uiDown(e){
   const tgt=e.currentTarget||cv;
   tgt.setPointerCapture(e.pointerId);
@@ -521,12 +541,12 @@ function uiDown(e){
        was the slowest gesture on the bench. A cell nothing owns is simply
        nothing to lift, and the drag stands whether or not the first one was. */
     if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
-      ui.drag={type:"pipeerase", v:1};
+      dragOn({type:"pipeerase", v:1});
       pipeLift(vPt(p));
       return;
     }
     if(screen==="design" && TOOL.active==="paint" && vIn(p)){
-      ui.drag={type:"materase", v:1, last:cellAt(vPt(p))};
+      dragOn({type:"materase", v:1, last:cellAt(vPt(p))});
       matLiftAt(vPt(p));
       return;
     }
@@ -534,9 +554,11 @@ function uiDown(e){
        resolved by design-bench.js's own ctx registry) - there is no quick-tap
        toggle any more, so a right click never silently flips the mode. */
     if(w&&w.type==="port"){
-      ui.drag={type:"portr"};
+      dragOn({type:"portr"});
       return; }
-    if(!e.shiftKey) ui.drag={type:"pan",lx:p.x,ly:p.y,sx:p.x,sy:p.y,moved:false};
+    // measured on #cv: hostLocal() is relative to a panel the pan itself moves
+    if(!e.shiftKey){ const lp=local(e);
+      dragOn({type:"pan",lx:lp.x,ly:lp.y,sx:lp.x,sy:lp.y,moved:false}); }
     return; }
   isTouch = e.pointerType==="touch" || e.pointerType==="pen";
   if(isTouch){ const t=findTip(p);
@@ -564,7 +586,7 @@ function uiDown(e){
        decided once both ends are known - pipeLay() needs the whole path - and
        a painted cell has none: it is one cell, and the fill the bench draws
        under the hand is what the player is watching change. */
-    ui.drag={type:"matdraw", v:1, last:c};
+    dragOn({type:"matdraw", v:1, last:c});
     matPaintAt(vPt(p));
     sel="mat:"+c[0]+","+c[1];
     return;
@@ -574,7 +596,7 @@ function uiDown(e){
     // `had` is what turns a click on a cell that is ALREADY pipe into a
     // rotate rather than a lay - decided at the press, because the drag may
     // yet lay across it and the answer must not change under the hand.
-    ui.drag={type:"pipedraw", cells:[c], v:1, had:!!D.pipes[pipeKey(c[0],c[1])]};
+    dragOn({type:"pipedraw", cells:[c], v:1, had:!!D.pipes[pipeKey(c[0],c[1])]});
     return;
   }
   /* ══ A PIPE IS PICKED THE WAY A MACHINE IS ══
@@ -599,7 +621,7 @@ function uiDown(e){
       // a commissioned plant is welded down: selectable, not movable; a
       // pinned part rides its parent, so it's selectable but never draggable
       if(screen==="design" && !w.part.pin){ const g=gridPt([q.x,q.y]);
-        ui.drag={type:"part",part:w.part,
+        dragOn({type:"part",part:w.part,
           // WHERE IN THE PART THE HAND TOOK HOLD, in CELLS. It was a pixel
           // offset, and a pixel is not a fixed share of a row: a 1-row pump is
           // DRAWN 84 px tall in a banded row, so a grab near its plinth stored
@@ -607,8 +629,8 @@ function uiDown(e){
           // nearly two rows clear of the hand. In cells the grab is bounded by
           // the part's own size and the same spot stays under the pointer.
           ox:g.x-w.part.x, oy:g.y-w.part.y,
-          sx:w.part.x, sy:w.part.y, gx:w.part.x, gy:w.part.y, v:w.v}; } }
-    else if(w.type==="sld"){ ui.drag=w;
+          sx:w.part.x, sy:w.part.y, gx:w.part.x, gy:w.part.y, v:w.v}); } }
+    else if(w.type==="sld"){ dragOn(w);
       const onThumb=Math.abs(q.x-w.tx)<=w.tw_/2+3;
       w.gv = onThumb ? w.val : valFrom(w,q.x);    // gv is the running command value
       w.gx = q.x; w.gx0 = q.x; w.moved = false;
@@ -627,8 +649,8 @@ function uiDown(e){
     /* the hull's own wall. NOTHING COMMITS UNTIL THE RELEASE: gridDrag() calls
        buildLayout(), which at pointer rate re-laid the whole board for every
        cell crossed. The wall wears a ghost outline while it moves (drawPlant). */
-    else if(w.type==="hull") ui.drag={type:"hull",edge:w.edge,v:w.v,gw:D.gw,gh:D.gh};
-  else if(w.type==="paint"){ ui.drag=w; w.last=null; w.fn(q,e); }
+    else if(w.type==="hull") dragOn({type:"hull",edge:w.edge,v:w.v,gw:D.gw,gh:D.gh});
+  else if(w.type==="paint"){ dragOn(w); w.last=null; w.fn(q,e); }
 }
 /* WHERE THE GESTURE IS, ASKED ONCE. A part drag is a MOVE now and only a
    move - GEOMETRY IS DRAGGED, TYPE IS MENUED means the box-to-box pipe gone,
@@ -644,7 +666,11 @@ function partDragTo(d,q){
 }
 function uiMove(e){
   const tgt=e.currentTarget||cv;
-  const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
+  const host=tgt._uiHost||null;
+  // a move from a surface this gesture did not start on says nothing about it,
+  // and ui.ptr must stay in the space the drag's own handler reads - see uiDown
+  if(ui.drag && ui.drag.host!==host) return;
+  const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=host;
   if(e.pointerType==="mouse") isTouch=false;
   if(ui.drag){ const d=ui.drag, q=d.v?vPt(p):p;
     /* NOTHING IS COMMITTED UNTIL THE RELEASE. moveTo() used to be called on
@@ -694,10 +720,11 @@ function uiMove(e){
     // the pan is measured in PAGE pixels and spent in plant units, so the
     // deck keeps up with the hand at any zoom
     else if(d.type==="pan"){
-      VIEW.ox-=(p.x-d.lx)/VIEW.s; VIEW.oy-=(p.y-d.ly)/VIEW.s;
-      d.lx=p.x; d.ly=p.y;
+      const lp=local(e);
+      VIEW.ox-=(lp.x-d.lx)/VIEW.s; VIEW.oy-=(lp.y-d.ly)/VIEW.s;
+      d.lx=lp.x; d.ly=lp.y;
       // a page-pixel threshold (not plant), so it feels the same at any zoom
-      if(Math.hypot(p.x-d.sx,p.y-d.sy)>4) d.moved=true; }
+      if(Math.hypot(lp.x-d.sx,lp.y-d.sy)>4) d.moved=true; }
   }
   (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||ui.drag.type==="part") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
@@ -809,6 +836,9 @@ function uiBind(el){
 uiBind(cv);
 function uiForward(el,toLocal){
   el._uiHost=el; el._uiLocal=toLocal;
+  // it takes right-button gestures like the plant does, so it owes the same
+  // menu suppression - a hosted canvas is one of the things standing over #cv
+  ctxSuppress(el);
   uiBind(el);
 }
 cv.addEventListener("wheel",e=>{
@@ -827,12 +857,23 @@ cv.addEventListener("wheel",e=>{
     const c=cellAt(vPt(p));
     if(pipeTurn(c[0],c[1],e.deltaY>0?1:-1)){ buildLayout(); return; }
   }
-  // anywhere on the canvas, not just over the plant - the page doesn't
-  // scroll any more, so there's nothing else for the wheel to do. Holds the
-  // plant point under the pointer still (or the middle, off-plant).
+  vWheel(p,e.deltaY);
+},{passive:false});
+/* ══ THE WHEEL ZOOMS, WHEREVER IT LANDS ══
+   Anywhere on the canvas, not just over the plant - the page does not scroll
+   any more, so there is nothing else for the wheel to do. Holds the plant point
+   under the pointer still, or the middle when the pointer is off-plant.
+
+   It is a function rather than the tail of cv's own handler because a margin
+   panel is HTML standing OVER the canvas (marginHost, ui/margin.js), so the
+   canvas never sees a wheel that starts on one - and a panel is anchored in
+   plant space, so the wheel has to do there what it does on the deck beside
+   it. The pipe-tool rotation and the scenario timeline stay on cv: those are
+   about a cell and a second under the pointer, and a panel is neither. */
+function vWheel(p,dy){
   const on=vIn(p);
   const px=on? p.x : VIEW.x+VIEW.w/2, py=on? p.y : VIEW.y+VIEW.h/2;
   const a=vPt({x:px,y:py});          // the plant point to hold still, at the OLD scale
-  vScale(VIEW.z*Math.exp(-e.deltaY*0.0015));
+  vScale(VIEW.z*Math.exp(-dy*0.0015));
   vAnchor(a,px,py);
-},{passive:false});
+}

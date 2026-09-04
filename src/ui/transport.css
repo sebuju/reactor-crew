@@ -2,7 +2,10 @@
    "the playhead is always on screen". One builder (trBuild in transport.js),
    mounted at the top of both #scr-operate and #scr-scenario. */
 
-.trs{position:relative;display:flex;align-items:center;gap:6px;
+/* z-index is the plant stacking scale - see .margin-host in plant-screens.css.
+   The margin panels are a viewport-wide fixed host, so the strip has to claim
+   its band rather than rely on DOM order. */
+.trs{position:relative;z-index:1;display:flex;align-items:center;gap:6px;
   height:30px;padding:0 12px;background:var(--c-panel);
   pointer-events:auto}
 

@@ -40,6 +40,18 @@ const C = {
      against a cool dark panel, so a burnt cell reads as burnt rather than as
      a hole cut in the picture. */
   h2:"#a48ad6", scar:"#2b1c15", scarHi:"#4a2f22",
+  /* THE LEADER FROM A MACHINE TO ITS PANEL (ui/margin.js). It was C.rail, which
+     is the tone this board draws things you are NOT meant to look at - a centre
+     line, a tick - and twenty leaders threading the plumbing simply vanished
+     into it. MAGENTA is the one hue the mimic has left: cyan and blue are the
+     water, amber the hot side and the selection, red the alarms, white the
+     steam, green the healthy lamps, brown the graphite, and VIOLET is spoken
+     for twice over - the surge line (pipes.js) and the port nozzles (portA)
+     and the hydrogen cloud (h2). What is left is YELLOW-GREEN, and it is far
+     enough from both its neighbours to be its own thing: C.green is a mint
+     LAMP and C.amber is orange. Nothing on the plant is ever this colour, so a
+     leader can never be mistaken for a reading about the plant. */
+  lead:"#a8bd45",
   /* AND WHAT IT LOOKS LIKE WHILE IT IS HAPPENING. Three tones off one axis -
      gas temperature - so the fire is not a colour somebody picked: fire is a
      stoichiometric front, fire2 is the same front a thousand kelvin cooler,
