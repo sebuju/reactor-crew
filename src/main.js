@@ -9,6 +9,13 @@ let prev=performance.now();
    of one frame's work per second. */
 const IDLE_MS=250;
 let lastDraw=-1e9;
+/* WHICH SCREEN THE HELD PICTURE IS OF. A validation run holds whatever the
+   canvas last painted (trQuiet(), record.js), and it may only hold a picture of
+   the plant and the screen that are actually up: a link arriving already in one
+   had painted nothing at all, and a commissioning entered from one left the
+   machine that was replaced on the glass. Null says the canvas owes a frame, so
+   one is drawn whatever the rate and the run holds that. */
+let paintedScreen=null;
 /* requestAnimationFrame IS A QUEUE FOR THE SCREEN. It hands the loop back on a
    vsync boundary whether or not anything was painted, so a run that draws
    nothing still waited for the monitor and idled a third of every frame.
@@ -27,16 +34,19 @@ function tick(now){
   let dt=(now-prev)/1000; prev=now; dt=Math.min(dt,.25);
   // a prewarm owns the whole frame and paints nothing - see prewarmStep()
   // (screens/shell.js). The sim cannot run either: P is half a plant.
-  if(prewarmStep()){ nextFrame(); return; }
+  // ...and what stands on the canvas while it runs is the plant this one
+  // REPLACES, so a validation run may not go on holding it: the frame after a
+  // prewarm is drawn whatever the rate.
+  if(prewarmStep()){ paintedScreen=null; nextFrame(); return; }
   const stepped=simFrame(dt);
   // taken unconditionally: short-circuiting behind `stepped` would leave the
   // flag set through a whole run and spend it on the first still frame after
   const want=uiTakeDirty();
   // a validation run buys its speed here: the whole frame goes to the sim and
   // the canvas holds whatever it last painted - see trQuiet() (record.js)
-  if(trQuiet()){ nextFrame(); return; }
+  if(trQuiet() && paintedScreen===screen){ nextFrame(); return; }
   if(!stepped && !want && now-lastDraw<IDLE_MS){ nextFrame(); return; }
-  lastDraw=now;
+  lastDraw=now; paintedScreen=screen;
   // the drawing cannot move inside a frame - see laySettle() (layout.js).
   // layoutMetrics() itself is NOT called here: drawPlant() calls it, and it
   // walks the plant a dozen ways that all want to be inside the window.

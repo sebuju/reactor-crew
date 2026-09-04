@@ -36,7 +36,9 @@ function urlApply(){
      the prewarm, so nothing has been measured by the time this runs either. A
      plain number is taken as written and trRateFit() (transport.js) puts it on
      an offer the moment the measurement exists. MAX and VLD still come off the
-     table, because neither is a number. */
+     table, because neither is a number. VLD arrives here like any other rate;
+     what a link into it needs is the one frame that proves the page is alive,
+     and that is the frame loop's own job - see `painted` (main.js). */
   const tsRaw = q.get("timescale"), tsNum = tsRaw && Number(tsRaw.replace(/x$/i,""));
   if(tsNum>0) trRate(tsNum);
   else { const ts = pick("timescale",urlRateRows()); if(ts) trRate(ts.v); }
@@ -61,7 +63,11 @@ function urlPreset(i){ layFresh(); urlPreI=i; urlPreGen=DGEN; }
 
 function urlSync(){
   if(!urlWrite) return;
-  const q=new URLSearchParams(location.search);
+  /* BUILT FRESH, never edited in place: a key nothing below writes is a key
+     that does not survive the first sync, so a misspelt or unusable param is
+     dropped off the address bar instead of being carried through every reload
+     and re-applied on each one. */
+  const q=new URLSearchParams();
   const tb=urlTabRows().find(r=>r.btn.dataset.screen===screen);
   q.set("tab", tb?tb.keys[tb.keys.length-1]:screen);
   const rt=urlRateRows().find(r=>r.v===TR.rate);   // an unoffered rate writes no param

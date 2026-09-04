@@ -156,6 +156,32 @@ function api(req, res, parts){
   return fail(res, 405, req.method + " not allowed");
 }
 
+/* ═══════════════ LIVE RELOAD ═══════════════ */
+
+/* Only with --live, and only in the copy of the page this process hands out:
+   nothing is written to the repo and the `file://` page never sees any of it. */
+const LIVE = process.argv.includes("--live");
+const LIVE_TAG = "<script>new EventSource('/api/live').onmessage=function(){location.reload();};</script>\n";
+const liveClients = new Set();
+const LIVE_SKIP = /(^|[\\/])(\.git|node_modules|saves|test-results|screenshots)([\\/]|$)/;
+
+function liveWatch(){
+  let t = null;
+  fs.watch(ROOT, {recursive:true}, (ev, name) => {
+    if(!name || LIVE_SKIP.test(name) || !/\.(js|css|html)$/i.test(name)) return;
+    clearTimeout(t);      // an editor's save is several events on one file
+    t = setTimeout(() => { for(const res of liveClients) res.write("data: reload\n\n"); }, 120);
+  });
+}
+
+function liveStream(req, res){
+  res.writeHead(200, {"Content-Type":"text/event-stream",
+                      "Cache-Control":"no-store", "Connection":"keep-alive"});
+  res.write("retry: 500\n\n");
+  liveClients.add(res);
+  req.on("close", () => liveClients.delete(res));
+}
+
 /* ═══════════════ STATIC FILES ═══════════════ */
 
 /* The traversal guard. `path.resolve` has already flattened every `..`, so the
@@ -182,6 +208,13 @@ function statics(req, res, pathname){
   try{ st = fs.statSync(abs); }catch(e){ return fail(res, 404, "not found"); }
   if(st.isDirectory()) return statics(req, res, pathname.replace(/\/*$/, "/"));
   const type = MIME[path.extname(abs).toLowerCase()] || "application/octet-stream";
+  if(LIVE && type === MIME[".html"]){
+    let src;
+    try{ src = fs.readFileSync(abs, "utf8"); }catch(e){ return fail(res, 404, "not found"); }
+    const body = Buffer.from(src.replace(/<\/body>/i, LIVE_TAG + "</body>"), "utf8");
+    res.writeHead(200, {"Content-Type": type, "Content-Length": body.length, "Cache-Control": "no-store"});
+    return req.method === "HEAD" ? res.end() : res.end(body);
+  }
   res.writeHead(200, {"Content-Type": type, "Content-Length": st.size, "Cache-Control": "no-store"});
   if(req.method === "HEAD") return res.end();
   fs.createReadStream(abs).pipe(res);
@@ -192,6 +225,7 @@ function statics(req, res, pathname){
 const server = http.createServer((req, res) => {
   const pathname = (req.url || "/").split("?")[0].split("#")[0];
   try{
+    if(LIVE && pathname === "/api/live") return liveStream(req, res);
     if(pathname === "/api" || pathname.startsWith("/api/"))
       return api(req, res, pathname.slice(5).split("/").filter(Boolean));
     statics(req, res, pathname);
@@ -202,10 +236,10 @@ const server = http.createServer((req, res) => {
   }
 });
 
-const PORT = Number(process.argv[2] || process.env.PORT || 8017);
+const PORT = Number(process.argv.slice(2).find(a => /^\d+$/.test(a)) || process.env.PORT || 8017);
 server.listen(PORT, () => {
+  if(LIVE) liveWatch();
   console.log("REACTOR-CREW  http://localhost:" + PORT + "/");
+  if(LIVE) console.log("live reload   watching *.js *.css *.html under " + ROOT);
   console.log("saves         " + SAVES);
-  console.log("The game does not need this. index.html still opens straight from the");
-  console.log("filesystem - running this only adds somewhere to save to.");
 });
