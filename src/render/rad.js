@@ -152,14 +152,13 @@ function radCells(data){
    bolted to the outside of the thing it reads. The "under" layers above stop
    at the component's own footprint for exactly the opposite reason: you
    cannot survey the inside of a vessel.
-   Shielding blocks a beam, it does not stand beside itself for repair, so a
-   shield component is skipped - the same predicate radPeak() and
-   partyCells() already use in src/data/rad.js. Unfitted parts are skipped
-   too: there is no machine there to reach, and the number would only land on
-   top of that component's own NOT FITTED tag. */
+   Shielding is PAINT now, so it is not in LAY.parts and there is nothing left
+   to skip - the same change radPeak() and partyCells() took in src/data/rad.js.
+   Unfitted parts are skipped: there is no machine there to reach, and the
+   number would only land on top of that component's own NOT FITTED tag. */
 function radPart(data){
   for(const p of LAY.parts){
-    if(p.grp==="shield" || !fitted(p)) continue;
+    if(!fitted(p)) continue;
     const r=radParty(data.f,p,data.g);
     const {x,y,w}=prect(p);
     txt(r.toFixed(2)+"x", x+w/2, y+11,
