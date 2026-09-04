@@ -233,13 +233,17 @@ const pipeDrop={};
    THIS is why it lives here and not in a layer's own data function.
    netFactored() caches its factorisation onto net.Af, and net is P.net - so a
    draw callback that solved would be a LAYER WRITING TO P, which is exactly
-   what the layer contract forbids, and audit-geometry only scans the view
-   files for `S.` writes, so it would not catch it. One refresh, from
-   drawPlant(), and the layers read the answer. */
+   what the layer contract forbids. One refresh, from drawPlant(), and the
+   layers read the answer. */
 const pipeP={};
+/* WHAT EACH RUN CARRIES THIS FRAME, kg/s, signed along the key's own canonical
+   order - off the same solve, and the one thing the flow meter prints. Same
+   standing as pipeDrop and pipeP beside it: a view cache, never state. */
+const pipeKg={};
 function pipeFieldRefresh(L){
   for(const k in pipeDrop) delete pipeDrop[k];
   for(const k in pipeP) delete pipeP[k];
+  for(const k in pipeKg) delete pipeKg[k];
   /* AND THE READING PLACES, once, before anything draws. The allocator has to
      run first because the UNDER seam draws before the gauges do, and one of
      the things drawn there prints a number in every cell it believes is empty
@@ -250,7 +254,7 @@ function pipeFieldRefresh(L){
   pipeStackTick();
   pipeAnchors(pipeRuns(L));
   if(!L) return;
-  netField(L, pipeDrop, pipeP);
+  netField(L, pipeDrop, pipeP, pipeKg);
 }
 /* Pressure on a RUN rather than at a node: the mean of its two ends, which is
    what a gauge tapped into the middle of it would read. null for a TAP-ENDED
@@ -352,11 +356,26 @@ function pipeRate(s){
    stop twitching then JUMPS the moment the plant moves, which is worse. So this is a
    first-order approach, not a quantiser - it follows closely when far from the true
    value and parks dead still within a hair of it. */
-function pipeDisplay(k,fr){
+/* ══ AND THE DEADBAND MAY NOT HIDE MORE THAN THE LAST DIGIT ══
+   It was a flat 0.0008 of the run's OWN REFERENCE, which on a 6719 kg/s hot
+   leg is 5.4 kg/s. So a severed run whose solved flow is 0.000 eased down,
+   crossed into the band at 5.3 kg/s and PARKED THERE FOR EVER: the phantom
+   flow standing on a pipe that is not there is exactly the band's own width,
+   read back off the display state. A deadband that stops a figure twitching
+   has to be smaller than the twitch it is hiding, and the only twitch that
+   matters is one the digits can show - so it is half of the last PRINTED step
+   now (pipeFmt's own buckets), scaled to whatever unit the caller is
+   smoothing in. On a leg at full flow that is 5 kg/s of 7500, which is where
+   the flat figure was aimed; near zero it is 0.05 kg/s, and the needle walks
+   all the way home. */
+const DISP_EPS=0.0008;
+const pipeStep = v => v>=1000 ? 10 : v>=100 ? 1 : 0.1;
+function pipeDisplay(k,fr,scale){
   const cur=pipeShown[k];
   if(cur===undefined){ pipeShown[k]=fr; return fr; }
   if(!pipeDt) return cur;                    // a paused plant must still freeze
-  if(Math.abs(fr-cur)<0.0008) return cur;
+  const eps = scale>0 ? 0.5*pipeStep(Math.abs(fr)*scale)/scale : DISP_EPS;
+  if(Math.abs(fr-cur)<eps) return cur;
   const n=Math.max(1,Math.round(pipeDt/PIPE_DT));
   let v=cur;
   for(let i=0;i<n;i++) v=approach(v,fr,PIPE_DT,4);
@@ -372,35 +391,6 @@ function pipeFmt(v){
   return v.toFixed(1);
 }
 
-/* ── what 100% means, per run ──
-   A needle needs a full scale, and now that S.flowPos is kept per RUN rather than
-   per kind, the honest full scale is per run too: P.netRefByRun[key], what THAT run
-   carries as commissioned, undamaged, valves wide. A short loop and a long loop are
-   not the same pipe wearing two labels, so they no longer share one guessed number -
-   each is judged against its own build.
-
-   EVERY RUN IS NORMALISED ON ITSELF, so the full scale is the same 84 for all
-   of them and the unit conversion is gone: step() drives each run's integral at
-   its own share of its own reference, and P.netRefKg says what that reference
-   is worth in kilograms. Weighting by ref/P.netRefRun instead measured a
-   condensate line against the PRIMARY's mean leg - see pipeFullScale().
-
-   Every run's dial now scales off ITS OWN reference the same way - not just
-   hot/cold/a fitting branch - because Stage 1 makes every run an edge and
-   P.netRefByRun is filled for every one of them. Two runs never get a real
-   one, and say so STRUCTURALLY rather than by name: HPI lands on a TANK's
-   own node (tid, mirroring netBuild()'s own test - see pipenet.js) and is
-   metered in inventory, not mass; the surge line has no second port of its
-   own to solve a reference for at all (runEnds() returns null - it drops
-   onto another run's pipe, see pipenet.js's own comment on that). Everything
-   else - a hot/cold run before commission() has given it a reference - keeps
-   the flat design rate this file always gave that KIND; that fallback is a
-   DEFAULT-PICKER, not a permission. */
-/* NO FLAT FULL-SCALE TABLE. It read {steam:96, exh:96, feed:96} - three
-   invented numbers that looked exactly like measurements, on the three kinds
-   nothing was forcing. All three have a real one now: feedwater off its own
-   solved reference, steam and exhaust off steamScale() (step.js), which is the
-   same figure the tick normalises the packet integral on. */
 /* Which TANK this run ends on, or null. Off the run's own END PARTS, never off
    P.net.tankNid: a tank's node carries no face and a run end does ("efw" against
    "efwt"), so the string compare that used to stand here matched nothing on any
@@ -411,32 +401,68 @@ function runTankId(key){
   if(!r) return null;
   return D.tanks[r.a] ? r.a : D.tanks[r.b] ? r.b : null;
 }
-function pipeFullScale(key,k){
-  const ends=runEnds(key,k);
-  /* A steam run's integral is already normalised on rated steam in step(), so
-     100 % is the same 84 every other run's reference lands on. */
-  if(runVapour(ends)) return 84;
-  /* A RUN IS NORMALISED ON ITSELF, so 100 % is the same 84 for every run on
-     the plant - liquid, steam or exhaust. It used to be weighted by
-     ref/P.netRefRun, which measured a condensate line against the PRIMARY's
-     mean leg: the same kilograms drew packets nine times slower the moment
-     they were water, and the digit beside them read 20 % high. */
-  if(P.netRefByRun[key]) return 84;
-  /* A run with no reference of its own. Every run is port to port now, so
-     runEnds() answers for all of them and this is only reached before
-     commission() has run - or on a run the reference sweep found carrying
-     nothing at all. */
-  if(!ends) return 0.02*84*Math.max(0.05,P.feff0);
-  return 84*Math.max(0.05,P.feff0);   // DEFAULT
+/* ══ WHAT THIS RUN CARRIES, kg/s, SIGNED - AND IT IS THE SOLVE ══
+   The meter used to be: solved flow, divided by P.netRefByRun, integrated into
+   s.flowPos, differentiated here, low-passed at tau 8, low-passed again at
+   tau 4, and multiplied back by P.netRefKg - an identity with two lags, a
+   84/(60*1.4) that cancelled itself, and a primary-inventory factor `wet` on
+   the tagged runs only, so after a LOCA the tagged and untagged runs of one
+   circuit printed in different currencies. s.flowPos stays: it is the PACKET
+   ANIMATION's phase, which is a real job, and it may keep its ratio and its
+   lag. The METER may not.
+   THREE ANSWERS, AND ONLY ONE OF THEM IS A CORRELATION. A vent branch is a
+   dead end in the network and carries nothing there, so it reads what its own
+   valves are passing - the same book step()'s own steam meter reads. A run
+   whose port valves are shut carries 0, written rather than skipped: skipping
+   left the last figure the meter happened to hold standing over a severed
+   pipe. Everything else is the solved edge, and that includes the surge line
+   and the injection line, which had correlations of their own until now. */
+function pipeRunKg(key,k,L){
+  const r = P.net && P.net.byKey[key];
+  if(r && L && !runPortsOpen(L,r)) return 0;
+  const b = runVapour(runEnds(key,k)) ? steamBook(key,k) : null;
+  if(b && b.vent){ let q=0;
+    for(const fid of b.taps) q += (L && L.reliefSteam && L.reliefSteam[fid]) || 0;
+    return q*steamDir(key,k); }
+  return pipeKg[key]||0;
 }
-
-const pipeFrac=(key,k,sp)=>sp/Math.max(1e-6,pipeFullScale(key,k));
+/* ══ AND THE MASS NO RUN CARRIES IS ON THE MACHINE ══
+   A machine's own internal path is not a run: it has no polyline, so it can
+   never be a pipe label, and the player is left looking at two run meters
+   either side of it expecting them to agree. They are not required to - the
+   body is an edge of the same graph and every free node between them stores -
+   so the honest answer is to print what crossed the body, off the same frame's
+   solve. STRUCTURAL, over whatever paths the ROLE declares: no per-role
+   branching, so a condenser states its steam side and its cooling water side
+   without either being named here.
+   AND A PATH THAT ENDS ON A BOUNDARY SAYS SO. A generator's feed lands in the
+   shell's own water (sec:<id>) and a tank, a condenser and containment are
+   fixed the same way - an imbalance across one of those is where the water
+   went, not an error, and a reading that does not say which is a reading the
+   player has to guess at. */
+function pipeThru(p,L){
+  if(!P || !P.net) return "";
+  const R = ROLE[p.role]; if(!R) return "";
+  const paths = roleIntern(R).map(IN=>({k:"comp:"+p.id+":"+IN.a+IN.b, a:IN.a, b:IN.b}));
+  if(R.vapPath) paths.push({k:"vap:"+p.id, a:R.vapPath.a, b:R.vapPath.b});
+  const rows = [];
+  for(const q of paths){ const v = pipeKg[q.k];
+    if(v === undefined) continue;
+    const wa = portWord(p,q.a,true)||FACE_NAME[q.a]||q.a,
+          wb = portWord(p,q.b,true)||FACE_NAME[q.b]||q.b;
+    rows.push((v<0?wb+" to "+wa:wa+" to "+wb)+" "+pipeFmt(Math.abs(v))+" kg/s"); }
+  if(!rows.length) return "";
+  let s = " ACROSS ITS OWN BODY: "+rows.join(", ")+".";
+  if(R.sgtr) s += " Its feedwater lands in the shell's own water, which is a"
+    + " boundary in the solve - the runs either side of it are not required to add up.";
+  return s;
+}
 
 /* ── what a run actually carries, in a unit that exists ──
    The gauge reads a real quantity; per cent of that run's own rating is on the
-   tooltip. Both come from ONE fraction (pipeFrac, off pipeSpd - the same integral the
-   packets move on) times a nominal, so a digit can never disagree with the needle
-   beside it, or with a packet's own speed.
+   tooltip. Both come from ONE fraction - pipeRunKg() over this nominal, which is
+   the solve itself - so the digit, the percentage and the three ink states
+   cannot disagree about one run.
 
    The nominal is a heat balance on the rated power, the plant's only sizing input -
    this file does not run a second one per run. Primary: Q = m*cp*dT, water at these
@@ -478,7 +504,7 @@ function pipeUnit(key,k){
   const sref=P.netRefByRun[key];
   if(sref) return {nom:(P.netRefKg&&P.netRefKg[key])||0, u:"kg/s",
                    dir:sref<0?-1:1};
-  if(!ends) return {nom:loop*0.02, u:"kg/s"};   // a tap-ended run - see pipeFullScale
+  if(!ends) return {nom:loop*0.02, u:"kg/s"};   // a tap-ended run: the surge line
   /* ── THE STEAM LINES GET THEIR NUMBER BACK ──
      They read null for as long as nothing solved a steam rate. step() solves
      one per generator now, so the honest answer is no longer "nothing": a
@@ -493,24 +519,74 @@ function pipeUnit(key,k){
     return {nom:steamScale(key,k), u:"kg/s", dir:steamDir(key,k)};
   return null;
 }
-/* ══ HOW TWO-PHASE A LINE IS, 0..1 - OFF WHAT IS ACTUALLY IN IT ══
-   This read net.tag, a DIRECTION label, plus a PIPE_NO_CARRYOVER name table
-   whose own comment said nothing solved distinguished the cases. Something
-   does: netQualAt() is the quality the enthalpy field carries at a node, and
-   it answers exactly this question at the run's own ends. The name table is
-   gone with it - a surge line reads liquid because its water IS liquid, not
-   because it was listed.
-   Read off the run's OWN graph edge (net.edges, matched by key), never
-   runEnds()+coreFold(): the edge already holds the two node indices the build
-   resolved. */
-function pipeSteam(r,L){
-  const net=P.net;
-  if(!net) return edgeLaw(r)===LAW_VAPOUR?1:0;
-  let x=0, seen=false;
-  for(const ed of net.edges) if(ed.key===r.key){
-    x = Math.max(x, netQualAt(L,net.name[ed.u]), netQualAt(L,net.name[ed.v])); seen=true; }
-  return seen ? clamp(x,0,1) : (edgeLaw(r)===LAW_VAPOUR?1:0);
+/* ══ WHAT IS ACTUALLY IN THIS RUN, AT EACH OF ITS OWN TWO ENDS ══
+   netQualAt() is the quality the field carries at a node, so this is the run
+   asked about itself. It returns null where there is nothing to ask - a run
+   with no edge in the graph carries nothing and says so. It used to fall back
+   on edgeLaw()===LAW_VAPOUR, which is the DESIGN label: a steam line drawn to
+   a shell that is not boiling read as steam because of what it was for, which
+   is the one thing this whole reading exists to stop.
+   Per END, not a Math.max over both: a run is one pipe with two ends at two
+   states and the drawing shows the change along it (pipePhaseCol, below). */
+function pipePhase(r,L){
+  /* THE BENCH HAS NO P AT ALL until something commissions, and it draws the
+     same runs this does - so the plant's own state is asked for here and
+     answered null, never assumed. */
+  const net=(typeof P!=="undefined" && P) ? P.net : null;
+  if(!net || !L) return null;
+  for(const ed of net.edges) if(ed.key===r.key)
+    return [clamp(netQualAt(L,net.name[ed.u]),0,1), clamp(netQualAt(L,net.name[ed.v]),0,1)];
+  return null;
 }
+// the one figure the parcels want: how vapour the run is as a whole
+const pipeSteam=(r,L)=>{ const q=pipePhase(r,L); return q ? (q[0]+q[1])/2 : 0; };
+/* ══ AND THE PHASE IS A SECOND CHANNEL ON THE KIND'S OWN HUE ══
+   The KIND says what a run is FOR and it keeps its colour, because that is
+   what makes a dense mimic readable at a glance. What is IN it rides on top as
+   lightness: liquid deepens the family hue, vapour washes it out toward the
+   steam white. Both directions, so the two questions cannot be confused - a
+   hot leg full of steam is a pale hot leg and a steam line full of water is a
+   deep one, and neither borrows the other's hue.
+   Measured against the three ink states the meter already uses (dead grey,
+   backwards amber, over-rating red): those are SATURATED marks on a value tag
+   and this is a lightness on the pipe body, so they do not collide. */
+/* Measured in the browser at the size runs are actually drawn: at 0.72 toward
+   white a voided hot leg lost its family hue entirely and read as the surge
+   line beside it. 0.55 keeps the hue and still reads as "not liquid" at 2 px. */
+const PIPE_VAP="#eef6f8", PIPE_LIQ_K=0.18, PIPE_VAP_K=0.55;
+const PIPE_PH_COL={};
+function pipePhaseCol(col,x){
+  const q=Math.round(clamp(x,0,1)*8)/8, k=col+"|"+q;    // eight steps: a lerp per run per frame is a string per run per frame
+  let v=PIPE_PH_COL[k];
+  if(v===undefined){
+    const liq=lerpC(col,C.bg,PIPE_LIQ_K);
+    v=lerpC(liq,PIPE_VAP,q*PIPE_VAP_K);
+    PIPE_PH_COL[k]=v;
+  }
+  return v;
+}
+/* WHAT TO STROKE THE RUN WITH. One colour where both ends agree, a gradient
+   along the run where they do not - which is what a line that is boiling at
+   one end looks like. The gradient is taken between the run's own two
+   endpoints, so a bent run's wash follows the same axis its packets travel. */
+function pipeStroke(r,PC,L){
+  const col=pipeCol(PC,r.k), q=pipePhase(r,L);
+  if(!q) return col;
+  if(Math.abs(q[0]-q[1])<0.02) return pipePhaseCol(col,(q[0]+q[1])/2);
+  const a=r.pts[0], b=r.pts[r.pts.length-1];
+  const g=ctx.createLinearGradient(a[0],a[1],b[0],b[1]);
+  /* the run's key orders its ends the same way netBuild did (ed.u, ed.v), so
+     end 0 of the polyline is end u - the same pairing pipeUnit()'s own
+     direction reads. */
+  g.addColorStop(0,pipePhaseCol(col,q[0]));
+  g.addColorStop(1,pipePhaseCol(col,q[1]));
+  return g;
+}
+/* AND IN WORDS, for the run panel and the tooltip: a kilogram of wet steam is
+   not a kilogram of water and the meter's kg/s cannot say which it is. */
+const pipePhaseWord=x => x===null ? "NOTHING"
+  : x<=0.001 ? "LIQUID" : x>=0.999 ? "STEAM"
+  : "WET STEAM, x="+x.toFixed(2);
 
 /* ══════════ the bubbles ══════════ */
 const PIPE_RUNWAY=60;
@@ -720,8 +796,8 @@ function pipeStackFlush(){
    THE LONGEST STRETCH IS NOT ALWAYS THE RIGHT ONE. A pipe runs BEHIND the plant, so
    the middle of the longest segment can be inside a vessel - where a meter is a face
    bolted to nothing and its reading lands across whatever that component is drawing.
-   At four loops the main steam meter sat inside the fourth generator, and audit-text
-   found it as the reading colliding with that generator's own REPAIR key. So a
+   At four loops the main steam meter sat inside the fourth generator, colliding
+   with that generator's own REPAIR key. So a
    stretch that is long enough to hold a meter AND clear of every component wins;
    length only decides between equals. A kind with nowhere better keeps the anchor it
    always had rather than losing its meter.
@@ -940,8 +1016,13 @@ function pipeMeters(runs,L){
     const k=r.k, key=r.key;
     const un=pipeUnit(key,k);
     if(!un) continue;                        // nothing forces this run - see pipeUnit()
-    const sp=pipeSpd[key]||0, fr=pipeDisplay(key,pipeFrac(key,k,sp));
-    const mag=pipeFmt(Math.abs(fr)*un.nom);
+    /* ONE display smoothing pass, at one tau, on the run's own solved flow
+       against its own reference - so the digit IS the solve to the printed
+       precision and the three ink states below still judge a fraction of the
+       quantity's own reference. */
+    const nom=Math.max(1e-6,Math.abs(un.nom));
+    const fr=pipeDisplay(key,pipeRunKg(key,k,L)/nom,nom);
+    const mag=pipeFmt(Math.abs(fr)*nom);
     /* the same three states the needle used to carry, in the ink instead:
        stagnant, backwards, over its rating. Judged against the run's own
        DESIGN direction (un.dir), because a key's canonical order is two part
@@ -961,7 +1042,7 @@ function pipeMeters(runs,L){
        :dead?" The line is stagnant."
        :"")+
       (pipeDrop[key]!=null
-        ? "  It spends "+(pipeDrop[key]*100).toFixed(0)+
+        ? " It spends "+(pipeDrop[key]*100).toFixed(0)+
           " % of the loop's whole pump head getting the water along it - that is the price of this run's length, its bore, and anything throttling it."
         : ""));
   }
@@ -1008,8 +1089,8 @@ function pipeHoldDial(L, id){
   TIP(cx-r,cy-r,2*r,2*r,partName(p).toUpperCase()+"  PRESSURE",
     pv.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+set.toFixed(1)+
     " MPa setpoint. Level "+tankLvl(L,id).toFixed(0)+" %."+
-    (fr>lift?"  It is past the relief valve setpoint."
-            :reliefAnyOpen(L)?"  The relief valve is passing.":""));
+    (fr>lift?" It is past the relief valve setpoint."
+            :reliefAnyOpen(L)?" The relief valve is passing.":""));
 }
 
 /* ══════════ the two entry points ══════════
@@ -1120,7 +1201,8 @@ function pipeFlow(L){
        kind has no entry of its own, so reading r.k here silently fed every packet
        phase 0 and every speed 0, whatever loop it was on. */
     pipeStream(pipePad(g,PIPE_RUNWAY), r.key, L.flowPos[r.key]||0,
-              pipeSpd[r.key]||0, pipeCol(PC,r.k), w, pipeSteam(r,L), pipeSeed(r.key));
+              pipeSpd[r.key]||0, pipePhaseCol(pipeCol(PC,r.k),pipeSteam(r,L)), w,
+              pipeSteam(r,L), pipeSeed(r.key));
     ctx.restore();
   }
 }
