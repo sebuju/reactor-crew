@@ -19,7 +19,7 @@ const M=require('./bundle').headless(
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
  'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,'+
- 'plantPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
+ 'plantPreset,latPreset,act,LAT:()=>LAT,latRevolve,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -145,6 +145,33 @@ const CASES={
     M.removePart("core1");      say("REMOVE on the 1st reactor");
   },
   loops4(){ const s=withPlant(null,{loops:4}); run(s,PSEC); dump(s,"stock plant, 4 loops"); },
+  /* ── IS THE AXIAL COUPLING WARNING TELLING THE TRUTH? ──
+     A tall compact core is warned about at core.cz < 0.35: loosely coupled
+     enough that one end can drift without the other noticing, so xenon can
+     oscillate top to bottom on its own. Nothing has ever seen it happen.
+     Split the banks, step the outer one, and print the axial offset. If it
+     swings and GROWS, the warning is real. If it flattens, XCOUP is too tight
+     and the warning is decoration. This prints; it decides nothing. */
+  xeosc(){
+    Object.assign(D,JSON.parse(JSON.stringify(BASE)));
+    M.latDefault(); M.latPreset(1);
+    // H/D 2.0: the COMPACT preset alone reads cz 0.70, nowhere near the warning
+    M.LAT().len=2*M.LAT().len/1.4; M.latRevolve();
+    M.buildStockPlumbing({loops:1});
+    M.buildLayout(); M.commission();
+    const s=M.S(), P=M.P(); s.diceOff=true;
+    M.act("split",true);
+    M.act("rodBank",P.NB-1,Math.min(1,s.rodZ[P.NB-1]+0.10));
+    console.log("\n── axial xenon, COMPACT lattice ──");
+    console.log(" cz "+f(P.cz,3)+"  H/D "+f(M.D().hd,2)+"  banks "+P.NB);
+    console.log("    t      ao%      n      fq");
+    for(let k=0;k<=PSEC*50;k++){
+      if(k%(10*50)===0)
+        console.log("  "+String(Math.round(k/50)).padStart(5)+
+          "  "+f(s.ao*100,2).padStart(7)+"  "+f(s.n,3).padStart(6)+"  "+f(s.fq,3));
+      M.step(0.02);
+    }
+  },
   /* Every whole-plant preset, flown, printing what it does and what stopped
      it. Disposable and assertion-free like every case here. */
   presets(){
