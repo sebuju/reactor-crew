@@ -61,7 +61,12 @@
      defined yet - and the bench lost its whole rail. tools/bundle.js
      concatenates the list into ONE function body, where the declaration hoists
      over the call, so no headless run could see it. -->
+<!-- the orthogonal connector router, ported whole from the `oc` project. It
+     depends on nothing in here (one IIFE, one global) so it may sit anywhere
+     above its callers. -->
+<script src="src/render/route.js"></script>
 <script src="src/render/inspector.js"></script>
+<script src="src/ui/margin.js"></script>
 <script src="src/screens/design-bench.js"></script>
 <script src="src/render/chart.js"></script>
 <script src="src/render/fx.js"></script>
