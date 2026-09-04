@@ -128,7 +128,7 @@ const boreSig=sigMemo(()=>{ let out="";
   for(const k in (D.bore||{})) out += "|b"+k+":"+D.bore[k];
   for(const k in (D.wall||{})) out += "|w"+k+":"+D.wall[k];
   return out; });
-const laySrcSig=()=>machineSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig();
+const laySrcSig=()=>machineSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig()+matSig();
 /* REMOVING A PART TAKES ITS PIPES WITH IT. It used to leave them behind,
    which was survivable only while ids were never reused - and they are, on
    purpose: addTank()/addFitting() take the lowest free slot. Delete tank2, add
@@ -1790,8 +1790,9 @@ function pipeLay(path,from,to){
   }
   // ONE THING PER CELL: a machine's box and a port are already something, so a
   // pipe simply does not go there. Asked with pipes OUT, because an existing
-  // pipe cell IS a legal thing to lay across (that is what a crossing is).
-  const g=occupied(null,{pipes:false});
+  // pipe cell IS a legal thing to lay across (that is what a crossing is) - and
+  // with paint out, because a pipe through a gas-tight cell is a PENETRATION.
+  const g=occupied(null,{pipes:false, mat:false});
   for(let i=0;i<path.length;i++){
     const c=path[i];
     if(c[0]<0||c[1]<0||c[0]>=GW||c[1]>=GH||g[c[1]][c[0]]) continue;
@@ -1842,8 +1843,9 @@ function pathBlocked(path, ca, cb){
   /* NEVER THE CACHED GRID. occupied() keys its cache on the node graph, and a
      seed lays run after run without rebuilding one - so the cache answers
      about the board as it stood several runs ago, and the check passes on a
-     lane the last run already took. */
-  const g=occupied([]);
+     lane the last run already took. Paint is out for the reason pipeLay() says:
+     a run may be routed through a wall, and that is a penetration. */
+  const g=occupied([], {mat:false});
   const ends=[pipeKey(ca[0],ca[1]), pipeKey(cb[0],cb[1])];
   /* ONE PIPE CELL IN A ROW IS A CROSSING; TWO IS A MERGE.
      Crossing an existing run is legal and PIPE_SHAPE.cross carries it. Running
@@ -1864,7 +1866,7 @@ function pathBlocked(path, ca, cb){
   return false;
 }
 function pipeRoute(a,b,ca,cb){
-  const g=occupied([]);            // fresh, for the reason pathBlocked() gives
+  const g=occupied([], {mat:false});   // fresh, and paint-passing, for the reasons pathBlocked() gives
   const ends=[pipeKey(ca[0],ca[1]), pipeKey(cb[0],cb[1])];
   const free=(x,y)=>{ if(x<0||y<0||x>=GW||y>=GH) return false;
     if(ends.includes(pipeKey(x,y))) return false;
@@ -2149,8 +2151,6 @@ const ROLE = {
           ports:{t:1, r:1, l:1, b:2}, thermal:"sink", tsurv:400, pburst:35},
   ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:340, pburst:20},
-  cont:  {internal:null, fixed:null, fold:null, mu:0.30, sgtr:false,
-          ports:{}, thermal:"none", tsurv:null, pburst:null},
   /* ONE ROLE FOR EVERY TANK. There is no kind: what a tank is made of, what
      is behind it and what it is plumbed to are per-instance config
      (D.tanks), never a role. mu is a tank of liquid, which shields rather
@@ -2165,8 +2165,6 @@ const ROLE = {
           ports:{"*":2}, thermal:"none", tsurv:420, pburst:100},
   bkp:   {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:350, pburst:20},
-  shield:{internal:null, fixed:null, fold:null, mu:0.18, sgtr:false,
-          ports:{}, thermal:"none", tsurv:null, pburst:null},
   /* A structure with mass that used to be a checkbox and nothing on the
      grid. It gets no `fixed` - the run each one carries
      (the traced connection) lands on a node that is ALREADY reachable from the
@@ -2266,14 +2264,10 @@ const MACHINE={
     tip:"A radiating panel. In space this is the ONLY way waste heat leaves the ship, and it must see the skin to work at all - an inboard panel sheds nothing and the plant loses its turbine. It must also be PLUMBED, because it cools the water going through it and nothing else. Select it for area and coating."},
   ctrl:{role:"ctrl", w:6, h:4, col:"#cfc9b8", grp:"crew", name:"CONTROL",
     tip:"Where your crew sits. Distance and shielding from the reactor set the dose they take."},
-  cont:{role:"cont", w:6, h:3, col:"#8fa9ae", grp:"safety", name:"CONTAINMENT",
-    tip:"The barrier between damaged fuel and your crew. Select it for containment type."},
   catcher:{role:"catcher", w:3, h:3, col:"#5a4a3a", grp:"safety", name:"CORE CATCHER",
     tip:"A cooled basin under the vessel. It will not save the fuel, but it stops a melted core burning through and breaching the vessel, which keeps the release contained."},
   bkp:{role:"bkp", w:3, h:5, col:"#57d38c", grp:"safety", name:"BACKUP PWR",
     tip:"Batteries or diesels keeping the pumps turning through a blackout. Keep it away from the hull."},
-  shield:{role:"shield", w:3, h:3, col:"#6d8f98", grp:"shield", name:"SHIELD", num:true,
-    tip:"A block of shielding. Put it between the reactor and the control room to cut crew dose. It has mass and it blocks access."},
   vent:{role:"vent", w:3, h:3, col:"#8fb8c4", grp:"safety", name:"VENT UNIT", num:true,
     tip:"Pulls compartment air overboard. It is the only thing on the plant besides the hull that takes heat OUT of the room, and it is on the main board - a blackout leaves the room with nothing but its own steel. Nothing to plumb."},
 };
@@ -2292,10 +2286,8 @@ const OPTIP={
   cond:"The number is hotwell level as a percent - the water the feed pumps draw from. Empty it and the feed train cavitates, whatever the generators are asking for.",
   radiator:"The number is what this panel is shedding, in MW. It is the only way heat leaves the ship, so the sum across the panels is the ceiling on the power the plant can hold.",
   ctrl:"The number is accumulated crew dose as a percent of the limit. It rises with release and with time spent beside an unshielded core; it never falls.",
-  cont:"The number is fission product release as a percent. It rises when damaged fuel meets a path out - a tube leak, a lifted relief valve or a break - and it never falls.",
   catcher:"A cooled basin under the vessel. It does nothing until fuel melts, and then it is what keeps a breach out of the compartment.",
   bkp:"It reads LOAD while it is carrying the plant through a blackout, and nothing while it stands by. Pumps and instruments run off it until it is spent.",
-  shield:"A block of shielding. It is doing its work whenever crew dose is not rising, and it blocks access to whatever stands behind it.",
   vent:"Pulls compartment air overboard, and it is the only active way heat leaves the room. Check it whenever compartment temperature is climbing.",
   tank:p=>tankHold(p.id)
     ? "The number is the pressure this vessel is holding for its circuit, in MPa. Heaters raise it and the spray lowers it; a falling reading with a steady level means water is leaving somewhere else."
@@ -2992,7 +2984,12 @@ const pinnedTo=p=>LAY.parts.filter(q=>q.pin&&q.pin.to===p.id);
    ports are flags rather than always-on. groupFits() wants them IN (a machine
    must not land on its own pipework, and a port is a real object in a cell);
    freeAdj() wants pipes OUT, because a machine ringed by the pipes it needs
-   would otherwise block its own repair and so block commissioning. */
+   would otherwise block its own repair and so block commissioning.
+   PAINT IS THE THIRD, on the same mechanism: a painted cell is occupied for
+   placing a machine, a port or a tank, and is NOT occupied for laying a pipe -
+   a pipe crossing a gas-tight cell is a PENETRATION. Without that a
+   containment is one nothing can be piped through, which is a containment
+   drawn round the whole ship except the control room. */
 /* On the graph (graphSlot()) - this grid is built from exactly what that graph
    is built from (LAY.parts, D.ports, D.pipes), and a frame asks for the whole
    of it a dozen times. Only the SKIPLESS grid: a skip is a what-if about a
@@ -3002,7 +2999,8 @@ function occupied(skip,opt){
   const off = skip ? (Array.isArray(skip)?skip:[skip]) : [];
   const wantPipes = !opt || opt.pipes!==false;
   const wantPorts = !opt || opt.ports!==false;
-  const slot=graphSlot("occupied"), key=(wantPipes?"p":"-")+(wantPorts?"o":"-");
+  const wantMat   = !opt || opt.mat!==false;
+  const slot=graphSlot("occupied"), key=(wantPipes?"p":"-")+(wantPorts?"o":"-")+(wantMat?"m":"-");
   if(!skip){ const hit=slot.get(key); if(hit) return hit; }
   const g=new Array(GH); for(let Y=0;Y<GH;Y++) g[Y]=new Array(GW).fill(null);
   for(const p of LAY.parts){ if(off.includes(p)) continue;
@@ -3013,6 +3011,10 @@ function occupied(skip,opt){
     if(!owner || off.includes(owner)) continue;
     const c=[owner.x+q.dx, owner.y+q.dy];
     if(c[0]>=0&&c[0]<GW&&c[1]>=0&&c[1]<GH && !g[c[1]][c[0]]) g[c[1]][c[0]]={id:pid, port:true};
+  }
+  if(wantMat) for(const k in (D.mat||{})){
+    const i=k.indexOf(","), X=+k.slice(0,i), Y=+k.slice(i+1);
+    if(X>=0&&X<GW&&Y>=0&&Y<GH && !g[Y][X]) g[Y][X]={id:"mat:"+k, mat:true, role:"mat"};
   }
   if(wantPipes) for(const k in D.pipes){
     const i=k.indexOf(","), X=+k.slice(0,i), Y=+k.slice(i+1);
@@ -3155,12 +3157,12 @@ function layoutMeasure(){
   const hull=p=>{ let k=0; for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
       if(X===0||X===GW-1||Y===0||Y===GH-1) k++; return k; };
   let cells=0, exp=0;
-  for(const p of P_){ if(p.grp==="shield"||!fitted(p)) continue; cells+=p.w*p.h; exp+=hull(p); }
+  for(const p of P_){ if(!fitted(p)) continue; cells+=p.w*p.h; exp+=hull(p); }
   const exposure = cells? exp/cells : 0;
 
   const g=occupied(null,{pipes:false});
   let reach=0, tot=0;
-  for(const p of P_){ if(p.grp==="shield"||!fitted(p)) continue; tot++;
+  for(const p of P_){ if(!fitted(p)) continue; tot++;
     const ok=freeAdj(p,g).length>0;
     p.access=ok; if(ok) reach++;
   }
@@ -3245,7 +3247,9 @@ function layoutMeasure(){
   // by what is inside it (runMassPerM(), pipenet.js), so a low-pressure loop
   // is lighter and an exotic-alloy one is not. Fitted to leave the stock PWR
   // exactly where the flat rate had it.
-  const mass = pmass + P_.filter(p=>p.grp==="shield").length*30;
+  // matMass(): shielding is PAINT now, so it weighs a real thickness of a real
+  // material over a real cell rather than 30 t a block.
+  const mass = pmass + matMass();
   layMass = mass;
   /* ══ WHAT THE PLANT CIRCULATES, AND IT IS A MEAN ══
      Loops are in PARALLEL and they SHARE the core's one flow, so each pump is

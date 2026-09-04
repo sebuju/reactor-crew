@@ -230,11 +230,6 @@ const SG_MASS_REF = 70;
 const sgInertiaK = () => { let n=0,m=0;
   for(const p of LAY.parts) if(p.role==="sg"){ m+=sgSteelT(p.id); n++; }
   return (n?m/n:SG_MASS_REF) / SG_MASS_REF; };
-const CONT=[
- {name:"NONE",rel:1.0,mass:0,note:"No containment. Any fuel damage releases directly to the environment, and to your crew."},
- {name:"SUPPRESSION POOL",rel:.25,mass:40,note:"Compact pool that condenses released steam. Holds most of a release, and can be overwhelmed by a large break."},
- {name:"LARGE DRY",rel:.05,mass:110,note:"A big heavy volume around the whole plant. Holds essentially everything, at more than twice the mass."},
-];
 const BKP=[
  {name:"NONE",bk:0,mass:0,note:"Lose main power and the coolant pumps stop dead. Only natural circulation remains."},
  {name:"BATTERY BANK",bk:.5,mass:22,note:"Keeps one pump turning at half speed through a blackout."},
@@ -330,7 +325,12 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
          /* THE HULL, in grid cells. Dragged from its own edges on the bench
             (gridDrag(), layout.js); GW/GH are these two resolved. */
          gw:60, gh:34,
-         cont:1,bkp:1,fittings:{},
+         bkp:1,fittings:{},
+         /* D.mat["x,y"] = {m:<material>, t:<mm>} - PAINTED STRUCTURE, cell-keyed
+            and parallel to D.pipes, so a cell may carry both. There is no
+            containment object anywhere: a containment is a closed shape in
+            here, found by the fill (matRegions(), paint.js). */
+         mat:{},
          /* ══ PER-INSTANCE QUANTITIES, IN REAL UNITS, KEYED BY PART ID ══
             EMPTY means "whatever this design suggests" - the suggestion is
             computed off the rest of the plant (layout.js), so an untouched
@@ -505,12 +505,13 @@ function derived(){
      weighed - volume times density, ring by ring - and a single ring of real
      steel round a real core comes to rather more than the 28 t the option list
      sold. That gap is a finding, not a rounding error. */
-  /* ASKED OF THE DRAWING, the same pass step.js already makes for the core
-     catcher. A containment nobody placed is not on the grid at all, so it
-     charges no mass either - and NONE and "never placed" price and warn
-     identically without saying so twice. */
-  const contFit=LAY.parts.some(p=>p.role==="cont");
-  const contRel=contFit?CONT[D.cont].rel:1;
+  /* ASKED OF THE FILL, not of a menu row and not of a box. A containment is a
+     closed shape in the paint (matRegions(), paint.js), so "is there one" is
+     "did a fill come back bounded" and what it holds back is its own wall's
+     material. Nobody painted anything: no region, and the release goes
+     straight to the crew - which is what NONE always meant and never said. */
+  const conts=matRegionsBounded();
+  const contRel=conts.length ? Math.min.apply(null, conts.map(g=>contRelAt(null, g.cells[0]%GW, (g.cells[0]/GW)|0))) : 1;
   /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
      layout.js - sums pumpCapOf() over every pump part, static and placed
      alike), replacing the old flat PUMPS[D.pumps] tier. Every generator on
@@ -548,7 +549,10 @@ function derived(){
      station and the supply is its own box, so neither is priced with nothing
      drawn behind it. */
   const mass=reactorMass
-    +totalPumpMass()+totalSgMass()+(contFit?CONT[D.cont].mass:0)
+    /* NO PAINT TERM HERE. layMass (layoutMetrics(), layout.js) already carries
+       it - that is the PIPING+SHIELD line - and charging it again here billed
+       every ship for its own structure twice. */
+    +totalPumpMass()+totalSgMass()
     +(roleOf("bkp")?BKP[D.bkp].mass:0)
     + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
     + (roleOf("ctrl")&&D.rps?55:0)
@@ -630,7 +634,8 @@ function derived(){
   const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
   // trip backpressure over where this sink rests at full power: under 1 it trips at rest, under 1/DUMP_COND_K the dump is blocked
   const condMargin=TURB_TRIP_P/Math.max(COND_P0, psatSec(condRest(plantDuty()).condT));
-  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr,Fq,xeW,core,
+  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr,Fq,xeW,core,contRel,
+    nCont:conts.length,
     boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,condMargin,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0,
@@ -654,7 +659,20 @@ function derived(){
       if(pwrDef>-100) w.push(["SOFT","Power coefficient only "+pwrDef.toFixed(0)+" pcm from zero to full power. Almost nothing in the fuel pushes back when power rises; the rods and the coolant are all that hold it.","core"]);
       if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power.","core"]);
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
-      if(contRel>0.5) w.push(["SOFT","No containment. Any fuel damage releases straight to the crew.","cont"]);
+      /* WHAT THE FILL FOUND, in words. It could never say this before: the old
+         line asked a menu index whether a box had been bought, so a wall with a
+         hole in it and a wall drawn round the whole plant read the same. */
+      const tightPainted=matCells().some(k=>{ const i=k.indexOf(",");
+        return matWall(+k.slice(0,i),+k.slice(i+1)); });
+      if(!conts.length) w.push(["SOFT", tightPainted
+        ? "The gas-tight structure on this ship encloses nothing - every fill round it reaches the hull, so there is no containment. Close the shape, or accept that a release goes straight to the crew."
+        : "No containment. Nothing painted on this ship is gas-tight, so any fuel damage releases straight to the crew - paint a closed shape in a gas-tight material to hold it in.",null]);
+      else { const weak=conts.map(g=>{ let lo=Infinity, at=null;
+               for(const i of g.wall){ const x=i%GW, y=(i/GW)|0, r=matRating(x,y);
+                 if(r<lo){ lo=r; at=[x,y]; } }
+               return {g,lo,at}; }).sort((a,b)=>a.lo-b.lo)[0];
+             if(weak.at && weak.lo < MAT_PDES)
+               w.push(["SOFT","The containment is walled for only "+weak.lo.toFixed(2)+" MPa at "+weak.at[0]+","+weak.at[1]+" - the middle of its longest flat side, against a "+MAT_PDES+" MPa design. Thicken the wall there, or draw the enclosure rounder so no cell is in the middle of a long span.",null]); }
       if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
       if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
       else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
