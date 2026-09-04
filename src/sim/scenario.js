@@ -103,6 +103,11 @@ const GEST = {
     emit:(a,ctx,put)=>put(0,[a[0]])},
 
   scram    :{lab:"SCRAM",      act:"scram", lane:"rod", span:"point",    args:[], emit:(a,ctx,put)=>put(0,[])},
+  /* the other half of a scram, and a scenario had no way to say it: the latch
+     holds the bank in until somebody clears it, so a scripted RESTART is not
+     expressible without this row. It refuses on its own if the condition that
+     tripped the plant is still standing (resetTrip(), step.js). */
+  resetTrip:{lab:"TRIP RESET", act:"resetTrip", lane:"rod", span:"point", args:[], emit:(a,ctx,put)=>put(0,[])},
   hit      :{lab:"COMBAT HIT", act:"hit", lane:"dmg", span:"point",
     args:[{lab:"PART", u:"id", def:"turb"}],
     emit:(a,ctx,put)=>put(0,[a[0]])},
@@ -633,6 +638,32 @@ const SCNPRE = [
     scnLimit(s,"no trip",  "trip", "<", 1,    0);
     scnLimit(s,"dnbr",     "dnbr", ">", 1.35, 0.5);
     scnLimit(s,"t-avg",    "tavg", "<", 590,  0.5);
+    return s; })(),
+
+  /* ── SCRAM AND RETURN ──
+     The one drill that asks what EXCESS REACTIVITY is for. Trip the plant, and
+     the xenon that was in equilibrium starts climbing as the iodine behind it
+     decays with nothing burning it. Pulling the bank back out has to beat that
+     climb, and 150 s here is about 17 hours on the xenon clock - past the
+     bottom of the pit. A flat, well-reflected core with excess in hand can do
+     it; a leaky one cannot, and that is the payoff for measuring leakage off
+     the drawing rather than off a curve in H/D.
+     The bank is walked out by hand rather than left to the controller, because
+     the lesson is the reactivity balance and not the controller's authority. */
+  (()=>{ const s = scnNew("scramret","SCRAM AND RETURN");
+    s.seed = SCN_SEED; s.secs = 180;
+    scnGest(s, 10, "note", "SCRAM - BACK TO 50 % BEFORE 150 S");
+    scnGest(s, 10, "scram");
+    scnGest(s, 30, "note", "CLEAR THE LATCH AND WALK THE BANK BACK OUT");
+    scnGest(s, 30, "resetTrip");
+    scnGest(s, 40, "rodStep", 30);
+    scnGest(s, 70, "rodStep", 15);
+    scnGest(s,100, "rodStep", 5);
+    scnGest(s,120, "rodStep", 0);
+    /* the grace IS the deadline: below half power for longer than 150 s is
+       the failure, which is the same sentence the note makes. */
+    scnLimit(s,"back to 50 %","pwr",  ">", 50,   150);
+    scnLimit(s,"dnbr",       "dnbr",  ">", 1.30, 0.5);
     return s; })(),
 ];
 
