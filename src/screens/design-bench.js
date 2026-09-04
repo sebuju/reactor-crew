@@ -63,8 +63,6 @@ function layoutStats(M){
    "How far the steam generators sit above the reactor. Hot water rises into them and cold water falls back with no pumps at all. Raise the generators and a blackout stops being fatal."],
   ["PRIMARY PIPE RUN",M.pipe.toFixed(1)+" m",1-clamp(M.pipe/60,0,1),M.pipe>40?C.amber:C.green,
    "Total hot and cold leg length. Long runs add friction so your pumps deliver less flow, and give more pipe for a hit to find. They also add coolant mass, which is thermal inertia in your favour."],
-  ["FLOW PENALTY",((1-M.flowK)*100).toFixed(0)+" %",clamp(M.flowK,0,1),statRamp(clamp(M.flowK,0,1)),
-   "Pumping loss from pipe friction. A short straight run from reactor to steam generator costs nothing; a sprawling layout quietly caps the flow you can ever achieve. Loops share the core's flow, so this is what the AVERAGE loop costs: a second loop does not buy flow, and a sprawling one still spends it."],
   ["PUMP CAPACITY",corePumpCap().toFixed(1)+" / "+totalPumpCap().toFixed(1)+" pumps",
    totalPumpCap()>0?clamp(corePumpCap()/totalPumpCap(),0,1):1,C.cyan,
    "How much pump is on the CORE's own circuit, against every pump on the ship. Each one develops its own stated head, so a second pump on a loop is real extra flow and not a spare that buys nothing - and the pumps that are not on this number are turning the feedwater and the cooling water, which are two other circuits doing two other jobs."],
@@ -170,8 +168,6 @@ const STATDRV={
    "mean lift   "+M.head.toFixed(1)+" cells"],
  "PRIMARY PIPE RUN":(d,M)=>["PIPE tool   hot, cold, surge and injection runs   "+M.pipe.toFixed(1)+" m",
    "secondary and relief runs   "+(M.sec+M.dead).toFixed(1)+" m, not counted here"],
- "FLOW PENALTY":(d,M)=>["PIPE tool   "+M.pipe.toFixed(1)+" m of primary run",
-   "flow kept   "+(M.flowK*100).toFixed(0)+" %"],
  "PUMP CAPACITY":()=>drvParts("pump").map(p=>partName(p)+"   "+pumpCapOf(p.id).toFixed(2)+" pumps")
    .concat(["on the core circuit   "+corePumpCap().toFixed(1)+" of "+totalPumpCap().toFixed(1)]),
  "COOLANT INERTIA":(d,M)=>["PIPE tool   "+(M.pipe+M.sec).toFixed(1)+" m of run",
