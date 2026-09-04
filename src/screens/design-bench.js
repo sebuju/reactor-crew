@@ -15,6 +15,7 @@ const blockAcc = key => typeof key==="string"
    was absent, and that is a design edit nobody made. */
 function massWith(key,i){ const a=blockAcc(key), o=a.raw?a.raw():a.get(); a.set(i);
   const m=derived().mass; a.set(o); return m; }
+/* A BAR IS A MERIT, NEVER A MAGNITUDE - every row here is wide when the design is good, so a bad figure is a short bar whichever way its own number runs. */
 
 function planStats(d){ return [
   ["POWER DENSITY",d.dens.toFixed(0)+" kW/L",clamp(d.dens/320,0,1),C.cyan,
@@ -29,51 +30,51 @@ function planStats(d){ return [
    "DNBR, the Departure from Nucleate Boiling Ratio: how far the fuel is from the point where cooling bubbles join into one insulating steam film. Sets your real overload ceiling, not the power rating."],
   ["CONDENSER MARGIN",d.condMargin.toFixed(1)+"x",clamp((d.condMargin-1)/4,0,1),d.condMargin<1?C.red:d.condMargin<1/DUMP_COND_K?C.amber:C.green,
    "How far the sink at rest sits under the turbine's backpressure trip. The steam dump is blocked below "+(1/DUMP_COND_K).toFixed(2)+"x, so a load drop then goes to the shell safeties instead of the condenser; below 1x the turbine trips before anything has happened."],
-  ["VOID COEFFICIENT",(d.aV>0?"+":"")+d.aV.toFixed(0)+" pcm",clamp(Math.abs(d.aV)/1600,0,1),d.aV>0?C.red:C.blue,
+  ["VOID COEFFICIENT",(d.aV>0?"+":"")+d.aV.toFixed(0)+" pcm",clamp(-d.aV/1600,0,1),d.aV>0?C.red:C.blue,
    "What happens when steam forms in the core. Negative shuts the reactor down as it boils. Positive means boiling adds power, which adds boiling."],
-  ["MODERATOR COEFF",d.aM.toFixed(0)+" pcm/K",clamp(Math.abs(d.aM)/70,0,1),d.aM>0?C.red:C.blue,
+  ["MODERATOR COEFF",d.aM.toFixed(0)+" pcm/K",clamp(-d.aM/70,0,1),d.aM>0?C.red:C.blue,
    "Feedback from moderator temperature - the coolant, set by your lattice pitch, and any blocks packed in it. Strongly negative makes the plant follow turbine load by itself."],
-  ["POWER COEFFICIENT",d.pwrDef.toFixed(0)+" pcm",clamp(Math.abs(d.pwrDef)/1500,0,1),d.pwrDef>-100?C.red:C.blue,
+  ["POWER COEFFICIENT",d.pwrDef.toFixed(0)+" pcm",clamp(-d.pwrDef/1500,0,1),d.pwrDef>-100?C.red:C.blue,
    "What the fuel gives back going from zero to full power: Doppler plus the fuel column's own expansion, over the pellet's rise above the coolant. The one number that says whether anything in the core stops a power rise by itself."],
   ["PEAKING FACTOR",d.Fq.toFixed(2)+" Fq",1-clamp((d.Fq-1.8)/1.2,0,1),d.Fq>2.6?C.amber:C.green,
    "How lopsided power is across the core. The hottest pin sets the limit for the whole reactor, so a flat core can run harder."],
-  ["XENON PIT DEPTH",d.xeW.toFixed(0)+" pcm",clamp(d.xeW/2700,0,1),d.xeW<800?C.green:C.amber,
+  ["XENON PIT DEPTH",d.xeW.toFixed(0)+" pcm",1-clamp(d.xeW/2700,0,1),d.xeW<800?C.green:C.amber,
    "How badly xenon locks you out after a shutdown. At 2700 pcm a scram costs roughly three minutes dead in the water."],
   ["SCRAM TRAVEL",(1/d.scram).toFixed(1)+" s",clamp(d.scram/2.5,0,1),C.green,
    "How long a full emergency rod insertion takes. In a fast transient, two seconds versus half a second is the whole game."],
-  ["OPERATING PRESS",d.P0.toFixed(1)+" MPa",clamp(d.P0/18,0,1),d.P0>12?C.amber:C.green,
+  ["OPERATING PRESS",d.P0.toFixed(1)+" MPa",1-clamp(d.P0/18,0,1),d.P0>12?C.amber:C.green,
    "Loop pressure. Buys thermal margin and demands a heavy vessel that fails violently."],
-  ["EXCESS REACTIVITY",d.excess.toFixed(0)+" pcm",clamp(d.excess/8000,0,1),C.cyan,
+  ["EXCESS REACTIVITY",d.excess.toFixed(0)+" pcm",1-clamp(d.excess/8000,0,1),C.cyan,
    "Reactivity built into the fresh core that must be held down at all times by rods, boron and burnable poison."],
-  ["NEUTRON LEAKAGE",d.leak.toFixed(0)+" pcm",clamp(d.leak/900,0,1),d.leak>500?C.amber:C.cyan,
+  ["NEUTRON LEAKAGE",d.leak.toFixed(0)+" pcm",1-clamp(d.leak/900,0,1),d.leak>500?C.amber:C.cyan,
    "Reactivity thrown away through the core surface, driven by how far your height-to-diameter ratio is from a squat cylinder."],
-  ["CONTAINMENT",((1-CONT[D.cont].rel)*100).toFixed(0)+" % held",1-CONT[D.cont].rel,
-   CONT[D.cont].rel>.5?C.red:C.green,
-   "Fraction of a radiological release that stays inside the plant instead of reaching your crew."],
+  ["CONTAINMENT",d.nCont?((1-d.contRel)*100).toFixed(0)+" % held":"NONE",1-d.contRel,
+   statRamp(1-d.contRel),
+   "Fraction of a radiological release that stays inside the plant instead of reaching your crew. It is not bought: it is what the FILL found - a closed shape painted in a gas-tight material, holding back what its own weakest wall material holds back. NONE means every fill reached the hull."],
   ["INSTRUMENT TRUST",((1-CHAN[D.chan].noise)*100).toFixed(0)+" %",1-CHAN[D.chan].noise,
-   CHAN[D.chan].noise>.6?C.amber:C.green,
+   statRamp(1-CHAN[D.chan].noise),
    "How much you can believe your own gauges. Single-channel readings visibly jitter and a failed sensor is undetectable."],
 ];}
 function layoutStats(M){
  return [
   ["THERMOSIPHON HEAD",M.head.toFixed(1)+" cells",clamp((M.head+1)/4,0,1),M.head<0.5?C.amber:C.green,
    "How far the steam generators sit above the reactor. Hot water rises into them and cold water falls back with no pumps at all. Raise the generators and a blackout stops being fatal."],
-  ["PRIMARY PIPE RUN",M.pipe.toFixed(1)+" m",clamp(M.pipe/60,0,1),M.pipe>40?C.amber:C.green,
+  ["PRIMARY PIPE RUN",M.pipe.toFixed(1)+" m",1-clamp(M.pipe/60,0,1),M.pipe>40?C.amber:C.green,
    "Total hot and cold leg length. Long runs add friction so your pumps deliver less flow, and give more pipe for a hit to find. They also add coolant mass, which is thermal inertia in your favour."],
-  ["FLOW PENALTY",((1-M.flowK)*100).toFixed(0)+" %",1-M.flowK,(1-M.flowK)>.2?C.amber:C.green,
+  ["FLOW PENALTY",((1-M.flowK)*100).toFixed(0)+" %",clamp(M.flowK,0,1),statRamp(clamp(M.flowK,0,1)),
    "Pumping loss from pipe friction. A short straight run from reactor to steam generator costs nothing; a sprawling layout quietly caps the flow you can ever achieve. Loops share the core's flow, so this is what the AVERAGE loop costs: a second loop does not buy flow, and a sprawling one still spends it."],
   ["PUMP CAPACITY",corePumpCap().toFixed(1)+" / "+totalPumpCap().toFixed(1)+" pumps",
    totalPumpCap()>0?clamp(corePumpCap()/totalPumpCap(),0,1):1,C.cyan,
    "How much pump is on the CORE's own circuit, against every pump on the ship. Each one develops its own stated head, so a second pump on a loop is real extra flow and not a spare that buys nothing - and the pumps that are not on this number are turning the feedwater and the cooling water, which are two other circuits doing two other jobs."],
   ["COOLANT INERTIA",((M.inertiaK-1)*100).toFixed(0)+" % grace",clamp((M.inertiaK-1)*3,0,1),C.cyan,
    "Extra water in long pipe runs takes longer to heat, so transients develop more slowly and you get more time to react. The one genuine reward for a spread-out layout."],
-  ["HULL EXPOSURE",(M.exposure*100).toFixed(0)+" %",M.exposure,M.exposure>.2?C.red:C.green,
+  ["HULL EXPOSURE",(M.exposure*100).toFixed(0)+" %",1-M.exposure,statRamp(1-M.exposure),
    "Share of equipment sitting in the outer ring, where incoming fire lands. Anything out there is a candidate the next time you take a hit."],
-  ["REPAIR ACCESS",(M.access*100).toFixed(0)+" %",M.access,M.access<1?C.red:C.green,
+  ["REPAIR ACCESS",(M.access*100).toFixed(0)+" %",M.access,statRamp(M.access),
    "Fraction of equipment with at least one free adjacent cell. A component walled in on all four sides cannot be repaired at all, however badly you need it."],
-  ["CREW DOSE RATE",M.dose.toFixed(2)+" x",clamp(M.dose/2,0,1),M.dose>1?C.amber:C.green,
+  ["CREW DOSE RATE",M.dose.toFixed(2)+" x",1-clamp(M.dose/2,0,1),M.dose>1?C.amber:C.green,
    "Radiation reaching the control room during an accident, solved along the straight line from reactor to crew. A shield only pays for itself if it actually stands on that line - one parked off to the side blocks nothing, whatever a bounding box would have said. Any other equipment sitting on the line helps a little too, just less than a shield built for the job."],
-  ["SURVEY PEAK",M.peak.v.toFixed(2)+" x",clamp(M.peak.v/RAD_CEIL,0,1),ZONE[zoneOf(M.peak.v)].col,
+  ["SURVEY PEAK",M.peak.v.toFixed(2)+" x",1-clamp(M.peak.v/RAD_CEIL,0,1),ZONE[zoneOf(M.peak.v)].col,
    "The crew dose rate above is one seat, in one room. This is the hottest cell any repair party could ever be sent to stand in"+(M.peak.who?" - right now, beside "+partName(M.peak.who):"")+". A layout that is comfortable in the control room and lethal at the pumps has not been shielded, it has been decorated."],
   ["PRESSURIZER LINK",M.pzrConn?"plumbed":"NOT PLUMBED",M.pzrConn?1:0,
    M.pzrConn?C.green:C.red,
@@ -84,7 +85,7 @@ function layoutStats(M){
   /* A SHARE, the way PUMP CAPACITY is, because turbPiped() is counted - one
      unpiped turbine of two costs half the output, not all of it. */
   ["STEAM CIRCUIT",(M.turbConn*turbCount()).toFixed(0)+" / "+turbCount()+" turbines",M.turbConn,
-   M.turbConn<1?C.red:C.green,
+   statRamp(M.turbConn),
    "Whether each turbine is in a circuit that can actually run: a generator raising steam into it, and a condenser to exhaust into. An unpiped turbine spins on nothing and makes no electricity, and a generator with nowhere to send its steam boils into a closed vessel and takes no heat out of its loop."],
   ["INJECTION HEAD",M.injZ.toFixed(1)+" m",clamp((M.injZ+2)/8,0,1),
    M.injZ<1?C.amber:C.green,
@@ -93,6 +94,122 @@ function layoutStats(M){
    sgCount()>1&&M.sep<4?C.amber:C.green,
    "Distance between redundant loops. Park two steam generators next to each other and a single hit takes out both, making the redundancy you paid for worthless."],
 ];}
+/* ══ WHAT MOVES THIS ROW, NAMED ══
+   A stat row states an answer and never said where the answer came from, so
+   "why is my grace time 28 s" had no door into the design at all. One entry
+   per row, keyed by the row's own label, handing back the CONTROLS, MACHINES
+   and PENS that feed it with their own live figures beside them - a machine is
+   named off the drawing (partName()), so a renamed pump reads under its given
+   name here too. */
+const drvParts = role => LAY ? LAY.parts.filter(p=>p.role===role) : [];
+const drvNames = role => drvParts(role).map(p=>partName(p));
+const drvList = (names,cap) => { cap=cap||4;
+  return !names.length ? "none"
+    : names.length>cap ? names.slice(0,cap).join(", ")+" +"+(names.length-cap)+" more"
+    : names.join(", "); };
+const drvHolds = () => holdTankIds().map(id=>{ const q=partOf(id); return q?partName(q):id; });
+const STATDRV={
+ "POWER DENSITY":d=>["COOLANT "+d.a.name+"   base "+d.a.dens+" kW/L",
+   "FUEL "+d.f.name+"   x"+d.f.densK.toFixed(2),
+   "RADIAL PLAN lattice pitch   x"+D.pitch.toFixed(2)],
+ "GRACE TIME":d=>["COOLANT "+d.a.name+"   x"+d.a.grace.toFixed(2),
+   "CHIMNEY HEIGHT   x"+D.chim.toFixed(2),
+   "STEAM GENERATORS   "+drvList(drvNames("sg")),
+   "core rating off the lattice   "+D.power.toFixed(0)+" MWt"],
+ "DELAYED NEUTRONS":d=>["FUEL "+d.f.name+"   beta "+d.beta+" pcm",
+   "FUEL ZONES painted on the RADIAL PLAN   "+latZonesUsed().length],
+ "SHUTDOWN MARGIN":d=>["ABSORBER + the clusters on the RADIAL PLAN   bank worth "+D.rodw.toFixed(0)+" pcm",
+   "SPREAD   "+D.nbank+" bank"+(D.nbank>1?"s":""),
+   "xenon coming back after a trip   "+d.xeW.toFixed(0)+" pcm",
+   "Doppler handed back as the fuel cools   "+(-d.pwrDef).toFixed(0)+" pcm",
+   "with the boron system driven out   "+d.sdmB.toFixed(0)+" pcm"],
+ "THERMAL MARGIN":d=>["COOLANT "+d.a.name+"   base "+d.a.dnbr.toFixed(2)+" DNBR",
+   "RADIAL PLAN lattice pitch   x"+D.pitch.toFixed(2),
+   "loop setpoint   "+d.P0.toFixed(1)+" MPa"],
+ "CONDENSER MARGIN":d=>["CONDENSERS   "+drvList(drvNames("cond")),
+   "RADIATORS   "+drvList(drvNames("rad")),
+   "turbine trips at   "+TURB_TRIP_P+" MPa backpressure"],
+ "VOID COEFFICIENT":d=>["RADIAL PLAN pitch and moderator blocks   thermal share "+(d.mth*100).toFixed(0)+" %",
+   "MODERATOR "+MODER[D.mod].name,
+   "REFLECTOR "+REFL[D.refl].name+"   "+(d.rf.dV>0?"+":"")+d.rf.dV+" pcm of void shift"],
+ "MODERATOR COEFF":d=>["RADIAL PLAN pitch   x"+D.pitch.toFixed(2)+"   moderator ratio "+d.mr.toFixed(2),
+   "MODERATOR "+MODER[D.mod].name+"   "+MODER[D.mod].aT+" pcm/K"],
+ "POWER COEFFICIENT":d=>["FUEL "+d.f.name+"   conduction x"+d.f.condK.toFixed(2),
+   "COOLANT "+d.a.name+"   Doppler "+d.a.aF+" pcm/K over a "+d.a.dTf+" K pellet rise"],
+ "PEAKING FACTOR":()=>["RADIAL PLAN   where the fuel and the clusters stand",
+   "AXIAL SECTION   the reflector lids and the active length",
+   "SPREAD   "+D.nbank+" bank"+(D.nbank>1?"s":"")],
+ "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2)],
+ "SCRAM TRAVEL":()=>["SCRAM SYSTEM "+SCRAM[D.scram].name+"   "+SCRAM[D.scram].rate.toFixed(2)+" of full travel a second"],
+ "OPERATING PRESS":d=>{ const h=drvHolds();
+   return [h.length? "PRESSURE CONTROL setpoint on "+drvList(h) : "no pressurizer on the core circuit - suggested off the coolant",
+     "COOLANT "+d.a.name+"   nominal "+d.a.P0+" MPa"]; },
+ "EXCESS REACTIVITY":d=>["FUEL "+d.f.name+"   +"+d.f.excess.toFixed(0)+" pcm",
+   "REFLECTOR "+REFL[D.refl].name+"   +"+d.rf.dRho+" pcm",
+   "POISON pen on the RADIAL PLAN   -"+D.poison.toFixed(0)+" pcm",
+   "leakage   -"+d.leak.toFixed(0)+" pcm"],
+ "NEUTRON LEAKAGE":()=>["AXIAL SECTION active length against the RADIAL PLAN radius   H/D "+D.hd.toFixed(2),
+   "REFLECTOR "+REFL[D.refl].name],
+ "CONTAINMENT":d=>["PAINT tool   "+matCells().length+" cells painted, "+d.nCont+" closed region"+(d.nCont===1?"":"s"),
+   "MATERIAL + THICKNESS on the painted cell's own panel",
+   "holds back   "+((1-d.contRel)*100).toFixed(0)+" %"],
+ "INSTRUMENT TRUST":()=>["INSTRUMENT CHANNELS "+CHAN[D.chan].name+"   noise x"+CHAN[D.chan].noise.toFixed(2),
+   "on the CONTROL STATION panel"],
+ "THERMOSIPHON HEAD":(d,M)=>["where the REACTOR stands on the grid",
+   "STEAM GENERATORS   "+drvList(drvNames("sg")),
+   "mean lift   "+M.head.toFixed(1)+" cells"],
+ "PRIMARY PIPE RUN":(d,M)=>["PIPE tool   hot, cold, surge and injection runs   "+M.pipe.toFixed(1)+" m",
+   "secondary and relief runs   "+(M.sec+M.dead).toFixed(1)+" m, not counted here"],
+ "FLOW PENALTY":(d,M)=>["PIPE tool   "+M.pipe.toFixed(1)+" m of primary run",
+   "flow kept   "+(M.flowK*100).toFixed(0)+" %"],
+ "PUMP CAPACITY":()=>drvParts("pump").map(p=>partName(p)+"   "+pumpCapOf(p.id).toFixed(2)+" pumps")
+   .concat(["on the core circuit   "+corePumpCap().toFixed(1)+" of "+totalPumpCap().toFixed(1)]),
+ "COOLANT INERTIA":(d,M)=>["PIPE tool   "+(M.pipe+M.sec).toFixed(1)+" m of run",
+   "worth   +"+((M.inertiaK-1)*100).toFixed(0)+" % grace"],
+ "HULL EXPOSURE":(d,M)=>["standing in the outer ring   "+drvList((LAY?LAY.parts:[])
+     .filter(p=>p.x===0||p.y===0||p.x+p.w===GW||p.y+p.h===GH).map(p=>partName(p))),
+   "share of equipment   "+(M.exposure*100).toFixed(0)+" %"],
+ "REPAIR ACCESS":(d,M)=>{ const w=(LAY?LAY.parts:[]).filter(p=>p.access===false).map(p=>partName(p));
+   return [w.length? "walled in on all four sides   "+drvList(w) : "every machine has a free cell beside it",
+     "reachable   "+(M.access*100).toFixed(0)+" %"]; },
+ "CREW DOSE RATE":(d,M)=>["where the CONTROL STATION and the REACTOR stand",
+   "PAINT standing on the line between them",
+   "at the seat   "+M.dose.toFixed(2)+" x"],
+ "SURVEY PEAK":(d,M)=>[M.peak.who? "hottest beside   "+partName(M.peak.who) : "hottest cell on the board",
+   "PAINT is what lowers it",
+   "peak   "+M.peak.v.toFixed(2)+" x"],
+ "PRESSURIZER LINK":()=>["PRESSURE CONTROL on   "+drvList(drvHolds()),
+   "a surge line drawn to it with the PIPE tool"],
+ "PRESSURIZER HEAD":(d,M)=>["PRESSURE CONTROL on   "+drvList(drvHolds()),
+   "it has to stand at or above the highest steam generator",
+   M.pzrOK? "it does" : "it does not"],
+ "STEAM CIRCUIT":(d,M)=>["TURBINES   "+drvList(drvNames("turb")),
+   "CONDENSERS   "+drvList(drvNames("cond")),
+   "steam and condensate runs drawn with the PIPE tool",
+   "piped   "+(M.turbConn*turbCount()).toFixed(0)+" of "+turbCount()],
+ "INJECTION HEAD":(d,M)=>{ const t=tankIds().filter(id=>tankPrimary(id)&&D.tanks[id]&&D.tanks[id].check);
+   return (t.length? t.map(id=>{ const q=partOf(id);
+       return (q?partName(q):id)+"   "+(M.tankZ[id]||0).toFixed(1)+" m above the core"; })
+     : ["no tank with a CHECK VALVE on the primary - nothing can inject"])
+     .concat(["a tank injects only with a CHECK VALVE fitted on its own panel"]); },
+ "LOOP SEPARATION":(d,M)=>["STEAM GENERATORS   "+drvList(drvNames("sg")),
+   "closest pair   "+(sgCount()>1? M.sep.toFixed(0)+" cells" : "n/a")],
+ "CONTAINED VOLUME":()=>["PAINT tool   the closed shapes drawn on the board"],
+ "WEAKEST WALL":()=>["PAINT tool   MATERIAL and THICKNESS at that cell",
+   "a rounder enclosure has no long flat side to be weak in the middle of"],
+};
+/* A ROW SAYS WHERE IT CAME FROM, or it says nothing - never a stale answer. */
+function statDrv(label,d,M){ const f=STATDRV[label];
+  if(!f) return "";
+  const rows=f(d,M).filter(Boolean);
+  return rows.length? "\n\nDRIVEN BY\n  "+rows.join("\n  ") : ""; }
+/* RED THROUGH AMBER TO GREEN, for the rows whose fraction is a real SHARE -
+   both ends mean something, so the colour may follow the bar. A row measured
+   against a chosen reference (kW/L over 320, metres over 60) keeps its own
+   threshold colour: a ramp there would paint an ordinary design red for
+   standing in the middle of a scale nobody promised was a scale of merit. */
+const statRamp = f => f<.5 ? lerpC(C.red,C.amber,clamp(f*2,0,1))
+                           : lerpC(C.amber,C.green,clamp((f-.5)*2,0,1));
 function layoutWarnings(M){ const w=[];
   /* SOFT, deliberately. The game never refuses a bad order - it carries it
      out and shows the cost - so an unplumbed pressurizer commissions, runs
@@ -199,7 +316,7 @@ function designIssues(d,M){
 function designBlocked(d,M){ return designIssues(d,M).some(warnHard); }
 function warnFor(id){
   const p=partOf(id);
-  if(p && !p.access && p.grp!=="shield") return C.red;
+  if(p && !p.access) return C.red;
   const w=designIssues(null,PLANT_LM).filter(q=>q[2]===id);
   if(!w.length) return null;
   return w.some(warnRed)?C.red:C.amber;
@@ -268,6 +385,8 @@ function ctxItemsDesign(hit){
        walk through this one reaches. */
     const keys=pipeMap().cellOwner[hit.pipe]||[];
     const items=[{label:"REMOVE CELL", fn:()=>{ delete D.pipes[hit.pipe]; buildLayout(); }}];
+    if(hit.cell && matCell(hit.cell.gx,hit.cell.gy))
+      items.push({label:"REMOVE WALL", fn:()=>{ matLift(hit.cell.gx,hit.cell.gy); buildLayout(); }});
     if(keys.length) items.push({label:"REMOVE RUN", fn:()=>{
       for(const key of keys){ const c=pipeMap().byKey[key]; if(!c) continue;
         for(const [x,y] of c.cells) delete D.pipes[x+","+y]; }
@@ -291,6 +410,11 @@ function ctxItemsDesign(hit){
          knob on its own panel afterwards, because all three are one box in
          one cell and only the mode differs. */
       items.push({label:"ADD VALVE", fn:()=>{ addFitting(gx,gy); }});
+      /* THE PAINT'S OWN ROW, for the hand that is already in this menu. It is
+         the same call the tool makes and it lays the same material. */
+      if(matCell(gx,gy))
+        items.push({label:"REMOVE WALL", fn:()=>{ matLift(gx,gy); buildLayout(); }});
+      else items.push({label:"PAINT WALL", fn:()=>{ matPaint(gx,gy,matPen); buildLayout(); }});
       /* ONE ROW PER KIND OF MACHINE, off MACHINE (layout.js) and nothing
          else - so adding a kind of machine is adding a row there, and no row
          here can offer a machine the mint table cannot build. Nothing is
@@ -991,26 +1115,30 @@ function dbRailSync(state){
      railBlank() clears a selection whose well does not claim it, so working
      the BORE field on a run picked off the drawing would have dropped the run
      the field belongs to. */
-  state.pipesWell.el._pickId = isRunKey(sel) ? sel : null;
+  state.pipesWell.el._pickId = (isRunKey(sel)||isMatKey(sel)) ? sel : null;
   /* THE SELECTED RUN'S OWN PANEL. Its own two number fields go through
      dbPanelSync() exactly as a machine's do, so a run is configured with the
      same widgets, the same SUGGEST and the same mass hint as everything else
      on the board. Nothing picked is a real state and says so. */
-  { const r = isRunKey(sel) ? sel : null;
-    dbPanelSync(state.runBody, r
-      ? [{kind:"rule",title:pipeLabel(pipeMap().byKey[r].k, r)||"PIPE RUN"}].concat(paramsForRun(r))
-      : [{kind:"note",text:"No run picked. Click a pipe on the drawing, or a row above, to set its bore and its wall."}]);
+  /* ONE WELL, TWO KINDS OF CELL-ADDRESSED THING. A run and a painted cell are
+     both not parts, both picked off the drawing, and both configured with the
+     same widgets - so they share the panel rather than each growing one. */
+  { const r = isRunKey(sel) ? sel : null, m = isMatKey(sel) ? sel : null;
+    dbPanelSync(state.runBody,
+      m ? [{kind:"rule",title:matRow(matCell(matKeyXY(m)[0],matKeyXY(m)[1]).m).name+"  "+m.slice(4)}].concat(paramsForMat(m))
+      : r ? [{kind:"rule",title:pipeLabel(pipeMap().byKey[r].k, r)||"PIPE RUN"}].concat(paramsForRun(r))
+      : [{kind:"note",text:"No run or wall picked. Click a pipe or a painted cell on the drawing, or a row above, to set its size."}]);
     // A PICK MADE ON THE DRAWING BRINGS UP THE PANEL, the same way a machine's
     // does - the whole well, "start", not the row inside it: the fields the
     // pick was made to reach are at its FOOT, and scrolling the row to the top
     // leaves them below the fold. A pick made in the rail scrolls nothing
     // (railPickId, on the row's own click).
-    if(r && moved) KIT.reveal(state.pipesWell.el,"start"); }
+    if((r||m) && moved) KIT.reveal(state.pipesWell.el,"start"); }
   { const rd=benchResultsData();
     const body=state.results.body;
     if(!body.firstChild){
       const mass=KIT.el("div","db-mass"); body.appendChild(mass);
-      const massBar=KIT.seg({cells:48}); body.appendChild(massBar.el);
+      const massBar=KIT.seg({cells:48, solid:true}); body.appendChild(massBar.el);
       const massVal=KIT.el("div","db-mass-val"); body.appendChild(massVal);
       const statBox=KIT.el("div","db-stats"); body.appendChild(statBox);
       body._h={massVal,massBar,statBox};
