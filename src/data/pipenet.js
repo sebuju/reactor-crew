@@ -23,8 +23,21 @@
    was linearised about, so runBore() below still hands back exactly what it
    handed back. */
 const BORE_REF = 750;
-const PIPE_BORE_MM = {hot:750, cold:750, cw:750, feed:1125, surge:225, hpi:187.5, relief:150, boron:150};
-const boreMm = kind => PIPE_BORE_MM[kind] !== undefined ? PIPE_BORE_MM[kind] : BORE_REF;
+const PIPE_BORE_MM = {cw:750, feed:1125, surge:225, hpi:187.5, relief:150, boron:150};
+/* ══ A LOOP LEG IS BORED FOR THE FLOW IT CARRIES ══
+   hot/cold were a flat 750 mm, which is a real hot leg for ONE loop of a
+   1 200 MWt plant and nothing else: with the loop priced on real losses a
+   four-loop ship's legs ran out to twice their design flow and a one-loop
+   ship's carried half. A designer picks the bore off the rated flow at the
+   velocity the fluid is run at (COOLANT[].vLeg - 15 m/s on a water leg,
+   8 on sodium, 60 on helium ducting), which is what this does, per loop.
+   A suggestion: D.bore still overrides it. */
+const legBoreMm = () => { const a = COOLANT[D.cool];
+  const n = Math.max(1, typeof LAY !== "undefined" && LAY ? sgCount() : 1);
+  const w = RATED_KW()/(a.cp*coreDT0()*n);
+  return Math.round(Math.sqrt(4*w/(Math.PI*a.dens*RHO_K*a.vLeg))*1000); };
+const boreMm = kind => (kind === "hot" || kind === "cold") ? legBoreMm()
+  : PIPE_BORE_MM[kind] !== undefined ? PIPE_BORE_MM[kind] : BORE_REF;
 /* ══ THE ONE CONVERSION BETWEEN MILLIMETRES AND THE SOLVE'S OWN BORE ══
    Every conductance in this file is written in a dimensionless bore against
    BORE_REF. Every MACHINE states millimetres. This is the one place the two
@@ -61,7 +74,7 @@ const fitBoreK  = fid => fitBoreMm(fid)/BORE_REF;
 let BORE_NOM = false;
 const withNomBore = fn => { BORE_NOM = true; try { return fn(); } finally { BORE_NOM = false; } };
 const runBoreMm = r => (!BORE_NOM && D.bore && D.bore[r.key] !== undefined) ? D.bore[r.key]
-                     : (PIPE_BORE_MM[r.k] !== undefined ? PIPE_BORE_MM[r.k] : BORE_REF);
+                     : boreMm(r.k);
 // DEFAULT: PIPE_BORE_MM picks a starting bore, never gates an edge's existence
 const runBore = r => runBoreMm(r)/BORE_REF;
 /* THE HOLDUP OF A RUN, m^3 - the thing a dimensionless bore could never give.
@@ -264,22 +277,55 @@ const NET_COMP_LEN = 0.1;   // metres, short against a real run
    FRACTION of the pressure it is a fraction of, never an absolute. */
 const PIPE_FRIC = 0.02;
 const RCRIT     = 0.55;
-const DPFRAC    = 0.02;
+const DPFRAC    = 0.002;
 const ORIF_CD   = 0.61;
+/* ══ FRICTION IS A FUNCTION OF THE FLOW, AND A BEND COSTS SOMETHING ══
+   PIPE_FRIC above is the Darcy factor before there is a flow to read - the
+   first solve, and a leg nothing has passed through yet. With a flow it is
+   Haaland's explicit Colebrook on the run's own Reynolds number at the
+   donor's viscosity, with laminar 64/Re below transition: a 750 mm leg at
+   7 m/s reads 0.011, a natural-circulation trickle reads 0.04 and up, which
+   is the whole of why a thermosiphon scales as the literature says and not
+   as a root. Re is floored so a stopped leg keeps a finite coefficient - at
+   w exactly 0 the laminar law is an absent edge and nothing could restart.
+   PIPE_ROUGH is commercial steel; K_BEND a standard elbow; K_ENTRY/K_EXIT a
+   sharp nozzle into and out of a vessel. All published shapes. */
+const PIPE_ROUGH = 4.5e-5;
+const K_BEND = 0.3, K_ENTRY = 0.5, K_EXIT = 1.0;
+const RE_FLOOR = 500;
+const fricOf = (bore, w, mu) => {
+  if(!(w !== undefined && mu > 0)) return PIPE_FRIC;
+  const D = boreM(bore), Re = Math.max(4*Math.abs(w)/(Math.PI*D*mu), RE_FLOOR);
+  if(Re < 2300) return 64/Re;
+  const r = -1.8*Math.log10(Math.pow(PIPE_ROUGH/D/3.7, 1.11) + 6.9/Re);
+  return 1/(r*r);
+};
 // the solve's own dimensionless bore back into metres
 const boreM  = bore => Math.max(bore*BORE_REF/1000, 0.01);
 const areaOf = bore => Math.PI/4*boreM(bore)*boreM(bore);
 /* A RUN'S FLOW COEFFICIENT, m^2 - its area over the root of its own Darcy
-   loss. Infinite length reaches exactly 0, which is how a severed pipe says
-   there is no pipe. */
-const pipeC = (bore, L) => {
-  const K = PIPE_FRIC*Math.max(L, NET_COMP_LEN)/boreM(bore);
+   loss plus whatever its bends and ends add (K0). Infinite length reaches
+   exactly 0, which is how a severed pipe says there is no pipe. */
+const pipeC = (bore, L, K0, f) => {
+  const K = (f === undefined ? PIPE_FRIC : f)*Math.max(L, NET_COMP_LEN)/boreM(bore) + (K0||0);
   return isFinite(K) && K > 0 ? areaOf(bore)/Math.sqrt(K) : 0;
 };
 // A HOLE. Not a pipe: an orifice has no length term, only its own area.
 const holeC = bore => ORIF_CD*areaOf(bore);
-// the path through a component's own body, at full bore over NET_COMP_LEN
+// the path through a component's own body, at full bore over NET_COMP_LEN -
+// plus the loss the ROLE states for its internals (tube bundle, plena)
 const COMP_C = pipeC(1, NET_COMP_LEN);
+const compC = K => K > 0 ? pipeC(1, NET_COMP_LEN, K) : COMP_C;
+/* WHAT A RUN'S SHAPE COSTS BESIDE ITS LENGTH: one elbow per direction change
+   the router drew (r.pts is the polyline with collinear points dropped, so
+   its interior points ARE the bends) and a nozzle at each end. A vessel
+   states its own end loss (ROLE.kEnd - the core's plena, downcomer and
+   support plate, per leg) and every other box takes the plain nozzle. */
+const runK0 = r => {
+  const endK = pid => { const p = partOf(pid), R = p && ROLE[p.role];
+    return R && R.kEnd !== undefined ? R.kEnd : (K_ENTRY + K_EXIT)/2; };
+  return K_BEND*Math.max(0, (r.pts ? r.pts.length : 2) - 2) + endK(r.a) + endK(r.b);
+};
 /* THE CONDUCTANCE THAT LAW BECOMES, about the differential it is standing at.
    dp_act is what the field says; dp_eff is what the flow is allowed to see. */
 /* THE RELATION ITSELF, kg/s, off a stated pair of pressures - for a reader
@@ -326,12 +372,13 @@ const flowG = (C, F, u, v, h) => {
    a tick solves the drawn plant and the reference plant (P.netNom) against
    different node sets, and an edge that read whichever net solved last would
    index another plant's array. */
-const netFieldOf = () => ({p:null, rho:null, x:null, wet:null});
+const netFieldOf = () => ({p:null, rho:null, x:null, wet:null, mu:null});
 function netFieldSize(F, n){
   F.p = new Float64Array(n).fill(typeof P!=="undefined" && P ? P.P0 : 1);
   F.rho = new Float64Array(n).fill(typeof P!=="undefined" && P && P.rho0 ? P.rho0 : 700);
   F.x = new Float64Array(n);
   F.wet = new Uint8Array(n).fill(1);
+  F.mu = new Float64Array(n).fill(SAT_WATER.mu);
 }
 /* ══ IS THERE ANYTHING LEFT AT THIS NODE ══
    A milligram per cubic metre of the node's own holdup - a fraction of that
@@ -398,7 +445,8 @@ function netFieldUpdate(net, s){
   for(let i=0;i<net.n;i++){ const nid = net.name[i], p = netPAt(s, nid);
     mixState(sat[i], p, netHAt(s, nid), mx);
     F.p[i] = p; F.rho[i] = mx.rho; F.x[i] = mx.x;
-    F.wet[i] = netNodeDry(net, s, i, mx.rho) ? 0 : 1; }
+    F.wet[i] = netNodeDry(net, s, i, mx.rho) ? 0 : 1;
+    F.mu[i] = mx.x > 0 ? sat[i].muV : sat[i].mu; }
   /* ══ AND CONTAINMENT NEVER FEEDS THE PLANT ══
      "A place water goes to and never comes back from" was true of the MASS
      field - containment is left out of it entirely, so it has no book and no
@@ -458,14 +506,14 @@ const valveLeq = x => x>=1 ? 0 : VALVE_LEQ*(1/Math.max(x,VALVE_XMIN)**2 - 1);
 // "no gate in this path" - shared, because a literal here is one array per
 // edge per solve to say the same nothing
 const NO_GATES = [];
-const throttledC = (s, bore, L, ids) => {
+const throttledC = (s, bore, L, ids, K0, f) => {
   let Ltot = L;
   for(const fid of ids){
     const x = s.valve && s.valve[fid];
     if(!(x>0)) return 0;
     Ltot += valveLeq(x);
   }
-  return pipeC(bore, Ltot);
+  return pipeC(bore, Ltot, K0, f);
 };
 
 /* ══════════ A BREAK IS A HOLE, NOT A BLOCKAGE ══════════
@@ -600,27 +648,25 @@ const satSlope = (c,p) => { const q = Math.max(p,c.pFloor);
    be documented as "feedwater to saturated steam", which is 1843 at that
    anchor, and four call sites spent it as if it were. Both quantities exist
    below and neither is the other: hfgOf() is latent, hRise() is the rise. */
-/* cp is CP_W (step.js) on BOTH curves, because that is the one specific heat
-   this model already prices every loop's inventory at (loopKg()*CP_W). A curve
-   with a cp of its own that disagreed with the pot integrating against it
-   would be two answers to one question. It is water's value near the 6.9 MPa
-   anchor and is flat everywhere else, which is a real error at 17 MPa (5.5
-   against 8.6) and is NOT fixed here - it is aliased into the primary's own
-   inventory and the core's enthalpy walk, so it is a job of its own. */
+/* cp here is the SHELL's, water's, near the 6.9 MPa anchor and flat, which is
+   a real error at 17 MPa (5.5 against 8.6). The primary's curve carries its
+   own (COOLANT[].cp, onto P.sat in commission()): sodium 1.25, salt 2.39,
+   helium 5.19. CP_W below is water's and is spent only on water - the shell,
+   the feed train, the condenser, the room. */
 /* tc/pc/rhoc are the critical point, the one place latent heat and both
    saturated densities have to go to a known value; A/B/C are Antoine, fitted
    to the real steam-table points at 0.004, 6.9 and 17 MPa. */
 const SAT_WATER = {A:9.844309, B:4174.5246, C:30.4331,
                    tc:647.096, pc:22.06, rhoc:322,
                    p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
-                   hfg:1509, rho:740, cp:5.5, solidK:1.4};
-/* ONE COPY, and it lives here for the reason T_FEED and CORE_DT0 below do:
+                   hfg:1509, rho:740, cp:5.5, mu:1.2e-4, muV:2.0e-5, solidK:1.4};
+/* ONE COPY, and it lives here for the reason T_FEED and coreDT0() below do:
    latRevolve() rates the core at module load (latRating(), lattice.js) and
    that walks coreConst(), so a const in step.js has not been initialised yet
    - a real ReferenceError, not a style point. */
 const CP_W=SAT_WATER.cp;
 /* WHERE FEEDWATER ARRIVES, K. It lives with the fluid rather than in step.js
-   for the reason CORE_DT0 below does: layout.js is asked for plantSteam()
+   for the reason coreDT0() below does: layout.js is asked for plantSteam()
    during buildStockPlumbing(), at module load, when a const in step.js has not
    been initialised yet - a real ReferenceError, not a style point. */
 const T_FEED = 490;
@@ -712,11 +758,17 @@ const rhoMixOf = (c,p,h) => mixState(c,p,h,MIX_SCRATCH).rho;
    extra curve read, floored at nothing - the caller owns the degenerate row. */
 const DRHO_DP = (c,p,h) => { const dp = Math.max(1e-4, p*1e-3);
   return (rhoMixOf(c, p+dp, h) - rhoMixOf(c, p, h))/dp; };
-/* THE CORE'S DESIGN TEMPERATURE RISE, K. It belongs with the fluid rather
+/* THE CORE'S DESIGN TEMPERATURE RISE, K - THIS COOLANT'S (COOLANT[].dT0).
+   It was a flat 30, water's figure, and with every fluid carrying water's cp
+   the rated flow came out the same for all of them. On the fluid's own cp a
+   30 K rise asks a sodium core for 4.4 times the flow its pumps push; a real
+   sodium plant takes ~170 K across the core and a pebble bed ~500 K, which is
+   why the rise is a row beside cp and not one number. It lives here rather
    than in step.js because layout.js's pump-flow suggestion is asked during
-   buildStockPlumbing(), at module load, when a const in step.js has not been
-   initialised yet - a real ReferenceError, not a style point. */
-const CORE_DT0 = 30;
+   buildStockPlumbing(), at module load. The ceiling is the same multiple of
+   it the flat 250 was of 30: where the rise stops being a rise. */
+const coreDT0   = () => COOLANT[D.cool].dT0;
+const coreDTMax = () => coreDT0()*8.3;
 /* ══ ENTHALPY, ON THE CURVE THE CIRCUIT ACTUALLY CARRIES ══
    Specific enthalpy, kJ/kg, measured from H_DATUM. Three straight lines: a
    subcooled liquid rising at cp, a flat two-phase shelf that costs hfg to
@@ -1328,7 +1380,7 @@ const pumpCurve = (s, pid) => Math.max(0,
    vapour side's own line anchor. Left free, the drawn geometry answers alone and a
    low-head sodium loop runs out at twice its rating; too tight and nothing is
    left for the circuit. A quarter is the measured middle. */
-let CASING_F = 0.25;
+let CASING_F = 0.05;
 function setCasingF(v){ CASING_F = v; }
 const dutyC = (q, rho) =>
   Math.max(q,0)/Math.sqrt(2*Math.max(rho||700,1)*CASING_F*PUMP_H0*1e6);
@@ -1884,8 +1936,13 @@ function netEdges(){
        faces of one part is not this case: it is a recirculation line, a real
        machine, and it stays and solves. */
     if(u === v) continue;
-    const bore = runBore(r), L = r.L;
+    const bore = runBore(r), L = r.L, K0 = runK0(r);
     const tid = tankIdOf(ends[0]) || tankIdOf(ends[1]);
+    /* THE FRICTION FACTOR IS THE EDGE'S OWN, off the flow it carried last
+       solve (ed.w, written by netSolve) at its donor's viscosity - the same
+       one-tick lag the density and the pressure already carry. */
+    const ed = {u, v, h: 0, kind: r.k, key: r.key};   // LABEL: kind carried for rendering/lookup, never re-compared here
+    const f = () => fricOf(bore, ed.w, F.mu[ed.w >= 0 ? u : v]);
     if(tid){
       /* Valve, diode and "is there anything left to give", asked of EVERY
          tank by the same predicate - see tankLive(). Nothing here knows
@@ -1893,23 +1950,20 @@ function netEdges(){
       /* ONE LAW: a tank's line is ordinary pipe, priced off its own drawn bore
          and length like every other run. A tank that cannot deliver wants a
          bigger line, which is a thing the player can draw. */
-      edges.push({u, v,
-        C: s => (tankLive(s,tid) && runPortsOpen(s,r))
-                ? pipeC(bore, L + runExtraLen(s, r)) : 0,
-        h: 0, kind: r.k, key: r.key}); // LABEL: carried onto the edge for rendering/lookup, never re-compared here
+      ed.C = s => (tankLive(s,tid) && runPortsOpen(s,r))
+                ? pipeC(bore, L + runExtraLen(s, r), K0, f()) : 0;
+      edges.push(ed);
       continue;
     }
-    /* r.k is a LABEL, carried onto the edge so a renderer can read it back;
-       nothing here branches on it. */
     /* ══ AND A STEAM LINE IS A PIPE ══
        There is ONE graph. A vapour run used to carry g 0 here and a SPEC the
        second matrix read back off it; it takes the same pipeC() every other
        run takes now, and what it passes is the same momentum relation at its
        own end's own density. That is the whole of why a steam line can fill
        with condensate and a water line can flash. */
-    edges.push({u, v, C: s => runPortsOpen(s,r)
-                  ? throttledC(s, bore, L + runExtraLen(s, r), NO_GATES) : 0,
-                h: 0, kind: r.k, key: r.key});
+    ed.C = s => runPortsOpen(s,r)
+                  ? throttledC(s, bore, L + runExtraLen(s, r), NO_GATES, K0, f()) : 0;
+    edges.push(ed);
   }
 
   // internal component paths: continuity through a component a run merely
@@ -1952,7 +2006,7 @@ function netEdges(){
     const ub = pool ? nodeIdx("sec:"+p.id) : nodeIdx(coreFold(p.id+IN.b));
     if(ua === ub) continue;
     const edge = {u: ua, v: ub,
-                  C: COMP_C, h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b};
+                  C: compC(IN.K), h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b};
     /* WHICH OF THIS PATH'S OWN FACES SITS IN A STEAM SPACE - see net2.vapour
        below. Per FACE and not per edge, because a generator's shell path is
        water at the feed nozzle and steam at the steam nozzle, and one answer
@@ -3287,6 +3341,37 @@ function netLiveSigOf(net, s){
   + '|' + (s.turbTrip?'T':'') + (s.condLost?'C':'') + (s.load>0?'L':'');
 }
 
+/* ══ THE FREE NODES, IN AN ORDER THAT KEEPS THE MATRIX NARROW ══
+   Reverse Cuthill-McKee over the STRUCTURAL edge list - every edge, whether
+   or not it conducts this tick - so the band is a property of the drawing and
+   the same ordering is right for any gate state. A plant is a near-chain of
+   two- to four-edge nodes, so its half-bandwidth comes out around ten where
+   the dense elimination was paying for the whole width; netFactor() and
+   netSubst() then stop at that band. Ties broken on node index, so the order
+   is a pure function of the graph and a re-factor lands on the same one. */
+function netOrder(net, fixed){
+  const n = net.n, pos = new Int32Array(n).fill(-1), free = [];
+  for(let i=0;i<n;i++) if(fixed[i]===undefined){ pos[i]=free.length; free.push(i); }
+  const nf = free.length, adj = Array.from({length:nf}, () => []);
+  for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e], a=pos[ed.u], b=pos[ed.v];
+    if(a<0 || b<0 || a===b) continue; adj[a].push(b); adj[b].push(a); }
+  const byDeg = (p,q) => adj[p].length-adj[q].length || p-q;
+  const seen = new Uint8Array(nf), order = [];
+  for(;;){
+    let s = -1;
+    for(let a=0;a<nf;a++) if(!seen[a] && (s<0 || byDeg(a,s)<0)) s = a;
+    if(s<0) break;
+    seen[s] = 1;
+    const q = [s];
+    for(let h=0; h<q.length; h++){
+      const x = q[h]; order.push(x);
+      const nb = adj[x].filter(y => !seen[y]).sort(byDeg);
+      for(const y of nb){ seen[y]=1; q.push(y); }
+    }
+  }
+  order.reverse();
+  return order.map(a => free[a]);
+}
 function netFactored(net, s, fixed){
   const sig = 'F' + (net.F.gen||0) + '|' + netLiveSig(net, s)
   /* the fixed SET is the fourth live input to A. A break appearing puts a
@@ -3306,15 +3391,18 @@ function netFactored(net, s, fixed){
        there is nothing in those rows to drop. The fixed SET is already in the
        signature above, so this index is cached with the factors it belongs to
        and a break opening rebuilds both together. */
-    const free = [];
-    for(let i=0;i<net.n;i++) if(fixed[i]===undefined) free.push(i);
+    const free = netOrder(net, fixed);
     const nf = free.length, row = new Int32Array(net.n);
     for(let a=0;a<nf;a++) row[free[a]] = a;
-    net.Affree = Int32Array.from(free); net.Afrow = row; net.Afn = nf;
+    let bw = 0;
+    for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e];
+      if(fixed[ed.u]!==undefined || fixed[ed.v]!==undefined) continue;
+      const d = Math.abs(row[ed.u]-row[ed.v]); if(d>bw) bw=d; }
+    net.Affree = Int32Array.from(free); net.Afrow = row; net.Afn = nf; net.Afbw = bw;
     const degC = new Uint8Array(nf);
     net.Af = netFactor(
       netAssemble(net.edges, net.n, fixed, s, null, null, null, row, nf, null,
-                  net.store && net.store.cap).A, nf, degC);
+                  net.store && net.store.cap).A, nf, degC, bw);
     /* Scattered back to node index, because every reader of it is - and a
        fixed node stays 0, which is what its reader already required: the byP
        loop asks about deg only where fixed[i] is undefined. */
@@ -3331,7 +3419,7 @@ function netFactored(net, s, fixed){
 function netSubstFree(net, x){
   const free = net.Affree, nf = net.Afn, c = new Float64Array(nf);
   for(let a=0;a<nf;a++) c[a] = x[free[a]];
-  netSubst(net.Af, c, nf);
+  netSubst(net.Af, c, nf, net.Afbw);
   x.fill(0);
   for(let a=0;a<nf;a++) x[free[a]] = c[a];
   return x;
@@ -3435,6 +3523,8 @@ function netSolve(net, s, keepField){
   netUnfix(b, fixed);
   const q = new Float64Array(net.edges.length);
   netFlows(net.edges, b, fixed, q, s);
+  // what fricOf() reads next solve - never off the pumps-off re-solve, whose flows are a readout
+  if(!keepField) for(let e=0;e<net.edges.length;e++) net.edges[e].w = q[e];
   netDiverge(net, q, fixed, net.store, b);
   return {net, s, b, q, fixed, touch, ref: net.refNow, store: net.store};
   } finally { net.sigLock = null; net.sigLockV = null; }
@@ -3762,8 +3852,25 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
      storage term is the opposite of one - it prices how fast a vessel gives
      way. Held, each shell is a fixed node at its own stated pressure, which
      is what this solve read before a shell had a compliance at all. */
+  /* ══ RELINEARISED UNTIL THE FIELD STOPS MOVING ══
+     One solve was the reference while every loop drop sat under the DPFRAC
+     floor, where the law is linear and a single pass IS the answer. With a
+     loop that spends its head on real losses the law is a root, and one pass
+     linearised about a flat field read 5 406 kg/s on a leg the tick then
+     carried at 3 924. Each pass feeds its own field back (s.pBy, the same
+     door the tick uses) and the net keeps the last converged field, so a
+     call starts where the previous one ended and lands in a few passes. */
   const was = netStoreHeld; netHoldStore(true);
-  try { const sol = netSolve(net, s);
+  try { s.pBy = net.refPBy;
+        let sol, ans, prev = null, pass = 0;
+        for(; pass<REF_PASSES; pass++){
+          sol = netSolve(net, s);
+          const pf = {}; netReadP(sol, pf); s.pBy = pf;
+          ans = netReadEdges(sol, null, null, null, null);
+          if(prev !== null && Math.abs(ans-prev) <= REF_TOL*Math.max(Math.abs(ans), 1e-9)) break;
+          prev = ans;
+        }
+        net.refPBy = s.pBy;
         // the solved edge flows themselves, as netFlowK() hands them on: a run
         // key is a label and a machine's internal path has none, so byRun
         // cannot say what a NODE passes
@@ -3771,6 +3878,7 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
         return netReadEdges(sol, byLoop, byRun, null, outs); }
   finally { netHoldStore(was); }
 };
+const REF_PASSES = 20, REF_TOL = 1e-4;
 
 /* Head lost across every edge, as a fraction of pump discharge. Read-only and
    derived - the potentials themselves never leave this file, because a caller
