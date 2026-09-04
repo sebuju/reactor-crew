@@ -4117,8 +4117,12 @@ function buildStockPlumbing(opt){
      than leaving its own turbine standing outside the skin. A multi-unit ship
      is as wide as its widest band and as tall as its sets, and the player may
      still drag it either way afterwards. */
-  if(multi){ D.gw = 60 + 7*(loops-1) + 12; D.gh = BAND*units; }
-  else     { D.gw = 60 + 7*(loops-1);      D.gh = 36; }
+  /* TWO COLUMNS LONGER THAN THE MACHINERY NEEDS, and they are the CONTAINMENT'S:
+     the engine room stood one column off the island, so the wall had nowhere to
+     stand aft of the last coolant pump and the four-loop ship's own cold legs
+     were left outside their containment. */
+  if(multi){ D.gw = 62 + 7*(loops-1) + 12; D.gh = BAND*units; }
+  else     { D.gw = 62 + 7*(loops-1);      D.gh = 36; }
   /* WHAT THIS SHIP DOES NOT CARRY. A preset that placed an injection tank and
      a relief valve and then took them off again had built a plant it did not
      mean; this simply never places them, and every nozzle and run that would
@@ -4164,8 +4168,8 @@ function buildStockPlumbing(opt){
   const uX = (u,i) => X(i) + uOX(u);         // ...and on the board
   // stacked units share their columns, so the engine room stands where it
   // always did - only further apart, band by band
-  const AFT   = 46+7*(loops-1) + (multi?2:0);
-  const FEEDX = X(loops) - 2 + (multi?2:0);
+  const AFT   = 48+7*(loops-1) + (multi?2:0);
+  const FEEDX = X(loops) + (multi?2:0);
   // the header riser's own column, forward of the engine room and aft of
   // every loop - the lane a set's main steam already climbs to its turbine
   const MSRX  = AFT-6;
@@ -4779,8 +4783,51 @@ function buildStockPlumbing(opt){
         x0=Math.min(x0,p.x); x1=Math.max(x1,p.x+p.w-1);
         y0=Math.min(y0,p.y); y1=Math.max(y1,p.y+p.h-1); }
       if(x1<x0) continue;
+      /* ══ AND THE PIPE BETWEEN TWO CONTAINED MACHINES IS INSIDE TOO ══
+         The box was the MACHINES' own, so a run leaving one and coming back
+         to the other looped out through the wall and back - two penetrations
+         on a line that never leaves the island. A penetration is what a run
+         to a machine OUTSIDE costs; a hot leg is not one. Asked of the traced
+         connections and of the machines' own nozzles, so it is the pipework
+         actually drawn. */
+      const inSet=new Set(ids);
+      let px0=x0,px1=x1,py0=y0,py1=y1;
+      for(const pid in D.ports){ if(!inSet.has(D.ports[pid].p)) continue;
+        const c=portCell(pid); if(!c) continue;
+        px0=Math.min(px0,c[0]); px1=Math.max(px1,c[0]);
+        py0=Math.min(py0,c[1]); py1=Math.max(py1,c[1]); }
+      for(const c of pipeMap().conns){
+        if(!inSet.has(c.a)||!inSet.has(c.b)) continue;
+        for(const [cx,cy] of c.cells){
+          px0=Math.min(px0,cx); px1=Math.max(px1,cx);
+          py0=Math.min(py0,cy); py1=Math.max(py1,cy); }
+      }
+      /* ══ AND THE WALL GOES OUT AS FAR AS IT CAN WITHOUT CUTTING A MACHINE ══
+         paint is refused an occupied cell, so a ring whose line crosses a box
+         or a nozzle has a HOLE in it - the one thing a containment may not
+         have. So the island's own box is the START, and each edge is then
+         walked outward toward the pipework one cell at a time, taking a step
+         only while the whole ring stays closed. A PIPE on the line is welcome:
+         a run crossing the wall is a penetration, which is what the mechanism
+         is for. */
+      const occ=occupied([],{pipes:false, mat:false});
+      const ringOpen=(a0,b0,a1,b1)=>{
+        for(let x=a0;x<=a1;x++) if(occ[b0][x]||occ[b1][x]) return true;
+        for(let y=b0;y<=b1;y++) if(occ[y][a0]||occ[y][a1]) return true;
+        return false; };
       x0=Math.max(0,x0-2); y0=Math.max(0,y0-2);
       x1=Math.min(GW-1,x1+2); y1=Math.min(GH-1,y1+2);
+      const want=[Math.max(0,px0-2), Math.max(0,py0-2),
+                  Math.min(GW-1,px1+2), Math.min(GH-1,py1+2)];
+      /* THE DECK BEFORE THE BEAM, and this ORDER is the whole of why it
+         works: the engine room stands AFT, so an edge that has spent its
+         travel going that way can no longer reach the bilge rows the cold
+         legs run along - measured on the four-loop ship, 75 cells of cold leg
+         outside a ring that had gone sideways instead. */
+      for(;y0>want[1] && !ringOpen(x0,y0-1,x1,y1); y0--);
+      for(;y1<want[3] && !ringOpen(x0,y0,x1,y1+1); y1++);
+      for(;x0>want[0] && !ringOpen(x0-1,y0,x1,y1); x0--);
+      for(;x1<want[2] && !ringOpen(x0,y0,x1+1,y1); x1++);
       for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++){
         if(x!==x0 && x!==x1 && y!==y0 && y!==y1) continue;
         matPaint(x,y,opt.cont.m);
