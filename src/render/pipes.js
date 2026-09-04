@@ -1370,3 +1370,186 @@ function pipeLoose(L){
   ctx.restore();
 }
 
+
+/* ══ PAINTED STRUCTURE, AND THE SEAL AROUND WHAT IT ENCLOSES ══
+   Drawn unconditionally, the way a pipe is: it is structure on the board, not
+   an instrument, so nothing gates it. MATERIAL is the fill and THICKNESS is
+   the stroke, on WALL_PX - the same stated display exaggeration a pipe's wall
+   already uses, so a 900 mm wall and a 900 mm pipe wall are the same number of
+   pixels and the player learns one scale rather than two.
+   THE SEAL is the whole readout of the fill in one mark: a hairline just
+   inside the enclosed set, present only when the fill came back bounded. A
+   containment that is holding has a closed line around it. One cell shot out
+   and there is no line at all, instantly, everywhere - because there is no
+   enclosed set left to outline. The player never has to find the hole to know
+   there is one. */
+/* MAT_PX is the same stated exaggeration WALL_PX is, on the scale a WALL is
+   set in: a 20 mm liner and a 900 mm concrete shell have to be tellable apart
+   across one 16 px cell, which true scale (34 px/m, so 900 mm is two cells)
+   cannot do. Floored at the width the hatch needs to read as a cut and not as
+   a line, capped at the cell because a cell is the widest wall there is room
+   to draw. */
+const MAT_PX = 0.016;
+/* A WALL'S CUT IS FINER THAN THE BOARD'S OWN HATCH: the band is a few pixels
+   across, so the 7 px pitch put one diagonal in it and read as a dash. */
+const MAT_HATCH_P = 4, MAT_HATCH_W = 0.9;
+const matWallPx = (x,y,r) => clamp(matThick(x,y)*MAT_PX, 4, Math.min(r.w,r.h));
+/* WHICH WAY IS IN. A wall grows from its inner face outward, so the band has
+   to know which side the enclosed volume is on: a face onto a cell that is not
+   wall and sits in a BOUNDED region. A cell with no such face - a shield, or
+   the inside of a thick block - has no inner face and fills its whole cell. */
+function matInFaces(R,x,y){
+  const out=[];
+  const inside=(X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return false;
+    if(matWall(X,Y)) return false;
+    const g=R.regions[R.of[Y*GW+X]]; return !!(g && g.bounded); };
+  if(inside(x-1,y)) out.push("l");
+  if(inside(x+1,y)) out.push("r");
+  if(inside(x,y-1)) out.push("t");
+  if(inside(x,y+1)) out.push("b");
+  /* A CORNER'S INSIDE IS DIAGONAL. The corner cell of a box is walled on both
+     the faces its neighbours band against, so the orthogonal test alone came
+     back empty and it filled its whole cell - a solid block at every corner of
+     an otherwise thin wall. The diagonal names both faces, which is the L the
+     two arriving bands already want. */
+  if(!out.length){
+    for(const d of [[-1,-1,"lt"],[1,-1,"rt"],[-1,1,"lb"],[1,1,"rb"]])
+      if(inside(x+d[0],y+d[1])) out.push(d[2]);
+  }
+  return out;
+}
+/* The band itself, as a path: one full-length strip per inner face, flush to
+   that face and `w` px outward. Two faces make an L and they overlap at the
+   corner, which is why it is one path filled once - a gap at a corner is the
+   one thing a containment must never draw. */
+function matBandPath(r,faces,w){
+  ctx.beginPath();
+  if(!faces.length){ ctx.rect(r.x,r.y,r.w,r.h); return; }
+  for(const f of faces){
+    /* A CORNER IS THE OVERLAP OF THE TWO STRIPS, NOT THEIR UNION: the band
+       arrives down the column and leaves along the row, so what joins them is
+       the w-square where those two strips cross. Filling both strips whole
+       left a tail hanging past the turn on each side. */
+    if(f.length===2){ ctx.rect(f[0]==="l" ? r.x : r.x+r.w-w,
+                               f[1]==="t" ? r.y : r.y+r.h-w, w, w); continue; }
+    if(f==="l") ctx.rect(r.x, r.y, w, r.h);
+    if(f==="r") ctx.rect(r.x+r.w-w, r.y, w, r.h);
+    if(f==="t") ctx.rect(r.x, r.y, r.w, w);
+    if(f==="b") ctx.rect(r.x, r.y+r.h-w, r.w, w);
+  }
+}
+/* AGGREGATE, for a material that has some. Placed off the CELL's own
+   coordinates, never a die: a texture that moves between frames is a fault
+   light nobody lit. The caller clips to the band. */
+const AGG_R=1.2;
+function matAgg(r,x,y,col){
+  ctx.fillStyle=col; ctx.globalAlpha=.55;
+  const o=((x*7+y*13)%5)/5;
+  for(const d of [[.28,.22],[.66,.48],[.38,.78]]){
+    ctx.beginPath();
+    ctx.arc(r.x+r.w*((d[0]+o)%1), r.y+r.h*((d[1]+o)%1), AGG_R, 0, 7); ctx.fill(); }
+  ctx.globalAlpha=1;
+}
+/* THE TWO LONG EDGES OF THE BAND, and nothing else. A stroke of the band path
+   would draw the cell's END edges too, so a run of wall came out as a ladder.
+   THE LINE SITS ON THE BAND'S OWN BOUNDARY, so it is drawn inside the caller's
+   clip at DOUBLE width and the clip keeps the inner half: measured on the
+   stock ship, a 1 px line centred on the edge put half a pixel outside the
+   band and a corner square wore it as a nub.
+   A LINE MAY NOT CROSS THE BAND IT TURNS INTO. Where two bands meet, whichever
+   line would run over the other's opening is the ladder rung again wearing a
+   corner: a diagonal cell got the whole square outlined, so both edges crossed
+   the two runs leaving it, and a cell walled on two orthogonal faces crossed
+   the band beside it. Each line stops at the other band's OUTER edge, which is
+   where the line it continues into already is - so the turn is a mitre, and a
+   diagonal cell is left with the outer L alone, its inner pair meeting as a
+   point at the corner. */
+function matSealLines(r,faces,w,dead){
+  ctx.save();
+  ctx.strokeStyle = dead ? C.red : C.bright;
+  ctx.globalAlpha = 1; ctx.lineWidth = 2;
+  const V=(X,y0,y1)=>{ ctx.beginPath(); ctx.moveTo(X,y0); ctx.lineTo(X,y1); ctx.stroke(); };
+  const H=(Y,x0,x1)=>{ ctx.beginPath(); ctx.moveTo(x0,Y); ctx.lineTo(x1,Y); ctx.stroke(); };
+  const has={}; for(const f of faces) if(f.length===1) has[f]=1;
+  for(const f of faces){
+    if(f.length===2){
+      const bx=f[0]==="l"?r.x:r.x+r.w-w, by=f[1]==="t"?r.y:r.y+r.h-w;
+      V(f[0]==="l"?r.x+w:r.x+r.w-w, by, by+w);
+      H(f[1]==="t"?r.y+w:r.y+r.h-w, bx, bx+w);
+      continue;
+    }
+    const x0=has.l?r.x+w:r.x, x1=has.r?r.x+r.w-w:r.x+r.w;
+    const y0=has.t?r.y+w:r.y, y1=has.b?r.y+r.h-w:r.y+r.h;
+    if(f==="l"){ V(r.x,y0,y1); V(r.x+w,y0,y1); }
+    if(f==="r"){ V(r.x+r.w,y0,y1); V(r.x+r.w-w,y0,y1); }
+    if(f==="t"){ H(r.y,x0,x1); H(r.y+w,x0,x1); }
+    if(f==="b"){ H(r.y+r.h,x0,x1); H(r.y+r.h-w,x0,x1); }
+  }
+  /* THE TURN ITSELF IS A PATCH, AND IT IS ON THE DIAGONAL CELL. The two inner
+     lines that meet at a corner belong to two DIFFERENT cells - the one down
+     the column and the one along the row - and each stops at its own cell's
+     edge, which is this cell's corner. Neither can reach into it, so the turn
+     was a hole the width of the line. It is the corner touching the inside,
+     never the band's outer corner, where the two outer lines already overlap.
+     No cap can do this: a cap that crossed would be clipped away. */
+  ctx.fillStyle = ctx.strokeStyle;
+  for(const f of faces) if(f.length===2)
+    ctx.fillRect((f[0]==="l"?r.x:r.x+r.w)-1, (f[1]==="t"?r.y:r.y+r.h)-1, 2, 2);
+  ctx.restore();
+}
+/* kg/s AT WHICH A BREACH DRAWS FLAT OUT. One cell of wall against a bar of
+   difference passes about this, so a wall opened on a pressurised compartment
+   is a full jet and a spent one is a wisp. The SPILL_FULL idiom, one field
+   over. */
+const HOLE_FULL = 300;
+function matPaintDraw(L){
+  if(!D.mat) return;
+  ctx.save();
+  const RG=matRegions();
+  for(const k in D.mat){
+    const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
+    if(x<0||x>=GW||y<0||y>=GH) continue;
+    const m=matRow(D.mat[k].m), r=grect(x,y,1,1);
+    const dead = L && matWrecked(L,x,y);
+    const w = matWallPx(x,y,r), faces = matInFaces(RG,x,y);
+    const col = dead ? C.well : m.col;
+    /* A WALL IS A CUT THROUGH STRUCTURE, AND A PIPE IS A LINE. Flat colour is
+       what a run draws, so the band read as one more pipe on the board. The
+       hatch is clipped to the band, never to the cell, or a thin wall throws
+       diagonals across the compartment it is holding. */
+    matBandPath(r,faces,w);
+    ctx.save(); ctx.clip();
+    ctx.fillStyle = lerpC(col, C.bg, m.tight ? 0.58 : 0.66);
+    ctx.fillRect(r.x,r.y,r.w,r.h);
+    hatch(r.x,r.y,r.w,r.h,col,m.tight?.85:.7,MAT_HATCH_P,MAT_HATCH_W);
+    if(m.agg) matAgg(r,x,y,col);
+    // gas-tight is a FACE, so it is drawn on the band's own two long edges -
+    // never as an outline, which would rung across every cell join
+    if(m.tight && faces.length) matSealLines(r,faces,w,dead);
+    ctx.restore();
+    /* ...AND IT PLUMES. pipeBreaks() is explicit that a break's plume is drawn
+       AT THE CELL, which is "the whole of what the break is"; a hole in a wall
+       with a pressurised compartment behind it is the same sentence. Off the
+       cell's OWN overpressure, so it dies away as the two sides equalise and
+       an intact ship draws nothing at all. Unasked, at the plume seam, because
+       an effect is not an instrument. */
+    /* ...AND IT JETS. pipeBreaks() is explicit that a break's plume is drawn AT
+       THE CELL, which is "the whole of what the break is"; a hole in a wall
+       with a pressurised compartment behind it is the same sentence. The RATE
+       is the orifice's own solved flow (s.holeQ, roomHoleStep()) and the
+       DIRECTION is the cell it is actually feeding, so a jet points out through
+       the wall and dies away as the two sides equalise. Unasked, at the plume
+       seam, because an effect is not an instrument. */
+    // clipped to the band, or a shot liner hatches a cell it does not occupy
+    if(dead){ ctx.save(); matBandPath(r,faces,w); ctx.clip();
+      hatch(r.x,r.y,r.w,r.h,C.red,.45); ctx.restore();
+      const hq = L.holeQ && L.holeQ[k];
+      if(hq && hq.q > 0){
+        const tx = hq.to%GW, ty = (hq.to/GW)|0;
+        fxJet(r.x+r.w/2, r.y+r.h/2, r.w*0.8, fxEase("brw:"+k, clamp(hq.q/HOLE_FULL,0,1)),
+              "#ffd0c4", Math.sign(tx-x), Math.sign(ty-y), 37); } }
+    if(sel==="mat:"+k){ ctx.strokeStyle=C.amber; ctx.lineWidth=2;
+      ctx.strokeRect(r.x+1,r.y+1,r.w-2,r.h-2); }
+  }
+  ctx.restore();
+}
