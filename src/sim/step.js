@@ -16,7 +16,7 @@ function* commissionGen(){
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
      aF:a.aF, aM:d.aM, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:a.tsat*Math.pow(d.P0/a.P0,.25),
-     rated:D.power, dnbr0:d.dnbr, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
+     rated:D.power, dnbr0:d.dnbr0, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      /* The trip floor used to be a flat number per PUMPS[D.pumps] tier. It now
         scales with pump capacity actually on the grid: +.15 for every full
         unit of capacity bought beyond the bare minimum (one pump per
@@ -48,7 +48,7 @@ function* commissionGen(){
      catcher:LAY.parts.some(p=>p.role==="catcher"), backup:BKP[D.bkp].bk,
      fittings:JSON.parse(JSON.stringify(D.fittings)),
      loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
-     lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237,
+     lamI:XE.lamI*K, lamX:XE.lamX*K, gI:XE.gI, gX:XE.gX,
      /* the coolant's own density, in kg/m^3 - the pipe network weighs a
         column of it to get buoyancy (rhoAt(), pipenet.js) */
      rho0:a.dens*RHO_K};
@@ -277,7 +277,7 @@ function* commissionGen(){
   P.netRefKg = {};
   for(const k in P.netRefByRun) P.netRefKg[k] = netKgs(P.netRefByRun[k]);
   /* xenon burnout, sigma*phi at rated flux, in units of the decay constant. */
-  P.sig=3.0*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
+  P.sig=XE.sigK*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = a.P0>3 ? 1.22 : 4.0;
   P.solidK = a.solidK;                                 // MPa/K of a sealed liquid: beta over compressibility
@@ -1812,9 +1812,6 @@ const sgOpen=(s,id)=>!!(s && ((s.sgBurst && s.sgBurst[id]) || partWrecked(s,id))
    invRate()'s currency, which is what an SGTR leak is measured in - and a
    flow in kg/s, which is what the secondary mass balance counts. Without it
    the two sides of a tube rupture are in units that cannot be added. */
-/* ONE COPY. It was 5.5 here and 5.5 again in SAT_WATER.cp - two constants
-   for one property of one fluid, in two files. */
-const CP_W=SAT_WATER.cp;
 /* ══ AND IT IS THE WATER THAT IS ACTUALLY THERE ══
    P.invKg0 is Sigma s.mBy over the core piece's own nodes, baked once at
    commissioning off the DRAWING - the pipes, the vessel and the machines the
@@ -2685,14 +2682,15 @@ const RELK={intact:0, burst:REL_GAP, oxid:REL_OX, molten:REL_MELT};
    ballooning at all - two behaviours this model could not tell apart while the
    criterion was a flat P.tdmg.
      P_FILL/T_FILL  the as-built helium charge, 2.2 MPa cold
-     BURST_R        mean radius over wall, so hoop stress is BURST_R*dP
+     burstR()       mean radius over wall, so hoop stress is burstR()*dP
    BURST_LO/BURST_HI are NUREG-0630's fast-ramp burst curve reduced to its two
    ends and interpolated in log stress - A FIT to a published SHAPE, not the
    published correlation, and it is the first thing to replace if this reads
    wrong. BURST_TAU is a fit too and says what it is: real ballooning and
    rupture take seconds, not one tick, and BURST_SPAN is the transition width
    that keeps the criterion from being a cliff - the same idiom CAV_SPAN has. */
-const P_FILL=2.2, T_FILL=300, BURST_R=(ROD_D/2-ROD_CLAD)/ROD_CLAD;
+const P_FILL=2.2, T_FILL=300;
+const burstR=()=>(rodD()/2-ROD_CLAD)/ROD_CLAD;
 const BURST_LO={sig:20,T:1477}, BURST_HI={sig:140,T:1030};
 /* ── AND THE SAME PAIR FOR A MACHINE STANDING IN A HOT ROOM ──
    ROLE.tsurv (layout.js) is where each machine gives up; these two are the
@@ -2704,7 +2702,7 @@ const BURST_LO={sig:20,T:1477}, BURST_HI={sig:140,T:1030};
 const ROOM_DMG_SPAN=60, ROOM_DMG_TAU=25;
 const BURST_TAU=8, BURST_SPAN=50;
 function burstT(dP){
-  const sig=BURST_R*Math.max(dP,0);
+  const sig=burstR()*Math.max(dP,0);
   if(sig<=BURST_LO.sig) return BURST_LO.T;
   const f=Math.log(sig/BURST_LO.sig)/Math.log(BURST_HI.sig/BURST_LO.sig);
   return Math.max(BURST_HI.T, BURST_LO.T-(BURST_LO.T-BURST_HI.T)*f);

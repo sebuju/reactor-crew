@@ -54,6 +54,11 @@ let XABS0=null;
    family - the quality term divided sodium by water's latent heat and the
    whole of Stage D's channel weight reads that quality. */
 const XTAU_F=4;
+/* and it FOLLOWS THE PIN, because a pin's heat capacity goes as its volume and
+   its film conductance as its surface: the ratio is a diameter. 4 s is the
+   reference rod, so a thin pin answers faster and forgives a scram with no
+   flow, and a fat one carries its own stored heat into the melt. */
+const xTauF=()=>XTAU_F*rodD()/ROD_D0;
 /* The reference clad rise above coolant at rated power, kelvin - what P.gSolid
    is fitted against in coreReset(). Real: a PWR rod's outer surface runs about
    30 K above the water going past it. */
@@ -179,7 +184,7 @@ function coreConst(T,d){
     /* the denominator is latVols()'s own cool term with the reference pitch put
        back in, so at pitch 1.0x the two are the same expression on the same
        operands and the ratio is exactly 1 - not 1 to within a rounding */
-    const open0=v.nF*(LAT_P0*LAT_P0 - LAT_RODFRAC*LAT_P0*LAT_P0);
+    const open0=v.nF*(LAT_P0*LAT_P0 - latRodFrac()*LAT_P0*LAT_P0);
     const solid=(v.nF+v.nM)>0 ? v.nM/(v.nF+v.nM) : 0;
     T.mix=open0>0 ? clamp(XMIX0*(v.cool/open0)*(1-solid), 0, XMIX_MAX) : 0; }
 
@@ -292,7 +297,38 @@ function coreConst(T,d){
   T.rodA=XABS0*ABSORB[LAT.abs].k;
   D.rodw=Math.max(0,T.rodA*worth(T.rodA));
   T.FqCold=coreFq(T,RODX0);
+  T.leak=coreLeak(T,T.phiCold);
   return T;
+}
+
+/* ── what this shape LEAKS, pcm ──
+   500*(hd-1)^2 was a curve in one aspect ratio, and it could not see a rod
+   pattern, a zone loading or a hole in the drawing. This is the boundary term
+   the solve already carries, summed over the faces that have one: what a face
+   loses is the coupling out of it, less the share the reflector sends back.
+   Read on the SAME converged flux coreFq() made, so rods, poison, nPen and
+   enrRho have all shaped it first - which is what makes fresh fuel on the rim
+   cost something. Full albedo on every face reads exactly 0.
+
+   LEAK_K is the one fit in it, and it is a MESH calibration: fourteen rings by
+   ten levels is coarse and the term is the whole face coupling, so it reads
+   13.9 % on the stock lattice - far more than a real core loses.
+   lattice against the ~3 % a large PWR really leaks. Solved once so the stock
+   core reads 3000 pcm; every other shape is then measured against it on the
+   same mesh, which is the XABS0 idiom. */
+const LEAK_K=0.13;
+function coreLeak(T,phi){
+  let out=0, tot=0;
+  for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
+    const k=XIX(i,j), w=nodeW[k];
+    tot+=phi[k]*w;
+    let g=0;
+    if(i===XNR-1) g+=(1-T.albR)*T.cr*faceO[i];
+    if(j===XNZ-1) g+=(1-T.albT)*T.cz;
+    if(j===0)     g+=(1-T.albB)*T.cz;
+    out+=g*phi[k]*w;
+  }
+  return tot>1e-9 ? LEAK_K*1e5*out/tot : 0;
 }
 
 /* peaking of a cold, xenon-free, unvoided core with the bank at x. The bench
@@ -725,7 +761,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
       oxP+=qOx*nodeW[k];
 
       // at dt 0 the pellet's algebra is its own balance, so a commissioning pass seeds it at the film it will actually see
-      let Tn=dt>0 ? s.nTf[k]+(qhat*pw+qOx-film*(s.nTf[k]-s.nTc[k]))*dt/XTAU_F
+      let Tn=dt>0 ? s.nTf[k]+(qhat*pw+qOx-film*(s.nTf[k]-s.nTc[k]))*dt/xTauF()
                   : s.nTc[k]+(qhat*pw+qOx)/Math.max(film,1e-9);
       /* ── MELT IS PAID FOR IN LATENT HEAT ──
          A node at tmelt absorbs power WITHOUT rising until its heat of fusion
