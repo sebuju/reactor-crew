@@ -171,28 +171,38 @@ const skinQRole = (s, role) => { let q = 0;
    itself goes through. An end a SHUT valve cuts is not an end (the same
    endLive() netBuild() prices the hole with), so a run with no live end holds
    what it holds and cools - which is what an isolated line does. */
-function runFluidT(s, key){
+function runFluidNodes(s, key){
   const r = P.net && P.net.byKey && P.net.byKey[key];
   if(!r) return null;
   const ends = runEnds(key, r.k);
   if(!ends) return null;
-  const pids = [r.pa, r.pb];
-  let t = 0, n = 0;
+  const pids = [r.pa, r.pb], out = [];
   for(let i=0;i<2;i++){
     const pid = pids[i];
     if(pid && !(portOpen(s,pid) || portWrecked(s,pid))) continue;
-    const T = netTempAt(s, coreFold(ends[i]));
-    if(!isFinite(T)) continue;
-    t += T; n++;
+    out.push(coreFold(ends[i]));
   }
-  return n ? t/n : null;
+  return out.length ? out : null;
+}
+const nodeMean = (nodes, read) => { let t = 0, n = 0;
+  for(const nd of nodes || []){ const v = read(nd); if(isFinite(v)){ t += v; n++; } }
+  return n ? t/n : null; };
+const runFluidT = (s, key) => nodeMean(runFluidNodes(s, key), nd => netTempAt(s, nd));
+/* ...AND WHAT IT IS WORTH TO THE ROOM, which is its ENTHALPY and not its
+   temperature: a hole flashes, so the state the jet leaves in is two-phase and
+   the latent heat in it is most of what the compartment gets. Read on the
+   circuit's own curve, the same (p, h) the density and the quality come off. */
+function runFluidH(s, key){
+  const nodes = runFluidNodes(s, key);
+  const h = nodeMean(nodes, nd => netHAt(s, nd));
+  return h === null ? null : {h, c:netSatOf(nodes[0])};
 }
 /* ...AND WHAT A BOX IS DISCHARGING, which is the DONOR node's water and not a
    mean of its two sides: a valve's own outlet holds what it has already let
    past, so averaging it in cools the jet by its own effect. The donor is the
    higher pressure, the same upwind rule advectStep() moves enthalpy by.
    s.Tavg said the reactor's mean whatever the valve was on. */
-function partFluidT(s, id){
+function partFluidNode(s, id){
   const net = P.net;
   if(!net || !net.index) return null;
   let best = null, bp = -Infinity;
@@ -201,12 +211,23 @@ function partFluidT(s, id){
     if(!nm || net.index[nm] === undefined) continue;
     const p = netPAt(s, nm);
     if(!(p > bp)) continue;
-    const T = netTempAt(s, nm);
-    if(!isFinite(T)) continue;
-    bp = p; best = T;
+    if(!isFinite(netTempAt(s, nm))) continue;
+    bp = p; best = nm;
   }
   return best;
 }
+function partFluidH(s, id){
+  const nd = partFluidNode(s, id);
+  if(!nd) return null;
+  const h = netHAt(s, nd);
+  return isFinite(h) ? {h, c:netSatOf(nd)} : null;
+}
+/* WHAT AN OPENING IS PASSING, keyed the way s.spillBy is. Heat and hydrogen
+   leave through the same hole at the same rate, so both ask this one reader:
+   asked twice, an opening whose state cannot be read put its gas in a
+   compartment its heat never reached. */
+const openFluidH = (s, k) => k === "break:core" ? partFluidH(s, "core")
+                                                : runFluidH(s, k.slice(6));
 
 /* ══ GEOMETRY, MEMOISED ON THE ARRANGEMENT ══
    laySig()+pipeSig(), the same key radGeom() uses and for the same reason:
@@ -359,9 +380,14 @@ const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
    that can never change sign, so the room passed the temperature of the only
    thing pouring into it. Each cell is charged on ITS OWN air, so the plume
    both heats and cools and the room can only approach Tf. */
-function roomJetLiq(src, T, cells, kg, Tf){
+/* AND IT IS CHARGED IN ENTHALPY, never cp*dT: at the hole the water has
+   flashed and sits at saturation, so a temperature difference threw the latent
+   heat of everything that flashed away and a severed hot leg heated the
+   compartment to 373 K and stopped. The air's own side is on the same curve,
+   so the sign still turns over and the room can only approach the jet. */
+function roomJetLiq(src, T, cells, kg, h, c){
   if(!(kg > 0)) return;
-  roomShare(cells, kg, (i,f) => { src[i] += kg*f*CP_W*(Tf - T[i]); });
+  roomShare(cells, kg, (i,f) => { src[i] += kg*f*(h - hOfT(c, T[i])); });
 }
 /* THE CELLS A PLUME REACHES, breadth-first out of the opening. Deterministic
    by construction - one fixed neighbour order, one queue, no dice - which is
@@ -478,18 +504,18 @@ function roomStep(s, dt){
   for(const fid in s.reliefVent){
     if(tgt[fid] || out[fid]) continue;
     const kg = kgOf(s.reliefVent[fid]);
-    const Tf = partFluidT(s, fid);
-    if(Tf === null) continue;
-    roomJetLiq(src, T, cellsOf(fid), kg, Tf);
+    const fl = partFluidH(s, fid);
+    if(!fl) continue;
+    roomJetLiq(src, T, cellsOf(fid), kg, fl.h, fl.c);
   }
-  /* AND AT THE TEMPERATURE THE OPENING IS ACTUALLY PASSING. s.Tavg is the
-     primary's mean, so a reserve tank emptying through a severed line put the
-     reactor's heat into the room out of water that never came near it. */
+  /* AND IN THE STATE THE OPENING IS ACTUALLY PASSING. s.Tavg is the primary's
+     mean, so a reserve tank emptying through a severed line put the reactor's
+     heat into the room out of water that never came near it. */
   for(const k in s.spillBy){
     const kg = kgOf(s.spillBy[k]);
-    const Tf = k === "break:core" ? s.Tavg : runFluidT(s, k.slice(6));
-    if(Tf === null) continue;
-    roomJetLiq(src, T, roomOpenCells(s, G, k), kg, Tf);
+    const fl = openFluidH(s, k);
+    if(!fl) continue;
+    roomJetLiq(src, T, roomOpenCells(s, G, k), kg, fl.h, fl.c);
   }
 
   /* ── the machines whose whole job is getting heat out of the building ──
@@ -705,9 +731,10 @@ function roomH2Step(s, dt, G){
       roomSpread(H, cells, Math.max(0, rate)/100*loopKg(), m);
     };
     const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
-    for(const k in s.spillBy) put(roomOpenCells(s, G, k), s.spillBy[k]);
+    for(const k in s.spillBy)
+      if(openFluidH(s, k)) put(roomOpenCells(s, G, k), s.spillBy[k]);
     for(const fid in s.reliefVent){
-      if(tgt[fid] || out[fid]) continue;
+      if(tgt[fid] || out[fid] || !partFluidH(s, fid)) continue;
       const q = G.parts.find(w => w.p.id === fid);
       put(q ? q.cells : [], s.reliefVent[fid]);
     }
