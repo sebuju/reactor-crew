@@ -5,13 +5,12 @@
    A snapshot of the plant is a clone of S and nothing else. That one sentence
    is what makes every future feature recordable for free: add a field to S and
    it is snapshotted, scrubbed, branched and replayed without a second list to
-   keep in step. Put sim state anywhere else and none of that happens - so the
-   rule is not a convention, it is checked. audit-physics runs the plant, takes
-   a snapshot, runs on, restores, runs the same span again and asserts the two
-   futures are identical to the last bit, under a wall clock that ADVANCES.
-   State parked in a module global is not restored, so the futures diverge and
-   the auditor names the field. A wall-clock read inside the tick does the
-   same. That is the whole enforcement, and it needs no list of field names.
+   keep in step. Put sim state anywhere else and none of that happens. The way
+   to catch a breach: run the plant, take a snapshot, run on, restore, run the
+   same span again and compare, under a wall clock that ADVANCES. State parked
+   in a module global is not restored, so the two futures diverge and the first
+   differing PATH names the field. A wall-clock read inside the tick does the
+   same. It needs no list of field names.
 
    Three things that are NOT on S, each for a stated reason:
      - P, the commissioned constants. Frozen for the life of a run by
@@ -26,8 +25,7 @@
    array, and a plain object. Anything else is a design error - a Map, a class
    instance, a DOM node, a function - and this says so on the spot instead of
    copying the REFERENCE into the snapshot, which would leave the future free
-   to mutate the past. That throw is half of why the all-state-on-S rule holds;
-   the auditor is the other half.
+   to mutate the past. That throw is why the all-state-on-S rule holds.
 
    Not JSON.stringify: a Float64Array degrades to {"0":...} and comes back a
    plain object, and Infinity - which s.perV genuinely holds at rest - comes
@@ -59,7 +57,7 @@ function restoreS(snap){ S = snapVal(snap);
 
 /* ══ WHERE TWO STATES FIRST DISAGREE, NOT WHETHER ══
    A boolean answer to "did the round trip hold" is a failing test with no
-   lead. This returns the PATH of the first difference, so the auditor can
+   lead. This returns the PATH of the first difference, so a caller can
    print `s.parts.xe: 12.4 vs 12.7` and point at the thing that leaked.
    Object.is, so a NaN matches a NaN - s.perV is Infinity at rest and a NaN
    anywhere is a fault we want reported as a value, not as a mismatch. */
@@ -94,9 +92,8 @@ const eqS = (a, b) => eqWhere(a, b) === null;
    itself is invisible to all three: it cannot be recorded, so a tape of the run
    plays back into a different plant; it cannot be replayed, so a scrub past it
    loses it; and a scenario cannot ask for it, so the only way to script the
-   situation is to write a second copy of the act inside the script. The rule is
-   checked - `audit-geometry.js` reads plant.js and control-room.js and fails on
-   a direct write to S from either.
+   situation is to write a second copy of the act inside the script. A direct
+   write to S from plant.js or control-room.js is a bug.
 
    ── the arguments are SIM units, never panel units ──
    A slider on the panel reads 0..100 % and the plant holds 0..1, and exactly one
@@ -547,8 +544,7 @@ function recAct(k, a){
    Called once per FRAME, not once per tick - main.js runs the sim out of an
    accumulator, so a frame is sometimes two ticks and sometimes none, and a
    keyframe on an exact multiple would simply be missed. Hence a threshold and a
-   next-due tick rather than a modulo; calling it every tick works too and is
-   what the auditor does.
+   next-due tick rather than a modulo; calling it every tick works too.
 
    `ei` is the number of events already on the track when the key was taken, and
    it is what stops a keyframe and an act that share a tick from fighting. A

@@ -144,7 +144,7 @@ Known and deliberate, roughly in order of how much they bite.
 | `src/sim/` | Nodal core, tick, linear solver, RNG, recording, scenarios, trends, log. |
 | `src/render/` | Plant view, pipe flow, overlay layers, inspector, charts. |
 | `src/screens/` | Screen state, design bench, control room, scenario, transport, help. |
-| `tools/` | Bundler, headless probes, auditors, optional static server. |
+| `tools/` | Bundler, headless probes, the sandbox rig, optional static server. |
 | `docs/` | The plan written before each larger piece of work. |
 
 ## Running
@@ -167,13 +167,6 @@ carries no assertions, so nothing in it can fail:
 ```
 node tools/probe.js --list
 node tools/probe.js stock
-```
-
-The auditors:
-
-```
-node tools/audit-geometry.js && node tools/audit-dom.js
-node tools/audit-par.js
 ```
 
 ## Status

@@ -41,9 +41,8 @@ function gridDrag(edge,c){
 }
 /* ══ WHAT A MACHINE IS CALLED ══
    The player's own name for a part, kept on D so it rides designSig(), the
-   recording head and the save format for free. partName() is the ONE reader -
-   audit-dom.js source-scans the UI files for a raw p.name read and fails the
-   build if one survives.
+   recording head and the save format for free. partName() is the ONE reader:
+   a raw p.name read anywhere in the UI is a bug.
    DATA, not display: it reads D and touches nothing on the page, and step()'s
    event log names the machine it is talking about - so living in core/ui.js
    put it outside the sim-only subset and the worker threw on the first log
@@ -132,9 +131,8 @@ const boreSig=sigMemo(()=>{ let out="";
 const laySrcSig=()=>machineSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig();
 /* REMOVING A PART TAKES ITS PIPES WITH IT. It used to leave them behind,
    which was survivable only while ids were never reused - and they are, on
-   purpose (addTank()/addFitting() take the lowest free slot, which is what
-   makes the "rename every id" audit mean anything). Delete tank2, add a
-   tank, and the new one inherited the dead one's plumbing. */
+   purpose: addTank()/addFitting() take the lowest free slot. Delete tank2, add
+   a tank, and the new one inherited the dead one's plumbing. */
 function removePart(id){
   /* TAKING A RIDER OFF TAKES ITS HOST OFF. The rod drives are bolted to the
      vessel head: there is no plant with drives and no reactor, so REMOVE on
@@ -160,13 +158,11 @@ function removePart(id){
    ONE default config (TANK_DEFAULT, pipenet.js), not a menu of four kinds.
    Everything that used to distinguish a boron tank from an accumulator from
    a relief tank is a knob on the instance, set afterwards on its own panel.
-   The id carries no meaning at all - it is a slot number, and Stage 7's
-   "rename every tank" check exists to prove nothing reads it. */
+   The id carries no meaning at all - it is a slot number and nothing reads it. */
 /* mintTank() is the one place a tank is built; addTank() is the GESTURE on
    top of it and picks the lowest free slot id, because the bench never asks
    a player to name one. buildStockPlumbing() (pipenet.js) names its own,
-   which costs nothing: a tank id carries no meaning whatsoever, and the
-   "rename every tank id" audit exists to prove exactly that. A null x is a
+   which costs nothing: a tank id carries no meaning whatsoever. A null x is a
    tank with no cell - a SECONDARY tank with no node and no box. */
 function mintTank(id,x,y){
   const t=JSON.parse(JSON.stringify(TANK_DEFAULT));
@@ -241,9 +237,8 @@ const fittingParts=()=>{
 /* mintFitting() is the one place a fitting is built; addFitting() is the
    GESTURE on top of it and picks the lowest free slot, because the bench
    never asks a player to name one. buildStockPlumbing() (pipenet.js) names
-   its own, which costs nothing and reads better in a test: a fitting id
-   carries no meaning whatsoever, and the "rename every fitting id" audit
-   exists to prove exactly that. Same split addTank()/mintTank() already has. */
+   its own, which costs nothing: a fitting id carries no meaning whatsoever.
+   Same split addTank()/mintTank() already has. */
 function mintFitting(id,x,y){
   const f=JSON.parse(JSON.stringify(FIT_DEFAULT));
   f.cell=[x,y];
@@ -2282,6 +2277,35 @@ const MACHINE={
   vent:{role:"vent", w:3, h:3, col:"#8fb8c4", grp:"safety", name:"VENT UNIT", num:true,
     tip:"Pulls compartment air overboard. It is the only thing on the plant besides the hull that takes heat OUT of the room, and it is on the main board - a blackout leaves the room with nothing but its own steel. Nothing to plumb."},
 };
+/* WHAT A MACHINE SAYS WHILE IT IS RUNNING. MACHINE.tip is a BENCH tip - where
+   to put the box and what to buy - and on the control room board it was
+   answering a question nobody standing at the panel can act on. Keyed by ROLE
+   so a tank and a fitting are covered by the same table, and every row names
+   the figure that machine prints on its own box. */
+const OPTIP={
+  core:"The number is chain-reaction power as a percent of rated. A figure in brackets is decay heat, which keeps running after a scram and needs flow and a heat sink for hours.",
+  rods:"The number is where the banks stand: 100% is fully inserted. Insert to cut power, withdraw to raise it, and expect T-avg to follow a few seconds later.",
+  sg:"The number is water level in the shell as a percent. Low level bares the tubes and trips the plant; high level carries water into the steam line. Feedwater is what moves it.",
+  pump:"The number is flow as a percent of what this pump is rated for. Zero here with the reactor hot is the emergency: heat is still being made and nothing is carrying it away.",
+  ihx:"The number is the exchanger's own temperature. It is the middle of two transfer stages, so heat entering the generators behind it is limited by this figure.",
+  turb:"The number is electrical output in MWe. It follows the steam reaching it, so it falls when a generator loses level, a valve shuts or a line is cut.",
+  cond:"The number is hotwell level as a percent - the water the feed pumps draw from. Empty it and the feed train cavitates, whatever the generators are asking for.",
+  radiator:"The number is what this panel is shedding, in MW. It is the only way heat leaves the ship, so the sum across the panels is the ceiling on the power the plant can hold.",
+  ctrl:"The number is accumulated crew dose as a percent of the limit. It rises with release and with time spent beside an unshielded core; it never falls.",
+  cont:"The number is fission product release as a percent. It rises when damaged fuel meets a path out - a tube leak, a lifted relief valve or a break - and it never falls.",
+  catcher:"A cooled basin under the vessel. It does nothing until fuel melts, and then it is what keeps a breach out of the compartment.",
+  bkp:"It reads LOAD while it is carrying the plant through a blackout, and nothing while it stands by. Pumps and instruments run off it until it is spent.",
+  shield:"A block of shielding. It is doing its work whenever crew dose is not rising, and it blocks access to whatever stands behind it.",
+  vent:"Pulls compartment air overboard, and it is the only active way heat leaves the room. Check it whenever compartment temperature is climbing.",
+  tank:p=>tankHold(p.id)
+    ? "The number is the pressure this vessel is holding for its circuit, in MPa. Heaters raise it and the spray lowers it; a falling reading with a steady level means water is leaving somewhere else."
+    : "The number is how full it is, as a percent. BURST means the shell has let go and it is now an opening into the compartment.",
+  fitting:p=>{ const f=D.fittings&&D.fittings[p.id];
+    return (f&&f.mode==="relief")
+      ? "A relief valve. It lifts by itself on pressure and reseats below it, and what it passes goes wherever its outlet is piped - a tank, or the room."
+      : "A valve in the line. Shut it and the run carries nothing; open it and flow follows pressure. The mark on the body is what it is stood down as."; },
+};
+const opTipOf = p => { const t=OPTIP[p.role]; return (typeof t==="function"?t(p):t) || p.tip; };
 const machRow  = id => { const m=D.machines[id]; return (m && MACHINE[m.kind]) || null; };
 const machRole = id => { const M=machRow(id); return M ? M.role : null; };
 /* A BOX FOLLOWS A REAL QUANTITY WHERE THE MACHINE STATES ONE. A panel's is

@@ -47,7 +47,7 @@ function fxIdPhase(id){
    Set once a frame by drawPlant(), which is the only thing that knows whether
    there is a plant at all; the bench passes wall seconds so a design preview
    still moves. Fed in rather than read off S, because nothing in a view file may
-   reach for sim state - audit-geometry checks that. */
+   reach for sim state. */
 let FXT = 0;
 const fxSetClock = t => { FXT = t; };
 const fxClock = () => FXT;

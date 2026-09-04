@@ -327,8 +327,7 @@ function scnDue(tick){
 /* THE ONE WAY A VERDICT IS SPELT. take.verdict is the object scnJudge handed
    back - the rows are the useful part and a string would throw them away - so
    anything that wants to PRINT one asks here. The branch picker drew the object
-   itself once, which reads [object Object] on any real run and was invisible
-   only because the auditor's fixture had put a string there by hand. */
+   itself once, which reads [object Object] on any real run. */
 const scnVerdLab = v => !v ? "" : v.pass ? (v.assisted ? "PASS (ASSISTED)" : "PASS") : "FAIL";
 const scnVerdCol = v => !v ? C.ink2 : v.pass ? (v.assisted ? C.amber : C.green) : C.red;
 
@@ -378,15 +377,14 @@ function scnJudge(take, limits){
 
    ── STOPS ON A BREACH, AND NOT ON A MELT ──
    A breach is the end of the pressure boundary and the physics past it is not
-   calibrated for anything; `run()` in audit-physics.js has always stopped
-   there, so scnRun and the auditor's own runner agree about when a plant has
-   stopped being a plant. A MELT is not a stop: release, dose and fuel damage
+   calibrated for anything, so a breach is where a plant stops being a plant.
+   A MELT is not a stop: release, dose and fuel damage
    all keep meaning something afterwards, and a limit about exactly those is the
    most likely reason somebody wrote a scenario that melts a core on purpose.
    Truncating the archive would make such a limit read as never broken.
 
    BLOCKING, on purpose. A sliced or worker-threaded version is a later phase;
-   this one has to be correct first, and it is what the auditor drives. */
+   this one has to be correct first, and it is what every headless run drives. */
 function scnRun(scn, onProgress){
   const was = SCNRUN;
   resetPlant();
@@ -425,8 +423,8 @@ function scnRun(scn, onProgress){
    recTick() exactly as scnRun() does, which is what makes the recording it
    produces an ORDINARY recording: the take it hands back can be scrubbed,
    branched and re-judged like any other, with nothing special about it.
-   audit-physics asserts the two runners land on the same plant bit-for-bit,
-   because the moment they can disagree, one of them is lying about the design.
+   The two runners must land on the same plant bit-for-bit, because the moment
+   they can disagree, one of them is lying about the design.
 
    WHAT IT COSTS THE LIVE SESSION: the same thing scnRun() costs. It calls
    resetPlant() and opens a new ROOT take, so the plant you were flying is
@@ -450,8 +448,8 @@ const scnFrac = () => SCNJOB ? Math.min(1, S.tick / Math.max(1, SCNJOB.end)) : 0
    scenario needs. But it cannot always start - a page opened straight off
    the filesystem has a null origin, and a worker refuses to load into one -
    so the slice is not a consolation prize, it is the path a file:// session
-   always takes. Both run the SAME scnRun()/simTick() code and audit-physics
-   pins them to the same plant bit-for-bit.
+   always takes. Both run the SAME scnRun()/simTick() code and must land on
+   the same plant bit-for-bit.
 
    FAILURE IS TIMED, not just caught. A worker that throws on construction is
    easy; a worker that loads and then never answers is the one that would
@@ -564,8 +562,8 @@ function scnDrain(){
 /* ═══════════════ PRESETS ═══════════════
    Three authored drills, built by calling the same three helpers a player's
    edits call - presets are the palette working in bulk, never a second way to
-   build a scenario. Each is passable by the DEFAULT plant, measured rather than
-   hoped: audit-physics.js runs them.
+   build a scenario. Each was measured passable by the DEFAULT plant when it
+   was written.
 
    The seed is shared and fixed. Every die is stood down in a scripted run, so
    it decides nothing today - it is here because the moment a scenario wants

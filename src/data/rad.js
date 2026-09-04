@@ -17,8 +17,8 @@
 // FITTED: chosen so a default PWR's P.dose lands on 0.0486, the figure every
 // release-rate line in step.js (~713, ~777) was already tuned against before
 // this field existed. Changing this number rescales EVERY release figure in
-// the game - re-derive it (fit against layoutMetrics().dose headless, see
-// the auditor block) rather than picking a rounder one.
+// the game - re-derive it (fit against layoutMetrics().dose headless) rather
+// than picking a rounder one.
 const RAD_K = 7.1583;
 
 /* Source strengths against the core's own 1.0 (radSrc(null)), and every one of

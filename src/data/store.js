@@ -11,9 +11,9 @@
    wants to save asks, gets `null`, and prints `storeWhy()`.
 
    NO TOP-LEVEL SIDE EFFECTS. Not one. This file is concatenated into the
-   bundle the three auditors evaluate through `new Function` in Node, where
+   bundle the headless tools evaluate through `new Function` in Node, where
    `fetch` may not exist at all and `window` is a stub; a probe at load time
-   would fire on every audit run and a `fetch` at load time would take the
+   would fire on every headless run and a `fetch` at load time would take the
    whole bundle down with it. The probe is a call the page makes, once, when it
    boots. */
 
@@ -86,7 +86,7 @@ function unpackVal(v){
 /* ═══════════════ IS ANYBODY LISTENING ═══════════════ */
 
 /* Defensive to the point of rudeness, because every way this can fail is a way
-   the game still has to start: no `fetch` at all (the auditors, and the bundle
+   the game still has to start: no `fetch` at all (the headless tools, and the bundle
    run through `new Function` in Node), a `fetch` that throws synchronously on
    `file://`, a 404 from something else squatting on the port, and a 200 whose
    body is somebody's HTML rather than our `{ok:true}`. */

@@ -18,10 +18,9 @@
    THE SHIM IS TWO LINES, and that is the measured cost of running the plant
    with no display: `screen` and `layout()`, both of which commission() reaches
    for on its way out. No DOM, no canvas, no 2d context, no stub of any of them.
-   audit-geometry asserts that this stays true by loading the same subset and
-   flying a scenario in it - so the day the sim starts needing a screen, the
-   auditor says so instead of this file quietly failing in a browser nobody is
-   watching. */
+   `tools/nodom-probe.js` flies the same subset in a bare process, so the day
+   the sim starts needing a screen it fails there instead of this file quietly
+   failing in a browser nobody is watching. */
 let screen = "operate";
 function layout(){}
 

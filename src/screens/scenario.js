@@ -110,7 +110,7 @@ let UI = null;
 
 function scnBuild(){
   if(UI) return UI;
-  /* no DOM under the headless auditors/worker - same guard help.js, transport.js
+  /* no DOM under a headless run or the worker - same guard help.js, transport.js
      and control-room.js use before touching document */
   if(typeof document==="undefined" || !document.documentElement) return null;
   const mount = document.getElementById("scr-scenario");
@@ -791,8 +791,8 @@ function drawScenario(){
   drawOverlay();
 }
 
-/* RUN is the same runner audit-physics measures, drained across frames so the
-   tab still answers. Pressing it again cancels. */
+/* RUN is scnRun(), drained across frames so the tab still answers. Pressing
+   it again cancels. */
 function scnGo(){
   if(!P) return;
   if(scnBusy()){ scnCancel(); scnProg=-1; scnNote="RUN CANCELLED"; return; }

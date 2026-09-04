@@ -60,10 +60,10 @@ const KIT = (function(){
      `node.style.display = ""` does not mean "show it" - it REMOVES the inline
      override and hands the element back to the stylesheet. Every element whose
      stylesheet default was `display:none` therefore stayed hidden forever, and
-     no auditor could see it because none of them loads CSS. The alarm stack and
-     the MELT/TRIP banner both lived there. So the stylesheet states the SHOWN
-     display for every element, this class is the only hide, and `audit-dom.js`
-     bans an inline display write in the screen and renderer files outright. */
+     nothing headless could see it, because no headless run loads CSS. The alarm
+     stack and the MELT/TRIP banner both lived there. So the stylesheet states
+     the SHOWN display for every element, and this class is the only hide: never
+     write an inline display in a screen or renderer file. */
   function show(node, on){
     node.classList.toggle("kit-hide", !on);
     return node;
@@ -679,7 +679,7 @@ const KIT = (function(){
       if(on === last) return; last = on;
       root.classList.toggle("on", on);
       if(opts.tip) tip(root, opts.label + (on ? "  [ FITTED ]" : "  [ not fitted ]"),
-        opts.tip + (opts.mass != null ? "  Costs " + opts.mass + " tonnes." : ""));
+        opts.tip + (opts.mass != null ? " Costs " + opts.mass + " tonnes." : ""));
     }
     if(opts.on != null) set(opts.on);
     return {el: root, set};

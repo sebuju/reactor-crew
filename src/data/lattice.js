@@ -98,8 +98,7 @@ let latRev=0;                    // bumped whenever the lattice changes
    cylinder holding the same fuel. The raggedness beyond it folds into the
    outer ring, which is what the albedo boundary is there to smear anyway, and
    every ring comes back essentially full. Do not "simplify" this back to the
-   corner radius; audit-physics.js will trip on the split-lean block if you do,
-   and that is the failure telling you about it.
+   corner radius; the split-lean block below stops agreeing if you do.
 
    It spans every OCCUPIED slot, fuel or moderator, because the envelope the
    mesh has to cover is the core - a graphite block between two assemblies is
@@ -199,7 +198,7 @@ const LAT_P0=(function(){
    poison into it, then spread the clusters over what you filled. They are two
    functions rather than a block written once per preset, because a preset IS
    latDefault() with different numbers in it - and a copy of this loop is the
-   copy that would quietly stop agreeing with the core audit-physics measures.
+   copy that would quietly stop agreeing with the core everything else measures.
 
    Neither of them revolves. The caller does, once, when it has finished
    changing things. */
@@ -249,7 +248,7 @@ function latLayBanks(nb){
   const rEqSlots=latEqR()/LAT.pitch;
   for(let b=0;b<nb;b++){
     /* nb in the denominator, so four banks land on the same rings 5/8/10/12
-       the hand-written list used to and audit-physics still measures */
+       the hand-written list used to */
     const ring=Math.round(Math.sqrt((b+.5)/nb)*(XNR-1));
     const rr=(ring+0.5)/XNR*rEqSlots;
     for(const th of [Math.PI/9, Math.PI*7/18]){
@@ -385,8 +384,7 @@ const latModCount=()=>{
        SS=4  1192 MWt      SS=8  1195 MWt      SS=16  1198 MWt
 
    Sixteen is nothing next to the diffusion solve that follows, and it holds
-   the error under two tenths of a per cent. audit-physics.js asserts the
-   revolved volume against the volume laid out, so it cannot quietly drift. */
+   the error under two tenths of a per cent. */
 const LAT_SS=16;
 const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float64Array(XNR)); return a; };
 
@@ -489,7 +487,7 @@ function latRevolve(){
   const bankR=bank.filter(a=>a&&a.length).map(a=>a.reduce((s,v)=>s+v,0)/a.length);
   if(!bankR.length) bankR.push((XNR-1)/2);
 
-  let laid=0;                       // the FUEL area actually laid out, for the audit
+  let laid=0;                       // the FUEL area actually laid out
   for(let q=0;q<LQ*LQ;q++) if(latFuel(q)) laid++;
   LM={dr, dz:LAT.len/XNZ, frac, occ, poi, nPen, chan, bankR, NB:bankR.length, zfrac, zTot,
       dia:2*rEq, hgt:LAT.len, vol, nAsm:4*laid, laid:4*laid*p*p*LAT.len};

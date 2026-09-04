@@ -69,8 +69,7 @@ const LAYER_DATA={
   /* A LAYER MUST NOT SOLVE, and pressure is the trap in that rule. The
      network's factorisation is cached onto P.net.Af by netFactored(), so a
      draw callback that asked the solve for a pressure would be a layer
-     writing to P - and audit-geometry scans the view files for `S.` writes
-     only, so it would sail through. drawPlant() refreshes the field once a
+     writing to P. drawPlant() refreshes the field once a
      frame (pipeFieldRefresh(), pipes.js), exactly the way it already does for
      pipeDrop, and this hands the layers what is already there.
      PRESSURE and SUBCOOLING share this one id on purpose: `data` is a memo
@@ -281,8 +280,7 @@ function layerToggle(k){ LAYERS[k].on=!LAYERS[k].on; }
    Both screens call this from zoomKeySync() (render/plant.js) rather than
    hand-roll a button per layer, the same reason there is one AUTOSYS and one
    bypRow() rather than a copy per system. A layer with no switch here has no
-   way to be turned off, so audit-dom.js counts exactly LAYER_ORDER.length of
-   them on both screens.
+   way to be turned off, so both screens carry exactly LAYER_ORDER.length of them.
 
    It lives over the plant and not on the rail because a layer paints the
    PLANT: the switch and the thing it switches are now the same glance, and

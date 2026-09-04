@@ -165,8 +165,7 @@ function ctxClose(){ ctxMenu=null; ctxHide(); }
    format for free - the same trick D.fittings and D.tanks already use - and the
    stock plant's signature does not move until a rename actually happens:
    nothing here writes D.name until setPartName() is handed a real string.
-   partName() is the ONE reader - audit-dom.js source-scans the files that
-   build this UI for a raw p.name read and fails the build if one survives. */
+   partName() is the ONE reader: a raw p.name read anywhere in the UI is a bug. */
 /* partName()/setPartName() live in layout.js. They read and write D.name and
    touch nothing on the page, and the SIM names its own machines now - an event
    log line calls partName(), so a copy here left the worker (which loads no UI

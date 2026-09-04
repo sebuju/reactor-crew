@@ -329,8 +329,8 @@ function trSync(h){
      since clientWidth is 0 on a display:none subtree.
      Against `screen` and not body.dataset.screen: the dataset is a copy layout()
      makes for CSS, so reading it would make this depend on layout() having run.
-     audit-dom sets `screen` per strip before syncing it, or this guard would
-     skip the work AND the check with it. */
+     A headless caller must set `screen` per strip before syncing it, or this
+     guard skips the work. */
   if(screen !== h.sc) return;
   const cur = recCur();
   h.pause.set({label:TR.paused?"PLAY":"PAUSE", on:TR.paused});
