@@ -51,7 +51,15 @@ const DICE={
      act is `hit`, because a cell is a legal damage id ("pipe:x,y") and
      "split it HERE" is exactly what a drill wants to stage. */
   burstCell:{p:null, act:"hit",
-    what:"which cell of an overpressured run splits open"}
+    what:"which cell of an overpressured run splits open"},
+  /* THE ONE PLACE THE PIPE'S DIE DOES NOT TRANSFER. A run's cells are all at
+     the same hoop stress, so its die is uniform over the whole run; a painted
+     wall's stress is p*R/t against a LOCAL span, so the weakest cell is a real
+     answer - and on a grid it is very often a SET rather than one cell. A
+     symmetric rectangle has two equally weak mid-span cells and four identical
+     sides give four. This is rolled over that argmin set and nothing else. */
+  wallCell:{p:null, act:"hit",
+    what:"which of the equally weakest cells of an overpressured wall lets go"}
 };
 /* s.diceOff is the scenario's master switch: nothing rolls, so the only faults
    that happen are the ones the script asked for. It is on S rather than a

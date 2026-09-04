@@ -45,7 +45,7 @@ function* commissionGen(){
         or not a reactor stands on the arrangement grid - see the kinetics
         block in step(). */
      vessel:!!roleOf("core"),
-     catcher:LAY.parts.some(p=>p.role==="catcher"), contRel:LAY.parts.some(p=>p.role==="cont")?CONT[D.cont].rel:1, backup:BKP[D.bkp].bk,
+     catcher:LAY.parts.some(p=>p.role==="catcher"), backup:BKP[D.bkp].bk,
      fittings:JSON.parse(JSON.stringify(D.fittings)),
      loops:sgCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:Math.LN2/(6.57*3600)*K, lamX:Math.LN2/(9.14*3600)*K, gI:.0639, gX:.00237,
@@ -97,6 +97,13 @@ function* commissionGen(){
      entered the matrix. A relief valve venting to the room has a LIVE stub
      edge to that same anchor, so it does, and the whole reference solve came
      back NaN: netRef 0, and every figure derived from it with it. */
+  /* THE SHIP'S OWN COMPARTMENT PRESSURE, and nothing more. It used to be where
+     every break, every relief discharge and every vent on the plant let go to,
+     whether or not there was a containment anywhere on the grid. What a PLACE
+     is held at is regionP() (paint.js), which reads this for a cell in no
+     region and reads the region's own gas law for a cell inside one - so a
+     break inside a containment and the same break outside it are two very
+     different accidents, decided by where the run was routed. */
   P.Pcont = 0.15;
   /* ══ AND THE STEAM SCALE IS AHEAD OF THE NETWORK TOO ══
      Both are pure functions of the DRAWING - what this boiler raises and what
@@ -645,7 +652,7 @@ const reliefAtP = (s,fid) => { const sh=shellsOf(fid);
   /* ISOLATED: the stub between a shut port valve and this valve is fed by
      nothing, so there is no shell pressure standing in it and the valve cannot
      lift on one. Containment is what a dead leg open to its own valve holds. */
-  if(!live.length) return P.Pcont;
+  if(!live.length) return regionPAt(s, partOf(fid));
   let pk=0; for(const id of live) pk=Math.max(pk,secP(s,id)); return pk; };
 // any relief fitting passing flow right now - what the annunciator, the
 // surge-line animation and the event log all mean by "the relief valve is
@@ -851,7 +858,7 @@ const COND_ATM=0.101;     // MPa, and the pressure a lost condenser sits at
 /* The exhaust pressure a turbine will not tolerate - a real figure, and about
    four times rated rejection, so no healthy plant is anywhere near it. */
 const TURB_TRIP_P=0.02;   // MPa
-const condP = s => Math.max(exhOpen(s) ? P.Pcont : 0, s.condLost ? COND_ATM : 0,
+const condP = s => Math.max(exhOpen(s) ? regionPAt(s, roleOf("cond")) : 0, s.condLost ? COND_ATM : 0,
   s.condT===undefined ? COND_P0 : Math.max(COND_P0, psatSec(s.condT)));
 /* THE MEAN OVER THE MACHINES THERE ARE, K - a readout, and what s.condT is
    refilled from every tick. undefined on a plant with no condenser, which is
@@ -1073,6 +1080,16 @@ const DMGFX={
   port:{msg:"NOZZLE VALVE HIT",
     why:"That port's isolation valve is wrecked. The valve body is open to the room, so the run landed on it is severed at the machine and spilling there, and it cannot be cut out until a party has been out to it.",
     hit:null, fix:null},
+  /* ONE CELL OF PAINTED STRUCTURE. There is no hit/fix pair and there must not
+     be one: what being wrecked MEANS is that the cell stops being gas-tight
+     (matOpen(), paint.js), so it becomes an ORIFICE between the two volumes it
+     gone - the room field crossing freely again, the discharge going to the
+     ship and the release reaching the crew all follow from that one predicate
+     with nothing told about the other two. The damage id IS the state, exactly
+     as it is for a port. */
+  mat:{msg:"CONTAINMENT BREACH",
+    why:"A cell of the wall is open. If it was holding a bounded region, that region is not bounded any more: the compartment behind it is now the ship's compartment, everything it was holding goes where the ship's air goes, and whatever was standing behind it is now shining on the crew.",
+    hit:null, fix:null},
   pipe:{msg:"PRIMARY PIPE RUPTURE",
     why:"A primary run has been severed. It carries nothing round the loop any more, and both cut ends are now open to containment - the loop is losing coolant and pressure through them until something stops it.",
     hit:null, fix:null}
@@ -1104,6 +1121,15 @@ function cellHazards(){
     out.push({id:"pipe:"+k, x:+k.slice(0,c), y:+k.slice(c+1), what:"the run at "+k}); }
   for(const pid in D.ports){ const c=portCell(pid); if(!c) continue;
     out.push({id:"port:"+pid, x:c[0], y:c[1], what:"the "+portLabel(pid)+" nozzle valve"}); }
+  /* AND EVERY PAINTED CELL THAT CAN FAIL HOT. A shielding material declares no
+     tsurv and is not in this list at all, which keeps today's behaviour for a
+     shield exactly; a gas-tight one states a real figure, because a liner and
+     its seals go long before the structure cares. That REVERSES what the heat
+     sweep below used to say out loud - it is still the right argument about a
+     shield and was always the wrong one about a containment. */
+  for(const k of matCells()){ const c=k.indexOf(","), x=+k.slice(0,c), y=+k.slice(c+1);
+    const lim=matTsurv(x,y); if(!lim) continue;
+    out.push({id:"mat:"+k, x, y, lim, what:"the containment wall at "+k}); }
   if(pn){ hazCache = out; hazPass = pn; }
   return out;
 }
@@ -1119,13 +1145,18 @@ function cellHazards(){
    interior one, which is what makes where you site a component a decision. */
 function combatHit(id){
   const s=S;
-  const canHit = q => q.grp!=="shield" && fitted(q) && !s.dmgParts.includes(q.id);
+  /* A SHIELD USED TO BE REFUSED OUTRIGHT. That was defensible while a shield
+     was a 3x3 block of scenery; it is not defensible for a containment wall,
+     because shooting the wall IS the threat model - a bounded region is only
+     worth anything if it can be opened. Structure is paint now, so it is not
+     in LAY.parts at all and there is nothing left here to refuse. */
+  const canHit = q => fitted(q) && !s.dmgParts.includes(q.id);
   let p;
   if(id!==undefined && id!==null){
     /* a pipe cell is named "pipe:"+x+","+y, never a raw cell key on its own -
        so an id that names a fitting or a component can never accidentally
        resolve as a pipe, and vice versa */
-    if(typeof id==="string" && (id.indexOf("pipe:")===0 || id.indexOf("port:")===0)){
+    if(typeof id==="string" && (id.indexOf("pipe:")===0 || id.indexOf("port:")===0 || id.indexOf("mat:")===0)){
       if(s.dmgParts.includes(id)) return;
       p=dmgPart(id);
       if(!p) return;
@@ -1144,7 +1175,11 @@ function combatHit(id){
        it terminates rather than being the one thing a round cannot hit. */
     const ports=portIds().map(pid=>"port:"+pid)
                   .filter(k=>!s.dmgParts.includes(k)).map(dmgPart).filter(Boolean);
-    const targets=parts.concat(runs,ports);
+    /* ...AND ONE PER PAINTED CELL, on the same per-cell rate a pipe pays. A
+       long flat wall is more wall for a round to find, which is the same
+       sentence a long run makes and is priced the same way. */
+    const mats=matIds().filter(k=>!s.dmgParts.includes(k)).map(dmgPart).filter(Boolean);
+    const targets=parts.concat(runs,ports,mats);
     if(!targets.length) return;
     /* the layout talking, part and run alike: a cell on the hull edge is
        worth roughly ten times an interior one (HITW_HULL/HITW_BASE,
@@ -2456,7 +2491,7 @@ function pressRead(s, dt){
     const id = holdOnCirc(ci)[0];
     const nid = id ? coreFold(id) : (ci === core ? coreFold(roleId("core")||"core") : null);
     if(nid === null || net.index[nid] === undefined){
-      if(ci !== core) setLoopP(s, ci, P.Pcont);
+      if(ci !== core) setLoopP(s, ci, regionPAt(s, roleOf("core")));
       continue; }
     setLoopP(s, ci, netPAt(s, nid));
     if(id && ci === core){ const was = s.lvl;
@@ -2788,10 +2823,84 @@ const ledgerKg = s => { let m = 0;
     if(!t.inf && !t.hold) m += (s.tank&&s.tank[id]!==undefined?s.tank[id]:t.level)/100*tankKg(id); }
   for(const id in s.sglBy){ const M=sgMassOf(id); if(M>0) m += s.sglBy[id]/100*M; }
   for(const id in s.sgSteamBy) m += s.sgSteamBy[id];
+  m += sumpKg(s);
   return m; };
 const ledgerOut = s => { let k=0; for(const n in s.massOut) k += s.massOut[n]; return k; };
+// what is standing on the floor of every region, and it is HELD - see sumpStep()
+const sumpKg = s => { let k=0; for(const j in (s.sump||{})) k += s.sump[j]; return k; };
 // kg out of the plant, by name. Negative is a boundary feeding it.
 const book = (s,name,kg) => { if(kg) s.massOut[name] = (s.massOut[name]||0) + kg; };
+/* ══ THE SUMP: WATER LET GO INSIDE A REGION DOES NOT LEAVE THE SHIP ══
+   Every opening on the plant is already booked out at the node it left from.
+   What this adds is WHERE it went: an opening standing inside a bounded region
+   put its water on that region's floor, so the same kilograms come back into
+   the held side of the book against a negative `sump` line. The ledger closes
+   flat either way, and the water is somewhere instead of nowhere.
+   It floods from the bottom cell up and it DROWNS WHAT IT REACHES - and what
+   drowns takes the ordinary red hatch every wrecked machine takes, so the
+   cause is in the picture and the effect is in its usual place. */
+function sumpStep(s, dt){
+  const G = P.net; if(!G) return;
+  const kgOf = rate => Math.max(0, rate)/100*loopKg();
+  const put = (cells, kg) => {
+    if(!(kg > 0) || !cells || !cells.length) return;
+    const c = cells[0], g = matRegionAt(c[0], c[1]);
+    if(!g) return;                       // it went into the ship, which is where it always went
+    /* ...AND ONLY WHAT FITS. A compartment full to the deckhead takes no more,
+       and what will not fit is simply never moved into this book - so it stays
+       booked out at the node it left from and the ledger needs no second
+       entry to undo. */
+    const k = regionKey(g), have = s.sump[k]||0;
+    const take = Math.min(kg, Math.max(0, regionSumpCap(g) - have));
+    if(!(take > 0)) return;
+    s.sump[k] = have + take;
+    book(s, "sump", -take);
+  };
+  /* ══ AND WATER IN A COMPARTMENT THAT IS NO LONGER ONE RUNS OUT OF IT ══
+     A wall cell opens, or the player lifts one on the bench, and the region
+     that held this water is not a region any more - so it goes where the ship's
+     own bilge water goes and the book that was holding it back is released. */
+  { const live = {};
+    for(const g of matRegionsBounded()) live[regionKey(g)] = g;
+    for(const k in s.sump){
+      const g = live[k];
+      if(g){ const cap = regionSumpCap(g);
+        if(s.sump[k] <= cap) continue;
+        book(s, "sump", s.sump[k]-cap); s.sump[k] = cap; continue; }
+      book(s, "sump", s.sump[k]); delete s.sump[k];
+    } }
+  for(const key in s.spillBy){
+    const r = G.byKey[key.slice(6)];
+    if(!r || !r.cells) continue;
+    const open = r.cells.filter(([x,y]) => cellBroken(s,x,y));
+    put(open, kgOf(s.spillBy[key])*dt);
+  }
+  const tgt = (G.fitTarget)||{}, out = (G.fitVentOut)||{};
+  for(const fid in s.reliefVent){
+    if(tgt[fid] || out[fid]) continue;
+    const q = partOf(fid); if(!q) continue;
+    put([[q.x+((q.w/2)|0), q.y+((q.h/2)|0)]], kgOf(s.reliefVent[fid])*dt);
+  }
+  /* AND WHAT THE LINE REACHES GOES UNDER IT. Read off the same depth the
+     FLOODING layer draws, so the picture and the failure cannot disagree about
+     which machine is in the water. */
+  for(const g of matRegionsBounded()){
+    const f = regionFlooded(s, g); if(!f) continue;
+    const line = f.bot + 1 - f.rows;
+    for(const p of LAY.parts){
+      if(!fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
+      if(p.y + p.h <= line) continue;
+      if(matRegionOf(p) !== g) continue;
+      s.dmgParts.push(p.id);
+      const fx = dmgFx(p.id);
+      if(fx.hit) fx.hit(s, p.id);
+      logE("alarm","FLOODING / "+fx.msg,
+        p.name+" is under water - "+f.d.toFixed(1)+
+        " m of it is standing on the floor of the region it is in, and the line has reached the machine. "+fx.why);
+    }
+  }
+}
+
 /* ══ EQUILIBRIUM IODINE AND XENON AT A FLUX ══
    Written once and asked three times: of the core average (P.X0), of the
    kinetics seed, and of each NODE in coreReset(), which is the only one of the
@@ -3117,6 +3226,11 @@ function resetPlant(){
         numbers, so snapVal() takes it, and cumulative, so a tick differences
         it rather than clearing it. */
      massOut:{}, massRes:0, massWarn:0, massWarnT:0,
+     /* WHAT IS STANDING ON EACH REGION'S FLOOR, kg, keyed by that region's own
+        lowest cell. It is the one place water that has left the plant is still
+        ON the ship, so ledgerKg() counts it and sumpStep() books the matching
+        negative - the same kilograms, in a different book. */
+     sump:{},
      /* what each tank's own AUTORULE decided last tick. A rule with two
         setpoints has to know whether it is already running, and this is the
         only place that memory can live - on S, so it rides a snapshot. */
@@ -3253,6 +3367,13 @@ function resetPlant(){
         exactly what that throw exists to catch. */
      roomO2:new Float64Array(GW*GH).fill(ROOM_O2_0),
      roomFlame:new Float64Array(GW*GH), roomP:new Float64Array(GW*GH),
+     /* KILOGRAMS OF GAS PER CELL, and the compartment's pressure follows from
+        it (roomPOf(), room.js). Seeded at what a cell holds at rest, so an
+        untouched ship commissions at exactly one atmosphere. */
+     roomM:new Float64Array(GW*GH).fill(ROOM_MAIR),
+     // what each open hole is passing, kg/s, keyed by its own cell - the jet
+     // the renderer draws IS the flow the orifice solved
+     holeQ:{},
      /* AND THE HIGH-WATER MARK OF THAT PRESSURE, never decayed and never
         cleared - the scar. s.roomP relieves on ROOM_P_TAU, so it answers
         "where is the wave" and cannot answer "where has this plant been
@@ -3522,7 +3643,7 @@ function resetPlant(){
          and seeded one shell at 3 114 MPa. A commissioning seed above the
          pressure the vessel lets go at is not a plant. */
       setP(p.map((v,j) => clamp(v + clamp(d[j], -0.2*v, 0.2*v),
-                                P.Pcont, sgBurstP(shells[j])))); }
+                                regionPAt(S, partOf(shells[j])), sgBurstP(shells[j])))); }
     if(n) solve();
     netHoldStore(false);
     if(last){ S.turbWk = last.turbWk||0;
@@ -3947,12 +4068,47 @@ function step(dt){
       pipeName(r)+" has split at "+c[0]+","+c[1]+" - "+Math.max(pa,pb).toFixed(2)+
       " MPa against a wall rated for "+runRating(r).toFixed(2)+" MPa. "+fx.why);
   }
+  /* ══ AND A WALL LETS GO AT ITS OWN SHAPE ══
+     Not at its own cell: a painted wall's stress is p*R/t and the local radius
+     is half the flat span the player drew (matSpan(), paint.js), so a long
+     straight side is weak in the middle, a corner braces itself and a round
+     enclosure has no weakest cell at all. The weakest cell of a region is the
+     one with the least margin of its own rating over its region's pressure.
+     ONE CELL PER EVENT, and it MAY break again: a pipe does not, because one
+     hole is all a run has to say, and a wall is the other case. When the first
+     cell goes the region opens and blows down, so the pressure that broke it
+     is gone and the sequence stops itself with no rule needed - and if the
+     pressure comes back faster than the hole can pass it, the next weakest
+     cell goes too, which is what a containment failure actually looks like. */
+  for(const g of matRegionsBounded()){
+    const pReg = regionDP(s, g);
+    let lo = Infinity, tie = [];
+    for(const i of g.wall){ const x=i%GW, y=(i/GW)|0;
+      if(s.dmgParts.indexOf("mat:"+x+","+y) >= 0) continue;
+      const m = matBurstP(x,y) - pReg;
+      if(m < lo - 1e-9){ lo = m; tie = [[x,y]]; }
+      else if(m < lo + 1e-9) tie.push([x,y]); }
+    if(!tie.length || lo > 0) continue;
+    // stood down, it takes the first in board order - what the pipe's own
+    // burst does when the table is down
+    const c = s.diceOff ? tie[0]
+            : tie[Math.min(tie.length-1, Math.floor(srand(s)*tie.length))];
+    const id = "mat:"+c[0]+","+c[1];
+    s.dmgParts.push(id);
+    const fx = dmgFx(id);
+    logE("alarm","CONTAINMENT FAILURE / "+fx.msg,
+      "The wall at "+c[0]+","+c[1]+" has let go - "+(pReg*1000).toFixed(0)+
+      " kPa across it against a cell that bursts at "+(matBurstP(c[0],c[1])*1000).toFixed(0)+
+      " kPa. It is the middle of a "+(matSpan(c[0],c[1])*MPC).toFixed(1)+
+      " m flat span, which is why it was the cell that went. "+fx.why);
+  }
   advectStep(s, dt, runFlow, netOut && netOut.edgeKg);
   /* ══ AND s.inv IS A READ ══
      Every way water leaves this loop is an EDGE - a break, a relief valve, a
      tube leak, a tank - so the transport pass above has already booked all of
      them at the node they left from. Nothing downstream writes it. */
   if(P.invKg0 > 0) s.inv = 100*invNodesKg(s)/P.invKg0;
+  sumpStep(s, dt);
 
   /* ── pump cavitation: a pump stalls when the water it sucks stops being
      water, and it asks AT ITS OWN SUCTION ──
@@ -4294,7 +4450,7 @@ function step(dt){
          fitting. net.fitTarget survives for exactly one question - is there
          a tank to catch this at all, or is it going straight into the room. */
       if(!(P.net.fitTarget && P.net.fitTarget[fid])){
-        s.release = Math.min(100, s.release + (rate/SGTR_RATE)*0.02*P.dose*dt);
+        s.release = Math.min(100, s.release + (rate/SGTR_RATE)*0.02*contRelPart(s,partOf(fid))*P.dose*dt);
         /* ONLY the vent that reaches no tank is charged to inventory here.
            What a valve puts INTO a tank leaves the loop through that tank's
            own node, which the per-tank loop below already integrates off the
@@ -4335,7 +4491,7 @@ function step(dt){
       const out = Math.min(s.tank[tid], HOT_DUMP*Math.min(s.tank[tid],100)/100*dt);
       s.tank[tid] -= out;
       book(s,"tankWreck", out/100*tankKg(tid));
-      s.release = Math.min(100, s.release + out*tankFluid(tid).act*P.dose*dt);
+      s.release = Math.min(100, s.release + out*tankFluid(tid).act*contRelPart(s,partOf(tid))*P.dose*dt);
     }
     const b = D.tanks[tid].burst;
     if(!b) continue;
@@ -4348,7 +4504,7 @@ function step(dt){
       const out = Math.min(s.tank[tid], b.drain*dt);
       s.tank[tid] -= out;
       book(s,"burstDisc", out/100*tankKg(tid));
-      s.release = Math.min(100, s.release + out*b.rel*tankFluid(tid).act*P.dose*dt);
+      s.release = Math.min(100, s.release + out*b.rel*tankFluid(tid).act*contRelPart(s,partOf(tid))*P.dose*dt);
     }
   }
   book(s,"spillPri", advectOutPri);   // the TRANSPORT's own kilograms - see advectStep()
@@ -4423,15 +4579,19 @@ function step(dt){
        share of the leak coming out of tubes that hold the core's own water
        (sgActive()), and a plant can have one generator behind an exchanger and
        one not. The whole leak still comes off inventory above. */
+    /* PER GENERATOR TO THE END, because the wall is per generator too: one
+       shell may stand inside a containment and another outside it, and it is
+       where the leak came out that decides what reached the crew. */
     let hot = 0;
-    for(const k in s.sgtrBy) if(sgActive(k.slice(5))) hot += s.sgtrBy[k];
+    for(const k in s.sgtrBy){ const id = k.slice(5);
+      if(sgActive(id)) hot += s.sgtrBy[k]*contRelPart(s, partOf(id)); }
     if(hot>0) s.release = Math.min(100, s.release + (hot/0.30)*0.02*P.dose*dt); }
   const burst = P.P0*(P.burstK - 0.0028*s.fatigue);   // fatigue weakens the vessel
   /* asked at the VESSEL, not at the pressurizer: what bursts a vessel is the
      pressure inside it, and hanging the pressurizer high genuinely puts the
      core above the gauge that reports it */
   if(!s.breach && s.pCore > burst){ s.breach=true; s.trip="VESSEL RUPTURE"; }
-  s.P = clamp(s.P, Math.min(P.P0*0.06,P.Pcont), P.P0*1.6);
+  s.P = clamp(s.P, Math.min(P.P0*0.06, regionPAt(s, roleOf("core"))), P.P0*1.6);
   /* invClamp IS GONE. It existed because a pool could be driven past its own
      ends; a node with a mass and a run-dry gate cannot be, so there is nothing
      left to clamp and nothing to book for it. */
@@ -4609,10 +4769,15 @@ function step(dt){
     if(!s.reliefOpen[fid] || s.reliefBlocked[fid]) continue;
     /* Sized off its OWN bore against its OWN lift point, so the capacity is a
        property of the valve the player bought and not a plant-wide number. */
-    const b = fitBoreK(fid), span = Math.max(0.05, set.lift-P.Pcont);
+    /* AGAINST THE REGION IT DISCHARGES INTO, not against one constant: a valve
+       blowing down into a pressurised containment has less differential to do
+       it with, which is exactly what a suppression pool being overwhelmed IS
+       and is the first time that sentence has been true here. */
+    const back = regionPAt(s, partOf(fid));
+    const b = fitBoreK(fid), span = Math.max(0.05, set.lift-back);
     for(const id of shells)
       (secVent[id]||(secVent[id]=[])).push({fid, cap:
-        SG_RELIEF_CAP*ratedSteam()*b*b*Math.max(0, secP(s,id)-P.Pcont)/span});
+        SG_RELIEF_CAP*ratedSteam()*b*b*Math.max(0, secP(s,id)-back)/span});
   }
   /* ── A SEVERED STEAM LINE IS AN OPENING ON THE SHELL BEHIND IT ──
      Same shape as a valve's capacity and deliberately so: a hole passing
@@ -4629,10 +4794,10 @@ function step(dt){
   const secHole = {};                     // per shell: kg/s the holes on it offer
   for(const bk of (P.net.steamBreaks||[])){
     if(bk.exh || !runHoled(s,bk)) continue;
-    const span = Math.max(0.05, sgDesignP()-P.Pcont);
-    for(const id of holeShells(s,bk))
+    for(const id of holeShells(s,bk)){
+      const back = regionPAt(s, partOf(id)), span = Math.max(0.05, sgDesignP()-back);
       secHole[id] = (secHole[id]||0) + SG_RELIEF_CAP*ratedSteam()*bk.bore*bk.bore
-                                       *Math.max(0, secP(s,id)-P.Pcont)/span;
+                                       *Math.max(0, secP(s,id)-back)/span; }
   }
   let boiled = 0;               // kg/s, summed for the mass balance below
   /* WHAT THE SOLVE MOVED THAT THE SHELL COULD NOT ACTUALLY GIVE. The vapour
@@ -4723,7 +4888,7 @@ function step(dt){
        pressure is READ rather than stepped and nothing here can disagree with
        what the steam line thought it was carrying.
        A BURST SHELL IS AN OPENING and netFixed() pins it at the room's. */
-    const pNew = open ? P.Pcont
+    const pNew = open ? regionPAt(s, partOf(id))
       : Math.max(COND_P0, (s.pBy && s.pBy[id+"t"] !== undefined) ? s.pBy[id+"t"] : shellP);
     /* WHAT BOILED follows from it: what the STEAM SPACE gained plus what left
        it. Taken off the DERIVED charge and not off sgCapAt()*dp, because the
@@ -4799,7 +4964,7 @@ function step(dt){
     if(vent>0 && sgtrLive(s,id) && sgActive(id)){
       const shr = vent/Math.max(outSteam+vent,1e-9);
       s.release = Math.min(100, s.release
-        + shr*(Math.max(0,s.sgtrRate)/SGTR_RATE)*0.02*P.dose*dt); }
+        + shr*(Math.max(0,s.sgtrRate)/SGTR_RATE)*0.02*contRelPart(s,partOf(id))*P.dose*dt); }
   }
   /* What the condenser has to get rid of: everything that reached it, less the
      work the shaft took out. LAGGED, the same argument s.coreDT carries: this
@@ -5028,7 +5193,11 @@ function step(dt){
     s.fatigue=Math.min(100,s.fatigue+MELT_FAT*s.meltFrac*dt); }
   { const st=fuelStages(s); let rel=0;
     for(let q=0;q<FAIL.length;q++) rel+=st[q]*RELK[FAIL[q].k];
-    if(rel>0) s.release=Math.min(100,s.release+rel*P.contRel*P.dose*dt); }
+    /* HELD BACK BY THE REGION THE FUEL IS STANDING IN, not by a menu row. It
+       reads the LIVE fill, so a wall with a cell shot out of it stops holding
+       anything the instant it opens - which is the fact the old commissioning
+       scalar could not carry at all. */
+    if(rel>0) s.release=Math.min(100,s.release+rel*contRelPart(s, roleOf("core"))*P.dose*dt); }
 
   /* ── radiation: a live field, not a commissioning-time number ──
      Placed here rather than with the demand walks at the top of the tick:
@@ -5091,21 +5260,44 @@ function step(dt){
       if(!lim || !fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
       if(roomPAt(s,p) < lim) continue;
       s.dmgParts.push(p.id);
-      s.burnEv.ids.push(p.name);
       const fx = dmgFx(p.id);
       if(fx.hit) fx.hit(s, p.id);
-      logE("alarm","BLAST DAMAGE / "+fx.msg,
-        p.name+" has been wrecked by a hydrogen explosion in the compartment - "+
-        roomPAt(s,p).toFixed(0)+" kPa against the "+lim+" kPa it was built for. "+fx.why);
+      /* THREE CAUSES REACH THIS ONE FIELD AND THEY ARE THREE DIFFERENT
+         ACCIDENTS TO BE STANDING NEXT TO. A deflagration is instantaneous, one
+         cell's peak, gone in half a second. A REGION HOLDING ITS OWN STEAM is
+         sustained: it is still there, and it will take the next machine too.
+         The old line named a hydrogen explosion, and a pump crushed by a
+         containment was not in one. */
+      const blast = s.roomBurnOn || s.roomPMax >= roomPAt(s,p);
+      // ...and only a blast is charged to the deflagration line, or a squeezed
+      // pump would be listed among what an explosion took
+      if(blast) s.burnEv.ids.push(p.name);
+      logE("alarm",(blast?"BLAST DAMAGE / ":"OVERPRESSURE DAMAGE / ")+fx.msg,
+        p.name+(blast
+          ? " has been wrecked by a hydrogen explosion in the compartment - "
+          : " has been crushed by the compartment it is standing in - ")+
+        roomPAt(s,p).toFixed(0)+" kPa against the "+lim+" kPa it was built for. "+
+        (blast ? "" : "This is not a bang: the region round it is holding that pressure, and it will take the next machine too until something relieves it. ")+fx.why);
     }
     for(const q of cellHazards()){
       if(s.dmgParts.indexOf(q.id) >= 0) continue;
+      /* A PAINTED CELL IS NOT HERE. A blast inside a region is a pressure the
+         WALL sweep already sees - regionDP() reads the worst cell of the region
+         - and it fails there against its own shape-rating with the die over the
+         ties. Judged again in this loop it would be taken in board order, which
+         beats the weakest cell to it every time. */
+      if(q.lim) continue;
       if(s.roomP[q.y*GW+q.x] < PIPE_PBURST) continue;
       s.dmgParts.push(q.id);
-      s.burnEv.ids.push(q.what);
       const fx = dmgFx(q.id);
-      logE("alarm","BLAST DAMAGE / "+fx.msg,
-        "A hydrogen explosion has taken "+q.what+". "+fx.why);
+      /* THE SAME THREE CAUSES, ONE LOOP DOWN. A pipe cell squeezed by a region
+         holding its own steam was not in an explosion either, and this line
+         said it was. */
+      const blast = s.roomBurnOn || s.roomPMax >= s.roomP[q.y*GW+q.x];
+      if(blast) s.burnEv.ids.push(q.what);
+      logE("alarm",(blast?"BLAST DAMAGE / ":"OVERPRESSURE DAMAGE / ")+fx.msg,
+        (blast ? "A hydrogen explosion has taken " : "Sustained overpressure in the compartment has taken ")+
+        q.what+". "+fx.why);
     }
   }
   /* ── AND WHAT ITS OWN CONTENTS COST ──
@@ -5203,7 +5395,7 @@ function step(dt){
       if(track) live[q.id] = 1;
       if(s.dmgParts.indexOf(q.id) >= 0){ s.roomHurt[q.id]=0; continue; }
       const air = s.roomT[q.y*GW+q.x];
-      const over = clamp((air-PIPE_TSURV)/ROOM_DMG_SPAN, 0, 1);
+      const over = clamp((air-(q.lim||PIPE_TSURV))/ROOM_DMG_SPAN, 0, 1);
       if(over <= 0) continue;
       const h = (s.roomHurt[q.id]||0) + over*dt/ROOM_DMG_TAU;
       s.roomHurt[q.id] = h;
@@ -5213,7 +5405,7 @@ function step(dt){
       const fx = dmgFx(q.id);
       logE("alarm","HEAT DAMAGE / "+fx.msg,
         "The compartment has cooked "+q.what+" - air at "+
-        air.toFixed(0)+" K against the "+PIPE_TSURV+" K it is good for. "+fx.why);
+        air.toFixed(0)+" K against the "+(q.lim||PIPE_TSURV)+" K it is good for. "+fx.why);
     }
     if(track) for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
 
