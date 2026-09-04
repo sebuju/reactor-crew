@@ -465,14 +465,17 @@ function roomPlume(cells, n){
                  roomRing = new Int32Array(N); }
   roomMark = ++roomPlumeGen;
   const mark = roomMark;
+  // a plume is gas, and blk already refuses a gas-tight cell everywhere else
+  const tight = roomGeom().tight;
   let head = 0; roomTail = 0;
   for(const i of cells) if(roomSeen[i] !== mark) roomPush(i, 0);
   while(head < roomTail && roomTail < n){
     const i = roomQ[head++], X = i%GW, Y = (i/GW)|0, r = roomRing[i]+1;
-    if(Y>0)      { const j=i-GW; if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
-    if(X>0)      { const j=i-1;  if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
-    if(X<GW-1)   { const j=i+1;  if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
-    if(Y<GH-1)   { const j=i+GW; if(roomSeen[j]!==mark && roomTail<n) roomPush(j, r); }
+    const ok = j => roomSeen[j]!==mark && !tight[j] && roomTail<n;
+    if(Y>0)      { const j=i-GW; if(ok(j)) roomPush(j, r); }
+    if(X>0)      { const j=i-1;  if(ok(j)) roomPush(j, r); }
+    if(X<GW-1)   { const j=i+1;  if(ok(j)) roomPush(j, r); }
+    if(Y<GH-1)   { const j=i+GW; if(ok(j)) roomPush(j, r); }
   }
   return roomTail;
 }
@@ -516,18 +519,27 @@ function roomStep(s, dt){
      - shut in, or severed and drained - has no contents term at all and falls
      to the air around it at its own time constant instead of pinning at the
      reactor's mean forever. */
-  const liveRun = {};
+  // one skin per REGION: a lumped run is infinite axial conductance, so a
+  // penetration carried a broken compartment's air out through its own wall
+  const liveRun = {}, regOf = matRegions().of;
   for(const r of G.runs){
-    const key = r.key, n = r.cells.length, Tf = runFluidT(s, key);
-    liveRun[key] = 1;
-    if(s.runT[key] === undefined) s.runT[key] = Tf === null ? T_HULL : Tf;
-    const Ts = s.runT[key];
-    let air = 0;
-    for(const i of r.cells) air += T[i];
-    const qProc = Tf === null ? 0 : n*ROOM_HK*SKIN_PROC_K*(Tf - Ts);
-    s.runT[key] = clamp(Ts + (qProc + ROOM_HK*(air - n*Ts))/skinCap(n)*dt,
-                        T_SPACE, ROOM_TMAX);
-    for(const i of r.cells) src[i] += ROOM_HK*(Ts - T[i]);
+    const seg = {};
+    // a cell the wall was painted over is not air, and is in no region
+    for(const i of r.cells){ const ri = regOf[i]; if(ri < 0) continue;
+      if(!seg[ri]) seg[ri] = []; seg[ri].push(i); }
+    const Tf = runFluidT(s, r.key);
+    for(const ri in seg){
+      const cells = seg[ri], key = r.key+"#"+ri, n = cells.length;
+      liveRun[key] = 1;
+      if(s.runT[key] === undefined) s.runT[key] = Tf === null ? T_HULL : Tf;
+      const Ts = s.runT[key];
+      let air = 0;
+      for(const i of cells) air += T[i];
+      const qProc = Tf === null ? 0 : n*ROOM_HK*SKIN_PROC_K*(Tf - Ts);
+      s.runT[key] = clamp(Ts + (qProc + ROOM_HK*(air - n*Ts))/skinCap(n)*dt,
+                          T_SPACE, ROOM_TMAX);
+      for(const i of cells) src[i] += ROOM_HK*(Ts - T[i]);
+    }
   }
   for(const k in s.runT) if(!liveRun[k]) delete s.runT[k];
 
@@ -1120,12 +1132,17 @@ function roomHoleStep(s, dt){
    its exact meaning; what changed is that it now bleeds MASS back toward what
    the compartment holds at rest rather than bleeding a pressure straight to
    zero. It is air, not plant inventory, so no book is opened for it. */
+// AT THE CELL'S OWN TEMPERATURE: ROOM_MAIR is that mass at T_HULL, and warm
+// air relaxed onto a 293 K figure holds T/T_HULL gauge for ever
 function roomShipLeak(s, dt){
   const R = matRegions();
   for(const g of R.regions){
     if(g.bounded) continue;
     const f = Math.min(1, dt/ROOM_P_TAU);
-    for(const i of g.cells) s.roomM[i] += (ROOM_MAIR - s.roomM[i])*f;
+    for(const i of g.cells){
+      const m0 = ROOM_P0/1000*ROOM_VCELL/(R_AIR*Math.max(s.roomT[i], 1));
+      s.roomM[i] += (m0 - s.roomM[i])*f;
+    }
   }
 }
 
