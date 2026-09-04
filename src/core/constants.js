@@ -1,7 +1,14 @@
 "use strict";
 /* canvas handle, palette, shared constants. The plant canvas now lives inside
-   #stage, below the HTML #topbar - see TOPBAR_H in shell.js. */
+   #stage, below the HTML #topbar. */
 const W = 760;
+/* THE DRAWING'S OTHER TWO DIMENSIONS STAND WITH W, and H is a `let` because
+   resize() (shell.js) writes it. They were declared in shell.js, eighteen
+   scripts after uiBind(cv) wires the pointer handlers - so a pointermove while
+   the rest of the page was still loading read both through the temporal dead
+   zone and threw "H is not defined" out of local(). */
+let H = 790;
+const TOPBAR_H = 40;
 /* ctx is `let`, not `const`: hostPaint() in render/plant.js swaps it for the
    duration of one draw so a graphical widget living inside an opaque HTML rail
    paints into its own bitmap using the same chrome.js primitives. */

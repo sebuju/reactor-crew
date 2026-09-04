@@ -1,7 +1,7 @@
 "use strict";
 /* screen state, canvas sizing, HTML top bar */
 
-let screen="design",H=790;
+let screen="design";
 
 /* HELP is HTML now, so every screen sizes to the window the same way; the
    canvas/HTML split is one dataset write, read by style.css. */
@@ -11,8 +11,8 @@ function layout(){
 }
 
 /* screens still draw into 0..H, but the canvas only covers TOPBAR_H..H - the
-   HTML topbar owns the rest. resize() offsets the transform, local() undoes it. */
-const TOPBAR_H=40;
+   HTML topbar owns the rest. resize() offsets the transform, local() undoes it.
+   Both figures are declared in constants.js; this file only WRITES H. */
 const winPx=()=>(typeof innerHeight==="number"&&innerHeight>200)?innerHeight:900;
 
 function resize(){
