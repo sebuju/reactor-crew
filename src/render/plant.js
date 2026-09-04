@@ -82,7 +82,7 @@ const PIPE_CASE="#22383e";
    Runs arrive square to a face (route(), layout.js), so the last leg is
    axis-aligned and the flange only ever needs the two orientations. */
 /* WHERE a run's nozzles go, and which way each one faces - pure, so the
-   auditor can sweep it without a canvas. A flange needs a DIRECTION, and a run
+   a headless caller can sweep it without a canvas. A flange needs a DIRECTION, and a run
    can have none: park the relief tank straight above the pressurizer and the
    header's two ports land on the same point, dedupe() collapses it to a single
    point, and there is no second point to face away from. That crashed the
@@ -297,14 +297,16 @@ function spinVane(cx,cy,r,deg,dpf,col){
    a 6 px actuator - a stalk with a speck on it, hanging out of the box it is
    supposed to occupy. The budget is the CELL: 2 px of air each side, and the
    actuator above the body is the 4 px that leaves. */
+// the tank shell's own corner radius, read by the shell AND by the box it
+// stands in, so a square panel cannot show through a domed vessel's corners
+const tankRad=id=>tankHeld(id)?9:3;
 function fitGlyphWH(id,boxW,boxH){
   const fw=clamp(pipeWidth(fitBoreK(id))*1.6, 8, Math.max(8, boxW-4));
   return {fw, fh:clamp(fw*11/16, 5, Math.max(5, boxH-10))};
 }
 // ART EXEMPT: the id if/else chain below draws each part's own glyph - what
-// a component LOOKS like, never a network decision - so it is exempt from
-// the no-unlabelled-kind-read scan (tools/audit-geometry.js) by name, not
-// because the scanner's regex happens not to reach `p.id`.
+// a component LOOKS like, never a network decision - so the "an id literal is
+// a name test" rule does not reach it.
 function drawSym(p,x,y,w,h,ink,L){
   const cx=x+w/2, X=x+5, Y=y+5, W=w-10, Hh=h-10;
   const shell=fn=>{ ctx.beginPath(); fn(); ctx.fillStyle=C.panel; ctx.fill();
@@ -680,9 +682,8 @@ function drawSym(p,x,y,w,h,ink,L){
        depicts what the VALVE is passing, not what reaches the room. Where the
        discharge goes is a separate question the tick asks separately
        (net.fitTarget, step.js). Gating the plume on that was tried and is
-       wrong - audit-text.js pins the plume against the tick's own vent term
-       AND pins that it shrinks as the receiving tank fills on back pressure,
-       both of which are claims about a valve that IS piped. */
+       wrong - the plume follows the tick's own vent term, and it shrinks as
+       the receiving tank fills on back pressure. */
     if(L && mode==="relief")
       fxSteam(cx,y+4,W*.7,fxEase(id+":porv",
         clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
@@ -731,7 +732,7 @@ function drawSym(p,x,y,w,h,ink,L){
        sits on ±1e-15 at rest - tankInjecting() (pipenet.js) is the floor, and
        it is the SAME one the sim judges by, so the picture and the plant
        cannot disagree about whether a tank is delivering. */
-    tank(TX,TY,TW,TH,tankHeld(id)?9:3, lv/100,
+    tank(TX,TY,TW,TH,tankRad(id), lv/100,
       tankInjecting(id,rate) ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
             /* A SINK WARNS ON THE WAY UP, not on the last tenth: amber used
@@ -1087,7 +1088,7 @@ function tankCtl(id){
        +(tankPrimary(id)
          ? "a solved flow: full loop pressure against a tank charged below it delivers exactly nothing, and a depressurised loop takes a surge."
          : "drawn on by the feed pumps.")
-       +"  Its automatic rule is "+(rule()?rule().label:"none")+", which opens it without you."};
+       +" Its automatic rule is "+(rule()?rule().label:"none")+", which opens it without you."};
   const dump=
     /* Dumping is only dangerous for a tank you DRAW ON - throwing away water
        something else needs. A sink (a primary tank with no non-return valve,
@@ -1483,7 +1484,7 @@ function bypRow(k,x,y,w,h,bench){
   armRow(x,y,w,h,{label:A.label,fit,lit,
     fn: bench ? ()=>{ D.start[sk]=!startOf(sk,false); } : ()=>{ act("byp",k); },
     title:A.name+"  [ "+(bench?(lit?"BYPASSED":"ARMED"):autoState(k))+" ]",
-    tip:A.tip+(fit?"":"  None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")});
+    tip:A.tip+(fit?"":" None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")});
 }
 
 /* A key narrower than this cannot hold even a stepped-down four-letter label,
@@ -1800,9 +1801,10 @@ function pipeFitMarks(L,net){
    instance - four generators meant four NAT CIRCs. Each of these now has a
    single singleton home (INVENTORY/FATIGUE/NAT CIRC on the reactor); they stay
    helpers because the band and the sentence are still written once. */
-const rowInv=s=>["INVENTORY",s.inv.toFixed(1)+" %",
+const rowInv=s=>["INVENTORY",(invNodesKg(s)/1000).toFixed(1)+" t",
   band(s.inv,80,100,[[95,C.red,"LEAKING"],[100,C.blue,"FULL"]],{dp:0}),
-  "How much water is actually in the loop. A whole loop sits at 100%; under 95% you are losing it somewhere."];
+  "How much water is actually in the loop, in tonnes - summed over the nodes the primary circuit owns. It was commissioned with "
+    +(P.invKg0/1000).toFixed(1)+" t, so this is "+s.inv.toFixed(1)+"% of the charge; under 95% you are losing it somewhere."];
 const rowFat=s=>["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",
   band(s.fatigue,0,100,[[50,C.cyan,"SOUND"],[100,C.amber,"WORN"]],{dp:0}),
   "Permanent metal damage from cold water hitting hot steel, mostly from emergency injection. It never resets, and the vessel bursts lower for every point of it."];
@@ -2926,8 +2928,8 @@ function leaderLine(panelEl,railEl){
 let backCv=null, backKey="";
 function plantBack(L,GHp,rowH){
   const m=ctx.getTransform&&ctx.getTransform();
-  // the headless DOM has no bitmap to bake into, and a geometry audit must see
-  // these rectangles on the recorder it is reading
+  // the headless DOM has no bitmap to bake into, and a headless reader must
+  // see these rectangles on the recorder it is reading
   if(!m||!m.a){ plantBackPaint(L,GHp,rowH); return; }
   const sc=m.a;
   const x0=GX-EL_GUT, y0=GY, w=GW*CELL+EL_GUT, h=GHp;
@@ -2997,7 +2999,7 @@ function drawPlant(y0,L,vh,vx,vw){
                   VIEW.y+d.y-(VIEW.cy+VIEW.oy)*VIEW.s); }
   ctx.scale(VIEW.s,VIEW.s);
   // and a bang in the compartment kicks the deck it happened on (room.js)
-  { const k=burnShakeAt(); if(k) ctx.translate(burnShakeRnd()*k, burnShakeRnd()*k); }
+  { const k=burnShakeAt(); if(k) ctx.translate(burnShakeRnd(0)*k, burnShakeRnd(1)*k); }
   viewOn=true;
   plantBack(L,GHp,rowH);
   /* THE HULL IS DRAGGED BY ITS OWN WALLS, and only the two that can move
@@ -3038,7 +3040,7 @@ function drawPlant(y0,L,vh,vx,vw){
      grey is that said in the picture rather than only in the rail. */
   pipeLoose(L);
   for(const pass of [0,1]) for(const r of NET){
-    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter, pinned in tools/audit-geometry.js - see pipeRuns() (pipes.js)
+    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter - see pipeRuns() (pipes.js)
     ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
     for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";
@@ -3060,7 +3062,11 @@ function drawPlant(y0,L,vh,vx,vw){
        that failed: red casing and deck bore, the same two marks pipeDamage()
        puts on the torn cell (runCut(), pipes.js). */
     const cut = runCut(r,L);
-    ctx.strokeStyle = pass? (cut?C.well:pipeCol(PC,r.k)) : (cut?C.red:PIPE_CASE);
+    /* THE BORE IS THE COLOUR OF WHAT IS IN IT (pipeStroke, pipes.js): the run's
+       kind keeps the hue and the phase rides it as lightness, so a hot leg
+       full of steam and a steam line full of water are told apart at a glance.
+       The CASING is the pipe itself and does not change with its contents. */
+    ctx.strokeStyle = pass? (cut?C.well:pipeStroke(r,PC,L)) : (cut?C.red:PIPE_CASE);
     ctx.stroke();
   }
   ctx.lineJoin="miter";
@@ -3126,7 +3132,12 @@ function drawPlant(y0,L,vh,vx,vw){
     // THE PANEL IS THE FOOTPRINT, to the pixel: a 2px inset left the grid line
     // showing inside the machine's own cells, so a box read one size and
     // occupied another.
-    if(fit) fillRect(x,y,w,h,C.panel);
+    const symFull = p.role==="tank";
+    // the shell sits 1 px in from the footprint, so the case takes that px back
+    const boxR = symFull ? tankRad(p.id)+1 : 0;
+    const boxPath=()=>{ ctx.beginPath(); rr(x,y,w,h,boxR); };
+    if(fit){ if(boxR){ boxPath(); ctx.fillStyle=C.panel; ctx.fill(); }
+             else fillRect(x,y,w,h,C.panel); }
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
     // stripPlan()'s last rung takes the room it needs even where there is
     // none, so the symbol can be asked for a negative rectangle - it is
@@ -3135,7 +3146,6 @@ function drawPlant(y0,L,vh,vx,vw){
        figure (tankW()/tankH() off `vol`), so shrinking it by the name row and
        the strip drew a vessel a cell smaller than the one the player bought.
        It takes the whole footprint and the name and the keys stand ON it. */
-    const symFull = p.role==="tank";
     if(fit && (symFull || h-sh-nameH > 0))
       drawSym(p, x, symFull?y:y+nameH, w, symFull?h:h-sh-nameH, ink, L);
     if(dmgd) hatch(x+3,y+3,w-6,h-6,C.red,.4);
@@ -3157,7 +3167,8 @@ function drawPlant(y0,L,vh,vx,vw){
       fillRect(x,y,w,h,"rgba(255,90,69,.10)"); frame(x,y,w,h,C.red); ctx.restore(); }
     // selection is an OUTLINE: the box keeps its own ink, so a picked machine
     // still reads as the machine it is rather than as an amber silhouette
-    if(on) frame(x,y,w,h,C.amber);
+    if(on){ if(boxR){ boxPath(); ctx.strokeStyle=C.amber; ctx.lineWidth=1; ctx.stroke(); }
+            else frame(x,y,w,h,C.amber); }
     /* A WRECKED MACHINE HAS NO READING. It printed its own value in red - a
        destroyed pressurizer stood there stating 15.5 MPa through the hatching
        that says it is not there any more - and an instrument on a machine
@@ -3224,7 +3235,8 @@ function drawPlant(y0,L,vh,vx,vw){
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
     TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
         (p.access||p.grp==="shield"?"":"  [ NO ACCESS ]"),
-      p.tip+(p.access||p.grp==="shield"?"":"  It is boxed in on every side - nobody could reach it to repair it."));
+      (L?opTipOf(p):p.tip)+(p.access||p.grp==="shield"?"":" It is boxed in on every side - nobody could reach it to repair it.")
+        +(L?pipeThru(p,L):""));
     /* A fitting's strip hangs BELOW its one cell, centred on it, because the
        cell has no room for it; every other machine declares the cells its own
        controls need and stands them inside its own box. */
