@@ -25,3 +25,8 @@ tools/sandbox/out/
 
 # Panel read dump - generated scratch
 docs-panel-reads.json
+node_modules/
+test-results/
+playwright-report/
+tests/out/
+tests/reports/

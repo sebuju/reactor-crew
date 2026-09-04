@@ -116,7 +116,7 @@ body[data-screen="help"] #cv{display:none}
   box-shadow:0 4px 14px rgba(0,0,0,.5)}
 #tip b{display:block;margin-bottom:4px;color:var(--c-bright);font-size:var(--t8);
   letter-spacing:1px;text-transform:uppercase}
-#tip p{margin:0}
+#tip p{margin:0;white-space:pre-wrap}   /* a cell tip is one value to a row */
 /* the title row: name on the left, the scale's verdict and its limits pushed to
    the right, so a band tooltip costs no extra line */
 .tip-head{display:flex;align-items:baseline;gap:8px}
