@@ -2618,7 +2618,7 @@ function readoutsFor(p,s){
      this one, saying the same thing twice off the same s.dmgParts test; the
      consequence they carried comes off DMGFX, which is the table that already
      owns what a hit means. */
-  if(partWrecked(s,p.id)) R.unshift(["STATUS","DESTROYED",C.red,
+  if(partWrecked(s,p.id)) R.unshift(["STATUS","DESTROYED / "+dmgWhyOf(s,p.id),C.red,
     "This component has taken a hit. "+dmgFx(p.id).why+" Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
   if(!p.access) R.unshift(["ACCESS","BLOCKED",C.red,
     "Your layout walls this in on every side, so no repair party can ever reach it. It stays broken for the rest of the run."]);
@@ -3175,9 +3175,10 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // clipTxt with the ladder off, not fitTxt: a narrow machine used to get a
     // 6px name beside its neighbour's 6.5px one, which reads as a different
     // kind of label rather than as a shorter box
-    const nmw=partName(p)+(stw?"  "+stw:"");
+    // the cause takes the state word's slot: a wreck has no state left to be in
+    const nmw=partName(p)+(dmgd?"  "+dmgWhyOf(L,p.id):(stw?"  "+stw:""));
     if(fit && nameH){
-      const nmo=Object.assign({},NAME_TXT,{color:stw?C.amber:(on?C.amber:C.ink2)});
+      const nmo=Object.assign({},NAME_TXT,{color:dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))});
       /* A FULL-BOX SYMBOL IS DRAWN UNDER ITS OWN NAME - a tank's water, hoops
          and hatching all run through the top row - so the name carries a
          ground, off the one txtPlate(). That ground may NOT run over the
@@ -3212,7 +3213,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
          pipework they belong to. What the valve is stood down as no longer
          depends on the label at all - it is on the glyph. */
       if(!nameH && (p.role!=="fitting" || hovd || on))
-        tag(nmw,x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(stw?C.amber:(on?C.amber:C.ink2)));
+        tag(nmw,x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))));
       /* THE VALUE WEARS ITS MACHINE'S WORST ALARM, and grey when there is
          nothing wrong. Not a second opinion: annLamp() is the SAME table and
          the SAME predicate as the lamp already drawn on this box, so the number
@@ -3226,7 +3227,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
       if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
     });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
-    TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ DAMAGED ]":"")+
+    TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ "+dmgWhyOf(L,p.id)+" ]":"")+
         (p.access?"":"  [ NO ACCESS ]"),
       (L?opTipOf(p):p.tip)+(p.access?"":" It is boxed in on every side - nobody could reach it to repair it.")
         +(L?pipeThru(p,L):""));
