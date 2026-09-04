@@ -408,34 +408,25 @@ function crCollapse(label){
   s.append(n,a); d.appendChild(s); d._alert=a;
   return d;
 }
-function crRailGroup(p){
-  const li=loopOf(p.id); if(li!=null) return "loop"+li;
-  const G=nodeGraph(), ns=G.nodesOf[p.id]||[];
-  if(!ns.length) return p.pin&&p.pin.to ? crRailGroup(partOf(p.pin.to)||p) : "support";
-  return "circ"+G.circuit[ns[0]];
-}
 /* MACHINES THAT SHARE A SIDE STAND TOGETHER, in the order the coolant meets
-   them: the primary that every loop shares, then the loops, then the secondary,
-   then what belongs to no circuit at all. Grouping is the BUILD's business
-   alone - a well is the same well wherever it stands, so no sync path knows. */
+   them - panelGroup()/panelGroupRank() (inspector.js) are that question and its
+   answer's order, shared with the margin panels. Grouping is the BUILD's
+   business alone - a well is the same well wherever it stands, so no sync path
+   knows. */
 function crRailBuild(rail,watch){
   rail.innerHTML="";
   const panels=[], byGroup=new Map();
   for(const p of LAY.parts){
-    const k=crRailGroup(p);
+    const k=panelGroup(p);
     if(!byGroup.has(k)) byGroup.set(k,[]);
     byGroup.get(k).push(p);
   }
-  const loops=Array.from(byGroup.keys()).filter(k=>k.startsWith("loop"))
-    .sort((a,b)=>+a.slice(4) - +b.slice(4));
   /* CIRCUITS ARE INDEXED, so the rail lists them in index order rather than in
      a two-name bucket. The core's own circuit leads, because that is where the
      heat comes from; support is last, because it carries none. */
-  const G0=nodeGraph();
-  const circs=Array.from(byGroup.keys()).filter(k=>k.startsWith("circ"))
-    .sort((a,b)=>{ const x=+a.slice(4), y=+b.slice(4);
-      return (x===G0.coreCirc?-1:0)-(y===G0.coreCirc?-1:0) || x-y; });
-  const order=circs.slice(0,1).concat(loops, circs.slice(1), ["support"]).filter(k=>byGroup.has(k));
+  const loops=Array.from(byGroup.keys()).filter(k=>k.startsWith("loop"));
+  const order=Array.from(byGroup.keys())
+    .sort((a,b)=>panelGroupRank(a)-panelGroupRank(b));
   /* a loop is a PRIMARY loop - it is seeded off a generator and walked over
      primary nodes only - and on a one-loop plant its number says nothing.
      SUPPORT is the last group: what is left carries no coolant at all. The
@@ -452,12 +443,12 @@ function crRailBuild(rail,watch){
   for(const k of order){
     const parts=byGroup.get(k), one=order.length===1;
     let head=null, box=rail;
-    if(!one){ head=crCollapse(label(k)); rail.appendChild(head); box=head; }
+    if(!one && !MARGIN_ONLY){ head=crCollapse(label(k)); rail.appendChild(head); box=head; }
     for(const p of parts){
       const well=KIT.well({title:partName(p)});
       railPick(well,[p.id],partName(p));
       const body=KIT.el("div","cr-panel-body"); well.body.appendChild(body);
-      box.appendChild(well.el);
+      if(!MARGIN_ONLY) box.appendChild(well.el);
       watch.add(well.el);
       panels.push({p,well,body,head,on:null,empty:null,base:null});
     }
@@ -818,8 +809,9 @@ function crBuild(){
 
   rail.appendChild(ops);
 
+  const mhost=marginHost(root);
   mount.appendChild(root);
-  return {root,vitalRows,viz,alarms,banner,rail,
+  return {root,vitalRows,viz,alarms,banner,rail,mhost,
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,cnx:cnxBody,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
@@ -923,8 +915,12 @@ function drawOperate(){
      plant, and the plant then sat in the remaining slot rather than in its
      frame. Pan it out from under the panel like anything else. */
   const vw = (railBox ? Math.max(200, railBox.x) : W);
-  drawPlant(vy,S,vh,0,vw);
+  // the panels stand in what the FIT gives up; the box, and so the clip, is whole
+  const mi=marginInsetU();
+  drawPlant(vy,S,vh,0,vw,mi.l+mi.r,mi.t+mi.b);
   zoomKeySync(CR&&CR.root);
+  // AFTER drawPlant, because a panel is anchored against the view it just set
+  marginSync(CR&&CR.mhost, true);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }
 }

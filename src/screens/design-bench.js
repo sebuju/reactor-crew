@@ -26,8 +26,8 @@ function planStats(d){ return [
    "Beta: the share of neutrons arriving seconds late instead of instantly. It is the entire margin a human has to react in."],
   ["SHUTDOWN MARGIN",d.sdm.toFixed(0)+" pcm",clamp(d.sdm/2000,0,1),d.sdm<200?C.red:C.green,
    "How firmly the BANK ALONE holds the core down once it cools and the xenon decays. It is usually negative, and that is not a fault: the plant is commissioned critical with equilibrium xenon in it, so when that xenon decays after a trip its whole worth comes back as positive reactivity, and the fuel cooling hands back Doppler on top. Rods do not win that argument on a real plant either - boron does. Borate after every scram. The bench blocks a design only when full boration cannot hold it either."],
-  ["THERMAL MARGIN",d.dnbr.toFixed(2)+" DNBR",clamp((d.dnbr-1)/2.5,0,1),d.dnbr<1.4?C.amber:C.green,
-   "DNBR, the Departure from Nucleate Boiling Ratio: how far the fuel is from the point where cooling bubbles join into one insulating steam film. Sets your real overload ceiling, not the power rating."],
+  ["BINDING LIMIT",d.bind.bind+"  "+d.bind.clear.toFixed(2)+"x",1-clamp((d.bind.clear-1)/2,0,1),d.bind.clear>2?C.amber:C.green,
+   "WHICH ceiling rates this core, and how far the other one is clear of it. MELT is the conductivity integral of the pellet to its own centreline melt; DNB is the surface flux the coolant will take, over the pin's circumference. The rating is the tighter of the two, so a core with one limit far clear of the other is a core paying for something it cannot use - a fatter pin, a hotter coolant or better-conducting fuel moves whichever one is binding."],
   ["CONDENSER MARGIN",d.condMargin.toFixed(1)+"x",clamp((d.condMargin-1)/4,0,1),d.condMargin<1?C.red:d.condMargin<1/DUMP_COND_K?C.amber:C.green,
    "How far the sink at rest sits under the turbine's backpressure trip. The steam dump is blocked below "+(1/DUMP_COND_K).toFixed(2)+"x, so a load drop then goes to the shell safeties instead of the condenser; below 1x the turbine trips before anything has happened."],
   ["VOID COEFFICIENT",(d.aV>0?"+":"")+d.aV.toFixed(0)+" pcm",clamp(-d.aV/1600,0,1),d.aV>0?C.red:C.blue,
@@ -38,8 +38,10 @@ function planStats(d){ return [
    "What the fuel gives back going from zero to full power: Doppler plus the fuel column's own expansion, over the pellet's rise above the coolant. The one number that says whether anything in the core stops a power rise by itself."],
   ["PEAKING FACTOR",d.Fq.toFixed(2)+" Fq",1-clamp((d.Fq-1.8)/1.2,0,1),d.Fq>2.6?C.amber:C.green,
    "How lopsided power is across the core. The hottest pin sets the limit for the whole reactor, so a flat core can run harder."],
-  ["XENON PIT DEPTH",d.xeW.toFixed(0)+" pcm",1-clamp(d.xeW/2700,0,1),d.xeW<800?C.green:C.amber,
-   "How badly xenon locks you out after a shutdown. At 2700 pcm a scram costs roughly three minutes dead in the water."],
+  ["XENON PIT DEPTH",d.xePit.toFixed(0)+" pcm",1-clamp(d.xePit/5000,0,1),d.xePit<1500?C.green:C.amber,
+   "What xenon is worth at the BOTTOM of the pit, hours after a trip - not the equilibrium the plant runs with. When the flux stops, the iodine already in the fuel goes on decaying into xenon and nothing burns any of it, so the poison climbs for hours before it decays away. This is that peak."],
+  ["RESTART WINDOW",d.xeWin==null?"ANY TIME":d.xeWin.toFixed(1)+" h",d.xeWin==null?1:clamp(d.xeWin/3,0,1),d.xeWin==null?C.green:d.xeWin<0.5?C.red:C.amber,
+   "How long after a trip you can still take this core critical on what it has: excess reactivity, less the bank it must pull out of, against the xenon standing at that hour. Miss the window and the plant is dead in the water until the xenon decays - hours, not minutes. Excess reactivity buys the window and leakage spends it, which is what a flat, well-reflected core is FOR."],
   ["SCRAM TRAVEL",(1/d.scram).toFixed(1)+" s",clamp(d.scram/2.5,0,1),C.green,
    "How long a full emergency rod insertion takes. In a fast transient, two seconds versus half a second is the whole game."],
   ["OPERATING PRESS",d.P0.toFixed(1)+" MPa",1-clamp(d.P0/18,0,1),d.P0>12?C.amber:C.green,
@@ -47,7 +49,7 @@ function planStats(d){ return [
   ["EXCESS REACTIVITY",d.excess.toFixed(0)+" pcm",1-clamp(d.excess/8000,0,1),C.cyan,
    "Reactivity built into the fresh core that must be held down at all times by rods, boron and burnable poison."],
   ["NEUTRON LEAKAGE",d.leak.toFixed(0)+" pcm",1-clamp(d.leak/900,0,1),d.leak>500?C.amber:C.cyan,
-   "Reactivity thrown away through the core surface, driven by how far your height-to-diameter ratio is from a squat cylinder."],
+   "Reactivity thrown away through the core surface. It is measured on the same flux solve the peaking factor is, so it is what THIS drawing leaks: a tall core loses it at the ends, a squat one at the rim, a reflected face sends most of it back, and fresh fuel out on the rim lifts the rim flux, which is the flux that leaves."],
   ["CONTAINMENT",d.nCont?((1-d.contRel)*100).toFixed(0)+" % held":"NONE",1-d.contRel,
    statRamp(1-d.contRel),
    "Fraction of a radiological release that stays inside the plant instead of reaching your crew. It is not bought: it is what the FILL found - a closed shape painted in a gas-tight material, holding back what its own weakest wall material holds back. NONE means every fill reached the hull."],
@@ -109,9 +111,9 @@ const drvList = (names,cap) => { cap=cap||4;
     : names.join(", "); };
 const drvHolds = () => holdTankIds().map(id=>{ const q=partOf(id); return q?partName(q):id; });
 const STATDRV={
- "POWER DENSITY":d=>["COOLANT "+d.a.name+"   base "+d.a.dens+" kW/L",
-   "FUEL "+d.f.name+"   x"+d.f.densK.toFixed(2),
-   "RADIAL PLAN lattice pitch   x"+D.pitch.toFixed(2)],
+ "POWER DENSITY":d=>["core rating off the hottest pin   "+D.power.toFixed(0)+" MWt",
+   "BINDING LIMIT   "+d.bind.bind,
+   "the fuel you laid out   "+(LM?LM.vol.toFixed(1):"0")+" m3"],
  "GRACE TIME":d=>["COOLANT "+d.a.name+"   x"+d.a.grace.toFixed(2),
    "CHIMNEY HEIGHT   x"+D.chim.toFixed(2),
    "STEAM GENERATORS   "+drvList(drvNames("sg")),
@@ -123,9 +125,9 @@ const STATDRV={
    "xenon coming back after a trip   "+d.xeW.toFixed(0)+" pcm",
    "Doppler handed back as the fuel cools   "+(-d.pwrDef).toFixed(0)+" pcm",
    "with the boron system driven out   "+d.sdmB.toFixed(0)+" pcm"],
- "THERMAL MARGIN":d=>["COOLANT "+d.a.name+"   base "+d.a.dnbr.toFixed(2)+" DNBR",
-   "RADIAL PLAN lattice pitch   x"+D.pitch.toFixed(2),
-   "loop setpoint   "+d.P0.toFixed(1)+" MPa"],
+ "BINDING LIMIT":d=>["FUEL "+d.f.name+"   melt at "+d.bind.melt.toFixed(1)+" kW/m",
+   "COOLANT "+d.a.name+"   "+d.a.qpp.toFixed(2)+" MW/m2",
+   "PIN DIAMETER "+(rodD()*1000).toFixed(1)+" mm   flux ceiling "+d.bind.dnb.toFixed(1)+" kW/m"],
  "CONDENSER MARGIN":d=>["CONDENSERS   "+drvList(drvNames("cond")),
    "RADIATORS   "+drvList(drvNames("rad")),
    "turbine trips at   "+TURB_TRIP_P+" MPa backpressure"],
@@ -133,23 +135,31 @@ const STATDRV={
    "MODERATOR "+MODER[D.mod].name,
    "REFLECTOR "+REFL[D.refl].name+"   "+(d.rf.dV>0?"+":"")+d.rf.dV+" pcm of void shift"],
  "MODERATOR COEFF":d=>["RADIAL PLAN pitch   x"+D.pitch.toFixed(2)+"   moderator ratio "+d.mr.toFixed(2),
+   "the hump   peak at "+MR_PEAK.toFixed(1)+", this core is "+(d.mr<MR_PEAK?"UNDER":"OVER")+"-moderated",
    "MODERATOR "+MODER[D.mod].name+"   "+MODER[D.mod].aT+" pcm/K"],
  "POWER COEFFICIENT":d=>["FUEL "+d.f.name+"   conduction x"+d.f.condK.toFixed(2),
    "COOLANT "+d.a.name+"   Doppler "+d.a.aF+" pcm/K over a "+d.a.dTf+" K pellet rise"],
  "PEAKING FACTOR":()=>["RADIAL PLAN   where the fuel and the clusters stand",
    "AXIAL SECTION   the reflector lids and the active length",
    "SPREAD   "+D.nbank+" bank"+(D.nbank>1?"s":"")],
- "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2)],
+ "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2),
+   "equilibrium at full power   "+d.xeW.toFixed(0)+" pcm",
+   "peak "+XE_PEAK.h.toFixed(1)+" h after the trip   x"+XE_PEAK.x.toFixed(2)],
+ "RESTART WINDOW":d=>["EXCESS REACTIVITY   "+d.excess.toFixed(0)+" pcm",
+   "the bank at its commissioning position   "+(d.excess-(d.xeW-d.boronOp)).toFixed(0)+" pcm to pull out",
+   "XENON PIT DEPTH   "+d.xePit.toFixed(0)+" pcm"],
  "SCRAM TRAVEL":()=>["SCRAM SYSTEM "+SCRAM[D.scram].name+"   "+SCRAM[D.scram].rate.toFixed(2)+" of full travel a second"],
  "OPERATING PRESS":d=>{ const h=drvHolds();
    return [h.length? "PRESSURE CONTROL setpoint on "+drvList(h) : "no pressurizer on the core circuit - suggested off the coolant",
      "COOLANT "+d.a.name+"   nominal "+d.a.P0+" MPa"]; },
  "EXCESS REACTIVITY":d=>["FUEL "+d.f.name+"   +"+d.f.excess.toFixed(0)+" pcm",
-   "REFLECTOR "+REFL[D.refl].name+"   +"+d.rf.dRho+" pcm",
+   "MODERATION RATIO "+d.mr.toFixed(2)+"   x"+modK(d.mr,d.mth).toFixed(3),
+   "PIN DIAMETER "+(rodD()*1000).toFixed(1)+" mm   clad eats -"+(ZR_ABS*modClad()).toFixed(0)+" pcm",
    "POISON pen on the RADIAL PLAN   -"+D.poison.toFixed(0)+" pcm",
    "leakage   -"+d.leak.toFixed(0)+" pcm"],
- "NEUTRON LEAKAGE":()=>["AXIAL SECTION active length against the RADIAL PLAN radius   H/D "+D.hd.toFixed(2),
-   "REFLECTOR "+REFL[D.refl].name],
+ "NEUTRON LEAKAGE":d=>["the flux this drawing settles into   peaking "+d.Fq.toFixed(2),
+   "AXIAL SECTION active length against the RADIAL PLAN radius   H/D "+D.hd.toFixed(2),
+   "REFLECTOR "+REFL[D.refl].name+"   rim "+LAT.reflR+" / lid "+LAT.reflT+" / floor "+LAT.reflB],
  "CONTAINMENT":d=>["PAINT tool   "+matCells().length+" cells painted, "+d.nCont+" closed region"+(d.nCont===1?"":"s"),
    "MATERIAL + THICKNESS on the painted cell's own panel",
    "holds back   "+((1-d.contRel)*100).toFixed(0)+" %"],
@@ -503,7 +513,13 @@ function latPlan(x,y,w,h){
   // the readout line under the grid has to fit INSIDE the box now: hostPaint()
   // clips to the host element, where before this spilled onto #cv
   const gx=x+AX, gy=y+3, gw=w-AX, gh=h-19;
-  const cs=gh/(LQ+0.6), p=LAT.pitch, ph=latRingPhi();
+  /* THE WHOLE CIRCLE IS DRAWN, AND THE QUARTER IS STILL WHAT IS AUTHORED.
+     A quadrant was the honest picture of the solve and an unreadable picture of
+     a core: nothing about it said the shape was round. Every slot is drawn four
+     times, mirrored about both axes, and a click anywhere on it FOLDS back onto
+     the one quarter LAT actually stores - so the gesture, the data and
+     latRevolve() are all exactly what they were. */
+  const cs=Math.min(gw,gh)/(2*LQ+0.6), p=LAT.pitch, ph=latRingPhi();
   /* CORE and RODS each own a lattice plan, so both paint through here every
      frame. The hover has to be tagged with the canvas it was taken in, or the
      second call clears what the first just found and the ring highlight lands
@@ -515,25 +531,32 @@ function latPlan(x,y,w,h){
     if(LAT.slot[LIX(u,v)]) rMax=Math.max(rMax,Math.hypot(u+1,v+1)*p);
 
   fillRect(gx,gy,gw,gh,C.well);
-  const CX=gx, CY=gy+gh;
+  const CX=gx+gw/2, CY=gy+gh/2;
   ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,gw,gh); ctx.clip();
   if(hRing>=0){
     const r0=hRing*LM.dr/p*cs, r1=(hRing+1)*LM.dr/p*cs;
-    ctx.beginPath(); ctx.arc(CX,CY,r1,-Math.PI/2,0);
-    ctx.arc(CX,CY,r0,0,-Math.PI/2,true); ctx.closePath();
+    ctx.beginPath(); ctx.arc(CX,CY,r1,0,7);
+    ctx.arc(CX,CY,r0,0,7,true);
     ctx.fillStyle="rgba(240,168,48,.10)"; ctx.fill();
   }
   ctx.strokeStyle="rgba(95,210,226,.16)"; ctx.lineWidth=1;
   for(let i=1;i<XNR;i++){
-    ctx.beginPath(); ctx.arc(CX,CY,i*LM.dr/p*cs,-Math.PI/2,0); ctx.stroke();
+    ctx.beginPath(); ctx.arc(CX,CY,i*LM.dr/p*cs,0,7); ctx.stroke();
   }
+  /* the ring the hot node stands in - the peaking factor is what the rating
+     divides by, so the place it is measured is a place you can see */
+  { const hi=nodePeak(corePredict(derived()).phiCold).i;
+    ctx.beginPath();
+    ctx.arc(CX,CY,(hi+.5)*LM.dr/p*cs,0,7);
+    ctx.strokeStyle=C.amber; ctx.lineWidth=1.4; ctx.stroke(); }
   if(rMax>0){
     ctx.save(); ctx.setLineDash([3,3]);
-    ctx.beginPath(); ctx.arc(CX,CY,rMax/p*cs,-Math.PI/2,0);
+    ctx.beginPath(); ctx.arc(CX,CY,rMax/p*cs,0,7);
     ctx.strokeStyle=C.cyan; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore();
   }
-  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
-    const X=gx+u*cs, Y=gy+gh-(v+1)*cs, q=LIX(u,v);
+  for(let uu=-LQ;uu<LQ;uu++) for(let vv=-LQ;vv<LQ;vv++){
+    const u=uu<0?-1-uu:uu, v=vv<0?-1-vv:vv;
+    const X=CX+uu*cs, Y=CY-(vv+1)*cs, q=LIX(u,v);
     const s=LAT.slot[q], rod=LAT.rod[q];
     if(!s){ fillRect(X+cs/2-1,Y+cs/2-1,2,2,"#1b2c33"); continue; }
     if(s===L_MOD){
@@ -563,23 +586,29 @@ function latPlan(x,y,w,h){
   ctx.restore();
   frame(gx,gy,gw,gh,C.edge);
   ctx.save(); ctx.setLineDash([9,3,2,3]);
-  line(CX,gy-2,CX,CY+4,C.rail,1); line(gx-AX+9,CY,gx+gw,CY,C.rail,1);
+  line(CX,gy,CX,gy+gh,C.rail,1); line(gx-AX+9,CY,gx+gw,CY,C.rail,1);
   ctx.restore();
   ctx.save(); ctx.translate(x+6,gy+gh/2); ctx.rotate(-Math.PI/2);
   txt("REACTOR AXIS",0,0,{size:6,sp:1.2,align:"center",color:C.rail});
   ctx.restore();
 
+  // THE FOLD, and the one place it happens: a pointer anywhere on the circle
+  // answers the quarter slot LAT stores
+  const cellAt=(px,py)=>{
+    const uu=Math.floor((px-CX)/cs), vv=Math.floor((CY-py)/cs);
+    if(uu<-LQ||uu>=LQ||vv<-LQ||vv>=LQ) return null;
+    return {u:uu<0?-1-uu:uu, v:vv<0?-1-vv:vv};
+  };
   const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
-    const u=Math.floor((pt.x-gx)/cs), v=Math.floor((gy+gh-pt.y)/cs);
-    if(u<0||u>=LQ||v<0||v>=LQ) return;
-    const id=u+","+v; if(id===LATPEN.last) return;
-    LATPEN.last=id; latAct(u,v,e&&e.shiftKey);
+    const c=cellAt(pt.x,pt.y); if(!c) return;
+    const id=c.u+","+c.v; if(id===LATPEN.last) return;
+    LATPEN.last=id; latAct(c.u,c.v,e&&e.shiftKey);
   }});
   // clear only OUR hover: the other plan's is not ours to stand down
   if(hov0&&hov0.host===me) LATPEN.hover=null;
   if(hov(wd)){
-    const u=Math.floor((ui.ptr.x-gx)/cs), v=Math.floor((gy+gh-ui.ptr.y)/cs);
-    if(u>=0&&u<LQ&&v>=0&&v<LQ) LATPEN.hover={host:me,u,v};
+    const c=cellAt(ui.ptr.x,ui.ptr.y);
+    if(c) LATPEN.hover={host:me,u:c.u,v:c.v};
   }
   if(!ui.drag) LATPEN.last=null;
 
@@ -598,7 +627,7 @@ const LATPLAN_TIP="The core, laid out looking down at it. Click or drag to place
 
 const LATPEN_CORE=[
   ["FUEL","fuel",
-   "Lay an assembly, or lift one out. Every square is four assemblies in the finished core, because the axis runs along the corner of the first slot. Rated power, core diameter and H/D are all counted off this, so an outer square is worth far more than an inner one - it carries a bigger annulus."],
+   "Lay an assembly, or lift one out. Every square is four assemblies in the finished core, and the three mirror images of it are drawn for you - the axis runs through the middle of the picture. Rated power, core diameter and H/D are all counted off this, so an outer square is worth far more than an inner one - it carries a bigger annulus."],
   ["POISON","pois",
    "Swap an assembly between plain fuel and one carrying burnable poison pins. Poison holds down fresh excess reactivity that would otherwise be held by boron, and unlike boron it is graded: put it where the flux peaks and it flattens the core. It only works on a slot that already has fuel in it."],
   ["ZONE","zone",
@@ -672,16 +701,24 @@ function latSection(x,y,w,h){
   }
   /* The fuel column, mirrored about the centreline exactly the way
      coreField() does it (plant.js), so the bench section and the control
-     room's section are the same picture of the same core. */
+     room's section are the same picture of the same core.
+     THE FLUX IS UNDER IT. The plan has had a flux dot per slot for a long
+     time and the section had nothing at all, which is half a picture of a
+     shape the whole rating now divides by. The HOT NODE - the node the rating
+     divides by - is marked in both. */
+  const T=corePredict(derived()), phi=T.phiCold, hot=nodePeak(phi);
   for(let c=0;c<NC;c++){
     const i=Math.abs(c-(XNR-1)), cx=CX+(c-(XNR-1))*cw-cw/2;
     const ff=clamp(LM.frac[i],0,1), oo=clamp(LM.occ[i],0,1);
     for(let j=0;j<XNZ;j++){
       const cy=CY-(j+1)*ch;
       if(oo<.02){ fillRect(cx+cw/2-1,cy+ch/2-1,2,2,"#1b2c33"); continue; }
+      ctx.globalAlpha=.10+.45*clamp(phi[XIX(i,j)]/hot.v,0,1);
+      fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.cyan);
       if(ff>.02){ ctx.globalAlpha=.20+.55*ff; fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.amber); }
       if(oo-ff>.02){ ctx.globalAlpha=.20+.55*(oo-ff); fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.graph); }
       ctx.globalAlpha=1;
+      if(i===hot.i&&j===hot.j) frame(cx+.4,cy+.4,cw-.8,ch-.8,C.amber);
     }
   }
   frame(CX-halfW,CY-colH,2*halfW,colH,C.edge);
@@ -724,7 +761,7 @@ const LATPEN_SEC=[
 
 const LATREAD=[
   ["RATED POWER",()=>D.power.toFixed(0)+" MWt",
-   "Not chosen. Fuel volume times the power density your family and pitch buy. Lay one more assembly and this rises by that annulus."],
+   "Not chosen. What the hottest pin can take, over how lopsided you drew it: the tighter of the two ceilings on one pin - centreline melt, or the surface flux the coolant allows - times every pin in the core, divided by the peaking factor. Flatten the flux and the same fuel makes more power."],
   ["CORE H / D",()=>D.hd.toFixed(2),
    "The shape the lattice revolves to, against the active length you dimensioned."],
   ["LATTICE PITCH",()=>(LAT.pitch*100).toFixed(1)+" cm",
@@ -919,7 +956,7 @@ function paramBlockMk(block){
     }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas");
-      KIT.tip(cv2,"FUEL LATTICE / QUARTER PLAN",LATPLAN_TIP);
+      KIT.tip(cv2,"FUEL LATTICE / PLAN",LATPLAN_TIP);
       hostForward(cv2);
       return {el:cv2,sync(){}};   // painted by dbSync() via hostPaint(), not here
     }
@@ -978,7 +1015,7 @@ function dbRailBuild(rail,vitals,watch){
       if(!g.noSfx) g.well.setSfx("x"+g.ids.length);
       continue;
     }
-    const well=dbNameWell(p); rail.appendChild(well.el);
+    const well=dbNameWell(p); if(!MARGIN_ONLY) rail.appendChild(well.el);
     const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
     const h={p,ids:[p.id],well,body,B,on:null,noSfx:!!B.gangPlain};
     railPick(well,h.ids,partName(p));
@@ -986,22 +1023,18 @@ function dbRailBuild(rail,vitals,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
-  /* ══ AND THE RUN YOU PICKED, IN THE SAME WELL ══
-     A run is not a part, so it gets no per-panel well of its own in the loop
-     above. It gets the foot of PIPES: the list of what is joined up and the
-     size of the one you picked out of it are the same subject, and two wells
-     put the answer a scroll away from the question. Picked from a row here or
-     by clicking the pipe on the drawing; both write `sel`, which is the same
-     selection every machine already uses. */
+  /* ══ THE LIST OF WHAT IS JOINED UP ══
+     A plant-wide report, so it keeps the rail. The run you PICK out of it is
+     configured on the drawing, in a panel of its own beside the pipe (see
+     marginPanKey, ui/margin.js) - the same standing every machine has. */
   const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
   const pipeList=KIT.el("div","db-pipe-list"); pipes.body.appendChild(pipeList);
-  const runBody=KIT.el("div","db-panel-body"); pipes.body.appendChild(runBody);
   watch.add(pipes.el);
   /* the verdict on the design stands over the plant it judges, not at the foot
      of a rail the player has to scroll past every machine to reach */
   const results=KIT.well({title:"RESULTS"}); vitals.appendChild(results.el);
   const review=KIT.well({title:"DESIGN REVIEW"}); vitals.appendChild(review.el);
-  return {panels,results,review,pipesWell:pipes,pipeList,runBody};
+  return {panels,results,review,pipesWell:pipes,pipeList};
 }
 /* ══ WHAT IS ACTUALLY CONNECTED ══
    One row per traced connection - from, to, and how long it is - plus a line
@@ -1116,24 +1149,6 @@ function dbRailSync(state){
      the BORE field on a run picked off the drawing would have dropped the run
      the field belongs to. */
   state.pipesWell.el._pickId = (isRunKey(sel)||isMatKey(sel)) ? sel : null;
-  /* THE SELECTED RUN'S OWN PANEL. Its own two number fields go through
-     dbPanelSync() exactly as a machine's do, so a run is configured with the
-     same widgets, the same SUGGEST and the same mass hint as everything else
-     on the board. Nothing picked is a real state and says so. */
-  /* ONE WELL, TWO KINDS OF CELL-ADDRESSED THING. A run and a painted cell are
-     both not parts, both picked off the drawing, and both configured with the
-     same widgets - so they share the panel rather than each growing one. */
-  { const r = isRunKey(sel) ? sel : null, m = isMatKey(sel) ? sel : null;
-    dbPanelSync(state.runBody,
-      m ? [{kind:"rule",title:matRow(matCell(matKeyXY(m)[0],matKeyXY(m)[1]).m).name+"  "+m.slice(4)}].concat(paramsForMat(m))
-      : r ? [{kind:"rule",title:pipeLabel(pipeMap().byKey[r].k, r)||"PIPE RUN"}].concat(paramsForRun(r))
-      : [{kind:"note",text:"No run or wall picked. Click a pipe or a painted cell on the drawing, or a row above, to set its size."}]);
-    // A PICK MADE ON THE DRAWING BRINGS UP THE PANEL, the same way a machine's
-    // does - the whole well, "start", not the row inside it: the fields the
-    // pick was made to reach are at its FOOT, and scrolling the row to the top
-    // leaves them below the fold. A pick made in the rail scrolls nothing
-    // (railPickId, on the row's own click).
-    if((r||m) && moved) KIT.reveal(state.pipesWell.el,"start"); }
   { const rd=benchResultsData();
     const body=state.results.body;
     if(!body.firstChild){
@@ -1210,8 +1225,9 @@ function dbBuild(){
   railBlank(rail);
   const vitals=KIT.el("div","db-vitals");
   root.append(head,vitals,rail);
+  const mhost=marginHost(root);
   mount.appendChild(root);
-  return {root,head,rail,vitals,state:null,watch:null};
+  return {root,head,rail,vitals,mhost,state:null,watch:null};
 }
 function dbSync(){
   if(!DB) return;
@@ -1242,8 +1258,12 @@ function drawDesign(){
   const vitBox = DB? hostRect(DB.vitals) : null;
   const vx = vitBox ? vitBox.x+vitBox.w : 0;
   const vw = (railBox ? Math.max(200, railBox.x) : W) - vx;
-  drawPlant(vy,null,vh,vx,vw);
+  // the panels stand in what the FIT gives up; the box, and so the clip, is whole
+  const mi=marginInsetU();
+  drawPlant(vy,null,vh,vx,vw,mi.l+mi.r,mi.t+mi.b);
   zoomKeySync(DB&&DB.root);
+  // AFTER drawPlant, because a panel is anchored against the view it just set
+  marginSync(DB&&DB.mhost, false);
   { const st=DB&&DB.state;
     const h = st && st.panels.find(o=>o.ids.includes(sel));
     if(h) leaderLine(h.well.el,DB.rail); }
