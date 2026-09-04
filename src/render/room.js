@@ -83,23 +83,47 @@ function roomZones(data){
    the ROUNDED figure, so nothing reads "0.0 %". Air temperature and oxygen are
    unconditional - a compartment always has both, and 0 % oxygen is a finding
    rather than an absence. */
+/* ══ ONE CELL, EVERY READING IT HAS, AND IT IS NOT ON A SWITCH ══
+   It used to be called by the H2 and BLAST layers, so a WALL - structure on the
+   board, and nothing to do with either field - only stated its material, its
+   thickness and its rating while a gas layer happened to be up. drawPlant()
+   calls it unconditionally now, once, at the layer seam: a cell has ONE
+   tooltip and it says whatever that cell actually has.
+   `L` may be null - the bench has no plant to have a temperature - so every
+   live row is gated on it and the structure rows are not. */
 function roomCellTip(L){
   const p = viewOn ? (vIn(ui.ptr)?vPt(ui.ptr):null) : ui.ptr;
   if(!p) return;
   const X=Math.floor((p.x-GX)/CELL), Y=rowAt(p.y);
   if(X<0||X>=GW||Y<0||Y>=GH) return;
-  const i=Y*GW+X, rad=layerData("rad",L), r=rad.f[i], T=L.roomT[i],
-        live=L.roomP[i], worst=L.roomPPk[i];
-  const h2=roomH2Frac(L,i)*100, rows=[];
+  const i=Y*GW+X, rows=[];
   const row=(lab,s)=>rows.push(lab+s);
-  if(r>=0.005) row("DOSE         ",r.toFixed(2)+" x  "+ZONE[zoneOf(r)].lab);
-  row("AIR TEMP     ",T.toFixed(0)+" K  "+HEATZ[heatOf(T)].lab);
-  if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
-  row("OXYGEN       ",(roomO2Frac(L,i)*100).toFixed(1)+" %");
-  if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
-  if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
-  if(worst>=BLAST_LO) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
-  if(rad.cells.has(i)) row("REPAIR CELL  ","YES");
+  if(L){
+    const rad=layerData("rad",L), r=rad.f[i], T=L.roomT[i],
+          live=L.roomP[i], worst=L.roomPPk[i], h2=roomH2Frac(L,i)*100;
+    if(r>=0.005) row("DOSE         ",r.toFixed(2)+" x  "+ZONE[zoneOf(r)].lab);
+    row("AIR TEMP     ",T.toFixed(0)+" K  "+HEATZ[heatOf(T)].lab);
+    if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
+    row("OXYGEN       ",(roomO2Frac(L,i)*100).toFixed(1)+" %");
+    if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
+    if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
+    if(worst>=BLAST_LO) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
+    if(rad.cells.has(i)) row("REPAIR CELL  ","YES");
+  }
+  /* THE WALL AND WHAT IT ENCLOSES. A painted cell states its own material,
+     thickness, rating and arm; any cell inside a region adds the region,
+     because that is the question a player standing anywhere inside one is
+     actually asking. */
+  { const m=matOf(X,Y);
+    if(m){ row("WALL         ",m.name+"  "+matThick(X,Y).toFixed(1)+" mm"+(L&&matOpen(L,X,Y)?"  BREACHED":""));
+           row("WALL RATING  ",(matRating(X,Y)*1000).toFixed(1)+" kPa   arm "+(matSpanEff(X,Y)*MPC).toFixed(1)+" m"); }
+    const g=matRegionAt(X,Y);
+    if(g){
+      row("REGION       ",g.cells.length+" cells   "+matRegVol(g).toFixed(1)+" m3   "+(matSealed(L||null,g)?"SEALED":"OPEN"));
+      if(L){ row("REGION PRESS ",(regionDP(L,g)*1000).toFixed(1)+" kPa");
+             const d=regionFloodM(L,g);
+             if(d>0.05) row("FLOODED TO   ",d.toFixed(1)+" m   "+(regionSump(L,g)/1000).toFixed(1)+" t"); } } }
+  if(!rows.length) return;
   TIP(GX+X*CELL, rowTop(Y), CELL, rowTop(Y+1)-rowTop(Y), "CELL "+X+","+Y, rows.join("\n"));
 }
 
@@ -174,7 +198,6 @@ function roomH2Layer(data,L){
   }
   ctx.stroke();
   ctx.lineWidth=1;
-  roomCellTip(L);
 }
 
 /* THE BLAST, AND ITS BANDS ARE THE MACHINES' OWN LIMITS - the HEATZ argument
@@ -236,7 +259,6 @@ function roomPLayer(data,L){
       if(Y<GH-1 && blastOf(pk[i+GW])!==z) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
     }
   }
-  roomCellTip(L);
 }
 
 /* WHAT IS LEFT TO BURN WITH. Oxygen is a place too - s.roomO2 is on S in the
@@ -722,4 +744,93 @@ function roomBurnFx(s){
     }
     ctx.globalAlpha=1;
   }
+}
+
+
+/* ══ CONTAINMENT: THE SURVEY ══
+   It tints every bounded region and bands every wall cell by its own margin to
+   its own rating. The bands are the WALL'S OWN LIMITS and not round numbers -
+   the BLASTZ rule, one field over: the region's pressure against the cell's
+   rating, and again against the rating times PIPE_BURST_K, which is where it
+   actually opens. A cell under the first band prints nothing.
+   NO FIGURE PER CELL. 144 numbers is too much ink and radn CELL DOSE exists
+   for people who want that; one reading per REGION, at its centroid. */
+const CONTZ=[
+  {t:0.50, col:C.green, lab:"HELD",    a:0.14},
+  {t:0.80, col:C.amber, lab:"WORKING", a:0.24},
+  {t:1.00, col:C.red,   lab:"AT RATED",a:0.36},
+  {t:1e9,  col:C.redHi, lab:"OPENING", a:0.50},
+];
+const contzOf = f => { for(let i=0;i<CONTZ.length;i++) if(f < CONTZ[i].t) return i;
+                       return CONTZ.length-1; };
+function contZones(data,L){
+  const R=matRegions();
+  ctx.save();
+  for(const g of R.regions){
+    if(!g.bounded) continue;
+    for(const i of g.cells){
+      const X=i%GW, Y=(i/GW)|0;
+      if(data.g[Y][X]) continue;         // the radZones() rule: a survey paints the room, not the machines
+      const y=rowTop(Y);
+      ctx.globalAlpha=0.10; fillRect(GX+X*CELL,y,CELL,rowTop(Y+1)-y,C.cyan); ctx.globalAlpha=1;
+    }
+    const pr = L ? regionDP(L, g) : 0;
+    for(const i of g.wall){
+      const X=i%GW, Y=(i/GW)|0, rate=matRating(X,Y);
+      const f = rate>0 ? pr/rate : 0;
+      if(f < CONTZ[0].t) continue;
+      const Z=CONTZ[contzOf(f)], y=rowTop(Y);
+      ctx.globalAlpha=Z.a; fillRect(GX+X*CELL,y,CELL,rowTop(Y+1)-y,Z.col); ctx.globalAlpha=1;
+    }
+    /* ONE READING PER REGION, at its own centroid: what it is holding, and the
+       margin of its weakest cell - which is the cell that will go. */
+    let sx=0, sy=0, lo=Infinity;
+    for(const i of g.cells){ sx+=i%GW; sy+=(i/GW)|0; }
+    for(const i of g.wall) lo=Math.min(lo, matBurstP(i%GW,(i/GW)|0));
+    if(!isFinite(lo)) continue;
+    const cx=GX+(sx/g.cells.length+0.5)*CELL, cy=rowTop(Math.round(sy/g.cells.length))+11;
+    /* kPa AT ONE DECIMAL, the unit the compartment's other canvas readings
+       already use (BLASTZ). In MPa a region holding 4.7 kPa printed 0.0. */
+    txt(L?(pr*1000).toFixed(1)+" kPa":"SEALED", cx, cy, {size:8, align:"center", color:C.cyan});
+    if(L) txt(((lo-pr)*1000).toFixed(1)+" kPa MARGIN", cx, cy+10,
+              {size:7, align:"center", color:(lo-pr)<0?C.red:C.ink2});
+  }
+  ctx.restore();
+}
+/* ══ FLOODING ══
+   The ship is drawn in SECTION, so standing water is a horizontal line and
+   there is no reason to draw it as anything else. Per region, from the bottom
+   cell up, at the depth the water discharged into it stands at. It paints
+   nothing at all until water is standing somewhere, which is the H2 CLOUD
+   argument word for word and is why it ships ON. */
+function floodLayer(data,L){
+  if(!L) return;
+  const R=matRegions();
+  ctx.save();
+  for(const g of R.regions){
+    if(!g.bounded) continue;
+    const d=regionFloodM(L,g); if(!(d>0.05)) continue;
+    let bot=-1, x0=GW, x1=0;
+    const inRegion=new Set(g.cells);
+    for(const i of g.cells){ const X=i%GW, Y=(i/GW)|0;
+      if(Y>bot) bot=Y; if(X<x0) x0=X; if(X>x1) x1=X; }
+    const top=rowTop(Math.max(0, bot+1-Math.ceil(d/MPC)));
+    const y1=rowTop(bot+1);
+    ctx.globalAlpha=0.30; fillRect(GX+x0*CELL, top, (x1-x0+1)*CELL, y1-top, C.blue); ctx.globalAlpha=1;
+    ctx.strokeStyle=C.blue; ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(GX+x0*CELL, top+0.7); ctx.lineTo(GX+(x1+1)*CELL, top+0.7); ctx.stroke();
+    txt(d.toFixed(1)+" m", GX+(x1+1)*CELL-3, top-3, {size:7, align:"right", color:C.blue});
+    /* AND IT BUBBLES WHERE IT IS GOING IN. Every opening inside this region is
+       a cell the water is arriving from, so that is where the disturbance is -
+       the same argument the break plume makes about being drawn at the cell. */
+    for(const id of (L.dmgParts||[])){
+      if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
+      const j=id.indexOf(","), bx=+id.slice(5,j), by=+id.slice(j+1);
+      if(!inRegion.has(by*GW+bx)) continue;
+      const br=grect(bx,by,1,1);
+      fxBubbles(br.x, Math.max(br.y, top), br.w, br.y+br.h-Math.max(br.y, top),
+                fxEase("fld:"+bx+","+by, 1), C.blue, "pool");
+    }
+  }
+  ctx.restore();
 }

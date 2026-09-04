@@ -222,6 +222,19 @@ const LAYERS={
   roomp:{group:"COMPARTMENT", label:"BLAST",      seam:"under", data:"room", live:true, on:false,
         draw:roomPLayer,
         tip:"What a blast did to each cell, and it STAYS. Overpressure is banded against the machines' own limits rather than round numbers: 20 kPa takes a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel - blue, green, amber, red, bright red. The compartment relieves itself in about half a second, so what is drawn is the HIGH-WATER MARK: the worst each cell has ever seen, never fading, dark with soot in proportion to it and coloured by what that pressure was enough to break. A compartment that has been blown apart three times looks like it, and stays that way until something cleans it. The cells the wave is in right now pulse. No figure is printed - point at a cell for the reading."},
+  /* TWO LAYERS ON ONE FIELD, AND THEY SHIP DIFFERENTLY ON PURPOSE - the test
+     is the one H2 CLOUD already passes. CONTAINMENT paints on a healthy plant,
+     so answering it unbidden would make the first look at the machines a look
+     at an overlay: it is a survey and it ships OFF. FLOODING paints nothing at
+     all until water is standing somewhere, which is an event you cannot answer
+     if you find out about it by remembering to ask: it is an annunciator and
+     it ships ON. */
+  contz:{group:"COMPARTMENT", label:"CONTAINMENT", seam:"under", data:"room", live:true, on:false,
+        draw:contZones,
+        tip:"Every bounded region, tinted, and every wall cell banded by its own margin to its own rating. The bands are the WALL'S limits and not round numbers: HELD, WORKING, AT RATED, and OPENING at the pressure it actually splits at. What a cell can take is a property of the SHAPE - stress is p*R/t, so the middle of a long flat side is weak and a corner braces itself. Paint a square region and a round one of the same area and read this: the square has a weakest cell in the middle of its longest side and the round one has none at all. No figure is printed per cell - one reading per region, at its centroid, and point at a cell for the rest."},
+  flood:{group:"COMPARTMENT", label:"FLOODING",    seam:"under", data:"room", live:true, on:true,
+        draw:floodLayer,
+        tip:"Water standing on the floor of a region. A break inside a containment does not vanish out of the book: it lands, it is a real depth, and it drowns what it reaches. The ship is drawn in section, so it is a horizontal line, and a machine the line crosses is under it. It paints nothing at all until there is water somewhere, which is why it ships on."},
   roomc:{group:"COMPARTMENT", label:"PART TEMP",  seam:"over",  data:"room", live:true, on:false,
         draw:roomPart,
         tip:"What each machine is standing in, in kelvin, coloured against what THAT machine was built for. The room field says the compartment is hot; this says which box is about to be damaged by it. Structure - shielding, containment, the core catcher - prints nothing, because a room temperature is not how any of them fails."},
