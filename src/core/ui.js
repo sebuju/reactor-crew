@@ -42,19 +42,42 @@ let viewOn=false;                       // are widgets being pushed through it?
    rect and vIn() do not, so a pan can still carry the plant across the whole box. */
 const vPad=()=>({x:Math.max(0,(VIEW.w-VIEW.cw*VIEW.s)/2),
                  y:Math.max(0,(VIEW.h-VIEW.ch*VIEW.s)/2)});
-const vPt=p=>{ const d=vPad();
-  return {x:VIEW.cx+VIEW.ox+(p.x-VIEW.x-d.x)/VIEW.s,
-          y:VIEW.cy+VIEW.oy+(p.y-VIEW.y-d.y)/VIEW.s}; };
-const vScr=p=>{ const d=vPad();
-  return {x:VIEW.x+d.x+(p.x-VIEW.cx-VIEW.ox)*VIEW.s,
-          y:VIEW.y+d.y+(p.y-VIEW.cy-VIEW.oy)*VIEW.s}; };
+const vOrigin=()=>{ const d=vPad(), m=vXf();
+  const x=VIEW.x+d.x-(VIEW.cx+VIEW.ox)*VIEW.s, y=VIEW.y+d.y-(VIEW.cy+VIEW.oy)*VIEW.s;
+  // snapped on the GRID's own corner, not on plant zero: every box edge is
+  // GX (12) or GY plus a whole number of cells, and neither of those is a whole
+  // number of cells itself - snapped at zero the cells were exact and every
+  // machine on them stood a quarter of a pixel off
+  const fix=(o,a,e)=>{ const dv=m.k*(o+a*VIEW.s)+e; return o+(Math.round(dv)-dv)/m.k; };
+  return {x:fix(x,GX,m.ex), y:fix(y,GY,m.ey)}; };
+const vPt=p=>{ const o=vOrigin();
+  return {x:(p.x-o.x)/VIEW.s, y:(p.y-o.y)/VIEW.s}; };
+const vScr=p=>{ const o=vOrigin();
+  return {x:o.x+p.x*VIEW.s, y:o.y+p.y*VIEW.s}; };
 const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
 function vBox(x,y,w,h){ VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h; }
+/* ══ A CELL IS A WHOLE NUMBER OF SCREEN PIXELS, AND THE PLANT STANDS ON ONE ══
+   The plant is drawn in grid units and then scaled twice - the stage's own
+   sc*dpr, and VIEW.s on top of it - so a cell landed on 19.03 device pixels at
+   a fractional origin: every machine's box, the grid line under it and the
+   pipe leaving it each rounded a different way, and a box read one pixel wider
+   than the cells it was standing on. vDevK() is what one grid unit is worth in
+   DEVICE pixels off the canvas' own transform (1 headless, where there is no
+   bitmap to be off by a pixel on); vSnapS() takes the scale DOWN to the
+   nearest whole pixel per cell, never up, or the fit overflows its own box by
+   half a pixel a cell; vOrigin() is the one place the plant's top-left is
+   computed, snapped to a device pixel, and the draw and the hit test both read
+   it so they cannot disagree. */
+function vXf(){ const m=ctx.getTransform&&ctx.getTransform();
+  return m&&m.a ? {k:m.a, ex:m.e, ey:m.f} : {k:1, ex:0, ey:0}; }
+const vDevK=()=>vXf().k;
+function vSnapS(s){ const k=vDevK(); return Math.max(1,Math.floor(CELL*s*k))/(CELL*k); }
+function vScale(z){ VIEW.z=z; VIEW.s=vSnapS(VIEW.fit*z); }
 function vFit(x,y,w,h,cx,cy,cw,ch){
   vBox(x,y,w,h);
   VIEW.cx=cx; VIEW.cy=cy; VIEW.cw=cw; VIEW.ch=ch;
   VIEW.fit=Math.min(w/Math.max(cw,1), h/Math.max(ch,1));
-  VIEW.s=VIEW.fit*VIEW.z;
+  vScale(VIEW.z);
 }
 /* ══ PUT PLANT POINT `a` UNDER SCREEN POINT (sx,sy) ══
    This is the inverse of vScr() and it must stay the inverse of vScr(). Three
@@ -71,7 +94,7 @@ function vAnchor(a,sx,sy){
 // zoom about a plant point - the wheel holds the point under the pointer, the
 // key centres on the component you have selected
 function vZoom(z,cx,cy){
-  VIEW.z=z; VIEW.s=VIEW.fit*VIEW.z;
+  vScale(z);
   vAnchor({x:cx,y:cy}, VIEW.x+VIEW.w/2, VIEW.y+VIEW.h/2);
 }
 
@@ -203,6 +226,12 @@ const TOOLS=[
    tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to put a port there, and click the port again to take it away."},
   {id:"pipe", sc:"design", label:"PIPE",
    tip:"Drag to lay a run of pipe cells. It follows the drag, turning where the drag turns. Click a bare cell to fill it and click a laid one to turn it a quarter, which the wheel also does. Hold the right button and sweep to take cells out. A cell drawn dashed and grey is pipe that joins nothing yet."},
+  /* STRUCTURE IS PAINTED, and it is the same two gestures the pipe tool has:
+     drag to lay, right-sweep to lift. What material lands is a knob on the
+     cell's own panel afterwards - the ADD TANK argument, one entry and no
+     submenu of kinds. */
+  {id:"paint", sc:"design", label:"PAINT",
+   tip:"Drag to paint structure into cells: shielding, or a gas-tight containment wall. A closed shape painted in a gas-tight material IS a containment - gas, heat and a release stop at it - and the seal drawn round it says the fill came back bounded. Hold the right button and sweep to take cells out. Paint blocks a machine and passes a pipe: a run crossing a wall is a penetration."},
   /* The FAULTS panel carries this one rather than a tool bar, so it is on the
      table for the pre-emption branch and the aim mark, not for a switch. */
   {id:"hit", sc:"operate", label:"AIMED COMBAT HIT",
@@ -216,6 +245,18 @@ const cellSame=(a,b)=>!!a&&!!b&&a[0]===b[0]&&a[1]===b[1];
 // because the press and the drag that follows it must lift the same thing.
 function pipeLift(pt){ const c=cellAt(pt), k=c[0]+","+c[1];
   if(D.pipes[k]){ delete D.pipes[k]; buildLayout(); } }
+// and the paint's own two, for the same reason: the press and the drag that
+// follows it must lay and lift the same thing
+const matPaintCell = (x,y) => matPaint(x,y, matPen);
+const matLiftCell = (x,y) => matLift(x,y);
+function matPaintAt(pt){ const c=cellAt(pt);
+  if(matPaintCell(c[0],c[1])) buildLayout(); }
+function matLiftAt(pt){ const c=cellAt(pt);
+  if(matLiftCell(c[0],c[1])) buildLayout(); }
+/* WHICH MATERIAL THE BRUSH IS LOADED WITH. Module state and not a D field: it
+   is a property of the TOOL, exactly as TOOL.active is, and it changes no
+   design - so nothing that compares a design signature may see it move. */
+let matPen = null;
 /* WHAT THE AIMED HIT IS ON, resolved once: the press and the mark that
    previews it read the same answer, or the picture and the damage would name
    different machines. A machine's whole footprint is the target, a port and a
@@ -227,6 +268,9 @@ function hitAimAt(pt){
   const c=cellAt(pt);
   const pid=portAtCell(c[0],c[1]);
   if(pid) return "port:"+pid;
+  // BEFORE the pipe: a run crossing a wall is a penetration, so both are in the
+  // cell, and the wall is the bigger thing standing in it
+  if(matCell(c[0],c[1])) return "mat:"+c[0]+","+c[1];
   const k=pipeKey(c[0],c[1]);
   return D.pipes[k] ? "pipe:"+k : null;
 }
@@ -481,6 +525,11 @@ function uiDown(e){
       pipeLift(vPt(p));
       return;
     }
+    if(screen==="design" && TOOL.active==="paint" && vIn(p)){
+      ui.drag={type:"materase", v:1, last:cellAt(vPt(p))};
+      matLiftAt(vPt(p));
+      return;
+    }
     /* A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU (REMOVE PORT,
        resolved by design-bench.js's own ctx registry) - there is no quick-tap
        toggle any more, so a right click never silently flips the mode. */
@@ -509,6 +558,17 @@ function uiDown(e){
     if(aim) act("hit",aim);
     return;
   }
+  if(screen==="design" && TOOL.active==="paint" && vIn(p)){
+    const c=cellAt(vPt(p));
+    /* COMMITTED AS IT GOES, unlike a pipe run. A run has a shape that is only
+       decided once both ends are known - pipeLay() needs the whole path - and
+       a painted cell has none: it is one cell, and the fill the bench draws
+       under the hand is what the player is watching change. */
+    ui.drag={type:"matdraw", v:1, last:c};
+    matPaintAt(vPt(p));
+    sel="mat:"+c[0]+","+c[1];
+    return;
+  }
   if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
     const c=cellAt(vPt(p));
     // `had` is what turns a click on a cell that is ALREADY pipe into a
@@ -525,7 +585,10 @@ function uiDown(e){
      into `sel`: a key always contains a colon and a part id never does, so
      every partOf(sel) reader already answers null for one. */
   if(!w && screen==="design" && vIn(p) && typeof pipeCellRuns==="function"){
-    const c=cellAt(vPt(p)), keys=pipeCellRuns(c[0],c[1]);
+    const c=cellAt(vPt(p));
+    // wall before pipe, the order hitAimAt() already resolves a penetration in
+    if(matCell(c[0],c[1])){ sel="mat:"+c[0]+","+c[1]; return; }
+    const keys=pipeCellRuns(c[0],c[1]);
     if(keys.length){ sel=keys[keys.length-1]; return; }   // a crossing cell owns two: last wins, as hitAt() does
   }
   // nothing under the pointer: a click on bare deck deselects, rather than
@@ -603,6 +666,19 @@ function uiMove(e){
     else if(d.type==="hull"){ const c=cellAt(q);
       if(c){ d.c=c; [d.gw,d.gh]=gridClamp(d.edge==="r"?c[0]+1:D.gw, d.edge==="b"?c[1]+1:D.gh); } }
     else if(d.type==="pipeerase") pipeLift(q);
+    /* WALKED CELL BY CELL, exactly as the pipe drag is. A pointer sample is not
+       a cell: a quick sweep delivers a move every few cells and painting only
+       what was sampled leaves gaps - which for a pipe is a run that does not
+       join and for a WALL is a containment that never closes. One axis at a
+       time, so the wall turns where the drag turns. */
+    else if(d.type==="matdraw" || d.type==="materase"){
+      const c=cellAt(q), fn = d.type==="matdraw" ? matPaintCell : matLiftCell;
+      if(!cellSame(c,d.last) && c[0]>=0 && c[1]>=0 && c[0]<GW && c[1]<GH){
+        let [x,y]=d.last||c;
+        while(x!==c[0]){ x+=Math.sign(c[0]-x); fn(x,y); }
+        while(y!==c[1]){ y+=Math.sign(c[1]-y); fn(x,y); }
+        d.last=c; buildLayout();
+      } }
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
       // integrate rather than re-derive, so moving away from the track
@@ -757,7 +833,6 @@ cv.addEventListener("wheel",e=>{
   const on=vIn(p);
   const px=on? p.x : VIEW.x+VIEW.w/2, py=on? p.y : VIEW.y+VIEW.h/2;
   const a=vPt({x:px,y:py});          // the plant point to hold still, at the OLD scale
-  VIEW.z=VIEW.z*Math.exp(-e.deltaY*0.0015);
-  VIEW.s=VIEW.fit*VIEW.z;
+  vScale(VIEW.z*Math.exp(-e.deltaY*0.0015));
   vAnchor(a,px,py);
 },{passive:false});

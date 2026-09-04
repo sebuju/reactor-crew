@@ -9,10 +9,22 @@ function line(x1,y1,x2,y2,c,w){ ctx.strokeStyle=c; ctx.lineWidth=w||1;
 // no colour, or C.edge/C.edge2 (structural boxes), draws no outline; any other
 // colour is a state (selected/damaged/fitted/plotted) and is the only thing
 // left saying so, so it stays.
+/* ══ A BORDER IS ONE SCREEN PIXEL, ON THE EDGE IT IS ABOUT ══
+   Rounding in LAYOUT units and offsetting half of one was right while the
+   canvas drew a layout unit as a screen pixel, and the plant has not for a
+   long time: at the bench's own scale half a unit is 0.59 of a pixel, so a
+   selection outline landed between two pixels and read a pixel wide on one
+   side of the box and two on the other. Snapped in DEVICE pixels off the
+   canvas' own transform instead, one device pixel thick, drawn inside the
+   rectangle it is given - so a frame is exactly the box, never a pixel over
+   it. devK() answers 1 headless, where there is no bitmap to be off by. */
+function devK(){ const m=ctx.getTransform&&ctx.getTransform(); return m&&m.a ? m : {a:1,d:1,e:0,f:0}; }
 function frame(x,y,w,h,c){
   if(!c || c===C.edge || c===C.edge2) return;
-  ctx.strokeStyle=c; ctx.lineWidth=1;
-  ctx.strokeRect(Math.round(x)+.5,Math.round(y)+.5,Math.round(w)-1,Math.round(h)-1); }
+  const m=devK(), sx=v=>(Math.round(m.a*v+m.e)-m.e)/m.a, sy=v=>(Math.round(m.d*v+m.f)-m.f)/m.d;
+  const x0=sx(x), y0=sy(y), x1=sx(x+w), y1=sy(y+h), hx=.5/m.a, hy=.5/m.d;
+  ctx.strokeStyle=c; ctx.lineWidth=1/m.a;
+  ctx.strokeRect(x0+hx, y0+hy, Math.max(0,x1-x0-2*hx), Math.max(0,y1-y0-2*hy)); }
 function rr(x,y,w,h,r){                 // rounded-rect path (no roundRect in older engines)
   // FLOORED AT 0: a box that has been squeezed to a negative size hands
   // Math.min a negative half-side, and arcTo THROWS on a negative radius -
@@ -109,40 +121,41 @@ function segMark(x,y,w,h,frac,marks,col,signed){
    into a 7x7 tile pinned at the origin and every call is a fillRect.
    Baked at device scale, so the diagonal is as crisp as the stroke it
    replaces; one tile per colour, and per scale. */
-const HATCH_P=7;
+const HATCH_P=7, HATCH_W=1.4;
 const ctxScale=()=>{ const m=ctx.getTransform&&ctx.getTransform();
   return (m&&m.a) ? Math.max(0.05,Math.hypot(m.a,m.b)) : 0; };
 const hatchOK=()=>typeof DOMMatrix!=="undefined" && ctxScale()>0;
-function hatchPat(col){
+function hatchPat(col,P,lw){
   const sc=ctxScale();
-  const key=col+"@"+sc.toFixed(3);
+  const key=col+"@"+sc.toFixed(3)+"@"+P+"@"+lw;
   // per CONTEXT: hostPaint() swaps ctx for a rail's own bitmap, and a pattern
   // belongs to the context that made it
   const pats = ctx.__hatchPats || (ctx.__hatchPats=new Map());
   let pat=pats.get(key);
-  if(!pat){ const n=Math.max(1,Math.round(HATCH_P*sc));
+  if(!pat){ const n=Math.max(1,Math.round(P*sc));
     const g=document.createElement("canvas"); g.width=g.height=n;
     const c=g.getContext("2d");
-    c.setTransform(n/HATCH_P,0,0,n/HATCH_P,0,0);
-    c.strokeStyle=col; c.lineWidth=1.4; c.lineCap="butt";
+    c.setTransform(n/P,0,0,n/P,0,0);
+    c.strokeStyle=col; c.lineWidth=lw; c.lineCap="butt";
     // the tile's own line plus its two neighbours, so the corners wrap
-    for(const k of [0,HATCH_P,2*HATCH_P]){
-      c.beginPath(); c.moveTo(k-HATCH_P,HATCH_P); c.lineTo(k+HATCH_P,-HATCH_P); c.stroke(); }
+    for(const k of [0,P,2*P]){
+      c.beginPath(); c.moveTo(k-P,P); c.lineTo(k+P,-P); c.stroke(); }
     pat=ctx.createPattern(g,"repeat");
     if(pat.setTransform && typeof DOMMatrix!=="undefined")
-      pat.setTransform(new DOMMatrix().scaleSelf(HATCH_P/n));
+      pat.setTransform(new DOMMatrix().scaleSelf(P/n));
     pats.set(key,pat); }
   return pat;
 }
-function hatch(x,y,w,h,col,a){
+function hatch(x,y,w,h,col,a,pitch,lw){
+  const P=pitch||HATCH_P, LW=lw||HATCH_W;
   ctx.save();
   ctx.globalAlpha=a||.55;
-  if(hatchOK()){ ctx.fillStyle=hatchPat(col); ctx.fillRect(x,y,w,h); }
+  if(hatchOK()){ ctx.fillStyle=hatchPat(col,P,LW); ctx.fillRect(x,y,w,h); }
   else {
     // no real 2-D context to bake into (the headless DOM): stroke it
     ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
-    ctx.strokeStyle=col; ctx.lineWidth=1.4;
-    const P=HATCH_P, ph=(((x+y+h)%P)+P)%P;
+    ctx.strokeStyle=col; ctx.lineWidth=LW;
+    const ph=(((x+y+h)%P)+P)%P;
     for(let i=P*Math.floor((ph-h)/P)-ph;i<w;i+=P){
       ctx.beginPath(); ctx.moveTo(x+i,y+h); ctx.lineTo(x+i+h,y); ctx.stroke(); }
   }
