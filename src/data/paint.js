@@ -129,14 +129,38 @@ function matRegions(){
   /* THE WALL BELONGS TO WHAT IT ENCLOSES, so a tight cell is walked once and
      handed to every region it touches - a shared wall between two enclosures
      is a wall of both, which is what it is. */
+  const wallOf={};
   for(let i=0;i<N;i++){
     if(!tight[i]) continue;
     const X=i%GW, Y=(i/GW)|0, seen={};
-    const put=j=>{ const r=of[j]; if(r>=0 && !seen[r]){ seen[r]=1; regions[r].wall.push(i); } };
+    const put=j=>{ const r=of[j]; if(r>=0 && !seen[r]){ seen[r]=1; regions[r].wall.push(i);
+      if(regions[r].bounded) (wallOf[i] || (wallOf[i]=[])).push(r); } };
     if(X>0) put(i-1); if(X<GW-1) put(i+1);
     if(Y>0) put(i-GW); if(Y<GH-1) put(i+GW);
   }
-  matRegCache={of, tight, regions}; matRegSig=sig;
+  /* ══ AND THE WALL ITSELF IS ONE THING ══
+     A region's `wall` is only what TOUCHES the volume, so the corners of a
+     painted box are in no region's wall at all and a thickness applied by the
+     ring left them at whatever they were painted at. A SEAL is the connected
+     component of gas-tight cells - corners included, and two enclosures that
+     share a wall are one seal, which is what one welded boundary is. */
+  const seal=new Int32Array(N).fill(-1), seals=[];
+  for(let i0=0;i0<N;i0++){
+    if(!tight[i0] || seal[i0]>=0) continue;
+    const idx=seals.length, cells=[];
+    let head=0, tail=0;
+    q[tail++]=i0; seal[i0]=idx;
+    while(head<tail){
+      const i=q[head++]; cells.push(i);
+      const X=i%GW, Y=(i/GW)|0;
+      if(X>0)    { const j=i-1;  if(tight[j]&&seal[j]<0){ seal[j]=idx; q[tail++]=j; } }
+      if(X<GW-1) { const j=i+1;  if(tight[j]&&seal[j]<0){ seal[j]=idx; q[tail++]=j; } }
+      if(Y>0)    { const j=i-GW; if(tight[j]&&seal[j]<0){ seal[j]=idx; q[tail++]=j; } }
+      if(Y<GH-1) { const j=i+GW; if(tight[j]&&seal[j]<0){ seal[j]=idx; q[tail++]=j; } }
+    }
+    seals.push(cells);
+  }
+  matRegCache={of, tight, regions, wallOf, seal, seals}; matRegSig=sig;
   return matRegCache;
 }
 // the BOUNDED region a cell is in, or null - a cell in the ship at large is in
@@ -147,6 +171,26 @@ function matRegionAt(x,y){
   if(r<0) return null;
   const g=R.regions[r];
   return g.bounded ? g : null;
+}
+/* ══ THE SEAL IS THE THING, NOT THE CELL ══
+   A gas-tight cell is in NO region of its own - it is the wall - so every
+   reader that asked matRegionAt() about the cell the hand was on got null and
+   fell back to per-cell figures: one cell of a boundary took a thickness the
+   other twenty did not, and the panel said the wall enclosed nothing. The seal
+   a wall cell belongs to is the region it walls, and a shared wall speaks for
+   the first of the two it separates. */
+function matWallRegionAt(x,y){
+  if(x==null||x<0||x>=GW||y==null||y<0||y>=GH) return null;
+  const rs=matRegions().wallOf[y*GW+x];
+  return rs && rs.length ? matRegions().regions[rs[0]] : null;
+}
+// the region a painted cell speaks for: what it walls, else what it stands in
+const matSealAt = (x,y) => matWall(x,y) ? matWallRegionAt(x,y) : matRegionAt(x,y);
+// every cell of the one welded boundary this cell is part of, or null
+function matSealCells(x,y){
+  if(x==null||x<0||x>=GW||y==null||y<0||y>=GH || !matWall(x,y)) return null;
+  const R=matRegions(), i=R.seal[y*GW+x];
+  return i>=0 ? R.seals[i] : null;
 }
 const matRegionsBounded = () => matRegions().regions.filter(g=>g.bounded);
 // every bounded region's wall cell, once - the set the damage sweeps walk
@@ -208,16 +252,16 @@ const regionPAt = (s,p) => p ? regionP(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : re
    from: bounded and intact behind a gas-tight wall, or loose in the ship. The
    weakest material on that region's own wall decides, because a release leaves
    through the poorest part of the boundary. */
-function contRelAt(s,x,y){
-  const g = matRegionAt(x,y);
-  /* AND A BOUNDARY WITH A HOLE IN IT HOLDS BACK NOTHING. What escapes leaves
-     through the hole, at the hole, into the ship - so the wall is not standing
-     between the release and the crew any more, whatever it is made of. */
+/* AND A BOUNDARY WITH A HOLE IN IT HOLDS BACK NOTHING. What escapes leaves
+   through the hole, at the hole, into the ship - so the wall is not standing
+   between the release and the crew any more, whatever it is made of. */
+function regionRel(s,g){
   if(!g || !g.wall.length || !matSealed(s,g)) return 1;
   let rel = 0;
   for(const i of g.wall){ const m=matOf(i%GW,(i/GW)|0); if(m) rel=Math.max(rel, m.rel); }
   return rel || 1;
 }
+const contRelAt = (s,x,y) => regionRel(s, matRegionAt(x,y));
 const contRelPart = (s,p) => p ? contRelAt(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : 1;
 
 /* ══ WHAT A WALL CELL CAN TAKE IS A PROPERTY OF THE SHAPE ══

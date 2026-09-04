@@ -12,8 +12,15 @@ const PROMPT_F=0.935;
    columns that said how MODERATED the core is - aM, aV and Lam - have left,
    because moderation is a property of the drawing and derived() measures it
    off the lattice now (modRatio(), lattice.js). What is left is the coolant
-   itself: what pressure it wants, where it boils, how much heat a litre of
-   the core makes, how well it slows a neutron and how much it eats.
+   itself: what pressure it wants, where it boils, how well it slows a neutron
+   and how much it eats.
+
+   qpp is the surface heat flux this fluid's own law allows at rated flow,
+   MW/m2, and it is one of the two ceilings the core is RATED on (latQLim(),
+   lattice.js). It replaced a kW/L column: power per litre was bought, so the
+   peaking factor measured on the mesh decided nothing. Power density is a
+   readout of the rating now. `dens` stays because it is the fluid's own
+   density stand-in (rhoDesign(), pipenet.js) and always was.
 
    modK is moderating power per unit volume against light water, absK the
    same for absorption. They are the only two new columns, and they are what
@@ -61,27 +68,27 @@ const PROMPT_F=0.935;
    diameter. runBore() is untouched - a coolant may not move a conductance. */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
-  P0:15.5,pipeK:1.00,col:"#5aa9d6",tsat:618,hfg:967,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,solidK:1.4,
+  P0:15.5,pipeK:1.00,col:"#5aa9d6",tsat:618,hfg:967,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,solidK:1.4,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
-  P0:7.0,pipeK:1.00,col:"#5aa9d6",tsat:559,hfg:1505,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,solidK:1.5,
+  P0:7.0,pipeK:1.00,col:"#5aa9d6",tsat:559,hfg:1505,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.33,solidK:1.5,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
-  P0:6.9,pipeK:1.00,col:"#5aa9d6",tsat:558,hfg:1512,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.31,solidK:1.5,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",tsat:558,hfg:1512,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,dTf:320,aF:-1.6,modK:1.00,absK:1.00,dens:55,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.31,solidK:1.5,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,dTf:500,aF:-1.2,modK:.05,absK:.15,dens:280,grace:6.0,dnbr:3.20,dnbLaw:"boil",xe:0.85,flowMin:.20,eff:.40,solidK:1.4,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,dTf:500,aF:-1.2,modK:.05,absK:.15,dens:280,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",xe:0.85,flowMin:.20,eff:.40,solidK:1.4,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
-  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,dTf:200,aF:-3.5,modK:.35,absK:.18,dens:80,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.44,solidK:0.5,
+  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,dTf:200,aF:-3.5,modK:.35,absK:.18,dens:80,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.44,solidK:0.5,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,
-  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,dTf:600,aF:-4.5,modK:0,absK:0,dens:6,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.42,solidK:0.009,
+  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,dTf:600,aF:-4.5,modK:0,absK:0,dens:6,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.42,solidK:0.009,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
 ];
@@ -125,15 +132,15 @@ const MODER=[
    metal fuel grows nearly twice as much as an oxide, which is why the metal
    fuelled fast reactors survived their own unprotected transients. */
 const FUEL=[
- {name:"UO2  3.2% LEU",beta:680,excess:4200,densK:.85,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
+ {name:"UO2  3.2% LEU",beta:680,excess:6200,densK:.85,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
- {name:"UO2  4.9% LEU",beta:650,excess:5200,densK:1.0,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
+ {name:"UO2  4.9% LEU",beta:650,excess:7200,densK:1.0,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",beta:640,excess:8200,densK:1.4,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
+ {name:"UO2 19.7% HEU",beta:640,excess:10200,densK:1.4,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
- {name:"MOX PLUTONIUM",beta:300,excess:6500,densK:1.6,condK:1.0,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
+ {name:"MOX PLUTONIUM",beta:300,excess:8500,densK:1.6,condK:1.0,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
- {name:"U-ZR METALLIC",beta:640,excess:6000,densK:1.85,condK:.55,alpha:1.7e-5,tdmg:1150,tmelt:1400,mass:-25,
+ {name:"U-ZR METALLIC",beta:640,excess:8000,densK:1.85,condK:.55,alpha:1.7e-5,tdmg:1150,tmelt:1400,mass:-25,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
 ];
 /* dens is what latMass() weighs the drawn band with. The old flat `mass`
@@ -465,21 +472,72 @@ const condShort_ = () => loadCeil() - condCeil() > 0.26;
    AV_MOD/AV_ABS/AV_FAST are solved together against the PWR, LWGR and SFR
    rows the old table carried; they are the plan's one fitted shape.
 
-   critK is the second: with no moderator the fission cross-section collapses,
-   so a fast core needs far more excess reactivity to reach critical. It is
-   normalised on CRIT_REF - the moderation a stock water lattice has - so a
-   well-moderated core reads exactly 1 and buys the fuel it paid for. */
+   modEta() is the second, and it HAS A PEAK. modTherm() only ever rises, so
+   more water was always more reactivity and no lattice could be drawn wrong
+   in that direction. modEta is resonance escape times thermal utilisation,
+   exp(-A/mr)/(1+B*mr): under-moderated on the left of the peak, over-moderated
+   on the right, and the slope changes sign at it. MOD_A and MOD_B are solved
+   once, off two stated figures - the peak sits at MR_PEAK and the stock water
+   lattice reads ETA_STOCK of the peak - and they are the fit.
+
+   modK() is what excess reactivity is scaled by, and it is the thermal chain
+   PLUS a fast route: with no moderator the thermal chain collapses outright
+   (exp(-A/mr) -> 0) and a fast core lives on fast fission alone, which is the
+   FAST_RHO term over the same (1-mth)^3 weight aV carries. Multiplying the
+   hump onto the old critK instead would have counted the same collapse twice
+   and left every fast core at zero excess. A stock water lattice reads ~1 and
+   buys the fuel it paid for; the best-moderated one reads about 5% more. */
 const MOD_HALF=1.0, LAM_FAST=4.0e-7, LAM_TH=8.0e-5;
-const AV_MOD=3715, AV_ABS=783, AV_FAST=660, AM_K=67;
+const AV_MOD=2286, AV_ABS=783, AV_FAST=660, AM_K=432;
 /* EXP_RHO is reactivity per unit core strain at a bare fast spectrum, pcm.
    Fitted ONCE: BN-600's isothermal coefficient aM+aS lands near -3 pcm/K, the
    published band for a large oxide sodium core (-1 to -3, radial growth the
    largest term). Weighted by the same (1-mth)^3 aV carries, because leakage is
    most of a fast core's balance and next to nothing of a thermal one's. */
 const EXP_RHO=42000;
-const CRIT_H=0.04, CRIT_REF=2/3;
+/* ── IODINE AND XENON, ONE TABLE ──
+   The four constants the field integrates (commission(), step.js) and the two
+   readouts below are the same chain, so they live here together rather than as
+   literals inside P. lam are per second; sigK is the burnout rate at rated
+   flux in units of the xenon decay constant. XE_EQ0 is what equilibrium xenon
+   is worth in a water core, pcm - the one fitted figure of the set. */
+const XE={lamI:Math.LN2/(6.57*3600), lamX:Math.LN2/(9.14*3600),
+          gI:.0639, gX:.00237, sigK:3.0};
+const XE_EQ0=2700;
+/* Xenon after a trip, as a MULTIPLE of the equilibrium it started from: the
+   iodine in the core decays into xenon with nothing burning it, so the poison
+   climbs for hours before it decays away. Walked once, on the curve's own two
+   exponentials - there is a closed form, and the walk is the same arithmetic
+   the tick does, which is why it is written this way. */
+function xeAfter(hours){
+  const li=XE.lamI, lx=XE.lamX, sig=XE.sigK*lx, t=hours*3600;
+  const I0=(XE.gI+XE.gX)/li, X0=(XE.gI+XE.gX)/(lx+sig);
+  const X=X0*Math.exp(-lx*t)+li*I0*(Math.exp(-li*t)-Math.exp(-lx*t))/(lx-li);
+  return X/X0;
+}
+const XE_PEAK=(function(){ let x=1,h=0;
+  for(let i=0;i<=48*4;i++){ const v=xeAfter(i/4); if(v>x){ x=v; h=i/4; } }
+  return {x,h}; })();
+/* The hours after a trip in which `avail` pcm still covers the xenon standing
+   at that hour. Returns null when the pit never closes over the core at all
+   (it can be restarted at any time) and 0 when it is shut from the start. */
+function xeWindow(avail,xeW){
+  if(avail>=xeW*XE_PEAK.x) return null;
+  for(let h=0;h<=48;h+=0.25) if(avail<xeW*xeAfter(h)) return h;
+  return null;
+}
+const MR_PEAK=3.2, MR_STOCK=1.6, ETA_STOCK=0.95, FAST_RHO=0.773;
+const MOD_A=0.337502, MOD_B=0.036845;
 const modTherm = mr => mr/(mr+MOD_HALF);
-const critK = mth => Math.min(1,(mth/(mth+CRIT_H))*((CRIT_REF+CRIT_H)/CRIT_REF));
+const modEta = mr => mr>1e-9 ? Math.exp(-MOD_A/mr)/(1+MOD_B*mr) : 0;
+const ETA_S=modEta(MR_STOCK);
+const modEtaN = mr => modEta(mr)/ETA_S;
+/* the hump's own slope, as a fraction of stock eta per fractional change in
+   mr. NOT divided by eta(mr): unnormalised it vanishes with the thermal chain,
+   so a fast core reads no moderator coefficient rather than an enormous one. */
+const modEtaSlope = mr => { const h=1e-6*Math.max(mr,1e-3);
+  return mr*(modEta(mr+h)-modEta(mr-h))/(2*h)/ETA_S; };
+const modK = (mr,mth) => modEtaN(mr)+FAST_RHO*Math.pow(1-mth,3);
 
 function derived(){
   /* fuelBlend() (lattice.js) is the loading pattern collapsed into one row.
@@ -496,8 +554,11 @@ function derived(){
      setpoint still costs saturation temperature and DNBR margin, off a real
      pressure rather than off a number with no units. */
   const P0=holdSetP(nodeGraph().coreCirc), pdesK=P0/a.P0;
-  const dens=a.dens*f.densK*(1.15-0.15*D.pitch);
-  const coreMass=D.power/dens*22*(0.8+0.2*D.hd);
+  /* A READOUT, kW/L: what the rating comes to over the core it was measured
+     on. It used to be the coolant's own bought column and D.power followed it;
+     the arrow runs the other way now (latRating(), lattice.js). */
+  const dens=(LM&&LM.vol>1e-9)? D.power/LM.vol : 0;
+  const coreMass=(LM?LM.vol:0)*22*(0.8+0.2*D.hd);
   const vesselMass=vesselShellMass(P0,a);
   /* latMass() replaces two table entries that used to stand in for drawn
      things: the reflector's flat catalogue figure, and a rod-worth surcharge
@@ -565,8 +626,8 @@ function derived(){
   const mr=modRatio(), mth=modTherm(mr), Lam=LAM_FAST*Math.pow(LAM_TH/LAM_FAST,mth);
   const sh=modShares(), fast=Math.pow(1-mth,3);
   // coolant and blocks each carry their own coefficient over their share of the moderation
-  const aM=mth*(-AM_K*sh.cool+MODER[D.mod].aT*sh.block);
-  const aV=AV_MOD*(modTherm(modRatio(true))-mth)+AV_ABS*modAbs()
+  const aM=mth*(-AM_K*modEtaSlope(mr)*sh.cool+MODER[D.mod].aT*sh.block);
+  const aV=AV_MOD*(modEtaN(modRatio(true))-modEtaN(mr))+AV_ABS*modAbs()
           +AV_FAST*fast+rf.dV;
   /* Expansion, off materials and geometry. aX: the fuel column lengthens, one
      dimension, on the pellet's own temperature. aS: the grid plate grows in
@@ -578,36 +639,45 @@ function derived(){
   const driveline=-STEEL_A*D.rodw*(1-Math.cos(2*Math.PI*RODX0));
   const aX=-EXP_RHO*fast*f.alpha;
   const aS=-EXP_RHO*fast*STEEL_A*2+driveline;
-  const leak=500*Math.pow(D.hd-1,2)*(D.hd>1?1:.6);
-  const excess=f.excess*critK(mth)+rf.dRho-D.poison-leak;
-  /* DNBR no longer rises 5.25% per generator for free. Flow is SOLVED (the
-     pipe network, pipenet.js), so thermal margin already follows what is
-     actually built and piped - a count sitting on top of that would be a
-     second, contradictory opinion about the same flow.
-     The SCALING is gone (D.loops no longer exists to scale against); the
-     0.95 is not a new fit, it is the old formula's own value at the stock
-     one-generator baseline (1+.05*(1-2) = 0.95), kept flat so the pinned
-     stock figures (derived().dnbr 1.7575, s.dnbr 1.83 at rest) do not move.
-     A design with more generators no longer buys anything for free - every
-     count now reads the identical 0.95, where the old table gave a 4-loop
-     plant 1.10. DNBR is read off s.dnbr (step.js) at run time, off the real
-     solved flow, for anything beyond this fitted baseline. */
-  const dnbr=a.dnbr*(.55+.45*D.pitch)*Math.pow(pdesK,.35)*0.95;
-  /* peaking is no longer a curve fitted to H/D: it is the peak of the flux
-     shape this core actually settles into, solved on the nodal mesh */
+  /* MEASURED OFF THE SHAPE, not off a curve in H/D: what the converged flux
+     loses through the faces it has (coreLeak(), core2d.js). rf.dRho went with
+     the curve - the albedo the same solve reads already puts the reflector in
+     the shape, and the two were counted twice. */
   const core=corePredict({dens,rf});
+  const leak=core.leak;
+  const excess=f.excess*modK(mr,mth)-ZR_ABS*modClad()-D.poison-leak;
+  /* peaking is no longer a curve fitted to H/D: it is the peak of the flux
+     shape this core actually settles into, solved on the nodal mesh - and it
+     is what the core is RATED on, so this is not a readout either */
   const Fq=core.FqCold;
+  /* WHICH CEILING RATED THIS CORE, and how far the other one was clear. The
+     margin at rated is PEAK_M by construction - that is what rating on the
+     limit means - so the old fitted dnbr formula has nothing left to say and
+     P.dnbr0 is the coolant's own W-3 level (dnbrOf(), step.js) directly. */
+  const bind=latQLim(), dnbr0=a.dnbr;
   /* Same argument as DNBR above: graceK no longer buys 12% per generator for
      free. Grace time is how long the core survives with no primary flow at
      all, which is a property of the coolant family and the SG type, not of
      how many of them are on the grid - deleted, not replaced with a count.
      The SG term is sgInertiaK(), shared with commission(). */
   const graceK=a.grace*sgInertiaK();
-  const xeW=2700*a.xe;
+  const xeW=XE_EQ0*a.xe;
   /* The bank S-curve, written once: how much worth is bought by inserting to x.
      boronOp and the shutdown margin below both read it, so they cannot drift. */
   const rodS=x=>D.rodw*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
   const boronOp=-(excess-rodS(RODX0)-xeW);
+  /* ── WHERE THE PIT BOTTOMS, AND WHETHER YOU CAN CLIMB OUT OF IT ──
+     The row used to be the EQUILIBRIUM worth, which is the poison the plant is
+     already commissioned with and the one figure a restart never fights. What
+     locks a restart out is the PEAK, hours after the trip, when the iodine
+     that was in the core when it stopped has finished decaying into xenon and
+     no flux is burning any of it. Both come off the same constants the field
+     integrates (XE), so the readout and the tick cannot disagree.
+     The WINDOW is the same curve asked the other way: the hours in which the
+     core can still be taken critical on what it has - excess, less the bank it
+     has to pull out of, against the xenon standing at that hour. */
+  const xePit=xeW*XE_PEAK.x;
+  const xeWin=xeWindow(excess-rodS(RODX0),xeW);
   /* ── SHUTDOWN MARGIN ──
      Measured against the state a tripped core actually drifts into, not fitted
      to one. Three things move after a scram and then keep moving:
@@ -634,9 +704,9 @@ function derived(){
   const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
   // trip backpressure over where this sink rests at full power: under 1 it trips at rest, under 1/DUMP_COND_K the dump is blocked
   const condMargin=TURB_TRIP_P/Math.max(COND_P0, psatSec(condRest(plantDuty()).condT));
-  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr,Fq,xeW,core,contRel,
+  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,contRel,
     nCont:conts.length,
-    boronOp,sdm,sdmB,leak,eff,loadMax,condCap,condShort,condMargin,
+    boronOp,sdm,sdmB,leak,xePit,xeWin,eff,loadMax,condCap,condShort,condMargin,
     grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
     beta:f.beta,scram:SCRAM[D.scram].rate,P0,
     /* Third element is the component the warning is ABOUT, for the bench's
@@ -651,13 +721,12 @@ function derived(){
          system has to hold DOWN to sit critical at the commissioning bank
          position; positive means it would have to hold the core UP, and
          nothing can. A fast core reaches this on low-enriched fuel because
-         critK collapses with the moderation - which is the consequence the
+         modK() collapses with the moderation - which is the consequence the
          spectrum was always supposed to carry and never did. */
       else if(boronOp>0) w.push(["RED","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank at its commissioning position. There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
       if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop.","core"]);
       if(aM>0) w.push(["SOFT","Positive moderator coefficient. Heating the moderator raises power instead of lowering it - an over-moderated lattice, or a graphite stack in one.","core"]);
       if(pwrDef>-100) w.push(["SOFT","Power coefficient only "+pwrDef.toFixed(0)+" pcm from zero to full power. Almost nothing in the fuel pushes back when power rises; the rods and the coolant are all that hold it.","core"]);
-      if(dnbr<1.4) w.push(["SOFT","Thermal margin only "+dnbr.toFixed(2)+" DNBR. Very little headroom above rated power.","core"]);
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
       /* WHAT THE FILL FOUND, in words. It could never say this before: the old
          line asked a menu index whether a box had been bought, so a wall with a

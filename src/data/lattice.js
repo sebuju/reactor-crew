@@ -39,6 +39,10 @@ const latFuel=q=>LAT.slot[q]===L_FUEL||LAT.slot[q]===L_POIS;
    reactor is drawn; these two only fix what "pitch 1.0x" means, so that a
    default lattice lands on the plant the bench used to sell. */
 const LAT_MW0=1200, LAT_HD0=1.0;
+/* kW/L, and it sizes the REFERENCE PITCH and nothing else. Power density is a
+   readout now (D.power over the volume), so there is no column to ask; this is
+   what "pitch 1.0x" was defined against and it stays a stated figure. */
+const LAT_DENS0=100;
 /* Stock fuel radius, in slots. Sized so the round core reaches BOTH axes of
    the quarter: shorter than this and the outer row and column are permanently
    empty, which reads as a cropped drawing rather than as a round core in a
@@ -111,7 +115,7 @@ const latEqR=()=>{
 
 /* ── WHAT IS IN THE LATTICE, BY VOLUME ──
    The one measurement Stage 2's whole moderation model reads. A fuel BUNDLE
-   is a fixed object - LAT_FUELFRAC of the REFERENCE cell, not of the cell it
+   is a fixed object - latFuelFrac() of the REFERENCE cell, not of the cell it
    sits in - so opening the pitch adds coolant around the same fuel and
    tightening it takes coolant away. That is how pitch moves the spectrum with
    no correction term written anywhere; the old aM*(2-D.pitch) was this,
@@ -121,14 +125,19 @@ const latEqR=()=>{
    a 12.6 mm square rod pitch. Three real numbers, and every fraction below is
    arithmetic off them rather than a typed volume fraction:
 
-     LAT_FUELFRAC  pellet area over rod-pitch area   - what the FUEL is
-     LAT_RODFRAC   clad area over the same           - what displaces COOLANT
+     latFuelFrac()  pellet area over rod-pitch area   - what the FUEL is
+     latRodFrac()   clad area over the same           - what displaces COOLANT
 
    Those two used to be one number, 0.33, which is why the water a rod pushes
    out of the way was the pellet's own volume. Both are shares of the REFERENCE
    cell, because a bundle is still a fixed object: the box holds (LAT_P0/ROD_P)^2
    rods whatever pitch the assemblies are laid on. */
-const ROD_D=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
+/* THE PIN DIAMETER IS A KNOB. ROD_D0 is the Westinghouse rod and the
+   suggestion; D.rodD is what the bench drew. Everything below is arithmetic
+   off it, so a thinner pin buys surface, clad and water and gives up fuel. */
+const ROD_D0=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
+const rodDSuggest=()=>ROD_D0;
+const rodD=()=>D.rodD??ROD_D0;
 /* ── WHAT THE CLAD IS MADE OF ──
    Four real properties of zircaloy, and they sit here rather than on a FUEL or
    COOLANT row because there is exactly ONE clad in this game: 0.57 mm of
@@ -141,27 +150,34 @@ const ROD_D=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
      ZR_QOX  reaction enthalpy, J per kg of zirconium burnt - the exothermic
              term that makes clad oxidation a runaway rather than a corrosion
      ZR_H2   stoichiometric hydrogen, kg per kg of zirconium:
-             Zr + 2 H2O -> ZrO2 + 2 H2, so 2*2.016/91.22 */
-const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442;
-const ROD_DP=ROD_D-2*ROD_CLAD;
-const LAT_FUELFRAC=Math.PI/4*(ROD_DP/ROD_P)*(ROD_DP/ROD_P);
-const LAT_RODFRAC =Math.PI/4*(ROD_D /ROD_P)*(ROD_D /ROD_P);
+             Zr + 2 H2O -> ZrO2 + 2 H2, so 2*2.016/91.22
+     ZR_ABS  what a core's worth of clad EATS, pcm per unit of clad volume over
+             fuel volume. Parasitic absorption was modelled nowhere, so a thin
+             pin bought surface, water and forgiveness for free. */
+const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442, ZR_ABS=1000;
+const rodDP=()=>rodD()-2*ROD_CLAD;
+const latFuelFrac=()=>Math.PI/4*(rodDP()/ROD_P)*(rodDP()/ROD_P);
+const latRodFrac =()=>Math.PI/4*(rodD() /ROD_P)*(rodD() /ROD_P);
+/* Clad per unit fuel: the annulus over the pellet. A thin pin is mostly clad,
+   and zirconium is a parasitic absorber - without this term a thin pin would
+   buy surface, water and forgiveness and pay nothing at all for it. */
+const modClad=()=>{ const f=latFuelFrac(); return f>1e-12 ? (latRodFrac()-f)/f : 0; };
 /* One bundle's hydraulics, at the pitch actually drawn. aHeat is per METRE of
    height, so a caller multiplies by the core height it measured. Opening the
    lattice adds flow area without adding rod surface, which is the pitch
    dependence the typed XSUB_AR it replaces could not express. */
 function latBundle(){
   const nRod=(LAT_P0/ROD_P)*(LAT_P0/ROD_P);
-  const aFlow=Math.max(0, LAT.pitch*LAT.pitch - LAT_RODFRAC*LAT_P0*LAT_P0);
-  const aHeat=nRod*Math.PI*ROD_D;
+  const aFlow=Math.max(0, LAT.pitch*LAT.pitch - latRodFrac()*LAT_P0*LAT_P0);
+  const aHeat=nRod*Math.PI*rodD();
   return {nRod, aFlow, aHeat, dh:aHeat>0 ? 4*aFlow/aHeat : 0};
 }
 function latVols(){
   let nF=0,nM=0;
   for(let q=0;q<LQ*LQ;q++){ const s=LAT.slot[q]; if(s===L_MOD) nM++; else if(s) nF++; }
   const cell=LAT.pitch*LAT.pitch, p0=LAT_P0*LAT_P0;
-  return {nF,nM,fuel:nF*LAT_FUELFRAC*p0,
-          cool:nF*Math.max(0,cell-LAT_RODFRAC*p0),mod:nM*cell};
+  return {nF,nM,fuel:nF*latFuelFrac()*p0,
+          cool:nF*Math.max(0,cell-latRodFrac()*p0),mod:nM*cell};
 }
 /* Moderating volume over fuel volume, the two contributors scaled by their own
    materials. `voided` stands the coolant down, which is the whole of what a
@@ -189,8 +205,7 @@ const LAT_P0=(function(){
   let n=0;
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
     if(Math.hypot(u+.5,v+.5)<=LAT_R0) n++;
-  const dens=COOLANT[0].dens*FUEL[1].densK*(1.15-0.15*1.0);
-  return Math.cbrt((LAT_MW0/dens)/(8*n*Math.sqrt(4*n/Math.PI)*LAT_HD0));
+  return Math.cbrt((LAT_MW0/LAT_DENS0)/(8*n*Math.sqrt(4*n/Math.PI)*LAT_HD0));
 })();
 
 /* ── laying the lattice in bulk ──
@@ -337,8 +352,8 @@ const ARCHPRE=[
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
  ["MSR",{fuel:1,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
-  "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the void coefficient is mildly negative. No pressure anywhere and almost no xenon pit."],
- ["HTGR",{fuel:1,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
+  "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the blocks own most of the moderation. Voiding the salt is worth almost nothing either way - it reads mildly POSITIVE, because taking the salt out takes an absorber out of somebody else's moderator. No pressure anywhere and almost no xenon pit."],
+ ["HTGR",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
   "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
 ];
 function archPreset(i){
@@ -495,6 +510,36 @@ function latRevolve(){
   return LM;
 }
 
+/* ══ WHAT THE HOTTEST PIN ALLOWS ══
+   The rating was fuel volume times a bought kW/L column, so the peaking factor
+   measured on the mesh decided nothing and a lopsided core was rated exactly
+   like a flat one. It is a LIMIT now, and there are two of them, both stated
+   in kW per metre of pin:
+
+     qMelt  4*pi times the conductivity integral of the fuel to melt. 6.3 kW/m
+            is UO2's published figure; a FUEL row's own condK scales it.
+     qDnb   the surface flux the coolant's law allows, over the pin's own
+            circumference - COOLANT[].qpp, MW/m2.
+
+   The tighter one is divided by PEAK_M, the one design margin, and the core is
+   then rated at what that allows on EVERY pin: the limit times the pins times
+   the column, over how lopsided the flux is. Flatten the core and the same fuel
+   makes more power. PEAK_M is solved once, on the stock lattice, so the stock
+   PWR lands on the 1200 MWt it always did - the XABS0 idiom, and a fit. */
+const KINT_UO2=6.3, PEAK_M=1.283;
+function latQLim(){
+  const f=fuelBlend(), a=COOLANT[D.cool];
+  const melt=4*Math.PI*KINT_UO2*f.condK, dnb=a.qpp*Math.PI*rodD()*1000;
+  return {melt,dnb,q:Math.min(melt,dnb)/PEAK_M,
+          bind:melt<dnb?"MELT":"DNB", clear:Math.max(melt,dnb)/Math.max(Math.min(melt,dnb),1e-9)};
+}
+function latRating(){
+  const M=LM; if(!M) return 0;
+  const Fq=Math.max(corePredict({rf:REFL[D.refl]}).FqCold,1e-6);
+  const nRods=M.nAsm*latBundle().nRod;
+  return latQLim().q*nRods*LAT.len/Fq/1000;
+}
+
 /* ── the lattice, turned into the numbers the bench already reads ──
    THE one place the drawing becomes D. derived() is untouched and every figure
    it produces is the real one. */
@@ -502,8 +547,6 @@ function latMeasure(){
   const M=LM;
   D.pitch=LAT.pitch/LAT_P0;
   const fb=fuelBlend();
-  const dens=COOLANT[D.cool].dens*fb.densK*(1.15-0.15*D.pitch);
-  D.power=M.vol*dens;              // MW over kW/L is m3 exactly
   D.hd=M.dia>1e-6? M.hgt/M.dia : 1;
   D.nbank=M.NB;
   let pm=0; for(let i=0;i<XNR;i++) pm+=M.poi[i]*ringW[i];
@@ -524,6 +567,9 @@ function latMeasure(){
     er[i]= w>1e-9? e/w-fb.excess : 0;
   }
   M.enrRho=er;
+  /* LAST, because the rating is solved on the flux and the solve reads the
+     poison grading and the loading pattern this function has just written. */
+  D.power=latRating();
 }
 
 /* ── what the drawing weighs ──
@@ -544,7 +590,7 @@ function latMass(){
   m+=disc*dz*(LAT.reflT+LAT.reflB)*rf.dens;
   /* the clusters themselves - a channel is about 6% of its ring by volume.
      GAME BALANCE, not measured: the bundle has rod pitches now, so this could
-     be counted off guide tube positions the way LAT_RODFRAC is. It is a mass
+     be counted off guide tube positions the way latRodFrac() is. It is a mass
      figure only, so nothing physical reads it. */
   for(const c of LM.chan) m+=ringA(c.i)*LAT.len*0.06*ABSORB[LAT.abs].dens;
   /* the moderator blocks you drew, weighed the same way the reflector is:
@@ -581,6 +627,11 @@ function latWarn(){
   if(!M.chan.length) w.push(["RED","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is.","rods"]);
   if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with.","rods"]);
   if(D.power<400||D.power>2400) w.push(["SOFT","This lattice rates "+D.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for.","core"]);
+  /* HARD: a rod pitch is a rod pitch, and pins have to be assembled with a
+     grid and a channel between them. Under 2 mm of gap there is nowhere for
+     the spacer to stand and nowhere for the water to go. */
+  { const gap=(ROD_P-rodD())*1000;
+    if(gap<2) w.push(["RED","Pin diameter "+(rodD()*1000).toFixed(1)+" mm leaves only "+gap.toFixed(1)+" mm between pins on a "+(ROD_P*1000).toFixed(1)+" mm rod pitch. Under 2 mm nothing can be assembled there - no grid, no channel, no water.","core"]); }
   if(D.hd<.5||D.hd>2.5) w.push(["SOFT","H/D of "+D.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make.","core"]);
   if(D.pitch<.6||D.pitch>1.8) w.push(["SOFT","Assembly pitch "+(LAT.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble.","core"]);
   const bare=[[LAT.reflR,"rim"],[LAT.reflT,"lid"],[LAT.reflB,"floor"]].filter(z=>z[0]<0.5);

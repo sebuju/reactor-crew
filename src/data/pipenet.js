@@ -614,6 +614,11 @@ const SAT_WATER = {A:9.844309, B:4174.5246, C:30.4331,
                    tc:647.096, pc:22.06, rhoc:322,
                    p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
                    hfg:1509, rho:740, cp:5.5, solidK:1.4};
+/* ONE COPY, and it lives here for the reason T_FEED and CORE_DT0 below do:
+   latRevolve() rates the core at module load (latRating(), lattice.js) and
+   that walks coreConst(), so a const in step.js has not been initialised yet
+   - a real ReferenceError, not a style point. */
+const CP_W=SAT_WATER.cp;
 /* WHERE FEEDWATER ARRIVES, K. It lives with the fluid rather than in step.js
    for the reason CORE_DT0 below does: layout.js is asked for plantSteam()
    during buildStockPlumbing(), at module load, when a const in step.js has not
