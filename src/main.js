@@ -39,6 +39,9 @@ function tick(now){
   // prewarm is drawn whatever the rate.
   if(prewarmStep()){ paintedScreen=null; nextFrame(); return; }
   const stepped=simFrame(dt);
+  // the WASD walk's eased pan and its arrow both outlast the input trail, so
+  // they ask for their own frames BEFORE the gate reads it (render/navarrow.js)
+  navStep(dt);
   // taken unconditionally: short-circuiting behind `stepped` would leave the
   // flag set through a whole run and spend it on the first still frame after
   const want=uiTakeDirty();
@@ -58,6 +61,15 @@ function tick(now){
   else if(screen==="operate") drawOperate();
   else if(screen==="scenario") drawScenario();
   else drawHelp();   // HELP is HTML now; the branch stays so an unbranched tab still falls somewhere
+  /* THE WALK'S ARROW GOES ON LAST, OVER EVERYTHING THE PLANT VIEW HOLDS - the
+     machinery, the instruments and the panels standing on the deck. It is the
+     answer to a key that was just pressed, so anything drawn over it hides the
+     one thing the player is looking for. Its own canvas, because a panel is
+     HTML and paints over #cv whatever this frame did (navLayerPaint(),
+     render/navarrow.js). Asked of the screen, because a curve outlives the
+     screen it was drawn on by up to NAV_TTL and the scenario board leaves VIEW
+     where the plant left it. */
+  if(plantScreen()) navLayerPaint();
   tipSync();
   ui.prev=ui.widgets;
   layRelease();
