@@ -9,7 +9,11 @@ const MARGIN_W=268, MARGIN_GAP=6, MARGIN_PAD=30;
    a role. It was the BLOCK COUNT, which is not the same question: every tank
    has 16 blocks and stands 882px, which fits in one, and all four went two-wide
    beside a reactor that has 24 and stands 2870 and wants three. */
-const MARGIN_COL_GAP=8, MARGIN_TALL=1200, MARGIN_COLS_MAX=3;
+/* THE COLUMNS BUTT, so a panel is a WHOLE NUMBER OF CELLS wide however many it
+   has. MARGIN_W is 268 and CELL is 134, so one column is exactly 2 cells - and a
+   gap of 8 between columns made two of them 4.06, which is 3 cells of deck
+   reserved to draw 2.06 of panel. n*268 over 134 is 2n with the gap gone. */
+const MARGIN_COL_GAP=0, MARGIN_TALL=1200, MARGIN_COLS_MAX=3;
 const marginColW=n=>n*MARGIN_W+(n-1)*MARGIN_COL_GAP;
 /* AND PANELS ALONG ONE EDGE STAND IN GROUPS. The cascade sorted on board
    position alone, so the primary's own panels were broken up by a loop and by
@@ -160,15 +164,33 @@ function marginPanBoard(host,key,title,corner){
 function marginPanKey(host,key){
   const h=marginPan(host,key==="run"?"PIPE RUN":"WALL",()=>marginKeyRect(h));
   h.key=key; h.id=key; h.selAt=null;
-  // a boundary is a hundred cells, so no one of them is a leader's target
-  if(key==="mat") h.corner="tr";
   return h;
+}
+/* ══ THE BOUNDARY'S OWN PANEL STANDS ON THE BOUNDARY ══
+   It was pinned to a corner because a hundred painted cells give no single
+   anchor to run a leader to - true, and it put the wall's panel at the far end
+   of the board from the wall. ANY cell of it is an anchor: the picked one while
+   one is picked, otherwise the ring's own top-left, which is stable for a given
+   drawing and is a piece of the thing the panel is about. */
+// matCells() (paint.js) is the KEY list; this is the same set as x,y pairs
+function matCellsXY(){
+  return matCells().map(k=>{ const i=k.indexOf(",");
+    return [+k.slice(0,i), +k.slice(i+1)]; });
+}
+// the leader still needs ONE cell to point at, and the ring's top-left is stable
+function matAnchorCell(){
+  let best=null;
+  for(const c of matCellsXY())
+    if(!best || c[1]<best[1] || (c[1]===best[1] && c[0]<best[0])) best=c;
+  return best;
 }
 function marginKeyRect(h){
   const k=h.selKey;
+  if(h.key==="mat"){
+    const c = k ? matKeyXY(k) : matAnchorCell();
+    if(!c) return null;                       // nothing painted: no anchor, no seat
+    return {x:PXc(c[0]), y:PYc(c[1]), w:CELL, h:CELL}; }
   if(!k) return null;
-  if(h.key==="mat"){ const [x,y]=matKeyXY(k);
-    return {x:PXc(x), y:PYc(y), w:CELL, h:CELL}; }
   const r=runOfKey(k); if(!r||!r.pts.length) return null;
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   for(const q of r.pts){ x0=Math.min(x0,q[0]); x1=Math.max(x1,q[0]);
@@ -290,8 +312,311 @@ function marginSide(r,box){
    the footprint it reserves moves in steps while VIEW.s moves smoothly, and the
    panel walks a few px per step. `zoom` re-lays out crisply at any value, so
    there is nothing left for the steps to buy. */
-const marginZoomK=()=>VIEW.s/Math.max(1e-6,VIEW.fit);
 const marginUPerPx=()=>(W/Math.max(1,marginCv().width))/Math.max(1e-6,VIEW.s);
+/* ══ A PANEL IS 268 PLANT UNITS WIDE, FULL STOP ══
+   It was VIEW.s/VIEW.fit, which pegs a panel to its CSS size at whatever the FIT
+   happens to be - so MARGIN_W meant "268 px when the whole ship is on screen" and
+   the panel's size against the machinery moved every time the fit did. It is the
+   exact inverse of marginUPerPx() now, so MARGIN_W, MARGIN_PAD and MARGIN_GAP are
+   plant units like every other size on the board, and CELL (layout.js) is then the
+   one figure deciding how big a machine is against its own readout. */
+const marginZoomK=()=>1/Math.max(1e-6,marginUPerPx());
+// the VIEW.s at which marginZoomK() is exactly 1 - past it a panel is magnified
+// past its own pixels, which is where vScale() stops the zoom (core/ui.js)
+const marginZoomMaxS=()=>W/Math.max(1,marginCv().width);
+
+/* ══ A PANEL STANDS ON THE BOARD, IN CELLS, ON GROUND NOTHING ELSE IS USING ══
+   The cascade this replaces put every panel out in a margin and drew a routed
+   leader back to its machine, because at CELL 16 a panel was wider than the
+   reactor and there was nowhere on the board to put one. There is now.
+
+   THE BOARD IS THE ONLY PLACE IT MAY STAND: cell-snapped, inside the grid, on
+   cells occupied() calls free - so it covers no machine, no tank, no fitting,
+   no nozzle, no pipe cell and no painted structure. Grid lines it may cover;
+   they are the one thing drawn under everything else.
+
+   AND IT MAY STAND HARD AGAINST THE BOX. There was a clear cell demanded on
+   every side; bolted straight onto its machine the panel needs no leader at all
+   (marginLeaders), which takes a line off the drawing rather than reserving a
+   ring of deck to keep one readable.
+
+   NEAREST WINS, and the BIGGEST PANEL CHOOSES FIRST: a small panel can find
+   somewhere almost anywhere, a ten-cell one cannot, and letting the small ones
+   settle first walled the big ones off the board entirely. */
+// a rect of free cells, in O(1), off a summed-area table of the free map
+/* ══ THE BOARD IS NOT THE EDGE OF THE WORLD ══
+   A panel may stand OFF the hull: there is nothing drawn out there, so nothing to
+   cover, and the machinery along the hull plating had nowhere on the inside to
+   put its readout. The search therefore runs over a padded frame - the grid with
+   SLOT_PAD cells of open deck round it - and every cell outside the grid is free
+   by construction. Cell coordinates stay the drawing's own and go NEGATIVE off
+   the bow; only the array index is shifted. */
+const SLOT_PAD=14;
+const eW=()=>GW+2*SLOT_PAD, eH=()=>GH+2*SLOT_PAD;
+function marginFreeSum(free){
+  const W=eW(), H=eH(), S=new Int32Array((W+1)*(H+1));
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++)
+    S[(y+1)*(W+1)+x+1] = free[y][x] + S[y*(W+1)+x+1] + S[(y+1)*(W+1)+x] - S[y*(W+1)+x];
+  return S;
+}
+// x,y are CELL coordinates and may be negative; the +SLOT_PAD is the index shift
+const marginSumAt=(S,x,y,w,h)=>{
+  const W=eW(), x0=x+SLOT_PAD, y0=y+SLOT_PAD;
+  return S[(y0+h)*(W+1)+x0+w] - S[y0*(W+1)+x0+w]
+       - S[(y0+h)*(W+1)+x0] + S[y0*(W+1)+x0];
+};
+const marginFreeAt=(S,x,y,w,h)=>marginSumAt(S,x,y,w,h)===w*h;
+// how much of rect A a rect B covers, in cells
+const marginOverlap=(ax,ay,aw,ah,b)=>
+  Math.max(0, Math.min(ax+aw,b.x+b.w)-Math.max(ax,b.x)) *
+  Math.max(0, Math.min(ay+ah,b.y+b.h)-Math.max(ay,b.y));
+
+const marginCellsOf=r=>({x:Math.round((r.x-GX)/CELL), y:Math.round((r.y-GY)/CELL),
+                         w:Math.max(1,Math.round(r.w/CELL)), h:Math.max(1,Math.round(r.h/CELL))});
+
+/* ONCE PER CHANGE, NOT ONCE PER FRAME. The search is O(GW*GH) per panel with an
+   O(1) rect test, which is 51k tests on the stock board - nothing as a one-off
+   and a real frame cost sixty times a second. LAY is rebuilt by buildLayout()
+   whenever the drawing changes, so its identity plus the panel sizes is the
+   whole of what a placement depends on. */
+let slotSig=null;
+function marginSlot(panels){
+  let sig=GW+"x"+GH;
+  for(const h of panels) sig += "|"+h.id+":"+h.w+","+h._hpx;
+  /* the PANEL LIST itself is part of the key: marginBuild() hands back a fresh
+     set of objects with no _slot on them, and a rebuild that happens to produce
+     the same ids and sizes would otherwise return early and drop every panel
+     back to the margin. */
+  if(slotSig && slotSig.lay===LAY && slotSig.sig===sig && slotSig.panels===panels) return;
+  slotSig={lay:LAY, sig, panels};
+  /* ══ ONE RULE: COVER NOTHING. TOUCHING IS FINE, AND IT IS THE POINT ══
+     There was a clear-cell ring as well, so a panel could not sit against the
+     machine it describes. Bolted straight onto the box the association needs no
+     leader at all, which is a line off the drawing rather than a gap on it. */
+  /* TWO MAPS AGAIN, AND THIS TIME THEY ARE ABOUT TWO DIFFERENT NEIGHBOURS.
+     COVER is what is DRAWN - machines, pipework, nozzles, painted structure - and
+     a panel may stand hard against any of it. FREEP is what other PANELS may use,
+     and a seated panel blocks its own cells PLUS a ring: two panels touching, even
+     at one corner, read as a single wider panel and the board loses the seam. */
+  const occ=occupied(null,{pipes:true,ports:true,mat:true});
+  const W=eW(), H=eH();
+  const cover=new Array(H), coverX=new Array(H), freep=new Array(H), mach=new Array(H);
+  for(let iy=0;iy<H;iy++){
+    cover[iy]=new Uint8Array(W); coverX[iy]=new Uint8Array(W);
+    freep[iy]=new Uint8Array(W).fill(1);
+    mach[iy]=new Uint8Array(W);
+    const y=iy-SLOT_PAD;
+    for(let ix=0;ix<W;ix++){
+      const x=ix-SLOT_PAD;
+      const inGrid = x>=0&&x<GW&&y>=0&&y<GH;
+      const o = inGrid ? occ[y][x] : null;             // off the hull nothing is drawn
+      cover[iy][ix] = o ? 0 : 1;
+      /* THE WALL'S OWN PANEL MAY STAND ON THE WALL. It is the only panel that is
+         ABOUT the paint, so covering a stretch of it is not hiding something the
+         reader needs from somewhere else - and the corner of the ring, which is
+         where it belongs, is made of the stuff. */
+      coverX[iy][ix] = (o && !o.mat) ? 0 : 1;
+    }
+  }
+  /* ══ A CELL CLEAR OF EVERY MACHINE BUT ITS OWN ══
+     Touching the box it describes is the association; touching somebody else's is
+     a panel that reads as belonging to the wrong machine. Asked in O(1): the
+     machine cells inside the candidate's GROWN rect must be exactly what its own
+     box contributes there, so any other machine in the ring fails it. */
+  for(const p of LAY.parts)
+    for(let y=p.y;y<p.y+p.h;y++) for(let x=p.x;x<p.x+p.w;x++){
+      const iy=y+SLOT_PAD, ix=x+SLOT_PAD;
+      if(iy>=0&&iy<H&&ix>=0&&ix<W) mach[iy][ix]=1;
+    }
+  /* AND THE ROW A SHORT MACHINE WEARS ITS NAME IN. A box too short for a name
+     row prints it ABOVE itself (drawSym's caller, plant.js), on cells occupied()
+     knows nothing about - so a fitting's or a small pump's label was the one
+     thing a panel could still bury. COVER only: standing beside a name is fine. */
+  for(const p of LAY.parts){
+    if(nameRowH(p)) continue;
+    const y=p.y-1;
+    for(let x=p.x;x<p.x+p.w;x++) cover[y+SLOT_PAD][x+SLOT_PAD]=0;
+  }
+
+  const want=[];
+  for(const h of panels){
+    if(h.corner || !h._mr) continue;
+    h._slot=null; h._att=false;
+    /* A BOUNDARY IS NEAR THE PIECE OF IT THAT IS NEAREST. Anchored on one cell of
+       the ring it was measured against a corner of a hundred-cell wall and landed
+       seven cells off a wall it is touching elsewhere. `near` is the whole set,
+       and the cost below takes the closest. */
+    want.push({h, m:marginCellsOf(h._mr),
+               near: h.key==="mat" ? matCellsXY() : null,
+               w:Math.max(1,Math.ceil(h.w/CELL)),
+               ht:Math.max(1,Math.ceil(h._hpx/CELL))});
+  }
+  /* BIGGEST FIRST, and the BOUNDARY LAST WHATEVER ITS SIZE. Every other panel is
+     about one box and has one right place; the wall is the length of the board,
+     so anywhere along it will do - and letting it choose early took ground a
+     machine's panel had only one candidate for. It takes what is left. */
+  want.sort((a,b)=> (!!a.near - !!b.near) || (b.w*b.ht)-(a.w*a.ht));
+
+  /* ATTACHED IS A FACT ABOUT THE GEOMETRY, NOT ABOUT WHICH PASS PLACED IT.
+     Taken from the pass, a panel that met its machine at a CORNER in the loose
+     pass was recorded as unattached and drew a leader across the one cell it was
+     already touching. Corner counts: the two boxes meet, and that is the whole of
+     what the line was there to say. */
+  const touchesOwn=(q,x,y)=>{
+    const m=q.m;
+    return !q.near && x-1 < m.x+m.w && x+q.w+1 > m.x
+                   && y-1 < m.y+m.h && y+q.ht+1 > m.y;
+  };
+  const place=(q,x,y)=>{
+    q.h._slot={x, y, w:q.w, h:q.ht};
+    q.h._att=touchesOwn(q,x,y);
+    // a seated panel is drawn ground to the next one, in BOTH cover maps...
+    for(let py=y;py<y+q.ht;py++) for(let px=x;px<x+q.w;px++){
+      cover[py+SLOT_PAD][px+SLOT_PAD]=0; coverX[py+SLOT_PAD][px+SLOT_PAD]=0; }
+    // ...and it takes a ring with it, so no two panels ever share even a corner
+    for(let py=y-1;py<=y+q.ht;py++) for(let px=x-1;px<=x+q.w;px++){
+      const iy=py+SLOT_PAD, ix=px+SLOT_PAD;
+      if(iy>=0&&iy<H&&ix>=0&&ix<W) freep[iy][ix]=0;
+    }
+  };
+  /* ══ ATTACHED IS A DIFFERENT ANSWER, SO IT IS A DIFFERENT PASS ══
+     Ranking every candidate by centre-to-centre distance never actually prefers
+     sharing an edge - a spot a cell off the corner scores better than one along
+     the face, so panels that had a face free sat loose beside it. And it cannot
+     be a weight either: a panel that CAN attach must, before a panel that cannot
+     takes the ground. So every panel is offered its own machine's faces first,
+     and only what is left over goes looking anywhere. */
+  /* A SIDE, AND TOPS LEVEL. A panel is a tall column of rows, so it reads beside
+     a machine and sits awkwardly over or under one; and a row of panels whose top
+     edges line up reads as a rack, while the same panels staggered read as
+     scattered. So the rungs are: LEFT or RIGHT face with the tops flush, then a
+     side at any height, then top or bottom - and distance only separates ties
+     inside a rung. */
+  const attachRung=(q,x,y)=>{
+    const m=q.m;
+    const hOv = x < m.x+m.w && x+q.w > m.x;
+    const vOv = y < m.y+m.h && y+q.ht > m.y;
+    const side = vOv && (x+q.w===m.x || m.x+m.w===x);
+    if(side) return y===m.y ? 0 : 1;
+    if(hOv && (y+q.ht===m.y || m.y+m.h===y)) return 2;
+    return -1;                                   // not touching its own box
+  };
+  /* THE BOUNDARY'S PANEL GOES TO THE BOUNDARY'S OWN CORNER. Measured against the
+     BOARD's four corners it went to the bow, which is a corner of the ship and
+     nothing to do with the wall it describes. The ring's bounding box is the
+     thing that has corners worth naming. */
+  const matBox=(()=>{
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+    for(const c of matCellsXY()){
+      x0=Math.min(x0,c[0]); x1=Math.max(x1,c[0]+1);
+      y0=Math.min(y0,c[1]); y1=Math.max(y1,c[1]+1); }
+    return x1>x0 ? {x0,y0,x1,y1} : null;
+  })();
+  const cornerCost=(x,y,w,h)=>{
+    const b=matBox; if(!b) return 0;
+    const cx=x+w/2, cy=y+h/2;
+    let best=Infinity;
+    for(const [gx,gy] of [[b.x0,b.y0],[b.x1,b.y0],[b.x0,b.y1],[b.x1,b.y1]]){
+      const dx=cx-gx, dy=cy-gy, d=dx*dx+dy*dy; if(d<best) best=d; }
+    return best;
+  };
+  const insideContainment=(x,y,w,h)=>{
+    for(let py=y;py<y+h;py++) for(let px=x;px<x+w;px++)
+      if(matRegionAt(px,py)) return true;
+    return false;
+  };
+  const search=(q,mustAttach)=>{
+    // the wall's panel is scored against the map that lets it stand on the wall
+    const SC=marginFreeSum(q.near?coverX:cover), SP=marginFreeSum(freep), SM=marginFreeSum(mach);
+    const mcx=q.m.x+q.m.w/2, mcy=q.m.y+q.m.h/2;
+    // the boundary panel names no box, so EVERY machine is somebody else's
+    const own=q.near ? {x:0,y:0,w:0,h:0} : q.m;
+    let best=null, bestC=Infinity;
+    for(let y=-SLOT_PAD;y+q.ht<=GH+SLOT_PAD;y++)
+    for(let x=-SLOT_PAD;x+q.w<=GW+SLOT_PAD;x++){
+      let rung=0;
+      if(mustAttach){ rung=attachRung(q,x,y); if(rung<0) continue; }
+      if(!marginFreeAt(SC,x,y,q.w,q.ht)) continue;      // covers nothing drawn
+      if(!marginFreeAt(SP,x,y,q.w,q.ht)) continue;      // touches no other panel
+      { // ...and no machine but its own is within a cell of it
+        const gx=Math.max(-SLOT_PAD,x-1), gy=Math.max(-SLOT_PAD,y-1);
+        const gw=Math.min(GW+SLOT_PAD,x+q.w+1)-gx, gh=Math.min(GH+SLOT_PAD,y+q.ht+1)-gy;
+        if(marginSumAt(SM,gx,gy,gw,gh) !== marginOverlap(gx,gy,gw,gh,own)) continue;
+      }
+      const px=x+q.w/2, py=y+q.ht/2;
+      let c;
+      if(q.near){
+        if(insideContainment(x,y,q.w,q.ht)) continue;   // the wall's panel stands OUTSIDE it
+        /* ══ AND ITS EDGES LINE UP WITH THE WALL'S ══
+           A panel sitting near a corner but a cell off both of its lines reads as
+           dropped there. Flush with the ring's own edges it continues them, which
+           is the thing the eye is actually following. Two lines beat one, one
+           beats none, and the distance to the corner only separates ties. */
+        /* EITHER EDGE ON EITHER LINE, which includes standing flush OUTSIDE the
+           ring - right edge on its left line, top edge on its bottom line. Only
+           the inner two were tested, and the one corner that satisfied both is
+           inside the enclosure, which the panel may not enter: so it aligned on a
+           single line and hung off the side of the other. */
+        const b=matBox;
+        const on=(a,z)=>a===b[z+"0"] || a===b[z+"1"];
+        const ax = b && (on(x,"x") || on(x+q.w,"x")) ? 1 : 0;
+        const ay = b && (on(y,"y") || on(y+q.ht,"y")) ? 1 : 0;
+        rung = 2-(ax+ay);
+        c=cornerCost(x,y,q.w,q.ht);
+      }
+      else { const dx=px-mcx, dy=py-mcy; c=dx*dx+dy*dy; }
+      const cost = rung*1e6 + c;
+      if(cost<bestC){ bestC=cost; best=[x,y]; }
+    }
+    return best;
+  };
+
+  const loose=[];
+  for(const q of want){
+    // the boundary names no box, so there is no face for it to be bolted to
+    const b = q.near ? null : search(q,true);
+    if(b) place(q,b[0],b[1]); else loose.push(q);
+  }
+  for(const q of loose){
+    const b=search(q,false);
+    if(b) place(q,b[0],b[1]);                 // may still meet its machine at a corner
+    // else: no room anywhere, and it keeps the cascade
+  }
+}
+
+/* ══ WHERE THE PANELS ARE STANDING, FOR WHOEVER ELSE WANTS THE GROUND ══
+   A panel covers no CELL anything is drawn in, but a run's reading is placed off
+   the pipe (pipeAnchors(), pipes.js) and lands on cells nothing owns. That
+   allocator already prices how much of another reading a spot would smear, so a
+   panel only has to join the list it is already scoring against. In PLANT UNITS,
+   because that is what the allocator works in. */
+function marginBoxes(){
+  const out=[];
+  for(const h of (MARGIN||[])){
+    if(!h._slot || !h.vis) continue;
+    out.push(grect(h._slot.x, h._slot.y, h._slot.w, h._slot.h));
+  }
+  return out;
+}
+
+/* ══ A PANEL IS A WHOLE NUMBER OF CELLS TALL, NOT JUST WIDE ══
+   MARGIN_W over CELL is exactly 2, so a panel's WIDTH snaps by construction; its
+   height is whatever its content measures and snapped to nothing - 24 of 24
+   landing on a fraction of a cell, one wasting 0.98 of one. The reservation
+   rounded up either way, so the deck was already spent; all this does is let the
+   panel FILL what it was standing on.
+   MEASURED WITH THE FLOOR TAKEN OFF FIRST, or the second pass reads back its own
+   padding and a panel could only ever grow. min-height, not height, so content
+   that outgrows the box still shows and is re-measured on the next change. */
+function marginMeasure(h){
+  h.well.el.style.minHeight="";
+  h.well.el.offsetHeight;                     // natural height, pre-columns
+  marginColumns(h);                           // may change the column count, so re-read
+  const nat=h.well.el.offsetHeight||60;
+  const pad=Math.max(CELL, Math.ceil(nat/CELL)*CELL);
+  h.well.el.style.minHeight=pad+"px";
+  return pad;
+}
 
 /* Read pass then write pass: a box measured after a style write forces a fresh
    layout, and there is one panel per machine. The write is a transform only -
@@ -336,25 +661,34 @@ function marginPlace(panels,host){
     const tf="translate3d("+x.toFixed(3)+"px,"+y.toFixed(3)+"px,0) scale("+k.toFixed(4)+")";
     if(h.tf!==tf){ h.well.el.style.transform=tf; h.tf=tf; }
   };
-  const board=[];
+  const board=[], seat=[];
   for(const h of panels){
     h._mr=h.rect&&h.rect();
     if(h.corner){
-      if(h.needH || h._hpx==null){ h._hpx=h.well.el.offsetHeight||60; h.needH=false; marginColumns(h); }
+      if(h.needH || h._hpx==null){ h._hpx=marginMeasure(h); h.needH=false; }
       h._hU=h._hpx*u; board.push(h); continue;
     }
     if(!h._mr) continue;
     // LAYOUT height, transform-free, so it is measured once per content change
     if(h.needH || h._hpx==null){
-      h._hpx=h.well.el.offsetHeight||60;
+      h._hpx=marginMeasure(h);
       h.needH=false;
-      marginColumns(h);
     }
     h._hU=h._hpx*u;
     h._grp = h.p ? panelGroup(h.p) : "support";
     h._rank = panelGroupRank(h._grp);
     h._side=marginSide(h._mr,B);
-    side[h._side].push(h);
+    seat.push(h);
+  }
+  /* THE BOARD FIRST, THE MARGIN ONLY FOR WHAT WOULD NOT FIT. A panel that found
+     free cells beside its own machine is placed there and drops out of the
+     cascade entirely; one that did not still goes to an edge, which is the
+     honest answer on a board with no room left rather than a panel dropped. */
+  marginSlot(seat);
+  for(const h of seat){
+    if(!h._slot){ side[h._side].push(h); continue; }
+    const r=grect(h._slot.x, h._slot.y, h._slot.w, h._slot.h);
+    put(h, r.x, r.y, h.w*u);
   }
   /* it names no machine, so it heads its own edge band rather than standing
      beside a box; the machine cascade below then starts under it */
@@ -490,10 +824,21 @@ function marginLeaders(panels){
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   for(const h of panels){
     if(!h._pan||!h._mr) continue;
+    /* A PANEL BOLTED TO ITS OWN MACHINE NEEDS NO LINE TO SAY WHICH ONE IT IS -
+       touching the box IS the association, and a dashed line over one shared
+       edge is noise. ONLY THEN, though: the gate was "is it seated at all",
+       which took the leader off ten panels sitting several cells clear of the
+       machine they name and left them attached to nothing. */
+    /* AND THE BOUNDARY NEVER GETS ONE. It names a hundred cells, so a line to any
+       one of them says less than the panel standing on the ring's own corner
+       already does. */
+    if(h._att || h.key==="mat") continue;
     const r=rt&&rt.get(h.id); if(!r||!r.pts||r.pts.length<2) continue;
     const pts=r.pts.map(q=>vScr({x:q[0],y:q[1]}));
+    // a fraction of the cell, like every other drawn size; VIEW.s because the
+    // leader is stroked in SCREEN space over the canvas, not under its transform
     leaderStroke(pts, h.on?C.amber:C.lead, [pts[0],pts[pts.length-1]],
-                 MARGIN_LEAD_W*VIEW.s, LEADER_RAD*VIEW.s);
+                 MARGIN_LEAD_W*DRAW_K*VIEW.s, LEADER_RAD*DRAW_K*VIEW.s);
   }
   ctx.restore();
 }
@@ -543,7 +888,8 @@ function marginSync(host,live){
   if(marginFit!==LAY || marginAt!==host){
     MARGIN=marginBuild(host,live); marginFit=LAY; marginAt=host; marginPSig=null;
   }
-  const psig = live ? null : designSig()+"|"+sel;
+  // PREV.seq: a hover is not a design change, and the MEASURED lists price it
+  const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq;
   const fresh = live || psig!==marginPSig; marginPSig=psig;
   // what could have moved a control's range
   const dtok = live ? (coreIds().map(id=>coreSeen(S,id).split?1:0).join("")+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
@@ -570,8 +916,32 @@ function marginSync(host,live){
       if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz);
     }else{
       if(!fresh) continue;
-      const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
-      dbPanelSync(h.body, paramsFor(partOf(h.p.id)||h.p)); h.needH=true;
+      const nm=partName(h.p), B=paramsFor(partOf(h.p.id)||h.p);
+      h.well.setTitle(nm);
+      // the panel's own help, asked for rather than stood open - see help() (inspector.js)
+      KIT.tip(h.well.head,nm,B.tip||"");
+      /* WHAT THIS BOX COSTS, on its own title bar - the sum of every tonnage
+         the knobs below quote, off the same door the mass budget reads
+         (partMassOf(), layout.js). The live screen puts the skin temperature
+         here instead; a bench panel has no skin. */
+      const t=partMassOf(h.p.id);
+      h.well.setSfx(t>=0.05 ? t.toFixed(t<10?1:0)+" t" : "");
+      /* AND WHAT IS NOT A KNOB HANGS OFF THE TITLE BAR - see the "menu" block
+         (design-bench.js). Seated before the suffix, so the tonnage keeps the
+         right-hand end of the bar. */
+      if(B.head && !h.head && h.well.head){
+        h.head=KIT.el("div","db-panel-head");
+        h.well.head.insertBefore(h.head, h.well.sfx);
+      }
+      if(h.head) dbPanelSync(h.head, B.head||[]);
+      /* RE-MEASURE ONLY WHEN THE BLOCK LIST ACTUALLY CHANGED - the same test
+         marginKeySync() above makes. It used to re-measure on every sync, which
+         was harmless while only a design edit could cause one; a hover causes
+         one now (PREV.seq), and a panel's height is quantised to whole cells,
+         so the first hover snapped the whole panel up a cell. */
+      const n0=h.body.childElementCount, s0=h.body._sig;
+      dbPanelSync(h.body, B);
+      if(h.body._sig!==s0 || h.body.childElementCount!==n0) h.needH=true;
     }
     marginCtlSync(h,live,deepNow);
   }
