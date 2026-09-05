@@ -10,7 +10,7 @@ const MARGIN_W=268, MARGIN_GAP=6, MARGIN_PAD=30;
    has 16 blocks and stands 882px, which fits in one, and all four went two-wide
    beside a reactor that has 24 and stands 2870 and wants three. */
 const MARGIN_COL_GAP=8, MARGIN_TALL=1200, MARGIN_COLS_MAX=3;
-const marginColW=n=>MARGIN_W*n+MARGIN_COL_GAP*(n-1);
+const marginColW=n=>n*MARGIN_W+(n-1)*MARGIN_COL_GAP;
 /* AND PANELS ALONG ONE EDGE STAND IN GROUPS. The cascade sorted on board
    position alone, so the primary's own panels were broken up by a loop and by
    the secondary - measured on the stock plant, the top edge ran circ0, loop0,
@@ -52,6 +52,25 @@ function marginHost(root){
     ctxClose();
     vWheel(local(e), e.deltaY);
   },{passive:false});
+  /* a panel covers the deck, so a right drag on one pans like the deck. Its own
+     state rather than ui.drag: uiMove() belongs to a surface that hit-tests. */
+  ctxSuppress(el);
+  let pan=null;
+  el.addEventListener("pointerdown",e=>{
+    if(e.button!==2 || e.shiftKey) return;
+    el.setPointerCapture(e.pointerId);
+    ctxClose();
+    const lp=local(e); pan={x:lp.x,y:lp.y};
+  });
+  el.addEventListener("pointermove",e=>{
+    if(!pan) return;
+    const lp=local(e);
+    VIEW.ox-=(lp.x-pan.x)/VIEW.s; VIEW.oy-=(lp.y-pan.y)/VIEW.s;
+    pan.x=lp.x; pan.y=lp.y; uiDirty();
+  });
+  const drop=()=>{ pan=null; };
+  el.addEventListener("pointerup",drop);
+  el.addEventListener("pointercancel",drop);
   root.appendChild(el);
   return el;
 }
@@ -92,6 +111,11 @@ function marginCols(h,n){
    sitting on a threshold flaps between two counts every frame. A change costs
    one extra measure, and only when it changes. */
 function marginColumns(h){
+  if(h.fixW) return;
+  // a stated count beats the height rule, which knows nothing of where to cut
+  const want0=h.body&&h.body._cols;
+  if(want0){ if(h.cols===want0) return;
+    marginCols(h,want0); h._hpx=h.well.el.offsetHeight||60; h.needH=false; return; }
   const est=h._hpx*h.cols;
   const want=Math.max(1,Math.min(MARGIN_COLS_MAX,Math.ceil(est/MARGIN_TALL)));
   if(want===h.cols) return;
@@ -114,16 +138,30 @@ function marginBuild(host,live){
      not drawn. One panel each, anchored on the drawing they were picked off,
      shown only while that pick stands. Bench only: a run's bore and a wall's
      thickness are DESIGN, and the control room sets neither. */
-  if(!live){
-    out.push(marginPanKey(host,"run"));
-    out.push(marginPanKey(host,"mat"));
-  }
+  if(!live) out.push(marginPanKey(host,"run"));
+  out.push(marginPanKey(host,"mat"));
+  // a list of every run names no machine, so there is no leader to draw
+  out.push(marginPanBoard(host, live?"cnx":"pipes", "PIPES", "tr"));
+  /* AND THE NOZZLE VALVES ARE THEIR OWN LIST. A port valve is what cuts a run
+     out, so it was a second list under the runs - but the two answer different
+     questions ("is it still there" and "is it lined up") and one panel made
+     each of them a scroll away from the other. */
+  if(live) out.push(marginPanBoard(host,"ports","PORT VALVES","tr"));
   return out;
+}
+function marginPanBoard(host,key,title,corner){
+  const h=marginPan(host,title,()=>null,null);
+  h.board=key; h.corner=corner; h.id=key;
+  h.well.el.classList.add("margin-board");
+  if(key==="pipes"){ h.fixW=marginColW(2); h.w=h.fixW; h.well.el.style.width=h.w+"px"; }
+  return h;
 }
 // the two selection-addressed panels: no part, so the anchor follows `sel`
 function marginPanKey(host,key){
   const h=marginPan(host,key==="run"?"PIPE RUN":"WALL",()=>marginKeyRect(h));
   h.key=key; h.id=key; h.selAt=null;
+  // a boundary is a hundred cells, so no one of them is a leader's target
+  if(key==="mat") h.corner="tr";
   return h;
 }
 function marginKeyRect(h){
@@ -185,7 +223,12 @@ function marginCtlSync(h,live,deep){
   if(rows&&live&&partWrecked(S,h.p.id)) rows=ctlDead(rows);
   if(rows&&!live) rows=ctlBench(rows);
   if(!rows||!rows.length){ if(h.ctl) KIT.show(h.ctl,false); return; }
-  if(!h.ctl){ h.ctl=KIT.el("div","margin-ctl"); h.well.body.appendChild(h.ctl); }
+  if(!h.ctl) h.ctl=KIT.el("div","margin-ctl");
+  // in the body so it rides the panel's columns; re-seated because both body
+  // syncs wipe innerHTML on a rebuild
+  const first = live ? h.body.firstChild : null;
+  if(h.ctl.parentNode!==h.body || (live ? first!==h.ctl : h.body.lastChild!==h.ctl))
+    live ? h.body.insertBefore(h.ctl,first) : h.body.appendChild(h.ctl);
   KIT.show(h.ctl,true);
   if(!marginCtlMatch(h,rows,deep)) marginCtlBuild(h,rows);
   let i=0;
@@ -243,8 +286,28 @@ function marginPlace(panels,host){
      one layout the panel already has, so its height in layout px is a constant
      and its picture is the same picture at every step - see hostScale()
      (render/plant.js), which is what keeps the hosted canvases in step. */
+  /* ONE WRITE PASS, wherever the place came from - the cascade and the corner
+     both land here, so a panel is scaled, clipped and hidden by one rule. */
+  const put=(h,ax,ay,wU)=>{
+    h._pan={x:ax,y:ay,w:wU,h:h._hU};
+    const s=vScr({x:ax,y:ay}), g=marginPage(s.x,s.y,rc);
+    // NOT rounded: a quantised place pops the panel a pixel each way as k moves
+    const x=g.x, y=g.y, eh=h._hpx*k;
+    h.vis = x<vpw && y<vph && x+h.w*k>0 && y+eh>rc.top;
+    if(h.hid!==!h.vis){ h.well.el.style.visibility=h.vis?"":"hidden"; h.hid=!h.vis; }
+    /* A HIDDEN PANEL IS STILL MOVED, or it pops from a stale place the frame
+       it comes back. Only the content sync is skipped (marginSync); a
+       transform is a string compare and one write. */
+    const tf="translate3d("+x.toFixed(3)+"px,"+y.toFixed(3)+"px,0) scale("+k.toFixed(4)+")";
+    if(h.tf!==tf){ h.well.el.style.transform=tf; h.tf=tf; }
+  };
+  const board=[];
   for(const h of panels){
     h._mr=h.rect&&h.rect();
+    if(h.corner){
+      if(h.needH || h._hpx==null){ h._hpx=h.well.el.offsetHeight||60; h.needH=false; marginColumns(h); }
+      h._hU=h._hpx*u; board.push(h); continue;
+    }
     if(!h._mr) continue;
     // LAYOUT height, transform-free, so it is measured once per content change
     if(h.needH || h._hpx==null){
@@ -258,12 +321,20 @@ function marginPlace(panels,host){
     h._side=marginSide(h._mr,B);
     side[h._side].push(h);
   }
+  /* it names no machine, so it heads its own edge band rather than standing
+     beside a box; the machine cascade below then starts under it */
+  const stack={l:B.y,r:B.y};
+  for(const h of board){
+    const sd=h.corner[1], wU=h.w*u;
+    put(h, sd==="l" ? B.x-padU-wU : B.x+B.w+padU, stack[sd], wU);
+    stack[sd]+=h._hU+gapU;
+  }
   for(const sd of ["l","r","t","b"]){
     const list=side[sd], flat=(sd==="t"||sd==="b");
     // GROUP FIRST, then board order inside the group - see MARGIN_GRP_GAP
     list.sort((a,b)=> (a._rank-b._rank) ||
       (flat ? a._mr.x-b._mr.x : a._mr.y-b._mr.y));
-    let run=-Infinity, was=null;          // the cascade that stops two overlapping
+    let run=flat?-Infinity:stack[sd]-gapU, was=null;   // the cascade that stops two overlapping
     for(const h of list){
       const wU=h.w*u, sep = (was!==null && h._grp!==was) ? grpU : gapU;
       was=h._grp;
@@ -275,17 +346,7 @@ function marginPlace(panels,host){
         ay=Math.max(run+sep-gapU, h._mr.y+h._mr.h/2-h._hU/2); run=ay+h._hU+gapU;
         ax=(sd==="l") ? B.x-padU-wU : B.x+B.w+padU;
       }
-      h._pan={x:ax,y:ay,w:wU,h:h._hU};
-      const s=vScr({x:ax,y:ay}), g=marginPage(s.x,s.y,rc);
-      // NOT rounded: a quantised place pops the panel a pixel each way as k moves
-      const x=g.x, y=g.y, eh=h._hpx*k;
-      h.vis = x<vpw && y<vph && x+h.w*k>0 && y+eh>rc.top;
-      if(h.hid!==!h.vis){ h.well.el.style.visibility=h.vis?"":"hidden"; h.hid=!h.vis; }
-      /* A HIDDEN PANEL IS STILL MOVED, or it pops from a stale place the frame
-         it comes back. Only the content sync is skipped (marginSync); a
-         transform is a string compare and one write. */
-      const tf="translate3d("+x.toFixed(3)+"px,"+y.toFixed(3)+"px,0) scale("+k.toFixed(4)+")";
-      if(h.tf!==tf){ h.well.el.style.transform=tf; h.tf=tf; }
+      put(h,ax,ay,wU);
     }
   }
   marginLeaders(panels);
@@ -405,21 +466,37 @@ function marginLeaders(panels){
 /* The run and wall panels exist only while their own pick stands. `sel` is the
    whole of their state, so the rebuild gate is the key changing - designSig()
    already carries `sel`, which is what `fresh` is taken off. */
-function marginKeySync(h,fresh){
-  const k = h.key==="run" ? (isRunKey(sel)?sel:null) : (isMatKey(sel)?sel:null);
+function marginKeySync(h,fresh,live){
+  const k = h.key==="run" ? (isRunKey(sel)?sel:null)
+                          : (isMatKey(sel)?sel:matDefaultKey());
   h.selKey=k;
   KIT.show(h.well.el, !!k);
   if(!k){ h.vis=false; h.selAt=null; return; }
-  if(!fresh && h.selAt===k) return;
+  // live has no design signature, so the measure is gated on the pick moving
+  const moved = h.selAt!==k;
+  if(!fresh && !moved) return;
   h.selAt=k;
-  const title = h.key==="run"
-    ? (pipeLabel(pipeMap().byKey[k].k, k)||"PIPE RUN")
-    : matPanelTitle(k);
-  h.well.setTitle(title); KIT.tip(h.well.head,title);
-  const blocks = h.key==="run" ? paramsForRun(k) : paramsForMat(k);
-  dbPanelSync(h.body, blocks); h.needH=true;
-  // it is the picked thing by construction, so its bar wears the pick
-  if(!h.on){ h.well.el.classList.add("on"); h.on=true; }
+  if(moved){
+    const title = h.key==="run"
+      ? (pipeLabel(pipeMap().byKey[k].k, k)||"PIPE RUN")
+      : matPanelTitle(k);
+    h.well.setTitle(title); KIT.tip(h.well.head,title);
+  }
+  const blocks = h.key==="run" ? paramsForRun(k)
+               : live ? paramsForMatLive(k) : paramsForMat(k);
+  dbPanelSync(h.body, blocks);
+  if(moved) h.needH=true;
+  // a default cell is not a selection
+  const on = sel===k;
+  if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
+}
+
+function marginBoardSync(h,live,fresh){
+  const n0=h.body.childElementCount, s0=h.body._sig;
+  if(h.board==="pipes"){ if(fresh) pipeRailSync(h.body,h.well.el); }
+  else if(h.board==="ports") crPortsSync(h.body);
+  else crCnxSync(h.body);
+  if(h.body._sig!==s0 || h.body.childElementCount!==n0) h.needH=true;
 }
 
 // once a frame from either screen, after drawPlant() set the view
@@ -437,7 +514,8 @@ function marginSync(host,live){
   const dtok = live ? (S.split+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
   const deepNow = dtok!==marginDeep; marginDeep=dtok;
   for(const h of MARGIN){
-    if(h.key){ marginKeySync(h,fresh); continue; }
+    if(h.key){ marginKeySync(h,fresh,live); continue; }
+    if(h.board){ marginBoardSync(h,live,fresh); continue; }
     const on=h.p.id===sel;
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     /* A PAN MAY NOT REBUILD ANYTHING. Gated on being visible, a panel panned
