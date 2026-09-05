@@ -63,6 +63,12 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    Two classes because .insp-viz sets its own padding further down the file.
    The seam between two of them is 12px of nothing - no line, and no gap above
    the first, so it only ever separates two pictures that are both there. */
+/* the unit tabs stand on the same 8px left edge the pictures below them keep,
+   and they wrap: a name is the player's to set, so four long ones must fall to
+   a second line rather than push the panel wider. Shorter than the topbar's
+   because this strip sits inside an instrument, not over the screen. */
+.cr-units{display:flex;flex-wrap:wrap;gap:3px;padding:0 8px 6px}
+.cr-units>.tab{height:17px;padding:0 8px;font-size:var(--t7);letter-spacing:1.2px}
 .insp-viz.cr-viz{padding:0 8px 6px;box-sizing:border-box}
 .insp-viz.cr-viz+.insp-viz.cr-viz{margin-top:12px}
 /* the first track is the plot dot: reserved whether or not it is lit, so
@@ -219,6 +225,14 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .insp-row-val{font-size:var(--t8-5);text-align:right;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
+/* what the option under the pointer would do to this row - see prevDelta().
+   ON A MEASURED LIST THE SLOT IS ALWAYS THERE, empty or not: a delta that
+   appeared under the pointer would widen the value and shunt every label on
+   the panel sideways. Elsewhere the span collapses, because nothing else on
+   the plant ever fills it. */
+.insp-row-dlt{font-size:var(--t8);letter-spacing:.3px}
+.insp-row-dlt:empty{display:none}
+.db-readlist .insp-row-dlt{display:inline-block;width:4.6em;text-align:right}
 .insp-row .kit-band,.insp-row .kit-seg{grid-column:1/-1}
 .insp-row:hover{background:var(--c-panel-hi)}
 /* a genuinely graphical row: its own bitmap, painted by the screen through
@@ -335,6 +349,11 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 
    Above this, outside the screen roots: #prewarm 999, #tip 1000, #ctxmenu 1001. */
 .margin-host{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
+/* the walk's arrow: same z as the panels, later in the DOM, so it clears them
+   and still passes under the topbar and the screen head (both z-index 1) */
+/* transparent EXPLICITLY: a canvas carries the page's own deck colour, and this
+   one stands over the whole plant view - inherited, it painted the board out */
+.nav-layer{position:fixed;pointer-events:none;z-index:0;background:transparent}
 .cr-rail,.db-rail,.scr-head,.cr-banner,.cr-vitals,.db-vitals{z-index:1}
 /* size comes from a transform:scale (marginPlace), so one layout is scaled and
    the panel's height in layout px is the same at every step of the zoom */
@@ -349,6 +368,17 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-pan.cols .db-panel-body{display:block;
   column-count:var(--margin-cols,2);column-gap:8px}
 .margin-pan.cols .db-panel-body>*{break-inside:avoid;margin-bottom:7px}
+/* A PANEL THAT STATES ITS OWN SHAPE flows nowhere: the "box" blocks are the
+   layout, so the column rules above are stood down whatever the width is. */
+.margin-pan.cols .db-panel-body.db-body-tree{display:flex;flex-direction:column;
+  column-count:auto;gap:7px}
+.margin-pan.cols .db-panel-body.db-body-tree>*{margin-bottom:0}
+/* what hangs off a panel's title bar - the "menu" block (design-bench.js) */
+.db-panel-head{display:flex;gap:4px;margin-left:8px}
+.db-panel-head .kit-menukey-menu{min-width:280px}
+.db-box-row{display:flex;flex-direction:row;align-items:flex-start;gap:8px}
+.db-box-col{display:flex;flex-direction:column;gap:7px}
+.db-box-row>*,.db-box-col>*{min-width:0}
 /* where a panel's columns are cut - the "colbreak" block (design-bench.js) */
 .db-colbreak{height:0;margin:0!important;break-before:column}
 .margin-pan:not(.cols) .db-colbreak{display:none}
@@ -375,3 +405,5 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-ctl .margin-port:hover{background:var(--c-panel);color:var(--c-bright)}
 .margin-ctl .margin-port.on{background:transparent;color:var(--c-amber)}
 .margin-ctl .margin-port.kit-btn-danger{background:transparent;color:var(--c-red);font-weight:400}
+/* what the two lattice canvases used to letter along their own bottom edge */
+.db-latread{margin-top:2px}

@@ -37,8 +37,7 @@
 .kit-rule-sfx:empty{display:none}
 .kit-rule-head>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* the head bar has no ::after spacer, so its suffix takes the slack itself */
-.kit-rule-head .kit-rule-sfx{margin-left:auto;font-weight:400;letter-spacing:.6px;
-  font-size:var(--t8)}
+.kit-rule-head .kit-rule-sfx{margin-left:auto;letter-spacing:0px;}
 /* a title bar that selects its own component - see railPick() in inspector.js */
 .kit-rule-pick{cursor:pointer}
 .kit-rule-pick:hover{background:var(--c-edge2);color:var(--c-bright)}
@@ -157,8 +156,7 @@
 .kit-textinput-input::placeholder{color:var(--c-ink2)}
 
 .kit-sliderrow{margin-bottom:8px}
-.kit-sliderrow-mass{display:block;margin-top:3px;font-size:var(--t9);color:var(--c-ink2)}
-.kit-sliderrow-mass.min{color:var(--c-green)}
+.kit-rule-sfx.kit-mass-min{color:var(--c-green)}
 
 .kit-readout{margin-bottom:8px}
 .kit-readout-val{display:block;text-align:right;font-size:var(--t10);color:var(--c-cyan)}
@@ -182,6 +180,7 @@
 .kit-numinput-input:hover{border-color:var(--c-edge2)}
 .kit-numinput-input:focus{outline:none;border-color:var(--c-amber)}
 .kit-numinput-unit{flex:0 0 auto;font-size:var(--t9);color:var(--c-ink2);white-space:nowrap}
+.kit-rule .kit-numinput-suggest{height:14px;padding:0 4px;letter-spacing:.4px}
 .kit-numinput-suggest{flex:0 0 auto;appearance:none;cursor:pointer;
   border:1px solid var(--c-edge);background:transparent;color:var(--c-ink2);
   font:inherit;font-size:var(--t9);letter-spacing:.5px;padding:2px 6px;height:22px}
@@ -198,3 +197,5 @@
   display:flex;flex-direction:column;gap:3px;max-height:70vh;overflow-y:auto}
 .kit-menukey-menu .kit-rule{margin:4px 0 2px}
 .kit-menukey-menu .kit-rule:first-child{margin-top:0}
+/* a slider standing at its own suggestion - the AUTO latch (autoKey) */
+.kit-sliderrow-auto .kit-slider-cells{opacity:.55}
