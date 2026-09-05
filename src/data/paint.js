@@ -160,7 +160,11 @@ function matRegions(){
     }
     seals.push(cells);
   }
-  matRegCache={of, tight, regions, wallOf, seal, seals}; matRegSig=sig;
+  // the poorest material on each region's wall, read once here rather than per release
+  for(const g of regions){ let rel=0;
+    for(const i of g.wall){ const m=matOf(i%GW,(i/GW)|0); if(m) rel=Math.max(rel, m.rel); }
+    g.rel = rel || 1; }
+  matRegCache={of, tight, regions, wallOf, seal, seals, rate:new Float64Array(N).fill(NaN)}; matRegSig=sig;
   return matRegCache;
 }
 // the BOUNDED region a cell is in, or null - a cell in the ship at large is in
@@ -255,12 +259,7 @@ const regionPAt = (s,p) => p ? regionP(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : re
 /* AND A BOUNDARY WITH A HOLE IN IT HOLDS BACK NOTHING. What escapes leaves
    through the hole, at the hole, into the ship - so the wall is not standing
    between the release and the crew any more, whatever it is made of. */
-function regionRel(s,g){
-  if(!g || !g.wall.length || !matSealed(s,g)) return 1;
-  let rel = 0;
-  for(const i of g.wall){ const m=matOf(i%GW,(i/GW)|0); if(m) rel=Math.max(rel, m.rel); }
-  return rel || 1;
-}
+const regionRel = (s,g) => (!g || !g.wall.length || !matSealed(s,g)) ? 1 : g.rel;
 const contRelAt = (s,x,y) => regionRel(s, matRegionAt(x,y));
 const contRelPart = (s,p) => p ? contRelAt(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : 1;
 
@@ -339,8 +338,14 @@ function regionDP(s,g){
   let v=0; for(const i of g.cells) if(s.roomP[i]>v) v=s.roomP[i];
   return v/1000;
 }
-const matRating = (x,y) => { const m=matOf(x,y); if(!m) return 0;
+const matRatingRaw = (x,y) => { const m=matOf(x,y); if(!m) return 0;
   return 2*m.S*Math.max(matThick(x,y)-WALL_CORR,0)/Math.max(matSpanD(x,y),1); };
+/* CACHED ON THE PAINT: every input is in matSig()+gridSig(), and the burst
+   sweep asked it of every wall cell every tick - four walks of the board each
+   - which was 28 % of a stock tick. */
+const matRating = (x,y) => { if(x<0||x>=GW||y<0||y>=GH) return 0;
+  const R=matRegions().rate, i=y*GW+x, v=R[i];
+  return v===v ? v : (R[i]=matRatingRaw(x,y)); };
 const matBurstP = (x,y) => matRating(x,y)*PIPE_BURST_K;
 // t, off the paint at its own thickness - a real volume of a real material
 const matCellMass = (x,y) => matThick(x,y)/1000*MPC*ROOM_DEPTH*matRow((matCell(x,y)||{}).m).rho/1000;

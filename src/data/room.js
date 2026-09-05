@@ -987,13 +987,17 @@ function roomDiffuse(F, G, dt, up){
    1.4 ms against a 20 ms tick, so an explicit acoustic pass over every face is
    unstable by a factor of fifteen and would buy nothing: the answer it would
    converge to is the lumped one. */
+let ROOM_VOL_SCR = null;
+const roomVolScr = n => { let z = ROOM_VOL_SCR;
+  if(!z || z.M.length !== n) z = ROOM_VOL_SCR = {M:new Float64Array(n), V:new Float64Array(n), MT:new Float64Array(n), T:new Float64Array(n), P:new Float64Array(n), RHO:new Float64Array(n)};
+  z.M.fill(0); z.V.fill(0); z.MT.fill(0); return z; };
 function roomVols(s){
   const R = matRegions(), n = R.regions.length;
-  const M = new Float64Array(n), V = new Float64Array(n), MT = new Float64Array(n);
+  const Z = roomVolScr(n), M = Z.M, V = Z.V, MT = Z.MT;
   for(let i=0;i<GW*GH;i++){ const r = R.of[i]; if(r<0) continue;
     const m = s.roomM[i];
     M[r] += m; V[r] += ROOM_VCELL; MT[r] += m*s.roomT[i]; }
-  const T = new Float64Array(n), P = new Float64Array(n), RHO = new Float64Array(n);
+  const T = Z.T, P = Z.P, RHO = Z.RHO;
   for(let r=0;r<n;r++){
     T[r] = M[r] > 0 ? MT[r]/M[r] : T_HULL;
     RHO[r] = V[r] > 0 ? M[r]/V[r] : ROOM_RHO;
@@ -1003,9 +1007,11 @@ function roomVols(s){
 }
 // kPa above ambient in every cell, off its own volume's mass and temperature -
 // one array, so the burn term and the damage sweeps read the same figure
+let pGaugeScr = null;
 function roomPGauge(s){
-  const q = roomVols(s), g = new Float64Array(GW*GH);
-  for(let i=0;i<GW*GH;i++){ const r = q.R.of[i]; if(r<0) continue;
+  const q = roomVols(s), N = GW*GH;
+  const g = (pGaugeScr && pGaugeScr.length === N) ? pGaugeScr.fill(0) : (pGaugeScr = new Float64Array(N));
+  for(let i=0;i<N;i++){ const r = q.R.of[i]; if(r<0) continue;
     g[i] = Math.max(0, (q.P[r] - ROOM_P0/1000)*1000); }
   return g;
 }

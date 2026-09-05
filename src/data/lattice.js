@@ -138,6 +138,7 @@ const latEqR=()=>{
 const ROD_D0=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
 const rodDSuggest=()=>ROD_D0;
 const rodD=()=>D.rodD??ROD_D0;
+const rodSpdOf=()=>D.rodSpd??ROD_SPD0;
 /* ── WHAT THE CLAD IS MADE OF ──
    Four real properties of zircaloy, and they sit here rather than on a FUEL or
    COOLANT row because there is exactly ONE clad in this game: 0.57 mm of

@@ -309,11 +309,6 @@ const tankMass=()=>{ let m=0;
    the condenser to a shell and the same walk suggests it a feed pump's head.
    PUMP_H0 rides on top of the standing term as the friction margin, so a
    coolant pump is untouched. */
-const boundP = (pid, node) => { const p = partOf(pid); const R = p && ROLE[p.role];
-  if(!R) return null;
-  if(R.sgtr && secondaryNode(node)) return sgDesignP(pid);
-  if(R.thermal === "sink") return COND_P0;
-  return null; };
 /* ══ AND THE SUCTION IS THE FIELD'S TO JUDGE ══
    The suggestion used to be capped at the circuit's hold setpoint, because a
    flat PUMP_H0 on a 0.20 MPa sodium loop put the suction below vacuum. The
@@ -384,28 +379,30 @@ function pumpBounds(id){
   return b;
 }
 function pumpBoundsOf(id){
-  const G = nodeGraph(), ci = (G.nodesOf[id]||[]).map(n=>G.circuit[n]);
-  let hi = null, lo = null, shell = false, hold = null, panel = false, core = false;
-  /* the setpoint of this pump's own circuit, where anything holds one - the
-     ceiling on the head above, and asked on the same walk for the same reason
-     the boundaries are */
-  for(const c of ci) if(holdOnCirc(c).length){ hold = holdSetP(c); break; }
-  for(const pid in G.nodesOf) for(const n of G.nodesOf[pid]){
-    if(ci.indexOf(G.circuit[n]) < 0) continue;
-    /* WHAT ELSE STANDS ON THIS CIRCUIT, asked before the boundary test: a
-       panel is no boundary at all, and it is what tells the circulating water
-       apart from the feedwater - both of them reach the condenser. */
-    const p0 = partOf(pid);
-    if(p0 && p0.role === "radiator") panel = true;
-    if(G.inCore(n)) core = true;
-    const q = boundP(pid, n); if(q === null) continue;
-    const p = partOf(pid), R = p && ROLE[p.role];
-    if(R && R.sgtr && secondaryNode(n)) shell = true;
+  /* WHICH nodes on this pump's circuits are boundaries is a fact about the
+     drawing, cached on the graph (graphSlot); WHAT they hold is asked every
+     call. Every solve asked pumpHead() of every pump, and the whole-plant walk
+     under it was 2 % of a tick. */
+  const slot = graphSlot("pumpBounds"); let S = slot.get(id);
+  if(!S){ const G = nodeGraph(), ci = (G.nodesOf[id]||[]).map(n=>G.circuit[n]);
+    S = {ci, cands:[], panel:false, core:false};
+    for(const pid in G.nodesOf) for(const n of G.nodesOf[pid]){
+      if(ci.indexOf(G.circuit[n]) < 0) continue;
+      const p0 = partOf(pid), R = p0 && ROLE[p0.role];
+      // a panel is no boundary, and it is what tells the circulating water from the feedwater
+      if(p0 && p0.role === "radiator") S.panel = true;
+      if(G.inCore(n)) S.core = true;
+      if(!R) continue;
+      if(R.sgtr && secondaryNode(n)) S.cands.push([pid, true]);
+      else if(R.thermal === "sink") S.cands.push([pid, false]); }
+    slot.set(id, S); }
+  let hi = null, lo = null, shell = false, hold = null;
+  for(const c of S.ci) if(holdOnCirc(c).length){ hold = holdSetP(c); break; }
+  for(const [pid, sg] of S.cands){ const q = sg ? sgDesignP(pid) : COND_P0;
+    if(sg) shell = true;
     if(hi === null || q > hi) hi = q;
-    if(lo === null || q < lo) lo = q;
-  }
-  // a panel spliced into a cold leg does not make a coolant pump a cw pump
-  return {hi, lo, shell, hold, cool: panel && !core};
+    if(lo === null || q < lo) lo = q; }
+  return {hi, lo, shell, hold, cool: S.panel && !S.core};
 }
 /* ══ WHAT THIS PUMP DRAWS ON ══
    A walk FROM the suction node, over the connections, stopping AT a tank
@@ -512,6 +509,12 @@ const bake = (bag, id, mk) => { const v = bag[id];
   return v === undefined ? (bag[id] = mk(id)) : v; };
 const pumpHead = id => D.pumpHead[id] ?? pumpHeadSuggest(id);
 const pumpFlow = id => D.pumpFlow[id] ?? pumpFlowSuggest(id);
+/* SECONDS OF RATED SHAFT POWER THE ROTOR STORES, E0/P0 - what decides how a machine coasts. A
+   flywheeled coolant pump is of order five to ten; a feed pump has no flywheel and a circulating
+   water pump is between. Asked of the drawing: a feed pump is one that reaches a shell. */
+const PUMP_ROTOR_S = 6;
+const pumpRotorSuggest = id => secGensOf(id).length ? 1 : primaryPump(id) ? PUMP_ROTOR_S : 2;
+const pumpRotor = id => D.pumpRotor[id] ?? pumpRotorSuggest(id);
 /* WHAT THIS PUMP IS WORTH AGAINST THE REFERENCE MACHINE - a MASS and a BOX,
    and nothing the solve reads. The head an edge develops is the machine's own
    MPa and the flow it swallows is its own casing bore (netBuild()), so this
@@ -818,7 +821,11 @@ const roleAlive=(role,s)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p=>
    EFW tank went on injecting through its own wreck because tankLive() never
    asked. Takes the live state, never S, so the reference solve and a replay
    ask it the same way every other predicate in this file is asked. */
-const partWrecked=(s,id)=>!!(s && s.dmgParts && id && s.dmgParts.indexOf(id)>=0);
+let dmgArr = null, dmgLen = -1, dmgSet = null;
+const partWrecked = (s,id) => { if(!(s && s.dmgParts && id) || s.dmgParts.length === 0) return false;
+  const a = s.dmgParts;   // every writer is a push or a filter that replaces the array, so identity + length is the whole state
+  if(a !== dmgArr || a.length !== dmgLen){ dmgSet = new Set(a); dmgArr = a; dmgLen = a.length; }
+  return dmgSet.has(id); };
 // WHAT took it, in one word - the label, the tooltip and the STATUS row
 const dmgWhyOf=(s,id)=>(s && s.dmgWhy && s.dmgWhy[id]) || "WRECKED";
 /* A part whose mass is not already counted by some other measure
@@ -1124,7 +1131,7 @@ function loopMap(){
      claimed by whichever loop reaches it first, deterministically, the same
      standing every other part in this map has. */
   let nextLoop=0;
-  const cut={}; for(const n of (G.nodesOf.core||[])) cut[n]=1;
+  const cut={}; for(const q of LAY.parts) if(q.role==="core") for(const n of (G.nodesOf[q.id]||[])) cut[n]=1;
   const seeded=[];
   const claim=(p,i,noGate)=>{
     const seen=G.reach((G.nodesOf[p.id]||[]).filter(n=>G.inCore(n)), cut, noGate);
