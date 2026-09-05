@@ -37,7 +37,6 @@ function shellInit(){
     plantLine:document.getElementById("plant-line"),
     clock:document.getElementById("clock"),
     clockRow:document.getElementById("clock-row"),
-    dot:document.getElementById("clock-dot"),
   };
   for(const btn of tabs){
     const k=btn.dataset.screen;
@@ -120,8 +119,6 @@ const SCNTIP_ON="Say what the reactor is FOR. Lay out a timeline of what will ha
 const OPTIP_ON="The live control room. Opening it commissions the current design. Run the plant, push it past its limits, and repair it when it bites back. Visiting the bench puts the plant back where it was commissioned, and changing anything there rebuilds the unit from scratch the next time you come back here.";
 const LOCKTIP="Locked while a machine is standing where it does not fit. Drag it clear on the design bench.";
 
-/* ONE string, so the sim time and the rate it is advancing at cannot be
-   written out of step with each other - they are two readings of one moment. */
 function shellClock(){
   /* THE CLOCK IS THE RUNNING PLANT'S, so it is not on a screen where nothing
      runs: the bench steps no ticks, so the reading is 0 TPS and 0.0x, and the
@@ -142,7 +139,8 @@ function shellClock(){
      figure here for the first time, and 1X on a heavy plant reads 0.6x.
      One decimal always, so the field does not change width as it moves. */
   const ts = (TR.sps/50).toFixed(1)+"x";
-  const t=S?S.t:0, clk="T+"+pad(t.toFixed(1),7)+" / "+pad(Math.round(TR.sps),4)+" TPS / "+ts;
+  // the sim time itself is on the transport strip, a hand's width below this
+  const clk=Math.round(TR.sps)+" TPS / "+ts;
   if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
   /* THE RATE IS A PROMISE AND THIS IS THE MEASUREMENT OF IT. Only a finite
      rate promises anything - MAX and VLD run at whatever they get - and only
@@ -189,15 +187,12 @@ function shellSync(){
      rating without the machine, and the bar says so rather than printing the
      last plant's figures over an empty board. */
   if(!roleOf("core")) line="NO REACTOR";
-  else if(fresh) line=`${P.id}  ${pad(P.rated.toFixed(0),4)} MWt  ${pad((P.rated*P.eff).toFixed(0),4)} MWe`;
+  else if(fresh) line=`${P.id} ${P.rated.toFixed(0)} MWt ${(P.rated*P.eff).toFixed(0)} MWe`;
   else { const d=derived();
-    line=`${d.a.id}  ${pad(D.power.toFixed(0),4)} MWt  ${pad((D.power*d.eff).toFixed(0),4)} MWe`; }
+    line=`${d.a.id} ${d.rated.toFixed(0)} MWt ${(d.rated*d.eff).toFixed(0)} MWe`; }
   if(shellEls.plantLine.textContent!==line){ shellEls.plantLine.textContent=line;
     shellEls.plantLine.classList.toggle("idle",!fresh); }
   shellClock();
-  // the blink is written inline, so it must answer the blank row itself - an
-  // inline `visible` on the dot shows straight through a hidden parent
-  shellEls.dot.style.visibility=SIMSCREEN[screen]&&Math.floor(performance.now()/500)%2?"visible":"hidden";
   layRelease();
 }
 
@@ -416,7 +411,7 @@ function circNames(){
   for(let i=0;i<G.nCirc;i++){
     const has=r=>partsOn[i].some(p=>p.role===r);
     raw.push(!piped[i] ? "UNPIPED"
-      : i===G.coreCirc ? "PRIMARY"
+      : G.coreCircs[i]===1 ? "PRIMARY"
       : has("radiator") ? "COOLING"
       : has("turb") ? "SECONDARY"
       : "INTERMEDIATE");

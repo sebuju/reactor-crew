@@ -257,7 +257,7 @@ function paramsFor(p){
      every material on the panel, so below them it overwrote the rows you had
      just picked. blockSig() keys the rail's rebuild on kind+title, so
      reordering costs nothing. */
-  if(p.role==="core"){
+  if(p.role==="core"){ const cD=coreD(id);
     B.gang="reactor"; B.gangPlain=true; B.cols=4;
     B.push({kind:"rule",title:"PRESETS",
       tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself."});
@@ -265,60 +265,60 @@ function paramsFor(p){
        moves the rating by 30x, and every machine figure already baked was
        priced off the family before it - a helium plant kept a PWR's 937 000 m2
        of panel and its 6.9 MPa shell. */
-    B.push({kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>{ designForget(); archPreset(i); }}))});
-    B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(i)}))});
+    B.push({kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>{ designForget(); archPreset(cD,i); }}))});
+    B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(cD,i)}))});
     B.push({kind:"bulkrow",label:"SPREAD",items:[1,2,3,4].map(n=>({name:String(n),
       tip:"Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
         (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
             :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
-      fn:()=>{ latLayBanks(n); latRevolve(); }}))});
-    opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.","cool",COOLANT);
+      fn:()=>{ latLayBanks(cD,n); latRevolve(cD); }}))});
+    opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.",bagAcc(cD,"cool",()=>cD.cool),COOLANT);
     /* One FUEL row per loading zone that has fuel in it. The setter must
        latMeasure() itself: an optlist is not a lattice edit, so nothing else
        would re-blend densK into D.power. */
     {
-      const zs=latZonesUsed(), one=zs.length<2;
+      const zs=latZonesUsed(cD), one=zs.length<2;
       for(const z of zs)
         opt(one?"FUEL":"FUEL ZONE "+(z+1),
           "Sets beta - your reaction time before prompt criticality - plus excess reactivity and core density."+
           (one?" Paint zones on the plan below and this becomes one row per zone, which is how a real core is loaded."
               :" This row loads the slots you painted as zone "+(z+1)+". The core's beta, density and excess are the blend; its melt limit is the WORST fuel in it."),
-          bagAcc(D.zoneFuel,z,()=>zoneFuelOf(z),latMeasure),FUEL);
+          bagAcc(cD.zoneFuel,z,()=>zoneFuelOf(cD,z),()=>latMeasure(cD)),FUEL);
     }
     num("PIN DIAMETER","How fat one fuel pin is, on a fixed 12.6 mm rod pitch. It is the one dimension inside the assembly you can set, and it moves nearly everything: a thin pin has more surface per unit of fuel, so the hottest pin takes more power before it reaches its flux ceiling, and it stores less heat to carry into a melt when the flow stops. It also carries more clad, which eats neutrons, and leaves more water, which walks the moderation ratio to the right. A fat pin is the opposite trade in every line.",
-        {get:()=>rodD()*1000, set:v=>{ D.rodD=v/1000; latRevolve(); },
-         raw:()=>D.rodD===undefined?undefined:D.rodD*1000, clr:()=>{ delete D.rodD; latRevolve(); }},
+        {get:()=>rodD(cD)*1000, set:v=>{ cD.rodD=v/1000; latRevolve(cD); },
+         raw:()=>cD.rodD===undefined?undefined:cD.rodD*1000, clr:()=>{ delete cD.rodD; latRevolve(cD); }},
         "mm",1,()=>ROD_D0*1000);
     // a feature of the VESSEL, which is what its own tooltip already said -
     // it never belonged on the pressurizer's panel
-    sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.","chim",0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
+    sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.",bagAcc(cD,"chim",()=>cD.chim),0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
     // a knob stands beside the picture it changes
     brk();
-    opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.","mod",MODER);
-    opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.","__abs",ABSORB);
+    opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.",bagAcc(cD,"mod",()=>cD.mod),MODER);
+    opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
     B.push({kind:"lattools",pen:"plan",title:"RADIAL PLAN",
       tools:LATPEN_CORE.concat(LATPEN_RODS),
       tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."});
-    B.push({kind:"latplan"});
+    B.push({kind:"latplan",core:id});
     brk();
-    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.","refl",LATREFL);
+    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL);
     B.push({kind:"lattools",pen:"sec",title:"AXIAL SECTION",
       tools:LATPEN_SEC,
       tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."});
-    B.push({kind:"latsection"});
+    B.push({kind:"latsection",core:id});
     brk();
     B.push({kind:"rule",title:"MEASURED",
       tip:"Every number on this list is an OUTPUT of the drawing above. Not one of them is a value you can set - if you want one of them to move, move the drawing."});
     /* ONE list, one mapper. LATREAD and LATREAD_RODS carry the same four
        columns, so a row can move between them without changing shape. */
     B.push({kind:"readlist",rows:()=>LATREAD.concat(LATREAD_RODS)
-      .map(r=>[r[0],r[1](),r[3]?r[3]():null,r[2]])});
-    opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.","scram",SCRAM);
+      .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
+    opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.",bagAcc(cD,"scram",()=>cD.scram),SCRAM);
     num("ROD DRIVE SPEED","How fast the drives walk the bank under normal control, as a percentage of full travel every second - the reference drive strokes end to end in 83 s. A fast core answers a rod before you have finished moving it and wants a motor to match; a graphite pile does not. It does NOT touch the scram, which drops on the system above. A motor that strokes twice as fast is twice the machine, and the mass hint is what that costs on every bank you have.",
-        {get:()=>rodSpdOf()*100, set:v=>{ D.rodSpd=v/100; dTouch(); },
-         raw:()=>D.rodSpd===undefined?undefined:D.rodSpd*100, clr:()=>{ delete D.rodSpd; dTouch(); }},
-        "%/s",2,()=>ROD_SPD0*100,v=>D.nbank*ROD_BANK_T*(v/100/ROD_SPD0-1));
-    opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.","foll",FOLL);
+        {get:()=>rodSpdOf(cD)*100, set:v=>{ cD.rodSpd=v/100; dTouch(); },
+         raw:()=>cD.rodSpd===undefined?undefined:cD.rodSpd*100, clr:()=>{ delete cD.rodSpd; dTouch(); }},
+        "%/s",2,()=>ROD_SPD0*100,v=>cD.nbank*ROD_BANK_T*(v/100/ROD_SPD0-1));
+    opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.",bagAcc(cD,"foll",()=>cD.foll),FOLL);
     tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. It only ever drives the bank inside the travel band you set below; you can always override it.","autorod",26);
     /* THE BAND THE CONTROLLER WORKS IN, as two handles rather than two
        constants. AUTOSYS.rod's own tooltip has always promised "the travel
@@ -406,8 +406,8 @@ function paramsFor(p){
          raw:()=>D.turbKgs[id], clr:()=>{ delete D.turbKgs[id]; }},
         "kg/s",0,()=>turbKgsSuggest(),v=>v*TURB_T_PER_KGS);
     B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
-      ["EFFICIENCY",(COOLANT[D.cool].eff*turbEffOf(id)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. It is DERIVED from the swallow above, by the law that isentropic efficiency rises slowly with machine size - a set ten times bigger is a few points better, not twice as good."],
-      ["RATED OUTPUT",(D.power*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
+      ["EFFICIENCY",(COOLANT[priD().cool].eff*turbEffOf(id)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. It is DERIVED from the swallow above, by the law that isentropic efficiency rises slowly with machine size - a set ten times bigger is a few points better, not twice as good."],
+      ["RATED OUTPUT",(d.rated*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
       ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room, as a share of the steam this plant raises at full power. A matched machine reads 100 %. Overpower is not free reach: it is turbine you paid mass for."]]; }});
     note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
   }
@@ -592,7 +592,7 @@ function paramsForRun(key){
   num("WALL","How thick the steel is. It is what the run is RATED for and it is what the run weighs - the two are the same number seen from either end. AUTO is the thickness this bore needs at the pressure this run actually carries.",
       {get:()=>runWallMm(r), set:v=>{ D.wall[r.key]=v; dTouch(); },
        raw:()=>D.wall[r.key], clr:()=>{ delete D.wall[r.key]; dTouch(); }},
-      "mm",1,()=>wallSuggestMm(runBoreMm(r), runDesignP(r), PRIMARY_K[r.k]?COOLANT[D.cool]:null),
+      "mm",1,()=>wallSuggestMm(runBoreMm(r), runDesignP(r), PRIMARY_K[r.k]?COOLANT[priD().cool]:null),
       v=>massAt(runBoreMm(r),v));
   B.push({kind:"readlist",rows:()=>{
     const c=pipeMap().byKey[r.key], a=c&&partOf(c.a), b=c&&partOf(c.b);

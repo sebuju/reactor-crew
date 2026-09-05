@@ -350,7 +350,7 @@ function drawSym(p,x,y,w,h,ink,L){
       fillRect(bx,by+bh*.62,bw,bh*.38,"#ff5a45"); ctx.globalAlpha=1; }
     if(L&&L.dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+L.dmg/140,.2,.85));
     frame(bx,by,bw,bh,ink);
-    coreDraw(bx+2,by+2,bw-4,bh-4,coreView(L));
+    coreDraw(bx+2,by+2,bw-4,bh-4,coreView(L,id));
     /* steam the core is actually making, normalised on the SAME 0..0.6 the VOID
        readout's band uses - so "the vessel is full of bubbles" and "the strip
        says BOILING" can never be two different statements. "chan": it rises in
@@ -403,7 +403,7 @@ function drawSym(p,x,y,w,h,ink,L){
        drawn - to scale, on the flux - in the core field on the reactor, and a
        second set of stems here said the same thing again in a box that has no
        core in it. What this component owns is whether the drives ANSWER. */
-    const nb = L&&L.rodZ? P.NB : 5;
+    const K=P&&P.cores&&P.cores[coreOf(p.id)]; const nb = L&&L.rodZ&&K? K.NB : 5;
     /* CENTRED, and packed no wider than a drive needs. The group used to start
        at X+12 and step by (W-24)/nb, which leaves a whole slot of empty plinth
        on the right - the row read as sitting off to one side of its own box. */
@@ -962,8 +962,8 @@ function liveValue(p,s){
   switch(true){
     /* the chain reaction, then the four decay groups summed on top - a scrammed
        core reads 0% (+6.0%) and that second term is the whole reason it needs a sink */
-    case p.role==="core":  return (s.n*100).toFixed(0)+"%"+(s.decay*100>=.05?" (+"+(s.decay*100).toFixed(1)+"%)":"");
-    case p.role==="rods":  return (s.rodPos*100).toFixed(0)+"%";
+    case p.role==="core":  { const c=coreSeen(s,p.id); return (c.n*100).toFixed(0)+"%"+(c.decay*100>=.05?" (+"+(c.decay*100).toFixed(1)+"%)":""); }
+    case p.role==="rods":  return (coreSeen(s,coreOf(p.id)).rodPos*100).toFixed(0)+"%";
     // a hold tank reports the pressure it is holding; every other tank a level
     case p.role==="sg":          return sgLvl(s,p.id).toFixed(0)+"%";
     case p.role==="ihx":         return ihxTemp(s,p.id).toFixed(0)+" K";
@@ -1295,6 +1295,10 @@ function ctlBase(p,live,split){
   }
   switch(p.role){
     case "rods": {
+      /* THIS VESSEL'S OWN DRIVES: every order is the addressed act and every
+         reading is this vessel's own view of the plant (coreSeen) */
+      const cid=coreOf(p.id), cS=()=>coreSeen(S,cid);
+      split = live && !!cS().split;
       /* ══ THERE IS NO MASTER SLIDER; THE BANKS ARE THE CONTROL ══
          A ganged plant drew one CONTROL BANK slider and hid the banks, so the
          handle you worked and the handles the plant has were two different
@@ -1309,36 +1313,36 @@ function ctlBase(p,live,split){
          gearing. Both keys go through act("rodCommon") like the slider, so a
          recording sees no difference. */
       const STEP=[
-       {kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("rodCommon",pctStep(S.rodDem,-1,0,1)); },
+       {kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("coreRodDem",cid,pctStep(cS().rodDem,-1,0,1)); },
         tip:"WITHDRAW 5% - takes the whole stack five percent of core height further out, onto the nearest 5% mark. Withdrawing adds reactivity, so power rises until the loop settles."},
-       {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("rodCommon",pctStep(S.rodDem,1,0,1)); },
+       {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("coreRodDem",cid,pctStep(cS().rodDem,1,0,1)); },
         tip:"INSERT 5% - drives the whole stack five percent of core height further in, onto the nearest 5% mark. Deeper insertion removes reactivity and raises power peaking, which eats thermal margin."}];
       /* GANGED, a bank's slider IS the common one: same key, same reading,
          same act - four handles onto one position, which is what a gang is.
          Split, each addresses its own bank. */
       const bankRow=b=>[
-       {kind:"btn",flex:1,k:"bankAuto:"+b,def:false,words:["AUT","MAN"],on:()=>!S.bankAuto[b],text:()=>S.bankAuto[b]?"AUT":"MAN",
-        fn:()=>{ act("bankAuto",b); },
+       {kind:"btn",flex:1,k:"bankAuto:"+b,def:false,words:["AUT","MAN"],on:()=>!cS().bankAuto[b],text:()=>cS().bankAuto[b]?"AUT":"MAN",
+        fn:()=>{ act("coreBankAuto",cid,b); },
         tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank stops answering the controller, but it still answers you: its own slider still moves it, ganged or split. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
        {kind:"sld",flex:2.8,k:split?"rodBank:"+b:"rodCommon",def:RODX0,sc:100,min:()=>0,max:()=>100,
-        val:()=>(split?S.rodZ[b]:S.rodPos)*100,
-        dem:()=>(split?S.rodZDem[b]:S.rodDem)*100,
+        val:()=>(split?cS().rodZ[b]:cS().rodPos)*100,
+        dem:()=>(split?cS().rodZDem[b]:cS().rodDem)*100,
         /* Only while the controller is actually driving: a band drawn for a
            system that is bypassed or was never fitted is two marks describing
            nobody. autoLive() is the one predicate for that. */
         marks:()=>autoLive("rod")?[S.arLo*100,S.arHi*100]:null,
         fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",
-        set:v=>{ split ? act("rodBank",b,v/100) : act("rodCommon",v/100); },
+        set:v=>{ split ? act("coreRodBank",cid,b,v/100) : act("coreRodDem",cid,v/100); },
         tip:"BANK "+(b+1)+" - insertion of this bank. GANGED, moving it carries every bank by the same amount and the whole stack goes with it. SPLIT, it is this bank alone, and standing one bank against another is the whole of how you answer a radial xenon tilt here. It moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. The stack travels at only 1.2%/s. The two amber marks are the travel band the automatic controller may move inside; they are drawn only while it is armed, and they never bind you."}];
       if(split){
         const rows=[STEP, ROD_TRIP_ROW,
-         [{kind:"btn",flex:1,on:()=>S.reGang,
-          text:()=>S.reGang?"GANGING..":"BANK GANG",
+         [{kind:"btn",flex:1,on:()=>cS().reGang,
+          text:()=>cS().reGang?"GANGING..":"BANK GANG",
           /* already a no-op once the walk is running: setSplit() refuses to
              re-seed a gang it is in the middle of */
-          fn:()=>{ act("split",false); },
+          fn:()=>{ act("coreSplit",cid,false); },
           tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close. A bank slider still steers the walk while it runs."}]];
-        for(let b=0;b<(live?P.NB:D.nbank);b++) rows.push(bankRow(b));
+        for(let b=0;b<(live?P.cores[cid].NB:coreBag(cid).nbank);b++) rows.push(bankRow(b));
         return rows;
       }
       const rows=[
@@ -1346,13 +1350,13 @@ function ctlBase(p,live,split){
        ROD_TRIP_ROW,
        /* the ganged handle on a radial xenon tilt: it stands the inner banks
           against the outer ones instead of moving the whole bank together */
-       [{kind:"sld",flex:2.8,k:"tiltDem",def:0,val:()=>S.tilt,min:()=>-1,max:()=>1,dem:()=>S.tiltDem,
-         fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{ act("tiltDem",v); },
+       [{kind:"sld",flex:2.8,k:"tiltDem",def:0,val:()=>cS().tilt,min:()=>-1,max:()=>1,dem:()=>cS().tiltDem,
+         fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{ act("coreTiltDem",cid,v); },
          tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. Full travel takes "+(1/tiltRate()).toFixed(0)+" s because the drives moving it are the drives that move the bank. It is your tilt handle only while the banks are ganged - split them and each bank's own demand takes over."},
         {kind:"btn",flex:1,text:()=>"SPL",
-         fn:()=>{ act("split",true); },
+         fn:()=>{ act("coreSplit",cid,true); },
          tip:"SPLIT BANKS - stops driving the banks as one and gives each its own demand. Splitting is bumpless by construction: every bank simply adopts where it already stands. From there the tilt slider stands down, the per-bank sliders are your tilt handle, and any bank you switch to MANUAL stops answering the temperature controller."}]];
-      for(let b=0;b<(live?P.NB:D.nbank);b++) rows.push(bankRow(b));
+      for(let b=0;b<(live?P.cores[cid].NB:coreBag(cid).nbank);b++) rows.push(bankRow(b));
       return rows;
     }
     case "core": return [
@@ -1402,7 +1406,7 @@ function portCtlRows(p){
     if(D.ports[pid].p!==p.id) continue;
     const f=portFaceOf(pid);
     const nm=(f&&portWord(p,f,false))||FACE_NAME[f]||pid;
-    cells.push({kind:"btn",flex:1,k:"port:"+pid+":shut",def:false,ownPart:true,
+    cells.push({kind:"port",flex:1,k:"port:"+pid+":shut",def:false,ownPart:true,
       inert:portWrecked(S,pid),
       on:()=>!portOpen(S,pid),
       danger:()=>!portOpen(S,pid),
@@ -1411,9 +1415,8 @@ function portCtlRows(p){
       fn:()=>{ act("portShut",pid); },
       tip:"The isolation valve in this nozzle. Shut, the run landing on it carries nothing - which is how a leaking line is cut out of the plant, and how a repair party gets a machine to work on. A wrecked nozzle jams where it stood and takes no orders at all."});
   }
-  const rows=[];
-  for(let i=0;i<cells.length;i+=2) rows.push(cells.slice(i,i+2));
-  return rows;
+  // one container, not a grid of keys: a valve list reads as a list
+  return cells.length ? [cells] : [];
 }
 function ctlFor(p,live,split){
   const rows=ctlBase(p,live,split), k=autoOn(p.id);
@@ -1779,7 +1782,7 @@ const RHO_TRACE_MIN=150, TAVG_TRACE_MIN=1;
    note on HOST_K. Everything is laid out off `h` rather than pinned, because
    the rail width is the player's to change. */
 function rhoViz(x,y,w,h){
-  const s=S; if(!s) return;
+  const s=coreSeen(S,coreOf(sel)); if(!s) return;
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
   // P.BETA is the delayed fraction; everything on this widget is pcm
   const beta=P?P.BETA*1e5:650;
@@ -2069,7 +2072,7 @@ function heatViz(x,y,w,h){
 
    Drawn through hostPaint(), so x,y start at 0,0 - see the note on HOST_K. */
 function dmgViz(x,y,w,h){
-  const s=S; if(!s||!s.nDmg) return;
+  const s=coreSeen(S,coreOf(sel)); if(!s||!s.nDmg) return;
   const L=x+2, R=x+w-2;
 
   txt("FUEL DAMAGE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
@@ -2148,6 +2151,7 @@ function readoutsFor(p,s){
   // a fitting is a part like any other, and what it is worth watching depends
   // on its mode rather than on its id - see readoutsForFit() below
   if(p.role==="fitting") return readoutsForFit(id,s);
+  const K=(P&&P.cores&&P.cores[coreOf(id)])||P; if(p.role==="core"||p.role==="rods") s=coreSeen(s,coreOf(id));
   if(p.role==="core"){
     /* POWER IS COLOURED BY POWER. It used to be forced red whenever DNBR fell
        under 1.30, which put a red 85 % on the panel - a number reading NORMAL
@@ -2159,7 +2163,7 @@ function readoutsFor(p,s){
       band(s.n*100,0,150,[[105,C.green,"NORMAL"],[110,C.amber,"HIGH"],[150,C.red,"OVERPOWER"]],
         {dp:0,lim:trip((1.10+0.22*m)*100,"FLUX")}),
       "Heat the core is making, as a share of what it is rated for. This is the chain reaction alone - decay heat is on top of it, and TOTAL MADE below is the two together. The real ceiling is DNBR, not this number.");
-    add("THERMAL",(s.n*P.rated).toFixed(0)+" MWt",null,
+    add("THERMAL",(s.n*K.rated).toFixed(0)+" MWt",null,
       "The same power in megawatts of heat: the rating times the share above.");
     { const per=period(), fin=isFinite(per)&&Math.abs(per)<999;
       add("PERIOD", fin?per.toFixed(0)+" s":"INF",
@@ -2168,7 +2172,7 @@ function readoutsFor(p,s){
     // scale top is measured off the plant: a sodium/salt core rests at 3.2
     // against water's 1.76, so a fixed 2.6 would peg the needle on half the
     // architectures from the first frame
-    const dHi=Math.max(2.6,P.dnbr0*1.3);
+    const dHi=Math.max(2.6,K.dnbr0*1.3);
     add("DNBR",s.dnbr.toFixed(2),
       band(s.dnbr,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],
         {dp:2,lim:trip(1.18-0.16*m,"TRIP")}),
@@ -2179,9 +2183,9 @@ function readoutsFor(p,s){
     add("FUEL TEMP",s.Tf.toFixed(0)+" K",
       // amber as a FRACTION of this fuel's own limit: a fixed 150 K short of it
       // sat amber on a gas core, which rests 1366 K hot by design
-      band(s.Tf,300,Math.max(2200,P.tdmg+700),[[P.tdmg*.95,C.cyan,"NORMAL"],[P.tdmg,C.amber,"HOT"],[Math.max(2200,P.tdmg+700),C.red,"FAILING"]],
-        {dp:0,lim:trip(P.tdmg+100+280*m,"TRIP")}),
-      "Temperature inside the pellets. Past "+P.tdmg.toFixed(0)+" K the cladding starts to fail, and that damage is permanent.");
+      band(s.Tf,300,Math.max(2200,K.tdmg+700),[[K.tdmg*.95,C.cyan,"NORMAL"],[K.tdmg,C.amber,"HOT"],[Math.max(2200,K.tdmg+700),C.red,"FAILING"]],
+        {dp:0,lim:trip(K.tdmg+100+280*m,"TRIP")}),
+      "Temperature inside the pellets. Past "+K.tdmg.toFixed(0)+" K the cladding starts to fail, and that damage is permanent.");
     add("PEAK Fq",s.fq.toFixed(2),
       band(s.fq,1,5,[[3.2,C.cyan,"FLAT"],[4.2,C.amber,"PEAKED"],[5,C.red,"HOT SPOT"]],{dp:2}),
       "How much hotter the hottest spot is than the core average. 1.00 is perfectly flat; past 3.2 one channel is doing far too much of the work.");
@@ -2202,20 +2206,20 @@ function readoutsFor(p,s){
        than on a pump because it is one number about the CORE and there are
        many pumps - and the trip it carries is a reactor trip. */
     /* IN KILOGRAMS, because the solve answers in kilograms: s.flowNet is a
-       share of P.netRef and P.netRef is a real flow in kg/s, so the figure is a
+       share of K.netRef and K.netRef is a real flow in kg/s, so the figure is a
        multiplication and not an invention. The SCALE tops at 1.3 of the
        reference and not at 1.1: the reference is solved at nominal bore, so a
        plant piped wider than nominal rests above it - the stock plant sits at
        1.12 and the sodium plant at 1.9, so the ceiling is twice the reference
        and a water plant's needle sits at half scale rather than on the end. */
-    const fref=(P.netRef>0?P.netRef:0);
+    const fref=(K.netRef>0?K.netRef:0);
     add("CORE FLOW",(s.flowNet*fref).toFixed(0)+" kg/s",
       band(s.flowNet*fref,0,fref*2,
-        [[P.flowMin*fref,C.red,"STARVED"],[fref*0.9,C.amber,"LOW"],[fref*2,C.cyan,"NORMAL"]],
-        {dp:0,lim:trip(P.flowMin*1.02*fref,"TRIP")}),
+        [[K.flowMin*fref,C.red,"STARVED"],[fref*0.9,C.amber,"LOW"],[fref*2,C.cyan,"NORMAL"]],
+        {dp:0,lim:trip(K.flowMin*1.02*fref,"TRIP")}),
       "Coolant actually reaching the core, which is what the protection system trips on - not what the pumps were told to do. The reference this plant was solved on is "+fref.toFixed(0)+" kg/s. A shut valve or a severed run shows up here and nowhere else.");
-    add("DESIGN FLOOR",(P.flowMin*fref).toFixed(0)+" kg/s",null,
-      "The least flow this pump set still delivers after damage, which is "+(P.flowMin*100).toFixed(0)+" % of the reference. It rises with how much spare pump capacity you actually placed on the grid, beyond one pump per loop.");
+    add("DESIGN FLOOR",(K.flowMin*fref).toFixed(0)+" kg/s",null,
+      "The least flow this pump set still delivers after damage, which is "+(K.flowMin*100).toFixed(0)+" % of the reference. It rises with how much spare pump capacity you actually placed on the grid, beyond one pump per loop.");
     // to 200 %, because a channel CAN carry more than the average and two
     // presets do: a 110 % ceiling pegged BN-600's own needle at 160 %
     add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
@@ -2242,7 +2246,7 @@ function readoutsFor(p,s){
       band(s.meltFrac*100,0,100,[[1e-9,C.cyan,"NONE"],[100,C.red,"MELTING"]],
         {dp:0,lim:[[MELT_LATCH*100,"MELT"]]}),
       "Fuel that is actually liquid, by volume. Cladding has to fail before a pellet can melt, so this can never run ahead of FUEL DAMAGE. Past "+(MELT_LATCH*100).toFixed(0)+"% the plant latches CORE MELT.");
-    add("OXIDATION HEAT",(s.qOx*P.rated).toFixed(1)+" MWt",
+    add("OXIDATION HEAT",(s.qOx*K.rated).toFixed(1)+" MWt",
       s.qOx>s.n*PROMPT_F?C.red:s.qOx>0?C.amber:C.ink2,
       "Heat the burning cladding is making. When this passes what the chain reaction is making, the reaction feeds itself and nothing on this ship can stop it.");
     add("HYDROGEN",s.h2.toFixed(1)+" kg",
@@ -2267,7 +2271,7 @@ function readoutsFor(p,s){
        decay term can be compared against a generator's own duty. The bars stay
        on the shared fractional scale - that is what makes them comparable. */
     { const hbar=v=>({f:clamp(v/HEAT_BAR,-1,1),full:HEAT_BAR});
-      const mw=v=>(v*P.rated).toFixed(1)+" MWt";
+      const mw=v=>(v*K.rated).toFixed(1)+" MWt";
       for(const r of HEAT_ROWS){
         const v = r[1]==="prompt" ? HEATBAL.prompt : (s.dec[+r[1][1]]||0);
         add(r[0],mw(v),C.amber,r[2],hbar(v));
@@ -2293,11 +2297,11 @@ function readoutsFor(p,s){
       "Where the bank stands. 100% is fully inserted, and the rods bite hardest around mid-travel rather than evenly.");
     add("BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",null,
       "Where you have asked the bank to go. The drives walk to it at "+(rodRate()*100).toFixed(1)+" %/s, so this leads the position every time you move the slider.");
-    add("WORTH HERE",coreRodWorth(s).toFixed(0)+" pcm",null,
+    add("WORTH HERE",coreRodWorth(K,s).toFixed(0)+" pcm",null,
       "What the bank is worth where it actually stands, solved on the live flux. Move a cluster inward at the bench and this changes.");
     add("DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green,
       "Whether the drive mechanisms answer at all. A hit here jams the bank where it stands, and a scram will not move it either.");
-    add("SCRAM TIME",(1/P.scram).toFixed(1)+" s",null,
+    add("SCRAM TIME",(1/K.scram).toFixed(1)+" s",null,
       "How long a full insertion takes on a trip. You bought this at the bench, and faster gear is heavier gear.");
     add("TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green,
       "Whether a trip is latched in. While it is, the drives are pinned fully inserted whatever the slider says.");
@@ -2310,10 +2314,10 @@ function readoutsFor(p,s){
     add("TILT DEMAND",(s.tiltDem>=0?"+":"")+s.tiltDem.toFixed(2),
         movingCol(s.tiltDem,s.tilt,.01),
       "Where you have asked the tilt to go. It walks there at drive speed, so it leads the trim above.");
-    add("SHUTDOWN MGN",P.sdm.toFixed(0)+" pcm",
+    add("SHUTDOWN MGN",K.sdm.toFixed(0)+" pcm",
       // to -5000, because a graphite plant's bank alone holds it down by
       // -3285 pcm and the old -3000 floor pegged the needle off the end
-      band(P.sdm,-5000,3000,[[200,C.red,"THIN"],[1000,C.amber,"SLIM"],[3000,C.green,"AMPLE"]],{dp:0}),
+      band(K.sdm,-5000,3000,[[200,C.red,"THIN"],[1000,C.amber,"SLIM"],[3000,C.green,"AMPLE"]],{dp:0}),
       "How firmly the bank ALONE holds this core down once it cools and the xenon decays. Usually negative, and that is what boron is for.");
   } else if(p.role==="sg"){
     add.apply(null,rowSgl(s,id));
@@ -2629,15 +2633,9 @@ function readoutsFor(p,s){
   // shielding has nothing to report, and neither has a component never
   // bought - the grid already draws the dashed outline and NOT FITTED itself
   if(!R.length||!fitted(p)) return [];
-  /* WHAT THIS BOX'S OWN METAL IS AT, on every machine that can fail this way.
-     The room field says the compartment is hot; this says whether the machine
-     has caught up with it yet, and it is the number the damage integral
-     reads. */
-  { const lim=partTsurv(p);
-    if(lim) R.push(["SKIN TEMP",partSkin(s,p).toFixed(0)+" K",
-      band(partSkin(s,p),T_HULL,lim*1.2,[[lim*0.85,C.cyan,"COOL"],
-        [lim,C.amber,"HOT"],[Infinity,C.red,"COOKING"]],{dp:0,lim:[[lim,"LIMIT"]]}),
-      "The temperature of this machine's own casing, against the "+lim+" K it was built for. It has mass, so it lags the air around it - that lag is the time you have to fix whatever is heating the room. Past the limit it cooks, and what it is standing in is the AIR TEMP layer."]); }
+  /* WHAT THIS BOX'S OWN METAL IS AT is on the panel's own title bar now
+     (marginSkinSync(), ui/margin.js) - one figure with a limit, wanted at a
+     glance on every panel and not worth a row of its own. */
   /* ONE damage row. Every role used to print its own DESTROYED line under
      this one, saying the same thing twice off the same s.dmgParts test; the
      consequence they carried comes off DMGFX, which is the table that already

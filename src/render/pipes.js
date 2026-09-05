@@ -81,7 +81,7 @@ function pipeColours(L){
      The cold end of the lerp was a hardcoded water blue, so a sodium plant's
      primary drew water. It is the coolant family's own hue now; the
      temperature lerp stays and simply lerps about that hue instead. */
-  const cc = (COOLANT[D.cool] && COOLANT[D.cool].col) || "#5aa9d6";
+  const cc = (COOLANT[priD().cool] && COOLANT[priD().cool].col) || "#5aa9d6";
   return { hot: L?lerpC(cc,"#ff5a45",(Th-520)/110):"#c8735e",
            cold:L?lerpC(cc,"#ff5a45",(Tc-520)/110):cc,
            surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2", cw:"#5aa9d6",

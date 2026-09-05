@@ -109,55 +109,55 @@ const drvList = (names,cap) => { cap=cap||4;
     : names.join(", "); };
 const drvHolds = () => holdTankIds().map(id=>{ const q=partOf(id); return q?partName(q):id; });
 const STATDRV={
- "POWER DENSITY":d=>["core rating off the hottest pin   "+D.power.toFixed(0)+" MWt",
+ "POWER DENSITY":d=>["core rating off the hottest pin   "+d.power.toFixed(0)+" MWt",
    "BINDING LIMIT   "+d.bind.bind,
-   "the fuel you laid out   "+(LM?LM.vol.toFixed(1):"0")+" m3"],
+   "the fuel you laid out   "+latM(priD()).vol.toFixed(1)+" m3"],
  "GRACE TIME":d=>["COOLANT "+d.a.name+"   x"+d.a.grace.toFixed(2),
-   "CHIMNEY HEIGHT   x"+D.chim.toFixed(2),
+   "CHIMNEY HEIGHT   x"+priD().chim.toFixed(2),
    "STEAM GENERATORS   "+drvList(drvNames("sg")),
-   "core rating off the lattice   "+D.power.toFixed(0)+" MWt"],
+   "core rating off the lattice   "+d.power.toFixed(0)+" MWt"],
  "DELAYED NEUTRONS":d=>["FUEL "+d.f.name+"   beta "+d.beta+" pcm",
-   "FUEL ZONES painted on the RADIAL PLAN   "+latZonesUsed().length],
- "SHUTDOWN MARGIN":d=>["ABSORBER + the clusters on the RADIAL PLAN   bank worth "+D.rodw.toFixed(0)+" pcm",
-   "SPREAD   "+D.nbank+" bank"+(D.nbank>1?"s":""),
+   "FUEL ZONES painted on the RADIAL PLAN   "+latZonesUsed(priD()).length],
+ "SHUTDOWN MARGIN":d=>["ABSORBER + the clusters on the RADIAL PLAN   bank worth "+priD().rodw.toFixed(0)+" pcm",
+   "SPREAD   "+priD().nbank+" bank"+(priD().nbank>1?"s":""),
    "xenon coming back after a trip   "+d.xeW.toFixed(0)+" pcm",
    "Doppler handed back as the fuel cools   "+(-d.pwrDef).toFixed(0)+" pcm",
    "with the boron system driven out   "+d.sdmB.toFixed(0)+" pcm"],
  "BINDING LIMIT":d=>["FUEL "+d.f.name+"   melt at "+d.bind.melt.toFixed(1)+" kW/m",
    "COOLANT "+d.a.name+"   "+d.a.qpp.toFixed(2)+" MW/m2",
-   "PIN DIAMETER "+(rodD()*1000).toFixed(1)+" mm   flux ceiling "+d.bind.dnb.toFixed(1)+" kW/m"],
+   "PIN DIAMETER "+(rodD(priD())*1000).toFixed(1)+" mm   flux ceiling "+d.bind.dnb.toFixed(1)+" kW/m"],
  "CONDENSER MARGIN":d=>["CONDENSERS   "+drvList(drvNames("cond")),
    "RADIATORS   "+drvList(drvNames("rad")),
    "turbine trips at   "+TURB_TRIP_P+" MPa backpressure"],
  "VOID COEFFICIENT":d=>["RADIAL PLAN pitch and moderator blocks   thermal share "+(d.mth*100).toFixed(0)+" %",
-   "MODERATOR "+MODER[D.mod].name,
-   "REFLECTOR "+REFL[D.refl].name+"   "+(d.rf.dV>0?"+":"")+d.rf.dV+" pcm of void shift"],
- "MODERATOR COEFF":d=>["RADIAL PLAN pitch   x"+D.pitch.toFixed(2)+"   moderator ratio "+d.mr.toFixed(2),
+   "MODERATOR "+MODER[priD().mod].name,
+   "REFLECTOR "+REFL[priD().refl].name+"   "+(d.rf.dV>0?"+":"")+d.rf.dV+" pcm of void shift"],
+ "MODERATOR COEFF":d=>["RADIAL PLAN pitch   x"+priD().pitch.toFixed(2)+"   moderator ratio "+d.mr.toFixed(2),
    "the hump   peak at "+MR_PEAK.toFixed(1)+", this core is "+(d.mr<MR_PEAK?"UNDER":"OVER")+"-moderated",
-   "MODERATOR "+MODER[D.mod].name+"   "+MODER[D.mod].aT+" pcm/K"],
+   "MODERATOR "+MODER[priD().mod].name+"   "+MODER[priD().mod].aT+" pcm/K"],
  "POWER COEFFICIENT":d=>["FUEL "+d.f.name+"   conduction x"+d.f.condK.toFixed(2),
    "COOLANT "+d.a.name+"   Doppler "+d.a.aF+" pcm/K over a "+d.a.dTf+" K pellet rise"],
  "PEAKING FACTOR":()=>["RADIAL PLAN   where the fuel and the clusters stand",
    "AXIAL SECTION   the reflector lids and the active length",
-   "SPREAD   "+D.nbank+" bank"+(D.nbank>1?"s":"")],
+   "SPREAD   "+priD().nbank+" bank"+(priD().nbank>1?"s":"")],
  "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2),
    "equilibrium at full power   "+d.xeW.toFixed(0)+" pcm",
    "peak "+XE_PEAK.h.toFixed(1)+" h after the trip   x"+XE_PEAK.x.toFixed(2)],
  "RESTART WINDOW":d=>["EXCESS REACTIVITY   "+d.excess.toFixed(0)+" pcm",
    "the bank at its commissioning position   "+(d.excess-(d.xeW-d.boronOp)).toFixed(0)+" pcm to pull out",
    "XENON PIT DEPTH   "+d.xePit.toFixed(0)+" pcm"],
- "SCRAM TRAVEL":()=>["SCRAM SYSTEM "+SCRAM[D.scram].name+"   "+SCRAM[D.scram].rate.toFixed(2)+" of full travel a second"],
+ "SCRAM TRAVEL":()=>["SCRAM SYSTEM "+SCRAM[priD().scram].name+"   "+SCRAM[priD().scram].rate.toFixed(2)+" of full travel a second"],
  "OPERATING PRESS":d=>{ const h=drvHolds();
    return [h.length? "PRESSURE CONTROL setpoint on "+drvList(h) : "no pressurizer on the core circuit - suggested off the coolant",
      "COOLANT "+d.a.name+"   nominal "+d.a.P0+" MPa"]; },
  "EXCESS REACTIVITY":d=>["FUEL "+d.f.name+"   +"+d.f.excess.toFixed(0)+" pcm",
    "MODERATION RATIO "+d.mr.toFixed(2)+"   x"+modK(d.mr,d.mth).toFixed(3),
-   "PIN DIAMETER "+(rodD()*1000).toFixed(1)+" mm   clad eats -"+(ZR_ABS*modClad()).toFixed(0)+" pcm",
-   "POISON pen on the RADIAL PLAN   -"+D.poison.toFixed(0)+" pcm",
+   "PIN DIAMETER "+(rodD(priD())*1000).toFixed(1)+" mm   clad eats -"+(ZR_ABS*modClad(priD())).toFixed(0)+" pcm",
+   "POISON pen on the RADIAL PLAN   -"+priD().poison.toFixed(0)+" pcm",
    "leakage   -"+d.leak.toFixed(0)+" pcm"],
  "NEUTRON LEAKAGE":d=>["the flux this drawing settles into   peaking "+d.Fq.toFixed(2),
-   "AXIAL SECTION active length against the RADIAL PLAN radius   H/D "+D.hd.toFixed(2),
-   "REFLECTOR "+REFL[D.refl].name+"   rim "+LAT.reflR+" / lid "+LAT.reflT+" / floor "+LAT.reflB],
+   "AXIAL SECTION active length against the RADIAL PLAN radius   H/D "+priD().hd.toFixed(2),
+   "REFLECTOR "+REFL[priD().refl].name+"   rim "+priD().lat.reflR+" / lid "+priD().lat.reflT+" / floor "+priD().lat.reflB],
  "CONTAINMENT":d=>["PAINT tool   "+matCells().length+" cells painted, "+d.nCont+" closed region"+(d.nCont===1?"":"s"),
    "MATERIAL + THICKNESS on the painted cell's own panel",
    "holds back   "+((1-d.contRel)*100).toFixed(0)+" %"],
@@ -311,10 +311,10 @@ let dbIssues=null, dbIssuesPass=0;
 const NO_CORE=[["RED","There is no reactor on this ship. Place one, and the rest of the design has something to be judged against.",null]];
 function designIssues(d,M){
   const lay=()=>layoutWarnings(M||layoutMetrics());
-  if(d) return roleOf("core") ? d.warn.concat(latWarn(),lay()) : NO_CORE.concat(lay());
+  if(d) return coreIds().length ? d.warn.concat(lay()) : NO_CORE.concat(lay());
   const p=layPass();                      // 0 = outside a window, so not cacheable
   if(p && dbIssuesPass===p) return dbIssues;
-  const out = roleOf("core") ? derived().warn.concat(latWarn(),lay())
+  const out = coreIds().length ? derived().warn.concat(lay())
                              : NO_CORE.concat(lay());
   if(p){ dbIssues=out; dbIssuesPass=p; }
   return out;
@@ -451,8 +451,8 @@ keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.active="select"; }}
    meant five of the six left the other canvas inert. */
 const LATPEN={plan:"fuel",sec:"len",bank:0,hover:null,last:null};
 
-function latRingPhi(){
-  const T=corePredict(derived()), phi=T.phiCold, r=new Float64Array(XNR);
+function latRingPhi(cD){
+  const T=corePredict(cD,derived(coreIdOf(cD))), phi=T.phiCold, r=new Float64Array(XNR);
   let mx=1e-9;
   for(let i=0;i<XNR;i++){
     let s=0; for(let j=0;j<XNZ;j++) s+=phi[XIX(i,j)];
@@ -461,50 +461,50 @@ function latRingPhi(){
   for(let i=0;i<XNR;i++) r[i]/=mx;
   return r;
 }
-const latRingOf=(u,v)=>Math.min(XNR-1,
-  Math.floor(Math.hypot(u+.5,v+.5)*LAT.pitch/LM.dr));
-function latSlotPhi(u,v,ph){
-  const t=Math.hypot(u+.5,v+.5)*LAT.pitch/LM.dr-0.5;
+const latRingOf=(cD,u,v)=>Math.min(XNR-1,
+  Math.floor(Math.hypot(u+.5,v+.5)*cD.lat.pitch/latM(cD).dr));
+function latSlotPhi(cD,u,v,ph){
+  const t=Math.hypot(u+.5,v+.5)*cD.lat.pitch/latM(cD).dr-0.5;
   const i0=Math.floor(t), f=clamp(t-i0,0,1);
   const a=ph[clamp(i0,0,XNR-1)], b=ph[clamp(i0+1,0,XNR-1)];
   return a+(b-a)*f;
 }
-function latShare(u,v,ph){
+function latShare(cD,u,v,ph){
   let tot=0;
   for(let a=0;a<LQ;a++) for(let b=0;b<LQ;b++)
-    if(LAT.slot[LIX(a,b)]) tot+=latSlotPhi(a,b,ph);
-  return tot>1e-9? latSlotPhi(u,v,ph)/(4*tot) : 0;
+    if(cD.lat.slot[LIX(a,b)]) tot+=latSlotPhi(cD,a,b,ph);
+  return tot>1e-9? latSlotPhi(cD,u,v,ph)/(4*tot) : 0;
 }
-function latAct(u,v,shift){
+function latAct(cD,u,v,shift){
   const q=LIX(u,v);
   if(LATPEN.plan==="mod"){
-    const nv=shift?L_EMPTY:(LAT.slot[q]===L_MOD?L_FUEL:L_MOD);
-    if(LAT.slot[q]===nv) return;
-    LAT.slot[q]=nv; if(nv!==L_FUEL) LAT.rod[q]=-1;
+    const nv=shift?L_EMPTY:(cD.lat.slot[q]===L_MOD?L_FUEL:L_MOD);
+    if(cD.lat.slot[q]===nv) return;
+    cD.lat.slot[q]=nv; if(nv!==L_FUEL) cD.lat.rod[q]=-1;
   } else if(LATPEN.plan==="fuel"){
-    const nv=shift?L_EMPTY:(LAT.slot[q]?L_EMPTY:L_FUEL);
-    if(LAT.slot[q]===nv) return;
-    LAT.slot[q]=nv; if(!nv) LAT.rod[q]=-1;
+    const nv=shift?L_EMPTY:(cD.lat.slot[q]?L_EMPTY:L_FUEL);
+    if(cD.lat.slot[q]===nv) return;
+    cD.lat.slot[q]=nv; if(!nv) cD.lat.rod[q]=-1;
   } else if(LATPEN.plan==="pois"){
-    if(!latFuel(q)) return;
-    LAT.slot[q]=LAT.slot[q]===L_POIS?L_FUEL:L_POIS;
+    if(!latFuel(cD,q)) return;
+    cD.lat.slot[q]=cD.lat.slot[q]===L_POIS?L_FUEL:L_POIS;
   } else if(LATPEN.plan==="zone"){
-    if(!latFuel(q)) return;
-    const nv=shift?0:(LAT.zone[q]+1)%LAT_NZ;
-    if(LAT.zone[q]===nv) return;
-    LAT.zone[q]=nv;
+    if(!latFuel(cD,q)) return;
+    const nv=shift?0:(cD.lat.zone[q]+1)%LAT_NZ;
+    if(cD.lat.zone[q]===nv) return;
+    cD.lat.zone[q]=nv;
   } else if(LATPEN.plan==="rod"){
-    if(!latFuel(q)) return;
-    const nv=LAT.rod[q]===LATPEN.bank?-1:LATPEN.bank;
-    if(LAT.rod[q]===nv) return;
-    LAT.rod[q]=nv;
+    if(!latFuel(cD,q)) return;
+    const nv=cD.lat.rod[q]===LATPEN.bank?-1:LATPEN.bank;
+    if(cD.lat.rod[q]===nv) return;
+    cD.lat.rod[q]=nv;
   }
-  latRevolve();
+  latRevolve(cD);
 }
 
 /* x,y,w,h are the host canvas's own box, origin 0,0, in the fixed HOST_K scale
    hostPaint() sets - not plant layout units. */
-function latPlan(x,y,w,h){
+function latPlan(cD,x,y,w,h){
   const AX=15;
   // the readout line under the grid has to fit INSIDE the box now: hostPaint()
   // clips to the host element, where before this spilled onto #cv
@@ -514,36 +514,36 @@ function latPlan(x,y,w,h){
      a core: nothing about it said the shape was round. Every slot is drawn four
      times, mirrored about both axes, and a click anywhere on it FOLDS back onto
      the one quarter LAT actually stores - so the gesture, the data and
-     latRevolve() are all exactly what they were. */
-  const cs=Math.min(gw,gh)/(2*LQ+0.6), p=LAT.pitch, ph=latRingPhi();
+     latRevolve(cD) are all exactly what they were. */
+  const cs=Math.min(gw,gh)/(2*LQ+0.6), p=cD.lat.pitch, ph=latRingPhi(cD);
   /* CORE and RODS each own a lattice plan, so both paint through here every
      frame. The hover has to be tagged with the canvas it was taken in, or the
      second call clears what the first just found and the ring highlight lands
      on the plan the pointer is NOT over. */
   const me=ui.host, hov0=LATPEN.hover;
-  const hv=(hov0&&hov0.host===me)? hov0 : null, hRing=hv? latRingOf(hv.u,hv.v) : -1;
+  const hv=(hov0&&hov0.host===me)? hov0 : null, hRing=hv? latRingOf(cD,hv.u,hv.v) : -1;
   let rMax=0;
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
-    if(LAT.slot[LIX(u,v)]) rMax=Math.max(rMax,Math.hypot(u+1,v+1)*p);
+    if(cD.lat.slot[LIX(u,v)]) rMax=Math.max(rMax,Math.hypot(u+1,v+1)*p);
 
   fillRect(gx,gy,gw,gh,C.well);
   const CX=gx+gw/2, CY=gy+gh/2;
   ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,gw,gh); ctx.clip();
   if(hRing>=0){
-    const r0=hRing*LM.dr/p*cs, r1=(hRing+1)*LM.dr/p*cs;
+    const r0=hRing*latM(cD).dr/p*cs, r1=(hRing+1)*latM(cD).dr/p*cs;
     ctx.beginPath(); ctx.arc(CX,CY,r1,0,7);
     ctx.arc(CX,CY,r0,0,7,true);
     ctx.fillStyle="rgba(240,168,48,.10)"; ctx.fill();
   }
   ctx.strokeStyle="rgba(95,210,226,.16)"; ctx.lineWidth=1;
   for(let i=1;i<XNR;i++){
-    ctx.beginPath(); ctx.arc(CX,CY,i*LM.dr/p*cs,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(CX,CY,i*latM(cD).dr/p*cs,0,7); ctx.stroke();
   }
   /* the ring the hot node stands in - the peaking factor is what the rating
      divides by, so the place it is measured is a place you can see */
-  { const hi=nodePeak(corePredict(derived()).phiCold).i;
+  { const hi=nodePeak(corePredict(cD,derived(coreIdOf(cD))).phiCold).i;
     ctx.beginPath();
-    ctx.arc(CX,CY,(hi+.5)*LM.dr/p*cs,0,7);
+    ctx.arc(CX,CY,(hi+.5)*latM(cD).dr/p*cs,0,7);
     ctx.strokeStyle=C.amber; ctx.lineWidth=1.4; ctx.stroke(); }
   if(rMax>0){
     ctx.save(); ctx.setLineDash([3,3]);
@@ -553,7 +553,7 @@ function latPlan(x,y,w,h){
   for(let uu=-LQ;uu<LQ;uu++) for(let vv=-LQ;vv<LQ;vv++){
     const u=uu<0?-1-uu:uu, v=vv<0?-1-vv:vv;
     const X=CX+uu*cs, Y=CY-(vv+1)*cs, q=LIX(u,v);
-    const s=LAT.slot[q], rod=LAT.rod[q];
+    const s=cD.lat.slot[q], rod=cD.lat.rod[q];
     if(!s){ fillRect(X+cs/2-1,Y+cs/2-1,2,2,"#1b2c33"); continue; }
     if(s===L_MOD){
       fillRect(X+1,Y+1,cs-2,cs-2,"#2a2622");
@@ -563,13 +563,13 @@ function latPlan(x,y,w,h){
     }
     const col=s===L_POIS?"#12303c":"#4a3208", ink=s===L_POIS?C.blue:C.amber;
     fillRect(X+1,Y+1,cs-2,cs-2,col);
-    const zn=LAT.zone[q];
+    const zn=cD.lat.zone[q];
     frame(X+1,Y+1,cs-2,cs-2,zn? C.cyan : lerpC(col,ink,.42));
     // a zone is a rim, not a fill: the flux dot and the poison colour still own
     // the middle of the slot, and zone one draws nothing at all
     if(zn) txt(String(zn+1),X+cs-2.5,Y+7,
       {size:6,weight:700,align:"right",color:C.cyan});
-    const r=cs*.30*Math.sqrt(clamp(latSlotPhi(u,v,ph),.04,1));
+    const r=cs*.30*Math.sqrt(clamp(latSlotPhi(cD,u,v,ph),.04,1));
     ctx.beginPath(); ctx.arc(X+cs/2,Y+cs/2,r,0,7);
     ctx.fillStyle=ink; ctx.globalAlpha=s===L_POIS?.9:.55; ctx.fill(); ctx.globalAlpha=1;
     if(rod>=0){
@@ -598,7 +598,7 @@ function latPlan(x,y,w,h){
   const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
     const c=cellAt(pt.x,pt.y); if(!c) return;
     const id=c.u+","+c.v; if(id===LATPEN.last) return;
-    LATPEN.last=id; latAct(c.u,c.v,e&&e.shiftKey);
+    LATPEN.last=id; latAct(cD,c.u,c.v,e&&e.shiftKey);
   }});
   // clear only OUR hover: the other plan's is not ours to stand down
   if(hov0&&hov0.host===me) LATPEN.hover=null;
@@ -610,11 +610,11 @@ function latPlan(x,y,w,h){
 
   if(hv) fitTxt("S "+hv.u+","+hv.v+"  RING "+hRing+
       "  r"+(Math.hypot(hv.u+.5,hv.v+.5)*p).toFixed(2)+"m"+
-      (LAT.slot[LIX(hv.u,hv.v)]
-        ? "  "+(latShare(hv.u,hv.v,ph)*100).toFixed(2)+"%"
+      (cD.lat.slot[LIX(hv.u,hv.v)]
+        ? "  "+(latShare(cD,hv.u,hv.v,ph)*100).toFixed(2)+"%"
         : "  EMPTY"),
       gx,gy+gh+11,gw,{size:6.5,sp:.3,color:C.amber});
-  else fitTxt(latCount()+" ASSEMBLIES / DOT IS FLUX",
+  else fitTxt(latCount(cD)+" ASSEMBLIES / DOT IS FLUX",
       gx,gy+gh+11,gw,{size:6.5,sp:.5,color:C.ink2});
 }
 /* a rail control is a DOM node, so it carries its own data-tip-title and the
@@ -658,36 +658,36 @@ function latSecGeom(x,y,w,h){
   const K=Math.min(gw/SEC_W, gh/SEC_H);
   return {gx,gy,gw,gh,K,CX:gx+gw/2,CY:gy+gh-SEC_FLOOR*K};
 }
-function latSectionAct(G,pt,shift){
+function latSectionAct(cD,G,pt,shift){
   const rr=Math.abs(pt.x-G.CX)/G.K, zz=(G.CY-pt.y)/G.K;
   if(LATPEN.sec==="len"){
     const nv=clamp(zz,LAT_LEN_MIN,LAT_LEN_MAX);
-    if(Math.abs(nv-LAT.len)<1e-9) return;
-    LAT.len=nv; latRevolve(); return;
+    if(Math.abs(nv-cD.lat.len)<1e-9) return;
+    cD.lat.len=nv; latRevolve(cD); return;
   }
   if(LATPEN.sec!=="refl") return;
-  const dr=LM.dr, dz=LM.dz, halfW=(XNR-0.5)*dr;
+  const dr=latM(cD).dr, dz=latM(cD).dz, halfW=(XNR-0.5)*dr;
   let face=null, k=0;
-  if(zz>LAT.len){ face="reflT"; k=Math.ceil((zz-LAT.len)/dz); }
+  if(zz>cD.lat.len){ face="reflT"; k=Math.ceil((zz-cD.lat.len)/dz); }
   else if(zz<0){ face="reflB"; k=Math.ceil(-zz/dz); }
   else if(rr>halfW){ face="reflR"; k=Math.ceil((rr-halfW)/dr); }
   if(!face) return;
   const nv=clamp(shift?k-1:k,0,LAT_REFLMAX);
   if(LAT[face]===nv) return;
-  LAT[face]=nv; latRevolve();
+  LAT[face]=nv; latRevolve(cD);
 }
-function latSection(x,y,w,h){
+function latSection(cD,x,y,w,h){
   const G=latSecGeom(x,y,w,h), {gx,gy,gw,gh,K,CX,CY}=G;
-  const dr=LM.dr, dz=LM.dz, cw=dr*K, ch=dz*K, NC=XNR*2-1;
-  const halfW=(XNR-0.5)*dr*K, colH=LAT.len*K;
+  const dr=latM(cD).dr, dz=latM(cD).dz, cw=dr*K, ch=dz*K, NC=XNR*2-1;
+  const halfW=(XNR-0.5)*dr*K, colH=cD.lat.len*K;
   fillRect(gx,gy,gw,gh,C.well);
   ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,gw,gh); ctx.clip();
 
   // the reflector band, at the thickness each face was given, in the tone of
   // the material bought - the same REFLC row the control room's section uses
-  const rc=REFLC[D.refl];
+  const rc=REFLC[cD.refl];
   if(rc){
-    const bt=LAT.reflT*ch, bb=LAT.reflB*ch, br=LAT.reflR*cw;
+    const bt=cD.lat.reflT*ch, bb=cD.lat.reflB*ch, br=cD.lat.reflR*cw;
     ctx.globalAlpha=.30;
     if(br>0){ fillRect(CX-halfW-br,CY-colH-bt,br,colH+bt+bb,rc);
               fillRect(CX+halfW,CY-colH-bt,br,colH+bt+bb,rc); }
@@ -702,10 +702,10 @@ function latSection(x,y,w,h){
      time and the section had nothing at all, which is half a picture of a
      shape the whole rating now divides by. The HOT NODE - the node the rating
      divides by - is marked in both. */
-  const T=corePredict(derived()), phi=T.phiCold, hot=nodePeak(phi);
+  const T=corePredict(cD,derived(coreIdOf(cD))), phi=T.phiCold, hot=nodePeak(phi);
   for(let c=0;c<NC;c++){
     const i=Math.abs(c-(XNR-1)), cx=CX+(c-(XNR-1))*cw-cw/2;
-    const ff=clamp(LM.frac[i],0,1), oo=clamp(LM.occ[i],0,1);
+    const ff=clamp(latM(cD).frac[i],0,1), oo=clamp(latM(cD).occ[i],0,1);
     for(let j=0;j<XNZ;j++){
       const cy=CY-(j+1)*ch;
       if(oo<.02){ fillRect(cx+cw/2-1,cy+ch/2-1,2,2,"#1b2c33"); continue; }
@@ -725,7 +725,7 @@ function latSection(x,y,w,h){
   frame(gx,gy,gw,gh,C.edge);
 
   const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
-    latSectionAct(G,pt,e&&e.shiftKey);
+    latSectionAct(cD,G,pt,e&&e.shiftKey);
   }});
   /* THE COLUMN TOP IS A HANDLE, NOT A PEN: with a plan pen up latSectionAct()
      returned at its first line and the whole section was inert. Grabbed by its
@@ -736,14 +736,14 @@ function latSection(x,y,w,h){
     : push({x:CX-halfW-4,y:CY-colH-6,w:2*halfW+8,h:12,type:"paint",fn:pt=>{
     if(grab===null) grab=(CY-colH)-pt.y;
     const nv=clamp((CY-(pt.y+grab))/K,LAT_LEN_MIN,LAT_LEN_MAX);
-    if(Math.abs(nv-LAT.len)<1e-9) return;
-    LAT.len=nv; latRevolve();
+    if(Math.abs(nv-cD.lat.len)<1e-9) return;
+    cD.lat.len=nv; latRevolve(cD);
   }});
   const lit=LATPEN.sec==="len"||hov(hw)||ui.drag===hw;
   fillRect(CX-halfW,CY-colH-1.6,2*halfW,3.2,lit?C.amber:C.rail);
   fitTxt(hov(wd)||hov(hw)
-      ? "LEN "+LAT.len.toFixed(2)+" m  H/D "+D.hd.toFixed(2)+
-        "  RIM "+LAT.reflR+"  LID "+LAT.reflT+"  FLOOR "+LAT.reflB
+      ? "LEN "+cD.lat.len.toFixed(2)+" m  H/D "+cD.hd.toFixed(2)+
+        "  RIM "+cD.lat.reflR+"  LID "+cD.lat.reflT+"  FLOOR "+cD.lat.reflB
       : "ELEVATION / DRAG TOP, PAINT FACES",
     gx,gy+gh+11,gw,{size:6.5,sp:.3,color:hov(wd)||hov(hw)?C.amber:C.ink2});
 }
@@ -756,57 +756,57 @@ const LATPEN_SEC=[
 ];
 
 const LATREAD=[
-  ["RATED POWER",()=>D.power.toFixed(0)+" MWt",
+  ["RATED POWER",cD=>cD.power.toFixed(0)+" MWt",
    "Not chosen. What the hottest pin can take, over how lopsided you drew it: the tighter of the two ceilings on one pin - centreline melt, or the surface flux the coolant allows - times every pin in the core, divided by the peaking factor. Flatten the flux and the same fuel makes more power."],
-  ["CORE H / D",()=>D.hd.toFixed(2),
+  ["CORE H / D",cD=>cD.hd.toFixed(2),
    "The shape the lattice revolves to, against the active length you dimensioned."],
-  ["LATTICE PITCH",()=>(LAT.pitch*100).toFixed(1)+" cm",
+  ["LATTICE PITCH",cD=>(cD.lat.pitch*100).toFixed(1)+" cm",
    "Assembly spacing, in centimetres. Tighter under-moderates: stronger, safer moderator feedback but less thermal margin."],
-  ["BURNABLE POISON",()=>D.poison.toFixed(0)+" pcm",
+  ["BURNABLE POISON",cD=>cD.poison.toFixed(0)+" pcm",
    "The volume mean of the pins you placed."],
-  ["CORE DIAMETER",()=>LM.dia.toFixed(2)+" m",
+  ["CORE DIAMETER",cD=>latM(cD).dia.toFixed(2)+" m",
    "The equal-area diameter of the fuel you laid out."],
-  ["ASSEMBLIES",()=>String(latCount()),
+  ["ASSEMBLIES",cD=>String(latCount(cD)),
    "How many fuel assemblies the core has. The plan shows a quarter of them."],
-  ["MODERATOR BLOCKS",()=>String(latModCount()),
+  ["MODERATOR BLOCKS",cD=>String(latModCount(cD)),
    "How many slots you packed with solid moderator instead of fuel. They make no power and they are on the mass budget, and in a helium or sodium core they are the only moderation there is."],
-  ["ACTIVE LENGTH",()=>LAT.len.toFixed(2)+" m",
+  ["ACTIVE LENGTH",cD=>cD.lat.len.toFixed(2)+" m",
    "How tall the fuel column is. Drawn in the section with the LENGTH pen, not set here."],
-  ["REFLECTOR CELLS",()=>LAT.reflR+" rim / "+LAT.reflT+" lid / "+LAT.reflB+" floor",
+  ["REFLECTOR CELLS",cD=>cD.lat.reflR+" rim / "+cD.lat.reflT+" lid / "+cD.lat.reflB+" floor",
    "How many cells of reflector are packed on each face. Painted in the section with the REFLECTOR pen. Leave the floor bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
-  ["CORE MEAN EXCESS",()=>fuelBlend().excess.toFixed(0)+" pcm",
+  ["CORE MEAN EXCESS",cD=>fuelBlend(cD).excess.toFixed(0)+" pcm",
    "The excess reactivity of the loading, blended by fuel volume over the zones you painted. Zoning does not change this - it moves reactivity from one ring to another, which is what flattens peaking."],
-  ["DELAYED FRACTION",()=>fuelBlend().beta.toFixed(0)+" pcm",
+  ["DELAYED FRACTION",cD=>fuelBlend(cD).beta.toFixed(0)+" pcm",
    "Beta for the core as loaded. Mixing MOX into a uranium core lands this between the two, and it is the distance to prompt criticality.",
-   ()=>fuelBlend().beta<450?"var(--c-amber)":null],
-  ["FUEL DAMAGE LIMIT",()=>fuelBlend().tdmg.toFixed(0)+" K",
+   cD=>fuelBlend(cD).beta<450?"var(--c-amber)":null],
+  ["FUEL DAMAGE LIMIT",cD=>fuelBlend(cD).tdmg.toFixed(0)+" K",
    "Where the fuel starts taking damage. It is the WORST fuel in the core, not the average one: melt is a local event, so one zone of metallic fuel cannot hide behind four of ceramic."],
-  ["MODERATION RATIO",()=>modRatio().toFixed(2),
+  ["MODERATION RATIO",cD=>modRatio(cD).toFixed(2),
    "Moderating volume over fuel volume, counted off the drawing: the coolant between the assemblies plus any blocks you packed, each scaled by how well its own material slows a neutron. This one number decides prompt lifetime, the moderator coefficient, the void coefficient and how much enrichment it takes to go critical at all. Near zero is a FAST core."],
-  ["PROMPT LIFETIME",()=>(derived().Lam*1e6).toFixed(2)+" us",
+  ["PROMPT LIFETIME",cD=>(derived(coreIdOf(cD)).Lam*1e6).toFixed(2)+" us",
    "How long a neutron generation lasts, in microseconds. A thermal core is tens of microseconds and forgiving; a fast core is fractions of one, and every reactivity mistake arrives that much faster."],
-  ["VOID COEFFICIENT",()=>derived().aV.toFixed(0)+" pcm",
+  ["VOID COEFFICIENT",cD=>derived(coreIdOf(cD)).aV.toFixed(0)+" pcm",
    "What steam in the core is worth. Negative means voiding shuts the reactor down. Positive means voiding ADDS power, and nothing in the code decides that - it falls out of whether the coolant is the moderator or only an absorber sitting in somebody else's moderator.",
-   ()=>derived().aV>0?"var(--c-amber)":null],
-  ["MODERATOR COEFF",()=>derived().aM.toFixed(0)+" pcm/K",
+   cD=>derived(coreIdOf(cD)).aV>0?"var(--c-amber)":null],
+  ["MODERATOR COEFF",cD=>derived(coreIdOf(cD)).aM.toFixed(0)+" pcm/K",
    "What heating the moderator is worth: the coolant over its share of the moderation, and any blocks you packed over theirs, each at its own material's coefficient. It is the negative feedback that makes the plant follow load by itself."],
-  ["EXPANSION FEEDBACK",()=>{ const d=derived(); return d.aX.toFixed(2)+" / "+d.aS.toFixed(2)+" pcm/K"; },
+  ["EXPANSION FEEDBACK",cD=>{ const d=derived(coreIdOf(cD)); return d.aX.toFixed(2)+" / "+d.aS.toFixed(2)+" pcm/K"; },
    "What hot metal growing is worth, fuel / structure. The fuel column lengthens with the pellet; the grid plate spreads the assemblies and the drivelines push the bank in with the coolant. Weighted by how fast the spectrum is, because leakage is most of a fast core's balance - it is why a sodium core with a positive void coefficient is stable at all.",
-   ()=>derived().aX+derived().aS>-0.5?"var(--c-amber)":null],
+   cD=>derived(coreIdOf(cD)).aX+derived(coreIdOf(cD)).aS>-0.5?"var(--c-amber)":null],
 ];
 const LATREAD_RODS=[
-  ["CONTROL BANK WORTH",()=>D.rodw.toFixed(0)+" pcm",
+  ["CONTROL BANK WORTH",cD=>cD.rodw.toFixed(0)+" pcm",
    "Measured, not bought: the bank is driven fully in and the flux-weighted worth is read straight off the solve. The handles are the absorber material and how near the flux you put the clusters, not their count.",
-   ()=>null],
-  ["ROD BANKS",()=>String(D.nbank),
+   cD=>null],
+  ["ROD BANKS",cD=>String(cD.nbank),
    "How many distinct banks your clusters are grouped into. One bank cannot tilt anything.",
-   ()=>D.nbank<2?"var(--c-amber)":null],
-  ["CLUSTER RINGS",()=>String(LM.chan.length),
+   cD=>cD.nbank<2?"var(--c-amber)":null],
+  ["CLUSTER RINGS",cD=>String(latM(cD).chan.length),
    "How many of the fourteen mesh rings have a cluster somewhere in them.",
-   ()=>null],
-  ["SHUTDOWN MARGIN",()=>derived().sdm.toFixed(0)+" pcm",
+   cD=>null],
+  ["SHUTDOWN MARGIN",cD=>derived(coreIdOf(cD)).sdm.toFixed(0)+" pcm",
    "How firmly the BANK ALONE holds the core down once it cools and the xenon decays.",
-   ()=>derived().sdm<200?"var(--c-red)":null],
+   cD=>derived(coreIdOf(cD)).sdm<200?"var(--c-red)":null],
 ];
 
 /* ══════════ HTML: the component panel rail ══════════ */
@@ -958,13 +958,13 @@ function paramBlockMk(block){
       return {el:root,sync:lit};
     }
     case "latplan": {
-      const cv2=KIT.el("canvas","db-latplan-canvas");
+      const cv2=KIT.el("canvas","db-latplan-canvas"); cv2.dataset.core=block.core;
       KIT.tip(cv2,"FUEL LATTICE / PLAN",LATPLAN_TIP);
       hostForward(cv2);
       return {el:cv2,sync(){}};   // painted by dbSync() via hostPaint(), not here
     }
     case "latsection": {
-      const cv2=KIT.el("canvas","db-latsection-canvas");
+      const cv2=KIT.el("canvas","db-latsection-canvas"); cv2.dataset.core=block.core;
       KIT.tip(cv2,"THE CORE / SECTION",LATSECTION_TIP);
       hostForward(cv2);
       return {el:cv2,sync(){}};
@@ -1237,8 +1237,8 @@ function dbSync(){
   dbRailSync(DB.state);
   /* the fuel lattice plan is genuinely graphical and stays canvas - but its own
      canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */
-  document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>hostPaint(cv2,latPlan));
-  document.querySelectorAll("#scr-design .db-latsection-canvas").forEach(cv2=>hostPaint(cv2,latSection));
+  document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latPlan(coreBag(cv2.dataset.core),x,y,w,h)));
+  document.querySelectorAll("#scr-design .db-latsection-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latSection(coreBag(cv2.dataset.core),x,y,w,h)));
 }
 if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
 
