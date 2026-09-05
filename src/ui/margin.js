@@ -909,11 +909,14 @@ function marginSync(host,live){
       const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
       marginSkinSync(h);
       fieldRowsSync(h.body, readoutsFor(h.p,S));
+      // the reactor states two columns: its list is the longest on the plant and
+      // the height rule only reaches for a second column past MARGIN_TALL
+      h.body._cols = h.p.role==="core" ? 2 : 0;
       /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
          canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
          exactly as the rail does it (crRailSync). */
       const vz=h.body._viz;
-      if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz);
+      if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz,coreOf(h.p.id));
     }else{
       if(!fresh) continue;
       const nm=partName(h.p), B=paramsFor(partOf(h.p.id)||h.p);

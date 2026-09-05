@@ -931,9 +931,9 @@ const nameMark=(x,y,nameH)=>({x:x+10*DRAW_K,
 
 // extra: room for the rows BELOW the first, so a label that breaks is one
 // plate with two lines on it and never two labels stacked
-function txtPlate(cx,base,w,size,extra){
+function txtPlate(cx,base,w,size,extra,col){
   const c=capH(size);
-  fillRect(cx-w/2-3,base-c-2,w+6,c+5+(extra||0),"rgba(6,10,11,.88)");
+  fillRect(cx-w/2-3,base-c-2,w+6,c+5+(extra||0),col||"rgba(6,10,11,.88)");
 }
 
 // maxw is optional: given, the tag steps DOWN the type ladder to fit it, through
@@ -2148,8 +2148,10 @@ function heatViz(x,y,w,h){
      with the legend generated from FAIL. Adding a stage is adding a row there.
 
    Drawn through hostPaint(), so x,y start at 0,0 - see the note on HOST_K. */
-function dmgViz(x,y,w,h){
-  const s=coreSeen(S,coreOf(sel)); if(!s||!s.nDmg) return;
+// cid comes from the panel this canvas is IN, not from sel: a rail panel is
+// painted whether or not its machine is the selected one
+function dmgViz(x,y,w,h,cid){
+  const s=coreSeen(S,cid); if(!s||!s.nDmg) return;
   const L=x+2, R=x+w-2;
 
   txt("FUEL DAMAGE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
@@ -2868,7 +2870,7 @@ const hostScale=el=>{ const o=el.offsetWidth;
 function hostLocal(el,e){ const r=el.getBoundingClientRect(), k=hostK()*hostScale(el);
   return {x:(e.clientX-r.left)/k, y:(e.clientY-r.top)/k}; }
 function hostForward(el){ uiForward(el, e=>hostLocal(el,e)); }
-function hostPaint(el,draw){
+function hostPaint(el,draw,arg){
   const box=el.getBoundingClientRect();
   if(box.width<4||box.height<4) return;
   const dpr=hostDpr(), k=hostK()*hostScale(el);
@@ -2878,7 +2880,7 @@ function hostPaint(el,draw){
   c.setTransform(s,0,0,s,0,0);
   c.clearRect(0,0,w,h);
   const prev=ctx; ctx=c; hostScope(el);
-  try{ draw(0,0,w,h); } finally { ctx=prev; hostScope(null); }
+  try{ draw(0,0,w,h,arg); } finally { ctx=prev; hostScope(null); }
 }
 
 /* ══ THE LEADER STARTS SOMEWHERE FREE, NOT AT THE MIDDLE OF THE FACE ══
@@ -3042,7 +3044,8 @@ function plantBackPaint(L,GHp,rowH){
   fillRect(GX,GY,GW*CELL,GHp,C.well);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
     if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,rowTop(Y),CELL,rowH(Y),"#1c1210");
-  const gl = L? "rgba(120,180,190,.03)" : "rgba(120,180,190,.05)";
+  // opaque, so a line reads the same wherever it lands: pre-blended onto C.well
+  const gl = L? "#080d0f" : "#0a1011";
   /* A GRID LINE IS A FRACTION OF THE CELL IT BOUNDS, not one unit. At 16 a unit
      was a sixteenth of a cell and read as a hairline; left at 1 on a 70-unit cell
      it is a seventieth and the deck loses its grid altogether. */
@@ -3319,7 +3322,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
         const inner=nameInner(w), ls=nameLines(nmw,w);
         let nb=y+nameH-3*DRAW_K, mw=0;
         for(const l of ls) mw=Math.max(mw,tw(l,nmo));
-        txtPlate(x+w/2,nb,Math.min(mw,inner),NAME_TXT.size,(ls.length-1)*NAME_LH);
+        txtPlate(x+w/2,nb,Math.min(mw,inner),NAME_TXT.size,(ls.length-1)*NAME_LH,C.machBg);
         for(const l of ls){ clipTxt(l,x+w/2,nb,inner,nmo); nb+=NAME_LH; }
       } else clipTxt(nmw,x+w/2,y+nameH-3*DRAW_K,w-8*DRAW_K,nmo);
     }

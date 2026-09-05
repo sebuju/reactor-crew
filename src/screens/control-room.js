@@ -799,7 +799,7 @@ function crRailSync(panels){
        fieldRowsBuild() hands the canvas back on the container, so this never
        searches the screen for it. */
     const v=h.body._viz;
-    if(v&&v.dmg) hostPaint(v.dmg,dmgViz);
+    if(v&&v.dmg) hostPaint(v.dmg,dmgViz,coreOf(h.p.id));
   }
   cautSweep(seen);
   crRailAlert(panels,red);
