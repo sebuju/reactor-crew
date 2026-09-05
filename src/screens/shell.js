@@ -2,6 +2,10 @@
 /* screen state, canvas sizing, HTML top bar */
 
 let screen="design";
+// the two screens that draw a plant, and the one place that says which they
+// are - the tooltip's placement, the WASD walk (core/ui.js) and anything else
+// that must know whether there is a drawing under it all ask the same question
+const plantScreen=()=>screen==="design"||screen==="operate";
 
 /* HELP is HTML now, so every screen sizes to the window the same way; the
    canvas/HTML split is one dataset write, read by style.css. */
@@ -274,7 +278,6 @@ function shellInitTooltip(){
     if(a) placeAnchor(a);
     else if(curRail) place(curGroup?curGroup.getBoundingClientRect().top:b.top+b.height/2, !!curGroup);
     else placeBy(b); };
-  const plantScreen=()=>screen==="design"||screen==="operate";
   const hide=()=>{ cur=null; curRail=null; curGroup=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
   tipHide=hide;
   document.addEventListener("pointerover",e=>{

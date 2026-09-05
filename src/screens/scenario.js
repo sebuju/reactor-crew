@@ -766,7 +766,7 @@ function scnSyncChart(){
    the head strip (with the key that opened it) stays up so it can be closed
    again. TAKES is dropped: transport.js's own strip already mounts an
    identical picker into this screen. */
-ovlAdd({k:"scntrend",label:"TRENDS",h:200,sc:"scenario",draw:drawTrend,
+ovlAdd({k:"scntrend",label:"TRENDS",h:()=>200+(trendUnits().length?TREND_TAB_H:0),sc:"scenario",draw:drawTrend,
   tip:["TRENDS","The same strip chart the control room draws, all twenty-six channels."]});
 ovlAdd({k:"scnlog",  label:"LOG",   h:180,sc:"scenario",draw:drawLog,
   tip:["LOG","Every event the run logged, with the reason it gives."]});
