@@ -417,11 +417,15 @@ function* commissionGen(){
      every once-through preset commissioned sitting on its own shell
      safeties. Only a SUGGESTED generator is refitted: a stated kW/K is the
      player's number. AND THROUGH THE FILM THE REST VOID LEAVES: a boiling
-     plant's tubes see 1-0.85*vf of their conductance, so BWR/4 raised 91 %
-     of its turbine's swallow and rested 3 % under design pressure. */
-  for(const id of sgIds()) if(D.sgUA[id]==null)
-    P.sgUABy[id] = sgUAOf(id)/Math.pow(Math.max(S.flowNet,.02),UA_FLOW)/(1-0.85*Math.min(clamp(P.vf0,0,1.5),1));
-  { const ids=sgIds(); if(ids.length) P.sgUA = ids.reduce((t,id)=>t+P.sgUABy[id],0)/ids.length; }
+     plant's tubes see 1-0.85*vf of their conductance.
+     FITTED ON THE TICK'S OWN LAW (sgQAt) AND INSIDE THE SETTLE (resetPlant):
+     the crossing is w*cp*eps*dT on the field's own tube inlet now, which is
+     not linear in UA and moves the field it is read from, so the refit is a
+     ratio step per settle pass - what this shell should carry, its share of
+     the seeded power, over what it carries - and the field, the level and the
+     tubes converge together. Fitted here, after one tick on a field the
+     settle had not yet converged, the stock tubes came out at 24 700 kW/K for
+     a 42 000 answer and the plant rested at 53 %. */
   /* AND THE GOVERNOR AT THE PRESSURE THE LINE DELIVERS. Fitted at design
      shell pressure it ignored the drawing: the main steam line drops 2-3 %
      on the way, so the shells rested that much over design to push rated
@@ -804,8 +808,8 @@ const cwPathsOf = id => { const p=partOf(id), R=p&&ROLE[p.role], o=[];
   return o; };
 const cwFlowOf = (m,id) => { let f=0;
   for(const q of cwPathsOf(id)) f += Math.abs(m[q.key]||0); return f; };
-/* the solved pressure field, kept on S for next tick's readers (pumpFwd, the
-   phase at a node) - REFILLED, never rebuilt */
+/* the solved pressure field, kept on S for next tick's readers (the diodes,
+   the phase at a node) - REFILLED, never rebuilt */
 const keepPField = (s, pf) => {
   const net = P && P.net, by = s.pBy, has = Object.prototype.hasOwnProperty;
   let n = 0, added = 0;
@@ -1582,8 +1586,17 @@ function reliefSet(fid){
    master switch and the valve's own arm both defeat it; nothing reads
    S.porvByp[fid] raw. */
 const porvLive = fid => autoLive("porv") && !S.porvByp[fid];
-/* pump rotational inertia, and the longer coastdown once the power is gone */
-const FLOW_TAU=5, FLOW_TAU_COAST=12;    // seconds
+/* ══ A PUMP RUNS UP ON ITS MOTOR AND COASTS ON ITS ROTOR ══
+   Up is a first-order walk at FLOW_TAU: the motor is a controlled drive.
+   Down is not - a machine with no torque on it obeys J*dw/dt = -tau_hyd, and
+   the hydraulic torque of a centrifugal pump goes as N^2 (the affinity law
+   the head already follows), so dN/dt = -N^2/tau_c and the speed falls as
+   1/(1+t/tau_c): half speed at tau_c, not 1/e. PUMP_ROTOR_S is the seconds
+   of rated shaft power the rotor stores, E0/P0 - a flywheeled coolant pump
+   is of order five to ten - and tau_c is twice it. It replaced a second
+   first-order constant (FLOW_TAU_COAST) that lost speed as e^-t, which is
+   not what a free rotor does. */
+const FLOW_TAU=5, PUMP_ROTOR_S=6;      // seconds
 /* ── the secondary mass balance (Stage 6a) ──
    s.sgl used to be clamp(50+(heat-s.load)*40-(s.load-1)*14,0,100), recomputed
    from scratch every tick with no memory, so it could not run out however long
@@ -1948,8 +1961,29 @@ function advectSrc(s){
      and the bubble pushes, condense a little and it gives. Both arrive HERE,
      at the vessel's own node, in kilowatts. */
   for(const id of holdTankIds()) add(coreFold(id), pzrQ(s, id));
+  /* ══ AND THE STEEL ROUND EACH NODE IS A STORE OF ITS OWN ══
+     The vessel and the loop piping are of the order of the coolant's own heat
+     capacity and they set every heat-up and cooldown rate; the field had only
+     the water. net.metalKg is the wall the node owns (pipenet.js) and
+     net.metalTau its own conduction time, so the wall lags the fluid by what
+     its thickness says and gives back exactly what advectStep then takes off
+     it (metalQ, the one figure both sides read). */
+  for(const k in metalQ) delete metalQ[k];
+  const net = P.net;
+  if(net && net.metalKg && s.metalT){
+    for(let i=0;i<net.n;i++){ const m = net.metalKg[i]; if(!(m > 0)) continue;
+      const nm = net.name[i], T = netTempAt(s, nm);
+      /* THE SETTLE IS NOT A TIME MARCH (netHoldStore), so through it the wall
+         simply IS at its water: charged at the first pass's temperature it
+         held WINDSCALE's outlet 100 K under its rise, because a thick wall's
+         coupling outweighs a gas's own w*cp and the rest point followed the
+         seed instead of the heat. */
+      if(s.metalT[nm] === undefined || !isFinite(s.metalT[nm]) || netStoreHeld) s.metalT[nm] = T;
+      const q = m*CP_STEEL*(s.metalT[nm] - T)/net.metalTau[i];
+      metalQ[nm] = q; add(nm, q); } }
   return src;
 }
+const metalQ = {};
 /* ══ WHERE A POT MEETS THE FIELD ══
    Two shapes, and the difference is what the pot IS rather than a special
    case. A pot that is a MACHINE - a generator's shell, a condenser, a panel -
@@ -2123,7 +2157,26 @@ function advectStep(s, dt, runFlow, edgeKg){
   // state into the pipe leaving it rather than last tick's
   for(const nm in A.hold) h[nm] = hOfT(satOfCirc(circOfNode(nm)), A.hold[nm]);
   for(const nm in A.holdH) h[nm] = A.holdH[nm];
+  /* ══ THE SPECIES SEED, AND A TANK HOLDS WHAT ITS FLUID SAYS ══
+     Boron on the core's circuit starts at the plant's own s.boron and at
+     nothing anywhere else; a tank's node is pinned at its FLUID's own
+     concentration every tick, exactly as its temperature is - a reserve of
+     borated water is boron0 less 100 times the row's pcm-per-percent, which
+     is the same shift the old scalar took per percent of loop replaced, and
+     plain makeup water is at the loop's own commissioned concentration, so
+     it dilutes nothing. Hydrogen starts at zero everywhere. */
+  const b = s.bBy, cH = s.h2By;
+  if(b && cH){
+    if(net.advKeysB !== b){ for(const k in b) if(net.index[k] === undefined) delete b[k];
+      for(const k in cH) if(net.index[k] === undefined) delete cH[k]; net.advKeysB = b; }
+    for(let i=0;i<net.n;i++){ const nm = net.name[i];
+      const tid = net.tankIdByNode && net.tankIdByNode[i];
+      if(tid !== undefined && !D.tanks[tid].hold)
+        b[nm] = (s.boron0||0) - 100*(tankFluid(tid).boron||0);
+      else if(b[nm] === undefined) b[nm] = circOfNode(nm) === G.coreCirc ? (s.boron||0) : 0;
+      if(cH[nm] === undefined) cH[nm] = 0; } }
   const mOut = new Float64Array(net.n), inH = new Float64Array(net.n), inM = new Float64Array(net.n);
+  const inB = new Float64Array(net.n), inC = new Float64Array(net.n);
   const kgs = netKgs;
   /* ══ ALONG THE FLOWS THE SOLVE ACTUALLY ANSWERED IN ══
      edgeKg is signed, per EDGE, u->v (netFlowK). runFlow is keyed by RUN, and
@@ -2154,7 +2207,11 @@ function advectStep(s, dt, runFlow, edgeKg){
      containment keep 1: their inventory is somebody else's integral, and
      containment cannot donate at all now. */
   const kOut = new Float64Array(net.n).fill(1);
-  { const bk = netBooked(net);
+  /* NEITHER LIMITER DURING A SETTLE (netStoreHeld): no mass is integrated
+     there and a pass is not a tick, so what a node "has" against a pass's
+     throughput means nothing - read anyway, it throttled every small node
+     and the settle's loop carried 5 540 kg/s of a 7 744 kg/s solve. */
+  if(!netStoreHeld){ const bk = netBooked(net);
     for(let i=0;i<net.n;i++){ const o = mOut[i]*dt;
       if(!(o > 0) || bk[i]) continue;
       const have = mBy[net.name[i]];
@@ -2176,7 +2233,7 @@ function advectStep(s, dt, runFlow, edgeKg){
      booked - it is simply NOT CARRIED, so it stays in the donor and the pass
      conserves exactly as it did. */
   const kIn = new Float64Array(net.n).fill(1);
-  { const bk = netBooked(net), pMax = new Float64Array(net.n);
+  if(!netStoreHeld){ const bk = netBooked(net), pMax = new Float64Array(net.n);
     for(let i=0;i<net.n;i++) pMax[i] = netPAt(s, net.name[i]);
     for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
       const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
@@ -2196,9 +2253,10 @@ function advectStep(s, dt, runFlow, edgeKg){
     const from = eFrom[e]; if(from < 0) continue;
     const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
     const k = kIn[to]; if(k !== 1) eM[e] *= k;
-    const m = eM[e];
-    inH[to] += m*h[net.name[from]];
+    const m = eM[e], fn = net.name[from];
+    inH[to] += m*h[fn];
     inM[to] += m;
+    if(b){ inB[to] += m*b[fn]; inC[to] += m*cH[fn]; }
   }
   mOut.fill(0);
   for(let e=0;e<net.edges.length;e++) if(eFrom[e] >= 0) mOut[eFrom[e]] += eM[e];
@@ -2211,8 +2269,13 @@ function advectStep(s, dt, runFlow, edgeKg){
      answer "what is this hole passing", which is a rate at the hole and not a
      tick's worth of inventory. */
   advectOutPri = advectOutSec = 0;
+  for(const k in advectH2Out) delete advectH2Out[k];
   for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e];
-    if(ed.kind !== "break" || ed.steam || eFrom[e] !== ed.u) continue;
+    if(eFrom[e] !== ed.u) continue;
+    // hydrogen leaves through the hole it is AT, at that node's own concentration
+    if(cH && (ed.kind === "break" || ed.kind === "vent") && cH[net.name[ed.u]] > 0)
+      advectH2Out[ed.key] = (advectH2Out[ed.key]||0) + cH[net.name[ed.u]]*eM[e]*dt;
+    if(ed.kind !== "break" || ed.steam) continue;
     if(ed.sec) advectOutSec += eM[e]*dt; else advectOutPri += eM[e]*dt; }
   /* ══ THE COURANT GUARD ══
      tau = holdup / inflow is how long this node takes to turn over. The blend
@@ -2232,7 +2295,11 @@ function advectStep(s, dt, runFlow, edgeKg){
     const mass = Math.max(mBy[net.name[i]] !== undefined ? mBy[net.name[i]]
                                                          : net.vol[i]*netRhoAt(s, net.name[i]),
                           DRY_MIN_KG);
-    let f = inM[i]*dt/mass;
+    /* A SETTLE PASS RELAXES EVERY NODE ALIKE: it is a steady-state sweep,
+       not a march, and at the tick's own blend the 125 t vessel moved a
+       750th of the way a pass and never arrived (SETTLE_RELAX; 1 would be a
+       shift register round the loop, undamped). */
+    let f = netStoreHeld ? SETTLE_RELAX : inM[i]*dt/mass;
     if(f >= 1){ f = 1; advectClamped++; }
     const nm = net.name[i];
     /* THE TARGET IS THE MIX PLUS WHAT THIS MACHINE PUTS IN PER KILOGRAM
@@ -2241,6 +2308,7 @@ function advectStep(s, dt, runFlow, edgeKg){
        a node downstream of it, and the relaxation toward it cannot overshoot. */
     const target = (inH[i] + (src[nm]||0))/inM[i];
     h[nm] += f*(target - h[nm]);
+    if(b){ b[nm] += f*(inB[i]/inM[i] - b[nm]); cH[nm] += f*(inC[i]/inM[i] - cH[nm]); }
   }
   /* ══ AND THE SAME PASS BOOKS THE MASS ══
      One donor rule, one set of solved flows, one loop: s.mBy and s.hBy must
@@ -2347,6 +2415,31 @@ function advectStep(s, dt, runFlow, edgeKg){
         ? s.dTavg + (raw - s.dTavg)*Math.min(1, dt/TAVG_RATE_TAU) : raw;
     }
   }
+  /* ══ AND s.boron IS READ AT THE CORE, s.h2 SUMMED OVER THE PRIMARY ══
+     What the transport moved into the vessel is what the chain reaction
+     sees; the demand follows it, or the charging walk would dilute an
+     injection straight back out at BOR_OUT. */
+  if(b && net.coreNode !== undefined){
+    const nm = net.name[net.coreNode];
+    if(b[nm] !== undefined){ const d = b[nm] - s.boron; s.boron = b[nm]; s.boronDem += d; }
+    s.h2 = h2Total(s); }
+  /* the wall gives back exactly what advectSrc charged it with this tick */
+  if(net.metalKg && s.metalT) for(const nm in metalQ){ const i = net.index[nm];
+    if(i !== undefined) s.metalT[nm] -= metalQ[nm]*dt/(net.metalKg[i]*CP_STEEL); }
+}
+/* kg of hydrogen this tick put through every hole, by edge key - the room's
+   own figure (room.js), off the same limited flows the mass integral rides */
+const advectH2Out = {};
+const SETTLE_RELAX = 0.5;
+/* kg of hydrogen in the core's circuit: concentration times what each node holds */
+function h2Total(s){
+  const net = P && P.net, G = nodeGraph(); if(!net || !s.h2By || G.coreCirc < 0) return s.h2||0;
+  let t = 0;
+  for(let i=0;i<net.n;i++){ const nm = net.name[i], c = s.h2By[nm];
+    if(!(c > 0) || circOfNode(nm) !== G.coreCirc) continue;
+    const m = s.mBy[nm] !== undefined ? s.mBy[nm] : net.vol[i]*netRhoAt(s, nm);
+    t += c*m; }
+  return t;
 }
 
 /* Kilograms of condensate the hotwell holds full. The plant's own generators
@@ -2378,11 +2471,55 @@ const ihxTemp=(s,id)=>{ const v=s&&s.ihxTBy&&s.ihxTBy[id];
    an intermediate exchanger stands in front of it, when it is that exchanger's
    pot. ONE reader, so the heat term, the readout and the T-HOT row cannot
    disagree about which stage a generator is on. */
-const sgHot=(s,id)=>{ const h=ihxOf(id); return h ? ihxTemp(s,h) : s.Tavg; };
+/* AND IT IS THE WATER ARRIVING AT ITS OWN TUBES, off the field: the hottest
+   node standing one edge outside the generator's own primary faces, because
+   heat only ever leaves and the faces themselves already carry half the
+   crossing (advectSrc). It was s.Tavg for every shell on the plant, so a
+   stalled loop's generator went on seeing the loop mean and a loop carrying
+   more of the core's rise boiled no harder. */
+const sgTubeNode=(s,id)=>{ const net=P.net; if(!net || !net.name) return -1;
+  const nb = net.sgInNbr || (net.sgInNbr = {});
+  let list = nb[id];
+  if(!list){ list = nb[id] = []; const own = new Set(net.nodesOfPart[id]||[]);
+    for(const c of (net.cont||[])) own.add(c);      // a hole's far end is the room, not a leg
+    for(const f of [ROLE.sg.internal[0].a, ROLE.sg.internal[0].b]){
+      const i = net.index[coreFold(id+f)]; if(i===undefined) continue;
+      list.push(i);
+      for(const ed of net.edges){ if(ed.u!==i && ed.v!==i) continue;
+        const o = ed.u===i ? ed.v : ed.u; if(!own.has(o) && list.indexOf(o)<0) list.push(o); } } }
+  let T=-Infinity, at=-1;
+  for(const i of list){ const t=netTempAt(s, net.name[i]); if(t>T){ T=t; at=i; } }
+  return at; };
+const sgTubeIn=(s,id)=>{ const i=sgTubeNode(s,id); return i<0 ? s.Tavg : netTempAt(s, P.net.name[i]); };
+const sgHot=(s,id)=>{ const h=ihxOf(id); return h ? ihxTemp(s,h) : sgTubeIn(s,id); };
 /* WHAT CROSSES ONE GENERATOR'S TUBES, kW, at a stated flow share and film -
-   the one expression, read by the tick and by the commissioning settle. */
-const sgQAt=(s,id,fl,filmK)=>((P.sgUABy && P.sgUABy[id]) || P.sgUA)*Math.pow(fl,UA_FLOW)*sgFill(s,id)*filmK
-                            * Math.max(0, sgHot(s,id) - sgTemp(s,id));
+   the one expression, read by the tick and by the commissioning settle.
+   ══ EFFECTIVENESS-NTU, NOT A CONDUCTANCE TIMES A MEAN ══
+   The shell is isothermal, so the tubes are a one-stream exchanger and what
+   they pass is w*cp*(1 - e^-NTU)*(Tin - Tsat): a trickle through hot tubes
+   gives up everything it has and nothing more, and a torrent at a small
+   approach is bounded by the tube area. Priced off the loop mean the term
+   had neither limit. Behind an intermediate exchanger the hot side is a POT
+   and the tube flow is the exchanger's own, so that stage keeps the
+   conductance form against the pot - and so does a BOILING primary: a
+   two-phase stream gives up latent heat at one temperature, which is the
+   infinite-cp limit of the same law, UA*dT. Read as w*cp on temperature a
+   BWR's tubes saw 25 K of a 40 K approach and rested at 54 %. */
+const sgQAt=(s,id,fl,filmK)=>{
+  const UA=((P.sgUABy && P.sgUABy[id]) || P.sgUA)*Math.pow(fl,UA_FLOW)*sgFill(s,id)*filmK;
+  const dT=Math.max(0, sgHot(s,id) - sgTemp(s,id));
+  const at=sgTubeNode(s,id);
+  if(ihxOf(id) || (at>=0 && netQualAt(s, P.net.name[at]) > 0)) return UA*dT;
+  const wcp=fl*P.netRef/Math.max(1,sgIds().length)*P.sat.cp;
+  return wcp > 0 ? wcp*(1-Math.exp(-UA/wcp))*dT : 0; };
+/* THE MOST TUBE A SUGGESTION MAY BUY: past NTU 4 the stream is at the shell
+   already and more area removes nothing, so a refit asked for heat the
+   approach cannot give must stop here rather than walk to infinity (it
+   reached 1e21 kW/K on WINDSCALE). Infinite where the law is a conductance. */
+const SG_NTU_MAX=4;
+const sgUACap=(s,id,fl)=>{ const at=sgTubeNode(s,id);
+  if(ihxOf(id) || (at>=0 && netQualAt(s, P.net.name[at]) > 0)) return Infinity;
+  return SG_NTU_MAX*fl*P.netRef/Math.max(1,sgIds().length)*P.sat.cp/Math.pow(fl,UA_FLOW); };
 /* IS WHAT IS IN THESE TUBES THE CORE'S OWN WATER? An intermediate exchanger is
    a BARRIER, and that is the whole reason the real machines exist: behind one,
    a tube rupture leaks the exchanger's coolant into the shell and costs no
@@ -2611,12 +2748,32 @@ function dnbW3(pMPa,gSI,x,dhM,dhSub){
    THE PLANT'S MARGIN IS THE NODE MINIMUM, and s.dnbr IS s.dnbrMin. DNB is a
    local event, so a plant figure that is not the worst point in the field is
    not a margin at all. */
+/* ══ AND PAST W-3's LOW-FLOW EDGE, A POOL LAW ══
+   W-3 is clamped at 1e6 lb/hr/ft2 because that is where the correlation's
+   data stops - but a loss-of-flow transient goes on past it, and clamped
+   the margin stopped falling exactly where a real core loses it fastest.
+   Below the floor the critical flux is walked from W-3 at the floor down to
+   Zuber's pool-boiling CHF at no flow, which is what a submerged rod can shed
+   with nothing moving past it: 0.131*hfg*sqrt(rhog)*(sigma*g*(rhof-rhog))^1/4,
+   water's surface tension off the IAPWS fit. Both published shapes. */
+const sigmaW = T => { const t = clamp(1 - T/647.096, 0, 1);
+  return 0.2358*Math.pow(t, 1.256)*(1 - 0.625*t); };
+const chfZuber = pMPa => { const c = SAT_WATER, T = satT(c, pMPa);
+  const rf = rhofOf(c,T), rg = rhogOf(c,T);
+  return 0.131*hfgOf(c,T)*1000*Math.sqrt(rg)*Math.pow(sigmaW(T)*9.81*Math.max(rf-rg,1e-3), 0.25); };
+const chfW3 = (p, g, x, dh, dhSub) => {
+  const gFloor = W3_LIM.g[0]*1e6/W3_G;
+  const w3 = dnbW3(p, Math.max(g, gFloor), x, dh, dhSub);
+  if(g >= gFloor) return w3;
+  const z = chfZuber(p);           // W/m2, the same currency dnbW3 answers in
+  return Math.min(w3, z + (w3 - z)*g/gFloor);
+};
 function dnbrOf(m){
   if(m.law==="boil")
     return P.dnbrK*(m.dhSub/P.sat.cp)/Math.max(m.dT,1e-3);
   if(m.law==="temp")
     return P.dnbrK*Math.max(P.tdmg-m.Tin,0)/Math.max(m.Tf-m.Tin,1e-3);
-  return P.dnbrK*dnbW3(m.p,Math.max(m.g,1e-3),m.x,P.dh,m.dhSub)/Math.max(m.q,1);
+  return P.dnbrK*chfW3(m.p,Math.max(m.g,1e-3),m.x,P.dh,m.dhSub)/Math.max(m.q,1);
 }
 /* ── AND WHAT LOSING THE MARGIN COSTS ──
    DNBR was computed, displayed and tripped on and then thrown away: crossing
@@ -2632,23 +2789,29 @@ function dnbrOf(m){
    departure the wall is blanketed and the coefficient falls by about an order
    of magnitude, and that residual share is what is left.
 
-   DNB_SPAN IS NOT PHYSICS AND IS NOT DERIVED. A real post-CHF transition is a
-   wall-superheat problem, not a band on a margin ratio; the width exists so a
-   hard switch at 1.0 cannot chatter against the lagged void and flow this loop
-   already reads, which is the BURST_SPAN/CAV_SPAN idiom. The VALUE was chosen
-   against the presets: no plant's rest-point node minimum may sit on the ramp,
-   and RBMK binds it at 1.25, so the ceiling goes below that with room to spare.
-   0.25 passes too and leaves RBMK 0.004 clear, which is noise rather than
-   margin. Replacing this with a superheat criterion in the film term is the
-   real fix and would delete the constant.
+   ══ THE REWET IS A WALL-SUPERHEAT PROBLEM, AND IT READS THE WALL ══
+   Departure (d < 1) blankets the wall: the film is DNB_FILM of itself at
+   once, because that jump IS what the critical heat flux means. Coming back
+   is the boiling curve read the other way - a wall that has climbed past the
+   minimum-film-boiling superheat (DT_LEID, Leidenfrost) stays blanketed
+   however the margin reads, and one below it quenches. The hysteresis is
+   real and it is what a fitted band on the margin ratio (DNB_SPAN) stood in
+   for: a node that dipped under 1.0 for a tick and whose pellet never heated
+   rewets at once; one whose pellet did heat holds its own wall over the
+   Leidenfrost point and does not. THE REGIME IS A STATE (s.nDnb): the
+   superheat is only asked of a node that HAS departed, because this film is
+   a single-phase fit that puts the clad CLAD_DT0 over the coolant and not a
+   boiling curve - read at rest, a BWR node at 80 % void showed a 280 K wall
+   over saturation the real nucleate wall never has, and latched itself into
+   film boiling on tick one. Water figure, published order: minimum film
+   boiling about 150 K over saturation at reactor pressure.
 
    P.dryout is which families departure is a real event for. Helium never
    boils, so a film that collapses is a fiction there; MSR's fuel is IN the
    coolant, so it has no film to lose either, and it is already receiving a
    burst and a melt it should not - this does not deepen that hole. */
-const DNB_FILM=0.10, DNB_SPAN=0.15;
-const dnbFilmK = d =>
-  P.dryout ? DNB_FILM+(1-DNB_FILM)*clamp((d-1)/DNB_SPAN,0,1) : 1;
+const DNB_FILM=0.10, DT_LEID=150;
+const dnbLatch = (d, dTs, was) => !P.dryout ? 0 : d < 1 ? 1 : (was && dTs > DT_LEID) ? 1 : 0;
 /* THE NODE's margin, called from inside coreStep()'s loop. Every operand is a
    local that loop already had, so nothing new is measured - the loop simply
    stops throwing it away. `rise` in particular is the enthalpy actually
@@ -3295,6 +3458,12 @@ function resetPlant(){
         law already believed density was a field (netRhoAt) while the inventory
         book insisted the loop was uniform. */
      mBy:{},
+     /* ══ AND SO ARE THE SPECIES ══
+        boron (pcm, the reactivity currency s.boron is in) and hydrogen (kg per
+        kg of coolant) per node, carried by the same donor pass, so poison
+        waits in an isolated leg and hydrogen leaves through the hole it is
+        at. s.metalT is the steel round each node, K (advectSrc). */
+     bBy:{}, h2By:{}, metalT:{},
      /* the controller's tune, copied from the commissioning constants so a
         RESET PLANT puts the operator's experiments back where they started */
      split:false, reGang:false,
@@ -3538,7 +3707,7 @@ function resetPlant(){
   HEATBAL.heat = S.heat;
   /* WITH A PRESSURE FIELD, because the solve is keyed on last tick's: a
      standby train's check valve reads wide open until there is one
-     (pumpFwd, pipenet.js), and a node's phase is read at s.P until there is
+     (flowG's diode, pipenet.js), and a node's phase is read at s.P until there is
      one - so the settle put BN-600's 490 K feedwater at 0.2 MPa and ran the
      feed pump's water back down the reserve train into its tank, and the
      first real tick, field in hand, sent 40 % more feedwater to the shells
@@ -3557,7 +3726,15 @@ function resetPlant(){
      yet feeding, hit exactly zero, and commissioned WINDSCALE with its own
      exhaust line cut. Held, every node reads the holdup its own state says. */
   netHoldStore(true);
-  { const DTS = 0.02;
+  /* THE FIELD HAS TO CONVERGE TOO, because the shells read it now (sgHot).
+     At the tick's own 0.02 s a pass moved the vessel node a 750th of the way
+     to its outlet temperature and the loop stopped on flow alone after
+     twenty: the stock plant commissioned with its hot leg 4 K over T-avg
+     where the tick then found 15, and the tubes fitted on that reading
+     over-removed by a third. A settle is not a time march: advectStep relaxes
+     every node by SETTLE_RELAX a pass while the store is held, and the loop
+     runs until every generator's own inlet stands still. */
+  { const DTS = 0.02, hotWas = {};
     for(let i=0;i<300;i++){
       const pf = {}, k = netFlowK(S, rf, pf, outs);
       keepPField(S, pf);
@@ -3567,7 +3744,35 @@ function resetPlant(){
       coreStep(S, 0, S.heat, tsat(S.pCore), 0,
                P.flowK*S.flowNet, Math.max(S.flowNet, CORE_DT_QMIN));
       advectStep(S, DTS, rf, outs.edgeKg);
-      if(i > 20 && Math.abs(S.flowNet - was) < 1e-5) break;
+      /* ══ AND THE LEVEL IS THE PROGRAMME ══
+         The transport owns the SHAPE round the loop; where the loop sits is
+         the rod controller's doing in the tick, and the settle has no
+         controller. With the shells reading the field, a settle left to
+         itself finds a rest at whatever mean its suggested tubes happen to
+         make - 14 K under Tref on the stock plant - and the plant then
+         commissions off its own programme. So every pass puts the core
+         circuit's mean back on Tref and the tube refit below sizes the
+         tubes for THAT point. The pressurizer's node keeps its bubble. */
+      { const G = nodeGraph(), c = satOfCirc(G.coreCirc);
+        if(G.coreCirc >= 0 && S.Tavg !== undefined && isFinite(S.Tavg)){
+          const dh = hOfT(c, P.Tref) - hOfT(c, S.Tavg);
+          if(Math.abs(dh) > 1e-9){ const skip = new Set(holdTankIds().map(coreFold));
+            for(const nm in S.hBy) if(circOfNode(nm) === G.coreCirc && !skip.has(nm)) S.hBy[nm] += dh;
+            S.Tavg = P.Tref; } } }
+      /* and the SUGGESTED tubes are sized for this point, a ratio step a pass
+         (see the TUBE FIT note in commissionGen) */
+      { const ids = sgIds(), n = Math.max(1, ids.length), filmK = 1-0.85*Math.min(clamp(S.vf,0,1.5),1);
+        let any = false;
+        for(const id of ids){ if(D.sgUA[id]!=null) continue;
+          const fl = Math.max(S.flowNet*(S.sgShare[id]!==undefined?S.sgShare[id]:1/n)*n, .02);
+          const now = sgQAt(S,id,fl,filmK), want = P.n0*P.rated*1000/n;
+          if(now>0 && want>0){ P.sgUABy[id] = Math.min(P.sgUABy[id]*clamp(want/now, 0.5, 2), sgUACap(S,id,fl)); any = true; } }
+        if(any) P.sgUA = ids.reduce((t,id)=>t+P.sgUABy[id],0)/n; }
+      let moved = 0;
+      for(const id of sgIds()){ const t = sgHot(S, id);
+        if(hotWas[id] !== undefined) moved = Math.max(moved, Math.abs(t - hotWas[id]));
+        hotWas[id] = t; }
+      if(i > 20 && Math.abs(S.flowNet - was) < 1e-5 && moved < 1e-3) break;
     } }
   netHoldStore(false);
   layRelease();
@@ -3608,6 +3813,9 @@ function resetPlant(){
     S.boron = S.boron0 = -(P.excess+o.rod+o.tip+o.dop+o.mod+o.exp+o.xe+o.vd);
     S.voidTh = S.vf = S.vNode; }        // the rest void P.vf0 is read off, not a 0 the first tick overwrites
   S.boronDem = S.boron;                 // start on demand, or it walks off commissioning
+  /* AND THE WATER CARRIES IT: the field was seeded through the settle at a
+     boron of 0, and s.boron is read off the vessel's node from tick one */
+  { const G=nodeGraph(); for(const nm in S.bBy) if(circOfNode(nm)===G.coreCirc) S.bBy[nm]=S.boron; }
   /* ══ AND THE STEAM SIDE IS SEEDED, NOT DISCOVERED ══
      Every conductance is priced off last tick's field, and on tick one there
      was none: every free node started at the condenser's pressure, so the
@@ -3791,6 +3999,8 @@ function resetPlant(){
      because the field is what decides how much a node at 8 kPa holds. */
   massSeed(S);
   P.invKg0 = invNodesKg(S);
+  // and the VESSEL's own commissioned charge, which is what a leak is measured against (vLeak)
+  { const nm = P.net.name[P.net.coreNode]; P.coreKg0 = S.mBy[nm] !== undefined ? S.mBy[nm] : 0; }
   if(P.invKg0 > 0) S.inv = 100*invNodesKg(S)/P.invKg0;
   LOG=[]; initHist();
   if(typeof pipeReset==="function") pipeReset();
@@ -3942,7 +4152,15 @@ function step(dt){
      can push. Same pattern as the bank above, and the reason its tooltip can
      finally say "slow" without lying. */
   { const db=s.boronDem-s.boron, rb=(db<0?BOR_IN:BOR_OUT)*dt;
-    s.boron+=Math.sign(db)*Math.min(Math.abs(db),rb); }
+    const d=Math.sign(db)*Math.min(Math.abs(db),rb);
+    s.boron+=d;
+    /* AND THE CHARGING SYSTEM REACHES WHAT THE CORE REACHES: every node in the
+       core's own live piece takes the same step, an isolated leg none of it.
+       The field is what s.boron is read off (advectStep), so this is the one
+       writer that moves the whole loop at once. */
+    if(d && P.net && s.bBy){ const pc=netPieces(P.net,s), cp=pc.of[P.net.coreNode];
+      for(let i=0;i<P.net.n;i++) if(pc.of[i]===cp){ const nm=P.net.name[i];
+        if(s.bBy[nm]!==undefined) s.bBy[nm]+=d; } } }
 
   /* ── throttles: an actuator, not a switch ──
      Same pattern as the bank and the boron walk above: the panel writes
@@ -4222,7 +4440,7 @@ function step(dt){
   /* The backup supply carries the share of pump power the bench sold: diesels
      are the full set, a battery bank is half of it. Scaled off demand, so what
      the operator asked for is still what the supply is trying to deliver. */
-  { const tau = s.blackout ? FLOW_TAU_COAST : FLOW_TAU, k = Math.min(dt/tau,1);
+  { const k = Math.min(dt/FLOW_TAU,1), tauC = 2*PUMP_ROTOR_S;
     const live = {};
     for(const id of pumpIds()){ live[id]=1;
       if(s.flowDemBy[id]===undefined) s.flowDemBy[id]=1;             // a pump placed mid-run arrives at rated
@@ -4234,7 +4452,10 @@ function step(dt){
       { const r = pumpResOf(id);
         if(r.length) s.flowDemBy[id] = r.some(t=>tankOpen(s,t)) ? 1 : 0; }
       if(s.flowBy[id]===undefined) s.flowBy[id]=s.flowDemBy[id];
-      s.flowBy[id] += (supplyK(s)*s.flowDemBy[id] - s.flowBy[id])*k; }
+      const N = s.flowBy[id], want = supplyK(s)*s.flowDemBy[id];
+      // up on the motor; down on the rotor, never below what the motor still holds
+      s.flowBy[id] = want >= N ? N + (want - N)*k
+                               : Math.max(want, N - N*N*dt/tauC); }
     for(const id in s.flowBy) if(!live[id]){ delete s.flowBy[id]; delete s.flowDemBy[id]; } }
 
   /* ── the core's temperature rise: the same 0-D split, told about flow ──
@@ -4260,16 +4481,13 @@ function step(dt){
      pump doing nothing. A correlation could never tell one steam generator
      from another, or notice that the valve between them was shut. */
   s.nat = netOut.nat || 0;
-  /* How much of the primary is still liquid. Water is the only thing in the loop
-     that carries heat or washes a fuel pin, so an empty vessel does neither, no
-     matter how hard the pumps are told to turn. Full down to 70% inventory, then
-     straight to nothing by 10%: a partly drained loop still circulates what is
-     left. At rest this is exactly 1, so a plant that is not leaking never feels
-     it, and commissioning is untouched. */
-  const wet = clamp((s.inv-10)/60,0,1);
-  /* no (1-0.8*cav) here, and none on mflux or the packet animation below:
-     cavitation is inside the pump's own head now, so pumpK already carries
-     it. Leaving one of the three behind would count it twice. */
+  /* `wet` IS GONE. It was clamp((inv-10)/60) on the core's flow and film - a
+     pool model's word for "the water has left", said beside a field that
+     already knows: the run-dry gate cuts a spent node's edges, and the core
+     node's own void (vLeak, below) collapses the film. Three opinions about
+     one loss of inventory dried the core out twice as early as the field.
+     No (1-0.8*cav) here either: cavitation is inside the pump's own head,
+     so pumpK already carries it. */
   /* Each generator's share of the primary flow, and so of the heat. Last
      tick's level rides inside it (sgFill, below): this tick's heat sets this
      tick's boil-off, which would set this tick's level, which would set this
@@ -4287,12 +4505,12 @@ function step(dt){
      with the correlation it corrected: the rise is measured up each channel
      now, so a loop on natural circulation gets a big rise because very little
      water is carrying the heat, not because a factor said so. */
-  const flowFrac = Math.max(s.flowNet, CORE_DT_QMIN) * wet;
+  const flowFrac = Math.max(s.flowNet, CORE_DT_QMIN);
   /* DNBR does not care how much heat left the loop, only how fast the water
      is moving past the pin - so the boiling-crisis calculation is shown the
      flux and never the removal. It is also the film coefficient the pellet
      balance uses, which is the same question about the same water. */
-  const mflux = driven * wet;
+  const mflux = driven;
 
   /* ── heat balance ── */
   /* With the runback bypassed the turbine keeps its load through a trip, so the
@@ -4348,7 +4566,7 @@ function step(dt){
   const sgQBy = {}, ihxFl = {};
   let qTot = 0;
   for(const id in sgW){
-    const fl = Math.max(pumpK*wet*sgW[id]*nSG, 0.02);
+    const fl = Math.max(pumpK*sgW[id]*nSG, 0.02);
     /* sgHot(), not s.Tavg: with an intermediate exchanger in front of it this
        generator is heated by that exchanger's pot, and the primary temperature
        is a stage away. Every other term is a property of THESE tubes and does
@@ -4599,14 +4817,11 @@ function step(dt){
     // an INEXHAUSTIBLE tank is a boundary, so what crossed its edge came from
     // outside the plant's books - negative is the plant being fed
     else book(s,"boundaryTank", -dPct/100*loopKg());
-    /* AND POISON ONLY REACHES A CORE IT IS PLUMBED TO. s.boron is the CORE's
-       concentration, so a borated tank emptying into an isolated leg fills
-       that leg and shuts nothing down; it waits there until something opens.
-       The inventory term above is not gated with it - what crossed the edge
-       left the tank either way, and where it went is Stage 4's question. */
-    const bw = FLUID[t.fluid].boron;
-    if(bw && dPct>0 && partOnCoreLoop(P.net,s,id)){
-      s.boron -= bw*dPct; s.boronDem -= bw*dPct; }
+    /* THE POISON IS IN THE WATER, and the transport carries it: the tank's
+       node is held at its fluid's own concentration (advectStep) and what
+       crosses the edge arrives where the edge lands, so a borated tank
+       emptying into an isolated leg fills that leg and shuts nothing down
+       until something opens. Nothing here writes s.boron. */
   }
   /* EACH RULE'S OWN STATE, fed forward like s.cavP and s.fregBy: this tick's
      answer is what the next tick's hysteresis reads, so nothing asking
@@ -4654,21 +4869,31 @@ function step(dt){
      the whole-core aggregates of a field, not lumps in their own right. */
   /* the core boils at ITS OWN pressure, not at the pressurizer's */
   const sat = tsat(s.pCore), Th = s.Tavg + s.coreDT/2;
-  /* WHAT IS LEFT OF THE INVENTORY IS WHERE THE STEAM IS. A fixed volume that
-     has lost mass is a mixture, and the void fraction of that mixture falls
-     straight out of the two densities: (1 - m/m0)/(1 - rvl). The typed
-     (95-inv)/25 said the same thing with the wrong slope and a 5 % dead band,
-     and it could not say that a depressurising loop voids further for the
-     same mass lost - which is exactly what rvl carries. */
-  const vLeak = Math.max(0,(1-s.inv/100)/Math.max(1-satRvl(P.sat, s.pCore),1e-3));
+  /* WHAT IS LEFT OF THE INVENTORY IS WHERE THE STEAM IS, AND THE VESSEL'S OWN
+     NODE SAYS SO: what its node holds against what it held as commissioned
+     (P.coreKg0), over the two densities - (1 - m/m0)/(1 - rvl). It was the
+     same expression off a plant-wide inventory scalar, which could not tell
+     a leak at the top of the loop from one at the bottom and dried the
+     vessel out on water that had left the cold leg. NOT the node's own
+     quality: a boiling core's vessel is two-phase by design, and read that
+     way every subcooled node at the inlet was floored at the outlet's void. */
+  const vLeak = (() => { const nm = P.net.name[P.net.coreNode], m = s.mBy[nm];
+    // a gas has no liquid to be short of: its mass follows p/T and a warm vessel is not a void
+    if(!(P.coreKg0 > 0) || m === undefined || (P.sat.tc && P.Tref > P.sat.tc)) return 0;
+    return Math.max(0, (1 - m/P.coreKg0)/Math.max(1 - satRvl(P.sat, s.pCore), 1e-3)); })();
   const nod = coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac);
+  /* THE HYDROGEN THE CLAD MADE ARRIVES AT THE VESSEL'S OWN NODE, as a
+     concentration in the water there, and rides the transport from then on;
+     s.h2 is the sum over the primary (h2Total). */
+  if(nod.h2 > 0 && s.h2By && P.net && P.net.coreNode !== undefined){
+    const nm = P.net.name[P.net.coreNode];
+    const m = s.mBy[nm] !== undefined ? s.mBy[nm] : P.net.vol[P.net.coreNode]*netRhoAt(s, nm);
+    if(m > DRY_MIN_KG){ s.h2By[nm] = (s.h2By[nm]||0) + nod.h2/m; s.h2 = h2Total(s); } }
   s.voidTh = s.vNode;
   /* A MEASUREMENT OF THE FIELD, plus the one thing the field cannot say. The
-     node void already carries vLeak (coreStep floors every node on it), so the
-     two used to be added to each other on top of that - a third opinion about
-     the same steam. What is left is the OVERSHOOT: a node fraction stops at 1
-     and vLeak runs past it on purpose, because s.vf is what says how far past
-     empty the loop is. */
+     node void already carries vLeak (coreStep floors every node on it); what
+     is left is the OVERSHOOT: a node fraction stops at 1 and vLeak runs past
+     it on purpose, because s.vf is what says how far past empty the loop is. */
   s.vf = clamp(Math.max(vLeak, s.voidTh), 0, 1.6);
 
   /* the LOW SUBCOOLING trip and its annunciator read the instrument's own
@@ -5699,15 +5924,14 @@ function step(dt){
        KIND_TEMP is about BUOYANCY and deliberately says nothing about the
        secondary (see its own comment), so gating the animation on it left the
        feedwater line - which has a real reference and a real solved flow -
-       falling through to a made-up rate. `wet` is a PRIMARY inventory factor
-       and only a primary run owes it. */
+       falling through to a made-up rate. */
     if(tag || P.netRefByRun[key]!==undefined){
       /* the run's OWN solved flow, with no correlation floor under it -
          buoyancy is already in that solve, so a plant on natural circulation
          still visibly moves water and a plant with a valve shut in the line
          visibly does not. Every key here is a RUN now - a fitting's own edge
          is inside its box and has no polyline to animate. */
-      d[key]+=sp*runRatio(key)*(tag?wet:1)*1.4;
+      d[key]+=sp*runRatio(key)*1.4;
     }
   }
   /* THE SHAFTS STATE A RATE, NOT AN ANGLE. Both used to be an angle kept %360
