@@ -289,30 +289,23 @@ function layerPass(seam, L){
 }
 
 function layerToggle(k){ LAYERS[k].on=!LAYERS[k].on; }
-/* ══ ONE MENU, HUNG OFF THE PLANT VIEW BESIDE THE ZOOM KEY ══
+/* ══ ONE MENU, ON THE HEAD ROW BESIDE THE ZOOM KEY ══
    Both screens call this from zoomKeySync() (render/plant.js) rather than
    hand-roll a button per layer, the same reason there is one AUTOSYS and one
    arming switch rather than a copy per system. A layer with no switch here has no
    way to be turned off, so both screens carry exactly LAYER_ORDER.length of them.
 
-   It lives over the plant and not on the rail because a layer paints the
-   PLANT: the switch and the thing it switches are now the same glance, and
-   neither rail has to be scrolled past every machine to reach one.
-
    The headings are read OFF the entries, in LAYER_ORDER, so a new layer joins
    its group by naming it - there is no second table of groups to keep in step
    with the first. */
 function layerMenu(){
-  const wrap=KIT.el("div","plant-layers");
-  const menu=KIT.el("div","plant-layers-menu kit-hide");
-  const key=KIT.button("LAYERS",{sunk:true});
-  key.el.classList.add("plant-layers-key");
-  KIT.tip(key.el,"LAYERS","Every overlay the plant view can draw, grouped by what it surveys. A layer is a view and never a fact: switching one on changes nothing about the plant, only what you are shown of it.");
+  const m=KIT.menuKey({label:"LAYERS", cls:"plant-layers",
+    tip:"Every overlay the plant view can draw, grouped by what it surveys. A layer is a view and never a fact: switching one on changes nothing about the plant, only what you are shown of it."});
   /* GROUPED BY GROUP, not by where the entry sits in LAYER_ORDER - that order
      is the DRAW order and FLOW METERS is last in it, so a single walk printed
      PLUMBING twice with the room layers between the halves. */
   for(const group of LAYER_ORDER.map(k=>LAYERS[k].group).filter((g,i,a)=>a.indexOf(g)===i)){
-    menu.appendChild(KIT.rule(group).el);
+    m.menu.appendChild(KIT.rule(group).el);
     for(const k of LAYER_ORDER){
       const l=LAYERS[k];
       if(l.group!==group) continue;
@@ -320,20 +313,8 @@ function layerMenu(){
         onClick:()=>{ layerToggle(k); b.set({on:l.on}); }});
       b.el.classList.add("layer-switch");
       KIT.tip(b.el, l.label, l.tip);
-      menu.appendChild(b.el);
+      m.menu.appendChild(b.el);
     }
   }
-  /* ONE HANDLER OPENS AND SHUTS IT, and it is the document's, not the key's -
-     the same idiom the context menu uses (shell.js). A press anywhere but
-     inside the menu shuts it, including on the key, so the plant under it
-     never loses the first click aimed past it. A key with its own click
-     handler could not do this: the press would shut the menu and the click
-     would reopen it. Captured, because the plant is a canvas and swallows
-     presses that land on it. */
-  document.addEventListener("pointerdown", e => {
-    if(menu.contains(e.target)) return;
-    const open=key.el.contains(e.target)&&menu.classList.contains("kit-hide");
-    KIT.show(menu,open); key.set({on:open}); }, true);
-  wrap.append(key.el,menu);
-  return {el:wrap};
+  return m;
 }

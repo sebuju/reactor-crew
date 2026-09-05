@@ -389,7 +389,7 @@ function drawSym(p,x,y,w,h,ink,L){
        that fall off the bottom, SCRAM because no tile is hosted here for it -
        so their tiles are dropped from the list rather than said twice. NEAR
        TRIP goes too: the row below names the channel, which the tile does not. */
-    const said={"VESSEL BREACH":1,"CORE MELT":1,"NEAR TRIP":1};
+    const said={"RX BREACH":1,"CORE MELT":1,"NEAR TRIP":1};
     if(L) bannerRows([
       L.breach && ["BREACHED",C.red],
       L.melt && ["MELT",C.red],
@@ -441,13 +441,13 @@ function drawSym(p,x,y,w,h,ink,L){
        every damaged component draws (below, in this same loop) is centred
        in this same box - two labels sharing one centre is a guaranteed
        overlap the moment both are true at once. */
-    // JAMMED and SCRAM are the drives not answering; ROD AT LIMIT is the drives
+    // JAMMED and SCRAM are the drives not answering; ROD LIMIT is the drives
     // answering perfectly to a controller that has run out of band, so it only
     // has anything to say once neither of the other two is true.
     if(jam||scram)
       banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red,Y+9);
-    else if(L&&annLit("ROD AT LIMIT"))
-      banner("ROD AT LIMIT",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.amber,Y+9);
+    else if(L&&annLit("ROD LIMIT"))
+      banner("ROD LIMIT",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.amber,Y+9);
   } else if(p.role==="sg"){
     const burst = !!(L && L.sgBurst && L.sgBurst[id]);
     // a burst shell is OPEN: the lid is torn instead of domed, so the boundary
@@ -636,8 +636,8 @@ function drawSym(p,x,y,w,h,ink,L){
        quietly and says nothing about what that costs, which is the same hole
        the dry-out pulse on the generators was drawn to close. Held high in the
        shell so the rising water never reaches the word. */
-    if(L&&annLit("HOTWELL FULL"))
-      banner("HOTWELL FULL",cx,X,Y+2,W,Hh-4,C.red,Y+14);
+    if(L&&annLit("HOTWELL HI"))
+      banner("HOTWELL HI",cx,X,Y+2,W,Hh-4,C.red,Y+14);
   } else if(p.role==="ctrl"){
     shell(()=>{ ctx.moveTo(X,Y+Hh); ctx.lineTo(X,Y+6); ctx.lineTo(X+W,Y+2);
       ctx.lineTo(X+W,Y+Hh); ctx.closePath(); });
@@ -1171,7 +1171,8 @@ const deadCell=c=>{ const o=Object.assign({},c);
   o.fn=()=>{}; o.set=()=>{}; o.on=()=>false; o.danger=()=>false; o.inert=true;
   if(c.kind==="arm") o.label=c.label||(()=>"");
   return o; };
-const ctlDead=rows=>rows&&rows.map(r=>r.map(deadCell));
+// a nozzle valve is its own part, and isolating a wreck is what you reach for
+const ctlDead=rows=>rows&&rows.map(r=>r.map(c=>c.ownPart?c:deadCell(c)));
 /* ══ WHAT THIS MACHINE IS STOOD DOWN AS, IN ONE WORD ══
    Null when there is nothing to say, which is the ordinary case. It exists
    because a valve's handles are put away until the hand is on the box: a shut
@@ -1393,10 +1394,33 @@ function bypCell(k){
     title:()=>A.name+"  [ "+autoState(k)+" ]",
     tip:A.tip+(autoFit(k)?"":" None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")};
 }
+/* A port belongs to the box it stands on, so its handle is in that box's panel;
+   the ten-pixel mark on the drawing still works and is the same act. */
+function portCtlRows(p){
+  const cells=[];
+  for(const pid in D.ports){
+    if(D.ports[pid].p!==p.id) continue;
+    const f=portFaceOf(pid);
+    const nm=(f&&portWord(p,f,false))||FACE_NAME[f]||pid;
+    cells.push({kind:"btn",flex:1,k:"port:"+pid+":shut",def:false,ownPart:true,
+      inert:portWrecked(S,pid),
+      on:()=>!portOpen(S,pid),
+      danger:()=>!portOpen(S,pid),
+      text:()=>nm+" "+(portWrecked(S,pid) ? (portOpen(S,pid)?"JAM OPEN":"JAM SHUT")
+                                          : (portOpen(S,pid)?"OPEN":"SHUT")),
+      fn:()=>{ act("portShut",pid); },
+      tip:"The isolation valve in this nozzle. Shut, the run landing on it carries nothing - which is how a leaking line is cut out of the plant, and how a repair party gets a machine to work on. A wrecked nozzle jams where it stood and takes no orders at all."});
+  }
+  const rows=[];
+  for(let i=0;i<cells.length;i+=2) rows.push(cells.slice(i,i+2));
+  return rows;
+}
 function ctlFor(p,live,split){
   const rows=ctlBase(p,live,split), k=autoOn(p.id);
-  if(!k) return rows;
-  return (rows||[]).concat([[bypCell(k)]]);
+  let out = k ? (rows||[]).concat([[bypCell(k)]]) : rows;
+  // the plant has to be welded down for a valve to have a position at all
+  if(live){ const pr=portCtlRows(p); if(pr.length) out=(out||[]).concat(pr); }
+  return out;
 }
 /* THE NAME ROW, and it is all the box reserves now: every control stands in
    the machine's own PANEL (ui/margin.js), so there is no strip to measure and
@@ -3286,12 +3310,12 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   return VIEW.y+VIEW.h;
 }
 
-/* ══ THE KEYS ARE HTML, AND THEY ARE THE ONLY CHROME ON THE PLANT THAT IS ══
+/* ══ THE KEYS ARE HTML, AND THEY LIVE ON THE HEAD ROW ══
    They are controls, not pictures: everything the canvas draws grows with the
    window, which is right for the plant and wrong for a key sitting among rail
-   type that is plain px. So they are real <button>s in the screen's own mount,
-   placed off VIEW each frame in CSS px - one strip, so the LAYERS menu and the
-   zoom key cannot drift apart or be placed twice.
+   type that is plain px. So they are real <button>s, in the head row both
+   screens carry - one strip, so the LAYERS menu and the zoom key cannot drift
+   apart or be placed twice, and no per-frame placement off VIEW.
 
    One ZOOM key, not two: at fit the only useful move is in, and zoomed in the
    only move is all the way back out. Reads FIT whenever off 1 in either
@@ -3318,7 +3342,4 @@ function zoomKeySync(mount){
   if(b.textContent!==want) b.textContent=want;
   b.title=(z?"FIT THE WHOLE PLANT":"ZOOM IN")+
     "\nThe plant view pans and zooms. Roll the wheel over it to zoom about the pointer, hold the RIGHT button to drag the plant about, and this key jumps between the whole plant and a close look at whatever component is selected.";
-  const v=viewRectCss(), mr=mount.getBoundingClientRect();
-  keys.style.right=Math.max(0,mr.right-v.right+6)+"px";
-  keys.style.top  =Math.max(0,v.top-mr.top+6)+"px";
 }
