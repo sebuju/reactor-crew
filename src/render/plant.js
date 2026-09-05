@@ -4,6 +4,11 @@
 // not of the grid, so no cell coordinate moves.
 const EL_GUT=22;
 
+/* HOW MUCH SHIP z=1 SHOWS, in CELLS. The companion to CELL (layout.js): CELL says
+   how big a machine is against its own panel, this says how many machines are on
+   screen at once. Both are meant to be tuned; nothing else states a view size. */
+const VIEW_CELLS_W=34, VIEW_CELLS_H=19;
+
 // the one valve symbol (two triangles nose to nose): the pressurizer relief
 // valve and a junction tie share this drawing so they cannot drift apart
 function bowtie(cx,cy,w,h,col){
@@ -114,8 +119,16 @@ function nozzleEnds(r){
    on the leading side and bare on the trailing one, a joint measuring 1 / 1
    READS flush against its own cell on one side only. 5 leaves two, so the gap
    survives the dot on both. */
-const NOZZLE_HALF_MAX = 5;
-const pipeNozzleHalf = bore => Math.min(pipeWidth(bore)*1.4, NOZZLE_HALF_MAX);
+const NOZZLE_HALF_MAX = 5*DRAW_K;
+/* ══ AND EVERY JOINT IS THE SAME JOINT ══
+   It was min(pipeWidth(bore)*1.4, the cap), so a joint was a READING of its
+   own run's bore - and the bore is already drawn, in the pipe. What it bought
+   instead was a board where a drain nozzle and a main steam nozzle were
+   different objects: two ports on one machine at two sizes, and neither of
+   them the size of the cell they stand in. A flange is a flange. The size is
+   the CELL's own budget, so the mark is uniform, always stands proud of the
+   widest pipe there is room for, and nothing about it has to be compared. */
+const pipeNozzleHalf = () => NOZZLE_HALF_MAX;
 /* WHICH SIDE OF A MACHINE A NOZZLE IS ON, IN COLOUR. The joint was flat
    C.metal, which is the truth for a vessel that is one node and a lie for a
    pump: its suction and its discharge are different water, and a plant with
@@ -153,20 +166,26 @@ function portColOf(pid,L){
 // not, so a fresh one reads as placed the instant it exists.
 // THE RECT THE JOINT OCCUPIES, so a caller that has to point AT one is working
 // off the same four numbers the draw does instead of guessing them off CELL.
-/* ...AND IT IS CENTRED ON THE DECK IT SHOWS, NOT ON THE CELL. The deck's grid
-   dot (gridDots(), chrome.js) is a 1x1 mark at every cell's TOP-LEFT corner,
-   so a joint centred in its cell leaves 2 px of gap at each end of its long
-   axis of which the leading one is 1 px dot + 1 px deck and the trailing one
-   is 2 px of deck. Measured off the picture that is 1 against 2, and it reads
-   as the joint being shoved against the near edge - which is exactly what it
-   was reported as, twice. Half the dot back the other way and the two gaps
-   show the same 1.5 px of bare deck. */
-const GRID_DOT=1;
+/* ...AND IT IS CENTRED ON ITS CELL, FULL STOP. It used to be shoved half a
+   grid dot along its own long axis, because the dot (gridDots(), chrome.js)
+   was drawn from a cell's top-left corner INTO that cell and so ate the gap
+   on one side only. The dot straddles the corner now, so the deck is
+   symmetric about every cell line and the joint has nothing to dodge. */
+/* THE FLANGE STANDS PROUD BY A FRACTION OF THE CELL, not by 2.5 units. `half`
+   already followed the bore and so grew with CELL, but `deep` and the casing
+   margin did not - so a joint that was a chunky flange at 16 came out a sliver
+   lying on a 90-unit cell, and the port read as having shrunk. */
+const NOZZLE_CASE=1*DRAW_K;
+const NOZZLE_DEEP=2.5*DRAW_K;   // how far it stands proud of the shell
+/* HOW FAR A JOINT REACHES ALONG ITS OWN RUN, so a word placed on that run can
+   be kept off it (pipeLabSpots(), pipes.js). One answer, or the label and the
+   joint each get their own idea of where the pipe starts. */
+const nozzleReach=()=>NOZZLE_DEEP+NOZZLE_CASE;
 function nozzleRect(px,py,flat,bore){
-  const half=pipeNozzleHalf(bore), deep=2.5;   // how far it stands proud of the shell
+  const half=pipeNozzleHalf(), deep=NOZZLE_DEEP;
   const bx=flat?deep:half, by=flat?half:deep;
-  const sx=flat?0:GRID_DOT/2, sy=flat?GRID_DOT/2:0;   // along the LONG axis only
-  return {x:px-bx-1+sx, y:py-by-1+sy, w:2*bx+2, h:2*by+2};
+  return {x:px-bx-NOZZLE_CASE, y:py-by-NOZZLE_CASE,
+          w:2*bx+2*NOZZLE_CASE, h:2*by+2*NOZZLE_CASE};
 }
 /* THE WALL IS WHAT SAYS BROKEN, on a joint exactly as on a run: the casing
    goes red and the bore keeps its own colour, so a wrecked port still reads
@@ -175,7 +194,8 @@ const portCasOf=(pid,L)=>portWrecked(L,pid)?C.red:PIPE_CASE;
 function drawNozzle(px,py,flat,bore,col,cas){
   const r=nozzleRect(px,py,flat,bore);
   fillRect(r.x,r.y,r.w,r.h,cas||PIPE_CASE);
-  fillRect(r.x+1,r.y+1,r.w-2,r.h-2,col);
+  fillRect(r.x+NOZZLE_CASE,r.y+NOZZLE_CASE,
+           r.w-2*NOZZLE_CASE,r.h-2*NOZZLE_CASE,col);
 }
 /* ══ THE BORE EACH JOINT IS DRAWN AT, AND THE RECT THAT FOLLOWS FROM IT ══
    ONE answer, because three passes were each working it out: pipeNozzles()
@@ -209,12 +229,12 @@ function portNozzleRect(pid,f,bore){
    White was tried and is wrong; a mid-tone fill wants dark ink, not light.
    PORT_WORD_PAD is a clear pixel on every side, so the word never touches the
    casing it is standing on. */
-const PORT_WORD_PAD=1;
+const PORT_WORD_PAD=1*DRAW_K;
 function portWordDraw(pid,f,word,r){
   const vert=portFlat(f), REF=10, pad=2*PORT_WORD_PAD;
   const long=(vert?r.h:r.w)-pad, short=(vert?r.w:r.h)-pad;
   const sz=Math.min(short, REF*long/Math.max(tw(word,{size:REF,sp:0}),1e-6));
-  if(!(sz>0.5)) return;
+  if(!(sz>0.5*DRAW_K)) return;
   ctx.save();
   ctx.translate(r.x+r.w/2, r.y+r.h/2);
   if(vert) ctx.rotate(-Math.PI/2);
@@ -307,9 +327,23 @@ function fitGlyphWH(id,boxW,boxH){
 // ART EXEMPT: the id if/else chain below draws each part's own glyph - what
 // a component LOOKS like, never a network decision - so the "an id literal is
 // a name test" rule does not reach it.
+/* ══ A SYMBOL IS DRAWN IN THE CELL IT WAS AUTHORED IN, AND THE BOX SCALES IT ══
+   Every figure inside symAt() - the 5-unit inset, the 1.5 stroke, the vessel's
+   10-unit dome, the 5-unit drive screw - is a fraction of a 16-unit cell, and
+   there are about a hundred of them. Multiplied one at a time by DRAW_K they
+   would drift the first time one was edited without the others; taken as ONE
+   TRANSFORM they cannot. So the symbol keeps its own coordinate space and the
+   scale is applied once, here. It is pure drawing - no push(), no TIP(), no
+   hit-test - which is what makes a transform legal at all. */
 function drawSym(p,x,y,w,h,ink,L){
+  ctx.save();
+  ctx.translate(x,y); ctx.scale(DRAW_K,DRAW_K);
+  symAt(p,0,0,w/DRAW_K,h/DRAW_K,ink,L);
+  ctx.restore();
+}
+function symAt(p,x,y,w,h,ink,L){
   const cx=x+w/2, X=x+5, Y=y+5, W=w-10, Hh=h-10;
-  const shell=fn=>{ ctx.beginPath(); fn(); ctx.fillStyle=C.panel; ctx.fill();
+  const shell=fn=>{ ctx.beginPath(); fn(); ctx.fillStyle=C.machBg; ctx.fill();
     ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke(); };
   const lvl=(fx,fy,fw,fh,frac,col)=>{ const t=clamp(frac,0,1);
     ctx.save(); ctx.globalAlpha=.45; fillRect(fx,fy+fh*(1-t),fw,fh*t,col); ctx.restore(); };
@@ -323,7 +357,7 @@ function drawSym(p,x,y,w,h,ink,L){
      of the fallback as a hatched box with no level in it. */
   const tank=(bx,by,bw,bh,rad,frac,col)=>{
     const path=()=>{ ctx.beginPath(); rr(bx,by,bw,bh,rad); };
-    path(); ctx.fillStyle=C.panel; ctx.fill();
+    path(); ctx.fillStyle=C.machBg; ctx.fill();
     const t=clamp(frac,0,1);
     if(t>0.001){
       const wy=by+bh*(1-t);
@@ -877,9 +911,9 @@ function coreField(x,y,w,h,V){
    a name that breaks would otherwise have the reading printed through it. Two
    copies of the break would answer that differently on exactly the frame it
    matters. */
-const NAME_TXT={size:6.5,sp:.4,step:false,align:"center"};
-const NAME_LH=capH(6.5)+4;
-const nameInner=w=>w-14;               // held clear of the case and its corner radius
+const NAME_TXT={size:6.5*DRAW_K,sp:.4*DRAW_K,step:false,align:"center"};
+const NAME_LH=capH(NAME_TXT.size)+4*DRAW_K;
+const nameInner=w=>w-14*DRAW_K;        // held clear of the case and its corner radius
 const nameLines=(s,w)=>wrapLines(s,nameInner(w),NAME_TXT);
 // the lowest pixel the plate reaches, off the same first baseline the draw uses
 const nameBot=(s,y,w,nameH)=>y+nameH+(nameLines(s,w).length-1)*NAME_LH;
@@ -891,8 +925,9 @@ const nameBot=(s,y,w,nameH)=>y+nameH+(nameLines(s,w).length-1)*NAME_LH;
    y+nameH-3 (the draw, below), so this is half a cap height above it, and a
    box with no name row keeps the top row it always had. Both marks - the
    bench's warning and the control room's lamp - are one point, one radius. */
-const MARK_R=4;
-const nameMark=(x,y,nameH)=>({x:x+10, y:y+(nameH? nameH-3-capH(NAME_TXT.size)/2 : 11)});
+const MARK_R=4*DRAW_K;
+const nameMark=(x,y,nameH)=>({x:x+10*DRAW_K,
+  y:y+(nameH? nameH-3*DRAW_K-capH(NAME_TXT.size)/2 : 11*DRAW_K)});
 
 // extra: room for the rows BELOW the first, so a label that breaks is one
 // plate with two lines on it and never two labels stacked
@@ -994,8 +1029,11 @@ function liveValue(p,s){
    that already draw every bank, and under the turbine it read as the
    condenser's. null means this machine already says it in its own picture.
    Returns a text BASELINE; the tag is always centred on the box. */
+// the reading a machine prints on itself, named once because valueBase() has to
+// clear it and the draw has to set it
+const VAL_TXT_SIZE=8*DRAW_K;
 function valueBase(p,x,y,w,h,sh,nameH,nmw){
-  const symTop=y+nameH, symH=h-sh-nameH, mid=symTop+symH/2+3;
+  const symTop=y+nameH, symH=h-sh-nameH, mid=symTop+symH/2+3*DRAW_K;
   switch(true){
     case p.role==="rods": return null;
     /* the two machines drawn front-on: the wheel is the machine, so the number
@@ -1004,9 +1042,9 @@ function valueBase(p,x,y,w,h,sh,nameH,nmw){
        aim and why both landed above their own rotors. */
     case p.role==="turb":
     case roleHead(p.role): return mid;
-    case p.role==="core":   return symTop+symH-20+9;               // under the vessel's inner box
-    case p.id==="pzr":    return PZR_DIAL_CY(y)+PIPE_DIAL_R+10;  // under its own dial
-    case p.role==="sg":   return symTop+12+(symH-12)/2+3;        // mid SHELL, not mid box
+    case p.role==="core":   return symTop+symH-20*DRAW_K+9*DRAW_K;   // under the vessel's inner box
+    case p.id==="pzr":    return PZR_DIAL_CY(y)+PIPE_DIAL_R+10*DRAW_K;  // under its own dial
+    case p.role==="sg":   return symTop+12*DRAW_K+(symH-12*DRAW_K)/2+3*DRAW_K;  // mid SHELL, not mid box
     case p.role==="bkp":
     case p.role==="cond":
     case p.role==="radiator": return mid;
@@ -1017,8 +1055,9 @@ function valueBase(p,x,y,w,h,sh,nameH,nmw){
        of the box is already under the name, and a name that breaks reaches
        further still. */
     case p.role==="tank":
-      return Math.max(y+h/2+3, nameBot(nmw,y,w,nameH)+3+capH(8));
-    default: return y+h+9;
+      return Math.max(y+h/2+3*DRAW_K,
+                      nameBot(nmw,y,w,nameH)+3*DRAW_K+capH(VAL_TXT_SIZE));
+    default: return y+h+9*DRAW_K;
   }
 }
 
@@ -1430,13 +1469,13 @@ function ctlFor(p,live,split){
    no ladder to compact one down. A tank's row is unconditional, because every
    label a tank carries stands on its own shell rather than in the pipe margin
    above it. */
-const nameRowH = p => (p.role==="tank" || p.h*CELL>CELL) ? 14 : 0;
+const nameRowH = p => (p.role==="tank" || p.h*CELL>CELL) ? 14*DRAW_K : 0;
 /* ══ THE GHOST PORT ══
    Hover a cell beside a machine and it shows where a port would land - a
    preview of addPortAt(), never a placement of its own. The hand names the
    CELL now, not a face: the face falls out of which side of the box the cell
    is on (faceOfOffset(), layout.js). */
-const GHOSTG=CELL-4;
+const GHOSTG=CELL-4*DRAW_K;
 function ghostPort(){
   if(ui.drag) return null;
   if(TOOL.active!=="select") return null;
@@ -1462,7 +1501,7 @@ function drawGhostPort(){
   const wd=push({x:bx,y:by,w:GHOSTG,h:GHOSTG,type:"ghostport",p:g.p.id,dx:g.dx,dy:g.dy});
   const hv=hov(wd);
   ctx.save(); ctx.globalAlpha=hv?0.9:0.45;
-  ctx.strokeStyle=C.green; ctx.lineWidth=1.3; ctx.setLineDash([2,2]);
+  ctx.strokeStyle=C.green; ctx.lineWidth=1.3*DRAW_K; ctx.setLineDash([2*DRAW_K,2*DRAW_K]);
   ctx.strokeRect(bx,by,GHOSTG,GHOSTG);
   ctx.restore();
   TIP(bx,by,GHOSTG,GHOSTG,"NEW PORT",
@@ -1481,7 +1520,7 @@ function drawHitAim(){
   if(p.isRun){ const [x,y]=cellPos(p.cells[0][0],p.cells[0][1]);
     bx=x-CELL/2; by=y-CELL/2; bw=bh=CELL; }
   else { const r=prect(p); bx=r.x; by=r.y; bw=r.w; bh=r.h; }
-  ctx.save(); ctx.strokeStyle=C.red; ctx.lineWidth=1.6; ctx.setLineDash([3,3]);
+  ctx.save(); ctx.strokeStyle=C.red; ctx.lineWidth=1.6*DRAW_K; ctx.setLineDash([3*DRAW_K,3*DRAW_K]);
   ctx.strokeRect(bx,by,bw,bh);
   ctx.restore();
 }
@@ -1490,7 +1529,7 @@ function drawHitAim(){
    two marks a cell apart rather than one mark claiming to speak for both.
    Left click takes it away again; right click held-and-released opens the
    mode menu (design-bench.js's own ctx registry). */
-const PORTG=CELL-4;
+const PORTG=CELL-4*DRAW_K;
 /* ONE WALK OVER THE PORTS, taken by both passes. The bench's placement marks
    and the control room's isolation valves ask the same three questions of
    every port - which part, which face, which cell - and a port whose part is
@@ -1519,7 +1558,7 @@ function drawPortMarks(){
     const wd=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid});
     // the JOINT lights up, not a square drawn near it - drawPortValves()' own
     // rule, and the same rect it rings
-    if(hov(wd)) fillRect(nr.x+1,nr.y+1,nr.w-2,nr.h-2,col);
+    if(hov(wd)) fillRect(nr.x+DRAW_K,nr.y+DRAW_K,nr.w-2*DRAW_K,nr.h-2*DRAW_K,col);
     /* ONE WORD PER NOZZLE, IN THE NOZZLE. It used to be a plate in the margin
        deduped to one per FACE, so a turbine's four steam nozzles carried a
        single label sitting on the first of them - and the plate landed in the
@@ -1558,7 +1597,7 @@ function drawPortMarks(){
    tags and layer annotations landing all around it - drawn in place, the mark
    went under the next thing painted.
    A press goes through act("portShut") like any other input - see uiDown(). */
-const PORT_RING=2;              // how far past the joint a press still counts
+const PORT_RING=2*DRAW_K;       // how far past the joint a press still counts
 /* ONE PORT IS HOVERED AT A TIME, so this is a rect and not a list. Set here,
    spent by drawPlant() after every tag has gone down. */
 let portRing=null;
@@ -1616,7 +1655,7 @@ function drawPipePreview(){
   ctx.save(); ctx.globalAlpha=0.55;
   for(const [x,y] of d.cells){
     const r=grect(x,y,1,1);
-    fillRect(r.x+2,r.y+2,r.w-4,r.h-4,C.amber);
+    fillRect(r.x+2*DRAW_K,r.y+2*DRAW_K,r.w-4*DRAW_K,r.h-4*DRAW_K,C.amber);
   }
   ctx.restore();
 }
@@ -1633,7 +1672,7 @@ function partGhost(){
   const d = ui.drag&&ui.drag.type==="part" ? ui.drag : null;
   if(!d || (d.gx===d.sx && d.gy===d.sy)) return;
   const cells=moveCells(d.part,d.gx,d.gy), ok=groupFits(cells);
-  ctx.save(); ctx.setLineDash([4,4]);
+  ctx.save(); ctx.setLineDash([4*DRAW_K,4*DRAW_K]);
   for(const {q,x,y} of cells){ const r=grect(x,y,q.w,q.h);
     fillRect(r.x,r.y,r.w,r.h, ok?"rgba(87,211,140,.10)":"rgba(255,90,69,.10)");
     frame(r.x,r.y,r.w,r.h, ok?C.green:C.red); }
@@ -1673,8 +1712,9 @@ function pipeFitMarks(L,net){
       const marg = reliefSet(id).lift - reliefAtP(L,id);
       /* IT STANDS UNDER THE GLYPH, so the room it has is what the bowtie
          leaves - a one-cell box runs out of height long before width. */
-      squeezeTxt((marg>=0?"+":"")+marg.toFixed(2), cx, r.y+r.h-2, r.w-2,
-        {size:8,align:"center",maxh:Math.max(2,r.h/2-fitGlyphWH(id,r.w,r.h).fh/2-3),
+      squeezeTxt((marg>=0?"+":"")+marg.toFixed(2), cx, r.y+r.h-2*DRAW_K, r.w-2*DRAW_K,
+        {size:8*DRAW_K,align:"center",
+         maxh:Math.max(2*DRAW_K,r.h/2-fitGlyphWH(id,r.w,r.h).fh/2-3*DRAW_K),
          color:marg<0?C.red : marg<reliefRefP(id)*0.02?C.amber : C.ink2});
     } else if(mode==="throttle"){
       /* THE DIFFERENTIAL IS WHAT A THROTTLE IS FOR. Position says what you
@@ -1687,7 +1727,7 @@ function pipeFitMarks(L,net){
       const dk = fitEdgeKey(id);
       if(pipeDrop[dk]!=null)
         put(id, (pipeDrop[dk]*100).toFixed(0)+"% dP",
-            pipeDrop[dk]>0.5?C.amber:C.ink2, cx, r.y+1);
+            pipeDrop[dk]>0.5?C.amber:C.ink2, cx, r.y+DRAW_K);
     }
   }
 }
@@ -1759,6 +1799,28 @@ const RHO_BAR=2600;
    worth drawing, so a settled plant reads settled instead of magnified */
 const RHO_TRACE_MIN=150, TAVG_TRACE_MIN=1;
 
+/* ══ WHICH VESSEL THE TWO BALANCES ARE READ OFF ══
+   Both of them - reactivity AND heat - are core-shaped, and both took the
+   PLANT's scalars, which step.js mirrors off primaryCore() (`s.parts`,
+   `s.rho`): on two units the second one's reactivity was simply not drawable
+   and its heat was averaged into a figure labelled as if it were the plant's.
+   rhoViz keyed off `coreOf(sel)`, so selecting a pump silently reverted it to
+   the first vessel with nothing on the panel saying so.
+   TREND.unit's twin, and a view state for the same reason: null is the plant,
+   the control room's tab row is the one writer, and nothing here rides S. */
+const CRUNIT={id:null};
+const crUnits=()=>{ const ids=typeof coreIds==="function"?coreIds():[]; return ids.length>1?ids:[]; };
+/* the vessel actually being read: a tab naming one this design no longer has
+   falls back to the plant rather than drawing a bag that is not there */
+const crUnit=()=>{ const id=CRUNIT.id;
+  return id && S && S.coreBy && S.coreBy[id] ? id : null; };
+/* THE TRACE UNDER EACH BALANCE READS THE SAME VESSEL THE BARS DO. trends.js
+   already keeps one ring per vessel for a vessel-shaped channel and names it
+   "rho:core1"; TREND.unit is the SCENARIO chart's own pick, so this widget
+   addresses the ring by name rather than reaching for a selector that belongs
+   to another screen and is never set on this one. */
+const crCh=k=>{ const id=crUnit(); return id && crUnits().length ? k+":"+id : k; };
+
 /* ═══════════ WHAT IS HAPPENING IN REACTIVITY, AND WHERE IT IS GOING ═══════════
    The ledger below this says what every term IS. Eight signed numbers do not
    say which of them is winning, and that is the only question the operator
@@ -1782,7 +1844,7 @@ const RHO_TRACE_MIN=150, TAVG_TRACE_MIN=1;
    note on HOST_K. Everything is laid out off `h` rather than pinned, because
    the rail width is the player's to change. */
 function rhoViz(x,y,w,h){
-  const s=coreSeen(S,coreOf(sel)); if(!s) return;
+  const s=coreSeen(S,crUnit()||primaryCore()); if(!s) return;
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
   // P.BETA is the delayed fraction; everything on this widget is pcm
   const beta=P?P.BETA*1e5:650;
@@ -1900,7 +1962,7 @@ function rhoViz(x,y,w,h){
   txt("BETA "+beta.toFixed(0),R,ny+nh+8,{size:6,sp:.6,align:"right",color:C.ink2});
 
   /* ── the last minute of it ── */
-  vizTrace(L,R,ny+nh+12+gap,Math.max(16,y+h-(ny+nh+12+gap)-2),"rho",C.amber,0,"",RHO_TRACE_MIN,"pcm");
+  vizTrace(L,R,ny+nh+12+gap,Math.max(16,y+h-(ny+nh+12+gap)-2),crCh("rho"),C.amber,0,"",RHO_TRACE_MIN,"pcm");
 }
 /* ══ THE LAST MINUTE, ABOUT A ZERO THAT DOES NOT MOVE ══
    Both balances end in the same picture, so it is one function - and the ZERO
@@ -1952,21 +2014,34 @@ const HEAT_ROWS=[
    NOT charge the core - the exchanger's pot does, and it is the pot's crossing
    that step() puts into qTot. Same split, asked the same way, so these rows sum
    to `removal` exactly rather than to something that looks like it. */
-function heatSinks(){
-  const out=[], rated=P?P.rated*1000:0;
+/* WHICH MACHINES ARE THIS VESSEL'S SINKS, asked of the drawing: a stage charges
+   a core when its NEAR side stands on that core's own circuit (sgPrimCirc(),
+   layout.js). Two units on two loops each see their own generators; two on one
+   loop both see all of them, which is the truth about a shared loop and not a
+   case anybody has to write. `cid` null is the plant and takes everything.
+   Not loopOf() - a core belongs to no numbered loop (they hang off it), so that
+   predicate answered null===null and gave every vessel an empty removal arm. */
+const heatOnUnit=(cid,id)=>!cid || sgPrimCirc(id)===coreCircOf(cid);
+function heatSinks(cid){
+  const out=[], rated=heatRated(cid)*1000;
   if(!rated) return out;
   for(const id of ihxIds()){
-    if(!ihxSgs(id).length) continue;
+    if(!ihxSgs(id).length || !heatOnUnit(cid,id)) continue;
     out.push({lab:nameOf(id),v:(S.ihxQBy[id]||0)/rated,col:C.cyan,
       tip:"Heat crossing this intermediate exchanger, out of the core and into its pot. The generators behind it are a stage further on."});
   }
   for(const id of sgIds()){
-    if(ihxOf(id)) continue;
+    if(ihxOf(id) || !heatOnUnit(cid,id)) continue;
     out.push({lab:nameOf(id),v:(HEATBAL.sgQBy[id]||0)/rated,col:C.green,
       tip:"Heat this generator is taking out of the core. It goes to zero when the tubes uncover, and a core with no sink at all keeps heating on decay heat alone."});
   }
   return out;
 }
+/* THE SCALE IS THE RATING OF WHAT IS BEING READ. Every figure on this widget is
+   a share of rated, so a vessel's own picture has to be a share of ITS rating -
+   over the plant's, one unit of two reads half the power it is making. */
+const heatRated=cid=>{ const K=cid&&P&&P.cores&&P.cores[cid];
+  return K ? K.rated : (P?P.rated:0); };
 /* full deflection of a heat ledger bar, share of rated power */
 const HEAT_BAR=0.10;
 
@@ -1989,13 +2064,14 @@ const HEAT_BAR=0.10;
      THE LAST MINUTE - T-avg, the integral of that needle. A balance can read
      near zero and still be sitting 80 K high. */
 function heatViz(x,y,w,h){
-  const s=S; if(!s) return;
+  const cid=crUnit(), s=cid?coreSeen(S,cid):S; if(!s) return;
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
-  const rated=P?P.rated:0;
+  const rated=heatRated(cid);
 
+  // a vessel's prompt term is its own n, never the plant's rated-weighted mean
   const src=HEAT_ROWS.map(r=>({lab:r[0],
-    v:r[1]==="prompt"?HEATBAL.prompt:(s.dec[+r[1][1]]||0), col:r[3]()}));
-  const snk=heatSinks();
+    v:r[1]==="prompt"?(cid?s.n*PROMPT_F:HEATBAL.prompt):(s.dec[+r[1][1]]||0), col:r[3]()}));
+  const snk=heatSinks(cid);
   let made=0,rem=0;
   for(const t of src) made+=Math.max(0,t.v);
   for(const t of snk) rem+=Math.max(0,t.v);
@@ -2054,7 +2130,8 @@ function heatViz(x,y,w,h){
      Temperature's zero is the plant's own commissioned T-avg, so the centre
      line means "where this loop was built to sit". */
   const ty=ny+nh+12+gap;
-  vizTrace(L,R,ty,Math.max(16,y+h-ty-2),"tavg",C.cyan,P?P.Tref:0,"T-AVG ",TAVG_TRACE_MIN,"K");
+  vizTrace(L,R,ty,Math.max(16,y+h-ty-2),crCh("tavg"),C.cyan,
+    (cid&&P&&P.cores&&P.cores[cid])?P.cores[cid].Tref:(P?P.Tref:0),"T-AVG ",TAVG_TRACE_MIN,"K");
 }
 /* ═══════════ WHERE THE CORE IS HURT ═══════════
    FUEL DAMAGE is one percentage, and a percentage cannot say the one thing an
@@ -2933,11 +3010,20 @@ function plantBack(L,GHp,rowH){
   // see these rectangles on the recorder it is reading
   if(!m||!m.a){ plantBackPaint(L,GHp,rowH); return; }
   const sc=m.a;
-  const x0=GX-EL_GUT, y0=GY, w=GW*CELL+EL_GUT, h=GHp;
+  /* ONLY WHAT IS ON SCREEN IS BAKED: the whole board at device scale is 62 Mpx
+     where a panel reaches 1:1 and past the canvas limit a rung above that, and a
+     zoom ease rebuilt it every frame. Quantised to a cell so a pan reuses it. */
+  const cvw=ctx.canvas?ctx.canvas.width:0, cvh=ctx.canvas?ctx.canvas.height:0;
+  const bx0=Math.max(GX-EL_GUT, Math.floor(((0-m.e)/m.a-CELL)/CELL)*CELL);
+  const by0=Math.max(GY,        Math.floor(((0-m.f)/m.d-CELL)/CELL)*CELL);
+  const x0=bx0, y0=by0;
+  const w=Math.min(GX-EL_GUT+GW*CELL+EL_GUT, Math.ceil(((cvw-m.e)/m.a+CELL)/CELL)*CELL)-x0;
+  const h=Math.min(GY+GHp,                   Math.ceil(((cvh-m.f)/m.d+CELL)/CELL)*CELL)-y0;
+  if(w<=0||h<=0) return;
   const dx=m.a*x0+m.c*y0+m.e, dy=m.b*x0+m.d*y0+m.f;
   const ix=Math.floor(dx), iy=Math.floor(dy);
   const q=v=>Math.round(v*4)/4, fx=q(dx-ix), fy=q(dy-iy);
-  const key=[GW,GH,GY,sc.toFixed(4),fx,fy,L?1:0].join("|");
+  const key=[GW,GH,GY,sc.toFixed(4),fx,fy,x0,y0,w,h,L?1:0].join("|");
   if(key!==backKey){
     if(!backCv) backCv=document.createElement("canvas");
     const bw=Math.ceil(w*sc)+2, bh=Math.ceil(h*sc)+2;
@@ -2957,19 +3043,25 @@ function plantBackPaint(L,GHp,rowH){
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
     if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,rowTop(Y),CELL,rowH(Y),"#1c1210");
   const gl = L? "rgba(120,180,190,.03)" : "rgba(120,180,190,.05)";
-  for(let X=0;X<=GW;X++) fillRect(GX+X*CELL,GY,1,GHp,gl);
-  for(let Y=0;Y<=GH;Y++) fillRect(GX,rowTop(Y),GW*CELL,1,gl);
+  /* A GRID LINE IS A FRACTION OF THE CELL IT BOUNDS, not one unit. At 16 a unit
+     was a sixteenth of a cell and read as a hairline; left at 1 on a 70-unit cell
+     it is a seventieth and the deck loses its grid altogether. */
+  const glw = 1*DRAW_K;
+  for(let X=0;X<=GW;X++) fillRect(GX+X*CELL,GY,glw,GHp,gl);
+  for(let Y=0;Y<=GH;Y++) fillRect(GX,rowTop(Y),GW*CELL,glw,gl);
   frame(GX,GY,GW*CELL,GHp,C.edge2);
   // outside the hull: inside it they sat in the same band as the FWD BULKHEAD
   // label and over the first column of cells
   for(let Y=0;Y<GH;Y++)
-    txt("EL"+pad(GH-1-Y,1),GX-4,rowTop(Y)+11,{size:6.5,align:"right",color:"#2c4148"});
-  txt("KEEL / HULL",GX+GW*CELL/2,GY+GHp-6,{size:7,sp:1.6,align:"center",color:"#5a3128"});
-  txt("UPPER DECK / HULL",GX+GW*CELL/2,GY+12,{size:7,sp:1.6,align:"center",color:"#5a3128"});
-  ctx.save(); ctx.translate(GX+11,GY+GHp/2); ctx.rotate(-Math.PI/2);
-  txt("FWD BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
-  ctx.save(); ctx.translate(GX+GW*CELL-7,GY+GHp/2); ctx.rotate(Math.PI/2);
-  txt("AFT BULKHEAD",0,0,{size:7,sp:1.6,align:"center",color:"#5a3128"}); ctx.restore();
+    txt("EL"+pad(GH-1-Y,1),GX-4*DRAW_K,rowTop(Y)+11*DRAW_K,
+        {size:6.5*DRAW_K,align:"right",color:"#2c4148"});
+  const deck={size:7*DRAW_K,sp:1.6*DRAW_K,align:"center",color:"#5a3128"};
+  txt("KEEL / HULL",GX+GW*CELL/2,GY+GHp-6*DRAW_K,deck);
+  txt("UPPER DECK / HULL",GX+GW*CELL/2,GY+12*DRAW_K,deck);
+  ctx.save(); ctx.translate(GX+11*DRAW_K,GY+GHp/2); ctx.rotate(-Math.PI/2);
+  txt("FWD BULKHEAD",0,0,deck); ctx.restore();
+  ctx.save(); ctx.translate(GX+GW*CELL-7*DRAW_K,GY+GHp/2); ctx.rotate(Math.PI/2);
+  txt("AFT BULKHEAD",0,0,deck); ctx.restore();
 }
 
 /* vx/vw are the viewport's left edge and width - GX/(W-2*GX) by default, or
@@ -2992,7 +3084,14 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
      current grid would otherwise be drawn outside the clip. */
   const dh=ui.drag&&ui.drag.type==="hull"?ui.drag:null;
   const fitW=Math.max(GW,dh&&dh.gw||0)*CELL, fitH=Math.max(GHp,(dh&&dh.gh||0)*CELL);
-  vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, fitW+EL_GUT, fitH, padX, padY);
+  /* THE VIEW IS A WINDOW ON THE SHIP, NOT THE WHOLE SHIP. A panel is 268 units
+     wide in the same space the machinery is drawn in, so a fit over 62 cells put
+     it 26px across and nothing on the board was readable. The window is stated in
+     CELLS and it is the second half of the CELL knob (layout.js): together they
+     say how much plant you see and how big it is against its own readouts. */
+  const win=Math.min(VIEW_CELLS_W, GW), winH=Math.min(VIEW_CELLS_H, GH);
+  vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, fitW+EL_GUT, fitH,
+       padX, padY, win*CELL+EL_GUT, winH*CELL);
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   // the letterbox, halved and then snapped to a device pixel - vOrigin() is
@@ -3000,7 +3099,9 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   { const o=vOrigin(); ctx.translate(o.x,o.y); }
   ctx.scale(VIEW.s,VIEW.s);
   // and a bang in the compartment kicks the deck it happened on (room.js)
-  { const k=burnShakeAt(); if(k) ctx.translate(burnShakeRnd(0)*k, burnShakeRnd(1)*k); }
+  // the kick is a fraction of a cell, like every other drawn size
+  { const k=burnShakeAt()*DRAW_K;
+    if(k) ctx.translate(burnShakeRnd(0)*k, burnShakeRnd(1)*k); }
   viewOn=true;
   plantBack(L,GHp,rowH);
   /* THE HULL IS DRAGGED BY ITS OWN WALLS, and only the two that can move
@@ -3042,13 +3143,13 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   pipeLoose(L);
   for(const pass of [0,1]) for(const r of NET){
     if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter - see pipeRuns() (pipes.js)
-    ctx.beginPath(); ctx.moveTo(r.pts[0][0],r.pts[0][1]);
-    for(let i=1;i<r.pts.length;i++) ctx.lineTo(r.pts[i][0],r.pts[i][1]);
     ctx.lineCap="square"; ctx.lineJoin="round";
     // BORE is the fluid line's width and WALL is the casing beyond it. The two
     // were one number drawn twice, because until now there was nothing to tell
     // them apart - a run states both in millimetres now.
     const w = pipeWidth(runBore(r)), cw = w + 2*pipeWallPx(r);
+    // ONE radius for every stroke of this run, off the CASING - see pipeBendPath()
+    pipeBendPath(r.pts, pipeBendR(r.pts, cw));
     /* THE OUTLINE, around the casing rather than inside it, so the highlight is
        the pipe's own shape and needs no second geometry. Drawn from EITHER end
        of the hover - pointing at the pipe and pointing at its label are the same
@@ -3057,7 +3158,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // ...and the SELECTED run keeps that outline whether or not the pointer is
     // on it, which is the same thing a selected machine's box already does
     if(!pass && (pipeHov===r.key || sel===r.key)){
-      ctx.lineWidth=cw+3; ctx.strokeStyle=C.amber; ctx.stroke(); }
+      ctx.lineWidth=cw+3*DRAW_K; ctx.strokeStyle=C.amber; ctx.stroke(); }
     ctx.lineWidth = pass? w : cw;
     /* A SEVERED RUN IS DESTROYED ALONG ITS WHOLE LENGTH, not only in the cell
        that failed: red casing and deck bore, the same two marks pipeDamage()
@@ -3132,8 +3233,8 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // the shell sits 1 px in from the footprint, so the case takes that px back
     const boxR = symFull ? tankRad(p.id)+1 : 0;
     const boxPath=()=>{ ctx.beginPath(); rr(x,y,w,h,boxR); };
-    if(fit){ if(boxR){ boxPath(); ctx.fillStyle=C.panel; ctx.fill(); }
-             else fillRect(x,y,w,h,C.panel); }
+    if(fit){ if(boxR){ boxPath(); ctx.fillStyle=C.machBg; ctx.fill(); }
+             else fillRect(x,y,w,h,C.machBg); }
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
     /* A TANK IS ITS BOX. Its shell is the one glyph whose SIZE is the design
        figure (tankW()/tankH() off `vol`), so shrinking it by the name row drew
@@ -3182,8 +3283,15 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
         fxEase(p.id+":sqz", roomPAt(L,p) >= lim*0.6 && !L.roomBurnOn ? 1 : 0), 1.1); }
     // selection is an OUTLINE: the box keeps its own ink, so a picked machine
     // still reads as the machine it is rather than as an amber silhouette
-    if(on){ if(boxR){ boxPath(); ctx.strokeStyle=C.amber; ctx.lineWidth=1; ctx.stroke(); }
-            else frame(x,y,w,h,C.amber); }
+    /* ONE STROKE FOR BOTH SHAPES, AND IT FOLLOWS THE CELL. The square branch went
+       through frame(), whose line is 1 DEVICE pixel by construction - right for a
+       widget's edge and a hairline round a machine the size this board draws now.
+       rr() with radius 0 is the square, so there is no second path to keep. */
+    // inset by half the pen so the whole line lands INSIDE the box, never on
+    // the neighbouring cell's edge
+    if(on){ const lw=1*DRAW_K, i=lw/2; ctx.beginPath();
+      rr(x+i,y+i,w-lw,h-lw,Math.max(0,boxR-i));
+      ctx.strokeStyle=C.amber; ctx.lineWidth=lw; ctx.stroke(); }
     /* A WRECKED MACHINE HAS NO READING. It printed its own value in red - a
        destroyed pressurizer stood there stating 15.5 MPa through the hatching
        that says it is not there any more - and an instrument on a machine
@@ -3209,11 +3317,11 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
          name takes a SECOND ROW rather than a wider plate. */
       if(symFull){
         const inner=nameInner(w), ls=nameLines(nmw,w);
-        let nb=y+nameH-3, mw=0;
+        let nb=y+nameH-3*DRAW_K, mw=0;
         for(const l of ls) mw=Math.max(mw,tw(l,nmo));
-        txtPlate(x+w/2,nb,Math.min(mw,inner),6.5,(ls.length-1)*NAME_LH);
+        txtPlate(x+w/2,nb,Math.min(mw,inner),NAME_TXT.size,(ls.length-1)*NAME_LH);
         for(const l of ls){ clipTxt(l,x+w/2,nb,inner,nmo); nb+=NAME_LH; }
-      } else clipTxt(nmw,x+w/2,y+nameH-3,w-8,nmo);
+      } else clipTxt(nmw,x+w/2,y+nameH-3*DRAW_K,w-8*DRAW_K,nmo);
     }
     // asked whether or not there is a value to print: the PLACE is a property
     // of the machine, and the REPAIR key below stands in it too
@@ -3235,18 +3343,18 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
          pipework they belong to. What the valve is stood down as no longer
          depends on the label at all - it is on the glyph. */
       if(!nameH && (p.role!=="fitting" || hovd || on))
-        tag(nmw,x+w/2,y-3,6.5,.4,!fit?"#3c4c47":(dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))));
+        tag(nmw,x+w/2,y-3*DRAW_K,6.5*DRAW_K,.4*DRAW_K,!fit?"#3c4c47":(dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))));
       /* THE VALUE WEARS ITS MACHINE'S WORST ALARM, and grey when there is
          nothing wrong. Not a second opinion: annLamp() is the SAME table and
          the SAME predicate as the lamp already drawn on this box, so the number
          and the lamp cannot say different things about one component. */
       if(v!=null && vb!=null && !showRep)
-        tag(v,x+w/2,vb,8,0,dmgd?C.red:(annLamp(p.id)||(on?C.amber:C.ink2)));
-      if(showRep){ const kw=Math.min(w-8,86), kx=x+(w-kw)/2;
-        button(kx,rb-11,kw,BTN_H,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
+        tag(v,x+w/2,vb,VAL_TXT_SIZE,0,dmgd?C.red:(annLamp(p.id)||(on?C.amber:C.ink2)));
+      if(showRep){ const kw=Math.min(w-8*DRAW_K,86*DRAW_K), kx=x+(w-kw)/2;
+        button(kx,rb-11*DRAW_K,kw,BTN_H,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
                :p.access?"REPAIR":"NO ACCESS",
-          {sunk:1,on:busy,danger:!p.access,size:7,sp:.8,fn:()=>act("repair",p.id)}); }
-      if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2,6,.2,"#3c4c47");
+          {sunk:1,on:busy,danger:!p.access,size:7*DRAW_K,sp:.8*DRAW_K,fn:()=>act("repair",p.id)}); }
+      if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2*DRAW_K,6*DRAW_K,.2*DRAW_K,"#3c4c47");
     });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
     TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ "+dmgWhyOf(L,p.id)+" ]":"")+
@@ -3318,11 +3426,18 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
    One ZOOM key, not two: at fit the only useful move is in, and zoomed in the
    only move is all the way back out. Reads FIT whenever off 1 in either
    direction, since the view zooms out past fit too. */
-const zoomedIn=()=>Math.abs(VIEW.z-1)>0.001;
+/* THE KEY SNAPS BETWEEN THE WORKING VIEW AND THE WHOLE SHIP. z=1 is a window of
+   VIEW_CELLS_W x VIEW_CELLS_H now, so the old 1.8x rung has nothing left to do -
+   the working view already IS the close look, and what is no longer reachable by
+   hand is the other end. vFitAll() is the z the whole content box fits at. */
+const zoomedOut=()=>VIEW.z < vFitAll()*1.02;
 function zoomToggle(){
-  if(zoomedIn()){ VIEW.ox=VIEW.oy=0; vScale(1); }
-  else { const p=partOf(sel), r=p&&prect(p);
-    vZoom(1.8, r? r.x+r.w/2 : GX+GW*CELL/2, r? r.y+r.h/2 : GY+gridH()/2); }
+  if(zoomedOut()){ const p=partOf(sel), r=p&&prect(p);
+    // the centring is vCenterOn()'s (core/ui.js), which the WASD walk lands on
+    // too - one writer, so the key and the walk cannot frame a machine differently
+    vScale(1);
+    vCenterOn(r || {x:GX, y:GY, w:GW*CELL, h:gridH()}); }
+  else { VIEW.ox=VIEW.oy=0; vScale(vFitAll()); }
   uiDirty();
 }
 function zoomKeySync(mount){
@@ -3335,9 +3450,9 @@ function zoomKeySync(mount){
     keys.append(layerMenu().el, nb);
     mount.appendChild(keys); }
   const b=keys.querySelector(".plant-zoom");
-  const z=zoomedIn();
-  const want=z?"FIT "+VIEW.z.toFixed(1)+"X":"ZOOM";
+  const z=!zoomedOut();
+  const want=z?"SHIP":"BOARD "+VIEW.z.toFixed(2)+"X";
   if(b.textContent!==want) b.textContent=want;
-  b.title=(z?"FIT THE WHOLE PLANT":"ZOOM IN")+
+  b.title=(z?"FIT THE WHOLE SHIP":"BACK TO THE BOARD")+
     "\nThe plant view pans and zooms. Roll the wheel over it to zoom about the pointer, hold the RIGHT button to drag the plant about, and this key jumps between the whole plant and a close look at whatever component is selected.";
 }
