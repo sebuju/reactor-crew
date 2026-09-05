@@ -30,7 +30,7 @@ const SECS = Number(process.env.SWEEP_SECS) || 600;
 /* ══════════ worker: simulate one shard ══════════ */
 if(!isMainThread){
   const M = require("./bundle").headless(
-    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,latDefault,buildLayout,buildStockPlumbing}");
+    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,coreD,buildLayout,buildStockPlumbing}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
 
   /* THE GRID STARTS BLANK, so a case has to be BUILT before it can be
@@ -38,9 +38,10 @@ if(!isMainThread){
      PRESET (archPreset lays the lattice - there is no D.arch to type any
      more), then whatever the case overrides. */
   const set = o => { Object.assign(D, BASE);
-    M.latDefault(); M.buildStockPlumbing({loops:1});
-    M.archPreset(o.arch); delete o.arch;
-    Object.assign(D, o); M.buildLayout(); M.commission(); return M.S(); };
+    M.buildStockPlumbing({loops:1});
+    M.archPreset(M.coreD("core"),o.arch); delete o.arch;
+    for(const k in o) (["fuel","scram","cool","foll","refl","mod"].includes(k) ? M.coreD("core") : D)[k]=o[k];
+    M.buildLayout(); M.commission(); return M.S(); };
   const run = (s,secs) => { for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) break; } return s; };
 
   /* the end state, to more digits than any physics could survive being wrong in */
@@ -93,12 +94,12 @@ const os = require("os");
    the workers and the report disagreeing about what "buildable" counted. */
 function cases(){
   const M = require("./bundle").headless(
-    "{derived,warnRed,D:()=>D,ARCHPRE:()=>ARCHPRE,FUEL:()=>FUEL,archPreset,latDefault,buildLayout,buildStockPlumbing}");
+    "{derived,warnRed,D:()=>D,ARCHPRE:()=>ARCHPRE,FUEL:()=>FUEL,archPreset,coreD,buildLayout,buildStockPlumbing}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
   const ok = o => { Object.assign(D, BASE);
-    M.latDefault(); M.buildStockPlumbing({loops:1});
-    M.archPreset(o.arch); const q = Object.assign({}, o); delete q.arch;
-    Object.assign(D, q); M.buildLayout();
+    M.buildStockPlumbing({loops:1});
+    M.archPreset(M.coreD("core"),o.arch); const q = Object.assign({}, o); delete q.arch;
+    for(const k in q) (["fuel","scram","cool","foll","refl","mod"].includes(k) ? M.coreD("core") : D)[k]=q[k]; M.buildLayout();
     return !M.derived().warn.some(M.warnRed); };
   const nA = M.ARCHPRE().length, nF = M.FUEL().length;
   const out = [];

@@ -14,12 +14,12 @@ const {portOnFace,spliceFitting,tieFitting}=require('./bundle');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
  'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,addPortAt,seedPort,seedRun,pipeLay,'+
- 'buildLayout,buildStockPlumbing,latDefault,pipeMap,pipeNetwork,nodeGraph,'+
+ 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,'+
  'crossTies,selfRuns,designIssues,loopMap,tankCircuit,tankPrimary,tankIds,tankKg,'+
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
  'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
- 'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,'+
- 'plantPreset,latPreset,act,LAT:()=>LAT,latRevolve,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
+ 'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
+ 'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -28,7 +28,7 @@ const BASE=JSON.parse(JSON.stringify(D));
    first, so no case can contaminate the next one. */
 function withPlant(build, opts){
   Object.assign(D,JSON.parse(JSON.stringify(BASE)));
-  M.latDefault();
+  
   M.buildStockPlumbing({loops:(opts&&opts.loops)||1});
   if(build) build(M);
   M.buildLayout();
@@ -59,6 +59,12 @@ function dump(s,label){
   row("core MW",f(s.fq*(s.P0mw||0),2)||"-"); row("electric MW",f(M.mwE(s),2));
   row("cond T K",f(s.condT,2)); row("cw in K",f(s.cwInT,2));
   row("release",f(s.release,5)); row("breach",!!s.breach);
+  /* EVERY VESSEL'S OWN BOOK, and its circuit's: only where there is more than
+     one, because on a one-unit plant the PLANT block above is that vessel. */
+  if(s.coreBy && Object.keys(s.coreBy).length>1){
+    console.log(" VESSELS");
+    for(const id in s.coreBy){ const c=M.coreSeen(s,id);
+      row(id, "n "+f(c.n,3)+"  Tavg "+f(c.Tavg,2)+"  P "+f(c.P,4)+"  lvl "+f(c.lvl,1)+"  inv "+f(c.inv,1)+"  sc "+f(c.sc,1)+"  flow "+f(c.flowNet,3)+"  rods "+f(c.rodPos,3)+(c.scrammed?"  SCRAMMED "+c.trip:"")); } }
 
   console.log(" POTS");
   for(const id in (s.condTBy||{})) row("cond "+id+" K",f(s.condTBy[id],2)+"  cw in "+f(s.cwInTBy[id],2)+" K");
@@ -112,7 +118,7 @@ const CASES={
      It must commission, run and read as nothing rather than throw. */
   blank(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
-    M.latDefault(); M.buildLayout(); M.commission();
+    M.buildLayout(); M.commission();
     const s=M.S(); run(s,PSEC); dump(s,"blank grid");
     console.log(" COUNTS  parts "+M.LAY().parts.length+
       "  turb "+M.turbCount()+"  cond "+M.condCount()+"  rad "+M.radIds().length);
@@ -134,7 +140,7 @@ const CASES={
      a second, take each away by a different end of the pair. */
   rides(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
-    M.latDefault(); M.buildLayout();
+    M.buildLayout();
     const say=t=>console.log("  "+t.padEnd(30)+
       (M.LAY().parts.map(p=>p.id).join(" ") || "(nothing)"));
     console.log("\n── a rider rides ──");
@@ -154,16 +160,15 @@ const CASES={
      and the warning is decoration. This prints; it decides nothing. */
   xeosc(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
-    M.latDefault(); M.latPreset(1);
+    M.buildStockPlumbing({loops:1}); M.latPreset(M.coreD("core"),1);
     // H/D 2.0: the COMPACT preset alone reads cz 0.70, nowhere near the warning
-    M.LAT().len=2*M.LAT().len/1.4; M.latRevolve();
-    M.buildStockPlumbing({loops:1});
+    { const c=M.coreD("core"); c.lat.len=2*c.lat.len/1.4; M.latRevolve(c); }
     M.buildLayout(); M.commission();
     const s=M.S(), P=M.P(); s.diceOff=true;
     M.act("split",true);
     M.act("rodBank",P.NB-1,Math.min(1,s.rodZ[P.NB-1]+0.10));
     console.log("\n── axial xenon, COMPACT lattice ──");
-    console.log(" cz "+f(P.cz,3)+"  H/D "+f(M.D().hd,2)+"  banks "+P.NB);
+    console.log(" cz "+f(P.cz,3)+"  H/D "+f(M.coreD("core").hd,2)+"  banks "+P.NB);
     console.log("    t      ao%      n      fq");
     for(let k=0;k<=PSEC*50;k++){
       if(k%(10*50)===0)

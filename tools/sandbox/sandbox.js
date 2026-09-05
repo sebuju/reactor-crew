@@ -41,12 +41,14 @@
      --hit=T:partId    act("hit", partId)
      --burst=T:x,y     act("hit", "pipe:x,y") - open one pipe cell
      --blackout=T      act("blackout", true)
+     --scram=T         act("scram")
+     --byp=T:key       act("byp", key) - toggle an AUTOSYS switch
 */
 const {headless} = require('../bundle');
 const M = headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
  'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,pipeLay,'+
- 'buildLayout,buildStockPlumbing,latDefault,pipeMap,pipeNetwork,nodeGraph,'+
+ 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,'+
  'tankCircuit,tankPrimary,tankIds,tankKg,tankLvl,tankP,tankLive,partOf,partName,'+
  'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdLive,holdPlumbed,loopP,setLoopP,'+
  'netTempAt,netQualAt,mwE,loopKg,secP,sgIds,sgLvl,circName,ROLE:()=>ROLE,'+
@@ -200,10 +202,10 @@ function parseEvents(args){
   const out = [];
   const add = (t, kind, arg) => out.push({t:+t, kind, arg});
   for(const a of args){
-    const m = /^--(shut|hit|burst|blackout)=(.*)$/.exec(a);
+    const m = /^--(shut|hit|burst|blackout|scram|byp)=(.*)$/.exec(a);
     if(!m) continue;
     const kind = m[1], v = m[2];
-    if(kind === "blackout"){ add(v, "blackout", true); continue; }
+    if(kind === "blackout" || kind === "scram"){ add(v, kind, true); continue; }
     const i = v.indexOf(":");
     if(i < 0){ console.log("# event needs T:arg - "+a); continue; }
     add(v.slice(0,i), kind, v.slice(i+1));
@@ -216,6 +218,8 @@ const fireEvent = e => {
      it used to look exactly like an event that did nothing. */
   console.log("# t="+e.t.toFixed(1)+" "+e.kind+" "+e.arg);
   if(e.kind === "blackout") M.act("blackout", true);
+  else if(e.kind === "scram") M.act("scram");
+  else if(e.kind === "byp")   M.act("byp", e.arg);
   else if(e.kind === "shut") M.act("portShut", e.arg);
   else if(e.kind === "hit")  M.act("hit", e.arg);
   else if(e.kind === "burst")M.act("hit", "pipe:"+e.arg);
@@ -226,7 +230,7 @@ const fireEvent = e => {
    its own, and a profile that is not reseeded is not comparable to itself. */
 function setup(spec, v, opt){
   Object.assign(D, JSON.parse(JSON.stringify(BASE)));
-  CLAMPS = []; M.latDefault();
+  CLAMPS = [];
   const note = spec.build(RIG, v) || {};
   M.buildLayout(); M.commission();
   const s = M.S();
