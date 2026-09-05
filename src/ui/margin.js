@@ -192,26 +192,44 @@ function marginCtlMatch(h,rows,deep){
 }
 const marginCtlLabel=c=> c.kind==="arm" ? c.label()+"  "+(c.on&&c.on()?"BYP":"AUTO")
                                         : c.text();
+/* A NUDGE KEY MOVES THE CONTROL, NEVER THE WIDGET: it goes through the same
+   slot.c.set() the drag does, so a step is an ordinary act. The step is the
+   control's own where it states one, and a twentieth of its span otherwise. */
+function marginSldStep(slot,dir){
+  const c=slot.c; if(c.inert) return;
+  const lo=c.min(), hi=c.max(), st=c.step||(hi-lo)/20;
+  const v=Math.max(lo,Math.min(hi,c.val()+dir*st));
+  c.set(c.step?Math.round(v/c.step)*c.step:v);
+}
 function marginCtlBuild(h,rows){
   h.ctl.innerHTML=""; h.cells=[]; h.nRows=rows.length; h.needH=true;
   for(const row of rows){
-    const r=KIT.el("div","margin-ctl-row"); h.ctl.appendChild(r);
+    const ports = row[0] && row[0].kind==="port";
+    const r=KIT.el("div", ports?"margin-ports":"margin-ctl-row"); h.ctl.appendChild(r);
     for(const c of row){
       const slot={c:c, w:null, kind:c.kind||"btn",
                   min:c.kind==="sld"?c.min():0, max:c.kind==="sld"?c.max():0};
-      let w;
+      let w, el;
       if(c.kind==="sld"){
         w=KIT.slider({min:c.min(), max:c.max(), step:c.step||undefined, fmt:c.fmt,
           mark:c.mark?c.mark():null, val:c.val(), dem:c.dem?c.dem():null, tip:c.tip,
           onChange:v=>{ const k=slot.c;
             if(!k.inert) k.set(k.step?Math.round(v/k.step)*k.step:v); }});
+        el=KIT.el("div","margin-sld");
+        const minus=KIT.button("−",{flat:true,size:7,onClick:()=>marginSldStep(slot,-1)});
+        const plus =KIT.button("+",     {flat:true,size:7,onClick:()=>marginSldStep(slot, 1)});
+        minus.el.classList.add("margin-sld-step"); plus.el.classList.add("margin-sld-step");
+        el.append(minus.el,w.el,plus.el);
       }else{
-        w=KIT.button(marginCtlLabel(c),{sunk:true,size:7,tip:c.tip,
+        w=KIT.button(marginCtlLabel(c),{flat:true,size:7,tip:c.tip,
           onClick:()=>{ const k=slot.c; if(!k.inert&&k.fn) k.fn(); }});
+        if(ports) w.el.classList.add("margin-port");
+        el=w.el;
       }
       slot.w=w;
-      w.el.style.flex=(c.flex||1)+" 1 0";
-      r.appendChild(w.el);
+      // a port list is a COLUMN, so a flex basis there shares out height
+      if(!ports) el.style.flex=(c.flex||1)+" 1 0";
+      r.appendChild(el);
       h.cells.push(slot);
     }
   }
@@ -229,6 +247,10 @@ function marginCtlSync(h,live,deep){
   const first = live ? h.body.firstChild : null;
   if(h.ctl.parentNode!==h.body || (live ? first!==h.ctl : h.body.lastChild!==h.ctl))
     live ? h.body.insertBefore(h.ctl,first) : h.body.appendChild(h.ctl);
+  /* the bench seats the block at the BOTTOM of the body, so it bleeds the
+     other way - but only where something stands above it. Alone in the panel
+     it is the whole body and the top gap would be a band of nothing. */
+  h.ctl.classList.toggle("at-end", !live && h.body.childElementCount>1);
   KIT.show(h.ctl,true);
   if(!marginCtlMatch(h,rows,deep)) marginCtlBuild(h,rows);
   let i=0;
@@ -241,6 +263,19 @@ function marginCtlSync(h,live,deep){
       slot.w.el.classList.toggle("kit-btn-danger", !!(c.danger&&c.danger()));
     }
   }
+}
+
+/* WHAT THIS BOX'S OWN METAL IS AT, on the title bar rather than in a row: it
+   is one figure with a limit, and it is wanted on every panel at a glance.
+   Degrees Celsius here alone - the panel is read by a human, the sim is in K,
+   and the conversion is the readout's, never the model's. */
+function marginSkinSync(h){
+  if(!h.well.sfx) return;
+  const lim=partTsurv(h.p);
+  const t=lim?partSkin(S,h.p):null;
+  h.well.setSfx(t===null?"":(t-273.15).toFixed(0)+"°C");
+  if(lim){ const col = t>=lim ? C.red : t>=lim*0.85 ? C.amber : "";
+    if(h._skinCol!==col){ h._skinCol=col; h.well.sfx.style.color=col; } }
 }
 
 // the plant edge the machine is nearest
@@ -511,7 +546,7 @@ function marginSync(host,live){
   const psig = live ? null : designSig()+"|"+sel;
   const fresh = live || psig!==marginPSig; marginPSig=psig;
   // what could have moved a control's range
-  const dtok = live ? (S.split+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
+  const dtok = live ? (coreIds().map(id=>coreSeen(S,id).split?1:0).join("")+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
   const deepNow = dtok!==marginDeep; marginDeep=dtok;
   for(const h of MARGIN){
     if(h.key){ marginKeySync(h,fresh,live); continue; }
@@ -526,6 +561,7 @@ function marginSync(host,live){
     if(live){
       if(!h.vis && h.tf!==null) continue;
       const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
+      marginSkinSync(h);
       fieldRowsSync(h.body, readoutsFor(h.p,S));
       /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
          canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,

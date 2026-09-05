@@ -34,20 +34,16 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 .tab.dis{color:var(--c-dis);cursor:default}
 .tab[data-screen="help"]{color:var(--c-amber)}
 
-/* pre, not nowrap: both lines are padded with spaces (pad(), core/text.js) and
-   HTML collapses a run of them, so the field changed width as the clock counted
-   and the centred tabs slid along with it */
-#plant-id{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:pre; position:relative;}
+#plant-id{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:nowrap;position:relative}
 #plant-line{color:var(--c-cyan);font-size:var(--t8);letter-spacing:1px}
 #plant-line.idle{color:var(--c-amber)}
-#clock-row{display:flex;align-items:center;gap:4px; position: absolute; bottom: -14px;}
+#clock-row{position:absolute;bottom:-14px}
 /* nothing is running, so there is nothing to read - the box stays, so the bar
    beside it does not move */
 #clock-row.blank{visibility:hidden}
 #clock{color:var(--c-ink2);font-size:var(--t8);letter-spacing:1px}
 /* running behind the rate it was asked for - the TPS beside it is the truth */
 #clock.slow{color:var(--c-amber)}
-#clock-dot{width:6px;height:7px;background:var(--c-amber)}
 
 #stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;
   overflow:hidden;background:var(--c-bg)}

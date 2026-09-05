@@ -214,7 +214,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    track puts every value in one column. fit-content() caps the label where a
    max-width on the item used to. */
 .insp-row{display:grid;grid-template-columns: 1fr auto;
-  align-items:center;column-gap:8px;row-gap:2px;padding:1px 4px; transition: 200ms background-color;}
+  align-items:center;column-gap:8px;row-gap:2px;padding:2px 4px; transition: 200ms background-color; margin: 0px -4px;}
 .insp-row-lab{font-size:var(--t7);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .insp-row-val{font-size:var(--t8-5);text-align:right;white-space:nowrap;
@@ -257,12 +257,12 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   background:var(--c-panel);padding-top:6px;
   display:flex;flex-direction:column;gap:6px}
 .db-panel-body{display:flex;flex-direction:column;gap:8px}
-.db-block{display:flex;flex-direction:column;gap:4px}
+.db-block{display:flex;flex-direction:column;}
 .db-note{margin:0;font-size:var(--t8-5);color:var(--c-ink2);line-height:1.4}
 /* six reactor presets and six pens do not fit one rail-wide line, and a row
    that overflows loses its last button entirely - so both rows wrap */
 .db-bulkrow{display:flex;align-items:center;gap:4px}
-.db-bulkrow-lab{font-size:var(--t6-5);letter-spacing:.7px;text-transform:uppercase;color:var(--c-ink2)}
+.db-bulkrow-lab{font-size:var(--t6-5);letter-spacing:.7px;text-transform:uppercase;color:var(--c-ink2); display: flex; align-items: center; height: 23px; align-self: self-start;}
 .db-bulkrow-btns{flex:1 1 auto;display:grid;gap:4px;
   grid-template-columns:repeat(auto-fit,minmax(46px,1fr))}
 .db-toolrow,.db-bankrow{display:flex;gap:4px;flex-wrap:wrap}
@@ -356,9 +356,22 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-board .db-panel-body{max-height:46vh;overflow-y:auto}
 /* the controls that used to stand on the machine box, in the widget kit's own
    HTML - see marginCtlBuild(). A row is the same row ctlFor() states. */
-.margin-ctl{display:flex;flex-direction:column;gap:3px;margin-top:5px}
+.margin-ctl{display:flex;flex-direction:column;gap:3px;margin: -6px -6px 6px -6px; padding: 9px 10px; background:var(--c-ctl-well); }
+.margin-ctl.at-end{margin: 9px -6px -7px -6px}
 .margin-ctl-row{display:flex;gap:3px;align-items:center}
-.margin-ctl .kit-btn{height:18px;padding:0 4px;letter-spacing:.08em;min-width:0;
+.margin-ctl .kit-btn{height:24px;padding:0 6px;letter-spacing:.08em;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .margin-ctl .kit-slider{gap:4px}
 .margin-ctl .kit-slider-readout{font-size:var(--t7)}
+/* the slider and its two nudge keys are one control - see marginCtlBuild() */
+.margin-sld{display:flex;gap:3px;align-items:center;min-width:0}
+.margin-sld .kit-slider{flex:1 1 auto;min-width:0}
+.margin-ctl .margin-sld-step{flex:0 0 auto;width:18px;padding:0;font-size:var(--t8)}
+/* EVERY NOZZLE VALVE IN ONE CONTAINER, and a list is not a bank of keys: the
+   row is a name and a state, like the PORT VALVES panel says it elsewhere. */
+.margin-ports{display:flex;flex-direction:column;background:var(--c-well)}
+.margin-ctl .margin-port{height:17px;background:transparent;text-align:left;
+  color:var(--c-ink2);letter-spacing:.06em;font-size:var(--t7-5)}
+.margin-ctl .margin-port:hover{background:var(--c-panel);color:var(--c-bright)}
+.margin-ctl .margin-port.on{background:transparent;color:var(--c-amber)}
+.margin-ctl .margin-port.kit-btn-danger{background:transparent;color:var(--c-red);font-weight:400}

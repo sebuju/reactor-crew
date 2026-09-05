@@ -131,6 +131,7 @@ const KIT = (function(){
     /* `head` is handed back so a caller can make the title bar do something -
        the component rails hang "select this component" off it. */
     return {el: root, body, head: head ? head.el : null,
+            sfx: head ? head.sfxEl : null,
             setTitle: head ? head.set : function(){},
             setName:  head ? head.setVal : function(){},
             setSfx:   head ? head.setSfx : function(){},
@@ -184,10 +185,11 @@ const KIT = (function(){
     } else {
       s = document.createElement("span");
       s.textContent = label;
-      r.appendChild(s);
+      sfx = el("span", "kit-rule-sfx");
+      r.appendChild(s); r.appendChild(sfx);
     }
     if(opts.color) r.style.setProperty("--kit-rule-color", opts.color);
-    return {el: r, input: box ? box.el : null,
+    return {el: r, input: box ? box.el : null, sfxEl: sfx,
       set(l){
         if(box) box.setPlaceholder(l);
         else if(s.textContent !== l) s.textContent = l;
