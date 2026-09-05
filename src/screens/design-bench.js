@@ -855,18 +855,25 @@ function paramBlockMk(block){
        design, and the designer is free to ignore it. */
     case "num": {
       const a=blockAcc(block.key);
+      // every getter resolves `?? xSuggest()`, so AUTO is exactly "nothing stored"
+      const auto = (block.suggest && a.raw && a.clr)
+        ? {get:()=>a.raw()===undefined, set:on=>{ on ? a.clr() : a.set(a.get()); }}
+        : null;
       const root=KIT.el("div","db-block");
       const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
       const n=KIT.numInput({unit:block.unit,dp:block.dp,tip:block.tip,title:block.title,
-        suggest:block.suggest, onChange:v=>a.set(v)});
+        auto, onChange:v=>a.set(v)});
       root.appendChild(n.el);
       const mass=KIT.el("span","kit-sliderrow-mass"); root.appendChild(mass);
       return {el:root,sync(b){
         KIT.show(root,!(b.when&&!b.when()));
         n.set(a.get());
+        if(auto) n.setAuto(auto.get());
         KIT.setText(mass, b.massFn ? b.massFn(a.get()).toFixed(0)+" t" : "");
       }};
     }
+    // stated where the knobs are; the multi-column body breaks on it
+    case "colbreak": return {el:KIT.el("div","db-colbreak"),sync(){}};
     case "readout": {
       const r=KIT.readout({title:block.title,tip:block.tip});
       return {el:r.el,sync(b){ r.set(typeof b.val==="function"?b.val():b.val); }};
@@ -967,6 +974,8 @@ function paramBlockMk(block){
 }
 function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||"")).join("|"); }
 function dbPanelSync(container,blocks){
+  // a STATED column count beats the height rule (marginColumns, ui/margin.js)
+  container._cols=blocks.cols||0;
   const sig=blockSig(blocks);
   if(sig!==container._sig || !container._h){
     container.innerHTML="";
@@ -1019,18 +1028,16 @@ function dbRailBuild(rail,vitals,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
-  /* ══ THE LIST OF WHAT IS JOINED UP ══
-     A plant-wide report, so it keeps the rail. The run you PICK out of it is
-     configured on the drawing, in a panel of its own beside the pipe (see
-     marginPanKey, ui/margin.js) - the same standing every machine has. */
-  const pipes=KIT.well({title:"PIPES"}); rail.appendChild(pipes.el);
-  const pipeList=KIT.el("div","db-pipe-list"); pipes.body.appendChild(pipeList);
-  watch.add(pipes.el);
   /* the verdict on the design stands over the plant it judges, not at the foot
      of a rail the player has to scroll past every machine to reach */
-  const results=KIT.well({title:"RESULTS"}); vitals.appendChild(results.el);
-  const review=KIT.well({title:"DESIGN REVIEW"}); vitals.appendChild(review.el);
-  return {panels,results,review,pipesWell:pipes,pipeList};
+  /* ONE VERDICT, not two stacked wells: the mass and the objections are the
+     same answer to the same question, and two headings over one floating box
+     spent a third of it saying so. */
+  const verdict=KIT.well(); verdict.el.classList.add("db-verdict");
+  vitals.appendChild(verdict.el);
+  const resBody=KIT.el("div","db-verdict-res"), revBody=KIT.el("div","db-verdict-rev");
+  verdict.body.append(resBody,revBody);
+  return {panels,verdict,resBody,revBody};
 }
 /* ══ WHAT IS ACTUALLY CONNECTED ══
    One row per traced connection - from, to, and how long it is - plus a line
@@ -1139,14 +1146,8 @@ function dbRailSync(state){
     dbPanelSync(h.body,cur);
   }
   if(!fresh) return;
-  pipeRailSync(state.pipeList,state.pipesWell.el);
-  /* AND THE WELL OWNS THE PICKED RUN. Same reason as the row's own handler:
-     railBlank() clears a selection whose well does not claim it, so working
-     the BORE field on a run picked off the drawing would have dropped the run
-     the field belongs to. */
-  state.pipesWell.el._pickId = (isRunKey(sel)||isMatKey(sel)) ? sel : null;
   { const rd=benchResultsData();
-    const body=state.results.body;
+    const body=state.resBody;
     if(!body.firstChild){
       const mass=KIT.el("div","db-mass"); body.appendChild(mass);
       const massBar=KIT.seg({cells:48, solid:true}); body.appendChild(massBar.el);
@@ -1162,7 +1163,7 @@ function dbRailSync(state){
     statRowsSync(statBox, rd.stats);
   }
   { const rv=benchReviewData();
-    const body=state.review.body;
+    const body=state.revBody;
     if(!body._list) body._list=(()=>{ const d=KIT.el("div","db-review-list"); body.appendChild(d); return d; })();
     const list=body._list, sig=rv.issues.map(w=>w[1]).join("|");
     if(list._sig!==sig){
@@ -1176,7 +1177,7 @@ function dbRailSync(state){
         row.append(tag,txt2); list.appendChild(row);
       }
     }
-    state.review.el.classList.toggle("blocked",rv.hard);
+    state.verdict.el.classList.toggle("blocked",rv.hard);
   }
 }
 
@@ -1185,7 +1186,7 @@ function dbBuild(){
   const mount=document.getElementById("scr-design");
   if(!mount) return null;
   const root=KIT.el("div","db-root");
-  const head=KIT.el("div","db-head");
+  const head=KIT.el("div","scr-head db-head");
   /* ONE SWITCH PER TOOL, over the top-left of the plant it addresses. It lived
      at the bottom of the rail, under every machine panel, which on a tall
      plant is off-screen - a tool nobody can find is a tool the bench does not
@@ -1203,20 +1204,20 @@ function dbBuild(){
      rebuilds the loops, the tanks and every run, so it is about the bench and
      not about whatever part happens to be selected. Designer-only for free -
      db-head lives inside #scr-design. */
-  const pres=KIT.el("div","db-bulkrow");
-  const plab=KIT.el("span","db-bulkrow-lab"); plab.textContent="PLANT";
-  const pbtns=KIT.el("div","db-bulkrow-btns");
+  const pres=KIT.menuKey({label:"PLANT", cls:"db-plants",
+    tip:"Whole ships, laid over whatever is on the grid. A preset rebuilds the loops, the tanks and every run."});
+  // a preset replaces the board under the menu, so the menu gets out of the way
+  const preShut=()=>{ KIT.show(pres.menu,false); pres.key.set({on:false}); };
   // first, because it is what every preset is laid over
-  const rst=KIT.button("RESET",{size:8,onClick:()=>{ plantClear(); urlPreset(null); sel=null; uiDirty(); }});
+  const rst=KIT.button("RESET",{size:8,onClick:()=>{ plantClear(); urlPreset(null); sel=null; preShut(); uiDirty(); }});
   KIT.tip(rst.el,"RESET","Takes the whole ship off the grid: every machine, tank, fitting, port and pipe, and the core back to the stock lattice. What is left is the blank grid a new design starts from, and it still commissions.");
-  pbtns.appendChild(rst.el);
+  pres.menu.appendChild(rst.el);
   PLANTPRE.forEach((pr,i)=>{
-    const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); urlPreset(i); sel=roleId("core"); uiDirty(); }});
+    const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); urlPreset(i); sel=roleId("core"); preShut(); uiDirty(); }});
     KIT.tip(b.el,pr[0],pr[2]);
-    pbtns.appendChild(b.el);
+    pres.menu.appendChild(b.el);
   });
-  pres.append(plab,pbtns);
-  head.append(tools,pres);
+  head.append(tools,pres.el);
   const rail=KIT.el("div","db-rail");
   railBlank(rail);
   const vitals=KIT.el("div","db-vitals");
@@ -1243,11 +1244,16 @@ if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
 
 function drawDesign(){
   dbSync();
-  const railBox=DB? hostRect(DB.rail) : null;
-  // measured off the head row, not a magic reserve - the design screen has no
-  // transport strip above it, so there is no fixed band to hard-code
+  // an empty rail is display:none, and a hidden box measures zero
+  const railBox = DB && DB.rail.offsetParent ? hostRect(DB.rail) : null;
+  /* THE HEAD ROW IS TRANSPARENT, so the view runs UNDER it - the standing the
+     vitals panel already has. Measured off the row, not a magic reserve, but
+     taken off the FIT and never off the BOX: off the box the clip stopped at
+     the row's bottom, and a plant panned up left a black band of bare page
+     between the topbar and the drawing. */
   const headBox=DB? hostRect(DB.head) : null;
-  const vy = headBox? headBox.y+headBox.h : TOPBAR_H;
+  const headU = headBox? Math.max(0, headBox.y+headBox.h-TOPBAR_H) : 0;
+  const vy = TOPBAR_H;
   const vh=Math.max(120,H-vy);
   // the verdict panel is opaque, so measure it on the left the way drawOperate()
   // measures the vitals panel
@@ -1256,8 +1262,8 @@ function drawDesign(){
   const vw = (railBox ? Math.max(200, railBox.x) : W) - vx;
   // the panels stand in what the FIT gives up; the box, and so the clip, is whole
   const mi=marginInsetU();
-  drawPlant(vy,null,vh,vx,vw,mi.l+mi.r,mi.t+mi.b);
-  zoomKeySync(DB&&DB.root);
+  drawPlant(vy,null,vh,vx,vw,mi.l+mi.r,mi.t+mi.b+headU);
+  zoomKeySync(DB&&DB.head);
   // AFTER drawPlant, because a panel is anchored against the view it just set
   marginSync(DB&&DB.mhost, false);
   { const st=DB&&DB.state;
