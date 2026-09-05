@@ -606,12 +606,15 @@ function uiDown(e){
      machine or a port standing on the same cell still wins. The run KEY goes
      into `sel`: a key always contains a colon and a part id never does, so
      every partOf(sel) reader already answers null for one. */
-  if(!w && screen==="design" && vIn(p) && typeof pipeCellRuns==="function"){
+  // the wall is picked on both screens; only the RUN has no control-room panel
+  if(!w && vIn(p) && typeof pipeCellRuns==="function"){
     const c=cellAt(vPt(p));
     // wall before pipe, the order hitAimAt() already resolves a penetration in
     if(matCell(c[0],c[1])){ sel="mat:"+c[0]+","+c[1]; return; }
-    const keys=pipeCellRuns(c[0],c[1]);
-    if(keys.length){ sel=keys[keys.length-1]; return; }   // a crossing cell owns two: last wins, as hitAt() does
+    if(screen==="design"){
+      const keys=pipeCellRuns(c[0],c[1]);
+      if(keys.length){ sel=keys[keys.length-1]; return; }   // a crossing cell owns two: last wins, as hitAt() does
+    }
   }
   // nothing under the pointer: a click on bare deck deselects, rather than
   // leaving whatever was picked last lit with nothing on screen to justify it
