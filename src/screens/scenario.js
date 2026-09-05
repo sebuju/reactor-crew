@@ -484,7 +484,7 @@ function scnSyncHead(){
   h.logBtn.set({on:ovlOpen==="scnlog"});
   const label = scnProg>=0 ? "RUNNING "+(scnProg*100).toFixed(0)+"%"
     : !scnVerd ? "NOT RUN"
-    : scnVerd.pass ? (scnVerd.assisted ? "PASS (ASSISTED)" : "PASS") : "FAIL";
+    : scnVerdLab(scnVerd);
   const col  = scnProg>=0 ? "var(--c-cyan)" : !scnVerd ? "var(--c-ink2)"
     : scnVerd.pass ? (scnVerd.assisted?"var(--c-amber)":"var(--c-green)") : "var(--c-red)";
   if(h.verdictEl.textContent!==label) h.verdictEl.textContent=label;
@@ -730,10 +730,14 @@ function scnSyncChart(){
   const x=(rect.left-cvRect.left)/scale, y=(rect.top-cvRect.top)/scale;
   const w=rect.width/scale, h=rect.height/scale;
 
-  const take=scnTake, sps=1/(SAMP_TICKS*0.02);
+  /* A SECOND IS FOUND IN THE ARCHIVE, NEVER MULTIPLIED INTO IT: the sample rate
+     is not a constant any more once a take has been thinned (trThin()), so the
+     index is the archive's own binary search on its ticks. */
+  const take=scnTake;
   const nAll = take? take.trN : 0;
-  const i0 = take? clamp(Math.floor(scnT0()*sps),0,Math.max(0,nAll-1)) : 0;
-  const i1 = take? clamp(Math.ceil((scnT0()+scnSpan())*sps),i0+1,nAll) : 0;
+  const iAt = t => take? clamp(trBefore(take,Math.round(t/0.02))+1,0,nAll) : 0;
+  const i0 = clamp(iAt(scnT0()),0,Math.max(0,nAll-1));
+  const i1 = take? clamp(iAt(scnT0()+scnSpan()),i0+1,nAll) : 0;
   const n = i1-i0;
   const ser = (take && n>1) ? [
     {lab:"LOAD DEMAND",u:"%",col:CH.load.col,n,at:i=>trAt(take,"load",i0+i),style:"dash"},
@@ -741,7 +745,7 @@ function scnSyncChart(){
   ] : [];
   const marks=[];
   if(take && n>1){
-    const f=t=>(t*sps-i0)/n;
+    const f=t=>(iAt(t)-i0)/n;
     for(const g of SCN.gest) if(GEST[g.k].act){ const q=f(g.t); if(q>=0&&q<=1) marks.push({f:q,col:C.edge}); }
     if(scnVerd) for(const r of scnVerd.rows) if(r.broke){ const q=f(r.tick*0.02); if(q>=0&&q<=1) marks.push({f:q,col:C.red}); }
     const q=f(scnPlay); if(q>=0&&q<=1) marks.push({f:q,col:C.amber});
@@ -799,8 +803,7 @@ function scnGo(){
   scnVerd=null; scnTake=null; scnProg=0; scnNote="RUNNING "+SCN.name;
   scnRunAsync(SCN, f=>{ scnProg=f; },
     r=>{ scnProg=-1; scnVerd=r.verdict; scnTake=r.take;
-         scnNote=SCN.name+"  "+(r.verdict.pass
-           ? (r.verdict.assisted?"PASS (ASSISTED)":"PASS") : "FAIL"); });
+         scnNote=SCN.name+"  "+scnVerdLab(r.verdict); });
 }
 keyAdd({k:"Enter", sc:"scenario", lab:"RUN", fn:scnGo});
 
@@ -819,8 +822,7 @@ function scnFly(){
   take.label = SCN.name;
   scnArm(SCN, {end:scnTicks(SCN.secs), take, onEnd:r=>{
     scnVerd=r.verdict; scnTake=r.take;
-    scnNote=SCN.name+"  "+(r.verdict.pass
-      ? (r.verdict.assisted?"PASS (ASSISTED)":"PASS") : "FAIL");
+    scnNote=SCN.name+"  "+scnVerdLab(r.verdict);
   }});
   TR.paused=false; TR.rate=1;
   scnNote="FLYING "+SCN.name;
