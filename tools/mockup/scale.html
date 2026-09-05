@@ -1,0 +1,241 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MOCKUP - plant scale</title>
+<style>
+:root{
+  --c-bg:#080c0e; --c-panel:#0e1518; --c-panel-hi:#142126; --c-well:#060a0b;
+  --c-edge:#1d2f35; --c-edge2:#2c464e; --c-rail:#33525b;
+  --c-ink:#9fb4b9; --c-ink2:#5d7378; --c-bright:#dff0f3;
+  --c-amber:#f0a830; --c-cyan:#5fd2e2; --c-red:#ff5a45; --c-green:#57d38c;
+  --c-blue:#5aa9d6; --c-on-amber:#2a1f08;
+  --mono:ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--c-bg);color:var(--c-ink);
+  font-family:var(--mono);font-size:10px;overflow:hidden}
+#app{display:grid;grid-template-rows:34px 1fr 22px;height:100%}
+#top{background:var(--c-panel);border-bottom:1px solid var(--c-edge);
+  display:flex;align-items:center;gap:16px;padding:0 10px;
+  font-size:9px;letter-spacing:1.6px;text-transform:uppercase;color:var(--c-ink2)}
+#top b{color:var(--c-bright);letter-spacing:2.4px}
+#top label{display:flex;align-items:center;gap:6px}
+#top input[type=range]{accent-color:var(--c-amber)}
+#top .sp{flex:1}
+#foot{background:var(--c-panel);border-top:1px solid var(--c-edge);
+  display:flex;align-items:center;gap:18px;padding:0 10px;font-size:9px;
+  letter-spacing:1.2px;text-transform:uppercase;color:var(--c-ink2)}
+#foot b{color:var(--c-amber)}
+#stage{position:relative;overflow:hidden;cursor:grab;background:var(--c-bg)}
+#stage.drag{cursor:grabbing}
+/* THE WHOLE WORLD IS ONE SCALE. Everything inside #world is authored in PLANT
+   UNITS - the machines, the pipes AND the panels - so zoom moves all of it
+   together and a panel is microscopic when the ship is fitted. */
+#world{position:absolute;left:0;top:0;transform-origin:0 0}
+#board{position:absolute;left:0;top:0;background-color:#0a1012;outline:1px solid var(--c-edge2)}
+#cg{position:absolute;inset:0;opacity:.55}
+.mat{position:absolute;background:#2b1c15;outline:1px solid #4a2f22;outline-offset:-1px}
+.pipe{position:absolute;background:var(--c-blue);opacity:.75}
+.mach{position:absolute;border:1px solid var(--c-edge2);background:var(--c-panel-hi);
+  display:flex;align-items:flex-start;justify-content:center;text-align:center;
+  letter-spacing:.1em;color:var(--c-ink);cursor:pointer;text-transform:uppercase;
+  line-height:1.15;overflow:hidden}
+.mach span{display:block;padding:.2em .3em;white-space:nowrap}
+.mach:hover{border-color:var(--c-rail);color:var(--c-bright)}
+.mach.sel{border-color:var(--c-amber);color:var(--c-bright);background:#161d1a}
+.mach.core{border-color:#7a3a30}
+/* 268 PLANT UNITS wide, and every size inside it is in em off that same root,
+   so the panel is one rigid object in plant space. */
+.pan{position:absolute;background:var(--c-panel);border:1px solid var(--c-edge)}
+.pan .head{padding:.45em .65em;background:var(--c-edge);color:var(--c-bright);
+  font-size:1em;font-weight:700;letter-spacing:.2em;text-transform:uppercase}
+.pan.sel .head{background:var(--c-amber);color:var(--c-on-amber)}
+.pan .body{padding:.55em .65em .65em}
+.row{display:flex;justify-content:space-between;gap:.9em;line-height:1.6;
+  font-size:1em;letter-spacing:.07em;white-space:nowrap}
+.row .k{color:var(--c-ink2);text-transform:uppercase}
+.row .v{color:var(--c-bright)}
+.ctl{display:flex;gap:.45em;margin-top:.65em;align-items:center}
+.btn{border:1px solid var(--c-edge2);background:var(--c-panel);color:var(--c-ink);
+  font:inherit;font-size:.9em;letter-spacing:.14em;text-transform:uppercase;
+  padding:0 .7em;height:1.8em;line-height:1.6em}
+.btn.on{background:var(--c-green);border-color:var(--c-green);color:#0f2018}
+.sld{position:relative;height:1.1em;flex:1;background:var(--c-well);border:1px solid var(--c-edge2)}
+.sld i{position:absolute;top:1px;bottom:1px;left:1px;background:var(--c-cyan)}
+#ruler{position:absolute;pointer-events:none;border:1px dashed var(--c-amber);opacity:.9}
+</style>
+<div id="app">
+  <div id="top">
+    <b>PLANT SCALE</b>
+    <label>UNITS / CELL <input id="u" type="range" min="16" max="240" value="16" style="width:200px"><i id="uv">16</i></label>
+    <label>ZOOM <input id="z" type="range" min="5" max="400" value="100" style="width:130px"><i id="zv">1.00x</i></label>
+    <span class="sp"></span>
+    <button class="btn" id="today">TODAY</button>
+    <button class="btn" id="prop">PROPOSED</button>
+    <button class="btn" id="fitall">FIT SHIP</button>
+  </div>
+  <div id="stage"><div id="world">
+    <div id="board"><div id="cg"></div></div>
+    <div id="ruler"></div>
+  </div></div>
+  <div id="foot">
+    <span>PANEL IS <b id="pcell">0</b> CELLS WIDE</span>
+    <span>PANEL / REACTOR WIDTH <b id="ratio">0</b></span>
+    <span>ON SCREEN: REACTOR <b id="rpx">0</b> PX &middot; PANEL <b id="ppx">0</b> PX</span>
+    <span class="sp"></span>
+    <span>DRAG TO PAN &middot; WHEEL TO ZOOM</span>
+  </div>
+</div>
+<script>
+const PLANT={"gw":62,"gh":36,"parts":[
+{"id":"core","role":"core","x":8,"y":15,"w":9,"h":12,"name":"REACTOR 1"},
+{"id":"rods","role":"rods","x":8,"y":2,"w":9,"h":13,"name":"ROD DRIVES 1"},
+{"id":"sg0","role":"sg","x":30,"y":7,"w":3,"h":6,"name":"STEAM GEN 1"},
+{"id":"pump0","role":"pump","x":30,"y":20,"w":3,"h":5,"name":"RCP 1"},
+{"id":"turb","role":"turb","x":48,"y":11,"w":9,"h":7,"name":"TURBINE 1"},
+{"id":"cond","role":"cond","x":48,"y":24,"w":9,"h":5,"name":"CONDENSER 1"},
+{"id":"feed","role":"pump","x":37,"y":31,"w":3,"h":5,"name":"FEED PUMP"},
+{"id":"ctrl","role":"ctrl","x":0,"y":32,"w":6,"h":4,"name":"CONTROL"},
+{"id":"bkp","role":"bkp","x":58,"y":11,"w":3,"h":5,"name":"BACKUP PWR"},
+{"id":"rad0","role":"radiator","x":41,"y":33,"w":3,"h":2,"name":"RADIATOR 1"},
+{"id":"pzr","role":"tank","x":22,"y":6,"w":3,"h":4,"name":"PRESSURIZER"},
+{"id":"reltk","role":"tank","x":22,"y":1,"w":2,"h":3,"name":"RELIEF TANK"},
+{"id":"efwtk","role":"tank","x":33,"y":31,"w":3,"h":4,"name":"RESERVE TANK"},
+{"id":"rv0","role":"fitting","x":25,"y":3,"w":1,"h":1,"name":"RELIEF VALVE"},
+{"id":"tee0","role":"fitting","x":21,"y":12,"w":1,"h":1,"name":"SURGE TEE"},
+{"id":"mstee0","role":"fitting","x":40,"y":9,"w":1,"h":1,"name":"MS TEE"},
+{"id":"efwtee","role":"fitting","x":37,"y":28,"w":1,"h":1,"name":"FEED TEE"}]};
+
+const stage=document.getElementById("stage"), world=document.getElementById("world"),
+      board=document.getElementById("board"), cg=document.getElementById("cg"),
+      ruler=document.getElementById("ruler");
+const $=id=>document.getElementById(id);
+
+/* A PANEL IS 268 PLANT UNITS WIDE AND ITS TYPE IS 9 - the figures margin.js
+   uses today, read as plant units instead of as CSS pixels. Nothing about the
+   panel changes in this mockup; what changes is what a CELL is worth. */
+const PAN_U=268, PAN_TYPE_U=9;
+let CU=16, Z=1, ox=0, oy=0, sel="core";
+
+const READ={
+  core:[["POWER","100.0 %"],["T-AVG","310.2 C"],["PRESSURE","15.51 MPa"],["ROD BANK","62 %"]],
+  rods:[["BANK A","62 %"],["BANK B","62 %"],["SCRAM","ARMED"]],
+  sg:[["LEVEL","64 %"],["PRESSURE","6.21 MPa"],["STEAM","331 kg/s"]],
+  pump:[["FLOW","100 %"],["HEAD","0.61 MPa"],["SPEED","1490 rpm"]],
+  turb:[["OUTPUT","612 MWe"],["STEAM","664 kg/s"],["SPEED","3000 rpm"]],
+  cond:[["HOTWELL","58 %"],["VACUUM","8.4 kPa"],["DUTY","1204 MWt"]],
+  ctrl:[["CREW","4"],["DOSE","0.02 mSv/h"]],
+  radiator:[["SHED","118 MW"],["COAT","WHITE"]],
+  tank:[["LEVEL","72 %"],["VOLUME","41 m3"],["TEMP","58 C"]],
+  fitting:[["MODE","THROTTLE"],["OPEN","100 %"]],
+  bkp:[["CHARGE","100 %"],["LOAD","0 kW"]]
+};
+const rowsFor=r=>READ[r]||[["STATE","OK"],["DUTY","-"]];
+
+function panHTML(p){
+  const rows=rowsFor(p.role).map(kv=>
+    '<div class="row"><span class="k">'+kv[0]+'</span><span class="v">'+kv[1]+'</span></div>').join("");
+  return '<div class="pan'+(p.id===sel?" sel":"")+'" data-id="'+p.id+'">'+
+    '<div class="head">'+p.name+'</div><div class="body">'+rows+
+    '<div class="ctl"><button class="btn on">RUN</button><button class="btn">STOP</button>'+
+    '<div class="sld"><i style="width:62%"></i></div></div></div></div>';
+}
+
+function build(){
+  board.style.width=(PLANT.gw*CU)+"px";
+  board.style.height=(PLANT.gh*CU)+"px";
+  cg.style.background=
+    "repeating-linear-gradient(0deg,var(--c-edge) 0 1px,transparent 1px "+CU+"px),"+
+    "repeating-linear-gradient(90deg,var(--c-edge) 0 1px,transparent 1px "+CU+"px)";
+  for(const el of world.querySelectorAll(".mach,.pan,.pipe")) el.remove();
+  const frag=document.createDocumentFragment();
+
+  // a straight run between each machine pair, drawn as pipe in plant units
+  const pw=Math.max(1,CU*0.28);
+  const link=(a,b)=>{
+    const A=byId(a), B=byId(b); if(!A||!B) return;
+    const ax=(A.x+A.w/2)*CU, ay=(A.y+A.h/2)*CU, bx=(B.x+B.w/2)*CU, by=(B.y+B.h/2)*CU;
+    add(Math.min(ax,bx),ay-pw/2,Math.abs(bx-ax),pw);
+    add(bx-pw/2,Math.min(ay,by),pw,Math.abs(by-ay)); };
+  const add=(x,y,w,h)=>{ const d=document.createElement("div"); d.className="pipe";
+    d.style.cssText="left:"+x+"px;top:"+y+"px;width:"+w+"px;height:"+h+"px";
+    frag.appendChild(d); };
+  const byId=id=>PLANT.parts.filter(q=>q.id===id)[0];
+  for(const [a,b] of [["core","sg0"],["sg0","pump0"],["pump0","core"],["core","tee0"],
+      ["tee0","pzr"],["pzr","rv0"],["rv0","reltk"],["sg0","mstee0"],["mstee0","turb"],
+      ["turb","cond"],["cond","feed"],["feed","efwtee"],["efwtee","sg0"],
+      ["efwtk","efwtee"],["cond","rad0"]]) link(a,b);
+
+  // machines: the name is a fraction of the CELL, so a box always wears a
+  // readable label whatever a cell is worth
+  const nameU=Math.max(5,CU*0.42);
+  for(const p of PLANT.parts){
+    const d=document.createElement("div");
+    d.className="mach"+(p.id===sel?" sel":"")+(p.role==="core"?" core":"");
+    d.dataset.id=p.id;
+    d.style.cssText="left:"+(p.x*CU)+"px;top:"+(p.y*CU)+"px;width:"+(p.w*CU)+
+      "px;height:"+(p.h*CU)+"px;font-size:"+nameU.toFixed(2)+"px";
+    d.innerHTML="<span>"+p.name+"</span>";
+    frag.appendChild(d); }
+
+  // panels, in plant units, parked beside their own machine
+  for(const p of PLANT.parts){
+    const t=document.createElement("template"); t.innerHTML=panHTML(p);
+    const el=t.content.firstElementChild;
+    el.style.width=PAN_U+"px";
+    el.style.fontSize=PAN_TYPE_U+"px";
+    el.style.left=((p.x+p.w)*CU+CU*0.4)+"px";
+    el.style.top=(p.y*CU)+"px";
+    frag.appendChild(el); }
+
+  world.appendChild(frag);
+
+  const core=byId("core");
+  ruler.style.cssText="left:"+(core.x*CU)+"px;top:"+(core.y*CU-1)+"px;width:"+PAN_U+
+    "px;height:"+(core.h*CU+2)+"px";
+  $("pcell").textContent=(PAN_U/CU).toFixed(2);
+  $("ratio").textContent=(PAN_U/(core.w*CU)*100).toFixed(0)+"%";
+  $("rpx").textContent=Math.round(core.w*CU*Z);
+  $("ppx").textContent=Math.round(PAN_U*Z);
+  $("uv").textContent=CU;
+  $("zv").textContent=Z.toFixed(2)+"x";
+  world.style.transform="translate("+ox+"px,"+oy+"px) scale("+Z+")";
+}
+
+// zoom about a stage point, so the thing you are looking at stays put
+function setZ(z,px,py){
+  const cx=px==null?stage.clientWidth/2:px, cy=py==null?stage.clientHeight/2:py;
+  const wx=(cx-ox)/Z, wy=(cy-oy)/Z;
+  Z=z; ox=cx-wx*Z; oy=cy-wy*Z; $("z").value=Math.round(Z*100); build();
+}
+function fitShip(){
+  const k=Math.min(stage.clientWidth/(PLANT.gw*CU), stage.clientHeight/(PLANT.gh*CU));
+  Z=k; ox=oy=0; $("z").value=Math.round(Z*100); build();
+}
+function goto(id,zoom){
+  const p=PLANT.parts.filter(q=>q.id===id)[0];
+  Z=zoom; ox=-p.x*CU*Z+70; oy=-p.y*CU*Z+50; $("z").value=Math.round(Z*100); build();
+}
+
+$("u").addEventListener("input",e=>{ CU=+e.target.value; build(); });
+$("z").addEventListener("input",e=>setZ(+e.target.value/100));
+$("today").addEventListener("click",()=>{ CU=16; $("u").value=16; fitShip(); });
+$("prop").addEventListener("click",()=>{ CU=120; $("u").value=120; goto("core",1); });
+$("fitall").addEventListener("click",fitShip);
+stage.addEventListener("wheel",e=>{
+  e.preventDefault();
+  const r=stage.getBoundingClientRect();
+  setZ(Math.max(0.05,Math.min(4,Z*Math.exp(-e.deltaY*0.0015))),
+       e.clientX-r.left, e.clientY-r.top);
+},{passive:false});
+world.addEventListener("click",e=>{
+  const m=e.target.closest(".mach,.pan"); if(!m) return; sel=m.dataset.id; build(); });
+let drag=null;
+stage.addEventListener("pointerdown",e=>{ drag={x:e.clientX-ox,y:e.clientY-oy};
+  stage.classList.add("drag"); stage.setPointerCapture(e.pointerId); });
+stage.addEventListener("pointermove",e=>{ if(!drag) return;
+  ox=e.clientX-drag.x; oy=e.clientY-drag.y;
+  world.style.transform="translate("+ox+"px,"+oy+"px) scale("+Z+")"; });
+stage.addEventListener("pointerup",()=>{ drag=null; stage.classList.remove("drag"); });
+addEventListener("resize",build);
+fitShip();
+</script>
