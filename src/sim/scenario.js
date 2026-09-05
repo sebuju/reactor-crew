@@ -328,23 +328,35 @@ function scnDue(tick){
    grace resolves to 0.1 s and a violation shorter than one sample interval can
    fall between two samples unseen. That is the price of judging the archive
    rather than the tick, and judging the tick is what would put limits inside
-   step(). Choose a grace of 0 for a latch and a real one for anything noisy. */
+   step(). Choose a grace of 0 for a latch and a real one for anything noisy.
+   On a take the archive has thinned the gap is SAMP_TICKS*trThin - see the
+   grace note in scnJudge() below. */
 /* THE ONE WAY A VERDICT IS SPELT. take.verdict is the object scnJudge handed
    back - the rows are the useful part and a string would throw them away - so
    anything that wants to PRINT one asks here. The branch picker drew the object
    itself once, which reads [object Object] on any real run. */
-const scnVerdLab = v => !v ? "" : v.pass ? (v.assisted ? "PASS (ASSISTED)" : "PASS") : "FAIL";
+const scnVerdLab = v => !v ? ""
+  : (v.pass ? (v.assisted ? "PASS (ASSISTED)" : "PASS") : "FAIL")
+    + (v.thin > 1 ? " / COARSE 1:"+v.thin : "");
 const scnVerdCol = v => !v ? C.ink2 : v.pass ? (v.assisted ? C.amber : C.green) : C.red;
 
 function scnJudge(take, limits){
   const segs = trSegs(take, take.tickEnd);
+  /* THE GRACE IS WIDENED BY WHAT THE ARCHIVE WAS THINNED TO. A thinned take
+     (trThin(), trends.js) samples every SAMP_TICKS*trThin ticks, so a grace
+     shorter than that gap is a window the archive can no longer resolve and a
+     verdict read at the authored figure would be reading rounding. Per SEGMENT,
+     because a lineage can cross a thinned parent into an unthinned child. */
+  let thin = 1;
   const rows = (limits||[]).map(L => {
     if(!limCh(L.ch)) throw new Error("scnJudge: no such channel "+L.ch);
-    const g = scnTicks(L.grace||0), up = L.cmp === ">";
+    const g0 = scnTicks(L.grace||0), up = L.cmp === ">";
     let start=null, brokeAt=null, worst=null, worstAt=null;
     for(const sg of segs){
       const t = sg[0];
       if(!t.tr[L.ch]) continue;         // a take from before this channel existed
+      const g = g0*(t.trThin||1);
+      if(t.trThin > thin) thin = t.trThin;
       for(let i=sg[1]; i<sg[2]; i++){
         const tk = trTick(t,i), x = trAt(t,L.ch,i);
         if(up ? x > L.v : x < L.v) start = null;
@@ -366,6 +378,7 @@ function scnJudge(take, limits){
        back into, so a PASS on it is a PASS with help - and a child of such a
        take inherits it for free, because it has a parent too. */
     assisted : !!take.assisted,
+    thin,
   };
 }
 
@@ -498,7 +511,7 @@ function scnWorkerGo(scn, onProgress, onDone, onFail){
 function scnGraft(take, endS){
   take.id = REC.takes.length; take.parent = null; take.kids = [];
   REC.takes.push(take); REC.roots.push(take.id); REC.cur = take.id;
-  REC.keyCount += take.keys.length;
+  recKeysAdopt(take); REC.trBytes += trBytesOf(take);
   restoreS(endS);
   REC.mode = "live";
   recTrimRoots();
