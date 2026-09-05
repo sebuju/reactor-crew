@@ -232,7 +232,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    the plant ever fills it. */
 .insp-row-dlt{font-size:var(--t8);letter-spacing:.3px}
 .insp-row-dlt:empty{display:none}
-.db-readlist .insp-row-dlt{display:inline-block;width:4.6em;text-align:right}
+.db-readlist .insp-row-dlt{display:inline-block;text-align:right}
 .insp-row .kit-band,.insp-row .kit-seg{grid-column:1/-1}
 .insp-row:hover{background:var(--c-panel-hi)}
 /* a genuinely graphical row: its own bitmap, painted by the screen through
@@ -367,7 +367,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    flex gap above becomes a margin. */
 .margin-pan.cols .db-panel-body{display:block;
   column-count:var(--margin-cols,2);column-gap:8px}
-.margin-pan.cols .db-panel-body>*{break-inside:avoid;margin-bottom:7px}
+.margin-pan.cols .db-panel-body>*{break-inside:avoid;}
 /* A PANEL THAT STATES ITS OWN SHAPE flows nowhere: the "box" blocks are the
    layout, so the column rules above are stood down whatever the width is. */
 .margin-pan.cols .db-panel-body.db-body-tree{display:flex;flex-direction:column;
