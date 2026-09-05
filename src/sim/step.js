@@ -6089,7 +6089,10 @@ function step(dt){
      It has to stop when there is nothing left to move: an empty primary, a
      dry steam generator, a feed pump that no longer exists. Natural
      circulation is real flow and keeps moving. */
-  const d=s.flowPos, sp=60*dt;
+  /* DIAGRAM PIXELS ARE DRAW_K NOW. 60 was authored against a 16-unit cell, so
+     on a CELL-unit board the parcels crawled a fraction of a bore a second and
+     a running plant read as a stopped one. */
+  const d=s.flowPos, sp=60*DRAW_K*dt;
   /* ══ AND THE LAST TWO CORRELATIONS ARE GONE ══
      PIPE_CORR named the surge line and the injection line and handed each a
      rate of its own - the surge line's was -s.dLvl*0.07 plus a relief term,

@@ -60,17 +60,33 @@ const pipeCol=(PC,k)=>PC[k]||C.ink2;
    pinned it, so every ordinary run drew at max and the number the player set
    could only be read downward. At 3.75 a full-bore leg is mid-scale and it
    takes about 1200 mm to reach the top. */
-const PIPE_W_MAX = 6;
-const PIPE_PX = 3.75;
-const pipeWidth = bore => clamp(PIPE_PX*bore, 2.2, PIPE_W_MAX);
+/* AND THE FLOOR IS A REAL PLANT'S THINNEST LINE, NOT A 16 px CELL'S. 2.2 was
+   what a line needed to be seen at all when a cell was sixteen units across,
+   and every bore under 440 mm sat on it - the whole small end of the plant
+   drew as one width. A cell is CELL units now, so the readable band is eight
+   times wider: 0.8 puts the floor at 160 mm and leaves 150-1200 mm graded. */
+const PIPE_W_MAX = 6*DRAW_K;
+const PIPE_PX = 3.75*DRAW_K;
+const pipeWidth = bore => clamp(PIPE_PX*bore, 0.8*DRAW_K, PIPE_W_MAX);
 /* ══ AND THE CASING IS THE WALL ══
    The casing was hardcoded at 2*w, so every pipe's wall read as half its own
    bore. It is the real millimetres now (runWallMm(), pipenet.js). WALL_PX is
    a STATED display exaggeration - the RAD_AREA_CELL idiom, a lie the ship's
    scale already tells, named out loud: a real 70 mm wall on a 750 mm bore is
    one pixel at true scale, and one pixel cannot be read. */
-const WALL_PX = 0.09;
-const pipeWallPx = r => clamp(runWallMm(r)*WALL_PX, 0.6, 2);   // 2, so bore+2 walls stays inside the joint that caps it
+/* AND THE CAP IS THE CASING BUDGET, NOT A NUMBER. A flat 2 was what a 6-unit
+   bore could afford to wear at the widest, so it was charged to every run:
+   Barlow puts a plant's walls at 5-50 mm and 0.09 pinned everything over
+   22 mm, which is all of them. The budget is the CASING (10, above), so a
+   narrow line spends what its own bore leaves and only a full-bore leg is
+   squeezed - and 0.05 then grades 10 mm of steam line against 45 mm of hot
+   leg instead of drawing both at the cap. */
+const WALL_PX = 0.05*DRAW_K;
+const PIPE_CASE_MAX = 10*DRAW_K;
+const pipeWallPx = r => {
+  const room = Math.max(0.5*DRAW_K, (PIPE_CASE_MAX - pipeWidth(runBore(r)))/2);
+  return clamp(runWallMm(r)*WALL_PX, 0.5*DRAW_K, room);
+};
 
 /* The one pipe colour table. drawPlant() strokes the run with it and the packets are
    drawn in it, so a packet can never be a different colour from its own pipe. */
@@ -136,6 +152,32 @@ function pipeClip(g,hw,ext){
     ctx.lineTo(bx-nx,by-ny); ctx.lineTo(ax-nx,ay-ny); ctx.closePath();
   }
   ctx.clip();
+}
+/* ══ A BEND IS A BEND ON BOTH SIDES ══
+   lineJoin "round" rounds the OUTER edge of a corner and leaves the inner one
+   a notch - the pipe folds rather than bends. On a 16-unit cell that notch was
+   a pixel; on a CELL-unit one it is most of the bore. So the CENTRELINE turns:
+   both edges are then arcs about one centre and the elbow is a real elbow.
+   The radius is priced off the CASING, so the inner edge keeps a positive
+   radius at the widest run there is, and capped at half the shortest leg so a
+   one-cell jog still closes. EVERY PASS TAKES THE SAME RADIUS - the bore is
+   drawn inside the casing and stops being concentric with it otherwise.
+   NAMED pipeBendPath: pipenet.js already owns pipePath(), which finds a CELL
+   LANE between two cells - a different question, and this file loads after it,
+   so the name would simply have replaced it. */
+function pipeBendR(pts,cw){
+  let minL=Infinity;
+  for(let i=1;i<pts.length;i++)
+    minL=Math.min(minL, Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  return Math.max(0, Math.min(cw*0.75, minL/2));
+}
+function pipeBendPath(pts,R){
+  const n=pts.length;
+  ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+  if(R>0) for(let i=1;i<n-1;i++)
+    ctx.arcTo(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1],R);
+  else for(let i=1;i<n-1;i++) ctx.lineTo(pts[i][0],pts[i][1]);
+  ctx.lineTo(pts[n-1][0],pts[n-1][1]);
 }
 /* build a path covering arc length a..b; false if nothing of it lands */
 function pipeSub(g,a,b){
@@ -589,8 +631,8 @@ const pipePhaseWord=x => x===null ? "NOTHING"
   : "WET STEAM, x="+x.toFixed(2);
 
 /* ══════════ the bubbles ══════════ */
-const PIPE_RUNWAY=60;
-const PIPE_BUB_WALL=0.35;       // px of bore left clear: a parcel touching the wall reads as a burr
+const PIPE_RUNWAY=60*DRAW_K;
+const PIPE_BUB_WALL=0.35*DRAW_K;  // bore left clear: a parcel touching the wall reads as a burr
 const pipeHash = k => Math.imul(k^0x9e3779b1,2654435761)>>>0;
 const pipeRnd = (k,sh,m) => ((pipeHash(k)>>>sh)&m)/m;
 const pipeSeed = key => { let a=0; for(let i=0;i<key.length;i++) a=Math.imul(a^key.charCodeAt(i),16777619); return a>>>0; };
@@ -617,9 +659,12 @@ function pipeBubCol(col){
   return v;
 }
 function pipeStream(g,key,ph0,sp,col,w,st,seed){
-  const moving=Math.min(1,Math.abs(sp)/8);
+  const moving=Math.min(1,Math.abs(sp)/(8*DRAW_K));
   /* a wide bore carries more of them, not bigger ones */
-  const gap0=Math.max(6,20-w*2.2)*(1+st*0.3), lim=w/2-PIPE_BUB_WALL;
+  /* the gap is a length on the board, so both ends of it carry DRAW_K - mixed
+     with a bare 20 the scaled bore drove every run onto the 6 floor and the
+     parcels ran into one stipple */
+  const gap0=Math.max(6*DRAW_K,20*DRAW_K-w*2.2)*(1+st*0.3), lim=w/2-PIPE_BUB_WALL;
   /* A FAST RUN SPREADS ITS PARCELS OUT RATHER THAN DIMMING THEM. The period is
      what sets the speed the texture can carry, so widening it is how the
      picture buys the speed back - fewer marks, further apart, all of them at
@@ -647,7 +692,7 @@ function pipeStream(g,key,ph0,sp,col,w,st,seed){
   ctx.save(); ctx.fillStyle=pipeBubCol(col);
   for(let s=((ph%gap)+gap)%gap-gap;s<g.len;s+=gap){
     const id=Math.round((ph-s)/gap)+(seed|0);
-    const r=clamp((0.45+0.55*pipeRnd(id,9,255))*w*0.42, 0.55, Math.max(0.55,lim));
+    const r=clamp((0.45+0.55*pipeRnd(id,9,255))*w*0.42, 0.55*DRAW_K, Math.max(0.55*DRAW_K,lim));
     /* THE PARCEL STAYS INSIDE THE BORE. The offset is priced off what the
        radius leaves, never off the bore, or half of a fat one sits on the wall. */
     const off=(pipeRnd(id,19,255)-0.5)*2*Math.max(0,lim-r);
@@ -684,30 +729,30 @@ function pipeDial(x,y,r,fr,col,label,o){
   ctx.save();
   ctx.beginPath(); ctx.arc(x,y,r,0,6.2832);
   ctx.fillStyle=C.panel; ctx.fill();
-  ctx.lineWidth=1; ctx.strokeStyle=over?C.red:(dead?C.edge:C.edge2); ctx.stroke();
+  ctx.lineWidth=1*DRAW_K; ctx.strokeStyle=over?C.red:(dead?C.edge:C.edge2); ctx.stroke();
   /* the band is always on the face, lit only when the needle is in it - you should be
      able to see where the limit is before you cross it */
-  ctx.beginPath(); ctx.arc(x,y,r-2.6, PIPE_A0+PIPE_SW*U(lim), PIPE_A0+PIPE_SW);
-  ctx.strokeStyle=over?C.red:"#4a1712"; ctx.lineWidth=1.8; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x,y,r-2.6*DRAW_K, PIPE_A0+PIPE_SW*U(lim), PIPE_A0+PIPE_SW);
+  ctx.strokeStyle=over?C.red:"#4a1712"; ctx.lineWidth=1.8*DRAW_K; ctx.stroke();
   const mark=(t,len,c)=>{
-    const a=PIPE_A0+PIPE_SW*t, cs=Math.cos(a), sn=Math.sin(a);
+    const a=PIPE_A0+PIPE_SW*t, cs=Math.cos(a), sn=Math.sin(a), i0=r-1.5*DRAW_K;
     ctx.beginPath();
-    ctx.moveTo(x+cs*(r-1.5), y+sn*(r-1.5));
-    ctx.lineTo(x+cs*(r-1.5-len), y+sn*(r-1.5-len));
-    ctx.strokeStyle=c; ctx.lineWidth=1; ctx.stroke();
+    ctx.moveTo(x+cs*i0, y+sn*i0);
+    ctx.lineTo(x+cs*(i0-len), y+sn*(i0-len));
+    ctx.strokeStyle=c; ctx.lineWidth=1*DRAW_K; ctx.stroke();
   };
-  for(let i=0;i<=4;i++) mark(U(i/4),2.4,C.edge2);      // 0 25 50 75 100 per cent
-  mark(U(0),3.2,C.amber);                              // the zero stop
+  for(let i=0;i<=4;i++) mark(U(i/4),2.4*DRAW_K,C.edge2);   // 0 25 50 75 100 per cent
+  mark(U(0),3.2*DRAW_K,C.amber);                           // the zero stop
   const a=PIPE_A0+PIPE_SW*U(fr);
-  ctx.beginPath(); ctx.moveTo(x-Math.cos(a)*2,y-Math.sin(a)*2);
-  ctx.lineTo(x+Math.cos(a)*(r-3), y+Math.sin(a)*(r-3));
-  ctx.strokeStyle=ink; ctx.lineWidth=1.6; ctx.lineCap="round"; ctx.stroke();
-  ctx.beginPath(); ctx.arc(x,y,1.5,0,6.2832); ctx.fillStyle=ink; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x-Math.cos(a)*2*DRAW_K,y-Math.sin(a)*2*DRAW_K);
+  ctx.lineTo(x+Math.cos(a)*(r-3*DRAW_K), y+Math.sin(a)*(r-3*DRAW_K));
+  ctx.strokeStyle=ink; ctx.lineWidth=1.6*DRAW_K; ctx.lineCap="round"; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x,y,1.5*DRAW_K,0,6.2832); ctx.fillStyle=ink; ctx.fill();
   ctx.restore();
   if(label)
     /* the reading carries the same alarm state as the needle, so a number read
        without looking at the face still says you are over the limit */
-    pipeTag(x,y+r+1,label,dead?C.ink2:over?C.red:back?C.amber:C.cyan);
+    pipeTag(x,y+r+1*DRAW_K,label,dead?C.ink2:over?C.red:back?C.amber:C.cyan);
 }
 
 /* A reading set on the plant itself, on its own backing plate so a pipe or a
@@ -715,9 +760,9 @@ function pipeDial(x,y,r,fr,col,label,o){
    diagram rather than in a rail goes through here, or the second one drifts a
    half pixel and a size away from the first. */
 function pipeTag(x,yTop,label,col){
-  const o={size:6.5,sp:.4,align:"center"}, lw=tw(label,o)+6;
-  fillRect(x-lw/2,yTop,lw,10,C.bg);
-  txt(label,x,yTop+8,Object.assign({},o,{color:col}));
+  const o={size:6.5*DRAW_K,sp:.4*DRAW_K,align:"center"}, lw=tw(label,o)+6*DRAW_K;
+  fillRect(x-lw/2,yTop,lw,10*DRAW_K,C.bg);
+  txt(label,x,yTop+8*DRAW_K,Object.assign({},o,{color:col}));
 }
 
 /* ══════════ ONE STACK OF READINGS PER RUN ══════════
@@ -742,7 +787,7 @@ function pipeTag(x,yTop,label,col){
 
    The one round face left on the plant is the pressurizer's (pipeVessel), and
    that is bolted to a vessel rather than to a pipe. */
-const STACK_H=10;                         // one line of 6.5px ink and its plate
+const STACK_H=10*DRAW_K;                  // one line of 6.5 ink and its plate
 /* THE BLOCK IS CENTRED ON THE ANCHOR, so it reads as that pipe's label
    whatever it ends up holding. Slot 0 used to be pinned 20px above the point
    and the rest hung off it, which centred a four-line stack and left a
@@ -757,7 +802,7 @@ const stackTop = (y,n) => Math.round(y-(n*STACK_H)/2);
    half pixel, and a slot whose layer was off punched a hole clean through the
    block. Collected by ANCHOR POINT, which is what a stack is: every line of
    one run is handed the same x,y. */
-const STACK_W=48;
+const STACK_W=48*DRAW_K;
 let stackInk=new Map();
 function pipeStackTick(){ stackInk=new Map(); }
 function pipeStackLine(x,y,slot,label,col){
@@ -783,8 +828,8 @@ function pipeStackFlush(){
        board is put. The +1 and the +8 were for butted plates and are what
        left the block reading half a pixel low. */
     fillRect(e.x-STACK_W/2, top, STACK_W, n*STACK_H, C.bg);
-    ls.forEach((l,i)=>txt(l.label, e.x, midBase(top+i*STACK_H,STACK_H,6.5),
-      {size:6.5,sp:.4,align:"center",color:l.col}));
+    ls.forEach((l,i)=>txt(l.label, e.x, midBase(top+i*STACK_H,STACK_H,6.5*DRAW_K),
+      {size:6.5*DRAW_K,sp:.4*DRAW_K,align:"center",color:l.col}));
   }
   stackInk.clear();
 }
@@ -804,11 +849,11 @@ function pipeStackFlush(){
    Clear of the WHOLE STACK, all three lines together - a point that is itself in
    open air can still drop the line below it inside a component, which is how the
    hot-leg reading ended up under a damage badge. */
-const PIPE_DIAL_R=10;
+const PIPE_DIAL_R=10*DRAW_K;
 /* WHERE THE PRESSURIZER'S OWN DIAL SITS, off the top of its BOX. One helper
    because valueBase() (plant.js) hangs the pressure figure under the dial: two
    copies of the offset and the number lands on the glass. */
-const PZR_DIAL_CY=boxY=>boxY+PIPE_DIAL_R+18;
+const PZR_DIAL_CY=boxY=>boxY+PIPE_DIAL_R+18*DRAW_K;
 /* Is this rectangle clear of every component box? The one test a widget that
    floats in the pipe margin - a meter, a fitting's control strip - uses to
    decide where it may sit, so two of them cannot disagree about what "in the
@@ -820,7 +865,7 @@ function boxClear(x,y,w,h){
 /* The straight stretch a stack would LIKE to sit on. Not a permission any
    more: a run shorter than this still gets its readings, it just has fewer
    places to put them. */
-const STACK_MIN_L=2*PIPE_DIAL_R+6;
+const STACK_MIN_L=2*PIPE_DIAL_R+6*DRAW_K;
 const stackBox=(x,y,n)=>({x:x-STACK_W/2, y:stackTop(y,n||STACK_N), w:STACK_W, h:(n||STACK_N)*STACK_H});
 /* ══ A FITTING'S READING IS A LINE OF ITS PIPE'S STACK ══
    A relief valve's margin and a throttle's share of the head used to be
@@ -874,7 +919,7 @@ const hit=(a,b)=>a.x+a.w>b.x && a.x<b.x+b.w && a.y+a.h>b.y && a.y<b.y+b.h;
 /* How far beside its own pipe a reading may stand. One stack height: far
    enough to get out of a neighbour's way on a crowded plant, near enough that
    it is plainly THAT pipe's reading and not the next one's. */
-const STACK_OFF=STACK_H+2;
+const STACK_OFF=STACK_H+2*DRAW_K;
 const STACK_STEPS=[0,1,-1,2,-2,3,-3];
 function pipeRunSpots(r){
   const out=[];
@@ -916,7 +961,12 @@ function pipeAnchorTick(){
 function pipeStackBoxes(){ return anchorBoxes; }
 function pipeAnchors(runs){
   if(anchorCache) return anchorCache;
-  const out={}, taken=[];
+  /* THE PANELS ARE ON THE BOARD, AND A READING MAY NOT BE PUT UNDER ONE. They
+     are seeded as already-taken ground rather than given a rule of their own, so
+     a panel costs a spot exactly what another reading costs it. One frame old -
+     marginSync() runs after the draw - which is right for a placement that only
+     moves when the drawing does. */
+  const out={}, taken=(typeof marginBoxes==="function"?marginBoxes():[]).slice();
   /* longest run first: a main leg has the most to say and the fewest places
      to say it, and letting a stub take the good spot first is what produced
      the smears this replaces. */
@@ -1128,13 +1178,28 @@ const pipeRuns = L => pipeNetwork();
    own ink for that ground, the same one a port's word already uses.
    Scaled, never clipped: a short leg gets a small word rather than half of a
    big one, and the size is in plant units, so zoom resolves it. */
-const PIPE_LAB_PAD=1.1;         // clear pixels between the word and the casing
+const PIPE_LAB_PAD=1.1*DRAW_K;  // clear board between the word and the casing
 /* WHERE THE TWO WORDS GO - one per straight leg where the run has two worth
    using, both on the one leg where it has not, each carrying the room it may
    spend along the pipe so neither is sized off length it has not got. */
+/* ══ AND THE WORD STOPS WHERE THE JOINT STARTS ══
+   A run's polyline ends ON the port, and the joint stands proud of the shell
+   along that same axis - so a leg only a few cells long put its word half
+   under its own flange, which is a reading you then have to move your head to
+   finish. Each segment is clipped to the run's OWN clear span first
+   (nozzleReach(), plant.js) and everything after that is the same arithmetic
+   on what is left. A leg with nothing left carries no word rather than a
+   hidden one. */
 function pipeLabSpots(g){
   const at=(q,t)=>({x:q.x+q.dx*t, y:q.y+q.dy*t, dx:q.dx, dy:q.dy});
-  const segs=g.segs.slice().sort((a,b)=>b.L-a.L);
+  const clear=nozzleReach()+PIPE_LAB_PAD;
+  const segs=[];
+  for(const q of g.segs){
+    const lo=Math.max(q.s0,clear), hi=Math.min(q.s0+q.L,g.len-clear);
+    if(hi<=lo) continue;
+    segs.push({x:q.x+q.dx*(lo-q.s0), y:q.y+q.dy*(lo-q.s0), dx:q.dx, dy:q.dy, L:hi-lo});
+  }
+  segs.sort((a,b)=>b.L-a.L);
   if(!segs.length) return [];
   const q=segs[0];
   if(segs.length<2 || segs[1].L < q.L*0.45)
@@ -1172,7 +1237,7 @@ function pipeLabPlan(r,cut){
     let sz=w-PIPE_LAB_PAD;
     for(let i=0;i<n;i++)
       sz=Math.min(sz, REF*spots[i].room/Math.max(tw(words[i],o0),1e-6));
-    if(sz>0.8) for(let i=0;i<n;i++){ const sp=spots[i];
+    if(sz>0.8*DRAW_K) for(let i=0;i<n;i++){ const sp=spots[i];
       items.push({word:words[i], x:sp.p.x, y:sp.p.y,
                   vert:Math.abs(sp.p.dx)<Math.abs(sp.p.dy), sz}); }
   }
@@ -1225,7 +1290,8 @@ function pipeBreaks(L){
     for(const key of pipeCellRuns(x,y)) q=Math.max(q, L.spillBy["break:"+key]||0);
     if(!(q>0)) continue;
     const [px,py]=cellPos(x,y);
-    fxSteam(px, py, 22, fxEase("brk:"+k, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29);
+    fxCellSpace(px, py, ()=>
+      fxSteam(0, 0, 22, fxEase("brk:"+k, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29));
   }
   /* A WRECKED NOZZLE VALVE IS AN OPENING TOO (runHoled(), pipenet.js), and it
      discharges at the JOINT rather than at a pipe cell - the one place on this
@@ -1238,7 +1304,8 @@ function pipeBreaks(L){
       q=Math.max(q, L.spillBy["break:"+r.key]||0);
     if(!(q>0)) continue;
     const [px,py]=portPos(pid);
-    fxSteam(px, py, 22, fxEase("brk:"+id, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29);
+    fxCellSpace(px, py, ()=>
+      fxSteam(0, 0, 22, fxEase("brk:"+id, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29));
   }
 }
 /* A BROKEN CELL IS THE SAME LENGTH OF PIPE WITH ITS WALL GONE RED AND NOTHING
@@ -1326,7 +1393,7 @@ function pipeDamage(L){
     const cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
     ctx.save();
     ctx.beginPath(); ctx.rect(r.x,r.y,r.w,r.h); ctx.clip();
-    ctx.strokeStyle=C.red; ctx.lineWidth=3;
+    ctx.strokeStyle=C.red; ctx.lineWidth=3*DRAW_K;
     for(const pr of sh.paths){
       const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
       ctx.beginPath();
@@ -1355,7 +1422,7 @@ function pipeLoose(L){
     const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
     const cell=D.pipes[k], sh=PIPE_SHAPE[cell.s];
     const r=grect(x,y,1,1), cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
-    if(sh){ ctx.lineWidth=3;
+    if(sh){ ctx.lineWidth=3*DRAW_K;
       for(const pr of sh.paths){
         const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
         ctx.beginPath();
@@ -1364,8 +1431,8 @@ function pipeLoose(L){
         ctx.lineTo(cx+DIRV[b][0]*h, cy+DIRV[b][1]*h);
         ctx.stroke();
       } }
-    ctx.save(); ctx.setLineDash([3,3]); ctx.lineWidth=1.5;
-    ctx.strokeRect(r.x+3,r.y+3,r.w-6,r.h-6); ctx.restore();
+    ctx.save(); ctx.setLineDash([3*DRAW_K,3*DRAW_K]); ctx.lineWidth=1.5*DRAW_K;
+    ctx.strokeRect(r.x+3*DRAW_K,r.y+3*DRAW_K,r.w-6*DRAW_K,r.h-6*DRAW_K); ctx.restore();
   }
   ctx.restore();
 }
@@ -1374,9 +1441,9 @@ function pipeLoose(L){
 /* ══ PAINTED STRUCTURE, AND THE SEAL AROUND WHAT IT ENCLOSES ══
    Drawn unconditionally, the way a pipe is: it is structure on the board, not
    an instrument, so nothing gates it. MATERIAL is the fill and THICKNESS is
-   the stroke, on WALL_PX - the same stated display exaggeration a pipe's wall
-   already uses, so a 900 mm wall and a 900 mm pipe wall are the same number of
-   pixels and the player learns one scale rather than two.
+   the stroke, on MAT_PX - the same kind of stated display exaggeration a
+   pipe's wall uses, on its own scale: a pipe wall is tens of millimetres and
+   a structural wall is hundreds, so one number cannot grade both.
    THE SEAL is the whole readout of the fill in one mark: a hairline just
    inside the enclosed set, present only when the fill came back bounded. A
    containment that is holding has a closed line around it. One cell shot out
@@ -1385,15 +1452,20 @@ function pipeLoose(L){
    there is one. */
 /* MAT_PX is the same stated exaggeration WALL_PX is, on the scale a WALL is
    set in: a 20 mm liner and a 900 mm concrete shell have to be tellable apart
-   across one 16 px cell, which true scale (34 px/m, so 900 mm is two cells)
-   cannot do. Floored at the width the hatch needs to read as a cut and not as
-   a line, capped at the cell because a cell is the widest wall there is room
-   to draw. */
-const MAT_PX = 0.016;
-/* A WALL'S CUT IS FINER THAN THE BOARD'S OWN HATCH: the band is a few pixels
-   across, so the 7 px pitch put one diagonal in it and read as a dash. */
-const MAT_HATCH_P = 4, MAT_HATCH_W = 0.9;
-const matWallPx = (x,y,r) => clamp(matThick(x,y)*MAT_PX, 4, Math.min(r.w,r.h));
+   across one cell, which true scale (900 mm is two cells) cannot do.
+   AND IT IS A DRAWING CONSTANT, so it carries DRAW_K like every other one.
+   Authored bare against a 16-unit cell it did not follow CELL at all: a
+   900 mm shell that used to fill nine tenths of its cell drew as a 14-unit
+   hairline on a 134-unit one, and everything under 250 mm sat on the floor.
+   Floored at the width the hatch needs to read as a cut and not as a line -
+   62 mm now, where it was 250 - capped at the cell because a cell is the
+   widest wall there is room to draw. */
+const MAT_PX = 0.016*DRAW_K;
+/* A WALL'S CUT IS FINER THAN THE BOARD'S OWN HATCH: it is the band that is
+   hatched, not the cell, so the pitch is a fraction of the band and follows
+   the same DRAW_K the band does - about four diagonals across a full wall. */
+const MAT_HATCH_P = 4*DRAW_K, MAT_HATCH_W = 0.9*DRAW_K;
+const matWallPx = (x,y,r) => clamp(matThick(x,y)*MAT_PX, 1*DRAW_K, Math.min(r.w,r.h));
 /* WHICH WAY IS IN. A wall grows from its inner face outward, so the band has
    to know which side the enclosed volume is on: a face onto a cell that is not
    wall and sits in a BOUNDED region. A cell with no such face - a shield, or
@@ -1441,7 +1513,7 @@ function matBandPath(r,faces,w){
 /* AGGREGATE, for a material that has some. Placed off the CELL's own
    coordinates, never a die: a texture that moves between frames is a fault
    light nobody lit. The caller clips to the band. */
-const AGG_R=1.2;
+const AGG_R=1.2*DRAW_K;
 function matAgg(r,x,y,col){
   ctx.fillStyle=col; ctx.globalAlpha=.55;
   const o=((x*7+y*13)%5)/5;
@@ -1467,7 +1539,13 @@ function matAgg(r,x,y,col){
 function matSealLines(r,faces,w,dead){
   ctx.save();
   ctx.strokeStyle = dead ? C.red : C.bright;
-  ctx.globalAlpha = 1; ctx.lineWidth = 2;
+  /* THE LINE IS PRICED OFF THE BAND IT SITS ON. Drawn at double width against
+     a clip that keeps the inner half, two edges cover the whole band once the
+     line reaches its width - so a flat 2*DRAW_K painted every LINER solid
+     white, band, hatch and material colour together. Half the band, so the
+     two lines and the cut between them are always all three visible. */
+  const lw = Math.min(2*DRAW_K, w*0.5);
+  ctx.globalAlpha = 1; ctx.lineWidth = lw;
   const V=(X,y0,y1)=>{ ctx.beginPath(); ctx.moveTo(X,y0); ctx.lineTo(X,y1); ctx.stroke(); };
   const H=(Y,x0,x1)=>{ ctx.beginPath(); ctx.moveTo(x0,Y); ctx.lineTo(x1,Y); ctx.stroke(); };
   const has={}; for(const f of faces) if(f.length===1) has[f]=1;
@@ -1494,7 +1572,7 @@ function matSealLines(r,faces,w,dead){
      No cap can do this: a cap that crossed would be clipped away. */
   ctx.fillStyle = ctx.strokeStyle;
   for(const f of faces) if(f.length===2)
-    ctx.fillRect((f[0]==="l"?r.x:r.x+r.w)-1, (f[1]==="t"?r.y:r.y+r.h)-1, 2, 2);
+    ctx.fillRect((f[0]==="l"?r.x:r.x+r.w)-lw/2, (f[1]==="t"?r.y:r.y+r.h)-lw/2, lw, lw);
   ctx.restore();
 }
 /* kg/s AT WHICH A BREACH DRAWS FLAT OUT. One cell of wall against a bar of
@@ -1519,7 +1597,7 @@ function matPaintDraw(L){
     return cs ? cs.map(i=>[i%GW,(i/GW)|0]) : [[x,y]]; })();
   if(selCells){
     ctx.save(); ctx.strokeStyle=C.amber; ctx.fillStyle=C.amber;
-    ctx.lineJoin="round"; ctx.lineWidth=3;
+    ctx.lineJoin="round"; ctx.lineWidth=3*DRAW_K;
     for(const c of selCells){ const r=grect(c[0],c[1],1,1);
       matBandPath(r, matInFaces(RG,c[0],c[1]), matWallPx(c[0],c[1],r));
       ctx.fill(); ctx.stroke(); }
@@ -1564,8 +1642,9 @@ function matPaintDraw(L){
       const hq = L.holeQ && L.holeQ[k];
       if(hq && hq.q > 0){
         const tx = hq.to%GW, ty = (hq.to/GW)|0;
-        fxJet(r.x+r.w/2, r.y+r.h/2, r.w*0.8, fxEase("brw:"+k, clamp(hq.q/HOLE_FULL,0,1)),
-              "#ffd0c4", Math.sign(tx-x), Math.sign(ty-y), 37); } }
+        fxCellSpace(r.x+r.w/2, r.y+r.h/2, ()=>
+          fxJet(0, 0, r.w*0.8/DRAW_K, fxEase("brw:"+k, clamp(hq.q/HOLE_FULL,0,1)),
+                "#ffd0c4", Math.sign(tx-x), Math.sign(ty-y), 37)); } }
   }
   ctx.restore();
 }

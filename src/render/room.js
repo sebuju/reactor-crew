@@ -832,9 +832,10 @@ function floodLayer(data,L){
       if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
       const j=id.indexOf(","), bx=+id.slice(5,j), by=+id.slice(j+1);
       if(!inRegion.has(by*GW+bx)) continue;
-      const br=grect(bx,by,1,1);
-      fxBubbles(br.x, Math.max(br.y, top), br.w, br.y+br.h-Math.max(br.y, top),
-                fxEase("fld:"+bx+","+by, 1), C.blue, "pool");
+      const br=grect(bx,by,1,1), bt=Math.max(br.y, top);
+      fxCellSpace(br.x, bt, ()=>
+        fxBubbles(0, 0, br.w/DRAW_K, (br.y+br.h-bt)/DRAW_K,
+                  fxEase("fld:"+bx+","+by, 1), C.blue, "pool"));
     }
   }
   ctx.restore();
