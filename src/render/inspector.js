@@ -144,7 +144,13 @@ function fieldRowsBuild(container,rows){
     }
     const el=KIT.el("div","insp-row");
     const lab=KIT.el("span","insp-row-lab"); lab.textContent=row[0];
+    /* THE VALUE AND WHAT IT IS ABOUT TO BECOME are two spans in one cell, not
+       two columns: a delta only ever appears under the pointer (row.dlt, the
+       readlist block in design-bench.js) and a third grid column would move
+       every value on the panel sideways the moment one did. */
     const val=KIT.el("span","insp-row-val");
+    const num=KIT.el("span"), dlt=KIT.el("span","insp-row-dlt");
+    val.append(num,dlt);
     el.append(lab,val);
     let bar=null,barKind=null;
     if(row[4]){ bar=KIT.band({lo:row[4].lo,hi:row[4].hi,zones:row[4].zones,dp:row[4].dp,lim:row[4].lim,v:row[4].v});
@@ -157,7 +163,8 @@ function fieldRowsBuild(container,rows){
        wrong: #00ffff goes in and rgb(0, 255, 255) comes out, so the guard never
        held and those rows repainted on every frame. Same cache the kit keeps
        for a cell's fill (kit.js). */
-    out.push({key:row[0],el,val,bar,barKind,txt:null,col:null,lim:row[4]?row[4].lim:null});
+    out.push({key:row[0],el,val,num,dlt,bar,barKind,txt:null,col:null,dtxt:null,dcol:null,
+              lim:row[4]?row[4].lim:null});
   }
   container._viz=viz;
   return out;
@@ -172,7 +179,11 @@ function fieldRowsSync(container,rows){
   for(let i=0;i<rows.length;i++){
     const H=h[i], row=rows[i];
     if(!H||row.sec||row.viz) continue;
-    if(H.txt!==row[1]){ H.val.textContent=row[1]; H.txt=row[1]; }
+    if(H.txt!==row[1]){ H.num.textContent=row[1]; H.txt=row[1]; }
+    const d=row.dlt;
+    if(H.dtxt!==(d?d.text:"")){ H.dtxt=d?d.text:""; H.dlt.textContent=H.dtxt; }
+    const dcol=d?cssCol(d.col):"";
+    if(H.dcol!==dcol){ H.dcol=dcol; H.dlt.style.color=dcol; }
     const col=cssCol(row[2]);
     if(H.col!==col){
       H.val.style.color=col;
@@ -227,18 +238,29 @@ function statRowsSync(container,stats){
    plain D field name, or a {get,set} pair for a per-part field (pump size).
    B.gang marks a set of identical components (paramBlockBuild's caller keeps
    the first and lends it the others' ids); B.plain marks nothing to adjust. */
+/* ONE HEADING FOR EVERY LIST OF ANSWERS. A readlist block is measurements by
+   definition, so the panel that carries one says so in the same words. */
+const MEASURED_TIP="Every number on this list is an OUTPUT of the design. Not one of them is a value you can set - to move one of these, move a knob above it.";
 function paramsFor(p){
   const B=[], id=p.id;
-  const opt=(title,tip,key,items,base)=>B.push({kind:"optlist",title,tip,key,base:base||0,
+  // where the next block lands. B unless a panel is building a "box" tree.
+  let T=B;
+  const opt=(title,tip,key,items,base)=>T.push({kind:"optlist",title,tip,key,base:base||0,
     items:items.map(o=>({name:o.name,tip:o.note||o.tip||""}))});
-  const seg_=(title,tip,key,labels,base)=>B.push({kind:"segsel",title,tip,key,labels,base:base||0});
-  const sld=(title,tip,key,min,max,fmt,step,massFn)=>B.push({kind:"slider",title,tip,key,min,max,fmt,step,massFn});
+  const seg_=(title,tip,key,labels,base)=>T.push({kind:"segsel",title,tip,key,labels,base:base||0});
+  const sld=(title,tip,key,min,max,fmt,step,massFn)=>T.push({kind:"slider",title,tip,key,min,max,fmt,step,massFn});
   // a MACHINE'S OWN QUANTITY, in its own units - see the "num" block (design-bench.js)
-  const num=(title,tip,key,unit,dp,suggest,massFn)=>B.push({kind:"num",title,tip,key,unit,dp,suggest,massFn});
-  const rdo=(title,tip,val)=>B.push({kind:"readout",title,tip,val});
-  const tog=(title,tip,key,mass)=>B.push({kind:"toggle",title,tip,key,mass});
-  const note=(text,color)=>B.push({kind:"note",text,color});
-  const brk=()=>B.push({kind:"colbreak"});
+  const num=(title,tip,key,unit,dp,suggest,massFn)=>T.push({kind:"num",title,tip,key,unit,dp,suggest,massFn});
+  const rdo=(title,tip,val)=>T.push({kind:"readout",title,tip,val});
+  const tog=(title,tip,key,mass)=>T.push({kind:"toggle",title,tip,key,mass});
+  const note=(text,color)=>T.push({kind:"note",text,color});
+  /* ══ HELP IS ASKED FOR, NEVER STOOD IN THE WAY ══
+     A paragraph of advice used to be a "note" block sitting open on the panel
+     for as long as the machine existed. It goes on the panel's own title bar
+     instead, where a tooltip is how every other explanation on this screen is
+     read - see marginSync() (ui/margin.js). */
+  const help=t=>{ if(t) B.tip = B.tip ? B.tip+"\n\n"+t : t; };
+  const brk=()=>T.push({kind:"colbreak"});
 
   if(!p.access)
     note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, so it is lost for good the moment it is damaged.","var(--c-red)");
@@ -259,19 +281,51 @@ function paramsFor(p){
      reordering costs nothing. */
   if(p.role==="core"){ const cD=coreD(id);
     B.gang="reactor"; B.gangPlain=true; B.cols=4;
-    B.push({kind:"rule",title:"PRESETS",
-      tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself."});
-    /* designForget() FIRST, the same order plantPreset() keeps: a family change
+    /* PRESETS ARE ASKED FOR FROM THE TITLE BAR. They stood open at the top of
+       the panel, over the knobs they overwrite - and a whole drawing to start
+       from is not a knob on this machine.
+       designForget() FIRST, the same order plantPreset() keeps: a family change
        moves the rating by 30x, and every machine figure already baked was
        priced off the family before it - a helium plant kept a PWR's 937 000 m2
        of panel and its 6.9 MPa shell. */
-    B.push({kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>{ designForget(); archPreset(cD,i); }}))});
-    B.push({kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(cD,i)}))});
-    B.push({kind:"bulkrow",label:"SPREAD",items:[1,2,3,4].map(n=>({name:String(n),
-      tip:"Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
-        (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
-            :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
-      fn:()=>{ latLayBanks(cD,n); latRevolve(cD); }}))});
+    B.head=[{kind:"menu",label:"PRESETS",
+      tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself.",
+      blocks:[
+      {kind:"bulkrow",label:"REACTOR",items:ARCHPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>{ designForget(); archPreset(cD,i); }}))},
+      {kind:"bulkrow",label:"LATTICE",items:LATPRE.map((pr,i)=>({name:pr[0],tip:pr[2],fn:()=>latPreset(cD,i)}))},
+      {kind:"bulkrow",label:"SPREAD",items:[1,2,3,4].map(n=>({name:String(n),
+        tip:"Clear every cluster and lay "+n+" bank"+(n>1?"s":"")+" again, spread by area over the core the way the stock lattice does - so each bank covers about the same share of the fuel."+
+          (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
+              :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
+        fn:()=>{ latLayBanks(cD,n); latRevolve(cD); }}))}]}];
+    /* ══ THE PANEL STATES ITS OWN SHAPE ══
+       Two drawings stacked, each two columns wide with its own pens and its own
+       knobs beside it, and the MEASURED list standing down the right of both.
+       A knob belongs to the surface it moves: what the lattice is made of goes
+       beside the plan, what the core's height and wrapping are goes beside the
+       section. */
+    const planK=[], secK=[], meas=[];
+    B.push({kind:"box",dir:"row",blocks:[
+      {kind:"box",dir:"col",w:3,blocks:[
+        {kind:"box",dir:"row",blocks:[
+          {kind:"box",dir:"col",w:2,blocks:[
+            {kind:"lattools",pen:"plan",title:"RADIAL PLAN",
+             tools:LATPEN_CORE.concat(LATPEN_RODS),
+             tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."},
+            {kind:"latplan",core:id},
+            {kind:"latread",pen:"plan",core:id}]},
+          {kind:"box",dir:"col",w:1,blocks:planK}]},
+        {kind:"box",dir:"row",blocks:[
+          {kind:"box",dir:"col",w:2,blocks:[
+            {kind:"lattools",pen:"sec",title:"AXIAL SECTION",
+             tools:LATPEN_SEC,
+             tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."},
+            {kind:"latsection",core:id},
+            {kind:"latread",pen:"sec",core:id}]},
+          {kind:"box",dir:"col",w:1,blocks:secK}]}]},
+      {kind:"box",dir:"col",w:1,blocks:meas}]});
+
+    T=planK;
     opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.",bagAcc(cD,"cool",()=>cD.cool),COOLANT);
     /* One FUEL row per loading zone that has fuel in it. The setter must
        latMeasure() itself: an optlist is not a lattice edit, so nothing else
@@ -289,30 +343,26 @@ function paramsFor(p){
         {get:()=>rodD(cD)*1000, set:v=>{ cD.rodD=v/1000; latRevolve(cD); },
          raw:()=>cD.rodD===undefined?undefined:cD.rodD*1000, clr:()=>{ delete cD.rodD; latRevolve(cD); }},
         "mm",1,()=>ROD_D0*1000);
+    opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.",bagAcc(cD,"mod",()=>cD.mod),MODER);
+    opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
+
+    T=secK;
+    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL);
     // a feature of the VESSEL, which is what its own tooltip already said -
     // it never belonged on the pressurizer's panel
     sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.",bagAcc(cD,"chim",()=>cD.chim),0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
-    // a knob stands beside the picture it changes
-    brk();
-    opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.",bagAcc(cD,"mod",()=>cD.mod),MODER);
-    opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
-    B.push({kind:"lattools",pen:"plan",title:"RADIAL PLAN",
-      tools:LATPEN_CORE.concat(LATPEN_RODS),
-      tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."});
-    B.push({kind:"latplan",core:id});
-    brk();
-    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL);
-    B.push({kind:"lattools",pen:"sec",title:"AXIAL SECTION",
-      tools:LATPEN_SEC,
-      tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."});
-    B.push({kind:"latsection",core:id});
-    brk();
-    B.push({kind:"rule",title:"MEASURED",
-      tip:"Every number on this list is an OUTPUT of the drawing above. Not one of them is a value you can set - if you want one of them to move, move the drawing."});
-    /* ONE list, one mapper. LATREAD and LATREAD_RODS carry the same four
-       columns, so a row can move between them without changing shape. */
-    B.push({kind:"readlist",rows:()=>LATREAD.concat(LATREAD_RODS)
+
+    T=meas;
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD
       .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
+    T=B;
+  }
+  /* THE DRIVES ARE A MACHINE YOU BUY, so what you buy for them stands on their
+     own panel and not on the reactor's: the scram system, the drive motor, the
+     follower and the automatic controller, over the rod rows of the same
+     MEASURED list. The core they are bolted to is the host (coreOf()). */
+  else if(p.role==="rods"){ const cD=coreD(coreOf(id));
+    if(cD){
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.",bagAcc(cD,"scram",()=>cD.scram),SCRAM);
     num("ROD DRIVE SPEED","How fast the drives walk the bank under normal control, as a percentage of full travel every second - the reference drive strokes end to end in 83 s. A fast core answers a rod before you have finished moving it and wants a motor to match; a graphite pile does not. It does NOT touch the scram, which drops on the system above. A motor that strokes twice as fast is twice the machine, and the mass hint is what that costs on every bank you have.",
         {get:()=>rodSpdOf(cD)*100, set:v=>{ cD.rodSpd=v/100; dTouch(); },
@@ -323,20 +373,18 @@ function paramsFor(p){
     /* THE BAND THE CONTROLLER WORKS IN, as two handles rather than two
        constants. AUTOSYS.rod's own tooltip has always promised "the travel
        band set on the rod-drive panel" and there was no such control - the
-       numbers were real, live and invisible. Hidden with the controller
-       itself: with nothing automatic fitted there is no band to set. */
+       numbers were real, live and invisible. */
     B.push({kind:"slider",title:"AUTO ROD OUT LIMIT",key:"arLo",min:0,max:1,step:.01,
-      when:()=>D.autorod, fmt:v=>(v*100).toFixed(0)+" %",
+      fmt:v=>(v*100).toFixed(0)+" %",
       tip:"The furthest OUT the temperature controller may walk the bank on its own. Pull it out and the controller has more authority over coolant temperature and you have less shutdown margin, because the position your margin was measured from is the position it is allowed to leave. Your own demand is never bound by it."});
     B.push({kind:"slider",title:"AUTO ROD IN LIMIT",key:"arHi",min:0,max:1,step:.01,
-      when:()=>D.autorod, fmt:v=>(v*100).toFixed(0)+" %",
+      fmt:v=>(v*100).toFixed(0)+" %",
       tip:"The furthest IN the controller may drive the bank on its own. Deeper insertion buys it more authority and costs thermal margin, because a deep bank peaks the power. Set it at or below the out limit and the band closes to nothing, which parks the controller where it stands."});
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD_RODS
+      .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
     B.push({kind:"sdmnote"});
+    }
   }
-  /* No blocks of its own: every one of them is on the reactor panel above,
-     and this marks the drives as the second member of that gang so clicking
-     the drives on the plant brings the same panel up. */
-  else if(p.role==="rods"){ B.gang="reactor"; B.gangPlain=true; }
   else if(p.role==="sg"){
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
         bagAcc(D.sgType,id,()=>sgTypeOf(id)),SGT);
@@ -351,7 +399,7 @@ function paramsFor(p){
         {get:()=>sgDesPOf(id),set:v=>{ D.sgDesP[id]=v; },
          raw:()=>D.sgDesP[id], clr:()=>{ delete D.sgDesP[id]; }},
         "MPa",2,()=>sgDesPSuggest(),()=>0);
-    B.push({kind:"readlist",rows:()=>{ const r=sgRowOf(id); return [
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const r=sgRowOf(id); return [
       ["SHELL BURSTS AT",sgBurstP(id).toFixed(2)+" MPa",null,"Where the shell itself lets go, off the design pressure above. Nothing stops it getting there except a relief valve you placed on its steam nozzle."],
       ["SECONDARY WATER",r.water.toFixed(0)+" t",null,"What is in THIS shell at 100 % level. It is what goes on removing heat after the feedwater stops, and it is the whole of the difference between the two types."],
       ["SHELL STEEL",sgShellT(id).toFixed(1)+" t",null,"The pressure shell itself, off its own water charge as a vessel at the wall its design pressure needs. Raise the pressure above and this goes up with it."],
@@ -363,19 +411,19 @@ function paramsFor(p){
        set by the coolant family and the generator type, off sgInertiaK(),
        not by this). Stock plant, scram, 600 s: on runs the loop a few
        degrees cooler than off, and P.graceK does not move for it. */
-    note("Emergency feedwater is a TANK, not a fitting on this pump: add one, set it to the secondary side and give it the LOW SG LEVEL rule. Its arm switch lives on the tank.");
-    note("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
+    help("Emergency feedwater is a TANK, not a fitting on this pump: add one, set it to the secondary side and give it the LOW SG LEVEL rule. Its arm switch lives on the tank.");
+    help("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
   }
   else if(p.role==="ihx"){
     num("TRANSFER COEFFICIENT","How fast heat crosses this exchanger's tubes, in kilowatts per kelvin of temperature difference. A big one gives back some of the shell temperature the second stage costs you, and it is a bigger flywheel after a trip. It is also the heaviest single thing you can buy per tonne of benefit. AUTO matches it to the generators in front of it.",
         {get:()=>ihxUAOf(id),set:v=>{ D.ihxUA[id]=v; },
          raw:()=>D.ihxUA[id], clr:()=>{ delete D.ihxUA[id]; }},
         "kW/K",0,()=>ihxUASuggest(),v=>v*IHX_T_PER_UA);
-    B.push({kind:"readlist",rows:()=>{ const served=ihxSgs(id); return [
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const served=ihxSgs(id); return [
       ["FEEDS",served.length?nameList(served):"nothing",null,"Which generators this exchanger heats. It is whatever is on the loop you spliced it into - splice it in with a hot leg and a cold leg, exactly like a generator."],
       ["EXCHANGER MASS",(ihxUAOf(id)*IHX_T_PER_UA).toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
-    note("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats the generators on its loop, so a tube rupture in one of those generators leaks THIS loop's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
-    note("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
+    help("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats the generators on its loop, so a tube rupture in one of those generators leaks THIS loop's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
+    help("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
   }
   else if(roleHead(p.role)){
     num("DEVELOPED HEAD","The pressure rise this pump makes at its rated flow, in megapascals. It is what pushes water from the SUCTION face to the DISCHARGE face and nothing else decides which way it goes - so a pump has to beat whatever pressure stands on the far side before a drop moves. AUTO asks the drawing what that is.",
@@ -394,22 +442,22 @@ function paramsFor(p){
        one pump role: a coolant pump is a pump the loop walk reaches from a
        generator, a feed pump is one that reaches a generator's SHELL, and a
        pump piped to neither is a pump somebody placed and has not wired up. */
-    note(secGensOf(id).length
-      ?"Piped to a generator's shell, so this is a FEEDWATER pump: it holds that generator's level through its own regulating valve, and the level controller's switch is the FEED CTRL bypass."
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[ secGensOf(id).length
+      ?["DUTY","FEEDWATER",null,"Piped to a generator's shell, so this is a FEEDWATER pump: it holds that generator's level through its own regulating valve, and the level controller's switch is the FEED CTRL bypass."]
       :primaryPump(id)
-        ?"In a coolant loop, so this is a COOLANT pump. Flow is the single biggest input to thermal margin, and the first thing a blackout takes off you."
-        :"Piped to nothing that reaches a core or a generator. It develops its own head and pools capacity with nobody - draw a run from it, or right-click the plant to remove it.");
+        ?["DUTY","COOLANT",null,"In a coolant loop, so this is a COOLANT pump. Flow is the single biggest input to thermal margin, and the first thing a blackout takes off you."]
+        :["DUTY","PIPED TO NOTHING",C.amber,"Piped to nothing that reaches a core or a generator. It develops its own head and pools capacity with nobody - draw a run from it, or right-click the plant to remove it."]]});
   }
   else if(p.role==="turb"){
     num("STEAM SWALLOW","The mass of steam this machine takes per second, wide open. It is what the turbine IS - efficiency follows from it and is not a second thing to buy. Every turbine is sized on its own, so a big machine and a small one is a legal fleet. AUTO matches it to the steam this plant will actually raise.",
         {get:()=>turbKgs(id),set:v=>{ D.turbKgs[id]=v; },
          raw:()=>D.turbKgs[id], clr:()=>{ delete D.turbKgs[id]; }},
         "kg/s",0,()=>turbKgsSuggest(),v=>v*TURB_T_PER_KGS);
-    B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
       ["EFFICIENCY",(COOLANT[priD().cool].eff*turbEffOf(id)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. It is DERIVED from the swallow above, by the law that isentropic efficiency rises slowly with machine size - a set ten times bigger is a few points better, not twice as good."],
       ["RATED OUTPUT",(d.rated*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
       ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room, as a share of the steam this plant raises at full power. A matched machine reads 100 %. Overpower is not free reach: it is turbine you paid mass for."]]; }});
-    note("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
+    help("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
   }
   else if(p.role==="cond"){
     num("CONDENSING DUTY","How fast heat crosses this condenser's tubes, in kilowatts per kelvin. It is what the machine IS: it sets how much steam you can condense at full draw, and it sizes the circulating water flow with it. Overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. AUTO matches it to this plant's rated rejection.",
@@ -420,7 +468,7 @@ function paramsFor(p){
         {get:()=>condDump(id),set:v=>{ D.condDump[id]=v; },
          raw:()=>D.condDump[id], clr:()=>{ delete D.condDump[id]; }},
         "kg/s",0,()=>condDumpSuggest(),()=>0);
-    B.push({kind:"readlist",rows:()=>{ const d=derived(); return [
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
       ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of full-load duty",null,"Every condenser on the plant added up, against the heat this plant actually rejects at full power. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
       ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, on the same basis as the row above, so the mismatch is visible from either component."],
       ["TERMINAL DIFFERENCE",COND_DT0+" K",null,"How far this machine sits above the sink it rejects into, at rated duty. Duty DIVIDES it: a half-size unit sits twice as far above the radiator for the same heat."],
@@ -428,11 +476,10 @@ function paramsFor(p){
       ["VACUUM FLOOR",COND_P0+" MPa",null,"The best vacuum this plant can ever pull, set by air leaking in and nothing else. An oversized condenser runs down onto this and stops paying."],
       ["TURBINE TRIPS AT",TURB_TRIP_P+" MPa",null,"The exhaust pressure the last-stage blading will not take. The stop valve shuts, and it does not reset."],
       ["VACUUM LOST AT",COND_ATM+" MPa",null,"Past atmospheric the condenser relieves and the air is in for good. This is the second failure, and it is the end of the heat sink."]]; }});
-    B.push({kind:"note",dyn:()=>{ const d=derived();
-      return {text:d.condShort
+    B.push({kind:"readlist",rows:()=>{ const short=derived().condShort; return [
+      ["MATCH",short?"UNDERSIZED":"MATCHED",short?C.amber:null, short
         ?"This condenser is far smaller than the turbine can draw. It runs hotter for the same heat, so the exhaust pressure climbs and the output falls with it - a unit at a third of duty gives back roughly a tenth of the plant's electricity at rest, before any overload."
-        :"Condenser is matched to the turbine. A brief overload costs little or nothing, and a bigger unit runs down onto the vacuum limit and stops paying.",
-        color:d.condShort?"var(--c-amber)":null}; }});
+        :"Condenser is matched to the turbine. A brief overload costs little or nothing, and a bigger unit runs down onto the vacuum limit and stops paying."]]; }});
   }
   /* ══ THE ONLY WAY HEAT LEAVES THE SHIP ══
      Design-time figures only: the bench has no S, so PANEL TEMPERATURE and
@@ -450,7 +497,7 @@ function paramsFor(p){
         "kW/K",0,()=>radUASuggest(id));
     opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
         bagAcc(D.radCoat,id,()=>D.radCoat[id]??1),RADCOAT.map(r=>({name:r[0]})));
-    B.push({kind:"readlist",rows:()=>{ const d=derived(), live=radLive(id);
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(), live=radLive(id);
       const tr=radTRated(d.eff);
       return [
       ["CAN SHED",live?"YES":"NO",null,"A panel radiates only through the skin. One face of its own footprint against the hull is enough. Walled in on every side it sheds nothing at all: measured, the stock pair moved inboard trips the turbine in under two minutes and the plant makes no electricity."],
@@ -458,15 +505,28 @@ function paramsFor(p){
       ["EMISSIVITY",radCoatOf(id).emis.toFixed(2),null,"The share of a perfect black body's radiation this finish actually sheds, at the same temperature."],
       ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."],
       ["PANEL MASS",radMass(id).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
-    note("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone. So is an unplumbed one: a panel cools the water running through it, so where you pipe it is what it cools.");
+    help("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone. So is an unplumbed one: a panel cools the water running through it, so where you pipe it is what it cools.");
   }
   else if(p.role==="ctrl"){
     opt("INSTRUMENT CHANNELS","How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.","chan",CHAN);
     tog("REACTOR PROTECTION SYSTEM","The automatic trips. Fitted, it scrams the core on high flux, low DNBR, high or low pressure, high fuel temperature, low flow, core void or low subcooling. Leave it off and none of that happens: the reactor will run itself to destruction and wait for you to notice.","rps",55);
     B.push({kind:"slider",title:"RPS TRIP MARGIN",key:"rpsm",min:0,max:1,step:.05,
-      fmt:v=>(v*100).toFixed(0)+" % permissive",when:()=>D.rps,
+      fmt:v=>(v*100).toFixed(0)+" % permissive",
       tip:"How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error."});
-    note("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure in RESULTS.");
+    help("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure in RESULTS.");
+    /* HIGH FLUX is the one trip point that is a pure function of the margin -
+       every other row in RPS_CH (step.js) is priced off a commissioned P. */
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
+      const M=PLANT_LM||layoutMetrics();
+      return [
+      ["INSTRUMENT TRUST",((1-CHAN[D.chan].noise)*100).toFixed(0)+" %",null,
+       "How much you can believe your own gauges. Single-channel readings visibly jitter and a failed sensor is undetectable."],
+      ["PROTECTION",D.rps?"FITTED":"NONE",D.rps?null:C.amber,
+       "Whether anything scrams this core without you. With none, every trip is yours to call by hand."],
+      ["HIGH FLUX TRIP",D.rps?((1.10+0.22*D.rpsm)*100).toFixed(0)+" %":"n/a",null,
+       "The neutron flux the automatic protection scrams at, as a share of rated power. It is the trip margin above, read out."],
+      ["CREW DOSE RATE",M.dose.toFixed(2)+" x",M.dose>1?C.amber:null,
+       "Radiation reaching this room during an accident, solved along the straight line from the reactor. Paint standing on that line is what lowers it."]]; }});
   }
   /* ══ ONE PANEL, EVERY TANK ══
      There is no menu of kinds anywhere in this game, and this is why: an
@@ -493,7 +553,7 @@ function paramsFor(p){
        legal, silent lie. tankSide() reads it off the runs instead
        (layout.js), so there is one fact and it comes from the pipe you drew.
        This row is a READOUT now, and it says "not connected" honestly. */
-    B.push({kind:"readlist",rows:()=>{ const ci=tankCircuit(id);
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const ci=tankCircuit(id);
       return [["PLUMBED TO", ci===null ? "NOTHING" : circName(ci), ci===null?C.amber:null,
         ci===null ? "Nothing is piped to this tank, so it is on no circuit at all - it has no edge, it can deliver nothing, and it is counted by nothing. Draw a run from it."
         : tankPrimary(id) ? "This tank has a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure."
@@ -515,7 +575,9 @@ function paramsFor(p){
       tip:"Make this vessel hold the pressure of whatever circuit it is piped to. Its gas charge stops being consulted - that is what CONTROLLED means - and its line becomes the surge line, ordinary pipe carrying the loop both ways. One per circuit: a second one on the same circuit is demoted and warned about."});
     sld("SETPOINT","The pressure this vessel holds its circuit at. Higher raises the boiling point, so it buys thermal margin and resists voiding - and every machine on the circuit needs the wall to take it, which is steel.",
       {get:()=>t().hold?(t().hold.p||holdSetP(tankCircuit(id))):0,
-       set:v=>{ if(t().hold) t().hold.p=v; }},
+       set:v=>{ if(t().hold) t().hold.p=v; },
+       raw:()=>{ const h=t().hold; return h&&h.p!=null ? h.p : undefined; },
+       clr:()=>{ if(t().hold) t().hold.p=null; }},
       0.2,22,v=>v.toFixed(1)+" MPa",0.1);
     sld("FILL AT COMMISSIONING","How full it starts. A source ships full; a tank meant to catch something ships empty, and its gas charge is set at whatever level you leave here.",
       acc("level"),0,100,v=>v.toFixed(0)+" %",5);
@@ -551,10 +613,15 @@ function paramsFor(p){
   }
   else if(p.role==="bkp"){
     opt("BACKUP POWER","What keeps the coolant pumps turning when main power is lost. Test it with the Station Blackout fault in the control room.","bkp",BKP);
-    note("With no backup, a blackout leaves you nothing but natural circulation - which is set by how high you put the steam generators and how tall you made the core.");
+    help("With no backup, a blackout leaves you nothing but natural circulation - which is set by how high you put the steam generators and how tall you made the core.");
+    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
+      ["PUMP POWER HELD",(BKP[D.bkp].bk*100).toFixed(0)+" %",D.bkp?null:C.amber,
+       "What share of rated pump power this set carries through a blackout. Nothing here means the pumps stop dead and only natural circulation is left."],
+      ["MASS",BKP[D.bkp].mass.toFixed(0)+" t",null,
+       "What the set weighs on the budget."]]});
   }
   else {
-    note(p.tip);
+    help(p.tip);
     B.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS"});
     B.plain = p.access;
   }
@@ -594,7 +661,7 @@ function paramsForRun(key){
        raw:()=>D.wall[r.key], clr:()=>{ delete D.wall[r.key]; dTouch(); }},
       "mm",1,()=>wallSuggestMm(runBoreMm(r), runDesignP(r), PRIMARY_K[r.k]?COOLANT[priD().cool]:null),
       v=>massAt(runBoreMm(r),v));
-  B.push({kind:"readlist",rows:()=>{
+  B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
     const c=pipeMap().byKey[r.key], a=c&&partOf(c.a), b=c&&partOf(c.b);
     const rate=runRating(r), held=runDesignP(r);
     return [
@@ -637,6 +704,11 @@ function paramsForFit(fid){
     massFn:v=>FIT_MASS*(v/FIT_BORE0)});
   const sld=(title,tip,key,min,max,fmt,step)=>B.push({kind:"slider",title,tip,key,min,max,fmt,step});
   const rdo=(title,tip,val)=>B.push({kind:"readout",title,tip,val});
+  B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
+    ["FLOW AREA",(Math.PI/4*Math.pow(j.bore/1000,2)).toFixed(4)+" m2",null,
+     "The hole the bore above makes. It is what the solve conducts through - a valve wide open is this area, and shut it is none of it."],
+    ["MASS",fitMassOf(fid).toFixed(1)+" t",null,
+     "What this fitting weighs, priced off its bore against the default valve."]]});
   if(j.mode!=="relief") return B;
   /* MEGAPASCALS, not a multiple. They were fractions of reliefRefP(), so the
      number on the panel was not the number on the valve and moving the
@@ -651,12 +723,14 @@ function paramsForFit(fid){
     {get:()=>reliefSet(fid).lift,
      // the deadband is dragged down with the lift point, or a valve dialled
      // low would end up reseating above its own lift and chatter every tick
-     set:v=>{ j.lift=v; if(reliefSet(fid).reseat > v-stp) j.reseat=v-stp; }},
+     set:v=>{ j.lift=v; if(reliefSet(fid).reseat > v-stp) j.reseat=v-stp; },
+     raw:()=>j.lift==null?undefined:j.lift, clr:()=>{ j.lift=null; }},
     lo,hi,v=>dp(v)+" MPa",stp);
   sld("RESEAT PRESSURE",
     "The pressure it shuts again at. The gap up to the lift point is the deadband, and it is what stops the valve chattering on its own setpoint - it cannot be dragged above the lift point, because a valve that reseats above where it lifts has no shut state at all.",
     {get:()=>reliefSet(fid).reseat,
-     set:v=>{ j.reseat=Math.min(v, reliefSet(fid).lift-stp); }},
+     set:v=>{ j.reseat=Math.min(v, reliefSet(fid).lift-stp); },
+     raw:()=>j.reseat==null?undefined:j.reseat, clr:()=>{ j.reseat=null; }},
     lo,hi,v=>dp(v)+" MPa",stp);
   rdo("DEADBAND","How far pressure has to fall, once this valve has lifted, before it shuts again. A wide band lifts once and clears the transient; a narrow one cycles.",
     ()=>{ const r=reliefSet(fid); return dp(r.lift-r.reseat)+" MPa"; });
@@ -782,7 +856,7 @@ function paramsForMat(key){
     suggest:()=>matThickSuggest(x,y),
     massFn:v=>v/1000*MPC*ROOM_DEPTH*matRow(matCell(x,y).m).rho/1000});
   B.push({kind:"colbreak"});
-  B.push({kind:"readlist",rows:()=>{
+  B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
     const g=matSealAt(x,y);
     const rate=matRating(x,y), burst=matBurstP(x,y);
     const rows=[
