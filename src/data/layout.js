@@ -314,21 +314,55 @@ const boundP = (pid, node) => { const p = partOf(pid); const R = p && ROLE[p.rol
   if(R.sgtr && secondaryNode(node)) return sgDesignP(pid);
   if(R.thermal === "sink") return COND_P0;
   return null; };
-/* ══ AND NEVER MORE DIFFERENTIAL THAN ITS CIRCUIT CAN HOLD ══
-   PUMP_H0 is a friction figure and it was flat, so a sodium or salt loop whose
-   pressurizer holds 0.20 MPa was suggested a machine that develops three times
-   the loop's whole absolute pressure - and its suction went below vacuum:
-   MSR's read -0.0130 MPa at every sample, which is not a pressure water or
-   salt has. A pump cannot develop more differential than the circuit it sits
-   in can stand at its suction, so the suggestion stops there.
-   ONLY WHERE THE LEVEL IS PINNED. A circuit with no hold on it floats to sit
-   its own lowest node at the pressure the ship holds (netReadP, pipenet.js),
-   so it accommodates whatever its pump develops and there is nothing to cap -
-   which is why the cooling loop's pump is untouched. */
+/* ══ AND THE SUCTION IS THE FIELD'S TO JUDGE ══
+   The suggestion used to be capped at the circuit's hold setpoint, because a
+   flat PUMP_H0 on a 0.20 MPa sodium loop put the suction below vacuum. The
+   head is the loop's own loss now, so at rated flow the drop round the loop
+   IS the head, and where the suction then sits depends on where the free
+   surface is drawn - at the pump, as a real sodium plant puts it, or a whole
+   loop away. A suction that reaches its vapour pressure cavitates (CAV_DERATE)
+   and the pump loses head until it does not, which is the honest limit and
+   is measured rather than typed. */
+/* ══ THE SYSTEM CURVE: WHAT THIS PUMP'S OWN LOOP COSTS AT RATED FLOW ══
+   Every run of the loop the pump stands in, at the loop's share of the flow
+   the core was drawn for, on the same friction law the solve prices it with
+   (fricOf, runK0) - plus what the machines in the loop state for their
+   internals and the casing's own share. A flat PUMP_H0 was one loop of one
+   plant: DUAL carried 45 % of rated and BN-600 60 % because a sodium loop at
+   354 mm does not cost what a water loop at 938 mm does. A pump on no loop -
+   a feed pump, a circulating water pump - keeps the reference friction figure
+   under its standing term. */
+let loopHCache = {}, loopHPass = -1;
+function loopHeadAt(id){
+  const pn = layPass();
+  if(pn && loopHPass !== pn){ loopHCache = {}; loopHPass = pn; }
+  if(pn && loopHCache[id] !== undefined) return loopHCache[id];
+  const h = loopHeadOf(id);
+  if(pn) loopHCache[id] = h;
+  return h;
+}
+const loopHeadOf = id => {
+  const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return null;
+  const a = COOLANT[D.cool], n = Math.max(1, L.n);
+  const w = RATED_KW()/(a.cp*coreDT0()*n), rho = a.dens*RHO_K;
+  const inLoop = pid => pid === "core" || L.partLoop[pid] === li;
+  const vAt = Dm => w/(rho*Math.PI/4*Dm*Dm);
+  let dp = 0;
+  for(const r of pipeNetwork()){ if(!inLoop(r.a) || !inLoop(r.b)) continue;
+    const mm = runBoreMm(r), Dm = mm/1000, v = vAt(Dm);
+    const K = fricOf(mm/BORE_REF, w, a.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
+    dp += K*rho*v*v/2; }
+  // a machine's internal path is priced at BORE_REF over NET_COMP_LEN (compC), so it is here
+  { const v = vAt(BORE_REF/1000);
+    for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
+      const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
+      for(const IN of R.internal) if(IN.K > 0 && !secondaryNode(pid+IN.a)) dp += IN.K*rho*v*v/2; } }
+  return dp/1e6 + CASING_F*PUMP_H0;
+};
 const pumpHeadSuggest = id => {
   if(id === undefined) return PUMP_H0;
   const b = pumpBounds(id);
-  const h0 = b.hold === null ? PUMP_H0 : Math.min(PUMP_H0, b.hold);
+  const h0 = loopHeadAt(id) ?? PUMP_H0;
   return h0 + (b.hi === null ? 0 : (b.hi - b.lo)*PUMP_MARGIN);
 };
 /* WHAT BOUNDARIES THIS PUMP'S OWN CIRCUIT CARRIES - the ONE walk, because the
@@ -1387,12 +1421,23 @@ function sgDesignP(id){
   let p = 0; for(const q of ids) p += sgDesPOf(q);
   return p/ids.length;
 }
-const sgUASuggest = () => { const n=Math.max(1,sgCount());
-  /* THE SAME DOOR THE TICK READS. This carried its own copy of the old
-     expression with D.pdes left out of it, so the bench and the tick had
-     already drifted apart about the one number both fit against. */
-  const dT0=Math.max(5, COOLANT[D.cool].Tref - tsatSec(sgDesignP()));
-  return RATED_KW()/(n*dT0); };
+/* THE SUGGESTION IS THE INVERSE OF THE TICK'S OWN LAW (sgQAt, step.js): the
+   tubes must drop the loop's rated rise out of the approach the hot leg has
+   over the shell, so the effectiveness is rise/approach and the UA is that
+   NTU at the loop's own w*cp. Capped: a plant whose cold leg would sit below
+   its own shell cannot be given tubes that do it, and says so by resting off
+   its rating instead of by a suggestion of infinity. */
+const SG_EPS_MAX = 0.98;
+const sgUASuggest = () => { const n=Math.max(1,sgCount()), a=COOLANT[D.cool];
+  const dT0=coreDT0(), tsatS=tsatSec(sgDesignP());
+  /* A BOILING PRIMARY GIVES ITS HEAT UP AT ONE TEMPERATURE - its own
+     saturation at the setpoint - so the tubes are a plain conductance
+     against that (sgQAt's own limit), and the rise is quality, not kelvin. */
+  const p0=holdSetP(nodeGraph().coreCirc), tsatP=a.tsat*Math.pow(p0/a.P0, coolSatN(a));
+  if(a.Tref + dT0/2 >= tsatP) return RATED_KW()/(n*Math.max(5, tsatP - tsatS));
+  const appr=Math.max(1e-3, a.Tref + dT0/2 - tsatS);
+  const eps=Math.min(dT0/appr, SG_EPS_MAX);
+  return -Math.log(1-eps)*RATED_KW()/(n*dT0); };
 const ihxUASuggest = () => sgUASuggest()*2.5;
 const sgUAOf  = id => D.sgUA[id]  ?? sgUASuggest(id);
 const ihxUAOf = id => D.ihxUA[id] ?? ihxUASuggest(id);
