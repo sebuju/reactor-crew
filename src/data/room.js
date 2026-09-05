@@ -95,6 +95,12 @@ const ROOM_CGAME = 50;
    figure is +2900. */
 const ROOM_CAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO*ROOM_CP;
 const ROOM_C = ROOM_CAIR*ROOM_CGAME;
+/* AND A BANG IS AT CONSTANT VOLUME, so it heats at cv, not cp: air's 0.718
+   against 1.0. The same cell's air, the other capacity - a deflagration in a
+   sealed bay has nowhere to do pressure-volume work. ROOM_CP stays the right
+   figure for everything that FLOWS (a plume, a vent, a fan). */
+const ROOM_CV = 0.718;
+const ROOM_CVAIR = ROOM_CAIR*ROOM_CV/ROOM_CP;
 // kW/K, one cell of hot surface - m^2 of machine surface one cell of
 // footprint is worth, pure geometry rather than a lookup
 const ROOM_HK = ROOM_H*MPC*MPC/1000;
@@ -806,26 +812,27 @@ function roomH2Step(s, dt, G){
      fall when anything escaped. The BLAST below rides on top of it. */
   const pGauge = roomPGauge(s);
   s.roomBurnOn = 0;
-  /* it leaves with what leaves.
-     Hydrogen is IN the primary, so the share of it that escapes this tick is
-     the share of the primary that escapes this tick. One expression, at every
-     opening, because an opening is an opening. */
+  /* IT LEAVES THROUGH THE HOLE IT IS AT. Hydrogen is a species the transport
+     carries (s.h2By, advectStep), so what comes out of an opening this tick
+     is that node's own concentration on what that hole actually passed -
+     advectH2Out, by edge key - and a hole at the top of the loop vents what
+     has collected there. The field has already lost it; nothing here debits
+     s.h2. */
   if(s.h2 > 0){
-    const put = (cells, rate) => {
-      const f = Math.max(0, rate)/100*dt;
-      if(!(f > 0) || !cells.length) return;
-      const m = Math.min(s.h2, s.h2*f);
-      s.h2 -= m;
+    const H2OUT = advectH2Out;
+    const put = (cells, rate, key) => {
+      const m = H2OUT[key];
+      if(!(m > 0) || !cells.length) return;
       // the same plume the heat went into, off the same opening at the same rate
       roomSpread(H, cells, Math.max(0, rate)/100*loopKg(), m);
     };
     const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
     for(const k in s.spillBy)
-      if(openFluidH(s, k)) put(roomOpenCells(s, G, k), s.spillBy[k]);
+      if(openFluidH(s, k)) put(roomOpenCells(s, G, k), s.spillBy[k], k);
     for(const fid in s.reliefVent){
       if(tgt[fid] || out[fid] || !partFluidH(s, fid)) continue;
       const q = G.parts.find(w => w.p.id === fid);
-      put(q ? q.cells : [], s.reliefVent[fid]);
+      put(q ? q.cells : [], s.reliefVent[fid], "vent:"+fid);
     }
   }
   /* THE VENTILATION SET EXCHANGES GAS, NOT JUST HEAT. Its own comment already
@@ -877,9 +884,9 @@ function roomH2Step(s, dt, G){
         if(m > 0){
           H[i] -= m; O[i] -= m*O2_PER_H2;
           burned += m; q = m*H2_LHV;
-          // THE BURN HEATS AT ROOM_CAIR - see its own note at the top of this
-          // file. A deflagration is over before the steel knows about it.
-          T[i] = Math.min(ROOM_TMAX, T[i] + q/ROOM_CAIR);
+          // THE BURN HEATS THE CELL'S OWN AIR AT cv - see ROOM_CVAIR's note.
+          // A deflagration is over before the steel knows about it.
+          T[i] = Math.min(ROOM_TMAX, T[i] + q/ROOM_CVAIR);
         }
         const nf = Math.min(1, Fl[i] + adv);
         if(nf >= 1 && Fl[i] < 1){
@@ -913,7 +920,7 @@ function roomH2Step(s, dt, G){
        Only the EXCESS over the compartment's own pressure is a transient, so
        only the excess relaxes. */
     const gz = pGauge[i];
-    const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CAIR)/T_HULL : 0)
+    const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CVAIR)/T_HULL : 0)
               - Math.max(0, Pr[i]-gz)/ROOM_P_TAU*dt;
     Pr[i] = Math.max(gz, p > 0 ? p : 0);
     if(Pr[i] > pmax) pmax = Pr[i];
