@@ -546,15 +546,12 @@ const KIT = (function(){
     root.appendChild(t.el);
     if(opts.unit){ const u = el("span", "kit-numinput-unit"); u.textContent = opts.unit;
                    root.appendChild(u); }
+    // a latch, not a one-shot: latched the field IS the suggestion
     let sug = null;
-    if(opts.suggest){
+    if(opts.auto){
       sug = el("button", "kit-numinput-suggest", {type: "button"});
-      sug.textContent = "SUGGEST";
-      sug.addEventListener("click", () => {
-        const v = opts.suggest();
-        if(v == null || !isFinite(v)) return;
-        show(v); if(opts.onChange) opts.onChange(v);
-      });
+      sug.textContent = "AUTO";
+      sug.addEventListener("click", () => opts.auto.set(!opts.auto.get()));
       root.appendChild(sug);
     }
     let live = null;
@@ -569,7 +566,12 @@ const KIT = (function(){
     t.input.addEventListener("blur", () => commit(t.input.value, true));
     if(opts.tip) tip(root, opts.title || "", opts.tip);
     if(opts.val != null) show(opts.val);
-    return {el: root, set: show, get: () => live};
+    let wasAuto = null;
+    const setAuto = on => { if(wasAuto===on) return; wasAuto=on;
+      if(sug) sug.classList.toggle("on", on);
+      t.input.disabled = on;
+      root.classList.toggle("kit-numinput-auto", on); };
+    return {el: root, set: show, get: () => live, setAuto};
   }
 
   function optList(items, opts){
@@ -688,7 +690,26 @@ const KIT = (function(){
     return {el: root, set};
   }
 
+  /* A KEY WITH A PANEL HANGING OFF IT. One handler on the DOCUMENT, captured,
+     opens and shuts it: the plant is a canvas and swallows presses that land on
+     it, and a key with its own click handler would shut the menu on the press
+     and reopen it on the click. */
+  function menuKey(opts){
+    const wrap = el("div", "kit-menukey" + (opts.cls ? " " + opts.cls : ""));
+    const menu = el("div", "kit-menukey-menu kit-hide");
+    const key = button(opts.label, {sunk: true});
+    key.el.classList.add("kit-menukey-key");
+    if(opts.tip) tip(key.el, opts.label, opts.tip);
+    document.addEventListener("pointerdown", e => {
+      if(menu.contains(e.target)) return;
+      const open = key.el.contains(e.target) && menu.classList.contains("kit-hide");
+      show(menu, open); key.set({on: open});
+    }, true);
+    wrap.append(key.el, menu);
+    return {el: wrap, key, menu};
+  }
+
   return {el, tip, setText, setStyle, show, well, rule, reveal, chip, dot, seg, segSigned,
     segMark, band, lamp, badge, hatch, button, slider, textInput, numInput, optList, segSel, sliderRow,
-    readout, toggle};
+    readout, toggle, menuKey};
 })();

@@ -177,3 +177,15 @@
   border:1px solid var(--c-edge);background:transparent;color:var(--c-ink2);
   font:inherit;font-size:var(--t9);letter-spacing:.5px;padding:2px 6px;height:22px}
 .kit-numinput-suggest:hover{border-color:var(--c-cyan);color:var(--c-cyan)}
+.kit-numinput-suggest.on{border-color:var(--c-amber);color:var(--c-amber)}
+.kit-numinput-input:disabled{color:var(--c-ink2);border-style:dashed;cursor:not-allowed}
+
+/* a key with a panel hanging under it - see menuKey() in kit.js. The panel is
+   out of flow, so opening one never moves the key beside it. */
+.kit-menukey{position:relative}
+.kit-menukey-key{height:20px;padding:0 8px;letter-spacing:.6px;white-space:nowrap}
+.kit-menukey-menu{position:absolute;top:24px;left:0;z-index:3;min-width:132px;padding:6px;
+  background:var(--c-panel);border:1px solid var(--c-edge);
+  display:flex;flex-direction:column;gap:3px;max-height:70vh;overflow-y:auto}
+.kit-menukey-menu .kit-rule{margin:4px 0 2px}
+.kit-menukey-menu .kit-rule:first-child{margin-top:0}

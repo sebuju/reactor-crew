@@ -24,8 +24,10 @@ function urlApply(){
     if(!hit) console.warn("url: unknown "+k+"="+v+" - have "+rows.map(r=>r.keys[0]).join(", "));
     return hit||null;
   };
+  // no preset named is the STOCK SHIP: D ships blank, but a page opened with no link behind it wants a plant on the board
   const pr = pick("preset",urlPreRows());
-  if(pr){ plantPreset(pr.i); urlPreset(pr.i); sel=roleId("core"); uiDirty(); }
+  const pi = pr ? pr.i : 0;
+  plantPreset(pi); urlPreset(pi); sel=roleId("core"); uiDirty();
   // the tab goes through its own button, so commissioning and every screen
   // guard in shellInit() run exactly as they do under the hand
   const tb = pick("tab",urlTabRows());

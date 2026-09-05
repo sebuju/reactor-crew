@@ -18,8 +18,8 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 ::-webkit-scrollbar-thumb:hover{background:var(--c-rail)}
 ::-webkit-scrollbar-corner{background:var(--c-well)}
 
-#topbar{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
-  gap:16px;height:40px;padding:0 12px;background:var(--c-panel)}
+#topbar{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between; z-index: 1;
+  gap:16px;height:40px;padding:0 12px;background:var(--c-bar)}
 #brand{display:flex;align-items:center;gap:8px}
 #logo-mark{position:relative;box-sizing:border-box;width:12px;height:12px;border:1px solid var(--c-amber)}
 #logo-mark::after{content:"";position:absolute;inset:3px;background:var(--c-amber)}
@@ -34,10 +34,13 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 .tab.dis{color:var(--c-dis);cursor:default}
 .tab[data-screen="help"]{color:var(--c-amber)}
 
-#plant-id{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:nowrap}
+/* pre, not nowrap: both lines are padded with spaces (pad(), core/text.js) and
+   HTML collapses a run of them, so the field changed width as the clock counted
+   and the centred tabs slid along with it */
+#plant-id{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:pre; position:relative;}
 #plant-line{color:var(--c-cyan);font-size:var(--t8);letter-spacing:1px}
 #plant-line.idle{color:var(--c-amber)}
-#clock-row{display:flex;align-items:center;gap:4px}
+#clock-row{display:flex;align-items:center;gap:4px; position: absolute; bottom: -14px;}
 /* nothing is running, so there is nothing to read - the box stays, so the bar
    beside it does not move */
 #clock-row.blank{visibility:hidden}
@@ -110,7 +113,14 @@ body[data-screen="help"] #cv{display:none}
 .pw-fill{height:100%;width:0;background:var(--c-amber);transition:width 80ms linear}
 .pw-note{margin-top:8px;font-size:var(--t7);letter-spacing:.5px;color:var(--c-ink2)}
 
-#tip{position:fixed;z-index:1000;display:block;max-width:320px;padding:8px 10px;
+/* WIDTH IS THE CONTENT'S, NEVER THE ROOM LEFT BESIDE IT. The box is fixed with
+   only `left` set, so its shrink-to-fit width was measured against the distance
+   from the PREVIOUS box's left edge to the window: parked near the right edge it
+   came out narrow, the narrow measurement then placed it further left, and the
+   next frame measured it wider again - a box that crept open over several frames
+   and wrapped differently depending on what had been hovered before it.
+   max-content is the same width wherever it stands, and max-width still caps it. */
+#tip{position:fixed;z-index:1000;display:block;width:max-content;max-width:320px;padding:8px 10px;
   background:var(--c-panel);border:1px solid var(--c-edge2);color:var(--c-ink);
   font-family:var(--mono);font-size:var(--t8);line-height:1.4;pointer-events:none;
   box-shadow:0 4px 14px rgba(0,0,0,.5)}
