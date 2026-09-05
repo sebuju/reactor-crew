@@ -48,6 +48,39 @@ const CR_VIZ=[
  {k:"rho", title:"REACTIVITY BALANCE", tip:RHOVIZ_TIP,  draw:rhoViz},
  {k:"heat",title:"HEAT BALANCE",       tip:HEATVIZ_TIP, draw:heatViz},
 ];
+/* ══ WHICH VESSEL THE TWO BALANCES ARE READ OFF ══
+   ONE ROW FOR BOTH, because both are core-shaped and a plant where the
+   reactivity picture and the heat picture could be looking at different
+   reactors is worse than either being wrong. The topbar's own .tab is the
+   widget - this is the same gesture in the same language, so it is that class
+   and not a second one that looks like it.
+   The row is absent on a single-unit plant: PLANT is then the only reading
+   there is, and a tab strip with one tab on it is a label. */
+function crUnitsBuild(container){
+  const root=KIT.el("div","cr-units"); container.appendChild(root);
+  return {root,keys:null,sig:""};
+}
+function crUnitsSync(h){
+  const units=crUnits();
+  const sig=units.join("|")+"/"+units.map(id=>{ const p=partOf(id); return p?partName(p):id; }).join("|");
+  KIT.show(h.root, units.length>0);
+  if(h.sig!==sig){
+    h.sig=sig; h.root.innerHTML=""; h.keys=[];
+    if(units.length){
+      const rows=[{id:null,lab:"PLANT"}].concat(units.map(id=>{
+        const p=partOf(id); return {id,lab:p?partName(p):id}; }));
+      for(const r of rows){
+        const b=KIT.el("button","tab",{type:"button"}); b.textContent=r.lab;
+        KIT.tip(b,r.lab, r.id
+          ? "Read both balances off this reactor alone - its own reactivity terms, its own heat, and the generators standing on its loop, against its own rating."
+          : "Read the heat balance across the whole plant. Reactivity has no plant-wide meaning, so it stays on the first reactor.");
+        b.addEventListener("click",()=>{ CRUNIT.id=r.id; });
+        h.root.appendChild(b); h.keys.push({b,id:r.id});
+      }
+    }
+  }
+  if(h.keys) for(const k of h.keys) k.b.classList.toggle("on", CRUNIT.id===k.id);
+}
 function crVitalsBuild(container){
   const rows=[];
   for(let i=0;i<6;i++){
@@ -201,17 +234,42 @@ function crTrendSync(host){
    has its own hosted chart (crTrendSync) and an HTML log (crLogSync), but
    because scenario.js reuses these two by reference for its own overlays, so
    a scenario run's history reads exactly like a free-play run's. */
+/* WHICH VESSEL THE CHART IS LOOKING AT - the one writer of TREND.unit, which
+   trends.js reads through chKey(). The rings already exist per vessel; a
+   vessel-shaped channel with no way to pick the vessel is a picture nobody can
+   steer, exactly as a chart with no way to pick the channel was. Drawn only
+   where trendUnits() answers more than one, so a one-unit plant is unchanged
+   down to the pixel and PLANT stays the only reading there is. */
+const TREND_TAB_H=BTN_H+6;
+function trendTabs(x,y){
+  const units=trendUnits();
+  if(!units.length) return 0;
+  const rows=[{id:null,lab:"PLANT"}].concat(units.map(id=>{
+    const p=partOf(id); return {id,lab:p?partName(p):id}; }));
+  let tx=x;
+  for(const r of rows){
+    const kw=tw(r.lab,{size:6.5,sp:1,caps:1})+14;
+    button(tx,y,kw,BTN_H,r.lab,{sunk:1,on:TREND.unit===r.id,size:6.5,sp:1,
+      fn:()=>{ TREND.unit=r.id; }});
+    TIP(tx,y,kw,BTN_H,r.lab, r.id
+      ? "Read every vessel-shaped channel off this reactor's own view of the plant. A channel that is not vessel-shaped keeps the plant's figure."
+      : "Read every channel off the plant, which is what a single-unit station reads.");
+    tx+=kw+4;
+  }
+  return TREND_TAB_H;
+}
 function drawTrend(yy){
   const x=12,y=yy,w=736,h=176;
+  const tb=trendTabs(x,y+3);
   const ser=plot.map(k=>({lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i)}));
-  const box=chart(x,y,w,h,{
+  const box=chart(x,y+tb,w,h,{
     title:"TREND / CLICK ANY GAUGE TO PLOT IT",
     series:ser, n:hlen,
     empty:hlen<2?"COLLECTING DATA":"NO CHANNELS SELECTED",
     xlab:["-"+(hlen/10).toFixed(0)+"s","NOW"]});
-  chartLegend(box,y+145,ser);
-  TIP(x,y,w,20,"TREND CHART","Rolling three-minute history of any plotted channel.");
-  return y+h+12;
+  chartLegend(box,y+tb+145,ser);
+  TIP(x,y+tb,w,20,"TREND CHART","Rolling three-minute history of any plotted channel.");
+  return y+tb+h+12;
 }
 function drawLog(yy){
   const x=12,y=yy,w=736;
@@ -763,6 +821,7 @@ function crBuild(){
      plant's account of itself, so they belong in this panel rather than behind
      a click on the reactor. Same canvas arrangement a rail widget uses - the
      panel is opaque, so each draws into its own <canvas> (hostPaint()). */
+  const units=crUnitsBuild(vitals);
   const viz={};
   for(const b of CR_VIZ){
     const c=KIT.el("canvas","insp-viz insp-viz-"+b.k+" cr-viz");
@@ -792,7 +851,7 @@ function crBuild(){
 
   const mhost=marginHost(root);
   mount.appendChild(root);
-  return {root,head,vitalRows,viz,banner,rail,mhost,
+  return {root,head,vitalRows,units,viz,banner,rail,mhost,
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
@@ -844,6 +903,7 @@ function crPortsSync(body){
 function crSync(){
   if(!CR) return;
   if(CR.vitalRows) crVitalsSync(CR.vitalRows);
+  crUnitsSync(CR.units);
   for(const b of CR_VIZ) hostPaint(CR.viz[b.k],b.draw);
   if(CR.trend.box) crTrendSync(CR.trend);
   crLogSync(CR.logList);
