@@ -348,15 +348,30 @@ function actDo(k, a){ if(actDead(k, a)) return; actLog(k, a); ACT[k].apply(S, ..
    is a reader of the sim and never a participant in it, which is the only way
    the "all sim state lives on S" rule above can stay checkable: a recorder the
    tick had to call would be state the tick depends on. */
-/* MEASURED, not chosen. A keyframe is a real clone of S and costs 11.1 KB of
-   heap; 900 of them is 9.5 MB, and at one per 5 sim-seconds that is 75 minutes
-   of history before the thinning ever has to start. The trend archive beside it
-   is 2.1 KB per sim-second and an event is 121 bytes, so a run costs about
-   4.3 KB of sim-second with nobody touching it. Re-measure before moving these:
-   the count is the honest handle, because the size of S is not ours to choose. */
+/* THE CAP IS IN BYTES, MEASURED OFF EACH SNAPSHOT AS IT IS TAKEN. It was a
+   COUNT (900) priced when a clone of S was 11.1 KB; the room fields alone are
+   7 x 17.4 KB now and a keyframe is 173 KB, so the same count was 155 MB of
+   plant and a two-hour session at 48x sat on it. The size of S is not ours to
+   choose, so the budget is the handle and the count follows from it: 24 MB is
+   ~140 keyframes today, 11.5 sim-minutes before the thinning starts.
+   THE ARCHIVE GETS THE SAME MOVE, in its own budget: 3.2 KB per sim-second
+   grows without end otherwise, and every reader of it binary-searches trT for
+   a tick, so dropping every other sample costs resolution and nothing else.
+   324 B a sample measured, so 32 MB is 2.7 sim-hours before the first thinning
+   and the figure does not move with the speed the run was flown at. */
 const REC_MAX_ROOTS = 8;      // whole runs kept; the 9th evicts the oldest lineage
-const REC_MAX_KEYS  = 900;    // keyframes across the whole forest, ~9.5 MB of plant
+const REC_MAX_KEY_BYTES = 24*1048576;
+const REC_MAX_TR_BYTES  = 32*1048576;
 const KF_TICKS      = 250;    // 5 sim-seconds between keyframes, before thinning
+// what a snapshot weighs, walked the way snapVal() walks it; header estimates per V8 object
+function snapBytes(v){
+  if(v === null || typeof v !== "object") return typeof v === "string" ? 16 + 2*v.length : 8;
+  if(v instanceof Float64Array) return 32 + v.byteLength;
+  let n = 32;
+  if(Array.isArray(v)){ for(let i=0;i<v.length;i++) n += 8 + snapBytes(v[i]); return n; }
+  for(const k in v) n += 24 + snapBytes(v[k]);
+  return n;
+}
 /* ══ A KEYFRAME IS PRICED IN WALL TIME, SO ITS SPACING FOLLOWS THE RATE ══
    KF_TICKS is a SIM-time gap. At 1x that is one snapshot every five seconds of
    your life; at 3500 ticks a second it is fourteen a second, each a clone of
@@ -372,7 +387,7 @@ const KF_PER_SEC = 2, KF_MAX_STRETCH = 4;
 const kfSpan = t => KF_TICKS * t.thin *
   clamp(Math.round(TR.sps/KF_PER_SEC/KF_TICKS), 1, KF_MAX_STRETCH);
 
-const REC = { roots:[], takes:[], cur:0, mode:"live", keyCount:0 };
+const REC = { roots:[], takes:[], cur:0, mode:"live", keyCount:0, keyBytes:0, trBytes:0 };
 
 /* ══ THE DESIGN HEADER, FROZEN ══
    P is not on S and never will be - it is frozen for the life of a run by
@@ -463,7 +478,7 @@ function recNew(parent, head){
     t0:S.t, tick0:S.tick,
     base:snapS(S), baseLog:LOG.slice(),
     keys:[], evs:[],
-    tr:{}, trT:[], trN:0,
+    tr:{}, trT:[], trN:0, trThin:1,   // trThin: samples dropped per sample kept, 1 = full rate
     tickEnd:S.tick, nextKey:S.tick + KF_TICKS,
     kids:[], label:null, verdict:null,
     /* ASSISTED means "this run was not flown straight through". Any take with a
@@ -560,12 +575,19 @@ function recTick(){
   const t = recBoot();
   t.tickEnd = S.tick;
   if(S.tick >= t.nextKey){
-    t.keys.push({tick:S.tick, S:snapS(S), lg:LOG.slice(), ei:t.evs.length});
-    REC.keyCount++;
+    recKeyAdd(t, {tick:S.tick, S:snapS(S), lg:LOG.slice(), ei:t.evs.length});
     t.nextKey = S.tick + kfSpan(t);
-    if(REC.keyCount > REC_MAX_KEYS) recEvict();
+    if(REC.keyBytes > REC_MAX_KEY_BYTES) recEvict();
   }
 }
+// the one door onto t.keys, so the byte book cannot drift from the list
+function recKeyAdd(t, k){
+  k.bytes = k.bytes || snapBytes(k.S) + 32 + 8*k.lg.length;
+  t.keys.push(k); REC.keyCount++; REC.keyBytes += k.bytes;
+}
+function recKeysTake(keys){ let n=0; for(const k of keys) n += k.bytes; return n; }
+// a take built in the worker arrives with keys and no book: price them here
+function recKeysAdopt(t){ const ks=t.keys; t.keys=[]; for(const k of ks) recKeyAdd(t,k); }
 
 /* ══ EVICTION THINS, IT NEVER TRUNCATES ══
    THE INPUTS ARE THE RECORDING; THE KEYFRAMES ARE A CACHE AND MAY ALWAYS BE
@@ -578,13 +600,14 @@ function recTick(){
    `base` is never a candidate: without it a take has no state to start from at
    all. Neither is `evs`, ever, for the reason above. */
 function recEvict(){
-  while(REC.keyCount > REC_MAX_KEYS){
+  while(REC.keyBytes > REC_MAX_KEY_BYTES){
     let o = null;
     for(const t of REC.takes) if(t && t.keys.length > 1 && (!o || t.id < o.id)) o = t;
     if(!o) return;                       // nothing left with a key to spare
     o.thin *= 2;
     const keep = o.keys.filter((_, i) => i % 2 === 0);
     REC.keyCount -= o.keys.length - keep.length;
+    REC.keyBytes -= recKeysTake(o.keys) - recKeysTake(keep);
     o.keys = keep;
   }
 }
@@ -596,7 +619,8 @@ function recEvict(){
 function recDrop(id){
   const t = REC.takes[id]; if(!t) return;
   for(const k of t.kids) recDrop(k);
-  REC.keyCount -= t.keys.length;
+  REC.keyCount -= t.keys.length; REC.keyBytes -= recKeysTake(t.keys);
+  REC.trBytes -= trBytesOf(t);
   REC.takes[id] = null;
 }
 function recTrimRoots(){

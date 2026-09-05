@@ -231,6 +231,49 @@ function recSample(){
   if(!t.trT[c]) t.trT[c]=new Int32Array(TR_CHUNK);
   t.trT[c][o]=S.tick;
   t.trN=n+1;
+  REC.trBytes += TR_BYTES_PER();
+  if(REC.trBytes > REC_MAX_TR_BYTES) trEvict();
+}
+
+/* ══ THE ARCHIVE THINS, IT NEVER TRUNCATES ══
+   Same move the keyframes make (recEvict(), record.js) and for the same
+   reason: the far end of the history is the part a debrief wants, so what is
+   given up is RESOLUTION and not the run. Every reader lands through
+   trBefore(), a binary search on trT, and ticks still ascend after every other
+   sample is dropped - so a thinned take reads exactly as it did, coarser.
+
+   THE LIVE TAKE'S TAIL IS NEVER THINNED. The strip chart is the last HN
+   samples of it, so thinning those would make the picture under the player's
+   hand go coarse while they watch. Only the head before that window moves. */
+const TR_BYTES_PER = () => 8*TRKEYS().length + 4;
+const trBytesOf = t => (t.trN||0) * TR_BYTES_PER();
+const trCut = t => t.id===REC.cur ? Math.max(0,t.trN-HN) : t.trN;
+
+function trThin(take){
+  const cut=trCut(take); if(cut<2) return false;
+  const idx=[];
+  for(let i=0;i<cut;i+=2) idx.push(i);
+  for(let i=cut;i<take.trN;i++) idx.push(i);
+  const n=idx.length, nc=Math.max(1,Math.ceil(n/TR_CHUNK));
+  const move=(src,make)=>{ const dst=[]; for(let c=0;c<nc;c++) dst[c]=make();
+    for(let j=0;j<n;j++){ const i=idx[j];
+      dst[(j/TR_CHUNK)|0][j%TR_CHUNK]=src[(i/TR_CHUNK)|0][i%TR_CHUNK]; }
+    return dst; };
+  for(const k of TRKEYS()) if(take.tr[k]) take.tr[k]=move(take.tr[k],()=>new Float64Array(TR_CHUNK));
+  take.trT=move(take.trT,()=>new Int32Array(TR_CHUNK));
+  REC.trBytes -= (take.trN-n)*TR_BYTES_PER();
+  take.trN=n; take.trThin=(take.trThin||1)*2;
+  return true;
+}
+/* Oldest first, exactly as recEvict() picks - and a take with nothing left to
+   give is skipped rather than ending the walk, or one short live take at the
+   front of the forest would hold the whole budget open. */
+function trEvict(){
+  while(REC.trBytes > REC_MAX_TR_BYTES){
+    let o=null;
+    for(const t of REC.takes) if(t && trCut(t)>=2 && (!o || t.id<o.id)) o=t;
+    if(!o || !trThin(o)) return;        // nothing left with a sample to spare
+  }
 }
 const trAt  =(take,k,i)=>take.tr[k][(i/TR_CHUNK)|0][i%TR_CHUNK];
 const trTick=(take,i)  =>take.trT[(i/TR_CHUNK)|0][i%TR_CHUNK];
