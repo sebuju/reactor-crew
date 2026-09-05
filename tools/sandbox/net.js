@@ -102,7 +102,7 @@ return {
     return {name:"the stock ship, one loop",
       build(R){ M.buildStockPlumbing({loops:1}); return {}; },
       cols(){ return Object.assign(NETCOLS(),
-        {P:COL.P, inv:COL.inv, Tavg:COL.Tavg, mwe:COL.mwe, flowK:colNet.flowK}); }};
+        {P:COL.P, inv:COL.inv, Tavg:COL.Tavg, mwe:COL.mwe, flowK:colNet.flowK, nat:colNet.nat}); }};
   },
 
 /* ── 5. THREE LOOPS AND THEIR CROSS-TIES ── */
@@ -110,7 +110,7 @@ return {
     return {name:"the stock ship, three loops",
       build(R){ M.buildStockPlumbing({loops:3}); return {}; },
       cols(){ return Object.assign(NETCOLS(),
-        {P:COL.P, inv:COL.inv, Tavg:COL.Tavg, mwe:COL.mwe, flowK:colNet.flowK}); }};
+        {P:COL.P, inv:COL.inv, Tavg:COL.Tavg, mwe:COL.mwe, flowK:colNet.flowK, nat:colNet.nat}); }};
   },
 
 /* ══ THE NONSENSE LADDER ══ none of these has to behave well ══ */

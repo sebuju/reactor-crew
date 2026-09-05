@@ -172,6 +172,7 @@ const colNet = {
     for(const ed of n.edges){ const g = typeof ed.g==="function"?ed.g(s):ed.g; if(g>0) c++; }
     return c; }},
   flowK: {dp:4, f:s=>M.netFlowK(s, null, null, {noNat:true})},
+  nat:   {dp:4, f:s=>s.nat},
   /* the biggest flow anywhere, kg/s. On a rig whose whole topology is one
      ring that IS the ring's circulation, to a milligram a second - the floor
      netDiverge() answers in. */
