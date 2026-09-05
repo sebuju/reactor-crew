@@ -5,34 +5,37 @@
    inside one gets its own <canvas> - see hostPaint() in render/plant.js. */
 body[data-screen="operate"] #scr-operate,
 body[data-screen="design"] #scr-design{pointer-events:none}
-/* the plant view's keys - LAYERS and zoom. Placed off VIEW by zoomKeySync()
-   (render/plant.js) so they track the rails, but sized in px like every other
-   control. One absolutely-placed strip; the keys inside it lay out normally. */
-.plant-keys{position:absolute;pointer-events:auto;display:flex;align-items:flex-start;gap:4px}
-.plant-zoom,.plant-layers-key{height:20px;padding:0 8px;letter-spacing:.6px;white-space:nowrap}
-/* the menu hangs UNDER its own key and out of flow, so opening it never moves
-   the zoom key beside it */
-.plant-layers{position:relative}
-.plant-layers-menu{position:absolute;top:24px;left:0;min-width:132px;padding:6px;
-  background:var(--c-panel);border:1px solid var(--c-edge);
-  display:flex;flex-direction:column;gap:3px;max-height:70vh;overflow-y:auto}
-.plant-layers-menu .kit-rule{margin:4px 0 2px}
-.plant-layers-menu .kit-rule:first-child{margin-top:0}
-.plant-layers-menu .layer-switch{justify-content:flex-start;text-align:left}
+/* the plant view's keys - LAYERS and zoom. They stand in the head row both
+   screens carry, in normal flow, sized in px like every other control. */
+.plant-keys{display:flex;align-items:flex-start;gap:4px}
+.plant-zoom{height:20px;padding:0 8px;letter-spacing:.6px;white-space:nowrap}
+.plant-layers .layer-switch{justify-content:flex-start;text-align:left}
+
+/* ONE HEAD ROW PER PLANT SCREEN. The keys that address the VIEW (layers, zoom)
+   and the drawers that address the plant as a whole live here rather than at
+   the foot of a rail nobody scrolls to. Transparent and click-through except
+   on the controls themselves, so the plant under it keeps its presses. It
+   starts clear of the panel in the top-left corner - RESULTS on the bench, the
+   vitals panel in the control room - which is the topmost thing on that side. */
+.scr-head{grid-column:1;grid-row:1;pointer-events:none;display:flex;align-items:flex-start;
+  flex-wrap:wrap;gap:8px;padding:6px 8px;margin-left:308px}
+.scr-head>*{pointer-events:auto}
 
 .cr-root,.db-root{position:absolute;display:grid;
   grid-template-rows:auto 1fr;pointer-events:none}
 /* the top inset clears the transport strip, which trBuild() mounts on operate
    and scenario only - the design bench has no strip and so no band to clear */
-.cr-root{inset:30px 0 0 0;grid-template-columns:1fr 340px}
-.db-root{inset:0;grid-template-columns:1fr 340px}
+.cr-root{inset:30px 0 0 0;grid-template-columns:1fr auto}
+/* the bench rail has nothing left in it, and an empty 340px column is a third
+   of the plant view given to nothing */
+.db-root{inset:0;grid-template-columns:1fr auto}
+.db-rail:empty,.cr-rail:empty{display:none}
 
 /* ─────────────── control room ─────────────── */
-/* FLOATS OVER THE PLANT, the seat .cr-alarms already keeps in the other corner:
-   out of the grid entirely, so it holds no track open and the plant view is
-   measured as if it were not there. In a grid row it was as tall as the window
-   whatever it held, and drawOperate() then carved 300 px off the left of the
-   plant for a panel that may only be half that deep.
+/* FLOATS OVER THE PLANT: out of the grid entirely, so it holds no track open and
+   the plant view is measured as if it were not there. In a grid row it was as
+   tall as the window whatever it held, and drawOperate() then carved 300 px off
+   the left of the plant for a panel that may only be half that deep.
    Sized by its own content and capped by max-height: a scroll container
    stretched by a grid row collapses to nothing. Nothing inside may squash - a
    flex child that shrinks hands hostPaint() a box its picture was not laid out
@@ -89,8 +92,8 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-caut-head{display:flex;flex:0 0 auto;align-items:center;gap:8px;padding:5px 8px 4px;
   font-size:var(--t7);letter-spacing:1.2px;text-transform:uppercase;color:var(--c-ink2)}
 .cr-caut-title{flex:1 1 auto;min-width:0}
-/* HELD, NOT REMOVED: hidden by visibility so the count never moves when the
-   last answered caution goes - see crCautSync() */
+/* HELD, NOT REMOVED: hidden by visibility so the AUTO key beside it never moves
+   when the last answered caution goes - see crCautSync() */
 .cr-caut-clear,.cr-caut-auto{flex:0 0 auto;padding:0 5px;line-height:1.5;letter-spacing:1px}
 .cr-caut-clear.off{visibility:hidden}
 /* the rows are the RAIL'S rows - fieldRowsSync() builds them, so value, colour
@@ -123,24 +126,25 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-caut-body .insp-row:hover{outline:1px solid var(--c-edge2);outline-offset:-1px;
   box-shadow:inset 0 0 0 999px color-mix(in srgb,var(--c-bright) 8%,transparent)}
 
-/* BOTTOM-ANCHORED: the stack grows upward out of the corner, so a row lighting
-   up never pushes the rows already being read off their line. */
-.cr-alarms{position:absolute;left:6px;bottom:6px;pointer-events:auto;max-width:300px;
-  background:rgba(7,12,13,.92);border:1px solid var(--c-edge2);display:block}
-.cr-alarms-head{display:flex;justify-content:space-between;gap:12px;padding:5px 10px;
-  font-size:var(--t9);letter-spacing:1.2px;color:var(--c-amber)}
-.cr-alarms-body{max-height:44vh;overflow-y:auto}
-.cr-alarm-row{display:flex;align-items:center;gap:6px;padding:4px 10px;font-size:var(--t10);
-  font-weight:700;letter-spacing:.6px}
+/* THE BOARD, at the head of the master caution - see crCautBuild(). It never
+   shrinks and never scrolls on its own: a tile scrolled out of sight is a tile
+   nobody saw light. The copied readings under it are what give way. */
+.cr-caut-ann{flex:0 0 auto; padding: 4px 6px;
+   display: grid; grid-template-columns: 1fr 1fr 1fr; grid-auto-rows: 1fr; white-space: nowrap;
+}
+/* A DARK TILE IS STILL A TILE, so it reads as a caption: the name in ink2, no
+   background. Lit is what carries a colour. */
+.cr-alarm-row{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:var(--t10); justify-content: center;
+  font-weight:700;letter-spacing:.6px;color:var(--c-ink2)}
 .cr-alarm-row.lit{color:var(--c-ink-on-lit)}
 .cr-alarm-row.lit.red{background:var(--c-red)}
 .cr-alarm-row.lit.amber{background:var(--c-amber)}
 .cr-alarm-row.lit:not(.red):not(.amber){background:var(--c-blue)}
+.cr-alarm-row:not(.lit){opacity: 0.25;font-weight: normal;}
 .cr-alarm-dot{display:none}
 
-/* right clears the 340px rail plus the same 6px gutter the left side keeps -
-   at 306 the banner ran a full 34px in under the rail. */
-.cr-banner{position:absolute;left:6px;right:346px;top:6px;pointer-events:none;
+/* under the head row, which is what now stands along the top of the plant */
+.cr-banner{position:absolute;left:6px;right:6px;top:38px;pointer-events:none;
   padding:8px;text-align:center;font-size:var(--t12);font-weight:700;letter-spacing:2px;
   text-transform:uppercase;overflow-wrap:anywhere;display:block}
 .cr-banner.melt{background:var(--c-bg-melt);color:var(--c-red)}
@@ -177,7 +181,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-group.caution>summary,.cr-group.caution[open]>summary{color:var(--c-amber)}
 .cr-group-alert{color:inherit;letter-spacing:.8px}
 .cr-group-alert:not(:empty){margin-left:8px}
-.cr-ops{margin-bottom:8px}
+/* a drawer holds rows of text, not a column of switches, so it is as wide as
+   the rail it came off */
+.cr-drawer .kit-menukey-menu{width:340px}
 .cr-log,.cr-dmg,.cr-flt{padding:6px 8px 8px}
 .cr-empty{font-size:var(--t8);letter-spacing:1px;color:var(--c-ink2);text-align:center;margin:8px 0}
 .cr-log-row{padding:4px 0;border-top:1px solid var(--c-edge)}
@@ -229,24 +235,25 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .insp-stat-val{font-size:var(--t8-5);text-align:right;white-space:nowrap; text-overflow: ellipsis; overflow: hidden;}
 
 /* ─────────────── design bench ─────────────── */
-.db-head{grid-column:1;grid-row:1;pointer-events:auto;display:flex;align-items:center;
-  justify-content:space-between;gap:8px;padding:6px 8px}
 .db-tools{display:flex;align-items:center;gap:4px}
-/* the head is as wide as the window, so its preset row sizes to its own names
-   rather than to the rail's fixed grid track */
-.db-head .db-bulkrow{flex:0 1 auto}
-.db-head .db-bulkrow-btns{display:flex;flex-wrap:wrap}
-/* RESULTS and DESIGN REVIEW float over the top-left of the plant, the seat
-   .cr-vitals keeps on the control room - and for the same reason it is sized by
-   its own content and capped: a scroll container stretched into a grid row
-   collapses to nothing. Row 2, so the tool bar keeps the corner. */
-.db-vitals{grid-column:1;grid-row:2;pointer-events:auto;display:flex;flex-direction:column;gap:6px;
-  width:300px;margin:0 0 0 4px;background:var(--c-panel);
-  align-self:start;max-height:calc(100vh - 44px);overflow-y:auto;scrollbar-width:none}
+.db-plants .kit-btn{justify-content:flex-start;text-align:left}
+/* THE VERDICT floats over the top-left of the plant, in exactly the seat
+   .cr-vitals keeps on the control room: OUT OF THE GRID, so it holds no track
+   open and the head row starts clear of it rather than above it. Sized by its
+   own content and capped, because a scroll container stretched into a grid row
+   collapses to nothing. */
+.db-vitals{position:absolute;left:4px;top:4px;pointer-events:auto;
+  display:flex;flex-direction:column;gap:6px;
+  width:300px;background:transparent;
+  max-height:calc(100% - 12px);overflow-y:auto;scrollbar-width:none}
+/* it stands ON the drawing, so it is not the rail colour */
+.db-verdict{background:var(--c-panel-float);box-shadow:0 8px 28px rgba(0,0,0,.9),0 2px 8px rgba(0,0,0,.8)}
+.db-verdict-rev{margin-top:8px}
+.db-verdict-rev:empty{display:none}
 .db-vitals::-webkit-scrollbar{display:none}
 .db-vitals:empty{display:none}
 .db-vitals>*{flex:0 0 auto}
-.db-rail{grid-column:2;grid-row:1/3;overflow-y:auto;pointer-events:auto;
+.db-rail{grid-column:2;grid-row:1/3;width:340px;overflow-y:auto;pointer-events:auto;
   background:var(--c-panel);padding-top:6px;
   display:flex;flex-direction:column;gap:6px}
 .db-panel-body{display:flex;flex-direction:column;gap:8px}
@@ -298,7 +305,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-pipe-ends{color:var(--c-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .db-pipe-len{color:var(--c-ink2);text-align:right}
 /* the control room's own copy, off the COMMISSIONED network */
-.cr-cnx{padding:6px 8px 8px}
 .cr-cnx-row{display:flex;gap:6px;justify-content:space-between;padding:2px 0;font-size:var(--t8)}
 /* a run's NAME is a label, so it reads as one - the same ink2 every caption in
    this rail keeps, leaving the colour to the verdict beside it */
@@ -310,10 +316,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* a port valve the watch has SHUT is not a fault, so it is not red: it is a
    thing somebody did on purpose, and amber is what this board says that in */
 .cr-cnx-row.shut .cr-cnx-name,.cr-cnx-row.shut .cr-cnx-state{color:var(--c-amber)}
-/* the ports are a second list under the runs, so they get a rule over them
-   rather than a second heading - the group is still PIPING */
-.cr-cnx-sub{margin-top:6px;padding-top:4px;border-top:1px solid var(--c-edge);
-  font-size:var(--t8);letter-spacing:.08em;color:var(--c-ink2)}
 
 /* ══ MARGIN PANELS (ui/margin.js) ══
    The host is fixed rather than a grid cell: its children are placed in the
@@ -325,30 +327,33 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    belongs with the drawing and everything that is SCREEN FURNITURE stands over
    it. Stated once here rather than as a z-index beside each rule: an omitted
    one means `auto`, which paints in DOM order, and the host is appended last
-   and so covered the alarm stack, the banner and the rail.
+   and so covered the vitals panel, the banner and the rail.
 
      0  margin panels        plant space
-     1  rail, banner, alarms, vitals   furniture over the plant
+     1  rail, banner, vitals           furniture over the plant
      2  plant keys + layer menu        opens over the furniture
 
    Above this, outside the screen roots: #prewarm 999, #tip 1000, #ctxmenu 1001. */
 .margin-host{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
-.cr-rail,.db-rail,.db-head,.cr-banner,.cr-alarms,.cr-vitals,.db-vitals{z-index:1}
-.plant-keys{z-index:2}
+.cr-rail,.db-rail,.scr-head,.cr-banner,.cr-vitals,.db-vitals{z-index:1}
 /* size comes from a transform:scale (marginPlace), so one layout is scaled and
    the panel's height in layout px is the same at every step of the zoom */
 .margin-pan{position:absolute;pointer-events:auto;background:var(--c-panel);
   transform-origin:0 0;contain:layout paint}
 .margin-pan .kit-well-body{padding:6px 6px 7px}
 /* the bench panel carries every knob, so it uses the rail's own block layout */
-.margin-pan .db-panel-body{display:flex;flex-direction:column;gap:7px}
+.margin-pan .db-panel-body{display:flex;flex-direction:column;gap:0px}
 /* A TALL PANEL GETS MORE COLUMNS, not a second screen of height - marginCols()
    sets --margin-cols and the width to match. Columns are a block layout, so the
    flex gap above becomes a margin. */
 .margin-pan.cols .db-panel-body{display:block;
   column-count:var(--margin-cols,2);column-gap:8px}
 .margin-pan.cols .db-panel-body>*{break-inside:avoid;margin-bottom:7px}
+/* where a panel's columns are cut - the "colbreak" block (design-bench.js) */
+.db-colbreak{height:0;margin:0!important;break-before:column}
+.margin-pan:not(.cols) .db-colbreak{display:none}
 .margin-pan .kit-rule-head{padding:8px;font-size:var(--t8)}
+.margin-board .db-panel-body{max-height:46vh;overflow-y:auto}
 /* the controls that used to stand on the machine box, in the widget kit's own
    HTML - see marginCtlBuild(). A row is the same row ctlFor() states. */
 .margin-ctl{display:flex;flex-direction:column;gap:3px;margin-top:5px}

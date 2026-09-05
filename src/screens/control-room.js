@@ -101,7 +101,16 @@ function crVitalsSync(rows){
   });
 }
 
-/* ══ THE ALARM STACK: NOTHING WHEN NOTHING IS LIT ══ */
+/* ══ THE ANNUNCIATOR BOARD, AT THE HEAD OF THE MASTER CAUTION ══
+   One panel, because the two lists were read as one thing standing in two
+   corners: the board says what is wrong NOW and goes dark on its own, the
+   caution list says what has HAPPENED and waits to be answered, and neither
+   answers the other's question on its own. No count - a board that is always
+   all there counts itself.
+   EVERY TILE STANDS, LIT OR NOT. A tile is a place on a board, and a board
+   whose dark tiles are absent is a list: the lit ones move every time another
+   lights, so nothing can be found by where it sits and nothing says what the
+   plant is NOT complaining about. */
 function crAlarmsBuild(container){
   const rows=ANN.map(a=>{
     const row=KIT.el("div","cr-alarm-row");
@@ -113,21 +122,13 @@ function crAlarmsBuild(container){
   });
   return rows;
 }
-/* the count element is held, not searched for, and written only when the count
-   moves - it was a querySelector plus a textContent write every frame to say the
-   same number. */
-function crAlarmsSync(al){
-  let lit=0;
-  for(const h of al.rows){
+function crAlarmsSync(rows){
+  for(const h of rows){
     const on=annLit(h.a[0]);
-    if(on) lit++;
     h.row.classList.toggle("lit",on);
     h.row.classList.toggle("red",on&&h.a[1]==="red");
     h.row.classList.toggle("amber",on&&h.a[1]==="amber");
-    KIT.show(h.row,on);
   }
-  KIT.show(al.wrap,lit);
-  if(lit!==al.lit){ al.lit=lit; al.count.textContent=String(lit); }
 }
 
 /* ══ TRENDS: chart() STAYS CANVAS, IN ITS OWN CANVAS UNDER THE VITALS ══
@@ -608,8 +609,8 @@ function crCautBuild(container){
   /* CLEARS THE ANSWERED ONES, and only those - a caution whose reading is still
      off-nominal is not the crew's to sweep away. It keeps its place in the head
      whether or not it is offered (visibility, not display), because a button
-     that shoves the count sideways as the plant recovers is a button nobody can
-     aim at. */
+     that shoves the AUTO key beside it sideways as the plant recovers is a
+     button nobody can aim at. */
   const clr=KIT.button("CLEAR",{size:7,flat:true,tip:"Removes every caution whose reading has come back inside its limit. Anything still off-nominal stays.",
     onClick:()=>cautClear()});
   clr.el.classList.add("cr-caut-clear");
@@ -619,15 +620,20 @@ function crCautBuild(container){
   const auto=KIT.button("AUTO",{size:7,flat:true,on:cautAuto,tip:"Clears each caution by itself once its reading has been back inside its limit for five seconds. Anything still off-nominal stays on the list.",
     onClick:()=>{ cautAuto=!cautAuto; auto.set({on:cautAuto}); if(cautAuto) cautClear(true); }});
   auto.el.classList.add("cr-caut-auto");
-  const h2=KIT.el("span","cr-caut-count"); head.append(h1,clr.el,auto.el,h2);
+  head.append(h1,clr.el,auto.el);
+  /* THE LIT ANNUNCIATORS STAND ABOVE THE COPIED READINGS. Every tile in the
+     board is built here and hidden until it lights, so a tile arriving costs no
+     rebuild - and the caution rows below never move to make room for one,
+     because the block above them is already there. */
+  const ann=KIT.el("div","cr-caut-ann");
   const body=KIT.el("div","cr-caut-body");
-  wrap.append(head,body); container.appendChild(wrap);
+  wrap.append(head,ann,body); container.appendChild(wrap);
   KIT.tip(wrap,"MASTER CAUTION",
-    "Every reading that has gone amber or red for longer than a moment, copied here whole - value, colour and limits - and named by the machine it belongs to. A line stays after the reading recovers; click it to answer it and clear it away.");
+    "At the top, every annunciator that is currently lit - the full board, including what is dark, is on the HELP screen. Under it, every reading that has gone amber or red for longer than a moment, copied whole - value, colour and limits - and named by the machine it belongs to. A copied line stays after the reading recovers; click it to answer it and clear it away.");
   /* ONE listener on the body, not one per row: fieldRowsSync() owns these
      elements and rebuilds them whenever the list changes, so a handler bound to
      a row would be thrown away with it. The keys are held in build order. */
-  const h={wrap,head,body,count:h2,clr:clr.el,offer:null,keys:[],state:null};
+  const h={head,body,ann:crAlarmsBuild(ann),clr:clr.el,offer:null,keys:[],state:null};
   body.addEventListener("click",e=>{
     const el=e.target.closest && e.target.closest(".insp-row"); if(!el) return;
     const k=h.keys[Array.prototype.indexOf.call(body.children,el)], c=k&&CAUT.get(k);
@@ -642,12 +648,10 @@ function crCautBuild(container){
 }
 function crCautSync(h){
   if(cautAuto) cautClear(true);
+  crAlarmsSync(h.ann);
   const keys=[], rows=[], on=[];
   for(const [k,e] of CAUT) if(e.latch){ keys.push(k); rows.push(e.row); on.push(e.live); }
   h.keys=keys;
-  KIT.show(h.wrap,rows.length>0);
-  const n=String(rows.length);
-  if(h.count.textContent!==n) h.count.textContent=n;
   const offer=on.some(v=>!v);
   if(h.offer!==offer){ h.clr.classList.toggle("off",!offer); h.offer=offer; }
   if(!rows.length){ h.body.innerHTML=""; h.body._h=null; return; }
@@ -766,53 +770,30 @@ function crBuild(){
   }
   const caut=crCautBuild(vitals);
 
-  const alarmsWrap=KIT.el("div","cr-alarms");
-  const alarmsHead=KIT.el("div","cr-alarms-head");
-  const ah1=KIT.el("span"); ah1.textContent="ALARMS";
-  const ah2=KIT.el("span","cr-alarms-count");
-  alarmsHead.append(ah1,ah2); alarmsWrap.appendChild(alarmsHead);
-  const alarmsBody=KIT.el("div","cr-alarms-body"); alarmsWrap.appendChild(alarmsBody);
-  const alarms={wrap:alarmsWrap,body:alarmsBody,count:ah2,rows:crAlarmsBuild(alarmsBody),lit:-1};
-  KIT.tip(alarmsWrap,"ALARM STACK","Every annunciator that is currently lit, and nothing that is not. The full board, including what is dark, is on the HELP screen.");
-  root.appendChild(alarmsWrap);
-
   const banner=KIT.el("div","cr-banner"); root.appendChild(banner);
 
   const rail=KIT.el("div","cr-rail"); root.appendChild(rail);
   railBlank(rail);
 
-  /* THE MACHINES COME FIRST. The ops drawers are filled here, in the order they
-     read best, but the rail is not given them until the component groups are
-     in: what the rail is FOR is the plant, and the log, the repair list and the
-     layer switches are what you go and get. */
-  const ops=KIT.el("div","cr-ops");
+  /* THE RAIL IS FOR THE PLANT. The log, the repair list and the faults are what
+     you GO AND GET, so each is a key on the head row with its own hanging panel
+     - the same KIT.menuKey() the LAYERS key is, and the same head row the bench
+     carries. */
+  const head=KIT.el("div","scr-head cr-head"); root.appendChild(head);
+  const drawer=(label,tip,cls)=>{ const m=KIT.menuKey({label,tip,cls:"cr-drawer"});
+    const body=KIT.el("div",cls); m.menu.appendChild(body); head.appendChild(m.el); return body; };
 
-  const logD=crCollapse("LOG");
-  const logList=KIT.el("div","cr-log"); logD.appendChild(logList); ops.appendChild(logD);
+  const logList=drawer("LOG","Everything the plant has done to itself and everything the crew has ordered, newest first.","cr-log");
+  const dmgList=drawer("REPAIR","Every damaged machine, what state its repair is in, and what reaching it would cost a repair party in dose.","cr-dmg");
+  const faults=crFaultsBuild(drawer("FAULTS","The fault injectors: what can be made to go wrong, on demand.","cr-flt"));
 
-  const dmgD=crCollapse("REPAIR");
-  const dmgList=KIT.el("div","cr-dmg"); dmgD.appendChild(dmgList); ops.appendChild(dmgD);
-
-  const fltD=crCollapse("FAULTS");
-  const fltBody=KIT.el("div","cr-flt"); fltD.appendChild(fltBody); ops.appendChild(fltD);
-  const faults=crFaultsBuild(fltBody);
-
-  const compRail=KIT.el("div","cr-comp-rail"); rail.appendChild(compRail);
-
-  /* EVERY CONNECTION THE PLANT WAS COMMISSIONED WITH, and whether it is still
-     carrying anything. Off P.net.byKey - the FROZEN commissioning snapshot, not
-     a live re-trace - so this lists the plant that is running rather than the
-     drawing on the bench. It closes the component half - the runs BETWEEN the
-     machines listed above it - so it stands under them and over the drawers. */
-  const cnxD=crCollapse("PIPING");
-  const cnxBody=KIT.el("div","cr-cnx"); cnxD.appendChild(cnxBody); rail.appendChild(cnxD);
-
-  rail.appendChild(ops);
+  const compRail=KIT.el("div","cr-comp-rail");
+  if(!MARGIN_ONLY) rail.appendChild(compRail);
 
   const mhost=marginHost(root);
   mount.appendChild(root);
-  return {root,vitalRows,viz,alarms,banner,rail,mhost,
-    trend:{box:trendBox,cvs:{}},logList,dmgList,faults,cnx:cnxBody,caut,compRail,panels:null,Pfit:null,
+  return {root,head,vitalRows,viz,banner,rail,mhost,
+    trend:{box:trendBox,cvs:{}},logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
 /* ONE ROW PER COMMISSIONED CONNECTION: what it joins, what it is carrying, and
@@ -829,17 +810,7 @@ function crCnxSync(body){
   const rows=keys.map(k=>{ const r=P.net.byKey[k];
     return {k, name:pipeName(r), cut:runHoled(S,r)};
   });
-  /* AND EVERY NOZZLE'S OWN VALVE, under the same heading. A port valve is
-     piping, not a component: it is what cuts a run out, so it belongs beside
-     the list of runs and nowhere else. Every port is listed, open ones
-     included - the question the list answers is "what is lined up", and a
-     list of only the shut ones cannot be read as an answer to that. */
-  const PS=S.portShut||{};
-  const ports=Object.keys(PS).map(pid=>({pid, name:portLabel(pid), shut:!!PS[pid],
-                                         dead:portWrecked(S,pid)}))
-    .sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
-  const sig=rows.map(r=>r.k+(r.cut?"!":"")).join("|")
-    +"//"+ports.map(p=>p.pid+(p.shut?"!":"")+(p.dead?"x":"")).join("|");
+  const sig=rows.map(r=>r.k+(r.cut?"!":"")).join("|");
   if(body._sig===sig) return;
   body._sig=sig; body.innerHTML="";
   for(const r of rows){
@@ -848,9 +819,19 @@ function crCnxSync(body){
     const s=KIT.el("span","cr-cnx-state"); s.textContent=r.cut?"SEVERED":"intact";
     row.append(n,s); body.appendChild(row);
   }
-  if(!ports.length) return;
-  const head=KIT.el("div","cr-cnx-sub"); head.textContent="PORT VALVES";
-  body.appendChild(head);
+}
+/* EVERY NOZZLE'S OWN VALVE, in its own panel. Every port is listed, open ones
+   included - the question the list answers is "what is lined up", and a list of
+   only the shut ones cannot be read as an answer to that. */
+function crPortsSync(body){
+  if(!S) return;
+  const PS=S.portShut||{};
+  const ports=Object.keys(PS).map(pid=>({pid, name:portLabel(pid), shut:!!PS[pid],
+                                         dead:portWrecked(S,pid)}))
+    .sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
+  const sig=ports.map(p=>p.pid+(p.shut?"!":"")+(p.dead?"x":"")).join("|");
+  if(body._sig===sig) return;
+  body._sig=sig; body.innerHTML="";
   for(const pv of ports){
     const row=KIT.el("div","cr-cnx-row"+(pv.dead?" cut":pv.shut?" shut":""));
     const n=KIT.el("span","cr-cnx-name"); n.textContent=pv.name;
@@ -864,12 +845,10 @@ function crSync(){
   if(!CR) return;
   if(CR.vitalRows) crVitalsSync(CR.vitalRows);
   for(const b of CR_VIZ) hostPaint(CR.viz[b.k],b.draw);
-  crAlarmsSync(CR.alarms);
   if(CR.trend.box) crTrendSync(CR.trend);
   crLogSync(CR.logList);
   crDamageSync(CR.dmgList);
   crFaultsSync(CR.faults);
-  crCnxSync(CR.cnx);
   if(CR.Pfit!==P){
     if(CR.watch) CR.watch.free();
     CR.watch=railWatch(CR.rail);
@@ -906,9 +885,14 @@ function drawOperate(){
      The box runs to the edges from there: the rail is opaque and the strip is
      opaque, so there is nothing for a margin to protect the plant from. */
   const stripBox = trStrip("operate") ? hostRect(trStrip("operate").root) : null;
-  const railBox=CR? hostRect(CR.rail) : null;
+  // an empty rail is display:none, and a hidden box measures zero
+  const railBox = CR && CR.rail.offsetParent ? hostRect(CR.rail) : null;
   const vy = stripBox ? stripBox.y+stripBox.h : TOPBAR_H;
   const vh=Math.max(120,H-vy);
+  /* THE HEAD ROW IS TRANSPARENT, so the view runs UNDER it - the bench measures
+     its own the same way, off the FIT and never off the BOX. */
+  const headBox = CR? hostRect(CR.head) : null;
+  const headU = headBox? Math.max(0, headBox.y+headBox.h-vy) : 0;
   /* THE VITALS PANEL FLOATS, so the view runs under it - the standing the alarm
      stack in the other corner has always had. Carving its width off the left
      gave a panel that is often half the window deep a full-height column of
@@ -917,8 +901,8 @@ function drawOperate(){
   const vw = (railBox ? Math.max(200, railBox.x) : W);
   // the panels stand in what the FIT gives up; the box, and so the clip, is whole
   const mi=marginInsetU();
-  drawPlant(vy,S,vh,0,vw,mi.l+mi.r,mi.t+mi.b);
-  zoomKeySync(CR&&CR.root);
+  drawPlant(vy,S,vh,0,vw,mi.l+mi.r,mi.t+mi.b+headU);
+  zoomKeySync(CR&&CR.head);
   // AFTER drawPlant, because a panel is anchored against the view it just set
   marginSync(CR&&CR.mhost, true);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
