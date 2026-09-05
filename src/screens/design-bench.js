@@ -13,8 +13,67 @@ const blockAcc = key => typeof key==="string"
    a nested key is restored as exactly as a flat one. `raw` where the accessor
    has one (bagAcc(), design.js): restoring a resolved default MINTS a key that
    was absent, and that is a design edit nobody made. */
-function massWith(key,i){ const a=blockAcc(key), o=a.raw?a.raw():a.get(); a.set(i);
-  const m=derived().mass; a.set(o); return m; }
+function withValue(key,v,fn){ const a=blockAcc(key), o=a.raw?a.raw():a.get();
+  a.set(v); try{ return fn(); } finally{ a.set(o); } }
+function massWith(key,i){ return withValue(key,i,()=>derived().mass); }
+/* ══ WHAT THE OPTION UNDER THE POINTER WOULD DO ══
+   The MEASURED lists are the answer to "what does this knob change", and until
+   now you had to change it to find out. One candidate at a time - the option
+   being hovered - written through the same accessor massWith() prices with,
+   read back, and put straight back. `seq` is what makes a panel re-sync: a
+   hover is not a design change, so designSig() cannot see it (ui/margin.js). */
+const PREV={key:null,val:null,seq:0};
+function prevSet(key,val){
+  if(PREV.key===key && PREV.val===val) return;
+  PREV.key=key; PREV.val=val; PREV.seq++;
+}
+/* THE PREVIEW HAS TO RE-MEASURE, AND THEN PUT THE MEASUREMENTS BACK. Writing a
+   candidate value is not enough on its own: the lattice figures these lists
+   read are MEASURED off the drawing (latMeasure(), lattice.js) and cached on
+   the core, so a preview that skipped this priced the drawing as it was and
+   showed no change at all - and one that skipped the second call would leave
+   the candidate's figures standing on a design nobody had edited. */
+function prevMeasure(){ for(const id of coreIds()) latMeasure(coreD(id)); }
+function prevRows(rows){
+  const out=withValue(PREV.key,PREV.val,()=>{ prevMeasure(); return rows(); });
+  prevMeasure();
+  return out;
+}
+/* ══ WHICH WAY IS BETTER, PER MEASUREMENT ══
+   A sign is not a verdict: less mass is good and less shutdown margin is not,
+   so a delta cannot colour itself off its own sign. +1 says a bigger number is
+   the better design, -1 says a smaller one is. A row that is not HERE has no
+   direction of merit and its delta stays neutral - a core diameter, a lattice
+   pitch and a flow area are shapes you choose, not scores you win.
+   Keyed on the row's own label, so one entry answers for every panel that
+   prints it: MASS costs mass wherever it stands. */
+const MERIT={
+  "RATED POWER":1, "RATED OUTPUT":1, "EFFICIENCY":1, "MAX LOAD":1,
+  "TURBINE CAN DRAW":1, "PLANT CAPACITY":1,
+  "DELAYED FRACTION":1, "PROMPT LIFETIME":1, "SHUTDOWN MARGIN":1,
+  "CONTROL BANK WORTH":1, "FUEL DAMAGE LIMIT":1,
+  "BURSTS AT":1, "SHELL BURSTS AT":1, "RATED FOR":1,
+  "SECONDARY WATER":1, "SHEDDING":1, "EMISSIVITY":1,
+  "PUMP POWER HELD":1, "INSTRUMENT TRUST":1,
+  "MASS":-1, "PANEL MASS":-1, "SHELL STEEL":-1, "TUBE BUNDLE":-1,
+  "CORE MEAN EXCESS":-1, "MODERATOR COEFF":-1, "VOID COEFFICIENT":-1,
+  "EXPANSION FEEDBACK":-1,
+  "CREW DOSE RATE":-1, "LENGTH":-1, "CARRIES":-1, "SPAN":-1,
+  "DESIGN BACKPRESSURE":-1, "TERMINAL DIFFERENCE":-1, "PLANT AT RATED":-1,
+  "VACUUM FLOOR":-1,
+};
+/* The row's own printed number, before and after, at the decimals it printed
+   it with. A row whose value is a word ("FITTED", a machine name) parses to
+   nothing and gets no delta, which is the honest answer for it. */
+function prevDelta(label,a,b){
+  const x=parseFloat(a), y=parseFloat(b);
+  if(!isFinite(x) || !isFinite(y)) return null;
+  const d=y-x; if(Math.abs(d) < 5e-4) return null;
+  const dot=String(a).match(/\.(\d+)/), dp=dot?Math.min(dot[1].length,3):0;
+  const m=MERIT[label]||0;
+  return {text:"("+(d>0?"+":"")+d.toFixed(dp)+")",
+          col:m? (d*m>0?C.green:C.red) : C.ink2};
+}
 /* A BAR IS A MERIT, NEVER A MAGNITUDE - every row here is wide when the design is good, so a bad figure is a short bar whichever way its own number runs. */
 
 function planStats(d){ return [
@@ -450,6 +509,23 @@ keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.active="select"; }}
    the pens that author r, `sec` the pens that author z. A single shared pen
    meant five of the six left the other canvas inert. */
 const LATPEN={plan:"fuel",sec:"len",bank:0,hover:null,last:null};
+/* ══ A CANVAS DRAWS; IT DOES NOT PRINT ══
+   Both lattice surfaces used to letter their own readout along the bottom edge,
+   in a bitmap font nobody could select, at whatever width the box happened to
+   be. The picture still works the figures out - it is the only thing that knows
+   what the pointer is over - and now it HANDS THEM OVER instead of drawing
+   them. One entry per surface per core; latReadSync() renders them into the
+   panel's own rows, the same fieldRowsSync() every other readout uses.
+   The cluster and zone numbers stay on the canvas: a glyph inside one square is
+   a mark on the drawing, not a value the panel could state anywhere else. */
+const LATREADOUT={};
+const latReadSet=(pen,cid,rows)=>{ LATREADOUT[pen+":"+cid]=rows; };
+function latReadSync(){
+  for(const el of document.querySelectorAll("#scr-design .db-latread")){
+    const rows=LATREADOUT[el.dataset.pen+":"+el.dataset.core];
+    if(rows) fieldRowsSync(el,rows);
+  }
+}
 
 function latRingPhi(cD){
   const T=corePredict(cD,derived(coreIdOf(cD))), phi=T.phiCold, r=new Float64Array(XNR);
@@ -505,10 +581,8 @@ function latAct(cD,u,v,shift){
 /* x,y,w,h are the host canvas's own box, origin 0,0, in the fixed HOST_K scale
    hostPaint() sets - not plant layout units. */
 function latPlan(cD,x,y,w,h){
-  const AX=15;
-  // the readout line under the grid has to fit INSIDE the box now: hostPaint()
-  // clips to the host element, where before this spilled onto #cv
-  const gx=x+AX, gy=y+3, gw=w-AX, gh=h-19;
+  // the left gutter went with the REACTOR AXIS label it was reserved for
+  const gx=x+3, gy=y+3, gw=w-6, gh=h-6;
   /* THE WHOLE CIRCLE IS DRAWN, AND THE QUARTER IS STILL WHAT IS AUTHORED.
      A quadrant was the honest picture of the solve and an unreadable picture of
      a core: nothing about it said the shape was round. Every slot is drawn four
@@ -582,10 +656,7 @@ function latPlan(cD,x,y,w,h){
   ctx.restore();
   frame(gx,gy,gw,gh,C.edge);
   ctx.save(); ctx.setLineDash([9,3,2,3]);
-  line(CX,gy,CX,gy+gh,C.rail,1); line(gx-AX+9,CY,gx+gw,CY,C.rail,1);
-  ctx.restore();
-  ctx.save(); ctx.translate(x+6,gy+gh/2); ctx.rotate(-Math.PI/2);
-  txt("REACTOR AXIS",0,0,{size:6,sp:1.2,align:"center",color:C.rail});
+  line(CX,gy,CX,gy+gh,C.rail,1); line(gx,CY,gx+gw,CY,C.rail,1);
   ctx.restore();
 
   // THE FOLD, and the one place it happens: a pointer anywhere on the circle
@@ -608,14 +679,19 @@ function latPlan(cD,x,y,w,h){
   }
   if(!ui.drag) LATPEN.last=null;
 
-  if(hv) fitTxt("S "+hv.u+","+hv.v+"  RING "+hRing+
-      "  r"+(Math.hypot(hv.u+.5,hv.v+.5)*p).toFixed(2)+"m"+
-      (cD.lat.slot[LIX(hv.u,hv.v)]
-        ? "  "+(latShare(cD,hv.u,hv.v,ph)*100).toFixed(2)+"%"
-        : "  EMPTY"),
-      gx,gy+gh+11,gw,{size:6.5,sp:.3,color:C.amber});
-  else fitTxt(latCount(cD)+" ASSEMBLIES / DOT IS FLUX",
-      gx,gy+gh+11,gw,{size:6.5,sp:.5,color:C.ink2});
+  /* EVERY ROW, EVERY FRAME. A list that grew four rows the moment the pointer
+     touched the picture moved everything under it - so the four say "-" when
+     there is nothing under the pointer, and the panel is one height. */
+  const HV=hv?C.amber:null, dash=v=>hv?v():"-";
+  latReadSet("plan",coreIdOf(cD), [
+    ["ASSEMBLIES",String(latCount(cD)),null,
+     "How many assemblies are laid on the plan, counting all four quadrants. The dot in each square is the flux at its own radius."],
+    ["SLOT",dash(()=>hv.u+", "+hv.v),HV,"Which quarter-lattice slot the pointer is over. The other three quadrants are the mirror of it."],
+    ["RING",dash(()=>String(hRing)),HV,"Which of the fourteen mesh rings the solver sorts this slot into."],
+    ["RADIUS",dash(()=>(Math.hypot(hv.u+.5,hv.v+.5)*p).toFixed(2)+" m"),HV,"How far this slot stands from the core axis."],
+    ["FLUX SHARE",dash(()=>cD.lat.slot[LIX(hv.u,hv.v)]
+        ? (latShare(cD,hv.u,hv.v,ph)*100).toFixed(2)+" %" : "EMPTY"),HV,
+     "The share of the core's power this one assembly makes, off the converged flux at its own radius."]]);
 }
 /* a rail control is a DOM node, so it carries its own data-tip-title and the
    canvas TIP() is not needed: same box either way (shellInitTooltip). */
@@ -654,17 +730,25 @@ const LAT_LEN_MIN=0.6, LAT_LEN_MAX=5.0;
    core is. Anchoring one off a copy of the other is the bug this bench has
    already shipped once. */
 function latSecGeom(x,y,w,h){
-  const gx=x+3, gy=y+3, gw=w-6, gh=h-19;
+  // the bottom band went with the readout line it was reserved for
+  const gx=x+3, gy=y+3, gw=w-6, gh=h-6;
   const K=Math.min(gw/SEC_W, gh/SEC_H);
   return {gx,gy,gw,gh,K,CX:gx+gw/2,CY:gy+gh-SEC_FLOOR*K};
 }
+/* ══ A LENGTH DRAG PAYS FOR ITSELF ONCE, AT THE END ══
+   Every pointer move used to re-revolve the lattice and re-solve the flux, so
+   the hand outran the picture. The column is written on every move - the
+   drawing has to follow the hand - and the two expensive answers are deferred:
+   the last flux is redrawn until the button comes up. */
+let latSecPend=null, latSecFlux=null;
+function latSecLen(cD,nv){
+  nv=clamp(nv,LAT_LEN_MIN,LAT_LEN_MAX);
+  if(Math.abs(nv-cD.lat.len)<1e-9) return;
+  cD.lat.len=nv; latSecPend=cD;
+}
 function latSectionAct(cD,G,pt,shift){
   const rr=Math.abs(pt.x-G.CX)/G.K, zz=(G.CY-pt.y)/G.K;
-  if(LATPEN.sec==="len"){
-    const nv=clamp(zz,LAT_LEN_MIN,LAT_LEN_MAX);
-    if(Math.abs(nv-cD.lat.len)<1e-9) return;
-    cD.lat.len=nv; latRevolve(cD); return;
-  }
+  if(LATPEN.sec==="len"){ latSecLen(cD,zz); return; }
   if(LATPEN.sec!=="refl") return;
   const dr=latM(cD).dr, dz=latM(cD).dz, halfW=(XNR-0.5)*dr;
   let face=null, k=0;
@@ -677,6 +761,7 @@ function latSectionAct(cD,G,pt,shift){
   LAT[face]=nv; latRevolve(cD);
 }
 function latSection(cD,x,y,w,h){
+  if(latSecPend && !ui.drag){ latRevolve(latSecPend); latSecPend=null; latSecFlux=null; }
   const G=latSecGeom(x,y,w,h), {gx,gy,gw,gh,K,CX,CY}=G;
   const dr=latM(cD).dr, dz=latM(cD).dz, cw=dr*K, ch=dz*K, NC=XNR*2-1;
   const halfW=(XNR-0.5)*dr*K, colH=cD.lat.len*K;
@@ -702,7 +787,9 @@ function latSection(cD,x,y,w,h){
      time and the section had nothing at all, which is half a picture of a
      shape the whole rating now divides by. The HOT NODE - the node the rating
      divides by - is marked in both. */
-  const T=corePredict(cD,derived(coreIdOf(cD))), phi=T.phiCold, hot=nodePeak(phi);
+  const T = latSecPend && latSecFlux ? latSecFlux
+          : (latSecFlux=corePredict(cD,derived(coreIdOf(cD))));
+  const phi=T.phiCold, hot=nodePeak(phi);
   for(let c=0;c<NC;c++){
     const i=Math.abs(c-(XNR-1)), cx=CX+(c-(XNR-1))*cw-cw/2;
     const ff=clamp(latM(cD).frac[i],0,1), oo=clamp(latM(cD).occ[i],0,1);
@@ -735,17 +822,16 @@ function latSection(cD,x,y,w,h){
   const hw=LATPEN.sec==="refl" ? {x:-1e4,y:-1e4,w:0,h:0}
     : push({x:CX-halfW-4,y:CY-colH-6,w:2*halfW+8,h:12,type:"paint",fn:pt=>{
     if(grab===null) grab=(CY-colH)-pt.y;
-    const nv=clamp((CY-(pt.y+grab))/K,LAT_LEN_MIN,LAT_LEN_MAX);
-    if(Math.abs(nv-cD.lat.len)<1e-9) return;
-    cD.lat.len=nv; latRevolve(cD);
+    latSecLen(cD,(CY-(pt.y+grab))/K);
   }});
   const lit=LATPEN.sec==="len"||hov(hw)||ui.drag===hw;
   fillRect(CX-halfW,CY-colH-1.6,2*halfW,3.2,lit?C.amber:C.rail);
-  fitTxt(hov(wd)||hov(hw)
-      ? "LEN "+cD.lat.len.toFixed(2)+" m  H/D "+cD.hd.toFixed(2)+
-        "  RIM "+cD.lat.reflR+"  LID "+cD.lat.reflT+"  FLOOR "+cD.lat.reflB
-      : "ELEVATION / DRAG TOP, PAINT FACES",
-    gx,gy+gh+11,gw,{size:6.5,sp:.3,color:hov(wd)||hov(hw)?C.amber:C.ink2});
+  const on=hov(wd)||hov(hw) ? C.amber : null;
+  latReadSet("sec",coreIdOf(cD), [
+    ["ACTIVE LENGTH",cD.lat.len.toFixed(2)+" m",on,"How tall the fuel column is. Drag the top of it with the LENGTH pen."],
+    ["CORE H / D",cD.hd.toFixed(2),on,"The active length against the diameter the plan revolves to. A tall narrow core leaks at both ends, a squat one at the rim."],
+    ["REFLECTOR",cD.lat.reflR+" rim / "+cD.lat.reflT+" lid / "+cD.lat.reflB+" floor",on,
+     "How many cells of reflector are packed on each face. Paint them with the REFLECTOR pen."]]);
 }
 const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, and how many cells of reflector are packed on the rim, the lid and the floor. Use the LENGTH pen and drag the top of the column; use the REFLECTOR pen and click a cell outside a face to pack it out to there, SHIFT to lift it back. Core H/D is what the two canvases make between them.";
 const LATPEN_SEC=[
@@ -816,7 +902,8 @@ function paramBlockMk(block){
       const a=blockAcc(block.key);
       const root=KIT.el("div","db-block");
       const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
-      const ol=KIT.optList(block.items,{onSelect:i=>a.set(block.base+i)});
+      const ol=KIT.optList(block.items,{onSelect:i=>a.set(block.base+i),
+        onHover:i=>prevSet(i==null?null:block.key, i==null?null:block.base+i)});
       root.appendChild(ol.el);
       return {el:root,sync(){
         const q=block.items.map((_,i)=>massWith(block.key,block.base+i));
@@ -828,7 +915,8 @@ function paramBlockMk(block){
       const a=blockAcc(block.key);
       const root=KIT.el("div","db-block");
       const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
-      const ss=KIT.segSel(block.labels,{onSelect:i=>a.set(block.base+i)});
+      const ss=KIT.segSel(block.labels,{onSelect:i=>a.set(block.base+i),
+        onHover:i=>prevSet(i==null?null:block.key, i==null?null:block.base+i)});
       root.appendChild(ss.el);
       return {el:root,sync(){
         const q=block.labels.map((_,i)=>massWith(block.key,block.base+i));
@@ -840,10 +928,14 @@ function paramBlockMk(block){
       const a=blockAcc(block.key);
       const get=()=>a.get();
       const set=v=>{ a.set(block.step?Math.round(v/block.step)*block.step:v); };
+      // the same latch the number field has - AUTO is exactly "nothing stored"
+      const auto = (a.raw && a.clr)
+        ? {get:()=>a.raw()===undefined, set:on=>{ on ? a.clr() : a.set(a.get()); }}
+        : null;
       const row=KIT.sliderRow({title:block.title,min:block.min,max:block.max,step:block.step,
-        fmt:block.fmt,massFn:!!block.massFn,tip:block.tip,onChange:set});
+        fmt:block.fmt,massFn:!!block.massFn,tip:block.tip,auto,onChange:set});
       return {el:row.el,sync(b){
-        KIT.show(row.el,!(b.when&&!b.when()));
+        if(auto) row.setAuto(auto.get());
         const v=get();
         row.set(v,null,b.massFn?b.massFn(v)-b.massFn(block.min):undefined);
       }};
@@ -864,16 +956,28 @@ function paramBlockMk(block){
       const n=KIT.numInput({unit:block.unit,dp:block.dp,tip:block.tip,title:block.title,
         auto, onChange:v=>a.set(v)});
       root.appendChild(n.el);
-      const mass=KIT.el("span","kit-sliderrow-mass"); root.appendChild(mass);
       return {el:root,sync(b){
-        KIT.show(root,!(b.when&&!b.when()));
         n.set(a.get());
         if(auto) n.setAuto(auto.get());
-        KIT.setText(mass, b.massFn ? b.massFn(a.get()).toFixed(0)+" t" : "");
+        r.setSfx(b.massFn ? b.massFn(a.get()).toFixed(0)+" t" : "");
       }};
     }
     // stated where the knobs are; the multi-column body breaks on it
     case "colbreak": return {el:KIT.el("div","db-colbreak"),sync(){}};
+    /* ══ A PANEL THAT STATES ITS OWN SHAPE ══
+       column-count can only FLOW blocks; it cannot say "this canvas is two
+       columns wide and these knobs stand beside it". A box is that statement:
+       `dir` is which way its children run and `w` is how many columns it is
+       worth beside its siblings. It nests, so one block kind covers every
+       arrangement and no panel needs a second mechanism. A body holding one
+       stops flowing entirely - see dbPanelSync(). */
+    case "box": {
+      const root=KIT.el("div",block.dir==="row"?"db-box-row":"db-box-col");
+      if(block.w) root.style.flex=block.w+" 1 0";
+      const hs=block.blocks.map(b=>{ const h=paramBlockMk(b); root.appendChild(h.el); return h; });
+      return {el:root,sync(b){
+        b.blocks.forEach((c,i)=>{ const h=hs[i]; if(h&&h.sync) h.sync(c); }); }};
+    }
     case "readout": {
       const r=KIT.readout({title:block.title,tip:block.tip});
       return {el:r.el,sync(b){ r.set(typeof b.val==="function"?b.val():b.val); }};
@@ -886,14 +990,28 @@ function paramBlockMk(block){
     case "note": {
       const p=KIT.el("p","db-note");
       return {el:p,sync(b){
-        const v=b.dyn?b.dyn():{text:b.text,color:b.color};
-        if(p.textContent!==v.text) p.textContent=v.text;
-        p.style.color=v.color||"";
+        if(p.textContent!==b.text) p.textContent=b.text;
+        p.style.color=b.color||"";
       }};
     }
+    /* A LIST OF ANSWERS, under its own heading when it has one - so "MEASURED"
+       is stated once, by the block that IS the measurements, and no panel has
+       to remember to push a rule above its own readouts. */
     case "readlist": {
-      const box=KIT.el("div","db-readlist");
-      return {el:box,sync(b){ fieldRowsSync(box, b.rows()); }};
+      const root=KIT.el("div","db-block");
+      if(block.title){ const r=KIT.rule(block.title); root.appendChild(r.el);
+        KIT.tip(r.el,block.title,block.tip||""); }
+      const box=KIT.el("div","db-readlist"); root.appendChild(box);
+      return {el:root,sync(b){
+        let rows=b.rows();
+        if(PREV.key!==null){
+          const after=prevRows(b.rows);
+          rows=rows.map((r,i)=>{ const d=prevDelta(r[0], r[1], after[i]&&after[i][1]);
+            if(!d) return r;
+            const out=[r[0],r[1],r[2],r[3]]; out.dlt=d; return out; });
+        }
+        fieldRowsSync(box, rows);
+      }};
     }
     case "sdmnote": {
       const seg=KIT.seg({cells:18});
@@ -920,6 +1038,15 @@ function paramBlockMk(block){
       }
       root.appendChild(cells);
       return {el:root,sync(){}};
+    }
+    /* A KEY ON THE TITLE BAR WITH BLOCKS HANGING OFF IT. Anything that is not
+       a knob on the machine - a whole drawing to start from - is asked for
+       here rather than standing open above the knobs it overwrites. */
+    case "menu": {
+      const mk=KIT.menuKey({label:block.label,tip:block.tip});
+      const hs=block.blocks.map(b=>{ const h=paramBlockMk(b); mk.menu.appendChild(h.el); return h; });
+      return {el:mk.el,sync(b){
+        b.blocks.forEach((c,i)=>{ const h=hs[i]; if(h&&h.sync) h.sync(c); }); }};
     }
     case "rule": {
       const r=KIT.rule(block.title);
@@ -957,6 +1084,12 @@ function paramBlockMk(block){
       root.appendChild(bankRow);
       return {el:root,sync:lit};
     }
+    // where a lattice canvas prints its figures - filled by latReadSync()
+    case "latread": {
+      const box=KIT.el("div","db-latread");
+      box.dataset.core=block.core; box.dataset.pen=block.pen;
+      return {el:box,sync(){}};
+    }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas"); cv2.dataset.core=block.core;
       KIT.tip(cv2,"FUEL LATTICE / PLAN",LATPLAN_TIP);
@@ -972,10 +1105,13 @@ function paramBlockMk(block){
     default: return {el:KIT.el("div"),sync(){}};
   }
 }
-function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||"")).join("|"); }
+function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||"")
+  +(b.blocks?"("+blockSig(b.blocks)+")":"")).join("|"); }
 function dbPanelSync(container,blocks){
   // a STATED column count beats the height rule (marginColumns, ui/margin.js)
   container._cols=blocks.cols||0;
+  // a panel that states its own shape is not flowed into columns as well
+  container.classList.toggle("db-body-tree",blocks.some(b=>b.kind==="box"));
   const sig=blockSig(blocks);
   if(sig!==container._sig || !container._h){
     container.innerHTML="";
@@ -1213,7 +1349,7 @@ function dbBuild(){
   KIT.tip(rst.el,"RESET","Takes the whole ship off the grid: every machine, tank, fitting, port and pipe, and the core back to the stock lattice. What is left is the blank grid a new design starts from, and it still commissions.");
   pres.menu.appendChild(rst.el);
   PLANTPRE.forEach((pr,i)=>{
-    const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); urlPreset(i); sel=roleId("core"); preShut(); uiDirty(); }});
+    const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); urlPreset(i); sel=null; preShut(); uiDirty(); }});
     KIT.tip(b.el,pr[0],pr[2]);
     pres.menu.appendChild(b.el);
   });
@@ -1239,6 +1375,8 @@ function dbSync(){
      canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */
   document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latPlan(coreBag(cv2.dataset.core),x,y,w,h)));
   document.querySelectorAll("#scr-design .db-latsection-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latSection(coreBag(cv2.dataset.core),x,y,w,h)));
+  // AFTER both paints: they are what works the figures out - see latReadSet()
+  latReadSync();
 }
 if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
 
