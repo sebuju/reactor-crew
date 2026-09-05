@@ -15,7 +15,7 @@ function* commissionGen(){
   const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
-     aF:a.aF, aM:d.aM, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:a.tsat*Math.pow(d.P0/a.P0,.25),
+     aF:a.aF, aM:d.aM, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:a.tsat*Math.pow(d.P0/a.P0,coolSatN(a)),
      rated:D.power, dnbr0:d.dnbr0, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      /* The trip floor used to be a flat number per PUMPS[D.pumps] tier. It now
         scales with pump capacity actually on the grid: +.15 for every full
@@ -39,7 +39,7 @@ function* commissionGen(){
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:holdDampK()*L.pzrK,
      dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
-     rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi, rodRate:D.rodSpd,
+     rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi, rodRate:rodSpdOf(),
      /* IS THERE A VESSEL FOR THE FUEL TO BE IN. The lattice is drawn on its
         own surface, so D.power and every reactivity term above exist whether
         or not a reactor stands on the arrangement grid - see the kinetics
@@ -62,7 +62,7 @@ function* commissionGen(){
   /* tc/pc/rhoc are this fluid's own critical point, off its COOLANT row: latent
      heat and both saturated densities fall to a known value there, and until
      they were carried here every fluid fell to water's. */
-  P.sat   = {p0:P.P0, T0:P.tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV,
+  P.sat   = {p0:P.P0, T0:P.tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV, hFilm:a.hFilm,
              tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:P.rho0, solidK:a.solidK};
   P.hfg   = a.hfg;                                     // THIS coolant's latent heat, kJ/kg
   /* A PLANT MAY COMMISSION SATURATED. The ceiling used to be tsat0-35, a hard
@@ -178,9 +178,9 @@ function* commissionGen(){
     P.steamRef = P.n0*P.rated*1000/steamRise();
     P.turbC = P.steamRef/Math.max(flowW(1, steamRhoDes(), sgDesignP(), condPDes()), 1e-9); };
   { const want = ratedSteam()/Math.max(1,sgCount());
-    /* SECANT, not a rate-limited walk: the network is LINEAR in head, so one
-       generator's flow is affine in its own valve and a handful of passes
-       lands on the answer. The controller's own stroke rate is a property of a
+    /* SECANT, not a rate-limited walk: one generator's flow is close to affine in
+       its own valve over the span walked, so a handful of passes lands on the
+       answer. The controller's own stroke rate is a property of a
        real valve moving in real time and has no business in a design-time
        reference - walked at that rate this cost 1.6 s of commissioning. */
     const fedOf = (outs,id) => (outs.sgFeedBy && outs.sgFeedBy[id]) || 0;
@@ -482,11 +482,11 @@ function* commissionGen(){
    fallback, the same standing secPTarget() has for a caller with no live S. */
 const autoCfg = () => P || D;
 const AUTOSYS={
-  rps:{part:()=>roleId("ctrl"),label:"RPS",ann:"RPS BYPASS",name:"PROTECTION SYSTEM",
+  rps:{part:()=>roleId("ctrl"),label:"RPS",ann:"RPS BYP",name:"PROTECTION SYSTEM",
     fit:()=>autoCfg().rps,
     tip:"Reactor Protection System. Armed, it scrams the core on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core.",
     warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
-  rod:{part:()=>roleId("rods"),label:"AUTO ROD",ann:"ROD AUTO BYP",name:"AUTOMATIC ROD CONTROL",
+  rod:{part:()=>roleId("rods"),label:"AUTO ROD",ann:"ROD BYP",name:"AUTOMATIC ROD CONTROL",
     fit:()=>autoCfg().autorod,
     tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band the rod drives were commissioned with - widen that band at the design bench and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
     warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
@@ -507,14 +507,14 @@ const AUTOSYS={
      it still owns the label, the annunciator name, the warning and its AUTOEV
      entry - one table per concept, and the concept still exists. Only its host
      and its granularity moved. autoOn() must tolerate the null. */
-  porv:{part:null,label:"PORV AUTO",ann:"PORV AUTO BYP",name:"AUTOMATIC RELIEF",
+  porv:{part:null,label:"PORV AUTO",ann:"PORV BYP",name:"AUTOMATIC RELIEF",
     fit:()=>reliefFitIds().length>0,
     /* One lamp for "automatic relief is defeated anywhere", because that is
        the question the watch reading the board is actually asking. */
     lit:s=>reliefFitIds().length>0 && (s.byp.porv || reliefFitIds().some(fid=>s.porvByp[fid])),
     tip:"Lifts each relief valve at its own setpoint, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
     warn:"The relief valve will not lift. An overpressure now ends at the vessel, not at the valve."},
-  runback:{part:()=>roleId("turb"),label:"RUNBACK",ann:"RUNBACK BYP",name:"TURBINE RUNBACK",
+  runback:{part:()=>roleId("turb"),label:"RUNBACK",ann:"NO RUNBACK",name:"TURBINE RUNBACK",
     fit:()=>true,
     tip:"Drops turbine load to 5% the instant the reactor trips, so the turbine cannot draw heat out of a shut-down core. Bypass it and load stays wherever you left it right through a scram.",
     warn:"A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop."},
@@ -541,11 +541,11 @@ const AUTOSYS={
      plant-wide control on a machine that owns one part of it, and there is no
      room on that box for a slider, a value and a switch at once. */
   feed:{part:null,
-    label:"FEED CTRL",ann:"FEED CTRL BYP",name:"FEEDWATER CONTROL",
+    label:"FEED CTRL",ann:"FEED BYP",name:"FEEDWATER CONTROL",
     fit:()=>pumpIds().some(id=>secGensOf(id).length>0),
     tip:"Holds each steam generator at its own level setpoint by throttling its feed regulating valve. Bypass it and the valves stop where they are - you feed by hand, on the pump's own demand.",
     warn:"Feedwater is on manual. Every regulating valve is frozen where it stands and the generators will drift off setpoint."},
-  bkp:{part:()=>roleId("bkp"),label:"BACKUP",ann:"BACKUP PWR BYP",name:"BACKUP POWER",
+  bkp:{part:()=>roleId("bkp"),label:"BACKUP",ann:"BACKUP BYP",name:"BACKUP POWER",
     fit:()=>(P?P.backup:D.bkp)>0,
     tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
     warn:"The backup supply will not pick up the pumps. A blackout now leaves natural circulation only."},
@@ -1143,11 +1143,10 @@ const dmgFx = id => {
    and a nozzle valve, which stand in the same air and take the same blast, so
    the heat loop and the blast loop walk one list rather than growing a third
    copy each time the board gains a per-cell target. */
-// cached for the length of one pass (layPass()): the heat loop and the blast loop both walk it every tick
-let hazCache = null, hazPass = -1;
+// cached on the design: every input is on D, and a per-pass key rebuilt it every tick (5 % of one)
+let hazCache = null, hazGen = -1;
 function cellHazards(){
-  const pn = layPass();
-  if(pn && hazPass === pn) return hazCache;
+  if(hazCache && hazGen === DGEN) return hazCache;
   const out=[];
   for(const k in D.pipes){ const c=k.indexOf(",");
     out.push({id:"pipe:"+k, x:+k.slice(0,c), y:+k.slice(c+1), what:"the run at "+k}); }
@@ -1162,7 +1161,7 @@ function cellHazards(){
   for(const k of matCells()){ const c=k.indexOf(","), x=+k.slice(0,c), y=+k.slice(c+1);
     const lim=matTsurv(x,y); if(!lim) continue;
     out.push({id:"mat:"+k, x, y, lim, what:"the containment wall at "+k}); }
-  if(pn){ hazCache = out; hazPass = pn; }
+  hazCache = out; hazGen = DGEN;
   return out;
 }
 
@@ -1548,7 +1547,7 @@ const autorodTune = () => { const lag=autorodLag();
    the three behind. P.scram replaces it on a trip. */
 // P is null on the bench, where ctlFor()'s tilt tip asks for it; commission()
 // copies the same D.rodSpd into P, so the two answers cannot differ
-const rodRate = () => P ? P.rodRate : D.rodSpd;
+const rodRate = () => P ? P.rodRate : rodSpdOf();
 /* actuator rates. Boration is charging-pump flow; dilution has to displace loop
    inventory, so it is slower. Poisoning yourself is easy, getting back out is not. */
 const BOR_IN=60, BOR_OUT=35;            // pcm/s toward more / less boron
@@ -1596,7 +1595,7 @@ const porvLive = fid => autoLive("porv") && !S.porvByp[fid];
    is of order five to ten - and tau_c is twice it. It replaced a second
    first-order constant (FLOW_TAU_COAST) that lost speed as e^-t, which is
    not what a free rotor does. */
-const FLOW_TAU=5, PUMP_ROTOR_S=6;      // seconds
+const FLOW_TAU=5;      // seconds; PUMP_ROTOR_S is beside pumpRotor() in layout.js
 /* ── the secondary mass balance (Stage 6a) ──
    s.sgl used to be clamp(50+(heat-s.load)*40-(s.load-1)*14,0,100), recomputed
    from scratch every tick with no memory, so it could not run out however long
@@ -1979,7 +1978,8 @@ function advectSrc(s){
          coupling outweighs a gas's own w*cp and the rest point followed the
          seed instead of the heat. */
       if(s.metalT[nm] === undefined || !isFinite(s.metalT[nm]) || netStoreHeld) s.metalT[nm] = T;
-      const q = m*CP_STEEL*(s.metalT[nm] - T)/net.metalTau[i];
+      const ua = net.metalUA ? net.metalUA[i] : 0;
+      const q = m*CP_STEEL*(s.metalT[nm] - T)/(net.metalTau[i] + (ua > 0 ? m*CP_STEEL/ua : 0));
       metalQ[nm] = q; add(nm, q); } }
   return src;
 }
@@ -2092,6 +2092,7 @@ const advectClampCount = () => advectClamped;
 /* WHAT THE TRANSPORT ACTUALLY PUT THROUGH EVERY HOLE THIS TICK, kg - the
    ledger's own figure, off the same limited flows the mass integral rides. */
 let advectOutPri = 0, advectOutSec = 0;
+const holdNodeSet = () => new Set(holdTankIds().map(coreFold));
 function advectStep(s, dt, runFlow, edgeKg){
   const net = P && P.net;
   if(!net || !net.name || !s.hBy || !s.mBy) return;
@@ -2175,8 +2176,8 @@ function advectStep(s, dt, runFlow, edgeKg){
         b[nm] = (s.boron0||0) - 100*(tankFluid(tid).boron||0);
       else if(b[nm] === undefined) b[nm] = circOfNode(nm) === G.coreCirc ? (s.boron||0) : 0;
       if(cH[nm] === undefined) cH[nm] = 0; } }
-  const mOut = new Float64Array(net.n), inH = new Float64Array(net.n), inM = new Float64Array(net.n);
-  const inB = new Float64Array(net.n), inC = new Float64Array(net.n);
+  const mOut = scratch(net, "mOut", net.n, Float64Array, 0), inH = scratch(net, "inH", net.n, Float64Array, 0), inM = scratch(net, "inM", net.n, Float64Array, 0);
+  const inB = scratch(net, "inB", net.n, Float64Array, 0), inC = scratch(net, "inC", net.n, Float64Array, 0);
   const kgs = netKgs;
   /* ══ ALONG THE FLOWS THE SOLVE ACTUALLY ANSWERED IN ══
      edgeKg is signed, per EDGE, u->v (netFlowK). runFlow is keyed by RUN, and
@@ -2184,7 +2185,7 @@ function advectStep(s, dt, runFlow, edgeKg){
      turbine exhaust node had an outlet and no inlet, and series segments of
      one run share a key and were counted twice. The fallback is for a caller
      with no solve to hand. */
-  const eFrom = new Int32Array(net.edges.length).fill(-1), eM = new Float64Array(net.edges.length);
+  const eFrom = scratch(net, "eFrom", net.edges.length, Int32Array, -1), eM = scratch(net, "eM", net.edges.length, Float64Array, 0);
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
     const q = edgeKg ? edgeKg[e] : runFlow[ed.key];
@@ -2206,7 +2207,7 @@ function advectStep(s, dt, runFlow, edgeKg){
      through the tick, which is what running out is. Booked nodes and
      containment keep 1: their inventory is somebody else's integral, and
      containment cannot donate at all now. */
-  const kOut = new Float64Array(net.n).fill(1);
+  const kOut = scratch(net, "kOut", net.n, Float64Array, 1);
   /* NEITHER LIMITER DURING A SETTLE (netStoreHeld): no mass is integrated
      there and a pass is not a tick, so what a node "has" against a pass's
      throughput means nothing - read anyway, it throttled every small node
@@ -2232,13 +2233,13 @@ function advectStep(s, dt, runFlow, edgeKg){
      node past the pressure pushing on it. The excess is not removed and not
      booked - it is simply NOT CARRIED, so it stays in the donor and the pass
      conserves exactly as it did. */
-  const kIn = new Float64Array(net.n).fill(1);
-  if(!netStoreHeld){ const bk = netBooked(net), pMax = new Float64Array(net.n);
+  const kIn = scratch(net, "kIn", net.n, Float64Array, 1);
+  if(!netStoreHeld){ const bk = netBooked(net), pMax = scratch(net, "pMax", net.n, Float64Array, 0);
     for(let i=0;i<net.n;i++) pMax[i] = netPAt(s, net.name[i]);
     for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
       const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
       const pf = netPAt(s, net.name[from]); if(pf > pMax[to]) pMax[to] = pf; }
-    const inRaw = new Float64Array(net.n), outNow = new Float64Array(net.n);
+    const inRaw = scratch(net, "inRaw", net.n, Float64Array, 0), outNow = scratch(net, "outNow", net.n, Float64Array, 0);
     for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
       const ed = net.edges[e]; outNow[from] += eM[e];
       inRaw[from === ed.u ? ed.v : ed.u] += eM[e]; }
@@ -2284,8 +2285,10 @@ function advectStep(s, dt, runFlow, edgeKg){
      what a node that small physically does. There is no explicit blow-up
      available here by construction, and no sub-stepping to pay for. */
   advectClamped = 0;
+  // a pressurizer's bubble is a seeded fact: at a rest point the surge flow is zero, and relaxed toward the loop's liquid the settle collapsed it (x 0, level 100 % at commission)
+  const keep = netStoreHeld ? holdNodeSet() : null;
   for(let i=0;i<net.n;i++){
-    if(!(inM[i] > 1e-9) || anch[net.name[i]] !== undefined) continue;
+    if(!(inM[i] > 1e-9) || anch[net.name[i]] !== undefined || (keep && keep.has(net.name[i]))) continue;
     /* AGAINST WHAT THIS NODE ACTUALLY HOLDS, kg. It was vol*P.rho0 - ONE
        plant-wide density, so a turbine exhaust holding 0.7 kg of steam was
        priced as though it held 700 times that and its blend came out a
@@ -2372,7 +2375,7 @@ function advectStep(s, dt, runFlow, edgeKg){
      somebody else's answer - and over what is CIRCULATING, because a stagnant
      reserve hanging off the loop is not going round. */
   if(G.coreCirc >= 0 && s.Tavg !== undefined){
-    let m = 0, hm = 0, pm = 0;
+    let m = 0, hm = 0, pm = 0; const coreNid = coreFold(roleId("core")||"core");
     for(let i=0;i<net.n;i++){ const nm = net.name[i];
       if(anch[nm] !== undefined || circOfNode(nm) !== G.coreCirc) continue;
       /* OVER WHAT IS ACTUALLY CIRCULATING, AND MEMBERSHIP IS NOT A SWITCH.
@@ -2391,8 +2394,8 @@ function advectStep(s, dt, runFlow, edgeKg){
          through-flow on none, so it scores zero on both and leaves for good,
          and a leg slowing down fades out continuously instead of dropping. */
       const ref = P.netRefThru && P.netRefThru[nm];
-      if(!(ref > 0)) continue;
-      const w = clamp(Math.min(inM[i], mOut[i])/ref, 0, 1);
+      // the vessel is always in the mean: stalled, every through-flow weight is 0 and Tavg froze while the core heated it
+      const w = nm === coreNid ? 1 : ref > 0 ? clamp(Math.min(inM[i], mOut[i])/ref, 0, 1) : 0;
       if(!(w > 0)) continue;
       const mi = w*(mBy[nm] !== undefined ? mBy[nm] : net.vol[i]*rho);
       m += mi; hm += mi*h[nm]; pm += mi*netPAt(s, nm);
@@ -2761,12 +2764,22 @@ const sigmaW = T => { const t = clamp(1 - T/647.096, 0, 1);
 const chfZuber = pMPa => { const c = SAT_WATER, T = satT(c, pMPa);
   const rf = rhofOf(c,T), rg = rhogOf(c,T);
   return 0.131*hfgOf(c,T)*1000*Math.sqrt(rg)*Math.pow(sigmaW(T)*9.81*Math.max(rf-rg,1e-3), 0.25); };
+/* PAST W-3's QUALITY EDGE THE LIMIT IS BIASI (1967), the boiling-length dryout correlation a
+   BWR channel is judged on: W-3 clamps x at 0.15, which is a BWR's own exit quality, so DNBR
+   there was a constant. q1 rules low quality, q2 high; W/cm2 with D in cm, G in g/cm2 s, P in bar. */
+const chfBiasi = (pMPa, gSI, x, dhM) => { const Dc = dhM*100, G = Math.max(gSI, 1)/10, Pb = pMPa*10;
+  const Dn = Math.pow(Dc, Dc >= 1 ? 0.4 : 0.6), g6 = Math.pow(G, 1/6);
+  const F = 0.7249 + 0.099*Pb*Math.exp(-0.032*Pb);
+  const H = -1.159 + 0.149*Pb*Math.exp(-0.019*Pb) + 8.99*Pb/(10 + Pb*Pb);
+  const q1 = 1.883e3/(Dn*g6)*(F/g6 - x), q2 = 3.78e3*H*(1 - x)/(Dn*Math.pow(G, 0.6));
+  return Math.max(q1, q2, 0)*1e4; };
 const chfW3 = (p, g, x, dh, dhSub) => {
   const gFloor = W3_LIM.g[0]*1e6/W3_G;
   const w3 = dnbW3(p, Math.max(g, gFloor), x, dh, dhSub);
-  if(g >= gFloor) return w3;
+  const w = x > W3_LIM.x[1] ? Math.min(w3, chfBiasi(p, Math.max(g, gFloor), x, dh)) : w3;
+  if(g >= gFloor) return w;
   const z = chfZuber(p);           // W/m2, the same currency dnbW3 answers in
-  return Math.min(w3, z + (w3 - z)*g/gFloor);
+  return Math.min(w, z + (w - z)*g/gFloor);
 };
 function dnbrOf(m){
   if(m.law==="boil")
@@ -3010,11 +3023,10 @@ const netKgs = q => Math.abs(q);
    tick that does not close has lost or invented water, and the residual is the
    term nobody wrote down. A DEV INVARIANT: it warns, it never throws - killing
    a player's run over a book-keeping slip is worse than the slip.
-   A HOLD TANK IS NOT A STORE. Its level is s.lvl, which netExpSurge() moves on
-   thermal expansion rather than on mass, so booking it would open the ledger
-   every time the loop warmed up. It is a pressure boundary; the water in it is
-   already the loop's. An `inf` tank is not a store either - its level never
-   moves (see the level loops below), so it is a boundary and books as a term. */
+   A HOLD TANK HAS NO LEVEL TERM. s.lvl is thermal expansion, not mass; its
+   water is the loop's own at an ordinary node of the field, so the unbooked
+   walk counts it like any other node. An `inf` tank is not a store either - its
+   level never moves (see the level loops below), so it is a boundary and books as a term. */
 const LEDGER_EPS = 1e-7;               // fraction of M0 - a solved quantity never meets a bare compare
 const LEDGER_QUIET = 30;               // seconds of sim time between two warnings about the SAME residual
 const ledgerKg = s => { let m = 0;
@@ -3756,7 +3768,7 @@ function resetPlant(){
       { const G = nodeGraph(), c = satOfCirc(G.coreCirc);
         if(G.coreCirc >= 0 && S.Tavg !== undefined && isFinite(S.Tavg)){
           const dh = hOfT(c, P.Tref) - hOfT(c, S.Tavg);
-          if(Math.abs(dh) > 1e-9){ const skip = new Set(holdTankIds().map(coreFold));
+          if(Math.abs(dh) > 1e-9){ const skip = holdNodeSet();
             for(const nm in S.hBy) if(circOfNode(nm) === G.coreCirc && !skip.has(nm)) S.hBy[nm] += dh;
             S.Tavg = P.Tref; } } }
       /* and the SUGGESTED tubes are sized for this point, a ratio step a pass
@@ -3867,28 +3879,39 @@ function resetPlant(){
       last = o;
       const by = o.sgSteamOutBy || {};
       return shells.map(id => (by[id]||0) - (HEATBAL.sgQBy[id]||0)/riseSg(id, secP(S,id))); };
+    /* ONE JACOBIAN BY DIFFERENCES, THEN BROYDEN. Each column is a full re-solve
+       and there were (n+1) per iteration for forty iterations: BN-600 spent
+       most of its commissioning here. The rank-one update needs no solve at
+       all and the residual is nearly diagonal in the shells, so it holds; it is
+       retaken by differences the moment an iteration makes the error worse. */
+    let A = null, pPrev = null, rPrev = null, errPrev = Infinity;
     for(let i=0;i<40 && n;i++){
       const p = pOf(), r0 = solve();
       let err = 0;
       shells.forEach((id,j) => { const w = (HEATBAL.sgQBy[id]||0)/riseSg(id, p[j]);
         if(w > 0) err = Math.max(err, Math.abs(r0[j])/w); });
       if(err < 1e-6) break;
-      const J = [];
-      for(let j=0;j<n;j++){ const dp = 1e-3*p[j], q = p.slice(); q[j] += dp; setP(q);
-        const r1 = solve(); J.push(r1.map((v,i2) => (v - r0[i2])/dp)); }
-      // J[j][i] is d r_i / d p_j; eliminate on the transpose for the step
-      const A = [], b = r0.map(v => -v);
-      for(let i2=0;i2<n;i2++){ A.push([]); for(let j=0;j<n;j++) A[i2].push(J[j][i2]); }
+      if(!A || err > errPrev){
+        A = shells.map(() => new Array(n).fill(0));
+        for(let j=0;j<n;j++){ const dp = 1e-3*p[j], q = p.slice(); q[j] += dp; setP(q);
+          const r1 = solve(); for(let i2=0;i2<n;i2++) A[i2][j] = (r1[i2] - r0[i2])/dp; } }
+      else { const dp = p.map((v,j) => v - pPrev[j]), dd = dp.reduce((t,v) => t + v*v, 0);
+        if(dd > 0) for(let i2=0;i2<n;i2++){ let Adp = 0;
+          for(let j=0;j<n;j++) Adp += A[i2][j]*dp[j];
+          const v = (r0[i2] - rPrev[i2]) - Adp;
+          for(let j=0;j<n;j++) A[i2][j] += v*dp[j]/dd; } }
+      pPrev = p; rPrev = r0; errPrev = err;
+      const M = A.map(row => row.slice()), b = r0.map(v => -v);
       for(let c=0;c<n;c++){ let piv = c;
-        for(let r=c+1;r<n;r++) if(Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
-        [A[c],A[piv]] = [A[piv],A[c]]; [b[c],b[piv]] = [b[piv],b[c]];
-        if(!(Math.abs(A[c][c]) > 1e-12)) continue;
-        for(let r=c+1;r<n;r++){ const f = A[r][c]/A[c][c];
-          for(let k=c;k<n;k++) A[r][k] -= f*A[c][k]; b[r] -= f*b[c]; } }
+        for(let r=c+1;r<n;r++) if(Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+        [M[c],M[piv]] = [M[piv],M[c]]; [b[c],b[piv]] = [b[piv],b[c]];
+        if(!(Math.abs(M[c][c]) > 1e-12)) continue;
+        for(let r=c+1;r<n;r++){ const f = M[r][c]/M[c][c];
+          for(let k=c;k<n;k++) M[r][k] -= f*M[c][k]; b[r] -= f*b[c]; } }
       const d = new Array(n).fill(0);
       for(let c=n-1;c>=0;c--){ let s = b[c];
-        for(let k=c+1;k<n;k++) s -= A[c][k]*d[k];
-        d[c] = Math.abs(A[c][c]) > 1e-12 ? s/A[c][c] : 0; }
+        for(let k=c+1;k<n;k++) s -= M[c][k]*d[k];
+        d[c] = Math.abs(M[c][c]) > 1e-12 ? s/M[c][c] : 0; }
       /* CEILED AT THE SHELL'S OWN BURST POINT. A pass that will not converge -
          DUAL's two shells on one header - simply ran its 20 % step forty times
          and seeded one shell at 3 114 MPa. A commissioning seed above the
@@ -4299,13 +4322,18 @@ function step(dt){
      run with no pressure at either end is not judged. */
   const pBurstAt = n => { const f = coreFold(n);
     return pField[f] === undefined ? null : pField[f]; };
+  // a run's burst pressure is a design fact: cached on the net (a commission) and DGEN (an edit),
+  // because runDesignP() walks every tank and pump on the plant and this asks it of every run
+  const net = P.net;
+  if(net.burstGen !== DGEN){ net.burstP = {}; net.burstGen = DGEN; }
   for(const r of pipeNetwork()){
     if(!r.cells || !r.cells.length) continue;
     const ends = runEnds(r.key, r.k); if(!ends) continue;
     const qa = pBurstAt(ends[0]), qb = pBurstAt(ends[1]);
     if(qa === null && qb === null) continue;
     const pa = qa === null ? qb : qa, pb = qb === null ? qa : qb;
-    if(Math.max(pa,pb) <= runBurstP(r)) continue;
+    const pBurst = net.burstP[r.key] ?? (net.burstP[r.key] = runBurstP(r));
+    if(Math.max(pa,pb) <= pBurst) continue;
     /* A RUN THAT IS ALREADY OPEN DOES NOT SPLIT TWICE. One hole is what the
        run has to say; without this the die is re-rolled every tick the line
        is still over its wall and eats the rest of the pipe cell by cell. */
@@ -4440,7 +4468,7 @@ function step(dt){
   /* The backup supply carries the share of pump power the bench sold: diesels
      are the full set, a battery bank is half of it. Scaled off demand, so what
      the operator asked for is still what the supply is trying to deliver. */
-  { const k = Math.min(dt/FLOW_TAU,1), tauC = 2*PUMP_ROTOR_S;
+  { const k = Math.min(dt/FLOW_TAU,1);
     const live = {};
     for(const id of pumpIds()){ live[id]=1;
       if(s.flowDemBy[id]===undefined) s.flowDemBy[id]=1;             // a pump placed mid-run arrives at rated
@@ -4455,7 +4483,7 @@ function step(dt){
       const N = s.flowBy[id], want = supplyK(s)*s.flowDemBy[id];
       // up on the motor; down on the rotor, never below what the motor still holds
       s.flowBy[id] = want >= N ? N + (want - N)*k
-                               : Math.max(want, N - N*N*dt/tauC); }
+                               : Math.max(want, N - N*N*dt/(2*pumpRotor(id))); }
     for(const id in s.flowBy) if(!live[id]){ delete s.flowBy[id]; delete s.flowDemBy[id]; } }
 
   /* ── the core's temperature rise: the same 0-D split, told about flow ──
@@ -4852,12 +4880,11 @@ function step(dt){
     for(const k in s.sgtrBy){ const id = k.slice(5);
       if(sgActive(id)) hot += s.sgtrBy[k]*contRelPart(s, partOf(id)); }
     if(hot>0) s.release = Math.min(100, s.release + (hot/0.30)*0.02*P.dose*dt); }
-  const burst = P.P0*(P.burstK - 0.0028*s.fatigue);   // fatigue weakens the vessel
+  const burst = P.P0*(P.burstK - 0.0028*s.fatigue);   // fatigue slope is a game figure, no source
   /* asked at the VESSEL, not at the pressurizer: what bursts a vessel is the
      pressure inside it, and hanging the pressurizer high genuinely puts the
      core above the gauge that reports it */
   if(!s.breach && s.pCore > burst){ s.breach=true; s.trip="VESSEL RUPTURE"; }
-  s.P = clamp(s.P, Math.min(P.P0*0.06, regionPAt(s, roleOf("core"))), P.P0*1.6);
   /* invClamp IS GONE. It existed because a pool could be driven past its own
      ends; a node with a mass and a run-dry gate cannot be, so there is nothing
      left to clamp and nothing to book for it. */
@@ -5075,7 +5102,7 @@ function step(dt){
       secHole[id] = (secHole[id]||0) + SG_RELIEF_CAP*ratedSteam()*bk.bore*bk.bore
                                        *Math.max(0, secP(s,id)-back)/span; }
   }
-  let boiled = 0;               // kg/s, summed for the mass balance below
+  let boiled = 0, boilQ = 0;    // kg/s and kW, each shell at its own pressure - the condenser used to take the design rise
   /* WHAT THE SOLVE MOVED THAT THE SHELL COULD NOT ACTUALLY GIVE. The vapour
      network answers off pressure alone; a shell whose steam space is empty
      has nothing to send whatever its pressure says, and the shortfall is
@@ -5230,7 +5257,7 @@ function step(dt){
     const raw = lvl + 100*(fed-steamOut)/M*dt;
     s.sglBy[id] = clamp(raw, 0, 100);
     book(s,"sgClamp", (raw - s.sglBy[id])/100*M);
-    boiled += outSteam;
+    boiled += outSteam; boilQ += outSteam*riseSg(id, secP(s,id));
     /* A ruptured generator on its safety valve is putting primary water in the
        sky. Charged at the SGTR scale already used below, times the share of
        this machine's steam that is going overboard rather than to the
@@ -5292,7 +5319,7 @@ function step(dt){
      is read off, so a single-condenser plant is bit-identical. */
   { const ids = condIds(), n = ids.length;
     for(const id in s.condTBy) if(!partOf(id)) delete s.condTBy[id];
-    if(n){ const qIn = Math.max(0, boiled*retK*steamRise() - workKW)/n;
+    if(n){ const qIn = Math.max(0, boilQ*retK - workKW)/n;
       for(const id of ids){
         if(s.condTBy[id]===undefined) s.condTBy[id] = cwInAt(s,id);
         s.condTBy[id] = potStep(s.condTBy[id], condCapOf(), qIn, condRejOf(s,id),
@@ -6000,7 +6027,7 @@ const ANN=[
   "A scram has occurred and the control rods are fully inserted. The reactor is shut down. Expect a xenon buildup that will keep it shut down for the next few minutes.","rods"],
  ["HI PRESS","red",s=>s.P>P.P0*1.05,
   "Primary pressure above 105% of normal. The relief valve will lift shortly. Sustained overpressure past about 122% bursts the vessel outright, and every point of vessel fatigue lowers that threshold.","pzr"],
- ["PUMP CAVITATION","amber",s=>s.cav>0.15,
+ ["CAVITATION","amber",s=>s.cav>0.15,
   "The water arriving at the coolant pumps is close to boiling, so the pumps are churning vapour instead of liquid. Actual flow is far below what the bench says. Raise pressure or cool the loop.","pump"],
  /* no heat guard here, unlike tripCause(): the trip refuses to fire on a shut-down
     plant, but the tile is information and the operator wants it most when the
@@ -6009,7 +6036,7 @@ const ANN=[
   "Coolant flow is below the design floor for the pumps fitted. With protection armed the reactor trips here. Bypassed, the fuel is cooled by buoyancy alone, and that is all the cooling there is.","pump"],
  ["NO RPS","amber",()=>!P.rps,
   "No protection system was fitted at the design bench. Nothing is watching flux, DNBR, pressure, fuel temperature, flow or void on your behalf. You are the protection system.","ctrl"],
- ["VESSEL BREACH","red",s=>s.breach,
+ ["RX BREACH","red",s=>s.breach,
   "The pressure vessel has ruptured. Coolant is leaving faster than anything can replace it. This is unrecoverable.","core"],
  ["BLACKOUT","amber",s=>s.blackout,
   "Main power to the coolant pumps is lost. Flow is now limited to your backup power supply plus whatever natural circulation the core geometry generates.",null],
@@ -6026,33 +6053,33 @@ const ANN=[
  /* A shell above the set point, whether or not anything was fitted to answer
     it - which is exactly the case worth being told about, because on that
     plant the next thing that gives is the shell. */
- ["HI STEAM PRESS","red",s=>sgIds().some(id=>secP(s,id)>sgLiftP()),
+ ["SG HI PRES","red",s=>sgIds().some(id=>secP(s,id)>sgLiftP()),
   "A steam generator is over its design shell pressure. If a relief valve is fitted it is passing steam to atmosphere, and the water going with it is not coming back. If one is NOT fitted, the shell bursts at 1.5x design. Find what is stopping the steam: a shut steam line, a drowned or isolated condenser, or a turbine that is not passing.","sg"],
- ["SG SHELL BURST","red",s=>sgIds().some(id=>s.sgBurst&&s.sgBurst[id]),
+ ["SG BURST","red",s=>sgIds().some(id=>s.sgBurst&&s.sgBurst[id]),
   "A secondary shell has ruptured. It is open to atmosphere, it will not hold pressure again, and it stops cooling its loop the moment it is empty. If those tubes were leaking, what is going out of the hole is primary water.","sg"],
  /* The two steps of boiling a shell dry, on the same numbers the mimic's own
     banner and the removal term read. Plant-wide, like every other row here:
     the lamp says "here", the board says "what". */
- ["SG LEVEL LO","amber",s=>sgIds().some(id=>sgLvl(s,id)<SG_LOW),
+ ["LO SG LVL","amber",s=>sgIds().some(id=>sgLvl(s,id)<SG_LOW),
   "A steam generator is below "+SG_LOW+"% and falling. Nothing is uncovered yet: this is the warning ahead of it, and emergency feedwater does not start until "+SG_DRY+"%. Feed it - check the feed pump, the regulating valve and the hotwell before you assume the pump has failed.","sg"],
  ["SG DRY","red",s=>sgIds().some(id=>sgLvl(s,id)<SG_DRY_LO),
   "A steam generator is below "+SG_DRY_LO+"%. Most of the bundle is in steam and that loop is not cooling the core any more. If every generator reads this, the only heat sink left is what leaks out of the boundary.","sg"],
- ["HOTWELL FULL","red",s=>condFrac(s)<1,
+ ["HOTWELL HI","red",s=>condFrac(s)<1,
   "The hotwell is above "+HOT_FLOOD+"% and the water in it is drowning the tubes that do the condensing. The condenser is losing capacity as it fills, so backpressure rises, the turbine takes less steam, and the shells pressurise behind it. Drain it or stop putting water into it.","cond"],
- ["TURBINE TRIP","red",s=>!!s.turbTrip,
+ ["TURB TRIP","red",s=>!!s.turbTrip,
   "Exhaust pressure got past what the machine will run against, so the stop valve is shut and the turbine is passing no steam. The reactor is still making heat. Find the heat sink: circulating water, a drowned hotwell, or a condenser that has been hit.","turb"],
- ["COND VACUUM LOST","red",s=>!!s.condLost,
+ ["NO VACUUM","red",s=>!!s.condLost,
   "The condenser reached atmospheric pressure and relieved. It is open to the room, it will not hold vacuum again, and it has stopped being a heat sink. Everything the generators raise now goes out of their safety valves, and the water goes with it.","cond"],
- ["ROD AT LIMIT","amber",s=>s.rodBand,
+ ["ROD LIMIT","amber",s=>s.rodBand,
   "The automatic rod controller is asking for rod travel the commissioned band will not give it, and coolant temperature is off programme because of it. It has no authority left in that direction. Move load, move boron, or widen the band at the design bench - the band is not a safety limit, it is how much room the controller was given.","rods"],
  ["NEAR TRIP","amber",()=>!!tripNear(),
   "A protection setpoint is within "+(RPS_NEAR*100).toFixed(0)+"% of tripping the reactor. The component itself names which one. This is a warning, not the trip: nothing has latched yet and the condition is still yours to clear.","core"],
- ["HI AREA RAD","amber",s=>s.doseRate>RAD_HI,
+ ["AREA RAD","amber",s=>s.doseRate>RAD_HI,
   "The control room is reading above 1x background. That number is set both by what has failed on the plant and by where you put the shielding at the bench - a well-shielded control room can sit this out through a release that would light this tile instantly on a poorly sited one. A repair party out on the plant right now is being spent while this is lit, faster the closer the job sits to whatever is shining.","ctrl"],
  /* Appended at the very end, after every existing entry, because help.js
     numbers the tiles by array index - inserting these beside FUEL DMG where
     they belong by subject would renumber every tile from 3 onward. */
- ["CLAD OXIDATION","red",s=>s.qOx>0&&s.qOx>s.n*PROMPT_F,
+ ["CLAD OXID","red",s=>s.qOx>0&&s.qOx>s.n*PROMPT_F,
   "Steam is burning the zirconium cladding, and it is now making more heat than the chain reaction is. This reaction feeds itself: the hotter the metal gets the faster it burns, and no rod, no pump and no valve on this ship stops it. It ends when the cladding is gone. It also makes hydrogen.","core"],
  ["FUEL MELT","red",s=>s.meltFrac>0,
   "Fuel pellets somewhere in the core are liquid. This is past cladding failure - the fuel itself has gone, and the damage map on the reactor panel says which part of the core. CORE MELT latches when a quarter of it is molten.","core"],
@@ -6060,7 +6087,7 @@ const ANN=[
     index, so a row that belongs beside FUEL DMG by subject still goes on the
     end. Hosted on the CONTROL cabinet: the room is a plant-wide fact and the
     cabinet is where the plant-wide facts already light (NO RPS, HI AREA RAD). */
- ["HI ROOM TEMP","red",s=>roomOverIds(s).length>0,
+ ["HI ROOM T","red",s=>roomOverIds(s).length>0,
   "A machine somewhere on the plant is standing in air hotter than it was built for, and it is being cooked at a rate you can watch. Heat is a place: it comes off every hot surface, it comes in a flood out of anything venting steam into the room rather than into a tank, it collects where a compact layout gives it nowhere to go, and the only sink is the hull. Find what is putting heat in, or fit something that takes it out.","ctrl"],
  /* AND WHETHER IT IS ALIGHT RIGHT NOW, which is a different question from
     whether it COULD light and was not askable anywhere on the board: the fire
@@ -6069,14 +6096,14 @@ const ANN=[
     finished. s.roomBurnOn is the flame count the burn pass already keeps. */
  ["H2 FIRE","red",s=>s.roomBurnOn>0,
   "Hydrogen is burning in the compartment right now. It stops when the fuel runs out or the air does - a sealed room smothers its own fire - and until then it keeps heating the machines and raising the pressure that breaks them. The OXYGEN layer says which way it is going.","ctrl"],
- ["H2 FLAMMABLE","red",s=>roomH2Peak(s)>=H2_LFL,
+ ["H2 LFL","red",s=>roomH2Peak(s)>=H2_LFL,
   "Hydrogen off the cladding has escaped the primary with the steam and is now over 4% by volume somewhere in the compartment. Above 773 K it lights itself - no spark needed - and it burns at 120 MJ per kilogram into the room it is standing in. This is the Fukushima sequence.","ctrl"],
  /* Appended, like every row above it. The panels ARE the heat sink out here,
     so this tile is the one that says the chain has come apart at the far end
     rather than in the plant. */
- ["NO HEAT SINK","red",s=>!radIds().some(id=>radLive(id)&&s.dmgParts.indexOf(id)<0),
+ ["NO SINK","red",s=>!radIds().some(id=>radLive(id)&&s.dmgParts.indexOf(id)<0),
   "Nothing on this ship is radiating. Every panel is destroyed, or walled in where it cannot see the skin, or there is no panel at all. Heat leaves this ship as light or it does not leave. The condenser will climb until it loses vacuum and the turbine trips, and after that the generators go to their safety valves.","cond"],
- ["PANEL OVERTEMP","amber",s=>radTMax(s)>tsatSec(TURB_TRIP_P)-COND_DT0,
+ ["PANEL HI T","amber",s=>radTMax(s)>tsatSec(TURB_TRIP_P)-COND_DT0,
   "The radiator is running hot enough that the condenser behind it is close to the pressure the turbine will not exhaust against. Rejection goes as the fourth power of panel temperature, so the last few kelvin cost far more than the first: cut reactor power, or accept the trip.","cond"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
