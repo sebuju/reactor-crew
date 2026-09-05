@@ -10,16 +10,19 @@
    So this file is the design surface, and seven things that used to be sliders
    on the bench are now MEASUREMENTS of it:
 
-     D.power    fuel volume x power density. Counted, never chosen.
-     D.hd       the envelope the lattice revolves to, against its length.
-     D.pitch    the assembly spacing, against the reference spacing.
-     D.poison   the volume mean of the poison pins you placed.
-     D.nbank    how many banks your clusters are grouped into.
-     D.rodw     measured off the solve by core2d, not bought.
+     c.power    fuel volume x power density. Counted, never chosen.
+     c.hd       the envelope the lattice revolves to, against its length.
+     c.pitch    the assembly spacing, against the reference spacing.
+     c.poison   the volume mean of the poison pins you placed.
+     c.nbank    how many banks your clusters are grouped into.
+     c.rodw     measured off the solve by core2d, not bought.
      coreDia    the lattice's own outer envelope.
 
-   coreConst() used to manufacture all of that out of the numbers. It now reads
-   what latRevolve() measured, and everything downstream is unchanged.
+   EVERY FUNCTION HERE TAKES THE CORE'S OWN DESIGN BAG `c` (D.cores[id],
+   design.js) - its lattice is c.lat, and what the revolve measured is kept
+   per bag (latM(c)). There is no lattice singleton: a plant has as many
+   drawings as it has vessels, and a blank grid has a stand-in (coreNone())
+   that stands on nothing and weighs nothing.
 
    LOAD ORDER. This is a data file that loads after a sim file, which is
    unusual and deliberate: it sizes its arrays from XNR/XNZ in core2d.js, and
@@ -33,14 +36,14 @@ const LQ=10;                     // quarter-plan slots per side
    fuel here" has to ask latFuel() rather than test the slot for non-zero. */
 const L_EMPTY=0, L_FUEL=1, L_POIS=2, L_MOD=3;
 const LIX=(u,v)=>u*LQ+v;
-const latFuel=q=>LAT.slot[q]===L_FUEL||LAT.slot[q]===L_POIS;
+const latFuel=(c,q)=>c.lat.slot[q]===L_FUEL||c.lat.slot[q]===L_POIS;
 
 /* The design point the stock lattice is sized to. Everything else about the
    reactor is drawn; these two only fix what "pitch 1.0x" means, so that a
    default lattice lands on the plant the bench used to sell. */
 const LAT_MW0=1200, LAT_HD0=1.0;
 /* kW/L, and it sizes the REFERENCE PITCH and nothing else. Power density is a
-   readout now (D.power over the volume), so there is no column to ask; this is
+   readout now (c.power over the volume), so there is no column to ask; this is
    what "pitch 1.0x" was defined against and it stays a stated figure. */
 const LAT_DENS0=100;
 /* Stock fuel radius, in slots. Sized so the round core reaches BOTH axes of
@@ -76,17 +79,24 @@ const ABSORB=[
 /* A slot's ZONE is an index, never an enrichment: the loading pattern is
    drawn and the fuel row it means is menued, one row per zone. */
 const LAT_NZ=3;
-const LAT={
+/* ONE LATTICE, BLANK. slot/rod/zone are the quarter plan; the rest is the
+   section: pitch and active length in metres, reflector cells per face, and
+   the absorber row. Every core bag carries one of these as c.lat. */
+const latNew=()=>({
   slot:new Uint8Array(LQ*LQ),
   rod:new Int8Array(LQ*LQ),      // -1 none, else bank 0..3
   zone:new Uint8Array(LQ*LQ),    // loading zone 0..LAT_NZ-1, 0 everywhere by default
-  pitch:0,                       // assembly pitch, metres
-  len:0,                         // active fuel length, metres
-  reflR:1, reflT:1, reflB:1,     // reflector thickness per face, cells
-  abs:0,                         // index into ABSORB
-};
-let LM=null;                     // the revolve: what the solver is handed
-let latRev=0;                    // bumped whenever the lattice changes
+  pitch:0, len:0,
+  reflR:1, reflT:1, reflB:1,
+  abs:0,
+});
+/* THE REVOLVE, PER BAG. Keyed on the bag object itself, so a bag a snapshot
+   replaced takes its stale measurement with it and nothing has to invalidate
+   anything. latRev is one monotonic counter over every lattice, so a revolve's
+   own `rev` is unique across cores - corePredict()'s key reads it. */
+const LMS=new WeakMap();
+let latRev=0;
+const latM=c=>LMS.get(c)||latRevolve(c);
 
 /* ── THE EQUIVALENT RADIUS ──
    How far out the mesh reaches, and the single most consequential line in this
@@ -108,9 +118,9 @@ let latRev=0;                    // bumped whenever the lattice changes
    mesh has to cover is the core - a graphite block between two assemblies is
    inside the reactor, not outside it. What is fuel and what is not is a
    separate question, asked per ring by latRevolve(). */
-const latEqR=()=>{
-  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]) n++;
-  return Math.sqrt(4*n/Math.PI)*LAT.pitch;
+const latEqR=c=>{
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.slot[q]) n++;
+  return Math.sqrt(4*n/Math.PI)*c.lat.pitch;
 };
 
 /* ── WHAT IS IN THE LATTICE, BY VOLUME ──
@@ -133,12 +143,12 @@ const latEqR=()=>{
    cell, because a bundle is still a fixed object: the box holds (LAT_P0/ROD_P)^2
    rods whatever pitch the assemblies are laid on. */
 /* THE PIN DIAMETER IS A KNOB. ROD_D0 is the Westinghouse rod and the
-   suggestion; D.rodD is what the bench drew. Everything below is arithmetic
+   suggestion; c.rodD is what the bench drew. Everything below is arithmetic
    off it, so a thinner pin buys surface, clad and water and gives up fuel. */
 const ROD_D0=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
 const rodDSuggest=()=>ROD_D0;
-const rodD=()=>D.rodD??ROD_D0;
-const rodSpdOf=()=>D.rodSpd??ROD_SPD0;
+const rodD=c=>c.rodD??ROD_D0;
+const rodSpdOf=c=>c.rodSpd??ROD_SPD0;
 /* ── WHAT THE CLAD IS MADE OF ──
    Four real properties of zircaloy, and they sit here rather than on a FUEL or
    COOLANT row because there is exactly ONE clad in this game: 0.57 mm of
@@ -156,44 +166,44 @@ const rodSpdOf=()=>D.rodSpd??ROD_SPD0;
              fuel volume. Parasitic absorption was modelled nowhere, so a thin
              pin bought surface, water and forgiveness for free. */
 const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442, ZR_ABS=1000;
-const rodDP=()=>rodD()-2*ROD_CLAD;
-const latFuelFrac=()=>Math.PI/4*(rodDP()/ROD_P)*(rodDP()/ROD_P);
-const latRodFrac =()=>Math.PI/4*(rodD() /ROD_P)*(rodD() /ROD_P);
+const rodDP=c=>rodD(c)-2*ROD_CLAD;
+const latFuelFrac=c=>Math.PI/4*(rodDP(c)/ROD_P)*(rodDP(c)/ROD_P);
+const latRodFrac =c=>Math.PI/4*(rodD(c) /ROD_P)*(rodD(c) /ROD_P);
 /* Clad per unit fuel: the annulus over the pellet. A thin pin is mostly clad,
    and zirconium is a parasitic absorber - without this term a thin pin would
    buy surface, water and forgiveness and pay nothing at all for it. */
-const modClad=()=>{ const f=latFuelFrac(); return f>1e-12 ? (latRodFrac()-f)/f : 0; };
+const modClad=c=>{ const f=latFuelFrac(c); return f>1e-12 ? (latRodFrac(c)-f)/f : 0; };
 /* One bundle's hydraulics, at the pitch actually drawn. aHeat is per METRE of
    height, so a caller multiplies by the core height it measured. Opening the
    lattice adds flow area without adding rod surface, which is the pitch
    dependence the typed XSUB_AR it replaces could not express. */
-function latBundle(){
-  const nRod=(LAT_P0/ROD_P)*(LAT_P0/ROD_P);
-  const aFlow=Math.max(0, LAT.pitch*LAT.pitch - latRodFrac()*LAT_P0*LAT_P0);
-  const aHeat=nRod*Math.PI*rodD();
+function latBundle(c){
+  const nRod=(LAT_P0/ROD_P)*(LAT_P0/ROD_P), p=c.lat.pitch;
+  const aFlow=Math.max(0, p*p - latRodFrac(c)*LAT_P0*LAT_P0);
+  const aHeat=nRod*Math.PI*rodD(c);
   return {nRod, aFlow, aHeat, dh:aHeat>0 ? 4*aFlow/aHeat : 0};
 }
-function latVols(){
+function latVols(c){
   let nF=0,nM=0;
-  for(let q=0;q<LQ*LQ;q++){ const s=LAT.slot[q]; if(s===L_MOD) nM++; else if(s) nF++; }
-  const cell=LAT.pitch*LAT.pitch, p0=LAT_P0*LAT_P0;
-  return {nF,nM,fuel:nF*latFuelFrac()*p0,
-          cool:nF*Math.max(0,cell-latRodFrac()*p0),mod:nM*cell};
+  for(let q=0;q<LQ*LQ;q++){ const s=c.lat.slot[q]; if(s===L_MOD) nM++; else if(s) nF++; }
+  const cell=c.lat.pitch*c.lat.pitch, p0=LAT_P0*LAT_P0;
+  return {nF,nM,fuel:nF*latFuelFrac(c)*p0,
+          cool:nF*Math.max(0,cell-latRodFrac(c)*p0),mod:nM*cell};
 }
 /* Moderating volume over fuel volume, the two contributors scaled by their own
    materials. `voided` stands the coolant down, which is the whole of what a
    void coefficient asks. */
-const modRatio=voided=>{ const v=latVols(); if(v.fuel<=0) return 0;
-  return ((voided?0:v.cool*COOLANT[D.cool].modK)+v.mod*MODER[D.mod].modK)/v.fuel; };
+const modRatio=(c,voided)=>{ const v=latVols(c); if(v.fuel<=0) return 0;
+  return ((voided?0:v.cool*COOLANT[c.cool].modK)+v.mod*MODER[c.mod].modK)/v.fuel; };
 /* How much of the moderation the COOLANT provides. 1 in a PWR, near 0 in a
    graphite core - and it is what decides whether voiding is a loss or a gain. */
-const modShares=()=>{ const v=latVols();
-  const c=v.cool*COOLANT[D.cool].modK, m=v.mod*MODER[D.mod].modK, t=c+m;
-  return t>1e-12? {cool:c/t,block:m/t} : {cool:0,block:0}; };
-const modCoolShare=()=>modShares().cool;
+const modShares=c=>{ const v=latVols(c);
+  const cc=v.cool*COOLANT[c.cool].modK, m=v.mod*MODER[c.mod].modK, t=cc+m;
+  return t>1e-12? {cool:cc/t,block:m/t} : {cool:0,block:0}; };
+const modCoolShare=c=>modShares(c).cool;
 /* Coolant absorption per unit fuel: what voiding gives BACK. */
-const modAbs=()=>{ const v=latVols();
-  return v.fuel>0? v.cool*COOLANT[D.cool].absK/v.fuel : 0; };
+const modAbs=c=>{ const v=latVols(c);
+  return v.fuel>0? v.cool*COOLANT[c.cool].absK/v.fuel : 0; };
 
 /* ── the reference pitch ──
    Solved against VOLUME, so a stock lattice lands on the stock reactor:
@@ -218,13 +228,14 @@ const LAT_P0=(function(){
 
    Neither of them revolves. The caller does, once, when it has finished
    changing things. */
-function latLayFuel(r0,poig){
+function latLayFuel(c,r0,poig){
+  const L=c.lat;
   /* A preset rewrites the drawing, so it puts every slot back into zone one -
      and the fuel the other zones were loaded with goes with them, or the
      preset would describe a reactor its own row does not. */
-  LAT.slot.fill(L_EMPTY); LAT.rod.fill(-1); LAT.zone.fill(0); D.zoneFuel={};
+  L.slot.fill(L_EMPTY); L.rod.fill(-1); L.zone.fill(0); c.zoneFuel={};
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++)
-    if(Math.hypot(u+.5,v+.5)<=r0) LAT.slot[LIX(u,v)]=L_FUEL;
+    if(Math.hypot(u+.5,v+.5)<=r0) L.slot[LIX(u,v)]=L_FUEL;
   /* Poison graded toward the centre, because that is where the flux peaks -
      the same job the old XPG constant did, except that you can see every pin
      and move it.
@@ -238,9 +249,9 @@ function latLayFuel(r0,poig){
      used to ride out. The dither is a fixed pattern rather than random, so the
      stock lattice is the same reactor every time it is laid out. */
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
-    if(!LAT.slot[LIX(u,v)]) continue;
+    if(!L.slot[LIX(u,v)]) continue;
     const f=poig*(1-Math.hypot(u+.5,v+.5)/r0);
-    if(((u*3+v*5)%7)/7 < f) LAT.slot[LIX(u,v)]=L_POIS;
+    if(((u*3+v*5)%7)/7 < f) L.slot[LIX(u,v)]=L_POIS;
   }
 }
   /* Clusters spread by AREA, so the outer banks cover the rings that hold most
@@ -259,9 +270,10 @@ function latLayFuel(r0,poig){
      CHECKED rather than assumed - a hand-written list did this first and one
      entry sat outside the fuel, so that bank quietly shipped with half its
      clusters and nothing said so. */
-function latLayBanks(nb){
-  for(let q=0;q<LQ*LQ;q++) LAT.rod[q]=-1;
-  const rEqSlots=latEqR()/LAT.pitch;
+function latLayBanks(c,nb){
+  const L=c.lat;
+  for(let q=0;q<LQ*LQ;q++) L.rod[q]=-1;
+  const rEqSlots=latEqR(c)/L.pitch;
   for(let b=0;b<nb;b++){
     /* nb in the denominator, so four banks land on the same rings 5/8/10/12
        the hand-written list used to */
@@ -270,21 +282,22 @@ function latLayBanks(nb){
     for(const th of [Math.PI/9, Math.PI*7/18]){
       let u=clamp(Math.round(rr*Math.cos(th)-.5),0,LQ-1);
       let v=clamp(Math.round(rr*Math.sin(th)-.5),0,LQ-1);
-      for(let g=0;g<LQ && !latFuel(LIX(u,v));g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
-      if(latFuel(LIX(u,v))) LAT.rod[LIX(u,v)]=b;
+      for(let g=0;g<LQ && !latFuel(c,LIX(u,v));g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
+      if(latFuel(c,LIX(u,v))) L.rod[LIX(u,v)]=b;
     }
   }
 }
 
 /* ── the stock lattice ── */
-function latDefault(){
-  LAT.pitch=LAT_P0;
-  latLayFuel(LAT_R0,LAT_POIG);
-  latLayBanks(4);
-  LAT.len=2*latEqR()*LAT_HD0;
-  LAT.reflR=LAT.reflT=LAT.reflB=1;
-  LAT.abs=0;
-  latRevolve();
+function latDefault(c){
+  const L=c.lat;
+  L.pitch=LAT_P0;
+  latLayFuel(c,LAT_R0,LAT_POIG);
+  latLayBanks(c,4);
+  L.len=2*latEqR(c)*LAT_HD0;
+  L.reflR=L.reflT=L.reflB=1;
+  L.abs=0;
+  latRevolve(c);
 }
 /* ── whole cores you can start from ──
    Three lattices laid out with the same two helpers the stock core uses, so a
@@ -303,15 +316,15 @@ const LATPRE=[
   ["FLAT",{r:9.6,pk:1.10,hd:0.70,poi:1.60,refl:2,nb:4},
    "A wide, squat core: full diameter, seven tenths of that in height, opened-out pitch and heavy central poison. Peaking falls and DNBR rises, so it takes more overpower before the hot channel is the thing that stops you. It weighs about what stock does, and the looser lattice weakens the moderator feedback that makes the plant follow load by itself."],
 ];
-function latPreset(i){
-  const q=LATPRE[i][1];
-  LAT.pitch=q.pk*LAT_P0;
-  latLayFuel(q.r,q.poi);
-  latLayMod(q.every||0);
-  latLayBanks(q.nb);
-  LAT.len=2*latEqR()*q.hd;
-  LAT.reflR=LAT.reflT=LAT.reflB=q.refl;
-  latRevolve();
+function latPreset(c,i){
+  const q=LATPRE[i][1], L=c.lat;
+  L.pitch=q.pk*LAT_P0;
+  latLayFuel(c,q.r,q.poi);
+  latLayMod(c,q.every||0);
+  latLayBanks(c,q.nb);
+  L.len=2*latEqR(c)*q.hd;
+  L.reflR=L.reflT=L.reflB=q.refl;
+  latRevolve(c);
 }
 /* ── packing moderator between the assemblies ──
    `every` is how many slots out of every N become a block: 0 lays none, 2 is
@@ -319,12 +332,13 @@ function latPreset(i){
    filled the disc, so the blocks displace fuel rather than sit outside it.
    Fixed dither, not random, for the same reason latLayFuel()'s poison is: a
    preset has to be the same reactor every time it is laid. */
-function latLayMod(every){
+function latLayMod(c,every){
   if(!every) return;
+  const L=c.lat;
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
     const q=LIX(u,v);
-    if(!LAT.slot[q]) continue;
-    if((u+v)%every===0){ LAT.slot[q]=L_MOD; LAT.rod[q]=-1; }
+    if(!L.slot[q]) continue;
+    if((u+v)%every===0){ L.slot[q]=L_MOD; L.rod[q]=-1; }
   }
 }
 /* ── WHOLE REACTORS YOU CAN START FROM ──
@@ -357,33 +371,33 @@ const ARCHPRE=[
  ["HTGR",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
   "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
 ];
-function archPreset(i){
-  const q=ARCHPRE[i][1];
-  D.cool=q.cool; D.mod=q.mod; D.fuel=q.fuel; D.refl=q.rmat;
-  D.scram=q.scram; D.foll=q.foll; LAT.abs=q.abs;
-  LAT.pitch=q.pk*LAT_P0;
-  latLayFuel(q.r,q.poi);
-  latLayMod(q.every);
-  latLayBanks(q.nb);
-  LAT.len=2*latEqR()*q.hd;
-  LAT.reflR=LAT.reflT=LAT.reflB=q.refl;
-  latRevolve();
+function archPreset(c,i){
+  const q=ARCHPRE[i][1], L=c.lat;
+  c.cool=q.cool; c.mod=q.mod; c.fuel=q.fuel; c.refl=q.rmat;
+  c.scram=q.scram; c.foll=q.foll; L.abs=q.abs;
+  L.pitch=q.pk*LAT_P0;
+  latLayFuel(c,q.r,q.poi);
+  latLayMod(c,q.every);
+  latLayBanks(c,q.nb);
+  L.len=2*latEqR(c)*q.hd;
+  L.reflR=L.reflT=L.reflB=q.refl;
+  latRevolve(c);
 }
 
-const latCount=()=>{               // FUEL assemblies in the WHOLE core, not the quarter
-  let n=0; for(let q=0;q<LQ*LQ;q++) if(latFuel(q)) n++;
+const latCount=c=>{               // FUEL assemblies in the WHOLE core, not the quarter
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(latFuel(c,q)) n++;
   return 4*n;
 };
 /* Which loading zones have any fuel in them at all - the panel puts up one
    FUEL row per zone that does, so an unzoned core still shows one menu. */
-const latZonesUsed=()=>{
+const latZonesUsed=c=>{
   const seen=[];
   for(let z=0;z<LAT_NZ;z++)
-    for(let q=0;q<LQ*LQ;q++) if(latFuel(q)&&LAT.zone[q]===z){ seen.push(z); break; }
+    for(let q=0;q<LQ*LQ;q++) if(latFuel(c,q)&&c.lat.zone[q]===z){ seen.push(z); break; }
   return seen.length? seen : [0];
 };
-const latModCount=()=>{
-  let n=0; for(let q=0;q<LQ*LQ;q++) if(LAT.slot[q]===L_MOD) n++;
+const latModCount=c=>{
+  let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.slot[q]===L_MOD) n++;
   return 4*n;
 };
 
@@ -416,45 +430,46 @@ const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float6
    ceramic. */
 const FUEL_BLEND=["beta","excess","densK","condK","alpha","mass"];
 const FUEL_MIN=["tdmg","tmelt"];
-function fuelBlend(){
-  if(!LM) latRevolve();
-  const zt=LM.zTot; let tot=0;
+function fuelBlend(c){
+  const zt=latM(c).zTot; let tot=0;
   for(let z=0;z<LAT_NZ;z++) tot+=zt[z];
-  const f0=FUEL[zoneFuelOf(0)];
+  const f0=FUEL[zoneFuelOf(c,0)];
   if(!(tot>1e-9)) return f0;
   const o={name:f0.name,note:f0.note};
   for(const k of FUEL_BLEND){
-    let a=0; for(let z=0;z<LAT_NZ;z++) a+=zt[z]/tot*FUEL[zoneFuelOf(z)][k];
+    let a=0; for(let z=0;z<LAT_NZ;z++) a+=zt[z]/tot*FUEL[zoneFuelOf(c,z)][k];
     o[k]=a;
   }
   for(const k of FUEL_MIN){
     o[k]=Infinity;
-    for(let z=0;z<LAT_NZ;z++) if(zt[z]>1e-9) o[k]=Math.min(o[k],FUEL[zoneFuelOf(z)][k]);
+    for(let z=0;z<LAT_NZ;z++) if(zt[z]>1e-9) o[k]=Math.min(o[k],FUEL[zoneFuelOf(c,z)][k]);
     if(!isFinite(o[k])) o[k]=f0[k];
   }
   return o;
 }
 
-function latRevolve(){
-  const p=LAT.pitch, rEq=latEqR();
+function latRevolve(c){
+  const L=c.lat, p=L.pitch, rEq=latEqR(c);
   latRev++;
+  let M;
   if(rEq<=0 || p<=0){
-    LM={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),poi:new Float64Array(XNR),
+    M={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),poi:new Float64Array(XNR),
         nPen:new Float64Array(XNR).fill(LAT_NF),chan:[],bankR:[(XNR-1)/2],NB:1,
         zfrac:latZeroZones(),zTot:new Float64Array(LAT_NZ),
-        dia:0,hgt:0,vol:0,nAsm:0,laid:0};
+        dia:0,hgt:0,vol:0,nAsm:0,laid:0,rev:latRev};
     // an empty core still has to be MEASURED: poiG is built nowhere else, and
     // without it every solve off a fuel-free lattice reads undefined[0]
-    latMeasure();
-    return LM;
+    LMS.set(c,M);
+    latMeasure(c);
+    return M;
   }
   const dr=rEq/XNR, patch=(p/LAT_SS)*(p/LAT_SS);
   const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR), modA=new Float64Array(XNR);
   const zoneA=latZeroZones();
   const rodN=[]; for(let i=0;i<XNR;i++) rodN.push({});
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
-    const s=LAT.slot[LIX(u,v)]; if(!s) continue;
-    const rod=LAT.rod[LIX(u,v)], zn=Math.min(LAT_NZ-1,LAT.zone[LIX(u,v)]);
+    const s=L.slot[LIX(u,v)]; if(!s) continue;
+    const rod=L.rod[LIX(u,v)], zn=Math.min(LAT_NZ-1,L.zone[LIX(u,v)]);
     for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++){
       const r=Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p);
       const i=Math.min(XNR-1,Math.floor(r/dr));
@@ -481,7 +496,7 @@ function latRevolve(){
        occupancy; book power against fuel alone. */
     occ[i]=clamp(4*(fuelA[i]+modA[i])/ring,0,1);
     nPen[i]=LAT_NF*(1-occ[i]);
-    vol+=ring*LAT.len*frac[i];
+    vol+=ring*L.len*frac[i];
   }
   /* Each zone's share of each ring's FUEL, and the fuel each zone holds
      altogether. Both come off the loop above with no second walk: zfrac is the
@@ -499,16 +514,17 @@ function latRevolve(){
     chan.push({i,b:+ks[0]});
   }
   const bank=[];
-  for(const c of chan) (bank[c.b]=bank[c.b]||[]).push(c.i);
+  for(const ch of chan) (bank[ch.b]=bank[ch.b]||[]).push(ch.i);
   const bankR=bank.filter(a=>a&&a.length).map(a=>a.reduce((s,v)=>s+v,0)/a.length);
   if(!bankR.length) bankR.push((XNR-1)/2);
 
   let laid=0;                       // the FUEL area actually laid out
-  for(let q=0;q<LQ*LQ;q++) if(latFuel(q)) laid++;
-  LM={dr, dz:LAT.len/XNZ, frac, occ, poi, nPen, chan, bankR, NB:bankR.length, zfrac, zTot,
-      dia:2*rEq, hgt:LAT.len, vol, nAsm:4*laid, laid:4*laid*p*p*LAT.len};
-  latMeasure();
-  return LM;
+  for(let q=0;q<LQ*LQ;q++) if(latFuel(c,q)) laid++;
+  M={dr, dz:L.len/XNZ, frac, occ, poi, nPen, chan, bankR, NB:bankR.length, zfrac, zTot,
+      dia:2*rEq, hgt:L.len, vol, nAsm:4*laid, laid:4*laid*p*p*L.len, rev:latRev};
+  LMS.set(c,M);
+  latMeasure(c);
+  return M;
 }
 
 /* ══ WHAT THE HOTTEST PIN ALLOWS ══
@@ -528,30 +544,29 @@ function latRevolve(){
    makes more power. PEAK_M is solved once, on the stock lattice, so the stock
    PWR lands on the 1200 MWt it always did - the XABS0 idiom, and a fit. */
 const KINT_UO2=6.3, PEAK_M=1.283;
-function latQLim(){
-  const f=fuelBlend(), a=COOLANT[D.cool];
-  const melt=4*Math.PI*KINT_UO2*f.condK, dnb=a.qpp*Math.PI*rodD()*1000;
+function latQLim(c){
+  const f=fuelBlend(c), a=COOLANT[c.cool];
+  const melt=4*Math.PI*KINT_UO2*f.condK, dnb=a.qpp*Math.PI*rodD(c)*1000;
   return {melt,dnb,q:Math.min(melt,dnb)/PEAK_M,
           bind:melt<dnb?"MELT":"DNB", clear:Math.max(melt,dnb)/Math.max(Math.min(melt,dnb),1e-9)};
 }
-function latRating(){
-  const M=LM; if(!M) return 0;
-  const Fq=Math.max(corePredict({rf:REFL[D.refl]}).FqCold,1e-6);
-  const nRods=M.nAsm*latBundle().nRod;
-  return latQLim().q*nRods*LAT.len/Fq/1000;
+function latRating(c){
+  const M=latM(c);
+  const Fq=Math.max(corePredict(c,{rf:REFL[c.refl]}).FqCold,1e-6);
+  const nRods=M.nAsm*latBundle(c).nRod;
+  return latQLim(c).q*nRods*c.lat.len/Fq/1000;
 }
 
 /* ── the lattice, turned into the numbers the bench already reads ──
-   THE one place the drawing becomes D. derived() is untouched and every figure
-   it produces is the real one. */
-function latMeasure(){
-  const M=LM;
-  D.pitch=LAT.pitch/LAT_P0;
-  const fb=fuelBlend();
-  D.hd=M.dia>1e-6? M.hgt/M.dia : 1;
-  D.nbank=M.NB;
+   THE one place the drawing becomes the bag's own measured figures. */
+function latMeasure(c){
+  const M=latM(c), L=c.lat;
+  c.pitch=L.pitch/LAT_P0;
+  const fb=fuelBlend(c);
+  c.hd=M.dia>1e-6? M.hgt/M.dia : 1;
+  c.nbank=M.NB;
   let pm=0; for(let i=0;i<XNR;i++) pm+=M.poi[i]*ringW[i];
-  D.poison=pm;
+  c.poison=pm;
   /* poiG keeps its old contract: graded shape, volume mean exactly one, so
      poison still buys flatness rather than reactivity */
   const g=new Float64Array(XNR);
@@ -564,13 +579,13 @@ function latMeasure(){
   const er=new Float64Array(XNR);
   for(let i=0;i<XNR;i++){
     let e=0,w=0;
-    for(let z=0;z<LAT_NZ;z++){ e+=M.zfrac[z][i]*FUEL[zoneFuelOf(z)].excess; w+=M.zfrac[z][i]; }
+    for(let z=0;z<LAT_NZ;z++){ e+=M.zfrac[z][i]*FUEL[zoneFuelOf(c,z)].excess; w+=M.zfrac[z][i]; }
     er[i]= w>1e-9? e/w-fb.excess : 0;
   }
   M.enrRho=er;
   /* LAST, because the rating is solved on the flux and the solve reads the
      poison grading and the loading pattern this function has just written. */
-  D.power=latRating();
+  c.power=latRating(c);
 }
 
 /* ── what the drawing weighs ──
@@ -578,41 +593,43 @@ function latMeasure(){
    cell by cell, and a single ring of steel round a real core comes to rather
    more than the 28 t the option list sold - which is a finding, not a rounding
    error. Fuel mass is NOT here: derived() already gets it from the volume. */
-function latMass(){
-  if(!LM) latRevolve();
-  const rf=REFL[D.refl], dr=LM.dr, dz=LM.dz;
+function latMass(c){
+  const M=latM(c), L=c.lat;
+  const rf=REFL[c.refl], dr=M.dr, dz=M.dz;
   const ringA=i=>Math.PI*((i+1)*(i+1)-i*i)*dr*dr;
   let m=0;
   /* rim: the band outside the mesh, at the thickness that face was given */
-  for(let q=0;q<Math.ceil(LAT.reflR);q++)
-    m+=ringA(XNR+q)*LAT.len*Math.min(1,LAT.reflR-q)*rf.dens;
+  for(let q=0;q<Math.ceil(L.reflR);q++)
+    m+=ringA(XNR+q)*L.len*Math.min(1,L.reflR-q)*rf.dens;
   /* lid and floor: a disc over the whole core, one cell of height each */
-  const disc=Math.PI*Math.pow((XNR+LAT.reflR)*dr,2);
-  m+=disc*dz*(LAT.reflT+LAT.reflB)*rf.dens;
+  const disc=Math.PI*Math.pow((XNR+L.reflR)*dr,2);
+  m+=disc*dz*(L.reflT+L.reflB)*rf.dens;
   /* the clusters themselves - a channel is about 6% of its ring by volume.
      GAME BALANCE, not measured: the bundle has rod pitches now, so this could
      be counted off guide tube positions the way latRodFrac() is. It is a mass
      figure only, so nothing physical reads it. */
-  for(const c of LM.chan) m+=ringA(c.i)*LAT.len*0.06*ABSORB[LAT.abs].dens;
+  for(const ch of M.chan) m+=ringA(ch.i)*L.len*0.06*ABSORB[L.abs].dens;
   /* the moderator blocks you drew, weighed the same way the reflector is:
      whole cells, at the density of what you packed them with */
-  m+=latVols().mod*4*LAT.len*MODER[D.mod].dens;
+  m+=latVols(c).mod*4*L.len*MODER[c.mod].dens;
   return m;
 }
 
 /* ── can this lattice be built ──
-   Same [SEV, sentence] shape derived().warn uses, so the two concatenate. */
-function latWarn(){
-  const w=[], M=LM||latRevolve();
+   Same [SEV, sentence] shape derived().warn uses, so the two concatenate. The
+   third element names the ROLE the warning is about ("core"/"rods"); the
+   caller retags it with the vessel's own id (coreWarns(), design.js). */
+function latWarn(c){
+  const w=[], M=latM(c), L=c.lat;
   let n=0, nf=0;
-  for(let q=0;q<LQ*LQ;q++){ if(LAT.slot[q]) n++; if(latFuel(q)) nf++; }
+  for(let q=0;q<LQ*LQ;q++){ if(L.slot[q]) n++; if(latFuel(c,q)) nf++; }
   if(!nf){ w.push(["RED","There is no fuel in this core at all.","core"]); return w; }
   /* The core has to be one piece: an island across a water gap is a second
      reactor with one set of rods between them. The walk crosses MODERATOR
      slots, because a graphite block between two assemblies couples them - it
      is the gap with nothing in it that splits a core. */
   const seen=new Uint8Array(LQ*LQ), q=[];
-  for(let i=0;i<LQ*LQ&&!q.length;i++) if(LAT.slot[i]){ q.push(i); seen[i]=1; }
+  for(let i=0;i<LQ*LQ&&!q.length;i++) if(L.slot[i]){ q.push(i); seen[i]=1; }
   let head=0, reach=1;
   while(head<q.length){
     const k=q[head++], u=(k/LQ)|0, v=k%LQ;
@@ -620,32 +637,34 @@ function latWarn(){
       const a=u+d[0], b=v+d[1];
       if(a<0||a>=LQ||b<0||b>=LQ) continue;
       const j=LIX(a,b);
-      if(seen[j]||!LAT.slot[j]) continue;
+      if(seen[j]||!L.slot[j]) continue;
       seen[j]=1; reach++; q.push(j);
     }
   }
   if(reach<n) w.push(["RED","There are "+((n-reach)*4)+" slots that nothing else in the core touches. A core split by a water gap is two reactors with one set of rods between them.","core"]);
   if(!M.chan.length) w.push(["RED","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is.","rods"]);
   if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with.","rods"]);
-  if(D.power<400||D.power>2400) w.push(["SOFT","This lattice rates "+D.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for.","core"]);
+  if(c.power<400||c.power>2400) w.push(["SOFT","This lattice rates "+c.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for.","core"]);
   /* HARD: a rod pitch is a rod pitch, and pins have to be assembled with a
      grid and a channel between them. Under 2 mm of gap there is nowhere for
      the spacer to stand and nowhere for the water to go. */
-  { const gap=(ROD_P-rodD())*1000;
-    if(gap<2) w.push(["RED","Pin diameter "+(rodD()*1000).toFixed(1)+" mm leaves only "+gap.toFixed(1)+" mm between pins on a "+(ROD_P*1000).toFixed(1)+" mm rod pitch. Under 2 mm nothing can be assembled there - no grid, no channel, no water.","core"]); }
-  if(D.hd<.5||D.hd>2.5) w.push(["SOFT","H/D of "+D.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make.","core"]);
-  if(D.pitch<.6||D.pitch>1.8) w.push(["SOFT","Assembly pitch "+(LAT.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble.","core"]);
-  const bare=[[LAT.reflR,"rim"],[LAT.reflT,"lid"],[LAT.reflB,"floor"]].filter(z=>z[0]<0.5);
+  { const gap=(ROD_P-rodD(c))*1000;
+    if(gap<2) w.push(["RED","Pin diameter "+(rodD(c)*1000).toFixed(1)+" mm leaves only "+gap.toFixed(1)+" mm between pins on a "+(ROD_P*1000).toFixed(1)+" mm rod pitch. Under 2 mm nothing can be assembled there - no grid, no channel, no water.","core"]); }
+  if(c.hd<.5||c.hd>2.5) w.push(["SOFT","H/D of "+c.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make.","core"]);
+  if(c.pitch<.6||c.pitch>1.8) w.push(["SOFT","Assembly pitch "+(L.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble.","core"]);
+  const bare=[[L.reflR,"rim"],[L.reflT,"lid"],[L.reflB,"floor"]].filter(z=>z[0]<0.5);
   if(bare.length) w.push(["SOFT","Bare "+bare.map(z=>z[1]).join(" and ")+
     ". Neutrons that leave that face are gone. A single ring of reflector is worth most of what a reflector has to give.","core"]);
   return w;
 }
 
-/* Reflector thickness is not a D field, so JSON.stringify(D) cannot see it
-   change. designSig() asks this as well, or moving a face would leave the
-   commissioned plant quietly out of date with the bench. */
-const latSig=()=>LAT.slot.join("")+"|"+LAT.rod.join("")+"|"+LAT.zone.join("")+"|"+
-  [LAT.pitch,LAT.len,LAT.reflR,LAT.reflT,LAT.reflB,LAT.abs].join(",");
+/* The whole of one core's design as a string: the drawing and every figure
+   bought for it. designSig() joins one per vessel, or a pen stroke would
+   leave the commissioned plant quietly out of date with the bench. */
+const latSig=c=>{ const L=c.lat;
+  return L.slot.join("")+"|"+L.rod.join("")+"|"+L.zone.join("")+"|"+
+  [L.pitch,L.len,L.reflR,L.reflT,L.reflB,L.abs].join(",")+"|"+
+  CORE_KEYS.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):c[k]).join(","); };
 
 /* ── thickness to albedo ──
    The ramp is pinned so that ONE cell of a material gives exactly the flat
@@ -656,13 +675,24 @@ function latAlb(t,rf){
   return Math.min(0.90, 0.53+0.40*Math.min(1,rf.dRho/750)*(1+0.6*(1-Math.pow(0.55,t-1))));
 }
 
-/* optList() writes D[key], and the absorber is not a D field - it belongs to
-   the lattice. One accessor rather than a second option-list widget, so the
-   rows, the live mass deltas and the tooltips all still come from the real
-   bench widget instead of a copy of it. Non-enumerable, so designSig()'s
-   JSON.stringify(D) does not see it twice - latSig() already carries it. */
-Object.defineProperty(D,"__abs",{
-  get:()=>LAT.abs,
-  set:v=>{ if(v!==LAT.abs){ LAT.abs=v; latRevolve(); } }});
-
-latDefault();
+/* ── A CORE'S DESIGN BAG ──
+   Minted with its vessel (mintMachine(), layout.js) and removed with it. The
+   stock lattice is what every new vessel is drawn with. */
+function coreMint(from){
+  if(from) return coreClone(from);
+  const c=Object.assign({zoneFuel:{},lat:latNew()},CORE_DEFAULT); latDefault(c); return c; }
+/* the same reactor again, drawing and all - a preset draws one and every
+   vessel on the ship is minted from it */
+function coreClone(src){
+  const L=src.lat, c=Object.assign({},src,{zoneFuel:Object.assign({},src.zoneFuel),
+    lat:Object.assign({},L,{slot:new Uint8Array(L.slot),rod:new Int8Array(L.rod),zone:new Uint8Array(L.zone)})});
+  latRevolve(c); return c; }
+/* THE STAND-IN FOR A SHIP WITH NO VESSEL. A blank grid still has to answer
+   every design question - what would the fluid be, what would a pin weigh -
+   and the answer is the stock reactor nobody placed. It stands on nothing, is
+   rated into nothing (ratedMWt() counts vessels), and weighs nothing. */
+let CORE_NONE=null;
+const coreNone=()=>{ if(CORE_NONE) return CORE_NONE;
+  // published before it is laid: the lay asks the plant, and the plant asks this
+  CORE_NONE=Object.assign({zoneFuel:{},lat:latNew()},CORE_DEFAULT); latDefault(CORE_NONE);
+  return CORE_NONE; };

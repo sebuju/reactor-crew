@@ -276,7 +276,23 @@ const RODX0=.35;
 /* zoneFuel[z] is the FUEL row the ZONE pen's zone z is loaded with; D.fuel is
    zone 0's fallback, so an unzoned core is every slot in zone 0 and reads
    exactly as it always did. `??`, never `||`, or a legitimate zone 0 fails. */
-const zoneFuelOf = z => D.zoneFuel[z] ?? D.fuel;
+const zoneFuelOf = (c,z) => c.zoneFuel[z] ?? c.fuel;
+/* ══ A CORE OWNS ITS DESIGN ══
+   D.cores[id] is one vessel's whole reactor: what was bought for it (the
+   coolant, the fuel, the materials, the scram gear, the drives) and what was
+   drawn (c.lat, lattice.js), with the figures the drawing measures written
+   back onto the same bag. The D.tanks[id] shape: minted with the machine,
+   removed with it, and nothing in it is a plant-wide fact. */
+const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodSpd"];
+const CORE_DEFAULT={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,chim:.3,scram:0,rodw:2600,foll:0,nbank:4};
+const coreD = id => D.cores[id];
+/* THE FIRST VESSEL'S DESIGN, which is what a plant-level reader asking about
+   "the coolant" or "the fuel" means by it - and the stand-in when there is
+   none (coreNone(), lattice.js). Stage G keys the fluid on the circuit. */
+const priD = () => D.cores[primaryCore()] || coreNone();
+const coreBag = id => (id!=null && D.cores[id]) || priD();
+/* THE PLANT'S RATING is every vessel's own, summed: a blank grid rates 0. */
+const ratedMWt = () => { let p=0; for(const id of coreIds()) p+=D.cores[id].power; return p; };
 /* ══ AN ABSENT BAG KEY IS NOT THE DEFAULT WRITTEN DOWN ══
    massWith() (design-bench.js) prices an option row by writing the design and
    putting back what it read, and what it read through a plain {get,set} is the
@@ -311,18 +327,8 @@ const bagAcc = (bag,key,read,after) => ({
 const ROD_SPD0=0.012, ROD_BANK_T=9;
 let DGEN=0;
 const dTouch=()=>{ DGEN++; };
-const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,
-         chim:.3,sg:0,
-         scram:0,chan:1,rodw:2600,foll:0,nbank:4,rps:true,rpsm:.35,autorod:true,
-         /* HOW FAST THE DRIVES WALK, fraction of travel per second, and it is a
-            REAL QUANTITY like every other machine size on this ship. It was a
-            constant in step.js, so every plant got a 83 s stroke whatever it
-            was worth to it - and a fast core that answers a rod before you have
-            finished moving it wants a faster motor than a graphite pile does.
-            A motor that strokes twice as fast is twice the machine, so it costs
-            ROD_BANK_T a bank on top of the bank's own gear (mass, below). */
-         // absent = follow the reference drive; rodSpdOf() is the one reader
-
+const D={sg:0,
+         chan:1,rps:true,rpsm:.35,autorod:true,
          /* How far the temperature controller may walk the bank on its own,
             as fractions inserted. Not a safety limit - it is what stops the
             controller wandering off the position the shutdown margin was
@@ -372,7 +378,8 @@ const D={cool:0,fuel:1,zoneFuel:{},mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,powe
             the default: nothing is on the ship because the code put it there.
             The stock ship is a preset (PLANTPRE, pipenet.js), and it is built
             out of the same gestures the bench hands the player. */
-         machines:{}, name:{},
+         /* D.cores[id] = one vessel's reactor, drawing and all - see CORE_KEYS. */
+         machines:{}, cores:{}, name:{},
          tanks:{}, pipes:{}, ports:{}, start:{}};
 
 /* WHERE AN ACTUATOR STANDS THE MOMENT THE PLANT IS COMMISSIONED. Absent means
@@ -432,7 +439,7 @@ const designClear=()=>{
 const grossEff  = () => { let w=0,e=0;
   for(const p of LAY.parts) if(p.role==="turb"){
     const k=turbKgs(p.id); w+=k; e+=k*turbEffOf(p.id); }
-  return COOLANT[D.cool].eff * (w>0 ? e/w : 1); };
+  return COOLANT[priD().cool].eff * (w>0 ? e/w : 1); };
 /* How much steam the turbine can swallow, and how much the condenser can turn
    back into water. They are separate on purpose: overload past the condenser and
    the output is there but the backpressure eats it. */
@@ -540,11 +547,20 @@ const modEtaSlope = mr => { const h=1e-6*Math.max(mr,1e-3);
   return mr*(modEta(mr+h)-modEta(mr-h))/(2*h)/ETA_S; };
 const modK = (mr,mth) => modEtaN(mr)+FAST_RHO*Math.pow(1-mth,3);
 
-function derived(){
+/* WHICH VESSEL THIS BAG IS ON, or null for the stand-in. N bags, one walk. */
+const coreIdOf = c => { for(const id in D.cores) if(D.cores[id]===c) return id; return null; };
+/* ══ ONE REACTOR'S FIGURES ══
+   Everything the lattice and the catalogue rows decide about one vessel's
+   core: the coefficients, the margins, the rating, what it weighs. derived()
+   is the PLANT - the cycle, the sink, the bill - and spreads the first
+   vessel's figures over itself for every reader that still means "the core".
+   The warnings here are tagged by ROLE; coreWarns() retags them by id. */
+function coreFig(c){
   /* fuelBlend() (lattice.js) is the loading pattern collapsed into one row.
      d.f is exported wholesale, so every downstream reader of beta, excess,
      densK, condK, mass and tdmg follows from this one substitution. */
-  const a=COOLANT[D.cool],f=fuelBlend(),rf=REFL[D.refl];
+  const a=COOLANT[c.cool],f=fuelBlend(c),rf=REFL[c.refl],M=latM(c);
+  const cid=coreIdOf(c), ci=cid ? coreCircOf(cid) : nodeGraph().coreCirc;
   /* THE PRIMARY'S SETPOINT, MPa, and it belongs to a MACHINE now: whichever
      hold tank stands on the core's circuit states it, and a plant with none
      is suggested its coolant family's own working pressure. D.pdes was a
@@ -554,12 +570,12 @@ function derived(){
      with "how far above nominal is this design" read instead, so raising the
      setpoint still costs saturation temperature and DNBR margin, off a real
      pressure rather than off a number with no units. */
-  const P0=holdSetP(nodeGraph().coreCirc), pdesK=P0/a.P0;
+  const P0=holdSetP(ci);
   /* A READOUT, kW/L: what the rating comes to over the core it was measured
      on. It used to be the coolant's own bought column and D.power followed it;
      the arrow runs the other way now (latRating(), lattice.js). */
-  const dens=(LM&&LM.vol>1e-9)? D.power/LM.vol : 0;
-  const coreMass=(LM?LM.vol:0)*22*(0.8+0.2*D.hd);
+  const dens=M.vol>1e-9? c.power/M.vol : 0;
+  const coreMass=M.vol*22*(0.8+0.2*c.hd);
   const vesselMass=vesselShellMass(P0,a);
   /* latMass() replaces two table entries that used to stand in for drawn
      things: the reflector's flat catalogue figure, and a rod-worth surcharge
@@ -572,18 +588,6 @@ function derived(){
      "did a fill come back bounded" and what it holds back is its own wall's
      material. Nobody painted anything: no region, and the release goes
      straight to the crew - which is what NONE always meant and never said. */
-  const conts=matRegionsBounded();
-  const contRel=conts.length ? Math.min.apply(null, conts.map(g=>contRelAt(null, g.cells[0]%GW, (g.cells[0]/GW)|0))) : 1;
-  /* Every pump on the grid costs its own capacity in mass (totalPumpCap(),
-     layout.js - sums pumpCapOf() over every pump part, static and placed
-     alike), replacing the old flat PUMPS[D.pumps] tier. Every generator on
-     the grid costs its OWN type's steel (totalSgMass(), layout.js) - the
-     old D.loops*34 flat lump priced neither the pump (totalPumpCap() already
-     does) nor the generator (one generator's steel was only ever charged once
-     for the whole plant); a 4-loop plant used to carry one generator's steel.
-     fittingMass() charges per fitting INSTANCE off its own bore, the same
-     way tankMass() charges per tank - a spool piece and a valve body, so a
-     tee is not free redundancy and a full-bore one is not free either. */
   /* ══ THE REACTOR IS ONE MACHINE, AND IT IS ON THE BOARD OR IT IS NOT ══
      THE VESSEL WEIGHS ITS OWN WALL. (D.pdes-1)*220 was a delta off a
      dimensionless multiplier - no wall, no diameter, and worth nothing at
@@ -599,36 +603,20 @@ function derived(){
      DRAWING (latMeasure(), lattice.js) and it exists whether or not anything
      stands on the arrangement grid; a drawing weighs nothing. Automatic rod
      control rides the drives (AUTOSYS.rod, step.js), so it goes with them. */
-  const reactorMass = !roleOf("core") ? 0 :
-      a.mass + f.mass + SCRAM[D.scram].mass + CHAN[D.chan].mass
-    + coreMass + vesselMass + D.chim*38 + latMass()
-    + FOLL[D.foll].mass + (D.nbank-4)*ROD_BANK_T
-    + D.nbank*ROD_BANK_T*(rodSpdOf()/ROD_SPD0-1)
+  const mass =
+      a.mass + f.mass + SCRAM[c.scram].mass + CHAN[D.chan].mass
+    + coreMass + vesselMass + c.chim*38 + latMass(c)
+    + FOLL[c.foll].mass + (c.nbank-4)*ROD_BANK_T
+    + c.nbank*ROD_BANK_T*(rodSpdOf(c)/ROD_SPD0-1)
     + (D.autorod?26:0);
-  /* EVERY TERM HERE NAMES A BOX ON THE GRID, and now every one of them means
-     it. tankMass() charges per tank INSTANCE, off its own vol, so four tanks
-     cost four tanks; the protection system is a cabinet at the control
-     station and the supply is its own box, so neither is priced with nothing
-     drawn behind it. */
-  const mass=reactorMass
-    /* NO PAINT TERM HERE. layMass (layoutMetrics(), layout.js) already carries
-       it - that is the PIPING+SHIELD line - and charging it again here billed
-       every ship for its own structure twice. */
-    +totalPumpMass()+totalSgMass()
-    +(roleOf("bkp")?BKP[D.bkp].mass:0)
-    + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
-    + (roleOf("ctrl")&&D.rps?55:0)
-    + totalTurbMass() + totalCondMass()
-    + totalIhxMass() + totalRadMass()
-    + layMass;
   /* MEASURED, not bought. The pitch correction the old line carried
      (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already
      inside modRatio() - it is how much coolant sits between the assemblies. */
-  const mr=modRatio(), mth=modTherm(mr), Lam=LAM_FAST*Math.pow(LAM_TH/LAM_FAST,mth);
-  const sh=modShares(), fast=Math.pow(1-mth,3);
+  const mr=modRatio(c), mth=modTherm(mr), Lam=LAM_FAST*Math.pow(LAM_TH/LAM_FAST,mth);
+  const sh=modShares(c), fast=Math.pow(1-mth,3);
   // coolant and blocks each carry their own coefficient over their share of the moderation
-  const aM=mth*(-AM_K*modEtaSlope(mr)*sh.cool+MODER[D.mod].aT*sh.block);
-  const aV=AV_MOD*(modEtaN(modRatio(true))-modEtaN(mr))+AV_ABS*modAbs()
+  const aM=mth*(-AM_K*modEtaSlope(mr)*sh.cool+MODER[c.mod].aT*sh.block);
+  const aV=AV_MOD*(modEtaN(modRatio(c,true))-modEtaN(mr))+AV_ABS*modAbs(c)
           +AV_FAST*fast+rf.dV;
   /* Expansion, off materials and geometry. aX: the fuel column lengthens, one
      dimension, on the pellet's own temperature. aS: the grid plate grows in
@@ -637,16 +625,16 @@ function derived(){
      strain over one core height, priced by the bank's own S-curve slope at its
      commissioning position. Its slow opposite, the vessel growing and lifting
      the bank OUT, is not modelled. */
-  const driveline=-STEEL_A*D.rodw*(1-Math.cos(2*Math.PI*RODX0));
+  const driveline=-STEEL_A*c.rodw*(1-Math.cos(2*Math.PI*RODX0));
   const aX=-EXP_RHO*fast*f.alpha;
   const aS=-EXP_RHO*fast*STEEL_A*2+driveline;
   /* MEASURED OFF THE SHAPE, not off a curve in H/D: what the converged flux
      loses through the faces it has (coreLeak(), core2d.js). rf.dRho went with
      the curve - the albedo the same solve reads already puts the reflector in
      the shape, and the two were counted twice. */
-  const core=corePredict({dens,rf});
+  const core=corePredict(c,{dens,rf});
   const leak=core.leak;
-  const excess=f.excess*modK(mr,mth)-ZR_ABS*modClad()-D.poison-leak;
+  const excess=f.excess*modK(mr,mth)-ZR_ABS*modClad(c)-c.poison-leak;
   /* peaking is no longer a curve fitted to H/D: it is the peak of the flux
      shape this core actually settles into, solved on the nodal mesh - and it
      is what the core is RATED on, so this is not a readout either */
@@ -655,7 +643,7 @@ function derived(){
      margin at rated is PEAK_M by construction - that is what rating on the
      limit means - so the old fitted dnbr formula has nothing left to say and
      P.dnbr0 is the coolant's own W-3 level (dnbrOf(), step.js) directly. */
-  const bind=latQLim(), dnbr0=a.dnbr;
+  const bind=latQLim(c), dnbr0=a.dnbr;
   /* Same argument as DNBR above: graceK no longer buys 12% per generator for
      free. Grace time is how long the core survives with no primary flow at
      all, which is a property of the coolant family and the SG type, not of
@@ -665,7 +653,7 @@ function derived(){
   const xeW=XE_EQ0*a.xe;
   /* The bank S-curve, written once: how much worth is bought by inserting to x.
      boronOp and the shutdown margin below both read it, so they cannot drift. */
-  const rodS=x=>D.rodw*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
+  const rodS=x=>c.rodw*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
   const boronOp=-(excess-rodS(RODX0)-xeW);
   /* ── WHERE THE PIT BOTTOMS, AND WHETHER YOU CAN CLIMB OUT OF IT ──
      The row used to be the EQUILIBRIUM worth, which is the poison the plant is
@@ -702,19 +690,11 @@ function derived(){
   const dopBack=-pwrDef;                         // released as the fuel cools to the coolant
   const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
-  const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
-  // trip backpressure over where this sink rests at full power: under 1 it trips at rest, under 1/DUMP_COND_K the dump is blocked
-  const condMargin=TURB_TRIP_P/Math.max(COND_P0, psatSec(condRest(plantDuty()).condT));
-  return {a,f,rf,dens,mass,over:mass>BUDGET,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,contRel,
-    nCont:conts.length,
-    boronOp,sdm,sdmB,leak,xePit,xeWin,eff,loadMax,condCap,condShort,condMargin,
-    grace:graceK*25/Math.sqrt(D.power/1200)*(1+.4*D.chim),
-    beta:f.beta,scram:SCRAM[D.scram].rate,P0,
-    /* Third element is the component the warning is ABOUT, for the bench's
-       per-component warning circle - null when no single component owns it
-       (a whole-design figure like mass or shutdown margin). */
+  return {a,f,rf,dens,mass,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,
+    boronOp,sdm,sdmB,leak,xePit,xeWin,power:c.power,
+    grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
+    beta:f.beta,scram:SCRAM[c.scram].rate,P0,
     warn:(()=>{const w=[];
-      if(mass>BUDGET) w.push(["RED","Over the "+BUDGET+" t mass budget by "+(mass-BUDGET).toFixed(0)+" t.",null]);
       if(sdmB<200) w.push(["RED","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
       else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin.","rods"]);
       if(boronOp<-6000) w.push(["RED","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment.","core"]);
@@ -729,46 +709,91 @@ function derived(){
       if(aM>0) w.push(["SOFT","Positive moderator coefficient. Heating the moderator raises power instead of lowering it - an over-moderated lattice, or a graphite stack in one.","core"]);
       if(pwrDef>-100) w.push(["SOFT","Power coefficient only "+pwrDef.toFixed(0)+" pcm from zero to full power. Almost nothing in the fuel pushes back when power rises; the rods and the coolant are all that hold it.","core"]);
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
-      /* WHAT THE FILL FOUND, in words. It could never say this before: the old
-         line asked a menu index whether a box had been bought, so a wall with a
-         hole in it and a wall drawn round the whole plant read the same. */
-      const tightPainted=matCells().some(k=>{ const i=k.indexOf(",");
-        return matWall(+k.slice(0,i),+k.slice(i+1)); });
-      if(!conts.length) w.push(["SOFT", tightPainted
-        ? "The gas-tight structure on this ship encloses nothing - every fill round it reaches the hull, so there is no containment. Close the shape, or accept that a release goes straight to the crew."
-        : "No containment. Nothing painted on this ship is gas-tight, so any fuel damage releases straight to the crew - paint a closed shape in a gas-tight material to hold it in.",null]);
-      else { const weak=conts.map(g=>{ let lo=Infinity, at=null;
-               for(const i of g.wall){ const x=i%GW, y=(i/GW)|0, r=matRating(x,y);
-                 if(r<lo){ lo=r; at=[x,y]; } }
-               return {g,lo,at}; }).sort((a,b)=>a.lo-b.lo)[0];
-             if(weak.at && weak.lo < MAT_PDES)
-               w.push(["SOFT","The containment is walled for only "+weak.lo.toFixed(2)+" MPa at "+weak.at[0]+","+weak.at[1]+" - the middle of its longest flat side, against a "+MAT_PDES+" MPa design. Thicken the wall there, or draw the enclosure rounder so no cell is in the middle of a long span.",null]); }
-      if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
-      if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
-      else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
-      if(turbCount() && loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
-      if(condMargin<1/DUMP_COND_K) w.push([condMargin<1?"RED":"SOFT","The sink rests at "+(TURB_TRIP_P/condMargin).toFixed(4)+" MPa of backpressure against a "+TURB_TRIP_P+" MPa turbine trip"+(condMargin<1?", so the turbine trips before anything has happened":", so the steam dump is blocked at rest: a load drop goes to the shell safeties and the water does not come back")+". Bigger panels or a bigger condenser buy the margin.","cond"]);
-      if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% of full-load duty but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
-      if(FOLL[D.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
+      if(FOLL[c.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
       if(core.cz<0.35) w.push(["SOFT","Loosely coupled core (axial coupling "+core.cz.toFixed(2)+"). It is tall enough that one end can drift without the other noticing, so xenon can oscillate top to bottom on its own.","core"]);
       if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);
-      if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
-      /* Buildable, not blocked - same standing as "no RPS" above. Topological
-         only (hasHeatSink(), layout.js): Stage 6 is what would let this warning
-         read the loop rather than just its wiring. */
-      if(!hasHeatSink()) w.push(["SOFT","This design has no heat sink. Nothing wired to the primary loop removes heat from it.",null]);
-      /* THE SHIP HAS NO SKY WITHOUT THESE. The bench warns; it never refuses
-         - the plant still runs, badly, exactly as it does with no containment.
-         radTAt() is the same expression the tick integrates against, so the
-         quoted temperature and the plant's own cannot disagree. */
-      if(!radCount()) w.push(["RED","No radiator on this ship. Nothing rejects the waste heat, so the condenser will climb until it loses vacuum and the turbine trips.","cond"]);
-      else {
-        const blind=radIds().filter(id=>!radLive(id));
-        for(const id of blind) w.push(["SOFT",partOf(id).name+" cannot see space. A panel with no face on the skin radiates nothing at all - move it against the hull, or it is dead weight and the plant loses the sink it was bought for.",id]);
-        const tr=radTRated(eff);
-        if(tr>RAD_TDES+1) w.push(["SOFT","The panels are short of rated rejection: at full power they sit at "+tr.toFixed(0)+" K against a design "+RAD_TDES+" K, which puts the condenser near "+psatSec(Math.min(tr+COND_DT0,500)).toFixed(4)+" MPa of backpressure and the turbine gives part of its work back.","cond"]);
-      }
       return w;})()};
+}
+/* ONE VESSEL'S WARNINGS, tagged with ITS boxes: the role a warning names
+   becomes this core's own id, or its own drives'. */
+function coreWarns(id){
+  const c=coreD(id), rods=rodsOf(id);
+  return coreFig(c).warn.concat(latWarn(c))
+    .map(w=>[w[0],w[1], w[2]==="core" ? id : w[2]==="rods" ? rods : w[2]]);
+}
+/* ══ THE PLANT ══
+   What the ship is: the bill, the cycle, the sink, the containment - and the
+   first vessel's own figures spread over it, because "the core" to every
+   reader that asks with no id is that vessel. derived(id) is one vessel's. */
+function derived(id){
+  if(id!=null) return coreFig(coreBag(id));
+  const d=coreFig(priD());
+  const cores=coreIds();
+  /* ASKED OF THE FILL, not of a menu row and not of a box. A containment is a
+     closed shape in the paint (matRegions(), paint.js), so "is there one" is
+     "did a fill come back bounded" and what it holds back is its own wall's
+     material. Nobody painted anything: no region, and the release goes
+     straight to the crew - which is what NONE always meant and never said. */
+  const conts=matRegionsBounded();
+  const contRel=conts.length ? Math.min.apply(null, conts.map(g=>contRelAt(null, g.cells[0]%GW, (g.cells[0]/GW)|0))) : 1;
+  /* EVERY TERM HERE NAMES A BOX ON THE GRID. Every vessel is charged its own
+     reactor (coreFig().mass, and a blank grid has none); tankMass() charges
+     per tank INSTANCE, so four tanks cost four tanks; the protection system
+     is a cabinet at the control station and the supply is its own box.
+     NO PAINT TERM HERE: layMass (layoutMetrics(), layout.js) already carries
+     it - that is the PIPING+SHIELD line. */
+  let mass=0; for(const cid of cores) mass+=coreFig(coreD(cid)).mass;
+  mass+=totalPumpMass()+totalSgMass()
+    +(roleOf("bkp")?BKP[D.bkp].mass:0)
+    + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
+    + (roleOf("ctrl")&&D.rps?55:0)
+    + totalTurbMass() + totalCondMass()
+    + totalIhxMass() + totalRadMass()
+    + layMass;
+  const eff=grossEff(), loadMax=loadCeil(), condCap=condCeil(), condShort=condShort_();
+  // trip backpressure over where this sink rests at full power: under 1 it trips at rest, under 1/DUMP_COND_K the dump is blocked
+  const condMargin=TURB_TRIP_P/Math.max(COND_P0, psatSec(condRest(plantDuty()).condT));
+  const w=[];
+  if(mass>BUDGET) w.push(["RED","Over the "+BUDGET+" t mass budget by "+(mass-BUDGET).toFixed(0)+" t.",null]);
+  for(const cid of cores) for(const x of coreWarns(cid)) w.push(x);
+  /* WHAT THE FILL FOUND, in words. It could never say this before: the old
+     line asked a menu index whether a box had been bought, so a wall with a
+     hole in it and a wall drawn round the whole plant read the same. */
+  const tightPainted=matCells().some(k=>{ const i=k.indexOf(",");
+    return matWall(+k.slice(0,i),+k.slice(i+1)); });
+  if(!conts.length) w.push(["SOFT", tightPainted
+    ? "The gas-tight structure on this ship encloses nothing - every fill round it reaches the hull, so there is no containment. Close the shape, or accept that a release goes straight to the crew."
+    : "No containment. Nothing painted on this ship is gas-tight, so any fuel damage releases straight to the crew - paint a closed shape in a gas-tight material to hold it in.",null]);
+  else { const weak=conts.map(g=>{ let lo=Infinity, at=null;
+           for(const i of g.wall){ const x=i%GW, y=(i/GW)|0, r=matRating(x,y);
+             if(r<lo){ lo=r; at=[x,y]; } }
+           return {g,lo,at}; }).sort((a,b)=>a.lo-b.lo)[0];
+         if(weak.at && weak.lo < MAT_PDES)
+           w.push(["SOFT","The containment is walled for only "+weak.lo.toFixed(2)+" MPa at "+weak.at[0]+","+weak.at[1]+" - the middle of its longest flat side, against a "+MAT_PDES+" MPa design. Thicken the wall there, or draw the enclosure rounder so no cell is in the middle of a long span.",null]); }
+  if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
+  if(!turbCount()) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
+  else if(!condCount()) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
+  if(turbCount() && loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
+  if(condMargin<1/DUMP_COND_K) w.push([condMargin<1?"RED":"SOFT","The sink rests at "+(TURB_TRIP_P/condMargin).toFixed(4)+" MPa of backpressure against a "+TURB_TRIP_P+" MPa turbine trip"+(condMargin<1?", so the turbine trips before anything has happened":", so the steam dump is blocked at rest: a load drop goes to the shell safeties and the water does not come back")+". Bigger panels or a bigger condenser buy the margin.","cond"]);
+  if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% of full-load duty but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
+  if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
+  /* Buildable, not blocked - same standing as "no RPS" above. Topological
+     only (hasHeatSink(), layout.js): Stage 6 is what would let this warning
+     read the loop rather than just its wiring. */
+  if(!hasHeatSink()) w.push(["SOFT","This design has no heat sink. Nothing wired to the primary loop removes heat from it.",null]);
+  /* THE SHIP HAS NO SKY WITHOUT THESE. The bench warns; it never refuses
+     - the plant still runs, badly, exactly as it does with no containment.
+     radTAt() is the same expression the tick integrates against, so the
+     quoted temperature and the plant's own cannot disagree. */
+  if(!radCount()) w.push(["RED","No radiator on this ship. Nothing rejects the waste heat, so the condenser will climb until it loses vacuum and the turbine trips.","cond"]);
+  else {
+    const blind=radIds().filter(id=>!radLive(id));
+    for(const id of blind) w.push(["SOFT",partOf(id).name+" cannot see space. A panel with no face on the skin radiates nothing at all - move it against the hull, or it is dead weight and the plant loses the sink it was bought for.",id]);
+    const tr=radTRated(eff);
+    if(tr>RAD_TDES+1) w.push(["SOFT","The panels are short of rated rejection: at full power they sit at "+tr.toFixed(0)+" K against a design "+RAD_TDES+" K, which puts the condenser near "+psatSec(Math.min(tr+COND_DT0,500)).toFixed(4)+" MPa of backpressure and the turbine gives part of its work back.","cond"]);
+  }
+  return Object.assign(d,{mass,over:mass>BUDGET,rated:ratedMWt(),contRel,nCont:conts.length,
+    eff,loadMax,condCap,condShort,condMargin,warn:w});
 }
 
 /* Three severities, one predicate each. HARD is the only one that refuses to

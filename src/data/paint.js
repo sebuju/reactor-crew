@@ -262,6 +262,9 @@ const regionPAt = (s,p) => p ? regionP(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : re
 const regionRel = (s,g) => (!g || !g.wall.length || !matSealed(s,g)) ? 1 : g.rel;
 const contRelAt = (s,x,y) => regionRel(s, matRegionAt(x,y));
 const contRelPart = (s,p) => p ? contRelAt(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : 1;
+// the plant's fuel stands in EVERY vessel, so what a release gets past is the mean over them
+const contRelCores = s => { const c = coreIds(); if(!c.length) return 1;
+  let r = 0; for(const id of c) r += contRelPart(s, partOf(id)); return r/c.length; };
 
 /* ══ WHAT A WALL CELL CAN TAKE IS A PROPERTY OF THE SHAPE ══
    A pipe's hoop stress is the same the length of the run. A painted wall is the

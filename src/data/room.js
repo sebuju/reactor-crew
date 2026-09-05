@@ -232,8 +232,10 @@ function partFluidH(s, id){
    leave through the same hole at the same rate, so both ask this one reader:
    asked twice, an opening whose state cannot be read put its gas in a
    compartment its heat never reached. */
-const openFluidH = (s, k) => k === "break:core" ? partFluidH(s, "core")
-                                                : runFluidH(s, k.slice(6));
+// a break key names a PART (no colon in it) or a RUN (its key always has one)
+const breakPart = k => { const t = k.slice(6); return t.indexOf(":") < 0 ? t : null; };
+const openFluidH = (s, k) => { const pid = breakPart(k);
+  return pid ? partFluidH(s, pid) : runFluidH(s, k.slice(6)); };
 
 /* ══ GEOMETRY, MEMOISED ON THE ARRANGEMENT ══
    laySig()+pipeSig(), the same key radGeom() uses and for the same reason:
@@ -663,7 +665,8 @@ function roomStep(s, dt){
    its break edges - "break:core" is the vessel itself, "break:"+run key is a
    severed run, and only the cells actually cut are open. */
 function roomOpenCells(s, G, key){
-  if(key === "break:core"){ const q = G.parts.find(w => w.p.id === "core"); return q ? q.cells : []; }
+  { const pid = breakPart(key);
+    if(pid){ const q = G.parts.find(w => w.p.id === pid); return q ? q.cells : []; } }
   const r = P.net.byKey[key.slice(6)];
   if(!r || !r.cells) return [];
   const out = [];

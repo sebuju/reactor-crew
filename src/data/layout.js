@@ -144,6 +144,7 @@ function removePart(id){
      and the two send each other round for ever. */
   delete D.machines[id];
   for(const rid in D.machines) if(D.machines[rid].on===id) removePart(rid);
+  delete D.cores[id];
   delete D.tanks[id];
   /* NO fitting->fitting cascade. A fitting left with no runs is a valve
      you can re-plumb, exactly as a tank with no runs is. */
@@ -338,9 +339,9 @@ function loopHeadAt(id){
 }
 const loopHeadOf = id => {
   const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return null;
-  const a = COOLANT[D.cool], n = Math.max(1, L.n);
+  const a = COOLANT[priD().cool], n = Math.max(1, L.n);
   const w = RATED_KW()/(a.cp*coreDT0()*n), rho = a.dens*RHO_K;
-  const inLoop = pid => pid === "core" || L.partLoop[pid] === li;
+  const inLoop = pid => coreOf(pid) === pid || L.partLoop[pid] === li;
   const vAt = Dm => w/(rho*Math.PI/4*Dm*Dm);
   let dp = 0;
   for(const r of pipeNetwork()){ if(!inLoop(r.a) || !inLoop(r.b)) continue;
@@ -491,7 +492,7 @@ const pumpFlowSuggest = id => {
      basis as condUASuggest() - this plant's duty on the design rise. */
   if(id !== undefined && pumpBounds(id).cool)
     return plantDuty()/(SAT_WATER.cp*CW_RISE);
-  return RATED_KW()/(COOLANT[D.cool].cp*coreDT0()*n);
+  return RATED_KW()/(COOLANT[priD().cool].cp*coreDT0()*n);
 };
 /* ══ A SUGGESTION FILLS THE FIELD. IT IS NOT THE FIELD ══
    These were `?? xSuggest()` - a LIVE default, recomputed from the rest of the
@@ -670,7 +671,7 @@ const condCount=()=>LAY.parts.filter(p=>p.role==="cond").length;
 /* Off D.power and layoutMetrics(), NEVER derived() - derived() prices mass,
    mass prices these machines, and a suggestion that asked derived() would ask
    itself. */
-const RATED_KW = () => D.power*1000;
+const RATED_KW = () => ratedMWt()*1000;
 /* ══ EVERY MACHINE DOWNSTREAM IS SIZED AT THE RATING ══
    n0Ref() stood here: a typed 0.006 per metre of primary run, capped at 1,
    that said how much of the rating the loop could carry - and it sized the
@@ -708,7 +709,7 @@ const plantSteam = () => RATED_KW()/steamRise();                    // kg/s rais
    families instead of within 30 %. It is a SIZING figure: what the machine
    actually captures is still grossEff(), off the turbine actually fitted.
    steamRise() is drawing-free for exactly this reason - see its own note. */
-const ratedEff = () => COOLANT[D.cool].eff
+const ratedEff = () => COOLANT[priD().cool].eff
   * clamp(1 + TURB_EFF_K*Math.log(RATED_KW()/steamRise()/TURB_EFF_REF),
           TURB_EFF_MIN, TURB_EFF_MAX);
 const plantDuty  = () => RATED_KW()*(1-ratedEff());                  // kW rejected
@@ -1091,7 +1092,7 @@ function nodeGraph(){
   const coreSeed = cores.length ? (nodesOf[cores[0].id]||[])[0] : undefined;
   const coreCirc = coreSeed===undefined ? -1 : circuit[coreSeed];
   const inCore = n => coreCircs[circuit[n]]===1;
-  nodeGraphCache={adj, nodesOf, runPorts, circuit, nCirc, coreCirc, inCore, reach}; nodeGraphSig=sig;
+  nodeGraphCache={adj, nodesOf, runPorts, circuit, nCirc, coreCirc, coreCircs, inCore, reach, sig}; nodeGraphSig=sig;
   return nodeGraphCache;
 }
 /* ══ AN ANSWER IS ONLY AS OLD AS THE GRAPH IT WAS READ OFF ══
@@ -1136,7 +1137,7 @@ function loopMap(){
   const claim=(p,i,noGate)=>{
     const seen=G.reach((G.nodesOf[p.id]||[]).filter(n=>G.inCore(n)), cut, noGate);
     for(const q of LAY.parts){
-      if(!LOOP_ROLE[q.role] || q.id==="core" || partLoop[q.id]!==undefined) continue;
+      if(!LOOP_ROLE[q.role] || q.role==="core" || partLoop[q.id]!==undefined) continue;
       if((G.nodesOf[q.id]||[]).some(n=>seen[n])) partLoop[q.id]=i;
     }
   };
@@ -1215,14 +1216,14 @@ function crossTies(){
     const A=side(na), B=side(nb);
     if(Object.keys(A).some(n=>B[n])) continue;
     const holds=(seen,pid)=>(G.nodesOf[pid]||[]).some(n=>seen[n]);
-    const hasCore=seen=>holds(seen,"core");
+    const coreIn=seen=>coreIds().find(id=>holds(seen,id))||null;
     const shellOf=seen=>{ const q=LAY.parts.find(q=>ROLE[q.role] && ROLE[q.role].sgtr && holds(seen,q.id));
       return q?q.id:null; };
-    let far=null;
-    if(hasCore(A)) far=shellOf(B);
-    else if(hasCore(B)) far=shellOf(A);
+    let far=null, core=coreIn(A);
+    if(core) far=shellOf(B);
+    else if((core=coreIn(B))) far=shellOf(A);
     if(!far) continue;
-    out.push({key:c.key, a:"core", b:far});
+    out.push({key:c.key, a:core, b:far});
   }
   return out;
 }
@@ -1409,7 +1410,7 @@ const IHX_HOLD_PER_UA= 7.6e-4;         // t of intermediate coolant per kW/K
    order to get wrong. */
 const SG_APPROACH = 25, SG_P_MAX = 17.0, SG_P_MIN = 0.2;
 const sgDesPSuggest = () =>
-  clamp(psatSec(COOLANT[D.cool].Tref - SG_APPROACH), SG_P_MIN, SG_P_MAX);
+  clamp(psatSec(COOLANT[priD().cool].Tref - SG_APPROACH), SG_P_MIN, SG_P_MAX);
 /* `?? xSuggest()`, NEVER bake(). bake() WRITES the suggestion into D the
    first time anything asks, which is right for a figure the player is
    expected to tune and wrong for one that was derived every frame until now:
@@ -1435,7 +1436,7 @@ function sgDesignP(id){
    its own shell cannot be given tubes that do it, and says so by resting off
    its rating instead of by a suggestion of infinity. */
 const SG_EPS_MAX = 0.98;
-const sgUASuggest = () => { const n=Math.max(1,sgCount()), a=COOLANT[D.cool];
+const sgUASuggest = () => { const n=Math.max(1,sgCount()), a=COOLANT[priD().cool];
   const dT0=coreDT0(), tsatS=tsatSec(sgDesignP());
   /* A BOILING PRIMARY GIVES ITS HEAT UP AT ONE TEMPERATURE - its own
      saturation at the setpoint - so the tubes are a plain conductance
@@ -1570,7 +1571,7 @@ const radTAt=qkW=>{ const k=totalRadEA();
 /* WHERE THIS SHIP'S PANELS SIT AT FULL POWER - the rating less what leaves as
    electricity. Written once because the unit is the trap: the inspector was
    handing radTAt() megawatts and quoting the stock plant at 55 K. */
-const radTRated=eff=>radTAt(D.power*1000*(1-eff));
+const radTRated=eff=>radTAt(ratedMWt()*1000*(1-eff));
 const radMass=id=>radAreaOf(id)*RAD_MASS_M2*radCoatOf(id).massK;   // t
 const totalRadMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="radiator") m+=radMass(p.id);
@@ -1628,6 +1629,18 @@ const partOf=id=>(LAY&&LAY.byId.get(id))||null;
    vessel" asks the drawing and must answer for getting nothing back. */
 const roleOf=role=>(LAY&&LAY.parts.find(p=>p.role===role))||null;
 const roleId=role=>{ const p=roleOf(role); return p?p.id:null; };
+/* EVERY VESSEL, in board order; a reader asking for ONE means the first. A
+   rider names its host (D.machines[].on), which is how a rod drive finds its
+   core and a core its drives. */
+const coreIds=()=>LAY ? LAY.parts.filter(p=>p.role==="core").map(p=>p.id) : [];
+const primaryCore=()=>roleId("core");
+const coreOf=pid=>{ const p=partOf(pid); if(!p) return null;
+  if(p.role==="core") return pid;
+  const m=D.machines[pid], h=m&&m.on&&partOf(m.on); return h&&h.role==="core" ? m.on : null; };
+const rodsOf=cid=>{ for(const p of LAY.parts){ const m=D.machines[p.id];
+    if(p.role==="rods"&&m&&m.on===cid) return p.id; } return null; };
+const coreCircOf=id=>{ const G=nodeGraph(), ns=G.nodesOf[id]; return ns&&ns.length ? G.circuit[ns[0]] : -1; };
+const coreOnCirc=ci=>coreIds().filter(id=>coreCircOf(id)===ci);
 /* WHICH SIDE OF THE PART THIS PORT IS ON, off faceOfOffset() and nothing else.
    It used to answer with its own chain of tests, whose last branch was a bare
    `else "b"` - so an offset that is on NO face, which is what a port becomes
@@ -2287,9 +2300,9 @@ const cellTop  =(role,h,v)=>role==="radiator" ? v-h : v;
    offered on its own, and dx/dy are where it stands relative to it. A machine
    that cannot exist by itself is not a machine you place. */
 const MACHINE={
-  core:{role:"core", w:9, h:12, col:"#ff5a45", grp:"core", name:"REACTOR",
+  core:{role:"core", w:9, h:12, col:"#ff5a45", grp:"core", name:"REACTOR", num:true,
     tip:"The vessel and the fuel inside it. Select it to choose the coolant family, the fuel, the lattice and the core shape."},
-  rods:{role:"rods", w:9, h:13, col:"#c8d8dc", grp:"core", name:"ROD DRIVES",
+  rods:{role:"rods", w:9, h:13, col:"#c8d8dc", grp:"core", name:"ROD DRIVES", num:true,
     rides:"core", dx:0, dy:-13,
     tip:"Control rod drive mechanisms, bolted to the vessel head. They ride on the head and move with the reactor - you site the reactor, not the drives. Select for scram gear, bank worth and emergency poison."},
   sg:{role:"sg", w:3, h:6, col:"#5fd2e2", grp:"sg", name:"STEAM GEN", num:true,
@@ -2353,10 +2366,12 @@ const machineW = (id,M) => M.role==="radiator" ? radW(id) : M.w;
    never asks a player to name one. Same split addTank()/mintTank() has, and
    buildStockPlumbing() (pipenet.js) names its own for the same reason: a
    machine id carries no meaning whatsoever. */
-function mintMachine(id,kind,x,y){
+function mintMachine(id,kind,x,y,core){
   const M=MACHINE[kind];
   D.machines[id]={kind, cell:[x,y]};
   D.machines[id].cell=[x, cellStore(M.role, y, machineH(id,M))];
+  // a vessel is minted with its own reactor drawn in it: the one handed in, else the stock one
+  if(M.role==="core") D.cores[id]=coreMint(core);
   /* WHAT IS BOLTED TO THIS ONE COMES WITH IT. A reactor with no rod drives is
      not a machine anybody could build, so placing one places both - and the
      rider's id is the host's own suffix on the rider's kind, so core -> rods
@@ -2919,7 +2934,7 @@ function tankCircuit(id){
 }
 // "on the core's circuit" - what every old tankSide()==="primary" test meant
 const tankPrimary = id => { const c=tankCircuit(id);
-  return c!==null && c>=0 && c===nodeGraph().coreCirc; };
+  return c!==null && c>=0 && nodeGraph().coreCircs[c]===1; };
 // connected somewhere, but not to the core's circuit
 const tankSecondary = id => { const c=tankCircuit(id); return c!==null && !tankPrimary(id); };
 /* Is this part id a tank on the PRIMARY side - the one predicate for "could
@@ -2976,10 +2991,11 @@ function runReach(fromId, blocks){
    heat is wired to the primary at all. Nothing blocks: heat crosses a tank
    as happily as it crosses anything else. */
 function hasHeatSink(){
-  if(!roleOf("core")) return true;   // no core, no claim to make
-  for(const pid of runReach("core")){ const p=partOf(pid), R=p&&ROLE[p.role];
-    if(R && (R.thermal==="sink"||R.thermal==="transfer")) return true; }
-  return false;
+  const cores=coreIds(); if(!cores.length) return true;   // no core, no claim to make
+  const sinks=id=>{ for(const pid of runReach(id)){ const p=partOf(pid), R=p&&ROLE[p.role];
+      if(R && (R.thermal==="sink"||R.thermal==="transfer")) return true; }
+    return false; };
+  return cores.every(sinks);
 }
 /* IS THE PRESSURIZER PLUMBED TO THE LOOP AT ALL - the bench's design-time
    half of pzrLive() (pipenet.js), which the tick asks off the solved network
@@ -3162,7 +3178,7 @@ function layoutMeasure(){
   /* A BLANK GRID HAS NO VESSEL, so every figure measured FROM one is measured
      from the middle of the hull instead - and reads as nothing, which is what
      it is. Nothing here refuses to answer. */
-  const P_=LAY.parts, core=roleOf("core"), cc=core?cen(core):{x:GW/2,y:GH/2};
+  const P_=LAY.parts, core=partOf(primaryCore()), cc=core?cen(core):{x:GW/2,y:GH/2};
   let head=0, n=0;
   for(const p of P_) if(p.role==="sg"){ head += (cc.y - cen(p).y); n++; }
   head = n? head/n : 0;
@@ -3301,7 +3317,7 @@ const laySig = sigMemo(() => LAY ? LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join("
    already a measured 5.6 ms hot spot before a pipe was a cell. The one D
    table left whole is the scalar config, which is small. */
 const D_SCALARS=()=>{ const o={};
-  for(const k in D) if(k!=="pipes" && k!=="ports" && k!=="tanks" && k!=="fittings") o[k]=D[k];
+  for(const k in D) if(k!=="pipes" && k!=="ports" && k!=="tanks" && k!=="fittings" && k!=="cores") o[k]=D[k];
   return JSON.stringify(o); };
 // every knob on a tank or a fitting: laySrcSig() carries only what puts a box on
 // the board, so a lift point or a setpoint moved nothing the bench compares
@@ -3309,5 +3325,5 @@ const D_PARTPARAM=()=>JSON.stringify(D.tanks)+"|"+JSON.stringify(D.fittings);
 // latSig() joins the key because most of what a lattice pen changes (a
 // reflector face, a cluster slot, active length) is NOT a D field - without
 // it a commissioned plant could go quietly out of date with the bench
-function designSig(){ return D_SCALARS()+D_PARTPARAM()+laySrcSig()+"|"+latSig()+"|"
+function designSig(){ return D_SCALARS()+D_PARTPARAM()+laySrcSig()+"|"+coreIds().map(id=>id+":"+latSig(D.cores[id])).join(";")+"|"
   +LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";"); }

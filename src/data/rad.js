@@ -114,9 +114,9 @@ function radGeom(){
   /* A BLANK GRID HAS NEITHER VESSEL NOR CONTROL STATION. The field is still
      solved - there is simply nothing shining and nowhere the crew stand, and
      radSrc() answers 0 for a core that is not there. */
-  const g=occupied(null), core=roleOf("core"), cc=core?cen(core):{x:GW/2,y:GH/2};
-  const K={core:radKernel(g,cc.x,cc.y), sg:[], tank:[],
-           crew:roleOf("ctrl")||core};
+  const g=occupied(null), core=partOf(primaryCore());
+  const K={core:[], sg:[], tank:[], crew:roleOf("ctrl")||core};
+  for(const id of coreIds()){ const c=cen(partOf(id)); K.core.push({id, k:radKernel(g,c.x,c.y)}); }
   for(const p of LAY.parts) if(p.role==="sg"){
     const c=cen(p); K.sg.push(radKernel(g,c.x,c.y));
   }
@@ -159,7 +159,8 @@ function radGeom(){
    term is 1 by fiat - that is what makes P.dose a purely geometric number,
    comparable across every architecture regardless of rated power. */
 function radSrc(L){
-  if(!L) return {core:1, sg:0, air:0, pipe:pipeSrc(1)};
+  if(!L){ const core={}; for(const id of coreIds()) core[id]=1;
+    return {core, sg:0, air:0, pipe:pipeSrc(1)}; }
   /* THE VESSEL'S OWN CELL DECIDES WHAT ESCAPES IT. P.contRel was a
      commissioning scalar off a menu row; contRelAt() is the same question
      asked where the damaged fuel actually stands, so a reactor walled into a
@@ -173,8 +174,14 @@ function radSrc(L){
      the same picture. RAD_DMG and RAD_MELT both keep their exact meanings, and
      s.melt stays the latch for the banner, the trend and the event log: latch
      for the story, field for the physics. */
-  return {core:(L.n*PROMPT_F+L.decay)*(L.breach?RAD_BREACH:1) + RAD_DMG*L.dmg*contRelPart(L, roleOf("core"))
-              + (!P.catcher?RAD_MELT*L.meltFrac:0),
+  /* EVERY vessel, at its own strength - its own power, its own damage, its
+     own breach - and what escapes is what its own cell lets past. */
+  const core={};
+  for(const id of coreIds()){ const c=(L.coreBy&&L.coreBy[id])||L;
+    core[id]=(c.n*PROMPT_F+c.decay)*(c.breach?RAD_BREACH:1)
+              + RAD_DMG*c.dmg*contRelPart(L, partOf(id))
+              + (!P.catcher?RAD_MELT*c.meltFrac:0); }
+  return {core,
           sg: L.sgtr?RAD_SGTR:0,
           /* EVERY tank, at its own strength: how much is in it times how
              active what is in it IS (FLUID.act). Water, borated water and
@@ -202,14 +209,16 @@ function radSrc(L){
 // In a molten salt plant the fuel is DISSOLVED in the coolant, so the whole
 // primary circuit shines and it shines with power, not with damage. Every
 // other coolant reads 0 and never touches K.pipe at all.
-const pipeSrc = n => COOLANT[D.cool].fuelInCoolant ? RAD_PIPE*n : 0;
+const pipeSrc = n => COOLANT[priD().cool].fuelInCoolant ? RAD_PIPE*n : 0;
 
 function radSolve(K,q){
   const f=new Float64Array(GW*GH);
   const Kp = q.pipe ? K.pipe : null;   // asking for it is what builds it
   // one pass per source, same summation order per cell as the per-cell form it replaces
-  const n=f.length, Kc=K.core, air=q.air, core=q.core;
-  for(let i=0;i<n;i++) f[i]=air + core*Kc[i];
+  const n=f.length, air=q.air;
+  for(let i=0;i<n;i++) f[i]=air;
+  for(const t of K.core){ const w=q.core[t.id]; if(!w) continue;
+    const k=t.k; for(let i=0;i<n;i++) f[i]+=w*k[i]; }
   if(q.sg) for(const k of K.sg){ const w=q.sg; for(let i=0;i<n;i++) f[i]+=w*k[i]; }
   if(q.tank) for(const t of K.tank){ const w=q.tank[t.id]; if(!w) continue;
     const k=t.k; for(let i=0;i<n;i++) f[i]+=w*k[i]; }

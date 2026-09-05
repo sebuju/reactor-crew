@@ -32,7 +32,7 @@ const PIPE_BORE_MM = {cw:750, feed:1125, surge:225, hpi:187.5, relief:150, boron
    velocity the fluid is run at (COOLANT[].vLeg - 15 m/s on a water leg,
    8 on sodium, 60 on helium ducting), which is what this does, per loop.
    A suggestion: D.bore still overrides it. */
-const legBoreMm = () => { const a = COOLANT[D.cool];
+const legBoreMm = () => { const a = COOLANT[priD().cool];
   const n = Math.max(1, typeof LAY !== "undefined" && LAY ? sgCount() : 1);
   const w = RATED_KW()/(a.cp*coreDT0()*n);
   return Math.round(Math.sqrt(4*w/(Math.PI*a.dens*RHO_K*a.vLeg))*1000); };
@@ -177,7 +177,7 @@ const circTopZ = ci => { const s = graphSlot("circTopZ"), was = s.get(ci);
   s.set(ci, hi); return hi; };
 // the coolant's own density at its design point, kg/m^3 - what commission()
 // bakes P.rho0 from, asked of D so the bench gets the same answer with no P
-const rhoDesign = () => COOLANT[D.cool].dens*RHO_K;
+const rhoDesign = () => COOLANT[priD().cool].dens*RHO_K;
 const colAt = n => { const ci = circOfNode(n);
   if(ci === null || ci === undefined) return 0;
   const z = nodeZ(n), top = circTopZ(ci);
@@ -205,7 +205,7 @@ const runDesignP = r => {
 };
 const runWallMm = r => (D.wall && D.wall[r.key] !== undefined) ? D.wall[r.key]
                      : wallSuggestMm(runBoreMm(r), runDesignP(r),
-                                     PRIMARY_K[r.k] ? COOLANT[D.cool] : null);
+                                     PRIMARY_K[r.k] ? COOLANT[priD().cool] : null);
 // t/m of a cylindrical shell: pi * mean diameter * wall * density
 const shellTPerM = (boreMm, wallMm) =>
   Math.PI*(boreMm+wallMm)/1000*(wallMm/1000)*STEEL_RHO/1000;
@@ -217,7 +217,7 @@ const runMassPerM = r => shellTPerM(runBoreMm(r), runWallMm(r));
    is than the side, both real figures rather than fitted ones. */
 const VESSEL_CLR = 0.55, VESSEL_HEAD_K = 1.6;
 function vesselShellMass(p0, c){
-  const L = (typeof latRevolve === "function") ? latRevolve() : null;
+  const L = (typeof latM === "function") ? latM(priD()) : null;
   const dM = ((L && L.dia) || 3) + 2*VESSEL_CLR, hM = ((L && L.hgt) || 4) + 2*VESSEL_CLR;
   const w = wallSuggestMm(dM*1000, p0, c)/1000;
   const area = Math.PI*dM*hM + 2*(Math.PI/4)*dM*dM*VESSEL_HEAD_K;
@@ -835,7 +835,7 @@ const DRHO_DP = (c,p,h,r0,b0) => { const dp = Math.max(1e-4, p*1e-3);
    than in step.js because layout.js's pump-flow suggestion is asked during
    buildStockPlumbing(), at module load. The ceiling is the same multiple of
    it the flat 250 was of 30: where the rise stops being a rise. */
-const coreDT0   = () => COOLANT[D.cool].dT0;
+const coreDT0   = c => COOLANT[(c||priD()).cool].dT0;
 const coreDTMax = () => coreDT0()*8.3;
 /* ══ ENTHALPY, ON THE CURVE THE CIRCUIT ACTUALLY CARRIES ══
    Specific enthalpy, kJ/kg, measured from H_DATUM. Three straight lines: a
@@ -874,8 +874,41 @@ const xOfH  = (c,p,h) => { const hf=satH(c,p);
    architecture (P.sat, built in commission()), and every other circuit is
    water until something says otherwise. No argument still means water, so a
    caller that genuinely has no circuit to hand reads what it always read. */
-const satOfCirc = ci => (ci!==null && ci!==undefined && ci>=0 &&
-  ci===nodeGraph().coreCirc && typeof P!=="undefined" && P && P.sat) ? P.sat : SAT_WATER;
+/* ONE VESSEL'S CURVE, at the setpoint its circuit holds: what commission()
+   used to build inline as P.sat, for any vessel and not only the first. */
+function satCurveOf(cid, p0){
+  const a = COOLANT[coreD(cid).cool];
+  if(p0 === undefined) p0 = holdSetP(coreCircOf(cid));
+  const tsat0 = a.tsat*Math.pow(p0/a.P0, coolSatN(a));
+  const c = {p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV, hFilm:a.hFilm,
+             tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:a.dens*RHO_K, solidK:a.solidK};
+  c.Tref = Math.min(a.Tref, tsat0);
+  return c;
+}
+/* A circuit with a vessel on it rides that vessel's coolant - the lowest-
+   ordinal vessel where there are two (the bench warns about a mismatched
+   pair, it never refuses). Commissioned, P.coreSat is the table for THIS
+   drawing (its graph signature says so); on the bench, or on a drawing the
+   last commission did not see, the curve is built off the drawing and
+   memoised per graph and setpoint. */
+const satOfCirc = ci => {
+  if(ci === null || ci === undefined || ci < 0) return SAT_WATER;
+  const G = nodeGraph();
+  if(G.coreCircs[ci] !== 1) return SAT_WATER;
+  if(typeof P !== "undefined" && P && P.coreSat && P.coreSatSig === G.sig && P.coreSat[ci]) return P.coreSat[ci];
+  const cid = coreOnCirc(ci)[0], p0 = holdSetP(ci), slot = graphSlot("satOf"), k = cid+"|"+p0;
+  return slot.get(k) || (slot.set(k, satCurveOf(cid, p0)), slot.get(k));
+};
+/* THE PART A CIRCUIT'S STATE IS KEYED ON: its lowest-ordinal vessel, else its
+   lowest-ordinal hold tank, else nothing. A part id and never a circuit
+   index, because an index is renumbered by any drawing edit and would put a
+   shifting key on the snapshot (the s.ihxTBy idiom). */
+const circKey = ci => { if(ci === null || ci === undefined || ci < 0) return null;
+  const s = graphSlot("circKey"), was = s.get(ci); if(was !== undefined) return was;
+  const v = coreOnCirc(ci)[0] || holdOnCirc(ci)[0] || null; s.set(ci, v); return v; };
+const primaryCirc = () => nodeGraph().coreCirc;
+// a NET node (folded) on any circuit with a vessel on it; nodeGraph().inCore takes the raw graph node
+const netInCore = nm => nodeGraph().coreCircs[circOfNode(nm)] === 1;
 const tsatSec = (p, ci) => satT(satOfCirc(ci), p);
 /* What a kilogram of steam at the DESIGN shell pressure occupies - the anchor
    the turbine's own flow coefficient is fitted at (P.turbC, step.js). Asked of
@@ -898,10 +931,26 @@ const riseOfCirc = (ci,p) => hRise(satOfCirc(ci), p);
    other circuit's setpoint lives in s.PBy, a plain object keyed by circuit
    index (the s.sglBy idiom: refilled, never rebuilt), and a circuit nothing
    authors has NO entry - it relaxes to containment, which is honest. */
-const loopP    = (s, ci) => ci === nodeGraph().coreCirc ? (s.P === undefined ? P.P0 : s.P)
-                          : (s.PBy && s.PBy[ci] !== undefined ? s.PBy[ci] : P.Pcont);
-const setLoopP = (s, ci, v) => { if(ci === nodeGraph().coreCirc) s.P = v;
-                                 else (s.PBy || (s.PBy = {}))[ci] = v; };
+/* s.PBy is keyed on circKey() now - a PART - and s.P is the FIRST vessel's
+   circuit written a second time, by the same writer, for the readers that
+   address it by name. */
+const loopP    = (s, ci) => { const k = circKey(ci), v = k !== null && s.PBy ? s.PBy[k] : undefined;
+  if(v !== undefined) return v;
+  if(ci === nodeGraph().coreCirc) return s.P === undefined ? P.P0 : s.P;
+  return nodeGraph().coreCircs[ci] === 1 ? satOfCirc(ci).p0 : P.Pcont; };
+const setLoopP = (s, ci, v) => { const k = circKey(ci);
+  if(k !== null) (s.PBy || (s.PBy = {}))[k] = v;
+  if(ci === nodeGraph().coreCirc) s.P = v; };
+/* ONE CIRCUIT'S OWN MEAN, K - the read advectStep() takes per circuit that
+   has a vessel on it, keyed like the pressure. Before the first read it is
+   that circuit's own programme; the first vessel's circuit still answers
+   s.Tavg, which a reference stub or an old tape may carry. */
+const TavgOf  = (s, ci) => { const k = circKey(ci), v = k !== null && s.TavgBy ? s.TavgBy[k] : undefined;
+  if(v !== undefined) return v;
+  if(ci === nodeGraph().coreCirc && s.Tavg !== undefined) return s.Tavg;
+  const c = satOfCirc(ci); return c.Tref !== undefined ? c.Tref : P.Tref; };
+const dTavgOf = (s, ci) => { const k = circKey(ci), v = k !== null && s.dTavgBy ? s.dTavgBy[k] : undefined;
+  return v !== undefined ? v : (ci === nodeGraph().coreCirc && s.dTavg !== undefined ? s.dTavg : 0); };
 /* ══ WHAT IS IN A PRESSURIZER, AS AN ENTHALPY ══
    A vessel part full of water with a saturated bubble over it. The LEVEL is
    the share of the volume the water has, so the quality is the share of the
@@ -929,7 +978,8 @@ const holdLvlOf = (s, nid) => { const c = satOfCirc(circOfNode(nid));
    shell - because that is the pressure something on that circuit is already
    built to hold, and containment where there is none. */
 const holdPSuggest = ci => {
-  if(ci === nodeGraph().coreCirc) return COOLANT[D.cool].P0;
+  { const c = coreOnCirc(ci)[0]; if(c) return COOLANT[coreD(c).cool].P0;
+    if(ci === nodeGraph().coreCirc) return COOLANT[priD().cool].P0; }   // the stand-in's own circuit on a blank grid
   let p = 0;
   for(const id of sgIds()) if(shellCirc(id)===ci) p = Math.max(p, sgDesignP(id));
   return p || (typeof P!=="undefined" && P ? P.Pcont : 0.1);
@@ -944,7 +994,7 @@ const holdSetP = ci => { const h = holdOnCirc(ci)[0];
    (wallSuggestMm() is the inverse), so this is the minimum of those - and a
    setpoint above it is a plant built to burst somewhere. The bench SOFT-warns
    and never refuses, which is the rule the whole bench keeps. */
-const runRating = r => 2*(STEEL_S/((PRIMARY_K[r.k] ? COOLANT[D.cool].pipeK : 1)))
+const runRating = r => 2*(STEEL_S/((PRIMARY_K[r.k] ? COOLANT[priD().cool].pipeK : 1)))
                      * Math.max(runWallMm(r)-WALL_CORR, 0) / Math.max(runBoreMm(r), 1);
 /* ══ AND WHERE IT ACTUALLY LETS GO ══
    A rating is an ALLOWABLE stress with a margin already inside it, so a pipe
@@ -991,7 +1041,8 @@ function holdDampK(){
    them, fitted or not: a plant with no pressurizer still has a programme, it
    simply has nothing holding it to it. */
 function holdCircs(){
-  const out = [nodeGraph().coreCirc];
+  const out = []; for(const id of coreIds()){ const ci = coreCircOf(id); if(ci >= 0 && out.indexOf(ci) < 0) out.push(ci); }
+  if(!out.length) out.push(nodeGraph().coreCirc);
   for(const id of holdTankIds()){ const ci = tankCircuit(id);
     if(ci !== null && ci !== undefined && ci >= 0 && out.indexOf(ci) < 0) out.push(ci); }
   return out;
@@ -1235,7 +1286,8 @@ const tankFluid = id => FLUID[D.tanks[id].fluid] || FLUID.water;
 /* ONE LEVEL, NOT TWO. A hold tank's level IS s.lvl - read off its own node's
    void fraction (holdLvlOf) - so this reads it back rather than letting
    s.tank[id] become a second, silently disagreeing copy. */
-const tankLvl   = (s,id) => D.tanks[id] && D.tanks[id].hold && s.lvl !== undefined ? s.lvl
+const holdLvlRead = (s,id) => s.lvlBy && s.lvlBy[id] !== undefined ? s.lvlBy[id] : s.lvl;
+const tankLvl   = (s,id) => D.tanks[id] && D.tanks[id].hold && holdLvlRead(s,id) !== undefined ? holdLvlRead(s,id)
                 : (s.tank && s.tank[id] !== undefined) ? s.tank[id] : D.tanks[id].level;
 /* ══ AND A VENTED TANK IS NOT A VACUUM ══
    A vessel with nothing behind it is open to the compartment, which is where
@@ -1791,7 +1843,7 @@ function netHAt(s, nid){
   const h = s.hBy && s.hBy[nid];
   if(h !== undefined) return h;
   const c = netSatOf(nid);
-  if(circOfNode(nid) === nodeGraph().coreCirc) return hOfT(c, s.Tavg===undefined?P.Tref:s.Tavg);
+  { const ci = circOfNode(nid); if(nodeGraph().coreCircs[ci] === 1) return hOfT(c, TavgOf(s, ci)); }
   const net = P && P.net, i = net && net.index ? net.index[nid] : undefined, p = netPAt(s, nid);
   return (net && net.vapour && i !== undefined && net.vapour[i]) ? satHg(c, p) : hOfT(c, satT(c, p));
 }
@@ -1955,7 +2007,11 @@ function netEdges(){
      solve - hang the pressurizer higher and the vessel genuinely sits at a
      higher pressure. netReadEdges() below identifies core flow by this index
      rather than by "touches ground", which is what it used to do. */
-  const coreNode = nodeIdx("core");
+  /* The FIRST vessel's node, and the reference frame's fallback anchor. A
+     drawing with no vessel keeps a bare node under the old name so every
+     reader that expects a frame still has one - counted at the phantom's own
+     cost, which is one empty row. */
+  const coreNode = nodeIdx(primaryCore() ? coreFold(primaryCore()) : "core");
 
   const edges = [];
   /* Hoisted up from the break pass (below) - a relief fitting whose header
@@ -2397,11 +2453,11 @@ function netEdges(){
   /* the vessel's own opening. s.breach stays exactly the latched flag the
      board, the scenarios and tripCause() all read - what goes is the fixed
      2.4 %/s drain that ran at one rate forever whatever the operator did. */
-  { const v = contNode("core"); const q0 = byId[roleId("core")];
+  for(const cid of coreIds()){ const v = contNode(cid), q0 = byId[cid], u = nodeIdx(coreFold(cid));
     breakIds.push(v);
-    if(q0) contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
-    edges.push({u: coreNode, v, C: s => s.breach ? holeC(BREACH_BORE) : 0,
-                h: 0, kind: "break", key: "break:core"}); }
+    contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
+    edges.push({u, v, C: s => (coreState(s,cid)||s).breach ? holeC(BREACH_BORE) : 0,
+                h: 0, kind: "break", key: "break:"+cid}); }
   /* ══ A DESTROYED VESSEL EMPTIES ITSELF ══
      A breach is a hole at the plenum's own height, so it spans no column and
      stops the moment the loop reaches containment pressure - a wound that
@@ -2411,13 +2467,12 @@ function netEdges(){
      it keeps pushing after the pressures have equalised and the loop empties.
      Two edges rather than one moving node, because net.z is settled at build
      time and damage is live. */
-  { const q = byId[roleId("core")];
-    if(q){ const v = contNode("core:floor");
-      breakIds.push(v);
-      contZ[v] = zFace(q, "b");
-      contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
-      edges.push({u: coreNode, v, C: s => partWrecked(s, q.id) ? holeC(BREACH_BORE) : 0,
-                  h: 0, kind: "break", key: "break:core"}); } }
+  for(const cid of coreIds()){ const q = byId[cid], v = contNode(cid+":floor"), u = nodeIdx(coreFold(cid));
+    breakIds.push(v);
+    contZ[v] = zFace(q, "b");
+    contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
+    edges.push({u, v, C: s => partWrecked(s, q.id) ? holeC(BREACH_BORE) : 0,
+                h: 0, kind: "break", key: "break:"+cid}); }
 
   /* ══ AND A WRECKED HOLD TANK EMPTIES ITSELF THE SAME WAY ══
      Its water is the CIRCUIT's own, at an ordinary node of the field, so the
@@ -2473,6 +2528,7 @@ function netMaps(ctx){
      catches nothing - it is a cross-tie somebody set to relief, and saying so
      is more honest than picking the first tank a loop walk stumbles into. */
   const fitTarget = {};
+  const coreSet = new Set(coreIds().map(q => index[coreFold(q)]).filter(i => i !== undefined));
   {
     const adjn = Array.from({length: nodes.length}, () => []);
     for(const ed of edges){
@@ -2485,7 +2541,7 @@ function netMaps(ctx){
       let tank = null, core = false;
       while(st.length){
         const u = st.pop();
-        if(u === coreNode) core = true;
+        if(coreSet.has(u)) core = true;
         const tid = tankIdOf(nodes[u]);
         if(tid){ if(!tank) tank = tid; continue; }             // reached, never crossed
         for(const v of adjn[u]) if(!seen.has(v)){ seen.add(v); st.push(v); }
@@ -2535,7 +2591,10 @@ function netMaps(ctx){
   for(const i in contZ) net2.z[i] = contZ[i];   // ...and a pipe-cell break is at the CELL, not at either machine
 
   net2.coreNode = coreNode;   // holdLive() needs the loop end of the walk, and nothing else knew it
-  net2.coreSet = new Set(LAY.parts.filter(q => q.role === "core").map(q => index[coreFold(q.id)]).filter(i => i !== undefined));
+  net2.coreSet = coreSet;
+  // every vessel's own node, by id, and the id back off the node: what a per-vessel reader of the solve keys on
+  net2.coreNodes = {}; net2.coreOfNode = {};
+  for(const q of coreIds()){ const i = index[coreFold(q)]; if(i !== undefined){ net2.coreNodes[q] = i; net2.coreOfNode[i] = q; } }
   /* THE FALLBACK ANCHOR, and only the fallback. There is no datum ROLE any
      more: a pressurizer is a tank whose gas space is controlled, and which
      node each component is measured from is decided per SOLVE (netRef()) off
@@ -2623,10 +2682,10 @@ function netMaps(ctx){
       const put = (i, kg, tau, area) => { if(!(kg > 0) || i === undefined) return;
         net2.metalUA[i] += (netSatOf(nodes[i]).hFilm || SAT_WATER.hFilm)*area/1000;
         net2.metalTau[i] += kg*tau; net2.metalKg[i] += kg; };
-      const core = roleOf("core"), G = nodeGraph();
-      if(core && nodesOfPart[core.id] && G.coreCirc >= 0){
-        const a = COOLANT[D.cool], p0 = holdSetP(G.coreCirc), list = nodesOfPart[core.id];
-        const L = latRevolve(), dM = ((L && L.dia) || 3) + 2*VESSEL_CLR;
+      for(const cid of coreIds()){ const ci = coreCircOf(cid), list = nodesOfPart[cid];
+        if(!list || ci < 0) continue;
+        const c = coreD(cid), a = COOLANT[c.cool], p0 = holdSetP(ci);
+        const L = latM(c), dM = ((L && L.dia) || 3) + 2*VESSEL_CLR;
         const kg = vesselShellMass(p0, a)*1000/list.length, tau = tauOf(wallSuggestMm(dM*1000, p0, a)), area = Math.PI*dM*((L && L.hgt) || 4)/list.length;
         for(const i of list) put(i, kg, tau, area); }
       for(const r of net){ const ends = runEnds(r.key, r.k); if(!ends) continue;
@@ -2954,7 +3013,8 @@ const circSeed = (net, ci) => {
   return -1; };
 function circSolid(net, s, ci){
   const holds = holdOnCirc(ci);
-  const seed = ci === nodeGraph().coreCirc ? net.coreNode
+  const own = coreOnCirc(ci)[0];
+  const seed = own ? net.index[coreFold(own)]
              : holds.length ? net.tankNode[holds[0]] : circSeed(net, ci);
   if(seed === undefined || seed === null || seed < 0) return false;
   /* AN ANCHOR IS A REFERENCE, NOT A BOUNDARY. netFixed() pins one node per
@@ -3038,7 +3098,11 @@ function pieceOf(net, s, node){
 }
 /* THE PIECE THE CORE IS IN, which is what "still plumbed to the primary"
    means for every gate below. */
-const corePiece = (net, s) => netPieces(net, s).of[net.coreNode];
+const corePiece = (net, s, cid) => netPieces(net, s).of[cid && net.coreNodes[cid] !== undefined ? net.coreNodes[cid] : net.coreNode];
+// the live piece of EVERY vessel - "still plumbed to a core" is asked of all of them
+const corePieces = (net, s) => { const of = netPieces(net, s).of, set = new Set();
+  for(const id in net.coreNodes) set.add(of[net.coreNodes[id]]);
+  if(!set.size) set.add(of[net.coreNode]); return set; };
 /* IS THIS MACHINE STILL PLUMBED TO THE CORE, over LIVE edges. A generator
    behind a shut port went on cooling the loop at the stagnant-flow floor, so a
    sealed reactor lost more heat than it made - the same mistake the relief
@@ -3046,8 +3110,8 @@ const corePiece = (net, s) => netPieces(net, s).of[net.coreNode];
 function partOnCoreLoop(net, s, id){
   const list = net.nodesOfPart && net.nodesOfPart[id];
   if(!list || !list.length) return false;
-  const pc = netPieces(net, s), c = pc.of[net.coreNode];
-  for(let k=0;k<list.length;k++) if(pc.of[list[k]] === c) return true;
+  const pc = netPieces(net, s), cps = corePieces(net, s);
+  for(let k=0;k<list.length;k++) if(cps.has(pc.of[list[k]])) return true;
   return false;
 }
 /* WHAT A HOLD TANK IS HOLDING, which is its LOOP's pressure while it is live
@@ -3221,7 +3285,7 @@ const netHoldStore = on => { netStoreHeld = !!on; };
    diagonal either way. */
 const SOLID_K_W = COOLANT[0].solidK;
 const netKapF = ci => BETA_W/Math.max(1e-6,
-  (ci===nodeGraph().coreCirc && typeof P!=="undefined" && P && P.solidK) ? P.solidK : SOLID_K_W);
+  satOfCirc(ci).solidK || SOLID_K_W);
 const netKappa = (nid, p, x) => { const q = clamp(x, 0, 1);
   const g = 1/Math.max(p, COND_P0);
   // a fluid above its own tc reads x 0 off the fictional tsat, and water's liquid floor is twice a gas's 1/p at 7 MPa
@@ -3409,7 +3473,7 @@ function netLiveSigOf(net, s){
   + '|' + (s.portShut ? Object.keys(s.portShut).filter(k => s.portShut[k]).join(',') : '')
   /* a ruptured vessel opens a break edge the same way a severed run does, and
      unlike a severed run it is not in s.dmgParts */
-  + '|' + (s.breach ? 'B' : '')
+  + '|' + coreIds().map(id => (coreState(s,id)||s).breach ? 'B' : '').join('')
   /* Every gate on every tank's own edge - the operator's valve, its auto
      rule, the diode and "is there anything left to give" - as ONE bit per
      tank, off the same tankLive() the edge itself is built from. Any of them
@@ -3740,7 +3804,7 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
      +0.5*P.pRise straight back into the pressure that just moved it. */
   const tankNodes = new Set();
   for(const id in net.tankNode) if(!(D.tanks[id] && D.tanks[id].hold)) tankNodes.add(net.tankNode[id]);
-  let core = 0, spill = 0, spillSec = 0;
+  let core = 0, spill = 0, spillSec = 0; const coreBy = outs ? {} : null;
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
     /* SIGNED, along the edge's own u->v order, which is the run key's own
@@ -3900,12 +3964,12 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
     if(!qTankEdge && !awayFromCore && (inU || inV)){
       const qin = inV ? q[e] : -q[e];
       if(qin > 0){
-        core += qin;
+        core += qin; if(coreBy){ const cid = net.coreOfNode[inV ? ed.v : ed.u]; if(cid) coreBy[cid] = (coreBy[cid]||0) + qin; }
         if(byLoop){ const i = loopOfKey(ed.key); if(i!=null) byLoop[i] = (byLoop[i]||0) + qin; }
       }
     }
   }
-  if(outs){ outs.spill = spill; outs.spillSec = spillSec; }
+  if(outs){ outs.spill = spill; outs.spillSec = spillSec; outs.coreKgBy = coreBy; }
   return core;
 }
 
@@ -4430,7 +4494,7 @@ function buildStockPlumbing(opt){
        reference ship could not be given the one containment it obviously has.
        Everything below follows the machine, because every run is routed and
        every nozzle is an offset. */
-    mintMachine("core"+U,"core",8+ox,13+oy);   // and its rod drives, which ride the head
+    mintMachine("core"+U,"core",8+ox,13+oy,opt&&opt.core);   // and its rod drives, which ride the head
     for(let i=0;i<loops;i++) mintMachine("sg"+(u*loops+i),"sg",uX(u,i),5+oy);
     for(let i=0;i<loops;i++) mintMachine("pump"+(u*loops+i),"pump",uX(u,i),18+oy);
   }
@@ -5133,13 +5197,23 @@ function plantPreset(i){
      rebuild, so without this a preset commissioned on the previous preset's
      generators, pumps and rod position. */
   designForget();
-  archPreset(q.arch);                    // buys the materials and redraws the core
-  if(q.lat!=null) latPreset(q.lat);
-  Object.assign(D,q.d);
+  /* a row's `d` is plant knobs and reactor knobs in one bag; each goes to
+     the thing it is a knob on, and a reactor knob to EVERY vessel the ship
+     carries */
+  const dCore={}, dPlant={};
+  for(const k in (q.d||{})) (CORE_KEYS.includes(k) ? dCore : dPlant)[k]=q.d[k];
+  Object.assign(D,dPlant);
+  /* THE REACTOR IS DRAWN FIRST and every vessel is minted from it - the ship
+     is sized off the rating as it is built, so the core has to be final
+     before the first box is placed. */
+  const core=coreMint();
+  archPreset(core,q.arch);
+  if(q.lat!=null) latPreset(core,q.lat);
+  Object.assign(core,dCore);
   /* WHAT THIS SHIP IS, laid gesture for gesture. `drop` is handed to the
      builder rather than run afterwards, so a preset without an injection tank
      never places one - it does not place one and take it off again. */
-  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont});
+  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont, core});
   // and anything this ship carries that the stock one does not, placed the
   // same way ADD MACHINE places it
   for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);
@@ -5184,7 +5258,6 @@ function plantPreset(i){
    new design starts, so it is the same call with nothing laid after it. */
 function plantClear(){
   designClear();
-  latDefault();
   dTouch();
   LAY=null; layoutMetrics();
   designForgetBags();

@@ -47,7 +47,7 @@ const storeURL = tail => (STORE.base || "api/") + tail;
 
 /* One table, so a tag and its constructor cannot drift apart. Add a kind here
    and both directions know about it. */
-const TARR = {__f64:Float64Array, __f32:Float32Array, __i32:Int32Array, __u8:Uint8Array};
+const TARR = {__f64:Float64Array, __f32:Float32Array, __i32:Int32Array, __u8:Uint8Array, __i8:Int8Array};
 const NUMTAG = "__num";
 /* An element of a typed array is always a number, so a non-finite one can be
    the bare string without ambiguity. A number sitting loose in an object
