@@ -63,6 +63,10 @@ const xTauF=()=>XTAU_F*rodD()/ROD_D0;
    is fitted against in coreReset(). Real: a PWR rod's outer surface runs about
    30 K above the water going past it. */
 const CLAD_DT0=30;
+/* What a covered rod sheds into STILL water, W/m2/K - natural convection
+   plus nucleate boiling on a vertical rod, a published order (1-5 kW/m2/K).
+   A real coefficient, turned into the film's own share in coreConst(). */
+const H_POOL=2000;
 /* Drift flux: quality to void fraction. C0 is the concentration parameter (the
    steam runs up the middle of the channel faster than the mean) and rvl is
    the density ratio of steam to water, which is satRvl(pressure) now rather
@@ -149,6 +153,11 @@ const faceI=new Float64Array(XNR), faceO=new Float64Array(XNR);
   }
 })();
 const wMean=a=>{ let m=0; for(let k=0;k<XNN;k++) m+=a[k]*nodeW[k]; return m; };
+/* IMPORTANCE-weighted mean of a field: volume times phi^2, normalised. One
+   group's adjoint is its flux, so this is what a local reactivity is worth. */
+const impW=(a,phi)=>{ let m=0,W=0;
+  for(let k=0;k<XNN;k++){ const q=nodeW[k]*phi[k]*phi[k]; m+=a[k]*q; W+=q; }
+  return W>0 ? m/W : 0; };
 function nodePeak(a){ let v=-1e30,k=0;
   for(let q=0;q<XNN;q++) if(a[q]>v){ v=a[q]; k=q; }
   return {v,k,i:(k/XNZ)|0,j:k%XNZ}; }
@@ -200,6 +209,10 @@ function coreConst(T,d){
        coreDT0() of rise at rated power, in THIS coolant. W-3 wants a real G, not a share. */
     T.G0=(T.rated||D.power)*1000/(cp*coreDT0())/Math.max(T.aFlow,1e-9);
     const qpp=(T.rated||D.power)*1e6/Math.max(T.aHeat,1e-6);
+    /* the pool-boiling film as a share of the rated forced film: the rated
+       film drops CLAD_DT0 at qpp, so its coefficient is qpp/CLAD_DT0 and the
+       floor is H_POOL over that - a real coefficient against a real one */
+    T.filmPool=H_POOL*CLAD_DT0/Math.max(qpp,1);
     T.xSub  = 154*cp*coreDT0()*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
@@ -274,7 +287,7 @@ function coreConst(T,d){
       rodShape(T,st,cov,fol);
       for(let k=0;k<XNN;k++) rho[k]=-a*cov[k];
       coreSolve(T,phi,rho,25);
-      w=0; for(let k=0;k<XNN;k++) w+=cov[k]*phi[k]*nodeW[k];
+      w=impW(cov,phi);
     }
     return w;
   };
@@ -289,8 +302,7 @@ function coreConst(T,d){
       rodShape(T,st,cov,fol);
       for(let k=0;k<XNN;k++) rho[k]=-a*cov[k];
       coreSolve(T,p0,rho,25);
-      let w=0; for(let k=0;k<XNN;k++) w+=cov[k]*p0[k]*nodeW[k];
-      a=XRODW0/Math.max(w,1e-3);
+      a=XRODW0/Math.max(impW(cov,p0),1e-3);
     }
     XABS0=a;
   }
@@ -464,9 +476,12 @@ function coreReset(s){
        nOx    oxide grown on an average pin here, metres. A NODE MEAN, so it
               cannot tell a uniformly thin node from a half-consumed one - as
               coarse as the mesh, the same limit s.TfHot has.
-       nMelt  fraction of the pellet melted, 0..1 */
+       nMelt  fraction of the pellet melted, 0..1
+       nDnb   1 while the node is in film boiling - a REGIME is a state, and
+              a wall past departure stays blanketed until it cools under the
+              Leidenfrost point (dnbFilmK, step.js) */
   s.nDmg=new Float64Array(XNN); s.nOx=new Float64Array(XNN);
-  s.nMelt=new Float64Array(XNN);
+  s.nMelt=new Float64Array(XNN); s.nDnb=new Float64Array(XNN);
   s.chW =new Float64Array(XNR).fill(1);
   /* Every P.NB-sized allocation lives here, because a bench change to nbank
      re-runs coreConst() and then resetPlant() -> coreReset(), so sizes can
@@ -594,10 +609,10 @@ function fuelStages(s){
    emergent, guessing it from a formula would leave the plant off-critical at
    commissioning and walk it into a trip nobody caused. */
 function coreRodWorth(s){
-  let w=0;
-  for(let k=0;k<XNN;k++)
-    w+=nodeW[k]*s.phi[k]*(-P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]);
-  return w;
+  let w=0, W=0;
+  for(let k=0;k<XNN;k++){ const q=nodeW[k]*s.phi[k]*s.phi[k];
+    w+=q*(-P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]); W+=q; }
+  return W>0 ? w/W : 0;
 }
 
 /* ── one tick of the core as a place ──
@@ -685,8 +700,13 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
        whole of the voiding-channel runaway. */
     const dTn=heat*dT0*mixK[i]/(XNZ*ff*chan);        // K of rise per node at phi = 1
     /* and the flux past the pin in this channel, which is a different question
-       from how much water is passing - see s.hotFlow */
-    const film0=Math.pow(Math.max(mflux*chan,0),0.8);
+       from how much water is passing - see s.hotFlow.
+       FLOORED AT THE POOL: a covered rod in still water still sheds heat by
+       natural convection and nucleate boiling (P.filmPool, coreConst), so
+       an isolated full vessel heats on decay heat at that rate and not as
+       if the water were not there. The (1-nV) factor below is what takes
+       the floor away when the node is bare. */
+    const film0=Math.max(Math.pow(Math.max(mflux*chan,0),0.8), P.filmPool||0);
     /* the same water as a MASS FLUX rather than a film - Saha-Zuber's G, and
        the one branch of it that divides by it */
     const gCh=Math.max(mflux*chan,1e-3);
@@ -728,7 +748,12 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          not a modelling choice. Void is not the only way to lose the film:
          dnbFilmK() (step.js) is departure itself, which is why the margin is
          measured first. */
-      const film=film0*(1-clamp(s.nV[k],0,1))*dnbFilmK(dnb);
+      /* the wall's own superheat is read with the nucleate film first, and
+         the post-CHF law (dnbFilmK) then says how much of that film is left */
+      const filmNB=film0*(1-clamp(s.nV[k],0,1));
+      const TclNB=s.nTc[k]+(s.nTf[k]-s.nTc[k])*P.gSolid/(P.gSolid+filmNB);
+      s.nDnb[k]=dnbLatch(dnb, TclNB-sat, s.nDnb[k]);
+      const film=filmNB*(s.nDnb[k] ? DNB_FILM : 1);
 
       const Tcl=s.nTc[k]+(s.nTf[k]-s.nTc[k])*P.gSolid/(P.gSolid+film);
       if(Tcl>TclH) TclH=Tcl;
@@ -832,22 +857,28 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
 
   /* ── what the rest of the sim gets back ── */
   const o={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0};
-  let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0;
+  let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0,W2=0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
-    const k=XIX(i,j), v=nodeW[k], w=v*s.phi[k];
-    /* flux weighted: a poisoned corner of a dead core does not get a vote */
-    o.dop+=w*clamp(P.aF*(s.nTf[k]-P.TfRef),-6000,3000);
-    o.mod+=w*clamp(P.aM*(s.nTc[k]-P.Tref),-6000,2500);
-    o.exp+=w*clamp(P.aX*(s.nTf[k]-P.TfRef)+P.aS*(s.nTc[k]-P.Tref),-6000,2500);
-    o.vd +=w*P.aV*s.nV[k];
-    o.xe +=w*-P.KXE*s.xX[k];
-    o.rod+=w*-P.rodA*s.nCov[k];
-    o.tip+=w*P.tipRho*s.nFol[k];
+    const k=XIX(i,j), v=nodeW[k], w=v*s.phi[k], w2=w*s.phi[k];
+    /* IMPORTANCE weighted, phi squared: in one group the adjoint is the flux,
+       so a local reactivity change is worth phi^2 (first-order perturbation
+       theory). Weighted by phi alone the centre was under-counted by Fq and
+       the rim over-counted, which flattened the S-curve and damped the axial
+       xenon mode. A poisoned corner of a dead core still gets no vote. */
+    o.dop+=w2*clamp(P.aF*(s.nTf[k]-P.TfRef),-6000,3000);
+    o.mod+=w2*clamp(P.aM*(s.nTc[k]-P.Tref),-6000,2500);
+    o.exp+=w2*clamp(P.aX*(s.nTf[k]-P.TfRef)+P.aS*(s.nTc[k]-P.Tref),-6000,2500);
+    o.vd +=w2*P.aV*s.nV[k];
+    o.xe +=w2*-P.KXE*s.xX[k];
+    o.rod+=w2*-P.rodA*s.nCov[k];
+    o.tip+=w2*P.tipRho*s.nFol[k];
+    W2+=w2;
     X+=v*s.xX[k]; I+=v*s.xI[k]; V+=v*s.nV[k]; Tf+=w*s.nTf[k];
     if(s.nTf[k]>TfH) TfH=s.nTf[k];
     if(j>=XNZ/2) top+=w; else bot+=w;
     if(i< XNR/2)  inn+=w; else out+=w;
   }
+  if(W2>0) for(const q in o) o[q]/=W2;
   const hot=nodePeak(s.phi);
   s.fq=hot.v; s.hotRing=hot.i; s.hotLev=hot.j;
   s.ao=(top-bot)/Math.max(top+bot,1e-6);
@@ -867,7 +898,7 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   let dm=0, mf=0;
   for(let k=0;k<XNN;k++){ dm+=nodeW[k]*s.nDmg[k]; mf+=nodeW[k]*s.nMelt[k]; }
   s.dmg=Math.min(100,100*dm); s.meltFrac=mf;
-  s.h2+=h2; s.oxMax=ecrH; s.TcladHot=TclH;
+  o.h2=h2; s.oxMax=ecrH; s.TcladHot=TclH;
   /* what the metal is making, as a share of rated - the one number that says
      whether this is corrosion or a runaway, and the comparison the event log
      puts it against is the chain reaction's own output */
