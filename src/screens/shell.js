@@ -272,10 +272,14 @@ function shellInitTooltip(){
     bar=null;
     KIT.show(tip,true);
     const b=el.getBoundingClientRect();
+    /* every panel on these two screens stands ON the drawing, so a box beside
+       the control that raised it is a box on top of the plant */
+    if(plantScreen()){ viewAt=""; placeView(); return; }
     const a=curRail?null:vitalsAnchor(el);
     if(a) placeAnchor(a);
     else if(curRail) place(curGroup?curGroup.getBoundingClientRect().top:b.top+b.height/2, !!curGroup);
     else placeBy(b); };
+  const plantScreen=()=>screen==="design"||screen==="operate";
   const hide=()=>{ cur=null; curRail=null; curGroup=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
   tipHide=hide;
   document.addEventListener("pointerover",e=>{
@@ -323,7 +327,8 @@ function shellInitTooltip(){
     tip.style.left=Math.max(4, Math.min(b.left, innerWidth-r.width-4))+"px";
     tip.style.top=y+"px";
   };
-  document.addEventListener("pointermove",e=>{ if(cur&&curRail&&!curGroup) place(e.clientY); });
+  document.addEventListener("pointermove",e=>{
+    if(cur&&curRail&&!curGroup&&!plantScreen()) place(e.clientY); });
 
   /* PARKED bottom-right OF THE PLANT VIEW, not carried on the pointer. A box
      that follows the hand is a box between the hand and whatever it is reaching
@@ -335,9 +340,6 @@ function shellInitTooltip(){
      box nobody can read. viewRectCss() is exactly the room the rails leave. */
   let viewAt="";
   const placeView=()=>{
-    const a=vitalsAnchor();
-    if(a){ const at="v"+a.right+","+a.top+","+tip.offsetHeight;
-      if(at===viewAt) return; viewAt=at; placeAnchor(a); return; }
     const v=viewRectCss(), r=tip.getBoundingClientRect();
     const x=Math.max(4,Math.min(v.right-r.width-6, innerWidth-r.width-4));
     const y=Math.max(4,Math.min(v.bottom-r.height-6,innerHeight-r.height-4));
