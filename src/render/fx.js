@@ -56,6 +56,24 @@ const fxWall = () => (typeof performance !== "undefined" ? performance.now() : D
    particle by whatever is left over, so a rising rate grows one in. */
 const fxN = (rate, max) => clamp(rate, 0, 1) * (max || FX_MAX);
 
+/* ══ AN EFFECT IS DRAWN IN THE CELL IT WAS AUTHORED IN ══
+   Every geometry figure below is a fraction of a 16-unit cell - a jet reaching
+   8+30 units, a bubble of radius 0.5..1.8, a 9-unit lane pitch, a 2..6 unit
+   spark - exactly like the machine symbols they mostly stand on, and for the
+   same reason they are NOT multiplied by DRAW_K one at a time.
+   MOST CALLERS NEED NOTHING: fifteen of the sixteen in plant.js are inside
+   symAt(), which is already under that transform, and scaling here as well
+   would square it. This is for the callers that are NOT - a break plume on a
+   pipe cell, a hole in a wall, hydrogen bubbling in a compartment - which stand
+   in plant space and would otherwise draw a speck on a 70-unit cell. Anchor in
+   plant units, body in cell units. */
+function fxCellSpace(x, y, fn){
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(DRAW_K, DRAW_K);
+  fn();
+  ctx.restore();
+}
+
 /* ══ AN EASED RATE IS DISPLAY STATE, SO IT IS NOT ON S ══
    Same standing as the damped meters in pipes.js: a picture of the last few frames,
    not a fact about the plant, so it is not snapshotted and whoever moves the clock

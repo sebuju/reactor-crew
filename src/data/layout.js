@@ -25,7 +25,26 @@
    ONE CELL IS THE FLOOR, and that is arithmetic rather than design: a zero
    grid is a Float64Array(0) and a divide by zero in every field pass. */
 let GW=60, GH=34;
-const CELL=16, GX=12, MPC=1.4/3;   // metres per cell
+/* ══ AND CELL IS THE ONE KNOB THE PLANT'S SCALE HANGS ON ══
+   A panel is 268 units wide (MARGIN_W) and it lives in PLANT SPACE, so it zooms
+   with the drawing and the ratio between these two figures is the whole of how big
+   the ship feels. At 16 a panel was 16.75 cells across against a 9-cell reactor -
+   the readout was 186% of the machine it described, which is why every panel had
+   to be exiled to a margin on a leader. At 134 it is exactly 2 cells, and the view shows
+   a WINDOW of the ship (VIEW_CELLS_W, plant.js) rather than all of it.
+   IT STAYS IN THIS FILE. core/constants.js is above ui.js in the load order and
+   looks like the better home for a rendering size, but tools/nodom-probe.js flies
+   a sim-only subset that does not carry constants.js and DOES carry this one -
+   moved, cellPos() threw "CELL is not defined" on the first headless run. */
+const CELL=134, GX=12, MPC=1.4/3;   // metres per cell
+/* ══ WHAT A FIGURE AUTHORED AGAINST THE OLD CELL IS WORTH NOW ══
+   Every pixel budget in the plant renderer was written against a 16-unit cell and
+   says so out loud - a 6-unit bore and a 12-unit flange spending "the budget
+   across a 16 px cell" (pipes.js). Those are fractions of a CELL, not sizes, and
+   rewriting each as a decimal of CELL would throw away the reasoning that picked
+   it. DRAW_K is that conversion, stated once: a drawing constant is multiplied by
+   it, screen furniture is not. CELL_REF is history and never moves. */
+const CELL_REF=16, DRAW_K=CELL/CELL_REF;
 const gridClamp=(w,h)=>[Math.max(1,Math.round(w)), Math.max(1,Math.round(h))];
 function gridSync(){ const [w,h]=gridClamp(D.gw,D.gh);
   if(w!==GW||h!==GH){ GW=w; GH=h; } }
@@ -627,7 +646,7 @@ const totalPumpCap=()=>{ let c=0;
    they each weigh - summing capacity first and scaling once would price a
    plant's redundancy as if it were one enormous machine. */
 const totalPumpMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(roleHead(p.role)) m+=pumpMassOf(p.id);
+  for(const p of LAY.parts) if(roleHead(p.role)) m+=partMassOf(p.id);
   return m; };
 // ...and the pumps on the CORE's own circuit, which is a different book: the
 // RPS low-flow floor (flowMin, step.js) is about the water going past the
@@ -742,7 +761,7 @@ const turbEffOf = id => { const k=turbKgs(id);
    the mass budget, which is the designer's problem and not this table's. */
 const TURB_T_PER_KGS=0.0369;
 const totalTurbMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="turb") m+=turbKgs(p.id)*TURB_T_PER_KGS;
+  for(const p of LAY.parts) if(p.role==="turb") m+=partMassOf(p.id);
   return m; };
 /* A condenser is a heat exchanger, so what it IS is a UA, kW/K. The
    suggestion is the unit that rejects the reference plant's waste heat across
@@ -763,7 +782,7 @@ const totalCondUA=()=>{ let c=0;
   for(const p of LAY.parts) if(p.role==="cond") c+=condUA(p.id);
   return c; };
 const totalCondMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="cond") m+=condUA(p.id)*COND_T_PER_UA;
+  for(const p of LAY.parts) if(p.role==="cond") m+=partMassOf(p.id);
   return m; };
 /* The dump ceiling is count-INDEPENDENT (P.bypass, step.js), so it takes the
    mean and not the sum; P.condUA reads the sum, and so does the circulating
@@ -800,7 +819,7 @@ const sgTubeT  = id => sgRowOf(id).tube;
 // in kg. This is the STEEL, in tonnes - two quantities, two names.
 const sgSteelT = id => sgShellT(id)+sgTubeT(id);
 const totalSgMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="sg") m+=sgSteelT(p.id);
+  for(const p of LAY.parts) if(p.role==="sg") m+=partMassOf(p.id);
   return m; };
 /* A generator carries its own transfer coefficient as well as its tonnage -
    the tonnage says how much water is in it, the UA says how fast heat crosses
@@ -843,6 +862,27 @@ const PART_MASS={catcher:66, vent:34};
    a role-level charge would hand out every unit after the first for nothing,
    which is the same trap widening a capacity slider's span had. */
 const partMass=role=>LAY.parts.filter(p=>p.role===role).length*(PART_MASS[role]||0);
+/* ══ WHAT ONE BOX ON THE BOARD WEIGHS, t ══
+   THE ONE DOOR. Every total below is this, summed over its own predicate, so a
+   panel's heading and the plant's mass budget cannot quote two prices for one
+   machine. A role with no charge weighs nothing and says so. */
+function partMassOf(id){
+  const p=partOf(id); if(!p) return 0;
+  if(roleHead(p.role)) return pumpMassOf(id);
+  switch(p.role){
+    case "core":     return coreFig(coreD(id)).mass;
+    case "sg":       return sgSteelT(id);
+    case "turb":     return turbKgs(id)*TURB_T_PER_KGS;
+    case "cond":     return condUA(id)*COND_T_PER_UA;
+    case "ihx":      return ihxUAOf(id)*IHX_T_PER_UA;
+    case "radiator": return radMass(id);
+    case "tank":     return D.tanks[id]&&D.tanks[id].cell ? tankMassOf(id) : 0;
+    case "fitting":  return fitMassOf(id);
+    case "bkp":      return BKP[D.bkp].mass;
+    case "ctrl":     return D.rps?55:0;
+    default:         return PART_MASS[p.role]||0;
+  }
+}
 /* WHERE THIS BOX GIVES UP, K - the ONE door, because a radiator's coating
    scales it per instance and two readers asking ROLE.tsurv directly would
    disagree with the panel that sold the coating. null is structure: a shield
@@ -1235,9 +1275,17 @@ const secondaryNode=node=>!nodeGraph().inCore(node);
    two of them, so "the circuit this machine is on" has no answer - the SHELL's
    does, and it is the one the core cannot reach. -1 when nothing is piped to
    it, which reads as water and is what an unplumbed shell always was. */
-const shellCirc=pid=>{ const G=nodeGraph();
-  const n=(G.nodesOf[pid]||[]).find(x=>!G.inCore(x));
+const stageCirc=(pid,core)=>{ const G=nodeGraph();
+  const n=(G.nodesOf[pid]||[]).find(x=>G.inCore(x)===core);
   return n===undefined ? -1 : G.circuit[n]; };
+const shellCirc=pid=>stageCirc(pid,false);
+/* AND WHICH CIRCUIT ITS NEAR SIDE IS ON - the same walk, the other answer, so
+   the two cannot disagree about which side of one machine's tube wall they are
+   naming. It is how a sink is charged to a vessel: a generator belongs to the
+   core it can reach, which is a fact about the drawing and not about a name.
+   On two units it is the whole difference between two heat balances; on one it
+   is the only circuit there is. */
+const sgPrimCirc=pid=>stageCirc(pid,true);
 // on the graph (graphSlot()): feedHeadMax() asks this of every pump per run per tick
 function secGensOf(pid){
   const slot=graphSlot("secGensOf"), was=slot.get(pid); if(was) return was;
@@ -1450,7 +1498,7 @@ const ihxUASuggest = () => sgUASuggest()*2.5;
 const sgUAOf  = id => D.sgUA[id]  ?? sgUASuggest(id);
 const ihxUAOf = id => D.ihxUA[id] ?? ihxUASuggest(id);
 const totalIhxMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="ihx") m+=ihxUAOf(p.id)*IHX_T_PER_UA;
+  for(const p of LAY.parts) if(p.role==="ihx") m+=partMassOf(p.id);
   return m; };
 /* ══════════ THE RADIATOR ══════════
    This is a space game: there is nothing to reject into, so waste heat leaves
@@ -1574,7 +1622,7 @@ const radTAt=qkW=>{ const k=totalRadEA();
 const radTRated=eff=>radTAt(ratedMWt()*1000*(1-eff));
 const radMass=id=>radAreaOf(id)*RAD_MASS_M2*radCoatOf(id).massK;   // t
 const totalRadMass=()=>{ let m=0;
-  for(const p of LAY.parts) if(p.role==="radiator") m+=radMass(p.id);
+  for(const p of LAY.parts) if(p.role==="radiator") m+=partMassOf(p.id);
   return m; };
 
 /* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
@@ -1610,8 +1658,10 @@ function loopOfKey(key){
    FIT_DEFAULT.bore (pipenet.js, which loads after this file), so a valve
    left at the default still costs exactly the 16 t the flat charge did. */
 const FIT_MASS=16, FIT_BORE0=412.5;   // mm, the default valve - the reference the mass is per
+const fitMassOf=id=>{ const f=D.fittings[id];
+  return f ? FIT_MASS*(f.bore/FIT_BORE0) : 0; };
 const fittingMass=()=>{ let m=0;
-  for(const id in D.fittings) m += FIT_MASS*(D.fittings[id].bore/FIT_BORE0);
+  for(const id in D.fittings) m += fitMassOf(id);
   return m; };
 
 /* ══════════ A PORT IS A CELL ══════════
@@ -2525,7 +2575,7 @@ const prect=p=>grect(p.x,p.y,p.w,p.h);
 const cellPos=(x,y)=>[GX+(x+0.5)*CELL, rowTop(y)+CELL/2];
 // A NOZZLE SITS ON THE SHELL, not in the middle of the port cell - half a
 // cell of bare board between a machine and its own joint read as unconnected.
-const PORT_PROUD=3.5;
+const PORT_PROUD=3.5*DRAW_K;
 function portPos(pid){
   const q=D.ports[pid], c=portCell(pid), f=portFaceOf(pid);
   if(!c||!f) return [0,0];

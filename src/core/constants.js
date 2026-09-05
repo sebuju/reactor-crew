@@ -23,6 +23,8 @@ const C = {
   bar:"#101a1d",
   // a panel that FLOATS over the drawing, against panel, which is bolted to a rail
   panelFloat:"#131d21",
+  // a machine on the board is not a panel: it moves without dragging the chrome
+  machBg:"#0b1114",
   edge:"#1d2f35", edge2:"#2c464e", rail:"#33525b",
   ink:"#9fb4b9", ink2:"#5d7378", bright:"#dff0f3",
   amber:"#f0a830", cyan:"#5fd2e2", red:"#ff5a45", green:"#57d38c",

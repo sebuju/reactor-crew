@@ -121,6 +121,9 @@ function segMark(x,y,w,h,frac,marks,col,signed){
    into a 7x7 tile pinned at the origin and every call is a fillRect.
    Baked at device scale, so the diagonal is as crisp as the stroke it
    replaces; one tile per colour, and per scale. */
+/* Reference-cell figures, multiplied by DRAW_K where they are USED: layout.js
+   is below this file in the load order, so a DRAW_K at the top level here is
+   not defined yet. */
 const HATCH_P=7, HATCH_W=1.4;
 const ctxScale=()=>{ const m=ctx.getTransform&&ctx.getTransform();
   return (m&&m.a) ? Math.max(0.05,Math.hypot(m.a,m.b)) : 0; };
@@ -147,7 +150,7 @@ function hatchPat(col,P,lw){
   return pat;
 }
 function hatch(x,y,w,h,col,a,pitch,lw){
-  const P=pitch||HATCH_P, LW=lw||HATCH_W;
+  const P=pitch||HATCH_P*DRAW_K, LW=lw||HATCH_W*DRAW_K;
   ctx.save();
   ctx.globalAlpha=a||.55;
   if(hatchOK()){ ctx.fillStyle=hatchPat(col,P,LW); ctx.fillRect(x,y,w,h); }
@@ -187,7 +190,16 @@ function cornerTab(x,y,s,col){
 let gridPat=null;
 function gridDots(x,y,w,h){
   if(!gridPat){ const g=document.createElement("canvas"); g.width=g.height=CELL;
-    const c=g.getContext("2d"); c.fillStyle="rgba(120,180,190,.075)"; c.fillRect(0,0,1,1);
+    /* the mark is a fraction of the cell it corners, so it survives CELL moving
+       - AND IT IS CENTRED ON THE CORNER. Drawn from the corner outwards it
+       lies wholly inside ONE of the four cells that meet there, so the grid
+       the eye reads is half a mark off the grid the geometry uses: on a
+       16-unit cell that was half a pixel and on a CELL-unit one it is enough
+       to make a pipe on the exact centre of its cell look off-centre. Four
+       quarters, one at each corner of the tile, is the same mark straddling
+       the join. */
+    const c=g.getContext("2d"), h=DRAW_K/2; c.fillStyle="rgba(120,180,190,.075)";
+    for(const x of [0,CELL-h]) for(const y of [0,CELL-h]) c.fillRect(x,y,h,h);
     gridPat=ctx.createPattern(g,"repeat"); }
   const s=VIEW.s||1, o=vScr({x:GX,y:GY});
   if(gridPat.setTransform && typeof DOMMatrix!=="undefined")
