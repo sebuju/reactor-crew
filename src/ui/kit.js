@@ -566,11 +566,11 @@ const KIT = (function(){
     const t = textInput({bare: true, cls: "kit-numinput-input",
                          tip: opts.tip, title: opts.title,
                          onChange: v => commit(v, false)});
+    const sug = opts.auto ? autoKey(opts.auto) : null;
+    if(sug) root.appendChild(sug.el);
     root.appendChild(t.el);
     if(opts.unit){ const u = el("span", "kit-numinput-unit"); u.textContent = opts.unit;
                    root.appendChild(u); }
-    const sug = opts.auto ? autoKey(opts.auto) : null;
-    if(sug) root.appendChild(sug.el);
     let live = null;
     const dp = opts.dp === undefined ? 2 : opts.dp;
     const show = v => { live = v; t.set(v == null ? "" : (+v).toFixed(dp)); };
