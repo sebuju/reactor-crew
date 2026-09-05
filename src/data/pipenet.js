@@ -111,6 +111,7 @@ function partVol(pid){
    mass BECAUSE IT IS THICKER. WALL_CORR is the corrosion and handling
    allowance - what PIPE_WALL_P0's own comment was already reaching for. */
 const STEEL_RHO = 7850;    // kg/m^3
+const ALPHA_STEEL = 1e-5;  // m^2/s, thermal diffusivity of a pressure-vessel steel
 const STEEL_S   = 138;     // MPa allowable stress, carbon steel at temperature
 const STEEL_A   = 1.8e-5;  // 1/K linear expansion, austenitic steel
 const WALL_CORR = 3;       // mm of corrosion/handling allowance under any pressure
@@ -192,8 +193,14 @@ const runDesignP = r => {
   for(const n of at) p = Math.max(p, circSetP(n) + colAt(n));
   for(const id of tankIds())
     if((G.nodesOf[id]||[]).some(m => at.has(coreFold(m)))) p = Math.max(p, tankDesignP(id));
+  /* EVERY RUN ON A PUMPED CIRCUIT IS RATED FOR THE DISCHARGE. Where the loop
+     sits against its setpoint depends on where the free surface is tapped,
+     and a hot leg on a loop whose surge line lands at the pump suction runs
+     a whole head over the setpoint - measured, BN-600's hot leg split at
+     0.3 MPa the moment its pumps were sized for their own loop. */
   for(const id of pumpIds()){ const dis = pumpDisNode(id);
-    if(at.has(dis)) p = Math.max(p, circSetP(dis) + colAt(dis) + pumpHead(id)); }
+    if([...at].some(n => circOfNode(n) === circOfNode(dis)))
+      p = Math.max(p, circSetP(dis) + colAt(dis) + pumpHead(id)); }
   return p;
 };
 const runWallMm = r => (D.wall && D.wall[r.key] !== undefined) ? D.wall[r.key]
@@ -333,7 +340,7 @@ const runK0 = r => {
 const flowW = (C, rho, pHi, pLo) => C > 0
   ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(Math.min(pHi-pLo, (1-RCRIT)*Math.max(pHi,0)), 0)*1e6)
   : 0;
-const flowG = (C, F, u, v, h) => {
+const flowG = (C, F, u, v, h, diode) => {
   if(!(C > 0)) return 0;
   /* THE DRIVING DIFFERENTIAL INCLUDES THE HEAD, and it has to: netFlows()
      carries Q = g*(p_u - p_v + h), so a conductance linearised about the node
@@ -353,7 +360,15 @@ const flowG = (C, F, u, v, h) => {
   const pHi = Math.max(F.p[u], F.p[v], 1e-4);
   const floor = DPFRAC*pHi;
   const act = Math.max(a, floor);
-  const eff = Math.max(Math.min(a, (1-RCRIT)*pHi), floor);
+  /* AND ONLY A VAPOUR EXPANDS. The cap bound at any |dp| over 0.45 of the
+     higher pressure whatever was flowing - a liquid break from 15.5 MPa to
+     containment ran at 7 MPa of effective differential, and a pump lifting
+     into a depressurised loop was throttled by a steam law. Gated on the
+     DONOR's own quality and on there being no head source on the edge, so a
+     liquid blowdown reads Bernoulli and a pump into a low back-pressure runs
+     out, which is what a real one does. */
+  const choke = !h && F.x && F.x[up] > 0;
+  const eff = Math.max(choke ? Math.min(a, (1-RCRIT)*pHi) : a, floor);
   /* ══ AND A NODE THAT IS SPENT FEEDS NOTHING ══
      tankLive()'s own inventory clause, asked of every node. A compliance
      bounds the RATE and
@@ -361,6 +376,10 @@ const flowG = (C, F, u, v, h) => {
      so without this a break drains an isolated leg past zero for ever. It is
      the DONOR's bit, so the same edge still fills the node back up. */
   if(F.wet && !F.wet[up]) return 0;
+  /* A CHECK VALVE IS A ONE-WAY EDGE: against its arrow the edge is absent.
+     Read off the same one-tick-old field every other term here reads. Signed:
+     +1 passes u->v only, -1 passes v->u only. */
+  if(diode && d*diode < 0) return 0;
   const w = C*Math.sqrt(2*Math.max(F.rho[up], 1e-3)*eff*1e6);
   return w/act;
 };
@@ -437,6 +456,18 @@ function netDrySig(net, s){
   for(let i=0;i<net.n;i++) if(!w[i]) hsh = (Math.imul(hsh, 31) + i + 1)|0;
   return hsh;
 }
+/* EVERY DIODE'S OWN BIT, for the same reason the dry mask has one: a check
+   valve that is shut takes its edge out of A, and the pieces memo is keyed on
+   this string and not on the field. Read exactly as flowG reads it. */
+function netDiodeSig(net, s){
+  const F = net.F; if(!F || !F.p) return 0;
+  const list = net.diodeEdges || (net.diodeEdges = net.edges.filter(ed => ed.diode));
+  let hsh = 0;
+  for(let k=0;k<list.length;k++){ const ed = list[k];
+    const h = typeof ed.h === "function" ? ed.h(s) : (ed.h || 0);
+    if((F.p[ed.u] - F.p[ed.v] + h)*ed.diode < 0) hsh = (Math.imul(hsh, 31) + k + 1)|0; }
+  return hsh;
+}
 function netFieldUpdate(net, s){
   const F = net.F;
   const mx = MIX_SCRATCH;
@@ -479,7 +510,7 @@ const edgeG = (net, ed, s) => {
   const C = typeof ed.C === "function" ? ed.C(s) : ed.C;
   if(!(C > 0)) return 0;
   const h = typeof ed.h === "function" ? ed.h(s) : (ed.h || 0);
-  return flowG(C, net.F, ed.u, ed.v, h);
+  return flowG(C, net.F, ed.u, ed.v, h, ed.diode);
 };
 
 // A valve's own resistance, expressed as an EQUIVALENT LENGTH added to
@@ -1258,8 +1289,6 @@ const tankInjecting = (id, q) => q > 1e-6 * tankRateRef(id);
    is an INJECTION line, and what an injection line is fighting is the loop it
    injects into. A reserve behind a PUMP is checked at the pump's own discharge
    instead (pumpCheckOpen), which is where a real train puts the valve. */
-const tankCheckOpen = (s, id) =>
-  !D.tanks[id].check || (s.pCore === undefined || s.pCore < tankP(s, id));
 /* THE OPERATOR'S OWN VALVE, or the rule that opens it for them. One question
    asked of every tank alike, in place of s.hpi, D.efw's "armed" flag and
    boronDump's one-shot latch. A tank that is empty is empty, which is the
@@ -1311,8 +1340,7 @@ const tankLive = (s,id) =>
      clause below - which answers correctly today by coincidence, not by
      saying anything true. Surge goes both ways by definition and there is no
      level at which the vessel stops being the plant's pressure boundary. */
-  D.tanks[id].hold ? tankOpen(s,id) :
-  tankOpen(s,id) && tankCheckOpen(s,id));
+  tankOpen(s,id));
 
 /* condLive() IS GONE for the same reason tankLive()'s inventory clause is:
    the condenser's own node carries the hotwell's kilograms now (bookedKg,
@@ -1341,23 +1369,34 @@ const COND_P0 = 0.004;
    of vapour is still turning, so it keeps a fifth of its head rather than
    none. Nothing measured says a fifth. */
 const CAV_DERATE = 0.8;
-/* ══ A PUMP HAS A HEAD-FLOW CURVE, AND IT IS WHY IT CANNOT RUN OUT ══
+/* ══ A PUMP HAS A HEAD-FLOW CURVE, AND IT OBEYS THE AFFINITY LAWS ══
    Shutoff head is (1+PUMP_DROOP) of the machine's stated duty head, the head
-   falls linearly with what it is passing, and it is exactly the stated head at
-   the stated flow - so a plant sitting at its duty point is bit-identical and
-   the reference solve, which has no flow to read yet, seeds on that point.
-   Past duty the head goes with the flow and reaches zero at 1+1/PUMP_DROOP of
-   rated, which is the runout a real machine has and this one had none of: the
-   BN-600 feed pump passed 320 times its rated flow against nothing but its own
-   casing.
+   falls with the SQUARE of what it is passing (a centrifugal characteristic,
+   not a line), and it is exactly the stated head at the stated flow - so a
+   plant sitting at its duty point is bit-identical and the reference solve,
+   which has no flow to read yet, seeds on that point. Past duty the head goes
+   with the flow and reaches zero at sqrt(1+1/PUMP_DROOP) of rated, which is
+   the runout a real machine has.
+   SPEED enters as the affinity laws say: head as N^2, and the curve read at
+   q/N, so a pump at half speed makes a quarter of its head at half its flow.
+   Read once as a linear factor, a blackout coast-down lost head half as fast
+   as it should and the hand-over to the thermosiphon was too gentle.
    s.pumpQBy is LAGGED one tick, and it must be - a head that depended on this
    tick's answer would be part of the question - the same standing s.cavP has,
    and it is smoothed for the same reason that one is. */
 const PUMP_DROOP = 0.25;
+const PUMP_N_MIN = 1e-3;
 const pumpQOf = (s, pid) => (s && s.pumpQBy && s.pumpQBy[pid]!==undefined)
   ? s.pumpQBy[pid] : pumpFlow(pid);
-const pumpCurve = (s, pid) => Math.max(0,
-  1 + PUMP_DROOP*(1 - pumpQOf(s,pid)/Math.max(pumpFlow(pid),1e-9)));
+const pumpCurve = (s, pid, N) => { const n = N === undefined ? 1 : N;
+  if(!(n > PUMP_N_MIN)) return 0;
+  const r = pumpQOf(s,pid)/(Math.max(pumpFlow(pid),1e-9)*n);
+  return Math.max(0, 1 + PUMP_DROOP*(1 - r*r)); };
+/* THE HEAD ONE PUMP DEVELOPS, MPa, at its own speed on its own curve, less
+   what its suction is costing it - the ONE expression the edge and the
+   cavitation readout read. */
+const pumpHeadNow = (s, pid) => { const N = pumpDrive(s, pid);
+  return pumpHead(pid)*N*N*pumpCurve(s, pid, N)*(1 - CAV_DERATE*cavOf(s, pid)); };
 /* THE CASING IS THE MACHINE'S OWN CHARACTERISTIC, and every machine with a head has one:
    an ideal head source in series with a resistance IS a linear head-flow curve - shutoff
    head at no flow, falling as it passes more - which is what stops a real machine running
@@ -1423,20 +1462,12 @@ const pumpDrive = (s, pid) =>
    suction node (step.js) and keyed by PUMP, so every pump on the grid can
    lose head to its own bad suction leg. */
 const cavOf = (s, pid) => (s.cavP && s.cavP[pid]) || 0;
-/* ══ A STANDBY TRAIN, AND WHETHER ITS CHECK VALVE IS PASSING ══
+/* ══ A STANDBY TRAIN HAS A DISCHARGE CHECK VALVE ══
    Standby is asked of the DRAWING: a pump that draws on a tank is a reserve
-   train (pumpResOf, layout.js) and has a discharge check valve. Passing is
-   asked of LAST TICK's field - what the machine can develop against what its
-   own discharge is already holding - so the diode is a boolean the solve is
-   keyed on rather than a condition inside it. No field yet (the reference
-   solve) is a valve wide open, which is what a commissioned plant has. */
+   train (pumpResOf, layout.js) and has a discharge check valve. The valve is
+   the edge's own diode (flowG), read off the same one-tick-old field every
+   other term of the law reads. */
 const pumpStandby = id => pumpResOf(id).length > 0;
-function pumpFwd(s, id){
-  const P_ = s && s.pBy; if(!P_) return true;
-  const a = P_[pumpSucNode(id)], b = P_[pumpDisNode(id)];
-  if(a === undefined || b === undefined) return true;
-  return b - a <= pumpHead(id)*pumpDrive(s,id)*pumpCurve(s,id)*(1 - CAV_DERATE*cavOf(s,id));
-}
 
 // A pipe hit (combatHit(), step.js) is a rupture, not a throttle: modelled as
 // ADDITIVE equivalent length on the SAME pipeC() every other run already
@@ -1708,9 +1739,21 @@ const KIND_TEMP = {hot: NT_HOT, surge: NT_HOT, cold: NT_COLD, hpi: NT_COLD};
    A node the field has not reached yet sits at Tavg, which is what "somewhere
    in the loop, unspecified" means and what the seed writes anyway. */
 const netSatOf = nid => satOfCirc(circOfNode(nid));
+/* A NODE THE FIELD HAS NOT REACHED IS AT ITS STRUCTURAL PHASE. On the core's
+   circuit that is the loop mean. Anywhere else it was ALSO the loop mean,
+   which put the primary's 583 K in a feed line at 0.2 MPa: superheated steam,
+   so the reference solve priced the feed train choked and at a vapour density
+   while the tick, with a real field, priced it as water - and the valve the
+   reference fitted was a third open on tick one. A steam space (net.vapour)
+   falls back to saturated steam and everything else to saturated liquid, at
+   the node's own pressure. */
 function netHAt(s, nid){
   const h = s.hBy && s.hBy[nid];
-  return h === undefined ? hOfT(netSatOf(nid), s.Tavg===undefined?P.Tref:s.Tavg) : h;
+  if(h !== undefined) return h;
+  const c = netSatOf(nid);
+  if(circOfNode(nid) === nodeGraph().coreCirc) return hOfT(c, s.Tavg===undefined?P.Tref:s.Tavg);
+  const net = P && P.net, i = net && net.index ? net.index[nid] : undefined, p = netPAt(s, nid);
+  return (net && net.vapour && i !== undefined && net.vapour[i]) ? satHg(c, p) : hOfT(c, satT(c, p));
 }
 /* FLOORED AT THE PLANT'S OWN VACUUM. A pump's suction node legitimately sits
    very low, and asking the saturation curve about 1e-4 MPa put a condensate
@@ -1952,6 +1995,8 @@ function netEdges(){
          bigger line, which is a thing the player can draw. */
       ed.C = s => (tankLive(s,tid) && runPortsOpen(s,r))
                 ? pipeC(bore, L + runExtraLen(s, r), K0, f()) : 0;
+      // a checked tank's line passes OUT of the tank only (flowG's diode)
+      if(D.tanks[tid].check) ed.diode = tankIdOf(ends[0]) ? 1 : -1;
       edges.push(ed);
       continue;
     }
@@ -2101,9 +2146,7 @@ function netEdges(){
          zero speed. net.usage (layout.js's pipeNetwork()) is the same port
          tally the bench's own "is this port free" check reads. */
       const routed = net.usage && (net.usage[p.id+"t"]||net.usage[p.id+"b"]||net.usage[p.id+"l"]||net.usage[p.id+"r"]);
-      if(routed) edge.h = s => pumpHead(p.id) * pumpDrive(s, p.id)
-                               * pumpCurve(s, p.id)
-                               * (1 - CAV_DERATE*cavOf(s, p.id));
+      if(routed) edge.h = s => pumpHeadNow(s, p.id);
       /* ══ AND THE CASING IS THE PUMP'S OWN CHARACTERISTIC ══
          An ideal head source in series with a resistance IS a linear head-flow
          curve - shutoff head at no flow, falling as it passes more - which is
@@ -2124,11 +2167,17 @@ function netEdges(){
          (pumpResOf) is a standby train - and NOT of every pump, because a
          reactor coolant pump deliberately has no such valve: natural
          circulation goes through it after a blackout and a diode would weld
-         the loop shut. A DIODE reads LAST TICK's field, since a gate that
-         depends on the answer cannot be part of the question, and it is a
-         BOOLEAN so netFactored() keys on two states and not a continuum. */
-      const cC = pumpCasingC(pumpHead(p.id), pumpFlow(p.id));
-      edge.C = pumpStandby(p.id) ? s => pumpFwd(s, p.id) ? cC : 0 : cC;
+         the loop shut. The diode is the edge's own (flowG) and reads LAST
+         TICK's field, since a gate that depends on the answer cannot be part
+         of the question. */
+      edge.C = pumpCasingC(pumpHead(p.id), pumpFlow(p.id));
+      /* and every FEED pump: a real one has a non-return valve on its
+         discharge, and without it a shell at 17 MPa pushed its water back down
+         through a feed pump that had run out on its own curve. Not the
+         circulating water pump - its closed loop runs on buoyancy past the
+         casing exactly as a coolant loop does, and with a diode WINDSCALE's
+         lost its vacuum at commissioning. */
+      if(pumpStandby(p.id) || pumpBounds(p.id).shell) edge.diode = 1;
     }
     /* ══ AND A WRECKED MACHINE PASSES NOTHING ══
        Only a PUMP ever noticed being destroyed (it lost its head, above), so
@@ -2535,7 +2584,29 @@ function netMaps(ctx){
       const half = runVol(r)/2;
       if(u !== undefined) net2.vol[u] += half;
       if(v !== undefined) net2.vol[v] += half; }
-    for(let i=0;i<net2.n;i++) if(!(net2.vol[i] > 1e-3)) net2.vol[i] = 1e-3; }
+    for(let i=0;i<net2.n;i++) if(!(net2.vol[i] > 1e-3)) net2.vol[i] = 1e-3;
+    /* ══ AND THE STEEL EACH NODE OWNS, kg, WITH ITS OWN CONDUCTION TIME ══
+       The vessel's wall on the core's nodes, half of each run's wall on its
+       two ends - the same split the holdup takes - at the wall Barlow says
+       each one has. A wall's time constant is its half-thickness squared
+       over pi^2 alpha, the first conduction mode, mass-weighted where a node
+       owns more than one wall. A shell, a condenser and an exchanger keep
+       their steel in their own pot and take none here. */
+    net2.metalKg = new Float64Array(net2.n); net2.metalTau = new Float64Array(net2.n);
+    { const tauOf = wallMm => Math.max(1, Math.pow(wallMm/2000, 2)/(Math.PI*Math.PI*ALPHA_STEEL));
+      const put = (i, kg, tau) => { if(!(kg > 0) || i === undefined) return;
+        net2.metalTau[i] += kg*tau; net2.metalKg[i] += kg; };
+      const core = roleOf("core"), G = nodeGraph();
+      if(core && nodesOfPart[core.id] && G.coreCirc >= 0){
+        const a = COOLANT[D.cool], p0 = holdSetP(G.coreCirc), list = nodesOfPart[core.id];
+        const L = latRevolve(), dM = ((L && L.dia) || 3) + 2*VESSEL_CLR;
+        const kg = vesselShellMass(p0, a)*1000/list.length, tau = tauOf(wallSuggestMm(dM*1000, p0, a));
+        for(const i of list) put(i, kg, tau); }
+      for(const r of net){ const ends = runEnds(r.key, r.k); if(!ends) continue;
+        const u = index[coreFold(ends[0])], v = index[coreFold(ends[1])];
+        const half = runMassPerM(r)*r.L*1000/2, tau = tauOf(runWallMm(r));
+        put(u, half, tau); put(v, half, tau); }
+      for(let i=0;i<net2.n;i++) if(net2.metalKg[i] > 0) net2.metalTau[i] /= net2.metalKg[i]; } }
 
   net2.condNode = {};
   for(const q of LAY.parts){
@@ -3265,10 +3336,9 @@ function netFixSetSig(net, fixed){
    Every conductance the edge list evaluates against S, as one string. The
    factorisation adds the fixed SET to it; netPieces() cannot, because the
    fixed set is built downstream of the pieces themselves. */
-// the two STRUCTURAL lists the signature walks, once per net: which tanks have a node, which pumps are standby trains
+// the STRUCTURAL list the signature walks, once per net: which tanks have a node
 const netSigLists = net => net.sigLists || (net.sigLists = {
-  tanks: tankIds().filter(id => net.tankNode[id] !== undefined),
-  pumps: pumpIds().filter(pumpStandby) });
+  tanks: tankIds().filter(id => net.tankNode[id] !== undefined) });
 function netLiveSig(net, s){
   // netSolve() reads s and never writes it, so inside one solve the string is built once (net.sigLock)
   if(net.sigLock === s && net.sigLockV !== null) return net.sigLockV;
@@ -3278,9 +3348,8 @@ function netLiveSig(net, s){
 }
 function netLiveSigOf(net, s){
   const L = netSigLists(net);
-  let tk = '', pm = '';
+  let tk = '';
   for(let i=0;i<L.tanks.length;i++) tk += tankLive(s, L.tanks[i]) ? '1' : '0';
-  for(let i=0;i<L.pumps.length;i++) pm += pumpFwd(s, L.pumps[i]) ? '1' : '0';
   return net.fitIds.map(fid => {
     const mode = net.fitMode[fid];
     /* relief is a mode too now, gated on S.reliefOpen/S.reliefBlocked rather
@@ -3324,10 +3393,7 @@ function netLiveSigOf(net, s){
      (flowG) exactly as a shut valve does. A HASH, never n characters of join:
      this signature is rebuilt on every netPieces() memo check, several times a
      tick, over a few hundred nodes. */
-  + '|' + netDrySig(net, s)
-  // and every standby train's own discharge check - one bit each, and a plant
-  // with no standby pump adds none
-  + '|' + pm
+  + '|' + netDrySig(net, s) + '|' + netDiodeSig(net, s)
   /* ...AND THE GOVERNOR, because the turbine's own path is an edge of this
      graph now and its C is a live gate: trip the machine with the dump shut
      and that edge is ABSENT, which splits the steam side into two pieces, and
@@ -3832,8 +3898,8 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
      is hot, the buoyancy it develops is real extra flow that a geometric
      reference must NOT contain. Pump speed is rated, because that is what
      "as commissioned" means for a pump. `pCore` is the pressure the line
-     above already names, spelled the way tankLive() and tankCheckOpen() read
-     it - left undefined they were asked about a plant with no pressure in it.
+     above already names, spelled the way tankLive() reads it - left undefined
+     it was asked about a plant with no pressure in it.
      `over` is EVERY field a caller may state instead of that default, one
      door rather than a positional per question. `fregBy`: a feed regulating
      valve commissions WIDE and then walks itself onto the level it holds, so
