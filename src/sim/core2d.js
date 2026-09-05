@@ -58,7 +58,7 @@ const XTAU_F=4;
    its film conductance as its surface: the ratio is a diameter. 4 s is the
    reference rod, so a thin pin answers faster and forgives a scram with no
    flow, and a fat one carries its own stored heat into the melt. */
-const xTauF=()=>XTAU_F*rodD()/ROD_D0;
+const xTauF=K=>XTAU_F*K.rodD/ROD_D0;
 /* The reference clad rise above coolant at rated power, kelvin - what P.gSolid
    is fitted against in coreReset(). Real: a PWR rod's outer surface runs about
    30 K above the water going past it. */
@@ -111,7 +111,7 @@ const XMIX0=0.55, XMIX_MAX=0.85;
    Neither can be applied literally: this file carries shares of the rated
    point, never W/m2 or kg/m2s. But the ratio collapses - q"/(G*cp) is the core
    rise times the flow area over the heated area - so both anchor on ONE
-   geometric ratio of a fuel bundle, which is the P.pinUA idiom, and coreDT0()
+   geometric ratio of a fuel bundle, which is the P.pinUA idiom, and a.dT0
    inside them makes both scale per plant. Both ratios are MEASURED off the
    drawn bundle now (latBundle(), lattice.js): the flow-to-heated area ratio
    was one real PWR written down as XSUB_AR, and the low branch's 28.3 K was
@@ -165,14 +165,14 @@ function nodePeak(a){ let v=-1e30,k=0;
 /* ── what the bench decides about the core as a place ──
    T is the object the constants land on: P when commissioning, a scratch
    object when the bench is only asking what a design would look like. */
-function coreConst(T,d){
+function coreConst(T,c,d){
   /* Every dimension below is MEASURED off the lattice in src/data/lattice.js.
      It used to be manufactured here out of D.power, D.hd, D.pitch, D.poison
      and D.nbank - a volume, a diameter, a coupling length, an albedo, a poison
      grading and a bank spread, all invented from numbers on tracks. Those five
      are now readouts of the thing that was laid out, and this function reads
      the same measurement they do. */
-  const M=LM||latRevolve();
+  const M=latM(c); T.rodD=rodD(c);
   T.coreDia=M.dia; T.coreHgt=M.hgt;
 
   /* migration length against node size gives the coupling. A tight lattice
@@ -182,55 +182,55 @@ function coreConst(T,d){
      against light water's real ~6 cm, and the square root is how M scales with
      lattice spacing. FITTED SHAPE, real magnitude - it is not read off the
      drawing the way modRatio() is, and it could be. */
-  const Lm=0.21*Math.sqrt(D.pitch);
+  const Lm=0.21*Math.sqrt(c.pitch);
   T.cz=XCOUP*Math.pow(Lm/(Math.max(T.coreHgt,.05)/XNZ),2);
   T.cr=XCOUP*Math.pow(Lm/(Math.max(T.coreDia,.05)/2/XNR),2);
 
   /* CROSS-FLOW, off the same measurement. Open area around ONE bundle against
      the same area at the reference pitch, so a stock lattice reads 1 by
      construction and needs no snapshot of a stock core to compare against. */
-  { const v=latVols();
+  { const v=latVols(c);
     /* the denominator is latVols()'s own cool term with the reference pitch put
        back in, so at pitch 1.0x the two are the same expression on the same
        operands and the ratio is exactly 1 - not 1 to within a rounding */
-    const open0=v.nF*(LAT_P0*LAT_P0 - latRodFrac()*LAT_P0*LAT_P0);
+    const open0=v.nF*(LAT_P0*LAT_P0 - latRodFrac(c)*LAT_P0*LAT_P0);
     const solid=(v.nF+v.nM)>0 ? v.nM/(v.nF+v.nM) : 0;
     T.mix=open0>0 ? clamp(XMIX0*(v.cool/open0)*(1-solid), 0, XMIX_MAX) : 0; }
 
   /* departure quality at the RATED point, one branch each - see SZ_LO. Both
      are magnitudes; the sign goes on where they are used. */
-  { const B=latBundle(), hgt=Math.max(T.coreHgt,.05), a=COOLANT[D.cool], hfg=a.hfg, cp=a.cp;
-    T.hfg = hfg;
+  { const B=latBundle(c), hgt=Math.max(T.coreHgt,.05), a=COOLANT[c.cool], hfg=a.hfg, cp=a.cp;
+    T.hfg = hfg; T.dT0 = a.dT0;
     T.dh = B.dh;                                   // Stages D and F both read it
-    const nF=latVols().nF;
+    const nF=latVols(c).nF;
     T.aHeat=4*nF*B.aHeat*hgt;                      // whole core rod surface, m2
     T.aFlow=4*nF*B.aFlow;                          // whole core flow area, m2
     /* rated mass flux, kg/m2/s: what the core carries when it is taking
-       coreDT0() of rise at rated power, in THIS coolant. W-3 wants a real G, not a share. */
-    T.G0=(T.rated||D.power)*1000/(cp*coreDT0())/Math.max(T.aFlow,1e-9);
-    const qpp=(T.rated||D.power)*1e6/Math.max(T.aHeat,1e-6);
+       a.dT0 of rise at rated power, in THIS coolant. W-3 wants a real G, not a share. */
+    T.G0=c.power*1000/(cp*a.dT0)/Math.max(T.aFlow,1e-9);
+    const qpp=c.power*1e6/Math.max(T.aHeat,1e-6);
     /* the pool-boiling film as a share of the rated forced film: the rated
        film drops CLAD_DT0 at qpp, so its coefficient is qpp/CLAD_DT0 and the
        floor is H_POOL over that - a real coefficient against a real one */
     T.filmPool=H_POOL*CLAD_DT0/Math.max(qpp,1);
-    T.xSub  = 154*cp*coreDT0()*(B.aFlow/(B.aHeat*hgt))/hfg;
+    T.xSub  = 154*cp*a.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
   /* the reflector stops being a flat pcm bonus and starts reflecting: the
      share of what leaks out of an edge node that finds its way back in, per
      face, at the thickness that face was given */
-  T.albR=latAlb(LAT.reflR,d.rf);
-  T.albT=latAlb(LAT.reflT,d.rf);
-  T.albB=latAlb(LAT.reflB,d.rf);
+  T.albR=latAlb(c.lat.reflR,d.rf);
+  T.albT=latAlb(c.lat.reflT,d.rf);
+  T.albB=latAlb(c.lat.reflB,d.rf);
   T.alb=(T.albR+T.albT+T.albB)/3;      // for anything reading the scalar
   /* the band itself, kept so the plant view can DRAW the reflector you
      dimensioned rather than only the albedo it bought. A commissioned plant
      carries its own, because the bench lattice may have been redrawn since. */
-  T.reflR=LAT.reflR; T.reflT=LAT.reflT; T.reflB=LAT.reflB; T.reflMat=D.refl;
+  T.reflR=c.lat.reflR; T.reflT=c.lat.reflT; T.reflB=c.lat.reflB; T.reflMat=c.refl;
 
   /* burnable poison is where you put the pins, normalised so the core-average
      worth is still exactly D.poison - it buys flatness, not reactivity */
-  T.poiG=M.poiG; T.poison=D.poison;
+  T.poiG=M.poiG; T.poison=c.poison;
   /* and a ring the lattice did not fill is a ring with no source in it */
   T.nPen=M.nPen;
   /* the loading pattern, as a zero-mean per-ring reactivity: FUEL[].excess is
@@ -260,7 +260,7 @@ function coreConst(T,d){
     const sp=Math.max(...T.bankR.map(r=>Math.abs(r-rm)));
     T.bankW=T.bankR.map(r=> sp>1e-9 ? -(r-rm)/sp : 0); }   // one bank cannot tilt anything
 
-  const fo=FOLL[D.foll];
+  const fo=FOLL[c.foll];
   T.tipRho=fo.tipRho; T.tipLen=fo.tipLen; T.follName=fo.name;
 
   /* ── what the bank is worth ──
@@ -306,8 +306,8 @@ function coreConst(T,d){
     }
     XABS0=a;
   }
-  T.rodA=XABS0*ABSORB[LAT.abs].k;
-  D.rodw=Math.max(0,T.rodA*worth(T.rodA));
+  T.rodA=XABS0*ABSORB[c.lat.abs].k;
+  c.rodw=Math.max(0,T.rodA*worth(T.rodA));
   T.FqCold=coreFq(T,RODX0);
   T.leak=coreLeak(T,T.phiCold);
   return T;
@@ -370,27 +370,33 @@ function coreFq(T,x){
    asked. Measured: laying four banks over the stock lattice read 2485 pcm for
    a bank the solve puts at 2600. latRev is bumped by latRevolve(), so it moves
    exactly when the lattice does. */
-let fqSig=null, fqVal=null;
-function corePredict(d){
-  /* D.zoneFuel is here for the same reason latRev is: picking a zone's fuel
-     off the menu is not a lattice edit, so latRev does not move, and a row
-     that happens not to move D.power would leave the readout one edit behind. */
-  const sig=[D.cool,D.mod,D.fuel,D.refl,D.poison,D.pitch,D.hd,D.power,
-             D.rodw,D.nbank,D.foll,latRev,JSON.stringify(D.zoneFuel)].join(",");
-  if(sig!==fqSig){ fqSig=sig; fqVal=coreConst({},d); }
-  return fqVal;
+/* ONE SLOT PER CORE, keyed on the bag: a single slot thrashed to a zero hit
+   rate the moment a second vessel existed. */
+const FQ=new WeakMap();
+function corePredict(c,d){
+  /* c.zoneFuel is here for the same reason the revolve's rev is: picking a
+     zone's fuel off the menu is not a lattice edit, so rev does not move, and
+     a row that happens not to move c.power would leave the readout one edit
+     behind. */
+  const sig=[c.cool,c.mod,c.fuel,c.refl,c.poison,c.pitch,c.hd,c.power,
+             c.rodw,c.nbank,c.foll,latM(c).rev,JSON.stringify(c.zoneFuel)].join(",");
+  const h=FQ.get(c);
+  if(h && h.sig===sig) return h.val;
+  const val=coreConst({},c,d); FQ.set(c,{sig,val});
+  return val;
 }
 
 /* Everything the renderer needs, from the live core if there is one and from
    the predicted one if the plant has not been built yet. One accessor, so the
    bench and the panel cannot drift apart. */
-function coreView(L){
-  if(L && L.phi) return {phi:L.phi,nV:L.nV,xX:L.xX,nTf:L.nTf,rodZ:L.rodZ,
-    nDmg:L.nDmg,nOx:L.nOx,nMelt:L.nMelt,
-    bankR:P.bankR,NB:P.NB,tipLen:P.tipLen,tipRho:P.tipRho,TfRef:P.TfRef,X0:P.X0,
-    dia:P.coreDia,hgt:P.coreHgt,frac:P.frac,peak:{i:L.hotRing,j:L.hotLev},
-    reflR:P.reflR,reflT:P.reflT,reflB:P.reflB,reflMat:P.reflMat};
-  const T=corePredict(derived());
+function coreView(L,id){
+  const cs=L && L.coreBy && L.coreBy[id], K=P && P.cores && P.cores[id];
+  if(cs && K) return {phi:cs.phi,nV:cs.nV,xX:cs.xX,nTf:cs.nTf,rodZ:cs.rodZ,
+    nDmg:cs.nDmg,nOx:cs.nOx,nMelt:cs.nMelt,
+    bankR:K.bankR,NB:K.NB,tipLen:K.tipLen,tipRho:K.tipRho,TfRef:K.TfRef,X0:K.X0,
+    dia:K.coreDia,hgt:K.coreHgt,frac:K.frac,peak:{i:cs.hotRing,j:cs.hotLev},
+    reflR:K.reflR,reflT:K.reflT,reflB:K.reflB,reflMat:K.reflMat};
+  const T=corePredict(coreBag(id),derived(id));
   return {phi:T.phiCold,nV:null,xX:null,nTf:null,rodZ:null,
     nDmg:null,nOx:null,nMelt:null,
     bankR:T.bankR,NB:T.NB,tipLen:T.tipLen,tipRho:T.tipRho,TfRef:0,X0:1,
@@ -452,18 +458,18 @@ function coreSolve(T,phi,rho,sweeps){
    so no caller has to remember it. coreStep() only reads what this left behind.
    Declared as a function, not a const: top-level const is shared across these
    plain scripts with a TDZ, and core2d loads before its callers do. */
-function rodBanks(s){
-  for(let b=0;b<P.NB;b++)
-    s.rodZ[b]=clamp(s.split ? s.rodZ[b] : s.rodPos+P.bankW[b]*XTILTZ*s.tilt, 0, 1);
+function rodBanks(K,cs){
+  for(let b=0;b<K.NB;b++)
+    cs.rodZ[b]=clamp(cs.split ? cs.rodZ[b] : cs.rodPos+K.bankW[b]*XTILTZ*cs.tilt, 0, 1);
 }
 
-function coreReset(s){
-  s.phi =new Float64Array(XNN).fill(1);
-  s.xI  =new Float64Array(XNN); s.xX=new Float64Array(XNN);
-  s.nTf =new Float64Array(XNN); s.nTc=new Float64Array(XNN);
-  s.nV  =new Float64Array(XNN); s.nRho=new Float64Array(XNN);
-  s.nVt =new Float64Array(XNN);
-  s.nCov=new Float64Array(XNN); s.nFol=new Float64Array(XNN);
+function coreReset(K,cs,flowNet){
+  cs.phi =new Float64Array(XNN).fill(1);
+  cs.xI  =new Float64Array(XNN); cs.xX=new Float64Array(XNN);
+  cs.nTf =new Float64Array(XNN); cs.nTc=new Float64Array(XNN);
+  cs.nV  =new Float64Array(XNN); cs.nRho=new Float64Array(XNN);
+  cs.nVt =new Float64Array(XNN);
+  cs.nCov=new Float64Array(XNN); cs.nFol=new Float64Array(XNN);
   /* ── HOW THE FUEL IS HURT, NODE BY NODE ──
      Three MONOTONIC integrals, and a stage is derived off them rather than
      stored (fuelStage(), below). Monotonic buys three things at once:
@@ -475,85 +481,85 @@ function coreReset(s){
        nDmg   fraction of the pins at this node that have burst, 0..1
        nOx    oxide grown on an average pin here, metres. A NODE MEAN, so it
               cannot tell a uniformly thin node from a half-consumed one - as
-              coarse as the mesh, the same limit s.TfHot has.
+              coarse as the mesh, the same limit cs.TfHot has.
        nMelt  fraction of the pellet melted, 0..1
        nDnb   1 while the node is in film boiling - a REGIME is a state, and
               a wall past departure stays blanketed until it cools under the
               Leidenfrost point (dnbFilmK, step.js) */
-  s.nDmg=new Float64Array(XNN); s.nOx=new Float64Array(XNN);
-  s.nMelt=new Float64Array(XNN); s.nDnb=new Float64Array(XNN);
-  s.chW =new Float64Array(XNR).fill(1);
-  /* Every P.NB-sized allocation lives here, because a bench change to nbank
+  cs.nDmg=new Float64Array(XNN); cs.nOx=new Float64Array(XNN);
+  cs.nMelt=new Float64Array(XNN); cs.nDnb=new Float64Array(XNN);
+  cs.chW =new Float64Array(XNR).fill(1);
+  /* Every K.NB-sized allocation lives here, because a bench change to nbank
      re-runs coreConst() and then resetPlant() -> coreReset(), so sizes can
      never go stale. Demand starts equal to actual, per bank, or the plant
      walks off its own commissioning point on tick one. */
-  s.rodZ   =new Float64Array(P.NB).fill(s.rodPos);
-  s.rodZDem=new Float64Array(P.NB).fill(s.rodPos);
-  s.bankAuto=new Array(P.NB).fill(true);
-  s.tilt=0; s.tiltDem=0; s.ao=0; s.ro=0; s.hotRing=0; s.hotLev=0; s.vNode=0;
-  s.hotFlow=1; s.tipRho=0; s.TfHot=P.TfRef;
+  cs.rodZ   =new Float64Array(K.NB).fill(cs.rodPos);
+  cs.rodZDem=new Float64Array(K.NB).fill(cs.rodPos);
+  cs.bankAuto=new Array(K.NB).fill(true);
+  cs.tilt=0; cs.tiltDem=0; cs.ao=0; cs.ro=0; cs.hotRing=0; cs.hotLev=0; cs.vNode=0;
+  cs.hotFlow=1; cs.tipRho=0; cs.TfHot=K.TfRef;
   /* the aggregates the field hands back, and the readouts that go with them.
-     s.h2 is the only integral here; the rest are re-measured every tick. */
-  s.h2=0; s.meltFrac=0; s.oxMax=0; s.qOx=0; s.TcladHot=P.Tref;
-  s.dnbrMin=P.dnbr0; s.dnbrRing=0; s.dnbrLev=0;
+     cs.h2 is the only integral here; the rest are re-measured every tick. */
+  cs.h2=0; cs.meltFrac=0; cs.oxMax=0; cs.qOx=0; cs.TcladHot=K.Tref;
+  cs.dnbrMin=K.dnbr0; cs.dnbrRing=0; cs.dnbrLev=0;
   for(let k=0;k<XNN;k++){
-    s.xI[k]=ioEq(P.n0); s.xX[k]=P.X0;
-    s.nTc[k]=P.Tref; s.nTf[k]=P.TfRef;
+    cs.xI[k]=ioEq(K,K.n0); cs.xX[k]=K.X0;
+    cs.nTc[k]=K.Tref; cs.nTf[k]=K.TfRef;
   }
   /* settle the shape once, properly, so the first tick does not start from a
      flat core and kick a transient nobody asked for */
-  rodShape(P,s,s.nCov,s.nFol);
+  rodShape(K,cs,cs.nCov,cs.nFol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    s.nRho[k]=-P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]-P.poison*(P.poiG[i]-1)
-             -P.nPen[i]+P.enrRho[i]; }
-  coreSolve(P,s.phi,s.nRho,60);
-  s.fq=nodePeak(s.phi).v;
+    cs.nRho[k]=-K.rodA*cs.nCov[k]+K.tipRho*cs.nFol[k]-K.poison*(K.poiG[i]-1)
+             -K.nPen[i]+K.enrRho[i]; }
+  coreSolve(K,cs.phi,cs.nRho,60);
+  cs.fq=nodePeak(cs.phi).v;
   /* ══ AND THE POISON IS THE NODE'S OWN, NOT THE CORE MEAN ══
-     P.X0 is the equilibrium of the AVERAGE node, and the flux is peaked - so a
+     K.X0 is the equilibrium of the AVERAGE node, and the flux is peaked - so a
      flat field is over-poisoned exactly where the flux is highest, and the
      reactivity is flux-weighted. The difference burns out on its own: measured
      on WINDSCALE, +106 pcm in ten seconds at the 400x xenon clock, which the
      rod controller answered and rode into the flux trip with nobody touching a
      control. Seeded HERE rather than above because it needs the settled shape,
      which the solve on the line before is what produces. */
-  for(let k=0;k<XNN;k++){ const fl=P.n0*s.phi[k];
-    s.xI[k]=ioEq(fl); s.xX[k]=xeEq(fl); }
+  for(let k=0;k<XNN;k++){ const fl=K.n0*cs.phi[k];
+    cs.xI[k]=ioEq(K,fl); cs.xX[k]=xeEq(K,fl); }
   /* ── THE ONE CONSTANT THE PIN BALANCE IS FITTED WITH ──
-     P.pinUA is the film conductance of the whole core at rated flow, and it is
+     K.pinUA is the film conductance of the whole core at rated flow, and it is
      read off the settled shape at ONE anchor: the flux-weighted mean fuel
-     temperature of a plant at rest is P.TfRef, which is the figure Doppler,
+     temperature of a plant at rest is K.TfRef, which is the figure Doppler,
      the HIGH FUEL TEMP trip and the damage threshold were every one of them
      calibrated against. That is where pk2 went - absorbed once, here, into a
      commissioning constant, instead of being applied every tick to stop a
      power-proportional guess double-counting its own peak. A balance has no
      such problem; a flux-weighted mean is just a flux-weighted mean.
-     P.condK is inside it, which is what its name always claimed: a
+     K.condK is inside it, which is what its name always claimed: a
      conductivity, not a scale on a guess. */
-  { let pk2=0; for(let k=0;k<XNN;k++) pk2+=nodeW[k]*s.phi[k]*s.phi[k];
-    /* AT THE FILM THIS PLANT ACTUALLY HAS. P.flowK alone is the film at
-       s.flowNet exactly 1 - the ISOTHERMAL reference, with no buoyancy in it -
+  { let pk2=0; for(let k=0;k<XNN;k++) pk2+=nodeW[k]*cs.phi[k]*cs.phi[k];
+    /* AT THE FILM THIS PLANT ACTUALLY HAS. K.flowK alone is the film at
+       flowNet exactly 1 - the ISOTHERMAL reference, with no buoyancy in it -
        and what coreStep() prices the pellet against every tick is
-       mflux = P.flowK * s.flowNet. On a pressurised plant those agree to a
+       mflux = K.flowK * flowNet. On a pressurised plant those agree to a
        percent. On one whose buoyancy is a real fraction of its drive they do
        not: WINDSCALE circulates at 1.46 times reference, so its pellets
        commissioned 200 K above the balance the tick then held them to, and the
        1400 pcm of Doppler that unwound as they cooled ran it onto its flux
        trip in under a second. Anchoring HERE keeps every calibrated figure
-       intact - the mean pellet of a plant at rest is still exactly P.TfRef, so
+       intact - the mean pellet of a plant at rest is still exactly K.TfRef, so
        Doppler, the fuel trip and the damage threshold all still read against
        the number they were fitted against, and S.boron's balance still lands
        on critical. */
-    const film0=Math.pow(Math.max(P.flowK*(s.flowNet||1),.02),0.8);
+    const film0=Math.pow(Math.max(K.flowK*(flowNet||1),.02),0.8);
     /* ON THE DESIGN'S OWN REST POINT, never on the seeded state. This is a fit
        for the PIN - a property of the machine, not of the power it happens to
        be at - and a plant commissioned shut down (no vessel on the drawing, so
        seedPower() seeds it cold) made pinUA zero, qhat 0/0, and put a NaN in
        every pellet temperature and every Doppler term. Identical to
-       s.n/s.decay for any plant seeded at P.n0, which is every plant that has
+       cs.n/cs.decay for any plant seeded at K.n0, which is every plant that has
        a reactor on it. */
-    const heat0=P.n0*(PROMPT_F+DEC_A.reduce((t,a)=>t+a,0));
-    P.pinUA=heat0*P.rated*1000*Math.max(pk2,1e-6)
-           /(film0*Math.max(P.TfRef-P.Tref,1)*P.condK);
+    const heat0=K.n0*(PROMPT_F+DEC_A.reduce((t,a)=>t+a,0));
+    K.pinUA=heat0*K.rated*1000*Math.max(pk2,1e-6)
+           /(film0*Math.max(K.TfRef-K.Tref,1)*K.condK);
     /* ── AND WHERE THE CLAD SITS INSIDE THAT DROP ──
        There is no clad node in this model: `film` above is the WHOLE pellet-
        to-coolant conductance, so nothing here knows the clad's temperature -
@@ -563,8 +569,8 @@ function coreReset(s){
        step from failing at commissioning.
 
        So the drop is split in series: a FIXED solid conductance (pellet, gap
-       and clad wall) and the LIVE film. P.gSolid is fitted ONCE here, in the
-       P.pinUA idiom, against a stated reference clad rise - and CLAD_DT0 is
+       and clad wall) and the LIVE film. K.gSolid is fitted ONCE here, in the
+       K.pinUA idiom, against a stated reference clad rise - and CLAD_DT0 is
        real, 30 K is what a PWR rod's outside sits above its coolant at power.
        The whole point is what happens away from that anchor: as the film
        collapses on a dry node the split goes to 1 and the clad rides at the
@@ -572,17 +578,17 @@ function coreReset(s){
        fire at all. IT IS A FIT AND IT SAYS SO; if a single linear split ever
        reads wrong, the replacement is a real two-node pellet/clad balance,
        not a second coefficient here. */
-    const r=clamp(CLAD_DT0/Math.max(P.TfRef-P.Tref,1),.01,.6);
-    P.gSolid=r*film0/(1-r);
+    const r=clamp(CLAD_DT0/Math.max(K.TfRef-K.Tref,1),.01,.6);
+    K.gSolid=r*film0/(1-r);
     /* and start every pellet where that balance puts it, or tick one is a
        transient nobody caused */
     /* THE FIT IS AT THE REST POINT; THE PELLETS START AT THE POWER THIS PLANT
        IS ACTUALLY SEEDED AT. Two different quantities that were sharing one
        name: a plant seeded shut down still had every pellet placed at full
        power, 340 K above its own coolant. Identical for any plant seeded at
-       P.n0, which is every plant that has a reactor on it. */
-    const qhat=(s.n*PROMPT_F+s.decay)*P.rated*1000/P.pinUA;
-    for(let k=0;k<XNN;k++) s.nTf[k]=s.nTc[k]+qhat*s.phi[k]/film0; }
+       K.n0, which is every plant that has a reactor on it. */
+    const qhat=(cs.n*PROMPT_F+cs.decay)*K.rated*1000/K.pinUA;
+    for(let k=0;k<XNN;k++) cs.nTf[k]=cs.nTc[k]+qhat*cs.phi[k]/film0; }
 }
 
 /* ── A STAGE IS DERIVED, NEVER STORED ──
@@ -590,17 +596,17 @@ function coreReset(s){
    ONLY place a node is named. FAIL (step.js) is the table it indexes; adding a
    stage is adding a row there and a branch here, and nothing else in the game
    branches on a stage id at all. */
-function fuelStage(s,k){
-  if(s.nMelt[k]>0) return 3;
-  if(ecrOf(s.nOx[k])>=OX_ECR_FAIL) return 2;
-  if(s.nDmg[k]>0) return 1;
+function fuelStage(cs,k){
+  if(cs.nMelt[k]>0) return 3;
+  if(ecrOf(cs.nOx[k])>=OX_ECR_FAIL) return 2;
+  if(cs.nDmg[k]>0) return 1;
   return 0;
 }
 /* How much of the core is in each stage, by volume. The release term and the
    panel both read this, so a picture and a consequence cannot disagree. */
-function fuelStages(s){
+function fuelStages(cs){
   const o=new Float64Array(FAIL.length);
-  for(let k=0;k<XNN;k++) o[fuelStage(s,k)]+=nodeW[k];
+  for(let k=0;k<XNN;k++) o[fuelStage(cs,k)]+=nodeW[k];
   return o;
 }
 
@@ -608,10 +614,10 @@ function fuelStages(s){
    uses it to set the boron that makes this core critical: with rod worth now
    emergent, guessing it from a formula would leave the plant off-critical at
    commissioning and walk it into a trip nobody caused. */
-function coreRodWorth(s){
+function coreRodWorth(K,cs){
   let w=0, W=0;
-  for(let k=0;k<XNN;k++){ const q=nodeW[k]*s.phi[k]*s.phi[k];
-    w+=q*(-P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]); W+=q; }
+  for(let k=0;k<XNN;k++){ const q=nodeW[k]*cs.phi[k]*cs.phi[k];
+    w+=q*(-K.rodA*cs.nCov[k]+K.tipRho*cs.nFol[k]); W+=q; }
   return W>0 ? w/W : 0;
 }
 
@@ -619,7 +625,7 @@ function coreRodWorth(s){
    step() has already worked out the loop conditions; this spends them node by
    node and hands back the flux-weighted reactivity that point kinetics needs.
    The field it leaves behind is what the renderer draws. */
-function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
+function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
   /* Where the banks stand is settled by the rod drives in step(), through
      rodBanks(). This function only reads it. */
 
@@ -635,25 +641,25 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
         which is what the multiplier is defined on, and it reads rvl, so a
         depressurising core loses channel flow harder because the two
         densities have closed on each other. */
-  { const rvl=satRvl(P.sat, s.pCore), rq=1/Math.max(rvl,1e-6)-1;
+  { const rvl=satRvl(K.sat, cs.pCore), rq=1/Math.max(rvl,1e-6)-1;
     let tot=0;
     for(let i=0;i<XNR;i++){
-      let x=0; for(let j=0;j<XNZ;j++) x+=voidQual(s.nV[XIX(i,j)],rvl);
-      s.chW[i]=1/Math.sqrt(1+rq*(x/XNZ));
-      tot+=s.chW[i]*ringW[i];
+      let x=0; for(let j=0;j<XNZ;j++) x+=voidQual(cs.nV[XIX(i,j)],rvl);
+      cs.chW[i]=1/Math.sqrt(1+rq*(x/XNZ));
+      tot+=cs.chW[i]*ringW[i];
     }
-    for(let i=0;i<XNR;i++) s.chW[i]/=Math.max(tot,1e-6);
+    for(let i=0;i<XNR;i++) cs.chW[i]/=Math.max(tot,1e-6);
   }
 
-  rodShape(P,s,s.nCov,s.nFol);
+  rodShape(K,cs,cs.nCov,cs.nFol);
   /* ── THE RISE FIRST, THEN WHERE IT SITS ──
      T-AVG IS THE AVERAGE, and that has to hold every tick or the model eats
      itself: the rise responds to power inside one tick, so hanging the channel
      inlet off LAST tick's rise leaves the flux-weighted mean coolant
      temperature moving with power at -45 pcm/K, prompt. Measured: the plant
      oscillated tick to tick and diverged in a quarter of a second. Computing
-     the rise first and centring the channel on s.Tavg makes the mean exactly
-     s.Tavg whatever the rise is, which is what the split it replaces asserted
+     the rise first and centring the channel on Tavg makes the mean exactly
+     Tavg whatever the rise is, which is what the split it replaces asserted
      by construction and what the word AVERAGE means.
      Capped, because past this the channel is boiling rather than getting
      hotter and the number stops being a temperature rise - it is buoyancy's
@@ -661,13 +667,13 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   const mixK=new Float64Array(XNR);
   { let raw=0;
     for(let i=0;i<XNR;i++){
-      let ringP=0; for(let j=0;j<XNZ;j++) ringP+=s.phi[XIX(i,j)];
+      let ringP=0; for(let j=0;j<XNZ;j++) ringP+=cs.phi[XIX(i,j)];
       ringP=Math.max(ringP/XNZ,1e-6);
-      mixK[i]=(1+(ringP-1)*(1-P.mix))/ringP;      // cross-flow, and it conserves
-      raw += ringW[i]*heat*coreDT0()*ringP*mixK[i]/Math.max(flowFrac,1e-3);
+      mixK[i]=(1+(ringP-1)*(1-K.mix))/ringP;      // cross-flow, and it conserves
+      raw += ringW[i]*heat*K.dT0*ringP*mixK[i]/Math.max(flowFrac,1e-3);
     }
-    s.coreDT=clamp(raw,0,coreDTMax()); }
-  const Tcold=s.Tavg-s.coreDT/2;
+    cs.coreDT=clamp(raw,0,coreDTMax()); }
+  const Tcold=Tavg-cs.coreDT/2;
   /* ── ENTHALPY UP A CHANNEL, AND THE PELLET AS A BALANCE ──
      Both of these used to be correlations wearing a field's clothes. Node
      coolant temperature was Tcold + 30*heat*frac, an imposed axial shape with
@@ -676,15 +682,15 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      goes into the water going past it, and what is left over is in the pellet.
 
      qhat is the core's power in the units the pin balance wants - kelvin of
-     film difference per unit of flux - so P.pinUA never appears again below.
+     film difference per unit of flux - so K.pinUA never appears again below.
      dTn is the rise one node of a channel carrying its own share of RATED flow
      takes at rated power, so an undamaged core at rest lands exactly where the
      correlation left it. */
-  const qhat  = heat*P.rated*1000/Math.max(P.pinUA,1e-9);
+  const qhat  = heat*K.rated*1000/Math.max(K.pinUA,1e-9);
   const ff    = Math.max(flowFrac, 1e-3);
-  const cp    = P.sat.cp, dT0 = coreDT0();
+  const cp    = K.sat.cp, dT0 = K.dT0;
   const hSat  = cp*sat;                      // enthalpy at saturation, kJ/kg
-  const rvl   = satRvl(P.sat, s.pCore);             // the core boils at ITS OWN pressure
+  const rvl   = satRvl(K.sat, cs.pCore);             // the core boils at ITS OWN pressure
   /* what the damage pass hands back: the worst node margin and where, the
      hottest clad, the deepest oxide, and the hydrogen this tick made. None of
      the margins are STORED - a node margin field is a pure function of this
@@ -694,49 +700,49 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
   const dhSub=cp*(sat-Tcold);
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
-    const chan=Math.max(s.chW[i],1e-3);
+    const chan=Math.max(cs.chW[i],1e-3);
     /* This channel's own flow, as a share of what it would carry at rated: the
        heat has to go into the water actually in THIS channel, which is the
        whole of the voiding-channel runaway. */
     const dTn=heat*dT0*mixK[i]/(XNZ*ff*chan);        // K of rise per node at phi = 1
     /* and the flux past the pin in this channel, which is a different question
-       from how much water is passing - see s.hotFlow.
+       from how much water is passing - see cs.hotFlow.
        FLOORED AT THE POOL: a covered rod in still water still sheds heat by
-       natural convection and nucleate boiling (P.filmPool, coreConst), so
+       natural convection and nucleate boiling (K.filmPool, coreConst), so
        an isolated full vessel heats on decay heat at that rate and not as
        if the water were not there. The (1-nV) factor below is what takes
        the floor away when the node is bare. */
-    const film0=Math.max(Math.pow(Math.max(mflux*chan,0),0.8), P.filmPool||0);
+    const film0=Math.max(Math.pow(Math.max(mflux*chan,0),0.8), K.filmPool||0);
     /* the same water as a MASS FLUX rather than a film - Saha-Zuber's G, and
        the one branch of it that divides by it */
     const gCh=Math.max(mflux*chan,1e-3);
     let h=cp*Tcold;
     for(let j=0;j<XNZ;j++){
-      const k=XIX(i,j), pw=s.phi[k];
+      const k=XIX(i,j), pw=cs.phi[k];
       const dh=cp*dTn*pw;                    // this node's own enthalpy rise
       const hMid=h+dh/2; h+=dh;              // the node sits at its own midpoint
       /* Subcooled water gets hotter; saturated water gets steamier. Quality
          only ever increases going up a heated channel, which falls out of
          carrying the enthalpy rather than being asserted. */
-      if(hMid<=hSat) s.nTc[k]=hMid/cp;
-      else         { s.nTc[k]=sat; }
+      if(hMid<=hSat) cs.nTc[k]=hMid/cp;
+      else         { cs.nTc[k]=sat; }
       /* VOID STARTS BEFORE THE BULK DOES. xe is the thermodynamic quality and
          is negative while subcooled; xd is where vapour first detaches, off
          whichever Saha-Zuber branch this channel is actually on. Floored so a
          core making no heat at all cannot divide by zero. */
       const q2=Math.max(heat*pw,0);
-      const xd=-Math.max(Math.min(P.xSub*q2/gCh, P.xSubLo*q2), 1e-6);
-      const xe=(hMid-hSat)/P.hfg;
-      s.nVt[k]=driftFlux(subQual(xe, xd), rvl);
+      const xd=-Math.max(Math.min(K.xSub*q2/gCh, K.xSubLo*q2), 1e-6);
+      const xe=(hMid-hSat)/K.hfg;
+      cs.nVt[k]=driftFlux(subQual(xe, xd), rvl);
 
       /* ── HOW THIS NODE IS FAILING ──
          Everything below runs on locals the loop already had. The margin is
          MEASURED here rather than peaked: the rise is the enthalpy actually
          carried to this node, which closes the stated gap where the boil law
          was reading a flux peaking factor in place of an enthalpy-rise one.
-         The minimum this pass finds IS s.dnbr (step.js): the plant has no
+         The minimum this pass finds IS cs.dnbr (step.js): the plant has no
          second margin arithmetic left to disagree with. */
-      const dnb=marginNode(s,heat,pw,hMid/cp-Tcold,Tcold,s.nTf[k],
+      const dnb=marginNode(K,cs,heat,pw,hMid/cp-Tcold,Tcold,cs.nTf[k],
                            mflux*chan,xe,dhSub);
       if(dnb<dnbLo){ dnbLo=dnb; dnbK=k; }
 
@@ -750,12 +756,12 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          measured first. */
       /* the wall's own superheat is read with the nucleate film first, and
          the post-CHF law (dnbFilmK) then says how much of that film is left */
-      const filmNB=film0*(1-clamp(s.nV[k],0,1));
-      const TclNB=s.nTc[k]+(s.nTf[k]-s.nTc[k])*P.gSolid/(P.gSolid+filmNB);
-      s.nDnb[k]=dnbLatch(dnb, TclNB-sat, s.nDnb[k]);
-      const film=filmNB*(s.nDnb[k] ? DNB_FILM : 1);
+      const filmNB=film0*(1-clamp(cs.nV[k],0,1));
+      const TclNB=cs.nTc[k]+(cs.nTf[k]-cs.nTc[k])*K.gSolid/(K.gSolid+filmNB);
+      cs.nDnb[k]=dnbLatch(K,dnb, TclNB-sat, cs.nDnb[k]);
+      const film=filmNB*(cs.nDnb[k] ? DNB_FILM : 1);
 
-      const Tcl=s.nTc[k]+(s.nTf[k]-s.nTc[k])*P.gSolid/(P.gSolid+film);
+      const Tcl=cs.nTc[k]+(cs.nTf[k]-cs.nTc[k])*K.gSolid/(K.gSolid+film);
       if(Tcl>TclH) TclH=Tcl;
 
       /* ── OXIDATION, AND THE HEAT IT MAKES ──
@@ -767,40 +773,40 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          exactly 0 and the power that freed it is 0/0 - a NaN in the pellet,
          and through nRho in every reactivity term the plant has. */
       let qOx=0;
-      if(dt>0 && P.oxid && Tcl>OX_T0 && s.nV[k]>OX_VMIN && ecrOf(s.nOx[k])<1){
-        const o0=s.nOx[k];
+      if(dt>0 && K.oxid && Tcl>OX_T0 && cs.nV[k]>OX_VMIN && ecrOf(cs.nOx[k])<1){
+        const o0=cs.nOx[k];
         /* clamped at the wall it is eating, or one step of a runaway steps
            straight past it and ECR - which the readout states as a percentage
            of the drawn thickness - reads over 100 % */
-        s.nOx[k]=Math.min(ZR_PBR*ROD_CLAD,
-          Math.sqrt(o0*o0+oxRate(Tcl)*(1+s.nDmg[k])*dt));
+        cs.nOx[k]=Math.min(ZR_PBR*ROD_CLAD,
+          Math.sqrt(o0*o0+oxRate(Tcl)*(1+cs.nDmg[k])*dt));
         /* the metal that oxide ate, as a mass and as the power that freed it.
            nodeW cancels: a node's own power in the balance's currency is
-           W/(nodeW[k]*P.pinUA), and this node's share of the rod surface is
-           P.aHeat*nodeW[k]. Getting that cancellation wrong one way makes the
+           W/(nodeW[k]*K.pinUA), and this node's share of the rod surface is
+           K.aHeat*nodeW[k]. Getting that cancellation wrong one way makes the
            term invisible and the other way melts every water core in a tick. */
-        const dm=ZR_RHO*(s.nOx[k]-o0)/ZR_PBR*P.aHeat*nodeW[k];
+        const dm=ZR_RHO*(cs.nOx[k]-o0)/ZR_PBR*K.aHeat*nodeW[k];
         h2 += ZR_H2*dm;
-        qOx = ZR_QOX*dm/(1000*dt*nodeW[k]*Math.max(P.pinUA,1e-9));
+        qOx = ZR_QOX*dm/(1000*dt*nodeW[k]*Math.max(K.pinUA,1e-9));
       }
-      { const e=ecrOf(s.nOx[k]); if(e>ecrH) ecrH=e; }
+      { const e=ecrOf(cs.nOx[k]); if(e>ecrH) ecrH=e; }
       oxP+=qOx*nodeW[k];
 
       // at dt 0 the pellet's algebra is its own balance, so a commissioning pass seeds it at the film it will actually see
-      let Tn=dt>0 ? s.nTf[k]+(qhat*pw+qOx-film*(s.nTf[k]-s.nTc[k]))*dt/xTauF()
-                  : s.nTc[k]+(qhat*pw+qOx)/Math.max(film,1e-9);
+      let Tn=dt>0 ? cs.nTf[k]+(qhat*pw+qOx-film*(cs.nTf[k]-cs.nTc[k]))*dt/xTauF(K)
+                  : cs.nTc[k]+(qhat*pw+qOx)/Math.max(film,1e-9);
       /* ── MELT IS PAID FOR IN LATENT HEAT ──
          A node at tmelt absorbs power WITHOUT rising until its heat of fusion
          is bought, and then rises again, so the melt plateau falls out instead
          of being a rate. It cannot start before the clad has failed, which is
-         physically true and is what makes s.meltFrac <= s.dmg/100 a theorem
+         physically true and is what makes cs.meltFrac <= cs.dmg/100 a theorem
          rather than a coincidence the melt latch relies on. */
-      if(Tn>P.tmelt && s.nDmg[k]>=1 && s.nMelt[k]<1){
-        const room=(1-s.nMelt[k])*FUSE_DT, paid=Math.min(Tn-P.tmelt,room);
-        s.nMelt[k]=Math.min(1,s.nMelt[k]+paid/FUSE_DT);
-        Tn=P.tmelt+(Tn-P.tmelt-paid);
+      if(Tn>K.tmelt && cs.nDmg[k]>=1 && cs.nMelt[k]<1){
+        const room=(1-cs.nMelt[k])*FUSE_DT, paid=Math.min(Tn-K.tmelt,room);
+        cs.nMelt[k]=Math.min(1,cs.nMelt[k]+paid/FUSE_DT);
+        Tn=K.tmelt+(Tn-K.tmelt-paid);
       }
-      s.nTf[k]=clamp(Tn,0,6000);
+      cs.nTf[k]=clamp(Tn,0,6000);
 
       /* ── AND WHETHER IT HAS BURST ──
          Two ways in, and both are measured: the clad balloons out against its
@@ -808,35 +814,35 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
          whole wall and there is no clad left to hold anything. Clamped at 1 at
          the integrator, because the aggregate is a PERCENTAGE and six readers
          lie at once if it ever runs past. */
-      if(ecrOf(s.nOx[k])>=1) s.nDmg[k]=1;
+      if(ecrOf(cs.nOx[k])>=1) cs.nDmg[k]=1;
       else {
-        const dP=P_FILL*Tcl/T_FILL-s.pCore, tb=burstT(dP);
-        if(Tcl>tb) s.nDmg[k]=Math.min(1,
-          s.nDmg[k]+clamp((Tcl-tb)/BURST_SPAN,0,1)*dt/BURST_TAU);
+        const dP=P_FILL*Tcl/T_FILL-cs.pCore, tb=burstT(dP);
+        if(Tcl>tb) cs.nDmg[k]=Math.min(1,
+          cs.nDmg[k]+clamp((Tcl-tb)/BURST_SPAN,0,1)*dt/BURST_TAU);
       }
 
       /* local xenon on local flux. A node running hard burns its own poison
          away while a quiet one keeps making more, and the difference is a
          reactivity gradient that moves the flux - which is the oscillation. */
-      const fl=s.n*pw;
-      s.xI[k]=Math.max(0,s.xI[k]+(P.gI*fl-P.lamI*s.xI[k])*dt);
-      s.xX[k]=Math.max(0,s.xX[k]+(P.gX*fl+P.lamI*s.xI[k]-P.lamX*s.xX[k]
-              -P.sig*fl*s.xX[k])*dt);
+      const fl=cs.n*pw;
+      cs.xI[k]=Math.max(0,cs.xI[k]+(K.gI*fl-K.lamI*cs.xI[k])*dt);
+      cs.xX[k]=Math.max(0,cs.xX[k]+(K.gX*fl+K.lamI*cs.xI[k]-K.lamX*cs.xX[k]
+              -K.sig*fl*cs.xX[k])*dt);
 
-      s.nRho[k]=clamp(P.aF*(s.nTf[k]-P.TfRef),-6000,3000)
-               +clamp(P.aM*(s.nTc[k]-P.Tref),-6000,2500)
-               +clamp(P.aX*(s.nTf[k]-P.TfRef)+P.aS*(s.nTc[k]-P.Tref),-6000,2500)
-               +P.aV*s.nV[k]-P.KXE*s.xX[k]
-               -P.rodA*s.nCov[k]+P.tipRho*s.nFol[k]
-               -P.poison*(P.poiG[i]-1)
-               -P.nPen[i]+P.enrRho[i];
+      cs.nRho[k]=clamp(K.aF*(cs.nTf[k]-K.TfRef),-6000,3000)
+               +clamp(K.aM*(cs.nTc[k]-K.Tref),-6000,2500)
+               +clamp(K.aX*(cs.nTf[k]-K.TfRef)+K.aS*(cs.nTc[k]-K.Tref),-6000,2500)
+               +K.aV*cs.nV[k]-K.KXE*cs.xX[k]
+               -K.rodA*cs.nCov[k]+K.tipRho*cs.nFol[k]
+               -K.poison*(K.poiG[i]-1)
+               -K.nPen[i]+K.enrRho[i];
     }
   }
 
-  /* THE RESCALE IS GONE. s.vf was a 0-D correlation with the field's shape
+  /* THE RESCALE IS GONE. cs.vf was a 0-D correlation with the field's shape
      painted on it (sc = vLump/raw); it is the volume-weighted mean of a real
      field now, and so is nothing else. A void fraction is still a fraction -
-     vLeak runs past 1 on purpose, so s.vf can say HOW far past empty the loop
+     vLeak runs past 1 on purpose, so cs.vf can say HOW far past empty the loop
      is, but a node cannot be more than all steam.
 
      The lag is TRANSPORT, and it is now measured as transport: the time a
@@ -846,63 +852,63 @@ function coreStep(s,dt,heat,sat,vLeak,mflux,flowFrac){
      a coasting pump moves water slower, so the void it makes arrives slower.
      Bounded well either side of anything a plant reaches; a stopped pump
      would otherwise divide by zero. */
-  { const v=Math.max(mflux,1e-3)*P.G0/Math.max(rhoAt(s.Tavg),1);
-    const tau=clamp(Math.max(P.coreHgt,.05)/Math.max(v,1e-3),0.1,60);
+  { const v=Math.max(mflux,1e-3)*K.G0/Math.max(rhoAt(Tavg),1);
+    const tau=clamp(Math.max(K.coreHgt,.05)/Math.max(v,1e-3),0.1,60);
     for(let k=0;k<XNN;k++){
-      const vT=clamp(Math.max(s.nVt[k],vLeak),0,1);
-      s.nV[k]+=(vT-s.nV[k])*dt/tau;
+      const vT=clamp(Math.max(cs.nVt[k],vLeak),0,1);
+      cs.nV[k]+=(vT-cs.nV[k])*dt/tau;
     } }
 
-  coreSolve(P,s.phi,s.nRho);
+  coreSolve(K,cs.phi,cs.nRho);
 
   /* ── what the rest of the sim gets back ── */
   const o={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0};
   let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0,W2=0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
-    const k=XIX(i,j), v=nodeW[k], w=v*s.phi[k], w2=w*s.phi[k];
+    const k=XIX(i,j), v=nodeW[k], w=v*cs.phi[k], w2=w*cs.phi[k];
     /* IMPORTANCE weighted, phi squared: in one group the adjoint is the flux,
        so a local reactivity change is worth phi^2 (first-order perturbation
        theory). Weighted by phi alone the centre was under-counted by Fq and
        the rim over-counted, which flattened the S-curve and damped the axial
        xenon mode. A poisoned corner of a dead core still gets no vote. */
-    o.dop+=w2*clamp(P.aF*(s.nTf[k]-P.TfRef),-6000,3000);
-    o.mod+=w2*clamp(P.aM*(s.nTc[k]-P.Tref),-6000,2500);
-    o.exp+=w2*clamp(P.aX*(s.nTf[k]-P.TfRef)+P.aS*(s.nTc[k]-P.Tref),-6000,2500);
-    o.vd +=w2*P.aV*s.nV[k];
-    o.xe +=w2*-P.KXE*s.xX[k];
-    o.rod+=w2*-P.rodA*s.nCov[k];
-    o.tip+=w2*P.tipRho*s.nFol[k];
+    o.dop+=w2*clamp(K.aF*(cs.nTf[k]-K.TfRef),-6000,3000);
+    o.mod+=w2*clamp(K.aM*(cs.nTc[k]-K.Tref),-6000,2500);
+    o.exp+=w2*clamp(K.aX*(cs.nTf[k]-K.TfRef)+K.aS*(cs.nTc[k]-K.Tref),-6000,2500);
+    o.vd +=w2*K.aV*cs.nV[k];
+    o.xe +=w2*-K.KXE*cs.xX[k];
+    o.rod+=w2*-K.rodA*cs.nCov[k];
+    o.tip+=w2*K.tipRho*cs.nFol[k];
     W2+=w2;
-    X+=v*s.xX[k]; I+=v*s.xI[k]; V+=v*s.nV[k]; Tf+=w*s.nTf[k];
-    if(s.nTf[k]>TfH) TfH=s.nTf[k];
+    X+=v*cs.xX[k]; I+=v*cs.xI[k]; V+=v*cs.nV[k]; Tf+=w*cs.nTf[k];
+    if(cs.nTf[k]>TfH) TfH=cs.nTf[k];
     if(j>=XNZ/2) top+=w; else bot+=w;
     if(i< XNR/2)  inn+=w; else out+=w;
   }
   if(W2>0) for(const q in o) o[q]/=W2;
-  const hot=nodePeak(s.phi);
-  s.fq=hot.v; s.hotRing=hot.i; s.hotLev=hot.j;
-  s.ao=(top-bot)/Math.max(top+bot,1e-6);
-  s.ro=(inn-out)/Math.max(inn+out,1e-6);
-  s.X=X; s.I=I; s.Tf=Tf; s.TfHot=TfH; s.vNode=V; s.tipRho=o.tip;
+  const hot=nodePeak(cs.phi);
+  cs.fq=hot.v; cs.hotRing=hot.i; cs.hotLev=hot.j;
+  cs.ao=(top-bot)/Math.max(top+bot,1e-6);
+  cs.ro=(inn-out)/Math.max(inn+out,1e-6);
+  cs.X=X; cs.I=I; cs.Tf=Tf; cs.TfHot=TfH; cs.vNode=V; cs.tipRho=o.tip;
   /* The hot channel is what burns out, not the core average - and burnout is a
      question of how fast the water is moving past the pin, not of how much heat
      left the loop. Those two are the same number while the pumps are running and
      nothing like it once they stop, so this reads mass flux, never the
      enthalpy rise. */
-  s.hotFlow=Math.max(mflux*s.chW[s.hotRing],0.02);
+  cs.hotFlow=Math.max(mflux*cs.chW[cs.hotRing],0.02);
   /* ── WHAT THE DAMAGE PASS LEFT BEHIND ──
      nodeW already sums to 1, so the two aggregates are plain volume means and
-     s.dmg keeps its old meaning and its old range exactly. s.oxMax is stated
+     cs.dmg keeps its old meaning and its old range exactly. cs.oxMax is stated
      as ECR rather than metres because that is the number the licensing limit
      is written in and the only one a reader can judge. */
   let dm=0, mf=0;
-  for(let k=0;k<XNN;k++){ dm+=nodeW[k]*s.nDmg[k]; mf+=nodeW[k]*s.nMelt[k]; }
-  s.dmg=Math.min(100,100*dm); s.meltFrac=mf;
-  o.h2=h2; s.oxMax=ecrH; s.TcladHot=TclH;
+  for(let k=0;k<XNN;k++){ dm+=nodeW[k]*cs.nDmg[k]; mf+=nodeW[k]*cs.nMelt[k]; }
+  cs.dmg=Math.min(100,100*dm); cs.meltFrac=mf;
+  o.h2=h2; cs.oxMax=ecrH; cs.TcladHot=TclH;
   /* what the metal is making, as a share of rated - the one number that says
      whether this is corrosion or a runaway, and the comparison the event log
      puts it against is the chain reaction's own output */
-  s.qOx=oxP*P.pinUA/Math.max(P.rated*1000,1e-9);
-  s.dnbrMin=dnbLo; s.dnbrRing=(dnbK/XNZ)|0; s.dnbrLev=dnbK%XNZ;
+  cs.qOx=oxP*K.pinUA/Math.max(K.rated*1000,1e-9);
+  cs.dnbrMin=dnbLo; cs.dnbrRing=(dnbK/XNZ)|0; cs.dnbrLev=dnbK%XNZ;
   return o;
 }

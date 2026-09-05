@@ -36,6 +36,8 @@
 function snapVal(v){
   if(v === null || typeof v !== "object") return v;
   if(v instanceof Float64Array) return new Float64Array(v);
+  if(v instanceof Uint8Array) return new Uint8Array(v);      // a lattice plan (D.cores[].lat)
+  if(v instanceof Int8Array) return new Int8Array(v);
   if(Array.isArray(v)) return v.map(snapVal);
   if(Object.getPrototypeOf(v) === Object.prototype){
     const o = {}; for(const k in v) o[k] = snapVal(v[k]); return o; }
@@ -134,6 +136,7 @@ const eqS = (a, b) => eqWhere(a, b) === null;
    reason it is `sched:false`: it is the boundary BETWEEN two recordings, not an
    event inside one, so it starts a fresh root take instead of being written to
    the take it ended. */
+const coreLab = id => { const p=partOf(id); return p ? p.name : id; };
 const ACT = {
   /* ── the panel ──
      `log` formats the VALUE for the event log; the row's `lab` already names
@@ -157,12 +160,26 @@ const ACT = {
               apply:(s,id,v)=>{ if(s.flowDemBy[id]!==undefined) s.flowDemBy[id]=v; }},
   rodCommon: {lab:"ROD DEMAND",   cont:true, part:()=>roleId("rods"), log:v=>(v*100).toFixed(1)+" %", apply:(s,v)=>{ setCommon(v); }},
   rodBank  : {lab:"BANK DEMAND",  cont:true, part:()=>roleId("rods"), log:(b,v)=>"BANK "+(b+1)+" TO "+(v*100).toFixed(1)+" %",
-              apply:(s,b,v)=>{ s.rodZDem[b]=v; }},
+              apply:(s,b,v)=>{ coreEach(s,cs=>{ cs.rodZDem[b]=v; }); }},
   bankAuto : {lab:"BANK AUT/MAN", part:()=>roleId("rods"), log:b=>"BANK "+(b+1)+" NOW "+(S.bankAuto[b]?"MANUAL":"AUTO"),
-              apply:(s,b)=>{ s.bankAuto[b]=!s.bankAuto[b]; }},
+              apply:(s,b)=>{ coreEach(s,cs=>{ cs.bankAuto[b]=!cs.bankAuto[b]; }); }},
   split    : {lab:"ROD MODE",     part:()=>roleId("rods"),     log:on=>on?"SPLIT":"GANG", apply:(s,on)=>{ setSplit(on); }},
-  tiltDem  : {lab:"TILT TRIM",    cont:true, part:()=>roleId("rods"), log:v=>v.toFixed(2), apply:(s,v)=>{ s.tiltDem=v; }},
+  tiltDem  : {lab:"TILT TRIM",    cont:true, part:()=>roleId("rods"), log:v=>v.toFixed(2), apply:(s,v)=>{ coreEach(s,cs=>{ cs.tiltDem=v; }); }},
   boronDem : {lab:"BORON DEMAND", cont:true, log:v=>v.toFixed(0)+" pcm", apply:(s,v)=>{ s.boronDem=v; }},
+  /* ONE VESSEL'S OWN ORDER, the addressed half of each rod row above: `part`
+     is that vessel's own drives, so a wrecked unit refuses only its own. */
+  coreRodDem : {lab:"ROD DEMAND",   cont:true, part:id=>rodsOf(id), log:(id,v)=>coreLab(id)+" TO "+(v*100).toFixed(1)+" %",
+              apply:(s,id,v)=>{ setCommon(v,id); }},
+  coreRodBank: {lab:"BANK DEMAND",  cont:true, part:id=>rodsOf(id), log:(id,b,v)=>coreLab(id)+" BANK "+(b+1)+" TO "+(v*100).toFixed(1)+" %",
+              apply:(s,id,b,v)=>{ coreOn(s,id,cs=>{ cs.rodZDem[b]=v; }); }},
+  coreBankAuto:{lab:"BANK AUT/MAN", part:id=>rodsOf(id), log:(id,b)=>coreLab(id)+" BANK "+(b+1)+" NOW "+(coreSeen(S,id).bankAuto[b]?"MANUAL":"AUTO"),
+              apply:(s,id,b)=>{ coreOn(s,id,cs=>{ cs.bankAuto[b]=!cs.bankAuto[b]; }); }},
+  coreSplit  : {lab:"ROD MODE",     part:id=>rodsOf(id), log:(id,on)=>coreLab(id)+" "+(on?"SPLIT":"GANG"), apply:(s,id,on)=>{ setSplit(on,id); }},
+  coreTiltDem: {lab:"TILT TRIM",    cont:true, part:id=>rodsOf(id), log:(id,v)=>coreLab(id)+" "+v.toFixed(2),
+              apply:(s,id,v)=>{ coreOn(s,id,cs=>{ cs.tiltDem=v; }); }},
+  coreScram  : {lab:"MANUAL SCRAM", part:id=>id, log:id=>coreLab(id), apply:(s,id)=>{ manualScram(id); }},
+  coreRodJam : {lab:"ROD JAM",      log:id=>coreLab(id)+" "+(coreSeen(S,id).rodJam?"CLEARED":"JAMMED"),
+              apply:(s,id)=>{ coreOn(s,id,cs=>{ cs.rodJam=!cs.rodJam; }); }},
   /* logCoal, not cont: a load slider drag must collapse in the LOG the way a
      rod drag does, but `cont` is a fact about the TAPE and adding it here would
      quietly change what a recorded scenario replays. */
@@ -250,7 +267,7 @@ const ACT = {
      table (rng.js) commands instead of rolling for. */
   porvArm  : {lab:"PORV STICKS",  log:()=>"ARMED FOR NEXT LIFT",
               apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefArm[fid]=true; }},
-  rodJam   : {lab:"ROD JAM",      log:()=>S.rodJam?"CLEARED":"JAMMED", apply:(s)=>{ s.rodJam=!s.rodJam; }},
+  rodJam   : {lab:"ROD JAM",      log:()=>S.rodJam?"CLEARED":"JAMMED", apply:(s)=>{ const on=!s.rodJam; coreEach(s,cs=>{ cs.rodJam=on; }); }},
   /* All four flags, matching DMGFX.pzr (step.js) exactly. Setting only open
      and unblocked left the valve stuck in fact - nothing reseats it - while
      reliefAnyStuck() (step.js) stayed false, so "PORV FAILED TO RESEAT" never
@@ -404,17 +421,13 @@ const REC = { roots:[], takes:[], cur:0, mode:"live", keyCount:0, keyBytes:0, tr
    core. Frozen all the way down, because a header that can be edited after the
    fact is not a header, it is a guess. */
 function recFreeze(o){
+  if(ArrayBuffer.isView(o)) return o;    // a typed array with elements refuses to freeze
   if(o && typeof o === "object"){ for(const k in o) recFreeze(o[k]); Object.freeze(o); }
   return o;
 }
 function recHead(){
   return recFreeze({
-    D        : snapVal(D),
-    lat      : {slot:Array.from(LAT.slot), rod:Array.from(LAT.rod),
-                zone:Array.from(LAT.zone),
-                pitch:LAT.pitch, len:LAT.len,
-                reflR:LAT.reflR, reflT:LAT.reflT, reflB:LAT.reflB, abs:LAT.abs},
-    latSig   : latSig(),
+    D        : snapVal(D),     // every vessel's reactor rides D.cores, drawing and all
     /* where the player sited each component, and where they dragged each
        plate. Neither is in D and both change what the plant IS - pipe run,
        thermosiphon head, exposure - so a tape without them replays into a
@@ -456,14 +469,10 @@ function recHead(){
    over it. */
 function recApplyHead(h){
   Object.assign(D, snapVal(h.D));
-  LAT.slot.set(h.lat.slot); LAT.rod.set(h.lat.rod);
-  LAT.zone.set(h.lat.zone||new Uint8Array(LQ*LQ));
-  LAT.pitch=h.lat.pitch; LAT.len=h.lat.len;
-  LAT.reflR=h.lat.reflR; LAT.reflT=h.lat.reflT; LAT.reflB=h.lat.reflB; LAT.abs=h.lat.abs;
-  latRevolve();                       // rebuilds LM and the D fields the lattice measures
   /* The head's own machinery came back with D above, so the board is already
      this plant's; the cell restore below only moves what is on it. */
   buildLayout();
+  for(const id of coreIds()) latRevolve(D.cores[id]);   // re-measures every vessel's own figures
   for(const q of h.parts){ const p=partOf(q.id); if(p){ p.x=q.x; p.y=q.y; } }
   layoutMetrics();
   return designSig() === h.dsig;

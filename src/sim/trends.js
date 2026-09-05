@@ -147,6 +147,21 @@ const CHB={
 /* The one lookup a limit goes through. Ask this, never CH or CHB by name. */
 const limCh = k => CH[k] || CHB[k];
 const HN=1800, SAMP_TICKS=5; let hist={},hi=0,hlen=0,plot=["pwr","dnbr"];
+/* ══ ONE RING PER VESSEL FOR A VESSEL-SHAPED CHANNEL ══
+   A channel that reads a core or its circuit - power, T-avg, pressure, the
+   rods - is sampled once more per vessel on a plant with more than one, under
+   the key "pwr:core1" (the sgQBy idiom), off that vessel's own view of the
+   plant (coreSeen). The plain key keeps the plant's own figure, which is what
+   a scenario limit names by string. One vessel is the plant, so a one-unit
+   plant records exactly what it always did. TREND.unit is the vessel the
+   chart is looking at: null is the plant. A layer-style view state, never S. */
+const UNIT_CH=new Set(["pwr","dnbr","tf","tavg","th","tc","prs","sub","lvl","inv","flow","rod","xe","exp","fq","ao","ro","rho","vd","dmg","fat","dec","mlt","dnbm"]);
+const TREND={unit:null};
+const trendUnits=()=>{ const ids=typeof coreIds==="function"?coreIds():[]; return ids.length>1?ids:[]; };
+const CHKEYS=()=>{ const ks=Object.keys(CH); for(const id of trendUnits()) for(const k of UNIT_CH) if(CH[k]) ks.push(k+":"+id); return ks; };
+const chSplit=k=>{ const i=k.indexOf(":"); return i<0?[k,null]:[k.slice(0,i),k.slice(i+1)]; };
+const chSample=k=>{ const [b,id]=chSplit(k); const row=limCh(b); return id?row.f(coreSeen(S,id)):row.f(S); };
+const chKey=k=>(TREND.unit && UNIT_CH.has(k) && hist[k+":"+TREND.unit]) ? k+":"+TREND.unit : k;
 /* ══ THE REACTOR PERIOD LIVES ON THE CLOCK, NOT IN A DRAW ══
    Period is seconds for power to multiply by e, so it is a DIFFERENTIATOR, and
    a differentiator cannot live in a draw function any more. `readoutsFor()` is
@@ -167,16 +182,16 @@ const HN=1800, SAMP_TICKS=5; let hist={},hi=0,hlen=0,plot=["pwr","dnbr"];
    could be run at 4x or 16x the strip chart stopped being 180 seconds of plant
    and started being 180 seconds of watching. The sampler counts ticks now. */
 const period=()=>S?S.perV:Infinity;
-function initHist(){ hist={}; for(const k in CH) hist[k]=new Float64Array(HN); hi=0;hlen=0;
+function initHist(){ hist={}; for(const k of CHKEYS()) hist[k]=new Float64Array(HN); hi=0;hlen=0;
   if(S){ S.perV=Infinity; S.perN=S.n; S.perT=S.t; } }
-function sample(){ for(const k in CH){ const v=CH[k].f(S); hist[k][hi]=isFinite(v)?v:0; }
+function sample(){ for(const k in hist){ const v=chSample(k); hist[k][hi]=isFinite(v)?v:0; }
   hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN);
   const dt=S.t-S.perT;
   if(dt>1e-9){ const dn=(S.n-S.perN)/dt;
     S.perV = Math.abs(dn)<1e-5 ? Infinity : S.n/dn;
     S.perN=S.n; S.perT=S.t; }
   recSample(); }
-function chAt(k,i){ return hist[k][((hi-hlen+i)%HN+HN)%HN]; }
+function chAt(k,i){ const r=hist[chKey(k)]; return r ? r[((hi-hlen+i)%HN+HN)%HN] : 0; }
 function togglePlot(k){ const i=plot.indexOf(k);
   if(i>=0) plot.splice(i,1); else { plot.push(k); if(plot.length>4) plot.shift(); } }
 
@@ -210,7 +225,7 @@ function togglePlot(k){ const i=plot.indexOf(k);
    is the one trend number that is NOT rebuilt from the archive, and that is
    correct: it is plant state, not history. */
 const TR_CHUNK=4096;
-const TRKEYS=()=>Object.keys(CH).concat(Object.keys(CHB));
+const TRKEYS=()=>CHKEYS().concat(Object.keys(CHB));
 
 /* Live only. A replay is re-deriving samples the archive already holds, so
    letting it append would write the same seconds twice and put the tick index
@@ -222,7 +237,7 @@ function recSample(){
   for(const k of TRKEYS()){
     const a=t.tr[k]||(t.tr[k]=[]);
     if(!a[c]) a[c]=new Float64Array(TR_CHUNK);
-    const v=limCh(k).f(S); a[c][o]=isFinite(v)?v:0;
+    const v=chSample(k); a[c][o]=isFinite(v)?v:0;
   }
   /* The tick each sample was taken on, alongside. It could be inferred from a
      start tick and SAMP_TICKS, but that would make the cadence an invariant the
@@ -319,12 +334,12 @@ function trSegs(take,tick){
    The ring carries CH alone - see THE RING IS NOT THE ARCHIVE above - so this
    fills off CH's keys while reading an archive that also holds CHB. */
 function histFill(take,tick){
-  for(const k in CH) if(!hist[k]) hist[k]=new Float64Array(HN);
+  for(const k of CHKEYS()) if(!hist[k]) hist[k]=new Float64Array(HN);
   const segs=trSegs(take,tick);
   let total=0; for(const s of segs) total+=s[2]-s[1];
   let skip=Math.max(0,total-HN);
   for(const s of segs){ const d=Math.min(skip,s[2]-s[1]); s[1]+=d; skip-=d; }
-  const KS=Object.keys(CH);
+  const KS=Object.keys(hist).filter(k=>take.tr[k]);
   hi=0; hlen=0;
   for(const s of segs) for(let i=s[1];i<s[2];i++){
     for(const k of KS) hist[k][hi]=trAt(s[0],k,i);
