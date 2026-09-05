@@ -1029,7 +1029,7 @@ const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(corePumpCap()-sgCount()),0.1
    threshold and nothing else: what actually costs a pump its head is its own
    suction going to vapour (s.cavP, step.js), measured at the machine. */
 const SUC_LOW=10;
-const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts down over "+FLOW_TAU_COAST+" s if the power goes. The pumps can be stopped completely: the red line on the track is the "+(pumpFloor()*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
+const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts on the rotor - half speed "+(2*PUMP_ROTOR_S)+" s after the power goes. The pumps can be stopped completely: the red line on the track is the "+(pumpFloor()*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
 // rows, not a flat list: a slider sharing 30px with two buttons is 3.3% of
 // rod travel per pixel, unusable
 /* one press of the boron keys, and the range they work in - the same -6000..0
@@ -2372,7 +2372,7 @@ function readoutsFor(p,s){
       "What this machine is moving right now, against the "+pumpFlow(id).toFixed(0)+" kg/s it was bought to swallow. A pump follows its own curve, so it can pass more than that against an easy circuit and far less against a shut valve. It falls with speed, with cavitation, and with anything the plumbing downstream is doing to it.");
     add("SPEED DEMAND",((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)*100).toFixed(1)+" %",
         movingCol(s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1,flowOf(s,id),.005),
-      "Where you have asked THIS pump to go. The main slider writes every pump at once; this pump's own strip writes only this one. Delivery lags it by "+FLOW_TAU+" s, and by "+FLOW_TAU_COAST+" s while coasting down in a blackout.");
+      "Where you have asked THIS pump to go. The main slider writes every pump at once; this pump's own strip writes only this one. Delivery lags it by "+FLOW_TAU+" s; in a blackout the rotor coasts to half speed in "+(2*PUMP_ROTOR_S)+" s.");
     add("CAVITATION",(cav*100).toFixed(0)+" %",
       band(cav*100,0,100,[[5,C.cyan,"NONE"],[30,C.amber,"CAVITATING"],
         [100,C.red,"BREAKING DOWN"]],{dp:0}),
