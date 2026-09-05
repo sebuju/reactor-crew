@@ -72,19 +72,51 @@ function vXf(){ const m=ctx.getTransform&&ctx.getTransform();
   return m&&m.a ? {k:m.a, ex:m.e, ey:m.f} : {k:1, ex:0, ey:0}; }
 const vDevK=()=>vXf().k;
 function vSnapS(s){ const k=vDevK(); return Math.max(1,Math.floor(CELL*s*k))/(CELL*k); }
-function vScale(z){ VIEW.z=z; VIEW.s=vSnapS(VIEW.fit*z); }
+/* ZOOM STOPS AT 1:1 ON THE PANELS. A margin panel is HTML scaled by the same
+   VIEW.s the drawing is (marginZoomK(), ui/margin.js), so past the scale where
+   that reaches 1 nothing gains detail - the panel's own pixels are magnified.
+   Absent (headless, no panels) there is no ceiling. */
+// rungs past 1:1 the hand still gets - a magnified panel is worth the closer look
+const ZOOM_IN_RUNGS=2;
+const vSMax=()=>(typeof marginZoomMaxS==="function") ? marginZoomMaxS()*Math.pow(ZOOM_STEP,ZOOM_IN_RUNGS) : Infinity;
+/* ══ AND IT STOPS A FEW RUNGS OUTSIDE THE SHIP ══
+   Unbounded, holding PageDown ran z to 0.000089 while VIEW.s sat pinned at the
+   one-device-pixel floor vSnapS() puts under a cell - so the picture had stopped
+   changing long before and the control was simply DEAD, twenty-odd presses from
+   showing anything again.
+   The floor is stated in ZOOM_STEP rungs PAST the whole ship rather than at that
+   pixel limit, which is true but sits a hundredfold too deep to be a control,
+   and not at the fit itself, which is tighter than the hand has ever had. */
+const ZOOM_OUT_RUNGS=3;
+const vZMin=()=>vFitAll()/Math.pow(ZOOM_STEP,ZOOM_OUT_RUNGS);
+function vScale(z){
+  const f=Math.max(1e-9,VIEW.fit);
+  VIEW.z=clamp(z, vZMin(), vSMax()/f);
+  VIEW.s=vSnapS(VIEW.fit*VIEW.z);
+}
 /* `padX`/`padY` are layout units the FIT gives up and the BOX does not - room
    reserved around the plant for something that stands beside it (the margin
    panels, ui/margin.js). Taken off the view box instead, the clip below shrinks
    with it and the drawing is cut in a band inside the canvas; taken off the fit,
    the plant is simply drawn smaller and vPad() centres it in the slack. */
-function vFit(x,y,w,h,cx,cy,cw,ch,padX,padY){
+/* `winW`/`winH` are the extent the fit COVERS, and they are not the content box.
+   The content box is what panning is bounded by and it stays the whole ship; the
+   fit is taken on a WINDOW of it, so z=1 is a working view of a few machines
+   rather than the entire drawing shrunk to nothing. Absent, the two are the same
+   and this is the old behaviour - which is what the scenario screen wants. */
+function vFit(x,y,w,h,cx,cy,cw,ch,padX,padY,winW,winH){
   vBox(x,y,w,h);
   VIEW.cx=cx; VIEW.cy=cy; VIEW.cw=cw; VIEW.ch=ch;
   const fw=Math.max(40,w-(padX||0)), fh=Math.max(40,h-(padY||0));
-  VIEW.fit=Math.min(fw/Math.max(cw,1), fh/Math.max(ch,1));
+  VIEW.fit=Math.min(fw/Math.max(winW||cw,1), fh/Math.max(winH||ch,1));
   vScale(VIEW.z);
 }
+/* what the whole ship would fit at, which is where the FIT key goes. 1 BEFORE THE
+   FIRST DRAW: the view has no box until drawPlant() has run once, and a zero there
+   is not "the ship fits at nothing", it is "nobody has measured yet" - taken
+   literally it scaled the plant to 0.003 and drew an empty screen. */
+const vFitAll=()=>(VIEW.w<=0||VIEW.h<=0) ? 1 :
+  Math.min(VIEW.w/Math.max(VIEW.cw,1), VIEW.h/Math.max(VIEW.ch,1))/Math.max(1e-9,VIEW.fit);
 /* ══ PUT PLANT POINT `a` UNDER SCREEN POINT (sx,sy) ══
    This is the inverse of vScr() and it must stay the inverse of vScr(). Three
    call sites - the zoom key, the wheel, and the wheel's off-plant fallback -
@@ -102,6 +134,98 @@ function vAnchor(a,sx,sy){
 function vZoom(z,cx,cy){
   vScale(z);
   vAnchor({x:cx,y:cy}, VIEW.x+VIEW.w/2, VIEW.y+VIEW.h/2);
+}
+/* ══ THE ZOOM LADDER ══
+   Presses land on RUNGS rather than multiplying wherever the wheel happened to
+   leave off, so the same two keys always give back the same set of scales - the
+   PCT_STEP idiom (render/plant.js), with the strict floor/ceil that guarantees a
+   press starting off a rung still moves the way it was pressed.
+   Only the top end is held, and vScale() already owns it. NO BOTTOM: the wheel
+   has never had one and the view is allowed out past the fit, so a key that
+   stopped at vFitAll() was a second, tighter answer to a question the hand
+   already answers differently.
+   EASED, on the same tween a hop uses, and about the point already in the
+   middle - so what you were reading stays put, which is the move the wheel makes
+   about the pointer. A press while a hop is still flying keeps the HOP's target,
+   so the two cannot pull the camera to two different places.
+   The rung is counted off the PENDING scale where there is one, or two quick
+   presses both step off the same part-way value and the second buys nothing. */
+const ZOOM_STEP=1.5;
+function vZoomStep(dir){
+  /* ZOOM_EPS is not a tolerance, it is the float grid's own error - the PCT_EPS
+     sentence (render/plant.js). Landed exactly on a rung, log() answers a hair
+     either side of the integer, and the strict ceil() then picked the rung it
+     was already standing on: measured, PageDown stuck at z 0.8 for ever. */
+  const ZOOM_EPS=1e-6;
+  const base=panZ!=null ? panZ : VIEW.z;
+  const n=Math.log(Math.max(1e-9,base))/Math.log(ZOOM_STEP);
+  const rung=dir>0 ? Math.floor(n+ZOOM_EPS)+1 : Math.ceil(n-ZOOM_EPS)-1;
+  vPanPt(panTo || vPt({x:VIEW.x+VIEW.w/2, y:VIEW.y+VIEW.h/2}), Math.pow(ZOOM_STEP,rung));
+}
+
+/* ══ PUT A BOX IN THE MIDDLE OF THE VIEW, AND EASE THE WAY THERE ══
+   vPanTo() stores the plant POINT rather than a solved VIEW.ox/oy, because the
+   ease is spread over a dozen frames and the view may be zoomed, letterboxed
+   or resized inside them - all of which move where that point has to sit. The
+   target is re-solved through vAnchor() every step for the same reason the
+   wheel and the zoom key go through it: it is the inverse of vScr(), and a
+   second copy of the mapping drifts the day the mapping grows a term.
+   A HAND ALWAYS WINS: a drag or a wheel drops the target, so the view never
+   crawls back out from under the pointer. */
+let panTo=null, panZ=null;
+/* Approach rate. An exponential has no fixed duration - it lands when it is
+   within half a pixel of the target, so a long hop takes longer than a short
+   one, which is the right shape for a camera and the wrong shape to quote one
+   number for: measured on the stock ship, 0.38 s onto a neighbouring machine
+   and 0.50 s across the board. */
+const PAN_K=16;
+/* Layout units - the space the tween's own quantity is measured in, since what
+   eases is a position ON THE GLASS. An exponential has an infinite tail and only
+   the drawn end of it is real, so half a pixel is where it is called landed. */
+const PAN_EPS=0.5;
+function vCenterOn(r){ vAnchor({x:r.x+r.w/2, y:r.y+r.h/2}, VIEW.x+VIEW.w/2, VIEW.y+VIEW.h/2); }
+/* `z` is optional and rides the SAME tween. Set on its own the scale snapped
+   while the pan still eased, so the drawing leapt sideways at the new zoom and
+   then slid to the target - it read as arriving from off to one side. Clamped
+   where vScale() clamps, or a target past the 1:1 ceiling never converges and
+   the ease never ends. */
+/* The pending scale is held inside the SAME bounds vScale() enforces, at both
+   ends. Clamped only at the top, hammering PageDown parked panZ far below the
+   floor VIEW.z can actually reach - and vZoomStep() counts its next rung off the
+   pending figure, so every press back up climbed a rung of a ladder nothing was
+   standing on and the picture did not move for twenty of them. */
+function vPanPt(p,z){
+  panTo={x:p.x, y:p.y};
+  panZ = z==null ? null : clamp(z, vZMin(), vSMax()/Math.max(1e-9,VIEW.fit));
+}
+function vPanTo(r,z){ vPanPt({x:r.x+r.w/2, y:r.y+r.h/2}, z); }
+/* ══ THE TARGET IS PINNED; WHAT EASES IS WHERE ON THE GLASS IT SITS ══
+   It used to ease VIEW.ox/oy toward the solved "target at the middle" while the
+   scale eased alongside, and those are two different motions: early in the walk
+   the view is still centred somewhere else, so growing the scale pushed the
+   target FURTHER out before the pan hauled it back. It read as zooming into the
+   wrong place and then sliding.
+   So the target keeps a screen position of its own and that is what is walked to
+   the middle - the zoom is then always ABOUT the target, which is the move the
+   wheel makes about the pointer. */
+function vPanStep(dt){
+  if(!panTo) return false;
+  const cx=VIEW.x+VIEW.w/2, cy=VIEW.y+VIEW.h/2;
+  const s0=vScr(panTo);                        // where it sits NOW, at the old scale
+  if(panZ!=null){
+    vScale(approach(VIEW.z,panZ,dt,PAN_K));
+    // landed ON the figure, not near it - the same snap the pan makes below. An
+    // approach stops a fraction short, and vZoomStep() counts its next rung off
+    // VIEW.z: 0.15 % short reads as "already on this rung" and the ladder stuck.
+    if(Math.abs(panZ-VIEW.z)<panZ*1e-3){ vScale(panZ); panZ=null; }
+  }
+  const sx=approach(s0.x,cx,dt,PAN_K), sy=approach(s0.y,cy,dt,PAN_K);
+  vAnchor(panTo,sx,sy);
+  // the ZOOM has to be done too, or the pan lands first, the tween ends and the
+  // scale is left stranded part of the way there
+  if(panZ==null && Math.abs(sx-cx)<PAN_EPS && Math.abs(sy-cy)<PAN_EPS){
+    vAnchor(panTo,cx,cy); panTo=null; }
+  return true;
 }
 
 // a keystroke is a registry too: a row carries BOTH the keystroke and the
@@ -122,9 +246,46 @@ addEventListener("keydown",e=>{
      a tool down instead of stopping the commissioning nobody wants to wait
      for. See prewarmCancel() (screens/shell.js). */
   if(e.key==="Escape" && prewarmBusy()){ e.preventDefault(); prewarmCancel(); return; }
+  const nk=navKey(e);
+  if(nk && navLive_()){
+    e.preventDefault();
+    // auto-repeat says nothing new: the direction is the SET of keys down, and
+    // a repeat adds no key to it
+    if(!e.repeat && !navHeld.has(nk)){ navHeld.add(nk); const d=navHeldDir(); navPreview(d[0],d[1]); }
+    return;
+  }
   const K=keyList().find(k=>k.k===e.key);
   if(K){ e.preventDefault(); K.fn(); }
 });
+/* ══ W A S D WALKS THE BOARD ══
+   Not a KEYS row. A row fires on the PRESS and again on every auto-repeat, and
+   this is a HOLD that lands on the RELEASE - two keys held together aim
+   diagonally, which is a direction no single row can state. The registry still
+   owns every other key on both screens; see navPreview()/navCommit()
+   (render/navarrow.js) for the walk itself. */
+const NAV={w:[0,-1], a:[-1,0], s:[0,1], d:[1,0]};
+const navHeld=new Set();
+const navKey=e=>{ const k=e.key&&e.key.length===1 ? e.key.toLowerCase() : ""; return NAV[k]?k:""; };
+/* A rail is HTML standing OVER the canvas (ui/margin.js), so without this every
+   letter typed into a machine's name field also walked the board. Asked of the
+   focus and not of the screen, because the fields come and go with the panel. */
+const navTyping=()=>{ const el=typeof document!=="undefined" && document.activeElement;
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName||"")); };
+const navLive_=()=>plantScreen() && !navTyping();
+function navHeldDir(){ let dx=0, dy=0;
+  for(const k of navHeld){ const v=NAV[k]; dx+=v[0]; dy+=v[1]; }
+  return [dx,dy]; }
+/* THE FIRST RELEASE COMMITS, and every still-held key is dropped with it. A
+   diagonal is two keys and no hand lets go of both on one tick, so waiting for
+   the last release would re-preview the survivor alone and land on ITS square
+   neighbour instead of the diagonal one the player was aiming at. Dropping the
+   rest also stops their auto-repeat starting a second walk. */
+addEventListener("keyup",e=>{
+  const nk=navKey(e);
+  if(!nk || !navHeld.has(nk)) return;
+  navHeld.clear(); navCommit();
+});
+addEventListener("blur",()=>{ if(navHeld.size){ navHeld.clear(); navClear(); } });
 
 const OVL=[];
 let ovlOpen=null;
@@ -724,6 +885,7 @@ function uiMove(e){
     // deck keeps up with the hand at any zoom
     else if(d.type==="pan"){
       const lp=local(e);
+      panTo=panZ=null;                  // a hand outranks an eased pan already in flight
       VIEW.ox-=(lp.x-d.lx)/VIEW.s; VIEW.oy-=(lp.y-d.ly)/VIEW.s;
       d.lx=lp.x; d.ly=lp.y;
       // a page-pixel threshold (not plant), so it feels the same at any zoom
@@ -816,7 +978,7 @@ const uiTakeDirty=()=>{
   return w;
 };
 if(typeof document!=="undefined" && document.addEventListener)
-  for(const ev of ["pointerdown","pointermove","pointerup","pointercancel","wheel","keydown","focusin","scroll"])
+  for(const ev of ["pointerdown","pointermove","pointerup","pointercancel","wheel","keydown","keyup","focusin","scroll"])
     document.addEventListener(ev,uiDirty,{capture:true,passive:true});
 
 function uiBind(el){
@@ -877,6 +1039,7 @@ function vWheel(p,dy){
   const on=vIn(p);
   const px=on? p.x : VIEW.x+VIEW.w/2, py=on? p.y : VIEW.y+VIEW.h/2;
   const a=vPt({x:px,y:py});          // the plant point to hold still, at the OLD scale
+  panTo=panZ=null;                   // ...and so does the wheel
   vScale(VIEW.z*Math.exp(-dy*0.0015));
   vAnchor(a,px,py);
 }
