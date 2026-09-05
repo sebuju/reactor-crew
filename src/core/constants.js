@@ -18,7 +18,7 @@ const stage = document.getElementById("stage");
 const MONO = `ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace`;
 
 const C = {
-  bg:"#040708", panel:"#0b1114", panelHi:"#142126", well:"#060a0b",
+  bg:"#040708", panel:"#0b1114", panelHi:"#142126", well:"#060a0b", ctlWell:"#0f181b",
   // the topbar is the ship's chrome, not one of the panels floating on the view
   bar:"#101a1d",
   // a panel that FLOATS over the drawing, against panel, which is bolted to a rail
