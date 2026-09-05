@@ -539,6 +539,27 @@ const KIT = (function(){
      `suggest` is the one affordance - it fills the field with a value matched
      to the rest of the plant. It never limits and it is never applied on its
      own. */
+  /* WHICH OPTION THE POINTER IS OVER, or null when it leaves. One helper, so a
+     list and a segmented row report a hover the same way - the bench prices
+     the option under the cursor with it (design-bench.js). */
+  function hoverIdx(node, i, opts){
+    if(!opts.onHover) return;
+    node.addEventListener("pointerenter", () => opts.onHover(i));
+    node.addEventListener("pointerleave", () => opts.onHover(null));
+  }
+
+  /* ══ THE ONE AUTO KEY ══
+     A latch, not a one-shot: latched, the control IS the suggestion, and the
+     first value written by hand takes it off. numInput() hangs one beside the
+     field and sliderRow() hangs one on its label - one key, two seats. */
+  function autoKey(auto){
+    const b = el("button", "kit-numinput-suggest", {type: "button"});
+    b.textContent = "AUTO";
+    b.addEventListener("click", () => auto.set(!auto.get()));
+    let was = null;
+    return {el: b, set(on){ if(was === on) return; was = on; b.classList.toggle("on", on); }};
+  }
+
   function numInput(opts){
     opts = opts || {};
     const root = el("div", "kit-numinput");
@@ -548,14 +569,8 @@ const KIT = (function(){
     root.appendChild(t.el);
     if(opts.unit){ const u = el("span", "kit-numinput-unit"); u.textContent = opts.unit;
                    root.appendChild(u); }
-    // a latch, not a one-shot: latched the field IS the suggestion
-    let sug = null;
-    if(opts.auto){
-      sug = el("button", "kit-numinput-suggest", {type: "button"});
-      sug.textContent = "AUTO";
-      sug.addEventListener("click", () => opts.auto.set(!opts.auto.get()));
-      root.appendChild(sug);
-    }
+    const sug = opts.auto ? autoKey(opts.auto) : null;
+    if(sug) root.appendChild(sug.el);
     let live = null;
     const dp = opts.dp === undefined ? 2 : opts.dp;
     const show = v => { live = v; t.set(v == null ? "" : (+v).toFixed(dp)); };
@@ -566,11 +581,24 @@ const KIT = (function(){
       live = v; if(opts.onChange) opts.onChange(v);
     }
     t.input.addEventListener("blur", () => commit(t.input.value, true));
+    // writes input.value itself: textInput's set() refuses to touch a focused field
+    function nudge(d){
+      const cur = parseFloat(String(t.input.value).replace(/[^0-9eE+\-.]/g, ""));
+      const v = +((isFinite(cur) ? cur : (live || 0)) + d).toFixed(Math.max(dp, 0));
+      t.input.value = v.toFixed(dp);
+      commit(t.input.value, false);
+    }
+    t.input.addEventListener("keydown", e => {
+      const d = e.key === "ArrowUp" ? 1 : e.key === "ArrowDown" ? -1 : 0;
+      if(!d) return;
+      e.preventDefault();
+      nudge(d * (e.shiftKey ? 10 : 1));
+    });
     if(opts.tip) tip(root, opts.title || "", opts.tip);
     if(opts.val != null) show(opts.val);
     let wasAuto = null;
     const setAuto = on => { if(wasAuto===on) return; wasAuto=on;
-      if(sug) sug.classList.toggle("on", on);
+      if(sug) sug.set(on);
       t.input.disabled = on;
       root.classList.toggle("kit-numinput-auto", on); };
     return {el: root, set: show, get: () => live, setAuto};
@@ -589,6 +617,7 @@ const KIT = (function(){
       row.appendChild(mass);
       if(it.tip) tip(row, it.name, it.tip);
       row.addEventListener("click", () => opts.onSelect && opts.onSelect(i));
+      hoverIdx(row, i, opts);
       root.appendChild(row);
       return {row, mark, mass};
     });
@@ -621,6 +650,7 @@ const KIT = (function(){
       const mass = el("span", "kit-segsel-mass");
       c.appendChild(name); c.appendChild(mass);
       c.addEventListener("click", () => opts.onSelect && opts.onSelect(i));
+      hoverIdx(c, i, opts);
       root.appendChild(c);
       return {c, mass};
     });
@@ -643,19 +673,24 @@ const KIT = (function(){
     const head = rule(opts.title);
     root.appendChild(head.el);
     if(opts.tip) tip(root, opts.title, opts.tip);
+    const sug = opts.auto ? autoKey(opts.auto) : null;
+    if(sug) head.el.insertBefore(sug.el, head.sfxEl);
     const sl = slider(opts);
     root.appendChild(sl.el);
-    const massEl = el("span", "kit-sliderrow-mass");
-    if(opts.massFn) root.appendChild(massEl);
+    /* WHAT IT COSTS STANDS ON THE LABEL, right of the name and left of nothing.
+       It was a line of its own under the track, so every knob on a panel spent
+       a row saying a figure that belongs beside the thing it prices. */
     function set(val, demVal, massDelta){
       sl.set(val, demVal);
       if(massDelta != null){
-        const t = "+" + massDelta.toFixed(0) + "t";
-        if(massEl.textContent !== t) massEl.textContent = t;
-        massEl.classList.toggle("min", massDelta < 1);
+        head.setSfx("+" + massDelta.toFixed(0) + "t");
+        head.sfxEl.classList.toggle("kit-mass-min", massDelta < 1);
       }
     }
-    return {el: root, set, slider: sl};
+    // dragging writes a value, so the accessor takes the latch off by itself
+    const setAuto = on => { if(sug) sug.set(on);
+      root.classList.toggle("kit-sliderrow-auto", on); };
+    return {el: root, set, setAuto, slider: sl};
   }
 
   function readout(opts){
