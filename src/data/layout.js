@@ -360,10 +360,12 @@ function loopHeadAt(id){
    dp goes as w^2/rho, so one flat table density priced a boiling hot leg at
    the weight of cold water: measured on BWR/4, the drawn loop cost 2.7 times
    what the isothermal figure said and the suggested pumps landed at 79 % of
-   the rating the core was seeded for. The state is the design's own - the
-   circuit's setpoint and coreDT0 either side of Tref, through the same
-   mixState() the solve reads, so a core whose outlet is past saturation is
-   priced as the two-phase column it is. */
+   the rating the core was seeded for. The state is the design's own, through
+   the same mixState() the solve reads, so a core whose outlet is past
+   saturation is priced as the two-phase column it is. A boiling loop's cold
+   leg is NOT coreDT0/2 subcooled - measured on BWR/4 it returns saturated at
+   x = 0.022, 108 kJ/kg above the subcooled line, so both ends ride satH()
+   there and the rise is the same cp*dT either way. */
 const loopHotInlet = p => { const R = p && ROLE[p.role];
   if(!R || R.thermal !== "transfer" || !R.internal) return null;
   for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal]))
@@ -379,15 +381,20 @@ const loopHeadOf = id => {
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
   const w = RATED_KW()/(a.cp*coreDT0()*n);
   const c = satOfCirc(nodeGraph().coreCirc), dT = coreDT0();
-  const rhoAt = T => Math.max(rhoMixOf(c, c.p0, hOfT(c, T)), 1e-3);
-  const rhoHot = rhoAt(c.Tref + dT/2), rhoCold = rhoAt(c.Tref - dT/2);
+  // and the friction factor off the same state point, through the same muMixOf() the solve reads
+  const stAtH = h => { const m = mixState(c, c.p0, h, {x:0, rho:0, b:0});
+    return {rho: Math.max(m.rho, 1e-3), mu: muMixOf(c, m.x)}; };
+  const hf = satH(c, c.p0), boils = hOfT(c, c.Tref + dT/2) > hf;
+  const hIn = boils ? hf : hOfT(c, c.Tref - dT/2), hOut = hIn + a.cp*dT;
+  const hotSt = stAtH(hOut), coldSt = stAtH(hIn);
+  const rhoHot = hotSt.rho, rhoCold = coldSt.rho;
   const inLoop = pid => coreOf(pid) === pid || L.partLoop[pid] === li;
   const dpOf = (K, Dm, rho) => { const A = Math.PI/4*Dm*Dm; return K*w*w/(2*rho*A*A); };
   let dp = 0;
   for(const r of pipeNetwork()){ if(!inLoop(r.a) || !inLoop(r.b)) continue;
-    const mm = runBoreMm(r), Dm = mm/1000;
-    const K = fricOf(mm/BORE_REF, w, a.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
-    dp += dpOf(K, Dm, runHotSide(r) ? rhoHot : rhoCold); }
+    const mm = runBoreMm(r), Dm = mm/1000, st = runHotSide(r) ? hotSt : coldSt;
+    const K = fricOf(mm/BORE_REF, w, st.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
+    dp += dpOf(K, Dm, st.rho); }
   // a machine's internal path is priced at BORE_REF over NET_COMP_LEN (compC), so it is here
   for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
     const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
@@ -1703,6 +1710,22 @@ const roleId=role=>{ const p=roleOf(role); return p?p.id:null; };
 /* EVERY VESSEL, in board order; a reader asking for ONE means the first. A
    rider names its host (D.machines[].on), which is how a rod drive finds its
    core and a core its drives. */
+/* ══ CAN A REPAIR PARTY REACH IT: THE ONE DOOR ══
+   `p.access` is written by layoutMeasure() alone, and buildLayout() hands back
+   FRESH part objects that nothing has measured yet - so between a rebuild and
+   the next layoutMetrics() the field is `undefined`, and every reader spelt
+   BLOCKED as `!p.access`. Undefined is not blocked, it is unasked: editing the
+   lattice resizes the core's box, which rebuilds the board on the stroke, and
+   the reactor's own panel headed itself NO ACCESS - a red note that is both
+   wrong and a row taller, so the whole panel stepped.
+   Asking makes the measure happen: layoutMetrics() is memoised on DGEN and
+   buildLayout() bumps it, so a board that has just changed is re-measured here
+   and one that has not costs a compare. */
+const partAccess = p => {
+  if(!p) return true;
+  if(p.access===undefined) layoutMetrics();
+  return p.access!==false;
+};
 const coreIds=()=>LAY ? LAY.parts.filter(p=>p.role==="core").map(p=>p.id) : [];
 const primaryCore=()=>roleId("core");
 const coreOf=pid=>{ const p=partOf(pid); if(!p) return null;
