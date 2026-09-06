@@ -367,10 +367,9 @@ function loopHeadAt(id){
    x = 0.022, 108 kJ/kg above the subcooled line, so both ends ride satH()
    there and the rise is the same cp*dT either way. */
 const loopHotInlet = p => { const R = p && ROLE[p.role];
-  if(!R || R.thermal !== "transfer" || !R.internal) return null;
-  for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal]))
-    if(!secondaryNode(p.id+IN.a)) return coreFold(p.id+IN.a);
-  return null; };
+  if(!R || R.thermal !== "transfer") return null;
+  const IN = roleIns(p)[0];
+  return IN ? coreFold(p.id+IN.a) : null; };
 /* WHICH RUNS OF A LOOP ARE STILL CARRYING WHAT THE CORE SENT OUT: the ones
    landing on a transfer machine's own declared primary INLET. Asked of that
    declaration and never of the run's KIND, which is a label. */
@@ -399,8 +398,9 @@ const loopHeadOf = id => {
   for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
     const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
     const hot = loopHotInlet(p);
-    for(const IN of R.internal) if(IN.K > 0 && !secondaryNode(pid+IN.a))
-      dp += dpOf(IN.K, BORE_REF/1000, hot === coreFold(pid+IN.a) ? rhoHot : rhoCold); }
+    // the HOT path only, which is the one the declaration puts first
+    { const IN = R.internal[0]; if(IN.K > 0)
+      dp += dpOf(IN.K, BORE_REF/1000, hot === coreFold(pid+IN.a) ? rhoHot : rhoCold); } }
   return dp/1e6;
 };
 const pumpHeadSuggest = id => {
@@ -442,7 +442,7 @@ function pumpBoundsOf(id){
       if(p0 && p0.role === "radiator") S.panel = true;
       if(G.inCore(n)) S.core = true;
       if(!R) continue;
-      if(R.sgtr && secondaryNode(n)) S.cands.push([pid, true]);
+      if(R.sgtr && onStage(pid, n.slice(pid.length), 1)) S.cands.push([pid, true]);
       else if(R.thermal === "sink") S.cands.push([pid, false]); }
     slot.set(id, S); }
   let hi = null, lo = null, shell = false, hold = null;
@@ -1300,21 +1300,33 @@ function crossTies(){
    core cannot reach it. Every caller that used to want a `side` field wants
    this instead. */
 const secondaryNode=node=>!nodeGraph().inCore(node);
-/* WHICH CIRCUIT A TRANSFER STAGE'S FAR SIDE IS ON. A generator has nodes on
-   two of them, so "the circuit this machine is on" has no answer - the SHELL's
-   does, and it is the one the core cannot reach. -1 when nothing is piped to
-   it, which reads as water and is what an unplumbed shell always was. */
-const stageCirc=(pid,core)=>{ const G=nodeGraph();
-  const n=(G.nodesOf[pid]||[]).find(x=>G.inCore(x)===core);
-  return n===undefined ? -1 : G.circuit[n]; };
-const shellCirc=pid=>stageCirc(pid,false);
+/* IS THIS FACE ON THE MACHINE'S OWN k-TH STREAM - 0 the one that gives the
+   heat up, 1 the one that takes it. The declaration's ORDER and never "the
+   core cannot reach it": with a barrier upstream that names both sides of a
+   generator, so the tubes read as a shell. */
+const onStage=(pid,face,k)=>{ const p=partOf(pid), IN=p && roleIns(p)[k];
+  return !!IN && (IN.a===face || IN.b===face); };
+/* WHICH CIRCUIT ONE STREAM OF A TRANSFER STAGE IS ON. A generator has nodes on
+   two of them, so "the circuit this machine is on" has no answer - a STREAM's
+   does. `k` indexes ROLE.internal and the order is the declaration: 0 is the
+   stream that gives the heat up, 1 the stream that takes it. -1 when nothing
+   is piped to it, which reads as water and is what an unplumbed shell always
+   was.
+   BY INDEX, NEVER BY "the core cannot reach it": with an intermediate stage in
+   front, NEITHER of a generator's sides is the core's own water, and the walk
+   handed the shell's readings to the tubes. */
+const stageCirc=(pid,k)=>{ const p=partOf(pid), IN=p && roleIns(p)[k];
+  if(!IN) return -1;
+  const c=nodeGraph().circuit[pid+IN.a];
+  return c===undefined ? -1 : c; };
+const shellCirc=pid=>stageCirc(pid,1);
 /* AND WHICH CIRCUIT ITS NEAR SIDE IS ON - the same walk, the other answer, so
    the two cannot disagree about which side of one machine's tube wall they are
    naming. It is how a sink is charged to a vessel: a generator belongs to the
    core it can reach, which is a fact about the drawing and not about a name.
    On two units it is the whole difference between two heat balances; on one it
    is the only circuit there is. */
-const sgPrimCirc=pid=>stageCirc(pid,true);
+const sgPrimCirc=pid=>stageCirc(pid,0);
 // on the graph (graphSlot()): feedHeadMax() asks this of every pump per run per tick
 function secGensOf(pid){
   const slot=graphSlot("secGensOf"), was=slot.get(pid); if(was) return was;
@@ -1332,10 +1344,8 @@ function secGensOf(pid){
 const shellFaces=()=>{
   const slot=graphSlot("shellFaces"), was=slot.get(1); if(was) return was;
   const out=[];
-  for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R||!R.sgtr||!R.internal) continue;
-    for(const IN of (Array.isArray(R.internal)?R.internal:[R.internal]))
-      if(secondaryNode(p.id+IN.a) && secondaryNode(p.id+IN.b))
-        out.push({id:p.id, feed:IN.a, steam:IN.b}); }
+  for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R||!R.sgtr) continue;
+    const IN=roleIns(p)[1]; if(IN) out.push({id:p.id, feed:IN.a, steam:IN.b}); }
   slot.set(1,out);
   return out; };
 /* WHAT IS IN THIS MACHINE'S OWN STEAM CIRCUIT - is there a machine to take the
@@ -1437,12 +1447,9 @@ const ihxCount=()=>ihxIds().length;
    suggestion, so an exchanger's mass and its heat capacity both moved when the
    core did. */
 const IHX_T_PER_UA   = 8.0e-4;         // t per kW/K - vessel, tubes, intermediate loop
-const IHX_HOLD_PER_UA= 7.6e-4;         // t of intermediate coolant per kW/K
 /* ══ EVERY EXCHANGER PRICES ITS OWN TRANSFER COEFFICIENT ══
-   IHX_UA=2.5 is gone. It existed so a second stage had SOME anchor when it
-   had none of its own; an exchanger states its UA in kW/K now, and the 2.5 is
-   what the bench SUGGESTS - a second stage worth two and a half times the
-   generator in front of it - which is a recommendation and not a law. */
+   An exchanger states its UA in kW/K, and 2.5 times the generator behind it is
+   what the bench SUGGESTS - a recommendation and not a law. */
 /* EQUAL MACHINES ON EQUAL SLOTS. Sizing each generator to its own loop's
    flow has been tried and is WRONG: more tubes on the busy loop move more
    heat into that shell, and a shell's pressure is its own pot, so it widened
@@ -1654,14 +1661,13 @@ const totalRadMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="radiator") m+=partMassOf(p.id);
   return m; };
 
-/* WHICH EXCHANGER STANDS IN FRONT OF THIS GENERATOR, and which generators one
-   exchanger feeds. Both are the LOOP, asked of loopMap() and never of a name.
-   No exchanger and the generator is heated by the core's own coolant, which is
-   every plant that did not buy one. */
-const ihxOf=sgId=>{ const L=loopOf(sgId); if(L===null) return null;
-  const p=LAY.parts.find(q=>q.role==="ihx" && loopOf(q.id)===L); return p?p.id:null; };
-const ihxSgs=id=>{ const L=loopOf(id); return L===null ? []
-  : LAY.parts.filter(q=>q.role==="sg" && loopOf(q.id)===L).map(q=>q.id); };
+/* WHAT ONE EXCHANGER FEEDS: every transfer stage whose HOT side stands on this
+   one's own second circuit. A CIRCUIT and never a loop id, and a stage and
+   never a generator - stages in series are circuits in series, so three
+   exchangers in a row need nothing here to know that chaining exists. */
+const ihxFeeds=id=>{ const ci=stageCirc(id,1); if(ci<0) return [];
+  return LAY.parts.filter(q=>q.id!==id && ROLE[q.role] && ROLE[q.role].thermal==="transfer"
+    && stageCirc(q.id,0)===ci).map(q=>q.id); };
 // a run's key is "kind:aIdFace-bIdFace" (or "kind:aIdFace" for a tap, which
 // has no loop identity of its own - stripped by the missing '-'). Off the
 // SAME graph loopOf() reads, never a regex on the kind prefix or on "sg"/
@@ -2245,18 +2251,16 @@ const ROLE = {
      even though the conductance between them is. */
   sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", vap:"b", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer", tsurv:800, pburst:200},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
-  /* A SECOND TRANSFER STAGE, and ONE internal path - the primary one. What an
-     intermediate exchanger moves heat INTO is a pot with a temperature
-     (s.ihxTBy, step.js), not a hydraulic circuit: the same standing the steam
-     side already has, where the runs carry a thermal rate and no solved
-     pressure drop. Every generator on its own loop takes its hot-side
-     temperature from that pot instead of from Tavg.
-     ONE internal path and FOUR faces, folded the way a valve body is: t onto l
-     and b onto r, so the exchanger plumbs vertically or horizontally with no
-     rotation knob to get wrong. It is spliced into a leg, so both ends are the
-     same leg and neither is a nozzle of its own. */
-  ihx:   {internal:[{a:"l", b:"r", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}], fixed:null,
-          fold:{t:"l", b:"r"}, mu:0.60, sgtr:false,
+  /* A SECOND TRANSFER STAGE, and TWO internal paths that do not meet - the
+     same declaration ROLE.sg makes, because that is what an intermediate
+     exchanger IS. Primary in hot at l and out cold at r; the intermediate
+     stream in cold at t and out hot at b. The only crossing is the tube wall,
+     which is heat and not an edge, and what the second stream carries is a
+     real circuit with its own pump, fluid and pressure rather than a pot.
+     FOUR DISTINCT FACES, so there is no fold: an exchanger has a rotation to
+     get right the way a generator does. */
+  ihx:   {internal:[{a:"l", b:"r", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"t", b:"b", kind:"comp", K:3, na:"COLD", nb:"HOT", la:"INTER COLD LEG", lb:"INTER HOT LEG"}], fixed:null,
+          fold:null, mu:0.60, sgtr:false,
           ports:{l:2, r:2, t:2, b:2}, thermal:"transfer", tsurv:800, pburst:200},
   /* ONE PUMP, and ONE HEAD LAW (netBuild()). There is no feedwater pump role:
      what makes a pump a feedwater pump is where it is piped, and it develops
@@ -2404,7 +2408,7 @@ const MACHINE={
   pump:{role:"pump", w:0, h:0, col:"#57d38c", grp:"pump", name:"RCP", num:true,
     tip:"A coolant pump. What it is FOR is asked of the drawing: pipe it from a condenser to a generator's shell and the same machine is a feed pump. Keep it low and reachable - it is the component most likely to need a repair under fire."},
   ihx:{role:"ihx", w:3, h:4, col:"#9ec96f", grp:"sg", name:"HEAT EXCHANGER", num:true,
-    tip:"An intermediate heat exchanger. Splice it into a loop and the generators on that loop are heated by IT rather than by the core, so primary coolant never reaches the secondary. Two stages in series cost a temperature drop, and the exchanger is heavy."},
+    tip:"An intermediate heat exchanger. Hot side left to right, second side top to bottom, and the second side is a real circuit: give it a pump and an expansion tank and whatever stands on it is heated by THIS instead of by the core, so primary coolant never reaches the secondary. Two stages in series cost a temperature drop, and the exchanger is heavy."},
   turb:{role:"turb", w:9, h:7, col:"#f0a830", grp:"sec", name:"TURBINE", num:true,
     tip:"Draws the ship's load. It swallows its own share of steam and carries its own share of it - lose one of two and you lose half the output, not all of it. Select it to size the steam dump that absorbs a turbine trip."},
   cond:{role:"cond", w:9, h:5, col:"#5aa9d6", grp:"sec", name:"CONDENSER", num:true,
@@ -2430,7 +2434,7 @@ const OPTIP={
   rods:"The number is where the banks stand: 100% is fully inserted. Insert to cut power, withdraw to raise it, and expect T-avg to follow a few seconds later.",
   sg:"The number is water level in the shell as a percent. Low level bares the tubes and trips the plant; high level carries water into the steam line. Feedwater is what moves it.",
   pump:"The number is flow as a percent of what this pump is rated for. Zero here with the reactor hot is the emergency: heat is still being made and nothing is carrying it away.",
-  ihx:"The number is the exchanger's own temperature. It is the middle of two transfer stages, so heat entering the generators behind it is limited by this figure.",
+  ihx:"The number is the heat crossing this exchanger, in MWt. It is the middle of two transfer stages, so everything behind it is limited by this figure.",
   turb:"The number is electrical output in MWe. It follows the steam reaching it, so it falls when a generator loses level, a valve shuts or a line is cut.",
   cond:"The number is hotwell level as a percent - the water the feed pumps draw from. Empty it and the feed train cavitates, whatever the generators are asking for.",
   radiator:"The number is what this panel is shedding, in MW. It is the only way heat leaves the ship, so the sum across the panels is the ceiling on the power the plant can hold.",
@@ -2741,8 +2745,9 @@ function partAt(pt){
    port flips within its own: tubes to tubes, shell to shell, never across.
    Which side of a generator a run is on stays a fact about the FACE, which
    is what runKindFor() already reads to tell a cold leg from a feed line. */
-const roleIns=p=>{ const R=ROLE[p.role]; if(!R||!R.internal) return [];
-  return Array.isArray(R.internal)?R.internal:[R.internal]; };
+const roleIntern=R=>!R||!R.internal ? []
+  : (Array.isArray(R.internal) ? R.internal : [R.internal]);
+const roleIns=p=>roleIntern(ROLE[p.role]);
 function portPath(p,f){
   if(!p||f==null) return null;
   /* MATCHED ON THE NODE, never on the face letter. ROLE.radiator folds t onto
@@ -2914,7 +2919,9 @@ function runKindFor(aId,bId,af,bf){
   if((A.role==="sg") !== (B.role==="sg")){
     const g = A.role==="sg" ? A : B, f = A.role==="sg" ? af : bf,
           o = A.role==="sg" ? B : A;
-    if(f!=null && !nodeGraph().inCore(g.id+f))
+    // the SHELL, asked of the declaration's own order - "the core cannot reach
+    // it" names both sides of a generator standing behind an exchanger
+    if(f!=null && onStage(g.id, f, 1))
       return (o.role==="pump" || o.role==="tank") ? "feed" : "steam";
   }
   /* A TANK'S LINE IS NAMED BY WHAT IT REACHES, not by which tank it is - there
@@ -3353,10 +3360,11 @@ function layoutMeasure(){
      whether anything is fitted to take it is a design question and belongs on
      the bench. Off the drawing, like every other warning here. */
   const sgNoRelief = P_.filter(p=>p.role==="sg" && !reliefsOnShell(p.id)).map(p=>p.id);
-  /* AN EXCHANGER ON NO LOOP HEATS NOTHING. It is spliced into a loop or it is
-     a box: with no generator behind it there is nothing for its pot to feed,
-     and with no loop at all it is not even in the primary. */
-  const ihxIdle   = P_.filter(p=>p.role==="ihx" && !ihxSgs(p.id).length).map(p=>p.id);
+  /* AN EXCHANGER WITH ITS SECOND STREAM UNPLUMBED HEATS NOTHING. Both sides
+     are real circuits, so the question is whether any stage at all stands on
+     the far one: with nothing behind it the box is a length of pipe carrying
+     a mass. */
+  const ihxIdle   = P_.filter(p=>p.role==="ihx" && !ihxFeeds(p.id).length).map(p=>p.id);
   /* A PUMP WITH NOTHING ON ITS DISCHARGE. Direction is the casing now, so
      this is a question about the drawing and not about what the pump is for:
      whatever the b face folds onto (fold, ROLE.pump) is where the water
