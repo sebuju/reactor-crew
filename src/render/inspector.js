@@ -455,11 +455,11 @@ function paramsFor(p){
          raw:()=>D.ihxUA[id], clr:()=>{ delete D.ihxUA[id]; }},
         "kW/K",0,()=>ihxUASuggest(),v=>v*IHX_T_PER_UA);
     SEC();
-    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const served=ihxSgs(id); return [
-      ["FEEDS",served.length?nameList(served):"nothing",null,"Which generators this exchanger heats. It is whatever is on the loop you spliced it into - splice it in with a hot leg and a cold leg, exactly like a generator."],
-      ["EXCHANGER MASS",(ihxUAOf(id)*IHX_T_PER_UA).toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
-    help("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats the generators on its loop, so a tube rupture in one of those generators leaks THIS loop's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
-    help("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const served=ihxFeeds(id); return [
+      ["FEEDS",served.length?nameList(served):"nothing",null,"Which stages stand on this exchanger's second circuit. Traced off the drawing - give the second side a pump, a tank and its own runs, exactly like the primary."],
+      ["EXCHANGER MASS",(ihxUAOf(id)*IHX_T_PER_UA).toFixed(0)+" t",null,"The vessel and the tubes. It is the whole price of the second stage, and it is heavy."]]; }});
+    help("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats whatever stands on its second circuit, so a tube rupture in one of those generators leaks THAT circuit's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
+    help("Four faces and no fold: hot side left to right, second side top to bottom. The second side is a real circuit and needs its own pump and its own expansion tank, or nothing crosses.");
   }
   else if(roleHead(p.role)){
     GRID(1); SEC("PUMP");
