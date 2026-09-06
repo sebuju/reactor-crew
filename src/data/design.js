@@ -580,7 +580,10 @@ function coreFig(c){
      the arrow runs the other way now (latRating(), lattice.js). */
   const dens=M.vol>1e-9? c.power/M.vol : 0;
   const coreMass=M.vol*22*(0.8+0.2*c.hd);
-  const vesselMass=vesselShellMass(P0,a);
+  // a tube core's boundary is the channel: its rating is the tube's, its mass every tube plus the shield over the cavity
+  const vesselMass=c.tube ? tubeMass(P0,a,c)+shieldT(c) : vesselShellMass(P0,a,c),
+        vesselRated=c.tube ? tubeRating(P0,a,c) : vesselRating(P0,a,c),
+        vesselBurst=vesselRated*PIPE_BURST_K;
   /* latMass() replaces two table entries that used to stand in for drawn
      things: the reflector's flat catalogue figure, and a rod-worth surcharge
      that priced a number rather than the clusters that made it. Both are now
@@ -695,7 +698,7 @@ function coreFig(c){
   return {a,f,rf,dens,mass,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,
     boronOp,sdm,sdmB,leak,xePit,xeWin,power:c.power,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
-    beta:f.beta,scram:SCRAM[c.scram].rate,P0,
+    beta:f.beta,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,
     warn:(()=>{const w=[];
       if(sdmB<200) w.push(["RED","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
       else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin.","rods"]);
