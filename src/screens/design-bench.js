@@ -381,7 +381,7 @@ function designIssues(d,M){
 function designBlocked(d,M){ return designIssues(d,M).some(warnHard); }
 function warnFor(id){
   const p=partOf(id);
-  if(p && !p.access) return C.red;
+  if(p && !partAccess(p)) return C.red;
   const w=designIssues(null,PLANT_LM).filter(q=>q[2]===id);
   if(!w.length) return null;
   return w.some(warnRed)?C.red:C.amber;
@@ -520,8 +520,8 @@ const LATPEN={plan:"fuel",sec:"len",bank:0,hover:null,last:null};
    a mark on the drawing, not a value the panel could state anywhere else. */
 const LATREADOUT={};
 const latReadSet=(pen,cid,rows)=>{ LATREADOUT[pen+":"+cid]=rows; };
-function latReadSync(){
-  for(const el of document.querySelectorAll("#scr-design .db-latread")){
+function latReadSync(root){
+  for(const el of (root||document).querySelectorAll(".db-latread")){
     const rows=LATREADOUT[el.dataset.pen+":"+el.dataset.core];
     if(rows) fieldRowsSync(el,rows);
   }
@@ -1096,13 +1096,13 @@ function paramBlockMk(block){
       box.dataset.core=block.core; box.dataset.pen=block.pen;
       return {el:box,sync(){}};
     }
-    // the controller's automation: the picture and its editor, synced by ctlGraphTick() from dbSync()
+    // the controller's automation: the picture and its editor, synced by ctlGraphTick() from dbHostPaint()
     case "ctlgraph": { const g=ctlGraphMk(!!block.live); return {el:g.el,sync(){ g.sync(); }}; }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas"); cv2.dataset.core=block.core;
       KIT.tip(cv2,"FUEL LATTICE / PLAN",LATPLAN_TIP);
       hostForward(cv2);
-      return {el:cv2,sync(){}};   // painted by dbSync() via hostPaint(), not here
+      return {el:cv2,sync(){}};   // painted by dbHostPaint() via hostPaint(), not here
     }
     case "latsection": {
       const cv2=KIT.el("canvas","db-latsection-canvas"); cv2.dataset.core=block.core;
@@ -1241,10 +1241,10 @@ function pipeRailSync(body,wellEl){
        because railBlank asks before any sync runs.
        railPickId is the same flag a panel's own title bar sets: a pick made IN
        the rail must not scroll the rail out from under the hand that made it. */
-    row.addEventListener("click",()=>{
+    MOUSE.on(row,{click(){
       sel=r[5]; railPickId=r[5];
       if(wellEl) wellEl._pickId=r[5];
-      uiDirty(); });
+      uiDirty(); }});
     KIT.tip(row,r[0],"Click to select this run. Its bore and its wall are at the foot of this panel, and it lights up on the drawing.");
   }
   const warn=t=>{ const row=KIT.el("div","db-review-row warn");
@@ -1367,8 +1367,9 @@ function dbBuild(){
   const vitals=KIT.el("div","db-vitals");
   root.append(head,vitals,rail);
   const mhost=marginHost(root);
+  const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,rail,vitals,mhost,state:null,watch:null};
+  return {root,head,rail,vitals,mhost,ihost,state:null,watch:null};
 }
 function dbSync(){
   if(!DB) return;
@@ -1379,13 +1380,29 @@ function dbSync(){
     dbPanelSig=null;                // new DOM, so the old signature says nothing about it
   }
   dbRailSync(DB.state);
+  dbHostPaint();
+  ctlGraphTick();
+}
+/* ══ A LATTICE CANVAS PAINTS, AND ITS FIGURES LAND IN THE SAME PASS ══
+   `root` is the box to walk, and it is the whole of why this takes one: the
+   every-frame call below walks the screen, which is right for the hover, and a
+   panel BUILT this frame is not on it yet - marginSync() and inspSync() run at
+   the foot of the frame, so their readout elements were born after this had
+   already gone past and came up blank until the next one.
+   IT MAY NOT MOVE TO THE FOOT OF THE FRAME TO FIX THAT. Rows added after
+   marginPlace() has measured a panel change its height behind the measurement,
+   and every panel on the board then steps the following frame. A panel fills
+   its own readout while it is being built instead - see panPartSync()
+   (ui/margin.js) - and this stays where it is. */
+function dbHostPaint(root){
+  if(!DB) return;
+  root = root || document.getElementById("scr-design") || document;
   /* the fuel lattice plan is genuinely graphical and stays canvas - but its own
      canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */
-  document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latPlan(coreBag(cv2.dataset.core),x,y,w,h)));
-  document.querySelectorAll("#scr-design .db-latsection-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latSection(coreBag(cv2.dataset.core),x,y,w,h)));
-  ctlGraphTick();
+  root.querySelectorAll(".db-latplan-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latPlan(coreBag(cv2.dataset.core),x,y,w,h)));
+  root.querySelectorAll(".db-latsection-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latSection(coreBag(cv2.dataset.core),x,y,w,h)));
   // AFTER both paints: they are what works the figures out - see latReadSet()
-  latReadSync();
+  latReadSync(root);
 }
 if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
 
@@ -1413,6 +1430,8 @@ function drawDesign(){
   zoomKeySync(DB&&DB.head);
   // AFTER drawPlant, because a panel is anchored against the view it just set
   marginSync(DB&&DB.mhost, false);
+  // AFTER the margin: both read panTick(), and the margin's call is what advances it
+  inspSync(DB&&DB.ihost, false);
   { const st=DB&&DB.state;
     const h = st && st.panels.find(o=>o.ids.includes(sel));
     if(h) leaderLine(h.well.el,DB.rail); }
