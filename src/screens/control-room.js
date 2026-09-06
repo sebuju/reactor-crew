@@ -74,7 +74,7 @@ function crUnitsSync(h){
         KIT.tip(b,r.lab, r.id
           ? "Read both balances off this reactor alone - its own reactivity terms, its own heat, and the generators standing on its loop, against its own rating."
           : "Read the heat balance across the whole plant. Reactivity has no plant-wide meaning, so it stays on the first reactor.");
-        b.addEventListener("click",()=>{ CRUNIT.id=r.id; });
+        MOUSE.on(b,{click(){ CRUNIT.id=r.id; }});
         h.root.appendChild(b); h.keys.push({b,id:r.id});
       }
     }
@@ -100,7 +100,7 @@ function crVitalsBuild(container){
     const val=KIT.el("span","cr-vital-val");
     row.append(plotDot,lab,barBox,val);
     container.appendChild(row);
-    row.addEventListener("click",()=>{ const d=crVitalsData()[i]; if(d.ch) togglePlot(d.ch); });
+    MOUSE.on(row,{click(){ const d=crVitalsData()[i]; if(d.ch) togglePlot(d.ch); }});
     rows.push({row,plotDot,lab,barBox,bar,val,signed:false});
   }
   return rows;
@@ -348,7 +348,7 @@ function crDamageSync(list){
     /* the card is reused by whatever part is at this slot next, so the handler
        reads its CURRENT part rather than closing over one */
     const h={el,name,state,dose,id:null};
-    el.addEventListener("click",()=>{ if(h.id) act("repair",h.id); });
+    MOUSE.on(el,{click(){ if(h.id) act("repair",h.id); }});
     return h;
   });
   /* the field is SOLVED ONCE for the whole card list, not once per card - the
@@ -359,7 +359,7 @@ function crDamageSync(list){
   ids.forEach((k,i)=>{
     const h=pool[i], part=dmgPart(k);
     h.id=k;
-    const nm=part?partName(part):k.toUpperCase(), blocked=!(part&&part.access);
+    const nm=part?partName(part):k.toUpperCase(), blocked=!(part&&partAccess(part));
     const busy=S.repair&&S.repair.id===k;
     if(h.name.textContent!==nm) h.name.textContent=nm;
     h.el.classList.toggle("blocked",blocked);
@@ -692,7 +692,7 @@ function crCautBuild(container){
      elements and rebuilds them whenever the list changes, so a handler bound to
      a row would be thrown away with it. The keys are held in build order. */
   const h={head,body,ann:crAlarmsBuild(ann),clr:clr.el,offer:null,keys:[],state:null};
-  body.addEventListener("click",e=>{
+  MOUSE.on(body,{click(e){
     const el=e.target.closest && e.target.closest(".insp-row"); if(!el) return;
     const k=h.keys[Array.prototype.indexOf.call(body.children,el)], c=k&&CAUT.get(k);
     if(!c) return;
@@ -701,7 +701,7 @@ function crCautBuild(container){
        group it is in and scrolls to it - the same as clicking it on the plant,
        which is what a caution list is for. Answered ones clear, as before. */
     if(c.live) sel=c.id; else CAUT.delete(k);
-  });
+  }});
   return h;
 }
 function crCautSync(h){
@@ -850,8 +850,9 @@ function crBuild(){
   if(!MARGIN_ONLY) rail.appendChild(compRail);
 
   const mhost=marginHost(root);
+  const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,vitalRows,units,viz,banner,rail,mhost,
+  return {root,head,vitalRows,units,viz,banner,rail,mhost,ihost,
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
@@ -965,6 +966,8 @@ function drawOperate(){
   zoomKeySync(CR&&CR.head);
   // AFTER drawPlant, because a panel is anchored against the view it just set
   marginSync(CR&&CR.mhost, true);
+  // AFTER the margin: both read panTick(), and the margin's call is what advances it
+  inspSync(CR&&CR.ihost, true);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }
 }
