@@ -407,3 +407,67 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-ctl .margin-port.kit-btn-danger{background:transparent;color:var(--c-red);font-weight:400}
 /* what the two lattice canvases used to letter along their own bottom edge */
 .db-latread{margin-top:2px}
+
+/* ── the controller's automation section (render/ctlgraph.js) ── */
+.ctlg{display:flex;flex-direction:column;gap:4px}
+/* the automation is a drawing, so it takes the whole width of a panel that
+   flows its other blocks in columns (marginCols) instead of one column of it */
+.margin-pan.cols .db-panel-body>.margin-ctlgraph,
+.margin-pan.cols .db-panel-body>.ctlg{column-span:all}
+/* the picture takes the whole width - every column it gets is a controller
+   that would otherwise be stacked - and the editor lies under it, its rows
+   flowed across rather than down so it stays a couple of rows deep */
+.ctlg-cols{display:flex;flex-direction:column;gap:8px}
+.ctlg-pic{position:relative;width:100%}
+.ctlg-side{display:flex;flex-direction:column;gap:4px}
+.ctlg-wires{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.ctlg-seam{stroke:var(--c-edge);stroke-width:1}
+.ctlg-wire polyline{fill:none;stroke:var(--c-cyan);stroke-width:1}
+.ctlg-wire .ctlg-head{fill:var(--c-cyan)}
+.ctlg-wire-lab{font-family:var(--mono);font-size:10px;text-anchor:middle;fill:var(--c-cyan);
+  stroke:var(--c-panel);stroke-width:3px;paint-order:stroke}
+.ctlg-wire.off polyline{stroke:var(--c-ink2)}
+.ctlg-wire.off .ctlg-head,.ctlg-wire.off .ctlg-wire-lab{fill:var(--c-ink2)}
+.ctlg-pic.dead .ctlg-wire:not(.off) polyline{stroke:var(--c-amber)}
+.ctlg-pic.dead .ctlg-wire:not(.off) .ctlg-head,
+.ctlg-pic.dead .ctlg-wire:not(.off) .ctlg-wire-lab{fill:var(--c-amber)}
+/* the top and bottom padding is the studs' room: a wire handle sits astride
+   each edge, and text running under one is text you cannot read */
+.ctlg-blk{position:absolute;display:flex;flex-direction:column;justify-content:center;
+  gap:1px;padding:7px 4px;box-sizing:border-box;overflow:hidden;cursor:pointer;font:inherit;text-align:center;
+  background:var(--c-mach-bg);border:1px solid var(--c-edge2);color:var(--c-bright)}
+.ctlg-blk-name{font-size:var(--t8);letter-spacing:.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctlg-blk-sub{font-size:var(--t7);color:var(--c-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctlg-blk-spec{font-size:var(--t7);color:var(--c-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctlg-blk-spec:empty{display:none}
+.ctlg-blk.m-source{border-color:var(--c-blue)}
+.ctlg-blk.m-sink{border-color:var(--c-green)}
+.ctlg-pic.dead .ctlg-blk{border-color:var(--c-amber)}
+.ctlg-blk.off{border-color:var(--c-edge);color:var(--c-ink2);text-decoration:line-through}
+.ctlg-blk.off .ctlg-blk-sub{color:var(--c-ink2)}
+.ctlg-blk:hover{border-color:var(--c-bright)}
+.ctlg-blk.sel{border-color:var(--c-cyan);background:var(--c-panel-hi);color:var(--c-bright)}
+/* the studs a wire is dragged by: out of the bottom of a block, into the top
+   of the block that reads it. Bigger than they look - the box is the hit. */
+.ctlg-stud{position:absolute;width:9px;height:9px;box-sizing:border-box;cursor:crosshair;
+  background:var(--c-panel);border:1px solid var(--c-edge2);z-index:2}
+.ctlg-stud.out{border-color:var(--c-cyan)}
+.ctlg-stud.in{border-radius:50%}
+.ctlg-stud.in.wired{background:var(--c-cyan);border-color:var(--c-cyan)}
+.ctlg-stud:hover{background:var(--c-bright);border-color:var(--c-bright)}
+.ctlg-pic.wiring .ctlg-blk{cursor:crosshair}
+.ctlg-rubber{fill:none;stroke:var(--c-amber);stroke-width:1.5;stroke-dasharray:4 3}
+.ctlg-row{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.ctlg-row>.kit-menukey{flex:1 1 auto;min-width:0}
+.ctlg-lab{font-size:var(--t8);color:var(--c-ink2);min-width:34px;letter-spacing:.5px}
+/* a signal's name is a sentence, and the key it stands on is one grid cell
+   wide: the key clips it rather than pushing the row out of the panel */
+.ctlg .kit-menukey{min-width:0;max-width:100%}
+.ctlg .kit-menukey-key{display:block;width:100%;box-sizing:border-box;text-align:left;
+  overflow:hidden;text-overflow:ellipsis}
+.ctlg .kit-menukey-menu{min-width:100%;max-width:520px;max-height:240px;overflow-y:auto}
+.ctlg .kit-numinput{flex:1 1 auto}
+.ctlg-ed{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:4px;align-content:start}
+.ctlg-ed>.kit-rule,.ctlg-hint{grid-column:1/-1}
+.ctlg-knobs{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.ctlg-hint{font-size:var(--t8);color:var(--c-ink2);line-height:1.4}

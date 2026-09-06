@@ -50,8 +50,17 @@ function marginInsetU(){
 
 function marginHost(root){
   const el=KIT.el("div","margin-host");
-  // the panels cover #cv, so the canvas never sees a wheel that starts on one
+  /* A BOX THAT CAN SCROLL KEEPS ITS OWN WHEEL. The panels cover #cv, so the
+     canvas never sees a wheel that starts on one - which also meant a long
+     menu inside a panel could not be scrolled: the wheel zoomed the plant
+     instead. Asked of the element under the hand, not of a list of classes. */
+  const scrolls=t=>{ for(let n=t; n&&n!==el; n=n.parentElement){
+    if(!n.scrollHeight) continue;
+    const ov=getComputedStyle(n).overflowY;
+    if((ov==="auto"||ov==="scroll") && n.scrollHeight>n.clientHeight+1) return true; }
+    return false; };
   el.addEventListener("wheel",e=>{
+    if(scrolls(e.target)) return;
     e.preventDefault();
     ctxClose();
     vWheel(local(e), e.deltaY);
@@ -62,6 +71,9 @@ function marginHost(root){
   let pan=null;
   el.addEventListener("pointerdown",e=>{
     if(e.button!==2 || e.shiftKey) return;
+    // a hosted canvas inside a panel started its own gesture on the way up here;
+    // capturing on the host steals the release and that drag never ends
+    if(e.target && e.target._uiHost) return;
     el.setPointerCapture(e.pointerId);
     ctxClose();
     const lp=local(e); pan={x:lp.x,y:lp.y};
@@ -380,15 +392,19 @@ const marginCellsOf=r=>({x:Math.round((r.x-GX)/CELL), y:Math.round((r.y-GY)/CELL
    whenever the drawing changes, so its identity plus the panel sizes is the
    whole of what a placement depends on. */
 let slotSig=null;
+// refilled, never rebuilt: a fresh array a frame is a garbage bill for nothing
+const seatBuf=[];
 function marginSlot(panels){
   let sig=GW+"x"+GH;
   for(const h of panels) sig += "|"+h.id+":"+h.w+","+h._hpx;
-  /* the PANEL LIST itself is part of the key: marginBuild() hands back a fresh
-     set of objects with no _slot on them, and a rebuild that happens to produce
-     the same ids and sizes would otherwise return early and drop every panel
-     back to the margin. */
-  if(slotSig && slotSig.lay===LAY && slotSig.sig===sig && slotSig.panels===panels) return;
-  slotSig={lay:LAY, sig, panels};
+  /* THE SEATS THEMSELVES ARE PART OF THE KEY, not the list's identity: marginBuild()
+     hands back a fresh set of objects with no _slot on them, and a rebuild that
+     happens to produce the same ids and sizes would otherwise return early and drop
+     every panel back to the margin. */
+  let hit = !!slotSig && slotSig.lay===LAY && slotSig.sig===sig;
+  if(hit) for(const h of panels) if(h._slot===undefined){ hit=false; break; }
+  if(hit) return;
+  slotSig={lay:LAY, sig};
   /* ══ ONE RULE: COVER NOTHING. TOUCHING IS FINE, AND IT IS THE POINT ══
      There was a clear-cell ring as well, so a panel could not sit against the
      machine it describes. Bolted straight onto the box the association needs no
@@ -661,7 +677,8 @@ function marginPlace(panels,host){
     const tf="translate3d("+x.toFixed(3)+"px,"+y.toFixed(3)+"px,0) scale("+k.toFixed(4)+")";
     if(h.tf!==tf){ h.well.el.style.transform=tf; h.tf=tf; }
   };
-  const board=[], seat=[];
+  const board=[], seat=seatBuf;
+  seat.length=0;
   for(const h of panels){
     h._mr=h.rect&&h.rect();
     if(h.corner){
@@ -904,19 +921,27 @@ function marginSync(host,live){
        can be two thousand pixels tall - one forced layout, mid-gesture, which
        is the hitch. The bench's content follows designSig() and nothing else,
        so it is synced on that alone, off screen or not. */
+    // the automation graph re-lays itself out at its own width (render/ctlgraph.js)
+    if(h.p.role==="ctrl" && h._ctlSeq!==CTLV.seq){ h._ctlSeq=CTLV.seq; h.needH=true; }
     if(live){
       if(!h.vis && h.tf!==null) continue;
       const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
       marginSkinSync(h);
       fieldRowsSync(h.body, readoutsFor(h.p,S));
-      // the reactor states two columns: its list is the longest on the plant and
-      // the height rule only reaches for a second column past MARGIN_TALL
-      h.body._cols = h.p.role==="core" ? 2 : 0;
+      /* THE PANELS THAT STATE THEIR OWN WIDTH: the reactor's list is the
+         longest on the plant, and the controller carries the automation graph,
+         which is a drawing and reads across, not down. The bench says the same
+         through B.cols (paramsFor), the door dbPanelSync() reads. */
+      h.body._cols = h.p.role==="core" ? 2 : h.p.role==="ctrl" ? MARGIN_COLS_MAX : 0;
       /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
          canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
          exactly as the rail does it (crRailSync). */
       const vz=h.body._viz;
       if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz,coreOf(h.p.id));
+      // the controller's cabinet: the automation graph and its editor, synced every frame (render/ctlgraph.js)
+      if(h.p.role==="ctrl"){ if(!h.ctlG) h.ctlG=KIT.el("div","margin-ctlgraph");
+        if(h.ctlG.parentNode!==h.body) h.body.appendChild(h.ctlG);
+        dbPanelSync(h.ctlG,CTLGRAPH_LIVE); }
     }else{
       if(!fresh) continue;
       const nm=partName(h.p), B=paramsFor(partOf(h.p.id)||h.p);

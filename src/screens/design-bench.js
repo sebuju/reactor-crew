@@ -1090,6 +1090,8 @@ function paramBlockMk(block){
       box.dataset.core=block.core; box.dataset.pen=block.pen;
       return {el:box,sync(){}};
     }
+    // the controller's automation: the picture and its editor, synced by ctlGraphTick() from dbSync()
+    case "ctlgraph": { const g=ctlGraphMk(!!block.live); return {el:g.el,sync(){ g.sync(); }}; }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas"); cv2.dataset.core=block.core;
       KIT.tip(cv2,"FUEL LATTICE / PLAN",LATPLAN_TIP);
@@ -1375,6 +1377,7 @@ function dbSync(){
      canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */
   document.querySelectorAll("#scr-design .db-latplan-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latPlan(coreBag(cv2.dataset.core),x,y,w,h)));
   document.querySelectorAll("#scr-design .db-latsection-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latSection(coreBag(cv2.dataset.core),x,y,w,h)));
+  ctlGraphTick();
   // AFTER both paints: they are what works the figures out - see latReadSet()
   latReadSync();
 }
