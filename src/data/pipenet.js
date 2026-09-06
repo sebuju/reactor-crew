@@ -580,7 +580,7 @@ function netFieldUpdate(net, s){
     mixState(sat[i], p, netHAt(s, nid), mx);
     F.p[i] = p; F.rho[i] = mx.rho; F.x[i] = mx.x; F.b[i] = mx.b;
     F.wet[i] = netNodeDry(net, s, i, mx.rho) ? 0 : 1;
-    F.mu[i] = mx.x > 0 ? sat[i].muV : sat[i].mu; }
+    F.mu[i] = muMixOf(sat[i], mx.x); }
   /* ══ AND CONTAINMENT NEVER FEEDS THE PLANT ══
      "A place water goes to and never comes back from" was true of the MASS
      field - containment is left out of it entirely, so it has no book and no
@@ -904,8 +904,30 @@ const mixState = (c,p,h,out) => { const Ts = satT(c,p), hf = c.cp*(Ts - H_DATUM)
   else { const rf = rhofOf(c,Ts);
     out.rho = 1/((1-x)/rf + x/rhogOf(c,Ts)); }
   return out; };
+/* ══ AND A BOILING CHANNEL IS NOT AS THIN AS THE STEAM IN IT ══
+   The homogeneous (McAdams) mixture viscosity, read at the node's own quality:
+   the density was already the mixture's, so this is the whole of the
+   homogeneous two-phase multiplier. It replaces a step (muV the moment x > 0)
+   that priced a 5 % quality hot leg as a dry steam line. Measured, it is worth
+   2e-4 in netFlowK on BWR/4 and nothing anywhere else - the friction factor is
+   a fifth root of the viscosity, so this is a correctness fix and NOT the
+   missing two-phase term. x=0 is mu_f and x=1 is mu_g exactly. */
+const muMixOf = (c, x) => { const mf = c.mu, mg = c.muV || c.mu;
+  return x <= 0 ? mf : x >= 1 ? mg : 1/(x/mg + (1-x)/mf); };
 const MIX_SCRATCH = {x:0, rho:0, b:0}, MIX_SCRATCH2 = {x:0, rho:0, b:0};
 const rhoMixOf = (c,p,h) => mixState(c,p,h,MIX_SCRATCH).rho;
+// entropy on mixState's own three branches, so the two cannot disagree; its pressure dependence is hfg/Ts at Ts(p), which is what an expansion is paid out of
+const mixS = (c,p,h) => { const Ts = satT(c,p), hf = c.cp*(Ts - H_DATUM),
+    hfg = Math.max(hfgOf(c,Ts), 1e-6);
+  if(h <= hf) return c.cp*Math.log(Math.max(Math.min(H_DATUM + h/c.cp, Ts), 1)/H_DATUM);
+  if(h >= hf + hfg) return c.cp*Math.log((Ts + (h - hf - hfg)/c.cp)/H_DATUM) + hfg/Ts;
+  return c.cp*Math.log(Ts/H_DATUM) + (h - hf)/Ts; };
+// kJ/kg a state can do expanding isentropically to p0: the Hicks-Menzies quantity the 1-3 % thermal-to-mechanical band is quoted against. Never per tick
+const expWorkOf = (c,p,h,p0) => { if(!(p > p0)) return 0;
+  const s1 = mixS(c,p,h); let lo = 0, hi = h;
+  for(let i=0;i<50;i++){ const mid = 0.5*(lo+hi);
+    if(mixS(c,p0,mid) < s1) lo = mid; else hi = mid; }
+  return Math.max(0, h - 0.5*(lo+hi)); };
 /* HOW MUCH HEAVIER A CUBIC METRE GETS PER MPa, at fixed enthalpy - the slope
    the store's diagonal is, taken off mixState() itself rather than off a
    parallel algebraic kappa. The two used to be written separately and the
@@ -1985,6 +2007,11 @@ function netQualAt(s, nid){
 function netRhoAt(s, nid){
   const c = netSatOf(nid);
   return rhoMixOf(c, netPAt(s,nid), netHAt(s,nid));
+}
+// kJ of mechanical work this node's own holdup can do letting down to containment - the same (p, h) every other reader takes, times the mass the node states
+function netWorkAt(s, nid){
+  const c = netSatOf(nid), m = (s.mBy && s.mBy[nid]) || 0;
+  return m > 0 ? m*expWorkOf(c, netPAt(s,nid), netHAt(s,nid), P ? P.Pcont : COND_P0) : 0;
 }
 
 /* Is this node a steam space? net2.vapour's structural answer, asked by node
