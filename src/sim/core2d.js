@@ -392,13 +392,13 @@ function corePredict(c,d){
 function coreView(L,id){
   const cs=L && L.coreBy && L.coreBy[id], K=P && P.cores && P.cores[id];
   if(cs && K) return {phi:cs.phi,nV:cs.nV,xX:cs.xX,nTf:cs.nTf,rodZ:cs.rodZ,
-    nDmg:cs.nDmg,nOx:cs.nOx,nMelt:cs.nMelt,
+    nDmg:cs.nDmg,nOx:cs.nOx,nMelt:cs.nMelt,nDisp:cs.nDisp,
     bankR:K.bankR,NB:K.NB,tipLen:K.tipLen,tipRho:K.tipRho,TfRef:K.TfRef,X0:K.X0,
     dia:K.coreDia,hgt:K.coreHgt,frac:K.frac,peak:{i:cs.hotRing,j:cs.hotLev},
     reflR:K.reflR,reflT:K.reflT,reflB:K.reflB,reflMat:K.reflMat};
   const T=corePredict(coreBag(id),derived(id));
   return {phi:T.phiCold,nV:null,xX:null,nTf:null,rodZ:null,
-    nDmg:null,nOx:null,nMelt:null,
+    nDmg:null,nOx:null,nMelt:null,nDisp:null,
     bankR:T.bankR,NB:T.NB,tipLen:T.tipLen,tipRho:T.tipRho,TfRef:0,X0:1,
     dia:T.coreDia,hgt:T.coreHgt,frac:T.frac,peak:nodePeak(T.phiCold),
     reflR:T.reflR,reflT:T.reflT,reflB:T.reflB,reflMat:T.reflMat};
@@ -483,11 +483,13 @@ function coreReset(K,cs,flowNet){
               cannot tell a uniformly thin node from a half-consumed one - as
               coarse as the mesh, the same limit cs.TfHot has.
        nMelt  fraction of the pellet melted, 0..1
+       nDisp  fraction of the pellet dispersed - come apart on a fast energy
+              deposition (DISP_H, step.js), clad intact or not
        nDnb   1 while the node is in film boiling - a REGIME is a state, and
               a wall past departure stays blanketed until it cools under the
               Leidenfrost point (dnbFilmK, step.js) */
   cs.nDmg=new Float64Array(XNN); cs.nOx=new Float64Array(XNN);
-  cs.nMelt=new Float64Array(XNN); cs.nDnb=new Float64Array(XNN);
+  cs.nMelt=new Float64Array(XNN); cs.nDisp=new Float64Array(XNN); cs.nDnb=new Float64Array(XNN);
   cs.chW =new Float64Array(XNR).fill(1);
   /* Every K.NB-sized allocation lives here, because a bench change to nbank
      re-runs coreConst() and then resetPlant() -> coreReset(), so sizes can
@@ -500,7 +502,7 @@ function coreReset(K,cs,flowNet){
   cs.hotFlow=1; cs.tipRho=0; cs.TfHot=K.TfRef;
   /* the aggregates the field hands back, and the readouts that go with them.
      cs.h2 is the only integral here; the rest are re-measured every tick. */
-  cs.h2=0; cs.meltFrac=0; cs.oxMax=0; cs.qOx=0; cs.TcladHot=K.Tref;
+  cs.h2=0; cs.meltFrac=0; cs.oxMax=0; cs.qOx=0; cs.fci=0; cs.TcladHot=K.Tref;
   cs.dnbrMin=K.dnbr0; cs.dnbrRing=0; cs.dnbrLev=0;
   for(let k=0;k<XNN;k++){
     cs.xI[k]=ioEq(K,K.n0); cs.xX[k]=K.X0;
@@ -597,7 +599,8 @@ function coreReset(K,cs,flowNet){
    stage is adding a row there and a branch here, and nothing else in the game
    branches on a stage id at all. */
 function fuelStage(cs,k){
-  if(cs.nMelt[k]>0) return 3;
+  if(cs.nMelt[k]>0) return 4;
+  if(cs.nDisp[k]>0) return 3;
   if(ecrOf(cs.nOx[k])>=OX_ECR_FAIL) return 2;
   if(cs.nDmg[k]>0) return 1;
   return 0;
@@ -696,7 +699,8 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
      the margins are STORED - a node margin field is a pure function of this
      tick, so it is resolved fresh and thrown away, exactly as the radiation
      field is. Only the integrals go on S. */
-  let dnbLo=1e30, dnbK=0, TclH=0, ecrH=0, h2=0, oxP=0;
+  let dnbLo=1e30, dnbK=0, TclH=0, ecrH=0, h2=0, oxP=0, fciE=0;
+  const disK=new Float64Array(XNN);
   const dhSub=cp*(sat-Tcold);
   /* ── node by node: heat it, boil it, poison it ── */
   for(let i=0;i<XNR;i++){
@@ -792,19 +796,43 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
       { const e=ecrOf(cs.nOx[k]); if(e>ecrH) ecrH=e; }
       oxP+=qOx*nodeW[k];
 
+      // fuel that has left the pin heats the water directly, which is where coreHeatKW already puts every watt
+      const qPin=qhat*pw*(1-cs.nDisp[k]);
       // at dt 0 the pellet's algebra is its own balance, so a commissioning pass seeds it at the film it will actually see
-      let Tn=dt>0 ? cs.nTf[k]+(qhat*pw+qOx-film*(cs.nTf[k]-cs.nTc[k]))*dt/xTauF(K)
-                  : cs.nTc[k]+(qhat*pw+qOx)/Math.max(film,1e-9);
+      let Tn=dt>0 ? cs.nTf[k]+(qPin+qOx-film*(cs.nTf[k]-cs.nTc[k]))*dt/xTauF(K)
+                  : cs.nTc[k]+(qPin+qOx)/Math.max(film,1e-9);
       /* ── MELT IS PAID FOR IN LATENT HEAT ──
          A node at tmelt absorbs power WITHOUT rising until its heat of fusion
          is bought, and then rises again, so the melt plateau falls out instead
          of being a rate. It cannot start before the clad has failed, which is
          physically true and is what makes cs.meltFrac <= cs.dmg/100 a theorem
          rather than a coincidence the melt latch relies on. */
-      if(Tn>K.tmelt && cs.nDmg[k]>=1 && cs.nMelt[k]<1){
-        const room=(1-cs.nMelt[k])*FUSE_DT, paid=Math.min(Tn-K.tmelt,room);
+      // only what is still a pellet can pool: fragments are the dispersed share and quench instead (below)
+      if(Tn>K.tmelt && cs.nDmg[k]>=1 && cs.nMelt[k]+cs.nDisp[k]<1){
+        const room=(1-cs.nMelt[k]-cs.nDisp[k])*FUSE_DT, paid=Math.min(Tn-K.tmelt,room);
         cs.nMelt[k]=Math.min(1,cs.nMelt[k]+paid/FUSE_DT);
         Tn=K.tmelt+(Tn-K.tmelt-paid);
+      }
+      /* ── OR IT HAS COME APART ──
+         A fast pulse fails the pin on ENERGY, not on temperature: past DISP_H
+         of pellet enthalpy the pellet expands into the clad and disperses,
+         whether or not the clad had time to balloon - so no clad gate here,
+         and the enthalpy is the one this balance already integrated, latent
+         heat included. Fragments have no clad, so nDmg follows. */
+      if(dt>0){
+        const hF=FUEL_CP*(Tn-T_STP)+cs.nMelt[k]*FUSE_KJ;
+        if(hF>DISP_H){ cs.nDisp[k]=Math.max(cs.nDisp[k],clamp((hF-DISP_H)/DISP_SPAN,0,1));
+          cs.nDmg[k]=Math.max(cs.nDmg[k],cs.nDisp[k]); }
+        /* ── FUEL-COOLANT INTERACTION ──
+           Fragments and melt standing in liquid water quench on their own
+           surface, through no film and no gap: the fuel drops toward the water
+           on FCI_TAU and every kilojoule it sheds lands in the vessel node
+           (o.fci, kW) - the pressure that follows is the node's own compliance
+           pricing the enthalpy, and nothing here invents one. */
+        const fr=Math.max(cs.nDisp[k],cs.nMelt[k])*(1-clamp(cs.nV[k],0,1));
+        if(fr>0 && Tn>cs.nTc[k]){
+          const dT=(Tn-cs.nTc[k])*Math.min(1,fr*FCI_ETA*(1-Math.exp(-dt/FCI_TAU)));
+          Tn-=dT; fciE+=dT*nodeW[k]; }
       }
       cs.nTf[k]=clamp(Tn,0,6000);
 
@@ -829,13 +857,19 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
       cs.xX[k]=Math.max(0,cs.xX[k]+(K.gX*fl+K.lamI*cs.xI[k]-K.lamX*cs.xX[k]
               -K.sig*fl*cs.xX[k])*dt);
 
-      cs.nRho[k]=clamp(K.aF*(cs.nTf[k]-K.TfRef),-6000,3000)
-               +clamp(K.aM*(cs.nTc[k]-K.Tref),-6000,2500)
-               +clamp(K.aX*(cs.nTf[k]-K.TfRef)+K.aS*(cs.nTc[k]-K.Tref),-6000,2500)
-               +K.aV*cs.nV[k]-K.KXE*cs.xX[k]
-               -K.rodA*cs.nCov[k]+K.tipRho*cs.nFol[k]
-               -K.poison*(K.poiG[i]-1)
-               -K.nPen[i]+K.enrRho[i];
+      const rI=clamp(K.aF*(cs.nTf[k]-K.TfRef),-6000,3000)
+              +clamp(K.aM*(cs.nTc[k]-K.Tref),-6000,2500)
+              +clamp(K.aX*(cs.nTf[k]-K.TfRef)+K.aS*(cs.nTc[k]-K.Tref),-6000,2500)
+              +K.aV*cs.nV[k]-K.KXE*cs.xX[k]
+              -K.rodA*cs.nCov[k]+K.tipRho*cs.nFol[k]
+              -K.poison*(K.poiG[i]-1)
+              -K.nPen[i]+K.enrRho[i];
+      /* DISASSEMBLY: fuel that has left the node multiplies nothing, so its
+         share of the node reads k = 0 (rho -1e5 pcm) and the rest reads what
+         the pin reads. Derived, not typed - it is what ended the chain
+         reaction at Chernobyl and at SL-1, and the field is where it happens. */
+      disK[k]=-cs.nDisp[k]*(1e5+rI);
+      cs.nRho[k]=rI+disK[k];
     }
   }
 
@@ -862,7 +896,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
   coreSolve(K,cs.phi,cs.nRho);
 
   /* ── what the rest of the sim gets back ── */
-  const o={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0};
+  const o={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0,dis:0};
   let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0,W2=0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
     const k=XIX(i,j), v=nodeW[k], w=v*cs.phi[k], w2=w*cs.phi[k];
@@ -878,6 +912,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
     o.xe +=w2*-K.KXE*cs.xX[k];
     o.rod+=w2*-K.rodA*cs.nCov[k];
     o.tip+=w2*K.tipRho*cs.nFol[k];
+    o.dis+=w2*disK[k];
     W2+=w2;
     X+=v*cs.xX[k]; I+=v*cs.xI[k]; V+=v*cs.nV[k]; Tf+=w*cs.nTf[k];
     if(cs.nTf[k]>TfH) TfH=cs.nTf[k];
@@ -905,6 +940,8 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
   for(let k=0;k<XNN;k++){ dm+=nodeW[k]*cs.nDmg[k]; mf+=nodeW[k]*cs.nMelt[k]; }
   cs.dmg=Math.min(100,100*dm); cs.meltFrac=mf;
   o.h2=h2; cs.oxMax=ecrH; cs.TcladHot=TclH;
+  // kelvin of node mean times the pin's own heat capacity (pinUA*tauF, kJ/K): kW the water took
+  o.fci=dt>0 ? fciE*xTauF(K)*K.pinUA/dt : 0;
   /* what the metal is making, as a share of rated - the one number that says
      whether this is corrosion or a runaway, and the comparison the event log
      puts it against is the chain reaction's own output */

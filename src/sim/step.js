@@ -40,7 +40,7 @@ function* commissionGen(){
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:holdDampK()*L.pzrK,
      dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
-     rps:D.rps, rpsm:D.rpsm, autorod:D.autorod, arLo:D.arLo, arHi:D.arHi, rodRate:rodSpdOf(priD()),
+     rps:D.rps, rpsm:D.rpsm, arLo:D.arLo, arHi:D.arHi, rodRate:rodSpdOf(priD()),
      /* IS THERE A VESSEL FOR THE FUEL TO BE IN. The lattice is drawn on its
         own surface, so D.power and every reactivity term above exist whether
         or not a reactor stands on the arrangement grid - see the kinetics
@@ -120,8 +120,8 @@ function* commissionGen(){
      (turbGate). Set forty lines lower, they were UNDEFINED there, so both C's
      came out NaN, flowG() read that as no edge at all, and the whole secondary
      component of the reference matrix solved to exactly zero - P.netRefKg for
-     every feed and steam run, and P.pumpQRef for every feed pump, was 0. It
-     read as a plant with no secondary rather than as an error. */
+     every feed and steam run was 0. It read as a plant with no secondary
+     rather than as an error. */
   P.steamRef = plantSteam();
   P.swallow  = totalTurbKgs();
   /* ── THE GOVERNOR VALVE, FITTED AT THE SAME ANCHOR ──
@@ -150,21 +150,8 @@ function* commissionGen(){
      valve the controller walks against the same solve. Only the secondary
      moves: a regulating head sits on a shell edge and the primary shares no
      node with it, so P.netRef - taken off the unregulated solve - is
-     untouched.
-     ══ AND EVERY PUMP ON ITS OWN CURVE ══
-     A head-flow curve (pumpCurve(), pipenet.js) makes a head depend on the
-     answer, so the two references close TOGETHER: a pump's swallow is read
-     off the REGULATED solve, because that is the plant that commissions, and
-     the valve is walked against the head that swallow leaves. Solved apart,
-     the feed pump was priced through a wide-open train at 46 times its rating,
-     came out with no head at all, and the plant commissioned with a dead feed
-     pump. kg/s needs P.netRef, which is why this cannot live inside the solve:
-     the conversion is what the solve is computing, so each pass converts on
-     its own answer. resetPlant() seeds s.pumpQBy from the result, so tick one
-     is the plant that was priced.
-     UNDER-RELAXED, because head falling with flow overshoots: a machine past
-     runout solves to no head, which solves to no flow, which restores full
-     head. Half a step a pass lands it. */
+     untouched. A pump's curve is its casing (pumpCasingC, pipenet.js), so
+     the reference solve's own relinearisation lands every pump on it. */
   let refOuts = {}, nomOuts = {};
   /* ══ WHAT THE LOOP CARRIES AGAINST WHAT THE CORE WAS DRAWN FOR ══
      P.wRated is the flow the core takes coreDT0() of rise at in its own
@@ -191,8 +178,6 @@ function* commissionGen(){
        real valve moving in real time and has no business in a design-time
        reference - walked at that rate this cost 1.6 s of commissioning. */
     const fedOf = (outs,id) => (outs.sgFeedBy && outs.sgFeedBy[id]) || 0;
-    P.pumpQRef = {}; P.pumpQNom = {};
-    for(const id of pumpIds()) P.pumpQRef[id] = P.pumpQNom[id] = pumpFlow(id);
     /* THE CIRCULATION REFERENCE IS THE NOMINAL PLANT, never the drawn one.
        Solved on the same arrangement piped at the bore every run and every
        fitting SHIPS at (withNomBore(), pipenet.js), so netFlowK() reads what
@@ -200,50 +185,32 @@ function* commissionGen(){
        1. Solved on P.net it was a figure divided by itself and the bore the
        designer set could not reach the physics at all - a cold leg taken from
        750 to 300 mm moved netFlowK by 2e-4.
-       ON ITS OWN PUMP DUTY, or the frame is not geometric: a pump sits on its
-       curve at the flow it develops, and reading that off the DRAWN plant let
-       narrow pipes push the reference itself up 23 %. pumpQNom converges on
-       the nominal net exactly the way pumpQRef converges on the drawn one.
        Per RUN the reference stays the drawn plant (P.netRefByRun, below) - a
        meter reads its own line against what that line actually carries. */
-    for(let pass=0;pass<20;pass++){
-      yield {frac:.04+.06*pass/20, stage:"CIRCULATION"};
-      P.netRefByRun = {};
-      const nomRun = {};
-      nomOuts = {}; P.netRef = netCoreFrac0(P.netNom, P.netRefByLoop, nomRun, {pumpQBy:P.pumpQNom}, nomOuts);
-      refPower();
-      netCoreFrac0(P.net, null, P.netRefByRun, {pumpQBy:P.pumpQRef});
-      const freg = {}, prev = {}, fedPrev = {};
-      for(const id of sgIds()){ freg[id] = 0; prev[id] = 1; }
-      { const o = {}; netCoreFrac0(P.net, null, null, {fregBy:prev, pumpQBy:P.pumpQRef}, o);
-        for(const id of sgIds()) fedPrev[id] = fedOf(o,id); }
-      for(let i=0;i<30;i++){
-        const o = {}; netCoreFrac0(P.net, null, null, {fregBy:freg, pumpQBy:P.pumpQRef}, o);
-        let worst = 0;
-        for(const id of sgIds()){
-          const fed = fedOf(o,id), slope = (fed - fedPrev[id])/((freg[id]-prev[id])||1e-9);
-          worst = Math.max(worst, Math.abs(fed-want)/Math.max(want, FREG_SPAN));
-          prev[id] = freg[id]; fedPrev[id] = fed;
-          freg[id] = clamp(freg[id] + (Math.abs(slope)>1e-9 ? (want-fed)/slope : 0), 0, 1);
-        }
-        if(worst < 1e-4) break;
+    yield {frac:.05, stage:"CIRCULATION"};
+    P.netRefByRun = {};
+    nomOuts = {}; P.netRef = netCoreFrac0(P.netNom, P.netRefByLoop, {}, {}, nomOuts);
+    refPower();
+    netCoreFrac0(P.net, null, P.netRefByRun, {});
+    const freg = {}, prev = {}, fedPrev = {};
+    for(const id of sgIds()){ freg[id] = 0; prev[id] = 1; }
+    { const o = {}; netCoreFrac0(P.net, null, null, {fregBy:prev}, o);
+      for(const id of sgIds()) fedPrev[id] = fedOf(o,id); }
+    for(let i=0;i<30;i++){
+      const o = {}; netCoreFrac0(P.net, null, null, {fregBy:freg}, o);
+      let worst = 0;
+      for(const id of sgIds()){
+        const fed = fedOf(o,id), slope = (fed - fedPrev[id])/((freg[id]-prev[id])||1e-9);
+        worst = Math.max(worst, Math.abs(fed-want)/Math.max(want, FREG_SPAN));
+        prev[id] = freg[id]; fedPrev[id] = fed;
+        freg[id] = clamp(freg[id] + (Math.abs(slope)>1e-9 ? (want-fed)/slope : 0), 0, 1);
       }
-      P.netRefByRun = {};
-      refOuts = {};
-      netCoreFrac0(P.net, null, P.netRefByRun, {fregBy:prev, pumpQBy:P.pumpQRef}, refOuts);
-      P.fregRef = prev;
-      let moved = 0;
-      for(const id of pumpIds()){
-        const k = pumpEdgeKey(id); if(!k) continue;
-        const was = P.pumpQRef[id], now = Math.max(0, netKgs(P.netRefByRun[k]||0));
-        P.pumpQRef[id] = was + (now-was)*0.5;
-        moved = Math.max(moved, Math.abs(now-was)/Math.max(now, pumpFlow(id), 1e-9));
-        const wasN = P.pumpQNom[id], nowN = Math.max(0, netKgs(nomRun[k]||0));
-        P.pumpQNom[id] = wasN + (nowN-wasN)*0.5;
-        moved = Math.max(moved, Math.abs(nowN-wasN)/Math.max(nowN, pumpFlow(id), 1e-9));
-      }
-      if(moved < 1e-3) break;
-    } }
+      if(worst < 1e-4) break;
+    }
+    P.netRefByRun = {};
+    refOuts = {};
+    netCoreFrac0(P.net, null, P.netRefByRun, {fregBy:prev}, refOuts);
+    P.fregRef = prev; }
   /* The cooling circuit's own reference, off the same solve - what this
      plant's circulating water pumps push through its condenser as
      commissioned. 0 is a machine with nothing turning that water, and cwKOf()
@@ -269,7 +236,7 @@ function* commissionGen(){
      kg/s - five times the reactor's own hot leg. */
   const openOuts = {};
   { const o = {}; netCoreFrac0(P.net, null, o,
-      {refOpen:1, fregBy:P.fregRef, pumpQBy:P.pumpQRef}, openOuts);
+      {refOpen:1, fregBy:P.fregRef}, openOuts);
     for(const k in P.netRefByRun) if(!P.netRefByRun[k] && o[k]) P.netRefByRun[k] = o[k]; }
   /* ══ AND WHAT EVERY NODE PASSES, kg/s ══
      P.netRefByRun's own idiom asked of a NODE rather than of a run: half the
@@ -523,65 +490,10 @@ const AUTOSYS={
     fit:()=>autoCfg().rps,
     tip:"Reactor Protection System. Armed, it scrams the core on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core.",
     warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
-  rod:{part:()=>roleId("rods"),label:"AUTO ROD",ann:"ROD BYP",name:"AUTOMATIC ROD CONTROL",
-    fit:()=>autoCfg().autorod,
-    tip:"Walks the rods to hold average coolant temperature on programme, so it overrides the slider you just moved. It drives every bank that is on AUTO, and it may only work inside the travel band the rod drives were commissioned with - widen that band at the design bench and it has more authority and less shutdown margin. Bypass it and every bank goes exactly where you put it, and stays there.",
-    warn:"The rods now go where you put them and nothing walks them back. Coolant temperature is yours to hold."},
-  /* Not hosted on the pressurizer. The pressurizer has not owned a relief
-     valve since one became a fitting with a tap of its own - the stock
-     valve sits on a hot leg - so the pressurizer was carrying the bypass
-     for a system nothing on it was part of. The relief tank is a placed
-     part now (Stage 5a) and no longer answers "does a relief path exist" by
-     its own presence, so this reads reliefFitIds() (the fittings
-     themselves) instead: fit is not a flat true because with no relief
-     fitting placed there is no automatic relief to arm, and the switch draws
-     that as a dead "none" the way it already does for an RPS nobody
-     bought. */
-  /* part:null - this system has NO component host. Every relief valve now
-     carries its own arming switch on its own glyph (pipeFitMarks(), plant.js),
-     so a part-mounted row would be a second switch saying the same thing on a
-     one-valve plant and an ambiguous one on a three-valve plant. The row stays:
-     it still owns the label, the annunciator name, the warning and its AUTOEV
-     entry - one table per concept, and the concept still exists. Only its host
-     and its granularity moved. autoOn() must tolerate the null. */
-  porv:{part:null,label:"PORV AUTO",ann:"PORV BYP",name:"AUTOMATIC RELIEF",
-    fit:()=>reliefFitIds().length>0,
-    /* One lamp for "automatic relief is defeated anywhere", because that is
-       the question the watch reading the board is actually asking. */
-    lit:s=>reliefFitIds().length>0 && (s.byp.porv || reliefFitIds().some(fid=>s.porvByp[fid])),
-    tip:"Lifts each relief valve at its own setpoint, which is what stops a pressure transient reaching the vessel. Bypass it and nothing vents.",
-    warn:"The relief valve will not lift. An overpressure now ends at the vessel, not at the valve."},
   runback:{part:()=>roleId("turb"),label:"RUNBACK",ann:"NO RUNBACK",name:"TURBINE RUNBACK",
     fit:()=>true,
     tip:"Drops turbine load to 5% the instant the reactor trips, so the turbine cannot draw heat out of a shut-down core. Bypass it and load stays wherever you left it right through a scram.",
     warn:"A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop."},
-  /* THERE IS NO "EMERGENCY FEEDWATER" ROW HERE, and that is the point. It was
-     one named system mounted on the FEED PUMP - a switch on a component that
-     was not part of it - standing in for what is really a rule on a tank. A
-     tank carries its own arm switch on its own strip (s.tankByp, ACT.tankByp),
-     so two reserves can be armed independently and neither is hosted on
-     somebody else's box. Same move porv made when a relief valve became a
-     fitting; this finishes it. */
-  /* THE FEED CONTROLLER. Fitted when there is a pump on the grid that reaches
-     a generator's shell - asked of the drawing (secGensOf(), layout.js), so a
-     plant with no feedwater path honestly reads NOT FITTED rather than
-     offering a switch for a system nobody built. Mounted on the first such
-     pump, because that is the box the switch belongs on.
-     Bypassed, every regulating valve FREEZES where it stands; it does not
-     slam open, because a valve that lost its controller is a valve nobody is
-     moving. What is left is the pump's own demand, which is a real control
-     the operator has (ACT.pumpDem) - so this is manual feedwater, not no
-     feedwater. */
-  /* part:null - no COMPONENT host, the same choice porv makes and for the same
-     reason: this system is per-instance. There is one regulating valve per
-     generator, so hanging the master switch on one pump's 1x1 box would put a
-     plant-wide control on a machine that owns one part of it, and there is no
-     room on that box for a slider, a value and a switch at once. */
-  feed:{part:null,
-    label:"FEED CTRL",ann:"FEED BYP",name:"FEEDWATER CONTROL",
-    fit:()=>pumpIds().some(id=>secGensOf(id).length>0),
-    tip:"Holds each steam generator at its own level setpoint by throttling its feed regulating valve. Bypass it and the valves stop where they are - you feed by hand, on the pump's own demand.",
-    warn:"Feedwater is on manual. Every regulating valve is frozen where it stands and the generators will drift off setpoint."},
   bkp:{part:()=>roleId("bkp"),label:"BACKUP",ann:"BACKUP BYP",name:"BACKUP POWER",
     fit:()=>(P?P.backup:D.bkp)>0,
     tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
@@ -591,7 +503,7 @@ const AUTOKEYS = Object.keys(AUTOSYS);
 /* One event key and one title per system, built once. step() raises these
    thirty times a second and has no business concatenating them each time. */
 const AUTOEV = AUTOKEYS.map(k=>[k, "byp_"+k, AUTOSYS[k].name+" BYPASSED"]);
-const autoFit   = k => !!AUTOSYS[k].fit();
+const autoFit   = k => !!(AUTOSYS[k] && AUTOSYS[k].fit());
 const autoLive  = k => autoFit(k) && !S.byp[k];
 /* WHAT THE SWITCHBOARD IS ACTUALLY DELIVERING, as a share of normal: 1 with
    the grid up, the backup's own capacity in a blackout, 0 with no backup on
@@ -601,6 +513,7 @@ const autoLive  = k => autoFit(k) && !S.byp[k];
    blackout worse. Read ONCE, into every pump's own speed target below - a
    head that read it again was applying the blackout twice. */
 const supplyK = s => s.blackout ? ((!s.bkpLost && autoLive("bkp")) ? P.backup : 0) : 1;
+const burstPOf = (K,cs) => K.P0*(K.burstK - 0.0028*cs.fatigue);   // fatigue slope is a game figure, no source
 const autoState = k => !autoFit(k) ? "NOT FITTED" : S.byp[k] ? "BYPASSED" : "ARMED";
 /* which system, if any, is mounted on this component - the renderer asks this */
 // AUTOSYS[k].part may be null (a system hosted on a fitting, not a component),
@@ -749,8 +662,10 @@ const reliefAnyStuck = s => reliefFitIds().some(id=>
    split, or a latch/jam took the drives away entirely. The precedence is
    written once, here, because the controller, the renderer and the inspector
    all have to agree on it. */
-const bankAutoLive = (cs,b) => autoLive("rod") && !cs.scrammed && !cs.rodJam
-                          && (!cs.split || cs.bankAuto[b]);
+/* WHICH BANK ANSWERS A CONTROLLER: not tripped, not jammed, and split, on AUTO.
+   Whether a controller is LIVE is the caller's question - the built-in law asks
+   autoLive("rod"), a wired ROD DRIVE sink is live by being wired. */
+const bankAutoLive = (cs,b) => !cs.scrammed && !cs.rodJam && (!cs.split || cs.bankAuto[b]);
 
 /* A stop valve slams shut in well under a second, so a runback is the one
    place load moves without waiting for the governor: it writes both the
@@ -1638,11 +1553,32 @@ function reliefSet(fid){
   return {lift:   j.lift   || reliefLiftSuggest(fid),
           reseat: j.reseat || reliefReseatSuggest(fid)};
 }
-/* "is THIS valve allowed to lift by itself" - the one predicate the tick may
-   ask, exactly as autoLive(k) is the one predicate for a system bypass. The
-   master switch and the valve's own arm both defeat it; nothing reads
-   S.porvByp[fid] raw. */
-const porvLive = fid => autoLive("porv") && !S.porvByp[fid];
+/* ══ THE VALVE TAKES ONE ORDER ══ open or shut, from the built-in lift law and
+   from a player-wired RELIEF VALVE sink alike. Opening rolls the stick; a valve
+   that is stuck, or that somebody opened by hand (reliefAuto false), does not
+   shut on an order. Answers whether anything moved. */
+function reliefCmd(s,fid,open){
+  if(open){ if(s.reliefOpen[fid]) return false;
+    s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
+    s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
+    s.reliefArm[fid]=false;
+    if(reliefSecIds().includes(fid)) logE("warn",nameOf(fid)+" LIFTED",
+      "Shell pressure reached this valve's set point and it is passing steam to atmosphere. The water going with it does not come back.");
+    return true; }
+  if(!(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid])) return false;
+  s.reliefOpen[fid]=false; s.reliefAuto[fid]=false; return true;
+}
+/* A SPRING SAFETY LIFTS BY ITSELF. `spring` is a knob on the relief fitting: set,
+   the valve is a code safety - no power, no block, no arm - and the tick works
+   its own lift/reseat hysteresis here. Unset, it is a PORV and only a wired
+   RELIEF VALVE sink moves it. */
+const fitSpring = fid => { const f=P?P.fittings:D.fittings; return !!(f && f[fid] && f[fid].spring); };
+const springStep = (s,fid,pv) => { const set=reliefSet(fid);
+  if(pv > set.lift) reliefCmd(s,fid,true); else if(pv < set.reseat) reliefCmd(s,fid,false); };
+/* THE PRESSURE A RELIEF VALVE IS LOOKING AT, off the last solved field: its own
+   node on the primary, its shells on the secondary. SIGNAL.fitp reads it. */
+const reliefP = (s,fid) => { if(reliefSecIds().includes(fid)) return reliefAtP(s,fid);
+  const n = P && P.net ? reliefNodeOf(P.net,fid) : null; return n===null ? s.P : netPAt(s,n); };
 /* ══ A PUMP RUNS UP ON ITS MOTOR AND COASTS ON ITS ROTOR ══
    Up is a first-order walk at FLOW_TAU: the motor is a controlled drive.
    Down is not - a machine with no torque on it obeys J*dw/dt = -tau_hyd, and
@@ -1743,6 +1679,11 @@ const FEED_LVL_K=2.3;
    relative error's denominator so a generator asking for nothing does not
    divide by zero. */
 const FREG_STROKE=4, FREG_SPAN=10;
+/* WHAT THE LEVEL PROGRAMME ASKS THIS GENERATOR'S FEED TO CARRY, kg/s: the steam
+   it is sending away plus the level error through the programme's own gain.
+   One expression, read by the tick and by SIGNAL.sgwant. */
+const feedWant = (s,id) => Math.max(0, (s.steamBy[id]||0)
+      + (SGL_SET-sgLvl(s,id))/100*FEED_LVL_K*ratedSteam()/Math.max(1,sgCount()));
 /* Below this the tubes are uncovered and the generator stops being a heat sink.
    It was already the threshold the mimic's dry-out pulse and the LOW banner
    used; making removal read the same number is what closes the loop. */
@@ -1988,7 +1929,9 @@ function advectSrc(s){
   /* AND WHAT THE VESSEL GIVES THE ROOM. It was a term in the s.Tavg pot and
      nowhere else; with the mean read off the field it has to arrive at a
      NODE, or the loop heats the compartment for free again. */
-  for(const id of coreIds()){ add(coreFold(id), coreHeatKW(id)); add(coreFold(id), -skinQOf(s,id)); }
+  for(const id of coreIds()){ add(coreFold(id), coreHeatKW(id)); add(coreFold(id), -skinQOf(s,id));
+    // what fuel out of its pin handed the water last tick (coreStep's o.fci), the same one-tick lag heatBy has
+    add(coreFold(id), (s.coreBy && s.coreBy[id] && s.coreBy[id].fci) || 0); }
   for(const id of sgIds()){
     const q = HEATBAL.sgQBy[id] || 0;
     /* A GENERATOR IS A BARRIER, so the heat leaves the tube nodes and arrives
@@ -2697,8 +2640,6 @@ const SPILL_FULL=8.0;
 const CAV_SPAN=12;
 // how long vapour takes to fill a pump's inlet, and to clear out of it again
 const CAV_TAU=1.5;
-// how fast a pump's own curve follows what it is passing (s.pumpQBy)
-const PUMP_Q_TAU=1.0;
 /* MPa of pressure programme per K of Tavg PER MPa OF SETPOINT. It was written
    as 0.17*(P.P0/15.5), which is a bare PWR pressure standing as a reference
    nobody could see; folded into one coefficient it is a real per-unit figure
@@ -2930,8 +2871,8 @@ function marginNode(K,cs,heat,pw,rise,Tin,Tf,gShare,x,dhSub){
    walk: margin is lost, the film collapses, the clad climbs to the pellet, it
    balloons against its own fill gas and it bursts. The RATE is an outcome now.
 
-   Damage is three per-node fields (s.nDmg, s.nOx, s.nMelt - core2d.js), all
-   three monotonic integrals, and A STAGE IS DERIVED off them and never stored
+   Damage is four per-node fields (s.nDmg, s.nOx, s.nMelt, s.nDisp - core2d.js),
+   all monotonic integrals, and A STAGE IS DERIVED off them and never stored
    - the same rule runKindFor() and sgActive() keep. Monotonic buys three
    things at once: "permanent" is a property of the integrator rather than a
    Math.min bolted on, a restore lands exactly where the snapshot was, and the
@@ -2944,6 +2885,7 @@ const FAIL=[
  {k:"intact",lab:"INTACT",    col:()=>C.cyan},
  {k:"burst", lab:"CLAD BURST",col:()=>C.amber},
  {k:"oxid",  lab:"OXIDISED",  col:()=>C.red},
+ {k:"disp",  lab:"DISPERSED", col:()=>C.h2},
  {k:"molten",lab:"FUEL MELT", col:()=>C.bright},
 ];
 /* ── WHAT EACH STAGE PUTS PAST THE FUEL BOUNDARY ──
@@ -2957,9 +2899,12 @@ const FAIL=[
    0.004*100, so a core that is 100 % burst and 0 % molten releases at today's
    rate to the bit. The other two are the published RATIOS above it - the same
    split W-3 has, where the correlation gives the shape and a bought column
-   gives the level. */
-const REL_GAP=0.40, REL_OX=0.80, REL_MELT=2.40;
-const RELK={intact:0, burst:REL_GAP, oxid:REL_OX, molten:REL_MELT};
+   gives the level.
+   REL_DISP is a FIT between its two neighbours and says so: fragmented fuel
+   standing in water has lost its clad and its gap but not yet its volatiles
+   to a pool, and no published row for that case was found. */
+const REL_GAP=0.40, REL_OX=0.80, REL_DISP=1.60, REL_MELT=2.40;
+const RELK={intact:0, burst:REL_GAP, oxid:REL_OX, disp:REL_DISP, molten:REL_MELT};
 /* ── WHEN A ROD BURSTS ──
    Ballooning is a hoop stress question, not a temperature one: the rod is
    pressurised with helium at fabrication, that pressure rises with absolute
@@ -3061,10 +3006,30 @@ const ecrOf = ox => ox/ZR_PBR/ROD_CLAD;
    and then rises again. That is one accumulator, one fewer fitted rate, and
    the melt plateau comes free - the same move as "void is quality, s.vf is a
    MEASUREMENT". FUSE_DT is that latent heat expressed as the temperature rise
-   it displaces: UO2's 277 kJ/kg of fusion over its ~0.33 kJ/kg/K specific heat
-   at temperature, both real. A node cannot melt before its clad has failed,
-   which is physically true and makes s.meltFrac <= s.dmg/100 a THEOREM. */
-const FUSE_DT=840;
+   it displaces: UO2's 277 kJ/kg of fusion (FUSE_KJ) over its ~0.33 kJ/kg/K
+   specific heat at temperature (FUEL_CP), both real. A node cannot melt before
+   its clad has failed, which is physically true and makes
+   s.meltFrac <= s.dmg/100 a THEOREM. */
+const FUSE_KJ=277, FUEL_CP=0.33, FUSE_DT=FUSE_KJ/FUEL_CP, T_STP=298;
+/* ── DISPERSAL: THE PIN FAILS ON ENERGY ──
+   A pellet hit with too much energy too fast does not wait to melt: SPERT saw
+   prompt fuel dispersal above ~275 cal/g of radially averaged peak fuel
+   enthalpy, and Regulatory Guide 1.77 wrote 280 cal/g down as the limit
+   against fuel-coolant interaction. DISP_H is that figure in this file's
+   currency (kJ/kg from T_STP, on FUEL_CP with the latent heat ridden on
+   nMelt); DISP_SPAN is the transition width, the BURST_SPAN idiom, a fit.
+   One figure for every fuel row - the SPERT rods were UO2 and nothing here
+   pretends to know the metal's. */
+const DISP_CALG=280, DISP_H=DISP_CALG*4.184, DISP_SPAN=40;
+/* ── AND WHAT FRAGMENTS DO IN WATER ──
+   FCI_TAU is how fast fuel that has left its pin quenches against the water
+   round it, seconds - the interaction is milliseconds and the tick is 20 ms,
+   so this is the tick's own resolution and is stated as such. FCI_ETA is the
+   share of the fragmented fuel that actually meets water and quenches in that
+   time rather than falling away from it: a GAME FIGURE, no source, the order
+   the premixing fractions in melt-water experiments come to. Both live beside
+   the pin balance they act on (coreStep, core2d.js). */
+const FCI_TAU=0.01, FCI_ETA=0.2;
 /* CORE MELT latches on a quarter of the fuel volume actually molten. The 60 it
    replaces was 60 % of a scalar that meant clad failure, which is a different
    quantity - and because melt cannot outrun burst, this makes "dmg > 25 at
@@ -3100,6 +3065,9 @@ const coreDTRated = heat => coreDT0()*heat;
    Kept as the one door so a caller still says which it wants, a signed flow
    or a rate. */
 const netKgs = q => Math.abs(q);
+// what a pump's own casing edge carried in the reference solve, kg/s - the panel's scale for PASSING
+const pumpRefKgs = id => { const k = pumpEdgeKey(id);
+  return k && P.netRefByRun && P.netRefByRun[k] ? netKgs(P.netRefByRun[k]) : pumpFlow(id); };
 /* ══ THE INVENTORY LEDGER ══
    Every kilogram of water the plant holds, and every named way one leaves. A
    tick that does not close has lost or invented water, and the residual is the
@@ -3256,8 +3224,8 @@ const coreFlowNet = (K, id, outs, fallback) =>
 function coreState0(K, x0){
   return {n:0,C:null,I:0,X:K.X0,Tf:K.TfRef,dec:null,decay:0,heat:0,
     rodPos:x0,rodDem:x0,rodJam:false,rodBand:false,scrammed:false,trip:"",split:false,reGang:false,
-    tilt:0,tiltDem:0,arDE:0,breach:false,melt:false,fatigue:0,dmg:0,meltFrac:0,oxMax:0,qOx:0,h2:0,
-    fq:1,dnbr:K.dnbr0,vf:0,voidTh:0,rho:0,parts:{rod:0,dop:0,mod:0,exp:0,xe:0,bor:0,vd:0,tip:0},
+    tilt:0,tiltDem:0,breach:false,melt:false,fatigue:0,dmg:0,meltFrac:0,oxMax:0,qOx:0,fci:0,h2:0,
+    fq:1,dnbr:K.dnbr0,vf:0,voidTh:0,rho:0,parts:{rod:0,dop:0,mod:0,exp:0,xe:0,bor:0,vd:0,tip:0,dis:0},
     pCore:K.P0,coreDT:coreDT0(coreD(K.id))*K.n0,flowNet:1};
 }
 /* THE PLANT'S FIGURES, off every vessel's own: power and damage weighted by
@@ -3558,13 +3526,14 @@ function resetPlant(){
      /* per-valve arming, seeded for RELIEF fittings only - a throttle has no
         automatic behaviour to defeat, and a phantom key here is a
         phantom key in every snapshot taken from now on. */
-     porvByp:Object.fromEntries(reliefFitIds().map(k=>[k,!!startOf(k+":porvByp",false)])),
      dmg:0,fatigue:0,dnbr:P.dnbr0,rho:0,voidTh:0,cav:0,vf:0,fq:1,ao:0,ro:0,
      /* the groups start in equilibrium with commissioning power (seedPower(),
         below), or the plant would spend its first minutes breeding heat it
         should already have */
      dec:null, decay:0,
      byp:Object.fromEntries(AUTOKEYS.map(k=>[k,!!startOf("byp:"+k,false)])),
+     /* the live automation, one record per D.blocks row - see ctl.js. REFILLED. */
+     blkBy:blkSeed(),
      breach:false,melt:false,trip:"",
      /* Both LATCHED, and both about the same number: the turbine's stop valve
         once exhaust pressure got away from it, and the condenser once it went
@@ -3659,7 +3628,7 @@ function resetPlant(){
         a plant nobody has isolated anything on is bit-identical to one with no
         port valves at all (portOpen(), pipenet.js). */
      portShut:Object.fromEntries(Object.keys(D.ports).map(k=>[k,false])),
-     ...autorodTune(), arDE:0, arLo:P.arLo, arHi:P.arHi,
+     arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
         takes whatever the cell it is STANDING in reads, via s.repRate below.
@@ -3676,14 +3645,11 @@ function resetPlant(){
         annunciator and the panel want. A plain object, so snapVal() takes it
         for free. */
      cavP:Object.fromEntries(pumpIds().map(id=>[id,0])),
-     /* AND ONE FLOW PER PUMP, kg/s, for its own head-flow curve (pumpCurve(),
-        pipenet.js). Seeded off the REFERENCE's own converged answer, so tick
-        one develops the head the plant was commissioned on rather than a duty
-        head nothing on this drawing produces. */
-     pumpQBy:Object.fromEntries(pumpIds().map(id=>[id,(P.pumpQRef&&P.pumpQRef[id])??pumpFlow(id)])),
+     // what each pump is passing, kg/s, off its own casing edge: a reading (pumpQOf), seeded at the reference's answer
+     pumpQBy:Object.fromEntries(pumpIds().map(id=>[id,pumpRefKgs(id)])),
      dose:0, crewDose:0, doseRate:P.dose, repRate:0, partySpent:false,
      bkpLost:false, dLvl:0,
-     boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,exp:0,xe:0,bor:0,vd:0,tip:0},
+     boron:0,boron0:0,boronDem:0,parts:{rod:0,dop:0,mod:0,exp:0,xe:0,bor:0,vd:0,tip:0,dis:0},
      /* One flow integral per RUN, not per kind - see the pipe-animation block
         below. Seeded from P.net's own key set (every run pipeNetwork() would
         draw, hot/cold/steam/feed/exh/surge/hpi and one per branch fitting)
@@ -3985,6 +3951,12 @@ function resetPlant(){
      circuit is stage G's to dial apart. */
   { let o0=null, K0=null;
     coreEach(S,(cs,K,id)=>{ let o=null;
+      /* AT THE PRESSURE THE FIRST TICK WILL READ (pressRead, off the settled
+         field), not the vessel's nominal: BWR/4's node stands 0.31 MPa over
+         its P0, and the void that difference moves was worth 110 pcm the tick
+         after a boron dialled at 7.00 - a DNB latch on the centre node from a
+         standing start once aV read its real size. */
+      { const pf = S.pBy && S.pBy[coreFold(id)]; if(pf !== undefined && isFinite(pf) && pf > 0) cs.pCore = pf; }
       for(let i=0;i<5;i++){
         o=coreStep(K,cs,0,cs.heat,satT(K.sat,cs.pCore),0,K.flowK*cs.flowNet,Math.max(cs.flowNet,CORE_DT_QMIN),TavgOf(S,K.circ));
         for(let k=0;k<XNN;k++) cs.nV[k]=cs.nVt[k]; }
@@ -4198,8 +4170,46 @@ function resetPlant(){
   LOG=[]; initHist();
   if(typeof pipeReset==="function") pipeReset();
   if(typeof fxReset==="function") fxReset();
+  blkSeedOuts(S);
   logE("info","PLANT AT POWER",
     P.name+" commissioned at "+P.rated.toFixed(0)+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
+}
+/* ══ THE ROD DRIVE TAKES AN INCREMENT ══ one door for the built-in law and for
+   a player-wired ROD DRIVE sink (SINK.rodStep, ctl.js). It may not order more
+   rod than the drive can deliver in a tick - the velocity form's output is a
+   speed, and unbounded it wound the demand into the band end in one tick
+   (actuator windup, measured hunting 0.61-0.77 of rated for minutes).
+   The band is what stops the controller wandering off the position the
+   shutdown margin was measured from. It is not a safety limit and the operator
+   may open it all the way - but opening it does NOT free the bank, it gives
+   the controller more room to move it. The only two ways out from under this
+   controller are the bypass and per-bank MANUAL. lo/hi cannot invert, because
+   the two setters clamp against each other.
+   Split: the same error reaches every bank left on AUTO, deliberately NOT
+   divided among them - two banks in manual means the two still answering carry
+   the same error with less worth between them, so the loop genuinely gets
+   slower. Not while reganging: the banks are walking to a frozen target. */
+function rodApply(s,cs,K,step,dt){
+  const rodErr = clamp(step, -rodRate(K)*dt, rodRate(K)*dt);
+  const rodLo=clamp(s.arLo,0,1), rodHi=clamp(Math.max(s.arHi,s.arLo),0,1);
+  /* THE CONTROLLER OUT OF AUTHORITY. Set where the clamp actually bites, not
+     inferred from the position afterwards: a bank parked on the band edge with
+     T-avg on programme is obeying, and only a bank being pushed further into
+     the stop is a controller that cannot do its job. The half-kelvin gate is
+     what keeps it off during the ordinary hunt across the setpoint. */
+  cs.rodBand=false;
+  const pinned=(want,got)=>{
+    if(Math.abs(want-got)>1e-9 && Math.abs(TavgOf(s,K.circ)-tProg(s,K,cs))>0.5) cs.rodBand=true; };
+  if(!cs.split && bankAutoLive(cs,0)){                // ganged: one controller, one bank
+    const want=cs.rodDem+rodErr;
+    cs.rodDem=clamp(want, rodLo, rodHi);
+    pinned(want,cs.rodDem);
+  } else if(cs.split && !cs.reGang){
+    for(let b=0;b<K.NB;b++)
+      if(bankAutoLive(cs,b)){ const want=cs.rodZDem[b]+rodErr;
+        cs.rodZDem[b]=clamp(want, rodLo, rodHi);
+        pinned(want,cs.rodZDem[b]); }
+  }
 }
 function step(dt){
   const s=S; s.t+=dt; s.tick++;
@@ -4209,75 +4219,11 @@ function step(dt){
      plant, and ~85 readers ask for it - see nodeGraph(), layout.js. The hold is
      dropped on the last line of this function, so it never outlives the tick. */
   laySettle();
+  /* the player's automation reads last tick's solved plant and writes this tick's demands - see ctl.js */
+  ctlPass(s,dt);
 
-  /* ── control rods ──
-     T-avg error alone is two integrations away from rod position, so on a
-     weakly self-limiting core (small moderator coefficient) the bank hunts and
-     the swing grows until the RPS trips it. The rate term is the lead
-     compensation a real rod controller uses: it stops pushing once T-avg is
-     already moving the right way. Both the gain and the lead are the operator's
-     to get wrong. Note s.dTavg is last tick's rate - it is computed further down
-     - and that one-tick lag is part of the tune this was fitted with. */
-  /* ══ AND THE POWER MISMATCH, WHICH IS WHAT A REAL ROD CONTROLLER RUNS ON ══
-     A Westinghouse rod control system takes T-avg error AND the mismatch
-     between nuclear power and TURBINE power, and the mismatch is what stops
-     it: the reactor follows the machine drawing the steam. Without it this
-     controller was a pure integrator against a setpoint a plant might not be
-     able to reach, and it had no stop in it at all - WINDSCALE walked 0.13 of
-     rod over seventy seconds chasing 3 K it never got back, which on that core
-     is 250 pcm, and rode its own correction into the flux trip.
-     IN KELVIN, through the programme's own slope: TPROG_SPAN is what a full
-     load range is worth in T-avg, so it is the conversion the plant already
-     states rather than a second gain to tune.
-     ONE-SIDED, and that is the whole of it. It STOPS the bank going further
-     out once the core is already making more than the machine is taking; it
-     never pulls the bank out to chase a power the plant may not be able to
-     raise. Two-sided it holds T-avg a permanent 2 K off programme on any plant
-     whose loop cannot carry its own rating - which is every plant here - and
-     that is an offset nobody asked for. A plant below its turbine's draw is
-     bit-identical to one with no mismatch term at all. */
-  /* THE ERROR THIS CONTROLLER IS ON, in kelvin, and the two differences the
-     velocity form needs. s.dTavg is the plant's own answer for the first one;
-     what the law is driven on is that rate FILTERED (AUTOROD_N), and the second
-     difference falls out of the same filter step, which is why arDE is on S and
-     not recomputed from a temperature history nobody keeps. */
-  coreEach(s,(cs,K)=>{
-  const arE = clamp(TavgOf(s,K.circ)-tProg(s,K,cs) + TPROG_SPAN*Math.max(0, cs.n - unitFrac(s, turbShare(s))), -6, 6);
-  const arDE = cs.arDE + Math.min(dt/Math.max(s.arTd/AUTOROD_N, dt), 1)*(dTavgOf(s,K.circ) - cs.arDE);
-  /* ══ AND IT MAY NOT ORDER MORE ROD THAN THE DRIVE CAN DELIVER ══
-     The velocity form's output is a rod SPEED, and it was integrated into
-     cs.rodDem with no bound while the drive walks rodPos at rodRate(K). On a
-     turbine load step the law asks for 0.48 of rod per second against a drive
-     that does 0.012, so the demand hit the band end in a tick and stayed
-     there: actuator windup, and the bank hunted 0.61-0.77 of rated power for
-     minutes before it settled. Bounded at the drive's own travel, the demand
-     never leaves the actual and there is no wind-up state to unwind. */
-  const rodErr = clamp(Math.abs(arE) < AUTOROD_DB ? 0
-    : s.arKp*(arDE + arE/s.arTi + s.arTd*(arDE - cs.arDE)/Math.max(dt,1e-9))*dt,
-    -rodRate(K)*dt, rodRate(K)*dt);
-  cs.arDE = arDE;
-  /* The band is what stops the controller wandering off the position the
-     shutdown margin was measured from. It is not a safety limit and the operator
-     may open it all the way - but opening it does NOT free the bank, it gives
-     the controller more room to move it. The only two ways out from under this
-     controller are the bypass and per-bank MANUAL. lo/hi cannot invert, because
-     the two setters clamp against each other. */
-  const rodLo=clamp(s.arLo,0,1), rodHi=clamp(Math.max(s.arHi,s.arLo),0,1);
-
-  /* THE CONTROLLER OUT OF AUTHORITY. Set where the clamp actually bites, not
-     inferred from the position afterwards: a bank parked on the band edge with
-     T-avg on programme is obeying, and only a bank being pushed further into
-     the stop is a controller that cannot do its job. The half-kelvin gate is
-     what keeps it off during the ordinary hunt across the setpoint. */
-  cs.rodBand=false;
-  const pinned=(want,got)=>{
-    if(Math.abs(want-got)>1e-9 && Math.abs(TavgOf(s,K.circ)-tProg(s,K,cs))>0.5) cs.rodBand=true; };
-
-  if(!cs.split && bankAutoLive(cs,0)){                // ganged: one controller, one bank
-    const want=cs.rodDem+rodErr;
-    cs.rodDem=clamp(want, rodLo, rodHi);
-    pinned(want,cs.rodDem);
-  }
+  coreEach(s,(cs,K,id)=>{
+  if(!sinkDriver(s,"rodStep",id)) cs.rodBand=false;   // nobody is on the drive, so nobody is out of authority
 
   /* ── ganging the banks back together ──
      The banks are driven together, never teleported: rodBanks() would otherwise
@@ -4292,16 +4238,6 @@ function step(dt){
       if(Math.abs(cs.rodZ[b]-cs.rodZDem[b])>1e-6) done=false;
     }
     if(done){ cs.split=false; cs.reGang=false; }
-  } else if(cs.split){
-    /* Split: the same temperature error reaches every bank left on AUTO. It is
-       deliberately NOT divided among them - two banks in manual means the two
-       still answering carry the same error with less worth between them, so the
-       loop genuinely gets slower. That is the cost of taking banks off auto,
-       and it is emergent rather than charged. */
-    for(let b=0;b<K.NB;b++)
-      if(bankAutoLive(cs,b)){ const want=cs.rodZDem[b]+rodErr;
-        cs.rodZDem[b]=clamp(want, rodLo, rodHi);
-        pinned(want,cs.rodZDem[b]); }
   }
 
   /* A latched trip owns every bank, ganged or split, auto or manual. The slider
@@ -4622,23 +4558,14 @@ function step(dt){
       if(c>0.15) cavIds.push(id);
     }
     s.cav = worst; }
-  /* ── what each pump is actually passing, for its own head-flow curve ──
-     Off this tick's own solve, through the casing edge and no other: a pump
-     with a run on every face still has ONE swallow. Smoothed on the same
-     argument s.cavP is - a head that jumped with the flow it set would ring
-     tick to tick - and fed to next tick's solve. */
+  /* ── what each pump is actually passing, off this tick's own solve through
+     the casing edge and no other: a pump with a run on every face still has
+     ONE swallow. A reading (the panel's PASSING row), never a head. ── */
   { for(const id in s.pumpQBy) if(!partOf(id)) delete s.pumpQBy[id];
-    const kq = Math.min(dt/PUMP_Q_TAU, 1);
     for(const id of pumpIds()){
       const k = pumpEdgeKey(id); if(!k) continue;
-      /* SIGNED, and floored at 0: netKgs() is a magnitude, so a pump being
-         pushed backwards read as an enormous forward flow, took its own head
-         off, and let itself be pushed harder - the reverse latched and the
-         generators emptied into the condenser. */
       const q = runFlow[k] || 0;
-      const want = q > 0 ? netKgs(q) : 0;
-      if(s.pumpQBy[id]===undefined) s.pumpQBy[id]=want;
-      s.pumpQBy[id] += (want - s.pumpQBy[id])*kq; } }
+      s.pumpQBy[id] = q > 0 ? netKgs(q) : 0; } }
   /* ── coolant flow: pumps have inertia ──
      Losing power does not stop a pump dead, it coasts. Blackout is the same lag
      with a longer time constant, so the grace time the brief promises is real. */
@@ -4900,20 +4827,8 @@ function step(dt){
     let ventLoose = 0;
     for(const fid in s.reliefVent) delete s.reliefVent[fid];
     for(const fid of reliefPriIds()){
-      const set=reliefSet(fid);
       s.reliefVent[fid]=0;
-      /* AT THE VALVE, not plant-wide: a node name, resolved off the valve's
-         own edge, and pAt() falls back to s.P for a valve nothing routed -
-         which is the plant this test always described. */
-      const pv=(n=>n===null?s.P:pAt(n))(reliefNodeOf(P.net,fid));
-      if(!s.reliefOpen[fid] && porvLive(fid) && pv > set.lift){
-        s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
-        s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
-        s.reliefArm[fid]=false;
-      }
-      if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid] && pv < set.reseat){
-        s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
-      }
+      if(fitSpring(fid)) springStep(s,fid,(n=>n===null?s.P:pAt(n))(reliefNodeOf(P.net,fid)));
       if(!s.reliefOpen[fid] || s.reliefBlocked[fid]) continue;
       const rate = Math.max(0, invRate((netOut.reliefBy && netOut.reliefBy[fid]) || 0));
       const q = rate*dt;
@@ -5063,7 +4978,7 @@ function step(dt){
      pressure inside it, and hanging the pressurizer high genuinely puts the
      core above the gauge that reports it */
   coreEach(s,(cs,K)=>{
-    const burst = K.P0*(K.burstK - 0.0028*cs.fatigue);   // fatigue slope is a game figure, no source
+    const burst = burstPOf(K,cs);
     if(!cs.breach && cs.pCore > burst){ cs.breach=true; cs.trip="VESSEL RUPTURE"; } });
   /* invClamp IS GONE. It existed because a pool could be driven past its own
      ends; a node with a mass and a run-dry gate cannot be, so there is nothing
@@ -5091,6 +5006,7 @@ function step(dt){
     return Math.max(0, (1 - m/K.coreKg0)/Math.max(1 - satRvl(K.sat, cs.pCore), 1e-3)); })();
   // this tick's flux past the pin, and LAST tick's share for the rise, exactly as the plant figures were ordered
   const nod = coreStep(K,cs,dt,cs.heat,sat,vLeak,K.flowK*coreFN[id],Math.max(cs.flowNet,CORE_DT_QMIN),TavgOf(s,K.circ));
+  cs.fci = nod.fci;
   /* THE HYDROGEN THE CLAD MADE ARRIVES AT THE VESSEL'S OWN NODE, as a
      concentration in the water there, and rides the transport from then on;
      s.h2 is the sum over the primary (h2Total). */
@@ -5107,8 +5023,8 @@ function step(dt){
   /* ── reactivity, this vessel's own ledger ── */
   { const p=cs.parts;
     p.rod=nod.rod; p.dop=nod.dop; p.mod=nod.mod; p.exp=nod.exp; p.xe=nod.xe; p.vd=nod.vd;
-    p.tip=nod.tip; p.bor=s.boron;
-    cs.rho=K.excess+p.rod+p.dop+p.mod+p.exp+p.xe+p.bor+p.vd+p.tip; }
+    p.tip=nod.tip; p.dis=nod.dis; p.bor=s.boron;
+    cs.rho=K.excess+p.rod+p.dop+p.mod+p.exp+p.xe+p.bor+p.vd+p.tip+p.dis; }
   });
   coreAgg(s);
 
@@ -5245,18 +5161,8 @@ function step(dt){
   const secVent = {};                     // per shell: [{fid, cap}], kg/s each valve offers
   for(const id in s.reliefSteam) delete s.reliefSteam[id];
   for(const fid of reliefSecIds()){
-    const shells = shellsLive(s,fid), set = reliefSet(fid), pk = reliefAtP(s,fid);
-    if(!s.reliefOpen[fid] && porvLive(fid) && pk > set.lift){
-      s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
-      s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
-      s.reliefArm[fid]=false;
-      logE("warn",nameOf(fid)+" LIFTED",
-        "Shell pressure reached this valve's set point and it is passing steam to atmosphere. The water going with it does not come back.");
-    }
-    if(s.reliefOpen[fid] && s.reliefAuto[fid] && !s.reliefStuck[fid]
-       && pk < set.reseat){
-      s.reliefOpen[fid]=false; s.reliefAuto[fid]=false;
-    }
+    const shells = shellsLive(s,fid), set = reliefSet(fid);
+    if(fitSpring(fid)) springStep(s,fid,reliefAtP(s,fid));
     s.reliefSteam[fid]=0;
     if(!s.reliefOpen[fid] || s.reliefBlocked[fid]) continue;
     /* Sized off its OWN bore against its OWN lift point, so the capacity is a
@@ -5267,9 +5173,11 @@ function step(dt){
        and is the first time that sentence has been true here. */
     const back = regionPAt(s, partOf(fid));
     const b = fitBoreK(fid), span = Math.max(0.05, set.lift-back);
-    for(const id of shells)
+    // one valve passes its capacity ONCE: split over the shells it reaches by their overpressure, never offered whole to each
+    let tot = 0; for(const id of shells) tot += Math.max(0, secP(s,id)-back);
+    for(const id of shells){ const over = Math.max(0, secP(s,id)-back);
       (secVent[id]||(secVent[id]=[])).push({fid, cap:
-        SG_RELIEF_CAP*ratedSteam()*b*b*Math.max(0, secP(s,id)-back)/span});
+        SG_RELIEF_CAP*ratedSteam()*b*b*over/span*(tot>0 ? over/tot : 0)}); }
   }
   /* ── A SEVERED STEAM LINE IS AN OPENING ON THE SHELL BEHIND IT ──
      Same shape as a valve's capacity and deliberately so: a hole passing
@@ -5405,8 +5313,7 @@ function step(dt){
        short, drawn against what is actually left in the reserve, rather than
        a flat fraction of rated steam that scaled with a number the tank has
        never had anything to do with. */
-    const want = Math.max(0, steamOut
-      + (SGL_SET-lvl)/100*FEED_LVL_K*ratedSteam()/Math.max(1,sgCount()));
+    const want = feedWant(s,id);
     /* ── THE FEED REGULATING VALVE IS AN ACTUATOR ──
        `want` is the DEMAND; what this generator's own shell edge actually
        carried this tick is the ACTUAL, and the valve is walked between them.
@@ -5421,8 +5328,6 @@ function step(dt){
        nothing does not divide by zero. Rate-limited by FREG_STROKE, which is
        what makes it a valve rather than an algebraic answer. */
     if(s.fregBy[id]===undefined) s.fregBy[id]=0;
-    if(autoLive("feed")){ const e = (fed - want)/Math.max(want, FREG_SPAN);
-      s.fregBy[id] = clamp(s.fregBy[id] + clamp(e,-1,1)/FREG_STROKE*dt, 0, 1); }
     /* ── WHAT ARRIVES IS THE SOLVED FLOW, NOT THE DEMAND ──
        `want` is what the controller asked for; this is what the network
        actually carried, and the two agree only when nothing is in the way.
@@ -5949,7 +5854,7 @@ function step(dt){
   ev("flowfloor",flowDemPri(s)<P.flowMin,"warn","PUMPS ORDERED BELOW DESIGN FLOOR",
     ()=>"Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
   ev("hip",s.P>P.P0*1.05,"warn","PRIMARY OVERPRESSURE",
-    ()=>"Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burst.toFixed(1)+" MPa.");
+    ()=>"Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burstPOf(P,s).toFixed(1)+" MPa.");
   ev("porv",reliefAnyOpen(s),"warn","RELIEF VALVE PASSING",
     ()=>{ const open=reliefFitIds().filter(id=>s.reliefOpen[id]&&!s.reliefBlocked[id]);
       return nameList(open)+" "+isAre(open)+" open and venting. If nobody commanded it, primary coolant is leaving the loop."; });
@@ -5995,7 +5900,7 @@ function step(dt){
   ev("crew50",s.crewDose>50,"alarm","WATCH DOSE PAST 50%",
     "The control-room watch has taken more than half its dose limit for this run. Nobody relieves them - that number only goes one way from here.",1);
   ev("fat50",s.fatigue>50,"warn","VESSEL FATIGUE PAST 50%",
-    ()=>"Thermal shock has embrittled the vessel. Its burst pressure is now "+burst.toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+".",1);
+    ()=>"Thermal shock has embrittled the vessel. Its burst pressure is now "+burstPOf(P,s).toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+".",1);
   ev("brk",s.breach,"alarm","VESSEL RUPTURE",
     ()=>"The pressure vessel failed at "+s.P.toFixed(1)+" MPa. Coolant is leaving faster than anything can replace it. Unrecoverable.",1);
   /* A RATIO, not a threshold: the moment the metal makes more heat than the

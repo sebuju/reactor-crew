@@ -223,18 +223,8 @@ const ACT = {
      match, so the master and the individuals can never disagree - and a tape
      recorded before per-valve arming existed still means exactly what it
      meant: one line, every valve. */
-  byp      : {lab:"BYPASS",       log:k=>AUTOSYS[k].name+" "+(S.byp[k]?"ARMED":"BYPASSED"),
-              apply:(s,k)=>{ if(!autoToggle(k)) return;
-                if(k==="porv") for(const fid of reliefFitIds()) s.porvByp[fid]=s.byp[k]; }},
-  /* One relief valve's own arm, and one relief valve's own block valve. Both
-     carry the P.fittings guard ACT.valveDem carries, and for the same
-     reason: a scenario line naming a fitting this design never had would
-     otherwise put a phantom key on S, and a phantom key on S is snapshotted,
-     restored and compared like a real one. Scoped to mode==="relief" because
-     S.porvByp carries keys for relief fittings only (resetPlant(), step.js). */
-  porvByp  : {lab:"PORV ARM",     part:fid=>fid,     log:fid=>fid.toUpperCase()+" "+(S.porvByp[fid]?"ARMED":"BYPASSED"),
-              apply:(s,fid)=>{ if(P.fittings[fid] && P.fittings[fid].mode==="relief")
-                s.porvByp[fid]=!s.porvByp[fid]; }},
+  byp      : {lab:"BYPASS",       log:k=>(AUTOSYS[k]?AUTOSYS[k].name:k.toUpperCase())+" "+(S.byp[k]?"ARMED":"BYPASSED"),
+              apply:(s,k)=>{ autoToggle(k); }},
   porvBlockOf:{lab:"BLOCK VALVE", part:fid=>fid, log:fid=>fid.toUpperCase()+" "+(S.reliefBlocked[fid]?"OPENED":"SHUT"),
               apply:(s,fid)=>{ if(P.fittings[fid] && P.fittings[fid].mode==="relief")
                 s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},
@@ -249,6 +239,20 @@ const ACT = {
      and a phantom key on S is snapshotted, restored and compared like a real
      one. Scoped to mode==="throttle" because S.valveDem carries keys for a
      throttle only (resetPlant(), step.js). */
+  /* ── THE PLAYER'S AUTOMATION (ctl.js) ── three orders to the cabinet, so a
+     rewire, a retune and a switch are inputs a tape replays. `part` is the
+     CONTROL room: a wrecked cabinet takes no orders, like every other box.
+     blkWire re-seeds a position-holding block onto the sink it now feeds
+     (bumpless transfer) - a wire landing must not be a step. */
+  blkWire  : {lab:"WIRE",         part:()=>roleId("ctrl"), log:(id,slot,src)=>id.toUpperCase()+" IN "+(slot+1)+" FROM "+(src?src.toUpperCase():"NOTHING"),
+              apply:(s,id,slot,src)=>{ const b=s.blkBy&&s.blkBy[id]; if(!b||slot<0||slot>=b.in.length) return;
+                b.in[slot]=(src&&s.blkBy[src])?src:null; blkSeedOut(s,id); }},
+  blkKnob  : {lab:"TUNE",         cont:true, part:()=>roleId("ctrl"), log:(id,k,v)=>id.toUpperCase()+" "+k.toUpperCase()+" "+(typeof v==="number"?+v.toPrecision(4):String(v).toUpperCase()),
+              apply:(s,id,k,v)=>{ const b=s.blkBy&&s.blkBy[id]; if(!b||!BLK[b.mode]||!(k in BLK[b.mode].knobs)) return;
+                b[k]=v; if(k==="sig"&&b.arg==null) b.arg=sigArg0(SIGNAL[v]?SIGNAL[v].scope:"plant");
+                if(k==="sink") b.arg=sigArg0(SINK[v]?SINK[v].scope:"plant"); }},
+  blkOn    : {lab:"BLOCK",        part:()=>roleId("ctrl"), log:id=>id.toUpperCase()+" "+(S.blkBy[id]&&S.blkBy[id].on?"OFF":"ON"),
+              apply:(s,id)=>{ const b=s.blkBy&&s.blkBy[id]; if(b) b.on=!b.on; }},
   valveDem : {lab:"VALVE DEMAND", cont:true, part:id=>id, log:(id,v)=>id.toUpperCase()+" TO "+(v*100).toFixed(0)+" %",
               apply:(s,id,v)=>{ if(P.fittings[id] && P.fittings[id].mode==="throttle") s.valveDem[id]=v; }},
   /* nolog: repairStart() writes REPAIR PARTY DISPATCHED itself, and it is the
