@@ -22,7 +22,7 @@
 // lets a caller factor once per structure/conductance change and then
 // substitute many times per tick for only an RHS change (~n^2 flops).
 
-const NET_EPS = 1e-9;
+const NET_EPS = 1e-9, NET_REL = 1e-12;
 
 // Symmetric Gaussian elimination, right-looking, no pivoting: the ordering
 // is whatever the caller assembled (node index), never chosen for stability,
@@ -56,9 +56,18 @@ const NET_EPS = 1e-9;
 // band is the whole matrix and this is the dense elimination it always was.
 function netFactor(A, n, deg, bw){
   const B = bw === undefined ? n : bw;
+  /* THE GUARD IS RELATIVE TO THE ROW'S OWN WEIGHT, not an absolute epsilon.
+     The last node of a floating block cancels to rounding noise, and that
+     noise is g x 1e-16: a cooling loop carrying a 2e7 conductance left 2e-9
+     there, over the old 1e-9, so on alternate passes the block was solved as
+     if grounded - noise divided by noise - and its flow flipped 5 876 / 7 104
+     kg/s. The original diagonal is the row's scale; it is read before any
+     elimination touches it. */
+  const d0 = new Float64Array(n);
+  for(let k=0;k<n;k++) d0[k] = A[k*n+k];
   for(let k=0;k<n;k++){
     const d = A[k*n+k], lim = Math.min(n, k+B+1);
-    if(!(d > NET_EPS)){
+    if(!(d > NET_EPS) || !(d > NET_REL*d0[k])){
       A[k*n+k] = 1;
       for(let j=k+1;j<lim;j++){ A[k*n+j]=0; A[j*n+k]=0; }
       if(deg) deg[k] = 1;
