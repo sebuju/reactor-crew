@@ -386,10 +386,18 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-pan.insp-win{transform-origin:0 0;pointer-events:auto;
   border:1px solid var(--c-edge);box-shadow:0 6px 22px rgba(0,0,0,.55)}
 .insp-win .kit-rule-head{cursor:move;user-select:none}
-.insp-win.pinned .kit-rule-head{border-left:2px solid var(--c-amber)}
 .insp-win.folded .kit-well-body{display:none}
-.insp-keys{display:flex;gap:2px;margin-left:8px}
-.insp-keys .kit-btn{height:15px;min-width:0;padding:0 5px;letter-spacing:.06em}
+/* the chevron points down while the window is open and right while it is
+   folded, which is the one drawing turned rather than a second icon */
+.insp-win.folded .insp-key-fold .kit-icon{transform:rotate(-90deg)}
+/* the hover peek (ui/hoverwin.js): the parked window's look, seated EARLIER in
+   the DOM at the same z, so a window the reader parked is never buried by one
+   they only pointed at */
+.hovw-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:3}
+/* the right hand end of the bar: margin-left:auto so the keys hold that end
+   whether or not the suffix beside them has anything to say */
+.insp-keys{display:flex;gap:2px;margin-left:auto;padding-left:8px}
+.insp-keys .kit-btn{height:15px;min-width:0;padding:0 4px}
 /* the controls that used to stand on the machine box, in the widget kit's own
    HTML - see marginCtlBuild(). A row is the same row ctlFor() states. */
 .margin-ctl{display:flex;flex-direction:column;gap:3px;margin: -6px -6px 6px -6px; padding: 9px 10px; background:var(--c-ctl-well); }

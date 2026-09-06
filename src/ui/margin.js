@@ -20,6 +20,9 @@ const marginColW=n=>n*MARGIN_W+(n-1)*MARGIN_COL_GAP;
 const MARGIN_GRP_GAP=26;
 // false puts the rail's own column of machine panels back
 const MARGIN_ONLY=true;
+// panels off: hidden panels are never built, filled or placed, and the view
+// gives up no deck for them
+const MARGIN_HIDE=true;
 // what the plant view gives up so there is deck to stand a panel on
 const MARGIN_IN={l:MARGIN_W+MARGIN_PAD, r:MARGIN_W+MARGIN_PAD, t:92, b:92};
 
@@ -38,34 +41,45 @@ function marginPage(x,y,rc){
 }
 // MARGIN_IN is CSS px because a panel is; the view is layout units
 function marginInsetU(){
+  if(MARGIN_HIDE) return {l:0,r:0,t:0,b:0};
   const rc=marginCv();
   const sx=W/Math.max(1,rc.width), sy=(H-TOPBAR_H)/Math.max(1,rc.height);
   return {l:MARGIN_IN.l*sx, r:MARGIN_IN.r*sx, t:MARGIN_IN.t*sy, b:MARGIN_IN.b*sy};
 }
 
-function marginHost(root){
-  const el=KIT.el("div","margin-host");
-  /* A BOX THAT CAN SCROLL KEEPS ITS OWN WHEEL. The panels cover #cv, so the
-     canvas never sees a wheel that starts on one - which also meant a long
-     menu inside a panel could not be scrolled: the wheel zoomed the plant
-     instead. Asked of the element under the hand, not of a list of classes. */
+/* ══ A PANEL COVERS THE DECK, SO ITS WHEEL IS THE DECK'S ══
+   Every box that stands over #cv owes this: the canvas never sees a wheel that
+   starts on a panel, so without it the plant simply stops zooming under the
+   reader's hand. Both hosts register it - the margin (ui/margin.js) and the
+   hover peek (ui/hoverwin.js).
+   A BOX THAT CAN SCROLL KEEPS ITS OWN WHEEL, or a long menu inside a panel
+   cannot be scrolled: it zooms the plant instead. Asked of the element under
+   the hand, not of a list of classes. */
+function panWheelPass(el){
   const scrolls=t=>{ for(let n=t; n&&n!==el; n=n.parentElement){
     if(!n.scrollHeight) continue;
     const ov=getComputedStyle(n).overflowY;
     if((ov==="auto"||ov==="scroll") && n.scrollHeight>n.clientHeight+1) return true; }
     return false; };
-  /* a panel covers the deck, so a right drag on one pans like the deck. Its own
-     state rather than ui.drag: uiMove() belongs to a surface that hit-tests. */
-  ctxSuppress(el);
-  let pan=null;
-  const drop=()=>{ pan=null; };
   MOUSE.on(el,{
     wheel(e){
       if(scrolls(e.target)) return;
       e.preventDefault();
       ctxClose();
       vWheel(local(e), e.deltaY);
-    },
+    }});
+  return el;
+}
+
+function marginHost(root){
+  const el=KIT.el("div","margin-host");
+  panWheelPass(el);
+  /* a panel covers the deck, so a right drag on one pans like the deck. Its own
+     state rather than ui.drag: uiMove() belongs to a surface that hit-tests. */
+  ctxSuppress(el);
+  let pan=null;
+  const drop=()=>{ pan=null; };
+  MOUSE.on(el,{
     down(e){
       if(e.button!==2 || e.shiftKey) return;
       // a hosted canvas inside a panel started its own gesture on the way up here;
@@ -870,7 +884,11 @@ function marginBoardSync(h,live,fresh){
    placed: a window leaves `vis` true and `tf` null, so the pan cull below is a
    fact about a margin panel and reads as false for a window. */
 function panPartSync(h,live,deep,fresh){
-  const on=h.p.id===sel;
+  /* A PEEK IS NEVER LIT. It only exists while it is being pointed at or walked
+     to, so a bar that changed colour on the selection was saying a thing the
+     panel's own presence already said. A window that STAYS is the one that
+     needs telling apart from the others (h.peek, ui/hoverwin.js). */
+  const on=!h.peek && h.p.id===sel;
   if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
   /* A PAN MAY NOT REBUILD ANYTHING. Gated on being visible, a panel panned
      off and back rebuilt its whole block list and re-measured a panel that
@@ -963,6 +981,8 @@ function panTick(live){
 function marginSync(host,live){
   if(!host||typeof LAY==="undefined"||!LAY) return;
   marginFrame++;
+  // after the frame counter: inspSync() reads panTick(), which caches on it
+  if(MARGIN_HIDE){ KIT.show(host,false); return; }
   // the host is in the trigger: one panel set, and a screen each owns one
   if(marginFit!==LAY || marginAt!==host){
     MARGIN=marginBuild(host,live); marginFit=LAY; marginAt=host; marginPSig=null;
