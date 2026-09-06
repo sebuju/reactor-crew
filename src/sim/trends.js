@@ -3,63 +3,99 @@
 
 /* ═══════════════ TREND HISTORY ═══════════════ */
 const HT = s => s.Tavg + 15*(s.n*PROMPT_F + s.decay);
-const CH={
- pwr :{lab:"POWER",        u:"%",  col:"#57d38c", f:s=>s.n*100},
- dnbr:{lab:"DNBR",         u:"",   col:"#f0a830", f:s=>s.dnbr},
- tf  :{lab:"FUEL TEMP",    u:"K",  col:"#ff5a45", f:s=>s.Tf},
- tavg:{lab:"T-AVG",        u:"K",  col:"#5fd2e2", f:s=>s.Tavg},
- th  :{lab:"T-HOT",        u:"K",  col:"#ffa07a", f:s=>HT(s)},
- tc  :{lab:"T-COLD",       u:"K",  col:"#5aa9d6", f:s=>s.Tavg-15*(s.n*PROMPT_F+s.decay)},
- prs :{lab:"PRESSURE",     u:"MPa",col:"#a98cf0", f:s=>s.P},
- sub :{lab:"SUBCOOLING",   u:"K",  col:"#5fd2e2", f:s=>tsat(s.P)-HT(s)},
- lvl :{lab:"PZR LEVEL",    u:"%",  col:"#c8d8dc", f:s=>s.lvl},
- sgl :{lab:"SG LEVEL",     u:"%",  col:"#8fa9ae", f:s=>sglMin(s)},   // the driest generator - an average would hide one boiling dry behind three healthy ones
- hot :{lab:"HOTWELL",      u:"%",  col:"#6f97a8", f:s=>tankPoolPct(s,hostedTankIds())},
- inv :{lab:"INVENTORY",    u:"%",  col:"#5aa9d6", f:s=>s.inv},
+const SIGNAL={
+ pwr :{scope:"core", lab:"POWER",        u:"%",  col:"#57d38c", f:s=>s.n*100},
+ dnbr:{scope:"core", lab:"DNBR",         u:"",   col:"#f0a830", f:s=>s.dnbr},
+ tf  :{scope:"core", lab:"FUEL TEMP",    u:"K",  col:"#ff5a45", f:s=>s.Tf},
+ tavg:{scope:"core", lab:"T-AVG",        u:"K",  col:"#5fd2e2", f:s=>s.Tavg},
+ th  :{scope:"core", lab:"T-HOT",        u:"K",  col:"#ffa07a", f:s=>HT(s)},
+ tc  :{scope:"core", lab:"T-COLD",       u:"K",  col:"#5aa9d6", f:s=>s.Tavg-15*(s.n*PROMPT_F+s.decay)},
+ prs :{scope:"core", lab:"PRESSURE",     u:"MPa",col:"#a98cf0", f:s=>s.P},
+ sub :{scope:"core", lab:"SUBCOOLING",   u:"K",  col:"#5fd2e2", f:s=>tsat(s.P)-HT(s)},
+ lvl :{scope:"core", lab:"PZR LEVEL",    u:"%",  col:"#c8d8dc", f:s=>s.lvl},
+ sgl :{scope:"plant",lab:"SG LEVEL",     u:"%",  col:"#8fa9ae", f:s=>sglMin(s)},   // the driest generator - an average would hide one boiling dry behind three healthy ones
+ hot :{scope:"plant",lab:"HOTWELL",      u:"%",  col:"#6f97a8", f:s=>tankPoolPct(s,hostedTankIds())},
+ inv :{scope:"core", lab:"INVENTORY",    u:"%",  col:"#5aa9d6", f:s=>s.inv},
  /* flowNet, not flow: the label says CORE FLOW, so it has to be the flow that
     reaches the core - what the pumps were TOLD to do is flowDemPri()'s business.
     The two are equal on an undamaged, unthrottled plant, so no archived trend
     changes shape; they part company exactly when a valve shuts or a run is
     severed, which is the moment this trace has something to say. */
- flow:{lab:"CORE FLOW",    u:"%",  col:"#57d38c", f:s=>s.flowNet*100},
- load:{lab:"LOAD DEMAND",  u:"%",  col:"#f0a830", f:s=>s.load*100},
- rod :{lab:"ROD BANK",     u:"%",  col:"#c8d8dc", f:s=>s.rodPos*100},
- bor :{lab:"BORON",        u:"pcm",col:"#5fd2e2", f:s=>s.boron},
- xe  :{lab:"XENON",        u:"pcm",col:"#5aa9d6", f:s=>s.parts.xe},
- exp :{lab:"EXPANSION",    u:"pcm",col:"#8fa9ae", f:s=>s.parts.exp},
- fq  :{lab:"PEAKING Fq",  u:"",   col:"#f0a830", f:s=>s.fq},
- ao  :{lab:"AXIAL OFFSET",u:"%",  col:"#a98cf0", f:s=>s.ao*100},
- ro  :{lab:"RADIAL TILT", u:"%",  col:"#5fd2e2", f:s=>s.ro*100},
- rho :{lab:"NET RHO",      u:"pcm",col:"#ff5a45", f:s=>s.rho},
- vd  :{lab:"VOID FRACTION",u:"",   col:"#a98cf0", f:s=>s.vf},
- dmg :{lab:"FUEL DAMAGE",  u:"%",  col:"#ff5a45", f:s=>s.dmg},
- fat :{lab:"VESSEL FATIGUE",u:"%", col:"#f0a830", f:s=>s.fatigue},
- cav :{lab:"CAVITATION",   u:"",   col:"#f0a830", f:s=>s.cav},
- nat :{lab:"NAT CIRC",     u:"%",  col:"#57d38c", f:s=>s.nat*100},
- rel :{lab:"RELEASE",      u:"%",  col:"#ff5a45", f:s=>s.release},
+ flow:{scope:"core", lab:"CORE FLOW",    u:"%",  col:"#57d38c", f:s=>s.flowNet*100},
+ load:{scope:"plant",lab:"LOAD DEMAND",  u:"%",  col:"#f0a830", f:s=>s.load*100},
+ rod :{scope:"core", lab:"ROD BANK",     u:"%",  col:"#c8d8dc", f:s=>s.rodPos*100},
+ bor :{scope:"plant",lab:"BORON",        u:"pcm",col:"#5fd2e2", f:s=>s.boron},
+ xe  :{scope:"core", lab:"XENON",        u:"pcm",col:"#5aa9d6", f:s=>s.parts.xe},
+ exp :{scope:"core", lab:"EXPANSION",    u:"pcm",col:"#8fa9ae", f:s=>s.parts.exp},
+ dis :{scope:"core", lab:"DISASSEMBLY",  u:"pcm",col:"#a48ad6", f:s=>s.parts.dis},
+ fq  :{scope:"core", lab:"PEAKING Fq",  u:"",   col:"#f0a830", f:s=>s.fq},
+ ao  :{scope:"core", lab:"AXIAL OFFSET",u:"%",  col:"#a98cf0", f:s=>s.ao*100},
+ ro  :{scope:"core", lab:"RADIAL TILT", u:"%",  col:"#5fd2e2", f:s=>s.ro*100},
+ rho :{scope:"core", lab:"NET RHO",      u:"pcm",col:"#ff5a45", f:s=>s.rho},
+ vd  :{scope:"core", lab:"VOID FRACTION",u:"",   col:"#a98cf0", f:s=>s.vf},
+ dmg :{scope:"core", lab:"FUEL DAMAGE",  u:"%",  col:"#ff5a45", f:s=>s.dmg},
+ fat :{scope:"core", lab:"VESSEL FATIGUE",u:"%", col:"#f0a830", f:s=>s.fatigue},
+ cav :{scope:"plant",lab:"CAVITATION",   u:"",   col:"#f0a830", f:s=>s.cav},
+ nat :{scope:"plant",lab:"NAT CIRC",     u:"%",  col:"#57d38c", f:s=>s.nat*100},
+ rel :{scope:"plant",lab:"RELEASE",      u:"%",  col:"#ff5a45", f:s=>s.release},
  /* Decay heat is simulated and was printed nowhere. It is the heat that does
     not go away with the chain reaction, so it needs its own trace beside POWER. */
- dec :{lab:"DECAY HEAT",   u:"%",  col:"#ff9a5a", f:s=>s.decay*100},
+ dec :{scope:"core", lab:"DECAY HEAT",   u:"%",  col:"#ff9a5a", f:s=>s.decay*100},
  /* Both cost the tape nothing: a trend ring is rebuilt from S every time,
     never recorded (see the header comment above), so these two are free the
     same way every other channel here is - they read s.doseRate/s.crewDose,
     which are themselves derived fresh every tick and never stored either. */
- rad :{lab:"AREA DOSE",  u:"x", col:"#c8d8dc", f:s=>s.doseRate},
- cdos:{lab:"WATCH DOSE", u:"%", col:"#8fa9ae", f:s=>s.crewDose},
+ rad :{scope:"plant",lab:"AREA DOSE",  u:"x", col:"#c8d8dc", f:s=>s.doseRate},
+ cdos:{scope:"plant",lab:"WATCH DOSE", u:"%", col:"#8fa9ae", f:s=>s.crewDose},
  /* APPENDED, and dmg above is neither renamed nor repurposed: a scenario limit
     names a trend key by STRING, so moving one silently changes what a saved
     scenario asserts. These three are what the staged damage field can say and
     the old scalar could not. */
- mlt :{lab:"FUEL MOLTEN",u:"%", col:"#ff9a5a", f:s=>s.meltFrac*100},
- h2  :{lab:"HYDROGEN",   u:"kg",col:"#a98cf0", f:s=>s.h2},
+ mlt :{scope:"core", lab:"FUEL MOLTEN",u:"%", col:"#ff9a5a", f:s=>s.meltFrac*100},
+ h2  :{scope:"plant",lab:"HYDROGEN",   u:"kg",col:"#a98cf0", f:s=>s.h2},
  // what the gas did when it lit, rather than how much of it there is
- rp  :{lab:"ROOM PRESSURE",u:"kPa",col:"#ff6a6a", f:s=>s.roomPMax},
- dnbm:{lab:"MIN NODE DNBR",u:"",col:"#f0a830", f:s=>s.dnbrMin},
+ rp  :{scope:"plant",lab:"ROOM PRESSURE",u:"kPa",col:"#ff6a6a", f:s=>s.roomPMax},
+ dnbm:{scope:"core", lab:"MIN NODE DNBR",u:"",col:"#f0a830", f:s=>s.dnbrMin},
  /* the sink the ship actually has. Everything else on this list is about
     making heat or moving it; this is the one channel about getting rid of it,
     and it is the slowest pot on the plant. */
- radt:{lab:"PANEL TEMP",  u:"K", col:"#b8c4cf", f:s=>radTMax(s)},
+ radt:{scope:"plant",lab:"PANEL TEMP",  u:"K", col:"#b8c4cf", f:s=>radTMax(s)},
+ /* ══ ROWS A BLOCK READS AND THE CHART DOES NOT ══ no `col`, so CH below skips
+    them. `core` rows are handed a coreSeen() view; every other scope takes the
+    instance id as its second argument. */
+ nfr  :{scope:"core", lab:"POWER FRAC", u:"",    f:v=>v.n},
+ tprog:{scope:"core", lab:"T-PROG",     u:"K",   f:v=>tProg(v,v.K,v)},
+ dtavg:{scope:"core", lab:"T-AVG RATE", u:"K/s", f:v=>v.dTavg},
+ tfrac:{scope:"core", lab:"TURB SHARE", u:"",    f:v=>unitFrac(v,turbShare(v))},
+ rodd :{scope:"core", lab:"ROD DEMAND", u:"%",   f:v=>v.rodDem*100},
+ trip :{scope:"core", lab:"TRIPPED",    u:"",    f:v=>v.scrammed?1:0},
+ sglv :{scope:"sg",   lab:"SG LEVEL",   u:"%",   f:(s,id)=>sgLvl(s,id)},
+ sgp  :{scope:"sg",   lab:"SHELL P",    u:"MPa", f:(s,id)=>secP(s,id)},
+ sgst :{scope:"sg",   lab:"STEAM OUT",  u:"kg/s",f:(s,id)=>(s.steamBy&&s.steamBy[id])||0},
+ sgfed:{scope:"sg",   lab:"FEED IN",    u:"kg/s",f:(s,id)=>(s.sgFedBy&&s.sgFedBy[id])||0},
+ sgwant:{scope:"sg",  lab:"FEED WANT",  u:"kg/s",f:(s,id)=>feedWant(s,id)},
+ pumpq:{scope:"pump", lab:"PUMP SPEED", u:"%",   f:(s,id)=>(s.flowBy[id]||0)*100},
+ pumpd:{scope:"pump", lab:"PUMP DEMAND",u:"%",   f:(s,id)=>(s.flowDemBy[id]||0)*100},
+ fitp :{scope:"fit",  lab:"VALVE P",    u:"MPa", f:(s,fid)=>reliefP(s,fid)},
+ fitopen:{scope:"fit",lab:"VALVE OPEN", u:"",    f:(s,fid)=>s.reliefOpen[fid]?1:0},
+ fitlift:{scope:"fit",lab:"LIFT SET",   u:"MPa", f:(s,fid)=>reliefSet(fid).lift},
+ fitreseat:{scope:"fit",lab:"RESEAT SET",u:"MPa", f:(s,fid)=>reliefSet(fid).reseat},
+ valve:{scope:"fit",  lab:"VALVE POS",  u:"%",   f:(s,fid)=>(s.valve[fid]||0)*100},
+ tankl:{scope:"tank", lab:"TANK LEVEL", u:"%",   f:(s,id)=>tankPoolPct(s,[id])},
+ loopp:{scope:"loop", lab:"LOOP P",     u:"MPa", f:(s,ci)=>loopP(s,+ci)},
+ supply:{scope:"plant",lab:"SUPPLY",    u:"",    f:s=>supplyK(s)},
+ dark :{scope:"plant",lab:"BLACKOUT",   u:"",    f:s=>s.blackout?1:0},
+ time :{scope:"plant",lab:"TIME",       u:"s",   f:s=>s.t},
 };
+/* THE CHART'S CHANNELS: every SIGNAL row that states a colour. Same objects,
+   same keys - a scenario limit that names "pwr" still finds the row it always
+   did. Below this line nothing reads SIGNAL by name but sigRead(). */
+const CH=Object.fromEntries(Object.entries(SIGNAL).filter(([,r])=>r.col));
+/* ONE READER. A core row is asked through the vessel's own view of the plant;
+   every other scope takes the instance id. No arg on a core row is the plant. */
+const sigRead=(s,k,arg)=>{ const r=SIGNAL[k]; if(!r) return 0;
+  if(r.scope==="core") return r.f(arg ? coreSeen(s,arg) : s);
+  return r.scope==="plant" ? r.f(s) : r.f(s,arg); };
 /* ══ HOW A CHANNEL IS DRAWN, NOT WHAT IT IS ══
    A trend used to scale itself to whatever it happened to contain, and that is
    the wrong picture twice over: a channel resting on its setpoint got its own
@@ -155,7 +191,7 @@ const HN=1800, SAMP_TICKS=5; let hist={},hi=0,hlen=0,plot=["pwr","dnbr"];
    a scenario limit names by string. One vessel is the plant, so a one-unit
    plant records exactly what it always did. TREND.unit is the vessel the
    chart is looking at: null is the plant. A layer-style view state, never S. */
-const UNIT_CH=new Set(["pwr","dnbr","tf","tavg","th","tc","prs","sub","lvl","inv","flow","rod","xe","exp","fq","ao","ro","rho","vd","dmg","fat","dec","mlt","dnbm"]);
+const UNIT_CH=new Set(Object.keys(CH).filter(k=>CH[k].scope==="core"));
 const TREND={unit:null};
 const trendUnits=()=>{ const ids=typeof coreIds==="function"?coreIds():[]; return ids.length>1?ids:[]; };
 const CHKEYS=()=>{ const ks=Object.keys(CH); for(const id of trendUnits()) for(const k of UNIT_CH) if(CH[k]) ks.push(k+":"+id); return ks; };
