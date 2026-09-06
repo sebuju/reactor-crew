@@ -243,8 +243,12 @@ function statRowsSync(container,stats){
 const MEASURED_TIP="Every number on this list is an OUTPUT of the design. Not one of them is a value you can set - to move one of these, move a knob above it.";
 function paramsFor(p){
   const B=[], id=p.id;
-  // where the next block lands. B unless a panel is building a "box" tree.
-  let T=B;
+  // where the next block lands. A section's blocks once a panel opens one.
+  let T=B, G=null;
+  const GRID=cols=>{ const g={kind:"grid",cols,blocks:[]}; B.push(g); G=g; return g; };
+  const SEC=(title,tip,span,rowspan)=>{ const s={kind:"section",blocks:[]};
+    if(title) s.title=title; if(tip) s.tip=tip; if(span) s.span=span; if(rowspan) s.rowspan=rowspan;
+    G.blocks.push(s); T=s.blocks; return s; };
   const opt=(title,tip,key,items,base)=>T.push({kind:"optlist",title,tip,key,base:base||0,
     items:items.map(o=>({name:o.name,tip:o.note||o.tip||""}))});
   const seg_=(title,tip,key,labels,base)=>T.push({kind:"segsel",title,tip,key,labels,base:base||0});
@@ -260,7 +264,6 @@ function paramsFor(p){
      instead, where a tooltip is how every other explanation on this screen is
      read - see marginSync() (ui/margin.js). */
   const help=t=>{ if(t) B.tip = B.tip ? B.tip+"\n\n"+t : t; };
-  const brk=()=>T.push({kind:"colbreak"});
 
   if(!p.access)
     note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, so it is lost for good the moment it is damaged.","var(--c-red)");
@@ -304,26 +307,18 @@ function paramsFor(p){
        A knob belongs to the surface it moves: what the lattice is made of goes
        beside the plan, what the core's height and wrapping are goes beside the
        section. */
-    const planK=[], secK=[], meas=[];
-    B.push({kind:"box",dir:"row",blocks:[
-      {kind:"box",dir:"col",w:3,blocks:[
-        {kind:"box",dir:"row",blocks:[
-          {kind:"box",dir:"col",w:2,blocks:[
-            {kind:"lattools",pen:"plan",title:"RADIAL PLAN",
-             tools:LATPEN_CORE.concat(LATPEN_RODS),
-             tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."},
-            {kind:"latplan",core:id},
-            {kind:"latread",pen:"plan",core:id}]},
-          {kind:"box",dir:"col",w:1,blocks:planK}]},
-        {kind:"box",dir:"row",blocks:[
-          {kind:"box",dir:"col",w:2,blocks:[
-            {kind:"lattools",pen:"sec",title:"AXIAL SECTION",
-             tools:LATPEN_SEC,
-             tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."},
-            {kind:"latsection",core:id},
-            {kind:"latread",pen:"sec",core:id}]},
-          {kind:"box",dir:"col",w:1,blocks:secK}]}]},
-      {kind:"box",dir:"col",w:1,blocks:meas}]});
+    GRID(4);
+    T=SEC(null,null,2).blocks;
+    T.push(
+      {kind:"lattools",pen:"plan",title:"RADIAL PLAN",
+       tools:LATPEN_CORE.concat(LATPEN_RODS),
+       tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."},
+      {kind:"latplan",core:id},
+      {kind:"latread",pen:"plan",core:id});
+    const planK=SEC(null,null,1).blocks;
+    const meas=SEC(null,null,1,2).blocks;
+    const secDraw=SEC(null,null,2).blocks;
+    const secK=SEC(null,null,1).blocks;
 
     T=planK;
     opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.",bagAcc(cD,"cool",()=>cD.cool),COOLANT);
@@ -346,11 +341,47 @@ function paramsFor(p){
     opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.",bagAcc(cD,"mod",()=>cD.mod),MODER);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
 
+    T=secDraw;
+    T.push(
+      {kind:"lattools",pen:"sec",title:"AXIAL SECTION",
+       tools:LATPEN_SEC,
+       tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."},
+      {kind:"latsection",core:id},
+      {kind:"latread",pen:"sec",core:id});
     T=secK;
     seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL);
     // a feature of the VESSEL, which is what its own tooltip already said -
     // it never belonged on the pressurizer's panel
     sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.",bagAcc(cD,"chim",()=>cD.chim),0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
+    { const vd=()=>derived(id), a=()=>COOLANT[cD.cool];
+      if(cD.tube){ const tb=cD.tube;
+      num("TUBE BORE","How wide one fuel channel is. This core has no vessel: every channel is its own pressure boundary, standing in a graphite stack that sits at room pressure under a shield. AUTO is what the lattice pitch leaves round one bundle.",
+          {get:()=>tubeBoreMm(cD), set:v=>{ tb.bore=v; dTouch(); }, raw:()=>tb.bore, clr:()=>{ delete tb.bore; dTouch(); }},
+          "mm",0,()=>tubeBoreSuggest(cD));
+      num("TUBE WALL","How thick one channel's wall is. It is what a channel is RATED for and what every channel weighs, the same Barlow every run on the board gets. A channel lets go one at a time, at its own hottest spot, at the same margin over its rating every pipe has.",
+          {get:()=>tubeWallMm(vd().P0,a(),cD), set:v=>{ tb.wall=v; dTouch(); }, raw:()=>tb.wall, clr:()=>{ delete tb.wall; dTouch(); }},
+          "mm",1,()=>tubeWallSuggest(vd().P0,a(),cD),v=>tubeMass(vd().P0,a(),cD,v));
+      num("CAVITY VOLUME","The sealed space round the stack that a torn channel discharges into. It has its own relief, sized for one channel; past that the shield above it lifts. AUTO is the stack's envelope times the void graphite leaves.",
+          {get:()=>cavVolM3(cD), set:v=>{ tb.cavVol=v; dTouch(); }, raw:()=>tb.cavVol, clr:()=>{ delete tb.cavVol; dTouch(); }},
+          "m3",0,()=>cavVolSuggest(cD));
+      num("SHIELD MASS","The slab over the cavity. Its weight over the cavity's area is the pressure the cavity will take: past it the shield lifts, every channel is torn at its top weld and the whole core is open. AUTO is a slab of steel-serpentinite over the stack.",
+          {get:()=>shieldT(cD), set:v=>{ tb.shieldT=v; dTouch(); }, raw:()=>tb.shieldT, clr:()=>{ delete tb.shieldT; dTouch(); }},
+          "t",0,()=>shieldSuggest(cD));
+      T.push({kind:"readlist",title:"CHANNELS",tip:MEASURED_TIP,rows:()=>{ const d=vd(); return [
+        ["CHANNELS",tubeCount(cD).toFixed(0),null,"How many fuel channels the lattice has, each its own pressure boundary."],
+        ["RATED FOR",d.vesselRated.toFixed(2)+" MPa",d.vesselRated<d.P0?C.red:null,"What one channel's wall will take, off the published hoop-stress relation. Under the setpoint, the channels are the weakest thing on this circuit."],
+        ["BURSTS AT",d.vesselBurst.toFixed(2)+" MPa",d.vesselBurst<d.P0?C.red:null,"Where a channel at operating temperature actually lets go. A hot channel goes sooner: its wall is weaker, and it fails first."],
+        ["SHIELD LIFTS AT",(shieldLiftP(cD)*1000).toFixed(0)+" kPa",null,"The cavity pressure that lifts the shield. Past this the whole core is open to the room."],
+        ["MASS",d.vesselMass.toFixed(0)+" t",null,"Every channel's zirconium at this wall, plus the shield."]]; }}); }
+      else {
+      num("VESSEL WALL","How thick the reactor vessel's steel is. It is what the vessel is RATED for and what it weighs, the same as any run on the board. AUTO is the thickness Barlow says this vessel needs at the pressure it is held at, floored at the plate a vessel this size is built from. The vessel lets go at the same margin over its rating every pipe has - buy wall and you buy the margin an excursion has to beat.",
+          {get:()=>vesselWallMm(vd().P0,a(),cD), set:v=>{ cD.wall=v; dTouch(); },
+           raw:()=>cD.wall, clr:()=>{ delete cD.wall; dTouch(); }},
+          "mm",0,()=>vesselWallSuggest(vd().P0,a(),cD),v=>vesselShellMass(vd().P0,a(),cD,v));
+      T.push({kind:"readlist",title:"VESSEL",tip:MEASURED_TIP,rows:()=>{ const d=vd(); return [
+        ["RATED FOR",d.vesselRated.toFixed(2)+" MPa",d.vesselRated<d.P0?C.red:null,"What the wall above will take, off the published hoop-stress relation - the same rating every run on the board carries. Under the setpoint, this vessel is the weakest thing on its circuit."],
+        ["BURSTS AT",d.vesselBurst.toFixed(2)+" MPa",d.vesselBurst<d.P0?C.red:null,"Where the vessel actually lets go. A rating has its margin inside it; past this the vessel is open and the core is in the room."],
+        ["MASS",d.vesselMass.toFixed(0)+" t",null,"What the vessel weighs: its shell at this wall over the lattice's own envelope and a downcomer round it."]]; }}); } }
 
     T=meas;
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD
@@ -363,6 +394,7 @@ function paramsFor(p){
      MEASURED list. The core they are bolted to is the host (coreOf()). */
   else if(p.role==="rods"){ const cD=coreD(coreOf(id));
     if(cD){
+    GRID(1); SEC("ROD DRIVES");
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.",bagAcc(cD,"scram",()=>cD.scram),SCRAM);
     num("ROD DRIVE SPEED","How fast the drives walk the bank under normal control, as a percentage of full travel every second - the reference drive strokes end to end in 83 s. A fast core answers a rod before you have finished moving it and wants a motor to match; a graphite pile does not. It does NOT touch the scram, which drops on the system above. A motor that strokes twice as fast is twice the machine, and the mass hint is what that costs on every bank you have.",
         {get:()=>rodSpdOf(cD)*100, set:v=>{ cD.rodSpd=v/100; dTouch(); },
@@ -373,18 +405,20 @@ function paramsFor(p){
        constants. AUTOSYS.rod's own tooltip has always promised "the travel
        band set on the rod-drive panel" and there was no such control - the
        numbers were real, live and invisible. */
-    B.push({kind:"slider",title:"AUTO ROD OUT LIMIT",key:"arLo",min:0,max:1,step:.01,
+    T.push({kind:"slider",title:"AUTO ROD OUT LIMIT",key:"arLo",min:0,max:1,step:.01,
       fmt:v=>(v*100).toFixed(0)+" %",
       tip:"The furthest OUT the temperature controller may walk the bank on its own. Pull it out and the controller has more authority over coolant temperature and you have less shutdown margin, because the position your margin was measured from is the position it is allowed to leave. Your own demand is never bound by it."});
-    B.push({kind:"slider",title:"AUTO ROD IN LIMIT",key:"arHi",min:0,max:1,step:.01,
+    T.push({kind:"slider",title:"AUTO ROD IN LIMIT",key:"arHi",min:0,max:1,step:.01,
       fmt:v=>(v*100).toFixed(0)+" %",
       tip:"The furthest IN the controller may drive the bank on its own. Deeper insertion buys it more authority and costs thermal margin, because a deep bank peaks the power. Set it at or below the out limit and the band closes to nothing, which parks the controller where it stands."});
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD_RODS
+    SEC();
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD_RODS
       .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
-    B.push({kind:"sdmnote"});
+    T.push({kind:"sdmnote"});
     }
   }
   else if(p.role==="sg"){
+    GRID(1); SEC("GENERATOR");
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
         bagAcc(D.sgType,id,()=>sgTypeOf(id)),SGT);
     /* The type row says how much water is in it; this says how fast heat
@@ -398,7 +432,8 @@ function paramsFor(p){
         {get:()=>sgDesPOf(id),set:v=>{ D.sgDesP[id]=v; },
          raw:()=>D.sgDesP[id], clr:()=>{ delete D.sgDesP[id]; }},
         "MPa",2,()=>sgDesPSuggest(),()=>0);
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const r=sgRowOf(id); return [
+    SEC();
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const r=sgRowOf(id); return [
       ["SHELL BURSTS AT",sgBurstP(id).toFixed(2)+" MPa",null,"Where the shell itself lets go, off the design pressure above. Nothing stops it getting there except a relief valve you placed on its steam nozzle."],
       ["SECONDARY WATER",r.water.toFixed(0)+" t",null,"What is in THIS shell at 100 % level. It is what goes on removing heat after the feedwater stops, and it is the whole of the difference between the two types."],
       ["SHELL STEEL",sgShellT(id).toFixed(1)+" t",null,"The pressure shell itself, off its own water charge as a vessel at the wall its design pressure needs. Raise the pressure above and this goes up with it."],
@@ -414,17 +449,20 @@ function paramsFor(p){
     help("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
   }
   else if(p.role==="ihx"){
+    GRID(1); SEC("EXCHANGER");
     num("TRANSFER COEFFICIENT","How fast heat crosses this exchanger's tubes, in kilowatts per kelvin of temperature difference. A big one gives back some of the shell temperature the second stage costs you, and it is a bigger flywheel after a trip. It is also the heaviest single thing you can buy per tonne of benefit. AUTO matches it to the generators in front of it.",
         {get:()=>ihxUAOf(id),set:v=>{ D.ihxUA[id]=v; },
          raw:()=>D.ihxUA[id], clr:()=>{ delete D.ihxUA[id]; }},
         "kW/K",0,()=>ihxUASuggest(),v=>v*IHX_T_PER_UA);
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const served=ihxSgs(id); return [
+    SEC();
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const served=ihxSgs(id); return [
       ["FEEDS",served.length?nameList(served):"nothing",null,"Which generators this exchanger heats. It is whatever is on the loop you spliced it into - splice it in with a hot leg and a cold leg, exactly like a generator."],
       ["EXCHANGER MASS",(ihxUAOf(id)*IHX_T_PER_UA).toFixed(0)+" t",null,"The vessel and the intermediate coolant behind it. It is the whole price of the second stage, and it is heavy."]]; }});
     help("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats the generators on its loop, so a tube rupture in one of those generators leaks THIS loop's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
     help("The intermediate loop is not solved as its own hydraulic circuit - it is a temperature and a heat capacity, the same standing the steam side has. Its pumps are not modelled.");
   }
   else if(roleHead(p.role)){
+    GRID(1); SEC("PUMP");
     num("DEVELOPED HEAD","The pressure rise this pump makes at its rated flow, in megapascals. It is what pushes water from the SUCTION face to the DISCHARGE face and nothing else decides which way it goes - so a pump has to beat whatever pressure stands on the far side before a drop moves. AUTO asks the drawing what that is.",
         {get:()=>pumpHead(id),set:v=>{ D.pumpHead[id]=v; },
          raw:()=>D.pumpHead[id], clr:()=>{ delete D.pumpHead[id]; }},
@@ -437,28 +475,32 @@ function paramsFor(p){
         {get:()=>pumpRotor(id),set:v=>{ D.pumpRotor[id]=v; },
          raw:()=>D.pumpRotor[id], clr:()=>{ delete D.pumpRotor[id]; }},
         "s",1,()=>pumpRotorSuggest(id),()=>0);
+    SEC();
     /* WHAT THIS PUMP IS FOR, off the drawing rather than off its id. There is
        one pump role: a coolant pump is a pump the loop walk reaches from a
        generator, a feed pump is one that reaches a generator's SHELL, and a
        pump piped to neither is a pump somebody placed and has not wired up. */
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[ secGensOf(id).length
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[ secGensOf(id).length
       ?["DUTY","FEEDWATER",null,"Piped to a generator's shell, so this is a FEEDWATER pump: it holds that generator's level through its own regulating valve, and the level controller's switch is the FEED CTRL bypass."]
       :primaryPump(id)
         ?["DUTY","COOLANT",null,"In a coolant loop, so this is a COOLANT pump. Flow is the single biggest input to thermal margin, and the first thing a blackout takes off you."]
         :["DUTY","PIPED TO NOTHING",C.amber,"Piped to nothing that reaches a core or a generator. It develops its own head and pools capacity with nobody - draw a run from it, or right-click the plant to remove it."]]});
   }
   else if(p.role==="turb"){
+    GRID(1); SEC("TURBINE");
     num("STEAM SWALLOW","The mass of steam this machine takes per second, wide open. It is what the turbine IS - efficiency follows from it and is not a second thing to buy. Every turbine is sized on its own, so a big machine and a small one is a legal fleet. AUTO matches it to the steam this plant will actually raise.",
         {get:()=>turbKgs(id),set:v=>{ D.turbKgs[id]=v; },
          raw:()=>D.turbKgs[id], clr:()=>{ delete D.turbKgs[id]; }},
         "kg/s",0,()=>turbKgsSuggest(),v=>v*TURB_T_PER_KGS);
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
+    SEC();
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
       ["EFFICIENCY",(COOLANT[priD().cool].eff*turbEffOf(id)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. It is DERIVED from the swallow above, by the law that isentropic efficiency rises slowly with machine size - a set ten times bigger is a few points better, not twice as good."],
       ["RATED OUTPUT",(d.rated*d.eff).toFixed(0)+" MWe",null,"Electrical power at 100% reactor power with the condenser keeping up. This is the number the ship gets, and it is the whole reason the reactor is here."],
       ["MAX LOAD",(d.loadMax*100).toFixed(0)+" %",null,"The furthest the load slider will go in the control room, as a share of the steam this plant raises at full power. A matched machine reads 100 %. Overpower is not free reach: it is turbine you paid mass for."]]; }});
     help("In the full game this is where weapons and ship systems draw from. A hit here rejects load instantly and the reactor has nowhere to put its heat.");
   }
   else if(p.role==="cond"){
+    GRID(1); SEC("CONDENSER");
     num("CONDENSING DUTY","How fast heat crosses this condenser's tubes, in kilowatts per kelvin. It is what the machine IS: it sets how much steam you can condense at full draw, and it sizes the circulating water flow with it. Overload a small condenser and backpressure eats your electrical output while the reactor goes on making the heat. AUTO matches it to this plant's rated rejection.",
         {get:()=>condUA(id),set:v=>{ D.condUA[id]=v; },
          raw:()=>D.condUA[id], clr:()=>{ delete D.condUA[id]; }},
@@ -467,7 +509,8 @@ function paramsFor(p){
         {get:()=>condDump(id),set:v=>{ D.condDump[id]=v; },
          raw:()=>D.condDump[id], clr:()=>{ delete D.condDump[id]; }},
         "kg/s",0,()=>condDumpSuggest(),()=>0);
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
+    SEC();
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
       ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of full-load duty",null,"Every condenser on the plant added up, against the heat this plant actually rejects at full power. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
       ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, on the same basis as the row above, so the mismatch is visible from either component."],
       ["TERMINAL DIFFERENCE",COND_DT0+" K",null,"How far this machine sits above the sink it rejects into, at rated duty. Duty DIVIDES it: a half-size unit sits twice as far above the radiator for the same heat."],
@@ -475,7 +518,7 @@ function paramsFor(p){
       ["VACUUM FLOOR",COND_P0+" MPa",null,"The best vacuum this plant can ever pull, set by air leaking in and nothing else. An oversized condenser runs down onto this and stops paying."],
       ["TURBINE TRIPS AT",TURB_TRIP_P+" MPa",null,"The exhaust pressure the last-stage blading will not take. The stop valve shuts, and it does not reset."],
       ["VACUUM LOST AT",COND_ATM+" MPa",null,"Past atmospheric the condenser relieves and the air is in for good. This is the second failure, and it is the end of the heat sink."]]; }});
-    B.push({kind:"readlist",rows:()=>{ const short=derived().condShort; return [
+    T.push({kind:"readlist",rows:()=>{ const short=derived().condShort; return [
       ["MATCH",short?"UNDERSIZED":"MATCHED",short?C.amber:null, short
         ?"This condenser is far smaller than the turbine can draw. It runs hotter for the same heat, so the exhaust pressure climbs and the output falls with it - a unit at a third of duty gives back roughly a tenth of the plant's electricity at rest, before any overload."
         :"Condenser is matched to the turbine. A brief overload costs little or nothing, and a bigger unit runs down onto the vacuum limit and stops paying."]]; }});
@@ -486,6 +529,7 @@ function paramsFor(p){
      is radTAt(), the same expression the tick integrates against, so the
      bench and the plant cannot quote two different sinks. */
   else if(p.role==="radiator"){
+    GRID(1); SEC("PANEL");
     num("RADIATING AREA","The surface this panel actually radiates from, in square metres. The box on the grid is a PICTURE of it, snapped to whole cells, so a small plant draws a small panel. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom. AUTO matches the fleet to this plant's own rejection at the design sink.",
         {get:()=>radAreaOf(id),set:v=>{ D.radArea[id]=v; },
          raw:()=>D.radArea[id], clr:()=>{ delete D.radArea[id]; }},
@@ -496,7 +540,8 @@ function paramsFor(p){
         "kW/K",0,()=>radUASuggest(id));
     opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
         bagAcc(D.radCoat,id,()=>D.radCoat[id]??1),RADCOAT.map(r=>({name:r[0]})));
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(), live=radLive(id);
+    SEC();
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(), live=radLive(id);
       const tr=radTRated(d.eff);
       return [
       ["CAN SHED",live?"YES":"NO",null,"A panel radiates only through the skin. One face of its own footprint against the hull is enough. Walled in on every side it sheds nothing at all: measured, the stock pair moved inboard trips the turbine in under two minutes and the plant makes no electricity."],
@@ -508,15 +553,17 @@ function paramsFor(p){
   }
   else if(p.role==="ctrl"){
     B.cols=3;   // the automation graph reads across: this panel states its own width
+    GRID(3); SEC("PROTECTION",null,2);
     opt("INSTRUMENT CHANNELS","How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.","chan",CHAN);
     tog("REACTOR PROTECTION SYSTEM","The automatic trips. Fitted, it scrams the core on high flux, low DNBR, high or low pressure, high fuel temperature, low flow, core void or low subcooling. Leave it off and none of that happens: the reactor will run itself to destruction and wait for you to notice.","rps",55);
-    B.push({kind:"slider",title:"RPS TRIP MARGIN",key:"rpsm",min:0,max:1,step:.05,
+    T.push({kind:"slider",title:"RPS TRIP MARGIN",key:"rpsm",min:0,max:1,step:.05,
       fmt:v=>(v*100).toFixed(0)+" % permissive",
       tip:"How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error."});
     help("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure in RESULTS.");
+    SEC();
     /* HIGH FLUX is the one trip point that is a pure function of the margin -
        every other row in RPS_CH (step.js) is priced off a commissioned P. */
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
       const M=PLANT_LM||layoutMetrics();
       return [
       ["INSTRUMENT TRUST",((1-CHAN[D.chan].noise)*100).toFixed(0)+" %",null,
@@ -529,7 +576,8 @@ function paramsFor(p){
        "Radiation reaching this room during an accident, solved along the straight line from the reactor. Paint standing on that line is what lowers it."]]; }});
     /* THE AUTOMATION LIVES HERE. Every controller on the plant is a graph of
        blocks in this cabinet - see ctl.js - and this is where it is built. */
-    B.push({kind:"ctlgraph",title:"AUTOMATION",live:false});
+    SEC("AUTOMATION",null,3);
+    T.push({kind:"ctlgraph",title:"AUTOMATION",live:false});
     help("Everything that acts on the plant without being asked, except the protection system, is wired here out of blocks: transmitters, setpoints, arithmetic, PID, limits, and the demands they land on. A preset ships the stock controllers already wired; take them apart, retune them or build your own. Automation runs on electricity: with the switchboard dark and no backup, every block holds its last output.");
   }
   /* ══ ONE PANEL, EVERY TANK ══
@@ -542,10 +590,11 @@ function paramsFor(p){
   else if(p.role==="fitting") return paramsForFit(id);
   else if(p.role==="tank"){
     B.cols=2;
+    GRID(2); SEC("VESSEL");
     const t=()=>D.tanks[id];
     const acc=(f)=>({get:()=>t()[f], set:v=>{ t()[f]=v; }});
     const FLUID_IDS=Object.keys(FLUID), AUTO_IDS=Object.keys(AUTORULE);
-    B.push({kind:"optlist",title:"CONTENTS",key:{get:()=>FLUID_IDS.indexOf(t().fluid),
+    T.push({kind:"optlist",title:"CONTENTS",key:{get:()=>FLUID_IDS.indexOf(t().fluid),
         set:i=>{ t().fluid=FLUID_IDS[i]; }},base:0,
       tip:"What is in the tank. This is the whole of what makes one tank different from another: activity, reactivity worth and what a burst disc puts into the air all follow from it.",
       items:FLUID_IDS.map(f=>({name:FLUID[f].label,
@@ -557,7 +606,7 @@ function paramsFor(p){
        legal, silent lie. tankSide() reads it off the runs instead
        (layout.js), so there is one fact and it comes from the pipe you drew.
        This row is a READOUT now, and it says "not connected" honestly. */
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const ci=tankCircuit(id);
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const ci=tankCircuit(id);
       return [["PLUMBED TO", ci===null ? "NOTHING" : circName(ci), ci===null?C.amber:null,
         ci===null ? "Nothing is piped to this tank, so it is on no circuit at all - it has no edge, it can deliver nothing, and it is counted by nothing. Draw a run from it."
         : tankPrimary(id) ? "This tank has a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure."
@@ -574,7 +623,8 @@ function paramsFor(p){
     /* ══ A PRESSURIZER IS A TANK WHOSE GAS SPACE IS CONTROLLED ══
        Two rows, and there is no pressurizer part any more. Put one on a second
        circuit and that circuit gets its own pressure. */
-    B.push({kind:"toggle",title:"PRESSURE CONTROL",mass:0,
+    SEC("PRESSURE");
+    T.push({kind:"toggle",title:"PRESSURE CONTROL",mass:0,
       key:{get:()=>!!t().hold, set:v=>{ t().hold = v?{p:null}:null; }},
       tip:"Make this vessel hold the pressure of whatever circuit it is piped to. Its gas charge stops being consulted - that is what CONTROLLED means - and its line becomes the surge line, ordinary pipe carrying the loop both ways. One per circuit: a second one on the same circuit is demoted and warned about."});
     sld("SETPOINT","The pressure this vessel holds its circuit at. Higher raises the boiling point, so it buys thermal margin and resists voiding - and every machine on the circuit needs the wall to take it, which is steel.",
@@ -585,8 +635,8 @@ function paramsFor(p){
       0.2,22,v=>v.toFixed(1)+" MPa",0.1);
     sld("FILL AT COMMISSIONING","How full it starts. A source ships full; a tank meant to catch something ships empty, and its gas charge is set at whatever level you leave here.",
       acc("level"),0,100,v=>v.toFixed(0)+" %",5);
-    brk();
-    B.push({kind:"toggle",title:"GAS CHARGE",mass:8,
+    SEC("GAS CHARGE");
+    T.push({kind:"toggle",title:"GAS CHARGE",mass:8,
       key:{get:()=>!!t().gas, set:v=>{ t().gas = v?{p0:4.5,frac:0.35}:null; }},
       tip:"A cover gas above the liquid. It is what makes the pressure mean anything: a vented tank never pressurises, so it can have no back-pressure and no rupture disc. It expands as a source empties and is compressed as a sink fills."});
     sld("CHARGE PRESSURE","What the gas holds at the commissioning level. It falls as a source drains and rises as a sink fills - that taper is the whole difference between an accumulator and a pump.",
@@ -595,10 +645,11 @@ function paramsFor(p){
     sld("GAS SPACE","How much of the tank is gas rather than liquid. A big space holds its pressure up as the tank drains, so the flow tapers late; a small one collapses as soon as it starts moving.",
       {get:()=>t().gas?t().gas.frac:0, set:v=>{ if(t().gas) t().gas.frac=v; }},
       0.05,0.8,v=>(v*100).toFixed(0)+" %",0.05);
-    B.push({kind:"toggle",title:"CHECK VALVE",mass:4,
+    SEC("SAFETY");
+    T.push({kind:"toggle",title:"CHECK VALVE",mass:4,
       key:acc("check"),
       tip:"A non-return valve on the tank's own line. With one, the tank can only ever push OUT - which is what makes it a source. Without one it fills as readily as it drains, which is what makes it a sink."});
-    B.push({kind:"toggle",title:"RUPTURE DISC",mass:2,
+    T.push({kind:"toggle",title:"RUPTURE DISC",mass:2,
       key:{get:()=>!!t().burst, set:v=>{ t().burst = v?{at:1.4,drain:6.0,rel:0.004}:null; }},
       tip:"A disc that lets go once the tank is full enough to push its gas past the setpoint. Past that the tank is an opening to containment and what was in it is on the floor. This is the TMI-2 sequence, and it does not reseat."});
     sld("DISC SETPOINT","The pressure the disc lets go at. Set it high and the tank takes more before it fails; set it too high and the tank itself is the weaker part.",
@@ -610,23 +661,26 @@ function paramsFor(p){
     sld("DISC RELEASE","What each point of level dumped costs in release. It follows what is in the tank - clean water is nearly free and contaminated water is not.",
       {get:()=>t().burst?t().burst.rel:0, set:v=>{ if(t().burst) t().burst.rel=v; }},
       0,0.02,v=>v.toFixed(3),0.001);
-    B.push({kind:"optlist",title:"OPENS ITSELF ON",key:{get:()=>AUTO_IDS.indexOf(t().auto),
+    T.push({kind:"optlist",title:"OPENS ITSELF ON",key:{get:()=>AUTO_IDS.indexOf(t().auto),
         set:i=>{ t().auto=AUTO_IDS[i]; }},base:0,
       tip:"When this tank lines itself up without being asked. The operator's own valve is always there beside it - this only ever OPENS, it never overrides a switch.",
       items:AUTO_IDS.map(a=>({name:AUTORULE[a].label,tip:""}))});
   }
   else if(p.role==="bkp"){
+    GRID(1); SEC("BACKUP");
     opt("BACKUP POWER","What keeps the coolant pumps turning when main power is lost. Test it with the Station Blackout fault in the control room.","bkp",BKP);
     help("With no backup, a blackout leaves you nothing but natural circulation - which is set by how high you put the steam generators and how tall you made the core.");
-    B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
+    SEC();
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
       ["PUMP POWER HELD",(BKP[D.bkp].bk*100).toFixed(0)+" %",D.bkp?null:C.amber,
        "What share of rated pump power this set carries through a blackout. Nothing here means the pumps stop dead and only natural circulation is left."],
       ["MASS",BKP[D.bkp].mass.toFixed(0)+" t",null,
        "What the set weighs on the budget."]]});
   }
   else {
+    GRID(1); SEC();
     help(p.tip);
-    B.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS"});
+    T.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS"});
     B.plain = p.access;
   }
   return B;
@@ -652,7 +706,10 @@ const runOfKey = key => pipeNetwork().find(r=>r.key===key) || null;
 const isRunKey = k => typeof k==="string" && k.indexOf(":")>=0 && !!runOfKey(k);
 function paramsForRun(key){
   const B=[], r=runOfKey(key); if(!r) return B;
-  const num=(title,tip,k,unit,dp,suggest,massFn)=>B.push({kind:"num",title,tip,key:k,unit,dp,suggest,massFn});
+  const grid={kind:"grid",cols:1,blocks:[]}; B.push(grid);
+  const runS={kind:"section",title:"RUN",blocks:[]}; grid.blocks.push(runS);
+  const measS={kind:"section",blocks:[]}; grid.blocks.push(measS);
+  const num=(title,tip,k,unit,dp,suggest,massFn)=>runS.blocks.push({kind:"num",title,tip,key:k,unit,dp,suggest,massFn});
   /* MASS IS PER METRE OF THIS RUN, so the hint prices the change the slider
      would actually make rather than a metre of pipe in the abstract. */
   const massAt=(bore,wall)=>shellTPerM(bore,wall)*r.L;
@@ -665,7 +722,7 @@ function paramsForRun(key){
        raw:()=>D.wall[r.key], clr:()=>{ delete D.wall[r.key]; dTouch(); }},
       "mm",1,()=>wallSuggestMm(runBoreMm(r), runDesignP(r), PRIMARY_K[r.k]?COOLANT[priD().cool]:null),
       v=>massAt(runBoreMm(r),v));
-  B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
+  measS.blocks.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
     const c=pipeMap().byKey[r.key], a=c&&partOf(c.a), b=c&&partOf(c.b);
     const rate=runRating(r), held=runDesignP(r);
     return [
@@ -691,8 +748,11 @@ function paramsForRun(key){
 }
 function paramsForFit(fid){
   const B=[], j=D.fittings[fid]; if(!j) return B;
+  const grid={kind:"grid",cols:1,blocks:[]}; B.push(grid);
+  const fitS={kind:"section",title:"FITTING",blocks:[]}; grid.blocks.push(fitS);
+  const measS={kind:"section",blocks:[]}; grid.blocks.push(measS);
   const MODE_IDS=["tee","throttle","relief"];
-  B.push({kind:"optlist",title:"FITTING",base:0,
+  fitS.blocks.push({kind:"optlist",title:"FITTING",base:0,
     key:{get:()=>MODE_IDS.indexOf(j.mode), set:i=>{ j.mode=MODE_IDS[i]; }},
     tip:"What this fitting IS. All three are the same box in the same cell - a tee is a plain junction with no gate at all, a throttle is a valve you work by hand, and a relief valve works itself off a setpoint.",
     items:[{name:"TEE",tip:"A junction. Four faces, one node, no gate: it costs the line nothing and closes nothing."},
@@ -701,20 +761,22 @@ function paramsForFit(fid){
   /* MILLIMETRES, like the pipe it sits in. It was 0.1-1 "x" of a full-bore
      leg, so a valve and its own line stated the same quantity in two units.
      boreK()/fitBoreK() (pipenet.js) are the one conversion into the solve. */
-  B.push({kind:"slider",title:"BORE",step:BORE_REF/20,min:BORE_REF/10,max:BORE_REF*1.5,
-    key:{get:()=>j.bore, set:v=>{ j.bore=v; }},
+  fitS.blocks.push({kind:"slider",title:"BORE",step:BORE_REF/20,min:BORE_REF/10,max:BORE_REF*1.5,
+    key:{get:()=>j.bore ?? fitBoreSuggest(fid), set:v=>{ j.bore=v; }},
     fmt:v=>v.toFixed(0)+" mm",
     tip:"How wide the valve is. A wide relief valve vents faster; a wide throttle costs the line less when it is open. It is steel either way, so it is on the mass budget.",
     massFn:v=>FIT_MASS*(v/FIT_BORE0)});
-  const sld=(title,tip,key,min,max,fmt,step)=>B.push({kind:"slider",title,tip,key,min,max,fmt,step});
-  const rdo=(title,tip,val)=>B.push({kind:"readout",title,tip,val});
-  B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
-    ["FLOW AREA",(Math.PI/4*Math.pow(j.bore/1000,2)).toFixed(4)+" m2",null,
+  const reliefS={kind:"section",title:"RELIEF VALVE",blocks:[]};
+  const sld=(title,tip,key,min,max,fmt,step)=>reliefS.blocks.push({kind:"slider",title,tip,key,min,max,fmt,step});
+  const rdo=(title,tip,val)=>reliefS.blocks.push({kind:"readout",title,tip,val});
+  measS.blocks.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
+    ["FLOW AREA",(Math.PI/4*Math.pow(fitBoreMm(fid)/1000,2)).toFixed(4)+" m2",null,
      "The hole the bore above makes. It is what the solve conducts through - a valve wide open is this area, and shut it is none of it."],
     ["MASS",fitMassOf(fid).toFixed(1)+" t",null,
      "What this fitting weighs, priced off its bore against the default valve."]]});
   if(j.mode!=="relief") return B;
-  B.push({kind:"toggle",title:"SPRING SAFETY",
+  grid.blocks.push(reliefS);
+  reliefS.blocks.push({kind:"toggle",title:"SPRING SAFETY",
     key:{get:()=>!!j.spring, set:v=>{ if(v) j.spring=true; else delete j.spring; }},
     tip:"What works this valve. Off, it is a power-operated relief valve: a block in the control room lifts it, and with the cabinet dark it stays shut. On, it is a code safety valve - a spring against the pressure, lifting and reseating at the setpoints below with no power, no wiring and no way to hold it shut. Real plants carry both."});
   /* MEGAPASCALS, not a multiple. They were fractions of reliefRefP(), so the
@@ -834,8 +896,12 @@ function paramsForMat(key){
   const B=[], [x,y]=matKeyXY(key);
   if(!matCell(x,y)) return B;
   B.cols=2;
+  const grid={kind:"grid",cols:2,blocks:[]}; B.push(grid);
+  const wallS={kind:"section",title:"WALL",blocks:[]}; grid.blocks.push(wallS);
+  const measS={kind:"section",blocks:[]}; grid.blocks.push(measS);
+  const WB=wallS.blocks, MB=measS.blocks;
   const s = (typeof S!=="undefined") ? S : null, live = !!(s && s.roomP);
-  B.push({kind:"optlist",title:"MATERIAL",base:0,
+  WB.push({kind:"optlist",title:"MATERIAL",base:0,
     /* IT ALSO LOADS THE BRUSH. Picking a material here is the only place one
        is picked at all, so the next stroke lays what the player just chose -
        otherwise every cell would have to be painted and then converted. */
@@ -849,7 +915,7 @@ function paramsForMat(key){
      Barlow at this cell's
      own local span, which is what makes a long flat side ask for more steel
      than a corner does. */
-  B.push({kind:"num",title:"THICKNESS",unit:"mm",dp:0,
+  WB.push({kind:"num",title:"THICKNESS",unit:"mm",dp:0,
     tip:"How thick the wall is. It is what the cell is RATED for and it is what the cell weighs. AUTO is Barlow against the FLAT SPAN this cell is in the middle of - so a long straight wall asks for a thick one and a corner asks for almost nothing.",
     key:{get:()=>matThick(x,y), set:v=>{ const cs=matSealCells(x,y);
       if(cs) for(const i of cs) (D.mat[(i%GW)+","+((i/GW)|0)]||{}).t=v;
@@ -862,8 +928,7 @@ function paramsForMat(key){
         buildLayout(); }},
     suggest:()=>matThickSuggest(x,y),
     massFn:v=>v/1000*MPC*ROOM_DEPTH*matRow(matCell(x,y).m).rho/1000});
-  B.push({kind:"colbreak"});
-  B.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
+  MB.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
     const g=matSealAt(x,y);
     const rate=matRating(x,y), burst=matBurstP(x,y);
     const rows=[
