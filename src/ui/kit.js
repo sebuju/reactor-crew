@@ -550,8 +550,8 @@ const KIT = (function(){
 
   /* ══ THE ONE AUTO KEY ══
      A latch, not a one-shot: latched, the control IS the suggestion, and the
-     first value written by hand takes it off. numInput() hangs one beside the
-     field and sliderRow() hangs one on its label - one key, two seats. */
+     first value written by hand takes it off. The slider's seat stands at the
+     right edge of its row; the field's seat stands left of the input. */
   function autoKey(auto){
     const b = el("button", "kit-numinput-suggest", {type: "button"});
     b.textContent = "AUTO";
@@ -673,10 +673,10 @@ const KIT = (function(){
     const head = rule(opts.title);
     root.appendChild(head.el);
     if(opts.tip) tip(root, opts.title, opts.tip);
-    const sug = opts.auto ? autoKey(opts.auto) : null;
-    if(sug) head.el.insertBefore(sug.el, head.sfxEl);
     const sl = slider(opts);
     root.appendChild(sl.el);
+    const sug = opts.auto ? autoKey(opts.auto) : null;
+    if(sug) root.appendChild(sug.el);
     /* WHAT IT COSTS STANDS ON THE LABEL, right of the name and left of nothing.
        It was a line of its own under the track, so every knob on a panel spent
        a row saying a figure that belongs beside the thing it prices. */
@@ -695,7 +695,7 @@ const KIT = (function(){
 
   function readout(opts){
     opts = opts || {};
-    const root = el("div", "kit-readout");
+    const root = el("div", "kit-readout db-field");
     const head = rule(opts.title);
     root.appendChild(head.el);
     const val = el("span", "kit-readout-val");
