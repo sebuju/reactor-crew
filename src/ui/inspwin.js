@@ -11,13 +11,13 @@
    marginPan() the one handle shape, so a row that appears on the drawing's
    panel appears here on the same frame.
 
-   ONE UNPINNED WINDOW, AND AS MANY PINNED AS ARE OPENED. The unpinned one is
-   the selection's - it re-points at whatever was picked last and closes when
-   the pick is not a machine. Pinning it (its own key, or shift-clicking a
-   machine) takes it out of that and bolts it to the machine it is showing,
-   which frees the selection to open a fresh one. */
+   A WINDOW IS NOT OPENED, IT IS KEPT. There is no key and no corner: the
+   reader drags the hover peek they are already reading (hovwPin,
+   ui/hoverwin.js) and it stays where the drag ended. So there is no unpinned
+   window, no selection to follow and no seat to compute - a window is where it
+   was put, and it closes on its own key. */
 
-const INSPW_GAP=14, INSPW_STEP=26, INSPW_MIN_VIS=80;
+const INSPW_GAP=14, INSPW_MIN_VIS=80;
 
 function inspHost(root){
   const el=KIT.el("div","insp-host");
@@ -49,20 +49,19 @@ function inspDrag(h){
     },
     move(e){
       if(!g) return;
+      /* MOVING A HOVER PEEK IS WHAT PINS IT (ui/hoverwin.js). Spent on the
+         first move rather than on the press, so a press that goes nowhere
+         leaves the peek a peek - and the grab is on the BAR, which the promote
+         keeps, so the same gesture carries straight on into the drag. */
+      if(h.onDrag){ const f=h.onDrag; h.onDrag=null; f(h); }
       h.wx=e.clientX-g.x; h.wy=e.clientY-g.y; inspMove(h);
     },
     up:drop, cancel:drop});
 }
 
-function inspPinSet(h,on){
-  h.pinned=!!on;
-  h.well.el.classList.toggle("pinned",h.pinned);
-  h.keyPin.set({label:h.pinned?"UNPIN":"PIN", on:h.pinned});
-}
 function inspCollapse(h,on){
   h.folded=!!on;
   h.well.el.classList.toggle("folded",h.folded);
-  h.keyFold.set({label:h.folded?"+":"−"});
 }
 function inspClose(h){
   const host=h.well.el.parentNode;
@@ -89,44 +88,6 @@ function inspFrame(host){
     if(hr.height>0) y0=Math.max(y0, hr.bottom); }
   return {x0:x0+INSPW_GAP, y0:y0+INSPW_GAP, x1:x1-INSPW_GAP, y1:y1-INSPW_GAP};
 }
-/* ══ WHERE A NEW WINDOW OPENS: THE TOP RIGHT ══
-   It used to open beside the machine it describes, which is where the margin
-   panel already stands - so the window landed on top of its own twin, and on a
-   zoomed-in plant it landed off screen with the machine. One corner instead:
-   the reader always knows where a new window will be, and the corner is the
-   one part of a plant screen nothing else is drawn in.
-   DOWN AND LEFT for the next one, because the stack grows away from the corner
-   it starts in, and the title bar of the one underneath stays readable.
-   THE RUNG IS THE SEAT, NOT THE PIXEL. Two panels of different widths both
-   hang off the same right edge, so their left edges differ and a comparison on
-   x said they were not on top of each other while they overlapped almost
-   entirely. A rung is taken or it is not. */
-function inspSeat(h){
-  const host=h.well.el.parentNode;
-  const f=inspFrame(host);
-  const w=h.well.el.offsetWidth||h.w;
-  const rungs=Math.max(1,Math.floor((f.y1-f.y0)/INSPW_STEP));
-  let n=0;
-  while(n<rungs && host._wins.some(o=>o!==h && o._seat && o._seat.n===n
-                                    && o.wx===o._seat.x && o.wy===o._seat.y)) n++;
-  if(n>=rungs) n=0;                    // full: back to the corner rather than off the ground
-  h.wx=Math.max(f.x0, f.x1-w-n*INSPW_STEP);
-  h.wy=f.y0+n*INSPW_STEP;
-  inspMove(h);
-  /* WHAT IT WAS SEATED AS, so a re-seat can tell an untouched window from one
-     the reader has put somewhere. A panel that states its own columns
-     (the reactor's two, the controller's three) is measured at ONE column here
-     and widens on its first sync, which hung it off the right edge - it is
-     re-seated at its real width, and only while nobody has moved it. */
-  h._seat={x:h.wx, y:h.wy, w, n};
-}
-// the seat is stale when the panel grew and the window is still standing on it
-function inspReseat(h){
-  const s=h._seat; if(!s) return;
-  if(h.wx!==s.x || h.wy!==s.y) return;
-  if((h.well.el.offsetWidth||h.w)===s.w) return;
-  inspSeat(h);
-}
 /* CLAMPED SO A TITLE BAR IS ALWAYS REACHABLE, never so the whole window fits:
    a window grows to its content and its content may be taller than the screen,
    and a clamp on the bottom edge would then drag the bar off the top. */
@@ -144,31 +105,55 @@ function inspMove(h){
   if(h.wtf!==tf){ h.well.el.style.transform=tf; h.wtf=tf; }
 }
 
-function inspOpen(host,id,pinned){
-  const p=partOf(id);
-  if(!p||!fitted(p)) return null;
-  const h=marginPan(host,partName(p),()=>null,p);
-  /* the margin panel's own class comes with it, because the LOOK is the same
-     panel's look; .insp-win only takes the plant-space placement back off it */
-  h.well.el.classList.add("insp-win");
-  h.wx=0; h.wy=0; h.wtf=null; h.pinned=false; h.folded=false;
-  ctxSuppress(h.well.el);
-  MOUSE.on(h.well.el,{down(){ inspRaise(h); }});
+/* THE TITLE BAR'S OWN KEYS, at the right hand end of the bar where a window's
+   keys stand. A peek has none while it is a peek - it goes when the pointer
+   does, so there is nothing to fold or close - and it grows them the moment a
+   drag keeps it (hovwPin, ui/hoverwin.js).
+   The chevron is not redrawn folded: the class on the window turns it. */
+const INSPW_ICON={fold:"M4 6.5 L8 10.5 L12 6.5", shut:"M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5"};
+function inspKeys(h){
   const keys=KIT.el("div","insp-keys");
-  h.keyFold=KIT.button("−",{flat:true,size:7,tip:"Fold this window down to its title bar.",
+  h.keyFold=KIT.button("FOLD",{flat:true,icon:INSPW_ICON.fold,
+    tip:"Fold this window down to its title bar.",
     onClick:()=>inspCollapse(h,!h.folded)});
-  h.keyPin=KIT.button("PIN",{flat:true,size:7,
-    tip:"Keep this window on this machine. An unpinned window follows the selection instead; shift-clicking a machine on the plant opens a pinned one straight away.",
-    onClick:()=>inspPinSet(h,!h.pinned)});
-  h.keyShut=KIT.button("×",{flat:true,size:7,tip:"Close this window.",onClick:()=>inspClose(h)});
-  keys.append(h.keyFold.el,h.keyPin.el,h.keyShut.el);
-  h.well.head.insertBefore(keys,h.well.sfx);
-  inspDrag(h);
-  inspPinSet(h,pinned);
-  inspCollapse(h,false);
-  host._wins.push(h);
-  inspSeat(h);
-  return h;
+  h.keyFold.el.classList.add("insp-key-fold");
+  h.keyShut=KIT.button("CLOSE",{flat:true,icon:INSPW_ICON.shut,
+    tip:"Close this window.",onClick:()=>inspClose(h)});
+  keys.append(h.keyFold.el,h.keyShut.el);
+  h.well.head.appendChild(keys);
+}
+/* ══ WHICH MACHINE THIS WINDOW IS ABOUT ══
+   A peek stands against its own box, so touching it IS the association. A
+   window has been carried off somewhere the reader wanted it, and then nothing
+   on screen says which machine it came from - so it keeps a dashed leader, the
+   same ink and the same elbow the margin panels use (leaderStroke,
+   render/plant.js). Drawn in LAYOUT space over the canvas and re-read off the
+   live DOM box every frame, so a pan, a zoom and a drag all come out right
+   with no listeners. Amber while its machine is the pick, like every other
+   leader on the board. */
+function inspLeaders(host){
+  if(!host||typeof LAY==="undefined"||!LAY||!host._wins.length) return;
+  const pad=3, vx0=VIEW.x+pad, vx1=VIEW.x+VIEW.w-pad, vy0=VIEW.y+pad, vy1=VIEW.y+VIEW.h-pad;
+  if(vx1<=vx0||vy1<=vy0) return;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
+  for(const h of host._wins){
+    const p=partOf(h.p.id); if(!p) continue;
+    const q=hostRect(h.well.el); if(q.h<1) continue;
+    const box=prect(p), c=vScr({x:box.x+box.w/2, y:box.y+box.h/2});
+    // the window's own near edge, and the face of the machine that looks at it
+    const face = q.x+q.w/2 >= c.x ? "r" : "l";
+    const s0=vScr(leaderAnchor(box,face));
+    // clamped, not culled: panned off the plant, the leader pins to the view's
+    // edge and still says which way the machine went
+    const a={x:clamp(s0.x,vx0,vx1), y:clamp(s0.y,vy0,vy1)};
+    const b={x: face==="r"? q.x : q.x+q.w, y:q.y+q.h/2};
+    if(Math.abs(b.x-a.x)<8) continue;             // sitting on its own machine: no room to turn
+    const gx=(a.x+b.x)/2;                         // turn halfway across, not against the window
+    const pts = Math.abs(a.y-b.y)<1 ? [a,b] : [a,{x:gx,y:a.y},{x:gx,y:b.y},b];
+    leaderStroke(pts, h.p.id===sel?C.amber:C.lead, [a,b], cvPx(), LEADER_RAD);
+  }
+  ctx.restore();
 }
 
 /* A window is re-pointed rather than rebuilt, so the one the reader is looking
@@ -186,33 +171,13 @@ function inspAim(h,id){
   marginCols(h,1);
 }
 
-// the screen whose windows a plant-side gesture is talking to - set by inspSync
+// the screen whose windows a peek is handed to - set by inspSync
 let INSPW_HOST=null;
-/* THE SHIFT-CLICK DOOR (uiDown, core/ui.js). Pinning what is already up beats
-   opening a second window on the same machine: the reader shift-clicked the
-   panel they can see. */
-function inspPin(id){
-  const host=INSPW_HOST; if(!host) return;
-  const had=host._wins.find(h=>h.p.id===id);
-  if(had){ inspPinSet(had,true); inspRaise(had); return; }
-  const h=inspOpen(host,id,true);
-  if(h) inspRaise(h);
-}
 
 function inspSync(host,live){
   if(!host||typeof LAY==="undefined"||!LAY) return;
   INSPW_HOST=host;
-  /* THE SELECTION OWNS ONE WINDOW. A run or a wall key is not a machine, so
-     there is nothing for the unpinned window to show and it goes. */
   const pick = partOf(sel) ? sel : null;
-  const free = host._wins.find(h=>!h.pinned);
-  if(!pick){ if(free) inspClose(free); }
-  else if(free){ if(free.p.id!==pick) inspAim(free,pick); }
-  /* ...AND NEVER A SECOND WINDOW ON A MACHINE THAT ALREADY HAS ONE. Pinning
-     the selection's own window leaves the pick standing, so the next frame
-     would otherwise open its twin beside it. */
-  else if(!host._wins.some(h=>h.p.id===pick)) inspOpen(host,pick,false);
-
   /* ══ PICKING A MACHINE BRINGS ITS WINDOW TO THE FRONT, AND LEAVES IT THERE ══
      The raise is spent on the CHANGE, not held while the pick stands: a window
      that dropped back on deselect would put the reader's own last move away,
@@ -234,7 +199,6 @@ function inspSync(host,live){
     panPartSync(h,live,t.deep,t.fresh||h._force);
     h._force=false;
     marginColumns(h);
-    inspReseat(h);
     inspMove(h);
   }
 }
