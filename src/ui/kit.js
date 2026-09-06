@@ -425,7 +425,7 @@ const KIT = (function(){
     if(opts.danger) b.classList.add("kit-btn-danger");
     if(opts.size) b.style.fontSize = "var(--t" + String(opts.size).replace(".", "-") + ")";
     if(opts.tip) tip(b, label, opts.tip);
-    if(opts.onClick) b.addEventListener("click", opts.onClick);
+    if(opts.onClick) MOUSE.on(b, {click: opts.onClick});
     let on = !!opts.on;
     b.classList.toggle("on", on);
     function set(o){
@@ -544,8 +544,7 @@ const KIT = (function(){
      the option under the cursor with it (design-bench.js). */
   function hoverIdx(node, i, opts){
     if(!opts.onHover) return;
-    node.addEventListener("pointerenter", () => opts.onHover(i));
-    node.addEventListener("pointerleave", () => opts.onHover(null));
+    MOUSE.on(node, {enter: () => opts.onHover(i), leave: () => opts.onHover(null)});
   }
 
   /* ══ THE ONE AUTO KEY ══
@@ -555,7 +554,7 @@ const KIT = (function(){
   function autoKey(auto){
     const b = el("button", "kit-numinput-suggest", {type: "button"});
     b.textContent = "AUTO";
-    b.addEventListener("click", () => auto.set(!auto.get()));
+    MOUSE.on(b, {click: () => auto.set(!auto.get())});
     let was = null;
     return {el: b, set(on){ if(was === on) return; was = on; b.classList.toggle("on", on); }};
   }
@@ -616,7 +615,7 @@ const KIT = (function(){
       const mass = el("span", "kit-optlist-mass");
       row.appendChild(mass);
       if(it.tip) tip(row, it.name, it.tip);
-      row.addEventListener("click", () => opts.onSelect && opts.onSelect(i));
+      MOUSE.on(row, {click: () => opts.onSelect && opts.onSelect(i)});
       hoverIdx(row, i, opts);
       root.appendChild(row);
       return {row, mark, mass};
@@ -649,7 +648,7 @@ const KIT = (function(){
       const name = el("span", "kit-segsel-name"); name.textContent = L;
       const mass = el("span", "kit-segsel-mass");
       c.appendChild(name); c.appendChild(mass);
-      c.addEventListener("click", () => opts.onSelect && opts.onSelect(i));
+      MOUSE.on(c, {click: () => opts.onSelect && opts.onSelect(i)});
       hoverIdx(c, i, opts);
       root.appendChild(c);
       return {c, mass};
@@ -715,7 +714,7 @@ const KIT = (function(){
     root.appendChild(mark); root.appendChild(label);
     const mass = el("span", "kit-toggle-mass");
     if(opts.mass != null){ mass.textContent = "+" + opts.mass + "t"; root.appendChild(mass); }
-    root.addEventListener("click", () => opts.onToggle && opts.onToggle());
+    MOUSE.on(root, {click: () => opts.onToggle && opts.onToggle()});
     let last = null;
     function set(on){
       if(on === last) return; last = on;
@@ -727,21 +726,21 @@ const KIT = (function(){
     return {el: root, set};
   }
 
-  /* A KEY WITH A PANEL HANGING OFF IT. One handler on the DOCUMENT, captured,
-     opens and shuts it: the plant is a canvas and swallows presses that land on
-     it, and a key with its own click handler would shut the menu on the press
-     and reopen it on the click. */
+  /* A KEY WITH A PANEL HANGING OFF IT. One handler in the hub's PRE phase opens
+     and shuts it: the plant is a canvas and swallows presses that land on it,
+     and a key with its own click handler would shut the menu on the press and
+     reopen it on the click. */
   function menuKey(opts){
     const wrap = el("div", "kit-menukey" + (opts.cls ? " " + opts.cls : ""));
     const menu = el("div", "kit-menukey-menu kit-hide");
     const key = button(opts.label, {sunk: true});
     key.el.classList.add("kit-menukey-key");
     if(opts.tip) tip(key.el, opts.label, opts.tip);
-    document.addEventListener("pointerdown", e => {
+    MOUSE.pre({down(e){
       if(menu.contains(e.target)) return;
       const open = key.el.contains(e.target) && menu.classList.contains("kit-hide");
       show(menu, open); key.set({on: open});
-    }, true);
+    }}, wrap);
     wrap.append(key.el, menu);
     return {el: wrap, key, menu};
   }
