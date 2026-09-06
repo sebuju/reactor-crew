@@ -328,7 +328,7 @@ const ROD_SPD0=0.012, ROD_BANK_T=9;
 let DGEN=0;
 const dTouch=()=>{ DGEN++; };
 const D={sg:0,
-         chan:1,rps:true,rpsm:.35,autorod:true,
+         chan:1,rps:true,rpsm:.35,
          /* How far the temperature controller may walk the bank on its own,
             as fractions inserted. Not a safety limit - it is what stops the
             controller wandering off the position the shutdown margin was
@@ -379,7 +379,7 @@ const D={sg:0,
             The stock ship is a preset (PLANTPRE, pipenet.js), and it is built
             out of the same gestures the bench hands the player. */
          /* D.cores[id] = one vessel's reactor, drawing and all - see CORE_KEYS. */
-         machines:{}, cores:{}, name:{},
+         machines:{}, cores:{}, name:{}, blocks:{},
          tanks:{}, pipes:{}, ports:{}, start:{}};
 
 /* WHERE AN ACTUATOR STANDS THE MOMENT THE PLANT IS COMMISSIONED. Absent means
@@ -474,11 +474,15 @@ const condShort_ = () => loadCeil() - condCeil() > 0.26;
        spectrum hardens by whatever modTherm() loses. Negative in water.
      - the coolant is also an ABSORBER, and taking an absorber out is
        positive. In a graphite core that term is the whole story, which is
-       where RBMK's +1500 comes from.
+       where RBMK's +2500 comes from.
      - a spectrum that is already fast hardens further on voiding, which is
        positive too and is why a sodium core is positive without any graphite.
-   AV_MOD/AV_ABS/AV_FAST are solved together against the PWR, LWGR and SFR
-   rows the old table carried; they are the plan's one fitted shape.
+   AV_MOD/AV_ABS/AV_FAST are solved together (docs/plan-excursion.md, A1) so
+   the three ARCHPRE drawings read published full-void worths as the SLOPE at
+   the operating point extrapolated to 100 % void - which is what a linear
+   aV times a node void fraction is: PWR -10000 (about -100 pcm per % void),
+   RBMK +2500 (the pre-1986 +5 beta), SFR +700 (a large oxide sodium core's
+   +2 $). They are the plan's one fitted shape; BWR, MSR and HTGR fall out.
 
    modEta() is the second, and it HAS A PEAK. modTherm() only ever rises, so
    more water was always more reactivity and no lattice could be drawn wrong
@@ -496,7 +500,7 @@ const condShort_ = () => loadCeil() - condCeil() > 0.26;
    and left every fast core at zero excess. A stock water lattice reads ~1 and
    buys the fuel it paid for; the best-moderated one reads about 5% more. */
 const MOD_HALF=1.0, LAM_FAST=4.0e-7, LAM_TH=8.0e-5;
-const AV_MOD=2286, AV_ABS=783, AV_FAST=660, AM_K=432;
+const AV_MOD=12562.5, AV_ABS=1578.9, AV_FAST=631.5, AM_K=432;
 /* EXP_RHO is reactivity per unit core strain at a bare fast spectrum, pcm.
    Fitted ONCE: BN-600's isothermal coefficient aM+aS lands near -3 pcm/K, the
    published band for a large oxide sodium core (-1 to -3, radial growth the
@@ -601,14 +605,12 @@ function coreFig(c){
      it, the reflector drawn beside it and the drives on its head are all ONE
      machine - so a ship with no vessel carries none of it. The lattice is a
      DRAWING (latMeasure(), lattice.js) and it exists whether or not anything
-     stands on the arrangement grid; a drawing weighs nothing. Automatic rod
-     control rides the drives (AUTOSYS.rod, step.js), so it goes with them. */
+     stands on the arrangement grid; a drawing weighs nothing. */
   const mass =
       a.mass + f.mass + SCRAM[c.scram].mass + CHAN[D.chan].mass
     + coreMass + vesselMass + c.chim*38 + latMass(c)
     + FOLL[c.foll].mass + (c.nbank-4)*ROD_BANK_T
-    + c.nbank*ROD_BANK_T*(rodSpdOf(c)/ROD_SPD0-1)
-    + (D.autorod?26:0);
+    + c.nbank*ROD_BANK_T*(rodSpdOf(c)/ROD_SPD0-1);
   /* MEASURED, not bought. The pitch correction the old line carried
      (aM*(2-D.pitch), aV+900*(D.pitch-1)) is gone because pitch is already
      inside modRatio() - it is how much coolant sits between the assemblies. */
@@ -777,6 +779,7 @@ function derived(id){
   if(condMargin<1/DUMP_COND_K) w.push([condMargin<1?"RED":"SOFT","The sink rests at "+(TURB_TRIP_P/condMargin).toFixed(4)+" MPa of backpressure against a "+TURB_TRIP_P+" MPa turbine trip"+(condMargin<1?", so the turbine trips before anything has happened":", so the steam dump is blocked at rest: a load drop goes to the shell safeties and the water does not come back")+". Bigger panels or a bigger condenser buy the margin.","cond"]);
   if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% of full-load duty but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
   if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
+  if(Object.keys(D.blocks).length && !roleOf("ctrl")) w.push(["SOFT","Automation is wired but there is no control room to house it. Every block in the cabinet computes nowhere: the demands they drive stay by hand until a CONTROL is placed.","ctrl"]);
   /* Buildable, not blocked - same standing as "no RPS" above. Topological
      only (hasHeatSink(), layout.js): Stage 6 is what would let this warning
      read the loop rather than just its wiring. */

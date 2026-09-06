@@ -362,12 +362,12 @@ const ARCHPRE=[
     and the disc rated 176 MWt, well under the 400 the hull is drawn for. WIDE
     and not tall: a longer channel boils further along itself, and at hd 1.2
     this core settles under its own DNBR trip on the commissioning transient. */
- ["RBMK",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:2,mod:0,pk:0.88,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3},
-  "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile with narrower channels than the real machine: open the pitch and the void coefficient climbs until the core hunts itself into a trip."],
+ ["RBMK",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:2,mod:0,pk:1.06,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3},
+  "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile, pitched so the void coefficient lands on the +2500 pcm the real machine carried before 1986: open it further and the core hunts itself into a trip."],
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
  ["MSR",{fuel:1,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
-  "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the blocks own most of the moderation. Voiding the salt is worth almost nothing either way - it reads mildly POSITIVE, because taking the salt out takes an absorber out of somebody else's moderator. No pressure anywhere and almost no xenon pit."],
+  "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the blocks own most of the moderation. Voiding the salt reads mildly NEGATIVE: the little moderation the salt does is worth more than the absorption it takes with it. No pressure anywhere and almost no xenon pit."],
  ["HTGR",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
   "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
 ];
