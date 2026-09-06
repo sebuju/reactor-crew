@@ -1000,7 +1000,7 @@ function liveValue(p,s){
     case p.role==="rods":  return (coreSeen(s,coreOf(p.id)).rodPos*100).toFixed(0)+"%";
     // a hold tank reports the pressure it is holding; every other tank a level
     case p.role==="sg":          return sgLvl(s,p.id).toFixed(0)+"%";
-    case p.role==="ihx":         return ihxTemp(s,p.id).toFixed(0)+" K";
+    case p.role==="ihx":         return ((S.ihxQBy&&S.ihxQBy[p.id]||0)/1000).toFixed(0)+" MW";
     case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
     case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
     // what this panel is actually shedding, which is the only reason it is here
@@ -2039,12 +2039,12 @@ function heatSinks(cid){
   const out=[], rated=heatRated(cid)*1000;
   if(!rated) return out;
   for(const id of ihxIds()){
-    if(!ihxSgs(id).length || !heatOnUnit(cid,id)) continue;
+    if(!sgActive(id) || !heatOnUnit(cid,id)) continue;
     out.push({lab:nameOf(id),v:(S.ihxQBy[id]||0)/rated,col:C.cyan,
-      tip:"Heat crossing this intermediate exchanger, out of the core and into its pot. The generators behind it are a stage further on."});
+      tip:"Heat crossing this intermediate exchanger, out of the core and into the circuit behind it. Whatever that circuit feeds is a stage further on."});
   }
   for(const id of sgIds()){
-    if(ihxOf(id) || !heatOnUnit(cid,id)) continue;
+    if(!sgActive(id) || !heatOnUnit(cid,id)) continue;
     out.push({lab:nameOf(id),v:(HEATBAL.sgQBy[id]||0)/rated,col:C.green,
       tip:"Heat this generator is taking out of the core. It goes to zero when the tubes uncover, and a core with no sink at all keeps heating on decay heat alone."});
   }
@@ -2437,16 +2437,15 @@ function readoutsFor(p,s){
     add("STEAM OUT",(s.steamTo&&s.steamTo[id]||0).toFixed(0)+" kg/s",
       (s.sgVentBy&&s.sgVentBy[id]>0)?C.red:null,
       "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go.");
-    /* WHAT HEATS THESE TUBES, off the same sgHot() the heat term reads. With an
-       intermediate exchanger in front there is no core coolant in this machine
-       at all, and no T-COLD either: the intermediate loop's own rise is not a
-       number this model carries. */
-    { const h=ihxOf(id);
-      add(h?"INTER IN":"T-HOT IN",(h?ihxTemp(s,h):Th).toFixed(0)+" K",null,
-        h?"Intermediate coolant arriving from "+nameOf(h)+". The core's own coolant never reaches this machine."
-         :"Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out.");
-      if(!h) add("T-COLD OUT",Tc.toFixed(0)+" K",null,
-        "Coolant going back to the core, after the generator has taken its heat."); }
+    /* WHAT HEATS THESE TUBES, off the same sgHot() the heat term reads. Behind
+       a barrier the coolant in this machine is the intermediate circuit's, and
+       both readings are the same two nodes either way. */
+    { const act=sgActive(id);
+      add(act?"T-HOT IN":"INTER IN",sgHot(s,id).toFixed(0)+" K",null,
+        act?"Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out."
+           :"Intermediate coolant arriving from the exchanger in front. The core's own coolant never reaches this machine.");
+      add(act?"T-COLD OUT":"INTER OUT",stageOutT(s,id,0).toFixed(0)+" K",null,
+        "Coolant going back the way it came, after the generator has taken its heat."); }
     add("HEAT REMOVED",((s.steamBy&&s.steamBy[id]||0)*riseSg(id,secP(s,id))/1000).toFixed(0)+" MWt",null,
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
     add("SHELL",(s.sgBurst&&s.sgBurst[id])?"BURST":"intact",
@@ -2455,18 +2454,18 @@ function readoutsFor(p,s){
     add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
       sgActive(id)
         ?"The barrier between primary and secondary. A rupture leaks coolant and activity straight past containment."
-        :"The barrier between the intermediate loop and the secondary. What is in these tubes came from "+nameOf(ihxOf(id))+", not from the core, so a rupture here costs coolant and no activity at all - that is what the exchanger is for.");
+        :"The barrier between the intermediate circuit and the secondary. What is in these tubes never came from the core, so a rupture here costs coolant and no activity at all - that is what the exchanger is for.");
   } else if(p.role==="ihx"){
-    const served=ihxSgs(id);
-    add("INTER TEMP",ihxTemp(s,id).toFixed(0)+" K",null,
-      "The temperature of the intermediate coolant in this exchanger. Heat crosses into it on the gap between this and the primary, and out of it on the gap between this and every shell it feeds - so it sits between the two, and it is what those generators see instead of the core.");
-    add("T-HOT IN",Th.toFixed(0)+" K",null,
-      "Primary coolant arriving from the core. The gap between this and INTER TEMP is what this exchanger is passing.");
+    const served=ihxFeeds(id);
+    add("T-HOT IN",stageInT(s,id,0).toFixed(0)+" K",null,
+      "Coolant arriving on the hot side. The gap between this and INTER IN is what this exchanger has to work across.");
+    add("INTER IN",stageInT(s,id,1).toFixed(0)+" K",null,
+      "Coolant arriving on the second side, from the circuit behind this machine. It leaves hotter by what crosses the tubes.");
     add("HEAT CROSSED",(((s.ihxQBy&&s.ihxQBy[id])||0)/1000).toFixed(0)+" MWt",null,
-      "Heat crossing these tubes out of the primary. It is a conductance times a temperature difference, exactly like the generator behind it - two stages in series, and each one costs a temperature drop.");
+      "Heat crossing these tubes into the second circuit. It is bounded by the tube area and by the smaller of the two flows - two stages in series, and each one costs a temperature drop.");
     add("FEEDS",served.length?nameList(served):"nothing",
         served.length?null:C.amber,
-      "Which generators are heated by this exchanger. It is the loop it is spliced into, asked of the drawing - an exchanger on no loop with no generator behind it heats nothing at all.");
+      "Which stages stand on this exchanger's second circuit. Traced off the drawing - an exchanger with nothing behind it heats nothing at all.");
   } else if(roleHead(p.role)){
     /* A PUMP PANEL IS ABOUT THIS PUMP. The rail carries one well per part, so
        the plant-wide flow ledger that used to stand here was reprinted once per
@@ -3096,7 +3095,8 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   /* one clock/frame, and it is the PLANT's - so pause freezes every effect and
      16x runs them sixteen times over. The bench has no plant to take a time
      from, and nothing there should freeze, so it gets wall seconds. */
-  fxSetClock(L ? L.t : fxWall());
+  // and at the rate the tape is SET to, never one read back off S.t
+  fxSetClock(L ? L.t : fxWall(), L ? trClockRate() : 1);
   const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
   // both screens are HTML rails now, so the content the view fits to is the grid alone
   /* the content box is the grid PLUS the elevation gutter, so the EL labels
@@ -3253,8 +3253,9 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // showing inside the machine's own cells, so a box read one size and
     // occupied another.
     const symFull = p.role==="tank";
-    // the shell sits 1 px in from the footprint, so the case takes that px back
-    const boxR = symFull ? tankRad(p.id)+1 : 0;
+    // the shell sits 1 symbol unit in from the footprint, so the case takes it
+    // back - both in SCREEN px, or the corners part as soon as CELL leaves 16
+    const boxR = symFull ? (tankRad(p.id)+1)*DRAW_K : 0;
     const boxPath=()=>{ ctx.beginPath(); rr(x,y,w,h,boxR); };
     if(fit){ if(boxR){ boxPath(); ctx.fillStyle=C.machBg; ctx.fill(); }
              else fillRect(x,y,w,h,C.machBg); }
