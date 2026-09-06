@@ -81,6 +81,18 @@ function navCentres(){
     const r=h._pan;
     out.push({id, x:r.x+r.w/2, y:r.y+r.h/2, rect:{x:r.x, y:r.y, w:r.w, h:r.h}});
   }
+  /* ══ AND WITH NO PANELS ON THE BOARD, IT IS BETWEEN MACHINES ══
+     The panels are hidden (MARGIN_HIDE, ui/margin.js) and a machine is read
+     through a hover peek that follows the pointer, so there is no second
+     arrangement standing on the deck to walk through - and gated on MARGIN
+     alone the keys simply did nothing. The boxes are what is left, and they
+     are what the panels were naming. */
+  if(!out.length && typeof LAY!=="undefined" && LAY)
+    for(const p of LAY.parts){
+      if(!fitted(p)) continue;
+      const r=prect(p);
+      out.push({id:p.id, x:r.x+r.w/2, y:r.y+r.h/2, rect:{x:r.x, y:r.y, w:r.w, h:r.h}});
+    }
   return out;
 }
 const navFind=(centres,id)=>centres.find(c=>c.id===id)||null;
@@ -153,8 +165,14 @@ function navPreview(dx,dy){
    live endpoint FREEZES into the chain and restarts the one shared deadline,
    so a run of hops keeps the whole curve up until TTL after the LAST of them.
    With no candidate the walk simply ends where it stood. */
+/* WHAT THE KEYS LANDED ON, so the peek can stand on it without a pointer
+   (hovwPartAt, ui/hoverwin.js). The id and not a flag: a pick made with the
+   mouse moves `sel` off it, and the peek is then reading a machine the walk is
+   no longer standing on. */
+let navLandId=null;
 function navCommit(){
   const id=navTarget; navTarget=null;
+  navLandId=id||null;
   if(!id){ navReset(); return; }
   if(navLive){ navChain.push(navLive); navLive=null; }
   navDeadline=navNow()+NAV_TTL;
