@@ -469,6 +469,8 @@ function coreReset(K,cs,flowNet){
   cs.nTf =new Float64Array(XNN); cs.nTc=new Float64Array(XNN);
   cs.nV  =new Float64Array(XNN); cs.nRho=new Float64Array(XNN);
   cs.nVt =new Float64Array(XNN);
+  // a pressure-tube core: which channels are torn (latched, whole ring), their share, the cavity relief's state
+  cs.nTube=new Float64Array(XNN); cs.tubesOpen=0; cs.cavRelief=0;
   cs.nCov=new Float64Array(XNN); cs.nFol=new Float64Array(XNN);
   /* ── HOW THE FUEL IS HURT, NODE BY NODE ──
      Three MONOTONIC integrals, and a stage is derived off them rather than
@@ -599,10 +601,11 @@ function coreReset(K,cs,flowNet){
    stage is adding a row there and a branch here, and nothing else in the game
    branches on a stage id at all. */
 function fuelStage(cs,k){
-  if(cs.nMelt[k]>0) return 4;
-  if(cs.nDisp[k]>0) return 3;
-  if(ecrOf(cs.nOx[k])>=OX_ECR_FAIL) return 2;
-  if(cs.nDmg[k]>0) return 1;
+  if(cs.nMelt[k]>0) return 5;
+  if(cs.nDisp[k]>0) return 4;
+  if(ecrOf(cs.nOx[k])>=OX_ECR_FAIL) return 3;
+  if(cs.nDmg[k]>0) return 2;
+  if(cs.nTube && cs.nTube[k]>0) return 1;
   return 0;
 }
 /* How much of the core is in each stage, by volume. The release term and the
