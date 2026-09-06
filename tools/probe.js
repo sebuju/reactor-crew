@@ -21,7 +21,7 @@ const M=require('./bundle').headless(
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
- 'netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg}');
+ 'netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -266,12 +266,14 @@ const CASES={
         const rmP=M.roomPGauge(s).reduce((a,v)=>Math.max(a,v),0);
         const cav=cavNode===undefined?"-":f((s.pBy["cav:core"]-P.Pcont)*1000,0);
         console.log("  "+f(t,1).padStart(5)+"  "+f(s.n,3).padStart(6)+"  "+f(s.rho,0).padStart(5)+"  "+f(s.rodPos,2).padStart(5)+"  "+f(s.vf,3).padStart(5)+"  "+f(s.pCore,3).padStart(7)+"  "+f(cs.fci/1000,1).padStart(6)+"  "+f(s.TfHot,0).padStart(6)+"  "+f(s.dmg,1).padStart(5)+"  "+f(s.meltFrac*100,1).padStart(5)+"  "+(q>=0?f(st[q]*100,1):"-").padStart(5)+"  "+f(s.parts.xe,0).padStart(5)+"  "+f(s.parts.vd,0).padStart(5)+"  "+f(cs.tipRho,0).padStart(4)+"  "+f(s.sc,1).padStart(5)+"  "+f(M.ledgerKg(s)+M.ledgerOut(s),0).padStart(9)+"  "+f(s.h2,1).padStart(6)+"  "+f(rmH2,1).padStart(4)+"  "+f(rmP,1).padStart(7)+"  "+f(s.roomMax,0).padStart(5)+"  "+f(M.sumpKg(s)/1000,1).padStart(6)+"  "+f((cs.tubesOpen||0)*100,0).padStart(5)+"  "+cav.padStart(7)+"  "+(s.trip||"")); };
-      let pkFci=0; const wrecked=[];
+      // the FCI's thermal energy, kJ, against the RISE in the work the vessel node can do letting down: a hot plant already carries most of that work, so only what the pulse adds is the 1-3 % conversion band
+      let pkFci=0, fciKJ=0, pkW=0, pkWfci=0, pkWt=0, w0=null; const wrecked=[];
       for(let k=0;k<=PSEC*50;k++){ const t=k*0.02;
         while(wrecked.length<s.dmgParts.length){ const id=s.dmgParts[wrecked.length]; wrecked.push(id+" "+s.dmgWhy[id]+"@"+f(t,1)); }
         if(starve>0 && k===starve*50){ if(!s.byp.feed) M.act("byp","feed"); for(const id of M.sgIds()) s.fregBy[id]=1; }
-        if(k===at*50){ if(scram) M.act("scram"); else M.act("blackout",true); if(hit>0) cs.nTf.fill(hit); }
+        if(k===at*50){ w0=M.netWorkAt(s,"core"); if(scram) M.act("scram"); else M.act("blackout",true); if(hit>0) cs.nTf.fill(hit); }
         if(cs.fci>pkFci) pkFci=cs.fci;
+        if(k>=at*50){ fciKJ+=cs.fci*0.02; const w=M.netWorkAt(s,"core"); if(w>pkW){ pkW=w; pkWfci=fciKJ; pkWt=t; } }
         if(k%(every*50)===0) line(t);
         M.step(0.02);
         if(s.n>pkN){ pkN=s.n; tN=t; } if(s.rho>pkRho){ pkRho=s.rho; tRho=t; }
@@ -279,6 +281,8 @@ const CASES={
         if(s.breach && tEnd===null){ tEnd=t; line(t); if(!process.argv.includes("--on")) break; } }
       const st=M.fuelStages(cs), FL=M.FAIL();
       console.log("  peak n "+f(pkN,3)+" @ "+f(tN,1)+" s   peak rho "+f(pkRho,0)+" pcm @ "+f(tRho,1)+" s   peak P "+f(pkP,3)+" MPa   peak Tf "+f(pkTf,0)+" K   peak fci "+f(pkFci/1000,1)+" MW");
+      { const dW=w0===null?0:pkW-w0;
+        console.log("  work  fci "+f(pkWfci/1e6,2)+" GJ to the work peak ("+f(fciKJ/1e6,2)+" GJ in all)   node work "+f((w0||0)/1e6,2)+" to "+f(pkW/1e6,2)+" GJ at "+f(pkWt,2)+" s   rise "+f(dW/1e6,3)+" GJ   conversion "+(pkWfci>0?f(100*dW/pkWfci,2)+" %":"-")); }
       console.log("  fuel  "+FL.map((r,q)=>r.k+" "+f(st[q]*100,1)+"%").join("  ")+"   h2 "+f(s.h2,1)+" kg");
       console.log("  end   "+(tEnd===null?"no event in "+PSEC+" s":s.trip+" at "+f(tEnd,1)+" s")+"   ledger "+f(M.ledgerKg(s),0)+" kg  out "+f(M.ledgerOut(s),0)+" kg");
       console.log("  wrecked "+(wrecked.join("  ")||"nothing"));
