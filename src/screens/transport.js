@@ -152,7 +152,7 @@ function trBuild(sc){
   pickHead.append(hRun,hFork,hLen,hAssist,hVerd);
   const pickTree = KIT.el("div","trs-take-tree");
   picker.body.append(pickHead,pickTree);
-  takesBtn.el.addEventListener("click",()=>picker.el.classList.toggle("open"));
+  MOUSE.on(takesBtn.el,{click(){ picker.el.classList.toggle("open"); }});
 
   root.append(pause.el,rate.el,stepBack.el,step.el,modeEl,notape,nameEl,forkEl,track,
     clock,takesBtn.el);
@@ -173,14 +173,10 @@ function trBuild(sc){
     const t=scrubTickAt(e);
     if(t!==null && S && t!==S.tick) seek(trTip,t);
   };
-  scrub.addEventListener("pointerdown",e=>{
-    dragging=true;
-    if(scrub.setPointerCapture) scrub.setPointerCapture(e.pointerId);
-    scrubMove(e);
-  });
-  scrub.addEventListener("pointermove",scrubMove);
-  scrub.addEventListener("pointerup",()=>{ dragging=false; });
-  scrub.addEventListener("pointercancel",()=>{ dragging=false; });
+  const scrubStop=()=>{ dragging=false; };
+  MOUSE.on(scrub,{
+    down(e){ dragging=true; MOUSE.grab(scrub); scrubMove(e); },
+    move:scrubMove, up:scrubStop, cancel:scrubStop});
 
   return {sc,root,pause,rate,stepBack,step,modeEl,notape,nameEl,forkEl,track,logLane,scrub,scrubHead,
     clock,takesBtn,picker,pickTree,blocks:[],forks:[],marks:[],
@@ -268,7 +264,7 @@ function trPickerRow(t){
   if(par){
     fork = KIT.el("button","trs-take-fork",{type:"button"});
     fork.textContent = "<- "+trName(par)+" @ "+trStamp(t.tick0);
-    fork.addEventListener("click",()=>seek(par.id,t.tick0));
+    MOUSE.on(fork,{click(){ seek(par.id,t.tick0); }});
     KIT.tip(fork,"FORK POINT","Click to put the plant on "+trName(par)+" at the moment "+trName(t)+" split off it - the state both runs share, and where you would start from to try a third way.");
   } else {
     fork = KIT.el("span","trs-take-root"); fork.textContent="ROOT";
