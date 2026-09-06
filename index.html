@@ -36,6 +36,9 @@
 <script src="src/core/constants.js"></script>
 <script src="src/core/text.js"></script>
 <script src="src/core/chrome.js"></script>
+<!-- the one mouse listener set: everything else registers handlers with it, so
+     it has to exist before any screen or widget is built -->
+<script src="src/core/mouse.js"></script>
 <script src="src/core/ui.js"></script>
 <script src="src/ui/kit.js"></script>
 <script src="src/data/design.js"></script>
@@ -69,6 +72,7 @@
 <script src="src/render/inspector.js"></script>
 <script src="src/render/ctlgraph.js"></script>
 <script src="src/ui/margin.js"></script>
+<script src="src/ui/inspwin.js"></script>
 <script src="src/render/navarrow.js"></script>
 <script src="src/screens/design-bench.js"></script>
 <script src="src/render/chart.js"></script>
