@@ -863,6 +863,20 @@ function trBench(){
   console.log("BENCH  "+ms.toFixed(2)+" ms/tick, best of "+TRB_ROUNDS+" rounds of "+TRB_PER+" -> "+
     TR.tps.toFixed(0)+" TPS sustainable, so "+TR.rateMax.toFixed(2)+"x is the fastest honest rate");
 }
+/* WHETHER THE PICTURE IS MOVING, which is not whether a tick landed. The sim
+   steps at 50 Hz and the screen at 60, so painting only on a tick sampled every
+   animation at the beat between the two - a parcel that stood still for one
+   frame in six and then moved twice, whatever the effect clock did. A running
+   plant owes a frame every frame; a paused one owes nothing. */
+const simLive = () => !!P && !!SIMSCREEN[screen] && !TR.paused;
+/* PLANT SECONDS PER WALL SECOND, and it is a SETTING, not a measurement. The
+   effect clock (fxSetClock(), render/fx.js) used to estimate this off S.t and
+   ease into it, which ramped every animation up on un-pause and left them
+   riding a filter chasing a 50 Hz input on a 144 Hz screen. The tape knows the
+   number exactly. Null where it does not - an unbounded rate runs as fast as
+   the machine allows - and the clock measures only then. */
+const trClockRate = () => TR.paused ? 0
+  : (scnBusy() || TR.rate===Infinity || TR.rate===TR_VLD) ? null : TR.rate;
 /* Returns whether the plant MOVED this frame. main.js paints on that, so the
    answer has to come from here rather than be re-derived from screen and
    TR.paused - those two say what the loop is meant to be doing, not what it
