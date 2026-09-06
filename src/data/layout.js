@@ -356,22 +356,44 @@ function loopHeadAt(id){
   if(pn) loopHCache[id] = h;
   return h;
 }
+/* ══ AND EVERY LEG AT THE DENSITY IT ACTUALLY CARRIES ══
+   dp goes as w^2/rho, so one flat table density priced a boiling hot leg at
+   the weight of cold water: measured on BWR/4, the drawn loop cost 2.7 times
+   what the isothermal figure said and the suggested pumps landed at 79 % of
+   the rating the core was seeded for. The state is the design's own - the
+   circuit's setpoint and coreDT0 either side of Tref, through the same
+   mixState() the solve reads, so a core whose outlet is past saturation is
+   priced as the two-phase column it is. */
+const loopHotInlet = p => { const R = p && ROLE[p.role];
+  if(!R || R.thermal !== "transfer" || !R.internal) return null;
+  for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal]))
+    if(!secondaryNode(p.id+IN.a)) return coreFold(p.id+IN.a);
+  return null; };
+/* WHICH RUNS OF A LOOP ARE STILL CARRYING WHAT THE CORE SENT OUT: the ones
+   landing on a transfer machine's own declared primary INLET. Asked of that
+   declaration and never of the run's KIND, which is a label. */
+const runHotSide = r => { const e = runPartEnds(r.a, r.b, r.sa, r.sb); if(!e) return false;
+  return e.some(({p,f}) => { const nd = loopHotInlet(p); return !!nd && nd === coreFold(p.id+f); }); };
 const loopHeadOf = id => {
   const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return null;
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
-  const w = RATED_KW()/(a.cp*coreDT0()*n), rho = a.dens*RHO_K;
+  const w = RATED_KW()/(a.cp*coreDT0()*n);
+  const c = satOfCirc(nodeGraph().coreCirc), dT = coreDT0();
+  const rhoAt = T => Math.max(rhoMixOf(c, c.p0, hOfT(c, T)), 1e-3);
+  const rhoHot = rhoAt(c.Tref + dT/2), rhoCold = rhoAt(c.Tref - dT/2);
   const inLoop = pid => coreOf(pid) === pid || L.partLoop[pid] === li;
-  const vAt = Dm => w/(rho*Math.PI/4*Dm*Dm);
+  const dpOf = (K, Dm, rho) => { const A = Math.PI/4*Dm*Dm; return K*w*w/(2*rho*A*A); };
   let dp = 0;
   for(const r of pipeNetwork()){ if(!inLoop(r.a) || !inLoop(r.b)) continue;
-    const mm = runBoreMm(r), Dm = mm/1000, v = vAt(Dm);
+    const mm = runBoreMm(r), Dm = mm/1000;
     const K = fricOf(mm/BORE_REF, w, a.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
-    dp += K*rho*v*v/2; }
+    dp += dpOf(K, Dm, runHotSide(r) ? rhoHot : rhoCold); }
   // a machine's internal path is priced at BORE_REF over NET_COMP_LEN (compC), so it is here
-  { const v = vAt(BORE_REF/1000);
-    for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
-      const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
-      for(const IN of R.internal) if(IN.K > 0 && !secondaryNode(pid+IN.a)) dp += IN.K*rho*v*v/2; } }
+  for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
+    const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
+    const hot = loopHotInlet(p);
+    for(const IN of R.internal) if(IN.K > 0 && !secondaryNode(pid+IN.a))
+      dp += dpOf(IN.K, BORE_REF/1000, hot === coreFold(pid+IN.a) ? rhoHot : rhoCold); }
   return dp/1e6;
 };
 const pumpHeadSuggest = id => {
@@ -1654,12 +1676,11 @@ function loopOfKey(key){
 }
 /* A FITTING'S OWN MASS, per INSTANCE and off its own bore - the same move
    tankMass() already makes. It was a flat 16 t per tap on the old D.fit,
-   which priced a 0.20 m relief valve and a full-bore tee alike. FIT_BORE0 mirrors
-   FIT_DEFAULT.bore (pipenet.js, which loads after this file), so a valve
-   left at the default still costs exactly the 16 t the flat charge did. */
+   which priced a 0.20 m relief valve and a full-bore tee alike. FIT_BORE0 is
+   the bore a fitting nobody sized takes (fitBoreSuggest(), pipenet.js), so a
+   valve left at the default still costs exactly the 16 t the flat charge did. */
 const FIT_MASS=16, FIT_BORE0=412.5;   // mm, the default valve - the reference the mass is per
-const fitMassOf=id=>{ const f=D.fittings[id];
-  return f ? FIT_MASS*(f.bore/FIT_BORE0) : 0; };
+const fitMassOf=id=>D.fittings[id] ? FIT_MASS*(fitBoreMm(id)/FIT_BORE0) : 0;
 const fittingMass=()=>{ let m=0;
   for(const id in D.fittings) m += fitMassOf(id);
   return m; };
@@ -2845,12 +2866,19 @@ function throughFitting(id,avoid,seen,out){
    the pipe reaching it came out "user", which left a generator's own steam
    nozzle carrying an unclassified fluid and stopped net.vapour ever calling
    it a steam space. What the line reaches is the valve. */
-function runKindFor(aId,bId,af,bf){
+/* THE TWO MACHINES A RUN JOINS AND THE FACES IT LANDS ON, with any fitting in
+   the way seen through - null when either end is off the grid. The naming
+   below and the loop's own drop (loopHeadOf) ask the same pair. Not runEnds()
+   (pipenet.js), which answers a different question off a run KEY. */
+function runPartEnds(aId,bId,af,bf){
   const oa={}, ob={};
   const A=throughFitting(aId,bId,null,oa)||partOf(aId), B=throughFitting(bId,aId,null,ob)||partOf(bId);
-  if(!A||!B) return "user";
-  if(oa.face!==undefined) af=oa.face;
-  if(ob.face!==undefined) bf=ob.face;
+  if(!A||!B) return null;
+  return [{p:A, f:oa.face!==undefined?oa.face:af}, {p:B, f:ob.face!==undefined?ob.face:bf}];
+}
+function runKindFor(aId,bId,af,bf){
+  const e=runPartEnds(aId,bId,af,bf); if(!e) return "user";
+  const A=e[0].p, B=e[1].p; af=e[0].f; bf=e[1].f;
   /* WHICH SIDE OF A GENERATOR THE RUN LANDS ON NAMES THE PIPE.
      There is no feedwater-pump role left to key the table on, so "pump|sg"
      alone cannot tell a cold leg from a feedwater line - the FACE tells it,
