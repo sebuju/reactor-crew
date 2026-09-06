@@ -61,7 +61,7 @@ function railPick(well,ids,name){
   if(!well.head) return well;
   well.head.classList.add("kit-rule-pick");
   well.el._pickId=ids[0];
-  well.head.addEventListener("click",()=>{ sel=ids[0]; railPickId=ids[0]; });
+  MOUSE.on(well.head,{click(){ sel=ids[0]; railPickId=ids[0]; }});
   KIT.tip(well.head,name||"",
     "Click to select this component. It lights up on the plant, and a leader runs from it to this panel.");
   return well;
@@ -72,10 +72,10 @@ function railPick(well,ids,name){
    has already moved `sel` by the time this asks - which is why it compares
    against the well under the pointer rather than remembering the old id. */
 function railBlank(rail){
-  rail.addEventListener("click",e=>{
+  MOUSE.on(rail,{click(e){
     const w=e.target.closest&&e.target.closest(".kit-well");
     if(!w || w._pickId!==sel) sel=null;
-  });
+  }});
 }
 
 /* ══ A RAIL ONLY SYNCS THE PANELS YOU CAN SEE ══
@@ -265,7 +265,7 @@ function paramsFor(p){
      read - see marginSync() (ui/margin.js). */
   const help=t=>{ if(t) B.tip = B.tip ? B.tip+"\n\n"+t : t; };
 
-  if(!p.access)
+  if(!partAccess(p))
     note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, so it is lost for good the moment it is damaged.","var(--c-red)");
 
   /* ONE PANEL FOR THE REACTOR AND ITS DRIVES. They were two, and each carried
@@ -681,7 +681,7 @@ function paramsFor(p){
     GRID(1); SEC();
     help(p.tip);
     T.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS"});
-    B.plain = p.access;
+    B.plain = partAccess(p);
   }
   return B;
 }
