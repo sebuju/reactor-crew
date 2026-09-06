@@ -128,7 +128,11 @@ function partTemp(s, p){
   const R = ROLE[p.role];
   if(!R || R.thermal === "none") return null;
   if(p.role === "sg")   return s.sgTBy[p.id];
-  if(p.role === "ihx")  return s.ihxTBy[p.id];
+  // an exchanger has no pot: what the box contains is what its own nodes hold
+  if(p.role === "ihx"){ let t=0, n=0;
+    for(const IN of roleIns(p)) for(const f of [IN.a, IN.b]){
+      t += netTempAt(s, coreFold(p.id+f)); n++; }
+    return n ? t/n : s.Tavg; }
   if(p.role === "cond") return s.condTBy[p.id];
   if(p.role === "radiator") return s.radTBy[p.id];
   return s.Tavg;                          // thermal:"source" - the vessel itself
