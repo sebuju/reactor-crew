@@ -197,43 +197,38 @@ function scnWirePointer(){
     const r=UI.rulerTrack.getBoundingClientRect();
     return scnTat(r.width>0?(clientX-r.left)/r.width:0);
   };
-  UI.rulerTrack.addEventListener("pointerdown",e=>{
-    UI.rulerTrack.setPointerCapture(e.pointerId);
-    scnPlay=scnSnapT(timeSecAt(e.clientX));
-  });
-  UI.rulerTrack.addEventListener("pointermove",e=>{
-    if(e.buttons!==1) return;
-    scnPlay=scnSnapT(timeSecAt(e.clientX));
-  });
+  MOUSE.on(UI.rulerTrack,{
+    down(e){ MOUSE.grab(UI.rulerTrack); scnPlay=scnSnapT(timeSecAt(e.clientX)); },
+    move(e){ if(e.buttons!==1) return;
+      scnPlay=scnSnapT(timeSecAt(e.clientX)); }});
   /* the wheel holds the second under the pointer still, the same lens feel
      VIEW.z's own wheel handler has on the plant */
-  UI.timeline.addEventListener("wheel",e=>{
+  MOUSE.on(UI.timeline,{wheel(e){
     e.preventDefault();
     const r=UI.rulerTrack.getBoundingClientRect();
     const f=r.width>0?clamp((e.clientX-r.left)/r.width,0,1):0.5;
     const a=scnTat(f);
     scnZoom=clamp(scnZoom*Math.exp(-e.deltaY*0.0015),1,SCN_ZMAX);
     scnPan=a-f*scnSpan();
-  },{passive:false});
+  }});
 
   const barSecAt = clientX => {
     const r=UI.panTrack.getBoundingClientRect();
     return clamp(r.width>0?(clientX-r.left)/r.width:0,0,1)*SCN.secs;
   };
   let panGrab=0;
-  UI.panTrack.addEventListener("pointerdown",e=>{
-    UI.panTrack.setPointerCapture(e.pointerId);
-    UI.panThumb.classList.add("drag");
-    const tr=UI.panThumb.getBoundingClientRect();
-    panGrab = (e.clientX>=tr.left && e.clientX<=tr.right)
-      ? barSecAt(e.clientX)-scnT0()-scnSpan()/2 : 0;
-    scnPan = barSecAt(e.clientX)-scnSpan()/2-panGrab;
-  });
-  UI.panTrack.addEventListener("pointermove",e=>{
-    if(e.buttons!==1) return;
-    scnPan = barSecAt(e.clientX)-scnSpan()/2-panGrab;
-  });
-  UI.panTrack.addEventListener("pointerup",()=>UI.panThumb.classList.remove("drag"));
+  MOUSE.on(UI.panTrack,{
+    down(e){
+      MOUSE.grab(UI.panTrack);
+      UI.panThumb.classList.add("drag");
+      const tr=UI.panThumb.getBoundingClientRect();
+      panGrab = (e.clientX>=tr.left && e.clientX<=tr.right)
+        ? barSecAt(e.clientX)-scnT0()-scnSpan()/2 : 0;
+      scnPan = barSecAt(e.clientX)-scnSpan()/2-panGrab;
+    },
+    move(e){ if(e.buttons!==1) return;
+      scnPan = barSecAt(e.clientX)-scnSpan()/2-panGrab; },
+    up(){ UI.panThumb.classList.remove("drag"); }});
 }
 
 /* ═══════════════ LANES + BLOCKS ═══════════════
@@ -253,28 +248,28 @@ function scnSyncLanes(LZ){
       const nameSpan=KIT.el("span"); nameSpan.textContent="LANE "+(li+1);
       lab.appendChild(nameSpan);
       KIT.tip(lab,"LANE "+(li+1),"Double-click to remove this lane. Refused while it still holds an event, and while it is the only lane left.");
-      lab.addEventListener("dblclick",()=>{
+      MOUSE.on(lab,{dblclick(){
         if(SCN.lanes.length<=1){ scnNote="AT LEAST ONE LANE"; return; }
         if(SCN.gest.some(g=>g.lane===L.id)){ scnNote="LANE NOT EMPTY"; return; }
         const idx=SCN.lanes.indexOf(L); if(idx>=0) SCN.lanes.splice(idx,1);
         scnVerd=null; UI.laneSig=null;
-      });
+      }});
       if(li===SCN.lanes.length-1){
         const add=KIT.el("button","scn-lane-add",{type:"button"}); add.textContent="+";
         KIT.tip(add,"ADD LANE","Adds another lane to the timeline.");
-        add.addEventListener("click",e=>{ e.stopPropagation();
-          SCN.lanes.push({id:"lane"+Date.now()}); scnVerd=null; UI.laneSig=null; });
+        MOUSE.on(add,{click(e){ e.stopPropagation();
+          SCN.lanes.push({id:"lane"+Date.now()}); scnVerd=null; UI.laneSig=null; }});
         lab.appendChild(add);
       }
       const track=KIT.el("div","scn-lane-track");
-      track.addEventListener("click",e=>{
+      MOUSE.on(track,{click(e){
         if(e.target!==track) return;
         const r=track.getBoundingClientRect();
         const t=scnSnapT(scnTat(r.width>0?(e.clientX-r.left)/r.width:0));
         const k=scnLastKind;
         SCN.gest.push({t,k,a:GEST[k].args.map(A=>A.def),lane:L.id});
         scnPick("ev",SCN.gest.length-1); scnVerd=null;
-      });
+      }});
       row.append(lab,track);
       UI.lanesEl.appendChild(row);
       UI.laneRows.set(L.id,{row,track,overWrap:null});
@@ -298,29 +293,30 @@ function scnMakeBlockNode(){
   el.append(span,sqL,sqR,pt,handle,lab);
   el._refs={span,sqL,sqR,pt,handle,lab};
 
-  el.addEventListener("pointerdown",e=>{
-    if(e.button!==0) return; e.stopPropagation();
-    const b=el._b; el.setPointerCapture(e.pointerId);
-    scnPick("ev",b.i); scnLastKind=b.e.k; scnVerd=null;
-    if(e.target===handle && RAMPARG[b.e.k]!=null){
-      UI.drag={type:"ramp",el,argI:RAMPARG[b.e.k]};
-    } else {
-      const r=UI.rulerTrack.getBoundingClientRect();
-      const f=r.width>0?(e.clientX-r.left)/r.width:0;
-      UI.drag={type:"move",el,grabT:b.e.t-scnTat(f)};
-    }
-    el.classList.add("dragging");
-  });
-  el.addEventListener("pointermove",e=>{ if(UI.drag&&UI.drag.el===el) scnDragMove(e); });
-  el.addEventListener("pointerup",()=>{ if(UI.drag&&UI.drag.el===el) scnDragEnd(el); });
-  el.addEventListener("pointercancel",()=>{ if(UI.drag&&UI.drag.el===el) scnDragEnd(el); });
-  el.addEventListener("dblclick",e=>{
-    e.stopPropagation();
-    const idx=SCN.gest.indexOf(el._b.e); if(idx<0) return;
-    SCN.gest.splice(idx,1);
-    if(scnSel===idx) scnSel=-1; else if(scnSel>idx) scnSel--;
-    scnVerd=null;
-  });
+  const blockEnd=()=>{ if(UI.drag&&UI.drag.el===el) scnDragEnd(el); };
+  MOUSE.on(el,{
+    down(e){
+      if(e.button!==0) return; e.stopPropagation();
+      const b=el._b; MOUSE.grab(el);
+      scnPick("ev",b.i); scnLastKind=b.e.k; scnVerd=null;
+      if(e.target===handle && RAMPARG[b.e.k]!=null){
+        UI.drag={type:"ramp",el,argI:RAMPARG[b.e.k]};
+      } else {
+        const r=UI.rulerTrack.getBoundingClientRect();
+        const f=r.width>0?(e.clientX-r.left)/r.width:0;
+        UI.drag={type:"move",el,grabT:b.e.t-scnTat(f)};
+      }
+      el.classList.add("dragging");
+    },
+    move(e){ if(UI.drag&&UI.drag.el===el) scnDragMove(e); },
+    up:blockEnd, cancel:blockEnd,
+    dblclick(e){
+      e.stopPropagation();
+      const idx=SCN.gest.indexOf(el._b.e); if(idx<0) return;
+      SCN.gest.splice(idx,1);
+      if(scnSel===idx) scnSel=-1; else if(scnSel>idx) scnSel--;
+      scnVerd=null;
+    }});
   return el;
 }
 
@@ -431,10 +427,10 @@ function scnSyncLimits(){
     bar.append(held,broke);
     row.append(lab,bar);
     const slot=UI.limitRows.length;
-    row.addEventListener("click",()=>{
+    MOUSE.on(row,{click(){
       const i=SCN.limits.indexOf(UI.limitRows[slot].L);
       if(i>=0) scnPick("lim",i);
-    });
+    }});
     UI.limitsRows.appendChild(row);
     UI.limitRows.push({row,lab,held,broke});
   }
@@ -504,8 +500,8 @@ function scnBuildEventInspector(){
     const k=GESTKEYS[(GESTKEYS.indexOf(gg.k)+dir+GESTKEYS.length)%GESTKEYS.length];
     gg.k=k; gg.a=GEST[k].args.map(A=>A.def); scnLastKind=k; scnVerd=null;
   };
-  prev.el.addEventListener("click",()=>cycle(-1));
-  next.el.addEventListener("click",()=>cycle(1));
+  MOUSE.on(prev.el,{click(){ cycle(-1); }});
+  MOUSE.on(next.el,{click(){ cycle(1); }});
   const timeSlider=KIT.slider({min:0,max:SCN.secs,step:0.5,fmt:v=>"AT "+scnFmt(v),
     onChange:v=>{ const gg=SCN.gest[scnSel]; if(gg){ gg.t=scnSnapT(v); scnVerd=null; } }});
   const argsWrap=KIT.el("div","scn-insp-args");
@@ -541,8 +537,8 @@ function scnBuildEventInspector(){
           const cur=Math.max(0,opts.findIndex(o=>String(o)===String(g2.a[i])));
           g2.a[i]=opts[(cur+dir+opts.length)%opts.length]; scnVerd=null;
         };
-        p.el.addEventListener("click",()=>step(-1));
-        n.el.addEventListener("click",()=>step(1));
+        MOUSE.on(p.el,{click(){ step(-1); }});
+        MOUSE.on(n.el,{click(){ step(1); }});
         wrap.append(p.el,val,n.el);
         argsWrap.appendChild(wrap); argW.push({kind:"pick",val,i});
       }
@@ -591,12 +587,12 @@ function scnBuildLimitInspector(){
     const chk=scnChans(), ci=Math.max(0,chk.indexOf(LL.ch));
     LL.ch=chk[(ci+dir+chk.length)%chk.length]; LL.v=0; scnVerd=null;
   };
-  prev.el.addEventListener("click",()=>cycle(-1));
-  next.el.addEventListener("click",()=>cycle(1));
-  cmpBtn.el.addEventListener("click",()=>{
+  MOUSE.on(prev.el,{click(){ cycle(-1); }});
+  MOUSE.on(next.el,{click(){ cycle(1); }});
+  MOUSE.on(cmpBtn.el,{click(){
     const LL=SCN.limits[scnLimSel]; if(!LL) return;
     LL.cmp = LL.cmp==="<"?">":"<"; scnVerd=null;
-  });
+  }});
   UI.inspector.append(prev.el,title,next.el,cmpBtn.el,valSlider.el,graceSlider.el,
     breakInfo,jumpBtn.el,del.el);
 
@@ -709,10 +705,10 @@ function scnSyncFloats(){
     w.name.textContent=f.name||f.id;
     w.meta.textContent=(f.secs||0).toFixed(0)+"s  "+(f.nGest||0)+" ev  "+(f.nLim||0)+" lim";
     w.stamp.textContent=f.saved||"";
-    w.load.el.onclick=()=>storeLoad("scenarios",f.id).then(o=>{ if(o){
+    MOUSE.on(w.load.el,{click(){ storeLoad("scenarios",f.id).then(o=>{ if(o){
       SCN=scnNormalize(o); scnSel=-1; scnLimSel=-1; scnVerd=null; scnFit();
-      scnNote="LOADED "+(o.name||f.id); UI.laneSig=null; UI.inspSig=null; } });
-    w.delB.el.onclick=()=>storeDelete("scenarios",f.id).then(()=>{ scnFiles=null; });
+      scnNote="LOADED "+(o.name||f.id); UI.laneSig=null; UI.inspSig=null; } }); }});
+    MOUSE.on(w.delB.el,{click(){ storeDelete("scenarios",f.id).then(()=>{ scnFiles=null; }); }});
   });
 }
 
