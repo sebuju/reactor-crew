@@ -44,7 +44,7 @@ function shellInit(){
   };
   for(const btn of tabs){
     const k=btn.dataset.screen;
-    btn.addEventListener("click",()=>{
+    MOUSE.on(btn,{click(){
       const dis=(k==="operate"||k==="scenario")&&designBlocked();
       if(dis) return;
       /* ANOTHER TAB IS THE CANCEL. A prewarm holds no screen of its own, so
@@ -73,7 +73,7 @@ function shellInit(){
       ctxClose();
       TOOL.active="select";
       screen=k; layout();
-    });
+    }});
   }
   shellInitTooltip();
   shellInitCtxMenu();
@@ -114,9 +114,9 @@ function shellInitCtxMenu(){
   };
   // a press anywhere else shuts it; uiDown() covers the canvas, this covers the
   // rails and the topbar, which the canvas never hears about
-  document.addEventListener("pointerdown",e=>{
+  MOUSE.pre({down(e){
     if(!e.target.closest("#ctxmenu")) ctxClose();
-  },true);
+  }});
 }
 
 const SCNTIP_ON="Say what the reactor is FOR. Lay out a timeline of what will happen to it - load changes, battle damage, a blackout - and the limits it has to hold while they do. RUN flies it with nobody at the panel and says PASS or FAIL and which limit broke. Unlike CONTROL, opening this never rebuilds a plant that is already running.";
@@ -280,14 +280,11 @@ function shellInitTooltip(){
     else placeBy(b); };
   const hide=()=>{ cur=null; curRail=null; curGroup=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
   tipHide=hide;
-  document.addEventListener("pointerover",e=>{
-    const el=e.target.closest("[data-tip-title]");
-    if(el && el!==cur) show(el);
-  });
-  document.addEventListener("pointerout",e=>{
-    const el=e.target.closest("[data-tip-title]");
-    if(el && el===cur && !(e.relatedTarget && el.contains(e.relatedTarget))) hide();
-  });
+  MOUSE.doc({
+    over(e){ const el=e.target.closest("[data-tip-title]");
+      if(el && el!==cur) show(el); },
+    out(e){ const el=e.target.closest("[data-tip-title]");
+      if(el && el===cur && !(e.relatedTarget && el.contains(e.relatedTarget))) hide(); }});
   /* PARKED CLEAR OF THE RAIL, not carried on the pointer. A panel in a rail is
      read control by control, so a box that follows the hand is a box sitting on
      top of the next control you were going to read - and the rails are where
@@ -325,8 +322,8 @@ function shellInitTooltip(){
     tip.style.left=Math.max(4, Math.min(b.left, innerWidth-r.width-4))+"px";
     tip.style.top=y+"px";
   };
-  document.addEventListener("pointermove",e=>{
-    if(cur&&curRail&&!curGroup&&!plantScreen()) place(e.clientY); });
+  MOUSE.doc({move(e){
+    if(cur&&curRail&&!curGroup&&!plantScreen()) place(e.clientY); }});
 
   /* PARKED bottom-right OF THE PLANT VIEW, not carried on the pointer. A box
      that follows the hand is a box between the hand and whatever it is reaching
