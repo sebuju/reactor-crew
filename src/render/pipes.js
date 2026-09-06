@@ -179,6 +179,38 @@ function pipeBendPath(pts,R){
   else for(let i=1;i<n-1;i++) ctx.lineTo(pts[i][0],pts[i][1]);
   ctx.lineTo(pts[n-1][0],pts[n-1][1]);
 }
+/* THE SAME ELBOW, AS POINTS. pipeBendPath() rounds a corner for the STROKE; the
+   packets ride pipeGeom()'s polyline, so they cut every bend square - outside
+   the casing's outer radius on the way in and jerking through the vertex. One
+   radius, one shape: the corner is replaced by chords on the same arc, so the
+   travel is what the pipe is drawn as. */
+function pipeBendPts(pts,R){
+  if(!(R>0) || pts.length<3) return pts;
+  const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){
+    const p=pts[i], a=pts[i-1], b=pts[i+1];
+    let ux=a[0]-p[0], uy=a[1]-p[1], vx=b[0]-p[0], vy=b[1]-p[1];
+    const lu=Math.hypot(ux,uy), lv=Math.hypot(vx,vy);
+    if(lu<0.01||lv<0.01) continue;
+    ux/=lu; uy/=lu; vx/=lv; vy/=lv;
+    const th=Math.acos(clamp(ux*vx+uy*vy,-1,1));
+    if(th>Math.PI-0.01 || th<0.01){ out.push(p); continue; }
+    const tan=Math.tan(th/2);
+    const t=Math.min(R/tan, lu/2, lv/2), r=t*tan;
+    let bx=ux+vx, by=uy+vy; const lb=Math.hypot(bx,by);
+    if(lb<1e-6){ out.push(p); continue; }
+    const cx=p[0]+bx/lb*(r/Math.sin(th/2)), cy=p[1]+by/lb*(r/Math.sin(th/2));
+    const a0=Math.atan2(p[1]+uy*t-cy, p[0]+ux*t-cx);
+    let d=Math.atan2(p[1]+vy*t-cy, p[0]+vx*t-cx)-a0;
+    while(d>Math.PI) d-=2*Math.PI;
+    while(d<-Math.PI) d+=2*Math.PI;
+    const n=Math.max(2,Math.ceil(Math.abs(d)/0.35));
+    for(let k=0;k<=n;k++){ const ang=a0+d*k/n;
+      out.push([cx+Math.cos(ang)*r, cy+Math.sin(ang)*r]); }
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
 /* build a path covering arc length a..b; false if nothing of it lands */
 function pipeSub(g,a,b){
   a=Math.max(0,a); b=Math.min(g.len,b);
@@ -239,7 +271,7 @@ const pipeLast={}, pipeSpd={}, pipeShown={};
    is a pure function of one pass uses, and which answers 0 - never cacheable -
    outside a window.
    Display state, so it is not on S and pipeReset() clears it. */
-const pipePh={}, pipeRaw={}, pipeOver={}, pipePass={}, pipeAdv={};
+const pipePh={}, pipeOver={}, pipePass={}, pipeAdv={};
 function aliasStep(key,adv,per){
   const pass=typeof layPass==="function"?layPass():0;
   if(pass && pipePass[key]===pass) return {ph:pipePh[key], over:pipeOver[key], adv:pipeAdv[key]||0};
@@ -248,20 +280,12 @@ function aliasStep(key,adv,per){
   pipeOver[key]=clamp(Math.abs(adv)/(per/2)-1,0,1);
   return {ph:pipePh[key], over:pipeOver[key], adv};
 }
-/* what a monotonic integral moved since the last pass, asked BEFORE the period
-   is chosen: a caller that can widen its own texture buys the speed back at
-   full brightness instead of losing it. */
-function aliasAdv(key,v){
-  const pass=typeof layPass==="function"?layPass():0;
-  if(pass && pipePass[key]===pass) return pipeAdv[key]||0;
-  const prev=pipeRaw[key]; pipeRaw[key]=v;
-  return prev===undefined ? 0 : v-prev;
-}
-const aliasRate=(key,rate,per)=>aliasStep(key,rate*pipeDt,per);
+const aliasRate=(key,rate,per)=>aliasStep(key,rate*frameDt(),per);
 /* PLANT seconds this frame - what a rate has to be multiplied by to become a
    frame's travel. A caller that shapes its own advance needs it before it can
-   hand one over. */
-const frameDt=()=>pipeDt;
+   hand one over. It is the SMOOTHED clock's (fxDt(), fx.js), never the raw
+   tick: S.t arrives 0.02 s at a time and a shaft driven by that stutters. */
+const frameDt=()=>fxDt();
 /* This frame's head loss per run, off netDrops() (pipenet.js). Refilled once a
    frame and never stored on S, for the same reason the solve is not: it is a
    pure function of S, so a snapshot that carried it could only ever disagree
@@ -370,7 +394,6 @@ function pipeReset(){
   for(const k in pipeSpd)   delete pipeSpd[k];
   for(const k in pipeShown) delete pipeShown[k];
   for(const k in pipePh)    delete pipePh[k];
-  for(const k in pipeRaw)   delete pipeRaw[k];
   for(const k in pipeOver)  delete pipeOver[k];
   for(const k in pipePass)  delete pipePass[k];
   for(const k in pipeAdv)   delete pipeAdv[k];
@@ -633,6 +656,8 @@ const pipePhaseWord=x => x===null ? "NOTHING"
 /* ══════════ the bubbles ══════════ */
 const PIPE_RUNWAY=60*DRAW_K;
 const PIPE_BUB_WALL=0.35*DRAW_K;  // bore left clear: a parcel touching the wall reads as a burr
+const PIPE_BUB_STEP=0.25;         // of its own spacing a parcel may travel in one frame
+const PIPE_BUB_MAXK=6;            // how far the spacing may stretch before the run is a streak
 const pipeHash = k => Math.imul(k^0x9e3779b1,2654435761)>>>0;
 const pipeRnd = (k,sh,m) => ((pipeHash(k)>>>sh)&m)/m;
 const pipeSeed = key => { let a=0; for(let i=0;i<key.length;i++) a=Math.imul(a^key.charCodeAt(i),16777619); return a>>>0; };
@@ -658,7 +683,7 @@ function pipeBubCol(col){
   }
   return v;
 }
-function pipeStream(g,key,ph0,sp,col,w,st,seed){
+function pipeStream(g,key,sp,col,w,st,seed){
   const moving=Math.min(1,Math.abs(sp)/(8*DRAW_K));
   /* a wide bore carries more of them, not bigger ones */
   /* the gap is a length on the board, so both ends of it carry DRAW_K - mixed
@@ -668,11 +693,20 @@ function pipeStream(g,key,ph0,sp,col,w,st,seed){
   /* A FAST RUN SPREADS ITS PARCELS OUT RATHER THAN DIMMING THEM. The period is
      what sets the speed the texture can carry, so widening it is how the
      picture buys the speed back - fewer marks, further apart, all of them at
-     full brightness and all of them still going the right way. Capped, or a
-     16x run empties into two dots. Dimming was tried first and it read as no
-     flow at all past 4x. */
-  const adv=aliasAdv(key,ph0);
-  const gap=gap0*clamp(Math.abs(adv)/(gap0*0.4),1,2.5);
+     full brightness and all of them still going the right way. Dimming was
+     tried first and it read as no flow at all past 4x.
+     ══ AND IT IS SPACED OFF THE ALIASING LIMIT, NOT ONTO IT ══
+     The period was solved as adv/0.4 against a phase clamped at period*0.4, so
+     the step sat exactly ON the clamp at every speed and anything that moved it
+     - a flow change, a frame - crossed it. Past 2.5x stretch the period stopped
+     growing while the speed went on, so the step pinned to the cap and the
+     parcels stuttered the faster they ran. A QUARTER of a period a frame is the
+     spacing now, which leaves the clamp slack rather than resting on it. */
+  /* THE TRAVEL IS THE SMOOTHED RATE OVER THE SMOOTHED FRAME, never the raw
+     jump in s.flowPos: that integral moves in whole ticks, so a frame with no
+     tick in it advanced nothing and the next one advanced two. */
+  const adv=sp*frameDt();
+  const gap=clamp(Math.abs(adv)/PIPE_BUB_STEP, gap0, gap0*PIPE_BUB_MAXK);
   /* THE PHASE IS THE ONE THE TEXTURE CAN CARRY - see aliasStep(). Everything
      below reads it, including the parcel's identity and its wobble, or a mark
      would be drawn somewhere its own number did not put it. */
@@ -696,11 +730,22 @@ function pipeStream(g,key,ph0,sp,col,w,st,seed){
     /* THE PARCEL STAYS INSIDE THE BORE. The offset is priced off what the
        radius leaves, never off the bore, or half of a fat one sits on the wall. */
     const off=(pipeRnd(id,19,255)-0.5)*2*Math.max(0,lim-r);
-    /* and it surges: a parcel is in the fluid, not bolted to it. The wobble is
-       driven by ph, so it stops dead when the flow does. */
-    const d=s+Math.sin(ph*(0.05+0.03*pipeRnd(id,3,255))+id)*gap*0.12;
+    /* and it surges: a parcel is in the fluid, not bolted to it.
+       ══ A SURGE IS A FREQUENCY, AND A FREQUENCY IS PER SECOND ══
+       It was driven by ph, which is a DISTANCE - so the sway ran at the speed
+       of the fluid and at the scale of the board. Authored on a 16 px cell it
+       crept 0.05 rad a frame; on a CELL-unit board at flow it advanced 0.6 rad
+       a frame with 12 px of amplitude, and every parcel buzzed on top of its
+       own travel. Faster flow, faster buzz - which is the stutter. It runs on
+       the CLOCK now, at a rate per second, and the amplitude is the base
+       spacing, not the stretched one, or a fast run swings six times as far.
+       It still stops dead when the flow does: `moving` is the amplitude. */
+    const d=s+Math.sin(fxClock()*(1.6+0.9*pipeRnd(id,3,255))+id)*gap0*0.12*moving;
     const at=pipeAt(g,clamp(d,0,g.len));
-    ctx.globalAlpha=0.9*moving*(0.55+0.45*pipeRnd(id,2,255))*(1-st*0.3);
+    // and what the spacing could not buy back is given up: past its own Nyquist
+    // a parcel is a mark in the wrong place, so it fades and the streak carries
+    // the run instead
+    ctx.globalAlpha=0.9*moving*(0.55+0.45*pipeRnd(id,2,255))*(1-st*0.3)*(1-a.over);
     ctx.beginPath(); ctx.arc(at.x-at.dy*off, at.y+at.dx*off, r, 0, 6.2832); ctx.fill();
   }
   ctx.restore();
@@ -1257,16 +1302,18 @@ function pipeFlow(L){
   pipeRate(L);
   const PC=pipeColours(L);
   for(const r of pipeRuns(L)){
-    const g=pipeGeom(r.pts);
-    if(!g.len) continue;
     if(runCut(r,L)) continue;   // a severed run carries nothing: no packets over an empty bore
     const w=pipeWidth(runBore(r));
+    // the SAME radius drawPlant() strokes the casing with, or the parcels leave
+    // the pipe at every elbow
+    const g=pipeGeom(pipeBendPts(r.pts, pipeBendR(r.pts, w+2*pipeWallPx(r))));
+    if(!g.len) continue;
     ctx.save(); pipeClip(g,w,w/2);
-    /* L.flowPos and pipeSpd are keyed by the RUN (r.key), never the kind (r.k) - a
-       kind has no entry of its own, so reading r.k here silently fed every packet
-       phase 0 and every speed 0, whatever loop it was on. */
-    pipeStream(pipePad(g,PIPE_RUNWAY), r.key, L.flowPos[r.key]||0,
-              pipeSpd[r.key]||0, pipePhaseCol(pipeCol(PC,r.k),pipeSteam(r,L)), w,
+    /* pipeSpd is keyed by the RUN (r.key), never the kind (r.k) - a kind has no
+       entry of its own, so reading r.k here silently fed every packet a speed
+       of 0, whatever loop it was on. */
+    pipeStream(pipePad(g,PIPE_RUNWAY), r.key, pipeSpd[r.key]||0,
+              pipePhaseCol(pipeCol(PC,r.k),pipeSteam(r,L)), w,
               pipeSteam(r,L), pipeSeed(r.key));
     ctx.restore();
   }
