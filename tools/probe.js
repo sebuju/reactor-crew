@@ -70,7 +70,7 @@ function dump(s,label){
 
   console.log(" POTS");
   for(const id in (s.condTBy||{})) row("cond "+id+" K",f(s.condTBy[id],2)+"  cw in "+f(s.cwInTBy[id],2)+" K");
-  for(const id in (s.ihxTBy||{})) row("ihx "+id+" K",f(s.ihxTBy[id],2));
+  for(const id in (s.ihxQBy||{})) row("ihx "+id, "crosses "+f((s.ihxQBy[id]||0)/1000,1)+" MW");
   for(const id in (s.radTBy||{}))
     row("rad "+id, "T "+f(s.radTBy[id],2)+"  takes "+f((s.radQBy[id]||0)/1000,1)+" MW");
   for(const id of M.sgIds()) row("sg "+id, "T "+f(s.sgTBy&&s.sgTBy[id],2)+"  lvl "+f(M.sgLvl(s,id),1)+"  P "+f(M.secP(s,id),4));
