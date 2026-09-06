@@ -4,16 +4,11 @@
    never a second table. */
 
 const MARGIN_W=268, MARGIN_GAP=6, MARGIN_PAD=30;
-/* A PANEL TOO TALL TO READ GETS MORE COLUMNS RATHER THAN A SECOND SCREEN OF
-   HEIGHT - so its own MEASURED HEIGHT decides how many, and nothing here names
-   a role. It was the BLOCK COUNT, which is not the same question: every tank
-   has 16 blocks and stands 882px, which fits in one, and all four went two-wide
-   beside a reactor that has 24 and stands 2870 and wants three. */
 /* THE COLUMNS BUTT, so a panel is a WHOLE NUMBER OF CELLS wide however many it
    has. MARGIN_W is 268 and CELL is 134, so one column is exactly 2 cells - and a
    gap of 8 between columns made two of them 4.06, which is 3 cells of deck
    reserved to draw 2.06 of panel. n*268 over 134 is 2n with the gap gone. */
-const MARGIN_COL_GAP=0, MARGIN_TALL=1200, MARGIN_COLS_MAX=3;
+const MARGIN_COL_GAP=0, MARGIN_COLS_MAX=4;
 const marginColW=n=>n*MARGIN_W+(n-1)*MARGIN_COL_GAP;
 /* AND PANELS ALONG ONE EDGE STAND IN GROUPS. The cascade sorted on board
    position alone, so the primary's own panels were broken up by a loop and by
@@ -100,12 +95,8 @@ function marginPan(host,title,rect,p){
   // placed at the origin once; every frame after this moves it by transform
   well.el.style.left="0px"; well.el.style.top="0px";
   well.el.style.width=MARGIN_W+"px";
-  /* THE RAIL'S OWN BODY CLASS, because dbPanelSync() fills this with the rail's
-     own blocks - so the block spacing and the column rules (plant-screens.css)
-     are written once and apply wherever a panel stands. It was `margin-body`,
-     which nothing styled: the reactor's panel took the two-column WIDTH and
-     kept one column of content, and the width alone made it look right. */
-  const body=KIT.el("div","db-panel-body"); well.body.appendChild(body);
+  /* Every plant-space body is a tree body; stated widths just widen the flex layout. */
+  const body=KIT.el("div","db-panel-body db-body-tree"); well.body.appendChild(body);
   host.appendChild(well.el);
   // the router addresses a connector by key, so every panel carries one name -
   // its machine's id, or "run"/"mat" for the two the selection addresses
@@ -116,27 +107,16 @@ function marginCols(h,n){
   if(h.cols===n) return;
   h.cols=n; h.w=marginColW(n);
   h.well.el.classList.toggle("cols",n>1);
-  h.well.el.style.setProperty("--margin-cols",n);
   h.well.el.style.width=h.w+"px";
   h.needH=true;
 }
-/* Asked of the height just measured, so the answer is about the panel actually
-   standing there. Its SINGLE-column height is what decides, and that is the
-   measurement times the columns it is already in - near enough, since columns
-   balance. Growing is immediate; shrinking wants a tenth of slack, or a panel
-   sitting on a threshold flaps between two counts every frame. A change costs
-   one extra measure, and only when it changes. */
+/* A stated count sets the width; nothing auto-grows columns from height. */
 function marginColumns(h){
   if(h.fixW) return;
-  // a stated count beats the height rule, which knows nothing of where to cut
   const want0=h.body&&h.body._cols;
-  if(want0){ if(h.cols===want0) return;
-    marginCols(h,want0); h._hpx=h.well.el.offsetHeight||60; h.needH=false; return; }
-  const est=h._hpx*h.cols;
-  const want=Math.max(1,Math.min(MARGIN_COLS_MAX,Math.ceil(est/MARGIN_TALL)));
-  if(want===h.cols) return;
-  if(want<h.cols && est > MARGIN_TALL*want*0.9) return;
-  marginCols(h,want);
+  if(!want0) return;
+  if(h.cols===want0) return;
+  marginCols(h,Math.max(1,Math.min(MARGIN_COLS_MAX,want0)));
   h._hpx=h.well.el.offsetHeight||60; h.needH=false;
 }
 function marginBuild(host,live){
@@ -615,23 +595,10 @@ function marginBoxes(){
   return out;
 }
 
-/* ══ A PANEL IS A WHOLE NUMBER OF CELLS TALL, NOT JUST WIDE ══
-   MARGIN_W over CELL is exactly 2, so a panel's WIDTH snaps by construction; its
-   height is whatever its content measures and snapped to nothing - 24 of 24
-   landing on a fraction of a cell, one wasting 0.98 of one. The reservation
-   rounded up either way, so the deck was already spent; all this does is let the
-   panel FILL what it was standing on.
-   MEASURED WITH THE FLOOR TAKEN OFF FIRST, or the second pass reads back its own
-   padding and a panel could only ever grow. min-height, not height, so content
-   that outgrows the box still shows and is re-measured on the next change. */
+/* Reservation rounds up to whole cells; the panel draws its natural height. */
 function marginMeasure(h){
-  h.well.el.style.minHeight="";
-  h.well.el.offsetHeight;                     // natural height, pre-columns
-  marginColumns(h);                           // may change the column count, so re-read
-  const nat=h.well.el.offsetHeight||60;
-  const pad=Math.max(CELL, Math.ceil(nat/CELL)*CELL);
-  h.well.el.style.minHeight=pad+"px";
-  return pad;
+  marginColumns(h);
+  return h.well.el.offsetHeight||60;
 }
 
 /* Read pass then write pass: a box measured after a style write forces a fresh
@@ -932,7 +899,7 @@ function marginSync(host,live){
          longest on the plant, and the controller carries the automation graph,
          which is a drawing and reads across, not down. The bench says the same
          through B.cols (paramsFor), the door dbPanelSync() reads. */
-      h.body._cols = h.p.role==="core" ? 2 : h.p.role==="ctrl" ? MARGIN_COLS_MAX : 0;
+      h.body._cols = h.p.role==="core" ? 2 : h.p.role==="ctrl" ? 3 : 0;
       /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
          canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
          exactly as the rail does it (crRailSync). */
