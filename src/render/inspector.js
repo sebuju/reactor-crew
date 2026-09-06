@@ -369,7 +369,6 @@ function paramsFor(p){
          raw:()=>cD.rodSpd===undefined?undefined:cD.rodSpd*100, clr:()=>{ delete cD.rodSpd; dTouch(); }},
         "%/s",2,()=>ROD_SPD0*100,v=>cD.nbank*ROD_BANK_T*(v/100/ROD_SPD0-1));
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.",bagAcc(cD,"foll",()=>cD.foll),FOLL);
-    tog("AUTOMATIC ROD CONTROL","A controller that holds coolant temperature on program so the plant follows load by itself. It only ever drives the bank inside the travel band you set below; you can always override it.","autorod",26);
     /* THE BAND THE CONTROLLER WORKS IN, as two handles rather than two
        constants. AUTOSYS.rod's own tooltip has always promised "the travel
        band set on the rod-drive panel" and there was no such control - the
@@ -508,6 +507,7 @@ function paramsFor(p){
     help("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone. So is an unplumbed one: a panel cools the water running through it, so where you pipe it is what it cools.");
   }
   else if(p.role==="ctrl"){
+    B.cols=3;   // the automation graph reads across: this panel states its own width
     opt("INSTRUMENT CHANNELS","How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.","chan",CHAN);
     tog("REACTOR PROTECTION SYSTEM","The automatic trips. Fitted, it scrams the core on high flux, low DNBR, high or low pressure, high fuel temperature, low flow, core void or low subcooling. Leave it off and none of that happens: the reactor will run itself to destruction and wait for you to notice.","rps",55);
     B.push({kind:"slider",title:"RPS TRIP MARGIN",key:"rpsm",min:0,max:1,step:.05,
@@ -527,6 +527,10 @@ function paramsFor(p){
        "The neutron flux the automatic protection scrams at, as a share of rated power. It is the trip margin above, read out."],
       ["CREW DOSE RATE",M.dose.toFixed(2)+" x",M.dose>1?C.amber:null,
        "Radiation reaching this room during an accident, solved along the straight line from the reactor. Paint standing on that line is what lowers it."]]; }});
+    /* THE AUTOMATION LIVES HERE. Every controller on the plant is a graph of
+       blocks in this cabinet - see ctl.js - and this is where it is built. */
+    B.push({kind:"ctlgraph",title:"AUTOMATION",live:false});
+    help("Everything that acts on the plant without being asked, except the protection system, is wired here out of blocks: transmitters, setpoints, arithmetic, PID, limits, and the demands they land on. A preset ships the stock controllers already wired; take them apart, retune them or build your own. Automation runs on electricity: with the switchboard dark and no backup, every block holds its last output.");
   }
   /* ══ ONE PANEL, EVERY TANK ══
      There is no menu of kinds anywhere in this game, and this is why: an
@@ -710,6 +714,9 @@ function paramsForFit(fid){
     ["MASS",fitMassOf(fid).toFixed(1)+" t",null,
      "What this fitting weighs, priced off its bore against the default valve."]]});
   if(j.mode!=="relief") return B;
+  B.push({kind:"toggle",title:"SPRING SAFETY",
+    key:{get:()=>!!j.spring, set:v=>{ if(v) j.spring=true; else delete j.spring; }},
+    tip:"What works this valve. Off, it is a power-operated relief valve: a block in the control room lifts it, and with the cabinet dark it stays shut. On, it is a code safety valve - a spring against the pressure, lifting and reseating at the setpoints below with no power, no wiring and no way to hold it shut. Real plants carry both."});
   /* MEGAPASCALS, not a multiple. They were fractions of reliefRefP(), so the
      number on the panel was not the number on the valve and moving the
      circuit's setpoint moved every relief valve on the plant with it. The

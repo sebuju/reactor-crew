@@ -56,7 +56,7 @@ function fitGlyph(cx,cy,w,h,mode,col){
 function reliefBowtie(cx,cy,w,h,L,fid){
   const open = !!(L && fid && L.reliefOpen[fid] && !L.reliefBlocked[fid]);
   const blkd = !!(L && fid && L.reliefBlocked[fid]);
-  const byp  = !!(L && fid && typeof porvLive==="function" && !porvLive(fid));
+  const byp  = !!(L && fid && !fitSpring(fid) && !sinkDriver(L,"relief",fid));
   fitGlyph(cx,cy,w,h,"relief", open?C.red : (blkd||byp)?C.dis : C.green);
   if(blkd) line(cx-w/1.5,cy,cx+w/1.5,cy,C.red,1.6);
   else if(byp){ const r=Math.max(w,h)/1.6;
@@ -277,8 +277,7 @@ const spinRate=dpf=>{ const m=Math.abs(dpf);
   return (dpf<0?-1:1)*(SPIN_KNEE+k*(1-Math.exp(-(m-SPIN_KNEE)/k))); };
 /* fraction of rated this shaft turns at: its own drive, or the water pushed
    through it - a stopped pump in a live loop windmills rather than standing. */
-const pumpSpinK = (s,id) => Math.max(pumpDrive(s,id),
-  pumpQOf(s,id)/Math.max((P.pumpQRef&&P.pumpQRef[id])||pumpFlow(id),1e-9));
+const pumpSpinK = (s,id) => Math.max(pumpDrive(s,id), pumpQOf(s,id)/Math.max(pumpRefKgs(id),1e-9));
 function spinVane(cx,cy,r,deg,dpf,col){
   const t=clamp((Math.abs(dpf)-SPIN_LO)/(SPIN_HI-SPIN_LO),0,1), a=deg*Math.PI/180;
   if(t<1){
@@ -872,7 +871,7 @@ function coreField(x,y,w,h,V){
          this dot, and reusing it would make a voided node and a failed one the
          same picture. A square says the rod geometry is gone, which is
          unambiguous at four pixels. */
-      if(V.nMelt && V.nMelt[k]>0){ fillRect(cx-r,cy-r,r*2,r*2,col); }
+      if((V.nMelt && V.nMelt[k]>0) || (V.nDisp && V.nDisp[k]>0)){ fillRect(cx-r,cy-r,r*2,r*2,col); }
       else {
         ctx.beginPath(); ctx.arc(cx,cy,r,0,7);
         if(V.nV && V.nV[k]>.12){ ctx.strokeStyle=col; ctx.lineWidth=Math.max(.7,r*.55); ctx.stroke(); }
@@ -1225,7 +1224,7 @@ function partStateWord(p){
     if(mode==="relief")
       return S.reliefBlocked[p.id] ? "BLOCKED"
            : S.reliefOpen[p.id]    ? "OPEN"
-           : !porvLive(p.id)       ? "BYP" : null;
+           : (!fitSpring(p.id) && !sinkDriver(S,"relief",p.id)) ? "BYP" : null;
     if(mode==="throttle") return (S.valve[p.id]??1)<0.005 ? "SHUT" : null;
     return null;
   }
@@ -1322,15 +1321,7 @@ function ctlBase(p,live,split){
        on:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
        text:()=>(S.reliefBlocked&&S.reliefBlocked[p.id])?"SHUT":"OPEN",
        fn:()=>{ act("porvBlockOf",p.id); },
-       tip:"BLOCK VALVE - your last defence against a relief valve that lifts and will not reseat. Shutting it stops the leak and gives this relief path up for the rest of the run."}],
-     /* NO LABEL. The switch is mounted ON the valve, so naming the system
-        again beside it read "PORV AUTO  AUTO" - the state word twice. Every
-        other arming switch on the plant that has no room for a label already
-        draws the state alone; this one just has no label to drop. */
-     [{kind:"arm",flex:1,k:p.id+":porvByp",def:false,name:AUTOSYS.porv.name,label:()=>"",
-       on:()=>!porvLive(p.id), fn:()=>{ act("porvByp",p.id); },
-       title:()=>AUTOSYS.porv.name+"  [ "+(porvLive(p.id)?"ARMED":"BYPASSED")+" ]",
-       tip:"Whether THIS valve may lift by itself at its own setpoint. Bypass it and this one stays shut while every other relief valve goes on working - which is how you defeat one valve without giving up the relief path."}]];
+       tip:"BLOCK VALVE - your last defence against a relief valve that lifts and will not reseat. Shutting it stops the leak and gives this relief path up for the rest of the run."}]]
   }
   switch(p.role){
     case "rods": {
@@ -1369,7 +1360,7 @@ function ctlBase(p,live,split){
         /* Only while the controller is actually driving: a band drawn for a
            system that is bypassed or was never fitted is two marks describing
            nobody. autoLive() is the one predicate for that. */
-        marks:()=>autoLive("rod")?[S.arLo*100,S.arHi*100]:null,
+        marks:()=>sinkDriver(S,"rodStep",cid)?[S.arLo*100,S.arHi*100]:null,
         fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",
         set:v=>{ split ? act("coreRodBank",cid,b,v/100) : act("coreRodDem",cid,v/100); },
         tip:"BANK "+(b+1)+" - insertion of this bank. GANGED, moving it carries every bank by the same amount and the whole stack goes with it. SPLIT, it is this bank alone, and standing one bank against another is the whole of how you answer a radial xenon tilt here. It moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. The stack travels at only 1.2%/s. The two amber marks are the travel band the automatic controller may move inside; they are drawn only while it is armed, and they never bind you."}];
@@ -1457,10 +1448,31 @@ function portCtlRows(p){
   // one container, not a grid of keys: a valve list reads as a list
   return cells.length ? [cells] : [];
 }
+/* ══ THE STRIP SAYS WHO IS DRIVING ══ a demand a block owns is marked on the
+   machine's own strip, and the key is the way to take it back: it switches
+   that block off, which is an act like any other (decision 6, the plan). */
+const DRIVEN_TIP="A block in the control room owns this demand. The control still draws and still moves, but what it shows is the block's order. Press to switch that block OFF and take the demand back by hand; switch it on again from the control room's own panel.";
+function drivenRows(p){
+  const pairs=[], m=D.machines[p.id];
+  if(p.role==="rods"&&m&&m.on) pairs.push(["rodStep",m.on]);
+  if(p.role==="pump") pairs.push(["flowDem",p.id]);
+  if(p.role==="turb"&&LAY.parts.find(q=>q.role==="turb")===p) pairs.push(["loadDem",null]);
+  if(p.role==="sg") pairs.push(["freg",p.id]);
+  if(p.role==="tank") pairs.push(["tankOpen",p.id]);
+  if(p.role==="fitting"){ const j=P&&P.fittings[p.id];
+    if(j&&j.mode==="relief"&&!j.spring) pairs.push(["relief",p.id]);
+    if(j&&j.mode==="throttle") pairs.push(["valveDem",p.id]); }
+  const cells=[];
+  for(const [sink,arg] of pairs){ const id=sinkDriver(S,sink,arg); if(!id) continue;
+    cells.push({kind:"btn",flex:1,ownPart:true,on:()=>true,text:()=>SINK[sink].lab+" BY "+id.toUpperCase(),
+      fn:()=>{ act("blkOn",id); },tip:DRIVEN_TIP}); }
+  return cells.length?[cells]:[];
+}
 function ctlFor(p,live,split){
   const rows=ctlBase(p,live,split), k=autoOn(p.id);
   let out = k ? (rows||[]).concat([[bypCell(k)]]) : rows;
   // the plant has to be welded down for a valve to have a position at all
+  if(live){ const dr=drivenRows(p); if(dr.length) out=(out||[]).concat(dr); }
   if(live){ const pr=portCtlRows(p); if(pr.length) out=(out||[]).concat(pr); }
   return out;
 }
@@ -1788,6 +1800,7 @@ const RHO_ROWS=[
  ["XENON","xe","Xenon-135, a neutron poison that builds up after fission. It has memory: what you did minutes ago is still eating your reactivity now. Equilibrium sits near -2700; after a scram it deepens toward -4800 and locks you out of restarting.",()=>C.blue],
  ["BORON","bor","Poison dissolved in the coolant, and whatever you have dialled in on the boron control. Slow to change, but it is the only lever left once rods and temperature have run out.",()=>C.green],
  ["VOID","vd","Steam bubbles in the core. In a water design this is strongly negative and shuts the reactor down as it uncovers. In a graphite or sodium design it is POSITIVE, and voiding adds power instead.",()=>C.bright],
+ ["DISASSEMBLY","dis","Fuel that a power pulse has blown out of its pins. It is no longer in the lattice, so it multiplies nothing - this is what actually stops a prompt excursion, and it is not a control.",()=>C.h2],
  ["ROD TIP","tip","Whatever hangs below the absorber. With a water follower this stays at zero all the way in. With a graphite one it goes POSITIVE as the bank drops, because graphite displaces water at the bottom of the core before the absorber has reached there - the reactivity you add before the reactivity you remove.",()=>C.graph],
  ["NET RHO","net","The sum of everything above. Zero means steady power, positive means it is climbing, negative means it is falling. The marks are your fuel's beta: past one of them the reactor is prompt critical and nothing can stop it in time.",()=>C.amber,()=>[-P.BETA*1e5,P.BETA*1e5]],
 ];
@@ -2207,7 +2220,7 @@ function dmgViz(x,y,w,h,cid){
       {size:6,sp:.2,color:C.ink2});
   });
 }
-const DMGVIZ_TIP="Where the core is hurt, cell by cell, on the same picture the reactor symbol draws. Amber is cladding that has burst, red is cladding the steam has eaten through, and the pale cells are fuel that is actually molten. The ring marks the node with the least thermal margin left - that is where the next failure happens. Under it, what share of the core is in each stage.";
+const DMGVIZ_TIP="Where the core is hurt, cell by cell, on the same picture the reactor symbol draws. Amber is cladding that has burst, red is cladding the steam has eaten through, violet is fuel a power pulse has blown apart inside the channel, and the pale cells are fuel that is actually molten. The ring marks the node with the least thermal margin left - that is where the next failure happens. Under it, what share of the core is in each stage.";
 const HEATVIZ_TIP="The core's whole heat balance. Everything it is MAKING stacks right - prompt fission plus four groups of decay heat on their own clocks - and everything a generator or exchanger is TAKING stacks left, both on one scale, so the longer arm is the side that is winning. A scram takes the prompt segment away and nothing else, which is why a shut-down core still needs a sink. Under it the net as K/s on T-avg, and the last minute of T-avg itself.";
 /* A DEMAND IN TRANSIT IS NOT A CAUTION: amber says the machine is walking to
    where it was asked, which is the plant obeying - cautStep() reads MOVING. */
@@ -2473,8 +2486,8 @@ function readoutsFor(p,s){
     /* NO SCALE, BECAUSE THIS PLANT HAS NO HONEST ONE TO DRAW. A pump sits
        wherever its own droop curve meets the circuit, which is well past its
        stated swallow on most of the presets - the circulating water pump passes
-       three times its rating - and P.pumpQRef only converges for a feed pump.
-       A figure with no bar says less than a bar on a scale that pegs. */
+       three times its rating. A figure with no bar says less than a bar on a
+       scale that pegs. */
     add("PASSING",pumpQOf(s,id).toFixed(0)+" kg/s",null,
       "What this machine is moving right now, against the "+pumpFlow(id).toFixed(0)+" kg/s it was bought to swallow. A pump follows its own curve, so it can pass more than that against an easy circuit and far less against a shut valve. It falls with speed, with cavitation, and with anything the plumbing downstream is doing to it.");
     add("SPEED DEMAND",((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)*100).toFixed(1)+" %",
@@ -2530,6 +2543,11 @@ function readoutsFor(p,s){
     add("RPS",rpsState().toLowerCase(),rpsLive()?C.green:C.amber,
       "The automatic protection. Live, it trips on eight conditions; bypassed, it watches you run the plant to destruction and says nothing.");
     add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2,T_TRIP);
+    { const B=s.blkBy||{}, n=Object.keys(B).length, on=Object.values(B).filter(b=>b.on).length, live=ctlLive(s);
+      add("AUTOMATION", n?on+"/"+n+" BLOCKS ON":"none", n?(live?C.green:C.amber):C.ink2,
+        "How many blocks are wired in this cabinet and how many are switched on. Every controller on the plant except the protection system is one of these graphs - open this panel to see them.");
+      if(n) add("CABINET", live?"computing":supplyK(s)>0?"WRECKED":"DARK", live?C.green:C.red,
+        "Whether the blocks are being evaluated. Automation runs on electricity: with the switchboard dark and no backup, or the cabinet hit, every block holds its last output and every demand it owned stays where it was."); }
     add("INSTRUMENTS",P.noise<.2?"VOTED":P.noise<.6?"2CH DRIFT":"1CH RAW",
         P.noise>.6?C.amber:C.green,
       "How many sensors watch each parameter. One channel jitters and hides a liar; three vote the liar out and the numbers hold still.");
@@ -2759,7 +2777,7 @@ function readoutsForFit(fid,s){
   if(mode==="relief"){
     const set=DES.set;
     const open = !!s.reliefOpen[fid] && !s.reliefBlocked[fid];
-    const blkd = !!s.reliefBlocked[fid], byp = !!s.porvByp[fid];
+    const blkd = !!s.reliefBlocked[fid];
     /* WHICH PRESSURE THIS VALVE IS ABOUT is asked of the drawing, not assumed
        to be the primary's: a valve placed on a steam line lifts on its shell.
        reliefRefP()/reliefAtP() (step.js) are the same pair the tick lifts on,
@@ -2801,9 +2819,11 @@ function readoutsForFit(fid,s){
     }
     add("BLOCK VALVE",blkd?"SHUT":"open",blkd?C.red:C.green,
       "Your last defence against this valve sticking open. Shutting it stops the leak and gives this relief path up for good.");
-    add("AUTO RELIEF", byp?"bypassed":autoState("porv").toLowerCase(),
-        (autoLive("porv")&&!byp)?C.green:C.amber,
-      "Whether THIS valve may lift by itself. Bypassing one valve leaves the others working; bypassing the master leaves nothing venting at all.");
+    if(fitSpring(fid)) add("ACTUATION","spring",C.green,
+      "A code safety: the spring is the controller. It lifts at its own setpoint with no power, no block and no arm, and nothing in the control room can hold it shut.");
+    else { const drv=sinkDriver(s,"relief",fid);
+      add("ACTUATION", drv?"PORV, wired "+drv.toUpperCase():"PORV, unwired", drv?C.green:C.amber,
+        "A power-operated relief valve: a block in the control room watches its pressure and lifts it. Unwired, or with the cabinet dark, it lifts for nobody and pressure ends at the vessel. Make it a SPRING SAFETY at the bench and it needs none of that."); }
   } else if(mode==="tee"){
     /* A TEE HAS NOTHING TO REPORT. It is one node with four faces - no gate,
        no position, no state at all - so it gets no rows and the rail hides
