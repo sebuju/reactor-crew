@@ -416,10 +416,24 @@ const KIT = (function(){
     return {el: e, set};
   }
 
+  /* A GLYPH THAT IS A DRAWING, not a character: a title bar key drawn as "−"
+     or "×" is at the mercy of whatever font answered, and the two never line
+     up with each other. One viewBox, one stroke, and the key states its own
+     meaning through `label` for the tooltip either way. */
+  function icon(paths){
+    const s = svgEl("svg", "kit-icon");
+    s.setAttribute("viewBox", "0 0 16 16");
+    for(const d of [].concat(paths)){
+      const p = svgEl("path"); p.setAttribute("d", d); s.appendChild(p);
+    }
+    return s;
+  }
+
   function button(label, opts){
     opts = opts || {};
     const b = el("button", "kit-btn", {type: "button"});
-    b.textContent = label;
+    if(opts.icon){ b.classList.add("kit-btn-icon"); b.appendChild(icon(opts.icon)); }
+    else b.textContent = label;
     if(opts.sunk) b.classList.add("kit-btn-sunk");
     if(opts.flat) b.classList.add("kit-btn-flat");
     if(opts.danger) b.classList.add("kit-btn-danger");
@@ -746,6 +760,6 @@ const KIT = (function(){
   }
 
   return {el, tip, setText, setStyle, show, well, rule, reveal, chip, dot, seg, segSigned,
-    segMark, band, lamp, badge, hatch, button, slider, textInput, numInput, optList, segSel, sliderRow,
+    segMark, band, lamp, badge, hatch, icon, button, slider, textInput, numInput, optList, segSel, sliderRow,
     readout, toggle, menuKey};
 })();
