@@ -234,7 +234,10 @@ function partFluidH(s, id){
    compartment its heat never reached. */
 // a break key names a PART (no colon in it) or a RUN (its key always has one)
 const breakPart = k => { const t = k.slice(6); return t.indexOf(":") < 0 ? t : null; };
-const openFluidH = (s, k) => { const pid = breakPart(k);
+// ...or a reactor CAVITY ("break:cav:"+core id): the core's cells, the cavity node's own water
+const breakCav = k => k.indexOf("break:cav:") === 0 ? k.slice(10) : null;
+const openFluidH = (s, k) => { const pid = breakPart(k), cid = breakCav(k);
+  if(cid){ const nd = "cav:"+cid, h = netHAt(s, nd); return isFinite(h) ? {h, c:netSatOf(nd)} : null; }
   return pid ? partFluidH(s, pid) : runFluidH(s, k.slice(6)); };
 
 /* ══ GEOMETRY, MEMOISED ON THE ARRANGEMENT ══
@@ -665,7 +668,7 @@ function roomStep(s, dt){
    its break edges - "break:core" is the vessel itself, "break:"+run key is a
    severed run, and only the cells actually cut are open. */
 function roomOpenCells(s, G, key){
-  { const pid = breakPart(key);
+  { const pid = breakPart(key) || breakCav(key);
     if(pid){ const q = G.parts.find(w => w.p.id === pid); return q ? q.cells : []; } }
   const r = P.net.byKey[key.slice(6)];
   if(!r || !r.cells) return [];
@@ -926,7 +929,7 @@ function roomH2Step(s, dt, G){
     const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CVAIR)/T_HULL : 0)
               - Math.max(0, Pr[i]-gz)/ROOM_P_TAU*dt;
     Pr[i] = Math.max(gz, p > 0 ? p : 0);
-    if(Pr[i] > pmax) pmax = Pr[i];
+    if(Pr[i]-gz > pmax) pmax = Pr[i]-gz;      // the bang is the excess over what the volume holds on its own
     /* AND THE MARK IT LEAVES. The pressure itself is gone in half a second,
        so the only record of where a bay was blown apart was the damage list -
        which names machines and cannot say that bare deck was in the wave.
@@ -1184,6 +1187,13 @@ function roomPAt(s, p){
   let v = 0;
   for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
     if(X>=0&&X<GW&&Y>=0&&Y<GH) v = Math.max(v, s.roomP[Y*GW+X]);
+  return v;
+}
+// the same cells, the BANG only: what the burn put on top of the volume's own static pressure (roomPGauge)
+function roomBlastAt(s, p, g){
+  let v = 0;
+  for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
+    if(X>=0&&X<GW&&Y>=0&&Y<GH){ const i = Y*GW+X; v = Math.max(v, s.roomP[i]-g[i]); }
   return v;
 }
 // the hydrogen concentration in a cell, as a volume fraction - the readout
