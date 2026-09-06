@@ -50,9 +50,35 @@ const boreK = kind => boreMm(kind)/BORE_REF;
    commissioned snapshot and D is the bench - the P?fallback:D idiom
    reliefSet() (step.js) uses, because a fitting resized after commissioning
    must not move the plant that is running. */
-const fitBoreMm = fid => { if(BORE_NOM) return FIT_DEFAULT.bore;
+const fitBoreMm = fid => { if(BORE_NOM) return fitBoreSuggest(fid);
   const f = (typeof P!=="undefined" && P) ? P.fittings : D.fittings;
-  return (f && f[fid] && f[fid].bore) || FIT_DEFAULT.bore; };
+  return (f && f[fid] && f[fid].bore) || fitBoreSuggest(fid); };
+/* ══ A SAFETY VALVE IS SIZED OFF WHAT IT PROTECTS ══
+   The hole that passes, choked at its own lift, the rated steam of the shells
+   it reaches - a code safety set carries its generator's full steam flow. It
+   was a flat 412.5 mm on every plant, which as a hole at 18 MPa passed 3 200
+   kg/s against 202 raised, so a lift on BN-600 emptied its header in a tick.
+   A fitting protecting no shell takes the flat default. Cached for one
+   design pass: shellsOf() is a graph walk. */
+let fitBoreCache = {}, fitBorePass = -1;
+const fitBoreSuggest = fid => {
+  if(fitModeOf(fid) !== "relief") return FIT_BORE0;
+  const pn = layPass();
+  if(pn && fitBorePass !== pn){ fitBoreCache = {}; fitBorePass = pn; }
+  if(pn && fitBoreCache[fid] !== undefined) return fitBoreCache[fid];
+  const shells = shellsOf(fid);
+  let v = FIT_BORE0;
+  if(shells.length && sgCount() > 0){
+    const ci = shellCirc(shells[0]), lift = reliefSet(fid).lift;
+    const rho = rhogOf(satOfCirc(ci), tsatSec(lift, ci));
+    // the share of this valve's shells' steam that is ITS, over every spring on the same header
+    const peers = reliefFitIds().filter(o => fitSpring(o) && shellsOf(o).some(id => shells.includes(id))).length;
+    const want = plantSteam()*shells.length/sgCount()/Math.max(peers, 1);
+    const area = want/(ORIF_CD*Math.sqrt(2*Math.max(rho,1e-3)*(1-RCRIT)*lift*1e6));
+    if(isFinite(area) && area > 0) v = Math.sqrt(4*area/Math.PI)*1000;
+  }
+  if(pn) fitBoreCache[fid] = v;
+  return v; };
 const fitBoreK  = fid => fitBoreMm(fid)/BORE_REF;
 /* This table is a set of DEFAULTS, not permissions: every run carries
    conductance whether or not its kind has a row here (see netBuild()'s single
@@ -216,13 +242,69 @@ const runMassPerM = r => shellTPerM(runBoreMm(r), runWallMm(r));
    the shell, in metres of radius; VESSEL_HEAD_K is how much thicker a head
    is than the side, both real figures rather than fitted ones. */
 const VESSEL_CLR = 0.55, VESSEL_HEAD_K = 1.6;
-function vesselShellMass(p0, c){
-  const L = (typeof latM === "function") ? latM(priD()) : null;
-  const dM = ((L && L.dia) || 3) + 2*VESSEL_CLR, hM = ((L && L.hgt) || 4) + 2*VESSEL_CLR;
-  const w = wallSuggestMm(dM*1000, p0, c)/1000;
+// mm, the plate a vessel this size is rolled from whatever it holds: BN-600's pool sits at 0.1 MPa in 30 mm
+const VESSEL_WALL_MIN = 25;
+const vesselDiaM = cD => { const L = (typeof latM === "function") ? latM(cD || priD()) : null;
+  return ((L && L.dia) || 3) + 2*VESSEL_CLR; };
+const vesselHgtM = cD => { const L = (typeof latM === "function") ? latM(cD || priD()) : null;
+  return ((L && L.hgt) || 4) + 2*VESSEL_CLR; };
+/* ══ THE VESSEL IS RATED OFF ITS OWN WALL, LIKE EVERY RUN AND TANK ══
+   The wall is a knob on the reactor (coreD().wall, mm), suggested by Barlow at
+   the setpoint it is held at and floored at the plate a vessel is built from;
+   the rating is runRating()'s inverse on it and the burst is the same margin
+   every pipe carries (PIPE_BURST_K). It was P.burstK, a typed 1.22 or 4.0 on
+   "is this a pressurised coolant" - the one pressure boundary on the board
+   with no steel in it, and the ceiling on every excursion. */
+const vesselWallSuggest = (p0, c, cD) => Math.max(VESSEL_WALL_MIN, wallSuggestMm(vesselDiaM(cD)*1000, p0, c));
+const vesselWallMm = (p0, c, cD) => { const d = cD || priD();
+  return (d && d.wall) || vesselWallSuggest(p0, c, cD); };
+const vesselRating = (p0, c, cD, wallMm) =>
+  2*(STEEL_S/((c&&c.pipeK)||1))*Math.max((wallMm ?? vesselWallMm(p0, c, cD))-WALL_CORR, 0)/(vesselDiaM(cD)*1000);
+const vesselBurstP = (p0, c, cD) => vesselRating(p0, c, cD)*PIPE_BURST_K;
+function vesselShellMass(p0, c, cD, wallMm){
+  const dM = vesselDiaM(cD), hM = vesselHgtM(cD);
+  const w = (wallMm ?? vesselWallMm(p0, c, cD))/1000;
   const area = Math.PI*dM*hM + 2*(Math.PI/4)*dM*dM*VESSEL_HEAD_K;
   return area*w*STEEL_RHO/1000;
 }
+/* ══ A PRESSURE-TUBE CORE HAS NO VESSEL: EVERY CHANNEL IS ITS OWN WALL ══
+   coreD().tube = {bore, wall, cavVol, shieldT} (absent = a vessel). The bore
+   is what the lattice pitch leaves round one bundle (TUBE_BORE_PITCH, the
+   RBMK's own 80 of 250 mm), the wall is Barlow at the setpoint like every
+   run, and the rating is runRating()'s law on that one tube. The stack sits
+   in a sealed cavity under a shield; the cavity's own rating is the shield's
+   weight over its area. CAV_VOID, SHIELD_THK, SHIELD_RHO are memory figures
+   (steel-serpentinite slab, the void a graphite stack leaves) - unsourced. */
+const TUBE_BORE_PITCH = 0.32, CAV_VOID = 0.15, SHIELD_THK = 3, SHIELD_RHO = 2500;
+const tubeOf = cD => ((cD || priD()) && (cD || priD()).tube) || null;
+const tubeBoreSuggest = cD => { const c = cD || priD(); return TUBE_BORE_PITCH*((c.lat && c.lat.pitch) || 0)*1000; };
+const tubeBoreMm = cD => { const t = tubeOf(cD); return (t && t.bore) || tubeBoreSuggest(cD); };
+const tubeWallSuggest = (p0, c, cD) => wallSuggestMm(tubeBoreMm(cD), p0, c);
+const tubeWallMm = (p0, c, cD) => { const t = tubeOf(cD); return (t && t.wall) || tubeWallSuggest(p0, c, cD); };
+const tubeRating = (p0, c, cD, wallMm) =>
+  2*(STEEL_S/((c&&c.pipeK)||1))*Math.max((wallMm ?? tubeWallMm(p0, c, cD))-WALL_CORR, 0)/Math.max(tubeBoreMm(cD), 1);
+const tubeBurstP = (p0, c, cD) => tubeRating(p0, c, cD)*PIPE_BURST_K;
+const tubeCount = cD => { const L = (typeof latM === "function") ? latM(cD || priD()) : null; return (L && L.nAsm) || 0; };
+function tubeMass(p0, c, cD, wallMm){ const d = cD || priD(), L = latM(d);
+  const w = (wallMm ?? tubeWallMm(p0, c, d))/1000, b = tubeBoreMm(d)/1000;
+  return L.nAsm*Math.PI*(b+w)*w*L.hgt*ZR_RHO/1000; }
+const cavAreaM2 = cD => Math.PI/4*Math.pow(vesselDiaM(cD), 2);
+const cavVolSuggest = cD => cavAreaM2(cD)*vesselHgtM(cD)*CAV_VOID;
+const cavVolM3 = cD => { const t = tubeOf(cD); return (t && t.cavVol) || cavVolSuggest(cD); };
+const shieldSuggest = cD => cavAreaM2(cD)*SHIELD_THK*SHIELD_RHO/1000;
+const shieldT = cD => { const t = tubeOf(cD); return (t && t.shieldT) || shieldSuggest(cD); };
+const shieldLiftP = cD => shieldT(cD)*1000*G_MPA/cavAreaM2(cD);
+// the cavity's relief lifts at half the shield and reseats at 80 % of its lift: what the real cavity had, one channel's worth
+const CAV_LIFT_K = 0.5, CAV_RESEAT_K = 0.8;
+/* m^2: the hole that passes one channel's discharge at the cavity's lift. The
+   channel is `one` (its two ends) choked at the setpoint on the loop's own
+   liquid; the relief passes that as steam at its lift over room pressure. */
+const cavReliefC = (cid, c, one) => {
+  const ci = coreCircOf(cid), p0 = holdSetP(ci), sat = satOfCirc(ci), pc = (typeof P!=="undefined" && P) ? P.Pcont : 0.1;
+  const w1 = flowW(one, rhofOf(sat, satT(sat, p0)), p0, pc);
+  const pl = pc + shieldLiftP(c)*CAV_LIFT_K;
+  const per = flowW(1, rhogOf(sat, satT(sat, pl)), pl, pc);
+  return per > 0 ? w1/per : 0; };
 
 // The head the network was linearised about, in MPa - so it is what a pump
 // nobody has sized SUGGESTS (pumpHeadSuggest(), layout.js) and nothing else.
@@ -449,6 +531,20 @@ function netBooked(net){
   for(const i of (net.cont||[])) b[i] = 2;      // 2: a boundary with no book at all
   for(let i=0;i<net.n;i++) if(net.name[i].indexOf("sec:") === 0) b[i] = 1;
   net.booked = b;
+  return b;
+}
+/* WHICH BOOK A NODE BELONGS TO, by name - the same partition netBooked()
+   marks, told apart: a shell's pool and its steam space are one book, every
+   condenser face is one (the hotwell, bookedKg), a tank node is its own.
+   undefined is the field's own, and containment. */
+function netBookOf(net){
+  if(net.bookOf) return net.bookOf;
+  const b = new Array(net.n);
+  for(const id in net.tankNode) if(!(D.tanks[id] && D.tanks[id].hold)) b[net.tankNode[id]] = "T:"+id;
+  for(const i of (net.secT||[])) b[i] = "G:"+net.secTById[i];
+  for(let i=0;i<net.n;i++) if(net.name[i].indexOf("sec:") === 0) b[i] = "G:"+net.name[i].slice(4);
+  for(const k in net.condNode) b[net.condNode[k]] = "C";
+  net.bookOf = b;
   return b;
 }
 /* THE MASK THE CONDUCTANCES THEMSELVES READ (F.wet, netFieldUpdate) - hashed,
@@ -1250,7 +1346,7 @@ const TANK_DEFAULT = {
    through. null means "this plant's default" - reliefSet() (step.js) is the
    one place that answers what that is. */
 const FIT_DEFAULT = {
-  name:"VALVE", col:"#c8b060", cell:null, mode:"throttle", bore:412.5,
+  name:"VALVE", col:"#c8b060", cell:null, mode:"throttle", bore:null,   // null = fitBoreSuggest()
   lift:null, reseat:null,
   tip:"A fitting in the pipe. Say what it is on its own panel - a tee that joins two lines, a throttle you can close, or a relief valve that lifts on pressure.",
 };
@@ -1780,6 +1876,7 @@ function circOfNode(nid){
     const p=partOf(nid) || partOf(nid.slice(0,-1));
     if(p) for(const n of (G.nodesOf[p.id]||[])){ if(n===nid || n.slice(0,-1)===p.id){ c=G.circuit[n]; break; } }
   }
+  if(c===undefined && nid.indexOf("cav:")===0) c=circOfNode(coreFold(nid.slice(4)));   // a reactor cavity holds its core's water
   if(c===undefined) c=-1;
   slot.set(nid,c); return c;
 }
@@ -2480,6 +2577,24 @@ function netEdges(){
     edges.push({u, v, C: s => partWrecked(s, q.id) ? holeC(BREACH_BORE) : 0,
                 h: 0, kind: "break", key: "break:"+cid}); }
 
+  /* ══ A PRESSURE-TUBE CORE DISCHARGES INTO ITS CAVITY, AND THE CAVITY INTO THE ROOM ══
+     The cavity is a free node of the field with the stack's own void for a
+     volume (it stores like every free node); a torn channel is two holes of
+     the tube's bore, over the share the core has opened (cs.tubesOpen); the
+     relief is a hole sized to pass one channel's discharge at its lift
+     (fitBoreSuggest()'s idiom), and once the shield is off (cs.breach) the
+     open face is the one hole figure every breach takes. */
+  const cavIds = [], cavCont = {}, cavVol = {};
+  for(const cid of coreIds()){ const c = coreD(cid), q0 = byId[cid]; if(!c || !c.tube || !q0) continue;
+    const u = nodeIdx(coreFold(cid)), cav = nodeIdx("cav:"+cid), v = contNode("cav:"+cid);
+    breakIds.push(v); contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
+    cavIds.push(cav); cavCont[cid] = v; cavVol[cav] = cavVolM3(c);
+    const one = 2*holeC(tubeBoreMm(c)/BORE_REF), n = tubeCount(c), relief = cavReliefC(cid, c, one);
+    edges.push({u, v: cav, C: s => { const cs = coreState(s, cid); return (cs && cs.tubesOpen > 0) ? cs.tubesOpen*n*one : 0; },
+                h: 0, kind: "cav", key: "cav:"+cid});   // LABEL: synthetic kind, a channel's two ends
+    edges.push({u: cav, v, C: s => { const cs = coreState(s, cid); return !cs ? 0 : cs.breach ? holeC(BREACH_BORE) : cs.cavRelief ? relief : 0; },
+                h: 0, kind: "break", key: "break:cav:"+cid}); }
+
   /* ══ AND A WRECKED HOLD TANK EMPTIES ITSELF THE SAME WAY ══
      Its water is the CIRCUIT's own, at an ordinary node of the field, so the
      only way out of it is an EDGE - a level it does not have and a book it is
@@ -2503,7 +2618,7 @@ function netEdges(){
   /* tankIdOf spans all three passes and is DERIVED off the drawing, so it is
      handed down rather than written a second time. */
   return {runs: net, byKey, byId, partOfNode, tankIdOf, nodes, index, coreNode, edges, F,
-          breakIds, steamBreaks, contZ, contCell, fitIds, fitMode, openSide, fitVentOut,
+          breakIds, steamBreaks, contZ, contCell, fitIds, fitMode, openSide, fitVentOut, cavIds, cavCont, cavVol,
           sgtrIds, sgtrParts, secTIds, secTParts};
 }
 
@@ -2567,7 +2682,7 @@ function netMaps(ctx){
 
   const net2 = {nodes, index, edges, core: coreNode, n: nodes.length, byKey, fitIds, fitMode, F: ctx.F,
                 cont: breakIds, contCell, sec: sgtrIds, secT: secTIds, sgtrParts, secTParts, fitTarget, fitVentOut,
-                steamBreaks,
+                steamBreaks, cav: ctx.cavIds || [], cavCont: ctx.cavCont || {}, cavVol: ctx.cavVol || {},
                 /* the surge run's own key, resolved once here rather than
                    re-found by a string scan every tick - step()'s level
                    integral reads this run's solved flow out of runFlow */
@@ -2674,6 +2789,7 @@ function netMaps(ctx){
       const half = runVol(r)/2;
       if(u !== undefined) net2.vol[u] += half;
       if(v !== undefined) net2.vol[v] += half; }
+    for(const i in net2.cavVol) net2.vol[i] = net2.cavVol[i];   // a reactor cavity is no part: its holdup is its own stated volume
     for(let i=0;i<net2.n;i++) if(!(net2.vol[i] > 1e-3)) net2.vol[i] = 1e-3;
     /* ══ AND THE STEEL EACH NODE OWNS, kg, WITH ITS OWN CONDUCTION TIME ══
        The vessel's wall on the core's nodes, half of each run's wall on its
@@ -2692,7 +2808,10 @@ function netMaps(ctx){
         if(!list || ci < 0) continue;
         const c = coreD(cid), a = COOLANT[c.cool], p0 = holdSetP(ci);
         const L = latM(c), dM = ((L && L.dia) || 3) + 2*VESSEL_CLR;
-        const kg = vesselShellMass(p0, a)*1000/list.length, tau = tauOf(wallSuggestMm(dM*1000, p0, a)), area = Math.PI*dM*((L && L.hgt) || 4)/list.length;
+        // a tube core's nodes own the channels' zirconium, wetted on every bore, at the tube wall's own time
+        const kg = (c.tube ? tubeMass(p0, a, c) : vesselShellMass(p0, a))*1000/list.length,
+              tau = tauOf(c.tube ? tubeWallMm(p0, a, c) : wallSuggestMm(dM*1000, p0, a)),
+              area = (c.tube ? tubeCount(c)*Math.PI*tubeBoreMm(c)/1000*L.hgt : Math.PI*dM*((L && L.hgt) || 4))/list.length;
         for(const i of list) put(i, kg, tau, area); }
       for(const r of net){ const ends = runEnds(r.key, r.k); if(!ends) continue;
         const u = index[coreFold(ends[0])], v = index[coreFold(ends[1])];
@@ -3479,7 +3598,9 @@ function netLiveSigOf(net, s){
   + '|' + (s.portShut ? Object.keys(s.portShut).filter(k => s.portShut[k]).join(',') : '')
   /* a ruptured vessel opens a break edge the same way a severed run does, and
      unlike a severed run it is not in s.dmgParts */
-  + '|' + coreIds().map(id => (coreState(s,id)||s).breach ? 'B' : '').join('')
+  + '|' + coreIds().map(id => { const cs = coreState(s,id)||s;
+      // ...and a tube core's torn channels and cavity relief are two more edges that appear the same way
+      return (cs.breach ? 'B' : '') + (cs.tubesOpen > 0 ? 'T' : '') + (cs.cavRelief ? 'R' : ''); }).join('')
   /* Every gate on every tank's own edge - the operator's valve, its auto
      rule, the diode and "is there anything left to give" - as ONE bit per
      tank, off the same tankLive() the edge itself is built from. Any of them
@@ -3746,7 +3867,7 @@ function netReadP(sol, byP){
     const store = sol.store;
     for(let i=0;i<net.n;i++){ const c = ref.of[i];
       if(fixed[i]!==undefined){ if(touch[i]) free[c]=0; continue; }
-      if(deg && deg[i]) continue;
+      if(deg && deg[i] && !touch[i]) continue;
       /* A NODE THAT STORES PINS ITS OWN PIECE. Its row carries C/dt*p*, and p*
          is what that node's own mass and enthalpy are AT (netPStar) - an
          absolute pressure, so there is nothing to float. It was store.pin
@@ -3759,7 +3880,7 @@ function netReadP(sol, byP){
       if(store && store.pin[i]) free[c] = 0;
       if(b[i] < lo[c]) lo[c] = b[i]; }
     for(let i=0;i<net.n;i++){
-      if(deg && deg[i] && fixed[i]===undefined){ delete byP[net.nodes[i]]; continue; }
+      if(deg && deg[i] && !touch[i] && fixed[i]===undefined){ delete byP[net.nodes[i]]; continue; }
       const c = ref.of[i];
       /* A PIECE NOTHING PINS IS FLOATED so its lowest node sits at the pressure
          the ship holds - the expansion tank open to the compartment every
@@ -4019,6 +4140,14 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
                            coreDT:0, P:P.P0, pCore:P.P0}, over);
   for(const fid of net.fitIds) if(net.fitMode[fid]==="throttle")
     s.valve[fid] = fitTies(fid) ? 0 : 1;
+  /* AND A STANDBY TRAIN IS STOPPED, the same predicate resetPlant() seeds
+     s.flowBy from (pumpDem0, step.js). "Rated speed" is what as-commissioned
+     means for a pump the plant commissions RUNNING; with the curve in the
+     casing a reserve pump that used to iterate to zero delivered 39 kg/s of a
+     32 kg/s rating into its own meter's scale. refOpen is the wide-open pass
+     and wants every train turning. */
+  if(!s.refOpen && !s.flowBy)
+    s.flowBy = Object.fromEntries(pumpIds().map(id => [id, pumpDem0(id)]));
   /* AND EVERY SHELL IS HELD. The reference is a GEOMETRIC figure, and a
      storage term is the opposite of one - it prices how fast a vessel gives
      way. Held, each shell is a fixed node at its own stated pressure, which
@@ -4033,14 +4162,22 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
      call starts where the previous one ended and lands in a few passes. */
   const was = netStoreHeld; netHoldStore(true);
   try { s.pBy = net.refPBy;
-        let sol, ans, prev = null, pass = 0;
+        /* CONVERGED MEANS EVERY EDGE HAS STOPPED, not the total: the total is the
+           core circuit, and a circuit that is not in it (the cooling water) was
+           left wherever the pass count fell - six identical calls read 5 442 /
+           7 106 / 7 078 / 6 876 / 5 821 / 5 441 kg/s on it. Measured against the
+           largest flow in the network, so a stub near zero cannot stall it. */
+        let sol, prev = null, pass = 0;
         for(; pass<REF_PASSES; pass++){
           sol = netSolve(net, s);
           const pf = {}; netReadP(sol, pf); s.pBy = pf;
-          ans = netReadEdges(sol, null, null, null, null);
-          if(prev !== null && Math.abs(ans-prev) <= REF_TOL*Math.max(Math.abs(ans), 1e-9)) break;
-          prev = ans;
+          const q = sol.q; let scale = 0, move = 0;
+          for(let e=0;e<q.length;e++) scale = Math.max(scale, Math.abs(q[e]));
+          if(prev !== null) for(let e=0;e<q.length;e++) move = Math.max(move, Math.abs(q[e]-prev[e]));
+          if(prev !== null && move <= REF_TOL*Math.max(scale, 1e-9)) break;
+          prev = prev ? prev.set(q) || prev : Float64Array.from(q);
         }
+        net.refPasses = pass+1;
         net.refPBy = s.pBy;
         // the solved edge flows themselves, as netFlowK() hands them on: a run
         // key is a label and a machine's internal path has none, so byRun
@@ -4722,7 +4859,7 @@ function buildStockPlumbing(opt){
     const li=u*loops+i, cx=svBase+3*i;   // three, so two tees' own ports never want one cell
     svtee[i]=fitting("svtee"+li,"", cx, oy+2, { name:"SAFETY TEE "+(li+1), mode:"tee", bore:boreMm("steam"),
       tip:"Where this generator's safety valve taps the main steam header. A tee closes nothing." });
-    svf[i]=fitting("sv"+li,"", cx, uOY(u)+0, { name:"SG SAFETY "+(li+1), mode:"relief", spring:true, bore:412.5, tip:svTip });
+    svf[i]=fitting("sv"+li,"", cx, uOY(u)+0, { name:"SG SAFETY "+(li+1), mode:"relief", spring:true, tip:svTip });
   }
   /* ══ AND A SECOND UNIT MEETS THE FIRST IN THE RISER, NEVER TEE TO TEE ══
      A unit's own header is laid along its band's top row, and that row is
