@@ -2739,7 +2739,7 @@ function readoutsFor(p,s){
      owns what a hit means. */
   if(partWrecked(s,p.id)) R.unshift(["STATUS","DESTROYED / "+dmgWhyOf(s,p.id),C.red,
     "This component has taken a hit. "+dmgFx(p.id).why+" Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
-  if(!p.access) R.unshift(["ACCESS","BLOCKED",C.red,
+  if(!partAccess(p)) R.unshift(["ACCESS","BLOCKED",C.red,
     "Your layout walls this in on every side, so no repair party can ever reach it. It stays broken for the rest of the run."]);
   return R;
 }
@@ -3266,7 +3266,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     if(fit && (symFull || h-sh-nameH > 0))
       drawSym(p, x, symFull?y:y+nameH, w, symFull?h:h-sh-nameH, ink, L);
     if(dmgd) hatch(x+3,y+3,w-6,h-6,C.red,.4);
-    else if(!p.access && fit) cornerTab(x+w,y,9,C.amber);
+    else if(!partAccess(p) && fit) cornerTab(x+w,y,9,C.amber);
     /* ONE ALARM MARK, ON THE NAME ROW, AND IT IS DRAWN OVER THE NAME. The lamp
        was painted before the label and the bench's own warning was pushed up
        into the margin over the box to get out from under it - so one was
@@ -3375,14 +3375,14 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
         tag(v,x+w/2,vb,VAL_TXT_SIZE,0,dmgd?C.red:(annLamp(p.id)||(on?C.amber:C.ink2)));
       if(showRep){ const kw=Math.min(w-8*DRAW_K,86*DRAW_K), kx=x+(w-kw)/2;
         button(kx,rb-11*DRAW_K,kw,BTN_H,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
-               :p.access?"REPAIR":"NO ACCESS",
-          {sunk:1,on:busy,danger:!p.access,size:7*DRAW_K,sp:.8*DRAW_K,fn:()=>act("repair",p.id)}); }
+               :partAccess(p)?"REPAIR":"NO ACCESS",
+          {sunk:1,on:busy,danger:!partAccess(p),size:7*DRAW_K,sp:.8*DRAW_K,fn:()=>act("repair",p.id)}); }
       if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2*DRAW_K,6*DRAW_K,.2*DRAW_K,"#3c4c47");
     });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
     TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ "+dmgWhyOf(L,p.id)+" ]":"")+
-        (p.access?"":"  [ NO ACCESS ]"),
-      (L?opTipOf(p):p.tip)+(p.access?"":" It is boxed in on every side - nobody could reach it to repair it.")
+        (partAccess(p)?"":"  [ NO ACCESS ]"),
+      (L?opTipOf(p):p.tip)+(partAccess(p)?"":" It is boxed in on every side - nobody could reach it to repair it.")
         +(L?pipeThru(p,L):""));
   }
   pipeNozzles(NET,L);           // the joint, over the shell it lands on
@@ -3469,7 +3469,7 @@ function zoomKeySync(mount){
   if(!keys){ keys=document.createElement("div"); keys.className="plant-keys";
     const nb=document.createElement("button");
     nb.className="kit-btn kit-btn-sunk plant-zoom";
-    nb.addEventListener("click",zoomToggle);
+    MOUSE.on(nb,{click:zoomToggle});
     keys.append(layerMenu().el, nb);
     mount.appendChild(keys); }
   const b=keys.querySelector(".plant-zoom");
