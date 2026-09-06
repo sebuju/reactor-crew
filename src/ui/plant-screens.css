@@ -349,6 +349,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
      0  margin panels        plant space
      1  rail, banner, vitals           furniture over the plant
      2  plant keys + layer menu        opens over the furniture
+     3  inspector windows              the reader parked it there, so nothing buries it
 
    Above this, outside the screen roots: #prewarm 999, #tip 1000, #ctxmenu 1001. */
 .margin-host{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
@@ -376,6 +377,19 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-rail .db-section{--db-span:1;--db-rowspan:1}
 .margin-pan .kit-rule-head{padding:8px;font-size:var(--t8)}
 .margin-board .db-panel-body{max-height:46vh;overflow-y:auto}
+
+/* ── the floating inspector windows (ui/inspwin.js) ──
+   The margin panel's own look, with the plant-space placement taken back off
+   it: no scale, no clip, and NO SCROLLER ANYWHERE - a window states its whole
+   panel and grows to it, which is the difference between it and a rail. */
+.insp-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:3}
+.margin-pan.insp-win{transform-origin:0 0;pointer-events:auto;
+  border:1px solid var(--c-edge);box-shadow:0 6px 22px rgba(0,0,0,.55)}
+.insp-win .kit-rule-head{cursor:move;user-select:none}
+.insp-win.pinned .kit-rule-head{border-left:2px solid var(--c-amber)}
+.insp-win.folded .kit-well-body{display:none}
+.insp-keys{display:flex;gap:2px;margin-left:8px}
+.insp-keys .kit-btn{height:15px;min-width:0;padding:0 5px;letter-spacing:.06em}
 /* the controls that used to stand on the machine box, in the widget kit's own
    HTML - see marginCtlBuild(). A row is the same row ctlFor() states. */
 .margin-ctl{display:flex;flex-direction:column;gap:3px;margin: -6px -6px 6px -6px; padding: 9px 10px; background:var(--c-ctl-well); }
