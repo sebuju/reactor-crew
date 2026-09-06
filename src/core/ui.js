@@ -663,7 +663,7 @@ function dblCheck(p,e){
    over the plant: an open #ctxmenu is a real element, so a second right click
    landing on it never reached the canvas and the browser's own menu came up on
    top of ours. Anything that covers the plant has to say this. */
-const ctxSuppress=el=>el&&el.addEventListener("contextmenu",e=>{ if(!e.shiftKey) e.preventDefault(); });
+const ctxSuppress=el=>el&&MOUSE.noCtx(el);
 ctxSuppress(cv);
 /* The three pointer handlers are named so uiForward() can bind them to a
    SECOND element. A widget hosted inside an opaque rail (the fuel lattice
@@ -684,9 +684,12 @@ ctxSuppress(cv);
    branches return early, and a stamp they skip is a drag uiMove() then refuses
    for ever. */
 const dragOn=d=>{ d.host=ui.ptrHost; ui.drag=d; return d; };
-function uiDown(e){
-  const tgt=e.currentTarget||cv;
-  tgt.setPointerCapture(e.pointerId);
+/* `el` is the surface the hub matched, not e.currentTarget: with one listener
+   on the document every handler is called with the registered element, and the
+   grab replaces the pointer capture this used to take (see core/mouse.js). */
+function uiDown(e,el){
+  const tgt=el||cv;
+  MOUSE.grab(tgt);
   const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
   e.dbl=dblCheck(p,e);
   ctxClose();
@@ -782,6 +785,10 @@ function uiDown(e){
   if(!w){ sel=null; return; }
   const q=ptIn(w,p);
     if(w.type==="part"){ sel=w.part.id;
+      /* SHIFT PINS AN INSPECTOR WINDOW ON IT (inspPin, ui/inspwin.js), and
+         spends the press: a shift-drag would otherwise move the machine the
+         reader has just asked to keep a window open on. */
+      if(e.shiftKey && typeof inspPin==="function"){ inspPin(w.part.id); return; }
       // a commissioned plant is welded down: selectable, not movable; a
       // pinned part rides its parent, so it's selectable but never draggable
       if(screen==="design" && !w.part.pin){ const g=gridPt([q.x,q.y]);
@@ -828,8 +835,8 @@ function partDragTo(d,q){
   // the same spot stays under the pointer whatever the part's size
   d.gx=Math.round(g.x-d.ox); d.gy=Math.round(g.y-d.oy);
 }
-function uiMove(e){
-  const tgt=e.currentTarget||cv;
+function uiMove(e,el){
+  const tgt=el||cv;
   const host=tgt._uiHost||null;
   // a move from a surface this gesture did not start on says nothing about it,
   // and ui.ptr must stay in the space the drag's own handler reads - see uiDown
@@ -891,10 +898,10 @@ function uiMove(e){
       // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(lp.x-d.sx,lp.y-d.sy)>4) d.moved=true; }
   }
-  (e.currentTarget||cv).style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||ui.drag.type==="part") ? "grabbing"
+  tgt.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||ui.drag.type==="part") ? "grabbing"
     : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
 }
-function uiUp(e){
+function uiUp(e,el){
   const d=ui.drag;
   /* A PRESS THAT NEVER MOVED IS A CLICK, even on the indicator. Pressing the
      thumb grabs it so a drag can be geared, and that grab used to swallow the
@@ -928,9 +935,9 @@ function uiUp(e){
     buildLayout();
   }
   if(d&&d.type==="part"){
-    const p=uiPt(e.currentTarget||cv,e);
+    const p=uiPt(el||cv,e);
     // ...but only off a point the plant actually covers. The press took the
-    // pointer capture, so a release over a docked rail is still delivered here
+    // grab, so a release over a docked rail is still delivered here
     // and vPt() extrapolates it happily - the part landed somewhere nobody had
     // aimed at. Out of view, the last in-view sample stands, which is the cell
     // the ghost was last drawn on.
@@ -966,7 +973,7 @@ function uiPt(el,e){ return el._uiLocal? el._uiLocal(e) : local(e); }
    shimmers even though every frame drawn is correct. A trail is also the
    honest reading of the gate: the loop idles when the PLAYER is idle, not
    between one twitch of a mouse and the next.
-   A live drag never idles either. uiDown() takes a pointer CAPTURE, so a
+   A live drag never idles either. uiDown() takes the GRAB (core/mouse.js), so a
    moving hand is not a page-wide event the listener below can be trusted to
    see. Asked here because whether a gesture is in flight is ui's own business. */
 const UI_TRAIL=12;                 // frames, ~200 ms
@@ -977,26 +984,24 @@ const uiTakeDirty=()=>{
   uiWants=false; if(uiTrail>0) uiTrail--;
   return w;
 };
+/* EVERY MOUSE EVENT ALREADY LANDS IN ONE PLACE, so the frame is marked there
+   rather than per surface - a repaint owed to a hand cannot be lost to a
+   handler that did not happen to be bound. The keyboard and the scroll are not
+   the hub's business and keep their own capture listeners. */
+if(typeof MOUSE!=="undefined") MOUSE.doc({down:uiDirty, move:uiDirty, up:uiDirty,
+  cancel:uiDirty, wheel:uiDirty, click:uiDirty});
 if(typeof document!=="undefined" && document.addEventListener)
-  for(const ev of ["pointerdown","pointermove","pointerup","pointercancel","wheel","keydown","keyup","focusin","scroll"])
+  for(const ev of ["keydown","keyup","focusin","scroll"])
     document.addEventListener(ev,uiDirty,{capture:true,passive:true});
 
 function uiBind(el){
-  /* MARKED AT THE HANDLER THAT MOVES THE PICTURE, not only at the document.
-     These three write ui.ptr and ui.drag, which is what the canvas draws from,
-     so a repaint owed to a hand cannot be lost to a retargeted event. */
-  el.addEventListener("pointerdown",uiDirty);
-  el.addEventListener("pointermove",uiDirty);
-  el.addEventListener("pointerup",uiDirty);
-  el.addEventListener("pointerdown",uiDown);
-  el.addEventListener("pointermove",uiMove);
-  el.addEventListener("pointerup",uiUp);
-  // A LEAVE IS NOT A CANCEL WHILE A HAND IS DOWN: the capture keeps delivering,
-  // but Chrome fires pointerleave on the boundary, killing any drag that crossed
-  // its own box - the lattice pens and the section's LENGTH drag, every time
-  el.addEventListener("pointercancel",()=>{ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty();});
-  el.addEventListener("pointerleave",()=>{ if(ui.drag) return;
-    ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); });
+  MOUSE.on(el,{down:uiDown, move:uiMove, up:uiUp,
+    cancel(){ ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); },
+    // A LEAVE IS NOT A CANCEL WHILE A HAND IS DOWN: the grab keeps delivering,
+    // but the boundary crossing still fires, and it killed any drag that crossed
+    // its own box - the lattice pens and the section's LENGTH drag, every time
+    leave(){ if(ui.drag) return;
+      ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); }});
 }
 uiBind(cv);
 function uiForward(el,toLocal){
@@ -1006,7 +1011,7 @@ function uiForward(el,toLocal){
   ctxSuppress(el);
   uiBind(el);
 }
-cv.addEventListener("wheel",e=>{
+MOUSE.on(cv,{wheel(e){
   // the scenario bench draws no plant, so there's no VIEW to zoom here -
   // the wheel zooms the TIMELINE instead, about the second under the pointer
   if(screen==="scenario"){ e.preventDefault(); scnWheel(local(e),e.deltaY); return; }
@@ -1023,7 +1028,7 @@ cv.addEventListener("wheel",e=>{
     if(pipeTurn(c[0],c[1],e.deltaY>0?1:-1)){ buildLayout(); return; }
   }
   vWheel(p,e.deltaY);
-},{passive:false});
+}});
 /* ══ THE WHEEL ZOOMS, WHEREVER IT LANDS ══
    Anywhere on the canvas, not just over the plant - the page does not scroll
    any more, so there is nothing else for the wheel to do. Holds the plant point
