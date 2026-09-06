@@ -54,34 +54,34 @@ function marginHost(root){
     const ov=getComputedStyle(n).overflowY;
     if((ov==="auto"||ov==="scroll") && n.scrollHeight>n.clientHeight+1) return true; }
     return false; };
-  el.addEventListener("wheel",e=>{
-    if(scrolls(e.target)) return;
-    e.preventDefault();
-    ctxClose();
-    vWheel(local(e), e.deltaY);
-  },{passive:false});
   /* a panel covers the deck, so a right drag on one pans like the deck. Its own
      state rather than ui.drag: uiMove() belongs to a surface that hit-tests. */
   ctxSuppress(el);
   let pan=null;
-  el.addEventListener("pointerdown",e=>{
-    if(e.button!==2 || e.shiftKey) return;
-    // a hosted canvas inside a panel started its own gesture on the way up here;
-    // capturing on the host steals the release and that drag never ends
-    if(e.target && e.target._uiHost) return;
-    el.setPointerCapture(e.pointerId);
-    ctxClose();
-    const lp=local(e); pan={x:lp.x,y:lp.y};
-  });
-  el.addEventListener("pointermove",e=>{
-    if(!pan) return;
-    const lp=local(e);
-    VIEW.ox-=(lp.x-pan.x)/VIEW.s; VIEW.oy-=(lp.y-pan.y)/VIEW.s;
-    pan.x=lp.x; pan.y=lp.y; uiDirty();
-  });
   const drop=()=>{ pan=null; };
-  el.addEventListener("pointerup",drop);
-  el.addEventListener("pointercancel",drop);
+  MOUSE.on(el,{
+    wheel(e){
+      if(scrolls(e.target)) return;
+      e.preventDefault();
+      ctxClose();
+      vWheel(local(e), e.deltaY);
+    },
+    down(e){
+      if(e.button!==2 || e.shiftKey) return;
+      // a hosted canvas inside a panel started its own gesture on the way up here;
+      // grabbing on the host steals the release and that drag never ends
+      if(e.target && e.target._uiHost) return;
+      MOUSE.grab(el);
+      ctxClose();
+      const lp=local(e); pan={x:lp.x,y:lp.y};
+    },
+    move(e){
+      if(!pan) return;
+      const lp=local(e);
+      VIEW.ox-=(lp.x-pan.x)/VIEW.s; VIEW.oy-=(lp.y-pan.y)/VIEW.s;
+      pan.x=lp.x; pan.y=lp.y; uiDirty();
+    },
+    up:drop, cancel:drop});
   root.appendChild(el);
   return el;
 }
@@ -863,8 +863,103 @@ function marginBoardSync(h,live,fresh){
   if(h.body._sig!==s0 || h.body.childElementCount!==n0) h.needH=true;
 }
 
+/* ══ ONE MACHINE PANEL, WHEREVER IT IS STANDING ══
+   The plant-space panel and the screen-space inspector window (ui/inspwin.js)
+   are the same panel seen twice, so the fill is one function and the handle
+   marginPan() mints is its one shape. Nothing in here knows where the panel is
+   placed: a window leaves `vis` true and `tf` null, so the pan cull below is a
+   fact about a margin panel and reads as false for a window. */
+function panPartSync(h,live,deep,fresh){
+  const on=h.p.id===sel;
+  if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
+  /* A PAN MAY NOT REBUILD ANYTHING. Gated on being visible, a panel panned
+     off and back rebuilt its whole block list and re-measured a panel that
+     can be two thousand pixels tall - one forced layout, mid-gesture, which
+     is the hitch. The bench's content follows designSig() and nothing else,
+     so it is synced on that alone, off screen or not. */
+  // the automation graph re-lays itself out at its own width (render/ctlgraph.js)
+  if(h.p.role==="ctrl" && h._ctlSeq!==CTLV.seq){ h._ctlSeq=CTLV.seq; h.needH=true; }
+  if(live){
+    if(!h.vis && h.tf!==null) return;
+    const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
+    marginSkinSync(h);
+    fieldRowsSync(h.body, readoutsFor(h.p,S));
+    /* THE PANELS THAT STATE THEIR OWN WIDTH: the reactor's list is the
+       longest on the plant, and the controller carries the automation graph,
+       which is a drawing and reads across, not down. The bench says the same
+       through B.cols (paramsFor), the door dbPanelSync() reads. */
+    h.body._cols = h.p.role==="core" ? 2 : h.p.role==="ctrl" ? 3 : 0;
+    /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
+       canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
+       exactly as the rail does it (crRailSync). */
+    const vz=h.body._viz;
+    if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz,coreOf(h.p.id));
+    // the controller's cabinet: the automation graph and its editor, synced every frame (render/ctlgraph.js)
+    if(h.p.role==="ctrl"){ if(!h.ctlG) h.ctlG=KIT.el("div","margin-ctlgraph");
+      if(h.ctlG.parentNode!==h.body) h.body.appendChild(h.ctlG);
+      dbPanelSync(h.ctlG,CTLGRAPH_LIVE); }
+  }else{
+    if(!fresh) return;
+    const nm=partName(h.p), B=paramsFor(partOf(h.p.id)||h.p);
+    h.well.setTitle(nm);
+    // the panel's own help, asked for rather than stood open - see help() (inspector.js)
+    KIT.tip(h.well.head,nm,B.tip||"");
+    /* WHAT THIS BOX COSTS, on its own title bar - the sum of every tonnage
+       the knobs below quote, off the same door the mass budget reads
+       (partMassOf(), layout.js). The live screen puts the skin temperature
+       here instead; a bench panel has no skin. */
+    const t=partMassOf(h.p.id);
+    h.well.setSfx(t>=0.05 ? t.toFixed(t<10?1:0)+" t" : "");
+    /* AND WHAT IS NOT A KNOB HANGS OFF THE TITLE BAR - see the "menu" block
+       (design-bench.js). Seated before the suffix, so the tonnage keeps the
+       right-hand end of the bar. */
+    if(B.head && !h.head && h.well.head){
+      h.head=KIT.el("div","db-panel-head");
+      h.well.head.insertBefore(h.head, h.well.sfx);
+    }
+    if(h.head) dbPanelSync(h.head, B.head||[]);
+    /* RE-MEASURE ONLY WHEN THE BLOCK LIST ACTUALLY CHANGED - the same test
+       marginKeySync() above makes. It used to re-measure on every sync, which
+       was harmless while only a design edit could cause one; a hover causes
+       one now (PREV.seq), and a panel's height is quantised to whole cells,
+       so the first hover snapped the whole panel up a cell. */
+    const n0=h.body.childElementCount, s0=h.body._sig;
+    dbPanelSync(h.body, B);
+    if(h.body._sig!==s0 || h.body.childElementCount!==n0){
+      /* A PANEL FILLS ITS OWN HOSTED CANVASES BEFORE IT IS MEASURED. The
+         screen-wide pass runs at the head of the frame (dbHostPaint,
+         design-bench.js) and this panel did not exist then, so its lattice
+         readout would stand empty until the next one - and it may not simply be
+         moved after us, because rows arriving after marginPlace() measured the
+         panel step the whole board. Its own box, right now, is the one place
+         that is both filled and not yet measured. */
+      dbHostPaint(h.body);
+      h.needH=true;
+    }
+  }
+  marginCtlSync(h,live,deep);
+}
+
 // once a frame from either screen, after drawPlant() set the view
 let MARGIN=null, marginFit=null, marginAt=null, marginFrame=0, marginPSig=null, marginDeep=null;
+/* WHAT CHANGED SINCE THE LAST FRAME, ASKED ONCE FOR EVERY PANEL ON SCREEN.
+   Two readers now - the margin and the inspector windows - and the answer is a
+   state machine over the last frame's signatures, so a second computation in
+   the same frame would tell the second reader nothing ever changes. Cached on
+   marginFrame, which is the frame. */
+let panTickAt=-1, panTickV={fresh:false,deep:false};
+function panTick(live){
+  if(panTickAt===marginFrame) return panTickV;
+  panTickAt=marginFrame;
+  // PREV.seq: a hover is not a design change, and the MEASURED lists price it
+  const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq;
+  const fresh = live || psig!==marginPSig; marginPSig=psig;
+  // what could have moved a control's range
+  const dtok = live ? (coreIds().map(id=>coreSeen(S,id).split?1:0).join("")+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
+  const deep = dtok!==marginDeep; marginDeep=dtok;
+  panTickV={fresh,deep};
+  return panTickV;
+}
 function marginSync(host,live){
   if(!host||typeof LAY==="undefined"||!LAY) return;
   marginFrame++;
@@ -872,73 +967,11 @@ function marginSync(host,live){
   if(marginFit!==LAY || marginAt!==host){
     MARGIN=marginBuild(host,live); marginFit=LAY; marginAt=host; marginPSig=null;
   }
-  // PREV.seq: a hover is not a design change, and the MEASURED lists price it
-  const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq;
-  const fresh = live || psig!==marginPSig; marginPSig=psig;
-  // what could have moved a control's range
-  const dtok = live ? (coreIds().map(id=>coreSeen(S,id).split?1:0).join("")+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
-  const deepNow = dtok!==marginDeep; marginDeep=dtok;
+  const t=panTick(live);
   for(const h of MARGIN){
-    if(h.key){ marginKeySync(h,fresh,live); continue; }
-    if(h.board){ marginBoardSync(h,live,fresh); continue; }
-    const on=h.p.id===sel;
-    if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
-    /* A PAN MAY NOT REBUILD ANYTHING. Gated on being visible, a panel panned
-       off and back rebuilt its whole block list and re-measured a panel that
-       can be two thousand pixels tall - one forced layout, mid-gesture, which
-       is the hitch. The bench's content follows designSig() and nothing else,
-       so it is synced on that alone, off screen or not. */
-    // the automation graph re-lays itself out at its own width (render/ctlgraph.js)
-    if(h.p.role==="ctrl" && h._ctlSeq!==CTLV.seq){ h._ctlSeq=CTLV.seq; h.needH=true; }
-    if(live){
-      if(!h.vis && h.tf!==null) continue;
-      const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
-      marginSkinSync(h);
-      fieldRowsSync(h.body, readoutsFor(h.p,S));
-      /* THE PANELS THAT STATE THEIR OWN WIDTH: the reactor's list is the
-         longest on the plant, and the controller carries the automation graph,
-         which is a drawing and reads across, not down. The bench says the same
-         through B.cols (paramsFor), the door dbPanelSync() reads. */
-      h.body._cols = h.p.role==="core" ? 2 : h.p.role==="ctrl" ? 3 : 0;
-      /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
-         canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
-         exactly as the rail does it (crRailSync). */
-      const vz=h.body._viz;
-      if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz,coreOf(h.p.id));
-      // the controller's cabinet: the automation graph and its editor, synced every frame (render/ctlgraph.js)
-      if(h.p.role==="ctrl"){ if(!h.ctlG) h.ctlG=KIT.el("div","margin-ctlgraph");
-        if(h.ctlG.parentNode!==h.body) h.body.appendChild(h.ctlG);
-        dbPanelSync(h.ctlG,CTLGRAPH_LIVE); }
-    }else{
-      if(!fresh) continue;
-      const nm=partName(h.p), B=paramsFor(partOf(h.p.id)||h.p);
-      h.well.setTitle(nm);
-      // the panel's own help, asked for rather than stood open - see help() (inspector.js)
-      KIT.tip(h.well.head,nm,B.tip||"");
-      /* WHAT THIS BOX COSTS, on its own title bar - the sum of every tonnage
-         the knobs below quote, off the same door the mass budget reads
-         (partMassOf(), layout.js). The live screen puts the skin temperature
-         here instead; a bench panel has no skin. */
-      const t=partMassOf(h.p.id);
-      h.well.setSfx(t>=0.05 ? t.toFixed(t<10?1:0)+" t" : "");
-      /* AND WHAT IS NOT A KNOB HANGS OFF THE TITLE BAR - see the "menu" block
-         (design-bench.js). Seated before the suffix, so the tonnage keeps the
-         right-hand end of the bar. */
-      if(B.head && !h.head && h.well.head){
-        h.head=KIT.el("div","db-panel-head");
-        h.well.head.insertBefore(h.head, h.well.sfx);
-      }
-      if(h.head) dbPanelSync(h.head, B.head||[]);
-      /* RE-MEASURE ONLY WHEN THE BLOCK LIST ACTUALLY CHANGED - the same test
-         marginKeySync() above makes. It used to re-measure on every sync, which
-         was harmless while only a design edit could cause one; a hover causes
-         one now (PREV.seq), and a panel's height is quantised to whole cells,
-         so the first hover snapped the whole panel up a cell. */
-      const n0=h.body.childElementCount, s0=h.body._sig;
-      dbPanelSync(h.body, B);
-      if(h.body._sig!==s0 || h.body.childElementCount!==n0) h.needH=true;
-    }
-    marginCtlSync(h,live,deepNow);
+    if(h.key){ marginKeySync(h,t.fresh,live); continue; }
+    if(h.board){ marginBoardSync(h,live,t.fresh); continue; }
+    panPartSync(h,live,t.deep,t.fresh);
   }
   marginPlace(MARGIN,host);
 }
