@@ -850,9 +850,11 @@ function crBuild(){
   if(!MARGIN_ONLY) rail.appendChild(compRail);
 
   const mhost=marginHost(root);
+  // before the parked windows: same z, so DOM order is what keeps a peek under one
+  const hhost=hovwHost(root);
   const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,vitalRows,units,viz,banner,rail,mhost,ihost,
+  return {root,head,vitalRows,units,viz,banner,rail,mhost,hhost,ihost,
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
@@ -968,6 +970,9 @@ function drawOperate(){
   marginSync(CR&&CR.mhost, true);
   // AFTER the margin: both read panTick(), and the margin's call is what advances it
   inspSync(CR&&CR.ihost, true);
+  hovwSync(CR&&CR.hhost, true);
+  // AFTER both syncs: the leader is drawn to where the window actually stands
+  inspLeaders(CR&&CR.ihost);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
     if(h) leaderLine(h.well.el,CR.rail); }
 }

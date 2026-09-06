@@ -1367,9 +1367,11 @@ function dbBuild(){
   const vitals=KIT.el("div","db-vitals");
   root.append(head,vitals,rail);
   const mhost=marginHost(root);
+  // before the parked windows: same z, so DOM order is what keeps a peek under one
+  const hhost=hovwHost(root);
   const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,rail,vitals,mhost,ihost,state:null,watch:null};
+  return {root,head,rail,vitals,mhost,hhost,ihost,state:null,watch:null};
 }
 function dbSync(){
   if(!DB) return;
@@ -1432,6 +1434,9 @@ function drawDesign(){
   marginSync(DB&&DB.mhost, false);
   // AFTER the margin: both read panTick(), and the margin's call is what advances it
   inspSync(DB&&DB.ihost, false);
+  hovwSync(DB&&DB.hhost, false);
+  // AFTER both syncs: the leader is drawn to where the window actually stands
+  inspLeaders(DB&&DB.ihost);
   { const st=DB&&DB.state;
     const h = st && st.panels.find(o=>o.ids.includes(sel));
     if(h) leaderLine(h.well.el,DB.rail); }
