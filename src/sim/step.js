@@ -1235,7 +1235,7 @@ function combatHit(id){
   const fx=dmgFx(p.id);
   if(fx.hit) fx.hit(s, p.id);
   logE("alarm","COMBAT DAMAGE / "+fx.msg, fx.why+
-    (p.access?" A repair party can reach it.":" IT IS WALLED IN - no repair is possible with this layout."));
+    (partAccess(p)?" A repair party can reach it.":" IT IS WALLED IN - no repair is possible with this layout."));
 }
 /* ══════════ REPAIR ══════════
    Sending a party is sim mutation, so it lives here beside the hit it undoes,
@@ -1259,7 +1259,7 @@ function repairStart(id){
      "already out": there is no second party this run, and the dispatch order
      is simply not carried out - a no-op, the same shape as every other
      refusal in this block, not a message about why the request was denied. */
-  if(!p || !p.access || s.repair || s.partySpent) return;
+  if(!p || !partAccess(p) || s.repair || s.partySpent) return;
   const need=repairNeed(p);
   s.repair={id:p.id,t:0,need};
   /* Seed repRate here rather than waiting for the next tick's radiation block.
