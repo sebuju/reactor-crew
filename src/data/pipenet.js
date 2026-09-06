@@ -388,8 +388,8 @@ const flowG = (C, F, u, v, h, diode) => {
 };
 /* ══ THE FIELD THE LAW IS LINEARISED ABOUT ══
    ONE TICK OLD, deliberately: this tick's pressures come out of the solve, so
-   they cannot also be an input to it - the same lag s.coreDT and s.pumpQBy
-   already carry.
+   they cannot also be an input to it - the same lag s.coreDT already
+   carries.
    Held PER NET and captured by every edge closure, never on a module global:
    a tick solves the drawn plant and the reference plant (P.netNom) against
    different node sets, and an edge that read whichever net solved last would
@@ -1462,31 +1462,29 @@ const CAV_DERATE = 0.8;
 /* ══ A PUMP HAS A HEAD-FLOW CURVE, AND IT OBEYS THE AFFINITY LAWS ══
    Shutoff head is (1+PUMP_DROOP) of the machine's stated duty head, the head
    falls with the SQUARE of what it is passing (a centrifugal characteristic,
-   not a line), and it is exactly the stated head at the stated flow - so a
-   plant sitting at its duty point is bit-identical and the reference solve,
-   which has no flow to read yet, seeds on that point. Past duty the head goes
-   with the flow and reaches zero at sqrt(1+1/PUMP_DROOP) of rated, which is
-   the runout a real machine has.
+   not a line), and it is exactly the stated head at the stated flow. Past
+   duty the head goes with the flow and reaches zero at sqrt(1+1/PUMP_DROOP)
+   of rated, which is the runout a real machine has.
+   THE CURVE IS THE CASING (pumpCasingC, below), IN THE MATRIX: the shutoff
+   head is the edge's source and the square-law droop is the edge's own
+   resistance, so the slope of the curve is a conductance this solve sees. It
+   was a head read at LAST tick's flow (s.pumpQBy, smoothed over 1 s), an
+   explicit loop whose gain - dh/dq times the circuit's secant conductance -
+   measured 0.95 on the RBMK feed train at rest and crossed 1 when a shell
+   blew down 0.2 MPa: the feed line rang tick to tick, reached 9.7 MPa and
+   burst.
    SPEED enters as the affinity laws say: head as N^2, and the curve read at
-   q/N, so a pump at half speed makes a quarter of its head at half its flow.
-   Read once as a linear factor, a blackout coast-down lost head half as fast
-   as it should and the hand-over to the thermosiphon was too gentle.
-   s.pumpQBy is LAGGED one tick, and it must be - a head that depended on this
-   tick's answer would be part of the question - the same standing s.cavP has,
-   and it is smoothed for the same reason that one is. */
+   q/N - so the casing drop, droop*H*(q/(Q*N))^2*N^2, is one number at every
+   speed. A pump at half speed makes a quarter of its head at half its flow. */
 const PUMP_DROOP = 0.25;
-const PUMP_N_MIN = 1e-3;
+// what a pump is passing, kg/s, off its own casing edge last tick (step() writes it): a reading, never a head
 const pumpQOf = (s, pid) => (s && s.pumpQBy && s.pumpQBy[pid]!==undefined)
   ? s.pumpQBy[pid] : pumpFlow(pid);
-const pumpCurve = (s, pid, N) => { const n = N === undefined ? 1 : N;
-  if(!(n > PUMP_N_MIN)) return 0;
-  const r = pumpQOf(s,pid)/(Math.max(pumpFlow(pid),1e-9)*n);
-  return Math.max(0, 1 + PUMP_DROOP*(1 - r*r)); };
-/* THE HEAD ONE PUMP DEVELOPS, MPa, at its own speed on its own curve, less
-   what its suction is costing it - the ONE expression the edge and the
-   cavitation readout read. */
+/* THE HEAD ONE PUMP DEVELOPS AT SHUTOFF, MPa, at its own speed, less what its
+   suction is costing it - the ONE expression the edge and the cavitation
+   readout read. What it delivers is this less its casing's drop. */
 const pumpHeadNow = (s, pid) => { const N = pumpDrive(s, pid);
-  return pumpHead(pid)*N*N*pumpCurve(s, pid, N)*(1 - CAV_DERATE*cavOf(s, pid)); };
+  return pumpHead(pid)*N*N*(1 + PUMP_DROOP)*(1 - CAV_DERATE*cavOf(s, pid)); };
 /* THE CASING IS THE MACHINE'S OWN CHARACTERISTIC, and every machine with a head has one:
    an ideal head source in series with a resistance IS a linear head-flow curve - shutoff
    head at no flow, falling as it passes more - which is what stops a real machine running
@@ -1513,7 +1511,14 @@ let CASING_F = 0.05;
 function setCasingF(v){ CASING_F = v; }
 const dutyC = (q, rho) =>
   Math.max(q,0)/Math.sqrt(2*Math.max(rho||700,1)*CASING_F*PUMP_H0*1e6);
-const pumpCasingC = (h, q) => dutyC(q, P.rho0);
+/* A PUMP'S CASING IS ITS OWN DROOP: the passage that costs PUMP_DROOP of the
+   machine's stated head at its stated flow, at the density its suction
+   actually carries (the momentum relation reads the donor's), so a feed pump
+   moving cold water and a coolant pump moving hot do exactly their stated
+   head at their stated flow. Not dutyC: that is a fitted passage, this is
+   the curve. */
+const pumpCasingC = (h, q, rho) =>
+  Math.max(q,0)/Math.sqrt(2*Math.max(rho||700,1)*PUMP_DROOP*Math.max(h,1e-3)*1e6);
 /* A GENERATOR'S OWN FEEDWATER TRAIN, sized the same way: this shell's share of
    what the plant raises. It is water on every plant, whatever the primary is. */
 const feedTrainC = () => dutyC(P.steamRef/Math.max(sgCount(),1), SAT_WATER.rho);
@@ -2266,7 +2271,8 @@ function netEdges(){
          the loop shut. The diode is the edge's own (flowG) and reads LAST
          TICK's field, since a gate that depends on the answer cannot be part
          of the question. */
-      edge.C = pumpCasingC(pumpHead(p.id), pumpFlow(p.id));
+      { const pid = p.id, u = edge.u;
+        edge.C = () => pumpCasingC(pumpHead(pid), pumpFlow(pid), F.rho ? F.rho[u] : P.rho0); }
       /* and every FEED pump: a real one has a non-return valve on its
          discharge, and without it a shell at 17 MPa pushed its water back down
          through a feed pump that had run out on its own curve. Not the
@@ -3252,8 +3258,8 @@ function netFixed(net, s){
    boil. The pressure that used to be integrated in step() is that node's own
    KCL row now.
 
-   THE HEAT TERMS ARE ONE TICK OLD, which is the same lag s.coreDT and
-   s.pumpQBy already carry, and it is safe HERE and was not safe on the feed:
+   THE HEAT TERMS ARE ONE TICK OLD, which is the same lag s.coreDT already
+   carries, and it is safe HERE and was not safe on the feed:
    the feedwater lands on the POOL, which is a boundary, so nothing in this
    row is a flow this solve also decides. */
 const NET_DT = 0.02;
@@ -4007,12 +4013,8 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
      door rather than a positional per question. `fregBy`: a feed regulating
      valve commissions WIDE and then walks itself onto the level it holds, so
      what that valve is worth is a question about the plant's rated feed
-     rather than about this reference's own geometry. `pumpQBy`: a pump sits
-     on its own head-flow curve (pumpCurve()) at the flow it is actually
-     developing; left out, the reference priced every pump at its duty head
-     while the plant one tick later derated to what it really passes, so cwKOf()
-     read 0.42 on MSRE against a flow the plant could never have. `refOpen`:
-     see the scale reference in commission(). */
+     rather than about this reference's own geometry. `refOpen`: see the
+     scale reference in commission(). */
   const s = Object.assign({dmgParts:[], valve:{}, flow:1, Tavg:P.Tref,
                            coreDT:0, P:P.P0, pCore:P.P0}, over);
   for(const fid of net.fitIds) if(net.fitMode[fid]==="throttle")
@@ -4720,7 +4722,7 @@ function buildStockPlumbing(opt){
     const li=u*loops+i, cx=svBase+3*i;   // three, so two tees' own ports never want one cell
     svtee[i]=fitting("svtee"+li,"", cx, oy+2, { name:"SAFETY TEE "+(li+1), mode:"tee", bore:boreMm("steam"),
       tip:"Where this generator's safety valve taps the main steam header. A tee closes nothing." });
-    svf[i]=fitting("sv"+li,"", cx, uOY(u)+0, { name:"SG SAFETY "+(li+1), mode:"relief", bore:412.5, tip:svTip });
+    svf[i]=fitting("sv"+li,"", cx, uOY(u)+0, { name:"SG SAFETY "+(li+1), mode:"relief", spring:true, bore:412.5, tip:svTip });
   }
   /* ══ AND A SECOND UNIT MEETS THE FIRST IN THE RISER, NEVER TEE TO TEE ══
      A unit's own header is laid along its band's top row, and that row is
@@ -5218,6 +5220,7 @@ function plantPreset(i){
   // same way ADD MACHINE places it
   for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);
+  buildStockAutomation();
   /* ══ A FIGURE BAKED OFF A HALF-BUILT CORE IS NOT THIS PLANT'S ══
      designForget() at the top is not enough. archPreset() redraws the core in
      stages - lay the fuel, pack the moderator, spread the banks, THEN set the

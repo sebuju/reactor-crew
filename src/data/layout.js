@@ -372,7 +372,7 @@ const loopHeadOf = id => {
     for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
       const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
       for(const IN of R.internal) if(IN.K > 0 && !secondaryNode(pid+IN.a)) dp += IN.K*rho*v*v/2; } }
-  return dp/1e6 + CASING_F*PUMP_H0;
+  return dp/1e6;
 };
 const pumpHeadSuggest = id => {
   if(id === undefined) return PUMP_H0;
