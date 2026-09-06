@@ -793,8 +793,6 @@ const CW_RISE=10;         // K, circulating water rise at the design point
    declares no anchor, so it is not one of these - it is what the water a
    condenser warmed is pushed through. Every condenser quantity below is keyed
    on one of these, exactly as s.sgTBy is keyed on a generator. */
-const roleIntern = R => !R || !R.internal ? []
-  : (Array.isArray(R.internal) ? R.internal : [R.internal]);
 const condIds = () => LAY.parts.filter(p=>{ const R=ROLE[p.role];
   return R && R.thermal==="sink" && roleIntern(R).some(IN=>IN.anch); }).map(p=>p.id);
 /* ONE MACHINE'S circulating water paths - the internal paths that declare no
@@ -888,6 +886,9 @@ const COND_ATM=0.101;     // MPa, and the pressure a lost condenser sits at
 /* The exhaust pressure a turbine will not tolerate - a real figure, and about
    four times rated rejection, so no healthy plant is anywhere near it. */
 const TURB_TRIP_P=0.02;   // MPa
+// the stop valve re-opens well under the pressure that shut it, so a plant sitting on the trip
+// point does not chatter the turbine on and off a tick at a time
+const TURB_RESET_K=0.75;
 const condP = s => Math.max(exhOpen(s) ? regionPAt(s, roleOf("cond")) : 0, s.condLost ? COND_ATM : 0,
   s.condT===undefined ? COND_P0 : Math.max(COND_P0, psatSec(s.condT)));
 /* THE MEAN OVER THE MACHINES THERE ARE, K - a readout, and what s.condT is
@@ -972,7 +973,7 @@ const radRejOf = (s,id) => (s.dmgParts.indexOf(id)>=0) ? 0
 const radRej = s => { let w=0;
   for(const p of LAY.parts) if(p.role==="radiator") w += radRejOf(s,p.id);
   return w; };
-/* THIS PANEL's own metal and the water it holds, kJ/K - ihxHeatCap()'s idiom.
+/* THIS PANEL's own metal and the water it holds, kJ/K.
    It used to be the condenser's hotwell, which was the honest figure while the
    fleet was one pot fed by that machine and is the wrong yardstick entirely
    now that a panel is plumbed to whatever the player ran a pipe to. */
@@ -1682,21 +1683,6 @@ const SG_P_WARN=0.15, SG_P_HI=0.6;
 const SG_RELIEF_CAP=3.0;
 /* Dittus-Boelter: the tube-side film goes as flow^0.8. PHYSICAL, not fitted. */
 const UA_FLOW=0.8;
-/* ── AND THE SAME POT ONE STAGE EARLIER ──
-   IHX_UA is what one intermediate exchanger's tubes are worth against the
-   generator it feeds. Bigger, because the temperature difference it has to
-   work across is the one it just gave away - a real intermediate exchanger is
-   oversized for exactly that reason. In series the pair is worth
-   1/(1/IHX_UA + 1) of the generator alone, so buying a second stage costs
-   OUTPUT rather than temperature: the rods hold Tavg on programme either way,
-   and the shell simply sits colder. IHX_HOLD_PER_UA is the intermediate
-   coolant it carries, which with its own steel (IHX_T_PER_UA, layout.js) is the pot's heat
-   capacity - and the reason a second stage is also a second flywheel. */
-const IHX_UA=2.5;
-/* A bigger exchanger is a bigger flywheel as well as a bigger conductance, so
-   the size scales the coolant it holds and the steel round it together. */
-const ihxHeatCap=id=>{ const ua=ihxUAOf(id);
-  return ua*IHX_HOLD_PER_UA*1000*CP_W + ua*IHX_T_PER_UA*1000*CP_STEEL; };
 /* HOW HARD THE LEVEL ERROR PULLS ON THE FEED, in multiples of this machine's
    own RATED feed per unit of fractional level error. It was the shell's own
    inventory over a typed 30 s, and an inventory is not a rate: SGT states a
@@ -1998,17 +1984,18 @@ function advectSrc(s){
   for(const id of coreIds()){ add(coreFold(id), coreHeatKW(id)); add(coreFold(id), -skinQOf(s,id));
     // what fuel out of its pin handed the water last tick (coreStep's o.fci), the same one-tick lag heatBy has
     add(coreFold(id), (s.coreBy && s.coreBy[id] && s.coreBy[id].fci) || 0); }
-  for(const id of sgIds()){
-    const q = HEATBAL.sgQBy[id] || 0;
-    /* A GENERATOR IS A BARRIER, so the heat leaves the tube nodes and arrives
-       on the shell nodes - ROLE.sg says which faces are which and this reads
-       it rather than naming a face. */
-    for(const IN of ROLE.sg.internal){
-      const prim = !secondaryNode(id+IN.a);
-      add(id+IN.a, (prim?-q:q)/2); add(id+IN.b, (prim?-q:q)/2);
-    }
+  /* A TRANSFER STAGE IS A BARRIER, so the heat leaves the stream that gives it
+     up and arrives on the stream that takes it. ROLE says which is which by
+     the ORDER it declares its paths - 0 hot, 1 cold - so a generator and an
+     intermediate exchanger are one loop and neither names a face.
+     The exchanger's crossing is one tick old (s.ihxQBy), the s.coreDT idiom:
+     the solve has to run before there is a field to price it off. */
+  for(const id of sgIds().concat(ihxIds())){
+    const q = HEATBAL.sgQBy[id] || (s.ihxQBy && s.ihxQBy[id]) || 0;
+    const INs = roleIntern(ROLE[partOf(id).role]);
+    for(let k=0;k<INs.length;k++){ const IN=INs[k], v=(k?q:-q)/2;
+      add(id+IN.a, v); add(id+IN.b, v); }
   }
-  for(const id of ihxIds()) add(id+"l", -((s.ihxQBy&&s.ihxQBy[id])||0));
   /* A SINK IS A BARRIER TOO. A condenser gives its rejection to the water on
      its OTHER side - the path that declares no anchor, cwKeys()' own predicate
      - so the circulating water leaves hotter than it arrived instead of being
@@ -2083,13 +2070,15 @@ function advectAnchors(s){
       if(P.net.index[n] !== undefined) m[n] = T; } };
   const FACES = ["t","r","b","l"];
   for(const id of sgIds()){
-    const ci = shellCirc(id), vf = {};
-    for(const IN of ROLE.sg.internal){ if(!IN.vap) continue;
-      if(IN.vap.indexOf("a")>=0) vf[IN.a]=1;
-      if(IN.vap.indexOf("b")>=0) vf[IN.b]=1; }
-    // the SHELL only: the tubes are primary water and belong to the loop mean
+    const ci = shellCirc(id), vf = {}, shell = {};
+    // the SHELL only: the tubes carry whatever stage feeds them and belong to
+    // that circuit. ROLE.sg's second path IS the shell - asked by index, so a
+    // generator behind a second stage does not anchor its tubes to its pot
+    { const IN = roleIntern(ROLE.sg)[1]; shell[IN.a]=1; shell[IN.b]=1;
+      if(IN.vap){ if(IN.vap.indexOf("a")>=0) vf[IN.a]=1;
+                  if(IN.vap.indexOf("b")>=0) vf[IN.b]=1; } }
     for(const f of FACES){ const n = coreFold(id+f);
-      if(P.net.index[n] === undefined || !secondaryNode(id+f)) continue;
+      if(P.net.index[n] === undefined || !shell[f]) continue;
       seed[n] = s.sgTBy[id];
       if(vf[f]) holdH[n] = satHg(satOfCirc(ci), secP(s,id));
       else hold[n] = s.sgTBy[id]; }
@@ -2594,35 +2583,52 @@ const sgFill=(s,id)=>{ const v=s.sglBy&&s.sglBy[id];
    bench, a tick-zero seed - gets the fallback curve's answer instead. */
 const sgTemp=(s,id)=>{ const v=s&&s.sgTBy&&s.sgTBy[id];
   return v===undefined ? tsatSec(secPTarget(s,id), shellCirc(id)) : v; };
-/* ONE exchanger's own intermediate temperature, K. No entry yet is a pot that
-   has not been seeded, and a pot at loop temperature is what it seeds to. */
-const ihxTemp=(s,id)=>{ const v=s&&s.ihxTBy&&s.ihxTBy[id];
-  return v===undefined ? (s?s.Tavg:0) : v; };
-/* WHAT THIS GENERATOR'S TUBES ARE HEATED BY - the core's own coolant, unless
-   an intermediate exchanger stands in front of it, when it is that exchanger's
-   pot. ONE reader, so the heat term, the readout and the T-HOT row cannot
-   disagree about which stage a generator is on. */
-/* AND IT IS THE WATER ARRIVING AT ITS OWN TUBES, off the field: the hottest
+/* WHAT THIS GENERATOR'S TUBES ARE HEATED BY - the water arriving at them, off
+   the field, whichever stage put it there. ONE reader, so the heat term, the
+   readout and the T-HOT row cannot disagree.
+   AND IT IS THE WATER ARRIVING AT ITS OWN TUBES, off the field: the hottest
    node standing one edge outside the generator's own primary faces, because
    heat only ever leaves and the faces themselves already carry half the
    crossing (advectSrc). It was s.Tavg for every shell on the plant, so a
    stalled loop's generator went on seeing the loop mean and a loop carrying
    more of the core's rise boiled no harder. */
-const sgTubeNode=(s,id)=>{ const net=P.net; if(!net || !net.name) return -1;
-  const nb = net.sgInNbr || (net.sgInNbr = {});
-  let list = nb[id];
-  if(!list){ list = nb[id] = []; const own = new Set(net.nodesOfPart[id]||[]);
+/* k INDEXES ROLE[].internal, AND THE ORDER IS THE DECLARATION: 0 is the stream
+   that gives the heat up, 1 the stream that takes it. A generator and an
+   intermediate exchanger are the same machine here, which is why there is one
+   function and not two. The hot stream's inlet is the HOTTEST neighbour and
+   the cold stream's the COLDEST, because heat only ever crosses one way. */
+const stageInNode=(s,id,k)=>{ const net=P.net; if(!net || !net.name) return -1;
+  const p=partOf(id), IN=p && roleIntern(ROLE[p.role])[k]; if(!IN) return -1;
+  const nb = net.sgInNbr || (net.sgInNbr = {}), key = id+"|"+k;
+  let list = nb[key];
+  /* THE NEIGHBOURS AND NOT THE FACES THEMSELVES. The crossing lands on the
+     faces (advectSrc), so the hot stream's own face is the coldest thing on
+     it and the cold stream's the hottest - take the extremum over the machine
+     itself and the cold side reads its own outlet back and never opens a
+     difference at all. The faces are the fallback for a stage with nothing
+     piped to it. */
+  if(!list){ list = nb[key] = []; const own = new Set(net.nodesOfPart[id]||[]);
+    const mine = [];
     for(const c of (net.cont||[])) own.add(c);      // a hole's far end is the room, not a leg
-    for(const f of [ROLE.sg.internal[0].a, ROLE.sg.internal[0].b]){
+    for(const f of [IN.a, IN.b]){
       const i = net.index[coreFold(id+f)]; if(i===undefined) continue;
-      list.push(i);
+      mine.push(i);
       for(const ed of net.edges){ if(ed.u!==i && ed.v!==i) continue;
-        const o = ed.u===i ? ed.v : ed.u; if(!own.has(o) && list.indexOf(o)<0) list.push(o); } } }
-  let T=-Infinity, at=-1;
-  for(const i of list){ const t=netTempAt(s, net.name[i]); if(t>T){ T=t; at=i; } }
+        const o = ed.u===i ? ed.v : ed.u; if(!own.has(o) && list.indexOf(o)<0) list.push(o); } }
+    if(!list.length) list.push(...mine); }
+  const hot = k===0;
+  let T=hot?-Infinity:Infinity, at=-1;
+  for(const i of list){ const t=netTempAt(s, net.name[i]);
+    if(hot ? t>T : t<T){ T=t; at=i; } }
   return at; };
-const sgTubeIn=(s,id)=>{ const i=sgTubeNode(s,id); return i<0 ? s.Tavg : netTempAt(s, P.net.name[i]); };
-const sgHot=(s,id)=>{ const h=ihxOf(id); return h ? ihxTemp(s,h) : sgTubeIn(s,id); };
+/* AND THE SAME READ AS A TEMPERATURE. No node at all - an unplumbed stage, a
+   bench with no field - falls back to the loop mean. */
+const stageInT=(s,id,k)=>{ const i=stageInNode(s,id,k);
+  return i<0 ? s.Tavg : netTempAt(s, P.net.name[i]); };
+const sgHot=(s,id)=>stageInT(s,id,0);
+// and what is leaving the same stream, which is the machine's own far face
+const stageOutT=(s,id,k)=>{ const IN=roleIns(partOf(id))[k];
+  return IN ? netTempAt(s, coreFold(id+IN.b)) : s.Tavg; };
 /* WHAT CROSSES ONE GENERATOR'S TUBES, kW, at a stated flow share and film -
    the one expression, read by the tick and by the commissioning settle.
    ══ EFFECTIVENESS-NTU, NOT A CONDUCTANCE TIMES A MEAN ══
@@ -2630,17 +2636,15 @@ const sgHot=(s,id)=>{ const h=ihxOf(id); return h ? ihxTemp(s,h) : sgTubeIn(s,id
    they pass is w*cp*(1 - e^-NTU)*(Tin - Tsat): a trickle through hot tubes
    gives up everything it has and nothing more, and a torrent at a small
    approach is bounded by the tube area. Priced off the loop mean the term
-   had neither limit. Behind an intermediate exchanger the hot side is a POT
-   and the tube flow is the exchanger's own, so that stage keeps the
-   conductance form against the pot - and so does a BOILING primary: a
+   had neither limit. A BOILING primary keeps the conductance form: a
    two-phase stream gives up latent heat at one temperature, which is the
    infinite-cp limit of the same law, UA*dT. Read as w*cp on temperature a
    BWR's tubes saw 25 K of a 40 K approach and rested at 54 %. */
 const sgQAt=(s,id,fl,filmK)=>{
   const UA=((P.sgUABy && P.sgUABy[id]) || P.sgUA)*Math.pow(fl,UA_FLOW)*sgFill(s,id)*filmK;
   const dT=Math.max(0, sgHot(s,id) - sgTemp(s,id));
-  const at=sgTubeNode(s,id);
-  if(ihxOf(id) || (at>=0 && netQualAt(s, P.net.name[at]) > 0)) return UA*dT;
+  const at=stageInNode(s,id,0);
+  if(at>=0 && netQualAt(s, P.net.name[at]) > 0) return UA*dT;
   const wcp=fl*P.netRef/Math.max(1,sgIds().length)*P.sat.cp;
   return wcp > 0 ? wcp*(1-Math.exp(-UA/wcp))*dT : 0; };
 /* THE MOST TUBE A SUGGESTION MAY BUY: past NTU 4 the stream is at the shell
@@ -2648,16 +2652,77 @@ const sgQAt=(s,id,fl,filmK)=>{
    approach cannot give must stop here rather than walk to infinity (it
    reached 1e21 kW/K on WINDSCALE). Infinite where the law is a conductance. */
 const SG_NTU_MAX=4;
-const sgUACap=(s,id,fl)=>{ const at=sgTubeNode(s,id);
-  if(ihxOf(id) || (at>=0 && netQualAt(s, P.net.name[at]) > 0)) return Infinity;
+const sgUACap=(s,id,fl)=>{ const at=stageInNode(s,id,0);
+  if(at>=0 && netQualAt(s, P.net.name[at]) > 0) return Infinity;
   return SG_NTU_MAX*fl*P.netRef/Math.max(1,sgIds().length)*P.sat.cp/Math.pow(fl,UA_FLOW); };
 /* IS WHAT IS IN THESE TUBES THE CORE'S OWN WATER? An intermediate exchanger is
    a BARRIER, and that is the whole reason the real machines exist: behind one,
    a tube rupture leaks the exchanger's coolant into the shell and costs no
    release at all. It still costs INVENTORY - the loop it drains is still a
    loop this plant needs to cool the core with - so only the activity is
-   bought, which is exactly what the barrier is. */
-const sgActive = id => !ihxOf(id);
+   bought, which is exactly what the barrier is.
+   ASKED OF THE DRAWING, not of a stage count: the tube side is active when the
+   core can still reach it. A barrier is a machine standing between the two,
+   and any number of them is the same question. */
+const sgActive = id => nodeGraph().inCore(id + roleIntern(ROLE.sg)[0].a);
+/* IS ANYTHING STILL BRINGING HEAT TO THIS STAGE'S HOT SIDE, over LIVE edges?
+   A generator behind a shut port went on cooling the loop at the stagnant-flow
+   floor, so a sealed reactor lost more heat than it made.
+   A CORE, OR THE COLD SIDE OF ANOTHER STAGE - one level and no recursion,
+   because a stage that is itself dead passes nothing and its own inlet then
+   cools on the field like any other stagnant water. */
+const stageFed=(net,s,id)=>{
+  if(!net.nodesOfPart || !net.nodesOfPart[id]) return false;
+  const pc=netPieces(net,s), IN=roleIns(partOf(id))[0]; if(!IN) return false;
+  const at=f=>{ const i=net.index[coreFold(f)]; return i===undefined ? -1 : pc.of[i]; };
+  const mine=new Set();
+  for(const f of [IN.a, IN.b]){ const p=at(id+f); if(p>=0) mine.add(p); }
+  if(!mine.size) return false;
+  for(const p of corePieces(net,s)) if(mine.has(p)) return true;
+  for(const q of sgIds().concat(ihxIds())){ if(q===id) continue;
+    const C=roleIns(partOf(q))[1]; if(!C) continue;
+    for(const f of [C.a, C.b]) if(mine.has(at(q+f))) return true; }
+  return false; };
+/* ══ AND A STAGE WITH TWO REAL STREAMS IS A COUNTERFLOW EXCHANGER ══
+   A generator's tubes face an isothermal shell, so they are the one-stream law
+   above. An intermediate exchanger has a finite heat capacity rate on BOTH
+   sides and takes the counterflow effectiveness: neither stream may leave past
+   the other's inlet, and at equal rates the general expression is 0/0 and the
+   limit is NTU/(1+NTU). */
+const ntuCounter=(NTU,Cr)=>{ if(!(NTU>0)) return 0;
+  if(!(Cr<0.999)) return NTU/(1+NTU);
+  const e=Math.exp(-NTU*(1-Cr));
+  return (1-e)/(1-Cr*e); };
+/* ONE STREAM OF ONE MACHINE, off the solve: what is arriving, how fast against
+   what this run was drawn to carry, and what its heat capacity rate is. A
+   two-phase stream gives up latent heat at one temperature, so its rate is
+   infinite - the same limit sgQAt() takes. */
+const stageStream=(s,id,k,rf)=>{ const IN=roleIns(partOf(id))[k];
+  const key="comp:"+id+":"+IN.a+IN.b;
+  const at=stageInNode(s,id,k), nm=at>=0 ? P.net.name[at] : null;
+  const ref=netKgs((P.netRefByRun||{})[key]||0);
+  /* THE SAME STAGNANT FLOOR THE TUBES TAKE: water standing in a stopped
+     circuit still conducts, and a rate of exactly zero is a deadlock - no
+     flow, no heat, and nothing to start the flow. */
+  const w=Math.max(netKgs((rf&&rf[key])||0), 0.02*ref);
+  const x=nm===null ? 0 : clamp(netQualAt(s,nm),0,1);
+  return {T: nm===null ? s.Tavg : netTempAt(s,nm), x,
+          fl: ref>1e-9 ? w/ref : 0.02,
+          C: x>0 ? Infinity : w*satOfCirc(circOfNode(nm)).cp}; };
+/* WHAT CROSSES ONE EXCHANGER, kW - the one expression, read by the tick and by
+   the commissioning settle, exactly as sgQAt() is. The film follows the wetter
+   of the two streams, because a void on either side is the same lost contact.
+   A wrecked machine passes nothing. */
+const ihxQAt=(s,id,rf)=>{
+  if(s.dmgParts.indexOf(id)>=0) return 0;
+  const a=stageStream(s,id,0,rf), b=stageStream(s,id,1,rf);
+  const dT=a.T-b.T; if(!(dT>0)) return 0;
+  const UA=ihxUAOf(id)*Math.pow(Math.min(a.fl,b.fl),UA_FLOW)
+          *(1-0.85*Math.max(a.x,b.x));
+  const Cmin=Math.min(a.C,b.C), Cmax=Math.max(a.C,b.C);
+  if(!isFinite(Cmin)) return UA*dT;
+  if(!(Cmin>0)) return 0;
+  return ntuCounter(UA/Cmin, isFinite(Cmax) ? Cmin/Cmax : 0)*Cmin*dT; };
 /* The pot's heat capacity: the water actually in it plus the steel round it. */
 const sgHeatCap=(s,id)=>sgRowOf(id).water*1000*(sgLvl(s,id)/100)*CP_W
                       + sgSteelT(id)*1000*CP_STEEL;
@@ -3594,10 +3659,10 @@ function resetPlant(){
         inside the network solve, so the shell's own equation has to have been
         integrated before it, not during. What the tick walks. REFILLED. */
      sgPBy:{},
-     /* AND THE SAME TWO FIELDS ONE STAGE EARLIER, per intermediate exchanger:
-        the temperature its pot is sitting at, and what is crossing into it.
-        Seeded below off the loop's own temperature. REFILLED by step(). */
-     ihxTBy:{}, ihxQBy:{},
+     /* kW crossing one intermediate exchanger's tubes. A readout, and the one
+        term advectSrc() reads a tick late because the solve has to run before
+        there is a field to price it off. REFILLED by step(). */
+     ihxQBy:{},
      /* kg/s a generator's own relief valves are passing - a readout, refilled */
      sgVentBy:{},
      /* and whether its shell has let go. LATCHED, like a rupture disc: a burst
@@ -3884,12 +3949,6 @@ function resetPlant(){
   /* The shell starts where the old formula put it, so nothing pinned against a
      plant at rest moves. From here it is an integral. */
   for(const id of sgIds()) S.sgTBy[id] = tsatSec(secPTarget(S,id), shellCirc(id));
-  /* The pot starts between the two stages it stands between, which is where a
-     settled plant puts it anyway - starting it at Tavg would hand a generator
-     the whole primary temperature for one tick and kick a transient nobody
-     caused, the same argument s.coreDT's own seed makes. */
-  for(const id of ihxIds())
-    S.ihxTBy[id] = S.Tavg - (S.Tavg - tsatSec(secPTarget(S,ihxSgs(id)[0])))/(1+IHX_UA);
   /* ══ THE PANELS COMMISSION WHERE THIS PLANT'S HEAT PUTS THEM ══
      RAD_TDES is the DESIGN sink - the anchor P.condUA and condPDes() are
      fitted at - and it stays that. It is not where a given ship's panels
@@ -3952,7 +4011,12 @@ function resetPlant(){
     const sh = sgShare(byLoop), n = Math.max(1, sgIds().length), filmK = 1-0.85*Math.min(clamp(S.vf,0,1.5),1);
     for(const id in HEATBAL.sgQBy) if(!(id in sh)) delete HEATBAL.sgQBy[id];
     for(const id in sh){ S.sgShare[id] = sh[id];
-      HEATBAL.sgQBy[id] = sgQAt(S, id, Math.max(S.flowNet*sh[id]*n, 0.02), filmK); } };
+      HEATBAL.sgQBy[id] = sgQAt(S, id, Math.max(S.flowNet*sh[id]*n, 0.02), filmK); }
+    /* AND THE STAGE IN FRONT OF THEM, on the same pass. advectSrc() reads the
+       exchanger's crossing off S, so a settle that never wrote one converged
+       the field with the second circuit taking nothing at all. */
+    for(const id in S.ihxQBy) if(!partOf(id)) delete S.ihxQBy[id];
+    for(const id of ihxIds()) S.ihxQBy[id] = ihxQAt(S, id, rf); };
   HEATBAL.heat = S.heat; coreEach(S,(cs,K,id)=>{ HEATBAL.heatBy[id]=cs.heat; });
   /* WITH A PRESSURE FIELD, because the solve is keyed on last tick's: a
      standby train's check valve reads wide open until there is one
@@ -4809,44 +4873,31 @@ function step(dt){
      Tref at 12 % over rated power. */
   const nSG = Math.max(1, Object.keys(sgW).length);
   const filmK = (1-0.85*Math.min(vNow,1));
-  const sgQBy = {}, ihxFl = {};
+  const sgQBy = {};
   let qTot = 0;
   for(const id in sgW){
     const fl = Math.max(pumpK*sgW[id]*nSG, 0.02);
-    /* sgHot(), not s.Tavg: with an intermediate exchanger in front of it this
-       generator is heated by that exchanger's pot, and the primary temperature
-       is a stage away. Every other term is a property of THESE tubes and does
-       not care which stage feeds them. */
-    /* AND ONLY IF THE PRIMARY STILL REACHES IT. The 0.02 floor is stagnant
-       water in tubes the loop is still connected to; isolate the generator
-       and there is no water crossing at all, which is what let a sealed
-       reactor cool down through shut ports. */
-    const q  = partOnCoreLoop(P.net,s,id) ? sgQAt(s,id,fl,filmK) : 0;
+    /* AND ONLY IF SOMETHING IS STILL BRINGING HEAT TO IT. The 0.02 floor is
+       stagnant water in tubes the loop is still connected to; isolate the
+       generator and there is no water crossing at all, which is what let a
+       sealed reactor cool down through shut ports. */
+    const q  = stageFed(P.net,s,id) ? sgQAt(s,id,fl,filmK) : 0;
     sgQBy[id] = q;
-    /* HEAT LEAVING THE CORE IS WHAT CROSSES THE FIRST STAGE, never the second.
-       With an exchanger in front, the primary gives its heat to the pot and the
-       pot gives it to the shell - charging the core with the shell's own
-       crossing would spend the stage that is storing it. */
-    const h = ihxOf(id);
-    if(h) ihxFl[h] = (ihxFl[h]||0) + fl;
-    else qTot += q;
+    /* HEAT LEAVING THE CORE IS WHAT CROSSES THE STAGE THE CORE'S OWN WATER
+       REACHES, never one behind a barrier - charging the core with the second
+       stage's crossing would spend the same joule twice. */
+    if(sgActive(id)) qTot += q;
   }
-  /* ── THE POT BETWEEN THE TWO STAGES ──
-     The shell's own sentence said once earlier: in on a temperature difference
-     across a conductance, out with whatever the shells behind it are taking,
-     and the difference is stored. One more integrator and no new mechanism.
+  /* ── AND EVERY INTERMEDIATE STAGE, ON THE SAME TWO STREAMS ──
+     Both ends are real nodes, so this is the counterflow law and not a pot:
+     what it takes off the circuit in front of it is what it gives to the
+     circuit behind it, in the same tick, with no stored temperature between.
      REFILLED, never rebuilt - a renderer holds these across frames. */
-  for(const id in s.ihxTBy) if(!ihxSgs(id).length) delete s.ihxTBy[id];
-  for(const id in s.ihxQBy) delete s.ihxQBy[id];
+  for(const id in s.ihxQBy) if(!partOf(id)) delete s.ihxQBy[id];
   for(const id of ihxIds()){
-    const served = ihxSgs(id); if(!served.length) continue;
-    const fl = Math.max((ihxFl[id]||0)/served.length, 0.02);
-    const qIn = ihxUAOf(id)*served.length*Math.pow(fl,UA_FLOW)*filmK
-              * Math.max(0, s.Tavg - ihxTemp(s,id));
-    let qOut = 0; for(const g of served) qOut += sgQBy[g]||0;
-    if(s.ihxTBy[id]===undefined) s.ihxTBy[id]=s.Tavg;
-    s.ihxTBy[id] = potStep(s.ihxTBy[id], ihxHeatCap(id), qIn, qOut, skinQOf(s,id), dt, P.Tmin, P.Tmax);
-    s.ihxQBy[id] = qIn; qTot += qIn;
+    const q = stageFed(P.net,s,id) ? ihxQAt(s,id,runFlow) : 0;
+    s.ihxQBy[id] = q;
+    if(sgActive(id)) qTot += q;
   }
   /* ══ AND A PANEL COOLS WHAT IT IS PLUMBED TO ══
      The same conductance-times-a-difference every other exchanger on this
@@ -5242,15 +5293,23 @@ function step(dt){
      Latched here, ahead of the stop valve, because both of them ARE the stop
      valve's answer. A turbine will not run against 0.02 MPa of exhaust - the
      real figure, and about four times rated rejection - and a condenser past
-     atmospheric has relieved and lost its vacuum for good. Neither resets:
-     there is no pump on this plant that pulls the air back out, and the
-     turbine trip is a latch until somebody rebuilds the plant. */
+     atmospheric has relieved and lost its vacuum for good. The vacuum does not
+     come back - there is no pump on this plant that pulls the air back out -
+     but the TRIP does: a real turbine re-latches once the exhaust is clear,
+     and a recoverable backpressure transient used to end a session's
+     electricity for good. It re-latches on what a real one asks: vacuum never
+     lost, exhaust whole, the machine repaired, and the pressure well under
+     what shut it. */
   if(!s.condLost && condP(s) >= COND_ATM){ s.condLost = true;
     logE("alarm","CONDENSER VACUUM LOST",
       "The condenser has reached atmospheric pressure and relieved. It is open to the room, it will not hold vacuum again, and it has stopped being a heat sink. What the bypass still passes into it goes overboard, and the rest backs up onto the generators' safety valves."); }
   if(!s.turbTrip && condP(s) > TURB_TRIP_P){ s.turbTrip = true;
     logE("alarm","TURBINE TRIP",
       "Exhaust pressure past what the machine will run against. The stop valve is shut. The reactor is still making heat and the turbine is no longer taking any of it."); }
+  else if(s.turbTrip && !s.condLost && !exhOpen(s) && roleAlive("turb",s) > 0
+          && condP(s) < TURB_TRIP_P*TURB_RESET_K){ s.turbTrip = false;
+    logE("info","TURBINE RELATCHED",
+      "Exhaust pressure is back under the trip point and the machine is whole. The stop valve is open and the turbine is taking steam again."); }
   /* ── A HOLE IN THE EXHAUST BREAKS THE VACUUM, IT DOES NOT VENT A SHELL ──
      condP() carries it (exhOpen(), above), so the enthalpy drop, the stop
      valve and the MWe readout all price the same backpressure. What still
