@@ -900,8 +900,8 @@ function paramBlockMk(block){
   switch(block.kind){
     case "optlist": {
       const a=blockAcc(block.key);
-      const root=KIT.el("div","db-block");
-      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
+      const root=KIT.el("div","db-field");
+      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(root,block.title,block.tip);
       const ol=KIT.optList(block.items,{onSelect:i=>a.set(block.base+i),
         onHover:i=>prevSet(i==null?null:block.key, i==null?null:block.base+i)});
       root.appendChild(ol.el);
@@ -913,8 +913,8 @@ function paramBlockMk(block){
     }
     case "segsel": {
       const a=blockAcc(block.key);
-      const root=KIT.el("div","db-block");
-      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
+      const root=KIT.el("div","db-field");
+      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(root,block.title,block.tip);
       const ss=KIT.segSel(block.labels,{onSelect:i=>a.set(block.base+i),
         onHover:i=>prevSet(i==null?null:block.key, i==null?null:block.base+i)});
       root.appendChild(ss.el);
@@ -951,8 +951,8 @@ function paramBlockMk(block){
       const auto = (block.suggest && a.raw && a.clr)
         ? {get:()=>a.raw()===undefined, set:on=>{ on ? a.clr() : a.set(a.get()); }}
         : null;
-      const root=KIT.el("div","db-block");
-      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip);
+      const root=KIT.el("div","db-field");
+      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(root,block.title,block.tip);
       const n=KIT.numInput({unit:block.unit,dp:block.dp,tip:block.tip,title:block.title,
         auto, onChange:v=>a.set(v)});
       root.appendChild(n.el);
@@ -962,18 +962,21 @@ function paramBlockMk(block){
         r.setSfx(b.massFn ? b.massFn(a.get()).toFixed(0)+" t" : "");
       }};
     }
-    // stated where the knobs are; the multi-column body breaks on it
-    case "colbreak": return {el:KIT.el("div","db-colbreak"),sync(){}};
-    /* ══ A PANEL THAT STATES ITS OWN SHAPE ══
-       column-count can only FLOW blocks; it cannot say "this canvas is two
-       columns wide and these knobs stand beside it". A box is that statement:
-       `dir` is which way its children run and `w` is how many columns it is
-       worth beside its siblings. It nests, so one block kind covers every
-       arrangement and no panel needs a second mechanism. A body holding one
-       stops flowing entirely - see dbPanelSync(). */
-    case "box": {
-      const root=KIT.el("div",block.dir==="row"?"db-box-row":"db-box-col");
-      if(block.w) root.style.flex=block.w+" 1 0";
+    /* One main grid per panel; sections are its cells. `cols` is the column
+       count, a section's `span`/`rowspan` how many cells it covers. */
+    case "grid": {
+      const root=KIT.el("div","db-grid");
+      root.style.setProperty("--db-grid-cols",block.cols||1);
+      const hs=block.blocks.map(b=>{ const h=paramBlockMk(b); root.appendChild(h.el); return h; });
+      return {el:root,sync(b){
+        b.blocks.forEach((c,i)=>{ const h=hs[i]; if(h&&h.sync) h.sync(c); }); }};
+    }
+    case "section": {
+      const root=KIT.el("div","db-section");
+      if(block.span) root.style.setProperty("--db-span",block.span);
+      if(block.rowspan) root.style.setProperty("--db-rowspan",block.rowspan);
+      if(block.title){ const r=KIT.rule(block.title); root.appendChild(r.el);
+        if(block.tip) KIT.tip(r.el,block.title,block.tip); }
       const hs=block.blocks.map(b=>{ const h=paramBlockMk(b); root.appendChild(h.el); return h; });
       return {el:root,sync(b){
         b.blocks.forEach((c,i)=>{ const h=hs[i]; if(h&&h.sync) h.sync(c); }); }};
@@ -984,8 +987,11 @@ function paramBlockMk(block){
     }
     case "toggle": {
       const a=blockAcc(block.key);
-      const t=KIT.toggle({label:block.title,mass:block.mass,tip:block.tip,onToggle:()=>{ a.set(!a.get()); }});
-      return {el:t.el,sync(){ t.set(!!a.get()); }};
+      const root=KIT.el("div","db-field");
+      const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(root,block.title,block.tip);
+      const t=KIT.toggle({label:block.title,mass:block.mass,onToggle:()=>{ a.set(!a.get()); }});
+      root.appendChild(t.el);
+      return {el:root,sync(){ t.set(!!a.get()); }};
     }
     case "note": {
       const p=KIT.el("p","db-note");
@@ -1110,10 +1116,10 @@ function paramBlockMk(block){
 function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||"")
   +(b.blocks?"("+blockSig(b.blocks)+")":"")).join("|"); }
 function dbPanelSync(container,blocks){
-  // a STATED column count beats the height rule (marginColumns, ui/margin.js)
+  // a stated count sets the panel width (marginColumns, ui/margin.js)
   container._cols=blocks.cols||0;
-  // a panel that states its own shape is not flowed into columns as well
-  container.classList.toggle("db-body-tree",blocks.some(b=>b.kind==="box"));
+  // plant-space bodies carry the class from birth; never strip it here
+  if(blocks.some(b=>b.kind==="grid")) container.classList.add("db-body-tree");
   const sig=blockSig(blocks);
   if(sig!==container._sig || !container._h){
     container.innerHTML="";
