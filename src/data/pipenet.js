@@ -208,11 +208,20 @@ const colAt = n => { const ci = circOfNode(n);
   if(ci === null || ci === undefined) return 0;
   const z = nodeZ(n), top = circTopZ(ci);
   return (z === null || !isFinite(top)) ? 0 : rhoDesign()*G_MPA*Math.max(top - z, 0); };
+/* ══ A RUN IS WALLED FOR THE CIRCUIT IT STANDS ON ══
+   The KIND was the proxy for that question and a kind is only a label: an
+   intermediate leg lands on a generator's tubes, resolves "steam" off the pair
+   of roles, and was walled for the shell while the pipe held a second circuit
+   at its own setpoint - measured, the whole circuit burst on tick two. A
+   circuit that AUTHORS a pressure answers for itself; the steam side and the
+   cooling water author none and keep the two figures they always had. */
+const runCircOf = r => { const ends = runEnds(r.key, r.k);
+  return ends ? circOfNode(coreFold(ends[0])) : -1; };
 const runDesignP = r => {
-  if(!PRIMARY_K[r.k]) return Math.max(sgDesignP(), feedHeadMax());
-  let p = holdSetP(nodeGraph().coreCirc);
   const ends = runEnds(r.key, r.k);
-  if(!ends) return p;
+  const ci = ends ? circOfNode(coreFold(ends[0])) : -1;
+  if(!circAuthored(ci)) return Math.max(sgDesignP(), feedHeadMax());
+  let p = holdSetP(ci);
   // both ends at once, so the tank and pump walks below are per RUN and not
   // per node - this is asked of every run every tick by the burst test
   const at = new Set(ends.map(coreFold)), G = nodeGraph();
@@ -230,8 +239,7 @@ const runDesignP = r => {
   return p;
 };
 const runWallMm = r => (D.wall && D.wall[r.key] !== undefined) ? D.wall[r.key]
-                     : wallSuggestMm(runBoreMm(r), runDesignP(r),
-                                     PRIMARY_K[r.k] ? COOLANT[priD().cool] : null);
+                     : wallSuggestMm(runBoreMm(r), runDesignP(r), circCool(runCircOf(r)));
 // t/m of a cylindrical shell: pi * mean diameter * wall * density
 const shellTPerM = (boreMm, wallMm) =>
   Math.PI*(boreMm+wallMm)/1000*(wallMm/1000)*STEEL_RHO/1000;
@@ -995,24 +1003,49 @@ const xOfH  = (c,p,h) => { const hf=satH(c,p);
 /* ONE VESSEL'S CURVE, at the setpoint its circuit holds: what commission()
    used to build inline as P.sat, for any vessel and not only the first. */
 function satCurveOf(cid, p0){
-  const a = COOLANT[coreD(cid).cool];
   if(p0 === undefined) p0 = holdSetP(coreCircOf(cid));
+  return satCurveFor(COOLANT[coreD(cid).cool], p0);
+}
+/* THE SAME CURVE OFF A COOLANT ROW ALONE, because a circuit between two
+   transfer stages has no vessel to ask and still has a substance in it. */
+function satCurveFor(a, p0){
   const tsat0 = a.tsat*Math.pow(p0/a.P0, coolSatN(a));
   const c = {p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV, hFilm:a.hFilm,
              tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:a.dens*RHO_K, solidK:a.solidK};
   c.Tref = Math.min(a.Tref, tsat0);
   return c;
 }
+/* DOES THIS CIRCUIT SAY WHAT IS IN IT AND WHAT IT SITS AT? One with a vessel
+   on it does; so does one whose expansion tank names a coolant. Every other
+   circuit is the steam side or the cooling water, which is water at the
+   shell's own design pressure and always was. */
+const circAuthored = ci => ci >= 0 && ci !== null && ci !== undefined
+  && (nodeGraph().coreCircs[ci] === 1 || !!circCoolTank(ci));
+const circCool = ci => { if(!(ci >= 0)) return null;
+  const c = coreOnCirc(ci)[0]; if(c) return COOLANT[coreD(c).cool];
+  const h = circCoolTank(ci); return h ? COOLANT[D.tanks[h].cool] : null; };
 /* A circuit with a vessel on it rides that vessel's coolant - the lowest-
    ordinal vessel where there are two (the bench warns about a mismatched
    pair, it never refuses). Commissioned, P.coreSat is the table for THIS
    drawing (its graph signature says so); on the bench, or on a drawing the
    last commission did not see, the curve is built off the drawing and
    memoised per graph and setpoint. */
+/* AND A CIRCUIT WITH NO VESSEL RIDES ITS EXPANSION TANK, where it has one that
+   states a coolant. Between two stages there is no core to ask, and the water
+   default is a different substance at a different pressure - an intermediate
+   sodium loop read as 17 MPa steam. It is the same part circKey() already keys
+   the circuit's state on, so the fluid and the setpoint cannot name two. */
+const circCoolTank = ci => { for(const id of holdOnCirc(ci))
+    if(D.tanks[id] && D.tanks[id].cool != null) return id;
+  return null; };
 const satOfCirc = ci => {
   if(ci === null || ci === undefined || ci < 0) return SAT_WATER;
   const G = nodeGraph();
-  if(G.coreCircs[ci] !== 1) return SAT_WATER;
+  if(G.coreCircs[ci] !== 1){
+    const h = circCoolTank(ci); if(!h) return SAT_WATER;
+    const p0 = holdSetP(ci), slot = graphSlot("satOf"), k = h+"|"+D.tanks[h].cool+"|"+p0;
+    return slot.get(k) || (slot.set(k, satCurveFor(COOLANT[D.tanks[h].cool], p0)), slot.get(k));
+  }
   if(typeof P !== "undefined" && P && P.coreSat && P.coreSatSig === G.sig && P.coreSat[ci]) return P.coreSat[ci];
   const cid = coreOnCirc(ci)[0], p0 = holdSetP(ci), slot = graphSlot("satOf"), k = cid+"|"+p0;
   return slot.get(k) || (slot.set(k, satCurveOf(cid, p0)), slot.get(k));
@@ -1020,7 +1053,7 @@ const satOfCirc = ci => {
 /* THE PART A CIRCUIT'S STATE IS KEYED ON: its lowest-ordinal vessel, else its
    lowest-ordinal hold tank, else nothing. A part id and never a circuit
    index, because an index is renumbered by any drawing edit and would put a
-   shifting key on the snapshot (the s.ihxTBy idiom). */
+   shifting key on the snapshot. */
 const circKey = ci => { if(ci === null || ci === undefined || ci < 0) return null;
   const s = graphSlot("circKey"), was = s.get(ci); if(was !== undefined) return was;
   const v = coreOnCirc(ci)[0] || holdOnCirc(ci)[0] || null; s.set(ci, v); return v; };
@@ -1098,6 +1131,7 @@ const holdLvlOf = (s, nid) => { const c = satOfCirc(circOfNode(nid));
 const holdPSuggest = ci => {
   { const c = coreOnCirc(ci)[0]; if(c) return COOLANT[coreD(c).cool].P0;
     if(ci === nodeGraph().coreCirc) return COOLANT[priD().cool].P0; }   // the stand-in's own circuit on a blank grid
+  { const h = circCoolTank(ci); if(h) return COOLANT[D.tanks[h].cool].P0; }
   let p = 0;
   for(const id of sgIds()) if(shellCirc(id)===ci) p = Math.max(p, sgDesignP(id));
   return p || (typeof P!=="undefined" && P ? P.Pcont : 0.1);
@@ -1350,6 +1384,10 @@ const TANK_DEFAULT = {
   vol:35, level:100, fluid:"water",
   gas:{p0:4.5, frac:0.35}, check:true, auto:"manual", burst:null,
   hold:null, tsurv:null, pburst:null, aspect:1,
+  /* WHICH COOLANT THIS TANK'S CIRCUIT IS FULL OF, as a COOLANT index, or null
+     for water. Only a HOLD tank is asked: an expansion tank is what a circuit
+     with no vessel on it has instead of one, and satOfCirc() reads it. */
+  cool:null,
   /* INEXHAUSTIBLE - a level that never moves, so the tank is an infinite
      source or an infinite sink depending on what pressure is behind it. It is
      a SANDBOX INSTRUMENT (tools/sandbox/): the one honest way to isolate a
@@ -1967,7 +2005,7 @@ function netHAt(s, nid){
   const h = s.hBy && s.hBy[nid];
   if(h !== undefined) return h;
   const c = netSatOf(nid);
-  { const ci = circOfNode(nid); if(nodeGraph().coreCircs[ci] === 1) return hOfT(c, TavgOf(s, ci)); }
+  { const ci = circOfNode(nid); if(circAuthored(ci)) return hOfT(c, TavgOf(s, ci)); }
   const net = P && P.net, i = net && net.index ? net.index[nid] : undefined, p = netPAt(s, nid);
   return (net && net.vapour && i !== undefined && net.vapour[i]) ? satHg(c, p) : hOfT(c, satT(c, p));
 }
@@ -2272,7 +2310,7 @@ function netEdges(){
        edge carry what it carried last tick and ran the node to -10 988 MPa.
        It ends at the POOL instead: `sec:<id>`, the same node the tube rupture
        already leaks into, because it is the same water. */
-    const pool = R.sgtr && secondaryNode(p.id+IN.a);
+    const pool = R.sgtr && IN === roleIns(p)[1];
     const ub = pool ? nodeIdx("sec:"+p.id) : nodeIdx(coreFold(p.id+IN.b));
     if(ua === ub) continue;
     const edge = {u: ua, v: ub,
@@ -2317,7 +2355,7 @@ function netEdges(){
        "can this part's tubes rupture" the sgtr edge is built from - and which
        PATH is the shell is asked of the drawing (secondaryNode), never of a
        face name. */
-    if(R.sgtr && secondaryNode(p.id+IN.a)){
+    if(R.sgtr && IN === roleIns(p)[1]){
       edge.shellOf = p.id;
       /* ── AND THE TRAIN IT SITS IN IS A REAL MACHINE ──
          FEED_LEN was a fitted 400 m of equivalent pipe, and deleting it left
@@ -3255,17 +3293,6 @@ const corePiece = (net, s, cid) => netPieces(net, s).of[cid && net.coreNodes[cid
 const corePieces = (net, s) => { const of = netPieces(net, s).of, set = new Set();
   for(const id in net.coreNodes) set.add(of[net.coreNodes[id]]);
   if(!set.size) set.add(of[net.coreNode]); return set; };
-/* IS THIS MACHINE STILL PLUMBED TO THE CORE, over LIVE edges. A generator
-   behind a shut port went on cooling the loop at the stagnant-flow floor, so a
-   sealed reactor lost more heat than it made - the same mistake the relief
-   valve made about pressure, in the heat balance. */
-function partOnCoreLoop(net, s, id){
-  const list = net.nodesOfPart && net.nodesOfPart[id];
-  if(!list || !list.length) return false;
-  const pc = netPieces(net, s), cps = corePieces(net, s);
-  for(let k=0;k<list.length;k++) if(cps.has(pc.of[list[k]])) return true;
-  return false;
-}
 /* WHAT A HOLD TANK IS HOLDING, which is its LOOP's pressure while it is live
    and its own the moment it is not. step() writes it; anything asked before
    the first tick falls back to the loop it is drawn on. */
@@ -4546,6 +4573,18 @@ const faceMid = (n, i, step) => { const k = step || 1;
   return Math.floor((n-1)/2) + (i%2 ? -k*Math.ceil(i/2) : k*Math.ceil(i/2)); };
 function buildStockPlumbing(opt){
   const loops = (opt && opt.loops) || 1;
+  /* ══ AND A THIRD CIRCUIT, WHERE THE PLANT IS BUILT THAT WAY ══
+     `inter` splices an intermediate exchanger into every loop and builds the
+     circuit behind it - its own pump, its own expansion tank stating what is
+     in it, and its own runs. The generator's tubes then stand on THAT circuit
+     and the core's coolant never reaches them, which is the whole reason the
+     real sodium plants have one. Six boxes to a loop instead of two, so the
+     loop pitch is the wider one. */
+  const inter = !!(opt && opt.inter);
+  const PITCH = inter ? 18 : 7;
+  // and the engine room stands that much further aft, because the feed pump and
+  // the reserve stand between it and the last loop's own gear
+  const INTER_AFT = inter ? 12 : 0;
   /* ══ HOW MANY REACTORS, AND HOW MANY ENGINE ROOMS ══
      A UNIT is a reactor and the loops around it; a SET is a turbine, its
      condenser and the feed pump under it. They are counted separately because
@@ -4589,8 +4628,8 @@ function buildStockPlumbing(opt){
      the engine room stood one column off the island, so the wall had nowhere to
      stand aft of the last coolant pump and the four-loop ship's own cold legs
      were left outside their containment. */
-  if(multi){ D.gw = 62 + 7*(loops-1) + 12; D.gh = BAND*units; }
-  else     { D.gw = 62 + 7*(loops-1);      D.gh = 36; }
+  if(multi){ D.gw = 62 + PITCH*(loops-1) + INTER_AFT + 12; D.gh = BAND*units; }
+  else     { D.gw = 62 + PITCH*(loops-1) + INTER_AFT;      D.gh = 36; }
   /* WHAT THIS SHIP DOES NOT CARRY. A preset that placed an injection tank and
      a relief valve and then took them off again had built a plant it did not
      mean; this simply never places them, and every nozzle and run that would
@@ -4632,11 +4671,11 @@ function buildStockPlumbing(opt){
      steam tee needs a free cell on that side - and at the reference spacing
      that cell is the relief tank's last column. The reference ship never asked
      for the port, because its first tee has nothing to its west. */
-  const X  = i => 30+7*i;
+  const X  = i => 30+PITCH*i;
   const uX = (u,i) => X(i) + uOX(u);         // ...and on the board
   // stacked units share their columns, so the engine room stands where it
   // always did - only further apart, band by band
-  const AFT   = 48+7*(loops-1) + (multi?2:0);
+  const AFT   = 48+PITCH*(loops-1) + INTER_AFT + (multi?2:0);
   const FEEDX = X(loops) + (multi?2:0);
   // the header riser's own column, forward of the engine room and aft of
   // every loop - the lane a set's main steam already climbs to its turbine
@@ -4662,7 +4701,21 @@ function buildStockPlumbing(opt){
        every nozzle is an offset. */
     mintMachine("core"+U,"core",8+ox,13+oy,opt&&opt.core);   // and its rod drives, which ride the head
     for(let i=0;i<loops;i++) mintMachine("sg"+(u*loops+i),"sg",uX(u,i),5+oy);
-    for(let i=0;i<loops;i++) mintMachine("pump"+(u*loops+i),"pump",uX(u,i),18+oy);
+    // the coolant pump stands under nothing on a three-circuit ship: the
+    // generator's column is the intermediate pump's, so it takes the lane
+    // between them and its suction has a clear approach from above
+    for(let i=0;i<loops;i++)
+      mintMachine("pump"+(u*loops+i),"pump",uX(u,i)+(inter?4:0),18+oy);
+    /* ══ AND THE SECOND STAGE STANDS BESIDE THE FIRST ══
+       The exchanger takes the generator's place in the primary - vessel,
+       exchanger, coolant pump, vessel, and the core's own water never reaches
+       a tube - and the generator moves one circuit out. The intermediate pump
+       stands under the exchanger the way the coolant pump stands under the
+       generator, so each circuit's own gear is one column band. */
+    if(inter) for(let i=0;i<loops;i++){ const li=u*loops+i;
+      mintMachine("ihx"+li,"ihx",uX(u,i)+7,5+oy);
+      mintMachine("ipump"+li,"pump",uX(u,i)+7,18+oy);
+    }
   }
   /* ══ AND IT STANDS BELOW WHAT IT DRAWS ON ══
      A pump takes suction on the face its casing says (ROLE.pump), and static
@@ -4774,6 +4827,19 @@ function buildStockPlumbing(opt){
      tank's own idiom, so no new default is needed in resetPlant(); bypassing
      it from the control room isolates the vessel and the circuit relaxes to
      containment, which is a capability that falls out rather than a case. */
+  /* ══ AND EVERY INTERMEDIATE CIRCUIT HAS TO STAND ON SOMETHING ══
+     A circuit with no vessel on it floats to containment pressure and reads as
+     water. This is what it has instead of a reactor: a hold tank stating the
+     pressure it holds and the coolant it is full of, which satOfCirc() and
+     holdSetP() both read. Its own loop's, not the ship's - three intermediate
+     circuits are three separate loops of sodium. */
+  if(inter) for(let i=0;i<loops;i++){ const li=u*loops+i;
+    tank("itank",String(li),uX(u,i)+12,oy+18,{ name:"SURGE TANK "+(li+1), col:"#c8b8a0",
+      tip:"The expansion tank of one intermediate circuit. It sets that circuit's pressure and states what is in it - the loop between the reactor and the boiler has no reactor of its own to ask.",
+      vol:25, level:60, fluid:"water", cool:coreD("core"+U).cool,
+      gas:null, check:false, auto:"always", burst:null,
+      hold:{p:null}, tsurv:800, pburst:70}); }
+
   tank("pzr",U,ox+18,oy+1,{ name:"PRESSURIZER", col:"#a98cf0",
     tip:"Sets the pressure of the circuit it is piped to. It has to sit high - the steam bubble must stay at the top of the loop.",
     vol:50, level:54, fluid:"water",
@@ -4855,7 +4921,7 @@ function buildStockPlumbing(opt){
   // the pump's DISCHARGE face - which is its bottom, because that is where the
   // casing puts it - so the lane the reserve has to reach them on is the riser
   // climbing to the first generator, and the tie stands in it.
-  const efwtee = fitting("efwtee",U, uX(u,0)+5+(multi?u:0), oy+12, { name:"EFW TIE", mode:"tee", bore:boreMm("feed"),
+  const efwtee = fitting("efwtee",U, uX(u,0)+(inter?3:5)+(multi?u:0), oy+(inter?24:12), { name:"EFW TIE", mode:"tee", bore:boreMm("feed"),
     tip:"Where the emergency reserve meets the feedwater line. A tee closes nothing: the reserve waits behind its own check valve until the line pressure falls under it." });
   const mstee=[], svf=[];
   for(let i=0;i<loops;i++){
@@ -4874,7 +4940,9 @@ function buildStockPlumbing(opt){
   let islX=-1e9;
   for(const id of ["core"+U,"rods"+U,"pzr"+U,"reltk"+U,"rv0"+U,"tee0"+U,"efwtee"+U]
         .concat(mstee.map(f=>f).filter(Boolean))
-        .concat(Array.from({length:loops},(_,i)=>"sg"+(u*loops+i)))){
+        .concat(Array.from({length:loops},(_,i)=>"sg"+(u*loops+i)))
+        .concat(inter ? Array.from({length:loops},(_,i)=>["ihx","ipump","itank"]
+          .map(k=>k+(u*loops+i))).flat() : [])){
     const q=partOf(id); if(q) islX=Math.max(islX, q.x+q.w-1); }
   const svtee=[];
   /* CLEAR OF THE RISER LANE. On a station the unit's own manifold stands in
@@ -4942,7 +5010,9 @@ function buildStockPlumbing(opt){
      the surge tee's own nozzle, and one port cell stops a lane as dead as a
      machine does. */
   const HOT_ROW =[14,15,16,24];      // out of the vessel, east to its own riser
-  const HOT_COL = i => X(i)-4;       // the gap forward of the generator
+  // the gap forward of the generator, or forward of the exchanger that now
+  // stands in the primary where the generator used to
+  const HOT_COL = i => X(i)+(inter?5:-4);
   /* one lane per feed line, on the pump's own left face and walking UP as the
      loop index rises - the bilge rows walk DOWN, so a feed line and a cold
      return share a row only where the loop count puts them at opposite ends of
@@ -4952,7 +5022,7 @@ function buildStockPlumbing(opt){
      units share their columns, so every riser asked for the same lane and the
      second unit's feed line merged into the first one's instead of reaching
      its own generator. A lane is a lane whoever wants it. */
-  const feedCol = (u,i) => uX(u,i)+5+(multi?u:0);
+  const feedCol = (u,i) => uX(u,i)+(inter?3:5)+(multi?u:0);
   /* ONE BILGE ROW PER LOOP, OFF THE VESSEL'S OWN FLOOR. Literal rows walked
      down the ship whenever the island moved, and the outermost loop's leg came
      out under the panels with nothing to route through. */
@@ -5138,16 +5208,50 @@ function buildStockPlumbing(opt){
       const li = u*loops+i;                    // this generator, on the plant
       const k  = (u%perSet)*loops+i;           // ...and its line's ordinal within its SET
       const g = sgPorts(li);
+      const pumpX = partOf("pump"+li).x;
       const pT = seedPort("pump"+li,1,-1), pB = seedPort("pump"+li,1,partOf("pump"+li).h);
       const teeB = seedPort(n.mstee[i],0,1);
       const teeL = hdr[u]!=null ? seedPort(n.mstee[i],-1,0) : null;
       const teeR = seedPort(n.mstee[i],1,0);
 
-      // primary: vessel to shell, shell to pump, pump back along its own bilge row
-      if(i) seedRun(n.coreHot(i), g.l, false, [[HOT_COL(i)+ox,HOT_ROW[i]+oy],[HOT_COL(i)+ox,6+oy]]);
-      else  seedRun(n.pTeeR, g.l, true);
-      seedRun(g.b, pT, true);
-      seedRun(pB, n.coreCold(i), false, [[uX(u,i)+1,coldRow(u,i)],[n.coreBilge(i),coldRow(u,i)]]);
+      /* ══ PRIMARY: VESSEL TO THE FIRST STAGE, FIRST STAGE TO THE PUMP ══
+         Which machine that first stage IS is the whole difference between a
+         two-circuit plant and a three-circuit one. With an exchanger it is the
+         exchanger, the generator is a stage further out, and the core's own
+         water never reaches a tube. */
+      const h = inter ? "ihx"+li : null, LX = uX(u,i);
+      const primIn  = h ? seedPort(h,-1,1) : g.l;
+      const primOut = h ? seedPort(h,3,1)  : g.b;
+      const hotVia = [[HOT_COL(i)+ox,HOT_ROW[i]+oy],[HOT_COL(i)+ox,6+oy]];
+      if(i)          seedRun(n.coreHot(i), primIn, false, hotVia);
+      else if(inter) seedRun(n.pTeeR,      primIn, false, hotVia);
+      else           seedRun(n.pTeeR,      primIn, true);
+      // the lane aft of the exchanger, off the nozzle's OWN column: a via one
+      // cell back of where the run leaves the port turns it onto the port again
+      /* DOWN INTO THE SUCTION, never along the row it stands on: a run that
+         TURNS in a cell can never be crossed afterwards, and rows 16 to 18 are
+         the hot legs of every loop aft of this one. */
+      if(inter) seedRun(primOut, pT, false, [[LX+11,10+oy],[LX+5,10+oy]]);
+      else      seedRun(primOut, pT, true);
+      seedRun(pB, n.coreCold(i), false, [[pumpX+1,coldRow(u,i)],[n.coreBilge(i),coldRow(u,i)]]);
+      /* ══ AND THE CIRCUIT BEHIND THE EXCHANGER ══
+         Out of the second stream hot into the generator's tubes, down into the
+         intermediate pump beside them and back up into the second stream cold.
+         ONE LANE EACH, the same table the primary's own lanes already are: row
+         13 for the hot leg, row 12 down into the pump, that loop's own bilge
+         row and the column aft of the exchanger for the cold return.
+         The surge tank hangs on the cold leg, which is where a real expansion
+         vessel stands - the coldest, lowest-pressure point on the circuit. */
+      if(h){
+        const ipB = partOf("ipump"+li);
+        seedRun(seedPort(h,2,4), g.l, false, [[LX+9,13+oy],[LX-1,13+oy]]);
+        seedRun(g.b, seedPort("ipump"+li,1,-1), false, [[LX+1,12+oy],[LX+8,12+oy]]);
+        seedRun(seedPort("ipump"+li,1,ipB.h), seedPort(h,1,-1),
+                false, [[LX+8,coldRow(u,i)],[LX+15,coldRow(u,i)],[LX+15,3+oy]]);
+        // a JOINT: the tank's own nozzle faces the pump's suction across one cell
+        if(partOf("itank"+li))
+          seedRun(seedPort("itank"+li,-1,1), seedPort("ipump"+li,3,1));
+      }
       // secondary: the nozzle faces the tee's own port across one cell - a joint,
       // no pipe
       seedRun(g.steam, teeB);
@@ -5168,11 +5272,15 @@ function buildStockPlumbing(opt){
       const land = partOf(n.efwtee).y+4;
       const bandVias = oy-ISL===sOY(s) ? null
         : [[FEEDX-3, FEED_ROW(s,k)], [FEEDX-3, land], [feedCol(u,i), land]];
+      /* THE RISER STOPS ONE ROW UNDER THE NOZZLE where it stands in the
+         nozzle's own column: a via ON the port cell is a run laid through its
+         own end, and pipeLay drops it. */
+      const FTOP = (inter?7:5)+oy;
       if(i) seedRun(t.feedL(k), g.feed, false,
-        (bandVias||[]).concat([[feedCol(u,i),bandVias?land:FEED_ROW(s,k)],[feedCol(u,i),5+oy]]));
+        (bandVias||[]).concat([[feedCol(u,i),bandVias?land:FEED_ROW(s,k)],[feedCol(u,i),FTOP]]));
       else { seedRun(t.feedL(k), n.pTieB, false,
                bandVias || [[feedCol(u,0),FEED_ROW(s,k)]]);
-             seedRun(n.pTieT, g.feed, false, [[feedCol(u,0),5+oy]]); }
+             seedRun(n.pTieT, g.feed, false, [[feedCol(u,0),FTOP]]); }
     }
     /* ══ AND THE HEADER GOES ON AFT THROUGH ITS SAFETY TEES ══
        One per generator, spliced in the order the generators are, each with
@@ -5331,7 +5439,7 @@ const PLANTPRE=[
  ["BWR/4",{loops:2,arch:1,cont:{m:"liner",t:20},d:{bkp:1,sg:0,chim:0.4}},
   "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
  ["BN-600",{loops:3,arch:3,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4}},
-  "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it."],
+  "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it. The real machine has three circuits, not two: sodium and water react, and a real BN-600 puts an intermediate sodium loop between that reaction and the primary. Splice heat exchangers in on the bench to build the machine it actually is."],
  ["EPR",{loops:4,arch:0,lat:2,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
@@ -5379,7 +5487,8 @@ function plantPreset(i){
   /* WHAT THIS SHIP IS, laid gesture for gesture. `drop` is handed to the
      builder rather than run afterwards, so a preset without an injection tank
      never places one - it does not place one and take it off again. */
-  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont, core});
+  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont,
+                      inter:q.inter, core});
   // and anything this ship carries that the stock one does not, placed the
   // same way ADD MACHINE places it
   for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);
