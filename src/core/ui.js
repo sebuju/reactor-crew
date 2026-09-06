@@ -785,10 +785,6 @@ function uiDown(e,el){
   if(!w){ sel=null; return; }
   const q=ptIn(w,p);
     if(w.type==="part"){ sel=w.part.id;
-      /* SHIFT PINS AN INSPECTOR WINDOW ON IT (inspPin, ui/inspwin.js), and
-         spends the press: a shift-drag would otherwise move the machine the
-         reader has just asked to keep a window open on. */
-      if(e.shiftKey && typeof inspPin==="function"){ inspPin(w.part.id); return; }
       // a commissioned plant is welded down: selectable, not movable; a
       // pinned part rides its parent, so it's selectable but never draggable
       if(screen==="design" && !w.part.pin){ const g=gridPt([q.x,q.y]);
