@@ -19,7 +19,8 @@ const M=require('./bundle').headless(
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
  'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
- 'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT}');
+ 'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
+ 'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -218,13 +219,68 @@ const CASES={
         (id?f(M.sgLvl(s,id),0):"-").padStart(7)+f(s.dmg,1).padStart(6)+"   "+died);
     }
   },
+  /* ── CAN THIS CORE GO PROMPT? ──
+     The RBMK-1000 plant, RPS bypassed, the cabinet's rod block off, the bank
+     driven fully out, then a blackout so the pumps coast and the core voids.
+     --pk=a,b,c overrides the lattice pitch multiplier so the void worth can be
+     walked; prints peak n, peak rho, what the fuel did and how the run ended. */
+  excursion(){
+    const pks=((process.argv.find(a=>/^--pk=/.test(a))||"").split("=")[1]||"").split(",").filter(Boolean).map(Number);
+    const at=+((process.argv.find(a=>/^--blackout=/.test(a))||"").split("=")[1]||20);
+    const every=+((process.argv.find(a=>/^--every=/.test(a))||"").split("=")[1]||5);
+    // --hit=K writes that pellet temperature into every node at the blackout tick: the pulse, injected, so the threshold is SEEN to cross
+    const hit=+((process.argv.find(a=>/^--hit=/.test(a))||"").split("=")[1]||0);
+    const vessel=+((process.argv.find(a=>/^--vessel=/.test(a))||"").split("=")[1]||1);
+    const i=M.PLANTPRE().findIndex(p=>p[0]==="RBMK-1000");
+    for(const pk of (pks.length?pks:[null])){
+      M.plantPreset(i);
+      const c=M.coreD("core");
+      if(pk!==null){ c.lat.pitch=pk*M.LAT_P0(); M.latRevolve(c); }
+      M.buildLayout(); M.commission();
+      const s=M.S(), P=M.P(), d=M.derived(), cs=s.coreBy.core;
+      s.diceOff=true; P.cores.core.burstK*=vessel;
+      console.log("\n── excursion  pk "+(pk===null?"preset":pk)+"  aV "+f(d.aV,0)+" pcm  aM "+f(d.aM,1)+"  beta "+f(P.BETA*1e5,0)+"  rated "+f(P.rated,0)+" MWt  burst "+f(P.P0*P.burstK,2)+" MPa ──");
+      if(!s.byp.rps) M.act("byp","rps");
+      /* --rods=keep leaves the cabinet's rod controller on the bank (the Chernobyl
+         state: it pulls the bank OUT on its own as xenon builds); --load=x holds
+         the turbine at that load first, so the 400x xenon clock has minutes to
+         poison a low-power core before the pumps are lost */
+      const rods=(process.argv.find(a=>/^--rods=/.test(a))||"").split("=")[1];
+      const load=+((process.argv.find(a=>/^--load=/.test(a))||"").split("=")[1]||0);
+      if(rods!=="keep"){
+        for(const id in D.blocks) if(D.blocks[id].mode==="sink" && D.blocks[id].sink==="rodStep") M.act("blkOn",id);
+        M.act("rodCommon",+(rods||0)); }
+      if(load>0) M.act("loadDem",load);
+      // --band=0 opens the controller's withdrawal stop (a rig write, the bench knob D.arLo); --scram fires AZ-5 at the blackout tick instead of the blackout
+      if(process.argv.some(a=>/^--band=/.test(a))) s.arLo=+((process.argv.find(a=>/^--band=/.test(a))).split("=")[1]);
+      const scram=process.argv.includes("--scram");
+      let pkN=0,pkRho=-1e9,tN=0,tRho=0,pkP=0,pkTf=0,tEnd=null;
+      console.log("    t      n     rho   rods    vf     P MPa  fci MW   TfHot   dmg%  melt%  disp%    xe    vd   trip");
+      const line=(t)=>{ const st=M.fuelStages(cs), FL=M.FAIL(), q=FL.findIndex(r=>r.k==="disp");
+        console.log("  "+f(t,1).padStart(5)+"  "+f(s.n,3).padStart(6)+"  "+f(s.rho,0).padStart(5)+"  "+f(s.rodPos,2).padStart(5)+"  "+f(s.vf,3).padStart(5)+"  "+f(s.pCore,3).padStart(7)+"  "+f(cs.fci/1000,1).padStart(6)+"  "+f(s.TfHot,0).padStart(6)+"  "+f(s.dmg,1).padStart(5)+"  "+f(s.meltFrac*100,1).padStart(5)+"  "+(q>=0?f(st[q]*100,1):"-").padStart(5)+"  "+f(s.parts.xe,0).padStart(5)+"  "+f(s.parts.vd,0).padStart(5)+"  "+(s.trip||"")); };
+      let pkFci=0;
+      for(let k=0;k<=PSEC*50;k++){ const t=k*0.02;
+        if(k===at*50){ if(scram) M.act("scram"); else M.act("blackout",true); if(hit>0) cs.nTf.fill(hit); }
+        if(cs.fci>pkFci) pkFci=cs.fci;
+        if(k%(every*50)===0) line(t);
+        M.step(0.02);
+        if(s.n>pkN){ pkN=s.n; tN=t; } if(s.rho>pkRho){ pkRho=s.rho; tRho=t; }
+        if(s.pCore>pkP) pkP=s.pCore; if(s.TfHot>pkTf) pkTf=s.TfHot;
+        if(s.breach && tEnd===null){ tEnd=t; line(t); break; } }
+      const st=M.fuelStages(cs), FL=M.FAIL();
+      console.log("  peak n "+f(pkN,3)+" @ "+f(tN,1)+" s   peak rho "+f(pkRho,0)+" pcm @ "+f(tRho,1)+" s   peak P "+f(pkP,3)+" MPa   peak Tf "+f(pkTf,0)+" K   peak fci "+f(pkFci/1000,1)+" MW");
+      console.log("  fuel  "+FL.map((r,q)=>r.k+" "+f(st[q]*100,1)+"%").join("  ")+"   h2 "+f(s.h2,1)+" kg");
+      console.log("  end   "+(tEnd===null?"no event in "+PSEC+" s":s.trip+" at "+f(tEnd,1)+" s")+"   ledger "+f(M.ledgerKg(s),0)+" kg  out "+f(M.ledgerOut(s),0)+" kg");
+      console.log("  books "+Object.entries(s.massOut).filter(e=>Math.abs(e[1])>1).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,6).map(e=>e[0]+" "+f(e[1],0)).join("  "));
+    }
+  },
   selfrun(){ const s=withPlant(M=>{
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
       M.seedRun(a,b); });
       run(s,120); dump(s,"a run from a machine back to itself"); },
 };
 
-const args=process.argv.slice(2).filter(a=>!/^--secs=/.test(a));
+const args=process.argv.slice(2).filter(a=>!/^--(?!list$)/.test(a));
 const PSEC=+((process.argv.find(a=>/^--secs=/.test(a))||"").split("=")[1])||600;
 if(args[0]==="--list"){ console.log(Object.keys(CASES).join("\n")); process.exit(0); }
 const pick=args.length?args:["stock"];

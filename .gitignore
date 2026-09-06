@@ -30,3 +30,6 @@ test-results/
 playwright-report/
 tests/out/
 tests/reports/
+
+# Editor config - local only
+.vscode/
