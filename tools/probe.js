@@ -20,7 +20,8 @@ const M=require('./bundle').headless(
  'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
- 'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut}');
+ 'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
+ 'netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -254,23 +255,33 @@ const CASES={
       // --band=0 opens the controller's withdrawal stop (a rig write, the bench knob D.arLo); --scram fires AZ-5 at the blackout tick instead of the blackout
       if(process.argv.some(a=>/^--band=/.test(a))) s.arLo=+((process.argv.find(a=>/^--band=/.test(a))).split("=")[1]);
       const scram=process.argv.includes("--scram");
+      // --starve=T cuts the feed at T s: the controller bypassed (every regulating valve freezes) and every valve driven shut, a rig write on s.fregBy
+      const starve=+((process.argv.find(a=>/^--starve=/.test(a))||"").split("=")[1]||0);
       let pkN=0,pkRho=-1e9,tN=0,tRho=0,pkP=0,pkTf=0,tEnd=null;
-      console.log("    t      n     rho   rods    vf     P MPa  fci MW   TfHot   dmg%  melt%  disp%    xe    vd   trip");
+      console.log("    t      n     rho   rods    vf     P MPa  fci MW   TfHot   dmg%  melt%  disp%    xe    vd   tip   sc K  ledger+out   h2 kg  rmH2  rmP kPa  rmT K  sump t  tube%  cav kPa  trip");
+      // tube%: the share of channels torn; cav kPa: the reactor cavity over the room (a tube core only)
+      const cavNode=P.net.index["cav:core"];
       const line=(t)=>{ const st=M.fuelStages(cs), FL=M.FAIL(), q=FL.findIndex(r=>r.k==="disp");
-        console.log("  "+f(t,1).padStart(5)+"  "+f(s.n,3).padStart(6)+"  "+f(s.rho,0).padStart(5)+"  "+f(s.rodPos,2).padStart(5)+"  "+f(s.vf,3).padStart(5)+"  "+f(s.pCore,3).padStart(7)+"  "+f(cs.fci/1000,1).padStart(6)+"  "+f(s.TfHot,0).padStart(6)+"  "+f(s.dmg,1).padStart(5)+"  "+f(s.meltFrac*100,1).padStart(5)+"  "+(q>=0?f(st[q]*100,1):"-").padStart(5)+"  "+f(s.parts.xe,0).padStart(5)+"  "+f(s.parts.vd,0).padStart(5)+"  "+(s.trip||"")); };
-      let pkFci=0;
+        let rmH2=0; for(let i=0;i<s.roomH2.length;i++) rmH2+=s.roomH2[i];
+        const rmP=M.roomPGauge(s).reduce((a,v)=>Math.max(a,v),0);
+        const cav=cavNode===undefined?"-":f((s.pBy["cav:core"]-P.Pcont)*1000,0);
+        console.log("  "+f(t,1).padStart(5)+"  "+f(s.n,3).padStart(6)+"  "+f(s.rho,0).padStart(5)+"  "+f(s.rodPos,2).padStart(5)+"  "+f(s.vf,3).padStart(5)+"  "+f(s.pCore,3).padStart(7)+"  "+f(cs.fci/1000,1).padStart(6)+"  "+f(s.TfHot,0).padStart(6)+"  "+f(s.dmg,1).padStart(5)+"  "+f(s.meltFrac*100,1).padStart(5)+"  "+(q>=0?f(st[q]*100,1):"-").padStart(5)+"  "+f(s.parts.xe,0).padStart(5)+"  "+f(s.parts.vd,0).padStart(5)+"  "+f(cs.tipRho,0).padStart(4)+"  "+f(s.sc,1).padStart(5)+"  "+f(M.ledgerKg(s)+M.ledgerOut(s),0).padStart(9)+"  "+f(s.h2,1).padStart(6)+"  "+f(rmH2,1).padStart(4)+"  "+f(rmP,1).padStart(7)+"  "+f(s.roomMax,0).padStart(5)+"  "+f(M.sumpKg(s)/1000,1).padStart(6)+"  "+f((cs.tubesOpen||0)*100,0).padStart(5)+"  "+cav.padStart(7)+"  "+(s.trip||"")); };
+      let pkFci=0; const wrecked=[];
       for(let k=0;k<=PSEC*50;k++){ const t=k*0.02;
+        while(wrecked.length<s.dmgParts.length){ const id=s.dmgParts[wrecked.length]; wrecked.push(id+" "+s.dmgWhy[id]+"@"+f(t,1)); }
+        if(starve>0 && k===starve*50){ if(!s.byp.feed) M.act("byp","feed"); for(const id of M.sgIds()) s.fregBy[id]=1; }
         if(k===at*50){ if(scram) M.act("scram"); else M.act("blackout",true); if(hit>0) cs.nTf.fill(hit); }
         if(cs.fci>pkFci) pkFci=cs.fci;
         if(k%(every*50)===0) line(t);
         M.step(0.02);
         if(s.n>pkN){ pkN=s.n; tN=t; } if(s.rho>pkRho){ pkRho=s.rho; tRho=t; }
         if(s.pCore>pkP) pkP=s.pCore; if(s.TfHot>pkTf) pkTf=s.TfHot;
-        if(s.breach && tEnd===null){ tEnd=t; line(t); break; } }
+        if(s.breach && tEnd===null){ tEnd=t; line(t); if(!process.argv.includes("--on")) break; } }
       const st=M.fuelStages(cs), FL=M.FAIL();
       console.log("  peak n "+f(pkN,3)+" @ "+f(tN,1)+" s   peak rho "+f(pkRho,0)+" pcm @ "+f(tRho,1)+" s   peak P "+f(pkP,3)+" MPa   peak Tf "+f(pkTf,0)+" K   peak fci "+f(pkFci/1000,1)+" MW");
       console.log("  fuel  "+FL.map((r,q)=>r.k+" "+f(st[q]*100,1)+"%").join("  ")+"   h2 "+f(s.h2,1)+" kg");
       console.log("  end   "+(tEnd===null?"no event in "+PSEC+" s":s.trip+" at "+f(tEnd,1)+" s")+"   ledger "+f(M.ledgerKg(s),0)+" kg  out "+f(M.ledgerOut(s),0)+" kg");
+      console.log("  wrecked "+(wrecked.join("  ")||"nothing"));
       console.log("  books "+Object.entries(s.massOut).filter(e=>Math.abs(e[1])>1).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,6).map(e=>e[0]+" "+f(e[1],0)).join("  "));
     }
   },
@@ -278,6 +289,88 @@ const CASES={
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
       M.seedRun(a,b); });
       run(s,120); dump(s,"a run from a machine back to itself"); },
+  /* ── DO THE BOOKS CLOSE, BOOK BY BOOK ──
+     From tick 0. Per tick, the change in every book (a free node's own mass,
+     a booked group's bookedKg) against what the transport moved onto it;
+     groups whose residual passes --kg (0.5) are named, and summed from --from=S.
+     --pre=N takes a preset instead of the stock ship. --node=NAME prints that
+     node's state and its edges over --ticks=N (8) ticks from --at=S; --tanks
+     prints every tank the transport touched; --every=S prints the condenser
+     and the tanks. --lift=FID holds a valve open from 5 s, --blackout=S orders
+     one; the drift printed is ledgerKg+ledgerOut since that order. */
+  ledger(){
+    const pre=(process.argv.find(a=>/^--pre=/.test(a))||"").split("=")[1];
+    const node=(process.argv.find(a=>/^--node=/.test(a))||"").split("=")[1];
+    const ticks=+((process.argv.find(a=>/^--ticks=/.test(a))||"").split("=")[1])||8;
+    const tol=+((process.argv.find(a=>/^--kg=/.test(a))||"").split("=")[1])||0.5;
+    const from=+((process.argv.find(a=>/^--from=/.test(a))||"").split("=")[1])||0;
+    let s;
+    if(pre!==undefined&&pre!==""){ M.plantPreset(+pre); M.buildLayout(); M.commission(); s=M.S(); s.diceOff=true; }
+    else s=withPlant(null);
+    const net=M.P().net, bk=M.netBooked(net), bookOf=M.netBookOf(net);
+    const group=i=>bk[i]===2?null:(bookOf[i]||net.name[i]);
+    // every condenser face reads the one pool (bookedKg), so the hotwell is taken once
+    const snap=()=>{ const g={}; let pool=false;
+      for(let i=0;i<net.n;i++){ const k=group(i); if(!k) continue;
+        if(k==="C"){ if(pool) continue; pool=true; }
+        const v=bk[i]?M.bookedKg(net,s,i):s.mBy[net.name[i]];
+        if(v!==undefined) g[k]=(g[k]||0)+v; }
+      return g; };
+    const cum={}, ni=node?net.index[node]:undefined;
+    const tankOf=k=>k.indexOf("T:")===0?k.slice(2):null;
+    // --lift=FID holds that valve open from 5 s; --blackout=SECS orders one then; drift is ledgerKg+ledgerOut from the order
+    const lift=(process.argv.find(a=>/^--lift=/.test(a))||"").split("=")[1];
+    const bo=(process.argv.find(a=>/^--blackout=/.test(a))||"").split("=")[1];
+    const every=+((process.argv.find(a=>/^--every=/.test(a))||"").split("=")[1])||0;
+    const at=+((process.argv.find(a=>/^--at=/.test(a))||"").split("=")[1])||0;
+    let drift0=null, drift0Vent=0; const seen={};
+    console.log("\n── ledger closure, "+(pre!==undefined&&pre!==""?M.PLANTPRE()[+pre][0]:"stock plant")+" ──");
+    for(let k=0;k<PSEC*50;k++){
+      const t=k*0.02;
+      if(lift&&k===250){ s.reliefOpen[lift]=true; s.reliefAuto[lift]=false; drift0=M.ledgerKg(s)+M.ledgerOut(s); drift0Vent=s.massOut.sgVent||0; }
+      if(bo!==undefined&&bo!==""&&k===Math.round(+bo*50)){ M.act("blackout",true); drift0=M.ledgerKg(s)+M.ledgerOut(s); }
+      const before=snap();
+      M.step(0.02);
+      for(const [key,on] of [["blackout",s.blackout],["turbTrip",s.turbTrip],["condLost",s.condLost],["scram",s.scrammed],["breach",s.breach],
+                             ["sgBurst",s.sgBurst&&Object.keys(s.sgBurst).some(id=>s.sgBurst[id])]])
+        if(on&&!seen[key]){ seen[key]=true; console.log("  "+key+" at "+f(t,2)+" s"); }
+      const after=snap(), moved={}, ek=M.advectEdgeKgOf();
+      if(ek) for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e], m=ek[e]; if(!m) continue;
+        const gu=group(ed.u), gv=group(ed.v); if(gu===gv) continue;
+        if(gu) moved[gu]=(moved[gu]||0)-m; if(gv) moved[gv]=(moved[gv]||0)+m; }
+      const bad=[];
+      for(const g in after){ const r=(after[g]-(before[g]||0))-(moved[g]||0);
+        if(k>=from*50) cum[g]=(cum[g]||0)+r; if(Math.abs(r)>tol) bad.push(g+" "+f(r,1)); }
+      const win=k>=at*50&&k<at*50+ticks; if(win||bad.length){
+        let line="tick "+(k+1)+": res "+f(s.massRes,3)+" kg";
+        if(bad.length) line+="  | "+bad.join(", ");
+        if(ni!==undefined){ const F=net.F;
+          line+="\n    "+node+": m "+f(s.mBy[node],2)+" h "+f(s.hBy[node],1)+" p "+f(s.pBy&&s.pBy[node],3)+
+            " F.p "+f(F.p[ni],3)+" rho "+f(F.rho[ni],1)+" x "+f(F.x[ni],3)+" wet "+F.wet[ni];
+          if(ek) for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e]; if(ed.u!==ni&&ed.v!==ni) continue;
+            const h=typeof ed.h==="function"?ed.h(s):(ed.h||0);
+            line+="\n      "+(ed.key||ed.kind)+" "+net.name[ed.u]+"("+f(F.p[ed.u],4)+",w"+F.wet[ed.u]+",m"+f(s.mBy[net.name[ed.u]],2)+")->"+
+              net.name[ed.v]+"("+f(F.p[ed.v],4)+",w"+F.wet[ed.v]+",m"+f(s.mBy[net.name[ed.v]],2)+") h "+f(h,4)+" moved "+f(ek[e],3)+" kg"; } }
+        for(const g in after){ const t=tankOf(g); if(!t) continue;
+          line+="\n    "+t+": lvl "+f(M.tankLvl(s,t),3)+" % rate "+f(s.tankRate[t],2)+" landed "+f(M.advectLanded(net.tankNode[t]),3)+" kg"; }
+        if(win) console.log(line); else console.log(line.split("\n")[0]); }
+      if(process.argv.some(a=>a==="--tanks")) for(const g in after){ const t=tankOf(g); if(!t) continue;
+        const l=M.advectLanded(net.tankNode[t]); if(Math.abs(l)>0.01||Math.abs(s.tankRate[t])>0.01)
+          console.log("    "+(k+1)+" "+t+": lvl "+f(M.tankLvl(s,t),3)+" % rate "+f(s.tankRate[t],3)+" landed "+f(l,3)+" kg  clampPri "+f(s.massOut.tankClampPri,2)); }
+      if(every&&(k+1)%(every*50)===0) console.log("  "+f(t+0.02,1)+" s: condT "+f(s.condT,2)+" condP "+f(s.condP,4)+" turbP "+f(s.turbP,4)+
+        " load "+f(s.load,3)+" MWe "+f(M.mwE(s),1)+" sgP "+f(M.secP(s,M.sgIds()[0]),3)+" P "+f(s.P,3)+" lvl "+f(s.lvl,2)+
+        " tanks "+M.tankIds().map(t=>t+" "+f(M.tankLvl(s,t),3)).join(" ")+
+        " open "+Object.keys(s.reliefOpen).filter(k=>s.reliefOpen[k]).join(","));
+    }
+    console.log(" cumulative residual by book from "+from+" s to "+PSEC+" s (|r| > "+tol+" kg):");
+    const keys=Object.keys(cum).filter(g=>Math.abs(cum[g])>tol).sort((a,b)=>Math.abs(cum[b])-Math.abs(cum[a]));
+    if(!keys.length) console.log("  none");
+    for(const g of keys) row(g,f(cum[g],2));
+    row("ledgerKg",f(M.ledgerKg(s),1)); row("ledgerOut",f(M.ledgerOut(s),1));
+    if(drift0!==null){ row("drift since order",f(M.ledgerKg(s)+M.ledgerOut(s)-drift0,2)+" kg");
+      if(lift) row("sgVent since lift",f((s.massOut.sgVent||0)-drift0Vent,1)+" kg"); }
+    for(const n in s.massOut) if(Math.abs(s.massOut[n])>tol) row("  massOut."+n,f(s.massOut[n],2));
+  },
 };
 
 const args=process.argv.slice(2).filter(a=>!/^--(?!list$)/.test(a));
