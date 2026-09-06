@@ -182,7 +182,7 @@ function ctlPicMk(live){
       nm.textContent=blkName(T[id]); el.append(nm,sub,spec);
       KIT.tip(el,blkTitle(T,id),blkTipBody(T,id,s));
       el.dataset.blk=id;
-      el.addEventListener("click",()=>{ CTLV.sel = CTLV.sel===id ? null : id; });
+      MOUSE.on(el,{click(){ CTLV.sel = CTLV.sel===id ? null : id; }});
       root.appendChild(el); box[id]={el,sub,spec};
       /* THE HANDLES A WIRE IS DRAWN BY. A wire is geometry, so it is dragged
          like a pipe: out of the stud under a block, into one of the studs on
@@ -218,36 +218,40 @@ function ctlPicMk(live){
     let best=0, bd=1e9;
     for(let i=0;i<n;i++){ const d=Math.abs(c.x+CG_NW*(i+1)/(n+1)-x); if(d<bd){ bd=d; best=i; } }
     return best; };
-  root.addEventListener("pointerdown",e=>{
-    if(e.button!==0) return;
-    const st=e.target.closest&&e.target.closest(".ctlg-stud"); if(!st) return;
-    e.preventDefault(); e.stopPropagation();
-    const T=ctlTable(live); if(!T) return;
-    const id=st.dataset.blk, slot=st.dataset.slot===undefined?null:+st.dataset.slot;
-    // an input stud carries the wire already on it; an empty one starts a new wire
-    const src = slot==null ? id : (T[id]&&T[id].in[slot]) || null;
-    drag={src, from:id, slot, p:at(e)};
-    if(slot!=null) ctlWire(live,id,slot,null);
-    root.setPointerCapture(e.pointerId); root.classList.add("wiring");
-  });
-  root.addEventListener("pointermove",e=>{ if(!drag) return; drag.p=at(e); rubberDraw(); });
-  root.addEventListener("pointerup",e=>{
-    if(!drag) return;
-    const d=drag; drag=null; root.classList.remove("wiring"); rubberDraw();
-    const T=ctlTable(live); if(!T) return;
-    const hit=hitOf(e);
-    if(d.slot!=null && d.src==null && !hit) return;          // a cut is what an empty drop means, and it is already done
-    if(!hit) return;
-    if(d.slot!=null){                                        // dragging an input: whatever it lands on feeds it
-      if(hit.blk!==d.from) ctlWire(live,d.from,d.slot,hit.blk);
-      else if(d.src) ctlWire(live,d.from,d.slot,d.src);      // back where it started
-      return;
-    }
-    if(hit.blk===d.src) return;                              // no block feeds itself
-    const slot = hit.slot!=null ? hit.slot : slotFor(T,hit.blk,at(e).x);
-    if(slot!=null) ctlWire(live,hit.blk,slot,d.src);
-  });
-  root.addEventListener("lostpointercapture",()=>{ if(drag){ drag=null; root.classList.remove("wiring"); rubberDraw(); } });
+  const wireOff=()=>{ if(drag){ drag=null; root.classList.remove("wiring"); rubberDraw(); } };
+  MOUSE.on(root,{
+    down(e){
+      if(e.button!==0) return;
+      const st=e.target.closest&&e.target.closest(".ctlg-stud"); if(!st) return;
+      e.preventDefault(); e.stopPropagation();
+      const T=ctlTable(live); if(!T) return;
+      const id=st.dataset.blk, slot=st.dataset.slot===undefined?null:+st.dataset.slot;
+      // an input stud carries the wire already on it; an empty one starts a new wire
+      const src = slot==null ? id : (T[id]&&T[id].in[slot]) || null;
+      drag={src, from:id, slot, p:at(e)};
+      if(slot!=null) ctlWire(live,id,slot,null);
+      MOUSE.grab(root); root.classList.add("wiring");
+    },
+    move(e){ if(!drag) return; drag.p=at(e); rubberDraw(); },
+    up(e){
+      if(!drag) return;
+      const d=drag; drag=null; root.classList.remove("wiring"); rubberDraw();
+      const T=ctlTable(live); if(!T) return;
+      const hit=hitOf(e);
+      if(d.slot!=null && d.src==null && !hit) return;        // a cut is what an empty drop means, and it is already done
+      if(!hit) return;
+      if(d.slot!=null){                                      // dragging an input: whatever it lands on feeds it
+        if(hit.blk!==d.from) ctlWire(live,d.from,d.slot,hit.blk);
+        else if(d.src) ctlWire(live,d.from,d.slot,d.src);    // back where it started
+        return;
+      }
+      if(hit.blk===d.src) return;                            // no block feeds itself
+      const slot = hit.slot!=null ? hit.slot : slotFor(T,hit.blk,at(e).x);
+      if(slot!=null) ctlWire(live,hit.blk,slot,d.src);
+    },
+    // the grab is dropped by the hub on the release; this is the drag that
+    // never got one - the cabinet was rebuilt out from under the hand
+    cancel:wireOff});
   function rubberDraw(){
     if(!rubber) return;
     if(!drag||!lastPos[drag.from]){ rubber.setAttribute("points",""); return; }
