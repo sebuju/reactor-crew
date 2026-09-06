@@ -48,10 +48,48 @@ function fxIdPhase(id){
    there is a plant at all; the bench passes wall seconds so a design preview
    still moves. Fed in rather than read off S, because nothing in a view file may
    reach for sim state. */
-let FXT = 0;
-const fxSetClock = t => { FXT = t; };
-const fxClock = () => FXT;
+/* ══ AND IT RUNS AT THE PLANT'S RATE, NOT IN THE PLANT'S STEPS ══
+   S.t moves 0.02 s at a time and a browser frame runs none, one or two of them,
+   so every effect on this clock - bubbles, steam, parcels, rotors - stood still
+   for a frame and then jumped two. The clock advances on WALL seconds times the
+   rate the tape is SET to (trClockRate(), record.js) instead.
+   THE RATE IS A SETTING AND IS NOT MEASURED. Estimating it off S.t and easing
+   into the estimate ramped every animation up on un-pause and left the whole
+   picture riding a filter chasing a 50 Hz input - a speed that was never
+   constant, on a screen that was. Rate 0 is a paused plant and freezes on the
+   frame. Null is the one case with no number to be had - an unbounded rate,
+   which runs as fast as the machine allows - and only that one is measured. */
+/* ══ AND IT IS MEASURED ON THE FRAME, NOT ON THE CALL ══
+   The screen hands out frames on an exact 7 ms; performance.now() read where
+   this is CALLED does not, because a frame that also runs a sim tick reaches
+   the draw later in its own frame. Measured that way the gap swung 3.6 to
+   12.9 ms on a 144 Hz screen with not one frame dropped - the picture was even
+   and what it drew was not. The loop hands over the frame's own timestamp
+   (fxSetFrame, main.js) and the wall clock is only the fallback for a caller
+   that has no frame: the bench preview and the headless draw. */
+// how far the display clock may stand off the plant's own before it is put
+// back: a hitch, a rewind, a loaded recording. Scaled by the rate, so 16x gets
+// the same number of PLANT seconds of slack as 1x does.
+const FX_SLIP = 0.5;
+let FXT = 0, FXSRC = null, FXW = 0, FXRATE = 0, FXDT = 0, FXFRAME = null;
 const fxWall = () => (typeof performance !== "undefined" ? performance.now() : Date.now()) / 1000;
+const fxSetFrame = w => { FXFRAME = w; };
+function fxSetClock(t, rate){
+  const w = FXFRAME === null ? fxWall() : FXFRAME;
+  const dw = FXSRC === null ? 0 : clamp(w - FXW, 0, 0.25);
+  const meas = rate === null || rate === undefined;
+  if(meas && dw > 0) FXRATE += ((t - FXSRC)/dw - FXRATE) * (1 - Math.exp(-dw/0.25));
+  const r = meas ? FXRATE : Math.max(0, rate);
+  FXW = w; FXSRC = t;
+  FXDT = dw * r;
+  FXT += FXDT;
+  // and it is the PLANT's clock, so it may not wander off it
+  if(!isFinite(t) || Math.abs(t - FXT) > FX_SLIP*Math.max(1, r)){ FXT = t; FXDT = 0; }
+}
+const fxClock = () => FXT;
+// plant seconds this frame, at the smoothed rate - what a speed has to be
+// multiplied by to become a frame's travel
+const fxDt = () => FXDT;
 /* FRACTIONAL on purpose: the caller takes Math.ceil() of this and fades the last
    particle by whatever is left over, so a rising rate grows one in. */
 const fxN = (rate, max) => clamp(rate, 0, 1) * (max || FX_MAX);
