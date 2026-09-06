@@ -221,9 +221,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    max-width on the item used to. */
 .insp-row{display:grid;grid-template-columns: 1fr auto;
   align-items:center;column-gap:8px;row-gap:2px;padding:2px 4px; transition: 200ms background-color; margin: 0px -4px;}
-.insp-row-lab{font-size:var(--t7);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
+.insp-row-lab{font-size:var(--t7);text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.insp-row-val{font-size:var(--t8-5);text-align:right;white-space:nowrap;
+.insp-row-val{font-size:var(--t7);text-align:right;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 /* what the option under the pointer would do to this row - see prevDelta().
    ON A MEASURED LIST THE SLOT IS ALWAYS THERE, empty or not: a delta that
@@ -272,6 +272,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   display:flex;flex-direction:column;gap:6px}
 .db-panel-body{display:flex;flex-direction:column;gap:8px}
 .db-block{display:flex;flex-direction:column;}
+.db-field{display:grid;grid-template-columns:1fr 2fr; gap: 7px;}
+.db-field>.kit-rule{letter-spacing:0;margin:0; padding-top:5px;}
+.db-field>.kit-toggle>.kit-toggle-label{display:none}
 .db-note{margin:0;font-size:var(--t8-5);color:var(--c-ink2);line-height:1.4}
 /* six reactor presets and six pens do not fit one rail-wide line, and a row
    that overflows loses its last button entirely - so both rows wrap */
@@ -360,28 +363,17 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-pan{position:absolute;pointer-events:auto;background:var(--c-panel);
   transform-origin:0 0;contain:layout paint}
 .margin-pan .kit-well-body{padding:6px 6px 7px}
-/* the bench panel carries every knob, so it uses the rail's own block layout */
-.margin-pan .db-panel-body{display:flex;flex-direction:column;gap:0px}
-/* A TALL PANEL GETS MORE COLUMNS, not a second screen of height - marginCols()
-   sets --margin-cols and the width to match. Columns are a block layout, so the
-   flex gap above becomes a margin. */
-.margin-pan.cols .db-panel-body{display:block;
-  column-count:var(--margin-cols,2);column-gap:8px}
-.margin-pan.cols .db-panel-body>*{break-inside:avoid;}
-/* A PANEL THAT STATES ITS OWN SHAPE flows nowhere: the "box" blocks are the
-   layout, so the column rules above are stood down whatever the width is. */
-.margin-pan.cols .db-panel-body.db-body-tree{display:flex;flex-direction:column;
-  column-count:auto;gap:7px}
-.margin-pan.cols .db-panel-body.db-body-tree>*{margin-bottom:0}
+.margin-pan .db-panel-body.db-body-tree{display:flex;flex-direction:column;gap:7px}
+.margin-pan .db-panel-body.db-body-tree>*{margin-bottom:0}
 /* what hangs off a panel's title bar - the "menu" block (design-bench.js) */
 .db-panel-head{display:flex;gap:4px;margin-left:8px}
 .db-panel-head .kit-menukey-menu{min-width:280px}
-.db-box-row{display:flex;flex-direction:row;align-items:flex-start;gap:8px}
-.db-box-col{display:flex;flex-direction:column;gap:7px}
-.db-box-row>*,.db-box-col>*{min-width:0}
-/* where a panel's columns are cut - the "colbreak" block (design-bench.js) */
-.db-colbreak{height:0;margin:0!important;break-before:column}
-.margin-pan:not(.cols) .db-colbreak{display:none}
+.db-grid{display:grid;gap:8px;align-items:stretch;
+  grid-template-columns:repeat(var(--db-grid-cols,1),minmax(min(260px,100%),1fr))}
+.db-section{display:flex;flex-direction:column;gap:0px;min-width:0;min-height:0;
+  grid-column:span var(--db-span,1);grid-row:span var(--db-rowspan,1)}
+.db-rail .db-grid{--db-grid-cols:1}
+.db-rail .db-section{--db-span:1;--db-rowspan:1}
 .margin-pan .kit-rule-head{padding:8px;font-size:var(--t8)}
 .margin-board .db-panel-body{max-height:46vh;overflow-y:auto}
 /* the controls that used to stand on the machine box, in the widget kit's own
@@ -410,10 +402,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 
 /* ── the controller's automation section (render/ctlgraph.js) ── */
 .ctlg{display:flex;flex-direction:column;gap:4px}
-/* the automation is a drawing, so it takes the whole width of a panel that
-   flows its other blocks in columns (marginCols) instead of one column of it */
-.margin-pan.cols .db-panel-body>.margin-ctlgraph,
-.margin-pan.cols .db-panel-body>.ctlg{column-span:all}
 /* the picture takes the whole width - every column it gets is a controller
    that would otherwise be stacked - and the editor lies under it, its rows
    flowed across rather than down so it stays a couple of rows deep */

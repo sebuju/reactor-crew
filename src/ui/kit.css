@@ -9,10 +9,16 @@
 .kit-well-body{padding:8px 6px}
 .db-vitals .kit-well-body{padding:8px 6px;}
 
-.kit-rule{display:flex;align-items:center;gap:7px;margin:0 0 3px;
+.kit-rule{display:flex;align-items:flex-start;gap:7px;margin:0 0 3px; justify-content: space-between;
   color:var(--kit-rule-color,var(--c-ink2));font-size:var(--t8);
-  letter-spacing:2px;text-transform:uppercase;white-space:nowrap}
-.kit-rule::after{content:"";flex:1 1 auto;height:1px;background:var(--c-edge2)}
+  letter-spacing:2px;text-transform:uppercase;}
+.kit-sliderrow > .kit-rule {letter-spacing: 0;margin:0;}
+/* .kit-rule{display:flex;align-items:center;gap:7px;
+  color:var(--kit-rule-color,var(--c-ink2));font-size:var(--t8);
+  text-transform:uppercase;white-space:nowrap} */
+/* .kit-rule::after{content:"";flex:1 1 auto;height:1px;background:var(--c-edge2)} */
+
+.kit-sliderrow {display: grid;grid-template-columns: 1fr 2fr auto;align-items:center;gap:8px;}
 
 /* the rule a well() builds for its own title. It sits OUTSIDE .kit-well-body,
    so it carries its own padding, and since the well lost its border this bar
@@ -105,16 +111,16 @@
 .kit-btn-danger{background:var(--c-red);border-color:var(--c-red);color:var(--c-ink-on-red);font-weight:700}
 .kit-btn-danger:hover{background:var(--c-red-hi);border-color:var(--c-red-hi)}
 
-.kit-optlist {}
+/* .kit-optlist {outline: 1px solid var(--c-panel-hi); outline-offset: -1px;} */
 .kit-optlist-row,.kit-segsel-cell{display:flex;align-items:center;width:100%;box-sizing:border-box;
   appearance:none;border:0;cursor:pointer;font:inherit;text-align:left;
-  padding:0 7px;height:23px;background:var(--c-panel);color:var(--c-ink)}
+  padding:0 1px;height:22px;background:var(--c-panel);color:var(--c-ink)}
 .kit-optlist-row:hover,.kit-segsel-cell:hover{background:var(--c-panel-hi)}
 .kit-optlist-row:hover:not(.on) > .kit-dot {background:var(--c-panel) !important;}
 .kit-optlist-row.on,.kit-segsel-cell.on{color:var(--c-amber)}
 .kit-segsel-cell.on{outline:1px solid var(--c-amber); outline-offset: -1px;}
 .kit-optlist-row .kit-dot{margin-right:8px}
-.kit-optlist-name{flex:1 1 auto;font-size:var(--t8-5);letter-spacing:.3px}
+.kit-optlist-name{flex:1 1 auto;font-size:var(--t7);}
 .kit-optlist-mass{font-size:var(--t8);color:var(--c-ink2)}
 .kit-optlist-row.on .kit-optlist-mass{color:var(--c-amber)}
 .kit-optlist-mass.min{color:var(--c-green)}
@@ -128,7 +134,7 @@
 /* actual (native range thumb) vs demand (the caret overlay): a rate-limited
    control has to say both, or the readout lies while the plant is still
    walking toward the order. */
-.kit-slider{display:flex;align-items:center;gap:8px}
+.kit-slider{display:grid;align-items:center;gap:8px; grid-template-columns: 1fr 50px;}
 .kit-slider-track{position:relative;flex:1 1 auto;height:22px}
 /* the same 15px cell box the seg and the band use, centred in the 22px track */
 .kit-slider-cells{position:absolute;top:4px;left:0;height:15px}
@@ -137,10 +143,10 @@
 .kit-slider-input{appearance:none;-webkit-appearance:none;position:absolute;inset:0;width:100%;
   height:100%;margin:0;background:transparent;cursor:pointer}
 .kit-slider-input::-webkit-slider-runnable-track{background:transparent;height:22px}
-.kit-slider-input::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:22px;
+.kit-slider-input::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:14px;margin-top:4px;
   background:var(--c-amber);cursor:pointer}
 .kit-slider-input::-moz-range-track{background:transparent;height:22px}
-.kit-slider-input::-moz-range-thumb{width:3px;height:22px;border:0;background:var(--c-amber);cursor:pointer}
+.kit-slider-input::-moz-range-thumb{width:3px;height:14px;border:0;background:var(--c-amber);cursor:pointer}
 /* RESERVED, NOT MEASURED: the readout is sized off the longest string fmt can
    produce, not off the current one. Content-driven, the track (flex:1 1 auto)
    would resize under the hand every time "9%" became "100%". */
@@ -155,38 +161,38 @@
 .kit-textinput-input:focus{outline:none;border-color:var(--c-amber)}
 .kit-textinput-input::placeholder{color:var(--c-ink2)}
 
-.kit-sliderrow{margin-bottom:8px}
+/* .kit-sliderrow{margin-bottom:8px} */
 .kit-rule-sfx.kit-mass-min{color:var(--c-green)}
 
 .kit-readout{margin-bottom:8px}
 .kit-readout-val{display:block;text-align:right;font-size:var(--t10);color:var(--c-cyan)}
 
 .kit-toggle{display:flex;align-items:center;width:100%;box-sizing:border-box;appearance:none;
-  border:0;cursor:pointer;font:inherit;text-align:left;height:28px;padding:2px 7px;
-  margin-bottom:2px;background:var(--c-well);color:var(--c-ink)}
-.kit-toggle:hover{background:var(--c-panel-hi)}
-.kit-toggle.on{background:var(--c-on-green);color:var(--c-green)}
+  border:0;cursor:pointer;font:inherit;text-align:left;height:22px;padding:0; justify-content: space-between;
+  background:transparent;color:var(--c-ink)}
+.kit-toggle.on:hover .kit-toggle-mark{background:var(--c-amber); opacity: 0.25;}
+.kit-toggle:not(.on):hover .kit-toggle-mark{background:var(--c-amber); opacity: 0.75;}
+.kit-toggle.on{color:var(--c-amber)}
 .kit-toggle-mark{width:7px;height:7px;margin-right:8px;background:var(--c-edge2)}
-.kit-toggle.on .kit-toggle-mark{background:var(--c-green)}
-.kit-toggle-label{flex:1 1 auto;font-size:var(--t8);letter-spacing:.3px}
-.kit-toggle-mass{font-size:var(--t8);color:var(--c-ink2)}
+.kit-toggle.on .kit-toggle-mark{background:var(--c-amber)}
+.kit-toggle-label{flex:1 1 auto;font-size:var(--t7);}
+.kit-toggle-mass{font-size:var(--t7);color:var(--c-ink2)}
 
 /* the kit's numeric field - see numInput() in kit.js */
-.kit-numinput{display:flex;align-items:center;gap:5px}
-.kit-numinput-input{flex:1 1 auto;min-width:0;box-sizing:border-box;appearance:none;
+.kit-numinput{display:flex;align-items:center;gap:5px;min-width:0}
+.kit-numinput-input{flex:1 1 0;min-width:0;box-sizing:border-box;appearance:none;
   border:1px solid var(--c-edge);background:var(--c-well);color:var(--c-bright);
-  font:inherit;font-size:var(--t8-5);letter-spacing:.3px;padding:3px 6px;height:22px;
+  font:inherit;font-size:var(--t7);padding:3px 6px;
   text-align:right}
 .kit-numinput-input:hover{border-color:var(--c-edge2)}
 .kit-numinput-input:focus{outline:none;border-color:var(--c-amber)}
-.kit-numinput-unit{flex:0 0 auto;font-size:var(--t9);color:var(--c-ink2);white-space:nowrap}
-.kit-rule .kit-numinput-suggest{height:14px;padding:0 4px;letter-spacing:.4px}
+.kit-numinput-unit{flex:0 0 22px;font-size:var(--t7);color:var(--c-ink2);white-space:nowrap}
 .kit-numinput-suggest{flex:0 0 auto;appearance:none;cursor:pointer;
   border:1px solid var(--c-edge);background:transparent;color:var(--c-ink2);
-  font:inherit;font-size:var(--t9);letter-spacing:.5px;padding:2px 6px;height:22px}
+  font:inherit;font-size:var(--t7);letter-spacing:.5px;padding:3px 6px;}
 .kit-numinput-suggest:hover{border-color:var(--c-cyan);color:var(--c-cyan)}
 .kit-numinput-suggest.on{border-color:var(--c-amber);color:var(--c-amber)}
-.kit-numinput-input:disabled{color:var(--c-ink2);border-style:dashed;cursor:not-allowed}
+.kit-numinput-input:disabled{color:var(--c-ink2);cursor:not-allowed}
 
 /* a key with a panel hanging under it - see menuKey() in kit.js. The panel is
    out of flow, so opening one never moves the key beside it. */
