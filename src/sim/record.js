@@ -214,7 +214,10 @@ const ACT = {
      Guarded exactly like ACT.tankOpen: a tape naming a port this design never
      had is a no-op, not a phantom key on S. */
   portShut : {lab:"PORT VALVE",   part:pid=>"port:"+pid,   log:pid=>portLabel(pid)+" "+(S.portShut[pid]?"OPENED":"SHUT"),
-              apply:(s,pid)=>{ if(s.portShut[pid]!==undefined) s.portShut[pid]=!s.portShut[pid]; }},
+              apply:(s,pid)=>{ if(s.portShut[pid]===undefined) return;
+                s.portShut[pid]=!s.portShut[pid];
+                // the line behind the valve goes with it - see portShiftKg() (pipenet.js)
+                portShiftKg(s,pid); }},
   tankDump : {lab:"TANK DUMP",    part:id=>id,    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" DUMP "+(S.tankDump[id]?"SHUT":"OPEN"),
               apply:(s,id)=>{ if(s.tankDump[id]!==undefined) s.tankDump[id]=!s.tankDump[id]; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
@@ -807,10 +810,18 @@ function simTick(){
 /* Counted here and not in simFrame() so a scenario drain, which steps the plant
    on its own budget, is in the figure too. Averaged over a window: a frame's own
    tick count divided by a frame's own dt is a number that never settles. */
-let spsN=0, spsT=0;
+/* THE PART TICK AT EACH END OF THE WINDOW IS COUNTED, or the reading beats
+   against the tick grid: 0.5X owes 12.5 ticks per half second, so a whole-tick
+   count alternates 12, 13 and the readout alternates 24, 26 TPS on a plant that
+   is holding 25 exactly. The accumulator IS that fraction - plant time owed and
+   not yet stepped - so the window is closed with the debt it carries across
+   each boundary. Still achieved and not asked for: a machine that cannot hold
+   the rate grows the debt to TR_DEBT_MAX and the clamp throws the rest away,
+   so a sustained shortfall lands in the figure within a window of appearing. */
+let spsN=0, spsT=0, spsAcc0=0;
 function spsFrame(dt){
   spsT += dt;
-  if(spsT>=0.5){ TR.sps = spsN/spsT; spsN=0; spsT=0; }
+  if(spsT>=0.5){ TR.sps=(spsN+(simAcc-spsAcc0)/0.02)/spsT; spsN=0; spsT=0; spsAcc0=simAcc; }
 }
 /* ══════════ WHAT THIS MACHINE CAN ACTUALLY HOLD ══════════
    A rate is a PROMISE of plant seconds per second, and a big plant on a slow
@@ -883,7 +894,7 @@ const trClockRate = () => TR.paused ? 0
    actually got done. */
 function simFrame(dt){
   spsFrame(dt);
-  if(!P || !SIMSCREEN[screen]){ simAcc=0; return false; }
+  if(!P || !SIMSCREEN[screen]){ simAcc=spsAcc0=0; return false; }
   /* once a frame, whether or not one is painted: the ticks below read the
      cached design signatures and this is the pass that proves them (layFresh(),
      layout.js). A VLD run paints nothing and would otherwise never ask. */
@@ -891,11 +902,11 @@ function simFrame(dt){
   /* a scenario draining takes the whole frame: it is already stepping the
      plant on its own budget, and letting the live accumulator step it too
      would run the run at two speeds at once. */
-  if(scnBusy()){ simAcc=0; scnDrain(); return true; }
+  if(scnBusy()){ simAcc=spsAcc0=0; scnDrain(); return true; }
   if(TR.paused){
     /* paused still honours a single-step, and still keyframes - otherwise a
        plant nudged forward one tick at a time would never lay one down */
-    simAcc=0;
+    simAcc=spsAcc0=0;
     let k=0;
     while(TR.step1>0){ TR.step1--; if(!recPlay()) break; simTick(); k++; }
     recTick(); return k>0;
@@ -903,7 +914,7 @@ function simFrame(dt){
   if(TR.rate===Infinity||TR.rate===TR_VLD){
     /* no accumulator at all: an unbounded rate owes an unbounded number of
        ticks, so the debt is meaningless and carrying it would only shed it. */
-    simAcc=0;
+    simAcc=spsAcc0=0;
     const vld=TR.rate===TR_VLD;
     // armed here, so the stash is the plant one tick before the run
     if(vld && !TR.vldSeen){ TR.vldSeen=trAnnSet(); TR.vldRev=S.annRev; }
@@ -939,7 +950,7 @@ function simFrame(dt){
        recorded acts and refuses once the tape runs out. A replay that ran on
        past its end would be simulating a future nobody recorded and filing it
        as one. */
-    if(!recPlay()){ simAcc=0; TR.paused=true; break; }
+    if(!recPlay()){ simAcc=spsAcc0=0; TR.paused=true; break; }
     simTick();
     simAcc-=0.02; n++;
   }
@@ -953,7 +964,10 @@ function simFrame(dt){
   recTick();                       // once a frame, after the ticks it covers
   return n>0;
 }
-const trRate=r=>{ TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=null; TR.vldRev=0; };
+/* 0X is the stopped slot, and stopped is TR.paused - the rate it was running at
+   is kept, so leaving 0X is a rate the strip already had. */
+const trRate=r=>{ if(r===0){ TR.paused=true; return; }
+  TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=null; TR.vldRev=0; };
 const trPause=()=>{ TR.paused=!TR.paused; };
 /* shift is ten, on both keys and both buttons: one 0.02 s tick is the right
    grain to look at and the wrong grain to travel in. */
