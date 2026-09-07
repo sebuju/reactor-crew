@@ -67,9 +67,9 @@ function headless(exportSrc, opts){
    kind of duplication that drifts - so both shapes are written ONCE, here,
    beside headless(), which is the only module every headless tool already loads.
 
-   These build nothing the bench cannot: addFitting(), addPortAt() and
-   pipeLay() are the same calls the context menu and the pipe drag make, and
-   seedPort()/seedRun() are the stock seeder's own two wrappers over them.
+   These build nothing the bench cannot: addFitting() and addPortAt() are the
+   context menu's own calls, and seedRun() is ADD PIPE - mint the run, let
+   runLay() route it.
    M is a headless() export bag and must carry D, LAY, pipeMap, buildLayout,
    addFitting, seedPort and seedRun.
 
