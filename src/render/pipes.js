@@ -322,28 +322,25 @@ function pipeFieldRefresh(L){
   if(!L) return;
   netField(L, pipeDrop, pipeP, pipeKg);
 }
-/* Pressure on a RUN rather than at a node: the mean of its two ends, which is
-   what a gauge tapped into the middle of it would read. null for a TAP-ENDED
-   run - one whose key names no second node, i.e. the surge line - so a caller
-   draws nothing rather than a zero. Every run with two ends has an edge and
-   two nodes, steam and feed included; runEnds() is the whole test. */
+/* ══ A RUN STATES ONE PRESSURE, AND IT IS ITS OWN ══
+   This was the mean of the run's two MACHINE nodes, which averaged two figures
+   a shut port valve was holding apart: a deadheaded feed pump at 7.587 MPa and
+   a tee at 4.361 on the far side of the valve printed 5.974, and no gauge on
+   the plant read it. The run is a node now, so this is a read.
+   A HOLED RUN NEEDS NO SPECIAL CASE EITHER: the hole is an edge off this same
+   node, so what the field says it is standing at IS containment - solved,
+   rather than asserted by the drawing.
+   null for a TAP-ENDED run - one whose key names no second node, i.e. the
+   surge line - so a caller draws nothing rather than a zero. */
 function pipeRunP(r,L){
-  /* A CUT RUN HOLDS NOTHING. Its two ends are still nodes on a live circuit,
-     so the mean of them printed the reactor's own pressure on a length of pipe
-     lying open in the compartment. What is in it is at containment, which is
-     where every other opening on this plant sits. */
-  if(runCut(r,L)) return P.Pcont;
-  const ends=runEnds(r.key,r.k);
-  if(!ends) return null;
-  const a=pipeP[coreFold(ends[0])], b=pipeP[coreFold(ends[1])];
-  if(a===undefined||b===undefined) return null;
+  const p=pipeP[runNodeOf(r.key)];
   /* NOT FLOORED AT ZERO, and that was a mistake worth naming: clamping it
      printed a suction line whose water column has broken as a tidy 0 kPa,
      which reads as a perfect vacuum - a confident wrong number in place of a
      fault. A negative absolute pressure is the field saying the liquid there
      cannot hold itself up and would flash, and that is exactly what a
      condensate pump mounted above its own hotwell gets. Let it say so. */
-  return (a+b)/2;
+  return p===undefined ? null : p;
 }
 /* Subcooling on a run: how far the water in it is below its own local boiling
    point. The same two questions asked at the same place - tsat() of the
@@ -353,38 +350,33 @@ function pipeRunP(r,L){
    built from the runs and component paths touching each node - never because
    its kind is spelt "steam". Splice a fitting into the steam line and the runs
    either side of it answer yes with nothing named. */
-const runVapour = ends =>
-  !!ends && netVapourAt(coreFold(ends[0])) && netVapourAt(coreFold(ends[1]));
+const runVapour = key => netVapourAt(runNodeOf(key));
 function pipeRunSc(r,L){
   const pr=pipeRunP(r,L);
   if(pr===null) return null;
-  const ends=runEnds(r.key,r.k);
   /* THE SECONDARY BOILS ON THE WATER CURVE, and it is the same mistake secP()
      used to make: tsat() is the PRIMARY coolant's curve, anchored on whatever
      that architecture boils at, and asking it about a steam line read -12 K of
      subcooling on a healthy plant. A VAPOUR run is saturated by definition -
      that is what makes it vapour - so it reads exactly 0 rather than a
      difference between two numbers that are the same one. */
-  const a=coreFold(ends[0]), b=coreFold(ends[1]);
-  if(runVapour(ends)) return 0;
+  if(runVapour(r.key)) return 0;
   /* THE CIRCUIT'S OWN CURVE, and the run's own MEASURED temperature. This used
      to pick between two curves off which side of the tubes the run was on and
      then subtract a two-state tag; both halves are real now - the fluid is a
      property of the circuit and the temperature is what the enthalpy at those
      two nodes says. */
-  const sat = satT(satOfCirc(circOfNode(a)), pr), t = pipeRunT(r,L);
+  const sat = satT(satOfCirc(circOfNode(runNodeOf(r.key))), pr), t = pipeRunT(r,L);
   return t===null ? null : sat - t;
 }
-/* AND THE TEMPERATURE ITSELF, K - the mean of the run's own two ends off the
-   enthalpy field. The margin (pipeRunSc) is a DIFFERENCE and was the only
-   thing a run ever printed about its heat: a hot leg at 583 K and a feed line
-   at 320 K both read "plenty of subcooling" and nothing said which was which.
-   One expression, two readers, so the temperature and the margin cannot
-   disagree about what is in the pipe. */
+/* AND THE TEMPERATURE ITSELF, K - off the run's own node. The margin
+   (pipeRunSc) is a DIFFERENCE and was the only thing a run ever printed about
+   its heat: a hot leg at 583 K and a feed line at 320 K both read "plenty of
+   subcooling" and nothing said which was which. One expression, two readers,
+   so the temperature and the margin cannot disagree about what is in the pipe. */
 function pipeRunT(r,L){
-  const ends=runEnds(r.key,r.k);
-  if(!ends || !L) return null;
-  const t=(netTempAt(L,coreFold(ends[0])) + netTempAt(L,coreFold(ends[1])))/2;
+  if(!L || !runEnds(r.key,r.k)) return null;   // a tap-ended run has no node of its own
+  const t=netTempAt(L,runNodeOf(r.key));
   return isFinite(t) ? t : null;
 }
 let pipeT=null, pipeDt=0;
@@ -497,7 +489,7 @@ function runTankId(key){
 function pipeRunKg(key,k,L){
   const r = P.net && P.net.byKey[key];
   if(r && L && !runPortsOpen(L,r)) return 0;
-  const b = runVapour(runEnds(key,k)) ? steamBook(key,k) : null;
+  const b = runVapour(key) ? steamBook(key,k) : null;
   if(b && b.vent){ let q=0;
     for(const fid of b.taps) q += (L && L.reliefSteam && L.reliefSteam[fid]) || 0;
     return q*steamDir(key,k); }
@@ -599,40 +591,45 @@ function pipeUnit(key,k){
   /* `dir` is the run's own DESIGN direction along the key's canonical order.
      The needle judges "backwards" against that, not against the order two part
      ids happened to sort in - see steamDir() (step.js). */
-  if(runVapour(ends))
+  if(runVapour(key))
     return {nom:steamScale(key,k), u:"kg/s", dir:steamDir(key,k)};
   return null;
 }
-/* ══ WHAT IS ACTUALLY IN THIS RUN, AT EACH OF ITS OWN TWO ENDS ══
+/* ══ WHAT IS ACTUALLY IN THIS RUN ══
    netQualAt() is the quality the field carries at a node, so this is the run
    asked about itself. It returns null where there is nothing to ask - a run
-   with no edge in the graph carries nothing and says so. It used to fall back
+   with no node in the graph carries nothing and says so. It used to fall back
    on edgeLaw()===LAW_VAPOUR, which is the DESIGN label: a steam line drawn to
    a shell that is not boiling read as steam because of what it was for, which
    is the one thing this whole reading exists to stop.
-   Per END, not a Math.max over both: a run is one pipe with two ends at two
-   states and the drawing shows the change along it (pipePhaseCol, below). */
+   ONE STATE, BECAUSE THE PIPE IS ONE NODE. This read the two MACHINES the run
+   lands on and drew a gradient between them, which is a change the model does
+   not carry and, worse, is not the pipe's: every preset drew the turbine
+   exhaust half LIQUID because its far end is a condenser pool, over a line the
+   field says is x=1.000 steam. A pair is still returned so the gradient stroke
+   needs no special case; a run that really does change along its length wants
+   more than one node, not a second machine's state painted on its end. */
 function pipePhase(r,L){
   /* THE BENCH HAS NO P AT ALL until something commissions, and it draws the
      same runs this does - so the plant's own state is asked for here and
      answered null, never assumed. */
   const net=(typeof P!=="undefined" && P) ? P.net : null;
-  if(!net || !L) return null;
-  for(const ed of net.edges) if(ed.key===r.key)
-    return [clamp(netQualAt(L,net.name[ed.u]),0,1), clamp(netQualAt(L,net.name[ed.v]),0,1)];
-  return null;
+  const nid=runNodeOf(r.key);
+  if(!net || !L || net.index[nid]===undefined) return null;
+  const q=clamp(netQualAt(L,nid),0,1);
+  return [q,q];
 }
 // the one figure the parcels want: how vapour the run is as a whole
 const pipeSteam=(r,L)=>{ const q=pipePhase(r,L); return q ? (q[0]+q[1])/2 : 0; };
-/* WHAT IS STANDING IN THE RUN, kg - its own bore and length at the density of
-   its two ends. A READING: the volume itself is split onto those two nodes
-   (netBuild), so the pipe keeps no book of its own to disagree with. */
+/* WHAT IS STANDING IN THE RUN, kg - the run's own node, off the mass field.
+   A READING of the one book that owns it: the volume is the run node's, so
+   this is s.mBy at that node and not a density product standing beside it. */
 function pipeRunHoldKg(r,L){
   const net=(typeof P!=="undefined" && P) ? P.net : null;
-  if(!net || !L) return null;
-  for(const ed of net.edges) if(ed.key===r.key)
-    return runVol(r)*(netRhoAt(L,net.name[ed.u])+netRhoAt(L,net.name[ed.v]))/2;
-  return null;
+  const nid=runNodeOf(r.key);
+  if(!net || !L || net.index[nid]===undefined) return null;
+  const m=L.mBy && L.mBy[nid];
+  return m===undefined ? runVol(r)*netRhoAt(L,nid) : m;
 }
 /* AND WHAT A MACHINE IS HOLDING, kg - every node the solve gave it, each one
    asked of whichever book OWNS it (bookedKg): a shell's water, its steam space
