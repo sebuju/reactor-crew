@@ -434,7 +434,7 @@ const flowW = (C, rho, pHi, pLo) => C > 0
   ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(Math.min(pHi-pLo, (1-RCRIT)*Math.max(pHi,0)), 0)*1e6)
   : 0;
 let FLOWG_CHOKE = false;          // set by flowG(), spent by edgeG() on the next line
-const flowG = (C, F, u, v, h, diode, hSrc) => {
+const flowG = (C, F, u, v, h, diode, hSrc, chokeAt) => {
   FLOWG_CHOKE = false;
   if(!(C > 0)) return 0;
   /* THE DRIVING DIFFERENTIAL INCLUDES THE HEAD, and it has to: netFlows()
@@ -466,7 +466,14 @@ const flowG = (C, F, u, v, h, diode, hSrc) => {
      the total, an edge chokes only where its two ends sit at exactly the same
      height, which held the choke off the turbine's own swallow. And on the
      source's VALUE this tick: a stopped pump is a length of pipe. */
-  const choke = !hSrc && F.x && F.x[up] > 0;
+  /* ══ A CONSTANT-AREA DUCT CHOKES ONCE, AT ITS EXIT ══
+     Fanno flow. A run is two half edges in series now, and left alone both
+     would cap - once at the machine's pressure and again at the run node's
+     lower one - so a steam line would pass less than the one pipe it is.
+     `chokeAt` is the run's own node: the half whose DONOR is that node is the
+     one the flow leaves by, and only it expands. The inlet half is plain pipe.
+     Absent on every other edge, which caps as it always did. */
+  const choke = !hSrc && F.x && F.x[up] > 0 && (chokeAt === undefined || up === chokeAt);
   const eff = Math.max(choke ? Math.min(a, (1-RCRIT)*pHi) : a, floor);
   /* AND WHETHER THE CAP ACTUALLY BIT, for the meter to say so. Read off THIS
      expression rather than re-derived beside it: a second copy of the test is
@@ -515,20 +522,6 @@ function netFieldSize(F, n){
    tankP -> holdLive -> netFixed -> netRef -> netPieces -> netLiveSig ->
    tankLive -> tankP closes through here and is a stack overflow on tick one. */
 const DRY_FRAC = 1e-3, DRY_MIN_KG = 1e-6;
-/* ══ WHAT THIS NODE HOLDS RIGHT NOW, m3 ══
-   A port valve stands AT THE MACHINE FACE, so the run is on its far side: shut
-   it and the machine keeps its own casing and nothing else. Half of every run
-   was booked inside the machine whatever the valve did, which is how an
-   isolated feed pump went on emptying six cubic metres of line it could not
-   reach. The water leaves with the volume (portShiftKg) so turning a valve
-   moves no density and no pressure - only where the inventory is. */
-function netVolAt(net, s, i){
-  const at = net.runsAt && net.runsAt[i];
-  if(!at || !s || !s.portShut) return net.vol[i];
-  let v = net.volPart[i];
-  for(let k=0;k<at.length;k++) if(portOpen(s, at[k].mine)) v += at[k].vol/2;
-  return v > 1e-3 ? v : 1e-3;
-}
 const netNodeDry = (net, s, i, rho) => {
   const nid = net.name[i], m = s && s.mBy ? s.mBy[nid] : undefined;
   /* AGAINST WHAT THIS NODE WOULD HOLD, never against a typed density. A
@@ -536,7 +529,7 @@ const netNodeDry = (net, s, i, rho) => {
      kg/m3 floor read every low-backpressure machine's exhaust as spent, cut
      its own inlet edge, and left five of the nine presets making no power at
      all. A fraction of the quantity's own reference, both ways. */
-  const eos = netVolAt(net, s, i)*(rho === undefined ? netRhoAt(s, nid) : rho);
+  const eos = net.vol[i]*(rho === undefined ? netRhoAt(s, nid) : rho);
   /* AND A NEAR-VACUUM IS NOT A SPENT STORE. This curve puts a milligram of
      steam in a turbine exhaust at 8 kPa, so its mass is noise and every
      comparison against it is too: the gate is about somewhere with something
@@ -647,7 +640,7 @@ const edgeG = (net, ed, s) => {
   const C = typeof ed.C === "function" ? ed.C(s) : ed.C;
   const h = C > 0 ? (typeof ed.h === "function" ? ed.h(s) : (ed.h || 0)) : 0;
   const hSrc = C > 0 && ed.hSrc ? ed.hSrc(s) : 0;
-  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc) : 0;
+  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc, ed.chokeAt) : 0;
   if(net.choke && ed.i !== undefined) net.choke[ed.i] = (g > 0 && FLOWG_CHOKE) ? 1 : 0;
   return g;
 };
@@ -773,37 +766,12 @@ const cellBroken = (s, x, y) => {
    fittings keep, and what netAssemble's g<=0 skip is there for. */
 const portOpen    = (s, pid) => !(s.portShut && s.portShut[pid]);
 const runPortsOpen = (s, r)  => portOpen(s, r.pa) && portOpen(s, r.pb);
-/* ══ AND THE WATER BEHIND A SHUT VALVE IS STILL THERE ══
-   The half-run netVolAt() takes off the machine has kilograms in it, and they
-   do not evaporate because somebody turned a handle: they are set aside on the
-   valve that isolated them, counted in ledgerKg() like any other book, and
-   handed back when it opens. Taken as a FRACTION of the node's own holdup, so
-   the density either side of the move is the one it already had. */
-function portShiftKg(s, pid){
-  const net = (typeof P!=="undefined" && P) ? P.net : null;
-  if(!net || !net.runsAt || !s.mBy || !s.portKg) return;
-  const shut = !portOpen(s, pid), on = [];
-  for(let i=0;i<net.n;i++){ const at = net.runsAt[i]; if(!at) continue;
-    for(const r of at) if(r.mine === pid) on.push([i, r.vol/2]); }
-  if(!on.length) return;
-  if(shut){
-    let kg = 0, h;
-    for(const [i, half] of on){ const nm = net.name[i], m = s.mBy[nm];
-      if(m === undefined) continue;
-      const dm = m*half/(netVolAt(net, s, i) + half);
-      s.mBy[nm] = m - dm; kg += dm; if(h === undefined) h = s.hBy[nm]; }
-    s.portKg[pid] = (s.portKg[pid] || 0) + kg;
-    if(h !== undefined) s.portH[pid] = h;
-    return;
-  }
-  const kg = s.portKg[pid] || 0; if(!(kg > 0)) return;
-  s.portKg[pid] = 0;
-  const each = kg/on.length, hp = s.portH[pid];
-  for(const [i] of on){ const nm = net.name[i], m = s.mBy[nm] || 0;
-    if(hp !== undefined && s.hBy[nm] !== undefined && m + each > 0)
-      s.hBy[nm] = (m*s.hBy[nm] + each*hp)/(m + each);
-    s.mBy[nm] = m + each; }
-}
+/* ══ AND A WRECKED VALVE BODY IS NOT ISOLATION ══
+   It is an opening: it passes, and it discharges at its own cell besides
+   (runHoled(), below). So the edge between a machine and its own run node is
+   live on this rather than on portOpen() alone, and the same predicate answers
+   for the break hanging off that valve. */
+const portLive = (s, pid) => portOpen(s, pid) || portWrecked(s, pid);
 
 /* ══════════ A TUBE RUPTURE IS A DIFFERENTIAL LEAK ══════════
    An SGTR is THE pressure-difference leak: a primary at 15.5 MPa bleeding
@@ -1857,9 +1825,14 @@ const pipeExtraLen = (s, cells) => {
    wrecked ACTUATOR does, and that is a different fault from a dead one.
    Asked of anything carrying cells and its two ports - a run, and a
    steamBreaks row, which is the same three fields. */
+/* IT IS NO LONGER A RESISTANCE. A holed run used to price its own conductance
+   at Infinity - a stand-in for physics, because with no node in the middle the
+   only way to stop water crossing a torn pipe was to stop the pipe conducting.
+   The run has a node now and the hole is a real edge off it, so both halves go
+   on conducting INTO the hole. What is left of this is the readers' question:
+   is this pipe lying open. */
 const runHoled = (s, r) => pipeExtraLen(s, r.cells) === Infinity
                         || portWrecked(s, r.pa) || portWrecked(s, r.pb);
-const runExtraLen = (s, r) => runHoled(s, r) ? Infinity : 0;
 
 /* ══════════ FIT: one row per fitting BEHAVIOUR ══════════
    Same idiom as LAYERS (render/layers.js), DMGFX and AUTOSYS (sim/step.js):
@@ -2002,6 +1975,18 @@ function runEnds(key, kind){
   e = i < 0 ? null : [rest.slice(0, i), rest.slice(i + 1)];
   RUN_ENDS.set(key, e); return e;
 }
+/* ══ AND THE RUN ITSELF IS A NODE ══
+   A pipe was an EDGE and nothing else, so it had no pressure, no inventory and
+   no state: its volume was split in half onto the machine at each end, and a
+   drawing asked what a run was holding averaged two nodes a shut valve was
+   holding apart. It has a node of its own now, named off its key, with its own
+   volume, its own steel and its own two edges - and the port valve at each
+   machine face is one of those edges rather than a volume trick. */
+const RUN_PRE = "run:";
+const runNodeOf   = key => RUN_PRE + key;
+const runKeyOfNode = nid => nid.indexOf(RUN_PRE) === 0 ? nid.slice(RUN_PRE.length) : null;
+// a run key IS "kind:a-b", so the kind runEnds() wants is in the key already
+const runNodeEnds = key => runEnds(key, key.slice(0, key.indexOf(":")));
 
 // core"r" and core"b" are the SAME node: today's lumped model has one core
 // plenum, r_core=0, and that identity is what makes a no-junction plant
@@ -2041,6 +2026,11 @@ function circOfNode(nid){
   const G=nodeGraph(), slot=graphSlot("circOfNode");
   const hit=slot.get(nid); if(hit!==undefined) return hit;
   let c=G.circuit[nid];
+  /* A RUN NODE BELONGS TO NO PART, so it is asked of the RUN. nodeGraph() is a
+     design-time walk over parts and faces and never sees one, and the partOf()
+     fallback below would answer -1 for every pipe on the plant. */
+  if(c===undefined){ const rk=runKeyOfNode(nid);
+    if(rk){ const e=runNodeEnds(rk); if(e) c=circOfNode(coreFold(e[0])); } }
   if(c===undefined){
     const p=partOf(nid) || partOf(nid.slice(0,-1));
     if(p) for(const n of (G.nodesOf[p.id]||[])){ if(n===nid || n.slice(0,-1)===p.id){ c=G.circuit[n]; break; } }
@@ -2080,7 +2070,16 @@ const zFace = (p, side) => side === "t" ? zRow(p.y)
    part here"; both callers owe that case their own answer, and they give
    different ones - netBuild() drops such a node at the core's height, the
    wall walks past it. */
-const nodeZ = nid => { const whole = partOf(nid);
+/* A RUN NODE STANDS MIDWAY BETWEEN THE TWO FACES IT JOINS, so each of its two
+   edges spans half the rise and the pair telescope back to the whole run's own
+   column. Answered here rather than patched into netBuild's elevation pass, or
+   every other reader of a height - circTopZ(), colAt(), the inspector - would
+   have to know about it separately. */
+const nodeZ = nid => { const rk = runKeyOfNode(nid);
+  if(rk){ const e = runNodeEnds(rk); if(!e) return null;
+    const za = nodeZ(coreFold(e[0])), zb = nodeZ(coreFold(e[1]));
+    return (za === null || zb === null) ? null : (za + zb)/2; }
+  const whole = partOf(nid);
   if(whole) return zFace(whole, "c");
   const q = partOf(nid.slice(0, -1));
   return q ? zFace(q, nid.slice(-1)) : null; };
@@ -2323,22 +2322,18 @@ function netEdges(){
   for(const p of LAY.parts) if(p.role === "fitting"){
     fitIds.push(p.id); fitMode[p.id] = fitModeOf(p.id); }
 
-  // every run is an edge now, full stop: the four lists that used to answer
-  // "carries a conductance / may be tapped / may be hit / may spill" with
-  // four different kind sets are gone, and what is left is a SPEC (bore,
-  // runBore() above) rather than a permission. A run with no branch taps on
-  // it keeps the single edge exactly as before, bit-for-bit, unless an in-line throttle sits on
-  // it, in which case that one edge's g becomes a function of the throttle's
-  // live position instead of a plain number - see pushSeg. A branch-tapped
-  // run instead becomes a chain of series edges, one per tap sorted along the
-  // run plus one to the far end - electrically the same run, just able to
-  // disagree with itself about pressure at the point a branch actually
-  // leaves it; any in-line throttle whose own t falls inside one of those
-  // segments folds into THAT segment's edge, in series with the pipe either
-  // side of it. pipeC()'s existing NET_COMP_LEN floor is what stops a
-  // degenerate sliver (two taps landing on the same t, or one sitting at
-  // exactly 0 or 1) from pricing out as a zero-resistance short - the same
-  // floor a same-point run already relies on.
+  /* ══ EVERY RUN IS A NODE WITH AN EDGE ON EACH SIDE OF IT ══
+     A run used to be one edge between two machines, so the pipe itself was
+     nowhere: no pressure of its own, no inventory of its own, and a port valve
+     that could only be modelled by hiding half a volume. It is a NODE now
+     (runNodeOf(), above), and each machine reaches it through its own port
+     valve's edge - so shutting a valve cuts an edge, the pipe keeps its water
+     on the far side of it, and the two ends of one line are free to disagree
+     about pressure because a real line does.
+     THE RESISTANCE STILL SUMS TO THE RUN. pipeC() prices K = f*L/bore + K0;
+     two half-length edges in series add their K, so the whole run is what it
+     always was - PROVIDED the bends, the nozzles and any in-line throttle go
+     on ONE half only. Doubling a nozzle would be a re-pin of every plant. */
   for(const r of net){
     const ends = runEnds(r.key, r.k);
     if(!ends) continue;
@@ -2351,13 +2346,21 @@ function netEdges(){
        faces of one part is not this case: it is a recirculation line, a real
        machine, and it stays and solves. */
     if(u === v) continue;
-    const bore = runBore(r), L = r.L, K0 = runK0(r);
+    const bore = runBore(r), Lh = r.L/2, K0 = runK0(r);
     const tid = tankIdOf(ends[0]) || tankIdOf(ends[1]);
+    const mid = nodeIdx(runNodeOf(r.key));
+    /* ONE KEY NAMES THE RUN, because the meter, the animation and the books
+       all want the pipe rather than one end of it - and exactly one half is
+       the METER, or every reader that sums over a key would read a series pair
+       as twice the flow. `end` is the port valve this half stands at. */
+    const ea = {u, v: mid, h: 0, kind: r.k, key: r.key, end: r.pa, chokeAt: mid};   // LABEL: kind carried for rendering/lookup, never re-compared here
+    const eb = {u: mid, v, h: 0, kind: r.k, key: r.key, end: r.pb, chokeAt: mid, meter: false};
+    ea.pair = eb;   // the meter half holds its far half, so "what crosses this pipe" can ask both
     /* THE FRICTION FACTOR IS THE EDGE'S OWN, off the flow it carried last
        solve (ed.w, written by netSolve) at its donor's viscosity - the same
        one-tick lag the density and the pressure already carry. */
-    const ed = {u, v, h: 0, kind: r.k, key: r.key};   // LABEL: kind carried for rendering/lookup, never re-compared here
-    const f = () => fricOf(bore, ed.w, F.mu[ed.w >= 0 ? u : v]);
+    const fa = () => fricOf(bore, ea.w, F.mu[ea.w >= 0 ? u : mid]);
+    const fb = () => fricOf(bore, eb.w, F.mu[eb.w >= 0 ? mid : v]);
     if(tid){
       /* Valve, diode and "is there anything left to give", asked of EVERY
          tank by the same predicate - see tankLive(). Nothing here knows
@@ -2365,11 +2368,11 @@ function netEdges(){
       /* ONE LAW: a tank's line is ordinary pipe, priced off its own drawn bore
          and length like every other run. A tank that cannot deliver wants a
          bigger line, which is a thing the player can draw. */
-      ed.C = s => (tankLive(s,tid) && runPortsOpen(s,r))
-                ? pipeC(bore, L + runExtraLen(s, r), K0, f()) : 0;
+      ea.C = s => (tankLive(s,tid) && portLive(s,r.pa)) ? pipeC(bore, Lh, K0, fa()) : 0;
+      eb.C = s => (tankLive(s,tid) && portLive(s,r.pb)) ? pipeC(bore, Lh, 0,  fb()) : 0;
       // a checked tank's line passes OUT of the tank only (flowG's diode)
-      if(D.tanks[tid].check) ed.diode = tankIdOf(ends[0]) ? 1 : -1;
-      edges.push(ed);
+      if(D.tanks[tid].check) ea.diode = eb.diode = tankIdOf(ends[0]) ? 1 : -1;
+      edges.push(ea, eb);
       continue;
     }
     /* ══ AND A STEAM LINE IS A PIPE ══
@@ -2378,9 +2381,9 @@ function netEdges(){
        run takes now, and what it passes is the same momentum relation at its
        own end's own density. That is the whole of why a steam line can fill
        with condensate and a water line can flash. */
-    ed.C = s => runPortsOpen(s,r)
-                  ? throttledC(s, bore, L + runExtraLen(s, r), NO_GATES, K0, f()) : 0;
-    edges.push(ed);
+    ea.C = s => portLive(s,r.pa) ? throttledC(s, bore, Lh, NO_GATES, K0, fa()) : 0;
+    eb.C = s => portLive(s,r.pb) ? throttledC(s, bore, Lh, NO_GATES, 0,  fb()) : 0;
+    edges.push(ea, eb);
   }
 
   // internal component paths: continuity through a component a run merely
@@ -2644,37 +2647,40 @@ function netEdges(){
        blowing off is a LIVE question (holeShells(), step.js) and `shells` is
        only ever its design-time superset - a shut port cannot add a shell. */
     if(steam) steamBreaks.push({cells: r.cells, bore, shells, exh, ends, pa: r.pa, pb: r.pb});
-    const ua = nodeIdx(coreFold(ends[0])), ub = nodeIdx(coreFold(ends[1]));
-    /* A MACHINE REACHES THE HOLE THROUGH ITS OWN NOZZLE VALVE. The break hung
-       off both ends unconditionally, so a severed line drained the vessel
-       through a valve the operator had already shut - the one move isolation
-       exists for. A WRECKED valve body is not isolation (runHoled(), above):
-       it passes, and discharges at its own cell besides. */
-    const endLive = (s, pid) => portOpen(s, pid) || portWrecked(s, pid);
-    const endsOf = r => [[ua, r.pa], [ub, r.pb]];
+    /* ══ ONE HOLE, ONE EDGE, ON THE RUN'S OWN NODE ══
+       Every opening on a pipe used to be built TWICE, once from each machine,
+       each copy gated on whether the far machine's port valve was still
+       passing - all of it only because the run had no middle to hang a hole
+       on. It has one now: a machine reaches the hole through its own port
+       edge, which is already gated, so the hole is simply an edge from the
+       pipe to the cell it is in. Nothing here has to ask about a valve. */
+    /* THE RUN'S OWN NODE, never a fresh one: a SELF-CONNECTION got no node in
+       the run loop above (both its ends fold onto one), and minting one here
+       hung a pipe's worth of break edges off a node nothing else touched - one
+       more connected component, measured on the netSelf rig. */
+    const um = index[runNodeOf(r.key)];
+    if(um === undefined) continue;
     for(const [x,y] of r.cells){
       const v = contNode("pipe:"+x+","+y);
       breakIds.push(v);
       contZ[v] = zRow(y);                  // the hole's own elevation, not a machine's
       contCell[v] = [x,y];
-      for(const [u,pid] of endsOf(r))
-        edges.push({u, v, C: s => (cellBroken(s,x,y) && endLive(s,pid)) ? hC : 0,
-                    h: 0, kind: "break", sec, steam, key: "break:"+r.key});
+      edges.push({u: um, v, C: s => cellBroken(s,x,y) ? hC : 0,
+                  h: 0, kind: "break", sec, steam, key: "break:"+r.key});
     }
     /* ...AND A WRECKED NOZZLE VALVE IS ONE MORE OPENING ON THE SAME RUN
        (runHoled(), above), discharging at ITS OWN cell rather than at any pipe
        cell - the same node-per-hole shape, so nothing downstream of here can
-       tell the two apart. */
+       tell the two apart. Off the run node like any other hole: a wrecked
+       valve PASSES (portLive), so the machine behind it reaches this too. */
     for(const pid of [r.pa, r.pb]){
       const c = portCell(pid); if(!c) continue;
       const v = contNode("port:"+pid);
       breakIds.push(v);
       contZ[v] = zRow(c[1]);
       contCell[v] = c;
-      for(const [u,end] of endsOf(r))
-        edges.push({u, v, C: s => (portWrecked(s,pid) && (end === pid || endLive(s,end))
-                                  ) ? hC : 0,
-                    h: 0, kind: "break", sec, steam, key: "break:"+r.key});
+      edges.push({u: um, v, C: s => portWrecked(s,pid) ? hC : 0,
+                  h: 0, kind: "break", sec, steam, key: "break:"+r.key});
     }
   }
   /* ══ THE MACHINE'S OWN STEAM PATH, AND IT IS AN EDGE LIKE ANY OTHER ══
@@ -2958,35 +2964,23 @@ function netMaps(ctx){
       if(q) (nodesOfPart[q.id] || (nodesOfPart[q.id] = [])).push(index[nid]); }
     for(const pid in nodesOfPart){ const list = nodesOfPart[pid], v = partVol(pid)/list.length;
       for(const i of list) net2.vol[i] += v; }
-    /* ══ AND WHICH HALF IS BEHIND WHICH VALVE ══
-       The split is the ordinary staggered one while both nozzle valves pass,
-       but a port valve stands AT THE MACHINE FACE: shut it and the whole run
-       is on its far side, and leaving half of it booked inside the machine is
-       what let an isolated feed pump empty six cubic metres of line it could
-       not reach. Kept per node so netVolAt() can ask the live question - the
-       part's own volume is what a machine has when nothing passes. */
-    net2.volPart = Float64Array.from(net2.vol);
-    net2.runsAt = new Array(net2.n);
-    /* a/sa and b/sb rather than runEnds(): the key is a SORTED pair and says
-       nothing about which end carries which port, and the whole point here is
-       to name the valve standing on each half. */
-    for(const r of net){ if(!runEnds(r.key, r.k)) continue;
-      const u = index[coreFold(r.a + r.sa)], v = index[coreFold(r.b + r.sb)];
-      const V = runVol(r), half = V/2;
-      if(u !== undefined) net2.vol[u] += half;
-      if(v !== undefined) net2.vol[v] += half;
-      if(u === undefined || v === undefined || u === v) continue;
-      (net2.runsAt[u] || (net2.runsAt[u] = [])).push({vol:V, mine:r.pa, far:r.pb, other:v});
-      (net2.runsAt[v] || (net2.runsAt[v] = [])).push({vol:V, mine:r.pb, far:r.pa, other:u}); }
-    for(const i in net2.cavVol){ net2.vol[i] = net2.cavVol[i]; net2.volPart[i] = net2.cavVol[i]; net2.runsAt[i] = null; }   // a reactor cavity is no part: its holdup is its own stated volume
+    /* ══ A RUN'S WATER IS THE RUN'S ══
+       It used to be split in half onto the machine at each end, so a line
+       isolated at one valve was only half reachable from its open end and the
+       shut half had to be set aside on the valve to stop a machine pumping
+       away a pipe it could not reach. The run has a node; the water is on it,
+       all of it, and a shut port is simply a missing edge. */
+    for(const r of net){ const m = index[runNodeOf(r.key)];
+      if(m !== undefined) net2.vol[m] += runVol(r); }
+    for(const i in net2.cavVol) net2.vol[i] = net2.cavVol[i];   // a reactor cavity is no part: its holdup is its own stated volume
     for(let i=0;i<net2.n;i++) if(!(net2.vol[i] > 1e-3)) net2.vol[i] = 1e-3;
     /* ══ AND THE STEEL EACH NODE OWNS, kg, WITH ITS OWN CONDUCTION TIME ══
-       The vessel's wall on the core's nodes, half of each run's wall on its
-       two ends - the same split the holdup takes - at the wall Barlow says
-       each one has. A wall's time constant is its half-thickness squared
-       over pi^2 alpha, the first conduction mode, mass-weighted where a node
-       owns more than one wall. A shell, a condenser and an exchanger keep
-       their steel in their own pot and take none here. */
+       The vessel's wall on the core's nodes and a run's wall on the run's own
+       node - the wall follows the water - at the wall Barlow says each one
+       has. A wall's time constant is its half-thickness squared over pi^2
+       alpha, the first conduction mode, mass-weighted where a node owns more
+       than one wall. A shell, a condenser and an exchanger keep their steel in
+       their own pot and take none here. */
     net2.metalKg = new Float64Array(net2.n); net2.metalTau = new Float64Array(net2.n); net2.metalUA = new Float64Array(net2.n);
     { const tauOf = wallMm => Math.max(1, Math.pow(wallMm/2000, 2)/(Math.PI*Math.PI*ALPHA_STEEL));
       // kW/K of film on the wetted wall at this fluid's own coefficient: a thick wall couples to helium through the gas, not through the first conduction mode
@@ -3002,10 +2996,8 @@ function netMaps(ctx){
               tau = tauOf(c.tube ? tubeWallMm(p0, a, c) : wallSuggestMm(dM*1000, p0, a)),
               area = (c.tube ? tubeCount(c)*Math.PI*tubeBoreMm(c)/1000*L.hgt : Math.PI*dM*((L && L.hgt) || 4))/list.length;
         for(const i of list) put(i, kg, tau, area); }
-      for(const r of net){ const ends = runEnds(r.key, r.k); if(!ends) continue;
-        const u = index[coreFold(ends[0])], v = index[coreFold(ends[1])];
-        const half = runMassPerM(r)*r.L*1000/2, tau = tauOf(runWallMm(r)), area = Math.PI*runBoreMm(r)/1000*r.L/2;
-        put(u, half, tau, area); put(v, half, tau, area); }
+      for(const r of net){ const m = index[runNodeOf(r.key)]; if(m === undefined) continue;
+        put(m, runMassPerM(r)*r.L*1000, tauOf(runWallMm(r)), Math.PI*runBoreMm(r)/1000*r.L); }
       for(let i=0;i<net2.n;i++) if(net2.metalKg[i] > 0) net2.metalTau[i] /= net2.metalKg[i]; } }
 
   net2.condNode = {};
@@ -3664,9 +3656,9 @@ function netStore(net, s){
        REACTOR's own setpoint, and a turbine exhaust reading 15.5 MPa reverses
        the edge that would have refilled it - dry for ever, on a plant that has
        a turbine running into it. A node that is spent still has a pressure. */
-    const mEos = Math.max(netVolAt(net, s, i)*net.F.rho[i], DRY_MIN_KG);
+    const mEos = Math.max(net.vol[i]*net.F.rho[i], DRY_MIN_KG);
     const m = (s && s.mBy && s.mBy[nid] !== undefined) ? s.mBy[nid] : mEos;
-    const V = netVolAt(net, s, i), c = netSatOf(nid), hN = netHAt(s, nid);
+    const V = net.vol[i], c = netSatOf(nid), hN = netHAt(s, nid);
     const pF = net.F.p[i], rF = net.F.rho[i], bF = net.F.b[i];
     const p0 = V > 0 ? netPStar(c, pF, hN, m/V, rF, bF) : pF;
     /* THE SLOPE IS THE CURVE'S OWN (DRHO_DP), at the state point, floored at
@@ -4134,7 +4126,24 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
        the hot leg's second half read sg0 to tee0 and drew water arriving at the
        surge tee from both sides at once. Every caller that wants a MAGNITUDE
        now says so; the one that wants a direction can finally have it. */
-    if(byRun && ed.key) byRun[ed.key] = (byRun[ed.key]||0) + q[e];
+    /* ══ WHAT A RUN CARRIES IS WHAT CROSSES IT END TO END ══
+       A run is two edges and one pipe. Summed, it would meter at twice its own
+       flow; taken off either half alone it would meter one END of itself, which
+       is a different quantity the moment the two disagree - both ends feeding a
+       hole in the middle traverse NOTHING, and a gauge that says 902 kg/s over
+       a pipe lying open in the compartment is the kind of drawing that makes
+       the solve behind it look wrong. So it is the flow COMMON to both halves:
+       same sign, the smaller; opposing signs, zero. On a whole pipe the two are
+       equal and this is bit-for-bit the single edge it replaced.
+       Every other edge in the graph is its own key and says nothing here, and
+       the several break edges of one severed run still SUM, which is what "how
+       much is leaving this pipe" means. */
+    if(byRun && ed.key && ed.meter !== false){
+      let v = q[e];
+      if(ed.pair !== undefined){ const w = q[ed.pair.i];
+        v = (v >= 0) === (w >= 0) ? (Math.abs(w) < Math.abs(v) ? w : v) : 0; }
+      byRun[ed.key] = (byRun[ed.key]||0) + v;
+    }
     /* SIGNED, PER TANK - identified by which NODE the edge touches
        (net.tankIdByNode), not by a kind label, so a run reaching that node
        any other way counts too. TANK-OUT-POSITIVE: positive is out of the
@@ -4151,7 +4160,19 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
       if(tu !== undefined || tv !== undefined){
         const by = outs.qTankBy || (outs.qTankBy = {});
         const tid3 = tu !== undefined ? tu : tv;
-        by[tid3] = (by[tid3]||0) + (tu !== undefined ? q[e] : -q[e]);
+        const tn = tu !== undefined ? ed.u : ed.v;
+        const out = tu !== undefined ? q[e] : -q[e];
+        /* ══ AND A SPENT TANK GIVES NOTHING, HERE TOO ══
+           flowG() gates the conductance on the DONOR's own F.wet bit, which is
+           one tick old, so the solve may still reverse the edge against it -
+           and advectStep() then refuses to carry what comes back, exactly as
+           it refuses containment. The RATE has to refuse it as well: measured
+           on the stock ship, an EMPTY relief tank metered 5.26 kg of injection
+           over 180 s that no book ever moved (the transport carried 0.0005 kg
+           the other way), and it filled the log with 239 INJECTING lines. The
+           same bit, so the reading and the transport cannot disagree. */
+        by[tid3] = (by[tid3]||0)
+                 + ((out > 0 && net.F.wet && !net.F.wet[tn]) ? 0 : out);
       }
     }
     /* SIGNED, PER CONDENSER, POSITIVE OUT OF THE POOL - the tank line above,
@@ -4189,7 +4210,9 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
         outs.turbWkP = (outs.turbWkP||0) + b[ed.u]*Math.abs(w);
         outs.turbWkA = (outs.turbWkA||0) + Math.abs(w); }
     }
-    if(byDrop && ed.key) byDrop[ed.key] = span>0 ? Math.abs(b[ed.u]-b[ed.v])/span : 0;
+    // SUMMED, because a run is two half edges and what it spends is both of
+    // them; every other key is one edge, where a sum is the assignment it was
+    if(byDrop && ed.key) byDrop[ed.key] = (byDrop[ed.key]||0) + (span>0 ? Math.abs(b[ed.u]-b[ed.v])/span : 0);
     if(ed.kind === "break"){ // LABEL: synthetic edge kind this function invents
       /* charged to the side the hole is on (ed.sec/ed.steam, netBuild) - the
          plume is still booked in outs.by whichever side it is, because a hole
