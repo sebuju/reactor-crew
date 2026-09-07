@@ -1564,8 +1564,8 @@ function drawGhostPort(){
   ctx.strokeStyle=C.green; ctx.lineWidth=1.3*DRAW_K; ctx.setLineDash([2*DRAW_K,2*DRAW_K]);
   ctx.strokeRect(bx,by,GHOSTG,GHOSTG);
   ctx.restore();
-  TIP(bx,by,GHOSTG,GHOSTG,"NEW PORT",
-    "Click to put a port here. A port is where a pipe may be terminated - lay the pipe itself with the PIPE tool.");
+  TIP(bx,by,GHOSTG,GHOSTG,"NEW PIPE",
+    "Click to start a pipe here. The nozzle appears because the pipe's end stands on this cell - drag its other end to the machine you want it to reach.");
 }
 /* ══ THE AIM MARK ══
    With the aimed hit up, what the next click would wreck - hitAimAt() is the
@@ -1710,14 +1710,49 @@ function drawPortValves(L){
 /* ══ THE RUN NOW BEING DRAGGED ══
    The cells the release would stamp, dashed - a proposal, not a pipe yet, the
    same dashing every other preview on this bench uses. */
-function drawPipePreview(){
-  const d=ui.drag; if(!d || d.type!=="pipedraw") return;
-  ctx.save(); ctx.globalAlpha=0.55;
-  for(const [x,y] of d.cells){
-    const r=grect(x,y,1,1);
-    fillRect(r.x+2*DRAW_K,r.y+2*DRAW_K,r.w-4*DRAW_K,r.h-4*DRAW_K,C.amber);
+/* ══ THE GRIPS ON THE RUN UNDER THE HAND ══
+   Two ends and its waypoints in order. Only the SELECTED run wears them - a
+   plant carries twenty runs and forty dots on the deck is not a gesture - and
+   a run that could not be laid wears them whether or not it is selected,
+   because it has no cells to be clicked on and would otherwise be an object
+   nobody could reach.
+   The dot is the grip: pushed last, so it takes the press before the machine
+   or the pipe cell underneath it. */
+const RUNG=CELL*0.62;
+function drawRunGrips(){
+  const selRid=D.runs[sel]?sel:null;      // `sel` IS the rid - see freeRid()
+  const dot=(x,y,col,label)=>{
+    const [px,py]=cellPos(x,y);
+    ctx.beginPath(); ctx.arc(px,py,RUNG/2,0,7); ctx.fillStyle=col; ctx.fill();
+    if(label!=null) txt(label, px, py+2.5*DRAW_K, {size:7,align:"center",color:C.inkOnLit});
+  };
+  for(const rid in D.runs){
+    const r=D.runs[rid], err=runErr(rid), on=rid===selRid;
+    if(!on && !err) continue;
+    /* WHERE IT WANTED TO GO, when it could not get there. The recipe is still
+       a real object with two ends; what is missing is the pipe. */
+    if(err){ ctx.save(); ctx.setLineDash([4*DRAW_K,4*DRAW_K]);
+      ctx.strokeStyle=C.red; ctx.lineWidth=1.4*DRAW_K; ctx.beginPath();
+      const path=[r.a].concat(r.pins,[r.b]);
+      path.forEach((c,i)=>{ const [px,py]=cellPos(c[0],c[1]);
+        if(i) ctx.lineTo(px,py); else ctx.moveTo(px,py); });
+      ctx.stroke(); ctx.restore(); }
+    for(const which of ["a","b"]){
+      const c=r[which], [px,py]=cellPos(c[0],c[1]);
+      const at=portAtCell(c[0],c[1])!=null;
+      push({x:px-RUNG/2, y:py-RUNG/2, w:RUNG, h:RUNG, type:"runend", rid, which});
+      TIP(px-RUNG/2, py-RUNG/2, RUNG, RUNG, err?"PIPE END - "+err:"PIPE END",
+        "Drag it where you want it. Put it on a cell beside a machine and a nozzle appears there; anywhere else the end is loose."+
+        (at?"":" It is loose: nothing is piped to a machine at this end."));
+      dot(c[0],c[1], err?C.red:(at?C.green:C.amber));
+    }
+    if(!on) continue;
+    r.pins.forEach((c,i)=>{ const [px,py]=cellPos(c[0],c[1]);
+      push({x:px-RUNG/2, y:py-RUNG/2, w:RUNG, h:RUNG, type:"runpin", rid, i});
+      TIP(px-RUNG/2, py-RUNG/2, RUNG, RUNG, "WAYPOINT "+(i+1),
+        "A cell this run has to go through. Drag it to move it, right click to drop it. Drag the pipe itself to pull a new one out of it.");
+      dot(c[0],c[1], C.amber, String(i+1)); });
   }
-  ctx.restore();
 }
 /* ══ WHERE A DRAGGED MACHINE WOULD LAND ══
    The move half of the gesture had no picture at all: the part stayed drawn in
@@ -3347,7 +3382,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
        the only thing tying the readings that appeared to the run they are on. */
     // ...and the SELECTED run keeps that outline whether or not the pointer is
     // on it, which is the same thing a selected machine's box already does
-    if(!pass && (pipeHov===r.key || sel===r.key)){
+    if(!pass && (pipeHov===r.key || sel===runIdOf(r))){
       ctx.lineWidth=cw+3*DRAW_K; ctx.strokeStyle=C.amber; ctx.stroke(); }
     ctx.lineWidth = pass? w : cw;
     /* A SEVERED RUN IS DESTROYED ALONG ITS WHOLE LENGTH, not only in the cell
@@ -3584,8 +3619,8 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
      nozzles for the press. */
   if(!L){ partGhost();                  // where a machine would land...
           drawPortMarks();              // ...every port already placed...
-          drawGhostPort();              // ...where the next one would go...
-          drawPipePreview(); }          // ...and the run now being dragged
+          drawGhostPort();              // ...where the next pipe would start...
+          drawRunGrips(); }             // ...and the grips on the one picked
   pipeFitMarks(L,NET);
   pipeStackFlush();             // every run reading, one plate per stack
   if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
