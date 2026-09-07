@@ -68,7 +68,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    a second line rather than push the panel wider. Shorter than the topbar's
    because this strip sits inside an instrument, not over the screen. */
 .cr-units{display:flex;flex-wrap:wrap;gap:3px;padding:0 8px 6px}
-.cr-units>.tab{height:17px;padding:0 8px;font-size:var(--t7);letter-spacing:1.2px}
+.cr-units>.tab{height:17px;padding:0 8px;font-size:var(--fs-label);letter-spacing:1.2px}
 .insp-viz.cr-viz{padding:0 8px 6px;box-sizing:border-box}
 .insp-viz.cr-viz+.insp-viz.cr-viz{margin-top:12px}
 /* the first track is the plot dot: reserved whether or not it is lit, so
@@ -81,10 +81,10 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* holds the strip's slot in the row while crVitalsSync() decides which strip
    a two-sided vital needs - see the signed branch there */
 .cr-vital-bar{display:block;min-width:0}
-.cr-vital-lab{font-size:var(--t7);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
+.cr-vital-lab{font-size:var(--fs-label);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cr-vital.on .cr-vital-lab{color:var(--c-ink)}
-.cr-vital-val{font-size:var(--t8);text-align:right;white-space:nowrap}
+.cr-vital-val{font-size:var(--fs-value);text-align:right;white-space:nowrap}
 /* hidden outright with nothing plotted - see crTrendSync() */
 .cr-trends{display:block}
 .cr-trend-canvas{display:block;width:100%;height:96px;background:transparent;
@@ -96,7 +96,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    still here, dimmed, because it has not been answered yet. */
 .cr-caut{display:block;margin-top:12px;border-top:1px solid var(--c-edge)}
 .cr-caut-head{display:flex;flex:0 0 auto;align-items:center;gap:8px;padding:5px 8px 4px;
-  font-size:var(--t7);letter-spacing:1.2px;text-transform:uppercase;color:var(--c-ink2)}
+  font-size:var(--fs-sec);letter-spacing:1.2px;text-transform:uppercase;color:var(--c-ink2)}
 .cr-caut-title{flex:1 1 auto;min-width:0}
 /* HELD, NOT REMOVED: hidden by visibility so the AUTO key beside it never moves
    when the last answered caution goes - see crCautSync() */
@@ -177,7 +177,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    default takes the disclosure marker away, and the marker is the only thing
    that says the heading opens. */
 .cr-group>summary{cursor:pointer;padding:4px 4px 5px;
-  font-size:var(--t8);letter-spacing:1.6px;text-transform:uppercase;color:var(--c-ink2);
+  font-size:var(--fs-sec);letter-spacing:1.6px;text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cr-group[open]>summary{color:var(--c-bright)}
 .cr-group>summary:hover{color:var(--c-bright)}
@@ -191,23 +191,23 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    the rail it came off */
 .cr-drawer .kit-menukey-menu{width:340px}
 .cr-log,.cr-dmg,.cr-flt{padding:6px 8px 8px}
-.cr-empty{font-size:var(--t8);letter-spacing:1px;color:var(--c-ink2);text-align:center;margin:8px 0}
+.cr-empty{font-size:var(--fs-note);letter-spacing:1px;color:var(--c-ink2);text-align:center;margin:8px 0}
 .cr-log-row{padding:4px 0;border-top:1px solid var(--c-edge)}
 .cr-log-row:first-child{border-top:0}
-.cr-log-t{font-size:var(--t7);color:var(--c-ink2);margin-right:6px}
-.cr-log-m{font-size:var(--t8-5);font-weight:700}
+.cr-log-t{font-size:var(--fs-tiny);color:var(--c-ink2);margin-right:6px}
+.cr-log-m{font-size:var(--fs-value);font-weight:700}
 .cr-log-row.alarm .cr-log-m{color:var(--c-red)}
 .cr-log-row.warn .cr-log-m{color:var(--c-amber)}
 /* a control action the crew took, not something the plant did to itself */
 .cr-log-row.act .cr-log-m{color:var(--c-cyan);font-weight:400}
 .cr-log-row.act .cr-log-w{display:none}
-.cr-log-w{margin:2px 0 0;font-size:var(--t8);color:var(--c-ink2)}
+.cr-log-w{margin:2px 0 0;font-size:var(--fs-note);color:var(--c-ink2)}
 .cr-dmg-card{padding:6px 8px;margin-bottom:4px;background:var(--c-panel);border:1px solid var(--c-edge2);cursor:pointer}
 .cr-dmg-card.blocked{border-color:var(--c-red);cursor:default}
 .cr-dmg-card.busy{border-color:var(--c-amber)}
-.cr-dmg-name{font-size:var(--t8-5);color:var(--c-bright)}
-.cr-dmg-state{font-size:var(--t7-5);color:var(--c-ink2)}
-.cr-dmg-dose{font-size:var(--t7);margin-top:2px}
+.cr-dmg-name{font-size:var(--fs-value);color:var(--c-bright)}
+.cr-dmg-state{font-size:var(--fs-label);color:var(--c-ink2)}
+.cr-dmg-dose{font-size:var(--fs-tiny);margin-top:2px}
 .cr-flt .kit-btn{display:block;width:100%;margin-bottom:4px}
 
 .cr-comp-rail{display:flex;flex-direction:column;}
@@ -221,16 +221,16 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    max-width on the item used to. */
 .insp-row{display:grid;grid-template-columns: 1fr auto;
   align-items:center;column-gap:8px;row-gap:2px;padding:2px 4px; transition: 200ms background-color; margin: 0px -4px;}
-.insp-row-lab{font-size:var(--t7);text-transform:uppercase;color:var(--c-ink2);
+.insp-row-lab{font-size:var(--fs-label);text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.insp-row-val{font-size:var(--t7);text-align:right;white-space:nowrap;
+.insp-row-val{font-size:var(--fs-value);text-align:right;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 /* what the option under the pointer would do to this row - see prevDelta().
    ON A MEASURED LIST THE SLOT IS ALWAYS THERE, empty or not: a delta that
    appeared under the pointer would widen the value and shunt every label on
    the panel sideways. Elsewhere the span collapses, because nothing else on
    the plant ever fills it. */
-.insp-row-dlt{font-size:var(--t8);letter-spacing:.3px}
+.insp-row-dlt{font-size:var(--fs-tiny);letter-spacing:.3px}
 .insp-row-dlt:empty{display:none}
 .db-readlist .insp-row-dlt{display:inline-block;text-align:right}
 .insp-row .kit-band,.insp-row .kit-seg{grid-column:1/-1}
@@ -244,9 +244,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .insp-viz-heat{height:240px}
 .insp-viz-dmg{height:240px}
 .insp-stat{display:grid;grid-template-columns:1fr 60px 60px;align-items:center;gap:6px;padding:2px 0}
-.insp-stat-lab{font-size:var(--t7);letter-spacing:.5px;color:var(--c-ink2);white-space:nowrap;
+.insp-stat-lab{font-size:var(--fs-label);letter-spacing:.5px;color:var(--c-ink2);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.insp-stat-val{font-size:var(--t8-5);text-align:right;white-space:nowrap; text-overflow: ellipsis; overflow: hidden;}
+.insp-stat-val{font-size:var(--fs-value);text-align:right;white-space:nowrap; text-overflow: ellipsis; overflow: hidden;}
 
 /* ─────────────── design bench ─────────────── */
 .db-tools{display:flex;align-items:center;gap:4px}
@@ -275,11 +275,11 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-field{display:grid;grid-template-columns:1fr 2fr; gap: 7px;}
 .db-field>.kit-rule{letter-spacing:0;margin:0; padding-top:5px;}
 .db-field>.kit-toggle>.kit-toggle-label{display:none}
-.db-note{margin:0;font-size:var(--t8-5);color:var(--c-ink2);line-height:1.4}
+.db-note{margin:0;font-size:var(--fs-note);color:var(--c-ink2);line-height:1.4}
 /* six reactor presets and six pens do not fit one rail-wide line, and a row
    that overflows loses its last button entirely - so both rows wrap */
 .db-bulkrow{display:flex;align-items:center;gap:4px}
-.db-bulkrow-lab{font-size:var(--t6-5);letter-spacing:.7px;text-transform:uppercase;color:var(--c-ink2); display: flex; align-items: center; height: 23px; align-self: self-start;}
+.db-bulkrow-lab{font-size:var(--fs-tiny);letter-spacing:.7px;text-transform:uppercase;color:var(--c-ink2); display: flex; align-items: center; height: 23px; align-self: self-start;}
 .db-bulkrow-btns{flex:1 1 auto;display:grid;gap:4px;
   grid-template-columns:repeat(auto-fit,minmax(46px,1fr))}
 .db-toolrow,.db-bankrow{display:flex;gap:4px;flex-wrap:wrap}
@@ -293,22 +293,22 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    in a box two thirds full of margin - plus the readout strip under the grid */
 .db-latsection-canvas{display:block;width:100%;aspect-ratio:4/5;background:transparent}
 .db-readlist{margin-top:2px}
-.db-mass{font-size:var(--t8-5)}
-.db-mass-val{font-size:var(--t8-5);color:var(--c-ink2);margin-top:4px}
+.db-mass{font-size:var(--fs-tiny)}
+.db-mass-val{font-size:var(--fs-tiny);color:var(--c-ink2);margin-top:4px}
 .db-stats{display:flex;flex-direction:column;gap:2px;margin-top:6px}
-.db-review-row{display:flex;gap:8px;padding:3px 0;font-size:var(--t10)}
+.db-review-row{display:flex;gap:8px;padding:3px 0;font-size:var(--fs-note)}
 .db-review-tag{flex:0 0 auto;font-weight:700}
 .db-review-row.red{color:var(--c-red)}
 .db-review-row.warn{color:var(--c-amber)}
-.db-review-ok{font-size:var(--t8-5);color:var(--c-green)}
+.db-review-ok{font-size:var(--fs-note);color:var(--c-green)}
 .kit-well.blocked{outline:1px solid var(--c-red);outline-offset:-1px}
 /* one row per TRACED connection - kind, the two machines it joins, its length */
 /* ONE TEMPLATE, so every run's numbers stand in the same columns - a flex row
    sized each cell to its own text, and a 750 mm bore landed under the run
    beside it's length */
 .db-pipe-row{display:grid;grid-template-columns:4.2em minmax(0,1fr) 2.6em 3.2em 3.2em;
-  gap:6px;align-items:baseline;padding:2px 0;font-size:var(--t8);cursor:pointer}
-.db-pipe-head{cursor:default;color:var(--c-ink2);font-size:var(--t7);
+  gap:6px;align-items:baseline;padding:2px 0;font-size:var(--fs-value);cursor:pointer}
+.db-pipe-head{cursor:default;color:var(--c-ink2);font-size:var(--fs-label);
   border-bottom:1px solid var(--c-panel-hi);padding-bottom:3px;margin-bottom:2px}
 .db-pipe-row.db-pipe-head:hover{background:none}
 .db-pipe-head .db-pipe-kind{color:var(--c-ink2);font-weight:400}
@@ -322,7 +322,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-pipe-ends{color:var(--c-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .db-pipe-len{color:var(--c-ink2);text-align:right}
 /* the control room's own copy, off the COMMISSIONED network */
-.cr-cnx-row{display:flex;gap:6px;justify-content:space-between;padding:2px 0;font-size:var(--t8)}
+.cr-cnx-row{display:flex;gap:6px;justify-content:space-between;padding:2px 0;font-size:var(--fs-value)}
 /* a run's NAME is a label, so it reads as one - the same ink2 every caption in
    this rail keeps, leaving the colour to the verdict beside it */
 .cr-cnx-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-ink2)}
@@ -350,6 +350,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
      1  rail, banner, vitals           furniture over the plant
      2  plant keys + layer menu        opens over the furniture
      3  inspector windows              the reader parked it there, so nothing buries it
+     4  the hover peek                 where the hand is NOW, so it buries even those
 
    Above this, outside the screen roots: #prewarm 999, #tip 1000, #ctxmenu 1001. */
 .margin-host{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
@@ -375,7 +376,16 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   grid-column:span var(--db-span,1);grid-row:span var(--db-rowspan,1)}
 .db-rail .db-grid{--db-grid-cols:1}
 .db-rail .db-section{--db-span:1;--db-rowspan:1}
-.margin-pan .kit-rule-head{padding:8px;font-size:var(--t8)}
+.margin-pan .kit-rule-head{padding:8px;font-size:var(--fs-win-title)}
+/* ══ READOUT SECTIONS PACK, THEY DO NOT LINE UP ══
+   A grid gives every section in a row the height of the tallest one, so a
+   three-row POWER section standing beside the damage map left most of a column
+   of panel empty. These sections are a list to be read down, not a table to be
+   compared across, so they FLOW instead: the browser balances the columns and
+   there is no free space left standing. The count is the PANEL's own
+   (marginCols, ui/margin.js), so a section never sets its own width. */
+.insp-grid{display:block;column-count:var(--db-grid-cols,1);column-gap:8px}
+.insp-grid>.db-section{break-inside:avoid;margin-bottom:10px}
 .margin-board .db-panel-body{max-height:46vh;overflow-y:auto}
 
 /* ── the floating inspector windows (ui/inspwin.js) ──
@@ -390,10 +400,12 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* the chevron points down while the window is open and right while it is
    folded, which is the one drawing turned rather than a second icon */
 .insp-win.folded .insp-key-fold .kit-icon{transform:rotate(-90deg)}
-/* the hover peek (ui/hoverwin.js): the parked window's look, seated EARLIER in
-   the DOM at the same z, so a window the reader parked is never buried by one
-   they only pointed at */
-.hovw-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:3}
+/* the hover peek (ui/hoverwin.js): the parked window's look, and it stands over
+   EVERYTHING, parked windows included. It is where the hand is pointing right
+   now, and it goes the moment the hand does - a peek buried under a window the
+   reader parked an hour ago is a panel that answers a question they are not
+   asking, hiding the one they are. */
+.hovw-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:4}
 /* the right hand end of the bar: margin-left:auto so the keys hold that end
    whether or not the suffix beside them has anything to say */
 .insp-keys{display:flex;gap:2px;margin-left:auto;padding-left:8px}
@@ -401,21 +413,43 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* the controls that used to stand on the machine box, in the widget kit's own
    HTML - see marginCtlBuild(). A row is the same row ctlFor() states. */
 .margin-ctl{display:flex;flex-direction:column;gap:3px;margin: -6px -6px 6px -6px; padding: 9px 10px; background:var(--c-ctl-well); }
+/* ══ ON A WIDE PANEL THE NOZZLE VALVES STAND BESIDE THE CONTROLS ══
+   Three columns or more (marginCols, ui/margin.js) and there is room: the
+   control rows keep column one and the valve list takes a column of its own
+   down the right, sized to its own text. On the reactor a full-width row under
+   the strip left the boron slider a metre long and the valves a metre of
+   nothing. Narrower than that there IS no room, and the list stays the row it
+   always was rather than squeezing both. */
+.margin-ctl-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 auto}
+.margin-pan.wide .margin-ctl{flex-direction:row;align-items:flex-start;gap:10px}
 .margin-ctl.at-end{margin: 9px -6px -7px -6px}
 .margin-ctl-row{display:flex;gap:3px;align-items:center}
 .margin-ctl .kit-btn{height:24px;padding:0 6px;letter-spacing:.08em;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .margin-ctl .kit-slider{gap:4px}
-.margin-ctl .kit-slider-readout{font-size:var(--t7)}
+.margin-ctl .kit-slider-readout{font-size:var(--fs-value)}
 /* the slider and its two nudge keys are one control - see marginCtlBuild() */
 .margin-sld{display:flex;gap:3px;align-items:center;min-width:0}
 .margin-sld .kit-slider{flex:1 1 auto;min-width:0}
-.margin-ctl .margin-sld-step{flex:0 0 auto;width:18px;padding:0;font-size:var(--t8)}
+.margin-ctl .margin-sld-step{flex:0 0 auto;width:18px;padding:0;font-size:var(--fs-key)}
 /* EVERY NOZZLE VALVE IN ONE CONTAINER, and a list is not a bank of keys: the
    row is a name and a state, like the PORT VALVES panel says it elsewhere. */
-.margin-ports{display:flex;flex-direction:column;background:var(--c-well)}
-.margin-ctl .margin-port{height:17px;background:transparent;text-align:left;
-  color:var(--c-ink2);letter-spacing:.06em;font-size:var(--t7-5)}
+/* the keys stand apart: each is two rows now, and butted together the second
+   row of one read as the third row of the one above it */
+.margin-ports{display:flex;flex-direction:column;gap:4px;padding:3px;
+  background:var(--c-well)}
+/* the ONE key in the kit that is not shouted: it carries units now, and a key
+   that uppercases its own label printed kg/s as KG/S and MPa as MPA. The words
+   it states are already capitals where they should be. */
+/* IT IS TWO ROWS, NOT ONE THAT CLIPS. Every other key in the strip is one word
+   and ellipsises safely; this one carries where the run goes and what it is
+   carrying, and as one line the ellipsis ate the pressure and the subcooling -
+   the strip's own rule is that it compacts and hides nothing. The break is the
+   one portRunRead() states (render/plant.js), so the two rows are the same two
+   on every panel whatever its width. */
+.margin-ctl .margin-port{height:auto;padding:2px 4px;background:transparent;
+  text-align:left;white-space:pre-line;text-overflow:clip;line-height:1.35;
+  text-transform:none;color:var(--c-ink2);letter-spacing:.06em;font-size:var(--fs-label)}
 .margin-ctl .margin-port:hover{background:var(--c-panel);color:var(--c-bright)}
 .margin-ctl .margin-port.on{background:transparent;color:var(--c-amber)}
 .margin-ctl .margin-port.kit-btn-danger{background:transparent;color:var(--c-red);font-weight:400}
@@ -446,9 +480,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-blk{position:absolute;display:flex;flex-direction:column;justify-content:center;
   gap:1px;padding:7px 4px;box-sizing:border-box;overflow:hidden;cursor:pointer;font:inherit;text-align:center;
   background:var(--c-mach-bg);border:1px solid var(--c-edge2);color:var(--c-bright)}
-.ctlg-blk-name{font-size:var(--t8);letter-spacing:.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ctlg-blk-sub{font-size:var(--t7);color:var(--c-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ctlg-blk-spec{font-size:var(--t7);color:var(--c-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctlg-blk-name{font-size:var(--fs-label);letter-spacing:.4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctlg-blk-sub{font-size:var(--fs-value);color:var(--c-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctlg-blk-spec{font-size:var(--fs-tiny);color:var(--c-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctlg-blk-spec:empty{display:none}
 .ctlg-blk.m-source{border-color:var(--c-blue)}
 .ctlg-blk.m-sink{border-color:var(--c-green)}
@@ -469,7 +503,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-rubber{fill:none;stroke:var(--c-amber);stroke-width:1.5;stroke-dasharray:4 3}
 .ctlg-row{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
 .ctlg-row>.kit-menukey{flex:1 1 auto;min-width:0}
-.ctlg-lab{font-size:var(--t8);color:var(--c-ink2);min-width:34px;letter-spacing:.5px}
+.ctlg-lab{font-size:var(--fs-label);color:var(--c-ink2);min-width:34px;letter-spacing:.5px}
 /* a signal's name is a sentence, and the key it stands on is one grid cell
    wide: the key clips it rather than pushing the row out of the panel */
 .ctlg .kit-menukey{min-width:0;max-width:100%}
@@ -480,4 +514,4 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-ed{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:4px;align-content:start}
 .ctlg-ed>.kit-rule,.ctlg-hint{grid-column:1/-1}
 .ctlg-knobs{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.ctlg-hint{font-size:var(--t8);color:var(--c-ink2);line-height:1.4}
+.ctlg-hint{font-size:var(--fs-note);color:var(--c-ink2);line-height:1.4}
