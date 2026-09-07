@@ -47,8 +47,8 @@
 const {headless} = require('../bundle');
 const M = headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
- 'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,pipeLay,'+
- 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,'+
+ 'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,'+
+ 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,runIdOf,'+
  'tankCircuit,tankPrimary,tankIds,tankKg,tankLvl,tankP,tankLive,partOf,partName,'+
  'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdLive,holdPlumbed,loopP,setLoopP,'+
  'netTempAt,netQualAt,mwE,loopKg,secP,sgIds,sgLvl,circName,ROLE:()=>ROLE,'+
@@ -83,7 +83,7 @@ const RIG = {
   void_ (id, x, y, cfg){ return RIG.tank(id, x, y, 0.15, Object.assign({col:"#7a6f9a"}, cfg)); },
   // one nozzle on a face, and one run to another port - the two bench gestures
   port(id, dx, dy){ return M.seedPort(id, dx, dy); },
-  run(a, b, vFirst, vias){ return M.seedRun(a, b, vFirst, vias); },
+  run(a, b, vias){ return M.seedRun(a, b, vias); },
   // a fitting in a stated mode, which is the only thing that tells a tee from
   // a valve - there is no fitting KIND to pick
   fit(x, y, mode, name){
@@ -100,7 +100,8 @@ const RIG = {
      16 MPa split the line on the second tick and took the whole topology with
      it. D.wall is the knob the PIPES panel writes; this is the same knob. */
   wall(mm){ M.buildLayout(); D.wall = D.wall || {};
-    for(const k in M.pipeMap().byKey) D.wall[k] = mm; },
+    const m = M.pipeMap().byKey;
+    for(const k in m) D.wall[M.runIdOf(m[k])] = mm; },
   machine(kind, x, y){ const id = M.addMachine(kind, x, y);
     if(id == null) console.log("# rig: no "+kind+" at "+x+","+y);
     M.buildLayout(); return id; },
