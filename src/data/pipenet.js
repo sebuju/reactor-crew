@@ -99,8 +99,13 @@ const fitBoreK  = fid => fitBoreMm(fid)/BORE_REF;
    still cancels exactly as before, and a plant nobody has re-bored reads 1. */
 let BORE_NOM = false;
 const withNomBore = fn => { BORE_NOM = true; try { return fn(); } finally { BORE_NOM = false; } };
-const runBoreMm = r => (!BORE_NOM && D.bore && D.bore[r.key] !== undefined) ? D.bore[r.key]
-                     : boreMm(r.k);
+/* WHAT AN AUTHORED FIGURE HANGS ON: the run's own id where it has one, and the
+   derived key only where it does not. Never both - falling back to the key on a
+   run that HAS an id is what let a cut neighbour hand its orphaned bore to the
+   next run laid on the same face pair. */
+const runIdOf = r => r.rid !== undefined ? r.rid : r.key;
+const runBoreMm = r => { const k=runIdOf(r);
+  return (!BORE_NOM && D.bore && D.bore[k] !== undefined) ? D.bore[k] : boreMm(r.k); };
 // DEFAULT: PIPE_BORE_MM picks a starting bore, never gates an edge's existence
 const runBore = r => runBoreMm(r)/BORE_REF;
 /* THE HOLDUP OF A RUN, m^3 - the thing a dimensionless bore could never give.
@@ -238,8 +243,9 @@ const runDesignP = r => {
       p = Math.max(p, circSetP(dis) + colAt(dis) + pumpHead(id)); }
   return p;
 };
-const runWallMm = r => (D.wall && D.wall[r.key] !== undefined) ? D.wall[r.key]
-                     : wallSuggestMm(runBoreMm(r), runDesignP(r), circCool(runCircOf(r)));
+const runWallMm = r => { const k=runIdOf(r);
+  return (D.wall && D.wall[k] !== undefined) ? D.wall[k]
+       : wallSuggestMm(runBoreMm(r), runDesignP(r), circCool(runCircOf(r))); };
 // t/m of a cylindrical shell: pi * mean diameter * wall * density
 const shellTPerM = (boreMm, wallMm) =>
   Math.PI*(boreMm+wallMm)/1000*(wallMm/1000)*STEEL_RHO/1000;
@@ -4666,7 +4672,7 @@ function pipeCellIds(){
    and PIPE_BORE, and pipenet.js loads after layout.js (index.html) - which
    is already why the relief seed lived here.
 
-   IDEMPOTENT: it clears D.pipes/D.ports/D.tanks/D.fittings first, so calling it twice gives
+   IDEMPOTENT: it clears D.pipes/D.ports/D.runs/D.tanks/D.fittings first, so calling it twice gives
    one plant and not two, and a tool building an n-loop plant calls the
    same thing a RESET DESIGN button would.
 
@@ -4676,47 +4682,34 @@ function pipeCellIds(){
    kind ever needs an explicit argument here, that is a missing RUN_KIND row
    and the row is the fix. */
 /* ══ THE STOCK PLANT'S GEOMETRY IS PLACED, NOT BAKED ══
-   There is no table of pixel waypoints any more, and nothing to regenerate:
-   ports are CELLS and pipes are CELLS, so the reference plant is written the
-   way a hand would draw it - a port beside each nozzle, then a run of cells
-   between two of them. seedRun() is the one authoring call, and it does
-   exactly what the bench's own pipe drag does: step one cell out of each port,
-   dogleg between those two, and stamp the shapes (pipeLay(), layout.js).
-   `vias` are the corners a hand would have clicked, for the two runs whose
-   plainest dogleg would cross a machine. */
+   There is no table of pixel waypoints any more and no table of hand-typed
+   lanes either: ports are CELLS and a run is one OBJECT with two end cells and
+   its waypoints (D.runs, layout.js). seedRun() is the one authoring call and it
+   is the bench's own ADD PIPE - mint the run, let runLay() route it. `vias` are
+   the corners a hand would have dragged out of the line, and they are the run's
+   waypoints verbatim. */
 function seedPort(partId,dx,dy){
   const pid=addPortAt(partId,dx,dy);
   if(pid==null) console.warn("stock port refused",partId,dx,dy);
   return pid;
 }
-function seedRun(pa,pb,vFirst,vias){
-  if(pa==null||pb==null) return;
+function seedRun(pa,pb,vias){
+  if(pa==null||pb==null) return null;
   const ca=portCell(pa), cb=portCell(pb);
-  const da=portFaceOf(pa), db=portFaceOf(pb);
-  if(!ca||!cb||!da||!db) return;
-  const a1=[ca[0]+DIRV[da][0], ca[1]+DIRV[da][1]];
-  const b1=[cb[0]+DIRV[db][0], cb[1]+DIRV[db][1]];
-  if(a1[0]===cb[0] && a1[1]===cb[1]) return;   // shell to shell: a joint, no pipe
-  const stops=[a1].concat(vias||[]).concat([b1]);
-  let path=[a1];
-  for(let i=1;i<stops.length;i++)
-    path=path.concat(pipePath(path[path.length-1], stops[i], vFirst));
-  /* THE HAND-PICKED LANE FIRST, THE SEARCH ONLY WHEN IT DOES NOT FIT. Every
-     run on the reference ship is laid exactly where its own comment says, and
-     a plant this arrangement has no room for gets a route found for it rather
-     than a line drawn through a machine. */
-  if(pathBlocked(path, ca, cb)){
-    const r = pipeRoute(a1, b1, ca, cb);
-    if(r) path=[a1].concat(r);
-    /* A RUN THAT COULD NOT BE LAID SAYS SO. pipeLay() drops the cells it
-       cannot have and leaves a line with a hole in it, which reads downstream
-       as a circuit that simply is not there - the quietest failure on the
-       board. The nozzle refusal beside it has warned since the day it was
-       written; this is its other half. */
-    else console.warn("stock run refused",
-      (D.ports[pa]||{}).p+"@"+ca, "->", (D.ports[pb]||{}).p+"@"+cb);
-  }
-  pipeLay(path, ca, cb);
+  if(!ca||!cb) return null;
+  /* THE SAME OBJECT THE BENCH PLACES. There is no table of hand-picked lanes
+     any more: the run states its two ends and the corners a hand would have
+     clicked, and the router lays it (runLay(), layout.js). The two nozzles are
+     already here, so the run adopts them - which is what makes them ITS ports
+     and gives the bore somewhere to hang that a redraw cannot rename.
+     A RUN THAT COULD NOT BE LAID SAYS SO. It used to leave a line with a hole
+     in it, which reads downstream as a circuit that simply is not there - the
+     quietest failure on the board. */
+  const rid=mintRun(ca,cb,vias);
+  const err=runLay(rid);
+  if(err) console.warn("stock run refused",
+    (D.ports[pa]||{}).p+"@"+ca, "->", (D.ports[pb]||{}).p+"@"+cb, err);
+  return rid;
 }
 /* ══ A NOZZLE GOES ON THE MIDDLE OF THE FACE FIRST, THEN OUTWARD ══
    `n` cells of face, nozzle `i`, `step` cells apart. The stock plant used to
@@ -4803,6 +4796,9 @@ function buildStockPlumbing(opt){
   for(const k   in D.pipes) delete D.pipes[k];
   for(const k   in D.mat)   delete D.mat[k];      // structure is the ship's too - a preset is the whole ship
   for(const pid in D.ports) delete D.ports[pid];
+  // ...and the recipes that laid those cells, or the next ship inherits the
+  // last one's runs, its rids and whatever bore was authored against them
+  for(const rid in D.runs)  delete D.runs[rid];
   for(const id  in D.tanks) delete D.tanks[id];
   for(const id  in D.fittings) delete D.fittings[id];
   /* AND EVERY MACHINE, because a preset is the whole ship. There is no fixed
@@ -5322,7 +5318,7 @@ function buildStockPlumbing(opt){
     seedRun(n.pPzrSurge, n.pTeeT);                // the surge line, down onto the tee
     run(n.pPzrRel, n.pRvL);                       // relief: vessel to valve...
     run(n.pRvR, n.pRelTk);                        // ...and valve to tank
-    run(n.pHpi, n.pCoreHpi, true);                // injection, onto the vessel's floor
+    run(n.pHpi, n.pCoreHpi);                      // injection, onto the vessel's floor
   }
   /* condensate: aft of the machinery, down to the band's floor and forward into
      the feed pump's suction nozzle. The suction sits BELOW the condenser it
@@ -5331,8 +5327,8 @@ function buildStockPlumbing(opt){
      between the two is a port cell or a machine. */
   for(const t of ST){
     const K = setKeel(t.s), fd = partOf("feed"+t.S);
-    seedRun(t.pTurbB, t.pCondT, true);            // exhaust
-    seedRun(t.pCondR, t.pFeedR, false, [[AFT+10,K],[fd.x+fd.w+1,K]]);
+    seedRun(t.pTurbB, t.pCondT);                  // exhaust
+    seedRun(t.pCondR, t.pFeedR, [[AFT+10,K],[fd.x+fd.w+1,K]]);
   }
   /* AFT OF THE LAST PUMP, so it never meets a bilge run: the engine room moves
      back with the loop count and the cold returns do not. */
@@ -5347,7 +5343,7 @@ function buildStockPlumbing(opt){
      circulating water system, which is what a multi-unit station has, and it
      is one connected component like any other. */
   { const first=ST[0], last=ST[ST.length-1], cd=partOf("cond"+first.S);
-    seedRun(first.pCondCwO, pCwpR, false, [[AFT-2,cd.y+cd.h-1]]);  // condenser water side, up and forward into the pump's suction
+    seedRun(first.pCondCwO, pCwpR, [[AFT-2,cd.y+cd.h-1]]);  // condenser water side, up and forward into the pump's suction
     seedRun(pCwpB, pRad0T);                       // and the pump stands on the first panel - a joint, no pipe
     seedRun(pRad0R, pRad1L);                      // ...through the second, in series...
     seedRun(pRad1R, last.pCondCwI);               // ...and back into the last condenser's water side
@@ -5388,17 +5384,17 @@ function buildStockPlumbing(opt){
       const primIn  = h ? seedPort(h,-1,1) : g.l;
       const primOut = h ? seedPort(h,3,1)  : g.b;
       const hotVia = [[HOT_COL(i)+ox,HOT_ROW[i]+oy],[HOT_COL(i)+ox,6+oy]];
-      if(i)          seedRun(n.coreHot(i), primIn, false, hotVia);
-      else if(inter) seedRun(n.pTeeR,      primIn, false, hotVia);
-      else           seedRun(n.pTeeR,      primIn, true);
+      if(i)          seedRun(n.coreHot(i), primIn, hotVia);
+      else if(inter) seedRun(n.pTeeR,      primIn, hotVia);
+      else           seedRun(n.pTeeR,      primIn);
       // the lane aft of the exchanger, off the nozzle's OWN column: a via one
       // cell back of where the run leaves the port turns it onto the port again
       /* DOWN INTO THE SUCTION, never along the row it stands on: a run that
          TURNS in a cell can never be crossed afterwards, and rows 16 to 18 are
          the hot legs of every loop aft of this one. */
-      if(inter) seedRun(primOut, pT, false, [[LX+11,10+oy],[LX+5,10+oy]]);
-      else      seedRun(primOut, pT, true);
-      seedRun(pB, n.coreCold(i), false, [[pumpX+1,coldRow(u,i)],[n.coreBilge(i),coldRow(u,i)]]);
+      if(inter) seedRun(primOut, pT, [[LX+11,10+oy],[LX+5,10+oy]]);
+      else      seedRun(primOut, pT);
+      seedRun(pB, n.coreCold(i), [[pumpX+1,coldRow(u,i)],[n.coreBilge(i),coldRow(u,i)]]);
       /* ══ AND THE CIRCUIT BEHIND THE EXCHANGER ══
          Out of the second stream hot into the generator's tubes, down into the
          intermediate pump beside them and back up into the second stream cold.
@@ -5409,10 +5405,10 @@ function buildStockPlumbing(opt){
          vessel stands - the coldest, lowest-pressure point on the circuit. */
       if(h){
         const ipB = partOf("ipump"+li);
-        seedRun(seedPort(h,2,4), g.l, false, [[LX+9,13+oy],[LX-1,13+oy]]);
-        seedRun(g.b, seedPort("ipump"+li,1,-1), false, [[LX+1,12+oy],[LX+8,12+oy]]);
+        seedRun(seedPort(h,2,4), g.l, [[LX+9,13+oy],[LX-1,13+oy]]);
+        seedRun(g.b, seedPort("ipump"+li,1,-1), [[LX+1,12+oy],[LX+8,12+oy]]);
         seedRun(seedPort("ipump"+li,1,ipB.h), seedPort(h,1,-1),
-                false, [[LX+8,coldRow(u,i)],[LX+15,coldRow(u,i)],[LX+15,3+oy]]);
+                [[LX+8,coldRow(u,i)],[LX+15,coldRow(u,i)],[LX+15,3+oy]]);
         // a JOINT: the tank's own nozzle faces the pump's suction across one cell
         if(partOf("itank"+li))
           seedRun(seedPort("itank"+li,-1,1), seedPort("ipump"+li,3,1));
@@ -5438,14 +5434,14 @@ function buildStockPlumbing(opt){
       const bandVias = oy-ISL===sOY(s) ? null
         : [[FEEDX-3, FEED_ROW(s,k)], [FEEDX-3, land], [feedCol(u,i), land]];
       /* THE RISER STOPS ONE ROW UNDER THE NOZZLE where it stands in the
-         nozzle's own column: a via ON the port cell is a run laid through its
-         own end, and pipeLay drops it. */
+         nozzle's own column: a waypoint ON the port cell is a run asked to pass
+         through its own end, which the router has no route for. */
       const FTOP = (inter?7:5)+oy;
-      if(i) seedRun(t.feedL(k), g.feed, false,
+      if(i) seedRun(t.feedL(k), g.feed,
         (bandVias||[]).concat([[feedCol(u,i),bandVias?land:FEED_ROW(s,k)],[feedCol(u,i),FTOP]]));
-      else { seedRun(t.feedL(k), n.pTieB, false,
+      else { seedRun(t.feedL(k), n.pTieB,
                bandVias || [[feedCol(u,0),FEED_ROW(s,k)]]);
-             seedRun(n.pTieT, g.feed, false, [[feedCol(u,0),FTOP]]); }
+             seedRun(n.pTieT, g.feed, [[feedCol(u,0),FTOP]]); }
     }
     /* ══ AND THE HEADER GOES ON AFT THROUGH ITS SAFETY TEES ══
        One per generator, spliced in the order the generators are, each with
@@ -5476,8 +5472,8 @@ function buildStockPlumbing(opt){
        turbine two rows under the top of its band, so the lane aft along the
        header's row IS the steam nozzle's own cell - the run stopped one cell
        short of it and the turbine read as unpiped. */
-    if(multi) seedRun(top, ST[s].pTurbT, true);
-    else      seedRun(top, ST[s].pTurbT, false, [[AFT+4, 2+ISL+sOY(s)]]);
+    if(multi) seedRun(top, ST[s].pTurbT);
+    else      seedRun(top, ST[s].pTurbT, [[AFT+4, 2+ISL+sOY(s)]]);
   }
   // the reserve, up out of its own tank into the pump beside it, and west
   // along its own row into the tie
