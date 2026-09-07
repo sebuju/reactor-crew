@@ -22,7 +22,7 @@ const HOVW_GRACE=280;
 
 function hovwHost(root){
   const el=KIT.el("div","hovw-host");
-  // the peek stands over the deck, so its wheel is the deck's (ui/margin.js)
+  // the peek stands over the deck, so its wheel and right drag are the deck's (ui/margin.js)
   panWheelPass(el);
   el._win=null; el._at=0;
   root.appendChild(el);
@@ -78,7 +78,7 @@ function hovwOpen(host,p){
   const h=marginPan(host,partName(p),()=>null,p);
   // the parked window's look, which is the margin panel's look
   h.well.el.classList.add("insp-win");
-  h.wx=0; h.wy=0; h.wtf=null; h.folded=false; h._force=true; h.peek=true;
+  h.wx=0; h.wy=0; h.wtf=null; h.folded=false; h.plant=false; h._force=true; h.peek=true;
   ctxSuppress(h.well.el);
   h.onDrag=hovwPin;
   inspDrag(h);
