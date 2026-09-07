@@ -215,9 +215,7 @@ const ACT = {
      had is a no-op, not a phantom key on S. */
   portShut : {lab:"PORT VALVE",   part:pid=>"port:"+pid,   log:pid=>portLabel(pid)+" "+(S.portShut[pid]?"OPENED":"SHUT"),
               apply:(s,pid)=>{ if(s.portShut[pid]===undefined) return;
-                s.portShut[pid]=!s.portShut[pid];
-                // the line behind the valve goes with it - see portShiftKg() (pipenet.js)
-                portShiftKg(s,pid); }},
+                s.portShut[pid]=!s.portShut[pid]; }},
   tankDump : {lab:"TANK DUMP",    part:id=>id,    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" DUMP "+(S.tankDump[id]?"SHUT":"OPEN"),
               apply:(s,id)=>{ if(s.tankDump[id]!==undefined) s.tankDump[id]=!s.tankDump[id]; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
@@ -445,9 +443,19 @@ function recHead(){
        the whole point of a machine being one object rather than two halves
        that can disagree. */
     dsig     : designSig(),
+    nsig     : NODE_SIG,
     seed     : S ? S.seed : 0,
   });
 }
+/* ══ WHICH NODE SET THE FIELD WAS KEYED BY ══
+   s.mBy and s.hBy are keyed by node NAME, and snapVal() throws on a TYPE it
+   does not know, never on a key it does not know - so a head taken before a
+   run had a node of its own restores with every pipe's key simply absent, and
+   the readers fall back to vol*rho without a word. designSig() cannot catch
+   it: the DESIGN did not change, the graph built off it did. Bumped whenever a
+   node's NAME or the set of them changes, and a head that does not carry it is
+   refused rather than half-restored. */
+const NODE_SIG = "run-node/1";
 
 /* ══ PUTTING A HEAD BACK ON ══
    recHead() says what plant a recording is about; this is how something that
@@ -482,7 +490,7 @@ function recApplyHead(h){
   for(const id of coreIds()) latRevolve(D.cores[id]);   // re-measures every vessel's own figures
   for(const q of h.parts){ const p=partOf(q.id); if(p){ p.x=q.x; p.y=q.y; } }
   layoutMetrics();
-  return designSig() === h.dsig;
+  return designSig() === h.dsig && h.nsig === NODE_SIG;
 }
 /* ══ ONE TAKE ══
    id/parent/kids are the tree. head is shared with the root. base+baseLog are
