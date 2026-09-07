@@ -763,10 +763,41 @@ function paramsFor(p){
    `sel` carries that key: a run key always contains a colon and a part id
    never does, so the two selection spaces cannot collide and every
    partOf(sel) reader already answers null for one. */
-const runOfKey = key => pipeNetwork().find(r=>r.key===key) || null;
-const isRunKey = k => typeof k==="string" && k.indexOf(":")>=0 && !!runOfKey(k);
+const runOfKey = key => pipeNetwork().find(r=>runIdOf(r)===key) || null;
+const isRunKey = k => typeof k==="string" && k.indexOf(":")>=0 && (!!runOfKey(k) || !!D.runs[k]);
+/* ══ A PIPE THAT REACHES NOTHING YET ══
+   A placed run whose ends are still on bare deck is a real object with a real
+   name, and it has no bore, no length and no ends to name - because a run's
+   size and its length are read off the CONNECTION and there is not one. The
+   panel says which of the two ends is loose rather than going blank, or ADD
+   PIPE lands five cells of pipe and an empty well. */
+function paramsForLooseRun(rid){
+  const r=D.runs[rid];
+  const end=c=>{ const pid=portAtCell(c[0],c[1]);
+    const p=pid!=null && partOf(D.ports[pid].p);
+    return p ? partName(p) : "loose at "+c[0]+","+c[1]; };
+  const grid={kind:"grid",cols:1,blocks:[]};
+  const s={kind:"section",blocks:[]}; grid.blocks.push(s);
+  s.blocks.push({kind:"note", text: runErr(rid) || "NOT CONNECTED YET"});
+  s.blocks.push({kind:"readlist", title:"THIS PIPE", tip:
+    "A pipe is one object you place. Drag an end onto a cell beside a machine and a nozzle appears there; with a machine on both ends it becomes a run and gets its own size.",
+    rows:()=>[
+      ["END A", end(r.a), null, "Drag the dot to move it."],
+      ["END B", end(r.b), null, "Drag the dot to move it."],
+      ["WAYPOINTS", String(r.pins.length), null, "Cells this pipe has to go through. Drag the pipe itself to pull one out; right click it to drop it."],
+      ["CELLS", String((r.cells||[]).length), null, "How much pipe it is laying at the moment."],
+    ]});
+  return [grid];
+}
 function paramsForRun(key){
-  const B=[], r=runOfKey(key); if(!r) return B;
+  const B=[], r=runOfKey(key);
+  if(!r) return D.runs[key] ? paramsForLooseRun(key) : B;
+  /* WRITTEN UNDER THE RUN'S OWN NAME, never the key the drawing derived. A key
+     is rebuilt every time the geometry moves, so a bore authored against one
+     was reset by an edit to a NEIGHBOURING run and then inherited by the next
+     run laid on the same face pair. runIdOf() falls back to the key for a run
+     laid by hand, which has no name of its own to hang on. */
+  const id=runIdOf(r);
   const grid={kind:"grid",cols:1,blocks:[]}; B.push(grid);
   const runS={kind:"section",title:"RUN",blocks:[]}; grid.blocks.push(runS);
   const measS={kind:"section",blocks:[]}; grid.blocks.push(measS);
@@ -775,12 +806,12 @@ function paramsForRun(key){
      would actually make rather than a metre of pipe in the abstract. */
   const massAt=(bore,wall)=>shellTPerM(bore,wall)*r.L;
   num("BORE","How wide this run is, inside the pipe. It is the whole of what the run conducts: a narrow leg is a real restriction and a wide one costs steel and holds more water. AUTO is what a run of this kind ships at.",
-      {get:()=>runBoreMm(r), set:v=>{ D.bore[r.key]=v; dTouch(); },
-       raw:()=>D.bore[r.key], clr:()=>{ delete D.bore[r.key]; dTouch(); }},
+      {get:()=>runBoreMm(r), set:v=>{ D.bore[id]=v; dTouch(); },
+       raw:()=>D.bore[id], clr:()=>{ delete D.bore[id]; dTouch(); }},
       "mm",0,()=>boreMm(r.k),v=>massAt(v,runWallMm(r)));
   num("WALL","How thick the steel is. It is what the run is RATED for and it is what the run weighs - the two are the same number seen from either end. AUTO is the thickness this bore needs at the pressure this run actually carries.",
-      {get:()=>runWallMm(r), set:v=>{ D.wall[r.key]=v; dTouch(); },
-       raw:()=>D.wall[r.key], clr:()=>{ delete D.wall[r.key]; dTouch(); }},
+      {get:()=>runWallMm(r), set:v=>{ D.wall[id]=v; dTouch(); },
+       raw:()=>D.wall[id], clr:()=>{ delete D.wall[id]; dTouch(); }},
       "mm",1,()=>wallSuggestMm(runBoreMm(r), runDesignP(r), PRIMARY_K[r.k]?COOLANT[priD().cool]:null),
       v=>massAt(runBoreMm(r),v));
   measS.blocks.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
