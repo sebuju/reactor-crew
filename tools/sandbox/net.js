@@ -16,8 +16,8 @@ const {M, D, COL, colNodeT, colNodeP, colNet, colTankP, colTankQ, clamp_} = C;
 const box = id => M.partOf(id);
 // the two gestures a vertical joint is: a nozzle on the lower face of the top
 // machine, one on the upper face of the bottom machine, and a pipe between
-const joinV = (R, a, b, ax, bx) => R.run(R.port(a, ax||0, box(a).h), R.port(b, bx||0, -1), false);
-const joinH = (R, a, b, ay, by) => R.run(R.port(a, box(a).w, ay||0), R.port(b, -1, by||0), true);
+const joinV = (R, a, b, ax, bx) => R.run(R.port(a, ax||0, box(a).h), R.port(b, bx||0, -1));
+const joinH = (R, a, b, ay, by) => R.run(R.port(a, box(a).w, ay||0), R.port(b, -1, by||0));
 // a small inexhaustible boundary: the rig's own source and void, kept to one
 // cell of box so a nonsense topology still fits on the grid
 const SMALL = {vol:2};
@@ -53,8 +53,9 @@ return {
   },
 
 /* ── 2. TWO LEGS, TWO BORES ──
-   The split has to follow the bores and nothing else. D.bore is written per
-   RUN KEY, which is the same door the PIPES panel writes through. */
+   The split has to follow the bores and nothing else. D.bore is written under
+   the run's own IDENTITY (runIdOf()), which is the same door the PIPES panel
+   writes through. */
   netParallel(){
     return {name:"two legs of different bore between one pair of tees",
       build(R){
@@ -62,13 +63,15 @@ return {
         const a = R.fit(6, 9, "tee", "TEE A"), b = R.fit(6, 21, "tee", "TEE B");
         vd(R, "sinkA", 6, 27);
         joinV(R, "srcA", a); joinV(R, b, "sinkA");
-        R.run(R.port(a, 0, 1), R.port(b, 0, -1), false);            // the short leg
-        R.run(R.port(a, 1, 0), R.port(b, 1, 0), true, [[14,15]]);   // out and back
+        R.run(R.port(a, 0, 1), R.port(b, 0, -1));            // the short leg
+        R.run(R.port(a, 1, 0), R.port(b, 1, 0), [[14,15]]);   // out and back
         M.buildLayout();
         // the two legs at 300 and 900 mm, so the answer is four to one on area
         // and nothing else about the two of them differs
-        const legs = Object.keys(M.pipeMap().byKey)
-          .filter(k => k.indexOf(a) >= 0 && k.indexOf(b) >= 0).sort();
+        const map = M.pipeMap().byKey;
+        const legs = Object.keys(map)
+          .filter(k => k.indexOf(a) >= 0 && k.indexOf(b) >= 0).sort()
+          .map(k => M.runIdOf(map[k]));
         D.bore = D.bore || {};
         if(legs[0]) D.bore[legs[0]] = 300;
         if(legs[1]) D.bore[legs[1]] = 900;
@@ -88,10 +91,10 @@ return {
         const p = R.machine("pump", 20, 20);
         const a = R.fit(20, 10, "tee", "RING A"), b = R.fit(30, 10, "tee", "RING B"),
               c = R.fit(30, 26, "tee", "RING C");
-        R.run(R.port(p, 0, -1), R.port(a, 0, 1), false);
+        R.run(R.port(p, 0, -1), R.port(a, 0, 1));
         joinH(R, a, b);
-        R.run(R.port(b, 0, 1), R.port(c, 0, -1), false);
-        R.run(R.port(c, -1, 0), R.port(p, box(p).w, 0), true);
+        R.run(R.port(b, 0, 1), R.port(c, 0, -1));
+        R.run(R.port(c, -1, 0), R.port(p, box(p).w, 0));
         return done(R, {note:"no tank, no pressurizer, no condenser"});
       },
       cols(){ return Object.assign(NETCOLS(), {flowK:colNet.flowK}); }};
@@ -140,7 +143,7 @@ return {
     return {name:"a run from one face back to the same face - the self-loop skip",
       build(R){
         id = R.machine("sg", 12, 12);
-        R.run(R.port(id, 0, -1), R.port(id, 2, -1), false, [[12,8]]);
+        R.run(R.port(id, 0, -1), R.port(id, 2, -1), [[12,8]]);
         return done(R, {note:"both ends are node "+id+"t"});
       },
       cols(){ return Object.assign(NETCOLS(), {sgP:colNodeP(id+"t")}); }};
@@ -195,12 +198,12 @@ return {
         for(let i=0;i<10;i++) ids.push(R.fit(44 - 4*i, 20, "tee", "T"+(10+i)));
         src(R, "srcA", 3, 8, 16.0);
         vd(R, "sinkA", 3, 24);
-        R.run(R.port("srcA", box("srcA").w, 0), R.port(ids[0], -1, 0), true);
+        R.run(R.port("srcA", box("srcA").w, 0), R.port(ids[0], -1, 0));
         for(let i=0;i<9;i++) if(ids[i] && ids[i+1]) joinH(R, ids[i], ids[i+1]);
         if(ids[9] && ids[10]) joinV(R, ids[9], ids[10]);
         for(let i=10;i<19;i++) if(ids[i] && ids[i+1])
-          R.run(R.port(ids[i], -1, 0), R.port(ids[i+1], 1, 0), true);
-        R.run(R.port(ids[19], -1, 0), R.port("sinkA", box("sinkA").w, 0), true);
+          R.run(R.port(ids[i], -1, 0), R.port(ids[i+1], 1, 0));
+        R.run(R.port(ids[19], -1, 0), R.port("sinkA", box("sinkA").w, 0));
         return done(R, {});
       },
       cols(){ return Object.assign(NETCOLS(), {srcQ:colTankQ("srcA")}); }};
@@ -219,11 +222,11 @@ return {
         const hub = R.machine("core", 20, 14), p = box(hub);
         const ids = [];
         for(let i=0;i<5;i++){ const t = R.fit(20 + i, 29, "tee", "S"+i);
-          ids.push(t); if(t) R.run(R.port(t, 0, -1), R.port(hub, i, p.h), false); }
+          ids.push(t); if(t) R.run(R.port(t, 0, -1), R.port(hub, i, p.h)); }
         for(let i=0;i<4;i++){ const t = R.fit(32, 14 + 3*i, "tee", "R"+i);
-          ids.push(t); if(t) R.run(R.port(t, -1, 0), R.port(hub, p.w, 3*i), true); }
+          ids.push(t); if(t) R.run(R.port(t, -1, 0), R.port(hub, p.w, 3*i)); }
         src(R, "srcA", 36, 26, 8.0);
-        R.run(R.port("srcA", -1, 0), R.port(ids[4], 1, 0), true);
+        R.run(R.port("srcA", -1, 0), R.port(ids[4], 1, 0));
         return done(R, {note:"every face of the reactor is the same node"});
       },
       cols(){ return Object.assign(NETCOLS(), {hubP:colNodeP("core")}); }};
@@ -258,8 +261,8 @@ return {
         src(R, "tkB", 26, 6, 12.0);
         src(R, "tkC", 17, 22, 8.0);
         joinH(R, "tkA", "tkB");
-        R.run(R.port("tkB", 0, box("tkB").h), R.port("tkC", box("tkC").w, 0), false);
-        R.run(R.port("tkA", 0, box("tkA").h), R.port("tkC", -1, 0), false);
+        R.run(R.port("tkB", 0, box("tkB").h), R.port("tkC", box("tkC").w, 0));
+        R.run(R.port("tkA", 0, box("tkA").h), R.port("tkC", -1, 0));
         return done(R, {note:"16, 12 and 8 MPa behind the three of them"});
       },
       cols(){ return Object.assign(NETCOLS(),
@@ -283,8 +286,8 @@ return {
         // the turbine takes a nozzle on its TOP face and its bottom, and
         // nowhere else (ROLE.turb.ports) - a steam machine is entered from
         // above, and the drawing says so
-        R.run(R.port(sg, 0, -1), R.port(tb, 0, -1), false);
-        R.run(R.port("tkA", 0, box("tkA").h), R.port(sg, 2, -1), false);
+        R.run(R.port(sg, 0, -1), R.port(tb, 0, -1));
+        R.run(R.port("tkA", 0, box("tkA").h), R.port(sg, 2, -1));
         return done(R, {note:"both land on "+sg+"t"});
       },
       cols(){ return Object.assign(NETCOLS(),
