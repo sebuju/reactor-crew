@@ -81,13 +81,18 @@ function shellInit(){
 }
 
 /* ══ THE BRAND IS THE DEBUG MENU ══
-   Four dumps (src/ui/dump.js) and nothing a player needs, so it hangs off the
+   The dumps (src/ui/dump.js) and nothing a player needs, so it hangs off the
    logo rather than taking a tab. Its own box and not #ctxmenu: that one is
-   about a thing on the board and is torn down by every click on the canvas. */
+   about a thing on the board and is torn down by every click on the canvas.
+   A row with `list` builds the next page of the menu instead of doing a job -
+   the one exception to closing on click, because picking a file is a choice
+   and a choice needs the box to stay up. */
 const BRANDMENU = [
-  ["SAVE STATE",       () => dumpState()],
+  ["DUMP STATE",       () => dumpState()],
   ["SAVE IMAGE",       () => dumpImage()],
   ["SAVE TIMELINE",    () => dumpTimeline()],
+  ["SAVE SNAPSHOT",    () => dumpSnapSave()],
+  ["LOAD SNAPSHOT",    null, "list"],
   ["PURGE SNAPSHOTS",  () => dumpPurge()],
 ];
 
@@ -96,21 +101,33 @@ function shellInitBrandMenu(){
   if(!box || !brand) return;
   ctxSuppress(box);
   const close = () => KIT.show(box, false);
-  const build = () => {
-    box.textContent = "";
-    const h = KIT.el("div", "ctx-title"); h.textContent = "DEBUG";
-    box.appendChild(h);
-    for(const [label, fn] of BRANDMENU)
-      box.appendChild(KIT.button(label, {flat:true, onClick(){
-        close();
-        /* The path is on the clipboard and the console has the rest. A dump is
-           a round trip to the server, so the menu would have to stay up
-           waiting on it to report anything, and the answer is a filename you
-           are about to paste somewhere else anyway. */
-        Promise.resolve().then(fn).then(m => console.log("[dump] " + m),
-                                        e => console.warn("[dump] failed: " + e.message));
-      }}).el);
+  /* The path is on the clipboard and the console has the rest. A dump is a
+     round trip to the server, so the menu would have to stay up waiting on it
+     to report anything, and the answer is a filename you are about to paste
+     somewhere else anyway. */
+  const run = fn => {
+    close();
+    Promise.resolve().then(fn).then(m => console.log("[dump] " + m),
+                                    e => console.warn("[dump] failed: " + e.message));
   };
+  const page = (title, rows) => {
+    box.textContent = "";
+    const h = KIT.el("div", "ctx-title"); h.textContent = title;
+    box.appendChild(h);
+    for(const [label, fn] of rows)
+      box.appendChild(KIT.button(label, {flat:true, onClick:fn}).el);
+  };
+  /* No server is no list, so the browser's own file picker is the load - which
+     is also the only thing that can reach a dump that went to Downloads. */
+  const loadPage = async () => {
+    const names = await dumpSnapNames();
+    if(names === null) return run(() => dumpSnapPick());
+    if(!names.length) return run(async () => "NO SNAPSHOTS: save one first.");
+    page("LOAD SNAPSHOT", names.map(n => [n.replace(/^rc_|_snap\.json$/g, ""),
+                                          () => run(() => dumpSnapLoad(n))]));
+  };
+  const build = () => page("DEBUG", BRANDMENU.map(([label, fn, kind]) =>
+    [label, kind === "list" ? loadPage : () => run(fn)]));
   MOUSE.on(brand, {click(){
     const open = box.classList.contains("kit-hide");
     if(open) build();
