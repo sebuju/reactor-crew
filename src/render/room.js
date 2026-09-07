@@ -10,15 +10,17 @@
    H2 CLOUD    (roomh, under) - where the hydrogen is, and where it will burn.
    OXYGEN      (roomo, under) - what is left to burn WITH. Depletion only.
    BLAST       (roomp, under) - overpressure, against the machines' own limits.
+   METAL POOL  (roomn, under) - spilled sodium, where it ran to and what is lit.
    PART TEMP   (roomc, over)  - what each machine is standing in, against what
                  it was built for. This is the triage number: the field says
                  the room is hot, this says which machine is about to go.
 
    THERE IS ONE LAYER PER FIELD ON S, and that is the rule rather than a
-   coincidence: s.roomT, s.roomH2, s.roomO2 and s.roomP are all places, so all
-   four are askable. s.roomFlame is the exception and deliberately so - it is
-   drawn INSIDE the hydrogen layer, because "where is the gas" and "where is
-   it burning" are one question. */
+   coincidence: s.roomT, s.roomH2, s.roomO2, s.roomP and s.roomPool are all
+   places, so all five are askable. s.roomFlame is the exception and
+   deliberately so - it is drawn INSIDE the hydrogen layer, because "where is
+   the gas" and "where is it burning" are one question. s.roomPoolE is the
+   other: it is the pool's temperature, which is drawn on the pool. */
 
 /* THE BANDS ARE THE READOUT, exactly as ZONE is for radiation - steps, not a
    gradient, because "this bay is in the red band" is a fact you can act on
@@ -106,6 +108,8 @@ function roomCellTip(L){
     if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
     row("OXYGEN       ",(roomO2Frac(L,i)*100).toFixed(1)+" %");
     if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
+    if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
+      roomPoolT(L,i).toFixed(0)+" K"+(roomPoolLit(L,i)?"  BURNING":""));
     if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
     if(worst>=BLAST_LO) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
     if(rad.cells.has(i)) row("REPAIR CELL  ","YES");
@@ -281,6 +285,29 @@ function roomO2Layer(data,L){
       fillRect(GX+X*CELL,y,CELL,h, inert?C.blue:C.ink2); ctx.globalAlpha=1;
       if(inert) txt((f*100).toFixed(0)+"%", GX+X*CELL+CELL/2, y+h-3,
                     {size:8, align:"center", color:C.blue});
+    }
+  }
+}
+
+/* WHERE THE METAL WENT, AND WHETHER IT IS ALIGHT. The other half of the
+   oxygen layer: that one draws what a fire has eaten, and this one draws the
+   fire. A pool is a PLACE in exactly the way the heat and the hydrogen are -
+   it runs downhill, it piles up on the deck and against the machines, and
+   which cells it reaches is what decides how fast it burns. Only the free
+   surface is drawn alight, because only the free surface burns. */
+function roomNaLayer(data,L){
+  if(!L || !L.roomPool) return;
+  const cell = ROOM_VCELL*fireRho();
+  for(let Y=0;Y<GH;Y++){
+    const y=rowTop(Y), h=rowTop(Y+1)-y;
+    for(let X=0;X<GW;X++){
+      const i=Y*GW+X, kg=L.roomPool[i];
+      if(!(kg>=0.01)) continue;
+      const lit=roomPoolLit(L,i);
+      ctx.globalAlpha = lit ? 0.50 : 0.12+0.30*Math.min(1,kg/cell);
+      fillRect(GX+X*CELL,y,CELL,h, lit?C.amber:C.ink2); ctx.globalAlpha=1;
+      if(lit) txt(roomPoolT(L,i).toFixed(0)+" K", GX+X*CELL+CELL/2, y+h-3,
+                  {size:8, align:"center", color:C.amber});
     }
   }
 }
