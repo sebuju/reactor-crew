@@ -33,3 +33,6 @@ tests/reports/
 
 # Editor config - local only
 .vscode/
+
+# Debug dumps - state/timeline CSV, viewport PNG, design sidecars. Scratch, purged from the brand menu.
+snapshots/
