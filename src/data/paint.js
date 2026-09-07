@@ -374,10 +374,12 @@ function matCellPart(x,y){
 // figure, because a liner and its seals go long before the structure cares.
 const matTsurv = (x,y) => { const m=matOf(x,y); return m ? m.tsurv : null; };
 
-/* ══ THE TWO GESTURES, AND THEY ARE pipeLay()'s OWN ══
+/* ══ THE TWO GESTURES ══
    Painting is a drag that fills cells and a right-sweep that lifts them, so
    these are the two calls the tool makes and the same two buildStockPlumbing()
    makes - the reference ship's shielding IS the gesture the player would make.
+   A WALL really is cells, which is why it keeps a cell-by-cell tool where a
+   pipe no longer has one: nothing routes a bulkhead.
    A cell already carrying a machine, a port or a tank is not painted: one thing
    per cell, the invariant D.pipes already keeps. A PIPE is the exception, and
    that is decision 4 - a pipe through a gas-tight cell is a penetration. */
