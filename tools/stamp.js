@@ -16,4 +16,6 @@ const stampSec = d => dmy(d) + " " + hms(d);
 // the same instant with nothing a filesystem objects to
 const stampFile = d => dmy(d).replace(/\//g, "-") + "_" + hms(d).replace(/:/g, "-");
 
-module.exports = { pad2, stamp, stampSec, stampFile };
+/* The page loads this file with a <script> tag, where `module` does not exist -
+   one format, one file, both sides. */
+if(typeof module !== "undefined") module.exports = { pad2, stamp, stampSec, stampFile };
