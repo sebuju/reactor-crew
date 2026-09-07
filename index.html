@@ -14,7 +14,7 @@
 <header id="topbar">
   <div id="brand">
     <span id="logo-mark"></span>
-    <span id="brand-title">REACTOR-CREW</span>
+    <button type="button" id="brand-title">REACTOR-CREW</button>
   </div>
   <nav id="tabs">
     <button type="button" class="tab" data-screen="design" data-tip-title="01 DESIGN"
@@ -33,6 +33,7 @@
 <div id="prewarm" class="kit-hide"><div class="pw-box"><div class="pw-head"><span class="pw-title">PREWARMING</span><span class="pw-stage"></span><span class="pw-pct"></span></div><div class="pw-track"><div class="pw-fill"></div></div><div class="pw-note">ESC or another tab cancels.</div></div></div>
 <div id="tip" class="kit-hide"></div>
 <div id="ctxmenu" class="kit-hide"></div>
+<div id="brandmenu" class="kit-hide"></div>
 <script src="src/core/constants.js"></script>
 <script src="src/core/text.js"></script>
 <script src="src/core/chrome.js"></script>
@@ -58,6 +59,9 @@
 <script src="src/data/store.js"></script>
 <script src="src/sim/record.js"></script>
 <script src="src/sim/scenario.js"></script>
+<!-- the one timestamp format, shared with the server side that reads it -->
+<script src="tools/stamp.js"></script>
+<script src="src/ui/dump.js"></script>
 <script src="src/screens/shell.js"></script>
 <!-- BEFORE design-bench.js, not after it: the bench builds its DOM at script
      eval time (DB=dbBuild()) and dbBuild() calls railBlank() from here. A
