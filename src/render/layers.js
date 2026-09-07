@@ -90,10 +90,11 @@ const LAYER_DATA={
    three instruments scattered along a pipe. `over` puts these under the
    fitting glyphs and the deferred value tags, which draw after the over pass.
 
-   THE SLOT IS PER LAYER and it is fixed: pressure is always the middle line
-   and subcooling always the bottom one, whether or not the other two are
-   switched on. A line that moved up when a neighbour was switched off would
-   be a reading you have to find again every time you change what is on. */
+   THE SLOT IS PER LAYER and it is fixed: flow, pressure, temperature,
+   subcooling, holdup, and a fitting's own reading last, whether or not the
+   others are switched on. A line that moved up when a neighbour was switched
+   off would be a reading you have to find again every time you change what is
+   on. */
 function layerRunLine(runs, slot, val, col, fmt){
   /* NOTHING STANDS DOWN. This used to run its own private clash test and drop
      the second of two overlapping readings - a VIEW declutter that hid a
@@ -136,8 +137,28 @@ const pressLayer = (d,L) => layerRunLine(d.runs, 1, r => pipeRunP(r,L), pressCol
    water - which is where a pump loses its head and where the loop stops
    circulating. */
 const subcCol = v => v<=0 ? C.red : v<15 ? C.amber : C.blue;
-const subcLayer = (d,L) => layerRunLine(d.runs, 2, r => pipeRunSc(r,L), subcCol,
+const subcLayer = (d,L) => layerRunLine(d.runs, 3, r => pipeRunSc(r,L), subcCol,
                                         v=>v.toFixed(0)+" K sub");
+/* PLAIN INK, for the reason the holdup line is: a temperature has no failure
+   state of its own. How close it is to boiling is the SUBCOOLING line right
+   under it, and colouring both by the same margin would be one reading
+   printed twice. Directly under PRESSURE, because the pair is the state
+   point every other figure on this run is read at. */
+const tempLayer = (d,L) => layerRunLine(d.runs, 2, r => pipeRunT(r,L), ()=>C.ink,
+                                        v=>v.toFixed(0)+" K");
+/* PLAIN INK. A holdup has no failure state of its own - a run emptied to
+   nothing already says so in red on the subcooling line above it - and
+   colouring it by how full it is would invent a signal the solve never made.
+   The MACHINES carry the same reading under their own boxes (pipeHoldMarks,
+   pipes.js): a pipe and a vessel hold water by the same rule and the switch
+   that asks the question has to answer it for both. */
+/* The RUN lines only when the runs are what was asked: a pointer on a vessel
+   wakes this row for that vessel, and lighting every pipe on the plant with it
+   is the survey the switch is there to ask for. */
+const holdLayer = (d,L) => {
+  if(LAYERS.hold.on || pipeHov) layerRunLine(d.runs, 4, r => pipeRunHoldKg(r,L), ()=>C.ink, holdFmt);
+  pipeHoldMarks(L);
+};
 
 /* THE FOUR RADIATION LAYERS. See src/render/rad.js for the draw functions and
    the zone table they share - this table only says where each one goes down
@@ -159,10 +180,10 @@ const subcLayer = (d,L) => layerRunLine(d.runs, 2, r => pipeRunSc(r,L), subcCol,
    EVERY RADIATION LAYER STARTS OFF, and every PIPE layer starts on. They are
    two different kinds of question. A radiation survey is asked OF the plant -
    nobody asked it, it paints over the machines, and answering it unbidden
-   makes the first look at the plant a look at an overlay. The three pipe
+   makes the first look at the plant a look at an overlay. The pipe
    instruments are not an overlay at all: they are the gauges on the pipework,
-   flow, pressure and subcooling, one per run and each in its own place on the
-   run. A plant drawn with no instruments on it is not a cleaner picture, it is
+   flow, pressure, subcooling and holdup, one per run and each in its own place
+   on the run. A plant drawn with no instruments on it is not a cleaner picture, it is
    a plant you cannot read - and the flow meters were never a layer in the
    first place, they were simply always drawn. */
 const LAYERS={
@@ -184,9 +205,15 @@ const LAYERS={
   press:{group:"PLUMBING", label:"PRESSURE",    seam:"over",  data:"press", live:true, on:false,
         draw:pressLayer,
         tip:"The pressure in every run, in MPa. Pressure is a place, not a number: it is highest at a pump's discharge, lowest at its suction, and it falls across every metre of pipe and every throttle in between. Turn this on to see where the head your pumps make actually goes."},
+  temp: {group:"PLUMBING", label:"TEMPERATURE", seam:"over",  data:"press", live:true, on:false,
+        draw:tempLayer,
+        tip:"How hot what is in each run actually is, in kelvin, off the enthalpy the transport carried there - never off what the run was drawn for. It is the other half of the state point: a pressure alone does not say whether a line is holding water or steam, and the two together do."},
   subc: {group:"PLUMBING", label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
         draw:subcLayer,
         tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},
+  hold: {group:"PLUMBING", label:"HOLDUP",      seam:"over",  data:"press", live:true, on:false,
+        draw:holdLayer,
+        tip:"What is standing in every run and in every machine, in kilograms - the run's reading on the run, the machine's under its box. A pipe is a small tank: its bore and its length are real inventory, so it stores, it springs, and the flow has to turn the whole lot over before what is in it changes. Half of a run's water is counted at the machine on each of its ends, unless that end's nozzle valve is shut - a shut valve leaves the line on its far side, where it actually is."},
   /* THE FIVE ROOM LAYERS - ONE PER FIELD ON S, and that is the rule rather
      than a count: s.roomT, s.roomH2, s.roomO2 and s.roomP are all places, so
      all four are askable, and PART TEMP is the per-machine reading off the
@@ -280,8 +307,13 @@ function layerPass(seam, L){
        doing. It puts NOTHING extra on the picture: pipeHovShow() (pipes.js)
        is already the filter, and it passes exactly the run under the pointer.
        The switch still decides what is drawn unasked, which is what a switch
-       on this menu means. */
-    if((!l.on && !(l.group==="PLUMBING" && pipeHov)) || l.seam!==seam || (l.live && !L)) continue;
+       on this menu means.
+       AND A HOVERED MACHINE OPENS THE ONE ROW THAT IS ABOUT MACHINES. HOLDUP
+       alone: the other three are readings taken ON a run, and putting the
+       whole plant's flows up because the pointer crossed a vessel answers a
+       question nobody asked. */
+    const woke = l.group==="PLUMBING" && (pipeHov || (k==="hold" && holdHov));
+    if((!l.on && !woke) || l.seam!==seam || (l.live && !L)) continue;
     ctx.save();
     l.draw(layerData(l.data, L), L);
     ctx.restore();
