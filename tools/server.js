@@ -18,6 +18,7 @@ const http = require("http"), fs = require("fs"), path = require("path");
 
 const ROOT  = path.resolve(__dirname, "..");
 const SAVES = path.join(ROOT, "saves");
+const SNAPS = path.join(ROOT, "snapshots");
 
 /* The two kinds, and the only two. A kind is half a filename, so this list is
    a whitelist and not a hint: anything not in it never reaches the disk. */
@@ -27,6 +28,9 @@ const KINDS = ["scenarios", "recordings"];
    many - so the cap is generous. It is still a cap: without one an aborted
    upload is an unbounded string in memory. */
 const MAXBODY = 32 * 1024 * 1024;
+/* A timeline dump is every keyframe the recorder still holds, each a whole
+   plant state written out flat, so it outgrows a recording's own cap. */
+const MAXSNAP = 192 * 1024 * 1024;
 
 /* THE ONE PLACE UNTRUSTED INPUT BECOMES A FILENAME.
    Not a blacklist of `..` and `/`, because that game is lost the moment
@@ -34,6 +38,9 @@ const MAXBODY = 32 * 1024 * 1024;
    pattern, and everything it does not match is a 400 - so the id that reaches
    path.join() cannot contain a separator, a dot or an escape by construction. */
 const IDPAT = /^[A-Za-z0-9_-]{1,64}$/;
+/* A dump carries its own extension, so its names allow a dot - and for that
+   reason the pattern has to refuse a leading one, or `..` is back. */
+const SNAPPAT = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,79}\.(csv|json|png)$/;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -98,13 +105,14 @@ function listKind(kind){
 
 /* ═══════════════ THE API ═══════════════ */
 
-function readBody(req, res, done){
+function readBody(req, res, done, cap){
   let len = 0; const chunks = [];
+  const max = cap || MAXBODY;
   req.on("data", c => {
     len += c.length;
     /* Refuse as soon as the cap is passed, not after the whole thing has
        arrived - the point of a cap is not to hold the oversized body. */
-    if(len > MAXBODY){ fail(res, 413, "body over " + (MAXBODY >> 20) + " MB"); req.destroy(); return; }
+    if(len > max){ fail(res, 413, "body over " + (max >> 20) + " MB"); req.destroy(); return; }
     chunks.push(c);
   });
   req.on("end", () => { if(!res.writableEnded) done(Buffer.concat(chunks).toString("utf8")); });
@@ -114,6 +122,7 @@ function readBody(req, res, done){
 function api(req, res, parts){
   if(parts.length === 1 && parts[0] === "ping" && req.method === "GET")
     return sendJSON(res, 200, {ok:true});
+  if(parts[0] === "snap") return snapApi(req, res, parts);
 
   const kind = parts[0];
   if(!KINDS.includes(kind)) return fail(res, 404, "no such collection");
@@ -156,6 +165,41 @@ function api(req, res, parts){
   return fail(res, 405, req.method + " not allowed");
 }
 
+/* ═══════════════ THE DEBUG DUMPS ═══════════════
+
+   `snapshots/` is a flat gitignored scratch directory, not a collection: the
+   browser names the file, the name carries the timestamp, and nothing here
+   parses the body. PUT writes it, DELETE on the collection empties the whole
+   directory, and there is no GET - a dump is read with a spreadsheet, not with
+   the page that wrote it.
+
+   `?b64=1` is how a PNG crosses: the body of a fetch is text. */
+
+function snapApi(req, res, parts){
+  if(parts.length === 1){
+    if(req.method !== "DELETE") return fail(res, 405, req.method + " not allowed on snapshots");
+    let n = 0;
+    try{
+      for(const f of fs.readdirSync(SNAPS))
+        if(SNAPPAT.test(f)){ fs.unlinkSync(path.join(SNAPS, f)); n++; }
+    }catch(e){ if(e.code !== "ENOENT") return fail(res, 500, "purge failed: " + e.message); }
+    return sendJSON(res, 200, {ok:true, n});
+  }
+  if(parts.length !== 2) return fail(res, 404, "no such route");
+  if(req.method !== "PUT") return fail(res, 405, req.method + " not allowed on a snapshot");
+
+  const name = parts[1];
+  if(!SNAPPAT.test(name)) return fail(res, 400, "a snapshot name is A-Z a-z 0-9 _ - . and ends .csv .json or .png");
+  const b64 = /(^|[?&])b64=1(&|$)/.test(req.url.split("?")[1] || "");
+  return readBody(req, res, body => {
+    try{
+      fs.mkdirSync(SNAPS, {recursive:true});
+      fs.writeFileSync(path.join(SNAPS, name), b64 ? Buffer.from(body, "base64") : Buffer.from(body, "utf8"));
+    }catch(e){ return fail(res, 500, "write failed: " + e.message); }
+    sendJSON(res, 200, {ok:true});
+  }, MAXSNAP);
+}
+
 /* ═══════════════ LIVE RELOAD ═══════════════ */
 
 /* Only with --live, and only in the copy of the page this process hands out:
@@ -163,7 +207,7 @@ function api(req, res, parts){
 const LIVE = process.argv.includes("--live");
 const LIVE_TAG = "<script>new EventSource('/api/live').onmessage=function(){location.reload();};</script>\n";
 const liveClients = new Set();
-const LIVE_SKIP = /(^|[\\/])(\.git|node_modules|saves|test-results|screenshots)([\\/]|$)/;
+const LIVE_SKIP = /(^|[\\/])(\.git|node_modules|saves|snapshots|test-results|screenshots)([\\/]|$)/;
 
 function liveWatch(){
   let t = null;
