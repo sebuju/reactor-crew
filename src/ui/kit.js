@@ -307,6 +307,13 @@ const KIT = (function(){
       cellZone.push(zoneAt(lo + span * (i + .5) / BAND_CELLS));
     const zoneFill = i => zones[cellZone[i]][1];
     if(opts.lim) for(const L of opts.lim) svg.appendChild(tick("kit-band-lim", at(L[0])));
+    /* EXTRA READINGS ON THE SAME AXIS - one line each, named by the caller and
+       moved by set()'s second argument. They are drawn UNDER the needle: the
+       needle is what the row's own figure says, and these are the company it
+       keeps. */
+    const marks = (opts.marks || []).map(cls => {
+      const m = tick("kit-band-mark kit-band-mark-" + cls, 0);
+      svg.appendChild(m); return m; });
     const needle = tick("kit-band-needle", 0);
     /* a round cap on a zero-length line is a device-pixel DOT even under the x
        stretch, because non-scaling-stroke puts the cap in device space */
@@ -348,8 +355,15 @@ const KIT = (function(){
     fitLabels();
     if(typeof ResizeObserver === "function") new ResizeObserver(fitLabels).observe(root);
 
-    let lastV = null;
-    function set(v){
+    let lastV = null, lastM = null;
+    function set(v, mv){
+      if(mv) for(let i = 0; i < marks.length; i++){
+        const q = mv[i];
+        if(lastM && lastM[i] === q) continue;
+        const mx = at(q);
+        marks[i].setAttribute("x1", mx); marks[i].setAttribute("x2", mx);
+      }
+      lastM = mv;
       if(v === lastV) return; lastV = v;
       const x = at(v);
       needle.setAttribute("x1", x); needle.setAttribute("x2", x);
@@ -455,9 +469,21 @@ const KIT = (function(){
      overlay is DEMAND. o.dem==null means no rate limit on this control. Uses
      a native <input type=range> for free drag/keyboard/touch handling, with the
      kit's one cellStrip() laid under it for the segmented look. */
+  /* ══ THE NATIVE CONTROL COUNTS STEPS, NOT VALUES ══
+     It used to be given the caller's own min and max, and a scale is allowed to
+     run either way here - boron is 0 down to -6000, clean water at the LEFT. An
+     <input type=range> with min above max is invalid: the browser collapses the
+     range onto a point, so the track took no click at all and only the keys and
+     the nudge buttons moved it. So the input runs 0..N in whole steps and the
+     value is a linear map off that, which cannot care which way the scale goes.
+     Keyboard arrows still move exactly one step, because a step IS the unit. */
   function slider(opts){
     opts = opts || {};
-    const min = opts.min, max = opts.max, step = opts.step || ((max - min) / 1000);
+    const min = opts.min, max = opts.max, span = max - min;
+    const step = opts.step || (Math.abs(span) / 1000) || 1;
+    const N = Math.max(1, Math.round(Math.abs(span) / step));
+    const posOf = v => Math.round(clampPct(span ? (v - min) / span : 0) / 100 * N);
+    const valOf = p => min + span * (p / N);
     const root = el("div", "kit-slider");
     const track = el("div", "kit-slider-track");
     root.appendChild(track);
@@ -471,7 +497,12 @@ const KIT = (function(){
     }
     const dem = el("div", "kit-slider-dem kit-hide");
     track.appendChild(dem);
-    const input = el("input", "kit-slider-input", {type: "range", min, max, step});
+    const input = el("input", "kit-slider-input", {type: "range", min: 0, max: N, step: 1});
+    /* where the value WOULD land if the hand pressed here. A slider states the
+       actual and the demand and said nothing at all about the press about to be
+       made, on a control whose whole span is 6000 pcm wide. */
+    const hov = el("div", "kit-slider-hov kit-hide");
+    track.appendChild(hov);
     track.appendChild(input);
     const readout = el("span", "kit-slider-readout");
     /* Reserve the readout at the widest string fmt can return, sampled across
@@ -489,17 +520,31 @@ const KIT = (function(){
     else if(opts.fmt) for(let i = 0; i <= 4; i++) roFit(String(opts.fmt(min + (max - min) * i / 4)));
     root.appendChild(readout);
     if(opts.tip) tip(root, opts.title || "", opts.tip);
-    input.addEventListener("input", () => { if(opts.onChange) opts.onChange(parseFloat(input.value)); });
+    input.addEventListener("input", () => { if(opts.onChange) opts.onChange(valOf(parseFloat(input.value))); });
     let lastVal = null, lastDem = null;
+    const roShow = str => { roFit(str); readout.textContent = str; };
+    input.addEventListener("mousemove", e => {
+      const r = track.getBoundingClientRect(); if(!r.width) return;
+      const t = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      hov.style.left = (t * 100) + "%"; show(hov, true);
+      if(opts.fmt) roShow(String(opts.fmt(valOf(Math.round(t * N)))));
+      readout.classList.add("hov");
+    });
+    input.addEventListener("mouseleave", () => {
+      show(hov, false); readout.classList.remove("hov");
+      if(opts.fmt && lastVal != null) roShow(String(opts.fmt(lastVal)));
+    });
     function set(val, demVal){
       if(val !== lastVal){
         lastVal = val;
-        if(document.activeElement !== input) input.value = val;
+        if(document.activeElement !== input) input.value = posOf(val);
         // lit to the ACTUAL, like the band's scale; the amber hairline the hand
         // drags is the native thumb and the caret above it is demand
         const lit = Math.round(Math.max(0, Math.min(1, (val - min) / (max - min))) * cells);
         strip.paint(lit, i => i < lit);
-        if(opts.fmt){ const str = String(opts.fmt(val)); roFit(str); readout.textContent = str; }
+        // a preview under the hand outranks the live figure: the reader is
+        // asking what a press WOULD do, and mouseleave puts the actual back
+        if(opts.fmt && !readout.classList.contains("hov")) roShow(String(opts.fmt(val)));
       }
       if(demVal != null && demVal !== lastDem){
         lastDem = demVal;
