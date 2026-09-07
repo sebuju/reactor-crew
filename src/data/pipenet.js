@@ -1895,7 +1895,7 @@ const FIT = {
     C:(s,id,bore,len)=>throttledC(s,bore,len,[id]),
   },
   relief:{
-    C:(s,id,bore,len)=>(reliefLive(s,id) && isFinite(len)) ? holeC(bore) : 0,
+    C:(s,id,bore)=>reliefLive(s,id) ? holeC(bore) : 0,
   },
 };
 
