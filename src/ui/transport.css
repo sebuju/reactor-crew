@@ -5,41 +5,44 @@
 /* z-index is the plant stacking scale - see .margin-host in plant-screens.css.
    The margin panels are a viewport-wide fixed host, so the strip has to claim
    its band rather than rely on DOM order. */
-.trs{position:relative;z-index:1;display:flex;align-items:center;gap:6px;
-  height:30px;padding:0 12px;background:var(--c-panel);
+.trs{position:relative;z-index:1;display:flex;align-items:center;gap:6px;padding:6px 12px;background:var(--c-panel);
   pointer-events:auto}
 
+/* THE STRIP PADS ITS OWN KEYS: the kit's 10px is sized for a panel, and these
+   sit in a 30px band next to a scrub bar. The reserved keys are already 8ch
+   wide, so they take a gutter rather than a spacing; the free-width ones carry
+   the whole gutter themselves. */
+.trs .kit-btn{padding:0 12px}
+.trs .trs-fixw{padding:0 6px}
+
 /* ══ RESERVE A WIDTH, SO A LABEL SWAP DOES NOT MOVE THE STRIP ══
-   PAUSE/PLAY and STEP -/STEP + both change their own text. A button that sizes
-   to its text drags every control right of it sideways - and drags itself out
-   from under the finger that just pressed it.
+   STEP -/STEP + change their own text. A button that sizes to its text drags
+   every control right of it sideways - and drags itself out from under the
+   finger that just pressed it.
 
    box-sizing:content-box IS THE FIX, and it is not the default here: Chrome's
    UA stylesheet sets border-box on <button>, so a bare min-width has to beat the
-   label AND .kit-btn's 20px of padding before it binds at all. Measured, it did
-   not: min-width came out 48.4px against a padded PAUSE of 58.3px, so the clamp
+   label AND the button's own padding before it binds at all. Measured, it did
+   not: min-width came out 48.4px against a padded label of 58.3px, so the clamp
    never fired and the button went on resizing. Against the content box, 8ch is
-   48.4px against a PAUSE text box of 38.3px, so it always fires - and it never
-   has to know what the kit pads by.
+   48.4px against a text box of 38.3px, so it always fires - and it never has to
+   know what it is padded by.
    8ch and not 6: the reserve must beat the longest label, and letter-spacing is
-   not in a ch. PAUSE is 5 glyphs plus 5 x 1.6px, which a 5ch reserve would miss. */
+   not in a ch. */
 .trs-fixw{box-sizing:content-box;min-width:8ch;text-align:center}
 
-/* ══ A STOPPED PLANT IS A STATE, SO IT IS LIT - AND IT IS NEVER BLACK ══
-   Every other .on button in this strip is a mode you chose and can see the
-   result of somewhere else on screen. This one is the CLOCK BEING STOPPED, and
-   the only other evidence of it is that nothing moves - which is exactly what a
-   plant sitting quietly at power looks like. So it carries the state on its own.
-   Both states are coloured. The kit's sunk button is --c-well on --c-bg, two
-   near-blacks, and its .on tint (--c-on-amber) is a third: at a glance the
-   control read as an unlit slab whichever way it was set.
-   Specificity, not source order: .trs .trs-pause is three classes, so it beats
-   .kit-btn.on and .kit-btn-sunk.on outright and cannot be undone by someone
-   reordering the <link> tags in index.html. */
-.trs .trs-pause,.trs .trs-pause:hover{background:var(--c-panel-hi);color:var(--c-cyan)}
-.trs .trs-pause.on,.trs .trs-pause.on:hover{background:var(--c-amber);color:var(--c-ink-on-lit)}
+/* ══ THE RATE IS A STATE, SO IT IS LIT - AND IT IS NEVER BLACK ══
+   The kit's selected cell is an amber outline on a near-black slab, and the
+   only other evidence of the rate is how fast the plant moves - which at 0X is
+   exactly what a plant sitting quietly at power looks like. Filled instead. */
+.trs-rate .kit-segsel-cell.on,.trs-rate .kit-segsel-cell.on:hover{
+  background:var(--c-amber);color:var(--c-ink-on-lit)}
 
-.trs-rate .kit-segsel-cell{height:24px}
+/* ONE WIDTH FOR EVERY SLOT: the kit cell is flex:1 1 0 but min-width:auto, so
+   the box floored on its own label and 0.2X came out wider than 1X. The strip
+   is not stretched to a panel width either, so the share has to be a real
+   figure rather than a share of nothing. */
+.trs-rate .kit-segsel-cell{height:23px;flex:0 0 4ch;min-width:0}
 .trs-rate .kit-segsel-mass{display:none}
 
 /* RESERVED, NOT MEASURED: both variants sit in the same grid cell so the
