@@ -169,14 +169,21 @@ function api(req, res, parts){
 
    `snapshots/` is a flat gitignored scratch directory, not a collection: the
    browser names the file, the name carries the timestamp, and nothing here
-   parses the body. PUT writes it, DELETE on the collection empties the whole
-   directory, and there is no GET - a dump is read with a spreadsheet, not with
-   the page that wrote it.
+   parses the body. PUT writes it, GET on the collection lists what is there and
+   GET on a name hands it straight back - that pair is what LOAD SNAPSHOT is
+   built on - and DELETE on the collection empties the directory.
 
    `?b64=1` is how a PNG crosses: the body of a fetch is text. */
 
 function snapApi(req, res, parts){
   if(parts.length === 1){
+    if(req.method === "GET"){
+      let names = [];
+      try{ names = fs.readdirSync(SNAPS).filter(f => SNAPPAT.test(f)); }
+      catch(e){ if(e.code !== "ENOENT") return fail(res, 500, "list failed: " + e.message); }
+      // newest first: the name is the timestamp and a debug load wants the last one
+      return sendJSON(res, 200, names.sort().reverse());
+    }
     if(req.method !== "DELETE") return fail(res, 405, req.method + " not allowed on snapshots");
     let n = 0;
     try{
@@ -186,15 +193,26 @@ function snapApi(req, res, parts){
     return sendJSON(res, 200, {ok:true, n});
   }
   if(parts.length !== 2) return fail(res, 404, "no such route");
-  if(req.method !== "PUT") return fail(res, 405, req.method + " not allowed on a snapshot");
+  if(req.method !== "PUT" && req.method !== "GET")
+    return fail(res, 405, req.method + " not allowed on a snapshot");
 
   const name = parts[1];
   if(!SNAPPAT.test(name)) return fail(res, 400, "a snapshot name is A-Z a-z 0-9 _ - . and ends .csv .json or .png");
+  const file = path.join(SNAPS, name);
+
+  if(req.method === "GET"){
+    let src;
+    try{ src = fs.readFileSync(file); }catch(e){ return fail(res, 404, "no snapshot called " + name); }
+    res.writeHead(200, {"Content-Type": MIME[path.extname(name)] || "application/octet-stream",
+                        "Content-Length": src.length, "Cache-Control":"no-store"});
+    return res.end(src);
+  }
+
   const b64 = /(^|[?&])b64=1(&|$)/.test(req.url.split("?")[1] || "");
   return readBody(req, res, body => {
     try{
       fs.mkdirSync(SNAPS, {recursive:true});
-      fs.writeFileSync(path.join(SNAPS, name), b64 ? Buffer.from(body, "base64") : Buffer.from(body, "utf8"));
+      fs.writeFileSync(file, b64 ? Buffer.from(body, "base64") : Buffer.from(body, "utf8"));
     }catch(e){ return fail(res, 500, "write failed: " + e.message); }
     sendJSON(res, 200, {ok:true});
   }, MAXSNAP);
