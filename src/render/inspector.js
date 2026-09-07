@@ -786,10 +786,20 @@ function paramsForRun(key){
   measS.blocks.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
     const c=pipeMap().byKey[r.key], a=c&&partOf(c.a), b=c&&partOf(c.b);
     const rate=runRating(r), held=runDesignP(r);
-    return [
+    // a row that has no answer is absent, never a blank line - filtered here so the RISE row can decline
+    return [].concat([
       ["RUNS FROM",(a?partName(a):"?")+" ⇒ "+(b?partName(b):"?"),null,
        "The two machines this run joins. It is traced off the pipe you drew, never authored - move either machine and this follows."],
       ["LENGTH",r.L.toFixed(1)+" m",null,"How far it actually goes, cell by cell. Length is resistance and it is mass."],
+      /* THE COLUMN THE RUN STANDS IN. staticH() puts it on the edge every
+         tick, and it was the one term of the momentum law with nowhere to
+         read it: natural circulation is this number and nothing else. Signed
+         along RUNS FROM above, so the sign says which end is uphill. */
+      (()=>{ const za=nodeZ(r.a+r.sa), zb=nodeZ(r.b+r.sb);
+        if(za===null||zb===null) return null;
+        const dz=zb-za;
+        return ["RISE",(dz>=0?"+":"")+dz.toFixed(1)+" m",null,
+          "How much higher the far end stands than the near one, along RUNS FROM above. It is a real column of fluid: it adds to the pressure at the low end and it is what drives circulation with every pump stopped. Raise a steam generator above the reactor and this is the number that cools the core in a blackout."]; })(),
       ["HOLDS",runVol(r).toFixed(2)+" m3",null,"The water standing in it, off the bore and the length. A node with volume has a time constant, which is why a long fat leg is slow to change temperature."],
       /* WHAT IS IN IT, in words. The meter above says kilograms a second and a
          kilogram of wet steam is not a kilogram of water: this is the same
@@ -804,7 +814,7 @@ function paramsForRun(key){
        "What the wall above will take, off the published hoop-stress relation. Under what it carries, this pipe is the thing that lets go first."],
       ["BURSTS AT",runBurstP(r).toFixed(2)+" MPa",runBurstP(r)<held?C.red:null,
        "Where this run actually splits open. A rating has its margin inside it, so a pipe held past the rating is not open yet - past this it is, at one cell, and it does not close again."],
-      ["MASS",massAt(runBoreMm(r),runWallMm(r)).toFixed(1)+" t",null,"What this run weighs: the shell it is, at the wall it has, over the length it runs."]]; }});
+      ["MASS",massAt(runBoreMm(r),runWallMm(r)).toFixed(1)+" t",null,"What this run weighs: the shell it is, at the wall it has, over the length it runs."]]).filter(Boolean); }});
   return B;
 }
 function paramsForFit(fid){
