@@ -271,16 +271,19 @@ const RODX0=.35;
    `cont` still says what TYPE you would buy, so removing one never forgets
    the other. Every box on the board is an instance in a dictionary on D. */
 /* ═══════════ D.pipes: THE PLANT'S OWN PLUMBING, CELL BY CELL ═══════════
-   There is no list of RUNS. A connection between two machines is not authored
-   at all - it is TRACED out of the cells and the ports (pipeMap(), layout.js)
-   and cached, which is what lets it be coloured when it is complete, listed in
-   a rail, and broken by a hit on any single cell along it.
+   A connection between two machines is not authored at all - it is TRACED out
+   of the cells and the ports (pipeMap(), layout.js) and cached, which is what
+   lets it be coloured when it is complete, listed in a rail, and broken by a
+   hit on any single cell along it. D.runs is the RECIPE that laid those cells
+   and the NAME a bore hangs on; it is never asked what is joined to what, and
+   a run laid by hand has no entry in it.
 
    D.pipes["x,y"] = {s:<shape>, r:<rotation 0..3>}. Cell-keyed, so a pipe cell's
    identity IS its cell: no id allocator, no name, no mode, no stored bore, and
-   "one thing per cell" is a plain dictionary invariant. A run's bore is still
-   priced off its derived KIND (runBore(), pipenet.js); a fitting carries a real
-   per-instance bore, which is a different question.
+   "one thing per cell" is a plain dictionary invariant. A run's bore is priced
+   off its derived KIND (runBore(), pipenet.js) unless one was stated, and a
+   stated one hangs on D.runs' own id; a fitting carries a real per-instance
+   bore, which is a different question.
 
    A generator, a pump or a spare turbine is a PLACED part wired by hand - it
    gets ports and cells like anything else, and pipeNetwork() skips a
@@ -391,6 +394,12 @@ const D={sg:0,
             The stock ship is a preset (PLANTPRE, pipenet.js), and it is built
             out of the same gestures the bench hands the player. */
          /* D.cores[id] = one vessel's reactor, drawing and all - see CORE_KEYS. */
+         /* D.runs[rid] = {a:[x,y], b:[x,y], pins:[...], cells:[...]} - a PIPE
+            is one object you place, and rid is the name D.bore/D.wall hang on
+            so that editing the drawing cannot rename them. The recipe, never
+            the truth: pipeTrace() still says what is joined to what, and a run
+            laid by hand has no entry here at all. */
+         runs:{},
          machines:{}, cores:{}, name:{}, blocks:{},
          tanks:{}, pipes:{}, ports:{}, start:{}};
 
