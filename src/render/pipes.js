@@ -162,9 +162,9 @@ function pipeClip(g,hw,ext){
    radius at the widest run there is, and capped at half the shortest leg so a
    one-cell jog still closes. EVERY PASS TAKES THE SAME RADIUS - the bore is
    drawn inside the casing and stops being concentric with it otherwise.
-   NAMED pipeBendPath: pipenet.js already owns pipePath(), which finds a CELL
-   LANE between two cells - a different question, and this file loads after it,
-   so the name would simply have replaced it. */
+   NAMED pipeBendPath: this is the ROUNDING of a polyline already found, not
+   the finding of one - that is runRoute() (layout.js), and it answers in cells
+   rather than in points. */
 function pipeBendR(pts,cw){
   let minL=Infinity;
   for(let i=1;i<pts.length;i++)
