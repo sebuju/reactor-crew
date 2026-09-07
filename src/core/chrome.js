@@ -210,9 +210,15 @@ function gridDots(x,y,w,h){
 // o.col is the one escape hatch: reactor POWER is coloured off DNBR rather
 // than its own value, since 89% power with a steam film on the pins isn't a
 // green number. Everything else lets the band decide.
+/* o.marks names EXTRA NEEDLES this scale carries - one class suffix each, and
+   o.mv their live values in the same order. A limit is `lim` and never a mark:
+   a lim is built into the strip and cannot move, and these are readings. Three
+   temperatures on one axis is what they are for - the hot leg, the cold leg
+   and where the coolant boils, all on the scale the mean already stood on. */
 function band(v,lo,hi,zones,o){
   o=o||{};
-  return {v,lo,hi,zones,dp:o.dp||0,lim:o.lim||null,col:o.col||null};
+  return {v,lo,hi,zones,dp:o.dp||0,lim:o.lim||null,col:o.col||null,
+          marks:o.marks||null,mv:o.mv||null};
 }
 function bandZone(g,v){
   v=(v===undefined)?g.v:v;
