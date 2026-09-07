@@ -395,10 +395,13 @@ const hitAt=p=>{
 const TOOL={active:"select"};
 const TOOLS=[
   {id:"select", sc:"design", label:"SELECT",
-   tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to put a port there, and click the port again to take it away."},
-  {id:"pipe", sc:"design", label:"PIPE",
-   tip:"Drag to lay a run of pipe cells. It follows the drag, turning where the drag turns. Click a bare cell to fill it and click a laid one to turn it a quarter, which the wheel also does. Hold the right button and sweep to take cells out. A cell drawn dashed and grey is pipe that joins nothing yet."},
-  /* STRUCTURE IS PAINTED, and it is the same two gestures the pipe tool has:
+   tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to start a pipe there, then drag the pipe's other end to the machine you want it to reach. Drag the pipe itself to pull a waypoint out of it; right click a waypoint to drop it."},
+  /* NO PIPE TOOL. A pipe is one OBJECT you place and drag by its ends, so
+     there is nothing left for a cell-by-cell mode to do: laying a run cell by
+     cell, rotating a corner and sweeping cells out were all ways of hand-
+     building a shape the router now finds, and every one of them could leave a
+     cell no run owns.
+     STRUCTURE IS STILL PAINTED, because a wall IS cells and nothing routes it:
      drag to lay, right-sweep to lift. What material lands is a knob on the
      cell's own panel afterwards - the ADD TANK argument, one entry and no
      submenu of kinds. */
@@ -413,12 +416,8 @@ const TOOLS=[
 // gesture is addressed at, since a tool paints CELLS and never pixels
 const cellAt=pt=>[Math.floor((pt.x-GX)/CELL), rowAt(pt.y)];
 const cellSame=(a,b)=>!!a&&!!b&&a[0]===b[0]&&a[1]===b[1];
-// take the pipe cell under a plant point out, if there is one. One helper,
-// because the press and the drag that follows it must lift the same thing.
-function pipeLift(pt){ const c=cellAt(pt), k=c[0]+","+c[1];
-  if(D.pipes[k]){ delete D.pipes[k]; buildLayout(); } }
-// and the paint's own two, for the same reason: the press and the drag that
-// follows it must lay and lift the same thing
+// the paint's own two: the press and the drag that follows it must lay and
+// lift the same thing
 const matPaintCell = (x,y) => matPaint(x,y, matPen);
 const matLiftCell = (x,y) => matLift(x,y);
 function matPaintAt(pt){ const c=cellAt(pt);
@@ -703,22 +702,21 @@ function uiDown(e,el){
   // instead (see pointerup)
   if(e.button===2){
     const w=hitAt(p);
-    /* RIGHT CLICK WITH THE PIPE TOOL LIFTS A CELL, where it lives rather than
+    /* RIGHT CLICK WITH THE PAINT TOOL LIFTS A CELL, where it lives rather than
        through the deck menu - the menu is addressed at a cell and this already
        is. HELD, it lifts every cell it is dragged over, the mirror of the left
-       button laying them: taking a wrong run out one careful click at a time
-       was the slowest gesture on the bench. A cell nothing owns is simply
-       nothing to lift, and the drag stands whether or not the first one was. */
-    if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
-      dragOn({type:"pipeerase", v:1});
-      pipeLift(vPt(p));
-      return;
-    }
+       button laying them. A cell nothing owns is simply nothing to lift, and
+       the drag stands whether or not the first one was. */
     if(screen==="design" && TOOL.active==="paint" && vIn(p)){
       dragOn({type:"materase", v:1, last:cellAt(vPt(p))});
       matLiftAt(vPt(p));
       return;
     }
+    // A WAYPOINT IS DROPPED WHERE IT STANDS. It is one cell on one run, so it
+    // owes no menu - the same argument the pipe tool's own right-click makes.
+    if(w&&w.type==="runpin"){
+      D.runs[w.rid].pins.splice(w.i,1); runLay(w.rid);
+      return; }
     /* A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU (REMOVE PORT,
        resolved by design-bench.js's own ctx registry) - there is no quick-tap
        toggle any more, so a right click never silently flips the mode. */
@@ -734,11 +732,10 @@ function uiDown(e,el){
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
   const w=hitAt(p);
   /* ══ A TOOL PRE-EMPTS EVERY CLICK ══
-     With the pipe tool up, a press on the plant is about the pipe, never
-     about whatever box it happens to land on - so this is asked before the
-     ordinary per-widget dispatch below. Nothing is committed until the
-     release, the same convention the part drag already keeps. */
-  /* AN AIMED HIT PRE-EMPTS THE SAME WAY, and it goes through act() like every
+     With a tool up, a press on the plant is about that tool, never about
+     whatever box it happens to land on - so this is asked before the ordinary
+     per-widget dispatch below.
+     AN AIMED HIT PRE-EMPTS THE SAME WAY, and it goes through act() like every
      other input, so a tape and a scenario carry it. A control strip standing
      over the plant is not a target: the press is not spent on it, and the tool
      stays up for the machine the hand was aiming at. */
@@ -751,21 +748,11 @@ function uiDown(e,el){
   }
   if(screen==="design" && TOOL.active==="paint" && vIn(p)){
     const c=cellAt(vPt(p));
-    /* COMMITTED AS IT GOES, unlike a pipe run. A run has a shape that is only
-       decided once both ends are known - pipeLay() needs the whole path - and
-       a painted cell has none: it is one cell, and the fill the bench draws
-       under the hand is what the player is watching change. */
+    // COMMITTED AS IT GOES: a painted cell has no shape to settle, it is one
+    // cell, and the fill under the hand is what the player is watching change
     dragOn({type:"matdraw", v:1, last:c});
     matPaintAt(vPt(p));
     sel="mat:"+c[0]+","+c[1];
-    return;
-  }
-  if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
-    const c=cellAt(vPt(p));
-    // `had` is what turns a click on a cell that is ALREADY pipe into a
-    // rotate rather than a lay - decided at the press, because the drag may
-    // yet lay across it and the answer must not change under the hand.
-    dragOn({type:"pipedraw", cells:[c], v:1, had:!!D.pipes[pipeKey(c[0],c[1])]});
     return;
   }
   /* ══ A PIPE IS PICKED THE WAY A MACHINE IS ══
@@ -776,13 +763,36 @@ function uiDown(e,el){
      into `sel`: a key always contains a colon and a part id never does, so
      every partOf(sel) reader already answers null for one. */
   // the wall is picked on both screens; only the RUN has no control-room panel
-  if(!w && vIn(p) && typeof pipeCellRuns==="function"){
+  if(!w && vIn(p) && typeof runsAtCell==="function"){
     const c=cellAt(vPt(p));
     // wall before pipe, the order hitAimAt() already resolves a penetration in
     if(matCell(c[0],c[1])){ sel="mat:"+c[0]+","+c[1]; return; }
     if(screen==="design"){
-      const keys=pipeCellRuns(c[0],c[1]);
-      if(keys.length){ sel=keys[keys.length-1]; return; }   // a crossing cell owns two: last wins, as hitAt() does
+      const keys=runsAtCell(c[0],c[1]);
+      if(keys.length){
+        const key=keys[keys.length-1];                      // a crossing cell owns two: last wins, as hitAt() does
+        /* PULL A WAYPOINT OUT OF THE LINE, once the run is the one being
+           worked on. It goes in at the place ALONG THE ROUTE where it was
+           grabbed, counted against the waypoints already ahead of it, so the
+           run keeps its own order and the hand does not have to know it. The
+           first press only picks the run: dragging a line you have not chosen
+           yet would bend whatever you happened to point at. */
+        // ...and only a run that was PLACED has waypoints to pull; one laid by
+        // hand is cells and nothing else
+        const rid = key, r = sel===key && D.runs[rid];
+        if(r && r.cells){
+          const at=r.cells.findIndex(q=>cellSame(q,c));
+          if(at>=0){
+            let j=0;
+            for(const pin of r.pins){ const pj=r.cells.findIndex(q=>cellSame(q,pin));
+              if(pj>=0&&pj<at) j++; }
+            r.pins.splice(j,0,c);
+            dragOn({type:"pipewp", rid, i:j, v:1});
+            runLay(rid);
+          }
+        }
+        sel=key; return;
+      }
     }
   }
   // nothing under the pointer: a click on bare deck deselects, rather than
@@ -808,16 +818,35 @@ function uiDown(e,el){
       w.gx = q.x; w.gx0 = q.x; w.moved = false;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
-    // A PORT IS A TOGGLE: click the mark to take it away again. Its mark is
-    // pushed after its own box, so it takes the press before a part drag can.
-    else if(w.type==="port"){ removePort(w.pid); }
+    /* A PORT BELONGS TO ITS PIPE, so clicking one PICKS THAT PIPE - the run
+       lights up, its grips come out, and dragging this end away is what takes
+       the nozzle with it. Taking the port off on its own would stand the run
+       down and leave its cells behind, which is a pipe nobody can see the ends
+       of. A port nobody's run owns is still a toggle: click it to take it away. */
+    else if(w.type==="port"){ const r=D.ports[w.pid].run;
+      if(r!==undefined && D.runs[r]) sel=r; else removePort(w.pid); }
     // ...and on a COMMISSIONED plant the same cell is the valve inside that
     // nozzle. Nothing is placed or taken away in the control room: the plant is
     // welded down, so all a port has left to offer is its own handle.
     else if(w.type==="portv"){ act("portShut",w.pid); }
-    // ...and the ghost places one. There is nothing to follow it with: a pipe
-    // is laid with the pipe tool, cell by cell.
-    else if(w.type==="ghostport"){ addPortAt(w.p,w.dx,w.dy); buildLayout(); }
+    /* ...AND THE GHOST PLACES A PIPE, not a bare nozzle. A port is not a thing
+       you put down: it appears because a run's END stands on that cell, and a
+       nozzle with no pipe on it is a fitting nobody ordered. So the click mints
+       the run with one end here, and the far end goes out along the face the
+       nozzle points, ready for the hand to drag it somewhere. */
+    else if(w.type==="ghostport"){
+      const p=partOf(w.p), a=p&&[p.x+w.dx, p.y+w.dy];
+      const f=p&&faceOfOffset(p,w.dx,w.dy);
+      const b=f&&runSpotNear(a[0]+DIRV[f][0]*4, a[1]+DIRV[f][1]*4);
+      if(b){ sel=mintRun(a,b); runLay(sel); }
+    }
+    /* ONE PIPE AT A TIME. An end and a waypoint are the same drag: it writes
+       the cell into D.runs and re-lays THAT run, so every other run on the
+       board stands where it is. Committed as it goes, the way the paint is and
+       unlike the cell-by-cell pipe tool - a run has a shape the moment its two
+       ends are known, so there is something true to draw under the hand. */
+    else if(w.type==="runend") dragOn({type:"pipewp", rid:w.rid, which:w.which, v:w.v});
+    else if(w.type==="runpin") dragOn({type:"pipewp", rid:w.rid, i:w.i, v:w.v});
     /* the hull's own wall. NOTHING COMMITS UNTIL THE RELEASE: gridDrag() calls
        buildLayout(), which at pointer rate re-laid the whole board for every
        cell crossed. The wall wears a ghost outline while it moves (drawPlant). */
@@ -846,28 +875,25 @@ function uiMove(e,el){
   if(e.pointerType==="mouse") isTouch=false;
   if(ui.drag){ const d=ui.drag, q=d.v?vPt(p):p;
     /* NOTHING IS COMMITTED UNTIL THE RELEASE. moveTo() used to be called on
-       every pointermove, which re-measured layoutMetrics() at pointer rate
-       and - now that the same drag can end as a pipe - would have walked the
-       part across the board on the way to the machine you were aiming at. */
+       every pointermove, which re-measured layoutMetrics() at pointer rate and
+       walked the part across the board on the way to where you were aiming. */
     if(d.type==="part") partDragTo(d,q);
-    /* THE RUN FOLLOWS THE DRAG, cell by cell: every cell between the last one
-       committed and the pointer joins the list, walking one axis at a time, so
-       the pipe turns where the drag turns. Only the list is built here -
-       pipeLay() runs on release, because nothing is committed until then. */
-    else if(d.type==="pipedraw"){
-      const c=cellAt(q), last=d.cells[d.cells.length-1];
-      if(!cellSame(c,last) && c[0]>=0 && c[1]>=0 && c[0]<GW && c[1]<GH){
-        let [x,y]=last;
-        while(x!==c[0]){ x+=Math.sign(c[0]-x); d.cells.push([x,y]); }
-        while(y!==c[1]){ y+=Math.sign(c[1]-y); d.cells.push([x,y]); }
-      } }
+    /* THE END OR THE WAYPOINT FOLLOWS THE HAND, one cell at a time, and the run
+       is re-laid on every cell it actually moves to. A cell nothing can stand
+       in is no move at all - the grip stays where it was rather than the run
+       reporting a refusal for a cell the hand only passed over. */
+    else if(d.type==="pipewp"){ const c=cellAt(q), r=D.runs[d.rid];
+      if(r && c[0]>=0 && c[1]>=0 && c[0]<GW && c[1]<GH){
+        const was = d.which ? r[d.which] : r.pins[d.i];
+        if(was && !cellSame(c,was)){
+          if(d.which) r[d.which]=c; else r.pins[d.i]=c;
+          runLay(d.rid);
+        } } }
     else if(d.type==="hull"){ const c=cellAt(q);
       if(c){ d.c=c; [d.gw,d.gh]=gridClamp(d.edge==="r"?c[0]+1:D.gw, d.edge==="b"?c[1]+1:D.gh); } }
-    else if(d.type==="pipeerase") pipeLift(q);
-    /* WALKED CELL BY CELL, exactly as the pipe drag is. A pointer sample is not
-       a cell: a quick sweep delivers a move every few cells and painting only
-       what was sampled leaves gaps - which for a pipe is a run that does not
-       join and for a WALL is a containment that never closes. One axis at a
+    /* WALKED CELL BY CELL. A pointer sample is not a cell: a quick sweep
+       delivers a move every few cells and painting only what was sampled leaves
+       gaps - which for a WALL is a containment that never closes. One axis at a
        time, so the wall turns where the drag turns. */
     else if(d.type==="matdraw" || d.type==="materase"){
       const c=cellAt(q), fn = d.type==="matdraw" ? matPaintCell : matLiftCell;
@@ -920,21 +946,6 @@ function uiUp(e,el){
      position - it is just called once, here, instead of at pointer rate. A
      drop that resolves to nothing (off the grid, on top of another machine)
      is a cancel, not an error, so there is no refusal to report. */
-  /* THE RUN COMMITS ON RELEASE. `from` and `to` are the cells either side of
-     the drag, so the first and last cell open toward where the hand started
-     and stopped rather than being left as a stub with one end. */
-  if(d&&d.type==="pipedraw"){
-    const c=d.cells;
-    // A CLICK ON A CELL THAT IS ALREADY PIPE TURNS IT. The wheel does the same
-    // thing, and a wheel is not a gesture every hand reaches for - a cell
-    // pointing the wrong way is the commonest reason a run does not join, so
-    // the fix is on the button the player is already holding.
-    if(c.length===1 && d.had) pipeTurn(c[0][0],c[0][1],1);
-    else if(c.length===1) pipeLay(c, [c[0][0]-1,c[0][1]], [c[0][0]+1,c[0][1]]);
-    else pipeLay(c, [2*c[0][0]-c[1][0], 2*c[0][1]-c[1][1]],
-                    [2*c[c.length-1][0]-c[c.length-2][0], 2*c[c.length-1][1]-c[c.length-2][1]]);
-    buildLayout();
-  }
   if(d&&d.type==="part"){
     const p=uiPt(el||cv,e);
     // ...but only off a point the plant actually covers. The press took the
@@ -1021,13 +1032,6 @@ MOUSE.on(cv,{wheel(e){
   // the box is anchored to where the pointer WAS; the plant moves under it, so
   // an open menu is stale the moment the view does anything
   ctxClose();
-  /* THE WHEEL ROTATES A PIPE CELL, and only there: with the pipe tool up and a
-     cell actually under the pointer. Everywhere else it still zooms, which is
-     what it does on every other screen and in every other tool. */
-  if(screen==="design" && TOOL.active==="pipe" && vIn(p)){
-    const c=cellAt(vPt(p));
-    if(pipeTurn(c[0],c[1],e.deltaY>0?1:-1)){ buildLayout(); return; }
-  }
   vWheel(p,e.deltaY);
 }});
 /* ══ THE WHEEL ZOOMS, WHEREVER IT LANDS ══
@@ -1039,8 +1043,8 @@ MOUSE.on(cv,{wheel(e){
    panel is HTML standing OVER the canvas (marginHost, ui/margin.js), so the
    canvas never sees a wheel that starts on one - and a panel is anchored in
    plant space, so the wheel has to do there what it does on the deck beside
-   it. The pipe-tool rotation and the scenario timeline stay on cv: those are
-   about a cell and a second under the pointer, and a panel is neither. */
+   it. The scenario timeline stays on cv: that one is about a second under the
+   pointer, and a panel is not. */
 function vWheel(p,dy){
   const on=vIn(p);
   const px=on? p.x : VIEW.x+VIEW.w/2, py=on? p.y : VIEW.y+VIEW.h/2;
