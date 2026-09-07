@@ -77,6 +77,49 @@ function shellInit(){
   }
   shellInitTooltip();
   shellInitCtxMenu();
+  shellInitBrandMenu();
+}
+
+/* ══ THE BRAND IS THE DEBUG MENU ══
+   Four dumps (src/ui/dump.js) and nothing a player needs, so it hangs off the
+   logo rather than taking a tab. Its own box and not #ctxmenu: that one is
+   about a thing on the board and is torn down by every click on the canvas. */
+const BRANDMENU = [
+  ["SAVE STATE",       () => dumpState()],
+  ["SAVE IMAGE",       () => dumpImage()],
+  ["SAVE TIMELINE",    () => dumpTimeline()],
+  ["PURGE SNAPSHOTS",  () => dumpPurge()],
+];
+
+function shellInitBrandMenu(){
+  const box = document.getElementById("brandmenu"), brand = document.getElementById("brand-title");
+  if(!box || !brand) return;
+  ctxSuppress(box);
+  const note = KIT.el("div", "brand-note");
+  const close = () => KIT.show(box, false);
+  const build = () => {
+    box.textContent = "";
+    const h = KIT.el("div", "ctx-title"); h.textContent = "DEBUG";
+    box.appendChild(h);
+    for(const [label, fn] of BRANDMENU)
+      box.appendChild(KIT.button(label, {flat:true, onClick(){
+        // every dump is a round trip to the server: say so, then say what happened
+        note.textContent = "WORKING...";
+        Promise.resolve().then(fn).then(m => { note.textContent = m; },
+                                        e => { note.textContent = "FAILED: " + e.message; });
+      }}).el);
+    note.textContent = "";
+    box.appendChild(note);
+  };
+  MOUSE.on(brand, {click(){
+    const open = box.classList.contains("kit-hide");
+    if(open) build();
+    KIT.show(box, open);
+    const r = brand.getBoundingClientRect();
+    box.style.left = r.left + "px";
+    box.style.top = r.bottom + 4 + "px";
+  }});
+  MOUSE.pre({down(e){ if(!e.target.closest("#brandmenu") && e.target !== brand) close(); }});
 }
 
 /* THE RIGHT-CLICK MENU, IN HTML. Built on OPEN and torn down on close, not
