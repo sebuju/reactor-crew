@@ -1074,11 +1074,14 @@ const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly
    the boron slider spans, so a key can never ask for a demand the slider could
    not be dragged to */
 const BOR_STEP=200, BOR_LO=-6000, BOR_HI=0;
-const borStep=dir=>clamp(S.boronDem-dir*BOR_STEP,BOR_LO,BOR_HI);
+// the bench has no S: the keys label off the commissioned figure the slider
+// draws there (benchCell's `bench`), the same way pumpFloor() reads past a null P
+const borNow=()=>S?S.boronDem:clamp(derived().boronOp,BOR_LO,BOR_HI);
+const borStep=dir=>clamp(borNow()-dir*BOR_STEP,BOR_LO,BOR_HI);
 /* WHAT THE PRESS IS WORTH, pcm, signed - the key's own label. It is the CLAMPED
    step and not a flat 200, so a key with only 89 pcm of travel left says 89 and
    a key against the end says nothing is left. */
-const borDelta=dir=>borStep(dir)-S.boronDem;
+const borDelta=dir=>borStep(dir)-borNow();
 const borLabel=dir=>{ const d=borDelta(dir);
   return (d>0?"+":"")+d.toFixed(0)+" pcm"; };
 /* ONE step for every PERCENTAGE control on a strip - the rod bank and the
@@ -1745,14 +1748,14 @@ function partGhost(){
 function pipeFitMarks(L,net){
   if(!L) return;                      // both readings are live figures
   const anch=pipeAnchors(net);
-  /* SLOT 3 OF THE RUN'S OWN STACK, never a plate of this reading's own over
+  /* SLOT 5 OF THE RUN'S OWN STACK, never a plate of this reading's own over
      the valve's box - that is where the valve's NAME is. fitRunKey() is the
      one answer the allocator already reserved the line against. A valve with
      no pipe on it at all has no stack to write into and keeps its own tag. */
   const put=(id,label,col,cx,yTop)=>{
     const key=fitRunKey(id,net), a=key!==null && anch[key];
     if(!a){ pipeTag(cx,yTop,label,col); return; }
-    if(pipeHovShow(key)) pipeStackLine(a.x,a.y,3,label,col);
+    if(pipeHovShow(key)) pipeStackLine(a.x,a.y,5,label,col);
   };
   for(const p of LAY.parts){
     if(p.role!=="fitting") continue;
@@ -3109,7 +3112,7 @@ function leaderAnchor(a,face){
    on whichever ends are attached to something. Both leaders go through here.
    SOLID. It was dashed so it could not read as one more pipe, and the two are
    in no danger of being confused any more: a pipe is drawn in the colour of
-   what is in it at 2.2 units and up (pipeWidth), a leader is one grey unit.
+   what is in it at 2.2 units and up (pipeWidth), a leader is two grey units.
 
    THE INK UNIT IS THE CALLER'S, BECAUSE THE TWO LEADERS ARE IN DIFFERENT
    SPACES. A leader to a RAIL has one end on the canvas and one on an HTML wall
@@ -3126,7 +3129,7 @@ function leaderStroke(pts,col,caps,ink,rad){
   const k=ink;
   ctx.save();
   ctx.lineCap="square"; ctx.lineJoin="round";
-  ctx.strokeStyle=col; ctx.lineWidth=k;
+  ctx.strokeStyle=col; ctx.lineWidth=2*k;
   // one path, not a line() per leg: a corner can only be rounded where the
   // segments meet, and arcTo needs the run either side of it to do that
   ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
