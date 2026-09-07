@@ -246,6 +246,13 @@ const LAYERS={
   roomo:{group:"COMPARTMENT", label:"OXYGEN",     seam:"under", data:"room", live:true, on:false,
         draw:roomO2Layer,
         tip:"What is left in each cell to burn WITH. It draws DEPLETION only - a cell holding what air actually holds prints nothing, because the question is where a fire has eaten its own air. Blue and labelled is under 5% by volume, the limiting oxygen concentration: nothing ignites there whatever else is in it, which is how a sealed corner smothers its own fire and leaves the hydrogen unburnt."},
+  /* SHIPS ON, and it passes H2 CLOUD's test for the same reason: a compartment
+     with no metal spilled in it paints nothing at all, so this is an
+     annunciator rather than a survey - and where the pool ran to is a fact you
+     cannot ask for if you find out about it by remembering to. */
+  roomn:{group:"COMPARTMENT", label:"METAL POOL", seam:"under", data:"room", live:true, on:true,
+        draw:roomNaLayer,
+        tip:"Sodium that has come out of a pipe and is lying on the deck. It is a PLACE: it falls, it runs along the deck, it piles up against the machines, and how far it spread is what decides how fast it burns - a puddle is slow, the same metal spread thin over a bay is not. Dim grey is metal that is not alight; AMBER, labelled with its own temperature, is metal that is. Only the top of a stack burns, because only the top of a stack has air on it. It needs no spark: it comes out of the pipe hundreds of degrees past the temperature it lights itself at, and it goes out only when the pool is gone, the metal has cooled, or the OXYGEN layer says the bay has nothing left to burn with."},
   roomp:{group:"COMPARTMENT", label:"BLAST",      seam:"under", data:"room", live:true, on:false,
         draw:roomPLayer,
         tip:"What a blast did to each cell, and it STAYS. Overpressure is banded against the machines' own limits rather than round numbers: 20 kPa takes a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel - blue, green, amber, red, bright red. The compartment relieves itself in about half a second, so what is drawn is the HIGH-WATER MARK: the worst each cell has ever seen, never fading, dark with soot in proportion to it and coloured by what that pressure was enough to break. A compartment that has been blown apart three times looks like it, and stays that way until something cleans it. The cells the wave is in right now pulse. No figure is printed - point at a cell for the reading."},
