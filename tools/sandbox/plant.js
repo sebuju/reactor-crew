@@ -49,7 +49,7 @@ return {
           vol:40, level:50, inf:false, gas:null, hold:{p:7.5}});
         const a = R.port("pzr2", 1, M.partOf("pzr2").h);
         const b = R.port("feed", 1, -1);
-        R.run(a, b, true);
+        R.run(a, b);
         return {note:"pzr2 holds 7.5 MPa on the secondary"};
       },
       cols(){ const G=M.nodeGraph();
@@ -75,8 +75,8 @@ return {
            both known - so a source wired straight into a void carries exactly
            nothing. The junction is the free node the solve needs. */
         const t = R.fit(1, 6, "tee", "RIG TEE");
-        R.run(R.port("srcA", 1, M.partOf("srcA").h), R.port(t, 0, -1), false);
-        R.run(R.port(t, 0, 1), R.port("sinkA", 1, -1), false);
+        R.run(R.port("srcA", 1, M.partOf("srcA").h), R.port(t, 0, -1));
+        R.run(R.port(t, 0, 1), R.port("sinkA", 1, -1));
         // a rig pipe is rated for what the rig pushes: 16 MPa split the line
         // on the second tick and this profile read srcQ 12.65 against sinkQ -0.07
         R.wall(60);
