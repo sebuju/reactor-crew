@@ -2164,6 +2164,8 @@ function bookedKg(net, s, i){
 }
 let advectClamped = 0;
 const advectClampCount = () => advectClamped;
+// sweeps of the donor limiter; it stops early when a pass changes nothing, so this is only the cap on a cascade
+const COURANT_PASSES = 8;
 /* WHAT THE TRANSPORT ACTUALLY PUT THROUGH EVERY HOLE THIS TICK, kg - the
    ledger's own figure, off the same limited flows the mass integral rides. */
 let advectOutPri = 0, advectOutSec = 0, advectCondIn = 0;
@@ -2296,8 +2298,6 @@ function advectStep(s, dt, runFlow, edgeKg){
        over 40 s of a blowdown. What the solve moved that way is not carried. */
     if(bkd[from] === 2) continue;
     eFrom[e] = from; eM[e] = m;
-    mOut[from] += m;
-    mIn[from === ed.u ? ed.v : ed.u] += m;
   }
   /* ══ AND A NODE MAY NOT GIVE MORE THAN IT HAS ══
      The donor-cell limiter the mass pass never had. flowG()'s run-dry gate
@@ -2312,7 +2312,6 @@ function advectStep(s, dt, runFlow, edgeKg){
      through the tick, which is what running out is. Booked nodes and
      containment keep 1: their inventory is somebody else's integral, and
      containment cannot donate at all now. */
-  const kOut = scratch(net, "kOut", net.n, Float64Array, 1);
   /* NEITHER LIMITER DURING A SETTLE (netStoreHeld): no mass is integrated
      there and a pass is not a tick, so what a node "has" against a pass's
      throughput means nothing - read anyway, it throttled every small node
@@ -2329,16 +2328,28 @@ function advectStep(s, dt, runFlow, edgeKg){
        stub 1.6 kg a tick out of nothing once the level read it (73 kg over a
        20 s lift, booked as a negative clamp). Shells and the hotwell keep 1:
        they boil and condense inside their own book. */
-    for(let i=0;i<net.n;i++){ const o = mOut[i]*dt;
-      if(!(o > 0) || (bk[i] && !(net.tankIdByNode && net.tankIdByNode[i] !== undefined))) continue;
-      const have = mBy[net.name[i]];
-      if(have === undefined) continue;
-      const cap = have + mIn[i]*dt;
-      if(o > cap) kOut[i] = Math.max(cap, 0)/o; } }
-  for(let e=0;e<net.edges.length;e++){
-    const from = eFrom[e]; if(from < 0) continue;
-    const k = kOut[from]; if(k !== 1) eM[e] *= k;
-  }
+    /* AND THE INFLOW IN THAT CAP IS SOMEBODY ELSE'S THROTTLED OUTFLOW, so one
+       pass is not the answer: priced off the RAW solve, a node fed by a donor
+       that ran dry was still cleared to give what never arrived, and the floor
+       at zero below booked the difference - 285 kg over a 15 s BWR/4 blowdown.
+       Swept until nothing moves, each pass reading the flows the last one left,
+       which only ever shrinks them, so it converges by construction. */
+    for(let pass=0; pass<COURANT_PASSES; pass++){
+      mOut.fill(0); mIn.fill(0);
+      for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+        const ed = net.edges[e];
+        mOut[from] += eM[e]; mIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
+      const kOut = scratch(net, "kOut", net.n, Float64Array, 1);
+      let bit = false;
+      for(let i=0;i<net.n;i++){ const o = mOut[i]*dt;
+        if(!(o > 0) || (bk[i] && !(net.tankIdByNode && net.tankIdByNode[i] !== undefined))) continue;
+        const have = mBy[net.name[i]];
+        if(have === undefined) continue;
+        const cap = have + mIn[i]*dt;
+        if(o > cap){ kOut[i] = Math.max(cap, 0)/o; bit = true; } }
+      if(!bit) break;
+      for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+        const k = kOut[from]; if(k !== 1) eM[e] *= k; } } }
   /* ══ AND A NODE MAY NOT TAKE MORE THAN IT CAN HOLD ══
      The other end of the same sentence. A node whose whole contents turn over
      inside one tick is past the Courant limit for the mass as well as for the
