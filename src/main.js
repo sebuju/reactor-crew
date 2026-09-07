@@ -71,6 +71,8 @@ const nextFrame = () => {
 };
 function tick(now){
   let dt=(now-prev)/1000; prev=now; dt=Math.min(dt,.25);
+  // a halted tab owes nothing but the poll that ends the halt (idlehalt.js)
+  if(haltStep(now)){ setTimeout(()=>tick(performance.now()),HALT_POLL_MS); return; }
   const t0=performance.now();
   // the frame's OWN time, not the time the draw happens to reach fx - see
   // fxSetClock() (render/fx.js)
