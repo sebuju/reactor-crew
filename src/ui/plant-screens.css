@@ -25,7 +25,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   grid-template-rows:auto 1fr;pointer-events:none}
 /* the top inset clears the transport strip, which trBuild() mounts on operate
    and scenario only - the design bench has no strip and so no band to clear */
-.cr-root{inset:30px 0 0 0;grid-template-columns:1fr auto}
+.cr-root{inset:36px 0 0 0;grid-template-columns:1fr auto}
 /* the bench rail has nothing left in it, and an empty 340px column is a third
    of the plant view given to nothing */
 .db-root{inset:0;grid-template-columns:1fr auto}
@@ -389,12 +389,16 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-board .db-panel-body{max-height:46vh;overflow-y:auto}
 
 /* ── the floating inspector windows (ui/inspwin.js) ──
-   The margin panel's own look, with the plant-space placement taken back off
-   it: no scale, no clip, and NO SCROLLER ANYWHERE - a window states its whole
+   The margin panel's own look; the plant-space placement is a key on the title
+   bar (inspPin, ui/inspwin.js), so a window is scaled only while it is bolted
+   to the deck. NO SCROLLER ANYWHERE either way - a window states its whole
    panel and grows to it, which is the difference between it and a rail. */
 .insp-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:3}
 .margin-pan.insp-win{transform-origin:0 0;pointer-events:auto;
   border:1px solid var(--c-edge);box-shadow:0 6px 22px rgba(0,0,0,.55)}
+/* bolted to the deck (inspPin, ui/inspwin.js): it is part of the drawing now,
+   so it drops the furniture shadow that says it stands over one */
+.margin-pan.insp-win.insp-plant{box-shadow:none}
 .insp-win .kit-rule-head{cursor:move;user-select:none}
 .insp-win.folded .kit-well-body{display:none}
 /* the chevron points down while the window is open and right while it is
