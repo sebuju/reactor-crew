@@ -63,13 +63,16 @@ const hovwOnEl=el=>!!(el&&hovwTgt&&el.contains(hovwTgt));
    clears it, in the handler above - so a pointer parked on some other machine
    is a stale reading and not a hand on it. The moment the hand moves, the
    landing is gone and the pointer is the only answer left. */
+// a machine the reader already kept a window for is being read in that window;
+// a second panel of the same rows is noise standing over the drawing
+const hovwKept=id=>!!(INSPW_HOST&&INSPW_HOST._wins.some(o=>o.p.id===id));
 function hovwPartAt(){
   const q = navLandId===sel ? partOf(sel) : null;
-  if(q&&fitted(q)) return q;
+  if(q&&fitted(q)&&!hovwKept(q.id)) return q;
   if(!ui.drag&&hovwOnPlant()&&vIn(hovwPt)){
     const pt=vPt(hovwPt);
     const p=partAt([pt.x,pt.y]);
-    if(p&&fitted(p)) return p;
+    if(p&&fitted(p)&&!hovwKept(p.id)) return p;
   }
   return null;
 }
@@ -178,9 +181,8 @@ function hovwSync(host,live){
 }
 
 /* ══ THE PANEL A MACHINE IS SHOWING IN ══
-   One machine may be on screen as a kept window and as a peek at the same
-   time; the window wins, because it is the one that stays still. This is the
-   one door the keys address, so nothing downstream has to know which of the
+   A kept window or a peek, never both for the same machine (hovwKept). This is
+   the one door the keys address, so nothing downstream has to know which of the
    two it got. */
 function panOfSel(){
   if(!sel) return null;
