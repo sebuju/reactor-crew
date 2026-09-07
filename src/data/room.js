@@ -177,22 +177,17 @@ const skinQRole = (s, role) => { let q = 0;
    run's NAME. A kind is a label, so a table off it stated s.Tavg for a line
    the operator had shut and a hit had severed - the pipe went on cooking the
    compartment out of a reactor it was no longer connected to, and a user run
-   carried nothing however hot it was. netTempAt() is the door the liquid
-   itself goes through. An end a SHUT valve cuts is not an end (the same
-   endLive() netBuild() prices the hole with), so a run with no live end holds
-   what it holds and cools - which is what an isolated line does. */
+   carried nothing however hot it was.
+   THE RUN'S OWN NODE, now that it has one. This took the mean of the two
+   MACHINES the run lands on, filtered by which port valve was still passing,
+   because the pipe had no state of its own to ask; a line isolated at both
+   ends had no answer at all and read as carrying nothing. It holds what it
+   holds, whatever its valves are doing, which is what an isolated line does. */
 function runFluidNodes(s, key){
-  const r = P.net && P.net.byKey && P.net.byKey[key];
-  if(!r) return null;
-  const ends = runEnds(key, r.k);
-  if(!ends) return null;
-  const pids = [r.pa, r.pb], out = [];
-  for(let i=0;i<2;i++){
-    const pid = pids[i];
-    if(pid && !(portOpen(s,pid) || portWrecked(s,pid))) continue;
-    out.push(coreFold(ends[i]));
-  }
-  return out.length ? out : null;
+  const net = P.net;
+  if(!net || !net.index) return null;
+  const nid = runNodeOf(key);
+  return net.index[nid] === undefined ? null : [nid];
 }
 const nodeMean = (nodes, read) => { let t = 0, n = 0;
   for(const nd of nodes || []){ const v = read(nd); if(isFinite(v)){ t += v; n++; } }
