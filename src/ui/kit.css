@@ -146,7 +146,7 @@
 .kit-optlist-row.on .kit-optlist-mass{color:var(--c-amber)}
 .kit-optlist-mass.min{color:var(--c-green)}
 
-.kit-segsel{display:flex;gap:4px}
+.kit-segsel{display:flex;gap:4px; outline: 1px solid var(--c-edge);}
 .kit-segsel-cell{flex:1 1 0;flex-direction:column;align-items:center;justify-content:center;height:39px}
 .kit-segsel-name{font-size:var(--fs-label);letter-spacing:.5px}
 .kit-segsel-mass{font-size:var(--fs-tiny);color:var(--c-ink2);margin-top:2px}
