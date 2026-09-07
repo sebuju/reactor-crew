@@ -174,6 +174,91 @@ async function dumpImage(){
   return dumpDone([name], ok);
 }
 
+/* ═══════════════ THE ONE DUMP THAT COMES BACK ═══════════════
+
+   The CSV above is for reading and this is for returning to, and they are not
+   the same file: six significant figures is what a chart wants and a plant put
+   back from six figures is a DIFFERENT plant, quietly, from the first tick.
+   So a snapshot is store.js's tagged JSON - typed arrays and Infinity survive
+   it - and it is exact.
+
+   The design still rides in the sidecar, exactly like the CSV dumps, so a
+   snapshot pair looks like every other pair in the directory. */
+
+const dumpSnapJSON = () => JSON.stringify(packVal({tick:S.tick, S:snapS(S), log:LOG}));
+
+async function dumpSnapSave(){
+  if(typeof S === "undefined" || !S) return "NO PLANT: commission one first.";
+  const stem = dumpStem("snap");
+  const a = await dumpWrite(stem + ".json", dumpSnapJSON());
+  const b = await dumpWrite(stem + ".design.json", dumpHeadJSON());
+  return dumpDone([stem + ".json", stem + ".design.json"], a && b);
+}
+
+const dumpSnapNames = async () => {
+  const all = await snapList();
+  return all === null ? null : all.filter(n => /_snap\.json$/.test(n));
+};
+
+/* ══ PUTTING A SAVED PLANT BACK ON THE BOARD ══
+   The order is the one a prewarm follows and it is not negotiable: the design
+   goes on first (recApplyHead() rebuilds D and the board), then commissioning
+   derives P from it, and only then does the state land - restoreS() into a P
+   built from another design is a plant whose network does not match its own
+   state. commission() drains the generator in one go, so the page blocks for
+   the second or so the prewarm bar normally covers.
+
+   A new ROOT after it, because what is on the board is not the continuation of
+   whatever was being recorded: it is a plant that appeared. The rings go with
+   it for the same reason - a strip chart carrying the last plant's history
+   under this one's trace is a lie about what just happened. */
+function dumpApply(snap, head){
+  const matched = recApplyHead(head);
+  commission();
+  trBench(); trRateFit();                  // the benchmark is part of commissioning
+  restoreS(snap.S);
+  LOG = Array.isArray(snap.log) ? snap.log.slice() : [];
+  recRoot();
+  initHist();
+  TR.paused = true;                        // a loaded plant waits to be looked at
+  screen = "operate"; layout(); uiDirty();
+  return matched;
+}
+
+async function dumpSnapLoad(name){
+  const stem = name.replace(/\.json$/, "");
+  const a = await snapGet(name), b = await snapGet(stem + ".design.json");
+  if(!a || !b) return "CANNOT READ " + name + (b ? "" : " or its .design.json sidecar") + ".";
+  let snap, head;
+  try{ snap = unpackVal(JSON.parse(a)); head = unpackVal(JSON.parse(b)); }
+  catch(e){ return "BAD SNAPSHOT: " + e.message; }
+  const matched = dumpApply(snap, head);
+  return "LOADED " + name + " at tick " + S.tick +
+    (matched ? "" : " - WARNING: the design signature did not match, so the head is missing " +
+                    "something designSig() counts. The plant on the board is the one in the file.");
+}
+
+/* No server means no list and no fetch, so the file is handed over instead.
+   Both halves at once: the state and its sidecar are one dump in two files. */
+function dumpSnapPick(){
+  return new Promise(resolve => {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = ".json"; inp.multiple = true;
+    inp.onchange = async () => {
+      const picked = [...inp.files];
+      const hf = picked.find(f => /\.design\.json$/.test(f.name)), sf = picked.find(f => f !== hf);
+      if(!hf || !sf) return resolve("PICK BOTH FILES: the _snap.json and its _snap.design.json.");
+      try{
+        const snap = unpackVal(JSON.parse(await sf.text()));
+        const head = unpackVal(JSON.parse(await hf.text()));
+        const matched = dumpApply(snap, head);
+        resolve("LOADED " + sf.name + " at tick " + S.tick + (matched ? "" : " - DESIGN SIGNATURE MISMATCH"));
+      }catch(e){ resolve("BAD SNAPSHOT: " + e.message); }
+    };
+    inp.click();
+  });
+}
+
 async function dumpPurge(){
   const n = await snapPurge();
   if(n === null) return "NO SERVER: nothing to purge from here. " + DUMP_DIR + " is on disk only.";
