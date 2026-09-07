@@ -5,7 +5,8 @@
    its machine and also what makes it move out from under the reader. An
    inspector window is the other answer to the same question - one machine's
    panel, parked where the reader put it, at its own size, staying there while
-   the plant is driven around underneath.
+   the plant is driven around underneath - or bolted back onto the deck by its
+   own key, which is the one choice the two grounds are (inspPin).
 
    IT IS NOT A SECOND PANEL. panPartSync() (ui/margin.js) is the one fill and
    marginPan() the one handle shape, so a row that appears on the drawing's
@@ -54,9 +55,36 @@ function inspDrag(h){
          leaves the peek a peek - and the grab is on the BAR, which the promote
          keeps, so the same gesture carries straight on into the drag. */
       if(h.onDrag){ const f=h.onDrag; h.onDrag=null; f(h); }
-      h.wx=e.clientX-g.x; h.wy=e.clientY-g.y; inspMove(h);
+      h.wx=e.clientX-g.x; h.wy=e.clientY-g.y;
+      // the hand always states a place in px; in plant space that place is an
+      // anchor on the board, so the drag writes the anchor and never wx/wy
+      if(h.plant) inspAnchor(h);
+      inspMove(h);
     },
     up:drop, cancel:drop});
+}
+
+/* ══ THE OTHER GROUND A WINDOW MAY STAND ON ══
+   Screen space is where a window is parked so the plant may be driven around
+   underneath it. Plant space is the margin panel's ground (ui/margin.js): the
+   window is bolted to the deck at the point the reader left it, and it then
+   pans, zooms and scales with the drawing exactly as a panel does. Same window,
+   same fill, one key between the two - which is the choice the reader actually
+   has, "stay with the machine" or "stay where I put you".
+   The anchor is a PLANT point, not a screen one, so a pan cannot make it stale. */
+function inspAnchor(h){
+  const q=vPt(marginUnits(h.wx,h.wy));
+  h.px=q.x; h.py=q.y;
+}
+function inspPin(h,on){
+  h.plant=!!on;
+  // handed over at the place it is standing, either way: the window does not
+  // jump under the hand that pressed the key
+  if(h.plant) inspAnchor(h);
+  h.wtf=null;
+  h.well.el.classList.toggle("insp-plant",h.plant);
+  if(h.keyPin) h.keyPin.set({on:h.plant});
+  inspMove(h);
 }
 
 function inspCollapse(h,on){
@@ -92,16 +120,27 @@ function inspFrame(host){
    a window grows to its content and its content may be taller than the screen,
    and a clamp on the bottom edge would then drag the bar off the top. */
 function inspMove(h){
-  const vw=typeof innerWidth==="number"?innerWidth:1920;
-  const vh=typeof innerHeight==="number"?innerHeight:1080;
-  const w=h.well.el.offsetWidth||h.w;
-  // sideways it may hang off, so a wide window can be read at either edge; the
-  // TOP is the frame's, because a bar dragged under the tools row is a window
-  // that cannot be moved back
-  const top = inspFrame(h.well.el.parentNode).y0;
-  h.wx=Math.max(INSPW_MIN_VIS-w, Math.min(vw-INSPW_MIN_VIS, h.wx));
-  h.wy=Math.max(top, Math.min(vh-24, h.wy));
-  const tf="translate3d("+Math.round(h.wx)+"px,"+Math.round(h.wy)+"px,0)";
+  let tf;
+  if(h.plant){
+    /* NOT CLAMPED AND NOT ROUNDED: a window bolted to the deck goes off screen
+       with the deck it is bolted to, and a quantised place pops it a pixel each
+       way as the zoom moves - both are the margin panel's rules, and this is
+       the margin panel's ground. */
+    const k=marginZoomK(), s=vScr({x:h.px,y:h.py}), g=marginPage(s.x,s.y);
+    h.wx=g.x; h.wy=g.y;
+    tf="translate3d("+h.wx.toFixed(3)+"px,"+h.wy.toFixed(3)+"px,0) scale("+k.toFixed(4)+")";
+  }else{
+    const vw=typeof innerWidth==="number"?innerWidth:1920;
+    const vh=typeof innerHeight==="number"?innerHeight:1080;
+    const w=h.well.el.offsetWidth||h.w;
+    // sideways it may hang off, so a wide window can be read at either edge; the
+    // TOP is the frame's, because a bar dragged under the tools row is a window
+    // that cannot be moved back
+    const top = inspFrame(h.well.el.parentNode).y0;
+    h.wx=Math.max(INSPW_MIN_VIS-w, Math.min(vw-INSPW_MIN_VIS, h.wx));
+    h.wy=Math.max(top, Math.min(vh-24, h.wy));
+    tf="translate3d("+Math.round(h.wx)+"px,"+Math.round(h.wy)+"px,0)";
+  }
   if(h.wtf!==tf){ h.well.el.style.transform=tf; h.wtf=tf; }
 }
 
@@ -110,9 +149,14 @@ function inspMove(h){
    does, so there is nothing to fold or close - and it grows them the moment a
    drag keeps it (hovwPin, ui/hoverwin.js).
    The chevron is not redrawn folded: the class on the window turns it. */
-const INSPW_ICON={fold:"M4 6.5 L8 10.5 L12 6.5", shut:"M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5"};
+const INSPW_ICON={fold:"M4 6.5 L8 10.5 L12 6.5", shut:"M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5",
+  pin:["M8 2.8 a2.4 2.4 0 1 1 0 4.8 a2.4 2.4 0 1 1 0-4.8","M8 7.6 L8 13.2"]};
 function inspKeys(h){
   const keys=KIT.el("div","insp-keys");
+  h.keyPin=KIT.button("PIN TO PLANT",{flat:true,icon:INSPW_ICON.pin,on:!!h.plant,
+    tip:"Bolt this window to the drawing, so it pans and zooms with the plant. Off, it stays where it is on screen while the plant moves under it.",
+    onClick:()=>inspPin(h,!h.plant)});
+  keys.appendChild(h.keyPin.el);
   h.keyFold=KIT.button("FOLD",{flat:true,icon:INSPW_ICON.fold,
     tip:"Fold this window down to its title bar.",
     onClick:()=>inspCollapse(h,!h.folded)});
