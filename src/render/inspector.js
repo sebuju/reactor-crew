@@ -124,18 +124,39 @@ function limSame(a,b){
   for(let i=0;i<a.length;i++) if(a[i][0]!==b[i][0]||a[i][1]!==b[i][1]) return false;
   return true;
 }
+/* ══ A LIVE PANEL IS SECTIONED LIKE A BENCH PANEL ══
+   The bench lays its knobs out as titled sections in a grid (dbPanelSync,
+   design-bench.js) and the control room laid the same machine's readouts out
+   as one flat column, so the two screens read as two different instruments
+   about one box. A row list that carries {sec:"NAME"} entries is built into
+   the SAME .db-grid of .db-section the bench builds, off the same KIT.rule.
+
+   OPT-IN, on the rows themselves: the master caution and the bench's own
+   readlist blocks hand in no section at all and stay the plain column they
+   were - a wrapper round those would be a box round one list. */
 function fieldRowsBuild(container,rows){
   const out=[];
   let viz=null;
+  let grid=null, sec=null;
+  if(rows.some(r=>r.sec)){
+    grid=KIT.el("div","db-grid insp-grid"); container.appendChild(grid);
+    sec=KIT.el("div","db-section"); grid.appendChild(sec);
+  }
+  const put=el=>(sec||container).appendChild(el);
   for(const row of rows){
-    if(row.sec){ container.appendChild(KIT.rule(row.sec).el); out.push({sec:row.sec}); continue; }
+    if(row.sec){
+      /* the leading section is minted empty above, so the first heading fills
+         it rather than opening a second one and leaving a blank cell */
+      if(sec.childElementCount){ sec=KIT.el("div","db-section"); grid.appendChild(sec); }
+      sec.appendChild(KIT.rule(row.sec).el);
+      out.push({sec:row.sec}); continue; }
     /* A genuinely graphical row keeps its own <canvas>, painted by the screen
        through hostPaint() - the rail is opaque, so drawing it on #cv would put
        it under the panel. Same arrangement the lattice plan uses. */
     if(row.viz){
       const c=KIT.el("canvas","insp-viz insp-viz-"+row.viz);
       if(row.tip) KIT.tip(c,row.title||row.viz,row.tip);
-      container.appendChild(c);
+      put(c);
       /* handed back on the container so the screen paints it off this build
          instead of re-querying the whole screen for it every frame. It cannot
          go stale: a rebuild replaces the canvas and this map together. */
@@ -153,11 +174,12 @@ function fieldRowsBuild(container,rows){
     val.append(num,dlt);
     el.append(lab,val);
     let bar=null,barKind=null;
-    if(row[4]){ bar=KIT.band({lo:row[4].lo,hi:row[4].hi,zones:row[4].zones,dp:row[4].dp,lim:row[4].lim,v:row[4].v});
+    if(row[4]){ bar=KIT.band({lo:row[4].lo,hi:row[4].hi,zones:row[4].zones,dp:row[4].dp,lim:row[4].lim,
+                              marks:row[4].marks,v:row[4].v});
       barKind="band"; el.appendChild(bar.el); }
     else if(row[5]){ bar=KIT.segMark({signed:true,full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
     if(row[3]) KIT.tip(el,row[0],row[3]);
-    container.appendChild(el);
+    put(el);
     /* txt/col are what was last WRITTEN. Asking the element back costs a DOM
        read per row per frame, and for a colour outside the palette it is also
        wrong: #00ffff goes in and rgb(0, 255, 255) comes out, so the guard never
@@ -202,7 +224,7 @@ function fieldRowsSync(container,rows){
       H.el.classList.toggle("amber",sev===C.amber);
       H.col=col;
     }
-    if(H.barKind==="band"){ H.bar.set(row[4].v); H.lim=row[4].lim; }
+    if(H.barKind==="band"){ H.bar.set(row[4].v,row[4].mv); H.lim=row[4].lim; }
     else if(H.barKind==="sig") H.bar.set(row[5].f,row[5].m,col);
   }
 }
@@ -241,6 +263,46 @@ function statRowsSync(container,stats){
 /* ONE HEADING FOR EVERY LIST OF ANSWERS. A readlist block is measurements by
    definition, so the panel that carries one says so in the same words. */
 const MEASURED_TIP="Every number on this list is an OUTPUT of the design. Not one of them is a value you can set - to move one of these, move a knob above it.";
+
+/* ══ WHAT EVERY BOX ON THE BOARD ANSWERS, WHATEVER IT IS ══
+   Six things are true of a machine because it is a machine: what it weighs,
+   what share of the ship that is, how much deck it stands on, how hot its own
+   metal will take, what blast it will take, and whether anybody can get to it
+   to mend it. None of them was on a panel, and the tonnage was a suffix on the
+   title bar - one figure with no scale beside it, on the one screen where the
+   mass budget is the whole game. They go on the MEASURED list because that is
+   what they are: outputs, not knobs.
+   Every row is a door already open (partMassOf/partTsurv/partPburst/
+   partAccess, data/layout.js), so nothing here is a second opinion. */
+function measBoxRows(id){
+  const p=partOf(id); if(!p) return [];
+  const t=partMassOf(id), all=derived().mass, ts=partTsurv(p), pb=partPburst(p);
+  const R=[["MASS",t.toFixed(t<10?1:0)+" t",null,
+    "What this box costs the ship, off the same door the mass budget reads. Every tonnage the knobs above quote is inside this one figure."]];
+  if(all>0) R.push(["SHARE OF SHIP",(t/all*100).toFixed(1)+" %",t/all>.25?C.amber:null,
+    "How much of the whole plant's mass is this one machine. Past a quarter of the ship in one box, it is the design decision, and everything else is detail."]);
+  R.push(["FOOTPRINT",p.w+" x "+p.h+" cells",null,
+    "How much deck it stands on. Deck is what a panel needs to see the skin, what a repair party walks through, and what the next machine has not got."]);
+  if(ts) R.push(["METAL SURVIVES TO",ts.toFixed(0)+" K",null,
+    "How hot the compartment air may get before this box is damaged by the room it is standing in. Its own title bar reads the temperature it is actually at."]);
+  if(pb) R.push(["BLAST LIMIT",pb.toFixed(0)+" kPa",null,
+    "The overpressure it takes from a hydrogen burn in the same compartment before it is wrecked."]);
+  R.push(["ACCESS",partAccess(p)?"reachable":"WALLED IN",partAccess(p)?C.green:C.red,
+    "Whether a repair party can reach this box at all. Walled in on every side it stays broken for the rest of the run, whatever you send."]);
+  return R;
+}
+/* Appended to the panel's own MEASURED list rather than pushed as a second
+   one: two lists under one heading is how a panel comes to have two answers. */
+function measAttach(B,id){
+  let hit=null;
+  (function walk(bs){ for(const b of bs){
+    if(b.kind==="readlist" && b.title==="MEASURED") hit=b;
+    else if(b.blocks) walk(b.blocks); } })(B);
+  if(!hit) return B;
+  const was=hit.rows;
+  hit.rows=()=>was().concat(measBoxRows(id));
+  return B;
+}
 function paramsFor(p){
   const B=[], id=p.id;
   // where the next block lands. A section's blocks once a panel opens one.
@@ -456,8 +518,7 @@ function paramsFor(p){
         "kW/K",0,()=>ihxUASuggest(),v=>v*IHX_T_PER_UA);
     SEC();
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const served=ihxFeeds(id); return [
-      ["FEEDS",served.length?nameList(served):"nothing",null,"Which stages stand on this exchanger's second circuit. Traced off the drawing - give the second side a pump, a tank and its own runs, exactly like the primary."],
-      ["EXCHANGER MASS",(ihxUAOf(id)*IHX_T_PER_UA).toFixed(0)+" t",null,"The vessel and the tubes. It is the whole price of the second stage, and it is heavy."]]; }});
+      ["FEEDS",served.length?nameList(served):"nothing",null,"Which stages stand on this exchanger's second circuit. Traced off the drawing - give the second side a pump, a tank and its own runs, exactly like the primary."]]; }});
     help("A second heat transfer stage, and it is a BARRIER. The primary heats this exchanger and this exchanger heats whatever stands on its second circuit, so a tube rupture in one of those generators leaks THAT circuit's coolant into the shell and costs no release at all. Two conductances in series cost a temperature drop, so the same core raises colder steam and makes less electricity - that is the price of the barrier.");
     help("Four faces and no fold: hot side left to right, second side top to bottom. The second side is a real circuit and needs its own pump and its own expansion tank, or nothing crosses.");
   }
@@ -547,8 +608,7 @@ function paramsFor(p){
       ["CAN SHED",live?"YES":"NO",null,"A panel radiates only through the skin. One face of its own footprint against the hull is enough. Walled in on every side it sheds nothing at all: measured, the stock pair moved inboard trips the turbine in under two minutes and the plant makes no electricity."],
       ["SHEDDING",live?(radArea(id)/1e6).toFixed(2)+" Mm²":"0",null,"What this panel is worth as fitted. Blind, it is zero however big the box is."],
       ["EMISSIVITY",radCoatOf(id).emis.toFixed(2),null,"The share of a perfect black body's radiation this finish actually sheds, at the same temperature."],
-      ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."],
-      ["PANEL MASS",radMass(id).toFixed(0)+" t",null,"Structure and coolant. Area is not free and the ceramic finish is the heaviest of the three."]]; }});
+      ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."]]; }});
     help("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone. So is an unplumbed one: a panel cools the water running through it, so where you pipe it is what it cools.");
   }
   else if(p.role==="ctrl"){
@@ -673,17 +733,18 @@ function paramsFor(p){
     SEC();
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
       ["PUMP POWER HELD",(BKP[D.bkp].bk*100).toFixed(0)+" %",D.bkp?null:C.amber,
-       "What share of rated pump power this set carries through a blackout. Nothing here means the pumps stop dead and only natural circulation is left."],
-      ["MASS",BKP[D.bkp].mass.toFixed(0)+" t",null,
-       "What the set weighs on the budget."]]});
+       "What share of rated pump power this set carries through a blackout. Nothing here means the pumps stop dead and only natural circulation is left."]]});
   }
   else {
     GRID(1); SEC();
     help(p.tip);
     T.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS"});
     B.plain = partAccess(p);
+    // nothing to set is not nothing to measure - measBoxRows() has six answers
+    // for any box at all, and this branch is where the plain ones land
+    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[]});
   }
-  return B;
+  return measAttach(B,id);
 }
 
 /* ══ WHAT A FITTING LETS YOU SET ══
@@ -771,10 +832,8 @@ function paramsForFit(fid){
   const rdo=(title,tip,val)=>reliefS.blocks.push({kind:"readout",title,tip,val});
   measS.blocks.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[
     ["FLOW AREA",(Math.PI/4*Math.pow(fitBoreMm(fid)/1000,2)).toFixed(4)+" m2",null,
-     "The hole the bore above makes. It is what the solve conducts through - a valve wide open is this area, and shut it is none of it."],
-    ["MASS",fitMassOf(fid).toFixed(1)+" t",null,
-     "What this fitting weighs, priced off its bore against the default valve."]]});
-  if(j.mode!=="relief") return B;
+     "The hole the bore above makes. It is what the solve conducts through - a valve wide open is this area, and shut it is none of it."]]});
+  if(j.mode!=="relief") return measAttach(B,fid);
   grid.blocks.push(reliefS);
   reliefS.blocks.push({kind:"toggle",title:"SPRING SAFETY",
     key:{get:()=>!!j.spring, set:v=>{ if(v) j.spring=true; else delete j.spring; }},
@@ -813,7 +872,7 @@ function paramsForFit(fid){
     ()=>{ const t=P&&P.net&&P.net.fitTarget&&P.net.fitTarget[fid];
           if(t) return (D.tanks[t]&&D.tanks[t].name)||t.toUpperCase();
           return (P&&P.net&&P.net.fitVentOut&&P.net.fitVentOut[fid]) ? "ATMOSPHERE" : "THE ROOM"; });
-  return B;
+  return measAttach(B,fid);
 }
 
 /* ══ THE TWO PLATES THAT BELONG TO THE WHOLE DESIGN ══
