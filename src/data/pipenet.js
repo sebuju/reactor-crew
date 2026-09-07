@@ -434,7 +434,7 @@ const flowW = (C, rho, pHi, pLo) => C > 0
   ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(Math.min(pHi-pLo, (1-RCRIT)*Math.max(pHi,0)), 0)*1e6)
   : 0;
 let FLOWG_CHOKE = false;          // set by flowG(), spent by edgeG() on the next line
-const flowG = (C, F, u, v, h, diode) => {
+const flowG = (C, F, u, v, h, diode, hSrc) => {
   FLOWG_CHOKE = false;
   if(!(C > 0)) return 0;
   /* THE DRIVING DIFFERENTIAL INCLUDES THE HEAD, and it has to: netFlows()
@@ -459,10 +459,14 @@ const flowG = (C, F, u, v, h, diode) => {
      higher pressure whatever was flowing - a liquid break from 15.5 MPa to
      containment ran at 7 MPa of effective differential, and a pump lifting
      into a depressurised loop was throttled by a steam law. Gated on the
-     DONOR's own quality and on there being no head source on the edge, so a
+     DONOR's own quality and on there being no head SOURCE on the edge, so a
      liquid blowdown reads Bernoulli and a pump into a low back-pressure runs
-     out, which is what a real one does. */
-  const choke = !h && F.x && F.x[up] > 0;
+     out, which is what a real one does. The source alone, never the total:
+     ed.h carries the static column too, and gravity is not a pump - gated on
+     the total, an edge chokes only where its two ends sit at exactly the same
+     height, which held the choke off the turbine's own swallow. And on the
+     source's VALUE this tick: a stopped pump is a length of pipe. */
+  const choke = !hSrc && F.x && F.x[up] > 0;
   const eff = Math.max(choke ? Math.min(a, (1-RCRIT)*pHi) : a, floor);
   /* AND WHETHER THE CAP ACTUALLY BIT, for the meter to say so. Read off THIS
      expression rather than re-derived beside it: a second copy of the test is
@@ -642,7 +646,8 @@ function netFieldUpdate(net, s){
 const edgeG = (net, ed, s) => {
   const C = typeof ed.C === "function" ? ed.C(s) : ed.C;
   const h = C > 0 ? (typeof ed.h === "function" ? ed.h(s) : (ed.h || 0)) : 0;
-  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode) : 0;
+  const hSrc = C > 0 && ed.hSrc ? ed.hSrc(s) : 0;
+  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc) : 0;
   if(net.choke && ed.i !== undefined) net.choke[ed.i] = (g > 0 && FLOWG_CHOKE) ? 1 : 0;
   return g;
 };
@@ -3141,6 +3146,10 @@ function netFinish(net2, ctx){
      staticH() returns 0 on its own. */
   for(const ed of edges){
     const src = ed.h;
+    /* the source term kept beside the total: the choke gate asks whether
+       anything on this edge is RAISING the pressure, and a column is not. */
+    ed.hSrc = typeof src === 'function' ? s => src(s)*HEAD_K
+            : src ? () => src*HEAD_K : null;
     ed.h = typeof src === 'function' ? s => (src(s) + staticH(net2, ed))*HEAD_K
          : src ? s => (src + staticH(net2, ed))*HEAD_K
          : s => staticH(net2, ed)*HEAD_K;
