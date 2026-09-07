@@ -105,17 +105,51 @@ async function dumpWrite(name, body, b64){
 
 const dumpStem = kind => "rc_" + stampFile(new Date()) + "_" + kind;
 
-/* One report line for a whole dump, so the menu never has to assemble one. */
-const dumpSaid = (files, served) =>
-  files.join(" + ") + (served ? " to " + DUMP_DIR
+/* ══ THE PATH GOES TO THE CLIPBOARD ══
+   The whole point of a dump is to open it somewhere else, so the answer to
+   "where is it" should be pasteable, not retyped off a menu. The async
+   clipboard needs a secure context and `file://` is not one, so the old
+   selection-and-copy is the fallback rather than a legacy leftover - it is the
+   path the download case actually takes.
+
+   hasFocus() FIRST, and it is not politeness: Chrome does not reject a
+   clipboard write from an unfocused document, it never settles the promise at
+   all, so awaiting one leaves the menu saying WORKING for the rest of the
+   session. Measured - it hung a tab for 45 s. */
+async function dumpCopy(text){
+  try{
+    if(document.hasFocus() && navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  }catch(e){ /* denied or not focused: try the old way below */ }
+  try{
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }catch(e){ return false; }
+}
+
+/* One report line for a whole dump, and the one place the first file's path
+   reaches the clipboard - a dump that says where it went and a dump that hands
+   you the path are the same event. */
+async function dumpDone(files, served){
+  await dumpCopy((served ? DUMP_DIR : "") + files[0]);
+  return files.join(" + ") + (served ? " to " + DUMP_DIR
     : " DOWNLOADED - no server, so not in " + DUMP_DIR + ". Run  node tools/server.js");
+}
 
 async function dumpState(){
   if(typeof S === "undefined" || !S) return "NO PLANT: commission one first.";
   const stem = dumpStem("state");
   const a = await dumpWrite(stem + ".csv", dumpStateCSV(S));
   const b = await dumpWrite(stem + ".design.json", dumpHeadJSON());
-  return dumpSaid([stem + ".csv", stem + ".design.json"], a && b);
+  return dumpDone([stem + ".csv", stem + ".design.json"], a && b);
 }
 
 async function dumpTimeline(){
@@ -126,7 +160,7 @@ async function dumpTimeline(){
   const a = await dumpWrite(stem + ".csv", dumpTimelineCSV(frames));
   const b = await dumpWrite(stem + ".design.json", dumpHeadJSON());
   return frames.length + " frames, ticks " + frames[0].tick + "-" + frames[frames.length - 1].tick +
-    ": " + dumpSaid([stem + ".csv", stem + ".design.json"], a && b);
+    ": " + await dumpDone([stem + ".csv", stem + ".design.json"], a && b);
 }
 
 /* The canvas only - the topbar, the rails and the bench panels are HTML and a
@@ -137,7 +171,7 @@ async function dumpImage(){
   if(!c) return "NO CANVAS.";
   const name = dumpStem("view") + ".png";
   const ok = await dumpWrite(name, c.toDataURL("image/png").split(",")[1], true);
-  return dumpSaid([name], ok);
+  return dumpDone([name], ok);
 }
 
 async function dumpPurge(){
