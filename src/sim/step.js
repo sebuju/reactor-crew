@@ -1633,6 +1633,13 @@ const reliefP = (s,fid) => { if(reliefSecIds().includes(fid)) return reliefAtP(s
    first-order constant (FLOW_TAU_COAST) that lost speed as e^-t, which is
    not what a free rotor does. */
 const FLOW_TAU=5;      // seconds; PUMP_ROTOR_S is beside pumpRotor() in layout.js
+/* AND A FREE ROTOR STOPS. The hydraulic term alone falls as 1/(1+t/tau_c) and
+   never reaches zero - a blacked-out coolant pump still turned at 2 % of rated
+   ten minutes in, and the plant read that as forced circulation for ever.
+   Bearings and windage are a torque that does NOT vanish with the flow, so
+   they are linear in N, and the pair stop the shaft: seconds to e-fold once
+   the hydraulic load has gone, which is the few minutes a real RCP takes. */
+const PUMP_FRIC_S=60;
 /* ── the secondary mass balance (Stage 6a) ──
    s.sgl used to be clamp(50+(heat-s.load)*40-(s.load-1)*14,0,100), recomputed
    from scratch every tick with no memory, so it could not run out however long
@@ -2640,21 +2647,24 @@ const stageOutT=(s,id,k)=>{ const IN=roleIns(partOf(id))[k];
    two-phase stream gives up latent heat at one temperature, which is the
    infinite-cp limit of the same law, UA*dT. Read as w*cp on temperature a
    BWR's tubes saw 25 K of a 40 K approach and rested at 54 %. */
-const sgQAt=(s,id,fl,filmK)=>{
+/* THE TUBE-SIDE RATE IS THE STREAM'S OWN, off stageStream(): priced at
+   P.netRef and P.sat.cp it was the PRIMARY's reference flow and the PRIMARY's
+   fluid, on a generator that may stand on another circuit entirely. A
+   two-phase stream still gives its latent heat at one temperature, which is
+   the infinite rate stageStream() already returns. */
+const sgQAt=(s,id,fl,filmK,rf)=>{
   const UA=((P.sgUABy && P.sgUABy[id]) || P.sgUA)*Math.pow(fl,UA_FLOW)*sgFill(s,id)*filmK;
   const dT=Math.max(0, sgHot(s,id) - sgTemp(s,id));
-  const at=stageInNode(s,id,0);
-  if(at>=0 && netQualAt(s, P.net.name[at]) > 0) return UA*dT;
-  const wcp=fl*P.netRef/Math.max(1,sgIds().length)*P.sat.cp;
+  const wcp=stageStream(s,id,0,rf).C;
+  if(!isFinite(wcp)) return UA*dT;
   return wcp > 0 ? wcp*(1-Math.exp(-UA/wcp))*dT : 0; };
 /* THE MOST TUBE A SUGGESTION MAY BUY: past NTU 4 the stream is at the shell
    already and more area removes nothing, so a refit asked for heat the
    approach cannot give must stop here rather than walk to infinity (it
    reached 1e21 kW/K on WINDSCALE). Infinite where the law is a conductance. */
 const SG_NTU_MAX=4;
-const sgUACap=(s,id,fl)=>{ const at=stageInNode(s,id,0);
-  if(at>=0 && netQualAt(s, P.net.name[at]) > 0) return Infinity;
-  return SG_NTU_MAX*fl*P.netRef/Math.max(1,sgIds().length)*P.sat.cp/Math.pow(fl,UA_FLOW); };
+const sgUACap=(s,id,fl,rf)=>{ const wcp=stageStream(s,id,0,rf).C;
+  return isFinite(wcp) ? SG_NTU_MAX*wcp/Math.pow(fl,UA_FLOW) : Infinity; };
 /* IS WHAT IS IN THESE TUBES THE CORE'S OWN WATER? An intermediate exchanger is
    a BARRIER, and that is the whole reason the real machines exist: behind one,
    a tube rupture leaks the exchanger's coolant into the shell and costs no
@@ -4016,7 +4026,7 @@ function resetPlant(){
     const sh = sgShare(byLoop), n = Math.max(1, sgIds().length), filmK = 1-0.85*Math.min(clamp(S.vf,0,1.5),1);
     for(const id in HEATBAL.sgQBy) if(!(id in sh)) delete HEATBAL.sgQBy[id];
     for(const id in sh){ S.sgShare[id] = sh[id];
-      HEATBAL.sgQBy[id] = sgQAt(S, id, Math.max(S.flowNet*sh[id]*n, 0.02), filmK); }
+      HEATBAL.sgQBy[id] = sgQAt(S, id, Math.max(S.flowNet*sh[id]*n, 0.02), filmK, rf); }
     /* AND THE STAGE IN FRONT OF THEM, on the same pass. advectSrc() reads the
        exchanger's crossing off S, so a settle that never wrote one converged
        the field with the second circuit taking nothing at all. */
@@ -4087,8 +4097,8 @@ function resetPlant(){
         let any = false;
         for(const id of ids){ if(D.sgUA[id]!=null) continue;
           const fl = Math.max(S.flowNet*(S.sgShare[id]!==undefined?S.sgShare[id]:1/n)*n, .02);
-          const now = sgQAt(S,id,fl,filmK), want = P.n0*P.rated*1000/n;
-          if(now>0 && want>0){ P.sgUABy[id] = Math.min(P.sgUABy[id]*clamp(want/now, 0.5, 2), sgUACap(S,id,fl)); any = true; } }
+          const now = sgQAt(S,id,fl,filmK,rf), want = P.n0*P.rated*1000/n;
+          if(now>0 && want>0){ P.sgUABy[id] = Math.min(P.sgUABy[id]*clamp(want/now, 0.5, 2), sgUACap(S,id,fl,rf)); any = true; } }
         if(any) P.sgUA = ids.reduce((t,id)=>t+P.sgUABy[id],0)/n; }
       let moved = 0;
       for(const id of sgIds()){ const t = sgHot(S, id);
@@ -4775,7 +4785,7 @@ function step(dt){
       const N = s.flowBy[id], want = supplyK(s)*s.flowDemBy[id];
       // up on the motor; down on the rotor, never below what the motor still holds
       s.flowBy[id] = want >= N ? N + (want - N)*k
-                               : Math.max(want, N - N*N*dt/(2*pumpRotor(id))); }
+                               : Math.max(want, N - (N*N/(2*pumpRotor(id)) + N/PUMP_FRIC_S)*dt); }
     for(const id in s.flowBy) if(!live[id]){ delete s.flowBy[id]; delete s.flowDemBy[id]; } }
 
   /* ── the core's temperature rise: the same 0-D split, told about flow ──
@@ -4891,7 +4901,7 @@ function step(dt){
        stagnant water in tubes the loop is still connected to; isolate the
        generator and there is no water crossing at all, which is what let a
        sealed reactor cool down through shut ports. */
-    const q  = stageFed(P.net,s,id) ? sgQAt(s,id,fl,filmK) : 0;
+    const q  = stageFed(P.net,s,id) ? sgQAt(s,id,fl,filmK,runFlow) : 0;
     sgQBy[id] = q;
     /* HEAT LEAVING THE CORE IS WHAT CROSSES THE STAGE THE CORE'S OWN WATER
        REACHES, never one behind a barrier - charging the core with the second
