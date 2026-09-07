@@ -254,6 +254,10 @@ addEventListener("keydown",e=>{
     if(!e.repeat && !navHeld.has(nk)){ navHeld.add(nk); const d=navHeldDir(); navPreview(d[0],d[1]); }
     return;
   }
+  /* BEFORE THE REGISTRY, because it takes Enter off the zoom row while a key
+     inside a panel has the focus - and answers false when nothing does, so the
+     row still fires (panKeyNav, ui/hoverwin.js). */
+  if(typeof panKeyNav==="function" && panKeyNav(e)) return;
   const K=keyList().find(k=>k.k===e.key);
   if(K){ e.preventDefault(); K.fn(); }
 });
