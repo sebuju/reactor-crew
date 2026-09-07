@@ -1074,7 +1074,7 @@ function satCurveOf(cid, p0){
 function satCurveFor(a, p0){
   const tsat0 = a.tsat*Math.pow(p0/a.P0, coolSatN(a));
   const c = {p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV, hFilm:a.hFilm,
-             tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:a.dens*RHO_K, solidK:a.solidK};
+             tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:a.dens*RHO_K, solidK:a.solidK, burn:a.burn};
   c.Tref = Math.min(a.Tref, tsat0);
   return c;
 }
