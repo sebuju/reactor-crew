@@ -416,7 +416,9 @@ function ctxTitleDesign(hit){
     return (p?partName(p):"")+" PORT"; }
   if(hit.part) return partName(hit.part);
   if(hit.pipe){ const keys=pipeMap().cellOwner[hit.pipe];
-    return (keys && pipeLabel(keys[0].split(":")[0], keys[0])) || "PIPE"; }
+    // the KIND comes off the traced key; a run whose ends are still loose has
+    // no kind yet, because it joins nothing
+    return (keys && keys.length && pipeLabel(keys[0].split(":")[0], keys[0])) || "PIPE"; }
   return "PLANT";
 }
 /* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
@@ -445,15 +447,30 @@ function ctxItemsDesign(hit){
              fn:()=>{ removePart(hit.part.id); }}];
   }
   if(hit.pipe){
-    /* A PIPE CELL UNDER THE CURSOR. The whole connection is what a player
-       usually means, so both offers are here - one cell, or every cell the
-       walk through this one reaches. */
-    const keys=pipeMap().cellOwner[hit.pipe]||[];
-    const items=[{label:"REMOVE CELL", fn:()=>{ delete D.pipes[hit.pipe]; buildLayout(); }}];
+    /* A PIPE CELL UNDER THE CURSOR, and both offers are about the PIPE it is
+       part of: cut it in two here, or take the whole thing off. */
+    const cell=[hit.cell.gx, hit.cell.gy];
+    const ids=runsAtCell(cell[0],cell[1]);
+    const items=[];
+    /* CUT IT IN TWO, where taking one cell out used to be. A cell is not a
+       thing you author any more, so removing one left a run with a hole in it
+       and nothing on the board saying so; two runs is what a cut pipe IS, and
+       each half is then an object with its own ends, name and size. Absent
+       where there is no half to make - the ends of a run and a run laid by hand
+       with no recipe behind it. */
+    const cut=ids[ids.length-1];
+    if(cut!=null && runSplitIdx(cut,cell)>=0)
+      items.push({label:"SPLIT PIPE", fn:()=>{ splitRun(cut,cell); }});
     if(hit.cell && matCell(hit.cell.gx,hit.cell.gy))
       items.push({label:"REMOVE WALL", fn:()=>{ matLift(hit.cell.gx,hit.cell.gy); buildLayout(); }});
-    if(keys.length) items.push({label:"REMOVE RUN", fn:()=>{
-      for(const key of keys){ const c=pipeMap().byKey[key]; if(!c) continue;
+    /* THE WHOLE RUN, THROUGH ITS OWN DOOR WHERE IT HAS ONE. removeRun() takes
+       the recipe, the cells and the two nozzles together and leaves a crossing
+       run standing; a run laid by hand has none of that, so it is still what it
+       always was - the cells the walk through this one reaches. */
+    if(ids.length) items.push({label:"REMOVE RUN", fn:()=>{
+      for(const id of ids){
+        if(D.runs[id]){ removeRun(id); continue; }
+        const c=pipeMap().byKey[id]; if(!c) continue;
         for(const [x,y] of c.cells) delete D.pipes[x+","+y]; }
       buildLayout(); }});
     return items;
@@ -468,6 +485,17 @@ function ctxItemsDesign(hit){
          config (TANK_DEFAULT, pipenet.js); what goes in it, what is behind it
          and how it is plumbed are set afterwards on its own panel. Not gated
          on a count - four tanks is a legal plant. */
+      /* A PIPE IS ONE OBJECT YOU PLACE, exactly as a tank is. It arrives with
+         its two ends on the deck and nothing plumbed: drag an end beside a
+         machine and the nozzle appears there. The far end goes a few cells
+         away so both grips are separable under the hand from the first frame. */
+      items.push({label:"ADD PIPE", fn:()=>{
+        const a=runSpotNear(gx,gy), b=a&&runSpotNear(a[0]+4,a[1]);
+        if(!a||!b) return;
+        // ...and it is PICKED, or it lands as five cells of pipe with no grips
+        // on them and nothing on the board to take hold of
+        sel=mintRun(a,b); runLay(sel);
+      }});
       items.push({label:"ADD TANK", fn:()=>{ addTank(gx,gy); }});
       /* ONE ENTRY, no submenu of kinds - the same argument ADD TANK
          makes. It places the single default fitting config (FIT_DEFAULT,
@@ -490,9 +518,8 @@ function ctxItemsDesign(hit){
                     fn:()=>{ addMachine(kind,gx,gy); }});
     }
   }
-  /* NO CONNECT OFFER HERE. A pipe is laid cell by cell with the PIPE tool and
-     a port is placed by clicking the cell beside a machine, so there is
-     nothing left here for a menu row to pick for it. */
+  /* NO CONNECT OFFER HERE. ADD PIPE places the run and the hand drags its ends
+     to the machines; nothing on a menu picks which port a run lands on. */
   return items;
 }
 ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign, title:ctxTitleDesign});
@@ -1199,11 +1226,11 @@ function pipeRailSync(body,wellEl){
      fluids for one run */
   const PC=pipeColours(null);
   const rows=M.conns.map(c=>{
-    const a=partOf(c.a), b=partOf(c.b), r=runOfKey(c.key);
+    const a=partOf(c.a), b=partOf(c.b), id=runIdOf(c), r=runOfKey(id);
     return [(pipeLabel(c.k,c.key)||"PIPE"),
             (a?partName(a):c.a)+" ⇒ "+(b?partName(b):c.b),
             c.L.toFixed(1), r?Math.round(runBoreMm(r)):"-",
-            r?runWallMm(r).toFixed(0):"-", c.key, pipeCol(PC,c.k)];
+            r?runWallMm(r).toFixed(0):"-", id, pipeCol(PC,c.k)];
   });
   const loose=M.orphan.length, dead=M.dangling.filter(d=>d.cells.length).length;
   // sel is in the signature: a row lights when it is the picked one, so the
