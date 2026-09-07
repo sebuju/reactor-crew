@@ -4579,7 +4579,11 @@ function buildStockPlumbing(opt){
      in it, and its own runs. The generator's tubes then stand on THAT circuit
      and the core's coolant never reaches them, which is the whole reason the
      real sodium plants have one. Six boxes to a loop instead of two, so the
-     loop pitch is the wider one. */
+     loop pitch is the wider one.
+     NO PRESET SETS IT YET (06/09/26). The circuits, the barrier and the heat
+     all measure clean; two feedwater lines and the reserve tie butt, because
+     six boxes to a loop is more than a hand-picked lane table can carry.
+     Waiting on the routing, not on the physics - `docs/backlog.md`. */
   const inter = !!(opt && opt.inter);
   const PITCH = inter ? 18 : 7;
   // and the engine room stands that much further aft, because the feed pump and
