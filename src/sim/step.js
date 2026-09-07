@@ -1923,7 +1923,7 @@ function massSeed(s){
   finally { netHoldStore(false); }
   const booked = netBooked(net);
   for(let i=0;i<net.n;i++){ if(booked[i]) continue;
-    const nm = net.name[i]; s.mBy[nm] = net.vol[i]*netRhoAt(s, nm); }
+    const nm = net.name[i]; s.mBy[nm] = netVolAt(net, s, i)*netRhoAt(s, nm); }
   /* ══ A STUB BEHIND A SHUT GATE HOLDS WHAT ITS OPEN END HOLDS ══
      The pinned solve reads the relief line between the PORV's seat and its
      tank at the LOOP's 15.5 MPa, so 0.18 m3 of line open to a tank at
@@ -1949,7 +1949,7 @@ function massSeed(s){
       const a = adj[i]; if(a) for(const v of a) if(!seen[v]){ seen[v] = 1; stack.push(v); } }
     if(plant) continue;
     for(const i of region){ const nm = net.name[i], c = netSatOf(nm), h = satHg(c, P.Pcont);
-      s.hBy[nm] = h; s.mBy[nm] = net.vol[i]*rhoMixOf(c, P.Pcont, h); s.pBy[nm] = P.Pcont; }
+      s.hBy[nm] = h; s.mBy[nm] = netVolAt(net, s, i)*rhoMixOf(c, P.Pcont, h); s.pBy[nm] = P.Pcont; }
   }
 }
 /* ══════════ JOB 4: ENTHALPY IS CARRIED ALONG THE FLOWS ══════════
@@ -2330,8 +2330,8 @@ function advectStep(s, dt, runFlow, edgeKg){
     for(let i=0;i<net.n;i++){ const ir = inRaw[i]*dt;
       if(!(ir > 0) || bk[i]) continue;
       const nm = net.name[i], have = mBy[nm];
-      if(have === undefined || !(net.vol[i] > 0)) continue;
-      const cap = net.vol[i]*rhoMixOf(netSatOf(nm), pMax[i], netHAt(s, nm));
+      if(have === undefined || !(netVolAt(net, s, i) > 0)) continue;
+      const cap = netVolAt(net, s, i)*rhoMixOf(netSatOf(nm), pMax[i], netHAt(s, nm));
       const room = cap - have + outNow[i]*dt;
       if(ir > room) kIn[i] = Math.max(room, 0)/ir; } }
   for(let e=0;e<net.edges.length;e++){
@@ -2398,7 +2398,7 @@ function advectStep(s, dt, runFlow, edgeKg){
        minutes on a volume that turns over in a tick. The mass is the state and
        the node has it. */
     const mass = Math.max(mBy[net.name[i]] !== undefined ? mBy[net.name[i]]
-                                                         : net.vol[i]*netRhoAt(s, net.name[i]),
+                                                         : netVolAt(net, s, i)*netRhoAt(s, net.name[i]),
                           DRY_MIN_KG);
     /* A SETTLE PASS RELAXES EVERY NODE ALIKE: it is a steady-state sweep,
        not a march, and at the tick's own blend the 125 t vessel moved a
@@ -2442,7 +2442,7 @@ function advectStep(s, dt, runFlow, edgeKg){
     /* THE SEED, AND THE ONE NODE WITH NO INTEGRAL WORTH RUNNING: under a
        milligram the mass is arithmetic noise (DRY_MIN_KG, the same line the
        run-dry gate exempts), and the settle is not a time march. */
-    const eos = net.vol[i]*netRhoAt(s, nm);
+    const eos = netVolAt(net, s, i)*netRhoAt(s, nm);
     if(netStoreHeld || mBy[nm] === undefined || eos <= DRY_MIN_KG){ mBy[nm] = eos; continue; }
     /* ══ AND THE MASS IS INTEGRATED, NEVER ASSIGNED ══
        A node turning over inside one tick used to be ASSIGNED eos - the
@@ -2506,7 +2506,7 @@ function advectStep(s, dt, runFlow, edgeKg){
       // the vessel is always in the mean: stalled, every through-flow weight is 0 and Tavg froze while the core heated it
       const w = coreNids.has(nm) ? 1 : ref > 0 ? clamp(Math.min(inM[i], mOut[i])/ref, 0, 1) : 0;
       if(!(w > 0)) continue;
-      const mi = w*(mBy[nm] !== undefined ? mBy[nm] : net.vol[i]*rho);
+      const mi = w*(mBy[nm] !== undefined ? mBy[nm] : netVolAt(net, s, i)*rho);
       /* THE VESSEL IS HALF AT ITS INLET. One upwind node holds the whole vessel at the
          outlet, so an inventory mean sat a third of the way up the rise, not half - and
          coreStep centres its channel on s.Tavg as the MIDPOINT (Tcold = Tavg - dT/2),
@@ -2557,7 +2557,7 @@ function h2Total(s){
   let t = 0;
   for(let i=0;i<net.n;i++){ const nm = net.name[i], c = s.h2By[nm];
     if(!(c > 0) || !netInCore(nm)) continue;
-    const m = s.mBy[nm] !== undefined ? s.mBy[nm] : net.vol[i]*netRhoAt(s, nm);
+    const m = s.mBy[nm] !== undefined ? s.mBy[nm] : netVolAt(net, s, i)*netRhoAt(s, nm);
     t += c*m; }
   return t;
 }
@@ -3269,6 +3269,7 @@ const ledgerKg = s => { let m = 0;
     if(!t.inf && !t.hold) m += (s.tank&&s.tank[id]!==undefined?s.tank[id]:t.level)/100*tankKg(id); }
   for(const id in s.sglBy){ const M=sgMassOf(id); if(M>0) m += s.sglBy[id]/100*M; }
   for(const id in s.sgSteamBy) m += s.sgSteamBy[id];
+  for(const pid in (s.portKg||{})) m += s.portKg[pid];   // the line a shut nozzle valve is holding
   m += sumpKg(s);
   return m; };
 const ledgerOut = s => { let k=0; for(const n in s.massOut) k += s.massOut[n]; return k; };
@@ -3807,6 +3808,10 @@ function resetPlant(){
         a plant nobody has isolated anything on is bit-identical to one with no
         port valves at all (portOpen(), pipenet.js). */
      portShut:Object.fromEntries(Object.keys(D.ports).map(k=>[k,false])),
+     /* and the line each shut valve has set aside, kg and its enthalpy - a
+        book of the ledger like a tank's level (portShiftKg, pipenet.js). */
+     portKg:Object.fromEntries(Object.keys(D.ports).map(k=>[k,0])),
+     portH:{},
      arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
@@ -4340,6 +4345,11 @@ function resetPlant(){
      because the field is what decides how much a node at 8 kPa holds. */
   massSeed(S);
   P.invKg0 = invNodesKg(S); coreEach(S,(cs,K,id)=>{ K.invKg0 = invNodesKg(S, id); });
+  /* AND WHAT EACH PUMP WAS LIFTING WHEN IT WAS BUILT, kg/m3 at its own
+     suction - the reference pumpRhoK() prices a voided casing against. AFTER
+     the settle and after the reference solve, so the figure the plant is rated
+     on is taken at 1.000 and no pinned flow moves. */
+  P.pumpRho0 = {}; for(const id of pumpIds()) P.pumpRho0[id] = netRhoAt(S, pumpSucNode(id));
   // and the VESSEL's own commissioned charge, which is what a leak is measured against (vLeak)
   { const nm = P.net.name[P.net.coreNode]; P.coreKg0 = S.mBy[nm] !== undefined ? S.mBy[nm] : 0;
     coreEach(S,(cs,K,id)=>{ const m = S.mBy[coreFold(id)]; K.coreKg0 = m !== undefined ? m : 0; }); }
@@ -6045,6 +6055,16 @@ function step(dt){
     ()=>"Water arriving at "+(cavIds.length?nameList(cavIds):"the pumps")+
         " is close to boiling, so "+(cavIds.length>1?"they are":"it is")+
         " churning vapour. Real flow is far below the bench setting.");
+  /* THE QUIETEST WAY THIS PLANT STOPS. A node with nothing in it feeds
+     nothing, so the machine on it passes zero and every gauge downstream goes
+     flat with no alarm behind it - which is a failure the operator can only
+     find by noticing an absence. Named, so it is an event like any other. */
+  { const dryIds = netDryParts(s);
+    ev("dry",dryIds.length>0,"alarm","LINE RUN DRY",
+      ()=>nameList(dryIds)+" "+isAre(dryIds)+" empty. There is nothing in "+
+          (dryIds.length>1?"them":"it")+" to pump and nothing will leave "+
+          (dryIds.length>1?"them":"it")+" until something fills "+
+          (dryIds.length>1?"them":"it")+" again - check what is shut upstream."); }
   ev("flowfloor",flowDemPri(s)<P.flowMin,"warn","PUMPS ORDERED BELOW DESIGN FLOOR",
     ()=>"Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
   ev("hip",s.P>P.P0*1.05,"warn","PRIMARY OVERPRESSURE",
