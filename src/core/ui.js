@@ -258,7 +258,8 @@ addEventListener("keydown",e=>{
      inside a panel has the focus - and answers false when nothing does, so the
      row still fires (panKeyNav, ui/hoverwin.js). */
   if(typeof panKeyNav==="function" && panKeyNav(e)) return;
-  const K=keyList().find(k=>k.k===e.key);
+  // shift is part of the stroke, so a row without it never fires under one
+  const K=keyList().find(k=>k.k===e.key && !!k.shift===e.shiftKey);
   if(K){ e.preventDefault(); K.fn(); }
 });
 /* ══ W A S D WALKS THE BOARD ══
