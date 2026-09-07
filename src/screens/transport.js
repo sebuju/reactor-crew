@@ -53,9 +53,10 @@ const trRateLab = v => v==null ? "" : v===Infinity ? "MAX" : v===TR_VLD ? "VLD"
    it holds nothing, which is a key that does nothing and a cell that is not
    drawn. Everything downstream (the strip, the deep link, the fit) asks here,
    so there is one place that decides what this machine offers. */
-const TR_RATES = [["1",()=>1,"1X"],["2",()=>trRateSlots().mid,"MID RATE"],
-                  ["3",()=>trRateSlots().fast,"FAST RATE"],
-                  ["4",()=>Infinity,"MAX"],["5",()=>TR_VLD,"VLD"]];
+const TR_RATES = [["0",()=>0,"0X"],["1",()=>0.2,"0.2X"],["2",()=>0.5,"0.5X"],
+                  ["3",()=>1,"1X"],["4",()=>trRateSlots().mid,"MID RATE"],
+                  ["5",()=>trRateSlots().fast,"FAST RATE"],
+                  ["6",()=>Infinity,"MAX"],["7",()=>TR_VLD,"VLD"]];
 const trRateNow = () => TR_RATES.map(r=>r[1]());
 /* THE RATE IN YOUR HAND WHEN THE PLANT CHANGES UNDER IT. A deep link picks its
    timescale before the prewarm it started has measured anything, and a design
@@ -77,6 +78,19 @@ TR_RATES.forEach((row,i)=>{
   keyAdd({k:row[0], sc:"operate",  lab:row[2], fn});
   keyAdd({k:row[0], sc:"scenario", lab:row[2], fn});
 });
+/* WALKS THE SLOTS THIS MACHINE OFFERS, so the step is what the strip holds
+   rather than a fixed factor. VLD is off the walk: it stops drawing the plant,
+   which is never something a nudge should do. */
+function trRateNudge(d){
+  const have=trRateNow().filter(v=>v!=null && v!==TR_VLD);
+  const at=have.indexOf(TR.paused?0:TR.rate);
+  const i=Math.max(0,Math.min(have.length-1,(at<0?have.indexOf(1):at)+d));
+  trRate(have[i]);
+}
+for(const sc of ["operate","scenario"]){
+  keyAdd({k:"PageUp",   shift:true, sc, lab:"RATE +", fn:()=>trRateNudge(1)});
+  keyAdd({k:"PageDown", shift:true, sc, lab:"RATE -", fn:()=>trRateNudge(-1)});
+}
 /* "," and "." are the frame-back/frame-forward pair every editing tool binds,
    and they sit next to each other under the same finger. */
 for(const sc of ["operate","scenario"]){
@@ -91,9 +105,6 @@ function trBuild(sc){
   if(!mount) return null;
 
   const root = KIT.el("div","trs");
-
-  const pause = KIT.button("PAUSE",{sunk:1,onClick:trBind(sc," ").fn});
-  pause.el.classList.add("trs-pause","trs-fixw");
 
   // labels are written by trRateOffer(); a slot's own answer is what it says
   const rate = KIT.segSel(trRateNow().map(trRateLab),
@@ -154,7 +165,7 @@ function trBuild(sc){
   picker.body.append(pickHead,pickTree);
   MOUSE.on(takesBtn.el,{click(){ picker.el.classList.toggle("open"); }});
 
-  root.append(pause.el,rate.el,stepBack.el,step.el,modeEl,notape,nameEl,forkEl,track,
+  root.append(rate.el,stepBack.el,step.el,modeEl,notape,nameEl,forkEl,track,
     clock,takesBtn.el);
   mount.appendChild(root);
   mount.appendChild(picker.el);
@@ -178,7 +189,7 @@ function trBuild(sc){
     down(e){ dragging=true; MOUSE.grab(scrub); scrubMove(e); },
     move:scrubMove, up:scrubStop, cancel:scrubStop});
 
-  return {sc,root,pause,rate,stepBack,step,modeEl,notape,nameEl,forkEl,track,logLane,scrub,scrubHead,
+  return {sc,root,rate,stepBack,step,modeEl,notape,nameEl,forkEl,track,logLane,scrub,scrubHead,
     clock,takesBtn,picker,pickTree,blocks:[],forks:[],marks:[],
     pickSig:null,parSig:null,forkSig:null,rateSig:null};
 }
@@ -329,8 +340,7 @@ function trSync(h){
      guard skips the work. */
   if(screen !== h.sc) return;
   const cur = recCur();
-  h.pause.set({label:TR.paused?"PLAY":"PAUSE", on:TR.paused});
-  h.rate.set(trRateNow().findIndex(v=>v===TR.rate));
+  h.rate.set(trRateNow().findIndex(v=>v===(TR.paused?0:TR.rate)));
   trRateOffer(h);
   h.modeEl.classList.toggle("replay", REC.mode==="replay");
   /* the strip says which rate is running and then goes still with the rest of
