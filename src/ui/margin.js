@@ -121,7 +121,13 @@ function marginCols(h,n){
   if(h.cols===n) return;
   h.cols=n; h.w=marginColW(n);
   h.well.el.classList.toggle("cols",n>1);
+  // three columns or more is a panel with room to stand a list beside its
+  // controls rather than under them - see .margin-ctl (ui/plant-screens.css)
+  h.well.el.classList.toggle("wide",n>=3);
   h.well.el.style.width=h.w+"px";
+  // what is INSIDE the panel is cut into the same number of columns the panel
+  // is wide - the readout grid reads it (.insp-grid, ui/plant-screens.css)
+  h.well.el.style.setProperty("--db-grid-cols",n);
   h.needH=true;
 }
 /* A stated count sets the width; nothing auto-grows columns from height. */
@@ -231,9 +237,17 @@ function marginSldStep(slot,dir){
 }
 function marginCtlBuild(h,rows){
   h.ctl.innerHTML=""; h.cells=[]; h.nRows=rows.length; h.needH=true;
+  /* THE CONTROL ROWS ARE ONE BLOCK, and the port list is its sibling. They were
+     all siblings, and standing the valve list beside them then meant asking a
+     grid to keep two stacks of different heights both packed at the top - which
+     it will not do: the tall one grew the row the short ones were sharing, and
+     the boron keys ended up at the bottom of the panel instead of under their
+     own slider. Two boxes, one flex row, and each packs itself. */
+  const main=KIT.el("div","margin-ctl-main"); h.ctl.appendChild(main);
   for(const row of rows){
     const ports = row[0] && row[0].kind==="port";
-    const r=KIT.el("div", ports?"margin-ports":"margin-ctl-row"); h.ctl.appendChild(r);
+    const r=KIT.el("div", ports?"margin-ports":"margin-ctl-row");
+    (ports?h.ctl:main).appendChild(r);
     for(const c of row){
       const slot={c:c, w:null, kind:c.kind||"btn",
                   min:c.kind==="sld"?c.min():0, max:c.kind==="sld"?c.max():0};
@@ -906,7 +920,7 @@ function panPartSync(h,live,deep,fresh){
        longest on the plant, and the controller carries the automation graph,
        which is a drawing and reads across, not down. The bench says the same
        through B.cols (paramsFor), the door dbPanelSync() reads. */
-    h.body._cols = h.p.role==="core" ? 2 : h.p.role==="ctrl" ? 3 : 0;
+    h.body._cols = h.p.role==="core" ? 4 : h.p.role==="ctrl" ? 3 : 0;
     /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
        canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
        exactly as the rail does it (crRailSync). */
@@ -922,15 +936,14 @@ function panPartSync(h,live,deep,fresh){
     h.well.setTitle(nm);
     // the panel's own help, asked for rather than stood open - see help() (inspector.js)
     KIT.tip(h.well.head,nm,B.tip||"");
-    /* WHAT THIS BOX COSTS, on its own title bar - the sum of every tonnage
-       the knobs below quote, off the same door the mass budget reads
-       (partMassOf(), layout.js). The live screen puts the skin temperature
-       here instead; a bench panel has no skin. */
-    const t=partMassOf(h.p.id);
-    h.well.setSfx(t>=0.05 ? t.toFixed(t<10?1:0)+" t" : "");
+    /* WHAT THIS BOX COSTS IS A MEASUREMENT, so it stands with the other
+       measurements (measRows(), render/inspector.js) and not on the title bar.
+       It was a suffix while it was the only answer a bench panel had; it is one
+       row of several now, and a figure quoted in two places is a figure that
+       can be read two ways. */
+    h.well.setSfx("");
     /* AND WHAT IS NOT A KNOB HANGS OFF THE TITLE BAR - see the "menu" block
-       (design-bench.js). Seated before the suffix, so the tonnage keeps the
-       right-hand end of the bar. */
+       (design-bench.js). */
     if(B.head && !h.head && h.well.head){
       h.head=KIT.el("div","db-panel-head");
       h.well.head.insertBefore(h.head, h.well.sfx);
