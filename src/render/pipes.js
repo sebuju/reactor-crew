@@ -372,8 +372,20 @@ function pipeRunSc(r,L){
      then subtract a two-state tag; both halves are real now - the fluid is a
      property of the circuit and the temperature is what the enthalpy at those
      two nodes says. */
-  const sat = satT(satOfCirc(circOfNode(a)), pr);
-  return sat - (netTempAt(L,a) + netTempAt(L,b))/2;
+  const sat = satT(satOfCirc(circOfNode(a)), pr), t = pipeRunT(r,L);
+  return t===null ? null : sat - t;
+}
+/* AND THE TEMPERATURE ITSELF, K - the mean of the run's own two ends off the
+   enthalpy field. The margin (pipeRunSc) is a DIFFERENCE and was the only
+   thing a run ever printed about its heat: a hot leg at 583 K and a feed line
+   at 320 K both read "plenty of subcooling" and nothing said which was which.
+   One expression, two readers, so the temperature and the margin cannot
+   disagree about what is in the pipe. */
+function pipeRunT(r,L){
+  const ends=runEnds(r.key,r.k);
+  if(!ends || !L) return null;
+  const t=(netTempAt(L,coreFold(ends[0])) + netTempAt(L,coreFold(ends[1])))/2;
+  return isFinite(t) ? t : null;
 }
 let pipeT=null, pipeDt=0;
 /* a browser frame at 16x carries ~0.27 s of plant time - PIPE_DTMAX is what a frame
@@ -518,6 +530,13 @@ function pipeThru(p,L){
     rows.push((v<0?wb+" to "+wa:wa+" to "+wb)+" "+pipeFmt(Math.abs(v))+" kg/s"); }
   if(!rows.length) return "";
   let s = " ACROSS ITS OWN BODY: "+rows.join(", ")+".";
+  /* AND WHETHER THAT PATH HAS REACHED ITS CAP. A safety valve lifting from
+     6.9 MPa into a compartment is choked from the moment it opens, and it is
+     the machine paths - a seat, a swallow - that actually get there, not the
+     pipework. Off the same expression the solve used (netChokedPart). */
+  if(netChokedPart(P.net, p.id)) s += " Its own path is CHOKED: what is crossing it is"
+    + " already leaving at the speed of sound, so a lower pressure on the far side buys"
+    + " nothing at all - only a wider bore or a denser fluid passes more.";
   if(R.sgtr) s += " Its feedwater lands in the shell's own water, which is a"
     + " boundary in the solve - the runs either side of it are not required to add up.";
   return s;
@@ -605,6 +624,31 @@ function pipePhase(r,L){
 }
 // the one figure the parcels want: how vapour the run is as a whole
 const pipeSteam=(r,L)=>{ const q=pipePhase(r,L); return q ? (q[0]+q[1])/2 : 0; };
+/* WHAT IS STANDING IN THE RUN, kg - its own bore and length at the density of
+   its two ends. A READING: the volume itself is split onto those two nodes
+   (netBuild), so the pipe keeps no book of its own to disagree with. */
+function pipeRunHoldKg(r,L){
+  const net=(typeof P!=="undefined" && P) ? P.net : null;
+  if(!net || !L) return null;
+  for(const ed of net.edges) if(ed.key===r.key)
+    return runVol(r)*(netRhoAt(L,net.name[ed.u])+netRhoAt(L,net.name[ed.v]))/2;
+  return null;
+}
+/* AND WHAT A MACHINE IS HOLDING, kg - every node the solve gave it, each one
+   asked of whichever book OWNS it (bookedKg): a shell's water, its steam space
+   and a hotwell each have an integral of their own, and reading s.mBy there
+   would print a second answer beside the one the plant actually runs on. */
+function partHoldKg(id,L){
+  const net=(typeof P!=="undefined" && P) ? P.net : null;
+  if(!net || !L || !net.nodesOfPart || !L.mBy) return null;
+  const list=net.nodesOfPart[id]; if(!list || !list.length) return null;
+  let m=0;
+  for(const i of list){ const b=bookedKg(net,L,i);
+    m += b!==undefined ? b : (L.mBy[net.name[i]]||0); }
+  return m;
+}
+// ONE format for both readings, so a pipe and a vessel state the same quantity the same way
+const holdFmt = v => v<1000 ? v.toFixed(0)+" kg" : (v/1000).toFixed(1)+" t";
 /* ══ AND THE PHASE IS A SECOND CHANNEL ON THE KIND'S OWN HUE ══
    The KIND says what a run is FOR and it keeps its colour, because that is
    what makes a dense mimic readable at a glance. What is IN it rides on top as
@@ -912,18 +956,23 @@ function boxClear(x,y,w,h){
    places to put them. */
 const STACK_MIN_L=2*PIPE_DIAL_R+6*DRAW_K;
 const stackBox=(x,y,n)=>({x:x-STACK_W/2, y:stackTop(y,n||STACK_N), w:STACK_W, h:(n||STACK_N)*STACK_H});
+/* WHERE A MACHINE'S OWN HOLDUP PLATE STANDS (pipeHoldMarks) - a pure function
+   of the drawing, so the run allocator seeds it as taken ground exactly the
+   way it seeds a panel, and a reading never lands on top of one. */
+const holdMarkBox = p => { const R=prect(p);
+  return {x:R.x+R.w/2-STACK_W/2, y:R.y+R.h+2*DRAW_K, w:STACK_W, h:STACK_H}; };
 /* ══ A FITTING'S READING IS A LINE OF ITS PIPE'S STACK ══
    A relief valve's margin and a throttle's share of the head used to be
    pipeTag()s parked over the valve's own box, which is where its NAME already
    is: two plates of different widths in one cell, and neither the allocator
    nor boxClear() knew either was there. They are plumbing readings like the
-   other three, so they go in the same rectangle at slot 3 and the allocator
+   rest, so they go in the same rectangle at slot 5 and the allocator
    keeps that line clear like the rest.
-   ONE ANSWER, asked here by the allocator (which must reserve the fourth
+   ONE ANSWER, asked here by the allocator (which must reserve the extra
    line) and by pipeFitMarks() (which draws into it) - two answers and the
    reading lands in a box nobody kept clear. Lowest key, so it does not depend
    on the placement it is an input to. */
-const STACK_N=3;                          // lines every run carries
+const STACK_N=5;                          // lines every run carries
 const fitPidPart=pid=>{ const q=D.ports[pid]; return q?q.p:null; };
 const fitReads=p=>p.role==="fitting" &&
   (fitModeOf(p.id)==="relief"||fitModeOf(p.id)==="throttle");
@@ -1012,6 +1061,8 @@ function pipeAnchors(runs){
      marginSync() runs after the draw - which is right for a placement that only
      moves when the drawing does. */
   const out={}, taken=(typeof marginBoxes==="function"?marginBoxes():[]).slice();
+  // ...and so is every machine's holdup plate, for the same reason and at the same price
+  for(const p of LAY.parts) if(fitted(p)) taken.push(holdMarkBox(p));
   /* longest run first: a main leg has the most to say and the fewest places
      to say it, and letting a stub take the good spot first is what produced
      the smears this replaces. */
@@ -1074,12 +1125,19 @@ function pipeRunAnchor(r){ return (anchorCache && anchorCache[r.key]) || pipeRun
    Resolved fresh each frame and spent the same one, so it lives beside the
    allocator rather than on S - the standing portRing (plant.js) has. */
 let pipeHov=null;
-const pipeHovOn = () => LAYERS.press.on||LAYERS.subc.on||LAYERS.flow.on;
+const pipeHovOn = () => LAYERS.press.on||LAYERS.subc.on||LAYERS.flow.on||LAYERS.hold.on||LAYERS.temp.on;
 /* The one predicate both label paths ask: layerRunLine() places slots 1 and 2,
    pipeMeters() slot 0, and they must not disagree about which run is showing. */
 const pipeHovShow = key => !pipeHov || pipeHov===key;
+/* ══ AND A MACHINE IS ASKED THE SAME WAY ══
+   A vessel holds water exactly as a run does, so pointing at one answers it at
+   the same price: the HOLDUP switch off, the box under the pointer only. A run
+   in focus stands the machines down with the other runs - the pointer is on
+   one thing at a time and the picture says which. */
+let holdHov=null;
+const holdPartShow = id => holdHov ? holdHov===id : !pipeHov;
 function pipeHovResolve(){
-  pipeHov=null;
+  pipeHov=null; holdHov=null;
   if(ui.drag || !vIn(ui.ptr)) return;
   const p=vPt(ui.ptr);
   /* THE LABEL FIRST, because a label draws over the pipes: under a stack the
@@ -1090,7 +1148,15 @@ function pipeHovResolve(){
     for(let i=boxes.length-1;i>=0;i--){ const b=boxes[i];
       if(p.x>=b.x&&p.x<b.x+b.w&&p.y>=b.y&&p.y<b.y+b.h){ pipeHov=b.key; return; } } }
   const c=cellAt(p), keys=pipeCellRuns(c[0],c[1]);
-  if(keys.length) pipeHov=keys[keys.length-1];   // a crossing cell owns two: last wins, as hitAt() does
+  if(keys.length){ pipeHov=keys[keys.length-1]; return; }   // a crossing cell owns two: last wins, as hitAt() does
+  /* NO PIPE UNDER THE POINTER, so ask the board. The machine's own plate hangs
+     BELOW its box, so both count as pointing at that machine - a reading you
+     have to keep off to read is not one. */
+  const q=partAt([p.x,p.y]);
+  if(q && fitted(q)){ holdHov=q.id; return; }
+  for(const r of LAY.parts){ if(!fitted(r)) continue;
+    const b=holdMarkBox(r);
+    if(p.x>=b.x&&p.x<b.x+b.w&&p.y>=b.y&&p.y<b.y+b.h){ holdHov=r.id; return; } }
 }
 
 function pipeMeters(runs,L){
@@ -1121,11 +1187,16 @@ function pipeMeters(runs,L){
     /* the same three states the needle used to carry, in the ink instead:
        stagnant, backwards, over its rating. Judged against the run's own
        DESIGN direction (un.dir), because a key's canonical order is two part
-       ids sorted and says nothing about which way the fluid is meant to go. */
-    const fd=fr*(un.dir||1);
+       ids sorted and says nothing about which way the fluid is meant to go.
+       CHOKED IS THE FOURTH, and it belongs here rather than on a line of its
+       own: it is not a fifth quantity, it is the reason THIS number has
+       stopped answering to pressure. Ranked under the three faults - a run
+       that is choked AND backwards is backwards first. */
+    const fd=fr*(un.dir||1), holdKg=pipeRunHoldKg(r,L);
     const dead=Math.abs(fd)<0.008, over=fd>1.001, back=fd<-0.008;
+    const chok=netChokedRun(P&&P.net, key);
     pipeStackLine(a.x,a.y,0,(back?"-":"")+mag+" "+un.u,
-                  dead?C.ink2:over?C.red:back?C.amber:pipeCol(PC,k));
+                  dead?C.ink2:over?C.red:back?C.amber:chok?C.bright:pipeCol(PC,k));
     /* three things the solve can actually say, kept as three sentences rather than
        one number doing all three jobs: how much, which way, and against what. No
        pressure/dP reading here - a fitting's node potentials never left pipenet.js. */
@@ -1136,10 +1207,37 @@ function pipeMeters(runs,L){
        :back?" It is running backwards."
        :dead?" The line is stagnant."
        :"")+
+      (chok?" It is CHOKED: the vapour in it is already leaving at the speed of sound, so lowering the pressure downstream buys nothing at all - only a wider bore or a denser fluid will pass more.":"")+
       (pipeDrop[key]!=null
         ? " It spends "+(pipeDrop[key]*100).toFixed(0)+
           " % of the loop's whole pump head getting the water along it - that is the price of this run's length, its bore, and anything throttling it."
-        : ""));
+        : "")
+      /* A PIPE IS A SMALL TANK, and the HOLDUP line of this same stack is the
+         reading. Here because the rate above is meaningless without it: this
+         is what that flow has to turn over. */
+      + " It holds "+runVol(r).toFixed(2)+" m3"
+      + (holdKg==null ? "" : " - "+Math.round(holdKg)+" kg standing in it right now")
+      + ", which the flow has to turn over before what is in it changes.");
+  }
+}
+
+/* ══ AND A MACHINE HOLDS WATER TOO ══
+   UNDER the box, not in it: the inside is the machine's own reading - power,
+   level, flow - and what it is holding is a different question. Same plate,
+   same ink and same format the runs' HOLDUP line uses, because a pipe and a
+   vessel hold water by one rule and two typefaces would say they do not. */
+function pipeHoldMarks(L){
+  if(!L) return;
+  for(const p of LAY.parts){
+    if(!fitted(p) || !holdPartShow(p.id)) continue;
+    const kg=partHoldKg(p.id,L);
+    if(kg===null || !isFinite(kg)) continue;
+    const b=holdMarkBox(p);
+    fillRect(b.x,b.y,b.w,b.h,C.bg);
+    txt(holdFmt(kg), b.x+b.w/2, midBase(b.y,STACK_H,6.5*DRAW_K),
+        {size:6.5*DRAW_K,sp:.4*DRAW_K,align:"center",color:C.ink});
+    TIP(b.x,b.y,b.w,b.h, partName(p).toUpperCase()+"  HOLDUP",
+      holdFmt(kg)+" of water and steam standing in this machine right now, off its own nodes in the solve. It is a real time constant: everything arriving has to displace it before what leaves changes. A shell, a hotwell and a tank are read from their own level, so nothing here is counted twice.");
   }
 }
 
