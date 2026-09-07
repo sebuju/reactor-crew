@@ -26,11 +26,16 @@ const { Worker, isMainThread, workerData, parentPort } = require("worker_threads
    sandbox are, so a run can be made to fit the 10 s script budget when what is
    being checked is that the sweep RUNS rather than what it finds. */
 const SECS = Number(process.env.SWEEP_SECS) || 600;
+/* THE SEED IS FIXED, exactly as the sandbox fixes its own: resetPlant() rolls
+   one off Math.random(), so two runs of this sweep were not comparable and
+   nothing said so. SWEEP_DICE=off stands the whole table down. */
+const SEED = Number(process.env.SWEEP_SEED) || 1;
+const DICE = process.env.SWEEP_DICE !== "off";
 
 /* ══════════ worker: simulate one shard ══════════ */
 if(!isMainThread){
   const M = require("./bundle").headless(
-    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,coreD,buildLayout,buildStockPlumbing}");
+    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,coreD,buildLayout,buildStockPlumbing,seedRng}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
 
   /* THE GRID STARTS BLANK, so a case has to be BUILT before it can be
@@ -41,7 +46,9 @@ if(!isMainThread){
     M.buildStockPlumbing({loops:1});
     M.archPreset(M.coreD("core"),o.arch); delete o.arch;
     for(const k in o) (["fuel","scram","cool","foll","refl","mod"].includes(k) ? M.coreD("core") : D)[k]=o[k];
-    M.buildLayout(); M.commission(); return M.S(); };
+    M.buildLayout(); M.commission();
+    // after commission(), because that is where resetPlant() rolls its own
+    const s = M.S(); M.seedRng(s, SEED); s.diceOff = !DICE; return s; };
   const run = (s,secs) => { for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) break; } return s; };
 
   /* the end state, to more digits than any physics could survive being wrong in */
@@ -135,7 +142,7 @@ function main(){
     const byI = new Map(got.map(r => [r.i, r]));
     const groups = all.map(c => Object.assign({ i:c.i, a:c.a, f:c.f, built:c.built },
                                               byI.get(c.i) || {}));
-    process.stdout.write(JSON.stringify({ secs:SECS, workers:N, groups }));
+    process.stdout.write(JSON.stringify({ secs:SECS, seed:SEED, dice:DICE, workers:N, groups }));
   };
   for(const cs of shards){
     const w = new Worker(__filename, { workerData:{ cases:cs } });
