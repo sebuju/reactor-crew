@@ -190,6 +190,27 @@ async function snapPut(name, body, b64){
   }catch(e){ return false; }
 }
 
+/* `null` is no store here too, and `[]` is an empty directory - the same two
+   answers storeList() gives, for the same reason. */
+async function snapList(){
+  if(storeOff()) return null;
+  try{
+    const r = await fetch(storeURL("snap"), {cache:"no-store"});
+    if(!r.ok) return null;
+    const j = await r.json();
+    return Array.isArray(j) ? j : null;
+  }catch(e){ return null; }
+}
+
+/* Text, not JSON: the caller knows what it asked for and a CSV is not JSON. */
+async function snapGet(name){
+  if(storeOff()) return null;
+  try{
+    const r = await fetch(storeURL("snap/" + name), {cache:"no-store"});
+    return r.ok ? await r.text() : null;
+  }catch(e){ return null; }
+}
+
 /* `null` is no store, a number is how many files went - the same two-answer
    shape the lists above use. */
 async function snapPurge(){
