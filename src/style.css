@@ -7,6 +7,20 @@
   /* floored at 10px - the steps below it existed to squeeze text into canvas
      boxes, and CSS fits text on its own */
   --t8:10px;--t7-5:10px;--t7:10px;--t6-5:10px;--t6:10px;
+  /* ══ PANEL TYPE, BY THE JOB THE TEXT DOES ══
+     The --t* ladder above is the CANVAS scale, and a panel that reads off it
+     picks a step per rule, so tuning the panels meant editing forty rules that
+     had no name for what they were doing. Every widget in the kit and every
+     row in a panel, a window or a rail now sizes off one of these seven, and
+     nothing else. Change one number here and every place that does that job
+     moves together. */
+  --fs-win-title:11px;   /* a panel's own title bar */
+  --fs-sec:10px;         /* the rule that heads a section inside one */
+  --fs-label:10px;       /* what a row or a control is called */
+  --fs-value:10px;       /* the number or word it is reading */
+  --fs-key:11px;         /* a button's label */
+  --fs-note:10.5px;      /* prose: help, warnings, verdicts */
+  --fs-tiny:10px;        /* units, tonnages, scale ends */
 }
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--c-bg);color-scheme:dark}
 body{display:flex;flex-direction:column;font-family:var(--mono)}
