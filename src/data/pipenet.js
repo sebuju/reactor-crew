@@ -433,7 +433,9 @@ const runK0 = r => {
 const flowW = (C, rho, pHi, pLo) => C > 0
   ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(Math.min(pHi-pLo, (1-RCRIT)*Math.max(pHi,0)), 0)*1e6)
   : 0;
+let FLOWG_CHOKE = false;          // set by flowG(), spent by edgeG() on the next line
 const flowG = (C, F, u, v, h, diode) => {
+  FLOWG_CHOKE = false;
   if(!(C > 0)) return 0;
   /* THE DRIVING DIFFERENTIAL INCLUDES THE HEAD, and it has to: netFlows()
      carries Q = g*(p_u - p_v + h), so a conductance linearised about the node
@@ -462,6 +464,12 @@ const flowG = (C, F, u, v, h, diode) => {
      out, which is what a real one does. */
   const choke = !h && F.x && F.x[up] > 0;
   const eff = Math.max(choke ? Math.min(a, (1-RCRIT)*pHi) : a, floor);
+  /* AND WHETHER THE CAP ACTUALLY BIT, for the meter to say so. Read off THIS
+     expression rather than re-derived beside it: a second copy of the test is
+     a second answer, and the one thing a reading about a limit must not do is
+     disagree with the limit. Scratch, spent by the caller (edgeG) on the same
+     line - never state. */
+  FLOWG_CHOKE = choke && (1-RCRIT)*pHi < a;
   /* ══ AND A NODE THAT IS SPENT FEEDS NOTHING ══
      tankLive()'s own inventory clause, asked of every node. A compliance
      bounds the RATE and
@@ -503,6 +511,20 @@ function netFieldSize(F, n){
    tankP -> holdLive -> netFixed -> netRef -> netPieces -> netLiveSig ->
    tankLive -> tankP closes through here and is a stack overflow on tick one. */
 const DRY_FRAC = 1e-3, DRY_MIN_KG = 1e-6;
+/* ══ WHAT THIS NODE HOLDS RIGHT NOW, m3 ══
+   A port valve stands AT THE MACHINE FACE, so the run is on its far side: shut
+   it and the machine keeps its own casing and nothing else. Half of every run
+   was booked inside the machine whatever the valve did, which is how an
+   isolated feed pump went on emptying six cubic metres of line it could not
+   reach. The water leaves with the volume (portShiftKg) so turning a valve
+   moves no density and no pressure - only where the inventory is. */
+function netVolAt(net, s, i){
+  const at = net.runsAt && net.runsAt[i];
+  if(!at || !s || !s.portShut) return net.vol[i];
+  let v = net.volPart[i];
+  for(let k=0;k<at.length;k++) if(portOpen(s, at[k].mine)) v += at[k].vol/2;
+  return v > 1e-3 ? v : 1e-3;
+}
 const netNodeDry = (net, s, i, rho) => {
   const nid = net.name[i], m = s && s.mBy ? s.mBy[nid] : undefined;
   /* AGAINST WHAT THIS NODE WOULD HOLD, never against a typed density. A
@@ -510,7 +532,7 @@ const netNodeDry = (net, s, i, rho) => {
      kg/m3 floor read every low-backpressure machine's exhaust as spent, cut
      its own inlet edge, and left five of the nine presets making no power at
      all. A fraction of the quantity's own reference, both ways. */
-  const eos = net.vol[i]*(rho === undefined ? netRhoAt(s, nid) : rho);
+  const eos = netVolAt(net, s, i)*(rho === undefined ? netRhoAt(s, nid) : rho);
   /* AND A NEAR-VACUUM IS NOT A SPENT STORE. This curve puts a milligram of
      steam in a turbine exhaust at 8 kPa, so its mass is noise and every
      comparison against it is too: the gate is about somewhere with something
@@ -619,10 +641,47 @@ function netFieldUpdate(net, s){
    edge by netFinish(), AFTER the static head has been folded into ed.h. */
 const edgeG = (net, ed, s) => {
   const C = typeof ed.C === "function" ? ed.C(s) : ed.C;
-  if(!(C > 0)) return 0;
-  const h = typeof ed.h === "function" ? ed.h(s) : (ed.h || 0);
-  return flowG(C, net.F, ed.u, ed.v, h, ed.diode);
+  const h = C > 0 ? (typeof ed.h === "function" ? ed.h(s) : (ed.h || 0)) : 0;
+  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode) : 0;
+  if(net.choke && ed.i !== undefined) net.choke[ed.i] = (g > 0 && FLOWG_CHOKE) ? 1 : 0;
+  return g;
 };
+/* ══ WHICH MACHINES HAVE A NODE WITH NOTHING LEFT IN IT ══
+   The donor gate (F.wet) read back out in words. It is the quietest way this
+   plant stops: an empty node feeds nothing, so a pump on one passes zero and
+   every reading downstream simply goes flat with no alarm behind it.
+   Containment is not a machine and is never in the list. */
+function netDryParts(s){
+  const net = (typeof P!=="undefined" && P) ? P.net : null, F = net && net.F;
+  if(!net || !F || !F.wet || !net.nodesOfPart) return [];
+  /* OFF nodesOfPart, which is the map netBuild already wrote: a containment
+     stub belongs to no machine and so cannot appear, and a node another book
+     owns is left out because F.wet reads the mass field there and the book is
+     the answer (netBooked). */
+  const booked = netBooked(net), out = [];
+  for(const id in net.nodesOfPart)
+    for(const i of net.nodesOfPart[id])
+      if(!F.wet[i] && !booked[i]){ out.push(id); break; }
+  return out;
+}
+/* IS THIS RUN AT ITS CHOKE, off the last conductance the solve took for it.
+   A run key, because that is what a meter has. Any edge of that run counts -
+   a run cut by a throttle is two segments and either can be the one at the
+   cap. */
+function netChokedRun(net, key){
+  return netChokedKey(net, k => k === key || k === "break:"+key);
+}
+/* AND A MACHINE'S OWN PATH. A relief valve's seat and a turbine's swallow are
+   edges of this graph like any pipe, and they are the ones that actually reach
+   the cap - a safety lifting from 6.9 MPa into a compartment is choked from
+   the moment it opens. `comp:<id>:` is the key netBuild gives them. */
+const netChokedPart = (net, id) => netChokedKey(net, k => k.indexOf("comp:"+id+":") === 0);
+function netChokedKey(net, want){
+  if(!net || !net.choke) return false;
+  for(let i=0;i<net.edges.length;i++){ const k = net.edges[i].key;
+    if(net.choke[i] && typeof k === "string" && want(k)) return true; }
+  return false;
+}
 
 // A valve's own resistance, expressed as an EQUIVALENT LENGTH added to
 // whatever run it sits on - never a multiplier on that run's conductance, or
@@ -709,6 +768,37 @@ const cellBroken = (s, x, y) => {
    fittings keep, and what netAssemble's g<=0 skip is there for. */
 const portOpen    = (s, pid) => !(s.portShut && s.portShut[pid]);
 const runPortsOpen = (s, r)  => portOpen(s, r.pa) && portOpen(s, r.pb);
+/* ══ AND THE WATER BEHIND A SHUT VALVE IS STILL THERE ══
+   The half-run netVolAt() takes off the machine has kilograms in it, and they
+   do not evaporate because somebody turned a handle: they are set aside on the
+   valve that isolated them, counted in ledgerKg() like any other book, and
+   handed back when it opens. Taken as a FRACTION of the node's own holdup, so
+   the density either side of the move is the one it already had. */
+function portShiftKg(s, pid){
+  const net = (typeof P!=="undefined" && P) ? P.net : null;
+  if(!net || !net.runsAt || !s.mBy || !s.portKg) return;
+  const shut = !portOpen(s, pid), on = [];
+  for(let i=0;i<net.n;i++){ const at = net.runsAt[i]; if(!at) continue;
+    for(const r of at) if(r.mine === pid) on.push([i, r.vol/2]); }
+  if(!on.length) return;
+  if(shut){
+    let kg = 0, h;
+    for(const [i, half] of on){ const nm = net.name[i], m = s.mBy[nm];
+      if(m === undefined) continue;
+      const dm = m*half/(netVolAt(net, s, i) + half);
+      s.mBy[nm] = m - dm; kg += dm; if(h === undefined) h = s.hBy[nm]; }
+    s.portKg[pid] = (s.portKg[pid] || 0) + kg;
+    if(h !== undefined) s.portH[pid] = h;
+    return;
+  }
+  const kg = s.portKg[pid] || 0; if(!(kg > 0)) return;
+  s.portKg[pid] = 0;
+  const each = kg/on.length, hp = s.portH[pid];
+  for(const [i] of on){ const nm = net.name[i], m = s.mBy[nm] || 0;
+    if(hp !== undefined && s.hBy[nm] !== undefined && m + each > 0)
+      s.hBy[nm] = (m*s.hBy[nm] + each*hp)/(m + each);
+    s.mBy[nm] = m + each; }
+}
 
 /* ══════════ A TUBE RUPTURE IS A DIFFERENTIAL LEAK ══════════
    An SGTR is THE pressure-difference leak: a primary at 15.5 MPa bleeding
@@ -1636,11 +1726,25 @@ const PUMP_DROOP = 0.25;
 // what a pump is passing, kg/s, off its own casing edge last tick (step() writes it): a reading, never a head
 const pumpQOf = (s, pid) => (s && s.pumpQBy && s.pumpQBy[pid]!==undefined)
   ? s.pumpQBy[pid] : pumpFlow(pid);
+/* ══ A PUMP LIFTS METRES, AND THE SOLVE IS ASKING FOR A PRESSURE ══
+   dp = rho*g*H, so what a machine develops depends on what is in its casing.
+   A pump running on vapour makes about a thousandth of its rated dp and dies
+   on its own - which is the honest reason an isolated pump stops, in place of
+   emptying its own suction at full flow until the mass field hits zero and
+   the donor gate cuts it in one tick. Against the density it was COMMISSIONED
+   at, so a plant at its own design point reads exactly 1 and nothing re-pins;
+   the ratio is the whole law and there is no threshold in it. */
+const pumpRhoK = (s, pid) => {
+  const r0 = (typeof P!=="undefined" && P && P.pumpRho0) ? P.pumpRho0[pid] : 0;
+  if(!(r0 > 0)) return 1;
+  const r = netRhoAt(s, pumpSucNode(pid));
+  return isFinite(r) && r > 0 ? r/r0 : 0;
+};
 /* THE HEAD ONE PUMP DEVELOPS AT SHUTOFF, MPa, at its own speed, less what its
    suction is costing it - the ONE expression the edge and the cavitation
    readout read. What it delivers is this less its casing's drop. */
 const pumpHeadNow = (s, pid) => { const N = pumpDrive(s, pid);
-  return pumpHead(pid)*N*N*(1 + PUMP_DROOP)*(1 - CAV_DERATE*cavOf(s, pid)); };
+  return pumpHead(pid)*N*N*(1 + PUMP_DROOP)*(1 - CAV_DERATE*cavOf(s, pid))*pumpRhoK(s, pid); };
 /* THE CASING IS THE MACHINE'S OWN CHARACTERISTIC, and every machine with a head has one:
    an ideal head source in series with a resistance IS a linear head-flow curve - shutoff
    head at no flow, falling as it passes more - which is what stops a real machine running
@@ -2849,12 +2953,27 @@ function netMaps(ctx){
       if(q) (nodesOfPart[q.id] || (nodesOfPart[q.id] = [])).push(index[nid]); }
     for(const pid in nodesOfPart){ const list = nodesOfPart[pid], v = partVol(pid)/list.length;
       for(const i of list) net2.vol[i] += v; }
-    for(const r of net){ const ends = runEnds(r.key, r.k); if(!ends) continue;
-      const u = index[coreFold(ends[0])], v = index[coreFold(ends[1])];
-      const half = runVol(r)/2;
+    /* ══ AND WHICH HALF IS BEHIND WHICH VALVE ══
+       The split is the ordinary staggered one while both nozzle valves pass,
+       but a port valve stands AT THE MACHINE FACE: shut it and the whole run
+       is on its far side, and leaving half of it booked inside the machine is
+       what let an isolated feed pump empty six cubic metres of line it could
+       not reach. Kept per node so netVolAt() can ask the live question - the
+       part's own volume is what a machine has when nothing passes. */
+    net2.volPart = Float64Array.from(net2.vol);
+    net2.runsAt = new Array(net2.n);
+    /* a/sa and b/sb rather than runEnds(): the key is a SORTED pair and says
+       nothing about which end carries which port, and the whole point here is
+       to name the valve standing on each half. */
+    for(const r of net){ if(!runEnds(r.key, r.k)) continue;
+      const u = index[coreFold(r.a + r.sa)], v = index[coreFold(r.b + r.sb)];
+      const V = runVol(r), half = V/2;
       if(u !== undefined) net2.vol[u] += half;
-      if(v !== undefined) net2.vol[v] += half; }
-    for(const i in net2.cavVol) net2.vol[i] = net2.cavVol[i];   // a reactor cavity is no part: its holdup is its own stated volume
+      if(v !== undefined) net2.vol[v] += half;
+      if(u === undefined || v === undefined || u === v) continue;
+      (net2.runsAt[u] || (net2.runsAt[u] = [])).push({vol:V, mine:r.pa, far:r.pb, other:v});
+      (net2.runsAt[v] || (net2.runsAt[v] = [])).push({vol:V, mine:r.pb, far:r.pa, other:u}); }
+    for(const i in net2.cavVol){ net2.vol[i] = net2.cavVol[i]; net2.volPart[i] = net2.cavVol[i]; net2.runsAt[i] = null; }   // a reactor cavity is no part: its holdup is its own stated volume
     for(let i=0;i<net2.n;i++) if(!(net2.vol[i] > 1e-3)) net2.vol[i] = 1e-3;
     /* ══ AND THE STEEL EACH NODE OWNS, kg, WITH ITS OWN CONDUCTION TIME ══
        The vessel's wall on the core's nodes, half of each run's wall on its
@@ -3033,6 +3152,9 @@ function netFinish(net2, ctx){
      of that, so an edge whose g was written at its push site would price
      itself in a frame with no column in it. An edge that states a bare g and
      no C keeps it - the vapour runs carry a SPEC and a deliberate 0. */
+  // its own slot in the choke mask, so edgeG can say which edge the cap bit on
+  net2.choke = new Uint8Array(edges.length);
+  for(let i=0;i<edges.length;i++) edges[i].i = i;
   for(const ed of edges) if(ed.C !== undefined) ed.g = s => edgeG(net2, ed, s);
 
   /* ══ WHAT FRAME IS THIS NODE MEASURED IN ══
@@ -3533,9 +3655,9 @@ function netStore(net, s){
        REACTOR's own setpoint, and a turbine exhaust reading 15.5 MPa reverses
        the edge that would have refilled it - dry for ever, on a plant that has
        a turbine running into it. A node that is spent still has a pressure. */
-    const mEos = Math.max(net.vol[i]*net.F.rho[i], DRY_MIN_KG);
+    const mEos = Math.max(netVolAt(net, s, i)*net.F.rho[i], DRY_MIN_KG);
     const m = (s && s.mBy && s.mBy[nid] !== undefined) ? s.mBy[nid] : mEos;
-    const V = net.vol[i], c = netSatOf(nid), hN = netHAt(s, nid);
+    const V = netVolAt(net, s, i), c = netSatOf(nid), hN = netHAt(s, nid);
     const pF = net.F.p[i], rF = net.F.rho[i], bF = net.F.b[i];
     const p0 = V > 0 ? netPStar(c, pF, hN, m/V, rF, bF) : pF;
     /* THE SLOPE IS THE CURVE'S OWN (DRHO_DP), at the state point, floored at
@@ -3918,10 +4040,12 @@ function netReadP(sol, byP){
   { const deg = net.Afdeg;
     const lo = new Float64Array(ref.nPiece).fill(Infinity);
     const free = new Uint8Array(ref.nPiece).fill(1);
+    const wet = new Uint8Array(ref.nPiece);
     const store = sol.store;
     for(let i=0;i<net.n;i++){ const c = ref.of[i];
       if(fixed[i]!==undefined){ if(touch[i]) free[c]=0; continue; }
       if(deg && deg[i] && !touch[i]) continue;
+      if(net.F.wet[i]) wet[c] = 1;
       /* A NODE THAT STORES PINS ITS OWN PIECE. Its row carries C/dt*p*, and p*
          is what that node's own mass and enthalpy are AT (netPStar) - an
          absolute pressure, so there is nothing to float. It was store.pin
@@ -3939,8 +4063,13 @@ function netReadP(sol, byP){
       /* A PIECE NOTHING PINS IS FLOATED so its lowest node sits at the pressure
          the ship holds - the expansion tank open to the compartment every
          closed cooling loop has. A shift cancels out of every flow, so nothing
-         solved moves; only the absolute level, which had no answer before. */
-      const off = (free[c] && fixed[i]===undefined && isFinite(lo[c])) ? netPcont(net, s, i) - lo[c] : 0;
+         solved moves; only the absolute level, which had no answer before.
+         A PIECE WITH NO WATER IN IT IS NOT ONE. An isolated stub the pumps
+         emptied holds vapour at its own state point, and lifting it to the
+         compartment put a drained feed suction 0.15 MPa above the condenser
+         it draws from: the momentum law then ran the line backwards, the dry
+         gate cut the edge, and re-opening the port never refilled it. */
+      const off = (free[c] && wet[c] && fixed[i]===undefined && isFinite(lo[c])) ? netPcont(net, s, i) - lo[c] : 0;
       byP[net.nodes[i]] = b[i] + off;
     } }
 }
