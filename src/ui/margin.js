@@ -39,6 +39,12 @@ function marginPage(x,y,rc){
   return {x:rc.left + x*rc.width/W,
           y:rc.top  + (y-TOPBAR_H)*rc.height/Math.max(1,H-TOPBAR_H)};
 }
+// and back: viewport px -> layout units, for a place the hand states in px
+function marginUnits(x,y,rc){
+  rc=rc||marginCv();
+  return {x:(x-rc.left)*W/Math.max(1,rc.width),
+          y:(y-rc.top)*Math.max(1,H-TOPBAR_H)/Math.max(1,rc.height)+TOPBAR_H};
+}
 // MARGIN_IN is CSS px because a panel is; the view is layout units
 function marginInsetU(){
   if(MARGIN_HIDE) return {l:0,r:0,t:0,b:0};
@@ -47,7 +53,7 @@ function marginInsetU(){
   return {l:MARGIN_IN.l*sx, r:MARGIN_IN.r*sx, t:MARGIN_IN.t*sy, b:MARGIN_IN.b*sy};
 }
 
-/* ══ A PANEL COVERS THE DECK, SO ITS WHEEL IS THE DECK'S ══
+/* ══ A PANEL COVERS THE DECK, SO ITS HAND IS THE DECK'S ══
    Every box that stands over #cv owes this: the canvas never sees a wheel that
    starts on a panel, so without it the plant simply stops zooming under the
    reader's hand. Both hosts register it - the margin (ui/margin.js) and the
@@ -61,25 +67,17 @@ function panWheelPass(el){
     const ov=getComputedStyle(n).overflowY;
     if((ov==="auto"||ov==="scroll") && n.scrollHeight>n.clientHeight+1) return true; }
     return false; };
+  // its own state rather than ui.drag: uiMove() belongs to a surface that hit-tests
+  let pan=null;
+  const drop=()=>{ pan=null; };
+  ctxSuppress(el);
   MOUSE.on(el,{
     wheel(e){
       if(scrolls(e.target)) return;
       e.preventDefault();
       ctxClose();
       vWheel(local(e), e.deltaY);
-    }});
-  return el;
-}
-
-function marginHost(root){
-  const el=KIT.el("div","margin-host");
-  panWheelPass(el);
-  /* a panel covers the deck, so a right drag on one pans like the deck. Its own
-     state rather than ui.drag: uiMove() belongs to a surface that hit-tests. */
-  ctxSuppress(el);
-  let pan=null;
-  const drop=()=>{ pan=null; };
-  MOUSE.on(el,{
+    },
     down(e){
       if(e.button!==2 || e.shiftKey) return;
       // a hosted canvas inside a panel started its own gesture on the way up here;
@@ -92,10 +90,17 @@ function marginHost(root){
     move(e){
       if(!pan) return;
       const lp=local(e);
+      panTo=panZ=null;                  // a hand outranks an eased pan already in flight
       VIEW.ox-=(lp.x-pan.x)/VIEW.s; VIEW.oy-=(lp.y-pan.y)/VIEW.s;
       pan.x=lp.x; pan.y=lp.y; uiDirty();
     },
     up:drop, cancel:drop});
+  return el;
+}
+
+function marginHost(root){
+  const el=KIT.el("div","margin-host");
+  panWheelPass(el);
   root.appendChild(el);
   return el;
 }
