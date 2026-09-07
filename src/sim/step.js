@@ -1930,7 +1930,7 @@ function massSeed(s){
   finally { netHoldStore(false); }
   const booked = netBooked(net);
   for(let i=0;i<net.n;i++){ if(booked[i]) continue;
-    const nm = net.name[i]; s.mBy[nm] = netVolAt(net, s, i)*netRhoAt(s, nm); }
+    const nm = net.name[i]; s.mBy[nm] = net.vol[i]*netRhoAt(s, nm); }
   /* ══ A STUB BEHIND A SHUT GATE HOLDS WHAT ITS OPEN END HOLDS ══
      The pinned solve reads the relief line between the PORV's seat and its
      tank at the LOOP's 15.5 MPa, so 0.18 m3 of line open to a tank at
@@ -1956,7 +1956,7 @@ function massSeed(s){
       const a = adj[i]; if(a) for(const v of a) if(!seen[v]){ seen[v] = 1; stack.push(v); } }
     if(plant) continue;
     for(const i of region){ const nm = net.name[i], c = netSatOf(nm), h = satHg(c, P.Pcont);
-      s.hBy[nm] = h; s.mBy[nm] = netVolAt(net, s, i)*rhoMixOf(c, P.Pcont, h); s.pBy[nm] = P.Pcont; }
+      s.hBy[nm] = h; s.mBy[nm] = net.vol[i]*rhoMixOf(c, P.Pcont, h); s.pBy[nm] = P.Pcont; }
   }
 }
 /* ══════════ JOB 4: ENTHALPY IS CARRIED ALONG THE FLOWS ══════════
@@ -1982,7 +1982,7 @@ function massSeed(s){
 /* WHAT ONE VESSEL PUTS INTO ITS NODE, kW - its own heat at its own rating,
    one tick old, the s.coreDT idiom. */
 const coreHeatKW = id => (HEATBAL.heatBy[id]||0)*P.cores[id].rated*1000;
-function advectSrc(s){
+function advectSrc(s, dt){
   const src = {};
   const add = (nid, q) => { if(q) src[nid] = (src[nid]||0) + q; };
   /* AND WHAT THE VESSEL GIVES THE ROOM. It was a term in the s.Tavg pot and
@@ -2042,7 +2042,17 @@ function advectSrc(s){
          seed instead of the heat. */
       if(s.metalT[nm] === undefined || !isFinite(s.metalT[nm]) || netStoreHeld) s.metalT[nm] = T;
       const ua = net.metalUA ? net.metalUA[i] : 0;
-      const q = m*CP_STEEL*(s.metalT[nm] - T)/(net.metalTau[i] + (ua > 0 ? m*CP_STEEL/ua : 0));
+      const q0 = m*CP_STEEL*(s.metalT[nm] - T)/(net.metalTau[i] + (ua > 0 ? m*CP_STEEL/ua : 0));
+      /* ══ AND A WALL MAY NOT DRIVE THE WATER PAST ITSELF ══
+         A relief line is 22 kg of steel round four grams of steam, so the
+         coupling outweighs the fluid's own heat capacity by four orders and an
+         explicit source there is unconditionally unstable: measured, the stub
+         ran to 5.6e17 kJ/kg and read 8e18 K. The ceiling is the exchange's own
+         end point - what the water at this node can take in one tick without
+         arriving past the wall - so nothing with real flow through it moves. */
+      const mf = (s.mBy && s.mBy[nm]) || 0;
+      const cap = dt > 0 ? mf*Math.abs(hOfT(netSatOf(nm), s.metalT[nm]) - netHAt(s, nm))/dt : Infinity;
+      const q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap);
       metalQ[nm] = q; add(nm, q); } }
   return src;
 }
@@ -2161,6 +2171,22 @@ let advectEdgeKg = null, advectLandedBy = null;
 // kg the transport landed on a booked node this tick (negative: took off it); 0 with no solve
 const advectLanded = i => (advectLandedBy && i !== undefined) ? advectLandedBy[i] : 0;
 const holdNodeSet = () => new Set(holdTankIds().map(coreFold));
+/* ══ AND THE LINE THAT IS A HOLD TANK'S OWN WATER ══
+   The surge line hangs off the pressurizer and holds what the pressurizer
+   holds, so it sits at saturation by construction. Once it had a node of its
+   own that made it the hottest LIQUID node on the primary, and the subcooling
+   instrument - which skips the vessel because its bubble is two-phase - read
+   0.01 K and scrammed four sweep groups at 14.6 s with nothing wrong. A real
+   plant reads core-exit thermocouples, not the surge line. Off the drawing:
+   the runs landing on a hold tank, whatever anyone called them. */
+// on the graph window, because it is a fact about the drawing and the tick asks it per circuit
+function holdLineSet(){
+  const slot = graphSlot("holdLine"), was = slot.get(1); if(was) return was;
+  const set = holdNodeSet(), out = new Set(set);
+  for(const r of pipeNetwork()){ const e = runEnds(r.key, r.k); if(!e) continue;
+    if(set.has(coreFold(e[0])) || set.has(coreFold(e[1]))) out.add(runNodeOf(r.key)); }
+  slot.set(1, out); return out;
+}
 function advectStep(s, dt, runFlow, edgeKg){
   const net = P && P.net;
   advectCondIn = 0; advectEdgeKg = advectLandedBy = null;
@@ -2176,7 +2202,7 @@ function advectStep(s, dt, runFlow, edgeKg){
     for(const k in mBy) if(net.index[k] === undefined) delete mBy[k];
     net.advKeysH = h; net.advKeysM = mBy; }
 
-  const src = advectSrc(s), A = advectAnchors(s);
+  const src = advectSrc(s, dt), A = advectAnchors(s);
   const anch = Object.assign({}, A.hold);
   for(const nm in A.holdH) anch[nm] = A.holdH[nm];   // the SKIP set is both maps
   const G = nodeGraph();
@@ -2337,8 +2363,8 @@ function advectStep(s, dt, runFlow, edgeKg){
     for(let i=0;i<net.n;i++){ const ir = inRaw[i]*dt;
       if(!(ir > 0) || bk[i]) continue;
       const nm = net.name[i], have = mBy[nm];
-      if(have === undefined || !(netVolAt(net, s, i) > 0)) continue;
-      const cap = netVolAt(net, s, i)*rhoMixOf(netSatOf(nm), pMax[i], netHAt(s, nm));
+      if(have === undefined || !(net.vol[i] > 0)) continue;
+      const cap = net.vol[i]*rhoMixOf(netSatOf(nm), pMax[i], netHAt(s, nm));
       const room = cap - have + outNow[i]*dt;
       if(ir > room) kIn[i] = Math.max(room, 0)/ir; } }
   for(let e=0;e<net.edges.length;e++){
@@ -2405,7 +2431,7 @@ function advectStep(s, dt, runFlow, edgeKg){
        minutes on a volume that turns over in a tick. The mass is the state and
        the node has it. */
     const mass = Math.max(mBy[net.name[i]] !== undefined ? mBy[net.name[i]]
-                                                         : netVolAt(net, s, i)*netRhoAt(s, net.name[i]),
+                                                         : net.vol[i]*netRhoAt(s, net.name[i]),
                           DRY_MIN_KG);
     /* A SETTLE PASS RELAXES EVERY NODE ALIKE: it is a steady-state sweep,
        not a march, and at the tick's own blend the 125 t vessel moved a
@@ -2449,7 +2475,7 @@ function advectStep(s, dt, runFlow, edgeKg){
     /* THE SEED, AND THE ONE NODE WITH NO INTEGRAL WORTH RUNNING: under a
        milligram the mass is arithmetic noise (DRY_MIN_KG, the same line the
        run-dry gate exempts), and the settle is not a time march. */
-    const eos = netVolAt(net, s, i)*netRhoAt(s, nm);
+    const eos = net.vol[i]*netRhoAt(s, nm);
     if(netStoreHeld || mBy[nm] === undefined || eos <= DRY_MIN_KG){ mBy[nm] = eos; continue; }
     /* ══ AND THE MASS IS INTEGRATED, NEVER ASSIGNED ══
        A node turning over inside one tick used to be ASSIGNED eos - the
@@ -2513,7 +2539,7 @@ function advectStep(s, dt, runFlow, edgeKg){
       // the vessel is always in the mean: stalled, every through-flow weight is 0 and Tavg froze while the core heated it
       const w = coreNids.has(nm) ? 1 : ref > 0 ? clamp(Math.min(inM[i], mOut[i])/ref, 0, 1) : 0;
       if(!(w > 0)) continue;
-      const mi = w*(mBy[nm] !== undefined ? mBy[nm] : netVolAt(net, s, i)*rho);
+      const mi = w*(mBy[nm] !== undefined ? mBy[nm] : net.vol[i]*rho);
       /* THE VESSEL IS HALF AT ITS INLET. One upwind node holds the whole vessel at the
          outlet, so an inventory mean sat a third of the way up the rise, not half - and
          coreStep centres its channel on s.Tavg as the MIDPOINT (Tcold = Tavg - dT/2),
@@ -2564,7 +2590,7 @@ function h2Total(s){
   let t = 0;
   for(let i=0;i<net.n;i++){ const nm = net.name[i], c = s.h2By[nm];
     if(!(c > 0) || !netInCore(nm)) continue;
-    const m = s.mBy[nm] !== undefined ? s.mBy[nm] : netVolAt(net, s, i)*netRhoAt(s, nm);
+    const m = s.mBy[nm] !== undefined ? s.mBy[nm] : net.vol[i]*netRhoAt(s, nm);
     t += c*m; }
   return t;
 }
@@ -3279,7 +3305,6 @@ const ledgerKg = s => { let m = 0;
     if(!t.inf && !t.hold) m += (s.tank&&s.tank[id]!==undefined?s.tank[id]:t.level)/100*tankKg(id); }
   for(const id in s.sglBy){ const M=sgMassOf(id); if(M>0) m += s.sglBy[id]/100*M; }
   for(const id in s.sgSteamBy) m += s.sgSteamBy[id];
-  for(const pid in (s.portKg||{})) m += s.portKg[pid];   // the line a shut nozzle valve is holding
   m += sumpKg(s);
   return m; };
 const ledgerOut = s => { let k=0; for(const n in s.massOut) k += s.massOut[n]; return k; };
@@ -3818,10 +3843,6 @@ function resetPlant(){
         a plant nobody has isolated anything on is bit-identical to one with no
         port valves at all (portOpen(), pipenet.js). */
      portShut:Object.fromEntries(Object.keys(D.ports).map(k=>[k,false])),
-     /* and the line each shut valve has set aside, kg and its enthalpy - a
-        book of the ledger like a tank's level (portShiftKg, pipenet.js). */
-     portKg:Object.fromEntries(Object.keys(D.ports).map(k=>[k,0])),
-     portH:{},
      arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false, noiseMul:1,
      /* Two crews, two places. `dose` is the repair party's own integral - it
@@ -4623,26 +4644,24 @@ function step(dt){
      repair party and the ledger are the mechanism the plant already had, and
      none of them needed a second kind of break. At the end doing the pushing,
      because that is where the hoop stress is. */
-  /* AT A NODE THAT ACTUALLY HAS A PRESSURE, never pAt()'s fallback: pAt()
-     answers s.P for anything the solve does not carry, so every steam line on
-     the plant was judged against the REACTOR's 15.5 MPa and the stock ship cut
-     its own main steam line on tick one. One field answers for every run now;
-     a node it does not carry is a node nobody can say the pressure at, and a
-     run with no pressure at either end is not judged. */
-  const pBurstAt = n => { const f = coreFold(n);
-    return pField[f] === undefined ? null : pField[f]; };
+  /* AT THE RUN'S OWN NODE, which is the pressure the pipe is actually
+     standing at. This took the higher of the two MACHINES the run lands on,
+     because the pipe had no pressure of its own - so a line isolated at one
+     valve was judged against a machine on the far side of it. pAt()'s fallback
+     is still refused: it answers s.P for anything the solve does not carry,
+     which judged every steam line against the REACTOR's 15.5 MPa and cut the
+     stock ship's main steam line on tick one. A node the field does not carry
+     is a node nobody can say the pressure at, and that run is not judged. */
   // a run's burst pressure is a design fact: cached on the net (a commission) and DGEN (an edit),
   // because runDesignP() walks every tank and pump on the plant and this asks it of every run
   const net = P.net;
   if(net.burstGen !== DGEN){ net.burstP = {}; net.burstGen = DGEN; }
   for(const r of pipeNetwork()){
     if(!r.cells || !r.cells.length) continue;
-    const ends = runEnds(r.key, r.k); if(!ends) continue;
-    const qa = pBurstAt(ends[0]), qb = pBurstAt(ends[1]);
-    if(qa === null && qb === null) continue;
-    const pa = qa === null ? qb : qa, pb = qb === null ? qa : qb;
+    const pa = pField[runNodeOf(r.key)];
+    if(pa === undefined) continue;
     const pBurst = net.burstP[r.key] ?? (net.burstP[r.key] = runBurstP(r));
-    if(Math.max(pa,pb) <= pBurst) continue;
+    if(pa <= pBurst) continue;
     /* A RUN THAT IS ALREADY OPEN DOES NOT SPLIT TWICE. One hole is what the
        run has to say; without this the die is re-rolled every tick the line
        is still over its wall and eats the rest of the pipe cell by cell. */
@@ -4653,10 +4672,10 @@ function step(dt){
        before: the hoop stress is the same the length of the run, so the flaw
        that goes first is not something the pipe's ends can tell you. Uniform
        over its own cells, so a long run fails somewhere you did not pick.
-       Stood down (s.diceOff), it takes the end doing the pushing - a scenario
-       that wants a particular cell stages it with the same act a hit uses. */
+       Stood down (s.diceOff), it takes the run's first cell - a scenario that
+       wants a particular one stages it with the same act a hit uses. */
     const n = r.cells.length;
-    const c = s.diceOff ? (pa >= pb ? r.cells[0] : r.cells[n-1])
+    const c = s.diceOff ? r.cells[0]
                         : r.cells[Math.min(n-1, Math.floor(srand(s)*n))];
     const id = "pipe:"+c[0]+","+c[1];
     if(s.dmgParts.indexOf(id) >= 0) continue;
@@ -4664,7 +4683,7 @@ function step(dt){
     s.dmgWhy[id] = "BURST";
     const fx = dmgFx(id);
     logE("alarm","PIPE BURST / "+fx.msg,
-      pipeName(r)+" has split at "+c[0]+","+c[1]+" - "+Math.max(pa,pb).toFixed(2)+
+      pipeName(r)+" has split at "+c[0]+","+c[1]+" - "+pa.toFixed(2)+
       " MPa against a wall rated for "+runRating(r).toFixed(2)+" MPa. "+fx.why);
   }
   /* ══ AND A WALL LETS GO AT ITS OWN SHAPE ══
@@ -5240,10 +5259,15 @@ function step(dt){
        margin by definition, which is not what the instrument is asking:
        margin is about where boiling would start NEXT, so it is the hottest
        node that is still liquid - the core exit on a reactor loop. */
+    /* ...AND NOT THE LINE THAT IS THAT VESSEL'S OWN WATER EITHER. The bubble
+       is skipped by its own quality; the surge line below it is LIQUID at the
+       same saturated temperature, so the quality test cannot see it and it
+       reads 0.01 K of margin for ever (holdLineSet, above). */
     let worst, hot = -Infinity;
+    const ownWater = holdLineSet();
     for(let i=0;i<P.net.n;i++){ const nm = P.net.name[i];
       if(circOfNode(nm) !== ci || netBooked(P.net)[i]) continue;
-      if(netQualAt(s, nm) > 0) continue;
+      if(ownWater.has(nm) || netQualAt(s, nm) > 0) continue;
       const T = netTempAt(s, nm);
       if(T > hot){ hot = T; worst = nm; } }
     s.scBy[ci] = scAt(worst || holdOnCirc(ci)[0] || coreOnCirc(ci)[0] || primaryCore()); }
