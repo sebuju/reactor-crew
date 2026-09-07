@@ -225,7 +225,8 @@ function partFluidH(s, id){
   const nd = partFluidNode(s, id);
   if(!nd) return null;
   const h = netHAt(s, nd);
-  return isFinite(h) ? {h, c:netSatOf(nd)} : null;
+  // the NODE travels with the reading: a spray needs the pressure it is leaving
+  return isFinite(h) ? {h, c:netSatOf(nd), nd} : null;
 }
 /* WHAT AN OPENING IS PASSING, keyed the way s.spillBy is. Heat and hydrogen
    leave through the same hole at the same rate, so both ask this one reader:
@@ -236,8 +237,40 @@ const breakPart = k => { const t = k.slice(6); return t.indexOf(":") < 0 ? t : n
 // ...or a reactor CAVITY ("break:cav:"+core id): the core's cells, the cavity node's own water
 const breakCav = k => k.indexOf("break:cav:") === 0 ? k.slice(10) : null;
 const openFluidH = (s, k) => { const pid = breakPart(k), cid = breakCav(k);
-  if(cid){ const nd = "cav:"+cid, h = netHAt(s, nd); return isFinite(h) ? {h, c:netSatOf(nd)} : null; }
+  if(cid){ const nd = "cav:"+cid, h = netHAt(s, nd); return isFinite(h) ? {h, c:netSatOf(nd), nd} : null; }
   return pid ? partFluidH(s, pid) : runFluidH(s, k.slice(6)); };
+/* ══ ONE WALK OVER THE LIQUID OPENINGS ══
+   Three passes wanted the same list - what the heat pass charges the air, what
+   the hydrogen pass vents, and now what the fire pass pools - and each carried
+   its own copy of "which openings are passing a fluid whose state can be read,
+   and where are they". Asked three ways, an opening could put its metal in a
+   compartment its heat never reached. fn(cells, rate, fl, key); the key is the
+   one advectH2Out is keyed by. */
+function roomLiqOuts(s, G, fn){
+  const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
+  for(const k in s.spillBy){
+    const fl = openFluidH(s, k);
+    if(fl) fn(roomOpenCells(s, G, k), s.spillBy[k], fl, k);
+  }
+  for(const fid in s.reliefVent){
+    if(tgt[fid] || out[fid]) continue;
+    const fl = partFluidH(s, fid);
+    if(!fl) continue;
+    const q = G.parts.find(w => w.p.id === fid);
+    fn(q ? q.cells : [], s.reliefVent[fid], fl, "vent:"+fid);
+  }
+}
+/* AND HOW WIDE THE HOLE IS, which is what decides whether a jet atomises. A
+   run states its bore and a relief valve states its bore; a torn machine and a
+   breached cavity state nothing, and a hole nobody can measure does not spray. */
+const openBoreM = key => {
+  if(key.indexOf("vent:") === 0) return fitBoreMm(key.slice(5))/1000;
+  if(key.indexOf("break:cav:") === 0) return 0;
+  const t = key.slice(6);
+  if(t.indexOf(":") < 0) return 0;
+  const r = P.net && P.net.byKey && P.net.byKey[t];
+  return r ? runBoreMm(r)/1000 : 0;
+};
 
 /* ══ GEOMETRY, MEMOISED ON THE ARRANGEMENT ══
    laySig()+pipeSig(), the same key radGeom() uses and for the same reason:
@@ -582,26 +615,22 @@ function roomStep(s, dt){
   /* The primary side, as LIQUID: hot water leaving a hole flashes, and it
      mixes with the air where it lands. One conversion out of invRate()'s % of
      loop inventory, the same bridge loopKg() is everywhere else. */
-  const kgOf = rate => Math.max(0, rate)/100*loopKg();
-  for(const fid in s.reliefVent){
-    if(tgt[fid] || out[fid]) continue;
-    const kg = kgOf(s.reliefVent[fid]);
-    const fl = partFluidH(s, fid);
-    if(!fl) continue;
-    roomJetLiq(src, T, cellsOf(fid), kg, fl.h, fl.c);
-    roomAddGas(s, cellsOf(fid), kg*dt, kg);
-  }
   /* AND IN THE STATE THE OPENING IS ACTUALLY PASSING. s.Tavg is the primary's
      mean, so a reserve tank emptying through a severed line put the reactor's
      heat into the room out of water that never came near it. */
-  for(const k in s.spillBy){
-    const kg = kgOf(s.spillBy[k]);
-    const fl = openFluidH(s, k);
-    if(!fl) continue;
-    { const oc = roomOpenCells(s, G, k);
-      roomJetLiq(src, T, oc, kg, fl.h, fl.c);
-      roomAddGas(s, oc, kg*dt, kg); }
-  }
+  const kgOf = rate => Math.max(0, rate)/100*loopKg();
+  roomLiqOuts(s, G, (cells, rate, fl) => {
+    /* A FLUID THAT BURNS KEEPS ITS HEAT. It lands as a pool and gives it up
+       through its own surface (roomFireStep), so charging the air the whole of
+       it here as well would spend the same joules twice - and it is not a gas
+       either: sodium at 723 K is four hundred degrees below its boiling point
+       and nothing about a compartment flashes it. */
+    if(fl.c.burn) return;
+    const kg = kgOf(rate);
+    roomJetLiq(src, T, cells, kg, fl.h, fl.c);
+    roomAddGas(s, cells, kg*dt, kg);
+  });
+  roomFireStep(s, dt, G, src);
 
   /* ── the machines whose whole job is getting heat out of the building ──
      A structure with no network presence at all, the shield/catcher idiom.
@@ -673,6 +702,18 @@ function roomOpenCells(s, G, key){
   if(!r || !r.cells) return [];
   const out = [];
   for(const [x,y] of r.cells) if(cellBroken(s, x, y)) out.push(y*GW+x);
+  /* A WRECKED NOZZLE IS AN OPENING ON THIS RUN TOO. netEdges() hangs one off
+     the run's own node for each port, discharging at the PORT's cell and not
+     at any pipe cell, and this reader knew only about pipe cells - so a run
+     that lost a valve body poured into a compartment that could not name a
+     single cell for it, and the heat, the hydrogen and the metal all went
+     nowhere. Measured at 128 kg of sodium in 60 s on a BN-600 pipe burst,
+     where the blast off the first flash wrecked two nozzles elsewhere. */
+  for(const pid of [r.pa, r.pb]){
+    if(!pid || !portWrecked(s, pid)) continue;
+    const c = portCell(pid);
+    if(c) out.push(c[1]*GW+c[0]);
+  }
   return out;
 }
 
@@ -805,6 +846,252 @@ function roomIgnites(s, G, i){
   return partSkin(s, p) >= H2_IGN || partWrecked(s, p.id);
 }
 
+/* ══ A COOLANT THAT IS ALSO A FUEL ══
+   The compartment already had every consequence of a fire - flammability
+   limits, oxygen per cell, oxygen depletion, a burning velocity, the blast
+   term - and one fuel. Sodium is the everyday accident an SFR is built
+   around: any burst pipe reaches it, where the water plant needs a melted
+   core first.
+
+   It is NOT the hydrogen mechanism with a second gas in it. Hydrogen is a
+   premixed cloud and burns as a FRONT crossing cells; a metal fire is a
+   surface, sitting where it fell, burning at a rate its own area and the
+   oxygen over it set. So this is a pool with a mass and a temperature, and
+   the ONE thing the two share is the joule: both land in roomH2Step's q, so
+   the fire and the bang cannot disagree about how big it was.
+
+   THE POOL CARRIES ITS OWN TEMPERATURE, and that is what an ignition test
+   costs. Without it every spill burns for ever: a pool that has given its
+   heat up, or frozen on a cold deck, is inert, and freezing is the reason a
+   sodium line is trace-heated in the first place. Energy is the state rather
+   than temperature so that two spills can be added, with the datum at LIQUID
+   AT THE MELTING POINT - negative energy is then exactly the latent heat of
+   fusion, and a pool sits at 371 K while it freezes instead of falling
+   through it.
+
+   WHERE THE HEAT GOES IS NOT A SPLIT SOMEBODY PICKED. Combustion happens at
+   the surface, so all of it lands in the pool, and the pool loses it by
+   convection and radiation like any other hot thing. The burning temperature
+   then falls out: 123 kW/m2 against an emissivity of 0.8 settles near 1250 K,
+   and the published range for a sodium pool fire is 900-1200 K. Nothing here
+   types that number.
+
+   FIGURES. lhv is the heat of formation of Na2O2, 510.9 kJ/mol over the
+   45.98 g of sodium in it = 11 111 kJ/kg, and o2 is the same reaction's
+   31.998/45.98. The peroxide is the oxygen-rich product and a pool fire in
+   air makes it; the monoxide route is 9 010 kJ/kg and 0.348, so the choice is
+   worth about 20 %. melt, boil and lf are published. rate is 40 kg/m2/h, the
+   middle of a published 25-50 band, and it is the one number that sets how
+   long a fire lasts. ign 400 K is a pool just above its melting point; the
+   published band runs to 600 K for an undisturbed surface, so this is the
+   eager end. loc is the oxygen a sodium fire dies below, and it is what
+   inerting a compartment would have to reach.
+
+   There is no density here. The pool is the same substance the circuit was
+   carrying, so it weighs what that row says it weighs (fireRho()) - the same
+   argument cp makes below. */
+const FIRE = {
+  NA:{ lhv:11111, o2:0.6959, ign:400, melt:371, boil:1156, lf:113,
+       rate:0.011111, loc:0.05, emis:0.80, hConv:0.010, sigma:0.180, eta:0.40 },
+};
+const FIRE_KEYS = Object.keys(FIRE);
+// kg of metal in ONE passage worth a log line - H2_BURN_EV's job, its own
+// number because a kilogram of sodium is not a kilogram of hydrogen
+const FIRE_EV_KG = 1.0;
+// ONE pool field, so ONE fuel: a second FIRE row wants a fuel key per cell
+const fireRow = () => FIRE[FIRE_KEYS[0]];
+/* The pool is the same substance the circuit was carrying, so what it weighs
+   and what it holds are that fluid's own columns and never a second copy of
+   them here - `dens` on the scale RHO_K turns into kg/m3, `cp` as it stands. */
+let fireCoolRow = null;
+const fireCool = () => fireCoolRow
+  || (fireCoolRow = COOLANT.filter(a => a.burn === FIRE_KEYS[0])[0] || null);
+const fireCp  = () => { const a = fireCool(); return a ? a.cp : 1; };
+const fireRho = () => { const a = fireCool(); return a ? a.dens*RHO_K : 1000; };
+/* HOW DEEP A SPREADING POOL GETS. BOUGHT: a liquid metal running out over
+   steel stops at a few millimetres, and this is the only thing that keeps a
+   gram of sodium from burning over a whole 0.218 m2 cell. Above about 1.8 kg
+   a cell is covered and the figure stops mattering at all. */
+const POOL_DMIN = 0.01;                   // metres
+/* ══ AND IT RUNS ══
+   A pool does not stay in the cells the hole was pointing at. It falls to the
+   deck and it spreads out along it, and both of those decide the ONE thing
+   that sets how fast a metal fire burns - how much surface it has. Fourteen
+   tonnes left where it landed stood thirteen metres deep in six cells and
+   burned at the rate a puddle would; the same metal on the deck is twenty
+   cells of free surface. It is also where the fire IS, which a leak at the
+   top of a bay gets wrong in the other direction.
+   A cell holds ROOM_VCELL of metal and no more, so a deep spill stacks, and
+   only the cell with nothing on top of it has a surface to burn from.
+   POOL_SPREAD is BOUGHT: it is how fast it levels, and a metal running out
+   over steel crosses a 0.467 m cell in a fraction of a second, so anything
+   above about 2/s is the same picture one tick later. */
+const POOL_SPREAD = 5;                    // per second
+let poolDM = null, poolDE = null;
+function poolFlow(s, dt, G){
+  const M = s.roomPool, E = s.roomPoolE, N = GW*GH;
+  const cap = ROOM_VCELL*fireRho(), k = Math.min(1, POOL_SPREAD*dt);
+  if(!poolDM || poolDM.length !== N){ poolDM = new Float64Array(N); poolDE = new Float64Array(N); }
+  poolDM.fill(0); poolDE.fill(0);
+  /* A wall or a machine box is a floor, not a hole. Only the TARGET is asked:
+     metal already standing in a machine's own cells - which is where a wrecked
+     machine puts it - still has to be able to run out of them. */
+  const shut = j => G.tight[j] || G.occ[j];
+  // fluxes off the SAME field, so no cell is drained by a neighbour that has
+  // already been visited and the answer does not depend on the sweep order
+  const move = (i, j, want) => { const take = Math.min(want, M[i], cap - M[j]);
+    if(!(take > 0)) return;
+    const e = E[i]*take/M[i];
+    poolDM[i] -= take; poolDE[i] -= e; poolDM[j] += take; poolDE[j] += e; };
+  for(let Y=0;Y<GH-1;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X, j = i+GW;                       // j is BELOW i on this grid
+    if(M[i] > 0 && !shut(j)) move(i, j, M[i]*k);
+  }
+  /* SIDEWAYS ONLY WHILE IT IS DEEPER THAN IT WANTS TO BE. Levelling on the
+     difference alone has no stopping point, so a tonne of metal ended up as a
+     gram in every cell of the bay - and a gram is not a pool. POOL_DMIN is
+     where it stops, which is the same figure the burning area already uses. */
+  const dmin = cap*POOL_DMIN/ROOM_DEPTH;
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW-1;X++){
+    const i = Y*GW+X, j = i+1, d = (M[i] - M[j])/2;
+    if(d > 0){ if(!shut(j) && M[i] > dmin) move(i, j, Math.min(d, M[i]-dmin)*k); }
+    else if(d < 0 && !shut(i) && M[j] > dmin) move(j, i, Math.min(-d, M[j]-dmin)*k);
+  }
+  for(let i=0;i<N;i++){ M[i] += poolDM[i]; E[i] += poolDE[i];
+    if(M[i] <= 0){ M[i] = 0; E[i] = 0; } }
+}
+/* ══ AND A LEAK THAT ATOMISES IS A DIFFERENT FIRE ══
+   A pool fire is slow and a SPRAY fire is not: the jet breaks into droplets,
+   the surface area goes up by orders of magnitude, and the charge burns in
+   flight in seconds instead of minutes. It is the accident that pressurises a
+   cell, and it is why this is a fire and not just a hot puddle.
+   WHAT DECIDES IT IS THE JET, not a switch. The gas Weber number
+   We = rho_air*v^2*d/sigma is the published breakup criterion: below 13 the
+   jet stays a column, above 40.3 it is in the atomisation regime, and between
+   them it is shedding. The velocity is the hole's own sqrt(2*dp/rho) and d is
+   the bore, so a wide tear at 0.2 MPa dribbles and a small hole sprays -
+   which is the real and unhelpful shape of it.
+   eta is what fraction of the atomised metal burns BEFORE it lands. BOUGHT,
+   and the softest number here: spray fire tests report 20-60 % and this is
+   0.40. It scales the violence of the fast fire directly. */
+const SPRAY_WE0 = 13, SPRAY_WE1 = 40.3;
+/* Pool temperature off its own energy. Liquid above the datum, pinned at the
+   melting point while the latent heat comes out, solid below that. */
+function poolT(m, E){
+  if(!(m > 0)) return T_HULL;
+  const f = fireRow(), cp = fireCp(), eF = -m*f.lf;
+  if(E >= 0) return f.melt + E/(m*cp);
+  return E > eF ? f.melt : f.melt + (E - eF)/(m*cp);
+}
+const roomPoolT = (s,i) => poolT(s.roomPool[i], s.roomPoolE[i]);
+// the same three tests the burn takes, so a cell cannot draw cold and burn
+const roomPoolLit = (s,i) => { const f = fireRow();
+  return s.roomPool[i] > 0 && (i < GW || !(s.roomPool[i-GW] > 0))
+      && roomPoolT(s,i) >= f.ign && roomO2Frac(s,i) >= f.loc; };
+// what the metal put into the air THIS tick, kJ per cell - read by the one q
+let fireQ = null;
+
+function roomFireStep(s, dt, G, src){
+  const N = GW*GH, f = fireRow(), cp = fireCp();
+  const M = s.roomPool, E = s.roomPoolE, O = s.roomO2, T = s.roomT;
+  if(!fireQ || fireQ.length !== N) fireQ = new Float64Array(N);
+  fireQ.fill(0);
+  s.roomFireOn = 0;
+  if(!fireCool()) return;
+  // the compartment's own pressure is a whole-grid pass, and the spray is the
+  // only thing here that wants it - asked once, and only if metal is arriving
+  let gz = null, on = 0;
+  /* ══ WHAT ARRIVES, AND WHETHER IT ARRIVES AS A SPRAY ══ */
+  roomLiqOuts(s, G, (cells, rate, fl, key) => {
+    const row = fl.c.burn && FIRE[fl.c.burn];
+    if(!row || !cells.length) return;
+    /* THE KILOGRAMS THE TRANSPORT BOOKED, never the solve's rate. Everything
+       else the room reads off an opening is a rate on a plume, and a few per
+       cent either way is a picture; this is a MASS that then sits on the deck
+       and has to be the same mass that left the loop. */
+    const kg = advectOutKg[key] || 0;
+    if(!(kg > 0)) return;
+    if(!gz) gz = roomPGauge(s);
+    const pN = netPAt(s, fl.nd)*1e6, pR = (ROOM_P0 + gz[cells[0]])*1000;
+    const v = Math.sqrt(2*Math.max(0, pN - pR)/fireRho());
+    const d = openBoreM(key);
+    const we = ROOM_RHO*v*v*d/row.sigma;
+    const frac = d > 0 ? clamp((we - SPRAY_WE0)/(SPRAY_WE1 - SPRAY_WE0), 0, 1) : 0;
+    /* THE IGNITION TEST ON THE METAL ITSELF, at the temperature it is leaving
+       at. A loop that has been shut down and cooled sprays cold sodium and
+       nothing happens; that is the same test the pool takes. */
+    const Tin = tOfH(fl.c, netPAt(s, fl.nd), fl.h);
+    const want = Tin >= row.ign ? kg*frac*row.eta : 0;
+    let burnt = 0;
+    if(want > 0) roomShare(cells, kg/dt, (i, sh) => {
+      const m = Math.min(want*sh, O[i]/row.o2);
+      if(!(m > 0)) return;
+      O[i] -= m*row.o2;
+      // its combustion AND the heat it was already carrying: this mass never
+      // reaches the deck, so the pool below never gets to give either up
+      fireQ[i] += m*(row.lhv + cp*(Tin - row.melt));
+      burnt += m; on++;
+    });
+    s.fireEv.kg += burnt;
+    // ...and everything that did not burn in flight is on the deck. Split over
+    // the opening's own cells and not over a plume: a liquid falls.
+    const per = (kg - burnt)/cells.length;
+    if(per > 0) for(const i of cells){ M[i] += per; E[i] += per*cp*(Tin - row.melt); }
+  });
+  /* ══ AND WHAT IS ALREADY ON THE DECK ══ */
+  poolFlow(s, dt, G);
+  const A0 = MPC*MPC;
+  for(let i=0;i<N;i++){
+    let m = M[i];
+    if(!(m > 0)) continue;
+    /* THE SURFACE OF A DEEP POOL IS THE WHOLE CELL. Only the metal in this
+       cell says how far a FILM has spread; metal standing on more metal is
+       floating on it and covers the lot, so the column is what the area asks.
+       One cell down is enough - a full one saturates this on its own. */
+    const A = Math.min(A0, (m + (i+GW < N ? M[i+GW] : 0))/(fireRho()*POOL_DMIN));
+    let Tp = poolT(m, E[i]);
+    const fo2 = roomO2Frac(s, i);
+    // ONLY THE FREE SURFACE BURNS. Metal with more metal standing on it is
+    // under the pool, not on it, and a stack is one fire and not three.
+    const open = i < GW || !(M[i-GW] > 0);
+    if(open && Tp >= f.ign && fo2 >= f.loc){
+      /* Diffusion-limited, so the published rate is the rate IN AIR and it
+         falls with the oxygen over it - which is what makes a sealed bay
+         smother a metal fire the way it already smothers a gas one. */
+      const mb = Math.min(f.rate*(fo2/O2_FRAC0)*A*dt, m, O[i]/f.o2);
+      if(mb > 0){
+        M[i] = m = m - mb;
+        O[i] -= mb*f.o2;
+        // the heat is released at the surface, into the pool; the metal that
+        // burnt leaves and takes its own sensible heat with it
+        E[i] += mb*f.lhv - mb*cp*(Tp - f.melt);
+        s.fireEv.kg += mb;
+        on++;
+      }
+    }
+    if(!(m > 0)){ M[i] = 0; E[i] = 0; continue; }
+    Tp = poolT(m, E[i]);
+    let q = (f.hConv*(Tp - T[i])
+             + f.emis*SIGMA*(Math.pow(Tp,4) - Math.pow(T[i],4))/1000)*A;     // kW
+    /* AND IT MAY NOT DRIVE ITSELF PAST THE AIR - advectSrc()'s rule, and for
+       the same reason: a film on top of a full cell radiates over the whole
+       footprint with almost no heat capacity behind it, so an uncapped
+       explicit source sends it hundreds of kelvin below the room in one tick,
+       and the fourth power then takes it to NaN. */
+    const qCap = m*cp*(Tp - T[i])/dt;
+    q = q > 0 ? Math.min(q, Math.max(0, qCap)) : Math.max(q, Math.min(0, qCap));
+    E[i] -= q*dt; src[i] += q;
+    /* IT MAY NOT GO PAST ITS OWN BOILING POINT. Past it the metal leaves the
+       pool as vapour and burns above it, which this model does not carry as a
+       phase - so the energy goes straight into the air instead, where the
+       vapour fire would have put it. Capping the temperature and dropping the
+       joules would have made a hot fire cheaper than a cool one. */
+    const eMax = m*cp*(f.boil - f.melt);
+    if(E[i] > eMax){ src[i] += (E[i] - eMax)/dt; E[i] = eMax; }
+  }
+  s.roomFireOn = on;
+}
+
 function roomH2Step(s, dt, G){
   const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame, Pr = s.roomP;
   const T = s.roomT, Pk = s.roomPPk;
@@ -831,14 +1118,7 @@ function roomH2Step(s, dt, G){
       // the same plume the heat went into, off the same opening at the same rate
       roomSpread(H, cells, Math.max(0, rate)/100*loopKg(), m);
     };
-    const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
-    for(const k in s.spillBy)
-      if(openFluidH(s, k)) put(roomOpenCells(s, G, k), s.spillBy[k], k);
-    for(const fid in s.reliefVent){
-      if(tgt[fid] || out[fid] || !partFluidH(s, fid)) continue;
-      const q = G.parts.find(w => w.p.id === fid);
-      put(q ? q.cells : [], s.reliefVent[fid], "vent:"+fid);
-    }
+    roomLiqOuts(s, G, (cells, rate, fl, key) => put(cells, rate, key));
   }
   /* THE VENTILATION SET EXCHANGES GAS, NOT JUST HEAT. Its own comment already
      said it moves compartment air against the rest of the ship rather than
@@ -889,9 +1169,6 @@ function roomH2Step(s, dt, G){
         if(m > 0){
           H[i] -= m; O[i] -= m*O2_PER_H2;
           burned += m; q = m*H2_LHV;
-          // THE BURN HEATS THE CELL'S OWN AIR AT cv - see ROOM_CVAIR's note.
-          // A deflagration is over before the steel knows about it.
-          T[i] = Math.min(ROOM_TMAX, T[i] + q/ROOM_CVAIR);
         }
         const nf = Math.min(1, Fl[i] + adv);
         if(nf >= 1 && Fl[i] < 1){
@@ -905,6 +1182,15 @@ function roomH2Step(s, dt, G){
         on++;
       }
     }
+    /* ONE q, TWO FUELS. The metal fire's fast half (roomFireStep, what burnt
+       in flight before it landed) joins the deflagration here and nowhere
+       else, so both heat the same air and raise the same pressure by the same
+       expression. Its SLOW half is not here: a pool giving its heat up over
+       minutes is an ordinary source and went into src[] with the steam jets.
+       THE BURN HEATS THE CELL'S OWN AIR AT cv - see ROOM_CVAIR's note. A
+       deflagration is over before the steel knows about it. */
+    if(fireQ && fireQ[i] > 0) q += fireQ[i];
+    if(q > 0) T[i] = Math.min(ROOM_TMAX, T[i] + q/ROOM_CVAIR);
     /* dP/dt = P0*(q/CAIR)/T_HULL - P/tau: the gas law at constant volume
        against a compartment that leaks, off the SAME q the heat term spent so
        the two cannot disagree about how big the bang was. The denominator is
@@ -938,6 +1224,7 @@ function roomH2Step(s, dt, G){
     if(Pr[i] > Pk[i]) Pk[i] = Pr[i];
   }
   s.roomBurnOn = on; s.roomPMax = pmax;
+  if(s.roomFireOn && pmax > s.fireEv.p) s.fireEv.p = pmax;
   /* ONE EVENT PER EXPLOSION. A front crawling at 0.05 m/s never trips a
      per-tick gate, so the charge is accumulated while anything is burning and
      step.js writes the line when the last flame goes out. */
