@@ -124,10 +124,12 @@ const fittingSig=sigMemo(()=>{ let out="";
    argument tankSig()/fittingSig() make. A port OCCUPIES A CELL now, so this
    is not merely additive: a port placed or moved changes what occupied()
    stamps and so what groupFits() will refuse. The FACE is derived from the
-   offset (portFaceOf()) and so is already in here. */
+   offset (portFaceOf()) and so is already in here. So is the RUN it belongs to:
+   that is where a traced connection gets its rid, and so which name D.bore is
+   read under. */
 const portSig=sigMemo(()=>{ let out="";
   for(const id in D.ports){ const p=D.ports[id];
-    out += "|"+id+":"+p.p+":"+p.dx+","+p.dy; }
+    out += "|"+id+":"+p.p+":"+p.dx+","+p.dy+":"+(p.run||""); }
   return out; });
 /* EVERY PIPE CELL, in key order - a pipe is cell-keyed data (D.pipes), so its
    own identity IS its cell and this is the whole of it. Joined into
@@ -139,10 +141,10 @@ const pipeSig=sigMemo(()=>{ let out="";
 // the hull's own size is in here: every grid-sized cache (the radiation field's
 // Float64Array(GW*GH), the room's geometry) proves itself against this string
 const gridSig=sigMemo(()=>"|g"+D.gw+"x"+D.gh);
-/* A RUN'S OWN BORE AND WALL, both in millimetres, keyed by run key. Here and
-   NOT in D_SCALARS(), which JSON-stringifies whole and is a measured 5.6 ms
-   hot spot. Neither has a writer yet - they are the hooks runBoreMm() and
-   runWallMm() already read, and a run panel is what is missing. */
+/* A RUN'S OWN BORE AND WALL, both in millimetres, keyed by runIdOf() - the
+   run's own name where it has one, the derived key where it was laid by hand.
+   Here and NOT in D_SCALARS(), which JSON-stringifies whole and is a measured
+   5.6 ms hot spot. */
 const boreSig=sigMemo(()=>{ let out="";
   for(const k in (D.bore||{})) out += "|b"+k+":"+D.bore[k];
   for(const k in (D.wall||{})) out += "|w"+k+":"+D.wall[k];
@@ -1861,203 +1863,297 @@ function pipeShapeFor(fa,fb){
 }
 const pipeDirOf=(a,b)=>{ const dx=b[0]-a[0], dy=b[1]-a[1];
   return dx>0?"r" : dx<0?"l" : dy>0?"b" : dy<0?"t" : null; };
-/* EVERY STATE A CELL CAN BE PUT IN BY HAND, in one order. Turning `r` alone
-   walks a turn round four corners and a straight between two, and NEVER
-   between the two shapes - so a corner the drag guessed wrong could not be
-   made a straight at all, whatever it was clicked or wheeled with. The cycle
-   is the whole set instead: both straights, four corners, the crossing. One
-   table, because the click and the wheel must step the same states.
-   Rotations that repeat a state are left out - a straight has two, a cross
-   one - or the gesture would appear to stick. */
-const PIPE_CYCLE=[
-  {s:"straight",r:0}, {s:"straight",r:1},
-  {s:"turn",r:0}, {s:"turn",r:1}, {s:"turn",r:2}, {s:"turn",r:3},
-  {s:"cross",r:0},
-];
-// step a cell through PIPE_CYCLE, or null if there is no pipe there. The
-// current state is matched on the FACES it opens, so a cell written with a
-// redundant rotation (straight r2) still finds its place in the list.
-function pipeTurn(x,y,step){
-  const k=pipeKey(x,y), c=D.pipes[k]; if(!c) return null;
-  const faces=q=>{ const sh=PIPE_SHAPE[q.s]; if(!sh) return "";
-    return sh.paths.map(pr=>[rotFace(pr[0],q.r),rotFace(pr[1],q.r)].sort().join("")).sort().join("|"); };
-  const now=faces(c);
-  let i=PIPE_CYCLE.findIndex(q=>faces(q)===now);
-  if(i<0) i=0;
-  const n=PIPE_CYCLE[((i+step)%PIPE_CYCLE.length+PIPE_CYCLE.length)%PIPE_CYCLE.length];
-  D.pipes[k]={s:n.s, r:n.r};
-  return D.pipes[k];
+/* ══════════ A RUN IS ONE OBJECT YOU PLACE, AND IT CARRIES ITS OWN NAME ══════════
+   D.runs[rid] = {a:[x,y], b:[x,y], pins:[[x,y]...], cells:[[x,y]...]}.
+   A run's KEY used to be built out of the drawing - "cold:coreb-pump0b#1", the
+   suffix handed out in trace order - so D.bore and D.wall could not survive an
+   edit to the geometry. Measured on the stock ship: setting 250 mm on the
+   second run onto a face pair, then cutting the FIRST, renumbered the survivor
+   and handed the orphaned 250 to the next run laid on that pair. runBoreMm()
+   feeds friction, rating and burst pressure, so that is a wrong number in the
+   physics. `rid` is a name geometry cannot rename.
+   THE RECIPE, NEVER THE TRUTH. pipeTrace() stays the one authority for what is
+   joined to what; nothing here is ever asked. A run laid by hand has no entry
+   here at all and works exactly as it did.
+   `cells` is what the last lay stamped, and it is what the LIFT reads: re-laying
+   a run has to take back its own cells and never a neighbour's, and a crossing
+   cell belongs to two runs at once. Absent until the run is laid. */
+/* WHERE A RUN COULD NOT BE LAID. Module state and not a D field, exactly as
+   matPen is: it is a property of the last lay, not of the design, and nothing
+   comparing a design signature may see it move. */
+const RUNERR={};
+const runErr=rid=>RUNERR[rid]||null;
+/* THE COLON IS LOAD-BEARING. `sel` carries a run's identity and a part id never
+   contains one, so the two selection spaces cannot collide - and the identity a
+   run is picked by has to be the identity its bore hangs on, or picking it and
+   sizing it are two different names for one pipe. */
+function freeRid(){ let n=0; while(D.runs["run:"+n]) n++; return "run:"+n; }
+function mintRun(a,b,pins){
+  const rid=freeRid();
+  D.runs[rid]={a:[a[0],a[1]], b:[b[0],b[1]], pins:(pins||[]).map(c=>[c[0],c[1]])};
+  RUNERR[rid]=null;                   // ids are reused, and so is the last one's refusal
+  return rid;
 }
-/* WHAT A CAP SHOULD OPEN ONTO: the neighbouring cell that is already open on
-   the face pointing back at this one - a port whose face names it, or a pipe
-   cell whose own path ends there. `hint` is the caller's own guess and WINS if
-   it is joinable, so a deliberate cap is never moved; `skip` is the cell the
-   other end of the run already took, so a one-cell run cannot answer with the
-   same neighbour twice. */
-function pipeJoinCell(c,hint,skip){
-  const at=f=>{ const x=c[0]+DIRV[f][0], y=c[1]+DIRV[f][1];
-    if(skip && skip[0]===x && skip[1]===y) return null;
-    const pid=portAtCell(x,y);
-    if(pid) return portFaceOf(pid)===OPP[f] ? [x,y] : null;
-    return pipeExit(pipeKey(x,y),OPP[f]) ? [x,y] : null; };
-  const hf=hint && pipeDirOf(c,hint);
-  if(hf && at(hf)) return hint;
-  for(const f in DIRV){ const n=at(f); if(n) return n; }
+/* THE NOZZLE A CELL WOULD CARRY, or null. Nothing CHOOSES a port and nothing
+   weighs one against another: the hand put the end on a cell, and either a
+   machine is beside it whose role whitelists that face or the end is loose. */
+function runEndPort(x,y){
+  const g=occupied(null,{pipes:false, ports:false, mat:false});
+  for(const f in DIRV){
+    const mx=x+DIRV[f][0], my=y+DIRV[f][1];
+    if(mx<0||my<0||mx>=GW||my>=GH) continue;
+    const p=g[my][mx]; if(!p||!p.role) continue;
+    const face=faceOfOffset(p, x-p.x, y-p.y);
+    if(!face || !portFaceOK(p.id,face)) continue;
+    return {part:p.id, face, dx:x-p.x, dy:y-p.y};
+  }
   return null;
 }
-/* LAY A RUN OF CELLS along an ordered path, stamping a straight where it goes
-   on and a turn where it changes direction. `from` and `to` are the cells
-   OUTSIDE each end (the two ports, or nothing) - they only ever supply the
-   direction the first and last cell must open toward. A cell already carrying
-   a straight becomes a CROSS where the new path runs across it, which is the
-   one case D.pipes was given two paths for. */
-function pipeLay(path,from,to){
-  /* A RUN THAT ENDS BESIDE SOMETHING OPEN ENDS AT IT. `from`/`to` are the
-     caller's guess at which way the two caps open, and the bench's guess is
-     the run's own axis extrapolated - so a one-cell drag was always capped
-     l-r, and re-laying a single cell taken out of a VERTICAL run stamped a
-     horizontal stub that joined neither neighbour. Dragging across a port's
-     face capped the same way and the trace found a butt end. That is the whole
-     of "connecting two parts is random": the joint depended on which way the
-     hand happened to move first, which nothing on screen says. */
-  const pa=pipeJoinCell(path[0],from); if(pa) from=pa;
-  const pz=pipeJoinCell(path[path.length-1],to,pa); if(pz) to=pz;
-  /* ONE JOINT AND OPEN GROUND: CARRY ON STRAIGHT. A single cell with a
-     neighbour on one side only still had the l-r guess on the other, so the
-     first of a two-cell gap in a vertical run came out an elbow - and an elbow
-     is not open on the face the second cell then needed. Filling a gap one
-     click at a time laid two corners facing away from each other and joined
-     nothing. Mirroring the joint is the only answer that lets the next click
-     land. */
-  const mir=(c,n)=>[2*c[0]-n[0], 2*c[1]-n[1]];
-  if(path.length===1){
-    if(pa && !pz) to=mir(path[0],pa);
-    else if(pz && !pa) from=mir(path[0],pz);
-    /* NOTHING ADJACENT AT ALL: read the axis off what is one cell FURTHER out.
-       The middle of a three-cell gap touches only the other two holes, so it
-       had no joint to read and came out horizontal whatever run it belonged
-       to - filling a gap from the middle then left two cells that could not
-       join it. */
-    else if(!pa && !pz)
-      for(const f in DIRV){ const c=path[0];
-        if(!pipeExit(pipeKey(c[0]+DIRV[f][0]*2, c[1]+DIRV[f][1]*2), OPP[f])) continue;
-        from=[c[0]+DIRV[f][0], c[1]+DIRV[f][1]]; to=mir(c,from); break; }
+/* A CELL A RUN'S END COULD STAND ON, walking out from the one asked for. ADD
+   PIPE drops a run with both ends on the deck, and an end dropped inside a
+   machine is a run nobody can see and nobody can grab. */
+function runSpotNear(x,y){
+  const g=occupied([],{mat:false});
+  const ok=(cx,cy)=>cx>=0&&cy>=0&&cx<GW&&cy<GH&&!g[cy][cx];
+  for(let r=0;r<GW+GH;r++) for(let dx=-r;dx<=r;dx++){
+    const dy=r-Math.abs(dx);
+    for(const s of (dy?[dy,-dy]:[0])) if(ok(x+dx,y+s)) return [x+dx,y+s];
   }
-  // ONE THING PER CELL: a machine's box and a port are already something, so a
-  // pipe simply does not go there. Asked with pipes OUT, because an existing
-  // pipe cell IS a legal thing to lay across (that is what a crossing is) - and
-  // with paint out, because a pipe through a gas-tight cell is a PENETRATION.
-  const g=occupied(null,{pipes:false, mat:false});
-  for(let i=0;i<path.length;i++){
-    const c=path[i];
-    if(c[0]<0||c[1]<0||c[0]>=GW||c[1]>=GH||g[c[1]][c[0]]) continue;
-    const prev = i>0 ? path[i-1] : from, next = i<path.length-1 ? path[i+1] : to;
-    if(!prev || !next) continue;
-    const din=pipeDirOf(prev,c), dout=pipeDirOf(c,next);
-    if(!din||!dout) continue;
-    const k=pipeKey(c[0],c[1]), have=D.pipes[k], want=pipeShapeFor(OPP[din],dout);
+  return null;
+}
+// the port at this run's end: its own, one nobody has claimed, or nothing
+function runPortFor(rid,cell){
+  const at=portAtCell(cell[0],cell[1]);
+  if(at!=null){ const q=D.ports[at];
+    if(q.run!==undefined && q.run!==rid) return null;
+    q.run=rid; return at; }
+  const e=runEndPort(cell[0],cell[1]); if(!e) return null;
+  const pid=addPortAt(e.part,e.dx,e.dy); if(pid==null) return null;
+  D.ports[pid].run=rid;
+  return pid;
+}
+/* TAKE THE RUN BACK OFF THE BOARD, cells and nozzles both, leaving every other
+   run exactly where it stands - "a laid pipe is frozen" is enforced here and
+   not by re-laying the neighbours. */
+function runLift(rid){
+  const r=D.runs[rid]; if(!r) return;
+  const cs=r.cells||[];
+  for(let i=0;i<cs.length;i++){
+    const k=pipeKey(cs[i][0],cs[i][1]), c=D.pipes[k]; if(!c) continue;
+    if(c.s!=="cross"){ delete D.pipes[k]; continue; }
+    /* A CROSSING IS TWO PATHS AND ONE OF THEM IS SOMEBODY ELSE'S. Deleting the
+       whole cell cut the run being crossed, which is the neighbour a lift may
+       never touch; what is left is the other axis, straight through. */
+    const n=i+1<cs.length?cs[i+1]:null, p=i>0?cs[i-1]:null;
+    const d=n?pipeDirOf(cs[i],n):(p?pipeDirOf(p,cs[i]):null);
+    D.pipes[k]=(d==="l"||d==="r")?{s:"straight", r:1}:{s:"straight", r:0};
+  }
+  delete r.cells;
+  for(const pid in D.ports) if(D.ports[pid].run===rid) delete D.ports[pid];
+}
+// ...and take the whole run off, recipe included
+function removeRun(rid){ runLift(rid); delete D.runs[rid]; delete RUNERR[rid]; buildLayout(); }
+/* WHERE A RUN COULD BE CUT: an index into its own cells, or -1. THE CELL ITSELF
+   GOES - two stubs facing each other across no gap are one pipe again and the
+   trace would say so - which is why there has to be a cell left on each side. */
+function runSplitIdx(rid,cell){
+  const r=D.runs[rid], cs=r&&r.cells; if(!cs) return -1;
+  const i=cs.findIndex(c=>c[0]===cell[0]&&c[1]===cell[1]);
+  return (i>=1 && i<=cs.length-2) ? i : -1;
+}
+/* ══ CUT ONE PIPE INTO TWO ══
+   The replacement for taking a single cell out. That left a run with a hole in
+   it - no longer a connection, still one object, and nothing on the board said
+   which. Two runs is what a cut pipe IS: each half keeps its own end, its own
+   waypoints and its own name, so each can be re-routed and sized on its own.
+   The FIRST half keeps `rid`, so whatever bore was authored stays with the half
+   that still reaches the machine end A is on; the second half is a new pipe and
+   takes the default. */
+function splitRun(rid,cell){
+  const i=runSplitIdx(rid,cell); if(i<0) return null;
+  const r=D.runs[rid], cs=r.cells;
+  const at=c=>cs.findIndex(q=>q[0]===c[0]&&q[1]===c[1]);
+  const before=r.pins.filter(p=>{ const j=at(p); return j>=0 && j<i; });
+  const after =r.pins.filter(p=>{ const j=at(p); return j>i; });
+  const a=r.a, b=r.b, endA=cs[i-1].slice(), startB=cs[i+1].slice();
+  runLift(rid);
+  D.runs[rid]={a, b:endA, pins:before};
+  const rid2=mintRun(startB, b, after);
+  runLay(rid); runLay(rid2);
+  return rid2;
+}
+/* ══ THE ROUTER ══
+   A* over cells carrying a DIRECTION. Every rule below was a measured bug in a
+   dry run first, and each comment says which.
+   Cost is in cells: one per cell, a turn charge, a crossing charge, a discount
+   for running beside an existing run so parallel lines bundle rather than
+   wander, and a charge for hugging a machine wall. The four figures are a FEEL
+   choice settled by eye, not a measurement - see the routing row in
+   `docs/fidelity.md`. */
+const ROUTE_K={turn:4, cross:8, hug:0.5, standoff:1.0};
+const DIRI=["l","r","t","b"];             // 4 = no direction yet
+// the paths a cell already opens, or null for bare floor
+function pipePathsAt(k){
+  const c=D.pipes[k], sh=c&&PIPE_SHAPE[c.s];
+  return sh?sh.paths.map(pr=>[rotFace(pr[0],c.r), rotFace(pr[1],c.r)]):null;
+}
+const pathAxis=f=>(f==="l"||f==="r")?"h":"v";
+function heapPush(h,v){ h.push(v); let i=h.length-1;
+  while(i>0){ const p=(i-1)>>1; if(h[p][0]<=h[i][0]) break;
+    const t=h[p]; h[p]=h[i]; h[i]=t; i=p; } }
+function heapPop(h){ const top=h[0], last=h.pop();
+  if(h.length){ h[0]=last; let i=0;
+    for(;;){ const l=2*i+1, r=l+1; let m=i;
+      if(l<h.length&&h[l][0]<h[m][0]) m=l;
+      if(r<h.length&&h[r][0]<h[m][0]) m=r;
+      if(m===i) break; const t=h[m]; h[m]=h[i]; h[i]=t; i=m; } }
+  return top; }
+/* ONE SEARCH, NOT ONE PER LEG. The state is (cell, direction, WAYPOINTS PASSED),
+   so the whole route is the cheapest route THROUGH its waypoints rather than a
+   chain of separately cheapest legs. Measured: routed leg by leg, the second
+   hot leg reached its waypoint from the far side - one cell cheaper for that
+   leg - and then had no way back east into the nozzle at all, and the run read
+   NO ROUTE on a board with plenty of room in it. */
+function runSearch(start,pins,goal,g){
+  const free=(x,y)=>{ if(x<0||y<0||x>=GW||y>=GH) return false;
+    const o=g[y][x]; return !o || !!o.pipe; };
+  const near=(x,y,fn)=>{ for(const f in DIRV){ const nx=x+DIRV[f][0], ny=y+DIRV[f][1];
+      if(nx<0||ny<0||nx>=GW||ny>=GH) continue;
+      if(fn(nx,ny)) return true; } return false; };
+  const wall=(x,y)=>{ const o=g[y][x]; return !!o && !o.pipe && !o.port && !o.mat; };
+  const NL=pins.length+1;
+  // a waypoint is PASSED THROUGH, so arriving on its cell is what advances the
+  // counter - and two waypoints on one cell advance it twice
+  const past=(l,x,y)=>{ while(l<pins.length && pins[l][0]===x && pins[l][1]===y) l++; return l; };
+  const isGoal=(x,y,l)=>l===pins.length && x===goal.x && y===goal.y;
+  const idx=(x,y,d,l)=>((y*GW+x)*5+d)*NL+l;
+  const best={}, prev={}, heap=[];
+  const l0=past(0,start.x,start.y);
+  let c0=0;
+  if(!isGoal(start.x,start.y,l0)){
+    if(!free(start.x,start.y)) return null;
+    /* THE FIRST CELL OUT OF A NOZZLE MAY BE A CROSSING TOO. Refused outright,
+       the reactor had no route off most of its own floor: one stock straight
+       across 14,28 and the port at 14,27 had nowhere to go. */
+    const have=pipePathsAt(pipeKey(start.x,start.y));
+    if(have){
+      if(start.d===4||have.length>1) return null;
+      const ax=pathAxis(DIRI[start.d]);
+      if(have.some(pr=>pr.some(q=>pathAxis(q)===ax))) return null;
+      c0+=ROUTE_K.cross;
+    }
+  }
+  const k0=idx(start.x,start.y,start.d,l0);
+  best[k0]=c0; prev[k0]=-1; heapPush(heap,[c0,start.x,start.y,start.d,l0]);
+  let found=-1;
+  while(heap.length){
+    const top=heapPop(heap), c=top[0], x=top[1], y=top[2], d=top[3], l=top[4];
+    const k=idx(x,y,d,l);
+    if(best[k]!==undefined&&c>best[k]) continue;
+    if(isGoal(x,y,l) && (!goal.dir||DIRI[d]===goal.dir)){ found=k; break; }
+    for(let i=0;i<4;i++){
+      const f=DIRI[i];
+      if(d<4&&f===OPP[DIRI[d]]) continue;
+      const nx=x+DIRV[f][0], ny=y+DIRV[f][1], nk=pipeKey(nx,ny);
+      if(nx<0||ny<0||nx>=GW||ny>=GH) continue;
+      const nl=past(l,nx,ny), end=isGoal(nx,ny,nl);
+      /* A NOZZLE OPENS ON ONE FACE. Reached sideways, the route stopped ON the
+         port cell - a pipe running PAST the shell, not into it, and the trace
+         finds no connection there.
+         A LOOSE END IS AN ORDINARY CELL and obeys every rule below: it is real
+         pipe on the deck, so it may not stand in a machine and may not land on
+         a run that is already there. Only a NOZZLE is exempt, because a port
+         cell is the one thing a run is allowed to finish on. */
+      const nozzle=end&&!!goal.dir;
+      if(nozzle&&f!==goal.dir) continue;
+      if(!nozzle&&!free(nx,ny)) continue;
+      const have=pipePathsAt(nk);
+      if(have&&!nozzle){
+        if(end) continue;                              // a loose end may not sit on another run
+        if(d===4||i!==d) continue;                     // a crossing goes STRAIGHT through
+        if(have.length>1) continue;                    // that cell is full
+        const ax=pathAxis(f);
+        if(have.some(pr=>pr.some(q=>pathAxis(q)===ax))) continue;   // sharing a face is a MERGE
+      }
+      let nc=c+1;
+      if(d<4&&i!==d) nc+=ROUTE_K.turn;
+      if(have&&!nozzle) nc+=ROUTE_K.cross;
+      if(!nozzle){
+        if(near(nx,ny,wall)) nc+=ROUTE_K.standoff;
+        if(near(nx,ny,(px,py)=>!!pipePathsAt(pipeKey(px,py)))) nc-=ROUTE_K.hug;
+        if(nc<=c) nc=c+0.05;                           // the discount may not pay for the step
+      }
+      const nkk=idx(nx,ny,i,nl);
+      if(best[nkk]===undefined||nc<best[nkk]){
+        best[nkk]=nc; prev[nkk]=k; heapPush(heap,[nc,nx,ny,i,nl]); }
+    }
+  }
+  if(found<0) return null;
+  const out=[];
+  for(let k=found;k>=0;k=prev[k]){ const cd=(k-k%NL)/NL, d=cd%5, cell=(cd-d)/5;
+    out.push([cell%GW, (cell-cell%GW)/GW]); }
+  out.reverse();
+  return out;
+}
+/* ONE ENTRY POINT: two end cells, the waypoints in order, and the faces the two
+   nozzles point along. Cells out, or a refusal - NEVER a silent reroute across
+   the ship, which is what the old dogleg-then-search did. */
+function runRoute(a,b,pins,fa,fb){
+  if(a[0]===b[0]&&a[1]===b[1]) return {err:"NO ROUTE - both ends stand on one cell"};
+  const g=occupied([],{mat:false});
+  const start = fa ? {x:a[0]+DIRV[fa][0], y:a[1]+DIRV[fa][1], d:DIRI.indexOf(fa)}
+                   : {x:a[0], y:a[1], d:4};
+  const cells=runSearch(start, pins||[], {x:b[0], y:b[1], dir:fb?OPP[fb]:null}, g);
+  if(!cells) return {err:"NO ROUTE - the way through is blocked or taken"};
+  /* AND IT MAY NOT RUN ALONGSIDE ITSELF. One search over (cell, direction) can
+     enter a cell twice, which perpendicular is an ordinary crossing and on the
+     same axis is the route merging with its own earlier leg - one line where
+     the drawing says two. Asked of the answer, because no per-step test can
+     see a cell the path has not reached yet. */
+  const axes={};
+  for(let i=0;i<cells.length;i++){
+    const q=i>0?cells[i-1]:null, n=i+1<cells.length?cells[i+1]:null;
+    if(!q&&!n) break;                   // one cell: two nozzles a cell apart, a joint
+    const ax=pathAxis(pipeDirOf(cells[i], n||q));
+    const k=pipeKey(cells[i][0],cells[i][1]);
+    if(axes[k]===ax) return {err:"NO ROUTE - it would run into itself"};
+    axes[k]=ax;
+  }
+  return {cells};
+}
+/* LAY ONE RUN, and only that one. Lift it, put its nozzles where its ends
+   stand, route what is left, stamp the cells. Every other run on the board is
+   wall to this one: editing a pipe used to move its neighbour, measured at 60
+   cells becoming 58 with no hand on it. */
+function runLay(rid){
+  const r=D.runs[rid]; if(!r) return null;
+  runLift(rid);
+  const pidA=runPortFor(rid,r.a), pidB=runPortFor(rid,r.b);
+  const res=runRoute(r.a,r.b,r.pins, pidA&&portFaceOf(pidA), pidB&&portFaceOf(pidB));
+  RUNERR[rid]=res.err||null;
+  if(res.err){ buildLayout(); return res.err; }
+  /* NO OCCUPANCY TEST HERE. One thing per cell is the ROUTER'S rule and it
+     already refused every cell a machine, a nozzle or another run's lane is
+     standing in - a second test here could only ever drop a cell out of the
+     middle of a route the search says is legal, which is a line with a hole in
+     it and reads downstream as a circuit that is not there. */
+  const seq = pidA ? [r.a].concat(res.cells) : res.cells.slice();
+  const stop = pidB ? seq.length-1 : seq.length;
+  const laid=[];
+  for(let i=(pidA?1:0);i<stop;i++){
+    const c=seq[i], q=i>0?seq[i-1]:null, n=i+1<seq.length?seq[i+1]:null;
+    // a loose end is a stub pointing into open space, which is what dangling IS
+    const ea=q?pipeDirOf(c,q):OPP[pipeDirOf(c,n)];
+    const eb=n?pipeDirOf(c,n):OPP[pipeDirOf(c,q)];
+    const k=pipeKey(c[0],c[1]), have=D.pipes[k], want=pipeShapeFor(ea,eb);
     if(!want) continue;
     if(have && have.s==="straight" && want.s==="straight" && have.r!==want.r) D.pipes[k]={s:"cross", r:0};
     else if(!have) D.pipes[k]=want;
+    laid.push([c[0],c[1]]);
   }
-}
-/* THE PLAINEST SQUARE DOGLEG between two cells, as the cell list BETWEEN them
-   plus the far end - what a caller with no corners of its own (the stock
-   seeder, a test) gets. `vFirst` leads with the vertical leg. Not a router: no
-   avoidance, no search, one deterministic elbow. */
-function pipePath(a,b,vFirst){
-  const out=[], seen={};
-  const push=(x,y)=>{ const k=pipeKey(x,y);
-    if(x===a[0]&&y===a[1]) return;
-    if(seen[k]) return; seen[k]=1; out.push([x,y]); };
-  if(vFirst){
-    const s=Math.sign(b[1]-a[1]); for(let y=a[1]; y!==b[1]; y+=s) push(a[0],y);
-    const t=Math.sign(b[0]-a[0]); for(let x=a[0]; x!==b[0]; x+=t) push(x,b[1]);
-  } else {
-    const t=Math.sign(b[0]-a[0]); for(let x=a[0]; x!==b[0]; x+=t) push(x,a[1]);
-    const s=Math.sign(b[1]-a[1]); for(let y=a[1]; y!==b[1]; y+=s) push(b[0],y);
-  }
-  push(b[0],b[1]);
-  return out;
-}
-/* ══ AND WHEN THE DOGLEG WALKS THROUGH A MACHINE, SEARCH ══
-   Every lane on the reference ship was hand-picked, and the comments above
-   them are a record of that: "one lane per run, and the table is the proof".
-   That works for one arrangement and for no other - stack a second unit on
-   the hull and its steam header runs straight through the next unit's
-   pressurizer, silently, because pipeLay() lays what it is given.
-   pipeRoute() is the answer to that: a shortest path over FREE cells with a
-   turn charged like four cells, so it comes out as plumbing rather than as a
-   snake, and it is deterministic. It is asked ONLY when the plain dogleg is
-   blocked, so every run that fits today is laid exactly where it was.
-   A pipe cell is passable STRAIGHT THROUGH and costs extra: that is a
-   crossing, which PIPE_SHAPE.cross already carries. A port cell is a wall -
-   two ports may not share a cell - except the two this run is joining. */
-const TURN_COST=4, CROSS_COST=6;
-function pathBlocked(path, ca, cb){
-  /* NEVER THE CACHED GRID. occupied() keys its cache on the node graph, and a
-     seed lays run after run without rebuilding one - so the cache answers
-     about the board as it stood several runs ago, and the check passes on a
-     lane the last run already took. Paint is out for the reason pipeLay() says:
-     a run may be routed through a wall, and that is a penetration. */
-  const g=occupied([], {mat:false});
-  const ends=[pipeKey(ca[0],ca[1]), pipeKey(cb[0],cb[1])];
-  /* ONE PIPE CELL IN A ROW IS A CROSSING; TWO IS A MERGE.
-     Crossing an existing run is legal and PIPE_SHAPE.cross carries it. Running
-     ALONG one for two cells or more is not a crossing at all - it is the same
-     lane twice, and the two runs become one line with no warning anywhere.
-     That is what stacked units did to their own feedwater risers: every unit
-     asked for the same column, and the second one silently joined the first
-     instead of reaching its own generator. */
-  let along=0;
-  for(const [x,y] of path){
-    if(x<0||y<0||x>=GW||y>=GH) return true;
-    if(ends.includes(pipeKey(x,y))) continue;
-    const o=g[y][x];
-    if(o && !o.pipe) return true;
-    along = (o && o.pipe) ? along+1 : 0;
-    if(along>1) return true;
-  }
-  return false;
-}
-function pipeRoute(a,b,ca,cb){
-  const g=occupied([], {mat:false});   // fresh, and paint-passing, for the reasons pathBlocked() gives
-  const ends=[pipeKey(ca[0],ca[1]), pipeKey(cb[0],cb[1])];
-  const free=(x,y)=>{ if(x<0||y<0||x>=GW||y>=GH) return false;
-    if(ends.includes(pipeKey(x,y))) return false;
-    const o=g[y][x]; return !o || !!o.pipe; };
-  const isPipe=(x,y)=>{ const o=g[y][x]; return !!(o&&o.pipe); };
-  if(!free(a[0],a[1])&&!(a[0]===b[0]&&a[1]===b[1])) return null;
-  const DX=[1,-1,0,0], DY=[0,0,1,-1];
-  const key=(x,y,d)=>(y*GW+x)*5+d;
-  const best={}, prev={}, heap=[[0,a[0],a[1],4]];
-  let found=null;
-  while(heap.length){
-    heap.sort((p,q)=>p[0]-q[0]);
-    const [c,x,y,d]=heap.shift();
-    const k=key(x,y,d);
-    if(best[k]!==undefined && c>best[k]) continue;
-    if(x===b[0]&&y===b[1]){ found=k; break; }
-    for(let i=0;i<4;i++){
-      const nx=x+DX[i], ny=y+DY[i];
-      if(!free(nx,ny) && !(nx===b[0]&&ny===b[1])) continue;
-      // a crossing has to go straight through the cell it crosses
-      if(isPipe(nx,ny) && d!==4 && d!==i) continue;
-      let nc = c + 1 + (d!==4 && d!==i ? TURN_COST : 0) + (isPipe(nx,ny) ? CROSS_COST : 0);
-      const nk = key(nx,ny,i);
-      if(best[nk]===undefined || nc<best[nk]){ best[nk]=nc; prev[nk]=k; heap.push([nc,nx,ny,i]); }
-    }
-    if(best[k]===undefined) best[k]=c;
-  }
-  if(found===null) return null;
-  const out=[];
-  for(let k=found; k!==undefined; k=prev[k]){
-    const d=k%5, cell=(k-d)/5, x=cell%GW, y=(cell-x)/GW;
-    out.push([x,y]);
-    if(x===a[0]&&y===a[1]) break;
-  }
-  out.reverse();
-  return out.slice(1);              // the caller already holds the first cell
+  r.cells=laid;
+  buildLayout();
+  return null;
 }
 /* ══════════ THE TRACE: A CONNECTION IS FOUND, NEVER AUTHORED ══════════
    The traversal unit is a HALF-EDGE (cell, entering face). The walk starts at
@@ -2156,6 +2252,12 @@ function pipeMap(){
     const base=c.k+":"+c.a+c.sa+"-"+c.b+c.sb;
     const n=nth[base]=(nth[base]===undefined?0:nth[base]+1);
     c.key = n? base+"#"+n : base;
+    /* AND ITS OWN NAME, WHERE IT HAS ONE. The run stamped both its nozzles, so
+       the port carries the link: both ends naming the same rid is the run's id.
+       A hand-laid run names none and keeps the derived key above, which is the
+       whole of what a run without a D.runs entry costs. */
+    const ra=D.ports[c.pa].run, rb=D.ports[c.pb].run;
+    if(ra!==undefined && ra===rb) c.rid=ra;
     byKey[c.key]=c;
     for(const [x,y] of c.cells){ const k=pipeKey(x,y);
       (cellOwner[k]||(cellOwner[k]=[])).push(c.key); }
@@ -2683,8 +2785,10 @@ function unbend(pts){
    against the drawing. Its RETURN SHAPE is unchanged, and deliberately so:
    netBuild(), the break pass, drawPlant()'s stroke loop,
    pipeFlow(), pipeMeters(), pipeBreaks() and layoutMetrics() are all consumers
-   of that shape. `rid` is the key, `wps` is empty (there are no draggable
-   corners any more), `cells` is the run itself and `L` its length. */
+   of that shape. `rid` is the run's OWN name where it has one (D.runs) and
+   undefined where it does not - runIdOf() is the door, never a bare read.
+   `wps` is empty (there are no draggable corners any more), `cells` is the run
+   itself and `L` its length. */
 function pipeNetwork(){
   /* On the graph (graphSlot()) AND on GY, which is the one piece of view the
      points are measured off - it moves on a resize and nothing else here does.
@@ -2708,7 +2812,7 @@ function pipeNetwork(){
     // now has its own isolation valve (s.portShut) and the run's edge has to
     // ask about them - a node name is partId+face and cannot name one of two
     // ports sharing that face.
-    net.push({k:c.k, key:c.key, rid:c.key, cells:c.cells, L:c.L,
+    net.push({k:c.k, key:c.key, rid:c.rid, cells:c.cells, L:c.L,
                pts, wps:[], wp:true, nz:[true,true],
                pa:c.pa, pb:c.pb,
                a:a.id, sa:c.sa, b:b.id, sb:c.sb});
@@ -2946,12 +3050,30 @@ function runKindFor(aId,bId,af,bf){
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
 }
-/* THE RUN JOINING TWO PARTS, by key - or null. There is no list of runs to go
-   stale, so this asks the traced connections, which is where a run's identity
-   lives. */
+/* EVERY RUN STANDING ON THIS CELL, by IDENTITY, in the order a pick should
+   prefer them. The placed run comes first and is asked of D.runs, because a run
+   whose ends are still loose reaches no port, is therefore no CONNECTION, and
+   owns none of its cells as far as the trace is concerned - so a fresh pipe was
+   five cells on the deck that nothing on the board could select. A run laid by
+   hand has only the trace to name it, and that is the fallback. */
+function runsAtCell(x,y){
+  const out=[];
+  for(const rid in D.runs){ const cs=D.runs[rid].cells;
+    if(cs && cs.some(c=>c[0]===x&&c[1]===y)) out.push(rid); }
+  const M=pipeMap();
+  for(const key of (M.cellOwner[pipeKey(x,y)]||[])){
+    const c=M.byKey[key], id=c?runIdOf(c):key;
+    if(out.indexOf(id)<0) out.push(id);
+  }
+  return out;
+}
+/* THE RUN JOINING TWO PARTS, by IDENTITY - or null. Asked of the traced
+   connections, because that is where a run's ends live; handed back as
+   runIdOf() because its one caller writes a bore with it, and a bore hangs on
+   the id where there is one. */
 function runBetween(a,b){
   for(const c of pipeMap().conns)
-    if((c.a===a&&c.b===b)||(c.a===b&&c.b===a)) return c.key;
+    if((c.a===a&&c.b===b)||(c.a===b&&c.b===a)) return runIdOf(c);
   return null;
 }
 /* WHICH END OF THIS RUN IS A DEAD END, or null. A fitting with nothing on its
@@ -3426,7 +3548,7 @@ const laySig = sigMemo(() => LAY ? LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join("
    already a measured 5.6 ms hot spot before a pipe was a cell. The one D
    table left whole is the scalar config, which is small. */
 const D_SCALARS=()=>{ const o={};
-  for(const k in D) if(k!=="pipes" && k!=="ports" && k!=="tanks" && k!=="fittings" && k!=="cores") o[k]=D[k];
+  for(const k in D) if(k!=="pipes" && k!=="ports" && k!=="tanks" && k!=="fittings" && k!=="cores" && k!=="runs") o[k]=D[k];
   return JSON.stringify(o); };
 // every knob on a tank or a fitting: laySrcSig() carries only what puts a box on
 // the board, so a lift point or a setpoint moved nothing the bench compares
