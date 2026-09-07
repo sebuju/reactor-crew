@@ -63,8 +63,16 @@ function* commissionGen(){
   /* tc/pc/rhoc are this fluid's own critical point, off its COOLANT row: latent
      heat and both saturated densities fall to a known value there, and until
      they were carried here every fluid fell to water's. */
-  P.sat   = {p0:P.P0, T0:P.tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV, hFilm:a.hFilm,
-             tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:P.rho0, solidK:a.solidK};
+  /* ONE BUILDER, and the core circuit was the only thing in the plant not
+     using it. This was a hand-typed copy of satCurveFor() that agreed with it
+     field for field except that it had no Tref - and mixState()'s
+     supercritical branch reads (c.Tref || c.T0). So a helium plant, which is
+     supercritical everywhere, priced its CORE at T0 2000 K and every other
+     circuit at Tref 773 K: one fluid, two densities, 2.6x apart. Every field
+     here was already the same expression (P.tsat0 IS satCurveFor's tsat0 at
+     this p0, P.rho0 IS a.dens*RHO_K, P.Tref IS its Tref), so nothing is
+     restated - and a column added to the row now reaches the core by itself. */
+  P.sat   = satCurveFor(a, P.P0);
   P.hfg   = a.hfg;                                     // THIS coolant's latent heat, kJ/kg
   /* A PLANT MAY COMMISSION SATURATED. The ceiling used to be tsat0-35, a hard
      35 K of subcooling with no derivation, and it is why no reactor here could
@@ -2417,11 +2425,18 @@ function advectStep(s, dt, runFlow, edgeKg){
     if(bookOf[to] === "C") advectCondIn += m; }
   advectOutPri = advectOutSec = 0;
   for(const k in advectH2Out) delete advectH2Out[k];
+  for(const k in advectOutKg) delete advectOutKg[k];
   for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e], m = advectEdgeKg[e];
     if(!(m > 0)) continue;
     // hydrogen leaves through the hole it is AT, at that node's own concentration
     if(cH && (ed.kind === "break" || ed.kind === "vent") && cH[net.name[ed.u]] > 0)
       advectH2Out[ed.key] = (advectH2Out[ed.key]||0) + cH[net.name[ed.u]]*m;
+    /* ...AND SO DOES THE FLUID ITSELF, in kilograms and off the same booking.
+       A room reading the SOLVE's rate instead loses whatever the donor limiter
+       took off it - 128 kg in 60 s of a severed sodium leg, which has to be
+       somewhere and was nowhere. */
+    if(ed.kind === "break" || ed.kind === "vent")
+      advectOutKg[ed.key] = (advectOutKg[ed.key]||0) + m;
     if(ed.kind !== "break" || ed.steam) continue;
     if(ed.sec) advectOutSec += m; else advectOutPri += m; }
   /* ══ THE COURANT GUARD ══
@@ -2594,6 +2609,8 @@ function advectStep(s, dt, runFlow, edgeKg){
 /* kg of hydrogen this tick put through every hole, by edge key - the room's
    own figure (room.js), off the same limited flows the mass integral rides */
 const advectH2Out = {};
+// and the KILOGRAMS every hole passed, keyed the same way - what a pool weighs
+const advectOutKg = {};
 const SETTLE_RELAX = 0.5;
 /* kg of hydrogen in the core's circuit: concentration times what each node holds */
 function h2Total(s){
@@ -3939,6 +3956,12 @@ function resetPlant(){
         exactly what that throw exists to catch. */
      roomO2:new Float64Array(GW*GH).fill(ROOM_O2_0),
      roomFlame:new Float64Array(GW*GH), roomP:new Float64Array(GW*GH),
+     /* THE METAL ON THE DECK, and its energy. Two fields because a pool that
+        cannot say how hot it is cannot be asked whether it is alight, and
+        without that test every spill burns for ever. The datum is LIQUID AT
+        THE MELTING POINT, so a negative energy is the latent heat of fusion
+        coming out and a frozen pool is inert - see FIRE, room.js. */
+     roomPool:new Float64Array(GW*GH), roomPoolE:new Float64Array(GW*GH),
      /* KILOGRAMS OF GAS PER CELL, and the compartment's pressure follows from
         it (roomPOf(), room.js). Seeded at what a cell holds at rest, so an
         untouched ship commissions at exactly one atmosphere. */
@@ -3956,6 +3979,8 @@ function resetPlant(){
         charge, the peak and what it took are accumulated while anything is
         burning and the line is written when the last flame goes out. */
      burnEv:{kg:0, p:0, blast:0, ids:[]},
+     // ...and the same latch for the metal fire, which is slower still
+     fireEv:{kg:0, p:0},
      /* how far each machine is through being cooked by its own cell, 0..1 -
         MONOTONIC while it is over its limit, and cleared when a party fixes
         it, or a repair in a room still cooking would be undone the same tick
@@ -3970,7 +3995,7 @@ function resetPlant(){
         by roomStep() off what the run's live ends carry. */
      runT:{},
      // readouts: the hottest cell, where it is, and what burned this tick
-     roomMax:T_HULL, roomMaxAt:-1, roomBurnOn:0, roomBang:0, roomPMax:0,
+     roomMax:T_HULL, roomMaxAt:-1, roomBurnOn:0, roomFireOn:0, roomBang:0, roomPMax:0,
      // how fast the two shafts are turning, deg/s - see step()'s own note
      spinV:0,spinTV:0,dTavg:0,heat:0,sc:0,t:0,tick:0};
   /* The ONE Math.random() the sim is allowed, and it is outside the tick: a
@@ -5915,7 +5940,7 @@ function step(dt){
       if(!lim || !fitted(p)) continue;
       crushLive[p.id] = 1;
       if(s.dmgParts.indexOf(p.id) >= 0){ s.roomCrush[p.id]=0; continue; }
-      const pk = roomPAt(s,p), bang = (s.roomBurnOn || s.roomBang) ? roomBlastAt(s,p,gauge) : 0;
+      const pk = roomPAt(s,p), bang = (s.roomBurnOn || s.roomFireOn || s.roomBang) ? roomBlastAt(s,p,gauge) : 0;
       const blast = bang >= lim;
       const clim = lim*ROOM_CRUSH_K;
       if(blast) s.roomCrush[p.id]=0;
@@ -5943,7 +5968,7 @@ function step(dt){
       if(q.lim) continue;
       crushLive[q.id] = 1;
       if(s.dmgParts.indexOf(q.id) >= 0){ s.roomCrush[q.id]=0; continue; }
-      const ci = q.y*GW+q.x, pk = s.roomP[ci], bang = (s.roomBurnOn || s.roomBang) ? pk-gauge[ci] : 0;
+      const ci = q.y*GW+q.x, pk = s.roomP[ci], bang = (s.roomBurnOn || s.roomFireOn || s.roomBang) ? pk-gauge[ci] : 0;
       const blast = bang >= PIPE_PBURST;
       const clim = PIPE_PBURST*ROOM_CRUSH_K;
       if(blast) s.roomCrush[q.id]=0;
@@ -6007,6 +6032,20 @@ function step(dt){
         (s.burnEv.ids.length ? "It took "+s.burnEv.ids.join(", ")+". " : "Nothing was broken by it. ")+
         "It came off the cladding, left the loop with the steam, collected under the deckhead and found something hot enough to light it. Nothing was needed but the heat that was already there.");
     s.burnEv = {kg:0, p:0, blast:0, ids:[]};
+  }
+  /* AND THE SAME LATCH FOR THE METAL, which burns for minutes rather than
+     seconds - a pool fire is the slow case the front never was. */
+  if(!s.roomFireOn && s.fireEv.kg > 0){
+    if(s.fireEv.kg > FIRE_EV_KG)
+      logE("alarm","SODIUM FIRE",
+        s.fireEv.kg.toFixed(1)+" kg of sodium has burned in the compartment, "+
+        (s.fireEv.kg*fireRow().lhv/1000).toFixed(0)+" MJ of it"+
+        (s.fireEv.p >= 1 ? ", peaking at "+s.fireEv.p.toFixed(0)+" kPa" : "")+
+        ". It spilled out of a sodium circuit at over 600 K, which is three "+
+        "hundred degrees past the temperature it lights itself at, and then it "+
+        "burned until the pool ran out or the bay ran out of air. Nothing had to "+
+        "go wrong twice. A cell under nitrogen would have smothered it.");
+    s.fireEv = {kg:0, p:0};
   }
   /* ── and what standing in it costs a machine ──
      s.dmgParts gets its SECOND WRITER. Until now combatHit() was the only one
@@ -6460,6 +6499,13 @@ const ANN=[
   "Nothing on this ship is radiating. Every panel is destroyed, or walled in where it cannot see the skin, or there is no panel at all. Heat leaves this ship as light or it does not leave. The condenser will climb until it loses vacuum and the turbine trips, and after that the generators go to their safety valves.","cond"],
  ["PANEL HI T","amber",s=>radTMax(s)>tsatSec(TURB_TRIP_P)-COND_DT0,
   "The radiator is running hot enough that the condenser behind it is close to the pressure the turbine will not exhaust against. Rejection goes as the fourth power of panel temperature, so the last few kelvin cost far more than the first: cut reactor power, or accept the trip.","cond"],
+ /* THE OTHER FUEL, and a sodium plant meets it first: no melted core in front
+    of it, just a pipe. Appended like every row above it - help.js numbers the
+    tiles by array index, so a row that belongs beside H2 FIRE by subject still
+    goes on the end. Its own tile because the two fires share only the air they
+    burn: this one is a pool, it needs no spark, and no fan takes it away. */
+ ["NA FIRE","red",s=>s.roomFireOn>0,
+  "Sodium is burning on the deck. It came out of a pipe at over 600 K, which is hundreds of degrees past the temperature it lights itself at, so nothing had to ignite it. It burns until the pool is gone or the bay's oxygen is - the OXYGEN layer says which way it is going - and while it burns it cooks every machine around it and eats the air. A spray from a small hole burns far faster than a puddle from a large one, and water makes it worse.","ctrl"],
 /* one tile per defeated automatic system, built from the same table the sim uses */
 ].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
   AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn,
