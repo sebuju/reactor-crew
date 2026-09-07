@@ -874,8 +874,14 @@ function marginKeySync(h,fresh,live){
   if(!fresh && !moved) return;
   h.selAt=k;
   if(moved){
+    /* OFF THE RUN, never off pipeMap().byKey[k]. `k` is the run's own IDENTITY
+       now (runIdOf()) and that map is keyed by the DERIVED key, so the lookup
+       came back undefined and the panel threw the moment a run was picked. A
+       run whose ends are still loose has no traced connection at all, so it has
+       no kind to be named after either. */
+    const r0 = h.key==="run" ? runOfKey(k) : null;
     const title = h.key==="run"
-      ? (pipeLabel(pipeMap().byKey[k].k, k)||"PIPE RUN")
+      ? (r0 ? (pipeLabel(r0.k, r0.key)||"PIPE RUN") : "PIPE RUN")
       : matPanelTitle(k);
     h.well.setTitle(title); KIT.tip(h.well.head,title);
   }
