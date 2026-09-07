@@ -95,7 +95,6 @@ function shellInitBrandMenu(){
   const box = document.getElementById("brandmenu"), brand = document.getElementById("brand-title");
   if(!box || !brand) return;
   ctxSuppress(box);
-  const note = KIT.el("div", "brand-note");
   const close = () => KIT.show(box, false);
   const build = () => {
     box.textContent = "";
@@ -103,13 +102,14 @@ function shellInitBrandMenu(){
     box.appendChild(h);
     for(const [label, fn] of BRANDMENU)
       box.appendChild(KIT.button(label, {flat:true, onClick(){
-        // every dump is a round trip to the server: say so, then say what happened
-        note.textContent = "WORKING...";
-        Promise.resolve().then(fn).then(m => { note.textContent = m; },
-                                        e => { note.textContent = "FAILED: " + e.message; });
+        close();
+        /* The path is on the clipboard and the console has the rest. A dump is
+           a round trip to the server, so the menu would have to stay up
+           waiting on it to report anything, and the answer is a filename you
+           are about to paste somewhere else anyway. */
+        Promise.resolve().then(fn).then(m => console.log("[dump] " + m),
+                                        e => console.warn("[dump] failed: " + e.message));
       }}).el);
-    note.textContent = "";
-    box.appendChild(note);
   };
   MOUSE.on(brand, {click(){
     const open = box.classList.contains("kit-hide");
