@@ -1,5 +1,6 @@
 /* Shared HTML widget kit styles. Colours are always var(--c-*), sizes always
-   var(--t*) for text - see src/core/constants.js (cssVarsBoot) and kit-api.md. */
+   var(--fs-*) for text, by the JOB the text does - see :root in src/style.css,
+   src/core/constants.js (cssVarsBoot) and kit-api.md. */
 
 /* KIT.show() is the only hide. Every stylesheet rule states the SHOWN display,
    so handing an element back to the stylesheet shows it - see kit.js show(). */
@@ -10,11 +11,11 @@
 .db-vitals .kit-well-body{padding:8px 6px;}
 
 .kit-rule{display:flex;align-items:flex-start;gap:7px;margin:0 0 3px; justify-content: space-between;
-  color:var(--kit-rule-color,var(--c-ink2));font-size:var(--t8);
+  color:var(--kit-rule-color,var(--c-ink2));font-size:var(--fs-sec);
   letter-spacing:2px;text-transform:uppercase;}
 .kit-sliderrow > .kit-rule {letter-spacing: 0;margin:0;}
 /* .kit-rule{display:flex;align-items:center;gap:7px;
-  color:var(--kit-rule-color,var(--c-ink2));font-size:var(--t8);
+  color:var(--kit-rule-color,var(--c-ink2));font-size:var(--fs-sec);
   text-transform:uppercase;white-space:nowrap} */
 /* .kit-rule::after{content:"";flex:1 1 auto;height:1px;background:var(--c-edge2)} */
 
@@ -24,7 +25,7 @@
    so it carries its own padding, and since the well lost its border this bar
    is what delimits the panel - and what .on/.blocked colour. */
 .kit-rule-head{margin:0;padding:8px 4px;background:var(--c-edge);
-  font-size:var(--t9);font-weight:700;letter-spacing:1.8px;
+  font-size:var(--fs-win-title);font-weight:700;letter-spacing:1.8px;
   color:var(--kit-rule-color,var(--c-bright));
   overflow:hidden;text-overflow:ellipsis}
 .kit-rule-head::after{display:none}
@@ -41,7 +42,11 @@
 .kit-rule-sfx{flex:0 0 auto;color:var(--c-ink2)}
 /* nothing to say costs no gap - every rule carries the span now */
 .kit-rule-sfx:empty{display:none}
-.kit-rule-head>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+/* THE NAME TAKES THE SLACK, so everything after it is packed against the right
+   hand end: the suffix, and then the window's own keys with a gap. Both of
+   those carried margin-left:auto and SHARED the free space between them, which
+   left the skin temperature floating in the middle of the bar. */
+.kit-rule-head>span:first-child{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* the head bar has no ::after spacer, so its suffix takes the slack itself */
 .kit-rule-head .kit-rule-sfx{margin-left:auto;letter-spacing:0px;}
 /* a title bar that selects its own component - see railPick() in inspector.js */
@@ -75,11 +80,19 @@
 .kit-band-lim{stroke:var(--c-red);stroke-width:1}
 .kit-band-needle{stroke:var(--c-bright);stroke-width:3}
 .kit-band-cap{stroke:var(--c-bright);stroke-width:6;stroke-linecap:round}
+/* the extra readings a scale carries (band()'s `marks`). Thinner than the
+   needle, because the needle is the figure the row states and these are the
+   two ends and the limit it sits between. The hot and cold legs take the same
+   two hues the pipes on the drawing do. */
+.kit-band-mark{stroke-width:1.5}
+.kit-band-mark-cold{stroke:var(--c-blue)}
+.kit-band-mark-hot{stroke:var(--c-amber)}
+.kit-band-mark-sat{stroke:var(--c-red)}
 .kit-band-peg{display:none;position:absolute;top:6px;width:3px;height:3px;
   background:var(--c-bright)}
 .kit-band-peg.lo{display:block;left:0;margin-left:-7px}
 .kit-band-peg.hi{display:block;right:0;margin-right:-7px}
-.kit-band-lo,.kit-band-hi,.kit-band-zlabel{position:absolute;top:17px;font-size:var(--t6);
+.kit-band-lo,.kit-band-hi,.kit-band-zlabel{position:absolute;top:17px;font-size:var(--fs-tiny);
   letter-spacing:.5px;color:var(--c-ink2);white-space:nowrap}
 .kit-band-hi{right:0;transform:translateX(0)}
 .kit-band-zlabel{transform:translateX(-50%)}
@@ -90,18 +103,21 @@
 
 .kit-badge{display:flex;align-items:center;justify-content:center;width:16px;height:14px;
   clip-path:polygon(50% 0,100% 100%,0 100%);background:var(--c-red);
-  color:var(--c-ink-on-amber);font-size:var(--t8);font-weight:700}
+  color:var(--c-ink-on-amber);font-size:var(--fs-tiny);font-weight:700}
 
 .kit-hatch{position:absolute;inset:0;display:block;pointer-events:none;opacity:.55;
   background-image:repeating-linear-gradient(-45deg,var(--kit-hatch-color,var(--c-red)) 0,
     var(--kit-hatch-color,var(--c-red)) 1.4px,transparent 1.4px,transparent 7px)}
 
 .kit-btn{appearance:none;border:1px solid var(--c-edge);cursor:pointer;font:inherit;
-  font-size:var(--t9);letter-spacing:1.6px;text-transform:uppercase;
+  font-size:var(--fs-key);letter-spacing:1.6px;text-transform:uppercase;
   padding:0 10px;height:23px;background:var(--c-panel);color:var(--c-ink)}
 .kit-btn:hover{background:var(--c-panel-hi);border-color:var(--c-edge2);color:var(--c-bright)}
 .kit-btn.on{border-color:var(--c-amber);color:var(--c-amber)}
 .kit-btn:disabled{cursor:default;opacity:.4}
+/* the arrow keys walk the keys of the panel a machine is showing in
+   (panKeyNav, ui/hoverwin.js), so which one they are standing on has to read */
+.kit-btn:focus-visible,.kit-btn:focus{outline:1px solid var(--c-amber);outline-offset:1px}
 .kit-btn-sunk{border:0;background:var(--c-well)}
 .kit-btn-sunk:hover{background:var(--c-panel)}
 .kit-btn-sunk.on{background:var(--c-on-amber)}
@@ -125,15 +141,15 @@
 .kit-optlist-row.on,.kit-segsel-cell.on{color:var(--c-amber)}
 .kit-segsel-cell.on{outline:1px solid var(--c-amber); outline-offset: -1px;}
 .kit-optlist-row .kit-dot{margin-right:8px}
-.kit-optlist-name{flex:1 1 auto;font-size:var(--t7);}
-.kit-optlist-mass{font-size:var(--t8);color:var(--c-ink2)}
+.kit-optlist-name{flex:1 1 auto;font-size:var(--fs-label);}
+.kit-optlist-mass{font-size:var(--fs-tiny);color:var(--c-ink2)}
 .kit-optlist-row.on .kit-optlist-mass{color:var(--c-amber)}
 .kit-optlist-mass.min{color:var(--c-green)}
 
 .kit-segsel{display:flex;gap:4px}
 .kit-segsel-cell{flex:1 1 0;flex-direction:column;align-items:center;justify-content:center;height:39px}
-.kit-segsel-name{font-size:var(--t9);letter-spacing:.5px}
-.kit-segsel-mass{font-size:var(--t6-5);color:var(--c-ink2);margin-top:2px}
+.kit-segsel-name{font-size:var(--fs-label);letter-spacing:.5px}
+.kit-segsel-mass{font-size:var(--fs-tiny);color:var(--c-ink2);margin-top:2px}
 .kit-segsel-mass.min{color:var(--c-green)}
 
 /* actual (native range thumb) vs demand (the caret overlay): a rate-limited
@@ -145,6 +161,11 @@
 .kit-slider-cells{position:absolute;top:4px;left:0;height:15px}
 .kit-slider-mark{position:absolute;top:0;width:1px;height:22px;background:var(--c-red)}
 .kit-slider-dem{position:absolute;top:0;width:1px;height:22px;background:var(--c-amber);display:block}
+/* where a press would land - see slider()'s mousemove. Amber like the demand
+   caret, because that is what it would become, and dimmer because it has not */
+.kit-slider-hov{position:absolute;top:0;width:1px;height:22px;background:var(--c-amber);
+  opacity:.45;pointer-events:none}
+.kit-slider-readout.hov{color:var(--c-amber)}
 .kit-slider-input{appearance:none;-webkit-appearance:none;position:absolute;inset:0;width:100%;
   height:100%;margin:0;background:transparent;cursor:pointer}
 .kit-slider-input::-webkit-slider-runnable-track{background:transparent;height:22px}
@@ -156,12 +177,12 @@
    produce, not off the current one. Content-driven, the track (flex:1 1 auto)
    would resize under the hand every time "9%" became "100%". */
 .kit-slider-readout{flex:0 0 auto;text-align:right;
-  font-size:var(--t6-5);color:var(--c-cyan);white-space:nowrap}
+  font-size:var(--fs-value);color:var(--c-cyan);white-space:nowrap}
 
 /* the kit's one free-text control - see textInput() in kit.js */
 .kit-textinput-input{width:100%;box-sizing:border-box;appearance:none;
   border:1px solid var(--c-edge);background:var(--c-well);color:var(--c-bright);
-  font:inherit;font-size:var(--t8-5);letter-spacing:.3px;padding:3px 6px;height:22px}
+  font:inherit;font-size:var(--fs-value);letter-spacing:.3px;padding:3px 6px;height:22px}
 .kit-textinput-input:hover{border-color:var(--c-edge2)}
 .kit-textinput-input:focus{outline:none;border-color:var(--c-amber)}
 .kit-textinput-input::placeholder{color:var(--c-ink2)}
@@ -170,7 +191,7 @@
 .kit-rule-sfx.kit-mass-min{color:var(--c-green)}
 
 .kit-readout{margin-bottom:8px}
-.kit-readout-val{display:block;text-align:right;font-size:var(--t10);color:var(--c-cyan)}
+.kit-readout-val{display:block;text-align:right;font-size:var(--fs-value);color:var(--c-cyan)}
 
 .kit-toggle{display:flex;align-items:center;width:100%;box-sizing:border-box;appearance:none;
   border:0;cursor:pointer;font:inherit;text-align:left;height:22px;padding:0; justify-content: space-between;
@@ -180,21 +201,21 @@
 .kit-toggle.on{color:var(--c-amber)}
 .kit-toggle-mark{width:7px;height:7px;margin-right:8px;background:var(--c-edge2)}
 .kit-toggle.on .kit-toggle-mark{background:var(--c-amber)}
-.kit-toggle-label{flex:1 1 auto;font-size:var(--t7);}
-.kit-toggle-mass{font-size:var(--t7);color:var(--c-ink2)}
+.kit-toggle-label{flex:1 1 auto;font-size:var(--fs-label);}
+.kit-toggle-mass{font-size:var(--fs-tiny);color:var(--c-ink2)}
 
 /* the kit's numeric field - see numInput() in kit.js */
 .kit-numinput{display:flex;align-items:center;gap:5px;min-width:0}
 .kit-numinput-input{flex:1 1 0;min-width:0;box-sizing:border-box;appearance:none;
   border:1px solid var(--c-edge);background:var(--c-well);color:var(--c-bright);
-  font:inherit;font-size:var(--t7);padding:3px 6px;
+  font:inherit;font-size:var(--fs-value);padding:3px 6px;
   text-align:right}
 .kit-numinput-input:hover{border-color:var(--c-edge2)}
 .kit-numinput-input:focus{outline:none;border-color:var(--c-amber)}
-.kit-numinput-unit{flex:0 0 22px;font-size:var(--t7);color:var(--c-ink2);white-space:nowrap}
+.kit-numinput-unit{flex:0 0 22px;font-size:var(--fs-tiny);color:var(--c-ink2);white-space:nowrap}
 .kit-numinput-suggest{flex:0 0 auto;appearance:none;cursor:pointer;
   border:1px solid var(--c-edge);background:transparent;color:var(--c-ink2);
-  font:inherit;font-size:var(--t7);letter-spacing:.5px;padding:3px 6px;}
+  font:inherit;font-size:var(--fs-tiny);letter-spacing:.5px;padding:3px 6px;}
 .kit-numinput-suggest:hover{border-color:var(--c-cyan);color:var(--c-cyan)}
 .kit-numinput-suggest.on{border-color:var(--c-amber);color:var(--c-amber)}
 .kit-numinput-input:disabled{color:var(--c-ink2);cursor:not-allowed}
