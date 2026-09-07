@@ -166,3 +166,38 @@ const storeWhy = () =>
   "SAVING IS OFF. The page is running from the filesystem, which cannot write " +
   "files - everything else works. Run  node tools/server.js  and open the " +
   "address it prints to keep scenarios and recordings on disk.";
+
+/* ═══════════════ THE DEBUG DUMPS ═══════════════
+
+   A different job from the four acts above: not one player's library of named
+   scenarios, but a pile of timestamped files a developer reads with a
+   spreadsheet and then throws away. So it is a flat directory (`snapshots/`,
+   gitignored), the body is whatever text or image the caller built, and the
+   name carries the timestamp instead of an id anybody has to remember.
+   PNG goes as base64 - the body of an XHR is text and a PNG is not. */
+
+async function snapPut(name, body, b64){
+  if(storeOff()) return false;
+  try{
+    const r = await fetch(storeURL("snap/" + name) + (b64 ? "?b64=1" : ""), {
+      method:"PUT",
+      headers:{"Content-Type":"text/plain; charset=utf-8"},
+      body,
+    });
+    if(!r.ok) return false;
+    const j = await r.json();
+    return !!(j && j.ok);
+  }catch(e){ return false; }
+}
+
+/* `null` is no store, a number is how many files went - the same two-answer
+   shape the lists above use. */
+async function snapPurge(){
+  if(storeOff()) return null;
+  try{
+    const r = await fetch(storeURL("snap"), {method:"DELETE"});
+    if(!r.ok) return null;
+    const j = await r.json();
+    return (j && j.ok) ? (j.n | 0) : null;
+  }catch(e){ return null; }
+}
