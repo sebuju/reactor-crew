@@ -27,6 +27,27 @@ function inspHost(root){
   return el;
 }
 
+/* ══ A WINDOW ABOUT NO MACHINE ══
+   The same window, minted rather than kept: there is no peek of the whole ship
+   to drag, so a reading about the DESIGN gets its key elsewhere and the window
+   is opened by it. Not in host._wins - that list is walked against LAY.parts
+   and a window with no part in it would be closed on the next frame - so the
+   opener owns the placement call. */
+function inspWin(host,title){
+  const h=marginPan(host,title,()=>null,null);
+  h.well.el.classList.add("insp-win");
+  h.wx=0; h.wy=0; h.wtf=null; h.folded=false; h.plant=false;
+  inspDrag(h); inspHand(h); inspKeys(h);
+  return h;
+}
+/* Where a minted window stands before anyone has moved it: the frame's own top
+   left, which is under the head row and clear of the rail. */
+function inspWinSeat(h,host){
+  if(h.wtf!==null) return;
+  const f=inspFrame(host);
+  h.wx=f.x0; h.wy=f.y0;
+}
+
 /* Windows are screen furniture, so the newest one is the one on top and a
    press anywhere on a window raises it. DOM order is the whole of the z-order
    here - the host is a stacking context and nothing inside it states one. */
@@ -177,8 +198,9 @@ function inspKeys(h){
     tip:"Fold this window down to its title bar.",
     onClick:()=>inspCollapse(h,!h.folded)});
   h.keyFold.el.classList.add("insp-key-fold");
+  // a window with a key that opens it again is put away, not thrown away
   h.keyShut=KIT.button("CLOSE",{flat:true,icon:INSPW_ICON.shut,
-    tip:"Close this window.",onClick:()=>inspClose(h)});
+    tip:"Close this window.",onClick:()=>h.onShut?h.onShut(h):inspClose(h)});
   keys.append(h.keyFold.el,h.keyShut.el);
   h.well.head.appendChild(keys);
 }

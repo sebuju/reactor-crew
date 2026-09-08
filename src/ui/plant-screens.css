@@ -20,8 +20,8 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .scr-head{grid-column:1;grid-row:1;pointer-events:none;display:flex;align-items:flex-start;
   flex-wrap:wrap;gap:8px;padding:6px 8px;margin-left:308px}
 .scr-head>*{pointer-events:auto}
-/* the bench stands its verdict UNDER this row (.db-left), so there is nothing
-   in the corner for the row to start clear of */
+/* the bench's verdict is a window, so nothing is bolted in that corner for the
+   row to start clear of */
 .db-head{margin-left:0}
 
 .cr-root,.db-root{position:absolute;display:grid;
@@ -254,26 +254,8 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* ─────────────── design bench ─────────────── */
 .db-tools{display:flex;align-items:center;gap:4px}
 .db-plants .kit-btn{justify-content:flex-start;text-align:left}
-/* THE VERDICT AND ITS KEY STAND UNDER THE TOOLS, at the left edge of the plant.
-   In the grid's second row rather than floating on a measured offset: the head
-   row wraps at a narrow window, and a top stated in px is one that is wrong the
-   moment it does. `start` on both axes so the column is its content's size and
-   the plant keeps the rest of the row. */
-.db-left{grid-column:1;grid-row:2;align-self:start;justify-self:start;
-  pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:4px;
-  padding:0 0 6px 4px;max-height:100%;min-height:0}
-.db-left>*{pointer-events:auto}
-/* Sized by its own content and capped, because a scroll container stretched by
-   a grid row collapses to nothing. */
-.db-vitals{display:flex;flex-direction:column;gap:6px;flex:0 1 auto;min-height:0;
-  width:300px;background:transparent;overflow-y:auto;scrollbar-width:none}
-/* it stands ON the drawing, so it is not the rail colour */
-.db-verdict{background:var(--c-panel-float);box-shadow:0 8px 28px rgba(0,0,0,.9),0 2px 8px rgba(0,0,0,.8)}
 .db-verdict-rev{margin-top:8px}
 .db-verdict-rev:empty{display:none}
-.db-vitals::-webkit-scrollbar{display:none}
-.db-vitals:empty{display:none}
-.db-vitals>*{flex:0 0 auto}
 .db-rail{grid-column:2;grid-row:1/3;width:340px;overflow-y:auto;pointer-events:auto;
   background:var(--c-panel);padding-top:6px;
   display:flex;flex-direction:column;gap:6px}
@@ -368,7 +350,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* transparent EXPLICITLY: a canvas carries the page's own deck colour, and this
    one stands over the whole plant view - inherited, it painted the board out */
 .nav-layer{position:fixed;pointer-events:none;z-index:0;background:transparent}
-.cr-rail,.db-rail,.cr-banner,.cr-vitals,.db-vitals,.db-left{z-index:1}
+.cr-rail,.db-rail,.cr-banner,.cr-vitals{z-index:1}
 .scr-head{z-index:5}
 /* size comes from a transform:scale (marginPlace), so one layout is scaled and
    the panel's height in layout px is the same at every step of the zoom */
@@ -386,6 +368,10 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   grid-template-columns:var(--db-cols-tpl,repeat(var(--db-grid-cols,1),minmax(min(var(--db-colw),100%),1fr)))}
 .db-section{display:flex;flex-direction:column;gap:6px;min-width:0;min-height:0;
   grid-column:span var(--db-span,1);grid-row:span var(--db-rowspan,1)}
+/* a panel's own tabs; the strip is the topbar's widget, so it is that class */
+.db-tabs{display:flex;flex-direction:column;gap:6px;min-width:0}
+.db-tabs-bar{display:flex;flex-wrap:wrap;gap:2px}
+.db-tab-body{display:flex;flex-direction:column;gap:8px;min-width:0}
 .db-rail .db-grid{--db-grid-cols:1;--db-cols-tpl:initial}
 .db-rail .db-section{--db-span:1;--db-rowspan:1}
 .margin-pan .kit-rule-head{padding:8px;font-size:var(--fs-win-title); align-items: center;}
@@ -533,6 +519,29 @@ body[data-screen="design"] #scr-design{pointer-events:none}
    is not on this tab and the picture must not pretend it is */
 .ctlg-xseg polyline{stroke-dasharray:3 2}
 .ctlg-xseg .ctlg-wire-lab{fill:var(--c-ink2)}
+/* CGCAT (render/ctlgraph.js); before .off and .dead, which tie on specificity */
+.ctlg-blk.cat-read{border-color:var(--c-blue)}
+.ctlg-blk.cat-math{border-color:var(--c-cyan)}
+.ctlg-blk.cat-time{border-color:var(--c-port-a)}
+.ctlg-blk.cat-logic{border-color:var(--c-port-b)}
+.ctlg-blk.cat-drive{border-color:var(--c-green)}
+.ctlg-wire.cat-read polyline{stroke:var(--c-blue)}
+.ctlg-wire.cat-math polyline{stroke:var(--c-cyan)}
+.ctlg-wire.cat-time polyline{stroke:var(--c-port-a)}
+.ctlg-wire.cat-logic polyline{stroke:var(--c-port-b)}
+.ctlg-wire.cat-drive polyline{stroke:var(--c-green)}
+.ctlg-wire.cat-read .ctlg-head,.ctlg-wire.cat-read .ctlg-wire-lab{fill:var(--c-blue)}
+.ctlg-wire.cat-math .ctlg-head,.ctlg-wire.cat-math .ctlg-wire-lab{fill:var(--c-cyan)}
+.ctlg-wire.cat-time .ctlg-head,.ctlg-wire.cat-time .ctlg-wire-lab{fill:var(--c-port-a)}
+.ctlg-wire.cat-logic .ctlg-head,.ctlg-wire.cat-logic .ctlg-wire-lab{fill:var(--c-port-b)}
+.ctlg-wire.cat-drive .ctlg-head,.ctlg-wire.cat-drive .ctlg-wire-lab{fill:var(--c-green)}
+/* the name wears it too, and so does the kind in the ADD list: a 1px border is
+   not a colour you can read a box by at arm's length */
+.ctlg-blk.cat-read .ctlg-blk-name,.kit-optlist-row.cat-read .kit-optlist-name{color:var(--c-blue)}
+.ctlg-blk.cat-math .ctlg-blk-name,.kit-optlist-row.cat-math .kit-optlist-name{color:var(--c-cyan)}
+.ctlg-blk.cat-time .ctlg-blk-name,.kit-optlist-row.cat-time .kit-optlist-name{color:var(--c-port-a)}
+.ctlg-blk.cat-logic .ctlg-blk-name,.kit-optlist-row.cat-logic .kit-optlist-name{color:var(--c-port-b)}
+.ctlg-blk.cat-drive .ctlg-blk-name,.kit-optlist-row.cat-drive .kit-optlist-name{color:var(--c-green)}
 .ctlg-wire.off polyline{stroke:var(--c-ink2)}
 .ctlg-wire.off .ctlg-head,.ctlg-wire.off .ctlg-wire-lab{fill:var(--c-ink2)}
 .ctlg-pic.dead .ctlg-wire:not(.off) polyline{stroke:var(--c-amber)}
@@ -547,11 +556,22 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-blk-sub{font-size:var(--fs-value);color:var(--c-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctlg-blk-spec{font-size:var(--fs-tiny);color:var(--c-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctlg-blk-spec:empty{display:none}
-.ctlg-blk.m-source{border-color:var(--c-blue)}
-.ctlg-blk.m-sink{border-color:var(--c-green)}
+/* the player's own words, on a section and on a block. Read-only in the
+   control room, where it is a line of text and not a field. */
+.ctlg-seg-note{display:block;width:100%;box-sizing:border-box;margin:0 0 6px;
+  font:inherit;font-size:var(--fs-note);line-height:1.35;color:var(--c-ink);
+  background:var(--c-well);border:1px solid var(--c-edge);padding:4px 6px;resize:vertical}
+div.ctlg-seg-note{background:none;border:0;color:var(--c-ink2);padding:0 2px}
+.ctlg-note-input{width:100%;box-sizing:border-box;font:inherit;font-size:var(--fs-note);
+  line-height:1.35;color:var(--c-ink);background:var(--c-well);border:1px solid var(--c-edge);
+  padding:3px 5px;resize:vertical}
+/* dimmed, never hidden: a box that vanishes takes its position with it */
+.ctlg-blk,.ctlg-wire{transition:opacity 140ms linear}
+.ctlg-blk.dim{opacity:.3}
+.ctlg-wire.dim{opacity:.18}
 .ctlg-pic.dead .ctlg-blk{border-color:var(--c-amber)}
 .ctlg-blk.off{border-color:var(--c-edge);color:var(--c-ink2);text-decoration:line-through}
-.ctlg-blk.off .ctlg-blk-sub{color:var(--c-ink2)}
+.ctlg-blk.off .ctlg-blk-sub,.ctlg-blk.off .ctlg-blk-name{color:var(--c-ink2)}
 .ctlg-blk:hover{border-color:var(--c-bright)}
 .ctlg-blk.sel{border-color:var(--c-cyan);background:var(--c-panel-hi);color:var(--c-bright)}
 /* the studs a wire is dragged by: out of the bottom of a block, into the top

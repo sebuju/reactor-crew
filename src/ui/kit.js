@@ -570,7 +570,10 @@ const KIT = (function(){
      box" would be a second place the focus guard could be forgotten. */
   function textInput(opts){
     opts = opts || {};
-    const input = el("input", opts.cls || "kit-textinput-input", {type: "text"});
+    // a note is a sentence, not a name, so the same door hands back a box that wraps
+    const input = opts.multiline ? el("textarea", opts.cls || "kit-textinput-input")
+                                 : el("input", opts.cls || "kit-textinput-input", {type: "text"});
+    if(opts.rows) input.setAttribute("rows", opts.rows);
     if(opts.placeholder) input.setAttribute("placeholder", opts.placeholder);
     if(opts.maxLength) input.setAttribute("maxlength", opts.maxLength);
     let root = input;
@@ -667,6 +670,7 @@ const KIT = (function(){
     const root = el("div", "kit-optlist");
     const rows = items.map((it, i) => {
       const row = el("button", "kit-optlist-row", {type: "button"});
+      if(it.cls) row.classList.add(it.cls);   // what the row IS, for a list that colours its choices
       const mark = dot();
       row.appendChild(mark.el);
       const name = el("span", "kit-optlist-name"); name.textContent = it.name;

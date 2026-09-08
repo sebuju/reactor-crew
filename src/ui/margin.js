@@ -1033,7 +1033,9 @@ function panPartSync(h,live,deep,fresh){
        so the first hover snapped the whole panel up a cell. */
     const n0=h.body.childElementCount, s0=h.body._sig;
     dbPanelSync(h.body, B);
-    if(h.body._sig!==s0 || h.body.childElementCount!==n0){
+    // a tab switch swaps one body for another without touching either count
+    const tabbed=h._panTab!==PANTAB.seq; h._panTab=PANTAB.seq;
+    if(tabbed || h.body._sig!==s0 || h.body.childElementCount!==n0){
       /* A PANEL FILLS ITS OWN HOSTED CANVASES BEFORE IT IS MEASURED. The
          screen-wide pass runs at the head of the frame (dbHostPaint,
          design-bench.js) and this panel did not exist then, so its lattice
@@ -1060,7 +1062,8 @@ function panTick(live){
   if(panTickAt===marginFrame) return panTickV;
   panTickAt=marginFrame;
   // PREV.seq: a hover is not a design change, and the MEASURED lists price it
-  const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq;
+  // PANTAB.seq: a tab switch is not a design change either, and it swaps a panel's whole body
+  const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq+"|"+PANTAB.seq;
   const fresh = live || psig!==marginPSig; marginPSig=psig;
   // what could have moved a control's range
   const dtok = live ? (coreIds().map(id=>coreSeen(S,id).split?1:0).join("")+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
