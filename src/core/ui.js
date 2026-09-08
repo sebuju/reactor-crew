@@ -349,7 +349,8 @@ function dblCheck(p,e){
 const ctxSuppress=el=>el&&MOUSE.noCtx(el);
 ctxSuppress(cv);
 // a drag is stamped with the surface it started on: hosts measure in overlapping spaces
-const dragOn=d=>{ d.host=ui.ptrHost; ui.drag=d; return d; };
+/* a drag may PLACE something - a pipe that finds a machine, a painted wall - and what it places states its figures on release */
+const dragOn=d=>{ d.host=ui.ptrHost; d.figWas=figSubs(); ui.drag=d; return d; };
 function uiDown(e,el){
   const tgt=el||cv;
   MOUSE.grab(tgt);
@@ -518,6 +519,7 @@ function uiUp(e,el){
     else runPinCollapse(d.rid,d.i);
   }
   if(d&&d.type==="hull"&&d.c) gridDrag(d.edge,d.c);
+  if(d&&d.figWas) designBakeSince(d.figWas);
   ui.drag=null;
 }
 function uiPt(el,e){ return el._uiLocal? el._uiLocal(e) : local(e); }
