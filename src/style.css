@@ -1,26 +1,14 @@
-/* palette comes from C in core/constants.js via cssVarsBoot() - do not hand-copy colours here */
 :root{
   --mono:ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,monospace;
-  /* one step per TSCALE step in core/text.js, but +2px: canvas type is hinted
-     monospace at those sizes and HTML type needs the bump to read the same */
   --t15:17px;--t13:15px;--t12:14px;--t10:12px;--t9-5:11.5px;--t9:11px;--t8-5:10.5px;
-  /* floored at 10px - the steps below it existed to squeeze text into canvas
-     boxes, and CSS fits text on its own */
   --t8:10px;--t7-5:10px;--t7:10px;--t6-5:10px;--t6:10px;
-  /* ══ PANEL TYPE, BY THE JOB THE TEXT DOES ══
-     The --t* ladder above is the CANVAS scale, and a panel that reads off it
-     picks a step per rule, so tuning the panels meant editing forty rules that
-     had no name for what they were doing. Every widget in the kit and every
-     row in a panel, a window or a rail now sizes off one of these seven, and
-     nothing else. Change one number here and every place that does that job
-     moves together. */
-  --fs-win-title:11px;   /* a panel's own title bar */
-  --fs-sec:11px;         /* the rule that heads a section inside one */
-  --fs-label:11px;       /* what a row or a control is called */
-  --fs-value:11px;       /* the number or word it is reading */
-  --fs-key:11px;         /* a button's label */
-  --fs-note:10.5px;      /* prose: help, warnings, verdicts */
-  --fs-tiny:11px;        /* units, tonnages, scale ends */
+  --fs-win-title:11px;
+  --fs-sec:11px;
+  --fs-label:11px;
+  --fs-value:11px;
+  --fs-key:11px;
+  --fs-note:10.5px;
+  --fs-tiny:11px;
 }
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--c-bg);color-scheme:dark}
 body{display:flex;flex-direction:column;font-family:var(--mono)}
@@ -53,30 +41,20 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 #plant-line{color:var(--c-cyan);font-size:var(--t8);letter-spacing:1px}
 #plant-line.idle{color:var(--c-amber)}
 #clock-row{position:absolute;bottom:-14px}
-/* nothing is running, so there is nothing to read - the box stays, so the bar
-   beside it does not move */
 #clock-row.blank{visibility:hidden}
 #clock{color:var(--c-ink2);font-size:var(--t8);letter-spacing:1px}
-/* running behind the rate it was asked for - the TPS beside it is the truth */
 #clock.slow{color:var(--c-amber)}
 
 #stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;
   overflow:hidden;background:var(--c-bg)}
 canvas{display:block;background:var(--c-well);touch-action:none;cursor:default}
 
-/* Mount points for the three HTML screens. Absolutely positioned over #stage
-   rather than flex siblings, so a screen with a plant (design, operate) can
-   lay HTML controls beside/over the canvas without disturbing the flex
-   centring that sizes it. Each screen's own script owns everything inside
-   its section; this file only says when it is visible. */
 #scr-operate,#scr-design,#scr-scenario{
   display:none;position:absolute;inset:0;box-sizing:border-box;pointer-events:none}
 body[data-screen="operate"] #scr-operate,
 body[data-screen="design"] #scr-design,
 body[data-screen="scenario"] #scr-scenario{display:block;pointer-events:auto}
 
-/* HELP is a document, not a plant view - shown/hidden off body[data-screen],
-   written in one place (layout() in shell.js) */
 #help{display:none;box-sizing:border-box;width:100%;height:100%;overflow-y:auto;
   padding:26px 32px 60px;color:var(--c-ink);font-size:var(--t9)}
 body[data-screen="help"] #help{display:block}
@@ -109,8 +87,6 @@ body[data-screen="help"] #cv{display:none}
 @keyframes ann-blink{0%,49%{opacity:1}50%,100%{opacity:.4}}
 .ann-tile.blink{animation:ann-blink 900ms steps(1,end) infinite}
 
-/* over the stage and under the topbar's z-order: the tabs stay live, because
-   picking another one is how a prewarm is cancelled */
 #prewarm{position:fixed;z-index:999;display:flex;align-items:center;justify-content:center;
   left:0;right:0;top:40px;bottom:0;background:rgba(0,0,0,.55)}
 .pw-box{width:min(520px,70vw);padding:14px 16px;background:var(--c-panel);
@@ -124,31 +100,20 @@ body[data-screen="help"] #cv{display:none}
 .pw-fill{height:100%;width:0;background:var(--c-amber);transition:width 80ms linear}
 .pw-note{margin-top:8px;font-size:var(--t7);letter-spacing:.5px;color:var(--c-ink2)}
 
-/* WIDTH IS THE CONTENT'S, NEVER THE ROOM LEFT BESIDE IT. The box is fixed with
-   only `left` set, so its shrink-to-fit width was measured against the distance
-   from the PREVIOUS box's left edge to the window: parked near the right edge it
-   came out narrow, the narrow measurement then placed it further left, and the
-   next frame measured it wider again - a box that crept open over several frames
-   and wrapped differently depending on what had been hovered before it.
-   max-content is the same width wherever it stands, and max-width still caps it. */
+/* max-content: shrink-to-fit measures against the box's own previous left, so the tip creeps wider each frame */
 #tip{position:fixed;z-index:1000;display:block;width:max-content;max-width:320px;padding:8px 10px;
   background:var(--c-panel);border:1px solid var(--c-edge2);color:var(--c-ink);
   font-family:var(--mono);font-size:var(--t8);line-height:1.4;pointer-events:none;
   box-shadow:0 4px 14px rgba(0,0,0,.5)}
 #tip b{display:block;margin-bottom:4px;color:var(--c-bright);font-size:var(--t8);
   letter-spacing:1px;text-transform:uppercase}
-#tip p{margin:0;white-space:pre-wrap}   /* a cell tip is one value to a row */
-/* the title row: name on the left, the scale's verdict and its limits pushed to
-   the right, so a band tooltip costs no extra line */
+#tip p{margin:0;white-space:pre-wrap}
 .tip-head{display:flex;align-items:baseline;gap:8px}
 .tip-head b{flex:1 1 auto;margin-bottom:4px}
 .tip-verdict,.tip-lim{flex:0 0 auto;font-size:var(--t7);letter-spacing:.5px}
 .tip-lim{color:var(--c-red)}
 #tip .kit-band{margin-top:6px}
 
-/* above #tip's 1000: a menu is opened deliberately and a tooltip is not.
-   A sibling of #stage, like #tip, because #stage clips and a menu opened near
-   an edge has to be allowed to stand outside it. */
 #ctxmenu,#brandmenu{position:fixed;z-index:1001;display:block;min-width:150px;max-width:280px;
   max-height:70vh;overflow:auto;padding:0;background:var(--c-well);
   font-family:var(--mono);box-shadow:0 4px 14px rgba(0,0,0,.6)}
@@ -159,8 +124,6 @@ body[data-screen="help"] #cv{display:none}
   letter-spacing:1.4px;text-align:left;background:transparent;white-space:nowrap}
 #ctxmenu .kit-btn:hover,#brandmenu .kit-btn:hover{background:var(--c-panel-hi)}
 
-/* above everything, menu included: the loop is stopped and nothing else on the
-   page can be true while it is */
 #halted{position:fixed;inset:0;z-index:2000;display:none;align-items:center;justify-content:center;
   background:rgba(0,0,0,.82);color:var(--c-red);font-family:var(--mono);font-size:11vw;
   font-weight:700;letter-spacing:2vw;text-indent:2vw;pointer-events:none;

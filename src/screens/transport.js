@@ -1,21 +1,16 @@
 "use strict";
-/* The transport strip - HTML now (docs/kit-api.md). trBuild()/trSync() at the
-   foot of this file mount it into #scr-operate and #scr-scenario. */
 
 const trSecs  = t => t*0.02;
 const trStamp = t => "T+"+trSecs(t).toFixed(1);
 const trName  = t => t.label || ("TAKE "+(t.id+1));
 
-/* seek() puts REC.cur on the take that OWNS a tick, so a bar drawn against
-   lineage(REC.cur) would shorten itself on a scrub past a fork. Span a
-   remembered TIP take instead; it only moves once REC.cur leaves its lineage. */
+/* a bar spanning lineage(REC.cur) would shorten itself on a scrub past a fork, so span a remembered tip take. */
 let trTip = 0;
 function trLine(){
   if(!REC.takes[trTip] || !lineage(trTip).some(t => t.id === REC.cur)) trTip = REC.cur;
   return lineage(trTip);
 }
 
-/* on-screen key and keystroke share one KEYS row; throws rather than building a dead key. */
 function trBind(sc,k){
   const q = KEYS.find(r => r.k===k && (!r.sc || r.sc===sc));
   if(!q) throw new Error("transport: no key bound to "+JSON.stringify(k)+" on "+sc);
@@ -23,22 +18,9 @@ function trBind(sc,k){
 }
 keyAdd({k:" ", sc:"operate",  lab:"PAUSE", fn:trPause});
 keyAdd({k:" ", sc:"scenario", lab:"PAUSE", fn:trPause});
-/* ══ THE TWO MULTIPLIERS ARE THE MACHINE'S, NOT A TABLE'S ══
-   4X and 16X were written down, so on a plant whose tick costs more than a
-   frame can pay they were two buttons that lied: the accumulator owed more
-   ticks and the loop paid what it could, which is faster than 1X and nothing
-   like sixteen times it. trBench() (record.js) measures what a tick costs
-   here, so the FAST slot is that figure rounded, capped at 16 - past that what
-   you want is the frame budget rather than a rate, and that is MAX - and the
-   MIDDLE slot is half of it.
-   A slot with nothing to say is ABSENT rather than dimmed: a fast slot of 1x
-   is the 1X already on the strip, and so is a middle slot of 1x. */
+/* past this a frame budget (MAX) is wanted rather than a rate. */
 const TR_FAST_CAP=16;
-/* EVEN, AND ROUNDED DOWN. Down because a rate the machine cannot quite hold is
-   the whole fault this replaced - the measurement is a ceiling, never a target
-   to round up to. Even because the middle slot is half of it, and a half slot
-   should be a whole number of plant seconds too: 9.3x measured gives 8X and
-   4X, not 9X and 4.5X. */
+/* rounded down because the measurement is a ceiling, even because the mid slot is half of it. */
 function trRateSlots(){
   const fast = TR.tickMs===null ? TR_FAST_CAP
              : Math.min(TR_FAST_CAP, Math.floor(TR.rateMax/2)*2);
@@ -46,23 +28,15 @@ function trRateSlots(){
   const mid = fast/2;
   return {mid: mid>1?mid:null, fast};
 }
-/* half of an odd fast slot is a half, so a label may carry one decimal. */
 const trRateLab = v => v==null ? "" : v===Infinity ? "MAX" : v===TR_VLD ? "VLD"
   : (Number.isInteger(v) ? v : v.toFixed(1))+"X";
-/* A KEY NAMES A SLOT, AND THE SLOT ANSWERS WITH WHAT IT HOLDS NOW - null when
-   it holds nothing, which is a key that does nothing and a cell that is not
-   drawn. Everything downstream (the strip, the deep link, the fit) asks here,
-   so there is one place that decides what this machine offers. */
+/* a slot answers null when it holds nothing: a key that does nothing and a cell that is not drawn. */
 const TR_RATES = [["0",()=>0,"0X"],["1",()=>0.2,"0.2X"],["2",()=>0.5,"0.5X"],
                   ["3",()=>1,"1X"],["4",()=>trRateSlots().mid,"MID RATE"],
                   ["5",()=>trRateSlots().fast,"FAST RATE"],
                   ["6",()=>Infinity,"MAX"],["7",()=>TR_VLD,"VLD"]];
 const trRateNow = () => TR_RATES.map(r=>r[1]());
-/* THE RATE IN YOUR HAND WHEN THE PLANT CHANGES UNDER IT. A deep link picks its
-   timescale before the prewarm it started has measured anything, and a design
-   edit can make the plant heavier while you sit at the fast slot. Called after
-   trBench(): the running rate lands on the fastest offer at or below it, so
-   the strip can never be running a rate it is not showing. */
+/* called after trBench(): a running rate no longer offered drops to the fastest offer below it. */
 function trRateFit(){
   if(typeof TR.rate!=="number" || !isFinite(TR.rate)) return;
   const have=trRateNow().filter(v=>typeof v==="number"&&isFinite(v));
@@ -78,9 +52,7 @@ TR_RATES.forEach((row,i)=>{
   keyAdd({k:row[0], sc:"operate",  lab:row[2], fn});
   keyAdd({k:row[0], sc:"scenario", lab:row[2], fn});
 });
-/* WALKS THE SLOTS THIS MACHINE OFFERS, so the step is what the strip holds
-   rather than a fixed factor. VLD is off the walk: it stops drawing the plant,
-   which is never something a nudge should do. */
+/* VLD is off the walk: it stops drawing the plant, which a nudge should never do. */
 function trRateNudge(d){
   const have=trRateNow().filter(v=>v!=null && v!==TR_VLD);
   const at=have.indexOf(TR.paused?0:TR.rate);
@@ -91,24 +63,20 @@ for(const sc of ["operate","scenario"]){
   keyAdd({k:"PageUp",   shift:true, sc, lab:"RATE +", fn:()=>trRateNudge(1)});
   keyAdd({k:"PageDown", shift:true, sc, lab:"RATE -", fn:()=>trRateNudge(-1)});
 }
-/* "," and "." are the frame-back/frame-forward pair every editing tool binds,
-   and they sit next to each other under the same finger. */
 for(const sc of ["operate","scenario"]){
   keyAdd({k:",", sc, lab:"STEP -", fn:trStepBack});
   keyAdd({k:".", sc, lab:"STEP +", fn:trStep});
 }
 
 
-/* ─────────────── build (once per screen) ─────────────── */
 function trBuild(sc){
   const mount = document.getElementById("scr-"+sc);
   if(!mount) return null;
 
   const root = KIT.el("div","trs");
 
-  // labels are written by trRateOffer(); a slot's own answer is what it says
   const rate = KIT.segSel(trRateNow().map(trRateLab),
-    {onSelect:i=>trBind(sc,TR_RATES[i][0]).fn()});   // the key's own fn, which is where the empty-slot test lives
+    {onSelect:i=>trBind(sc,TR_RATES[i][0]).fn()});
   rate.el.classList.add("trs-rate");
   KIT.tip(rate.el.children[TR_RATES.findIndex(r=>r[1]()===TR_VLD)],"VLD / VALIDATION RUN",
     "Runs as fast as MAX and stops drawing the plant while it does, so the whole frame goes into the sim - only the clock and the tick counter in the topbar keep moving. The alarms already lit when you start it are stashed; the first tile that was NOT lit then drops the run back to 1x and hands the plant back to you.");
@@ -137,8 +105,6 @@ function trBuild(sc){
   const nameEl = KIT.el("span","trs-name");
   const forkEl = KIT.el("span","trs-fork");
 
-  /* the log gets a lane of its OWN above the bar rather than marks on it: a
-     marker on the bar is a marker the hand has to miss to scrub past it */
   const track = KIT.el("div","trs-track");
   const logLane = KIT.el("div","trs-logs");
   const scrub = KIT.el("div","trs-scrub");
@@ -194,35 +160,9 @@ function trBuild(sc){
     pickSig:null,parSig:null,forkSig:null,rateSig:null};
 }
 
-/* ═══════════ THE EVENT LOG, ON THE SCRUB BAR ═══════════
-   The log is a list of moments and the scrub bar is a line of moments, so the
-   log belongs on it: the point of a recording is to go back to the second
-   something happened, and reading a time off a list and then hunting for it
-   with the hand is the long way round.
-
-   ── THEY ARE GROUPED, NOT DRAWN ON TOP OF EACH OTHER ──
-   A trip raises six entries inside a second, which on a 300 px bar is six
-   marks inside one pixel: unreadable, and the top one is the only one you can
-   ever hover. So marks landing in the same SLOT collapse into ONE, showing the
-   count instead of a symbol and carrying every message in its tooltip. The
-   severity shown is the WORST in the group - a group that hid an alarm behind
-   four control actions would be a group that lies.
-   The slot is a question about the bar's WIDTH and not about ticks, because the
-   bar is elastic and what may overlap depends on how wide it is today. */
-/* ── A MARK LANDS IN A SLOT, NEVER ON A FRACTION ──
-   The lane holds a whole number of marks and no more: TRS_SLOT px each, so the
-   bar is floor(width/TRS_SLOT) slots wide and a mark's left is an integer pixel
-   multiple of it. The old code placed each mark at (f*100).toFixed(3)+"%", which
-   is a sub-pixel offset on a transform:translateX(-50%) box - so marks landed on
-   half pixels, rendered soft, and sat at uneven gaps that changed with the
-   window width.
-
-   The slot index is also what GROUPS them, which is the point: "these two would
-   overlap" and "these two are drawn in the same place" used to be two separate
-   calculations (a fractional gap test, then a fractional position) that could
-   disagree. One integer answers both, and it cannot. */
 const TRS_SLOT=9;                                // px per mark: 8 of body, 1 of gutter
 const SEV_RANK={alarm:3,warn:2,act:1,info:0};
+/* marks sharing a slot collapse into one carrying the WORST severity, so a group cannot hide an alarm. */
 function trMarkGroups(t0,tEnd,slots){
   const out=[], span=Math.max(1,tEnd-t0);
   let g=null;
@@ -235,12 +175,9 @@ function trMarkGroups(t0,tEnd,slots){
   return out;
 }
 function trMarksSync(h,t0,tEnd){
-  /* Measured off the LANE, not off the bar: they are two boxes and only one of
-     them is the one the marks are laid out in. transport.css gives the lane a
-     transparent border to match the bar's real one, so the two content boxes are
-     the same width and a mark sits over the tick it names. */
+  /* measured off the LANE, not the bar: the marks are laid out in it, and its transparent border matches the bar's real one. */
   const wpx=h.logLane.clientWidth;
-  if(wpx<=0) return;              // a hidden screen has no width and no picture to draw
+  if(wpx<=0) return;
   const slots=Math.max(1,Math.floor(wpx/TRS_SLOT));
   const groups=trMarkGroups(t0,tEnd,slots);
   while(h.marks.length<groups.length){ const m=KIT.el("div","trs-log"); h.logLane.appendChild(m); h.marks.push(m); }
@@ -257,9 +194,6 @@ function trMarksSync(h,t0,tEnd){
   });
 }
 
-/* ─────────────── sync (cheap, every pass) ─────────────── */
-/* NO TAPE YET and the strip proper are the same four elements shown either way
-   round, so they are one write and cannot get out of step. */
 function trTape(h,on){
   KIT.setStyle(h.notape,"display",on?"none":"");
   for(const el of [h.nameEl,h.forkEl,h.track,h.clock]) KIT.setStyle(el,"display",on?"":"none");
@@ -307,9 +241,6 @@ function trPickerBuild(container,ids){
   }
 }
 
-/* Signature-gated on the offers themselves: they move once per commissioning
-   and this is a label write and a paragraph of tip text against a control that
-   changes on nothing else. */
 function trRateOffer(h){
   const vals=trRateNow(), sig=vals.join(",");
   if(sig===h.rateSig) return;
@@ -330,21 +261,12 @@ function trRateOffer(h){
 
 function trSync(h){
   if(!h) return;
-  /* Both strips are synced on one interval, and only one screen is ever up.
-     Syncing the other one is a full pass of string building and DOM writes
-     against a box with no width - which is also where the mark lane collapsed,
-     since clientWidth is 0 on a display:none subtree.
-     Against `screen` and not body.dataset.screen: the dataset is a copy layout()
-     makes for CSS, so reading it would make this depend on layout() having run.
-     A headless caller must set `screen` per strip before syncing it, or this
-     guard skips the work. */
+  /* both strips share one interval; a display:none subtree has clientWidth 0, so syncing it lays marks out wrong. */
   if(screen !== h.sc) return;
   const cur = recCur();
   h.rate.set(trRateNow().findIndex(v=>v===(TR.paused?0:TR.rate)));
   trRateOffer(h);
   h.modeEl.classList.toggle("replay", REC.mode==="replay");
-  /* the strip says which rate is running and then goes still with the rest of
-     the screen - see trQuiet() (record.js). */
   if(trQuiet()) return;
 
   const many = REC.takes.filter(Boolean).length>1;
@@ -365,10 +287,7 @@ function trSync(h){
     KIT.setText(h.forkEl, "ROOT");
   }
   h.forkEl.classList.toggle("root", !par);
-  /* KIT.tip() already refuses to WRITE a tip it has written before, but the
-     string still had to be built to find that out - and this one is a paragraph,
-     ten times a second, for a fork point that changes when you fork and never
-     otherwise. The signature is what the paragraph is made of. */
+  /* KIT.tip() dedupes writes, but the paragraph still has to be built to find that out. */
   const parSig = cur.id+":"+(par?par.id+"@"+cur.tick0:"root");
   if(parSig!==h.parSig){
     h.parSig=parSig;
@@ -394,10 +313,7 @@ function trSync(h){
     el.classList.toggle("cur", t.id===REC.cur);
   });
 
-  /* Only the branches that LEFT this line get a ring. A take's own successor is
-     one of its kids too, and it is already the next segment of the rail with its
-     own filled dot on it - ringing that as well would draw a departure where the
-     run simply carried on. */
+  /* only branches that LEFT this line get a ring; a take's own successor is already the next segment. */
   const onLine=new Set(line.map(t=>t.id));
   const gone=[];
   for(const t of line) for(const k of t.kids){
@@ -417,8 +333,7 @@ function trSync(h){
   }
 
   if(h.picker.el.classList.contains("open")){
-    /* The columns, not just the shape: LENGTH, VERDICT and ASSISTED all move
-       while the picker is held open, and a sig of ids alone left them stale. */
+    /* LENGTH, VERDICT and ASSISTED move while the picker is held open, so a sig of ids alone goes stale. */
     const sig = REC.takes.map(t=>t&&(t.id+":"+t.kids.join(",")+":"+t.tickEnd+":"+
       (t.label||"")+":"+(t.verdict||"")+":"+(t.assisted?1:0))).join("|")+"|"+REC.cur;
     if(sig!==h.pickSig){
@@ -430,10 +345,6 @@ function trSync(h){
   }
 }
 
-/* Keyed by screen rather than held in two consts, so drawOperate() can MEASURE
-   the strip it has to draw under instead of reserving a constant band for it.
-   The strip is a fixed CSS height and the plant view is in layout units, so a
-   reserve is only ever right at one window width. */
 const TRS_STRIP = {};
 const trStrip = sc => TRS_STRIP[sc] || null;
 
