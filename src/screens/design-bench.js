@@ -112,9 +112,6 @@ function planStats(d){ return [
   ["CONTAINMENT",d.nCont?((1-d.contRel)*100).toFixed(0)+" % held":"NONE",1-d.contRel,
    statRamp(1-d.contRel),
    "Fraction of a radiological release that stays inside the plant instead of reaching your crew. It is not bought: it is what the FILL found - a closed shape painted in a gas-tight material, holding back what its own weakest wall material holds back. NONE means every fill reached the hull."],
-  ["INSTRUMENT TRUST",((1-CHAN[D.chan].noise)*100).toFixed(0)+" %",1-CHAN[D.chan].noise,
-   statRamp(1-CHAN[D.chan].noise),
-   "How much you can believe your own gauges. Single-channel readings visibly jitter and a failed sensor is undetectable."],
 ];}
 function layoutStats(M){
  return [
@@ -220,8 +217,6 @@ const STATDRV={
  "CONTAINMENT":d=>["PAINT tool   "+matCells().length+" cells painted, "+d.nCont+" closed region"+(d.nCont===1?"":"s"),
    "MATERIAL + THICKNESS on the painted cell's own panel",
    "holds back   "+((1-d.contRel)*100).toFixed(0)+" %"],
- "INSTRUMENT TRUST":()=>["INSTRUMENT CHANNELS "+CHAN[D.chan].name+"   noise x"+CHAN[D.chan].noise.toFixed(2),
-   "on the CONTROL STATION panel"],
  "THERMOSIPHON HEAD":(d,M)=>["where the REACTOR stands on the grid",
    "STEAM GENERATORS   "+drvList(drvNames("sg")),
    "mean lift   "+M.head.toFixed(1)+" cells"],
@@ -1090,8 +1085,8 @@ function paramBlockMk(block){
     // directly over that surface's canvas
     case "lattools": {
       const pen=block.pen, root=KIT.el("div","db-block");
-      const r=KIT.rule(block.title); root.appendChild(r.el);
-      KIT.tip(r.el,block.title,block.tip);
+      // the heading may stand above the bar in a cell of its own (paramsFor)
+      if(block.title){ const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip); }
       const row=KIT.el("div","db-toolrow");
       /* PICKING A PEN CHANGES NO DESIGN, so dbRailSync()'s signature gate never
          reaches this block's sync() - the bar stayed lit on the last pen until
@@ -1124,7 +1119,15 @@ function paramBlockMk(block){
       return {el:box,sync(){}};
     }
     // the controller's automation: the picture and its editor, synced by ctlGraphTick() from dbHostPaint()
-    case "ctlgraph": { const g=ctlGraphMk(!!block.live); return {el:g.el,sync(){ g.sync(); }}; }
+    /* ONE HEADING, AND IT IS THIS ONE. The bench stands the cabinet under a
+       SEC("AUTOMATION") of its own, so it passes no title and gets none; the
+       control room's panel has no section above it, so it asks for one here. */
+    case "ctlgraph": { const g=ctlGraphMk(!!block.live);
+      if(!block.title) return {el:g.el,sync(){ g.sync(); }};
+      const wrap=KIT.el("div"), r=KIT.rule(block.title);
+      if(block.tip) KIT.tip(r.el,block.title,block.tip);
+      wrap.append(r.el,g.el);
+      return {el:wrap,sync(){ g.sync(); }}; }
     case "latplan": {
       const cv2=KIT.el("canvas","db-latplan-canvas"); cv2.dataset.core=block.core;
       KIT.tip(cv2,"FUEL LATTICE / PLAN",LATPLAN_TIP);
@@ -1145,6 +1148,7 @@ function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||""
 function dbPanelSync(container,blocks){
   // a stated count sets the panel width (marginColumns, ui/margin.js)
   container._cols=blocks.cols||0;
+  container._colw=blocks.colw||null;
   // plant-space bodies carry the class from birth; never strip it here
   if(blocks.some(b=>b.kind==="grid")) container.classList.add("db-body-tree");
   const sig=blockSig(blocks);
@@ -1352,7 +1356,7 @@ function dbRailSync(state){
   }
 }
 
-let DB=null;
+let DB=null, dbResOn=true;
 function dbBuild(){
   const mount=document.getElementById("scr-design");
   if(!mount) return null;
@@ -1391,14 +1395,24 @@ function dbBuild(){
   head.append(tools,pres.el);
   const rail=KIT.el("div","db-rail");
   railBlank(rail);
+  /* ══ THE VERDICT IS A READING, AND A READING MAY BE PUT AWAY ══
+     It is the tallest thing standing on the board and it is not always what the
+     designer is working on, so it gets a key of its own. On by default: the
+     mass budget and the objections are what the bench is FOR, and a reader who
+     has never pressed the key has to be able to see them. */
   const vitals=KIT.el("div","db-vitals");
-  root.append(head,vitals,rail);
+  const left=KIT.el("div","db-left");
+  const resKey=KIT.button("RESULTS",{size:8,sunk:true,on:true,
+    onClick:()=>{ dbResOn=!dbResOn; resKey.set({on:dbResOn}); KIT.show(vitals,dbResOn); uiDirty(); }});
+  KIT.tip(resKey.el,"RESULTS","The mass budget and the objections to this design. Off, the board has the room back.");
+  left.append(resKey.el,vitals);
+  root.append(head,left,rail);
   const mhost=marginHost(root);
   // before the parked windows: same z, so DOM order is what keeps a peek under one
-  const hhost=hovwHost(root);
+  const phost=selwHost(root);
   const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,rail,vitals,mhost,hhost,ihost,state:null,watch:null};
+  return {root,head,rail,vitals,mhost,phost,ihost,state:null,watch:null};
 }
 function dbSync(){
   if(!DB) return;
@@ -1461,7 +1475,7 @@ function drawDesign(){
   marginSync(DB&&DB.mhost, false);
   // AFTER the margin: both read panTick(), and the margin's call is what advances it
   inspSync(DB&&DB.ihost, false);
-  hovwSync(DB&&DB.hhost, false);
+  selwSync(DB&&DB.phost, false);
   // AFTER both syncs: the leader is drawn to where the window actually stands
   inspLeaders(DB&&DB.ihost);
   { const st=DB&&DB.state;

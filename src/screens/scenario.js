@@ -526,7 +526,7 @@ function scnBuildEventInspector(){
         inp.addEventListener("input",()=>{ const g2=SCN.gest[scnSel]; if(g2){ g2.a[i]=inp.value; scnVerd=null; } });
         argsWrap.appendChild(inp); argW.push({kind:"text",w:inp,i});
       } else {
-        const opts = A.u==="sys" ? Object.keys(AUTOSYS) : A.u==="id" ? LAY.parts.map(p=>p.id)
+        const opts = A.u==="blk" ? Object.keys(D.blocks) : A.u==="id" ? LAY.parts.map(p=>p.id)
                    : A.u==="on" ? [true,false] : null;
         const wrap=KIT.el("div","scn-insp-pick");
         const p=KIT.button("<",{flat:true,size:6.5});

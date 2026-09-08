@@ -6,9 +6,13 @@
    places that line on the track at a fixed fraction, so every bar reads the
    same shape regardless of what its own units are. */
 function crVitalsData(){
-  const s=S, m=P.rpsm, sc=s.sc;
-  const nTrip=1.10+0.22*m, dTrip=1.18-0.16*m,
-        pLo=P.P0*0.86, pHi=P.P0*(1.06+0.07*m);
+  const s=S, sc=s.sc;
+  /* READ OFF THE CHANNEL, never written out again. These four were the
+     setpoint formulas spelt a second time, and a bar filling toward a number
+     the protection system does not trip on is a bar that lies. rpsSetOf()
+     (step.js) states flux as a PERCENTAGE, and this panel wants the fraction. */
+  const nTrip=rpsSetOf("flux",0)/100, dTrip=rpsSetOf("dnbr",0),
+        pLo=rpsSetOf("plp",0), pHi=rpsSetOf("php",0);
   const toward=(now,rest,lim)=> rest===lim ? 0 : (rest-now)/(rest-lim);
   return [
    // MEGAWATTS, like every other vital on this panel: the rating is a real
@@ -851,10 +855,10 @@ function crBuild(){
 
   const mhost=marginHost(root);
   // before the parked windows: same z, so DOM order is what keeps a peek under one
-  const hhost=hovwHost(root);
+  const phost=selwHost(root);
   const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,vitalRows,units,viz,banner,rail,mhost,hhost,ihost,
+  return {root,head,vitalRows,units,viz,banner,rail,mhost,phost,ihost,
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
@@ -970,7 +974,7 @@ function drawOperate(){
   marginSync(CR&&CR.mhost, true);
   // AFTER the margin: both read panTick(), and the margin's call is what advances it
   inspSync(CR&&CR.ihost, true);
-  hovwSync(CR&&CR.hhost, true);
+  selwSync(CR&&CR.phost, true);
   // AFTER both syncs: the leader is drawn to where the window actually stands
   inspLeaders(CR&&CR.ihost);
   { const h=CR&&CR.panels&&CR.panels.find(o=>(o.fid||o.p.id)===sel);
