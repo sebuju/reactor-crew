@@ -12,12 +12,36 @@
 /* seq counts the times a picture changed size, so the panel holding one knows
    to measure itself again - a graph that got shorter must not leave the box
    it was reserved in standing empty under it. */
-const CTLV={sel:null, seq:0};
-const CG_NW=116, CG_NH=48, CG_GX=8, CG_GY=20, CG_PAD=4, CG_ROW=CG_NH+8;
+const CTLV={sel:null, seq:0, seg:null};
+/* WHICH SECTION IS OPEN. The picture draws one at a time (segIds(), ctl.js) or
+   the cabinet is one drawing of ninety blocks. A section that has been deleted
+   under the selection falls back to the first, so this can never name nothing. */
+const ctlSeg = () => { const a=segIds(); return a.includes(CTLV.seg) ? CTLV.seg : a[0]; };
+/* the blocks of the open section only. Everything downstream - the layout, the
+   wires, the studs - reads this and not the whole cabinet. */
+const ctlSegTable = T => { const sid=ctlSeg(), o={};
+  for(const id in T) if(segOf(id)===sid) o[id]=T[id];
+  return o; };
+/* CG_GY IS A LANE, NOT A GAP: the wire labels are drawn in it, so it has to be
+   deep enough for two of them (CG_LAB_H below) clear of the boxes either side.
+   At 20 a label's box started 2px above the block over it and every nudge put
+   the next one further into the block under it.
+   CG_ROWGAP is what separates the rows a single rank WRAPS onto. It was 8, and
+   a stud is 9 across and centred on the block's own edge, so the studs of two
+   stacked rows overlapped each other by a pixel - measured 12 collisions on the
+   protection graph. It also has to hold a wire label, because a rank that
+   wraps puts two rows in front of the wires crossing them, so it is CG_LAB_H
+   plus clearance and not merely more than a stud. */
+const CG_NW=116, CG_NH=48, CG_GX=8, CG_GY=28, CG_PAD=4, CG_ROWGAP=18, CG_ROW=CG_NH+CG_ROWGAP;
 /* the narrowest a whole controller may be drawn in. A cabinet holds several -
    a rod loop, a feed loop, a relief valve - and stacking them is what made the
    section a screen tall, so a panel wide enough stands them side by side. */
 const CG_COMPW=248, CG_COLGAP=14, CG_STUD=9;
+/* ONE WIRE LABEL'S HEIGHT, and it is what the anti-overlap nudge steps by. It
+   was 9, which is the type size and not the line: the label carries a 3px
+   panel-coloured halo (paint-order:stroke, CSS) so its box is taller than its
+   glyphs, and two labels stacked 9 apart still touched. */
+const CG_LAB_H=12;
 
 /* the table the picture reads: the live block in the control room, the design
    on the bench. Same shape either way - mode, in, on, knobs. */
@@ -59,7 +83,7 @@ function ctlLayComp(T,comp,w){
     ids.forEach((id,i)=>{ const row=(i/perRow)|0, col=i%perRow, n=Math.min(perRow,ids.length-row*perRow);
       const x0=(w-(n*(CG_NW+CG_GX)-CG_GX))/2;
       pos[id]={x:x0+col*(CG_NW+CG_GX), y:y+row*CG_ROW}; });
-    y+=rows*CG_ROW-8+CG_GY;
+    y+=rows*CG_ROW-CG_ROWGAP+CG_GY;   // the last row of a rank pays the lane, not the wrap gap
   }
   return {pos, h:Math.max(CG_NH, y-CG_GY)};
 }
@@ -93,9 +117,30 @@ const blkArgName=b=>{ if(b.arg==null) return ""; const p=partOf(b.arg); return p
 /* "b6" is a key, not a word: everywhere a block is named to the player it is
    named by what it does, and the key rides along as BLOCK 6. */
 const blkNo=id=>"BLOCK "+blkNum(id);
-function blkTitle(T,id){ const b=T[id]; if(!b) return blkNo(id);
+/* WHAT IT DOES IS ONLY THE DEFAULT NAME. A cabinet of eight SUBs is eight
+   blocks called SUB, so the player may name one and the name wins wherever
+   the block is spelt out - the box, the title, a wire picker, the strip key
+   that owns the demand. nameFor() (layout.js) is the same door a machine's
+   name comes through, so a block rides designSig() and the save format free. */
+const blkWord=(id,b)=>nameFor(id, blkName(b));
+/* ONLY EVER SMALLER, the same bargain stripPlan() strikes on a control strip:
+   a name the player set may be twenty-four characters and the box is one
+   width, so the TYPE comes down to meet the word rather than the word being
+   cut off halfway. Asked only when the text CHANGES - ninety boxes measuring
+   themselves every frame is a forced layout in the middle of a drag. */
+const CG_NAME_PX=[null,10,9,8];
+function fitName(el){
+  el.style.fontSize="";
+  for(const px of CG_NAME_PX){
+    if(px) el.style.fontSize=px+"px";
+    if(el.scrollWidth<=el.clientWidth+1) return;
+  }
+}
+function blkDflt(T,id){ const b=T[id]; if(!b) return blkNo(id);
   const arg=blkArgName(b), kind=BLK[b.mode]?BLK[b.mode].lab:b.mode;
-  return blkName(b)+(arg?" "+arg:"")+(blkName(b)===kind?"":" ("+kind+")")+" · "+blkNo(id); }
+  return blkName(b)+(arg?" "+arg:"")+(blkName(b)===kind?"":" ("+kind+")"); }
+function blkTitle(T,id){ if(!T[id]) return blkNo(id);
+  return nameFor(id, blkDflt(T,id))+" · "+blkNo(id); }
 /* the tooltip is the block's own paper: what it is, what it is of, what is
    wired into every slot. Never its value - the box already carries that live,
    and a tooltip built at pointerover would sit there going stale. */
@@ -137,13 +182,22 @@ function blkSpec(b){
 }
 function ctlPicMk(live){
   const root=KIT.el("div","ctlg-pic");
+  /* A PRESS ON BARE DECK LETS THE BLOCK GO, and with it the window standing
+     over it. The listener is on the picture and not on the page: a document
+     handler would close the editor on every press anywhere on the ship. A
+     press on a block, a stud or the window itself is that thing's own. */
+  MOUSE.on(root,{click(e){
+    if(e.target.closest(".ctlg-blk,.ctlg-stud,.ctlg-ed-win")) return;
+    CTLV.sel=null;
+  }});
   let sig=null, box={}, runs=[], lastPos={}, rubber=null, drag=null;
   /* the cabinet's shape, and nothing that moves inside it: a value changing
      must never cost a rebuild, and the width must always cost one */
   const shape=(T,w)=>{ const a=[live?1:0,Math.round(w/8)];
     for(const id in T){ const b=T[id]; a.push(id,b.mode,b.sig||"",b.sink||"",b.arg==null?"":b.arg,b.op||"",b.in.join(">")); }
     return a.join("|"); };
-  const build=(T,w,s)=>{
+  const build=(T,w,s,ALL)=>{
+    ALL=ALL||T;
     root.innerHTML=""; box={}; runs=[];
     const L=ctlLayout(T,w); lastPos=L.pos;
     if(root.style.height!==L.h+"px"){ root.style.height=L.h+"px"; CTLV.seq++; }
@@ -155,18 +209,51 @@ function ctlPicMk(live){
       ln.setAttribute("x1",CG_PAD); ln.setAttribute("x2",w-CG_PAD); ln.setAttribute("y1",sy); ln.setAttribute("y2",sy); sv.appendChild(ln); }
     const placed=[];
     for(const id in T){ const b=T[id], c=L.pos[id];
-      b.in.forEach((src,i)=>{ if(!src||!T[src]||!L.pos[src]) return;
-        const a=L.pos[src], n=b.in.length;
+      b.in.forEach((src,i)=>{ if(!src||!ALL[src]) return;
+        const n=b.in.length;
+        /* A WIRE FROM ANOTHER SECTION IS STILL A WIRE. Drawing only what is on
+           this tab would make the picture lie about where a block's reading
+           comes from, so it is drawn as a stub into the stud, labelled with the
+           block it comes from and the section that holds it. */
+        if(!T[src]||!L.pos[src]){
+          const x1=c.x+CG_NW*(i+1)/(n+1), y1=c.y, g=svgEl("g","ctlg-wire ctlg-xseg");
+          const pl=svgEl("polyline"); pl.setAttribute("points",[x1+","+(y1-CG_GY),x1+","+y1].join(" ")); g.appendChild(pl);
+          const hd=svgEl("polygon","ctlg-head"); hd.setAttribute("points",[x1+","+y1,(x1-3)+","+(y1-5),(x1+3)+","+(y1-5)].join(" ")); g.appendChild(hd);
+          const t=svgEl("text","ctlg-wire-lab");
+          t.setAttribute("x",x1); t.setAttribute("y",y1-CG_GY-2);
+          t.textContent=blkWord(src,ALL[src])+" · "+segName(segOf(src));
+          g.appendChild(t); sv.appendChild(g);
+          return;
+        }
+        const a=L.pos[src];
         const x0=a.x+CG_NW/2, y0=a.y+CG_NH, x1=c.x+CG_NW*(i+1)/(n+1), y1=c.y;
         const ym=y1>y0 ? y1-CG_GY/2 : y0+CG_GY/2;
         const g=svgEl("g","ctlg-wire");
         const pl=svgEl("polyline"); pl.setAttribute("points",[x0+","+y0,x0+","+ym,x1+","+ym,x1+","+y1].join(" ")); g.appendChild(pl);
         const hd=svgEl("polygon","ctlg-head"); hd.setAttribute("points",[x1+","+y1,(x1-3)+","+(y1-5),(x1+3)+","+(y1-5)].join(" ")); g.appendChild(hd);
         /* a label per wire, nudged down off any label already at that spot -
-           the same pricing the canvas did, on an estimate of the glyph width */
-        const t=svgEl("text","ctlg-wire-lab"), lx=(x0+x1)/2; let ly=ym-3;
-        const wide=id=>String(blkSub(T,id,s)).length*4.6;
-        for(let k=0;k<4;k++){ if(!placed.some(r=>Math.abs(r.x-lx)<(r.w+wide(src))/2+3 && Math.abs(r.y-ly)<9)) break; ly+=9; }
+           the same pricing the canvas did, on an estimate of the glyph width.
+           MEASURED ON THE STRING sync() WILL ACTUALLY DRAW: the bench label is
+           the unit and the control room's is the value, and pricing both as
+           the value left the bench's labels overlapping at narrow widths. */
+        const t=svgEl("text","ctlg-wire-lab"), lx=(x0+x1)/2;
+        /* THE LABEL SITS AT THE END IT ARRIVES AT, in the lane immediately above
+           the block that reads it - not at the middle of the wire. A wire from
+           a source down to the second wrapped row of the next rank crosses a
+           whole row of boxes, and its midpoint is inside one of them: the box
+           is opaque and painted after the wires, so the label was simply gone.
+           It also reads better there, beside the input it is feeding.
+           The nudge may only move inside that lane, and where the lane is full
+           it stops rather than stepping out of it. */
+        const down=y1>y0;
+        const laneBot=down ? y1-2 : Math.max(y0,y1)-2;
+        const laneTop=down ? y1-CG_GY+CG_LAB_H : Math.min(y0,y1)+CG_LAB_H;
+        let ly=clamp(ym-3, Math.min(laneTop,laneBot), laneBot);
+        const wide=id=>(live ? String(blkSub(T,id,s)) : (blkLabel(s,id).u||"")).length*4.6;
+        for(let k=0;k<10;k++){
+          if(!placed.some(r=>Math.abs(r.x-lx)<(r.w+wide(src))/2+3 && Math.abs(r.y-ly)<CG_LAB_H)) break;
+          if(ly+CG_LAB_H>laneBot) break;
+          ly+=CG_LAB_H; }
         placed.push({x:lx,y:ly,w:wide(src)});
         t.setAttribute("x",lx); t.setAttribute("y",ly); g.appendChild(t);
         sv.appendChild(g);
@@ -179,11 +266,12 @@ function ctlPicMk(live){
       el.style.width=CG_NW+"px"; el.style.height=CG_NH+"px";
       el.classList.add("m-"+T[id].mode);
       const nm=KIT.el("span","ctlg-blk-name"), sub=KIT.el("span","ctlg-blk-sub"), spec=KIT.el("span","ctlg-blk-spec");
-      nm.textContent=blkName(T[id]); el.append(nm,sub,spec);
+      nm.textContent=blkWord(id,T[id]); el.append(nm,sub,spec);
       KIT.tip(el,blkTitle(T,id),blkTipBody(T,id,s));
       el.dataset.blk=id;
       MOUSE.on(el,{click(){ CTLV.sel = CTLV.sel===id ? null : id; }});
-      root.appendChild(el); box[id]={el,sub,spec};
+      root.appendChild(el); box[id]={el,nm,sub,spec};
+      fitName(nm);   // AFTER it is on the page: an element out of the document measures 0 and fits anything
       /* THE HANDLES A WIRE IS DRAWN BY. A wire is geometry, so it is dragged
          like a pipe: out of the stud under a block, into one of the studs on
          top of the block that reads it. Dragging a wired input stud picks the
@@ -261,14 +349,18 @@ function ctlPicMk(live){
     rubber.setAttribute("points",[x0+","+y0, drag.p.x+","+drag.p.y].join(" "));
   }
   function sync(){
-    const T=ctlTable(live), w=root.clientWidth;
-    if(!T||w<=0){ if(sig!==null){ root.innerHTML=""; sig=null; box={}; runs=[]; rubber=null; } return; }
-    const s=live?S:null, nsig=shape(T,w);
-    if(nsig!==sig){ sig=nsig; build(T,w,s); rubberDraw(); }
+    const ALL=ctlTable(live), w=root.clientWidth;
+    if(!ALL||w<=0){ if(sig!==null){ root.innerHTML=""; sig=null; box={}; runs=[]; rubber=null; } return; }
+    // ONE SECTION AT A TIME. The whole cabinet is still what a wire may reach.
+    const T=ctlSegTable(ALL);
+    const s=live?S:null, nsig=ctlSeg()+"|"+shape(T,w);
+    if(nsig!==sig){ sig=nsig; build(T,w,s,ALL); rubberDraw(); }
     root.classList.toggle("dead",!!(live&&!ctlLive(S)));
     for(const id in box){ const b=T[id], o=box[id];
       o.el.classList.toggle("sel",CTLV.sel===id);
       o.el.classList.toggle("off",!b.on);
+      // a rename does not move a box, so the picture is not rebuilt for one - but the type has to be refitted to it
+      { const nm=blkWord(id,b); if(o.nm.textContent!==nm){ o.nm.textContent=nm; fitName(o.nm); } }
       o.sub.textContent=blkSub(T,id,s);
       o.spec.textContent=blkSpec(b);
     }
@@ -276,7 +368,7 @@ function ctlPicMk(live){
       r.g.classList.toggle("off",!on);
       r.t.textContent = live ? blkSub(T,r.src,s) : (blkLabel(s,r.src).u||""); }
   }
-  return {el:root, sync};
+  return {el:root, sync, pos:()=>lastPos};
 }
 
 /* ══ THE WRITERS ══ one pair of doors, so the bench and the control room
@@ -310,17 +402,33 @@ function ctlPick(label,items,cur,onPick,tips){
 }
 function ctlEditorMk(live){
   const root=KIT.el("div","ctlg-ed"); let sig=null, P_={};
-  /* the box keeps its height whether or not a block is picked: an editor that
-     grows and shrinks under the picture moves the picture out from under the hand */
+  /* The box keeps its height whether or not a block is picked: an editor that
+     grows and shrinks under the picture moves the picture out from under the
+     hand. Empty, it says nothing - it used to stand a line of instructions
+     open for ever, which is a sentence you read once and then look past for
+     the rest of the game. The instruction is on the box, in its tooltip,
+     where every other explanation in this project lives. */
   const hint=KIT.el("div","ctlg-hint");
-  hint.textContent="Click a block in the picture to wire it, tune it or switch it off.";
+  KIT.tip(hint,"BLOCK","Click a block in the picture to wire it, tune it, name it, move it to another section or switch it off.");
   root.appendChild(hint);
   const build=(id,b)=>{ root.innerHTML=""; P_={}; const m=BLK[b.mode];
-    const r=KIT.rule(blkTitle(ctlTable(live)||{},id)); KIT.tip(r.el,m.lab,m.tip); root.appendChild(r.el);
+    /* THE HEADING IS THE NAME FIELD, the same bargain dbNameWell() strikes on
+       a machine: the derived name is the placeholder, so a blank box still
+       reads as the block it is, and BLOCK n stays in the suffix where it
+       cannot be typed over. A name is design data, so the bench writes it and
+       the live cabinet only reads it. */
+    const dflt=blkDflt(ctlTable(live)||{},id);
+    const r=KIT.rule(dflt, live?null:{edit:{maxLength:NAME_CAP,onChange:v=>{ setPartName(id,v); dTouch(); }}});
+    r.setSfx(blkNo(id)); if(!live) r.setVal(nameFor(id,""));
+    KIT.tip(r.input||r.el, live?m.lab:"NAME",
+      live?m.tip:"Type to name this block. Clear the box and it goes back to \""+dflt+"\". The name follows it onto the machine strip that says who owns the demand.");
+    root.appendChild(r.el);
+    /* THE SWITCH AND THE BIN STAND IN THE HEADING, beside the name they act on
+       - as a row of their own they were two keys costing a line in a window
+       232px wide. */
     const onB=KIT.button("ON",{flat:true,size:7,tip:"Whether this block computes. Off, its output holds and any sink under it lets go of its demand.",onClick:()=>ctlOn(live,id)});
-    P_.on=onB; const head=[onB.el];
-    if(!live){ const del=KIT.button("REMOVE",{flat:true,size:7,danger:true,tip:"Takes this block out of the cabinet and unwires everything that read it.",onClick:()=>{ removeBlock(id); CTLV.sel=null; }}); head.push(del.el); }
-    root.appendChild(ctlRow(null,...head));
+    P_.on=onB; r.el.appendChild(onB.el);
+    if(!live) r.el.appendChild(KIT.button("REMOVE",{flat:true,size:7,danger:true,tip:"Takes this block out of the cabinet and unwires everything that read it.",onClick:()=>{ removeBlock(id); CTLV.sel=null; }}).el);
     if(!live){ const mp=ctlPick("KIND",BLK_MODES.map(k=>BLK[k].lab),BLK_MODES.indexOf(b.mode),i=>{ setBlockMode(id,BLK_MODES[i]); },BLK_MODES.map(k=>BLK[k].tip)); root.appendChild(ctlRow(null,mp.el)); }
     if(b.mode==="source"){ const keys=Object.keys(SIGNAL);
       P_.sig=ctlPick("SIGNAL",keys.map(k=>SIGNAL[k].lab+(SIGNAL[k].u?" ("+SIGNAL[k].u+")":"")+" · "+SIGNAL[k].scope),keys.indexOf(b.sig),i=>ctlWrite(live,id,"sig",keys[i]));
@@ -333,7 +441,14 @@ function ctlEditorMk(live){
       if(args.length){ const names=args.map(a=>{ const p=partOf(a); return p?partName(p):String(a).toUpperCase(); });
         P_.arg=ctlPick("OF",names,args.indexOf(b.arg),i=>ctlWrite(live,id,"arg",args[i])); P_.args=args;
         root.appendChild(ctlRow(null,P_.arg.el)); } }
-    if(b.mode==="math"||b.mode==="sel"){ const ops=b.mode==="math"?MATH_OPS:SEL_OPS;
+    /* WHICH TAB THIS BLOCK IS DRAWN UNDER, and that is all it changes: moving a
+       block cuts no wire and alters nothing it computes. Bench only, like every
+       other design fact in this panel. */
+    if(!live){ const sids=segIds().slice();
+      P_.seg=ctlPick("SECTION",sids.map(segName),sids.indexOf(segOf(id)),
+        i=>{ D.blocks[id].seg=sids[i]; CTLV.seg=sids[i]; dTouch(); });
+      P_.segIds=sids; root.appendChild(ctlRow(null,P_.seg.el)); }
+    if(OPS_OF[b.mode]){ const ops=OPS_OF[b.mode];
       P_.op=ctlPick("OP",ops.map(o=>o.toUpperCase()),ops.indexOf(b.op),i=>ctlWrite(live,id,"op",ops[i])); P_.ops=ops;
       root.appendChild(ctlRow(null,P_.op.el)); }
     // inputs: any other block, by what it says
@@ -353,20 +468,22 @@ function ctlEditorMk(live){
       P_.num[k]=n; kb.appendChild(ctlRow(k.toUpperCase(),n.el)); }
     if(kb.children.length) root.appendChild(kb);
   };
-  /* the floor only ever rises: the tallest editor this cabinet has shown is the
-     height every other one is padded to, so picking a block never moves anything */
-  let edMax=0;
-  const edFit=()=>{ const h=root.offsetHeight; if(h>edMax){ edMax=h; root.style.minHeight=h+"px"; } };
+  /* NO HEIGHT FLOOR. It padded every editor to the tallest one this cabinet had
+     shown, so that picking a block could not move the picture below it. The
+     editor floats over the picture now and moves nothing, so the padding was
+     only ever empty box under a short block's knobs. */
   function sync(){
     const T=ctlTable(live), id=CTLV.sel;
     if(!id||!T||!T[id]){ if(sig!==null){ root.innerHTML=""; root.appendChild(hint); sig=null; } return; }
-    const b=T[id], nsig=id+"|"+b.mode+"|"+(b.sig||"")+"|"+(b.sink||"")+"|"+Object.keys(T).join(",")+"|"+live;
-    if(nsig!==sig){ sig=nsig; build(id,b); edFit(); }
+    const b=T[id], nsig=id+"|"+b.mode+"|"+(b.sig||"")+"|"+(b.sink||"")+"|"+Object.keys(T).join(",")+"|"+live
+      +"|"+(live?"":segIds().join(",")+segIds().map(segName).join(","));
+    if(nsig!==sig){ sig=nsig; build(id,b); }
     P_.on.set({label:b.on?"ON":"OFF", on:!!b.on});
     if(P_.sig) P_.sig.set(P_.sigKeys.indexOf(b.sig));
     if(P_.sink) P_.sink.set(SINK_KEYS.indexOf(b.sink));
     if(P_.arg) P_.arg.set(P_.args.indexOf(b.arg));
     if(P_.op) P_.op.set(P_.ops.indexOf(b.op));
+    if(P_.seg) P_.seg.set(P_.segIds.indexOf(segOf(id)));
     P_.ins.forEach((o,slot)=>o.pk.set(o.others.indexOf(b.in[slot])+1));
     for(const k in P_.num){ const v=b[k]; P_.num[k].set(v==null?null:v); if(BLK[b.mode].knobs[k]===null) P_.num[k].setAuto(v==null); }
   }
@@ -376,23 +493,125 @@ function ctlEditorMk(live){
 /* ══ THE PANEL SECTION ══ the picture, and the editor beside it where the
    panel is wide enough to stand them side by side (CSS, .ctlg-cols). */
 const CTLG=new Set();
+/* ══ THE TABS ══ one per section, flat, the open one lit and underlined. The
+   OPEN tab IS the name field on the bench: a tab is the section, so the place
+   to type its name is the tab, not a heading above the row that says the same
+   word twice. rule()'s `edit` strikes exactly this bargain for a machine's
+   title bar; this is a text input for the same reason, in the same shape.
+   The control room only turns the pages - a section is design data.
+   NOTHING IS REBUILT WHEN A TAB IS CLICKED. The strip is built from the
+   section LIST and from nothing else; opening a tab moves the one name field
+   into it and toggles two classes. Rebuilding on the open tab tore down every
+   element on every click, and the new field spent one frame empty, so the tab
+   flashed to the width of its default name before the real one arrived. */
+const segDflt = sid => SEG_LAB+" "+(segIds().indexOf(sid)+1);
+function ctlTabsMk(live){
+  const bar=KIT.el("div","ctlg-tabs"); let sig=null, tabs=[];
+  /* ONE FIELD FOR THE WHOLE STRIP, made once and moved. Made per tab it would
+     be destroyed and remade on every switch, which is a focus and a cursor
+     position thrown away. */
+  const inp = live ? null : KIT.textInput({bare:true, cls:"ctlg-tab-input", maxLength:NAME_CAP,
+    onChange:v=>{ setPartName(ctlSeg(),v); dTouch(); }});
+  if(inp) KIT.tip(inp.el,"SECTION NAME","Type to name this section. Clear the box and it goes back to its number. A section is a tab and nothing else: it decides which blocks are drawn together and never what any of them computes.");
+  function build(){
+    bar.innerHTML=""; tabs=[];
+    /* THE TABS WRAP AMONG THEMSELVES; THE KEYS NEVER WRAP. In one flat wrapping
+       row the spacer that pinned the keys right was itself wrappable, so a
+       strip nearly full of tabs threw + and - onto a line of their own. The
+       tabs get their own growing row and the keys stand beside it. */
+    const list=KIT.el("div","ctlg-tabs-list"); bar.appendChild(list);
+    for(const sid of segIds()){
+      /* THE LABEL IS ALWAYS THE THING THAT HAS THE WIDTH. Open or shut, a tab
+         is the same element holding the same span, and the field on the open
+         one is laid OVER that span rather than in place of it. */
+      const t=KIT.el("div","ctlg-tab",{role:"button",tabindex:"0"});
+      const lab=KIT.el("span","ctlg-tab-lab"); lab.textContent=segName(sid);
+      t.appendChild(lab);
+      KIT.tip(t,segName(sid),"Show this section of the cabinet. A section is a named set of blocks and nothing else - it decides which tab a block is drawn under and never what it computes.");
+      MOUSE.on(t,{click:()=>{ CTLV.seg=sid; CTLV.sel=null; }});
+      list.appendChild(t); tabs.push({sid,el:t,lab});
+    }
+    /* ADD AND DROP A SECTION, at the right edge of the strip and outside the
+       row that wraps. They are one glyph each because they are not tabs and
+       must not read as one more page to turn; what they do is in the tooltip,
+       where every other explanation on this panel lives. */
+    if(!live){
+      const key=(label,tip,fn)=>{ const k=KIT.button(label,{flat:true,size:7,tip,onClick:fn});
+        k.el.classList.add("ctlg-tab-key"); bar.appendChild(k.el); };
+      key("+","ADD A SECTION - a new, empty tab. Blocks you add land in whichever section is open, and a block already placed is moved with the SECTION key in its own panel.",
+        ()=>{ CTLV.seg=segMint(); CTLV.sel=null; });
+      key("-","DROP THE OPEN SECTION - its blocks are NOT deleted. They come home to the first section with their wiring untouched. The last section cannot be dropped.",
+        ()=>{ if(segRemove(ctlSeg())){ CTLV.seg=null; CTLV.sel=null; } });
+    }
+  }
+  let lastOpen=null;
+  return {el:bar, sync(){
+    const nsig=segIds().join(",")+"|"+live;
+    if(nsig!==sig){ sig=nsig; build(); }
+    const open=ctlSeg();
+    /* THE FIELD LETS GO WHEN THE SECTION UNDER IT CHANGES. set() refuses to
+       write a focused box - which is what stops a sync overwriting what is
+       being typed - so a field still holding focus would keep the old
+       section's name and rename the NEW section with it on the next key. */
+    if(inp && lastOpen!==open){
+      if(document.activeElement===inp.input) inp.input.blur();
+      lastOpen=open;
+    }
+    /* AND IT IS FILLED BEFORE IT IS READ. Read first and it answers with an
+       empty string on the frame it lands in, and the label takes the default
+       name's width for one frame - the flash. */
+    if(inp){ inp.set(nameFor(open,"")); inp.setPlaceholder(segDflt(open)); }
+    for(const r of tabs){
+      const on=r.sid===open;
+      r.el.classList.toggle("on",on);
+      r.el.classList.toggle("edit",on&&!!inp);
+      if(on&&inp&&inp.el.parentNode!==r.el) r.el.appendChild(inp.el);
+      const nm = (on&&inp) ? (inp.get()||segDflt(r.sid)) : segName(r.sid);
+      if(r.lab.textContent!==nm) r.lab.textContent=nm;
+    }
+  }};
+}
 function ctlGraphMk(live){
   const root=KIT.el("div","ctlg");
-  const hd=KIT.rule("AUTOMATION");
-  KIT.tip(hd.el,"AUTOMATION","Every block in this cabinet, sources at the top, the demands they drive at the bottom. Each controller stands in its own column. A wire says what it carries. Hover a block to read it, click it to wire it, tune it or switch it off"+(live?".":"; ADD puts a new one in."));
-  root.appendChild(hd.el);
-  const cols=KIT.el("div","ctlg-cols"), side=KIT.el("div","ctlg-side");
+  /* NO HEADING HERE. The panel that hosts this section already draws one -
+     AUTOMATION, on the bench and in the control room alike - and this drew a
+     second one directly under it saying the same word. */
+  const tabs=ctlTabsMk(live); root.appendChild(tabs.el);
+  const cols=KIT.el("div","ctlg-cols");
   const pic=ctlPicMk(live);
-  cols.append(pic.el,side); root.appendChild(cols);
-  if(!live){ const mk=KIT.menuKey({label:"ADD BLOCK",tip:"A new block in the cabinet. Pick its kind; wire it from its own row after."});
-    const ol=KIT.optList(BLK_MODES.map(k=>({name:BLK[k].lab,tip:BLK[k].tip})),{onSelect:i=>{ CTLV.sel=mintBlock(BLK_MODES[i]); KIT.show(mk.menu,false); mk.key.set({on:false}); }});
-    mk.menu.appendChild(ol.el); side.appendChild(ctlRow(null,mk.el)); }
-  const ed=ctlEditorMk(live); side.appendChild(ed.el);
-  const g={el:root, live, sync(){ pic.sync(); ed.sync(); }};
+  cols.append(pic.el); root.appendChild(cols);
+  /* ══ ADD BLOCK FLOATS OVER THE PICTURE ══ as a row of its own it cost the
+     panel a whole line of height for one key, and the cabinet is the tallest
+     section on the bench already. It hangs off `cols`, not off the picture,
+     because the picture wipes its own contents on every rebuild. Adding and
+     dropping a SECTION belongs to the tab strip and lives there. */
+  if(!live){ const keys=KIT.el("div","ctlg-keys");
+    const mk=KIT.menuKey({label:"ADD",cls:"ctlg-add",tip:"ADD A BLOCK, in the section that is open. Pick its kind; wire it from its own row after."});
+    const ol=KIT.optList(BLK_MODES.map(k=>({name:BLK[k].lab,tip:BLK[k].tip})),{onSelect:i=>{ CTLV.sel=mintBlock(BLK_MODES[i],ctlSeg()); KIT.show(mk.menu,false); mk.key.set({on:false}); }});
+    mk.menu.appendChild(ol.el); keys.appendChild(mk.el);
+    cols.appendChild(keys); }
+  /* ══ THE EDITOR IS A WINDOW ON THE BLOCK, NOT A COLUMN BESIDE THE PICTURE ══
+     It stood in its own column under the drawing, so the block being edited
+     and the box you edited it in were at opposite ends of a tall panel and the
+     eye had to carry the name between them. It opens at the block instead, to
+     its right where the picture has room and to its left where it has not, and
+     it is not there at all while nothing is picked. */
+  const ed=ctlEditorMk(live); ed.el.classList.add("ctlg-ed-win"); cols.appendChild(ed.el);
+  function edPlace(){
+    const p=CTLV.sel && pic.pos()[CTLV.sel];
+    KIT.show(ed.el, !!p); if(!p) return;
+    const W=pic.el.clientWidth, H=pic.el.clientHeight;
+    const w=ed.el.offsetWidth||230, h=ed.el.offsetHeight||120;
+    let x=p.x+CG_NW+8; if(x+w>W) x=p.x-w-8;
+    ed.el.style.left=clamp(x,0,Math.max(0,W-w))+"px";
+    ed.el.style.top =clamp(p.y,0,Math.max(0,H-h))+"px";
+  }
+  const g={el:root, live, sync(){ tabs.sync(); pic.sync(); ed.sync(); edPlace(); }};
   CTLG.add(g); return g;
 }
 /* the bench's frame: sync every section still on the page */
 function ctlGraphTick(){
   for(const g of CTLG){ if(!g.el.isConnected){ CTLG.delete(g); continue; } if(g.live) continue; g.sync(); }
 }
-const CTLGRAPH_LIVE=[{kind:"ctlgraph",title:"AUTOMATION",live:true}];
+const CTLGRAPH_LIVE=[{kind:"ctlgraph",title:"AUTOMATION",live:true,
+  tip:"Every block in this cabinet, one section to a tab, sources at the top and the demands they drive at the bottom. A wire says what it carries. Hover a block to read it, click it to wire it, tune it or switch it off."}];
