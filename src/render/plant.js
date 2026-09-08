@@ -790,7 +790,7 @@ function symAt(p,x,y,w,h,ink,L){
        the only place it was stated, and a supply that can carry half the pumps
        looked identical on the mimic to one that can carry all of them */
     const cap = L? P.backup : BKP[D.bkp].bk;
-    const dead = L && (L.bkpLost || !autoLive("bkp"));
+    const dead = L && (L.bkpLost || !(P.backup>0));
     const bx2=X+4, by2=Y+Hh-13, bw2=W-8, n=6, cw2=bw2/n;
     for(let i=0;i<n;i++){
       const lit=(i+.5)/n<=clamp(cap,0,1);
@@ -1237,8 +1237,12 @@ function partStateWord(p){
     if(mode==="throttle") return (S.valve[p.id]??1)<0.005 ? "SHUT" : null;
     return null;
   }
-  const k=autoOn(p.id);
-  return k && autoFit(k) && S.byp[k] ? "BYP" : null;
+  /* A box is marked BYP when a system it hosts is wired and switched off - the
+     control cabinet's protection, the turbine's runback. There is no AUTOSYS
+     row to look it up in any more, so the two are asked directly. */
+  if(p.role==="ctrl"  && rpsState()==="BYPASSED") return "BYP";
+  if(p.role==="turb"  && sinkWired(S,"runback",null) && !runbackLive()) return "BYP";
+  return null;
 }
 function ctlBase(p,live,split){
   if(p.role==="tank") return tankCtl(p.id);
@@ -1435,21 +1439,11 @@ function ctlBase(p,live,split){
   return null;
 }
 
-/* ══ AND THE ARMING SWITCH IS A CONTROL LIKE ANY OTHER ══
-   It used to be drawn by the component loop as a row of its own, one rung
-   below the strip - so with the strip gone it would have gone with it.
-   It is a row of ctlFor() instead, which is the one table, and it therefore
-   reaches the panel by the same door every other key does. An unfitted system
-   still gets its switch, drawn dead: there is nothing to arm, and saying so
-   is what the old `none` state on the box said. */
-function bypCell(k){
-  const A=AUTOSYS[k];
-  return {kind:"arm",flex:1,k:"byp:"+k,def:false,name:A.name,label:()=>A.label,
-    on:()=>autoFit(k)&&S.byp[k], inert:!autoFit(k),
-    fn:()=>{ act("byp",k); },
-    title:()=>A.name+"  [ "+autoState(k)+" ]",
-    tip:A.tip+(autoFit(k)?"":" None was fitted at the design bench, so there is nothing to arm and nothing to bypass.")};
-}
+/* ══ AND THE ARMING SWITCH IS THE BLOCK'S OWN SWITCH ══
+   bypCell() and its D.start["byp:*"] starting positions are gone with AUTOSYS.
+   An automatic system is a graph now, so arming one is switching the block
+   that drives it, and drivenRows() below already draws exactly that key on the
+   machine whose demand it owns. One switch, on the box that feels it. */
 /* A port belongs to the box it stands on, so its handle is in that box's panel;
    the ten-pixel mark on the drawing still works and is the same act. */
 /* ══ WHAT THE NOZZLE IS ACTUALLY PASSING ══
@@ -1499,26 +1493,37 @@ function portCtlRows(p){
 /* ══ THE STRIP SAYS WHO IS DRIVING ══ a demand a block owns is marked on the
    machine's own strip, and the key is the way to take it back: it switches
    that block off, which is an act like any other (decision 6, the plan). */
-const DRIVEN_TIP="A block in the control room owns this demand. The control still draws and still moves, but what it shows is the block's order. Press to switch that block OFF and take the demand back by hand; switch it on again from the control room's own panel.";
+const DRIVEN_TIP="A block in the control room is wired to this demand. Switched ON it owns the demand - the control still draws and still moves, but what it shows is the block's order. Press to switch that block OFF and take the demand back by hand, and press again to hand it back.";
 function drivenRows(p){
   const pairs=[], m=D.machines[p.id];
   if(p.role==="rods"&&m&&m.on) pairs.push(["rodStep",m.on]);
   if(p.role==="pump") pairs.push(["flowDem",p.id]);
-  if(p.role==="turb"&&LAY.parts.find(q=>q.role==="turb")===p) pairs.push(["loadDem",null]);
+  /* THE PROTECTION SYSTEM'S OWN SWITCH, on the vessel it protects: this is
+     where the RPS bypass key used to be and it is the same gesture, except
+     that what it switches is the block the player can see. */
+  if(p.role==="core"){ pairs.push(["scram",p.id]); pairs.push(["nearTrip",p.id]); }
+  if(p.role==="turb"&&LAY.parts.find(q=>q.role==="turb")===p){ pairs.push(["loadDem",null]); pairs.push(["runback",null]); }
   if(p.role==="sg") pairs.push(["freg",p.id]);
   if(p.role==="tank") pairs.push(["tankOpen",p.id]);
   if(p.role==="fitting"){ const j=P&&P.fittings[p.id];
     if(j&&j.mode==="relief"&&!j.spring) pairs.push(["relief",p.id]);
     if(j&&j.mode==="throttle") pairs.push(["valveDem",p.id]); }
   const cells=[];
-  for(const [sink,arg] of pairs){ const id=sinkDriver(S,sink,arg); if(!id) continue;
-    cells.push({kind:"btn",flex:1,ownPart:true,on:()=>true,text:()=>SINK[sink].lab+" BY "+id.toUpperCase(),
+  /* The key stays on the strip once the block is switched off, or the one door
+     back to automatic closes behind the hand that opened it. */
+  for(const [sink,arg] of pairs){ const id=sinkWired(S,sink,arg); if(!id) continue;
+    const lit=()=>!!(S.blkBy[id]&&S.blkBy[id].on);
+    /* A NAMED BLOCK SPEAKS FOR ITSELF. "TURBINE RUNBACK BY TURBINE RUNBACK" is
+       what naming the sink after its own demand costs, so the sink's label is
+       only there to say what an unnamed block is driving. */
+    const own=()=>nameFor(id,null);
+    cells.push({kind:"btn",flex:1,ownPart:true,on:lit,
+      text:()=>(own()||SINK[sink].lab+(lit()?" BY ":" - ")+id.toUpperCase())+(lit()?"":" OFF"),
       fn:()=>{ act("blkOn",id); },tip:DRIVEN_TIP}); }
   return cells.length?[cells]:[];
 }
 function ctlFor(p,live,split){
-  const rows=ctlBase(p,live,split), k=autoOn(p.id);
-  let out = k ? (rows||[]).concat([[bypCell(k)]]) : rows;
+  let out=ctlBase(p,live,split);
   // the plant has to be welded down for a valve to have a position at all
   if(live){ const dr=drivenRows(p); if(dr.length) out=(out||[]).concat(dr); }
   if(live){ const pr=portCtlRows(p); if(pr.length) out=(out||[]).concat(pr); }
@@ -1539,7 +1544,7 @@ const GHOSTG=CELL-4*DRAW_K;
 function ghostPort(){
   if(ui.drag) return null;
   if(TOOL.active!=="select") return null;
-  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return null;
+  const ptr = vHit(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return null;
   const g = gridPt([ptr.x,ptr.y]);
   const gx=Math.floor(g.x), gy=Math.floor(g.y);
   if(gx<0||gy<0||gx>=GW||gy>=GH) return null;
@@ -1573,7 +1578,7 @@ function drawGhostPort(){
    Bare deck draws nothing, because a click there only puts the tool back. */
 function drawHitAim(){
   if(TOOL.active!=="hit"||ui.drag) return;
-  const ptr = vIn(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return;
+  const ptr = vHit(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return;
   const id = hitAimAt(ptr); if(!id) return;
   const p = dmgPart(id); if(!p) return;
   let bx,by,bw,bh;
@@ -2318,13 +2323,18 @@ const movingCol=(dem,act,tol)=>Math.abs(dem-act)>tol?C.amber:C.ink2;
    Everything is a fraction of holdSetP() rather than a figure, because a
    sodium loop is held at 0.2 MPa and a water loop at 15.5, and the shape of
    the scale is the same on both. */
-const loopPBand=ci=>{ const set=holdSetP(ci), m=P.rpsm;
+/* The coloured bands are fractions of this loop's own setpoint, because they
+   are the SHAPE of the scale. The two limit marks are the protection system's
+   real trip points and are read off the channel (rpsSetOf(), step.js) - spelt
+   out here a second time was exactly how the two panels came to alarm at
+   different pressures. */
+const loopPBand=ci=>{ const set=holdSetP(ci);
   return v=>band(v,set*.80,set*1.15,
     [[set*0.86,C.red,"LOW"],[set*0.935,C.amber,"LOW"],[set*1.05,C.cyan,"NORMAL"],
      [set*1.15,C.red,"HIGH"]],
-    {dp:2,lim:rpsLive()?[[set*(1.06+0.07*m),"HI"],[set*0.86,"LO"]]:null}); };
+    {dp:2,lim:rpsLive()?[[rpsSetOf("php",0),"HI"],[rpsSetOf("plp",0),"LO"]]:null}); };
 function readoutsFor(p,s){
-  const id=p.id, R=[], m=P.rpsm;
+  const id=p.id, R=[];
   // a setpoint only exists while something is watching it: no mark drawn with
   // no protection fitted or bypassed - the overpower mechanic as a picture
   const trip=(v,l)=>rpsLive()?[[v,l]]:null;
@@ -2357,7 +2367,7 @@ function readoutsFor(p,s){
     add("POWER",(s.n*100).toFixed(1)+" %",
       // amber at 105, not at 100: a salt plant rests at 102 % of its own rating
       band(s.n*100,0,150,[[105,C.green,"NORMAL"],[110,C.amber,"HIGH"],[150,C.red,"OVERPOWER"]],
-        {dp:0,lim:trip((1.10+0.22*m)*100,"FLUX")}),
+        {dp:0,lim:trip(rpsSetOf("flux",0),"FLUX")}),
       "Heat the core is making, as a share of what it is rated for. This is the chain reaction alone - decay heat is on top of it, and TOTAL MADE below is the two together. The real ceiling is DNBR, not this number.");
     add("THERMAL",(s.n*K.rated).toFixed(0)+" MWt",null,
       "The same power in megawatts of heat: the rating times the share above.");
@@ -2415,7 +2425,7 @@ function readoutsFor(p,s){
     secRow("THERMAL MARGIN");
     add("DNBR",s.dnbr.toFixed(2),
       band(s.dnbr,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],
-        {dp:2,lim:trip(1.18-0.16*m,"TRIP")}),
+        {dp:2,lim:trip(rpsSetOf("dnbr",0),"TRIP")}),
       "How far the fuel is from a steam film that stops cooling it. Over 1.30 is comfortable; 1.00 damages fuel. This is the hot-channel figure, and it is the one the protection system trips on.");
     add("MIN NODE DNBR",s.dnbrMin.toFixed(2)+"  R"+s.dnbrRing+"/EL"+s.dnbrLev,
       band(s.dnbrMin,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],{dp:2}),
@@ -2424,7 +2434,7 @@ function readoutsFor(p,s){
       // amber as a FRACTION of this fuel's own limit: a fixed 150 K short of it
       // sat amber on a gas core, which rests 1366 K hot by design
       band(s.Tf,300,Math.max(2200,K.tdmg+700),[[K.tdmg*.95,C.cyan,"NORMAL"],[K.tdmg,C.amber,"HOT"],[Math.max(2200,K.tdmg+700),C.red,"FAILING"]],
-        {dp:0,lim:trip(K.tdmg+100+280*m,"TRIP")}),
+        {dp:0,lim:trip(rpsSetOf("tf",0),"TRIP")}),
       "Temperature inside the pellets. Past "+K.tdmg.toFixed(0)+" K the cladding starts to fail, and that damage is permanent.");
     add("PEAK Fq",s.fq.toFixed(2),
       band(s.fq,1,5,[[3.2,C.cyan,"FLAT"],[4.2,C.amber,"PEAKED"],[5,C.red,"HOT SPOT"]],{dp:2}),
@@ -2721,9 +2731,10 @@ function readoutsFor(p,s){
     secRow("GOVERNOR");
     add("GOV STROKE",LOAD_TAU.toFixed(0)+" s",null,
       "How long the governor valves take to answer a change in load demand.");
-    add("RUNBACK",autoState("runback").toLowerCase(),
-        autoLive("runback")?C.green:C.amber,
-      "Whether a trip also pulls the turbine back. Bypass it and a scram leaves the turbine drawing hard on a dead core, chilling the loop.");
+    // "bypassed" is the WORD the caution list filters on (cautStep, control-room.js), so it stays the word
+    add("RUNBACK",!sinkWired(s,"runback",null)?"not fitted":runbackLive()?"armed":"bypassed",
+        runbackLive()?C.green:C.amber,
+      "Whether a trip also pulls the turbine back. It is a block in the control cabinet; switch it off and a scram leaves the turbine drawing hard on a dead core, chilling the loop.");
   } else if(p.role==="ctrl"){
     secRow("PROTECTION");
     add("RPS",rpsState().toLowerCase(),rpsLive()?C.green:C.amber,
@@ -2735,9 +2746,6 @@ function readoutsFor(p,s){
         "How many blocks are wired in this cabinet and how many are switched on. Every controller on the plant except the protection system is one of these graphs - open this panel to see them.");
       if(n) add("CABINET", live?"computing":supplyK(s)>0?"WRECKED":"DARK", live?C.green:C.red,
         "Whether the blocks are being evaluated. Automation runs on electricity: with the switchboard dark and no backup, or the cabinet hit, every block holds its last output and every demand it owned stays where it was."); }
-    add("INSTRUMENTS",P.noise<.2?"VOTED":P.noise<.6?"2CH DRIFT":"1CH RAW",
-        P.noise>.6?C.amber:C.green,
-      "How many sensors watch each parameter. One channel jitters and hides a liar; three vote the liar out and the numbers hold still.");
     secRow("DOSE");
     add("PARTY DOSE",s.dose.toFixed(1)+" %",
       band(s.dose,0,100,[[50,C.cyan,"LOW"],[80,C.amber,"HIGH"],[100,C.red,"AT LIMIT"]],{dp:0}),

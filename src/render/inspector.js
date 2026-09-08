@@ -313,7 +313,6 @@ function paramsFor(p){
     G.blocks.push(s); T=s.blocks; return s; };
   const opt=(title,tip,key,items,base)=>T.push({kind:"optlist",title,tip,key,base:base||0,
     items:items.map(o=>({name:o.name,tip:o.note||o.tip||""}))});
-  const seg_=(title,tip,key,labels,base)=>T.push({kind:"segsel",title,tip,key,labels,base:base||0});
   const sld=(title,tip,key,min,max,fmt,step,massFn)=>T.push({kind:"slider",title,tip,key,min,max,fmt,step,massFn});
   // a MACHINE'S OWN QUANTITY, in its own units - see the "num" block (design-bench.js)
   const num=(title,tip,key,unit,dp,suggest,massFn)=>T.push({kind:"num",title,tip,key,unit,dp,suggest,massFn});
@@ -345,7 +344,9 @@ function paramsFor(p){
      just picked. blockSig() keys the rail's rebuild on kind+title, so
      reordering costs nothing. */
   if(p.role==="core"){ const cD=coreD(id);
-    B.gang="reactor"; B.gangPlain=true; B.cols=4;
+    B.gang="reactor"; B.gangPlain=true; B.cols=3;
+    // the canvas column is one and a half standard columns; the knobs and MEASURED take one each
+    B.colw=[390,260,260];
     /* PRESETS ARE ASKED FOR FROM THE TITLE BAR. They stood open at the top of
        the panel, over the knobs they overwrite - and a whole drawing to start
        from is not a knob on this machine.
@@ -364,23 +365,26 @@ function paramsFor(p){
               :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
         fn:()=>{ latLayBanks(cD,n); latRevolve(cD); }}))}]}];
     /* ══ THE PANEL STATES ITS OWN SHAPE ══
-       Two drawings stacked, each two columns wide with its own pens and its own
+       Two drawings stacked, each with its pen bar spanning the canvas and the
        knobs beside it, and the MEASURED list standing down the right of both.
        A knob belongs to the surface it moves: what the lattice is made of goes
        beside the plan, what the core's height and wrapping are goes beside the
        section. */
-    GRID(4);
+    GRID(3);
     T=SEC(null,null,2).blocks;
     T.push(
-      {kind:"lattools",pen:"plan",title:"RADIAL PLAN",
-       tools:LATPEN_CORE.concat(LATPEN_RODS),
-       tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."},
-      {kind:"latplan",core:id},
-      {kind:"latread",pen:"plan",core:id});
+      {kind:"rule",title:"RADIAL PLAN",
+       tip:"The core seen from above - the r axis of the solve, revolved about the middle. Only a quarter of it is authored: draw in any quadrant and the other three follow, because the solve has one radius and not four. Every pen here is a toggle: click a slot to lay the thing down, click it again to take it away, and hold SHIFT while you drag to clear whatever you cross. The section below has pens of its own."});
+    const meas=SEC(null,null,1,4).blocks;
+    const planDraw=SEC(null,null,1).blocks;
     const planK=SEC(null,null,1).blocks;
-    const meas=SEC(null,null,1,2).blocks;
-    const secDraw=SEC(null,null,2).blocks;
+    const secHead=SEC(null,null,2).blocks;
+    const secDraw=SEC(null,null,1).blocks;
     const secK=SEC(null,null,1).blocks;
+
+    T=planDraw;
+    T.push({kind:"lattools",pen:"plan",tools:LATPEN_CORE.concat(LATPEN_RODS)},
+      {kind:"latplan",core:id},{kind:"latread",pen:"plan",core:id});
 
     T=planK;
     opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.",bagAcc(cD,"cool",()=>cD.cool),COOLANT);
@@ -403,18 +407,22 @@ function paramsFor(p){
     opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.",bagAcc(cD,"mod",()=>cD.mod),MODER);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
 
-    T=secDraw;
+    T=secHead;
     T.push(
-      {kind:"lattools",pen:"sec",title:"AXIAL SECTION",
-       tools:LATPEN_SEC,
-       tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."},
-      {kind:"latsection",core:id},
-      {kind:"latread",pen:"sec",core:id});
+      {kind:"rule",title:"AXIAL SECTION",
+       tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."});
+    T=secDraw;
+    T.push({kind:"lattools",pen:"sec",tools:LATPEN_SEC},
+      {kind:"latsection",core:id},{kind:"latread",pen:"sec",core:id});
     T=secK;
-    seg_("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL);
+    opt("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL.map(n=>({name:n})));
     // a feature of the VESSEL, which is what its own tooltip already said -
     // it never belonged on the pressurizer's panel
     sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.",bagAcc(cD,"chim",()=>cD.chim),0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
+    /* MEASURED IS ONE COLUMN: the lattice's own readings first, then whatever
+       holds it in - a vessel, or the channels a tube core has instead. */
+    meas.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD
+      .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
     { const vd=()=>derived(id), a=()=>COOLANT[cD.cool];
       if(cD.tube){ const tb=cD.tube;
       num("TUBE BORE","How wide one fuel channel is. This core has no vessel: every channel is its own pressure boundary, standing in a graphite stack that sits at room pressure under a shield. AUTO is what the lattice pitch leaves round one bundle.",
@@ -429,7 +437,7 @@ function paramsFor(p){
       num("SHIELD MASS","The slab over the cavity. Its weight over the cavity's area is the pressure the cavity will take: past it the shield lifts, every channel is torn at its top weld and the whole core is open. AUTO is a slab of steel-serpentinite over the stack.",
           {get:()=>shieldT(cD), set:v=>{ tb.shieldT=v; dTouch(); }, raw:()=>tb.shieldT, clr:()=>{ delete tb.shieldT; dTouch(); }},
           "t",0,()=>shieldSuggest(cD));
-      T.push({kind:"readlist",title:"CHANNELS",tip:MEASURED_TIP,rows:()=>{ const d=vd(); return [
+      meas.push({kind:"readlist",title:"CHANNELS",tip:MEASURED_TIP,rows:()=>{ const d=vd(); return [
         ["CHANNELS",tubeCount(cD).toFixed(0),null,"How many fuel channels the lattice has, each its own pressure boundary."],
         ["RATED FOR",d.vesselRated.toFixed(2)+" MPa",d.vesselRated<d.P0?C.red:null,"What one channel's wall will take, off the published hoop-stress relation. Under the setpoint, the channels are the weakest thing on this circuit."],
         ["BURSTS AT",d.vesselBurst.toFixed(2)+" MPa",d.vesselBurst<d.P0?C.red:null,"Where a channel at operating temperature actually lets go. A hot channel goes sooner: its wall is weaker, and it fails first."],
@@ -440,14 +448,11 @@ function paramsFor(p){
           {get:()=>vesselWallMm(vd().P0,a(),cD), set:v=>{ cD.wall=v; dTouch(); },
            raw:()=>cD.wall, clr:()=>{ delete cD.wall; dTouch(); }},
           "mm",0,()=>vesselWallSuggest(vd().P0,a(),cD),v=>vesselShellMass(vd().P0,a(),cD,v));
-      T.push({kind:"readlist",title:"VESSEL",tip:MEASURED_TIP,rows:()=>{ const d=vd(); return [
-        ["RATED FOR",d.vesselRated.toFixed(2)+" MPa",d.vesselRated<d.P0?C.red:null,"What the wall above will take, off the published hoop-stress relation - the same rating every run on the board carries. Under the setpoint, this vessel is the weakest thing on its circuit."],
+      meas.push({kind:"readlist",title:"VESSEL",tip:MEASURED_TIP,rows:()=>{ const d=vd(); return [
+        ["RATED FOR",d.vesselRated.toFixed(2)+" MPa",d.vesselRated<d.P0?C.red:null,"What the wall you bought will take, off the published hoop-stress relation - the same rating every run on the board carries. Under the setpoint, this vessel is the weakest thing on its circuit."],
         ["BURSTS AT",d.vesselBurst.toFixed(2)+" MPa",d.vesselBurst<d.P0?C.red:null,"Where the vessel actually lets go. A rating has its margin inside it; past this the vessel is open and the core is in the room."],
         ["MASS",d.vesselMass.toFixed(0)+" t",null,"What the vessel weighs: its shell at this wall over the lattice's own envelope and a downcomer round it."]]; }}); } }
 
-    T=meas;
-    T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD
-      .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
     T=B;
   }
   /* THE DRIVES ARE A MACHINE YOU BUY, so what you buy for them stands on their
@@ -614,30 +619,42 @@ function paramsFor(p){
   else if(p.role==="ctrl"){
     B.cols=3;   // the automation graph reads across: this panel states its own width
     GRID(3); SEC("PROTECTION",null,2);
-    opt("INSTRUMENT CHANNELS","How many independent sensors watch each parameter. This decides whether you can tell a broken gauge from a real emergency.","chan",CHAN);
-    tog("REACTOR PROTECTION SYSTEM","The automatic trips. Fitted, it scrams the core on high flux, low DNBR, high or low pressure, high fuel temperature, low flow, core void or low subcooling. Leave it off and none of that happens: the reactor will run itself to destruction and wait for you to notice.","rps",55);
+    /* THERE IS NO "IS AN RPS FITTED" TOGGLE. A protection system is a scram
+       somebody wired in the cabinet below, so fitting one is wiring one and
+       the MEASURED list reads the answer off the same cabinet. */
+    /* The readout is the margin and nothing else. It used to carry the word
+       "permissive" too, and the box is sized to hold the longest string the
+       format can produce, so that one word overflowed the row. What the
+       margin is WORTH is the eight setpoints in MEASURED below. */
     T.push({kind:"slider",title:"RPS TRIP MARGIN",key:"rpsm",min:0,max:1,step:.05,
-      fmt:v=>(v*100).toFixed(0)+" % permissive",
-      tip:"How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error."});
+      fmt:v=>(v*100).toFixed(0)+" %",
+      tip:"How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error. Every setpoint it moves is printed in MEASURED below."});
+    T.push({kind:"slider",title:"TRIP RESPONSE",key:"rpsLag",min:0,max:.5,step:.02,
+      fmt:v=>(v*1000).toFixed(0)+" ms",
+      tip:"How long a channel must stand made before the breakers open - the protection logic settling and the rod coils letting go. A real solid-state system takes 50 to 100 ms; relay logic takes several times that. Long is not only slow: it is also what stops a spike that clears by itself from scramming the plant, so the fastest setting trips on transients the slower one rides out."});
     help("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure in RESULTS.");
     SEC();
-    /* HIGH FLUX is the one trip point that is a pure function of the margin -
-       every other row in RPS_CH (step.js) is priced off a commissioned P. */
+    /* EVERY TRIP POINT IS PRINTED, not just the one that was easy. The margin
+       slider moves eight setpoints and the panel used to show one of them, so
+       the other seven were a number you had to take on faith. rpsSetRows()
+       (step.js) is the one door onto them, and the two priced off a settled
+       plant say so instead of guessing. */
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
-      const M=PLANT_LM||layoutMetrics();
-      return [
-      ["INSTRUMENT TRUST",((1-CHAN[D.chan].noise)*100).toFixed(0)+" %",null,
-       "How much you can believe your own gauges. Single-channel readings visibly jitter and a failed sensor is undetectable."],
-      ["PROTECTION",D.rps?"FITTED":"NONE",D.rps?null:C.amber,
-       "Whether anything scrams this core without you. With none, every trip is yours to call by hand."],
-      ["HIGH FLUX TRIP",D.rps?((1.10+0.22*D.rpsm)*100).toFixed(0)+" %":"n/a",null,
-       "The neutron flux the automatic protection scrams at, as a share of rated power. It is the trip margin above, read out."],
-      ["CREW DOSE RATE",M.dose.toFixed(2)+" x",M.dose>1?C.amber:null,
-       "Radiation reaching this room during an accident, solved along the straight line from the reactor. Paint standing on that line is what lowers it."]]; }});
+      const M=PLANT_LM||layoutMetrics(), wired=scramWiredD(), K=rpsBenchK();
+      const R=[["PROTECTION",wired?(scramArmedD()?"ARMED":"WIRED, OFF"):"NONE",wired?null:C.amber,
+       "Whether anything scrams this core without you. It is read off the control cabinet below: a protection system is a scram block somebody wired, and every preset ships one switched OFF so a new plant runs its faults out instead of tripping on the first."]];
+      for(const r of rpsSetRows(K))
+        R.push([r.name, r.val==null ? "at commissioning"
+                      : (Math.abs(r.val)>=100?r.val.toFixed(0):r.val.toFixed(2))+(r.unit?" "+r.unit:""),
+          r.val==null?C.ink2:null,
+          "Where the "+r.name.toLowerCase()+" channel scrams, in the unit it is read in. The margin slider moves it. Blank until commissioning means the setpoint is priced off a figure measured on the settled plant - its own subcooling or void at rest - which this design does not have until it is built."]);
+      R.push(["CREW DOSE RATE",M.dose.toFixed(2)+" x",M.dose>1?C.amber:null,
+       "Radiation reaching this room during an accident, solved along the straight line from the reactor. Paint standing on that line is what lowers it."]);
+      return R; }});
     /* THE AUTOMATION LIVES HERE. Every controller on the plant is a graph of
        blocks in this cabinet - see ctl.js - and this is where it is built. */
-    SEC("AUTOMATION",null,3);
-    T.push({kind:"ctlgraph",title:"AUTOMATION",live:false});
+    SEC("AUTOMATION","Every block in this cabinet, one section to a tab, sources at the top and the demands they drive at the bottom. A wire says what it carries. Hover a block to read it, click it to wire it, tune it or switch it off.",3);
+    T.push({kind:"ctlgraph",live:false});   // no title: the section above is the heading
     help("Everything that acts on the plant without being asked, except the protection system, is wired here out of blocks: transmitters, setpoints, arithmetic, PID, limits, and the demands they land on. A preset ships the stock controllers already wired; take them apart, retune them or build your own. Automation runs on electricity: with the switchboard dark and no backup, every block holds its last output.");
   }
   /* ══ ONE PANEL, EVERY TANK ══
