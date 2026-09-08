@@ -169,6 +169,7 @@ function segRemove(sid){
   a.splice(i,1);
   for(const k in D.blocks) if(D.blocks[k].seg===sid) D.blocks[k].seg=a[0];
   if(D.name) delete D.name[sid];
+  if(D.note) delete D.note[sid];
   dTouch(); return true;
 }
 /* ══ THE DESIGN SIDE: D.blocks ══ bench gestures, never through act(). */
@@ -183,6 +184,7 @@ function mintBlock(mode,seg){
 function removeBlock(id){
   delete D.blocks[id];
   if(D.name) delete D.name[id];   // mintBlock() reuses b<n>, so a dead block's name must not be inherited by the next one
+  if(D.note) delete D.note[id];
 
   for(const k in D.blocks){ const b=D.blocks[k]; for(let i=0;i<b.in.length;i++) if(b.in[i]===id) b.in[i]=null; }
   dTouch();
@@ -340,13 +342,14 @@ function blkLabel(s,id){
    does, so the cabinet opens on a row of tabs a player can read instead of one
    picture of ninety blocks. blkMk() drops into whichever section is open. */
 let SEG_CUR=null;
-function inSeg(name,fn){ const was=SEG_CUR, sid=segMint(name); SEG_CUR=sid;
+function inSeg(name,fn,note){ const was=SEG_CUR, sid=segMint(name); SEG_CUR=sid; if(note) setNote(sid,note);
   // a controller that declined to build (no turbine, say) leaves no empty tab behind
   try{ fn(); } finally { SEG_CUR=was; if(!segHas(sid)) segRemove(sid); } }
 const segHas = sid => Object.keys(D.blocks).some(k=>D.blocks[k].seg===sid);
-function blkMk(mode,knobs,ins){
+function blkMk(mode,knobs,ins,note){
   const id=mintBlock(mode,SEG_CUR); Object.assign(D.blocks[id],knobs||{});
   if(ins) ins.forEach((src,i)=>{ if(src) D.blocks[id].in[i]=src; });
+  if(note) setNote(id,note);   // a preset says what every block of its own is for
   return id;
 }
 /* The Westinghouse-shaped rod controller: T-avg against programme, plus the
@@ -355,17 +358,19 @@ function blkMk(mode,knobs,ins){
    drive. Expression for expression the law step() carried, so a plant wired
    this way is bit-identical to one that ran it built in. */
 function buildRodAuto(cid){
-  const tavg=blkMk("source",{sig:"tavg",arg:cid}), tprog=blkMk("source",{sig:"tprog",arg:cid});
-  const e0=blkMk("math",{op:"sub"},[tavg,tprog]);
-  const n=blkMk("source",{sig:"nfr",arg:cid}), tf=blkMk("source",{sig:"tfrac",arg:cid});
-  const m0=blkMk("math",{op:"sub"},[n,tf]);
-  const m1=blkMk("limit",{lo:0},[m0]);
-  const m2=blkMk("math",{op:"add",k:TPROG_SPAN},[m1]);
-  const e1=blkMk("math",{op:"add"},[e0,m2]);
-  const e=blkMk("limit",{lo:-6,hi:6},[e1]);
-  const rate=blkMk("source",{sig:"dtavg",arg:cid});
-  const pid=blkMk("pid",{db:AUTOROD_DB,n:AUTOROD_N},[e,rate]);
-  blkMk("sink",{sink:"rodStep",arg:cid},[pid]);
+  const tavg=blkMk("source",{sig:"tavg",arg:cid},null,"The coolant temperature this loop steers: the average of hot and cold leg, measured."),
+        tprog=blkMk("source",{sig:"tprog",arg:cid},null,"Where that average is meant to sit at the load being asked for. A programme, not a fixed setpoint.");
+  const e0=blkMk("math",{op:"sub"},[tavg,tprog],"The temperature error itself: measured minus programmed. Positive means the core is running hot.");
+  const n=blkMk("source",{sig:"nfr",arg:cid},null,"What the core is making, as a fraction of its rating."),
+        tf=blkMk("source",{sig:"tfrac",arg:cid},null,"What the turbine is taking, as a fraction of the same rating.");
+  const m0=blkMk("math",{op:"sub"},[n,tf],"Nuclear against turbine. Positive means the core is making more heat than the turbine is taking away.");
+  const m1=blkMk("limit",{lo:0},[m0],"Only the positive half of that mismatch. A turbine taking more than the core makes is answered by temperature alone.");
+  const m2=blkMk("math",{op:"add",k:TPROG_SPAN},[m1],"The mismatch turned into kelvin, through the programme's own slope, so it can be added to a temperature error.");
+  const e1=blkMk("math",{op:"add"},[e0,m2],"The whole error the rods answer: temperature error plus the mismatch the plant has not shown as temperature yet.");
+  const e=blkMk("limit",{lo:-6,hi:6},[e1],"Clamped to six kelvin either way, so one transient cannot ask for full rod speed.");
+  const rate=blkMk("source",{sig:"dtavg",arg:cid},null,"How fast that temperature is moving, measured. It is what stops the loop hunting.");
+  const pid=blkMk("pid",{db:AUTOROD_DB,n:AUTOROD_N},[e,rate],"Velocity form: it puts out rod steps, not a rod position. Blank gains take the plant's own rod tune.");
+  blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are.");
 }
 /* The feed regulating valve: the shell's feed against what its level programme
    asks, made relative to what it is boiling (FREG_SPAN floors the divisor),
@@ -373,25 +378,27 @@ function buildRodAuto(cid){
    tick's steam and level where the built-in law read this tick's, so it
    follows one tick behind it - measured, see the plan. */
 function buildFeedAuto(sgId){
-  const fed=blkMk("source",{sig:"sgfed",arg:sgId}), want=blkMk("source",{sig:"sgwant",arg:sgId});
-  const a=blkMk("math",{op:"sub"},[fed,want]);
-  const span=blkMk("const",{v:FREG_SPAN});
-  const b=blkMk("math",{op:"max"},[want,span]);
-  const e=blkMk("math",{op:"div"},[a,b]);
-  const el=blkMk("limit",{lo:-1,hi:1},[e]);
-  const pid=blkMk("pid",{kp:1,ti:FREG_STROKE,td:0,db:0},[el]);
-  const pos=blkMk("integ",{lo:0,hi:1},[pid]);
-  blkMk("sink",{sink:"freg",arg:sgId},[pos]);
+  const fed=blkMk("source",{sig:"sgfed",arg:sgId},null,"Feedwater going into this generator right now."),
+        want=blkMk("source",{sig:"sgwant",arg:sgId},null,"What its level programme asks for: roughly what it is boiling off.");
+  const a=blkMk("math",{op:"sub"},[fed,want],"Feeding too much or too little, in kilograms a second.");
+  const span=blkMk("const",{v:FREG_SPAN},null,"A floor under the divisor below, so a generator boiling almost nothing cannot make the error enormous.");
+  const b=blkMk("math",{op:"max"},[want,span],"What the error is measured against: the demand, or the floor, whichever is bigger.");
+  const e=blkMk("math",{op:"div"},[a,b],"The error made relative, so the same valve tune works at any power.");
+  const el=blkMk("limit",{lo:-1,hi:1},[e],"Clamped to plus or minus one: a bigger error than that is still just fully shut or fully open.");
+  const pid=blkMk("pid",{kp:1,ti:FREG_STROKE,td:0,db:0},[el],"Integral time is the valve's own stroke, so it never asks for a move faster than the valve can make.");
+  const pos=blkMk("integ",{lo:0,hi:1},[pid],"The valve position those increments add up to, shut to wide open.");
+  blkMk("sink",{sink:"freg",arg:sgId},[pos],"Drives this generator's feed regulating valve.");
 }
 /* A relief valve's pressure controller: lift above one setpoint, reseat below
    the other. The setpoints are READ off the valve (SIGNAL.fitlift/fitreseat),
    never copied: the valve's own panel stays the one place they are stated. */
 const reliefFitIdsD = () => Object.keys(D.fittings).filter(f=>D.fittings[f].mode==="relief" && !D.fittings[f].spring);
 function buildReliefAuto(fid){
-  const p=blkMk("source",{sig:"fitp",arg:fid});
-  const lift=blkMk("source",{sig:"fitlift",arg:fid}), reseat=blkMk("source",{sig:"fitreseat",arg:fid});
-  const c=blkMk("compare",{},[p,lift,reseat]);
-  blkMk("sink",{sink:"relief",arg:fid},[c]);
+  const p=blkMk("source",{sig:"fitp",arg:fid},null,"The pressure at this valve.");
+  const lift=blkMk("source",{sig:"fitlift",arg:fid},null,"The valve's own lift point, read off the valve. It is never copied here, so the valve's panel stays the one place it is set."),
+        reseat=blkMk("source",{sig:"fitreseat",arg:fid},null,"The valve's own reseat point. The gap up to the lift point is what stops it chattering.");
+  const c=blkMk("compare",{},[p,lift,reseat],"Open above the lift point, shut again below the reseat point.");
+  blkMk("sink",{sink:"relief",arg:fid},[c],"Drives the valve. This is a power-operated valve, so with the cabinet dark it holds and only a spring safety is left.");
 }
 /* ══ THE PROTECTION SYSTEM, DRAWN ══ one column per channel: the reading, the
    channel's own setpoint, and a compare that goes hot when the plant passes
@@ -403,42 +410,53 @@ function buildReliefAuto(fid){
    and a plant whose design moves takes its protection with it.
    The compare is a bare threshold - on and off wired to the same setpoint -
    because a protection channel does not have hysteresis: it is the latch on
-   the far side of the scram that stops it chattering. */
-function blkOr(ids){                       // sel takes three, so an OR of many is a tree of them
+   the far side of the scram that stops it chattering.
+   IT IS TWO TABS: the channels, and the logic they land on. A section is a
+   view, so the wires cross from one to the other and nothing computes
+   differently for it. */
+function blkOr(ids,note){                  // sel takes three, so an OR of many is a tree of them
   while(ids.length>1){ const next=[];
-    for(let i=0;i<ids.length;i+=3) next.push(blkMk("sel",{op:"max"},ids.slice(i,i+3)));
+    for(let i=0;i<ids.length;i+=3) next.push(blkMk("sel",{op:"max"},ids.slice(i,i+3),note));
     ids=next; }
   return ids[0];
 }
-function buildRpsAuto(cid){
+function buildRpsAuto(cid,lab){
   const trip=[], near=[];
-  for(const [key,name,,dir,sig,,gate] of RPS_CH){
-    const op=dir>0?"above":"below";
-    const v=blkMk("source",{sig,arg:cid});
-    for(const [set,out] of [["rpsset",trip],["rpsnear",near]]){
-      const t=blkMk("source",{sig:set,arg:key});
-      let c=blkMk("compare",{op},[v,t,t]);
-      setPartName(c,name);            // the CHANNEL carries the name, so the trip's word is the channel's
-      /* A CHANNEL MAY BE STOOD DOWN BY THE PLANT ITSELF: low flow does not
-         protect a core that is making no heat. The gate is a compare like any
-         other and it is ANDed in by multiplying two zero-or-ones. */
-      if(gate){ const h=blkMk("source",{sig:"heat",arg:cid});
-        const g=blkMk("compare",{op:"above",on:.3,off:.3},[h]);
-        setPartName(g,"HEAT PERMISSIVE");
-        c=blkMk("math",{op:"mul"},[c,g]); }
-      out.push(c);
+  inSeg(lab+" CHANNELS", ()=>{
+    for(const [key,name,,dir,sig,,gate] of RPS_CH){
+      const op=dir>0?"above":"below";
+      const v=blkMk("source",{sig,arg:cid},null,"What the "+name.toLowerCase()+" channel watches.");
+      for(const [set,out] of [["rpsset",trip],["rpsnear",near]]){
+        const t=blkMk("source",{sig:set,arg:key},null,set==="rpsset"
+          ? "Where this channel trips. Read off the protection system, so the margin slider moves it and nothing here states a number."
+          : "The near-trip point of the same channel: the lamp lights here, well before the scram.");
+        let c=blkMk("compare",{op},[v,t,t],"Made when the plant passes the "+name.toLowerCase()+" point. On and off are the same value: a protection channel has no hysteresis, the latch beyond the scram is what stops it chattering.");
+        setPartName(c,name);          // the CHANNEL carries the name, so the trip's word is the channel's
+        /* A CHANNEL MAY BE STOOD DOWN BY THE PLANT ITSELF: low flow does not
+           protect a core that is making no heat. The gate is a compare like any
+           other and it is ANDed in by multiplying two zero-or-ones. */
+        if(gate){ const h=blkMk("source",{sig:"heat",arg:cid},null,"How hard this core is making heat. The permissive below reads it.");
+          const g=blkMk("compare",{op:"above",on:.3,off:.3},[h],"Above 30% heat this channel is armed; below it the channel is stood down. Low flow does not protect a core that is making nothing.");
+          setPartName(g,"HEAT PERMISSIVE");
+          c=blkMk("math",{op:"mul"},[c,g],"The channel ANDed with its permissive: two zero-or-ones multiplied, so both must be made."); }
+        out.push(c);
+      }
     }
-  }
-  // the sinks are named too, so the key on the vessel's own strip reads as the system and not as b79
-  setPartName(blkMk("sink",{sink:"scram",arg:cid},[blkOr(trip)]),"PROTECTION SYSTEM");
-  setPartName(blkMk("sink",{sink:"nearTrip",arg:cid},[blkOr(near)]),"NEAR TRIP");
+  }, "One column per channel: the reading, the channel's own trip point, and a compare that is made when the plant passes it. Nothing here states a number. The compares land on the OR in the logic section next door.");
+  inSeg(lab+" LOGIC", ()=>{
+    // the sinks are named too, so the key on the vessel's own strip reads as the system and not as b79
+    setPartName(blkMk("sink",{sink:"scram",arg:cid},[blkOr(trip,"Any channel that is made trips the plant: max over the channels is the OR.")],
+      "Drops the rods on this core. Switching it off is defeating the protection system, and the plant says so."),"PROTECTION SYSTEM");
+    setPartName(blkMk("sink",{sink:"nearTrip",arg:cid},[blkOr(near,"The same OR, on the near points: any channel approaching its trip lights the lamp.")],
+      "Lights the near-trip lamp. It only warns; nothing on the plant moves because of it."),"NEAR TRIP");
+  }, "The OR over the channels next door: any one of them trips the plant. A second OR on the near points lights the warning lamp and does nothing else. The wires arrive from the channels section.");
 }
 function buildStockAutomation(){
   /* A preset states the whole cabinet; emptied in place, never rebuilt - and
      the names and the sections go with the blocks. One bare section is left
      standing, because a cabinet with no section has nowhere to put a block. */
-  for(const k in D.blocks){ delete D.blocks[k]; if(D.name) delete D.name[k]; }
-  for(const sid of segIds()) if(D.name) delete D.name[sid];
+  for(const k in D.blocks){ delete D.blocks[k]; if(D.name) delete D.name[k]; if(D.note) delete D.note[k]; }
+  for(const sid of segIds()){ if(D.name) delete D.name[sid]; if(D.note) delete D.note[sid]; }
   D.segs=["g1"];
   /* A TAB IS A FEW CHARACTERS WIDE. The name used to carry the machine's own -
      "RELIEF RELIEF VALVE", "PROTECTION REACTOR 1" - which is the machine said
@@ -449,11 +467,17 @@ function buildStockAutomation(){
   const cores=coreIds(), feeds=sgIds().filter(id=>pumpIds().some(p=>secGensOf(p).includes(id))),
         reliefs=reliefFitIdsD();
   cores.forEach((id,i)=>inSeg(nm(coreBoils(id)?"FLOW CTL":"ROD CTL",i,cores.length),
-    ()=>(coreBoils(id)?buildFlowAuto:buildRodAuto)(id)));
-  feeds.forEach((id,i)=>inSeg(nm("FEED",i,feeds.length), ()=>buildFeedAuto(id)));
-  reliefs.forEach((fid,i)=>inSeg(nm("RELIEF",i,reliefs.length), ()=>buildReliefAuto(fid)));
-  cores.forEach((id,i)=>inSeg(nm("RPS",i,cores.length), ()=>buildRpsAuto(id)));
-  inSeg("RUNBACK", buildRunbackAuto);
+    ()=>(coreBoils(id)?buildFlowAuto:buildRodAuto)(id),
+    coreBoils(id)
+      ? "Follows load with the coolant pumps. Recirculation sweeps void out of a boiling core and the void is the reactivity, so this plant steers on flow and leaves the rods alone."
+      : "Holds average coolant temperature on its load programme by moving the rods, with the nuclear-to-turbine mismatch fed forward so the rods start moving before the temperature has."));
+  feeds.forEach((id,i)=>inSeg(nm("FEED",i,feeds.length), ()=>buildFeedAuto(id),
+    "Keeps this steam generator fed with what it is boiling off, through its own regulating valve. The error is made relative to the demand, so one tune works at any power."));
+  reliefs.forEach((fid,i)=>inSeg(nm("RELIEF",i,reliefs.length), ()=>buildReliefAuto(fid),
+    "Opens this power-operated relief valve above its lift point and shuts it below its reseat point. Both are read off the valve itself. It runs on electricity: with the cabinet dark only a spring safety is left."));
+  cores.forEach((id,i)=>buildRpsAuto(id,nm("RPS",i,cores.length)));   // makes its own two tabs
+  inSeg("RUNBACK", buildRunbackAuto,
+    "Sheds turbine load when a reactor trips, so the turbine is not left drawing hard on a dead core.");
   if(!segHas("g1")) segRemove("g1");   // the seed section, if every controller made its own
 }
 /* The turbine sheds load the instant any vessel trips: an OR over every
@@ -484,10 +508,12 @@ function blkSinkOff(s,sink){
 }
 function buildRunbackAuto(){
   const ids=coreIds(); if(!ids.length || !roleId("turb")) return;
-  const t=blkOr(ids.map(id=>blkMk("source",{sig:"trip",arg:id})));
-  const c=blkMk("compare",{op:"above",on:.5,off:.5},[t]);
+  const t=blkOr(ids.map(id=>blkMk("source",{sig:"trip",arg:id},null,"Whether this reactor has tripped.")),
+    "Any reactor tripping is enough: max over the vessels is the OR.");
+  const c=blkMk("compare",{op:"above",on:.5,off:.5},[t],"Turns that into the one-shot the runback takes.");
   setPartName(c,"REACTOR TRIPPED");
-  setPartName(blkMk("sink",{sink:"runback"},[c]),"TURBINE RUNBACK");
+  setPartName(blkMk("sink",{sink:"runback"},[c],
+    "Sheds turbine load the moment a reactor trips. Switch it off and a scram leaves the turbine drawing hard on a dead core, chilling the loop."),"TURBINE RUNBACK");
 }
 /* ══ THE BOILING PLANT STEERS ON FLOW ══ recirculation sweeps void out of the
    core and void is the reactivity, so a BWR follows load with its pumps and
@@ -497,9 +523,10 @@ function buildRunbackAuto(){
    per generator) so the controller cannot trip the plant it is steering. */
 const coreBoils = id => COOLANT[coreD(id).cool].id==="BWR";
 function buildFlowAuto(cid){
-  const load=blkMk("source",{sig:"load"}), pwr=blkMk("source",{sig:"pwr",arg:cid});
-  const e=blkMk("math",{op:"sub"},[load,pwr]);
-  const pid=blkMk("pid",{kp:1,ti:15,td:0,db:0},[e]);
-  const dem=blkMk("integ",{lo:35,hi:100},[pid]);
-  for(const p of pumpIds()) if(primaryPump(p)) blkMk("sink",{sink:"flowDem",arg:p},[dem]);
+  const load=blkMk("source",{sig:"load"},null,"What the turbine is being asked for."),
+        pwr=blkMk("source",{sig:"pwr",arg:cid},null,"What this core is actually making.");
+  const e=blkMk("math",{op:"sub"},[load,pwr],"The gap between the two. A boiling core answers it with flow, because sweeping void out of the core is what adds reactivity.");
+  const pid=blkMk("pid",{kp:1,ti:15,td:0,db:0},[e],"Velocity form: it puts out changes of pump demand, not a demand.");
+  const dem=blkMk("integ",{lo:35,hi:100},[pid],"The demand those changes add up to. The 35% floor keeps it above the low flow trip, so the controller cannot trip the plant it is steering.");
+  for(const p of pumpIds()) if(primaryPump(p)) blkMk("sink",{sink:"flowDem",arg:p},[dem],"Drives this coolant pump. Every primary pump shares the one demand.");
 }
