@@ -95,14 +95,17 @@ function removePart(id){
 /* mintTank() builds; addTank() is the gesture on top and takes the lowest free slot. A null x is a tank with no cell - a secondary tank with no node and no box. */
 function mintTank(id,x,y){
   const t=JSON.parse(JSON.stringify(TANK_DEFAULT));
-  t.name=FLUID[t.fluid].label+" TANK"; t.col="#5aa9d6";
+  /* the kind and nothing else: CONTENTS is a charge the vessel can be drained of, so it may not be the name */
+  t.name="TANK"; t.col="#5aa9d6";
   t.cell = x==null ? null : [x,y];
   t.tip="A tank. Say what is in it, how it is charged and how it is plumbed on its own panel - the physics follows from that and from where you put it.";
   D.tanks[id]=t; buildLayout(); return id;
 }
 function addTank(x,y){
   let n=1; while(D.tanks["tank"+n]) n++;
-  return mintTank("tank"+n,x,y);
+  mintTank("tank"+n,x,y);
+  D.tanks["tank"+n].name="TANK "+n;
+  return "tank"+n;
 }
 /* A tank carries a control row, so it is a machine-sized box; a fitting stays one cell with its handles in the margin below. */
 const FIT_W=1, FIT_H=1;
@@ -694,7 +697,7 @@ function shellsOf(pid, dead){
 }
 // which loop a PART pools capacity with, or null - never read as "is it plumbed at all"
 const loopOf = id => { const v=loopMap().partLoop[id]; return v===undefined?null:v; };
-const ihxIds=()=>LAY.parts.filter(p=>p.role==="ihx").map(p=>p.id);
+const ihxIds=()=>roleAll("ihx");
 const ihxCount=()=>ihxIds().length;
 const IHX_T_PER_UA   = 8.0e-4;         // t per kW/K - vessel, tubes, intermediate loop
 /* Saturation SG_APPROACH below the coolant programme, off the COOLANT row and never P. SG_P_MAX is not a curve guard: past it the UA that dT0 implies runs the core into its own HIGH FLUX trip. */
@@ -735,7 +738,7 @@ const RADCOAT=[
   ["WHITE PAINT",             {emis:0.85, massK:1.00, tsurvK:1.00}],
   ["HIGH-EMISSIVITY CERAMIC", {emis:0.94, massK:1.35, tsurvK:0.80}],
 ];
-const radIds=()=>LAY.parts.filter(p=>p.role==="radiator").map(p=>p.id);
+const radIds=()=>roleAll("radiator");
 const radCount=()=>radIds().length;
 const radCoatOf=id=>RADCOAT[D.radCoat[id]??1][1];
 /* The one fudge here, and it is bought balance: a grid cell is 0.218 m2 and rejecting the stock plant's heat needs order 10^6 m2, the same scale lie the hull already carries. Set once off the stock rated rejection at RAD_TDES; do NOT tune it afterwards to recover output. */
@@ -815,13 +818,14 @@ const partOf=id=>(LAY&&LAY.byId.get(id))||null;
 /* The first machine of a role on the drawing, or null: an id literal is a name test, and a blank grid has none of any of them. */
 const roleOf=role=>(LAY&&LAY.parts.find(p=>p.role===role))||null;
 const roleId=role=>{ const p=roleOf(role); return p?p.id:null; };
+const roleAll=role=>LAY?LAY.parts.filter(p=>p.role===role).map(p=>p.id):[];
 /* THE ONE DOOR: `p.access` is undefined between a rebuild and the next layoutMetrics(), and undefined is unasked, not blocked - so asking makes the measure happen. */
 const partAccess = p => {
   if(!p) return true;
   if(p.access===undefined) layoutMetrics();
   return p.access!==false;
 };
-const coreIds=()=>LAY ? LAY.parts.filter(p=>p.role==="core").map(p=>p.id) : [];
+const coreIds=()=>roleAll("core");
 const primaryCore=()=>roleId("core");
 const coreOf=pid=>{ const p=partOf(pid); if(!p) return null;
   if(p.role==="core") return pid;
