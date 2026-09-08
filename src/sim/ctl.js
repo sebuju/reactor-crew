@@ -1,17 +1,7 @@
 "use strict";
-/* ═══════════════ AUTOMATION THE PLAYER BUILDS ═══════════════
-   Every block lives inside the CONTROL room (ROLE.ctrl): it is a row in
-   D.blocks, not a machine on the grid. The design is D.blocks[id] =
-   {mode, in:[…], on, …knobs}; the live block is s.blkBy[id], seeded from it by
-   resetPlant() and moved only by ACT.blkWire/blkKnob/blkOn and by ctlPass().
-   A block reads SIGNAL rows, feeds other blocks, and lands on a SINK row.
-   Evaluated once per tick at the head of step(), on the previous tick's solved
-   values - the lag the built-in rod controller was tuned with.
-   Automation is electrical: with no supply (supplyK 0) or the controller
-   wrecked, nothing is evaluated and every output HOLDS. */
+/* the design is D.blocks[id], the live block s.blkBy[id], evaluated once per tick on the previous tick's solved values */
 
-/* ══ THE MODES ══ ins names the slots, knobs their defaults, st the state a
-   block carries beside its output. A knob that means "none" is null. */
+/* ins names the slots, knobs their defaults, st the state a block carries beside its output; a knob meaning "none" is null */
 const BLK={
   source: {lab:"SOURCE",  ins:[],              knobs:{sig:"tavg", arg:null},
     tip:"A transmitter. Reads one plant quantity, of one machine where the quantity has one."},
@@ -41,11 +31,6 @@ const BLK={
   lag:    {lab:"LAG",     ins:["IN"],          knobs:{tau:1},
     tip:"First-order filter, tau seconds. What a real transmitter does to a step.",
     ktip:{tau:"Time constant, seconds: after a step the output covers about two thirds of the gap in this long. Bigger is smoother and later."}},
-  /* ABOVE or BELOW, because half the trips on a plant are low ones: low flow,
-     low pressure, low DNBR. Standing a falling channel on its head with a
-     gain of -1 needed a second block on both the reading and the setpoint,
-     and then the setpoint on the knob read as a negative number nobody could
-     check against the panel it came from. */
   compare:{lab:"COMPARE", ins:["IN","ON","OFF"], knobs:{op:"above", on:1, off:0},
     tip:"ABOVE: 1 once IN rises above on, 0 once it falls below off. BELOW turns both round, which is what a low trip is. The gap between on and off is the hysteresis that stops it chattering; equal points is a bare threshold. Wire ON or OFF and the setpoint is read live from there instead of from the knob - a relief valve's own lift point, or a protection channel's own trip set.",
     ktip:{on:"The value IN must pass for the output to go to 1. Ignored while the ON slot is wired.",
@@ -59,14 +44,9 @@ const BLK={
 };
 const BLK_MODES=Object.keys(BLK);
 const MATH_OPS=["add","sub","mul","div","min","max"], SEL_OPS=["max","min","median"], CMP_OPS=["above","below"];
-// every mode whose `op` knob is a menu, and the words it offers
 const OPS_OF={math:MATH_OPS, sel:SEL_OPS, compare:CMP_OPS};
 
-/* ══ THE SINKS ══ every demand a block may drive, in the unit the matching
-   SIGNAL row reads. `part` is the machine the order is for, and the refusal
-   is the same partWrecked() actDead() (record.js) asks - a wrecked machine
-   takes no orders down either path. `step` marks a sink that takes an
-   increment and integrates it itself: the rod drive is the integrator. */
+/* every demand a block may drive, in the unit the matching SIGNAL row reads; `step` marks a sink that integrates the increment itself */
 const SINK={
   rodStep:{lab:"ROD DRIVE", u:"/tick", scope:"core", step:true, part:id=>rodsOf(id),
     read:(s,id)=>coreSeen(s,id).rodDem,
@@ -76,7 +56,7 @@ const SINK={
     apply:(s,id,v)=>{ if(s.fregBy[id]!==undefined) s.fregBy[id]=clamp(v,0,1); }},
   relief: {lab:"RELIEF VALVE", u:"", scope:"fit", part:fid=>fid,
     read:(s,fid)=>s.reliefOpen[fid]?1:0,
-    apply:(s,fid,v)=>{ if(s.reliefOpen[fid]!==undefined && !fitSpring(fid)) reliefCmd(s,fid,v>0.5); }},   // a spring safety takes no orders; a valve this plant never had is a no-op, not a phantom key on S
+    apply:(s,fid,v)=>{ if(s.reliefOpen[fid]!==undefined && !fitSpring(fid)) reliefCmd(s,fid,v>0.5); }},   // a spring safety takes no orders; an absent valve is a no-op, not a phantom key on S
   flowDem:{lab:"PUMP DEMAND", u:"%", scope:"pump", part:id=>id,
     read:(s,id)=>(s.flowDemBy[id]||0)*100,
     apply:(s,id,v)=>{ if(s.flowDemBy[id]!==undefined) s.flowDemBy[id]=clamp(v/100,0,1.5); }},
@@ -92,38 +72,26 @@ const SINK={
   tankOpen:{lab:"TANK VALVE", u:"", scope:"tank", part:id=>id,
     read:(s,id)=>s.tankOpen[id]?1:0,
     apply:(s,id,v)=>{ if(s.tankOpen[id]!==undefined) s.tankOpen[id]=v>0.5; }},
-  /* A CHANNEL BEING MADE IS NOT YET A SCRAM. Real protection takes 50-100 ms to
-     get from a made channel to open breakers - the logic settles, the relays
-     pick up, the coils let go - so the order waits out P.rpsLag of CONTINUOUS
-     demand and a spike that clears inside it never trips the plant. The timer
-     resets the instant the channel clears, which is what makes it a delay and
-     not an integrator. */
+  /* the order waits out P.rpsLag of continuous demand and the timer resets the instant the channel clears: a delay, not an integrator */
   scram:  {lab:"SCRAM", u:"", scope:"core", part:id=>id,
     read:(s,id)=>coreSeen(s,id).scrammed?1:0,
     apply:(s,id,v,dt)=>{ const hot=v>0.5;
       coreOn(s,id,c=>{ c.rpsHot = hot ? c.rpsHot+dt : 0; });
       const cs=coreSeen(s,id);
-      /* to the NEAREST tick, because a tick is the timer's resolution: ten
-         additions of 0.02 come to 0.19999999999999998, so a 200 ms setting
-         asked for an eleventh tick and was 20 ms slower than it said. */
+      /* to the nearest tick: ten additions of 0.02 come to 0.19999999999999998, so a 200 ms setting would ask for an eleventh */
       if(hot && !cs.scrammed && cs.rpsHot>=P.rpsLag-dt*0.5) rpsScram(id,blkBlame(s,sinkDriver(s,"scram",id))); }},
-  /* THE WARNING IS AN ACTUATOR TOO. A protection channel that is close to its
-     setpoint lights a lamp on a real board, so the near band lands on a sink
-     like every other order rather than being read out of the middle of a graph
-     the player is free to rewire. */
+  /* the warning is an actuator too, never a read out of the middle of a graph the player may rewire */
   nearTrip:{lab:"NEAR TRIP LAMP", u:"", scope:"core", part:id=>id,
     read:(s,id)=>coreSeen(s,id).rpsNear?1:0,
     apply:(s,id,v)=>{ coreOn(s,id,cs=>{ cs.rpsNear=v>0.5; }); }},
-  /* A ONE-SHOT ON THE RISING EDGE. The order is "shed load NOW", not a demand
-     to hold: a sink that wrote 5 % every tick it saw a trip would mean the
-     operator could never raise load again while the latch was in. */
+  /* a one-shot on the rising edge: held, the operator could never raise load again while the latch was in */
   runback:{lab:"TURBINE RUNBACK", u:"", scope:"plant", part:()=>roleId("turb"),
     read:s=>s.rbHot?1:0,
     apply:(s,_,v)=>{ const hot=v>0.5; if(hot && !s.rbHot) runbackNow(s); s.rbHot=hot; }},
 };
 const SINK_KEYS=Object.keys(SINK);
 
-/* WHICH INSTANCES A SCOPE MAY NAME. `plant` names none. */
+/* which instances a scope may name; `plant` names none */
 function sigArgs(scope){
   switch(scope){
     case "core": return coreIds();
@@ -136,23 +104,13 @@ function sigArgs(scope){
     default: return [];
   }
 }
-/* the argument a freshly placed block gets: the first instance there is */
 const sigArg0=scope=>{ const a=sigArgs(scope); return a.length?a[0]:null; };
 
-/* ══ SECTIONS OF THE CABINET ══ a protection system is fifty blocks and a rod
-   controller is twelve, so one picture of the whole cabinet is a picture
-   nobody can read. A section is a NAMED SET OF BLOCKS and nothing else: it
-   decides which tab a block is drawn under and has no say in what anything
-   computes. `D.segs` is an array because the order is the tab order, and the
-   name comes through nameFor() like a machine's and a block's - one map, one
-   door, and it rides designSig() and the save format free.
-   DESIGN ONLY. blkSeed() does not copy it, so nothing on S has an opinion
-   about where a block is drawn. */
+/* a section is a named set of blocks: it picks the tab a block is drawn under and is design only, nothing on S has an opinion about it */
 const SEG_LAB="SECTION";
 function segIds(){ if(!Array.isArray(D.segs)||!D.segs.length) D.segs=["g1"]; return D.segs; }
 const segName = sid => nameFor(sid, SEG_LAB+" "+(segIds().indexOf(sid)+1));
-/* A block whose section was deleted, or that predates sections, is drawn in
-   the first one - there is no such thing as a block in no section. */
+/* there is no such thing as a block in no section */
 const segOf = id => { const b=D.blocks[id], a=segIds();
   return (b && a.includes(b.seg)) ? b.seg : a[0]; };
 function segMint(name){
@@ -160,9 +118,7 @@ function segMint(name){
   const sid="g"+n; D.segs.push(sid); if(name) setPartName(sid,name);
   dTouch(); return sid;
 }
-/* REMOVING A SECTION NEVER REMOVES A BLOCK. The blocks come home to the first
-   section, wiring untouched: a tab is a view and closing a view may not delete
-   the plant's automation. The last section cannot go - there has to be one. */
+/* a tab is a view, so closing one must not delete automation: the blocks come home to the first section */
 function segRemove(sid){
   const a=segIds(); if(a.length<2) return false;
   const i=a.indexOf(sid); if(i<0) return false;
@@ -172,7 +128,7 @@ function segRemove(sid){
   if(D.note) delete D.note[sid];
   dTouch(); return true;
 }
-/* ══ THE DESIGN SIDE: D.blocks ══ bench gestures, never through act(). */
+/* bench gestures, never through act() */
 function mintBlock(mode,seg){
   let n=1; while(D.blocks["b"+n]) n++;
   const id="b"+n, m=BLK[mode]||BLK.const;
@@ -189,17 +145,15 @@ function removeBlock(id){
   for(const k in D.blocks){ const b=D.blocks[k]; for(let i=0;i<b.in.length;i++) if(b.in[i]===id) b.in[i]=null; }
   dTouch();
 }
-/* a mode change keeps the id and the wiring slots that still exist */
+/* a mode change keeps the id, the section and the wiring slots that still exist */
 function setBlockMode(id,mode){
   const b=D.blocks[id]; if(!b||!BLK[mode]) return;
-  // the section survives a kind change: the block stayed where the player put it
   const m=BLK[mode], nb=Object.assign({mode, in:m.ins.map((_,i)=>b.in[i]||null), on:b.on!==false, seg:segOf(id)}, m.knobs);
   if(mode==="source") nb.arg=sigArg0(SIGNAL[nb.sig].scope);
   if(mode==="sink")   nb.arg=sigArg0(SINK[nb.sink].scope);
   D.blocks[id]=nb; dTouch();
 }
 
-/* ══ THE LIVE SIDE: s.blkBy ══ */
 function blkSeed(){
   const out={};
   for(const id in D.blocks){ const b=D.blocks[id], m=BLK[b.mode]; if(!m) continue;
@@ -209,8 +163,7 @@ function blkSeed(){
     out[id]=L; }
   return out;
 }
-/* BUMPLESS: a block that remembers a position (integ, limit, lag) and feeds a
-   sink starts where that sink already stands, so a wire landing is not a step. */
+/* bumpless: a position-holding block starts where its sink already stands, so a wire landing is not a step */
 function blkSeedOut(s,id){
   const b=s.blkBy[id]; if(!b || b.mode!=="sink") return;
   const src=b.in[0], u=src&&s.blkBy[src], row=SINK[b.sink];
@@ -219,9 +172,7 @@ function blkSeedOut(s,id){
 }
 const blkSeedOuts=s=>{ for(const id in s.blkBy) blkSeedOut(s,id); };
 
-/* ══ ORDER ══ Kahn over the live links, cached on their signature. A block
-   left on a cycle is evaluated after the rest and reads last tick's outputs,
-   which is the one-tick lag a feedback loop has anyway. */
+/* Kahn over the live links, cached on their signature; a block left on a cycle reads last tick's outputs */
 const CTL_ORD={sig:null, order:[]};
 function ctlOrder(s){
   const ids=Object.keys(s.blkBy), sig=ids.map(id=>id+":"+s.blkBy[id].in.join(",")).join(";");
@@ -236,13 +187,12 @@ function ctlOrder(s){
   return order;
 }
 
-/* ══ IS THE CABINET COMPUTING ══ a controller placed, whole, and fed. */
+/* is the cabinet computing: a controller placed, whole, and fed */
 const ctlHost = () => roleId("ctrl");
 const ctlLive = s => { const id=ctlHost(); return !!id && !partWrecked(s,id) && supplyK(s)>0; };
 const blkDead = (s,b) => { const row=SINK[b.sink]; if(!row) return true;
   const part=row.part(b.arg); return !!part && partWrecked(s,part); };
 
-/* ══ ONE BLOCK ══ */
 function blkEval(s,b,I,dt){
   switch(b.mode){
     case "source": return sigRead(s,b.sig,b.arg);
@@ -273,9 +223,7 @@ function blkEval(s,b,I,dt){
   return b.out;
 }
 
-/* ══ THE PASS ══ at the head of the tick. Off, wrecked or dark: every output
-   holds and no sink is written - the plant runs on the last demand it was
-   given, which is exactly what a dead cabinet leaves behind. */
+/* at the head of the tick; off, wrecked or dark, every output holds and no sink is written */
 function ctlPass(s,dt){
   if(!s.blkBy) return;
   if(!ctlLive(s)) return;
@@ -287,12 +235,7 @@ function ctlPass(s,dt){
   }
 }
 
-/* ══ WHO IS DRIVING THIS DEMAND ══ the strip asks, the rod drive asks. Null
-   when no live, wired, powered block lands on it. */
-/* A BLOCK SWITCHED OFF IS STILL THE BLOCK WIRED TO THIS DEMAND, and the strip
-   key that switched it off is the only one that will switch it back on - so
-   the walk is one function and `on` is the caller's question, not the walk's.
-   A live block still wins over a switched-off peer on the same demand. */
+/* a block switched off is still the block wired to this demand, so `on` is the caller's question; a live block wins over a switched-off peer */
 function sinkWired(s,sink,arg,onOnly){
   if(!s||!s.blkBy||!ctlLive(s)) return null;
   let off=null;
@@ -303,25 +246,19 @@ function sinkWired(s,sink,arg,onOnly){
   return onOnly ? null : off;
 }
 const sinkDriver = (s,sink,arg) => sinkWired(s,sink,arg,true);
-/* ══ WHICH BLOCK IS RESPONSIBLE ══ walk up from a sink through the inputs that
-   are hot and answer with the deepest one the player has NAMED. A protection
-   channel is a named compare, so "RPS TRIP / LOW FLOW" comes out of the drawn
-   graph and not out of a table - name the block, name the trip. Unnamed the
-   whole way up, there is nothing honest to say, so it says nothing. */
+/* the deepest hot input the player has named, so a trip's word comes out of the drawn graph and not a table */
 function blkBlame(s,id,seen){
   if(!id||!s||!s.blkBy) return "";
   seen=seen||new Set(); if(seen.has(id)) return ""; seen.add(id);
   const b=s.blkBy[id]; if(!b) return "";
-  /* A READING IS NOT A DECISION. A source holding 15.5 MPa is "hot" against any
-     zero-or-one test, so the walk would blame the transmitter for the trip. */
+  /* any source reads "hot" against a zero-or-one test, so the walk would blame the transmitter */
   if(b.mode==="source"||b.mode==="const") return "";
   for(const src of b.in){ const u=src&&s.blkBy[src];
     if(!u || !(u.out>0.5)) continue;
     const deep=blkBlame(s,src,seen); if(deep) return deep; }
   return nameFor(id,"");
 }
-/* the label on a wire: the signal's own name and unit where one forces it,
-   the block's kind otherwise */
+/* the label on a wire: the signal's own name and unit where one forces it, the block's kind otherwise */
 function blkLabel(s,id){
   const b=(s&&s.blkBy&&s.blkBy[id])||D.blocks[id]; if(!b) return {lab:id,u:""};
   if(b.mode==="source"){ const r=SIGNAL[b.sig]; return {lab:r?r.lab:b.sig, u:r?r.u:""}; }
@@ -334,13 +271,7 @@ function blkLabel(s,id){
   return {lab:m?m.lab:b.mode, u:""};
 }
 
-/* ══ THE STOCK AUTOMATION, AS GESTURES ══ what AUTOSYS used to ship built in,
-   rebuilt out of the same blocks the player has - so a preset cannot wire a
-   controller the player could not have wired. Called by the preset builder
-   after the plumbing, once the machines it addresses exist. */
-/* EVERY CONTROLLER A PRESET WIRES GETS ITS OWN SECTION, named after what it
-   does, so the cabinet opens on a row of tabs a player can read instead of one
-   picture of ninety blocks. blkMk() drops into whichever section is open. */
+/* built out of the same blocks the player has, so a preset cannot wire a controller the player could not; blkMk() drops into whichever section is open */
 let SEG_CUR=null;
 function inSeg(name,fn,note){ const was=SEG_CUR, sid=segMint(name); SEG_CUR=sid; if(note) setNote(sid,note);
   // a controller that declined to build (no turbine, say) leaves no empty tab behind
@@ -349,14 +280,10 @@ const segHas = sid => Object.keys(D.blocks).some(k=>D.blocks[k].seg===sid);
 function blkMk(mode,knobs,ins,note){
   const id=mintBlock(mode,SEG_CUR); Object.assign(D.blocks[id],knobs||{});
   if(ins) ins.forEach((src,i)=>{ if(src) D.blocks[id].in[i]=src; });
-  if(note) setNote(id,note);   // a preset says what every block of its own is for
+  if(note) setNote(id,note);
   return id;
 }
-/* The Westinghouse-shaped rod controller: T-avg against programme, plus the
-   one-sided nuclear-to-turbine mismatch in kelvin through the programme's own
-   slope, into a velocity PID on the plant's measured T-avg rate, onto the rod
-   drive. Expression for expression the law step() carried, so a plant wired
-   this way is bit-identical to one that ran it built in. */
+/* expression for expression the law step() carried, so a plant wired this way is bit-identical to one running it built in */
 function buildRodAuto(cid){
   const tavg=blkMk("source",{sig:"tavg",arg:cid},null,"The coolant temperature this loop steers: the average of hot and cold leg, measured."),
         tprog=blkMk("source",{sig:"tprog",arg:cid},null,"Where that average is meant to sit at the load being asked for. A programme, not a fixed setpoint.");
@@ -372,11 +299,7 @@ function buildRodAuto(cid){
   const pid=blkMk("pid",{db:AUTOROD_DB,n:AUTOROD_N},[e,rate],"Velocity form: it puts out rod steps, not a rod position. Blank gains take the plant's own rod tune.");
   blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are.");
 }
-/* The feed regulating valve: the shell's feed against what its level programme
-   asks, made relative to what it is boiling (FREG_SPAN floors the divisor),
-   clamped, integrated at the valve's own stroke. The graph reads the previous
-   tick's steam and level where the built-in law read this tick's, so it
-   follows one tick behind it - measured, see the plan. */
+/* reads the previous tick's steam and level where the built-in law read this tick's, so it follows one tick behind it */
 function buildFeedAuto(sgId){
   const fed=blkMk("source",{sig:"sgfed",arg:sgId},null,"Feedwater going into this generator right now."),
         want=blkMk("source",{sig:"sgwant",arg:sgId},null,"What its level programme asks for: roughly what it is boiling off.");
@@ -389,9 +312,7 @@ function buildFeedAuto(sgId){
   const pos=blkMk("integ",{lo:0,hi:1},[pid],"The valve position those increments add up to, shut to wide open.");
   blkMk("sink",{sink:"freg",arg:sgId},[pos],"Drives this generator's feed regulating valve.");
 }
-/* A relief valve's pressure controller: lift above one setpoint, reseat below
-   the other. The setpoints are READ off the valve (SIGNAL.fitlift/fitreseat),
-   never copied: the valve's own panel stays the one place they are stated. */
+/* the setpoints are read off the valve, never copied: its own panel stays the one place they are stated */
 const reliefFitIdsD = () => Object.keys(D.fittings).filter(f=>D.fittings[f].mode==="relief" && !D.fittings[f].spring);
 function buildReliefAuto(fid){
   const p=blkMk("source",{sig:"fitp",arg:fid},null,"The pressure at this valve.");
@@ -400,20 +321,7 @@ function buildReliefAuto(fid){
   const c=blkMk("compare",{},[p,lift,reseat],"Open above the lift point, shut again below the reseat point.");
   blkMk("sink",{sink:"relief",arg:fid},[c],"Drives the valve. This is a power-operated valve, so with the cabinet dark it holds and only a spring safety is left.");
 }
-/* ══ THE PROTECTION SYSTEM, DRAWN ══ one column per channel: the reading, the
-   channel's own setpoint, and a compare that goes hot when the plant passes
-   it. Every compare feeds a max tree, which is the OR, which lands on the
-   scram. A second tree of compares on the SAME readings sits at the near
-   setpoint and lands on the warning lamp.
-   NOTHING HERE STATES A NUMBER. Both setpoints are read off RPS_CH (step.js)
-   through SIGNAL.rpsset/rpsnear, so the trip points stay stated in one place
-   and a plant whose design moves takes its protection with it.
-   The compare is a bare threshold - on and off wired to the same setpoint -
-   because a protection channel does not have hysteresis: it is the latch on
-   the far side of the scram that stops it chattering.
-   IT IS TWO TABS: the channels, and the logic they land on. A section is a
-   view, so the wires cross from one to the other and nothing computes
-   differently for it. */
+/* nothing here states a number: both setpoints are read off RPS_CH through SIGNAL.rpsset/rpsnear */
 function blkOr(ids,note){                  // sel takes three, so an OR of many is a tree of them
   while(ids.length>1){ const next=[];
     for(let i=0;i<ids.length;i+=3) next.push(blkMk("sel",{op:"max"},ids.slice(i,i+3),note));
@@ -422,8 +330,9 @@ function blkOr(ids,note){                  // sel takes three, so an OR of many 
 }
 function buildRpsAuto(cid,lab){
   const trip=[], near=[];
-  inSeg(lab+" CHANNELS", ()=>{
-    for(const [key,name,,dir,sig,,gate] of RPS_CH){
+  for(const fam of [...new Set(RPS_CH.map(r=>r[7]))]) inSeg(lab+" "+fam, ()=>{
+    for(const [key,name,,dir,sig,,gate,f] of RPS_CH){
+      if(f!==fam) continue;
       const op=dir>0?"above":"below";
       const v=blkMk("source",{sig,arg:cid},null,"What the "+name.toLowerCase()+" channel watches.");
       for(const [set,out] of [["rpsset",trip],["rpsnear",near]]){
@@ -432,9 +341,7 @@ function buildRpsAuto(cid,lab){
           : "The near-trip point of the same channel: the lamp lights here, well before the scram.");
         let c=blkMk("compare",{op},[v,t,t],"Made when the plant passes the "+name.toLowerCase()+" point. On and off are the same value: a protection channel has no hysteresis, the latch beyond the scram is what stops it chattering.");
         setPartName(c,name);          // the CHANNEL carries the name, so the trip's word is the channel's
-        /* A CHANNEL MAY BE STOOD DOWN BY THE PLANT ITSELF: low flow does not
-           protect a core that is making no heat. The gate is a compare like any
-           other and it is ANDed in by multiplying two zero-or-ones. */
+        /* the permissive is a compare like any other, ANDed in by multiplying two zero-or-ones */
         if(gate){ const h=blkMk("source",{sig:"heat",arg:cid},null,"How hard this core is making heat. The permissive below reads it.");
           const g=blkMk("compare",{op:"above",on:.3,off:.3},[h],"Above 30% heat this channel is armed; below it the channel is stood down. Low flow does not protect a core that is making nothing.");
           setPartName(g,"HEAT PERMISSIVE");
@@ -442,27 +349,21 @@ function buildRpsAuto(cid,lab){
         out.push(c);
       }
     }
-  }, "One column per channel: the reading, the channel's own trip point, and a compare that is made when the plant passes it. Nothing here states a number. The compares land on the OR in the logic section next door.");
+  }, "One column per channel of this family: the reading, the channel's own trip point, and a compare that is made when the plant passes it. Nothing here states a number. The compares land on the OR in the logic section.");
   inSeg(lab+" LOGIC", ()=>{
     // the sinks are named too, so the key on the vessel's own strip reads as the system and not as b79
     setPartName(blkMk("sink",{sink:"scram",arg:cid},[blkOr(trip,"Any channel that is made trips the plant: max over the channels is the OR.")],
       "Drops the rods on this core. Switching it off is defeating the protection system, and the plant says so."),"PROTECTION SYSTEM");
     setPartName(blkMk("sink",{sink:"nearTrip",arg:cid},[blkOr(near,"The same OR, on the near points: any channel approaching its trip lights the lamp.")],
       "Lights the near-trip lamp. It only warns; nothing on the plant moves because of it."),"NEAR TRIP");
-  }, "The OR over the channels next door: any one of them trips the plant. A second OR on the near points lights the warning lamp and does nothing else. The wires arrive from the channels section.");
+  }, "The OR over every channel: any one of them trips the plant. A second OR on the near points lights the warning lamp and does nothing else. The wires arrive from the channel sections.");
 }
 function buildStockAutomation(){
-  /* A preset states the whole cabinet; emptied in place, never rebuilt - and
-     the names and the sections go with the blocks. One bare section is left
-     standing, because a cabinet with no section has nowhere to put a block. */
+  /* emptied in place; one bare section stays, because a cabinet with none has nowhere to put a block */
   for(const k in D.blocks){ delete D.blocks[k]; if(D.name) delete D.name[k]; if(D.note) delete D.note[k]; }
   for(const sid of segIds()){ if(D.name) delete D.name[sid]; if(D.note) delete D.note[sid]; }
   D.segs=["g1"];
-  /* A TAB IS A FEW CHARACTERS WIDE. The name used to carry the machine's own -
-     "RELIEF RELIEF VALVE", "PROTECTION REACTOR 1" - which is the machine said
-     twice and a strip nobody can read. It is the short word plus a NUMBER, and
-     only where there is more than one of the thing to tell apart. The player
-     renames any of them in the tab itself. */
+  /* numbered only where there is more than one to tell apart */
   const nm=(lab,i,n)=> n>1 ? lab+" "+(i+1) : lab;
   const cores=coreIds(), feeds=sgIds().filter(id=>pumpIds().some(p=>secGensOf(p).includes(id))),
         reliefs=reliefFitIdsD();
@@ -480,28 +381,18 @@ function buildStockAutomation(){
     "Sheds turbine load when a reactor trips, so the turbine is not left drawing hard on a dead core.");
   if(!segHas("g1")) segRemove("g1");   // the seed section, if every controller made its own
 }
-/* The turbine sheds load the instant any vessel trips: an OR over every
-   vessel's TRIPPED signal onto the one-shot. A hall of two units with one of
-   them still up runs back to that unit's share, which runbackNow() works out
-   for itself - the graph only says WHEN. */
-/* ARM OR DEFEAT THE WHOLE PROTECTION SYSTEM AT THE BENCH, which is one switch
-   per vessel's scram sink. The one door presets and headless tools use, so
-   "commissioned with protection off" is stated once. */
+/* the one door presets and headless tools use, so "commissioned with protection off" is stated once */
 function scramBlocksOn(on){
   for(const id in D.blocks){ const b=D.blocks[id];
     if(b.mode==="sink" && b.sink==="scram") b.on=!!on; }
   dTouch();
 }
-/* WHETHER THIS DESIGN HAS A PROTECTION SYSTEM AT ALL, asked of the cabinet the
-   way rpsState() asks it of a running one. There is no D.rps flag any more: a
-   protection system is a scram somebody wired, so a design that has one is a
-   design whose cabinet contains one, and the two answers cannot disagree. */
+/* a protection system is a scram somebody wired, asked of the design the way rpsState() asks it of a running plant */
 const scramWiredD = () => Object.keys(D.blocks).some(id=>{
   const b=D.blocks[id]; return b.mode==="sink" && b.sink==="scram"; });
 const scramArmedD = () => Object.keys(D.blocks).some(id=>{
   const b=D.blocks[id]; return b.mode==="sink" && b.sink==="scram" && b.on && b.in[0]; });
-/* AND THE SAME ORDER TO A PLANT THAT IS ALREADY RUNNING, through act() like
-   every other live change - what the headless tools used to say with --byp. */
+/* the same order to a plant already running, through act() like every other live change */
 function blkSinkOff(s,sink){
   for(const id in s.blkBy){ const b=s.blkBy[id];
     if(b.mode==="sink" && b.sink===sink && b.on) act("blkOn",id); }
@@ -515,12 +406,6 @@ function buildRunbackAuto(){
   setPartName(blkMk("sink",{sink:"runback"},[c],
     "Sheds turbine load the moment a reactor trips. Switch it off and a scram leaves the turbine drawing hard on a dead core, chilling the loop."),"TURBINE RUNBACK");
 }
-/* ══ THE BOILING PLANT STEERS ON FLOW ══ recirculation sweeps void out of the
-   core and void is the reactivity, so a BWR follows load with its pumps and
-   leaves the rods where they are: turbine load against reactor power, a PI in
-   velocity form, integrated into a pump demand every coolant pump shares.
-   35 % floors the demand above the LOW FLOW trip (P.flowMin, 0.30 at one pump
-   per generator) so the controller cannot trip the plant it is steering. */
 const coreBoils = id => COOLANT[coreD(id).cool].id==="BWR";
 function buildFlowAuto(cid){
   const load=blkMk("source",{sig:"load"},null,"What the turbine is being asked for."),

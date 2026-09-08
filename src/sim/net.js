@@ -1,68 +1,8 @@
-// Dense solver for a pipe conductance network: a weighted graph Laplacian.
-//
-// Edge e=(u,v) with conductance g_e and head h_e carries flow
-//   Q_e = g_e * (p_u - p_v + h_e)
-// KCL at every FREE node gives a symmetric PSD system G p = b, with
-//   G_uu = sum of g on u,  G_uv = -g_e,  b_u = sum of head terms on u.
-//
-// A FIXED node is one whose pressure is KNOWN rather than solved. The single
-// `ground` node this file used to carry was the one-node case of that, pinned
-// at 0; it is a set now because a plant can hold several known pressures at
-// once - the pressurizer at s.P, containment behind a break, a tank's own
-// charge - and no single affine offset can satisfy two of them at the same
-// time. `fixed` is an object keyed by node index whose value is that node's
-// pressure; a node absent from it is solved for.
-//
-// Factorization: LDL^T (Cholesky without the square root — the matrix is
-// only PSD, not always strictly PD, because a floating island contributes an
-// exact zero pivot; a plain Cholesky would have to take sqrt of that zero
-// and lose the sign information the guard below needs). Stored compactly
-// in-place in A: strict-lower entries become the unit-lower-triangular
-// multipliers L[i][k] (i>k), the diagonal becomes D. That split is what
-// lets a caller factor once per structure/conductance change and then
-// substitute many times per tick for only an RHS change (~n^2 flops).
-
 const NET_EPS = 1e-9, NET_REL = 1e-12;
 
-// Symmetric Gaussian elimination, right-looking, no pivoting: the ordering
-// is whatever the caller assembled (node index), never chosen for stability,
-// because a graph Laplacian with every component grounded is PD in any order.
-//
-// The pivot guard: a component with no path to ground (an isolated design-
-// bench port, a subgraph cut loose) makes that component's block singular.
-// By elimination step, this always surfaces as a single pivot going to zero
-// at the LAST node of that block to be processed — PSD guarantees the block
-// diagonal cannot go negative, and once every other node in the block has
-// been eliminated, whatever detached component is left has nothing further
-// to contribute. Clamping the diagonal to 1 and zeroing only the *forward*
-// entries (columns > k, not yet used) decouples that node for every pivot
-// still to come, so no later step ever divides by ~0 and no NaN is produced.
-// Columns < k are left untouched: those already hold finalized multipliers
-// from earlier, non-degenerate pivots in the same block, and are exactly
-// what makes the rest of that block's internal flows (e.g. a head source
-// between two nodes that are floating together) solve correctly instead of
-// silently discarding half the block's history.
-// WHICH NODES THE GUARD BELOW HAD TO DECOUPLE, and it is worth handing back
-// rather than throwing away: a node with no remaining path to ground gets an
-// arbitrary potential out of the solve, and a caller that PRINTS potentials
-// has to know that so it can print nothing instead. Shut a valve in the steam
-// line and the turbine inlet is exactly this case - measured, it read 15.5 MPa
-// on a pipe full of steam, which is a plausible-looking wrong number and the
-// worst kind. Index is MATRIX row, which a compacting caller (netFactored,
-// pipenet.js) scatters back to node index.
-// `bw` is the HALF-BANDWIDTH of A under the caller's ordering: every non-zero
-// sits within bw of the diagonal, and LDL^T without pivoting creates no fill
-// outside that band, so both loops stop at k+bw instead of n. Omitted, the
-// band is the whole matrix and this is the dense elimination it always was.
 function netFactor(A, n, deg, bw){
   const B = bw === undefined ? n : bw;
-  /* THE GUARD IS RELATIVE TO THE ROW'S OWN WEIGHT, not an absolute epsilon.
-     The last node of a floating block cancels to rounding noise, and that
-     noise is g x 1e-16: a cooling loop carrying a 2e7 conductance left 2e-9
-     there, over the old 1e-9, so on alternate passes the block was solved as
-     if grounded - noise divided by noise - and its flow flipped 5 876 / 7 104
-     kg/s. The original diagonal is the row's scale; it is read before any
-     elimination touches it. */
+  // Relative to the row's own weight: a floating block's last pivot cancels to g x 1e-16.
   const d0 = new Float64Array(n);
   for(let k=0;k<n;k++) d0[k] = A[k*n+k];
   for(let k=0;k<n;k++){
@@ -83,10 +23,6 @@ function netFactor(A, n, deg, bw){
   return A;
 }
 
-// Solve using a factored A (from netFactor) in place: x holds b on entry,
-// p on exit. Forward-solve L y=b, divide by D, back-solve L^T z=y. O(n^2),
-// no allocation — this is the per-tick path when only b changed. Banded
-// like netFactor, on the same bw.
 function netSubst(A, x, n, bw){
   const B = bw === undefined ? n : bw;
   for(let k=0;k<n;k++){
@@ -103,71 +39,12 @@ function netSubst(A, x, n, bw){
   return x;
 }
 
-// Builds A (n*n, row-major) and b (length n) from an edge list. Each edge is
-// {u, v, g, h}; g and h may be a plain number or a function(s) evaluated
-// per assembly, since conductance/head both depend on live sim state (valve
-// position, pump demand) while the graph topology itself does not change
-// tick to tick.
-//
-// Fixed nodes: rather than pinning one with a penalty (an arbitrary, hard to
-// justify condition number) or resizing the system to drop its row/column, a
-// fixed node is simply never written to during assembly. Its row and column
-// of A stay exactly zero, so netFactor's pivot guard decouples it exactly
-// like any node with no path to a fixed one, and netSubst lands its solved
-// potential at exactly 0 — the same single mechanism does both jobs, and the
-// caller reads the KNOWN value back out of `fixed` rather than out of p.
-// A fixed node's own pressure reaches its free neighbours through b instead:
-// the -g*p_v term that would have sat in the matrix moves to the right-hand
-// side as +g*pFixed. With one fixed node at 0 that term vanishes and this
-// assembles bit-for-bit the matrix the single-ground version did.
-//
-// An edge with g<=0 (a fully-shut valve, same as a removed pipe) is skipped
-// entirely rather than assembled with a zero conductance: a structurally-
-// absent edge and a shut valve must produce a bit-identical matrix, because
-// a later stage compares assembled matrices by strict equality.
-/* `src`, if given, is a per-node injected CURRENT added to the KCL right-hand
-   side after every edge has been stamped - a volume appearing at a node rather
-   than flowing to it through a conductance. Thermal expansion is exactly that
-   (step.js): heating the loop makes water where there was none, and in an
-   incompressible network it has to leave somewhere, which is what makes the
-   solved surge flow contain expansion by construction instead of a correlation
-   standing beside the solve claiming it does.
-
-   It goes in HERE and not in a pre-loaded b, which is what it looks like it
-   should be: this function fills b from zero every call, so anything a caller
-   wrote into b beforehand is wiped before the first edge is stamped.
-
-   A fixed node absorbs whatever it is given by definition, so injecting into
-   one is a no-op that would silently vanish; skipped rather than added. */
-/* PASS `false` FOR `A` TO ASK FOR THE RIGHT-HAND SIDE ONLY. A back-substitution
-   against a cached factorisation needs b and nothing else, and the matrix it
-   was throwing away was n*n doubles allocated, zeroed and stamped every call -
-   measured at 18% of a sim tick, twice a tick, for an answer nobody read.
-   `null`/omitted still means "make me one", because that is what a caller
-   assembling a matrix to factor wants; only an explicit `false` skips it. */
-/* `row`/`m` COMPACT THE SYSTEM, and it costs nothing: only a free node is
-   ever written, so a fixed one occupies a row and a column of exact zeros. On
-   a four-loop plant that is 276 of 312 nodes, and a dense elimination pays m^3
-   for them. `row` maps node index -> matrix row (a fixed node's entry is never
-   read) and `m` is the resulting width; A and b are then m-sized, and the
-   caller scatters the answer back to node index. Omitted, the matrix is the
-   whole network exactly as before. */
-/* `touch` is which nodes an edge that actually CONDUCTS this pass landed on.
-   Pure bookkeeping over the same loop and the same g - the caller cannot ask
-   it afterwards without evaluating every edge's conductance a second time, and
-   a second evaluation is a second answer. */
-/* `cap`, if given, is a per-node STORAGE conductance in kg/s per MPa - C/dt
-   for a node that can hold something, added to its own diagonal and nowhere
-   else. It is what turns a KCL row into a first-order lag: what arrives less
-   what leaves is what the node took in. The matching C/dt*p_prev goes in
-   through `src`, which is the existing hook and already the right shape - a
-   current appearing at a node rather than flowing to it. A fixed node absorbs
-   whatever it is given, so a store on one is a no-op and is skipped. */
+// A is compacted onto the free rows by `row`, b stays at full node length; a fixed node is never stamped and reaches free neighbours through b as +g*pFixed.
 function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap){
   const wantA = A !== false;
   if(!row) m = n;
   if(wantA) A = A || new Float64Array(m*m);
-  b = b || new Float64Array(m);
+  b = b || new Float64Array(n);
   if(wantA) A.fill(0);
   b.fill(0);
   for(let e=0;e<edges.length;e++){
@@ -179,30 +56,24 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap){
     if(touch){ touch[u]=1; touch[v]=1; }
     const pu = fixed[u], pv = fixed[v];
     const gu = pu === undefined, gv = pv === undefined;
-    const ru = row ? row[u] : u, rv = row ? row[v] : v;
     if(wantA){
+      const ru = row ? row[u] : u, rv = row ? row[v] : v;
       if(gu) A[ru*m+ru] += g;
       if(gv) A[rv*m+rv] += g;
       if(gu && gv){ A[ru*m+rv] -= g; A[rv*m+ru] -= g; }
     }
-    if(gu) b[ru] -= g*h;
-    if(gv) b[rv] += g*h;
-    if(gu && !gv) b[ru] += g*pv;
-    if(gv && !gu) b[rv] += g*pu;
+    if(gu) b[u] -= g*h;
+    if(gv) b[v] += g*h;
+    if(gu && !gv) b[u] += g*pv;
+    if(gv && !gu) b[v] += g*pu;
   }
   if(wantA && cap) for(let i=0;i<n;i++) if(fixed[i]===undefined && cap[i] > 0){
     const ri = row ? row[i] : i; A[ri*m+ri] += cap[i]; }
-  if(src) for(let i=0;i<n;i++) if(fixed[i]===undefined && src[i]) b[row?row[i]:i] += src[i];
+  if(src) for(let i=0;i<n;i++) if(fixed[i]===undefined && src[i]) b[i] += src[i];
   return { A, b };
 }
 
-// Per-edge flow from solved potentials p: Q_e = g_e*(p_u - p_v + h_e).
-// A fixed node reads as its KNOWN pressure, never as whatever p holds for it
-// (netSubst leaves that at 0, which is the right answer only for a node
-// fixed at 0 - leave it and every flow touching the core reads as though the
-// vessel were at zero pressure: a large, plausible-looking wrong number with
-// nothing thrown anywhere). Writes into out (length edges.length) to avoid
-// allocating per tick; s is only needed if any edge's g/h is a function.
+// A fixed node reads its known pressure, never p - netSubst leaves that at 0.
 function netFlows(edges, p, fixed, out, s){
   for(let e=0;e<edges.length;e++){
     const ed = edges[e];
@@ -217,10 +88,25 @@ function netFlows(edges, p, fixed, out, s){
   return out;
 }
 
-// The solved field, with every fixed node's known pressure written back over
-// the 0 netSubst left there. One place says "a fixed node reads its own
-// value", so a reader can take p straight afterwards.
 function netUnfix(p, fixed){
   for(const i in fixed) p[i] = fixed[i];
   return p;
+}
+
+// A (rows) and b are consumed; false = a pivot vanished, `out` still filled with 0 where it could not be decided.
+function denseSolve(A, b, out, n){
+  let ok = true;
+  for(let c=0;c<n;c++){
+    let piv = c;
+    for(let r=c+1;r<n;r++) if(Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    if(piv !== c){ const t=A[c]; A[c]=A[piv]; A[piv]=t; const u=b[c]; b[c]=b[piv]; b[piv]=u; }
+    if(!(Math.abs(A[c][c]) > 1e-12)){ ok = false; continue; }
+    for(let r=c+1;r<n;r++){ const f = A[r][c]/A[c][c];
+      for(let k=c;k<n;k++) A[r][k] -= f*A[c][k];
+      b[r] -= f*b[c]; }
+  }
+  for(let c=n-1;c>=0;c--){ let s = b[c];
+    for(let k=c+1;k<n;k++) s -= A[c][k]*out[k];
+    out[c] = Math.abs(A[c][c]) > 1e-12 ? s/A[c][c] : 0; }
+  return ok;
 }
