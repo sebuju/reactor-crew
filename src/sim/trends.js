@@ -86,6 +86,10 @@ const SIGNAL={
  sgst :{scope:"sg",   lab:"STEAM OUT",  u:"kg/s",f:(s,id)=>(s.steamBy&&s.steamBy[id])||0},
  sgfed:{scope:"sg",   lab:"FEED IN",    u:"kg/s",f:(s,id)=>(s.sgFedBy&&s.sgFedBy[id])||0},
  sgwant:{scope:"sg",  lab:"FEED WANT",  u:"kg/s",f:(s,id)=>feedWant(s,id)},
+ /* Infinity with no shell on the board, so a plant that owns no generator
+    cannot have a low-level channel made for it by the absence of a machine. */
+ sglo :{scope:"plant",lab:"LOWEST SG LEVEL",u:"%",
+        f:s=>sgIds().reduce((m,id)=>Math.min(m,sgLvl(s,id)),Infinity)},
  pumpq:{scope:"pump", lab:"PUMP SPEED", u:"%",   f:(s,id)=>(s.flowBy[id]||0)*100},
  pumpd:{scope:"pump", lab:"PUMP DEMAND",u:"%",   f:(s,id)=>(s.flowDemBy[id]||0)*100},
  fitp :{scope:"fit",  lab:"VALVE P",    u:"MPa", f:(s,fid)=>reliefP(s,fid)},
@@ -97,6 +101,7 @@ const SIGNAL={
  loopp:{scope:"loop", lab:"LOOP P",     u:"MPa", f:(s,ci)=>loopP(s,+ci)},
  supply:{scope:"plant",lab:"SUPPLY",    u:"",    f:s=>supplyK(s)},
  dark :{scope:"plant",lab:"BLACKOUT",   u:"",    f:s=>s.blackout?1:0},
+ turbtr:{scope:"plant",lab:"TURBINE TRIPPED",u:"", f:s=>s.turbTrip?1:0},
  time :{scope:"plant",lab:"TIME",       u:"s",   f:s=>s.t},
 };
 /* THE CHART'S CHANNELS: every SIGNAL row that states a colour. Same objects,

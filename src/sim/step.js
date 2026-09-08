@@ -1423,6 +1423,14 @@ const RPS_CH=[
   /* 3 K absolute, or 3 K below what this plant was COMMISSIONED subcooled by -
      whichever is lower. A plant designed saturated has no 3 K to lose. */
   ["sub","LOW SUBCOOLING","SUBCOOL", -1, "scc", P_=>Math.min(3,P_.sc0-3)],
+  /* THE TWO CHANNELS A BLACKOUT IS ACTUALLY CAUGHT ON, and low flow is not one
+     of them: the pumps coast slower than the void takes the power away, so the
+     heat permissive shuts before the flow channel is made. Every family carries
+     both - a PWR trips on turbine above P-9 and on generator level low-low.
+     Neither states a number: the permissive is the real ~30 % bypass already
+     here, and SG_LOW is already the LO SG LVL lamp. */
+  ["turbt","TURBINE TRIP","TURBINE", +1, "turbtr", ()=>0.5,  s=>s.heat>0.3],
+  ["sglvl","LOW SG LEVEL","LEVEL",   -1, "sglo",   ()=>SG_LOW],
 ];
 const RPS_BY=Object.fromEntries(RPS_CH.map(r=>[r[0],r]));
 /* `slack` shifts the setpoint toward the plant, so 0 is the real limit and
@@ -3156,9 +3164,13 @@ function dnbrOf(K,m){
 
    The ONSET is physics: DNBR 1.0 is what departure means, and the ramp is
    priced on the node's own margin, which carries P.dnbrK, so 1.0 means the
-   same departure on every family. DNB_FILM is physics too, roughly - past
-   departure the wall is blanketed and the coefficient falls by about an order
-   of magnitude, and that residual share is what is left.
+   same departure on every family. DNB_FILM is physics too, and it is a share
+   of the SINGLE-PHASE COOLANT FILM, not of the whole pellet-to-coolant path:
+   departing does not make the pellet's own conduction worse. Measured on the
+   stock BWR, that film is 22.7 kW/m2/K, so 0.10 leaves 2.3 kW/m2/K against a
+   published post-CHF film boiling of 1-3. The literal did not move; what it
+   multiplies did, and it was 221 W/m2/K - an order under the band - while it
+   was multiplying the series total.
 
    ══ THE REWET IS A WALL-SUPERHEAT PROBLEM, AND IT READS THE WALL ══
    Departure (d < 1) blankets the wall: the film is DNB_FILM of itself at
@@ -3169,13 +3181,12 @@ function dnbrOf(K,m){
    real and it is what a fitted band on the margin ratio (DNB_SPAN) stood in
    for: a node that dipped under 1.0 for a tick and whose pellet never heated
    rewets at once; one whose pellet did heat holds its own wall over the
-   Leidenfrost point and does not. THE REGIME IS A STATE (s.nDnb): the
-   superheat is only asked of a node that HAS departed, because this film is
-   a single-phase fit that puts the clad CLAD_DT0 over the coolant and not a
-   boiling curve - read at rest, a BWR node at 80 % void showed a 280 K wall
-   over saturation the real nucleate wall never has, and latched itself into
-   film boiling on tick one. Water figure, published order: minimum film
-   boiling about 150 K over saturation at reactor pressure.
+   Leidenfrost point and does not. THE REGIME IS A STATE (s.nDnb), and the
+   superheat is now read off a wall that has a boiling curve behind it
+   (jensLottes, core2d.js): a BWR node at rest holds 7.9 K over saturation,
+   where the single-phase fit it used to be read with showed 233 K and latched
+   the node into film boiling on tick one. Water figure, published order:
+   minimum film boiling about 150 K over saturation at reactor pressure.
 
    P.dryout is which families departure is a real event for. Helium never
    boils, so a film that collapses is a fiction there; MSR's fuel is IN the
