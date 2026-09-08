@@ -247,8 +247,10 @@ const reliefRefP = fid => { const pn = layPass();
   const v = reliefRefPOf(fid);
   if(pn) refPCache[fid] = v;
   return v; };
-const reliefRefPOf = fid => shellsOf(fid).length ? Math.min.apply(null, shellsOf(fid).map(sgDesignP))
-                       : (P ? P.P0 : holdPSuggest(nodeGraph().coreCirc));
+/* the same reference off the DRAWING alone: designBake() runs on the bench, where P is the last plant commissioned */
+const reliefRefPD = fid => shellsOf(fid).length ? Math.min.apply(null, shellsOf(fid).map(sgDesignP))
+                       : holdPSuggest(nodeGraph().coreCirc);
+const reliefRefPOf = fid => (P && !shellsOf(fid).length) ? P.P0 : reliefRefPD(fid);
 /* which shells this valve can see right now: the drawing with the shut runs cut out */
 const shellsLive = (s,fid) => shellsOf(fid, portDead(s));
 /* a hole sits on the run: it blows off whichever end still has an open port valve */
@@ -987,10 +989,9 @@ function advectAnchors(s){
     for(const IN of (Array.isArray(R.internal) ? R.internal : []))
       if(IN.anch) at(hold, p.id, [IN.a, IN.b], T);
   }
-  /* A tank is a pot of its own at its FLUID's stated temperature; a hold tank is not storage and is left to the transport. */
+  /* CONTENTS is the commissioning charge and nothing more: seeded at its FLUID's temperature, then left to the transport like any other vessel. */
   for(const id of tankIds()){ if(D.tanks[id].hold) continue;
-    const T = tankFluid(id).temp;
-    at(hold, id, FACES, T); at(seed, id, FACES, T); }
+    at(seed, id, FACES, tankFluid(id).temp); }
   return {hold, seed, holdH};
 }
 // seconds of lag on s.dTavg, the rate every pressure and controller term reads
@@ -1062,7 +1063,10 @@ function advectStep(s, dt, runFlow, edgeKg){
         const c = circOfNode(nm);
         /* The walk carries a TEMPERATURE, which on the shelf is saturated liquid - so a steam space seeds off net.vapour and a pressurizer with its bubble in it. */
         const hold = holdTankIds().find(id => coreFold(id) === nm);
+        /* a charged vessel seeds at what was put in it, on the core's circuit as much as anywhere: the loop's mean temperature is not the contents of a tank standing beside it */
+        const tid = net.tankIdByNode && net.tankIdByNode[i];
         h[nm] = hold ? holdSeedH(tankCircuit(hold), holdSetP(tankCircuit(hold)), tankLvl(s,hold))
+          : tid !== undefined ? hOfT(satOfCirc(c), tankFluid(tid).temp)
           : (net.vapour && net.vapour[i])
           ? satHg(satOfCirc(c), netPAt(s,nm))
           : hOfT(satOfCirc(c), (c !== G.coreCirc && T[i] !== undefined) ? T[i] : s.Tavg); } } }
@@ -1309,7 +1313,7 @@ function h2Total(s){
 const hotMass=()=>{ let m=0;
   for(const id of sgIds()) m+=sgRowOf(id).water*1000;
   return Math.max(1,m); };
-const sgIds=()=>LAY.parts.filter(p=>p.role==="sg").map(p=>p.id);
+const sgIds=()=>roleAll("sg");
 /* 1 down to SG_DRY, then nothing; an unseeded level reads 1. */
 const sgFill=(s,id)=>{ const v=s.sglBy&&s.sglBy[id];
   return v===undefined?1:clamp(v/SG_DRY,0,1); };
@@ -2701,10 +2705,8 @@ function step(dt){
   const ids = sgIds();
   for(const id in s.sglBy) if(!sgW.hasOwnProperty(id)) delete s.sglBy[id];
   for(const id in s.fregBy) if(!sgW.hasOwnProperty(id)) delete s.fregBy[id];
-  /* two pools, told apart by a rule and never by a name: a tank whose valve stands open always IS the circuit, one that has to be opened is a reserve */
-  const circ = [], res = [];
-  for(const id of secTankIds())
-    (D.tanks[id].auto === "always" ? circ : res).push(id);
+  /* the condensate pool is the HOSTED tank - a hotwell lives inside its condenser and has no cell. A tank standing on the board is metered against its own edge, whatever its valve rule says */
+  const circ = secTankIds().filter(id => !D.tanks[id].cell);
   /* both latched here, ahead of the stop valve, because both are the stop valve's answer; the vacuum never comes back but the trip re-latches on a whole, clear machine */
   if(!s.condLost && condP(s) >= COND_ATM){ s.condLost = true;
     logE("alarm","CONDENSER VACUUM LOST",
