@@ -439,18 +439,19 @@ function pipeRate(s){
    all the way home. */
 const DISP_EPS=0.0008;
 const pipeStep = v => v>=1000 ? 10 : v>=100 ? 1 : 0.1;
-function pipeDisplay(k,fr,scale){
+function dispEase(k,fr,eps,rate){
   const cur=pipeShown[k];
   if(cur===undefined){ pipeShown[k]=fr; return fr; }
   if(!pipeDt) return cur;                    // a paused plant must still freeze
-  const eps = scale>0 ? 0.5*pipeStep(Math.abs(fr)*scale)/scale : DISP_EPS;
   if(Math.abs(fr-cur)<eps) return cur;
   const n=Math.max(1,Math.round(pipeDt/PIPE_DT));
   let v=cur;
-  for(let i=0;i<n;i++) v=approach(v,fr,PIPE_DT,4);
+  for(let i=0;i<n;i++) v=approach(v,fr,PIPE_DT,rate);
   pipeShown[k]=v;
   return v;
 }
+const pipeDisplay=(k,fr,scale)=>
+  dispEase(k,fr,scale>0?0.5*pipeStep(Math.abs(fr)*scale)/scale:DISP_EPS,4);
 /* three significant figures, which is what an instrument face gives you. The fourth
    digit of a four-figure flow is worth a hundredth of a per cent and is pure noise -
    printing it makes a steady meter look like it is hunting. */
@@ -1575,6 +1576,22 @@ function pipeLoose(L){
       } }
     ctx.save(); ctx.setLineDash([3*DRAW_K,3*DRAW_K]); ctx.lineWidth=1.5*DRAW_K;
     ctx.strokeRect(r.x+3*DRAW_K,r.y+3*DRAW_K,r.w-6*DRAW_K,r.h-6*DRAW_K); ctx.restore();
+  }
+  /* AND ON ONTO THE NOZZLE. A run's END CELL is the port cell, so the cells it
+     stamps begin one clear of it - which drew an unfinished pipe with a cell of
+     bare board between it and the machine it is already landed on. A traced run
+     draws its own stub (pipeNetwork() takes portPos at both ends), so this is
+     only ever the half-plumbed one. */
+  ctx.lineWidth=3*DRAW_K;
+  for(const rid in D.runs){
+    const r=D.runs[rid], cs=r.cells; if(!cs||!cs.length) continue;
+    for(const which of ["a","b"]){
+      const e=r[which], pid=portAtCell(e[0],e[1]); if(pid==null) continue;
+      const c = which==="a" ? cs[0] : cs[cs.length-1];
+      if(own[pipeKey(c[0],c[1])]) continue;
+      const [px,py]=portPos(pid), [qx,qy]=cellPos(c[0],c[1]);
+      ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(qx,qy); ctx.stroke();
+    }
   }
   ctx.restore();
 }

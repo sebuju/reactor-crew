@@ -1716,11 +1716,11 @@ function drawPortValves(L){
    The cells the release would stamp, dashed - a proposal, not a pipe yet, the
    same dashing every other preview on this bench uses. */
 /* ══ THE GRIPS ON THE RUN UNDER THE HAND ══
-   Two ends and its waypoints in order. Only the SELECTED run wears them - a
-   plant carries twenty runs and forty dots on the deck is not a gesture - and
-   a run that could not be laid wears them whether or not it is selected,
-   because it has no cells to be clicked on and would otherwise be an object
-   nobody could reach.
+   Two ends and its waypoints in order. A FINISHED run wears them only when it
+   is selected - a plant carries twenty runs and forty dots on the deck is not
+   a gesture - but an UNFINISHED one wears them always: a loose end and a run
+   that could not be laid are both jobs left half done, and the grips are the
+   only handle on either.
    The dot is the grip: pushed last, so it takes the press before the machine
    or the pipe cell underneath it. */
 const RUNG=CELL*0.62;
@@ -1733,10 +1733,17 @@ function drawRunGrips(){
   };
   for(const rid in D.runs){
     const r=D.runs[rid], err=runErr(rid), on=rid===selRid;
-    if(!on && !err) continue;
+    const loose = portAtCell(r.a[0],r.a[1])==null || portAtCell(r.b[0],r.b[1])==null;
+    if(!on && !err && !loose) continue;
+    /* A GRIP STANDING ON A GRIP IS A JOINT WAITING FOR THE RELEASE, not a
+       refusal: the cell is one two runs both want, so the router turns the
+       dragged one down and would otherwise report NO ROUTE in red for the whole
+       length of a gesture that is about to succeed. */
+    const join={a:runJoinAt(rid,"a"), b:runJoinAt(rid,"b")};
+    const dup=r.pins.some((c,i)=>runPinDup(rid,i));   // ...and so is a waypoint about to collapse
     /* WHERE IT WANTED TO GO, when it could not get there. The recipe is still
        a real object with two ends; what is missing is the pipe. */
-    if(err){ ctx.save(); ctx.setLineDash([4*DRAW_K,4*DRAW_K]);
+    if(err && !join.a && !join.b && !dup){ ctx.save(); ctx.setLineDash([4*DRAW_K,4*DRAW_K]);
       ctx.strokeStyle=C.red; ctx.lineWidth=1.4*DRAW_K; ctx.beginPath();
       const path=[r.a].concat(r.pins,[r.b]);
       path.forEach((c,i)=>{ const [px,py]=cellPos(c[0],c[1]);
@@ -1745,18 +1752,21 @@ function drawRunGrips(){
     for(const which of ["a","b"]){
       const c=r[which], [px,py]=cellPos(c[0],c[1]);
       const at=portAtCell(c[0],c[1])!=null;
+      const jn=join[which];
       push({x:px-RUNG/2, y:py-RUNG/2, w:RUNG, h:RUNG, type:"runend", rid, which});
-      TIP(px-RUNG/2, py-RUNG/2, RUNG, RUNG, err?"PIPE END - "+err:"PIPE END",
-        "Drag it where you want it. Put it on a cell beside a machine and a nozzle appears there; anywhere else the end is loose."+
-        (at?"":" It is loose: nothing is piped to a machine at this end."));
-      dot(c[0],c[1], err?C.red:(at?C.green:C.amber));
+      TIP(px-RUNG/2, py-RUNG/2, RUNG, RUNG, jn?"PIPE END - JOINS HERE":(err?"PIPE END - "+err:"PIPE END"),
+        "Drag it where you want it. Put it on a cell beside a machine and a nozzle appears there; drop it on another pipe's end and the two become one pipe; anywhere else the end is loose."+
+        (at||jn?"":" It is loose: nothing is piped to a machine at this end."));
+      // GREEN IS "THIS END HAS LANDED ON SOMETHING", and a joint is the other
+      // way an end stops being loose - no second hue for one meaning
+      dot(c[0],c[1], (at||jn)?C.green:(err?C.red:C.amber));
     }
-    if(!on) continue;
     r.pins.forEach((c,i)=>{ const [px,py]=cellPos(c[0],c[1]);
+      const dp=runPinDup(rid,i);
       push({x:px-RUNG/2, y:py-RUNG/2, w:RUNG, h:RUNG, type:"runpin", rid, i});
-      TIP(px-RUNG/2, py-RUNG/2, RUNG, RUNG, "WAYPOINT "+(i+1),
-        "A cell this run has to go through. Drag it to move it, right click to drop it. Drag the pipe itself to pull a new one out of it.");
-      dot(c[0],c[1], C.amber, String(i+1)); });
+      TIP(px-RUNG/2, py-RUNG/2, RUNG, RUNG, dp?"WAYPOINT "+(i+1)+" - COLLAPSES HERE":"WAYPOINT "+(i+1),
+        "A cell this run has to go through. Drag it to move it, right click to drop it. Drop it on another waypoint or on either end of the pipe and it goes. Drag the pipe itself to pull a new one out of it.");
+      dot(c[0],c[1], dp?C.green:C.amber, String(i+1)); });
   }
 }
 /* ══ WHERE A DRAGGED MACHINE WOULD LAND ══
@@ -2145,6 +2155,9 @@ const heatRated=cid=>{ const K=cid&&P&&P.cores&&P.cores[cid];
   return K ? K.rated : (P?P.rated:0); };
 /* full deflection of a heat ledger bar, share of rated power */
 const HEAT_BAR=0.10;
+/* the smallest K/s on T-avg worth a reading - 0.6 K a minute - and it is the
+   needle's deadband and its green band both, so the two cannot disagree. */
+const HEAT_DEAD=0.01;
 
 /* ═══════════ WHAT THE CORE IS MAKING, AND WHETHER IT IS LEAVING ═══════════
    The chain reaction is not the heat. A scrammed core still makes decay heat on
@@ -2215,15 +2228,17 @@ function heatViz(x,y,w,h){
 
   /* ── the net, in K/s ── */
   const ny=ky+krows*8+5+gap, nh=13+grow;
-  const dT=s.dTavg||0, dSpan=Math.max(.5,Math.abs(dT)*1.2);
+  // the raw derivative spikes a tenth of a K/s on a settled loop; needle, colour and digits read one eased figure
+  const dT=dispEase("heat:dT:"+(cid||"plant"),s.dTavg||0,HEAT_DEAD,4);
+  const dSpan=Math.max(.5,Math.abs(dT)*1.2);
   const atN=v=>cx+clamp(v/dSpan,-1,1)*span;
   fillRect(L,ny+nh/2,R-L,1,C.edge2);
   const nx=atN(dT);
-  const nCol = dT>.15? C.red : dT<-.05? C.blue : Math.abs(dT)<.01? C.green : C.amber;
+  const nCol = dT>.15? C.red : dT<-.05? C.blue : Math.abs(dT)<HEAT_DEAD? C.green : C.amber;
   fillRect(Math.min(cx,nx),ny+nh/2-2,Math.max(1,Math.abs(nx-cx)),4,nCol);
   fillRect(nx-1,ny-2,3,nh+4,nCol);
   fillRect(cx,ny-2,1,nh+4,C.bright);
-  txt((dT>=0?"+":"")+dT.toFixed(3)+" K/s",L,ny+nh+8,{size:7,sp:.6,color:nCol});
+  txt((dT>=0?"+":"")+dT.toFixed(2)+" K/s",L,ny+nh+8,{size:7,sp:.6,color:nCol});
   txt(rated?(made*rated).toFixed(0)+" MWt MADE":"NOT COMMISSIONED",R,ny+nh+8,
     {size:6,sp:.6,align:"right",color:C.ink2});
 
