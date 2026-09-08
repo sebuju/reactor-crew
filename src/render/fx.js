@@ -1,75 +1,19 @@
 "use strict";
-/* Ambient plant effects - steam, bubbles, sparks, glow.
-
-   Every effect here is a pure function of a box, a RATE and the PLANT's clock.
-   It reads no sim state, writes none, and rolls no die: placement comes out of
-   fxHash(), so the same plant draws the same picture on two machines and a
-   headless draw needs no generator (see rng.js - the sim's cursor lives on S
-   and an effect must never touch it).
-
-   Rate is always 0..1 and is always the whole scale of the effect. Each caller
-   normalises its own quantity ONCE, at the call site, so there is exactly one
-   place per effect where "how much is a lot" is decided - and that place is
-   next to the physics the number came from.
-
-   Rate owns how many, how big, how bright - never a phase speed. Phase runs off
-   the clock over minutes of uptime, so multiplying it by rate meant a
-   0.01 rate change moved a bubble's position by whole cycles - it teleported.
-   fxBubbles' climb is a real px/s (FXBUB[style].rise) instead. Where a count is fractional
-   (n before Math.ceil), the newest particle's alpha is scaled by what is left of
-   it, so it fades in rather than popping. fxEase() smooths a rate itself, for a
-   caller whose source figure is not already damped. */
-
 const FX_MAX = 14;                 // particles at rate 1, before the caller's own cap
-const FX_MIN = 0.02;               // below this a rate draws nothing at all
+const FX_MIN = 0.02;
 
 function fxHash(i){
   let h = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b);
   h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
-/* A STOPPED ROTOR STANDS WHERE IT STOPPED, and not at zero: the shaft angles on
-   this plant are ONE rate shared by every machine of a kind (s.spinV,
-   s.spinTV), so freezing them all at 0 would park a row of wrecked pumps in
-   perfect formation and read as deliberate. A hash of the id is a fixed,
-   arbitrary angle per machine - the same one every frame, and on a headless
-   draw too. Returns turns, 0..1. */
+// a fixed arbitrary angle per machine, in turns: shaft rate is shared per kind, so stopping them all at 0 reads as deliberate
 function fxIdPhase(id){
   let h=0;
   for(let i=0;i<id.length;i++) h=Math.imul(h^id.charCodeAt(i),0x01000193);
   return fxHash(h>>>0);
 }
-/* ══ THE CLOCK IS THE PLANT'S, NOT THE WALL'S ══
-   Steam off a relief valve is the plant doing something, so it has to stop when
-   the plant stops and run sixteen times over at 16x - a wall clock did neither,
-   and left a paused reactor visibly boiling. Same argument as the damped meters
-   in pipes.js, which freeze because their dt comes from S.t.
-   Set once a frame by drawPlant(), which is the only thing that knows whether
-   there is a plant at all; the bench passes wall seconds so a design preview
-   still moves. Fed in rather than read off S, because nothing in a view file may
-   reach for sim state. */
-/* ══ AND IT RUNS AT THE PLANT'S RATE, NOT IN THE PLANT'S STEPS ══
-   S.t moves 0.02 s at a time and a browser frame runs none, one or two of them,
-   so every effect on this clock - bubbles, steam, parcels, rotors - stood still
-   for a frame and then jumped two. The clock advances on WALL seconds times the
-   rate the tape is SET to (trClockRate(), record.js) instead.
-   THE RATE IS A SETTING AND IS NOT MEASURED. Estimating it off S.t and easing
-   into the estimate ramped every animation up on un-pause and left the whole
-   picture riding a filter chasing a 50 Hz input - a speed that was never
-   constant, on a screen that was. Rate 0 is a paused plant and freezes on the
-   frame. Null is the one case with no number to be had - an unbounded rate,
-   which runs as fast as the machine allows - and only that one is measured. */
-/* ══ AND IT IS MEASURED ON THE FRAME, NOT ON THE CALL ══
-   The screen hands out frames on an exact 7 ms; performance.now() read where
-   this is CALLED does not, because a frame that also runs a sim tick reaches
-   the draw later in its own frame. Measured that way the gap swung 3.6 to
-   12.9 ms on a 144 Hz screen with not one frame dropped - the picture was even
-   and what it drew was not. The loop hands over the frame's own timestamp
-   (fxSetFrame, main.js) and the wall clock is only the fallback for a caller
-   that has no frame: the bench preview and the headless draw. */
-// how far the display clock may stand off the plant's own before it is put
-// back: a hitch, a rewind, a loaded recording. Scaled by the rate, so 16x gets
-// the same number of PLANT seconds of slack as 1x does.
+// display clock runs on wall seconds times the tape's SET rate; a null rate is unbounded and the only measured case
 const FX_SLIP = 0.5;
 let FXT = 0, FXSRC = null, FXW = 0, FXRATE = 0, FXDT = 0, FXFRAME = null;
 const fxWall = () => (typeof performance !== "undefined" ? performance.now() : Date.now()) / 1000;
@@ -83,28 +27,14 @@ function fxSetClock(t, rate){
   FXW = w; FXSRC = t;
   FXDT = dw * r;
   FXT += FXDT;
-  // and it is the PLANT's clock, so it may not wander off it
   if(!isFinite(t) || Math.abs(t - FXT) > FX_SLIP*Math.max(1, r)){ FXT = t; FXDT = 0; }
 }
 const fxClock = () => FXT;
-// plant seconds this frame, at the smoothed rate - what a speed has to be
-// multiplied by to become a frame's travel
 const fxDt = () => FXDT;
-/* FRACTIONAL on purpose: the caller takes Math.ceil() of this and fades the last
-   particle by whatever is left over, so a rising rate grows one in. */
+// fractional on purpose: the caller ceils it and fades the last particle by the remainder
 const fxN = (rate, max) => clamp(rate, 0, 1) * (max || FX_MAX);
 
-/* ══ AN EFFECT IS DRAWN IN THE CELL IT WAS AUTHORED IN ══
-   Every geometry figure below is a fraction of a 16-unit cell - a jet reaching
-   8+30 units, a bubble of radius 0.5..1.8, a 9-unit lane pitch, a 2..6 unit
-   spark - exactly like the machine symbols they mostly stand on, and for the
-   same reason they are NOT multiplied by DRAW_K one at a time.
-   MOST CALLERS NEED NOTHING: fifteen of the sixteen in plant.js are inside
-   symAt(), which is already under that transform, and scaling here as well
-   would square it. This is for the callers that are NOT - a break plume on a
-   pipe cell, a hole in a wall, hydrogen bubbling in a compartment - which stand
-   in plant space and would otherwise draw a speck on a 70-unit cell. Anchor in
-   plant units, body in cell units. */
+// for callers standing in plant space rather than inside symAt(): anchor in plant units, body in cell units
 function fxCellSpace(x, y, fn){
   ctx.save();
   ctx.translate(x, y); ctx.scale(DRAW_K, DRAW_K);
@@ -112,11 +42,7 @@ function fxCellSpace(x, y, fn){
   ctx.restore();
 }
 
-/* ══ AN EASED RATE IS DISPLAY STATE, SO IT IS NOT ON S ══
-   Same standing as the damped meters in pipes.js: a picture of the last few frames,
-   not a fact about the plant, so it is not snapshotted and whoever moves the clock
-   clears it by hand. Per-key timestamps, so an effect that is skipped for some frames
-   still eases correctly the moment it comes back. */
+// an eased rate is display state, so it is not on S and whoever moves the clock clears it by hand
 const FXR={};
 const FX_EASE=2.2;                 // how fast a rate change closes, per second
 function fxReset(){ for(const k in FXR) delete FXR[k]; }
@@ -128,21 +54,12 @@ function fxEase(id,rate){
   return st.v;
 }
 
-/* THE particle jet: puffs leaving (cx, cy) along (dx, dy), widening across that
-   direction and fading as they go. Steam out of a relief valve, water falling
-   out of an injection line, exhaust crossing a turbine and activity escaping a
-   containment are all the same drawing pointed a different way - written four
-   times they would have drifted into four different-looking leaks.
-
-   `spread` is the width across the travel; how far a puff gets and how many
-   there are both scale with the rate, so a line barely passing reads
-   differently from one wide open. `seed` separates two jets sharing a box, or
-   they animate in lockstep and read as one. */
+// `seed` separates two jets sharing a box, or they animate in lockstep and read as one
 function fxJet(cx, cy, spread, rate, col, dx, dy, seed){
   if(rate < FX_MIN) return;
   const r0 = clamp(rate, 0, 1), n = Math.max(2, fxN(rate)), N = Math.ceil(n);
   const t = fxClock(), reach = 8 + 30 * r0, k = seed || 0;
-  const nx = -dy, ny = dx;                       // across the travel
+  const nx = -dy, ny = dx;
   ctx.save();
   ctx.fillStyle = col || "#cfe6ea";
   for(let i = 0; i < N; i++){
@@ -156,24 +73,13 @@ function fxJet(cx, cy, spread, rate, col, dx, dy, seed){
   }
   ctx.restore();
 }
-// the common case, and the only one with a name: something venting upward
 const fxSteam = (cx, y, w, rate, col, seed) => fxJet(cx, y, w, rate, col, 0, -1, seed);
 
-/* ══ ONE DRAWING, TWO BOILS ══
-   A core is a lattice of narrow channels, so its steam rises in fixed lanes and stays
-   small; a generator is an open kettle, so its bubbles wander, swell as they climb and
-   coalesce on the way up. Written as two functions they would have drifted into two
-   different-looking boils. */
 const FXBUB={
   chan:{rise:26, n:20, r:[0.50,0.90], grow:0,   lane:9, wob:0.4, fill:0},
   pool:{rise:18, n:10, r:[1.00,1.80], grow:0.9, lane:0, wob:1.6, fill:1}
 };
-// rise: px/s climbed. n: particles at rate 1. r: [base, perRate] radius terms.
-// grow: radius swell across the climb. lane: lane pitch in px, 0 = free placement.
-// wob: sideways wobble multiplier. fill: 1 = filled blob, 0 = stroked ring.
 
-/* Bubbles rising inside a vessel, clipped to it. Count and size scale with the
-   rate; the wobble is what stops a column of dots reading as a dashed line. */
 function fxBubbles(x, y, w, h, rate, col, style){
   if(rate < FX_MIN || w <= 0 || h <= 0) return;
   const B = FXBUB[style] || FXBUB.chan;
@@ -184,16 +90,14 @@ function fxBubbles(x, y, w, h, rate, col, style){
   const L = B.lane ? Math.max(2, Math.round(w / B.lane)) : 0;
   for(let i = 0; i < N; i++){
     const a = fxHash(i * 3 + 1), b = fxHash(i * 3 + 2), c = fxHash(i * 3 + 3);
-    // a real climb speed converted into this box's phase, so t*sp never outruns a whole
-    // cycle just because rate ticked - a rate change used to teleport every bubble
+    // a real climb speed converted into this box's phase, so a rate change never teleports a bubble
     const sp = B.rise * (0.55 + 0.9 * a) / h;
     const ph = ((t * sp + b) % 1);
     const py = y + h - ph * h;
     const px0 = L ? x + w * ((Math.floor(c * L) + 0.5) / L) : x + w * (0.08 + 0.84 * c);
     const px = px0 + Math.sin((t * 2 + b * 9)) * w * 0.05 * B.wob;
     const r = (B.r[0] + B.r[1] * clamp(rate, 0, 1)) * (0.5 + 0.8 * a) * (1 + B.grow * ph);
-    // a filled blob carries more ink than a ring of the same size, so it is taken down
-    // to match - at equal alpha a fat one reads as a solid dot
+    // a filled blob carries more ink than a ring of the same size, so it is taken down to match
     ctx.globalAlpha = (B.fill ? 0.75 : 1) *
       (0.28 + 0.5 * clamp(rate, 0, 1) * (1 - ph * 0.55)) * Math.min(1, n - i);
     ctx.beginPath(); ctx.arc(px, py, r, 0, 7);
@@ -202,8 +106,6 @@ function fxBubbles(x, y, w, h, rate, col, style){
   ctx.restore();
 }
 
-/* Short bright arcs somewhere in the box - a broken machine that is still
-   energised. Deliberately sparse: this decorates damage, it never reports it. */
 function fxSparks(x, y, w, h, rate, col){
   if(rate < FX_MIN || w <= 0 || h <= 0) return;
   const n = Math.max(1, fxN(rate, 5)), N = Math.ceil(n), t = fxClock(), k = 0;
@@ -211,7 +113,6 @@ function fxSparks(x, y, w, h, rate, col){
   ctx.strokeStyle = col || C.amber; ctx.lineWidth = 1; ctx.lineCap = "round";
   for(let i = 0; i < N; i++){
     const a = fxHash(i * 5 + 7 + k), b = fxHash(i * 5 + 8 + k), c = fxHash(i * 5 + 9 + k);
-    // each spark is lit for a slice of its own cycle, so they never all flash together
     const ph = ((t * (1.4 + 2.2 * a) + b) % 1);
     if(ph > 0.13) continue;
     const px = x + w * (0.15 + 0.7 * b), py = y + h * (0.15 + 0.7 * c);
@@ -223,9 +124,6 @@ function fxSparks(x, y, w, h, rate, col){
   ctx.restore();
 }
 
-/* A soft pulse over a box. The one place a "this is live right now" glow is
-   drawn, so the melt flicker, a carrying supply and a passing valve all breathe
-   at the same speed instead of three hand-picked ones. */
 function fxPulse(x, y, w, h, col, rate, hz){
   if(rate < FX_MIN || w <= 0 || h <= 0) return;
   const t = fxClock(), k = 0.5 + 0.5 * Math.sin(t * 6.28 * (hz || 1.1));

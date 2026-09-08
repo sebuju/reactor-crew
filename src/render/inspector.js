@@ -1,50 +1,17 @@
 "use strict";
-/* paramsFor(): what a component lets you set, as DATA (kind-tagged blocks, no
-   draw closures) - consumed by design-bench.js's paramBlockBuild/Sync.
-   Also: the two shared row builders both screens read a component through
-   (fieldRows for label+value(+band) lists, statRows for the RESULTS bars),
-   and the two summary blocks that belong to the whole design rather than to
-   any one component (benchResults/benchReview). */
-
-/* readoutsFor()/planStats()/layoutStats() are shared with the canvas palette
-   (C.red etc, core/constants.js) and hand back its raw hex values - this is
-   the one place those get translated to the CSS custom properties the same
-   palette is also written into (cssVarsBoot()), so an HTML row never carries
-   a literal hex colour. */
+// the one place a canvas-palette hex is translated to its CSS custom property
 const C2VAR={};
 (function(){ if(typeof C==="undefined") return;
   for(const k in C) if(typeof C[k]==="string" && C[k][0]==="#")
     C2VAR[C[k]]="var(--c-"+k.replace(/([A-Z])/g,"-$1").toLowerCase()+")"; })();
 const cssCol=c=>c?(C2VAR[c]||c):"";
 
-/* ══ A PANEL'S TITLE BAR PICKS ITS COMPONENT ══
-   The other half of "clicking a component brings its panel up". The rail is a
-   list of every component on the ship, so it is also the way to get AROUND the
-   plant - and until now the only way to select something was to find it on the
-   drawing, which is hard for the parts that are small or behind something.
-   Both rails call this, because two rails with a copy each is how the two
-   would end up disagreeing about what a title bar does. */
-/* WHERE THE PICK CAME FROM, because the two rails answer it the same way: a
-   selection made on the DRAWING has to scroll the rail to the panel, and a
-   selection made ON that panel's own title bar must not - the panel is already
-   under the pointer, and scrolling it to the top pulled it out from under the
-   click that made it. Held as the id rather than a flag so a stale one cannot
-   swallow the next canvas pick; the sync clears it on the frame it reads it. */
+// held as an id so a stale pick cannot swallow a canvas pick
 let railPickId=null;
 const railSelfPick=()=>{ const self = railPickId!==null && railPickId===sel;
   railPickId=null; return self; };
 
-/* ══ WHICH MACHINES BELONG TOGETHER, ASKED OF THE DRAWING ══
-   Its primary LOOP, else the CIRCUIT its own nodes sit on, else nothing at all
-   - a pinned part inherits its host's answer, because a rod drive belongs
-   wherever the vessel it is bolted to belongs. No name test and no table: a
-   machine's company is a fact about what it is plumbed to.
-   `panelGroupRank` is the ORDER those groups are read in, and it is the order
-   the coolant meets them: the primary every loop shares, then the loops, then
-   the other circuits, then what carries no coolant at all. Both are here
-   rather than beside one screen's rail because BOTH rails want them - the
-   control room stacks its wells by this and the margin panels group along an
-   edge by it (ui/margin.js). */
+// a machine's company is a fact about what it is plumbed to: no name test, no table
 function panelGroup(p){
   const li=loopOf(p.id); if(li!=null) return "loop"+li;
   const G=nodeGraph(), ns=G.nodesOf[p.id]||[];
@@ -66,11 +33,7 @@ function railPick(well,ids,name){
     "Click to select this component. It lights up on the plant, and a leader runs from it to this panel.");
   return well;
 }
-/* The mirror of "a click on bare deck deselects": a rail is as much of the
-   screen as the canvas is, so a click in it that lands anywhere but the
-   selected panel drops the selection too. Bubbles, so railPick()'s own handler
-   has already moved `sel` by the time this asks - which is why it compares
-   against the well under the pointer rather than remembering the old id. */
+// bubbles, so railPick() has already moved `sel`: compares the well under the pointer, never a remembered id
 function railBlank(rail){
   MOUSE.on(rail,{click(e){
     const w=e.target.closest&&e.target.closest(".kit-well");
@@ -78,16 +41,7 @@ function railBlank(rail){
   }});
 }
 
-/* ══ A RAIL ONLY SYNCS THE PANELS YOU CAN SEE ══
-   Both rails rebuild every panel's data table on every frame - readoutsFor() in
-   the control room, paramsFor() on the bench - and a rail is a tall scroller,
-   so most of those panels are past its bottom edge. An IntersectionObserver
-   marks the ones actually on screen and the sync loops skip the rest. The
-   margin makes a panel live before it scrolls in, so nothing is ever seen
-   catching up.
-
-   With no observer (headless) every panel counts as visible, because a gate
-   that skips the work would skip every headless reader's coverage with it. */
+// with no observer (headless) every panel counts as visible: a gate that skips the work skips the check
 function railWatch(scroller){
   if(typeof IntersectionObserver!=="function") return {add(el){ el._vis=true; },free(){}};
   const io=new IntersectionObserver(es=>{ for(const e of es) e.target._vis=e.isIntersecting; },
@@ -96,20 +50,7 @@ function railWatch(scroller){
 }
 const railSeen = el => el._vis!==false;
 
-/* ══ ONE ROW LIST, TWO SCREENS ══
-   readoutsFor() rows and the bench's MEASURED rows are the same shape -
-   [label,value,color,tip,band,signedBar] or {sec}. A signedBar carries `m`,
-   the limit marks in track fractions, so a centre-zero row can say where the
-   line is exactly the way a band's `lim` does. Built once, and checked against
-   the handles that build made, so a row set that changes shape (a STATUS row
-   appearing on damage, a TRIP mark appearing when a bypass is thrown) rebuilds
-   instead of silently misaligning against the old DOM. */
-
-/* Both checks run per panel per frame, so neither may allocate. They compare
-   against the handles the last build made rather than building a signature
-   string to compare. `lim` in particular is a fresh array literal every frame
-   (readoutsFor), so identity can never match it and a JSON string per band row
-   per frame was the whole cost of asking. */
+// a row is [label,value,color,tip,band,signedBar] or {sec}/{viz}; both checks run per panel per frame, so neither may allocate
 function fieldRowsMatch(h,rows){
   if(!h || h.length!==rows.length) return false;
   for(let i=0;i<rows.length;i++){ const r=rows[i], H=h[i];
@@ -124,16 +65,7 @@ function limSame(a,b){
   for(let i=0;i<a.length;i++) if(a[i][0]!==b[i][0]||a[i][1]!==b[i][1]) return false;
   return true;
 }
-/* ══ A LIVE PANEL IS SECTIONED LIKE A BENCH PANEL ══
-   The bench lays its knobs out as titled sections in a grid (dbPanelSync,
-   design-bench.js) and the control room laid the same machine's readouts out
-   as one flat column, so the two screens read as two different instruments
-   about one box. A row list that carries {sec:"NAME"} entries is built into
-   the SAME .db-grid of .db-section the bench builds, off the same KIT.rule.
-
-   OPT-IN, on the rows themselves: the master caution and the bench's own
-   readlist blocks hand in no section at all and stay the plain column they
-   were - a wrapper round those would be a box round one list. */
+// {sec:"NAME"} rows build the same .db-grid the bench does; a sectionless list stays a plain column
 function fieldRowsBuild(container,rows){
   const out=[];
   let viz=null;
@@ -145,30 +77,21 @@ function fieldRowsBuild(container,rows){
   const put=el=>(sec||container).appendChild(el);
   for(const row of rows){
     if(row.sec){
-      /* the leading section is minted empty above, so the first heading fills
-         it rather than opening a second one and leaving a blank cell */
+      // the leading section is minted empty above, so the first heading fills it rather than leaving a blank cell
       if(sec.childElementCount){ sec=KIT.el("div","db-section"); grid.appendChild(sec); }
       sec.appendChild(KIT.rule(row.sec).el);
       out.push({sec:row.sec}); continue; }
-    /* A genuinely graphical row keeps its own <canvas>, painted by the screen
-       through hostPaint() - the rail is opaque, so drawing it on #cv would put
-       it under the panel. Same arrangement the lattice plan uses. */
+    // its own canvas, painted through hostPaint(): the rail is opaque, so drawing on #cv would put it under the panel
     if(row.viz){
       const c=KIT.el("canvas","insp-viz insp-viz-"+row.viz);
       if(row.tip) KIT.tip(c,row.title||row.viz,row.tip);
       put(c);
-      /* handed back on the container so the screen paints it off this build
-         instead of re-querying the whole screen for it every frame. It cannot
-         go stale: a rebuild replaces the canvas and this map together. */
       (viz||(viz={}))[row.viz]=c;
       out.push({viz:row.viz}); continue;
     }
     const el=KIT.el("div","insp-row");
     const lab=KIT.el("span","insp-row-lab"); lab.textContent=row[0];
-    /* THE VALUE AND WHAT IT IS ABOUT TO BECOME are two spans in one cell, not
-       two columns: a delta only ever appears under the pointer (row.dlt, the
-       readlist block in design-bench.js) and a third grid column would move
-       every value on the panel sideways the moment one did. */
+    // value and delta are two spans in ONE cell: a third column would shift every value the moment a delta appeared
     const val=KIT.el("span","insp-row-val");
     const num=KIT.el("span"), dlt=KIT.el("span","insp-row-dlt");
     val.append(num,dlt);
@@ -180,11 +103,7 @@ function fieldRowsBuild(container,rows){
     else if(row[5]){ bar=KIT.segMark({signed:true,full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
     if(row[3]) KIT.tip(el,row[0],row[3]);
     put(el);
-    /* txt/col are what was last WRITTEN. Asking the element back costs a DOM
-       read per row per frame, and for a colour outside the palette it is also
-       wrong: #00ffff goes in and rgb(0, 255, 255) comes out, so the guard never
-       held and those rows repainted on every frame. Same cache the kit keeps
-       for a cell's fill (kit.js). */
+    // txt/col are what was last WRITTEN: reading the element back is a DOM read per row per frame, and colours come back reformatted
     out.push({key:row[0],el,val,num,dlt,bar,barKind,txt:null,col:null,dtxt:null,dcol:null,
               lim:row[4]?row[4].lim:null});
   }
@@ -209,16 +128,7 @@ function fieldRowsSync(container,rows){
     const col=cssCol(row[2]);
     if(H.col!==col){
       H.val.style.color=col;
-      /* THE ROW CARRIES ITS OWN SEVERITY, so the master caution and the rail
-         panel it was copied from are washed by the same rule off the same
-         fact. Written here rather than by either caller: two of them setting
-         it is how the copy and the original end up disagreeing.
-         A LEDGER TERM IS EXEMPT, and row[5] is the test. A centre-zero bar is
-         what makes a row a term in a balance - the reactivity stack and the
-         heat stack - and there the colour is the KEY to the picture beside it,
-         not a verdict: fuel is red and decay is amber whatever the plant is
-         doing. Washing those painted eight permanent alarm stripes onto a
-         healthy reactor panel. */
+      // a ledger term (row[5]) is exempt: there the colour keys the picture beside it, it is not a verdict
       const sev = row[5] ? null : row[2];
       H.el.classList.toggle("red",sev===C.red);
       H.el.classList.toggle("amber",sev===C.amber);
@@ -229,7 +139,7 @@ function fieldRowsSync(container,rows){
   }
 }
 
-/* A stat row - [label,value,frac,color,tip] - the RESULTS panel's shape. */
+// a stat row is [label,value,frac,color,tip]
 function statRowsBuild(container,stats){
   const out=[];
   for(const st of stats){
@@ -255,25 +165,9 @@ function statRowsSync(container,stats){
     H.bar.set(st[2],cssCol(st[3])); });
 }
 
-/* ══ WHAT A COMPONENT LETS YOU SET, AS DATA ══
-   Every block is {kind,...}. `key` on a slider/optlist/segsel block is a
-   plain D field name, or a {get,set} pair for a per-part field (pump size).
-   B.gang marks a set of identical components (paramBlockBuild's caller keeps
-   the first and lends it the others' ids); B.plain marks nothing to adjust. */
-/* ONE HEADING FOR EVERY LIST OF ANSWERS. A readlist block is measurements by
-   definition, so the panel that carries one says so in the same words. */
+// every block is {kind,...}; `key` is a D field name or a {get,set} pair. B.gang = identical set, B.plain = nothing to adjust
 const MEASURED_TIP="Every number on this list is an OUTPUT of the design. Not one of them is a value you can set - to move one of these, move a knob above it.";
 
-/* ══ WHAT EVERY BOX ON THE BOARD ANSWERS, WHATEVER IT IS ══
-   Six things are true of a machine because it is a machine: what it weighs,
-   what share of the ship that is, how much deck it stands on, how hot its own
-   metal will take, what blast it will take, and whether anybody can get to it
-   to mend it. None of them was on a panel, and the tonnage was a suffix on the
-   title bar - one figure with no scale beside it, on the one screen where the
-   mass budget is the whole game. They go on the MEASURED list because that is
-   what they are: outputs, not knobs.
-   Every row is a door already open (partMassOf/partTsurv/partPburst/
-   partAccess, data/layout.js), so nothing here is a second opinion. */
 function measBoxRows(id){
   const p=partOf(id); if(!p) return [];
   const t=partMassOf(id), all=derived().mass, ts=partTsurv(p), pb=partPburst(p);
@@ -291,8 +185,7 @@ function measBoxRows(id){
     "Whether a repair party can reach this box at all. Walled in on every side it stays broken for the rest of the run, whatever you send."]);
   return R;
 }
-/* Appended to the panel's own MEASURED list rather than pushed as a second
-   one: two lists under one heading is how a panel comes to have two answers. */
+// appended to the panel's own MEASURED list, never pushed as a second one
 function measAttach(B,id){
   let hit=null;
   (function walk(bs){ for(const b of bs){
@@ -305,7 +198,6 @@ function measAttach(B,id){
 }
 function paramsFor(p){
   const B=[], id=p.id;
-  // where the next block lands. A section's blocks once a panel opens one.
   let T=B, G=null, R=B, TB=null;
   const GRID=cols=>{ const g={kind:"grid",cols,blocks:[]}; R.push(g); G=g; return g; };
   // one panel, one thing at a time: everything after a TAB() lands under that tab
@@ -317,46 +209,23 @@ function paramsFor(p){
   const opt=(title,tip,key,items,base)=>T.push({kind:"optlist",title,tip,key,base:base||0,
     items:items.map(o=>({name:o.name,tip:o.note||o.tip||""}))});
   const sld=(title,tip,key,min,max,fmt,step,massFn)=>T.push({kind:"slider",title,tip,key,min,max,fmt,step,massFn});
-  // a MACHINE'S OWN QUANTITY, in its own units - see the "num" block (design-bench.js)
+  // a MACHINE'S OWN QUANTITY, in its own units
   const num=(title,tip,key,unit,dp,suggest,massFn)=>T.push({kind:"num",title,tip,key,unit,dp,suggest,massFn});
   const rdo=(title,tip,val)=>T.push({kind:"readout",title,tip,val});
   const tog=(title,tip,key,mass)=>T.push({kind:"toggle",title,tip,key,mass});
   const note=(text,color)=>T.push({kind:"note",text,color});
-  /* ══ HELP IS ASKED FOR, NEVER STOOD IN THE WAY ══
-     A paragraph of advice used to be a "note" block sitting open on the panel
-     for as long as the machine existed. It goes on the panel's own title bar
-     instead, where a tooltip is how every other explanation on this screen is
-     read - see marginSync() (ui/margin.js). */
+  // advice goes on the panel's own title bar, where every other explanation on this screen is read
   const help=t=>{ if(t) B.tip = B.tip ? B.tip+"\n\n"+t : t; };
 
   if(!partAccess(p))
     note("NO ACCESS. This component is walled in on every side. No repair party could ever reach it, so it is lost for good the moment it is damaged.","var(--c-red)");
 
-  /* ONE PANEL FOR THE REACTOR AND ITS DRIVES. They were two, and each carried
-     its OWN copy of the lattice plan - the same canvas twice, over one shared
-     pen, so whichever panel synced last decided what a click on either plan
-     did and the other panel's tools could never be selected at all. They are
-     one machine to configure: the clusters go into the assemblies, and the
-     drives are bolted to the head that carries them. So the rods FOLD into
-     this panel (they are a gang, dbRailBuild()) and there is exactly one plan,
-     with every pen on it. Two boxes on the plant, one panel - clicking either
-     brings this up. */
-  /* ══ PRESETS, BUY, DRAW, READ, FIT THE DRIVES, VERDICT ══
-     A PRESET COMES FIRST BECAUSE IT WRITES WHAT IS UNDER IT: archPreset() buys
-     every material on the panel, so below them it overwrote the rows you had
-     just picked. blockSig() keys the rail's rebuild on kind+title, so
-     reordering costs nothing. */
+  // a preset comes first because it WRITES what is under it
   if(p.role==="core"){ const cD=coreD(id);
     B.gang="reactor"; B.gangPlain=true; B.cols=3;
     // the canvas column is one and a half standard columns; the knobs and MEASURED take one each
     B.colw=[390,260,260];
-    /* PRESETS ARE ASKED FOR FROM THE TITLE BAR. They stood open at the top of
-       the panel, over the knobs they overwrite - and a whole drawing to start
-       from is not a knob on this machine.
-       designForget() FIRST, the same order plantPreset() keeps: a family change
-       moves the rating by 30x, and every machine figure already baked was
-       priced off the family before it - a helium plant kept a PWR's 937 000 m2
-       of panel and its 6.9 MPa shell. */
+    // designForget() FIRST: a family change moves the rating, and every baked figure was priced off the old one
     B.head=[{kind:"menu",label:"PRESETS",
       tip:"Whole drawings you can begin with. Every one of them lays out fuel, moderator and banks with the same pens you have - a preset cannot describe a reactor you could not have drawn yourself.",
       blocks:[
@@ -367,12 +236,7 @@ function paramsFor(p){
           (n<2?" One bank has nothing to lean a flux tilt against, so tilt trim and SPLIT mode have no work to do."
               :" Fewer banks sit nearer the flux and so measure a little more worth; watch CONTROL BANK WORTH below say by how much."),
         fn:()=>{ latLayBanks(cD,n); latRevolve(cD); }}))}]}];
-    /* ══ THE PANEL STATES ITS OWN SHAPE ══
-       Two drawings stacked, each with its pen bar spanning the canvas and the
-       knobs beside it, and the MEASURED list standing down the right of both.
-       A knob belongs to the surface it moves: what the lattice is made of goes
-       beside the plan, what the core's height and wrapping are goes beside the
-       section. */
+    // a knob belongs beside the surface it moves
     GRID(3);
     T=SEC(null,null,2).blocks;
     T.push(
@@ -391,9 +255,7 @@ function paramsFor(p){
 
     T=planK;
     opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.",bagAcc(cD,"cool",()=>cD.cool),COOLANT);
-    /* One FUEL row per loading zone that has fuel in it. The setter must
-       latMeasure() itself: an optlist is not a lattice edit, so nothing else
-       would re-blend densK into D.power. */
+    // the setter must latMeasure() itself: an optlist is not a lattice edit, so nothing else re-blends densK
     {
       const zs=latZonesUsed(cD), one=zs.length<2;
       for(const z of zs)
@@ -419,11 +281,7 @@ function paramsFor(p){
       {kind:"latsection",core:id},{kind:"latread",pen:"sec",core:id});
     T=secK;
     opt("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL.map(n=>({name:n})));
-    // a feature of the VESSEL, which is what its own tooltip already said -
-    // it never belonged on the pressurizer's panel
     sld("CHIMNEY HEIGHT","How tall the standpipe above the core is. It is a feature of the vessel, not of any one loop, and it is what natural circulation leans on when the pumps are gone - taller buys grace time and costs steel.",bagAcc(cD,"chim",()=>cD.chim),0,1,v=>v.toFixed(2)+" x",.05,v=>v*38);
-    /* MEASURED IS ONE COLUMN: the lattice's own readings first, then whatever
-       holds it in - a vessel, or the channels a tube core has instead. */
     meas.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD
       .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
     { const vd=()=>derived(id), a=()=>COOLANT[cD.cool];
@@ -458,10 +316,6 @@ function paramsFor(p){
 
     T=B;
   }
-  /* THE DRIVES ARE A MACHINE YOU BUY, so what you buy for them stands on their
-     own panel and not on the reactor's: the scram system, the drive motor, the
-     follower and the automatic controller, over the rod rows of the same
-     MEASURED list. The core they are bolted to is the host (coreOf()). */
   else if(p.role==="rods"){ const cD=coreD(coreOf(id));
     if(cD){
     GRID(1); SEC("ROD DRIVES");
@@ -471,10 +325,6 @@ function paramsFor(p){
          raw:()=>cD.rodSpd===undefined?undefined:cD.rodSpd*100, clr:()=>{ delete cD.rodSpd; dTouch(); }},
         "%/s",2,()=>ROD_SPD0*100,v=>cD.nbank*ROD_BANK_T*(v/100/ROD_SPD0-1));
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.",bagAcc(cD,"foll",()=>cD.foll),FOLL);
-    /* THE BAND THE CONTROLLER WORKS IN, as two handles rather than two
-       constants. AUTOSYS.rod's own tooltip has always promised "the travel
-       band set on the rod-drive panel" and there was no such control - the
-       numbers were real, live and invisible. */
     T.push({kind:"slider",title:"AUTO ROD OUT LIMIT",key:"arLo",min:0,max:1,step:.01,
       fmt:v=>(v*100).toFixed(0)+" %",
       tip:"The furthest OUT the temperature controller may walk the bank on its own. Pull it out and the controller has more authority over coolant temperature and you have less shutdown margin, because the position your margin was measured from is the position it is allowed to leave. Your own demand is never bound by it."});
@@ -491,9 +341,6 @@ function paramsFor(p){
     GRID(1); SEC("GENERATOR");
     opt("GENERATOR TYPE","U-tube units hold a lot of secondary water that keeps removing heat for minutes after feedwater is lost. Once-through units are light, respond instantly, and boil dry just as fast. Each generator is its own machine, so a U-tube on one loop and a once-through on another is a legal plant.",
         bagAcc(D.sgType,id,()=>sgTypeOf(id)),SGT);
-    /* The type row says how much water is in it; this says how fast heat
-       crosses the tubes. They were one figure and they are not the same
-       question - a big-inventory shell with poor tubes is a real machine. */
     num("TRANSFER COEFFICIENT","How fast heat crosses this generator's tubes, in kilowatts per kelvin. Buy more and the same core raises hotter steam at a smaller temperature difference; buy less and the primary runs hotter for the same power. AUTO matches it to this core at its own rated power.",
         {get:()=>sgUAOf(id),set:v=>{ D.sgUA[id]=v; },
          raw:()=>D.sgUA[id], clr:()=>{ delete D.sgUA[id]; }},
@@ -508,13 +355,6 @@ function paramsFor(p){
       ["SECONDARY WATER",r.water.toFixed(0)+" t",null,"What is in THIS shell at 100 % level. It is what goes on removing heat after the feedwater stops, and it is the whole of the difference between the two types."],
       ["SHELL STEEL",sgShellT(id).toFixed(1)+" t",null,"The pressure shell itself, off its own water charge as a vessel at the wall its design pressure needs. Raise the pressure above and this goes up with it."],
       ["TUBE BUNDLE",sgTubeT(id).toFixed(1)+" t",null,"The tubes, priced off the transfer coefficient you bought. A bigger UA is more tube, and more tube is more steel."]]; }});
-    /* MEASURED, not the label this used to carry: a placed tank and pump
-       (layout.js) piped to the generator, but the flow itself is not solved
-       until the secondary conserves water - so what this buys today is the
-       stated dump term below, and NOTHING measurable on grace time (that is
-       set by the coolant family and the generator type, off sgInertiaK(),
-       not by this). Stock plant, scram, 600 s: on runs the loop a few
-       degrees cooler than off, and P.graceK does not move for it. */
     help("Emergency feedwater is a TANK, not a fitting on this pump: add one, set it to the secondary side and give it the LOW SG LEVEL rule. Its arm switch lives on the tank.");
     help("Height matters more than anything else on this component. Sitting above the reactor, it drives natural circulation with no pumps at all.");
   }
@@ -545,10 +385,7 @@ function paramsFor(p){
          raw:()=>D.pumpRotor[id], clr:()=>{ delete D.pumpRotor[id]; }},
         "s",1,()=>pumpRotorSuggest(id),()=>0);
     SEC();
-    /* WHAT THIS PUMP IS FOR, off the drawing rather than off its id. There is
-       one pump role: a coolant pump is a pump the loop walk reaches from a
-       generator, a feed pump is one that reaches a generator's SHELL, and a
-       pump piped to neither is a pump somebody placed and has not wired up. */
+    // what this pump is FOR, off the drawing rather than off its id: there is one pump role
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[ secGensOf(id).length
       ?["DUTY","FEEDWATER",null,"Piped to a generator's shell, so this is a FEEDWATER pump: it holds that generator's level through its own regulating valve, and the level controller's switch is the FEED CTRL bypass."]
       :primaryPump(id)
@@ -592,11 +429,7 @@ function paramsFor(p){
         ?"This condenser is far smaller than the turbine can draw. It runs hotter for the same heat, so the exhaust pressure climbs and the output falls with it - a unit at a third of duty gives back roughly a tenth of the plant's electricity at rest, before any overload."
         :"Condenser is matched to the turbine. A brief overload costs little or nothing, and a bigger unit runs down onto the vacuum limit and stops paying."]]; }});
   }
-  /* ══ THE ONLY WAY HEAT LEAVES THE SHIP ══
-     Design-time figures only: the bench has no S, so PANEL TEMPERATURE and
-     what a panel is actually shedding live on the control-room rail. AT RATED
-     is radTAt(), the same expression the tick integrates against, so the
-     bench and the plant cannot quote two different sinks. */
+  // design-time figures only: the bench has no S, and AT RATED is the expression the tick integrates against
   else if(p.role==="radiator"){
     GRID(1); SEC("PANEL");
     num("RADIATING AREA","The surface this panel actually radiates from, in square metres. The box on the grid is a PICTURE of it, snapped to whole cells, so a small plant draws a small panel. Rejection goes as the FOURTH power of panel temperature, so area does not buy heat directly - it buys a colder panel, which buys backpressure, which buys output and overload headroom. AUTO matches the fleet to this plant's own rejection at the design sink.",
@@ -623,13 +456,7 @@ function paramsFor(p){
     B.cols=3;   // the automation graph reads across: this panel states its own width
     TAB("PROTECTION","What trips this plant without being asked: the margin the automatic protection allows, how fast it acts, and every setpoint that follows from the two.");
     GRID(3); SEC(null,null,2);
-    /* THERE IS NO "IS AN RPS FITTED" TOGGLE. A protection system is a scram
-       somebody wired in the cabinet below, so fitting one is wiring one and
-       the MEASURED list reads the answer off the same cabinet. */
-    /* The readout is the margin and nothing else. It used to carry the word
-       "permissive" too, and the box is sized to hold the longest string the
-       format can produce, so that one word overflowed the row. What the
-       margin is WORTH is the eight setpoints in MEASURED below. */
+    // there is no "is an RPS fitted" toggle: fitting one is wiring one in the cabinet below
     T.push({kind:"slider",title:"RPS TRIP MARGIN",key:"rpsm",min:0,max:1,step:.05,
       fmt:v=>(v*100).toFixed(0)+" %",
       tip:"How much overhead the automatic protection allows before it scrams. Conservative trips at 110% flux and 1.18 DNBR, so the plant is hard to damage and you can never push it. Permissive lets you reach 132% and 1.02 DNBR, which is real combat performance and a much smaller margin for error. Every setpoint it moves is printed in MEASURED below."});
@@ -638,11 +465,7 @@ function paramsFor(p){
       tip:"How long a channel must stand made before the breakers open - the protection logic settling and the rod coils letting go. A real solid-state system takes 50 to 100 ms; relay logic takes several times that. Long is not only slow: it is also what stops a spike that clears by itself from scramming the plant, so the fastest setting trips on transients the slower one rides out."});
     help("Crew dose during an accident falls with distance from the reactor and drops sharply for every shield block between the two. Move this room and watch the dose figure in RESULTS.");
     SEC();
-    /* EVERY TRIP POINT IS PRINTED, not just the one that was easy. The margin
-       slider moves eight setpoints and the panel used to show one of them, so
-       the other seven were a number you had to take on faith. rpsSetRows()
-       (step.js) is the one door onto them, and the two priced off a settled
-       plant say so instead of guessing. */
+    // rpsSetRows() (step.js) is the one door onto the setpoints
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
       const M=PLANT_LM||layoutMetrics(), wired=scramWiredD(), K=rpsBenchK();
       const R=[["PROTECTION",wired?(scramArmedD()?"ARMED":"WIRED, OFF"):"NONE",wired?null:C.amber,
@@ -655,19 +478,10 @@ function paramsFor(p){
       R.push(["CREW DOSE RATE",M.dose.toFixed(2)+" x",M.dose>1?C.amber:null,
        "Radiation reaching this room during an accident, solved along the straight line from the reactor. Paint standing on that line is what lowers it."]);
       return R; }});
-    /* THE AUTOMATION LIVES HERE. Every controller on the plant is a graph of
-       blocks in this cabinet - see ctl.js - and this is where it is built. */
     TAB("AUTOMATION","Every block in this cabinet, one section to a tab, sources at the top and the demands they drive at the bottom. A wire says what it carries. Hover a block to read it, click it to wire it, tune it or switch it off.");
     T.push({kind:"ctlgraph",live:false});   // no title: the tab is the heading
     help("Everything that acts on the plant without being asked, except the protection system, is wired here out of blocks: transmitters, setpoints, arithmetic, PID, limits, and the demands they land on. A preset ships the stock controllers already wired; take them apart, retune them or build your own. Automation runs on electricity: with the switchboard dark and no backup, every block holds its last output.");
   }
-  /* ══ ONE PANEL, EVERY TANK ══
-     There is no menu of kinds anywhere in this game, and this is why: an
-     accumulator, a boron tank, a relief tank and a hotwell are these eight
-     knobs at four settings. Every one of them writes D.tanks[id] through the
-     normal design path, so designSig() sees it and the plant re-commissions.
-     FLUID_IDS/AUTO_IDS are read off the tables themselves, so adding a
-     substance or an opening rule adds an entry here for free. */
   else if(p.role==="fitting") return paramsForFit(id);
   else if(p.role==="tank"){
     B.cols=2;
@@ -681,29 +495,18 @@ function paramsFor(p){
       items:FLUID_IDS.map(f=>({name:FLUID[f].label,
         tip:(FLUID[f].boron?"Worth "+FLUID[f].boron+" pcm per 1 % of loop inventory delivered. ":"")
            +(FLUID[f].act?"Active - a full tank of it is a place a repair party would rather not stand.":"Not active.")}))});
-    /* THE "PLUMBED TO" SELECTOR IS DELETED. It asked the designer to declare
-       what the drawing already said, and let the two disagree with nothing to
-       catch it - a tank marked PRIMARY and piped into the secondary was a
-       legal, silent lie. tankSide() reads it off the runs instead
-       (layout.js), so there is one fact and it comes from the pipe you drew.
-       This row is a READOUT now, and it says "not connected" honestly. */
+    // a readout, never a selector: which circuit a tank is on is read off the runs you drew
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const ci=tankCircuit(id);
       return [["PLUMBED TO", ci===null ? "NOTHING" : circName(ci), ci===null?C.amber:null,
         ci===null ? "Nothing is piped to this tank, so it is on no circuit at all - it has no edge, it can deliver nothing, and it is counted by nothing. Draw a run from it."
         : tankPrimary(id) ? "This tank has a node in the pressure solve and one edge into the loop, so what it delivers is fought for against loop pressure."
         : "This tank is on the far side of a heat exchanger: it answers to that circuit's own pressure, not to the core loop's."]]; }});
-    /* CUBIC METRES, and it always was: tankKg() is vol*TANK_RHO and partVol()
-       hands it back as holdup. The row said "%" and quoted 0.4 t/m^3 against
-       tankMass()'s 0.5 - two units and two prices for one number. It is a real
-       quantity in its own units now, and the mass hint is the mass term. */
     sld("CAPACITY","How big it is, in cubic metres. It costs the steel of a shell that size at the pressure it has to hold, and it is what turns a solved flow into a level.",
       acc("vol"),5,100,v=>v.toFixed(0)+" m3",5,v=>tankMassOf(id,v));
     sld("ASPECT","What SHAPE that volume is on the grid, width against height. The area is the volume either way - this only decides whether it stands as a tall column or lies as a wide drum, and a shape that fits the deck you have is worth having.",
       {get:()=>tankAspect(id), set:v=>{ t().aspect=v; }},
       0.25,4,v=>v.toFixed(2)+" w:h",0.25);
-    /* ══ A PRESSURIZER IS A TANK WHOSE GAS SPACE IS CONTROLLED ══
-       Two rows, and there is no pressurizer part any more. Put one on a second
-       circuit and that circuit gets its own pressure. */
+    // a pressurizer is a tank whose gas space is controlled: two rows, no pressurizer part
     SEC("PRESSURE");
     T.push({kind:"toggle",title:"PRESSURE CONTROL",mass:0,
       key:{get:()=>!!t().hold, set:v=>{ t().hold = v?{p:null}:null; }},
@@ -761,37 +564,16 @@ function paramsFor(p){
     help(p.tip);
     T.push({kind:"note",text:"NO ADJUSTABLE PARAMETERS"});
     B.plain = partAccess(p);
-    // nothing to set is not nothing to measure - measBoxRows() has six answers
-    // for any box at all, and this branch is where the plain ones land
+    // nothing to set is not nothing to measure: measAttach() fills this list
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>[]});
   }
   return measAttach(B,id);
 }
 
-/* ══ WHAT A FITTING LETS YOU SET ══
-   A branch of paramsFor(), reached the way a tank's panel is: WHAT it is
-   (mode) and how big it is (bore) are the design, and the position it is
-   worked to is not. A relief valve's lift and reseat pressures are MECHANICAL,
-   chosen when it is built, so they live in D.fittings and never on S; the
-   arming switch is the opposite - it is worked during a transient - and lives
-   on the valve's own control strip (ctlFor(), plant.js). */
-/* ══ A RUN IS A MACHINE TOO, AND IT HAS A PANEL ══
-   D.bore and D.wall have been hooks with no writer: runBoreMm()/runWallMm()
-   read them and nothing ever set one, so a pipe was the last thing on the
-   plant whose own size the player could not state. It is not a PART - it has
-   no box and no id in LAY - so it is addressed by its RUN KEY, which is the
-   name pipeMap() gives it and the name every other reader already uses.
-   `sel` carries that key: a run key always contains a colon and a part id
-   never does, so the two selection spaces cannot collide and every
-   partOf(sel) reader already answers null for one. */
+// a run is not a PART, so it is addressed by its run key: a key always has a colon and a part id never does
 const runOfKey = key => pipeNetwork().find(r=>runIdOf(r)===key) || null;
 const isRunKey = k => typeof k==="string" && k.indexOf(":")>=0 && (!!runOfKey(k) || !!D.runs[k]);
-/* ══ A PIPE THAT REACHES NOTHING YET ══
-   A placed run whose ends are still on bare deck is a real object with a real
-   name, and it has no bore, no length and no ends to name - because a run's
-   size and its length are read off the CONNECTION and there is not one. The
-   panel says which of the two ends is loose rather than going blank, or ADD
-   PIPE lands five cells of pipe and an empty well. */
+// a run with a loose end has no bore and no length, because both are read off the connection
 function paramsForLooseRun(rid){
   const r=D.runs[rid];
   const end=c=>{ const pid=portAtCell(c[0],c[1]);
@@ -803,28 +585,24 @@ function paramsForLooseRun(rid){
   s.blocks.push({kind:"readlist", title:"THIS PIPE", tip:
     "A pipe is one object you place. Drag an end onto a cell beside a machine and a nozzle appears there; with a machine on both ends it becomes a run and gets its own size.",
     rows:()=>[
-      ["END A", end(r.a), null, "Drag the dot to move it."],
-      ["END B", end(r.b), null, "Drag the dot to move it."],
+      ["END A", end(r.a), null, "Drag the dot to move it. Right click it to take the whole pipe off."],
+      ["END B", end(r.b), null, "Drag the dot to move it. Right click it to take the whole pipe off."],
       ["WAYPOINTS", String(r.pins.length), null, "Cells this pipe has to go through. Drag the pipe itself to pull one out; right click it to drop it."],
-      ["CELLS", String((r.cells||[]).length), null, "How much pipe it is laying at the moment."],
+      ["PIPEWORK", (r.cells||[]).length ? (r.cells.length+" cells") : "NONE - DRAWN AS A LINE", null,
+       "No pipe is laid until BOTH ends land on a machine: until then the line is what you have drawn, and it takes no deck off the runs that are plumbed."],
     ]});
   return [grid];
 }
 function paramsForRun(key){
   const B=[], r=runOfKey(key);
   if(!r) return D.runs[key] ? paramsForLooseRun(key) : B;
-  /* WRITTEN UNDER THE RUN'S OWN NAME, never the key the drawing derived. A key
-     is rebuilt every time the geometry moves, so a bore authored against one
-     was reset by an edit to a NEIGHBOURING run and then inherited by the next
-     run laid on the same face pair. runIdOf() falls back to the key for a run
-     laid by hand, which has no name of its own to hang on. */
+  // written under the run's own name, never the derived key: a key is rebuilt whenever the geometry moves
   const id=runIdOf(r);
   const grid={kind:"grid",cols:1,blocks:[]}; B.push(grid);
   const runS={kind:"section",title:"RUN",blocks:[]}; grid.blocks.push(runS);
   const measS={kind:"section",blocks:[]}; grid.blocks.push(measS);
   const num=(title,tip,k,unit,dp,suggest,massFn)=>runS.blocks.push({kind:"num",title,tip,key:k,unit,dp,suggest,massFn});
-  /* MASS IS PER METRE OF THIS RUN, so the hint prices the change the slider
-     would actually make rather than a metre of pipe in the abstract. */
+  // over THIS run's length, so the hint prices the change the slider would actually make
   const massAt=(bore,wall)=>shellTPerM(bore,wall)*r.L;
   num("BORE","How wide this run is, inside the pipe. It is the whole of what the run conducts: a narrow leg is a real restriction and a wide one costs steel and holds more water. AUTO is what a run of this kind ships at.",
       {get:()=>runBoreMm(r), set:v=>{ D.bore[id]=v; dTouch(); },
@@ -838,29 +616,54 @@ function paramsForRun(key){
   measS.blocks.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{
     const c=pipeMap().byKey[r.key], a=c&&partOf(c.a), b=c&&partOf(c.b);
     const rate=runRating(r), held=runDesignP(r);
+    const rec=D.runs[id], node=runNodeOf(r.key), area=Math.PI/4*Math.pow(runBoreMm(r)/1000,2);
+    const endRow=(which,pid)=>{ if(pid==null||!D.ports[pid]) return null;
+      const shut=S&&S.portShut&&S.portShut[pid], wrecked=S&&portWrecked(S,pid);
+      return ["END "+which, portLabel(pid)+(wrecked?" - WRECKED":shut?" - SHUT":""),
+        wrecked?C.red:shut?C.amber:null,
+        "The nozzle this end of the pipe stands on, and the valve in it. Shut, this end passes nothing at all; wrecked, the body is an opening and cannot be worked."]; };
     // a row that has no answer is absent, never a blank line - filtered here so the RISE row can decline
     return [].concat([
       ["RUNS FROM",(a?partName(a):"?")+" ⇒ "+(b?partName(b):"?"),null,
        "The two machines this run joins. It is traced off the pipe you drew, never authored - move either machine and this follows."],
+      endRow("A",c&&c.pa), endRow("B",c&&c.pb),
       ["LENGTH",r.L.toFixed(1)+" m",null,"How far it actually goes, cell by cell. Length is resistance and it is mass."],
-      /* THE COLUMN THE RUN STANDS IN. staticH() puts it on the edge every
-         tick, and it was the one term of the momentum law with nowhere to
-         read it: natural circulation is this number and nothing else. Signed
-         along RUNS FROM above, so the sign says which end is uphill. */
+      rec?["ROUTE",(rec.cells||[]).length+" cells, "+rec.pins.length+" waypoints",null,
+        "The pipework this run is laying, and how many cells you have told it to go through on the way. Drag the line to pull a waypoint out of it; right click a waypoint to drop it."]:null,
+      ["FLOW AREA",area.toFixed(4)+" m2",null,
+       "The hole the bore makes. It is what the solve conducts through, and it is what sets the speed of the water at any given flow."],
       (()=>{ const za=nodeZ(r.a+r.sa), zb=nodeZ(r.b+r.sb);
         if(za===null||zb===null) return null;
         const dz=zb-za;
         return ["RISE",(dz>=0?"+":"")+dz.toFixed(1)+" m",null,
           "How much higher the far end stands than the near one, along RUNS FROM above. It is a real column of fluid: it adds to the pressure at the low end and it is what drives circulation with every pump stopped. Raise a steam generator above the reactor and this is the number that cools the core in a blackout."]; })(),
       ["HOLDS",runVol(r).toFixed(2)+" m3",null,"The water standing in it, off the bore and the length. A node with volume has a time constant, which is why a long fat leg is slow to change temperature."],
-      /* WHAT IS IN IT, in words. The meter above says kilograms a second and a
-         kilogram of wet steam is not a kilogram of water: this is the same
-         reading the pipe is drawn in (pipePhaseCol, pipes.js), stated. */
+      // the same reading the pipe is DRAWN in (pipePhaseCol), stated in words
       ["CARRYING",(()=>{ const q=pipePhase(r,S);
         if(!q) return "NOTHING";
         return Math.abs(q[0]-q[1])<0.02 ? pipePhaseWord((q[0]+q[1])/2)
           : pipePhaseWord(q[0])+" to "+pipePhaseWord(q[1]); })(),null,
        "The phase of what is actually in this run, at each of its own two ends - off the enthalpy field, never off what the run was drawn for. A run with no path in the network carries nothing and says so."],
+      // each declines rather than printing a zero
+      (()=>{ const p=pipeRunP(r,S); return p===null?null:
+        ["PRESSURE",p.toFixed(3)+" MPa",null,
+         "What the water in this run is actually standing at, off the solved field at the run's own node - not the setpoint it was sized for."]; })(),
+      (()=>{ const t=pipeRunT(r,S); return t===null?null:
+        ["TEMPERATURE",t.toFixed(1)+" K",null,
+         "The temperature of what is in it, off the enthalpy at its own node."]; })(),
+      (()=>{ const q=pipeRunKg(r.key,r.k,S);
+        return !isFinite(q) ? null : ["FLOW",(q<0?"":"+")+q.toFixed(1)+" kg/s",null,
+         "What is crossing it this instant, signed along RUNS FROM above - so a minus sign means it is running the other way."]; })(),
+      (()=>{ const q=pipeRunKg(r.key,r.k,S), rho=netRhoAt(S,node);
+        if(!isFinite(q)||!isFinite(rho)||rho<=0||area<=0) return null;
+        return ["SPEED",Math.abs(q/(rho*area)).toFixed(1)+" m/s",null,
+         "How fast the fluid is moving in it, off that flow, that bore and what the fluid weighs. Past about 10 m/s a water line erodes and sings; a steam line runs far faster."]; })(),
+      (()=>{ const ref=P.netRefKg&&P.netRefKg[r.key];
+        return !isFinite(ref) ? null : ["FLOW AS BUILT",Math.abs(ref).toFixed(1)+" kg/s",null,
+         "What this run carries with the plant commissioned, undamaged and every valve wide. It is the scale the flow meter on the deck reads against."]; })(),
+      (()=>{ const d=pipeDrop[r.key];
+        return d===undefined||!isFinite(d) ? null : ["HEAD SPENT",(d*100).toFixed(0)+" %",null,
+         "The share of the loop's whole pump head this one run eats getting the water along it - its length, its bore and anything throttling it."]; })(),
       ["CARRIES",held.toFixed(2)+" MPa",null,"The pressure this run is actually asked to hold - its circuit's own setpoint, or the shell design pressure on the secondary."],
       ["RATED FOR",rate.toFixed(2)+" MPa",rate<held?C.red:null,
        "What the wall above will take, off the published hoop-stress relation. Under what it carries, this pipe is the thing that lets go first."],
@@ -881,9 +684,7 @@ function paramsForFit(fid){
     items:[{name:"TEE",tip:"A junction. Four faces, one node, no gate: it costs the line nothing and closes nothing."},
            {name:"THROTTLE",tip:"A valve you set and it holds. Wide open it costs the line nothing at all; shut it is a real break in the pipe."},
            {name:"RELIEF VALVE",tip:"Lifts on its own at its own setpoint and blows the line down through whatever is piped behind it. Leave its outlet unpiped and it vents straight into the room."}]});
-  /* MILLIMETRES, like the pipe it sits in. It was 0.1-1 "x" of a full-bore
-     leg, so a valve and its own line stated the same quantity in two units.
-     boreK()/fitBoreK() (pipenet.js) are the one conversion into the solve. */
+  // millimetres, like the pipe it sits in; boreK()/fitBoreK() are the one conversion into the solve
   fitS.blocks.push({kind:"slider",title:"BORE",step:BORE_REF/20,min:BORE_REF/10,max:BORE_REF*1.5,
     key:{get:()=>j.bore ?? fitBoreSuggest(fid), set:v=>{ j.bore=v; }},
     fmt:v=>v.toFixed(0)+" mm",
@@ -900,19 +701,14 @@ function paramsForFit(fid){
   reliefS.blocks.push({kind:"toggle",title:"SPRING SAFETY",
     key:{get:()=>!!j.spring, set:v=>{ if(v) j.spring=true; else delete j.spring; }},
     tip:"What works this valve. Off, it is a power-operated relief valve: a block in the control room lifts it, and with the cabinet dark it stays shut. On, it is a code safety valve - a spring against the pressure, lifting and reseating at the setpoints below with no power, no wiring and no way to hold it shut. Real plants carry both."});
-  /* MEGAPASCALS, not a multiple. They were fractions of reliefRefP(), so the
-     number on the panel was not the number on the valve and moving the
-     circuit's setpoint moved every relief valve on the plant with it. The
-     span is this valve's own reference either side, so a 0.2 MPa sodium loop
-     and a 15.5 MPa water one both get a slider they can work in. */
+  // the span is this valve's own reference either side, so any loop pressure gets a workable slider
   const dp = v => v<1 ? v.toFixed(3) : v.toFixed(2);
   const lo = reliefRefP(fid)*0.9, hi = reliefRefP(fid)*1.35;
   const stp = Math.max(0.005, +(reliefRefP(fid)*0.01).toFixed(3));
   sld("LIFT PRESSURE",
     "The pressure this valve opens itself at. Low and it lifts on every transient and spends its stick chances early; high and pressure climbs further before anything vents, toward a vessel that bursts at about 122% of what it holds.",
     {get:()=>reliefSet(fid).lift,
-     // the deadband is dragged down with the lift point, or a valve dialled
-     // low would end up reseating above its own lift and chatter every tick
+     // the deadband is dragged down with the lift point, or the valve reseats above its own lift and chatters
      set:v=>{ j.lift=v; if(reliefSet(fid).reseat > v-stp) j.reseat=v-stp; },
      raw:()=>j.lift==null?undefined:j.lift, clr:()=>{ j.lift=null; }},
     lo,hi,v=>dp(v)+" MPa",stp);
@@ -924,12 +720,7 @@ function paramsForFit(fid){
     lo,hi,v=>dp(v)+" MPa",stp);
   rdo("DEADBAND","How far pressure has to fall, once this valve has lifted, before it shuts again. A wide band lifts once and clears the transient; a narrow one cycles.",
     ()=>{ const r=reliefSet(fid); return dp(r.lift-r.reseat)+" MPa"; });
-  /* Nothing showed this before, so a relief tank sited across the plant cost
-     vent rate silently. It is a commissioned figure - it reads the routed
-     branch pipe - so the bench shows the length that drives it instead. */
-  /* WHERE THE DISCHARGE ACTUALLY GOES, asked of the drawing. A valve whose
-     outlet reaches no tank is not broken - it vents into the room, which is a
-     real design and the bench NAMES it rather than refusing it. */
+  // asked of the drawing: an outlet reaching no tank is not broken, it vents into the room
   rdo("DISCHARGES TO","Where what this valve passes ends up. Pipe its outlet to a tank and the discharge is caught. Stand it against the skin and the discharge goes outside, which spares the compartment but is still a release. Leave it inboard and unpiped and it goes straight into the air the crew is breathing.",
     ()=>{ const t=P&&P.net&&P.net.fitTarget&&P.net.fitTarget[fid];
           if(t) return (D.tanks[t]&&D.tanks[t].name)||t.toUpperCase();
@@ -937,28 +728,15 @@ function paramsForFit(fid){
   return measAttach(B,fid);
 }
 
-/* ══ THE TWO PLATES THAT BELONG TO THE WHOLE DESIGN ══
-   RESULTS (what it adds up to) and REVIEW (what is wrong with it) point at no
-   component - data only, built into HTML by design-bench.js. */
-/* ══ AND WITH NO REACTOR THERE IS NOTHING TO ADD UP ══
-   Every row here is a figure ABOUT a machine - power density, grace time,
-   shutdown margin, peaking, the pipe run, the crew's dose - and the lattice is
-   a DRAWING that exists whether or not a vessel stands on the arrangement
-   grid. A blank ship read a full plate of a plant nobody had built. The mass
-   line stays, because 0 t is the honest answer and the budget is still there
-   to be spent against. */
+// with no reactor there is nothing to add up; the mass line stays, because 0 t is the honest answer
 function benchResultsData(){
   const d=derived(), core=!!roleOf("core"), M=PLANT_LM||layoutMetrics();
   const stats=(core?planStats(d).concat(layoutStats(M)):[]).concat(containStats());
   return {mass:d.mass,over:d.over,eq:(d.mass-layMass),ship:layMass,
     dens:core?d.dens:0, excess:core?d.excess:0,
-    // the row's tip and what DRIVES it are one string by the time a row is drawn
     stats:stats.map(r=>[r[0],r[1],r[2],r[3],(r[4]||"")+statDrv(r[0],d,M)])};
 }
-/* ══ AND THE REGION A PLANT HAS APPEARS IN THE REVIEW ══
-   Not gated on a reactor, unlike every row above: a containment is a fact
-   about the drawing and it is a real answer on a ship with no vessel in it.
-   Nothing here is gated on a count either - two enclosures is a legal plant. */
+// not gated on a reactor, unlike every row above: a containment is a fact about the drawing
 function containStats(){
   const gs=matRegionsBounded();
   if(!matCells().length) return [];
@@ -982,17 +760,10 @@ function benchReviewData(){
   return {issues:designIssues(d,LM),hard:designBlocked(d,LM)};
 }
 
-/* ══ A PAINTED CELL IS SELECTABLE, AND SO IS WHAT IT ENCLOSES ══
-   A cell is not a part, so it is addressed by its CELL KEY - "mat:x,y", which
-   carries a colon and a comma and so can collide with neither a part id nor a
-   run key. The panel states the CELL's own figures and its REGION's, because
-   standing on a wall is how you ask about the thing it encloses; the selection
-   is never a region index, which is derived and renumbers the moment the paint
-   changes. */
+// keyed "mat:x,y" so it collides with neither a part id nor a run key; never a region index, which renumbers
 const isMatKey = k => typeof k==="string" && k.indexOf("mat:")===0
                    && !!matCell(+k.slice(4,k.indexOf(",")), +k.slice(k.indexOf(",")+1));
 const matKeyXY = k => { const i=k.indexOf(","); return [+k.slice(4,i), +k.slice(i+1)]; };
-// the cell that decides the answer: the weakest wall of a sealed region
 function matDefaultKey(){
   const gs=matRegionsBounded();
   let lo=Infinity, at=null;
@@ -1005,8 +776,6 @@ function matDefaultKey(){
 // the control room sets no thickness and buys no material
 const paramsForMatLive = key =>
   paramsForMat(key).filter(b=>b.kind==="readlist"||b.kind==="note");
-/* THE PANEL IS NAMED FOR WHAT IT EDITS. A wall cell's fields carry the whole
-   seal, so a title reading one cell's coordinates named the wrong thing. */
 function matPanelTitle(key){
   const [x,y]=matKeyXY(key), c=matCell(x,y);
   if(!c) return "WALL";
@@ -1023,19 +792,12 @@ function paramsForMat(key){
   const WB=wallS.blocks, MB=measS.blocks;
   const s = (typeof S!=="undefined") ? S : null, live = !!(s && s.roomP);
   WB.push({kind:"optlist",title:"MATERIAL",base:0,
-    /* IT ALSO LOADS THE BRUSH. Picking a material here is the only place one
-       is picked at all, so the next stroke lays what the player just chose -
-       otherwise every cell would have to be painted and then converted. */
+    // it also loads the brush: this is the only place a material is picked, so the next stroke lays it
     key:{get:()=>MAT.findIndex(m=>m.id===matCell(x,y).m),
          set:i=>{ matCell(x,y).m=MAT[i].id; matPen=MAT[i].id; buildLayout(); }},
     tip:"What this cell is made of. Only a GAS-TIGHT material makes a closed shape a containment; the other two are shielding and nothing else.",
     items:MAT.map(m=>({name:m.name, tip:m.tip}))});
-  /* APPLIED TO THE WHOLE SEAL, not to the one cell and not to the region's own
-     `wall` either - that set is only what touches the volume, so a painted
-     box's four CORNERS kept whatever they were painted at. The suggestion is
-     Barlow at this cell's
-     own local span, which is what makes a long flat side ask for more steel
-     than a corner does. */
+  // applied to the whole SEAL, not the region's `wall` set, which misses a painted box's four corners
   WB.push({kind:"num",title:"THICKNESS",unit:"mm",dp:0,
     tip:"How thick the wall is. It is what the cell is RATED for and it is what the cell weighs. AUTO is Barlow against the FLAT SPAN this cell is in the middle of - so a long straight wall asks for a thick one and a corner asks for almost nothing.",
     key:{get:()=>matThick(x,y), set:v=>{ const cs=matSealCells(x,y);
@@ -1063,8 +825,6 @@ function paramsForMat(key){
     if(!g){ rows.push(["ENCLOSES","NOTHING",C.ink2,
       "This cell is not part of any closed shape. Every fill beside it reaches the hull, so it is shielding and never a containment."]);
       return rows; }
-    /* THE WEAKEST CELL IS THE SINGLE MOST USEFUL LINE ON THIS PANEL: it names
-       the cell that will go, before it goes. */
     let lo=Infinity, at=null;
     for(const i of g.wall){ const X=i%GW, Y=(i/GW)|0, r=matRating(X,Y);
       if(r<lo){ lo=r; at=[X,Y]; } }
@@ -1099,10 +859,6 @@ function paramsForMat(key){
         ["HELD BACK",((1-regionRel(s,g))*100).toFixed(0)+" %",null,
          "How much of a release leaving inside this region stays inside it. It is the weakest material on this wall, not a menu row - and it is zero the moment the wall opens."]);
     }
-    /* WHAT IS STANDING ON ITS FLOOR, and what that has reached. A break inside
-       a containment does not vanish out of the book - it lands, it is a real
-       depth and it drowns what it touches - so both are read off the same
-       regionFlooded() the FLOODING layer draws from. */
     if(live){ const f=regionFlooded(s,g);
       if(f){ const line=f.bot+1-f.rows;
         const wet=LAY.parts.filter(q=>matRegionOf(q)===g && q.y+q.h>line).map(q=>partName(q));
@@ -1114,8 +870,6 @@ function paramsForMat(key){
     const inside=LAY.parts.filter(q=>matRegionOf(q)===g).map(q=>partName(q));
     rows.push(["CONTAINS",inside.length?inside.join(", "):"nothing",null,
       "The machines standing inside this region. They are what its pressure will crush and what its wall is holding the release of."],
-      /* THE WHOLE BOUNDARY'S MASS, beside the one cell's above: a wall is
-         bought by the ring and not by the cell the hand happens to be on. */
       ["WALL MASS",g.wall.reduce((a,i)=>a+matCellMass(i%GW,(i/GW)|0),0).toFixed(1)+" t",null,
        "What this whole boundary weighs, summed off the paint at its own thickness. A bigger enclosure has a longer flat span, a longer span needs a thicker wall, and this is where that is paid."]);
     return rows; }});
