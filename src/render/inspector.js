@@ -306,8 +306,11 @@ function measAttach(B,id){
 function paramsFor(p){
   const B=[], id=p.id;
   // where the next block lands. A section's blocks once a panel opens one.
-  let T=B, G=null;
-  const GRID=cols=>{ const g={kind:"grid",cols,blocks:[]}; B.push(g); G=g; return g; };
+  let T=B, G=null, R=B, TB=null;
+  const GRID=cols=>{ const g={kind:"grid",cols,blocks:[]}; R.push(g); G=g; return g; };
+  // one panel, one thing at a time: everything after a TAB() lands under that tab
+  const TAB=(title,tip)=>{ if(!TB){ TB={kind:"tabs",tabs:[]}; B.push(TB); }
+    const t={title,tip,blocks:[]}; TB.tabs.push(t); R=T=t.blocks; G=null; return t; };
   const SEC=(title,tip,span,rowspan)=>{ const s={kind:"section",blocks:[]};
     if(title) s.title=title; if(tip) s.tip=tip; if(span) s.span=span; if(rowspan) s.rowspan=rowspan;
     G.blocks.push(s); T=s.blocks; return s; };
@@ -618,7 +621,8 @@ function paramsFor(p){
   }
   else if(p.role==="ctrl"){
     B.cols=3;   // the automation graph reads across: this panel states its own width
-    GRID(3); SEC("PROTECTION",null,2);
+    TAB("PROTECTION","What trips this plant without being asked: the margin the automatic protection allows, how fast it acts, and every setpoint that follows from the two.");
+    GRID(3); SEC(null,null,2);
     /* THERE IS NO "IS AN RPS FITTED" TOGGLE. A protection system is a scram
        somebody wired in the cabinet below, so fitting one is wiring one and
        the MEASURED list reads the answer off the same cabinet. */
@@ -653,8 +657,8 @@ function paramsFor(p){
       return R; }});
     /* THE AUTOMATION LIVES HERE. Every controller on the plant is a graph of
        blocks in this cabinet - see ctl.js - and this is where it is built. */
-    SEC("AUTOMATION","Every block in this cabinet, one section to a tab, sources at the top and the demands they drive at the bottom. A wire says what it carries. Hover a block to read it, click it to wire it, tune it or switch it off.",3);
-    T.push({kind:"ctlgraph",live:false});   // no title: the section above is the heading
+    TAB("AUTOMATION","Every block in this cabinet, one section to a tab, sources at the top and the demands they drive at the bottom. A wire says what it carries. Hover a block to read it, click it to wire it, tune it or switch it off.");
+    T.push({kind:"ctlgraph",live:false});   // no title: the tab is the heading
     help("Everything that acts on the plant without being asked, except the protection system, is wired here out of blocks: transmitters, setpoints, arithmetic, PID, limits, and the demands they land on. A preset ships the stock controllers already wired; take them apart, retune them or build your own. Automation runs on electricity: with the switchboard dark and no backup, every block holds its last output.");
   }
   /* ══ ONE PANEL, EVERY TANK ══

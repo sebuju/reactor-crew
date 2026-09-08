@@ -334,7 +334,7 @@ function shellInitTooltip(){
     /* every panel on these two screens stands ON the drawing, so a box beside
        the control that raised it is a box on top of the plant */
     if(plantScreen()){ viewAt=""; placeView(); return; }
-    const a=curRail?null:vitalsAnchor(el);
+    const a=curRail?null:vitalsAnchor();
     if(a) placeAnchor(a);
     else if(curRail) place(curGroup?curGroup.getBoundingClientRect().top:b.top+b.height/2, !!curGroup);
     else placeBy(b); };
@@ -358,7 +358,7 @@ function shellInitTooltip(){
   /* ONE PARK SPOT WHENEVER THE VITALS PANEL IS UP - off its right edge, top on
      its top. A RAIL CONTROL IS NOT ON IT: a rail keeps its own seat beside
      itself, or reading the rail throws the box across the window. */
-  const vitalsAnchor=el=>{ const v=(el&&el.closest(".db-vitals"))||document.querySelector(".cr-vitals");
+  const vitalsAnchor=()=>{ const v=document.querySelector(".cr-vitals");
     return v&&v.offsetParent?v.getBoundingClientRect():null; };
   const placeAnchor=b=>{
     const gap=8, r=tip.getBoundingClientRect();

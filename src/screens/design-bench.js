@@ -453,8 +453,10 @@ function ctxItemsDesign(hit){
        each half is then an object with its own ends, name and size. Absent
        where there is no half to make - the ends of a run and a run laid by hand
        with no recipe behind it. */
-    const cut=ids[ids.length-1];
-    if(cut!=null && runSplitIdx(cut,cell)>=0)
+    // the last id that can actually be cut here: a crossing cell carries two
+    // runs, and a traced key standing beside a real one owns no recipe to cut
+    const cut=ids.filter(id=>runSplitIdx(id,cell)>=0).pop();
+    if(cut!=null)
       items.push({label:"SPLIT PIPE", fn:()=>{ splitRun(cut,cell); }});
     if(hit.cell && matCell(hit.cell.gx,hit.cell.gy))
       items.push({label:"REMOVE WALL", fn:()=>{ matLift(hit.cell.gx,hit.cell.gy); buildLayout(); }});
@@ -993,6 +995,28 @@ function paramBlockMk(block){
       return {el:root,sync(b){
         b.blocks.forEach((c,i)=>{ const h=hs[i]; if(h&&h.sync) h.sync(c); }); }};
     }
+    /* One panel, one tab open. Only the open tab is synced - a hidden one has
+       no width, and the automation graph lays itself out at the width it has. */
+    case "tabs": {
+      const root=KIT.el("div","db-tabs"), bar=KIT.el("div","db-tabs-bar");
+      const key=block.tabs.map(t=>t.title).join("|");
+      root.appendChild(bar);
+      const keys=[], bodies=[], hs=[];
+      block.tabs.forEach((t,i)=>{
+        const b=KIT.el("button","tab",{type:"button"}); b.textContent=t.title;
+        if(t.tip) KIT.tip(b,t.title,t.tip);
+        MOUSE.on(b,{click(){ if(PANTAB[key]!==i){ PANTAB[key]=i; PANTAB.seq++; } }});
+        bar.appendChild(b); keys.push(b);
+        const body=KIT.el("div","db-tab-body"); root.appendChild(body); bodies.push(body);
+        hs.push(t.blocks.map(x=>{ const h=paramBlockMk(x); body.appendChild(h.el); return h; }));
+      });
+      return {el:root,sync(bl){
+        const open=clamp(PANTAB[key]|0,0,bl.tabs.length-1);
+        keys.forEach((b,i)=>b.classList.toggle("on",i===open));
+        bodies.forEach((b,i)=>KIT.show(b,i===open));
+        bl.tabs[open].blocks.forEach((c,j)=>{ const h=hs[open][j]; if(h&&h.sync) h.sync(c); });
+      }};
+    }
     case "section": {
       const root=KIT.el("div","db-section");
       if(block.span) root.style.setProperty("--db-span",block.span);
@@ -1144,13 +1168,18 @@ function paramBlockMk(block){
   }
 }
 function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||"")
-  +(b.blocks?"("+blockSig(b.blocks)+")":"")).join("|"); }
+  +(b.blocks?"("+blockSig(b.blocks)+")":"")
+  +(b.tabs?"["+b.tabs.map(t=>t.title+"("+blockSig(t.blocks)+")").join("|")+"]":"")).join("|"); }
+// which tab of a tabbed panel is open, by its tab names - view state, never design.
+// seq counts switches, so a panel knows to measure itself again (ui/margin.js)
+const PANTAB={seq:0};
 function dbPanelSync(container,blocks){
   // a stated count sets the panel width (marginColumns, ui/margin.js)
   container._cols=blocks.cols||0;
   container._colw=blocks.colw||null;
   // plant-space bodies carry the class from birth; never strip it here
-  if(blocks.some(b=>b.kind==="grid")) container.classList.add("db-body-tree");
+  const hasGrid=b=>b.kind==="grid"||(b.tabs&&b.tabs.some(t=>t.blocks.some(hasGrid)));
+  if(blocks.some(hasGrid)) container.classList.add("db-body-tree");
   const sig=blockSig(blocks);
   if(sig!==container._sig || !container._h){
     container.innerHTML="";
@@ -1177,8 +1206,8 @@ function dbNameWell(p){
   return well;
 }
 /* one panel per component (or gang) */
-function dbRailBuild(rail,vitals,watch){
-  rail.innerHTML=""; vitals.innerHTML="";
+function dbRailBuild(rail,vwin,watch){
+  rail.innerHTML=""; vwin.body.innerHTML="";
   const panels=[], gangs={};
   for(const p of LAY.parts){
     const B=paramsFor(p); if(!B.length&&!B.gang || B.plain) continue;
@@ -1203,16 +1232,12 @@ function dbRailBuild(rail,vitals,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
-  /* the verdict on the design stands over the plant it judges, not at the foot
-     of a rail the player has to scroll past every machine to reach */
   /* ONE VERDICT, not two stacked wells: the mass and the objections are the
-     same answer to the same question, and two headings over one floating box
-     spent a third of it saying so. */
-  const verdict=KIT.well(); verdict.el.classList.add("db-verdict");
-  vitals.appendChild(verdict.el);
+     same answer to the same question, and two headings over one window spent a
+     third of it saying so. The window IS the well, so there is no second one. */
   const resBody=KIT.el("div","db-verdict-res"), revBody=KIT.el("div","db-verdict-rev");
-  verdict.body.append(resBody,revBody);
-  return {panels,verdict,resBody,revBody};
+  vwin.body.append(resBody,revBody);
+  return {panels,verdict:vwin.well,resBody,revBody};
 }
 /* ══ WHAT IS ACTUALLY CONNECTED ══
    One row per traced connection - from, to, and how long it is - plus a line
@@ -1296,7 +1321,7 @@ let dbLastSel=null, dbPanelSig=null;
 function dbRailSync(state){
   // see railSelfPick() - a pick made on a panel's own title bar does not scroll
   const moved = sel!==dbLastSel && !railSelfPick(); dbLastSel=sel;
-  const sig=designSig()+"|"+sel, fresh=sig!==dbPanelSig; dbPanelSig=sig;
+  const sig=designSig()+"|"+sel+"|"+PANTAB.seq, fresh=sig!==dbPanelSig; dbPanelSig=sig;
   for(const h of state.panels){
     const on=h.ids.includes(sel);
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
@@ -1395,34 +1420,38 @@ function dbBuild(){
   head.append(tools,pres.el);
   const rail=KIT.el("div","db-rail");
   railBlank(rail);
-  /* ══ THE VERDICT IS A READING, AND A READING MAY BE PUT AWAY ══
-     It is the tallest thing standing on the board and it is not always what the
-     designer is working on, so it gets a key of its own. On by default: the
-     mass budget and the objections are what the bench is FOR, and a reader who
-     has never pressed the key has to be able to see them. */
-  const vitals=KIT.el("div","db-vitals");
-  const left=KIT.el("div","db-left");
-  const resKey=KIT.button("RESULTS",{size:8,sunk:true,on:true,
-    onClick:()=>{ dbResOn=!dbResOn; resKey.set({on:dbResOn}); KIT.show(vitals,dbResOn); uiDirty(); }});
-  KIT.tip(resKey.el,"RESULTS","The mass budget and the objections to this design. Off, the board has the room back.");
-  left.append(resKey.el,vitals);
-  root.append(head,left,rail);
+  root.append(head,rail);
   const mhost=marginHost(root);
   // before the parked windows: same z, so DOM order is what keeps a peek under one
   const phost=selwHost(root);
   const ihost=inspHost(root);
+  /* ══ THE VERDICT IS A READING, AND A READING IS A WINDOW ══
+     It is the tallest thing standing on the board and it is not always what the
+     designer is working on, so it is the same window every machine panel is -
+     dragged where the reader wants it, folded, put away - rather than a box
+     bolted to a corner of the grid. On by default: the mass budget and the
+     objections are what the bench is FOR. */
+  const vwin=inspWin(ihost,"RESULTS");
+  const resSet=on=>{ dbResOn=on; resKey.set({on}); KIT.show(vwin.well.el,on); uiDirty(); };
+  const resKey=KIT.button("RESULTS",{size:8,sunk:true,on:true,onClick:()=>resSet(!dbResOn)});
+  KIT.tip(resKey.el,"RESULTS","The mass budget and the objections to this design. Off, the board has the room back.");
+  // the window's own close key is the same switch, so the key and the window agree
+  vwin.onShut=()=>resSet(false);
+  head.appendChild(resKey.el);
   mount.appendChild(root);
-  return {root,head,rail,vitals,mhost,phost,ihost,state:null,watch:null};
+  return {root,head,rail,vwin,mhost,phost,ihost,state:null,watch:null};
 }
 function dbSync(){
   if(!DB) return;
   if(DB.rail._layFit!==LAY) {
     if(DB.watch) DB.watch.free();
     DB.watch=railWatch(DB.rail);
-    DB.state=dbRailBuild(DB.rail,DB.vitals,DB.watch); DB.rail._layFit=LAY;
+    DB.state=dbRailBuild(DB.rail,DB.vwin,DB.watch); DB.rail._layFit=LAY;
     dbPanelSig=null;                // new DOM, so the old signature says nothing about it
   }
   dbRailSync(DB.state);
+  // nobody else places it: it is not in the host's own list - see inspWin()
+  inspWinSeat(DB.vwin,DB.ihost); inspMove(DB.vwin);
   dbHostPaint();
   ctlGraphTick();
 }
@@ -1453,23 +1482,19 @@ function drawDesign(){
   dbSync();
   // an empty rail is display:none, and a hidden box measures zero
   const railBox = DB && DB.rail.offsetParent ? hostRect(DB.rail) : null;
-  /* THE HEAD ROW IS TRANSPARENT, so the view runs UNDER it - the standing the
-     vitals panel already has. Measured off the row, not a magic reserve, but
-     taken off the FIT and never off the BOX: off the box the clip stopped at
-     the row's bottom, and a plant panned up left a black band of bare page
-     between the topbar and the drawing. */
+  /* THE HEAD ROW IS TRANSPARENT, so the view runs UNDER it. Measured off the
+     row, not a magic reserve, but taken off the FIT and never off the BOX: off
+     the box the clip stopped at the row's bottom, and a plant panned up left a
+     black band of bare page between the topbar and the drawing. */
   const headBox=DB? hostRect(DB.head) : null;
   const headU = headBox? Math.max(0, headBox.y+headBox.h-TOPBAR_H) : 0;
   const vy = TOPBAR_H;
   const vh=Math.max(120,H-vy);
-  // the verdict panel is opaque, so measure it on the left the way drawOperate()
-  // measures the vitals panel
-  const vitBox = DB? hostRect(DB.vitals) : null;
-  const vx = vitBox ? vitBox.x+vitBox.w : 0;
-  const vw = (railBox ? Math.max(200, railBox.x) : W) - vx;
+  // the verdict is a window now, so it stands OVER the view and takes none of it
+  const vw = railBox ? Math.max(200, railBox.x) : W;
   // the panels stand in what the FIT gives up; the box, and so the clip, is whole
   const mi=marginInsetU();
-  drawPlant(vy,null,vh,vx,vw,mi.l+mi.r,mi.t+mi.b+headU);
+  drawPlant(vy,null,vh,0,vw,mi.l+mi.r,mi.t+mi.b+headU);
   zoomKeySync(DB&&DB.head);
   // AFTER drawPlant, because a panel is anchored against the view it just set
   marginSync(DB&&DB.mhost, false);
