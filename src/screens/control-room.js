@@ -1,25 +1,13 @@
 "use strict";
-/* the live control screen - the plant view (canvas) plus an HTML rail */
 
-/* ══ VITALS: SIX BARS THAT FILL TOWARD TROUBLE ══
-   `v.u` is the value in LIMIT UNITS: 1.0 means "at the line". LIM_AT (chrome.js)
-   places that line on the track at a fixed fraction, so every bar reads the
-   same shape regardless of what its own units are. */
+/* `v.u` is in LIMIT UNITS: 1.0 is at the line, which LIM_AT places on the track */
 function crVitalsData(){
   const s=S, sc=s.sc;
-  /* READ OFF THE CHANNEL, never written out again. These four were the
-     setpoint formulas spelt a second time, and a bar filling toward a number
-     the protection system does not trip on is a bar that lies. rpsSetOf()
-     (step.js) states flux as a PERCENTAGE, and this panel wants the fraction. */
   const nTrip=rpsSetOf("flux",0)/100, dTrip=rpsSetOf("dnbr",0),
         pLo=rpsSetOf("plp",0), pHi=rpsSetOf("php",0);
   const toward=(now,rest,lim)=> rest===lim ? 0 : (rest-now)/(rest-lim);
   return [
-   // MEGAWATTS, like every other vital on this panel: the rating is a real
-   // quantity, so the share belongs in the sentence and not in the readout
    {lab:"REACTOR POWER",val:(s.n*P.rated).toFixed(0),unit:"MWt",ch:"pwr",
-    // coloured by POWER, not by margin - DNBR is the row directly below and
-    // says it for itself; see the POWER row in readoutsFor()
     u:s.n/nTrip, col:s.n>1.1?"var(--c-red)":s.n>1.05?"var(--c-amber)":"var(--c-green)",
     tip:"Heat the chain reaction is making, out of the "+P.rated.toFixed(0)+" MWt this core is rated for - "+(s.n*100).toFixed(1)+"% of rating. The bar fills toward the high-flux trip at "+(nTrip*P.rated).toFixed(0)+" MWt; past that mark you are running on a bypassed protection system."},
    {lab:"DNBR",val:s.dnbr.toFixed(2),unit:"",ch:"dnbr",
@@ -30,16 +18,9 @@ function crVitalsData(){
     col:cssCol(pColor(s.P)),
     tip:"Primary loop pressure. The one vital where both directions are a trip - centred on "+P.P0.toFixed(2)+" MPa, marked at "+pLo.toFixed(2)+" low and "+pHi.toFixed(2)+" high."},
    {lab:"SUBCOOLING",val:sc.toFixed(1),unit:"K",ch:"sub",
-    // AMBER OFF THE PLANT'S OWN MARGIN. A fixed 20 K is water's whole
-    // commissioned subcooling (22 K on the stock plant), so it sat amber from
-    // tick one, and on a helium core it is a sliver 1400 K down the scale.
     u:toward(sc,P.sc0,3),
     col:sc<8?"var(--c-red)":sc<Math.max(10,P.sc0*.6)?"var(--c-amber)":"var(--c-cyan)",
     tip:"Degrees below boiling in the hot leg - the honest leak indicator. Commissioned "+P.sc0.toFixed(0)+" K subcooled, marked at the 3 K trip."},
-   /* KILOGRAMS, because there ARE kilograms now: s.inv is a READ of
-      invNodesKg() over the core piece's own nodes, so the vital states the
-      quantity and keeps the share of the commissioned charge in the sentence
-      under it. The bar stays proportional - a needle wants a span. */
    {lab:"INVENTORY",val:(invNodesKg(s)/1000).toFixed(1),unit:"t",ch:"inv",
     u:(100-s.inv)/30, col:s.inv<95?"var(--c-red)":s.inv<98.5?"var(--c-amber)":"var(--c-blue)",
     tip:"How much water is actually in the loop, in tonnes. Commissioned with "+(P.invKg0/1000).toFixed(1)+" t, so this is "+s.inv.toFixed(1)+"% of the charge. Nothing trips on it, but under 95% the missing water starts taking heat removal with it."},
@@ -47,19 +28,10 @@ function crVitalsData(){
     u:-s.parts.xe/3200, col:-s.parts.xe>3200?"var(--c-blue)":"var(--c-cyan)",
     tip:"Xenon-135 poison. The mark is 3200 pcm, about where the pit costs you more reactivity than the rods have left to give."}];
 }
-/* the balances the vitals panel draws under its six bars, in draw order */
 const CR_VIZ=[
  {k:"rho", title:"REACTIVITY BALANCE", tip:RHOVIZ_TIP,  draw:rhoViz},
  {k:"heat",title:"HEAT BALANCE",       tip:HEATVIZ_TIP, draw:heatViz},
 ];
-/* ══ WHICH VESSEL THE TWO BALANCES ARE READ OFF ══
-   ONE ROW FOR BOTH, because both are core-shaped and a plant where the
-   reactivity picture and the heat picture could be looking at different
-   reactors is worse than either being wrong. The topbar's own .tab is the
-   widget - this is the same gesture in the same language, so it is that class
-   and not a second one that looks like it.
-   The row is absent on a single-unit plant: PLANT is then the only reading
-   there is, and a tab strip with one tab on it is a label. */
 function crUnitsBuild(container){
   const root=KIT.el("div","cr-units"); container.appendChild(root);
   return {root,keys:null,sig:""};
@@ -89,16 +61,8 @@ function crVitalsBuild(container){
   const rows=[];
   for(let i=0;i<6;i++){
     const row=KIT.el("div","cr-vital");
-    /* A SQUARE DOT, not a lit row. Tinting the whole row said "plotted" in the
-       same language the bars use for "in trouble", so a plotted channel read as
-       an alarming one. The dot carries the channel's own trend colour, which is
-       also the one thing that ties a row to its curve in the chart below. */
     const plotDot=KIT.el("span","cr-vital-plot");
     const lab=KIT.el("span","cr-vital-lab");
-    /* The strip lives in its own box because WHICH strip it is depends on the
-       row's data, and the data needs a commissioned plant to exist. The box
-       holds the place in the grid; crVitalsSync() puts the right instrument
-       in it. */
     const barBox=KIT.el("span","cr-vital-bar");
     const bar=KIT.segMark({cells:24}); barBox.appendChild(bar.el);
     const val=KIT.el("span","cr-vital-val");
@@ -113,12 +77,7 @@ function crVitalsSync(rows){
   const data=crVitalsData();
   data.forEach((v,i)=>{
     const h=rows[i];
-    /* A TWO-SIDED ROW NEEDS A TWO-SIDED STRIP. PRESSURE is the one vital where
-       both directions are a trip, so it carries marks at -LIM_AT as well as
-       +LIM_AT - and on an UNSIGNED strip a negative mark is drawn at a negative
-       percentage, i.e. off the left end of the bar and straight over the label
-       beside it. The row's own data says which it is, so the widget is built
-       from that rather than from the position it happens to sit in. */
+    /* an unsigned strip draws a -LIM_AT mark off the left end, over the label */
     const wantSigned=!!v.sgn;
     if(h.signed!==wantSigned){
       h.barBox.innerHTML="";
@@ -138,16 +97,6 @@ function crVitalsSync(rows){
   });
 }
 
-/* ══ THE ANNUNCIATOR BOARD, AT THE HEAD OF THE MASTER CAUTION ══
-   One panel, because the two lists were read as one thing standing in two
-   corners: the board says what is wrong NOW and goes dark on its own, the
-   caution list says what has HAPPENED and waits to be answered, and neither
-   answers the other's question on its own. No count - a board that is always
-   all there counts itself.
-   EVERY TILE STANDS, LIT OR NOT. A tile is a place on a board, and a board
-   whose dark tiles are absent is a list: the lit ones move every time another
-   lights, so nothing can be found by where it sits and nothing says what the
-   plant is NOT complaining about. */
 function crAlarmsBuild(container){
   const rows=ANN.map(a=>{
     const row=KIT.el("div","cr-alarm-row");
@@ -168,41 +117,7 @@ function crAlarmsSync(rows){
   }
 }
 
-/* ══ TRENDS: chart() STAYS CANVAS, IN ITS OWN CANVAS UNDER THE VITALS ══
-   Not on #cv: the plate it sits on is opaque and paints over it. hostPaint()
-   swaps ctx and gives it its own box - see render/plant.js.
-
-   It lives with the vitals because clicking a vital is the only way to put a
-   channel on it, and the two were a screen apart: you plotted something in one
-   corner and went looking for it in the other. Nothing plotted, nothing drawn -
-   an empty chart taking 130 px to say "NO CHANNELS SELECTED" is worse than the
-   space back.
-
-   ── IT IS SIZED OFF THE HTML AROUND IT, NOT OFF ITSELF ──
-   At HOST_K one layout unit is one and a half CSS pixels, so every number here
-   is a CSS measurement divided by that, and the panel is what states them:
-
-     k    0.87 puts the legend NAME on TSCALE's 6.5 - the step HOST_K was
-          picked to land on the 10 px floor src/style.css gives HTML type, so
-          it matches the vital labels stacked directly above - and the READING
-          one step up at 8, because a reading that is the same size as its own
-          caption stops looking like the number the panel is for. At 0.7 both
-          collapsed onto the bottom of the ladder and the chart read as a
-          footnote to the panel rather than part of it.
-     pad  CR_TREND_PAD is .cr-vital's 8 px side padding, so the plot frame
-          stands in the same column as the six labels instead of 7 px inside them.
-     ph   the plot takes everything the legend does not: CR_TREND_LEG is the
-          legend band, and chart()'s `top` of 6 is the breathing room under the
-          border-top that separates this from the vitals. */
 const CR_TREND_PAD=8/HOST_K, CR_TREND_LEG=13;
-/* ── ONE CHART PER CHANNEL, NOT ONE CHART PER PANEL ──
-   Four channels sharing one plot meant four invisible scales stacked on top of
-   each other, so a curve's HEIGHT said nothing and two curves crossing said
-   nothing either. Each channel gets its own small plot instead, pinned to its
-   own range (CHVIEW, trends.js) with its own warning lines on it - so the
-   picture is "where is this against its limit", which is the only question the
-   panel is ever asked. A one-series legend is one line (chartLegend), which is
-   what pays for the extra frames. */
 function crTrendSync(host){
   const want=plot;
   KIT.show(host.box, want.length>0);
@@ -216,7 +131,6 @@ function crTrendSync(host){
         "Rolling history of this channel. The scale is fixed to the range the plant is steered in, so a flat trace reads flat; the dashed lines are the trip and alarm limits it is being read against. Click the vital above to take it off.");
       host.cvs[k]=cv2;
     }
-    // DOM order follows plot order, so reordering the picks reorders the stack
     if(host.box.children[i]!==cv2) host.box.insertBefore(cv2, host.box.children[i]||null);
   });
   if(!want.length) return;
@@ -234,16 +148,7 @@ function crTrendSync(host){
   });
 }
 
-/* drawTrend()/drawLog() draw full-width on #cv - not for this screen, which
-   has its own hosted chart (crTrendSync) and an HTML log (crLogSync), but
-   because scenario.js reuses these two by reference for its own overlays, so
-   a scenario run's history reads exactly like a free-play run's. */
-/* WHICH VESSEL THE CHART IS LOOKING AT - the one writer of TREND.unit, which
-   trends.js reads through chKey(). The rings already exist per vessel; a
-   vessel-shaped channel with no way to pick the vessel is a picture nobody can
-   steer, exactly as a chart with no way to pick the channel was. Drawn only
-   where trendUnits() answers more than one, so a one-unit plant is unchanged
-   down to the pixel and PLANT stays the only reading there is. */
+/* drawTrend()/drawLog() are not for this screen: scenario.js reuses them by reference */
 const TREND_TAB_H=BTN_H+6;
 function trendTabs(x,y){
   const units=trendUnits();
@@ -300,13 +205,6 @@ function drawLog(yy){
   return y+h+12;
 }
 
-/* ══ TWO POOLED LISTS ══
-   Both used to throw their DOM away and build it again whenever their contents
-   changed - the log on every single new event, which is once a second in a
-   transient and is exactly when the panel is being read. A row is a row: keep
-   as many as are wanted, hide the rest, and write only the text that differs.
-   crPool() is the one place that grows and trims, so neither list carries its
-   own copy of the same three lines. */
 function crPool(list,n,mk){
   const pool=list._pool||(list._pool=[]);
   while(pool.length<n){ const h=mk(); list.appendChild(h.el); pool.push(h); }
@@ -349,15 +247,11 @@ function crDamageSync(list){
     const state=KIT.el("div","cr-dmg-state");
     const dose=KIT.el("div","cr-dmg-dose");
     el.append(name,state,dose);
-    /* the card is reused by whatever part is at this slot next, so the handler
-       reads its CURRENT part rather than closing over one */
+    /* the card is reused by the next part at this slot, so never close over one */
     const h={el,name,state,dose,id:null};
     MOUSE.on(el,{click(){ if(h.id) act("repair",h.id); }});
     return h;
   });
-  /* the field is SOLVED ONCE for the whole card list, not once per card - the
-     same field every card below reads radParty() against, per the "one
-     accessor" rule rad.js documents for radSrc()/radSolve() itself. */
   const f = ids.length ? radSolve(P.radK, radSrc(S)) : null;
   const g = ids.length ? occupied(null) : null;
   ids.forEach((k,i)=>{
@@ -385,10 +279,7 @@ function crDamageSync(list){
     }
     if(h.state.textContent!==st) h.state.textContent=st;
 
-    /* the estimate the card PROMISES has to be the dose the sim will actually
-       charge: rate*RAD_DOSE_K*dt integrated over the real time the job takes
-       (need/radWorkK(rate), since work only advances at that fraction of a
-       second per second) is exactly rate*RAD_DOSE_K*need/radWorkK(rate). */
+    /* the promise must equal what the sim charges: work advances at radWorkK(rate) */
     const showDose = part && !blocked && !S.partySpent;
     const rate = showDose ? radParty(f,part,g) : 0;
     const doseTxt = showDose
@@ -402,8 +293,6 @@ function crDamageSync(list){
   });
 }
 
-// ESC PUTS THE TOOL BACK, the same key and the same one way out of a mode the
-// bench has
 keyAdd({k:"Escape", sc:"operate", lab:"SELECT", fn:()=>{ TOOL.active="select"; }});
 
 function crFaultsBuild(container){
@@ -418,15 +307,10 @@ function crFaultsBuild(container){
   KIT.tip(reset.el,"RESET PLANT","Returns the reactor to steady 100% power with all faults cleared. Keeps your current design.");
   const hit=scram("RANDOM COMBAT HIT",{onClick:()=>act("hit")});
   KIT.tip(hit.el,"RANDOM COMBAT HIT","Takes a hit somewhere in the engineering space, weighted toward the hull.");
-  /* The aimed hit is a TOOL, not a button that damages on the press: the target
-     is a machine on the plant, so it is picked on the plant. */
   const aim=scram("AIMED COMBAT HIT",{onClick:()=>{ TOOL.active = TOOL.active==="hit"?"select":"hit"; }});
   KIT.tip(aim.el,"AIMED COMBAT HIT",TOOLS.find(t=>t.id==="hit").tip);
   const black=scram("STATION BLACKOUT",{onClick:()=>act("blackout")});
   KIT.tip(black.el,"STATION BLACKOUT","Cuts main power to the coolant pumps.");
-  /* Opens EVERY tank that could poison the loop, off what is in them. It is a
-     shortcut for the tanks' own valves and nothing more - there is no one-shot
-     latch behind it any more, because a tank that is empty is empty. */
   const boron=scram("EMERGENCY BORON",{danger:true,
     onClick:()=>{ for(const id of boronTankIds()) if(!S.tankOpen[id]) act("tankOpen",id); }});
   container.append(porv.el,jam.el,load.el,reset.el,hit.el,aim.el,black.el,boron.el);
@@ -444,38 +328,15 @@ function crFaultsSync(h){
   h.boron.set({label:spent?"BORON EXPENDED":"EMERGENCY BORON",disabled:spent});
 }
 
-/* ══ THE COMPONENT RAIL: EVERY FITTED COMPONENT'S readoutsFor() TABLE ══ */
-/* ══ WHICH SIDE OF THE PLANT A MACHINE IS ON, ASKED OF THE DRAWING ══
-   loopOf() answers for the five LOOP_ROLEs and null for everything else, which
-   is why a relief tank hanging off the primary read as plant-wide. The node
-   graph knows better and it is the same graph the solve walks: a part's nodes
-   are primary or they are not (nodeGraph().primary), so the side is MEASURED,
-   never declared. A generator has nodes on both and is caught by loopOf()
-   first, which is correct - it belongs to its loop.
-   A part with no node at all is either bolted to one that has (the rod drives
-   ride the reactor) or carries nothing at all (protection, containment). */
-/* ONE COLLAPSIBLE, used by the rail's groups and by the LOG/REPAIR/FAULTS/
-   PIPING stack above them. They were two <details> with two looks in
-   one scroller, which read as two different kinds of thing; they are the same
-   kind of thing. EVERY ONE STARTS SHUT: the rail is then a list of the plant's
-   sides, one line each, and picking a machine on the drawing opens the group it
-   is in (crRailSync()) - so the way in is the plant, not the scroller. */
 function crCollapse(label){
-  const d=KIT.el("details","cr-group"); d.open=false;   // written, not assumed
+  const d=KIT.el("details","cr-group"); d.open=false;
   const s=KIT.el("summary");
   const n=KIT.el("span","cr-group-name"); n.textContent=label;
-  /* WHAT IS RED UNDER A SHUT LID. A group that hides its panels hides its bad
-     news with them, so the summary carries it: crRailAlert() fills this. Held
-     as its own span so the NAME is written once and never rewritten. */
+  /* its own span so the NAME is written once: crRailAlert() fills this one */
   const a=KIT.el("span","cr-group-alert");
   s.append(n,a); d.appendChild(s); d._alert=a;
   return d;
 }
-/* MACHINES THAT SHARE A SIDE STAND TOGETHER, in the order the coolant meets
-   them - panelGroup()/panelGroupRank() (inspector.js) are that question and its
-   answer's order, shared with the margin panels. Grouping is the BUILD's
-   business alone - a well is the same well wherever it stands, so no sync path
-   knows. */
 function crRailBuild(rail,watch){
   rail.innerHTML="";
   const panels=[], byGroup=new Map();
@@ -484,25 +345,12 @@ function crRailBuild(rail,watch){
     if(!byGroup.has(k)) byGroup.set(k,[]);
     byGroup.get(k).push(p);
   }
-  /* CIRCUITS ARE INDEXED, so the rail lists them in index order rather than in
-     a two-name bucket. The core's own circuit leads, because that is where the
-     heat comes from; support is last, because it carries none. */
   const loops=Array.from(byGroup.keys()).filter(k=>k.startsWith("loop"));
   const order=Array.from(byGroup.keys())
     .sort((a,b)=>panelGroupRank(a)-panelGroupRank(b));
-  /* a loop is a PRIMARY loop - it is seeded off a generator and walked over
-     primary nodes only - and on a one-loop plant its number says nothing.
-     SUPPORT is the last group: what is left carries no coolant at all. The
-     control room, the containment, the backup set and the shielding do not
-     move heat, they hold the reactor up, so the heading names the JOB rather
-     than the building it happens to be in. */
   const label=k=>k==="support"?"SUPPORT"
     :k.startsWith("circ")?circName(+k.slice(4))
     :loops.length>1?"PRIMARY LOOP "+(+k.slice(4)+1):"PRIMARY LOOP";
-  /* A GROUP IS A crCollapse() - shut, like every other one. A shut group leaves
-     its panels in the DOM but out of view, which the rail already handles:
-     railSeen() reads the observer and the sync skips what nobody can see. One
-     group and nothing to tell it apart from needs no box at all. */
   for(const k of order){
     const parts=byGroup.get(k), one=order.length===1;
     let head=null, box=rail;
@@ -516,18 +364,11 @@ function crRailBuild(rail,watch){
       panels.push({p,well,body,head,on:null,empty:null,base:null});
     }
   }
-  /* THE RAIL OPENS NOTHING ON ARRIVAL. crRailSync() opens the group of a
-     machine the selection MOVES to, and on the first sync after a rebuild every
-     selection looks like a move - so entering the control room sprang open
-     whichever group the standing selection sat in. Adopting it here makes the
-     first frame a no-move; a real pick after that still opens its group. */
+  /* adopt the standing selection, or the first sync reads as a move and opens its group */
   crLastSel=sel;
   crHeadsDone=false;
   return panels;
 }
-/* A HEADING WITH NOTHING UNDER IT IS A LIE. Whether a panel has anything to
-   report is settled on the first sync (h.empty), not here, so the headings are
-   judged once, on the frame the last of them resolves. */
 let crHeadsDone=false;
 function crRailHeads(panels){
   if(crHeadsDone || panels.some(h=>h.empty===null)) return;
@@ -536,39 +377,12 @@ function crRailHeads(panels){
   for(const h of panels) if(h.head && !h.empty) live.add(h.head);
   for(const h of panels) if(h.head) KIT.show(h.head,live.has(h.head));
 }
-/* ══ THE MASTER CAUTION STORE ══
-   ONE MAP, two readers: the group headings say what is wrong RIGHT NOW under a
-   shut lid, and the master caution panel keeps a copy until the crew clicks it
-   away. Both ask the same question of the same rows, so a heading and the panel
-   can never disagree about what the plant is doing.
-
-   A READING HAS TO MEAN IT. A row that flicks amber for a frame while a pump
-   spins up is not a caution, so nothing is raised until the reading has been
-   off-nominal for CAUT_TICKS simulation steps without a break - the count is
-   the tick it started on, and it goes back to nothing the moment the value
-   comes back inside its limit. Ticks, not frames: the plant runs at 1x, 4x and
-   16x and a caution must mean the same thing at all three.
-
-   LATCHED IS NOT LIVE. `live` is "off-nominal this tick" and drives the group
-   heading; `latch` is "it has been raised" and drives the panel, which holds it
-   even after the plant recovers - a caution nobody saw is a caution nobody
-   answered. Dismissing deletes the entry outright, so the same reading going
-   bad again later is a NEW caution rather than a resurrected one. */
+/* `live` = off-nominal this tick, drives the headings; `latch` = raised, drives the panel */
 const CAUT_TICKS=10;
 const CAUT=new Map();                 // partId|label -> {name,label,text,col,since,live,latch,tip}
 const cautCol=c=>c===C.red?"red":c===C.amber?"amber":null;
-/* One row, one tick. Returns the entry while it is raised, and null while it is
-   nominal or still counting - so a caller can print it without asking twice. */
-/* THE COPY IS THE ROW, not a sentence about it - same six fields the rail
-   panel is built from (readoutsFor()), so the caution carries the value, the
-   colour and the band exactly as the machine's own panel draws them. Only the
-   LABEL differs: it is given the machine's name, because out of its panel a
-   bare "STEAM OUT" belongs to nothing. */
 const cautRow=(r,text)=>[text,r[1],r[2],r[3],r[4],r[5]];
-/* THE READING HAS COME BACK - or it is not there to read any more. One branch,
-   two callers, because a row that vanished is not a row still off-nominal: the
-   hold, the dimming and the deletion are the same in both cases. `r` is null
-   when there is no row left to copy, and the frozen one stands. */
+/* `r` null = no row left to copy, so the frozen one stands */
 function cautCalm(key,e,r,text){
   if(e.calm==null) e.calm=performance.now();
   const held = e.latch && performance.now()-e.calm < CAUT_CALM_MS;
@@ -579,82 +393,31 @@ function cautCalm(key,e,r,text){
   else if(r) e.row=cautRow(r,text);
   return null;
 }
-/* A ROW NOBODY STEPPED IS NOT A ROW STILL READING BAD. STATUS DESTROYED leaves
-   the panel the moment the machine is repaired or the plant is reset, and an
-   entry nothing steps was never cooled: it stayed live for ever, so the crew
-   could neither clear it nor dismiss it. */
+/* a row nobody stepped is not a row still reading bad, so it is cooled here */
 function cautSweep(seen){
   for(const [k,e] of CAUT) if(!seen.has(k)) cautCalm(k,e,null,null);
 }
-/* EVERY CAUTION BELONGS TO ONE RUN. plantGen (step.js) moves on every
-   resetPlant() - a recommission, a scenario run, the bench putting the plant
-   back - and a caution raised by the last run is about a machine that may not
-   even be fitted here. A SCRUB is not a reset, so a latched caution survives
-   one, which is what the snapshot branch in cautStep() is for. */
 let cautGen=-1;
 function cautRun(){ if(cautGen!==plantGen){ cautGen=plantGen; CAUT.clear(); } }
 function cautStep(id,r,name,base,seen){
   const key=id+"|"+r[0], col=cautCol(r[2]), e=CAUT.get(key);
   if(seen) seen.add(key);
   const text=name+": "+r[0];
-  /* A BYPASS IS NOT A CAUTION. autoState() reads BYPASSED and every row that
-     prints it is amber, which is right on the machine's own panel - it is a
-     protection you have stood down and the panel should say so for as long as
-     it is stood down. It is not news, though: the crew did it on purpose, it
-     will not clear itself, and a caution list it can never leave is a list that
-     stops being read. The VALUE is the test, so a new bypassable system needs
-     nothing here. */
+  /* a bypass is deliberate and a centre-zero bar's colour is a key, not a verdict */
   const byp = r[1]==="bypassed";
-  /* A LEDGER TERM IS EXEMPT, and r[5] is the same test fieldRowsSync() washes
-     on: a centre-zero bar makes the colour a KEY to the picture beside it, not
-     a verdict - so withdrawing the bank turned its reactivity term amber and
-     the master caution reported the rods moving. MOVING is the other half: a
-     demand the machine is still walking to is the plant obeying. */
   const bal = !!r[5], mov = MOVING.has(r[0]);
-  // the baseline is this plant's own resting colours - see the caller
   if(!col || byp || bal || mov || base.has(r[0])){
-    /* A LATCHED CAUTION KEEPS UPDATING once the hold below has expired: the
-       reading has recovered, so the row is no longer red, and showing it frozen
-       at its worst would be a lie about the plant right now. It goes dim
-       instead, and reads live.
-       IT STAYS LIT FOR THE CALM WINDOW FIRST. Dimming on the tick the reading
-       came back put the flicker straight back: a value crossing its limit
-       twenty times a second made the line, its wash and its group heading
-       strobe, and holding only the DELETION did nothing about it. While held
-       the copy is frozen at the reading that raised it, because a line that
-       keeps its place and changes colour is the same flash. */
     return e ? cautCalm(key,e,r,text) : null;
   }
   const t=S.tick;
   if(!e){ CAUT.set(key,{id,name,label:r[0],text,col,since:t,live:false,latch:false,row:cautRow(r,text)}); return null; }
   if(e.since<0 || e.since>t) e.since=t;      // fresh, or a snapshot scrubbed us backwards
   e.col=col; e.name=name; e.text=text; e.row=cautRow(r,text);
-  /* THE CALM WINDOW STARTS AGAIN EVERY TIME THE READING GOES BAD, not only when
-     it latches - a value flicking in and out of its limit is off-nominal again
-     before the ten ticks that re-raise it, so a clock left running swept the
-     line away while the plant was still misbehaving. */
   e.calm=null;
   if(t-e.since>CAUT_TICKS){ e.latch=true; e.live=true; return e; }
   return null;
 }
-/* ══ THE MASTER CAUTION PANEL ══
-   Every caution the plant has raised this run, still there after the reading
-   itself recovered, until somebody clicks it away. That is the whole point of a
-   master caution and the reason it is not the annunciator stack: the stack says
-   what is wrong NOW and goes dark on its own, this says what has HAPPENED and
-   waits to be answered.
-
-   It stands UNDER the two balances rather than over them, so a caution arriving
-   never moves a picture somebody is reading. */
-/* ONE CLEAR, two callers - the button and the AUTO toggle below it, which is
-   nothing more than that button pressed every frame. */
-/* AUTO HOLDS THE RECOVERED LINE FOR FIVE SECONDS OF THE CREW'S OWN TIME. Sweeping
-   it the moment the reading came back inside its limit made the list flash. In
-   TICKS the second shrank with the timescale - at 8x fifty ticks is an eighth
-   of a real second and it still flashed - so this one clock is the wall clock:
-   how long a line has to sit still to be readable is a fact about the person
-   reading it, not about the plant. Display state, so it is not on S. The crew's
-   own CLEAR waits for nothing. */
+/* wall clock, not ticks: how long a line must sit still to be read is about the reader */
 const CAUT_CALM_MS=5000;
 let cautAuto=true;
 function cautClear(hold){
@@ -668,42 +431,24 @@ function crCautBuild(container){
   const wrap=KIT.el("div","cr-caut");
   const head=KIT.el("div","cr-caut-head");
   const h1=KIT.el("span","cr-caut-title"); h1.textContent="MASTER CAUTION";
-  /* CLEARS THE ANSWERED ONES, and only those - a caution whose reading is still
-     off-nominal is not the crew's to sweep away. It keeps its place in the head
-     whether or not it is offered (visibility, not display), because a button
-     that shoves the AUTO key beside it sideways as the plant recovers is a
-     button nobody can aim at. */
   const clr=KIT.button("CLEAR",{size:7,flat:true,tip:"Removes every caution whose reading has come back inside its limit. Anything still off-nominal stays.",
     onClick:()=>cautClear()});
   clr.el.classList.add("cr-caut-clear");
-  /* AUTO presses CLEAR every frame, so a caution that recovers leaves on its
-     own and the list is only ever what the plant is still doing. It answers
-     nothing a live reading raised, because CLEAR does not. */
   const auto=KIT.button("AUTO",{size:7,flat:true,on:cautAuto,tip:"Clears each caution by itself once its reading has been back inside its limit for five seconds. Anything still off-nominal stays on the list.",
     onClick:()=>{ cautAuto=!cautAuto; auto.set({on:cautAuto}); if(cautAuto) cautClear(true); }});
   auto.el.classList.add("cr-caut-auto");
   head.append(h1,clr.el,auto.el);
-  /* THE LIT ANNUNCIATORS STAND ABOVE THE COPIED READINGS. Every tile in the
-     board is built here and hidden until it lights, so a tile arriving costs no
-     rebuild - and the caution rows below never move to make room for one,
-     because the block above them is already there. */
   const ann=KIT.el("div","cr-caut-ann");
   const body=KIT.el("div","cr-caut-body");
   wrap.append(head,ann,body); container.appendChild(wrap);
   KIT.tip(wrap,"MASTER CAUTION",
     "At the top, every annunciator that is currently lit - the full board, including what is dark, is on the HELP screen. Under it, every reading that has gone amber or red for longer than a moment, copied whole - value, colour and limits - and named by the machine it belongs to. A copied line stays after the reading recovers; click it to answer it and clear it away.");
-  /* ONE listener on the body, not one per row: fieldRowsSync() owns these
-     elements and rebuilds them whenever the list changes, so a handler bound to
-     a row would be thrown away with it. The keys are held in build order. */
+  /* one listener on the body: fieldRowsSync() owns the rows and rebuilds them */
   const h={head,body,ann:crAlarmsBuild(ann),clr:clr.el,offer:null,keys:[],state:null};
   MOUSE.on(body,{click(e){
     const el=e.target.closest && e.target.closest(".insp-row"); if(!el) return;
     const k=h.keys[Array.prototype.indexOf.call(body.children,el)], c=k&&CAUT.get(k);
     if(!c) return;
-    /* A LIVE CAUTION IS NOT DISMISSIBLE, so its click does the other useful
-       thing: it takes you to the machine. The rail lights that panel, opens the
-       group it is in and scrolls to it - the same as clicking it on the plant,
-       which is what a caution list is for. Answered ones clear, as before. */
     if(c.live) sel=c.id; else CAUT.delete(k);
   }});
   return h;
@@ -717,20 +462,8 @@ function crCautSync(h){
   const offer=on.some(v=>!v);
   if(h.offer!==offer){ h.clr.classList.toggle("off",!offer); h.offer=offer; }
   if(!rows.length){ h.body.innerHTML=""; h.body._h=null; return; }
-  /* THE WASH IS NOT THIS PANEL'S BUSINESS. fieldRowsSync() paints a row off its
-     own colour, so a caution and the rail panel it was copied from are washed by
-     one rule off one fact - and it TRACKS: red that eases to amber washes amber,
-     and a reading back inside its limit washes nothing. No wash IS answered, so
-     a recovered caution needs no styling of its own; it stays on the list, fully
-     legible, waiting to be cleared. */
   fieldRowsSync(h.body,rows);
 }
-/* ══ A SHUT GROUP STILL REPORTS ══
-   The heading carries what is red underneath it, so collapsing a group hides
-   the detail and never the trouble. Each reads MACHINE: READING, because four
-   generators all reading SG LEVEL is four different machines in trouble and a
-   bare label could not say which. One or two of them print; past that they stop
-   fitting on a heading's single line and the COUNT is the honest thing. */
 function crRailAlert(panels,red){
   const seen=new Set();
   for(const h of panels){
@@ -739,8 +472,6 @@ function crRailAlert(panels,red){
     const labs=Array.from(new Set(list.map(e=>e.text)));
     const txt = !labs.length ? "" : labs.length>2 ? labs.length+" CAUTIONS" : labs.join(", ");
     if(d._alert.textContent!==txt) d._alert.textContent=txt;
-    // one red anywhere under the lid makes the heading red: the worse colour
-    // wins, or a burst shell would read as amber behind a lagging valve
     const st = !labs.length ? "" : list.some(e=>e.col==="red") ? "alarm" : "caution";
     if(d._st!==st){
       d.classList.toggle("alarm",st==="alarm");
@@ -751,34 +482,21 @@ function crRailAlert(panels,red){
 /* see dbRailSync() - reveal on the frame sel changes, never every frame */
 let crLastSel=null;
 function crRailSync(panels){
-  // a pick made IN the rail already has the panel under the pointer, so the
-  // scroll it used to trigger threw the thing just clicked off the screen
+  // a pick made in the rail is already under the pointer; scrolling throws it off screen
   const moved = sel!==crLastSel && !railSelfPick(); crLastSel=sel;
   cautRun();
   const red=new Map();                      // head -> the labels reading red
   const seen=new Set();                     // every caution key stepped this pass
   for(const h of panels){
-    /* whether a panel has anything to report is a question about the DESIGN -
-       readoutsFor() answers [] on fitted(p), p.grp and P, all frozen for the
-       run - so it is asked once per rail and the rail is rebuilt when P moves.
-       Asking it every frame meant building the table just to throw it away. */
     if(h.empty) continue;
     const on = h.p.id===sel;
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     const first = h.empty===null;
-    /* THE TABLE IS BUILT EVEN FOR A PANEL NOBODY CAN SEE, because a shut group
-       has to be able to say what is wrong inside it. Only the DOM work below is
-       still gated on being on screen - that is where the cost was. */
+    /* built even for a panel nobody can see: a shut group still has to report */
     const rows = readoutsFor(h.p,S);
     if(first){ h.empty=!rows.length; KIT.show(h.well.el,rows.length>0); }
     if(!rows.length) continue;
-    /* RED IS NOT ALWAYS TROUBLE, so the baseline is MEASURED. Some rows are red
-       on a perfectly healthy plant: TOTAL MADE is red because the heat balance
-       paints fuel red, and SHUTDOWN MARGIN is red at rest on most designs
-       because it is usually negative - that is what boron is for. Whatever is
-       red on the first frame after commissioning is this plant's normal, and
-       only a row that goes red AFTER that is an alarm. The rail is rebuilt when
-       P moves, so the baseline is always taken at a rest point. */
+    /* some rows are red on a healthy plant, so this plant's first frame is the baseline */
     if(first) h.base=new Set(rows.filter(r=>Array.isArray(r)&&cautCol(r[2])).map(r=>r[0]));
     {
       const nm=partName(h.p);
@@ -791,17 +509,11 @@ function crRailSync(panels){
       if(hit && h.head){ const a=red.get(h.head); if(a) a.push.apply(a,hit); else red.set(h.head,hit); }
     }
     if(!railSeen(h.well.el) && !(on&&moved)) continue;
-    // a rename does not touch P, so this rail's build trigger (Pfit) never
-    // fires for it - re-read the name every sync, guarded no-ops either way
+    // a rename does not touch P, so the Pfit rebuild never fires: re-read every sync
     { const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm); }
-    // a machine picked on the DRAWING may sit in a group somebody shut: open
-    // it, or the click lands on nothing and the plant looks unresponsive
+    // a machine picked on the drawing may sit in a group somebody shut
     if(on && moved){ if(h.head) h.head.open=true; KIT.reveal(h.well.el,"start"); }
     fieldRowsSync(h.body,rows);
-    /* the damage map is genuinely graphical and keeps its own canvas, the way
-       the lattice plan does on the bench - see hostPaint() and dmgViz().
-       fieldRowsBuild() hands the canvas back on the container, so this never
-       searches the screen for it. */
     const v=h.body._viz;
     if(v&&v.dmg) hostPaint(v.dmg,dmgViz,coreOf(h.p.id));
   }
@@ -815,16 +527,8 @@ function crBuild(){
   if(!mount) return null;
   const root=KIT.el("div","cr-root");
   const vitals=KIT.el("div","cr-vitals"); root.appendChild(vitals);
-  /* THE SIX BAR ROWS ARE OFF THE PANEL, AND THE TRENDS GO WITH THEM: a row
-     click was the only thing that ever put a channel on the chart, so charts
-     with no way to pick them are a picture nobody can steer.
-     crVitalsBuild()/crVitalsSync() and crTrendSync() stand ready for whichever
-     of them comes back. */
+  /* the bar rows and their trends are off the panel; their build/sync stand ready */
   const vitalRows=null, trendBox=null;
-  /* THE TWO BALANCES ARE VITALS, NOT COMPONENT READOUTS. They are the whole
-     plant's account of itself, so they belong in this panel rather than behind
-     a click on the reactor. Same canvas arrangement a rail widget uses - the
-     panel is opaque, so each draws into its own <canvas> (hostPaint()). */
   const units=crUnitsBuild(vitals);
   const viz={};
   for(const b of CR_VIZ){
@@ -838,10 +542,6 @@ function crBuild(){
   const rail=KIT.el("div","cr-rail"); root.appendChild(rail);
   railBlank(rail);
 
-  /* THE RAIL IS FOR THE PLANT. The log, the repair list and the faults are what
-     you GO AND GET, so each is a key on the head row with its own hanging panel
-     - the same KIT.menuKey() the LAYERS key is, and the same head row the bench
-     carries. */
   const head=KIT.el("div","scr-head cr-head"); root.appendChild(head);
   const drawer=(label,tip,cls)=>{ const m=KIT.menuKey({label,tip,cls:"cr-drawer"});
     const body=KIT.el("div",cls); m.menu.appendChild(body); head.appendChild(m.el); return body; };
@@ -862,17 +562,9 @@ function crBuild(){
     trend:{box:trendBox,cvs:{}},logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
-/* ONE ROW PER COMMISSIONED CONNECTION: what it joins, what it is carrying, and
-   whether a hit anywhere along it has cut it. BROKEN is asked of the SOLVE, so
-   the panel and the solve can never disagree about what broken means -
-   runHoled() (pipenet.js) is that one predicate, nozzle valves included. */
 function crCnxSync(body){
   if(!P||!P.net||!S) return;
   const keys=Object.keys(P.net.byKey);
-  /* STATUS ONLY. A run's length is a DESIGN number - it prices the run and it
-     is what the bench is for. In the control room the only question a piping
-     list can answer is whether the run is still carrying, so the metres are
-     not shown and r.L is not read. */
   const rows=keys.map(k=>{ const r=P.net.byKey[k];
     return {k, name:pipeName(r), cut:runHoled(S,r)};
   });
@@ -886,9 +578,6 @@ function crCnxSync(body){
     row.append(n,s); body.appendChild(row);
   }
 }
-/* EVERY NOZZLE'S OWN VALVE, in its own panel. Every port is listed, open ones
-   included - the question the list answers is "what is lined up", and a list of
-   only the shut ones cannot be read as an answer to that. */
 function crPortsSync(body){
   if(!S) return;
   const PS=S.portShut||{};
@@ -901,7 +590,6 @@ function crPortsSync(body){
   for(const pv of ports){
     const row=KIT.el("div","cr-cnx-row"+(pv.dead?" cut":pv.shut?" shut":""));
     const n=KIT.el("span","cr-cnx-name"); n.textContent=pv.name;
-    // a wrecked valve has no position to report - it is where it stood
     const s=KIT.el("span","cr-cnx-state");
     s.textContent=pv.dead?("JAMMED "+(pv.shut?"SHUT":"OPEN")):pv.shut?"SHUT":"open";
     row.append(n,s); body.appendChild(row);
@@ -924,10 +612,6 @@ function crSync(){
   if(CR.panels){ crRailSync(CR.panels); crRailHeads(CR.panels); }
   crCautSync(CR.caut);
 
-  /* the banner is a view of three fields, so it is written when one of them
-     moves and not otherwise - the trip line alone built a string every frame.
-     Nothing to clear on a scrub: it compares against the live S each frame, so
-     a restored snapshot writes it on the next one. */
   const s=S;
   if(s.melt!==CR.bMelt||s.breach!==CR.bBreach||s.trip!==CR.bTrip){
     CR.bMelt=s.melt; CR.bBreach=s.breach; CR.bTrip=s.trip;
@@ -944,29 +628,15 @@ if(typeof document!=="undefined" && document.documentElement) CR=crBuild();
 
 function drawOperate(){
   crSync();
-  /* MEASURED, not reserved. The strip is a fixed CSS height floating over the
-     canvas while the plant view is in layout units, so any constant band is
-     right at exactly one window width and leaves a growing gap at every other -
-     which is what put a strip of dead canvas above the plant. Same measurement
-     the design bench already makes off its head row.
-     The box runs to the edges from there: the rail is opaque and the strip is
-     opaque, so there is nothing for a margin to protect the plant from. */
   const stripBox = trStrip("operate") ? hostRect(trStrip("operate").root) : null;
   // an empty rail is display:none, and a hidden box measures zero
   const railBox = CR && CR.rail.offsetParent ? hostRect(CR.rail) : null;
   const vy = stripBox ? stripBox.y+stripBox.h : TOPBAR_H;
   const vh=Math.max(120,H-vy);
-  /* THE HEAD ROW IS TRANSPARENT, so the view runs UNDER it - the bench measures
-     its own the same way, off the FIT and never off the BOX. */
+  /* the head row is transparent, so the view runs under it - measured off the FIT */
   const headBox = CR? hostRect(CR.head) : null;
   const headU = headBox? Math.max(0, headBox.y+headBox.h-vy) : 0;
-  /* THE VITALS PANEL FLOATS, so the view runs under it - the standing the alarm
-     stack in the other corner has always had. Carving its width off the left
-     gave a panel that is often half the window deep a full-height column of
-     plant, and the plant then sat in the remaining slot rather than in its
-     frame. Pan it out from under the panel like anything else. */
   const vw = (railBox ? Math.max(200, railBox.x) : W);
-  // the panels stand in what the FIT gives up; the box, and so the clip, is whole
   const mi=marginInsetU();
   drawPlant(vy,S,vh,0,vw,mi.l+mi.r,mi.t+mi.b+headU);
   zoomKeySync(CR&&CR.head);

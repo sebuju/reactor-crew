@@ -1,5 +1,4 @@
 "use strict";
-/* the reference screen */
 
 const HELP=[
  ["h","READING THE DIAGRAM"],
@@ -52,7 +51,6 @@ const HELP=[
  ["d","THE XENON PIT","Sit at 100 percent, hit SCRAM, then try to return to power immediately. Rods fully out will not do it. Diluting boron is the only way back, and it takes time you would not have in a fight."],
  ["d","THE TMI-2 TRAP","Inject the stuck PORV fault. Pressure falls while pressurizer level rises. The relief tank fills, and past its rupture disc what was in it is on the containment floor. The correct move is to watch subcooling collapse, close the block valve, then open the injection tank's valve, and accept the vessel fatigue."],
 ];
-/* HELP is HTML now; the array above is still the one source of the prose. */
 let helpAnnTiles=null;
 
 function helpBuildDOM(){
@@ -90,7 +88,6 @@ function helpBuildAnnBoard(){
   return grid;
 }
 
-/* Board draws dark on an uncommissioned plant - there is no lit set without S. */
 function helpSync(){
   if(screen!=="help" || !helpAnnTiles) return;
   for(const {el,row} of helpAnnTiles){

@@ -1,52 +1,25 @@
 "use strict";
-/* the design screen - the plant view (canvas) plus an HTML rail of panels */
 
-/* ONE ACCESSOR FOR EVERY PARAM BLOCK. A block's `key` is either a field name
-   on D or an explicit {get,set} pair - the latter for anything that does not
-   live at the top level of D, a tank's own config (D.tanks[id]) above all.
-   The slider already understood both; every other kind read D[key] directly,
-   which is how a tank panel would have had to invent a second mechanism. */
 const blockAcc = key => typeof key==="string"
   ? {get:()=>D[key], set:v=>{ D[key]=v; }} : key;
-/* What the plant would weigh with this block set to that value. It has to
-   WRITE the value to ask, so it puts it back - through the same accessor, so
-   a nested key is restored as exactly as a flat one. `raw` where the accessor
-   has one (bagAcc(), design.js): restoring a resolved default MINTS a key that
-   was absent, and that is a design edit nobody made. */
+/* raw() where the accessor has one: restoring a resolved default MINTS a key that was absent */
 function withValue(key,v,fn){ const a=blockAcc(key), o=a.raw?a.raw():a.get();
   a.set(v); try{ return fn(); } finally{ a.set(o); } }
 function massWith(key,i){ return withValue(key,i,()=>derived().mass); }
-/* ══ WHAT THE OPTION UNDER THE POINTER WOULD DO ══
-   The MEASURED lists are the answer to "what does this knob change", and until
-   now you had to change it to find out. One candidate at a time - the option
-   being hovered - written through the same accessor massWith() prices with,
-   read back, and put straight back. `seq` is what makes a panel re-sync: a
-   hover is not a design change, so designSig() cannot see it (ui/margin.js). */
+/* seq is what makes a panel re-sync: a hover is not a design change, so designSig() cannot see it */
 const PREV={key:null,val:null,seq:0};
 function prevSet(key,val){
   if(PREV.key===key && PREV.val===val) return;
   PREV.key=key; PREV.val=val; PREV.seq++;
 }
-/* THE PREVIEW HAS TO RE-MEASURE, AND THEN PUT THE MEASUREMENTS BACK. Writing a
-   candidate value is not enough on its own: the lattice figures these lists
-   read are MEASURED off the drawing (latMeasure(), lattice.js) and cached on
-   the core, so a preview that skipped this priced the drawing as it was and
-   showed no change at all - and one that skipped the second call would leave
-   the candidate's figures standing on a design nobody had edited. */
+/* the lattice figures these lists read are measured off the drawing and cached on the core, so a preview has to re-measure both ways */
 function prevMeasure(){ for(const id of coreIds()) latMeasure(coreD(id)); }
 function prevRows(rows){
   const out=withValue(PREV.key,PREV.val,()=>{ prevMeasure(); return rows(); });
   prevMeasure();
   return out;
 }
-/* ══ WHICH WAY IS BETTER, PER MEASUREMENT ══
-   A sign is not a verdict: less mass is good and less shutdown margin is not,
-   so a delta cannot colour itself off its own sign. +1 says a bigger number is
-   the better design, -1 says a smaller one is. A row that is not HERE has no
-   direction of merit and its delta stays neutral - a core diameter, a lattice
-   pitch and a flow area are shapes you choose, not scores you win.
-   Keyed on the row's own label, so one entry answers for every panel that
-   prints it: MASS costs mass wherever it stands. */
+/* +1 = a bigger number is the better design, -1 = smaller; a row that is not here has no direction of merit */
 const MERIT={
   "RATED POWER":1, "RATED OUTPUT":1, "EFFICIENCY":1, "MAX LOAD":1,
   "TURBINE CAN DRAW":1, "PLANT CAPACITY":1,
@@ -62,9 +35,6 @@ const MERIT={
   "DESIGN BACKPRESSURE":-1, "TERMINAL DIFFERENCE":-1, "PLANT AT RATED":-1,
   "VACUUM FLOOR":-1,
 };
-/* The row's own printed number, before and after, at the decimals it printed
-   it with. A row whose value is a word ("FITTED", a machine name) parses to
-   nothing and gets no delta, which is the honest answer for it. */
 function prevDelta(label,a,b){
   const x=parseFloat(a), y=parseFloat(b);
   if(!isFinite(x) || !isFinite(y)) return null;
@@ -74,7 +44,6 @@ function prevDelta(label,a,b){
   return {text:"("+(d>0?"+":"")+d.toFixed(dp)+")",
           col:m? (d*m>0?C.green:C.red) : C.ink2};
 }
-/* A BAR IS A MERIT, NEVER A MAGNITUDE - every row here is wide when the design is good, so a bad figure is a short bar whichever way its own number runs. */
 
 function planStats(d){ return [
   ["POWER DENSITY",d.dens.toFixed(0)+" kW/L",clamp(d.dens/320,0,1),C.cyan,
@@ -138,8 +107,6 @@ function layoutStats(M){
   ["PRESSURIZER HEAD",M.pzrOK?"at loop top":"BELOW LOOP TOP",M.pzrOK?1:0.2,
    M.pzrOK?C.green:C.red,
    "The pressurizer works by holding a steam bubble at the highest point of the primary loop. Mount it below the reactor or the steam generators and the bubble cannot sit where it needs to: pressure control loses more than half its damping and every load change whips the loop pressure around."],
-  /* A SHARE, the way PUMP CAPACITY is, because turbPiped() is counted - one
-     unpiped turbine of two costs half the output, not all of it. */
   ["STEAM CIRCUIT",(M.turbConn*turbCount()).toFixed(0)+" / "+turbCount()+" turbines",M.turbConn,
    statRamp(M.turbConn),
    "Whether each turbine is in a circuit that can actually run: a generator raising steam into it, and a condenser to exhaust into. An unpiped turbine spins on nothing and makes no electricity, and a generator with nowhere to send its steam boils into a closed vessel and takes no heat out of its loop."],
@@ -150,13 +117,6 @@ function layoutStats(M){
    sgCount()>1&&M.sep<4?C.amber:C.green,
    "Distance between redundant loops. Park two steam generators next to each other and a single hit takes out both, making the redundancy you paid for worthless."],
 ];}
-/* ══ WHAT MOVES THIS ROW, NAMED ══
-   A stat row states an answer and never said where the answer came from, so
-   "why is my grace time 28 s" had no door into the design at all. One entry
-   per row, keyed by the row's own label, handing back the CONTROLS, MACHINES
-   and PENS that feed it with their own live figures beside them - a machine is
-   named off the drawing (partName()), so a renamed pump reads under its given
-   name here too. */
 const drvParts = role => LAY ? LAY.parts.filter(p=>p.role===role) : [];
 const drvNames = role => drvParts(role).map(p=>partName(p));
 const drvList = (names,cap) => { cap=cap||4;
@@ -258,29 +218,16 @@ const STATDRV={
  "WEAKEST WALL":()=>["PAINT tool   MATERIAL and THICKNESS at that cell",
    "a rounder enclosure has no long flat side to be weak in the middle of"],
 };
-/* A ROW SAYS WHERE IT CAME FROM, or it says nothing - never a stale answer. */
 function statDrv(label,d,M){ const f=STATDRV[label];
   if(!f) return "";
   const rows=f(d,M).filter(Boolean);
   return rows.length? "\n\nDRIVEN BY\n  "+rows.join("\n  ") : ""; }
-/* RED THROUGH AMBER TO GREEN, for the rows whose fraction is a real SHARE -
-   both ends mean something, so the colour may follow the bar. A row measured
-   against a chosen reference (kW/L over 320, metres over 60) keeps its own
-   threshold colour: a ramp there would paint an ordinary design red for
-   standing in the middle of a scale nobody promised was a scale of merit. */
+/* only for a fraction that is a real SHARE - a row measured against a chosen reference keeps its own threshold colour */
 const statRamp = f => f<.5 ? lerpC(C.red,C.amber,clamp(f*2,0,1))
                            : lerpC(C.amber,C.green,clamp((f-.5)*2,0,1));
 function layoutWarnings(M){ const w=[];
-  /* SOFT, deliberately. The game never refuses a bad order - it carries it
-     out and shows the cost - so an unplumbed pressurizer commissions, runs
-     and loses its pressure, and that is the lesson. What it must not do is
-     happen SILENTLY, which is what it did until this row existed. */
   for(const id of holdTankIds()){ if(holdPlumbed(id)) continue;
     w.push(["SOFT",partName(partOf(id))+" stands on a dead leg. Nothing goes round through it, so it holds nothing: the pressure of the circuit it stands on will drift off programme and stay there.",id]); }
-  /* ══ WHAT A HOLD TANK CAN BE WRONG ABOUT ══
-     All soft: the bench warns and never refuses. Two on one circuit is the
-     case netRef() demotes; a check valve on a surge line is a one-way line
-     that cannot surge; a vessel alone on its circuit is holding nothing. */
   { const byCirc={};
     for(const id of holdTankIds()){ const t=D.tanks[id], ci=tankCircuit(id);
       (byCirc[ci]||(byCirc[ci]=[])).push(id);
@@ -288,9 +235,6 @@ function layoutWarnings(M){ const w=[];
       if(!holdPlumbed(id)) continue;
       if(ci===null||ci===undefined||ci<0)
         w.push(["SOFT",partName(partOf(id))+" is on no circuit. It holds nothing at all.",id]); }
-    /* A SETPOINT ABOVE WHAT THE WEAKEST THING ON THE CIRCUIT WILL TAKE. Every
-       wall on the plant is a real thickness now, so this is a comparison and
-       not a rule of thumb. */
     for(const ci of holdCircs()){ const set=holdSetP(ci), lim=plantRating(ci);
       if(lim>0 && set>lim) w.push(["SOFT","The "+circName(ci).toLowerCase()+" is held at "+
         set.toFixed(1)+" MPa and the thinnest wall on it is built for "+lim.toFixed(1)+
@@ -299,15 +243,8 @@ function layoutWarnings(M){ const w=[];
     for(const ci in byCirc) if(byCirc[ci].length>1)
       w.push(["SOFT","More than one vessel is set to hold "+circName(+ci)+". Only the first is used; the rest run as ordinary tanks.",byCirc[ci][1]]); }
   if(!M.pzrOK) w.push(["SOFT","A pressure vessel is not the highest point of its loop. Its steam bubble cannot form properly, so pressure damping drops to 45%.",holdTankIds()[0]||null]);
-  /* The same standing pzrConn has, for the other half of the plant. A steam
-     circuit is a generator, a turbine and somewhere to reject the heat; miss
-     any one of the three and the machines are decorations the bench used to
-     price, draw and never mention. */
   for(const id of (M.sgNoSteam||[]))
     w.push(["SOFT","This steam generator has no steam path to a turbine that can exhaust. It boils into a closed vessel, so it takes no heat out of its loop at all.",id]);
-  /* THERE IS NO INVISIBLE LID. A shell with nothing fitted to relieve it
-     bursts, so the bench says so - and still builds it, because refusing is
-     not what this bench does. */
   for(const id of (M.sgNoRelief||[]))
     w.push(["SOFT","No relief valve is fitted anywhere on this generator's steam side. Nothing will let the pressure go if the steam cannot get away, and the shell bursts at 1.5x its design pressure. Place a fitting on the steam line and set it to RELIEF.",id]);
   if(M.turbConn!==undefined && M.turbConn<1)
@@ -315,26 +252,9 @@ function layoutWarnings(M){ const w=[];
   for(const id of (M.pumpNoDis||[]))
     w.push(["SOFT","Nothing is piped to this pump's DISCHARGE. A pump pushes the way its casing is cast - suction on one face, discharge on the other - so it is pushing into a blank plate and moves nothing. Draw a run from the discharge, or turn the pump round.",id]);
   if(M.head<0) w.push(["SOFT","Steam generators sit BELOW the reactor. Natural circulation runs backwards - there is no passive cooling at all.",null]);
-  /* A HYDRAULIC SHORT BETWEEN THE TWO SIDES, named and not refused. The tubes
-     are the only crossing a plant is meant to have; a pipe drawn round them
-     puts primary water into a generator's shell and secondary water into the
-     loop, and the solve prices it honestly because every run is an edge. This
-     could not be reached while the secondary carried no flow. */
-  /* NOT COUNTED. One pipe drawn round the tubes puts several runs on the same
-     side of the short - the feed line into that generator is then carrying
-     primary water too - so a count would report more pipes than the designer
-     drew. The fault is that the two sides are joined at all. */
   if(crossTies().length) w.push(["SOFT","The primary side is piped into a generator's shell, going round its tubes. Whatever is in one side will end up in the other: primary water into the steam, and steam pressure into the loop.",null]);
-  /* A run whose two ends are the SAME node. It is drawn, it costs mass, and no
-     pressure difference across it is possible - so it can never carry
-     anything. The bench warns; it never refuses. A run between two different
-     faces of one machine is a recirculation line and is not this. */
   if(selfRuns().length) w.push(["SOFT",selfRuns().length===1?"One run goes from a nozzle straight back to the same one. Both ends are the same point in the plant, so no pressure can ever push anything along it - it costs mass and carries nothing.":selfRuns().length+" runs go from a nozzle straight back to the same one. Both ends of each are the same point in the plant, so nothing can ever flow along them - they cost mass and carry nothing.",null]);
-  /* ONE ROW PER PART IN LIMBO, so the review panel names the machine and
-     warnFor() can put the red dot on it. HARD: two machines in the same cells
-     is not a plant anybody could build, and every occupancy question below -
-     repair access, exposure, where a nozzle may sit - answers nonsense while
-     it is true. It is drawn, not refused, so the fix is to drag it out. */
+  /* HARD: every occupancy question - access, exposure, where a nozzle may sit - answers nonsense while a part overlaps */
   for(const p of LAY.parts.filter(q=>q.limbo))
     w.push(["HARD",partName(p)+" is standing where it does not fit - on another machine, or off the grid. Drag it clear.",p.id]);
   if(M.access<1) w.push(["RED","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
@@ -343,25 +263,9 @@ function layoutWarnings(M){ const w=[];
   return w;
 }
 
-/* ONE LIST PER PASS. warnFor() below asks for this once per PART to pull out
-   that part's own rows, so the whole review - derived(), the lattice warnings
-   and a crossTies() walk - was being run twenty-odd times a frame, and again
-   at 10 Hz from shellSync(). Cached on layPass() (layout.js), which is the
-   same window the node graph is settled in, so it cannot outlive a frame or a
-   tick and D cannot move under it. Only the no-argument form: a caller that
-   hands in its own `d` is asking about a plant that is not on the board (the
-   inspector's preview), and that is nobody else's answer. */
+/* cached on layPass() (layout.js): warnFor() asks once per PART, and only the no-argument form is on the board */
 let dbIssues=null, dbIssuesPass=0;
-/* ══ WITHOUT A REACTOR THERE IS NOTHING TO REVIEW ══
-   Every figure derived().warn and latWarn() judge - shutdown margin, boron
-   demand, void, peaking, the turbine's share of the steam this plant raises -
-   is about a reactor, and the lattice is a DRAWING that exists whether or not
-   one is on the board. So a ship with nothing on it read nine warnings about a
-   machine nobody had placed. It says the one useful thing instead.
-   RED and never HARD: a blank grid commissions.
-   layoutWarnings() STAYS either way - those are objections about boxes that DO
-   exist, and one of them is the HARD that refuses a part standing in a bad
-   cell. Hiding that would let a broken arrangement commission. */
+/* RED and never HARD: a blank grid commissions */
 const NO_CORE=[["RED","There is no reactor on this ship. Place one, and the rest of the design has something to be judged against.",null]];
 function designIssues(d,M){
   const lay=()=>layoutWarnings(M||layoutMetrics());
@@ -382,88 +286,46 @@ function warnFor(id){
   return w.some(warnRed)?C.red:C.amber;
 }
 
-// which port a plant-space point lands on, or null - the same small square
-// PORTG (plant.js) draws a mark in
 function portHit(pt){
   const gx=Math.floor((pt[0]-GX)/CELL), gy=rowAt(pt[1]);
   return portAtCell(gx,gy);
 }
-/* right-click, held still and released: add or remove - see .claude/CLAUDE.md
-   A PORT under the cursor wins over everything else it happens to sit on -
-   see uiDown()'s own right-click split (core/ui.js): a quick tap never
-   reaches this at all, only a held-and-released or a drag does. */
 function ctxResolveDesign(p){
   const pt=vIn(p)?vPt(p):null;
   if(!pt) return null;
   const gx=Math.floor((pt.x-GX)/CELL), gy=rowAt(pt.y);
   const port=portHit([pt.x,pt.y]);
-  const part=partAt([pt.x,pt.y]);   // layout.js - the same lookup the part drag's drop test uses
-  // a pipe is a CELL, so "which pipe is under the cursor" is one lookup and
-  // not a distance to a polyline
+  const part=partAt([pt.x,pt.y]);
   const pipe = (!port && !part && D.pipes[gx+","+gy]) ? gx+","+gy : null;
   return {x:p.x,y:p.y,cell:{gx,gy},port,part,pipe};
 }
-// Stage 7a: the menu header names the thing it is ABOUT - a part, a run, a
-// fitting, or the plant itself for a bare cell. Never a menu item, so it
-// carries no fn and cannot be clicked - see shellInitCtxMenu() (screens/shell.js).
 function ctxTitleDesign(hit){
   if(hit.port){ const pt=D.ports[hit.port], p=partOf(pt.p);
     return (p?partName(p):"")+" PORT"; }
   if(hit.part) return partName(hit.part);
   if(hit.pipe){ const keys=pipeMap().cellOwner[hit.pipe];
-    // the KIND comes off the traced key; a run whose ends are still loose has
-    // no kind yet, because it joins nothing
     return (keys && keys.length && pipeLabel(keys[0].split(":")[0], keys[0])) || "PIPE"; }
   return "PLANT";
 }
-/* Stage 7a: a REMOVE offer belongs to the thing under the cursor. hit.part
-   decides - a click on a component offers REMOVE, one item, about that
-   part; a click on nothing offers no removal at all. The old shape built a
-   fixed FIT/REMOVE prefix before it ever looked at hit, so right-clicking
-   dead space offered to remove equipment that was nowhere near the cursor. */
 function ctxItemsDesign(hit){
-  /* DECISION 2: a port's only offer is REMOVE PORT, which takes the port's own
-     pipe with it (removePort(), layout.js) exactly as removing a part takes
-     its runs. The SUCT/DISCH rows are gone: the FACE decides which side of an
-     internal path a port is on, so naming it was a label that could disagree
-     with the plumbing and change nothing. */
   if(hit.port)
     return [{label:"REMOVE PORT", fn:()=>{ removePort(hit.port); }}];
   if(hit.part){
-    /* ANYTHING ON THE BOARD, THE PLAYER CAN TAKE OFF - there is one
-       mechanism now, so there is one offer. A machine, a tank and a fitting
-       are three dictionaries on D and nothing here asks which. A blank grid
-       is a legal plant: it reads as a ship with nothing on it.
-       A RIDER SAYS WHAT ACTUALLY GOES: the rod drives are bolted to the
-       vessel head, so removing them removes the reactor, and the row names it
-       rather than letting the player find out afterwards. */
+    /* removing a rider takes its host with it, so the row names the host */
     const host=hit.part.pin && partOf(hit.part.pin.to);
     return [{label:host?("REMOVE "+partName(host)):"REMOVE",
              fn:()=>{ removePart(hit.part.id); }}];
   }
   if(hit.pipe){
-    /* A PIPE CELL UNDER THE CURSOR, and both offers are about the PIPE it is
-       part of: cut it in two here, or take the whole thing off. */
     const cell=[hit.cell.gx, hit.cell.gy];
     const ids=runsAtCell(cell[0],cell[1]);
     const items=[];
-    /* CUT IT IN TWO, where taking one cell out used to be. A cell is not a
-       thing you author any more, so removing one left a run with a hole in it
-       and nothing on the board saying so; two runs is what a cut pipe IS, and
-       each half is then an object with its own ends, name and size. Absent
-       where there is no half to make - the ends of a run and a run laid by hand
-       with no recipe behind it. */
-    // the last id that can actually be cut here: a crossing cell carries two
-    // runs, and a traced key standing beside a real one owns no recipe to cut
+    // a crossing cell carries two runs, and a traced key beside a real one owns no recipe to cut
     const cut=ids.filter(id=>runSplitIdx(id,cell)>=0).pop();
     if(cut!=null)
       items.push({label:"SPLIT PIPE", fn:()=>{ splitRun(cut,cell); }});
     if(hit.cell && matCell(hit.cell.gx,hit.cell.gy))
       items.push({label:"REMOVE WALL", fn:()=>{ matLift(hit.cell.gx,hit.cell.gy); buildLayout(); }});
-    /* THE WHOLE RUN, THROUGH ITS OWN DOOR WHERE IT HAS ONE. removeRun() takes
-       the recipe, the cells and the two nozzles together and leaves a crossing
-       run standing; a run laid by hand has none of that, so it is still what it
-       always was - the cells the walk through this one reaches. */
     if(ids.length) items.push({label:"REMOVE RUN", fn:()=>{
       for(const id of ids){
         if(D.runs[id]){ removeRun(id); continue; }
@@ -472,76 +334,33 @@ function ctxItemsDesign(hit){
       buildLayout(); }});
     return items;
   }
-  // a genuinely bare cell: nothing is under the cursor, so no REMOVE
-  // belongs here - only offers that create or connect something.
   const items=[];
   if(hit.cell){
     const {gx,gy}=hit.cell;
     if(gx>=0 && gy>=0 && gx<GW && gy<GH){
-      /* ONE ENTRY, no submenu of kinds. It places the single default tank
-         config (TANK_DEFAULT, pipenet.js); what goes in it, what is behind it
-         and how it is plumbed are set afterwards on its own panel. Not gated
-         on a count - four tanks is a legal plant. */
-      /* A PIPE IS ONE OBJECT YOU PLACE, exactly as a tank is. It arrives with
-         its two ends on the deck and nothing plumbed: drag an end beside a
-         machine and the nozzle appears there. The far end goes a few cells
-         away so both grips are separable under the hand from the first frame. */
       items.push({label:"ADD PIPE", fn:()=>{
-        const a=runSpotNear(gx,gy), b=a&&runSpotNear(a[0]+4,a[1]);
+        const a=runSpotNear(gx,gy), b=a&&runSpotNear(a[0]+1,a[1]);
         if(!a||!b) return;
-        // ...and it is PICKED, or it lands as five cells of pipe with no grips
-        // on them and nothing on the board to take hold of
         sel=mintRun(a,b); runLay(sel);
       }});
       items.push({label:"ADD TANK", fn:()=>{ addTank(gx,gy); }});
-      /* ONE ENTRY, no submenu of kinds - the same argument ADD TANK
-         makes. It places the single default fitting config (FIT_DEFAULT,
-         pipenet.js); whether it is a tee, a throttle or a relief valve is a
-         knob on its own panel afterwards, because all three are one box in
-         one cell and only the mode differs. */
       items.push({label:"ADD VALVE", fn:()=>{ addFitting(gx,gy); }});
-      /* THE PAINT'S OWN ROW, for the hand that is already in this menu. It is
-         the same call the tool makes and it lays the same material. */
       if(matCell(gx,gy))
         items.push({label:"REMOVE WALL", fn:()=>{ matLift(gx,gy); buildLayout(); }});
       else items.push({label:"PAINT WALL", fn:()=>{ matPaint(gx,gy,matPen); buildLayout(); }});
-      /* ONE ROW PER KIND OF MACHINE, off MACHINE (layout.js) and nothing
-         else - so adding a kind of machine is adding a row there, and no row
-         here can offer a machine the mint table cannot build. Nothing is
-         gated on a count, and nothing is SPARE: whether a second pump is
-         redundancy is read off the drawing. */
       for(const kind in MACHINE) if(!machRides(kind))
         items.push({label:"ADD "+MACHINE[kind].name,
                     fn:()=>{ addMachine(kind,gx,gy); }});
     }
   }
-  /* NO CONNECT OFFER HERE. ADD PIPE places the run and the hand drags its ends
-     to the machines; nothing on a menu picks which port a run lands on. */
   return items;
 }
 ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign, title:ctxTitleDesign});
-// ESC PUTS THE TOOL BACK - the one way out of a mode, and the same key that
-// used to cancel a pipe in flight
 keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.active="select"; }});
 
-/* ─────────────── THE FUEL LATTICE, IN PLAN (canvas - genuinely graphical) ───────────────
-   Drawn into its OWN <canvas> in the CORE and RODS panels by hostPaint(), which
-   swaps the ctx the shared primitives (fillRect/txt/frame/dot...) write to. Not
-   on #cv: the rail is opaque and paints over it, so anything drawn there would
-   be both invisible and unclickable - see hostPaint() in plant.js. */
-/* ONE PEN PER SURFACE. A pen bar governs the canvas it stands over: `plan` is
-   the pens that author r, `sec` the pens that author z. A single shared pen
-   meant five of the six left the other canvas inert. */
+/* one pen per surface: `plan` authors r, `sec` authors z */
 const LATPEN={plan:"fuel",sec:"len",bank:0,hover:null,last:null};
-/* ══ A CANVAS DRAWS; IT DOES NOT PRINT ══
-   Both lattice surfaces used to letter their own readout along the bottom edge,
-   in a bitmap font nobody could select, at whatever width the box happened to
-   be. The picture still works the figures out - it is the only thing that knows
-   what the pointer is over - and now it HANDS THEM OVER instead of drawing
-   them. One entry per surface per core; latReadSync() renders them into the
-   panel's own rows, the same fieldRowsSync() every other readout uses.
-   The cluster and zone numbers stay on the canvas: a glyph inside one square is
-   a mark on the drawing, not a value the panel could state anywhere else. */
+/* the canvas is the only thing that knows what the pointer is over, so it hands its figures to the panel's own rows */
 const LATREADOUT={};
 const latReadSet=(pen,cid,rows)=>{ LATREADOUT[pen+":"+cid]=rows; };
 function latReadSync(root){
@@ -602,22 +421,11 @@ function latAct(cD,u,v,shift){
   latRevolve(cD);
 }
 
-/* x,y,w,h are the host canvas's own box, origin 0,0, in the fixed HOST_K scale
-   hostPaint() sets - not plant layout units. */
+/* x,y,w,h are the host canvas's own box, origin 0,0, in hostPaint()'s fixed HOST_K scale - not plant units */
 function latPlan(cD,x,y,w,h){
-  // the left gutter went with the REACTOR AXIS label it was reserved for
   const gx=x+3, gy=y+3, gw=w-6, gh=h-6;
-  /* THE WHOLE CIRCLE IS DRAWN, AND THE QUARTER IS STILL WHAT IS AUTHORED.
-     A quadrant was the honest picture of the solve and an unreadable picture of
-     a core: nothing about it said the shape was round. Every slot is drawn four
-     times, mirrored about both axes, and a click anywhere on it FOLDS back onto
-     the one quarter LAT actually stores - so the gesture, the data and
-     latRevolve(cD) are all exactly what they were. */
   const cs=Math.min(gw,gh)/(2*LQ+0.6), p=cD.lat.pitch, ph=latRingPhi(cD);
-  /* CORE and RODS each own a lattice plan, so both paint through here every
-     frame. The hover has to be tagged with the canvas it was taken in, or the
-     second call clears what the first just found and the ring highlight lands
-     on the plan the pointer is NOT over. */
+  /* CORE and RODS both paint through here, so a hover is tagged with the canvas it was taken in */
   const me=ui.host, hov0=LATPEN.hover;
   const hv=(hov0&&hov0.host===me)? hov0 : null, hRing=hv? latRingOf(cD,hv.u,hv.v) : -1;
   let rMax=0;
@@ -637,8 +445,6 @@ function latPlan(cD,x,y,w,h){
   for(let i=1;i<XNR;i++){
     ctx.beginPath(); ctx.arc(CX,CY,i*latM(cD).dr/p*cs,0,7); ctx.stroke();
   }
-  /* the ring the hot node stands in - the peaking factor is what the rating
-     divides by, so the place it is measured is a place you can see */
   { const hi=nodePeak(corePredict(cD,derived(coreIdOf(cD))).phiCold).i;
     ctx.beginPath();
     ctx.arc(CX,CY,(hi+.5)*latM(cD).dr/p*cs,0,7);
@@ -663,8 +469,6 @@ function latPlan(cD,x,y,w,h){
     fillRect(X+1,Y+1,cs-2,cs-2,col);
     const zn=cD.lat.zone[q];
     frame(X+1,Y+1,cs-2,cs-2,zn? C.cyan : lerpC(col,ink,.42));
-    // a zone is a rim, not a fill: the flux dot and the poison colour still own
-    // the middle of the slot, and zone one draws nothing at all
     if(zn) txt(String(zn+1),X+cs-2.5,Y+7,
       {size:6,weight:700,align:"right",color:C.cyan});
     const r=cs*.30*Math.sqrt(clamp(latSlotPhi(cD,u,v,ph),.04,1));
@@ -683,8 +487,7 @@ function latPlan(cD,x,y,w,h){
   line(CX,gy,CX,gy+gh,C.rail,1); line(gx,CY,gx+gw,CY,C.rail,1);
   ctx.restore();
 
-  // THE FOLD, and the one place it happens: a pointer anywhere on the circle
-  // answers the quarter slot LAT stores
+  // the fold, and the one place it happens: the whole circle is drawn, the quarter is what LAT stores
   const cellAt=(px,py)=>{
     const uu=Math.floor((px-CX)/cs), vv=Math.floor((CY-py)/cs);
     if(uu<-LQ||uu>=LQ||vv<-LQ||vv>=LQ) return null;
@@ -695,7 +498,6 @@ function latPlan(cD,x,y,w,h){
     const id=c.u+","+c.v; if(id===LATPEN.last) return;
     LATPEN.last=id; latAct(cD,c.u,c.v,e&&e.shiftKey);
   }});
-  // clear only OUR hover: the other plan's is not ours to stand down
   if(hov0&&hov0.host===me) LATPEN.hover=null;
   if(hov(wd)){
     const c=cellAt(ui.ptr.x,ui.ptr.y);
@@ -703,9 +505,7 @@ function latPlan(cD,x,y,w,h){
   }
   if(!ui.drag) LATPEN.last=null;
 
-  /* EVERY ROW, EVERY FRAME. A list that grew four rows the moment the pointer
-     touched the picture moved everything under it - so the four say "-" when
-     there is nothing under the pointer, and the panel is one height. */
+  /* the hover rows say "-" rather than being absent, or the panel changes height under the pointer */
   const HV=hv?C.amber:null, dash=v=>hv?v():"-";
   latReadSet("plan",coreIdOf(cD), [
     ["ASSEMBLIES",String(latCount(cD)),null,
@@ -717,8 +517,6 @@ function latPlan(cD,x,y,w,h){
         ? (latShare(cD,hv.u,hv.v,ph)*100).toFixed(2)+" %" : "EMPTY"),HV,
      "The share of the core's power this one assembly makes, off the converged flux at its own radius."]]);
 }
-/* a rail control is a DOM node, so it carries its own data-tip-title and the
-   canvas TIP() is not needed: same box either way (shellInitTooltip). */
 const LATPLAN_TIP="The core, laid out looking down at it. Click or drag to place assemblies, poison pins or rod clusters; hold SHIFT to clear. Rated power, core H/D, lattice pitch, burnable poison, bank count and control bank worth are all MEASUREMENTS of what you lay out here - not one of them is a number you can set. The faint arcs are the fourteen mesh rings the solver sorts your assemblies into, and the dot in each assembly is the flux at its own radius.";
 
 const LATPEN_CORE=[
@@ -738,32 +536,17 @@ const LATPEN_RODS=[
 
 const LATREFL=["NONE","STEEL","BERYL","GRAPH"];
 
-/* ─────────────── THE CORE IN SECTION (canvas, the second host) ───────────────
-   The sim is 2-D (r, z) and the plan authors only r. This is z: the fuel
-   column's height and the reflector on each of its three faces, which were
-   four sliders and are now a drawing. It goes through the SAME hostForward()
-   + hostPaint() door latPlan() uses - there is one host-canvas mechanism.
-
-   The scale is METRIC and FIXED, not fitted to the core. That is what makes
-   the ACTIVE LENGTH drag track the pointer: a fitted scale would rescale the
-   picture under the hand that is dragging it. */
+/* the scale is metric and FIXED: a fitted one would rescale the picture under the hand dragging the length */
 const SEC_W=5.0, SEC_H=5.8;        // metres of section the canvas shows
 const SEC_FLOOR=0.55;              // metres of room left under the core for the floor band
 const LAT_LEN_MIN=0.6, LAT_LEN_MAX=5.0;
-/* THE HIT TEST AND THE DRAW READ THIS, and nothing else works out where the
-   core is. Anchoring one off a copy of the other is the bug this bench has
-   already shipped once. */
+/* the hit test and the draw both read this, and nothing else works out where the core is */
 function latSecGeom(x,y,w,h){
-  // the bottom band went with the readout line it was reserved for
   const gx=x+3, gy=y+3, gw=w-6, gh=h-6;
   const K=Math.min(gw/SEC_W, gh/SEC_H);
   return {gx,gy,gw,gh,K,CX:gx+gw/2,CY:gy+gh-SEC_FLOOR*K};
 }
-/* ══ A LENGTH DRAG PAYS FOR ITSELF ONCE, AT THE END ══
-   Every pointer move used to re-revolve the lattice and re-solve the flux, so
-   the hand outran the picture. The column is written on every move - the
-   drawing has to follow the hand - and the two expensive answers are deferred:
-   the last flux is redrawn until the button comes up. */
+/* a length drag defers the revolve and the flux solve to the button coming up; the last flux is redrawn meanwhile */
 let latSecPend=null, latSecFlux=null;
 function latSecLen(cD,nv){
   nv=clamp(nv,LAT_LEN_MIN,LAT_LEN_MAX);
@@ -792,8 +575,6 @@ function latSection(cD,x,y,w,h){
   fillRect(gx,gy,gw,gh,C.well);
   ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,gw,gh); ctx.clip();
 
-  // the reflector band, at the thickness each face was given, in the tone of
-  // the material bought - the same REFLC row the control room's section uses
   const rc=REFLC[cD.refl];
   if(rc){
     const bt=cD.lat.reflT*ch, bb=cD.lat.reflB*ch, br=cD.lat.reflR*cw;
@@ -804,13 +585,6 @@ function latSection(cD,x,y,w,h){
     if(bb>0) fillRect(CX-halfW,CY,2*halfW,bb,rc);
     ctx.globalAlpha=1;
   }
-  /* The fuel column, mirrored about the centreline exactly the way
-     coreField() does it (plant.js), so the bench section and the control
-     room's section are the same picture of the same core.
-     THE FLUX IS UNDER IT. The plan has had a flux dot per slot for a long
-     time and the section had nothing at all, which is half a picture of a
-     shape the whole rating now divides by. The HOT NODE - the node the rating
-     divides by - is marked in both. */
   const T = latSecPend && latSecFlux ? latSecFlux
           : (latSecFlux=corePredict(cD,derived(coreIdOf(cD))));
   const phi=T.phiCold, hot=nodePeak(phi);
@@ -838,10 +612,7 @@ function latSection(cD,x,y,w,h){
   const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
     latSectionAct(cD,G,pt,e&&e.shiftKey);
   }});
-  /* THE COLUMN TOP IS A HANDLE, NOT A PEN: with a plan pen up latSectionAct()
-     returned at its first line and the whole section was inert. Grabbed by its
-     OFFSET, and stood down only under the REFLECTOR pen, whose first lid cell
-     is the same band of picture. */
+  /* the column top is a handle under every pen but REFLECTOR, whose first lid cell is the same band of picture */
   let grab=null;
   const hw=LATPEN.sec==="refl" ? {x:-1e4,y:-1e4,w:0,h:0}
     : push({x:CX-halfW-4,y:CY-colH-6,w:2*halfW+8,h:12,type:"paint",fn:pt=>{
@@ -919,7 +690,6 @@ const LATREAD_RODS=[
    cD=>derived(coreIdOf(cD)).sdm<200?"var(--c-red)":null],
 ];
 
-/* ══════════ HTML: the component panel rail ══════════ */
 function paramBlockMk(block){
   switch(block.kind){
     case "optlist": {
@@ -952,7 +722,6 @@ function paramBlockMk(block){
       const a=blockAcc(block.key);
       const get=()=>a.get();
       const set=v=>{ a.set(block.step?Math.round(v/block.step)*block.step:v); };
-      // the same latch the number field has - AUTO is exactly "nothing stored"
       const auto = (a.raw && a.clr)
         ? {get:()=>a.raw()===undefined, set:on=>{ on ? a.clr() : a.set(a.get()); }}
         : null;
@@ -964,11 +733,6 @@ function paramBlockMk(block){
         row.set(v,null,b.massFn?b.massFn(v)-b.massFn(block.min):undefined);
       }};
     }
-    /* A MACHINE'S OWN QUANTITY, in its own units. A slider is still right for a
-       genuine fraction of its own travel - a rod, a valve, a demand - so only
-       "how big is this machine" comes here. It never clamps: the SUGGEST
-       affordance fills the field with a value matched to the rest of the
-       design, and the designer is free to ignore it. */
     case "num": {
       const a=blockAcc(block.key);
       // every getter resolves `?? xSuggest()`, so AUTO is exactly "nothing stored"
@@ -986,8 +750,6 @@ function paramBlockMk(block){
         r.setSfx(b.massFn ? b.massFn(a.get()).toFixed(0)+" t" : "");
       }};
     }
-    /* One main grid per panel; sections are its cells. `cols` is the column
-       count, a section's `span`/`rowspan` how many cells it covers. */
     case "grid": {
       const root=KIT.el("div","db-grid");
       root.style.setProperty("--db-grid-cols",block.cols||1);
@@ -995,8 +757,7 @@ function paramBlockMk(block){
       return {el:root,sync(b){
         b.blocks.forEach((c,i)=>{ const h=hs[i]; if(h&&h.sync) h.sync(c); }); }};
     }
-    /* One panel, one tab open. Only the open tab is synced - a hidden one has
-       no width, and the automation graph lays itself out at the width it has. */
+    /* only the open tab is synced - a hidden one has no width, and the graph lays itself out at the width it has */
     case "tabs": {
       const root=KIT.el("div","db-tabs"), bar=KIT.el("div","db-tabs-bar");
       const key=block.tabs.map(t=>t.title).join("|");
@@ -1046,9 +807,6 @@ function paramBlockMk(block){
         p.style.color=b.color||"";
       }};
     }
-    /* A LIST OF ANSWERS, under its own heading when it has one - so "MEASURED"
-       is stated once, by the block that IS the measurements, and no panel has
-       to remember to push a rule above its own readouts. */
     case "readlist": {
       const root=KIT.el("div","db-block");
       if(block.title){ const r=KIT.rule(block.title); root.appendChild(r.el);
@@ -1080,8 +838,6 @@ function paramBlockMk(block){
       const root=KIT.el("div","db-bulkrow");
       const lab=KIT.el("span","db-bulkrow-lab"); lab.textContent=block.label;
       root.appendChild(lab);
-      // a GRID, not a wrapping flex row: every preset is one column wide, so a
-      // row that wraps leaves the odd ones the same size as the rest
       const cells=KIT.el("div","db-bulkrow-btns");
       for(const it of block.items){
         const b=KIT.button(it.name,{size:6.5,onClick:it.fn});
@@ -1091,9 +847,6 @@ function paramBlockMk(block){
       root.appendChild(cells);
       return {el:root,sync(){}};
     }
-    /* A KEY ON THE TITLE BAR WITH BLOCKS HANGING OFF IT. Anything that is not
-       a knob on the machine - a whole drawing to start from - is asked for
-       here rather than standing open above the knobs it overwrites. */
     case "menu": {
       const mk=KIT.menuKey({label:block.label,tip:block.tip});
       const hs=block.blocks.map(b=>{ const h=paramBlockMk(b); mk.menu.appendChild(h.el); return h; });
@@ -1105,16 +858,11 @@ function paramBlockMk(block){
       if(block.tip) KIT.tip(r.el,block.title,block.tip);
       return {el:r.el,sync(){}};
     }
-    // block.pen names which surface's pen this bar sets, and the bar stands
-    // directly over that surface's canvas
     case "lattools": {
       const pen=block.pen, root=KIT.el("div","db-block");
-      // the heading may stand above the bar in a cell of its own (paramsFor)
       if(block.title){ const r=KIT.rule(block.title); root.appendChild(r.el); KIT.tip(r.el,block.title,block.tip); }
       const row=KIT.el("div","db-toolrow");
-      /* PICKING A PEN CHANGES NO DESIGN, so dbRailSync()'s signature gate never
-         reaches this block's sync() - the bar stayed lit on the last pen until
-         something was actually drawn. The click lights its own button. */
+      /* picking a pen changes no design, so dbRailSync()'s signature gate never reaches this sync() - the click lights its own button */
       const lit=()=>{
         if(!block.tools.some(t=>t[1]===LATPEN[pen])) LATPEN[pen]=block.tools[0][1];
         btns.forEach(o=>o.b.set({on:LATPEN[pen]===o.k}));
@@ -1142,10 +890,6 @@ function paramBlockMk(block){
       box.dataset.core=block.core; box.dataset.pen=block.pen;
       return {el:box,sync(){}};
     }
-    // the controller's automation: the picture and its editor, synced by ctlGraphTick() from dbHostPaint()
-    /* ONE HEADING, AND IT IS THIS ONE. The bench stands the cabinet under a
-       SEC("AUTOMATION") of its own, so it passes no title and gets none; the
-       control room's panel has no section above it, so it asks for one here. */
     case "ctlgraph": { const g=ctlGraphMk(!!block.live);
       if(!block.title) return {el:g.el,sync(){ g.sync(); }};
       const wrap=KIT.el("div"), r=KIT.rule(block.title);
@@ -1170,8 +914,7 @@ function paramBlockMk(block){
 function blockSig(blocks){ return blocks.map(b=>b.kind+":"+(b.title||b.label||"")
   +(b.blocks?"("+blockSig(b.blocks)+")":"")
   +(b.tabs?"["+b.tabs.map(t=>t.title+"("+blockSig(t.blocks)+")").join("|")+"]":"")).join("|"); }
-// which tab of a tabbed panel is open, by its tab names - view state, never design.
-// seq counts switches, so a panel knows to measure itself again (ui/margin.js)
+// view state, never design; seq counts switches, so a panel knows to measure itself again (ui/margin.js)
 const PANTAB={seq:0};
 function dbPanelSync(container,blocks){
   // a stated count sets the panel width (marginColumns, ui/margin.js)
@@ -1189,35 +932,21 @@ function dbPanelSync(container,blocks){
   blocks.forEach((b,i)=>{ const h=container._h[i]; if(h&&h.sync) h.sync(b); });
 }
 
-/* THE HEADING IS THE NAME FIELD. It was a NAME row inside the panel, under a
-   title bar already showing the same word - so the panel said the name twice
-   and only one of them could be typed into. rule()'s `edit` (kit.js) makes the
-   title bar itself the input: the DEFAULT name is its placeholder, so a blank
-   box still reads as the machine it is. It lives in the head and not in the
-   body on purpose - dbPanelSync() wipes the body's innerHTML on every
-   signature change, and an input living there would be torn down and rebuilt
-   under the player's own cursor mid-keystroke. */
+/* the input lives in the head, not the body: dbPanelSync() wipes the body's innerHTML on every signature change */
 function dbNameWell(p){
-  const def=p.name;   // DEFAULT NAME: the placeholder and the tip both offer the name a blank falls back to, so this is the one name partName() must NOT be asked for
+  const def=p.name;   // the default a blank box falls back to, so never partName()
   const well=KIT.well({title:def,edit:{maxLength:NAME_CAP,onChange:v=>{ setPartName(p.id,v); }}});
   if(well.nameInput)
     KIT.tip(well.nameInput,"NAME",
       "Type to rename this machine. Clear the box and it goes back to \""+def+"\". Clicking anywhere on this bar also selects the machine on the plant.");
   return well;
 }
-/* one panel per component (or gang) */
 function dbRailBuild(rail,vwin,watch){
   rail.innerHTML=""; vwin.body.innerHTML="";
   const panels=[], gangs={};
   for(const p of LAY.parts){
     const B=paramsFor(p); if(!B.length&&!B.gang || B.plain) continue;
-    /* A GANG IS TWO MACHINES SHARING ONE PANEL, and it now covers two cases
-       with one mechanism. Identical components (three pumps) fold together and
-       the head carries an "x3" suffix; machines that are simply married - the
-       reactor and the drives bolted to its head - fold together with no suffix
-       at all, because they are not copies of each other. Either way the FIRST
-       one to arrive owns the well and lends the others its selection, so
-       clicking either machine on the plant lights the same panel. */
+    /* the first of a gang owns the well and lends the others its selection; married machines are not copies, so no suffix */
     const g=gangs[B.gang];
     if(B.gang && g){
       g.ids.push(p.id);
@@ -1232,27 +961,12 @@ function dbRailBuild(rail,vwin,watch){
     if(B.gang) gangs[B.gang]=h;
     panels.push(h);
   }
-  /* ONE VERDICT, not two stacked wells: the mass and the objections are the
-     same answer to the same question, and two headings over one window spent a
-     third of it saying so. The window IS the well, so there is no second one. */
   const resBody=KIT.el("div","db-verdict-res"), revBody=KIT.el("div","db-verdict-rev");
   vwin.body.append(resBody,revBody);
   return {panels,verdict:vwin.well,resBody,revBody};
 }
-/* ══ WHAT IS ACTUALLY CONNECTED ══
-   One row per traced connection - from, to, and how long it is - plus a line
-   for every pipe cell that reaches nothing. This is the whole point of tracing
-   rather than authoring: "is this joined up" becomes a question the bench can
-   answer and print, instead of a thing the player has to read off the picture. */
 function pipeRailSync(body,wellEl){
   const M=pipeMap();
-  /* THE SIZE IS IN THE LIST, not only on the panel under it: bore and wall are
-     what the player sets, and one run at a time on a panel is no way to see
-     that one leg is half the width of the one it feeds. Off the run itself
-     (runOfKey), so a row and the panel below cannot disagree. */
-  /* the ends read in the run's OWN colour, off the same table the drawing
-     strokes it with, so the list and the picture cannot name two different
-     fluids for one run */
   const PC=pipeColours(null);
   const rows=M.conns.map(c=>{
     const a=partOf(c.a), b=partOf(c.b), id=runIdOf(c), r=runOfKey(id);
@@ -1262,16 +976,15 @@ function pipeRailSync(body,wellEl){
             r?runWallMm(r).toFixed(0):"-", id, pipeCol(PC,c.k)];
   });
   const loose=M.orphan.length, dead=M.dangling.filter(d=>d.cells.length).length;
-  // sel is in the signature: a row lights when it is the picked one, so the
-  // list has to rebuild when the pick moves
-  const sig=rows.map(r=>r.join("/")).join("|")+"|"+loose+"|"+dead+"|"+sel;
+  /* an unfinished run lays no cells, so the two traced counts above cannot see it at all */
+  const undone=Object.keys(D.runs).filter(rid=>{ const r=D.runs[rid];
+    return runErr(rid) || portAtCell(r.a[0],r.a[1])==null || portAtCell(r.b[0],r.b[1])==null; }).length;
+  // sel is in the signature: the picked row lights, so the list rebuilds when the pick moves
+  const sig=rows.map(r=>r.join("/")).join("|")+"|"+loose+"|"+dead+"|"+undone+"|"+sel;
   if(body._sig===sig) return;
   body._sig=sig; body.innerHTML=""; body._rows={};
   if(!rows.length){ const p=KIT.el("p","db-review-ok");
     p.textContent="NOTHING IS PIPED UP"; body.appendChild(p); }
-  /* ONE GRID, so a column is a column. Five spans per row against one template
-     (db-pipe-row, plant-screens.css) - the head carries the units, so no cell
-     below has to repeat them. */
   const cells=(row,vals,endsCol)=>{
     const CLS=["db-pipe-kind","db-pipe-ends","db-pipe-len","db-pipe-bore","db-pipe-wall"];
     vals.forEach((v,i)=>{ const s=KIT.el("span",CLS[i]); s.textContent=v;
@@ -1287,16 +1000,7 @@ function pipeRailSync(body,wellEl){
     const row=KIT.el("div","db-pipe-row"+(sel===r[5]?" on":""));
     cells(row,[r[0],r[1],r[2],r[3],r[4]],r[6]);
     body.appendChild(row); body._rows[r[5]]=row;
-    /* THE ROW IS THE PICK - the way at a run that is hard to click on a
-       crowded drawing. Three things, and the third is why it never worked:
-       railBlank() (inspector.js) drops the selection on any rail click that
-       does not land in the well whose _pickId IS the selection, and it BUBBLES
-       - so this handler set `sel` and railBlank cleared it again a moment
-       later, every time. PIPES is the panel for whichever run is picked, so it
-       carries that run as its _pickId, set here rather than at the next sync
-       because railBlank asks before any sync runs.
-       railPickId is the same flag a panel's own title bar sets: a pick made IN
-       the rail must not scroll the rail out from under the hand that made it. */
+    /* railBlank() (inspector.js) bubbles and drops any pick not in the well whose _pickId it is, and it asks before any sync runs */
     MOUSE.on(row,{click(){
       sel=r[5]; railPickId=r[5];
       if(wellEl) wellEl._pickId=r[5];
@@ -1306,41 +1010,28 @@ function pipeRailSync(body,wellEl){
   const warn=t=>{ const row=KIT.el("div","db-review-row warn");
     const tag=KIT.el("span","db-review-tag"); tag.textContent="WARN";
     const s=KIT.el("span"); s.textContent=t; row.append(tag,s); body.appendChild(row); };
+  if(undone) warn(undone+" pipe"+(undone===1?" is":"s are")+" unfinished - drawn as a line, laying no pipework until both ends land on a machine.");
   if(dead)  warn(dead+" pipe run"+(dead===1?"":"s")+" reach a port at one end and nothing at the other.");
   if(loose) warn(loose+" pipe cell"+(loose===1?"":"s")+" belong to no run at all.");
 }
-/* the rail scrolls to a newly selected panel ONCE, on the frame sel changes -
-   every frame would fight the user's own scrolling */
+/* the rail scrolls to a newly picked panel ONCE, on the frame sel changes - every frame would fight the user's own scrolling */
 let dbLastSel=null, dbPanelSig=null;
-/* PRICING AN OPTION WRITES THE DESIGN, so an ungated sync is not merely a
-   wasted read. massWith() sets D[key] to ask what the plant would weigh, and
-   D.cool/D.fuel/D.foll are in corePredict()'s cache key while __abs re-runs
-   latRevolve() - so every option list burned a full core solve per option,
-   every frame, 5.6 ms of it on the reactor panel alone. designSig() is the
-   signature five other caches here already key on, and costs 0.017 ms. */
+/* massWith() WRITES D to price an option, so an ungated sync burns a full core solve per option per frame */
 function dbRailSync(state){
-  // see railSelfPick() - a pick made on a panel's own title bar does not scroll
   const moved = sel!==dbLastSel && !railSelfPick(); dbLastSel=sel;
   const sig=designSig()+"|"+sel+"|"+PANTAB.seq, fresh=sig!==dbPanelSig; dbPanelSig=sig;
   for(const h of state.panels){
     const on=h.ids.includes(sel);
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     if(on && moved) KIT.reveal(h.well.el,"start");
-    // a rename does not rebuild LAY, so the title has to be re-read here
-    // every sync, not just once at build time - cheap, since setTitle()/
-    // KIT.tip() are themselves guarded no-ops when nothing changed.
-    /* The heading SHOWS the display name and the placeholder offers the
-       default, so a cleared box reads as the machine's own name rather than as
-       an empty bar. */
+    // a rename does not rebuild LAY, so the title is re-read every sync
     const nm=partName(h.p);
     h.well.setName(nm);
     KIT.tip(h.well.head,nm);
-    // paramsFor() rebuilds the whole block list, so it is only asked for a
-    // panel that is actually on screen - see railWatch() in inspector.js
+    // paramsFor() rebuilds the whole block list, so only a panel actually on screen asks for it
     const seen=railSeen(h.well.el), shown=seen&&!h.seen; h.seen=seen;
     if(!seen && !(on&&moved)) continue;
-    // scrolling is not a design change, so a panel arriving on screen has to
-    // ask for its first sync itself - the signature cannot know it moved
+    // scrolling is not a design change, so a panel arriving on screen asks for its own first sync
     if(!fresh && !shown) continue;
     const cur=paramsFor(partOf(h.p.id)||h.p);
     dbPanelSync(h.body,cur);
@@ -1387,11 +1078,6 @@ function dbBuild(){
   if(!mount) return null;
   const root=KIT.el("div","db-root");
   const head=KIT.el("div","scr-head db-head");
-  /* ONE SWITCH PER TOOL, over the top-left of the plant it addresses. It lived
-     at the bottom of the rail, under every machine panel, which on a tall
-     plant is off-screen - a tool nobody can find is a tool the bench does not
-     have. Each key manages its own state off the TOOL table, so there is
-     nothing here for a per-frame sync to keep in step with. */
   const tools=KIT.el("div","db-tools"), btns=[];
   for(const t of TOOLS.filter(t=>t.sc==="design")){
     const b=KIT.button(t.label,{size:8, sunk:true, on:TOOL.active===t.id,
@@ -1400,15 +1086,9 @@ function dbBuild(){
     KIT.tip(b.el, t.label, t.tip);
     tools.appendChild(b.el); btns.push({id:t.id,b});
   }
-  /* WHOLE PLANTS, over the plant they replace. Not a panel row: a preset
-     rebuilds the loops, the tanks and every run, so it is about the bench and
-     not about whatever part happens to be selected. Designer-only for free -
-     db-head lives inside #scr-design. */
   const pres=KIT.menuKey({label:"PLANT", cls:"db-plants",
     tip:"Whole ships, laid over whatever is on the grid. A preset rebuilds the loops, the tanks and every run."});
-  // a preset replaces the board under the menu, so the menu gets out of the way
   const preShut=()=>{ KIT.show(pres.menu,false); pres.key.set({on:false}); };
-  // first, because it is what every preset is laid over
   const rst=KIT.button("RESET",{size:8,onClick:()=>{ plantClear(); urlPreset(null); sel=null; preShut(); uiDirty(); }});
   KIT.tip(rst.el,"RESET","Takes the whole ship off the grid: every machine, tank, fitting, port and pipe, and the core back to the stock lattice. What is left is the blank grid a new design starts from, and it still commissions.");
   pres.menu.appendChild(rst.el);
@@ -1425,17 +1105,10 @@ function dbBuild(){
   // before the parked windows: same z, so DOM order is what keeps a peek under one
   const phost=selwHost(root);
   const ihost=inspHost(root);
-  /* ══ THE VERDICT IS A READING, AND A READING IS A WINDOW ══
-     It is the tallest thing standing on the board and it is not always what the
-     designer is working on, so it is the same window every machine panel is -
-     dragged where the reader wants it, folded, put away - rather than a box
-     bolted to a corner of the grid. On by default: the mass budget and the
-     objections are what the bench is FOR. */
   const vwin=inspWin(ihost,"RESULTS");
   const resSet=on=>{ dbResOn=on; resKey.set({on}); KIT.show(vwin.well.el,on); uiDirty(); };
   const resKey=KIT.button("RESULTS",{size:8,sunk:true,on:true,onClick:()=>resSet(!dbResOn)});
   KIT.tip(resKey.el,"RESULTS","The mass budget and the objections to this design. Off, the board has the room back.");
-  // the window's own close key is the same switch, so the key and the window agree
   vwin.onShut=()=>resSet(false);
   head.appendChild(resKey.el);
   mount.appendChild(root);
@@ -1455,25 +1128,13 @@ function dbSync(){
   dbHostPaint();
   ctlGraphTick();
 }
-/* ══ A LATTICE CANVAS PAINTS, AND ITS FIGURES LAND IN THE SAME PASS ══
-   `root` is the box to walk, and it is the whole of why this takes one: the
-   every-frame call below walks the screen, which is right for the hover, and a
-   panel BUILT this frame is not on it yet - marginSync() and inspSync() run at
-   the foot of the frame, so their readout elements were born after this had
-   already gone past and came up blank until the next one.
-   IT MAY NOT MOVE TO THE FOOT OF THE FRAME TO FIX THAT. Rows added after
-   marginPlace() has measured a panel change its height behind the measurement,
-   and every panel on the board then steps the following frame. A panel fills
-   its own readout while it is being built instead - see panPartSync()
-   (ui/margin.js) - and this stays where it is. */
+/* `root` so a panel built THIS frame can be walked; it may not move to the foot of the frame, where late rows would change a measured panel's height */
 function dbHostPaint(root){
   if(!DB) return;
   root = root || document.getElementById("scr-design") || document;
-  /* the fuel lattice plan is genuinely graphical and stays canvas - but its own
-     canvas, because the rail it lives in is opaque over #cv. See hostPaint(). */
   root.querySelectorAll(".db-latplan-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latPlan(coreBag(cv2.dataset.core),x,y,w,h)));
   root.querySelectorAll(".db-latsection-canvas").forEach(cv2=>hostPaint(cv2,(x,y,w,h)=>latSection(coreBag(cv2.dataset.core),x,y,w,h)));
-  // AFTER both paints: they are what works the figures out - see latReadSet()
+  // AFTER both paints: they are what works the figures out
   latReadSync(root);
 }
 if(typeof document!=="undefined" && document.documentElement) DB=dbBuild();
@@ -1482,17 +1143,12 @@ function drawDesign(){
   dbSync();
   // an empty rail is display:none, and a hidden box measures zero
   const railBox = DB && DB.rail.offsetParent ? hostRect(DB.rail) : null;
-  /* THE HEAD ROW IS TRANSPARENT, so the view runs UNDER it. Measured off the
-     row, not a magic reserve, but taken off the FIT and never off the BOX: off
-     the box the clip stopped at the row's bottom, and a plant panned up left a
-     black band of bare page between the topbar and the drawing. */
+  /* the head row is transparent, so the view runs UNDER it: measured off the row, taken off the FIT and never the BOX */
   const headBox=DB? hostRect(DB.head) : null;
   const headU = headBox? Math.max(0, headBox.y+headBox.h-TOPBAR_H) : 0;
   const vy = TOPBAR_H;
   const vh=Math.max(120,H-vy);
-  // the verdict is a window now, so it stands OVER the view and takes none of it
   const vw = railBox ? Math.max(200, railBox.x) : W;
-  // the panels stand in what the FIT gives up; the box, and so the clip, is whole
   const mi=marginInsetU();
   drawPlant(vy,null,vh,0,vw,mi.l+mi.r,mi.t+mi.b+headU);
   zoomKeySync(DB&&DB.head);

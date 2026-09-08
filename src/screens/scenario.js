@@ -1,16 +1,10 @@
 "use strict";
-/* the scenario bench: an HTML timeline you author IN, and the verdict it earns.
-   THE TIMELINE IS THE SCREEN, NOT A STRIP ON IT - no bottom bar, no palette,
-   no EVENTS/LIMITS/VERDICT panel. See .claude/CLAUDE.md "The scenario bench".
-   The chart alone stays canvas (chart() in render/chart.js); everything else
-   here is DOM, built once in scnBuild() and synced every frame from
-   drawScenario(), which main.js already calls once per tick. */
 
-const SCN_ROWH   = 18;                 // px per lane sub-row
-const SCN_SUBMAX = 3;                  // sub-rows a lane grows before it counts, not lists
-const SCN_SNAP   = 0.5;                // events land on the half second
+const SCN_ROWH   = 18;
+const SCN_SUBMAX = 3;
+const SCN_SNAP   = 0.5;
 const SCN_ZMAX   = 240;
-const SCN_CH_MIN = 40;                 // chart slot shorter than this draws nothing
+const SCN_CH_MIN = 40;
 const SCNH = {size:6.5, sp:1};
 
 let scnSel=-1, scnLimSel=-1, scnPlay=0, scnVerd=null, scnTake=null, scnProg=-1,
@@ -21,10 +15,6 @@ function scnPick(kind,i){
   if(kind==="ev"){ scnSel=i; scnLimSel=-1; } else { scnLimSel=i; scnSel=-1; }
 }
 
-/* seconds <-> fraction of the visible span. scnZoom is a MULTIPLE OF FIT, for
-   the reason VIEW.z is one: how much room the timeline gets depends on the
-   window. The pan IS clamped, unlike the plant view - a scenario has exactly
-   two edges. */
 const scnSpan = () => SCN.secs/scnZoom;
 const scnT0   = () => clamp(scnPan, 0, Math.max(0, SCN.secs-scnSpan()));
 const scnFracOf = t => (t-scnT0())/scnSpan();
@@ -37,13 +27,7 @@ function scnStep(span){
   return 3600;
 }
 
-/* ═══ WHERE EVERY BLOCK STARTS AND ENDS ═══
-   Unchanged from the canvas build. A `ramp` ends at its own OVER argument, a
-   `latch` ends at the next event of the same kind carrying the same first
-   argument (except pair:0 - BLACKOUT - whose argument IS the state), a
-   `point` never reaches either search. Packed into at most SCN_SUBMAX rows
-   per lane on the half-open interval [t0,t1), in TIME not pixels, so a block
-   never jumps rows as you zoom; what does not fit is counted, not listed. */
+/* rows are packed in TIME, not pixels, so a block never jumps row as you zoom. */
 function scnLay(){
   const g=SCN.gest, out=[];
   const ord=g.map((_,i)=>i).sort((a,b)=>g[a].t-g[b].t || a-b);
@@ -93,8 +77,7 @@ function scnBlockLab(b){
 }
 
 const scnChans = () => Object.keys(CH).concat(Object.keys(CHB));
-/* A sane slider top per channel, grouped by unit, so a DNBR limit is not set
-   on a 0..1600 track where every useful value lives in the first pixel. */
+/* slider top per channel, so a DNBR limit is not set on a 0..1600 track. */
 function scnLimTop(k){
   if(CHB[k]) return 4;
   if(k==="dnbr"||k==="fq"||k==="vd"||k==="cav") return 4;
@@ -105,13 +88,11 @@ function scnLimTop(k){
   return 150;
 }
 
-/* ═══════════════ DOM: BUILD ONCE ═══════════════ */
 let UI = null;
 
 function scnBuild(){
   if(UI) return UI;
-  /* no DOM under a headless run or the worker - same guard help.js, transport.js
-     and control-room.js use before touching document */
+  /* no DOM under a headless run or the worker */
   if(typeof document==="undefined" || !document.documentElement) return null;
   const mount = document.getElementById("scr-scenario");
   if(!mount) return null;
@@ -201,8 +182,6 @@ function scnWirePointer(){
     down(e){ MOUSE.grab(UI.rulerTrack); scnPlay=scnSnapT(timeSecAt(e.clientX)); },
     move(e){ if(e.buttons!==1) return;
       scnPlay=scnSnapT(timeSecAt(e.clientX)); }});
-  /* the wheel holds the second under the pointer still, the same lens feel
-     VIEW.z's own wheel handler has on the plant */
   MOUSE.on(UI.timeline,{wheel(e){
     e.preventDefault();
     const r=UI.rulerTrack.getBoundingClientRect();
@@ -231,11 +210,6 @@ function scnWirePointer(){
     up(){ UI.panThumb.classList.remove("drag"); }});
 }
 
-/* ═══════════════ LANES + BLOCKS ═══════════════
-   LANES ARE SCENARIO DATA, NOT A FIXED CATALOGUE: SCN.lanes is per-scenario,
-   a lane is just an id. Clicking bare lane adds scnLastKind and selects it
-   immediately - this replaces the old right-click ADD menu; CLAUDE.md is
-   authoritative that a click is unambiguous once lanes exist. */
 function scnSyncLanes(LZ){
   const sig = SCN.lanes.map(L=>L.id).join("|");
   if(UI.laneSig!==sig){
@@ -339,10 +313,7 @@ function scnDragMove(e){
 }
 function scnDragEnd(el){ UI.drag=null; el.classList.remove("dragging"); }
 
-/* the block that reaches this fills itself in fresh each frame - cheap,
-   given a scenario never carries more than a few dozen events - EXCEPT while
-   it is under the pointer: pointer capture lives on the DOM node itself, and
-   a rebuild that destroyed and recreated it would silently end the drag. */
+/* refilled each frame, but never while under the pointer: pointer capture lives on the node, so a rebuild would end the drag. */
 function scnApplyBlock(el,b){
   el._b=b;
   el.classList.toggle("on", scnSel===b.i);
@@ -414,9 +385,6 @@ function scnSyncRuler(){
   UI.playhead.style.left=`calc(var(--scn-gutter) + ${pf*100}% - ${pf}*var(--scn-gutter))`;
 }
 
-/* ═══════════════ LIMITS: A ROW UNDER THE LANES ═══════════════
-   Green where it held, red from the moment it broke - painted along the
-   run's own axis rather than printed as a time. */
 function scnSyncLimits(){
   while(UI.limitRows.length<SCN.limits.length){
     const row=KIT.el("div","scn-limit-row");
@@ -487,10 +455,6 @@ function scnSyncHead(){
   h.verdictEl.style.color=col;
 }
 
-/* ═══════════════ THE INSPECTOR ═══════════════
-   ONE selection, one strip: an event and a limit answer to the same row.
-   Rebuilt whenever the selection or the selected event's KIND changes (its
-   argument shapes change with it); values alone are cheap-synced every frame. */
 function scnBuildEventInspector(){
   const prev=KIT.button("<",{flat:true,size:6.5});
   const title=KIT.el("span","scn-insp-title");
@@ -520,7 +484,6 @@ function scnBuildEventInspector(){
           onChange:v=>{ const g2=SCN.gest[scnSel]; if(g2) g2.a[i]=Math.round(v); scnVerd=null; }});
         argsWrap.appendChild(s.el); argW.push({kind:"num",w:s,i});
       } else if(A.u==="text"){
-        /* NOTE was read-only prose on canvas; HTML gives it a real field */
         const inp=KIT.el("input","scn-insp-text",{type:"text"});
         inp.value=gg.a[i]||"";
         inp.addEventListener("input",()=>{ const g2=SCN.gest[scnSel]; if(g2){ g2.a[i]=inp.value; scnVerd=null; } });
@@ -560,10 +523,7 @@ function scnBuildEventInspector(){
 }
 
 function scnBuildLimitInspector(){
-  /* the value slider's min/max/fmt come from the SELECTED limit's channel,
-     fixed at construction - cycling the channel changes L.ch, which changes
-     scnSyncInspector()'s signature and rebuilds this whole inspector fresh,
-     so there is never a stale scale to mutate in place. */
+  /* the value slider's scale is fixed at construction; changing L.ch rebuilds this inspector. */
   const L0=SCN.limits[scnLimSel], top0=scnLimTop(L0.ch), u0=limCh(L0.ch).u;
   const prev=KIT.button("<",{flat:true,size:6.5});
   const title=KIT.el("span","scn-insp-title");
@@ -636,7 +596,6 @@ function scnSyncInspector(){
   if(UI.insp) UI.insp.sync();
 }
 
-/* ═══════════════ PRESETS / SAVE ═══════════════ */
 function scnBuildPresets(){
   const box=KIT.well({title:"START FROM"});
   box.el.classList.add("scn-float");
@@ -712,12 +671,7 @@ function scnSyncFloats(){
   });
 }
 
-/* ═══════════════ THE CHART, STILL CANVAS ═══════════════
-   chart() draws on the one shared #cv, which sits UNDER this screen's HTML in
-   paint order (a positioned section always paints over a plain canvas). The
-   chart slot is a transparent hole: its DOM rect, converted into #cv's own
-   world units, IS the rect handed to chart() - so the canvas drawing tracks
-   whatever flex layout put the slot at, every frame, with nothing hard-coded. */
+/* the chart slot is a transparent hole: its DOM rect, in #cv world units, is the rect chart() draws in. */
 function scnSyncChart(){
   const rect=UI.chartSlot.getBoundingClientRect();
   if(rect.height<SCN_CH_MIN || rect.width<40) return;
@@ -726,9 +680,7 @@ function scnSyncChart(){
   const x=(rect.left-cvRect.left)/scale, y=(rect.top-cvRect.top)/scale;
   const w=rect.width/scale, h=rect.height/scale;
 
-  /* A SECOND IS FOUND IN THE ARCHIVE, NEVER MULTIPLIED INTO IT: the sample rate
-     is not a constant any more once a take has been thinned (trThin()), so the
-     index is the archive's own binary search on its ticks. */
+  /* a thinned take (trThin()) has no constant sample rate, so a second is found by search, never multiplied. */
   const take=scnTake;
   const nAll = take? take.trN : 0;
   const iAt = t => take? clamp(trBefore(take,Math.round(t/0.02))+1,0,nAll) : 0;
@@ -755,13 +707,6 @@ function scnSyncChart(){
   chartLegend(box, y+h-26, ser);
 }
 
-/* TRENDS/LOG stay the control room's own canvas draws, registered a second
-   time here so a scenario run's history reads exactly like free play's - see
-   .claude/CLAUDE.md. Both paint into VIEW via drawOverlay(), which this HTML
-   would otherwise cover, so scn-main stands down for as long as one is open;
-   the head strip (with the key that opened it) stays up so it can be closed
-   again. TAKES is dropped: transport.js's own strip already mounts an
-   identical picker into this screen. */
 ovlAdd({k:"scntrend",label:"TRENDS",h:()=>200+(trendUnits().length?TREND_TAB_H:0),sc:"scenario",draw:drawTrend,
   tip:["TRENDS","The same strip chart the control room draws, all twenty-six channels."]});
 ovlAdd({k:"scnlog",  label:"LOG",   h:180,sc:"scenario",draw:drawLog,
@@ -771,7 +716,6 @@ function scnSyncOverlayVisibility(){
   UI.main.classList.toggle("scn-canvas-ovl", ovlOpen==="scntrend" || ovlOpen==="scnlog");
 }
 
-/* ═══════════════ THE SCREEN ═══════════════ */
 function drawScenario(){
   if(!scnBuild()) return;
   if(scnSel>=SCN.gest.length) scnSel=-1;
@@ -791,8 +735,6 @@ function drawScenario(){
   drawOverlay();
 }
 
-/* RUN is scnRun(), drained across frames so the tab still answers. Pressing
-   it again cancels. */
 function scnGo(){
   if(!P) return;
   if(scnBusy()){ scnCancel(); scnProg=-1; scnNote="RUN CANCELLED"; return; }
@@ -803,10 +745,7 @@ function scnGo(){
 }
 keyAdd({k:"Enter", sc:"scenario", lab:"RUN", fn:scnGo});
 
-/* PLAY arms the same compiled track on the LIVE plant and hands the player
-   the control room - see .claude/CLAUDE.md "PLAY is RUN turned inside out".
-   Order mirrors scnRun(): seed and diceOff must be on the plant before
-   recRoot() takes its base. */
+/* order mirrors scnRun(): seed and diceOff must be on the plant before recRoot() takes its base. */
 function scnFly(){
   if(!P || scnBusy()) return;
   scnVerd=null; scnTake=null; scnProg=-1;
