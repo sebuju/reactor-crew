@@ -1,26 +1,10 @@
-/* ══ THE TRACE ══ what the NETWORK did, and nothing else.
-
-   A CSV row can say a number moved. It cannot say WHICH PART of a network
-   moved, which is the only question a split of netBuild()/netSolve() is judged
-   on - so this writes the whole graph out once and the field on it per sample,
-   and tools/sandbox/netview.html paints two of them over each other.
-
-   A SCRIPT TAG, NOT JSON. `fetch` does not work on file:// and this project
-   has no build step, so a trace is an assignment into NETTRACE and the viewer
-   loads it the same way index.html loads the game.
-
-   Rounded to what each reading is worth - a pressure to 4 dp is 0.1 kPa and a
-   flow to 4 dp is a tenth of a gramme a second. A trace that carried the last
-   bit would diff on rounding and say nothing. */
+// a script tag, not JSON: fetch does not work on file://, so the viewer loads NETTRACE the way index.html loads the game
 const fs = require('fs'), path = require('path');
 const OUT = path.join(__dirname, 'out');
 
 const r = (v, dp) => (v === null || v === undefined || !isFinite(v)) ? null
                    : Math.round(v*Math.pow(10,dp))/Math.pow(10,dp);
 
-/* WHERE A NODE STANDS, or nothing. A node name is partId+face, a folded part
-   id on its own, or a synthetic containment name that belongs to no part at
-   all - so the viewer force-lays what this cannot place. */
 function cellOf(M, nid){
   const p = M.partOf(nid) || M.partOf(nid.slice(0,-1));
   return p ? [p.x, p.y, p.w, p.h] : null;

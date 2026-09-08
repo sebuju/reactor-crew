@@ -1,49 +1,5 @@
 #!/usr/bin/env node
-/* reactor-crew SANDBOX.
-
-   A rig for isolating one piece of the plant and driving it on its own, so a
-   question about the pressure network does not cost a ten minute whole-plant
-   run. It carries no assertions, exactly like tools/probe.js: it PRINTS what
-   the plant did and a human reads it.
-
-   Three instruments, and every one of them is an ordinary machine with an
-   ordinary knob - there are no sandbox-only physics anywhere in src/:
-
-     SOURCE   a tank with `inf` and a gas charge, so it pushes at a stated MPa
-              and never runs down - its level cannot move, so the gas law is
-              exactly p0 and there is no drift in it at all.
-     VOID     the same tank at compartment pressure, so whatever reaches it
-              leaves and it never fills.
-     CLAMP    a field of S written back every tick. This is the only thing
-              here that is not a machine, and it is deliberately a DEBUG
-              instrument rather than a component: pinning s.Tavg is not
-              something a plant can do, it is something an experimenter does
-              to one.
-
-   Output is CSV on stdout, one row per sample, rounded to what the reading is
-   worth. Rows are cheap to read and cheap to diff. `--trace` instead writes
-   the whole network - topology and per-sample field - to tools/sandbox/out/,
-   for tools/sandbox/netview.html to paint two of side by side.
-
-   THE SEED IS FIXED, ALWAYS. resetPlant() picks a seed off Math.random(), so
-   two runs of one profile were not comparable and a trace diff meant nothing.
-   Every run reseeds with --seed (default 1) the moment commission() returns,
-   and --dice=off stands the whole table down.
-
-   Usage:  node tools/sandbox/sandbox.js [profile ...] [options]
-     --list            print every profile name
-     --secs=N          how long to fly (default 60)
-     --every=N         seconds between printed rows (default 5)
-     --seed=N          the run's own seed (default 1)
-     --dice=off|on     stand the dice table down (default on)
-     --trace           write tools/sandbox/out/<profile>.js instead of CSV
-     --shut=T:portId   act("portShut", portId) at T seconds
-     --hit=T:partId    act("hit", partId)
-     --burst=T:x,y     act("hit", "pipe:x,y") - open one pipe cell
-     --blackout=T      act("blackout", true)
-     --scram=T         act("scram")
-     --blkoff=T:sink   switch off whatever block drives that demand (scram, freg, ...)
-*/
+// node tools/sandbox/sandbox.js [profile ...] --list --secs=N --every=N --seed=N --dice=off --trace --shut=T:portId --hit=T:partId --burst=T:x,y --blackout=T --scram=T --blkoff=T:sink
 const {headless} = require('../bundle');
 const M = headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
@@ -53,22 +9,12 @@ const M = headless(
  'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdLive,holdPlumbed,loopP,setLoopP,'+
  'netTempAt,netQualAt,mwE,loopKg,secP,sgIds,sgLvl,circName,ROLE:()=>ROLE,'+
  'netKgs,radIds,invRate,tankMass,layoutMetrics,designIssues,'+
- /* THE HARNESS GIVES ORDERS THE WAY A PLAYER DOES. act() is the one dispatch
-    (record.js) and a replay sees exactly what the sandbox did; poking S would
-    be an order no tape carries. seedRng is what makes two runs comparable at
-    all, and netSolve/netPressures/netField are the network readings a trace
-    is made of. */
  'act,seedRng,netSolve,netPressures,netField,netFlowK,partWrecked,portWrecked}');
 
 const D = M.D();
 const BASE = JSON.parse(JSON.stringify(D));
 
-/* ══ THE RIG ══ every helper here builds through the same calls the bench's
-   own gestures make: mintTank(), seedPort(), seedRun(). Nothing is baked. */
 const RIG = {
-  /* An inexhaustible tank. `p` is what is behind it in MPa - high makes it a
-     SOURCE and near-zero makes it a VOID, which is the same machine answering
-     the same solve from the two ends. */
   tank(id, x, y, p, cfg){
     M.mintTank(id, x, y);
     Object.assign(D.tanks[id], {name:id.toUpperCase(), col:"#8fd18a", vol:100, level:50,
@@ -78,14 +24,10 @@ const RIG = {
     return id;
   },
   source(id, x, y, p, cfg){ return RIG.tank(id, x, y, p, Object.assign({col:"#5fd2e2"}, cfg)); },
-  // a VOID is a place at COMPARTMENT pressure, not a vacuum - the same floor
-  // every vented vessel on the plant sits at
+  // a VOID sits at COMPARTMENT pressure, not a vacuum - the floor every vented vessel sits at
   void_ (id, x, y, cfg){ return RIG.tank(id, x, y, 0.15, Object.assign({col:"#7a6f9a"}, cfg)); },
-  // one nozzle on a face, and one run to another port - the two bench gestures
   port(id, dx, dy){ return M.seedPort(id, dx, dy); },
   run(a, b, vias){ return M.seedRun(a, b, vias); },
-  // a fitting in a stated mode, which is the only thing that tells a tee from
-  // a valve - there is no fitting KIND to pick
   fit(x, y, mode, name){
     const id = M.addFitting(x, y);
     if(id == null){ console.log("# rig: no fitting at "+x+","+y); return null; }
@@ -94,11 +36,7 @@ const RIG = {
     M.buildLayout();
     return id;
   },
-  /* A RIG PIPE IS RATED FOR WHAT THE RIG PUSHES. runBurstP() asks every run
-     every tick, and a wall is SUGGESTED off the plant's own setpoint - so on a
-     rig with no reactor on the board the suggestion is thin, and a boundary at
-     16 MPa split the line on the second tick and took the whole topology with
-     it. D.wall is the knob the PIPES panel writes; this is the same knob. */
+  // a rig pipe is rated for what the rig pushes: a suggested wall is thin with no reactor on the board
   wall(mm){ M.buildLayout(); D.wall = D.wall || {};
     const m = M.pipeMap().byKey;
     for(const k in m) D.wall[M.runIdOf(m[k])] = mm; },
@@ -107,14 +45,9 @@ const RIG = {
     M.buildLayout(); return id; },
 };
 
-/* ══ CLAMPS ══ a list of [path, value]; written onto S before every tick, so
-   whatever the sim does to that field is undone and the rest of the plant is
-   solved against a held boundary. Dotted paths and one level of index only -
-   "Tavg", "sgTBy.sg0". */
+// [path, value] written onto S before every tick; dotted paths, one level only
 let CLAMPS = [];
 const clampSet = (s, path, val) => {
-  // a function value is read off S itself, so "hold these four nodes at
-  // whatever the first one is" is sayable without naming a number
   const v = typeof val === "function" ? val(s) : val;
   if(v === undefined) return;
   const i = path.indexOf(".");
@@ -124,11 +57,6 @@ const clampSet = (s, path, val) => {
 };
 const clamp_ = (path, v) => CLAMPS.push([path, v]);
 
-/* ══ WHAT A ROW SAYS ══ a column is a name and a reader, so a profile states
-   exactly the readings its own question needs and pays for nothing else.
-   `dp` is what the reading is worth: a pressure to 3 dp is 1 Pa, a level to
-   1 dp is a millimetre in a tall vessel, and a temperature to 1 dp is past
-   anything the model claims. */
 const COL = {
   t:      {dp:1, f:(s,t)=>t},
   P:      {dp:3, f:s=>s.P},
@@ -142,7 +70,6 @@ const COL = {
   rel:    {dp:4, f:s=>s.release},
   brk:    {dp:0, f:s=>s.breach?1:0},
 };
-// one column per named thing, built on demand so a profile names its own
 const colP    = ci => ({dp:3, f:s=>M.loopP(s,ci)});
 const colTank = id => ({dp:1, f:s=>M.tankLvl(s,id)});
 const colTankP= id => ({dp:3, f:s=>M.tankP(s,id)});
@@ -153,10 +80,7 @@ const colNodeP= n  => ({dp:4, f:s=>{ const o=M.netPressures(s); return o[n]===un
 const colSgT  = id => ({dp:1, f:s=>s.sgTBy&&s.sgTBy[id]});
 const colSecP = id => ({dp:3, f:s=>M.secP(s,id)});
 const colHold = ci => ({dp:0, f:s=>M.holdLive(M.P().net,s,ci)?1:0});
-/* WHAT THIS TANK'S OWN EDGES CARRY, in the solve's own current and positive
-   out of the tank. s.tankRate is that same figure as a PERCENTAGE OF LOOP
-   INVENTORY, so on a rig with no reactor loop P.netRef is 0 and invRate()
-   answers 0 - honestly, and uselessly for a hydraulics question. */
+// kg/s out of the tank: s.tankRate is a percentage of loop inventory, which is 0 on a rig with no loop
 const colTankQ = id => ({dp:4, f:s=>{ const net = M.P().net;
   const i = net && net.tankNode && net.tankNode[id];
   if(i === undefined || i === null) return null;
@@ -165,8 +89,6 @@ const colTankQ = id => ({dp:4, f:s=>{ const net = M.P().net;
   for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e];
     if(ed.u === i) q += sol.q[e]; else if(ed.v === i) q -= sol.q[e]; }
   return q; }});
-// how many nodes, edges and structural components this plant actually built -
-// the three figures every nonsense profile is really asking about
 const colNet = {
   nodes: {dp:0, f:()=>{ const n=M.P().net; return n?n.n:0; }},
   edges: {dp:0, f:()=>{ const n=M.P().net; return n?n.edges.length:0; }},
@@ -176,9 +98,6 @@ const colNet = {
     return c; }},
   flowK: {dp:4, f:s=>M.netFlowK(s, null, null, {noNat:true})},
   nat:   {dp:4, f:s=>s.nat},
-  /* the biggest flow anywhere, kg/s. On a rig whose whole topology is one
-     ring that IS the ring's circulation, to a milligram a second - the floor
-     netDiverge() answers in. */
   maxQ:  {dp:6, f:s=>{ const n=M.P().net; if(!n) return 0;
     const sol = M.netSolve(n, s); let m = 0;
     for(let e=0;e<sol.q.length;e++) if(Math.abs(sol.q[e]) > m) m = Math.abs(sol.q[e]);
@@ -191,14 +110,8 @@ const fmt = (v,dp) => (v===null||v===undefined||Number.isNaN(v)) ? ""
 const CTX = {M, D, RIG, COL, colP, colTank, colTankP, colRate, colTankQ, colNodeT, colNodeX,
              colNodeP, colSgT, colSecP, colHold, colNet, clamp_};
 
-/* ══ PROFILES ══ disposable, exactly like probe.js's cases. Each one isolates
-   ONE question. Add one, read it, delete it. */
 const PROFILES = Object.assign({}, require('./plant')(CTX), require('./net')(CTX));
 
-/* ══ EVENTS ══ the same overlay any profile can be flown with, so one topology
-   is seen clean and hurt without a second profile that differs in two ways at
-   once. EVERY ONE GOES THROUGH act(): an order the harness gives by hand is an
-   order a replay never sees, and this rig exists to be believed. */
 function parseEvents(args){
   const out = [];
   const add = (t, kind, arg) => out.push({t:+t, kind, arg});
@@ -214,9 +127,7 @@ function parseEvents(args){
   return out.sort((a,b)=>a.t-b.t);
 }
 const fireEvent = e => {
-  /* SAID OUT LOUD. act() declines an order for a machine this plant has not
-     got, quietly and correctly - so an event that named a cell with no pipe in
-     it used to look exactly like an event that did nothing. */
+  // said out loud: act() declines an order for a machine this plant has not got, quietly
   console.log("# t="+e.t.toFixed(1)+" "+e.kind+" "+e.arg);
   if(e.kind === "blackout") M.act("blackout", true);
   else if(e.kind === "scram") M.act("scram");
@@ -226,9 +137,7 @@ const fireEvent = e => {
   else if(e.kind === "burst")M.act("hit", "pipe:"+e.arg);
 };
 
-/* ══ ONE RUN ══ reset D to what it shipped as, build, commission, RESEED, fly.
-   The reseed is after commission() because that is where resetPlant() rolls
-   its own, and a profile that is not reseeded is not comparable to itself. */
+// the reseed is after commission() because that is where resetPlant() rolls its own
 function setup(spec, v, opt){
   Object.assign(D, JSON.parse(JSON.stringify(BASE)));
   CLAMPS = [];
@@ -240,9 +149,7 @@ function setup(spec, v, opt){
   return {s, note};
 }
 
-/* ══ SWEEPS ══ a profile with a `sweep` runs once per value and prints ONE
-   settled row each, which is the tightest honest shape for "what does this
-   knob do". Everything else prints a time series. */
+// a profile with a `sweep` prints one settled row per value; everything else a time series
 function flyOne(key, opt){
   const spec = PROFILES[key]();
   const evs = opt.events;
