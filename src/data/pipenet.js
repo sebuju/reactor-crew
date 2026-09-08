@@ -533,9 +533,10 @@ const circAuthored = ci => ci >= 0 && ci !== null && ci !== undefined
 const circCool = ci => { if(!(ci >= 0)) return null;
   const c = coreOnCirc(ci)[0]; if(c) return COOLANT[coreD(c).cool];
   const h = circCoolTank(ci); return h ? COOLANT[D.tanks[h].cool] : null; };
-/* the same part circKey() keys its state on, so the fluid and the setpoint cannot name two */
-const circCoolTank = ci => { for(const id of holdOnCirc(ci))
-    if(D.tanks[id] && D.tanks[id].cool != null) return id;
+/* a HOLD tank first, so where there is one the fluid and the setpoint name the part circKey() keys on; any tank may still state what is in its circuit */
+const circCoolTank = ci => { const names = id => D.tanks[id] && D.tanks[id].cool != null;
+  for(const id of holdOnCirc(ci)) if(names(id)) return id;
+  for(const id of tankIds()) if(names(id) && tankCircuit(id) === ci) return id;
   return null; };
 const satOfCirc = ci => {
   if(ci === null || ci === undefined || ci < 0) return SAT_WATER;
@@ -697,7 +698,8 @@ const AUTORULE = {
 const TANK_RHO = 1000;                 // kg/m^3 - what a tank of an unlisted fluid holds
 const TANK_DEFAULT = {
   vol:35, level:100, fluid:"water",
-  gas:{p0:4.5, frac:0.35}, check:true, auto:"manual", burst:null,
+  /* a plain vessel: lined up, with ordinary nozzles, so a tank dropped between two machines conducts. An injection tank states its own check valve and its own rule */
+  gas:{p0:4.5, frac:0.35}, check:false, auto:"always", burst:null,
   hold:null, tsurv:null, pburst:null, aspect:1,
   /* a COOLANT index, or null for water; only a HOLD tank is asked */
   cool:null,
@@ -887,7 +889,8 @@ function reliefFullRate(s, fid){
 const RUN_ENDS = new Map();   // a run key never changes meaning
 function runEnds(key, kind){
   let e = RUN_ENDS.get(key); if(e !== undefined) return e;
-  const rest = key.slice(kind.length + 1), i = rest.indexOf("-");
+  /* the "#n" pipeMap() adds to tell a second run between the same two FACES apart is part of the key and no part of the node it lands on */
+  const rest = key.slice(kind.length + 1).split("#")[0], i = rest.indexOf("-");
   e = i < 0 ? null : [rest.slice(0, i), rest.slice(i + 1)];
   RUN_ENDS.set(key, e); return e;
 }
@@ -2766,6 +2769,8 @@ function plantPreset(i){
   LAY=null; layoutMetrics();             // re-fit the arrangement once, not per gesture
   /* the bags go LAST, after the last thing that can bake: cleared before layoutMetrics() they refill off the same stale rating */
   designForgetBags();
+  /* the LAST thing that can bake has run, so every suggestion is this plant's: stated now, the ship arrives with no AUTO left on it */
+  designBake();
   /* AFTER the bags, because D.start IS a bag; every preset commissions with protection DEFEATED, so a plant runs its faults out */
   scramBlocksOn(false);
   Object.assign(D.start, q.start||{});
