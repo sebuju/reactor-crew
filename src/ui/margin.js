@@ -9,7 +9,17 @@ const MARGIN_W=268, MARGIN_GAP=6, MARGIN_PAD=30;
    gap of 8 between columns made two of them 4.06, which is 3 cells of deck
    reserved to draw 2.06 of panel. n*268 over 134 is 2n with the gap gone. */
 const MARGIN_COL_GAP=0, MARGIN_COLS_MAX=4;
-const marginColW=n=>n*MARGIN_W+(n-1)*MARGIN_COL_GAP;
+/* A STATED COLUMN IS A CONTENT WIDTH, in the units --db-colw is in - the well's
+   padding and the grid's own gaps are the PANEL's, so they are added here or a
+   390 px column is drawn at 378. Snapped up to a whole cell, which is what
+   MARGIN_COL_GAP=0 buys the unstated case for free. */
+const MARGIN_WELL_PAD=12, MARGIN_GRID_GAP=8, MARGIN_COLW=260;
+const marginColW=(n,cw)=>{
+  if(!cw) return n*MARGIN_W+(n-1)*MARGIN_COL_GAP;
+  let w=MARGIN_WELL_PAD+(n-1)*MARGIN_GRID_GAP;
+  for(let i=0;i<n;i++) w+=cw[i]||MARGIN_COLW;
+  return Math.ceil(w/CELL)*CELL;
+};
 /* AND PANELS ALONG ONE EDGE STAND IN GROUPS. The cascade sorted on board
    position alone, so the primary's own panels were broken up by a loop and by
    the secondary - measured on the stock plant, the top edge ran circ0, loop0,
@@ -53,32 +63,78 @@ function marginInsetU(){
   return {l:MARGIN_IN.l*sx, r:MARGIN_IN.r*sx, t:MARGIN_IN.t*sy, b:MARGIN_IN.b*sy};
 }
 
-/* ══ A PANEL COVERS THE DECK, SO ITS HAND IS THE DECK'S ══
-   Every box that stands over #cv owes this: the canvas never sees a wheel that
-   starts on a panel, so without it the plant simply stops zooming under the
-   reader's hand. Both hosts register it - the margin (ui/margin.js) and the
-   hover peek (ui/hoverwin.js).
-   A BOX THAT CAN SCROLL KEEPS ITS OWN WHEEL, or a long menu inside a panel
-   cannot be scrolled: it zooms the plant instead. Asked of the element under
-   the hand, not of a list of classes. */
-function panWheelPass(el){
-  const scrolls=t=>{ for(let n=t; n&&n!==el; n=n.parentElement){
+/* A BOX THAT CAN SCROLL KEEPS ITS OWN WHEEL, or a long list inside a panel
+   cannot be scrolled: the deck takes the wheel instead. Asked of the element
+   under the hand, not of a list of classes. */
+function wheelScrolls(el,t){
+  for(let n=t; n&&n!==el; n=n.parentElement){
     if(!n.scrollHeight) continue;
     const ov=getComputedStyle(n).overflowY;
     if((ov==="auto"||ov==="scroll") && n.scrollHeight>n.clientHeight+1) return true; }
-    return false; };
+  return false;
+}
+/* ══ A WHEEL OVER A PANEL MOVES THAT PANEL ══
+   Zooming is the DECK's answer and it is the wrong one here: a panel is a page
+   of type, the hand rolling on it is asking to read further down it, and a zoom
+   takes the whole board away instead. So the wheel states one thing - how far
+   the BOX under the hand should travel, in screen px - and where it is spent is
+   the panel's own business. The right drag is not this: it stays the plant's
+   own pan, wherever it lands.
+   AND IT STOPS WHERE THAT PANEL RUNS OUT, at the frame's own edge: a panel
+   travels until the edge it is heading for is flush with the frame's, and the
+   room is the FURTHER of its two edges, which is the same rule read twice. A
+   panel that fits may cross the frame and stop against the far side; one taller
+   than the frame is already flush at the near side, so its room is the overhang
+   and the gesture reads it out and stops. Bounded by the near edge alone,
+   nothing that fits could move at all. */
+function panRoom(m,el){
+  const b=el.getBoundingClientRect(), f=inspFrame(el.parentNode);
+  const ax=(d,a,z)=> d>0 ? Math.min(d,Math.max(0,a,z)) : -Math.min(-d,Math.max(0,-a,-z));
+  return {x:ax(m.x, f.x0-b.left, f.x1-b.right),
+          y:ax(m.y, f.y0-b.top,  f.y1-b.bottom)};
+}
+/* SPENT ON THE DECK, which is the ground a plant-space panel is bolted to: the
+   drawing goes the other way, and its own panel comes with it. */
+function panDeck(m,el){
+  const d=panRoom(m,el); if(!d.x&&!d.y) return;
+  panTo=panZ=null;                    // a hand outranks an eased pan already in flight
+  const k=cvPx()/VIEW.s;
+  VIEW.ox-=d.x*k; VIEW.oy-=d.y*k;
+  uiDirty();
+}
+/* ══ A PANEL COVERS THE DECK, SO ITS HAND IS THE DECK'S ══
+   Every box that stands over #cv owes this: the canvas never sees a wheel or a
+   right drag that starts on a panel. The two hosts register it for the panels
+   they hold - the margin (ui/margin.js) and the selection peek (ui/selwin.js) -
+   and a parked window registers it for itself, because which ground it stands
+   on is its own per-instance answer (inspHand, ui/inspwin.js). */
+function panWheelPass(el,spend,onDown){
+  const pay=spend||panDeck;
+  // the hosts are pointer-transparent, so a gesture landed on a panel or on
+  // nothing at all - and the panel it landed on is the one being read
+  const panelAt=t=>(t&&t.closest)?t.closest(".margin-pan"):null;
   // its own state rather than ui.drag: uiMove() belongs to a surface that hit-tests
   let pan=null;
   const drop=()=>{ pan=null; };
   ctxSuppress(el);
   MOUSE.on(el,{
     wheel(e){
-      if(scrolls(e.target)) return;
+      if(wheelScrolls(el,e.target)) return;
       e.preventDefault();
       ctxClose();
-      vWheel(local(e), e.deltaY);
+      const q=panelAt(e.target);
+      // SHIFT+WHEEL IS THE SAME ROLL. The browser hands a shifted wheel over as
+      // deltaX, which spent on x is a panel that will not move for a reader
+      // holding the key every other page uses for the second axis - so the roll
+      // is whichever axis it arrived on, and it is spent the one way.
+      if(q) pay({x:0,y:-(e.deltaY||e.deltaX)},q);
     },
+    /* THE RIGHT DRAG IS THE PLANT'S PAN WHEREVER IT STARTS. It is how the board
+       is driven, and a panel covers enough of the board that a hand which had
+       to find bare deck first would be reaching around the furniture. Measured
+       on #cv: a panel is moved BY the pan, so its own box is not a ruler. */
     down(e){
+      if(onDown) onDown(e);
       if(e.button!==2 || e.shiftKey) return;
       // a hosted canvas inside a panel started its own gesture on the way up here;
       // grabbing on the host steals the release and that drag never ends
@@ -122,9 +178,10 @@ function marginPan(host,title,rect,p){
   return {p,rect,well,body,id:p?p.id:title,on:null,ctl:null,cells:null,nRows:0,
           w:MARGIN_W,cols:1,vis:true,hid:false,tf:null,needH:true,_hpx:null};
 }
-function marginCols(h,n){
-  if(h.cols===n) return;
-  h.cols=n; h.w=marginColW(n);
+function marginCols(h,n,cw){
+  const sig=n+":"+((cw||[]).join(","));
+  if(h.colSig===sig) return;
+  h.colSig=sig; h.cols=n; h.colw=cw||null; h.w=marginColW(n,cw);
   h.well.el.classList.toggle("cols",n>1);
   // three columns or more is a panel with room to stand a list beside its
   // controls rather than under them - see .margin-ctl (ui/plant-screens.css)
@@ -133,6 +190,15 @@ function marginCols(h,n){
   // what is INSIDE the panel is cut into the same number of columns the panel
   // is wide - the readout grid reads it (.insp-grid, ui/plant-screens.css)
   h.well.el.style.setProperty("--db-grid-cols",n);
+  /* THE TEMPLATE IS STATED HERE WHETHER THE WIDTHS WERE OR NOT. The CSS
+     fallback floors every track at --db-colw, and an unstated panel is n*268
+     wide because that is a whole number of deck cells - which leaves 260n-4
+     for the columns, so three of them were 4 px over the panel they stand in
+     and the last one was clipped. The panel's width is the deck's answer; the
+     columns divide what it left. Shares, not px: a px template would have to
+     know the well's own padding and the grid's gaps. */
+  h.well.el.style.setProperty("--db-cols-tpl",
+    Array.from({length:n},(_,i)=>"minmax(0,"+(cw?(cw[i]||MARGIN_COLW):1)+"fr)").join(" "));
   h.needH=true;
 }
 /* A stated count sets the width; nothing auto-grows columns from height. */
@@ -140,8 +206,8 @@ function marginColumns(h){
   if(h.fixW) return;
   const want0=h.body&&h.body._cols;
   if(!want0) return;
-  if(h.cols===want0) return;
-  marginCols(h,Math.max(1,Math.min(MARGIN_COLS_MAX,want0)));
+  const cw=h.body._colw||null;
+  marginCols(h,Math.max(1,Math.min(MARGIN_COLS_MAX,want0)),cw);
   h._hpx=h.well.el.offsetHeight||60; h.needH=false;
 }
 function marginBuild(host,live){
@@ -912,7 +978,7 @@ function panPartSync(h,live,deep,fresh){
   /* A PEEK IS NEVER LIT. It only exists while it is being pointed at or walked
      to, so a bar that changed colour on the selection was saying a thing the
      panel's own presence already said. A window that STAYS is the one that
-     needs telling apart from the others (h.peek, ui/hoverwin.js). */
+     needs telling apart from the others (h.peek, ui/selwin.js). */
   const on=!h.peek && h.p.id===sel;
   if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
   /* A PAN MAY NOT REBUILD ANYTHING. Gated on being visible, a panel panned

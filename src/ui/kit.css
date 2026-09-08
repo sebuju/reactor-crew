@@ -12,8 +12,10 @@
 
 .kit-rule{display:flex;align-items:flex-start;gap:7px;margin:0 0 3px; justify-content: space-between;
   color:var(--kit-rule-color,var(--c-ink2));font-size:var(--fs-sec);
-  letter-spacing:2px;text-transform:uppercase;}
-.kit-sliderrow > .kit-rule {letter-spacing: 0;margin:0;}
+  letter-spacing:2px;text-transform:uppercase;
+  /* the 2px tracking IS the subheading; anything that drops it drops the line too */
+  border-bottom:1px solid var(--c-edge2);padding-bottom:3px;}
+.kit-sliderrow > .kit-rule {letter-spacing: 0;margin:0;border-bottom:none;padding-bottom:0}
 /* .kit-rule{display:flex;align-items:center;gap:7px;
   color:var(--kit-rule-color,var(--c-ink2));font-size:var(--fs-sec);
   text-transform:uppercase;white-space:nowrap} */
@@ -26,9 +28,9 @@
    is what delimits the panel - and what .on/.blocked colour. */
 .kit-rule-head{margin:0;padding:8px 4px;background:var(--c-edge);
   font-size:var(--fs-win-title);font-weight:700;letter-spacing:1.8px;
-  color:var(--kit-rule-color,var(--c-bright));
-  overflow:hidden;text-overflow:ellipsis}
+  color:var(--kit-rule-color,var(--c-bright))}
 .kit-rule-head::after{display:none}
+.kit-rule-head{border-bottom:none;padding-bottom:8px}
 .db-vitals .kit-rule-head {padding: 8px;}
 /* THE HEADING IS THE NAME FIELD - see rule()'s `edit` in kit.js. It has to
    read as the heading it replaced, so it inherits the bar's own type and
@@ -42,6 +44,7 @@
 .kit-rule-sfx{flex:0 0 auto;color:var(--c-ink2)}
 /* nothing to say costs no gap - every rule carries the span now */
 .kit-rule-sfx:empty{display:none}
+/* the NAME clips, not the bar: a menu key on this bar hangs its panel below it */
 /* THE NAME TAKES THE SLACK, so everything after it is packed against the right
    hand end: the suffix, and then the window's own keys with a gap. Both of
    those carried margin-left:auto and SHARED the free space between them, which
@@ -116,8 +119,8 @@
 .kit-btn.on{border-color:var(--c-amber);color:var(--c-amber)}
 .kit-btn:disabled{cursor:default;opacity:.4}
 /* the arrow keys walk the keys of the panel a machine is showing in
-   (panKeyNav, ui/hoverwin.js), so which one they are standing on has to read */
-.kit-btn:focus-visible,.kit-btn:focus{outline:1px solid var(--c-amber);outline-offset:1px}
+   (panKeyNav, ui/selwin.js), so which one they are standing on has to read */
+.kit-btn:focus-visible,.kit-btn:focus{outline:1px solid var(--c-amber-soft);outline-offset:-1px}
 .kit-btn-sunk{border:0;background:var(--c-well)}
 .kit-btn-sunk:hover{background:var(--c-panel)}
 .kit-btn-sunk.on{background:var(--c-on-amber)}
@@ -221,11 +224,12 @@
 .kit-numinput-input:disabled{color:var(--c-ink2);cursor:not-allowed}
 
 /* a key with a panel hanging under it - see menuKey() in kit.js. The panel is
-   out of flow, so opening one never moves the key beside it. */
+   out of flow, so opening one never moves the key beside it. It hangs out of
+   the title bar, so no ancestor of it may clip - see .kit-rule-head above. */
 .kit-menukey{position:relative}
-.kit-menukey-key{height:20px;padding:0 8px;letter-spacing:.6px;white-space:nowrap}
-.kit-menukey-menu{position:absolute;top:24px;left:0;z-index:3;min-width:132px;padding:6px;
-  background:var(--c-panel);border:1px solid var(--c-edge);
+.kit-menukey-key{white-space:nowrap; margin: 0; height: 21px;}
+.kit-menukey-menu{position:absolute;top:calc(100% + 1px);left:0;z-index:3;min-width:132px;padding:6px;
+  background:var(--c-panel-float);
   display:flex;flex-direction:column;gap:3px;max-height:70vh;overflow-y:auto}
 .kit-menukey-menu .kit-rule{margin:4px 0 2px}
 .kit-menukey-menu .kit-rule:first-child{margin-top:0}

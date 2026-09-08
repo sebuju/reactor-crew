@@ -14,12 +14,15 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* ONE HEAD ROW PER PLANT SCREEN. The keys that address the VIEW (layers, zoom)
    and the drawers that address the plant as a whole live here rather than at
    the foot of a rail nobody scrolls to. Transparent and click-through except
-   on the controls themselves, so the plant under it keeps its presses. It
-   starts clear of the panel in the top-left corner - RESULTS on the bench, the
-   vitals panel in the control room - which is the topmost thing on that side. */
+   on the controls themselves, so the plant under it keeps its presses. In the
+   control room it starts clear of the vitals panel, which is the topmost thing
+   in that corner; the bench stands its own panel underneath instead. */
 .scr-head{grid-column:1;grid-row:1;pointer-events:none;display:flex;align-items:flex-start;
   flex-wrap:wrap;gap:8px;padding:6px 8px;margin-left:308px}
 .scr-head>*{pointer-events:auto}
+/* the bench stands its verdict UNDER this row (.db-left), so there is nothing
+   in the corner for the row to start clear of */
+.db-head{margin-left:0}
 
 .cr-root,.db-root{position:absolute;display:grid;
   grid-template-rows:auto 1fr;pointer-events:none}
@@ -251,15 +254,19 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* ─────────────── design bench ─────────────── */
 .db-tools{display:flex;align-items:center;gap:4px}
 .db-plants .kit-btn{justify-content:flex-start;text-align:left}
-/* THE VERDICT floats over the top-left of the plant, in exactly the seat
-   .cr-vitals keeps on the control room: OUT OF THE GRID, so it holds no track
-   open and the head row starts clear of it rather than above it. Sized by its
-   own content and capped, because a scroll container stretched into a grid row
-   collapses to nothing. */
-.db-vitals{position:absolute;left:4px;top:4px;pointer-events:auto;
-  display:flex;flex-direction:column;gap:6px;
-  width:300px;background:transparent;
-  max-height:calc(100% - 12px);overflow-y:auto;scrollbar-width:none}
+/* THE VERDICT AND ITS KEY STAND UNDER THE TOOLS, at the left edge of the plant.
+   In the grid's second row rather than floating on a measured offset: the head
+   row wraps at a narrow window, and a top stated in px is one that is wrong the
+   moment it does. `start` on both axes so the column is its content's size and
+   the plant keeps the rest of the row. */
+.db-left{grid-column:1;grid-row:2;align-self:start;justify-self:start;
+  pointer-events:none;display:flex;flex-direction:column;align-items:flex-start;gap:4px;
+  padding:0 0 6px 4px;max-height:100%;min-height:0}
+.db-left>*{pointer-events:auto}
+/* Sized by its own content and capped, because a scroll container stretched by
+   a grid row collapses to nothing. */
+.db-vitals{display:flex;flex-direction:column;gap:6px;flex:0 1 auto;min-height:0;
+  width:300px;background:transparent;overflow-y:auto;scrollbar-width:none}
 /* it stands ON the drawing, so it is not the rail colour */
 .db-verdict{background:var(--c-panel-float);box-shadow:0 8px 28px rgba(0,0,0,.9),0 2px 8px rgba(0,0,0,.8)}
 .db-verdict-rev{margin-top:8px}
@@ -273,7 +280,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-panel-body{display:flex;flex-direction:column;gap:8px}
 .db-block{display:flex;flex-direction:column;}
 .db-field{display:grid;grid-template-columns:1fr 2fr; gap: 7px;}
-.db-field>.kit-rule{letter-spacing:0;margin:0; padding-top:5px;}
+.db-field>.kit-rule{letter-spacing:0;margin:0; padding-top:5px;border-bottom:none;padding-bottom:0}
 .db-field>.kit-toggle>.kit-toggle-label{display:none}
 .db-note{margin:0;font-size:var(--fs-note);color:var(--c-ink2);line-height:1.4}
 /* six reactor presets and six pens do not fit one rail-wide line, and a row
@@ -350,7 +357,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
      1  rail, banner, vitals           furniture over the plant
      2  plant keys + layer menu        opens over the furniture
      3  inspector windows              the reader parked it there, so nothing buries it
-     4  the hover peek                 where the hand is NOW, so it buries even those
+     4  the selection peek             what is picked NOW, so it buries even those
+     5  the head row                   the tools are how a panel is got rid of, so
+                                       nothing may bury THEM
 
    Above this, outside the screen roots: #prewarm 999, #tip 1000, #ctxmenu 1001. */
 .margin-host{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
@@ -359,7 +368,8 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* transparent EXPLICITLY: a canvas carries the page's own deck colour, and this
    one stands over the whole plant view - inherited, it painted the board out */
 .nav-layer{position:fixed;pointer-events:none;z-index:0;background:transparent}
-.cr-rail,.db-rail,.scr-head,.cr-banner,.cr-vitals,.db-vitals{z-index:1}
+.cr-rail,.db-rail,.cr-banner,.cr-vitals,.db-vitals,.db-left{z-index:1}
+.scr-head{z-index:5}
 /* size comes from a transform:scale (marginPlace), so one layout is scaled and
    the panel's height in layout px is the same at every step of the zoom */
 .margin-pan{position:absolute;pointer-events:auto;background:var(--c-panel);
@@ -369,14 +379,16 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .margin-pan .db-panel-body.db-body-tree>*{margin-bottom:0}
 /* what hangs off a panel's title bar - the "menu" block (design-bench.js) */
 .db-panel-head{display:flex;gap:4px;margin-left:8px}
-.db-panel-head .kit-menukey-menu{min-width:280px}
-.db-grid{display:grid;gap:8px;align-items:stretch;
-  grid-template-columns:repeat(var(--db-grid-cols,1),minmax(min(260px,100%),1fr))}
-.db-section{display:flex;flex-direction:column;gap:0px;min-width:0;min-height:0;
+/* the key stands at the RIGHT end of the title bar and the panel clips its own
+   paint, so the panel hangs from that end rather than running off the edge */
+.db-panel-head .kit-menukey-menu{min-width:280px;left:auto;right:0}
+.db-grid{--db-colw:260px;display:grid;gap:8px;align-items:stretch;
+  grid-template-columns:var(--db-cols-tpl,repeat(var(--db-grid-cols,1),minmax(min(var(--db-colw),100%),1fr)))}
+.db-section{display:flex;flex-direction:column;gap:6px;min-width:0;min-height:0;
   grid-column:span var(--db-span,1);grid-row:span var(--db-rowspan,1)}
-.db-rail .db-grid{--db-grid-cols:1}
+.db-rail .db-grid{--db-grid-cols:1;--db-cols-tpl:initial}
 .db-rail .db-section{--db-span:1;--db-rowspan:1}
-.margin-pan .kit-rule-head{padding:8px;font-size:var(--fs-win-title)}
+.margin-pan .kit-rule-head{padding:8px;font-size:var(--fs-win-title); align-items: center;}
 /* ══ READOUT SECTIONS PACK, THEY DO NOT LINE UP ══
    A grid gives every section in a row the height of the tallest one, so a
    three-row POWER section standing beside the damage map left most of a column
@@ -404,16 +416,16 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* the chevron points down while the window is open and right while it is
    folded, which is the one drawing turned rather than a second icon */
 .insp-win.folded .insp-key-fold .kit-icon{transform:rotate(-90deg)}
-/* the hover peek (ui/hoverwin.js): the parked window's look, and it stands over
-   EVERYTHING, parked windows included. It is where the hand is pointing right
-   now, and it goes the moment the hand does - a peek buried under a window the
-   reader parked an hour ago is a panel that answers a question they are not
+/* the selection peek (ui/selwin.js): the parked window's look, and it stands
+   over EVERYTHING, parked windows included. It is the machine the reader picked
+   just now, and it goes the moment the pick does - a peek buried under a window
+   they parked an hour ago is a panel that answers a question they are not
    asking, hiding the one they are. */
-.hovw-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:4}
+.selw-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:4}
 /* the right hand end of the bar: margin-left:auto so the keys hold that end
    whether or not the suffix beside them has anything to say */
 .insp-keys{display:flex;gap:2px;margin-left:auto;padding-left:8px}
-.insp-keys .kit-btn{height:15px;min-width:0;padding:0 4px}
+.insp-keys .kit-btn{height:20px;width:20px;margin:-6px 0px; min-width:0;padding:0 4px}
 /* the controls that used to stand on the machine box, in the widget kit's own
    HTML - see marginCtlBuild(). A row is the same row ctlFor() states. */
 .margin-ctl{display:flex;flex-direction:column;gap:3px;margin: -6px -6px 6px -6px; padding: 9px 10px; background:var(--c-ctl-well); }
@@ -465,7 +477,50 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 /* the picture takes the whole width - every column it gets is a controller
    that would otherwise be stacked - and the editor lies under it, its rows
    flowed across rather than down so it stays a couple of rows deep */
-.ctlg-cols{display:flex;flex-direction:column;gap:8px}
+/* ── ONE TAB PER SECTION OF THE CABINET ──
+   Flat, like every other row of choices on this ship: no boxes and no raised
+   edges, one rule under the whole row, and the open tab marked by carrying its
+   own colour and standing on a thicker piece of that rule. Wrapped, because a
+   plant with six controllers has six tabs and they may not push the picture
+   off its own panel. */
+.ctlg-tabs{display:flex;flex-wrap:nowrap;align-items:flex-end;gap:0;margin: -8px 0px 2px 0px;}
+/* ONE ELEMENT, OPEN OR SHUT, and the LABEL inside it is what has the width.
+   The open tab used to be an input where a shut one was a key, so the strip
+   measured two different ways and every click on a tab moved the whole row
+   sideways. The field on the open tab is laid OVER its label instead. */
+.ctlg-tabs .ctlg-tab{position:relative;height:22px;padding:0 9px;cursor:pointer;
+  display:flex;align-items:center;color:var(--c-ink2);background:var(--c-well);margin-bottom:-1px}
+.ctlg-tabs .ctlg-tab:hover{color:var(--c-bright)}
+.ctlg-tabs .ctlg-tab.on{color:var(--c-amber);background: var(--c-on-amber);}
+.ctlg-tabs .ctlg-tab:focus-visible{outline:1px solid var(--c-amber);outline-offset:-1px}
+.ctlg-tab-lab{font-size:var(--fs-key);letter-spacing:1.6px;text-transform:uppercase;white-space:nowrap}
+/* the field wears the tab, not a box, and it is the label's own size */
+.ctlg-tab.edit>.ctlg-tab-lab{visibility:hidden}
+.ctlg-tab-input{position:absolute;left:9px;right:9px;top:0;bottom:0;
+  border:0;background:none;font:inherit;font-size:var(--fs-key);
+  letter-spacing:1.6px;text-transform:uppercase;color:var(--c-amber);padding:0;width:auto}
+.ctlg-tab-input:focus{outline:0}
+.ctlg-tab-input::placeholder{color:var(--c-ink2);opacity:.7}
+/* ADD AND DROP A SECTION SIT AT THE RIGHT EDGE and never wrap. The tabs wrap
+   inside their own row, which grows; the keys stand outside it, so a strip
+   nearly full of tabs can no longer throw + and - onto a line of their own.
+   One glyph each, and no tab's background, so they never read as another page
+   to turn. */
+.ctlg-tabs-list{display:flex;flex-wrap:wrap;align-items:flex-end;flex:1 1 auto;min-width:0}
+.ctlg-tabs .ctlg-tab-key{flex:0 0 auto;border:0;background:none;height:22px;padding:0 8px;
+  color:var(--c-ink2);align-self:center}
+.ctlg-tabs .ctlg-tab-key:hover{background:none;color:var(--c-bright)}
+/* ADD BLOCK hangs over the top right of the picture: as a row of its own it
+   cost the panel a line of height for one key */
+.ctlg-cols{position:relative;display:flex;flex-direction:column;gap:8px}
+/* the key is as wide as its own word: the 10ch track was cut for ADD BLOCK,
+   + SECTION and DROP SECTION standing in a column together, and two of those
+   moved to the tab strip */
+.ctlg-keys{position:absolute;left:0;bottom:0;z-index:2;display:grid;gap:4px;
+  grid-auto-flow:row;grid-auto-columns:auto;width:max-content}
+/* AND ITS LIST OPENS UPWARDS, because the key stands on the floor of the
+   picture and a list hung below it would fall out of the panel. */
+.ctlg-add>.kit-menukey-menu{top:auto;bottom:calc(100% + 1px)}
 .ctlg-pic{position:relative;width:100%}
 .ctlg-side{display:flex;flex-direction:column;gap:4px}
 .ctlg-wires{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
@@ -474,6 +529,10 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-wire .ctlg-head{fill:var(--c-cyan)}
 .ctlg-wire-lab{font-family:var(--mono);font-size:10px;text-anchor:middle;fill:var(--c-cyan);
   stroke:var(--c-panel);stroke-width:3px;paint-order:stroke}
+/* a wire coming in from another section: dashed, because the block it leaves
+   is not on this tab and the picture must not pretend it is */
+.ctlg-xseg polyline{stroke-dasharray:3 2}
+.ctlg-xseg .ctlg-wire-lab{fill:var(--c-ink2)}
 .ctlg-wire.off polyline{stroke:var(--c-ink2)}
 .ctlg-wire.off .ctlg-head,.ctlg-wire.off .ctlg-wire-lab{fill:var(--c-ink2)}
 .ctlg-pic.dead .ctlg-wire:not(.off) polyline{stroke:var(--c-amber)}
@@ -516,6 +575,35 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg .kit-menukey-menu{min-width:100%;max-width:520px;max-height:240px;overflow-y:auto}
 .ctlg .kit-numinput{flex:1 1 auto}
 .ctlg-ed{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:4px;align-content:start}
+/* THE EDITOR OPENS AT THE BLOCK. As a column under the drawing the box you
+   typed in and the box you were typing about were at opposite ends of a tall
+   panel. One column wide, because it stands over the picture now and must not
+   cover the graph it is editing; it scrolls rather than growing past it. */
+.ctlg-ed-win{position:absolute;z-index:3;width:232px;box-sizing:border-box;
+  max-height:300px;overflow-y:auto;overflow-x:hidden;padding:6px;
+  background:var(--c-panel);border:1px solid var(--c-edge2);
+  box-shadow:0 6px 18px rgba(0,0,0,.55)}
+.ctlg-ed-win.ctlg-ed{grid-template-columns:1fr}
+/* THE NAME FIELD TAKES THE WHOLE WIDTH and BLOCK n drops under it, with the
+   switch and the bin beside it. Side by side the field was squeezed to about
+   half, so the default name in it was cut off mid-word - and that field is
+   where the block is named, so it is the one thing here that may not be short
+   of room. `kit-rule-input` carries 3px of side padding to make room for the
+   box it grows on hover, so BLOCK n is indented to match: the name and the key
+   under it stand on one left edge. */
+.ctlg-ed-win>.kit-rule{flex-wrap:wrap;white-space:normal;line-height:1.25;
+  align-items:center;gap:4px}
+.ctlg-ed-win>.kit-rule>.kit-rule-input{flex:1 1 100%;min-width:0}
+.ctlg-ed-win>.kit-rule>.kit-rule-sfx{padding-left:3px;margin-right:auto}
+/* NOTHING IN HERE MAY BE WIDER THAN THE WINDOW. A grid item's default minimum
+   is its CONTENT, so one long menu key pushed the whole editor sideways and
+   put a horizontal scrollbar under a 232px box. */
+.ctlg-ed-win>*{min-width:0;max-width:100%}
+.ctlg-ed-win .kit-menukey,.ctlg-ed-win .kit-numinput,.ctlg-ed-win .ctlg-row{min-width:0;max-width:100%}
+.ctlg-ed-win .kit-menukey>button{width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctlg-ed-win .ctlg-knobs{grid-template-columns:1fr}
 .ctlg-ed>.kit-rule,.ctlg-hint{grid-column:1/-1}
 .ctlg-knobs{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.ctlg-hint{font-size:var(--fs-note);color:var(--c-ink2);line-height:1.4}
+/* the empty editor. It holds the box open and says nothing; what it is for is
+   in its tooltip, like every other explanation in this project */
+.ctlg-hint{min-height:18px}

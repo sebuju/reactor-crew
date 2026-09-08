@@ -13,8 +13,8 @@
    panel appears here on the same frame.
 
    A WINDOW IS NOT OPENED, IT IS KEPT. There is no key and no corner: the
-   reader drags the hover peek they are already reading (hovwPin,
-   ui/hoverwin.js) and it stays where the drag ended. So there is no unpinned
+   reader drags the peek they are already reading (selwPin,
+   ui/selwin.js) and it stays where the drag ended. So there is no unpinned
    window, no selection to follow and no seat to compute - a window is where it
    was put, and it closes on its own key. */
 
@@ -50,7 +50,7 @@ function inspDrag(h){
     },
     move(e){
       if(!g) return;
-      /* MOVING A HOVER PEEK IS WHAT PINS IT (ui/hoverwin.js). Spent on the
+      /* MOVING A PEEK IS WHAT PINS IT (ui/selwin.js). Spent on the
          first move rather than on the press, so a press that goes nowhere
          leaves the peek a peek - and the grab is on the BAR, which the promote
          keeps, so the same gesture carries straight on into the drag. */
@@ -62,6 +62,20 @@ function inspDrag(h){
       inspMove(h);
     },
     up:drop, cancel:drop});
+}
+
+/* ══ AND THE HAND IS ANSWERED ON WHICHEVER GROUND THE WINDOW IS STANDING ON ══
+   Bolted to the deck the window travels with the drawing, so moving the deck is
+   what carries it (panDeck, ui/margin.js). Cut loose there is nothing
+   underneath to move, and the window itself is what the hand is pushing. The
+   wheel and the right drag are the same gesture to both grounds - see
+   panWheelPass(), which states the travel and asks this for the spending. */
+function inspHand(h){
+  panWheelPass(h.well.el,(m,el)=>{
+    if(h.plant){ panDeck(m,el); return; }
+    const d=panRoom(m,el); if(!d.x&&!d.y) return;
+    h.wx+=d.x; h.wy+=d.y; inspMove(h); uiDirty();
+  },()=>inspRaise(h));
 }
 
 /* ══ THE OTHER GROUND A WINDOW MAY STAND ON ══
@@ -83,7 +97,7 @@ function inspPin(h,on){
   if(h.plant) inspAnchor(h);
   h.wtf=null;
   h.well.el.classList.toggle("insp-plant",h.plant);
-  if(h.keyPin) h.keyPin.set({on:h.plant});
+  if(h.keyPin) h.keyPin.set({on:!h.plant});
   inspMove(h);
 }
 
@@ -136,7 +150,8 @@ function inspMove(h){
     const w=h.well.el.offsetWidth||h.w;
     // sideways it may hang off, so a wide window can be read at either edge; the
     // TOP is the frame's, because a bar dragged under the tools row is a window
-    // that cannot be moved back
+    // that cannot be moved back. The frame already carries INSPW_GAP, so "up to
+    // the bar" is up to the bar with its own margin kept.
     const top = inspFrame(h.well.el.parentNode).y0;
     h.wx=Math.max(INSPW_MIN_VIS-w, Math.min(vw-INSPW_MIN_VIS, h.wx));
     h.wy=Math.max(top, Math.min(vh-24, h.wy));
@@ -148,14 +163,14 @@ function inspMove(h){
 /* THE TITLE BAR'S OWN KEYS, at the right hand end of the bar where a window's
    keys stand. A peek has none while it is a peek - it goes when the pointer
    does, so there is nothing to fold or close - and it grows them the moment a
-   drag keeps it (hovwPin, ui/hoverwin.js).
+   drag keeps it (selwPin, ui/selwin.js).
    The chevron is not redrawn folded: the class on the window turns it. */
 const INSPW_ICON={fold:"M4 6.5 L8 10.5 L12 6.5", shut:"M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5",
   pin:["M8 2.8 a2.4 2.4 0 1 1 0 4.8 a2.4 2.4 0 1 1 0-4.8","M8 7.6 L8 13.2"]};
 function inspKeys(h){
   const keys=KIT.el("div","insp-keys");
-  h.keyPin=KIT.button("PIN TO PLANT",{flat:true,icon:INSPW_ICON.pin,on:!!h.plant,
-    tip:"Bolt this window to the drawing, so it moves with the plant while keeping its size. Off, it stays where it is on screen while the plant moves under it.",
+  h.keyPin=KIT.button("UNPIN FROM PLANT",{flat:true,icon:INSPW_ICON.pin,on:!h.plant,
+    tip:"Cut this window loose from the drawing, so it stays where it is on screen while the plant moves under it. Off, it is bolted to the deck and moves with the plant at its own size.",
     onClick:()=>inspPin(h,!h.plant)});
   keys.appendChild(h.keyPin.el);
   h.keyFold=KIT.button("FOLD",{flat:true,icon:INSPW_ICON.fold,

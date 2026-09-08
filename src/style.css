@@ -15,12 +15,12 @@
      nothing else. Change one number here and every place that does that job
      moves together. */
   --fs-win-title:11px;   /* a panel's own title bar */
-  --fs-sec:10px;         /* the rule that heads a section inside one */
-  --fs-label:10px;       /* what a row or a control is called */
-  --fs-value:10px;       /* the number or word it is reading */
+  --fs-sec:11px;         /* the rule that heads a section inside one */
+  --fs-label:11px;       /* what a row or a control is called */
+  --fs-value:11px;       /* the number or word it is reading */
   --fs-key:11px;         /* a button's label */
   --fs-note:10.5px;      /* prose: help, warnings, verdicts */
-  --fs-tiny:10px;        /* units, tonnages, scale ends */
+  --fs-tiny:11px;        /* units, tonnages, scale ends */
 }
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--c-bg);color-scheme:dark}
 body{display:flex;flex-direction:column;font-family:var(--mono)}
