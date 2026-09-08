@@ -502,9 +502,8 @@ function coreReset(K,cs,flowNet){
   cs.bankAuto=new Array(K.NB).fill(true);
   cs.tilt=0; cs.tiltDem=0; cs.ao=0; cs.ro=0; cs.hotRing=0; cs.hotLev=0; cs.vNode=0;
   cs.hotFlow=1; cs.tipRho=0; cs.TfHot=K.TfRef;
-  /* the aggregates the field hands back, and the readouts that go with them.
-     cs.h2 is the only integral here; the rest are re-measured every tick. */
-  cs.h2=0; cs.meltFrac=0; cs.oxMax=0; cs.qOx=0; cs.fci=0; cs.TcladHot=K.Tref;
+  // the aggregates the field hands back - not one of them is an integral
+  cs.meltFrac=0; cs.oxMax=0; cs.qOx=0; cs.fci=0; cs.TcladHot=K.Tref;
   cs.dnbrMin=K.dnbr0; cs.dnbrRing=0; cs.dnbrLev=0;
   for(let k=0;k<XNN;k++){
     cs.xI[k]=ioEq(K,K.n0); cs.xX[k]=K.X0;

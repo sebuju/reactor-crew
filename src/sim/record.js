@@ -220,12 +220,9 @@ const ACT = {
               apply:(s,id)=>{ if(s.tankDump[id]!==undefined) s.tankDump[id]=!s.tankDump[id]; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},
   resetTrip: {lab:"TRIP RESET",   apply:(s)=>{ resetTrip(); }},
-  /* The master switch. For relief it also drives every valve's own arm to
-     match, so the master and the individuals can never disagree - and a tape
-     recorded before per-valve arming existed still means exactly what it
-     meant: one line, every valve. */
-  byp      : {lab:"BYPASS",       log:k=>(AUTOSYS[k]?AUTOSYS[k].name:k.toUpperCase())+" "+(S.byp[k]?"ARMED":"BYPASSED"),
-              apply:(s,k)=>{ autoToggle(k); }},
+  /* ACT.byp IS GONE with AUTOSYS. There is no master switch left to record:
+     every automatic system is a block graph, and switching one off is
+     ACT.blkOn on the block that drives it. */
   porvBlockOf:{lab:"BLOCK VALVE", part:fid=>fid, log:fid=>fid.toUpperCase()+" "+(S.reliefBlocked[fid]?"OPENED":"SHUT"),
               apply:(s,fid)=>{ if(P.fittings[fid] && P.fittings[fid].mode==="relief")
                 s.reliefBlocked[fid]=!s.reliefBlocked[fid]; }},

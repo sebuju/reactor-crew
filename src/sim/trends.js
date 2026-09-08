@@ -69,6 +69,18 @@ const SIGNAL={
  tfrac:{scope:"core", lab:"TURB SHARE", u:"",    f:v=>unitFrac(v,turbShare(v))},
  rodd :{scope:"core", lab:"ROD DEMAND", u:"%",   f:v=>v.rodDem*100},
  trip :{scope:"core", lab:"TRIPPED",    u:"",    f:v=>v.scrammed?1:0},
+ /* THE SUBCOOLING THE PROTECTION SYSTEM ACTUALLY WATCHES, which is not `sub`
+    above: that one is the hot leg against saturation, this one is the solved
+    field's hottest liquid node (s.sc, step.js). The LOW SUBCOOLING channel has
+    always read this, so this is the row its compare must read too.
+    `heat` is the LOW FLOW channel's gate: a core making no heat needs no flow. */
+ scc  :{scope:"core", lab:"SUBCOOL MARGIN",u:"K", f:v=>v.sc},
+ heat :{scope:"core", lab:"HEAT FRAC",  u:"",    f:v=>v.heat},
+ /* A SETPOINT IS READ OFF THE CHANNEL, NEVER COPIED INTO THE BLOCK - the same
+    bargain fitlift/fitreseat strike with a relief valve. RPS_CH (step.js) stays
+    the one place a trip point is stated, and a compare wired here follows it. */
+ rpsset :{scope:"rpsch", lab:"TRIP SET", u:"",   f:(s,ch)=>rpsSetOf(ch,0)},
+ rpsnear:{scope:"rpsch", lab:"NEAR SET", u:"",   f:(s,ch)=>rpsSetOf(ch,RPS_NEAR)},
  sglv :{scope:"sg",   lab:"SG LEVEL",   u:"%",   f:(s,id)=>sgLvl(s,id)},
  sgp  :{scope:"sg",   lab:"SHELL P",    u:"MPa", f:(s,id)=>secP(s,id)},
  sgst :{scope:"sg",   lab:"STEAM OUT",  u:"kg/s",f:(s,id)=>(s.steamBy&&s.steamBy[id])||0},
@@ -114,13 +126,20 @@ const sigRead=(s,k,arg)=>{ const r=SIGNAL[k]; if(!r) return 0;
 
    A channel with no row here keeps the old self-scaling behaviour. */
 const CHVIEW={
- pwr :{rng:()=>[0,125],                     warn:()=>[(1.10+0.22*P.rpsm)*100]},
- dnbr:{rng:()=>[0,Math.max(3,P.dnbr0*1.3)], warn:()=>[1.30, 1.18-0.16*P.rpsm]},
- tf  :{rng:()=>[300,Math.max(2000,P.tdmg+700)], warn:()=>[P.tdmg, P.tdmg+100+280*P.rpsm]},
+ /* A WARN LINE THAT IS A TRIP POINT IS READ OFF THE CHANNEL, never written out
+    again here. These four spelt the setpoint formulas a second time and the
+    DNBR one had already drifted: it carried 1.18-0.16m without the floor and
+    the commissioned-margin cap the channel actually trips on, so on a boiling
+    core the band and the trip were different numbers. rpsSetOf() (step.js) is
+    the one door. Figures that are NOT setpoints - fuel damage onset, the
+    steering bands - stay stated here, because nothing else states them. */
+ pwr :{rng:()=>[0,125],                     warn:()=>[rpsSetOf("flux",0)]},
+ dnbr:{rng:()=>[0,Math.max(3,P.dnbr0*1.3)], warn:()=>[1.30, rpsSetOf("dnbr",0)]},
+ tf  :{rng:()=>[300,Math.max(2000,P.tdmg+700)], warn:()=>[P.tdmg, rpsSetOf("tf",0)]},
  tavg:{rng:()=>[P.Tref-60,P.Tref+60]},
  th  :{rng:()=>[P.Tref-40,P.Tref+80]},
  tc  :{rng:()=>[P.Tref-80,P.Tref+40]},
- prs :{rng:()=>[P.P0*0.70,P.P0*1.25],       warn:()=>[P.P0*0.86, P.P0*(1.06+0.07*P.rpsm)]},
+ prs :{rng:()=>[P.P0*0.70,P.P0*1.25],       warn:()=>[rpsSetOf("plp",0), rpsSetOf("php",0)]},
  sub :{rng:()=>[0,Math.max(40,P.sc0*1.4)],  warn:()=>[8,3]},
  lvl :{rng:()=>[0,100],                     warn:()=>[78]},
  sgl :{rng:()=>[0,100],                     warn:()=>[SG_LOW]},

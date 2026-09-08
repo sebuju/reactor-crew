@@ -121,8 +121,11 @@ const GEST = {
      A scripted run stands every die down, so this is the only way the relief
      valve fails to reseat - which is exactly the point of s.diceOff. */
   porvArm  :{lab:"PORV STICKS",act:"porvArm", lane:"sys", span:"point", args:[], emit:(a,ctx,put)=>put(0,[])},
-  byp      :{lab:"BYPASS",     act:"byp", lane:"sys", span:"latch",
-    args:[{lab:"SYSTEM", u:"sys", def:"rps"}],
+  /* SWITCHING A BLOCK OFF is what defeating an automatic system is now: there
+     is no AUTOSYS master switch to name, only the block that drives the
+     demand. A script names it the way the cabinet does, by id. */
+  blkOn    :{lab:"BLOCK ON/OFF",act:"blkOn", lane:"sys", span:"latch",
+    args:[{lab:"BLOCK", u:"blk", def:"b1"}],
     emit:(a,ctx,put)=>put(0,[a[0]])},
   /* A VALVE IS A POSITION, not a switch. This row was JUNCTION and it toggled
      S.juncOpen - a two-position gate on a tap-shaped cross-tie. A fitting is a
@@ -636,10 +639,7 @@ const SCNPRE = [
      the plant is asked to do something. The repair party is sent while the
      ramp is still running, and the controller picks the temperature back up
      when the drives come back.
-     The rod drives are the target because their damage is REAL and reversible.
-     A hit on the instrument cabinet reads well and does nothing the sim can
-     measure - s.noiseMul is written by DMGFX and read by nothing - so putting
-     one in a preset would be teaching a fault that is not there. */
+     The rod drives are the target because their damage is REAL and reversible. */
   (()=>{ const s = scnNew("action","ACTION DAMAGE");
     s.seed = SCN_SEED; s.secs = 180;
     scnGest(s, 20, "note", "ROD DRIVE HIT - THE BANK IS STUCK WHERE IT STANDS");
