@@ -12,7 +12,9 @@
 /* seq counts the times a picture changed size, so the panel holding one knows
    to measure itself again - a graph that got shorter must not leave the box
    it was reserved in standing empty under it. */
-const CTLV={sel:null, seq:0, seg:null};
+const CTLV={sel:null, hov:null, hovT:0, hovOn:false, seq:0, seg:null};
+// the pointer has to PARK on a block before the picture dims; crossing one dims nothing
+const CG_HOV_MS=400;
 /* WHICH SECTION IS OPEN. The picture draws one at a time (segIds(), ctl.js) or
    the cabinet is one drawing of ninety blocks. A section that has been deleted
    under the selection falls back to the first, so this can never name nothing. */
@@ -32,11 +34,12 @@ const ctlSegTable = T => { const sid=ctlSeg(), o={};
    protection graph. It also has to hold a wire label, because a rank that
    wraps puts two rows in front of the wires crossing them, so it is CG_LAB_H
    plus clearance and not merely more than a stud. */
-const CG_NW=116, CG_NH=48, CG_GX=8, CG_GY=28, CG_PAD=4, CG_ROWGAP=18, CG_ROW=CG_NH+CG_ROWGAP;
+// CG_GX holds two CG_ROUTE_C clearances and a lane; CG_NW/CG_NH are the text's (152px tune line, 56 for three rows)
+const CG_NW=164, CG_NH=58, CG_GX=36, CG_GY=44, CG_PAD=24, CG_ROWGAP=40, CG_ROW=CG_NH+CG_ROWGAP;
 /* the narrowest a whole controller may be drawn in. A cabinet holds several -
    a rod loop, a feed loop, a relief valve - and stacking them is what made the
    section a screen tall, so a panel wide enough stands them side by side. */
-const CG_COMPW=248, CG_COLGAP=14, CG_STUD=9;
+const CG_COMPW=2*CG_NW+CG_GX, CG_COLGAP=14, CG_STUD=9;
 /* ONE WIRE LABEL'S HEIGHT, and it is what the anti-overlap nudge steps by. It
    was 9, which is the type size and not the line: the label carries a 3px
    panel-coloured halo (paint-order:stroke, CSS) so its box is taller than its
@@ -47,16 +50,28 @@ const CG_LAB_H=12;
    on the bench. Same shape either way - mode, in, on, knobs. */
 const ctlTable = live => live ? (S&&S.blkBy)||null : D.blocks;
 
-/* rank = longest path from a block with nothing wired in. A block on a cycle
-   ranks below everything it can reach from, which is where it reads from. */
+/* A BLOCK SITS ONE ROW ABOVE THE NEAREST BLOCK THAT READS IT, and a block
+   nothing reads sits on the bottom row. Depth alone put every source on row
+   zero whatever read it, so a transmitter feeding the last rank ran a wire the
+   whole height of the picture past everything in between. The longest path is
+   still the pass that orders the work - it is what settles a block's readers
+   before the block, and it is what a cycle is broken on. */
 function ctlRanks(T){
-  const ids=Object.keys(T), rank={}, deg={}, kids={};
-  for(const id of ids){ deg[id]=0; kids[id]=[]; rank[id]=0; }
+  const ids=Object.keys(T), deep={}, deg={}, kids={};
+  for(const id of ids){ deg[id]=0; kids[id]=[]; deep[id]=0; }
   for(const id of ids) for(const src of T[id].in) if(src&&T[src]){ deg[id]++; kids[src].push(id); }
   const q=ids.filter(id=>deg[id]===0); let top=0;
-  while(q.length){ const id=q.shift(); top=Math.max(top,rank[id]);
-    for(const k of kids[id]){ rank[k]=Math.max(rank[k],rank[id]+1); if(--deg[k]===0) q.push(k); } }
-  for(const id of ids) if(deg[id]>0) rank[id]=top+1;
+  while(q.length){ const id=q.shift(); top=Math.max(top,deep[id]);
+    for(const k of kids[id]){ deep[k]=Math.max(deep[k],deep[id]+1); if(--deg[k]===0) q.push(k); } }
+  for(const id of ids) if(deg[id]>0) deep[id]=top+1;
+  const rank={};
+  for(const id of ids.slice().sort((a,b)=>deep[b]-deep[a])){
+    let r=null;
+    for(const k of kids[id]) if(rank[k]!=null) r = r==null ? rank[k]-1 : Math.min(r,rank[k]-1);
+    rank[id] = r==null ? top : r;
+  }
+  const lo=Math.min(...ids.map(id=>rank[id]));
+  for(const id of ids) rank[id]-=lo;
   return rank;
 }
 const blkNum=id=>+String(id).replace(/\D/g,"")||0;
@@ -103,6 +118,39 @@ function ctlLayout(T,w){
   });
   return {pos, seams, h:Math.max(CG_NH+2*CG_PAD, y+band+CG_PAD)};
 }
+/* only the keys ui/margin.js also passes: opts.config assigns into the router's
+   shared C. laneGap is the frame's price - at 4 the lane spreading, with the
+   wall leaving it nowhere to shift, evicted 12 wires through a box. */
+const CG_ROUTE_C={clearance:12, bendCost:40, laneGap:2, nodeHalo:4, haloCost:0};
+// gates, not faces: a wire leaves and arrives downwards, so it lands on the stud it is wired to
+function ctlRoutes(T,L,w){
+  const nodes=[], edges=[];
+  // the picture's own edges are walls - the SVG does not clip, and a free outside is a cheap detour
+  const M=24;
+  nodes.push({id:"wall:l", x:-M, y:-M, w:M, h:L.h+2*M},
+             {id:"wall:r", x:w,  y:-M, w:M, h:L.h+2*M},
+             {id:"wall:t", x:-M, y:-M, w:w+2*M, h:M},
+             {id:"wall:b", x:-M, y:L.h, w:w+2*M, h:M});
+  for(const id in L.pos){ const c=L.pos[id]; nodes.push({id, x:c.x, y:c.y, w:CG_NW, h:CG_NH}); }
+  // every wire a block feeds leaves by its own point on the bottom edge, or a
+  // block read by six of them sends six wires down one line
+  const outs={}, sent={};
+  for(const id in T) for(const s of T[id].in) if(s&&L.pos[s]) (outs[s]||(outs[s]=[])).push(id);
+  for(const id in T){ const b=T[id], c=L.pos[id]; if(!c) continue;
+    const n=b.in.length;
+    b.in.forEach((src,i)=>{ const a=src&&L.pos[src]; if(!a) return;
+      const k=outs[src].length, j=(sent[src]=(sent[src]||0)+1)-1;
+      edges.push({key:id+"<"+i, from:src, to:id,
+        fromGate:{pt:[a.x+CG_NW*(j+1)/(k+1), a.y+CG_NH], dir:"S", face:"B"},
+        toGate:{pt:[c.x+CG_NW*(i+1)/(n+1), c.y], dir:"S", face:"T"}}); });
+  }
+  return edges.length ? ROUTE.routeGraph(nodes,[],edges,{config:CG_ROUTE_C}) : new Map();
+}
+// the colour a box and every wire off it wears; a wire carries its source's output
+const CGCAT={read:["source","const"], math:["math","sel"],
+             time:["pid","integ","lag","limit"], logic:["compare","latch"], drive:["sink"]};
+const CGCAT_OF={}; for(const k in CGCAT) for(const m of CGCAT[k]) CGCAT_OF[m]=k;
+const blkCat=b=>"cat-"+(CGCAT_OF[b.mode]||"math");
 const ctlFmt=(v,u)=>{ if(v==null||!isFinite(v)) return "—";
   const a=Math.abs(v), s=a>=100?v.toFixed(0):a>=10?v.toFixed(1):a>=1?v.toFixed(2):v.toFixed(3);
   return u?s+" "+u:s; };
@@ -144,7 +192,7 @@ function blkTitle(T,id){ if(!T[id]) return blkNo(id);
 /* the tooltip is the block's own paper: what it is, what it is of, what is
    wired into every slot. Never its value - the box already carries that live,
    and a tooltip built at pointerover would sit there going stale. */
-function blkTipBody(T,id,s){ const b=T[id], m=BLK[b.mode], L=[m.tip];
+function blkTipBody(T,id,s){ const b=T[id], m=BLK[b.mode], note=noteFor(id), L=note?[note,m.tip]:[m.tip];
   const arg=blkArgName(b); if(arg) L.push("OF: "+arg);
   const u=blkLabel(s,id).u; if(u) L.push("PUTS OUT: "+u);
   if(m.ins.length) L.push(m.ins.map((nm,i)=>nm+": "+(b.in[i]&&T[b.in[i]]?blkTitle(T,b.in[i]):"nothing wired")).join("\n"));
@@ -190,7 +238,7 @@ function ctlPicMk(live){
     if(e.target.closest(".ctlg-blk,.ctlg-stud,.ctlg-ed-win")) return;
     CTLV.sel=null;
   }});
-  let sig=null, box={}, runs=[], lastPos={}, rubber=null, drag=null;
+  let sig=null, box={}, runs=[], xruns=[], lastPos={}, rubber=null, drag=null;
   /* the cabinet's shape, and nothing that moves inside it: a value changing
      must never cost a rebuild, and the width must always cost one */
   const shape=(T,w)=>{ const a=[live?1:0,Math.round(w/8)];
@@ -198,7 +246,7 @@ function ctlPicMk(live){
     return a.join("|"); };
   const build=(T,w,s,ALL)=>{
     ALL=ALL||T;
-    root.innerHTML=""; box={}; runs=[];
+    root.innerHTML=""; box={}; runs=[]; xruns=[];
     const L=ctlLayout(T,w); lastPos=L.pos;
     if(root.style.height!==L.h+"px"){ root.style.height=L.h+"px"; CTLV.seq++; }
     const sv=svgEl("svg","ctlg-wires");
@@ -207,7 +255,7 @@ function ctlPicMk(live){
     root.appendChild(sv);
     for(const sy of L.seams){ const ln=svgEl("line","ctlg-seam");
       ln.setAttribute("x1",CG_PAD); ln.setAttribute("x2",w-CG_PAD); ln.setAttribute("y1",sy); ln.setAttribute("y2",sy); sv.appendChild(ln); }
-    const placed=[];
+    const RT=ctlRoutes(T,L,w), placed=[];
     for(const id in T){ const b=T[id], c=L.pos[id];
       b.in.forEach((src,i)=>{ if(!src||!ALL[src]) return;
         const n=b.in.length;
@@ -216,44 +264,35 @@ function ctlPicMk(live){
            comes from, so it is drawn as a stub into the stud, labelled with the
            block it comes from and the section that holds it. */
         if(!T[src]||!L.pos[src]){
-          const x1=c.x+CG_NW*(i+1)/(n+1), y1=c.y, g=svgEl("g","ctlg-wire ctlg-xseg");
+          const x1=c.x+CG_NW*(i+1)/(n+1), y1=c.y, g=svgEl("g","ctlg-wire ctlg-xseg "+blkCat(ALL[src]));
           const pl=svgEl("polyline"); pl.setAttribute("points",[x1+","+(y1-CG_GY),x1+","+y1].join(" ")); g.appendChild(pl);
           const hd=svgEl("polygon","ctlg-head"); hd.setAttribute("points",[x1+","+y1,(x1-3)+","+(y1-5),(x1+3)+","+(y1-5)].join(" ")); g.appendChild(hd);
           const t=svgEl("text","ctlg-wire-lab");
           t.setAttribute("x",x1); t.setAttribute("y",y1-CG_GY-2);
           t.textContent=blkWord(src,ALL[src])+" · "+segName(segOf(src));
           g.appendChild(t); sv.appendChild(g);
+          xruns.push({g,dst:id});
           return;
         }
         const a=L.pos[src];
-        const x0=a.x+CG_NW/2, y0=a.y+CG_NH, x1=c.x+CG_NW*(i+1)/(n+1), y1=c.y;
-        const ym=y1>y0 ? y1-CG_GY/2 : y0+CG_GY/2;
-        const g=svgEl("g","ctlg-wire");
-        const pl=svgEl("polyline"); pl.setAttribute("points",[x0+","+y0,x0+","+ym,x1+","+ym,x1+","+y1].join(" ")); g.appendChild(pl);
+        const x1=c.x+CG_NW*(i+1)/(n+1), y1=c.y;
+        // the elbow is the fallback: a route the router declined still has to land on its stud
+        const rt=RT.get(id+"<"+i);
+        const pts=(rt&&rt.pts&&rt.pts.length>=2) ? rt.pts
+          : [[a.x+CG_NW/2,a.y+CG_NH],[a.x+CG_NW/2,y1-CG_GY/2],[x1,y1-CG_GY/2],[x1,y1]];
+        const g=svgEl("g","ctlg-wire "+blkCat(T[src]));
+        const pl=svgEl("polyline"); pl.setAttribute("points",pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ")); g.appendChild(pl);
         const hd=svgEl("polygon","ctlg-head"); hd.setAttribute("points",[x1+","+y1,(x1-3)+","+(y1-5),(x1+3)+","+(y1-5)].join(" ")); g.appendChild(hd);
-        /* a label per wire, nudged down off any label already at that spot -
-           the same pricing the canvas did, on an estimate of the glyph width.
-           MEASURED ON THE STRING sync() WILL ACTUALLY DRAW: the bench label is
-           the unit and the control room's is the value, and pricing both as
-           the value left the bench's labels overlapping at narrow widths. */
-        const t=svgEl("text","ctlg-wire-lab"), lx=(x0+x1)/2;
-        /* THE LABEL SITS AT THE END IT ARRIVES AT, in the lane immediately above
-           the block that reads it - not at the middle of the wire. A wire from
-           a source down to the second wrapped row of the next rank crosses a
-           whole row of boxes, and its midpoint is inside one of them: the box
-           is opaque and painted after the wires, so the label was simply gone.
-           It also reads better there, beside the input it is feeding.
-           The nudge may only move inside that lane, and where the lane is full
-           it stops rather than stepping out of it. */
-        const down=y1>y0;
-        const laneBot=down ? y1-2 : Math.max(y0,y1)-2;
-        const laneTop=down ? y1-CG_GY+CG_LAB_H : Math.min(y0,y1)+CG_LAB_H;
-        let ly=clamp(ym-3, Math.min(laneTop,laneBot), laneBot);
+        // over the stud it arrives at: a routed wire's midpoint can be under an opaque box
+        const t=svgEl("text","ctlg-wire-lab"), lx=x1;
+        const laneBot=y1-3, laneTop=y1-CG_GY+CG_LAB_H;
+        let ly=laneBot;
+        // priced on the string sync() will draw: the bench says the unit, the control room the value
         const wide=id=>(live ? String(blkSub(T,id,s)) : (blkLabel(s,id).u||"")).length*4.6;
         for(let k=0;k<10;k++){
           if(!placed.some(r=>Math.abs(r.x-lx)<(r.w+wide(src))/2+3 && Math.abs(r.y-ly)<CG_LAB_H)) break;
-          if(ly+CG_LAB_H>laneBot) break;
-          ly+=CG_LAB_H; }
+          if(ly-CG_LAB_H<laneTop) break;
+          ly-=CG_LAB_H; }
         placed.push({x:lx,y:ly,w:wide(src)});
         t.setAttribute("x",lx); t.setAttribute("y",ly); g.appendChild(t);
         sv.appendChild(g);
@@ -264,12 +303,15 @@ function ctlPicMk(live){
       const el=KIT.el("button","ctlg-blk"); el.type="button";
       el.style.left=c.x+"px"; el.style.top=c.y+"px";
       el.style.width=CG_NW+"px"; el.style.height=CG_NH+"px";
-      el.classList.add("m-"+T[id].mode);
+      el.classList.add(blkCat(T[id]));
       const nm=KIT.el("span","ctlg-blk-name"), sub=KIT.el("span","ctlg-blk-sub"), spec=KIT.el("span","ctlg-blk-spec");
       nm.textContent=blkWord(id,T[id]); el.append(nm,sub,spec);
       KIT.tip(el,blkTitle(T,id),blkTipBody(T,id,s));
       el.dataset.blk=id;
-      MOUSE.on(el,{click(){ CTLV.sel = CTLV.sel===id ? null : id; }});
+      MOUSE.on(el,{click(){ CTLV.sel = CTLV.sel===id ? null : id; },
+        enter(){ CTLV.hov=id; CTLV.hovT=performance.now(); },
+        // hovOn is left standing: leave fires before the next enter, so block to block switches without re-arming
+        leave(){ if(CTLV.hov===id) CTLV.hov=null; }});
       root.appendChild(el); box[id]={el,nm,sub,spec};
       fitName(nm);   // AFTER it is on the page: an element out of the document measures 0 and fits anything
       /* THE HANDLES A WIRE IS DRAWN BY. A wire is geometry, so it is dragged
@@ -350,14 +392,23 @@ function ctlPicMk(live){
   }
   function sync(){
     const ALL=ctlTable(live), w=root.clientWidth;
-    if(!ALL||w<=0){ if(sig!==null){ root.innerHTML=""; sig=null; box={}; runs=[]; rubber=null; } return; }
+    if(!ALL||w<=0){ if(sig!==null){ root.innerHTML=""; sig=null; box={}; runs=[]; xruns=[]; rubber=null; } return; }
     // ONE SECTION AT A TIME. The whole cabinet is still what a wire may reach.
     const T=ctlSegTable(ALL);
     const s=live?S:null, nsig=ctlSeg()+"|"+shape(T,w);
     if(nsig!==sig){ sig=nsig; build(T,w,s,ALL); rubberDraw(); }
     root.classList.toggle("dead",!!(live&&!ctlLive(S)));
+    if(!CTLV.hov) CTLV.hovOn=false;
+    else if(!CTLV.hovOn && performance.now()-CTLV.hovT>=CG_HOV_MS) CTLV.hovOn=true;
+    // a pick outlives the pointer, so it wins over the hover
+    const foc = CTLV.sel && T[CTLV.sel] ? CTLV.sel
+              : (CTLV.hovOn && T[CTLV.hov] ? CTLV.hov : null);
+    const near = foc ? new Set([foc]) : null;
+    if(near){ for(const src of T[foc].in) if(src) near.add(src);
+      for(const id in T) if(T[id].in.includes(foc)) near.add(id); }
     for(const id in box){ const b=T[id], o=box[id];
       o.el.classList.toggle("sel",CTLV.sel===id);
+      o.el.classList.toggle("dim",!!near&&!near.has(id));
       o.el.classList.toggle("off",!b.on);
       // a rename does not move a box, so the picture is not rebuilt for one - but the type has to be refitted to it
       { const nm=blkWord(id,b); if(o.nm.textContent!==nm){ o.nm.textContent=nm; fitName(o.nm); } }
@@ -366,7 +417,9 @@ function ctlPicMk(live){
     }
     for(const r of runs){ const on=T[r.src].on&&T[r.dst].on;
       r.g.classList.toggle("off",!on);
+      r.g.classList.toggle("dim",!!foc&&r.src!==foc&&r.dst!==foc);
       r.t.textContent = live ? blkSub(T,r.src,s) : (blkLabel(s,r.src).u||""); }
+    for(const x of xruns) x.g.classList.toggle("dim",!!foc&&x.dst!==foc);
   }
   return {el:root, sync, pos:()=>lastPos};
 }
@@ -394,9 +447,9 @@ function ctlOn(live,id){
    kind or the block list changes, value-synced every call otherwise. */
 const ctlRow=(lab,...els)=>{ const r=KIT.el("div","ctlg-row"); if(lab){ const l=KIT.el("span","ctlg-lab"); l.textContent=lab; r.appendChild(l); } for(const e of els) r.appendChild(e); return r; };
 /* a key that opens a list: the current choice on the key, the choices in the menu */
-function ctlPick(label,items,cur,onPick,tips){
+function ctlPick(label,items,cur,onPick,tips,clss){
   const mk=KIT.menuKey({label:label+": "+(items[cur]||"—")});
-  const ol=KIT.optList(items.map((n,i)=>({name:n,tip:tips?tips[i]:""})),{onSelect:i=>{ onPick(i); KIT.show(mk.menu,false); mk.key.set({on:false}); }});
+  const ol=KIT.optList(items.map((n,i)=>({name:n,tip:tips?tips[i]:"",cls:clss?clss[i]:""})),{onSelect:i=>{ onPick(i); KIT.show(mk.menu,false); mk.key.set({on:false}); }});
   mk.menu.appendChild(ol.el); ol.set(cur);
   return {el:mk.el, set:(i,its)=>{ ol.set(i); mk.key.set({label:label+": "+((its||items)[i]||"—")}); }};
 }
@@ -429,7 +482,13 @@ function ctlEditorMk(live){
     const onB=KIT.button("ON",{flat:true,size:7,tip:"Whether this block computes. Off, its output holds and any sink under it lets go of its demand.",onClick:()=>ctlOn(live,id)});
     P_.on=onB; r.el.appendChild(onB.el);
     if(!live) r.el.appendChild(KIT.button("REMOVE",{flat:true,size:7,danger:true,tip:"Takes this block out of the cabinet and unwires everything that read it.",onClick:()=>{ removeBlock(id); CTLV.sel=null; }}).el);
-    if(!live){ const mp=ctlPick("KIND",BLK_MODES.map(k=>BLK[k].lab),BLK_MODES.indexOf(b.mode),i=>{ setBlockMode(id,BLK_MODES[i]); },BLK_MODES.map(k=>BLK[k].tip)); root.appendChild(ctlRow(null,mp.el)); }
+    if(!live){ const mp=ctlPick("KIND",BLK_MODES.map(k=>BLK[k].lab),BLK_MODES.indexOf(b.mode),i=>{ setBlockMode(id,BLK_MODES[i]); },BLK_MODES.map(k=>BLK[k].tip),BLK_MODES.map(k=>blkCat({mode:k}))); root.appendChild(ctlRow(null,mp.el)); }
+    // what this block is FOR, in words. Design data, so the bench writes it and the box reads it back in its tooltip
+    if(!live){ P_.note=KIT.textInput({multiline:true, rows:2, cls:"ctlg-note-input", maxLength:NOTE_CAP,
+        placeholder:"why this block is here", title:"NOTE",
+        tip:"A note on this block, in your own words. It is read back on the box's own tooltip.",
+        onChange:v=>{ setNote(id,v); dTouch(); }});
+      P_.note.set(noteFor(id)); root.appendChild(ctlRow(null,P_.note.el)); }
     if(b.mode==="source"){ const keys=Object.keys(SIGNAL);
       P_.sig=ctlPick("SIGNAL",keys.map(k=>SIGNAL[k].lab+(SIGNAL[k].u?" ("+SIGNAL[k].u+")":"")+" · "+SIGNAL[k].scope),keys.indexOf(b.sig),i=>ctlWrite(live,id,"sig",keys[i]));
       P_.sigKeys=keys; root.appendChild(ctlRow(null,P_.sig.el)); }
@@ -484,6 +543,7 @@ function ctlEditorMk(live){
     if(P_.arg) P_.arg.set(P_.args.indexOf(b.arg));
     if(P_.op) P_.op.set(P_.ops.indexOf(b.op));
     if(P_.seg) P_.seg.set(P_.segIds.indexOf(segOf(id)));
+    if(P_.note) P_.note.set(noteFor(id));
     P_.ins.forEach((o,slot)=>o.pk.set(o.others.indexOf(b.in[slot])+1));
     for(const k in P_.num){ const v=b[k]; P_.num[k].set(v==null?null:v); if(BLK[b.mode].knobs[k]===null) P_.num[k].setAuto(v==null); }
   }
@@ -577,6 +637,19 @@ function ctlGraphMk(live){
      AUTOMATION, on the bench and in the control room alike - and this drew a
      second one directly under it saying the same word. */
   const tabs=ctlTabsMk(live); root.appendChild(tabs.el);
+  /* WHAT THIS SECTION IS FOR, under its own tab: typed on the bench, read in
+     the control room. It is the one explanation on this panel that is not a
+     tooltip, because it is the player's own and nobody hovers a tab to look
+     for one. */
+  const note = live ? KIT.el("div","ctlg-seg-note")
+    : KIT.textInput({multiline:true, rows:2, cls:"ctlg-seg-note", maxLength:NOTE_CAP,
+        placeholder:"what this section is for", title:"SECTION NOTE",
+        tip:"A note on this section, in your own words. The control room reads it back.",
+        onChange:v=>{ setNote(ctlSeg(),v); dTouch(); }});
+  root.appendChild(live?note:note.el);
+  const noteSync=()=>{ const t=noteFor(ctlSeg());
+    if(live){ KIT.show(note,!!t); if(note.textContent!==t) note.textContent=t; }
+    else note.set(t); };
   const cols=KIT.el("div","ctlg-cols");
   const pic=ctlPicMk(live);
   cols.append(pic.el); root.appendChild(cols);
@@ -587,7 +660,7 @@ function ctlGraphMk(live){
      dropping a SECTION belongs to the tab strip and lives there. */
   if(!live){ const keys=KIT.el("div","ctlg-keys");
     const mk=KIT.menuKey({label:"ADD",cls:"ctlg-add",tip:"ADD A BLOCK, in the section that is open. Pick its kind; wire it from its own row after."});
-    const ol=KIT.optList(BLK_MODES.map(k=>({name:BLK[k].lab,tip:BLK[k].tip})),{onSelect:i=>{ CTLV.sel=mintBlock(BLK_MODES[i],ctlSeg()); KIT.show(mk.menu,false); mk.key.set({on:false}); }});
+    const ol=KIT.optList(BLK_MODES.map(k=>({name:BLK[k].lab,tip:BLK[k].tip,cls:blkCat({mode:k})})),{onSelect:i=>{ CTLV.sel=mintBlock(BLK_MODES[i],ctlSeg()); KIT.show(mk.menu,false); mk.key.set({on:false}); }});
     mk.menu.appendChild(ol.el); keys.appendChild(mk.el);
     cols.appendChild(keys); }
   /* ══ THE EDITOR IS A WINDOW ON THE BLOCK, NOT A COLUMN BESIDE THE PICTURE ══
@@ -606,7 +679,7 @@ function ctlGraphMk(live){
     ed.el.style.left=clamp(x,0,Math.max(0,W-w))+"px";
     ed.el.style.top =clamp(p.y,0,Math.max(0,H-h))+"px";
   }
-  const g={el:root, live, sync(){ tabs.sync(); pic.sync(); ed.sync(); edPlace(); }};
+  const g={el:root, live, sync(){ tabs.sync(); noteSync(); pic.sync(); ed.sync(); edPlace(); }};
   CTLG.add(g); return g;
 }
 /* the bench's frame: sync every section still on the page */
