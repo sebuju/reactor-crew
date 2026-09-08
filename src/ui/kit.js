@@ -473,8 +473,10 @@ const KIT = (function(){
     const b = el("button", "kit-numinput-suggest", {type: "button"});
     b.textContent = "AUTO";
     MOUSE.on(b, {click: () => auto.set(!auto.get())});
-    let was = null;
-    return {el: b, set(on){ if(was === on) return; was = on; b.classList.toggle("on", on); }};
+    let was = null, wasTip = null;
+    return {el: b, set(on){ if(was === on) return; was = on; b.classList.toggle("on", on); },
+      // the basis and what it currently works out to, refreshed with the row
+      setTip(body){ if(body == null || body === wasTip) return; wasTip = body; tip(b, "AUTO", body); }};
   }
 
   function numInput(opts){
@@ -518,7 +520,8 @@ const KIT = (function(){
       if(sug) sug.set(on);
       t.input.disabled = on;
       root.classList.toggle("kit-numinput-auto", on); };
-    return {el: root, set: show, get: () => live, setAuto};
+    const setAutoTip = body => { if(sug) sug.setTip(body); };
+    return {el: root, set: show, get: () => live, setAuto, setAutoTip};
   }
 
   function optList(items, opts){
@@ -604,7 +607,8 @@ const KIT = (function(){
     }
     const setAuto = on => { if(sug) sug.set(on);
       root.classList.toggle("kit-sliderrow-auto", on); };
-    return {el: root, set, setAuto, slider: sl};
+    const setAutoTip = body => { if(sug) sug.setTip(body); };
+    return {el: root, set, setAuto, setAutoTip, slider: sl};
   }
 
   function readout(opts){
