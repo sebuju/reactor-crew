@@ -355,7 +355,9 @@ function ctxItemsDesign(hit){
   }
   return items;
 }
-ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsDesign, title:ctxTitleDesign});
+/* every gesture on this menu goes through the same door, so anything it places arrives with its figures stated */
+const ctxItemsBaked=(...a)=>ctxItemsDesign(...a).map(it=>Object.assign({},it,{fn:()=>designBakeNew(it.fn)}));
+ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsBaked, title:ctxTitleDesign});
 keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.active="select"; }});
 
 /* one pen per surface: `plan` authors r, `sec` authors z */
@@ -690,6 +692,13 @@ const LATREAD_RODS=[
    cD=>derived(coreIdOf(cD)).sdm<200?"var(--c-red)":null],
 ];
 
+/* the AUTO key states its own basis, and what that basis works out to on THIS ship right now */
+function autoTip(b, fmt){
+  if(!b.sug) return null;
+  const v = b.suggest ? b.suggest() : null;
+  return b.sug + (v!=null && isFinite(v) ? " Here that is "+fmt(v)+"." : "");
+}
+
 function paramBlockMk(block){
   switch(block.kind){
     case "optlist": {
@@ -728,7 +737,7 @@ function paramBlockMk(block){
       const row=KIT.sliderRow({title:block.title,min:block.min,max:block.max,step:block.step,
         fmt:block.fmt,massFn:!!block.massFn,tip:block.tip,auto,onChange:set});
       return {el:row.el,sync(b){
-        if(auto) row.setAuto(auto.get());
+        if(auto){ row.setAuto(auto.get()); row.setAutoTip(autoTip(b, v=>b.fmt?b.fmt(v):String(v))); }
         const v=get();
         row.set(v,null,b.massFn?b.massFn(v)-b.massFn(block.min):undefined);
       }};
@@ -746,7 +755,8 @@ function paramBlockMk(block){
       root.appendChild(n.el);
       return {el:root,sync(b){
         n.set(a.get());
-        if(auto) n.setAuto(auto.get());
+        if(auto){ n.setAuto(auto.get());
+          n.setAutoTip(autoTip(b, v=>(+v).toFixed(b.dp===undefined?2:b.dp)+(b.unit?" "+b.unit:""))); }
         r.setSfx(b.massFn ? b.massFn(a.get()).toFixed(0)+" t" : "");
       }};
     }
@@ -1092,6 +1102,9 @@ function dbBuild(){
   const rst=KIT.button("RESET",{size:8,onClick:()=>{ plantClear(); urlPreset(null); sel=null; preShut(); uiDirty(); }});
   KIT.tip(rst.el,"RESET","Takes the whole ship off the grid: every machine, tank, fitting, port and pipe, and the core back to the stock lattice. What is left is the blank grid a new design starts from, and it still commissions.");
   pres.menu.appendChild(rst.el);
+  const aut=KIT.button("ALL AUTO",{size:8,onClick:()=>{ designAuto(); sel=null; preShut(); uiDirty(); }});
+  KIT.tip(aut.el,"ALL AUTO","Hands every figure on the ship back to its suggestion: bores, walls, transfer coefficients, pump duties, setpoints and plate thicknesses. Nothing is placed or removed - each number goes back to following the design instead of standing where it was left.");
+  pres.menu.appendChild(aut.el);
   PLANTPRE.forEach((pr,i)=>{
     const b=KIT.button(pr[0],{size:8,onClick:()=>{ plantPreset(i); urlPreset(i); sel=null; preShut(); uiDirty(); }});
     KIT.tip(b.el,pr[0],pr[2]);
