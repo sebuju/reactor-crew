@@ -150,7 +150,10 @@ const frameDt=()=>fxDt();
 const pipeDrop={};
 const pipeP={};
 const pipeKg={};
+// nothing has been solved yet: a reader states no flow at all rather than the zero the empty cache reads as
+let pipeFieldOn=false;
 function pipeFieldRefresh(L){
+  pipeFieldOn=false;
   for(const k in pipeDrop) delete pipeDrop[k];
   for(const k in pipeP) delete pipeP[k];
   for(const k in pipeKg) delete pipeKg[k];
@@ -160,6 +163,7 @@ function pipeFieldRefresh(L){
   pipeAnchors(pipeRuns(L));
   if(!L) return;
   netField(L, pipeDrop, pipeP, pipeKg);
+  pipeFieldOn=true;
 }
 // null for a TAP-ENDED run, so a caller draws nothing rather than a zero; never floored at zero
 function pipeRunP(r,L){
@@ -233,15 +237,17 @@ function pipeFmt(v){
   return v.toFixed(1);
 }
 
+// the bench reads a run before anything is commissioned, and P is null until it is
+const pipeConn = key => (P && P.net) ? P.net.byKey[key] : null;
 // off the run's own END PARTS, never P.net.tankNid: a tank's node carries no face and a run end does
 function runTankId(key){
-  const r = P.net && P.net.byKey[key];
+  const r = pipeConn(key);
   if(!r) return null;
   return D.tanks[r.a] ? r.a : D.tanks[r.b] ? r.b : null;
 }
 // signed, and it IS the solve; a vent branch is a dead end there, so it reads what its own valves pass
 function pipeRunKg(key,k,L){
-  const r = P.net && P.net.byKey[key];
+  const r = pipeConn(key);
   if(r && L && !runPortsOpen(L,r)) return 0;
   const b = runVapour(key) ? steamBook(key,k) : null;
   if(b && b.vent){ let q=0;
