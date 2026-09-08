@@ -440,7 +440,7 @@ const flowW = (C, rho, pHi, pLo) => C > 0
   ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(Math.min(pHi-pLo, (1-RCRIT)*Math.max(pHi,0)), 0)*1e6)
   : 0;
 let FLOWG_CHOKE = false;          // set by flowG(), spent by edgeG() on the next line
-const flowG = (C, F, u, v, h, diode, hSrc, chokeAt) => {
+const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
   FLOWG_CHOKE = false;
   if(!(C > 0)) return 0;
   /* THE DRIVING DIFFERENTIAL INCLUDES THE HEAD, and it has to: netFlows()
@@ -498,7 +498,9 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt) => {
      Read off the same one-tick-old field every other term here reads. Signed:
      +1 passes u->v only, -1 passes v->u only. */
   if(diode && d*diode < 0) return 0;
-  const w = C*Math.sqrt(2*Math.max(F.rho[up], 1e-3)*eff*1e6);
+  // a nozzle in the steam space passes the steam's own density, not the vessel's mixture
+  const rho = gasAt === up && F.x[up] > 0 ? F.rhoG[up] : F.rho[up];
+  const w = C*Math.sqrt(2*Math.max(rho, 1e-3)*eff*1e6);
   return w/act;
 };
 /* ══ THE FIELD THE LAW IS LINEARISED ABOUT ══
@@ -512,10 +514,12 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt) => {
 // per-net scratch, reused across solves: a solve allocated three arrays and the store three more, every solve
 const scratch = (net, k, n, Ctor, v) => { const b = net.scr || (net.scr = {}); let a = b[k];
   if(!a || a.length !== n) a = b[k] = new Ctor(n); a.fill(v); return a; };
-const netFieldOf = () => ({p:null, rho:null, x:null, wet:null, mu:null});
+const netFieldOf = () => ({p:null, rho:null, rhoG:null, x:null, wet:null, mu:null});
 function netFieldSize(F, n){
   F.p = new Float64Array(n).fill(typeof P!=="undefined" && P ? P.P0 : 1);
   F.rho = new Float64Array(n).fill(typeof P!=="undefined" && P && P.rho0 ? P.rho0 : 700);
+  // only a node a steam nozzle stands on ever fills this in (netFieldUpdate)
+  F.rhoG = new Float64Array(n);
   F.x = new Float64Array(n);
   F.wet = new Uint8Array(n).fill(1);
   F.mu = new Float64Array(n).fill(SAT_WATER.mu);
@@ -614,6 +618,7 @@ function netFieldUpdate(net, s){
     F.p[i] = p; F.rho[i] = mx.rho; F.x[i] = mx.x; F.b[i] = mx.b;
     F.wet[i] = netNodeDry(net, s, i, mx.rho) ? 0 : 1;
     F.mu[i] = muMixOf(sat[i], mx.x); }
+  for(const i of (net.gasNodes||[])) F.rhoG[i] = rhogOf(sat[i], satT(sat[i], F.p[i]));
   /* ══ AND CONTAINMENT NEVER FEEDS THE PLANT ══
      "A place water goes to and never comes back from" was true of the MASS
      field - containment is left out of it entirely, so it has no book and no
@@ -646,7 +651,7 @@ const edgeG = (net, ed, s) => {
   const C = typeof ed.C === "function" ? ed.C(s) : ed.C;
   const h = C > 0 ? (typeof ed.h === "function" ? ed.h(s) : (ed.h || 0)) : 0;
   const hSrc = C > 0 && ed.hSrc ? ed.hSrc(s) : 0;
-  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc, ed.chokeAt) : 0;
+  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc, ed.chokeAt, ed.gasAt) : 0;
   if(net.choke && ed.i !== undefined) net.choke[ed.i] = (g > 0 && FLOWG_CHOKE) ? 1 : 0;
   return g;
 };
@@ -1399,18 +1404,17 @@ const AUTORULE = {
 
    The config for every instance lives in D.tanks[id] (design.js) - so it
    rides designSig(), the recording head and the save file for free - and all
-   of it is free except `side`, which decides whether the tank gets a node at
-   all. Neither mass nor node is config: mass follows from `vol`, and
+   of it is free. Neither mass nor node is config: mass follows from `vol`, and
    netBuild() writes the CURRENT node back every rebuild off the part's own
    declared ROLE.fixed and whatever pipeNetwork() actually routed that frame.
+   No `side` row either: which side a tank is on is read off the runs
+   (tankCircuit(), layout.js), and a tank nobody has piped is on no side.
 
-     side    "primary"   - a node in the graph and one solved edge
-             "secondary" - a boundary, no node, no solve (CLAUDE.md: the
-                           secondary is PRICED, not solved)
-     vol     capacity, in % of that side's own reference inventory -
-             loopKg() for the primary, hotMass() for the secondary. One
-             conversion carries a solved flow into both a tank level and
-             s.inv, so a tank cannot leak into the loop's books.
+     vol     capacity, m^3 - the same number wherever it is piped, where the
+             % of a side's reference inventory it used to be resized itself
+             when somebody moved the pipe. One conversion carries a solved
+             flow into both a tank level and s.inv, so a tank cannot leak
+             into the loop's books.
      level   0..100 at commissioning
      fluid   which FLUID row is in it
      gas     {p0,frac} cover gas, or null for a tank with no charge at all.
@@ -1428,19 +1432,10 @@ const AUTORULE = {
              puts the tank on the floor at `drain` %/s, and each point of
              level dumped costs `rel` of release. Latched - a burst disc does
              not reseat.
-     cell    [x,y] on the grid, or null for a SECONDARY tank that has no node
-             and therefore needs no cell: the hotwell lives inside the
-             condenser it condenses into, and giving it a box of its own
-             would be inventing hydraulics the secondary does not have. */
-/* NO `side` ROW. Which side a tank is on is not config and never was a choice
-   the designer should have been asked to make - it is read off the runs
-   (tankCircuit(), layout.js). A new tank starts connected to nothing and is on
-   no side at all until somebody draws a pipe to it. */
-/* ══ A TANK'S SIZE IS A VOLUME, m^3 ══
-   `vol` was a PERCENTAGE of whichever side's reference inventory the tank
-   happened to be plumbed to, so the same tank changed size when somebody
-   moved its pipe. It is cubic metres now and it is the same number wherever
-   it is piped. */
+     cell    [x,y] on the grid, or null for a hosted tank with no node of its
+             own: the hotwell lives inside the condenser it condenses into,
+             and giving it a box of its own would be inventing hydraulics the
+             secondary does not have. */
 const TANK_RHO = 1000;                 // kg/m^3 - what a tank of an unlisted fluid holds
 /* ══ `hold` IS WHAT MAKES A TANK A PRESSURIZER ══
    {p} MPa, or null for an ordinary tank. A hold tank's gas law is not
@@ -2378,6 +2373,16 @@ function netEdges(){
       eb.C = s => (tankLive(s,tid) && portLive(s,r.pb)) ? pipeC(bore, Lh, 0,  fb()) : 0;
       // a checked tank's line passes OUT of the tank only (flowG's diode)
       if(D.tanks[tid].check) ea.diode = eb.diode = tankIdOf(ends[0]) ? 1 : -1;
+      /* ══ A RELIEF VALVE IS FITTED ON THE STEAM SPACE ══
+         Which is why a vessel has one: it relieves the gas and keeps its
+         water. The vessel hands this line its VAPOUR - density, enthalpy and
+         whatever the gas is carrying - and the line and the valve past it are
+         ordinary pipe reading what arrived. Structural, off the fitting the
+         run lands on; a vessel with no bubble in it relieves what it has. */
+      { const at = tankIdOf(ends[0]) ? 0 : 1, far = ends[at ? 0 : 1];
+        const fp = partOf(far) || partOf(far.slice(0, -1));
+        if(fp && fitMode[fp.id] === "relief"){
+          if(at) eb.gasAt = v; else ea.gasAt = u; } }
       edges.push(ea, eb);
       continue;
     }
@@ -3088,6 +3093,8 @@ function netFinish(net2, ctx){
      The DATUM COLUMN this used to decide is gone with the datum: what is left
      reading it is the vapour build and the renderer's own "is this run steam"
      question, both of which are asking the same structural thing. */
+  // the nodes a steam nozzle draws on, so the field prices a vapour density for those and no others
+  net2.gasNodes = [...new Set(edges.filter(ed => ed.gasAt !== undefined).map(ed => ed.gasAt))];
   net2.vapour = new Uint8Array(net2.n);
   { const any = new Uint8Array(net2.n);
     net2.vapour.fill(1);
@@ -5687,8 +5694,10 @@ function plantPreset(i){
      written above it, a preset's own starting positions were cleared by the
      line that clears the machine sizes.
      Every preset commissions with protection DEFEATED, so a plant runs its
-     faults out instead of tripping on the first one; a row may still arm it. */
-  D.start["byp:rps"] = true;
+     faults out instead of tripping on the first one. It is the scram block's
+     own switch now, not a D.start position: an automatic system is a graph,
+     and there is nothing else left to defeat. */
+  scramBlocksOn(false);
   Object.assign(D.start, q.start||{});
 }
 /* THE EMPTY SHIP, which is the one plant no preset can describe: it is where a
