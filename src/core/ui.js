@@ -55,6 +55,11 @@ const vPt=p=>{ const o=vOrigin();
 const vScr=p=>{ const o=vOrigin();
   return {x:o.x+p.x*VIEW.s, y:o.y+p.y*VIEW.s}; };
 const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
+/* ...ON THE PLANT, which a point measured on a hosted canvas never is. Each host
+   has its own space and they overlap numerically (ptrHost, top of this file), so
+   a press inside the core panel passes vIn() too - which is how a right click on
+   the lattice opened the deck menu for whatever machine the panel stood over. */
+const vHit=p=>!ui.ptrHost&&vIn(p);
 function vBox(x,y,w,h){ VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h; }
 /* ══ A CELL IS A WHOLE NUMBER OF SCREEN PIXELS, AND THE PLANT STANDS ON ONE ══
    The plant is drawn in grid units and then scaled twice - the stage's own
@@ -256,7 +261,7 @@ addEventListener("keydown",e=>{
   }
   /* BEFORE THE REGISTRY, because it takes Enter off the zoom row while a key
      inside a panel has the focus - and answers false when nothing does, so the
-     row still fires (panKeyNav, ui/hoverwin.js). */
+     row still fires (panKeyNav, ui/selwin.js). */
   if(typeof panKeyNav==="function" && panKeyNav(e)) return;
   // shift is part of the stroke, so a row without it never fires under one
   const K=keyList().find(k=>k.k===e.key && !!k.shift===e.shiftKey);
@@ -707,7 +712,7 @@ function uiDown(e,el){
        is. HELD, it lifts every cell it is dragged over, the mirror of the left
        button laying them. A cell nothing owns is simply nothing to lift, and
        the drag stands whether or not the first one was. */
-    if(screen==="design" && TOOL.active==="paint" && vIn(p)){
+    if(screen==="design" && TOOL.active==="paint" && vHit(p)){
       dragOn({type:"materase", v:1, last:cellAt(vPt(p))});
       matLiftAt(vPt(p));
       return;
@@ -724,7 +729,7 @@ function uiDown(e,el){
       dragOn({type:"portr"});
       return; }
     // measured on #cv: hostLocal() is relative to a panel the pan itself moves
-    if(!e.shiftKey){ const lp=local(e);
+    if(!e.shiftKey && !ui.ptrHost){ const lp=local(e);
       dragOn({type:"pan",lx:lp.x,ly:lp.y,sx:lp.x,sy:lp.y,moved:false}); }
     return; }
   isTouch = e.pointerType==="touch" || e.pointerType==="pen";
@@ -739,14 +744,14 @@ function uiDown(e,el){
      other input, so a tape and a scenario carry it. A control strip standing
      over the plant is not a target: the press is not spent on it, and the tool
      stays up for the machine the hand was aiming at. */
-  if(screen==="operate" && TOOL.active==="hit" && vIn(p)){
+  if(screen==="operate" && TOOL.active==="hit" && vHit(p)){
     const aim=hitAimAt(vPt(p));
     if(!aim && w) return;
     TOOL.active="select";
     if(aim) act("hit",aim);
     return;
   }
-  if(screen==="design" && TOOL.active==="paint" && vIn(p)){
+  if(screen==="design" && TOOL.active==="paint" && vHit(p)){
     const c=cellAt(vPt(p));
     // COMMITTED AS IT GOES: a painted cell has no shape to settle, it is one
     // cell, and the fill under the hand is what the player is watching change
@@ -763,7 +768,7 @@ function uiDown(e,el){
      into `sel`: a key always contains a colon and a part id never does, so
      every partOf(sel) reader already answers null for one. */
   // the wall is picked on both screens; only the RUN has no control-room panel
-  if(!w && vIn(p) && typeof runsAtCell==="function"){
+  if(!w && vHit(p) && typeof runsAtCell==="function"){
     const c=cellAt(vPt(p));
     // wall before pipe, the order hitAimAt() already resolves a penetration in
     if(matCell(c[0],c[1])){ sel="mat:"+c[0]+","+c[1]; return; }

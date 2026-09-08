@@ -1,89 +1,57 @@
 "use strict";
 /* ══ THE SAME PANEL AGAIN, AS A PEEK ══
    An inspector window (ui/inspwin.js) is PARKED: the reader opened it and it
-   stays until they close it. A hover window is the other half of that - it
-   costs no click, it stands beside the machine the pointer is over, and it
-   goes when the pointer does. One at a time.
+   stays until they close it. A peek is the other half of that - it stands
+   beside the MACHINE THAT IS PICKED and goes when the pick does. One at a time,
+   because there is one selection.
 
    AND IT IS WHERE A PARKED WINDOW COMES FROM: drag the peek and it stays
-   (hovwPin). That is the whole door - a window is not opened, it is kept.
+   (selwPin). That is the whole door - a window is not opened, it is kept.
 
    IT IS NOT A THIRD PANEL. panPartSync() (ui/margin.js) is still the one fill
    and marginPan() the one handle shape; inspAim(), inspDrag(), inspKeys() and
-   inspMove() are shared with the parked window, so this file is life only.
+   inspMove() are shared with the parked window, so this file is life only. */
 
-   ── THE HAND MUST BE ABLE TO REACH IT ──
-   The pointer leaving the machine is not the panel closing: it has to be able
-   to walk off the box, across the gap, and onto the panel to touch a control.
-   So the ground that keeps it up is the machine, the panel, and the box the two
-   of them span (hovwNear); the grace timer only covers leaving all three. */
-
-const HOVW_GRACE=280;
-
-function hovwHost(root){
-  const el=KIT.el("div","hovw-host");
-  // the peek stands over the deck, so its wheel and right drag are the deck's (ui/margin.js)
-  panWheelPass(el);
-  el._win=null; el._at=0;
+/* ══ A PEEK IS SEATED, NOT BOLTED, SO THE HAND MOVES THE PEEK ══
+   selwPlace() re-seats it beside its machine every frame and clamps it into the
+   frame, so panning the deck under it does nothing until the machine has
+   travelled most of a screen - which reads as a dead wheel on the one panel the
+   reader is holding. The gesture is spent on the peek's own offset instead:
+   same promise as everywhere else, the box under the hand travels, and
+   panRoom() stops it where a panel runs out. */
+function selwHost(root){
+  const el=KIT.el("div","selw-host");
+  panWheelPass(el,(m,q)=>{
+    const h=el._win; if(!h||h.well.el!==q) return;
+    const d=panRoom(m,q); if(!d.x&&!d.y) return;
+    h.off.x+=d.x; h.off.y+=d.y;
+    selwPlace(h); uiDirty();
+  });
+  el._win=null;
   root.appendChild(el);
   return el;
 }
 
-const hovwNow=()=>(typeof performance!=="undefined"&&performance.now?performance.now():Date.now());
-
-/* ══ ONE READING OF WHERE THE HAND IS, AND EVERYTHING ASKS IT ══
-   This was three answers and they disagreed. `ui.ptr` is parked off screen the
-   moment the pointer crosses onto the panel (uiBind's leave, core/ui.js), and
-   `ui.ptrHost` changes again on a canvas hosted INSIDE the panel; the panel's
-   own enter/leave then had to undo both - and a panel that is re-placed by a
-   transform every frame can slide under a still hand without any crossing
-   event firing at all. That is the flake: three sources, one of them silent.
-   So: the document's own move, in the same LAYOUT units local() gives every
-   other reader, plus the node it landed on. Both are facts, neither is state
-   to keep in step, and a frame can ask them as often as it likes. */
-let hovwPt={x:-1e4,y:-1e4}, hovwTgt=null;
-MOUSE.doc({move(e){
-  const p=local(e);
-  /* AND A HAND THAT MOVES TAKES THE PEEK BACK OFF THE KEYS. It has to be the
-     MOVE and not where the pointer is standing: the hand is on bare deck most
-     of the time, so a test asked per frame cleared the walk's landing the frame
-     after it happened and the keys never opened anything at all. */
-  if(Math.abs(p.x-hovwPt.x)>0.5 || Math.abs(p.y-hovwPt.y)>0.5) navLandId=null;
-  hovwPt=p; hovwTgt=e.target;
-}});
-// the drawing itself, not the furniture standing over it
-const hovwOnPlant=()=>hovwTgt===cv;
-const hovwOnEl=el=>!!(el&&hovwTgt&&el.contains(hovwTgt));
-
-/* WHICH MACHINE IS BEING READ, or null.
-   ══ THE WALK FIRST, AND A STILL HAND IS NOT A HOVER ══
-   W A S D lands on a machine and selects it (navCommit, render/navarrow.js),
-   which is the same act as pointing at one, so it opens the same peek. While
-   that landing stands the mouse has NOT moved since it happened - any move
-   clears it, in the handler above - so a pointer parked on some other machine
-   is a stale reading and not a hand on it. The moment the hand moves, the
-   landing is gone and the pointer is the only answer left. */
+/* WHICH MACHINE IS BEING READ, or null: the SELECTION, whichever gesture made
+   it - a click on the box, the W A S D walk's landing (navCommit,
+   render/navarrow.js), a rail row. A pointer resting on a machine is not a
+   pick, so it opens nothing. */
 // a machine the reader already kept a window for is being read in that window;
 // a second panel of the same rows is noise standing over the drawing
-const hovwKept=id=>!!(INSPW_HOST&&INSPW_HOST._wins.some(o=>o.p.id===id));
-function hovwPartAt(){
-  const q = navLandId===sel ? partOf(sel) : null;
-  if(q&&fitted(q)&&!hovwKept(q.id)) return q;
-  if(!ui.drag&&hovwOnPlant()&&vIn(hovwPt)){
-    const pt=vPt(hovwPt);
-    const p=partAt([pt.x,pt.y]);
-    if(p&&fitted(p)&&!hovwKept(p.id)) return p;
-  }
-  return null;
+const selwKept=id=>!!(INSPW_HOST&&INSPW_HOST._wins.some(o=>o.p.id===id));
+function selwPartAt(){
+  const q=partOf(sel);
+  return q&&fitted(q)&&!selwKept(q.id) ? q : null;
 }
 
-function hovwOpen(host,p){
+function selwOpen(host,p){
   const h=marginPan(host,partName(p),()=>null,p);
   // the parked window's look, which is the margin panel's look
   h.well.el.classList.add("insp-win");
   h.wx=0; h.wy=0; h.wtf=null; h.folded=false; h.plant=false; h._force=true; h.peek=true;
+  h.off={x:0,y:0};
   ctxSuppress(h.well.el);
-  h.onDrag=hovwPin;
+  h.onDrag=selwPin;
   inspDrag(h);
   host._win=h;
   return h;
@@ -95,7 +63,7 @@ function hovwOpen(host,p){
    which is what lets the drag that kept it carry straight on into the move.
    The keys arrive with it, because they are what a window that STAYS needs and
    a peek has no use for. */
-function hovwPin(h){
+function selwPin(h){
   const dst=INSPW_HOST; if(!dst) return;
   const src=h.well.el.parentNode;
   if(src&&src._win===h) src._win=null;
@@ -103,27 +71,15 @@ function hovwPin(h){
   h.peek=false;
   dst.appendChild(h.well.el);
   dst._wins.push(h);
-  MOUSE.on(h.well.el,{down(){ inspRaise(h); }});
+  // the raise rides inspHand's own press: MOUSE.on() merges by event name, so a
+  // second `down` registered here would simply take the window's hand off again
+  inspHand(h);
   inspKeys(h);
   inspCollapse(h,false);
+  // a window opens bolted to the deck; the key cuts it loose
+  inspPin(h,true);
 }
-/* ══ THE GROUND BETWEEN THE MACHINE AND ITS PANEL IS STILL THE PANEL'S ══
-   The grace alone was a race the reader kept losing: a hand that sets off
-   towards the panel and hesitates, or takes the long way round a pipe, spends
-   longer than any timer on the deck between the two - and the panel went while
-   they were reaching for it. So the box the two of them span keeps it up, and
-   the timer only has to cover leaving that. In LAYOUT units, which is what
-   ui.ptr is measured in while the pointer is over the canvas. */
-function hovwNear(h){
-  if(!h||!h.well.el.parentNode||hovwPt.x<-1e3) return false;
-  const q=hostRect(h.well.el); if(q.h<1) return false;
-  const r=prect(h.p);
-  const s0=vScr({x:r.x,y:r.y}), s1=vScr({x:r.x+r.w,y:r.y+r.h});
-  const pad=INSPW_GAP;
-  return hovwPt.x>=Math.min(s0.x,q.x)-pad && hovwPt.x<=Math.max(s1.x,q.x+q.w)+pad
-      && hovwPt.y>=Math.min(s0.y,q.y)-pad && hovwPt.y<=Math.max(s1.y,q.y+q.h)+pad;
-}
-function hovwClose(host){
+function selwClose(host){
   const h=host._win; if(!h) return;
   if(h.well.el.parentNode) h.well.el.parentNode.removeChild(h.well.el);
   host._win=null;
@@ -133,9 +89,8 @@ function hovwClose(host){
    To the RIGHT of the machine, and to the left when the right hand edge has not
    the room. Re-asked every frame, because the plant pans and zooms under it -
    and only until a drag keeps it, after which the reader owns the place.
-   The gap is the frame's own (INSPW_GAP, ui/inspwin.js), and it is deck the
-   hand has to cross to reach the panel - see the grace above. */
-function hovwPlace(h){
+   The gap is the frame's own (INSPW_GAP, ui/inspwin.js). */
+function selwPlace(h){
   const host=h.well.el.parentNode; if(!host) return;
   const f=inspFrame(host);
   const w=h.well.el.offsetWidth||h.w, eh=h.well.el.offsetHeight||0;
@@ -144,51 +99,42 @@ function hovwPlace(h){
   const a=marginPage(s0.x,s0.y), b=marginPage(s1.x,s1.y);
   let x=b.x+INSPW_GAP;
   if(x+w>f.x1) x=a.x-INSPW_GAP-w;
-  h.wx=Math.max(f.x0,Math.min(Math.max(f.x0,f.x1-w),x));
-  h.wy=Math.max(f.y0,Math.min(Math.max(f.y0,f.y1-eh),a.y));
+  // the seat first, then wherever the reader has pushed it from that seat
+  h.wx=Math.max(f.x0,Math.min(Math.max(f.x0,f.x1-w),x))+h.off.x;
+  h.wy=Math.max(f.y0,Math.min(Math.max(f.y0,f.y1-eh),a.y))+h.off.y;
   inspMove(h);
 }
 
-// the screen whose peek the keys are talking to - set by hovwSync
-let HOVW_HOST=null;
+// the screen whose peek the keys are talking to - set by selwSync
+let SELW_HOST=null;
 
-function hovwSync(host,live){
+function selwSync(host,live){
   if(!host||typeof LAY==="undefined"||!LAY) return;
-  HOVW_HOST=host;
-  const p=hovwPartAt(), now=hovwNow();
+  SELW_HOST=host;
+  const p=selwPartAt();
   let h=host._win;
-  if(p){
-    host._at=now;
-    if(!h) h=hovwOpen(host,p);
-    else if(h.p.id!==p.id) inspAim(h,p.id);
-  }else if(h){
-    // the hand is on the panel, or in the deck between it and its machine
-    if(ui.drag||hovwOnEl(h.well.el)||hovwNear(h)) host._at=now;
-    else if(now-host._at>HOVW_GRACE){ hovwClose(host); return; }
-    // the grace runs on the clock, and a still hand posts no event to end it
-    else uiDirty();
-  }
-  if(!h) return;
-  // the drawing was edited out from under it: LAY.parts is the authority
-  const q=partOf(h.p.id);
-  if(!q||!fitted(q)){ hovwClose(host); return; }
-  h.p=q;
+  if(!p){ if(h) selwClose(host); return; }
+  if(!h) h=selwOpen(host,p);
+  // a new machine is a new panel, so it opens at its own seat and not at
+  // wherever the last one had been pushed to
+  else if(h.p.id!==p.id){ h.off.x=h.off.y=0; inspAim(h,p.id); }
+  h.p=p;
   const t=panTick(live);
   panPartSync(h,live,t.deep,t.fresh||h._force);
   h._force=false;
   marginColumns(h);
-  hovwPlace(h);
+  selwPlace(h);
 }
 
 /* ══ THE PANEL A MACHINE IS SHOWING IN ══
-   A kept window or a peek, never both for the same machine (hovwKept). This is
+   A kept window or a peek, never both for the same machine (selwKept). This is
    the one door the keys address, so nothing downstream has to know which of the
    two it got. */
 function panOfSel(){
   if(!sel) return null;
   const w=INSPW_HOST&&INSPW_HOST._wins.find(o=>o.p.id===sel);
   if(w) return w.well.el;
-  const h=HOVW_HOST&&HOVW_HOST._win;
+  const h=SELW_HOST&&SELW_HOST._win;
   return h&&h.p.id===sel ? h.well.el : null;
 }
 /* ══ AND THE ARROWS WALK ITS KEYS ══

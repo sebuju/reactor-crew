@@ -1135,7 +1135,7 @@ let holdHov=null;
 const holdPartShow = id => holdHov ? holdHov===id : !pipeHov;
 function pipeHovResolve(){
   pipeHov=null; holdHov=null;
-  if(ui.drag || !vIn(ui.ptr)) return;
+  if(ui.drag || !vHit(ui.ptr)) return;
   const p=vPt(ui.ptr);
   /* THE LABEL FIRST, because a label draws over the pipes: under a stack the
      answer is that stack, even where a foreign run passes beneath it. Only
