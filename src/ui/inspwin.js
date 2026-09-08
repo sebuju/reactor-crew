@@ -140,6 +140,18 @@ function inspKeys(h){
   keys.append(h.keyFold.el,h.keyShut.el);
   h.well.head.appendChild(keys);
 }
+/* which side of the window the leader leaves by: the target's own bearing, weighed against the box's
+   aspect so a wide panel does not take a top face for a target barely above it */
+function inspLeadFace(q,a){
+  const dx=a.x-(q.x+q.w/2), dy=a.y-(q.y+q.h/2);
+  return Math.abs(dx)*q.h >= Math.abs(dy)*q.w ? (dx>=0?"r":"l") : (dy>=0?"b":"t");
+}
+// the middle of that face, wherever the target stands: a leader that slides along the edge reads as a moving part
+function inspLeadPort(q,f){
+  if(f==="l"||f==="r") return {x: f==="r"? q.x+q.w : q.x, y: q.y+q.h/2};
+  return {x: q.x+q.w/2, y: f==="b"? q.y+q.h : q.y};
+}
+
 /* re-read off the live DOM box every frame, so pan, zoom and drag need no listeners */
 function inspLeaders(host){
   if(!host||typeof LAY==="undefined"||!LAY||!host._wins.length) return;
@@ -148,18 +160,27 @@ function inspLeaders(host){
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   for(const h of host._wins){
-    const p=partOf(h.p.id); if(!p) continue;
+    if(!h.key){ const p=partOf(h.p.id); if(!p) continue; h.p=p; }
     const q=hostRect(h.well.el); if(q.h<1) continue;
-    const box=prect(p), c=vScr({x:box.x+box.w/2, y:box.y+box.h/2});
-    const face = q.x+q.w/2 >= c.x ? "r" : "l";
-    const s0=vScr(leaderAnchor(box,face));
+    const box=panRectOf(h); if(!box) continue;
+    const mid=panMidOf(h) || {x:box.x+box.w/2, y:box.y+box.h/2};
+    const c=vScr(mid);
+    const pf=inspLeadFace(q,c);
+    // the machine's own face is the one that looks back at the window
+    const s0 = h.key ? c : vScr(leaderAnchor(box,OPP[pf]));
     // clamped, not culled: the leader still says which way the machine went
     const a={x:clamp(s0.x,vx0,vx1), y:clamp(s0.y,vy0,vy1)};
-    const b={x: face==="r"? q.x : q.x+q.w, y:q.y+q.h/2};
-    if(Math.abs(b.x-a.x)<8) continue;             // sitting on its own machine: no room to turn
-    const gx=(a.x+b.x)/2;
-    const pts = Math.abs(a.y-b.y)<1 ? [a,b] : [a,{x:gx,y:a.y},{x:gx,y:b.y},b];
-    leaderStroke(pts, h.p.id===sel?C.amber:C.lead, [a,b], cvPx(), LEADER_RAD);
+    const b=inspLeadPort(q,pf);
+    // standing ON the window: every route to the edge crosses the panel, so there is no leader to draw
+    if(a.x>q.x-2 && a.x<q.x+q.w+2 && a.y>q.y-2 && a.y<q.y+q.h+2) continue;
+    const flat = pf==="l"||pf==="r";
+    if(Math.abs(flat ? b.x-a.x : b.y-a.y)<8) continue;   // sitting on its own machine: no room to turn
+    // the turn is made in the axis the face points along, or the line would run back across the window
+    const g = flat ? (a.x+b.x)/2 : (a.y+b.y)/2;
+    const pts = flat
+      ? (Math.abs(a.y-b.y)<1 ? [a,b] : [a,{x:g,y:a.y},{x:g,y:b.y},b])
+      : (Math.abs(a.x-b.x)<1 ? [a,b] : [a,{x:a.x,y:g},{x:b.x,y:g},b]);
+    leaderStroke(pts, h.id===sel?C.amber:C.lead, [a,b], cvPx(), LEADER_RAD);
   }
   ctx.restore();
 }
@@ -176,22 +197,34 @@ function inspAim(h,id){
   marginCols(h,1);
 }
 
+// the run was cut or the wall scrubbed out from under a pinned window
+const inspKeyAlive = h => h.key==="run" ? isRunKey(h.id) : isMatKey(h.id);
+
 // the screen whose windows a peek is handed to
 let INSPW_HOST=null;
 
 function inspSync(host,live){
   if(!host||typeof LAY==="undefined"||!LAY) return;
   INSPW_HOST=host;
-  const pick = partOf(sel) ? sel : null;
+  const pick = sel || null;
   /* spent on the change: re-raising every frame would move a DOM node sixty times a second */
   if(host._pickAt!==pick){
     host._pickAt=pick;
-    const on = pick && host._wins.find(h=>h.p.id===pick);
+    const on = pick && host._wins.find(h=>h.id===pick);
     if(on) inspRaise(on);
   }
 
   const t=panTick(live);
   for(const h of host._wins.slice()){
+    // a pinned window is read on the key it was pinned on, never on what the hand has picked since
+    if(h.key){
+      if(!inspKeyAlive(h)){ inspClose(h); continue; }
+      marginKeyFill(h,h.id,t.fresh||h._force,live);
+      h._force=false;
+      marginColumns(h);
+      inspMove(h);
+      continue;
+    }
     // the drawing was edited out from under it: LAY.parts is the authority
     const p=partOf(h.p.id);
     if(!p||!fitted(p)){ inspClose(h); continue; }
