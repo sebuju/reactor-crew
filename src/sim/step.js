@@ -35,12 +35,12 @@ function* commissionGen(){
         the field (advectStep), on the loop's own mass and its own coolant's
         cp. The bench's GRACE TIME column is derived()'s own `grace` and never
         was this. */
-     excess:d.excess, flowMin:clamp(0.30+0.15*(corePumpCap()-sgCount()),0.15,0.75),
-     noise:CHAN[D.chan].noise, id:a.id, name:a.name,
+     excess:d.excess, flowMin:flowMinOf(),
+     id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
      condK:f.condK, pzrK:holdDampK()*L.pzrK,
      dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
-     rps:D.rps, rpsm:D.rpsm, arLo:D.arLo, arHi:D.arHi, rodRate:rodSpdOf(priD()),
+     rpsm:D.rpsm, rpsLag:D.rpsLag, arLo:D.arLo, arHi:D.arHi, rodRate:rodSpdOf(priD()),
      /* IS THERE A VESSEL FOR THE FUEL TO BE IN. The lattice is drawn on its
         own surface, so D.power and every reactivity term above exist whether
         or not a reactor stands on the arrangement grid - see the kinetics
@@ -481,39 +481,16 @@ function* commissionGen(){
   S.dnbr  = P.dnbr0;
   screen="operate"; layout();
 }
-/* ══════════ THE AUTOMATIC SYSTEMS ══════════
-   Every system that acts on the plant without being asked, in one table.
-   Fitted is a design-bench decision and cannot be undone at the panel;
-   bypassed is the operator's, and the operator is allowed to be wrong - all of
-   these can be switched off from the panel, including the ones that only ever
-   help you. Each system is mounted on exactly one component, and that is where
-   its bypass switch is drawn. */
-/* WHETHER A SYSTEM WAS FITTED IS A DESIGN QUESTION, so it must be answerable
-   with no commissioned plant at all - the bench draws these switches too now
-   (a bypass is a STARTING POSITION, see D.start). P is the commissioned copy
-   of exactly these D fields, so it is preferred when there is one and D is the
-   fallback, the same standing secPTarget() has for a caller with no live S. */
-const autoCfg = () => P || D;
-const AUTOSYS={
-  rps:{part:()=>roleId("ctrl"),label:"RPS",ann:"RPS BYP",name:"PROTECTION SYSTEM",
-    fit:()=>autoCfg().rps,
-    tip:"Reactor Protection System. Armed, it scrams the core on high flux, low DNBR, high pressure, high fuel temp, low flow, low pressure, core void or low subcooling. Bypass it to run past rated power - and to melt the core.",
-    warn:"Automatic trips are defeated. Nothing will shut this reactor down for you."},
-  runback:{part:()=>roleId("turb"),label:"RUNBACK",ann:"NO RUNBACK",name:"TURBINE RUNBACK",
-    fit:()=>true,
-    tip:"Drops turbine load to 5% the instant the reactor trips, so the turbine cannot draw heat out of a shut-down core. Bypass it and load stays wherever you left it right through a scram.",
-    warn:"A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop."},
-  bkp:{part:()=>roleId("bkp"),label:"BACKUP",ann:"BACKUP BYP",name:"BACKUP POWER",
-    fit:()=>(P?P.backup:D.bkp)>0,
-    tip:"Picks the coolant pumps up automatically in a blackout. Bypass it and the pumps stay dead: natural circulation is all the core gets.",
-    warn:"The backup supply will not pick up the pumps. A blackout now leaves natural circulation only."},
-};
-const AUTOKEYS = Object.keys(AUTOSYS);
-/* One event key and one title per system, built once. step() raises these
-   thirty times a second and has no business concatenating them each time. */
-const AUTOEV = AUTOKEYS.map(k=>[k, "byp_"+k, AUTOSYS[k].name+" BYPASSED"]);
-const autoFit   = k => !!(AUTOSYS[k] && AUTOSYS[k].fit());
-const autoLive  = k => autoFit(k) && !S.byp[k];
+/* ══════════ THERE IS NO TABLE OF AUTOMATIC SYSTEMS ══════════
+   AUTOSYS was three rows with a bypass switch each, and it is gone. Every
+   system that acts on the plant without being asked is now wired in the
+   control cabinet out of blocks (ctl.js) - protection, runback, the rod and
+   feed controllers alike - so "fitted" is whether somebody wired it and
+   "armed" is whether that block is switched on. One mechanism, asked the one
+   way, and the operator's own graph is the switch panel.
+   Backup power is the exception, and it is not automation: a cabinet cannot
+   compute its way out of the blackout that took its own supply away. It is a
+   property of the switchboard, so it is bought at the bench and read here. */
 /* WHAT THE SWITCHBOARD IS ACTUALLY DELIVERING, as a share of normal: 1 with
    the grid up, the backup's own capacity in a blackout, 0 with no backup on
    the plant. ONE expression, because the coolant pumps and the feedwater pump
@@ -521,7 +498,7 @@ const autoLive  = k => autoFit(k) && !S.byp[k];
    not its feed pumps was a plant where buying a bigger supply made the
    blackout worse. Read ONCE, into every pump's own speed target below - a
    head that read it again was applying the blackout twice. */
-const supplyK = s => s.blackout ? ((!s.bkpLost && autoLive("bkp")) ? P.backup : 0) : 1;
+const supplyK = s => s.blackout ? (s.bkpLost ? 0 : P.backup) : 1;
 const burstPOf = (K,cs) => K.P0*(K.burstK - 0.0028*cs.fatigue);   // fatigue slope is a game figure, no source
 /* ── A PRESSURE-TUBE CORE LETS GO ONE CHANNEL AT A TIME, AT ITS OWN HOTTEST SPOT ──
    The vessel test above is one pressure against one wall. A channel's strength
@@ -564,24 +541,14 @@ function tubeStep(s,cs,K,id,burst){
     s.roomP[i]=Math.max(s.roomP[i], g[i]+kPa); if(s.roomP[i]>s.roomPPk[i]) s.roomPPk[i]=s.roomP[i]; }
   s.roomBang=Math.max(s.roomBang||0, kPa);
 }
-const autoState = k => !autoFit(k) ? "NOT FITTED" : S.byp[k] ? "BYPASSED" : "ARMED";
-/* which system, if any, is mounted on this component - the renderer asks this */
-// AUTOSYS[k].part may be null (a system hosted on a fitting, not a component),
-// so the null host must never match a component that was asked about.
-/* WHICH COMPONENT HOSTS THIS SYSTEM. A row may state it (rps sits on the
-   control station and always will) or ANSWER it off the drawing - the feed
-   controller is mounted on whichever pump actually feeds a generator, which
-   is a question only the graph can settle, and stating an id there would be
-   the stored-flag mistake this codebase keeps deleting. */
-const autoPart  = k => { const v=AUTOSYS[k].part; return typeof v==="function" ? v() : v; };
-const autoOn    = id => AUTOKEYS.find(k=>{ const h=autoPart(k); return h!=null && h===id; }) || null;
-function autoToggle(k){
-  if(!autoFit(k)) return false;
-  S.byp[k]=!S.byp[k];
-  return true;
-}
-const rpsLive  = ()=> autoLive("rps");
-const rpsState = ()=> autoState("rps");
+/* ══ WHETHER THE PLANT IS PROTECTED, ASKED OF THE CABINET ══
+   There is no AUTOSYS row and no bypass switch behind these any more. FITTED
+   is "somebody wired a scram", ARMED is "and the block driving it is on" -
+   which is the same question sinkWired()/sinkDriver() answer for every other
+   demand on the plant, so protection is not a special kind of automation. */
+const rpsLive  = ()=> coreIds().some(rpsArmed);
+const rpsState = ()=> !coreIds().some(id=>sinkWired(S,"scram",id)) ? "NOT FITTED"
+                    : rpsLive() ? "ARMED" : "BYPASSED";
 /* ══════════ FITTINGS ══════════
    Placed (a box in a cell - see D.fittings, layout.js) and worked at the
    panel are two different questions, the same way a protection system is
@@ -722,7 +689,13 @@ const bankAutoLive = (cs,b) => !cs.scrammed && !cs.rodJam && (!cs.split || cs.ba
    actual and the demand, or the lag would wind the turbine straight back up. */
 /* to what the vessels still running can raise: a hall fed by two units keeps
    the other unit's share, a one-unit plant runs back to the 5 % floor */
-function runback(s){ if(!autoLive("runback")) return;
+/* WIRED OR IT DOES NOT HAPPEN. `SINK.runback` (ctl.js) is the block that
+   orders it, off the vessel's own TRIPPED signal, so a plant whose cabinet has
+   no runback block keeps its load right through a scram - which is exactly
+   what bypassing the old switch did. It lands one tick after the trip, the
+   same lag every other controller took when it moved into the cabinet. */
+const runbackLive = () => !!sinkDriver(S,"runback",null);
+function runbackNow(s){
   let live=0; coreEach(s,(cs,K)=>{ if(!cs.scrammed) live+=K.rated; });
   s.load=s.loadDem=Math.min(s.load, Math.max(0.05, P.rated>0 ? live/P.rated : 0)); }
 
@@ -1021,14 +994,22 @@ const mwE   = s => (s.turbWk||0)*turbDh(s.turbP||0, condP(s))*P.eff/1000;
 const mwRej = s => condRej(s)/1000;
 /* A scram is the same act from the diagram and from the inspector, and the
    turbine runback that rides along with it is defeatable, so it lives here. */
-function manualScram(id){
+function manualScram(id){ scramCore(id,"MANUAL SCRAM"); }
+/* THE SAME DROP, ORDERED BY THE CABINET. `why` is the name of the block that
+   went hot (blkBlame(), ctl.js), so a protection channel the player named LOW
+   FLOW is what the log says tripped the plant - the trip's word comes off the
+   drawn graph, never off a table beside it. */
+function rpsScram(id,why){ scramCore(id, why ? "RPS TRIP / "+why : "AUTOMATIC SCRAM"); }
+function scramCore(id,trip){
   const s=S;
   coreOn(s,id,(cs,K,id)=>{
-    cs.scrammed=true; cs.rodDem=1; cs.trip="MANUAL SCRAM";
+    cs.scrammed=true; cs.rodDem=1; cs.trip=trip;
     /* a scram frees a sticky bank, but not a wrecked one - once the drives have
        been shot away only a repair party puts them back */
     if(!s.dmgParts.includes(rodsOf(id))) cs.rodJam=false; });
-  runback(s);
+  /* THE LOAD IS NOT SHED HERE. SINK.runback watches the vessel's own TRIPPED
+     signal and orders it from the cabinet, so a plant with no runback block
+     keeps its load through a scram. */
 }
 
 /* ══════════ COMBAT DAMAGE ══════════
@@ -1083,9 +1064,13 @@ const DMGFX={
   radiator:{msg:"RADIATOR PANEL HIT",
     why:"That panel sheds nothing now. The ship's heat sink is whatever is left of the others, so the condenser climbs and the turbine trips on backpressure.",
     hit:null, fix:null},
+  /* THE CABINET'S DAMAGE IS THAT IT STOPS COMPUTING - ctlLive() (ctl.js) asks
+     partWrecked() and every block holds its last output. It used to set a
+     noiseMul nothing read, which was a fault stated on the panel and absent
+     from the plant. A transmitter that can actually LIE is a separate job. */
   ctrl:{msg:"INSTRUMENT CABINET HIT",
-    why:"Sensor channels lost. Every reading on the panel is now far less trustworthy.",
-    hit:s=>s.noiseMul=3.5, fix:s=>s.noiseMul=1},
+    why:"The control cabinet is wrecked. Every block in it stops computing and every demand it owned holds where it was.",
+    hit:null, fix:null},
   bkp :{msg:"BACKUP POWER HIT",
     why:"Your emergency supply is gone. A blackout now means natural circulation only.",
     hit:s=>s.bkpLost=true, fix:s=>s.bkpLost=false},
@@ -1409,8 +1394,17 @@ const RPS_NEAR=0.03;                        // how close to a setpoint counts as
    under: DNBR 1.0 IS departure (dnbrOf()), so a setpoint below it protects
    nothing at all. */
 const DNBR_TRIP_K=0.72, DNBR_ONSET=1.02;
+/* A CHANNEL NAMES THE SIGNAL IT READS, it does not carry its own reader. The
+   protection system is wired out of blocks now, and a block reads the plant
+   through SIGNAL (trends.js) - so a row that kept its own `val` would be a
+   second spelling of the same reading, free to drift from the one the drawn
+   graph is watching. `thr` is stated in that signal's OWN unit, which is why
+   LOW FLOW reads 102 and not 1.02: SIGNAL.flow is a percentage. */
 const RPS_CH=[
-  ["HIGH FLUX","FLUX",          +1, (P_,m)=>1.10+0.22*m,             s=>s.n],
+  /* Read as a PERCENTAGE, because that is how a flux trip is stated and how
+     the panel prints it. SIGNAL.pwr is SIGNAL.nfr x 100 exactly, so the
+     setpoint carries the same 100 and the channel trips where it always did. */
+  ["flux","HIGH FLUX","FLUX",   +1, "pwr",  (P_,m)=>110+22*m],
   /* The PWR setpoint, or a fixed fraction under what THIS plant commissions
      at - whichever is lower, and never under departure itself. Same argument
      LOW SUBCOOLING and CORE VOID below already carry: a boiling channel
@@ -1419,29 +1413,51 @@ const RPS_CH=[
      own settling transient with nobody aboard. min(), so no plant that used
      to hold this channel can start failing it, and the stock PWR is exactly
      the number it always was. */
-  ["LOW DNBR","DNBR",           -1, (P_,m)=>Math.max(DNBR_ONSET,
-                                       Math.min(1.18-0.16*m, P_.dnbr0*DNBR_TRIP_K)), s=>s.dnbr],
-  ["HIGH PRESSURE","PRESSURE",  +1, (P_,m)=>P_.P0*(1.06+0.07*m),     s=>s.P],
-  ["HIGH FUEL TEMP","FUEL",     +1, (P_,m)=>P_.tdmg+100+280*m,       s=>s.Tf],
-  ["LOW FLOW","FLOW",           -1, P_=>P_.flowMin*1.02,             s=>s.flowNet, s=>s.heat>0.3],
-  ["LOW PRESSURE","PRESSURE",   -1, P_=>P_.P0*0.86,                  s=>s.P],
-  ["CORE VOID","VOID",          +1, (P_,m)=>Math.max(.30,P_.vf0+.20)+.15*m, s=>s.vf],
+  ["dnbr","LOW DNBR","DNBR",    -1, "dnbr", (P_,m)=>Math.max(DNBR_ONSET,
+                                       Math.min(1.18-0.16*m, P_.dnbr0*DNBR_TRIP_K))],
+  ["php","HIGH PRESSURE","PRESSURE", +1, "prs", (P_,m)=>P_.P0*(1.06+0.07*m)],
+  ["tf","HIGH FUEL TEMP","FUEL",+1, "tf",   (P_,m)=>P_.tdmg+100+280*m],
+  ["flow","LOW FLOW","FLOW",    -1, "flow", P_=>P_.flowMin*102,      s=>s.heat>0.3],
+  ["plp","LOW PRESSURE","PRESSURE",  -1, "prs", P_=>P_.P0*0.86],
+  ["void","CORE VOID","VOID",   +1, "vd",   (P_,m)=>Math.max(.30,P_.vf0+.20)+.15*m],
   /* 3 K absolute, or 3 K below what this plant was COMMISSIONED subcooled by -
      whichever is lower. A plant designed saturated has no 3 K to lose. */
-  ["LOW SUBCOOLING","SUBCOOL",  -1, P_=>Math.min(3,P_.sc0-3),        s=>s.sc],
+  ["sub","LOW SUBCOOLING","SUBCOOL", -1, "scc", P_=>Math.min(3,P_.sc0-3)],
 ];
+const RPS_BY=Object.fromEntries(RPS_CH.map(r=>[r[0],r]));
 /* `slack` shifts the setpoint toward the plant, so 0 is the real limit and
    RPS_NEAR is the warning band. Proportional, because every setpoint on the
    table is a positive quantity and a flat offset would mean something
    different on each one. */
+/* THE ONE DOOR ONTO A SETPOINT, so the drawn graph's compare and any built-in
+   reader cannot be handed two different numbers. */
+const rpsSetOf=(key,slack,K)=>{ const r=RPS_BY[key]; if(!r) return 0;
+  K = K || P;
+  return r[5](K,K.rpsm)*(1-r[3]*slack); };
+/* ══ EVERY TRIP POINT, IN THE UNIT ITS CHANNEL IS READ IN ══ so the margin
+   slider can be watched moving them instead of being believed.
+   `K` is the commissioned plant when there is one. A BENCH bag knows four of
+   the six figures a setpoint is priced off - the two that are MEASURED off a
+   settled plant (P.sc0 and P.vf0, its own subcooling and void at rest) do not
+   exist until it commissions, so those come back null and the panel says so
+   rather than printing a number nobody measured. */
+function rpsSetRows(K){
+  return RPS_CH.map(([key,name,,dir,sig])=>{
+    const v=rpsSetOf(key,0,K||P);
+    return {key, name, dir, unit:(SIGNAL[sig]||{}).u||"", val:isFinite(v)?v:null};
+  });
+}
+/* THE BENCH'S BAG, off the design rather than off the last plant commissioned. */
+const flowMinOf = () => clamp(0.30+0.15*(corePumpCap()-sgCount()),0.15,0.75);
+function rpsBenchK(){ const d=derived();
+  return {rpsm:D.rpsm, dnbr0:d.dnbr0, P0:d.P0, tdmg:d.f.tdmg, flowMin:flowMinOf()}; }
 /* ONE VESSEL'S CHANNELS, read through its own view of the plant (coreSeen):
    a core-shaped row reads that vessel, a circuit-shaped row the plant's. */
 function rpsHitCore(slack, s){
-  const m=P.rpsm;
-  for(const [name,word,dir,thr,val,gate] of RPS_CH){
+  for(const [key,name,word,dir,sig,,gate] of RPS_CH){
     if(gate && !gate(s)) continue;
-    const t=thr(P,m)*(1-dir*slack);
-    if(dir>0 ? val(s)>t : val(s)<t) return {name,word};
+    const v=sigRead(s,sig), t=rpsSetOf(key,slack);
+    if(dir>0 ? v>t : v<t) return {name,word};
   }
   return null;
 }
@@ -1450,21 +1466,36 @@ function rpsHit(slack){
   return null;
 }
 function tripCause(){ const h=rpsHit(0); return h?h.name:""; }
+/* ══ WHAT THE PROTECTION SYSTEM IS SAYING, ASKED OF THE CABINET ══
+   The three readers below used to run the channel table themselves. They read
+   the DRAWN graph now, because the graph is the protection system: a player
+   who rewires a channel, retunes it or switches it off must see the board and
+   the reset button agree with what the plant will actually do.
+   `scramArm(id)` is the block feeding that vessel's scram - the trip condition
+   BEFORE the latch, which is exactly what a reset has to be checked against. */
+const scramArm = id => { const sink=sinkDriver(S,"scram",id); if(!sink) return null;
+  const b=S.blkBy[sink], up=b&&b.in[0]&&S.blkBy[b.in[0]]; return up||null; };
+const rpsArmed = id => !!scramArm(id);
 /* The one word for a plant that has NOT tripped yet but is inside the band.
    Null once it actually trips - at that point the latch owns the picture. */
 function tripNear(){
-  if(S.scrammed || rpsHit(0)) return null;
-  const h=rpsHit(RPS_NEAR);
-  return h?h.word:null;
+  if(S.scrammed) return null;
+  for(const id of coreIds()){ const cs=coreState(S,id);
+    if(!cs || !cs.rpsNear) continue;
+    const a=scramArm(id); if(a && a.out>0.5) return null;   // already made: the trip owns the picture
+    const w=blkBlame(S,sinkDriver(S,"nearTrip",id)); if(w) return w; }
+  return null;
 }
 
 /* Why a reset would be refused right now, or "" if it would clear. The button
    and the panel readout ask the same helper, so the promise cannot drift from
-   the act. The veto belongs to a LIVE protection system: bypassed is the
-   operator taking the check off, exactly as it does for the trip itself. */
-const resetVeto = ()=>{ if(!rpsLive()) return "";
+   the act. The veto belongs to a protection system that is WIRED AND ON: a
+   block switched off is the operator taking the check off, exactly as the
+   bypass switch used to be. */
+const resetVeto = ()=>{
   for(const id of coreIds()){ const cs=coreState(S,id);
-    if(cs && cs.scrammed){ const h=rpsHitCore(0, coreSeen(S,id)); if(h) return h.name; } }
+    if(!cs || !cs.scrammed) continue;
+    const a=scramArm(id); if(a && a.out>0.5) return blkBlame(S,sinkDriver(S,"scram",id))||"PROTECTION"; }
   return ""; };
 /* Clearing a trip is a deliberate act, never a side effect of nudging a slider.
    With protection armed the plant holds a veto while a trip condition stands.
@@ -1992,7 +2023,22 @@ function massSeed(s){
 const coreHeatKW = id => (HEATBAL.heatBy[id]||0)*P.cores[id].rated*1000;
 function advectSrc(s, dt){
   const src = {};
-  const add = (nid, q) => { if(q) src[nid] = (src[nid]||0) + q; };
+  /* ══ AND A MACHINE HANDS ITS HEAT TO THE WATER THAT IS THERE ══
+     The wall has had this ceiling since the relief stub ran to 5.6e17 kJ/kg;
+     nothing else did. A drained node keeps every machine term at full duty and
+     advectStep() divides it by DRY_MIN_KG, so an uncovered core took 29 MW
+     into a milligram and read 4.4e7 kJ/kg, and a generator's tube face the
+     same once the primary emptied. Against the node's OWN state point, so an
+     uncovering surface fades rather than switching. */
+  const net = P.net, wetBy = {};
+  const wetOf = nid => { if(wetBy[nid] !== undefined) return wetBy[nid];
+    const i = net ? net.index[nid] : undefined;
+    let w = 1;
+    if(i !== undefined && s.mBy && s.mBy[nid] !== undefined){
+      const eos = net.vol[i]*netRhoAt(s, nid);
+      if(eos > 0) w = Math.max(0, Math.min(1, s.mBy[nid]/eos)); }
+    return (wetBy[nid] = w); };
+  const add = (nid, q) => { if(q) src[nid] = (src[nid]||0) + q*wetOf(nid); };
   /* AND WHAT THE VESSEL GIVES THE ROOM. It was a term in the s.Tavg pot and
      nowhere else; with the mean read off the field it has to arrive at a
      NODE, or the loop heats the compartment for free again. */
@@ -2039,7 +2085,6 @@ function advectSrc(s, dt){
      its thickness says and gives back exactly what advectStep then takes off
      it (metalQ, the one figure both sides read). */
   for(const k in metalQ) delete metalQ[k];
-  const net = P.net;
   if(net && net.metalKg && s.metalT){
     for(let i=0;i<net.n;i++){ const m = net.metalKg[i]; if(!(m > 0)) continue;
       const nm = net.name[i], T = netTempAt(s, nm);
@@ -2061,7 +2106,8 @@ function advectSrc(s, dt){
       const mf = (s.mBy && s.mBy[nm]) || 0;
       const cap = dt > 0 ? mf*Math.abs(hOfT(netSatOf(nm), s.metalT[nm]) - netHAt(s, nm))/dt : Infinity;
       const q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap);
-      metalQ[nm] = q; add(nm, q); } }
+      // its own cap is already the node's own mass, and s.metalT reads metalQ back: scaled twice the wall would keep what the water took
+      metalQ[nm] = q; src[nm] = (src[nm]||0) + q; } }
   return src;
 }
 const metalQ = {};
@@ -2213,6 +2259,7 @@ function advectStep(s, dt, runFlow, edgeKg){
     net.advKeysH = h; net.advKeysM = mBy; }
 
   const src = advectSrc(s, dt), A = advectAnchors(s);
+  for(const k in h2Take) delete h2Take[k];
   const anch = Object.assign({}, A.hold);
   for(const nm in A.holdH) anch[nm] = A.holdH[nm];   // the SKIP set is both maps
   const G = nodeGraph();
@@ -2391,9 +2438,24 @@ function advectStep(s, dt, runFlow, edgeKg){
     const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
     const k = kIn[to]; if(k !== 1) eM[e] *= k;
     const m = eM[e], fn = net.name[from];
-    inH[to] += m*h[fn];
+    // a steam nozzle hands over the VAPOUR: its enthalpy, and the gas the node is carrying
+    const gas = ed.gasAt === from && net.F.x[from] > 0;
+    const hd = gas ? satHg(netSatOf(fn), net.F.p[from]) : h[fn];
+    inH[to] += m*hd;
     inM[to] += m;
-    if(b){ inB[to] += m*b[fn]; inC[to] += m*cH[fn]; }
+    // what the steam took over this node's own mean, charged back to it, or the energy comes from nowhere
+    if(gas) src[fn] = (src[fn]||0) - m*(hd - h[fn]);
+    if(b){ inB[to] += m*b[fn];
+      let cIn = m*cH[fn];
+      if(gas && cH[fn] > 0){
+        const m0 = mBy[fn] || 0, have = cH[fn]*m0, mine = cH[fn]*m*dt;
+        // all of it is in the vapour, and a node may not hand over more than it holds
+        const extra = Math.min(mine*(1/net.F.x[from] - 1),
+                               Math.max(0, have - mine - (h2Take[fn]||0)*m0));
+        cIn += extra/dt;
+        if(m0 > 0) h2Take[fn] = (h2Take[fn]||0) + extra/m0;
+      }
+      inC[to] += cIn; }
   }
   mOut.fill(0);
   for(let e=0;e<net.edges.length;e++) if(eFrom[e] >= 0) mOut[eFrom[e]] += eM[e];
@@ -2428,7 +2490,7 @@ function advectStep(s, dt, runFlow, edgeKg){
   for(const k in advectOutKg) delete advectOutKg[k];
   for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e], m = advectEdgeKg[e];
     if(!(m > 0)) continue;
-    // hydrogen leaves through the hole it is AT, at that node's own concentration
+    // hydrogen leaves through the hole it is AT, at that node's own concentration - a torn pipe passes what is in it, mixed
     if(cH && (ed.kind === "break" || ed.kind === "vent") && cH[net.name[ed.u]] > 0)
       advectH2Out[ed.key] = (advectH2Out[ed.key]||0) + cH[net.name[ed.u]]*m;
     /* ...AND SO DOES THE FLUID ITSELF, in kilograms and off the same booking.
@@ -2519,6 +2581,9 @@ function advectStep(s, dt, runFlow, edgeKg){
     if(want !== got) book(s, "advect", want - got);
     mBy[nm] = got;
   }
+  // ...and a node may not give a hole more hydrogen than it holds
+  if(cH) for(const nm in h2Take) cH[nm] = Math.max(0, cH[nm] - h2Take[nm]);
+  h2RiseStep(s, dt);
   /* ══ AND s.Tavg IS READ OFF THE CORE CIRCUIT ══
      THE FIELD IS THE ENERGY AUTHORITY NOW. It used to be the other way round:
      a pot integrated (heat - removal) over loopKg()*CP_W and this block then
@@ -2611,7 +2676,35 @@ function advectStep(s, dt, runFlow, edgeKg){
 const advectH2Out = {};
 // and the KILOGRAMS every hole passed, keyed the same way - what a pool weighs
 const advectOutKg = {};
+// what a hole took over the share the water it passed was carrying, as a concentration, by node
+const h2Take = {};
 const SETTLE_RELAX = 0.5;
+// hydrogen is barely soluble: it leaves the water and fills the high points, so it goes out of the valve on top first
+const H2_RISE = 0.25;                    // m/s, drift velocity of a gas bubble in water
+function h2RiseStep(s, dt){
+  const net = P && P.net, c = s.h2By, mBy = s.mBy;
+  if(!net || !c || !mBy || !net.z) return;
+  // the edges a bubble could climb, walked once per network: most of them cannot
+  if(!net.riseE) net.riseE = net.edges.filter(ed => !netHole(ed) && net.z[ed.u] !== net.z[ed.v]);
+  const mov = [], outBy = {};
+  for(const ed of net.riseE){
+    // the path's own area, and a shut branch is an absent branch: C is the gate
+    const A = typeof ed.C === "function" ? ed.C(s) : ed.C;
+    if(!(A > 0)) continue;
+    const up = net.z[ed.v] > net.z[ed.u], lo = up ? ed.u : ed.v, hi = up ? ed.v : ed.u;
+    const nl = net.name[lo], nh = net.name[hi], ml = mBy[nl], mh = mBy[nh], V = net.vol[lo];
+    if(!(ml > DRY_MIN_KG) || !(mh > DRY_MIN_KG) || !(c[nl] > 0) || !(V > 0)) continue;
+    const kg = c[nl]*ml/V*H2_RISE*A*dt;          // drift flux: what is in a cubic metre, swept up
+    if(!(kg > 0)) continue;
+    mov.push([nl, nh, kg]); outBy[nl] = (outBy[nl]||0) + kg;
+  }
+  // a node with several ways up may not give away more hydrogen than it holds
+  const k = {};
+  for(const nl in outBy){ const have = c[nl]*mBy[nl];
+    k[nl] = outBy[nl] > have ? have/outBy[nl] : 1; }
+  for(const [nl, nh, kg] of mov){ const m = kg*k[nl];
+    c[nl] -= m/mBy[nl]; c[nh] += m/mBy[nh]; }
+}
 /* kg of hydrogen in the core's circuit: concentration times what each node holds */
 function h2Total(s){
   const net = P && P.net, G = nodeGraph(); if(!net || !s.h2By || G.coreCirc < 0) return s.h2||0;
@@ -3466,7 +3559,7 @@ const coreFlowNet = (K, id, outs, fallback) =>
   (outs && outs.coreKgBy && K.netRef > 0) ? (outs.coreKgBy[id]||0)/K.netRef : fallback;
 function coreState0(K, x0){
   return {n:0,C:null,I:0,X:K.X0,Tf:K.TfRef,dec:null,decay:0,heat:0,
-    rodPos:x0,rodDem:x0,rodJam:false,rodBand:false,scrammed:false,trip:"",split:false,reGang:false,
+    rodPos:x0,rodDem:x0,rodJam:false,rodBand:false,scrammed:false,rpsNear:false,rpsHot:0,trip:"",split:false,reGang:false,
     tilt:0,tiltDem:0,breach:false,melt:false,fatigue:0,dmg:0,meltFrac:0,oxMax:0,qOx:0,fci:0,h2:0,
     fq:1,dnbr:K.dnbr0,vf:0,voidTh:0,rho:0,parts:{rod:0,dop:0,mod:0,exp:0,xe:0,bor:0,vd:0,tip:0,dis:0},
     pCore:K.P0,coreDT:coreDT0(coreD(K.id))*K.n0,flowNet:1};
@@ -3577,7 +3670,7 @@ const TPROG_SPAN=18;                    // K of programme across the load range
    one-unit plant is the plant, and reads the fraction itself. */
 const unitFrac=(s,x)=>{ let live=0; coreEach(s,(cs,K)=>{ if(!cs.scrammed) live+=K.rated; });
   return (live>0 && live!==P.rated) ? Math.min(1, x*P.rated/live) : x; };
-const tProg=(s,K,cs)=>{ K = K || s.K || P; return ((cs ? cs.scrammed : s.scrammed) && autoLive("runback")) ? K.Tref-TPROG_SPAN
+const tProg=(s,K,cs)=>{ K = K || s.K || P; return ((cs ? cs.scrammed : s.scrammed) && runbackLive()) ? K.Tref-TPROG_SPAN
              : K.steam ? K.Tref
              : K.Tref-TPROG_SPAN + TPROG_SPAN*(s.load===undefined ? 1 : cs ? unitFrac(s, s.load) : s.load); };
 /* WHAT THE TURBINE IS ACTUALLY TAKING, as a share of what this plant raises at
@@ -3774,7 +3867,7 @@ function resetPlant(){
         below), or the plant would spend its first minutes breeding heat it
         should already have */
      dec:null, decay:0,
-     byp:Object.fromEntries(AUTOKEYS.map(k=>[k,!!startOf("byp:"+k,false)])),
+     rbHot:false,                        // SINK.runback's edge, so the one-shot fires once - see ctl.js
      /* the live automation, one record per D.blocks row - see ctl.js. REFILLED. */
      blkBy:blkSeed(),
      breach:false,melt:false,trip:"",
@@ -3872,7 +3965,7 @@ function resetPlant(){
         port valves at all (portOpen(), pipenet.js). */
      portShut:Object.fromEntries(Object.keys(D.ports).map(k=>[k,false])),
      arLo:P.arLo, arHi:P.arHi,
-     dmgParts:[], repair:null, sgtr:false, noiseMul:1,
+     dmgParts:[], repair:null, sgtr:false,
      /* Two crews, two places. `dose` is the repair party's own integral - it
         takes whatever the cell it is STANDING in reads, via s.repRate below.
         `crewDose` is the control-room watch's, off the crew's own seat
@@ -6100,13 +6193,10 @@ function step(dt){
     }
     if(track) for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
 
-  /* ── reactor protection system: trips unless it was never fitted, or is defeated ── */
-  if(rpsLive()) coreEach(s,(cs,K,id)=>{
-    if(cs.scrammed) return;
-    const h=rpsHitCore(0, coreSeen(s,id));
-    if(h){ cs.scrammed=true; cs.rodDem=1; cs.trip="RPS TRIP / "+h.name;
-           runback(s); }
-  });
+  /* THE PROTECTION SYSTEM IS NOT HERE ANY MORE. It is wired out of blocks in
+     the cabinet (buildRpsAuto(), ctl.js) and it acts through ctlPass() at the
+     head of the tick, on last tick's solved plant - the same one-tick lag the
+     feed controller took when it moved. */
   coreAgg(s);
 
   /* ── event log: every transition, with why ── */
@@ -6181,9 +6271,15 @@ function step(dt){
     "Xenon-135 past 3200 pcm. Raising power may be physically impossible until it decays, whatever you do with the rods.");
   ev("jam",s.rodJam,"alarm","CONTROL RODS NOT RESPONDING",
     "The bank is ignoring demand, a scram included. You are left with boron, flow and load.");
-  for(const [k,evk,title] of AUTOEV)
-    ev(evk, autoFit(k)&&s.byp[k], "warn", title, AUTOSYS[k].warn);
-  ev("norps",!P.rps,"warn","NO PROTECTION SYSTEM FITTED",
+  /* ONE WARNING PER SYSTEM THE CABINET HAS BUT IS NOT RUNNING. Wired and
+     switched off is the operator taking a check away, which is what the old
+     bypass switches were; nothing wired at all is a design decision and is
+     said elsewhere. */
+  ev("byp_rps", rpsState()==="BYPASSED", "warn", "PROTECTION SYSTEM SWITCHED OFF",
+    "Automatic trips are defeated. Nothing will shut this reactor down for you.");
+  ev("byp_runback", !!sinkWired(s,"runback",null) && !runbackLive(), "warn", "TURBINE RUNBACK SWITCHED OFF",
+    "A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop.");
+  ev("norps",rpsState()==="NOT FITTED","warn","NO PROTECTION SYSTEM FITTED",
     "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call.",true);
   ev("inj",injIds.length>0,"info","INJECTING",
     ()=>nameList(injIds)+" "+isAre(injIds)+" pushing water into the loop at "+
@@ -6428,8 +6524,8 @@ const ANN=[
     protection has been defeated and the flow is simply gone. */
  ["LO FLOW","amber",s=>s.flowNet<P.flowMin,
   "Coolant flow is below the design floor for the pumps fitted. With protection armed the reactor trips here. Bypassed, the fuel is cooled by buoyancy alone, and that is all the cooling there is.","pump"],
- ["NO RPS","amber",()=>!P.rps,
-  "No protection system was fitted at the design bench. Nothing is watching flux, DNBR, pressure, fuel temperature, flow or void on your behalf. You are the protection system.","ctrl"],
+ ["NO RPS","amber",()=>rpsState()==="NOT FITTED",
+  "Nothing in the control cabinet lands on a scram. Nothing is watching flux, DNBR, pressure, fuel temperature, flow or void on your behalf. You are the protection system.","ctrl"],
  ["RX BREACH","red",s=>s.breach,
   "The pressure vessel has ruptured. Coolant is leaving faster than anything can replace it. This is unrecoverable.","core"],
  ["BLACKOUT","amber",s=>s.blackout,
@@ -6506,13 +6602,16 @@ const ANN=[
     burn: this one is a pool, it needs no spark, and no fan takes it away. */
  ["NA FIRE","red",s=>s.roomFireOn>0,
   "Sodium is burning on the deck. It came out of a pipe at over 600 K, which is hundreds of degrees past the temperature it lights itself at, so nothing had to ignite it. It burns until the pool is gone or the bay's oxygen is - the OXYGEN layer says which way it is going - and while it burns it cooks every machine around it and eats the air. A spray from a small hole burns far faster than a puddle from a large one, and water makes it worse.","ctrl"],
-/* one tile per defeated automatic system, built from the same table the sim uses */
-].concat(AUTOKEYS.map(k=>[AUTOSYS[k].ann,"amber",AUTOSYS[k].lit||(s=>autoFit(k)&&s.byp[k]),
-  AUTOSYS[k].name+" is switched off at the panel. "+AUTOSYS[k].warn,
-  /* LAZY, because a host that is read off the drawing cannot be resolved
-     while this table is being built - LAY does not exist yet. annHost()
-     below is the one place a row's host is turned into an id. */
-  ()=>autoPart(k)]));
+/* ── one tile per system the cabinet carries and is not running ──
+   Two rows now, not a table generated off AUTOSYS: a system is a block graph,
+   and a graph the player drew has no row to generate a tile from. The host is
+   LAZY, because it is read off the drawing and LAY does not exist while this
+   table is being built - annHost() below is the one place it is resolved. */
+ ["RPS OFF","amber",()=>rpsState()==="BYPASSED",
+  "The protection system is wired and switched off at the cabinet. Automatic trips are defeated. Nothing will shut this reactor down for you.",()=>roleId("ctrl")],
+ ["NO RUNBACK","amber",s=>!!sinkWired(s,"runback",null)&&!runbackLive(),
+  "The turbine runback is wired and switched off at the cabinet. A trip no longer sheds load, so the turbine will keep drawing steam from a dead core and chill the loop.",()=>roleId("turb")],
+];
 
 /* ── one lamp per component ──
    Built from the same table the board is built from, so a tile cannot exist
