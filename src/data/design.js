@@ -177,11 +177,6 @@ const FOLL=[
  {name:"BORATED STEEL",tipRho:-420,tipLen:4.0,mass:34,
   note:"A poisoned follower. The bank bites early and there is no positive excursion anywhere in its travel, at the price of carrying that poison all campaign - and of the mass."},
 ];
-const CHAN=[
- {name:"SINGLE CHANNEL",noise:1.0,mass:10,note:"One sensor per parameter. When it lies, nothing contradicts it."},
- {name:"TWO CHANNEL",noise:.45,mass:25,note:"Disagreement is visible, but you cannot tell which of the two is wrong."},
- {name:"THREE CHANNEL VOTE",noise:.10,mass:45,note:"Majority voting rejects a failed sensor outright and the readings hold still."},
-];
 /* `water` is tonnes of SECONDARY water held by ONE generator at power, and it
    is the whole of the boil-dry mechanic: step()'s mass balance divides the
    steam raised into it. It is not a free constant - it is read off the real
@@ -343,7 +338,7 @@ const ROD_SPD0=0.012, ROD_BANK_T=9;
 let DGEN=0;
 const dTouch=()=>{ DGEN++; };
 const D={sg:0,
-         chan:1,rps:true,rpsm:.35,
+         rpsm:.35,rpsLag:.06,
          /* How far the temperature controller may walk the bank on its own,
             as fractions inserted. Not a safety limit - it is what stops the
             controller wandering off the position the shutdown margin was
@@ -400,7 +395,7 @@ const D={sg:0,
             the truth: pipeTrace() still says what is joined to what, and a run
             laid by hand has no entry here at all. */
          runs:{},
-         machines:{}, cores:{}, name:{}, blocks:{},
+         machines:{}, cores:{}, name:{}, blocks:{}, segs:["g1"],
          tanks:{}, pipes:{}, ports:{}, start:{}};
 
 /* WHERE AN ACTUATOR STANDS THE MOMENT THE PLANT IS COMMISSIONED. Absent means
@@ -631,7 +626,7 @@ function coreFig(c){
      DRAWING (latMeasure(), lattice.js) and it exists whether or not anything
      stands on the arrangement grid; a drawing weighs nothing. */
   const mass =
-      a.mass + f.mass + SCRAM[c.scram].mass + CHAN[D.chan].mass
+      a.mass + f.mass + SCRAM[c.scram].mass
     + coreMass + vesselMass + c.chim*38 + latMass(c)
     + FOLL[c.foll].mass + (c.nbank-4)*ROD_BANK_T
     + c.nbank*ROD_BANK_T*(rodSpdOf(c)/ROD_SPD0-1);
@@ -772,7 +767,7 @@ function derived(id){
   mass+=totalPumpMass()+totalSgMass()
     +(roleOf("bkp")?BKP[D.bkp].mass:0)
     + partMass("catcher") + partMass("vent") + tankMass() + fittingMass()
-    + (roleOf("ctrl")&&D.rps?55:0)
+    + (roleOf("ctrl")?55:0)
     + totalTurbMass() + totalCondMass()
     + totalIhxMass() + totalRadMass()
     + layMass;
@@ -802,7 +797,7 @@ function derived(id){
   if(turbCount() && loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
   if(condMargin<1/DUMP_COND_K) w.push([condMargin<1?"RED":"SOFT","The sink rests at "+(TURB_TRIP_P/condMargin).toFixed(4)+" MPa of backpressure against a "+TURB_TRIP_P+" MPa turbine trip"+(condMargin<1?", so the turbine trips before anything has happened":", so the steam dump is blocked at rest: a load drop goes to the shell safeties and the water does not come back")+". Bigger panels or a bigger condenser buy the margin.","cond"]);
   if(condShort) w.push(["SOFT","The condenser handles "+(condCap*100).toFixed(0)+"% of full-load duty but the turbine can draw "+(loadMax*100).toFixed(0)+"%. Past its duty it sits hotter, the exhaust pressure climbs and the turbine gives back part of what it made - continuously, not just in a transient. The reactor goes on making the heat either way.","cond"]);
-  if(!D.rps) w.push(["SOFT","No reactor protection system. Nothing will scram this core for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
+  if(!scramWiredD()) w.push(["SOFT","No reactor protection system. Nothing in the control cabinet lands on a scram, so nothing will shut this core down for you - not high flux, not low DNBR, not a dry loop. Every trip is yours to call by hand.","ctrl"]);
   if(Object.keys(D.blocks).length && !roleOf("ctrl")) w.push(["SOFT","Automation is wired but there is no control room to house it. Every block in the cabinet computes nowhere: the demands they drive stay by hand until a CONTROL is placed.","ctrl"]);
   /* Buildable, not blocked - same standing as "no RPS" above. Topological
      only (hasHeatSink(), layout.js): Stage 6 is what would let this warning

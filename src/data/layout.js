@@ -66,11 +66,14 @@ function gridDrag(edge,c){
    event log names the machine it is talking about - so living in core/ui.js
    put it outside the sim-only subset and the worker threw on the first log
    line that named a part. */
+/* AND A BLOCK IN THE CABINET IS CALLED WHAT THE PLAYER CALLS IT TOO, off the
+   same map: the id is the key either way, so one reader takes the id and the
+   default the caller falls back to, and partName() is the part's spelling of
+   it. A block's default is derived from what it does (blkName(), ctlgraph.js),
+   which is why the fallback is the caller's to state. */
 const NAME_CAP=24;
-function partName(p){
-  const n=(D.name&&D.name[p.id]||"").trim();
-  return n?n.slice(0,NAME_CAP):p.name;
-}
+const nameFor=(id,dflt)=>{ const n=(D.name&&D.name[id]||"").trim(); return n?n.slice(0,NAME_CAP):dflt; };
+function partName(p){ return nameFor(p.id,p.name); }
 function setPartName(id,str){
   const t=(str||"").trim().slice(0,NAME_CAP);
   if(t){ if(!D.name) D.name={}; D.name[id]=t; }
@@ -910,7 +913,7 @@ function partMassOf(id){
     case "tank":     return D.tanks[id]&&D.tanks[id].cell ? tankMassOf(id) : 0;
     case "fitting":  return fitMassOf(id);
     case "bkp":      return BKP[D.bkp].mass;
-    case "ctrl":     return D.rps?55:0;
+    case "ctrl":     return 55;
     default:         return PART_MASS[p.role]||0;
   }
 }
