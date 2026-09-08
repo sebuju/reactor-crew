@@ -15,17 +15,24 @@ function selwHost(root){
   return el;
 }
 
-// a machine with a kept window is already being read there
-const selwKept=id=>!!(INSPW_HOST&&INSPW_HOST._wins.some(o=>o.p.id===id));
-function selwPartAt(){
+// a pick with a kept window is already being read there
+const selwKept=id=>!!(INSPW_HOST&&INSPW_HOST._wins.some(o=>o.id===id));
+/* a machine, a pipe run or a painted wall: three things the drawing lets the hand pick, one peek */
+function selwPickAt(){
+  if(!sel||selwKept(sel)) return null;
   const q=partOf(sel);
-  return q&&fitted(q)&&!selwKept(q.id) ? q : null;
+  if(q) return fitted(q) ? {p:q, id:q.id} : null;
+  if(isRunKey(sel)) return {key:"run", id:sel};
+  if(isMatKey(sel)) return {key:"mat", id:sel};
+  return null;
 }
 
-function selwOpen(host,p){
-  const h=marginPan(host,partName(p),()=>null,p);
+function selwOpen(host,pick){
+  const title = pick.p ? partName(pick.p) : pick.key==="run" ? "PIPE RUN" : "WALL";
+  const h=marginPan(host,title,()=>null,pick.p||null);
   h.well.el.classList.add("insp-win");
   h.wx=0; h.wy=0; h.wtf=null; h.folded=false; h.plant=false; h._force=true; h.peek=true;
+  if(pick.key){ h.key=pick.key; h.id=pick.id; h.selAt=null; }
   h.off={x:0,y:0};
   ctxSuppress(h.well.el);
   h.onDrag=selwPin;
@@ -58,7 +65,7 @@ function selwPlace(h){
   const host=h.well.el.parentNode; if(!host) return;
   const f=inspFrame(host);
   const w=h.well.el.offsetWidth||h.w, eh=h.well.el.offsetHeight||0;
-  const r=prect(h.p);
+  const r=panRectOf(h); if(!r) return;
   const s0=vScr({x:r.x,y:r.y}), s1=vScr({x:r.x+r.w,y:r.y+r.h});
   const a=marginPage(s0.x,s0.y), b=marginPage(s1.x,s1.y);
   let x=b.x+INSPW_GAP;
@@ -75,15 +82,18 @@ let SELW_HOST=null;
 function selwSync(host,live){
   if(!host||typeof LAY==="undefined"||!LAY) return;
   SELW_HOST=host;
-  const p=selwPartAt();
+  const pick=selwPickAt();
   let h=host._win;
-  if(!p){ if(h) selwClose(host); return; }
-  if(!h) h=selwOpen(host,p);
-  // a new machine opens at its own seat, not where the last one was pushed to
-  else if(h.p.id!==p.id){ h.off.x=h.off.y=0; inspAim(h,p.id); }
-  h.p=p;
+  if(!pick){ if(h) selwClose(host); return; }
+  // a machine's body and a key's are filled by different hands, so the kind changing is a new peek
+  if(h && !!h.key!==!!pick.key){ selwClose(host); h=null; }
+  if(!h) h=selwOpen(host,pick);
+  // a new pick opens at its own seat, not where the last one was pushed to
+  else if(h.id!==pick.id){ h.off.x=h.off.y=0;
+    if(pick.key) h.id=pick.id; else inspAim(h,pick.id); }
   const t=panTick(live);
-  panPartSync(h,live,t.deep,t.fresh||h._force);
+  if(pick.key) marginKeyFill(h,pick.id,t.fresh||h._force,live);
+  else { h.p=pick.p; panPartSync(h,live,t.deep,t.fresh||h._force); }
   h._force=false;
   marginColumns(h);
   selwPlace(h);
@@ -92,10 +102,10 @@ function selwSync(host,live){
 /* a kept window or a peek, never both for the same machine: the one door the keys address */
 function panOfSel(){
   if(!sel) return null;
-  const w=INSPW_HOST&&INSPW_HOST._wins.find(o=>o.p.id===sel);
+  const w=INSPW_HOST&&INSPW_HOST._wins.find(o=>o.id===sel);
   if(w) return w.well.el;
   const h=SELW_HOST&&SELW_HOST._win;
-  return h&&h.p.id===sel ? h.well.el : null;
+  return h&&h.id===sel ? h.well.el : null;
 }
 /* not the next key in the DOM: the test is what the boxes face across the travel, and 1e4 is a rank */
 function panKeyPick(rects,from,dx,dy){
