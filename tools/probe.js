@@ -21,7 +21,7 @@ const M=require('./bundle').headless(
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
- 'netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt}');
+ 'blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -241,7 +241,7 @@ const CASES={
       const s=M.S(), P=M.P(), d=M.derived(), cs=s.coreBy.core;
       s.diceOff=true; P.cores.core.burstK*=vessel;
       console.log("\n── excursion  pk "+(pk===null?"preset":pk)+"  aV "+f(d.aV,0)+" pcm  aM "+f(d.aM,1)+"  beta "+f(P.BETA*1e5,0)+"  rated "+f(P.rated,0)+" MWt  burst "+f(P.P0*P.burstK,2)+" MPa ──");
-      if(!s.byp.rps) M.act("byp","rps");
+      M.blkSinkOff(s,"scram");   // every excursion case runs with protection defeated - the scram block is switched off
       /* --rods=keep leaves the cabinet's rod controller on the bank (the Chernobyl
          state: it pulls the bank OUT on its own as xenon builds); --load=x holds
          the turbine at that load first, so the 400x xenon clock has minutes to
@@ -270,7 +270,7 @@ const CASES={
       let pkFci=0, fciKJ=0, pkW=0, pkWfci=0, pkWt=0, w0=null; const wrecked=[];
       for(let k=0;k<=PSEC*50;k++){ const t=k*0.02;
         while(wrecked.length<s.dmgParts.length){ const id=s.dmgParts[wrecked.length]; wrecked.push(id+" "+s.dmgWhy[id]+"@"+f(t,1)); }
-        if(starve>0 && k===starve*50){ if(!s.byp.feed) M.act("byp","feed"); for(const id of M.sgIds()) s.fregBy[id]=1; }
+        if(starve>0 && k===starve*50){ M.blkSinkOff(s,"freg"); for(const id of M.sgIds()) s.fregBy[id]=1; }
         if(k===at*50){ w0=M.netWorkAt(s,"core"); if(scram) M.act("scram"); else M.act("blackout",true); if(hit>0) cs.nTf.fill(hit); }
         if(cs.fci>pkFci) pkFci=cs.fci;
         if(k>=at*50){ fciKJ+=cs.fci*0.02; const w=M.netWorkAt(s,"core"); if(w>pkW){ pkW=w; pkWfci=fciKJ; pkWt=t; } }

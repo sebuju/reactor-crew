@@ -42,13 +42,13 @@
      --burst=T:x,y     act("hit", "pipe:x,y") - open one pipe cell
      --blackout=T      act("blackout", true)
      --scram=T         act("scram")
-     --byp=T:key       act("byp", key) - toggle an AUTOSYS switch
+     --blkoff=T:sink   switch off whatever block drives that demand (scram, freg, ...)
 */
 const {headless} = require('../bundle');
 const M = headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
  'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,'+
- 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,runIdOf,'+
+ 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,runIdOf,blkSinkOff,'+
  'tankCircuit,tankPrimary,tankIds,tankKg,tankLvl,tankP,tankLive,partOf,partName,'+
  'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdLive,holdPlumbed,loopP,setLoopP,'+
  'netTempAt,netQualAt,mwE,loopKg,secP,sgIds,sgLvl,circName,ROLE:()=>ROLE,'+
@@ -203,7 +203,7 @@ function parseEvents(args){
   const out = [];
   const add = (t, kind, arg) => out.push({t:+t, kind, arg});
   for(const a of args){
-    const m = /^--(shut|hit|burst|blackout|scram|byp)=(.*)$/.exec(a);
+    const m = /^--(shut|hit|burst|blackout|scram|blkoff)=(.*)$/.exec(a);
     if(!m) continue;
     const kind = m[1], v = m[2];
     if(kind === "blackout" || kind === "scram"){ add(v, kind, true); continue; }
@@ -220,7 +220,7 @@ const fireEvent = e => {
   console.log("# t="+e.t.toFixed(1)+" "+e.kind+" "+e.arg);
   if(e.kind === "blackout") M.act("blackout", true);
   else if(e.kind === "scram") M.act("scram");
-  else if(e.kind === "byp")   M.act("byp", e.arg);
+  else if(e.kind === "blkoff") M.blkSinkOff(M.S(), e.arg);
   else if(e.kind === "shut") M.act("portShut", e.arg);
   else if(e.kind === "hit")  M.act("hit", e.arg);
   else if(e.kind === "burst")M.act("hit", "pipe:"+e.arg);
