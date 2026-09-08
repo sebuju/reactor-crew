@@ -1,8 +1,5 @@
 "use strict";
-/* THE DEAD-MAN SWITCH. A tab left running in the background is a plant nobody
-   is watching, burning a core of the machine on ticks nobody will read. This
-   stops every one of them - sim, paint and clock - and says so on the glass,
-   because a stopped plant that looks like a running one is worse than either. */
+/* the dead-man switch: an unwatched tab stops sim, paint and clock, and says so on the glass */
 const HALT_IDLE_MS=15*60*1000, HALT_LINGER_MS=2000, HALT_POLL_MS=250;
 const HALT_EV=["pointerdown","pointermove","pointerup","keydown","keyup","wheel","touchstart"];
 let haltLast=performance.now(), haltOn=false, haltShown=0, haltBox=null;
@@ -16,8 +13,7 @@ function haltPaint(on){
   }
   haltBox.classList.toggle("halt-on",on);
 }
-/* Returns whether the loop must stand down this frame. Focus alone is a poke:
-   a tab being looked at never idles out, however still the hand is. */
+/* focus alone is a poke: a tab being looked at never idles out, however still the hand */
 function haltStep(now){
   if(document.hasFocus()) haltLast=now;
   const idle=now-haltLast>=HALT_IDLE_MS;

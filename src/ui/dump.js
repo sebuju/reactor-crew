@@ -1,23 +1,9 @@
 "use strict";
-/* the debug dumps behind the brand menu */
-
-/* ═══════════════ WHAT A DUMP IS FOR ═══════════════
-
-   Not a save. A save is a named thing the player reopens in the game; a dump is
-   a timestamped file a developer opens in a spreadsheet once and deletes. So
-   the format is CSV rather than the tagged JSON store.js packs recordings into,
-   the numbers are rounded to what a reader can actually use, and `snapshots/`
-   is gitignored scratch that PURGE empties.
-
-   CSV cannot carry a design - it is a tree, not a table - so the design rides
-   beside every dump as a JSON SIDECAR with the same stem. The pair is the
-   dump: the CSV says what the plant was doing, the sidecar says what plant. */
+/* CSV cannot carry a design, so one rides beside every dump as a JSON sidecar with the same stem */
 
 const DUMP_SIG = 6;                 // significant figures kept per number
 const DUMP_DIR = "snapshots/";
 
-/* A double is 17 digits of which about six mean anything here, and the other
-   eleven are most of the file. */
 const dumpNum = v => Number.isFinite(v) ? String(Number(v.toPrecision(DUMP_SIG))) : String(v);
 
 function dumpCell(v){
@@ -28,8 +14,7 @@ function dumpCell(v){
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-/* One leaf per row, `a.b[3].c` the path. Typed arrays index like arrays, which
-   is the whole reason this is not JSON.stringify. */
+/* one leaf per row, `a.b[3].c` the path; typed arrays index like arrays, which JSON.stringify does not do */
 function dumpFlat(v, key, out){
   if(v === null || typeof v !== "object"){ out.push([key, v]); return out; }
   if(Array.isArray(v) || ArrayBuffer.isView(v)){
@@ -43,12 +28,7 @@ function dumpFlat(v, key, out){
 const dumpStateCSV = s =>
   "key,value\n" + dumpFlat(s, "", []).map(r => dumpCell(r[0]) + "," + dumpCell(r[1])).join("\n") + "\n";
 
-/* ══ EVERY KEYFRAME THE RECORDER STILL HOLDS ══
-   The lineage of the current take, cut at each branch point: a parent keeps
-   keyframes past the tick its child forked at, and those belong to a timeline
-   this run did not fly. Keyframes are a cache and get thinned (recEvict()), so
-   the spacing in the file is whatever survived, which is why the tick is a
-   column and not an assumption. */
+/* the lineage cut at each branch point: a parent's keyframes past the fork belong to a timeline this run did not fly */
 function dumpFrames(){
   if(typeof REC === "undefined" || !REC.takes.length) return [];
   const line = lineage(REC.cur), out = [];
@@ -60,8 +40,7 @@ function dumpFrames(){
   return out.sort((a, b) => a.tick - b.tick);
 }
 
-/* Union of keys, first seen first, because a node map (`s.flowBy`) gains and
-   loses ids over a run and a column that only exists later is still a column. */
+/* union of keys, first seen first: a node map gains and loses ids over a run */
 function dumpTimelineCSV(frames){
   const cols = [], seen = new Set(), rows = [];
   for(const f of frames){
@@ -78,16 +57,10 @@ function dumpTimelineCSV(frames){
   return head + "\n" + body.join("\n") + "\n";
 }
 
-/* The recorder's head is already the answer to "which plant is this": D whole,
-   where every part stands, and the signature that says whether it still matches
-   the bench. packVal() because a lattice plan is a typed array. */
+/* packVal() because a lattice plan is a typed array */
 const dumpHeadJSON = () => JSON.stringify(packVal(recHead()), null, 1);
 
-/* ══ THE SERVER WRITES IT, OR THE BROWSER DOES ══
-   `file://` cannot write a file, so without the server a dump falls back to a
-   download and lands in the browser's download directory instead of
-   `snapshots/`. Said out loud in the answer, because a file that quietly went
-   somewhere else is worse than one that did not go. */
+/* `file://` cannot write a file, so without the server a dump falls back to a download */
 function dumpDownload(name, body, b64){
   const blob = b64
     ? new Blob([Uint8Array.from(atob(body), c => c.charCodeAt(0))], {type:"image/png"})
@@ -105,17 +78,7 @@ async function dumpWrite(name, body, b64){
 
 const dumpStem = kind => "rc_" + stampFile(new Date()) + "_" + kind;
 
-/* ══ THE PATH GOES TO THE CLIPBOARD ══
-   The whole point of a dump is to open it somewhere else, so the answer to
-   "where is it" should be pasteable, not retyped off a menu. The async
-   clipboard needs a secure context and `file://` is not one, so the old
-   selection-and-copy is the fallback rather than a legacy leftover - it is the
-   path the download case actually takes.
-
-   hasFocus() FIRST, and it is not politeness: Chrome does not reject a
-   clipboard write from an unfocused document, it never settles the promise at
-   all, so awaiting one leaves the menu saying WORKING for the rest of the
-   session. Measured - it hung a tab for 45 s. */
+/* hasFocus() first: Chrome never settles a clipboard write from an unfocused document, and the fallback is what `file://` takes */
 async function dumpCopy(text){
   try{
     if(document.hasFocus() && navigator.clipboard && navigator.clipboard.writeText){
@@ -135,9 +98,6 @@ async function dumpCopy(text){
   }catch(e){ return false; }
 }
 
-/* One report line for a whole dump, and the one place the first file's path
-   reaches the clipboard - a dump that says where it went and a dump that hands
-   you the path are the same event. */
 async function dumpDone(files, served){
   await dumpCopy((served ? DUMP_DIR : "") + files[0]);
   return files.join(" + ") + (served ? " to " + DUMP_DIR
@@ -163,9 +123,7 @@ async function dumpTimeline(){
     ": " + await dumpDone([stem + ".csv", stem + ".design.json"], a && b);
 }
 
-/* The canvas only - the topbar, the rails and the bench panels are HTML and a
-   browser will not hand their pixels to a script. It is the drawing that is
-   worth a picture. */
+/* the canvas only: a browser will not hand a script the HTML rails' pixels */
 async function dumpImage(){
   const c = document.getElementById("cv");
   if(!c) return "NO CANVAS.";
@@ -174,16 +132,7 @@ async function dumpImage(){
   return dumpDone([name], ok);
 }
 
-/* ═══════════════ THE ONE DUMP THAT COMES BACK ═══════════════
-
-   The CSV above is for reading and this is for returning to, and they are not
-   the same file: six significant figures is what a chart wants and a plant put
-   back from six figures is a DIFFERENT plant, quietly, from the first tick.
-   So a snapshot is store.js's tagged JSON - typed arrays and Infinity survive
-   it - and it is exact.
-
-   The design still rides in the sidecar, exactly like the CSV dumps, so a
-   snapshot pair looks like every other pair in the directory. */
+/* exact, unlike the CSV above: a plant put back from six figures is a different plant */
 
 const dumpSnapJSON = () => JSON.stringify(packVal({tick:S.tick, S:snapS(S), log:LOG}));
 
@@ -200,18 +149,7 @@ const dumpSnapNames = async () => {
   return all === null ? null : all.filter(n => /_snap\.json$/.test(n));
 };
 
-/* ══ PUTTING A SAVED PLANT BACK ON THE BOARD ══
-   The order is the one a prewarm follows and it is not negotiable: the design
-   goes on first (recApplyHead() rebuilds D and the board), then commissioning
-   derives P from it, and only then does the state land - restoreS() into a P
-   built from another design is a plant whose network does not match its own
-   state. commission() drains the generator in one go, so the page blocks for
-   the second or so the prewarm bar normally covers.
-
-   A new ROOT after it, because what is on the board is not the continuation of
-   whatever was being recorded: it is a plant that appeared. The rings go with
-   it for the same reason - a strip chart carrying the last plant's history
-   under this one's trace is a lie about what just happened. */
+/* the order is not negotiable: head rebuilds D, commission() derives P, then the state lands */
 function dumpApply(snap, head){
   const matched = recApplyHead(head);
   commission();
@@ -238,8 +176,7 @@ async function dumpSnapLoad(name){
                     "something designSig() counts. The plant on the board is the one in the file.");
 }
 
-/* No server means no list and no fetch, so the file is handed over instead.
-   Both halves at once: the state and its sidecar are one dump in two files. */
+/* no server means no list and no fetch, so both halves are handed over by hand */
 function dumpSnapPick(){
   return new Promise(resolve => {
     const inp = document.createElement("input");

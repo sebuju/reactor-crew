@@ -1,9 +1,3 @@
-/* Shared HTML widget kit styles. Colours are always var(--c-*), sizes always
-   var(--fs-*) for text, by the JOB the text does - see :root in src/style.css,
-   src/core/constants.js (cssVarsBoot) and kit-api.md. */
-
-/* KIT.show() is the only hide. Every stylesheet rule states the SHOWN display,
-   so handing an element back to the stylesheet shows it - see kit.js show(). */
 .kit-hide{display:none !important}
 
 .kit-well{background:var(--c-panel)}
@@ -12,27 +6,16 @@
 .kit-rule{display:flex;align-items:flex-start;gap:7px;margin:0 0 3px; justify-content: space-between;
   color:var(--kit-rule-color,var(--c-ink2));font-size:var(--fs-sec);
   letter-spacing:2px;text-transform:uppercase;
-  /* the 2px tracking IS the subheading; anything that drops it drops the line too */
   border-bottom:1px solid var(--c-edge2);padding-bottom:3px;}
 .kit-sliderrow > .kit-rule {letter-spacing: 0;margin:0;border-bottom:none;padding-bottom:0}
-/* .kit-rule{display:flex;align-items:center;gap:7px;
-  color:var(--kit-rule-color,var(--c-ink2));font-size:var(--fs-sec);
-  text-transform:uppercase;white-space:nowrap} */
-/* .kit-rule::after{content:"";flex:1 1 auto;height:1px;background:var(--c-edge2)} */
 
 .kit-sliderrow {display: grid;grid-template-columns: 1fr 2fr auto;align-items:center;gap:8px;}
 
-/* the rule a well() builds for its own title. It sits OUTSIDE .kit-well-body,
-   so it carries its own padding, and since the well lost its border this bar
-   is what delimits the panel - and what .on/.blocked colour. */
 .kit-rule-head{margin:0;padding:8px 4px;background:var(--c-edge);
   font-size:var(--fs-win-title);font-weight:700;letter-spacing:1.8px;
   color:var(--kit-rule-color,var(--c-bright))}
 .kit-rule-head::after{display:none}
 .kit-rule-head{border-bottom:none;padding-bottom:8px}
-/* THE HEADING IS THE NAME FIELD - see rule()'s `edit` in kit.js. It has to
-   read as the heading it replaced, so it inherits the bar's own type and
-   carries no box until the pointer is on it. */
 .kit-rule-input{flex:1 1 auto;min-width:0;appearance:none;border:1px solid transparent;
   background:transparent;color:inherit;font:inherit;font-size:inherit;font-weight:inherit;
   letter-spacing:inherit;text-transform:inherit;padding:0 3px;margin:-1px 0}
@@ -40,39 +23,21 @@
 .kit-rule-input:focus{outline:none;border-color:var(--c-amber);background:var(--c-well)}
 .kit-rule-input::placeholder{color:inherit;opacity:1}
 .kit-rule-sfx{flex:0 0 auto;color:var(--c-ink2)}
-/* nothing to say costs no gap - every rule carries the span now */
 .kit-rule-sfx:empty{display:none}
-/* the NAME clips, not the bar: a menu key on this bar hangs its panel below it */
-/* THE NAME TAKES THE SLACK, so everything after it is packed against the right
-   hand end: the suffix, and then the window's own keys with a gap. Both of
-   those carried margin-left:auto and SHARED the free space between them, which
-   left the skin temperature floating in the middle of the bar. */
 .kit-rule-head>span:first-child{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-/* the head bar has no ::after spacer, so its suffix takes the slack itself */
 .kit-rule-head .kit-rule-sfx{margin-left:auto;letter-spacing:0px;}
-/* a title bar that selects its own component - see railPick() in inspector.js */
 .kit-rule-pick{cursor:pointer}
 .kit-rule-pick:hover{background:var(--c-edge2);color:var(--c-bright)}
 
 .kit-chip{display:inline-block;width:6px;height:6px;background:var(--c-cyan)}
 .kit-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--c-cyan)}
 
-/* ONE segmented LED look, drawn by cellStrip() in kit.js - the house rule is
-   "segments, never a fill", and there is exactly one renderer of them. A cell
-   past the value is DIMMED, not absent, so the whole scale is always readable.
-   Colour is set through style.fill by the caller; this is only the default. */
 .kit-cells{display:block;width:100%;height:100%;overflow:visible}
 .kit-cell{fill:var(--c-cyan)}
 .kit-cell.dim{opacity:.22}
 
-/* a seg and a band are the same instrument at the same size - see cellStrip().
-   No ground behind the cells: a dimmed cell already says "scale, not value",
-   and the well made the seg a sunk box the band was not. */
 .kit-seg{position:relative;height:15px}
 .kit-seg .kit-cells{height:15px}
-/* the signed strip carries a band's end labels, so it needs a band's box - the
-   SAME box, padding and all, because the reactivity panel stacks the two kinds
-   in one column and a 2px offset there reads as two different instruments */
 .kit-seg-signed{height:30px;padding-top:2px}
 .kit-seg-mid{stroke:var(--c-rail);stroke-width:1}
 
@@ -81,10 +46,6 @@
 .kit-band-lim{stroke:var(--c-red);stroke-width:1}
 .kit-band-needle{stroke:var(--c-bright);stroke-width:3}
 .kit-band-cap{stroke:var(--c-bright);stroke-width:6;stroke-linecap:round}
-/* the extra readings a scale carries (band()'s `marks`). Thinner than the
-   needle, because the needle is the figure the row states and these are the
-   two ends and the limit it sits between. The hot and cold legs take the same
-   two hues the pipes on the drawing do. */
 .kit-band-mark{stroke-width:1.5}
 .kit-band-mark-cold{stroke:var(--c-blue)}
 .kit-band-mark-hot{stroke:var(--c-amber)}
@@ -116,24 +77,17 @@
 .kit-btn:hover{background:var(--c-panel-hi);border-color:var(--c-edge2);color:var(--c-bright)}
 .kit-btn.on{border-color:var(--c-amber);color:var(--c-amber)}
 .kit-btn:disabled{cursor:default;opacity:.4}
-/* the arrow keys walk the keys of the panel a machine is showing in
-   (panKeyNav, ui/selwin.js), so which one they are standing on has to read */
 .kit-btn:focus-visible,.kit-btn:focus{outline:1px solid var(--c-amber-soft);outline-offset:-1px}
 .kit-btn-sunk{border:0;background:var(--c-well)}
 .kit-btn-sunk:hover{background:var(--c-panel)}
 .kit-btn-sunk.on{background:var(--c-on-amber)}
 .kit-btn-flat{border:0}
-/* a key whose label is a drawing: the glyph inherits the key's own ink, so
-   hover and disabled state carry it without a second rule */
 .kit-btn-icon{display:inline-flex;align-items:center;justify-content:center}
 .kit-icon{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:1.5;
   stroke-linecap:round;stroke-linejoin:round}
-/* SCRAM and the emergency boron dump only: the one state drawn solid, dark
-   text on full red, so it is never a hairline read at a glance. */
 .kit-btn-danger{background:var(--c-red);border-color:var(--c-red);color:var(--c-ink-on-red);font-weight:700}
 .kit-btn-danger:hover{background:var(--c-red-hi);border-color:var(--c-red-hi)}
 
-/* .kit-optlist {outline: 1px solid var(--c-panel-hi); outline-offset: -1px;} */
 .kit-optlist-row,.kit-segsel-cell{display:flex;align-items:center;width:100%;box-sizing:border-box;
   appearance:none;border:0;cursor:pointer;font:inherit;text-align:left;
   padding:0 1px;height:22px;background:var(--c-panel);color:var(--c-ink)}
@@ -153,17 +107,11 @@
 .kit-segsel-mass{font-size:var(--fs-tiny);color:var(--c-ink2);margin-top:2px}
 .kit-segsel-mass.min{color:var(--c-green)}
 
-/* actual (native range thumb) vs demand (the caret overlay): a rate-limited
-   control has to say both, or the readout lies while the plant is still
-   walking toward the order. */
 .kit-slider{display:grid;align-items:center;gap:8px; grid-template-columns: 1fr 50px;}
 .kit-slider-track{position:relative;flex:1 1 auto;height:22px}
-/* the same 15px cell box the seg and the band use, centred in the 22px track */
 .kit-slider-cells{position:absolute;top:4px;left:0;height:15px}
 .kit-slider-mark{position:absolute;top:0;width:1px;height:22px;background:var(--c-red)}
 .kit-slider-dem{position:absolute;top:0;width:1px;height:22px;background:var(--c-amber);display:block}
-/* where a press would land - see slider()'s mousemove. Amber like the demand
-   caret, because that is what it would become, and dimmer because it has not */
 .kit-slider-hov{position:absolute;top:0;width:1px;height:22px;background:var(--c-amber);
   opacity:.45;pointer-events:none}
 .kit-slider-readout.hov{color:var(--c-amber)}
@@ -174,13 +122,9 @@
   background:var(--c-amber);cursor:pointer}
 .kit-slider-input::-moz-range-track{background:transparent;height:22px}
 .kit-slider-input::-moz-range-thumb{width:3px;height:14px;border:0;background:var(--c-amber);cursor:pointer}
-/* RESERVED, NOT MEASURED: the readout is sized off the longest string fmt can
-   produce, not off the current one. Content-driven, the track (flex:1 1 auto)
-   would resize under the hand every time "9%" became "100%". */
 .kit-slider-readout{flex:0 0 auto;text-align:right;
   font-size:var(--fs-value);color:var(--c-cyan);white-space:nowrap}
 
-/* the kit's one free-text control - see textInput() in kit.js */
 .kit-textinput-input{width:100%;box-sizing:border-box;appearance:none;
   border:1px solid var(--c-edge);background:var(--c-well);color:var(--c-bright);
   font:inherit;font-size:var(--fs-value);letter-spacing:.3px;padding:3px 6px;height:22px}
@@ -188,7 +132,6 @@
 .kit-textinput-input:focus{outline:none;border-color:var(--c-amber)}
 .kit-textinput-input::placeholder{color:var(--c-ink2)}
 
-/* .kit-sliderrow{margin-bottom:8px} */
 .kit-rule-sfx.kit-mass-min{color:var(--c-green)}
 
 .kit-readout{margin-bottom:8px}
@@ -205,7 +148,6 @@
 .kit-toggle-label{flex:1 1 auto;font-size:var(--fs-label);}
 .kit-toggle-mass{font-size:var(--fs-tiny);color:var(--c-ink2)}
 
-/* the kit's numeric field - see numInput() in kit.js */
 .kit-numinput{display:flex;align-items:center;gap:5px;min-width:0}
 .kit-numinput-input{flex:1 1 0;min-width:0;box-sizing:border-box;appearance:none;
   border:1px solid var(--c-edge);background:var(--c-well);color:var(--c-bright);
@@ -221,9 +163,6 @@
 .kit-numinput-suggest.on{border-color:var(--c-amber);color:var(--c-amber)}
 .kit-numinput-input:disabled{color:var(--c-ink2);cursor:not-allowed}
 
-/* a key with a panel hanging under it - see menuKey() in kit.js. The panel is
-   out of flow, so opening one never moves the key beside it. It hangs out of
-   the title bar, so no ancestor of it may clip - see .kit-rule-head above. */
 .kit-menukey{position:relative}
 .kit-menukey-key{white-space:nowrap; margin: 0; height: 21px;}
 .kit-menukey-menu{position:absolute;top:calc(100% + 1px);left:0;z-index:3;min-width:132px;padding:6px;
@@ -231,5 +170,4 @@
   display:flex;flex-direction:column;gap:3px;max-height:70vh;overflow-y:auto}
 .kit-menukey-menu .kit-rule{margin:4px 0 2px}
 .kit-menukey-menu .kit-rule:first-child{margin-top:0}
-/* a slider standing at its own suggestion - the AUTO latch (autoKey) */
 .kit-sliderrow-auto .kit-slider-cells{opacity:.55}

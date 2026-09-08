@@ -1,9 +1,5 @@
 "use strict";
-/* Shared HTML widget kit for the three screens (control room, design bench,
-   scenario bench). Canvas now draws only the plant; everything else is DOM.
-   See docs/kit-api.md for the contract. Nothing here calls act() or touches
-   S — every widget takes an onChange/onClick callback and the CALLER decides
-   what to do with it, which is what keeps every input recordable. */
+/* nothing here calls act() or touches S: every widget takes a callback and the caller decides */
 
 const KIT = (function(){
 
@@ -21,33 +17,14 @@ const KIT = (function(){
     return e;
   }
 
-  /* shell.js's document-wide pointerover/pointerout listener reads exactly
-     these two attributes off whatever the pointer is over - no separate
-     tooltip primitive is needed on the HTML side. */
-  /* Guarded, because several callers re-state a tip on every sync pass rather
-     than tracking whether it changed - and a dataset write is a real attribute
-     write, so an unguarded one is thirty DOM mutations a second saying nothing. */
+  /* shell.js's hover listener reads these two attributes; guarded, since a dataset write is a real DOM write */
   function tip(node, title, body){
     if(node.dataset.tipTitle !== title) node.dataset.tipTitle = title;
     if(body != null && node.dataset.tipBody !== body) node.dataset.tipBody = body;
     return node;
   }
 
-  /* ══ THE SAME GUARD tip() NEEDS, FOR TEXT AND STYLE ══
-     `el.textContent = s` DESTROYS the text node and builds a new one - even when
-     the string is IDENTICAL. Two separate costs, and this answers both:
-
-       - restating a label that did not change is pure churn, and a
-         build-once/sync-only-what-changed screen is not allowed to do it;
-       - a label that DID change (the playhead clock, ten times a second) still
-         has no business replacing a node. Writing the existing text node's
-         nodeValue mutates it in place, so the element keeps one child from the
-         first sync to the last.
-
-     The first call has no text node yet and takes the textContent path, which
-     makes one; every call after it edits that one. Written here rather than in
-     each screen because trMarksSync had already hand-rolled the guard, and the
-     second copy is the one that starts drifting. */
+  /* textContent replaces the text node even for an identical string; nodeValue mutates it in place */
   function setText(node, s){
     const t = node.firstChild;
     if(t && t.nodeType === 3 && !t.nextSibling){ if(t.nodeValue !== s) t.nodeValue = s; }
@@ -56,14 +33,7 @@ const KIT = (function(){
   }
   function setStyle(node, k, v){ if(node.style[k] !== v) node.style[k] = v; return node; }
 
-  /* ══ VISIBILITY IS A CLASS, NEVER AN INLINE DISPLAY STRING ══
-     `node.style.display = ""` does not mean "show it" - it REMOVES the inline
-     override and hands the element back to the stylesheet. Every element whose
-     stylesheet default was `display:none` therefore stayed hidden forever, and
-     nothing headless could see it, because no headless run loads CSS. The alarm
-     stack and the MELT/TRIP banner both lived there. So the stylesheet states
-     the SHOWN display for every element, and this class is the only hide: never
-     write an inline display in a screen or renderer file. */
+  /* style.display="" hands the element back to the stylesheet, so hiding is a class and never inline */
   function show(node, on){
     node.classList.toggle("kit-hide", !on);
     return node;
@@ -71,25 +41,9 @@ const KIT = (function(){
 
   const clampPct = t => Math.max(0, Math.min(1, t)) * 100;
 
-  /* ONE cell geometry for every strip in the kit - box, cell height AND cell
-     count. seg()/segSigned() used to draw full-height cells in a 10-unit box
-     with a well behind them while band() drew 7-unit cells floating in 15, and
-     then kept 28 cells against a band's 40 - so the reactivity ledger, which is
-     the one panel that shows both, looked like two different instruments at two
-     different resolutions. They are the same instrument, so they are the same
-     box and the same pitch. A caller that wants a coarser strip still asks. */
   const BAND_VB_H = 15, BAND_CELLS = 40;
 
-  /* THE one segment renderer. band(), seg(), segSigned() and slider() all draw
-     their cells here - real <rect>s that are lit or dimmed, `solid` only butts
-     them because the gaps do not read at small pitch, and never a second
-     implementation of the same look.
-
-     The viewBox is 0..100 wide and stretched to the caller's box, so cell width
-     is proportional while a tick's stroke stays device-crisp (the ticks carry
-     vector-effect). Colour goes through style.fill, not the fill ATTRIBUTE:
-     zones are written as var(--c-*) and a custom property is only reliably
-     resolved in a style declaration. */
+  /* fill goes through style, not the attribute: var(--c-*) only resolves in a style declaration */
   function cellStrip(opts){
     opts = opts || {};
     const n = opts.cells || BAND_CELLS, vbH = opts.vbH || BAND_VB_H;
@@ -97,7 +51,7 @@ const KIT = (function(){
     const svg = svgEl("svg", "kit-cells" + (opts.cls ? " " + opts.cls : ""));
     svg.setAttribute("viewBox", "0 0 100 " + vbH);
     svg.setAttribute("preserveAspectRatio", "none");
-    // butted cells still seam on a stretched viewBox - snapping the edges to the pixel grid is what closes them
+    // butted cells still seam on a stretched viewBox; snapping to the pixel grid closes them
     if(opts.solid) svg.setAttribute("shape-rendering", "crispEdges");
     const step = 100 / n, cells = [];
     for(let i = 0; i < n; i++){
@@ -107,9 +61,7 @@ const KIT = (function(){
       svg.appendChild(r); cells.push(r);
     }
     let lastKey = null;
-    /* key is whatever lit/fill actually depend on. Touching 48 rects on a frame
-       that changed nothing is the entire cost of this widget, so the caller
-       states when the repaint can be skipped. */
+    /* key is whatever lit/fill depend on: touching every rect a frame is this widget's whole cost */
     function paint(key, lit, fill){
       if(key === lastKey) return; lastKey = key;
       cells.forEach((r, i) => {
@@ -128,8 +80,6 @@ const KIT = (function(){
       root.appendChild(head.el); }
     const body = el("div", "kit-well-body");
     root.appendChild(body);
-    /* `head` is handed back so a caller can make the title bar do something -
-       the component rails hang "select this component" off it. */
     return {el: root, body, head: head ? head.el : null,
             sfx: head ? head.sfxEl : null,
             setTitle: head ? head.set : function(){},
@@ -138,16 +88,7 @@ const KIT = (function(){
             nameInput: head ? head.input : null};
   }
 
-  /* Scrolls a scrolling container to show one of its children. Default
-     "nearest", so a node already on screen never moves under the hand; a rail
-     that has just changed selection asks for "start" instead and gets the
-     panel at the top, which is why the rails carry a tail of empty space.
-
-     scrollIntoView() is deliberately NOT used. It scrolls EVERY scrollable
-     ancestor, and overflow:hidden only removes the scrollbar, not the scroll -
-     so the first reveal in the control room scrolled #stage itself and left
-     the top of the transport strip cut off until a reload. This walks up to
-     the one box that declared itself a scroller and moves only that. */
+  /* not scrollIntoView(): it scrolls every scrollable ancestor, #stage included */
   function scroller(node){
     if(typeof getComputedStyle !== "function") return null;
     for(let p = node.parentNode; p && p.nodeType === 1; p = p.parentNode){
@@ -165,14 +106,7 @@ const KIT = (function(){
     else if(n.bottom > b.bottom) box.scrollTop += n.bottom - b.bottom;
   }
 
-  /* `opts.edit` turns the heading itself into the name field. A component's
-     name was a separate NAME row inside the panel, which said the same word
-     twice: once as the title and once as the thing you type into. The heading
-     IS the name, so the heading is the input. The label becomes the
-     PLACEHOLDER - the default name a blank falls back to - and `setVal()` is
-     what carries the custom one, guarded while the box has focus so a sync
-     cannot rewrite what is being typed. `sfx` is the trailing count a ganged
-     panel needs, kept out of the input so it cannot be typed over. */
+  /* opts.edit makes the heading itself the name field, with the label as its placeholder */
   function rule(label, opts){
     opts = opts || {};
     const r = el("div", "kit-rule");
@@ -234,11 +168,8 @@ const KIT = (function(){
     const root = el("div", "kit-seg kit-seg-signed");
     const strip = cellStrip({cells});
     root.appendChild(strip.el);
-    // the zero rule is a tick on the strip, like every other rule the kit draws
     strip.el.appendChild(tick("kit-seg-mid", 50));
-    /* the same end labels a band() carries, for the same reason: a centre-zero
-       bar with no scale on it says which way but never how far. `full` is what
-       either end of the strip means. */
+    /* `full` is what either end of the strip means */
     if(opts.full != null){
       const dp = opts.dp || 0;
       const lo = el("span", "kit-band-lo"); lo.textContent = "-" + opts.full.toFixed(dp);
@@ -248,7 +179,6 @@ const KIT = (function(){
     function set(frac, color){
       frac = Math.max(-1, Math.min(1, frac));
       color = color || "var(--c-cyan)";
-      // lit outward from the middle, in the direction of the sign
       const k = Math.round(Math.abs(frac) * half), up = frac >= 0;
       const lit = up ? i => i >= half && i < half + k : i => i < half && i >= half - k;
       strip.paint((up ? k : -k) + "|" + color, lit, () => color);
@@ -257,10 +187,6 @@ const KIT = (function(){
     return {el: root, set, strip};
   }
 
-  /* A mark on a seg is the SAME thing a band()'s lim tick is - the line you are
-     not meant to cross - so it is the same tick, in the same red, on the same
-     strip. It used to be a grey HTML rule floating over the cells, which read
-     as decoration next to a band sitting in the row above it. */
   function segMark(opts){
     opts = opts || {};
     const base = opts.signed ? segSigned(opts) : seg(opts);
@@ -280,14 +206,7 @@ const KIT = (function(){
     return {el: base.el, set};
   }
 
-  /* One zoned scale strip (band()+bandBar() combined). Zone/lo/hi are static
-     for the life of the widget - only the needle and the active zone move.
-
-     The BAR is SVG and the LABELS are HTML on purpose. preserveAspectRatio
-     "none" stretches the 100-unit x axis to whatever width the panel gives,
-     which is exactly right for the cells and wrong for anything with a shape:
-     the ticks survive it through vector-effect, and text would not survive it
-     at all - it would be squashed, and at a size the CSS ladder never set. */
+  /* the bar is SVG and the labels HTML: the stretched x axis would squash text */
   function band(opts){
     opts = opts || {};
     const lo = opts.lo || 0, hi = opts.hi != null ? opts.hi : 1;
@@ -307,22 +226,14 @@ const KIT = (function(){
       cellZone.push(zoneAt(lo + span * (i + .5) / BAND_CELLS));
     const zoneFill = i => zones[cellZone[i]][1];
     if(opts.lim) for(const L of opts.lim) svg.appendChild(tick("kit-band-lim", at(L[0])));
-    /* EXTRA READINGS ON THE SAME AXIS - one line each, named by the caller and
-       moved by set()'s second argument. They are drawn UNDER the needle: the
-       needle is what the row's own figure says, and these are the company it
-       keeps. */
     const marks = (opts.marks || []).map(cls => {
       const m = tick("kit-band-mark kit-band-mark-" + cls, 0);
       svg.appendChild(m); return m; });
     const needle = tick("kit-band-needle", 0);
-    /* a round cap on a zero-length line is a device-pixel DOT even under the x
-       stretch, because non-scaling-stroke puts the cap in device space */
+    /* non-scaling-stroke puts the cap in device space, so a zero-length line is a dot */
     const cap = tick("kit-band-cap", 0); cap.setAttribute("y2", 0);
     svg.appendChild(needle); svg.appendChild(cap);
-    /* the scale is drawn for the range the plant is STEERED in, so a scrammed
-       core runs DNBR clean off the end of it. A detached pip past the end says
-       the needle PEGGED rather than arrived. HTML, not SVG: its offset past the
-       end has to be device pixels, which a stretched x axis cannot express. */
+    /* HTML, not SVG: the peg's offset past the end has to be device pixels */
     const peg = el("span", "kit-band-peg");
     root.appendChild(peg);
 
@@ -338,9 +249,7 @@ const KIT = (function(){
       return {e: lbl, x: at(z[0])};
     });
 
-    /* a zone label sits at its own value, so two close boundaries land on the
-       same pixels - measured against the ends and each other, and the one
-       further right loses. Widths are only knowable once the panel has a width */
+    /* two close boundaries land on the same pixels, and the one further right loses */
     function fitLabels(){
       const W = root.clientWidth;
       if(!W || !root.getBoundingClientRect) return;
@@ -370,15 +279,12 @@ const KIT = (function(){
       cap.setAttribute("x1", x); cap.setAttribute("x2", x);
       const off = v < lo ? -1 : v > hi ? 1 : 0;
       peg.className = "kit-band-peg" + (off ? (off > 0 ? " hi" : " lo") : "");
-      // only the zone the needle is in stays lit: the scale says WHERE you are
       const zi = zoneAt(v);
       strip.paint(zi, i => cellZone[i] === zi, zoneFill);
     }
     set(opts.v != null ? opts.v : lo);
     return {el: root, set};
   }
-  /* non-scaling-stroke is what lets a 1-unit line stay a crisp device-pixel
-     rule under the band's non-uniform x stretch */
   function tick(cls, x){
     const l = svgEl("line", cls);
     l.setAttribute("x1", x); l.setAttribute("x2", x);
@@ -430,10 +336,6 @@ const KIT = (function(){
     return {el: e, set};
   }
 
-  /* A GLYPH THAT IS A DRAWING, not a character: a title bar key drawn as "−"
-     or "×" is at the mercy of whatever font answered, and the two never line
-     up with each other. One viewBox, one stroke, and the key states its own
-     meaning through `label` for the tooltip either way. */
   function icon(paths){
     const s = svgEl("svg", "kit-icon");
     s.setAttribute("viewBox", "0 0 16 16");
@@ -465,18 +367,8 @@ const KIT = (function(){
     return {el: b, set};
   }
 
-  /* Actual vs demand: the thumb (native range value) is the ACTUAL, the caret
-     overlay is DEMAND. o.dem==null means no rate limit on this control. Uses
-     a native <input type=range> for free drag/keyboard/touch handling, with the
-     kit's one cellStrip() laid under it for the segmented look. */
-  /* ══ THE NATIVE CONTROL COUNTS STEPS, NOT VALUES ══
-     It used to be given the caller's own min and max, and a scale is allowed to
-     run either way here - boron is 0 down to -6000, clean water at the LEFT. An
-     <input type=range> with min above max is invalid: the browser collapses the
-     range onto a point, so the track took no click at all and only the keys and
-     the nudge buttons moved it. So the input runs 0..N in whole steps and the
-     value is a linear map off that, which cannot care which way the scale goes.
-     Keyboard arrows still move exactly one step, because a step IS the unit. */
+  /* the thumb is the ACTUAL, the caret overlay is DEMAND */
+  /* the input counts 0..N whole steps: a scale may run either way here, and a native range with min above max is invalid */
   function slider(opts){
     opts = opts || {};
     const min = opts.min, max = opts.max, span = max - min;
@@ -498,19 +390,12 @@ const KIT = (function(){
     const dem = el("div", "kit-slider-dem kit-hide");
     track.appendChild(dem);
     const input = el("input", "kit-slider-input", {type: "range", min: 0, max: N, step: 1});
-    /* where the value WOULD land if the hand pressed here. A slider states the
-       actual and the demand and said nothing at all about the press about to be
-       made, on a control whose whole span is 6000 pcm wide. */
+    /* where the value would land if the hand pressed here */
     const hov = el("div", "kit-slider-hov kit-hide");
     track.appendChild(hov);
     track.appendChild(input);
     const readout = el("span", "kit-slider-readout");
-    /* Reserve the readout at the widest string fmt can return, sampled across
-       the range. Left content-driven it resizes the flexible track - and so the
-       thumb - every time the value's LENGTH changes ("9%" -> "100%"). The body
-       font is monospace, so ch is exact. Grows but never shrinks: some fmt
-       closures label a target that changes under them, and a reservation that
-       gave width back would put the jitter straight back. */
+    /* reserved at the widest string fmt returns: content-driven, the readout's length resizes the track */
     let roCh = 0;
     function roFit(str){
       if(str.length <= roCh) return;
@@ -538,12 +423,9 @@ const KIT = (function(){
       if(val !== lastVal){
         lastVal = val;
         if(document.activeElement !== input) input.value = posOf(val);
-        // lit to the ACTUAL, like the band's scale; the amber hairline the hand
-        // drags is the native thumb and the caret above it is demand
         const lit = Math.round(Math.max(0, Math.min(1, (val - min) / (max - min))) * cells);
         strip.paint(lit, i => i < lit);
-        // a preview under the hand outranks the live figure: the reader is
-        // asking what a press WOULD do, and mouseleave puts the actual back
+        // a preview under the hand outranks the live figure until mouseleave
         if(opts.fmt && !readout.classList.contains("hov")) roShow(String(opts.fmt(val)));
       }
       if(demVal != null && demVal !== lastDem){
@@ -556,21 +438,9 @@ const KIT = (function(){
     return {el: root, set};
   }
 
-  /* THE one free-text input in the kit. Same shape as slider(): a native
-     control for free keyboard/IME/paste handling, guarded against
-     clobbering an in-progress edit the way slider()'s native range input
-     already is. maxlength is a real browser-level refusal, not just a
-     display truncation - the caller (partName()'s cap, core/ui.js) still
-     truncates on read too, so a value written any other way (a save file)
-     can't outrun it. */
-  /* `bare` hands back the <input> itself instead of a wrapper, and `cls`
-     replaces the class it is dressed in. Both exist for rule()'s editable
-     heading, which is a free-text control that has to sit INSIDE a flex row
-     wearing the heading's own type - a second implementation of "guarded text
-     box" would be a second place the focus guard could be forgotten. */
+  /* `bare` hands back the <input> itself, for rule()'s editable heading */
   function textInput(opts){
     opts = opts || {};
-    // a note is a sentence, not a name, so the same door hands back a box that wraps
     const input = opts.multiline ? el("textarea", opts.cls || "kit-textinput-input")
                                  : el("input", opts.cls || "kit-textinput-input", {type: "text"});
     if(opts.rows) input.setAttribute("rows", opts.rows);
@@ -593,26 +463,12 @@ const KIT = (function(){
     return {el: root, input, set, get, setPlaceholder};
   }
 
-  /* textInput()'s sibling, for a MACHINE'S OWN QUANTITY - kg/s, kW/K, MPa,
-     m^3. It parses, it carries a unit suffix, and it REVERTS on garbage
-     rather than writing a NaN into the design. It never clamps and it has no
-     range: an absurd turbine is a legal design that performs accordingly and
-     blows the mass budget, which is the designer's problem.
-     `suggest` is the one affordance - it fills the field with a value matched
-     to the rest of the plant. It never limits and it is never applied on its
-     own. */
-  /* WHICH OPTION THE POINTER IS OVER, or null when it leaves. One helper, so a
-     list and a segmented row report a hover the same way - the bench prices
-     the option under the cursor with it (design-bench.js). */
   function hoverIdx(node, i, opts){
     if(!opts.onHover) return;
     MOUSE.on(node, {enter: () => opts.onHover(i), leave: () => opts.onHover(null)});
   }
 
-  /* ══ THE ONE AUTO KEY ══
-     A latch, not a one-shot: latched, the control IS the suggestion, and the
-     first value written by hand takes it off. The slider's seat stands at the
-     right edge of its row; the field's seat stands left of the input. */
+  /* a latch, not a one-shot: latched, the control IS the suggestion */
   function autoKey(auto){
     const b = el("button", "kit-numinput-suggest", {type: "button"});
     b.textContent = "AUTO";
@@ -670,7 +526,7 @@ const KIT = (function(){
     const root = el("div", "kit-optlist");
     const rows = items.map((it, i) => {
       const row = el("button", "kit-optlist-row", {type: "button"});
-      if(it.cls) row.classList.add(it.cls);   // what the row IS, for a list that colours its choices
+      if(it.cls) row.classList.add(it.cls);
       const mark = dot();
       row.appendChild(mark.el);
       const name = el("span", "kit-optlist-name"); name.textContent = it.name;
@@ -739,9 +595,6 @@ const KIT = (function(){
     root.appendChild(sl.el);
     const sug = opts.auto ? autoKey(opts.auto) : null;
     if(sug) root.appendChild(sug.el);
-    /* WHAT IT COSTS STANDS ON THE LABEL, right of the name and left of nothing.
-       It was a line of its own under the track, so every knob on a panel spent
-       a row saying a figure that belongs beside the thing it prices. */
     function set(val, demVal, massDelta){
       sl.set(val, demVal);
       if(massDelta != null){
@@ -749,7 +602,6 @@ const KIT = (function(){
         head.sfxEl.classList.toggle("kit-mass-min", massDelta < 1);
       }
     }
-    // dragging writes a value, so the accessor takes the latch off by itself
     const setAuto = on => { if(sug) sug.set(on);
       root.classList.toggle("kit-sliderrow-auto", on); };
     return {el: root, set, setAuto, slider: sl};
@@ -789,10 +641,7 @@ const KIT = (function(){
     return {el: root, set};
   }
 
-  /* A KEY WITH A PANEL HANGING OFF IT. One handler in the hub's PRE phase opens
-     and shuts it: the plant is a canvas and swallows presses that land on it,
-     and a key with its own click handler would shut the menu on the press and
-     reopen it on the click. */
+  /* opened in the hub's PRE phase: the canvas swallows presses, so a click handler would shut and reopen it */
   function menuKey(opts){
     const wrap = el("div", "kit-menukey" + (opts.cls ? " " + opts.cls : ""));
     const menu = el("div", "kit-menukey-menu kit-hide");
