@@ -313,7 +313,7 @@ function buildFeedAuto(sgId){
   blkMk("sink",{sink:"freg",arg:sgId},[pos],"Drives this generator's feed regulating valve.");
 }
 /* the setpoints are read off the valve, never copied: its own panel stays the one place they are stated */
-const reliefFitIdsD = () => Object.keys(D.fittings).filter(f=>D.fittings[f].mode==="relief" && !D.fittings[f].spring);
+const reliefFitIdsD = () => reliefFitsD().filter(f=>!D.fittings[f].spring);
 function buildReliefAuto(fid){
   const p=blkMk("source",{sig:"fitp",arg:fid},null,"The pressure at this valve.");
   const lift=blkMk("source",{sig:"fitlift",arg:fid},null,"The valve's own lift point, read off the valve. It is never copied here, so the valve's panel stays the one place it is set."),
