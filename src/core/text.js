@@ -1,12 +1,4 @@
 "use strict";
-/* monospace text measuring and drawing */
-
-/* ─────────────── text ─────────────── */
-/* TWO STRINGS PER DRAWN STRING, and there are hundreds of those a frame - so
-   both are built once per distinct value and handed back. The scale is a
-   dozen steps and letter-spacing a handful, so these tables settle in the
-   first frame; the guard is there because nothing STOPS a caller passing an
-   arbitrary size, not because one is expected to. */
 const FNT_CACHE=new Map(), SP_CACHE=new Map();
 function fnt(o){
   const size=(o&&o.size)||10, bold=!!(o&&o.weight===700), key=bold?-size:size;
@@ -29,14 +21,7 @@ function txt(s,x,y,o){
   ctx.fillText(s,x,y);
   try{ctx.letterSpacing="0px";}catch(e){}
 }
-/* A WIDTH IS A PURE FUNCTION OF (font, letter-spacing, string), and MONO is a
-   system stack - nothing loads late and changes an answer under us. So each
-   distinct label is measured once: measureText() is a call across into the
-   renderer that hands back a TextMetrics OBJECT, and the mimic asked for
-   ninety of those a frame to be told what it was told last frame. Measured in
-   Chrome, not inferred. Keyed in three levels, so the lookup itself builds no
-   key string; the transform on the canvas does not enter it, which is why one
-   table can serve every hosted context. */
+/* a width is a pure function of (font, letter-spacing, string); the canvas transform does not enter the key */
 const TW_BY_SIZE=new Map();
 function twSlot(size,bold,sp){
   const k=bold?-size:size;
@@ -56,37 +41,20 @@ function tw(s,o){
   m.set(s,w);
   return w;
 }
-/* The documented type scale, largest first. fitTxt() walks it, so a shrunk label
-   still lands on a real step of the scale instead of an arbitrary size. */
+/* the type scale, largest first: fitTxt() walks it, so a shrunk label lands on a real step */
 const TSCALE=[15,13,12,10,9.5,9,8.5,8,7.5,7,6.5,6];
-/* Draw a string that must not run into whatever sits beside it: step down the
-   scale until it fits maxw, then draw. Returns the size actually used.
-   A label overrunning its own row is the commonest way this UI breaks - two
-   panels were doing it silently before this existed, and neither was noticed by
-   eye. Give it the width the neighbour leaves free, not the width of the box. */
 function fitTxt(s,x,y,maxw,o){
   o=o||{};
   const size=fitStep(s,maxw,o);
   txt(s,x,y,Object.assign({},o,{size}));
   return size;
 }
-/* fitTxt shrinks; this one shrinks AND THEN CUTS. The ladder has a floor, so a
-   long string in a narrow column overflows at 6px however far it was stepped
-   down - which is how the trend legend came to draw past the edge of its own
-   chart. The HTML side has had this all along as text-overflow:ellipsis; this
-   is the canvas half of the same behaviour.
-
-   ONLY EVER FOR A NAME. A clipped number is a DIFFERENT number and reads as one
-   - "-5437" cut to "-54" is not a shortened value, it is a wrong one. A caller
-   with a figure to place must drop the unit, drop a neighbour, or take a wider
-   box; there is no honest way to trim it. */
+/* names only: this one cuts, and a clipped number is a different number */
 function clipTxt(s,x,y,maxw,o){
   o=o||{};
-  /* o.step:false cuts WITHOUT walking the ladder first. For a set of labels
-     that must all read as one class - every machine's name on the plant - a
-     stepped-down one is a different kind of label, not a narrower one. */
+  /* o.step:false cuts without walking the ladder: a set of labels must all read as one class */
   const size = o.step===false ? (o.size||10) : fitStep(s,maxw,o);
-  const q=Object.assign({},o,{size});     // one clone, read three times
+  const q=Object.assign({},o,{size});
   let t=String(s);
   if(tw(t,q)>maxw){
     const per=Math.max(1e-6,tw("M",q));
@@ -95,35 +63,23 @@ function clipTxt(s,x,y,maxw,o){
   txt(t,x,y,q);
   return size;
 }
-/* A FIGURE THAT MUST LAND IN A BOX NARROWER THAN THE LADDER'S FLOOR. Steps
-   down first, then scales UNIFORMLY past it - a cut number is a different
-   number, so clipTxt() may not be used on one, and a horizontal-only squeeze
-   kept the full cap height in a box that had no room for it. */
+/* for a figure narrower than the ladder's floor: steps down, then scales uniformly past it */
 function squeezeTxt(s,cx,yBase,maxw,o){
   const q=Object.assign({},o,{size:fitStep(s,maxw,o),align:"center"});
   const w=tw(s,q);
-  // o.maxh is the CAP HEIGHT the caller has room for: a one-cell box runs out
-  // of height before it runs out of width, and only the caller knows what else
-  // stands in it
+  // o.maxh is the cap height the caller has room for
   const kh = o.maxh ? o.maxh/(q.size*CAP) : 1;
   if(w<=maxw && kh>=1){ txt(s,cx,yBase,q); return; }
   const k=Math.min(maxw/w,kh);
   ctx.save(); ctx.translate(cx,yBase); ctx.scale(k,k);
   txt(s,0,0,q); ctx.restore();
 }
-/* the step fitTxt would use, without drawing - so clipTxt can ask the same
-   question and there is still one walk of the ladder */
 function fitStep(s,maxw,o){
   const want=(o&&o.size)||10;
-  // ONE clone for the whole walk, its size moved between steps: a fresh
-  // object per rung was twelve of them per label per frame
   const q=Object.assign({},o);
   for(const t of TSCALE){ q.size=t; if(t<=want && tw(s,q)<=maxw) return t; }
   return TSCALE[TSCALE.length-1];
 }
-/* THE ONE LINE BREAKER. A caller that draws the lines itself - a plated label
-   on a symbol - needs the same breaks the flowing text gets, and two copies of
-   this walk had already drifted into a count that disagreed with the draw. */
 function wrapLines(s,maxw,o){
   const words=String(s).split(" "), out=[]; let line="";
   for(const wd of words){
@@ -141,12 +97,6 @@ const wrapCount=(s,maxw,o)=>Math.max(1,wrapLines(s,maxw,o).length);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const pad=(v,n)=>String(v).padStart(n," ");
 
-/* ─────────────── label placement ───────────────
-   Every small label used to be positioned by a hand-tuned magic number, and each
-   number had been tuned against a different font size, so a 6.5px label in a 10px
-   box sat a pixel low while an 8px one in an 8px box poked out of the top. Cap
-   height is a fixed share of the em in this mono stack, so one helper places them
-   all: midBase() returns the baseline that optically centres CAPS in a box. */
 const CAP=0.72;                                     // cap height / em
 const capH    = size       => size*CAP;
 const midBase = (y,h,size) => y+h/2+size*CAP/2;

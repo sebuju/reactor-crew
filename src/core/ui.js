@@ -1,53 +1,23 @@
 "use strict";
 
-/* ptrHost names the canvas ui.ptr is measured in: null for the page canvas, or
-   the element a hosted widget owns (see hostPaint in render/plant.js). Each
-   host has its OWN coordinate space, so a point from one must never be tested
-   against a widget pushed by another - they overlap numerically.
-   ui.host is the one being painted right now: a draw function shared by two
-   hosts needs it to tell its own per-host state apart. */
+// ptrHost is the canvas ui.ptr was measured in (null = page canvas); hosts overlap numerically
 const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9},ptrHost:null,host:null};
 function hostScope(el){ ui.host=el; }
 
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
-/* ══ CSS PIXELS, ON A CANVAS MEASURED IN LAYOUT UNITS ══
-   #cv stretches W layout units across the stage, so everything drawn on it
-   grows with the window. That is right for the PLANT and wrong for anything
-   that is furniture - a menu, a key, a leader to an HTML rail - because those
-   sit among HTML type that is plain px. cvK() is CSS px per layout unit; its
-   reciprocal is what one screen pixel is worth here. */
 function cvK(){ const r=cv.getBoundingClientRect(); return r.width? r.width/W : 1; }
 const cvPx=()=>1/cvK();
-/* THE PLANT VIEW'S BOX, IN CLIENT PIXELS - the one door from VIEW into the space
-   an absolutely positioned HTML element lives in. Two callers park furniture on
-   the edge of the plant view (the ZOOM key and the tooltip) and a second copy of
-   this arithmetic would drift the moment the letterbox changed. */
 function viewRectCss(){
   const rc=cv.getBoundingClientRect(), k=cvK();
   return {left:rc.left+VIEW.x*k, top:rc.top+(VIEW.y-TOPBAR_H)*k,
           right:rc.left+(VIEW.x+VIEW.w)*k, bottom:rc.top+(VIEW.y+VIEW.h-TOPBAR_H)*k};
 }
-let viewOn=false;                       // are widgets being pushed through it?
-/* ══ THE LETTERBOX, HALVED ══
-   vFit() scales the plant to FIT its box, so unless the box happens to share the
-   plant's aspect ratio there is slack on one axis - and the transform lands the
-   plant's top-left on the box's top-left, so every pixel of that slack used to
-   pile up on the bottom and the right. It read as a plant sitting wrong in its
-   frame rather than as a margin. Split it.
-   Measured against the CURRENT scale, not the fit, so it is exactly zero the
-   moment you zoom in - which is when there is no slack to split.
-   Recomputed per call rather than stored on VIEW: it is a pure function of four
-   fields already there, and a stored copy is one more thing a pan could leave
-   stale. The three places that map plant space to screen space add it; the clip
-   rect and vIn() do not, so a pan can still carry the plant across the whole box. */
+let viewOn=false;
 const vPad=()=>({x:Math.max(0,(VIEW.w-VIEW.cw*VIEW.s)/2),
                  y:Math.max(0,(VIEW.h-VIEW.ch*VIEW.s)/2)});
 const vOrigin=()=>{ const d=vPad(), m=vXf();
   const x=VIEW.x+d.x-(VIEW.cx+VIEW.ox)*VIEW.s, y=VIEW.y+d.y-(VIEW.cy+VIEW.oy)*VIEW.s;
-  // snapped on the GRID's own corner, not on plant zero: every box edge is
-  // GX (12) or GY plus a whole number of cells, and neither of those is a whole
-  // number of cells itself - snapped at zero the cells were exact and every
-  // machine on them stood a quarter of a pixel off
+  // snapped on the GRID's own corner, not plant zero: GX/GY are not whole cells
   const fix=(o,a,e)=>{ const dv=m.k*(o+a*VIEW.s)+e; return o+(Math.round(dv)-dv)/m.k; };
   return {x:fix(x,GX,m.ex), y:fix(y,GY,m.ey)}; };
 const vPt=p=>{ const o=vOrigin();
@@ -55,43 +25,15 @@ const vPt=p=>{ const o=vOrigin();
 const vScr=p=>{ const o=vOrigin();
   return {x:o.x+p.x*VIEW.s, y:o.y+p.y*VIEW.s}; };
 const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
-/* ...ON THE PLANT, which a point measured on a hosted canvas never is. Each host
-   has its own space and they overlap numerically (ptrHost, top of this file), so
-   a press inside the core panel passes vIn() too - which is how a right click on
-   the lattice opened the deck menu for whatever machine the panel stood over. */
+// a point measured on a hosted canvas passes vIn() too, so it is excluded here
 const vHit=p=>!ui.ptrHost&&vIn(p);
 function vBox(x,y,w,h){ VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h; }
-/* ══ A CELL IS A WHOLE NUMBER OF SCREEN PIXELS, AND THE PLANT STANDS ON ONE ══
-   The plant is drawn in grid units and then scaled twice - the stage's own
-   sc*dpr, and VIEW.s on top of it - so a cell landed on 19.03 device pixels at
-   a fractional origin: every machine's box, the grid line under it and the
-   pipe leaving it each rounded a different way, and a box read one pixel wider
-   than the cells it was standing on. vDevK() is what one grid unit is worth in
-   DEVICE pixels off the canvas' own transform (1 headless, where there is no
-   bitmap to be off by a pixel on); vSnapS() takes the scale DOWN to the
-   nearest whole pixel per cell, never up, or the fit overflows its own box by
-   half a pixel a cell; vOrigin() is the one place the plant's top-left is
-   computed, snapped to a device pixel, and the draw and the hit test both read
-   it so they cannot disagree. */
 function vXf(){ const m=ctx.getTransform&&ctx.getTransform();
   return m&&m.a ? {k:m.a, ex:m.e, ey:m.f} : {k:1, ex:0, ey:0}; }
 const vDevK=()=>vXf().k;
 function vSnapS(s){ const k=vDevK(); return Math.max(1,Math.floor(CELL*s*k))/(CELL*k); }
-/* ZOOM STOPS AT 1:1 ON THE PANELS. A margin panel is HTML scaled by the same
-   VIEW.s the drawing is (marginZoomK(), ui/margin.js), so past the scale where
-   that reaches 1 nothing gains detail - the panel's own pixels are magnified.
-   Absent (headless, no panels) there is no ceiling. */
-// rungs past 1:1 the hand still gets - a magnified panel is worth the closer look
 const ZOOM_IN_RUNGS=2;
 const vSMax=()=>(typeof marginZoomMaxS==="function") ? marginZoomMaxS()*Math.pow(ZOOM_STEP,ZOOM_IN_RUNGS) : Infinity;
-/* ══ AND IT STOPS A FEW RUNGS OUTSIDE THE SHIP ══
-   Unbounded, holding PageDown ran z to 0.000089 while VIEW.s sat pinned at the
-   one-device-pixel floor vSnapS() puts under a cell - so the picture had stopped
-   changing long before and the control was simply DEAD, twenty-odd presses from
-   showing anything again.
-   The floor is stated in ZOOM_STEP rungs PAST the whole ship rather than at that
-   pixel limit, which is true but sits a hundredfold too deep to be a control,
-   and not at the fit itself, which is tighter than the hand has ever had. */
 const ZOOM_OUT_RUNGS=3;
 const vZMin=()=>vFitAll()/Math.pow(ZOOM_STEP,ZOOM_OUT_RUNGS);
 function vScale(z){
@@ -99,16 +41,6 @@ function vScale(z){
   VIEW.z=clamp(z, vZMin(), vSMax()/f);
   VIEW.s=vSnapS(VIEW.fit*VIEW.z);
 }
-/* `padX`/`padY` are layout units the FIT gives up and the BOX does not - room
-   reserved around the plant for something that stands beside it (the margin
-   panels, ui/margin.js). Taken off the view box instead, the clip below shrinks
-   with it and the drawing is cut in a band inside the canvas; taken off the fit,
-   the plant is simply drawn smaller and vPad() centres it in the slack. */
-/* `winW`/`winH` are the extent the fit COVERS, and they are not the content box.
-   The content box is what panning is bounded by and it stays the whole ship; the
-   fit is taken on a WINDOW of it, so z=1 is a working view of a few machines
-   rather than the entire drawing shrunk to nothing. Absent, the two are the same
-   and this is the old behaviour - which is what the scenario screen wants. */
 function vFit(x,y,w,h,cx,cy,cw,ch,padX,padY,winW,winH){
   vBox(x,y,w,h);
   VIEW.cx=cx; VIEW.cy=cy; VIEW.cw=cw; VIEW.ch=ch;
@@ -116,51 +48,20 @@ function vFit(x,y,w,h,cx,cy,cw,ch,padX,padY,winW,winH){
   VIEW.fit=Math.min(fw/Math.max(winW||cw,1), fh/Math.max(winH||ch,1));
   vScale(VIEW.z);
 }
-/* what the whole ship would fit at, which is where the FIT key goes. 1 BEFORE THE
-   FIRST DRAW: the view has no box until drawPlant() has run once, and a zero there
-   is not "the ship fits at nothing", it is "nobody has measured yet" - taken
-   literally it scaled the plant to 0.003 and drew an empty screen. */
+// 1 before the first draw: no box yet means nobody has measured, not "fits at nothing"
 const vFitAll=()=>(VIEW.w<=0||VIEW.h<=0) ? 1 :
   Math.min(VIEW.w/Math.max(VIEW.cw,1), VIEW.h/Math.max(VIEW.ch,1))/Math.max(1e-9,VIEW.fit);
-/* ══ PUT PLANT POINT `a` UNDER SCREEN POINT (sx,sy) ══
-   This is the inverse of vScr() and it must stay the inverse of vScr(). Three
-   call sites - the zoom key, the wheel, and the wheel's off-plant fallback -
-   each inverted the mapping by hand, which was survivable while the mapping was
-   two terms and stopped being survivable the moment vPad() added a third: two of
-   the three would have silently missed it and the plant would jump under the
-   pointer on every wheel notch. One function, so it cannot be missed twice. */
 function vAnchor(a,sx,sy){
   const d=vPad();
   VIEW.ox=(a.x-VIEW.cx)-(sx-VIEW.x-d.x)/VIEW.s;
   VIEW.oy=(a.y-VIEW.cy)-(sy-VIEW.y-d.y)/VIEW.s;
 }
-// zoom about a plant point - the wheel holds the point under the pointer, the
-// key centres on the component you have selected
 function vZoom(z,cx,cy){
   vScale(z);
   vAnchor({x:cx,y:cy}, VIEW.x+VIEW.w/2, VIEW.y+VIEW.h/2);
 }
-/* ══ THE ZOOM LADDER ══
-   Presses land on RUNGS rather than multiplying wherever the wheel happened to
-   leave off, so the same two keys always give back the same set of scales - the
-   PCT_STEP idiom (render/plant.js), with the strict floor/ceil that guarantees a
-   press starting off a rung still moves the way it was pressed.
-   Only the top end is held, and vScale() already owns it. NO BOTTOM: the wheel
-   has never had one and the view is allowed out past the fit, so a key that
-   stopped at vFitAll() was a second, tighter answer to a question the hand
-   already answers differently.
-   EASED, on the same tween a hop uses, and about the point already in the
-   middle - so what you were reading stays put, which is the move the wheel makes
-   about the pointer. A press while a hop is still flying keeps the HOP's target,
-   so the two cannot pull the camera to two different places.
-   The rung is counted off the PENDING scale where there is one, or two quick
-   presses both step off the same part-way value and the second buys nothing. */
 const ZOOM_STEP=1.5;
 function vZoomStep(dir){
-  /* ZOOM_EPS is not a tolerance, it is the float grid's own error - the PCT_EPS
-     sentence (render/plant.js). Landed exactly on a rung, log() answers a hair
-     either side of the integer, and the strict ceil() then picked the rung it
-     was already standing on: measured, PageDown stuck at z 0.8 for ever. */
   const ZOOM_EPS=1e-6;
   const base=panZ!=null ? panZ : VIEW.z;
   const n=Math.log(Math.max(1e-9,base))/Math.log(ZOOM_STEP);
@@ -168,128 +69,61 @@ function vZoomStep(dir){
   vPanPt(panTo || vPt({x:VIEW.x+VIEW.w/2, y:VIEW.y+VIEW.h/2}), Math.pow(ZOOM_STEP,rung));
 }
 
-/* ══ PUT A BOX IN THE MIDDLE OF THE VIEW, AND EASE THE WAY THERE ══
-   vPanTo() stores the plant POINT rather than a solved VIEW.ox/oy, because the
-   ease is spread over a dozen frames and the view may be zoomed, letterboxed
-   or resized inside them - all of which move where that point has to sit. The
-   target is re-solved through vAnchor() every step for the same reason the
-   wheel and the zoom key go through it: it is the inverse of vScr(), and a
-   second copy of the mapping drifts the day the mapping grows a term.
-   A HAND ALWAYS WINS: a drag or a wheel drops the target, so the view never
-   crawls back out from under the pointer. */
+// the plant POINT, not a solved VIEW.ox/oy: the view may zoom or resize mid-ease
 let panTo=null, panZ=null;
-/* Approach rate. An exponential has no fixed duration - it lands when it is
-   within half a pixel of the target, so a long hop takes longer than a short
-   one, which is the right shape for a camera and the wrong shape to quote one
-   number for: measured on the stock ship, 0.38 s onto a neighbouring machine
-   and 0.50 s across the board. */
 const PAN_K=16;
-/* Layout units - the space the tween's own quantity is measured in, since what
-   eases is a position ON THE GLASS. An exponential has an infinite tail and only
-   the drawn end of it is real, so half a pixel is where it is called landed. */
 const PAN_EPS=0.5;
 function vCenterOn(r){ vAnchor({x:r.x+r.w/2, y:r.y+r.h/2}, VIEW.x+VIEW.w/2, VIEW.y+VIEW.h/2); }
-/* `z` is optional and rides the SAME tween. Set on its own the scale snapped
-   while the pan still eased, so the drawing leapt sideways at the new zoom and
-   then slid to the target - it read as arriving from off to one side. Clamped
-   where vScale() clamps, or a target past the 1:1 ceiling never converges and
-   the ease never ends. */
-/* The pending scale is held inside the SAME bounds vScale() enforces, at both
-   ends. Clamped only at the top, hammering PageDown parked panZ far below the
-   floor VIEW.z can actually reach - and vZoomStep() counts its next rung off the
-   pending figure, so every press back up climbed a rung of a ladder nothing was
-   standing on and the picture did not move for twenty of them. */
 function vPanPt(p,z){
   panTo={x:p.x, y:p.y};
   panZ = z==null ? null : clamp(z, vZMin(), vSMax()/Math.max(1e-9,VIEW.fit));
 }
 function vPanTo(r,z){ vPanPt({x:r.x+r.w/2, y:r.y+r.h/2}, z); }
-/* ══ THE TARGET IS PINNED; WHAT EASES IS WHERE ON THE GLASS IT SITS ══
-   It used to ease VIEW.ox/oy toward the solved "target at the middle" while the
-   scale eased alongside, and those are two different motions: early in the walk
-   the view is still centred somewhere else, so growing the scale pushed the
-   target FURTHER out before the pan hauled it back. It read as zooming into the
-   wrong place and then sliding.
-   So the target keeps a screen position of its own and that is what is walked to
-   the middle - the zoom is then always ABOUT the target, which is the move the
-   wheel makes about the pointer. */
 function vPanStep(dt){
   if(!panTo) return false;
   const cx=VIEW.x+VIEW.w/2, cy=VIEW.y+VIEW.h/2;
-  const s0=vScr(panTo);                        // where it sits NOW, at the old scale
+  const s0=vScr(panTo);
   if(panZ!=null){
     vScale(approach(VIEW.z,panZ,dt,PAN_K));
-    // landed ON the figure, not near it - the same snap the pan makes below. An
-    // approach stops a fraction short, and vZoomStep() counts its next rung off
-    // VIEW.z: 0.15 % short reads as "already on this rung" and the ladder stuck.
+    // landed ON the figure: an approach stops short, and vZoomStep() counts its rung off VIEW.z
     if(Math.abs(panZ-VIEW.z)<panZ*1e-3){ vScale(panZ); panZ=null; }
   }
   const sx=approach(s0.x,cx,dt,PAN_K), sy=approach(s0.y,cy,dt,PAN_K);
   vAnchor(panTo,sx,sy);
-  // the ZOOM has to be done too, or the pan lands first, the tween ends and the
-  // scale is left stranded part of the way there
   if(panZ==null && Math.abs(sx-cx)<PAN_EPS && Math.abs(sy-cy)<PAN_EPS){
     vAnchor(panTo,cx,cy); panTo=null; }
   return true;
 }
 
-// a keystroke is a registry too: a row carries BOTH the keystroke and the
-// function, so the on-screen key and the shortcut can never drift apart.
-// Modified keys are left alone on purpose - ctrl-R must still reload the
-// page and cmd-1 must still change browser tab.
 const KEYS=[];
 const keyAdd=o=>{ KEYS.push(o); return o; };
 const keyList=()=>KEYS.filter(k=>!k.sc||k.sc===screen);
 addEventListener("keydown",e=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
-  /* AN OPEN MENU EATS THE FIRST ESCAPE. Not a KEYS row: the registry takes the
-     first match, so a row here would beat the bench's own Escape for good and
-     the tool could never be put down again. Menu first, then everything else. */
+  // menu then prewarm eat Escape ahead of the registry, which takes the first match for good
   if(e.key==="Escape" && ctxMenu){ e.preventDefault(); ctxClose(); return; }
-  /* AND A PREWARM EATS IT AHEAD OF EITHER. Same reason: the screen underneath
-     is still the bench or the scenario board, so its own Escape row would put
-     a tool down instead of stopping the commissioning nobody wants to wait
-     for. See prewarmCancel() (screens/shell.js). */
   if(e.key==="Escape" && prewarmBusy()){ e.preventDefault(); prewarmCancel(); return; }
   const nk=navKey(e);
   if(nk && navLive_()){
     e.preventDefault();
-    // auto-repeat says nothing new: the direction is the SET of keys down, and
-    // a repeat adds no key to it
     if(!e.repeat && !navHeld.has(nk)){ navHeld.add(nk); const d=navHeldDir(); navPreview(d[0],d[1]); }
     return;
   }
-  /* BEFORE THE REGISTRY, because it takes Enter off the zoom row while a key
-     inside a panel has the focus - and answers false when nothing does, so the
-     row still fires (panKeyNav, ui/selwin.js). */
   if(typeof panKeyNav==="function" && panKeyNav(e)) return;
-  // shift is part of the stroke, so a row without it never fires under one
   const K=keyList().find(k=>k.k===e.key && !!k.shift===e.shiftKey);
   if(K){ e.preventDefault(); K.fn(); }
 });
-/* ══ W A S D WALKS THE BOARD ══
-   Not a KEYS row. A row fires on the PRESS and again on every auto-repeat, and
-   this is a HOLD that lands on the RELEASE - two keys held together aim
-   diagonally, which is a direction no single row can state. The registry still
-   owns every other key on both screens; see navPreview()/navCommit()
-   (render/navarrow.js) for the walk itself. */
+// not a KEYS row: a HOLD that lands on the release, and two keys held aim diagonally
 const NAV={w:[0,-1], a:[-1,0], s:[0,1], d:[1,0]};
 const navHeld=new Set();
 const navKey=e=>{ const k=e.key&&e.key.length===1 ? e.key.toLowerCase() : ""; return NAV[k]?k:""; };
-/* A rail is HTML standing OVER the canvas (ui/margin.js), so without this every
-   letter typed into a machine's name field also walked the board. Asked of the
-   focus and not of the screen, because the fields come and go with the panel. */
 const navTyping=()=>{ const el=typeof document!=="undefined" && document.activeElement;
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName||"")); };
 const navLive_=()=>plantScreen() && !navTyping();
 function navHeldDir(){ let dx=0, dy=0;
   for(const k of navHeld){ const v=NAV[k]; dx+=v[0]; dy+=v[1]; }
   return [dx,dy]; }
-/* THE FIRST RELEASE COMMITS, and every still-held key is dropped with it. A
-   diagonal is two keys and no hand lets go of both on one tick, so waiting for
-   the last release would re-preview the survivor alone and land on ITS square
-   neighbour instead of the diagonal one the player was aiming at. Dropping the
-   rest also stops their auto-repeat starting a second walk. */
+// the first release commits and drops the rest, or a diagonal re-previews as its survivor
 addEventListener("keyup",e=>{
   const nk=navKey(e);
   if(!nk || !navHeld.has(nk)) return;
@@ -309,8 +143,7 @@ function drawOverlay(){
   const h=Math.min(typeof o.h==="function"?o.h():o.h, VIEW.h-10), y=VIEW.y+VIEW.h-h;
   fillRect(VIEW.x,VIEW.y,VIEW.w,VIEW.h,"rgba(6,10,11,.62)");
   fillRect(12,y,736,h,C.panel);
-  // catcher, pushed BEFORE the panel's own widgets so a click on bare overlay
-  // does not reach the component behind it
+  // catcher, before the panel's own widgets: a click on bare overlay must not reach behind
   push({x:12,y,w:736,h,type:"btn"});
   o.draw(y);
 }
@@ -330,130 +163,68 @@ function ovlBar(y,h,note){
   if(note) fitTxt(note,12,midBase(y,h,7),x-20,{size:7,color:C.ink2});
 }
 
-// a right-click menu is a registry for the same reason an overlay is: the
-// bench's ADD/REMOVE menu and the scenario timeline's own menu are the same
-// gesture answering two different questions, sharing one engine instead of
-// each carrying a copy. resolve(p) reads the raw release point and returns
-// what the click landed on (or null); items(hit) turns that into menu rows.
 const CTX=[];
 const ctxAdd=o=>{ CTX.push(o); return o; };
 const ctxFor=()=>CTX.find(o=>!o.sc||o.sc===screen);
 
 let ctxMenu=null;
-/* THE MENU IS HTML - #ctxmenu, built by shell.js. What is left here is the
-   registry, the hit, and the gesture: resolve(p) still reads a LAYOUT point,
-   because that is the space the plant is drawn in, while cx/cy carry the
-   pointer's own client pixels, which is the space the box is placed in. No
-   conversion either way, and the cvPx() scaling the painted menu needed on
-   every single measurement is simply what a CSS pixel already means. */
+// resolve(p) reads a LAYOUT point; cx/cy carry client pixels, the space the box is placed in
 function openCtxMenu(p,e){
   const R=ctxFor();
   ctxMenu = R ? R.resolve(p) : null;
   if(ctxMenu){ ctxMenu.cx=e.clientX; ctxMenu.cy=e.clientY; }
   ctxShow(ctxMenu);
 }
-// set by shell.js; the default is what the headless bundle and the sim worker get
 let ctxShow=()=>{}, ctxHide=()=>{};
-// hides UNCONDITIONALLY: the box and the hit are two things, and a close that
-// only fires when the hit happens to be set is a close that can leave the box up
 function ctxClose(){ ctxMenu=null; ctxHide(); }
-
-/* ══ STAGE 8: A COMPONENT CARRIES THE NAME THE PLAYER GAVE IT ══
-   D.name is not declared in design.js (which this file does not own) - it is
-   created lazily, here, by the one writer. Keyed by part id, so a rename
-   rides designSig() (JSON.stringify(D)+...), the recording head and the save
-   format for free - the same trick D.fittings and D.tanks already use - and the
-   stock plant's signature does not move until a rename actually happens:
-   nothing here writes D.name until setPartName() is handed a real string.
-   partName() is the ONE reader: a raw p.name read anywhere in the UI is a bug. */
-/* partName()/setPartName() live in layout.js. They read and write D.name and
-   touch nothing on the page, and the SIM names its own machines now - an event
-   log line calls partName(), so a copy here left the worker (which loads no UI
-   file at all) throwing on the first log line that named a part. */
 
 const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
 
 const push=w=>{ if(viewOn) w.v=1; w.host=ui.host; ui.widgets.push(w); return w; };
 const inside=(w,p)=>!!p&&p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
 const hov=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr))&&!ui.drag;
-/* THE SAME TEST WITHOUT THE DRAG GATE. hov() goes false on any press, which is
-   right for a highlight and wrong for a region that decides whether a control
-   is DRAWN AT ALL - a strip that vanished the moment its own slider was
-   grabbed would take the slider with it. */
+// hov() without the drag gate, for a region that decides whether a control is drawn at all
 const hovHold=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr));
-/* IS THE SLIDER NOW BEING DRAGGED ONE OF THIS REGION'S OWN? ui.drag IS the
-   slider's widget, so the question is asked of its RECT and not of the pointer,
-   which a geared drag deliberately carries far away from the track. */
+// asked of the slider's own RECT, not the pointer: a geared drag is carried off the track
 const sldIn=r=>{ const d=ui.drag;
   return !!(d&&d.type==="sld"&&d.x>=r.x-2&&d.x<=r.x+r.w+2&&d.y>=r.y-2&&d.y<=r.y+r.h+2); };
-// the ONE hit test: last widget pushed wins, and it answers for either button
 const hitAt=p=>{
   for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
     if(w.host===ui.ptrHost&&inside(w,ptIn(w,p))) return w; }
   return null;
 };
-/* ══ THE TOOL TABLE ══
-   One module-level object, modelled on LATPEN (design-bench.js), and the one
-   thing a bench gesture asks before it does anything else. Only one tool is
-   ever active; more will follow, so the table is the extension point rather
-   than a boolean somebody has to remember to clear. */
 const TOOL={active:"select"};
 const TOOLS=[
   {id:"select", sc:"design", label:"SELECT",
    tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to start a pipe there, then drag the pipe's other end to the machine you want it to reach. Drag the pipe itself to pull a waypoint out of it; right click a waypoint to drop it."},
-  /* NO PIPE TOOL. A pipe is one OBJECT you place and drag by its ends, so
-     there is nothing left for a cell-by-cell mode to do: laying a run cell by
-     cell, rotating a corner and sweeping cells out were all ways of hand-
-     building a shape the router now finds, and every one of them could leave a
-     cell no run owns.
-     STRUCTURE IS STILL PAINTED, because a wall IS cells and nothing routes it:
-     drag to lay, right-sweep to lift. What material lands is a knob on the
-     cell's own panel afterwards - the ADD TANK argument, one entry and no
-     submenu of kinds. */
   {id:"paint", sc:"design", label:"PAINT",
    tip:"Drag to paint structure into cells: shielding, or a gas-tight containment wall. A closed shape painted in a gas-tight material IS a containment - gas, heat and a release stop at it - and the seal drawn round it says the fill came back bounded. Hold the right button and sweep to take cells out. Paint blocks a machine and passes a pipe: a run crossing a wall is a penetration."},
-  /* The FAULTS panel carries this one rather than a tool bar, so it is on the
-     table for the pre-emption branch and the aim mark, not for a switch. */
   {id:"hit", sc:"operate", label:"AIMED COMBAT HIT",
    tip:"Click a machine, a port or a pipe cell to take the hit THERE. One click, then the tool puts itself back; a click on bare deck cancels it."},
 ];
-// which cell a plant-space point lands on, in grid units - what every tool
-// gesture is addressed at, since a tool paints CELLS and never pixels
 const cellAt=pt=>[Math.floor((pt.x-GX)/CELL), rowAt(pt.y)];
 const cellSame=(a,b)=>!!a&&!!b&&a[0]===b[0]&&a[1]===b[1];
-// the paint's own two: the press and the drag that follows it must lay and
-// lift the same thing
 const matPaintCell = (x,y) => matPaint(x,y, matPen);
 const matLiftCell = (x,y) => matLift(x,y);
 function matPaintAt(pt){ const c=cellAt(pt);
   if(matPaintCell(c[0],c[1])) buildLayout(); }
 function matLiftAt(pt){ const c=cellAt(pt);
   if(matLiftCell(c[0],c[1])) buildLayout(); }
-/* WHICH MATERIAL THE BRUSH IS LOADED WITH. Module state and not a D field: it
-   is a property of the TOOL, exactly as TOOL.active is, and it changes no
-   design - so nothing that compares a design signature may see it move. */
+// tool state, not a D field: nothing comparing a design signature may see it move
 let matPen = null;
-/* WHAT THE AIMED HIT IS ON, resolved once: the press and the mark that
-   previews it read the same answer, or the picture and the damage would name
-   different machines. A machine's whole footprint is the target, a port and a
-   pipe cell are each a target of their own (combatHit() prices them that way
-   too), and null is bare deck. */
 function hitAimAt(pt){
   const p=partAt([pt.x,pt.y]);
   if(p) return p.id;
   const c=cellAt(pt);
   const pid=portAtCell(c[0],c[1]);
   if(pid) return "port:"+pid;
-  // BEFORE the pipe: a run crossing a wall is a penetration, so both are in the
-  // cell, and the wall is the bigger thing standing in it
+  // before the pipe: a run crossing a wall is a penetration, so both are in the cell
   if(matCell(c[0],c[1])) return "mat:"+c[0]+","+c[1];
   const k=pipeKey(c[0],c[1]);
   return D.pipes[k] ? "pipe:"+k : null;
 }
 
 let touchTip=null, isTouch=false;
-// g is an optional band(): the scale the value in this region lives on, so
-// the tooltip can be checked at a glance instead of just believed
 function TIP(x,y,w,h,title,body,g){ ui.tips.push({x,y,w,h,title,body,g,v:viewOn?1:0,host:ui.host}); }
 function findTip(p){
   for(let i=ui.tips.length-1;i>=0;i--){ const t=ui.tips[i];
@@ -462,179 +233,92 @@ function findTip(p){
     if(q.x>=t.x&&q.x<=t.x+t.w&&q.y>=t.y&&q.y<=t.y+t.h) return t; }
   return null;
 }
-/* WHICH TIP THE POINTER IS ON, and nothing else. The BOX is HTML - one #tip
-   element, styled by the stylesheet, presented by shell.js - so all that is
-   left here is the part a canvas widget cannot delegate: it is not a DOM node,
-   so it cannot carry the data-tip-title a rail control carries, and the hover
-   has to be resolved against the rects TIP() pushed. */
 function tipHover(){
   if(ui.drag) return null;
   if(isTouch) return (touchTip && performance.now()<touchTip.until) ? touchTip : null;
   return findTip(ui.ptr);
 }
 
-/* ONE HEIGHT FOR EVERY KEY DRAWN ON THE CANVAS. A control strip cell, a bypass
-   row, a relief valve's arm, the REPAIR key and the ZOOM key were 10, 10, 13, 14
-   and 14 px tall - five numbers for one kind of object, so any two of them next
-   to each other read as different kinds of control. The height is still passed
-   in, because a caller sometimes has to fill a rect it does not own; what it
-   passes is this. */
-/* A KEY'S ORDINARY HEIGHT and the smallest it may compact to before a strip
-   gives up and drops a name row instead - rungs 4 and 5 of the degradation
-   ladder (ctlStrip(), plant.js). BTN_TXT_PAD is the air either side of a
-   label inside its own key, and it is what fitStep() measures against, so a
-   label never sits hard against the edge of the box it names. */
 const BTN_H=14, BTN_H_MIN=10, BTN_TXT_PAD=5;
-/* THE FILL UNDER A KEY, BY STATE, IN ONE PLACE. An arming switch draws its own
-   two-part label so it cannot go through button() whole - and while it also
-   picked its own fill, it sat at the PLINTH tone while every key beside it sat
-   a shade above, so the switch read as a hole punched in the strip rather than
-   a key mounted on it. Danger is drawn SOLID (dark text on full red), the way a
-   lit annunciator tile is - SCRAM and the one-shot boron dump are the two keys
-   that must never be found by reading them, only by their colour. */
 function btnFill(o,hovered){
   if(o.danger) return hovered?"#ff7d6c":C.red;
   if(o.on) return "#2a1f08";
-  // o.sunk is a borderless key: it sits a shade ABOVE the plinth it stands on -
-  // filled with C.well it read as a hole punched in the component rather than
-  // as a key mounted on it. o.base overrides the RESTING fill for a key whose
-  // row is otherwise the same colour as the plate under it.
   const base = o.sunk?C.edge:(o.base!==undefined?o.base:C.panel);
   return hovered ? (o.sunk?C.edge2:C.panelHi) : base;
 }
 function button(x,y,w,h,label,o){
   o=o||{}; const wd=o.inert?{x,y,w,h}:push({x,y,w,h,type:"btn",fn:o.fn});
   const h_=!o.inert && hov(wd);
-  // o.sunk is a borderless key: tone alone reads the shape, so it draws no
-  // frame (boxing every key in a 46px component read as a cage)
   const col = o.inert ? "#3c4c47" : o.danger ? C.red : o.on ? C.amber : (h_?C.edge2:C.edge);
   fillRect(x,y,w,h, o.inert?C.panel:btnFill(o,h_));
-  // o.flat is o.sunk's sibling for a SELECTED key that must also lose its
-  // outline (the bench's pen/preset keys, whose amber fill+type already say it)
   if(!o.sunk && !o.flat) frame(x,y,w,h,col);
-  /* ══ A KEY'S LABEL STEPS DOWN BEFORE IT IS CUT ══
-     This was a bare txt(), so a label too wide for its key simply overflowed
-     it - and that overflow is the whole reason a machine's box carried a
-     width floor. clipTxt() walks TSCALE (core/text.js) exactly as every other
-     fitted label on the plant does, and only cuts once the smallest rung
-     still will not fit. `sp` is dropped with the size, because letter
-     spacing is the first thing worth losing. */
   const q={size:o.size||9,weight:(!o.inert&&o.danger)?700:o.weight,
            sp:o.sp===undefined?1.6:o.sp,caps:1,align:"center",
            color:o.inert?"#3c4c47":o.danger?"#160404":o.on?C.amber:(h_?C.bright:C.ink)};
   let inner=Math.max(2,w-BTN_TXT_PAD);
   if(tw(label,q)>inner && q.sp>0) q.sp=0;
-  /* A NARROW KEY GIVES UP ITS AIR BEFORE IT GIVES UP A LETTER. BTN_TXT_PAD is
-     a third of an 18px fitting key, which is what cut its OPEN to OPE. */
   if(tw(label,Object.assign({},q,{size:TSCALE[TSCALE.length-1]}))>inner)
     inner=Math.max(2,w-2);
   clipTxt(label,x+w/2,midBase(y,h,fitStep(label,inner,q)),inner,q);
   return wd;
 }
-// while the pointer is over the track, the readout shows what a click WOULD
-// set (amber); otherwise the value the plant actually has (cyan) - shared by
-// the strip readout, the bench and the controller tunables so the preview
-// behaviour can't exist on one and not the others
 function sldRead(wd,fmt){
   return wd.pv!=null ? {s:fmt(wd.pv),col:C.amber} : {s:fmt(wd.val),col:C.cyan};
 }
 
-// o.th sizes the widget; o.tw is the GRAB zone, not a drawn width. o.fmt
-// makes the slider draw its own readout, outside the track. The track is a
-// bargraph (not seg()) because a rate-limited control has three things to
-// say - where the plant IS, where it's headed, and where it is not.
+// o.th sizes the widget; o.tw is the GRAB zone, not a drawn width
 function slider(x,y,w,val,min,max,o){
   o=o||{}; const th=o.th||22, tw_=o.tw||10;
-  // every edge is rounded to whole layout units first: at th=13 the strip top
-  // lands on a half unit, and a 1-unit serif across a half unit smears to 2
+  // rounded to whole layout units first, or a 1-unit serif across a half unit smears to 2
   const t0=Math.round(y-th/2), t1=Math.round(y+th/2), hh=t1-t0;
-  // the readout stands OUTSIDE the track (an opaque plate ON an 84px strip
-  // used to cover most of the bar); width is measured at both range ends and
-  // the value, or the track would jiggle as digits come and go
+  // width measured at both range ends AND the value, or the track jiggles as digits come and go
   const ro={size:6.5};
   let rw = o.fmt ? Math.max(tw(o.fmt(min),ro),tw(o.fmt(max),ro),tw(o.fmt(val),ro))+5 : 0;
-  if(w-rw<24) rw=0;                  // no room for both: the bar wins
+  if(w-rw<24) rw=0;
   const tW=w-rw;
-  // the widget is the TRACK, not the row - otherwise clicking the number
-  // would slam the value to whatever the number's own x means
-  // o.inert: a READING, not a control - it registers no widget at all, so it
-  // cannot be hovered, previewed or dragged, and it wears C.ink2 throughout
+  // the widget is the TRACK, not the row, or clicking the number would slam the value
   const wd = o.inert ? {x,w:tW,val,pv:null}
     : push({x,y:y-th/2-2,w:tW,h:th+4,type:"sld",min,max,fn:o.fn,
-                 cy:y,val,tw_});     // cy/val/tw_ are what the drag handler needs
-  // clamp t, or a value outside the range draws the indicator off its own
-  // track. o.dem is what you asked for (may lag behind with a rate limit);
-  // o.mark is a setpoint the slider is ALLOWED to cross.
+                 cy:y,val,tw_});
   const t=clamp((val-min)/(max-min),0,1);
   wd.tx=x+t*tW;
   const dem = o.dem==null ? t : clamp((o.dem-min)/(max-min),0,1);
-  // which side of the mark costs you is the caller's business: a ceiling is
-  // red above it, a design floor is red below it - drawing every mark as a
-  // ceiling would paint the whole safe half of an RCP bar red
   const lo_ = !!o.markLo;
   const mk  = o.mark==null ? (lo_?-1:2) : clamp((o.mark-min)/(max-min),0,1);
   const lo=Math.min(t,dem), hi=Math.max(t,dem), rising=dem>t;
   const viol = o.mark==null ? false : (lo_? t<mk   : t>mk);
   const violD= o.mark==null ? false : (lo_? dem<mk : dem>mk);
-  // what a click here would set - only on the bare track, since pressing the
-  // indicator itself grabs it, and a drag is geared so the pointer is not the
-  // value once dragging (hov() already stands down for that). Converted
-  // through ptIn() like any plant widget, or the preview hairline would land
-  // wherever the raw PAGE pointer is, far from the track at fit scale.
+  // through ptIn() like any plant widget, or the preview hairline lands on the PAGE pointer
   const pp = o.inert ? null : ptIn(wd,ui.ptr);
-  /* THE PREVIEW HAS NO DEAD ZONE. It used to stand down within a thumb-width
-     of the indicator, because pressing there GRABS instead of jumping - but
-     that is exactly the neighbourhood a fine adjustment lives in, so the one
-     place the bar refused to say what a click would set was the one place you
-     were aiming at. Pressing the thumb still grabs; releasing without moving
-     now lands the click (see uiUp), so the preview is honest again. */
   wd.pv = (pp && hov(wd)) ? valFrom(wd,pp.x) : null;
-  const n=clamp(Math.round(tW/5),6,30), cw=tW/n;   // one cell per ~5px
+  const n=clamp(Math.round(tW/5),6,30), cw=tW/n;
   const bh=Math.min(10,th-3), by=Math.round(y-bh/2);
   for(let i=0;i<n;i++){
-    // the mark is a limit, never an end of the scale - the wrong side draws
-    // as a zone you can see before you're in it. Being IN it is separate from
-    // a cell merely lying in it: a floor is where those two come apart (a bar
-    // at 100% fills through the low end, which is every running pump, not a
-    // fault) - so it's the VALUE crossing the mark that lights a cell.
+    // a cell lies past the mark, but it is the VALUE crossing it that lights the cell red
     const c=(i+.5)/n, past=lo_? c<mk : c>mk;
-    // an unlit cell is a dark slot (C.well), not the old #152125 grey, which
-    // was close enough to the plinth a control strip sits on to wash out
-    let col = past?"#240b08":C.well;                                          // not there
-    if(c<=lo)      col = o.inert?"#2b3338":(past&&viol)?C.red:"#2f7d8c";      // there
+    let col = past?"#240b08":C.well;
+    if(c<=lo)      col = o.inert?"#2b3338":(past&&viol)?C.red:"#2f7d8c";
     else if(c<=hi) col = (past&&(viol||violD))?"#5c2a1c"
-                                              :(rising?"#5a4415":"#1d3a41");  // on its way
+                                              :(rising?"#5a4415":"#1d3a41");
     fillRect(x+i*cw,by,cw-1.3,bh,col);
   }
   if(o.mark!=null) fillRect(Math.round(x+mk*tW),t0,1,hh,C.red);
-  /* `marks` is a BAND the caller is telling you about, not a limit it will be
-     scored against - the automatic rod controller's own travel band, drawn on
-     the bank's own bar so "where may it go" is answered where the question is
-     asked. Amber and half-lit: it is a fact about another hand on the same
-     control, never a fault of yours, so it must not wear the red a violated
-     mark does. */
   if(o.marks) for(const mv of o.marks){
     const f=clamp((mv-min)/(max-min),0,1);
     ctx.globalAlpha=.5; fillRect(Math.round(x+f*tW),t0,1,hh,C.amber); ctx.globalAlpha=1;
   }
-  if(wd.pv!=null) fillRect(Math.round(pp.x),t0,1,hh,"#7a5a18");  // where a click lands
-  // a hairline in a cut, not a plate - the old 10px thumb covered an eighth
-  // of an 84px track; the cut keeps 1px of amber readable against a lit cell
+  if(wd.pv!=null) fillRect(Math.round(pp.x),t0,1,hh,"#7a5a18");
   const cx=Math.round(clamp(x+t*tW,x+1,x+tW-1)), ind=o.inert?C.ink2:C.amber;
-  fillRect(cx-1,t0,3,hh,C.bg);       // the cut, so 1 unit of amber survives a lit cell
-  fillRect(cx,t0,1,hh,ind);          // the indicator itself
-  fillRect(cx-2,t0,5,1,ind);         // serifs, 1 unit tall - they mark the ends, not the value
+  fillRect(cx-1,t0,3,hh,C.bg);
+  fillRect(cx,t0,1,hh,ind);
+  fillRect(cx-2,t0,5,1,ind);
   fillRect(cx-2,t1-1,5,1,ind);
-  // demand is an ORDER, not a position, so it rides above the track as a
-  // caret with a 3-unit serif against the indicator's 5
   if(o.dem!=null && Math.abs(dem-t)>.002){
     const dx=Math.round(clamp(x+dem*tW,x+1,x+tW-1));
     fillRect(dx,t0,1,4,C.amber); fillRect(dx-1,t0,3,1,C.amber);
   }
   if(rw){ const r=sldRead(wd,o.fmt);
     txt(r.s,x+w,midBase(t0,hh,6.5),Object.assign({},ro,{align:"right",color:o.inert?C.ink2:r.col})); }
-  // a one-cell component has no room for a track AND a number, so there it's
-  // hover-only, standing in the half of the track the pointer isn't in
   else if(o.fmt && wd.pv!=null){
     const ps=o.fmt(wd.pv), lw=tw(ps,ro)+4, far=(pp.x-x)/tW>.5;
     const px=far ? x+1 : x+tW-lw-1;
@@ -648,18 +332,12 @@ function local(e){ const r=cv.getBoundingClientRect();
   return {x:(e.clientX-r.left)*(W/r.width),
           y:(e.clientY-r.top)*((H-TOPBAR_H)/r.height)+TOPBAR_H}; }
 const valFrom=(w,x)=>w.min+clamp((x-w.x)/w.w,0,1)*(w.max-w.min);
-// a control mounted inside a component is only as wide as the component (the
-// rod bank gets 84px for a full 0..100% stroke), so the drag is relative and
-// geared like a fader: pulling away from the track buys less travel per
-// pixel. Grabbing the thumb never jumps the value; pressing bare track does.
+// geared like a fader: pulling away from the track buys less travel per pixel
 const sldGain = dy => 1/(1+Math.max(0,Math.abs(dy)-24)/16);
 
 const DBL_MS=400, DBL_PX=6;
 let lastDown=null;
-// MouseEvent.detail (click count) is never promised on a PointerEvent -
-// Chromium happens to set it, nothing requires it to - so a double-click is
-// detected here instead, off one clock/pointer, and stamped onto the event
-// as `.dbl` so every call site reads one boolean instead of re-deriving it
+// MouseEvent.detail is not promised on a PointerEvent, so the count is derived here
 function dblCheck(p,e){
   const now=performance.now();
   const dbl = !!lastDown && e.button===lastDown.button
@@ -667,64 +345,31 @@ function dblCheck(p,e){
   lastDown={t:now,x:p.x,y:p.y,button:e.button};
   return dbl;
 }
-/* SHIFT+RIGHT IS THE BROWSER'S MENU; a bare right click is ours. Bound to a
-   NODE, not to #cv, because the plant is no longer the only thing standing
-   over the plant: an open #ctxmenu is a real element, so a second right click
-   landing on it never reached the canvas and the browser's own menu came up on
-   top of ours. Anything that covers the plant has to say this. */
+// anything that covers the plant has to suppress the browser menu too, not just #cv
 const ctxSuppress=el=>el&&MOUSE.noCtx(el);
 ctxSuppress(cv);
-/* The three pointer handlers are named so uiForward() can bind them to a
-   SECOND element. A widget hosted inside an opaque rail (the fuel lattice
-   plan) sits over #cv but eats its events, so it has to feed the same
-   hit-test loop itself - local() is measured off #cv either way, so the
-   coordinates match the boxes hostPaint() let it push. */
-/* ══ A DRAG BELONGS TO THE SURFACE IT STARTED ON ══
-   The one door onto ui.drag, so a gesture cannot be started without saying
-   where. It is the same fact push() already stamps on a widget - a drag simply
-   never carried it. Every host measures in its OWN space and they overlap
-   numerically (see ptrHost at the top of this file), so a move arriving from a
-   different surface is not a bigger or smaller number, it is a number about
-   somewhere else. The PAN is what showed it: a move delivered by a hosted
-   lattice canvas mid-pan fed hostLocal()'s panel-relative x straight into
-   VIEW.ox, which moved the panel, which grew the next reading - a feedback
-   loop, measured at VIEW.ox 3.7e7 after a couple of seconds of dragging across
-   the reactor's panel. Not written at the foot of uiDown(): four of its
-   branches return early, and a stamp they skip is a drag uiMove() then refuses
-   for ever. */
+// a drag is stamped with the surface it started on: hosts measure in overlapping spaces
 const dragOn=d=>{ d.host=ui.ptrHost; ui.drag=d; return d; };
-/* `el` is the surface the hub matched, not e.currentTarget: with one listener
-   on the document every handler is called with the registered element, and the
-   grab replaces the pointer capture this used to take (see core/mouse.js). */
 function uiDown(e,el){
   const tgt=el||cv;
   MOUSE.grab(tgt);
   const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=tgt._uiHost||null;
   e.dbl=dblCheck(p,e);
   ctxClose();
-  // shift+right is the browser's own menu, not a pan; right held-and-dragged
-  // pans, right pressed-and-released without moving opens the ADD/REMOVE menu
-  // instead (see pointerup)
   if(e.button===2){
     const w=hitAt(p);
-    /* RIGHT CLICK WITH THE PAINT TOOL LIFTS A CELL, where it lives rather than
-       through the deck menu - the menu is addressed at a cell and this already
-       is. HELD, it lifts every cell it is dragged over, the mirror of the left
-       button laying them. A cell nothing owns is simply nothing to lift, and
-       the drag stands whether or not the first one was. */
     if(screen==="design" && TOOL.active==="paint" && vHit(p)){
       dragOn({type:"materase", v:1, last:cellAt(vPt(p))});
       matLiftAt(vPt(p));
       return;
     }
-    // A WAYPOINT IS DROPPED WHERE IT STANDS. It is one cell on one run, so it
-    // owes no menu - the same argument the pipe tool's own right-click makes.
+    if(w&&w.type==="runend"){
+      if(sel===w.rid) sel=null;
+      removeRun(w.rid);
+      return; }
     if(w&&w.type==="runpin"){
       D.runs[w.rid].pins.splice(w.i,1); runLay(w.rid);
       return; }
-    /* A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU (REMOVE PORT,
-       resolved by design-bench.js's own ctx registry) - there is no quick-tap
-       toggle any more, so a right click never silently flips the mode. */
     if(w&&w.type==="port"){
       dragOn({type:"portr"});
       return; }
@@ -736,14 +381,7 @@ function uiDown(e,el){
   if(isTouch){ const t=findTip(p);
     touchTip = t ? Object.assign({},t,{until:performance.now()+4000}) : null; }
   const w=hitAt(p);
-  /* ══ A TOOL PRE-EMPTS EVERY CLICK ══
-     With a tool up, a press on the plant is about that tool, never about
-     whatever box it happens to land on - so this is asked before the ordinary
-     per-widget dispatch below.
-     AN AIMED HIT PRE-EMPTS THE SAME WAY, and it goes through act() like every
-     other input, so a tape and a scenario carry it. A control strip standing
-     over the plant is not a target: the press is not spent on it, and the tool
-     stays up for the machine the hand was aiming at. */
+  // a tool pre-empts the per-widget dispatch below: the press is about the tool
   if(screen==="operate" && TOOL.active==="hit" && vHit(p)){
     const aim=hitAimAt(vPt(p));
     if(!aim && w) return;
@@ -753,37 +391,19 @@ function uiDown(e,el){
   }
   if(screen==="design" && TOOL.active==="paint" && vHit(p)){
     const c=cellAt(vPt(p));
-    // COMMITTED AS IT GOES: a painted cell has no shape to settle, it is one
-    // cell, and the fill under the hand is what the player is watching change
     dragOn({type:"matdraw", v:1, last:c});
     matPaintAt(vPt(p));
     sel="mat:"+c[0]+","+c[1];
     return;
   }
-  /* ══ A PIPE IS PICKED THE WAY A MACHINE IS ══
-     A run has no widget in the hit list - it is a polyline, not a box - so it
-     is resolved off the CELL under the pointer, the same answer pipeHovResolve()
-     already gives the hover. It is tried only where nothing else was hit, so a
-     machine or a port standing on the same cell still wins. The run KEY goes
-     into `sel`: a key always contains a colon and a part id never does, so
-     every partOf(sel) reader already answers null for one. */
-  // the wall is picked on both screens; only the RUN has no control-room panel
+  // a run has no widget in the hit list, so it is resolved off the CELL under the pointer
   if(!w && vHit(p) && typeof runsAtCell==="function"){
     const c=cellAt(vPt(p));
-    // wall before pipe, the order hitAimAt() already resolves a penetration in
     if(matCell(c[0],c[1])){ sel="mat:"+c[0]+","+c[1]; return; }
     if(screen==="design"){
       const keys=runsAtCell(c[0],c[1]);
       if(keys.length){
-        const key=keys[keys.length-1];                      // a crossing cell owns two: last wins, as hitAt() does
-        /* PULL A WAYPOINT OUT OF THE LINE, once the run is the one being
-           worked on. It goes in at the place ALONG THE ROUTE where it was
-           grabbed, counted against the waypoints already ahead of it, so the
-           run keeps its own order and the hand does not have to know it. The
-           first press only picks the run: dragging a line you have not chosen
-           yet would bend whatever you happened to point at. */
-        // ...and only a run that was PLACED has waypoints to pull; one laid by
-        // hand is cells and nothing else
+        const key=keys[keys.length-1];
         const rid = key, r = sel===key && D.runs[rid];
         if(r && r.cells){
           const at=r.cells.findIndex(q=>cellSame(q,c));
@@ -800,93 +420,50 @@ function uiDown(e,el){
       }
     }
   }
-  // nothing under the pointer: a click on bare deck deselects, rather than
-  // leaving whatever was picked last lit with nothing on screen to justify it
   if(!w){ sel=null; return; }
   const q=ptIn(w,p);
     if(w.type==="part"){ sel=w.part.id;
-      // a commissioned plant is welded down: selectable, not movable; a
-      // pinned part rides its parent, so it's selectable but never draggable
+      // a commissioned plant is welded down, and a pinned part rides its parent
       if(screen==="design" && !w.part.pin){ const g=gridPt([q.x,q.y]);
         dragOn({type:"part",part:w.part,
-          // WHERE IN THE PART THE HAND TOOK HOLD, in CELLS. It was a pixel
-          // offset, and a pixel is not a fixed share of a row: a 1-row pump is
-          // DRAWN 84 px tall in a banded row, so a grab near its plinth stored
-          // ~80 px and, carried into the 46 px row above, put the part's top
-          // nearly two rows clear of the hand. In cells the grab is bounded by
-          // the part's own size and the same spot stays under the pointer.
+          // the grab is in CELLS: a pixel offset is not a fixed share of a banded row
           ox:g.x-w.part.x, oy:g.y-w.part.y,
           sx:w.part.x, sy:w.part.y, gx:w.part.x, gy:w.part.y, v:w.v}); } }
     else if(w.type==="sld"){ dragOn(w);
       const onThumb=Math.abs(q.x-w.tx)<=w.tw_/2+3;
-      w.gv = onThumb ? w.val : valFrom(w,q.x);    // gv is the running command value
+      w.gv = onThumb ? w.val : valFrom(w,q.x);
       w.gx = q.x; w.gx0 = q.x; w.moved = false;
       if(!onThumb) w.fn(w.gv); }
     else if(w.type==="btn"){ w.fn&&w.fn(); }
-    /* A PORT BELONGS TO ITS PIPE, so clicking one PICKS THAT PIPE - the run
-       lights up, its grips come out, and dragging this end away is what takes
-       the nozzle with it. Taking the port off on its own would stand the run
-       down and leave its cells behind, which is a pipe nobody can see the ends
-       of. A port nobody's run owns is still a toggle: click it to take it away. */
     else if(w.type==="port"){ const r=D.ports[w.pid].run;
       if(r!==undefined && D.runs[r]) sel=r; else removePort(w.pid); }
-    // ...and on a COMMISSIONED plant the same cell is the valve inside that
-    // nozzle. Nothing is placed or taken away in the control room: the plant is
-    // welded down, so all a port has left to offer is its own handle.
     else if(w.type==="portv"){ act("portShut",w.pid); }
-    /* ...AND THE GHOST PLACES A PIPE, not a bare nozzle. A port is not a thing
-       you put down: it appears because a run's END stands on that cell, and a
-       nozzle with no pipe on it is a fitting nobody ordered. So the click mints
-       the run with one end here, and the far end goes out along the face the
-       nozzle points, ready for the hand to drag it somewhere. */
     else if(w.type==="ghostport"){
       const p=partOf(w.p), a=p&&[p.x+w.dx, p.y+w.dy];
       const f=p&&faceOfOffset(p,w.dx,w.dy);
-      const b=f&&runSpotNear(a[0]+DIRV[f][0]*4, a[1]+DIRV[f][1]*4);
-      if(b){ sel=mintRun(a,b); runLay(sel); }
+      const b=f&&runSpotNear(a[0]+DIRV[f][0], a[1]+DIRV[f][1]);
+      if(b){ sel=mintRun(a,b); runLay(sel);
+        dragOn({type:"pipewp", rid:sel, which:"b", v:w.v}); }
     }
-    /* ONE PIPE AT A TIME. An end and a waypoint are the same drag: it writes
-       the cell into D.runs and re-lays THAT run, so every other run on the
-       board stands where it is. Committed as it goes, the way the paint is and
-       unlike the cell-by-cell pipe tool - a run has a shape the moment its two
-       ends are known, so there is something true to draw under the hand. */
-    else if(w.type==="runend") dragOn({type:"pipewp", rid:w.rid, which:w.which, v:w.v});
-    else if(w.type==="runpin") dragOn({type:"pipewp", rid:w.rid, i:w.i, v:w.v});
-    /* the hull's own wall. NOTHING COMMITS UNTIL THE RELEASE: gridDrag() calls
-       buildLayout(), which at pointer rate re-laid the whole board for every
-       cell crossed. The wall wears a ghost outline while it moves (drawPlant). */
+    else if(w.type==="runend"){ sel=w.rid; dragOn({type:"pipewp", rid:w.rid, which:w.which, v:w.v}); }
+    else if(w.type==="runpin"){ sel=w.rid; dragOn({type:"pipewp", rid:w.rid, i:w.i, v:w.v}); }
+    // nothing commits until the release: gridDrag() re-lays the whole board
     else if(w.type==="hull") dragOn({type:"hull",edge:w.edge,v:w.v,gw:D.gw,gh:D.gh});
   else if(w.type==="paint"){ dragOn(w); w.last=null; w.fn(q,e); }
 }
-/* WHERE THE GESTURE IS, ASKED ONCE. A part drag is a MOVE now and only a
-   move - GEOMETRY IS DRAGGED, TYPE IS MENUED means the box-to-box pipe gone,
-   the same box drag is unambiguous whatever it lands on. The release used to
-   inherit whatever the last pointermove had decided; a release carries no
-   move of its own, so the drop is measured here rather than trusted to have
-   been measured already. */
 function partDragTo(d,q){
   const g=gridPt([q.x,q.y]);
-  // THE PART'S TOP-LEFT UNDER THE HAND, SNAPPED, AND ALL OF IT IN CELLS - so
-  // the same spot stays under the pointer whatever the part's size
   d.gx=Math.round(g.x-d.ox); d.gy=Math.round(g.y-d.oy);
 }
 function uiMove(e,el){
   const tgt=el||cv;
   const host=tgt._uiHost||null;
-  // a move from a surface this gesture did not start on says nothing about it,
-  // and ui.ptr must stay in the space the drag's own handler reads - see uiDown
+  // ui.ptr must stay in the space the drag's own handler reads
   if(ui.drag && ui.drag.host!==host) return;
   const p=uiPt(tgt,e); ui.ptr=p; ui.ptrHost=host;
   if(e.pointerType==="mouse") isTouch=false;
   if(ui.drag){ const d=ui.drag, q=d.v?vPt(p):p;
-    /* NOTHING IS COMMITTED UNTIL THE RELEASE. moveTo() used to be called on
-       every pointermove, which re-measured layoutMetrics() at pointer rate and
-       walked the part across the board on the way to where you were aiming. */
     if(d.type==="part") partDragTo(d,q);
-    /* THE END OR THE WAYPOINT FOLLOWS THE HAND, one cell at a time, and the run
-       is re-laid on every cell it actually moves to. A cell nothing can stand
-       in is no move at all - the grip stays where it was rather than the run
-       reporting a refusal for a cell the hand only passed over. */
     else if(d.type==="pipewp"){ const c=cellAt(q), r=D.runs[d.rid];
       if(r && c[0]>=0 && c[1]>=0 && c[0]<GW && c[1]<GH){
         const was = d.which ? r[d.which] : r.pins[d.i];
@@ -896,10 +473,7 @@ function uiMove(e,el){
         } } }
     else if(d.type==="hull"){ const c=cellAt(q);
       if(c){ d.c=c; [d.gw,d.gh]=gridClamp(d.edge==="r"?c[0]+1:D.gw, d.edge==="b"?c[1]+1:D.gh); } }
-    /* WALKED CELL BY CELL. A pointer sample is not a cell: a quick sweep
-       delivers a move every few cells and painting only what was sampled leaves
-       gaps - which for a WALL is a containment that never closes. One axis at a
-       time, so the wall turns where the drag turns. */
+    // walked cell by cell: a pointer sample is not a cell, and a gap is a wall that never closes
     else if(d.type==="matdraw" || d.type==="materase"){
       const c=cellAt(q), fn = d.type==="matdraw" ? matPaintCell : matLiftCell;
       if(!cellSame(c,d.last) && c[0]>=0 && c[1]>=0 && c[0]<GW && c[1]<GH){
@@ -910,24 +484,16 @@ function uiMove(e,el){
       } }
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
-      // integrate rather than re-derive, so moving away from the track
-      // changes the gearing from here on instead of jumping the value.
-      // ORDERED bounds: a scale is allowed to run backwards (boron is 0 at the
-      // left and -6000 at the right), and clamp() is max(a,min(b,v)), so
-      // handing it min>max pins every value to the low end. Everything else in
-      // slider() is (v-min)/(max-min) and reverses on its own.
+      // ORDERED bounds: a scale may run backwards, and clamp(min>max) pins everything low
       const lo=Math.min(d.min,d.max), hi=Math.max(d.min,d.max);
       d.gv=clamp(d.gv+(q.x-d.gx)/d.w*(d.max-d.min)*sldGain(q.y-d.cy),lo,hi);
       if(q.x!==d.gx0) d.moved=true;
       d.gx=q.x; d.fn(d.gv); }
-    // the pan is measured in PAGE pixels and spent in plant units, so the
-    // deck keeps up with the hand at any zoom
     else if(d.type==="pan"){
       const lp=local(e);
-      panTo=panZ=null;                  // a hand outranks an eased pan already in flight
+      panTo=panZ=null;
       VIEW.ox-=(lp.x-d.lx)/VIEW.s; VIEW.oy-=(lp.y-d.ly)/VIEW.s;
       d.lx=lp.x; d.ly=lp.y;
-      // a page-pixel threshold (not plant), so it feels the same at any zoom
       if(Math.hypot(lp.x-d.sx,lp.y-d.sy)>4) d.moved=true; }
   }
   tgt.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||ui.drag.type==="part") ? "grabbing"
@@ -935,75 +501,28 @@ function uiMove(e,el){
 }
 function uiUp(e,el){
   const d=ui.drag;
-  /* A PRESS THAT NEVER MOVED IS A CLICK, even on the indicator. Pressing the
-     thumb grabs it so a drag can be geared, and that grab used to swallow the
-     press outright - so on a 48-unit bar carrying 0..100% there was a whole
-     neighbourhood around the current value that could not be typed at all:
-     standing at 40%, the click that means 41% landed on the thumb and did
-     nothing. Releasing without moving now lands where it was pressed. */
+  // a press that never moved is a click, even on the thumb the grab swallowed
   if(d&&d.type==="sld"&&!d.moved) d.fn(valFrom(d,d.gx0));
-  // right button held and released without dragging the plant is a click,
-  // which on the design bench opens the ADD/REMOVE menu
   if(d&&d.type==="pan"&&!d.moved&&e.button===2) openCtxMenu(local(e),e);
-  // A PORT'S RIGHT CLICK ALWAYS OPENS THE MENU, dragged or not - see uiDown().
   if(d&&d.type==="portr"&&e.button===2) openCtxMenu(local(e),e);
-  /* WHERE THE MOVE COMMITS. moveTo() is still the only way a part changes
-     position - it is just called once, here, instead of at pointer rate. A
-     drop that resolves to nothing (off the grid, on top of another machine)
-     is a cancel, not an error, so there is no refusal to report. */
   if(d&&d.type==="part"){
     const p=uiPt(el||cv,e);
-    // ...but only off a point the plant actually covers. The press took the
-    // grab, so a release over a docked rail is still delivered here
-    // and vPt() extrapolates it happily - the part landed somewhere nobody had
-    // aimed at. Out of view, the last in-view sample stands, which is the cell
-    // the ghost was last drawn on.
+    // only off a point the plant covers: the grab still delivers over a rail, and vPt() extrapolates
     if(!d.v || vIn(p)) partDragTo(d, d.v?vPt(p):p);
     if(d.gx!==d.sx||d.gy!==d.sy) moveTo(d.part,d.gx,d.gy);
   }
-  /* A GRIP DROPPED ON A GRIP JOINS THE TWO PIPES. Asked on the RELEASE and not
-     on every cell the drag crosses: merging mid-drag takes the grip out from
-     under the hand, and a grip passed OVER is not a grip aimed at. Both ends,
-     because one drag can close a joint at either. */
+  // asked on the RELEASE: merging mid-drag takes the grip out from under the hand
   if(d&&d.type==="pipewp"&&D.runs[d.rid]){
     if(d.which) for(const w of ["a","b"]){ const j=runJoinAt(d.rid,w);
       if(j) sel=mergeRuns(d.rid,w,j.rid,j.which); }
-    // ...and the same drop for a WAYPOINT is one waypoint fewer, not a joint
     else runPinCollapse(d.rid,d.i);
   }
-  // THE WALL COMMITS ON RELEASE - one buildLayout() for the whole gesture
   if(d&&d.type==="hull"&&d.c) gridDrag(d.edge,d.c);
   ui.drag=null;
 }
-/* the page canvas measures in layout units off local(); a hosted widget hands
-   uiForward() its own converter, because its box is its own space */
 function uiPt(el,e){ return el._uiLocal? el._uiLocal(e) : local(e); }
-/* Leaving the surface stands the POINTER down as well as the drag. It only
-   stood the drag down, so the page canvas kept the last point the pointer was
-   measured at forever - and findTip() is a pure function of that point, so the
-   canvas tooltip went on describing whatever the hand had last passed over
-   while the hand was somewhere else entirely. */
-/* ══ THE FRAME LOOP IS EVENT-DRIVEN, AND THE EVENT IS "A HAND MOVED" ══
-   Nothing on the bench animates itself: every fx rate resolves to 0 without a
-   live plant, and no dashed line offsets. So a still hand means an identical
-   picture, sixty times a second, and the loop can simply not paint it.
-   What may NOT be done is enumerate the paths that change the drawing - a
-   rail slider, the lattice pen, a layer switch and a context menu all write
-   outside act(), and a list of them is a list that rots. Any raw input
-   anywhere marks the canvas instead, in the CAPTURE phase so a handler that
-   stops propagation cannot also stop the repaint. main.js owns the floor that
-   covers whatever this still misses. */
-/* A HAND IS A CONTINUUM, NOT A SET OF INSTANTS, so an input does not buy one
-   frame - it keeps the loop awake for UI_TRAIL of them. Painting only the
-   frames an event landed in makes the interval between paints as ragged as
-   the event stream is, and a hover ink that changes on a ragged interval
-   shimmers even though every frame drawn is correct. A trail is also the
-   honest reading of the gate: the loop idles when the PLAYER is idle, not
-   between one twitch of a mouse and the next.
-   A live drag never idles either. uiDown() takes the GRAB (core/mouse.js), so a
-   moving hand is not a page-wide event the listener below can be trusted to
-   see. Asked here because whether a gesture is in flight is ui's own business. */
-const UI_TRAIL=12;                 // frames, ~200 ms
+// an input keeps the loop awake for UI_TRAIL frames, or the interval between paints is as ragged as the event stream
+const UI_TRAIL=12;
 let uiWants=true, uiTrail=0;
 const uiDirty=()=>{ uiWants=true; uiTrail=UI_TRAIL; };
 const uiTakeDirty=()=>{
@@ -1011,10 +530,6 @@ const uiTakeDirty=()=>{
   uiWants=false; if(uiTrail>0) uiTrail--;
   return w;
 };
-/* EVERY MOUSE EVENT ALREADY LANDS IN ONE PLACE, so the frame is marked there
-   rather than per surface - a repaint owed to a hand cannot be lost to a
-   handler that did not happen to be bound. The keyboard and the scroll are not
-   the hub's business and keep their own capture listeners. */
 if(typeof MOUSE!=="undefined") MOUSE.doc({down:uiDirty, move:uiDirty, up:uiDirty,
   cancel:uiDirty, wheel:uiDirty, click:uiDirty});
 if(typeof document!=="undefined" && document.addEventListener)
@@ -1024,47 +539,29 @@ if(typeof document!=="undefined" && document.addEventListener)
 function uiBind(el){
   MOUSE.on(el,{down:uiDown, move:uiMove, up:uiUp,
     cancel(){ ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); },
-    // A LEAVE IS NOT A CANCEL WHILE A HAND IS DOWN: the grab keeps delivering,
-    // but the boundary crossing still fires, and it killed any drag that crossed
-    // its own box - the lattice pens and the section's LENGTH drag, every time
+    // a leave is not a cancel while a hand is down: the grab keeps delivering
     leave(){ if(ui.drag) return;
       ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); }});
 }
 uiBind(cv);
 function uiForward(el,toLocal){
   el._uiHost=el; el._uiLocal=toLocal;
-  // it takes right-button gestures like the plant does, so it owes the same
-  // menu suppression - a hosted canvas is one of the things standing over #cv
   ctxSuppress(el);
   uiBind(el);
 }
 MOUSE.on(cv,{wheel(e){
-  // the scenario bench draws no plant, so there's no VIEW to zoom here -
-  // the wheel zooms the TIMELINE instead, about the second under the pointer
   if(screen==="scenario"){ e.preventDefault(); scnWheel(local(e),e.deltaY); return; }
   const p=local(e);
   e.preventDefault();
-  // the box is anchored to where the pointer WAS; the plant moves under it, so
-  // an open menu is stale the moment the view does anything
+  // the box is anchored where the pointer WAS, so an open menu is stale once the view moves
   ctxClose();
   vWheel(p,e.deltaY);
 }});
-/* ══ THE WHEEL ZOOMS, WHEREVER IT LANDS ══
-   Anywhere on the canvas, not just over the plant - the page does not scroll
-   any more, so there is nothing else for the wheel to do. Holds the plant point
-   under the pointer still, or the middle when the pointer is off-plant.
-
-   It is a function rather than the tail of cv's own handler because a margin
-   panel is HTML standing OVER the canvas (marginHost, ui/margin.js), so the
-   canvas never sees a wheel that starts on one - and a panel is anchored in
-   plant space, so the wheel has to do there what it does on the deck beside
-   it. The scenario timeline stays on cv: that one is about a second under the
-   pointer, and a panel is not. */
 function vWheel(p,dy){
   const on=vIn(p);
   const px=on? p.x : VIEW.x+VIEW.w/2, py=on? p.y : VIEW.y+VIEW.h/2;
-  const a=vPt({x:px,y:py});          // the plant point to hold still, at the OLD scale
-  panTo=panZ=null;                   // ...and so does the wheel
+  const a=vPt({x:px,y:py});          // the point to hold still, at the OLD scale
+  panTo=panZ=null;
   vScale(VIEW.z*Math.exp(-dy*0.0015));
   vAnchor(a,px,py);
 }

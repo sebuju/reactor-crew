@@ -1,17 +1,8 @@
 "use strict";
-/* canvas handle, palette, shared constants. The plant canvas now lives inside
-   #stage, below the HTML #topbar. */
 const W = 760;
-/* THE DRAWING'S OTHER TWO DIMENSIONS STAND WITH W, and H is a `let` because
-   resize() (shell.js) writes it. They were declared in shell.js, eighteen
-   scripts after uiBind(cv) wires the pointer handlers - so a pointermove while
-   the rest of the page was still loading read both through the temporal dead
-   zone and threw "H is not defined" out of local(). */
 let H = 790;
 const TOPBAR_H = 40;
-/* ctx is `let`, not `const`: hostPaint() in render/plant.js swaps it for the
-   duration of one draw so a graphical widget living inside an opaque HTML rail
-   paints into its own bitmap using the same chrome.js primitives. */
+/* ctx is `let`: hostPaint() (render/plant.js) swaps it for the duration of one draw */
 const cv = document.getElementById("cv");
 let ctx = cv.getContext("2d");
 const stage = document.getElementById("stage");
@@ -19,71 +10,26 @@ const MONO = `ui-monospace,"SF Mono","Roboto Mono","DejaVu Sans Mono",Menlo,mono
 
 const C = {
   bg:"#040708", panel:"#0b1114", panelHi:"#142126", well:"#060a0b", ctlWell:"#0f181b",
-  // the topbar is the ship's chrome, not one of the panels floating on the view
   bar:"#101a1d",
-  // a panel that FLOATS over the drawing, against panel, which is bolted to a rail
   panelFloat:"#131d21",
-  // a machine on the board is not a panel: it moves without dragging the chrome
   machBg:"#1b1f21",
   edge:"#1d2f35", edge2:"#2c464e", rail:"#33525b",
   ink:"#9fb4b9", ink2:"#5d7378", bright:"#dff0f3",
   amber:"#f0a830", cyan:"#5fd2e2", red:"#ff5a45", green:"#57d38c",
   blue:"#5aa9d6", metal:"#6d8f98",
-  /* THE TWO SIDES OF A PORT'S OWN INTERNAL PATH, named once so the nozzle, its
-     word and its tooltip cannot drift apart. The slot is hemmed in on every
-     side: not amber (amber IS the selection), not red (a side is not an
-     alarm), not green (green is a healthy lamp, and portB WAS C.green to the
-     digit), and not cyan or blue - both are on the pipework a port sits on, so
-     an inlet wearing them vanished into the run it was capping.
-     MUTED, because these are FILLS with a word standing on them rather than
-     lamps: the pink and the light green were as loud as an alarm for something
-     that is only ever saying "this end, not that one". Mid-tone, so the dark
-     ink on top (C.inkOnLit) reads. */
   portA:"#9a86c4", portB:"#b59a6f",
-  /* THE COMPARTMENT'S OWN TWO READINGS, and they are on screen together.
-     h2 is a violet the blast bands do not use, so the cloud and the wave
-     cannot be read as one another; scar/scarHi are SOOT - warm and very dark
-     against a cool dark panel, so a burnt cell reads as burnt rather than as
-     a hole cut in the picture. */
   h2:"#a48ad6", scar:"#2b1c15", scarHi:"#4a2f22",
-  /* THE LEADER FROM A MACHINE TO ITS PANEL (ui/margin.js). It was C.rail, which
-     is the tone this board draws things you are NOT meant to look at - a centre
-     line, a tick - and twenty leaders threading the plumbing simply vanished
-     into it. MAGENTA is the one hue the mimic has left: cyan and blue are the
-     water, amber the hot side and the selection, red the alarms, white the
-     steam, green the healthy lamps, brown the graphite, and VIOLET is spoken
-     for twice over - the surge line (pipes.js) and the port nozzles (portA)
-     and the hydrogen cloud (h2). What is left is YELLOW-GREEN, and it is far
-     enough from both its neighbours to be its own thing: C.green is a mint
-     LAMP and C.amber is orange. Nothing on the plant is ever this colour, so a
-     leader can never be mistaken for a reading about the plant. */
-  /* DIMMED. The hue is right and the LEVEL was not: at full chroma twenty
-     dashed lines across the mimic pulled the eye off the plant they annotate.
-     Same hue, taken down to a muted olive - still clear of C.rail, still
-     nothing else on the board, and now quiet enough to read past. */
   lead:"#6e7a52",
-  /* AND WHAT IT LOOKS LIKE WHILE IT IS HAPPENING. Three tones off one axis -
-     gas temperature - so the fire is not a colour somebody picked: fire is a
-     stoichiometric front, fire2 is the same front a thousand kelvin cooler,
-     and amber and red below them are already on this table. smoke is the
-     steam the burn makes, which is what is left once it has cooled. */
   fire:"#fff3d0", fire2:"#ffd27a", smoke:"#6a6560",
   xe:"#2a1f3a", graph:"#8a6a4a",
-  /* selected fills, the near-black inks that go on top of a bright fill, and
-     the two banner grounds. Here rather than in a stylesheet so there is still
-     exactly one palette. */
   onAmber:"#2a1f08", onGreen:"#0f2018", redHi:"#ff7d6c", dis:"#2c3f45",
-  /* amber carrying its own alpha, for a ring that marks a thing without
-     shouting as loud as the thing. A var() cannot be given an alpha at the
-     use site, so the translucent value is a palette entry rather than a
-     literal hex in a stylesheet. */
+  /* a var() cannot be given an alpha at the use site, so the translucent value is an entry */
   amberSoft:"#f0a8305e",
   inkOnAmber:"#180404", inkOnRed:"#160404", inkOnLit:"#120404",
   bgMelt:"#1a0605", bgTrip:"#1a1206"
 };
 
-/* C stays the one palette; CSS reads it through these. Guarded: the bundle
-   also runs headless through new Function, where document has no documentElement. */
+/* guarded: the bundle also runs headless, where document has no documentElement */
 function cssVarsBoot(){
   if(typeof document==="undefined" || !document.documentElement) return;
   const root=document.documentElement.style;
