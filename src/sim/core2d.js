@@ -67,6 +67,16 @@ const CLAD_DT0=30;
    plus nucleate boiling on a vertical rod, a published order (1-5 kW/m2/K).
    A real coefficient, turned into the film's own share in coreConst(). */
 const H_POOL=2000;
+/* ── WHAT A BOILING SURFACE ACTUALLY DOES ──
+   Jens-Lottes (1951): the wall superheat a nucleate-boiling surface holds is
+   25*(q''/1e6)^0.25*exp(-p/6.2), q'' in W/m2 and p in MPa - a weak quarter
+   power of the flux, so the wall very nearly PINS to saturation however hard
+   the rod is driven. That is the bonus a void fraction was being read as a
+   penalty for. It is a water correlation and coreStep() names no fluid: a
+   coolant that is nowhere near boiling puts this wall above its single-phase
+   one, so the max() there never picks it. */
+const JL_K=25, JL_P=6.2;
+const jensLottes=(qpp,p)=>JL_K*Math.pow(Math.max(qpp,1)/1e6,0.25)*Math.exp(-p/JL_P);
 /* Drift flux: quality to void fraction. C0 is the concentration parameter (the
    steam runs up the middle of the channel faster than the mean) and rvl is
    the density ratio of steam to water, which is satRvl(pressure) now rather
@@ -564,25 +574,24 @@ function coreReset(K,cs,flowNet){
     K.pinUA=heat0*K.rated*1000*Math.max(pk2,1e-6)
            /(film0*Math.max(K.TfRef-K.Tref,1)*K.condK);
     /* ── AND WHERE THE CLAD SITS INSIDE THAT DROP ──
-       There is no clad node in this model: `film` above is the WHOLE pellet-
-       to-coolant conductance, so nothing here knows the clad's temperature -
-       and every failure criterion worth having is about the clad, not the
-       pellet. A stock HTGR rests at 1373 K of pellet against UO2's tdmg of
-       1500, so hanging a criterion on the pellet would put the helium core one
-       step from failing at commissioning.
+       There is no clad node in this model, and every failure criterion worth
+       having is about the clad, not the pellet: a stock HTGR rests at 1373 K
+       of pellet against UO2's tdmg of 1500, so hanging a criterion on the
+       pellet would put the helium core one step from failing at commissioning.
 
-       So the drop is split in series: a FIXED solid conductance (pellet, gap
-       and clad wall) and the LIVE film. K.gSolid is fitted ONCE here, in the
-       K.pinUA idiom, against a stated reference clad rise - and CLAD_DT0 is
-       real, 30 K is what a PWR rod's outside sits above its coolant at power.
-       The whole point is what happens away from that anchor: as the film
-       collapses on a dry node the split goes to 1 and the clad rides at the
-       pellet's own temperature, which is the only reason a clad criterion can
-       fire at all. IT IS A FIT AND IT SAYS SO; if a single linear split ever
-       reads wrong, the replacement is a real two-node pellet/clad balance,
-       not a second coefficient here. */
+       So the pellet-to-coolant path is TWO conductances in series - a FIXED
+       solid one (pellet, gap and clad wall) and the LIVE coolant film - and
+       the pellet balance takes their series sum. Both legs are fitted here
+       against a stated reference clad rise, in the K.pinUA idiom: CLAD_DT0 is
+       real, 30 K is what a PWR rod's outside sits above its coolant at power,
+       so at the rest point the film carries r of the drop and the series sum
+       is film0 exactly. K.cladR is that r, and it is what coreStep() divides
+       by to get the film leg out of a channel's own flow term. The whole point
+       is what happens away from the anchor: as the film collapses on a bare
+       node the split goes to 1 and the clad rides at the pellet's own
+       temperature, which is the only reason a clad criterion can fire. */
     const r=clamp(CLAD_DT0/Math.max(K.TfRef-K.Tref,1),.01,.6);
-    K.gSolid=r*film0/(1-r);
+    K.gSolid=film0/(1-r); K.cladR=r;
     /* and start every pellet where that balance puts it, or tick one is a
        transient nobody caused */
     /* THE FIT IS AT THE REST POINT; THE PELLETS START AT THE POWER THIS PLANT
@@ -692,6 +701,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
      takes at rated power, so an undamaged core at rest lands exactly where the
      correlation left it. */
   const qhat  = heat*K.rated*1000/Math.max(K.pinUA,1e-9);
+  const qpp0  = K.rated*1e6/Math.max(K.aHeat,1e-6);   // rated flux past the pin, W/m2 - what the boiling law wants
   const ff    = Math.max(flowFrac, 1e-3);
   const cp    = K.sat.cp, dT0 = K.dT0;
   const hSat  = cp*sat;                      // enthalpy at saturation, kJ/kg
@@ -716,7 +726,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
        FLOORED AT THE POOL: a covered rod in still water still sheds heat by
        natural convection and nucleate boiling (K.filmPool, coreConst), so
        an isolated full vessel heats on decay heat at that rate and not as
-       if the water were not there. The (1-nV) factor below is what takes
+       if the water were not there. The (1-vLeak) factor below is what takes
        the floor away when the node is bare. */
     const film0=Math.max(Math.pow(Math.max(mflux*chan,0),0.8), K.filmPool||0);
     /* the same water as a MASS FLUX rather than a film - Saha-Zuber's G, and
@@ -757,17 +767,30 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
          its heat and climbs on its own heat capacity until it melts, which is
          the real accident and was not reachable at all while a cap and a floor
          stood between the two. The clamp is numerical headroom well past melt,
-         not a modelling choice. Void is not the only way to lose the film:
-         dnbFilmK() (step.js) is departure itself, which is why the margin is
-         measured first. */
-      /* the wall's own superheat is read with the nucleate film first, and
-         the post-CHF law (dnbFilmK) then says how much of that film is left */
-      const filmNB=film0*(1-clamp(cs.nV[k],0,1));
-      const TclNB=cs.nTc[k]+(cs.nTf[k]-cs.nTc[k])*K.gSolid/(K.gSolid+filmNB);
+         not a modelling choice. Losing the water is not the only way to lose
+         the film: dnbFilmK() (step.js) is departure itself, which is why the
+         margin is measured first. */
+      /* ── THE COOLANT FILM, AND WHAT IT IS DOING ──
+         BARENESS is the penalty, and it is vLeak - the vessel's own shortfall
+         of water. It was the node's total void, which is the SAME number on an
+         uncovered node and the wrong one on a boiling one: a rod in bubbles
+         sheds heat better than a rod in water, not worse.
+         So the wet film is the better of two real laws, and neither of them is
+         asked which fluid this is - a coolant nowhere near boiling puts the
+         nucleate wall above its own single-phase one and the max() drops it.
+         Departure blankets the wall, so it is priced on the SINGLE-PHASE film:
+         the boiling bonus is exactly what departing loses. */
+      const bare=1-clamp(vLeak,0,1);
+      const hCsp=film0*bare/K.cladR;
+      const hCnb=qhat*pw*bare/Math.max(sat+jensLottes(qpp0*q2,cs.pCore)-cs.nTc[k],1e-3);
+      const hCw=Math.max(hCsp,hCnb);
+      const TclNB=cs.nTc[k]+(cs.nTf[k]-cs.nTc[k])*K.gSolid/(K.gSolid+hCw);
       cs.nDnb[k]=dnbLatch(K,dnb, TclNB-sat, cs.nDnb[k]);
-      const film=filmNB*(cs.nDnb[k] ? DNB_FILM : 1);
+      const hC=cs.nDnb[k] ? hCsp*DNB_FILM : hCw;
+      // and the pellet sheds through BOTH legs, in series - its own conduction never followed the water
+      const film=K.gSolid*hC/Math.max(K.gSolid+hC,1e-12);
 
-      const Tcl=cs.nTc[k]+(cs.nTf[k]-cs.nTc[k])*K.gSolid/(K.gSolid+film);
+      const Tcl=cs.nTc[k]+(cs.nTf[k]-cs.nTc[k])*K.gSolid/(K.gSolid+hC);
       if(Tcl>TclH) TclH=Tcl;
 
       /* ── OXIDATION, AND THE HEAT IT MAKES ──
