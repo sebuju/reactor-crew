@@ -136,9 +136,9 @@ const D={sg:0,
 /* Where an actuator stands at commissioning; absent means "whatever resetPlant() hard-codes", so an untouched design commissions bit-identically. */
 const startOf=(k,fallback)=>(D.start && D.start[k]!==undefined) ? D.start[k] : fallback;
 
-/* A suggestion is BAKED on first read (bake(), layout.js), so a figure left behind prices the next plant off the last one's core. Emptied in place: a reassignment strands a holder. */
-const DBAGS=["turbKgs","condUA","condDump","sgUA","ihxUA","pumpHead","pumpFlow","pumpRotor",
-             "sgType","radCoat","radArea","radUA","bore","start"];
+/* designBake() states a figure per machine, so one left behind prices the next plant off the last one's core. Emptied in place: a reassignment strands a holder. */
+const DBAGS=["turbKgs","condUA","condDump","sgUA","sgDesP","ihxUA","pumpHead","pumpFlow","pumpRotor",
+             "sgType","radCoat","radArea","radUA","bore","wall","start"];
 /* The scalars, taken before anything can edit them. */
 const DSCAL=Object.fromEntries(Object.entries(D).filter(([,v])=>typeof v!=="object"));
 /* For a caller that has just written the scalars it wants and cannot have designForget() put them back. */
@@ -149,6 +149,79 @@ const designClear=()=>{
   for(const k in D) if(typeof D[k]==="object") for(const j in D[k]) delete D[k][j];
   Object.assign(D,DSCAL);
 };
+
+/* One row per figure that carries an AUTO key. The panel, designBake() and designAuto() read THIS list; nobody keeps a second one. */
+let FIG_BATCH=false;
+const figSide=fn=>{ if(fn && !FIG_BATCH) fn(); };
+const figBag=(bag,key,get,after)=>({get, raw:()=>{ const v=bag[key]; return v==null?undefined:v; },
+  set:v=>{ bag[key]=v; figSide(after); }, clr:()=>{ delete bag[key]; figSide(after); }});
+const figCore=(id,bag,key,get,after)=>figBag(bag(coreD(id)),key,()=>get(coreD(id),id),after);
+const FIG={
+  /* commission() walks an UNSTATED UA onto rated power (step.js) and takes a stated one as the player's word: baking it stands that trim down */
+  sgUA:     {subs:()=>roleAll("sg"), keep:true, acc:id=>figBag(D.sgUA,id,()=>sgUAOf(id))},
+  sgDesP:   {subs:()=>roleAll("sg"),    acc:id=>figBag(D.sgDesP,id,()=>sgDesPOf(id))},
+  ihxUA:    {subs:()=>ihxIds(),         acc:id=>figBag(D.ihxUA,id,()=>ihxUAOf(id))},
+  pumpHead: {subs:()=>pumpIds(),        acc:id=>figBag(D.pumpHead,id,()=>pumpHead(id))},
+  /* pumpBoxCap() reads the STORED flow, so stating this one grows the box a preset's pipework was routed round */
+  pumpFlow: {subs:()=>pumpIds(), keep:true, acc:id=>figBag(D.pumpFlow,id,()=>pumpFlow(id))},
+  pumpRotor:{subs:()=>pumpIds(),        acc:id=>figBag(D.pumpRotor,id,()=>pumpRotor(id))},
+  turbKgs:  {subs:()=>roleAll("turb"),  acc:id=>figBag(D.turbKgs,id,()=>turbKgs(id))},
+  condUA:   {subs:()=>roleAll("cond"),  acc:id=>figBag(D.condUA,id,()=>condUA(id))},
+  condDump: {subs:()=>roleAll("cond"),  acc:id=>figBag(D.condDump,id,()=>condDump(id))},
+  radArea:  {subs:()=>radIds(),         acc:id=>figBag(D.radArea,id,()=>radAreaOf(id))},
+  radUA:    {subs:()=>radIds(),         acc:id=>figBag(D.radUA,id,()=>radUAOf(id))},
+  /* the run's own name, never the derived key: runIdOf() is the one door D.bore and D.wall are written under */
+  bore:     {subs:()=>pipeNetwork(),    acc:r=>figBag(D.bore,runIdOf(r),()=>runBoreMm(r),dTouch)},
+  wall:     {subs:()=>pipeNetwork(),    acc:r=>figBag(D.wall,runIdOf(r),()=>runWallMm(r),dTouch)},
+  rodD:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodD",cD=>rodD(cD),()=>latRevolve(coreD(id)))},
+  rodSpd:   {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodSpd",cD=>rodSpdOf(cD),dTouch)},
+  vesselWall:{subs:()=>coreIds().filter(id=>!coreD(id).tube),
+    acc:id=>figCore(id,cD=>cD,"wall",(cD,i)=>vesselWallMm(derived(i).P0,COOLANT[cD.cool],cD),dTouch)},
+  tubeBore: {subs:()=>coreIds().filter(id=>coreD(id).tube),
+    acc:id=>figCore(id,cD=>cD.tube,"bore",cD=>tubeBoreMm(cD),dTouch)},
+  tubeWall: {subs:()=>coreIds().filter(id=>coreD(id).tube),
+    acc:id=>figCore(id,cD=>cD.tube,"wall",(cD,i)=>tubeWallMm(derived(i).P0,COOLANT[cD.cool],cD),dTouch)},
+  cavVol:   {subs:()=>coreIds().filter(id=>coreD(id).tube),
+    acc:id=>figCore(id,cD=>cD.tube,"cavVol",cD=>cavVolM3(cD),dTouch)},
+  shieldT:  {subs:()=>coreIds().filter(id=>coreD(id).tube),
+    acc:id=>figCore(id,cD=>cD.tube,"shieldT",cD=>shieldT(cD),dTouch)},
+  holdP:    {subs:()=>tankIds().filter(id=>D.tanks[id].hold),
+    acc:id=>figBag(D.tanks[id].hold,"p",()=>holdSetP(tankCircuit(id)))},
+  /* off the drawing, so a valve is not baked against the last plant commissioned */
+  fitLift:  {subs:()=>reliefFitsD(),    acc:fid=>figBag(D.fittings[fid],"lift",()=>D.fittings[fid].lift||reliefRefPD(fid)*PORV_LIFT_K)},
+  fitReseat:{subs:()=>reliefFitsD(),    acc:fid=>figBag(D.fittings[fid],"reseat",()=>D.fittings[fid].reseat||reliefRefPD(fid)*PORV_RESEAT_K)},
+  matT:     {subs:()=>Object.keys(D.mat),
+    acc:k=>figBag(D.mat[k],"t",()=>matThick(+k.split(",")[0],+k.split(",")[1]),buildLayout)},
+};
+const reliefFitsD=()=>Object.keys(D.fittings).filter(f=>D.fittings[f].mode==="relief");
+const figBatch=fn=>{ FIG_BATCH=true; try{ return fn(); } finally { FIG_BATCH=false; } };
+/* a run is its own object; everything else names itself, so one string is the subject either way */
+const figKey=sub=>(sub && typeof sub==="object") ? runIdOf(sub) : sub;
+const figWalk=(fn,all)=>{ for(const k in FIG){ const r=FIG[k]; if(r.keep && !all) continue;
+  for(const sub of r.subs()) fn(r.acc(sub), figKey(sub)); } };
+const figSettle=()=>{ for(const id of coreIds()) latRevolve(coreD(id)); buildLayout(); dTouch(); };
+/* every value is READ before any is written: a figure resolved off one just baked would otherwise price itself off the write */
+const designBake=only=>figBatch(()=>{
+  const want=(a,k)=>(!only || only(k)) && a.raw()===undefined;
+  /* asked before anything is settled, so a gesture that placed nothing costs a walk and touches neither the layout nor the lattice */
+  let any=false; figWalk((a,k)=>{ if(want(a,k)) any=true; });
+  if(!any) return;
+  figSettle();                       // the bags were just emptied: every cache keyed on DGEN still holds the last plant's answers
+  const w=[];
+  figWalk((a,k)=>{ if(want(a,k)) w.push([a,a.get()]); });
+  for(const [a,v] of w) a.set(v);
+  figSettle();
+});
+const designAuto=()=>figBatch(()=>{ figWalk(a=>a.clr(),true); figSettle(); });
+/* what a gesture PLACED states its own figures; anything already on the board keeps what it was left on, AUTO included */
+const figSubs=()=>{ const s=new Set(); figWalk((a,k)=>s.add(k),true); return s; };
+const designBakeSince=was=>designBake(k=>!was.has(k));
+function designBakeNew(fn){
+  const was=figSubs();
+  const out=fn();
+  designBakeSince(was);
+  return out;
+}
 
 /* Swallow-weighted: efficiency is a property of the STEAM, and the steam splits by what each machine can take. */
 const grossEff  = () => { let w=0,e=0;
