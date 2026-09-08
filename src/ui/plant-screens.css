@@ -1,148 +1,67 @@
-/* Control room and design bench: HTML rails around a plant view that is
-   still drawn on the one page canvas. The canvas keeps receiving pointer
-   events everywhere except the rail itself, so the plant still pans, zooms
-   and drags beside these panels. A rail is OPAQUE, so a graphical widget
-   inside one gets its own <canvas> - see hostPaint() in render/plant.js. */
 body[data-screen="operate"] #scr-operate,
 body[data-screen="design"] #scr-design{pointer-events:none}
-/* the plant view's keys - LAYERS and zoom. They stand in the head row both
-   screens carry, in normal flow, sized in px like every other control. */
 .plant-keys{display:flex;align-items:flex-start;gap:4px}
 .plant-zoom{height:20px;padding:0 8px;letter-spacing:.6px;white-space:nowrap}
 .plant-layers .layer-switch{justify-content:flex-start;text-align:left}
 
-/* ONE HEAD ROW PER PLANT SCREEN. The keys that address the VIEW (layers, zoom)
-   and the drawers that address the plant as a whole live here rather than at
-   the foot of a rail nobody scrolls to. Transparent and click-through except
-   on the controls themselves, so the plant under it keeps its presses. In the
-   control room it starts clear of the vitals panel, which is the topmost thing
-   in that corner; the bench stands its own panel underneath instead. */
 .scr-head{grid-column:1;grid-row:1;pointer-events:none;display:flex;align-items:flex-start;
   flex-wrap:wrap;gap:8px;padding:6px 8px;margin-left:308px}
 .scr-head>*{pointer-events:auto}
-/* the bench's verdict is a window, so nothing is bolted in that corner for the
-   row to start clear of */
 .db-head{margin-left:0}
 
 .cr-root,.db-root{position:absolute;display:grid;
   grid-template-rows:auto 1fr;pointer-events:none}
-/* the top inset clears the transport strip, which trBuild() mounts on operate
-   and scenario only - the design bench has no strip and so no band to clear */
 .cr-root{inset:36px 0 0 0;grid-template-columns:1fr auto}
-/* the bench rail has nothing left in it, and an empty 340px column is a third
-   of the plant view given to nothing */
 .db-root{inset:0;grid-template-columns:1fr auto}
 .db-rail:empty,.cr-rail:empty{display:none}
 
-/* ─────────────── control room ─────────────── */
-/* FLOATS OVER THE PLANT: out of the grid entirely, so it holds no track open and
-   the plant view is measured as if it were not there. In a grid row it was as
-   tall as the window whatever it held, and drawOperate() then carved 300 px off
-   the left of the plant for a panel that may only be half that deep.
-   Sized by its own content and capped by max-height: a scroll container
-   stretched by a grid row collapses to nothing. Nothing inside may squash - a
-   flex child that shrinks hands hostPaint() a box its picture was not laid out
-   for. */
 .cr-vitals{position:absolute;left:4px;top:4px;pointer-events:auto;
   display:flex;flex-direction:column;
   width:300px;padding:4px 0;background:var(--c-panel);
-  /* CAPPED AGAINST ITS OWN PARENT, never against the window. .cr-root is inset
-     below the topbar AND below the transport strip, so 100vh less a typed 44px
-     overhung the screen by the strip's own height - measured 916px of panel in
-     an 878px window. The 4px it keeps at the top, and 8px at the bottom: a
-     panel flush with the window edge reads as cut off. */
   max-height:calc(100% - 12px);overflow-y:auto;scrollbar-width:none}
 .cr-vitals::-webkit-scrollbar{display:none}
 .cr-vitals>*{flex:0 0 auto}
-/* THE CAUTION LIST IS WHAT GIVES WAY. Everything above it is an instrument with
-   a laid-out picture in it - six bars and two hosted canvases - and squashing
-   one hands hostPaint() a box it was not drawn for, so the list is the only
-   child allowed to shrink, and it does it by SCROLLING its own rows rather than
-   by losing them. The panel keeps overflow-y:auto as the last resort, for a
-   window too short to hold even the fixed part. */
 .cr-vitals>.cr-caut{flex:0 1 auto;min-height:0;display:flex;flex-direction:column}
 .cr-vitals>.cr-caut>.cr-caut-body{flex:1 1 auto;min-height:0;overflow-y:auto}
-/* 8px of side padding puts these on the same left edge the vital rows keep.
-   Two classes because .insp-viz sets its own padding further down the file.
-   The seam between two of them is 12px of nothing - no line, and no gap above
-   the first, so it only ever separates two pictures that are both there. */
-/* the unit tabs stand on the same 8px left edge the pictures below them keep,
-   and they wrap: a name is the player's to set, so four long ones must fall to
-   a second line rather than push the panel wider. Shorter than the topbar's
-   because this strip sits inside an instrument, not over the screen. */
 .cr-units{display:flex;flex-wrap:wrap;gap:3px;padding:0 8px 6px}
 .cr-units>.tab{height:17px;padding:0 8px;font-size:var(--fs-label);letter-spacing:1.2px}
 .insp-viz.cr-viz{padding:0 8px 6px;box-sizing:border-box}
 .insp-viz.cr-viz+.insp-viz.cr-viz{margin-top:12px}
-/* the first track is the plot dot: reserved whether or not it is lit, so
-   turning a channel on does not shift the six labels sideways */
 .cr-vital{display:grid;grid-template-columns:7px 84px 1fr 58px;align-items:center;gap:6px;
   padding:2px 8px;border-bottom:1px solid rgba(120,180,190,.05);cursor:pointer}
 .cr-vital:last-child{border-bottom:0}
 .cr-vital:hover{background:var(--c-panel-hi)}
 .cr-vital-plot{width:7px;height:7px}
-/* holds the strip's slot in the row while crVitalsSync() decides which strip
-   a two-sided vital needs - see the signed branch there */
 .cr-vital-bar{display:block;min-width:0}
 .cr-vital-lab{font-size:var(--fs-label);letter-spacing:.6px;text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cr-vital.on .cr-vital-lab{color:var(--c-ink)}
 .cr-vital-val{font-size:var(--fs-value);text-align:right;white-space:nowrap}
-/* hidden outright with nothing plotted - see crTrendSync() */
 .cr-trends{display:block}
 .cr-trend-canvas{display:block;width:100%;height:96px;background:transparent;
   border-top:1px solid var(--c-edge)}
 
-/* MASTER CAUTION - see crCautBuild(). LAST in the vitals panel, so a caution
-   arriving grows the panel downward and never moves a balance somebody is
-   reading. A dismissed line is gone; a line whose reading has RECOVERED is
-   still here, dimmed, because it has not been answered yet. */
 .cr-caut{display:block;margin-top:12px;border-top:1px solid var(--c-edge)}
 .cr-caut-head{display:flex;flex:0 0 auto;align-items:center;gap:8px;padding:5px 8px 4px;
   font-size:var(--fs-sec);letter-spacing:1.2px;text-transform:uppercase;color:var(--c-ink2)}
 .cr-caut-title{flex:1 1 auto;min-width:0}
-/* HELD, NOT REMOVED: hidden by visibility so the AUTO key beside it never moves
-   when the last answered caution goes - see crCautSync() */
 .cr-caut-clear,.cr-caut-auto{flex:0 0 auto;padding:0 5px;line-height:1.5;letter-spacing:1px}
 .cr-caut-clear.off{visibility:hidden}
-/* the rows are the RAIL'S rows - fieldRowsSync() builds them, so value, colour
-   and band all come for free. Only two things are added here: they are
-   clickable, and one whose reading has recovered is dimmed. */
 .cr-caut-body{padding:0 8px 6px}
 .cr-caut-body .insp-row{cursor:pointer;margin: 2px -4px 0px -4px; }
-/* THE WASH IS WHAT THE READING IS DOING NOW, and it is the SAME rule in the
-   rail as in the master caution - fieldRowsSync() puts the class on off the
-   row's own colour, so a caution and the panel it was copied from cannot look
-   different. Mixed with transparent, not with the panel, so a row keeps reading
-   correctly whatever it sits on. Nominal has no wash and needs no rule - bare
-   is also what an answered caution looks like. */
 .cr-caut-body .insp-row.red,.cr-panel-body .insp-row.red{
   background:color-mix(in srgb,var(--c-red) 12%,transparent)}
 .cr-caut-body .insp-row.amber,.cr-panel-body .insp-row.amber{
   background:color-mix(in srgb,var(--c-amber) 12%,transparent)}
-/* the label steps up one notch on a washed row - ink, not bright: a caption in
-   ink2 over a tint is the first thing to disappear, but full white would make
-   the caption louder than the value, and the value is the verdict. Same step a
-   plotted vital's label takes. */
 .cr-caut-body .insp-row.red .insp-row-lab,.cr-panel-body .insp-row.red .insp-row-lab,
 .cr-caut-body .insp-row.amber .insp-row-lab,.cr-panel-body .insp-row.amber .insp-row-lab{
   color:var(--c-ink)}
-/* HOVER MUST NOT TOUCH THE BACKGROUND, because the background is the severity:
-   swapping it for a hover colour threw away the one thing the row was saying.
-   An inset shadow lightens whatever is already there - bare, amber or red alike
-   - and paints over the background but under the text; the outline is drawn
-   inside the box, so nothing shifts by a pixel when the pointer arrives. */
 .cr-caut-body .insp-row:hover{outline:1px solid var(--c-edge2);outline-offset:-1px;
   box-shadow:inset 0 0 0 999px color-mix(in srgb,var(--c-bright) 8%,transparent)}
 
-/* THE BOARD, at the head of the master caution - see crCautBuild(). It never
-   shrinks and never scrolls on its own: a tile scrolled out of sight is a tile
-   nobody saw light. The copied readings under it are what give way. */
 .cr-caut-ann{flex:0 0 auto; padding: 4px 6px;
    display: grid; grid-template-columns: 1fr 1fr 1fr; grid-auto-rows: 1fr; white-space: nowrap;
 }
-/* A DARK TILE IS STILL A TILE, so it reads as a caption: the name in ink2, no
-   background. Lit is what carries a colour. */
 .cr-alarm-row{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:var(--t10); justify-content: center;
   font-weight:700;letter-spacing:.6px;color:var(--c-ink2)}
 .cr-alarm-row.lit{color:var(--c-ink-on-lit)}
@@ -152,46 +71,27 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-alarm-row:not(.lit){opacity: 0.25;font-weight: normal;}
 .cr-alarm-dot{display:none}
 
-/* under the head row, which is what now stands along the top of the plant */
 .cr-banner{position:absolute;left:6px;right:6px;top:38px;pointer-events:none;
   padding:8px;text-align:center;font-size:var(--t12);font-weight:700;letter-spacing:2px;
   text-transform:uppercase;overflow-wrap:anywhere;display:block}
 .cr-banner.melt{background:var(--c-bg-melt);color:var(--c-red)}
 .cr-banner.trip{background:var(--c-bg-trip);color:var(--c-amber)}
 
-/* OVERSCROLL. KIT.reveal() puts a newly picked panel at the TOP of the rail,
-   and the last panel cannot reach the top unless there is empty rail under it.
-   The tail is one viewport less a title bar, so every panel can get there. */
 .cr-rail,.db-rail{padding-bottom:calc(100vh - 60px)}
-/* the overscroll tail means this rail is ALWAYS taller than its box, so the
-   page-wide scrollbar would sit here permanently - hide the bar, keep the scroll */
 .cr-rail{grid-column:2;grid-row:1/3;overflow-y:auto;pointer-events:auto;
   background:var(--c-panel);padding-top:6px;scrollbar-width:none}
 .cr-rail::-webkit-scrollbar{display:none}
-/* A SIDE OF THE PLANT, COLLAPSIBLE - see crRailBuild(). It reads as a heading
-   rather than as a well: no box of its own, so the panels inside keep the
-   rail's own left edge and the shut group is one line. The summary marker is
-   the only thing that says it opens. */
 .cr-group{}
 .cr-group:first-child{margin-top:0}
-/* ONE ROW, ALWAYS. The alarm text after the name is as long as the machine
-   names in it, so the heading clips rather than wrapping onto a second line and
-   pushing the whole rail down. No flex here on purpose: any display but the
-   default takes the disclosure marker away, and the marker is the only thing
-   that says the heading opens. */
 .cr-group>summary{cursor:pointer;padding:4px 4px 5px;
   font-size:var(--fs-sec);letter-spacing:1.6px;text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cr-group[open]>summary{color:var(--c-bright)}
 .cr-group>summary:hover{color:var(--c-bright)}
-/* what is red under the lid - see crRailAlert(). The heading goes red with it,
-   so the colour carries at a glance and the text says which machine. */
 .cr-group.alarm>summary,.cr-group.alarm[open]>summary{color:var(--c-red)}
 .cr-group.caution>summary,.cr-group.caution[open]>summary{color:var(--c-amber)}
 .cr-group-alert{color:inherit;letter-spacing:.8px}
 .cr-group-alert:not(:empty){margin-left:8px}
-/* a drawer holds rows of text, not a column of switches, so it is as wide as
-   the rail it came off */
 .cr-drawer .kit-menukey-menu{width:340px}
 .cr-log,.cr-dmg,.cr-flt{padding:6px 8px 8px}
 .cr-empty{font-size:var(--fs-note);letter-spacing:1px;color:var(--c-ink2);text-align:center;margin:8px 0}
@@ -201,7 +101,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-log-m{font-size:var(--fs-value);font-weight:700}
 .cr-log-row.alarm .cr-log-m{color:var(--c-red)}
 .cr-log-row.warn .cr-log-m{color:var(--c-amber)}
-/* a control action the crew took, not something the plant did to itself */
 .cr-log-row.act .cr-log-m{color:var(--c-cyan);font-weight:400}
 .cr-log-row.act .cr-log-w{display:none}
 .cr-log-w{margin:2px 0 0;font-size:var(--fs-note);color:var(--c-ink2)}
@@ -214,35 +113,20 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-flt .kit-btn{display:block;width:100%;margin-bottom:4px}
 
 .cr-comp-rail{display:flex;flex-direction:column;}
-/* the well has no border any more, so its two states are outlines - which cost
-   no layout, so nothing shifts by 2px when a panel is picked */
 .kit-well.on > .kit-rule-head{background: color-mix(in srgb, var(--c-amber) 12%, transparent);}
 
-/* ─────────────── shared: label+value(+band) row, RESULTS stat row ─────────────── */
-/* a grid, not a flex row: the bar needs a line of its own, and only an explicit
-   track puts every value in one column. fit-content() caps the label where a
-   max-width on the item used to. */
 .insp-row{display:grid;grid-template-columns: 1fr auto;
   align-items:center;column-gap:8px;row-gap:2px;padding:2px 4px; transition: 200ms background-color; margin: 0px -4px;}
 .insp-row-lab{font-size:var(--fs-label);text-transform:uppercase;color:var(--c-ink2);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .insp-row-val{font-size:var(--fs-value);text-align:right;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-/* what the option under the pointer would do to this row - see prevDelta().
-   ON A MEASURED LIST THE SLOT IS ALWAYS THERE, empty or not: a delta that
-   appeared under the pointer would widen the value and shunt every label on
-   the panel sideways. Elsewhere the span collapses, because nothing else on
-   the plant ever fills it. */
 .insp-row-dlt{font-size:var(--fs-tiny);letter-spacing:.3px}
 .insp-row-dlt:empty{display:none}
 .db-readlist .insp-row-dlt{display:inline-block;text-align:right}
 .insp-row .kit-band,.insp-row .kit-seg{grid-column:1/-1}
 .insp-row:hover{background:var(--c-panel-hi)}
-/* a genuinely graphical row: its own bitmap, painted by the screen through
-   hostPaint() - see fieldRowsBuild() and rhoViz() */
 .insp-viz{display:block;width:100%;background:transparent; padding: 6px 0px;}
-/* four registers in one column. At 176 every seam sat at its minimum and the
-   trace was a 29-unit sliver - see the slack note in rhoViz(). */
 .insp-viz-rho{height:240px}
 .insp-viz-heat{height:240px}
 .insp-viz-dmg{height:240px}
@@ -251,7 +135,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   overflow:hidden;text-overflow:ellipsis}
 .insp-stat-val{font-size:var(--fs-value);text-align:right;white-space:nowrap; text-overflow: ellipsis; overflow: hidden;}
 
-/* ─────────────── design bench ─────────────── */
 .db-tools{display:flex;align-items:center;gap:4px}
 .db-plants .kit-btn{justify-content:flex-start;text-align:left}
 .db-verdict-rev{margin-top:8px}
@@ -265,21 +148,13 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-field>.kit-rule{letter-spacing:0;margin:0; padding-top:5px;border-bottom:none;padding-bottom:0}
 .db-field>.kit-toggle>.kit-toggle-label{display:none}
 .db-note{margin:0;font-size:var(--fs-note);color:var(--c-ink2);line-height:1.4}
-/* six reactor presets and six pens do not fit one rail-wide line, and a row
-   that overflows loses its last button entirely - so both rows wrap */
 .db-bulkrow{display:flex;align-items:center;gap:4px}
 .db-bulkrow-lab{font-size:var(--fs-tiny);letter-spacing:.7px;text-transform:uppercase;color:var(--c-ink2); display: flex; align-items: center; height: 23px; align-self: self-start;}
 .db-bulkrow-btns{flex:1 1 auto;display:grid;gap:4px;
   grid-template-columns:repeat(auto-fit,minmax(46px,1fr))}
 .db-toolrow,.db-bankrow{display:flex;gap:4px;flex-wrap:wrap}
 .db-toolrow .kit-btn,.db-bankrow .kit-btn{flex:1 1 auto}
-/* paints into its OWN bitmap via hostPaint() and takes its own pointer events
-   via uiForward() - the rail is opaque, so anything drawn on #cv under it is
-   invisible and unclickable */
 .db-latplan-canvas{display:block;width:100%;aspect-ratio:1/1;background:transparent}
-/* THE BOX FOLLOWS SEC_W/SEC_H (design-bench.js), or the fixed metric scale is
-   pinned by the SHORT axis and the core is drawn two thirds the size it could be
-   in a box two thirds full of margin - plus the readout strip under the grid */
 .db-latsection-canvas{display:block;width:100%;aspect-ratio:4/5;background:transparent}
 .db-readlist{margin-top:2px}
 .db-mass{font-size:var(--fs-tiny)}
@@ -291,10 +166,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-review-row.warn{color:var(--c-amber)}
 .db-review-ok{font-size:var(--fs-note);color:var(--c-green)}
 .kit-well.blocked{outline:1px solid var(--c-red);outline-offset:-1px}
-/* one row per TRACED connection - kind, the two machines it joins, its length */
-/* ONE TEMPLATE, so every run's numbers stand in the same columns - a flex row
-   sized each cell to its own text, and a 750 mm bore landed under the run
-   beside it's length */
 .db-pipe-row{display:grid;grid-template-columns:4.2em minmax(0,1fr) 2.6em 3.2em 3.2em;
   gap:6px;align-items:baseline;padding:2px 0;font-size:var(--fs-value);cursor:pointer}
 .db-pipe-head{cursor:default;color:var(--c-ink2);font-size:var(--fs-label);
@@ -303,125 +174,53 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .db-pipe-head .db-pipe-kind{color:var(--c-ink2);font-weight:400}
 .db-pipe-bore,.db-pipe-wall{text-align:right;color:var(--c-ink);font-variant-numeric:tabular-nums}
 .db-pipe-row:hover{background:var(--c-panel-hi)}
-/* the SAME selection every list on the board wears (kit-optlist-row.on) - a
-   picked run was the one row with a colour of its own plus an edge stripe */
 .db-pipe-row.on{background:var(--c-on-amber);color:var(--c-amber)}
 .db-pipe-row.on > span{color:var(--c-amber)}
 .db-pipe-kind{color:var(--c-cyan);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .db-pipe-ends{color:var(--c-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .db-pipe-len{color:var(--c-ink2);text-align:right}
-/* the control room's own copy, off the COMMISSIONED network */
 .cr-cnx-row{display:flex;gap:6px;justify-content:space-between;padding:2px 0;font-size:var(--fs-value)}
-/* a run's NAME is a label, so it reads as one - the same ink2 every caption in
-   this rail keeps, leaving the colour to the verdict beside it */
 .cr-cnx-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-ink2)}
-/* the state is a VERDICT, so it carries a verdict's colour: a run still
-   carrying is green, the same green every "intact" reads in on a panel */
 .cr-cnx-state{flex:0 0 auto;color:var(--c-green)}
 .cr-cnx-row.cut .cr-cnx-name,.cr-cnx-row.cut .cr-cnx-state{color:var(--c-red)}
-/* a port valve the watch has SHUT is not a fault, so it is not red: it is a
-   thing somebody did on purpose, and amber is what this board says that in */
 .cr-cnx-row.shut .cr-cnx-name,.cr-cnx-row.shut .cr-cnx-state{color:var(--c-amber)}
 
-/* ══ MARGIN PANELS (ui/margin.js) ══
-   The host is fixed rather than a grid cell: its children are placed in the
-   same client coordinates getBoundingClientRect() answers in, so nothing has
-   to know which screen's grid it is standing on. It passes clicks through -
-   the panels themselves take them back. */
-/* ══ WHAT STANDS OVER WHAT, over the plant ══
-   A margin panel is IN PLANT SPACE - it pans and zooms with the drawing - so it
-   belongs with the drawing and everything that is SCREEN FURNITURE stands over
-   it. Stated once here rather than as a z-index beside each rule: an omitted
-   one means `auto`, which paints in DOM order, and the host is appended last
-   and so covered the vitals panel, the banner and the rail.
-
-     0  margin panels        plant space
-     1  rail, banner, vitals           furniture over the plant
-     2  plant keys + layer menu        opens over the furniture
-     3  inspector windows              the reader parked it there, so nothing buries it
-     4  the selection peek             what is picked NOW, so it buries even those
-     5  the head row                   the tools are how a panel is got rid of, so
-                                       nothing may bury THEM
-
-   Above this, outside the screen roots: #prewarm 999, #tip 1000, #ctxmenu 1001. */
 .margin-host{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
-/* the walk's arrow: same z as the panels, later in the DOM, so it clears them
-   and still passes under the topbar and the screen head (both z-index 1) */
-/* transparent EXPLICITLY: a canvas carries the page's own deck colour, and this
-   one stands over the whole plant view - inherited, it painted the board out */
 .nav-layer{position:fixed;pointer-events:none;z-index:0;background:transparent}
 .cr-rail,.db-rail,.cr-banner,.cr-vitals{z-index:1}
 .scr-head{z-index:5}
-/* size comes from a transform:scale (marginPlace), so one layout is scaled and
-   the panel's height in layout px is the same at every step of the zoom */
 .margin-pan{position:absolute;pointer-events:auto;background:var(--c-panel);
   transform-origin:0 0;contain:layout paint}
 .margin-pan .kit-well-body{padding:6px 6px 7px}
 .margin-pan .db-panel-body.db-body-tree{display:flex;flex-direction:column;gap:7px}
 .margin-pan .db-panel-body.db-body-tree>*{margin-bottom:0}
-/* what hangs off a panel's title bar - the "menu" block (design-bench.js) */
 .db-panel-head{display:flex;gap:4px;margin-left:8px}
-/* the key stands at the RIGHT end of the title bar and the panel clips its own
-   paint, so the panel hangs from that end rather than running off the edge */
 .db-panel-head .kit-menukey-menu{min-width:280px;left:auto;right:0}
 .db-grid{--db-colw:260px;display:grid;gap:8px;align-items:stretch;
   grid-template-columns:var(--db-cols-tpl,repeat(var(--db-grid-cols,1),minmax(min(var(--db-colw),100%),1fr)))}
 .db-section{display:flex;flex-direction:column;gap:6px;min-width:0;min-height:0;
   grid-column:span var(--db-span,1);grid-row:span var(--db-rowspan,1)}
-/* a panel's own tabs; the strip is the topbar's widget, so it is that class */
 .db-tabs{display:flex;flex-direction:column;gap:6px;min-width:0}
 .db-tabs-bar{display:flex;flex-wrap:wrap;gap:2px}
 .db-tab-body{display:flex;flex-direction:column;gap:8px;min-width:0}
 .db-rail .db-grid{--db-grid-cols:1;--db-cols-tpl:initial}
 .db-rail .db-section{--db-span:1;--db-rowspan:1}
 .margin-pan .kit-rule-head{padding:8px;font-size:var(--fs-win-title); align-items: center;}
-/* ══ READOUT SECTIONS PACK, THEY DO NOT LINE UP ══
-   A grid gives every section in a row the height of the tallest one, so a
-   three-row POWER section standing beside the damage map left most of a column
-   of panel empty. These sections are a list to be read down, not a table to be
-   compared across, so they FLOW instead: the browser balances the columns and
-   there is no free space left standing. The count is the PANEL's own
-   (marginCols, ui/margin.js), so a section never sets its own width. */
 .insp-grid{display:block;column-count:var(--db-grid-cols,1);column-gap:8px}
 .insp-grid>.db-section{break-inside:avoid;margin-bottom:10px}
 .margin-board .db-panel-body{max-height:46vh;overflow-y:auto}
 
-/* ── the floating inspector windows (ui/inspwin.js) ──
-   The margin panel's own look; the plant-space placement is a key on the title
-   bar (inspPin, ui/inspwin.js), so a window is scaled only while it is bolted
-   to the deck. NO SCROLLER ANYWHERE either way - a window states its whole
-   panel and grows to it, which is the difference between it and a rail. */
 .insp-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:3}
 .margin-pan.insp-win{transform-origin:0 0;pointer-events:auto;
   border:1px solid var(--c-edge);box-shadow:0 6px 22px rgba(0,0,0,.55)}
-/* bolted to the deck (inspPin, ui/inspwin.js): it is part of the drawing now,
-   so it drops the furniture shadow that says it stands over one */
 .margin-pan.insp-win.insp-plant{box-shadow:none}
 .insp-win .kit-rule-head{cursor:move;user-select:none}
 .insp-win.folded .kit-well-body{display:none}
-/* the chevron points down while the window is open and right while it is
-   folded, which is the one drawing turned rather than a second icon */
 .insp-win.folded .insp-key-fold .kit-icon{transform:rotate(-90deg)}
-/* the selection peek (ui/selwin.js): the parked window's look, and it stands
-   over EVERYTHING, parked windows included. It is the machine the reader picked
-   just now, and it goes the moment the pick does - a peek buried under a window
-   they parked an hour ago is a panel that answers a question they are not
-   asking, hiding the one they are. */
 .selw-host{position:fixed;inset:0;overflow:visible;pointer-events:none;z-index:4}
-/* the right hand end of the bar: margin-left:auto so the keys hold that end
-   whether or not the suffix beside them has anything to say */
 .insp-keys{display:flex;gap:2px;margin-left:auto;padding-left:8px}
 .insp-keys .kit-btn{height:20px;width:20px;margin:-6px 0px; min-width:0;padding:0 4px}
-/* the controls that used to stand on the machine box, in the widget kit's own
-   HTML - see marginCtlBuild(). A row is the same row ctlFor() states. */
 .margin-ctl{display:flex;flex-direction:column;gap:3px;margin: -6px -6px 6px -6px; padding: 9px 10px; background:var(--c-ctl-well); }
-/* ══ ON A WIDE PANEL THE NOZZLE VALVES STAND BESIDE THE CONTROLS ══
-   Three columns or more (marginCols, ui/margin.js) and there is room: the
-   control rows keep column one and the valve list takes a column of its own
-   down the right, sized to its own text. On the reactor a full-width row under
-   the strip left the boron slider a metre long and the valves a metre of
-   nothing. Narrower than that there IS no room, and the list stays the row it
-   always was rather than squeezing both. */
 .margin-ctl-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 auto}
 .margin-pan.wide .margin-ctl{flex-direction:row;align-items:flex-start;gap:10px}
 .margin-ctl.at-end{margin: 9px -6px -7px -6px}
@@ -430,82 +229,40 @@ body[data-screen="design"] #scr-design{pointer-events:none}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .margin-ctl .kit-slider{gap:4px}
 .margin-ctl .kit-slider-readout{font-size:var(--fs-value)}
-/* the slider and its two nudge keys are one control - see marginCtlBuild() */
 .margin-sld{display:flex;gap:3px;align-items:center;min-width:0}
 .margin-sld .kit-slider{flex:1 1 auto;min-width:0}
 .margin-ctl .margin-sld-step{flex:0 0 auto;width:18px;padding:0;font-size:var(--fs-key)}
-/* EVERY NOZZLE VALVE IN ONE CONTAINER, and a list is not a bank of keys: the
-   row is a name and a state, like the PORT VALVES panel says it elsewhere. */
-/* the keys stand apart: each is two rows now, and butted together the second
-   row of one read as the third row of the one above it */
 .margin-ports{display:flex;flex-direction:column;gap:4px;padding:3px;
   background:var(--c-well)}
-/* the ONE key in the kit that is not shouted: it carries units now, and a key
-   that uppercases its own label printed kg/s as KG/S and MPa as MPA. The words
-   it states are already capitals where they should be. */
-/* IT IS TWO ROWS, NOT ONE THAT CLIPS. Every other key in the strip is one word
-   and ellipsises safely; this one carries where the run goes and what it is
-   carrying, and as one line the ellipsis ate the pressure and the subcooling -
-   the strip's own rule is that it compacts and hides nothing. The break is the
-   one portRunRead() states (render/plant.js), so the two rows are the same two
-   on every panel whatever its width. */
 .margin-ctl .margin-port{height:auto;padding:2px 4px;background:transparent;
   text-align:left;white-space:pre-line;text-overflow:clip;line-height:1.35;
   text-transform:none;color:var(--c-ink2);letter-spacing:.06em;font-size:var(--fs-label)}
 .margin-ctl .margin-port:hover{background:var(--c-panel);color:var(--c-bright)}
 .margin-ctl .margin-port.on{background:transparent;color:var(--c-amber)}
 .margin-ctl .margin-port.kit-btn-danger{background:transparent;color:var(--c-red);font-weight:400}
-/* what the two lattice canvases used to letter along their own bottom edge */
 .db-latread{margin-top:2px}
 
-/* ── the controller's automation section (render/ctlgraph.js) ── */
 .ctlg{display:flex;flex-direction:column;gap:4px}
-/* the picture takes the whole width - every column it gets is a controller
-   that would otherwise be stacked - and the editor lies under it, its rows
-   flowed across rather than down so it stays a couple of rows deep */
-/* ── ONE TAB PER SECTION OF THE CABINET ──
-   Flat, like every other row of choices on this ship: no boxes and no raised
-   edges, one rule under the whole row, and the open tab marked by carrying its
-   own colour and standing on a thicker piece of that rule. Wrapped, because a
-   plant with six controllers has six tabs and they may not push the picture
-   off its own panel. */
 .ctlg-tabs{display:flex;flex-wrap:nowrap;align-items:flex-end;gap:0;margin: -8px 0px 2px 0px;}
-/* ONE ELEMENT, OPEN OR SHUT, and the LABEL inside it is what has the width.
-   The open tab used to be an input where a shut one was a key, so the strip
-   measured two different ways and every click on a tab moved the whole row
-   sideways. The field on the open tab is laid OVER its label instead. */
 .ctlg-tabs .ctlg-tab{position:relative;height:22px;padding:0 9px;cursor:pointer;
   display:flex;align-items:center;color:var(--c-ink2);background:var(--c-well);margin-bottom:-1px}
 .ctlg-tabs .ctlg-tab:hover{color:var(--c-bright)}
 .ctlg-tabs .ctlg-tab.on{color:var(--c-amber);background: var(--c-on-amber);}
 .ctlg-tabs .ctlg-tab:focus-visible{outline:1px solid var(--c-amber);outline-offset:-1px}
 .ctlg-tab-lab{font-size:var(--fs-key);letter-spacing:1.6px;text-transform:uppercase;white-space:nowrap}
-/* the field wears the tab, not a box, and it is the label's own size */
 .ctlg-tab.edit>.ctlg-tab-lab{visibility:hidden}
 .ctlg-tab-input{position:absolute;left:9px;right:9px;top:0;bottom:0;
   border:0;background:none;font:inherit;font-size:var(--fs-key);
   letter-spacing:1.6px;text-transform:uppercase;color:var(--c-amber);padding:0;width:auto}
 .ctlg-tab-input:focus{outline:0}
 .ctlg-tab-input::placeholder{color:var(--c-ink2);opacity:.7}
-/* ADD AND DROP A SECTION SIT AT THE RIGHT EDGE and never wrap. The tabs wrap
-   inside their own row, which grows; the keys stand outside it, so a strip
-   nearly full of tabs can no longer throw + and - onto a line of their own.
-   One glyph each, and no tab's background, so they never read as another page
-   to turn. */
 .ctlg-tabs-list{display:flex;flex-wrap:wrap;align-items:flex-end;flex:1 1 auto;min-width:0}
 .ctlg-tabs .ctlg-tab-key{flex:0 0 auto;border:0;background:none;height:22px;padding:0 8px;
   color:var(--c-ink2);align-self:center}
 .ctlg-tabs .ctlg-tab-key:hover{background:none;color:var(--c-bright)}
-/* ADD BLOCK hangs over the top right of the picture: as a row of its own it
-   cost the panel a line of height for one key */
 .ctlg-cols{position:relative;display:flex;flex-direction:column;gap:8px}
-/* the key is as wide as its own word: the 10ch track was cut for ADD BLOCK,
-   + SECTION and DROP SECTION standing in a column together, and two of those
-   moved to the tab strip */
 .ctlg-keys{position:absolute;left:0;bottom:0;z-index:2;display:grid;gap:4px;
   grid-auto-flow:row;grid-auto-columns:auto;width:max-content}
-/* AND ITS LIST OPENS UPWARDS, because the key stands on the floor of the
-   picture and a list hung below it would fall out of the panel. */
 .ctlg-add>.kit-menukey-menu{top:auto;bottom:calc(100% + 1px)}
 .ctlg-pic{position:relative;width:100%}
 .ctlg-side{display:flex;flex-direction:column;gap:4px}
@@ -515,11 +272,9 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-wire .ctlg-head{fill:var(--c-cyan)}
 .ctlg-wire-lab{font-family:var(--mono);font-size:10px;text-anchor:middle;fill:var(--c-cyan);
   stroke:var(--c-panel);stroke-width:3px;paint-order:stroke}
-/* a wire coming in from another section: dashed, because the block it leaves
-   is not on this tab and the picture must not pretend it is */
 .ctlg-xseg polyline{stroke-dasharray:3 2}
-.ctlg-xseg .ctlg-wire-lab{fill:var(--c-ink2)}
-/* CGCAT (render/ctlgraph.js); before .off and .dead, which tie on specificity */
+.ctlg-xseg .ctlg-wire-lab{fill:var(--c-ink2);pointer-events:auto}
+/* must precede .off and .dead, which tie with these on specificity */
 .ctlg-blk.cat-read{border-color:var(--c-blue)}
 .ctlg-blk.cat-math{border-color:var(--c-cyan)}
 .ctlg-blk.cat-time{border-color:var(--c-port-a)}
@@ -535,8 +290,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-wire.cat-time .ctlg-head,.ctlg-wire.cat-time .ctlg-wire-lab{fill:var(--c-port-a)}
 .ctlg-wire.cat-logic .ctlg-head,.ctlg-wire.cat-logic .ctlg-wire-lab{fill:var(--c-port-b)}
 .ctlg-wire.cat-drive .ctlg-head,.ctlg-wire.cat-drive .ctlg-wire-lab{fill:var(--c-green)}
-/* the name wears it too, and so does the kind in the ADD list: a 1px border is
-   not a colour you can read a box by at arm's length */
 .ctlg-blk.cat-read .ctlg-blk-name,.kit-optlist-row.cat-read .kit-optlist-name{color:var(--c-blue)}
 .ctlg-blk.cat-math .ctlg-blk-name,.kit-optlist-row.cat-math .kit-optlist-name{color:var(--c-cyan)}
 .ctlg-blk.cat-time .ctlg-blk-name,.kit-optlist-row.cat-time .kit-optlist-name{color:var(--c-port-a)}
@@ -547,8 +300,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-pic.dead .ctlg-wire:not(.off) polyline{stroke:var(--c-amber)}
 .ctlg-pic.dead .ctlg-wire:not(.off) .ctlg-head,
 .ctlg-pic.dead .ctlg-wire:not(.off) .ctlg-wire-lab{fill:var(--c-amber)}
-/* the top and bottom padding is the studs' room: a wire handle sits astride
-   each edge, and text running under one is text you cannot read */
 .ctlg-blk{position:absolute;display:flex;flex-direction:column;justify-content:center;
   gap:1px;padding:7px 4px;box-sizing:border-box;overflow:hidden;cursor:pointer;font:inherit;text-align:center;
   background:var(--c-mach-bg);border:1px solid var(--c-edge2);color:var(--c-bright)}
@@ -556,8 +307,6 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .ctlg-blk-sub{font-size:var(--fs-value);color:var(--c-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctlg-blk-spec{font-size:var(--fs-tiny);color:var(--c-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctlg-blk-spec:empty{display:none}
-/* the player's own words, on a section and on a block. Read-only in the
-   control room, where it is a line of text and not a field. */
 .ctlg-seg-note{display:block;width:100%;box-sizing:border-box;margin:0 0 6px;
   font:inherit;font-size:var(--fs-note);line-height:1.35;color:var(--c-ink);
   background:var(--c-well);border:1px solid var(--c-edge);padding:4px 6px;resize:vertical}
@@ -565,17 +314,14 @@ div.ctlg-seg-note{background:none;border:0;color:var(--c-ink2);padding:0 2px}
 .ctlg-note-input{width:100%;box-sizing:border-box;font:inherit;font-size:var(--fs-note);
   line-height:1.35;color:var(--c-ink);background:var(--c-well);border:1px solid var(--c-edge);
   padding:3px 5px;resize:vertical}
-/* dimmed, never hidden: a box that vanishes takes its position with it */
 .ctlg-blk,.ctlg-wire{transition:opacity 140ms linear}
 .ctlg-blk.dim{opacity:.3}
-.ctlg-wire.dim{opacity:.18}
+.ctlg-wire.dim,.ctlg-wire-lab.dim{opacity:.18}
 .ctlg-pic.dead .ctlg-blk{border-color:var(--c-amber)}
 .ctlg-blk.off{border-color:var(--c-edge);color:var(--c-ink2);text-decoration:line-through}
 .ctlg-blk.off .ctlg-blk-sub,.ctlg-blk.off .ctlg-blk-name{color:var(--c-ink2)}
 .ctlg-blk:hover{border-color:var(--c-bright)}
 .ctlg-blk.sel{border-color:var(--c-cyan);background:var(--c-panel-hi);color:var(--c-bright)}
-/* the studs a wire is dragged by: out of the bottom of a block, into the top
-   of the block that reads it. Bigger than they look - the box is the hit. */
 .ctlg-stud{position:absolute;width:9px;height:9px;box-sizing:border-box;cursor:crosshair;
   background:var(--c-panel);border:1px solid var(--c-edge2);z-index:2}
 .ctlg-stud.out{border-color:var(--c-cyan)}
@@ -587,43 +333,25 @@ div.ctlg-seg-note{background:none;border:0;color:var(--c-ink2);padding:0 2px}
 .ctlg-row{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
 .ctlg-row>.kit-menukey{flex:1 1 auto;min-width:0}
 .ctlg-lab{font-size:var(--fs-label);color:var(--c-ink2);min-width:34px;letter-spacing:.5px}
-/* a signal's name is a sentence, and the key it stands on is one grid cell
-   wide: the key clips it rather than pushing the row out of the panel */
 .ctlg .kit-menukey{min-width:0;max-width:100%}
 .ctlg .kit-menukey-key{display:block;width:100%;box-sizing:border-box;text-align:left;
   overflow:hidden;text-overflow:ellipsis}
 .ctlg .kit-menukey-menu{min-width:100%;max-width:520px;max-height:240px;overflow-y:auto}
 .ctlg .kit-numinput{flex:1 1 auto}
 .ctlg-ed{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:4px;align-content:start}
-/* THE EDITOR OPENS AT THE BLOCK. As a column under the drawing the box you
-   typed in and the box you were typing about were at opposite ends of a tall
-   panel. One column wide, because it stands over the picture now and must not
-   cover the graph it is editing; it scrolls rather than growing past it. */
 .ctlg-ed-win{position:absolute;z-index:3;width:232px;box-sizing:border-box;
   max-height:300px;overflow-y:auto;overflow-x:hidden;padding:6px;
   background:var(--c-panel);border:1px solid var(--c-edge2);
   box-shadow:0 6px 18px rgba(0,0,0,.55)}
 .ctlg-ed-win.ctlg-ed{grid-template-columns:1fr}
-/* THE NAME FIELD TAKES THE WHOLE WIDTH and BLOCK n drops under it, with the
-   switch and the bin beside it. Side by side the field was squeezed to about
-   half, so the default name in it was cut off mid-word - and that field is
-   where the block is named, so it is the one thing here that may not be short
-   of room. `kit-rule-input` carries 3px of side padding to make room for the
-   box it grows on hover, so BLOCK n is indented to match: the name and the key
-   under it stand on one left edge. */
 .ctlg-ed-win>.kit-rule{flex-wrap:wrap;white-space:normal;line-height:1.25;
   align-items:center;gap:4px}
 .ctlg-ed-win>.kit-rule>.kit-rule-input{flex:1 1 100%;min-width:0}
 .ctlg-ed-win>.kit-rule>.kit-rule-sfx{padding-left:3px;margin-right:auto}
-/* NOTHING IN HERE MAY BE WIDER THAN THE WINDOW. A grid item's default minimum
-   is its CONTENT, so one long menu key pushed the whole editor sideways and
-   put a horizontal scrollbar under a 232px box. */
 .ctlg-ed-win>*{min-width:0;max-width:100%}
 .ctlg-ed-win .kit-menukey,.ctlg-ed-win .kit-numinput,.ctlg-ed-win .ctlg-row{min-width:0;max-width:100%}
 .ctlg-ed-win .kit-menukey>button{width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ctlg-ed-win .ctlg-knobs{grid-template-columns:1fr}
 .ctlg-ed>.kit-rule,.ctlg-hint{grid-column:1/-1}
 .ctlg-knobs{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-/* the empty editor. It holds the box open and says nothing; what it is for is
-   in its tooltip, like every other explanation in this project */
 .ctlg-hint{min-height:18px}

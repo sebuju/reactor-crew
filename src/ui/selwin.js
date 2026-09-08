@@ -1,24 +1,7 @@
 "use strict";
-/* ══ THE SAME PANEL AGAIN, AS A PEEK ══
-   An inspector window (ui/inspwin.js) is PARKED: the reader opened it and it
-   stays until they close it. A peek is the other half of that - it stands
-   beside the MACHINE THAT IS PICKED and goes when the pick does. One at a time,
-   because there is one selection.
+/* the peek beside the picked machine; a drag keeps it as a window (selwPin, ui/inspwin.js) */
 
-   AND IT IS WHERE A PARKED WINDOW COMES FROM: drag the peek and it stays
-   (selwPin). That is the whole door - a window is not opened, it is kept.
-
-   IT IS NOT A THIRD PANEL. panPartSync() (ui/margin.js) is still the one fill
-   and marginPan() the one handle shape; inspAim(), inspDrag(), inspKeys() and
-   inspMove() are shared with the parked window, so this file is life only. */
-
-/* ══ A PEEK IS SEATED, NOT BOLTED, SO THE HAND MOVES THE PEEK ══
-   selwPlace() re-seats it beside its machine every frame and clamps it into the
-   frame, so panning the deck under it does nothing until the machine has
-   travelled most of a screen - which reads as a dead wheel on the one panel the
-   reader is holding. The gesture is spent on the peek's own offset instead:
-   same promise as everywhere else, the box under the hand travels, and
-   panRoom() stops it where a panel runs out. */
+/* selwPlace() re-seats it every frame, so the hand is spent on the peek's own offset */
 function selwHost(root){
   const el=KIT.el("div","selw-host");
   panWheelPass(el,(m,q)=>{
@@ -32,12 +15,7 @@ function selwHost(root){
   return el;
 }
 
-/* WHICH MACHINE IS BEING READ, or null: the SELECTION, whichever gesture made
-   it - a click on the box, the W A S D walk's landing (navCommit,
-   render/navarrow.js), a rail row. A pointer resting on a machine is not a
-   pick, so it opens nothing. */
-// a machine the reader already kept a window for is being read in that window;
-// a second panel of the same rows is noise standing over the drawing
+// a machine with a kept window is already being read there
 const selwKept=id=>!!(INSPW_HOST&&INSPW_HOST._wins.some(o=>o.p.id===id));
 function selwPartAt(){
   const q=partOf(sel);
@@ -46,7 +24,6 @@ function selwPartAt(){
 
 function selwOpen(host,p){
   const h=marginPan(host,partName(p),()=>null,p);
-  // the parked window's look, which is the margin panel's look
   h.well.el.classList.add("insp-win");
   h.wx=0; h.wy=0; h.wtf=null; h.folded=false; h.plant=false; h._force=true; h.peek=true;
   h.off={x:0,y:0};
@@ -56,27 +33,18 @@ function selwOpen(host,p){
   host._win=h;
   return h;
 }
-/* ══ MOVING A PEEK IS WHAT KEEPS IT ══
-   There is no key to press and no corner to open in: the reader drags the panel
-   they are already reading, and the panel they dragged is the window they now
-   have. Nothing is rebuilt - the same handle is handed to the inspector host,
-   which is what lets the drag that kept it carry straight on into the move.
-   The keys arrive with it, because they are what a window that STAYS needs and
-   a peek has no use for. */
+/* nothing is rebuilt: the same handle moves to the inspector host, so the drag carries on */
 function selwPin(h){
   const dst=INSPW_HOST; if(!dst) return;
   const src=h.well.el.parentNode;
   if(src&&src._win===h) src._win=null;
-  // it stays now, so it lights with the selection like every other panel
   h.peek=false;
   dst.appendChild(h.well.el);
   dst._wins.push(h);
-  // the raise rides inspHand's own press: MOUSE.on() merges by event name, so a
-  // second `down` registered here would simply take the window's hand off again
+  // MOUSE.on() merges by event name, so a second `down` here would take the hand off again
   inspHand(h);
   inspKeys(h);
   inspCollapse(h,false);
-  // a window opens bolted to the deck; the key cuts it loose
   inspPin(h,true);
 }
 function selwClose(host){
@@ -85,11 +53,7 @@ function selwClose(host){
   host._win=null;
 }
 
-/* ══ BESIDE THE BOX IT DESCRIBES ══
-   To the RIGHT of the machine, and to the left when the right hand edge has not
-   the room. Re-asked every frame, because the plant pans and zooms under it -
-   and only until a drag keeps it, after which the reader owns the place.
-   The gap is the frame's own (INSPW_GAP, ui/inspwin.js). */
+/* right of the machine, left when there is no room; re-asked every frame */
 function selwPlace(h){
   const host=h.well.el.parentNode; if(!host) return;
   const f=inspFrame(host);
@@ -105,7 +69,7 @@ function selwPlace(h){
   inspMove(h);
 }
 
-// the screen whose peek the keys are talking to - set by selwSync
+// the screen whose peek the keys are talking to
 let SELW_HOST=null;
 
 function selwSync(host,live){
@@ -115,8 +79,7 @@ function selwSync(host,live){
   let h=host._win;
   if(!p){ if(h) selwClose(host); return; }
   if(!h) h=selwOpen(host,p);
-  // a new machine is a new panel, so it opens at its own seat and not at
-  // wherever the last one had been pushed to
+  // a new machine opens at its own seat, not where the last one was pushed to
   else if(h.p.id!==p.id){ h.off.x=h.off.y=0; inspAim(h,p.id); }
   h.p=p;
   const t=panTick(live);
@@ -126,10 +89,7 @@ function selwSync(host,live){
   selwPlace(h);
 }
 
-/* ══ THE PANEL A MACHINE IS SHOWING IN ══
-   A kept window or a peek, never both for the same machine (selwKept). This is
-   the one door the keys address, so nothing downstream has to know which of the
-   two it got. */
+/* a kept window or a peek, never both for the same machine: the one door the keys address */
 function panOfSel(){
   if(!sel) return null;
   const w=INSPW_HOST&&INSPW_HOST._wins.find(o=>o.p.id===sel);
@@ -137,25 +97,7 @@ function panOfSel(){
   const h=SELW_HOST&&SELW_HOST._win;
   return h&&h.p.id===sel ? h.well.el : null;
 }
-/* ══ AND THE ARROWS WALK ITS KEYS ══
-   W A S D walks the BOARD, so the arrows are free to walk what is inside the
-   panel the walk landed on - the reader never has to reach for the mouse to
-   press a key they can see. Only in the control room: the bench's panels are
-   design knobs, and a machine there is dragged, not driven.
-   ENTER IS THE ZOOM UNTIL SOMETHING IS FOCUSED (navarrow.js). With a key under
-   the focus it presses that key instead, which is what Enter means everywhere
-   else on a page - and .click() goes through the mouse hub exactly as a real
-   press does. */
-/* ══ AND IT IS DIRECTIONAL, LIKE THE BOARD WALK ══
-   Not the next key in the DOM: the keys are laid out in rows of whatever width
-   the row needed, so DOWN off either of two half-width keys has to land on the
-   one wide key under BOTH of them. So the test is what the boxes FACE across
-   the direction of travel - any overlap at all on the perpendicular axis - and
-   the nearest of those wins. A key that faces nothing is still reachable, but
-   only once nothing faces: the 1e4 is a rank, not a distance.
-   The board's own cone (navNearestInDir, render/navarrow.js) is the wrong test
-   here - it is written for boxes scattered on a deck, and it throws away a wide
-   neighbour whose centre is further sideways than it is down. */
+/* not the next key in the DOM: the test is what the boxes face across the travel, and 1e4 is a rank */
 function panKeyPick(rects,from,dx,dy){
   let best=-1, bs=Infinity;
   for(let i=0;i<rects.length;i++){
@@ -182,7 +124,7 @@ function panKeyNav(e){
                 .filter(b=>!b.disabled && b.offsetParent!==null);
   if(!keys.length) return false;
   const at=keys.indexOf(document.activeElement);
-  if(!dir){                                  // Enter
+  if(!dir){
     if(at<0) return false;
     e.preventDefault(); keys[at].click(); uiDirty(); return true;
   }
@@ -190,7 +132,7 @@ function panKeyNav(e){
   if(at<0){ keys[0].focus(); uiDirty(); return true; }
   const rects=keys.map(b=>b.getBoundingClientRect());
   const to=panKeyPick(rects,rects[at],dir[0],dir[1]);
-  // nothing that way: the focus stays where it is rather than wrapping round
+  // nothing that way: the focus stays put rather than wrapping round
   if(to>=0){ keys[to].focus(); uiDirty(); }
   return true;
 }

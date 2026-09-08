@@ -1,18 +1,9 @@
 "use strict";
-/* A panel per machine, anchored in plant space beside the box it describes.
-   One mechanism for both screens; a second reader of readoutsFor()/ctlFor(),
-   never a second table. */
 
 const MARGIN_W=268, MARGIN_GAP=6, MARGIN_PAD=30;
-/* THE COLUMNS BUTT, so a panel is a WHOLE NUMBER OF CELLS wide however many it
-   has. MARGIN_W is 268 and CELL is 134, so one column is exactly 2 cells - and a
-   gap of 8 between columns made two of them 4.06, which is 3 cells of deck
-   reserved to draw 2.06 of panel. n*268 over 134 is 2n with the gap gone. */
+// zero gap keeps a panel a whole number of cells wide (MARGIN_W is 2*CELL)
 const MARGIN_COL_GAP=0, MARGIN_COLS_MAX=4;
-/* A STATED COLUMN IS A CONTENT WIDTH, in the units --db-colw is in - the well's
-   padding and the grid's own gaps are the PANEL's, so they are added here or a
-   390 px column is drawn at 378. Snapped up to a whole cell, which is what
-   MARGIN_COL_GAP=0 buys the unstated case for free. */
+// a stated column is a CONTENT width, so the well pad and grid gaps are added here
 const MARGIN_WELL_PAD=12, MARGIN_GRID_GAP=8, MARGIN_COLW=260;
 const marginColW=(n,cw)=>{
   if(!cw) return n*MARGIN_W+(n-1)*MARGIN_COL_GAP;
@@ -20,36 +11,23 @@ const marginColW=(n,cw)=>{
   for(let i=0;i<n;i++) w+=cw[i]||MARGIN_COLW;
   return Math.ceil(w/CELL)*CELL;
 };
-/* AND PANELS ALONG ONE EDGE STAND IN GROUPS. The cascade sorted on board
-   position alone, so the primary's own panels were broken up by a loop and by
-   the secondary - measured on the stock plant, the top edge ran circ0, loop0,
-   circ1, circ0, circ0, loop0... The group is a SORT KEY here, not a move: a
-   panel still goes to the edge its own machine is nearest, because a short
-   leader is what makes the association readable at all, and the group only
-   decides the order along that edge and where the wider gaps fall. */
 const MARGIN_GRP_GAP=26;
-// false puts the rail's own column of machine panels back
 const MARGIN_ONLY=true;
-// panels off: hidden panels are never built, filled or placed, and the view
-// gives up no deck for them
 const MARGIN_HIDE=true;
 // what the plant view gives up so there is deck to stand a panel on
 const MARGIN_IN={l:MARGIN_W+MARGIN_PAD, r:MARGIN_W+MARGIN_PAD, t:92, b:92};
 
-// getBoundingClientRect() flushes layout, so it is read once a frame and never
-// inside the placement loop, which writes styles
+// getBoundingClientRect() flushes layout, so it is read once a frame
 let marginRc=null, marginRcAt=-1;
 function marginCv(){
   if(marginRcAt!==marginFrame){ marginRc=cv.getBoundingClientRect(); marginRcAt=marginFrame; }
   return marginRc;
 }
-// layout units -> viewport px; the inverse of hostRect(), and the host is fixed
 function marginPage(x,y,rc){
   rc=rc||marginCv();
   return {x:rc.left + x*rc.width/W,
           y:rc.top  + (y-TOPBAR_H)*rc.height/Math.max(1,H-TOPBAR_H)};
 }
-// and back: viewport px -> layout units, for a place the hand states in px
 function marginUnits(x,y,rc){
   rc=rc||marginCv();
   return {x:(x-rc.left)*W/Math.max(1,rc.width),
@@ -63,9 +41,6 @@ function marginInsetU(){
   return {l:MARGIN_IN.l*sx, r:MARGIN_IN.r*sx, t:MARGIN_IN.t*sy, b:MARGIN_IN.b*sy};
 }
 
-/* A BOX THAT CAN SCROLL KEEPS ITS OWN WHEEL, or a long list inside a panel
-   cannot be scrolled: the deck takes the wheel instead. Asked of the element
-   under the hand, not of a list of classes. */
 function wheelScrolls(el,t){
   for(let n=t; n&&n!==el; n=n.parentElement){
     if(!n.scrollHeight) continue;
@@ -73,28 +48,13 @@ function wheelScrolls(el,t){
     if((ov==="auto"||ov==="scroll") && n.scrollHeight>n.clientHeight+1) return true; }
   return false;
 }
-/* ══ A WHEEL OVER A PANEL MOVES THAT PANEL ══
-   Zooming is the DECK's answer and it is the wrong one here: a panel is a page
-   of type, the hand rolling on it is asking to read further down it, and a zoom
-   takes the whole board away instead. So the wheel states one thing - how far
-   the BOX under the hand should travel, in screen px - and where it is spent is
-   the panel's own business. The right drag is not this: it stays the plant's
-   own pan, wherever it lands.
-   AND IT STOPS WHERE THAT PANEL RUNS OUT, at the frame's own edge: a panel
-   travels until the edge it is heading for is flush with the frame's, and the
-   room is the FURTHER of its two edges, which is the same rule read twice. A
-   panel that fits may cross the frame and stop against the far side; one taller
-   than the frame is already flush at the near side, so its room is the overhang
-   and the gesture reads it out and stops. Bounded by the near edge alone,
-   nothing that fits could move at all. */
+// room is the FURTHER of the two edges, or nothing that fits the frame could move
 function panRoom(m,el){
   const b=el.getBoundingClientRect(), f=inspFrame(el.parentNode);
   const ax=(d,a,z)=> d>0 ? Math.min(d,Math.max(0,a,z)) : -Math.min(-d,Math.max(0,-a,-z));
   return {x:ax(m.x, f.x0-b.left, f.x1-b.right),
           y:ax(m.y, f.y0-b.top,  f.y1-b.bottom)};
 }
-/* SPENT ON THE DECK, which is the ground a plant-space panel is bolted to: the
-   drawing goes the other way, and its own panel comes with it. */
 function panDeck(m,el){
   const d=panRoom(m,el); if(!d.x&&!d.y) return;
   panTo=panZ=null;                    // a hand outranks an eased pan already in flight
@@ -102,16 +62,9 @@ function panDeck(m,el){
   VIEW.ox-=d.x*k; VIEW.oy-=d.y*k;
   uiDirty();
 }
-/* ══ A PANEL COVERS THE DECK, SO ITS HAND IS THE DECK'S ══
-   Every box that stands over #cv owes this: the canvas never sees a wheel or a
-   right drag that starts on a panel. The two hosts register it for the panels
-   they hold - the margin (ui/margin.js) and the selection peek (ui/selwin.js) -
-   and a parked window registers it for itself, because which ground it stands
-   on is its own per-instance answer (inspHand, ui/inspwin.js). */
+// the canvas never sees a wheel or right drag that started on a panel
 function panWheelPass(el,spend,onDown){
   const pay=spend||panDeck;
-  // the hosts are pointer-transparent, so a gesture landed on a panel or on
-  // nothing at all - and the panel it landed on is the one being read
   const panelAt=t=>(t&&t.closest)?t.closest(".margin-pan"):null;
   // its own state rather than ui.drag: uiMove() belongs to a surface that hit-tests
   let pan=null;
@@ -123,21 +76,13 @@ function panWheelPass(el,spend,onDown){
       e.preventDefault();
       ctxClose();
       const q=panelAt(e.target);
-      // SHIFT+WHEEL IS THE SAME ROLL. The browser hands a shifted wheel over as
-      // deltaX, which spent on x is a panel that will not move for a reader
-      // holding the key every other page uses for the second axis - so the roll
-      // is whichever axis it arrived on, and it is spent the one way.
+      // a shifted wheel arrives as deltaX, and it is still the same one roll
       if(q) pay({x:0,y:-(e.deltaY||e.deltaX)},q);
     },
-    /* THE RIGHT DRAG IS THE PLANT'S PAN WHEREVER IT STARTS. It is how the board
-       is driven, and a panel covers enough of the board that a hand which had
-       to find bare deck first would be reaching around the furniture. Measured
-       on #cv: a panel is moved BY the pan, so its own box is not a ruler. */
     down(e){
       if(onDown) onDown(e);
       if(e.button!==2 || e.shiftKey) return;
-      // a hosted canvas inside a panel started its own gesture on the way up here;
-      // grabbing on the host steals the release and that drag never ends
+      // grabbing on the host steals the release from a hosted canvas mid-gesture
       if(e.target && e.target._uiHost) return;
       MOUSE.grab(el);
       ctxClose();
@@ -146,7 +91,7 @@ function panWheelPass(el,spend,onDown){
     move(e){
       if(!pan) return;
       const lp=local(e);
-      panTo=panZ=null;                  // a hand outranks an eased pan already in flight
+      panTo=panZ=null;
       VIEW.ox-=(lp.x-pan.x)/VIEW.s; VIEW.oy-=(lp.y-pan.y)/VIEW.s;
       pan.x=lp.x; pan.y=lp.y; uiDirty();
     },
@@ -161,20 +106,15 @@ function marginHost(root){
   return el;
 }
 
-/* One handle shape for every panel. `rect` answers the LAYOUT-space box the
-   panel is anchored beside - a machine's own box, a run's cells, a painted
-   cell - so marginPlace() never asks what kind of thing it is placing. */
 function marginPan(host,title,rect,p){
   const well=KIT.well({title});
   well.el.classList.add("margin-pan");
   // placed at the origin once; every frame after this moves it by transform
   well.el.style.left="0px"; well.el.style.top="0px";
   well.el.style.width=MARGIN_W+"px";
-  /* Every plant-space body is a tree body; stated widths just widen the flex layout. */
   const body=KIT.el("div","db-panel-body db-body-tree"); well.body.appendChild(body);
   host.appendChild(well.el);
-  // the router addresses a connector by key, so every panel carries one name -
-  // its machine's id, or "run"/"mat" for the two the selection addresses
+  // the router addresses a connector by key, so every panel carries one name
   return {p,rect,well,body,id:p?p.id:title,on:null,ctl:null,cells:null,nRows:0,
           w:MARGIN_W,cols:1,vis:true,hid:false,tf:null,needH:true,_hpx:null};
 }
@@ -183,25 +123,15 @@ function marginCols(h,n,cw){
   if(h.colSig===sig) return;
   h.colSig=sig; h.cols=n; h.colw=cw||null; h.w=marginColW(n,cw);
   h.well.el.classList.toggle("cols",n>1);
-  // three columns or more is a panel with room to stand a list beside its
-  // controls rather than under them - see .margin-ctl (ui/plant-screens.css)
+  // 3+ columns has room to stand a list beside the controls (.margin-ctl)
   h.well.el.classList.toggle("wide",n>=3);
   h.well.el.style.width=h.w+"px";
-  // what is INSIDE the panel is cut into the same number of columns the panel
-  // is wide - the readout grid reads it (.insp-grid, ui/plant-screens.css)
   h.well.el.style.setProperty("--db-grid-cols",n);
-  /* THE TEMPLATE IS STATED HERE WHETHER THE WIDTHS WERE OR NOT. The CSS
-     fallback floors every track at --db-colw, and an unstated panel is n*268
-     wide because that is a whole number of deck cells - which leaves 260n-4
-     for the columns, so three of them were 4 px over the panel they stand in
-     and the last one was clipped. The panel's width is the deck's answer; the
-     columns divide what it left. Shares, not px: a px template would have to
-     know the well's own padding and the grid's gaps. */
+  // shares, not px: a px template would need the well's padding and grid gaps
   h.well.el.style.setProperty("--db-cols-tpl",
     Array.from({length:n},(_,i)=>"minmax(0,"+(cw?(cw[i]||MARGIN_COLW):1)+"fr)").join(" "));
   h.needH=true;
 }
-/* A stated count sets the width; nothing auto-grows columns from height. */
 function marginColumns(h){
   if(h.fixW) return;
   const want0=h.body&&h.body._cols;
@@ -219,20 +149,11 @@ function marginBuild(host,live){
     railPick(h.well,[p.id],partName(p));
     out.push(h);
   }
-  /* ══ AND A RUN AND A WALL CELL STAND ON THE PLANT TOO ══
-     Neither is a part, so neither is in the loop above - and both were only
-     reachable down a rail, which is the one place the thing they describe is
-     not drawn. One panel each, anchored on the drawing they were picked off,
-     shown only while that pick stands. Bench only: a run's bore and a wall's
-     thickness are DESIGN, and the control room sets neither. */
+  // bench only: a run's bore and a wall's thickness are DESIGN
   if(!live) out.push(marginPanKey(host,"run"));
   out.push(marginPanKey(host,"mat"));
   // a list of every run names no machine, so there is no leader to draw
   out.push(marginPanBoard(host, live?"cnx":"pipes", "PIPES", "tr"));
-  /* AND THE NOZZLE VALVES ARE THEIR OWN LIST. A port valve is what cuts a run
-     out, so it was a second list under the runs - but the two answer different
-     questions ("is it still there" and "is it lined up") and one panel made
-     each of them a scroll away from the other. */
   if(live) out.push(marginPanBoard(host,"ports","PORT VALVES","tr"));
   return out;
 }
@@ -243,24 +164,16 @@ function marginPanBoard(host,key,title,corner){
   if(key==="pipes"){ h.fixW=marginColW(2); h.w=h.fixW; h.well.el.style.width=h.w+"px"; }
   return h;
 }
-// the two selection-addressed panels: no part, so the anchor follows `sel`
 function marginPanKey(host,key){
   const h=marginPan(host,key==="run"?"PIPE RUN":"WALL",()=>marginKeyRect(h));
   h.key=key; h.id=key; h.selAt=null;
   return h;
 }
-/* ══ THE BOUNDARY'S OWN PANEL STANDS ON THE BOUNDARY ══
-   It was pinned to a corner because a hundred painted cells give no single
-   anchor to run a leader to - true, and it put the wall's panel at the far end
-   of the board from the wall. ANY cell of it is an anchor: the picked one while
-   one is picked, otherwise the ring's own top-left, which is stable for a given
-   drawing and is a piece of the thing the panel is about. */
-// matCells() (paint.js) is the KEY list; this is the same set as x,y pairs
 function matCellsXY(){
   return matCells().map(k=>{ const i=k.indexOf(",");
     return [+k.slice(0,i), +k.slice(i+1)]; });
 }
-// the leader still needs ONE cell to point at, and the ring's top-left is stable
+// the leader needs ONE cell to point at, and the ring's top-left is stable
 function matAnchorCell(){
   let best=null;
   for(const c of matCellsXY())
@@ -281,10 +194,7 @@ function marginKeyRect(h){
   return {x:x0, y:y0, w:Math.max(CELL,x1-x0), h:Math.max(CELL,y1-y0)};
 }
 
-/* ctlFor() hands back fresh closures every frame, so a handler closes over the
-   SLOT and the sync re-points it. `deep` asks a slider whether its range still
-   holds - two closure calls per slider, so only when something could have
-   moved it. */
+// ctlFor() hands back fresh closures every frame, so a handler closes over the SLOT
 function marginCtlMatch(h,rows,deep){
   if(!h.cells || h.nRows!==rows.length) return false;
   let i=0;
@@ -297,9 +207,6 @@ function marginCtlMatch(h,rows,deep){
 }
 const marginCtlLabel=c=> c.kind==="arm" ? c.label()+"  "+(c.on&&c.on()?"BYP":"AUTO")
                                         : c.text();
-/* A NUDGE KEY MOVES THE CONTROL, NEVER THE WIDGET: it goes through the same
-   slot.c.set() the drag does, so a step is an ordinary act. The step is the
-   control's own where it states one, and a twentieth of its span otherwise. */
 function marginSldStep(slot,dir){
   const c=slot.c; if(c.inert) return;
   const lo=c.min(), hi=c.max(), st=c.step||(hi-lo)/20;
@@ -308,12 +215,7 @@ function marginSldStep(slot,dir){
 }
 function marginCtlBuild(h,rows){
   h.ctl.innerHTML=""; h.cells=[]; h.nRows=rows.length; h.needH=true;
-  /* THE CONTROL ROWS ARE ONE BLOCK, and the port list is its sibling. They were
-     all siblings, and standing the valve list beside them then meant asking a
-     grid to keep two stacks of different heights both packed at the top - which
-     it will not do: the tall one grew the row the short ones were sharing, and
-     the boron keys ended up at the bottom of the panel instead of under their
-     own slider. Two boxes, one flex row, and each packs itself. */
+  // two boxes in one flex row, so each stack packs itself at the top
   const main=KIT.el("div","margin-ctl-main"); h.ctl.appendChild(main);
   for(const row of rows){
     const ports = row[0] && row[0].kind==="port";
@@ -349,20 +251,14 @@ function marginCtlBuild(h,rows){
 }
 function marginCtlSync(h,live,deep){
   let rows=ctlFor(h.p,live,live&&S.split);
-  // a wrecked machine takes no orders, and the refusal is the sim's - these
-  // keys only have to stop LOOKING as though they would be answered
   if(rows&&live&&partWrecked(S,h.p.id)) rows=ctlDead(rows);
   if(rows&&!live) rows=ctlBench(rows);
   if(!rows||!rows.length){ if(h.ctl) KIT.show(h.ctl,false); return; }
   if(!h.ctl) h.ctl=KIT.el("div","margin-ctl");
-  // in the body so it rides the panel's columns; re-seated because both body
-  // syncs wipe innerHTML on a rebuild
+  // in the body so it rides the panel's columns; both body syncs wipe innerHTML
   const first = live ? h.body.firstChild : null;
   if(h.ctl.parentNode!==h.body || (live ? first!==h.ctl : h.body.lastChild!==h.ctl))
     live ? h.body.insertBefore(h.ctl,first) : h.body.appendChild(h.ctl);
-  /* the bench seats the block at the BOTTOM of the body, so it bleeds the
-     other way - but only where something stands above it. Alone in the panel
-     it is the whole body and the top gap would be a band of nothing. */
   h.ctl.classList.toggle("at-end", !live && h.body.childElementCount>1);
   KIT.show(h.ctl,true);
   if(!marginCtlMatch(h,rows,deep)) marginCtlBuild(h,rows);
@@ -378,10 +274,7 @@ function marginCtlSync(h,live,deep){
   }
 }
 
-/* WHAT THIS BOX'S OWN METAL IS AT, on the title bar rather than in a row: it
-   is one figure with a limit, and it is wanted on every panel at a glance.
-   Degrees Celsius here alone - the panel is read by a human, the sim is in K,
-   and the conversion is the readout's, never the model's. */
+// the sim is in K; the conversion to °C is the readout's, never the model's
 function marginSkinSync(h){
   if(!h.well.sfx) return;
   const lim=partTsurv(h.p);
@@ -391,7 +284,6 @@ function marginSkinSync(h){
     if(h._skinCol!==col){ h._skinCol=col; h.well.sfx.style.color=col; } }
 }
 
-// the plant edge the machine is nearest
 function marginSide(r,box){
   const cx=r.x+r.w/2, cy=r.y+r.h/2;
   let best="l", bd=cx-box.x;
@@ -399,49 +291,12 @@ function marginSide(r,box){
   bid(box.x+box.w-cx,"r"); bid(cy-box.y,"t"); bid(box.y+box.h-cy,"b");
   return best;
 }
-/* scales with the plant, continuously. A stepped k drifts against the drawing:
-   the footprint it reserves moves in steps while VIEW.s moves smoothly, and the
-   panel walks a few px per step. `zoom` re-lays out crisply at any value, so
-   there is nothing left for the steps to buy. */
 const marginUPerPx=()=>(W/Math.max(1,marginCv().width))/Math.max(1e-6,VIEW.s);
-/* ══ A PANEL IS 268 PLANT UNITS WIDE, FULL STOP ══
-   It was VIEW.s/VIEW.fit, which pegs a panel to its CSS size at whatever the FIT
-   happens to be - so MARGIN_W meant "268 px when the whole ship is on screen" and
-   the panel's size against the machinery moved every time the fit did. It is the
-   exact inverse of marginUPerPx() now, so MARGIN_W, MARGIN_PAD and MARGIN_GAP are
-   plant units like every other size on the board, and CELL (layout.js) is then the
-   one figure deciding how big a machine is against its own readout. */
 const marginZoomK=()=>1/Math.max(1e-6,marginUPerPx());
-// the VIEW.s at which marginZoomK() is exactly 1 - past it a panel is magnified
-// past its own pixels, which is where vScale() stops the zoom (core/ui.js)
+// the VIEW.s at which marginZoomK() is exactly 1, where vScale() stops the zoom
 const marginZoomMaxS=()=>W/Math.max(1,marginCv().width);
 
-/* ══ A PANEL STANDS ON THE BOARD, IN CELLS, ON GROUND NOTHING ELSE IS USING ══
-   The cascade this replaces put every panel out in a margin and drew a routed
-   leader back to its machine, because at CELL 16 a panel was wider than the
-   reactor and there was nowhere on the board to put one. There is now.
-
-   THE BOARD IS THE ONLY PLACE IT MAY STAND: cell-snapped, inside the grid, on
-   cells occupied() calls free - so it covers no machine, no tank, no fitting,
-   no nozzle, no pipe cell and no painted structure. Grid lines it may cover;
-   they are the one thing drawn under everything else.
-
-   AND IT MAY STAND HARD AGAINST THE BOX. There was a clear cell demanded on
-   every side; bolted straight onto its machine the panel needs no leader at all
-   (marginLeaders), which takes a line off the drawing rather than reserving a
-   ring of deck to keep one readable.
-
-   NEAREST WINS, and the BIGGEST PANEL CHOOSES FIRST: a small panel can find
-   somewhere almost anywhere, a ten-cell one cannot, and letting the small ones
-   settle first walled the big ones off the board entirely. */
-// a rect of free cells, in O(1), off a summed-area table of the free map
-/* ══ THE BOARD IS NOT THE EDGE OF THE WORLD ══
-   A panel may stand OFF the hull: there is nothing drawn out there, so nothing to
-   cover, and the machinery along the hull plating had nowhere on the inside to
-   put its readout. The search therefore runs over a padded frame - the grid with
-   SLOT_PAD cells of open deck round it - and every cell outside the grid is free
-   by construction. Cell coordinates stay the drawing's own and go NEGATIVE off
-   the bow; only the array index is shifted. */
+// the frame is padded so a panel may stand off the hull; a cell may go negative
 const SLOT_PAD=14;
 const eW=()=>GW+2*SLOT_PAD, eH=()=>GH+2*SLOT_PAD;
 function marginFreeSum(free){
@@ -450,14 +305,12 @@ function marginFreeSum(free){
     S[(y+1)*(W+1)+x+1] = free[y][x] + S[y*(W+1)+x+1] + S[(y+1)*(W+1)+x] - S[y*(W+1)+x];
   return S;
 }
-// x,y are CELL coordinates and may be negative; the +SLOT_PAD is the index shift
 const marginSumAt=(S,x,y,w,h)=>{
   const W=eW(), x0=x+SLOT_PAD, y0=y+SLOT_PAD;
   return S[(y0+h)*(W+1)+x0+w] - S[y0*(W+1)+x0+w]
        - S[(y0+h)*(W+1)+x0] + S[y0*(W+1)+x0];
 };
 const marginFreeAt=(S,x,y,w,h)=>marginSumAt(S,x,y,w,h)===w*h;
-// how much of rect A a rect B covers, in cells
 const marginOverlap=(ax,ay,aw,ah,b)=>
   Math.max(0, Math.min(ax+aw,b.x+b.w)-Math.max(ax,b.x)) *
   Math.max(0, Math.min(ay+ah,b.y+b.h)-Math.max(ay,b.y));
@@ -465,34 +318,18 @@ const marginOverlap=(ax,ay,aw,ah,b)=>
 const marginCellsOf=r=>({x:Math.round((r.x-GX)/CELL), y:Math.round((r.y-GY)/CELL),
                          w:Math.max(1,Math.round(r.w/CELL)), h:Math.max(1,Math.round(r.h/CELL))});
 
-/* ONCE PER CHANGE, NOT ONCE PER FRAME. The search is O(GW*GH) per panel with an
-   O(1) rect test, which is 51k tests on the stock board - nothing as a one-off
-   and a real frame cost sixty times a second. LAY is rebuilt by buildLayout()
-   whenever the drawing changes, so its identity plus the panel sizes is the
-   whole of what a placement depends on. */
+// once per change, not per frame: the search is O(GW*GH) per panel
 let slotSig=null;
-// refilled, never rebuilt: a fresh array a frame is a garbage bill for nothing
 const seatBuf=[];
 function marginSlot(panels){
   let sig=GW+"x"+GH;
   for(const h of panels) sig += "|"+h.id+":"+h.w+","+h._hpx;
-  /* THE SEATS THEMSELVES ARE PART OF THE KEY, not the list's identity: marginBuild()
-     hands back a fresh set of objects with no _slot on them, and a rebuild that
-     happens to produce the same ids and sizes would otherwise return early and drop
-     every panel back to the margin. */
+  // the seats are part of the key: a rebuild can produce the same ids and sizes
   let hit = !!slotSig && slotSig.lay===LAY && slotSig.sig===sig;
   if(hit) for(const h of panels) if(h._slot===undefined){ hit=false; break; }
   if(hit) return;
   slotSig={lay:LAY, sig};
-  /* ══ ONE RULE: COVER NOTHING. TOUCHING IS FINE, AND IT IS THE POINT ══
-     There was a clear-cell ring as well, so a panel could not sit against the
-     machine it describes. Bolted straight onto the box the association needs no
-     leader at all, which is a line off the drawing rather than a gap on it. */
-  /* TWO MAPS AGAIN, AND THIS TIME THEY ARE ABOUT TWO DIFFERENT NEIGHBOURS.
-     COVER is what is DRAWN - machines, pipework, nozzles, painted structure - and
-     a panel may stand hard against any of it. FREEP is what other PANELS may use,
-     and a seated panel blocks its own cells PLUS a ring: two panels touching, even
-     at one corner, read as a single wider panel and the board loses the seam. */
+  // COVER is what is drawn and may be touched; FREEP adds a ring, so no two panels share a seam
   const occ=occupied(null,{pipes:true,ports:true,mat:true});
   const W=eW(), H=eH();
   const cover=new Array(H), coverX=new Array(H), freep=new Array(H), mach=new Array(H);
@@ -506,27 +343,16 @@ function marginSlot(panels){
       const inGrid = x>=0&&x<GW&&y>=0&&y<GH;
       const o = inGrid ? occ[y][x] : null;             // off the hull nothing is drawn
       cover[iy][ix] = o ? 0 : 1;
-      /* THE WALL'S OWN PANEL MAY STAND ON THE WALL. It is the only panel that is
-         ABOUT the paint, so covering a stretch of it is not hiding something the
-         reader needs from somewhere else - and the corner of the ring, which is
-         where it belongs, is made of the stuff. */
+      // the wall's own panel is the one panel allowed to stand on the paint
       coverX[iy][ix] = (o && !o.mat) ? 0 : 1;
     }
   }
-  /* ══ A CELL CLEAR OF EVERY MACHINE BUT ITS OWN ══
-     Touching the box it describes is the association; touching somebody else's is
-     a panel that reads as belonging to the wrong machine. Asked in O(1): the
-     machine cells inside the candidate's GROWN rect must be exactly what its own
-     box contributes there, so any other machine in the ring fails it. */
   for(const p of LAY.parts)
     for(let y=p.y;y<p.y+p.h;y++) for(let x=p.x;x<p.x+p.w;x++){
       const iy=y+SLOT_PAD, ix=x+SLOT_PAD;
       if(iy>=0&&iy<H&&ix>=0&&ix<W) mach[iy][ix]=1;
     }
-  /* AND THE ROW A SHORT MACHINE WEARS ITS NAME IN. A box too short for a name
-     row prints it ABOVE itself (drawSym's caller, plant.js), on cells occupied()
-     knows nothing about - so a fitting's or a small pump's label was the one
-     thing a panel could still bury. COVER only: standing beside a name is fine. */
+  // a box too short for a name row prints it ABOVE itself, where occupied() cannot see
   for(const p of LAY.parts){
     if(nameRowH(p)) continue;
     const y=p.y-1;
@@ -537,26 +363,16 @@ function marginSlot(panels){
   for(const h of panels){
     if(h.corner || !h._mr) continue;
     h._slot=null; h._att=false;
-    /* A BOUNDARY IS NEAR THE PIECE OF IT THAT IS NEAREST. Anchored on one cell of
-       the ring it was measured against a corner of a hundred-cell wall and landed
-       seven cells off a wall it is touching elsewhere. `near` is the whole set,
-       and the cost below takes the closest. */
+    // `near` is the whole ring, so the cost below can take the closest piece of it
     want.push({h, m:marginCellsOf(h._mr),
                near: h.key==="mat" ? matCellsXY() : null,
                w:Math.max(1,Math.ceil(h.w/CELL)),
                ht:Math.max(1,Math.ceil(h._hpx/CELL))});
   }
-  /* BIGGEST FIRST, and the BOUNDARY LAST WHATEVER ITS SIZE. Every other panel is
-     about one box and has one right place; the wall is the length of the board,
-     so anywhere along it will do - and letting it choose early took ground a
-     machine's panel had only one candidate for. It takes what is left. */
+  // biggest first, boundary last: a big panel has few candidates, the wall has many
   want.sort((a,b)=> (!!a.near - !!b.near) || (b.w*b.ht)-(a.w*a.ht));
 
-  /* ATTACHED IS A FACT ABOUT THE GEOMETRY, NOT ABOUT WHICH PASS PLACED IT.
-     Taken from the pass, a panel that met its machine at a CORNER in the loose
-     pass was recorded as unattached and drew a leader across the one cell it was
-     already touching. Corner counts: the two boxes meet, and that is the whole of
-     what the line was there to say. */
+  // attached is a fact about the geometry, not about which pass placed it
   const touchesOwn=(q,x,y)=>{
     const m=q.m;
     return !q.near && x-1 < m.x+m.w && x+q.w+1 > m.x
@@ -565,28 +381,14 @@ function marginSlot(panels){
   const place=(q,x,y)=>{
     q.h._slot={x, y, w:q.w, h:q.ht};
     q.h._att=touchesOwn(q,x,y);
-    // a seated panel is drawn ground to the next one, in BOTH cover maps...
     for(let py=y;py<y+q.ht;py++) for(let px=x;px<x+q.w;px++){
       cover[py+SLOT_PAD][px+SLOT_PAD]=0; coverX[py+SLOT_PAD][px+SLOT_PAD]=0; }
-    // ...and it takes a ring with it, so no two panels ever share even a corner
     for(let py=y-1;py<=y+q.ht;py++) for(let px=x-1;px<=x+q.w;px++){
       const iy=py+SLOT_PAD, ix=px+SLOT_PAD;
       if(iy>=0&&iy<H&&ix>=0&&ix<W) freep[iy][ix]=0;
     }
   };
-  /* ══ ATTACHED IS A DIFFERENT ANSWER, SO IT IS A DIFFERENT PASS ══
-     Ranking every candidate by centre-to-centre distance never actually prefers
-     sharing an edge - a spot a cell off the corner scores better than one along
-     the face, so panels that had a face free sat loose beside it. And it cannot
-     be a weight either: a panel that CAN attach must, before a panel that cannot
-     takes the ground. So every panel is offered its own machine's faces first,
-     and only what is left over goes looking anywhere. */
-  /* A SIDE, AND TOPS LEVEL. A panel is a tall column of rows, so it reads beside
-     a machine and sits awkwardly over or under one; and a row of panels whose top
-     edges line up reads as a rack, while the same panels staggered read as
-     scattered. So the rungs are: LEFT or RIGHT face with the tops flush, then a
-     side at any height, then top or bottom - and distance only separates ties
-     inside a rung. */
+  // rungs: side face tops flush, then a side at any height, then top/bottom
   const attachRung=(q,x,y)=>{
     const m=q.m;
     const hOv = x < m.x+m.w && x+q.w > m.x;
@@ -596,10 +398,6 @@ function marginSlot(panels){
     if(hOv && (y+q.ht===m.y || m.y+m.h===y)) return 2;
     return -1;                                   // not touching its own box
   };
-  /* THE BOUNDARY'S PANEL GOES TO THE BOUNDARY'S OWN CORNER. Measured against the
-     BOARD's four corners it went to the bow, which is a corner of the ship and
-     nothing to do with the wall it describes. The ring's bounding box is the
-     thing that has corners worth naming. */
   const matBox=(()=>{
     let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
     for(const c of matCellsXY()){
@@ -633,7 +431,7 @@ function marginSlot(panels){
       if(mustAttach){ rung=attachRung(q,x,y); if(rung<0) continue; }
       if(!marginFreeAt(SC,x,y,q.w,q.ht)) continue;      // covers nothing drawn
       if(!marginFreeAt(SP,x,y,q.w,q.ht)) continue;      // touches no other panel
-      { // ...and no machine but its own is within a cell of it
+      { // no machine but its own is within a cell of it
         const gx=Math.max(-SLOT_PAD,x-1), gy=Math.max(-SLOT_PAD,y-1);
         const gw=Math.min(GW+SLOT_PAD,x+q.w+1)-gx, gh=Math.min(GH+SLOT_PAD,y+q.ht+1)-gy;
         if(marginSumAt(SM,gx,gy,gw,gh) !== marginOverlap(gx,gy,gw,gh,own)) continue;
@@ -642,16 +440,7 @@ function marginSlot(panels){
       let c;
       if(q.near){
         if(insideContainment(x,y,q.w,q.ht)) continue;   // the wall's panel stands OUTSIDE it
-        /* ══ AND ITS EDGES LINE UP WITH THE WALL'S ══
-           A panel sitting near a corner but a cell off both of its lines reads as
-           dropped there. Flush with the ring's own edges it continues them, which
-           is the thing the eye is actually following. Two lines beat one, one
-           beats none, and the distance to the corner only separates ties. */
-        /* EITHER EDGE ON EITHER LINE, which includes standing flush OUTSIDE the
-           ring - right edge on its left line, top edge on its bottom line. Only
-           the inner two were tested, and the one corner that satisfied both is
-           inside the enclosure, which the panel may not enter: so it aligned on a
-           single line and hung off the side of the other. */
+        // either edge on either of the ring's lines: two beat one, one beats none
         const b=matBox;
         const on=(a,z)=>a===b[z+"0"] || a===b[z+"1"];
         const ax = b && (on(x,"x") || on(x+q.w,"x")) ? 1 : 0;
@@ -674,17 +463,10 @@ function marginSlot(panels){
   }
   for(const q of loose){
     const b=search(q,false);
-    if(b) place(q,b[0],b[1]);                 // may still meet its machine at a corner
-    // else: no room anywhere, and it keeps the cascade
+    if(b) place(q,b[0],b[1]);
   }
 }
 
-/* ══ WHERE THE PANELS ARE STANDING, FOR WHOEVER ELSE WANTS THE GROUND ══
-   A panel covers no CELL anything is drawn in, but a run's reading is placed off
-   the pipe (pipeAnchors(), pipes.js) and lands on cells nothing owns. That
-   allocator already prices how much of another reading a spot would smear, so a
-   panel only has to join the list it is already scoring against. In PLANT UNITS,
-   because that is what the allocator works in. */
 function marginBoxes(){
   const out=[];
   for(const h of (MARGIN||[])){
@@ -694,21 +476,16 @@ function marginBoxes(){
   return out;
 }
 
-/* Reservation rounds up to whole cells; the panel draws its natural height. */
 function marginMeasure(h){
   marginColumns(h);
   return h.well.el.offsetHeight||60;
 }
 
-/* Read pass then write pass: a box measured after a style write forces a fresh
-   layout, and there is one panel per machine. The write is a transform only -
-   left/top would re-lay-out the page for a move the compositor can do. */
+// read pass then write pass: a box measured after a style write forces a relayout
 function marginPlace(panels,host){
   if(VIEW.w<60||VIEW.h<60) return;
   const k=marginZoomK(), u=marginUPerPx()*k, rc=marginCv();
-  /* clipped to the CANVAS BOX, not just below the topbar: a panel is part of
-     the drawing, so it may not paint on the letterbox #stage leaves around a
-     canvas that does not fill the window. */
+  // clipped to the CANVAS BOX, so no panel paints on #stage's letterbox
   const vpw=(typeof innerWidth==="number"?innerWidth:rc.right);
   const vph=(typeof innerHeight==="number"?innerHeight:rc.bottom);
   const clip="inset("+Math.max(0,Math.round(rc.top))+"px "
@@ -716,20 +493,11 @@ function marginPlace(panels,host){
                      +Math.max(0,Math.round(vph-rc.bottom))+"px "
                      +Math.max(0,Math.round(rc.left))+"px)";
   if(host && host._clip!==clip){ host.style.clipPath=clip; host._clip=clip; }
-  // u is grid units per CSS px OF THE DRAWN PANEL, so a slot reserves what the
-  // panel actually covers and two cannot land on each other at any zoom
+  // u is grid units per CSS px OF THE DRAWN PANEL, so a slot reserves what it covers
   const padU=MARGIN_PAD*u, gapU=MARGIN_GAP*u, grpU=MARGIN_GRP_GAP*u;
   const B={x:VIEW.cx, y:VIEW.cy, w:VIEW.cw, h:VIEW.ch};
   const side={l:[],r:[],t:[],b:[]};
-  /* A PANEL IS SCALED, NOT ZOOMED. `zoom` re-lays the panel out at each step,
-     and a re-layout at a new font size is not proportional: line breaks move
-     and rounding differs, so the panel's own HEIGHT walked as the plant was
-     zoomed and the thing the reader was looking at slid. A transform scales the
-     one layout the panel already has, so its height in layout px is a constant
-     and its picture is the same picture at every step - see hostScale()
-     (render/plant.js), which is what keeps the hosted canvases in step. */
-  /* ONE WRITE PASS, wherever the place came from - the cascade and the corner
-     both land here, so a panel is scaled, clipped and hidden by one rule. */
+  // scaled by transform: a relayout at a new font size would walk the panel's height
   const put=(h,ax,ay,wU)=>{
     h._pan={x:ax,y:ay,w:wU,h:h._hU};
     const s=vScr({x:ax,y:ay}), g=marginPage(s.x,s.y,rc);
@@ -737,9 +505,7 @@ function marginPlace(panels,host){
     const x=g.x, y=g.y, eh=h._hpx*k;
     h.vis = x<vpw && y<vph && x+h.w*k>0 && y+eh>rc.top;
     if(h.hid!==!h.vis){ h.well.el.style.visibility=h.vis?"":"hidden"; h.hid=!h.vis; }
-    /* A HIDDEN PANEL IS STILL MOVED, or it pops from a stale place the frame
-       it comes back. Only the content sync is skipped (marginSync); a
-       transform is a string compare and one write. */
+    // a hidden panel is still moved, or it pops from a stale place on its way back
     const tf="translate3d("+x.toFixed(3)+"px,"+y.toFixed(3)+"px,0) scale("+k.toFixed(4)+")";
     if(h.tf!==tf){ h.well.el.style.transform=tf; h.tf=tf; }
   };
@@ -763,18 +529,14 @@ function marginPlace(panels,host){
     h._side=marginSide(h._mr,B);
     seat.push(h);
   }
-  /* THE BOARD FIRST, THE MARGIN ONLY FOR WHAT WOULD NOT FIT. A panel that found
-     free cells beside its own machine is placed there and drops out of the
-     cascade entirely; one that did not still goes to an edge, which is the
-     honest answer on a board with no room left rather than a panel dropped. */
+  // the board first; only what found no seat falls through to the edge cascade
   marginSlot(seat);
   for(const h of seat){
     if(!h._slot){ side[h._side].push(h); continue; }
     const r=grect(h._slot.x, h._slot.y, h._slot.w, h._slot.h);
     put(h, r.x, r.y, h.w*u);
   }
-  /* it names no machine, so it heads its own edge band rather than standing
-     beside a box; the machine cascade below then starts under it */
+  // a board panel names no machine, so it heads its edge band and the cascade follows
   const stack={l:B.y,r:B.y};
   for(const h of board){
     const sd=h.corner[1], wU=h.w*u;
@@ -804,52 +566,16 @@ function marginPlace(panels,host){
   marginLeaders(panels);
 }
 
-/* ══ AND A LINE SAYS WHICH MACHINE THE PANEL IS FOR ══
-   The PATH is the router's (ROUTE.routeGraph, render/route.js); the INK is the
-   rail leader's own (leaderStroke, render/plant.js), so the two leaders on this
-   board are dashed, capped and coloured alike. Amber for the picked machine,
-   rail grey for the rest, so the selection is answered on the drawing as well
-   as on the panel's title bar. */
-/* ITS INK IS A PLANT QUANTITY, like a pipe's. Both ends are in plant space, so
-   pinned to a CSS pixel the line stayed the same weight while everything it
-   joins shrank - over a plant three cells wide it read as a rope. One plant
-   unit, against pipeWidth()'s own 2.2 floor, so it never reads as plumbing. */
+// a plant quantity like a pipe's, so the leader shrinks with what it joins
 const MARGIN_LEAD_W=1;
-/* ══ THE WHOLE SET IS ROUTED AT ONCE, BY THE BUS ROUTER, NOT BY A RULE HERE ══
-   The halfway elbow this used to draw knew about two boxes and nothing else, so
-   a leader ran straight through whatever machines stood between its own two
-   ends - and twenty of them crossed each other. ROUTE.busRouteGraph (render/
-   route.js) carves shared CORRIDORS through the free deck, and every leader
-   then approaches the nearest one, rides it, turns ninety degrees at a junction
-   onto the next, and exits onto its panel - reserving a lane centre-out. Twenty
-   leaders fanning out to the margin is exactly the case corridors are for: they
-   gang into a few trunks instead of taking twenty separate paths.
-
-   AND `routeGraph` IS ITS FALLBACK, which is how `oc` wires the pair. The bus
-   router may legitimately leave a line unplaced - no corridor reaches an
-   endpoint, or every lane is full - and a per-line A* pass then places just
-   those. deCollide runs ONLY on that path: a bus line already holds a lane it
-   reserved, so a shift could only move it off one, but a fallback line is
-   routed blind to those lanes and can land on top.
-
-   Every machine AND every panel is an obstacle, so a leader also refuses to
-   cross a panel it does not belong to.
-
-   ROUTED ONCE PER GEOMETRY, NOT PER FRAME. A panel's box in PLANT units is
-   invariant under pan and zoom - marginUPerPx() cancels VIEW.s out, which is
-   the same fact that makes a panel scale with the drawing - so the only things
-   that move these boxes are a design edit and a panel's own content height.
-   That is the signature. */
 // bus knobs, in PLANT units - `oc`'s own defaults are pixels on a node canvas
-// and a grid cell here is 16, so a 280-unit minimum trunk would carve nothing
 const MARGIN_BUS_C={margin:6, laneGap:5, minLen:60, hopCost:2000,
                     facePad:4, minSep:4, tightGap:4, trunkCap:4};
 const MARGIN_ROUTE_C={clearance:10, bendCost:40, laneGap:5, nodeHalo:8, haloCost:60};
 let marginRt=null, marginRtSig=null, marginRtSides=null;
 function marginRoutes(panels){
   const P=panels.filter(h=>h._pan&&h._mr);
-  // designSig() carries the ports (and everything else drawn), the boxes carry
-  // the panels - between them nothing an obstacle is made of can move unseen
+  // designSig() plus the boxes: nothing an obstacle is made of can move unseen
   const sig=designSig()+"#"+P.map(h=>{ const m=h._mr, q=h._pan;
     return h.id+":"+m.x+","+m.y+","+m.w+","+m.h+"|"+
       q.x.toFixed(1)+","+q.y.toFixed(1)+","+q.w.toFixed(1)+","+q.h.toFixed(1); }).join(";");
@@ -863,21 +589,14 @@ function marginRoutes(panels){
     walls.push({x:m.x,y:m.y,w:m.w,h:m.h},{x:q.x,y:q.y,w:q.w,h:q.h});
     edges.push({from:"m/"+h.id, to:"p/"+h.id, key:h.id});
   }
-  /* A PORT IS AN OBSTACLE, and it is one for BOTH routers. It is a real cell of
-     the drawing - a nozzle stands in it and a pipe leaves by it - so a leader
-     crossing one reads as plumbing. Added as an ordinary node rather than
-     through busRouteGraph's blockRects: the fallback A* takes its hard
-     obstacles off the node list alone, so a port in blockRects would be dodged
-     by the bus and driven straight through by whatever fell back. Never an
-     endpoint, so no walk is ever exempted from it. */
+  // a node rather than blockRects: the fallback A* takes obstacles off nodes alone
   for(const pid in D.ports){
     const c=portCell(pid); if(!c) continue;
     const r=grect(c[0],c[1],1,1);
     nodes.push({id:"port/"+pid, x:r.x, y:r.y, w:r.w, h:r.h});
     walls.push({x:r.x,y:r.y,w:r.w,h:r.h});
   }
-  // prevSides keeps a fallback connector on last pass's faces unless another is
-  // genuinely cheaper, so an edit cannot flip every route it has to place
+  // prevSides holds a fallback connector to its old faces, so an edit flips few routes
   const sides=new Map();
   marginRt=ROUTE.busRouteGraph(nodes,edges,{
     bus:MARGIN_BUS_C,
@@ -888,18 +607,7 @@ function marginRoutes(panels){
   marginRtSides=sides;
   return marginRt;
 }
-/* EVERY PLACED PANEL GETS ITS LINE, EVERY FRAME - CLIPPED, NEVER CULLED.
-   Two gates have been tried here and both were wrong for the same reason: a
-   visibility test makes the leader a function of the ZOOM, so lines blinked in
-   and out as the view moved and the picture read as broken rather than as
-   panned. First the panel had to be on screen (it is anchored on the edge of
-   the WHOLE plant, so zooming in throws it off - measured at 2.1x the reactor's
-   panel sits at x -2894, and the line died while the machine it names was still
-   on the board); then either end had to be near the view, which merely moved
-   the flicker to a different zoom. The clip is the only thing that decides what
-   lands: a leader with nothing on screen paints nothing and costs one path.
-   The only test left is whether the panel has been PLACED at all - a run or
-   wall panel with no pick has no box to leave from. */
+// clipped, never culled: a visibility gate blinks leaders as the view moves
 function marginLeaders(panels){
   if(typeof ctx==="undefined"||!ctx||VIEW.w<2||VIEW.h<2) return;
   const rt=marginRoutes(panels);
@@ -907,28 +615,17 @@ function marginLeaders(panels){
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   for(const h of panels){
     if(!h._pan||!h._mr) continue;
-    /* A PANEL BOLTED TO ITS OWN MACHINE NEEDS NO LINE TO SAY WHICH ONE IT IS -
-       touching the box IS the association, and a dashed line over one shared
-       edge is noise. ONLY THEN, though: the gate was "is it seated at all",
-       which took the leader off ten panels sitting several cells clear of the
-       machine they name and left them attached to nothing. */
-    /* AND THE BOUNDARY NEVER GETS ONE. It names a hundred cells, so a line to any
-       one of them says less than the panel standing on the ring's own corner
-       already does. */
+    // touching the box IS the association, and the boundary names too many cells
     if(h._att || h.key==="mat") continue;
     const r=rt&&rt.get(h.id); if(!r||!r.pts||r.pts.length<2) continue;
     const pts=r.pts.map(q=>vScr({x:q[0],y:q[1]}));
-    // a fraction of the cell, like every other drawn size; VIEW.s because the
-    // leader is stroked in SCREEN space over the canvas, not under its transform
+    // VIEW.s because the leader is stroked in SCREEN space, not under the transform
     leaderStroke(pts, h.on?C.amber:C.lead, [pts[0],pts[pts.length-1]],
                  MARGIN_LEAD_W*DRAW_K*VIEW.s, LEADER_RAD*DRAW_K*VIEW.s);
   }
   ctx.restore();
 }
 
-/* The run and wall panels exist only while their own pick stands. `sel` is the
-   whole of their state, so the rebuild gate is the key changing - designSig()
-   already carries `sel`, which is what `fresh` is taken off. */
 function marginKeySync(h,fresh,live){
   const k = h.key==="run" ? (isRunKey(sel)?sel:null)
                           : (isMatKey(sel)?sel:matDefaultKey());
@@ -940,11 +637,7 @@ function marginKeySync(h,fresh,live){
   if(!fresh && !moved) return;
   h.selAt=k;
   if(moved){
-    /* OFF THE RUN, never off pipeMap().byKey[k]. `k` is the run's own IDENTITY
-       now (runIdOf()) and that map is keyed by the DERIVED key, so the lookup
-       came back undefined and the panel threw the moment a run was picked. A
-       run whose ends are still loose has no traced connection at all, so it has
-       no kind to be named after either. */
+    // off the run, not pipeMap().byKey[k]: `k` is runIdOf(), not the derived key
     const r0 = h.key==="run" ? runOfKey(k) : null;
     const title = h.key==="run"
       ? (r0 ? (pipeLabel(r0.k, r0.key)||"PIPE RUN") : "PIPE RUN")
@@ -968,24 +661,10 @@ function marginBoardSync(h,live,fresh){
   if(h.body._sig!==s0 || h.body.childElementCount!==n0) h.needH=true;
 }
 
-/* ══ ONE MACHINE PANEL, WHEREVER IT IS STANDING ══
-   The plant-space panel and the screen-space inspector window (ui/inspwin.js)
-   are the same panel seen twice, so the fill is one function and the handle
-   marginPan() mints is its one shape. Nothing in here knows where the panel is
-   placed: a window leaves `vis` true and `tf` null, so the pan cull below is a
-   fact about a margin panel and reads as false for a window. */
+// shared with ui/inspwin.js: a window leaves `vis` true and `tf` null, so the pan cull misses it
 function panPartSync(h,live,deep,fresh){
-  /* A PEEK IS NEVER LIT. It only exists while it is being pointed at or walked
-     to, so a bar that changed colour on the selection was saying a thing the
-     panel's own presence already said. A window that STAYS is the one that
-     needs telling apart from the others (h.peek, ui/selwin.js). */
   const on=!h.peek && h.p.id===sel;
   if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
-  /* A PAN MAY NOT REBUILD ANYTHING. Gated on being visible, a panel panned
-     off and back rebuilt its whole block list and re-measured a panel that
-     can be two thousand pixels tall - one forced layout, mid-gesture, which
-     is the hitch. The bench's content follows designSig() and nothing else,
-     so it is synced on that alone, off screen or not. */
   // the automation graph re-lays itself out at its own width (render/ctlgraph.js)
   if(h.p.role==="ctrl" && h._ctlSeq!==CTLV.seq){ h._ctlSeq=CTLV.seq; h.needH=true; }
   if(live){
@@ -993,17 +672,10 @@ function panPartSync(h,live,deep,fresh){
     const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
     marginSkinSync(h);
     fieldRowsSync(h.body, readoutsFor(h.p,S));
-    /* THE PANELS THAT STATE THEIR OWN WIDTH: the reactor's list is the
-       longest on the plant, and the controller carries the automation graph,
-       which is a drawing and reads across, not down. The bench says the same
-       through B.cols (paramsFor), the door dbPanelSync() reads. */
+    // the bench says the same through B.cols (paramsFor)
     h.body._cols = h.p.role==="core" ? 4 : h.p.role==="ctrl" ? 3 : 0;
-    /* AND A GRAPHICAL ROW IS PAINTED HERE TOO - the panel is opaque, so its
-       canvas rows are hostPaint()ed off the map fieldRowsBuild() hands back,
-       exactly as the rail does it (crRailSync). */
     const vz=h.body._viz;
     if(vz&&vz.dmg) hostPaint(vz.dmg,dmgViz,coreOf(h.p.id));
-    // the controller's cabinet: the automation graph and its editor, synced every frame (render/ctlgraph.js)
     if(h.p.role==="ctrl"){ if(!h.ctlG) h.ctlG=KIT.el("div","margin-ctlgraph");
       if(h.ctlG.parentNode!==h.body) h.body.appendChild(h.ctlG);
       dbPanelSync(h.ctlG,CTLGRAPH_LIVE); }
@@ -1011,38 +683,21 @@ function panPartSync(h,live,deep,fresh){
     if(!fresh) return;
     const nm=partName(h.p), B=paramsFor(partOf(h.p.id)||h.p);
     h.well.setTitle(nm);
-    // the panel's own help, asked for rather than stood open - see help() (inspector.js)
     KIT.tip(h.well.head,nm,B.tip||"");
-    /* WHAT THIS BOX COSTS IS A MEASUREMENT, so it stands with the other
-       measurements (measRows(), render/inspector.js) and not on the title bar.
-       It was a suffix while it was the only answer a bench panel had; it is one
-       row of several now, and a figure quoted in two places is a figure that
-       can be read two ways. */
+    // cost is one of measRows() (render/inspector.js), not a title-bar suffix
     h.well.setSfx("");
-    /* AND WHAT IS NOT A KNOB HANGS OFF THE TITLE BAR - see the "menu" block
-       (design-bench.js). */
     if(B.head && !h.head && h.well.head){
       h.head=KIT.el("div","db-panel-head");
       h.well.head.insertBefore(h.head, h.well.sfx);
     }
     if(h.head) dbPanelSync(h.head, B.head||[]);
-    /* RE-MEASURE ONLY WHEN THE BLOCK LIST ACTUALLY CHANGED - the same test
-       marginKeySync() above makes. It used to re-measure on every sync, which
-       was harmless while only a design edit could cause one; a hover causes
-       one now (PREV.seq), and a panel's height is quantised to whole cells,
-       so the first hover snapped the whole panel up a cell. */
+    // height is quantised to cells, so a hover-driven re-measure snaps the panel
     const n0=h.body.childElementCount, s0=h.body._sig;
     dbPanelSync(h.body, B);
     // a tab switch swaps one body for another without touching either count
     const tabbed=h._panTab!==PANTAB.seq; h._panTab=PANTAB.seq;
     if(tabbed || h.body._sig!==s0 || h.body.childElementCount!==n0){
-      /* A PANEL FILLS ITS OWN HOSTED CANVASES BEFORE IT IS MEASURED. The
-         screen-wide pass runs at the head of the frame (dbHostPaint,
-         design-bench.js) and this panel did not exist then, so its lattice
-         readout would stand empty until the next one - and it may not simply be
-         moved after us, because rows arriving after marginPlace() measured the
-         panel step the whole board. Its own box, right now, is the one place
-         that is both filled and not yet measured. */
+      // the screen-wide pass ran before this panel existed; marginPlace() measures next
       dbHostPaint(h.body);
       h.needH=true;
     }
@@ -1050,19 +705,13 @@ function panPartSync(h,live,deep,fresh){
   marginCtlSync(h,live,deep);
 }
 
-// once a frame from either screen, after drawPlant() set the view
 let MARGIN=null, marginFit=null, marginAt=null, marginFrame=0, marginPSig=null, marginDeep=null;
-/* WHAT CHANGED SINCE THE LAST FRAME, ASKED ONCE FOR EVERY PANEL ON SCREEN.
-   Two readers now - the margin and the inspector windows - and the answer is a
-   state machine over the last frame's signatures, so a second computation in
-   the same frame would tell the second reader nothing ever changes. Cached on
-   marginFrame, which is the frame. */
+// cached per frame, or a second reader would be told nothing ever changes
 let panTickAt=-1, panTickV={fresh:false,deep:false};
 function panTick(live){
   if(panTickAt===marginFrame) return panTickV;
   panTickAt=marginFrame;
-  // PREV.seq: a hover is not a design change, and the MEASURED lists price it
-  // PANTAB.seq: a tab switch is not a design change either, and it swaps a panel's whole body
+  // PREV.seq and PANTAB.seq: neither is a design change, but both move the body
   const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq+"|"+PANTAB.seq;
   const fresh = live || psig!==marginPSig; marginPSig=psig;
   // what could have moved a control's range

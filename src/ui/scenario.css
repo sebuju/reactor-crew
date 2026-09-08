@@ -1,7 +1,3 @@
-/* The scenario bench. THE TIMELINE IS THE SCREEN: no bottom bar, no palette,
-   no EVENTS/LIMITS/VERDICT panel - see .claude/CLAUDE.md. Grid columns line
-   up a fixed label gutter against one shared "track" column so the ruler,
-   every lane, every limit row and the pan bar all read off the same x axis. */
 :root{ --scn-gutter:104px; --scn-row-h:18px; }
 
 #scr-scenario .scn-root{display:flex;flex-direction:column;height:100%}
