@@ -1,43 +1,10 @@
-/* A DOM small enough to fit in one file and real enough to BUILD THE SCREENS.
-
-   Why this exists. `headless()` in bundle.js hands the bundle a document with
-   no `documentElement`, and every screen guards its own construction on exactly
-   that:
-
-       if(typeof document!=="undefined" && document.documentElement) CR=crBuild();
-
-   So under that document CR and DB are null, `crSync()`/`dbSync()` return
-   on their first line, and NOT ONE LINE of the HTML rail layer runs. That is
-   most of the UI. Two crashes were sitting in it at the time this was written -
-   a widget reading a constant that had been deleted, and a readout reading a
-   field of P that does not exist - and neither was reachable headless.
-
-   ── WHAT IT IS NOT ──
-   Not a browser. There is no CSS, no layout, no reflow, so it cannot answer
-   "does this look right" and must never be asked to. What it answers is
-   narrower and is the half that was missing: does the code RUN, does it build
-   its DOM once, and does a hosted canvas widget draw inside the box it was
-   handed. Every box here is one this file made up, so a check written against
-   it is a check about the widget's arithmetic, never about the stylesheet.
-
-   ── EVERY CANVAS GETS ITS OWN CONTEXT ──
-   hostPaint() swaps the global `ctx` for a rail widget's own, and the whole
-   point of a per-host check is knowing WHICH widget drew a string. Handing out
-   one shared proxy would lose that, so getContext() tags the recorder with the
-   node that owns it and every draw is filed under that node. */
-
 function install(opts){
   opts = opts || {};
   const BOX = opts.box || {width:300, height:180};
 
-  const draws = [];            // every primitive, tagged with the canvas it hit
+  const draws = [];
   let nodes = 0;
 
-  /* ── the 2d context ──
-     A recorder, not a renderer. It keeps just enough state to answer the two
-     questions a check asks of a string: how big was it, and where did it land.
-     translate/scale/rotate are tracked because hostPaint() sets a transform and
-     drawSym() nests several more inside it. */
   function mkctx(owner){
     const st = {font:'10px m', fillStyle:'#000', strokeStyle:'#000',
                 textAlign:'left', textBaseline:'alphabetic', letterSpacing:'0px',
@@ -79,10 +46,6 @@ function install(opts){
     });
   }
 
-  /* ── a node ──
-     Listeners are really stored, so a check can click a title bar and see
-     whether the selection followed. A stub that swallowed them would let a
-     handler that throws pass for one that works. */
   function node(tag){
     nodes++;
     const cls = new Set();
@@ -127,9 +90,6 @@ function install(opts){
       get clientWidth(){ return (this._box||BOX).width; },
       get clientHeight(){ return (this._box||BOX).height; },
       get firstChild(){ return this.children[0] || null; },
-      /* innerHTML="" is the one form the screens use, and it is a WIPE. Nothing
-         here parses markup, and nothing should - a screen that needed markup
-         parsed would be a screen building DOM from strings. */
       set innerHTML(v){ if(v) throw new Error('domstub: innerHTML can only be cleared, got '+JSON.stringify(String(v).slice(0,40)));
                         for(const c of this.children) c.parentNode=null;
                         this.children.length=0; },
@@ -142,10 +102,7 @@ function install(opts){
     return n;
   }
 
-  /* One selector grammar, and it is deliberately small: a tag, a class chain,
-     an id, or `[data-x]`. Descendant combinators are matched on the LAST part
-     only, which is what every selector in src/ actually needs. Anything richer
-     would be a second CSS engine to keep honest. */
+  // tag, class chain, id or [data-x] only; a descendant selector matches on its LAST part
   function matches(n, sel){
     return String(sel).trim().split(/\s+/).filter(Boolean).every(part => {
       if(part[0] === '#') return n.attrs.id === part.slice(1);
@@ -160,11 +117,9 @@ function install(opts){
   function find(root, sel){
     const last = String(sel).trim().split(/\s+/).pop(), out = [];
     (function rec(n){ for(const c of n.children){ if(matches(c,last)) out.push(c); rec(c); } })(root);
-    return out;                       // an Array: NodeList.forEach is what callers use
+    return out;
   }
 
-  /* Every id index.html carries that the source looks up. Missing one does not
-     fail loudly - it hands back null and the screen quietly half-builds. */
   const IDS = ['cv','stage','topbar','tip','ctxmenu','clock','clock-dot','plant-line',
                'help-doc','scr-operate','scr-design','scr-scenario'];
   const mounts = {};
@@ -186,8 +141,6 @@ function install(opts){
     querySelectorAll(sel){ let out = []; for(const k in mounts) out = out.concat(find(mounts[k],sel)); return out; },
   };
   global.window = global;
-  // the tooltip and the context menu clamp themselves against the window, so a
-  // stub with no window size cannot place either of them
   global.innerWidth = opts.winW || 1200;
   global.innerHeight = opts.winH || 900;
   global.devicePixelRatio = opts.dpr || 1;
@@ -196,9 +149,7 @@ function install(opts){
   global.requestAnimationFrame = () => {};
   global.addEventListener = () => {};
   global.removeEventListener = () => {};
-  /* transport.js starts a 100 ms sync on load. Under a stub it would either
-     never fire or fire forever and hold the process open; the caller drives
-     trSync() by hand instead, which is also the only way to say WHEN. */
+  // transport.js starts a 100 ms sync on load; a live interval would hold the process open
   global.setInterval = () => 0;
   global.clearInterval = () => {};
 
@@ -206,8 +157,6 @@ function install(opts){
     mounts, draws, node,
     nodeCount: () => nodes,
     clearDraws: () => { draws.length = 0; },
-    /* the box every element reports, so a check can re-run a widget at a second
-       rail width and catch one that only fits at the first */
     setBox: b => { BOX.width = b.width; BOX.height = b.height; },
     IDS,
   };

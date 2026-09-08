@@ -1,15 +1,5 @@
 #!/usr/bin/env node
-/* reactor-crew configuration probe.
-   Spins up an arbitrary plant, runs it, and PRINTS what it does.
-
-   There are no assertions here and there never will be. A committed suite of
-   configurations would become a specification - two dozen things that must
-   stay true forever - and the model has to keep moving. It prints, a human
-   reads the answer, and the case is thrown away.
-
-   Usage:  node tools/probe.js [caseName ...]
-           node tools/probe.js --list
-*/
+// node tools/probe.js [caseName ...] | --list | --secs=N
 const {portOnFace,spliceFitting,tieFitting}=require('./bundle');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
@@ -26,8 +16,6 @@ const M=require('./bundle').headless(
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
 
-/* THE STOCK SHIP, THEN WHATEVER THE CASE ADDS. D goes back to the blank grid
-   first, so no case can contaminate the next one. */
 function withPlant(build, opts){
   Object.assign(D,JSON.parse(JSON.stringify(BASE)));
   
@@ -42,7 +30,6 @@ const run=(s,secs)=>{ for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) bre
 const f=(v,d)=>(v===null||v===undefined||Number.isNaN(v))?"-":(+v).toFixed(d===undefined?3:d);
 const row=(...c)=>console.log("  "+c.map((x,i)=>String(x).padEnd(i?14:22)).join(""));
 
-/* ══ THE DUMP ══ every reading that matters, and none it does not have. */
 function dump(s,label){
   console.log("\n── "+label+" ──");
   const G=M.nodeGraph();
@@ -61,8 +48,6 @@ function dump(s,label){
   row("core MW",f(s.fq*(s.P0mw||0),2)||"-"); row("electric MW",f(M.mwE(s),2));
   row("cond T K",f(s.condT,2)); row("cw in K",f(s.cwInT,2));
   row("release",f(s.release,5)); row("breach",!!s.breach);
-  /* EVERY VESSEL'S OWN BOOK, and its circuit's: only where there is more than
-     one, because on a one-unit plant the PLANT block above is that vessel. */
   if(s.coreBy && Object.keys(s.coreBy).length>1){
     console.log(" VESSELS");
     for(const id in s.coreBy){ const c=M.coreSeen(s,id);
@@ -105,7 +90,6 @@ function dump(s,label){
   if(M.selfRuns().length) row("self runs", M.selfRuns().join(" "));
 }
 
-/* ══ CASES ══ disposable. Add one, read it, delete it. */
 const CASES={
   stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
   dual(){
@@ -116,8 +100,6 @@ const CASES={
       "  cond "+M.condCount()+"  rad "+M.radIds().length+
       "  grid "+M.D().gw+"x"+M.D().gh);
   },
-  /* A BLANK GRID. Nothing is placed at all: no core, no turbine, no panels.
-     It must commission, run and read as nothing rather than throw. */
   blank(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
     M.buildLayout(); M.commission();
@@ -125,8 +107,6 @@ const CASES={
     console.log(" COUNTS  parts "+M.LAY().parts.length+
       "  turb "+M.turbCount()+"  cond "+M.condCount()+"  rad "+M.radIds().length);
   },
-  /* NO COUNT ANYWHERE SAYS HOW MANY TO ADD. Two condensers and three panels
-     on an otherwise stock ship, and the counts are read off the drawing. */
   counts(){
     const s=withPlant(M=>{
       M.addMachine("cond",2,2); M.addMachine("radiator",2,8);
@@ -138,8 +118,6 @@ const CASES={
     for(const p of M.LAY().parts) if(["turb","cond","radiator","pump","sg"].includes(p.role))
       console.log("  "+p.id.padEnd(10)+M.partName(p));
   },
-  /* A REACTOR COMES WITH ITS ROD DRIVES AND GOES WITH THEM. Place one, place
-     a second, take each away by a different end of the pair. */
   rides(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
     M.buildLayout();
@@ -153,13 +131,6 @@ const CASES={
     M.removePart("core1");      say("REMOVE on the 1st reactor");
   },
   loops4(){ const s=withPlant(null,{loops:4}); run(s,PSEC); dump(s,"stock plant, 4 loops"); },
-  /* ── IS THE AXIAL COUPLING WARNING TELLING THE TRUTH? ──
-     A tall compact core is warned about at core.cz < 0.35: loosely coupled
-     enough that one end can drift without the other noticing, so xenon can
-     oscillate top to bottom on its own. Nothing has ever seen it happen.
-     Split the banks, step the outer one, and print the axial offset. If it
-     swings and GROWS, the warning is real. If it flattens, XCOUP is too tight
-     and the warning is decoration. This prints; it decides nothing. */
   xeosc(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
     M.buildStockPlumbing({loops:1}); M.latPreset(M.coreD("core"),1);
@@ -179,8 +150,6 @@ const CASES={
       M.step(0.02);
     }
   },
-  /* Every whole-plant preset, flown, printing what it does and what stopped
-     it. Disposable and assertion-free like every case here. */
   presets(){
     const PRE=M.PLANTPRE();
     const only=(process.argv.find(a=>/^--pre=/.test(a))||"").split("=")[1];
@@ -220,16 +189,10 @@ const CASES={
         (id?f(M.sgLvl(s,id),0):"-").padStart(7)+f(s.dmg,1).padStart(6)+"   "+died);
     }
   },
-  /* ── CAN THIS CORE GO PROMPT? ──
-     The RBMK-1000 plant, RPS bypassed, the cabinet's rod block off, the bank
-     driven fully out, then a blackout so the pumps coast and the core voids.
-     --pk=a,b,c overrides the lattice pitch multiplier so the void worth can be
-     walked; prints peak n, peak rho, what the fuel did and how the run ended. */
   excursion(){
     const pks=((process.argv.find(a=>/^--pk=/.test(a))||"").split("=")[1]||"").split(",").filter(Boolean).map(Number);
     const at=+((process.argv.find(a=>/^--blackout=/.test(a))||"").split("=")[1]||20);
     const every=+((process.argv.find(a=>/^--every=/.test(a))||"").split("=")[1]||5);
-    // --hit=K writes that pellet temperature into every node at the blackout tick: the pulse, injected, so the threshold is SEEN to cross
     const hit=+((process.argv.find(a=>/^--hit=/.test(a))||"").split("=")[1]||0);
     const vessel=+((process.argv.find(a=>/^--vessel=/.test(a))||"").split("=")[1]||1);
     const i=M.PLANTPRE().findIndex(p=>p[0]==="RBMK-1000");
@@ -241,32 +204,24 @@ const CASES={
       const s=M.S(), P=M.P(), d=M.derived(), cs=s.coreBy.core;
       s.diceOff=true; P.cores.core.burstK*=vessel;
       console.log("\n── excursion  pk "+(pk===null?"preset":pk)+"  aV "+f(d.aV,0)+" pcm  aM "+f(d.aM,1)+"  beta "+f(P.BETA*1e5,0)+"  rated "+f(P.rated,0)+" MWt  burst "+f(P.P0*P.burstK,2)+" MPa ──");
-      M.blkSinkOff(s,"scram");   // every excursion case runs with protection defeated - the scram block is switched off
-      /* --rods=keep leaves the cabinet's rod controller on the bank (the Chernobyl
-         state: it pulls the bank OUT on its own as xenon builds); --load=x holds
-         the turbine at that load first, so the 400x xenon clock has minutes to
-         poison a low-power core before the pumps are lost */
+      M.blkSinkOff(s,"scram");
       const rods=(process.argv.find(a=>/^--rods=/.test(a))||"").split("=")[1];
       const load=+((process.argv.find(a=>/^--load=/.test(a))||"").split("=")[1]||0);
       if(rods!=="keep"){
         for(const id in D.blocks) if(D.blocks[id].mode==="sink" && D.blocks[id].sink==="rodStep") M.act("blkOn",id);
         M.act("rodCommon",+(rods||0)); }
       if(load>0) M.act("loadDem",load);
-      // --band=0 opens the controller's withdrawal stop (a rig write, the bench knob D.arLo); --scram fires AZ-5 at the blackout tick instead of the blackout
       if(process.argv.some(a=>/^--band=/.test(a))) s.arLo=+((process.argv.find(a=>/^--band=/.test(a))).split("=")[1]);
       const scram=process.argv.includes("--scram");
-      // --starve=T cuts the feed at T s: the controller bypassed (every regulating valve freezes) and every valve driven shut, a rig write on s.fregBy
       const starve=+((process.argv.find(a=>/^--starve=/.test(a))||"").split("=")[1]||0);
       let pkN=0,pkRho=-1e9,tN=0,tRho=0,pkP=0,pkTf=0,tEnd=null;
       console.log("    t      n     rho   rods    vf     P MPa  fci MW   TfHot   dmg%  melt%  disp%    xe    vd   tip   sc K  ledger+out   h2 kg  rmH2  rmP kPa  rmT K  sump t  tube%  cav kPa  trip");
-      // tube%: the share of channels torn; cav kPa: the reactor cavity over the room (a tube core only)
       const cavNode=P.net.index["cav:core"];
       const line=(t)=>{ const st=M.fuelStages(cs), FL=M.FAIL(), q=FL.findIndex(r=>r.k==="disp");
         let rmH2=0; for(let i=0;i<s.roomH2.length;i++) rmH2+=s.roomH2[i];
         const rmP=M.roomPGauge(s).reduce((a,v)=>Math.max(a,v),0);
         const cav=cavNode===undefined?"-":f((s.pBy["cav:core"]-P.Pcont)*1000,0);
         console.log("  "+f(t,1).padStart(5)+"  "+f(s.n,3).padStart(6)+"  "+f(s.rho,0).padStart(5)+"  "+f(s.rodPos,2).padStart(5)+"  "+f(s.vf,3).padStart(5)+"  "+f(s.pCore,3).padStart(7)+"  "+f(cs.fci/1000,1).padStart(6)+"  "+f(s.TfHot,0).padStart(6)+"  "+f(s.dmg,1).padStart(5)+"  "+f(s.meltFrac*100,1).padStart(5)+"  "+(q>=0?f(st[q]*100,1):"-").padStart(5)+"  "+f(s.parts.xe,0).padStart(5)+"  "+f(s.parts.vd,0).padStart(5)+"  "+f(cs.tipRho,0).padStart(4)+"  "+f(s.sc,1).padStart(5)+"  "+f(M.ledgerKg(s)+M.ledgerOut(s),0).padStart(9)+"  "+f(s.h2,1).padStart(6)+"  "+f(rmH2,1).padStart(4)+"  "+f(rmP,1).padStart(7)+"  "+f(s.roomMax,0).padStart(5)+"  "+f(M.sumpKg(s)/1000,1).padStart(6)+"  "+f((cs.tubesOpen||0)*100,0).padStart(5)+"  "+cav.padStart(7)+"  "+(s.trip||"")); };
-      // the FCI's thermal energy, kJ, against the RISE in the work the vessel node can do letting down: a hot plant already carries most of that work, so only what the pulse adds is the 1-3 % conversion band
       let pkFci=0, fciKJ=0, pkW=0, pkWfci=0, pkWt=0, w0=null; const wrecked=[];
       for(let k=0;k<=PSEC*50;k++){ const t=k*0.02;
         while(wrecked.length<s.dmgParts.length){ const id=s.dmgParts[wrecked.length]; wrecked.push(id+" "+s.dmgWhy[id]+"@"+f(t,1)); }
@@ -293,15 +248,6 @@ const CASES={
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
       M.seedRun(a,b); });
       run(s,120); dump(s,"a run from a machine back to itself"); },
-  /* ── DO THE BOOKS CLOSE, BOOK BY BOOK ──
-     From tick 0. Per tick, the change in every book (a free node's own mass,
-     a booked group's bookedKg) against what the transport moved onto it;
-     groups whose residual passes --kg (0.5) are named, and summed from --from=S.
-     --pre=N takes a preset instead of the stock ship. --node=NAME prints that
-     node's state and its edges over --ticks=N (8) ticks from --at=S; --tanks
-     prints every tank the transport touched; --every=S prints the condenser
-     and the tanks. --lift=FID holds a valve open from 5 s, --blackout=S orders
-     one; the drift printed is ledgerKg+ledgerOut since that order. */
   ledger(){
     const pre=(process.argv.find(a=>/^--pre=/.test(a))||"").split("=")[1];
     const node=(process.argv.find(a=>/^--node=/.test(a))||"").split("=")[1];
@@ -322,7 +268,6 @@ const CASES={
       return g; };
     const cum={}, ni=node?net.index[node]:undefined;
     const tankOf=k=>k.indexOf("T:")===0?k.slice(2):null;
-    // --lift=FID holds that valve open from 5 s; --blackout=SECS orders one then; drift is ledgerKg+ledgerOut from the order
     const lift=(process.argv.find(a=>/^--lift=/.test(a))||"").split("=")[1];
     const bo=(process.argv.find(a=>/^--blackout=/.test(a))||"").split("=")[1];
     const every=+((process.argv.find(a=>/^--every=/.test(a))||"").split("=")[1])||0;

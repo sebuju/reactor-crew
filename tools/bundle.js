@@ -1,5 +1,3 @@
-/* Single source of truth for "what code does the page actually run?".
-   Every headless tool goes through this so none of them can drift from index.html. */
 const fs = require('fs'), path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 
@@ -8,9 +6,6 @@ function scriptPaths(){
   return [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m => m[1]);
 }
 
-/* every script concatenated in load order, exactly as the browser sees it.
-   Memoised: a caller asking for the source and then for a headless plant is
-   nineteen files read twice to build one identical string. */
 let bundleSrc = null;
 function bundle(){
   if(bundleSrc === null)
@@ -18,26 +13,7 @@ function bundle(){
   return bundleSrc;
 }
 
-/* Run the whole page headless.
-
-   A tool that needs to *execute* the plant (not just read its source) needs
-   the same scaffolding: enough of a DOM and a 2d context for the render layer to
-   construct without touching a screen, and the boot line replaced so the bundle
-   initialises but never starts a frame loop we would then have to stop.
-
-   `exportSrc` is the source of an object literal appended to the bundle, so the
-   caller picks what it wants out of the top-level scope. It is source rather than
-   a list of names because several of those bindings - `S`, `P`, `LAY` - are
-   *reassigned* during a run, so a caller that cares about the live value has to
-   ask for a getter (`S:()=>S`) and one that does not can take the value directly. */
-/* THE CLOCK IS A STUB, AND A CONSTANT STUB IS A BLIND ONE.
-   performance.now() returned a fixed 1000 here for as long as this file has
-   existed, which is fine for a renderer and useless for the determinism check:
-   any wall clock leaking into S is CONSTANT under a frozen clock, so a
-   snapshot/restore round trip passes while the leak sits there. Pass
-   {clock:true} and the stub advances instead, so a tick that reads the wall
-   shows up as two futures that disagree. Default stays frozen, because every
-   other caller wants a still picture. */
+// exportSrc is source, not a name list: S/P/LAY are reassigned, so a live caller passes a getter
 function headless(exportSrc, opts){
   const noop = () => {};
   const ctx = new Proxy({font:'10px m'},{
@@ -58,28 +34,6 @@ function headless(exportSrc, opts){
   return new Function(src + '; return ' + exportSrc + ';')();
 }
 
-/* ══════════ PLACING A FITTING, THE WAY A PLAYER DOES ══════════
-   A fitting used to be a fraction along a pipe key, so a caller could
-   place one in a single addFit(mode, aKey, aT, bKey, bT) call. It is a
-   COMPONENT in a grid CELL now, and placing one is three gestures: put the
-   box down, place a port beside each machine, drag the pipe. That is more
-   honest and it is also several lines at ~40 call sites, which is exactly the
-   kind of duplication that drifts - so both shapes are written ONCE, here,
-   beside headless(), which is the only module every headless tool already loads.
-
-   These build nothing the bench cannot: addFitting() and addPortAt() are the
-   context menu's own calls, and seedRun() is ADD PIPE - mint the run, let
-   runLay() route it.
-   M is a headless() export bag and must carry D, LAY, pipeMap, buildLayout,
-   addFitting, seedPort and seedRun.
-
-   spliceFitting: cut a RUN and put a fitting in the middle of it. The two
-   halves keep the original run's own end PORTS, so the plant is the plant it
-   was with a box in the line.
-   tieFitting: a fitting between two machines - what a cross-tie is, now that
-   nothing can tap a pipe mid-run. */
-// the first cell of `face` addPortAt() will take: a face is many cells wide,
-// and which of them is free depends on what was plumbed there first
 function portOnFace(M, partId, face){
   const p = M.LAY().parts.find(q => q.id === partId);
   if(!p) return null;
@@ -96,8 +50,6 @@ function spliceFitting(M, runKey, mode, cell){
   const D = M.D();
   const r = M.pipeMap().byKey[runKey];
   if(!r) throw new Error("spliceFitting: no run keyed " + runKey);
-  // the cells go and the two PORTS stay: what is left is that same pair of
-  // nozzles with nothing between them, which is what a cut line looks like
   for(const [x, y] of r.cells) delete D.pipes[x + "," + y];
   const fid = M.addFitting(cell[0], cell[1]);
   D.fittings[fid].mode = mode;

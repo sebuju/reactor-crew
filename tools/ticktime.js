@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-/* Wall time of one tick and one commission, per preset, plus heap growth over
-   the run. Prints; asserts nothing. `node tools/ticktime.js [pre] [ticks]`,
-   default stock and 3 000 ticks (60 s). --expose-gc makes the heap figure mean
-   something; without it the number is garbage-collector timing. */
+// node --expose-gc tools/ticktime.js [pre] [ticks] - without --expose-gc the heap figure is GC timing
 const path = require('path');
 const { headless } = require('./bundle');
 const M = headless('{PLANTPRE:()=>PLANTPRE,plantPreset,buildLayout,commission,S:()=>S,step}');
