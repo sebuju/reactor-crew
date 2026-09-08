@@ -1,14 +1,7 @@
 const { test, expect } = require("@playwright/test");
 const { record } = require("./report");
 
-/* Every preset is commissioned and flown for a minute of plant time with
-   nobody at the controls. A lit annunciator ends the run there and fails the
-   whole test - the presets after it are not flown, because the first plant
-   that cannot hold itself steady is the one worth looking at.
-   The AUTOSYS bypass tiles are not alarms: they say where a switch is standing,
-   and plantPreset() deliberately commissions every preset with the protection
-   system defeated (`D.start["byp:rps"]`, pipenet.js) so a plant runs its faults
-   out instead of tripping on the first one. */
+/* the AUTOSYS bypass tiles are not alarms: they say where a switch is standing, and every preset commissions with RPS defeated. */
 const SECS = 60;
 const TICKS = SECS * 50;   // simTick() steps a literal 0.02 s
 

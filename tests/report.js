@@ -2,9 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { stampSec, stampFile } = require("../tools/stamp");
 
-/* Every spec files one line here as it finishes; globalTeardown turns the
-   pile into the report. A file rather than a module variable because
-   Playwright gives each spec its own worker process. */
+/* a file rather than a module variable: Playwright gives each spec its own worker process. */
 const OUT = path.join(__dirname, "out");
 const RUNS = path.join(OUT, ".runs.jsonl");
 const REPORTS = path.join(__dirname, "reports");

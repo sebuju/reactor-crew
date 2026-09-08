@@ -2,8 +2,6 @@ const { test, expect } = require("@playwright/test");
 const { TICKS, SETTLE, prepare, runTarget, writer } = require("./dump");
 const { record } = require("./report");
 
-/* Every port on the stock PWR is shut in turn, each on a plant commissioned
-   from scratch, and the next 50 ticks are dumped into one file. */
 test("shut every port on the stock PWR in turn", async ({ page }) => {
   test.setTimeout(30 * 60 * 1000);
   const t0 = Date.now();

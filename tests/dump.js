@@ -1,16 +1,11 @@
 const fs = require("fs");
 const path = require("path");
 
-/* The upset dumps share one column set and one writer. What differs between
-   them is the target list and the one act() that stands for the upset. */
 const TICKS = 50;
 const SETTLE = 500;
-/* MAP_MAX leaves out the cell fields (roomT and the 140-node core arrays) -
-   they are 2040 and 140 columns wide and swamp the readings an upset moves. */
+/* keeps the cell fields (roomT, the core arrays) out: 2040 and 140 columns wide, they swamp what an upset moves. */
 const MAP_MAX = 64;
 
-/* Settles a stock PWR, fixes the column set off it and leaves the readers on
-   window for every later evaluate() to use. */
 async function prepare(page, opts) {
   await page.goto("/");
   await page.waitForFunction(() => typeof window.commission === "function");
@@ -30,10 +25,7 @@ async function prepare(page, opts) {
       }
     }
     window.__cols = cols;
-    /* The solved network is not on S, so the per-run flow and the node
-       pressure field have to be re-solved and read back the way every other
-       reader does. noNat skips the second, pump-stopped solve - nothing here
-       reads the NAT CIRC share. */
+    /* the solved network is not on S, so it is re-solved here; noNat skips the second, pump-stopped solve. */
     window.__net = () => { const byRun = {}, byP = {};
       netFlowK(S, byRun, byP, {noNat: true}); return {byRun, byP}; };
     const seed = __net();
@@ -47,8 +39,7 @@ async function prepare(page, opts) {
       .concat(__nodes.map(k => "netP." + k)));
 }
 
-/* One target: a fresh plant, a settle, the upset, then TICKS rows. `upset` is
-   the body of an act() call, given as source so it crosses into the page. */
+/* `upsetSrc` is the body of an act() call, given as source so it crosses into the page. */
 function runTarget(page, arg, upsetSrc) {
   return page.evaluate(([arg, ticks, settle, src]) => {
     plantPreset(0);
@@ -67,12 +58,10 @@ function runTarget(page, arg, upsetSrc) {
   }, [arg, TICKS, SETTLE, upsetSrc]);
 }
 
-/* 4 significant figures, trailing zeros stripped - a pressure needs 6 digits
-   and a dose rate needs an exponent, and neither is worth a column of them. */
 const round4 = v => v == null ? "" : v === 0 ? "0"
   : Number(Number(v).toPrecision(4)).toString();
 
-/* A pipe cell target is named "pipe:x,y", so a key field carries a comma. */
+/* a pipe cell target is named "pipe:x,y", so a key field carries a comma. */
 const cell = v => /[",\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
 
 function writer(name, comment, keyCols, head) {
