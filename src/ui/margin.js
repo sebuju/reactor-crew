@@ -187,11 +187,48 @@ function marginKeyRect(h){
     if(!c) return null;                       // nothing painted: no anchor, no seat
     return {x:PXc(c[0]), y:PYc(c[1]), w:CELL, h:CELL}; }
   if(!k) return null;
-  const r=runOfKey(k); if(!r||!r.pts.length) return null;
+  const r=runOfKey(k);
+  // a run with a loose end is drawn as a line and owns no pts, but it is still picked and still seats a panel
+  const pts = r&&r.pts.length ? r.pts : marginLooseRunPts(k);
+  if(!pts||!pts.length) return null;
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
-  for(const q of r.pts){ x0=Math.min(x0,q[0]); x1=Math.max(x1,q[0]);
-                         y0=Math.min(y0,q[1]); y1=Math.max(y1,q[1]); }
+  for(const q of pts){ x0=Math.min(x0,q[0]); x1=Math.max(x1,q[0]);
+                       y0=Math.min(y0,q[1]); y1=Math.max(y1,q[1]); }
   return {x:x0, y:y0, w:Math.max(CELL,x1-x0), h:Math.max(CELL,y1-y0)};
+}
+function marginLooseRunPts(k){
+  const r=D.runs[k]; if(!r) return null;
+  const cs=(r.cells&&r.cells.length) ? r.cells : [r.a,r.b].concat(r.pins||[]);
+  return cs.map(c=>[PXc(c[0])+CELL/2, PYc(c[1])+CELL/2]);
+}
+// the box a panel is seated on and points at: a machine's, or the cells of the run or wall it was picked from
+const panRectOf = h => h.key ? marginKeyRect(h) : (h.p && prect(h.p));
+/* the spot a leader lands on. A machine takes a face (leaderAnchor); a run takes its OWN middle, because the box round an elbow has corners the pipe never visits. */
+function panMidOf(h){
+  if(!h.key) return null;
+  if(h.key!=="run"){ const b=marginKeyRect(h); return b && {x:b.x+b.w/2, y:b.y+b.h/2}; }
+  return runMidPt(h.selKey||h.id);
+}
+// half way ALONG it, not half way between its ends: a run that doubles back has both at the same place
+function runMidPt(k){
+  const r=runOfKey(k);
+  const pts = r&&r.pts.length ? r.pts : marginLooseRunPts(k);
+  if(!pts||!pts.length) return null;
+  const seg=[]; let L=0;
+  for(let i=1;i<pts.length;i++){
+    const d=Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]);
+    seg.push(d); L+=d;
+  }
+  if(!L) return {x:pts[0][0], y:pts[0][1]};
+  let t=L/2;
+  for(let i=0;i<seg.length;i++){
+    if(t<=seg[i]){ const f=seg[i]?t/seg[i]:0;
+      return {x:pts[i][0]+(pts[i+1][0]-pts[i][0])*f,
+              y:pts[i][1]+(pts[i+1][1]-pts[i][1])*f}; }
+    t-=seg[i];
+  }
+  const q=pts[pts.length-1];
+  return {x:q[0], y:q[1]};
 }
 
 // ctlFor() hands back fresh closures every frame, so a handler closes over the SLOT
@@ -629,6 +666,10 @@ function marginLeaders(panels){
 function marginKeySync(h,fresh,live){
   const k = h.key==="run" ? (isRunKey(sel)?sel:null)
                           : (isMatKey(sel)?sel:matDefaultKey());
+  marginKeyFill(h,k,fresh,live);
+}
+/* the rail asks off `sel`, a peek off the pick and a pinned window off the key it was pinned on */
+function marginKeyFill(h,k,fresh,live){
   h.selKey=k;
   KIT.show(h.well.el, !!k);
   if(!k){ h.vis=false; h.selAt=null; return; }
