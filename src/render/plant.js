@@ -175,11 +175,16 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke(); };
   const lvl=(fx,fy,fw,fh,frac,col)=>{ const t=clamp(frac,0,1);
     ctx.save(); ctx.globalAlpha=.45; fillRect(fx,fy+fh*(1-t),fw,fh*t,col); ctx.restore(); };
-  // every tank draws through this: shell, water clipped to that shell, a waterline, gas space above left empty
-  const tank=(bx,by,bw,bh,rad,frac,col)=>{
+  // every tank draws through this: shell, water clipped to that shell, a waterline, and the space above in the charge's own tint - bare where the vessel is vented to the air
+  const tank=(bx,by,bw,bh,rad,frac,col,gasCol)=>{
     const path=()=>{ ctx.beginPath(); rr(bx,by,bw,bh,rad); };
     path(); ctx.fillStyle=C.machBg; ctx.fill();
     const t=clamp(frac,0,1);
+    if(gasCol && t<0.999){
+      ctx.save(); path(); ctx.clip();
+      ctx.globalAlpha=.16; fillRect(bx,by,bw,bh*(1-t),gasCol);
+      ctx.restore();
+    }
     if(t>0.001){
       const wy=by+bh*(1-t);
       ctx.save(); path(); ctx.clip();
@@ -415,7 +420,8 @@ function symAt(p,x,y,w,h,ink,L){
     tank(TX,TY,TW,TH,tankRad(id), lv/100,
       tankInjecting(id,rate) ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
-            : (lv>=SINK_RED ? C.red : lv>SINK_AMB ? C.amber : C.blue));
+            : (lv>=SINK_RED ? C.red : lv>SINK_AMB ? C.amber : C.blue),
+      tankHeld(id) ? C.amber : null);
     // on what the tank is ACTUALLY pushing, never the operator's switch: injection is a solved flow
     if(L) fxJet(cx,TY+TH-3,TW*.35,
       fxEase(id+":inj",clamp(rate/tankRateRef(id),0,1)),C.cyan,0,1,71);
@@ -608,7 +614,8 @@ function liveValue(p,s){
     // a burst disc first: a tank that is an opening to containment is not reporting a level
     case p.role==="tank": return s.burstBy[p.id] ? "BURST"
       : tankHold(p.id) ? loopP(s,tankCircuit(p.id)).toFixed(1)+" MPa"
-      : tankLvl(s,p.id).toFixed(0)+"%";
+      /* the charge is what makes the vessel push, so it belongs on the box beside the level */
+      : tankLvl(s,p.id).toFixed(0)+"%"+(D.tanks[p.id].gas ? "  "+tankP(s,p.id).toFixed(1)+" MPa" : "");
     default: return null;
   }
 }
