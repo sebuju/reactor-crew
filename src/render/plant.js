@@ -1,38 +1,18 @@
 "use strict";
 
-// the lane left of the hull for the EL labels. Part of the view's content box,
-// not of the grid, so no cell coordinate moves.
+// the lane left of the hull for the EL labels: part of the view's content box, not of the grid
 const EL_GUT=22;
 
-/* HOW MUCH SHIP z=1 SHOWS, in CELLS. The companion to CELL (layout.js): CELL says
-   how big a machine is against its own panel, this says how many machines are on
-   screen at once. Both are meant to be tuned; nothing else states a view size. */
+// how much ship z=1 shows, in CELLS
 const VIEW_CELLS_W=34, VIEW_CELLS_H=19;
 
-// the one valve symbol (two triangles nose to nose): the pressurizer relief
-// valve and a junction tie share this drawing so they cannot drift apart
 function bowtie(cx,cy,w,h,col){
   ctx.beginPath();
   ctx.moveTo(cx-w/2,cy-h/2); ctx.lineTo(cx+w/2,cy+h/2);
   ctx.lineTo(cx+w/2,cy-h/2); ctx.lineTo(cx-w/2,cy+h/2);
   ctx.closePath(); ctx.fillStyle=col; ctx.fill();
 }
-/* A relief valve has THREE states, not two: shut and holding, passing, and
-   GIVEN UP - a blocked valve is dead metal with a bar through it, because
-   shutting the block valve buys the leak back at the price of the relief path
-   for the rest of the run. One drawing, once, at the fitting's own tap
-   (pipeFitMarks()) - however many relief valves a design carries. */
-/* THREE fittings, three symbols, one drawing. A bowtie alone says "valve" and
-   stops there, so a tee, a throttle and a relief valve were the same mark in
-   three places - and on the bench they were not even that, just a dot. What
-   tells them apart is what sits on the stem, the way a P&ID does it:
-
-     tee       bare        it is a gate, opened and shut, nothing drives it
-     throttle  crossbar    a handwheel - a position you set and it holds
-     relief    coil        a spring - it lifts itself, and no one asked it to
-
-   The bench draws the identical symbol in a dead colour, because the shape is
-   what the design is; only the state belongs to a running plant. */
+// what sits on the stem tells the three fittings apart, the way a P&ID does it
 function fitGlyph(cx,cy,w,h,mode,col){
   bowtie(cx,cy,w,h,col);
   if(mode==="tee") return;
@@ -42,17 +22,7 @@ function fitGlyph(cx,cy,w,h,mode,col){
   else { line(cx-3,t-2,cx+3,t-4,col,1.2);          // a spring seen from the side
          line(cx-3,t-4,cx+3,t-2,col,1.2); }
 }
-/* ══ A VALVE SAYS WHAT IT IS STOOD DOWN AS ON ITS OWN GLYPH ══
-   BLOCKED / BYPASSED / SHUT used to be a word appended to the valve's NAME,
-   which is a label in the pipe margin - so the state of the plumbing was read
-   off text stacked over the pipework rather than off the valve. Each state
-   has its own mark, and no two share one:
-     OPEN     the bowtie in red        (it is passing)
-     BLOCKED  a red bar lying across it (the path is given up)
-     BYPASSED an amber X over the body  (nothing will lift it by itself)
-     SHUT     a red bar standing up     (a throttle worked closed)
-   All four stand inside the valve's own cell - the marks are on the BODY,
-   never above the actuator, because there is no room up there. */
+// every stood-down state gets its own mark, on the BODY: there is no room above the actuator
 function reliefBowtie(cx,cy,w,h,L,fid){
   const open = !!(L && fid && L.reliefOpen[fid] && !L.reliefBlocked[fid]);
   const blkd = !!(L && fid && L.reliefBlocked[fid]);
@@ -62,42 +32,19 @@ function reliefBowtie(cx,cy,w,h,L,fid){
   else if(byp){ const r=Math.max(w,h)/1.6;
     line(cx-r,cy-r,cx+r,cy+r,C.amber,1.3); line(cx-r,cy+r,cx+r,cy-r,C.amber,1.3); }
 }
-/* A throttle worked shut: dead metal with the seat barred ACROSS the flow.
-   The bar stands UP, where a blocked relief valve's lies flat, so the two
-   never read as the same mark on a board carrying both. */
+// the bar stands UP, where a blocked relief valve's lies flat
 function throttleShut(cx,cy,w,h){
   fitGlyph(cx,cy,w,h,"throttle",C.dis);
   line(cx,cy-h/1.5,cx,cy+h/1.5,C.red,1.6);
 }
-/* The casing colour, named once: the nozzle below has to be the same dark as
-   the pipe it caps, or the joint reads as a different object bolted on. */
+// the nozzle has to be the same dark as the pipe it caps
 const PIPE_CASE="#22383e";
 
-/* A run ends ON a component's shell, and the component loop draws straight
-   over that last pixel - so a pipe arrived at a box and simply STOPPED, with
-   nothing to say it was connected rather than parked against it. A nozzle is
-   that joint made visible: a short flange straddling the shell line, wider
-   than the bore it carries, drawn AFTER the machines so it reads as bolted on
-   instead of buried under them.
-
-   Only a real port gets one (r.nz, layout.js). A branch ends on another
-   PIPE, not on a shell, and it already carries the fitting's own glyph -
-   a flange there would be a second mark on the same joint.
-
-   Runs arrive square to a face (route(), layout.js), so the last leg is
-   axis-aligned and the flange only ever needs the two orientations. */
-/* WHERE a run's nozzles go, and which way each one faces - pure, so the
-   a headless caller can sweep it without a canvas. A flange needs a DIRECTION, and a run
-   can have none: park the relief tank straight above the pressurizer and the
-   header's two ports land on the same point, dedupe() collapses it to a single
-   point, and there is no second point to face away from. That crashed the
-   whole frame. An end with no direction simply has no nozzle - the run is
-   zero-length, so there is no joint to draw anyway. */
+// only a real port gets one (r.nz): a branch ends on another pipe and already carries the fitting's glyph
 function nozzleEnds(r){
   const out=[], n=r.pts.length;
   if(!r.nz || n<2) return out;
-  // `end` names WHOSE nozzle this is, so a caller can ask what side of the
-  // machine it lands on without re-deriving which end of pts it was
+  // `end` names WHOSE nozzle this is
   const add=(p,q,end)=>{
     const dx=q[0]-p[0], dy=q[1]-p[1];
     if(Math.abs(dx)<0.5 && Math.abs(dy)<0.5) return;   // coincident: no facing
@@ -107,79 +54,23 @@ function nozzleEnds(r){
   if(r.nz[1]) add(r.pts[n-1],r.pts[n-2],"b");
   return out;
 }
-/* Across the bore, wider than the casing so the joint reads as sitting IN
-   the pipe rather than being the pipe's own outline - the same ratio the old
-   two-value table (4 or 5.5, against a casing half of 3 or 4) always kept,
-   generalised off pipeWidth() (pipes.js) so a nozzle tracks the run's own
-   bore exactly as the pipe it joins does.
-   ...and it stops at the CELL, TWO pixels short of it. nozzleRect() adds a
-   pixel either side of this half-width, so 6 leaves the arithmetic gap of one
-   pixel - and that pixel is the one the deck's grid dot stands in
-   (gridDots(), chrome.js: a 1x1 mark at each cell's top-left corner). Filled
-   on the leading side and bare on the trailing one, a joint measuring 1 / 1
-   READS flush against its own cell on one side only. 5 leaves two, so the gap
-   survives the dot on both. */
+// two pixels short of the cell, so the gap survives the deck's grid dot on both sides
 const NOZZLE_HALF_MAX = 5*DRAW_K;
-/* ══ AND EVERY JOINT IS THE SAME JOINT ══
-   It was min(pipeWidth(bore)*1.4, the cap), so a joint was a READING of its
-   own run's bore - and the bore is already drawn, in the pipe. What it bought
-   instead was a board where a drain nozzle and a main steam nozzle were
-   different objects: two ports on one machine at two sizes, and neither of
-   them the size of the cell they stand in. A flange is a flange. The size is
-   the CELL's own budget, so the mark is uniform, always stands proud of the
-   widest pipe there is room for, and nothing about it has to be compared. */
+// one size for every joint: the CELL's own budget, so nothing about a flange has to be compared
 const pipeNozzleHalf = () => NOZZLE_HALF_MAX;
-/* WHICH SIDE OF A MACHINE A NOZZLE IS ON, IN COLOUR. The joint was flat
-   C.metal, which is the truth for a vessel that is one node and a lie for a
-   pump: its suction and its discharge are different water, and a plant with
-   both its loop pipes on one of them drives nothing. So a machine that HAS
-   two sides gets two colours and a machine that does not keeps the metal -
-   the same rule portPath() states once for the click. Nothing is added to
-   the picture; the joint already drawn is the port. */
-/* NOT amber: amber IS the selection, and a nozzle wearing it reads as picked
-   rather than as a side. Not red either - a side is not an alarm. Cyan and
-   green are the two live inks left, and neither is the cold leg's own blue,
-   so a port never disappears into the pipe on it. */
-/* Addressed by PORT, not by (part, face): two ports can share a face, and only
-   one of them may have its isolation valve shut.
-   RED IS THAT VALVE, and it is the one exception to the rule above. A shut
-   valve is a fact about the PORT, so it is said by colouring the port rather
-   than by parking a second glyph beside one - a nozzle is what a port looks
-   like, piped or not. Every pass reads this - pipeNozzles(), the control
-   room's hover - so one port cannot be red in one pass and green in the next.
-   Takes the live state rather than reaching for S: the bench draws nozzles too
-   and must never colour one off the last run's valve positions. */
+// addressed by PORT, not by (part, face) - two ports can share a face; takes the live state, never S, because the bench draws nozzles too
 function portColOf(pid,L){
-  // A WRECKED JOINT IS EMPTY, the same mark a broken pipe cell wears
-  // (pipeDamage(), pipes.js): the red is the WALL and the bore is deck, so the
-  // two halves of "it failed and it carries nothing" are said once each.
+  // a wrecked joint is empty: the red is the WALL and the bore is deck
   if(portWrecked(L,pid)) return C.well;
   if(L && L.portShut && L.portShut[pid]) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
   const f=portFaceOf(pid), IN=portPath(partOf(q.p), f);
   return !IN ? C.metal : portEnd(partOf(q.p),f)==="a" ? C.portA : C.portB;
 }
-// THE JOINT ITSELF - a small flanged rectangle standing proud of the shell,
-// its long axis across the bore and its short axis the direction it faces.
-// Shared by a piped run's own end (pipeNozzles()) and a bare port with
-// nothing piped to it yet (drawPortMarks()) - a port IS this mark, piped or
-// not, so a fresh one reads as placed the instant it exists.
-// THE RECT THE JOINT OCCUPIES, so a caller that has to point AT one is working
-// off the same four numbers the draw does instead of guessing them off CELL.
-/* ...AND IT IS CENTRED ON ITS CELL, FULL STOP. It used to be shoved half a
-   grid dot along its own long axis, because the dot (gridDots(), chrome.js)
-   was drawn from a cell's top-left corner INTO that cell and so ate the gap
-   on one side only. The dot straddles the corner now, so the deck is
-   symmetric about every cell line and the joint has nothing to dodge. */
-/* THE FLANGE STANDS PROUD BY A FRACTION OF THE CELL, not by 2.5 units. `half`
-   already followed the bore and so grew with CELL, but `deep` and the casing
-   margin did not - so a joint that was a chunky flange at 16 came out a sliver
-   lying on a 90-unit cell, and the port read as having shrunk. */
+// the flange stands proud by a fraction of the CELL, so it grows with DRAW_K like the bore does
 const NOZZLE_CASE=1*DRAW_K;
 const NOZZLE_DEEP=2.5*DRAW_K;   // how far it stands proud of the shell
-/* HOW FAR A JOINT REACHES ALONG ITS OWN RUN, so a word placed on that run can
-   be kept off it (pipeLabSpots(), pipes.js). One answer, or the label and the
-   joint each get their own idea of where the pipe starts. */
+// how far a joint reaches along its own run, so a word placed on that run can be kept off it
 const nozzleReach=()=>NOZZLE_DEEP+NOZZLE_CASE;
 function nozzleRect(px,py,flat,bore){
   const half=pipeNozzleHalf(), deep=NOZZLE_DEEP;
@@ -187,9 +78,7 @@ function nozzleRect(px,py,flat,bore){
   return {x:px-bx-NOZZLE_CASE, y:py-by-NOZZLE_CASE,
           w:2*bx+2*NOZZLE_CASE, h:2*by+2*NOZZLE_CASE};
 }
-/* THE WALL IS WHAT SAYS BROKEN, on a joint exactly as on a run: the casing
-   goes red and the bore keeps its own colour, so a wrecked port still reads
-   its valve position instead of surrendering it to the damage. */
+// the wall is what says broken: the casing goes red and the bore keeps its valve colour
 const portCasOf=(pid,L)=>portWrecked(L,pid)?C.red:PIPE_CASE;
 function drawNozzle(px,py,flat,bore,col,cas){
   const r=nozzleRect(px,py,flat,bore);
@@ -197,14 +86,7 @@ function drawNozzle(px,py,flat,bore,col,cas){
   fillRect(r.x+NOZZLE_CASE,r.y+NOZZLE_CASE,
            r.w-2*NOZZLE_CASE,r.h-2*NOZZLE_CASE,col);
 }
-/* ══ THE BORE EACH JOINT IS DRAWN AT, AND THE RECT THAT FOLLOWS FROM IT ══
-   ONE answer, because three passes were each working it out: pipeNozzles()
-   asked the run, the control room's valve ring built its own map, and the
-   bench's own mark assumed a bore of 1 for every port on the board - so a
-   900 mm main steam nozzle drew at the size of a drain on one screen and full
-   size on the other, and the word sitting in it was centred on the port's CELL,
-   which is neither shape. A port with nothing piped to it IS a bore of 1: that
-   is the only case with no run to ask. */
+// one answer for the bore every pass draws a joint at; a port with nothing piped to it is a bore of 1
 function portBores(){
   const b={};
   for(const r of pipeNetwork()){ const v=runBore(r);
@@ -216,19 +98,7 @@ function portNozzleRect(pid,f,bore){
   const [nx,ny]=portPos(pid);
   return nozzleRect(nx,ny,portFlat(f),bore||1);
 }
-/* ══ AND THE WORD LIES ALONG THE JOINT ══
-   A nozzle on a side face is TALL AND NARROW and one on a top or bottom face
-   is WIDE AND SLIM, so a single upright label could only ever suit half of
-   them. Turned a quarter turn on the side faces, every word gets its own
-   joint's LONG axis to spend and they all size by one rule.
-   SCALED, never clipped: clipTxt() truncates and a cut label is a different
-   label. It gets small, and that is the trade - the COLOUR already says which
-   side of the machine this is, and the word is there to be zoomed into.
-   DARK ON THE JOINT, because the joint is a FILL: C.inkOnLit is the palette's
-   own near-black for exactly this - ink that goes on top of a bright ground.
-   White was tried and is wrong; a mid-tone fill wants dark ink, not light.
-   PORT_WORD_PAD is a clear pixel on every side, so the word never touches the
-   casing it is standing on. */
+// the word lies along the joint's own long axis, scaled rather than clipped
 const PORT_WORD_PAD=1*DRAW_K;
 function portWordDraw(pid,f,word,r){
   const vert=portFlat(f), REF=10, pad=2*PORT_WORD_PAD;
@@ -249,34 +119,13 @@ function pipeNozzles(NET,L){
     }
   }
 }
-/* ══ A VANE GIVES WAY TO WHAT IT SWEEPS ══
-   One vane is one mark on a circle, so it says "turning" only while a frame is
-   worth well under half a turn. Past that it is a stutter, and past 180 degrees
-   a drawn angle cannot carry a direction at all - which is why this takes the
-   frame's own travel (aliasStep(), pipes.js) rather than reading two angles.
-   So the mark becomes the ARC THE VANE COVERED, whose length is the speed and
-   whose bright end is the head. ONE PATH AND ONE CONIC GRADIENT: a ring built
-   out of n wedges is itself a repeating texture and aliases exactly as the vane
-   did. Below SPIN_LO it is the vane and nothing else, so a plant at 1x is
-   untouched - and SPIN_LO is set above where 4x lands (58 degrees a frame at
-   480 ticks a second) because a vane there still reads perfectly well.
-
-   AND THE SHOWN RATE NEVER FALLS. Flicker fusion is about ten turns a second,
-   so past that a faster shaft cannot be drawn turning faster - but it must not
-   be drawn turning SLOWER either. Blending the rate down toward something
-   followable did exactly that: measured on the stock plant, 16x showed 42
-   degrees a frame against 50 at 480 ticks a second, on a vane that was still
-   71% opaque. A slower vane is a slower pump, whatever the arc behind it says.
-   So the rate SATURATES - identity up to SPIN_KNEE, asymptotic to SPIN_CAP -
-   and the crossover is NARROW, so 16x is a ring rather than a dimmed vane and
-   "slower" is not one of the readings available. */
+// past SPIN_LO a vane cannot carry a direction, so the mark becomes the ARC it covered; the shown rate saturates but never falls
 const SPIN_LO=52, SPIN_HI=80, SPIN_KNEE=50, SPIN_CAP=66, SPIN_FULL=400;
 const spinRate=dpf=>{ const m=Math.abs(dpf);
   if(m<=SPIN_KNEE) return dpf;
   const k=SPIN_CAP-SPIN_KNEE;
   return (dpf<0?-1:1)*(SPIN_KNEE+k*(1-Math.exp(-(m-SPIN_KNEE)/k))); };
-/* fraction of rated this shaft turns at: its own drive, or the water pushed
-   through it - a stopped pump in a live loop windmills rather than standing. */
+// fraction of rated this shaft turns at: its own drive, or the water pushed through it
 const pumpSpinK = (s,id) => Math.max(pumpDrive(s,id), pumpQOf(s,id)/Math.max(pumpRefKgs(id),1e-9));
 function spinVane(cx,cy,r,deg,dpf,col){
   const t=clamp((Math.abs(dpf)-SPIN_LO)/(SPIN_HI-SPIN_LO),0,1), a=deg*Math.PI/180;
@@ -288,10 +137,7 @@ function spinVane(cx,cy,r,deg,dpf,col){
   if(!t) return;
   // how far past "a blur" it is, and the three things that say so
   const u=clamp((Math.abs(dpf)-SPIN_HI)/(SPIN_FULL-SPIN_HI),0,1);
-  /* the arc arrives QUICKLY and then goes on getting brighter. Fading it in on
-     t alone put a 0.25 ghost behind a half-faded vane at exactly the crossover,
-     which is less ink than the vane it replaced - so 16x still read slower than
-     4x, for the second reason. */
+  // the arc arrives quickly and then goes on getting brighter, or the crossover shows less ink than the vane it replaced
   const fade=clamp(t*3,0,1);
   const dir=dpf<0?-1:1, span=clamp(Math.abs(dpf)*2.6,60,358)*Math.PI/180;
   const r0=r*(.36-.10*u), r1=r*(.68+.06*u), peak=(0.55+0.40*u)*fade, tail=a-span*dir;
@@ -309,31 +155,14 @@ function spinVane(cx,cy,r,deg,dpf,col){
   ctx.arc(cx,cy,r0-r*.04,a+0.03,a-0.12,true);
   ctx.closePath(); ctx.fillStyle=alphaC(C.bright,0.85*fade); ctx.fill();
 }
-/* HOW BIG A FITTING'S GLYPH IS, off its own bore and its own box - asked by the
-   draw AND by the reading that has to stand clear of it underneath. */
-/* THE WHOLE SYMBOL STANDS IN THE CELL, stem and spring included. boxW-12 on a
-   16 px cell is 4, so the clamp inverted and every valve drew a 4x2 body under
-   a 6 px actuator - a stalk with a speck on it, hanging out of the box it is
-   supposed to occupy. The budget is the CELL: 2 px of air each side, and the
-   actuator above the body is the 4 px that leaves. */
-// the tank shell's own corner radius, read by the shell AND by the box it
-// stands in, so a square panel cannot show through a domed vessel's corners
+// the tank shell's own corner radius, read by the shell AND by the box it stands in
 const tankRad=id=>tankHeld(id)?9:3;
+// the whole symbol stands in the cell, stem and spring included
 function fitGlyphWH(id,boxW,boxH){
   const fw=clamp(pipeWidth(fitBoreK(id))*1.6, 8, Math.max(8, boxW-4));
   return {fw, fh:clamp(fw*11/16, 5, Math.max(5, boxH-10))};
 }
-// ART EXEMPT: the id if/else chain below draws each part's own glyph - what
-// a component LOOKS like, never a network decision - so the "an id literal is
-// a name test" rule does not reach it.
-/* ══ A SYMBOL IS DRAWN IN THE CELL IT WAS AUTHORED IN, AND THE BOX SCALES IT ══
-   Every figure inside symAt() - the 5-unit inset, the 1.5 stroke, the vessel's
-   10-unit dome, the 5-unit drive screw - is a fraction of a 16-unit cell, and
-   there are about a hundred of them. Multiplied one at a time by DRAW_K they
-   would drift the first time one was edited without the others; taken as ONE
-   TRANSFORM they cannot. So the symbol keeps its own coordinate space and the
-   scale is applied once, here. It is pure drawing - no push(), no TIP(), no
-   hit-test - which is what makes a transform legal at all. */
+// ART EXEMPT: symAt()'s id chain draws each part's own glyph, never a network decision; it is authored in a 16-unit cell and scaled once, here
 function drawSym(p,x,y,w,h,ink,L){
   ctx.save();
   ctx.translate(x,y); ctx.scale(DRAW_K,DRAW_K);
@@ -346,14 +175,7 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke(); };
   const lvl=(fx,fy,fw,fh,frac,col)=>{ const t=clamp(frac,0,1);
     ctx.save(); ctx.globalAlpha=.45; fillRect(fx,fy+fh*(1-t),fw,fh*t,col); ctx.restore(); };
-  /* ══ A TANK IS A SHELL WITH WATER IN IT, AND THERE IS ONE OF THEM ══
-     EVERY tank draws through this, however many there are: shell, water CLIPPED to
-     that shell, a waterline, and the gas space above it left empty. Written
-     once because the two were drifting apart in opposite directions - the HPI
-     tank drew a square fill inside a rounded shell, so the water leaked past
-     its own border at the corners AND was pinned at a hard-coded full whatever
-     the tank had left, and the relief tank had no branch at all and came out
-     of the fallback as a hatched box with no level in it. */
+  // every tank draws through this: shell, water clipped to that shell, a waterline, gas space above left empty
   const tank=(bx,by,bw,bh,rad,frac,col)=>{
     const path=()=>{ ctx.beginPath(); rr(bx,by,bw,bh,rad); };
     path(); ctx.fillStyle=C.machBg; ctx.fill();
@@ -368,9 +190,7 @@ function symAt(p,x,y,w,h,ink,L){
     path(); ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke();
   };
   const id=p.id;
-  // WRECKED MACHINERY DOES NOT TURN, and it is asked once here rather than at
-  // each moving symbol - the fan already stood still and the pump and the
-  // turbine went on spinning through their own destruction
+  // wrecked machinery does not turn, asked once here rather than at each moving symbol
   const dead = partWrecked(L,id);
   if(p.role==="core"){
     shell(()=>{ ctx.moveTo(X,Y+10); ctx.quadraticCurveTo(cx,Y-6,X+W,Y+10);
@@ -384,44 +204,16 @@ function symAt(p,x,y,w,h,ink,L){
     if(L&&L.dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+L.dmg/140,.2,.85));
     frame(bx,by,bw,bh,ink);
     coreDraw(bx+2,by+2,bw-4,bh-4,coreView(L,id));
-    /* steam the core is actually making, normalised on the SAME 0..0.6 the VOID
-       readout's band uses - so "the vessel is full of bubbles" and "the strip
-       says BOILING" can never be two different statements. "chan": it rises in
-       the channel lattice, not a kettle */
+    // normalised on the SAME 0..0.6 the VOID readout's band uses
     if(L) fxBubbles(bx+1,by+1,bw-2,bh-2,fxEase(id+":boil",clamp(L.vf/.6,0,1)),C.bright,"chan");
-    // DNBR under 1.00 is fuel being damaged right now, not a warning about
-    // later. The melt flicker already owns the end state, so this stands down
-    // once that takes over rather than beating against it.
+    // the melt flicker owns the end state, so this stands down once that takes over
     if(L) fxPulse(bx,by,bw,bh,C.red,fxEase(id+":dnb",L.dnbr<1&&!L.melt?1:0),1.6);
-    /* A burst vessel blows its inventory into the compartment. Deliberately
-       unclipped and wider than the valve's plume: this one is not a relief
-       path working, it is the boundary gone.
-       Driven by THIS opening's own solved outflow, not by the s.breach flag -
-       a pinhole and a guillotine used to look identical, and both went on
-       blowing at full rate long after the loop had equalised with
-       containment. It now starts, scales and STOPS with the thing it depicts,
-       because it is reading the thing it depicts. */
+    // driven by THIS opening's own solved outflow, never the s.breach flag, so it stops with the thing it depicts
     if(L) fxSteam(cx,Y+6,W*.6,
       fxEase(id+":breach",clamp((L.spillBy["break:core"]||0)/SPILL_FULL,0,1)),"#ffd0c4",31);
-    /* THE LATCHED TRIP, SAID ON THE COMPONENT IT IS ABOUT. The rod drives shout
-       it too, but the eye goes to the reactor, and a scrammed core used to look
-       exactly like a running one apart from four stems sitting low. */
-    // BREACHED beats SCRAM: once the boundary is open the trip is no longer the
-    // news, and the run is over whatever the rods are doing
-    /* BREACHED beats SCRAM beats NEAR TRIP: the third is the only one of the
-       three that has not happened yet, so it stands down the moment either of
-       the others does. tripNear() names the channel in one word - the board's
-       own tile says the rest. */
+    // BREACHED beats SCRAM beats NEAR TRIP: only the last has not happened yet
     const near = L && !L.breach && !L.scrammed && tripNear();
-    /* THE VESSEL IS BIG ENOUGH TO SAY ALL OF IT. Every other symbol picks one
-       word because it has room for one; stacking them here stops BREACHED from
-       hiding the melt underneath it, and lets the reactor carry its own lit
-       tiles as words (annOnPart(), step.js) instead of one lamp colour.
-       The three the mimic already owned lead, in its own shorter words - the
-       two latches because they are the end of the run and must not be the rows
-       that fall off the bottom, SCRAM because no tile is hosted here for it -
-       so their tiles are dropped from the list rather than said twice. NEAR
-       TRIP goes too: the row below names the channel, which the tile does not. */
+    // the three the mimic already owns lead, so their tiles are dropped rather than said twice
     const said={"RX BREACH":1,"CORE MELT":1,"NEAR TRIP":1};
     if(L) bannerRows([
       L.breach && ["BREACHED",C.red],
@@ -432,21 +224,13 @@ function symAt(p,x,y,w,h,ink,L){
     ],cx,bx-2,by-2,bw+4,bh+4);
   } else if(p.role==="rods"){
     shell(()=>ctx.rect(X+8,Y+2,W-16,Hh-10));
-    /* the DRIVE MECHANISMS, not the rods. Where each bank stands is already
-       drawn - to scale, on the flux - in the core field on the reactor, and a
-       second set of stems here said the same thing again in a box that has no
-       core in it. What this component owns is whether the drives ANSWER. */
+    // the DRIVE MECHANISMS, not the rods: what this component owns is whether the drives ANSWER
     const K=P&&P.cores&&P.cores[coreOf(p.id)]; const nb = L&&L.rodZ&&K? K.NB : 5;
-    /* CENTRED, and packed no wider than a drive needs. The group used to start
-       at X+12 and step by (W-24)/nb, which leaves a whole slot of empty plinth
-       on the right - the row read as sitting off to one side of its own box. */
     const DW=5, step=Math.min((W-24)/nb, DW*3), x0=cx-nb*step/2+(step-DW)/2;
     const jam = L&&L.rodJam, scram = L&&L.scrammed;
     const hcol = jam?"#8a7a4a" : scram?C.red : "#b9cdd2";
     const ht=Math.max(4,Hh-16), hy=Y+6;
-    // where the nut sits for an insertion 0..1: the top of the screw is a bank
-    // fully OUT, the foot of it a bank fully IN, which is the way the drawing
-    // already runs and the way the core field beside it already reads
+    // where the nut sits for an insertion 0..1: the top of the screw is fully OUT, its foot fully IN
     const at=v=>hy+3+clamp(v,0,1)*Math.max(0,ht-8);
     for(let i=0;i<nb;i++){ const sx=Math.round(x0+i*step);
       fillRect(sx,hy,DW,ht,C.well);                // the housing the lead screw runs in
@@ -454,37 +238,23 @@ function symAt(p,x,y,w,h,ink,L){
       fillRect(sx+1,hy+ht-2,3,2,hcol);             // the gearbox at its foot
       const z = L? (L.rodZ?L.rodZ[i]:L.rodPos) : 0.2;
       const d = L? (L.rodZDem?L.rodZDem[i]:L.rodDem) : 0.2;
-      /* the stretch of screw still to run, so a walking drive says HOW FAR it
-         has to go and not merely that it is moving */
+      // the stretch of screw still to run, so a walking drive says HOW FAR it has to go
       if(L&&!jam&&!scram&&Math.abs(d-z)>.002){
         const a=Math.min(at(z),at(d)), b=Math.max(at(z),at(d));
         fillRect(sx+1,a,3,Math.max(1,b-a),"rgba(240,168,48,.5)");
       }
-      /* THE NUT ON THE LEAD SCREW - how far this drive has run its own bank in.
-         The core field says where the absorber is; this says where the MACHINE
-         that put it there has got to, which is the reading that survives a jam,
-         and it is what makes a row of stems mean anything at a glance. */
+      // the nut says where the MACHINE has got to, which is the reading that survives a jam
       fillRect(sx-1,Math.round(at(z)),DW+2,2,hcol);
     }
     fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),fxEase(id+":jam",jam?1:0),C.red);
-    /* JAMMED wins over SCRAM: a jammed bank while a trip is latched is a scram
-       that did not happen, which is worse news than the trip itself. Pinned
-       near the TOP of the frame rather than its default vertical centre: a
-       jammed bank came from a hit on the drives, and the generic REPAIR key
-       every damaged component draws (below, in this same loop) is centred
-       in this same box - two labels sharing one centre is a guaranteed
-       overlap the moment both are true at once. */
-    // JAMMED and SCRAM are the drives not answering; ROD LIMIT is the drives
-    // answering perfectly to a controller that has run out of band, so it only
-    // has anything to say once neither of the other two is true.
+    // JAMMED wins over SCRAM, and both over ROD LIMIT: pinned near the TOP, clear of the REPAIR key's own centre
     if(jam||scram)
       banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red,Y+9);
     else if(L&&annLit("ROD LIMIT"))
       banner("ROD LIMIT",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.amber,Y+9);
   } else if(p.role==="sg"){
     const burst = !!(L && L.sgBurst && L.sgBurst[id]);
-    // a burst shell is OPEN: the lid is torn instead of domed, so the boundary
-    // reads as gone from across the board and not only in the panel text
+    // a burst shell is OPEN: the lid is torn instead of domed
     const sgPath=()=>{ ctx.moveTo(X,Y+12);
       if(burst){ const n=7; for(let i=1;i<=n;i++){ const t=i/n;
           ctx.lineTo(X+W*t, Y+12-(1-Math.abs(2*t-1))*13 + (i%2?6:-4)); } }
@@ -497,52 +267,28 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.quadraticCurveTo(cx,Y+Hh*.18,X+W-7,Y+Hh*.4); ctx.lineTo(X+W-7,Y+Hh-4);
     ctx.strokeStyle=ink; ctx.lineWidth=1.6; ctx.stroke();
     if(L){
-      // it is a kettle: how hard it boils is the heat actually crossing into it,
-      // which is the lower of what the core makes and what the turbine will
-      // take - and a kettle only boils while there is water left in it
+      // a kettle only boils while there is water left in it
       const wet=clamp(sgLvl(L,id)/25,0,1);
-      // clipped to the SHELL, not to the body box: the steam space is the domed
-      // lid, so a boil that stopped at the springline read as a kettle with a
-      // ceiling in it
+      // clipped to the SHELL, not the body box: the steam space is the domed lid
       ctx.save(); ctx.beginPath(); sgPath(); ctx.clip();
       fxBubbles(X+2,Y+4,W-4,Hh-6,fxEase(id+":boil",clamp(Math.min(L.n,L.load),0,1)*wet),C.bright,"pool");
       ctx.restore();
-      /* boiling dry, on the same 25% the SG LEVEL band calls LOW. This is the
-         core losing its heat sink, and it had no picture at all - the level
-         fill alone drops quietly and says nothing about what that costs. */
+      // boiling dry, on the same 25% the SG LEVEL band calls LOW
       fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",sgLvl(L,id)<SG_DRY?1-wet*.7:0),1.5);
-      /* ruptured tubes: primary water crossing into the secondary side, which
-         is activity going straight past containment. Drawn rising off the
-         bundle itself, where the leak is - and on THIS generator's own solved
-         leak, so the fault stays on the machine that was hit and slows as the
-         primary comes down to the secondary, stopping at equalisation. It was
-         a latch drawn on every generator in the row at one rate forever. */
+      // on THIS generator's own solved leak, so it slows as the primary comes down to the secondary
       const sgtrQ = (L.sgtrBy && L.sgtrBy["sgtr:"+id]) || 0;
       fxJet(cx,Y+Hh*.42,W*.45,fxEase(id+":sgtr",clamp(sgtrQ/SGTR_RATE,0,1)),C.red,0,-1,53);
-      /* RUPTURED wins over DRYING: a dry generator is a heat sink you can feed
-         back, a ruptured one is primary water leaving past containment. */
-      // sat high, in the steam space: the middle of a generator is where the
-      // flow gauge on its own steam line lands
-      /* what the hole is actually passing, on the same scale step() gives it -
-         so it starts, scales and STOPS with the shell emptying */
+      // what the hole is actually passing, on the same scale step() gives it
       if(burst) fxSteam(cx,Y+8,W*.75,
         fxEase(id+":burst",clamp(((L.sgVentBy&&L.sgVentBy[id])||0)
                                  /Math.max(SG_RELIEF_CAP*ratedSteam(),1e-9),0,1)),"#ffd0c4",67);
-      /* CLIMBING TOWARD THE BURST, not merely over design: the shell is the
-         only pressure boundary with no set point of its own, so the warning is
-         its own distance to the hole. Stands down once burst - by then the
-         pressure is atmosphere and the news is the plume. */
+      // the shell has no setpoint of its own, so the warning is its own distance to the hole
       const ruptured = sgtrLive(L, id), lv=sgLvl(L,id);
       const pFrac = burst ? 0
         : clamp((secP(L,id)-sgDesignP(id))/Math.max(sgBurstP(id)-sgDesignP(id),1e-9),0,1);
       fxPulse(X+2,Y+14,W-4,Hh-16,pFrac>SG_P_HI?C.red:C.amber,
               fxEase(id+":press",pFrac>SG_P_WARN?pFrac:0),2.2);
-      // Three steps of one ladder, on the same constants the board's tiles read:
-      // LOW is the warning, DRYING is the tubes starting to uncover and is
-      // recoverable, DRY is most of the bundle in steam.
-      // BURST beats all three: the boundary is gone, so nothing about level is
-      // the news any more. HIGH PRESS sits under RUPTURED and over the level
-      // ladder - it has not happened yet, but a dry shell you can feed back.
+      // one ladder, on the same constants the board's tiles read
       const word = burst?"BURST" : ruptured?"RUPTURED" : pFrac>SG_P_WARN?"HIGH PRESS"
                  : lv<SG_DRY_LO?"DRY" : lv<SG_DRY?"DRYING" : "LOW";
       if(burst||ruptured||pFrac>SG_P_WARN||lv<SG_LOW)
@@ -550,9 +296,7 @@ function symAt(p,x,y,w,h,ink,L){
                (burst||ruptured||lv<SG_DRY_LO||pFrac>SG_P_HI)?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
     }
   } else if(p.role==="ihx"){
-    /* A SHELL-AND-TUBE VESSEL WITH NO STEAM SPACE, so it is drawn full and it
-       has no level: what is inside it is liquid all the way up on both sides,
-       which is the one visible difference between this and the kettle above. */
+    // no steam space, so it is drawn full and has no level
     shell(()=>{ ctx.moveTo(X,Y+5); ctx.quadraticCurveTo(cx,Y-4,X+W,Y+5);
       ctx.lineTo(X+W,Y+Hh-5); ctx.quadraticCurveTo(cx,Y+Hh+4,X,Y+Hh-5); ctx.closePath(); });
     ctx.beginPath();
@@ -560,42 +304,24 @@ function symAt(p,x,y,w,h,ink,L){
       ctx.moveTo(X+4,yy); ctx.lineTo(X+W-4,yy); }
     ctx.strokeStyle=ink; ctx.lineWidth=1.2; ctx.stroke();
   } else if(roleHead(p.role)){
-    /* FLOORED, the same way the turbine's own rT is: a box shorter than the
-       5 px inset gives a NEGATIVE radius, and arc() throws on one. A two-cell
-       machine is a legal machine (the circulating water pump is one) and a
-       zoomed-out board makes every box short. */
+    // floored: a box shorter than the 5 px inset gives a negative radius, and arc() throws on one
     const r=Math.max(6,Math.min(W,Hh)/2-1), cy=y+h/2;
     shell(()=>ctx.arc(cx,cy,r,0,7));
-    // a wrecked pump is not turning. s.spinV is the PLANT's flux, so a pump
-    // ordered to 0 turned with the ones still running: the rate is that
-    // machine's own (pumpSpinK()), and the phase is keyed per pump because
-    // each now advances at its own rate
-    // a still pump on the bench is drawn the same way a stalled one is, or the
-    // box is an empty circle with nothing in it to say it is a pump
+    // s.spinV is the PLANT's flux, so the rate is that machine's own and the phase is keyed per pump
     { const still = !L || dead, dpf = still?0:L.spinV*pumpSpinK(L,id)*frameDt();
       spinVane(cx,cy,r, !L?0 : dead?fxIdPhase(id)*360 : aliasStep("spin:"+id,spinRate(dpf),360).ph,
                dpf, ink); }
     if(L&&L.cav>.15){ ctx.beginPath(); ctx.arc(cx,cy,r+3,0,7); ctx.strokeStyle=C.amber;
       ctx.lineWidth=1.5; ctx.setLineDash([3,3]); ctx.stroke(); ctx.setLineDash([]); }
-    // vapour flashing at the inlet, small and violent, not a kettle - on the same
-    // 0..0.6 the CAVITATION readout's band uses
+    // on the same 0..0.6 the CAVITATION readout's band uses
     if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",dead?0:clamp(L.cav/.6,0,1)),C.amber,"chan");
   } else if(p.role==="turb"){
     shell(()=>{ ctx.moveTo(X,Y+3); ctx.lineTo(X+W,Y-2); ctx.lineTo(X+W,Y+Hh+2);
       ctx.lineTo(X,Y+Hh-3); ctx.closePath(); });
-    /* Drawn FROM THE FRONT, like the pump - a ring of fixed stator vanes with
-       the rotor turning inside it. The rest of the diagram is a longitudinal
-       section, but a turbine seen edge-on is a box with lines in it, and the
-       one thing worth seeing on this machine is that it turns. The vanes lean
-       one way and the rotor blades the other, which is what stops a ring of
-       spokes reading as a bicycle wheel.
-       The rate is s.spinTV, off LOAD - so it stops dead with a paused sim and
-       slows as the turbine sheds load. */
+    // drawn from the front: the vanes lean one way and the rotor blades the other, or a ring of spokes reads as a wheel
     const cyT=y+h/2, rT=Math.max(6,Math.min(W,Hh)/2-1);
     fillRect(X,cyT-1,W,2,"rgba(140,170,178,.45)");            // the shaft, through
     shell(()=>ctx.arc(cx,cyT,rT,0,7));
-    // the stator is a short ring of vanes tucked against the casing; the rotor
-    // is the long, heavy part, and it should own the middle of the machine
     const r0=rT*.70, r1=rT*.94;
     ctx.save(); ctx.strokeStyle="rgba(140,170,178,.55)"; ctx.lineWidth=1;
     for(let i=0;i<10;i++){ const a=i*.6283;                    // STATOR - fixed
@@ -616,19 +342,9 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.restore();
     dot(cx-2,cyT-2,4,ink);                                     // the hub
   } else if(p.role==="radiator"){
-    /* A BLIND PANEL IS DRAWN BLIND. radLive() is false and radArea() is
-       already exactly 0, so this machine is doing nothing at all - and the
-       only thing that used to say so was a SOFT line in the bench's warning
-       list and a 8px dot the control room does not draw. The picture is where
-       the mistake was made, so the verdict goes on the box: dead fins, no
-       radiating ticks, and the amber hatch every other "this is not working"
-       verdict on this canvas already uses. It reads on BOTH screens, because
-       drawSym() is the one door and neither screen has a second one. */
+    // a blind panel radiates nothing at all, so the verdict goes on the box
     const blind=!radLive(p.id);
-    // fins, and they radiate: the ticks fade with how far the panel sits above
-    // the sky rather than being decoration
     const hot=blind?0:clamp((radTOf(L,p.id)-RAD_TDES)/60,0,1);
-    // PANEL TEMP on the box, not only in the well
     if(hot>0) fillRect(X,Y,W,Hh,"rgba(255,150,90,"+(0.06+0.30*hot).toFixed(2)+")");
     for(let i=1;i<W/7;i++) fillRect(X+i*7,Y+3,2,Hh-6,
       blind?"rgba(184,196,207,.18)":"rgba(184,196,207,.55)");
@@ -638,24 +354,13 @@ function symAt(p,x,y,w,h,ink,L){
         ctx.beginPath(); ctx.moveTo(X+3,yy); ctx.lineTo(X+W-3,yy); ctx.stroke(); }
       ctx.restore(); }
     else { hatch(X,Y,W,Hh,C.amber,.22); frame(X,Y,W,Hh,C.amber);
-      // BLIND, not "NO VIEW OF SPACE": clipTxt() TRUNCATES, and a cut label is
-      // a different label. The tip and the rail carry the sentence.
+      // one word: clipTxt() truncates, and a cut label is a different label
       clipTxt("BLIND",X+W/2,Y+Hh/2+2,W-6,
         {size:6.5,sp:.6,step:false,align:"center",color:C.amber}); }
   } else if(p.role==="cond"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     for(let i=1;i<7;i++) fillRect(X+i*(W/7),Y+5,1,Hh-10,"rgba(140,170,178,.45)");
-    /* it CONDENSES: steam meets cold tubes and falls off them as water, into
-       the hotwell at the bottom. So the effect runs DOWNWARD - drawing it as a
-       rising plume said the opposite of what this machine is for. Rate is the
-       heat it is actually rejecting, and it is clipped inside the shell,
-       because a condenser that vented to the compartment would be a leak. */
-    /* THE HOTWELL: condensate in from the tubes above, feed suction out to
-       the generators. It is a TANK like any other now - it simply has no cell
-       of its own, so the machine it lives inside draws it (hostedTankIds(),
-       pipenet.js). Two hosted tanks pool and draw as one. Full is half the
-       shell, so a rupture filling it is visible without swallowing the tube
-       bank the jet is drawn against. */
+    // the hotwell is a hosted tank with no cell of its own, so the machine it lives inside draws it; two pool as one
     const hosted=hostedTankIds();
     const hwPct = L ? tankPoolPct(L,hosted)
                     : (hosted.length ? D.tanks[hosted[0]].level : 0);
@@ -665,61 +370,28 @@ function symAt(p,x,y,w,h,ink,L){
     if(L){ ctx.save(); ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4-hw); ctx.clip();
       fxJet(cx,Y+6,W*.62,fxEase(id+":cond",clamp(Math.min(L.n,L.load),0,1)*.8),"rgba(150,195,225,.95)",0,1,23);
       ctx.restore(); }
-    /* THE WATER IS DROWNING THE TUBES. The fill alone drops the capacity
-       quietly and says nothing about what that costs, which is the same hole
-       the dry-out pulse on the generators was drawn to close. Held high in the
-       shell so the rising water never reaches the word. */
+    // held high in the shell, so the rising water never reaches the word
     if(L&&annLit("HOTWELL HI"))
       banner("HOTWELL HI",cx,X,Y+2,W,Hh-4,C.red,Y+14);
   } else if(p.role==="ctrl"){
     shell(()=>{ ctx.moveTo(X,Y+Hh); ctx.lineTo(X,Y+6); ctx.lineTo(X+W,Y+2);
       ctx.lineTo(X+W,Y+Hh); ctx.closePath(); });
-    /* main power gone drops this room to emergency lighting. It is the one
-       component whose whole job is that somebody is still in there watching,
-       so a blackout should be visible HERE and not only on the supply. */
     const dark = L && L.blackout;
     for(let i=0;i<3;i++) fillRect(X+6+i*((W-12)/3),Y+9,(W-18)/3,4,
       dark?"rgba(255,90,69,.40)":"rgba(95,210,226,.45)");
     fxPulse(X+2,Y+4,W-4,Hh-8,C.red,fxEase(id+":dark",dark?1:0),0.7);
   } else if(p.role==="fitting"){
-    /* ONE BRANCH FOR EVERY FITTING, and the symbol is the whole of it. The
-       glyph used to be drawn on the pipe at the fitting's own tap, because a
-       fitting had no box; it has one now, so it draws where every other
-       machine draws and "a fitting's glyph survives commissioning" holds BY
-       CONSTRUCTION rather than by a per-mode branch remembering to.
-       reliefBowtie() is the live state (shut / passing / blocked) and
-       fitGlyph() the bare shape the bench shows - one drawing either way. */
     const mode=fitModeOf(id);
-    /* ══ AND IT IS DRAWN AT ITS OWN BORE ══
-       A fitting states millimetres now, like the pipe it sits in, and the
-       glyph was one fixed size - so the one number a player sets on a valve
-       could be read off the panel and nowhere else. The box is the CASING and
-       the opening is the BORE, which is the same sentence the pipe stroke
-       makes (pipeWidth()/pipeWallPx(), pipes.js) drawn front-on. Floored so a
-       hair-bore valve is still a shape, and capped to the cell it stands in. */
+    // the box is the CASING and the opening the BORE, the same sentence the pipe stroke makes, drawn front-on
     const {fw,fh}=fitGlyphWH(id,w,h);
     if(mode==="relief" && L) reliefBowtie(cx,y+h/2,fw,fh,L,id);
     else if(mode==="throttle" && L && (L.valve[id]??1)<0.005) throttleShut(cx,y+h/2,fw,fh);
     else fitGlyph(cx,y+h/2,fw,fh,mode,ink);
-    /* WHAT THIS VALVE IS PASSING, drawn instead of typed, at the valve, and
-       judged against this fitting's OWN fully-open rate (reliefFullRate(),
-       pipenet.js) so the plume can never show a rate the sim is not
-       performing. Per fitting, so two relief valves are two plumes.
-       IT IS DRAWN WHETHER OR NOT THE VALVE IS PIPED, deliberately: this
-       depicts what the VALVE is passing, not what reaches the room. Where the
-       discharge goes is a separate question the tick asks separately
-       (net.fitTarget, step.js). Gating the plume on that was tried and is
-       wrong - the plume follows the tick's own vent term, and it shrinks as
-       the receiving tank fills on back pressure. */
+    // what the VALVE is passing, judged against its own fully-open rate, piped or not: where the discharge goes is a separate question
     if(L && mode==="relief")
       fxSteam(cx,y+4,W*.7,fxEase(id+":porv",
         clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
   } else if(p.role==="vent"){
-    /* A FAN AND A DUCT OUT. It gets a branch of its own rather than falling
-       through to the hatched fallback, because that fallback is what a SHIELD
-       draws - and a machine that takes heat out of the room reading as a block
-       of lead is the one confusion worth a dozen lines. Dead in a blackout,
-       and it says so by standing still. */
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     const r=Math.min(W,Hh-4)/2-3, a=L&&!L.blackout&&!dead?fxClock()*2.2:0;
     ctx.save(); ctx.translate(cx,y+h/2); ctx.rotate(a);
@@ -729,66 +401,32 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.restore();
     line(cx,y+2,cx,y-2,ink,1.5);
   } else if(p.role==="tank"){
-    /* ONE BRANCH FOR EVERY TANK. What is LEFT in it, not a full tank forever -
-       a tank that has finished injecting is empty, and drawing it brimming is
-       the one picture that says the mechanic is over.
-       A SOURCE IS ALARMING WHEN IT IS EMPTY AND A SINK WHEN IT IS FULL, and
-       which of the two this is is STRUCTURAL, never a name: the only thing
-       that can fill against its own will is a PRIMARY tank with no
-       non-return valve on its edge - that is what a vent header discharges
-       into. Everything else is something you draw on, and full is good news.
-       Get it backwards and a healthy full accumulator is painted in the same
-       red as a relief tank about to burst. */
+    // a source alarms when it is EMPTY and a sink when it is FULL, and which it is is structural, never a name
     const lv = L ? tankLvl(L,id) : D.tanks[id].level;
     const rate = L ? ((L.tankRate&&L.tankRate[id])||0) : 0;
     const src = !(tankPrimary(id) && !D.tanks[id].check);
-    /* ══ A PRESSURISED TANK IS A PRESSURE VESSEL, AND IT LOOKS LIKE ONE ══
-       What decides whether a tank can push at all is whether anything is
-       BEHIND it - a gas charge or a pump (tankP(), pipenet.js) - and that was
-       invisible: an accumulator and an open header drew the identical box, so
-       the one knob that says "this will inject in a blackout" could only be
-       read off the panel. A vessel that holds pressure gets a second, inset
-       hoop and domed ends; an open tank keeps the plain shell it always had. */
-    // the shell fills the footprint, one clear pixel in from the grid line
+    // a vessel that holds pressure gets a second inset hoop and domed ends; an open tank keeps the plain shell
     const TX=x+1, TY=y+1, TW=w-2, TH=h-2;
     if(tankHeld(id) && TW>10 && TH>16){
       ctx.beginPath(); rr(TX+2.5,TY+2.5,TW-5,TH-5,7);
       ctx.strokeStyle=ink; ctx.lineWidth=1; ctx.globalAlpha=.55; ctx.stroke(); ctx.globalAlpha=1;
     }
-    /* THE RATE IS NOT COMPARED WITH A BARE ZERO. It comes off the solve, so it
-       sits on ±1e-15 at rest - tankInjecting() (pipenet.js) is the floor, and
-       it is the SAME one the sim judges by, so the picture and the plant
-       cannot disagree about whether a tank is delivering. */
+    // the rate comes off the solve, so it sits on ±1e-15 at rest: tankInjecting() is the floor the sim judges by
     tank(TX,TY,TW,TH,tankRad(id), lv/100,
       tankInjecting(id,rate) ? C.cyan
       : src ? (lv<=15 ? C.red : lv<50 ? C.amber : C.blue)
-            /* A SINK WARNS ON THE WAY UP, not on the last tenth: amber used
-               to mean any water at all, so a relief tank read alarming the
-               moment it took a drop and had nothing left to say between that
-               drop and its own disc. */
             : (lv>=SINK_RED ? C.red : lv>SINK_AMB ? C.amber : C.blue));
-    /* Cold water going down the line. The safe act with the long bill, and
-       worth seeing that it is still running - every second of it ages the
-       vessel whether or not anybody is looking at FATIGUE. On what the tank is
-       ACTUALLY pushing against its own rating, never on the operator's switch:
-       injection is a solved flow, and a tank at 4.5 MPa against a loop at 15.5
-       delivers exactly nothing. */
+    // on what the tank is ACTUALLY pushing, never the operator's switch: injection is a solved flow
     if(L) fxJet(cx,TY+TH-3,TW*.35,
       fxEase(id+":inj",clamp(rate/tankRateRef(id),0,1)),C.cyan,0,1,71);
-    /* the rupture disc, which is what the gas space above the water is FOR.
-       Burst, the tank is an opening to containment and its contents are on the
-       floor - so it stops being a tank and says so. */
+    // burst, the tank is an opening to containment, so it stops being a tank and says so
     if(L&&L.burstBy&&L.burstBy[id]) hatch(TX+1,TY+1,TW-2,TH-2,C.red,.55);
-    /* OVERPRESSURE, ON THE VESSEL IT IS ABOUT - the pressurizer's own branch
-       carried this, and the pressurizer is a tank now. */
     if(L&&tankHold(id)&&annLit("HI PRESS"))
       banner("HI PRESS",cx,TX,TY,TW,TH,C.red,TY+TH-7);
   } else if(p.role==="bkp"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink);
-    /* how much pump flow this set can turn, as cells - the CAPACITY readout was
-       the only place it was stated, and a supply that can carry half the pumps
-       looked identical on the mimic to one that can carry all of them */
+    // how much pump flow this set can turn, as cells
     const cap = L? P.backup : BKP[D.bkp].bk;
     const dead = L && (L.bkpLost || !(P.backup>0));
     const bx2=X+4, by2=Y+Hh-13, bw2=W-8, n=6, cw2=bw2/n;
@@ -798,17 +436,26 @@ function symAt(p,x,y,w,h,ink,L){
     }
     // carrying the pumps right now, not merely able to
     if(L) fxPulse(bx2,by2,bw2,5,C.green,fxEase(id+":bkp",L.blackout&&!dead&&cap>0?1:0),1.4);
+  } else if(p.role==="inert"){
+    shell(()=>ctx.rect(X,Y+2,W,Hh-4));
+    const bw3=(W-8)/3;
+    for(let i=0;i<3;i++){ const bx3=X+4+i*bw3+1;
+      ctx.strokeStyle=ink; ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.rect(bx3,Y+8,bw3-3,Hh-14); ctx.stroke();
+      line(bx3+(bw3-3)/2,Y+8,bx3+(bw3-3)/2,Y+4,ink,1.4); }
+  } else if(p.role==="pan"){
+    ctx.strokeStyle=ink; ctx.lineWidth=1.8;
+    ctx.beginPath(); ctx.moveTo(X+1,Y+3); ctx.lineTo(X+1,Y+Hh-3);
+    ctx.lineTo(X+W-1,Y+Hh-3); ctx.lineTo(X+W-1,Y+3); ctx.stroke();
+    line(cx,Y+Hh-3,cx,Y+Hh+3,ink,1.8);
   } else {
     shell(()=>ctx.rect(X,Y+2,W,Hh-4)); hatch(X+1,Y+3,W-2,Hh-6,"#6d8f98",.5);
   }
 }
 
-/* A SINK TANK'S TWO WARNING LEVELS, % full. */
+// a sink tank's two warning levels, % full
 const SINK_AMB=50, SINK_RED=75;
 const CORE_DIA_REF=2.9, CORE_HGT_REF=3.1, CORE_MIN=0.3;
-// NONE draws nothing; the other three borrow tones already meaning the right
-// thing elsewhere - steel is the rod-stem grey, graphite the follower brown,
-// beryllium the pale one left
 const REFLC=[null,C.metal,C.ink,C.graph];
 function coreDraw(x,y,w,h,V){
   if(w<=0||h<=0) return;
@@ -828,13 +475,7 @@ function coreDraw(x,y,w,h,V){
   coreField(fx,fy,fw,fh,V);
 }
 
-/* THE MIRRORED COLUMN ARITHMETIC LIVES HERE AND NOWHERE ELSE.
-   A revolved core draws 2*XNR-1 columns for XNR rings, level 0 at the bottom,
-   and two widgets need exactly that: the core symbol on the plant and the
-   damage map in the panel. Anchoring one off a copy of the other is the bug
-   latSecGeom() exists to prevent, and it has already shipped once here.
-   latSection() is deliberately NOT folded in - its scale is metric and fixed
-   for a stated reason, and that is a separate argument. */
+// the mirrored column arithmetic lives here and nowhere else: 2*XNR-1 columns, level 0 at the bottom
 function coreCellGeom(x,y,w,h){
   const NC=XNR*2-1, cw=w/NC, ch=h/XNZ;
   return {NC,cw,ch, rMax:Math.max(0,Math.min(cw,ch)*0.44),
@@ -842,16 +483,14 @@ function coreCellGeom(x,y,w,h){
     cx:c=>x+(c+.5)*cw, cy:j=>y+h-(j+.5)*ch};
 }
 function coreField(x,y,w,h,V){
-  // a negative box must not throw - this runs inside the frame loop and one
-  // bad frame takes the whole plant with it
+  // a negative box must not throw: one bad frame takes the whole plant with it
   if(w<=0||h<=0) return;
   const g=coreCellGeom(x,y,w,h), NC=g.NC, cw=g.cw, ch=g.ch, rMax=g.rMax;
   for(let c=0;c<NC;c++){
     const i=g.ring(c);
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), cx=g.cx(c), cy=g.cy(j);
-      /* THE DAMAGE WASH IS THE SUBSTRATE, so it is drawn FIRST - before the
-         xenon rect, which has to keep reading as an overlay on top of it. */
+      // the damage wash is the substrate, so it goes down before the xenon rect
       if(V.nDmg){ const st=fuelStage(V,k);
         if(st>0){ ctx.globalAlpha=.16+.16*st;
           fillRect(cx-cw/2,cy-ch/2,cw,ch,FAIL[st].col()); ctx.globalAlpha=1; } }
@@ -862,15 +501,11 @@ function coreField(x,y,w,h,V){
       let r=rMax*Math.sqrt(clamp(V.phi[k]/2.6,.03,1));
       // the one animation in here: a node in film boiling is not steady
       if(t>.85) r*=.72+.28*Math.abs(Math.sin(fxClock()/0.09));
-      // dot fades with how much fuel is actually in this ring, so a hole you
-      // drew stays a hole rather than painting as a smaller full node
+      // fades with how much fuel is in this ring, so a hole stays a hole rather than a smaller full node
       const ff=V.frac? clamp(V.frac[i],0,1) : 1;
       if(ff<.985){ ctx.globalAlpha=.12+.88*ff;
         if(ff<.3) fillRect(cx-1,cy-1,2,2,"#1b2c33"); }   // an empty slot, as in the plan
-      /* MELT IS A SQUARE, never a stroke: void already owns stroke-vs-fill on
-         this dot, and reusing it would make a voided node and a failed one the
-         same picture. A square says the rod geometry is gone, which is
-         unambiguous at four pixels. */
+      // melt is a square, never a stroke: void already owns stroke-vs-fill on this dot
       if((V.nMelt && V.nMelt[k]>0) || (V.nDisp && V.nDisp[k]>0)){ fillRect(cx-r,cy-r,r*2,r*2,col); }
       else {
         ctx.beginPath(); ctx.arc(cx,cy,r,0,7);
@@ -882,8 +517,7 @@ function coreField(x,y,w,h,V){
           ctx.strokeStyle=C.bg; ctx.lineWidth=Math.max(.6,r*.35); ctx.stroke(); }
       }
       ctx.globalAlpha=1;
-      // drawn bright rather than red: colour already means margin, and a mark
-      // that changed colour with the thing it marks would say it twice
+      // bright rather than red: colour already means margin on this dot
       if(V.peak && i===V.peak.i && j===V.peak.j){
         ctx.beginPath(); ctx.arc(cx,cy,Math.max(r+1.6,rMax*.85),0,7);
         ctx.strokeStyle=C.bright; ctx.lineWidth=.8; ctx.globalAlpha=.75;
@@ -903,42 +537,25 @@ function coreField(x,y,w,h,V){
   }
 }
 
-/* THE GROUND UNDER A LABEL, and there is one of it. Sized from cap height and
-   not from the em, or it sits low and leaves a gap over the letters. */
-/* ══ THE NAME BLOCK ON A FULL-BOX SYMBOL, AND THERE IS ONE OF IT ══
-   The draw needs the lines; valueBase() needs how far down they reach, because
-   a name that breaks would otherwise have the reading printed through it. Two
-   copies of the break would answer that differently on exactly the frame it
-   matters. */
+// one break for both readers: the draw needs the lines, valueBase() how far down they reach
 const NAME_TXT={size:6.5*DRAW_K,sp:.4*DRAW_K,step:false,align:"center"};
 const NAME_LH=capH(NAME_TXT.size)+4*DRAW_K;
 const nameInner=w=>w-14*DRAW_K;        // held clear of the case and its corner radius
 const nameLines=(s,w)=>wrapLines(s,nameInner(w),NAME_TXT);
 // the lowest pixel the plate reaches, off the same first baseline the draw uses
 const nameBot=(s,y,w,nameH)=>y+nameH+(nameLines(s,w).length-1)*NAME_LH;
-/* ══ WHERE A MACHINE'S ALARM MARK STANDS ══
-   ON ITS OWN NAME ROW, centred on the CAPS of the label rather than on the
-   baseline the letters sit on - a mark hung off the baseline reads low beside
-   the word it is about, and one hung in the margin above the box reads as
-   belonging to the machine overhead. The name's first baseline is
-   y+nameH-3 (the draw, below), so this is half a cap height above it, and a
-   box with no name row keeps the top row it always had. Both marks - the
-   bench's warning and the control room's lamp - are one point, one radius. */
+// on the machine's own name row, centred on the CAPS; both marks are one point, one radius
 const MARK_R=4*DRAW_K;
 const nameMark=(x,y,nameH)=>({x:x+10*DRAW_K,
   y:y+(nameH? nameH-3*DRAW_K-capH(NAME_TXT.size)/2 : 11*DRAW_K)});
 
-// extra: room for the rows BELOW the first, so a label that breaks is one
-// plate with two lines on it and never two labels stacked
+// extra: room for the rows BELOW the first, so a label that breaks is one plate
 function txtPlate(cx,base,w,size,extra,col){
   const c=capH(size);
   fillRect(cx-w/2-3,base-c-2,w+6,c+5+(extra||0),col||"rgba(6,10,11,.88)");
 }
 
-// maxw is optional: given, the tag steps DOWN the type ladder to fit it, through
-// the same fitStep() fitTxt uses. A component name may overrun its own box (the
-// grid clamp below keeps it on the page); a banner sat across a narrow symbol
-// may not, or it reads as belonging to the component next door.
+// maxw optional: given, the tag steps DOWN the type ladder to fit it
 function tag(s,cx,base,size,sp,col,maxw){
   const o={size,sp};
   if(maxw) o.size=fitStep(s,maxw,o);
@@ -948,17 +565,8 @@ function tag(s,cx,base,size,sp,col,maxw){
   txt(s,cx,base,{size:o.size,sp,align:"center",color:col});
 }
 
-/* THE component banner: the latched faults, said across the middle of the
-   symbol on their own plates, with a frame round the box they belong to.
-   STILL, never flashing - every one of these is a state that sits there until
-   somebody clears it, and a permanent flash only teaches the eye to skip it.
-   Every component with a fault to announce comes through here, so the fifth one
-   cannot quietly invent a fifth look. */
 const BANNER_LH=capH(9)+7;
-/* Rows are [word,colour], WORST FIRST, and the frame takes the worst one's
-   colour. A symbol only says what fits in its own box, so the tail is dropped
-   rather than run over the machine below - which is why the order is the
-   caller's job and not a sort in here. */
+// rows are [word,colour] WORST FIRST, the caller's job: the tail is dropped rather than run over the machine below
 function bannerRows(rows,cx,x,y,w,h,ty){
   rows=rows.filter(r=>r);
   if(!rows.length) return;
@@ -966,14 +574,10 @@ function bannerRows(rows,cx,x,y,w,h,ty){
   if(rows.length>fit) rows=rows.slice(0,fit);
   frame(x,y,w,h,rows[0][1]);
   const mw=w-4;
-  // ty lets a caller lift the word off something already drawn across the
-  // middle of its box; the frame is unaffected
+  // ty lifts the word off something already drawn across the middle of the box; the frame is unaffected
   let base=(ty!=null?ty:midBase(y,h,9))-BANNER_LH*(rows.length-1)/2;
   for(const r of rows){
-    /* letter spacing is the first thing to go. The ladder has a floor, so a
-       wide-tracked word on a narrow symbol steps all the way down to 6px and
-       STILL overruns - which is how RUPTURED came to sit on a pipe gauge two
-       cells away. Track it tight first, then shrink. */
+    // letter spacing goes first: the type ladder has a floor, so track it tight before shrinking
     const sp = tw(r[0],{size:9,sp:2})<=mw ? 2 : .3;
     tag(r[0],cx,base,9,sp,r[1],mw);
     base+=BANNER_LH;
@@ -981,39 +585,27 @@ function bannerRows(rows,cx,x,y,w,h,ty){
 }
 const banner=(word,cx,x,y,w,h,col,ty)=>bannerRows([[word,col]],cx,x,y,w,h,ty);
 
-/* What the pressurizer's OWN (primary) relief valve is passing, off the
-   SOLVED edge flow (reliefRate(), pipenet.js) - the mimic draws one plume
-   for one valve, the same scope primaryRelief() gives every other legacy
-   control (step.js). reliefRate() is the one reader outside the tick: the
-   plume and the RELIEF FLOW readout both call it, so neither can describe a
-   vent the sim is not performing. Unlike the old porvRateOf() this does not
-   gate on !s.breach - a breached plant's open, passing relief valve reads
-   whatever the solve actually gives it, not a forced zero. */
+// off the SOLVED edge flow, so the plume and the RELIEF FLOW readout cannot describe a vent the sim is not performing
 const porvRate = s => { const fid=primaryRelief(); return fid ? reliefRate(s,fid) : 0; };
 
 function liveValue(p,s){
   const H_=s.Tavg+15*(s.n*PROMPT_F+s.decay);
   switch(true){
-    /* the chain reaction, then the four decay groups summed on top - a scrammed
-       core reads 0% (+6.0%) and that second term is the whole reason it needs a sink */
+    // the chain reaction, then the four decay groups summed on top
     case p.role==="core":  { const c=coreSeen(s,p.id); return (c.n*100).toFixed(0)+"%"+(c.decay*100>=.05?" (+"+(c.decay*100).toFixed(1)+"%)":""); }
     case p.role==="rods":  return (coreSeen(s,coreOf(p.id)).rodPos*100).toFixed(0)+"%";
-    // a hold tank reports the pressure it is holding; every other tank a level
     case p.role==="sg":          return sgLvl(s,p.id).toFixed(0)+"%";
     case p.role==="ihx":         return ((S.ihxQBy&&S.ihxQBy[p.id]||0)/1000).toFixed(0)+" MW";
     case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
     case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
-    // what this panel is actually shedding, which is the only reason it is here
     case p.role==="radiator": return (radRejOf(s,p.id)/1000).toFixed(0)+" MW";
     case p.role==="cond": return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
-    /* null, not "rdy": a standby set that is standing by is the ordinary case
-       and printing a word for it was ink saying nothing. The PLACE stays - the
-       tag simply is not drawn when there is no value - so the REPAIR key still
-       has its anchor and a future reading has somewhere to land. */
+    // null rather than a word for the ordinary case; the PLACE stays, so the REPAIR key keeps its anchor
     case p.role==="bkp":   return s.blackout?"LOAD":null;
+    case p.role==="pan":   { const kg=s.panBy[p.id]||0;
+      return kg>0 ? (kg/1000).toFixed(1)+" t" : null; }
     case p.role==="ctrl":  return s.dose.toFixed(0)+"%";
-    /* ONE ROW FOR EVERY TANK. A burst disc first, because a tank that is an
-       opening to containment is not reporting a level any more. */
+    // a burst disc first: a tank that is an opening to containment is not reporting a level
     case p.role==="tank": return s.burstBy[p.id] ? "BURST"
       : tankHold(p.id) ? loopP(s,tankCircuit(p.id)).toFixed(1)+" MPa"
       : tankLvl(s,p.id).toFixed(0)+"%";
@@ -1021,24 +613,13 @@ function liveValue(p,s){
   }
 }
 
-/* ══ WHERE A LIVE VALUE STANDS, PER MACHINE ══
-   A plaque under the box is the default and is right for anything whose symbol
-   has no room to carry a number. It is wrong wherever the symbol does: under
-   the rod drives it was a SECOND rod position indicator, beside a row of nuts
-   that already draw every bank, and under the turbine it read as the
-   condenser's. null means this machine already says it in its own picture.
-   Returns a text BASELINE; the tag is always centred on the box. */
-// the reading a machine prints on itself, named once because valueBase() has to
-// clear it and the draw has to set it
+// a text BASELINE, always centred on the box; null means the machine already says it in its own picture
 const VAL_TXT_SIZE=8*DRAW_K;
 function valueBase(p,x,y,w,h,sh,nameH,nmw){
   const symTop=y+nameH, symH=h-sh-nameH, mid=symTop+symH/2+3*DRAW_K;
   switch(true){
     case p.role==="rods": return null;
-    /* the two machines drawn front-on: the wheel is the machine, so the number
-       goes on it. drawSym() is handed the SYMBOL box, so its own y+h/2 is the
-       middle of that - not of the whole component, which is where this used to
-       aim and why both landed above their own rotors. */
+    // the two machines drawn front-on: the wheel is the machine, so the number goes on it
     case p.role==="turb":
     case roleHead(p.role): return mid;
     case p.role==="core":   return symTop+symH-20*DRAW_K+9*DRAW_K;   // under the vessel's inner box
@@ -1047,12 +628,7 @@ function valueBase(p,x,y,w,h,sh,nameH,nmw){
     case p.role==="bkp":
     case p.role==="cond":
     case p.role==="radiator": return mid;
-    /* THE MIDDLE OF THE SHELL, WHICH IS THE MIDDLE OF THE BOX. A tank's symbol
-       takes the whole footprint (symFull) and reserves no strip, so the shared
-       symTop/symH arithmetic aims it a name row low on its own vessel. It is
-       driven DOWN off the name block, never over it: on a short tank the middle
-       of the box is already under the name, and a name that breaks reaches
-       further still. */
+    // a tank's symbol takes the whole footprint, so this is the middle of the BOX, driven down off the name block
     case p.role==="tank":
       return Math.max(y+h/2+3*DRAW_K,
                       nameBot(nmw,y,w,nameH)+3*DRAW_K+capH(VAL_TXT_SIZE));
@@ -1060,40 +636,23 @@ function valueBase(p,x,y,w,h,sh,nameH,nmw){
   }
 }
 
-// mirrors commission()'s formula (step.js) because ctlFor() is also called on
-// the bench, before any plant is commissioned and P is still null
+// mirrors commission()'s formula because ctlFor() is also called on the bench, with P still null
 const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(corePumpCap()-sgCount()),0.15,0.75);
-/* Tank level under which a pump drawing on it is in trouble. A WARNING
-   threshold and nothing else: what actually costs a pump its head is its own
-   suction going to vapour (s.cavP, step.js), measured at the machine. */
+// a WARNING threshold only: what costs a pump its head is its own suction going to vapour
 const SUC_LOW=10;
 const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts on the rotor - half speed "+(2*PUMP_ROTOR_S)+" s after the power goes. The pumps can be stopped completely: the red line on the track is the "+(pumpFloor()*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
-// rows, not a flat list: a slider sharing 30px with two buttons is 3.3% of
-// rod travel per pixel, unusable
-/* one press of the boron keys, and the range they work in - the same -6000..0
-   the boron slider spans, so a key can never ask for a demand the slider could
-   not be dragged to */
+// the same span the boron slider covers, so a key can never ask for a demand the slider could not be dragged to
 const BOR_STEP=200, BOR_LO=-6000, BOR_HI=0;
-// the bench has no S: the keys label off the commissioned figure the slider
-// draws there (benchCell's `bench`), the same way pumpFloor() reads past a null P
+// the bench has no S: the keys label off the commissioned figure the slider draws there
 const borNow=()=>S?S.boronDem:clamp(derived().boronOp,BOR_LO,BOR_HI);
 const borStep=dir=>clamp(borNow()-dir*BOR_STEP,BOR_LO,BOR_HI);
-/* WHAT THE PRESS IS WORTH, pcm, signed - the key's own label. It is the CLAMPED
-   step and not a flat 200, so a key with only 89 pcm of travel left says 89 and
-   a key against the end says nothing is left. */
+// the CLAMPED step, so a key against the end of its travel says nothing is left
 const borDelta=dir=>borStep(dir)-borNow();
 const borLabel=dir=>{ const d=borDelta(dir);
   return (d>0?"+":"")+d.toFixed(0)+" pcm"; };
-/* ONE step for every PERCENTAGE control on a strip - the rod bank and the
-   turbine both, so the two keys cannot end up meaning different amounts. It
-   lands on the 5% GRID rather than adding 5 to wherever the demand happens to
-   sit, so repeated presses give round numbers; the strict floor/ceil is what
-   guarantees a press off the grid still moves the way it was pressed. */
+// one step for every percentage control, landing on the 5% GRID rather than adding 5 to where the demand sits
 const PCT_STEP=5;
-/* PCT_EPS is not a tolerance, it is the float grid's own error: 0.55*100 is
-   55.00000000000001, so a demand sitting exactly ON a mark reads as a hair
-   above it and the strict ceil()-1 hands back the mark it started on - the
-   key draws, records an act, and moves nothing. */
+// not a tolerance, the float grid's own error: 0.55*100 is 55.00000000000001
 const PCT_EPS=1e-9;
 function pctStep(cur,dir,lo,hi){
   const g=cur*100/PCT_STEP;
@@ -1106,21 +665,8 @@ const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, 
   {kind:"btn",flex:1,on:()=>S.scrammed,text:()=>"RESET",
    fn:()=>{ act("resetTrip"); },
    tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection armed it refuses while a trip condition is still present. Bypass the RPS and it clears anyway."}];
-// live=false asks the DESIGN question (what room will this need once
-// commissioned) so the bench can reserve it; nothing in the structure may
-// read S in that case, only the closures, which run only while drawing a
-// live plant. split is asked separately because stripH() reserves the taller
-// of both modes.
-/* Every tank's own strip, and it is the same strip for every tank: the
-   operator's valve, and its overboard dump. What used to be three separate
-   buttons on three different components - HPI's INJECT, the reactor's
-   one-shot BORON DUMP and the condenser's HOTWELL DUMP - reading three
-   different pieces of state. */
-/* TWO ROWS, not three buttons - and what decides that is no longer the box's
-   old fixed width. The valve and the dump are ONE row because they are one
-   decision about the same line; if the box is too narrow to hold them side by
-   side, the panel wraps them. The arm switch goes on its own row, and only
-   for a tank that HAS a rule to arm: a manual tank has nothing to defeat. */
+// live=false asks the DESIGN question, so nothing in the structure may read S - only the closures
+// the valve and the dump are ONE row, one decision about the same line; the arm switch only for a tank with a rule
 function tankCtl(id){
   const t=()=>D.tanks[id]||{}, rule=()=>AUTORULE[t().auto];
   const valve=
@@ -1132,26 +678,14 @@ function tankCtl(id){
          : "drawn on by the feed pumps.")
        +" Its automatic rule is "+(rule()?rule().label:"none")+", which opens it without you."};
   const dump=
-    /* Dumping is only dangerous for a tank you DRAW ON - throwing away water
-       something else needs. A sink (a primary tank with no non-return valve,
-       which is what a vent header discharges into) is a tank you WANT empty,
-       so an empty one lighting up red said the opposite of the truth. */
-    /* THE WORD DOES NOT CHANGE, THE GROUND DOES. It used to read DUMPING while
-       it ran, which does not fit a key this narrow - it was cut to "DUMPI" and
-       read as a different control. A dump valve is a two-state thing like every
-       other valve on the plant, so it says what it IS and lets the fill say
-       whether it is doing it. */
+    // dumping is only dangerous for a tank you DRAW ON: a sink is a tank you WANT empty
     {kind:"btn",flex:1,k:id+":tankDump",def:false,words:["DUMP","DUMP"],on:()=>S.tankDump[id],
      danger:()=>S.tankDump[id] ||
        (!(tankPrimary(id) && !t().check) && tankLvl(S,id)<SUC_LOW),
      text:()=>"DUMP",
      fn:()=>{ act("tankDump",id); },
      tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+SUC_LOW+"%."};
-  /* THE SAME SWITCH a system's bypass row is, so it is the same `arm` kind -
-     green ARMED against amber BYPASSED. Drawn as an ordinary key it
-     inherited button()'s `on` amber, so a tank whose rule was still armed lit
-     up in the colour every other arming switch on the plant uses for DEFEATED,
-     and the one that had been bypassed sat dark. */
+  // the same `arm` kind a system's bypass row is: green ARMED against amber BYPASSED
   const arm=
     {kind:"arm",flex:1,k:id+":tankByp",def:false,name:"TANK AUTO",label:()=>rule()?rule().label:"AUTO",on:()=>S.tankByp[id],
      fn:()=>{ act("tankByp",id); },
@@ -1161,31 +695,15 @@ function tankCtl(id){
   const hasRule = t().auto && t().auto!=="manual" && t().auto!=="always";
   return hasRule ? [[valve,dump],[arm]] : [[valve,dump]];
 }
-/* ══════════ THE STARTING POSITION IS DESIGN DATA ══════════
-   D.start[k] is where an actuator STANDS the moment you enter the control
-   room. ctlFor() below stays the one table - it already declares every control
-   in the game - so the only thing added to a row is a KEY and the value that
-   key falls back to. A cell with no `k` is MOMENTARY (SCRAM, RST, +/-B,
-   REPAIR): there is no such thing as a starting position for a button that
-   DOES something, and one field decides it rather than a list somebody has to
-   maintain.
-   startOf() itself lives in design.js, beside D.start - resetPlant() reads it
-   too and the sim loads no renderer at all. */
-/* THE BENCH WRITES D.start DIRECTLY, never act(). ACT is the one input
-   dispatch and recAct() runs before every apply, so a design edit going
-   through it would land on the tape as a crew action - the same standing every
-   other bench edit already has. A control-room session never writes D.start
-   and the bench never writes S: nothing crosses, so the bench cannot show
-   drift, because it is not reading the thing that drifted. */
+// D.start[k] is where an actuator stands on entry; a cell with no `k` is MOMENTARY
+// the bench writes D.start directly, never act(): a design edit must not land on the tape as a crew action
 function benchCell(c){
   const o=Object.assign({},c);
   const sc=c.sc||1;
   if(!c.k){                          // momentary: nothing to set, so it draws dead
     o.fn=()=>{}; o.set=()=>{};
     o.on=()=>false; o.danger=()=>false;
-    /* `bench` is for the one control whose starting position is COMMISSIONED
-       rather than chosen: boron is solved to make the drawn core critical, so
-       the bench must read the design's own figure or it draws clean water. */
+    // `bench` is for a control whose starting position is COMMISSIONED rather than chosen
     if(c.kind==="sld"){ o.val=c.bench||(()=>0); o.dem=null; o.min=c.min; o.max=c.max; o.inert=true; }
     return o;
   }
@@ -1198,35 +716,21 @@ function benchCell(c){
     o.on=on; o.danger=()=>false;
     if(c.words) o.text=()=>c.words[on()?1:0];
     if(c.label) o.label=c.label;
-    // an arming switch states its own heading, and the LIVE one reads S to do
-    // it - so the bench gets the same sentence built off the starting position
+    // the same sentence the live switch builds off S, built here off the starting position
     if(c.kind==="arm") o.title=()=>(c.name||"")+"  [ "+(on()?"BYPASSED":"ARMED")+" ]";
     o.fn=()=>{ D.start[c.k]=!on(); };
   }
   return o;
 }
 const ctlBench=rows=>rows&&rows.map(r=>r.map(benchCell));
-/* ══ A WRECKED MACHINE ANSWERS NOTHING ══
-   Its handles still stroked and still logged an act - a destroyed pump took a
-   flow demand and a destroyed valve opened - which is the same lie its own
-   readout was telling before it was taken away. Every key goes dead and draws
-   dead; the REPAIR key is not in here, it is drawn over the value tag by the
-   component loop and is the one thing on the box that still works.
-   The same cell shape benchCell() makes, so the strip still measures and
-   still compacts - nothing is hidden, it just does not answer. */
+// the same cell shape benchCell() makes, so the strip still measures: nothing is hidden, it just does not answer
 const deadCell=c=>{ const o=Object.assign({},c);
   o.fn=()=>{}; o.set=()=>{}; o.on=()=>false; o.danger=()=>false; o.inert=true;
   if(c.kind==="arm") o.label=c.label||(()=>"");
   return o; };
 // a nozzle valve is its own part, and isolating a wreck is what you reach for
 const ctlDead=rows=>rows&&rows.map(r=>r.map(c=>c.ownPart?c:deadCell(c)));
-/* ══ WHAT THIS MACHINE IS STOOD DOWN AS, IN ONE WORD ══
-   Null when there is nothing to say, which is the ordinary case. It exists
-   because a valve's handles are put away until the hand is on the box: a shut
-   block valve, a bypassed arm or a lifted relief is a fact about the plant and
-   must not go away with the control that set it, so it is said in the NAME,
-   which is always drawn. One function, or the mimic and the rail would grow two
-   vocabularies for the same four states. */
+// said in the NAME, which is always drawn: a stood-down valve must not go away with the control that set it
 function partStateWord(p){
   if(p.role==="fitting"){
     const mode=fitModeOf(p.id);
@@ -1237,80 +741,50 @@ function partStateWord(p){
     if(mode==="throttle") return (S.valve[p.id]??1)<0.005 ? "SHUT" : null;
     return null;
   }
-  /* A box is marked BYP when a system it hosts is wired and switched off - the
-     control cabinet's protection, the turbine's runback. There is no AUTOSYS
-     row to look it up in any more, so the two are asked directly. */
+  // no AUTOSYS row to look these up in any more, so the two are asked directly
   if(p.role==="ctrl"  && rpsState()==="BYPASSED") return "BYP";
   if(p.role==="turb"  && sinkWired(S,"runback",null) && !runbackLive()) return "BYP";
   return null;
 }
 function ctlBase(p,live,split){
   if(p.role==="tank") return tankCtl(p.id);
-  /* ONE LOAD LEVER, on the FIRST turbine. There can be more than one now, and
-     load demand is an order to the plant rather than to a machine - the same
-     shape the coolant pump lever has, and the same reason: what changed is
-     that "the turbine" is no longer a thing there is exactly one of. */
+  // one load lever, on the FIRST turbine: load demand is an order to the plant, not to a machine
   if(p.role==="turb"){
     if(LAY.parts.find(q=>q.role==="turb")!==p) return null;
     return [
-     /* ALWAYS THE DESIGN'S OWN CEILING, never the commissioned copy. `P ?
-        P.loadMax : ...` was meant to fall back on the bench, but P exists on
-        the bench too - it is the LAST plant commissioned - so a designer
-        resizing this turbine watched the strip keep the old machine's reach.
-        A running plant cannot edit its design (designBlocked()), so the two
-        agree there and there is nothing left for the branch to choose. */
+     // always the DESIGN's own ceiling: P is the last plant commissioned, so on the bench it is the wrong machine
      [{kind:"sld",flex:1,k:"loadDem",def:1,sc:100,val:()=>S.load*100,min:()=>0,max:()=>derived().loadMax*100,dem:()=>S.loadDem*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}],
-     // the same 5% bite the rod strip takes, against the same demand the
-     // slider writes - a load change is an order given in round numbers
+     // the same 5% bite the rod strip takes, against the same demand the slider writes
      [{kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,-1,0,P.loadMax)); },
        tip:"UNLOAD 5% - drops turbine demand five percent, onto the nearest 5% mark. Less draw means less heat leaving the loop, so the primary warms and the reactor backs its own power off."},
       {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,1,0,P.loadMax)); },
        tip:"LOAD 5% - raises turbine demand five percent, onto the nearest 5% mark, and never past the turbine's own ceiling. More draw cools the loop and the reactor answers by raising power."}]];
   }
-  /* The tanks this machine HOSTS - a tank with no cell has no box of its own
-     to carry a strip, so it gets one here, on the component it lives inside.
-     One row per hosted tank, so two hotwells are two rows. On the FIRST
-     condenser only, for the same reason the load lever is on the first
-     turbine: two condensers must not each draw a copy of the same hotwell's
-     strip. hostPartOf() (layout.js) is the one answer to "which machine hosts
-     a cell-less tank". */
+  // one row per hosted tank, on the FIRST condenser only, or two condensers each draw a copy of the same hotwell's strip
   if(p.role==="cond"){
     if(hostPartOf()!==p) return null;
     const h=hostedTankIds(); if(!h.length) return null;
     const out=[]; for(const id of h) for(const r of tankCtl(id)) out.push(r); return out;
   }
 
-  /* ONE STRIP FOR EVERY PUMP, and what it ADDRESSES is the only difference: a
-     coolant pump's lever is the order to ALL of them, the way a real board
-     carries one RCP speed demand, and any other pump answers only for itself.
-     Both write the same s.flowDemBy through the same ACT table - one
-     mechanism, two spans. The floor is a trip setpoint, not a stop, so the
-     mark says where it costs rather than where the slider ends. */
+  // one strip for every pump; what it ADDRESSES is the only difference, and the floor is a trip setpoint, not a stop
   if(roleHead(p.role)){
     const pri = primaryPump(p.id);
     return [[
-    // the DEFAULT is the machine's own (pumpDem0, step.js), so the bench draws
-    // a standby train stopped rather than at rated
+    // the DEFAULT is the machine's own, so the bench draws a standby train stopped rather than at rated
     {kind:"sld",flex:1,k:pri?"flowDem":p.id+":pumpDem",def:pri?1:pumpDem0(p.id),sc:100,
      val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
      dem:()=>(pri?flowDemPri(S):(S.flowDemBy[p.id]??pumpDem0(p.id)))*100,
-     /* THE MARK IS THE TRIP, so it stands on any pump the CORE's own circuit
-        carries - the low-flow setpoint is about the water going past the fuel
-        and about nothing else. */
+     // the mark is the TRIP, so it stands on any pump the CORE's own circuit carries
      mark:()=>corePump(p.id)?pumpFloor()*100:null,markLo:true,
      fmt:v=>v.toFixed(0)+" %",
      set:v=>{ pri ? act("flowDem",v/100) : act("pumpDem",p.id,v/100); },
      tip:(pri?"COOLANT PUMPS - "+pumpTip()
             :"THIS PUMP ONLY - what it is told to deliver. It develops its own head at its own speed, exactly like the coolant pumps; what it does not answer to is their one lever.")}]];
   }
-  /* ══ A FITTING'S OWN HANDLES, ON ITS OWN PLINTH ══
-     They used to float in the pipe margin on a hand-rolled strip with its own
-     width and row count, because a fitting had no box to bolt one to. It has
-     a panel of its own now, so this is an ordinary ctlFor() row set and the
-     boxless special case is gone with the constants that served it. A TEE gets nothing at all, and that is the point of a
-     tee: a junction has no gate, so there is nothing to work. */
+  // a TEE gets nothing at all, and that is the point of a tee: a junction has no gate
   if(p.role==="fitting"){
     const mode=fitModeOf(p.id);
     if(mode==="tee") return null;
@@ -1319,16 +793,9 @@ function ctlBase(p,live,split){
        dem:()=>(S.valveDem[p.id]??1)*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("valveDem",p.id,v/100); },
        tip:"THROTTLE - how far this valve stands open. Wide open it costs the line nothing at all; shut, it is a real break in the pipe, the same as a valve shut anywhere else."}]];
-    /* One row per handle, and they are NOT side by side: two switches this
-       narrow lose their labels before they lose their state, and these two
-       are not read at a glance the same way. BLOCK is a COMMAND and stays a
-       button; the arm is an arming switch and wears the ARMED/BYPASSED state
-       every other arming switch on the plant wears. */
+    // one row per handle: two switches this narrow lose their labels before they lose their state
     return [
-     /* OPEN / SHUT, the same two words every other valve on the plant wears -
-        it said BLOCK / BLOCKED, which is an ACTION and a STATE in one control
-        and matched nothing else on the board. What the key reports is where the
-        block valve stands, and shutting it is what gives the relief path up. */
+     // OPEN / SHUT, the same two words every other valve wears; the key reports where the block valve stands
      [{kind:"btn",flex:1,k:p.id+":porvBlock",def:false,words:["OPEN","SHUT"],
        danger:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
        on:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
@@ -1338,31 +805,16 @@ function ctlBase(p,live,split){
   }
   switch(p.role){
     case "rods": {
-      /* THIS VESSEL'S OWN DRIVES: every order is the addressed act and every
-         reading is this vessel's own view of the plant (coreSeen) */
+      // this vessel's own drives: every order is the addressed act and every reading is coreSeen()
       const cid=coreOf(p.id), cS=()=>coreSeen(S,cid);
       split = live && !!cS().split;
-      /* ══ THERE IS NO MASTER SLIDER; THE BANKS ARE THE CONTROL ══
-         A ganged plant drew one CONTROL BANK slider and hid the banks, so the
-         handle you worked and the handles the plant has were two different
-         sets depending on a mode. Every bank is on the strip in both modes -
-         GANGING is what happens to an input, not which controls exist: a bank
-         moved while ganged goes through act("rodCommon") and carries all of
-         them, exactly as the master row did (setCommon(), step.js), so a
-         recording sees the same act it always did. */
-      /* The same demand a ganged bank writes, in fixed bites - the boron
-         row's argument, for a control that is just as slow to drag: the bank
-         travels at 1.2%/s, so a fine adjustment by hand is a fight with the
-         gearing. Both keys go through act("rodCommon") like the slider, so a
-         recording sees no difference. */
+      // no master slider: ganging is what happens to an INPUT, so a ganged bank goes through act("rodCommon")
       const STEP=[
        {kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("coreRodDem",cid,pctStep(cS().rodDem,-1,0,1)); },
         tip:"WITHDRAW 5% - takes the whole stack five percent of core height further out, onto the nearest 5% mark. Withdrawing adds reactivity, so power rises until the loop settles."},
        {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("coreRodDem",cid,pctStep(cS().rodDem,1,0,1)); },
         tip:"INSERT 5% - drives the whole stack five percent of core height further in, onto the nearest 5% mark. Deeper insertion removes reactivity and raises power peaking, which eats thermal margin."}];
-      /* GANGED, a bank's slider IS the common one: same key, same reading,
-         same act - four handles onto one position, which is what a gang is.
-         Split, each addresses its own bank. */
+      // ganged, a bank's slider IS the common one; split, each addresses its own bank
       const bankRow=b=>[
        {kind:"btn",flex:1,k:"bankAuto:"+b,def:false,words:["AUT","MAN"],on:()=>!cS().bankAuto[b],text:()=>cS().bankAuto[b]?"AUT":"MAN",
         fn:()=>{ act("coreBankAuto",cid,b); },
@@ -1370,9 +822,7 @@ function ctlBase(p,live,split){
        {kind:"sld",flex:2.8,k:split?"rodBank:"+b:"rodCommon",def:RODX0,sc:100,min:()=>0,max:()=>100,
         val:()=>(split?cS().rodZ[b]:cS().rodPos)*100,
         dem:()=>(split?cS().rodZDem[b]:cS().rodDem)*100,
-        /* Only while the controller is actually driving: a band drawn for a
-           system that is bypassed or was never fitted is two marks describing
-           nobody. autoLive() is the one predicate for that. */
+        // only while the controller is actually driving: a band drawn for a bypassed system describes nobody
         marks:()=>sinkDriver(S,"rodStep",cid)?[S.arLo*100,S.arHi*100]:null,
         fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",
         set:v=>{ split ? act("coreRodBank",cid,b,v/100) : act("coreRodDem",cid,v/100); },
@@ -1381,8 +831,7 @@ function ctlBase(p,live,split){
         const rows=[STEP, ROD_TRIP_ROW,
          [{kind:"btn",flex:1,on:()=>cS().reGang,
           text:()=>cS().reGang?"GANGING..":"BANK GANG",
-          /* already a no-op once the walk is running: setSplit() refuses to
-             re-seed a gang it is in the middle of */
+          // already a no-op once the walk is running: setSplit() refuses to re-seed a gang mid-walk
           fn:()=>{ act("coreSplit",cid,false); },
           tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close. A bank slider still steers the walk while it runs."}]];
         for(let b=0;b<(live?P.cores[cid].NB:coreBag(cid).nbank);b++) rows.push(bankRow(b));
@@ -1391,8 +840,7 @@ function ctlBase(p,live,split){
       const rows=[
        STEP,
        ROD_TRIP_ROW,
-       /* the ganged handle on a radial xenon tilt: it stands the inner banks
-          against the outer ones instead of moving the whole bank together */
+       // the ganged handle on a radial xenon tilt: inner banks against outer ones
        [{kind:"sld",flex:2.8,k:"tiltDem",def:0,val:()=>cS().tilt,min:()=>-1,max:()=>1,dem:()=>cS().tiltDem,
          fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{ act("coreTiltDem",cid,v); },
          tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. Full travel takes "+(1/tiltRate()).toFixed(0)+" s because the drives moving it are the drives that move the bank. It is your tilt handle only while the banks are ganged - split them and each bank's own demand takes over."},
@@ -1403,68 +851,30 @@ function ctlBase(p,live,split){
       return rows;
     }
     case "core": return [
-     /* the scale runs 0 -> -6000, clean water at the LEFT: "+B" adds poison and
-        must drive the thumb right, and the -B / RST / +B row must read in the
-        direction it moves. A slider() scale is allowed to run either way - see
-        the ordered clamp in the drag handler in core/ui.js. */
+     // the scale runs 0 -> -6000, clean water at the LEFT, so "+B" drives the thumb right
      [{kind:"sld",flex:1,val:()=>S.boron,min:()=>0,max:()=>-6000,step:10,
        dem:()=>S.boronDem,bench:()=>derived().boronOp,
        fmt:v=>v.toFixed(0)+" pcm",set:v=>{ act("boronDem",v); },
        tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}],
-     /* the same demand the slider writes, in fixed bites. A poison you can only
-        set by dragging is unusable at 60 pcm/s: the useful orders are "a bit
-        more", "a bit less" and "back to clean water", and all three go through
-        act("boronDem") like the slider, so a recording sees no difference. */
-     /* THE KEY STATES WHAT THE PRESS IS WORTH. Which way it goes is already in
-        where it stands - dilute left, borate right, the same direction the
-        slider above it runs - and "-B" said nothing about how much. */
+     // the same demand the slider writes, in fixed bites, through the same act
      [{kind:"btn",flex:1,text:()=>borLabel(-1),fn:()=>{ act("boronDem",borStep(-1)); },
        tip:"DILUTE "+BOR_STEP+" PCM - takes one step of boron back out, toward clean water. Dilution runs at only "+BOR_OUT+" pcm/s, so this is about "+(BOR_STEP/BOR_OUT).toFixed(0)+" s of charging every time you press it."},
-      /* ══ RESET IS THE COMMISSIONED FIGURE, NOT ZERO ══
-         It asked for clean water, which is not a reset of anything: it is one
-         end of the travel, and -B already walks toward it. What the key is for
-         is the mark already drawn on the slider above it - the boron this core
-         was commissioned critical at (boronOp, data/design.js) - so RST and
-         that tick are the same number by construction. */
-      /* IT KEEPS ITS WORD AND STATES ITS TARGET. The two keys beside it say what
-         a press is WORTH, and this one is not a step - it is a destination, so
-         it says the destination and reads as the odd one out it is. */
+      // the commissioned figure, not zero: RST and the mark on the slider are one number by construction
       {kind:"btn",flex:1,text:()=>"RST "+clamp(derived().boronOp,BOR_LO,BOR_HI).toFixed(0),
        fn:()=>{ act("boronDem",clamp(derived().boronOp,BOR_LO,BOR_HI)); },
        tip:"RESET BORON - back to the "+derived().boronOp.toFixed(0)+" pcm this core was commissioned critical at, which is the mark on the slider above. It does not happen at once: the loop still has to charge or dilute its way there, and dilution runs at only "+BOR_OUT+" pcm/s, so from a deep pit this is minutes, not seconds."},
       {kind:"btn",flex:1,text:()=>borLabel(1),fn:()=>{ act("boronDem",borStep(1)); },
        tip:"BORATE "+BOR_STEP+" PCM - puts one step more poison in. Boration is the fast direction at "+BOR_IN+" pcm/s, about "+(BOR_STEP/BOR_IN).toFixed(0)+" s a press, and every step you add has to be diluted back out again slowly."}]];
-    /* ── replaced by the role branches above ── */
   }
   return null;
 }
 
-/* ══ AND THE ARMING SWITCH IS THE BLOCK'S OWN SWITCH ══
-   bypCell() and its D.start["byp:*"] starting positions are gone with AUTOSYS.
-   An automatic system is a graph now, so arming one is switching the block
-   that drives it, and drivenRows() below already draws exactly that key on the
-   machine whose demand it owns. One switch, on the box that feels it. */
-/* A port belongs to the box it stands on, so its handle is in that box's panel;
-   the ten-pixel mark on the drawing still works and is the same act. */
-/* ══ WHAT THE NOZZLE IS ACTUALLY PASSING ══
-   The key said OPEN or SHUT and nothing else, so the one question it is
-   pressed to answer - is this the leg that has gone - had to be taken to the
-   drawing and read off the pipe. The run landing on the nozzle is the answer,
-   and the three doors that already state it are pipeRunKg/pipeRunP/pipeRunSc
-   (render/pipes.js), off this frame's own solve. Absolute kilograms: a
-   direction along the key's canonical order says nothing at a nozzle. */
+// what the run landing on this nozzle is passing, off this frame's own solve; absolute kg, because a nozzle has no canonical order
 function portRunRead(pid,byPort){
   const r=byPort[pid]; if(!r||!P.net) return "";
-  /* AND WHERE THE RUN GOES. A nozzle is one end of a pipe, and which machine
-     is on the other end is the thing the key is pressed about - the drawing
-     says it, and the reader had to go and look. Traced, never authored: the
-     connection already names both parts. */
   const far=partOf(r.pa===pid ? r.b : r.a);
   const kg=pipeRunKg(r.key,r.k,S), pr=pipeRunP(r,S), sc=pipeRunSc(r,S);
-  /* TWO LINES, and the break is in the label: the first says what this nozzle
-     IS - where it goes and whether it is open - and the second is what the run
-     is doing, which changes every tick. Wrapped as one paragraph the two ran
-     together and where a line broke depended on the panel's width. */
+  // the break is in the label: the first line is what the nozzle IS, the second what the run is doing
   return (far ? "  "+partName(far) : "")
        + "\n"+Math.abs(kg).toFixed(0)+" kg/s"
        + (pr===null ? "" : "  "+(pr>=10?pr.toFixed(1):pr.toFixed(2))+" MPa")
@@ -1490,17 +900,13 @@ function portCtlRows(p){
   // one container, not a grid of keys: a valve list reads as a list
   return cells.length ? [cells] : [];
 }
-/* ══ THE STRIP SAYS WHO IS DRIVING ══ a demand a block owns is marked on the
-   machine's own strip, and the key is the way to take it back: it switches
-   that block off, which is an act like any other (decision 6, the plan). */
+// a demand a block owns is marked on the machine's own strip, and the key switches that block off
 const DRIVEN_TIP="A block in the control room is wired to this demand. Switched ON it owns the demand - the control still draws and still moves, but what it shows is the block's order. Press to switch that block OFF and take the demand back by hand, and press again to hand it back.";
 function drivenRows(p){
   const pairs=[], m=D.machines[p.id];
   if(p.role==="rods"&&m&&m.on) pairs.push(["rodStep",m.on]);
   if(p.role==="pump") pairs.push(["flowDem",p.id]);
-  /* THE PROTECTION SYSTEM'S OWN SWITCH, on the vessel it protects: this is
-     where the RPS bypass key used to be and it is the same gesture, except
-     that what it switches is the block the player can see. */
+  // the protection system's own switch, on the vessel it protects
   if(p.role==="core"){ pairs.push(["scram",p.id]); pairs.push(["nearTrip",p.id]); }
   if(p.role==="turb"&&LAY.parts.find(q=>q.role==="turb")===p){ pairs.push(["loadDem",null]); pairs.push(["runback",null]); }
   if(p.role==="sg") pairs.push(["freg",p.id]);
@@ -1509,13 +915,10 @@ function drivenRows(p){
     if(j&&j.mode==="relief"&&!j.spring) pairs.push(["relief",p.id]);
     if(j&&j.mode==="throttle") pairs.push(["valveDem",p.id]); }
   const cells=[];
-  /* The key stays on the strip once the block is switched off, or the one door
-     back to automatic closes behind the hand that opened it. */
+  // the key stays on the strip once the block is off, or the one door back to automatic closes behind the hand
   for(const [sink,arg] of pairs){ const id=sinkWired(S,sink,arg); if(!id) continue;
     const lit=()=>!!(S.blkBy[id]&&S.blkBy[id].on);
-    /* A NAMED BLOCK SPEAKS FOR ITSELF. "TURBINE RUNBACK BY TURBINE RUNBACK" is
-       what naming the sink after its own demand costs, so the sink's label is
-       only there to say what an unnamed block is driving. */
+    // a named block speaks for itself; the sink's label is only there for an unnamed one
     const own=()=>nameFor(id,null);
     cells.push({kind:"btn",flex:1,ownPart:true,on:lit,
       text:()=>(own()||SINK[sink].lab+(lit()?" BY ":" - ")+id.toUpperCase())+(lit()?"":" OFF"),
@@ -1529,17 +932,9 @@ function ctlFor(p,live,split){
   if(live){ const pr=portCtlRows(p); if(pr.length) out=(out||[]).concat(pr); }
   return out;
 }
-/* THE NAME ROW, and it is all the box reserves now: every control stands in
-   the machine's own PANEL (ui/margin.js), so there is no strip to measure and
-   no ladder to compact one down. A tank's row is unconditional, because every
-   label a tank carries stands on its own shell rather than in the pipe margin
-   above it. */
+// the name row is all the box reserves: every control stands in the machine's own PANEL
 const nameRowH = p => (p.role==="tank" || p.h*CELL>CELL) ? 14*DRAW_K : 0;
-/* ══ THE GHOST PORT ══
-   Hover a cell beside a machine and it shows where a port would land - a
-   preview of addPortAt(), never a placement of its own. The hand names the
-   CELL now, not a face: the face falls out of which side of the box the cell
-   is on (faceOfOffset(), layout.js). */
+// a preview of addPortAt(), never a placement of its own; the hand names the CELL, not a face
 const GHOSTG=CELL-4*DRAW_K;
 function ghostPort(){
   if(ui.drag) return null;
@@ -1550,8 +945,7 @@ function ghostPort(){
   if(gx<0||gy<0||gx>=GW||gy>=GH) return null;
   if(portAtCell(gx,gy)) return null;
   if(occupied(null,{ports:false})[gy][gx]) return null;
-  /* Whichever machine this cell is on the shell of. A cell can only ever be
-     beside one, because a cell is one thing and so is a footprint. */
+  // a cell can only ever be on the shell of one machine
   for(const p of LAY.parts){
     const dx=gx-p.x, dy=gy-p.y;
     const f=faceOfOffset(p,dx,dy);
@@ -1570,12 +964,9 @@ function drawGhostPort(){
   ctx.strokeRect(bx,by,GHOSTG,GHOSTG);
   ctx.restore();
   TIP(bx,by,GHOSTG,GHOSTG,"NEW PIPE",
-    "Click to start a pipe here. The nozzle appears because the pipe's end stands on this cell - drag its other end to the machine you want it to reach.");
+    "Press to start a pipe here, and keep the button down to pull the other end straight to the machine you want it to reach. The nozzle appears because the pipe's end stands on this cell.");
 }
-/* ══ THE AIM MARK ══
-   With the aimed hit up, what the next click would wreck - hitAimAt() is the
-   one resolver, so the outline can never name a machine the press would miss.
-   Bare deck draws nothing, because a click there only puts the tool back. */
+// hitAimAt() is the one resolver, so the outline can never name a machine the press would miss
 function drawHitAim(){
   if(TOOL.active!=="hit"||ui.drag) return;
   const ptr = vHit(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return;
@@ -1589,16 +980,9 @@ function drawHitAim(){
   ctx.strokeRect(bx,by,bw,bh);
   ctx.restore();
 }
-/* ══ AN EXISTING PORT ══
-   One mark PER PORT, and a port is a CELL: a face carrying two of them draws
-   two marks a cell apart rather than one mark claiming to speak for both.
-   Left click takes it away again; right click held-and-released opens the
-   mode menu (design-bench.js's own ctx registry). */
+// one mark PER PORT, and a port is a CELL: a face carrying two draws two marks a cell apart
 const PORTG=CELL-4*DRAW_K;
-/* ONE WALK OVER THE PORTS, taken by both passes. The bench's placement marks
-   and the control room's isolation valves ask the same three questions of
-   every port - which part, which face, which cell - and a port whose part is
-   off the grid or whose cell is gone is skipped by both for the same reason. */
+// one walk over the ports, taken by both passes, so both skip a broken one for the same reason
 function eachPort(fn){
   for(const pid in D.ports){
     const port=D.ports[pid], p=partOf(port.p); if(!p) continue;
@@ -1612,22 +996,14 @@ function drawPortMarks(){
     const [x,y]=cellPos(c[0],c[1]), bx=x-PORTG/2, by=y-PORTG/2;
     const IN=portPath(p,f), col=IN ? (portEnd(p,f)==="a"?C.portA:C.portB) : C.metal;
     const nr=portNozzleRect(pid,f,bore[pid]);
-    // A PIPED PORT'S NOZZLE IS DRAWN BY THE RUN (pipeNozzles()), landing on
-    // this exact point. A BARE port draws its own here - the same mark, not a
-    // placeholder for it - so a fresh port reads as placed before any pipe
-    // reaches it. Asked of the CELL the pipe would occupy, never of a run
-    // count, so two connections sharing a port cannot double-draw the joint.
+    // asked of the CELL the pipe would occupy, never of a run count, so two connections cannot double-draw the joint
     const out=[c[0]+DIRV[f][0], c[1]+DIRV[f][1]];
     const piped=!!owner[out[0]+","+out[1]];
     if(!piped){ const [nx,ny]=portPos(pid); drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col); }
     const wd=push({x:bx,y:by,w:PORTG,h:PORTG,type:"port",pid});
-    // the JOINT lights up, not a square drawn near it - drawPortValves()' own
-    // rule, and the same rect it rings
+    // the JOINT lights up, not a square drawn near it: the same rect drawPortValves() rings
     if(hov(wd)) fillRect(nr.x+DRAW_K,nr.y+DRAW_K,nr.w-2*DRAW_K,nr.h-2*DRAW_K,col);
-    /* ONE WORD PER NOZZLE, IN THE NOZZLE. It used to be a plate in the margin
-       deduped to one per FACE, so a turbine's four steam nozzles carried a
-       single label sitting on the first of them - and the plate landed in the
-       lane the pipework runs through and read as a component. */
+    // one word per nozzle, IN the nozzle: a plate in the margin lands in the lane the pipework runs through
     const word = portWord(p,f);
     if(word) portWordDraw(pid,f,word,nr);
     const nm=partName(p), longWord=IN&&portWord(p,f,true);
@@ -1636,40 +1012,12 @@ function drawPortMarks(){
       "Click to take it away."+(IN?" Which side of "+nm+" it is on is the FACE it stands beside, so move it by taking it away and placing it on the other face.":""));
   });
 }
-/* ══ THE ISOLATION VALVE IN EVERY PORT, ON THE RUNNING PLANT ══
-   The control room's half of the same walk. Nothing is drawn for a port that
-   is open, deliberately: every nozzle on the board has one of these, so
-   marking them all would be marking nothing, and what the eye has to find is
-   the handful that are SHUT - and a SHUT PORT IS A RED PORT. The valve is a
-   fact about the nozzle, so it is said by colouring the nozzle (portColOf(),
-   above), not by parking a second glyph beside it: a mark that is not the port
-   is a mark you then have to associate with one.
-   ══ THE RING IS THE JOINT'S OWN CASING ══
-   nozzleRect(), the same four numbers drawNozzle() paints its dark casing on -
-   not the port's cell, and not arithmetic on CELL. A port is DRAWN on the
-   shell, so the cell it is filed under is a half cell away from the picture,
-   and a row on this grid is not CELL tall either. The ring lands exactly on
-   that casing: the mark is the port lighting up, not a box drawn near one.
-   The BORE is the run's, so a fat joint gets a ring its own size.
-   THE HIT BOX IS BIGGER THAN THE MARK, and that is deliberate - a joint is
-   about ten pixels across and a target that small is a fight, so the press is
-   taken PORT_RING clear of it all round. This is the one place on the mimic
-   where the two differ, and it errs the only way it may: everything the mark
-   covers is pressable.
-   The ring is AMBER, the board's one selection colour, so pointing at a port
-   reads the same as pointing at anything else; and it is DEFERRED to the last
-   pass (portRing, below) because a joint sits on a shell with pipework, value
-   tags and layer annotations landing all around it - drawn in place, the mark
-   went under the next thing painted.
-   A press goes through act("portShut") like any other input - see uiDown(). */
+// nothing is drawn for an OPEN port: every nozzle has one, so marking them all would be marking nothing
 const PORT_RING=2*DRAW_K;       // how far past the joint a press still counts
-/* ONE PORT IS HOVERED AT A TIME, so this is a rect and not a list. Set here,
-   spent by drawPlant() after every tag has gone down. */
+// one port is hovered at a time, so this is a rect; deferred to the last pass, or the mark goes under the next thing painted
 let portRing=null;
 function drawPortValves(L){
   portRing=null;
-  // the bore each joint was drawn at, off the runs that land on it - portBores()
-  // is the one answer, so the ring cannot be a size the joint is not
   const bore=portBores();
   eachPort((pid,p,f,c)=>{
     const shut=!portOpen(L,pid);
@@ -1681,18 +1029,11 @@ function drawPortValves(L){
              w:nr.w+2*PORT_RING, h:nr.h+2*PORT_RING};
     const wd=push({x:r.x,y:r.y,w:r.w,h:r.h,type:"portv",pid});
     if(hov(wd)) portRing=nr;
-    /* A port nothing is piped to has no run to draw its joint (pipeNozzles()),
-       so it draws its own - the same mark, in the same colour, which is now
-       red. Piped or not, a shut valve looks the same. */
+    // a port with no run has no joint drawn for it, so it draws its own: piped or not, a shut valve looks the same
     if(shut||wreck) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col,portCasOf(pid,L));
-    /* AND A WRECKED ONE WEARS AN X. Red alone is the SHUT valve, and the two
-       are not the same order at all: one is a position, the other is a nozzle
-       that will never take another. It stands in the WORD's place, because the
-       joint has room for one mark and which side of a pump a dead port was on
-       is not the thing to say about it. */
+    // a wrecked one wears an X, in the WORD's place: red alone is the SHUT valve, which is a position and not this
     if(wreck){
       ctx.save();
-      // red on the deck the empty bore now shows, not ink on a bright fill
       ctx.strokeStyle=C.red; ctx.lineWidth=1.5; ctx.lineCap="butt";
       const ix=nr.x+1.5, iy=nr.y+1.5, iw=nr.w-3, ih=nr.h-3;
       ctx.beginPath();
@@ -1701,28 +1042,15 @@ function drawPortValves(L){
       ctx.stroke();
       ctx.restore();
     }
-    /* AND THE WORD, on the running plant too. drawPortMarks() is the BENCH's
-       pass and runs behind `if(!L)`, so every nozzle on the control room was
-       unnamed - which is the screen where knowing a pump's suction from its
-       discharge actually decides something. portWordDraw() is the one
-       primitive, so the two screens cannot label a joint differently. */
+    // portWordDraw() is the one primitive, so the bench and the control room cannot label a joint differently
     const word=wreck?null:portWord(p,f);
     if(word) portWordDraw(pid,f,word,nr);
     TIP(r.x,r.y,r.w,r.h, portLabel(pid)+"  [ "+(wreck?"WRECKED":shut?"SHUT":"OPEN")+" ]",
       "The isolation valve in this nozzle. Every port has one, it costs nothing, and it commissions open. Shutting it takes the run landed here out of the network entirely - which is how a leak is cut out of a live plant, and equally how a loop is starved by mistake. "+(wreck?"This one is WRECKED: it is jammed where it stood and takes no orders until the repair party has it.":"Click to work it."));
   });
 }
-/* ══ THE RUN NOW BEING DRAGGED ══
-   The cells the release would stamp, dashed - a proposal, not a pipe yet, the
-   same dashing every other preview on this bench uses. */
-/* ══ THE GRIPS ON THE RUN UNDER THE HAND ══
-   Two ends and its waypoints in order. A FINISHED run wears them only when it
-   is selected - a plant carries twenty runs and forty dots on the deck is not
-   a gesture - but an UNFINISHED one wears them always: a loose end and a run
-   that could not be laid are both jobs left half done, and the grips are the
-   only handle on either.
-   The dot is the grip: pushed last, so it takes the press before the machine
-   or the pipe cell underneath it. */
+// a finished run wears grips only when selected; an unfinished one always, because they are its only handle
+// the dot is pushed last, so it takes the press before the machine or the pipe cell underneath it
 const RUNG=CELL*0.62;
 function drawRunGrips(){
   const selRid=D.runs[sel]?sel:null;      // `sel` IS the rid - see freeRid()
@@ -1735,16 +1063,14 @@ function drawRunGrips(){
     const r=D.runs[rid], err=runErr(rid), on=rid===selRid;
     const loose = portAtCell(r.a[0],r.a[1])==null || portAtCell(r.b[0],r.b[1])==null;
     if(!on && !err && !loose) continue;
-    /* A GRIP STANDING ON A GRIP IS A JOINT WAITING FOR THE RELEASE, not a
-       refusal: the cell is one two runs both want, so the router turns the
-       dragged one down and would otherwise report NO ROUTE in red for the whole
-       length of a gesture that is about to succeed. */
+    // a grip standing on a grip is a joint waiting for the release, not a refusal
     const join={a:runJoinAt(rid,"a"), b:runJoinAt(rid,"b")};
     const dup=r.pins.some((c,i)=>runPinDup(rid,i));   // ...and so is a waypoint about to collapse
-    /* WHERE IT WANTED TO GO, when it could not get there. The recipe is still
-       a real object with two ends; what is missing is the pipe. */
-    if(err && !join.a && !join.b && !dup){ ctx.save(); ctx.setLineDash([4*DRAW_K,4*DRAW_K]);
-      ctx.strokeStyle=C.red; ctx.lineWidth=1.4*DRAW_K; ctx.beginPath();
+    // an unfinished pipe is drawn as the line its recipe already is: red where the router refused, amber where it is not plumbed yet
+    const unlaid = !(r.cells && r.cells.length);
+    if(unlaid && !(err && (join.a || join.b || dup))){
+      ctx.save(); ctx.setLineDash([4*DRAW_K,4*DRAW_K]);
+      ctx.strokeStyle=err?C.red:C.amber; ctx.lineWidth=1.4*DRAW_K; ctx.beginPath();
       const path=[r.a].concat(r.pins,[r.b]);
       path.forEach((c,i)=>{ const [px,py]=cellPos(c[0],c[1]);
         if(i) ctx.lineTo(px,py); else ctx.moveTo(px,py); });
@@ -1755,10 +1081,9 @@ function drawRunGrips(){
       const jn=join[which];
       push({x:px-RUNG/2, y:py-RUNG/2, w:RUNG, h:RUNG, type:"runend", rid, which});
       TIP(px-RUNG/2, py-RUNG/2, RUNG, RUNG, jn?"PIPE END - JOINS HERE":(err?"PIPE END - "+err:"PIPE END"),
-        "Drag it where you want it. Put it on a cell beside a machine and a nozzle appears there; drop it on another pipe's end and the two become one pipe; anywhere else the end is loose."+
+        "Drag it where you want it. Put it on a cell beside a machine and a nozzle appears there; drop it on another pipe's end and the two become one pipe; anywhere else the end is loose. Right click it to take the whole pipe off."+
         (at||jn?"":" It is loose: nothing is piped to a machine at this end."));
-      // GREEN IS "THIS END HAS LANDED ON SOMETHING", and a joint is the other
-      // way an end stops being loose - no second hue for one meaning
+      // green is "this end has landed on something", and a joint is the other way an end stops being loose
       dot(c[0],c[1], (at||jn)?C.green:(err?C.red:C.amber));
     }
     r.pins.forEach((c,i)=>{ const [px,py]=cellPos(c[0],c[1]);
@@ -1769,15 +1094,7 @@ function drawRunGrips(){
       dot(c[0],c[1], dp?C.green:C.amber, String(i+1)); });
   }
 }
-/* ══ WHERE A DRAGGED MACHINE WOULD LAND ══
-   The move half of the gesture had no picture at all: the part stayed drawn in
-   the cell it came from and the only sign was its own outline going bright, so
-   a drop was aimed blind and a refusal was indistinguishable from a drop the
-   browser never delivered. This is the same proposal the pipe band is - dashed,
-   because nothing has moved yet - and it asks groupFits(), the one predicate
-   moveTo() will ask on release, so green means it WILL land and red means it
-   will not. Red is the whole reason a drop is refused: off the grid, or on top
-   of another machine. Reads gx/gy and writes nothing. */
+// asks groupFits(), the one predicate moveTo() will ask on release, so green means it WILL land
 function partGhost(){
   const d = ui.drag&&ui.drag.type==="part" ? ui.drag : null;
   if(!d || (d.gx===d.sx && d.gy===d.sy)) return;
@@ -1788,20 +1105,11 @@ function partGhost(){
     frame(r.x,r.y,r.w,r.h, ok?C.green:C.red); }
   ctx.restore();
 }
-/* ══ WHAT A FITTING STILL DRAWS ON THE PIPEWORK ══
-   Almost nothing, now that it is a component: the box, the symbol, the name
-   and the control strip are all the ordinary component loop's job. What is
-   left is the two READINGS: a throttle's share of the loop's head, beside the
-   valve in the pipe margin, and a relief valve's margin to its own lift point,
-   which stands INSIDE the box - squeezed to the cell, because the one number a
-   relief valve exists to watch belongs on the valve and nowhere else. */
+// all a fitting still draws on the pipework: a throttle's share of the head, and a relief valve's margin to its lift point
 function pipeFitMarks(L,net){
   if(!L) return;                      // both readings are live figures
   const anch=pipeAnchors(net);
-  /* SLOT 5 OF THE RUN'S OWN STACK, never a plate of this reading's own over
-     the valve's box - that is where the valve's NAME is. fitRunKey() is the
-     one answer the allocator already reserved the line against. A valve with
-     no pipe on it at all has no stack to write into and keeps its own tag. */
+  // slot 5 of the run's own stack, the line the allocator reserved; a valve with no pipe keeps its own tag
   const put=(id,label,col,cx,yTop)=>{
     const key=fitRunKey(id,net), a=key!==null && anch[key];
     if(!a){ pipeTag(cx,yTop,label,col); return; }
@@ -1811,29 +1119,15 @@ function pipeFitMarks(L,net){
     if(p.role!=="fitting") continue;
     const id=p.id, mode=fitModeOf(id), r=prect(p), cx=r.x+r.w/2;
     if(mode==="relief"){
-      /* HOW FAR PRESSURE STILL HAS TO CLIMB before this valve lifts itself,
-         signed, in the units the pressurizer's own gauge reads. A relief
-         valve is the one instrument on the plant whose whole job is a
-         THRESHOLD, and it was the only one not saying where that threshold
-         was. Negative means pressure is past the setpoint: armed, it is
-         lifting; bypassed or blocked, that is the number telling you nothing
-         is going to. Against THIS valve's own lift point, never a plant-wide
-         constant. */
+      // how far pressure still has to climb, signed, against THIS valve's own lift point
       const marg = reliefSet(id).lift - reliefAtP(L,id);
-      /* IT STANDS UNDER THE GLYPH, so the room it has is what the bowtie
-         leaves - a one-cell box runs out of height long before width. */
+      // it stands under the glyph, so the room it has is what the bowtie leaves
       squeezeTxt((marg>=0?"+":"")+marg.toFixed(2), cx, r.y+r.h-2*DRAW_K, r.w-2*DRAW_K,
         {size:8*DRAW_K,align:"center",
          maxh:Math.max(2*DRAW_K,r.h/2-fitGlyphWH(id,r.w,r.h).fh/2-3*DRAW_K),
          color:marg<0?C.red : marg<reliefRefP(id)*0.02?C.amber : C.ink2});
     } else if(mode==="throttle"){
-      /* THE DIFFERENTIAL IS WHAT A THROTTLE IS FOR. Position says what you
-         asked for; only the drop says what it cost, and without it the knob
-         is one whose effect has to be inferred from a flow meter three
-         components away. Off the solve's own node heads (netDrops()), as a
-         share of the whole loop's head, so it is comparable between a long
-         leg and a short one. Its own edge, named once (fitEdgeKey(),
-         pipenet.js), never a run key spelled out here. */
+      // a share of the whole loop's head, so it is comparable between a long leg and a short one
       const dk = fitEdgeKey(id);
       if(pipeDrop[dk]!=null)
         put(id, (pipeDrop[dk]*100).toFixed(0)+"% dP",
@@ -1842,16 +1136,7 @@ function pipeFitMarks(L,net){
   }
 }
 
-// readoutsFor() is DATA - rows of [key,value,colour,tip,band,signedBar] - the
-// ONE description of what a component is worth watching, consumed by the
-/* control room's HTML rail (fieldRowsSync() in inspector.js).
-   A PLANT-WIDE NUMBER BELONGS TO ONE PANEL. The rail builds a well per PART, so
-   a row about the whole plant printed on an instanced panel is printed once per
-   instance - four generators meant four NAT CIRCs. Each of these now has a
-   single singleton home (INVENTORY/FATIGUE/NAT CIRC on the reactor); they stay
-   helpers because the band and the sentence are still written once. */
-// the BAND is in tonnes too, off the commissioned charge: a scale in per cent
-// under a figure in tonnes is two units for one row
+// readoutsFor() is DATA - rows of [key,value,colour,tip,band,signedBar] - and a plant-wide number belongs to ONE panel
 const rowInv=s=>["INVENTORY",(invNodesKg(s)/1000).toFixed(1)+" t",
   band(invNodesKg(s)/1000,P.invKg0*.8/1000,P.invKg0/1000,
     [[P.invKg0*.95/1000,C.red,"LEAKING"],[P.invKg0*.985/1000,C.amber,"LOSING"],
@@ -1861,35 +1146,20 @@ const rowInv=s=>["INVENTORY",(invNodesKg(s)/1000).toFixed(1)+" t",
 const rowFat=s=>["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",
   band(s.fatigue,0,100,[[50,C.cyan,"SOUND"],[80,C.amber,"WORN"],[100,C.red,"SPENT"]],{dp:0}),
   "Permanent metal damage from cold water hitting hot steel, mostly from emergency injection. It never resets, and the vessel bursts lower for every point of it."];
-/* A LEVEL IS THIS GENERATOR'S. The plant-wide sglMin() form is gone: the rail
-   carries one well per part, so an aggregate printed on the feed panel stood
-   beside the per-machine rows it was a minimum of. */
+// a level is THIS generator's, never a plant-wide minimum
 const rowSgl=(s,id)=>{ const v=sgLvl(s,id);
   return ["SG LEVEL",v.toFixed(1)+" %",
   band(v,0,100,[[25,C.red,"LOW"],[40,C.amber,"LOW"],[100,C.cyan,"NORMAL"]],{dp:0}),
   "Water in the steam generator. Under 25% it is boiling dry and the core is losing its heat sink."]; };
-// IN KILOGRAMS, against the same reference CORE FLOW is read on: the solved
-// thermosiphon is a real flow, so it is stated as one
-// FULL SCALE IS THE WHOLE REFERENCE AND A FIFTH, not a fifth of it: a sodium
-// loop thermosiphons at 1.14 of its own reference flow and pegged a 20 % scale
+// in kilograms, against the same reference CORE FLOW is read on; full scale is the reference and a fifth, because a sodium loop thermosiphons past its own
 const rowNat=s=>{ const ref=P.netRef>0?P.netRef:0, q=s.nat*ref;
   return ["NAT CIRC",q.toFixed(0)+" kg/s",
   band(q,0,ref*1.2,[[ref*.02,C.ink2,"NONE"],[ref*1.2,C.green,"ESTABLISHED"]],{dp:0}),
   "Flow that buoyancy alone is making. It builds once the loop is hot, and it is all you have with the pumps dead. Generator height over the core sets it."]; };
 const T_TRIP="What tripped the plant most recently. It stays here after a reset, so you can still see what you were fighting.";
 
-// the key is the field on s.parts, except "net" which is the sum the sim already keeps
-/* [label, s.parts key, tip, colour, limit]. ONE table: the ledger rows in
-   readoutsFor(), the stack segments in rhoViz() and its key all read this, so a
-   term cannot be given a colour in the picture and a different one in the list.
-   Each colour is the thing it names - fuel red, coolant cyan, graphite brown.
-
-   `limit` is the pcm marks a row carries, and ONLY THE NET HAS ANY. A doppler
-   or a boron figure has no line you must not cross - it is just where that term
-   stands - and inventing one would teach a limit the plant does not have. Beta
-   is the one real line here: past it nothing on the ship is fast enough. (The
-   xenon pit is a limit too, but it sits past RHO_BAR, so on this scale the mark
-   would land on the end cap and say nothing. The VITALS bar carries it.) */
+// [label, s.parts key, tip, colour, limit]. ONE table, so a term cannot wear one colour in the picture and another in the list
+// `limit` is the pcm marks a row carries, and only the NET has any
 const RHO_ROWS=[
  ["RODS","rod","Negative reactivity from the inserted control rods. The deeper they go the stronger this gets, but not evenly: the rods bite hardest around mid-travel.",()=>C.metal],
  ["DOPPLER","dop","Feedback from hot fuel. As fuel heats it absorbs more neutrons, pushing power back down. Instant, automatic and always stabilising - this is what stops a runaway before a human could react.",()=>C.red],
@@ -1903,57 +1173,21 @@ const RHO_ROWS=[
  ["NET RHO","net","The sum of everything above. Zero means steady power, positive means it is climbing, negative means it is falling. The marks are your fuel's beta: past one of them the reactor is prompt critical and nothing can stop it in time.",()=>C.amber,()=>[-P.BETA*1e5,P.BETA*1e5]],
 ];
 const RHO_TERMS=RHO_ROWS.filter(r=>r[1]!=="net");
-/* full deflection of a ledger bar, pcm. Every term shares it, or the bars would
-   be eight different scales sitting in one column pretending to be comparable. */
+// full deflection of a ledger bar, pcm; every term shares it, or the bars are eight scales in one column
 const RHO_BAR=2600;
-/* the tightest scale either trace may take - the smallest move of that quantity
-   worth drawing, so a settled plant reads settled instead of magnified */
+// the smallest move worth drawing, so a settled plant reads settled instead of magnified
 const RHO_TRACE_MIN=150, TAVG_TRACE_MIN=1;
 
-/* ══ WHICH VESSEL THE TWO BALANCES ARE READ OFF ══
-   Both of them - reactivity AND heat - are core-shaped, and both took the
-   PLANT's scalars, which step.js mirrors off primaryCore() (`s.parts`,
-   `s.rho`): on two units the second one's reactivity was simply not drawable
-   and its heat was averaged into a figure labelled as if it were the plant's.
-   rhoViz keyed off `coreOf(sel)`, so selecting a pump silently reverted it to
-   the first vessel with nothing on the panel saying so.
-   TREND.unit's twin, and a view state for the same reason: null is the plant,
-   the control room's tab row is the one writer, and nothing here rides S. */
+// which vessel the two balances are read off: null is the plant, and the control room's tab row is the one writer
 const CRUNIT={id:null};
 const crUnits=()=>{ const ids=typeof coreIds==="function"?coreIds():[]; return ids.length>1?ids:[]; };
-/* the vessel actually being read: a tab naming one this design no longer has
-   falls back to the plant rather than drawing a bag that is not there */
+// a tab naming a vessel this design no longer has falls back to the plant
 const crUnit=()=>{ const id=CRUNIT.id;
   return id && S && S.coreBy && S.coreBy[id] ? id : null; };
-/* THE TRACE UNDER EACH BALANCE READS THE SAME VESSEL THE BARS DO. trends.js
-   already keeps one ring per vessel for a vessel-shaped channel and names it
-   "rho:core1"; TREND.unit is the SCENARIO chart's own pick, so this widget
-   addresses the ring by name rather than reaching for a selector that belongs
-   to another screen and is never set on this one. */
+// addressed by ring name, never TREND.unit, which is the SCENARIO chart's own pick
 const crCh=k=>{ const id=crUnit(); return id && crUnits().length ? k+":"+id : k; };
 
-/* ═══════════ WHAT IS HAPPENING IN REACTIVITY, AND WHERE IT IS GOING ═══════════
-   The ledger below this says what every term IS. Eight signed numbers do not
-   say which of them is winning, and that is the only question the operator
-   actually has. This answers it in three registers, top to bottom:
-
-     THE BALANCE - one stacked bar about zero. Everything holding the reactor
-     down stacks to the left, everything pushing it up to the right, each term
-     its own colour. The two arms are drawn on ONE scale, so the longer arm is
-     genuinely the stronger side and the picture is a pair of scales.
-
-     THE NET - the same sum as a single needle on a scale marked in BETA, which
-     is the number that decides whether this is a transient or a prompt
-     excursion. A ghost caret sits where the net was five seconds ago and an
-     arrow runs from it to now: that is "where it is going", measured rather
-     than guessed.
-
-     THE LAST MINUTE - net rho against its own zero line. A term can be flat and
-     still be losing, and only the trace shows that.
-
-   Drawn through hostPaint(), so x,y start at 0,0 in its own canvas - see the
-   note on HOST_K. Everything is laid out off `h` rather than pinned, because
-   the rail width is the player's to change. */
+// three registers: the balance, the net against beta, and the last minute; laid out off `h`, because the rail width is the player's
 function rhoViz(x,y,w,h){
   const s=coreSeen(S,crUnit()||primaryCore()); if(!s) return;
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
@@ -1963,45 +1197,19 @@ function rhoViz(x,y,w,h){
   const vals=RHO_TERMS.map(r=>({lab:r[0],v:s.parts[r[1]],col:r[3]()}));
   let neg=0,pos=0;
   for(const t of vals){ if(t.v<0) neg-=t.v; else pos+=t.v; }
-  /* ONE scale for both arms, and it is CONTINUOUS in the total.
-
-     A half-decade quantiser set it before, and a hard quantiser is the failure
-     pipeDisplay() exists for: the step IS the snap. Full scale was a ceiling to
-     the next mag/2, so one pcm of wobble across 5000 took the axis to 5500 and
-     every segment in the bar changed width in a single frame with nothing in
-     the plant having moved. Damping that target only trades the snap for a lag,
-     and a lagging scale is worse than a snapping one here: a segment is placed
-     at acc/full, so the instant full sits under the true total the bar and its
-     labels run outside the widget.
-
-     Headroom is ADDITIVE, not a factor. A factor pins the longer arm at the same
-     length whatever the total is, which throws away the one thing the axis label
-     is left saying. Adding a constant compresses instead: a few hundred pcm of
-     imbalance draws short, thousands draws nearly full, and the ratio between the
-     two arms - the actual question - is untouched either way, because both arms
-     divide by the same number. */
+  // one scale for both arms, continuous in the total; headroom is ADDITIVE, or the longer arm pins whatever the total is
   const RHO_HEAD=800;
   const raw=Math.max(neg,pos,1), full=raw+RHO_HEAD;
 
-  /* ── how tall everything gets ──
-     Four registers stacked in one column read as one solid block when every
-     seam sits at its minimum, which is what a pinned pitch gave at any height.
-     RHOVIZ_MIN is the height where nothing can give; whatever the row has over
-     that is shared out - a little to each of the three seams, a little to the
-     two bars, and the remainder to the trace. Shrink the row and it walks back
-     to the old pinned layout instead of overflowing. */
+  // whatever the row has over its minimum is shared out: a little to each seam, a little to the bars, the rest to the trace
   const KCOL=4, krows=Math.ceil(vals.length/KCOL);
   const slack=Math.max(0,h-(88+krows*8));
   const gap=Math.min(6,slack*.14), grow=Math.min(4,slack*.07);
 
   txt("REACTIVITY BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
-  /* the GEOMETRY is continuous, the LABEL is not: printing full scale to the pcm
-     would hunt its last digits on a plant that is standing still. 50 pcm is under
-     a per cent of any axis this widget draws, so the caption is round and steady
-     and still describes the bar under it. */
+  // the GEOMETRY is continuous, the LABEL is not: to the pcm it would hunt its last digits on a standing plant
   txt("+/-"+(Math.round(full/50)*50).toFixed(0)+" pcm",R,y+8,{size:7,sp:.6,align:"right",color:C.bright});
 
-  /* ── the balance ── */
   const by=y+13+gap, bh=14+grow;
   fillRect(L,by,R-L,bh,C.well);
   const seg=(from,dir)=>{
@@ -2012,8 +1220,7 @@ function rhoViz(x,y,w,h){
       const a=cx+dir*(acc/full)*span, b=cx+dir*((acc+m)/full)*span;
       const x0=Math.min(a,b), wd=Math.abs(b-a);
       fillRect(x0,by,Math.max(.6,wd),bh,t.col);
-      // the name only where it fits: a clipped label is worse than the colour
-      // key below, which says the same thing and always fits
+      // the name only where it fits: the colour key below says the same thing and always does
       if(wd>tw(t.lab,{size:6,sp:.4})+6)
         txt(t.lab,(a+b)/2,by+bh/2+2,{size:6,sp:.4,align:"center",color:C.inkOnLit});
       acc+=m;
@@ -2023,16 +1230,11 @@ function rhoViz(x,y,w,h){
   seg(cx,-1); seg(cx,1);
   frame(L,by,R-L,bh,C.edge);
   fillRect(cx,by-2,1,bh+4,C.bright);
-  // fitTxt and not txt: these carry a figure that has no ceiling, so the string
-  // grows with the plant. Given the room either side of the zero rule, a long
-  // one steps down the ladder instead of running off the widget.
+  // fitTxt and not txt: these figures have no ceiling, so a long one steps down the ladder
   fitTxt("HOLD DOWN "+neg.toFixed(0),cx-4,by+bh+8,span-6,{size:6,sp:.5,align:"right",color:C.blue});
   fitTxt(pos.toFixed(0)+" PUSH UP",cx+4,by+bh+8,span-6,{size:6,sp:.5,color:C.red});
 
-  /* ── the key ──
-     TWO ROWS. Seven across is about 30 units a column at a stock rail width,
-     and MODERATOR alone is 34 at the smallest size the ladder has - so a single
-     row could only ever be a row of labels overwriting each other. */
+  // two rows: one across is a row of labels overwriting each other at a stock rail width
   const kw=(R-L)/KCOL, ky=by+bh+13+gap;
   vals.forEach((t,i)=>{
     const kx=L+(i%KCOL)*kw, kyy=ky+((i/KCOL)|0)*8;
@@ -2040,7 +1242,6 @@ function rhoViz(x,y,w,h){
     fitTxt(t.lab,kx+6,kyy+4,kw-8,{size:6,sp:.2,color:C.ink2});
   });
 
-  /* ── the net, on a scale of beta ── */
   const ny=ky+krows*8+5+gap, nh=13+grow, bSpan=Math.max(beta*1.6,Math.abs(s.rho)*1.1,1);
   const atN=v=>cx+clamp(v/bSpan,-1,1)*span;
   fillRect(L,ny+nh/2,R-L,1,C.edge2);
@@ -2056,8 +1257,7 @@ function rhoViz(x,y,w,h){
   fillRect(Math.min(cx,nx),ny+nh/2-2,Math.max(1,Math.abs(nx-cx)),4,nCol);
   fillRect(nx-1,ny-2,3,nh+4,nCol);
   fillRect(cx,ny-2,1,nh+4,C.bright);
-  /* where it was five seconds ago, and an arrow from there to here. hist is
-     sampled every SAMP_TICKS, so the lookback is a sample count, not a guess. */
+  // hist is sampled every SAMP_TICKS, so the five-second lookback is a sample count
   const back=Math.round(5/(SAMP_TICKS*0.02));
   if(hlen>back+1){
     const was=chAt("rho",hlen-1-back), wx=atN(was);
@@ -2072,26 +1272,17 @@ function rhoViz(x,y,w,h){
   txt((s.rho>=0?"+":"")+s.rho.toFixed(0)+" pcm NET",L,ny+nh+8,{size:7,sp:.6,color:nCol});
   txt("BETA "+beta.toFixed(0),R,ny+nh+8,{size:6,sp:.6,align:"right",color:C.ink2});
 
-  /* ── the last minute of it ── */
   vizTrace(L,R,ny+nh+12+gap,Math.max(16,y+h-(ny+nh+12+gap)-2),crCh("rho"),C.amber,0,"",RHO_TRACE_MIN,"pcm");
 }
-/* ══ THE LAST MINUTE, ABOUT A ZERO THAT DOES NOT MOVE ══
-   Both balances end in the same picture, so it is one function - and the ZERO
-   LINE IS THE MIDDLE OF THE BOX, always. An auto-scaled window put the line
-   wherever the last minute happened to sit, so a trace that had not crossed
-   zero read as if it were sitting on it. The span is the worst excursion either
-   way, so the trace moves ABOUT the line and the line never moves.
-   `zero` is what that quantity's own nothing is: 0 pcm for reactivity, the
-   commissioned T-avg for temperature. */
+// the zero line is the middle of the box, always: the span is the worst excursion either way, so the line never moves
+// `zero` is that quantity's own nothing: 0 pcm for reactivity, the commissioned T-avg for temperature
 function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
   fillRect(L,ty,R-L,th,C.well); frame(L,ty,R-L,th,C.edge);
   const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
   if(N<=2){ txt("COLLECTING DATA",(L+R)/2,ty+th/2+2,{size:7,sp:1.4,align:"center",color:C.ink2}); return; }
   let dev=0;
   for(let i=0;i<N;i++) dev=Math.max(dev,Math.abs(chAt(ch,hlen-N+i)-zero));
-  /* the floor is the smallest deviation of this quantity WORTH LOOKING AT, so a
-     channel standing still draws flat on a stated scale rather than having its
-     own last decimal blown up over the full height of the box. */
+  // the floor is the smallest deviation worth looking at, so a channel standing still draws flat
   const half=Math.max(dev*1.2,floor);
   const zy=ty+th/2;
   ctx.save(); ctx.setLineDash([2,3]);
@@ -2109,11 +1300,7 @@ function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
 }
 const fmtSpan=v=>v>=10?v.toFixed(0):v>=1?v.toFixed(1):v.toFixed(2);
 const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. The trace is the last minute of it against its own zero.";
-/* [label, HEATBAL/s key, tip, colour]. The same one-table arrangement RHO_ROWS
-   has, and for the same reason: the ledger rows and the bar segments read it,
-   so a term cannot be one colour in the picture and another in the list.
-   SOURCES ONLY - the sinks are generated off the machines that are actually
-   fitted (heatSinks()), never typed here. */
+// [label, HEATBAL/s key, tip, colour]. SOURCES ONLY: the sinks come off the machines actually fitted
 const HEAT_ROWS=[
  ["PROMPT FISSION","prompt","Heat from the chain reaction itself. It follows power instantly and it is the only term a scram takes away.",()=>C.red],
  ["DECAY 7 s","d0","Short-lived fission products, half-life about 7 seconds. The first thing to fade after a trip, and the largest of the four while it lasts.",()=>C.amber],
@@ -2121,17 +1308,7 @@ const HEAT_ROWS=[
  ["DECAY 28 min","d2","Half-life about 28 minutes. Long after the plant looks shut down, this is still worth around one per cent of rated power.",()=>C.metal],
  ["DECAY 8.8 h","d3","Half-life about 8.8 hours. On any timescale this ship cares about it is a floor that never goes away - the heat you must keep removing forever.",()=>C.bright],
 ];
-/* Sink rows off the drawing. A generator behind an intermediate exchanger does
-   NOT charge the core - the exchanger's pot does, and it is the pot's crossing
-   that step() puts into qTot. Same split, asked the same way, so these rows sum
-   to `removal` exactly rather than to something that looks like it. */
-/* WHICH MACHINES ARE THIS VESSEL'S SINKS, asked of the drawing: a stage charges
-   a core when its NEAR side stands on that core's own circuit (sgPrimCirc(),
-   layout.js). Two units on two loops each see their own generators; two on one
-   loop both see all of them, which is the truth about a shared loop and not a
-   case anybody has to write. `cid` null is the plant and takes everything.
-   Not loopOf() - a core belongs to no numbered loop (they hang off it), so that
-   predicate answered null===null and gave every vessel an empty removal arm. */
+// a stage charges a core when its NEAR side stands on that core's own circuit; `cid` null is the plant and takes everything
 const heatOnUnit=(cid,id)=>!cid || sgPrimCirc(id)===coreCircOf(cid);
 function heatSinks(cid){
   const out=[], rated=heatRated(cid)*1000;
@@ -2148,35 +1325,15 @@ function heatSinks(cid){
   }
   return out;
 }
-/* THE SCALE IS THE RATING OF WHAT IS BEING READ. Every figure on this widget is
-   a share of rated, so a vessel's own picture has to be a share of ITS rating -
-   over the plant's, one unit of two reads half the power it is making. */
+// a share of ITS OWN rating: over the plant's, one unit of two reads half the power it is making
 const heatRated=cid=>{ const K=cid&&P&&P.cores&&P.cores[cid];
   return K ? K.rated : (P?P.rated:0); };
-/* full deflection of a heat ledger bar, share of rated power */
+// full deflection of a heat ledger bar, share of rated power
 const HEAT_BAR=0.10;
-/* the smallest K/s on T-avg worth a reading - 0.6 K a minute - and it is the
-   needle's deadband and its green band both, so the two cannot disagree. */
+// the needle's deadband and its green band both, so the two cannot disagree
 const HEAT_DEAD=0.01;
 
-/* ═══════════ WHAT THE CORE IS MAKING, AND WHETHER IT IS LEAVING ═══════════
-   The chain reaction is not the heat. A scrammed core still makes decay heat on
-   four clocks that no control on this ship touches, and POWER says nothing
-   about it - the panel reads 4 % while the core makes 6.6 %. Three registers,
-   the same three rhoViz() uses:
-
-     THE BALANCE - one stacked bar about zero. Everything the core is MAKING
-     stacks right, everything a generator or an exchanger is TAKING stacks left,
-     both on one scale, so the longer arm is the side that is winning. A plant
-     whose generators have boiled dry draws an empty left arm, which is the
-     whole picture in one glance.
-
-     THE NET - s.dTavg as a needle about zero, in K/s. That is the number which
-     answers "am I cooling down", and it is the line the bar is a decomposition
-     of.
-
-     THE LAST MINUTE - T-avg, the integral of that needle. A balance can read
-     near zero and still be sitting 80 K high. */
+// the same three registers rhoViz() uses: the balance, the net in K/s, and the last minute of T-avg
 function heatViz(x,y,w,h){
   const cid=crUnit(), s=cid?coreSeen(S,cid):S; if(!s) return;
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
@@ -2226,7 +1383,6 @@ function heatViz(x,y,w,h){
     fitTxt(t.lab,kx+6,kyy+4,kw-8,{size:6,sp:.2,color:C.ink2});
   });
 
-  /* ── the net, in K/s ── */
   const ny=ky+krows*8+5+gap, nh=13+grow;
   // the raw derivative spikes a tenth of a K/s on a settled loop; needle, colour and digits read one eased figure
   const dT=dispEase("heat:dT:"+(cid||"plant"),s.dTavg||0,HEAT_DEAD,4);
@@ -2242,30 +1398,13 @@ function heatViz(x,y,w,h){
   txt(rated?(made*rated).toFixed(0)+" MWt MADE":"NOT COMMISSIONED",R,ny+nh+8,
     {size:6,sp:.6,align:"right",color:C.ink2});
 
-  /* ── the last minute of T-avg: the integral of the needle above ──
-     Temperature's zero is the plant's own commissioned T-avg, so the centre
-     line means "where this loop was built to sit". */
+  // temperature's zero is the plant's own commissioned T-avg, so the centre line is where this loop was built to sit
   const ty=ny+nh+12+gap;
   vizTrace(L,R,ty,Math.max(16,y+h-ty-2),crCh("tavg"),C.cyan,
     (cid&&P&&P.cores&&P.cores[cid])?P.cores[cid].Tref:(P?P.Tref:0),"T-AVG ",TAVG_TRACE_MIN,"K");
 }
-/* ═══════════ WHERE THE CORE IS HURT ═══════════
-   FUEL DAMAGE is one percentage, and a percentage cannot say the one thing an
-   operator needs: WHICH PART. A centre channel with its clad gone and a
-   uniformly warm core read the same number, and they are not the same
-   accident. Two registers:
-
-     THE MAP - the 14x10 field revolved to 27 columns, each cell coloured by
-     the worst thing that has happened to it, with the node carrying the least
-     thermal margin ringed. It is the same geometry the reactor symbol draws,
-     off the same coreCellGeom(), so a cell in one is a cell in the other.
-
-     THE LEDGER - what share of the core is in each stage, as one stacked bar,
-     with the legend generated from FAIL. Adding a stage is adding a row there.
-
-   Drawn through hostPaint(), so x,y start at 0,0 - see the note on HOST_K. */
-// cid comes from the panel this canvas is IN, not from sel: a rail panel is
-// painted whether or not its machine is the selected one
+// the map off the same coreCellGeom() the reactor symbol draws, so a cell in one is a cell in the other
+// cid comes from the panel this canvas is IN, not from sel: a rail panel is painted whether or not its machine is selected
 function dmgViz(x,y,w,h,cid){
   const s=coreSeen(S,cid); if(!s||!s.nDmg) return;
   const L=x+2, R=x+w-2;
@@ -2273,8 +1412,7 @@ function dmgViz(x,y,w,h,cid){
   txt("FUEL DAMAGE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
   txt(s.dmg.toFixed(1)+" % CLAD",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
 
-  /* the map takes whatever is left after the ledger and its legend, so the row
-     can be made taller or shorter without either register overflowing */
+  // the map takes whatever is left after the ledger and its legend
   const krows=Math.ceil(FAIL.length/2);
   const foot=34+krows*8;
   const my=y+13, mh=Math.max(30,y+h-my-foot);
@@ -2292,8 +1430,7 @@ function dmgViz(x,y,w,h,cid){
       if(ff<.3) fillRect(cx-1,cy-1,2,2,C.edge2);
     }
   }
-  /* the least margin anywhere, ringed - it is where the NEXT cell to fail is,
-     which is the only forward-looking thing this picture has to say */
+  // the least margin anywhere, ringed: it is where the NEXT cell to fail is
   { const cx=g.cx((XNR-1)+s.dnbrRing), cy=g.cy(s.dnbrLev);
     ctx.beginPath(); ctx.arc(cx,cy,Math.min(g.cw,g.ch)*.42,0,7);
     ctx.strokeStyle=C.bright; ctx.lineWidth=.8; ctx.globalAlpha=.8;
@@ -2302,7 +1439,6 @@ function dmgViz(x,y,w,h,cid){
   txt("MIN NODE DNBR "+s.dnbrMin.toFixed(2)+" @ R"+s.dnbrRing+"/EL"+s.dnbrLev,
     L,my+mh+8,{size:6,sp:.4,color:C.ink2});
 
-  /* ── the ledger ── */
   const st=fuelStages(s), by=my+mh+14, bh=12;
   fillRect(L,by,R-L,bh,C.well);
   let acc=0;
@@ -2325,24 +1461,11 @@ function dmgViz(x,y,w,h,cid){
 }
 const DMGVIZ_TIP="Where the core is hurt, cell by cell, on the same picture the reactor symbol draws. Amber is cladding that has burst, red is cladding the steam has eaten through, violet is fuel a power pulse has blown apart inside the channel, and the pale cells are fuel that is actually molten. The ring marks the node with the least thermal margin left - that is where the next failure happens. Under it, what share of the core is in each stage.";
 const HEATVIZ_TIP="The core's whole heat balance. Everything it is MAKING stacks right - prompt fission plus four groups of decay heat on their own clocks - and everything a generator or exchanger is TAKING stacks left, both on one scale, so the longer arm is the side that is winning. A scram takes the prompt segment away and nothing else, which is why a shut-down core still needs a sink. Under it the net as K/s on T-avg, and the last minute of T-avg itself.";
-/* A DEMAND IN TRANSIT IS NOT A CAUTION: amber says the machine is walking to
-   where it was asked, which is the plant obeying - cautStep() reads MOVING. */
+// a demand in transit is not a caution: amber says the machine is walking to where it was asked
 const MOVING=new Set(["BORON DEMAND","TILT DEMAND","SPEED DEMAND","LOAD DEMAND"]);
 const movingCol=(dem,act,tol)=>Math.abs(dem-act)>tol?C.amber:C.ink2;
-/* ══ ONE SCALE FOR A CIRCUIT'S PRESSURE ══
-   The pressurizer states it about its own vessel and the reactor states it
-   about the loop it stands on, and it is ONE quantity with ONE set of limits:
-   where the protection trips high and low, and the two bands either side of
-   the setpoint the plant is steered in. Two copies of these numbers is how the
-   two panels come to alarm at different pressures.
-   Everything is a fraction of holdSetP() rather than a figure, because a
-   sodium loop is held at 0.2 MPa and a water loop at 15.5, and the shape of
-   the scale is the same on both. */
-/* The coloured bands are fractions of this loop's own setpoint, because they
-   are the SHAPE of the scale. The two limit marks are the protection system's
-   real trip points and are read off the channel (rpsSetOf(), step.js) - spelt
-   out here a second time was exactly how the two panels came to alarm at
-   different pressures. */
+// one scale for a circuit's pressure: fractions of holdSetP(), because the shape is the same at 0.2 MPa and 15.5
+// the two limit marks are read off the channel, never spelt out here, or two panels alarm at different pressures
 const loopPBand=ci=>{ const set=holdSetP(ci);
   return v=>band(v,set*.80,set*1.15,
     [[set*0.86,C.red,"LOW"],[set*0.935,C.amber,"LOW"],[set*1.05,C.cyan,"NORMAL"],
@@ -2350,34 +1473,20 @@ const loopPBand=ci=>{ const set=holdSetP(ci);
     {dp:2,lim:rpsLive()?[[rpsSetOf("php",0),"HI"],[rpsSetOf("plp",0),"LO"]]:null}); };
 function readoutsFor(p,s){
   const id=p.id, R=[];
-  // a setpoint only exists while something is watching it: no mark drawn with
-  // no protection fitted or bypassed - the overpower mechanic as a picture
+  // a setpoint only exists while something is watching it
   const trip=(v,l)=>rpsLive()?[[v,l]]:null;
-  // a row hands in a colour OR a band; a band's colour comes off it, so the
-  // figure and its tooltip strip cannot disagree about where the limit is.
-  // `bar` is an optional centre-zero bar, {f:-1..1, full}, where `full` is what
-  // either end of the strip is worth - drawn by fieldRowsSync() (inspector.js).
+  // a row hands in a colour OR a band; `bar` is an optional centre-zero bar, {f:-1..1, full}
   const add=(k,v,c,tip,bar)=>{
     const g=(c&&typeof c==="object")?c:null;
     R.push([k,v, g?bandCol(g):(c||C.cyan), tip, g, bar]);
   };
-  /* ══ THE SAME MACHINE, GROUPED THE SAME WAY IT IS ON THE BENCH ══
-     A bench panel is titled sections in a grid and this list was one flat
-     column, so the two screens read as two instruments about one box. The rows
-     and their order are unchanged: these only say where one group of them ends
-     and the next begins, and fieldRowsBuild() (render/inspector.js) lays them
-     out in the bench's own .db-grid off them. */
+  // a section only says where one group of rows ends and the next begins; the row order is unchanged
   const secRow=t=>R.push({sec:t});
-  // a fitting is a part like any other, and what it is worth watching depends
-  // on its mode rather than on its id - see readoutsForFit() below
+  // what a fitting is worth watching depends on its mode, never on its id
   if(p.role==="fitting") return readoutsForFit(id,s);
   const K=(P&&P.cores&&P.cores[coreOf(id)])||P; if(p.role==="core"||p.role==="rods") s=coreSeen(s,coreOf(id));
   if(p.role==="core"){
-    /* POWER IS COLOURED BY POWER. It used to be forced red whenever DNBR fell
-       under 1.30, which put a red 85 % on the panel - a number reading NORMAL
-       against its own band and its own trip mark, in the colour that means
-       overpower. The margin has its own row directly below and its own caution;
-       borrowing this one's colour said it twice and lied once. */
+    // power is coloured by power: DNBR has its own row below and its own caution
     secRow("POWER");
     add("POWER",(s.n*100).toFixed(1)+" %",
       // amber at 105, not at 100: a salt plant rests at 102 % of its own rating
@@ -2386,11 +1495,7 @@ function readoutsFor(p,s){
       "Heat the core is making, as a share of what it is rated for. This is the chain reaction alone - decay heat is on top of it, and TOTAL MADE below is the two together. The real ceiling is DNBR, not this number.");
     add("THERMAL",(s.n*K.rated).toFixed(0)+" MWt",null,
       "The same power in megawatts of heat: the rating times the share above.");
-    /* WHAT THE CORE MAKES WITH THE CHAIN REACTION STOPPED. The ledger below
-       states it four times, once per decay group in megawatts, and never as
-       the one number an operator scrams on: this is the heat that is still
-       there a second after the rods drop, and it is why a shut-down core still
-       needs a sink. */
+    // the one number an operator scrams on; the ledger below states it four times, once per group
     add("DECAY HEAT",(s.decay*100).toFixed(2)+" %",
       s.decay*K.rated>0?C.amber:C.ink2,
       "Heat from fission products, as a share of rating. It does not scram: right after a trip it is around 6 % of full power and it takes hours to fall away. TOTAL MADE below is this plus the chain reaction.");
@@ -2398,25 +1503,12 @@ function readoutsFor(p,s){
       add("PERIOD", fin?per.toFixed(0)+" s":"INF",
         fin&&per>0&&per<30 ? C.red : fin&&per>0&&per<80 ? C.amber : C.cyan,
         "Seconds for power to multiply by 2.7 times at the rate it is moving right now. INF means steady. A short POSITIVE period is power running away from you, and under about ten seconds nothing you do will catch it."); }
-    /* ══ WHAT THE COOLANT IS DOING, ASKED OF THE CORE'S OWN CIRCUIT ══
-       Every one of these was computed and none of them was on a panel: the
-       loop had a temperature, two ends and a boiling point, and the only thing
-       said about any of it was the RATE T-avg was moving at, six sections
-       down. s.coreDT is the rise the core solve actually carried, so the two
-       ends are the midpoint plus and minus half of it rather than an assumed
-       axial shape; the pressure and the saturation come off the circuit this
-       vessel stands on, so a sodium or a helium core prints its own. */
+    // asked of the core's own circuit: s.coreDT is the rise the solve carried, and the pressure is that circuit's
     { const cci=coreCircOf(id), pv=loopP(s,cci), dT=s.coreDT||0;
       const dT0=coreDT0(coreD(id)), scH=(s.scBy&&s.scBy[cci]!==undefined)?s.scBy[cci]:(s.sc||0);
       const scHi=Math.max(60,(P.tsat0-P.Tref)*1.25);
       secRow("COOLANT");
-      /* ══ FOUR TEMPERATURES, ONE AXIS ══
-         They were four rows, and four scales side by side is the one thing a
-         reader cannot do in their head: the whole question is how much room is
-         left between the hot leg and where the coolant boils, and that is a
-         DISTANCE on one strip. So the mean is the needle and the two legs and
-         the saturation line are marks beside it, on a scale pinned to the
-         commissioned plant so it never moves under the reading. */
+      // four temperatures on ONE axis: the question is the DISTANCE from the hot leg to saturation, pinned to the commissioned plant
       { const Tc=s.Tavg-dT/2, Th=s.Tavg+dT/2, ts=tsatSec(pv,cci);
         const tLo=P.Tref-Math.max(40,dT0*1.5), tHi=Math.max(P.tsat0,P.Tref)+Math.max(20,dT0);
         add("COLD / AVG / HOT",Tc.toFixed(0)+" / "+s.Tavg.toFixed(0)+" / "+Th.toFixed(0)+" K",
@@ -2433,9 +1525,7 @@ function readoutsFor(p,s){
         band(scH,0,scHi,[[8,C.red,"SATURATED"],[Math.max(10,P.sc0*.6),C.amber,"THIN"],
           [scHi,C.cyan,"SUBCOOLED"]],{dp:0}),
         "Degrees the hottest liquid in this circuit is below boiling. It is the honest leak indicator: it collapses before anything else on this panel admits the loop is voiding, and VOID FRACTION below is what happens after it reaches zero."); }
-    // scale top is measured off the plant: a sodium/salt core rests at 3.2
-    // against water's 1.76, so a fixed 2.6 would peg the needle on half the
-    // architectures from the first frame
+    // scale top measured off the plant: a fixed one pegs the needle on half the architectures from the first frame
     const dHi=Math.max(2.6,K.dnbr0*1.3);
     secRow("THERMAL MARGIN");
     add("DNBR",s.dnbr.toFixed(2),
@@ -2446,8 +1536,7 @@ function readoutsFor(p,s){
       band(s.dnbrMin,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],{dp:2}),
       "The same margin asked of every mesh node separately, and the worst answer, with where it is. It reads the enthalpy actually carried to that node rather than a peaking factor, so it will not agree with DNBR above and is not meant to. Nothing trips on it - it is what the damage map is looking at.");
     add("FUEL TEMP",s.Tf.toFixed(0)+" K",
-      // amber as a FRACTION of this fuel's own limit: a fixed 150 K short of it
-      // sat amber on a gas core, which rests 1366 K hot by design
+      // amber as a FRACTION of this fuel's own limit, or a hot-running core sits amber by design
       band(s.Tf,300,Math.max(2200,K.tdmg+700),[[K.tdmg*.95,C.cyan,"NORMAL"],[K.tdmg,C.amber,"HOT"],[Math.max(2200,K.tdmg+700),C.red,"FAILING"]],
         {dp:0,lim:trip(rpsSetOf("tf",0),"TRIP")}),
       "Temperature inside the pellets. Past "+K.tdmg.toFixed(0)+" K the cladding starts to fail, and that damage is permanent.");
@@ -2464,37 +1553,21 @@ function readoutsFor(p,s){
         {dp:2,lim:trip(.30,"TRIP")}),
       "Share of the coolant that has turned to steam. Steam carries heat away far worse than water, and in a graphite core it adds reactivity as well.");
     add.apply(null,rowInv(s));
-    /* s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow
-       (tripCause(), step.js), so a gauge on the pump SETTING would sit at
-       100% NORMAL, with its own trip mark on a number that no longer causes
-       the trip, right up to the moment the plant tripped. It reads here rather
-       than on a pump because it is one number about the CORE and there are
-       many pumps - and the trip it carries is a reactor trip. */
-    /* IN KILOGRAMS, because the solve answers in kilograms: s.flowNet is a
-       share of K.netRef and K.netRef is a real flow in kg/s, so the figure is a
-       multiplication and not an invention. The SCALE tops at 1.3 of the
-       reference and not at 1.1: the reference is solved at nominal bore, so a
-       plant piped wider than nominal rests above it - the stock plant sits at
-       1.12 and the sodium plant at 1.9, so the ceiling is twice the reference
-       and a water plant's needle sits at half scale rather than on the end. */
+    // s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow, and it is one number about the CORE
+    // in kilograms, and the scale tops at twice the reference, because a plant piped wider than nominal rests above it
     const fref=(K.netRef>0?K.netRef:0);
     secRow("FLOW");
     add("CORE FLOW",(s.flowNet*fref).toFixed(0)+" kg/s",
       band(s.flowNet*fref,0,fref*2,
         [[K.flowMin*fref,C.red,"STARVED"],[fref*0.9,C.amber,"LOW"],[fref*2,C.cyan,"NORMAL"]],
         {dp:0,lim:trip(K.flowMin*1.02*fref,"TRIP")}),
-      /* THE DESIGN FLOOR IS THE RED BOUNDARY, so it was a row saying a number
-         the scale beside it already draws. It stays in the tip, where what it
-         MEANS belongs - a figure with a scale under it needs no second row. */
       "Coolant actually reaching the core, which is what the protection system trips on - not what the pumps were told to do. The reference this plant was solved on is "+fref.toFixed(0)+" kg/s, and the scale runs to twice it. Where the strip turns red at "+(K.flowMin*fref).toFixed(0)+" kg/s is the design floor: the least this pump set still delivers after damage, "+(K.flowMin*100).toFixed(0)+" % of the reference, and it rises with the spare pump capacity you actually placed on the grid. A shut valve or a severed run shows up here and nowhere else.");
-    // to 200 %, because a channel CAN carry more than the average and two
-    // presets do: a 110 % ceiling pegged BN-600's own needle at 160 %
+    // to 200 %, because a channel CAN carry more than the average and two presets do
     add("HOT CHANNEL",(s.hotFlow*100).toFixed(0)+" %",
       band(s.hotFlow*100,0,200,[[50,C.red,"STARVED"],[70,C.amber,"MARGINAL"],[200,C.cyan,"FED"]],{dp:0}),
       "Flow in the WORST channel, not the average. A voiding channel loses the flow it needed to stop voiding, and that runaway is why the core is a place and not a number.");
     add.apply(null,rowNat(s));
-    // BORON and XENON aren't stated here: they're reactivity terms, so the
-    // ledger below says them (with direction) instead of two rows quoting one number
+    // BORON and XENON are reactivity terms, so the ledger below says them instead
     add("BORON DEMAND",s.boronDem.toFixed(0)+" pcm",
         movingCol(s.boronDem,s.boron,20),
       "Where you have asked boron to go. It borates at "+BOR_IN+" pcm/s and only dilutes at "+BOR_OUT+", so poisoning yourself is the fast direction.");
@@ -2503,8 +1576,7 @@ function readoutsFor(p,s){
       band(s.TcladHot,300,1600,[[1000,C.cyan,"NORMAL"],[1200,C.amber,"HOT"],[1600,C.red,"FAILING"]],{dp:0}),
       "The hottest cladding anywhere in the core. This is the number every kind of fuel failure turns on, and it is not the fuel temperature above: while water is going past the rods the cladding sits close to the coolant, and the moment a node goes dry it climbs to meet the pellet.");
     add("FUEL DAMAGE",s.dmg.toFixed(1)+" %",
-      // any damage at all is the bad zone, so the good one is a sliver - the
-      // strip saying honestly that this scale has no safe stretch
+      // any damage at all is the bad zone, so the good one is a sliver: this scale has no safe stretch
       band(s.dmg,0,100,[[1e-9,C.cyan,"NONE"],[100,C.red,"CLAD FAILED"]],{dp:0}),
       "Cladding that has already burst, counted over the whole core, and it is permanent. A rod bursts when its cladding gets hot while the loop pressure is below the gas sealed inside it - so a depressurised core fails its fuel hundreds of degrees earlier than one still at pressure.");
     add("OXIDISED",(s.oxMax*100).toFixed(1)+" %",
@@ -2522,9 +1594,7 @@ function readoutsFor(p,s){
       "Hydrogen made by steam burning the cladding. It is not modelled as burning here - no explosion, no containment pressure - but it is a direct measure of how much cladding has gone.");
     add.apply(null,rowFat(s));
     R.push({viz:"dmg",tip:DMGVIZ_TIP,title:"FUEL DAMAGE"});
-    /* the two balances draw in the VITALS panel (crBuild()) - they are read
-       against the plant, not against the reactor's own rail. The numbers they
-       are a picture OF stay here. */
+    // the two balances draw in the VITALS panel; the numbers they are a picture OF stay here
     secRow("REACTIVITY");
     for(const r of RHO_ROWS){
       const v = r[1]==="net" ? s.rho : s.parts[r[1]];
@@ -2535,10 +1605,7 @@ function readoutsFor(p,s){
         {f:clamp(v/RHO_BAR,-1,1),full:RHO_BAR,
          m:lim&&lim.map(q=>clamp(q/RHO_BAR,-1,1))});
     }
-    /* IN MEGAWATTS. Every term here is a share of rated and the rating is a
-       real quantity, so the ledger reads in the same unit THERMAL does and a
-       decay term can be compared against a generator's own duty. The bars stay
-       on the shared fractional scale - that is what makes them comparable. */
+    // in megawatts, so a decay term compares against a generator's own duty; the bars stay on the shared fractional scale
     secRow("HEAT BALANCE");
     { const hbar=v=>({f:clamp(v/HEAT_BAR,-1,1),full:HEAT_BAR});
       const mw=v=>(v*K.rated).toFixed(1)+" MWt";
@@ -2546,11 +1613,7 @@ function readoutsFor(p,s){
         const v = r[1]==="prompt" ? HEATBAL.prompt : (s.dec[+r[1][1]]||0);
         add(r[0],mw(v),C.amber,r[2],hbar(v));
       }
-      /* NOT RED. In the PICTURE red is what the core makes, and that is fine
-         there - the stack is a key, not a verdict. In a column of readouts red
-         means trouble, and 85 % made is a plant running normally, sitting two
-         rows above FUEL DAMAGE and reading like a fault. The balance keeps its
-         colour; the number reads as the total it is. */
+      // not red: in a column of readouts red means trouble, and 85 % made is a plant running normally
       add("TOTAL MADE",mw(HEATBAL.heat),C.bright,
         "Everything the core is making, chain reaction and decay heat together. This is the number that heats the coolant, and POWER above is only its first term.",hbar(HEATBAL.heat));
       for(const t of heatSinks())
@@ -2558,26 +1621,12 @@ function readoutsFor(p,s){
       add("TOTAL REMOVED",mw(HEATBAL.removal),
         HEATBAL.removal<HEATBAL.heat*.5?C.red:C.green,
         "Everything leaving the core through the generators and any exchangers in front of them. Relief valves and breaks cost inventory and pressure, not T-avg, so they are not on this side.",hbar(HEATBAL.removal));
-      /* ══ THE NET IS THE ONE TERM THAT IS ACTUALLY SIGNED ══
-         Every row above it is an arm of a balance drawn on the shared
-         fractional scale, and the ANSWER - which arm is winning - was the one
-         bare number in the section. It gets the centre-zero bar the reactivity
-         ledger uses, on a scale this plant states for itself: everything the
-         core makes, into the loop's own heat capacity, with nothing taken away.
-         That is the fastest T-avg can move here, so a needle on the end is a
-         plant with no sink at all and half scale is half of that. */
-      /* A QUARTER of the no-sink rate, not all of it. At full scale the whole
-         range a plant is actually steered in - a tenth of a kelvin a second -
-         was a sliver against the zero and the needle never left it, which is a
-         bar that cannot be read. A quarter still derives the scale from this
-         plant rather than from a constant, and the peg pip says honestly when
-         the needle has gone past it. */
+      // a QUARTER of this plant's own no-sink rate: at the full rate the range it is actually steered in is a sliver
       { const dTfull=Math.max(0.05, K.rated*1000/Math.max(1,loopKg()*P.sat.cp)*0.25);
         add("NET ON T-AVG",(s.dTavg>=0?"+":"")+s.dTavg.toFixed(3)+" K/s",
           s.dTavg>.15?C.red:s.dTavg<-.05?C.blue:C.green,
           "What the difference is doing to the loop temperature right now. Positive is heating up, negative is cooling down, and zero is a plant in balance. Either end of the strip is "+dTfull.toFixed(2)+" K/s, a quarter of what this core alone would do to this loop's own water with no sink at all; the marks are where the reading turns red and blue.",
-          // dp: the end labels are tenths of a kelvin a second, and the default
-          // whole number printed a 0.50 scale as "1"
+          // dp: the end labels are tenths of a kelvin a second, and a whole number prints 0.50 as "1"
           {f:clamp(s.dTavg/dTfull,-1,1),full:dTfull,dp:2,
            m:[0.15/dTfull,-0.05/dTfull].map(q=>clamp(q,-1,1))}); }
     }
@@ -2607,20 +1656,13 @@ function readoutsFor(p,s){
         movingCol(s.tiltDem,s.tilt,.01),
       "Where you have asked the tilt to go. It walks there at drive speed, so it leads the trim above.");
     add("SHUTDOWN MGN",K.sdm.toFixed(0)+" pcm",
-      // to -5000, because a graphite plant's bank alone holds it down by
-      // -3285 pcm and the old -3000 floor pegged the needle off the end
+      // to -5000, because a graphite plant's bank alone holds it down past -3000
       band(K.sdm,-5000,3000,[[200,C.red,"THIN"],[1000,C.amber,"SLIM"],[3000,C.green,"AMPLE"]],{dp:0}),
       "How firmly the bank ALONE holds this core down once it cools and the xenon decays. Usually negative, and that is what boron is for.");
   } else if(p.role==="sg"){
     secRow("SHELL");
     add.apply(null,rowSgl(s,id));
-    /* secP(), not a second copy of its formula: CLAUDE.md's rule is that the
-       node an SGTR leaks into is fixed at "the same expression the STEAM PRESS
-       row prints", and this row printed its own copy - which stopped being the
-       same expression the moment Stage 6b gave each generator its own. */
-    /* The lid is a PLACED BOX now, so there is no plant-wide set point left to
-       quote: this asks the drawing which valves reach this shell, the same
-       question step() asks, and names them. None fitted is a real answer. */
+    // secP(), never a second copy of its formula; the valves are asked of the drawing, and none fitted is a real answer
     { const vents = reliefSecIds().filter(fid => shellsOf(fid).indexOf(id)>=0);
       add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",
         band(secP(s,id),0,sgBurstP(id),
@@ -2639,9 +1681,7 @@ function readoutsFor(p,s){
     add("STEAM OUT",(s.steamTo&&s.steamTo[id]||0).toFixed(0)+" kg/s",
       (s.sgVentBy&&s.sgVentBy[id]>0)?C.red:null,
       "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go.");
-    /* WHAT HEATS THESE TUBES, off the same sgHot() the heat term reads. Behind
-       a barrier the coolant in this machine is the intermediate circuit's, and
-       both readings are the same two nodes either way. */
+    // off the same sgHot() the heat term reads: behind a barrier the coolant here is the intermediate circuit's
     secRow("TUBE SIDE");
     { const act=sgActive(id);
       add(act?"T-HOT IN":"INTER IN",sgHot(s,id).toFixed(0)+" K",null,
@@ -2672,27 +1712,14 @@ function readoutsFor(p,s){
         served.length?null:C.amber,
       "Which stages stand on this exchanger's second circuit. Traced off the drawing - an exchanger with nothing behind it heats nothing at all.");
   } else if(roleHead(p.role)){
-    /* A PUMP PANEL IS ABOUT THIS PUMP. The rail carries one well per part, so
-       the plant-wide flow ledger that used to stand here was reprinted once per
-       pump - four wells quoting one s.flowNet. Delivered core flow and the hot
-       channel are the CORE's numbers and say so from the reactor's panel; what
-       is left is per-instance, which is the standing s.flowBy/s.flowDemBy have
-       had since every control became per-instance. */
+    // a pump panel is about THIS pump: delivered core flow is the core's number and says so from the reactor's panel
     const cav=(s.cavP&&s.cavP[id])||0;
     secRow("PUMP");
     add("PUMP SPEED",(flowOf(s,id)*100).toFixed(1)+" %",
       band(flowOf(s,id)*100,0,110,
         [[5,C.red,"STOPPED"],[40,C.amber,"SLOW"],[110,C.cyan,"RUNNING"]],{dp:0}),
       "How fast THIS pump is actually turning. It is not what reaches the core: a shut valve downstream leaves this at 100% and starves the core anyway. CORE FLOW on the reactor panel is that number.");
-    /* WHAT IT IS ACTUALLY PASSING, in kilograms - the solve's own answer for
-       this machine (pumpQOf), against the machine's own rated swallow. The
-       speed row above is a shaft reading and cannot say this: a pump at full
-       speed against a shut valve passes nothing. */
-    /* NO SCALE, BECAUSE THIS PLANT HAS NO HONEST ONE TO DRAW. A pump sits
-       wherever its own droop curve meets the circuit, which is well past its
-       stated swallow on most of the presets - the circulating water pump passes
-       three times its rating. A figure with no bar says less than a bar on a
-       scale that pegs. */
+    // no scale: a pump sits wherever its own droop curve meets the circuit, which is well past its stated swallow on most presets
     add("PASSING",pumpQOf(s,id).toFixed(0)+" kg/s",null,
       "What this machine is moving right now, against the "+pumpFlow(id).toFixed(0)+" kg/s it was bought to swallow. A pump follows its own curve, so it can pass more than that against an easy circuit and far less against a shut valve. It falls with speed, with cavitation, and with anything the plumbing downstream is doing to it.");
     add("SPEED DEMAND",((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)*100).toFixed(1)+" %",
@@ -2705,10 +1732,7 @@ function readoutsFor(p,s){
       "Vapour forming at THIS pump's own inlet because pressure fell too far. It costs head, so losing pressure costs you flow as well. Every pump reads its own suction: two pumps on one loop can be in different trouble, and a feedwater pump is the one a real plant loses this way.");
     add("DEVELOPED HEAD",pumpHead(id).toFixed(2)+" MPa",null,
       "The pressure rise this machine makes at rated speed. It is what the solve is given: what the pump actually delivers is that head against whatever the plumbing and the pressure on the far side cost it.");
-    /* A TANK READOUT, on the box that draws on the tank - not a pump control.
-       It stands here because it is this pump's own suction that a reserve
-       lining itself up is about, and it is asked of the DRAWING (secGensOf(),
-       layout.js), which is a name and never a fact the physics reads. */
+    // a readout and not a control: it is this pump's own suction a reserve lining itself up is about
     if(secGensOf(id).length){
       const arm=tankRuleAny(s,tankSecondary), any=secTankIds().some(tid=>D.tanks[tid].auto!=="always"&&D.tanks[tid].auto!=="manual");
       secRow("FEED");
@@ -2716,17 +1740,8 @@ function readoutsFor(p,s){
         "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time.");
     }
   } else if(p.role==="turb"){
-    // THE SHARE AND THE KILOGRAMS. s.load is a fraction OF P.steamRef, which is
-    // a real flow, so the steam the machine is drawing is a multiplication - and
-    // it is the unit the generators, the dump valve and the steam lines already
-    // read in.
-    /* AND IT HAS A REAL CEILING TO DRAW A SCALE ON: P.swallow, what the fitted
-       machines can pass, which is the limit the governor gate stops at and what
-       P.loadMax is that figure over the steam this plant raises. Every preset
-       ships a matched machine, so the mark sits at rated on all nine - a bigger
-       turbine moves it right and an undersized one left, which is the whole
-       reading. Full scale carries a tenth of headroom past it, or a plant at
-       full load reads as a pegged needle. */
+    // s.load is a fraction of P.steamRef, a real flow, so the kilograms are a multiplication
+    // the scale's ceiling is P.swallow, what the fitted machines can pass, with a tenth of headroom past it
     secRow("LOAD");
     { const sw=Math.max(P.swallow||0,1e-9), top=Math.max(sw,P.steamRef)*1.1;
       add("LOAD",(s.load*P.steamRef).toFixed(0)+" kg/s",
@@ -2746,7 +1761,7 @@ function readoutsFor(p,s){
     secRow("GOVERNOR");
     add("GOV STROKE",LOAD_TAU.toFixed(0)+" s",null,
       "How long the governor valves take to answer a change in load demand.");
-    // "bypassed" is the WORD the caution list filters on (cautStep, control-room.js), so it stays the word
+    // "bypassed" is the WORD the caution list filters on, so it stays the word
     add("RUNBACK",!sinkWired(s,"runback",null)?"not fitted":runbackLive()?"armed":"bypassed",
         runbackLive()?C.green:C.amber,
       "Whether a trip also pulls the turbine back. It is a block in the control cabinet; switch it off and a scram leaves the turbine drawing hard on a dead core, chilling the loop.");
@@ -2777,28 +1792,18 @@ function readoutsFor(p,s){
     add("EVENTS",LOG.length+"",null,
       "How many things have gone wrong this run. The LOG panel says what each of them was.");
   } else if(p.role==="tank"){
-    /* ONE PANEL FOR EVERY TANK. Every row is read off the instance's own
-       config and its own solved flow, so the same rows describe an
-       accumulator, a boron tank, a relief tank and a hotwell. */
+    // every row is read off the instance's own config and its own solved flow
     const t=D.tanks[id], fl=tankFluid(id), rate=(s.tankRate&&s.tankRate[id])||0;
-    /* ══ AND A HOLD TANK LEADS WITH WHAT IT HOLDS ══
-       The four rows the pressurizer's own branch used to carry, asked of the
-       CIRCUIT this vessel stands on rather than of s.P - so a second hold tank
-       on a second circuit prints its own numbers and not the primary's. */
+    // asked of the CIRCUIT this vessel stands on, so a second hold tank prints its own numbers
     if(t.hold){
       const ci=tankCircuit(id), set=holdSetP(ci);
-      /* THE VESSEL'S OWN PRESSURE, not its circuit's. They are the same figure
-         while it is holding, and the moment a valve isolates it they are not -
-         printing loopP here had the pressurizer report the loop it had just
-         been cut off from. */
+      // the VESSEL's own pressure, not its circuit's: the two part the moment a valve isolates it
       const pv=tankP(s,id), live=P.net?holdLive(P.net,s,ci):true;
       const scH=(s.scBy && s.scBy[ci]!==undefined) ? s.scBy[ci] : s.sc;
       secRow("PRESSURE");
       add("PRESSURE",pv.toFixed(2)+" MPa",loopPBand(ci)(pv),
         "The pressure this vessel holds its circuit at. It sets the temperature the coolant boils at, so every megapascal here is thermal margin.");
-      // measured off the plant like DNBR's scale: a helium core sits 1400 K
-      // below boiling, water only 22, so a fixed ceiling would peg one or
-      // squash the other. The 8 K SATURATED line stays absolute regardless.
+      // measured off the plant like DNBR's scale; the 8 K SATURATED line stays absolute regardless
       const scHi=Math.max(60,(P.tsat0-P.Tref)*1.25);
       add("SUBCOOLING",scH.toFixed(1)+" K",
         band(scH,0,scHi,[[8,C.red,"SATURATED"],[Math.max(10,P.sc0*.6),C.amber,"THIN"],
@@ -2816,23 +1821,14 @@ function readoutsFor(p,s){
     add("CONTENTS",fl.label.toLowerCase()+", "+fl.temp.toFixed(0)+" K",null,
       "What is in this tank. Activity and reactivity worth follow from this and from nothing else"
       +(fl.boron?" - a tank of this is worth "+fl.boron+" pcm for every 1 % of loop inventory it pushes in.":"."));
-    /* IN TONNES, and the level beside it: the vessel is cubic metres of a real
-       fluid, so what is in it is a mass and the bar is that mass against the
-       vessel's own capacity. */
+    // in tonnes: the vessel is cubic metres of a real fluid, so what is in it is a mass
     { const kg=tankKg(id), lv=tankLvl(s,id), held=lv/100*kg/1000, cap=kg/1000;
-      /* THREE KINDS OF GOOD NEWS, and a HOLD TANK IS THE THIRD. The source/sink
-         question the symbol asks has two answers - a reserve wants to be full, a
-         catch tank wants to be empty - and a pressurizer wants to be at its own
-         mid level: read as a catch tank the stock vessel printed a RED 54 %
-         standing at exactly where it is supposed to stand. */
+      // three kinds of good news: a reserve wants to be full, a catch tank empty, and a hold tank at its own mid level
       add("TANK LEVEL",held.toFixed(1)+" t",
         t.hold
           ? band(held,0,cap,[[cap*.20,C.red,"LOW"],[cap*.35,C.amber,"LOW"],
                              [cap*.80,C.cyan,"NORMAL"],[cap,C.amber,"HIGH"]],{dp:1})
-          /* A CATCH TANK IS ONE FULL OF SOMETHING ACTIVE, asked of its own
-             FLUID and not of which circuit it stands on: the primary-circuit
-             test read a SECOND unit's relief tank as a reserve, so an empty
-             catch tank on unit 1 printed a red LOW at commissioning. */
+          // a catch tank is one full of something ACTIVE, asked of its own fluid and not of which circuit it stands on
           : fl.act>0
           ? band(held,0,cap,[[cap*.10,C.green,"EMPTY"],[cap*.75,C.amber,"FILLING"],
                              [cap,C.red,"FULL"]],{dp:1})
@@ -2847,24 +1843,14 @@ function readoutsFor(p,s){
     add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
       "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
     if(tankPrimary(id)){
-      /* THE COLOUR READS THE PRINTED NUMBER, not the solved one. A bare sign
-         test on a solved quantity is exactly the thing this codebase does not
-         do: the network returns a difference of large numbers, so a shut tank
-         sits at -1e-17 and the row printed a perfectly still "-0.00 %/s" in
-         amber. Rounding first makes the colour and the digits agree by
-         construction, and -0 is folded onto 0 so the sign cannot survive it. */
-      /* IN KILOGRAMS PER SECOND: s.tankRate is that flow expressed as a share
-         of the loop's own inventory per second (invRate(), step.js), so the
-         kilograms it was measured in come back by multiplying the same
-         inventory. Rounded FIRST, on the printed figure, for the reason below. */
+      // rounded FIRST, so the colour reads the PRINTED number: a solved rate sits on -1e-17 at rest
       const shown=Math.round(rate/100*loopKg()*10)/10 || 0;
       add("RATE",shown.toFixed(1)+" kg/s",shown>0?C.cyan:shown<0?C.amber:null,
         "What this tank's own line is carrying, positive out. Not a setting: it is what the tank wins against the pressure in the loop, so it is near zero at full pressure and surges once the primary comes down. Negative means the loop is filling it.");
       add("HEAD",((P.lay&&P.lay.tankZ&&P.lay.tankZ[id])||0).toFixed(1)+" m",null,
         "How high this tank stands above the core. It is real static head in the solve: mount it high and it drains in fast, mount it level with the core and it barely trickles.");
     }
-    // only where there is something to say: a heading over no rows is a box
-    // the reader is left looking for the contents of
+    // only where there is something to say: a heading over no rows is a box with nothing in it
     if(t.burst || (s.tankOver&&s.tankOver[id]>0)) secRow("SAFETY");
     if(t.burst) add("RUPTURE DISC",s.burstBy[id]?"BURST":"intact",s.burstBy[id]?C.red:C.green,
       "It lets go at "+t.burst.at.toFixed(2)+" MPa. Past that the tank is an opening to containment: it drains onto the floor and what was in it is in the air, not behind a wall. This is the TMI-2 sequence, and a burst disc does not reseat.");
@@ -2877,8 +1863,7 @@ function readoutsFor(p,s){
     add("CAPACITY",(P.backup*(P.netRef>0?P.netRef:0)).toFixed(0)+" kg/s",null,
       "Coolant flow your backup supply can still turn, against the "+(P.netRef>0?P.netRef:0).toFixed(0)+" kg/s reference this plant is measured on. Everything above this has to come from buoyancy.");
   } else if(p.role==="radiator"){
-    /* The LIVE half of the radiator panel - the bench has no S, so PANEL TEMP
-       and what this one is actually shedding can only be said here. */
+    // the LIVE half of the radiator panel: the bench has no S
     secRow("PANEL");
     add("PANEL TEMP",radTOf(s,id).toFixed(0)+" K",
       band(radTOf(s,id),RAD_TDES*0.7,tsatSec(COND_ATM)-COND_DT0,
@@ -2892,11 +1877,7 @@ function readoutsFor(p,s){
     add("CAN SHED",radLive(id)?"YES":"NO",radLive(id)?C.green:C.red,
       "Whether this panel has a face on the skin. Walled in, it sheds nothing and warms the compartment instead.");
   } else if(p.role==="cond"){
-    /* BANDED AGAINST THE LIMIT IT PRECEDES, not against the vacuum floor.
-       COND_P0*1.5 was 0.006 MPa: a healthy plant rests at 0.0056 and a plant
-       built on the smallest condenser rests at 0.0155, which is 78 % of the
-       way to the turbine trip - so the amber came on at commissioning and
-       never moved again, and there was no red step at all before the latch. */
+    // banded against the limit it PRECEDES, never against the vacuum floor
     secRow("VACUUM");
     add("BACK PRESS",condP(s).toFixed(4)+" MPa",
       band(condP(s),0,TURB_TRIP_P,[[TURB_TRIP_P*0.5,C.cyan,"NORMAL"],
@@ -2909,15 +1890,11 @@ function readoutsFor(p,s){
     add("HEAT REJECTED",(condRejOf(s,id)/1000).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
     add("CW OUTLET",cwOutOf(s,id).toFixed(0)+" K",
-      // the scale STARTS BELOW THE INLET: a healthy plant's panels run cooler
-      // than their design point, so a scale anchored at RAD_TDES pegged its own
-      // needle off the low end at commissioning (304 K against a 307 K floor)
+      // the scale starts BELOW the inlet: a healthy plant's panels run cooler than their design point
       band(cwOutOf(s,id),RAD_TDES-CW_RISE,RAD_TDES+CW_RISE*3,[[RAD_TDES+CW_RISE*1.6,C.cyan,"NORMAL"],
         [RAD_TDES+CW_RISE*2.5,C.amber,"HIGH"],[Infinity,C.red,"HOT"]],{dp:0}),
       "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" K of rise, and a machine working harder than it was bought for sends it out hotter.");
-    /* THE CHAIN, END TO END. All of these were computed and none was visible,
-       and the radiator makes the last two the whole story: two pots in series,
-       so an operator has to be able to see which one is failing. */
+    // two pots in series, so the chain is stated end to end and it is visible which one is failing
     add("TERMINAL DIFF",(condTAt(s,id)-cwInAt(s,id)).toFixed(0)+" K",
       band(condTAt(s,id)-cwInAt(s,id),0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
         [COND_DT0*2,C.amber,"WIDE"],[Infinity,C.red,"FOULED"]],{dp:0}),
@@ -2933,9 +1910,7 @@ function readoutsFor(p,s){
       "The circulating water pumps. They sit on the main board, so a blackout stops them dead - and with no water moving there is no heat sink at all, whatever the condenser itself is worth.");
     add("VACUUM",s.condLost?"LOST":"holding",s.condLost?C.red:C.green,
       "Whether this machine still holds a vacuum. Past atmospheric it relieves, the air is in, and it does not come back: the condenser stops being a heat sink for good and the steam backs up into the generators.");
-    /* The tanks this machine hosts - a tank with no cell of its own has no
-       panel of its own either, so it reports here, on the component it lives
-       inside. One row per hosted tank. */
+    // a hosted tank has no panel of its own, so it reports here, one row each
     if(hostedTankIds().length) secRow("HOTWELL");
     for(const tid of hostedTankIds()){
       const kg=tankKg(tid), lv=tankLvl(s,tid), cap=kg/1000;
@@ -2947,16 +1922,9 @@ function readoutsFor(p,s){
         "It is full and cannot take any more. This water is leaving the plant, and after a tube rupture it is primary water.");
     }
   }
-  // shielding has nothing to report, and neither has a component never
-  // bought - the grid already draws the dashed outline and NOT FITTED itself
+  // shielding has nothing to report, and neither has a component never bought
   if(!R.length||!fitted(p)) return [];
-  /* WHAT THIS BOX'S OWN METAL IS AT is on the panel's own title bar now
-     (marginSkinSync(), ui/margin.js) - one figure with a limit, wanted at a
-     glance on every panel and not worth a row of its own. */
-  /* ONE damage row. Every role used to print its own DESTROYED line under
-     this one, saying the same thing twice off the same s.dmgParts test; the
-     consequence they carried comes off DMGFX, which is the table that already
-     owns what a hit means. */
+  // one damage row, and the consequence it carries comes off DMGFX
   if(partWrecked(s,p.id)) R.unshift(["STATUS","DESTROYED / "+dmgWhyOf(s,p.id),C.red,
     "This component has taken a hit. "+dmgFx(p.id).why+" Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
   if(!partAccess(p)) R.unshift(["ACCESS","BLOCKED",C.red,
@@ -2964,19 +1932,7 @@ function readoutsFor(p,s){
   return R;
 }
 
-/* ══ WHAT A FITTING IS WORTH WATCHING ══
-   A branch of readoutsFor(), not a sibling of it: a fitting is a PART now, so
-   the rail that is built from LAY.parts reaches it like every other machine,
-   and the second function this used to be existed only because it could not.
-   Every row addresses THIS fitting - the six relief rows that used to sit on
-   the pressurizer could only ever describe primaryRelief(), so a second or
-   third valve was invisible to the panel that claimed to report it. */
-/* THE DESIGN HALF, ASKED ONCE PER EDIT. The rail builds this table twice a
-   frame for every fitting, and half of it - the mode, the shells this valve
-   can reach, the set points, the reference pressure, the edge key - cannot
-   move while the plant runs. The LIVE half stays computed on every call, and
-   that split is exactly the rule this panel already lives by: it may never
-   quote a set point the valve does not use. */
+// every row addresses THIS fitting; the design half is asked once per edit and the live half on every call
 const fitDesignMemo=new Map(); let fitDesignGen=-1;
 function fitDesign(fid){
   if(fitDesignGen!==DGEN){ fitDesignMemo.clear(); fitDesignGen=DGEN; }
@@ -2999,10 +1955,7 @@ function readoutsForFit(fid,s){
     const set=DES.set;
     const open = !!s.reliefOpen[fid] && !s.reliefBlocked[fid];
     const blkd = !!s.reliefBlocked[fid];
-    /* WHICH PRESSURE THIS VALVE IS ABOUT is asked of the drawing, not assumed
-       to be the primary's: a valve placed on a steam line lifts on its shell.
-       reliefRefP()/reliefAtP() (step.js) are the same pair the tick lifts on,
-       so this panel cannot quote a set point the valve does not use. */
+    // which pressure this valve is about is asked of the drawing, on the same pair the tick lifts on
     const sec = DES.shells.length>0, refP = DES.refP, atP = reliefAtP(s,fid);
     const iso = reliefIso(s,fid);
     secRow("SETPOINTS");
@@ -3014,9 +1967,7 @@ function readoutsForFit(fid,s){
       "Where THIS valve opens on its own. It has an 18% chance of sticking open every single time it lifts.");
     add("RESEAT SETPOINT",set.reseat.toFixed(2)+" MPa",null,
       "Where it shuts again. The gap up to the lift point is its deadband - narrow it and the valve cycles on the setpoint instead of lifting once and clearing it. Both are set at the design bench.");
-    // scale is a share of THIS plant's pressure (a sodium loop runs at 0.2
-    // MPa); the 0.3 MPa NEAR LIFT line stays absolute and can sit off the end
-    // on a low-pressure plant, honestly saying it's always close to lifting
+    // a share of THIS plant's pressure; the 0.3 MPa NEAR LIFT line stays absolute and may sit off the end
     const mlLo=Math.min(-0.1,-refP*.04), mlHi=Math.max(0.4,refP*.12);
     const marg = set.lift - atP;
     add("MARGIN TO LIFT",marg.toFixed(2)+" MPa",
@@ -3025,9 +1976,7 @@ function readoutsForFit(fid,s){
     secRow("STATE");
     add("PORV",open?"PASSING":"shut", open?C.red:C.green,
       "The valve itself. PASSING means coolant is leaving the loop through it, whether you asked or not.");
-    /* BOTH SIDES IN KILOGRAMS. The primary's own figure is solved in kg/s and
-       then expressed as a share of loop inventory (invRate(), step.js), so the
-       kilograms come back off the same inventory - not a made-up conversion. */
+    // both sides in kilograms: the primary's share of loop inventory comes back off that same inventory
     if(sec){
       const kg=(s.reliefSteam&&s.reliefSteam[fid])||0;
       const full=SG_RELIEF_CAP*ratedSteam()*fitBoreK(fid)*fitBoreK(fid);
@@ -3048,9 +1997,7 @@ function readoutsForFit(fid,s){
       add("ACTUATION", drv?"PORV, wired "+drv.toUpperCase():"PORV, unwired", drv?C.green:C.amber,
         "A power-operated relief valve: a block in the control room watches its pressure and lifts it. Unwired, or with the cabinet dark, it lifts for nobody and pressure ends at the vessel. Make it a SPRING SAFETY at the bench and it needs none of that."); }
   } else if(mode==="tee"){
-    /* A TEE HAS NOTHING TO REPORT. It is one node with four faces - no gate,
-       no position, no state at all - so it gets no rows and the rail hides
-       its panel, exactly as it does for a component with nothing to say. */
+    // a tee is one node with four faces: no gate, no position, no state to report
     return R;
   } else {
     secRow("VALVE");
@@ -3067,48 +2014,23 @@ function readoutsForFit(fid,s){
   return R;
 }
 
-// the layoutMetrics() a drawPlant() call already paid for is cached here so
-// the bench rail (design-bench.js) can read PLANT_LM without recomputing it
+// cached so the bench rail can read the layoutMetrics() drawPlant() already paid for
 let PLANT_LM=null;
 
-// a widget hosted inside an HTML panel (trend chart, fuel lattice plan) still
-// draws HERE, at the screen box its placeholder element occupies - matches
-// local()'s page<->layout conversion (core/ui.js) so clicks land correctly
+// a widget hosted in an HTML panel still draws HERE, at the screen box its placeholder occupies
 function hostRect(el){
   const rc=cv.getBoundingClientRect(), r=el.getBoundingClientRect();
   const sx=W/rc.width, sy=(H-TOPBAR_H)/rc.height;
   return {x:(r.left-rc.left)*sx, y:(r.top-rc.top)*sy+TOPBAR_H, w:r.width*sx, h:r.height*sy};
 }
 
-/* ...except inside a RAIL, which is opaque and paints over #cv, so anything
-   drawn under it is invisible and its pointer events never reach cv. Those
-   widgets paint into their own <canvas> instead.
-
-   Their scale is FIXED, not the plant's. #cv stretches W=760 layout units
-   across the stage, so canvas type grows with the window - fine for the plant,
-   wrong for a widget sitting among HTML type that is plain px. One layout unit
-   is HOST_K CSS px here, picked so the smallest size in use (6.5) lands on the
-   10px floor src/style.css gives HTML type. Nothing in a rail resizes with the
-   window any more.
-
-   Because that space starts at 0,0 it OVERLAPS the plant's numerically, which
-   is why push()/hov() are scoped by host - see hostScope()/ui.ptrHost. */
+// a rail widget paints into its own canvas at a FIXED scale, so its type does not grow with the window
+// that space starts at 0,0 and so overlaps the plant's, which is why push()/hov() are scoped by host
 const HOST_K=1.5;
 const hostDpr=()=>(typeof devicePixelRatio==="number"&&devicePixelRatio)||1;
-/* THE LAYOUT UNIT IS A WHOLE NUMBER OF DEVICE PIXELS, WHICH IS WHY IT IS NOT
-   EXACTLY HOST_K. At 125% Windows scaling dpr is 1.25, so a flat HOST_K put the
-   transform on 1.875 device pixels per unit and every hairline this kit draws -
-   a zero line, a bar frame, a needle - was spread across two of them. Rounding
-   the DEVICE scale and reading the unit back off it costs a few per cent of
-   size and buys a picture that is actually on the pixel grid. */
+// a whole number of DEVICE pixels per layout unit, or every hairline spreads across two of them
 const hostK=()=>{ const d=hostDpr(); return Math.max(1,Math.round(d*HOST_K))/d; };
-/* A HOST CANVAS MAY STAND ON A SCALED PANEL, AND ITS PICTURE MAY NOT RESHAPE
-   WHEN IT DOES. A margin panel is scaled with the plant (ui/margin.js), so the
-   rect grew with the zoom while the type inside this canvas is drawn at a fixed
-   size - the lattice reflowed at every zoom step. offsetWidth is the LAYOUT box
-   and a transform never touches it, so the ratio between the two IS whatever
-   the panel is scaled by: the drawing is laid out in the layout box and only
-   its RESOLUTION follows the scale. 1 in a rail, where nothing is scaled. */
+// offsetWidth is the LAYOUT box and a transform never touches it, so the ratio IS whatever the panel is scaled by
 const hostScale=el=>{ const o=el.offsetWidth;
   return o>0 ? el.getBoundingClientRect().width/o : 1; };
 function hostLocal(el,e){ const r=el.getBoundingClientRect(), k=hostK()*hostScale(el);
@@ -3127,20 +2049,7 @@ function hostPaint(el,draw,arg){
   try{ draw(0,0,w,h,arg); } finally { ctx=prev; hostScope(null); }
 }
 
-/* ══ THE LEADER STARTS SOMEWHERE FREE, NOT AT THE MIDDLE OF THE FACE ══
-   It used to leave from the exact centre of the part's right edge, which is
-   where port() puts a pipe whenever a face carries an odd number of them - so
-   on the components that matter most the dashed leader set off along a pipe
-   and read as one more branch of the plumbing for its first few pixels.
-
-   So: walk candidate points along the face and take the one furthest from any
-   pipe that actually lands on it. The middle is still FIRST in the list, so a
-   face with nothing on it is unchanged; the offsets alternate either side of it
-   so a leader never has to travel far from where the eye expects it.
-
-   THE FACE IS A PARAMETER AND THE BOX IS A RECT, because "the right edge of a
-   part" was never the fact - it was true only while the one panel on the board
-   sat in a rail on the right. */
+// the leader starts at the candidate point furthest from any pipe landing on the face; the middle is first in the list
 const LEADER_SPOTS=[0.5,0.30,0.70,0.14,0.86];
 const LEADER_CLEAR=7;
 function leaderAnchor(a,face){
@@ -3165,22 +2074,7 @@ function leaderAnchor(a,face){
   return best.p;
 }
 
-/* ══ AND THE INK IS THE SAME INK WHEREVER THE PANEL IS ══
-   One polyline in LAYOUT space, rounded where it turns, with a square centred
-   on whichever ends are attached to something. Both leaders go through here.
-   SOLID. It was dashed so it could not read as one more pipe, and the two are
-   in no danger of being confused any more: a pipe is drawn in the colour of
-   what is in it at 2.2 units and up (pipeWidth), a leader is two grey units.
-
-   THE INK UNIT IS THE CALLER'S, BECAUSE THE TWO LEADERS ARE IN DIFFERENT
-   SPACES. A leader to a RAIL has one end on the canvas and one on an HTML wall
-   that does not zoom, so its ink is CSS pixels - drawn at a flat lineWidth 1 it
-   read as a hairline at 760 px and as a fat dashed rope at full screen. A
-   leader to a MARGIN PANEL is in plant space at BOTH ends, so its ink is plant
-   units and it thins out as you zoom away exactly as a pipe does: pinned to a
-   pixel it was a hairline up close and a rope over a plant three cells wide.
-   The PATH is always in layout units; `ink` and `rad` say what a stroke unit
-   and a corner are worth in that same space. */
+// the PATH is always in layout units; `ink` and `rad` are the caller's, because a rail leader and a margin leader are in different spaces
 const LEADER_RAD=8;
 function leaderStroke(pts,col,caps,ink,rad){
   if(pts.length<2) return;
@@ -3188,8 +2082,7 @@ function leaderStroke(pts,col,caps,ink,rad){
   ctx.save();
   ctx.lineCap="square"; ctx.lineJoin="round";
   ctx.strokeStyle=col; ctx.lineWidth=2*k;
-  // one path, not a line() per leg: a corner can only be rounded where the
-  // segments meet, and arcTo needs the run either side of it to do that
+  // one path, not a line() per leg: arcTo needs the run either side of a corner to round it
   ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
   for(let i=1;i<pts.length-1;i++){
     const p=pts[i], a=pts[i-1], b=pts[i+1];
@@ -3202,12 +2095,7 @@ function leaderStroke(pts,col,caps,ink,rad){
   ctx.restore();
 }
 
-/* the panels live in HTML rails now, so a selected component and the panel that
-   configures it no longer touch. This leader is redrawn every frame in LAYOUT
-   space - outside drawPlant()'s view transform - and hostRect() reads the live
-   DOM box, so pan, zoom and rail scroll all come out right with no listeners.
-   It stops at the rail's left edge because the rail is opaque and the canvas
-   is under it; dashed, so it never reads as one more pipe. */
+// redrawn every frame in LAYOUT space, outside the view transform, off the live DOM box: no listeners
 function leaderLine(panelEl,railEl){
   const part=LAY&&partOf(sel);
   if(!part||!panelEl||!railEl) return;
@@ -3215,14 +2103,10 @@ function leaderLine(panelEl,railEl){
   if(r.w<2||r.h<2||q.h<1) return;                 // rail unlaid, or a panel hidden by display:none
   const pad=3, vx0=VIEW.x+pad, vx1=VIEW.x+VIEW.w-pad, vy0=VIEW.y+pad, vy1=VIEW.y+VIEW.h-pad;
   if(vx1<=vx0||vy1<=vy0) return;
-  // clamped, not culled: panned off the plant, the leader pins to the viewport
-  // edge and still says which way the component went
+  // clamped, not culled: panned off the plant it pins to the viewport edge and still says which way the component went
   const s0 = vScr(leaderAnchor(prect(part),"r"));
   const sx=clamp(s0.x,vx0,vx1), sy=clamp(s0.y,vy0,vy1);
-  // scrolled away, the leader takes the first turn only and then runs clean off
-  // the top or bottom of the canvas, so it reads as continuing to a panel that
-  // is simply not on screen - never turning back in to claim an attachment the
-  // rail edge does not have
+  // scrolled away it takes the first turn only and runs off the canvas, never claiming an attachment the rail edge has not got
   const ey0=q.y+q.h/2, vis=ey0>=r.y+4&&ey0<=r.y+r.h-4;
   const ey=vis? ey0 : (ey0<r.y? TOPBAR_H : H);
   if(r.x-sx<8) return;                            // rail sits on the plant, no room to turn
@@ -3230,35 +2114,19 @@ function leaderLine(panelEl,railEl){
   const a={x:sx,y:sy}, b={x:vis?r.x:gx, y:ey};
   const pts = Math.abs(sy-ey)<1 ? [a,b]
     : vis ? [a,{x:gx,y:sy},{x:gx,y:ey},b] : [a,{x:gx,y:sy},b];
-  // a square at each end, so both read as attached rather than as a stray
-  // stroke. Each is CENTRED on what it marks, so the rail one is half swallowed
-  // by the opaque rail and reads as slotted into its edge - and a panel
-  // scrolled out of the rail gets none, because it is attached to nothing
+  // a square CENTRED on each attached end; a panel scrolled out of the rail gets none, because it is attached to nothing
   leaderStroke(pts, C.amber, vis? [a,b] : [a], cvPx(), LEADER_RAD);
 }
 
-/* ══ THE HULL PICTURE IS A PURE FUNCTION OF THE HULL ══
-   The well, the 2040-cell border, ninety-odd grid lines, the frame, the EL
-   column and the four bulkhead words are decided by GW, GH, the grid top and
-   whether a plant is live - none of which a running plant can move. Painted
-   once into its own bitmap and blitted after that.
-   BAKED AT DEVICE SCALE AND BLITTED IN DEVICE SPACE, with the view's own
-   sub-pixel offset baked into the bitmap and the blit landing on a whole
-   device pixel, so the grid hairlines rasterise exactly where they did when
-   they were drawn straight onto the canvas. The offset is quantised to a
-   quarter pixel, or panning would rebuild it every frame for a difference
-   nothing can see. burnShakeAt() is in the transform this reads, so the deck
-   kick still moves the picture. */
+// the hull picture is a pure function of the hull, so it is baked once at device scale and blitted
+// the view's sub-pixel offset is baked in and quantised to a quarter pixel, or a pan rebuilds it every frame
 let backCv=null, backKey="";
 function plantBack(L,GHp,rowH){
   const m=ctx.getTransform&&ctx.getTransform();
-  // the headless DOM has no bitmap to bake into, and a headless reader must
-  // see these rectangles on the recorder it is reading
+  // the headless DOM has no bitmap to bake into, and a headless reader must still see these rectangles
   if(!m||!m.a){ plantBackPaint(L,GHp,rowH); return; }
   const sc=m.a;
-  /* ONLY WHAT IS ON SCREEN IS BAKED: the whole board at device scale is 62 Mpx
-     where a panel reaches 1:1 and past the canvas limit a rung above that, and a
-     zoom ease rebuilt it every frame. Quantised to a cell so a pan reuses it. */
+  // only what is on screen is baked, quantised to a cell so a pan reuses it
   const cvw=ctx.canvas?ctx.canvas.width:0, cvh=ctx.canvas?ctx.canvas.height:0;
   const bx0=Math.max(GX-EL_GUT, Math.floor(((0-m.e)/m.a-CELL)/CELL)*CELL);
   const by0=Math.max(GY,        Math.floor(((0-m.f)/m.d-CELL)/CELL)*CELL);
@@ -3290,15 +2158,12 @@ function plantBackPaint(L,GHp,rowH){
     if(X===0||X===GW-1||Y===0||Y===GH-1) fillRect(GX+X*CELL,rowTop(Y),CELL,rowH(Y),"#1c1210");
   // opaque, so a line reads the same wherever it lands: pre-blended onto C.well
   const gl = L? "#080d0f" : "#0a1011";
-  /* A GRID LINE IS A FRACTION OF THE CELL IT BOUNDS, not one unit. At 16 a unit
-     was a sixteenth of a cell and read as a hairline; left at 1 on a 70-unit cell
-     it is a seventieth and the deck loses its grid altogether. */
+  // a grid line is a FRACTION of the cell it bounds, never one unit
   const glw = 1*DRAW_K;
   for(let X=0;X<=GW;X++) fillRect(GX+X*CELL,GY,glw,GHp,gl);
   for(let Y=0;Y<=GH;Y++) fillRect(GX,rowTop(Y),GW*CELL,glw,gl);
   frame(GX,GY,GW*CELL,GHp,C.edge2);
-  // outside the hull: inside it they sat in the same band as the FWD BULKHEAD
-  // label and over the first column of cells
+  // outside the hull, clear of the FWD BULKHEAD label and the first column of cells
   for(let Y=0;Y<GH;Y++)
     txt("EL"+pad(GH-1-Y,1),GX-4*DRAW_K,rowTop(Y)+11*DRAW_K,
         {size:6.5*DRAW_K,align:"right",color:"#2c4148"});
@@ -3311,56 +2176,33 @@ function plantBackPaint(L,GHp,rowH){
   txt("AFT BULKHEAD",0,0,deck); ctx.restore();
 }
 
-/* vx/vw are the viewport's left edge and width - GX/(W-2*GX) by default, or
-   whatever the caller's own HTML rail leaves clear of the plant, so the
-   canvas never draws under a docked panel. */
+// vx/vw are the viewport's left edge and width, so the canvas never draws under a docked panel
 function drawPlant(y0,L,vh,vx,vw,padX,padY){
   PLANT_LM=layoutMetrics(); GY=y0;
-  layerTick();                                     // one memo/frame - see layers.js
-  /* one clock/frame, and it is the PLANT's - so pause freezes every effect and
-     16x runs them sixteen times over. The bench has no plant to take a time
-     from, and nothing there should freeze, so it gets wall seconds. */
-  // and at the rate the tape is SET to, never one read back off S.t
+  layerTick();                                     // one memo/frame
+  // one clock a frame, the PLANT's, at the rate the tape is SET to; the bench has no plant, so it gets wall seconds
   fxSetClock(L ? L.t : fxWall(), L ? trClockRate() : 1);
   const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
-  // both screens are HTML rails now, so the content the view fits to is the grid alone
-  /* the content box is the grid PLUS the elevation gutter, so the EL labels
-     that stand outside the hull are inside what the view fits and cannot be
-     clipped away by the letterbox. */
-  /* ...and while a wall is being dragged the content box covers the GHOST too:
-     the board is not re-laid until the release, so a hull growing past the
-     current grid would otherwise be drawn outside the clip. */
+  // the content box is the grid plus the elevation gutter, and while a wall is dragged it covers the GHOST too
   const dh=ui.drag&&ui.drag.type==="hull"?ui.drag:null;
   const fitW=Math.max(GW,dh&&dh.gw||0)*CELL, fitH=Math.max(GHp,(dh&&dh.gh||0)*CELL);
-  /* THE VIEW IS A WINDOW ON THE SHIP, NOT THE WHOLE SHIP. A panel is 268 units
-     wide in the same space the machinery is drawn in, so a fit over 62 cells put
-     it 26px across and nothing on the board was readable. The window is stated in
-     CELLS and it is the second half of the CELL knob (layout.js): together they
-     say how much plant you see and how big it is against its own readouts. */
+  // the view is a WINDOW on the ship, stated in cells: the second half of the CELL knob
   const win=Math.min(VIEW_CELLS_W, GW), winH=Math.min(VIEW_CELLS_H, GH);
   vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, fitW+EL_GUT, fitH,
        padX, padY, win*CELL+EL_GUT, winH*CELL);
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
-  // the letterbox, halved and then snapped to a device pixel - vOrigin() is
-  // the one place it is computed, and the hit test reads the same one
+  // vOrigin() is the one place the letterbox is computed, and the hit test reads the same one
   { const o=vOrigin(); ctx.translate(o.x,o.y); }
   ctx.scale(VIEW.s,VIEW.s);
-  // and a bang in the compartment kicks the deck it happened on (room.js)
   // the kick is a fraction of a cell, like every other drawn size
   { const k=burnShakeAt()*DRAW_K;
     if(k) ctx.translate(burnShakeRnd(0)*k, burnShakeRnd(1)*k); }
   viewOn=true;
   plantBack(L,GHp,rowH);
-  /* THE HULL IS DRAGGED BY ITS OWN WALLS, and only the two that can move
-     without renumbering every cell under them: a pipe is keyed by its cell, so
-     growing off the bow or the deck would have to rewrite D.pipes and every
-     fixed slot's literal. Bench only - a commissioned ship is welded. */
+  // only the two walls that can move without renumbering every cell under them; bench only, a commissioned ship is welded
   if(!L){
-    /* THE HANDLE IS PUT AWAY UNTIL THE HAND IS ON ITS OWN WALL - the same move
-       a valve's strip makes. The hit stays live either way: the zone is the
-       wall band the handle sits in, so nothing can be reached without it
-       showing first, and the drag survives the pointer leaving the band. */
+    // the handle is put away until the hand is on its own wall, but the hit stays live either way
     const grab=(x,y,w,h,edge,zone,title,body)=>{
       const wd=push({x,y,w,h,type:"hull",edge});
       const on = hovHold({...zone,v:1,host:ui.host}) || (ui.drag&&ui.drag.type==="hull"&&ui.drag.edge===edge);
@@ -3373,147 +2215,82 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     grab(GX+GW*CELL*0.35, GY+GHp-2, GW*CELL*0.3, 4, "b",
       {x:GX, y:rowTop(GH-1), w:GW*CELL, h:GY+GHp-rowTop(GH-1)}, "KEEL",
       "Drag it down to make the ship deeper, up to make it shallower. Every machine standing outside the hull is marked and blocks commissioning until it is dragged back in.");
-    /* THE GHOST THE WALL WEARS WHILE IT MOVES. The board itself is not re-laid
-       until the release, so the size under the hand is drawn rather than built:
-       one rectangle, in cells the grid already knows how to measure. */
+    // the board is not re-laid until the release, so the size under the hand is drawn rather than built
     if(ui.drag&&ui.drag.type==="hull"){ const d=ui.drag;
       frame(GX, GY, (d.gw||GW)*CELL, (d.gh||GH)*CELL, C.amber); }
   }
 
-  // dark casing, then the coloured fluid line inside it, both round-jointed
-  // (concentric radii) so a pipe bends rather than folds
+  // dark casing, then the coloured fluid line inside it, both on concentric radii so a pipe bends rather than folds
   const PC=pipeColours(L), NET=pipeNetwork();
   pipeFieldRefresh(L);          // one solve read per frame, shared by every gauge and both pressure layers
   pipeHovResolve();             // AFTER it: the label boxes it asks about are allocated in there
-  /* A CELL THAT NO CONNECTION CLAIMS IS DRAWN, AND DRAWN AS WHAT IT IS. It is
-     pipe on the grid either way; what it is not is a connection, and dashed
-     grey is that said in the picture rather than only in the rail. */
+  // a cell no connection claims is still pipe on the grid; dashed grey says so in the picture
   pipeLoose(L);
   for(const pass of [0,1]) for(const r of NET){
-    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!tankLive(L,tid)) continue; }   // LABEL: a VIEW declutter - see pipeRuns() (pipes.js)
+    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!tankLive(L,tid)) continue; }   // a VIEW declutter
     ctx.lineCap="square"; ctx.lineJoin="round";
-    // BORE is the fluid line's width and WALL is the casing beyond it. The two
-    // were one number drawn twice, because until now there was nothing to tell
-    // them apart - a run states both in millimetres now.
+    // BORE is the fluid line's width and WALL the casing beyond it; a run states both in millimetres
     const w = pipeWidth(runBore(r)), cw = w + 2*pipeWallPx(r);
     // ONE radius for every stroke of this run, off the CASING - see pipeBendPath()
     pipeBendPath(r.pts, pipeBendR(r.pts, cw));
-    /* THE OUTLINE, around the casing rather than inside it, so the highlight is
-       the pipe's own shape and needs no second geometry. Drawn from EITHER end
-       of the hover - pointing at the pipe and pointing at its label are the same
-       pairing asked from the two sides, and with the layers off the outline is
-       the only thing tying the readings that appeared to the run they are on. */
-    // ...and the SELECTED run keeps that outline whether or not the pointer is
-    // on it, which is the same thing a selected machine's box already does
+    // the outline is around the CASING, so the highlight is the pipe's own shape; a selected run keeps it without the pointer
     if(!pass && (pipeHov===r.key || sel===runIdOf(r))){
       ctx.lineWidth=cw+3*DRAW_K; ctx.strokeStyle=C.amber; ctx.stroke(); }
     ctx.lineWidth = pass? w : cw;
-    /* A SEVERED RUN IS DESTROYED ALONG ITS WHOLE LENGTH, not only in the cell
-       that failed: red casing and deck bore, the same two marks pipeDamage()
-       puts on the torn cell (runCut(), pipes.js). */
+    // a severed run is destroyed along its WHOLE length: the same two marks pipeDamage() puts on the torn cell
     const cut = runCut(r,L);
-    /* THE BORE IS THE COLOUR OF WHAT IS IN IT (pipeStroke, pipes.js): the run's
-       kind keeps the hue and the phase rides it as lightness, so a hot leg
-       full of steam and a steam line full of water are told apart at a glance.
-       The CASING is the pipe itself and does not change with its contents. */
+    // the bore is the colour of what is IN it; the casing is the pipe itself and does not change with its contents
     ctx.strokeStyle = pass? (cut?C.well:pipeStroke(r,PC,L)) : (cut?C.red:PIPE_CASE);
     ctx.stroke();
   }
   ctx.lineJoin="miter";
   if(L) pipeFlow(L);
-  // AFTER the packets: a broken cell is EMPTY, and a packet drawn over it
-  // would be the picture insisting the run still carries something there
+  // AFTER the packets: a broken cell is EMPTY, and a packet drawn over it insists the run still carries something
   if(L) pipeDamage(L);
-  /* OVER THE PIPES, AND OVER WHAT IS WRITTEN ON THEM. A wall is the structure
-     of the ship and the run behind it is a PENETRATION, so the wall is the
-     thing in front and a run passes under it - which is also the only way a
-     band drawn one cell wide stays an unbroken line where pipework crosses it.
-     A bore and a pressure are written on the run, so they pass under it too. */
-  pipeSizeLabels(NET,L);        // over the packets: a size is a fact, not decoration
+  // a wall is structure and the run behind it is a PENETRATION, so the wall is in front and what is written on the run passes under it
+  pipeSizeLabels(NET,L);
   matPaintDraw(L);
-  // over the pipes, under the machines - the one seam a layer can paint
-  // without landing on a value tag, a control strip or a bypass row, because
-  // every one of those belongs to the component loop that runs after this.
-  // It is also the true seam for what a "field in the room" means: nobody
-  // can survey the inside of a vessel, so the cells a layer may cover here
-  // are exactly the cells a repair party could stand in. Move this call and
-  // the next reactor to show dose gets it painted on top of its own gauges.
+  // over the pipes, under the machines: the cells a layer may cover here are exactly the cells a repair party could stand in
   layerPass("under",L);
-  /* ONE CELL, ONE TOOLTIP, ON NO SWITCH AT ALL. It was called by the H2 and
-     BLAST layers, so pointing at a containment wall said nothing unless a gas
-     survey happened to be up - and a wall is structure, not a field. Here it
-     is asked once, at the seam the fields themselves paint at, so the reading
-     and the wash are about the same cell. Before the component loop, because a
-     machine's own tooltip is the more specific answer and findTip() takes the
-     last box pushed. */
+  // one cell, one tooltip, on no switch: before the component loop, because a machine's own tooltip is the more specific answer
   roomCellTip(L);
 
-  const tags=[];                // drawn last - see the push below
-  // own pass after the tags: the mark stands on the machine's own name row, so
-  // it has to be painted after the name, the symbol and every tag on the box
+  const tags=[];                // drawn last
+  // the mark stands on the machine's own name row, so it is painted after the name, the symbol and every tag
   const wdots=[];
   for(const p of LAY.parts){
     const {x,y,w,h}=prect(p);
     const fit = fitted(p), live = L && fit;
-    /* ══ A CONTROL IS ON THE MACHINE'S PANEL, NEVER ON THE DRAWING ══
-       Every key, slider and arming switch stands in the panel anchored beside
-       the box (ui/margin.js), which reads the same ctlFor() this loop used to
-       draw. So a machine reserves nothing but its NAME ROW, and the symbol -
-       the picture of the machine - gets the whole of the rest of the box. */
+    // a control is on the machine's PANEL, never on the drawing, so a box reserves nothing but its name row
     const dmgd = live && partWrecked(L,p.id);
     const sh = 0;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
     const hovd = hov(wd)||drag;
     const ink = !fit?"#3c4c47" : dmgd?C.red : hovd?C.bright : C.metal;
-    /* WHAT THIS MACHINE IS STOOD DOWN AS, in one word, or null. NOT a valve's:
-       a fitting says it on its own GLYPH now (reliefBowtie()/throttleShut()),
-       so the word is not stacked into a label lying over the pipework, and the
-       label itself can go away with the handles when the hand leaves. */
+    // not a valve's: a fitting says it on its own glyph, so the word is not stacked into a label over the pipework
     const stw = live && p.role!=="fitting" ? partStateWord(p) : null;
-    // the top row inside the box, where the name lives. Deep enough to clear
-    // the box's own border and leave air above the caps.
     const nameH = nameRowH(p);
-    // THE PANEL IS THE FOOTPRINT, to the pixel: a 2px inset left the grid line
-    // showing inside the machine's own cells, so a box read one size and
-    // occupied another.
     const symFull = p.role==="tank";
-    // the shell sits 1 symbol unit in from the footprint, so the case takes it
-    // back - both in SCREEN px, or the corners part as soon as CELL leaves 16
+    // the shell sits 1 symbol unit in from the footprint and the case takes it back, both in SCREEN px
     const boxR = symFull ? (tankRad(p.id)+1)*DRAW_K : 0;
     const boxPath=()=>{ ctx.beginPath(); rr(x,y,w,h,boxR); };
     if(fit){ if(boxR){ boxPath(); ctx.fillStyle=C.machBg; ctx.fill(); }
              else fillRect(x,y,w,h,C.machBg); }
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
-    /* A TANK IS ITS BOX. Its shell is the one glyph whose SIZE is the design
-       figure (tankW()/tankH() off `vol`), so shrinking it by the name row drew
-       a vessel a cell smaller than the one the player bought. It takes the
-       whole footprint and the name stands ON it. */
+    // a tank's shell is the one glyph whose SIZE is the design figure, so it takes the whole footprint
     if(fit && (symFull || h-sh-nameH > 0))
       drawSym(p, x, symFull?y:y+nameH, w, symFull?h:h-sh-nameH, ink, L);
     if(dmgd) hatch(x+3,y+3,w-6,h-6,C.red,.4);
     else if(!partAccess(p) && fit) cornerTab(x+w,y,9,C.amber);
-    /* ONE ALARM MARK, ON THE NAME ROW, AND IT IS DRAWN OVER THE NAME. The lamp
-       was painted before the label and the bench's own warning was pushed up
-       into the margin over the box to get out from under it - so one was
-       buried by its own name and the other belonged to the machine above.
-       Deferred instead: the mark is the last thing on the box, so the plate,
-       the symbol and the selection frame all pass underneath it. */
+    // deferred, so the plate, the symbol and the selection frame all pass underneath the mark
     const mark = fit ? (L ? annLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
     if(mark){ const c=nameMark(x,y,nameH);
       wdots.push(()=> L ? lamp(c.x,c.y,mark) : dot(c.x-MARK_R,c.y-MARK_R,MARK_R*2,mark)); }
-    /* A PART IN LIMBO KEEPS THE MARK THE DROP PREVIEW GAVE IT. Same dash, same
-       red, same wash as partGhost() paints under the hand: the picture that
-       said "this will not fit" and the picture that says "this does not fit"
-       are one picture, so letting go changes nothing except that it is now
-       true. Over the symbol, not under it - it is a verdict on the box. */
+    // a part in limbo keeps the mark the drop preview gave it, so letting go changes nothing but that it is now true
     if(p.limbo){ ctx.save(); ctx.setLineDash([4,4]);
       fillRect(x,y,w,h,"rgba(255,90,69,.10)"); frame(x,y,w,h,C.red); ctx.restore(); }
-    /* ══ AND A MACHINE THE WATER HAS REACHED IS DRAWN IN IT ══
-       The ship is a SECTION, so standing water is a horizontal line and a box
-       the line crosses is half under it. Off the same regionFloodLine() the
-       panel's HOLDS row and the drowning sweep read, so the picture cannot
-       disagree with which machine is about to die. */
+    // off the same regionFloodLine() the panel's HOLDS row and the drowning sweep read
     if(live){ const fl=regionFloodLine(L,p);
       if(fl!==null){ const wy=Math.max(y, rowTop(Math.max(0,Math.ceil(fl))));
         if(wy < y+h){ ctx.save(); ctx.globalAlpha=0.32;
@@ -3521,49 +2298,22 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
           ctx.strokeStyle=C.blue; ctx.lineWidth=1.2;
           ctx.beginPath(); ctx.moveTo(x,wy+0.6); ctx.lineTo(x+w,wy+0.6); ctx.stroke();
           ctx.restore(); } } }
-    /* ══ AND A LIVE SQUEEZE DRAWS AS A LIVE CONDITION ══
-       A blast leaves a scar (roomPPk) and is history; a region holding its own
-       steam is still there and will take this machine next. The player has to
-       be able to tell "this room blew up once" from "this room is crushing my
-       plant right now", so one is a permanent stain on the BLAST layer and
-       this one pulses and goes away when the pressure does. */
+    // a blast leaves a scar and is history; a live squeeze pulses and goes away when the pressure does
     if(live && !dmgd){ const lim=partPburst(p);
       if(lim) fxPulse(x+2,y+2,w-4,h-4,C.red,
         fxEase(p.id+":sqz", roomPAt(L,p) >= lim*0.6 && !L.roomBurnOn ? 1 : 0), 1.1); }
-    // selection is an OUTLINE: the box keeps its own ink, so a picked machine
-    // still reads as the machine it is rather than as an amber silhouette
-    /* ONE STROKE FOR BOTH SHAPES, AND IT FOLLOWS THE CELL. The square branch went
-       through frame(), whose line is 1 DEVICE pixel by construction - right for a
-       widget's edge and a hairline round a machine the size this board draws now.
-       rr() with radius 0 is the square, so there is no second path to keep. */
-    // inset by half the pen so the whole line lands INSIDE the box, never on
-    // the neighbouring cell's edge
+    // selection is an OUTLINE, one stroke for both shapes, inset by half the pen so it lands inside the box
     if(on){ const lw=1*DRAW_K, i=lw/2; ctx.beginPath();
       rr(x+i,y+i,w-lw,h-lw,Math.max(0,boxR-i));
       ctx.strokeStyle=C.amber; ctx.lineWidth=lw; ctx.stroke(); }
-    /* A WRECKED MACHINE HAS NO READING. It printed its own value in red - a
-       destroyed pressurizer stood there stating 15.5 MPa through the hatching
-       that says it is not there any more - and an instrument on a machine
-       nobody can reach is not reporting anything. The box, the tear and the
-       REPAIR key are what it has to say. */
+    // a wrecked machine has no reading: the box, the tear and the REPAIR key are what it has to say
     const v = L&&fit&&!dmgd ? liveValue(p,L) : null;
-    /* THE NAME MOVED INSIDE THE BOX, onto its own top row - it used to sit in
-       the margin above, in the same lane a pipe and its fittings run through,
-       so a glyph landing on one buried it. The LIVE VALUE still waits for the
-       last pass, because a number is the one thing a pipe must not cover. */
-    // clipTxt with the ladder off, not fitTxt: a narrow machine used to get a
-    // 6px name beside its neighbour's 6.5px one, which reads as a different
-    // kind of label rather than as a shorter box
+    // clipTxt with the ladder off, not fitTxt: a narrow machine must not get a smaller name than its neighbour
     // the cause takes the state word's slot: a wreck has no state left to be in
     const nmw=partName(p)+(dmgd?"  "+dmgWhyOf(L,p.id):(stw?"  "+stw:""));
     if(fit && nameH){
       const nmo=Object.assign({},NAME_TXT,{color:dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))});
-      /* A FULL-BOX SYMBOL IS DRAWN UNDER ITS OWN NAME - a tank's water, hoops
-         and hatching all run through the top row - so the name carries a
-         ground, off the one txtPlate(). That ground may NOT run over the
-         CASE: the shell is the drawing, and its own line is what says how big
-         the vessel is. So the plate is held clear of the corner radius and the
-         name takes a SECOND ROW rather than a wider plate. */
+      // a full-box symbol runs under its own name, so the name carries a ground - held clear of the CASE, which is the drawing
       if(symFull){
         const inner=nameInner(w), ls=nameLines(nmw,w);
         let nb=y+nameH-3*DRAW_K, mw=0;
@@ -3572,31 +2322,18 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
         for(const l of ls){ clipTxt(l,x+w/2,nb,inner,nmo); nb+=NAME_LH; }
       } else clipTxt(nmw,x+w/2,y+nameH-3*DRAW_K,w-8*DRAW_K,nmo);
     }
-    // asked whether or not there is a value to print: the PLACE is a property
-    // of the machine, and the REPAIR key below stands in it too
+    // asked whether or not there is a value to print: the PLACE is the machine's, and the REPAIR key stands in it too
     const vb = fit ? valueBase(p,x,y,w,h,sh,nameH,nmw) : null;
-    /* WHERE THE REPAIR KEY STANDS: exactly where this machine's own value tag
-       does, in the last pass, so it covers whatever is drawn over the box
-       rather than being covered by it - a key you cannot press is worse than no
-       key. A machine with no value tag of its own (the rod drives) has no
-       anchor either, so the middle of its symbol is the fallback. */
+    // the repair key stands where the value tag does, in the last pass, so nothing can be drawn over a key you must press
     const rb = vb!=null ? vb : y+nameH+(h-sh-nameH)/2+3;
     const busy = dmgd && L.repair && L.repair.id===p.id;
-    // ON HOVER, or while a party is on it: the progress figure is the only
-    // report of a job in hand that stands on the machine itself
+    // on hover, or while a party is on it: the progress figure is the only report that stands on the machine itself
     const showRep = dmgd && (hovd||busy);
     tags.push(()=>{
-      /* A FITTING'S NAME IS PUT AWAY UNTIL THE HAND IS ON IT, on the same
-         terms as its handles: the label hangs in the pipe margin, outside the
-         box, so a dense grid carried a dozen of them permanently over the
-         pipework they belong to. What the valve is stood down as no longer
-         depends on the label at all - it is on the glyph. */
+      // a fitting's name is put away until the hand is on it, on the same terms as its handles
       if(!nameH && (p.role!=="fitting" || hovd || on))
         tag(nmw,x+w/2,y-3*DRAW_K,6.5*DRAW_K,.4*DRAW_K,!fit?"#3c4c47":(dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))));
-      /* THE VALUE WEARS ITS MACHINE'S WORST ALARM, and grey when there is
-         nothing wrong. Not a second opinion: annLamp() is the SAME table and
-         the SAME predicate as the lamp already drawn on this box, so the number
-         and the lamp cannot say different things about one component. */
+      // annLamp() is the SAME predicate as the lamp already on this box, so the number and the lamp cannot disagree
       if(v!=null && vb!=null && !showRep)
         tag(v,x+w/2,vb,VAL_TXT_SIZE,0,dmgd?C.red:(annLamp(p.id)||(on?C.amber:C.ink2)));
       if(showRep){ const kw=Math.min(w-8*DRAW_K,86*DRAW_K), kx=x+(w-kw)/2;
@@ -3612,34 +2349,15 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
         +(L?pipeThru(p,L):""));
   }
   pipeNozzles(NET,L);           // the joint, over the shell it lands on
-  /* ...and the valves in those joints, AFTER the component loop. A joint
-     STRADDLES a shell - half of it stands on the machine - so pushed before
-     the machines, the machine's own box took every press landing on the inner
-     half and a port could only be worked by aiming at its outer half. ORDER IS
-     PRIORITY (see below): the port is the smaller, more specific target, so it
-     goes last. */
+  // a joint STRADDLES a shell, so its valve goes after the component loop: order is priority, and the port is the smaller target
   if(L) drawPortValves(L);
-  /* the break plumes go down BEFORE the layer pass, because a plume is behind
-     a dial and not over it - and because an effect is not an instrument: the
-     FLOW METERS switch must not be able to switch off the picture of a hole. */
+  // the plumes go down BEFORE the layer pass: an effect is behind an instrument, and no switch may turn off the picture of a hole
   if(L) pipeBreaks(L);
-  /* ...and the compartment going up goes down at the same seam, for the same
-     two reasons: an effect is behind an instrument, and no menu switch may be
-     able to turn off the picture of an explosion. The BLAST layer is the
-     survey of what one LEFT; roomBurnFx() is the one happening. */
   if(L) roomBurnFx(L); else burnIdle();
   layerPass("over",L);          // instruments and annotations, on top of the machines
-  /* THE PRESSURIZER'S DIAL IS NOT A LAYER. It rode the FLOW METERS switch, and
-     that switch is about the three readings a RUN carries; this gauge is not on
-     a run at all, and it is the only instrument plant pressure has - turning
-     the pipe labels off left the one number the whole plant turns on with
-     nothing standing in for it. Same seam, no switch. */
+  // the pressurizer's dial is not a layer: it is the only instrument plant pressure has, so no switch stands it down
   if(L) pipeVessel(L);
-  /* ORDER IS PRIORITY: the hit test takes the LAST widget pushed. The tap
-     the tap handle that used to ride the pointer here is gone with the tap
-     shape: a fitting is placed in a CELL now, so nothing has to be aimed at a
-     fraction along a pipe and nothing competes with the waypoint grips or the
-     nozzles for the press. */
+  // order is priority: the hit test takes the LAST widget pushed
   if(!L){ partGhost();                  // where a machine would land...
           drawPortMarks();              // ...every port already placed...
           drawGhostPort();              // ...where the next pipe would start...
@@ -3649,13 +2367,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   if(L) drawHitAim();           // what the aimed hit would wreck, over the machine it names
   for(const t of tags) t();     // every name and value, over the pipework
   for(const d of wdots) d();    // ...and every alarm mark over all of them
-  // ...and the hovered port's ring last of all: it marks a joint the pipework,
-  // the tags and the layers all draw across (drawPortValves(), above)
-  /* strokeRect and not frame(): frame() snaps to whole SCREEN pixels, which is
-     what a machine's box wants and what a 2 px gap round a joint does not - at
-     the bench's own scale the snap is worth a fifth of that gap, and the ring
-     came out lopsided. Here the inset is half a line width on every side, so
-     the four gaps are equal by construction. */
+  // the hovered port's ring last of all; strokeRect and not frame(), whose snap to whole screen pixels leaves it lopsided
   if(portRing){ const r=portRing;
     ctx.strokeStyle=C.amber; ctx.lineWidth=1;
     ctx.strokeRect(r.x+.5,r.y+.5,r.w-1,r.h-1);
@@ -3665,25 +2377,12 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   return VIEW.y+VIEW.h;
 }
 
-/* ══ THE KEYS ARE HTML, AND THEY LIVE ON THE HEAD ROW ══
-   They are controls, not pictures: everything the canvas draws grows with the
-   window, which is right for the plant and wrong for a key sitting among rail
-   type that is plain px. So they are real <button>s, in the head row both
-   screens carry - one strip, so the LAYERS menu and the zoom key cannot drift
-   apart or be placed twice, and no per-frame placement off VIEW.
-
-   One ZOOM key, not two: at fit the only useful move is in, and zoomed in the
-   only move is all the way back out. Reads FIT whenever off 1 in either
-   direction, since the view zooms out past fit too. */
-/* THE KEY SNAPS BETWEEN THE WORKING VIEW AND THE WHOLE SHIP. z=1 is a window of
-   VIEW_CELLS_W x VIEW_CELLS_H now, so the old 1.8x rung has nothing left to do -
-   the working view already IS the close look, and what is no longer reachable by
-   hand is the other end. vFitAll() is the z the whole content box fits at. */
+// the keys are real HTML buttons, not pictures: they must not grow with the window the way the canvas does
+// one ZOOM key, snapping between the working view and the whole ship; vFitAll() is the z the content box fits at
 const zoomedOut=()=>VIEW.z < vFitAll()*1.02;
 function zoomToggle(){
   if(zoomedOut()){ const p=partOf(sel), r=p&&prect(p);
-    // the centring is vCenterOn()'s (core/ui.js), which the WASD walk lands on
-    // too - one writer, so the key and the walk cannot frame a machine differently
+    // vCenterOn() is the one writer, so the key and the WASD walk cannot frame a machine differently
     vScale(1);
     vCenterOn(r || {x:GX, y:GY, w:GW*CELL, h:gridH()}); }
   else { VIEW.ox=VIEW.oy=0; vScale(vFitAll()); }

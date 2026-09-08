@@ -1,36 +1,11 @@
 "use strict";
 
-/* ══ THE ARROW THE BOARD IS WALKED WITH ══
-   W A S D step from the selected machine to its neighbour in that direction.
-   While the keys are HELD one live endpoint tracks the candidate; each landed
-   hop APPENDS to a single Catmull-Rom curve threading every machine the walk
-   touched, tipped by one arrowhead at the leading end. Ported from the `oc`
-   node view (navarrow.js + keynav.js) and redrawn for canvas.
-
-   Endpoints are PLANT coords, re-projected through vScr() every frame, so the
-   curve is glued to the panels and pans and zooms with them; the stroke and the
-   head are plant sizes too, so the whole arrow scales with the drawing.
-
-   Nothing here is on `S` - a walk is a view of the board, not a fact about the
-   plant - and the curve dies on a DEADLINE checked per frame rather than on a
-   setTimeout, because the frame loop idles (main.js) and a timer would fire
-   into a frame nobody drew. */
-
 const NAV_TTL=900;                 // ms the whole curve survives after the last hop
 const NAV_FADE=260;                // ms of that spent fading out
-/* A FRACTION OF A CELL, like every other size on the drawing - scaled by VIEW.s
-   where it is drawn. Held in layout units the arrow kept ONE size on the glass,
-   so zoomed out to the whole ship it was a slab lying across half the board: it
-   is part of the picture, not furniture standing beside it. */
 const NAV_HEAD=0.8*CELL, NAV_HALF=0.4*CELL;    // arrowhead length and half-width
 const NAV_LW=0.2*CELL;                         // shaft width
-/* ONE COLOUR, THE WHOLE WAY. It was a gradient of the machines' own tints, which
-   is what oc does because there a node's colour is the only thing naming it -
-   here the panel it lands on is already labelled, so the blend said nothing and
-   only made the arrow harder to pick out. Amber is what a selection is. */
 const NAV_COL=C.amber;
-/* Catmull-Rom handle scale: smaller is shorter handles is sharper turns. 1/6
-   is the round one, and round on a four-hop walk reads as a loop of string. */
+// Catmull-Rom handle scale; smaller is sharper turns
 const NAV_SMOOTH=0.09;
 
 const navChain=[];                 // landed points {x,y} in PLANT coords
@@ -49,29 +24,7 @@ function navAlpha(){
   return left>=NAV_FADE ? 1 : Math.max(0,left/NAV_FADE);
 }
 
-/* ══ THE WALK IS BETWEEN PANELS, NOT BETWEEN MACHINES ══
-   A panel is what is READ - the machine is a box with a name on it - so the
-   panels are what the keys step through and what the camera frames. They stand
-   on the deck around the plant at their own solved slots (marginSlot(),
-   ui/margin.js), which is a different arrangement from the machinery's: two
-   machines side by side can have panels at opposite edges, and W from one is
-   then a genuinely different answer from W between their boxes.
-   THE RECT IS `_pan`, which marginPlace()'s one write pass gives EVERY panel in
-   plant units - the ones seated on the board, the ones cascaded to an edge and
-   the corner-anchored boards alike. `_slot` is only the seated ones, so PIPES
-   had no rect at all and could not be walked to.
-   AND NOT `vis`, WHICH MEANS "ON SCREEN THIS FRAME" (margin.js): gated on it the
-   walk could only reach what you were already looking at, which is the opposite
-   of what it is for - containment, the turbine and the radiators were all
-   unreachable the moment they scrolled off.
-   THE WALL PANEL IS IN, THE RUN PANEL IS NOT. They look like one pair (both are
-   `h.key`, both keyed on `sel`) and they are not: a run panel only exists while
-   a run is picked, but the wall panel falls back to matDefaultKey() and so
-   stands as long as anything is painted - and a CONTAINMENT is painted material
-   (design.js), not a machine, so that panel is the only way to reach one.
-   Its id is its own SELECTION KEY, not "mat", because landing on it selects the
-   cell the same way a click on the wall does - and the next hop then finds its
-   anchor in the ordinary way. */
+// the walk is between PANELS: `_pan` covers every panel, and `vis` is not asked or only what is on screen is reachable
 function navCentres(){
   const out=[];
   for(const h of (typeof MARGIN!=="undefined" && MARGIN || [])){
@@ -81,12 +34,7 @@ function navCentres(){
     const r=h._pan;
     out.push({id, x:r.x+r.w/2, y:r.y+r.h/2, rect:{x:r.x, y:r.y, w:r.w, h:r.h}});
   }
-  /* ══ AND WITH NO PANELS ON THE BOARD, IT IS BETWEEN MACHINES ══
-     The panels are hidden (MARGIN_HIDE, ui/margin.js) and a machine is read
-     through a peek beside the machine that is picked, so there is no second
-     arrangement standing on the deck to walk through - and gated on MARGIN
-     alone the keys simply did nothing. The boxes are what is left, and they
-     are what the panels were naming. */
+  // with the panels hidden (MARGIN_HIDE) the boxes are what is left to walk
   if(!out.length && typeof LAY!=="undefined" && LAY)
     for(const p of LAY.parts){
       if(!fitted(p)) continue;
@@ -97,20 +45,12 @@ function navCentres(){
 }
 const navFind=(centres,id)=>centres.find(c=>c.id===id)||null;
 
-// the machine closest to a plant point - what seeds a walk with nothing selected
 function navCentreMost(centres,tx,ty){
   let best=null, bd=Infinity;
   for(const c of centres){ const d=(c.x-tx)**2+(c.y-ty)**2;
     if(d<bd){ bd=d; best=c.id; } }
   return best;
 }
-/* THE NEAREST MACHINE IN A DIRECTION. It only qualifies if it lies AHEAD along
-   the direction and inside a 45 degree cone of it, so D picks something to
-   starboard and not something mostly above that happens to be marginally
-   rightward. A DIAGONAL additionally demands that exact quadrant - a positive
-   offset on BOTH axes - so it can only ever land on a genuinely off-axis
-   machine and never on the one a straight W or D would have picked; with
-   nothing there it returns null rather than inventing a target. */
 function navNearestInDir(centres,from,dx,dy){
   const diag=dx!==0&&dy!==0;
   const sx=Math.sign(dx), sy=Math.sign(dy);      // quadrant signs, taken before the normalise
@@ -121,18 +61,15 @@ function navNearestInDir(centres,from,dx,dy){
     const vx=c.x-from.x, vy=c.y-from.y;
     if(diag && (Math.sign(vx)!==sx || Math.sign(vy)!==sy)) continue;
     const along=vx*dx+vy*dy;
-    if(along<=1e-3) continue;                    // behind or square on: not ahead
+    if(along<=1e-3) continue;
     const lateral=Math.abs(vx*-dy+vy*dx);
-    if(lateral>along) continue;                  // outside the cone
-    const score=along+lateral*2;                 // close and on-axis wins
+    if(lateral>along) continue;
+    const score=along+lateral*2;
     if(score<bs){ bs=score; best=c.id; }
   }
   return best;
 }
 
-/* THE WALK'S CURSOR IS THE SELECTION. oc carries a second one because an arrow
-   hop there pans WITHOUT selecting; here a hop lands on a machine and lights
-   it, so a separate cursor would be a second answer to the same question. */
 function navAnchorOf(centres){
   const c=sel&&navFind(centres,sel);
   if(c) return c;
@@ -140,10 +77,7 @@ function navAnchorOf(centres){
   return navFind(centres, navCentreMost(centres,mid.x,mid.y));
 }
 
-/* Set the live endpoint, seeding the chain's first point off the anchor. A
-   chain whose end is no longer the anchor belongs to a walk the player has
-   left - clicked elsewhere, or a machine removed under it - so it is dropped
-   rather than joined to, which would draw a curve through a hop nobody made. */
+// a chain whose end is no longer the anchor belongs to a walk the player has left, so it is dropped
 function navDrawLive(from,to){
   navExpire();
   const tail=navChain[navChain.length-1];
@@ -152,7 +86,6 @@ function navDrawLive(from,to){
   navLive = to ? {x:to.x, y:to.y} : null;
 }
 
-// the candidate for the currently held direction, previewed
 function navPreview(dx,dy){
   const centres=navCentres();
   const from=(dx||dy)&&centres.length ? navAnchorOf(centres) : null;
@@ -161,57 +94,37 @@ function navPreview(dx,dy){
   navDrawLive(from||null, to||null);
 }
 
-/* Every key released: land on the candidate, select it, and pan there. The
-   live endpoint FREEZES into the chain and restarts the one shared deadline,
-   so a run of hops keeps the whole curve up until TTL after the LAST of them.
-   With no candidate the walk simply ends where it stood. */
 function navCommit(){
   const id=navTarget; navTarget=null;
   if(!id){ navReset(); return; }
   if(navLive){ navChain.push(navLive); navLive=null; }
   navDeadline=navNow()+NAV_TTL;
-  /* the SELECTION is still the machine - a panel is a view of one, and every
-     reader downstream (the highlight, the rail, paramsFor()) addresses the
-     machine - but the camera frames the PANEL, which is what was walked to. */
+  // selection stays the machine; the camera frames the panel, which is what was walked to
   const to=navFind(navCentres(),id);
   sel=id;
   if(to) vPanTo(to.rect);
 }
 
-/* ══ 1:1 ON THE PANEL YOU ARE STANDING ON ══
-   marginZoomMaxS() (ui/margin.js) is already the VIEW.s at which a panel is
-   drawn at exactly its own pixels - it is where vScale() stops the zoom - so
-   this is that figure and not a second definition of "1:1". Centres on the
-   panel through the same eased pan a hop uses. */
 function navZoom1(){
   const c=navFind(navCentres(), sel);
   if(!c || typeof marginZoomMaxS!=="function") return;
-  // the scale rides the pan's own tween - set here it snapped, and the drawing
-  // arrived from off to one side before sliding onto the panel
+  // the scale rides the pan's own tween; set directly it snaps
   vPanTo(c.rect, marginZoomMaxS()/Math.max(1e-9,VIEW.fit));
 }
-/* One row per plant screen, beside the walk they belong to rather than split
-   across the two screen files. Not the space bar: that is PAUSE in the control
-   room (screens/transport.js) and a live plant may not lose it. */
+// not the space bar: that is PAUSE in the control room and a live plant may not lose it
 keyAdd({k:"Enter", sc:"design",  lab:"1:1", fn:navZoom1});
 keyAdd({k:"Enter", sc:"operate", lab:"1:1", fn:navZoom1});
-// ...and the ladder either side of it, on the same two screens
 for(const sc of ["design","operate"]){
   keyAdd({k:"PageUp",   sc, lab:"ZOOM -", fn:()=>vZoomStep(-1)});
   keyAdd({k:"PageDown", sc, lab:"ZOOM +", fn:()=>vZoomStep(1)});
 }
 
-/* THE PAN AND THE FADE BOTH OWE FRAMES THE LOOP WOULD NOT OTHERWISE DRAW. An
-   input buys UI_TRAIL frames (ui.js) and this outlasts them, so the walk asks
-   for its own the way a live drag does. */
+// the pan and the fade outlast the UI_TRAIL frames an input buys, so the walk asks for its own
 function navStep(dt){
   const panning=vPanStep(dt);
   if(panning||navActive()) uiDirty();
 }
 
-/* Catmull-Rom to cubic bezier - the curve passes THROUGH every point. Emits
-   the path onto ctx when asked, and returns the unit tangent it arrives at the
-   last point by, which is what the head is squared to. */
 function navCurve(pts,emit){
   const n=pts.length;
   if(emit){ ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y); }
@@ -227,21 +140,7 @@ function navCurve(pts,emit){
   if(tl<1e-3){ tx=end.x-pts[n-2].x; ty=end.y-pts[n-2].y; tl=Math.hypot(tx,ty)||1; }
   return {x:tx/tl, y:ty/tl};
 }
-/* ══ ITS OWN CANVAS, STANDING OVER THE PANELS ══
-   A panel is HTML anchored in plant space (ui/margin.js) and the margin host is
-   a POSITIONED element, so it paints over #cv whatever order the plant is drawn
-   in - and the panels are what the walk now aims at, so the head landed behind
-   the one thing it was pointing at. This is a second canvas, not an SVG layer:
-   the arrow is drawn in canvas space with the canvas's own primitives, and the
-   only thing that changes is which surface it lands on. It is a LATER SIBLING
-   of BOTH margin hosts at the same z-index, so it clears the panels and still
-   sits under the topbar and the screen head, which are z-index 1.
-   ONE layer on the page, not one per screen: a walk is a single thing, and a
-   layer per screen put the live arrow on whichever screen was built LAST - the
-   control room's, whose root is display:none while the bench is up, so it
-   measured 0 x 0 and painted nothing.
-   The transform is resize()'s (screens/shell.js) - layout units, offset by the
-   topbar - so vScr() and every size in here mean the same as they always did. */
+// a second canvas, one per page not per screen, sibling of both margin hosts so the arrow clears the HTML panels
 let navCv=null;
 function navLayerEl(){
   if(navCv && navCv.isConnected) return navCv;
@@ -254,8 +153,6 @@ function navLayerPaint(){
   const el=navLayerEl();
   if(!el) return;
   const on=navActive();
-  // the layer is hidden rather than left holding a stale curve; KIT.show is the
-  // one hide (core rule), and a hidden canvas costs nothing to keep sized
   if(el._on!==on){ KIT.show(el,on); el._on=on; }
   if(!on) return;
   const rc=cv.getBoundingClientRect();
@@ -291,17 +188,13 @@ function navArrowDraw(){
   if(!(tot>0.5)) return;                         // two machines on one spot: no direction to draw
   const end=pts[pts.length-1];
   const tan=navCurve(pts,false);
-  // the endpoints came through vScr(), so the sizes take the same scale
   const k=VIEW.s, headL=NAV_HEAD*k;
-  // a hop shorter than the head would put the head's BASE behind the start and
-  // draw the arrow backwards, so the head is capped at a share of the walk
+  // capped at a share of the walk, or a short hop puts the head's base behind the start
   const hl=Math.min(headL, tot*0.6), hw=NAV_HALF*k*(hl/Math.max(1e-6,headL));
   const bx=end.x-tan.x*hl, by=end.y-tan.y*hl;
   const px=-tan.y, py=tan.x;
   const a=navAlpha();
   ctx.save();
-  // it crosses machines it is not about, so it is not quite opaque - and the
-  // head is the least transparent thing in it, because the head is the answer
   ctx.globalAlpha=a*0.9;
   // the shaft stops at the head's BASE, or it pokes out through the point
   navCurve(pts.slice(0,-1).concat([{x:bx, y:by}]), true);
