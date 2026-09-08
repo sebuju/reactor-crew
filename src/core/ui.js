@@ -961,6 +961,16 @@ function uiUp(e,el){
     if(!d.v || vIn(p)) partDragTo(d, d.v?vPt(p):p);
     if(d.gx!==d.sx||d.gy!==d.sy) moveTo(d.part,d.gx,d.gy);
   }
+  /* A GRIP DROPPED ON A GRIP JOINS THE TWO PIPES. Asked on the RELEASE and not
+     on every cell the drag crosses: merging mid-drag takes the grip out from
+     under the hand, and a grip passed OVER is not a grip aimed at. Both ends,
+     because one drag can close a joint at either. */
+  if(d&&d.type==="pipewp"&&D.runs[d.rid]){
+    if(d.which) for(const w of ["a","b"]){ const j=runJoinAt(d.rid,w);
+      if(j) sel=mergeRuns(d.rid,w,j.rid,j.which); }
+    // ...and the same drop for a WAYPOINT is one waypoint fewer, not a joint
+    else runPinCollapse(d.rid,d.i);
+  }
   // THE WALL COMMITS ON RELEASE - one buildLayout() for the whole gesture
   if(d&&d.type==="hull"&&d.c) gridDrag(d.edge,d.c);
   ui.drag=null;

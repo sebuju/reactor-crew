@@ -79,6 +79,16 @@ function setPartName(id,str){
   if(t){ if(!D.name) D.name={}; D.name[id]=t; }
   else if(D.name) delete D.name[id];
 }
+/* WHAT A THING IS FOR, IN THE PLAYER'S OWN WORDS - the same map shape as the
+   name, keyed by the same id, so a note rides designSig(), the recording head
+   and the save format the way a name does. A preset writes its own. */
+const NOTE_CAP=240;
+const noteFor=id=>(D.note&&D.note[id])||"";
+function setNote(id,str){
+  const t=(str||"").trim().slice(0,NOTE_CAP);
+  if(t){ if(!D.note) D.note={}; D.note[id]=t; }
+  else if(D.note) delete D.note[id];
+}
 let GY=100;                                   // grid top, set each frame by the layout section
 // sel starts null: a blank grid has nothing on it to be selected, and every
 // partOf(sel) reader already answers null for a key that names no part
@@ -174,6 +184,7 @@ function removePart(id){
      you can re-plumb, exactly as a tank with no runs is. */
   delete D.fittings[id];
   if(D.name) delete D.name[id];   // ids are reused on purpose, so a dead part's name must not be inherited by the next one
+  if(D.note) delete D.note[id];
   // a port belongs to the component - remove the component and its ports
   // (and whatever they carried) go with it, exactly like a tank's runs do.
   for(const pid in D.ports) if(D.ports[pid].p===id) removePort(pid);
@@ -1985,6 +1996,58 @@ function splitRun(rid,cell){
   runLay(rid); runLay(rid2);
   return rid2;
 }
+/* A WAYPOINT STANDING ON SOMETHING THIS RUN ALREADY GOES THROUGH: another
+   waypoint, or one of its own two ends. Both say the same thing twice, and the
+   router cannot honour the second - a route passes a cell once, so a run asked
+   to pass one cell twice is a run with no route at all. Asked by the DRAWING
+   too, so the picture says the drop will collapse before the hand lets go. */
+function runPinDup(rid,i){
+  const r=D.runs[rid], c=r&&r.pins[i]; if(!c) return false;
+  const same=q=>q[0]===c[0]&&q[1]===c[1];
+  return same(r.a) || same(r.b) || r.pins.some((q,j)=>j!==i&&same(q));
+}
+// ...and the drop that resolves it. THE DRAGGED PIN STANDS and whatever it
+// landed on goes, so the hand keeps the cell it chose; landed on an END, the
+// pin itself is what goes, because the end is not a thing a waypoint replaces.
+function runPinCollapse(rid,i){
+  if(!runPinDup(rid,i)) return;
+  const r=D.runs[rid], c=r.pins[i];
+  const same=q=>q[0]===c[0]&&q[1]===c[1];
+  r.pins=r.pins.filter((q,j)=>j===i || !same(q));
+  if(same(r.a)||same(r.b)) r.pins.splice(r.pins.indexOf(c),1);
+  runLay(rid);
+}
+const OTHEREND={a:"b", b:"a"};
+/* ══ JOIN TWO PIPES INTO ONE ══
+   The mirror of splitRun(), and THE GESTURE IS OVERLAP: drop one pipe's grip on
+   another pipe's grip and the two are one pipe. Two runs merely butted end to
+   end already traced as one connection while D.runs held two, so the id under
+   the cursor was the derived key, which owns no recipe - no grips, no bore of
+   its own, and SPLIT PIPE offered on neither half. The first run keeps its name
+   and its authored bore; the shared cell becomes a waypoint, so the merged run
+   re-routes through the corner it was drawn round.
+   Asked of the RECIPE and never of the laid cells: one cell two runs both want
+   is a cell the router refuses the second of, so there are no cells to read. */
+function runJoinAt(rid,which){
+  const r=D.runs[rid]; if(!r) return null;
+  const e=r[which];
+  for(const q in D.runs){ if(q===rid) continue;
+    for(const w of ["a","b"]) if(D.runs[q][w][0]===e[0] && D.runs[q][w][1]===e[1]) return {rid:q, which:w};
+  }
+  return null;
+}
+function mergeRuns(rid,which,rid2,which2){
+  const r=D.runs[rid], q=D.runs[rid2];
+  // waypoints in route order, read from the FAR end of each half toward the joint
+  const from=(run,w)=> w==="b" ? run.pins.slice() : run.pins.slice().reverse();
+  const pins=from(r,which).concat([r[which].slice()], from(q,OTHEREND[which2]));
+  const a=r[OTHEREND[which]].slice(), b=q[OTHEREND[which2]].slice();
+  runLift(rid); runLift(rid2);
+  delete D.runs[rid2]; delete RUNERR[rid2]; delete D.bore[rid2]; delete D.wall[rid2];
+  D.runs[rid]={a, b, pins};
+  runLay(rid);
+  return rid;
+}
 /* ══ THE ROUTER ══
    A* over cells carrying a DIRECTION. Every rule below was a measured bug in a
    dry run first, and each comment says which.
@@ -3346,6 +3409,19 @@ const moveCells=(p,nx,ny)=>[{q:p,x:nx,y:ny}].concat(
 function moveTo(p,nx,ny){
   if(p.pin) return false;
   const cells=moveCells(p,nx,ny);
+  /* A RUN'S END FOLLOWS ITS OWN NOZZLE. A port rides the part it is bolted to,
+     so a move used to carry the nozzles away and leave the pipework stamped
+     round the box's old footprint - ports on the machine, runs reaching where
+     it used to be. Read BEFORE anything moves: portAtCell() answers for the
+     board as it stands. */
+  const shift=[];
+  for(const {q,x,y} of cells){
+    const dx=x-q.x, dy=y-q.y; if(!dx&&!dy) continue;
+    for(const rid in D.runs) for(const w of ["a","b"]){
+      const e=D.runs[rid][w], pid=portAtCell(e[0],e[1]);
+      if(pid!=null && D.ports[pid].p===q.id) shift.push({rid, w, dx, dy});
+    }
+  }
   /* A tank is rebuilt from D.tanks on every buildLayout(), so its cell has to
      land back there or the move is undone by the next unrelated rebuild.
      moveTo() is the ONLY way a part changes position, so this is the one
@@ -3356,6 +3432,19 @@ function moveTo(p,nx,ny){
     if(D.fittings[q.id]) D.fittings[q.id].cell=[x,y]; }
   dTouch();                        // moves a part without rebuilding LAY - see dTouch() (design.js)
   markLimbo(LAY.parts);
+  // ...and the run is re-laid, not merely translated: the box it was routed
+  // round is somewhere else now, so the old cells are no route at all
+  const relay={};
+  for(const {rid,w,dx,dy} of shift){ const e=D.runs[rid][w];
+    D.runs[rid][w]=[e[0]+dx, e[1]+dy]; relay[rid]=1; }
+  /* A PIPE IS NOT SNATCHED BY WHATEVER IT IS PARKED BESIDE. runLift() takes a
+     run's nozzles off with its cells and runEndPort() then re-derives them from
+     the cell alone - first machine round the cell wins - so parking a moved
+     machine next to another one handed that machine the pipe. The nozzle is
+     UNLINKED instead of lifted: it has already ridden its own part to the new
+     cell, so it stands there and runPortFor() claims that very one back. */
+  for(const pid in D.ports) if(relay[D.ports[pid].run]) delete D.ports[pid].run;
+  for(const rid in relay) runLay(rid);
   return true;
 }
 // every cell a party could stand in beside p and still be working ON p - not
