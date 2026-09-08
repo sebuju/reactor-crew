@@ -1,57 +1,14 @@
 "use strict";
-/* the one storage layer, and the two backends under it */
+/* No top-level side effects: this file is bundled into a `new Function` eval in Node, where `fetch` may not exist. */
 
-/* ═══════════════ THE SERVER IS OPTIONAL AND THE GAME DOES NOT NEED IT ═══════════════
-
-   `index.html` opens straight off the filesystem and every part of the game
-   works there. What `file://` cannot do is write a file, so this is the one
-   place that asks whether anybody is listening: `storeProbe()` pings
-   `tools/server.js`, and everything below either talks to it or answers "no"
-   quietly. NOTHING here throws and nothing here refuses to load - a panel that
-   wants to save asks, gets `null`, and prints `storeWhy()`.
-
-   NO TOP-LEVEL SIDE EFFECTS. Not one. This file is concatenated into the
-   bundle the headless tools evaluate through `new Function` in Node, where
-   `fetch` may not exist at all and `window` is a stub; a probe at load time
-   would fire on every headless run and a `fetch` at load time would take the
-   whole bundle down with it. The probe is a call the page makes, once, when it
-   boots. */
-
-/* `base` is an override and normally stays empty: the page is served by the
-   same process on whatever port it was given, so the URL has to be RELATIVE.
-   Hard-coding `http://localhost:8017` would be wrong the moment somebody
-   passes a port - and wrong in a way that looks like the server being down. */
+/* Relative, never absolute: the page is served by the same process on whatever port it was given. */
 const STORE = {on:false, base:"", probed:false};
 const storeURL = tail => (STORE.base || "api/") + tail;
 
-/* ═══════════════ JSON CANNOT CARRY WHAT A RECORDING IS MADE OF ═══════════════
-
-   A plant state is largely `Float64Array`s - the nodal core's flux, fuel
-   temperature and void fields are all flat typed arrays - and a recording is
-   many plant states. `JSON.stringify` turns a Float64Array into
-   `{"0":1,"1":2,...}`, an object of numbers that parses back as a plain object
-   and then reads `.length` as undefined in the solver. So a tagged form on the
-   way out and back again on the way in.
-
-   WHY IT LIVES HERE AND NOT IN THE RECORDER. The recorder's own cloner stays
-   bit-exact and in-memory: it never leaves the process, so it can keep the
-   typed array itself and copy it. This one crosses a PROCESS BOUNDARY, where
-   the only thing that survives is text, so it has to be a wider and slower
-   format - an array of plain numbers per field, allocated twice. Two different
-   jobs; the day they are made one, the in-memory path pays for the text.
-
-   Non-finite numbers go the same way and for the same reason: `stringify`
-   turns `Infinity` and `NaN` into `null`, which is 0 the moment anything adds
-   to it. `s.perV` - the reactor period - starts at `Infinity` on every reset,
-   so this is not hypothetical. */
-
-/* One table, so a tag and its constructor cannot drift apart. Add a kind here
-   and both directions know about it. */
+/* `JSON.stringify` flattens a typed array to a plain object and turns Infinity/NaN into null; both get tagged. */
 const TARR = {__f64:Float64Array, __f32:Float32Array, __i32:Int32Array, __u8:Uint8Array, __i8:Int8Array};
 const NUMTAG = "__num";
-/* An element of a typed array is always a number, so a non-finite one can be
-   the bare string without ambiguity. A number sitting loose in an object
-   cannot, so that one gets the tag. */
+/* A typed-array element is always a number, so a bare string is unambiguous where a loose one needs the tag. */
 const packNum = n => Number.isFinite(n) ? n : String(n);
 
 function packVal(v){
@@ -64,7 +21,7 @@ function packVal(v){
     for(const k of Object.keys(v)) o[k] = packVal(v[k]);
     return o;
   }
-  return v;                                  // string, boolean, null, undefined
+  return v;
 }
 
 function unpackVal(v){
@@ -72,8 +29,7 @@ function unpackVal(v){
   if(Array.isArray(v)) return v.map(unpackVal);
   const keys = Object.keys(v);
   if(keys.length === 1){
-    /* One key only, so a real object that happens to carry a field called
-       `__f64` alongside anything else is still read as an object. */
+    /* One key only, so an object that merely carries a `__f64` field alongside others stays an object. */
     const k = keys[0];
     if(k === NUMTAG && typeof v[k] === "string") return Number(v[k]);
     if(TARR[k] && Array.isArray(v[k])) return TARR[k].from(v[k], Number);
@@ -83,13 +39,7 @@ function unpackVal(v){
   return o;
 }
 
-/* ═══════════════ IS ANYBODY LISTENING ═══════════════ */
-
-/* Defensive to the point of rudeness, because every way this can fail is a way
-   the game still has to start: no `fetch` at all (the headless tools, and the bundle
-   run through `new Function` in Node), a `fetch` that throws synchronously on
-   `file://`, a 404 from something else squatting on the port, and a 200 whose
-   body is somebody's HTML rather than our `{ok:true}`. */
+/* `j.ok` too: a 200 may come from something else on the port, and the game still has to start through it. */
 async function storeProbe(){
   STORE.probed = true;
   STORE.on = false;
@@ -103,16 +53,7 @@ async function storeProbe(){
   return STORE.on;
 }
 
-/* ═══════════════ THE FOUR ACTS ═══════════════
-
-   `kind` is "scenarios" or "recordings". Every one of these RESOLVES on
-   failure rather than rejecting, so a caller on `file://` is a `null` and not
-   an unhandled rejection halfway through a draw.
-
-   `null` from a list means THERE IS NO STORE; `[]` means the store is empty
-   and nothing has been saved yet. A panel prints `storeWhy()` for the first
-   and "nothing saved" for the second, so keep them apart. */
-
+/* These resolve on failure, never reject; `null` is NO STORE, `[]` is a store with nothing in it. */
 const storeOff = () => !STORE.on || typeof fetch !== "function";
 
 async function storeList(kind){
@@ -158,24 +99,12 @@ async function storeDelete(kind, id){
   }catch(e){ return false; }
 }
 
-/* ══ ONE STRING, ONE PLACE ══
-   Two panels will want to explain the same absence, and two panels wording it
-   differently is two different accounts of whether anything is broken. It is
-   not broken: the game is running exactly as designed and saving is the extra. */
 const storeWhy = () =>
   "SAVING IS OFF. The page is running from the filesystem, which cannot write " +
   "files - everything else works. Run  node tools/server.js  and open the " +
   "address it prints to keep scenarios and recordings on disk.";
 
-/* ═══════════════ THE DEBUG DUMPS ═══════════════
-
-   A different job from the four acts above: not one player's library of named
-   scenarios, but a pile of timestamped files a developer reads with a
-   spreadsheet and then throws away. So it is a flat directory (`snapshots/`,
-   gitignored), the body is whatever text or image the caller built, and the
-   name carries the timestamp instead of an id anybody has to remember.
-   PNG goes as base64 - the body of an XHR is text and a PNG is not. */
-
+/* An XHR body is text, so a PNG goes as base64. */
 async function snapPut(name, body, b64){
   if(storeOff()) return false;
   try{
@@ -190,8 +119,6 @@ async function snapPut(name, body, b64){
   }catch(e){ return false; }
 }
 
-/* `null` is no store here too, and `[]` is an empty directory - the same two
-   answers storeList() gives, for the same reason. */
 async function snapList(){
   if(storeOff()) return null;
   try{
@@ -202,7 +129,6 @@ async function snapList(){
   }catch(e){ return null; }
 }
 
-/* Text, not JSON: the caller knows what it asked for and a CSV is not JSON. */
 async function snapGet(name){
   if(storeOff()) return null;
   try{
@@ -211,8 +137,6 @@ async function snapGet(name){
   }catch(e){ return null; }
 }
 
-/* `null` is no store, a number is how many files went - the same two-answer
-   shape the lists above use. */
 async function snapPurge(){
   if(storeOff()) return null;
   try{
