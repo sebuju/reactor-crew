@@ -437,7 +437,8 @@ function netDryParts(s){
   for(const id in net.nodesOfPart){
     if(D.tanks && D.tanks[id]) continue;
     for(const i of net.nodesOfPart[id])
-      if(!F.wet[i] && !booked[i]){ out.push(id); break; } }
+      /* a steam space is never RUN DRY: an exhaust hood at the vacuum holds grams, and the alarm would read that noise */
+      if(!F.wet[i] && !booked[i] && !(net.vapour && net.vapour[i])){ out.push(id); break; } }
   return out;
 }
 /* any edge of that run counts: a run cut by a throttle is two segments, either can be at the cap */
@@ -1020,8 +1021,11 @@ let reliefOuts=null, reliefOutsFor=null, netPassLive=false;
 /* netSolve() writes ed.w, which fricOf() reads next solve, so a second paint solve feeds the friction the sim linearises against */
 let netPassSol=null, netPassSolS=null;
 const netPassClear=()=>{ reliefOuts=null; reliefOutsFor=null; netPassSol=null; netPassSolS=null; };
-const netPassStart=()=>{ netPassLive=true;  netPassClear(); };
-const netPassDrop =()=>{ netPassLive=false; netPassClear(); };
+const netPassStart=()=>{ netPassLive=true;  netReadOnly=true;  netPassClear(); };
+const netPassDrop =()=>{ netPassLive=false; netReadOnly=false; netPassClear(); };
+/* a solve nobody is marching on leaves no mark: ed.w is what the next solve linearises friction against, so a reader that writes it feeds the sim */
+let netReadOnly=false;
+const netReading = on => { const was = netReadOnly; netReadOnly = !!on; return was; };
 function reliefRate(s, fid){
   if(!(P && P.net)) return 0;
   let o = (netPassLive && reliefOutsFor===s) ? reliefOuts : null;
@@ -2126,7 +2130,7 @@ function netSolve(net, s){
   const q = new Float64Array(net.edges.length);
   netFlows(net.edges, b, fixed, q, s);
   // what fricOf() reads next solve
-  for(let e=0;e<net.edges.length;e++) net.edges[e].w = q[e];
+  if(!netReadOnly) for(let e=0;e<net.edges.length;e++) net.edges[e].w = q[e];
   netDiverge(net, q, fixed, net.store, b);
   const sol = {net, s, b, q, fixed, touch, ref: net.refNow, store: net.store};
   if(netPassLive){ netPassSol = sol; netPassSolS = s; }
@@ -2159,6 +2163,14 @@ function netReadP(sol, byP){
     } }
 }
 
+/* SIGNED along the edge's own u->v order; what a run carries is the flow COMMON to both its halves - same sign, the smaller; opposing signs, zero - because both ends feeding a hole in the middle traverse nothing */
+function runEdgeCommon(net, q, e){
+  const ed = net.edges[e];
+  let v = q[e];
+  if(ed.pair !== undefined){ const w = q[ed.pair.i];
+    v = (v >= 0) === (w >= 0) ? (Math.abs(w) < Math.abs(v) ? w : v) : 0; }
+  return v;
+}
 /* pure over a netSolve() answer: reads the field and the flows, writes only into the bags it was handed, and returns the core's own circulation */
 function netReadEdges(sol, byLoop, byRun, byDrop, outs){
   const net = sol.net, s = sol.s, b = sol.b, q = sol.q, fixed = sol.fixed, ref = sol.ref;
@@ -2179,13 +2191,8 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
   let core = 0, spill = 0, spillSec = 0; const coreBy = outs ? {} : null;
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
-    /* SIGNED along the edge's own u->v order; what a run carries is the flow COMMON to both its halves - same sign, the smaller; opposing signs, zero - because both ends feeding a hole in the middle traverse nothing */
-    if(byRun && ed.key && ed.meter !== false){
-      let v = q[e];
-      if(ed.pair !== undefined){ const w = q[ed.pair.i];
-        v = (v >= 0) === (w >= 0) ? (Math.abs(w) < Math.abs(v) ? w : v) : 0; }
-      byRun[ed.key] = (byRun[ed.key]||0) + v;
-    }
+    if(byRun && ed.key && ed.meter !== false)
+      byRun[ed.key] = (byRun[ed.key]||0) + runEdgeCommon(net, q, e);
     /* signed per TANK off the tank's OWN node, positive out: a tank whose far end is not the core has no core end for a core-relative sign to read */
     if(outs && net.tankIdByNode){
       const tu = tankNodes.has(ed.u) ? net.tankIdByNode[ed.u] : undefined,
@@ -2324,7 +2331,7 @@ function netPressures(s){
 /* the thermosiphon, MEASURED: its own solve on its own field, because the head is inside every pump edge's conductance. Held between takes - it feeds a bar and a trend, nothing closed-loop */
 const NAT_PASSES = 8, NAT_TOL = 1e-3, NAT_EVERY = 25;
 function netNatCirc(net, s, natLoop){
-  if(net.natLoop && ((net.natTick = (net.natTick||0)+1) % NAT_EVERY)){
+  if(net.natLoop && (netReadOnly || ((net.natTick = (net.natTick||0)+1) % NAT_EVERY))){
     Object.assign(natLoop, net.natLoop); return; }
   const sNat = Object.create(s); sNat.flowScale = 0; sNat.pBy = net.natPBy || s.pBy;
   const w = net.edges.map(ed => ed.w);
@@ -2337,9 +2344,8 @@ function netNatCirc(net, s, natLoop){
       ans = netReadEdges(sol, null, null, null, null);
       if(prev !== null && Math.abs(ans-prev) <= NAT_TOL*Math.max(Math.abs(ans), 1e-9)) break;
       prev = ans; }
-    net.natPBy = sNat.pBy;
     netReadEdges(sol, natLoop, null, null, null);
-    net.natLoop = Object.assign({}, natLoop);
+    if(!netReadOnly){ net.natPBy = sNat.pBy; net.natLoop = Object.assign({}, natLoop); }
   } finally { netHoldStore(was);
     for(let e=0;e<net.edges.length;e++) net.edges[e].w = w[e];
     netFieldUpdate(net, s); }
@@ -2553,6 +2559,14 @@ function buildStockPlumbing(opt){
   const port = (pid,dx,dy) => pid && partOf(pid) ? seedPort(pid,dx,dy) : null;
   const run  = (a,b,...rest) => (a && b) ? seedRun(a,b,...rest) : null;
 
+  /* on the CONDENSER's outlet nozzle and never the pump's suction face: a tank a suction walk reaches is a reserve (pumpResOf) and commissions that pump stopped */
+  let CWT = null;
+  { const cd = partOf("cond"+sfx(0));
+    if(cd) CWT = tank("cwtank","", cd.x-4, cd.y-3, { name:"CW SURGE TANK", col:"#7fb8d6",
+      tip:"Takes the expansion of the circulating water as it warms, and sets the cooling loop's pressure. Without it the loop is rigid and reads whatever the compartment is at.",
+      vol:10, level:60, fluid:"water",
+      gas:{p0:0.6}, check:false, auto:"always", burst:null}); }
+
   /* everything below belongs to a REACTOR rather than to the ship */
   const UN=[];                       // one bag of ids per unit, for the runs below
   for(let u=0;u<units;u++){
@@ -2758,6 +2772,7 @@ function buildStockPlumbing(opt){
     seedRun(pRad0R, pRad1L);
     seedRun(pRad1R, last.pCondCwI);
     for(let s=0;s+1<sets;s++) seedRun(ST[s+1].pCondCwO, ST[s].pCondCwI);
+    run(CWT && port(CWT,partOf(CWT).w,1), port("cond"+first.S,-1,0));
   }
 
   /* the header is the UNIT's and the riser is the SET's; hdr[u] is the last tee laid on unit u and nothing more */
