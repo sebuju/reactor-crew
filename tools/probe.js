@@ -4,7 +4,7 @@ const {portOnFace,spliceFitting,tieFitting}=require('./bundle');
 const M=require('./bundle').headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
  'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,addPortAt,seedPort,seedRun,'+
- 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,'+
+ 'buildLayout,buildStockPlumbing,buildStockAutomation,pipeMap,pipeNetwork,nodeGraph,'+
  'crossTies,selfRuns,designIssues,loopMap,tankCircuit,tankPrimary,tankIds,tankKg,'+
  'netBuild,netFlowK,ROLE:()=>ROLE,partOf,partName,mwE,loopKg,hotMass,radIds,radArea,'+
  'netKgs,sgIds,sgLvl,secP,turbCount,condCount,circName,netTempAt,netQualAt,advectClampCount,'+
@@ -22,6 +22,8 @@ function withPlant(build, opts){
   M.buildStockPlumbing({loops:(opts&&opts.loops)||1});
   if(build) build(M);
   M.buildLayout();
+  /* the cabinet is part of the plant: a preset always wires one, and without it s.fregBy has no live driver at all, so the feed valve is frozen wherever commissioning left it */
+  M.buildStockAutomation();
   M.commission();
   return M.S();
 }
@@ -136,7 +138,7 @@ const CASES={
     M.buildStockPlumbing({loops:1}); M.latPreset(M.coreD("core"),1);
     // H/D 2.0: the COMPACT preset alone reads cz 0.70, nowhere near the warning
     { const c=M.coreD("core"); c.lat.len=2*c.lat.len/1.4; M.latRevolve(c); }
-    M.buildLayout(); M.commission();
+    M.buildLayout(); M.buildStockAutomation(); M.commission();
     const s=M.S(), P=M.P(); s.diceOff=true;
     M.act("split",true);
     M.act("rodBank",P.NB-1,Math.min(1,s.rodZ[P.NB-1]+0.10));
