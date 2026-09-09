@@ -2,14 +2,15 @@
 
 /* mm; every conductance in this file is linearised about BORE_REF */
 const BORE_REF = 750;
-const PIPE_BORE_MM = {cw:750, feed:1125, surge:225, hpi:187.5, relief:150, boron:150};
+/* mm: the bore that carries w kg/s of a fluid at rho at the design velocity v. The one expression a bore is ever produced by. */
+const boreForW = (w, rho, v) => Math.round(
+  Math.sqrt(4*Math.max(w,0)/(Math.PI*Math.max(rho,1e-3)*Math.max(v,1e-3)))*1000);
+/* m/s. Erosion sets the liquid figure, and it sits inside both a 2 m/s circulating-water conduit and a 5 m/s feed line; pressure drop sets the vapour one. A primary leg states its own (COOLANT[].vLeg). */
+const V_LIQ = 3, V_VAP = 50;
+/* A suction line is one size up, for NPSH. */
+const SUC_BORE_K = 2;
 const legBoreMm = () => { const a = COOLANT[priD().cool];
-  const n = Math.max(1, typeof LAY !== "undefined" && LAY ? sgCount() : 1);
-  const w = RATED_KW()/(a.cp*coreDT0()*n);
-  return Math.round(Math.sqrt(4*w/(Math.PI*a.dens*RHO_K*a.vLeg))*1000); };
-const boreMm = kind => (kind === "hot" || kind === "cold") ? legBoreMm()
-  : PIPE_BORE_MM[kind] !== undefined ? PIPE_BORE_MM[kind] : BORE_REF;
-const boreK = kind => boreMm(kind)/BORE_REF;
+  return boreForW(legDutyKgs(), a.dens*RHO_K, a.vLeg); };
 /* P before D: a fitting resized after commissioning must not move the plant that is running */
 const fitBoreMm = fid => { if(BORE_NOM) return fitBoreSuggest(fid);
   const f = (typeof P!=="undefined" && P) ? P.fittings : D.fittings;
@@ -17,16 +18,22 @@ const fitBoreMm = fid => { if(BORE_NOM) return fitBoreSuggest(fid);
 /* cached for one design pass: shellsOf() is a graph walk */
 let fitBoreCache = {}, fitBorePass = -1;
 const fitBoreSuggest = fid => {
-  if(fitModeOf(fid) !== "relief") return FIT_BORE0;
+  /* a tee is a piece of the line it stands in, so it is as wide as the widest run landing on it */
+  if(fitModeOf(fid) !== "relief"){
+    let v = 0;
+    for(const r of pipeNetwork())
+      if(r.a === fid || r.b === fid) v = Math.max(v, runBoreMm(r));
+    return v > 0 ? v : FIT_BORE0; }
   const pn = layPass();
   if(pn && fitBorePass !== pn){ fitBoreCache = {}; fitBorePass = pn; }
   if(pn && fitBoreCache[fid] !== undefined) return fitBoreCache[fid];
   const shells = shellsOf(fid);
   let v = FIT_BORE0;
   if(shells.length && sgCount() > 0){
-    const ci = shellCirc(shells[0]), lift = reliefSet(fid).lift;
+    /* the DRAWING's setpoint: a suggestion is a figure about the plant being drawn, and designBake() runs where P is the last plant commissioned */
+    const ci = shellCirc(shells[0]), lift = reliefSetD(fid).lift;
     const rho = rhogOf(satOfCirc(ci), tsatSec(lift, ci));
-    const peers = reliefFitIds().filter(o => fitSpring(o) && shellsOf(o).some(id => shells.includes(id))).length;
+    const peers = reliefFitsD().filter(o => fitSpringD(o) && shellsOf(o).some(id => shells.includes(id))).length;
     const want = plantSteam()*shells.length/sgCount()/Math.max(peers, 1);
     const area = want/(ORIF_CD*Math.sqrt(2*Math.max(rho,1e-3)*(1-RCRIT)*lift*1e6));
     if(isFinite(area) && area > 0) v = Math.sqrt(4*area/Math.PI)*1000;
@@ -39,8 +46,59 @@ let BORE_NOM = false;
 const withNomBore = fn => { BORE_NOM = true; try { return fn(); } finally { BORE_NOM = false; } };
 /* never the derived key as well: a cut neighbour's orphaned bore would land on the next run laid on the same faces */
 const runIdOf = r => r.rid !== undefined ? r.rid : r.key;
+/* The parts the run's OWN two end cells land on, never what stands beyond a fitting: walk through and a header takes the smallest duty on the far side of the tee. */
+const runEndParts = r => { const ends = runEnds(r.key, r.k); if(!ends) return [];
+  const out = [];
+  for(const n of ends){ const p = partOf(n) || partOf(n.slice(0,-1));
+    if(p) out.push({p, face: n.slice(p.id.length)}); }
+  return out; };
+/* kg/s the run has to carry: the SMALLEST figure either end states. The minimum is what tells an injection line from the leg it is teed into. null where no end states one. */
+/* kg/s ONE machine face states, which is what both a pipe bolted to it and its own casing are sized for. A fitting is transparent and states nothing. */
+const endDutyKgs = (p, face, vap) => { const R = ROLE[p.role];
+  if(!R || p.role === "fitting") return 0;
+  if(p.role === "pump")        return pumpFlow(p.id);
+  if(p.role === "turb")        return turbKgs(p.id);
+  if(p.role === "tank")        return tankKg(p.id)/RESERVE_T;
+  if(p.role === "radiator")    return cwDutyKgs();
+  if(R.sgtr)                   return onStage(p.id, face, 1)
+                                    ? plantSteam()/Math.max(1, sgCount()) : legDutyKgs();
+  if(R.thermal === "sink")     return vap ? plantSteam()/Math.max(1, condCount()) : cwDutyKgs();
+  if(R.internal || R.thermal === "source") return legDutyKgs();
+  return 0; };
+const runDutyKgs = r => {
+  const vap = edgeLaw(r) === LAW_VAPOUR;
+  let w = null;
+  for(const {p, face} of runEndParts(r)){ const v = endDutyKgs(p, face, vap);
+    if(v > 0 && (w === null || v < w)) w = v; }
+  return w; };
+/* The vessel the run's own end states, so a turbine exhaust comes out wide and a steam line narrow. */
+const runVapP = r => { let p = null;
+  for(const {p: part} of runEndParts(r)){ const R = ROLE[part.role];
+    const q = R && R.sgtr ? sgDesignP(part.id) : (R && R.thermal === "sink") ? condPDes() : null;
+    if(q > 0 && (p === null || q < p)) p = q; }
+  return p === null ? sgDesignP() : p; };
+/* A relief line is the valve's own bore: it is sized off what it protects, and nothing either end of it states that. */
+const runReliefBore = r => { for(const {p} of runEndParts(r))
+    if(p.role === "fitting" && fitModeOf(p.id) === "relief") return fitBoreMm(p.id);
+  return null; };
+const runBoreSuggest = r => {
+  const rel = runReliefBore(r); if(rel !== null) return rel;
+  const w = runDutyKgs(r); if(w === null) return BORE_REF;
+  const vap = edgeLaw(r) === LAW_VAPOUR, ci = runCircOf(r);
+  const mm = boreForW(w, circDesRho(ci, vap, vap ? runVapP(r) : 0),
+                      vap ? V_VAP : runOnLeg(r) ? circCoolOf(ci).vLeg : V_LIQ);
+  return runOnSuction(r) ? SUC_BORE_K*mm : mm; };
+/* an unauthored circuit - every secondary and every circulating-water circuit on the board - is WATER, never the primary's fluid */
+const circCoolOf = ci => circCool(ci) || COOLANT[0];
+const circDesRho = (ci, vap, pVap) => vap
+  ? rhogOf(satOfCirc(ci), satT(satOfCirc(ci), pVap)) : circCoolOf(ci).dens*RHO_K;
+/* A run landing on a pump's suction face; and a primary LEG, which is the only run a coolant states its own velocity for. */
+const runOnSuction = r => runEndParts(r).some(({p, face}) =>
+  p.role === "pump" && pumpSucNode(p.id) === coreFold(p.id+face));
+const runOnLeg = r => { const ci = runCircOf(r);
+  return ci >= 0 && coreOnCirc(ci).length > 0; };
 const runBoreMm = r => { const k=runIdOf(r);
-  return (!BORE_NOM && D.bore && D.bore[k] !== undefined) ? D.bore[k] : boreMm(r.k); };
+  return (!BORE_NOM && D.bore && D.bore[k] !== undefined) ? D.bore[k] : runBoreSuggest(r); };
 const runBore = r => runBoreMm(r)/BORE_REF;
 const runVol = r => Math.PI/4*Math.pow(runBoreMm(r)/1000, 2)*r.L;
 /* m^3 of fluid off the box where the machine does not state it */
@@ -62,6 +120,16 @@ function nodeVol(pid, nid, list){
   return tube ? sgRowOf(pid).tubeV/2 : Math.max(0.1, p.w*p.h*PART_VOL_CELL)/2;
 }
 
+/* m^2 the path passes: its own face's duty at the velocity its ROLE row states. A bundle's flow area is not its nozzle's, which is why the velocity is the path's and not the pipework's. */
+const pathAreaSuggest = (pid, IN) => { const p = partOf(pid); if(!p) return 0;
+  const vap = !!(IN.vap && IN.vap.indexOf("a") >= 0);
+  const w = endDutyKgs(p, IN.a, vap); if(!(w > 0)) return 0;
+  const ci = circOfNode(coreFold(pid+IN.a));
+  return w/(circDesRho(ci, vap, vap ? sgDesignP() : 0)*IN.v); };
+/* The water inside a machine has to be accelerated like the water in a pipe: I = L/A on the path's OWN duct. A path that is not a duct - a shell pool, a hotwell, a turbine's exhaust space - states no velocity and has no inertance, because that water's momentum is not the nozzle's. */
+const partPathI = (pid, IN) => { if(!(IN.v > 0) || !(IN.len > 0)) return 0;
+  const A = pathAreaSuggest(pid, IN);
+  return A > 0 ? IN.len/A : 0; };
 /* a MASS term only - nothing here may reach a conductance */
 const STEEL_RHO = 7850;    // kg/m^3
 const ALPHA_STEEL = 1e-5;  // m^2/s, thermal diffusivity of a pressure-vessel steel
@@ -78,7 +146,8 @@ let feedHeadCache = 0, feedHeadPass = -1;
 const feedHeadMax = () => { const pn = layPass();
   if(pn && feedHeadPass === pn) return feedHeadCache;
   let h = 0;
-  for(const id of pumpIds()) if(secGensOf(id).length) h = Math.max(h, pumpHead(id));
+  /* a feed line is walled for the worst its own pump can reach, and that is its SHUTOFF head - what it puts on the line the moment the regulating valve shuts */
+  for(const id of pumpIds()) if(secGensOf(id).length) h = Math.max(h, pumpHead(id)*(1 + PUMP_DROOP));
   if(pn){ feedHeadCache = h; feedHeadPass = pn; }
   return h; };
 /* the column is against the TOP of the circuit: the anchor is a solved quantity and this is asked with no S */
@@ -342,12 +411,18 @@ function netFieldUpdate(net, s){
 /* the ONE place the law is applied: an edge states a flow coefficient, nothing else */
 const edgeG = (net, ed, s) => {
   const C = typeof ed.C === "function" ? ed.C(s) : ed.C;
-  const h = C > 0 ? (typeof ed.h === "function" ? ed.h(s) : (ed.h || 0)) : 0;
+  /* the AUTHORED head, never edgeH()'s: the friction law is linearised about the drop it is itself asked to account for, and the momentum term is not one */
+  const h = C > 0 ? (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0)) : 0;
   const hSrc = C > 0 && ed.hSrc ? ed.hSrc(s) : 0;
   const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc, ed.chokeAt, ed.gasAt) : 0;
   if(net.choke && ed.i !== undefined) net.choke[ed.i] = (g > 0 && FLOWG_CHOKE) ? 1 : 0;
-  return g;
+  return g > 0 ? g/(1 + g*edgeIn(ed)) : g;
 };
+/* I/dt in MPa per kg/s, the inertance as a resistance over one tick. `I*dw/dt` is a TIME derivative and is identically zero in a steady solve, so it exists inside a march and nowhere else - a settle, a reference solve and a governor walk all carry none. That is also what leaves `ed.w` at the flows the first march starts from, so its `In*w0` cancels its own conductance factor exactly and the term arrives without a step. An orifice states no length and has none either. */
+const edgeIn = ed => netMarch ? (ed.I || 0)/NET_DT/1e6 : 0;
+/* What the MATRIX drives the edge with: the authored head, plus the momentum the water is already carrying. w0 is last solve's flow, the same one-tick lag the friction and the density take. */
+const edgeH = (ed, s) => (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0))
+  + edgeIn(ed)*(ed.w || 0);
 function netDryParts(s){
   const net = (typeof P!=="undefined" && P) ? P.net : null, F = net && net.F;
   if(!net || !F || !F.wet || !net.nodesOfPart) return [];
@@ -1109,6 +1184,8 @@ function netEdges(){
     const ea = {u, v: mid, h: 0, kind: r.k, key: r.key, end: r.pa, chokeAt: mid};   // LABEL: kind carried for rendering/lookup, never re-compared here
     const eb = {u: mid, v, h: 0, kind: r.k, key: r.key, end: r.pb, chokeAt: mid, meter: false};
     ea.pair = eb;   // the meter half holds its far half, so "what crosses this pipe" can ask both
+    /* the water in the pipe has mass, so the flow through it cannot be changed for nothing: L/A, off the SAME length and area the friction law is priced on */
+    ea.I = eb.I = Math.max(Lh, NET_COMP_LEN)/areaOf(bore);
     /* off the flow this edge carried last solve, at its donor's viscosity: the same one-tick lag the density carries */
     const fa = () => fricOf(bore, ea.w, F.mu[ea.w >= 0 ? u : mid]);
     const fb = () => fricOf(bore, eb.w, F.mu[eb.w >= 0 ? mid : v]);
@@ -1145,7 +1222,8 @@ function netEdges(){
     const ub = nodeIdx(coreFold(p.id+IN.b));
     if(ua === ub) continue;
     const edge = {u: ua, v: ub,
-                  C: compC(IN.K), h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b};
+                  C: compC(IN.K), h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b,
+                  I: partPathI(p.id, IN)};
     /* per FACE and not per edge: a shell path is water at the feed nozzle and steam at the steam nozzle */
     if(IN.vap){ edge.vapU = IN.vap.indexOf("a")>=0;
                 edge.vapV = IN.vap.indexOf("b")>=0; }
@@ -1163,14 +1241,16 @@ function netEdges(){
       edge.shellOf = p.id;
       /* a GATE and not a back-pressure: a fraction shut, 0..1, closing the path itself, so no differential can outgrow the valve's authority */
       edge.C = s => feedTrainC()*(1 - clamp((s && s.fregBy && s.fregBy[p.id]) || 0, 0, 1));
+      /* a feedwater check valve, which every real generator has and for this reason: without one a shell above its own feed header blows down through the nozzle, and a shell that empties backwards takes the heaters with it - the water arriving is then the shell's own and there is no bleed to take */
+      edge.diode = 1;
     }
     if(IN.head){
       /* signed a -> b by the CASING and nothing else, so a pump plumbed backwards pumps backwards; a part no run reaches carries no head */
       const routed = net.usage && (net.usage[p.id+"t"]||net.usage[p.id+"b"]||net.usage[p.id+"l"]||net.usage[p.id+"r"]);
       if(routed) edge.h = s => pumpHeadNow(s, p.id);
-      /* the casing is priced off the RATIO the machine states, head per rated kg/s, so the runout multiple is the same for every pump on the grid */
-      { const pid = p.id, u = edge.u;
-        edge.C = () => pumpCasingC(pumpHead(pid), pumpFlow(pid), F.rho ? F.rho[u] : P.rho0); }
+      /* the casing is priced off the RATIO the machine states, head per rated kg/s, so the runout multiple is the same for every pump on the grid. The density is the DESIGN one and it is taken once: a passage is a geometry, and read live off F.rho it never cancelled the donor's own F.rhoD in the flow law - a suction that flashed then priced the casing at vapour and passed the law liquid, and the pump became a hole (measured: a feed pump at 23 202 kg/s against a 636 rating, its suction at -0.15 MPa). */
+      { const c = circOfNode(coreFold(p.id + IN.a));
+        edge.C = pumpCasingC(pumpHead(p.id), pumpFlow(p.id), circDesRho(c, false, 0)); }
       /* standby and feed pumps only: a coolant or circ pump with a diode welds its loop shut against natural circulation */
       if(pumpStandby(p.id) || pumpBounds(p.id).shell) edge.diode = 1;
     }
@@ -1447,6 +1527,13 @@ function netMaps(ctx){
       if(IN.anch.indexOf("b")>=0) faces.push(IN.b); } }
     else faces.push("t","r","l","b");
     for(const f of faces) if((q.id+f) in index) net2.condNode[q.id+f] = index[q.id+f];
+    /* which of those faces is the LIQUID one: the anchored end of the steam path that `vap` does not name */
+    if(R.internal) for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+      if(!IN.anch || !IN.vap) continue;
+      if(IN.anch.indexOf("b")>=0 && IN.vap.indexOf("b")<0 && (q.id+IN.b) in index)
+        (net2.condLiq || (net2.condLiq = {}))[q.id+IN.b] = q.id;
+      if(IN.anch.indexOf("a")>=0 && IN.vap.indexOf("a")<0 && (q.id+IN.a) in index)
+        (net2.condLiq || (net2.condLiq = {}))[q.id+IN.a] = q.id; }
   }
 
   /* the non-vapour end of an anchored steam path is where the hotwell drains: fixed, but BOOKED and shut when the pool is empty */
@@ -1539,7 +1626,8 @@ function netFinish(net2, ctx){
   // its own slot in the choke mask, so edgeG can say which edge the cap bit on
   net2.choke = new Uint8Array(edges.length);
   for(let i=0;i<edges.length;i++) edges[i].i = i;
-  for(const ed of edges) if(ed.C !== undefined) ed.g = s => edgeG(net2, ed, s);
+  for(const ed of edges) if(ed.C !== undefined){ ed.g = s => edgeG(net2, ed, s);
+    ed.h0 = ed.h; ed.h = s => edgeH(ed, s); }
 
   /* connected components over the STRUCTURAL edge list, never ed.g: a reference frame must not jump when an operator turns a handwheel */
   net2.comp = new Int32Array(net2.n).fill(-1);
@@ -1713,12 +1801,22 @@ function netFixed(net, s){
   /* the shell is an ordinary vessel in the field: pinned only while the settle stands the stores down, and open through its own break edge */
   if(netStoreHeld) net.secT.forEach((i,k)=>{ f[i] = secP(s, net.secTParts[k]); });
   /* live, not a constant: a fixed node's VALUE is safe for the factorisation cache, since only conductances enter its signature */
-  { const pc = condP(s);
-    for(const k in net.condNode){ const i = net.condNode[k]; f[i] = pc; } }
+  { const pc = condP(s), liq = net.condLiq || {};
+    for(const k in net.condNode){ const i = net.condNode[k];
+      /* the condensate nozzle is UNDER the pool, so what stands on it is the vapour space PLUS the water above it - the head every condensate pump takes suction on. Fixed at the vapour pressure alone a hotwell hands its pump nothing, and the feed train cavitates from tick one. */
+      f[i] = liq[k] ? pc + hotwellH(s, liq[k]) : pc; } }
   return f;
 }
+/* MPa of water standing over a condenser's own condensate nozzle: its drawn height, at the pool's own level, weighed at the hotwell's temperature */
+const hotwellH = (s, pid) => { const p = partOf(pid); if(!p) return 0;
+  const d = Math.max(p.h, 1)*MPC*clamp(condFrac(s), 0, 1);
+  const T = (s && s.condT) || T_FEED;
+  return rhofOf(SAT_WATER, T)*G_MPA*d; };
 /* simTick()'s literal 0.02, named: a compliance is per SECOND, so a storage term is the one place that has to know how long a tick is */
 const NET_DT = 0.02;
+/* whether the solve being asked for is one tick of a time march; only step() sets it */
+let netMarch = false;
+const netMarching = v => { netMarch = !!v; };
 /* the settle and the reference solve are QUASI-STATIC figures, so every store stands down for them */
 let netStoreHeld = false;
 const netHoldStore = on => { netStoreHeld = !!on; };
@@ -2319,6 +2417,7 @@ function buildStockPlumbing(opt){
   // the last set takes the remainder, so a set's own count is counted
   const setUnits = s => { let n=0; for(let u=0;u<units;u++) if(setOf(u)===s) n++; return n; };
   const multi  = units>1 || sets>1;
+  const cpump  = !!(opt && opt.cpump);
   /* a unit gets its own BAND, never a column beside another: two units side by side leave no west-east lane for the main steam header */
   const BAND=40;
   /* row 0 of a band is the WALL's, and the island stands off it; every placement inside a unit is off this offset */
@@ -2381,6 +2480,11 @@ function buildStockPlumbing(opt){
     mintMachine("cond"+S,"cond",AFT,condY(s));
     mintMachine("feed"+S,"pump",FEEDX,feedY(s));
     setPartName("feed"+S,"FEED PUMP");
+    /* a feed pump drawing straight off a hotwell has only the column between them, and a real plant does not ask it to: the condensate pump is what lifts the water out of the vacuum so the feed pump has a suction to work against */
+    if(cpump){
+      /* in the aft lane the condensate already runs down, one row clear of the keel so its discharge has a cell to turn in */
+      mintMachine("cpump"+S,"pump",AFT+9,setKeel(s)-pumpH("cpump"+S)-1);
+      setPartName("cpump"+S,"CONDENSATE PUMP"); }
   }
   mintMachine("ctrl","ctrl",0,BOT);
   /* on the keel with more than one set: beside the turbine is the row a banded ship's condenser puts its cooling nozzle on */
@@ -2458,21 +2562,21 @@ function buildStockPlumbing(opt){
   }
 
   /* a STARTING DESIGN like the tanks: nothing anywhere may ask which of these is "the surge tee" */
-  const tee0 = fitting("tee0",U,ox+20,oy+14,{ name:"SURGE TEE", mode:"tee", bore:boreMm("hot"),
+  const tee0 = fitting("tee0",U,ox+20,oy+14,{ name:"SURGE TEE", mode:"tee",
     tip:"The junction where the pressurizer meets the loop. A tee costs nothing and closes nothing - it is one node with four faces." });
-  const rv0  = fitting("rv0",U,RV_X,oy+2,{ name:"RELIEF VALVE", mode:"relief", bore:boreMm("relief"),
+  const rv0  = fitting("rv0",U,RV_X,oy+2,{ name:"RELIEF VALVE", mode:"relief",
     tip:"Lifts on pressure and blows the loop down through whatever is piped behind it. Pipe its outlet to a tank, or it vents straight into the room." });
   /* the SAME relief fitting the pressurizer has; what makes it a secondary valve is only where it was placed. It taps the nozzle, never the line - a valve in the line is shut off with the line */
   const svTip="The steam generator's own safety valve. It lifts on SHELL pressure and blows steam to atmosphere - the water goes with it and does not come back, so a shell held on its valve boils itself dry. Without one the shell bursts instead. It stands against the skin, so what it blows goes outside; move it inboard and the same steam lands in the engine room.";
 
   /* one header, one tee per generator: a line per generator cannot be drawn, because the safety valves own the rows a second steam lane needs. Two ports facing each other across a cell boundary are a joint and need no pipe */
   // in loop 0's own feed RISER, not beside the pump: the feedwater lines leave the pump's underside
-  const efwtee = fitting("efwtee",U, uX(u,0)+(inter?3:5)+(multi?u:0), oy+(inter?24:12), { name:"EFW TIE", mode:"tee", bore:boreMm("feed"),
+  const efwtee = fitting("efwtee",U, uX(u,0)+(inter?3:5)+(multi?u:0), oy+(inter?24:12), { name:"EFW TIE", mode:"tee",
     tip:"Where the emergency reserve meets the feedwater line. A tee closes nothing: the reserve waits behind its own check valve until the line pressure falls under it." });
   const mstee=[], svf=[];
   for(let i=0;i<loops;i++){
     const li = u*loops+i;
-    mstee[i]=fitting("mstee"+li,"", uX(u,i)+1, oy+2, { name:"STEAM TEE "+(li+1), mode:"tee", bore:boreMm("steam"),
+    mstee[i]=fitting("mstee"+li,"", uX(u,i)+1, oy+2, { name:"STEAM TEE "+(li+1), mode:"tee",
       tip:"Where this generator's steam meets the main header, and where its safety valve stands." });
   }
   /* a valve blows overboard only where its open face is against the hull, so each stands aft of the wall on the skin over its own tee */
@@ -2489,13 +2593,13 @@ function buildStockPlumbing(opt){
   if(setUnits(setOf(u))>1 && svBase >= MSRX-2) svBase = MSRX-3;
   for(let i=0;i<loops;i++){
     const li=u*loops+i, cx=svBase+3*i;   // three, so two tees' own ports never want one cell
-    svtee[i]=fitting("svtee"+li,"", cx, oy+2, { name:"SAFETY TEE "+(li+1), mode:"tee", bore:boreMm("steam"),
+    svtee[i]=fitting("svtee"+li,"", cx, oy+2, { name:"SAFETY TEE "+(li+1), mode:"tee",
       tip:"Where this generator's safety valve taps the main steam header. A tee closes nothing." });
     svf[i]=fitting("sv"+li,"", cx, uOY(u)+0, { name:"SG SAFETY "+(li+1), mode:"relief", spring:true, tip:svTip });
   }
   /* a second unit meets the first in the RISER, never tee to tee: a band's top row is blocked at every steam tee by its own nozzle cells */
   const mshdr = setUnits(setOf(u))>1
-    ? fitting("mshdr",U, MSRX, oy+2, { name:"STEAM HEADER "+(u+1), mode:"tee", bore:boreMm("steam"),
+    ? fitting("mshdr",U, MSRX, oy+2, { name:"STEAM HEADER "+(u+1), mode:"tee",
         tip:"Where this unit's main steam joins the header its turbine is fed from. A tee closes nothing: lose a unit and the rest of the station keeps the machine turning." })
     : null;
   UN[u] = {U, ox, oy, tee0, rv0, efwtee, mstee, svtee, svf, mshdr};
@@ -2597,7 +2701,11 @@ function buildStockPlumbing(opt){
   for(const t of ST){
     const K = setKeel(t.s), fd = partOf("feed"+t.S);
     seedRun(t.pTurbB, t.pCondT);
-    seedRun(t.pCondR, t.pFeedR, [[AFT+10,K],[fd.x+fd.w+1,K]]);
+    if(cpump){ const cp = partOf("cpump"+t.S);
+      /* the same lane, cut in two by the pump: it takes suction on top off the drop from the hotwell and discharges down onto the keel the feed pump's suction stands on */
+      seedRun(t.pCondR, seedPort("cpump"+t.S,faceMid(cp.w,0),-1));
+      seedRun(seedPort("cpump"+t.S,faceMid(cp.w,0),cp.h), t.pFeedR, [[fd.x+fd.w+1,K]]);
+    } else seedRun(t.pCondR, t.pFeedR, [[AFT+10,K],[fd.x+fd.w+1,K]]);
   }
   /* one cooling circuit however many condensers: a panel has to SEE THE SKIN to shed anything, so there is one bank and every condenser is in series with it */
   { const first=ST[0], last=ST[ST.length-1], cd=partOf("cond"+first.S);
@@ -2690,10 +2798,7 @@ function buildStockPlumbing(opt){
     run(n.pEfw, n.pEfwpSuc);
     run(n.pEfwpDis, n.pTieR);           // a JOINT: the two nozzles face each other, zero pipe
   }
-  /* a suction line is bigger than a discharge line: everything the line costs comes off the pump's own NPSH, and a coefficient goes as bore squared */
   buildLayout();
-  for(const n of UN){ const suc = runBetween("efw"+n.U,"efwp"+n.U);
-    if(suc) D.bore[suc] = 2*boreMm("feed"); }
 
   /* LAST of everything, because paint is refused a cell a machine, a tank or a nozzle stands in; a pipe cell it may have, and that run is a PENETRATION. The ring is the island's own bounding box plus two: one cell of air, then the wall */
   if(opt && opt.cont){
@@ -2748,23 +2853,23 @@ function buildStockPlumbing(opt){
 
 /* every field below is a plain D write or a call the bench has, so a preset cannot describe a plant the player could not have built. `lat` is only ever given to a family that lays no moderator blocks - latPreset() does not call latLayMod() */
 const PLANTPRE=[
- ["STOCK PWR",{loops:1,arch:0,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.3}},
+ ["STOCK PWR",{loops:1,arch:0,cpump:true,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.3}},
   "The reference ship: one pressurised water loop, a pressurizer with a relief valve behind it, injection water, an emergency feedwater tie, a turbine, a condenser and two panels. Everything the other presets add or take away is measured against this."],
- ["NUSCALE",{loops:1,arch:0,lat:1,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.5}},
+ ["NUSCALE",{loops:1,arch:0,lat:1,cpump:true,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.5}},
   "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
  ["BWR/4",{loops:2,arch:1,cont:{m:"liner",t:20},d:{bkp:1,sg:0,chim:0.4}},
   "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
- ["BN-600",{loops:3,arch:3,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4},
+ ["BN-600",{loops:3,arch:3,cpump:true,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4},
    place:[["pan0","pan",27,31],["pan1","pan",36,31],["inert0","inert",32,25]]},
   "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it. It ships the cell defences a real sodium plant is built with: catch pans under the loops, so a leak runs into a drain instead of over the deck, and a nitrogen set to smother a fire the pans do not catch. The real machine has three circuits, not two: the shells sit at seventeen megapascals against a primary at atmospheric, so a tube leak drives WATER INTO SODIUM, and a real BN-600 puts an intermediate sodium loop between that reaction and the fuel. Nitrogen does nothing about that one. Splice heat exchangers in on the bench to build the machine it actually is."],
- ["EPR",{loops:4,arch:0,lat:2,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
+ ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
- ["RBMK-1000",{loops:2,arch:2,d:{bkp:1,sg:1,chim:0.3}},
+ ["RBMK-1000",{loops:2,arch:2,cpump:true,d:{bkp:1,sg:1,chim:0.3}},
   "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. Boiling the water ADDS reactivity here, so the plant hunts itself and the slow rods arrive late."],
  ["MSRE",{loops:1,arch:4,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
- ["WINDSCALE",{loops:1,arch:5,d:{bkp:0,sg:1,chim:0.2},
+ ["WINDSCALE",{loops:1,arch:5,cpump:true,d:{bkp:0,sg:1,chim:0.2},
    drop:["hpi","rv0","reltk"], tanks:{efw:{vol:5},
      pzr:{name:"HELIUM STORE", hold:null, gas:{p0:7.0}, level:50, fluid:"helium", tsurv:null, pburst:null}}},
   "A graphite pile with no containment, no backup power, no injection water and no relief valve on the loop. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, overpressure the loop and nothing lifts, and there is nothing to inject with at all. Fly it to see what the safeguards on every other preset are FOR."],
@@ -2787,7 +2892,7 @@ function plantPreset(i){
   Object.assign(core,dCore);
   /* `drop` is handed to the builder rather than run afterwards, so a preset without an injection tank never places one */
   buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont,
-                      inter:q.inter, core});
+                      inter:q.inter, cpump:q.cpump, core});
   // anything this ship carries that the stock one does not, placed the same way ADD MACHINE places it
   for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);

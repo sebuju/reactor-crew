@@ -732,11 +732,14 @@ const PORV_LIFT_K=1.06, PORV_RESEAT_K=1.01;
 /* The one reader of a relief valve's setpoints; P is null on the bench. */
 const reliefLiftSuggest   = fid => reliefRefP(fid)*PORV_LIFT_K;
 const reliefReseatSuggest = fid => reliefRefP(fid)*PORV_RESEAT_K;
+const reliefSetOf = (j, ref) => ({lift:   j.lift   || ref*PORV_LIFT_K,
+                                  reseat: j.reseat || ref*PORV_RESEAT_K});
 function reliefSet(fid){
-  const f=P?P.fittings:D.fittings, j=(f&&f[fid])||{};
-  return {lift:   j.lift   || reliefLiftSuggest(fid),
-          reseat: j.reseat || reliefReseatSuggest(fid)};
+  const f=P?P.fittings:D.fittings;
+  return reliefSetOf((f&&f[fid])||{}, reliefRefP(fid));
 }
+/* the same setpoints off the DRAWING alone, for every design-time reader */
+const reliefSetD = fid => reliefSetOf((D.fittings&&D.fittings[fid])||{}, reliefRefPD(fid));
 /* Opening rolls the stick; a stuck or hand-opened valve does not shut on an order. Answers whether anything moved. */
 function reliefCmd(s,fid,open){
   if(open){ if(s.reliefOpen[fid]) return false;
@@ -750,7 +753,10 @@ function reliefCmd(s,fid,open){
   s.reliefOpen[fid]=false; s.reliefAuto[fid]=false; return true;
 }
 /* `spring` set = code safety, worked by the tick; unset = PORV, moved only by a wired RELIEF VALVE sink. */
-const fitSpring = fid => { const f=P?P.fittings:D.fittings; return !!(f && f[fid] && f[fid].spring); };
+const fitSpringIn = (f,fid) => !!(f && f[fid] && f[fid].spring);
+const fitSpring  = fid => fitSpringIn(P?P.fittings:D.fittings, fid);
+/* off the DRAWING alone, for a design-time reader: P is the last plant commissioned and may not carry this valve at all */
+const fitSpringD = fid => fitSpringIn(D.fittings, fid);
 const springStep = (s,fid,pv) => { const set=reliefSet(fid);
   if(pv > set.lift) reliefCmd(s,fid,true); else if(pv < set.reseat) reliefCmd(s,fid,false); };
 /* Off the last solved field: its own node on the primary, its shells on the secondary. */
@@ -771,7 +777,8 @@ const feedInH = (s,id) => { const h = feedInHBy[feedNode(id)];
   return hOfT(satOfCirc(shellCirc(id)), s.condT !== undefined ? s.condT : T_FEED); };
 /* refilled by advectStep off the same donor pass the enthalpy integral uses, and empty until one has run */
 const feedInHBy = {};
-const feedHeatKW = (s,id) => (s.sgFedBy[id]||0)
+/* off what the HEATERS pass, which is the condensate flow and not the post-valve feed: the heater train stands between the condenser and the feed pump, upstream of the regulating valve, so a valve movement is not its duty. Read at the shell's own nozzle instead, the bleed collapses whenever the feed dips, the turbine takes the whole raised steam and the plant over-produces by exactly bleedFrac. */
+const feedHeatKW = (s,id) => Math.max(0, s.steamBy[id]||0)
   * Math.max(0, hOfT(satOfCirc(shellCirc(id)), T_FEED) - feedInH(s,id));
 /* an open heater: b kg of steam at h_g plus the rest of the condensate at h_in leave together at T_FEED, so a bleed kilogram gives up h_g - h_in and not h_g - h_fw */
 const feedBleedKgs = (s,id) => feedHeatKW(s,id)
@@ -813,7 +820,8 @@ const HOT_DUMP=1.6;
 const sgMassOf=id=>{ const ci=shellCirc(id);
   return sgRowOf(id).water*rhofOf(satOfCirc(ci), tsatSec(sgDesignP(id), ci)); };
 /* Rated steam for the WHOLE plant, kg/s. */
-const ratedSteam=()=>P.rated*1000/steamRise();
+/* the drawing's own rating where there is no commissioned plant: a design-time bore read asks this before P exists */
+const ratedSteam=()=>((P && P.rated) ? P.rated*1000 : RATED_KW())/steamRise();
 /* 100 % on a steam line: one generator's worth for its own run, the whole plant's for the exhaust. */
 const steamScale=(key,k)=>k==="exh" ? ratedSteam()
   : ratedSteam()*Math.max(1,steamFeeders(key,k).length)/Math.max(1,sgCount());
@@ -1851,6 +1859,7 @@ function resetPlant(){
      flowDemBy:Object.fromEntries(pumpIds().map(id=>[id,pumpStart(id)])),
      /* each generator's feed regulating valve, an actuator walked toward the controller's ask; 0 is wide open */
      fregBy:Object.fromEntries(sgIds().map(id=>[id,0])),
+     fregDemBy:Object.fromEntries(sgIds().map(id=>[id,0])),
      /* each generator's share of the heat leaving the primary, measured off the solve and read back by secP() next tick */
      sgShare:Object.fromEntries(sgIds().map(id=>[id,1/Math.max(1,sgCount())])),
      /* K at the shell's own saturation, and kg/s down its steam nozzle - both reads off the solved field, refilled */
@@ -2152,8 +2161,8 @@ function resetPlant(){
       S.turbWk = Math.max(0, (last.turbWk||0) - bleedPlant(S)); } }
   /* the feed valve is left where the controller would have: each is bisected against the liquid solve to the back-pressure at which its own shell edge carries what the shell raises, and the round repeats because the shells share a header */
   { const ids = sgIds();
-    // held for the same reason the shell walk holds it: a reading taken while the stores march is a state N ticks on, not a rest point
-    netHoldStore(true);
+    /* the store is LIVE for this walk: the valve is being positioned for the network the TICK marches, and a solve with no node diagonal is not that network */
+    netHoldStore(false);
     const solveFeed = () => { const o = {noNat:true}, pf = {}; netFlowK(S, rf, pf, o);
       keepPField(S, pf); return o; };
     // read at the field's own fixed point: one solve relinearises the next, so a bracket on single solves never closed
@@ -2245,6 +2254,8 @@ function resetPlant(){
         land((a+b)/2); }
       if(moved < 1e-5) break; }
     P.fregSeed = Object.assign({}, S.fregBy);
+    /* the settle's answer is where the motor already is, so a commissioned plant is not walking anywhere */
+    for(const id in S.fregBy) S.fregDemBy[id] = S.fregBy[id];
     // the field, the pumps' own flows and the pressures at the valves as finally left, not at the last trial
     netHoldStore(false);
     if(ids.length) solveFeed(); }
@@ -2299,6 +2310,10 @@ function rodApply(s,cs,K,step,dt){
   }
 }
 function step(dt){
+  netMarching(true);
+  try { stepMarch(dt); } finally { netMarching(false); }
+}
+function stepMarch(dt){
   const s=S; s.t+=dt; s.tick++;
   if(!s.massOut) s.massOut={};
   const ledgM0 = ledgerKg(s), ledgO0 = ledgerOut(s);
@@ -2306,6 +2321,9 @@ function step(dt){
   laySettle();
   /* the player's automation reads last tick's solved plant and writes this tick's demands - see ctl.js */
   ctlPass(s,dt);
+  /* the feed regulating valve is an actuator like every other: the controller writes demand and the motor gets there at VALVE_RATE. Teleported, it is a step change in a line that has mass, which is the one thing a real MOV cannot do. */
+  for(const id in s.fregBy){ const dv=(s.fregDemBy[id]??s.fregBy[id])-s.fregBy[id];
+    if(dv) s.fregBy[id]+=Math.sign(dv)*Math.min(Math.abs(dv),VALVE_RATE*dt); }
 
   coreEach(s,(cs,K,id)=>{
   if(!sinkDriver(s,"rodStep",id)) cs.rodBand=false;   // nobody is on the drive, so nobody is out of authority
@@ -2710,6 +2728,7 @@ function step(dt){
   s.flowNet = pumpK; coreEach(s,(cs,K,id)=>{ cs.flowNet = coreFN[id]; });
   const ids = sgIds();
   for(const id in s.fregBy) if(!sgW.hasOwnProperty(id)) delete s.fregBy[id];
+  for(const id in s.fregDemBy) if(!sgW.hasOwnProperty(id)) delete s.fregDemBy[id];
   /* the condensate pool is the HOSTED tank - a hotwell lives inside its condenser and has no cell. A tank standing on the board is metered against its own edge, whatever its valve rule says */
   const circ = secTankIds().filter(id => !D.tanks[id].cell);
   /* both latched here, ahead of the stop valve, because both are the stop valve's answer; the vacuum never comes back but the trip re-latches on a whole, clear machine */
@@ -2782,6 +2801,7 @@ function step(dt){
     s.steamBy[id]=steamTo;
     s.sgVentBy[id]=vent;
     if(s.fregBy[id]===undefined) s.fregBy[id]=0;
+    if(s.fregDemBy[id]===undefined) s.fregDemBy[id]=s.fregBy[id];
     // what reached the CONDENSER is what left down the nozzle less what the valves took out of the header on the way
     { const avail = Math.max(0, steamTo - toCondCut), bleed = Math.min(bleedOf(s,id), avail);
       bleedAll += bleed;

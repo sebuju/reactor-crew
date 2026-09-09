@@ -613,8 +613,8 @@ function paramsForRun(key){
   const massAt=(bore,wall)=>shellTPerM(bore,wall)*r.L;
   num("BORE","How wide this run is, inside the pipe. It is the whole of what the run conducts: a narrow leg is a real restriction and a wide one costs steel and holds more water.",
       FIG.bore.acc(r),
-      "mm",0,()=>boreMm(r.k),v=>massAt(v,runWallMm(r)),
-      "The nominal bore a run of this kind ships at, scaled to this plant's own rating.");
+      "mm",0,()=>runBoreSuggest(r),v=>massAt(v,runWallMm(r)),
+      "The bore that carries what this run's own ends state, at the design velocity for what is in it.");
   num("WALL","How thick the steel is. It is what the run is RATED for and it is what the run weighs - the two are the same number seen from either end.",
       FIG.wall.acc(r),
       "mm",1,()=>wallSuggestMm(runBoreMm(r), runDesignP(r), PRIMARY_K[r.k]?COOLANT[priD().cool]:null),

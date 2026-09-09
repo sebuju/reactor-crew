@@ -53,7 +53,7 @@ const SINK={
     apply:(s,id,v,dt)=>{ coreOn(s,id,(cs,K)=>rodApply(s,cs,K,v,dt)); }},
   freg:   {lab:"FEED VALVE", u:"", scope:"sg", part:id=>id,
     read:(s,id)=>s.fregBy[id]||0,
-    apply:(s,id,v)=>{ if(s.fregBy[id]!==undefined) s.fregBy[id]=clamp(v,0,1); }},
+    apply:(s,id,v)=>{ if(s.fregDemBy[id]!==undefined) s.fregDemBy[id]=clamp(v,0,1); }},
   relief: {lab:"RELIEF VALVE", u:"", scope:"fit", part:fid=>fid,
     read:(s,fid)=>s.reliefOpen[fid]?1:0,
     apply:(s,fid,v)=>{ if(s.reliefOpen[fid]!==undefined && !fitSpring(fid)) reliefCmd(s,fid,v>0.5); }},   // a spring safety takes no orders; an absent valve is a no-op, not a phantom key on S

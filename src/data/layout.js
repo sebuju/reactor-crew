@@ -179,8 +179,21 @@ const loopHotInlet = p => { const R = p && ROLE[p.role];
 /* Which runs still carry what the core sent out: asked of the transfer machine's declared primary INLET, never of the run's KIND. */
 const runHotSide = r => { const e = runPartEnds(r.a, r.b, r.sa, r.sb); if(!e) return false;
   return e.some(({p,f}) => { const nd = loopHotInlet(p); return !!nd && nd === coreFold(p.id+f); }); };
+/* A pump on no primary LOOP is priced round the circuit it discharges into, each run at its OWN duty: charged the pump's whole flow instead, an emergency feed pump's 139 mm discharge line puts 5 MPa of system curve on the feed pump. One flat design state, because satOfCirc().Tref is undefined off the core's circuit. */
+const circHeadOf = id => {
+  const ci = circOfNode(pumpDisNode(id)); if(!(ci >= 0)) return null;
+  const c = circCool(ci) || COOLANT[0], rho = c.dens*RHO_K;
+  let dp = 0;
+  for(const r of pipeNetwork()){
+    if(runCircOf(r) !== ci || edgeLaw(r) === LAW_VAPOUR) continue;
+    const w = runDutyKgs(r); if(!(w > 0)) continue;
+    const mm = runBoreMm(r), Dm = mm/1000, A = Math.PI/4*Dm*Dm;
+    const K = fricOf(mm/BORE_REF, w, c.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
+    dp += K*w*w/(2*rho*A*A); }
+  return dp/1e6;
+};
 const loopHeadOf = id => {
-  const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return null;
+  const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return circHeadOf(id);
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
   const w = RATED_KW()/(a.cp*coreDT0()*n);
   const c = satOfCirc(nodeGraph().coreCirc), dT = coreDT0();
@@ -208,10 +221,36 @@ const loopHeadOf = id => {
 };
 const pumpHeadSuggest = id => {
   if(id === undefined) return PUMP_H0;
-  const b = pumpBounds(id);
   const h0 = loopHeadAt(id) ?? PUMP_H0;
+  /* A pump that discharges into another pump's SUCTION is a booster, and what it is bought for is that pump's NPSH - never the boundary beyond it, which the pump ahead is itself bought to reach. Charged the boundary, two machines in series each develop the whole rise and drag the first one's suction under the vacuum it draws on. */
+  const ahead = pumpAhead(id);
+  if(ahead) return h0 + NPSH_K*pumpNPSH(ahead);
+  const b = pumpBounds(id);
   return h0 + (b.hi === null ? 0 : (b.hi - b.lo)*PUMP_MARGIN);
 };
+/* Thoma's cavitation number: the suction a stage needs is a few percent of the head it develops, and a pump is bought with margin over it. Derived off the head rather than stated, so an impeller cut for low NPSH is not yet a machine this can draw. */
+const NPSH_SIG = 0.03, NPSH_K = 1.3;
+const pumpNPSH = id => NPSH_SIG*pumpHead(id);
+/* The first pump the discharge reaches, by pumpResOf()'s rule read the other way: through fittings only, because what stands behind another MACHINE is that machine's business. */
+function pumpAhead(id){
+  const slot = graphSlot("pumpAhead"), was = slot.get(id);
+  if(was !== undefined) return was;
+  slot.set(id, null);                        // a ring of pumps terminates rather than recurses
+  const G = nodeGraph(), dis = pumpDisNode(id);
+  const partAt = n => partOf(n) || partOf(n.slice(0,-1));
+  const seen = {}, stack = [];
+  for(const n of (G.nodesOf[id]||[])) if(coreFold(n) === dis){ seen[n] = 1; stack.push(n); }
+  let out = null;
+  while(stack.length && !out){ const u = stack.pop();
+    for(const v of (G.adj[u]||[])){ if(seen[v]) continue;
+      const p = partAt(v); if(!p || p.id === id) continue;
+      seen[v] = 1;
+      if(roleHead(p.role) && coreFold(v) === pumpSucNode(p.id)){ out = p.id; break; }
+      if(p.role !== "fitting") continue;
+      stack.push(v); } }
+  slot.set(id, out);
+  return out;
+}
 /* The ONE walk both suggestions make; `shell` - a boundary that is a generator's secondary side - is what makes a pump a FEED pump. Cached for one layPass(), and 0 means "not cacheable". */
 let pumpBCache = {}, pumpBPass = -1;
 function pumpBounds(id){
@@ -269,17 +308,21 @@ const RESERVE_T = 600;                 // s a reserve is sized to hold the plant
 /* A machine sized to exactly the pressure it pushes against delivers nothing and its regulating valve has no authority; real feed pumps are bought about a third above drum pressure. Multiplies the STANDING term only. */
 const PUMP_MARGIN = 1.35;
 /* Rated heat over what one kelvin of core rise costs, divided by LOOPS and never by pumps: two pumps in one loop are redundancy, not half a loop each. */
+/* kg/s round ONE primary loop, divided by LOOPS and never by pumps: two pumps in one loop are redundancy, not half a loop each. */
+const legDutyKgs = () => RATED_KW()
+  /(COOLANT[priD().cool].cp*coreDT0()*Math.max(1, loopMap().n));
+/* kg/s of circulating water: it carries the REJECTION and not the core, the same basis condUASuggest() uses. */
+const cwDutyKgs = () => plantDuty()/(SAT_WATER.cp*CW_RISE);
+/* kg/s a reserve is bought to deliver: what those tanks hold, over the time it is sized to hold the plant up. */
+const resDutyKgs = ids => ids.reduce((m,t)=>m+tankKg(t),0)/RESERVE_T;
 const pumpFlowSuggest = id => {
-  const n = Math.max(1, loopMap().n);
   /* A reserve pump is sized by its reserve, asked of the SUCTION and never of the circuit - a feed pump and an emergency feed pump share a circuit. */
   if(id !== undefined){ const r = pumpResOf(id);
-    if(r.length) return r.reduce((m,t)=>m+tankKg(t),0)/RESERVE_T; }
+    if(r.length) return resDutyKgs(r); }
   if(id !== undefined && pumpBounds(id).shell)
     return RATED_KW()/steamRise();            // rated heat over the feed-to-steam rise: kg/s of steam
-  /* Circulating water carries the REJECTION, not the core - the same basis condUASuggest() uses, this plant's duty over the design rise. */
-  if(id !== undefined && pumpBounds(id).cool)
-    return plantDuty()/(SAT_WATER.cp*CW_RISE);
-  return RATED_KW()/(COOLANT[priD().cool].cp*coreDT0()*n);
+  if(id !== undefined && pumpBounds(id).cool) return cwDutyKgs();
+  return legDutyKgs();
 };
 /* Baked on first read, so the machine owns it: a live `?? xSuggest()` default is a hidden reference, and editing one machine must never set a value on another. */
 const bake = (bag, id, mk) => { const v = bag[id];
@@ -1274,21 +1317,21 @@ function pipeMap(){
   pipeMapCache={conns, byKey, cellOwner, dangling, orphan}; pipeMapSig=sig;
   return pipeMapCache;
 }
-/* One row per part ROLE, the network + radiation contract. `internal` {a,b,kind} is an edge through the component, face a to face b; `head` puts a pump's own MPa on it, a the SUCTION and b the discharge. `na`/`nb` name each end (five characters at most). `fold` are faces that collapse onto the bare part id. `mu` is attenuation per cell of chord crossed. `ports` is a face WHITELIST, not a count ("*" pools all four). `thermal` is source|transfer|sink|none. `tsurv` is K in the AIR AROUND the machine and `pburst` kPa of blast overpressure, both NULL for structure. A part built with no role takes radMu()'s 0.75 fallback. */
+/* One row per part ROLE, the network + radiation contract. `internal` {a,b,kind} is an edge through the component, face a to face b; `head` puts a pump's own MPa on it, a the SUCTION and b the discharge. `v` m/s and `len` m are the path's DUCT - the velocity its flow area is sized at and the length the water is accelerated over; a path that is not a duct states neither and carries no inertance. `na`/`nb` name each end (five characters at most). `fold` are faces that collapse onto the bare part id. `mu` is attenuation per cell of chord crossed. `ports` is a face WHITELIST, not a count ("*" pools all four). `thermal` is source|transfer|sink|none. `tsurv` is K in the AIR AROUND the machine and `pburst` kPa of blast overpressure, both NULL for structure. A part built with no role takes radMu()'s 0.75 fallback. */
 const ROLE = {
   core:  {internal:null, fixed:null, fold:["r","b"], kEnd:2, mu:0.50, sgtr:false,
           ports:{r:4, b:5}, thermal:"source", tsurv:1200, pburst:200},
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:450, pburst:35},
   /* Two paths that do not meet - tubes (l<->b, primary) and shell (r<->t, secondary) - crossed only by the sgtr LEAK edge. `a` is the INLET on a shell path: the feed regulating valve's head is signed off it. */
-  sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
+  sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, v:5, len:20, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer", tsurv:800, pburst:200},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
   /* Primary in hot at l, out cold at r; the intermediate stream in cold at t, out hot at b. FOUR distinct faces, so no fold - an exchanger has a rotation to get right. */
-  ihx:   {internal:[{a:"l", b:"r", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"t", b:"b", kind:"comp", K:3, na:"COLD", nb:"HOT", la:"INTER COLD LEG", lb:"INTER HOT LEG"}], fixed:null,
+  ihx:   {internal:[{a:"l", b:"r", kind:"comp", K:3, v:5, len:10, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"t", b:"b", kind:"comp", K:3, v:2, len:6, na:"COLD", nb:"HOT", la:"INTER COLD LEG", lb:"INTER HOT LEG"}], fixed:null,
           fold:null, mu:0.60, sgtr:false,
           ports:{l:2, r:2, t:2, b:2}, thermal:"transfer", tsurv:800, pburst:200},
   /* One pump role and one head law: what makes a pump a feedwater pump is where it is piped. One path, folded r onto t and l onto b, so it splices into a horizontal leg with no rotation knob. */
-  pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, na:"IN", nb:"OUT", la:"SUCTION", lb:"DISCHARGE"},
+  pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, v:5, len:4, na:"IN", nb:"OUT", la:"SUCTION", lb:"DISCHARGE"},
           fixed:null, fold:{r:"t", l:"b"}, mu:0.75, sgtr:false,
           ports:{t:4, b:4, r:4, l:4}, thermal:"none", tsurv:400, pburst:70},
   /* `vapPath` is off `internal` because its resistance is the GATE and not the body, so it takes turbCOf() rather than COMP_C; `work` is what tells the wheels from the bypass around them. */
@@ -1297,7 +1340,7 @@ const ROLE = {
   /* Steam side takes exhaust in at t and gives condensate back at r; the water side (b<->l) is the circulating water, crossed only by the tube wall. */
   cond:  {internal:[{a:"t", b:"r", kind:"comp", vap:"a", anch:"ab", na:"EXH", nb:"COND", la:"EXHAUST", lb:"CONDENSATE"},
                     /* b is the INLET and l the outlet - the water runs b->l - and every component on this circuit declares its inlet as `a`. */
-                    {a:"b", b:"l", kind:"comp", na:"CW IN", nb:"CW OUT", la:"CIRC WATER IN", lb:"CIRC WATER OUT"}],
+                    {a:"b", b:"l", kind:"comp", v:2, len:12, na:"CW IN", nb:"CW OUT", la:"CIRC WATER IN", lb:"CIRC WATER OUT"}],
           fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:1, r:1, l:1, b:2}, thermal:"sink", tsurv:400, pburst:35},
   ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
@@ -1318,7 +1361,7 @@ const ROLE = {
   pan:   {internal:null, fixed:null, fold:null, mu:0.55, sgtr:false,
           ports:{}, thermal:"none", tsurv:null, pburst:null},
   /* A heat exchanger with space on one side: ONE internal path, folded t->l and b->r so it splices into a cooling leg however it is oriented. Radiating to T_SPACE never becomes an edge - space is not a node. tsurv is scaled per instance by the coating. */
-  radiator:{internal:{a:"l", b:"r", kind:"comp", na:"IN", nb:"OUT", la:"COOLANT IN", lb:"COOLANT OUT"},
+  radiator:{internal:{a:"l", b:"r", kind:"comp", v:2, len:10, na:"IN", nb:"OUT", la:"COOLANT IN", lb:"COOLANT OUT"},
           fixed:null, fold:{t:"l", b:"r"}, mu:0.35, sgtr:false,
           ports:{"*":2}, thermal:"sink", tsurv:520, pburst:15, pdes:1.0},
   /* One role for every fitting: a tee, a throttle and a relief valve differ by `mode` on the instance. `gate` prices the path off FIT[mode] instead of the flat component length, and `fold` answers per INSTANCE because a tee is one node and a valve is two with the gate between them. */

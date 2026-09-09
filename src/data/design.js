@@ -188,8 +188,8 @@ const FIG={
   holdP:    {subs:()=>tankIds().filter(id=>D.tanks[id].hold),
     acc:id=>figBag(D.tanks[id].hold,"p",()=>holdSetP(tankCircuit(id)))},
   /* off the drawing, so a valve is not baked against the last plant commissioned */
-  fitLift:  {subs:()=>reliefFitsD(),    acc:fid=>figBag(D.fittings[fid],"lift",()=>D.fittings[fid].lift||reliefRefPD(fid)*PORV_LIFT_K)},
-  fitReseat:{subs:()=>reliefFitsD(),    acc:fid=>figBag(D.fittings[fid],"reseat",()=>D.fittings[fid].reseat||reliefRefPD(fid)*PORV_RESEAT_K)},
+  fitLift:  {subs:()=>reliefFitsD(),    acc:fid=>figBag(D.fittings[fid],"lift",()=>reliefSetD(fid).lift)},
+  fitReseat:{subs:()=>reliefFitsD(),    acc:fid=>figBag(D.fittings[fid],"reseat",()=>reliefSetD(fid).reseat)},
   matT:     {subs:()=>Object.keys(D.mat),
     acc:k=>figBag(D.mat[k],"t",()=>matThick(+k.split(",")[0],+k.split(",")[1]),buildLayout)},
 };
