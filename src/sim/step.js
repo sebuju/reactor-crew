@@ -300,12 +300,15 @@ const keepPField = (s, pf) => {
   if(!net || net.pByObj !== by || net.pByN + added !== n)
     for(const k in by) if(pf[k] === undefined) delete by[k];
   if(net){ net.pByObj = by; net.pByN = n; } };
+/* whether a circulating water path runs a->b, along the solved flow's own direction */
+const cwFwd = (runFlow, key) => { const ref = Math.abs(P.netRefByRun[key]||0);
+  return (ref > 1e-9 ? (runFlow[key]||0)/ref : 0) >= 0; };
+const cwInFace = (runFlow, q) => cwFwd(runFlow, q.key) ? q.a : q.b;
+const cwOutFace = (runFlow, q) => cwFwd(runFlow, q.key) ? q.b : q.a;
 /* the inlet face of each circulating water path, read along the solved flow's own direction */
 const cwInOf = (s, runFlow, id) => {
   let t = 0, n = 0;
-  for(const q of cwPathsOf(id)){ const ref = Math.abs(P.netRefByRun[q.key]||0);
-    const r = ref > 1e-9 ? (runFlow[q.key]||0)/ref : 0;
-    t += netTempAt(s, coreFold(id + (r >= 0 ? q.a : q.b))); n++; }
+  for(const q of cwPathsOf(id)){ t += netTempAt(s, coreFold(id + cwInFace(runFlow, q))); n++; }
   return n ? t/n : undefined; };
 /* the design sink is the answer before the first tick has written one */
 const cwInAt = (s,id) => { const v = s.cwInTBy && s.cwInTBy[id];
@@ -968,7 +971,7 @@ function massSeed(s){
 }
 /* kW into one vessel's node, one tick old - the solve has to run before there are flows to carry it. */
 const coreHeatKW = id => (HEATBAL.heatBy[id]||0)*P.cores[id].rated*1000;
-function advectSrc(s, dt){
+function advectSrc(s, dt, runFlow){
   const src = {};
   /* A machine hands its heat to the water that is there: every term fades with the node's own wetness. */
   const net = P.net, wetBy = {};
@@ -1007,9 +1010,9 @@ function advectSrc(s, dt){
   for(const id in s.sgPwQBy){ const q = s.sgPwQBy[id]; if(!q) continue;
     const IN = roleIns(partOf(id))[0];
     add(id+IN.a, q/2); add(id+IN.b, q/2); }
-  /* A condenser gives its rejection to the water on its other side - the path that declares no anchor. */
+  /* A condenser gives its rejection to the water on its other side - the path that declares no anchor - where that water LEAVES, so the inlet face reads what arrived. */
   { for(const id of condIds()){ const q = condRejOf(s,id);
-      for(const w of cwPathsOf(id)){ add(coreFold(id+w.a), q/2); add(coreFold(id+w.b), q/2); } } }
+      for(const w of cwPathsOf(id)) add(coreFold(id + cwOutFace(runFlow, w)), q); } }
   /* A panel takes heat out of whatever is running through it, wherever that is. */
   { const IN = ROLE.radiator.internal;
     for(const id of radIds()){ const q = (s.radQBy && s.radQBy[id]) || 0;
@@ -1101,7 +1104,7 @@ function advectStep(s, dt, runFlow, edgeKg){
     for(const k in mBy) if(net.index[k] === undefined) delete mBy[k];
     net.advKeysH = h; net.advKeysM = mBy; }
 
-  const src = advectSrc(s, dt), A = advectAnchors(s);
+  const src = advectSrc(s, dt, runFlow), A = advectAnchors(s);
   for(const k in h2Take) delete h2Take[k];
   const anch = Object.assign({}, A.hold);
   for(const nm in A.holdH) anch[nm] = A.holdH[nm];   // the SKIP set is both maps
