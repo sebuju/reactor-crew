@@ -76,13 +76,13 @@ const FOLL=[
  {name:"BORATED STEEL",tipRho:-420,tipLen:4.0,mass:34,
   note:"A poisoned follower. The bank bites early and there is no positive excursion anywhere in its travel, at the price of carrying that poison all campaign - and of the mass."},
 ];
-/* `water` t of secondary water ONE generator holds at power, the whole of the boil-dry mechanic; `tube` t of BUNDLE, the shell priced separately (sgSteelT(), layout.js). */
+/* `water` m³ of secondary water ONE generator holds at 100 % level, the whole of the boil-dry mechanic; a holdup is a VOLUME here as it is everywhere else, and `sgMassOf()` weighs it at the shell's own state - 74.3 m³ is the ~55 t a Westinghouse U-tube unit carries. `tubeV` m³ of PRIMARY water inside the tubes and heads, which is a different inventory on the other side of the wall: a Model F's 5626 tubes of 15.3 mm bore over 20 m hold 21 m³ and the channel head the rest, while a once-through unit is the other way round - little in the shell, a long bundle full of it. `tube` t of BUNDLE STEEL, the shell priced separately (sgSteelT(), layout.js). */
 const SGT=[
- {name:"U-TUBE",water:55,tube:63.3,note:"Large secondary water inventory acts as a heat sink for minutes after feedwater is lost. Heavy and slow to respond."},
- {name:"ONCE-THROUGH",water:7,tube:41.1,note:"Very little water in it, so it responds instantly to load changes and boils dry almost as fast. Light."},
+ {name:"U-TUBE",water:74.3,tubeV:30,tube:63.3,note:"Large secondary water inventory acts as a heat sink for minutes after feedwater is lost. Heavy and slow to respond."},
+ {name:"ONCE-THROUGH",water:9.5,tubeV:45,tube:41.1,note:"Very little water in it, so it responds instantly to load changes and boils dry almost as fast. Light."},
 ];
 /* The MEAN over the generators drawn, never the sum - both readers are plant-wide flywheel terms - normalised so a stock plant reads exactly 1.0. */
-const SG_MASS_REF = 70;
+const SG_MASS_REF = 72.25;   // t, re-measured 09/09/26 when the shell's stated volume became 74.3 m3
 const sgInertiaK = () => { let n=0,m=0;
   for(const p of LAY.parts) if(p.role==="sg"){ m+=sgSteelT(p.id); n++; }
   return (n?m/n:SG_MASS_REF) / SG_MASS_REF; };
