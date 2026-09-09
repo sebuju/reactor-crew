@@ -179,8 +179,10 @@ function* commissionGen(){
     let lnCw, lnKw;
     for(let r=0;r<6;r++){ let k=0, to=0;
       yield {frac:.38+.10*r, stage:"GOVERNOR"};
-      if(P.turbC>0) for(const id of ids){ k = Math.max(k, secP(S,id)/sgDesignP(id)); to += S.steamTo[id]||0; }
-      k = (k>0 && S.turbWk>0) ? k*Math.max(to,S.turbWk)/S.turbWk : 1;
+      /* the governor is a FLOW match on the nozzle, so both sides are the physical steam: the bleed is taken downstream of it */
+      const wk = S.turbWk + bleedPlant(S);
+      if(P.turbC>0) for(const id of ids){ k = Math.max(k, secP(S,id)/sgDesignP(id)); to += S.steamBy[id]||0; }
+      k = (k>0 && wk>0) ? k*Math.max(to,wk)/wk : 1;
       if(r>0 && Math.abs(k-1) < 3e-3) break;
       const lnC = Math.log(P.turbC), lnK = Math.log(k);
       let step = lnK;
@@ -253,16 +255,6 @@ const reliefRefPD = fid => shellsOf(fid).length ? Math.min.apply(null, shellsOf(
 const reliefRefPOf = fid => (P && !shellsOf(fid).length) ? P.P0 : reliefRefPD(fid);
 /* which shells this valve can see right now: the drawing with the shut runs cut out */
 const shellsLive = (s,fid) => shellsOf(fid, portDead(s));
-/* a hole sits on the run: it blows off whichever end still has an open port valve */
-const holeShells = (s,bk) => {
-  const dead = portDead(s);
-  if(!dead || !bk.ends) return bk.shells;
-  const out = [];
-  for(const id of bk.shells){ const seen = steamNodesOf(id, false, dead);
-    if((!s.portShut[bk.pa] && seen[bk.ends[0]]) || (!s.portShut[bk.pb] && seen[bk.ends[1]]))
-      out.push(id); }
-  return out;
-};
 const reliefIso  = (s,fid) => shellsOf(fid).length>0 && shellsLive(s,fid).length===0;
 const reliefAtP = (s,fid) => { const sh=shellsOf(fid);
   if(!sh.length) return s.P;
@@ -467,16 +459,27 @@ const DMGFX={
   mat:{msg:"CONTAINMENT BREACH",
     why:"A cell of the wall is open. If it was holding a bounded region, that region is not bounded any more: the compartment behind it is now the ship's compartment, everything it was holding goes where the ship's air goes, and whatever was standing behind it is now shining on the crew.",
     hit:null, fix:null},
-  pipe:{msg:"PRIMARY PIPE RUPTURE",
-    why:"A primary run has been severed. It carries nothing round the loop any more, and both cut ends are now open to containment - the loop is losing coolant and pressure through them until something stops it.",
+  pipe:{msg:id=>(cellInCore(id)?"PRIMARY ":"")+"PIPE RUPTURE",
+    why:id=>cellInCore(id)
+      ? "A primary run has been severed. It carries nothing round the loop any more, and both cut ends are now open to containment - the loop is losing coolant and pressure through them until something stops it."
+      : "A run off the primary has been severed. It carries nothing round its own circuit any more, and both cut ends are open to the compartment - that circuit is losing its water and its pressure through them until something stops it.",
     hit:null, fix:null}
 };
+/* which circuit a burst cell stands on, asked of the run under it; a cell no run owns reads as the primary's, which is where a message with nothing traced belongs */
+const cellInCore = id => { const c = id.slice(5).split(","), M = pipeMap();
+  const key = (M.cellOwner[pipeKey(+c[0], +c[1])] || [])[0];
+  const r = key && M.byKey[key];
+  return !r || runCircOf(r) === nodeGraph().coreCirc; };
 const DMGANY={msg:"EQUIPMENT HIT", why:"A component has been knocked out.", hit:null, fix:null};
 /* this part first, then what it is, then the id-prefix fallback - most specific wins */
 const dmgFx = id => {
   const p = partOf(id);
-  return DMGFX[id] || (p && DMGFX[p.role])
+  const r = DMGFX[id] || (p && DMGFX[p.role])
       || DMGFX[Object.keys(DMGFX).find(k=>id.startsWith(k))] || DMGANY;
+  /* a row may state its text off the thing that was hit; resolved HERE, so every reader still gets two strings */
+  if(typeof r.msg !== "function" && typeof r.why !== "function") return r;
+  return Object.assign({}, r, {msg: typeof r.msg === "function" ? r.msg(id) : r.msg,
+                               why: typeof r.why === "function" ? r.why(id) : r.why});
 };
 
 /* everything on the board that is one cell and not in LAY.parts, so the heat and blast loops walk one list */
@@ -759,6 +762,24 @@ const FLOW_TAU=5;      // seconds; PUMP_ROTOR_S is beside pumpRotor() in layout.
 const PUMP_FRIC_S=60;
 /* A kilogram of steam costs the FEED-TO-STEAM RISE, not the latent heat, at the shell's own pressure. */
 const riseSg = (id,p) => riseOfCirc(shellCirc(id), p);
+/* The feed nozzle is at T_FEED because part of the shell's own steam was bled off to put it there: it does no shaft work and never reaches the condenser. */
+const feedNode = id => coreFold(id + roleIntern(ROLE.sg)[1].a);
+/* priced off the water ARRIVING, never off the nozzle itself: a well-mixed node reads the outlet, and a source that chases its own outlet settles halfway. */
+const feedInH = (s,id) => { const h = feedInHBy[feedNode(id)];
+  if(h !== undefined) return h;
+  /* no transport pass yet: the feedwater comes off the hotwell, so that is where it starts */
+  return hOfT(satOfCirc(shellCirc(id)), s.condT !== undefined ? s.condT : T_FEED); };
+/* refilled by advectStep off the same donor pass the enthalpy integral uses, and empty until one has run */
+const feedInHBy = {};
+const feedHeatKW = (s,id) => (s.sgFedBy[id]||0)
+  * Math.max(0, hOfT(satOfCirc(shellCirc(id)), T_FEED) - feedInH(s,id));
+/* an open heater: b kg of steam at h_g plus the rest of the condensate at h_in leave together at T_FEED, so a bleed kilogram gives up h_g - h_in and not h_g - h_fw */
+const feedBleedKgs = (s,id) => feedHeatKW(s,id)
+  / Math.max(satHg(satOfCirc(shellCirc(id)), secP(s,id)) - feedInH(s,id), 1);
+/* what a kilogram down the nozzle hands the CONDENSER: it leaves there as condensate at the hotwell's own enthalpy, and the heaters put the rest of the way back to T_FEED in themselves. */
+const riseCond = (s,id,p) => Math.max(1, satHg(satOfCirc(shellCirc(id)), p) - feedInH(s,id));
+const bleedOf = (s,id) => Math.min(feedBleedKgs(s,id), Math.max(0, s.steamBy[id]||0));
+const bleedPlant = s => { let k=0; for(const id of sgIds()) k += bleedOf(s,id); return k; };
 const SGL_SET=50;         // %, the level the feed controller holds
 /* what is left of the shell's heat capacity once its water is counted separately */
 const CP_STEEL=0.5;       // kJ/kg/K
@@ -811,9 +832,9 @@ function steamDir(key,k){
   const pid = n => n.slice(0,-1);
   if(k==="exh") return isSink(pid(ends[1])) ? 1 : -1;
   // a run ON a generator leaves it, whichever end the key happens to sort first
-  if(S && S.steamTo){
-    if(S.steamTo[pid(ends[0])]!==undefined) return 1;
-    if(S.steamTo[pid(ends[1])]!==undefined) return -1;
+  if(S && S.steamBy){
+    if(S.steamBy[pid(ends[0])]!==undefined) return 1;
+    if(S.steamBy[pid(ends[1])]!==undefined) return -1;
   }
   /* a tap discharges into its dead end, and the reach test below would say the opposite */
   const de = runDeadEnd(pid(ends[0]), pid(ends[1]));
@@ -933,10 +954,15 @@ function advectSrc(s, dt){
   /* ROLE's declaration ORDER says which stream gives the heat up (0) and which takes it (1); neither names a face. */
   for(const id of sgIds().concat(ihxIds())){
     const q = HEATBAL.sgQBy[id] || (s.ihxQBy && s.ihxQBy[id]) || 0;
-    const INs = roleIntern(ROLE[partOf(id).role]);
-    for(let k=0;k<INs.length;k++){ const IN=INs[k], v=(k?q:-q)/2;
+    const R = ROLE[partOf(id).role], INs = roleIntern(R);
+    for(let k=0;k<INs.length;k++){ const IN=INs[k];
+      /* a shell is ONE vessel: all of what crosses its tubes lands on it, and half on the feed nozzle would only heat the feedwater */
+      if(k && R.sgtr){ add(shellNode(id), q + ((s.sgSwQBy && s.sgSwQBy[id])||0) - skinQOf(s,id)); continue; }
+      const v=(k?q:-q)/2;
       add(id+IN.a, v); add(id+IN.b, v); }
   }
+  /* The bleed heaters land on the feed nozzle, which is why the water arrives at T_FEED at all. */
+  for(const id of sgIds()) add(feedNode(id), feedHeatKW(s,id));
   /* A sodium-water reaction happens in the SODIUM, so it lands on the primary faces; the shell's side is a current into its storage row. */
   for(const id in s.sgPwQBy){ const q = s.sgPwQBy[id]; if(!q) continue;
     const IN = roleIns(partOf(id))[0];
@@ -975,17 +1001,14 @@ function advectAnchors(s){
     for(const f of faces){ const n = coreFold(pid+f);
       if(P.net.index[n] !== undefined) m[n] = T; } };
   const FACES = ["t","r","b","l"];
+  /* the shell is a vessel now: SEEDED at saturation and held at nothing, or its level is pinned wherever the seed left it */
   for(const id of sgIds()){
-    const ci = shellCirc(id), vf = {}, shell = {};
-    // the shell only, asked by index: the tubes belong to whatever stage feeds them
-    { const IN = roleIntern(ROLE.sg)[1]; shell[IN.a]=1; shell[IN.b]=1;
-      if(IN.vap){ if(IN.vap.indexOf("a")>=0) vf[IN.a]=1;
-                  if(IN.vap.indexOf("b")>=0) vf[IN.b]=1; } }
-    for(const f of FACES){ const n = coreFold(id+f);
-      if(P.net.index[n] === undefined || !shell[f]) continue;
-      seed[n] = s.sgTBy[id];
-      if(vf[f]) holdH[n] = satHg(satOfCirc(ci), secP(s,id));
-      else hold[n] = s.sgTBy[id]; }
+    const IN = roleIntern(ROLE.sg)[1];
+    for(const f of [IN.a, IN.b]){ const n = coreFold(id+f);
+      if(P.net.index[n] !== undefined) seed[n] = s.sgTBy[id]; }
+    /* the settle is not a time march, so through it the heaters simply ARE at their duty; the tick holds nothing and the source has to earn T_FEED on its own */
+    if(netStoreHeld){ const n = coreFold(id+IN.a);
+      if(P.net.index[n] !== undefined) hold[n] = T_FEED; }
   }
   /* A sink HOLDS only the path declaring an anchor - its circulating water is fluid like anything else - but SEEDS every face. */
   for(const p of LAY.parts){ const R=ROLE[p.role];
@@ -1008,12 +1031,7 @@ function bookedKg(net, s, i){
   const id = net.tankIdByNode && net.tankIdByNode[i];
   if(id !== undefined) return net.tankField[id] ? undefined
                             : tankLvl(s,id)/100*tankKg(id);
-  const sg = net.secTById && net.secTById[i];
-  if(sg !== undefined) return s.sgSteamBy && s.sgSteamBy[sg] !== undefined
-    ? s.sgSteamBy[sg] : undefined;
   const nm = net.name[i];
-  if(nm.indexOf("sec:") === 0){ const q = nm.slice(4), M = sgMassOf(q);
-    return (M > 0 && s.sglBy && s.sglBy[q] !== undefined) ? s.sglBy[q]/100*M : undefined; }
   if(net.condNode && net.condNode[nm] !== undefined){ const h = hostedTankIds();
     if(h.length && s.tank){ let m = 0; for(const t of h) m += tankKg(t);
       return tankPoolPct(s,h)/100*m; } }
@@ -1040,7 +1058,7 @@ function holdLineSet(){
 function advectStep(s, dt, runFlow, edgeKg){
   const net = P && P.net;
   advectCondIn = 0; advectEdgeKg = advectLandedBy = null;
-  if(!net || !net.name || !s.hBy || !s.mBy) return;
+  if(!net || !net.name || !s.hBy || !s.mBy){ for(const k in feedInHBy) delete feedInHBy[k]; return; }
   const h = s.hBy, mBy = s.mBy;
   // refilled, never rebuilt; a key can only go stale when the net or the field object is replaced
   if(net.advKeysH !== h || net.advKeysM !== mBy){
@@ -1069,9 +1087,12 @@ function advectStep(s, dt, runFlow, edgeKg){
         const c = circOfNode(nm);
         /* The walk carries a TEMPERATURE, which on the shelf is saturated liquid - so a steam space seeds off net.vapour and a pressurizer with its bubble in it. */
         const hold = holdTankIds().find(id => coreFold(id) === nm);
+        /* a shell is a vessel with a bubble in it, seeded exactly as a pressurizer is: the level is a void fraction */
+        const shell = sgIds().find(id => shellNode(id) === nm);
         /* a charged vessel seeds at what was put in it, on the core's circuit as much as anywhere: the loop's mean temperature is not the contents of a tank standing beside it */
         const tid = net.tankIdByNode && net.tankIdByNode[i];
         h[nm] = hold ? holdSeedH(tankCircuit(hold), holdSetP(tankCircuit(hold)), tankLvl(s,hold))
+          : shell ? holdSeedH(shellCirc(shell), secPTarget(s,shell), SGL_SET/SG_DOME)
           : tid !== undefined ? hOfT(satOfCirc(c), tankFluid(tid).temp)
           : (net.vapour && net.vapour[i])
           ? satHg(satOfCirc(c), netPAt(s,nm))
@@ -1170,6 +1191,9 @@ function advectStep(s, dt, runFlow, edgeKg){
       }
       inC[to] += cIn; }
   }
+  for(const k in feedInHBy) delete feedInHBy[k];
+  for(const id of sgIds()){ const nm = feedNode(id), i = net.index[nm];
+    if(i !== undefined && inM[i] > 0) feedInHBy[nm] = inH[i]/inM[i]; }
   mOut.fill(0);
   for(let e=0;e<net.edges.length;e++) if(eFrom[e] >= 0) mOut[eFrom[e]] += eM[e];
   /* advectEdgeKg is signed u->v per edge; advectLandedBy is kg that arrived on a booked node from outside its own book, negative for what left. Charged off the same eM[] the mass integral uses, never off the solve's rate */
@@ -1319,10 +1343,10 @@ function h2Total(s){
 const hotMass=()=>{ let m=0;
   for(const id of sgIds()) m+=sgMassOf(id);
   return Math.max(1,m); };
-const sgIds=()=>roleAll("sg");
+/* the generators the PLANT has: one nobody piped is a drawing, and the duty is not split over it */
+const sgIds=()=>rolePiped("sg");
 /* 1 down to SG_DRY, then nothing; an unseeded level reads 1. */
-const sgFill=(s,id)=>{ const v=s.sglBy&&s.sglBy[id];
-  return v===undefined?1:clamp(v/SG_DRY,0,1); };
+const sgFill=(s,id)=>clamp(sgLvl(s,id)/SG_DRY,0,1);
 /* K. A caller with no live shell - the bench, a tick-zero seed - gets the fallback curve. */
 const sgTemp=(s,id)=>{ const v=s&&s.sgTBy&&s.sgTBy[id];
   return v===undefined ? tsatSec(secPTarget(s,id), shellCirc(id)) : v; };
@@ -1406,33 +1430,12 @@ const ihxQAt=(s,id,rf)=>{
   if(!isFinite(Cmin)) return UA*dT;
   if(!(Cmin>0)) return 0;
   return ntuCounter(UA/Cmin, isFinite(Cmax) ? Cmin/Cmax : 0)*Cmin*dT; };
-/* The pot's heat capacity: the water actually in it plus the steel round it. */
-const sgHeatCap=(s,id)=>sgMassOf(id)*(sgLvl(s,id)/100)*CP_W
-                      + sgSteelT(id)*1000*CP_STEEL;
-/* Defaults to SGL_SET, not 0: a bench with no sim running draws a half-full kettle. */
-const sgLvl=(s,id)=>{ const v=s&&s.sglBy&&s.sglBy[id]; return v===undefined?SGL_SET:v; };
-const sgRhoW=(s,id)=>rhofOf(satOfCirc(shellCirc(id)), tsatSec(secP(s,id), shellCirc(id)));
 const SG_DOME=1.6;   // steam space at 100 % level: a level is read across a downcomer span, not the whole drum
-const sgSteamVol=(s,id)=>Math.max(0.1, sgMassOf(id)/sgRhoW(s,id)*(SG_DOME-sgLvl(s,id)/100));
-/* kg: saturated steam at the shell's own solved pressure - one state, not two. */
-const sgSteamOf=(s,id)=>sgSteamVol(s,id)*rhogOf(satOfCirc(shellCirc(id)), tsatSec(secP(s,id), shellCirc(id)));
-/* kg per MPa, by difference off the curve rather than a slope written out beside it. */
-const SG_CAP_DP=0.01;                                       // MPa, the secant's own step
-const sgCapAt=(s,id,p)=>{ const ci=shellCirc(id), c=satOfCirc(ci);
-  const r0=rhogOf(c, tsatSec(p, ci)), r1=rhogOf(c, tsatSec(p+SG_CAP_DP, ci));
-  return Math.max(1e-9, sgSteamVol(s,id)*(r1-r0)/SG_CAP_DP); };
-/* kg per MPa: the steam space filling up, plus the water and steel following saturation. */
-const shellStoreC=(s,id)=>{ const ci=shellCirc(id), p=secP(s,id);
-  const hfg=Math.max(1, hfgOfCirc(ci,p));
-  const dTdp=Math.max(1e-6, (tsatSec(p+SG_CAP_DP,ci)-tsatSec(p,ci))/SG_CAP_DP);
-  return sgCapAt(s,id,p) + sgHeatCap(s,id)*dTdp/hfg; };
-/* kg/s arriving without crossing an edge: a boil rate, every term one tick old. A lifted valve is NOT a term here - it is an edge of this same matrix. */
-const shellStoreW=(s,id)=>{
-  const ci=shellCirc(id), p=secP(s,id), hfg=Math.max(1, hfgOfCirc(ci,p));
-  const fed=(s.sgFedBy && s.sgFedBy[id])||0;
-  return ((HEATBAL.sgQBy[id]||0) + ((s.sgSwQBy && s.sgSwQBy[id])||0)
-          - fed*CP_W*Math.max(0, tsatSec(p,ci)-T_FEED)
-          - skinQOf(s,id))/hfg; };
+/* the void fraction of the shell's own node, read across the operating span; SGL_SET before there is a field to read */
+const sgLvl=(s,id)=>{ const n=shellNode(id);
+  if(!s || !s.hBy || s.hBy[n]===undefined || !P.net || P.net.index[n]===undefined) return SGL_SET;
+  const v=holdLvlOf(s,n)*SG_DOME;
+  return isFinite(v) ? clamp(v,0,100) : SGL_SET; };
 /* which way the leak crosses is the pressures, not a choice; the reaction is where the metal is, so one expression covers both signs. Terms are the FIRE row (swReact(), room.js), and nothing is debited - the transport already booked what crossed */
 const sgPrimH2=(s,id,kg)=>{
   const IN=roleIns(partOf(id))[0];
@@ -1461,8 +1464,7 @@ function sgReactStep(s, dt, raw){
 }
 /* the driest generator: an average would hide one boiling dry behind three healthy ones */
 const sglMin=s=>{ const ids=sgIds(); if(!ids.length) return 100;
-  let m=100; for(const id of ids){ const v=s.sglBy&&s.sglBy[id];
-    if(v!==undefined && v<m) m=v; } return m; };
+  let m=100; for(const id of ids){ const v=sgLvl(s,id); if(v<m) m=v; } return m; };
 /* each generator's share of the heat leaving the primary, in proportion to its own loop's solved flow; equal split when the solve has nothing to say */
 function sgShare(byLoop){
   const ids=sgIds(), out={};
@@ -1650,8 +1652,6 @@ const ledgerKg = s => { let m = 0;
       for(let i=0;i<net.n;i++) if(!booked[i]) m += s.mBy[net.name[i]] || 0; } }
   for(const id of tankIds()){ const t=D.tanks[id];
     if(!t.inf && !t.hold && !tankInField(id)) m += (s.tank&&s.tank[id]!==undefined?s.tank[id]:t.level)/100*tankKg(id); }
-  for(const id in s.sglBy){ const M=sgMassOf(id); if(M>0) m += s.sglBy[id]/100*M; }
-  for(const id in s.sgSteamBy) m += s.sgSteamBy[id];
   m += sumpKg(s);
   return m; };
 const ledgerOut = s => { let k=0; for(const n in s.massOut) k += s.massOut[n]; return k; };
@@ -1829,6 +1829,7 @@ const loadStart = () => Math.min(startOf("loadDem",1), P.loadMax);
 let plantGen=0;
 function resetPlant(){
   plantGen++;
+  for(const k in feedInHBy) delete feedInHBy[k];
   const x0=startOf("rodCommon",RODX0);
   S={coreBy:{}, n:0,C:null,I:0,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,rodBand:false,scrammed:false,
@@ -1848,23 +1849,19 @@ function resetPlant(){
      /* one demand and one actual per pump, refilled; demand starts equal to actual, the rule every actuator owes */
      flowBy:Object.fromEntries(pumpIds().map(id=>[id,pumpStart(id)])),
      flowDemBy:Object.fromEntries(pumpIds().map(id=>[id,pumpStart(id)])),
-     /* one level per generator, refilled, so a renderer may hold it across frames */
-     sglBy:Object.fromEntries(sgIds().map(id=>[id,SGL_SET])),
      /* each generator's feed regulating valve, an actuator walked toward the controller's ask; 0 is wide open */
      fregBy:Object.fromEntries(sgIds().map(id=>[id,0])),
      /* each generator's share of the heat leaving the primary, measured off the solve and read back by secP() next tick */
      sgShare:Object.fromEntries(sgIds().map(id=>[id,1/Math.max(1,sgCount())])),
-     /* one generator's shell as a pot: what it sits at, what it raises, and what gets away down the steam line; the gap between the last two is the trapped steam */
-     sgTBy:{}, steamBy:{}, steamTo:{},
-     /* what each shell edge carried last tick, kg/s; one tick old because the pool it lands on is a boundary */
+     /* K at the shell's own saturation, and kg/s down its steam nozzle - both reads off the solved field, refilled */
+     sgTBy:{}, steamBy:{},
+     /* what each shell's feed regulating valve carried, kg/s; a readout */
      sgFedBy:{},
      /* kg/s across the turbine wheels and the MPa it saw doing it; plant level, because a header mixes */
      turbWk:0, turbP:0,
      /* kg/s of secondary water going overboard through a machine open to atmosphere - a readout and a ledger entry */
      condVent:0, condVentSeen:false,
-     /* kg of saturated steam in the shell's own space at the solved pressure - derived every tick, never integrated, so mass and pressure cannot disagree */
-     sgSteamBy:{},
-     /* MPa; secP() is asked from inside the network solve, so the shell's own equation is integrated before it, never during */
+     /* MPa read off the shell's own node once a tick: secP() is asked from inside the solve and may not see a half-solved field */
      sgPBy:{},
      /* how far the reaction has eaten this tube leak open, the heat into shell and primary in kW, and the hydrogen made in the shell and not yet vented */
      sgWastBy:{}, sgSwQBy:{}, sgPwQBy:{}, sgH2By:{},
@@ -2002,7 +1999,7 @@ function resetPlant(){
   /* the shell is seeded off the fallback curve; from here it is an integral */
   for(const id of sgIds()) S.sgTBy[id] = tsatSec(secPTarget(S,id), shellCirc(id));
   /* one temperature over the fleet: rejection is emis*area*T^4, so a common T is the solution whatever the mix of coatings and sizes */
-  { const q = P.rated*P.n0*(1-P.eff)*1000, r = condRest(q);
+  { const q = P.rated*P.n0*(1-(1-bleedFrac())*P.eff)*1000, r = condRest(q);
     for(const id in S.radTBy) if(!partOf(id)) delete S.radTBy[id];
     for(const id of radIds()) S.radTBy[id] = r.radT;
     /* at rest a panel takes out what it sheds; left at 0 the settle below commissions the cooling circuit ten kelvin hot */
@@ -2042,6 +2039,12 @@ function resetPlant(){
                K.flowK*cs.flowNet, Math.max(cs.flowNet, CORE_DT_QMIN), TavgOf(S, K.circ)); });
       coreAgg(S);
       advectStep(S, DTS, rf, outs.edgeKg);
+      /* the shell is held at its commissioning level for the same reason the hold tank is pinned: the settle is a rest point, and the feed valve is not walked until after it */
+      for(const id of sgIds()){ const n = shellNode(id), i = P.net.index[n];
+        if(i === undefined || S.hBy[n] === undefined) continue;
+        const ci = shellCirc(id), p = secP(S,id);
+        S.hBy[n] = holdSeedH(ci, p, SGL_SET/SG_DOME);
+        S.mBy[n] = P.net.vol[i]*rhoMixOf(satOfCirc(ci), p, S.hBy[n]); }
       /* the transport owns the shape round the loop, but the settle has no controller, so every pass puts the core circuit's mean back on Tref; the pressurizer's node keeps its bubble */
       { const G = nodeGraph();
         for(const ci of holdCircs()){ if(G.coreCircs[ci] !== 1) continue;
@@ -2142,12 +2145,11 @@ function resetPlant(){
                                 regionPAt(S, partOf(shells[j])), sgBurstP(shells[j])))); }
     if(n) solve();
     netHoldStore(false);
-    if(last){ S.turbWk = last.turbWk||0;
-      S.turbP = last.turbWkA > 0 ? last.turbWkP/last.turbWkA : condP(S);
-      const by = last.sgSteamOutBy || {};
-      for(const id of shells){ S.steamTo[id] = by[id]||0;
-        S.sgFedBy[id] = (last.sgFeedBy && last.sgFeedBy[id]) || 0;
-        S.steamBy[id] = (HEATBAL.sgQBy[id]||0)/riseSg(id, secP(S,id)); } } }
+    if(last){ S.turbP = last.turbWkA > 0 ? last.turbWkP/last.turbWkA : condP(S);
+      /* what leaves is what the shell RAISES: the pinned solve reports the geometry's answer, and the condenser is sized off this */
+      for(const id of shells){ S.sgFedBy[id] = (last.sgFeedBy && last.sgFeedBy[id]) || 0;
+        S.steamBy[id] = (HEATBAL.sgQBy[id]||0)/riseSg(id, secP(S,id)); }
+      S.turbWk = Math.max(0, (last.turbWk||0) - bleedPlant(S)); } }
   /* the feed valve is left where the controller would have: each is bisected against the liquid solve to the back-pressure at which its own shell edge carries what the shell raises, and the round repeats because the shells share a header */
   { const ids = sgIds();
     // held for the same reason the shell walk holds it: a reading taken while the stores march is a state N ticks on, not a rest point
@@ -2247,13 +2249,12 @@ function resetPlant(){
     netHoldStore(false);
     if(ids.length) solveFeed(); }
   layRelease();
-  /* written here as well as every tick: the books have to see the steam charge before the first tick, or a shell grows its own out of nothing */
-  for(const id of sgIds()) S.sgSteamBy[id] = sgSteamOf(S,id);
   /* the condenser sits on the water that actually arrives: condRest() is only the bench's estimate, and the settled field is what the tick will read */
   { const ids = condIds(), n = ids.length;
     for(const id of ids){ const t = cwInOf(S, rf, id); if(t !== undefined) S.cwInTBy[id] = t; }
-    let boiled = 0; for(const id of sgIds()) boiled += S.steamTo[id]||0;
-    const qAll = Math.max(0, boiled*steamRise() - S.turbWk*turbDh(S.turbP, condP(S))*P.eff);
+    let boilQ = 0; for(const id of sgIds()) boilQ +=
+      Math.max(0, (S.steamBy[id]||0) - bleedOf(S,id))*riseCond(S, id, secP(S,id));
+    const qAll = Math.max(0, boilQ - S.turbWk*turbDh(S.turbP, condP(S))*P.eff);
     for(const id of ids){ const c = cwCOf(S,id),
       eps = c>0 ? 1-Math.exp(-condUA(id)*condKOf(S,id)/c) : 0;
       if(c>0 && eps>0) S.condTBy[id] = cwInAt(S,id) + qAll/n/(c*eps); }
@@ -2707,9 +2708,7 @@ function step(dt){
   s.heat = heat; s.sc = sc;              // tripCause() reads these outside the tick
   /* what a flow meter would read, never what the pump dial was set to: LOW FLOW has to trip on the delivered figure or shutting every valve trips nothing */
   s.flowNet = pumpK; coreEach(s,(cs,K,id)=>{ cs.flowNet = coreFN[id]; });
-  /* the secondary balance, per generator off sgW - the same flow-weighted share the removal was taken with, so what boils out of each machine is what crossed into it */
   const ids = sgIds();
-  for(const id in s.sglBy) if(!sgW.hasOwnProperty(id)) delete s.sglBy[id];
   for(const id in s.fregBy) if(!sgW.hasOwnProperty(id)) delete s.fregBy[id];
   /* the condensate pool is the HOSTED tank - a hotwell lives inside its condenser and has no cell. A tank standing on the board is metered against its own edge, whatever its valve rule says */
   const circ = secTankIds().filter(id => !D.tanks[id].cell);
@@ -2750,38 +2749,20 @@ function step(dt){
     for(const id of shells){ const over = Math.max(0, secP(s,id)-back);
       secVent[id] = (secVent[id]||0) + q*(tot>0 ? over/tot : 1/shells.length); }
   }
-  /* a severed steam line is a valve minus its set point, priced against the shell's design pressure and off the run's own bore; kept out of secVent, which is split back over the valves that earned it */
-  const secHole = {};                     // per shell: kg/s the holes on it offer
-  for(const bk of (P.net.steamBreaks||[])){
-    if(bk.exh || !runHoled(s,bk)) continue;
-    for(const id of holeShells(s,bk)){
-      const back = regionPAt(s, partOf(id)), span = Math.max(0.05, sgDesignP()-back);
-      secHole[id] = (secHole[id]||0) + SG_RELIEF_CAP*ratedSteam()*bk.bore*bk.bore
-                                       *Math.max(0, secP(s,id)-back)/span; }
-  }
-  let boiled = 0, boilQ = 0;    // kg/s and kW, each shell at its own pressure - the condenser used to take the design rise
-  /* what the solve moved that the shell could not give: the shortfall comes off the shaft work rather than being made twice */
-  let starve = 0;
+  let boiled = 0, boilQ = 0, bleedAll = 0;    // kg/s and kW, each shell at its own pressure - the condenser used to take the design rise
   for(const id in s.sgTBy)  if(!sgW.hasOwnProperty(id)) delete s.sgTBy[id];
-  for(const id in s.sgSteamBy) if(!sgW.hasOwnProperty(id)) delete s.sgSteamBy[id];
   for(const id in s.sgPBy) if(!sgW.hasOwnProperty(id)) delete s.sgPBy[id];
   for(const id in s.sgFedBy) if(!sgW.hasOwnProperty(id)) delete s.sgFedBy[id];
   for(const id in s.sgBurst) if(!sgW.hasOwnProperty(id)) delete s.sgBurst[id];
   for(const id in s.steamBy)  delete s.steamBy[id];
-  for(const id in s.steamTo)  delete s.steamTo[id];
   for(const id in s.sgVentBy) delete s.sgVentBy[id];
   if(ids.length) for(const id of ids){
-    /* this machine's own secondary water: hoisted, a mixed fleet integrates every level against the first machine's charge */
-    const M = sgMassOf(id); if(M<=0) continue;
-    if(s.sglBy[id]===undefined) s.sglBy[id]=SGL_SET;                 // a generator placed mid-run starts full
+    if(sgMassOf(id)<=0) continue;
     if(s.sgBurst[id]===undefined) s.sgBurst[id]=false;
-    const lvl = s.sglBy[id], ci = shellCirc(id);
-    /* the shell's pressure is the one state; temperature is what saturation says about it and the steam charge is what the space holds at it */
-    if(s.sgSteamBy[id]===undefined) s.sgSteamBy[id]=sgSteamOf(s,id);
-    const shellP = secP(s,id), Tsat = tsatSec(shellP, ci);
-    s.sgTBy[id] = Tsat;
-    const fed = (netOut.sgFeedBy && netOut.sgFeedBy[id]) || 0;
-    const ms = s.sgSteamBy[id];
+    const nd = shellNode(id), ci = shellCirc(id);
+    const shellP = secP(s,id);
+    s.sgTBy[id] = tsatSec(shellP, ci);
+    s.sgFedBy[id] = (netOut.sgFeedBy && netOut.sgFeedBy[id]) || 0;
     /* there is no lid that is not a placed box: past this the shell is open to atmosphere and stops raising pressure at all. Latched */
     if(!s.sgBurst[id] && shellP > sgBurstP(id)){
       s.sgBurst[id]=true;
@@ -2791,45 +2772,24 @@ function step(dt){
     /* the solved flow out of this generator's own nozzle; negative is steam arriving from a hotter machine down a shared header, which is why a header equalises */
     const open = sgOpen(s,id);
     const steamTo = open ? 0 : (vapOut[id] || 0);
-    s.sgFedBy[id] = fed;                  // next tick's own store reads it back
-    /* a hole comes off the level; a valve has already left through its own nozzle edge, so only an open shell and a severed steam line are taken here */
     const vent = secVent[id] || 0;                           // its valves, off their own edges
-    let cap = open ? SG_RELIEF_CAP*ratedSteam() : 0;         // a hole, not a valve
-    cap += secHole[id]||0;                                   // a severed steam line is another
-    let hole = Math.min(cap, lvl/100*M/Math.max(dt,1e-9));
-    /* a shell with nothing in its steam space passes nothing, taken as a scale rather than a clamp; an open shell is losing its WATER, so `cap` above already floors it and this does not apply */
-    const avail = ms/Math.max(dt,1e-9);
-    const k = (!open && (steamTo+hole) > avail) ? Math.max(0,avail)/Math.max(steamTo+hole,1e-9) : 1;
-    const outSteam = steamTo*k;
-    if(!open) hole *= k;
-    starve += steamTo - outSteam;
-    /* the shell's one equation is a row of the matrix: shellStoreC the diagonal, shellStoreW the injected current, and what left is the solved flow on its own edges */
-    const pNew = open ? regionPAt(s, partOf(id))
-      : Math.max(COND_P0, (s.pBy && s.pBy[id+"t"] !== undefined) ? s.pBy[id+"t"] : shellP);
-    /* what boiled is what the steam space gained plus what left it, off the derived charge rather than sgCapAt()*dp: the space also moves with the water level under it */
-    s.sgPBy[id] = pNew;
-    const msNew = Math.max(0, sgSteamOf(s, id));
-    const steamOut = (msNew - ms)/Math.max(dt,1e-9) + outSteam + hole;
-    s.sgSteamBy[id] = msNew;
+    /* the shell's pressure is its NODE's, read once a tick: secP() is asked from inside the solve and may not see a half-solved field */
+    s.sgPBy[id] = open ? regionPAt(s, partOf(id))
+      : Math.max(COND_P0, (s.pBy && s.pBy[nd] !== undefined) ? s.pBy[nd] : shellP);
     /* booked and never subtracted, the sentence the primary's reliefs make (reliefRoom); a lifting valve takes some of the header's own holdup, so it may pass more than this shell sent up the pipe */
-    const toCondCut = Math.min(vent, Math.max(outSteam, 0));
+    const toCondCut = Math.min(vent, Math.max(steamTo, 0));
     book(s,"sgVent", vent*dt);
-    book(s,"sgHole", hole*dt);            // an open shell has no edge; what leaves it leaves here
-    s.steamBy[id]=steamOut; s.steamTo[id]=outSteam;
+    s.steamBy[id]=steamTo;
     s.sgVentBy[id]=vent;
-    const want = feedWant(s,id);
-    /* the feed regulating valve is an actuator walked between demand and what the shell edge carried, fed forward like s.cavP; the error is relative, so one gain serves a 55 t unit and a 7 t one */
     if(s.fregBy[id]===undefined) s.fregBy[id]=0;
-    /* what arrives is the solved flow, never the demand: no ceiling here, or a clamp discards mass the solve already moved and the secondary's books stop closing */
-    const raw = lvl + 100*(fed-steamOut)/M*dt;
-    s.sglBy[id] = clamp(raw, 0, 100);
-    book(s,"sgClamp", (raw - s.sglBy[id])/100*M);
     // what reached the CONDENSER is what left down the nozzle less what the valves took out of the header on the way
-    { const toCond = Math.max(0, outSteam - toCondCut);
-      boiled += toCond; boilQ += toCond*riseSg(id, secP(s,id)); }
+    { const avail = Math.max(0, steamTo - toCondCut), bleed = Math.min(bleedOf(s,id), avail);
+      bleedAll += bleed;
+      const toCond = avail - bleed;
+      boiled += toCond; boilQ += toCond*riseCond(s, id, shellP); }
     /* a ruptured generator on its safety valve is putting primary water in the sky, charged by the share of its steam going overboard rather than to the condenser */
     if(vent>0 && sgtrLive(s,id) && sgActive(id)){
-      const shr = vent/Math.max(outSteam+vent,1e-9);
+      const shr = vent/Math.max(steamTo+vent,1e-9);
       s.release = Math.min(100, s.release
         + shr*(Math.max(0,s.sgtrRate)/SGTR_RATE)*0.02*contRelPart(s,partOf(id))*P.dose*dt); }
   }
@@ -2842,7 +2802,7 @@ function step(dt){
     logE("warn","STEAM GOING OVERBOARD",
       "The turbine bypass is passing steam into a machine that is open to atmosphere, and the water going with it does not come back. The hotwell is draining and no valve on the plant is open."); }
   /* one number for the plant: what went round through the bypass did no work, and what crossed the wheels did it at the pressure the stop valve is seeing */
-  s.turbWk = Math.max(0, (netOut.turbWk||0) - starve);
+  s.turbWk = Math.max(0, (netOut.turbWk||0) - bleedAll);
   s.turbP  = netOut.turbWkA > 0 ? netOut.turbWkP/netOut.turbWkA : pCond;
   const workKW = s.turbWk*turbDh(s.turbP, pCond)*P.eff;
   /* one pot per machine: the header mixes, so what the fleet condenses is shared, and each sits where its own circulating water and duty put it. A relieved condenser is bounded by its atmospheric saturation */
@@ -2871,9 +2831,8 @@ function step(dt){
     if(net && advectEdgeKg) for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e];
       if(ed.condOf !== undefined) k += ed.condOut*advectEdgeKg[e]; }
     return k/Math.max(dt,1e-9); })();
-  /* the secondary as one closed system; a tube rupture grows the secondary total and the water ends up here, with loopKg() the one bridge between invRate()'s % and these kg. A secondary hole is not charged here, because every one of its exits is already metered */
-  { const sgtrKg = Math.max(0, s.sgtrRate)/100*loopKg();
-    const netKg = advectCondIn/Math.max(dt,1e-9)*retK - condOut + sgtrKg;
+  /* the secondary as one closed system. A tube rupture is NOT credited here: its edge lands the primary's water on the shell's own node, and a secondary hole has every one of its exits metered */
+  { const netKg = advectCondIn/Math.max(dt,1e-9)*retK - condOut;
     const circCap = (()=>{ let c=0; for(const id of circ) c+=tankKg(id); return c; })();
     for(const id in s.tankOver) delete s.tankOver[id];
     for(const id of secTankIds()){

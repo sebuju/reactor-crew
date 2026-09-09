@@ -107,7 +107,7 @@ function layoutStats(M){
   ["PRESSURIZER HEAD",M.pzrOK?"at loop top":"BELOW LOOP TOP",M.pzrOK?1:0.2,
    M.pzrOK?C.green:C.red,
    "The pressurizer works by holding a steam bubble at the highest point of the primary loop. Mount it below the reactor or the steam generators and the bubble cannot sit where it needs to: pressure control loses more than half its damping and every load change whips the loop pressure around."],
-  ["STEAM CIRCUIT",(M.turbConn*turbCount()).toFixed(0)+" / "+turbCount()+" turbines",M.turbConn,
+  ["STEAM CIRCUIT",(M.turbConn*roleAll("turb").length).toFixed(0)+" / "+roleAll("turb").length+" turbines",M.turbConn,
    statRamp(M.turbConn),
    "Whether each turbine is in a circuit that can actually run: a generator raising steam into it, and a condenser to exhaust into. An unpiped turbine spins on nothing and makes no electricity, and a generator with nowhere to send its steam boils into a closed vessel and takes no heat out of its loop."],
   ["INJECTION HEAD",M.injZ.toFixed(1)+" m",clamp((M.injZ+2)/8,0,1),
@@ -206,7 +206,7 @@ const STATDRV={
  "STEAM CIRCUIT":(d,M)=>["TURBINES   "+drvList(drvNames("turb")),
    "CONDENSERS   "+drvList(drvNames("cond")),
    "steam and condensate runs drawn with the PIPE tool",
-   "piped   "+(M.turbConn*turbCount()).toFixed(0)+" of "+turbCount()],
+   "piped   "+(M.turbConn*roleAll("turb").length).toFixed(0)+" of "+roleAll("turb").length],
  "INJECTION HEAD":(d,M)=>{ const t=tankIds().filter(id=>tankPrimary(id)&&D.tanks[id]&&D.tanks[id].check);
    return (t.length? t.map(id=>{ const q=partOf(id);
        return (q?partName(q):id)+"   "+(M.tankZ[id]||0).toFixed(1)+" m above the core"; })

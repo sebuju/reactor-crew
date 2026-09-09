@@ -187,7 +187,7 @@ function recHead(){
   });
 }
 /* bumped whenever a node name or the set of them changes: s.mBy/s.hBy are keyed by name and designSig() cannot see a graph change */
-const NODE_SIG = "run-node/1";
+const NODE_SIG = "shell-node/1";
 
 /* returns whether the head rebuilt into the same reactor, and the caller must ask */
 function recApplyHead(h){

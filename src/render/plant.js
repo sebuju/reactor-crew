@@ -1683,11 +1683,9 @@ function readoutsFor(p,s){
     add("SHELL TEMP",sgTemp(s,id).toFixed(0)+" K",null,
       "The temperature of the water and steam in this shell. Heat crosses the tubes on the gap between this and the primary, so a shell that heats up stops cooling the core.");
     secRow("STEAM");
-    add("STEAM RAISED",(s.steamBy&&s.steamBy[id]||0).toFixed(0)+" kg/s",null,
-      "What this generator is boiling off. What actually leaves down the steam line is below - the difference stays in the shell and puts the pressure up.");
-    add("STEAM OUT",(s.steamTo&&s.steamTo[id]||0).toFixed(0)+" kg/s",
+    add("STEAM OUT",(s.steamBy&&s.steamBy[id]||0).toFixed(0)+" kg/s",
       (s.sgVentBy&&s.sgVentBy[id]>0)?C.red:null,
-      "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go.");
+      "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go, and the pressure climbs.");
     // off the same sgHot() the heat term reads: behind a barrier the coolant here is the intermediate circuit's
     secRow("TUBE SIDE");
     { const act=sgActive(id);
@@ -1696,7 +1694,7 @@ function readoutsFor(p,s){
            :"Intermediate coolant arriving from the exchanger in front. The core's own coolant never reaches this machine.");
       add(act?"T-COLD OUT":"INTER OUT",stageOutT(s,id,0).toFixed(0)+" K",null,
         "Coolant going back the way it came, after the generator has taken its heat."); }
-    add("HEAT REMOVED",((s.steamBy&&s.steamBy[id]||0)*riseSg(id,secP(s,id))/1000).toFixed(0)+" MWt",null,
+    add("HEAT REMOVED",((HEATBAL.sgQBy[id]||0)/1000).toFixed(0)+" MWt",null,
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
     secRow("BOUNDARY");
     add("SHELL",(s.sgBurst&&s.sgBurst[id])?"BURST":"intact",

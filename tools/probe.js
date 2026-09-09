@@ -70,7 +70,7 @@ function dump(s,label){
   { const net=M.netBuild(s);
     const names=[]; for(const nm in net.index) names.push(nm);
     for(const nm of names){
-      if(nm.indexOf("cont:")===0 || nm.indexOf("sec:")===0) continue;   // room boundaries, not plant
+      if(nm.indexOf("cont:")===0) continue;   // room boundaries, not plant
       row(nm, f(M.netTempAt(s,nm),1)+" K   x="+f(M.netQualAt(s,nm),2)+"   "+f(net.vol[net.index[nm]],2)+" m3");
     }
     row("courant clamps", M.advectClampCount()+" node(s) last tick"); }
@@ -182,7 +182,7 @@ const CASES={
           "  qIn(now) "+f(n*P.sgUA*Math.pow(P.flowK,0.8)*dTnow/1000,1)+" MW"+
           "  rated*n0 "+f(P.n0*P.rated,1)+" MW"+
           "\n    steamRef "+f(P.steamRef,1)+"  raised "+f(s.steamBy&&s.steamBy[id],1)+
-          "  left "+f(s.steamTo&&s.steamTo[id],1)+"  swallow "+f(P.swallow,1)+
+          "  swallow "+f(P.swallow,1)+
           "  load "+f(s.load,3));
       }
       console.log(PRE[i][0].padEnd(12)+f(M.mwE(s),0).padStart(6)+f(s.Tavg,1).padStart(8)+

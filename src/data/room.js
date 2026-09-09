@@ -258,8 +258,10 @@ let roomMark = 0, roomTail = 0;
 const roomPush = (j, r) => { roomSeen[j] = roomMark; roomRing[j] = r; roomQ[roomTail++] = j; };
 function roomPlume(cells, n){
   const N = GW*GH;
-  if(!roomSeen){ roomSeen = new Int32Array(N); roomQ = new Int32Array(N);
-                 roomRing = new Int32Array(N); }
+  // re-cut on N like roomScratch(): a hull that grew leaves a short queue that silently drops pushes
+  if(!roomSeen || roomSeen.length !== N){
+    roomSeen = new Int32Array(N); roomQ = new Int32Array(N);
+    roomRing = new Int32Array(N); }
   roomMark = ++roomPlumeGen;
   const mark = roomMark;
   // a plume is gas, and blk already refuses a gas-tight cell everywhere else
@@ -346,7 +348,8 @@ function roomStep(s, dt){
   for(const id in s.sgH2By){
     const m = s.sgH2By[id], rate = s.sgVentBy[id] || 0;
     if(!(m > 0) || !(rate > 0)) continue;
-    const f = Math.min(1, rate*dt/Math.max(s.sgSteamBy[id] || 0, 1e-6));
+    const nd = shellNode(id), ms = (s.mBy[nd]||0)*clamp(netQualAt(s,nd),0,1);
+    const f = Math.min(1, rate*dt/Math.max(ms, 1e-6));
     s.sgH2By[id] = m - m*f;
     roomSpread(s.roomH2, cellsOf(id), rate, m*f);
   }

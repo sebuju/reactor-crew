@@ -30,6 +30,8 @@ function expected(kind, dir){
   if(dir === "rev" && ins.some(IN => IN.head)) return "the path carries head, so backwards is a different machine";
   if(kind === "relief") return "a relief valve is shut until it lifts";
   if(R.vapPath) return "a vapour path in a liquid leg: the swallow is sized for steam";
+  /* a machine that states its own design pressure is not a boundary for a loop: spliced in, it bursts as one and its internal path goes with it */
+  if(R.pdes !== undefined) return "the shell is built for " + R.pdes + " MPa and the loop is not";
   return null;
 }
 function kinds(){

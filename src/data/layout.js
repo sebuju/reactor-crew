@@ -257,7 +257,8 @@ function pumpResOf(id){
     for(const v of (G.adj[u]||[])){ if(seen[v]) continue;
       const p=partAt(v); if(!p || p.id===id) continue;
       seen[v]=1;
-      if(p.role==="tank"){ if(!out.includes(p.id)) out.push(p.id); continue; }
+      /* a circuit's own expansion vessel is NOT a reserve: it rides the loop, and the pump on it circulates what comes back round rather than drawing the tank down */
+      if(p.role==="tank"){ if(D.tanks[p.id].cool == null && !out.includes(p.id)) out.push(p.id); continue; }
       /* A suction line may have valves and tees in it; what stands behind another MACHINE is that machine's suction, not this one's. */
       if(p.role!=="fitting") continue;
       stack.push(v); } }
@@ -337,9 +338,15 @@ const corePumpCap=()=>{ let c=0;
   for(const p of LAY.parts) if(corePump(p.id)) c+=pumpCapOf(p.id);
   return c; };
 // counted off the grid, never a stored knob
-const sgCount=()=>LAY.parts.filter(p=>p.role==="sg").length;
-const turbCount=()=>LAY.parts.filter(p=>p.role==="turb").length;
-const condCount=()=>LAY.parts.filter(p=>p.role==="cond").length;
+/* A count answers how many machines the PLANT HAS, and a machine nobody piped is not one: the duty is split over what the water can reach. `usage` is the traced connection, so an orphaned port reads as no port at all. Ask roleAll() for how many are DRAWN. */
+const partPiped=pid=>{ const u=pipeNetwork().usage;
+  for(const f in DIRV) if(u[pid+f]) return true;
+  return false; };
+const rolePiped=role=>roleAll(role).filter(partPiped);
+const roleCount=role=>rolePiped(role).length;
+const sgCount=()=>roleCount("sg");
+const turbCount=()=>roleCount("turb");
+const condCount=()=>roleCount("cond");
 /* Every field below is the ENGINEERING QUANTITY in its own units, defaulting to `?? xSuggest()` and never a baked figure: an absurd number is a legal design that performs accordingly. */
 /* Off D.power and layoutMetrics(), NEVER derived(): derived() prices mass, mass prices these machines, and a suggestion that asked derived() would ask itself. */
 const RATED_KW = () => ratedMWt()*1000;
@@ -351,7 +358,12 @@ const plantSteam = () => RATED_KW()/steamRise();                    // kg/s rais
 const ratedEff = () => COOLANT[priD().cool].eff
   * clamp(1 + TURB_EFF_K*Math.log(RATED_KW()/steamRise()/TURB_EFF_REF),
           TURB_EFF_MIN, TURB_EFF_MAX);
-const plantDuty  = () => RATED_KW()*(1-ratedEff());                  // kW rejected
+/* The share of the steam raised the feed heaters take: an open heater carrying condensate off the design backpressure up to T_FEED. It never reaches the wheels and it never reaches the condenser. */
+const bleedFrac = () => { const hc = hOfT(SAT_WATER, RAD_TDES + COND_DT0);
+  return clamp((hOfT(SAT_WATER, T_FEED) - hc)
+             / Math.max(satHg(SAT_WATER, sgDesPSuggest()) - hc, 1), 0, 0.9); };
+/* Only the throttle steam reaches the wheels, so what the plant CAPTURES is the bleed's complement of ratedEff(); the heat itself is recycled and the condenser still sees the rest of the core. */
+const plantDuty  = () => RATED_KW()*(1-(1-bleedFrac())*ratedEff());  // kW rejected
 /* What one turbine swallows wide open, kg/s. A designer sizes a set for the
    boiler in front of it, so the suggestion is all of what that boiler raises -
    and a machine that reaches past it is overload the designer chose to buy. */
@@ -567,10 +579,11 @@ function loopMap(){
       if((G.nodesOf[q.id]||[]).some(n=>seen[n])) partLoop[q.id]=i;
     }
   };
-  for(const p of LAY.parts){
-    if(p.role!=="sg" || partLoop[p.id]!==undefined) continue;
-    const i=nextLoop++;
-    partLoop[p.id]=i; seeded.push({p,i});
+  /* seeded on the generators the plant HAS: one nobody piped is not a loop of its own */
+  for(const id of rolePiped("sg")){
+    if(partLoop[id]!==undefined) continue;
+    const p=partOf(id), i=nextLoop++;
+    partLoop[id]=i; seeded.push({p,i});
     claim(p,i,true);
   }
   for(const {p,i} of seeded) claim(p,i,false);
@@ -739,7 +752,7 @@ const RADCOAT=[
   ["HIGH-EMISSIVITY CERAMIC", {emis:0.94, massK:1.35, tsurvK:0.80}],
 ];
 const radIds=()=>roleAll("radiator");
-const radCount=()=>radIds().length;
+const radCount=()=>radIds().filter(partPiped).length;
 const radCoatOf=id=>RADCOAT[D.radCoat[id]??1][1];
 /* The one fudge here, and it is bought balance: a grid cell is 0.218 m2 and rejecting the stock plant's heat needs order 10^6 m2, the same scale lie the hull already carries. Set once off the stock rated rejection at RAD_TDES; do NOT tune it afterwards to recover output. */
 const RAD_AREA_CELL=62468;             // m^2 of panel one grid cell is worth
@@ -759,7 +772,7 @@ const radSrcCount=()=>{ let n=0;
   for(const id in D.machines) if(machRole(id)==="radiator") n++;
   return Math.max(1,n); };
 /* One panel's share of the plant's rejection at the sink the condenser was priced against; never derived(), which would ask itself. */
-const radAreaSuggest=id=>RATED_KW()*1000*(1-ratedEff())
+const radAreaSuggest=id=>plantDuty()*1000
   /(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4))/radSrcCount();
 /* Baked on first read: radAreaSuggest() divides by the panel COUNT, so a live `??` would let a third panel shrink the two already fitted. */
 const radAreaOf=id=>D.radArea[id] ?? radAreaSuggest(id);
@@ -783,7 +796,7 @@ const totalRadEA=()=>{ let k=0;
 const radTAt=qkW=>{ const k=totalRadEA();
   return k>0 ? Math.pow(qkW*1000/k + Math.pow(T_SPACE,4), 0.25) : Infinity; };
 // ...and at full power, written once because radTAt() takes kW and the trap is handing it megawatts
-const radTRated=eff=>radTAt(ratedMWt()*1000*(1-eff));
+const radTRated=eff=>radTAt(ratedMWt()*1000*(1-(1-bleedFrac())*eff));
 const radMass=id=>radAreaOf(id)*RAD_MASS_M2*radCoatOf(id).massK;   // t
 const totalRadMass=()=>{ let m=0;
   for(const p of LAY.parts) if(p.role==="radiator") m+=partMassOf(p.id);
@@ -1268,7 +1281,7 @@ const ROLE = {
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:450, pburst:35},
   /* Two paths that do not meet - tubes (l<->b, primary) and shell (r<->t, secondary) - crossed only by the sgtr LEAK edge. `a` is the INLET on a shell path: the feed regulating valve's head is signed off it. */
-  sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", vap:"b", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
+  sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer", tsurv:800, pburst:200},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
   /* Primary in hot at l, out cold at r; the intermediate stream in cold at t, out hot at b. FOUR distinct faces, so no fold - an exchanger has a rotation to get right. */
   ihx:   {internal:[{a:"l", b:"r", kind:"comp", K:3, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"t", b:"b", kind:"comp", K:3, na:"COLD", nb:"HOT", la:"INTER COLD LEG", lb:"INTER HOT LEG"}], fixed:null,
