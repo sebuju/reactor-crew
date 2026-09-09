@@ -339,18 +339,18 @@ const TURB_TRIP_P=0.02;   // MPa
 const TURB_RESET_K=0.75;
 /* the exhaust space's own pressure, written once a tick off its node; condP() is asked from inside the solve and may not see a half-solved field */
 const condPRead = s => { let p = 0, n = 0;
-  for(const id of condIds()){ const v = s.condPBy && s.condPBy[id];
+  for(const id of condSinks()){ const v = s.condPBy && s.condPBy[id];
     if(v !== undefined && isFinite(v)){ p += v; n++; } }
   if(n) return Math.max(COND_P0, p/n);
   return s.condT===undefined ? condPDes() : Math.max(COND_P0, psatSec(s.condT)); };
 const condP = s => Math.max(exhOpen(s) ? regionPAt(s, roleOf("cond")) : 0, s.condLost ? COND_ATM : 0,
   condPRead(s));
 /* undefined on a plant with no condenser, which leaves the seed standing */
-const condTMean = s => { const ids = condIds(); if(!ids.length) return undefined;
+const condTMean = s => { const ids = condSinks(); if(!ids.length) return undefined;
   let t=0,n=0; for(const id of ids){ const v=condTOf(s,id);
     if(v!==undefined){ t+=v; n++; } }
   return n ? t/n : undefined; };
-const cwInMean = s => { const ids = condIds(); if(!ids.length) return undefined;
+const cwInMean = s => { const ids = condSinks(); if(!ids.length) return undefined;
   let t=0,n=0; for(const id of ids){ const v=s.cwInTBy&&s.cwInTBy[id];
     if(v!==undefined){ t+=v; n++; } }
   return n ? t/n : undefined; };
@@ -1081,7 +1081,7 @@ let advectEdgeKg = null, advectLandedBy = null;
 // kg the transport landed on a booked node this tick (negative: took off it); 0 with no solve
 const advectLanded = i => (advectLandedBy && i !== undefined) ? advectLandedBy[i] : 0;
 const holdNodeSet = () => new Set(holdTankIds().map(coreFold));
-const poolSet = () => new Set(condIds().map(condVesNode));
+const poolSet = () => new Set(condSinks().map(condVesNode));
 /* The runs landing on a hold tank: they hold what it holds, so they sit at saturation and the subcooling instrument must skip them. */
 function holdLineSet(){
   const slot = graphSlot("holdLine"), was = slot.get(1); if(was) return was;
@@ -2086,7 +2086,7 @@ function resetPlant(){
         S.hBy[n] = holdSeedH(ci, p, SGL_SET/SG_DOME);
         S.mBy[n] = P.net.vol[i]*rhoMixOf(satOfCirc(ci), p, S.hBy[n]); }
       /* and the hotwell at its own, for the same reason: nothing walks the condensate level until the plant is running */
-      for(const id of condIds()){ const n = condVesNode(id), i = P.net.index[n];
+      for(const id of condSinks()){ const n = condVesNode(id), i = P.net.index[n];
         if(i === undefined || S.hBy[n] === undefined) continue;
         const c = satOfCirc(circOfNode(n)), T = satT(c, condP(S));
         S.hBy[n] = hOfT(c, T);
@@ -2852,11 +2852,9 @@ function stepMarch(dt){
       s.release = Math.min(100, s.release
         + shr*(Math.max(0,s.sgtrRate)/SGTR_RATE)*0.02*contRelPart(s,partOf(id))*P.dose*dt); }
   }
-  /* steam crossing a turbine exhausting to the room reaches neither the condenser nor the hotwell; plant-level, because the condenser is one pot and pCond one backpressure */
-  const retK = (exhOpen(s) || s.condLost) ? 0 : 1;
-  /* and it is an opening, not a hole in the books: what does not come back goes to atmosphere and is booked here */
-  s.condVent = Math.max(0, boiled*(1-retK));
-  book(s,"condVent", s.condVent*dt);
+  /* what a lost vacuum is putting in the turbine hall is what the transport carried out of its own opening, off the same edge the books charge */
+  s.condVent = !s.condLost ? 0
+    : condSinks().reduce((m,id) => m + (advectOutKg["break:"+id]||0), 0)/Math.max(dt,1e-9);
   if(s.condVent > 0 && !s.condVentSeen){ s.condVentSeen = true;
     logE("warn","STEAM GOING OVERBOARD",
       "The turbine bypass is passing steam into a machine that is open to atmosphere, and the water going with it does not come back. The hotwell is draining and no valve on the plant is open."); }

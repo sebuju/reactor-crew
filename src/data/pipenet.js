@@ -750,10 +750,12 @@ const condVesNode = id => { const IN = condIN(id); return IN ? coreFold(id + IN.
 const condOutNode = id => { const IN = condIN(id); return IN ? coreFold(id + IN.b) : null; };
 /* m3 of condensate the ship states, shared over the condensers holding it */
 const condPoolVol = () => { let v = 0; for(const t of hostedTankIds()) v += D.tanks[t].vol;
-  return v/Math.max(1, condIds().length); };
+  return v/Math.max(1, condSinks().length); };
 /* A sink standing IN the primary is a heat exchanger in a hot leg, not a machine at a vacuum: it takes the loop's own pressure, and neither the vacuum's compliance nor the settle's pin belongs on it. */
 const condVacuum = id => { const n = condVesNode(id);
   return n !== null && !nodeGraph().inCore(n); };
+/* the sinks that are actually at a vacuum: the one set the plant's backpressure, its pool and its disc banks are shared over */
+const condSinks = () => condIds().filter(condVacuum);
 /* this machine's own pool, %; the commissioning fill before there is a field to read */
 const condLvl = (s, id) => { const net = P && P.net;
   const i = net && net.condVById && net.condVById[id];
@@ -769,6 +771,12 @@ const condFill0 = () => { const h = hostedTankIds(); if(!h.length) return 50;
 /* the operator's drain, kg/s at a full pool: HOT_DUMP's own rate, now a real opening */
 const condDumpKgs = () => HOT_DUMP/100*condPoolVol()*TANK_RHO;
 const condDumpOpen = s => !!(s.tankDump && hostedTankIds().some(id => s.tankDump[id]));
+/* mm; a sink past atmospheric has relieved through its disc bank, and a bank is sized off what it protects: the ship's bypass steam, its share, choked at COND_ATM at that steam's own density */
+const condVentBore = id => { const ci = circOfNode(condVesNode(id)),
+        w = ((typeof P !== "undefined" && P && P.steamRef) || plantSteam())/Math.max(1, condSinks().length),
+        rho = rhogOf(satOfCirc(ci), tsatSec(COND_ATM, ci)),
+        area = w/(ORIF_CD*Math.sqrt(2*Math.max(rho,1e-3)*(1-RCRIT)*COND_ATM*1e6));
+  return isFinite(area) && area > 0 ? Math.sqrt(4*area/Math.PI)*1000 : FIT_BORE0; };
 /* the fallback only: what a caller with no live inventory gets */
 const secPTarget = (s, id) => sgDesignP(id)*Math.pow(Math.max(secLoad(s,id),.05),.25);
 /* the solved pressure at that node; step() writes s.sgPBy off it once per tick so a reader inside the solve is one tick behind, never mid-solve */
@@ -1406,13 +1414,14 @@ function netEdges(){
     const id = q.id, va = nodeIdx(condVesNode(id)), vb = nodeIdx(condOutNode(id));
     if(va === vb) continue;
     condVIds.push(va); condParts.push(id);
-    /* one opening, two causes: a wrecked machine is a breach and the operator's drain is a duty-sized hole */
+    /* one opening, three causes: a wrecked machine is a breach, a lost vacuum has burst its discs, and the operator's drain is a duty-sized hole */
     { const c = contNode("cond:"+id);
       breakIds.push(c);
       contZ[c] = zFace(q, "b");
       contCell[c] = [q.x+((q.w/2)|0), q.y+q.h-1];
       edges.push({u: va, v: c, h: 0, kind: "break", sec: 1, key: "break:"+id,
                   C: s => partWrecked(s, id) ? holeC(BREACH_BORE)
+                        : (s.condLost && condVacuum(id)) ? holeC(condVentBore(id))
                         : condDumpOpen(s) ? dutyC(condDumpKgs(), TANK_RHO) : 0}); }
   }
 
@@ -1560,9 +1569,10 @@ function netMaps(ctx){
     /* the steam face IS the shell: the stated water at 100 % level, plus the space over it */
     for(const id of sgIds()){ const i = index[shellNode(id)];
       if(i !== undefined) net2.vol[i] += Math.max(0.1, sgRowOf(id).water*SG_DOME); }
-    /* the vessel IS the hotwell: the ship's stated pool, this machine's share, full at level 100 */
+    /* the vessel IS the hotwell: the ship's stated pool, this machine's share, full at level 100. A sink in the primary holds no condensate and takes the partVol() share every other machine takes. */
     { const v = condPoolVol();
-      for(const id of ctx.condParts){ const i = index[condVesNode(id)];
+      for(const id of ctx.condParts){ if(!condVacuum(id)) continue;
+        const i = index[condVesNode(id)];
         if(i !== undefined) net2.vol[i] += Math.max(0.1, v); } }
     /* a run's water is all on the run's own node; a shut port is simply a missing edge */
     for(const r of net){ const m = index[runNodeOf(r.key)];
