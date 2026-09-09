@@ -18,7 +18,8 @@ const M = new Function(src +
 
 M.layoutMetrics();
 
-M.buildStockPlumbing();
+/* the REFERENCE ship, which carries a condensate pump: a feed pump drawing straight off a hotwell has only the column between them, and it cavitates */
+M.buildStockPlumbing({cpump: true});
 if (!M.LAY().parts.length) throw new Error('the stock plant built nothing');
 M.commission();
 const r = M.scnRun(M.scnClone(M.SCNPRE()[0]));

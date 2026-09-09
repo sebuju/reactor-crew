@@ -311,8 +311,8 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
   if(F.wet && !F.wet[up]) return 0;
   /* a check valve is signed: +1 passes u->v only */
   if(diode && d*diode < 0) return 0;
-  // a nozzle in the steam space passes the steam's own density, not the vessel's mixture
-  const rho = gasAt === up && F.x[up] > 0 ? F.rhoG[up] : F.rhoD[up];
+  /* a nozzle in the steam space passes the steam's own density, not the vessel's mixture. F.void is a vessel whose free SURFACE says there is a space over it: at the condenser's vacuum the quality of a half-full pool is 7e-5 and a bare x > 0 pulls the hotwell out through the exhaust duct. */
+  const rho = gasAt === up && (F.x[up] > 0 || F.void[up]) ? F.rhoG[up] : F.rhoD[up];
   const w = C*Math.sqrt(2*Math.max(rho, 1e-3)*eff*1e6);
   return w/act;
 };
@@ -320,12 +320,14 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
 const scratch = (net, k, n, Ctor, v) => { const b = net.scr || (net.scr = {}); let a = b[k];
   if(!a || a.length !== n) a = b[k] = new Ctor(n); a.fill(v); return a; };
 /* the field the law is linearised about: one tick old on purpose, and per net */
-const netFieldOf = () => ({p:null, rho:null, rhoD:null, rhoG:null, x:null, wet:null, mu:null});
+const netFieldOf = () => ({p:null, rho:null, rhoD:null, rhoG:null, void:null, x:null, wet:null, mu:null});
 function netFieldSize(F, n){
   F.p = new Float64Array(n).fill(typeof P!=="undefined" && P ? P.P0 : 1);
   F.rho = new Float64Array(n).fill(typeof P!=="undefined" && P && P.rho0 ? P.rho0 : 700);
   /* what the DONOR is actually carrying, which is not always what (p,h) says it should be. Only flowG reads this; netStore() needs the EOS read, because its whole job is the residual between the two. */
   F.rhoD = new Float64Array(n).fill(typeof P!=="undefined" && P && P.rho0 ? P.rho0 : 700);
+  // a vessel whose free surface is tracked as a level: there is a space over it whatever (p,h) says
+  F.void = new Uint8Array(n);
   // only a node a steam nozzle stands on ever fills this in (netFieldUpdate)
   F.rhoG = new Float64Array(n);
   F.x = new Float64Array(n);
@@ -351,7 +353,6 @@ function netBooked(net){
   /* a vessel in the field is no book: its water is the circuit's own, and mass crossing its line must stay in the field */
   for(const id in net.tankNode) if(!net.tankField[id])
     b[net.tankNode[id]] = 1;
-  for(const k in net.condNode) b[net.condNode[k]] = 1;
   for(const i of (net.cont||[])) b[i] = 2;      // 2: a boundary with no book at all
   net.booked = b;
   return b;
@@ -361,7 +362,6 @@ function netBookOf(net){
   if(net.bookOf) return net.bookOf;
   const b = new Array(net.n);
   for(const id in net.tankNode) if(!net.tankField[id]) b[net.tankNode[id]] = "T:"+id;
-  for(const k in net.condNode) b[net.condNode[k]] = "C";
   net.bookOf = b;
   return b;
 }
@@ -401,6 +401,12 @@ function netFieldUpdate(net, s){
     F.wet[i] = netNodeDry(net, s, i, mx.rho) ? 0 : 1;
     F.mu[i] = muMixOf(sat[i], mx.x); }
   for(const i of (net.gasNodes||[])) F.rhoG[i] = rhogOf(sat[i], satT(sat[i], F.p[i]));
+  /* the pool's own surface, not (p,h): a hotwell short of full has a space over it and every nozzle in that space draws steam */
+  if(net.condV && net.condV.length){ F.void.fill(0);
+    for(const i of net.condV){ const lvl = poolLvlOf(net, s, i);
+      if(lvl !== undefined && lvl < 100) F.void[i] = 1;
+      /* and the drain in its floor is under the water, so what this vessel DONATES is liquid. The EOS read at a saturated node is a knife edge and reads it as steam; gasAt already answers for the nozzle in the space above. */
+      if(lvl !== undefined && lvl > 0) F.rhoD[i] = rhofOf(sat[i], satT(sat[i], F.p[i])); } }
   /* containment never donates: F.wet is the DONOR's bit, so a break stops supplying without stopping it receiving */
   for(const i of (net.cont||[])) F.wet[i] = 0;
   /* built here so it cannot be built twice: the diagonal and its own C/dt*p_prev are two halves of one row */
@@ -737,6 +743,32 @@ function holdCircs(){
 
 /* the shell IS the machine's own steam face: one two-phase vessel, the feed valve and the tube leak landing on it */
 const shellNode = id => coreFold(id + roleIntern(ROLE.sg)[1].b);
+/* a sink's ANCHORED path is its steam side. `a` IS the machine - one vessel, the exhaust space and the pool under it, holding the ship's condensate - and `b` is the condensate nozzle in its floor. */
+const condIN = pid => { const p = partOf(pid), R = p && ROLE[p.role];
+  return R ? roleIntern(R).find(IN => IN.anch) : null; };
+const condVesNode = id => { const IN = condIN(id); return IN ? coreFold(id + IN.a) : null; };
+const condOutNode = id => { const IN = condIN(id); return IN ? coreFold(id + IN.b) : null; };
+/* m3 of condensate the ship states, shared over the condensers holding it */
+const condPoolVol = () => { let v = 0; for(const t of hostedTankIds()) v += D.tanks[t].vol;
+  return v/Math.max(1, condIds().length); };
+/* A sink standing IN the primary is a heat exchanger in a hot leg, not a machine at a vacuum: it takes the loop's own pressure, and neither the vacuum's compliance nor the settle's pin belongs on it. */
+const condVacuum = id => { const n = condVesNode(id);
+  return n !== null && !nodeGraph().inCore(n); };
+/* this machine's own pool, %; the commissioning fill before there is a field to read */
+const condLvl = (s, id) => { const net = P && P.net;
+  const i = net && net.condVById && net.condVById[id];
+  const v = i === undefined ? undefined : poolLvlOf(net, s, i);
+  return v === undefined ? condFill0() : v; };
+const condVolOf = id => { const net = P && P.net;
+  const i = net && net.condVById && net.condVById[id];
+  return i === undefined ? 0.1 : net.vol[i]; };
+/* %, the commissioning fill the ship states for its condensate */
+const condFill0 = () => { const h = hostedTankIds(); if(!h.length) return 50;
+  let v = 0, f = 0; for(const t of h){ v += D.tanks[t].vol; f += D.tanks[t].vol*D.tanks[t].level; }
+  return v > 0 ? f/v : 50; };
+/* the operator's drain, kg/s at a full pool: HOT_DUMP's own rate, now a real opening */
+const condDumpKgs = () => HOT_DUMP/100*condPoolVol()*TANK_RHO;
+const condDumpOpen = s => !!(s.tankDump && hostedTankIds().some(id => s.tankDump[id]));
 /* the fallback only: what a caller with no live inventory gets */
 const secPTarget = (s, id) => sgDesignP(id)*Math.pow(Math.max(secLoad(s,id),.05),.25);
 /* the solved pressure at that node; step() writes s.sgPBy off it once per tick so a reader inside the solve is one tick behind, never mid-solve */
@@ -829,8 +861,16 @@ const tankLvlRead = (s,id) => { const t = D.tanks[id], V0 = tankGasV0(id);
   const p = tankNodeP(s,id);
   if(p === undefined) return clamp(t.level,0,100);
   return 100*(1 - Math.min(t.vol, V0*t.gas.p0/p)/Math.max(t.vol,1e-9)); };
+/* a hosted tank has no cell and so no node of its own: the ship's condensate is the water standing in its condensers, read across the fleet */
+const condPoolLvl = s => { const net = P && P.net; if(!net || !s) return undefined;
+  let v = 0, f = 0;
+  for(const i of (net.condV || [])){ const lvl = poolLvlOf(net, s, i);
+    if(lvl === undefined) continue;
+    const V = net.vol[i]; v += V; f += V*lvl; }
+  return v > 0 ? f/v : undefined; };
 const tankLvl   = (s,id) => D.tanks[id] && D.tanks[id].hold && holdLvlRead(s,id) !== undefined ? holdLvlRead(s,id)
                 : tankInField(id) ? tankLvlRead(s,id)
+                : (D.tanks[id] && !D.tanks[id].cell && condPoolLvl(s) !== undefined) ? condPoolLvl(s)
                 : (s.tank && s.tank[id] !== undefined) ? s.tank[id] : D.tanks[id].level;
 /* a vented tank is not a vacuum: with nothing behind it a vessel is open to the compartment */
 function tankP(s,id){
@@ -1119,11 +1159,23 @@ function netVapourAt(nid){
 const netHole = ed => ed.kind === "break" || ed.kind === "vent" || ed.kind === "sgtr";
 
 /* MPa; rho is the MEAN of the two ends, because either end's own value turns on which way round netBuild() pushed the edge */
-const staticH = (net, ed) => {
-  const dz = net.z[ed.u] - net.z[ed.v];
-  if(dz === 0) return 0;
-  const F = net.F;
-  return (F.rho[ed.u] + F.rho[ed.v])/2 * G_MPA * dz;
+const staticH = (net, ed, s) => {
+  const dz = net.z[ed.u] - net.z[ed.v], F = net.F;
+  let h = dz === 0 ? 0 : (F.rho[ed.u] + F.rho[ed.v])/2 * G_MPA * dz;
+  if(ed.poolAt !== undefined) h += (ed.poolAt === ed.u ? 1 : -1)*poolH(net, s, ed.poolAt);
+  return h;
+};
+/* a pool's level is the water it HOLDS against the volume it has. At the condenser's vacuum a saturated node's void fraction is a knife edge in enthalpy - 0.17 kJ/kg spans the whole range - and the mass is the state. */
+const poolLvlOf = (net, s, i) => { const nm = net.name[i];
+  if(!s || !s.mBy || s.mBy[nm] === undefined) return undefined;
+  const c = satOfCirc(circOfNode(nm)), rf = rhofOf(c, satT(c, netPAt(s, nm)));
+  return clamp(100*s.mBy[nm]/Math.max(net.vol[i]*rf, 1e-9), 0, 100); };
+/* MPa of pool standing over the drain in a vessel's floor: the machine's own drawn height, weighed as liquid, at full commissioning fill and falling away with the pool as it drains. No node elevation can carry it - the surface moves. */
+const poolH = (net, s, i) => { const nm = net.name[i], lvl = poolLvlOf(net, s, i);
+  if(lvl === undefined) return 0;
+  const p = partOf(nm.slice(0, -1)); if(!p) return 0;
+  const c = satOfCirc(circOfNode(nm)), f = clamp(lvl/Math.max(condFill0(), 1), 0, 1);
+  return rhofOf(c, satT(c, netPAt(s, nm)))*G_MPA*Math.max(p.h, 1)*MPC*f;
 };
 
 /* three passes, and both cuts are forced: the elevation copy and the fitTarget walk need EVERY edge to exist, and the condenser splice looks edges up by node NAME */
@@ -1348,6 +1400,22 @@ function netEdges(){
                   h: 0, kind: "break", sec: 1, key: "break:"+id}); }
   }
 
+  /* a sink is an ordinary vessel: the exhaust space and the pool under it are ONE node, and the condensate nozzle in its floor is the other */
+  const condVIds = [], condParts = [];
+  for(const q of LAY.parts){ const IN = condIN(q.id); if(!IN) continue;
+    const id = q.id, va = nodeIdx(condVesNode(id)), vb = nodeIdx(condOutNode(id));
+    if(va === vb) continue;
+    condVIds.push(va); condParts.push(id);
+    /* one opening, two causes: a wrecked machine is a breach and the operator's drain is a duty-sized hole */
+    { const c = contNode("cond:"+id);
+      breakIds.push(c);
+      contZ[c] = zFace(q, "b");
+      contCell[c] = [q.x+((q.w/2)|0), q.y+q.h-1];
+      edges.push({u: va, v: c, h: 0, kind: "break", sec: 1, key: "break:"+id,
+                  C: s => partWrecked(s, id) ? holeC(BREACH_BORE)
+                        : condDumpOpen(s) ? dutyC(condDumpKgs(), TANK_RHO) : 0}); }
+  }
+
   /* the vessel's own opening */
   for(const cid of coreIds()){ const v = contNode(cid), q0 = byId[cid], u = nodeIdx(coreFold(cid));
     breakIds.push(v);
@@ -1391,7 +1459,7 @@ function netEdges(){
 
   return {runs: net, byKey, byId, partOfNode, tankIdOf, nodes, index, coreNode, edges, F,
           breakIds, steamBreaks, contZ, contCell, fitIds, fitMode, openSide, fitVentOut, cavIds, cavCont, cavVol,
-          secTIds, secTParts};
+          secTIds, secTParts, condVIds, condParts};
 }
 
 /* pass two: read-only over the edge list it is handed */
@@ -1439,6 +1507,7 @@ function netMaps(ctx){
 
   const net2 = {nodes, index, edges, core: coreNode, n: nodes.length, byKey, fitIds, fitMode, F: ctx.F,
                 cont: breakIds, contCell, secT: secTIds, secTParts, fitTarget, fitVentOut,
+                condV: ctx.condVIds, condParts: ctx.condParts,
                 steamBreaks, cav: ctx.cavIds || [], cavCont: ctx.cavCont || {}, cavVol: ctx.cavVol || {},
                 surgeKey: (byKey && Object.keys(byKey).find(k=>k.indexOf("surge:")===0)) || null};
 
@@ -1491,6 +1560,10 @@ function netMaps(ctx){
     /* the steam face IS the shell: the stated water at 100 % level, plus the space over it */
     for(const id of sgIds()){ const i = index[shellNode(id)];
       if(i !== undefined) net2.vol[i] += Math.max(0.1, sgRowOf(id).water*SG_DOME); }
+    /* the vessel IS the hotwell: the ship's stated pool, this machine's share, full at level 100 */
+    { const v = condPoolVol();
+      for(const id of ctx.condParts){ const i = index[condVesNode(id)];
+        if(i !== undefined) net2.vol[i] += Math.max(0.1, v); } }
     /* a run's water is all on the run's own node; a shut port is simply a missing edge */
     for(const r of net){ const m = index[runNodeOf(r.key)];
       if(m !== undefined) net2.vol[m] += runVol(r); }
@@ -1516,63 +1589,22 @@ function netMaps(ctx){
         put(m, runMassPerM(r)*r.L*1000, tauOf(runWallMm(r)), Math.PI*runBoreMm(r)/1000*r.L); }
       for(let i=0;i<net2.n;i++) if(net2.metalKg[i] > 0) net2.metalTau[i] /= net2.metalKg[i]; } }
 
-  net2.condNode = {};
-  for(const q of LAY.parts){
-    const R = ROLE[q.role];
-    if(!R || R.thermal !== "sink") continue;
-    const faces = [];
-    if(R.internal){ for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
-      if(!IN.anch) continue;
-      if(IN.anch.indexOf("a")>=0) faces.push(IN.a);
-      if(IN.anch.indexOf("b")>=0) faces.push(IN.b); } }
-    else faces.push("t","r","l","b");
-    for(const f of faces) if((q.id+f) in index) net2.condNode[q.id+f] = index[q.id+f];
-    /* which of those faces is the LIQUID one: the anchored end of the steam path that `vap` does not name */
-    if(R.internal) for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
-      if(!IN.anch || !IN.vap) continue;
-      if(IN.anch.indexOf("b")>=0 && IN.vap.indexOf("b")<0 && (q.id+IN.b) in index)
-        (net2.condLiq || (net2.condLiq = {}))[q.id+IN.b] = q.id;
-      if(IN.anch.indexOf("a")>=0 && IN.vap.indexOf("a")<0 && (q.id+IN.a) in index)
-        (net2.condLiq || (net2.condLiq = {}))[q.id+IN.a] = q.id; }
-  }
-
-  /* the non-vapour end of an anchored steam path is where the hotwell drains: fixed, but BOOKED and shut when the pool is empty */
-  net2.condOutNode = {};
-  for(const q of LAY.parts){
-    const R = ROLE[q.role];
-    if(!R || R.thermal !== "sink" || !R.internal) continue;
-    for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
-      if(!IN.anch || !IN.vap) continue;
-      const liq = IN.vap.indexOf("a")>=0 ? "b" : "a";
-      if(IN.anch.indexOf(liq)<0) continue;
-      const nid = q.id + IN[liq];
-      if(nid in index) net2.condOutNode[index[nid]] = q.id;
-    }
-  }
+  // the other way round: a reader asks per machine, the arrays are what the solve walks
+  net2.condVById = {};
+  for(let k=0;k<net2.condParts.length;k++) net2.condVById[net2.condParts[k]] = net2.condV[k];
 
   return net2;
 }
 
-/* pass three: the splice CHANGES the edge list and everything after reads it, so the order in here is load-bearing */
+/* pass three: everything here reads the ASSEMBLED edge list, so the order in it is load-bearing */
 function netFinish(net2, ctx){
   const edges = net2.edges, index = ctx.index, fitIds = ctx.fitIds,
         fitMode = ctx.fitMode, secTIds = ctx.secTIds, secTParts = ctx.secTParts;
 
-  /* an edge between two fixed nodes carries no information: only the elevation between two numbers somebody else set */
-  { const fixed = net2.condNode;
-    for(let i=edges.length-1;i>=0;i--)
-      if(fixed[net2.name[edges[i].u]] !== undefined && fixed[net2.name[edges[i].v]] !== undefined)
-        edges.splice(i,1); }
-
-  /* applied to the ASSEMBLED edges, so a tapped segment or an internal path landing on that node is caught by the same line; positive is OUT, the tank convention */
-  for(const ed of edges){
-    const cu = net2.condOutNode[ed.u], cv = net2.condOutNode[ed.v];
-    if(cu === undefined && cv === undefined) continue;
-    ed.condOf  = cu !== undefined ? cu : cv;
-    ed.condOut = cu !== undefined ? 1 : -1;
-    const c0 = ed.C;
-    ed.C = c0;
-  }
+  /* the ONE edge the pool's own column stands on: the drop from the water surface to the condensate nozzle in the vessel's floor. The exhaust nozzle is over the water and sees none of it. */
+  for(let k=0;k<net2.condParts.length;k++){
+    const ed = edges.find(e => e.key === "comp:"+net2.condParts[k]+":"+condIN(net2.condParts[k]).a+condIN(net2.condParts[k]).b);
+    if(ed) ed.poolAt = net2.condV[k]; }
 
   /* STRUCTURAL: a node every edge touching it reaches through vapour is a steam space, and nothing is named */
   // the nodes a steam nozzle draws on, so the field prices a vapour density for those and no others
@@ -1618,9 +1650,9 @@ function netFinish(net2, ctx){
     /* the source kept beside the total: the choke gate asks whether anything is RAISING the pressure, and a column is not */
     ed.hSrc = typeof src === 'function' ? s => src(s)*HEAD_K
             : src ? () => src*HEAD_K : null;
-    ed.h = typeof src === 'function' ? s => (src(s) + staticH(net2, ed))*HEAD_K
-         : src ? s => (src + staticH(net2, ed))*HEAD_K
-         : s => staticH(net2, ed)*HEAD_K;
+    ed.h = typeof src === 'function' ? s => (src(s) + staticH(net2, ed, s))*HEAD_K
+         : src ? s => (src + staticH(net2, ed, s))*HEAD_K
+         : s => staticH(net2, ed, s)*HEAD_K;
   }
   /* AFTER the head loop: g is linearised about the full driving differential, and the static term is part of it */
   // its own slot in the choke mask, so edgeG can say which edge the cap bit on
@@ -1800,18 +1832,13 @@ function netFixed(net, s){
     f[i] = tankP(s,id); }
   /* the shell is an ordinary vessel in the field: pinned only while the settle stands the stores down, and open through its own break edge */
   if(netStoreHeld) net.secT.forEach((i,k)=>{ f[i] = secP(s, net.secTParts[k]); });
-  /* live, not a constant: a fixed node's VALUE is safe for the factorisation cache, since only conductances enter its signature */
-  { const pc = condP(s), liq = net.condLiq || {};
-    for(const k in net.condNode){ const i = net.condNode[k];
-      /* the condensate nozzle is UNDER the pool, so what stands on it is the vapour space PLUS the water above it - the head every condensate pump takes suction on. Fixed at the vapour pressure alone a hotwell hands its pump nothing, and the feed train cavitates from tick one. */
-      f[i] = liq[k] ? pc + hotwellH(s, liq[k]) : pc; } }
+  /* the condenser is an ordinary vessel in the field: pinned only while the settle stands the stores down, and open through its own break edge */
+  /* ONE end of the machine, never both: an edge between two fixed nodes is an unlimited source at one and an unlimited sink at the other, and the whole condensate train solves round it.
+     The VESSEL is the end that is pinned, because its pressure is the one that is known - the saturation over its own pool - and the outlet under it follows through the internal path, column and all. */
+  if(netStoreHeld){ const pc = condP(s);
+    net.condParts.forEach((id,k) => { if(condVacuum(id)) f[net.condV[k]] = pc; }); }
   return f;
 }
-/* MPa of water standing over a condenser's own condensate nozzle: its drawn height, at the pool's own level, weighed at the hotwell's temperature */
-const hotwellH = (s, pid) => { const p = partOf(pid); if(!p) return 0;
-  const d = Math.max(p.h, 1)*MPC*clamp(condFrac(s), 0, 1);
-  const T = (s && s.condT) || T_FEED;
-  return rhofOf(SAT_WATER, T)*G_MPA*d; };
 /* simTick()'s literal 0.02, named: a compliance is per SECOND, so a storage term is the one place that has to know how long a tick is */
 const NET_DT = 0.02;
 /* whether the solve being asked for is one tick of a time march; only step() sets it */
@@ -1890,6 +1917,18 @@ function netStore(net, s){
     const p0 = tankP(s, id);
     if(!isFinite(p0)) continue;
     cap[i] = C/NET_DT; src[i] = C/NET_DT*p0; pin[i] = 1;
+    any = true;
+  }
+  // netStoreHeld leaves the TANKS alone: one that stopped storing unpinned is a piece that floats
+  for(let k=0;netStoreHeld?0:k<(net.condV||[]).length;k++){
+    const i = net.condV[k], id = net.condParts[k];
+    if(partWrecked(s,id) || !condVacuum(id)) continue;   // an opening, or a sink in the primary: the leg's own store
+    const C = condStoreC(s,id), w = condStoreW(s,id), p0 = condSatP(s,id);
+    // a NaN on the diagonal silently zeroes every flow on that circuit and leaves the rest of the plant reading fine
+    if(!(C > 0) || !isFinite(C) || !isFinite(w) || !isFinite(p0)) continue;
+    cap[i] = C/NET_DT;
+    src[i] = C/NET_DT*p0 + w;
+    pin[i] = 1;
     any = true;
   }
   return any ? {cap, src, pin} : null;
@@ -2150,11 +2189,6 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
         by[tid3] = (by[tid3]||0)
                  + ((out > 0 && net.F.wet && !net.F.wet[tn]) ? 0 : out);
       }
-    }
-    /* signed per condenser, positive OUT of the pool; the one charge against the hotwell */
-    if(outs && ed.condOf !== undefined){
-      const by = outs.qCondBy || (outs.qCondBy = {});
-      by[ed.condOf] = (by[ed.condOf]||0) + ed.condOut*q[e];
     }
     /* signed out of the shell; negative is steam ARRIVING from a hotter machine down a shared header, which is why a header equalises */
     if(outs && net.secTById && ed.shellOf === undefined && ed.kind !== "sgtr"){
