@@ -9,7 +9,7 @@ const M = headless(
  'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdLive,holdPlumbed,loopP,setLoopP,'+
  'netTempAt,netQualAt,mwE,loopKg,secP,sgIds,sgLvl,circName,ROLE:()=>ROLE,'+
  'netKgs,radIds,invRate,tankMass,layoutMetrics,designIssues,'+
- 'act,seedRng,netSolve,netPressures,netField,netFlowK,partWrecked,portWrecked}');
+ 'act,seedRng,netSolve,netPressures,netField,netFlowK,netReading,partWrecked,portWrecked}');
 
 const D = M.D();
 const BASE = JSON.parse(JSON.stringify(D));
@@ -167,7 +167,9 @@ function flyOne(key, opt){
         if(spec.at && spec.at[i/50]) spec.at[i/50](s);
         M.step(0.02); if(s.breach) break;
       }
-      console.log(names.map(k=>fmt(C[k].f(s, opt.secs), C[k].dp)).join(","));
+      M.netReading(true);
+      try { console.log(names.map(k=>fmt(C[k].f(s, opt.secs), C[k].dp)).join(",")); }
+      finally { M.netReading(false); }
     }
     return;
   }
@@ -186,10 +188,13 @@ function flyOne(key, opt){
     while(ei < evs.length && evs[ei].t <= i/50) fireEvent(evs[ei++]);
     if(spec.at && spec.at[i/50]) spec.at[i/50](s);
     if(i%step===0){
-      if(TR) TR.sample(s, i/50);
-      else console.log(names.map(k=>{ const c=C[k];
-        let v; try{ v=c.f(s,i/50); }catch(e){ v=NaN; }
-        return fmt(typeof v==="boolean"?(v?1:0):v, c.dp); }).join(","));
+      M.netReading(true);
+      try {
+        if(TR) TR.sample(s, i/50);
+        else console.log(names.map(k=>{ const c=C[k];
+          let v; try{ v=c.f(s,i/50); }catch(e){ v=NaN; }
+          return fmt(typeof v==="boolean"?(v?1:0):v, c.dp); }).join(","));
+      } finally { M.netReading(false); }
     }
     if(i<n) M.step(0.02);
     if(s.breach){ if(!TR) console.log("# breach at t="+(i/50).toFixed(1)); break; }
