@@ -11,7 +11,7 @@ const M=require('./bundle').headless(
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
- 'blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt}');
+ 'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -81,6 +81,23 @@ function dump(s,label){
   for(const r of M.pipeNetwork())
     row(r.k+" "+r.key.slice(0,40), flow[r.key]===undefined ? "-"
         : f(Math.sign(flow[r.key])*M.netKgs(flow[r.key]),2)+" kg/s");
+  console.log(" NODE BALANCE   kg/s, free nodes only");
+  { M.netReading(true);
+    const net=M.P().net, sol=M.netSolve(net,s), ek=M.advectEdgeKgOf(), st=sol.store;
+    M.netReading(false);
+    const din=new Float64Array(net.n), tin=new Float64Array(net.n);
+    for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e], q=sol.q[e];
+      din[ed.u]-=q; din[ed.v]+=q;
+      const m=ek?ek[e]/0.02:0; tin[ed.u]-=m; tin[ed.v]+=m; }
+    let wi=-1,wr=0,wj=-1,wd=0;
+    for(let i=0;i<net.n;i++){ if(sol.fixed[i]!==undefined) continue;
+      const acc = st && st.cap[i]>0 ? st.cap[i]*sol.b[i]-st.src[i] : 0;
+      const r=din[i]-acc, d=din[i]-tin[i];
+      if(Math.abs(r)>Math.abs(wr)){ wr=r; wi=i; }
+      if(Math.abs(d)>Math.abs(wd)){ wd=d; wj=i; } }
+    row("worst store residual", wi<0?"-":net.name[wi]+"  "+f(wr,3));
+    row("worst solve vs landed", wj<0?"-":net.name[wj]+"  "+f(wd,3)); }
+
   console.log(" STEAM   MPa");
   for(const id of M.sgIds()) row(id+" shell", f(M.secP(s,id),4));
   row("turbine", f(s.turbWk,2)+" kg/s at "+f(s.turbP,4)+" MPa");
