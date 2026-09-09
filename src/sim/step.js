@@ -788,7 +788,9 @@ const SG_EFW_OFF=40;      // %
 /* % of that tank per second: fast enough to stay ahead of a tube rupture, slow enough that opening it is a decision. */
 const HOT_DUMP=1.6;
 /* Kilograms of secondary water at 100 % level in ONE generator. */
-const sgMassOf=id=>sgRowOf(id).water*1000;
+/* kg the shell holds full: its stated VOLUME weighed at the water density its own design pressure implies. `water` is m³, which is what `partVol()` and `sgShellT()` already read it as; only the mass readers took it for tonnes. */
+const sgMassOf=id=>{ const ci=shellCirc(id);
+  return sgRowOf(id).water*rhofOf(satOfCirc(ci), tsatSec(sgDesignP(id), ci)); };
 /* Rated steam for the WHOLE plant, kg/s. */
 const ratedSteam=()=>P.rated*1000/steamRise();
 /* 100 % on a steam line: one generator's worth for its own run, the whole plant's for the exhaust. */
@@ -885,14 +887,18 @@ function massSeed(s){
   finally { netHoldStore(false); }
   const booked = netBooked(net);
   for(let i=0;i<net.n;i++){ if(booked[i]) continue;
-    const nm = net.name[i]; s.mBy[nm] = net.vol[i]*netRhoAt(s, nm); }
+    const nm = net.name[i];
+    /* a charged vessel is only as full as it was commissioned: the rest of its volume is the gas, which is a compliance and never water in the field */
+    const tid = net.tankIdByNode && net.tankIdByNode[i];
+    const fill = (tid !== undefined && tankStores(tid)) ? clamp(D.tanks[tid].level,0,100)/100 : 1;
+    s.mBy[nm] = fill*net.vol[i]*netRhoAt(s, nm); }
   /* A stub behind a shut gate seeds at its boundary's state: walked from every boundary over the edges that conduct. A walk that reaches the plant is left alone. */
   const cOf = ed => typeof ed.C === "function" ? ed.C(s) : ed.C;
   const adj = new Array(net.n);
   for(const ed of net.edges){ if(!(cOf(ed) > 0)) continue;
     (adj[ed.u] || (adj[ed.u] = [])).push(ed.v); (adj[ed.v] || (adj[ed.v] = [])).push(ed.u); }
   const seeds = new Set((net.cont || []).concat(net.cav || []));   // a reactor cavity starts at room pressure
-  for(const id in net.tankNode) if(!D.tanks[id].hold && tankP(s,id) <= P.Pcont*1.001) seeds.add(net.tankNode[id]);
+  for(const id in net.tankNode) if(!net.tankField[id] && tankP(s,id) <= P.Pcont*1.001) seeds.add(net.tankNode[id]);
   const cores = new Set(); for(const id of coreIds()) cores.add(net.index[coreFold(id)]);
   const holds = holdNodeSet();
   const seen = new Uint8Array(net.n);
@@ -1000,7 +1006,7 @@ const TAVG_RATE_TAU = 0.5;
 function bookedKg(net, s, i){
   /* A book with no entry yet is not a book saying zero - undefined falls through to the node's own state point. */
   const id = net.tankIdByNode && net.tankIdByNode[i];
-  if(id !== undefined) return (D.tanks[id] && D.tanks[id].hold) ? undefined
+  if(id !== undefined) return net.tankField[id] ? undefined
                             : tankLvl(s,id)/100*tankKg(id);
   const sg = net.secTById && net.secTById[i];
   if(sg !== undefined) return s.sgSteamBy && s.sgSteamBy[sg] !== undefined
@@ -1311,7 +1317,7 @@ function h2Total(s){
 
 /* Kilograms of condensate the hotwell holds full, against the generators it feeds. */
 const hotMass=()=>{ let m=0;
-  for(const id of sgIds()) m+=sgRowOf(id).water*1000;
+  for(const id of sgIds()) m+=sgMassOf(id);
   return Math.max(1,m); };
 const sgIds=()=>roleAll("sg");
 /* 1 down to SG_DRY, then nothing; an unseeded level reads 1. */
@@ -1401,7 +1407,7 @@ const ihxQAt=(s,id,rf)=>{
   if(!(Cmin>0)) return 0;
   return ntuCounter(UA/Cmin, isFinite(Cmax) ? Cmin/Cmax : 0)*Cmin*dT; };
 /* The pot's heat capacity: the water actually in it plus the steel round it. */
-const sgHeatCap=(s,id)=>sgRowOf(id).water*1000*(sgLvl(s,id)/100)*CP_W
+const sgHeatCap=(s,id)=>sgMassOf(id)*(sgLvl(s,id)/100)*CP_W
                       + sgSteelT(id)*1000*CP_STEEL;
 /* Defaults to SGL_SET, not 0: a bench with no sim running draws a half-full kettle. */
 const sgLvl=(s,id)=>{ const v=s&&s.sglBy&&s.sglBy[id]; return v===undefined?SGL_SET:v; };
@@ -1643,7 +1649,7 @@ const ledgerKg = s => { let m = 0;
     if(net && net.name && s.mBy){ const booked = netBooked(net);
       for(let i=0;i<net.n;i++) if(!booked[i]) m += s.mBy[net.name[i]] || 0; } }
   for(const id of tankIds()){ const t=D.tanks[id];
-    if(!t.inf && !t.hold) m += (s.tank&&s.tank[id]!==undefined?s.tank[id]:t.level)/100*tankKg(id); }
+    if(!t.inf && !t.hold && !tankInField(id)) m += (s.tank&&s.tank[id]!==undefined?s.tank[id]:t.level)/100*tankKg(id); }
   for(const id in s.sglBy){ const M=sgMassOf(id); if(M>0) m += s.sglBy[id]/100*M; }
   for(const id in s.sgSteamBy) m += s.sgSteamBy[id];
   m += sumpKg(s);
@@ -2600,21 +2606,27 @@ function step(dt){
   }
   /* the rupture disc: past its own setpoint the tank is an opening to containment, latched, and what it dumps costs release in proportion to the activity of what was in it */
   for(const tid of tankIds()){
-    /* a wrecked tank is an open tank, running out at HOT_DUMP; a hold tank is not here, because its water drains through a real edge in the field */
-    if(!D.tanks[tid].hold && partWrecked(s,tid) && s.tank[tid] > 0){
+    const field = tankInField(tid), b = D.tanks[tid].burst;
+    /* level points off the deck this tick: a vessel in the field lost them through its own break edge, which spillPri has already booked, and every other tank drains its own pool at HOT_DUMP */
+    if(field){
+      const out = 100*(advectOutKg["break:"+tid]||0)/tankKg(tid);
+      const rel = partWrecked(s,tid) ? 1 : (s.burstBy[tid] && b) ? b.rel : 0;
+      if(out > 0 && rel > 0)
+        s.release = Math.min(100, s.release + out*rel*tankFluid(tid).act*contRelPart(s,partOf(tid))*P.dose*dt);
+    }
+    else if(!D.tanks[tid].hold && partWrecked(s,tid) && s.tank[tid] > 0){
       const out = Math.min(s.tank[tid], HOT_DUMP*Math.min(s.tank[tid],100)/100*dt);
       s.tank[tid] -= out;
       book(s,"tankWreck", out/100*tankKg(tid));
       s.release = Math.min(100, s.release + out*tankFluid(tid).act*contRelPart(s,partOf(tid))*P.dose*dt);
     }
-    const b = D.tanks[tid].burst;
     if(!b) continue;
     if(!s.burstBy[tid] && tankP(s,tid) >= b.at){
       s.burstBy[tid] = true;
       logE("alarm",D.tanks[tid].name+" DISC BURST",
         "The tank filled and its rupture disc let go. What was in it is on the containment floor and its activity is in the air, not behind a wall. This is the TMI-2 sequence.");
     }
-    if(s.burstBy[tid] && s.tank[tid] > 0){
+    if(!field && s.burstBy[tid] && s.tank[tid] > 0){
       const out = Math.min(s.tank[tid], b.drain*dt);
       s.tank[tid] -= out;
       book(s,"burstDisc", out/100*tankKg(tid));
@@ -2623,18 +2635,12 @@ function step(dt){
   }
   book(s,"spillPri", advectOutPri);   // the transport's own kilograms - see advectStep()
   s.injRate = inj;
-  /* every primary tank off its own solved edge, tank-out-positive, so a tank being filled reads negative and the same subtraction raises it */
+  /* an inexhaustible tank is the one primary vessel with a level that does not move, so it is the only one with a term: everything else on the core's circuit keeps its water in s.mBy and is metered by the transport like any other node */
   for(const id of tankIds()){
-    const t = D.tanks[id];
-    if(!tankPrimary(id)) continue;
+    if(!D.tanks[id].inf || !tankPrimary(id)) continue;
     /* what the TRANSPORT took off it, never the solve's edge; s.tankRate above stays the solve's, because it is the gauge and not the book */
-    const outKg = -advectLanded(P.net && P.net.tankNode[id]);
-    // inexhaustible: the level does not move, so what it delivers is not limited by what it holds
-    if(!t.inf){ const raw = s.tank[id] - outKg/tankKg(id)*100;
-      s.tank[id] = clamp(raw, 0, 100);
-      book(s,"tankClampPri", (raw - s.tank[id])/100*tankKg(id)); }
     // a boundary, so what crossed its edge came from outside the books - negative is the plant being fed
-    else book(s,"boundaryTank", -outKg);
+    book(s,"boundaryTank", advectLanded(P.net && P.net.tankNode[id]));
   }
   /* each rule's own state, fed forward like s.cavP: this tick's answer is what the next tick's hysteresis reads */
   for(const id of tankIds()){
