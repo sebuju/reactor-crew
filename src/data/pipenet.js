@@ -48,8 +48,18 @@ const PART_VOL_CELL = 0.35;
 function partVol(pid){
   const p = partOf(pid); if(!p) return 0;
   if(p.role === "tank") return Math.max(0.1, (D.tanks[pid]||{vol:0}).vol);
-  if(p.role === "sg")   return Math.max(0.1, sgRowOf(pid).water);
+  if(p.role === "sg")   return Math.max(0.1, sgRowOf(pid).water + sgRowOf(pid).tubeV);
   return Math.max(0.1, p.w*p.h*PART_VOL_CELL);
+}
+/* The holdup of ONE node, because a machine with two internal paths holds two different inventories and splitting one figure over both puts the shell's water inside the tubes. Everything with a single path answers the even share it always did. */
+function nodeVol(pid, nid, list){
+  const p = partOf(pid); if(!p) return 0;
+  if(p.role !== "sg") return partVol(pid)/Math.max(1, list.length);
+  const face = nid.length > pid.length ? nid.slice(pid.length) : null;
+  const IN = roleIntern(ROLE.sg);
+  const tube = face !== null && (face === IN[0].a || face === IN[0].b);
+  /* the shell's own water is the POOL's (netBuild registers `sec:<id>` separately); its two shell-path nodes are nozzles */
+  return tube ? sgRowOf(pid).tubeV/2 : Math.max(0.1, p.w*p.h*PART_VOL_CELL)/2;
 }
 
 /* a MASS term only - nothing here may reach a conductance */
@@ -267,8 +277,8 @@ const netNodeDry = (net, s, i, rho) => {
 function netBooked(net){
   if(net.booked) return net.booked;
   const b = new Uint8Array(net.n);
-  /* a hold tank is no book: its water is the circuit's own, and mass crossing the surge line must stay in the field */
-  for(const id in net.tankNode) if(!(D.tanks[id] && D.tanks[id].hold))
+  /* a vessel in the field is no book: its water is the circuit's own, and mass crossing its line must stay in the field */
+  for(const id in net.tankNode) if(!net.tankField[id])
     b[net.tankNode[id]] = 1;
   for(const i of (net.secT||[])) b[i] = 1;
   for(const k in net.condNode) b[net.condNode[k]] = 1;
@@ -281,7 +291,7 @@ function netBooked(net){
 function netBookOf(net){
   if(net.bookOf) return net.bookOf;
   const b = new Array(net.n);
-  for(const id in net.tankNode) if(!(D.tanks[id] && D.tanks[id].hold)) b[net.tankNode[id]] = "T:"+id;
+  for(const id in net.tankNode) if(!net.tankField[id]) b[net.tankNode[id]] = "T:"+id;
   for(const i of (net.secT||[])) b[i] = "G:"+net.secTById[i];
   for(let i=0;i<net.n;i++) if(net.name[i].indexOf("sec:") === 0) b[i] = "G:"+net.name[i].slice(4);
   for(const k in net.condNode) b[net.condNode[k]] = "C";
@@ -340,11 +350,12 @@ const edgeG = (net, ed, s) => {
 function netDryParts(s){
   const net = (typeof P!=="undefined" && P) ? P.net : null, F = net && net.F;
   if(!net || !F || !F.wet || !net.nodesOfPart) return [];
-  /* a booked node is left out: F.wet reads the mass field there and the book is the answer */
+  /* a booked node is left out: F.wet reads the mass field there and the book is the answer. So is a vessel, whose emptiness is a LEVEL it already states - a relief tank commissions empty on purpose. */
   const booked = netBooked(net), out = [];
-  for(const id in net.nodesOfPart)
+  for(const id in net.nodesOfPart){
+    if(D.tanks && D.tanks[id]) continue;
     for(const i of net.nodesOfPart[id])
-      if(!F.wet[i] && !booked[i]){ out.push(id); break; }
+      if(!F.wet[i] && !booked[i]){ out.push(id); break; } }
   return out;
 }
 /* any edge of that run counts: a run cut by a throttle is two segments, either can be at the cap */
@@ -694,12 +705,12 @@ const AUTORULE = {
     return loopP(s,ci) < holdSetP(ci)*0.55; }},
 };
 
-/* cover gas law: p(l) = p0*frac/(frac + (level - l)/100) about the commissioning level */
+/* ONE VESSEL: water at the bottom, the charge on top of it, total volume fixed. `level` is the commissioning fill of the WHOLE tank and the gas space is the rest of it, so a vessel left full has no bubble and simply conducts. */
 const TANK_RHO = 1000;                 // kg/m^3 - what a tank of an unlisted fluid holds
 const TANK_DEFAULT = {
   vol:35, level:100, fluid:"water",
   /* a plain vessel: lined up, with ordinary nozzles, so a tank dropped between two machines conducts. An injection tank states its own check valve and its own rule */
-  gas:{p0:4.5, frac:0.35}, check:false, auto:"always", burst:null,
+  gas:{p0:4.5}, check:false, auto:"always", burst:null,
   hold:null, tsurv:null, pburst:null, aspect:1,
   /* a COOLANT index, or null for water; only a HOLD tank is asked */
   cool:null,
@@ -723,14 +734,30 @@ const boronTankIds = () => tankIds().filter(id=>
 /* kg off the tank's own volume, never where it is piped */
 const tankKg = id => { const t = D.tanks[id], fl = FLUID[t.fluid]; return t.vol*((fl && fl.dens) || TANK_RHO); };
 const tankPoolKg = (s,list) => { let m=0;
-  for(const id of list) m += (s.tank[id]||0)/100*tankKg(id); return m; };
+  for(const id of list) m += clamp(tankLvl(s,id),0,100)/100*tankKg(id); return m; };
 const tankPoolPct = (s,list) => { let c=0, m=0;
-  for(const id of list){ const k=tankKg(id); c+=k; m+=(s.tank[id]||0)/100*k; }
+  for(const id of list){ const k=tankKg(id); c+=k; m+=clamp(tankLvl(s,id),0,100)/100*k; }
   return c>0 ? 100*m/c : 0; };
 const tankFluid = id => FLUID[D.tanks[id].fluid] || FLUID.water;
+/* the gas space the commissioning fill leaves, as a share of the WHOLE vessel; a tank left full has none and is ordinary water */
+const tankVoidFrac = id => { const t = D.tanks[id];
+  return t ? Math.max(0, (100-clamp(t.level,0,100))/100) : 0; };
+const tankGasV0 = id => { const t = D.tanks[id]; return t ? t.vol*tankVoidFrac(id) : 0; };
+/* whose water is in s.mBy: an ordinary vessel on the core's circuit. An `inf` tank is a boundary and a secondary tank is still its own pool (step.js), and both keep a book of their own. */
+const tankInField = id => { const t = D.tanks[id];
+  return !!t && !t.hold && !t.inf && !!t.cell && tankPrimary(id); };
 /* a hold tank's level IS its node's void fraction; s.tank[id] must not become a second copy */
 const holdLvlRead = (s,id) => s.lvlBy && s.lvlBy[id] !== undefined ? s.lvlBy[id] : s.lvl;
+/* the node's own solved pressure, or NOTHING: before the first solve a vessel has only its charge to state, and netPAt()'s loop-pressure fallback is not that vessel's answer */
+const tankNodeP = (s,id) => (s && s.pBy && s.pBy[id] !== undefined) ? Math.max(COND_P0, s.pBy[id]) : undefined;
+/* isothermal, p*V constant about the charge: the bubble at the node's own solved pressure, capped at the whole vessel. With no charge the node's own void fraction is the level, the same read a pressurizer takes. */
+const tankLvlRead = (s,id) => { const t = D.tanks[id], V0 = tankGasV0(id);
+  if(!(V0 > 0) || !t.gas) return holdLvlOf(s, id);
+  const p = tankNodeP(s,id);
+  if(p === undefined) return clamp(t.level,0,100);
+  return 100*(1 - Math.min(t.vol, V0*t.gas.p0/p)/Math.max(t.vol,1e-9)); };
 const tankLvl   = (s,id) => D.tanks[id] && D.tanks[id].hold && holdLvlRead(s,id) !== undefined ? holdLvlRead(s,id)
+                : tankInField(id) ? tankLvlRead(s,id)
                 : (s.tank && s.tank[id] !== undefined) ? s.tank[id] : D.tanks[id].level;
 /* a vented tank is not a vacuum: with nothing behind it a vessel is open to the compartment */
 function tankP(s,id){
@@ -739,20 +766,29 @@ function tankP(s,id){
   const ci = tankCircuit(id);
   // CONTROLLED, so no gas law is consulted: a hold tank holds its circuit's setpoint
   if(t.hold && s && P && P.net && holdLive(P.net, s, ci)) return loopP(s, ci);
+  /* a vessel whose water is in the field IS its node - the charge law only ever named a pressure nobody solved, and it is left below as the commissioning value */
+  if(tankInField(id)){ const v = tankNodeP(s,id); if(v !== undefined) return v; }
   /* an isolated hold tank is a gas tank on the same charge law, charged by the vessel and not the player */
-  const gas = t.gas || (t.hold
-    ? {p0: holdSetP(ci), frac: Math.max(0.01, (100-clamp(t.level,0,100))/100)} : null);
-  // a bubble squeezed to nothing is a divide by zero, and a gauge cannot print one
-  return Math.max(regionPAt(s, partOf(id)), !gas ? 0
-    : gas.p0*gas.frac/Math.max(0.01, gas.frac + (t.level - clamp(tankLvl(s,id),0,100))/100));
+  const frac = t.gas ? tankVoidFrac(id) : t.hold ? Math.max(0.01, tankVoidFrac(id)) : 0;
+  const p0 = t.gas ? t.gas.p0 : t.hold ? holdSetP(ci) : 0;
+  // a vessel left water-solid has no bubble to squeeze, so what it sits at is the charge itself
+  if(!(frac > 0)) return Math.max(regionPAt(s, partOf(id)), p0);
+  return Math.max(regionPAt(s, partOf(id)),
+    p0*frac/Math.max(0.01, frac + (t.level - clamp(tankLvl(s,id),0,100))/100));
 }
 /* kg per MPa: the exact inverse of tankP()'s charge law, so the two cannot disagree about the same vessel */
 const tankStores = id => { const t = D.tanks[id];
-  return !!t && !t.hold && !t.inf && !!t.gas; };
+  return !!t && !t.hold && !t.inf && !!t.gas && tankGasV0(id) > 0; };
 const tankCapAt = (s,id) => { const t = D.tanks[id];
   if(!tankStores(id)) return 0;
   const p = Math.max(tankP(s,id), regionPAt(s, partOf(id)));
-  return tankKg(id)*t.gas.p0*t.gas.frac/(p*p); };
+  return tankKg(id)*tankVoidFrac(id)*t.gas.p0/(p*p); };
+/* the authored drain rate IS a hole, and the slider already says so: the area that passes it at the pressure the disc lets go at, on the same momentum relation every other opening uses */
+const tankDiscC = id => { const t = D.tanks[id], b = t && t.burst;
+  if(!b) return 0;
+  const rho = tankKg(id)/Math.max(t.vol, 1e-9);
+  const dp = Math.max(b.at - ((typeof P !== "undefined" && P) ? P.Pcont : 0.1), 0.01);
+  return b.drain/100*tankKg(id)/Math.sqrt(2*rho*dp*1e6); };
 /* MPa, the highest pressure the tank can see; design-time, so setpoints and charges, never a solved field */
 const tankDesignP = id => { const t=D.tanks[id]; if(!t) return 0;
   const ci = tankCircuit(id);
@@ -1258,8 +1294,9 @@ function netEdges(){
     edges.push({u: cav, v, C: s => { const cs = coreState(s, cid); return !cs ? 0 : cs.breach ? holeC(BREACH_BORE) : cs.cavRelief ? relief : 0; },
                 h: 0, kind: "break", key: "break:cav:"+cid}); }
 
-  /* a hold tank's water is the CIRCUIT's, at an ordinary node, so the only way out of it is an EDGE; every other tank drains its own level in step() */
-  for(const id of holdTankIds()){
+  /* a vessel whose water is the CIRCUIT's sits at an ordinary node, so the only way out of it is an EDGE; a tank with a pool of its own drains its level in step(). A wreck and a rupture disc are the same opening, differing in where on the shell it is. */
+  for(const id of tankIds()){
+    if(!D.tanks[id].hold && !tankInField(id)) continue;
     const q = byId[id]; if(!q) continue;
     // a vessel nothing is plumbed to has no node, and this may not invent one
     if(index[id] === undefined) continue;
@@ -1267,7 +1304,8 @@ function netEdges(){
     breakIds.push(v);
     contZ[v] = zFace(q, "b");
     contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
-    edges.push({u: nodeIdx(id), v, C: s => partWrecked(s, id) ? holeC(BREACH_BORE) : 0,
+    edges.push({u: nodeIdx(id), v, C: s => partWrecked(s, id) ? holeC(BREACH_BORE)
+                                         : (s.burstBy && s.burstBy[id]) ? tankDiscC(id) : 0,
                 h: 0, kind: "break", key: "break:"+id});
   }
 
@@ -1350,10 +1388,13 @@ function netMaps(ctx){
   net2.tankNid = {};
   net2.tankNode = {};
   net2.tankIdByNode = {};
+  /* which vessels keep their water in the field, settled HERE so netBooked() stays structural - off the maps netBuild() wrote, never off a live pressure */
+  net2.tankField = {};
   for(const nid in index){
     const tid2 = tankIdOf(nid);
     if(tid2 && net2.tankNode[tid2] === undefined){
       net2.tankNode[tid2] = index[nid]; net2.tankIdByNode[index[nid]] = tid2; net2.tankNid[tid2] = nid;
+      net2.tankField[tid2] = (D.tanks[tid2] && D.tanks[tid2].hold) || tankInField(tid2);
     }
   }
   // index the other way: nodes are addressed by NAME, because that is what survives a snapshot
@@ -1366,8 +1407,11 @@ function netMaps(ctx){
     const partOfNodeV = nid => byId[nid] || partOfNode(nid);
     for(const nid in index){ const q = partOfNodeV(nid);
       if(q) (nodesOfPart[q.id] || (nodesOfPart[q.id] = [])).push(index[nid]); }
-    for(const pid in nodesOfPart){ const list = nodesOfPart[pid], v = partVol(pid)/list.length;
-      for(const i of list) net2.vol[i] += v; }
+    for(const pid in nodesOfPart){ const list = nodesOfPart[pid];
+      for(const i of list) net2.vol[i] += nodeVol(pid, net2.name[i], list); }
+    /* the shell pool is no face of the machine, so nodesOfPart never saw it; it is the vessel the stated water is IN */
+    for(const id of sgIds()){ const i = index["sec:"+id];
+      if(i !== undefined) net2.vol[i] += Math.max(0.1, sgRowOf(id).water); }
     /* a run's water is all on the run's own node; a shut port is simply a missing edge */
     for(const r of net){ const m = index[runNodeOf(r.key)];
       if(m !== undefined) net2.vol[m] += runVol(r); }
@@ -1529,8 +1573,9 @@ const netLevel = s => (s.P === undefined ? P.P0 : s.P);   // a piece with no sto
 /* somewhere the water can go: entries are MARKERS, never pressures, and which nodes store is asked STRUCTURALLY - via netStore() it is tankP() -> holdLive() -> netFixed() -> netRef() -> netPieces() -> netLiveSig() -> tankLive() -> tankP() */
 function netBounds(net, s){
   const b = netFixed(net, s);
+  /* a vessel in the field is nowhere the water GOES - it is somewhere the water is */
   for(const id in net.tankNode){ const i = net.tankNode[id];
-    if(tankStores(id) && b[i] === undefined) b[i] = 0; }
+    if(tankStores(id) && !tankInField(id) && b[i] === undefined) b[i] = 0; }
   if(!netStoreHeld) for(const i of (net.secT||[])) if(b[i] === undefined) b[i] = 0;
   return b;
 }
@@ -1664,6 +1709,7 @@ function netFixed(net, s){
   /* fixed at what its own gas space holds, open edge or not: an isolated node costs nothing and keeps the fixed SET constant */
   for(const id in net.tankNode){ const i = net.tankNode[id];
     if(D.tanks[id] && D.tanks[id].hold) continue;
+    if(tankInField(id)) continue;             // an ordinary vessel: the solve says what it holds
     if(tankStores(id)) continue;              // it gives way instead (netStore)
     f[i] = tankP(s,id); }
   /* the pool is a BOUNDARY (a burst one is pinned at the room's pressure); the steam space is free, and its diagonal is the shell's whole compliance */
@@ -1744,7 +1790,7 @@ function netStore(net, s){
   /* a hold tank takes the generic row above but PINS: a pressurizer is what "something decides this circuit's pressure" means */
   for(const id in net.tankNode) if(D.tanks[id] && D.tanks[id].hold && !netStoreHeld){
     const i = net.tankNode[id]; if(cap[i] > 0) pin[i] = 1; }
-  /* p_prev is tankP(), off a LEVEL the tick integrates: the state is still the inventory, and the row only adds how fast it gives way */
+  /* the charge is a COMPLIANCE and nothing else; on a vessel in the field it is linearised about that node's own last pressure, so the row carries no figure the solve did not produce. `pin` is not a matrix term - it is netReadP()'s "this piece does not float". */
   for(const id in net.tankNode){
     const i = net.tankNode[id], C = tankCapAt(s, id);
     if(!(C > 0) || !isFinite(C)) continue;          // before tankP(): a hold tank's is a graph walk
@@ -2073,12 +2119,11 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
       (outs.reliefBy || (outs.reliefBy = {}));
       outs.reliefBy[fid] = (outs.reliefBy[fid]||0) + Math.abs(q[e]);
     }
-    /* by NODE incidence, never "kind cold": positive contributions only, which by conservation is the circulation. Two exclusions, both structural - a tank edge is a DIFFERENT flow with its own figure, and a hot leg counted positively either doubles its cold leg or reads a reversed trickle as circulation */
+    /* by NODE INCIDENCE AND SIGN ALONE, never a kind: a leg carrying water away is a negative contribution and drops out on its own, and KIND_TEMP is a buoyancy tag - read here it deleted the one edge feeding a core whose cold leg had an exchanger spliced into it. A tank edge is a DIFFERENT flow with its own figure. */
     const qTankEdge = tankNodes.has(ed.u) || tankNodes.has(ed.v);
-    const awayFromCore = KIND_TEMP[ed.kind] === NT_HOT; // LABEL: a direction, not a permission
     // EVERY core on the board is a hub
     const inU = net.coreSet.has(ed.u), inV = net.coreSet.has(ed.v);
-    if(!qTankEdge && !awayFromCore && (inU || inV)){
+    if(!qTankEdge && (inU || inV)){
       const qin = inV ? q[e] : -q[e];
       if(qin > 0){
         core += qin; if(coreBy){ const cid = net.coreOfNode[inV ? ed.v : ed.u]; if(cid) coreBy[cid] = (coreBy[cid]||0) + qin; }
@@ -2386,9 +2431,9 @@ function buildStockPlumbing(opt){
 
   tank("hpi",U,ox+1,oy+19,{ name:"HPI TANK", col:"#5aa9d6",
     tip:"Emergency injection water, and its one line into the loop. Mount it HIGH: its own column is real head, and it only injects while it is winning against the pressure in the loop.",
-    vol:57, level:100, fluid:"water",
-    /* a gas charge, not a charging pump: an accumulator is the one injection path a blackout does not kill */
-    gas:{p0:11.0, frac:0.35}, check:true, auto:"manual", burst:null});
+    vol:57, level:65, fluid:"water",
+    /* a gas charge, not a charging pump: an accumulator is the one injection path a blackout does not kill. 65 % of 57 m^3 is a Westinghouse accumulator's own 34 % nitrogen space */
+    gas:{p0:11.0}, check:true, auto:"manual", burst:null});
   /* one lane clear of the vessel, off its own WIDTH; set after minting, because the box does not exist until the volume is on it */
   if(D.tanks["hpi"+U]){
     D.tanks["hpi"+U].cell = [Math.max(0, partOf("core"+U).x - partOf("hpi"+U).w - 3), oy+19];
@@ -2414,15 +2459,15 @@ function buildStockPlumbing(opt){
     tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
     vol:35, level:0, fluid:"contaminated",
     /* at rest the gas sits at containment pressure, so an empty tank costs the relief path exactly nothing */
-    gas:{p0:0.15, frac:25/23}, check:false, auto:"always",
+    gas:{p0:0.15}, check:false, auto:"always",
     burst:{at:1.4, drain:6.0, rel:0.004}});
 
   /* tied into the feedwater LINE, so it reaches whatever the feed pump reaches */
   tank("efw",U,EFWX,oy+17,{ name:"EFW TANK", col:"#5aa9d6",
     tip:"Independent feedwater reserve, tied into the feedwater line through its own pump. It starts on LOW GENERATOR LEVEL, not on being armed - an emergency pump feeding a healthy generator overfills it.",
-    vol:19, level:100, fluid:"condensate",
+    vol:19, level:65, fluid:"condensate",
     /* the gas charge is NPSH and nothing else - vented, the pump flashes its own suction; the machine beside it is what pushes */
-    gas:{p0:1.5, frac:0.35}, check:false, auto:"sglow", burst:null});
+    gas:{p0:1.5}, check:false, auto:"sglow", burst:null});
   /* beside its own tank, so the SUCTION is a few cells and the discharge carries the ship; ROLE.pump folds r onto t and l onto b */
   if(has("efw")){
     mintMachine("efwp"+U,"pump",EFWX-3,oy+10);
@@ -2738,7 +2783,7 @@ const PLANTPRE=[
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
  ["WINDSCALE",{loops:1,arch:5,d:{bkp:0,sg:1,chim:0.2},
    drop:["hpi","rv0","reltk"], tanks:{efw:{vol:5},
-     pzr:{name:"HELIUM STORE", hold:null, gas:{p0:7.0, frac:0.5}, level:50, fluid:"helium", tsurv:null, pburst:null}}},
+     pzr:{name:"HELIUM STORE", hold:null, gas:{p0:7.0}, level:50, fluid:"helium", tsurv:null, pburst:null}}},
   "A graphite pile with no containment, no backup power, no injection water and no relief valve on the loop. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, overpressure the loop and nothing lifts, and there is nothing to inject with at all. Fly it to see what the safeguards on every other preset are FOR."],
  /* no containment, and it is the hull that refuses it: on every band below the top one the drives stand in the row a wall would close along */
  ["DUAL",{units:2,sets:1,loops:1,arch:0,lat:1,d:{bkp:1,sg:0,chim:0.3}},
