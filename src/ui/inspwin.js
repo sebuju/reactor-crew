@@ -84,6 +84,8 @@ function inspCollapse(h,on){
 function inspClose(h){
   const host=h.well.el.parentNode;
   if(host){ host.removeChild(h.well.el); const i=host._wins.indexOf(h); if(i>=0) host._wins.splice(i,1); }
+  // shutting the window is letting the thing go; still picked, the peek opens it again next frame
+  if(h.id && h.id===sel){ sel=null; uiDirty(); }
 }
 
 /* the CANVAS box, and the head row is measured rather than assumed: the screens differ */
