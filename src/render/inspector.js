@@ -528,14 +528,11 @@ function paramsFor(p){
       acc("level"),0,100,v=>v.toFixed(0)+" %",5);
     SEC("GAS CHARGE");
     T.push({kind:"toggle",title:"GAS CHARGE",mass:8,
-      key:{get:()=>!!t().gas, set:v=>{ t().gas = v?{p0:4.5,frac:0.35}:null; }},
-      tip:"A cover gas above the liquid. It is what makes the pressure mean anything: a vented tank never pressurises, so it can have no back-pressure and no rupture disc. It expands as a source empties and is compressed as a sink fills."});
+      key:{get:()=>!!t().gas, set:v=>{ t().gas = v?{p0:4.5}:null; }},
+      tip:"A cover gas above the liquid, filling whatever the commissioning level leaves. It is what makes the pressure mean anything: a vented tank never pressurises, so it can have no back-pressure and no rupture disc. A vessel left full has no space for one at all."});
     sld("CHARGE PRESSURE","What the gas holds at the commissioning level. It falls as a source drains and rises as a sink fills - that taper is the whole difference between an accumulator and a pump.",
       {get:()=>t().gas?t().gas.p0:0, set:v=>{ if(t().gas) t().gas.p0=v; }},
       0.05,15,v=>v.toFixed(2)+" MPa",0.05);
-    sld("GAS SPACE","How much of the tank is gas rather than liquid. A big space holds its pressure up as the tank drains, so the flow tapers late; a small one collapses as soon as it starts moving.",
-      {get:()=>t().gas?t().gas.frac:0, set:v=>{ if(t().gas) t().gas.frac=v; }},
-      0.05,0.8,v=>(v*100).toFixed(0)+" %",0.05);
     SEC("SAFETY");
     T.push({kind:"toggle",title:"CHECK VALVE",mass:4,
       key:acc("check"),
