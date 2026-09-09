@@ -1385,8 +1385,14 @@ const machRole = id => { const M=machRow(id); return M ? M.role : null; };
 const machineH = (id,M) => M.role==="radiator" ? radH(id) : M.h;
 const machineW = (id,M) => M.role==="radiator" ? radW(id) : M.w;
 /* mintMachine() builds; addMachine() is the gesture on top and picks the lowest free slot, because a machine id carries no meaning. */
+/* A PANEL THAT IS PIPED UP IS BUILT, and a built machine does not resize because another was drawn: radAreaSuggest() is one panel's share of the fleet, so drawing a third shrank the two already fitted, their boxes lost a column, and the circulating-water runs seeded on that column went with it. Each states what it is before the count moves. */
+function radFreeze(){
+  for(const q of radIds()) if(pipeMap().conns.some(c => c.a===q || c.b===q))
+    bake(D.radArea, q, radAreaOf);
+}
 function mintMachine(id,kind,x,y,core){
   const M=MACHINE[kind];
+  if(M.role==="radiator") radFreeze();
   D.machines[id]={kind, cell:[x,y]};
   D.machines[id].cell=[x, cellStore(M.role, y, machineH(id,M))];
   // a vessel is minted with its own reactor drawn in it: the one handed in, else the stock one
@@ -1664,6 +1670,19 @@ function runPartEnds(aId,bId,af,bf){
   if(!A||!B) return null;
   return [{p:A, f:oa.face!==undefined?oa.face:af}, {p:B, f:ob.face!==undefined?ob.face:bf}];
 }
+/* The ONE machine a vessel carries the line on to, over its own nozzles and past any fitting: null for a branch, which has nothing on the far side, and null for a header, which has no single leg to continue. */
+function tankThrough(tid,avoid){
+  let out=null;
+  for(const c of pipeTrace().conns){
+    const o = c.a===tid ? c.b : c.b===tid ? c.a : null;
+    if(o==null || o===avoid) continue;
+    const q = throughFitting(o,tid) || partOf(o);
+    if(!q || q.id===tid) continue;
+    if(out && out.id!==q.id) return null;
+    out=q;
+  }
+  return out;
+}
 function runKindFor(aId,bId,af,bf){
   const e=runPartEnds(aId,bId,af,bf); if(!e) return "user";
   const A=e[0].p, B=e[1].p; af=e[0].f; bf=e[1].f;
@@ -1684,7 +1703,11 @@ function runKindFor(aId,bId,af,bf){
     if(!primaryTank(t.id)) return "feed";
     /* The line reaching the vessel that authors this circuit's pressure IS the surge line. */
     if(tankHold(t.id)) return "surge";
-    return (isT(o) && tankHold(o.id)) ? "relief" : "hpi";
+    if(isT(o) && tankHold(o.id)) return "relief";
+    /* A vessel with a line on each side of it is a PIECE of the leg, not a branch off it, so what it carries the line on to is what names this run - a bore is read off the kind, and a tank spliced into a leg may not resize the leg. */
+    const thru = tankThrough(t.id, o.id);
+    if(thru) return RUN_KIND[[thru.role, o.role].sort().join("|")] || "user";
+    return "hpi";
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
 }
