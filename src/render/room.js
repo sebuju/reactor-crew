@@ -189,16 +189,26 @@ function roomNaLayer(data,L){
 }
 
 // the skin, not the air: it has mass, so a box lags the room it stands in
-function roomPart(data,L){
+function heatParts(L){
   if(!L) return;
+  const T=L.roomT, cellsOf={};
+  for(const q of roomGeom().parts) cellsOf[q.p.id]=q.cells;
   for(const p of LAY.parts){
-    const lim=partTsurv(p);
-    if(!lim || !fitted(p)) continue;
-    const v=partSkin(L,p), {x,y,w}=prect(p);
+    if(!fitted(p)) continue;
+    const lim=partTsurv(p), v=partSkin(L,p), {x,y,w}=prect(p);
     txt(v.toFixed(0)+"K", x+w/2, y+20,
-      {size:8, align:"center", color:v>lim?C.red:v>lim-40?C.amber:C.ink2});
+      {size:8, align:"center", color:!lim?C.ink2:v>lim?C.red:v>lim-40?C.amber:C.ink2});
+    const cells=cellsOf[p.id];
+    if(!cells||!T) continue;
+    let air=0; for(const i of cells) air+=T[i];
+    // the arrow the room feels, so a box the air is heating reads the other colour
+    const q=ROOM_HK*(cells.length*v-air);
+    if(Math.abs(q)<1) continue;
+    txt((q>0?"+":"")+q.toFixed(0)+" kW", x+w/2, y+29,
+      {size:7, align:"center", color:q>0?C.amber:C.blue});
   }
 }
+const heatLayer=(data,L,seam)=> seam==="under" ? roomZones(data) : heatParts(L);
 
 // the effect belongs to a BANG, not a cell; every list below is display state off the plant clock, never on S
 const P_FULL=600;                         // kPa of rise that reads as a full bang

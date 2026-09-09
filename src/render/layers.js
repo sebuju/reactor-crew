@@ -64,9 +64,9 @@ const LAYERS={
         draw:holdLayer,
         tip:"What is standing in every run and in every machine, in kilograms - the run's reading on the run, the machine's under its box. A pipe is a small tank: its bore and its length are real inventory, so it stores, it springs, and the flow has to turn the whole lot over before what is in it changes. Half of a run's water is counted at the machine on each of its ends, unless that end's nozzle valve is shut - a shut valve leaves the line on its far side, where it actually is."},
   // a layer that paints on a healthy plant is a survey and ships off; one silent until it matters is an annunciator and ships on
-  roomz:{group:"COMPARTMENT", label:"AIR TEMP",    seam:"under", data:"room", live:true, on:false,
-        draw:roomZones,
-        tip:"Air temperature in every cell of the compartment, as a survey map: five bands from AMBIENT to UNTENABLE. Heat is a place. It comes off every hot surface, it comes in a flood out of anything venting steam into the room instead of into a tank, a machine is a WALL to it, and the only sink is the hull - so a compact plant runs hotter than a spread-out one. The band edges are the machines' own limits, not round numbers."},
+  heat: {group:"COMPARTMENT", label:"HEAT",        seam:["under","over"], data:"room", live:true, on:false,
+        draw:heatLayer,
+        tip:"Where the heat is, in one picture. The cells are banded by air temperature, AMBIENT to UNTENABLE, with the band edges set at the temperatures machines actually give up at rather than at round numbers. Every machine prints its own skin temperature, coloured against what THAT box was built for where it has a limit, and under it the kilowatts it is putting into the room - plus into the air, minus out of it. Heat is a place. It comes off every hot surface, it comes in a flood out of anything venting steam into the room instead of into a tank, a machine is a WALL to it, and the only sink is the hull - so a compact plant runs hotter than a spread-out one."},
   roomh:{group:"COMPARTMENT", label:"H2 CLOUD",   seam:"under", data:"room", live:true, on:true,
         draw:roomH2Layer,
         tip:"Where the hydrogen off the cladding has ended up. It leaves the primary with the steam, at whatever hole the steam left through, and then it is a gas fourteen times lighter than air, collecting under the deckhead of a SEALED compartment - the only thing that takes it out again is the ventilation set, or a fire. VIOLET is the gas, and the hard violet line is the 4 % flammable limit: inside it, the room is a bomb waiting for something at 773 K. Amber and moving is a flame front, and how fast it crosses a cell is a property of the mixture. No figure is printed - point at a cell for the reading. This is the Fukushima sequence, drawn."},
@@ -85,9 +85,6 @@ const LAYERS={
   flood:{group:"COMPARTMENT", label:"FLOODING",    seam:"under", data:"room", live:true, on:true,
         draw:floodLayer,
         tip:"Water standing on the floor of a region. A break inside a containment does not vanish out of the book: it lands, it is a real depth, and it drowns what it reaches. The ship is drawn in section, so it is a horizontal line, and a machine the line crosses is under it. It paints nothing at all until there is water somewhere, which is why it ships on."},
-  roomc:{group:"COMPARTMENT", label:"PART TEMP",  seam:"over",  data:"room", live:true, on:false,
-        draw:roomPart,
-        tip:"What each machine is standing in, in kelvin, coloured against what THAT machine was built for. The room field says the compartment is hot; this says which box is about to be damaged by it. Structure - shielding, containment, the core catcher - prints nothing, because a room temperature is not how any of them fails."},
   flow: {group:"PLUMBING", label:"FLOW METERS", seam:"over",  data:null,    live:true, on:false,
         draw:(d,L)=>pipeMeters(pipeRuns(L),L),
         tip:"The top line of every run's readings: what that run is carrying, in kg/s. The figure goes amber and takes a minus sign when a run reverses, and red when it is being pushed past its rating. The pressurizer's own dial is not on this switch - it is the only gauge that plant pressure has, so it is always drawn."},
@@ -102,13 +99,16 @@ function layerData(id, L){
   return layerCache[id] || (layerCache[id]=LAYER_DATA[id](L));
 }
 
+// a layer that draws on both sides of the machines states both seams; the pass tells its draw which one it is in
+const layerSeam=(l,seam)=> Array.isArray(l.seam) ? l.seam.indexOf(seam)>=0 : l.seam===seam;
+
 function layerPass(seam, L){
   for(const k of LAYER_ORDER){
     const l=LAYERS[k];
     const woke = l.group==="PLUMBING" && (pipeHov || (k==="hold" && holdHov));
-    if((!l.on && !woke) || l.seam!==seam || (l.live && !L)) continue;
+    if((!l.on && !woke) || !layerSeam(l,seam) || (l.live && !L)) continue;
     ctx.save();
-    l.draw(layerData(l.data, L), L);
+    l.draw(layerData(l.data, L), L, seam);
     ctx.restore();
   }
 }

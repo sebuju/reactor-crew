@@ -894,7 +894,7 @@ function roomShipLeak(s, dt){
   }
 }
 
-/* The worst cell a machine stands in; the damage criterion and the PART TEMP layer both read it, so picture and failure cannot disagree. */
+/* The worst cell a machine stands in; the damage criterion and the HEAT layer both read it, so picture and failure cannot disagree. */
 function roomAt(s, p){
   let v = 0;
   for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
