@@ -389,6 +389,9 @@ function netFieldUpdate(net, s){
   // a node's curve is its circuit's: a fact about the net's own graph, so it memoises on net
   const sat = net.satBy || (net.satBy = net.name.map(netSatOf));
   const mBy = s && s.mBy;
+  /* a node that passes more per tick than it holds cannot run itself out, only its supply can */
+  const fedIn = scratch(net, "fedIn", net.n, Float64Array, 0);
+  for(const ed of net.edges){ const w = ed.w || 0; if(w > 0) fedIn[ed.v] += w; else if(w < 0) fedIn[ed.u] -= w; }
   for(let i=0;i<net.n;i++){ const nid = net.name[i], p = netPAt(s, nid), h = netHAt(s, nid);
     const m = mBy ? mBy[nid] : undefined, mk = m === undefined ? -1 : m;
     if(p === F.lp[i] && h === F.lh[i] && mk === F.lm[i]) continue;
@@ -398,7 +401,7 @@ function netFieldUpdate(net, s){
     /* A RUN is a full pipe, so what it is carrying IS its holdup. Read off (p,h) alone, a run resting on its own saturation line flashes 982 to 0.8 and back on alternate ticks while its mass never moves, and every conductance leaning on it rings with it. A vessel is not this: its mean density is not the density at its nozzle, and gasAt already answers that. */
     F.rhoD[i] = (m !== undefined && net.vol[i] > 0 && runKeyOfNode(nid) !== null)
       ? m/net.vol[i] : mx.rho;
-    F.wet[i] = netNodeDry(net, s, i, mx.rho) ? 0 : 1;
+    F.wet[i] = (netNodeDry(net, s, i, mx.rho) && fedIn[i]*NET_DT <= DRY_FRAC*net.vol[i]*mx.rho) ? 0 : 1;
     F.mu[i] = muMixOf(sat[i], mx.x); }
   for(const i of (net.gasNodes||[])) F.rhoG[i] = rhogOf(sat[i], satT(sat[i], F.p[i]));
   /* the pool's own surface, not (p,h): a hotwell short of full has a space over it and every nozzle in that space draws steam */
