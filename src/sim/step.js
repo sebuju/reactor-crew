@@ -365,6 +365,26 @@ const condTOf = (s,id) => s.condTBy && s.condTBy[id];
 /* the same with an answer always: before the first tick, the water arriving at it */
 const condTAt = (s,id) => { const v = condTOf(s,id);
   return v===undefined ? cwInAt(s,id) : v; };
+/* K, off the pool's own enthalpy: saturated at T with the space over it holding the vapour the volume forces. On the shelf tOfH() reads Tsat(p) and never h, and p is set off T, so that pair carries no energy. */
+const condPoolT = (s,id) => { const n = condVesNode(id); if(n === null) return undefined;
+  const c = netSatOf(n), m = s.mBy && s.mBy[n], h = netHAt(s,n), V = condVolOf(id),
+        fall = () => netTempAt(s,n);
+  if(!(m > 0) || !isFinite(h) || !(V > 0)) return fall();
+  const tb = c.tc && curveTab(c),
+        hi = tb ? tb.hi : (c.tc ? c.tc - 1 : (c.Tref || c.T0 || 1)*1.5), lo = CURVE_LO + 1;
+  if(!(hi > lo)) return fall();
+  /* the vapour fraction the VOLUME forces at saturation T: liquid m(1-x)/rhof plus vapour m*x/rhog fill V */
+  const xAt = T => { const rf = rhofOf(c,T), rg = rhogOf(c,T);
+    return clamp(rg*(V - m/rf)/Math.max(1e-12, m*(1 - rg/rf)), 0, 1); };
+  const hAt = T => hOfT(c,T) + xAt(T)*hfgOf(c,T);
+  /* no pool the volume will hold, or energy above saturated steam anywhere on the curve: the node is the space */
+  if(xAt(hi) >= 1 || h >= hAt(hi)) return fall();
+  if(h <= hAt(lo)) return lo;
+  let a = lo, b = hi;
+  for(let k=0;k<40;k++){ const T = 0.5*(a+b); if(hAt(T) < h) a = T; else b = T; }
+  return 0.5*(a+b); };
+/* a sink spliced into a primary leg is a vessel on that leg and keeps the leg's read */
+const condTRead = (s,id) => condVacuum(id) ? condPoolT(s,id) : netTempAt(s, condVesNode(id));
 const condRejOf = (s,id) => { const c = cwCOf(s,id);
   if(!(c>0)) return 0;
   const cold = cwInAt(s,id), T = condTOf(s,id);
@@ -1199,7 +1219,9 @@ function advectStep(s, dt, runFlow, edgeKg){
       if(!(ir > 0) || bk[i]) continue;
       const nm = net.name[i], have = mBy[nm];
       if(have === undefined || !(net.vol[i] > 0)) continue;
-      const cap = net.vol[i]*rhoMixOf(netSatOf(nm), pMax[i], netHAt(s, nm));
+      /* a vessel with a free surface states its capacity liquid-full: the EOS read at a saturated pool is a knife edge (0.8 kJ/kg spans 86 t to 16 t against 41 t held) and on the low side the limiter refuses every arrival */
+      const c = netSatOf(nm);
+      const cap = net.vol[i]*(net.F.void[i] ? rhofOf(c, satT(c, pMax[i])) : rhoMixOf(c, pMax[i], netHAt(s, nm)));
       const room = cap - have + outNow[i]*dt;
       if(ir > room) kIn[i] = Math.max(room, 0)/ir; } }
   for(let e=0;e<net.edges.length;e++){
@@ -2363,7 +2385,7 @@ function plantSettle(){
       eps = c>0 ? 1-Math.exp(-condUA(id)*condKOf(S,id)/c) : 0;
       if(c>0 && eps>0) S.condTBy[id] = cwInAt(S,id) + qAll/n/(c*eps);
       /* the water actually in it beats the design estimate: a sink spliced into a hot leg is full of that leg, and condRest() would pin it at a vacuum */
-      const t = netTempAt(S, condVesNode(id));
+      const t = condTRead(S, id);
       if(t !== undefined && isFinite(t)) S.condTBy[id] = Math.max(S.condTBy[id], t);
       S.condPBy[id] = Math.max(COND_P0, psatSec(S.condTBy[id])); }
     const mi = cwInMean(S); if(mi !== undefined) S.cwInT = mi;
@@ -2919,7 +2941,7 @@ function stepMarch(dt){
       if(p !== undefined && isFinite(p))
         s.condPBy[id] = partWrecked(s,id) ? regionPAt(s, partOf(id)) : Math.max(COND_P0, p);
       /* one vessel, so one reading: the pressure is the backpressure and the temperature is what the tubes condense against */
-      const t = netTempAt(s, condVesNode(id));
+      const t = condTRead(s, id);
       if(t !== undefined && isFinite(t)) s.condTBy[id] = t; }
     const m = condTMean(s); if(m !== undefined) s.condT = m; }
   /* the panel climbs until its duty goes to 0 on the (Tin - Tpanel) term, so the chain stops itself; floored at T_SPACE, because nothing radiates below the sky */

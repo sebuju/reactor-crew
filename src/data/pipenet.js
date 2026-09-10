@@ -290,6 +290,8 @@ const runK0 = r => {
 const flowW = (C, rho, pHi, pLo) => C > 0
   ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(Math.min(pHi-pLo, (1-RCRIT)*Math.max(pHi,0)), 0)*1e6)
   : 0;
+/* a nozzle in the steam space stands in the steam's own density, not the vessel's mixture - for what it passes and for what it weighs. F.void is a vessel whose free SURFACE says there is a space over it: at the condenser's vacuum the quality of a half-full pool is 7e-5 and a bare x > 0 pulls the hotwell out through the exhaust duct. */
+const gasEnd = (F, gasAt, i) => gasAt === i && (F.x[i] > 0 || !!F.void[i]);
 let FLOWG_CHOKE = false;          // set by flowG(), spent by edgeG() on the next line
 const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
   FLOWG_CHOKE = false;
@@ -311,8 +313,7 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
   if(F.wet && !F.wet[up]) return 0;
   /* a check valve is signed: +1 passes u->v only */
   if(diode && d*diode < 0) return 0;
-  /* a nozzle in the steam space passes the steam's own density, not the vessel's mixture. F.void is a vessel whose free SURFACE says there is a space over it: at the condenser's vacuum the quality of a half-full pool is 7e-5 and a bare x > 0 pulls the hotwell out through the exhaust duct. */
-  const rho = gasAt === up && (F.x[up] > 0 || F.void[up]) ? F.rhoG[up] : F.rhoD[up];
+  const rho = gasEnd(F, gasAt, up) ? F.rhoG[up] : F.rhoD[up];
   const w = C*Math.sqrt(2*Math.max(rho, 1e-3)*eff*1e6);
   return w/act;
 };
@@ -1175,10 +1176,11 @@ function netVapourAt(nid){
 /* "break"/"vent"/"sgtr" are SYNTHETIC edge kinds netEdges() invents, never a run's own declared kind */
 const netHole = ed => ed.kind === "break" || ed.kind === "vent" || ed.kind === "sgtr";
 
-/* MPa; rho is the MEAN of the two ends, because either end's own value turns on which way round netBuild() pushed the edge */
+/* MPa; rho is the MEAN of the two ends, because either end's own value turns on which way round netBuild() pushed the edge. Each end weighs what stands AT it: a steam nozzle on a vessel is a column of steam, and priced at the vessel's mixture a 1.4 m exhaust duct outweighs the whole vacuum span it works in. */
 const staticH = (net, ed, s) => {
   const dz = net.z[ed.u] - net.z[ed.v], F = net.F;
-  let h = dz === 0 ? 0 : (F.rho[ed.u] + F.rho[ed.v])/2 * G_MPA * dz;
+  const rhoAt = i => gasEnd(F, ed.gasAt, i) ? F.rhoG[i] : F.rho[i];
+  let h = dz === 0 ? 0 : (rhoAt(ed.u) + rhoAt(ed.v))/2 * G_MPA * dz;
   if(ed.poolAt !== undefined) h += (ed.poolAt === ed.u ? 1 : -1)*poolH(net, s, ed.poolAt);
   return h;
 };
