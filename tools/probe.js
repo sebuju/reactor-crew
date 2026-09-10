@@ -11,7 +11,8 @@ const M=require('./bundle').headless(
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
- 'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt,annStep,ANN:()=>ANN}');
+ 'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt,annStep,ANN:()=>ANN,'+
+ 'drumIds,boilerIds,boilerLvl,boilerP,boilerDesignP,holdSetP,loopMap,coreMint,designForget,pumpIds,secGensOf}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -60,7 +61,7 @@ function dump(s,label){
   for(const id in (s.ihxQBy||{})) row("ihx "+id, "crosses "+f((s.ihxQBy[id]||0)/1000,1)+" MW");
   for(const id in (s.radTBy||{}))
     row("rad "+id, "T "+f(s.radTBy[id],2)+"  takes "+f((s.radQBy[id]||0)/1000,1)+" MW");
-  for(const id of M.sgIds()) row("sg "+id, "T "+f(s.sgTBy&&s.sgTBy[id],2)+"  lvl "+f(M.sgLvl(s,id),1)+"  P "+f(M.secP(s,id),4));
+  for(const id of M.boilerIds()) row("boiler "+id, "T "+f(s.sgTBy&&s.sgTBy[id],2)+"  lvl "+f(M.boilerLvl(s,id),1)+"  P "+f(M.boilerP(s,id),4));
 
   console.log(" TANKS");
   for(const id of M.tankIds())
@@ -99,7 +100,7 @@ function dump(s,label){
     row("worst solve vs landed", wj<0?"-":net.name[wj]+"  "+f(wd,3)); }
 
   console.log(" STEAM   MPa");
-  for(const id of M.sgIds()) row(id+" shell", f(M.secP(s,id),4));
+  for(const id of M.boilerIds()) row(id+" boiler", f(M.boilerP(s,id),4));
   row("turbine", f(s.turbWk,2)+" kg/s at "+f(s.turbP,4)+" MPa");
 
   console.log(" DESIGN");
@@ -190,8 +191,8 @@ const CASES={
         if(s.condLost)                    { died="VACUUM "+t.toFixed(0)+"s"; break; }
         if(s.scrammed)                    { died="SCRAM "+t.toFixed(0)+"s"; break; }
         if(s.dmg>1)                       { died="DAMAGE "+t.toFixed(0)+"s"; break; } }
-      const id=M.sgIds()[0], dp=M.sgDesignP();
-      const sp=id?M.secP(s,id):0;
+      const id=M.boilerIds()[0], dp=M.boilerDesignP();
+      const sp=id?M.boilerP(s,id):0;
       if(process.argv.some(a=>a==="--why")){
         const P=M.P(), n=M.sgIds().length;
         const dT0=P.Tref-M.tsatSec(dp), dTnow=s.Tavg-M.tsatSec(sp);
@@ -209,7 +210,7 @@ const CASES={
       console.log(PRE[i][0].padEnd(12)+f(M.mwE(s),0).padStart(6)+f(s.Tavg,1).padStart(8)+
         (f(sp,3)+" /"+f(dp,2)).padStart(15)+f(sp/Math.max(dp,1e-9),3).padStart(7)+
         f(M.sgLiftP(),2).padStart(6)+f(M.sgBurstP(id),2).padStart(7)+
-        (id?f(M.sgLvl(s,id),0):"-").padStart(7)+f(s.dmg,1).padStart(6)+"   "+died);
+        (id?f(M.boilerLvl(s,id),0):"-").padStart(7)+f(s.dmg,1).padStart(6)+"   "+died);
     }
   },
   excursion(){
@@ -266,6 +267,31 @@ const CASES={
       console.log("  wrecked "+(wrecked.join("  ")||"nothing"));
       console.log("  books "+Object.entries(s.massOut).filter(e=>Math.abs(e[1])>1).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,6).map(e=>e[0]+" "+f(e[1],0)).join("  "));
     }
+  },
+  drum(){
+    Object.assign(D,JSON.parse(JSON.stringify(BASE)));
+    M.designForget();
+    const core=M.coreMint(); M.archPreset(core,1);       // a boiling core: a drum on a subcooled loop separates nothing
+    M.buildStockPlumbing({loops:1, drum:true, core});
+    M.buildLayout(); M.buildStockAutomation(); M.commission();
+    const s=M.S(); s.diceOff=true;
+    /* the same footing a preset commissions on: what is being measured is the drum, not the protection system */
+    M.blkSinkOff(s,"scram");
+    const ids=M.drumIds();
+    console.log("\n── one drum on the stock loop, boiling core ──");
+    console.log(" drums "+ids.join(" ")+"   boilers "+M.boilerIds().join(" ")+
+      "   loops "+M.loopMap().n+"   setpoint "+f(M.holdSetP(M.nodeGraph().coreCirc),3)+" MPa");
+    for(const id of M.pumpIds()) if(M.secGensOf(id).length)
+      console.log(" "+id+" feeds "+M.secGensOf(id).join(" ")+"   head "+f(M.pumpHead(id),2)+" MPa");
+    console.log("    t     n   flowNet    vf"+ids.map(id=>"   "+id+" lvl      P    steam     fed   freg").join(""));
+    const line=t=>console.log("  "+f(t,1).padStart(5)+" "+f(s.n,3).padStart(5)+"  "+f(s.flowNet,3).padStart(6)+
+      " "+f(s.vf,3).padStart(6)+ids.map(id=>"  "+f(M.boilerLvl(s,id),1).padStart(6)+" "+f(M.boilerP(s,id),3).padStart(6)+
+      " "+f(s.steamBy[id],1).padStart(7)+" "+f(s.sgFedBy[id],1).padStart(7)+" "+f(s.fregBy[id],3).padStart(6)).join("")+
+      (s.trip?"  "+s.trip:"")+(s.breach?"  BREACH":""));
+    line(0);
+    for(let k=0;k<PSEC*50;k++){ M.step(0.02); if((k+1)%(5*50)===0) line((k+1)*0.02); if(s.breach) break; }
+    console.log(" ledger "+f(M.ledgerKg(s),0)+" kg  out "+f(M.ledgerOut(s),0)+" kg  residual "+f(s.massRes,3)+" kg");
+    console.log(" wrecked "+((s.dmgParts||[]).map(id=>id+" "+s.dmgWhy[id]).join("  ")||"nothing"));
   },
   selfrun(){ const s=withPlant(M=>{
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
