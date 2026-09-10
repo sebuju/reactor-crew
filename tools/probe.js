@@ -11,7 +11,7 @@ const M=require('./bundle').headless(
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
- 'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt}');
+ 'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt,annStep,ANN:()=>ANN}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -178,8 +178,12 @@ const CASES={
       M.plantPreset(i); M.buildLayout(); M.commission();
       const s=M.S(); s.diceOff=true;
       let died="-", t=0;
+      const reds=M.ANN().filter(a=>a[1]==="red").map(a=>a[0]);
       for(let k=0;k<PSEC*50;k++){ M.step(0.02); t=k*0.02;
         const id=M.sgIds()[0];
+        M.annStep(s);
+        const red=reds.find(n=>s.annOn[n]);
+        if(red)                           { died=red+" "+t.toFixed(0)+"s"; break; }
         if(s.breach)                      { died="BREACH "+t.toFixed(0)+"s"; break; }
         if(id&&s.sgBurst&&s.sgBurst[id])  { died="SG BURST "+t.toFixed(0)+"s"; break; }
         if(s.turbTrip)                    { died="TURB TRIP "+t.toFixed(0)+"s"; break; }

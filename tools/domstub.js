@@ -120,8 +120,10 @@ function install(opts){
     return out;
   }
 
-  const IDS = ['cv','stage','topbar','tip','ctxmenu','clock','clock-dot','plant-line',
-               'help-doc','scr-operate','scr-design','scr-scenario'];
+  /* every id index.html carries, so a screen that reaches for one gets a node rather than a null */
+  const IDS = ['cv','stage','topbar','tip','ctxmenu','clock','clock-dot','clock-row','plant-line',
+               'brand','brandmenu','brand-title','help','help-doc','logo-mark','plant-id','prewarm',
+               'tabs','scr-operate','scr-design','scr-scenario'];
   const mounts = {};
   for(const id of IDS){ const n = node('div'); n.attrs.id = id; mounts[id] = n; }
   mounts.stage._box = {width:1200, height:900};
@@ -141,6 +143,8 @@ function install(opts){
     querySelectorAll(sel){ let out = []; for(const k in mounts) out = out.concat(find(mounts[k],sel)); return out; },
   };
   global.window = global;
+  global.location = {search:'', hash:'', href:'file:///index.html', pathname:'/index.html'};
+  global.history = {replaceState:()=>{}, pushState:()=>{}};
   global.innerWidth = opts.winW || 1200;
   global.innerHeight = opts.winH || 900;
   global.devicePixelRatio = opts.dpr || 1;
