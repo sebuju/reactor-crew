@@ -237,7 +237,7 @@ function matLiftAt(pt){ const c=cellAt(pt);
 let matPen = null;
 /* The two fault tools' own dials. Tool state like matPen, never on D and never on S - what reaches S
    is the act, and only when a button goes down. */
-const FAULT={blastKPa:300, injectKind:"heat"};
+const FAULT={blastMPa:5, injectKind:"heat"};
 const INJECT_KIND=[
   {id:"heat",  label:"HEAT",  unit:"kW",   rate:1000, tip:"Kilowatts into the cell's own air, on the same source term a fire uses."},
   {id:"gas",   label:"GAS",   unit:"kg/s", rate:0.5, tip:"Hydrogen into the cell. Removing takes the cell's whole gas inventory out in proportion, the way a vent set does."},
@@ -446,7 +446,7 @@ function uiDown(e,el){
   }
   if(screen==="operate" && TOOL.active==="blast" && vHit(p)){
     const c=cellAt(vPt(p));
-    if(c[0]>=0&&c[0]<GW&&c[1]>=0&&c[1]<GH) act("blast", c[1]*GW+c[0], FAULT.blastKPa);
+    if(c[0]>=0&&c[0]<GW&&c[1]>=0&&c[1]<GH) act("blast", c[1]*GW+c[0], FAULT.blastMPa*1000);
     return;
   }
   if(screen==="operate" && TOOL.active==="inject" && vHit(p)){

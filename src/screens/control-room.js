@@ -319,9 +319,9 @@ function crFaultsBuild(container){
     row.appendChild(b.el);
     let kind=null, num=null;
     if(T.id==="blast"){
-      num=KIT.numInput({val:FAULT.blastKPa, unit:"kPa", dp:0, title:"BLAST SIZE",
-        tip:"Overpressure at the cell you click, in the same kilopascals the layer is scaled in.",
-        onChange:v=>{ FAULT.blastKPa=Math.max(0,v); }});
+      num=KIT.numInput({val:FAULT.blastMPa, unit:"MPa", dp:2, title:"BLAST SIZE",
+        tip:"Overpressure at the cell you click. The layer is banded in kilopascals, and 0.2 MPa there is already enough to open a pressure vessel.",
+        onChange:v=>{ FAULT.blastMPa=Math.max(0,v); }});
     } else {
       kind=KIT.segSel(INJECT_KIND.map(k=>k.label),{onSelect:i=>{
         const k=INJECT_KIND[i]; FAULT.injectKind=k.id; FAULT.injectRate=k.rate;

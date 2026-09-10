@@ -93,17 +93,16 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-group-alert{color:inherit;letter-spacing:.8px}
 .cr-group-alert:not(:empty){margin-left:8px}
 .cr-drawer .kit-menukey-menu{width:340px}
-.cr-log,.cr-dmg,.cr-flt{padding:6px 8px 8px}
+.cr-log { display: grid; gap: 12px; }
 .cr-empty{font-size:var(--fs-note);letter-spacing:1px;color:var(--c-ink2);text-align:center;margin:8px 0}
-.cr-log-row{padding:4px 0;border-top:1px solid var(--c-edge)}
-.cr-log-row:first-child{border-top:0}
-.cr-log-t{font-size:var(--fs-tiny);color:var(--c-ink2);margin-right:6px}
+.cr-log-t{font-size:var(--fs-tiny);color:var(--c-ink2); grid-column: 2; place-self: end; grid-row: 1;}
 .cr-log-m{font-size:var(--fs-value);font-weight:700}
+.cr-log-row {display: grid; grid-template-columns: auto 1fr; gap: 4px;}
 .cr-log-row.alarm .cr-log-m{color:var(--c-red)}
 .cr-log-row.warn .cr-log-m{color:var(--c-amber)}
 .cr-log-row.act .cr-log-m{color:var(--c-cyan);font-weight:400}
 .cr-log-row.act .cr-log-w{display:none}
-.cr-log-w{margin:2px 0 0;font-size:var(--fs-note);color:var(--c-ink2)}
+.cr-log-w{font-size:var(--fs-note);color:var(--c-ink2); grid-column: span 2; margin: 0; border-top: 1px solid var(--c-edge);}
 .cr-dmg-card{padding:6px 8px;margin-bottom:4px;background:var(--c-panel);border:1px solid var(--c-edge2);cursor:pointer}
 .cr-dmg-card.blocked{border-color:var(--c-red);cursor:default}
 .cr-dmg-card.busy{border-color:var(--c-amber)}
@@ -114,7 +113,7 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-flt-row{display:flex;align-items:center;gap:4px;margin-bottom:4px}
 .cr-flt-row .kit-btn{flex:1;margin-bottom:0}
 .cr-flt-row .kit-numinput{flex:0 0 84px}
-.cr-flt-row .kit-segsel{flex:0 0 96px}
+.cr-flt-row .kit-segsel{flex:2 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;}
 /* menuKey() owns .on for whether the menu is open; this is whether a tool is armed */
 .cr-drawer-armed .kit-menukey-key{color:var(--c-amber);border-color:var(--c-amber)}
 
