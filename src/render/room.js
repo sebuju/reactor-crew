@@ -58,7 +58,7 @@ function roomCellTip(L){
     if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
       roomPoolT(L,i).toFixed(0)+" K"+(roomPoolLit(L,i)?"  BURNING":""));
     if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
-    if(worst>=BLAST_LO) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
+    if(worst>=BLASTFX.lo) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
     if(rad.cells.has(i)) row("REPAIR CELL  ","YES");
   }
   { const m=matOf(X,Y);
@@ -123,31 +123,61 @@ function roomH2Layer(data,L){
   ctx.lineWidth=1;
 }
 
-const BLAST_LO=15;                        // kPa, below which the layer is silent
-const BLASTZ=[
-  {t:20,  col:C.blue,  lab:"PANELS",   a:0.10},
-  {t:70,  col:C.green, lab:"CABINETS", a:0.16},
-  {t:120, col:C.amber, lab:"MACHINES", a:0.24},
-  {t:200, col:C.red,   lab:"PIPEWORK", a:0.34},
-  {t:1e9, col:C.redHi, lab:"VESSELS",  a:0.48},
-];
+/* One table for the whole blast picture. The front is one cell thick because at 0.4667 m cells the
+   physics cannot resolve a real shock, which is millimetres; `smooth` reads between cell centres and
+   adds no information, and `trailTau` fades a passed cell rather than slowing the front down. */
+const BLASTFX={
+  trailTau:0,     // s a cell keeps glowing after the front has passed
+  smooth:0,       // 0 blocky, 1 fully blended between cell centres
+  lo:15,          // kPa below which the layer is silent
+  full:600,       // kPa that reads as a full bang
+  scar:200,       // kPa that reads as a full scar
+  zones:[
+    {t:20,  col:C.blue,  lab:"PANELS",   a:0.10},
+    {t:70,  col:C.green, lab:"CABINETS", a:0.16},
+    {t:120, col:C.amber, lab:"MACHINES", a:0.24},
+    {t:200, col:C.red,   lab:"PIPEWORK", a:0.34},
+    {t:1e9, col:C.redHi, lab:"VESSELS",  a:0.48},
+  ],
+};
+const BLASTZ=BLASTFX.zones;
 const blastOf = v => { for(let k=0;k<BLASTZ.length;k++) if(v<BLASTZ[k].t) return k;
                        return BLASTZ.length-1; };
 // draws s.roomPPk, the high-water mark on S: the live field relieves in half a second and would read empty
-const SCAR_FULL=200;                      // kPa
-const scarF = v => v<BLAST_LO ? 0 : Math.min(1,(v-BLAST_LO)/(SCAR_FULL-BLAST_LO));
+const scarF = v => v<BLASTFX.lo ? 0 : Math.min(1,(v-BLASTFX.lo)/(BLASTFX.scar-BLASTFX.lo));
+/* Display state off the plant clock, never on S, like every other list in this file. The leading edge
+   still moves at the true speed; this is a fading tail behind it. */
+let blastTrail=null, blastTrailT=null;
+function blastLive(L){
+  if(!(BLASTFX.trailTau>0)){ blastTrailT=null; return L.roomP; }
+  const N=L.roomP.length, dt=blastTrailT===null ? 0 : clamp(burnClk-blastTrailT,0,0.25);
+  blastTrailT=burnClk;
+  if(!blastTrail || blastTrail.length!==N) blastTrail=new Float32Array(N);
+  const k=dt>0 ? Math.exp(-dt/BLASTFX.trailTau) : 1;
+  for(let i=0;i<N;i++){ const t=blastTrail[i]*k, v=L.roomP[i];
+    blastTrail[i]= v>t ? v : t; }
+  return blastTrail;
+}
+/* Centred over the four neighbours; a cell on the edge of the grid reads itself in place of the one
+   that is not there. It adds no information and is not pretending to - at 0.4667 m cells the physics
+   cannot resolve a front thinner than one cell. */
+function blastSmooth(F,X,Y){
+  const i=Y*GW+X;
+  return 0.5*F[i] + 0.125*(F[X>0?i-1:i] + F[X<GW-1?i+1:i] + F[Y>0?i-GW:i] + F[Y<GH-1?i+GW:i]);
+}
 function roomPLayer(data,L){
   if(!L) return;
-  const pk=L.roomPPk;
+  const pk=L.roomPPk, live=blastLive(L), sm=BLASTFX.smooth;
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
       const i=Y*GW+X, v=pk[i];
-      if(v<BLAST_LO) continue;
+      if(v<BLASTFX.lo) continue;
       const z=blastOf(v), Z=BLASTZ[z], x0=GX+X*CELL;
       ctx.globalAlpha=0.25+0.65*scarF(v); fillRect(x0,y,CELL,h,C.scar);
       ctx.globalAlpha=Z.a; fillRect(x0,y,CELL,h,Z.col); ctx.globalAlpha=1;
-      if(L.roomP[i]>=BLAST_LO) fxPulse(x0,y,CELL,h,Z.col,1,4);
+      const now = sm>0 ? live[i]+(blastSmooth(live,X,Y)-live[i])*sm : live[i];
+      if(now>=BLASTFX.lo) fxPulse(x0,y,CELL,h,Z.col,1,4);
       if(X<GW-1 && blastOf(pk[i+1])!==z) fillRect(x0+CELL-1,y,1,h,Z.col);
       if(Y<GH-1 && blastOf(pk[i+GW])!==z) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
     }
@@ -211,7 +241,6 @@ function heatParts(L){
 const heatLayer=(data,L,seam)=> seam==="under" ? roomZones(data) : heatParts(L);
 
 // the effect belongs to a BANG, not a cell; every list below is display state off the plant clock, never on S
-const P_FULL=600;                         // kPa of rise that reads as a full bang
 const BED_DIM=0.42;                       // the flame bed under a fireball, not instead of one
 const SMOKE_RMAX=CELL*2.6;                // a puff shears apart rather than swelling for ever
 const RING_GAP=6;                         // m the last front must be clear before another leaves
@@ -312,7 +341,7 @@ function ringFold(A,B){
 
 // every emission is the EVENT's, never one per burning cell
 function evFx(e,dt){
-  const k=clamp(e.p/P_FULL,0,1);
+  const k=clamp(e.p/BLASTFX.full,0,1);
   const cx=GX+(e.cx+0.5)*CELL, cy=rowTop(0)+(e.cy+0.5)*CELL, rad=e.r*CELL;
   // fronts are spaced in distance, not pressure
   if(!e.done && e.p>20 && e.p > e.pEmit*1.6 &&
@@ -361,7 +390,7 @@ function evFx(e,dt){
 }
 
 // Rankine-Hugoniot front speed with cylindrical decay; WAVE_SLOW is not physics
-const A0=347, GAM=1.4, DP_MIN=BLAST_LO, WAVE_SUB=4, WAVE_SLOW=16, OBS_K=2.2;
+const A0=347, GAM=1.4, DP_MIN=BLASTFX.lo, WAVE_SUB=4, WAVE_SLOW=16, OBS_K=2.2;
 function burnParticles(dt){
   burnRings=burnRings.filter(o=>{
     for(let k=0;k<WAVE_SUB;k++){

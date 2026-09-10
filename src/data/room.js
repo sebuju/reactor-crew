@@ -181,11 +181,13 @@ function roomGeom(){
   for(const k in (D.mat||{})){ const j=k.indexOf(","), X=+k.slice(0,j), Y=+k.slice(j+1);
     if(X>=0&&X<GW&&Y>=0&&Y<GH && matWall(X,Y)) tight[Y*GW+X]=1; }
   const blk = i => tight[i] ? 0 : (occ[i] ? ROOM_BLOCK : 1);
+  /* The face mask itself, symmetric: the diffusion prices it with g0 and lays ROOM_UP on top, the wave takes it bare, so both reflect off exactly what matWall() calls a wall. */
+  const bx = new Float64Array(N), by = new Float64Array(N);
   const gx = new Float64Array(N), gUp = new Float64Array(N), gDn = new Float64Array(N);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
     const i = Y*GW+X;
-    if(X<GW-1) gx[i] = g0*blk(i)*blk(i+1);
-    if(Y<GH-1){ const b = g0*blk(i)*blk(i+GW);
+    if(X<GW-1){ bx[i] = blk(i)*blk(i+1); gx[i] = g0*bx[i]; }
+    if(Y<GH-1){ by[i] = blk(i)*blk(i+GW); const b = g0*by[i];
       gUp[i] = b*ROOM_UP; gDn[i] = b; }
   }
   /* Obstacle-generated turbulence off the occ array the stencil already built, so a plant drawn tight accelerates its own flame. */
@@ -199,7 +201,7 @@ function roomGeom(){
     if(Y<GH-1 && occ[i+GW]) n++;
     turb[i] = 1 + H2_TURB*n/4;
   }
-  roomCache = {occ, tight, face, own, pan, turb, parts, runs, shellValves, gx, gUp, gDn};
+  roomCache = {occ, tight, face, own, pan, turb, parts, runs, shellValves, bx, by, gx, gUp, gDn};
   roomCacheSig = sig;
   return roomCache;
 }
@@ -244,9 +246,13 @@ function roomSpread(F, cells, kgps, amount){
   roomShare(cells, kgps, (i,f) => { F[i] += amount*f; });
 }
 const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
-/* The machinery half of the gas law, and the door anything venting into a compartment calls: the same plume and cells, but a MASS. */
-const roomAddGas = (s, cells, kg, kgps) =>
-  roomSpread(s.roomM, cells, kgps, kg);
+/* The machinery half of the gas law, and the door anything venting into a compartment calls: the same plume and cells, but a MASS - and a pressure, dp = dm*R*T/V on the same weights, so the rise is highest at the opening rather than even over the region. */
+function roomAddGas(s, cells, kg, kgps){
+  if(!(kg > 0)) return;
+  roomShare(cells, kgps, (i,f) => { const dm = kg*f;
+    s.roomM[i] += dm;
+    roomBlastPost(s, i, dm*R_AIR*s.roomT[i]/ROOM_VCELL*1000); });
+}
 /* Charged in ENTHALPY, never cp*dT, and against each cell's OWN air, so the plume both heats and cools and the room can only approach the jet. */
 function roomJetLiq(src, T, cells, kg, h, c){
   if(!(kg > 0)) return;
@@ -280,6 +286,19 @@ function roomPlume(cells, n){
 }
 // kJ/kg a kilogram of secondary steam is worth to the room, above ambient water
 const roomSteamH = () => steamRise() + CP_W*(T_FEED - T_HULL);
+
+/* The INJECT tool's room half: heat rides the same src[] a fire does, so the cell's own ballast
+   prices it, and gas is hydrogen in or the cell's whole inventory out. The fluid half is
+   injectFluid() (step.js), because plant inventory is a book and compartment air is not. */
+function injectRoom(s, dt, src){
+  const q = s.inject, i = q && q.target;
+  if(!q || !q.rate || typeof i !== "number" || i < 0 || i >= GW*GH) return;
+  if(q.kind === "heat"){ src[i] += q.rate; return; }
+  if(q.kind !== "gas") return;
+  if(q.rate > 0){ const dm = q.rate*dt; s.roomH2[i] += dm; s.roomM[i] += dm; return; }
+  const f = Math.min(1, -q.rate*dt/Math.max(s.roomM[i], 1e-9));
+  s.roomH2[i] -= s.roomH2[i]*f; s.roomO2[i] -= s.roomO2[i]*f; s.roomM[i] -= s.roomM[i]*f;
+}
 
 /* Sources, transport, sink, in that order; nothing here writes anything but s.roomT, s.roomH2 and the readouts off them. */
 function roomStep(s, dt){
@@ -363,6 +382,7 @@ function roomStep(s, dt){
     roomAddGas(s, cells, kg*dt, kg);
   });
   roomFireStep(s, dt, G, src);
+  injectRoom(s, dt, src);
 
   /* No network presence at all, the shield/catcher idiom; on the main board, so a blackout leaves the room with nothing but its hull. */
   if(!s.blackout) for(const q of G.parts){
@@ -455,6 +475,109 @@ const H2_TURB = 4;
 /* Constant-volume combustion off the SAME q the heat term uses. There is no detonation switch: the axis is burning velocity against ROOM_P_TAU's relief time, and H2_TURB and ROOM_P_TAU are the two to hold still while measuring anything else. */
 const ROOM_P0 = 101.3;                    // kPa, ambient
 const ROOM_P_TAU = 0.5;                   // s
+
+/* Linearised Euler on the same grid, so overpressure falls off with distance instead of lifting a
+   whole region at once. Pressure at cell centres (s.roomP, kPa gauge), momentum on the faces
+   (s.roomPU +x, s.roomPV +y, m/s). No fitted number: c^2 = GAMMA*R*T off the cell's own air. */
+const GAMMA_AIR = 1.4, R_SI = 287;        // J/kg/K
+const soundC2 = T => GAMMA_AIR*R_SI*Math.max(T, 1);
+/* Substeps are adaptive off the hottest LIVE cell; ROOM_TMAX bounds them at 172, and this ceiling
+   is a frame budget below that. When it bites the wave covers only part of the tick and says so. */
+const WAVE_SUB_MAX = 48;
+// kPa of excess below which a cell is not carrying a wave, and m/s below which a face is not
+const WAVE_P_LO = 0.05, WAVE_U_LO = 0.01;
+let waveCapWarned = false;
+/* Bumped every solve: s.roomP changes here and nowhere else, so a reader's cache keys on it. */
+let roomPGen = 0;
+
+/* Posted this tick and consumed by roomWaveStep(): a source states kPa AT A CELL and the wave
+   spreads it, so the burn, the shield and a break venting all arrive the same way. */
+let roomPost = null, roomPostAny = false;
+const roomPostScr = () => { const N = GW*GH;
+  if(!roomPost || roomPost.length !== N) roomPost = new Float64Array(N);
+  return roomPost; };
+function roomBlastPost(s, i, kPa){
+  if(!(kPa > 0) || i < 0 || i >= GW*GH) return;
+  roomPostScr()[i] += kPa; roomPostAny = true;
+}
+
+let waveKu = null, waveKv = null, waveKp = null, waveRho = null;
+/* Applies this tick's posts, propagates them, then relaxes what is left toward the region's own
+   lumped pressure - the wave is the transient, roomPGauge() is the attractor it converges to.
+   Returns the worst excess over gauge, which is what a bang is judged on. */
+function roomWaveStep(s, dt, G, gz){
+  roomPGen++;
+  const N = GW*GH, Pr = s.roomP, T = s.roomT, Pk = s.roomPPk;
+  const U = s.roomPU, V = s.roomPV, post = roomPostScr();
+  if(roomPostAny) for(let i=0;i<N;i++) if(post[i] !== 0) Pr[i] += post[i];
+
+  /* The gate: on a quiet tick nothing was posted and nothing is above the layer's own floor, so the
+     solve is skipped outright and the momentum left over is below anything that draws or damages. */
+  let live = roomPostAny;
+  for(let i=0;i<N;i++)
+    if(Math.abs(Pr[i]-gz[i]) > WAVE_P_LO || Math.abs(U[i]) > WAVE_U_LO
+       || Math.abs(V[i]) > WAVE_U_LO){ live = true; break; }
+  if(roomPostAny){ post.fill(0); roomPostAny = false; }
+
+  if(!live){ U.fill(0); V.fill(0); }
+  else {
+    if(!waveKu || waveKu.length !== N){ waveKu = new Float64Array(N);
+      waveKv = new Float64Array(N); waveKp = new Float64Array(N); waveRho = new Float64Array(N); }
+    const ku = waveKu, kv = waveKv, kp = waveKp, rho = waveRho, bx = G.bx, by = G.by;
+    for(let i=0;i<N;i++) rho[i] = Math.max(s.roomM[i]/ROOM_VCELL, 1e-4);
+    /* The stability limit is a property of the DISCRETE operator, not of the gas: the momentum update
+       takes the face's mean density and the pressure update the cell's own, so across a density step
+       one side of the face runs at c^2*2*rho/(rho+rho') - up to twice c^2 where a cell has been
+       emptied. Asking the faces themselves is exact and costs one sweep; guessing c_max off the
+       hottest cell is what let a break at the vacuum floor pump itself. */
+    let c2max = 0;
+    for(let i=0;i<N;i++){
+      const c2 = soundC2(T[i]), a = c2*2*rho[i];
+      if(bx[i] !== 0){ const v = a/(rho[i]+rho[i+1])*bx[i]; if(v > c2max) c2max = v; }
+      if(by[i] !== 0){ const v = a/(rho[i]+rho[i+GW])*by[i]; if(v > c2max) c2max = v; }
+      if(i >= 1 && bx[i-1] !== 0){ const v = a/(rho[i]+rho[i-1])*bx[i-1]; if(v > c2max) c2max = v; }
+      if(i >= GW && by[i-GW] !== 0){ const v = a/(rho[i]+rho[i-GW])*by[i-GW]; if(v > c2max) c2max = v; }
+    }
+    if(!(c2max > 0)) c2max = soundC2(T_HULL);
+    const dtCfl = MPC/(Math.sqrt(c2max)*Math.SQRT2);
+    const want = Math.max(1, Math.ceil(dt/dtCfl)), n = Math.min(want, WAVE_SUB_MAX);
+    if(n < want && !waveCapWarned){ waveCapWarned = true;
+      console.warn("[room] blast wave capped at "+WAVE_SUB_MAX+" substeps of "+want
+        +"; the front covers "+(n/want*100).toFixed(0)+" % of a tick"); }
+    const h = dt/want;
+    /* Every coefficient is constant over the substeps, so they are priced once: kPa to Pa, the face's
+       own mean density, and the mask. A face the mask shuts carries no momentum at all. */
+    for(let i=0;i<N;i++){
+      kp[i] = h*rho[i]*soundC2(T[i])/1000/MPC;
+      if(bx[i] === 0){ ku[i] = 0; U[i] = 0; } else ku[i] = h*2000/((rho[i]+rho[i+1])*MPC)*bx[i];
+      if(by[i] === 0){ kv[i] = 0; V[i] = 0; } else kv[i] = h*2000/((rho[i]+rho[i+GW])*MPC)*by[i];
+    }
+    /* U[i] is the face between i and i+1, so the last column is never written and stays zero; the
+       same entry is what the first column of the next row reads as its own left face. */
+    const nx = N-1, ny = N-GW;
+    for(let k=0;k<n;k++){
+      for(let i=0;i<nx;i++) if(ku[i] !== 0) U[i] -= ku[i]*(Pr[i+1]-Pr[i]);
+      for(let i=0;i<ny;i++) if(kv[i] !== 0) V[i] -= kv[i]*(Pr[i+GW]-Pr[i]);
+      Pr[0] -= kp[0]*(U[0] + V[0]);
+      for(let i=1;i<GW;i++) Pr[i] -= kp[i]*(U[i] - U[i-1] + V[i]);
+      for(let i=GW;i<N;i++) Pr[i] -= kp[i]*(U[i] - U[i-1] + V[i] - V[i-GW]);
+    }
+  }
+  /* Only the EXCESS over what the volume holds on its own is a transient, so only that relaxes, and
+     the momentum goes with it on the same time constant. Floored at vacuum: a rarefaction is real,
+     an absolute pressure below zero is not. */
+  const f = Math.min(1, dt/ROOM_P_TAU), fu = 1-f;
+  let pmax = 0;
+  for(let i=0;i<N;i++){
+    let p = Pr[i] - (Pr[i]-gz[i])*f;
+    if(p < -ROOM_P0) p = -ROOM_P0;
+    Pr[i] = p; U[i] *= fu; V[i] *= fu;
+    if(p-gz[i] > pmax) pmax = p-gz[i];
+    /* Monotonic and on S, because "this compartment has been blown up" is a fact about the run: it saves, it loads, and a replay lands on the same battlefield. */
+    if(p > Pk[i]) Pk[i] = p;
+  }
+  return pmax;
+}
 
 /* Read off the same roomH2Frac() the layer draws, so a cell cannot draw as safe and burn. */
 const roomFlamOf = (f,fo2) => f >= H2_LFL && f <= H2_UFL && fo2 >= O2_LOC;
@@ -678,8 +801,8 @@ function roomFireStep(s, dt, G, src){
 }
 
 function roomH2Step(s, dt, G){
-  const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame, Pr = s.roomP;
-  const T = s.roomT, Pk = s.roomPPk;
+  const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame;
+  const T = s.roomT;
   /* Off the real kilograms (roomPOf()), so a discharge raises it and a hole lowers it; the BLAST below rides on top of this. */
   const pGauge = roomPGauge(s);
   s.roomBurnOn = 0;
@@ -715,7 +838,7 @@ function roomH2Step(s, dt, G){
   /* s.roomFlame is how far the front has crossed each cell, 0..1, on S: it advances at its own mixture's burning velocity times the clutter around it, and nothing latches. */
   for(let i=0;i<N;i++)
     if(Fl[i] <= 0 && H[i] > 0 && roomFlam(s,i) && roomIgnites(s,G,i)) Fl[i] = 1e-6;
-  let burned = 0, on = 0, pmax = 0;
+  let burned = 0, on = 0;
   for(let i=0;i<N;i++){
     let q = 0;
     if(Fl[i] > 0){
@@ -743,15 +866,10 @@ function roomH2Step(s, dt, G){
     /* The metal fire's fast half joins the deflagration here and nowhere else, and both heat the cell's own air at cv (ROOM_CVAIR); the pool's slow half is an ordinary source in src[]. */
     if(fireQ && fireQ[i] > 0) q += fireQ[i];
     if(q > 0) T[i] = Math.min(ROOM_TMAX, T[i] + q/ROOM_CVAIR);
-    /* Constant-volume gas law off the SAME q, against a compartment that leaks. The denominator is AMBIENT: P0/T_HULL is rho*R, so this is identically (gamma-1)*q/V and has no temperature in it. Only the EXCESS over the volume's own static pressure is a transient, so only that relaxes. */
-    const gz = pGauge[i];
-    const p = Pr[i] + (q > 0 ? ROOM_P0*(q/ROOM_CVAIR)/T_HULL : 0)
-              - Math.max(0, Pr[i]-gz)/ROOM_P_TAU*dt;
-    Pr[i] = Math.max(gz, p > 0 ? p : 0);
-    if(Pr[i]-gz > pmax) pmax = Pr[i]-gz;      // the bang is the excess over what the volume holds on its own
-    /* Monotonic and on S, because "this compartment has been blown up" is a fact about the run: it saves, it loads, and a replay lands on the same battlefield. */
-    if(Pr[i] > Pk[i]) Pk[i] = Pr[i];
+    /* Constant-volume gas law off the SAME q, against a compartment that leaks. The denominator is AMBIENT: P0/T_HULL is rho*R, so this is identically (gamma-1)*q/V and has no temperature in it. */
+    if(q > 0) roomBlastPost(s, i, ROOM_P0*(q/ROOM_CVAIR)/T_HULL);
   }
+  const pmax = roomWaveStep(s, dt, G, pGauge);
   s.roomBurnOn = on; s.roomPMax = pmax;
   if(s.roomFireOn && pmax > s.fireEv.p) s.fireEv.p = pmax;
   /* One event per explosion: a front at 0.05 m/s never trips a per-tick gate, so step.js writes the line when the last flame goes out. */
@@ -908,17 +1026,15 @@ function roomScarAt(s, p){
     if(X>=0&&X<GW&&Y>=0&&Y<GH) v = Math.max(v, s.roomPPk[Y*GW+X]);
   return v;
 }
-function roomPAt(s, p){
+/* One walk over a machine's own cells; `g` is the volume's static pressure per cell, so passing it
+   asks for the BANG - what a source put ON TOP - and leaving it out asks for the field itself. The
+   field may sit below gauge behind a front, and neither reader wants a negative. */
+function roomPAt(s, p, g){
   let v = 0;
   for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
-    if(X>=0&&X<GW&&Y>=0&&Y<GH) v = Math.max(v, s.roomP[Y*GW+X]);
-  return v;
-}
-// the same cells, the BANG only: what the burn put on top of the volume's own static pressure (roomPGauge)
-function roomBlastAt(s, p, g){
-  let v = 0;
-  for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
-    if(X>=0&&X<GW&&Y>=0&&Y<GH){ const i = Y*GW+X; v = Math.max(v, s.roomP[i]-g[i]); }
+    if(X>=0&&X<GW&&Y>=0&&Y<GH){ const i = Y*GW+X;
+      const q = g ? s.roomP[i]-g[i] : s.roomP[i];
+      if(q > v) v = q; }
   return v;
 }
 // volume fraction, the same expression the ignition test uses so a cell cannot draw as safe and burn

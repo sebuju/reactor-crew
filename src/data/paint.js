@@ -144,11 +144,30 @@ const matSealed = (s,g) => !matHoles(s).some(h=>h.a===g.idx||h.b===g.idx);
 const matRegVol = g => g.cells.length*MPC*MPC*ROOM_DEPTH;
 const matRegEqD = g => Math.sqrt(4*g.cells.length*MPC*MPC/Math.PI);
 const matRegPerim = g => g.wall.length*MPC;
+/* The region MEAN of the blast field, one pass per solve: a choked orifice discharges against the
+   volume, not against the cell it stands in, because the wave crosses the compartment in four ticks
+   and the discharge takes seconds. Measured at a hot-leg break, the hole's own cell alternates
+   between the vacuum floor and 1585 kPa while the region climbs smoothly, which on the cell would
+   hand the break a back-pressure of 0.049 MPa one tick and 1.74 the next. */
+let regPMeanScr = null, regPMeanCnt = null, regPMeanFor = null, regPMeanAt = -1;
+function regionPMean(s){
+  if(regPMeanFor === s && regPMeanAt === roomPGen) return regPMeanScr;
+  const R = matRegions(), n = R.regions.length;
+  if(!regPMeanScr || regPMeanScr.length !== n){
+    regPMeanScr = new Float64Array(n); regPMeanCnt = new Float64Array(n); }
+  const m = regPMeanScr.fill(0), cnt = regPMeanCnt.fill(0);
+  for(let i=0;i<GW*GH;i++){ const r = R.of[i]; if(r<0) continue; m[r] += s.roomP[i]; cnt[r]++; }
+  for(let r=0;r<n;r++) if(cnt[r]) m[r] /= cnt[r];
+  regPMeanFor = s; regPMeanAt = roomPGen;
+  return m;
+}
 /* MPa absolute: P.Pcont is the ship's compartment pressure, s.roomP the gauge field roomStep() writes in kPa. */
 function regionP(s,x,y){
   const base = (typeof P!=="undefined" && P && P.Pcont) ? P.Pcont : 0.15;
   if(!s || !s.roomP || x==null || x<0||x>=GW||y==null||y<0||y>=GH) return base;
-  return base + s.roomP[y*GW+x]/1000;
+  const r = matRegions().of[y*GW+x];
+  if(r < 0) return base;
+  return base + regionPMean(s)[r]/1000;
 }
 const regionPAt = (s,p) => p ? regionP(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : regionP(s,null,null);
 
