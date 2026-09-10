@@ -111,6 +111,12 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .cr-dmg-state{font-size:var(--fs-label);color:var(--c-ink2)}
 .cr-dmg-dose{font-size:var(--fs-tiny);margin-top:2px}
 .cr-flt .kit-btn{display:block;width:100%;margin-bottom:4px}
+.cr-flt-row{display:flex;align-items:center;gap:4px;margin-bottom:4px}
+.cr-flt-row .kit-btn{flex:1;margin-bottom:0}
+.cr-flt-row .kit-numinput{flex:0 0 84px}
+.cr-flt-row .kit-segsel{flex:0 0 96px}
+/* menuKey() owns .on for whether the menu is open; this is whether a tool is armed */
+.cr-drawer-armed .kit-menukey-key{color:var(--c-amber);border-color:var(--c-amber)}
 
 .cr-comp-rail{display:flex;flex-direction:column;}
 .kit-well.on > .kit-rule-head{background: color-mix(in srgb, var(--c-amber) 12%, transparent);}

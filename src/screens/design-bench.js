@@ -358,7 +358,7 @@ function ctxItemsDesign(hit){
 /* every gesture on this menu goes through the same door, so anything it places arrives with its figures stated */
 const ctxItemsBaked=(...a)=>ctxItemsDesign(...a).map(it=>Object.assign({},it,{fn:()=>designBakeNew(it.fn)}));
 ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsBaked, title:ctxTitleDesign});
-keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.active="select"; }});
+keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.set("select"); }});
 
 /* one pen per surface: `plan` authors r, `sec` authors z */
 const LATPEN={plan:"fuel",sec:"len",bank:0,hover:null,last:null};
@@ -1091,7 +1091,7 @@ function dbBuild(){
   const tools=KIT.el("div","db-tools"), btns=[];
   for(const t of TOOLS.filter(t=>t.sc==="design")){
     const b=KIT.button(t.label,{size:8, sunk:true, on:TOOL.active===t.id,
-      onClick:()=>{ TOOL.active=t.id; for(const q of btns) q.b.set({on:TOOL.active===q.id}); }});
+      onClick:()=>{ TOOL.set(t.id); for(const q of btns) q.b.set({on:TOOL.active===q.id}); }});
     b.el.classList.add("tool-switch");
     KIT.tip(b.el, t.label, t.tip);
     tools.appendChild(b.el); btns.push({id:t.id,b});

@@ -109,6 +109,15 @@ const ACT = {
               apply:(s,id,v)=>{ if(P.fittings[id] && P.fittings[id].mode==="throttle") s.valveDem[id]=v; }},
   repair   : {lab:"REPAIR PARTY", nolog:true, apply:(s,id)=>{ repairStart(id); }},
   hit      : {lab:"COMBAT HIT",   nolog:true, apply:(s,id)=>{ combatHit(id); }},
+  blast    : {lab:"BLAST",        log:(i,kPa)=>kPa.toFixed(0)+" kPa AT CELL "+(i%GW)+","+((i/GW)|0),
+              apply:(s,i,kPa)=>{ roomBlastPost(s, i, kPa);
+                s.roomBang = Math.max(s.roomBang||0, kPa); }},
+  /* two acts, never one a tick: a held button recorded per tick would flood the take forest and make
+     the replay depend on frame timing. The press writes the demand and the tick walks the actual. */
+  injectOn : {lab:"INJECT",       cont:true, log:(kind,rate,tgt)=>kind.toUpperCase()+" "+rate+" AT "+
+                (typeof tgt==="number" ? (tgt%GW)+","+((tgt/GW)|0) : String(tgt).toUpperCase()),
+              apply:(s,kind,rate,target)=>{ s.inject={kind,rate,target}; }},
+  injectOff: {lab:"INJECT OFF",   apply:(s)=>{ s.inject=null; }},
   blackout : {lab:"BLACKOUT",     log:on=>(on===undefined?!S.blackout:!!on)?"ON":"RESTORED",
               apply:(s,on)=>{ s.blackout = on===undefined ? !s.blackout : !!on; }},
   porvArm  : {lab:"PORV STICKS",  log:()=>"ARMED FOR NEXT LIFT",

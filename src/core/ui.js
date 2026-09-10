@@ -103,6 +103,8 @@ addEventListener("keydown",e=>{
   // menu then prewarm eat Escape ahead of the registry, which takes the first match for good
   if(e.key==="Escape" && ctxMenu){ e.preventDefault(); ctxClose(); return; }
   if(e.key==="Escape" && prewarmBusy()){ e.preventDefault(); prewarmCancel(); return; }
+  // a focused field owns the keyboard: every registry key is a character somebody is typing
+  if(uiTyping()) return;
   const nk=navKey(e);
   if(nk && navLive_()){
     e.preventDefault();
@@ -117,9 +119,9 @@ addEventListener("keydown",e=>{
 const NAV={w:[0,-1], a:[-1,0], s:[0,1], d:[1,0]};
 const navHeld=new Set();
 const navKey=e=>{ const k=e.key&&e.key.length===1 ? e.key.toLowerCase() : ""; return NAV[k]?k:""; };
-const navTyping=()=>{ const el=typeof document!=="undefined" && document.activeElement;
+const uiTyping=()=>{ const el=typeof document!=="undefined" && document.activeElement;
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName||"")); };
-const navLive_=()=>plantScreen() && !navTyping();
+const navLive_=()=>plantScreen();
 function navHeldDir(){ let dx=0, dy=0;
   for(const k of navHeld){ const v=NAV[k]; dx+=v[0]; dy+=v[1]; }
   return [dx,dy]; }
@@ -193,15 +195,36 @@ const hitAt=p=>{
     if(w.host===ui.ptrHost&&inside(w,ptIn(w,p))) return w; }
   return null;
 };
+/* One string makes the tools exclusive by construction. TOOL.set() is the one door onto it, so
+   arming a tool and disarming the last one cannot be two decisions in two files. */
 const TOOL={active:"select"};
 const TOOLS=[
   {id:"select", sc:"design", label:"SELECT",
    tip:"Pick a machine to configure it, and drag it to move it. Click a cell beside a machine to start a pipe there, then drag the pipe's other end to the machine you want it to reach. Drag the pipe itself to pull a waypoint out of it; right click a waypoint to drop it."},
-  {id:"paint", sc:"design", label:"PAINT",
+  {id:"paint", sc:"design", label:"PAINT", stick:true,
    tip:"Drag to paint structure into cells: shielding, or a gas-tight containment wall. A closed shape painted in a gas-tight material IS a containment - gas, heat and a release stop at it - and the seal drawn round it says the fill came back bounded. Hold the right button and sweep to take cells out. Paint blocks a machine and passes a pipe: a run crossing a wall is a penetration."},
-  {id:"hit", sc:"operate", label:"AIMED COMBAT HIT",
-   tip:"Click a machine, a port or a pipe cell to take the hit THERE. One click, then the tool puts itself back; a click on bare deck cancels it."},
+  {id:"hit", sc:"operate", label:"AIMED COMBAT HIT", stick:true,
+   tip:"Click a machine, a port or a pipe cell to take the hit THERE. The tool stays armed until you pick it again or press Escape; a click on bare deck does nothing."},
+  {id:"blast", sc:"operate", label:"BLAST", stick:true, fault:true,
+   tip:"Click a room cell to set a blast off there, at the overpressure in the box beside this key. It arrives in that cell and spreads out from it as a wave, so what it wrecks depends on how far away it is."},
+  {id:"inject", sc:"operate", label:"INJECT", stick:true, fault:true,
+   tip:"Hold the left button on a cell and it adds at the rate in the box beside this key, every tick, until you let go. The right button takes away instead. What it adds is the kind chosen beside it: heat and gas land in a room cell, fluid lands in the machine or pipe under the pointer."},
 ];
+const toolRow = id => TOOLS.filter(t=>t.id===id)[0] || null;
+const toolArmed = () => { const t=toolRow(TOOL.active); return !!(t && t.stick); };
+// the sticking faults, for the drawer that houses them
+const toolFaults = () => TOOLS.filter(t=>t.fault);
+/* Picking the armed tool again returns to SELECT, which is the toggle every caller wants. */
+TOOL.set = id => {
+  const next = (id === TOOL.active && id !== "select") ? "select" : id;
+  if(next === TOOL.active) return next;
+  if(TOOL.active === "paint") matPen = null;
+  if(TOOL.active === "inject") injectStop();
+  ui.drag = null;
+  ctxClose();
+  TOOL.active = next;
+  return next;
+};
 const cellAt=pt=>[Math.floor((pt.x-GX)/CELL), rowAt(pt.y)];
 const cellSame=(a,b)=>!!a&&!!b&&a[0]===b[0]&&a[1]===b[1];
 const matPaintCell = (x,y) => matPaint(x,y, matPen);
@@ -212,6 +235,32 @@ function matLiftAt(pt){ const c=cellAt(pt);
   if(matLiftCell(c[0],c[1])) buildLayout(); }
 // tool state, not a D field: nothing comparing a design signature may see it move
 let matPen = null;
+/* The two fault tools' own dials. Tool state like matPen, never on D and never on S - what reaches S
+   is the act, and only when a button goes down. */
+const FAULT={blastKPa:300, injectKind:"heat"};
+const INJECT_KIND=[
+  {id:"heat",  label:"HEAT",  unit:"kW",   rate:1000, tip:"Kilowatts into the cell's own air, on the same source term a fire uses."},
+  {id:"gas",   label:"GAS",   unit:"kg/s", rate:0.5, tip:"Hydrogen into the cell. Removing takes the cell's whole gas inventory out in proportion, the way a vent set does."},
+  {id:"fluid", label:"FLUID", unit:"kg/s", rate:10,  tip:"Kilograms onto the node under the pointer - a machine or a pipe run. It is booked against `inject`, so the ledger still closes."},
+];
+const injectRow = () => INJECT_KIND.filter(k=>k.id===FAULT.injectKind)[0] || INJECT_KIND[0];
+/* Heat and gas are room-cell fields, so the aim is the bare cell; fluid is plant inventory and lands
+   on a node, so it goes through the same hitAimAt() the combat hit does. The difference is here only. */
+const injectAim = pt => { const c=cellAt(pt);
+  if(c[0]<0||c[0]>=GW||c[1]<0||c[1]>=GH) return null;
+  if(FAULT.injectKind !== "fluid") return c[1]*GW+c[0];
+  const a=hitAimAt(pt);
+  // a run or a machine carries a node; a nozzle and a painted wall do not
+  return (a && a.indexOf("port:") !== 0 && a.indexOf("mat:") !== 0) ? a : null; };
+let injectAt=null;
+function injectGo(pt, sign){
+  const a=injectAim(pt);
+  if(a===null || (a===injectAt && S && S.inject && S.inject.rate*sign>0)) return;
+  injectAt=a;
+  act("injectOn", FAULT.injectKind, injectRow().rate*sign, a);
+}
+function injectStop(){ if(injectAt===null) return; injectAt=null;
+  if(typeof S!=="undefined" && S && S.inject) act("injectOff"); }
 function hitAimAt(pt){
   const p=partAt([pt.x,pt.y]);
   if(p) return p.id;
@@ -234,7 +283,8 @@ function findTip(p){
   return null;
 }
 function tipHover(){
-  if(ui.drag) return null;
+  // a drag covers what it moves, except INJECT, whose whole point is watching the cell answer
+  if(ui.drag && ui.drag.type !== "inject") return null;
   if(isTouch) return (touchTip && performance.now()<touchTip.until) ? touchTip : null;
   return findTip(ui.ptr);
 }
@@ -364,6 +414,11 @@ function uiDown(e,el){
       matLiftAt(vPt(p));
       return;
     }
+    if(screen==="operate" && TOOL.active==="inject" && vHit(p)){
+      dragOn({type:"inject", v:1, sign:-1});
+      injectGo(vPt(p), -1);
+      return;
+    }
     if(w&&w.type==="runend"){
       if(sel===w.rid) sel=null;
       removeRun(w.rid);
@@ -386,8 +441,17 @@ function uiDown(e,el){
   if(screen==="operate" && TOOL.active==="hit" && vHit(p)){
     const aim=hitAimAt(vPt(p));
     if(!aim && w) return;
-    TOOL.active="select";
     if(aim) act("hit",aim);
+    return;
+  }
+  if(screen==="operate" && TOOL.active==="blast" && vHit(p)){
+    const c=cellAt(vPt(p));
+    if(c[0]>=0&&c[0]<GW&&c[1]>=0&&c[1]<GH) act("blast", c[1]*GW+c[0], FAULT.blastKPa);
+    return;
+  }
+  if(screen==="operate" && TOOL.active==="inject" && vHit(p)){
+    dragOn({type:"inject", v:1, sign:1});
+    injectGo(vPt(p), 1);
     return;
   }
   if(screen==="design" && TOOL.active==="paint" && vHit(p)){
@@ -483,6 +547,7 @@ function uiMove(e,el){
         while(y!==c[1]){ y+=Math.sign(c[1]-y); fn(x,y); }
         d.last=c; buildLayout();
       } }
+    else if(d.type==="inject") injectGo(q, d.sign);
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
       // ORDERED bounds: a scale may run backwards, and clamp(min>max) pins everything low
@@ -518,6 +583,7 @@ function uiUp(e,el){
       if(j) sel=mergeRuns(d.rid,w,j.rid,j.which); }
     else runPinCollapse(d.rid,d.i);
   }
+  if(d&&d.type==="inject") injectStop();
   if(d&&d.type==="hull"&&d.c) gridDrag(d.edge,d.c);
   if(d&&d.figWas) designBakeSince(d.figWas);
   ui.drag=null;
@@ -540,7 +606,7 @@ if(typeof document!=="undefined" && document.addEventListener)
 
 function uiBind(el){
   MOUSE.on(el,{down:uiDown, move:uiMove, up:uiUp,
-    cancel(){ ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); },
+    cancel(){ injectStop(); ui.drag=null; ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); },
     // a leave is not a cancel while a hand is down: the grab keeps delivering
     leave(){ if(ui.drag) return;
       ui.ptr={x:-1e4,y:-1e4}; ui.ptrHost=null; uiDirty(); }});

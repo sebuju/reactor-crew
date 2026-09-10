@@ -293,7 +293,7 @@ function crDamageSync(list){
   });
 }
 
-keyAdd({k:"Escape", sc:"operate", lab:"SELECT", fn:()=>{ TOOL.active="select"; }});
+keyAdd({k:"Escape", sc:"operate", lab:"SELECT", fn:()=>{ TOOL.set("select"); }});
 
 function crFaultsBuild(container){
   const scram=(l,o)=>KIT.button(l,o);
@@ -307,17 +307,50 @@ function crFaultsBuild(container){
   KIT.tip(reset.el,"RESET PLANT","Returns the reactor to steady 100% power with all faults cleared. Keeps your current design.");
   const hit=scram("RANDOM COMBAT HIT",{onClick:()=>act("hit")});
   KIT.tip(hit.el,"RANDOM COMBAT HIT","Takes a hit somewhere in the engineering space, weighted toward the hull.");
-  const aim=scram("AIMED COMBAT HIT",{onClick:()=>{ TOOL.active = TOOL.active==="hit"?"select":"hit"; }});
+  const aim=scram("AIMED COMBAT HIT",{onClick:()=>{ TOOL.set("hit"); }});
   KIT.tip(aim.el,"AIMED COMBAT HIT",TOOLS.find(t=>t.id==="hit").tip);
+  /* A sticking tool is a TOOLS row and a number beside it; nothing here tracks armed-ness, because
+     TOOL.active already does and two places holding it is what this drawer was rebuilt to stop. */
+  const tools={};
+  for(const T of toolFaults()){
+    const row=KIT.el("div","cr-flt-row");
+    const b=scram(T.label,{onClick:()=>{ TOOL.set(T.id); }});
+    KIT.tip(b.el,T.label,T.tip);
+    row.appendChild(b.el);
+    let kind=null, num=null;
+    if(T.id==="blast"){
+      num=KIT.numInput({val:FAULT.blastKPa, unit:"kPa", dp:0, title:"BLAST SIZE",
+        tip:"Overpressure at the cell you click, in the same kilopascals the layer is scaled in.",
+        onChange:v=>{ FAULT.blastKPa=Math.max(0,v); }});
+    } else {
+      kind=KIT.segSel(INJECT_KIND.map(k=>k.label),{onSelect:i=>{
+        const k=INJECT_KIND[i]; FAULT.injectKind=k.id; FAULT.injectRate=k.rate;
+        kind.set(i); num.set(k.rate); num.el.querySelector(".kit-numinput-unit").textContent=k.unit; }});
+      kind.set(INJECT_KIND.findIndex(k=>k.id===FAULT.injectKind));
+      num=KIT.numInput({val:injectRow().rate, unit:injectRow().unit, dp:2, title:"INJECT RATE",
+        tip:"Per second, in the chosen kind's own units, added every tick the button is held.",
+        onChange:v=>{ injectRow().rate=v; }});
+      row.appendChild(kind.el);
+    }
+    row.appendChild(num.el);
+    tools[T.id]={b,row};
+  }
   const black=scram("STATION BLACKOUT",{onClick:()=>act("blackout")});
   KIT.tip(black.el,"STATION BLACKOUT","Cuts main power to the coolant pumps.");
   const boron=scram("EMERGENCY BORON",{danger:true,
     onClick:()=>{ for(const id of boronTankIds()) if(!S.tankOpen[id]) act("tankOpen",id); }});
   container.append(porv.el,jam.el,load.el,reset.el,hit.el,aim.el,black.el,boron.el);
-  return {porv,jam,load,reset,hit,aim,black,boron};
+  for(const id in tools) container.appendChild(tools[id].row);
+  return {porv,jam,load,reset,hit,aim,black,boron,tools};
 }
 function crFaultsSync(h){
   if(!P) return;
+  for(const id in h.tools) h.tools[id].b.set({on:TOOL.active===id});
+  /* Its own class, never key.set({on}) - menuKey() already owns `on` for whether the menu is open,
+     and driving it from two places is the conflict this drawer exists to remove. */
+  const armed=toolArmed();
+  if(h.key && h.armed!==armed){ h.armed=armed;
+    h.key.el.classList.toggle("cr-drawer-armed", armed); }
   h.porv.set({on:reliefAnyStuck(S)});
   h.jam.set({on:S.rodJam});
   h.aim.set({on:TOOL.active==="hit"});
@@ -543,12 +576,16 @@ function crBuild(){
   railBlank(rail);
 
   const head=KIT.el("div","scr-head cr-head"); root.appendChild(head);
+  /* the handle comes back too: crFaultsSync() lights the key while a sticking tool is armed */
   const drawer=(label,tip,cls)=>{ const m=KIT.menuKey({label,tip,cls:"cr-drawer"});
-    const body=KIT.el("div",cls); m.menu.appendChild(body); head.appendChild(m.el); return body; };
+    const body=KIT.el("div",cls); m.menu.appendChild(body); head.appendChild(m.el);
+    return {key:m, body}; };
 
-  const logList=drawer("LOG","Everything the plant has done to itself and everything the crew has ordered, newest first.","cr-log");
-  const dmgList=drawer("REPAIR","Every damaged machine, what state its repair is in, and what reaching it would cost a repair party in dose.","cr-dmg");
-  const faults=crFaultsBuild(drawer("FAULTS","The fault injectors: what can be made to go wrong, on demand.","cr-flt"));
+  const logList=drawer("LOG","Everything the plant has done to itself and everything the crew has ordered, newest first.","cr-log").body;
+  const dmgList=drawer("REPAIR","Every damaged machine, what state its repair is in, and what reaching it would cost a repair party in dose.","cr-dmg").body;
+  const fltDrawer=drawer("FAULTS","The fault injectors: what can be made to go wrong, on demand.","cr-flt");
+  const faults=crFaultsBuild(fltDrawer.body);
+  faults.key=fltDrawer.key;
 
   const compRail=KIT.el("div","cr-comp-rail");
   if(!MARGIN_ONLY) rail.appendChild(compRail);

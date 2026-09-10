@@ -49,7 +49,7 @@ function shellInit(){
       if(k==="scenario"&&!scnArmed()) TR.paused=true;
       // a menu or a tool addresses one screen's plant, so neither outlives the screen
       ctxClose();
-      TOOL.active="select";
+      TOOL.set("select");
       screen=k; layout();
     }});
   }
