@@ -95,7 +95,7 @@ const SINK_KEYS=Object.keys(SINK);
 function sigArgs(scope){
   switch(scope){
     case "core": return coreIds();
-    case "sg":   return sgIds();
+    case "sg":   return boilerIds();
     case "pump": return pumpIds();
     case "fit":  return Object.keys(D.fittings);   // D, not P: on the bench P is the LAST plant commissioned
     case "rpsch":return RPS_CH.map(r=>r[0]);
@@ -312,6 +312,17 @@ function buildFeedAuto(sgId){
   const pos=blkMk("integ",{lo:0,hi:1},[pid],"The valve position those increments add up to, shut to wide open.");
   blkMk("sink",{sink:"freg",arg:sgId},[pos],"Drives this generator's feed regulating valve.");
 }
+/* A DIRECT CYCLE has no shell between the core and the machine, so the turbine governor is what holds the loop's pressure: power is set by the rods and the pumps, and the load follows. */
+function buildPressAuto(ci){
+  const p=blkMk("source",{sig:"loopp",arg:String(ci)},null,"The pressure in the loop the turbine is taking its steam off."),
+        set=blkMk("source",{sig:"loopset",arg:String(ci)},null,"What that loop is designed to sit at, read off the drawing. Nothing here states a number.");
+  const a=blkMk("math",{op:"sub"},[p,set],"Over or under pressure, in megapascals. Positive means the boiler is raising more than the machine is taking.");
+  const e=blkMk("math",{op:"div"},[a,set],"The error made relative, so the same tune works whatever the loop is designed at.");
+  const el=blkMk("limit",{lo:-1,hi:1},[e],"Clamped: a bigger error than the setpoint itself is still just wide open or shut.");
+  const pid=blkMk("pid",{kp:PRESS_KP,ti:PRESS_TI,td:0,db:0},[el],"Velocity form: it puts out load steps. Integral time is the governor's own stroke.");
+  const pos=blkMk("integ",{lo:0,hi:100},[pid],"The load demand those steps add up to, in per cent.");
+  blkMk("sink",{sink:"loadDem"},[pos],"Drives the turbine governor. Switch it off and the loop rides its own pressure, which on a direct cycle is the reactor's.");
+}
 /* the setpoints are read off the valve, never copied: its own panel stays the one place they are stated */
 const reliefFitIdsD = () => reliefFitsD().filter(f=>!D.fittings[f].spring);
 function buildReliefAuto(fid){
@@ -365,15 +376,19 @@ function buildStockAutomation(){
   D.segs=["g1"];
   /* numbered only where there is more than one to tell apart */
   const nm=(lab,i,n)=> n>1 ? lab+" "+(i+1) : lab;
-  const cores=coreIds(), feeds=sgIds().filter(id=>pumpIds().some(p=>secGensOf(p).includes(id))),
+  const cores=coreIds(), feeds=boilerIds().filter(id=>pumpIds().some(p=>secGensOf(p).includes(id))),
         reliefs=reliefFitIdsD();
-  cores.forEach((id,i)=>inSeg(nm(coreBoils(id)?"FLOW CTL":"ROD CTL",i,cores.length),
-    ()=>(coreBoils(id)?buildFlowAuto:buildRodAuto)(id),
-    coreBoils(id)
+  /* on a direct cycle the LOAD is the governor's output, so a load-following flow controller would close a loop with nothing at the head of it */
+  const direct=drumIds().length>0;
+  cores.forEach((id,i)=>inSeg(nm(coreBoils(id)&&!direct?"FLOW CTL":"ROD CTL",i,cores.length),
+    ()=>(coreBoils(id)&&!direct?buildFlowAuto:buildRodAuto)(id),
+    coreBoils(id)&&!direct
       ? "Follows load with the coolant pumps. Recirculation sweeps void out of a boiling core and the void is the reactivity, so this plant steers on flow and leaves the rods alone."
       : "Holds average coolant temperature on its load programme by moving the rods, with the nuclear-to-turbine mismatch fed forward so the rods start moving before the temperature has."));
   feeds.forEach((id,i)=>inSeg(nm("FEED",i,feeds.length), ()=>buildFeedAuto(id),
     "Keeps this steam generator fed with what it is boiling off, through its own regulating valve. The error is made relative to the demand, so one tune works at any power."));
+  if(direct) inSeg("PRESS CTL", ()=>buildPressAuto(nodeGraph().coreCirc),
+    "Holds the loop's pressure with the turbine governor. On a direct cycle the machine is the only thing standing between the core and the condenser, so the load follows the steam and power is set by the rods and the pumps.");
   reliefs.forEach((fid,i)=>inSeg(nm("RELIEF",i,reliefs.length), ()=>buildReliefAuto(fid),
     "Opens this power-operated relief valve above its lift point and shuts it below its reseat point. Both are read off the valve itself. It runs on electricity: with the cabinet dark only a spring safety is left."));
   cores.forEach((id,i)=>buildRpsAuto(id,nm("RPS",i,cores.length)));   // makes its own two tabs
