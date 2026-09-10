@@ -800,12 +800,29 @@ function pipeCellPath(pts,r,pad,keep){
   }
   return any;
 }
+// the machines' own tear mark, laid ALONG the pipe: it is the bore that is wrecked, not the tile it crosses
+function pipeTearHatch(w){
+  if(!hatchOK()) return;
+  ctx.save();
+  ctx.globalAlpha=.4; ctx.lineWidth=w;
+  ctx.strokeStyle=hatchPat(C.red, HATCH_P*DRAW_K, HATCH_W*DRAW_K);
+  ctx.stroke();
+  ctx.restore();
+}
 // one clip per RUN, not per hole: a clip forces the rasteriser to start again
 function pipeDamage(L){
   if(!L || !L.dmgParts) return;
   const NET=pipeNetwork(), byKey=new Map();
   for(const q of NET) byKey.set(q.key,q);
   const byRun=new Map(), loose=[];
+  const mark=(key,r)=>{ let a=byRun.get(key); if(!a){ a=[]; byRun.set(key,a); } a.push(r); };
+  // a wrecked nozzle is a torn part too, and the pipe it holds stands in the PORT'S cell, which owns no run
+  for(const id of L.dmgParts){
+    if(typeof id!=="string" || id.indexOf("port:")!==0) continue;
+    const pid=id.slice(5), c=portCell(pid); if(!c) continue;
+    const r=grect(c[0],c[1],1,1);
+    for(const q of NET) if(q.pa===pid || q.pb===pid) mark(q.key,r);
+  }
   for(const id of L.dmgParts){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
@@ -813,9 +830,7 @@ function pipeDamage(L){
     let drew=false;
     for(const key of pipeCellRuns(x,y)){
       if(!byKey.has(key)) continue;
-      drew=true;
-      let a=byRun.get(key); if(!a){ a=[]; byRun.set(key,a); }
-      a.push(r);
+      drew=true; mark(key,r);
     }
     if(!drew) loose.push([k,r]);
   }
@@ -834,6 +849,7 @@ function pipeDamage(L){
     if(any){
       ctx.lineWidth=cw; ctx.strokeStyle=C.red; ctx.stroke();
       ctx.lineWidth=w;  ctx.strokeStyle=C.well; ctx.stroke();
+      pipeTearHatch(cw);
     }
     ctx.restore();
   }
@@ -845,14 +861,15 @@ function pipeDamage(L){
     ctx.save();
     ctx.beginPath(); ctx.rect(r.x,r.y,r.w,r.h); ctx.clip();
     ctx.strokeStyle=C.red; ctx.lineWidth=3*DRAW_K;
+    ctx.beginPath();
     for(const pr of sh.paths){
       const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
-      ctx.beginPath();
       ctx.moveTo(cx+DIRV[a][0]*h, cy+DIRV[a][1]*h);
       ctx.lineTo(cx,cy);
       ctx.lineTo(cx+DIRV[b][0]*h, cy+DIRV[b][1]*h);
-      ctx.stroke();
     }
+    ctx.stroke();
+    pipeTearHatch(3*DRAW_K);
     ctx.restore();
   }
   ctx.restore();

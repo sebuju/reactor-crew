@@ -9,12 +9,26 @@ const HEATZ=[
 ];
 const heatOf = v => { for(let i=0;i<HEATZ.length;i++) if(v<HEATZ[i].t) return i; return HEATZ.length-1; };
 
+/* A gas-tight wall cell holds no atmosphere of its own - matRegions() leaves it out of every region,
+   so every room field stays at its seed there. A survey reads it off the faces it SEPARATES, worst
+   first, which is what contZones() already bands a wall by. */
+function roomFace(get, i, worse){
+  const of=matRegions().of;
+  if(of[i]>=0) return get(i);
+  const X=i%GW, Y=(i/GW)|0;
+  let v=null;
+  const take=j=>{ if(of[j]>=0) v = v===null ? get(j) : worse(v, get(j)); };
+  if(X>0) take(i-1); if(X<GW-1) take(i+1);
+  if(Y>0) take(i-GW); if(Y<GH-1) take(i+GW);
+  return v===null ? get(i) : v;
+}
+
 // fill skips an occupied cell (the radZones() rule); the iso-line does not, because a machine IS a wall to this field
 function roomZones(data){
   const T=data.T, g=data.g;
   if(!T) return;
-  const GN=GW*GH, z=new Uint8Array(GN);
-  for(let i=0;i<GN;i++) z[i]=heatOf(T[i]);
+  const GN=GW*GH, z=new Uint8Array(GN), getT=j=>T[j];
+  for(let i=0;i<GN;i++) z[i]=heatOf(roomFace(getT,i,Math.max));
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
@@ -48,12 +62,16 @@ function roomCellTip(L){
   const i=Y*GW+X, rows=[];
   const row=(lab,s)=>rows.push(lab+s);
   if(L){
-    const rad=layerData("rad",L), r=rad.f[i], T=L.roomT[i],
-          live=L.roomP[i], worst=L.roomPPk[i], h2=roomH2Frac(L,i)*100;
+    // through roomFace(), the layers' own door, or a wall cell reads ambient under a picture that says otherwise
+    const rad=layerData("rad",L), r=rad.f[i],
+          T=roomFace(j=>L.roomT[j],i,Math.max),
+          live=roomFace(j=>L.roomP[j],i,Math.max),
+          worst=roomFace(j=>L.roomPPk[j],i,Math.max),
+          h2=roomFace(j=>roomH2Frac(L,j),i,Math.max)*100;
     if(r>=0.005) row("DOSE         ",r.toFixed(2)+" x  "+ZONE[zoneOf(r)].lab);
     row("AIR TEMP     ",T.toFixed(0)+" K  "+HEATZ[heatOf(T)].lab);
     if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
-    row("OXYGEN       ",(roomO2Frac(L,i)*100).toFixed(1)+" %");
+    row("OXYGEN       ",(roomFace(j=>roomO2Frac(L,j),i,Math.min)*100).toFixed(1)+" %");
     if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
     if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
       roomPoolT(L,i).toFixed(0)+" K"+(roomPoolLit(L,i)?"  BURNING":""));
@@ -77,10 +95,11 @@ function roomCellTip(L){
 // off roomH2Frac(), the same expression the ignition test uses, so a cell cannot draw as safe and burn
 function roomH2Layer(data,L){
   if(!L) return;
+  const getH2=j=>roomH2Frac(L,j), h2At=i=>roomFace(getH2,i,Math.max);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
-      const i=Y*GW+X, f=roomH2Frac(L,i);
+      const i=Y*GW+X, f=h2At(i);
       if(f<=0.002) continue;
       if(data.g[Y][X]) continue;
       ctx.globalAlpha = Math.min(0.22, 0.05+0.19*(f/H2_LFL));
@@ -88,7 +107,7 @@ function roomH2Layer(data,L){
     }
   }
   ctx.strokeStyle=C.h2; ctx.lineWidth=1.2;
-  const lit=i=>roomH2Frac(L,i)>=H2_LFL;
+  const lit=i=>h2At(i)>=H2_LFL;
   const segs=[], atCorner={}, px=X=>GX+X*CELL, py=Y=>rowTop(Y);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), y1=rowTop(Y+1);
@@ -167,19 +186,41 @@ function blastSmooth(F,X,Y){
 }
 function roomPLayer(data,L){
   if(!L) return;
-  const pk=L.roomPPk, live=blastLive(L), sm=BLASTFX.smooth;
+  const pkA=L.roomPPk, live=blastLive(L), sm=BLASTFX.smooth;
+  const pk=i=>roomFace(j=>pkA[j],i,Math.max);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
-      const i=Y*GW+X, v=pk[i];
-      if(v<BLASTFX.lo) continue;
+      const i=Y*GW+X, v=pk(i);
+      if(v<BLASTFX.lo || data.g[Y][X]) continue;
       const z=blastOf(v), Z=BLASTZ[z], x0=GX+X*CELL;
       ctx.globalAlpha=0.25+0.65*scarF(v); fillRect(x0,y,CELL,h,C.scar);
       ctx.globalAlpha=Z.a; fillRect(x0,y,CELL,h,Z.col); ctx.globalAlpha=1;
       const now = sm>0 ? live[i]+(blastSmooth(live,X,Y)-live[i])*sm : live[i];
       if(now>=BLASTFX.lo) fxPulse(x0,y,CELL,h,Z.col,1,4);
-      if(X<GW-1 && blastOf(pk[i+1])!==z) fillRect(x0+CELL-1,y,1,h,Z.col);
-      if(Y<GH-1 && blastOf(pk[i+GW])!==z) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
+      if(X<GW-1 && blastOf(pk(i+1))!==z) fillRect(x0+CELL-1,y,1,h,Z.col);
+      if(Y<GH-1 && blastOf(pk(i+GW))!==z) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
+    }
+  }
+}
+
+// 0.5 kPa is roomCellTip()'s own floor for BLAST NOW, so the picture and the reading start together
+const PNOW_LO=0.5;
+// the live field, never the high-water mark: it relieves on ROOM_P_TAU, so what is drawn IS the wave
+function roomPNowLayer(data,L){
+  if(!L) return;
+  const F=blastLive(L), at=i=>roomFace(j=>F[j],i,Math.max);
+  const band=i=>{ const v=at(i); return v<PNOW_LO?-1:blastOf(v); };
+  for(let Y=0;Y<GH;Y++){
+    const y=rowTop(Y), h=rowTop(Y+1)-y;
+    for(let X=0;X<GW;X++){
+      const i=Y*GW+X, v=at(i), b=band(i);
+      if(b<0 || data.g[Y][X]) continue;
+      const Z=BLASTZ[b], x0=GX+X*CELL;
+      ctx.globalAlpha=Z.a*(0.30+0.70*clamp((v-PNOW_LO)/(BLASTFX.full-PNOW_LO),0,1));
+      fillRect(x0,y,CELL,h,Z.col); ctx.globalAlpha=1;
+      if(X<GW-1 && band(i+1)!==b) fillRect(x0+CELL-1,y,1,h,Z.col);
+      if(Y<GH-1 && band(i+GW)!==b) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
     }
   }
 }
@@ -187,11 +228,12 @@ function roomPLayer(data,L){
 // depletion only: a cell at what air actually holds prints nothing
 function roomO2Layer(data,L){
   if(!L) return;
+  const getO2=j=>roomO2Frac(L,j);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
-      const i=Y*GW+X, f=roomO2Frac(L,i);
-      if(f>=O2_FRAC0*0.9) continue;
+      const i=Y*GW+X, f=roomFace(getO2,i,Math.min);
+      if(f>=O2_FRAC0*0.9 || data.g[Y][X]) continue;
       const inert = f<O2_LOC;
       ctx.globalAlpha = inert ? 0.42 : 0.10+0.30*(1-f/O2_FRAC0);
       fillRect(GX+X*CELL,y,CELL,h, inert?C.blue:C.ink2); ctx.globalAlpha=1;
@@ -208,7 +250,7 @@ function roomNaLayer(data,L){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
       const i=Y*GW+X, kg=L.roomPool[i];
-      if(!(kg>=0.01)) continue;
+      if(!(kg>=0.01) || data.g[Y][X]) continue;
       const lit=roomPoolLit(L,i);
       ctx.globalAlpha = lit ? 0.50 : 0.12+0.30*Math.min(1,kg/cell);
       fillRect(GX+X*CELL,y,CELL,h, lit?C.amber:C.ink2); ctx.globalAlpha=1;
@@ -238,7 +280,7 @@ function heatParts(L){
       {size:7, align:"center", color:q>0?C.amber:C.blue});
   }
 }
-const heatLayer=(data,L,seam)=> seam==="under" ? roomZones(data) : heatParts(L);
+const heatLayer=(data,L,seam)=> seam==="env" ? roomZones(data) : heatParts(L);
 
 // the effect belongs to a BANG, not a cell; every list below is display state off the plant clock, never on S
 const BED_DIM=0.42;                       // the flame bed under a fireball, not instead of one
@@ -581,9 +623,12 @@ function floodLayer(data,L){
     const inRegion=new Set(g.cells);
     for(const i of g.cells){ const X=i%GW, Y=(i/GW)|0;
       if(Y>bot) bot=Y; if(X<x0) x0=X; if(X>x1) x1=X; }
-    const top=rowTop(Math.max(0, bot+1-Math.ceil(d/MPC)));
-    const y1=rowTop(bot+1);
-    ctx.globalAlpha=0.30; fillRect(GX+x0*CELL, top, (x1-x0+1)*CELL, y1-top, C.blue); ctx.globalAlpha=1;
+    const topR=Math.max(0, bot+1-Math.ceil(d/MPC)), top=rowTop(topR);
+    // cell by cell, because a machine under the line draws its own water and must not be tinted twice
+    ctx.globalAlpha=0.30;
+    for(let Y=topR;Y<=bot;Y++){ const yr=rowTop(Y), hr=rowTop(Y+1)-yr;
+      for(let X=x0;X<=x1;X++) if(!data.g[Y][X]) fillRect(GX+X*CELL,yr,CELL,hr,C.blue); }
+    ctx.globalAlpha=1;
     ctx.strokeStyle=C.blue; ctx.lineWidth=1.4;
     ctx.beginPath(); ctx.moveTo(GX+x0*CELL, top+0.7); ctx.lineTo(GX+(x1+1)*CELL, top+0.7); ctx.stroke();
     txt(d.toFixed(1)+" m", GX+(x1+1)*CELL-3, top-3, {size:7, align:"right", color:C.blue});
@@ -591,10 +636,13 @@ function floodLayer(data,L){
       if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
       const j=id.indexOf(","), bx=+id.slice(5,j), by=+id.slice(j+1);
       if(!inRegion.has(by*GW+bx)) continue;
+      // off the same solved rate pipeBreaks() draws the plume at: a drained tear bubbles nothing
+      let q=0;
+      for(const key of pipeCellRuns(bx,by)) q=Math.max(q, (L.spillBy&&L.spillBy["break:"+key])||0);
       const br=grect(bx,by,1,1), bt=Math.max(br.y, top);
       fxCellSpace(br.x, bt, ()=>
         fxBubbles(0, 0, br.w/DRAW_K, (br.y+br.h-bt)/DRAW_K,
-                  fxEase("fld:"+bx+","+by, 1), C.blue, "pool"));
+                  fxEase("fld:"+bx+","+by, clamp(q/SPILL_FULL,0,1)), C.blue, "pool"));
     }
   }
   ctx.restore();

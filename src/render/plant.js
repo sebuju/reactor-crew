@@ -297,8 +297,10 @@ function symAt(p,x,y,w,h,ink,L){
       const word = burst?"BURST" : ruptured?"RUPTURED" : pFrac>SG_P_WARN?"HIGH PRESS"
                  : lv<SG_DRY_LO?"DRY" : lv<SG_DRY?"DRYING" : "LOW";
       if(burst||ruptured||pFrac>SG_P_WARN||lv<SG_LOW)
+        // a wrecked shell prints no level, so its word takes the middle back
         banner(word,cx,X+1,Y+11,W-2,Hh-12,
-               (burst||ruptured||lv<SG_DRY_LO||pFrac>SG_P_HI)?C.red:C.amber, midBase(Y+13,(Hh-12)*.36,9));
+               (burst||ruptured||lv<SG_DRY_LO||pFrac>SG_P_HI)?C.red:C.amber,
+               ruptured?null:midBase(Y+13,(Hh-12)*.36,9));
     }
   } else if(p.role==="ihx"){
     // no steam space, so it is drawn full and has no level
@@ -2356,6 +2358,8 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   pipeNozzles(NET,L);           // the joint, over the shell it lands on
   // a joint STRADDLES a shell, so its valve goes after the component loop: order is priority, and the port is the smaller target
   if(L) drawPortValves(L);
+  // what is in the room is IN FRONT of what stands in it, so the compartment layers go over the joints too
+  layerPass("env",L);
   // the plumes go down BEFORE the layer pass: an effect is behind an instrument, and no switch may turn off the picture of a hole
   if(L) pipeBreaks(L);
   if(L) roomBurnFx(L); else burnIdle();
