@@ -54,11 +54,14 @@ const runEndParts = r => { const ends = runEnds(r.key, r.k); if(!ends) return []
   return out; };
 /* kg/s the run has to carry: the SMALLEST figure either end states. The minimum is what tells an injection line from the leg it is teed into. null where no end states one. */
 /* kg/s ONE machine face states, which is what both a pipe bolted to it and its own casing are sized for. A fitting is transparent and states nothing. */
-const endDutyKgs = (p, face, vap) => { const R = ROLE[p.role];
+const endDutyKgs = (p, face, vap, k) => { const R = ROLE[p.role];
   if(!R || p.role === "fitting") return 0;
   if(p.role === "pump")        return pumpFlow(p.id);
   if(p.role === "turb")        return turbKgs(p.id);
-  if(p.role === "tank")        return tankKg(p.id)/RESERVE_T;
+  /* a drum is a piece of the LOOP, not a reserve: its steam and feed lines carry what it raises and its own legs carry the recirculation */
+  if(p.role === "tank")        return isDrum(p.id)
+                                    ? ((k === "steam" || k === "feed") ? plantSteam()/Math.max(1, boilerCount()) : legDutyKgs())
+                                    : tankKg(p.id)/RESERVE_T;
   if(p.role === "radiator")    return cwDutyKgs();
   if(R.sgtr)                   return onStage(p.id, face, 1)
                                     ? plantSteam()/Math.max(1, sgCount()) : legDutyKgs();
@@ -68,13 +71,14 @@ const endDutyKgs = (p, face, vap) => { const R = ROLE[p.role];
 const runDutyKgs = r => {
   const vap = edgeLaw(r) === LAW_VAPOUR;
   let w = null;
-  for(const {p, face} of runEndParts(r)){ const v = endDutyKgs(p, face, vap);
+  for(const {p, face} of runEndParts(r)){ const v = endDutyKgs(p, face, vap, r.k);
     if(v > 0 && (w === null || v < w)) w = v; }
   return w; };
 /* The vessel the run's own end states, so a turbine exhaust comes out wide and a steam line narrow. */
 const runVapP = r => { let p = null;
   for(const {p: part} of runEndParts(r)){ const R = ROLE[part.role];
-    const q = R && R.sgtr ? sgDesignP(part.id) : (R && R.thermal === "sink") ? condPDes() : null;
+    const q = R && R.sgtr ? sgDesignP(part.id) : isDrum(part.id) ? boilerDesignP(part.id)
+            : (R && R.thermal === "sink") ? condPDes() : null;
     if(q > 0 && (p === null || q < p)) p = q; }
   return p === null ? sgDesignP() : p; };
 /* A relief line is the valve's own bore: it is sized off what it protects, and nothing either end of it states that. */
@@ -657,9 +661,9 @@ const primaryCirc = () => nodeGraph().coreCirc;
 const netInCore = nm => nodeGraph().coreCircs[circOfNode(nm)] === 1;
 const tsatSec = (p, ci) => satT(satOfCirc(ci), p);
 /* the anchor P.turbC is fitted at; a board with no generator takes the core's circuit */
-const steamRhoDes = () => { const id = sgIds()[0];
-  const ci = id !== undefined ? shellCirc(id) : nodeGraph().coreCirc;
-  return Math.max(1e-3, rhogOf(satOfCirc(ci), tsatSec(sgDesignP(), ci))); };
+const steamRhoDes = () => { const id = boilerIds()[0];
+  const ci = id !== undefined ? boilerCirc(id) : nodeGraph().coreCirc;
+  return Math.max(1e-3, rhogOf(satOfCirc(ci), tsatSec(boilerDesignP(), ci))); };
 const psatSec = (T, ci) => satP(satOfCirc(ci), T);
 /* takes a PRESSURE: latent heat is not a constant of a fluid */
 const hfgOfCirc  = (ci,p) => { const c=satOfCirc(ci); return hfgOf(c, satT(c,p)); };
@@ -864,6 +868,69 @@ const tankGasV0 = id => { const t = D.tanks[id]; return t ? t.vol*tankVoidFrac(i
 /* whose water is in s.mBy: an ordinary vessel on the core's circuit. An `inf` tank is a boundary and a secondary tank is still its own pool (step.js), and both keep a book of their own. */
 const tankInField = id => { const t = D.tanks[id];
   return !!t && !t.hold && !t.inf && !!t.cell && tankPrimary(id); };
+/* A DRUM is a two-phase vessel in the field with a vapour path off it: level under full, no gas charge, and a line reaching a turbine. Asked of the drawing through pipeTrace(), never pipeMap(), because runKindFor() asks isDrum() and naming inside the trace would be that cycle. */
+/* the walk is its own, not throughFitting(): that one asks pumpResOf(), which asks isDrum(), which is this */
+const drumSteams = tid => { const seen = {[tid]:1}, stack = [tid];
+  while(stack.length){ const id = stack.pop();
+    for(const c of pipeTrace().conns){
+      const o = c.a === id ? c.b : c.b === id ? c.a : null;
+      if(o == null || seen[o]) continue;
+      const p = partOf(o); if(!p) continue;
+      if(p.role === "turb") return true;
+      seen[o] = 1;
+      if(p.role === "fitting") stack.push(o); } }
+  return false; };
+const drumIds = () => { const slot = graphSlot("drumIds"), was = slot.get(1); if(was) return was;
+  const out = tankIds().filter(id => { const t = D.tanks[id];
+    return tankInField(id) && !t.gas && clamp(t.level,0,100) < 100 && drumSteams(id); });
+  slot.set(1, out); return out; };
+const isDrum = id => drumIds().indexOf(id) >= 0;
+/* Where the recirculating loop ENDS on a direct cycle: the far node of a drum's steam line, and the drum-side face of the valve in its feed line. `valve` is that fitting, with the two faces of its own gate. */
+function drumFence(){
+  const slot = graphSlot("drumFence"), was = slot.get(1); if(was) return was;
+  const out = {loop:{}, feed:{}, valve:{}, any:false};
+  if(drumIds().length) for(const c of pipeMap().conns){
+    for(const [a, b, fb] of [[c.a, c.b, c.sb], [c.b, c.a, c.sa]]){
+      if(!isDrum(a)) continue;
+      const p = partOf(b); if(!p) continue;
+      if(c.k !== "steam" && c.k !== "feed") continue;
+      /* the RAW face the line lands on, because a cut is checked against the graph's own node names and a fold is not one */
+      out.loop[b + fb] = 1; out.any = true;
+      if(c.k === "feed") out.feed[b + fb] = 1;
+      if(c.k !== "feed" || p.role !== "fitting" || fitModeOf(b) === "tee") continue;
+      const IN = roleIntern(ROLE.fitting)[0];
+      const n = coreFold(b + fb), l = coreFold(b + IN.a), r = coreFold(b + IN.b);
+      out.valve[b] = {id: a, in: n, out: n === r ? l : r, dir: n === r ? 1 : -1}; } }
+  slot.set(1, out); return out;
+}
+/* the drums a part's own node reaches from OUTSIDE the fence: what makes a pump a feed pump on a direct cycle */
+function drumFedFrom(node, dead){
+  const F = drumFence(); if(!F.any) return [];
+  const G = nodeGraph(), seen = G.reach([node], F.loop, false, dead), out = [];
+  for(const fid in F.valve){ const v = F.valve[fid];
+    if(seen[v.out] && out.indexOf(v.id) < 0) out.push(v.id); }
+  return out;
+}
+/* the nodes of ci the water RECIRCULATES round: everything but what is past a drum's steam nozzle or its feed valve. null on a plant with no drum, where the circuit is the loop. */
+function loopNodes(ci){
+  const F = drumFence(); if(!F.any) return null;
+  const slot = graphSlot("loopNodes"), was = slot.get(ci); if(was) return was;
+  const G = nodeGraph(), seeds = [];
+  for(const cid of coreIds()) for(const n of (G.nodesOf[cid]||[])) if(G.circuit[n] === ci) seeds.push(n);
+  const seen = G.reach(seeds, F.loop), out = new Set();
+  for(const n in seen) out.add(coreFold(n));
+  slot.set(ci, out); return out;
+}
+/* the node the FEEDWATER stands in before it reaches a drum: the outboard face of that drum's own regulating valve, where the heaters land */
+const drumFeedNode = id => { const F = drumFence();
+  for(const fid in F.valve) if(F.valve[fid].id === id) return F.valve[fid].out;
+  return null; };
+/* a RUN is on the loop only when both its ends are: the steam line has the drum at one end and the header at the other */
+const inLoop = (ci, nm) => { const set = loopNodes(ci); if(!set) return true;
+  const rk = runKeyOfNode(nm);
+  if(!rk) return set.has(nm);
+  const e = runNodeEnds(rk);
+  return !!e && set.has(coreFold(e[0])) && set.has(coreFold(e[1])); };
 /* a hold tank's level IS its node's void fraction; s.tank[id] must not become a second copy */
 const holdLvlRead = (s,id) => s.lvlBy && s.lvlBy[id] !== undefined ? s.lvlBy[id] : s.lvl;
 /* the node's own solved pressure, or NOTHING: before the first solve a vessel has only its charge to state, and netPAt()'s loop-pressure fallback is not that vessel's answer */
@@ -978,7 +1045,7 @@ const dutyC = (q, rho) =>
 const pumpCasingC = (h, q, rho) =>
   Math.max(q,0)/Math.sqrt(2*Math.max(rho||700,1)*PUMP_DROOP*Math.max(h,1e-3)*1e6);
 /* this shell's share of what the plant raises; water on every plant, whatever the primary is */
-const feedTrainC = () => dutyC(P.steamRef/Math.max(sgCount(),1), SAT_WATER.rho);
+const feedTrainC = () => dutyC(P.steamRef/Math.max(boilerCount(),1), SAT_WATER.rho);
 /* 0..1 actual, not demand; s.flowScale is NOT sim state, it is netNatCirc()'s per-solve override */
 const flowOf = (s, pid) =>
   (s.flowBy && s.flowBy[pid]!==undefined ? s.flowBy[pid] : 1)
@@ -1312,6 +1379,11 @@ function netEdges(){
       edge.C = s => row.C(s, p.id, bore, NET_COMP_LEN);
       edge.fit = p.id;
       edge.key = fitEdgeKey(p.id);
+      /* a drum has no feed nozzle of its own, so its regulating valve is the fitting in its feed line: the same gate, the same check valve and the same C a shell's own feed path carries */
+      const dv = drumFence().valve[p.id];
+      if(dv){ const did = dv.id;
+        edge.shellOf = did; edge.shellSign = dv.dir; edge.diode = dv.dir;
+        edge.C = s => feedTrainC()*(1 - clamp((s && s.fregBy && s.fregBy[did]) || 0, 0, 1)); }
     }
     /* one regulating valve per generator: one pump on a shared header cannot hold two shells at level against their own secP() spread */
     if(R.sgtr && IN === roleIns(p)[1]){
@@ -1851,6 +1923,9 @@ function netFixed(net, s){
   /* the settle stands every store down, so the hold tank is pinned at its setpoint for the length of the walk or the piece floats */
   if(netStoreHeld) for(const id of holdTankIds()){ const i = net.tankNode[id];
     if(i !== undefined) f[i] = holdPOf(s, id); }
+  /* a drum is the same case as a shell, and on a direct cycle it is the vessel that AUTHORS the loop's pressure: pinned at its circuit's setpoint for the length of the walk, and a store from the first tick */
+  if(netStoreHeld) for(const id of drumIds()){ const i = net.tankNode[id];
+    if(i !== undefined) f[i] = holdSetP(tankCircuit(id)); }
   /* fixed at what its own gas space holds, open edge or not: an isolated node costs nothing and keeps the fixed SET constant */
   for(const id in net.tankNode){ const i = net.tankNode[id];
     if(D.tanks[id] && D.tanks[id].hold) continue;
@@ -1937,6 +2012,9 @@ function netStore(net, s){
   /* a hold tank takes the generic row above but PINS: a pressurizer is what "something decides this circuit's pressure" means */
   for(const id in net.tankNode) if(D.tanks[id] && D.tanks[id].hold && !netStoreHeld){
     const i = net.tankNode[id]; if(cap[i] > 0) pin[i] = 1; }
+  /* and so does a drum: a vessel with its own bubble in it states an absolute pressure the same way a pressurizer does, and on a direct cycle it is the only thing on the loop that states one */
+  if(!netStoreHeld) for(const id of drumIds()){
+    const i = net.tankNode[id]; if(i !== undefined && cap[i] > 0) pin[i] = 1; }
   /* the charge is a COMPLIANCE and nothing else; on a vessel in the field it is linearised about that node's own last pressure, so the row carries no figure the solve did not produce. `pin` is not a matrix term - it is netReadP()'s "this piece does not float". */
   for(const id in net.tankNode){
     const i = net.tankNode[id], C = tankCapAt(s, id);
@@ -2249,7 +2327,8 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
     /* off the shell EDGE and not any pipe, so however many lines feed it all arrive here and sum; positive is into the shell */
     if(outs && ed.shellOf !== undefined){
       (outs.sgFeedBy || (outs.sgFeedBy = {}));
-      outs.sgFeedBy[ed.shellOf] = (outs.sgFeedBy[ed.shellOf]||0) + q[e];
+      // positive INTO the boiler, whichever face of the valve the drum happens to stand on
+      outs.sgFeedBy[ed.shellOf] = (outs.sgFeedBy[ed.shellOf]||0) + (ed.shellSign === -1 ? -q[e] : q[e]);
     }
     /* signed: primary into secondary is positive, so it reaches zero on its own once the primary is brought down */
     if(outs && ed.kind === "sgtr"){ // LABEL: synthetic edge kind this function invents
@@ -2462,6 +2541,18 @@ function seedRun(pa,pb,vias){
     (D.ports[pa]||{}).p+"@"+ca, "->", (D.ports[pb]||{}).p+"@"+cb, err);
   return rid;
 }
+/* m3 the STOCK drum states, per loop: a real RBMK-1000 loop carries two separators of about 120 m3 each, and this preset draws them as one vessel. */
+const DRUM_VOL = 240;
+/* A vessel, not a machine: `mintTank()` and a plain assign, which is exactly what the bench does. What makes it a drum is the steam line off it, never this call. */
+function mintDrum(id, x, y, n){
+  mintTank(id, x, y);
+  Object.assign(D.tanks[id], { name:"STEAM DRUM "+(n+1), col:"#5fd2e2",
+    tip:"Steam leaves the loop here. The water arriving from the channels is a mixture; what separates out goes to the turbine and the rest goes back down to the pumps, so the level is what is left after the steam has gone. Feed water lands in it through its own regulating valve.",
+    vol:DRUM_VOL, aspect:4, level:50, fluid:"water",
+    gas:null, check:false, auto:"always", burst:null, tsurv:800, pburst:100 });
+  buildLayout();
+  return id;
+}
 /* `n` cells of face, nozzle `i`, `step` apart, walked out from the MIDDLE; the along-face index only - which face is still a hydraulic decision */
 const faceMid = (n, i, step) => { const k = step || 1;
   return Math.floor((n-1)/2) + (i%2 ? -k*Math.ceil(i/2) : k*Math.ceil(i/2)); };
@@ -2469,9 +2560,17 @@ function buildStockPlumbing(opt){
   const loops = (opt && opt.loops) || 1;
   /* `inter` splices an intermediate exchanger into every loop and builds the circuit behind it: six boxes to a loop, so the wider pitch */
   const inter = !!(opt && opt.inter);
-  const PITCH = inter ? 18 : 7;
+  /* `drum` puts a steam drum where the generator stands and takes the steam straight off the loop: a direct cycle. A drum holds two orders more water than a shell, so its box is that much wider and the loops stand further apart. */
+  const drum = !!(opt && opt.drum);
+  const PITCH = inter ? 18 : drum ? 20 : 7;
+  /* the feed riser runs up UNDER the drum's own box, which follows its VOLUME - a literal would land outside it, in the next loop's lane */
+  const drumW = () => drum ? partOf("drum0").w : 0;
+  const riserOff = () => inter ? 3 : drum ? drumW()-4 : 5;
+  /* rows in that riser, top down: the drum's floor nozzle, its regulating valve, then the reserve tie */
+  const DRUM_FV_Y = 12, DRUM_TIE_Y = 16;
   // the engine room stands that much further aft: the feed pump and the reserve stand between it and the last loop
-  const INTER_AFT = inter ? 12 : 0;
+  /* a drum's box reaches most of the way to the next loop's column, and its feed riser stands one clear of that, so the engine room moves aft by the whole vessel */
+  const INTER_AFT = inter ? 12 : drum ? 22 : 0;
   /* a UNIT is a reactor and its loops; a SET is a turbine, condenser and feed pump. Both default to 1, where every offset below is 0 and every id keeps its bare name */
   const units = (opt && opt.units) || 1;
   const sets  = (opt && opt.sets)  || 1;
@@ -2526,7 +2625,9 @@ function buildStockPlumbing(opt){
     const U=sfx(u), ox=uOX(u), oy=uOY(u)+ISL;
     /* one row off the deckhead, and that row is what a containment needs: the drives ride the head */
     mintMachine("core"+U,"core",8+ox,13+oy,opt&&opt.core);
-    for(let i=0;i<loops;i++) mintMachine("sg"+(u*loops+i),"sg",uX(u,i),5+oy);
+    for(let i=0;i<loops;i++){ const li=u*loops+i;
+      if(drum) mintDrum("drum"+li, uX(u,i), 5+oy, li);
+      else mintMachine("sg"+li,"sg",uX(u,i),5+oy); }
     // on a three-circuit ship the generator's column is the intermediate pump's, so the coolant pump takes the lane between them
     for(let i=0;i<loops;i++)
       mintMachine("pump"+(u*loops+i),"pump",uX(u,i)+(inter?4:0),18+oy);
@@ -2612,7 +2713,7 @@ function buildStockPlumbing(opt){
     hold:{p:null}, tsurv:800, pburst:200});
 
   /* off the vessel's own box, never literals: a tank's footprint follows its VOLUME, and two ports may not share a cell */
-  const PZR_W = partOf("pzr"+U).w, RV_X = ox+18+PZR_W+2, RELTK_X = RV_X+3;
+  const PZR_W = partOf("pzr"+U) ? partOf("pzr"+U).w : 3, RV_X = ox+18+PZR_W+2, RELTK_X = RV_X+3;
   tank("reltk",U,RELTK_X,oy+1,{ name:"RELIEF TANK", col:"#8a6cd0",
     tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
     vol:35, level:0, fluid:"contaminated",
@@ -2642,7 +2743,7 @@ function buildStockPlumbing(opt){
 
   /* one header, one tee per generator: a line per generator cannot be drawn, because the safety valves own the rows a second steam lane needs. Two ports facing each other across a cell boundary are a joint and need no pipe */
   // in loop 0's own feed RISER, not beside the pump: the feedwater lines leave the pump's underside
-  const efwtee = fitting("efwtee",U, uX(u,0)+(inter?3:5)+(multi?u:0), oy+(inter?24:12), { name:"EFW TIE", mode:"tee",
+  const efwtee = fitting("efwtee",U, uX(u,0)+riserOff()+(multi?u:0), oy+(inter?24:drum?DRUM_TIE_Y:12), { name:"EFW TIE", mode:"tee",
     tip:"Where the emergency reserve meets the feedwater line. A tee closes nothing: the reserve waits behind its own check valve until the line pressure falls under it." });
   const mstee=[], svf=[];
   for(let i=0;i<loops;i++){
@@ -2654,7 +2755,7 @@ function buildStockPlumbing(opt){
   let islX=-1e9;
   for(const id of ["core"+U,"rods"+U,"pzr"+U,"reltk"+U,"rv0"+U,"tee0"+U,"efwtee"+U]
         .concat(mstee.map(f=>f).filter(Boolean))
-        .concat(Array.from({length:loops},(_,i)=>"sg"+(u*loops+i)))
+        .concat(Array.from({length:loops},(_,i)=>(drum?"drum":"sg")+(u*loops+i)))
         .concat(inter ? Array.from({length:loops},(_,i)=>["ihx","ipump","itank"]
           .map(k=>k+(u*loops+i))).flat() : [])){
     const q=partOf(id); if(q) islX=Math.max(islX, q.x+q.w-1); }
@@ -2688,11 +2789,11 @@ function buildStockPlumbing(opt){
   /* ONE LANE PER RUN - a lane that shares a row with anything else MERGES with it; loop 3 leaves the vessel at its FLOOR, because one port cell stops a lane as dead as a machine does */
   const HOT_ROW =[14,15,16,24];      // out of the vessel, east to its own riser
   // the gap forward of the generator, or of the exchanger that stands in the primary where the generator used to
-  const HOT_COL = i => X(i)+(inter?5:-4);
+  const HOT_COL = i => X(i)+(inter?5:drum?-3:-4);
   /* one lane per feed line, walking UP as the loop index rises while the bilge rows walk DOWN, so their spans cannot meet */
   const FEED_ROW= (s,i) => partOf("feed"+sfx(s)).y+3-i;
   /* one riser column per unit: stacked units share their columns, so every riser would ask for the same lane */
-  const feedCol = (u,i) => uX(u,i)+(inter?3:5)+(multi?u:0);
+  const feedCol = (u,i) => uX(u,i)+riserOff()+(multi?u:0);
   /* one bilge row per loop, off the VESSEL's own floor, so it follows the island */
   const coldRow = (u,i) => { const c=partOf("core"+sfx(u)); return c.y+c.h+1+i; };
   const KEEL=GH-1;
@@ -2709,8 +2810,8 @@ function buildStockPlumbing(opt){
     /* dx 1, not the corner: the fourth cold return IS the corner, and two ports cannot share a cell */
     n.pCoreHpi = has("hpi") ? seedPort("core"+U,1,12) : null;
     const pzrB = tankBox("pzr"+U), relB = tankBox("reltk"+U), hpiB = tankBox("hpi"+U);
-    n.pPzrSurge= seedPort("pzr"+U,1,pzrB.h);
-    n.pPzrRel  = has("rv0") ? seedPort("pzr"+U,pzrB.w,1) : null;
+    n.pPzrSurge= has("pzr") ? seedPort("pzr"+U,1,pzrB.h) : null;
+    n.pPzrRel  = has("pzr") && has("rv0") ? seedPort("pzr"+U,pzrB.w,1) : null;
     n.pTeeL    = seedPort(n.tee0,-1,0);
     n.pTeeT    = seedPort(n.tee0,0,-1);
     n.pTeeR    = seedPort(n.tee0,1,0);
@@ -2760,10 +2861,17 @@ function buildStockPlumbing(opt){
     steam: seedPort("sg"+li,1,-1),
     feed:  seedPort("sg"+li,3,0),
   });
+  /* the same four lines on the same four faces: the mixture in on the left, the downcomer out of the floor, the steam off the top and the feed water in the right-hand end */
+  const drumPorts = li => { const id="drum"+li, b=tankBox(id);
+    return { l:     seedPort(id,-1,1),
+             b:     seedPort(id,1,b.h),
+             steam: seedPort(id,1,-1),
+             /* in the floor, over its own riser: a nozzle on the end face would put the feed line in the next loop's lane */
+             feed:  seedPort(id,Math.max(2,b.w-4),b.h) }; };
   /* the one legal overlap on the board is row 14: loop 0's hot leg stops at the surge tee, west of where any feed line begins */
   for(const n of UN){
     seedRun(n.pCoreHot, n.pTeeL);
-    seedRun(n.pPzrSurge, n.pTeeT);
+    run(n.pPzrSurge, n.pTeeT);
     run(n.pPzrRel, n.pRvL);
     run(n.pRvR, n.pRelTk);
     run(n.pHpi, n.pCoreHpi);
@@ -2797,7 +2905,7 @@ function buildStockPlumbing(opt){
     for(let i=0;i<loops;i++){
       const li = u*loops+i;                    // this generator, on the plant
       const k  = (u%perSet)*loops+i;           // ...and its line's ordinal within its SET
-      const g = sgPorts(li);
+      const g = drum ? drumPorts(li) : sgPorts(li);
       const pumpX = partOf("pump"+li).x;
       const pT = seedPort("pump"+li,1,-1), pB = seedPort("pump"+li,1,partOf("pump"+li).h);
       const teeB = seedPort(n.mstee[i],0,1);
@@ -2838,11 +2946,19 @@ function buildStockPlumbing(opt){
         : [[FEEDX-3, FEED_ROW(s,k)], [FEEDX-3, land], [feedCol(u,i), land]];
       /* the riser stops one row UNDER the nozzle: a waypoint on the port cell asks the run to pass through its own end */
       const FTOP = (inter?7:5)+oy;
-      if(i) seedRun(t.feedL(k), g.feed,
-        (bandVias||[]).concat([[feedCol(u,i),bandVias?land:FEED_ROW(s,k)],[feedCol(u,i),FTOP]]));
+      /* a drum has no feed path of its own to regulate, so the valve is a FITTING in its feed line - that edge is what s.fregBy drives and what carries the check valve */
+      const fv = drum ? fitting("freg"+li,"", feedCol(u,i), oy+DRUM_FV_Y,
+        { name:"FEED REG VALVE "+(li+1), mode:"throttle",
+          tip:"Holds this drum's level by letting through what it is boiling off. Behind it is a check valve, so a drum above its own feed header cannot blow down through the nozzle." }) : null;
+      const land0 = fv ? seedPort(fv,0,1) : g.feed;
+      // a JOINT: the valve's own top port faces the drum's floor nozzle across one cell
+      if(fv) seedRun(seedPort(fv,0,-1), g.feed);
+      const riser = [[feedCol(u,i), fv ? oy+DRUM_TIE_Y+1 : FTOP]];
+      if(i) seedRun(t.feedL(k), land0,
+        (bandVias||[]).concat([[feedCol(u,i),bandVias?land:FEED_ROW(s,k)]]).concat(riser));
       else { seedRun(t.feedL(k), n.pTieB,
                bandVias || [[feedCol(u,0),FEED_ROW(s,k)]]);
-             seedRun(n.pTieT, g.feed, [[feedCol(u,0),FTOP]]); }
+             seedRun(n.pTieT, land0, fv ? [] : [[feedCol(u,0),FTOP]]); }
     }
     /* the header goes on aft through its safety tees, one per generator, each with its own riser to a valve on the skin */
     for(let i=0;i<loops;i++){
@@ -2877,7 +2993,7 @@ function buildStockPlumbing(opt){
     for(let u=0;u<units;u++){
       const U=sfx(u), ids=["core"+U,"rods"+U,"pzr"+U,"reltk"+U,"rv0"+U,"tee0"+U,"efwtee"+U];
       for(let i=0;i<loops;i++){ const li=u*loops+i;
-        ids.push("sg"+li,"pump"+li,"mstee"+li); }   // the safety valves stand outside, on the skin
+        ids.push((drum?"drum":"sg")+li,"pump"+li,"mstee"+li); }   // the safety valves stand outside, on the skin
       let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
       for(const id of ids){ const p=partOf(id); if(!p) continue;
         x0=Math.min(x0,p.x); x1=Math.max(x1,p.x+p.w-1);
@@ -2937,8 +3053,9 @@ const PLANTPRE=[
  ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
- ["RBMK-1000",{loops:2,arch:2,cpump:true,d:{bkp:1,sg:1,chim:0.3}},
-  "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. Boiling the water ADDS reactivity here, so the plant hunts itself and the slow rods arrive late."],
+ /* no pressurizer: on a direct cycle the DRUM is the vessel with the bubble in it, and a hold tank on the same circuit would pin the pressure the governor exists to hold. The relief valve and its tank hang on the pressurizer, so they go with it - what protects this plant is the drums' own safety valves on the steam header, which is what the real machine has. */
+ ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,drop:["pzr","rv0","reltk"],d:{bkp:1,sg:1,chim:0.3}},
+  "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the feed water comes back into the drum and the downcomers feed the pumps. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
  ["MSRE",{loops:1,arch:4,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
  ["WINDSCALE",{loops:1,arch:5,cpump:true,d:{bkp:0,sg:1,chim:0.2},
@@ -2964,7 +3081,7 @@ function plantPreset(i){
   Object.assign(core,dCore);
   /* `drop` is handed to the builder rather than run afterwards, so a preset without an injection tank never places one */
   buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont,
-                      inter:q.inter, cpump:q.cpump, core});
+                      inter:q.inter, drum:q.drum, cpump:q.cpump, core});
   // anything this ship carries that the stock one does not, placed the same way ADD MACHINE places it
   for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);

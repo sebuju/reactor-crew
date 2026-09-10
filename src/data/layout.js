@@ -275,10 +275,12 @@ function pumpBoundsOf(id){
       if(!R) continue;
       if(R.sgtr && onStage(pid, n.slice(pid.length), 1)) S.cands.push([pid, true]);
       else if(R.thermal === "sink") S.cands.push([pid, false]); }
+    /* a drum is not found by the walk above - it stands on the pump's OWN circuit, so every pump on a direct cycle would read it. What this pump has to push into is what it FEEDS. */
+    for(const g of secGensOf(id)) if(isDrum(g) && !S.cands.some(c=>c[0]===g)) S.cands.push([g, true]);
     slot.set(id, S); }
   let hi = null, lo = null, shell = false, hold = null;
   for(const c of S.ci) if(holdOnCirc(c).length){ hold = holdSetP(c); break; }
-  for(const [pid, sg] of S.cands){ const q = sg ? sgDesignP(pid) : COND_P0;
+  for(const [pid, sg] of S.cands){ const q = sg ? boilerDesignP(pid) : COND_P0;
     if(sg) shell = true;
     if(hi === null || q > hi) hi = q;
     if(lo === null || q < lo) lo = q; }
@@ -297,7 +299,8 @@ function pumpResOf(id){
       const p=partAt(v); if(!p || p.id===id) continue;
       seen[v]=1;
       /* a circuit's own expansion vessel is NOT a reserve: it rides the loop, and the pump on it circulates what comes back round rather than drawing the tank down */
-      if(p.role==="tank"){ if(D.tanks[p.id].cool == null && !out.includes(p.id)) out.push(p.id); continue; }
+      /* a circuit's own expansion vessel is not a reserve, and neither is a drum: both ride the loop, and the pump on them circulates what comes back round */
+      if(p.role==="tank"){ if(D.tanks[p.id].cool == null && !isDrum(p.id) && !out.includes(p.id)) out.push(p.id); continue; }
       /* A suction line may have valves and tees in it; what stands behind another MACHINE is that machine's suction, not this one's. */
       if(p.role!=="fitting") continue;
       stack.push(v); } }
@@ -614,6 +617,8 @@ function loopMap(){
   /* Seeded on each generator's PRIMARY nodes with the core's own nodes CUT, because the core is the shared hub. Pass one cuts every gate so a cross-tie cannot merge two standing loops; pass two crosses them and picks up the in-line throttle. */
   let nextLoop=0;
   const cut={}; for(const q of LAY.parts) if(q.role==="core") for(const n of (G.nodesOf[q.id]||[])) cut[n]=1;
+  /* and at the drum's own nozzles: a loop ends where the steam leaves it and the feed water comes back in, or the walk claims the turbine hall and prices its lines at the whole leg flow */
+  for(const n in drumFence().loop) cut[n]=1;
   const seeded=[];
   const claim=(p,i,noGate)=>{
     const seen=G.reach((G.nodesOf[p.id]||[]).filter(n=>G.inCore(n)), cut, noGate);
@@ -622,8 +627,8 @@ function loopMap(){
       if((G.nodesOf[q.id]||[]).some(n=>seen[n])) partLoop[q.id]=i;
     }
   };
-  /* seeded on the generators the plant HAS: one nobody piped is not a loop of its own */
-  for(const id of rolePiped("sg")){
+  /* seeded on the BOILERS the plant has: one nobody piped is not a loop of its own, and on a direct cycle the thing at the top of the loop is a drum */
+  for(const id of boilerIds()){
     if(partLoop[id]!==undefined) continue;
     const p=partOf(id), i=nextLoop++;
     partLoop[id]=i; seeded.push({p,i});
@@ -693,8 +698,10 @@ const sgPrimCirc=pid=>stageCirc(pid,0);
 function secGensOf(pid){
   const slot=graphSlot("secGensOf"), was=slot.get(pid); if(was) return was;
   const G=nodeGraph(), out=[];
-  for(const n of (G.nodesOf[pid]||[]))
+  for(const n of (G.nodesOf[pid]||[])){
     for(const g of secGensFromNode(n)) if(!out.includes(g)) out.push(g);
+    /* a drum stands on the core's own circuit, so the inCore() test above can never see one: what makes this a feed pump is reaching the OUTBOARD face of the drum's own regulating valve */
+    for(const g of drumFedFrom(n)) if(!out.includes(g)) out.push(g); }
   slot.set(pid,out);
   return out;
 }
@@ -714,10 +721,13 @@ function secCircuitOf(pid, seeds){
   const key=pid+"|"+(seeds?seeds.join(","):"");
   if(secCircCache[key]) return secCircCache[key];
   const cut={}; for(const sh of shellFaces()) cut[sh.id+sh.feed]=1;
-  const seen=G.reach(seeds||G.nodesOf[pid]||[], cut), out={sg:false, turb:false, sink:false};
+  /* and at a drum's own feed valve, for the same reason: the secondary is a loop, and on a direct cycle it comes round the other way through the core */
+  for(const n in drumFence().feed) cut[n]=1;
+  const seen=G.reach(seeds||G.nodesOf[pid]||[], cut), out={sg:false, turb:false, sink:false, boiler:false};
   for(const p of LAY.parts){ const R=ROLE[p.role]; if(!R) continue;
     if(!(G.nodesOf[p.id]||[]).some(n=>seen[n])) continue;
-    if(p.role==="sg")      out.sg=true;
+    if(p.role==="sg")      out.sg=out.boiler=true;
+    if(isDrum(p.id))       out.boiler=true;
     if(p.role==="turb")    out.turb=true;
     if(R.thermal==="sink") out.sink=true; }
   return (secCircCache[key]=out);
@@ -725,7 +735,7 @@ function secCircuitOf(pid, seeds){
 /* The share that is piped up, beside roleAlive()'s share that is unbroken - a machine can be both. No turbine is not an unpiped turbine, so none of none is 1. */
 const turbPiped=()=>{ const ids=LAY.parts.filter(p=>p.role==="turb").map(p=>p.id);
   if(!ids.length) return 1;
-  return ids.filter(id=>{ const c=secCircuitOf(id); return c.sg&&c.sink; }).length/ids.length; };
+  return ids.filter(id=>{ const c=secCircuitOf(id); return c.boiler&&c.sink; }).length/ids.length; };
 /* Seeded at the shell's STEAM face, cut at every shell's FEED face and at the CONDENSER, or the walk reaches the condensate line the long way round. Cut the turbine too and what is left is the HEADER at shell pressure. */
 function steamNodesOf(sgId, cutTurb, dead){
   const G=nodeGraph(), sh=shellFaces().find(s=>s.id===sgId);
@@ -758,8 +768,13 @@ const ihxCount=()=>ihxIds().length;
 const IHX_T_PER_UA   = 8.0e-4;         // t per kW/K - vessel, tubes, intermediate loop
 /* Saturation SG_APPROACH below the coolant programme, off the COOLANT row and never P. SG_P_MAX is not a curve guard: past it the UA that dT0 implies runs the core into its own HIGH FLUX trip. */
 const SG_APPROACH = 25, SG_P_MAX = 17.0, SG_P_MIN = 0.2;
-const sgDesPSuggest = () =>
-  clamp(psatSec(COOLANT[priD().cool].Tref - SG_APPROACH), SG_P_MIN, SG_P_MAX);
+/* Off D alone: this is read while the BOXES are being sized, so LAY does not exist yet and drumIds() cannot be asked. No generator and a vessel drawn with a steam space is a direct cycle. */
+const drumDrawn = () => !Object.keys(D.machines).some(id=>D.machines[id].kind==="sg")
+  && Object.keys(D.tanks).some(id=>{ const t=D.tanks[id];
+       return !!t && !!t.cell && !t.gas && !t.hold && !t.inf && clamp(t.level,0,100) < 100; });
+/* on a direct cycle there is no approach to take: the steam side IS the core's circuit and its design pressure is that circuit's working pressure */
+const sgDesPSuggest = () => drumDrawn() ? COOLANT[priD().cool].P0
+  : clamp(psatSec(COOLANT[priD().cool].Tref - SG_APPROACH), SG_P_MIN, SG_P_MAX);
 /* `?? xSuggest()`, NEVER bake(): baking a PWR's figure at boot would leave every shell rated for water after the coolant is changed. */
 const sgDesPOf = id => D.sgDesP[id] ?? sgDesPSuggest();
 /* The plant-wide figure for anchors about the steam side as a whole. The MEAN, so a mixed plant is not silently rated at its strongest machine. */
@@ -1758,6 +1773,16 @@ function runKindFor(aId,bId,af,bf){
           : isT(A) ? A : isT(B) ? B : null;
   if(t){
     const o = t===A? B : A;
+    /* A DRUM is a piece of the loop with four lines on it, so what names each one is the machine at the far end and the FACE it lands on. Without the steam row the vapour law never applies and the separator is never armed. */
+    if(isDrum(t.id)){
+      if(o.role==="turb") return "steam";
+      if(o.role==="core") return "hot";
+      const IN = roleHead(o.role) && roleIns(o)[0], f = t===A ? bf : af;
+      if(IN && f!=null){ const n = coreFold(o.id+f);
+        if(n === coreFold(o.id+IN.a)) return "cold";     // the downcomer, into the pump's suction
+        if(n === coreFold(o.id+IN.b)) return "feed"; }
+      return "user";
+    }
     if(!primaryTank(t.id)) return "feed";
     /* The line reaching the vessel that authors this circuit's pressure IS the surge line. */
     if(tankHold(t.id)) return "surge";
