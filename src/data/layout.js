@@ -814,8 +814,10 @@ const radLive=id=>{ const p=partOf(id); if(!p) return false;
 const radSrcCount=()=>{ let n=0;
   for(const id in D.machines) if(machRole(id)==="radiator") n++;
   return Math.max(1,n); };
+/* Panels sit in SERIES on one circulating-water run, so the first sheds more than the last and neither is the mean this divides by; sized at the mean share the pair runs hot, and sigma*T^4 turns that straight into condenser backpressure. */
+const SINK_MARGIN=1.18;
 /* One panel's share of the plant's rejection at the sink the condenser was priced against; never derived(), which would ask itself. */
-const radAreaSuggest=id=>plantDuty()*1000
+const radAreaSuggest=id=>plantDuty()*SINK_MARGIN*1000
   /(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4))/radSrcCount();
 /* Baked on first read: radAreaSuggest() divides by the panel COUNT, so a live `??` would let a third panel shrink the two already fitted. */
 const radAreaOf=id=>D.radArea[id] ?? radAreaSuggest(id);

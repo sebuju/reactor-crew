@@ -11,16 +11,13 @@ function srand(s){
   return ((t ^ (t>>>14)) >>> 0) / 4294967296;
 }
 
-/* `p:null` = not a yes/no die: it decides which target, not whether. */
+/* No die decides WHETHER anything happens: every fault is injected, through `act()`. These pick which of several equal targets an event that is already happening lands on. */
 const DICE={
-  porvStick:{p:0.18, act:"porvArm",
-    what:"the relief valve fails to reseat after an automatic lift"},
-  hitTarget:{p:null, act:"hit",
+  hitTarget:{act:"hit",
     what:"which component a combat hit destroys - weighted toward the hull"},
-  burstCell:{p:null, act:"hit",
+  burstCell:{act:"hit",
     what:"which cell of an overpressured run splits open"},
   /* Rolled over the argmin set: a wall's weakest cell is very often several. */
-  wallCell:{p:null, act:"hit",
+  wallCell:{act:"hit",
     what:"which of the equally weakest cells of an overpressured wall lets go"}
 };
-const roll=(s,k)=> !s.diceOff && srand(s) < DICE[k].p;

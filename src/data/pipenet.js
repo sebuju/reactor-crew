@@ -955,6 +955,8 @@ const pumpQOf = (s, pid) => (s && s.pumpQBy && s.pumpQBy[pid]!==undefined)
   ? s.pumpQBy[pid] : pumpFlow(pid);
 /* dp = rho*g*H, against the density it was COMMISSIONED at, so a plant at its design point reads exactly 1 */
 const pumpRhoK = (s, pid) => {
+  /* the settle IS the rating point, so it rates at 1: a figure taken at the end of one settle would otherwise derate the pump inside the next */
+  if(netStoreHeld) return 1;
   const r0 = (typeof P!=="undefined" && P && P.pumpRho0) ? P.pumpRho0[pid] : 0;
   if(!(r0 > 0)) return 1;
   const r = netRhoAt(s, pumpSucNode(pid));
@@ -1234,6 +1236,10 @@ function netEdges(){
   for(const p of LAY.parts) if(p.role === "fitting"){
     fitIds.push(p.id); fitMode[p.id] = fitModeOf(p.id); }
 
+  /* A nozzle draws the steam off the top only where there IS a top: a vessel with a level keeps the water it separated, a tee has nowhere to put it and passes its own mixture. Asked of the part, never of the run's kind. */
+  const separates = nid => { const p = partOfNode(nid), R = p && ROLE[p.role];
+    return !!(R && (p.role === "sg" || p.role === "core" || R.thermal === "sink" || tankIdOf(nid))); };
+
   /* two half-length edges in series add their K, so the bends, the nozzles and any in-line throttle go on ONE half only */
   for(const r of net){
     const ends = runEnds(r.key, r.k);
@@ -1254,7 +1260,9 @@ function netEdges(){
     const fa = () => fricOf(bore, ea.w, F.mu[ea.w >= 0 ? u : mid]);
     const fb = () => fricOf(bore, eb.w, F.mu[eb.w >= 0 ? mid : v]);
     /* a vapour run off a two-phase vessel is a SEPARATOR: it draws the steam, never the drum's mixture */
-    if(edgeLaw(r) === LAW_VAPOUR){ ea.gasAt = u; eb.gasAt = v; }
+    if(edgeLaw(r) === LAW_VAPOUR){
+      if(separates(coreFold(ends[0]))) ea.gasAt = u;
+      if(separates(coreFold(ends[1]))) eb.gasAt = v; }
     if(tid){
       /* a tank's line is ordinary pipe, priced off its own drawn bore and length like every other run */
       ea.C = s => (tankLive(s,tid) && portLive(s,r.pa)) ? pipeC(bore, Lh, K0, fa()) : 0;

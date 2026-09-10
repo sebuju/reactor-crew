@@ -43,7 +43,6 @@ const GEST = {
   blackout :{lab:"BLACKOUT",   act:"blackout", lane:"sys", span:"latch", pair:0,
     args:[{lab:"ON", u:"on", def:true}],
     emit:(a,ctx,put)=>put(0,[!!a[0]])},
-  /* commands DICE.porvStick instead of rolling it: a scripted run stands every die down */
   porvArm  :{lab:"PORV STICKS",act:"porvArm", lane:"sys", span:"point", args:[], emit:(a,ctx,put)=>put(0,[])},
   blkOn    :{lab:"BLOCK ON/OFF",act:"blkOn", lane:"sys", span:"latch",
     args:[{lab:"BLOCK", u:"blk", def:"b1"}],

@@ -190,6 +190,8 @@ function* commissionGen(){
       lnCw = lnC; lnKw = lnK;
       P.turbC *= Math.exp(step); resetPlant(); } }
   S.dnbr  = P.dnbr0;
+  /* what every later resetPlant() puts back, so leaving a screen and coming back is the same plant and not another walk's answer */
+  P.snap0 = snapS(S);
   screen="operate"; layout();
 }
 /* what the switchboard delivers, as a share of normal; read once into every pump's speed target, or the blackout is applied twice */
@@ -219,9 +221,9 @@ function tubeStep(s,cs,K,id,burst){
     "The reactor cavity reached "+(gauge*1000).toFixed(0)+" kPa against the "+(lift*1000).toFixed(0)+" its shield weighs. The shield is off, every channel is torn at its top weld and the whole core is open to the room.","shield:"+id);
   /* posted the way a burn posts its own blast, so the damage sweep sees no second mechanism */
   const p=partOf(id); if(!p) return;
-  const g=roomPGauge(s), kPa=lift*1000;
-  for(let X=p.x-1;X<=p.x+p.w;X++) for(let Y=p.y-1;Y<=p.y+p.h;Y++) if(X>=0&&X<GW&&Y>=0&&Y<GH){ const i=Y*GW+X;
-    s.roomP[i]=Math.max(s.roomP[i], g[i]+kPa); if(s.roomP[i]>s.roomPPk[i]) s.roomPPk[i]=s.roomP[i]; }
+  const kPa=lift*1000;
+  for(let X=p.x-1;X<=p.x+p.w;X++) for(let Y=p.y-1;Y<=p.y+p.h;Y++)
+    if(X>=0&&X<GW&&Y>=0&&Y<GH) roomBlastPost(s, Y*GW+X, kPa);
   s.roomBang=Math.max(s.roomBang||0, kPa);
 }
 /* FITTED is "somebody wired a scram", ARMED is "and the block driving it is on" */
@@ -764,11 +766,11 @@ function reliefSet(fid){
 }
 /* the same setpoints off the DRAWING alone, for every design-time reader */
 const reliefSetD = fid => reliefSetOf((D.fittings&&D.fittings[fid])||{}, reliefRefPD(fid));
-/* Opening rolls the stick; a stuck or hand-opened valve does not shut on an order. Answers whether anything moved. */
+/* It sticks only if somebody armed it; a stuck or hand-opened valve does not shut on an order. Answers whether anything moved. */
 function reliefCmd(s,fid,open){
   if(open){ if(s.reliefOpen[fid]) return false;
     s.reliefOpen[fid]=true; s.reliefAuto[fid]=true;
-    s.reliefStuck[fid] = s.reliefArm[fid] || roll(s,"porvStick");
+    s.reliefStuck[fid] = s.reliefArm[fid];
     s.reliefArm[fid]=false;
     if(reliefSecIds().includes(fid)) logE("warn",nameOf(fid)+" LIFTED",
       "Shell pressure reached this valve's set point and it is passing steam to atmosphere. The water going with it does not come back.");
@@ -973,15 +975,10 @@ function massSeed(s){
 const coreHeatKW = id => (HEATBAL.heatBy[id]||0)*P.cores[id].rated*1000;
 function advectSrc(s, dt, runFlow){
   const src = {};
-  /* A machine hands its heat to the water that is there: every term fades with the node's own wetness. */
-  const net = P.net, wetBy = {};
-  const wetOf = nid => { if(wetBy[nid] !== undefined) return wetBy[nid];
-    const i = net ? net.index[nid] : undefined;
-    let w = 1;
-    if(i !== undefined && s.mBy && s.mBy[nid] !== undefined){
-      const eos = net.vol[i]*netRhoAt(s, nid);
-      if(eos > 0) w = Math.max(0, Math.min(1, s.mBy[nid]/eos)); }
-    return (wetBy[nid] = w); };
+  /* A machine hands its heat to the water that is there, and F.wet is the ONE dryness answer: a second ratio off the EOS density read a full condenser as half spent every third tick, and the heat it dropped was still credited to the circulating water. */
+  const net = P.net;
+  const wetOf = nid => { const i = net ? net.index[nid] : undefined;
+    return (i !== undefined && net.F && net.F.wet) ? net.F.wet[i] : 1; };
   const add = (nid, q) => { if(q) src[nid] = (src[nid]||0) + q*wetOf(nid); };
   for(const id of coreIds()){ add(coreFold(id), coreHeatKW(id)); add(coreFold(id), -skinQOf(s,id));
     // what fuel out of its pin handed the water last tick (coreStep's o.fci)
@@ -1207,22 +1204,39 @@ function advectStep(s, dt, runFlow, edgeKg){
       if(ir > room) kIn[i] = Math.max(room, 0)/ir; } }
   for(let e=0;e<net.edges.length;e++){
     const from = eFrom[e]; if(from < 0) continue;
+    const ed = net.edges[e], k = kIn[from === ed.u ? ed.v : ed.u];
+    if(k !== 1) eM[e] *= k; }
+  /* A separator passes what it HAS: a gas nozzle hands over its node's own vapour, plus the vapour arriving in the same tick, and carries the rest at the node's mean - a drum out of steam passes water. Without this a wet node donates its whole flow at hg, charges itself back below its own hf, and prices the gap as a subcooled liquid at gas density. */
+  const gasK = scratch(net, "gasK", net.edges.length, Float64Array, 0);
+  { const vIn = scratch(net, "vIn", net.n, Float64Array, 0),
+          gOut = scratch(net, "gOut", net.n, Float64Array, 0);
+    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+      const ed = net.edges[e], x = net.F.x[from];
+      if(ed.gasAt === from && x > 0){ gasK[e] = 1; gOut[from] += eM[e]; vIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
+      else vIn[from === ed.u ? ed.v : ed.u] += eM[e]*Math.max(0, x); }
+    for(let i=0;i<net.n;i++){ const o = gOut[i]; if(!(o > 0)) continue;
+      const have = mBy[net.name[i]];
+      const budget = (have === undefined ? o*dt : net.F.x[i]*have) / dt + vIn[i];
+      if(o > budget) for(let e=0;e<net.edges.length;e++)
+        if(gasK[e] === 1 && eFrom[e] === i) gasK[e] = Math.max(budget, 0)/o; } }
+  for(let e=0;e<net.edges.length;e++){
+    const from = eFrom[e]; if(from < 0) continue;
     const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
-    const k = kIn[to]; if(k !== 1) eM[e] *= k;
     const m = eM[e], fn = net.name[from];
     // a steam nozzle hands over the VAPOUR: its enthalpy, and the gas the node is carrying
-    const gas = ed.gasAt === from && net.F.x[from] > 0;
-    const hd = gas ? satHg(netSatOf(fn), net.F.p[from]) : h[fn];
+    const fg = gasK[e], gas = fg > 0;
+    const hg = gas ? satHg(netSatOf(fn), net.F.p[from]) : 0;
+    const hd = gas ? fg*hg + (1 - fg)*h[fn] : h[fn];
     inH[to] += m*hd;
     inM[to] += m;
     // what the steam took over this node's own mean, charged back to it
-    if(gas) src[fn] = (src[fn]||0) - m*(hd - h[fn]);
+    if(gas) src[fn] = (src[fn]||0) - m*fg*(hg - h[fn]);
     if(b){ inB[to] += m*b[fn];
       let cIn = m*cH[fn];
       if(gas && cH[fn] > 0){
         const m0 = mBy[fn] || 0, have = cH[fn]*m0, mine = cH[fn]*m*dt;
         // all of it is in the vapour, and a node may not hand over more than it holds
-        const extra = Math.min(mine*(1/net.F.x[from] - 1),
+        const extra = Math.min(fg*mine*(1/net.F.x[from] - 1),
                                Math.max(0, have - mine - (h2Take[fn]||0)*m0));
         cIn += extra/dt;
         if(m0 > 0) h2Take[fn] = (h2Take[fn]||0) + extra/m0;
@@ -1699,6 +1713,30 @@ const ledgerOut = s => { let k=0; for(const n in s.massOut) k += s.massOut[n]; r
 const sumpKg = s => { let k=0; for(const j in (s.sump||{})) k += s.sump[j]; return k; };
 // kg out of the plant, by name. Negative is a boundary feeding it.
 const book = (s,name,kg) => { if(kg) s.massOut[name] = (s.massOut[name]||0) + kg; };
+/* The INJECT tool's fluid half. It is a boundary the player is holding open, so what it lands on the
+   node is booked against `inject` with the sign reversed and the ledger still closes. */
+function injectNode(tgt){
+  const net = P && P.net;
+  if(!net || !tgt) return null;
+  if(tgt.indexOf("pipe:") === 0){
+    const own = pipeMap().cellOwner[tgt.slice(5)];
+    const n = own && own.length && runNodeOf(own[0]);
+    return (n && net.index[n] !== undefined) ? n : null; }
+  for(let i=0;i<net.n;i++){ const p = net.partOfNode(net.name[i]);
+    if(p && p.id === tgt) return net.name[i]; }
+  return null;
+}
+function injectFluid(s, dt){
+  const q = s.inject;
+  if(!q || q.kind !== "fluid" || !q.rate) return;
+  const n = injectNode(q.target);
+  if(!n || s.mBy[n] === undefined) return;
+  const have = s.mBy[n];
+  const kg = q.rate > 0 ? q.rate*dt : -Math.min(-q.rate*dt, have);
+  if(!kg) return;
+  s.mBy[n] = have + kg;
+  book(s, "inject", -kg);
+}
 /* water let go inside a bounded region comes back into the held side of the book against a negative `sump` line; it floods from the bottom cell up and drowns what it reaches */
 function sumpStep(s, dt){
   const G = P.net; if(!G) return;
@@ -1870,6 +1908,16 @@ let plantGen=0;
 function resetPlant(){
   plantGen++;
   for(const k in feedInHBy) delete feedInHBy[k];
+  /* the plant commissioning built, put back exactly: plantSettle() is a fixed-point walk that limit-cycles on the secondary, so re-running it on the same drawing lands a different plant */
+  if(P.snap0 && P.dsig === designSig()) restoreS(P.snap0); else plantSettle();
+  LOG=[]; initHist();
+  if(typeof pipeReset==="function") pipeReset();
+  if(typeof fxReset==="function") fxReset();
+  blkSeedOuts(S);
+  logE("info","PLANT AT POWER",
+    P.name+" commissioned at "+P.rated.toFixed(0)+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
+}
+function plantSettle(){
   const x0=startOf("rodCommon",RODX0);
   S={coreBy:{}, n:0,C:null,I:0,X:P.X0,
      Tf:P.TfRef,Tavg:P.Tref,rodPos:x0,rodDem:x0,rodJam:false,rodBand:false,scrammed:false,
@@ -1950,6 +1998,9 @@ function resetPlant(){
      tankOver:{},
      /* kg out of the plant by named term, cumulative, so a tick differences it rather than clearing it */
      massOut:{}, massRes:0, massWarn:0, massWarnT:0,
+     /* the INJECT tool's live order: the gesture writes a demand, the tick walks the actual, and one
+        act on press and one on release keep a held button off the take forest */
+     inject:null,
      /* kg standing on each region's floor, keyed by its lowest cell: water that has left the plant and is still on the ship */
      sump:{},
      /* what each tank's AUTORULE decided last tick; a rule with two setpoints has to know whether it is already running */
@@ -2007,6 +2058,8 @@ function resetPlant(){
      /* oxygen seeded at what air holds, the flame front's progress per cell, and the pressure that breaks things; declared here because the snapshot cloner throws on anything it does not know */
      roomO2:new Float32Array(GW*GH).fill(ROOM_O2_0),
      roomFlame:new Float32Array(GW*GH), roomP:new Float32Array(GW*GH),
+     /* the blast wave's momentum, m/s on the faces: roomPU on the +x face of each cell, roomPV on the +y */
+     roomPU:new Float32Array(GW*GH), roomPV:new Float32Array(GW*GH),
      /* the metal on the deck and its energy, datum liquid at the melting point, so a pool has a temperature to take the ignition test with */
      roomPool:new Float32Array(GW*GH), roomPoolE:new Float32Array(GW*GH),
      /* kg each catch pan's drain has taken off the deck; the metal was booked out at the opening it left through, so this moves no book */
@@ -2327,12 +2380,6 @@ function resetPlant(){
     coreEach(S,(cs,K,id)=>{ const m = S.mBy[coreFold(id)]; K.coreKg0 = m !== undefined ? m : 0; }); }
   if(P.invKg0 > 0) S.inv = 100*invNodesKg(S)/P.invKg0;
   coreEach(S,(cs,K,id)=>{ if(K.invKg0 > 0) S.invBy[circKey(K.circ)] = 100*invNodesKg(S, id)/K.invKg0; });
-  LOG=[]; initHist();
-  if(typeof pipeReset==="function") pipeReset();
-  if(typeof fxReset==="function") fxReset();
-  blkSeedOuts(S);
-  logE("info","PLANT AT POWER",
-    P.name+" commissioned at "+P.rated.toFixed(0)+" MWt, holding "+(P.n0*100).toFixed(1)+"% - pipe run and pump head decide how much of the rating the loop can actually carry. Everything that happens from here is logged with the reason.");
 }
 /* the one door for the built-in law and a wired ROD DRIVE sink; the increment is capped at what the drive delivers in a tick, and split, the same error reaches every bank left on AUTO, deliberately undivided */
 function rodApply(s,cs,K,step,dt){
@@ -2947,6 +2994,7 @@ function stepMarch(dt){
     /* radParty() wants the coldest free cell next to the job, never the job's own footprint; no party out, no rate */
     s.repRate  = s.repair ? repairRadRate(f, s.repair.id) : 0; }
 
+  injectFluid(s, dt);
   roomStep(s, dt);
   /* what the blast costs: instantaneous, not integrated, so a machine either survives the peak its own cells saw or it does not */
   { /* the bang is its own event, latched on s.burnEv so it fires once per passage, at the peak that first threatens the weakest machine */
@@ -2958,14 +3006,14 @@ function stepMarch(dt){
         " kPa the weakest machine on this plant is built for. The compartment relieves itself in about half a second, so what it costs is decided now.");
     }
     const crushLive = {};
-    /* the bang is judged on what the burn put ON TOP of the volume's own static pressure (roomBlastAt), never on s.roomP itself */
+    /* the bang is judged on what a source put ON TOP of the volume's own static pressure, never on s.roomP itself */
     const gauge = roomPGauge(s);
     for(const p of LAY.parts){
       const lim = partPburst(p);
       if(!lim || !fitted(p)) continue;
       crushLive[p.id] = 1;
       if(s.dmgParts.indexOf(p.id) >= 0){ s.roomCrush[p.id]=0; continue; }
-      const pk = roomPAt(s,p), bang = (s.roomBurnOn || s.roomFireOn || s.roomBang) ? roomBlastAt(s,p,gauge) : 0;
+      const pk = roomPAt(s,p), bang = (s.roomBurnOn || s.roomFireOn || s.roomBang) ? roomPAt(s,p,gauge) : 0;
       const blast = bang >= lim;
       const clim = lim*ROOM_CRUSH_K;
       if(blast) s.roomCrush[p.id]=0;
