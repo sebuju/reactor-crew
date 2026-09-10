@@ -110,7 +110,7 @@ const ACT = {
   repair   : {lab:"REPAIR PARTY", nolog:true, apply:(s,id)=>{ repairStart(id); }},
   hit      : {lab:"COMBAT HIT",   nolog:true, apply:(s,id)=>{ combatHit(id); }},
   blast    : {lab:"BLAST",        log:(i,kPa)=>kPa.toFixed(0)+" kPa AT CELL "+(i%GW)+","+((i/GW)|0),
-              apply:(s,i,kPa)=>{ roomBlastPost(s, i, kPa);
+              apply:(s,i,kPa)=>{ roomBang(s, i, kPa/ROOM_P0*T_HULL*ROOM_CVAIR);
                 s.roomBang = Math.max(s.roomBang||0, kPa); }},
   /* two acts, never one a tick: a held button recorded per tick would flood the take forest and make
      the replay depend on frame timing. The press writes the demand and the tick walks the actual. */

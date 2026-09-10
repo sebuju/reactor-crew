@@ -210,11 +210,23 @@ const matThick = (x,y) => { if(x<0||x>=GW||y<0||y>=GH) return matThickRaw(x,y);
   const A=matRegions().thick, i=y*GW+x, v=A[i];
   return v===v ? v : (A[i]=matThickRaw(x,y)); };
 const MAT_PDES = 0.5;   // MPa differential a region's boundary is built to hold
-/* The worst cell's gauge kPa, as MPa: hoop stress is driven by the difference across the wall, never the absolute. */
+/* The worst cell's gauge kPa, as MPa. A READOUT: the panels and the room layer print it, and the wall is judged on matCellDP() instead, because the worst cell of a whole region is not a load on any one cell of its boundary. */
 function regionDP(s,g){
   if(!s || !s.roomP) return 0;
   let v=0; for(const i of g.cells) if(s.roomP[i]>v) v=s.roomP[i];
   return v/1000;
+}
+/* What one wall cell is actually carrying, MPa: the difference across it, over the neighbours that are gas. With the same volume on both faces it is zero, which is correct; with one face it is the gauge, which already carries the difference against ambient. */
+function matCellDP(s,x,y){
+  if(!s || !s.roomP) return 0;
+  const of=matRegions().of;
+  let hi=-Infinity, lo=Infinity, n=0;
+  const put=(X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return;
+    const i=Y*GW+X; if(of[i]<0) return;
+    const p=s.roomP[i]; if(p>hi) hi=p; if(p<lo) lo=p; n++; };
+  put(x-1,y); put(x+1,y); put(x,y-1); put(x,y+1);
+  if(!n) return 0;
+  return (n===1 ? Math.max(0,hi) : hi-lo)/1000;
 }
 const matRatingRaw = (x,y) => { const m=matOf(x,y); if(!m) return 0;
   return 2*m.S*Math.max(matThick(x,y)-WALL_CORR,0)/Math.max(matSpanD(x,y),1); };

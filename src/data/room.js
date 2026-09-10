@@ -206,6 +206,37 @@ function roomGeom(){
   return roomCache;
 }
 
+/* A hole passes the wave, the heat and the species, not only the kilograms roomHoleStep() meters; the design object itself where nothing is wrecked, and only the sim takes this. */
+let roomLiveCache = null, roomLiveSig = "";
+function roomGeomLive(s){
+  const G = roomGeom();
+  let open = "";
+  if(s && s.dmgParts) for(const id of s.dmgParts){
+    if(typeof id !== "string" || id.indexOf("mat:") !== 0) continue;
+    const j = id.indexOf(","), x = +id.slice(4,j), y = +id.slice(j+1);
+    if(x>=0 && x<GW && y>=0 && y<GH && matWall(x,y)) open += "|"+x+","+y;
+  }
+  if(!open) return G;
+  const sig = roomCacheSig+open;
+  if(roomLiveCache && roomLiveSig === sig) return roomLiveCache;
+  const N = GW*GH, hole = new Uint8Array(N);
+  for(const k of open.split("|")){ if(!k) continue;
+    const j = k.indexOf(","); hole[(+k.slice(j+1))*GW + (+k.slice(0,j))] = 1; }
+  const blk = i => (G.tight[i] && !hole[i]) ? 0 : (G.occ[i] ? ROOM_BLOCK : 1);
+  const g0 = ROOM_MIX*ROOM_C/(MPC*MPC);
+  const bx = new Float64Array(N), by = new Float64Array(N);
+  const gx = new Float64Array(N), gUp = new Float64Array(N), gDn = new Float64Array(N);
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X;
+    if(X<GW-1){ bx[i] = blk(i)*blk(i+1); gx[i] = g0*bx[i]; }
+    if(Y<GH-1){ by[i] = blk(i)*blk(i+GW); const b = g0*by[i];
+      gUp[i] = b*ROOM_UP; gDn[i] = b; }
+  }
+  roomLiveCache = Object.assign({}, G, {bx, by, gx, gUp, gDn});
+  roomLiveSig = sig;
+  return roomLiveCache;
+}
+
 /* Scratch, never read across a call: NOT state, every element is written before it is read. */
 let roomSrc = null, roomD = null, roomD2 = null;
 const roomScratch = () => { const N = GW*GH;
@@ -246,12 +277,14 @@ function roomSpread(F, cells, kgps, amount){
   roomShare(cells, kgps, (i,f) => { F[i] += amount*f; });
 }
 const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
-/* The machinery half of the gas law, and the door anything venting into a compartment calls: the same plume and cells, but a MASS - and a pressure, dp = dm*R*T/V on the same weights, so the rise is highest at the opening rather than even over the region. */
+/* The machinery half of the gas law, and the door anything venting into a compartment calls: the same plume and cells, but a MASS - and a jet HOLD, its own stagnation pressure, so the opening stands above the volume it is filling rather than pumping it a tick at a time. The area is one cell face: the jet has spread to fill the cell, which is the finest statement this grid can make. */
 function roomAddGas(s, cells, kg, kgps){
   if(!(kg > 0)) return;
+  const A = MPC*ROOM_DEPTH;
   roomShare(cells, kgps, (i,f) => { const dm = kg*f;
     s.roomM[i] += dm;
-    roomBlastPost(s, i, dm*R_AIR*s.roomT[i]/ROOM_VCELL*1000); });
+    const w = kgps*f, rho = Math.max(s.roomM[i]/ROOM_VCELL, 1e-4);
+    roomJetHold(s, i, w*w/(2*rho*A*A)/1000); });
 }
 /* Charged in ENTHALPY, never cp*dT, and against each cell's OWN air, so the plume both heats and cools and the room can only approach the jet. */
 function roomJetLiq(src, T, cells, kg, h, c){
@@ -302,7 +335,7 @@ function injectRoom(s, dt, src){
 
 /* Sources, transport, sink, in that order; nothing here writes anything but s.roomT, s.roomH2 and the readouts off them. */
 function roomStep(s, dt){
-  const G = roomGeom(), T = s.roomT, N = roomScratch();
+  const G = roomGeomLive(s), T = s.roomT, N = roomScratch();
   const src = roomSrc, d = roomD;
   src.fill(0);
 
@@ -500,30 +533,54 @@ function roomBlastPost(s, i, kPa){
   if(!(kPa > 0) || i < 0 || i >= GW*GH) return;
   roomPostScr()[i] += kPa; roomPostAny = true;
 }
+/* A bang is an impulse and ADDS to the field; a jet is a boundary condition and HOLDS it, or the blowdown is priced into one cell's volume every tick. */
+let roomHold = null, roomHoldAny = false;
+const roomHoldScr = () => { const N = GW*GH;
+  if(!roomHold || roomHold.length !== N) roomHold = new Float64Array(N);
+  return roomHold; };
+function roomJetHold(s, i, kPa){
+  if(!(kPa > 0) || i < 0 || i >= GW*GH) return;
+  const h = roomHoldScr();
+  if(kPa > h[i]) h[i] = kPa;
+  roomHoldAny = true;
+}
+/* The one place kJ in a cell becomes a temperature and the rise that goes with it: P0/T_HULL is rho*R, so it is identically (gamma-1)*q/V. */
+function roomBang(s, i, kJ){
+  if(!(kJ > 0) || i < 0 || i >= GW*GH) return;
+  const dT = kJ/ROOM_CVAIR;
+  s.roomT[i] = Math.min(ROOM_TMAX, s.roomT[i] + dT);
+  roomBlastPost(s, i, ROOM_P0*dT/T_HULL);
+}
 
 let waveKu = null, waveKv = null, waveKp = null, waveRho = null;
+let waveNux = null, waveNuy = null, waveDp = null;
 /* Applies this tick's posts, propagates them, then relaxes what is left toward the region's own
    lumped pressure - the wave is the transient, roomPGauge() is the attractor it converges to.
    Returns the worst excess over gauge, which is what a bang is judged on. */
 function roomWaveStep(s, dt, G, gz){
   roomPGen++;
   const N = GW*GH, Pr = s.roomP, T = s.roomT, Pk = s.roomPPk;
-  const U = s.roomPU, V = s.roomPV, post = roomPostScr();
+  const U = s.roomPU, V = s.roomPV, post = roomPostScr(), hold = roomHoldScr();
   if(roomPostAny) for(let i=0;i<N;i++) if(post[i] !== 0) Pr[i] += post[i];
+  if(roomHoldAny) for(let i=0;i<N;i++)
+    if(hold[i] > 0 && Pr[i] < gz[i] + hold[i]) Pr[i] = gz[i] + hold[i];
 
   /* The gate: on a quiet tick nothing was posted and nothing is above the layer's own floor, so the
      solve is skipped outright and the momentum left over is below anything that draws or damages. */
-  let live = roomPostAny;
+  let live = roomPostAny || roomHoldAny;
   for(let i=0;i<N;i++)
     if(Math.abs(Pr[i]-gz[i]) > WAVE_P_LO || Math.abs(U[i]) > WAVE_U_LO
        || Math.abs(V[i]) > WAVE_U_LO){ live = true; break; }
   if(roomPostAny){ post.fill(0); roomPostAny = false; }
+  if(roomHoldAny){ hold.fill(0); roomHoldAny = false; }
 
   if(!live){ U.fill(0); V.fill(0); }
   else {
     if(!waveKu || waveKu.length !== N){ waveKu = new Float64Array(N);
-      waveKv = new Float64Array(N); waveKp = new Float64Array(N); waveRho = new Float64Array(N); }
+      waveKv = new Float64Array(N); waveKp = new Float64Array(N); waveRho = new Float64Array(N);
+      waveNux = new Float64Array(N); waveNuy = new Float64Array(N); waveDp = new Float64Array(N); }
     const ku = waveKu, kv = waveKv, kp = waveKp, rho = waveRho, bx = G.bx, by = G.by;
+    const nux = waveNux, nuy = waveNuy, dP = waveDp;
     for(let i=0;i<N;i++) rho[i] = Math.max(s.roomM[i]/ROOM_VCELL, 1e-4);
     /* The stability limit is a property of the DISCRETE operator, not of the gas: the momentum update
        takes the face's mean density and the pressure update the cell's own, so across a density step
@@ -539,7 +596,9 @@ function roomWaveStep(s, dt, G, gz){
       if(i >= GW && by[i-GW] !== 0){ const v = a/(rho[i]+rho[i-GW])*by[i-GW]; if(v > c2max) c2max = v; }
     }
     if(!(c2max > 0)) c2max = soundC2(T_HULL);
-    const dtCfl = MPC/(Math.sqrt(c2max)*Math.SQRT2);
+    /* Tighter than the acoustic dx/(c*sqrt(2)): the Rusanov term below must stay MONOTONE - four faces of h*c/(2*dx) summing to at most a half - or the mode it damps is amplified by -1 and the acoustic half grows it. */
+    const cmax = Math.sqrt(c2max);
+    const dtCfl = MPC/(4*cmax);
     const want = Math.max(1, Math.ceil(dt/dtCfl)), n = Math.min(want, WAVE_SUB_MAX);
     if(n < want && !waveCapWarned){ waveCapWarned = true;
       console.warn("[room] blast wave capped at "+WAVE_SUB_MAX+" substeps of "+want
@@ -549,8 +608,12 @@ function roomWaveStep(s, dt, G, gz){
        own mean density, and the mask. A face the mask shuts carries no momentum at all. */
     for(let i=0;i<N;i++){
       kp[i] = h*rho[i]*soundC2(T[i])/1000/MPC;
-      if(bx[i] === 0){ ku[i] = 0; U[i] = 0; } else ku[i] = h*2000/((rho[i]+rho[i+1])*MPC)*bx[i];
-      if(by[i] === 0){ kv[i] = 0; V[i] = 0; } else kv[i] = h*2000/((rho[i]+rho[i+GW])*MPC)*by[i];
+      if(bx[i] === 0){ ku[i] = 0; U[i] = 0; nux[i] = 0; }
+      else { ku[i] = h*2000/((rho[i]+rho[i+1])*MPC)*bx[i];
+             nux[i] = h*Math.sqrt(soundC2((T[i]+T[i+1])/2))/(2*MPC)*bx[i]; }
+      if(by[i] === 0){ kv[i] = 0; V[i] = 0; nuy[i] = 0; }
+      else { kv[i] = h*2000/((rho[i]+rho[i+GW])*MPC)*by[i];
+             nuy[i] = h*Math.sqrt(soundC2((T[i]+T[i+GW])/2))/(2*MPC)*by[i]; }
     }
     /* U[i] is the face between i and i+1, so the last column is never written and stays zero; the
        same entry is what the first column of the next row reads as its own left face. */
@@ -561,6 +624,13 @@ function roomWaveStep(s, dt, G, gz){
       Pr[0] -= kp[0]*(U[0] + V[0]);
       for(let i=1;i<GW;i++) Pr[i] -= kp[i]*(U[i] - U[i-1] + V[i]);
       for(let i=GW;i<N;i++) Pr[i] -= kp[i]*(U[i] - U[i-1] + V[i] - V[i-GW]);
+      /* The Rusanov flux, nothing fitted: central differences alone leave the shortest mode this grid holds with a group velocity of exactly zero, so a point source stands on its own cells and rings. */
+      dP.fill(0);
+      for(let i=0;i<nx;i++) if(nux[i] !== 0){ const q = nux[i]*(Pr[i+1]-Pr[i]);
+        dP[i] += q; dP[i+1] -= q; }
+      for(let i=0;i<ny;i++) if(nuy[i] !== 0){ const q = nuy[i]*(Pr[i+GW]-Pr[i]);
+        dP[i] += q; dP[i+GW] -= q; }
+      for(let i=0;i<N;i++) Pr[i] += dP[i];
     }
   }
   /* Only the EXCESS over what the volume holds on its own is a transient, so only that relaxes, and
@@ -865,9 +935,7 @@ function roomH2Step(s, dt, G){
     }
     /* The metal fire's fast half joins the deflagration here and nowhere else, and both heat the cell's own air at cv (ROOM_CVAIR); the pool's slow half is an ordinary source in src[]. */
     if(fireQ && fireQ[i] > 0) q += fireQ[i];
-    if(q > 0) T[i] = Math.min(ROOM_TMAX, T[i] + q/ROOM_CVAIR);
-    /* Constant-volume gas law off the SAME q, against a compartment that leaks. The denominator is AMBIENT: P0/T_HULL is rho*R, so this is identically (gamma-1)*q/V and has no temperature in it. */
-    if(q > 0) roomBlastPost(s, i, ROOM_P0*(q/ROOM_CVAIR)/T_HULL);
+    if(q > 0) roomBang(s, i, q);
   }
   const pmax = roomWaveStep(s, dt, G, pGauge);
   s.roomBurnOn = on; s.roomPMax = pmax;

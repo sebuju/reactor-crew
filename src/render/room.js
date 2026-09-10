@@ -217,7 +217,8 @@ function roomPNowLayer(data,L){
       const i=Y*GW+X, v=at(i), b=band(i);
       if(b<0 || data.g[Y][X]) continue;
       const Z=BLASTZ[b], x0=GX+X*CELL;
-      ctx.globalAlpha=Z.a*(0.30+0.70*clamp((v-PNOW_LO)/(BLASTFX.full-PNOW_LO),0,1));
+      /* Weighted to the FLOOR, not the span: the bands are the machines' own limits and a real field sits at single-digit kPa, so a ramp against BLASTFX.full 600 draws the honest answer at 3 % and hides it. */
+      ctx.globalAlpha=Z.a*(0.55+0.45*clamp((v-PNOW_LO)/(BLASTFX.full-PNOW_LO),0,1));
       fillRect(x0,y,CELL,h,Z.col); ctx.globalAlpha=1;
       if(X<GW-1 && band(i+1)!==b) fillRect(x0+CELL-1,y,1,h,Z.col);
       if(Y<GH-1 && band(i+GW)!==b) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
