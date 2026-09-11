@@ -60,7 +60,7 @@ const NOZZLE_HALF_MAX = 5*DRAW_K;
 const pipeNozzleHalf = () => NOZZLE_HALF_MAX;
 // addressed by PORT, not by (part, face) - two ports can share a face; takes the live state, never S, because the bench draws nozzles too
 function portColOf(pid,L){
-  // a wrecked joint is empty: the red is the WALL and the bore is deck
+  // a wrecked joint is empty: the bore is deck
   if(portWrecked(L,pid)) return C.well;
   if(L && L.portShut && L.portShut[pid]) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
@@ -78,11 +78,9 @@ function nozzleRect(px,py,flat,bore){
   return {x:px-bx-NOZZLE_CASE, y:py-by-NOZZLE_CASE,
           w:2*bx+2*NOZZLE_CASE, h:2*by+2*NOZZLE_CASE};
 }
-// the wall is what says broken: the casing goes red and the bore keeps its valve colour
-const portCasOf=(pid,L)=>portWrecked(L,pid)?C.red:PIPE_CASE;
-function drawNozzle(px,py,flat,bore,col,cas){
+function drawNozzle(px,py,flat,bore,col){
   const r=nozzleRect(px,py,flat,bore);
-  fillRect(r.x,r.y,r.w,r.h,cas||PIPE_CASE);
+  fillRect(r.x,r.y,r.w,r.h,PIPE_CASE);
   fillRect(r.x+NOZZLE_CASE,r.y+NOZZLE_CASE,
            r.w-2*NOZZLE_CASE,r.h-2*NOZZLE_CASE,col);
 }
@@ -115,7 +113,7 @@ function pipeNozzles(NET,L){
   for(const r of NET){
     for(const e of nozzleEnds(r)){
       const pid=e.end==="a"?r.pa:r.pb;
-      drawNozzle(e.p[0],e.p[1],e.flat,runBore(r),portColOf(pid,L),portCasOf(pid,L));
+      drawNozzle(e.p[0],e.p[1],e.flat,runBore(r),portColOf(pid,L));
     }
   }
 }
@@ -948,7 +946,7 @@ const GHOSTG=CELL-4*DRAW_K;
 function ghostPort(){
   if(ui.drag) return null;
   if(TOOL.active!=="select") return null;
-  const ptr = vHit(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return null;
+  const ptr = vPtr; if(!ptr) return null;
   const g = gridPt([ptr.x,ptr.y]);
   const gx=Math.floor(g.x), gy=Math.floor(g.y);
   if(gx<0||gy<0||gx>=GW||gy>=GH) return null;
@@ -978,7 +976,7 @@ function drawGhostPort(){
 // hitAimAt() is the one resolver, so the outline can never name a machine the press would miss
 function drawHitAim(){
   if(TOOL.active!=="hit"||ui.drag) return;
-  const ptr = vHit(ui.ptr) ? vPt(ui.ptr) : null; if(!ptr) return;
+  const ptr = vPtr; if(!ptr) return;
   const id = hitAimAt(ptr); if(!id) return;
   const p = dmgPart(id); if(!p) return;
   let bx,by,bw,bh;
@@ -1039,18 +1037,9 @@ function drawPortValves(L){
     const wd=push({x:r.x,y:r.y,w:r.w,h:r.h,type:"portv",pid});
     if(hov(wd)) portRing=nr;
     // a port with no run has no joint drawn for it, so it draws its own: piped or not, a shut valve looks the same
-    if(shut||wreck) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col,portCasOf(pid,L));
-    // a wrecked one wears an X, in the WORD's place: red alone is the SHUT valve, which is a position and not this
-    if(wreck){
-      ctx.save();
-      ctx.strokeStyle=C.red; ctx.lineWidth=1.5; ctx.lineCap="butt";
-      const ix=nr.x+1.5, iy=nr.y+1.5, iw=nr.w-3, ih=nr.h-3;
-      ctx.beginPath();
-      ctx.moveTo(ix,iy); ctx.lineTo(ix+iw,iy+ih);
-      ctx.moveTo(ix+iw,iy); ctx.lineTo(ix,iy+ih);
-      ctx.stroke();
-      ctx.restore();
-    }
+    if(shut||wreck) drawNozzle(nx,ny,portFlat(f),bore[pid]||1,col);
+    // the machines' own tear mark: red alone is the SHUT valve, which is a position and not this
+    if(wreck) hatch(nr.x,nr.y,nr.w,nr.h,C.red,.4);
     // portWordDraw() is the one primitive, so the bench and the control room cannot label a joint differently
     const word=wreck?null:portWord(p,f);
     if(word) portWordDraw(pid,f,word,nr);
@@ -2183,6 +2172,7 @@ function plantBackPaint(L,GHp,rowH){
   txt("AFT BULKHEAD",0,0,deck); ctx.restore();
 }
 
+const HULL_GRIP_PX=10;
 // vx/vw are the viewport's left edge and width, so the canvas never draws under a docked panel
 function drawPlant(y0,L,vh,vx,vw,padX,padY){
   PLANT_LM=layoutMetrics(); GY=y0;
@@ -2197,6 +2187,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   const win=Math.min(VIEW_CELLS_W, GW), winH=Math.min(VIEW_CELLS_H, GH);
   vFit(vx==null?GX:vx, GY, vw==null?(W-2*GX):vw, vh||GHp, GX-EL_GUT, GY, fitW+EL_GUT, fitH,
        padX, padY, win*CELL+EL_GUT, winH*CELL);
+  vPtrSet();                                       // before the transform - see vPtr (core/ui.js)
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   // vOrigin() is the one place the letterbox is computed, and the hit test reads the same one
@@ -2210,17 +2201,20 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   // only the two walls that can move without renumbering every cell under them; bench only, a commissioned ship is welded
   if(!L){
     // the handle is put away until the hand is on its own wall, but the hit stays live either way
-    const grab=(x,y,w,h,edge,zone,title,body)=>{
-      const wd=push({x,y,w,h,type:"hull",edge});
-      const on = hovHold({...zone,v:1,host:ui.host}) || (ui.drag&&ui.drag.type==="hull"&&ui.drag.edge===edge);
-      if(on) fillRect(x,y,w,h, hov(wd)?C.amber:"#3a2a22");
-      TIP(x,y,w,h,title,body);
+    // screen furniture straddling the wall, but never wider than the cell it stands in when zoomed out
+    const t=Math.min(HULL_GRIP_PX/VIEW.s, CELL);
+    const grab=(edge,title,body)=>{
+      const r = edge==="r" ? {x:GX+GW*CELL-t/2, y:GY, w:t, h:GHp} : {x:GX, y:GY+GHp-t/2, w:GW*CELL, h:t};
+      const zone = edge==="r" ? {x:GX+(GW-1)*CELL, y:GY, w:CELL+t/2, h:GHp} : {x:GX, y:rowTop(GH-1), w:GW*CELL, h:CELL+t/2};
+      const wd=push({...r,type:"hull",edge});
+      const held = !!ui.drag&&ui.drag.type==="hull"&&ui.drag.edge===edge;
+      if(held || hovHold({...zone,v:1,host:ui.host})){ const b=t/3, col=held||hov(wd)?C.amber:"#3a2a22";
+        if(edge==="r") fillRect(r.x+(t-b)/2, r.y, b, r.h, col); else fillRect(r.x, r.y+(t-b)/2, r.w, b, col); }
+      TIP(r.x,r.y,r.w,r.h,title,body);
     };
-    grab(GX+GW*CELL-2, GY+GHp*0.35, 4, GHp*0.3, "r",
-      {x:GX+(GW-1)*CELL, y:GY, w:CELL, h:GHp}, "AFT BULKHEAD",
+    grab("r", "AFT BULKHEAD",
       "Drag it aft to make the ship longer, forward to make it shorter. Every machine standing outside the hull is marked and blocks commissioning until it is dragged back in.");
-    grab(GX+GW*CELL*0.35, GY+GHp-2, GW*CELL*0.3, 4, "b",
-      {x:GX, y:rowTop(GH-1), w:GW*CELL, h:GY+GHp-rowTop(GH-1)}, "KEEL",
+    grab("b", "KEEL",
       "Drag it down to make the ship deeper, up to make it shallower. Every machine standing outside the hull is marked and blocks commissioning until it is dragged back in.");
     // the board is not re-laid until the release, so the size under the hand is drawn rather than built
     if(ui.drag&&ui.drag.type==="hull"){ const d=ui.drag;
@@ -2239,7 +2233,8 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // BORE is the fluid line's width and WALL the casing beyond it; a run states both in millimetres
     const w = pipeWidth(runBore(r)), cw = w + 2*pipeWallPx(r);
     // ONE radius for every stroke of this run, off the CASING - see pipeBendPath()
-    pipeBendPath(r.pts, pipeBendR(r.pts, cw));
+    const dp = runDrawPts(r, cw);
+    pipeBendPath(dp.pts, dp.R);
     // the outline is around the CASING, so the highlight is the pipe's own shape; a selected run keeps it without the pointer
     if(!pass && (pipeHov===r.key || sel===runIdOf(r))){
       ctx.lineWidth=cw+3*DRAW_K; ctx.strokeStyle=C.amber; ctx.stroke(); }
@@ -2282,21 +2277,26 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // the shell sits 1 symbol unit in from the footprint and the case takes it back, both in SCREEN px
     const boxR = symFull ? (tankRad(p.id)+1)*DRAW_K : 0;
     const boxPath=()=>{ ctx.beginPath(); rr(x,y,w,h,boxR); };
+    // the machine leans off its grid cell; its name, lamp, tags and hit rect do not
+    const lean = live ? partLean(p) : {x:0,y:0};
+    ctx.save(); ctx.translate(lean.x, lean.y);
     if(fit){ if(boxR){ boxPath(); ctx.fillStyle=C.machBg; ctx.fill(); }
              else fillRect(x,y,w,h,C.machBg); }
     if(!fit){ ctx.setLineDash([3,3]); frame(x+3,y+3,w-6,h-6,"#3c4c47"); ctx.setLineDash([]); }
     // a tank's shell is the one glyph whose SIZE is the design figure, so it takes the whole footprint
     if(fit && (symFull || h-sh-nameH > 0))
       drawSym(p, x, symFull?y:y+nameH, w, symFull?h:h-sh-nameH, ink, L);
+    layerPass("skin", L, p);
     if(dmgd) hatch(x+3,y+3,w-6,h-6,C.red,.4);
     else if(!partAccess(p) && fit) cornerTab(x+w,y,9,C.amber);
-    // deferred, so the plate, the symbol and the selection frame all pass underneath the mark
-    const mark = fit ? (L ? annLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
-    if(mark){ const c=nameMark(x,y,nameH);
-      wdots.push(()=> L ? lamp(c.x,c.y,mark) : dot(c.x-MARK_R,c.y-MARK_R,MARK_R*2,mark)); }
     // a part in limbo keeps the mark the drop preview gave it, so letting go changes nothing but that it is now true
     if(p.limbo){ ctx.save(); ctx.setLineDash([4,4]);
       fillRect(x,y,w,h,"rgba(255,90,69,.10)"); frame(x,y,w,h,C.red); ctx.restore(); }
+    ctx.restore();
+    // deferred, so the plate, the symbol and the selection frame all pass underneath the mark
+    const mark = fit ? (L ? annLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
+    if(mark){ const c=nameMark(x,y,nameH);
+      wdots.push(()=> L ? lamp(c.x,c.y,MARK_R,mark) : dot(c.x-MARK_R,c.y-MARK_R,MARK_R*2,mark)); }
     // off the same regionFloodLine() the panel's HOLDS row and the drowning sweep read
     if(live){ const fl=regionFloodLine(L,p);
       if(fl!==null){ const wy=Math.max(y, rowTop(Math.max(0,Math.ceil(fl))));

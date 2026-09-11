@@ -286,6 +286,10 @@ function paramsFor(p){
     meas.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>LATREAD
       .map(r=>[r[0],r[1](cD),r[3]?r[3](cD):null,r[2]])});
     { const vd=()=>derived(id), a=()=>COOLANT[cD.cool];
+      num("CORE PRESSURE DROP","What the water spends getting through this reactor at rated flow: the inlet throttle, the plena and the channels. It sits on the cold leg where it lands, so every pump on this circuit is bought big enough to push through it.",
+          FIG.coreDp.acc(id),
+          "MPa",2,()=>coreDpSuggest(id),null,
+          "What a real machine of this kind spends between its own nozzles.");
       if(cD.tube){
       num("TUBE BORE","How wide one fuel channel is. This core has no vessel: every channel is its own pressure boundary, standing in a graphite stack that sits at room pressure under a shield.",
           FIG.tubeBore.acc(id),
@@ -873,12 +877,12 @@ function paramsForMat(key){
     }
     if(live){ const f=regionFlooded(s,g);
       if(f){ const line=f.bot+1-f.rows;
-        const wet=LAY.parts.filter(q=>matRegionOf(q)===g && q.y+q.h>line).map(q=>partName(q));
+        const wet=LAY.parts.filter(q=>matRegionOf(q)===g && floodDrowns(q,line)).map(q=>partName(q));
         rows.push(["FLOODED TO",f.d.toFixed(1)+" m   "+(regionSump(s,g)/1000).toFixed(1)+" t",
           f.d>0?C.blue:null,
           "How deep the water discharged into this region is standing. It fills from the bottom cell up and it cannot pass the deckhead - what will not fit never enters the compartment's book at all."],
           ["HOLDS",wet.length?wet.join(", "):"nothing yet",wet.length?C.red:null,
-           "What the water line has reached. A machine under it is drowned, and it takes the same red hatch every wrecked machine takes."]); } }
+           "What the water has drowned: a machine goes when the water is two thirds of the way up it, and it takes the same red hatch every wrecked machine takes."]); } }
     const inside=LAY.parts.filter(q=>matRegionOf(q)===g).map(q=>partName(q));
     rows.push(["CONTAINS",inside.length?inside.join(", "):"nothing",null,
       "The machines standing inside this region. They are what its pressure will crush and what its wall is holding the release of."],

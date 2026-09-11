@@ -71,6 +71,11 @@ function pipeBendR(pts,cw){
     minL=Math.min(minL, Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
   return Math.max(0, Math.min(cw*0.75, minL/2));
 }
+// the line a run is stroked along: its traced corners, or every cell while a blast bows it, at the radius the corners set
+function runDrawPts(r,cw){
+  const R=pipeBendR(r.pts,cw), lp=runLeanPts(r);
+  return lp ? {pts:lp, R:Math.min(R,CELL/2)} : {pts:r.pts, R};
+}
 function pipeBendPath(pts,R){
   const n=pts.length;
   ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
@@ -587,8 +592,8 @@ let holdHov=null;
 const holdPartShow = id => holdHov ? holdHov===id : !pipeHov;
 function pipeHovResolve(){
   pipeHov=null; holdHov=null;
-  if(ui.drag || !vHit(ui.ptr)) return;
-  const p=vPt(ui.ptr);
+  if(ui.drag || !vPtr) return;
+  const p=vPtr;
   // the label first, because a label draws over the pipes; only while a layer is on, or the box holds no ink
   if(pipeHovOn()){ const boxes=pipeStackBoxes();
     for(let i=boxes.length-1;i>=0;i--){ const b=boxes[i];
@@ -740,8 +745,9 @@ function pipeFlow(L){
   for(const r of pipeRuns(L)){
     if(runCut(r,L)) continue;   // a severed run carries nothing: no packets over an empty bore
     const w=pipeWidth(runBore(r));
-    // the SAME radius drawPlant() strokes the casing with, or the parcels leave the pipe at every elbow
-    const g=pipeGeom(pipeBendPts(r.pts, pipeBendR(r.pts, w+2*pipeWallPx(r))));
+    // the SAME line and radius drawPlant() strokes the casing with, or the parcels leave the pipe at every elbow
+    const dp=runDrawPts(r, w+2*pipeWallPx(r));
+    const g=pipeGeom(pipeBendPts(dp.pts, dp.R));
     if(!g.len) continue;
     ctx.save(); pipeClip(g,w,w/2);
     // pipeSpd is keyed by the RUN, never the kind: a kind has no entry of its own
@@ -847,20 +853,18 @@ function pipeDamage(L){
     let any=false;
     for(const r of cells) any = pipeCellPath(run.pts,r,cw,true) || any;
     if(any){
-      ctx.lineWidth=cw; ctx.strokeStyle=C.red; ctx.stroke();
-      ctx.lineWidth=w;  ctx.strokeStyle=C.well; ctx.stroke();
+      ctx.lineWidth=w; ctx.strokeStyle=C.well; ctx.stroke();
       pipeTearHatch(cw);
     }
     ctx.restore();
   }
-  // a cell no connection claims has no polyline to borrow, so it takes pipeLoose()'s, in red
+  // a cell no connection claims has no polyline to borrow, so it takes pipeLoose()'s
   for(const [k,r] of loose){
     const cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s];
     if(!sh) continue;
     const cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
     ctx.save();
     ctx.beginPath(); ctx.rect(r.x,r.y,r.w,r.h); ctx.clip();
-    ctx.strokeStyle=C.red; ctx.lineWidth=3*DRAW_K;
     ctx.beginPath();
     for(const pr of sh.paths){
       const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
@@ -989,6 +993,8 @@ function matSealLines(r,faces,w,dead){
 }
 // kg/s at which a breach draws flat out; the SPILL_FULL idiom
 const HOLE_FULL = 300;
+// the same for water, which a whole cell of hole passes by the tonne
+const HOLE_W_FULL = 2000;
 function matPaintDraw(L){
   if(!D.mat) return;
   ctx.save();
@@ -1032,7 +1038,13 @@ function matPaintDraw(L){
         const tx = hq.to%GW, ty = (hq.to/GW)|0;
         fxCellSpace(r.x+r.w/2, r.y+r.h/2, ()=>
           fxJet(0, 0, r.w*0.8/DRAW_K, fxEase("brw:"+k, clamp(hq.q/HOLE_FULL,0,1)),
-                "#ffd0c4", Math.sign(tx-x), Math.sign(ty-y), 37)); } }
+                "#ffd0c4", Math.sign(tx-x), Math.sign(ty-y), 37)); }
+      const hw = L.holeW && L.holeW[k];
+      if(hw && hw.q > 0 && hw.to >= 0){
+        const tx = hw.to%GW, ty = (hw.to/GW)|0;
+        fxCellSpace(r.x+r.w/2, r.y+r.h/2, ()=>
+          fxJet(0, 0, r.w*0.5/DRAW_K, fxEase("brh:"+k, clamp(hw.q/HOLE_W_FULL,0,1)),
+                C.blue, Math.sign(tx-x), Math.sign(ty-y), 53)); } }
   }
   ctx.restore();
 }

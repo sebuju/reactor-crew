@@ -77,12 +77,12 @@ const LAYERS={
   roomn:{group:"COMPARTMENT", label:"METAL POOL", seam:"env",   data:"room", live:true, on:true,
         draw:roomNaLayer,
         tip:"Sodium that has come out of a pipe and is lying on the deck. It is a PLACE: it falls, it runs along the deck, it piles up against the machines, and how far it spread is what decides how fast it burns - a puddle is slow, the same metal spread thin over a bay is not. Dim grey is metal that is not alight; AMBER, labelled with its own temperature, is metal that is. Only the top of a stack burns, because only the top of a stack has air on it. It needs no spark: it comes out of the pipe hundreds of degrees past the temperature it lights itself at, and it goes out only when the pool is gone, the metal has cooled, or the OXYGEN layer says the bay has nothing left to burn with."},
-  roomp:{group:"COMPARTMENT", label:"BLAST",      seam:"env",   data:"room", live:true, on:false,
+  roomp:{group:"COMPARTMENT", label:"BLAST",      seam:["under","skin"], data:"room", live:true, on:true,
         draw:roomPLayer,
-        tip:"What a blast did to each cell, and it STAYS. Overpressure is banded against the machines' own limits rather than round numbers: 20 kPa takes a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel - blue, green, amber, red, bright red. The compartment relieves itself in about half a second, so what is drawn is the HIGH-WATER MARK: the worst each cell has ever seen, never fading, dark with soot in proportion to it and coloured by what that pressure was enough to break. A compartment that has been blown apart three times looks like it, and stays that way until something cleans it. The cells the wave is in right now pulse. No figure is printed - point at a cell for the reading."},
-  roompn:{group:"COMPARTMENT", label:"PRESSURE NOW", seam:"env",  data:"room", live:true, on:false,
+        tip:"What the blast has done to the machines. A dark bite into a machine's side is the scar of every wave that has passed that face, and it grows with each one: two half hits mark like one full one. The same soot lies on every pipe and wall the waves passed. It never fades; a repair does not clean it. Point at a cell for its worst reading."},
+  roompn:{group:"COMPARTMENT", label:"PRESSURE NOW", seam:"env",  data:"room", live:true, on:true,
         draw:roomPNowLayer,
-        tip:"What the air in every cell is pushing at RIGHT NOW, in the same bands the BLAST layer scars with: 20 kPa takes a cabinet, 70 heavy rotating plant, 120 a pipe and 200 a pressure vessel. This is the wave itself rather than what it left behind - a bang starts in one cell and spreads out from it at the local speed of sound, so it arrives late and weaker the further away a machine is standing, and behind the front the compartment bleeds down to its own lumped pressure in about half a second. Watch it race, and watch it turn a corner. It is also the slow answer: a sealed region being pressurised by a leak reads its own gauge here, with no wave in sight. No figure is printed - point at a cell for the reading."},
+        tip:"The wave, and nothing else: how steeply the pressure changes across a cell, which is what a schlieren photograph of a blast shows. A still room at any pressure is black. Machines and pipes lean away from a front as it hits them, and spring back when it has passed."},
   contz:{group:"COMPARTMENT", label:"CONTAINMENT", seam:"under", data:"room", live:true, on:false,
         draw:contZones,
         tip:"Every bounded region, tinted, and every wall cell banded by its own margin to its own rating. The bands are the WALL'S limits and not round numbers: HELD, WORKING, AT RATED, and OPENING at the pressure it actually splits at. What a cell can take is a property of the SHAPE - stress is p*R/t, so the middle of a long flat side is weak and a corner braces itself. Paint a square region and a round one of the same area and read this: the square has a weakest cell in the middle of its longest side and the round one has none at all. No figure is printed per cell - one reading per region, at its centroid, and point at a cell for the rest."},
@@ -106,13 +106,14 @@ function layerData(id, L){
 // a layer that draws on both sides of the machines states both seams; the pass tells its draw which one it is in
 const layerSeam=(l,seam)=> Array.isArray(l.seam) ? l.seam.indexOf(seam)>=0 : l.seam===seam;
 
-function layerPass(seam, L){
+// "skin" runs once per machine, on its box and under its name, and hands the draw that machine
+function layerPass(seam, L, p){
   for(const k of LAYER_ORDER){
     const l=LAYERS[k];
     const woke = l.group==="PLUMBING" && (pipeHov || (k==="hold" && holdHov));
     if((!l.on && !woke) || !layerSeam(l,seam) || (l.live && !L)) continue;
     ctx.save();
-    l.draw(layerData(l.data, L), L, seam);
+    l.draw(layerData(l.data, L), L, seam, p);
     ctx.restore();
   }
 }

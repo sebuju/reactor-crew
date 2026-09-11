@@ -55,7 +55,7 @@ function roomZones(data){
 }
 
 function roomCellTip(L){
-  const p = viewOn ? (vIn(ui.ptr)?vPt(ui.ptr):null) : ui.ptr;
+  const p = vPtr;
   if(!p) return;
   const X=Math.floor((p.x-GX)/CELL), Y=rowAt(p.y);
   if(X<0||X>=GW||Y<0||Y>=GH) return;
@@ -85,9 +85,10 @@ function roomCellTip(L){
     const g=matSealAt(X,Y);
     if(g){
       row("REGION       ",g.cells.length+" cells   "+matRegVol(g).toFixed(1)+" m3   "+(matSealed(L||null,g)?"SEALED":"OPEN"));
-      if(L){ row("REGION PRESS ",(regionDP(L,g)*1000).toFixed(1)+" kPa");
-             const d=regionFloodM(L,g);
-             if(d>0.05) row("FLOODED TO   ",d.toFixed(1)+" m   "+(regionSump(L,g)/1000).toFixed(1)+" t"); } } }
+      if(L) row("REGION PRESS ",(regionDP(L,g)*1000).toFixed(1)+" kPa"); }
+    const gf=matRegionIn(X,Y)||g;
+    if(L && gf){ const d=regionFloodM(L,gf);
+      if(d>0.05) row("FLOODED TO   ",d.toFixed(1)+" m   "+(regionSump(L,gf)/1000).toFixed(1)+" t"); } }
   if(!rows.length) return;
   TIP(GX+X*CELL, rowTop(Y), CELL, rowTop(Y+1)-rowTop(Y), "CELL "+X+","+Y, rows.join("\n"));
 }
@@ -142,15 +143,9 @@ function roomH2Layer(data,L){
   ctx.lineWidth=1;
 }
 
-/* One table for the whole blast picture. The front is one cell thick because at 0.4667 m cells the
-   physics cannot resolve a real shock, which is millimetres; `smooth` reads between cell centres and
-   adds no information, and `trailTau` fades a passed cell rather than slowing the front down. */
 const BLASTFX={
-  trailTau:0,     // s a cell keeps glowing after the front has passed
-  smooth:0,       // 0 blocky, 1 fully blended between cell centres
-  lo:15,          // kPa below which the layer is silent
+  lo:15,          // kPa below which the tooltip prints no peak
   full:600,       // kPa that reads as a full bang
-  scar:200,       // kPa that reads as a full scar
   zones:[
     {t:20,  col:C.blue,  lab:"PANELS",   a:0.10},
     {t:70,  col:C.green, lab:"CABINETS", a:0.16},
@@ -162,68 +157,131 @@ const BLASTFX={
 const BLASTZ=BLASTFX.zones;
 const blastOf = v => { for(let k=0;k<BLASTZ.length;k++) if(v<BLASTZ[k].t) return k;
                        return BLASTZ.length-1; };
-// draws s.roomPPk, the high-water mark on S: the live field relieves in half a second and would read empty
-const scarF = v => v<BLASTFX.lo ? 0 : Math.min(1,(v-BLASTFX.lo)/(BLASTFX.scar-BLASTFX.lo));
-/* Display state off the plant clock, never on S, like every other list in this file. The leading edge
-   still moves at the true speed; this is a fading tail behind it. */
-let blastTrail=null, blastTrailT=null;
-function blastLive(L){
-  if(!(BLASTFX.trailTau>0)){ blastTrailT=null; return L.roomP; }
-  const N=L.roomP.length, dt=blastTrailT===null ? 0 : clamp(burnClk-blastTrailT,0,0.25);
-  blastTrailT=burnClk;
-  if(!blastTrail || blastTrail.length!==N) blastTrail=new Float32Array(N);
-  const k=dt>0 ? Math.exp(-dt/BLASTFX.trailTau) : 1;
-  for(let i=0;i<N;i++){ const t=blastTrail[i]*k, v=L.roomP[i];
-    blastTrail[i]= v>t ? v : t; }
-  return blastTrail;
-}
-/* Centred over the four neighbours; a cell on the edge of the grid reads itself in place of the one
-   that is not there. It adds no information and is not pretending to - at 0.4667 m cells the physics
-   cannot resolve a front thinner than one cell. */
-function blastSmooth(F,X,Y){
-  const i=Y*GW+X;
-  return 0.5*F[i] + 0.125*(F[X>0?i-1:i] + F[X<GW-1?i+1:i] + F[Y>0?i-GW:i] + F[Y<GH-1?i+GW:i]);
-}
-function roomPLayer(data,L){
-  if(!L) return;
-  const pkA=L.roomPPk, live=blastLive(L), sm=BLASTFX.smooth;
-  const pk=i=>roomFace(j=>pkA[j],i,Math.max);
-  for(let Y=0;Y<GH;Y++){
-    const y=rowTop(Y), h=rowTop(Y+1)-y;
-    for(let X=0;X<GW;X++){
-      const i=Y*GW+X, v=pk(i);
-      if(v<BLASTFX.lo || data.g[Y][X]) continue;
-      const z=blastOf(v), Z=BLASTZ[z], x0=GX+X*CELL;
-      ctx.globalAlpha=0.25+0.65*scarF(v); fillRect(x0,y,CELL,h,C.scar);
-      ctx.globalAlpha=Z.a; fillRect(x0,y,CELL,h,Z.col); ctx.globalAlpha=1;
-      const now = sm>0 ? live[i]+(blastSmooth(live,X,Y)-live[i])*sm : live[i];
-      if(now>=BLASTFX.lo) fxPulse(x0,y,CELL,h,Z.col,1,4);
-      if(X<GW-1 && blastOf(pk(i+1))!==z) fillRect(x0+CELL-1,y,1,h,Z.col);
-      if(Y<GH-1 && blastOf(pk(i+GW))!==z) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
+// 1 only between two cells of open air: a machine face passes ROOM_BLOCK and a wall nothing
+const faceOpen = b => b === 1;
+
+const SCAR_DEEP=0.7, SCAR_LAYERS=8, SCAR_A=0.9, SCAR_MIN=1*DRAW_K;
+const scarF = a => Math.min(1, a/(HIT_FULL-HIT_LO));
+const scarSmooth = raw => raw.map((v,j)=>(raw[Math.max(0,j-1)] + 2*v + raw[Math.min(raw.length-1,j+1)])/4);
+// a box or a wall books no scar of its own; the air beside it does
+const scarAt = (L,G,X,Y) => { if(X<0||X>=GW||Y<0||Y>=GH) return 0; const i=Y*GW+X;
+  return G.occ[i] || G.tight[i] ? 0 : L.roomScar[i]; };
+// tools/wavemock.html's paintScars(), run straight between cell centres rather than in half-cell blocks
+function scarPart(L,p){
+  if(!fitted(p)) return;
+  const G=roomGeom(), r=prect(p);
+  ctx.fillStyle=C.scar; ctx.globalAlpha=SCAR_A/SCAR_LAYERS;
+  for(const sd of "lrtb"){
+    const vert = sd==="l" || sd==="r", n = vert ? p.h : p.w, across = vert ? r.w : r.h;
+    const raw=[]; let any=false;
+    for(let j=0;j<n;j++){
+      const a = sd==="l" ? scarAt(L,G,p.x-1,p.y+j) : sd==="r" ? scarAt(L,G,p.x+p.w,p.y+j)
+              : sd==="t" ? scarAt(L,G,p.x+j,p.y-1) : scarAt(L,G,p.x+j,p.y+p.h);
+      raw.push(a>0 ? SCAR_MIN + SCAR_DEEP*across*scarF(a) : 0);
+      if(a>0) any=true;
+    }
+    if(!any) continue;
+    const d=scarSmooth(raw);
+    // u along the side, v in from the face
+    const pt = (u,v) => sd==="l" ? [r.x+v, r.y+u] : sd==="r" ? [r.x+r.w-v, r.y+u]
+                      : sd==="t" ? [r.x+u, r.y+v] : [r.x+u, r.y+r.h-v];
+    for(let k=1;k<=SCAR_LAYERS;k++){
+      const f=k/SCAR_LAYERS, path=[pt(0,0), pt(0,d[0]*f)];
+      for(let j=0;j<n;j++) path.push(pt((j+0.5)*CELL, d[j]*f));
+      path.push(pt(n*CELL, d[n-1]*f), pt(n*CELL,0));
+      ctx.beginPath(); ctx.moveTo(path[0][0],path[0][1]);
+      for(const q of path) ctx.lineTo(q[0],q[1]);
+      ctx.closePath(); ctx.fill();
     }
   }
+  ctx.globalAlpha=1;
+}
+// the same soot on what else stands in the air: every pipe through a scarred cell, and every wall beside one
+function scarSurfaces(L){
+  const G=roomGeom(), mid=(p,q)=>[(p[0]+q[0])/2, (p[1]+q[1])/2];
+  ctx.fillStyle=C.scar; ctx.strokeStyle=C.scar;
+  ctx.lineCap="butt"; ctx.lineJoin="round";
+  for(const r of pipeNetwork()){
+    if(!r.cells || !r.cells.length) continue;
+    const a=scarSmooth(r.cells.map(c=>scarF(scarAt(L,G,c[0],c[1]))));
+    if(!a.some(v=>v>0)) continue;
+    const n=r.cells.length, cw=pipeWidth(runBore(r))+2*pipeWallPx(r);
+    const pts=runCellPts(r), R=runDrawPts(r,cw).R;
+    ctx.lineWidth=cw;
+    for(let j=0;j<n;j++){
+      if(!(a[j]>0)) continue;
+      const p=pts[j+1], s0 = j===0 ? pts[0] : mid(pts[j],p), s1 = j===n-1 ? pts[n+1] : mid(p,pts[j+2]);
+      ctx.globalAlpha=SCAR_A*a[j];
+      ctx.beginPath(); ctx.moveTo(s0[0],s0[1]); ctx.arcTo(p[0],p[1],s1[0],s1[1],R); ctx.lineTo(s1[0],s1[1]); ctx.stroke();
+    }
+  }
+  const RG=matRegions();
+  for(const k in (D.mat||{})){
+    const j=k.indexOf(","), x=+k.slice(0,j), y=+k.slice(j+1);
+    if(x<0||x>=GW||y<0||y>=GH) continue;
+    let v=0;
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) v=Math.max(v, scarAt(L,G,x+dx,y+dy));
+    if(!(v>0)) continue;
+    const r=grect(x,y,1,1);
+    ctx.globalAlpha=SCAR_A*scarF(v);
+    matBandPath(r, matInFaces(RG,x,y), matWallPx(x,y,r)); ctx.fill();
+  }
+  ctx.globalAlpha=1;
 }
 
-// 0.5 kPa is roomCellTip()'s own floor for BLAST NOW, so the picture and the reading start together
-const PNOW_LO=0.5;
-// the live field, never the high-water mark: it relieves on ROOM_P_TAU, so what is drawn IS the wave
+// the worst reading per cell is the tooltip's, off s.roomPPk
+function roomPLayer(data,L,seam,p){
+  if(!L) return;
+  if(seam==="skin") scarPart(L,p);
+  else if(seam==="under") scarSurfaces(L);
+}
+
+/* grad p in kPa per cell over OPEN faces only, which is what a schlieren photograph is of: a level
+   at any height has no step in it and draws black, and a wall face gives no slope. */
+let gradX=null, gradY=null;
+function waveGrad(L){
+  const P=L.roomP, G=roomGeomLive(L), bx=G.bx, by=G.by, N=P.length;
+  if(!gradX || gradX.length!==N){ gradX=new Float64Array(N); gradY=new Float64Array(N); }
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i=Y*GW+X;
+    let gx=0, nx=0, gy=0, ny=0;
+    if(X<GW-1 && faceOpen(bx[i]))   { gx+=P[i+1]-P[i];   nx++; }
+    if(X>0    && faceOpen(bx[i-1])) { gx+=P[i]-P[i-1];   nx++; }
+    if(Y<GH-1 && faceOpen(by[i]))   { gy+=P[i+GW]-P[i];  ny++; }
+    if(Y>0    && faceOpen(by[i-GW])){ gy+=P[i]-P[i-GW];  ny++; }
+    gradX[i]=nx ? gx/nx : 0; gradY[i]=ny ? gy/ny : 0;
+  }
+  return {gx:gradX, gy:gradY};
+}
+/* tools/wavemock.html's paint(): against the loudest slope since the plant was built, which never
+   falls, or a fading wave holds full brightness and then blinks out. Floored at PNOW_LO kPa per cell,
+   or float noise in a still room becomes the reference and draws at full. */
+const PNOW_LO=0.5, PNOW_CUT=0.02, PNOW_A=0.92;
+let waveRef=0, shownA=null, shownW=null;
+// what PRESSURE NOW draws per cell, `a` the slope over the reference and `w` its brightness 0..1; the lean reads `w`, so nothing moves where the layer is dark
+function waveShown(L){
+  const g=waveGrad(L), N=g.gx.length;
+  if(!shownA || shownA.length!==N){ shownA=new Float64Array(N); shownW=new Float64Array(N); }
+  let mx=PNOW_LO;
+  for(let i=0;i<N;i++){ const f=Math.hypot(g.gx[i], g.gy[i]); shownA[i]=f; if(f>mx) mx=f; }
+  if(mx>waveRef) waveRef=mx;
+  for(let i=0;i<N;i++){ const a=shownA[i]/waveRef, on=a>=PNOW_CUT;
+    shownA[i]=on ? a : 0; shownW[i]=on ? Math.min(1, Math.sqrt(a)/PNOW_A) : 0; }
+  return {gx:g.gx, gy:g.gy, a:shownA, w:shownW};
+}
 function roomPNowLayer(data,L){
   if(!L) return;
-  const F=blastLive(L), at=i=>roomFace(j=>F[j],i,Math.max);
-  const band=i=>{ const v=at(i); return v<PNOW_LO?-1:blastOf(v); };
+  const sh=waveShown(L);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
-      const i=Y*GW+X, v=at(i), b=band(i);
-      if(b<0 || data.g[Y][X]) continue;
-      const Z=BLASTZ[b], x0=GX+X*CELL;
-      /* Weighted to the FLOOR, not the span: the bands are the machines' own limits and a real field sits at single-digit kPa, so a ramp against BLASTFX.full 600 draws the honest answer at 3 % and hides it. */
-      ctx.globalAlpha=Z.a*(0.55+0.45*clamp((v-PNOW_LO)/(BLASTFX.full-PNOW_LO),0,1));
-      fillRect(x0,y,CELL,h,Z.col); ctx.globalAlpha=1;
-      if(X<GW-1 && band(i+1)!==b) fillRect(x0+CELL-1,y,1,h,Z.col);
-      if(Y<GH-1 && band(i+GW)!==b) fillRect(x0,rowTop(Y+1)-1,CELL,1,Z.col);
+      const i=Y*GW+X, a=sh.a[i];
+      if(data.g[Y][X] || !a) continue;
+      ctx.globalAlpha=PNOW_A*sh.w[i];
+      fillRect(GX+X*CELL,y,CELL,h,lerpC(C.wave,C.waveHi,a*a));
     }
   }
+  ctx.globalAlpha=1;
 }
 
 // depletion only: a cell at what air actually holds prints nothing
@@ -286,36 +344,116 @@ const heatLayer=(data,L,seam)=> seam==="env" ? roomZones(data) : heatParts(L);
 // the effect belongs to a BANG, not a cell; every list below is display state off the plant clock, never on S
 const BED_DIM=0.42;                       // the flame bed under a fireball, not instead of one
 const SMOKE_RMAX=CELL*2.6;                // a puff shears apart rather than swelling for ever
-const RING_GAP=6;                         // m the last front must be clear before another leaves
 const EV_END=0.30;                        // s of quiet before an event is over
 const EV_NB=2;                            // cells of reach when a cell looks for its event
 const MERGE_K=0.95;                       // how deep two fireballs overlap before they are one
 const PX_M=CELL/MPC;                      // pixels per metre on the board
-let burnRings=[], burnSparks=[], burnSmoke=[], burnEvs=[], burnTouch=[], burnShake=0, burnBlock=0,
+const SPARK_PX=1.2*DRAW_K;                 // a fleck, not a chunk
+let burnSparks=[], burnSmoke=[], burnEvs=[], burnTouch=[], burnShake=0,
     burnClk=0, flashT=0, flashA=0.5, glowF=null;
+const flashC=new Set();                   // the air components the flash lights
 let burnSeed=0x9e3779b9;
 const burnRnd=()=>{ burnSeed^=burnSeed<<13; burnSeed^=burnSeed>>>17; burnSeed^=burnSeed<<5;
                     return (burnSeed>>>0)/4294967296; };
-function burnReset(){ burnRings=[]; burnSparks=[]; burnSmoke=[]; burnEvs=[]; burnTouch=[];
-                      flashT=0; burnShake=0; if(glowF) glowF.fill(0); }
+function burnReset(){ burnSparks=[]; burnSmoke=[]; burnEvs=[]; burnTouch=[];
+                      flashT=0; flashC.clear(); burnShake=0; if(glowF) glowF.fill(0);
+                      leanSt.clear(); pipeLeanSt.clear(); waveRef=0; blastSeen=-1; }
 // a screen with no plant never steps this, so a live shake would kick for ever
 function burnIdle(){
-  if(burnShake||burnEvs.length||burnRings.length||burnSparks.length||burnSmoke.length) burnReset();
+  if(burnShake||burnEvs.length||burnSparks.length||burnSmoke.length||pipeLeanSt.size) burnReset();
   burnClk=0;
 }
+
+/* Screen time, not the solver's: one spring the eye can follow, kicked by the load a frame sees. A
+   one-frame kick peaks near half its target, hence LEAN_KICK (tools/wavemock.html). */
+const LEAN_W=2*Math.PI/0.15, LEAN_Z=0.7, LEAN_KICK=2, LEAN_H=0.005;
+const leanSt=new Map();
+function leanSpring(o,tx,ty,n,h){
+  const w2=LEAN_W*LEAN_W, c=2*LEAN_Z*LEAN_W;
+  for(let k=0;k<n;k++){
+    o.vx+=(w2*(tx-o.dx)-c*o.vx)*h; o.dx+=o.vx*h;
+    o.vy+=(w2*(ty-o.dy)-c*o.vy)*h; o.dy+=o.vy*h;
+  }
+}
+function leanStep(L,dt){
+  if(!(dt>0)) return;
+  const G=roomGeom(), gz=roomPGauge(L), sh=waveShown(L), n=Math.ceil(dt/LEAN_H), h=dt/n;
+  for(const p of LAY.parts){
+    if(!fitted(p)) continue;
+    // scaled by the brightest cell round the box, not weighted per cell: a dark flat side still pushes back
+    const f=partLoad(L,p,gz,G,sh.w), t=partLeanOf(p, {fx:f.fx*f.lit, fy:f.fy*f.lit});
+    let o=leanSt.get(p.id);
+    if(!o){ o={dx:0,dy:0,vx:0,vy:0}; leanSt.set(p.id,o); }
+    leanSpring(o, t.x*LEAN_KICK, t.y*LEAN_KICK, n, h);
+  }
+  pipeLeanStep(sh,n,h);
+}
+// px
+function partLean(p){
+  const o=leanSt.get(p.id);
+  const v=leanCap({x:o?o.dx:0, y:o?o.dy:0}, LEAN_MAX);
+  return {x:v.x*CELL, y:v.y*CELL};
+}
+/* A run bows off the pressure step across each of its cells, square to the run there, and its two
+   nozzles hold. Cells per 10 kPa across one cell, the most one may bow, and what counts as at rest. */
+const PIPE_LEAN_K=0.65, PIPE_LEAN_MAX=0.35, PIPE_LEAN_LO=0.002;
+const pipeLeanSt=new Map();
+// the traced line through every cell centre, before any bow
+const runBasePts = r => [r.pts[0], ...r.cells.map(c=>cellPos(c[0],c[1])), r.pts[r.pts.length-1]];
+function pipeLeanStep(g,n,h){
+  const seen=new Set();
+  for(const r of pipeNetwork()){
+    const m=r.cells ? r.cells.length : 0;
+    if(!m) continue;
+    const base=runBasePts(r), tx=new Float64Array(m+2), ty=new Float64Array(m+2);
+    let push=false;
+    for(let j=0;j<m;j++){
+      const X=r.cells[j][0], Y=r.cells[j][1];
+      if(X<0||X>=GW||Y<0||Y>=GH) continue;
+      const i=Y*GW+X, a=base[j], b=base[j+2];
+      const dx=b[0]-a[0], dy=b[1]-a[1], l=Math.hypot(dx,dy)||1, ux=dx/l, uy=dy/l;
+      const fx=-g.gx[i]*g.w[i], fy=-g.gy[i]*g.w[i], ax=fx*ux+fy*uy;
+      tx[j+1]=(fx-ax*ux)*PIPE_LEAN_K/10; ty[j+1]=(fy-ax*uy)*PIPE_LEAN_K/10;
+      if(Math.abs(tx[j+1])>PIPE_LEAN_LO || Math.abs(ty[j+1])>PIPE_LEAN_LO) push=true;
+    }
+    let st=pipeLeanSt.get(r.key);
+    if(st && st.length!==m) st=null;
+    if(!st){ if(!push) continue;
+      st=Array.from({length:m},()=>({dx:0,dy:0,vx:0,vy:0})); pipeLeanSt.set(r.key,st); }
+    let live=push;
+    for(let j=0;j<m;j++){
+      const o=st[j];
+      leanSpring(o, (tx[j]+2*tx[j+1]+tx[j+2])/4*LEAN_KICK, (ty[j]+2*ty[j+1]+ty[j+2])/4*LEAN_KICK, n, h);
+      if(Math.abs(o.dx)>PIPE_LEAN_LO || Math.abs(o.dy)>PIPE_LEAN_LO
+         || Math.abs(o.vx)>PIPE_LEAN_LO*LEAN_W || Math.abs(o.vy)>PIPE_LEAN_LO*LEAN_W) live=true;
+    }
+    if(live) seen.add(r.key);
+  }
+  for(const k of [...pipeLeanSt.keys()]) if(!seen.has(k)) pipeLeanSt.delete(k);
+}
+function runCellPts(r){
+  const st=pipeLeanSt.get(r.key), pts=runBasePts(r);
+  if(st) for(let j=0;j<st.length;j++){
+    const v=leanCap({x:st[j].dx, y:st[j].dy}, PIPE_LEAN_MAX);
+    pts[j+1]=[pts[j+1][0]+v.x*CELL, pts[j+1][1]+v.y*CELL];
+  }
+  return pts;
+}
+// null while nothing bows the run, so a still pipe is stroked on its own corners
+const runLeanPts = r => pipeLeanSt.has(r.key) ? runCellPts(r) : null;
 // floored, or a dead shake jitters the board for ever at a fifth of a pixel
 const burnShakeAt=()=>burnShake>0.2?burnShake:0;
 // off the plant clock, not a fresh die, or the board jitters while the sim is paused
 const burnShakeRnd=k=>fxHash(Math.round(fxClock()*120)*2+k)-0.5;
 
 // centre weighted by heat; radius is the equal-area circle over the footprint
-function evNew(n){
-  const e={mask:new Uint8Array(n), wx:0,wy:0,w:0,cells:0,r:0,cx:0,cy:0,p:0,hot:0,hotF:0,wF:0,
-           quiet:0,done:0,fade:1,burning:0,newF:0,ring:null,pEmit:0,flashed:0,sparkBudget:0,smokeT:0};
+function evNew(n,c){
+  const e={c, mask:new Uint8Array(n), wx:0,wy:0,w:0,cells:0,r:0,cx:0,cy:0,p:0,hot:0,hotF:0,wF:0,
+           quiet:0,done:0,fade:1,burning:0,newF:0,pEmit:0,flashed:0,sparkBudget:0,smokeT:0};
   burnEvs.push(e); return e;
 }
-// finding TWO neighbours is how two bangs discover they have met
-function evFor(i,n){
+// finding TWO neighbours is how two bangs discover they have met; a wall between them keeps them two
+function evFor(i,n,c){
   const X=i%GW, Y=(i/GW)|0;
   let home=null;
   for(let dy=-EV_NB;dy<=EV_NB;dy++) for(let dx=-EV_NB;dx<=EV_NB;dx++){
@@ -323,12 +461,12 @@ function evFor(i,n){
     if(x<0||y<0||x>=GW||y>=GH) continue;
     const j=y*GW+x;
     for(const e of burnEvs){
-      if(e.done || !e.mask[j]) continue;
+      if(e.done || !e.mask[j] || e.c!==c) continue;
       if(!home) home=e;
       else if(home!==e) burnTouch.push([home,e]);
     }
   }
-  return home || evNew(n);
+  return home || evNew(n,c);
 }
 function evFeed(e,i,g,p){
   const X=i%GW, Y=(i/GW)|0;
@@ -360,7 +498,6 @@ function evFold(A,B){
   for(let i=0;i<B.mask.length;i++) if(B.mask[i] && !A.mask[i]){ A.mask[i]=1; A.cells++; }
   A.r=Math.sqrt(A.cells/Math.PI);
   if(A.w>0){ A.cx=A.wx/A.w; A.cy=A.wy/A.w; }
-  ringFold(A,B);
   const j=burnEvs.indexOf(B); if(j>=0) burnEvs.splice(j,1);
 }
 function evMerge(){
@@ -369,41 +506,28 @@ function evMerge(){
   burnTouch=[];
   for(let a=0;a<burnEvs.length;a++) for(let b=a+1;b<burnEvs.length;b++){
     const A=burnEvs[a], B=burnEvs[b];
-    if(Math.hypot(A.cx-B.cx, A.cy-B.cy) > (A.r+B.r)*MERGE_K) continue;
+    if(A.c!==B.c || Math.hypot(A.cx-B.cx, A.cy-B.cy) > (A.r+B.r)*MERGE_K) continue;
     evFold(A,B); b--;
   }
 }
-// the leading front survives and takes the other's overpressure
-function ringFold(A,B){
-  const keep = !A.ring ? B.ring : !B.ring ? A.ring : (A.ring.R>=B.ring.R ? A.ring : B.ring);
-  const drop = keep===A.ring ? B.ring : A.ring;
-  if(drop){ const j=burnRings.indexOf(drop); if(j>=0) burnRings.splice(j,1); }
-  if(keep && drop){ keep.dp=Math.max(keep.dp,drop.dp); keep.dp0=Math.max(keep.dp0,drop.dp0); }
-  A.ring=keep;
-}
-
 // every emission is the EVENT's, never one per burning cell
-function evFx(e,dt){
+function evFx(e,dt,cm,occ){
   const k=clamp(e.p/BLASTFX.full,0,1);
   const cx=GX+(e.cx+0.5)*CELL, cy=rowTop(0)+(e.cy+0.5)*CELL, rad=e.r*CELL;
-  // fronts are spaced in distance, not pressure
-  if(!e.done && e.p>20 && e.p > e.pEmit*1.6 &&
-     (!e.ring || e.ring.R > Math.max(ROOM_DEPTH/2, e.r*MPC) + RING_GAP)){
+  if(!e.done && e.p>20 && e.p > e.pEmit*1.6){
     e.pEmit=e.p;
-    e.ring={x:cx, y:cy, R:Math.max(ROOM_DEPTH/2, e.r*MPC), dp:e.p, dp0:e.p, u:0};
-    burnRings.push(e.ring);
     for(let j=0;j<Math.round(4+26*k);j++){
       const th=burnRnd()*6.283, sp=(90+e.p*2.2)*(0.35+burnRnd());
-      burnSparks.push({x:cx+Math.cos(th)*rad*0.8, y:cy+Math.sin(th)*rad*0.8,
-                       vx:Math.cos(th)*sp, vy:Math.sin(th)*sp,
-                       life:(0.35+0.7*k)*(0.6+burnRnd()*0.8), t:0});
+      burnSpawn(burnSparks, {x:cx+Math.cos(th)*rad*0.8, y:cy+Math.sin(th)*rad*0.8,
+                             vx:Math.cos(th)*sp, vy:Math.sin(th)*sp,
+                             life:(0.35+0.7*k)*(0.6+burnRnd()*0.8), t:0}, e.c, cm, occ);
     }
     burnShake=Math.max(burnShake, Math.min(9, e.p/34));
   }
   // peak and footprint together: a slow wide burn is a big event at low pressure
   if(!e.done && e.p>12){
     const f=clamp(Math.max(k, e.cells/260),0,1);
-    if(f>e.flashed){ e.flashed=f; flashT=Math.max(flashT,0.08+0.30*f); flashA=0.16+0.44*f; }
+    if(f>e.flashed){ e.flashed=f; flashT=Math.max(flashT,0.08+0.30*f); flashA=0.16+0.44*f; flashC.add(e.c); }
   }
   // debris is priced off the cells the front TOOK this frame, not off how many are alight
   if(e.newF>0){
@@ -413,9 +537,9 @@ function evFx(e,dt){
     while(n-- > 0){
       const th=burnRnd()*6.283, rr=Math.max(CELL*0.5,rad)*(0.35+0.65*burnRnd());
       const sp=(60+e.p*1.6)*(0.35+burnRnd());
-      burnSparks.push({x:cx+Math.cos(th)*rr, y:cy+Math.sin(th)*rr,
-                       vx:Math.cos(th)*sp, vy:Math.sin(th)*sp,
-                       life:(0.35+0.6*k)*(0.6+burnRnd()*0.8), t:0});
+      burnSpawn(burnSparks, {x:cx+Math.cos(th)*rr, y:cy+Math.sin(th)*rr,
+                             vx:Math.cos(th)*sp, vy:Math.sin(th)*sp,
+                             life:(0.35+0.6*k)*(0.6+burnRnd()*0.8), t:0}, e.c, cm, occ);
     }
   }
   if(e.fade>0 && rad>0){
@@ -423,49 +547,84 @@ function evFx(e,dt){
     if(e.smokeT<=0){
       e.smokeT=(0.06+0.10*burnRnd())/(0.30+0.70*k);
       const th=burnRnd()*6.283, rr=rad*Math.sqrt(burnRnd()), sc=0.5+1.6*Math.sqrt(k);
-      burnSmoke.push({x:cx+Math.cos(th)*rr, y:cy+Math.sin(th)*rr,
-                      r:CELL*(0.35+0.55*sc), vy:-CELL*(0.55+0.8*sc),
-                      life:1.6+1.4*sc+burnRnd()*1.5, t:0,
-                      a:0.17+0.20*sc, g:CELL*(0.18+0.35*sc)});
+      burnSpawn(burnSmoke, {x:cx+Math.cos(th)*rr, y:cy+Math.sin(th)*rr,
+                            r:CELL*(0.35+0.55*sc), vx:0, vy:-CELL*(0.55+0.8*sc),
+                            life:1.6+1.4*sc+burnRnd()*1.5, t:0,
+                            a:0.17+0.20*sc, g:CELL*(0.18+0.35*sc)}, e.c, cm, occ);
     }
   }
   e.wF=0; e.newF=0;
 }
 
-// Rankine-Hugoniot front speed with cylindrical decay; WAVE_SLOW is not physics
-const A0=347, GAM=1.4, DP_MIN=BLASTFX.lo, WAVE_SUB=4, WAVE_SLOW=16, OBS_K=2.2;
-function burnParticles(dt){
-  burnRings=burnRings.filter(o=>{
-    for(let k=0;k<WAVE_SUB;k++){
-      o.u=A0*Math.sqrt(1+(GAM+1)/(2*GAM)*o.dp/ROOM_P0);
-      const R1=o.R+o.u*dt/WAVE_SLOW/WAVE_SUB;
-      o.dp*=Math.pow(o.R/R1, 0.5+1.5*clamp(o.dp/ROOM_P0,0,1)+OBS_K*burnBlock);
-      o.R=R1;
-    }
-    return o.dp>DP_MIN && o.R<GW*MPC*1.5;
-  });
-  for(const o of burnSparks){ o.t+=dt; o.x+=o.vx*dt; o.y+=o.vy*dt; o.vy+=90*dt;
-                             o.vx*=0.96; o.vy*=0.96; }
+// px/s of the air the wave solved, at the cell centre off its two staggered faces
+function airAt(s,x,y){
+  const X=clamp(Math.floor((x-GX)/CELL),0,GW-1), Y=clamp(Math.floor((y-rowTop(0))/CELL),0,GH-1), i=Y*GW+X;
+  return [(s.roomPU[i]+(X>0?s.roomPU[i-1]:0))/2*PX_M, (s.roomPV[i]+(Y>0?s.roomPV[i-GW]:0))/2*PX_M];
+}
+/* tools/wavemock.html's spawnFx(): a charge throws its own debris and smoke, in m/s through PX_M.
+   The mark only says a charge went off; what it does is the field. */
+let blastSeen=-1;
+function blastFx(i,cm,occ){
+  const cx=GX+(i%GW+0.5)*CELL, cy=rowTop((i/GW)|0)+CELL/2, c=cm[i];
+  for(let k=0;k<160;k++){ const th=burnRnd()*6.283, sp=(15+burnRnd()*45)*PX_M;
+    burnSpawn(burnSparks, {x:cx, y:cy, vx:Math.cos(th)*sp, vy:Math.sin(th)*sp, life:0.8+burnRnd()*1.2, t:0}, c, cm, occ); }
+  for(let k=0;k<24;k++){ const th=burnRnd()*6.283, sp=burnRnd()*4*PX_M;
+    burnSpawn(burnSmoke, {x:cx+Math.cos(th)*1.5*CELL, y:cy+Math.sin(th)*1.5*CELL,
+                          vx:Math.cos(th)*sp, vy:Math.sin(th)*sp-1.5*PX_M,
+                          r:0.6*CELL, g:0.8*CELL, life:2.5+burnRnd()*2, t:0, a:0.35}, c, cm, occ); }
+}
+// thrown into the air its source stands in, never into a box or through a wall into the next compartment
+function burnSpawn(list,o,c,cm,occ){
+  const i=burnCell(o.x,o.y);
+  if(i<0 || occ[i] || cm[i]!==c) return;
+  o.c=c; list.push(o);
+}
+// gravity 9.81 m/s2 and a 0.6 s drag, the mock's
+function burnParticles(s,dt,occ){
+  const drag=Math.exp(-dt/0.6);
+  for(const o of burnSparks){ o.t+=dt; const a=airAt(s,o.x,o.y);
+    const nx=o.x+(o.vx+a[0])*dt, ny=o.y+(o.vy+a[1])*dt;
+    if(burnPath(occ,o.x,o.y,nx,ny)){ o.x=nx; o.y=ny; } else { o.vx=0; o.vy=0; }
+    o.vy+=9.81*PX_M*dt; o.vx*=drag; o.vy*=drag; }
   burnSparks=burnSparks.filter(o=>o.t<o.life);
   burnShake*=Math.exp(-dt/0.18);
-  for(const o of burnSmoke){ o.t+=dt; o.y+=o.vy*dt; o.vy*=0.99;
-                             o.r=Math.min(o.r+o.g*dt, SMOKE_RMAX); }
+  for(const o of burnSmoke){ o.t+=dt; const a=airAt(s,o.x,o.y);
+    const nx=o.x+(o.vx+a[0])*dt, ny=o.y+(o.vy+a[1])*dt;
+    if(burnPath(occ,o.x,o.y,nx,ny)){ o.x=nx; o.y=ny; }
+    o.vy*=0.99; o.r=Math.min(o.r+o.g*dt, SMOKE_RMAX); }
   burnSmoke=burnSmoke.filter(o=>o.t<o.life);
 }
 
-// a machine is a wall to this fire, so nothing here may be drawn on a box
-function burnOcc(n){
-  const occ=new Uint8Array(n);
-  for(const p of LAY.parts)
-    for(let y=p.y;y<p.y+p.h;y++) for(let x=p.x;x<p.x+p.w;x++)
-      if(y>=0&&y<GH&&x>=0&&x<GW) occ[y*GW+x]=1;
+// a machine and a standing wall are solid to this fire, so nothing here may be drawn in one
+function burnOcc(s,G){
+  const N=GW*GH, occ=new Uint8Array(N);
+  for(let i=0;i<N;i++) if(G.occ[i] || (G.tight[i] && !matOpen(s,i%GW,(i/GW)|0))) occ[i]=1;
   return occ;
 }
-const burnFree=(occ,x,y)=>{
+const burnCell=(x,y)=>{
   const X=Math.floor((x-GX)/CELL), Y=Math.floor((y-rowTop(0))/CELL);
-  if(X<0||Y<0||X>=GW||Y>=GH) return false;
-  return !occ[Y*GW+X];
+  return X<0||Y<0||X>=GW||Y>=GH ? -1 : Y*GW+X;
 };
+const burnFree=(occ,x,y)=>{ const i=burnCell(x,y); return i>=0 && !occ[i]; };
+// sampled every quarter cell, or a fast spark steps over a one-cell wall between two frames
+function burnPath(occ,x0,y0,x1,y1){
+  const n=Math.ceil(Math.hypot(x1-x0,y1-y0)/(CELL/4));
+  for(let k=1;k<=n;k++) if(!burnFree(occ,x0+(x1-x0)*k/n,y0+(y1-y0)*k/n)) return false;
+  return true;
+}
+// one air component as row spans: an effect stops at the wall that would stop it
+function compClip(cm,c){
+  ctx.beginPath();
+  for(let Y=0;Y<GH;Y++){
+    let x0=-1;
+    for(let X=0;X<=GW;X++){
+      const on = X<GW && cm[Y*GW+X]===c;
+      if(on && x0<0) x0=X;
+      else if(!on && x0>=0){ ctx.rect(GX+x0*CELL, rowTop(Y), (X-x0)*CELL, CELL); x0=-1; }
+    }
+  }
+  ctx.clip();
+}
 // one fill per shade, not one per cell: alpha banded to 1/32, finer than the screen can show
 const BED_A=32;
 const bedBy=new Map();
@@ -487,11 +646,13 @@ function bedFlush(){
 function roomBurnFx(s){
   if(!s.roomFlame) return;
   const T=s.roomT, Fl=s.roomFlame, Pr=s.roomP, N=Fl.length;
-  const occ=burnOcc(N);
-  { let b=0; for(let i=0;i<N;i++) if(occ[i]) b++; burnBlock=b/N; }
+  const G=roomGeomLive(s), cm=roomComp(G), occ=burnOcc(s,G);
   const now=fxClock();
   if(now<burnClk){ burnReset(); burnClk=now; }
   const dt=clamp(now-burnClk,0,0.25); burnClk=now;
+  leanStep(s,dt);
+  if(s.blastEv.n!==blastSeen){ if(blastSeen>=0 && s.blastEv.n>blastSeen) blastFx(s.blastEv.at,cm,occ);
+    blastSeen=s.blastEv.n; }
   // how recently a cell burnt, so a front that has moved on fades instead of snapping off
   if(!glowF || glowF.length!==N) glowF=new Float64Array(N);
   const gk=Math.exp(-dt/0.35);
@@ -514,61 +675,53 @@ function roomBurnFx(s){
         const al=Math.min(0.95, Math.max(fl>0?0.55:0, lit))*(fl>0?1:BED_DIM);
         bedPush(col, al, x0+(CELL-iw)/2, y+(h-ih)/2, iw, ih);
       }
-      if(fl>0) evFeed(evFor(i,N), i, clamp((T[i]-600)/1600,0,1), p);
+      if(fl>0) evFeed(evFor(i,N,cm[i]), i, clamp((T[i]-600)/1600,0,1), p);
     }
   }
   bedFlush();
   evStep(dt);
-  for(const e of burnEvs) evFx(e,dt);
-  burnParticles(dt);
-  // the fireball goes down before the debris: its light is behind what flies out of it
-  for(const e of burnEvs){
-    if(!(e.r>0 && e.fade>0)) continue;
-    const cx=GX+(e.cx+0.5)*CELL, cy=rowTop(0)+(e.cy+0.5)*CELL;
-    const r=Math.max(CELL*1.1, e.r*CELL*1.35), a=e.fade*(0.25+0.55*Math.max(e.hot,0.25));
-    const gr=ctx.createRadialGradient(cx,cy,0,cx,cy,r);
-    gr.addColorStop(0,   alphaC(C.fire,  0.70*a));
-    gr.addColorStop(0.35,alphaC(C.fire2, 0.42*a));
-    gr.addColorStop(0.70,alphaC(C.amber, 0.18*a));
-    gr.addColorStop(1,   alphaC(C.red,   0));
-    ctx.fillStyle=gr; ctx.fillRect(cx-r,cy-r,r*2,r*2);
-  }
-  // a ring is one circle and cannot be skipped per cell, so the free deck is the clip
-  ctx.save();
-  ctx.beginPath();
-  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++)
-    if(!occ[Y*GW+X]) ctx.rect(GX+X*CELL, rowTop(Y), CELL, rowTop(Y+1)-rowTop(Y));
-  ctx.clip();
-  for(const o of burnRings){
-    const f=clamp(o.dp/o.dp0,0,1);
-    ctx.globalAlpha=clamp(0.10+0.72*Math.sqrt(f),0,0.9);
-    ctx.strokeStyle = o.dp>=120 ? C.bright : o.dp>=70 ? C.fire2 : o.dp>=20 ? C.amber : C.ink;
-    ctx.lineWidth=1+3.5*Math.sqrt(f)*clamp(0.35+o.dp0/300,0,1);
-    ctx.beginPath(); ctx.arc(o.x,o.y,o.R*PX_M,0,6.284); ctx.stroke(); ctx.globalAlpha=1;
-  }
-  ctx.restore();
-  ctx.lineWidth=1;
-  for(const o of burnSparks){
-    if(!burnFree(occ,o.x,o.y)) continue;
-    const k=1-o.t/o.life;
-    ctx.globalAlpha=Math.max(0,k); ctx.fillStyle = k>0.6?C.fire:k>0.3?C.amber:C.red;
-    ctx.fillRect(o.x,o.y,2,2); ctx.globalAlpha=1;
-  }
-  for(const o of burnSmoke){
-    if(!burnFree(occ,o.x,o.y)) continue;
-    const k=1-o.t/o.life;
-    ctx.globalAlpha=Math.max(0,o.a*k); ctx.fillStyle=C.smoke;
-    ctx.beginPath(); ctx.arc(o.x,o.y,o.r,0,6.284); ctx.fill(); ctx.globalAlpha=1;
-  }
+  for(const e of burnEvs) evFx(e,dt,cm,occ);
+  burnParticles(s,dt,occ);
   // armed by the EVENT, so a standing flame lighting a cell a second never accumulates one
   flashT=Math.max(0,flashT-dt);
-  if(flashT>0){
-    ctx.globalAlpha=Math.min(flashA,flashT*3.2);
-    for(let Y=0;Y<GH;Y++){
-      const y=rowTop(Y), h=rowTop(Y+1)-y;
-      for(let X=0;X<GW;X++) if(!occ[Y*GW+X]) fillRect(GX+X*CELL,y,CELL,h,C.fire);
+  if(!(flashT>0)) flashC.clear();
+  const comps=new Set(flashC);
+  for(const e of burnEvs) if(e.r>0 && e.fade>0) comps.add(e.c);
+  for(const o of burnSparks) comps.add(o.c);
+  for(const o of burnSmoke) comps.add(o.c);
+  for(const c of comps){
+    ctx.save(); compClip(cm,c);
+    // the fireball goes down before the debris: its light is behind what flies out of it
+    for(const e of burnEvs){
+      if(e.c!==c || !(e.r>0 && e.fade>0)) continue;
+      const cx=GX+(e.cx+0.5)*CELL, cy=rowTop(0)+(e.cy+0.5)*CELL;
+      const r=Math.max(CELL*1.1, e.r*CELL*1.35), a=e.fade*(0.25+0.55*Math.max(e.hot,0.25));
+      const gr=ctx.createRadialGradient(cx,cy,0,cx,cy,r);
+      gr.addColorStop(0,   alphaC(C.fire,  0.70*a));
+      gr.addColorStop(0.35,alphaC(C.fire2, 0.42*a));
+      gr.addColorStop(0.70,alphaC(C.amber, 0.18*a));
+      gr.addColorStop(1,   alphaC(C.red,   0));
+      ctx.fillStyle=gr; ctx.fillRect(cx-r,cy-r,r*2,r*2);
     }
-    ctx.globalAlpha=1;
+    ctx.lineWidth=1;
+    for(const o of burnSparks){
+      if(o.c!==c || !burnFree(occ,o.x,o.y)) continue;
+      const k=1-o.t/o.life;
+      ctx.globalAlpha=Math.max(0,k); ctx.fillStyle = k>0.6?C.fire:k>0.3?C.amber:C.red;
+      ctx.fillRect(o.x-SPARK_PX/2,o.y-SPARK_PX/2,SPARK_PX,SPARK_PX); ctx.globalAlpha=1;
+    }
+    for(const o of burnSmoke){
+      if(o.c!==c || !burnFree(occ,o.x,o.y)) continue;
+      const k=1-o.t/o.life;
+      ctx.globalAlpha=Math.max(0,o.a*k); ctx.fillStyle=C.smoke;
+      ctx.beginPath(); ctx.arc(o.x,o.y,o.r,0,6.284); ctx.fill(); ctx.globalAlpha=1;
+    }
+    if(flashC.has(c)){
+      ctx.globalAlpha=Math.min(flashA,flashT*3.2);
+      for(let i=0;i<N;i++) if(cm[i]===c && !occ[i]) fillRect(GX+(i%GW)*CELL,rowTop((i/GW)|0),CELL,CELL,C.fire);
+      ctx.globalAlpha=1;
+    }
+    ctx.restore();
   }
 }
 
@@ -618,7 +771,6 @@ function floodLayer(data,L){
   const R=matRegions();
   ctx.save();
   for(const g of R.regions){
-    if(!g.bounded) continue;
     const d=regionFloodM(L,g); if(!(d>0.05)) continue;
     let bot=-1, x0=GW, x1=0;
     const inRegion=new Set(g.cells);
@@ -628,7 +780,7 @@ function floodLayer(data,L){
     // cell by cell, because a machine under the line draws its own water and must not be tinted twice
     ctx.globalAlpha=0.30;
     for(let Y=topR;Y<=bot;Y++){ const yr=rowTop(Y), hr=rowTop(Y+1)-yr;
-      for(let X=x0;X<=x1;X++) if(!data.g[Y][X]) fillRect(GX+X*CELL,yr,CELL,hr,C.blue); }
+      for(let X=x0;X<=x1;X++) if(!data.g[Y][X] && inRegion.has(Y*GW+X)) fillRect(GX+X*CELL,yr,CELL,hr,C.blue); }
     ctx.globalAlpha=1;
     ctx.strokeStyle=C.blue; ctx.lineWidth=1.4;
     ctx.beginPath(); ctx.moveTo(GX+x0*CELL, top+0.7); ctx.lineTo(GX+(x1+1)*CELL, top+0.7); ctx.stroke();
