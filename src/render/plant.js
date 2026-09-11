@@ -212,8 +212,7 @@ function symAt(p,x,y,w,h,ink,L){
     // the melt flicker owns the end state, so this stands down once that takes over
     if(L) fxPulse(bx,by,bw,bh,C.red,fxEase(id+":dnb",L.dnbr<1&&!L.melt?1:0),1.6);
     // driven by THIS opening's own solved outflow, never the s.breach flag, so it stops with the thing it depicts
-    if(L) fxSteam(cx,Y+6,W*.6,
-      fxEase(id+":breach",clamp((L.spillBy["break:core"]||0)/SPILL_FULL,0,1)),"#ffd0c4",31);
+    if(L) fxSteam(cx,Y+6,W*.6,fxEase(id+":breach",breakPlume(L,"break:core",-1)),"#ffd0c4",31);
     // BREACHED beats SCRAM beats NEAR TRIP: only the last has not happened yet
     const near = L && !L.breach && !L.scrammed && tripNear();
     // the three the mimic already owns lead, so their tiles are dropped rather than said twice
@@ -2297,14 +2296,6 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     const mark = fit ? (L ? annLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
     if(mark){ const c=nameMark(x,y,nameH);
       wdots.push(()=> L ? lamp(c.x,c.y,MARK_R,mark) : dot(c.x-MARK_R,c.y-MARK_R,MARK_R*2,mark)); }
-    // off the same partFloodLine() the panel's HOLDS row and the drowning sweep read
-    if(live){ const fl=partFloodLine(L,p);
-      if(fl!==null){ const wy=Math.max(y, rowTop(Math.max(0,Math.ceil(fl))));
-        if(wy < y+h){ ctx.save(); ctx.globalAlpha=0.32;
-          fillRect(x,wy,w,y+h-wy,C.blue); ctx.globalAlpha=1;
-          ctx.strokeStyle=C.blue; ctx.lineWidth=1.2;
-          ctx.beginPath(); ctx.moveTo(x,wy+0.6); ctx.lineTo(x+w,wy+0.6); ctx.stroke();
-          ctx.restore(); } } }
     // a blast leaves a scar and is history; a live squeeze pulses and goes away when the pressure does
     if(live && !dmgd){ const lim=partPburst(p);
       if(lim) fxPulse(x+2,y+2,w-4,h-4,C.red,
@@ -2366,6 +2357,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   layerPass("over",L);          // instruments and annotations, on top of the machines
   // the pressurizer's dial is not a layer: it is the only instrument plant pressure has, so no switch stands it down
   if(L) pipeVessel(L);
+  if(L) contDials(L);
   // order is priority: the hit test takes the LAST widget pushed
   if(!L){ partGhost();                  // where a machine would land...
           drawPortMarks();              // ...every port already placed...

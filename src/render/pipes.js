@@ -757,6 +757,8 @@ function pipeFlow(L){
     ctx.restore();
   }
 }
+// only what flashes at the opening is a plume, off the split the room books it by; the liquid lands on the deck and liqDraw() draws it
+const breakPlume = (L, key, i) => clamp((L.spillBy[key]||0)*openFlashX(L, openFluidH(L, key), i)/SPILL_FULL, 0, 1);
 // one plume per open end, at the end's own point and that opening's own solved rate
 function pipeBreaks(L){
   if(!L || !L.spillBy || !L.dmgParts) return;
@@ -766,23 +768,23 @@ function pipeBreaks(L){
     const x=+k.slice(0,i), y=+k.slice(i+1);
     // the rate is the connection's, because that is what the solve prices, but the plume is drawn AT THE CELL
     let q=0;
-    for(const key of pipeCellRuns(x,y)) q=Math.max(q, L.spillBy["break:"+key]||0);
+    for(const key of pipeCellRuns(x,y)) q=Math.max(q, breakPlume(L, "break:"+key, y*GW+x));
     if(!(q>0)) continue;
     const [px,py]=cellPos(x,y);
     fxCellSpace(px, py, ()=>
-      fxSteam(0, 0, 22, fxEase("brk:"+k, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29));
+      fxSteam(0, 0, 22, fxEase("brk:"+k, q), "#ffd0c4", 29));
   }
   // a wrecked nozzle valve is an opening too, and it discharges at the JOINT rather than at a pipe cell
   for(const id of L.dmgParts){
     if(typeof id!=="string" || id.indexOf("port:")!==0) continue;
-    const pid=id.slice(5);
+    const pid=id.slice(5), c=portCell(pid), at=c ? c[1]*GW+c[0] : -1;
     let q=0;
     for(const r of pipeNetwork()) if(r.pa===pid||r.pb===pid)
-      q=Math.max(q, L.spillBy["break:"+r.key]||0);
+      q=Math.max(q, breakPlume(L, "break:"+r.key, at));
     if(!(q>0)) continue;
     const [px,py]=portPos(pid);
     fxCellSpace(px, py, ()=>
-      fxSteam(0, 0, 22, fxEase("brk:"+id, clamp(q/SPILL_FULL,0,1)), "#ffd0c4", 29));
+      fxSteam(0, 0, 22, fxEase("brk:"+id, q), "#ffd0c4", 29));
   }
 }
 // the cell is grown by one casing width, since a stroke reaches at most half of that from its centreline

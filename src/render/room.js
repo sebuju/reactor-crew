@@ -305,79 +305,76 @@ function roomO2Layer(data,L){
 
 // kg in a cell before it draws at all
 const LIQ_SEEN = 0.01;
-// share of a cell: a drop shorter than this is water lying on water for the tick the cell under takes to fill, and is drawn lying
-const LIQ_REST = 0.1;
-let liqBuf = {n:0};
-// px of a cell's height a liquid fills from its floor, never under one once it is there at all
-const liqPx = (q, i, hp) => q.M[i] >= LIQ_SEEN ? Math.max(1, Math.min(1, liqFill(q.M, q.rho, i)/MPC)*hp) : 0;
-// px across a falling stream: the share of the cell's volume it fills, seen through the whole depth, so a full cell is the only full-width one
-const liqJetPx = (q, i) => Math.max(1.5, Math.min(1, q.M[i]/Math.max(liqCap(q, i), 1e-9))*CELL);
-/* One stream per falling run of a column: its width taken at each cell's middle so it tapers from cell to cell, its foot on whatever it lands on (`land(x)` the height under each point of it), and foam where that is a surface or a floor. */
-function liqStream(L, q, X, Y0, Y1, land, foam, col, a){
-  const cx=GX+(X+0.5)*CELL, ys=[rowTop(Y0)], ws=[liqJetPx(q, Y0*GW+X)];
-  for(let Y=Y0;Y<=Y1;Y++){ ys.push((rowTop(Y)+rowTop(Y+1))/2); ws.push(liqJetPx(q, Y*GW+X)); }
-  const n=ys.length, wl=ws[n-1], foot=x=>Math.max(land(x), ys[n-1]), yb=foot(cx);
-  // under the width floor a stream fades by what it holds, or a gram in flight draws as a line a cell tall
-  let share=0;
-  for(let Y=Y0;Y<=Y1;Y++){ const i=Y*GW+X; share=Math.max(share, q.M[i]/Math.max(liqCap(q, i), 1e-9)); }
-  const fade=Math.min(1, share*CELL/1.5);
-  ctx.beginPath(); ctx.moveTo(cx-ws[0]/2, ys[0]);
-  for(let k=1;k<n;k++) ctx.lineTo(cx-ws[k]/2, ys[k]);
-  ctx.lineTo(cx-wl/2, foot(cx-wl/2)); ctx.lineTo(cx, yb); ctx.lineTo(cx+wl/2, foot(cx+wl/2));
-  for(let k=n-1;k>=0;k--) ctx.lineTo(cx+ws[k]/2, ys[k]);
-  ctx.closePath();
-  ctx.globalAlpha=a*fade; ctx.fillStyle=col; ctx.fill();
-  ctx.globalAlpha=Math.min(1, a*1.6)*fade; ctx.strokeStyle=lerpC(col, C.bright, 0.3); ctx.lineWidth=1;
-  for(const s of [-1, 1]){ ctx.beginPath(); ctx.moveTo(cx+s*ws[0]/2, ys[0]);
-    for(let k=1;k<n;k++) ctx.lineTo(cx+s*ws[k]/2, ys[k]);
-    ctx.lineTo(cx+s*wl/2, foot(cx+s*wl/2)); ctx.stroke(); }
-  // off the plant clock, so a paused plant holds its streaks still
-  const wMin=Math.min(...ws), dash=CELL*0.22, gap=CELL*0.4;
-  if(wMin > CELL*0.12){
-    ctx.globalAlpha=0.22; ctx.strokeStyle=C.bright; ctx.setLineDash([dash, gap]);
-    ctx.lineDashOffset=-(((L.t||0)*CELL*2) % (dash+gap));
-    for(const s of [-0.22, 0.2]){ ctx.beginPath(); ctx.moveTo(cx+s*wMin, ys[0]); ctx.lineTo(cx+s*wMin, foot(cx+s*wMin)); ctx.stroke(); }
-    ctx.setLineDash([]); ctx.lineDashOffset=0;
-  }
-  // a plunging stream churns the water it lands in white, wider than itself
-  if(foam){
-    const rx=Math.min(CELL*1.1, wl*1.3), k=Math.min(0.8, 0.35+0.5*wl/CELL)*fade;
-    const gr=ctx.createRadialGradient(0,0,0,0,0,rx);
-    gr.addColorStop(0,   alphaC(C.bright, 0.75*k));
-    gr.addColorStop(0.5, alphaC(C.bright, 0.35*k));
-    gr.addColorStop(1,   alphaC(C.bright, 0));
-    ctx.save(); ctx.translate(cx, yb); ctx.scale(1, 0.45); ctx.globalAlpha=1; ctx.fillStyle=gr;
-    ctx.beginPath(); ctx.arc(0, 0, rx, 0, 2*Math.PI); ctx.fill(); ctx.restore();
-  }
-  ctx.globalAlpha=1;
-}
 // the board height of a level z metres over the keel, through the row it falls in
 const liqY = z => { const k=clamp(Math.floor(z/MPC), 0, GH-1), y1=rowTop(GH-k); return y1-clamp(z/MPC-k, 0, 1)*(y1-rowTop(GH-1-k)); };
-/* One primitive for both liquids. What stands in a column, and what leans on the water beside it, is one body per column packed down onto its floor with the second liquid under it (`under`), its surface sampled at the column's middle and curved through the edges it shares with the body beside it; only water with air on both sides is drawn falling. */
-function liqDraw(data, L, q, col, a, under, lit){
-  const G=roomGeomLive(L), N=GW*GH, M=q.M, other={M:q.O, rho:q.oRho};
-  if(liqBuf.n!==N) liqBuf={n:N, lying:new Uint8Array(N), seg:new Int32Array(N)};
-  const lying=liqBuf.lying.fill(0), seg=liqBuf.seg.fill(-1);
-  const falls=i=>M[i]>=LIQ_SEEN && !liqStands(q,G,i), stands=i=>M[i]>=LIQ_SEEN && !falls(i);
-  // water leaning on standing water beside it, or lying on a body with less than LIQ_REST of a drop left, is part of that body, not a stream through air
-  for(let X=0;X<GW;X++) for(let Y=GH-1;Y>=0;Y--){
-    const i=Y*GW+X, b=i+GW;
-    if(!(M[i]>=LIQ_SEEN)) continue;
-    lying[i] = !falls(i) || (lying[b] && 1-(liqFill(M,q.rho,b)+liqFill(other.M,other.rho,b))/MPC < LIQ_REST)
-      || (X>0 && stands(i-1)) || (X<GW-1 && stands(i+1)) ? 1 : 0;
+// samples a cell is cut into each way for the outline falling liquid is drawn with
+const LIQ_SUB = 6;
+let liqFB = null;
+/* What is still in the air is not drawn cell by cell: each cell's share is laid on a fine grid as a band down its column's middle, softened once, and outlined where it crosses half, so a pour, a drip and the pool it lands in are one shape. The outline goes into the path already open, and fills with the bodies in one pass. */
+function liqGoo(runs){
+  if(!runs.length) return;
+  const K=LIQ_SUB, sp=CELL/K, NX=GW*K+2, NY=GH*K+2, x0=GX-sp, y0=rowTop(0)-sp, N=NX*NY, I=0.5;
+  if(!liqFB || liqFB.a.length!==N) liqFB={a:new Float32Array(N), b:new Float32Array(N)};
+  const F=liqFB.a.fill(0), T=liqFB.b.fill(0);
+  let c0=NX, c1=0, b0=NY, b1=0;
+  // under one and a half samples a band would soften away to nothing
+  const band=(cx, w, ya, yb)=>{
+    w=Math.max(w, 1.5*sp);
+    const xa=cx-w/2, xb=cx+w/2;
+    const ca=Math.max(0, Math.floor((xa-x0)/sp)), cb=Math.min(NX-1, Math.floor((xb-x0)/sp));
+    const ra=Math.max(0, Math.floor((ya-y0)/sp)), rb=Math.min(NY-1, Math.floor((yb-y0)/sp));
+    for(let c=ca;c<=cb;c++){ const sx=x0+c*sp, h=(Math.min(xb,sx+sp)-Math.max(xa,sx))/sp;
+      if(!(h>0)) continue;
+      for(let r=ra;r<=rb;r++){ const sy=y0+r*sp, v=h*(Math.min(yb,sy+sp)-Math.max(ya,sy))/sp;
+        if(v>0){ const k=r*NX+c; F[k]=Math.min(1, F[k]+v); } } }
+    c0=Math.min(c0,ca); c1=Math.max(c1,cb); b0=Math.min(b0,ra); b1=Math.max(b1,rb); };
+  for(const r of runs){
+    const cx=GX+(r.X+0.5)*CELL;
+    for(let y=r.Y0;y<=r.Y1;y++) band(cx, r.ws[y-r.Y0], y===r.Y0 && r.hang ? rowTop(y)-sp : rowTop(y), rowTop(y+1));
+    if(r.land!==null) band(cx, r.ws[r.ws.length-1], rowTop(r.Y1+1), r.land+sp);
   }
-  const lies=i=>lying[i]===1;
-  const segs=[], byCol=[];
+  c0=Math.max(1, c0-1); c1=Math.min(NX-3, c1+1); b0=Math.max(1, b0-1); b1=Math.min(NY-3, b1+1);
+  for(let r=b0-1;r<=b1+1;r++) for(let c=c0;c<=c1;c++){ const k=r*NX+c; T[k]=(F[k-1]+2*F[k]+F[k+1])/4; }
+  for(let r=b0;r<=b1;r++) for(let c=c0;c<=c1;c++){ const k=r*NX+c; F[k]=(T[k-NX]+2*T[k]+T[k+NX])/4; }
+  for(let r=b0-1;r<=b1+1;r++){ F[r*NX+c0-1]=0; F[r*NX+c1+1]=0; }
+  for(let c=c0-1;c<=c1+1;c++){ F[(b0-1)*NX+c]=0; F[(b1+1)*NX+c]=0; }
+  const X=c=>x0+(c+0.5)*sp, Y=r=>y0+(r+0.5)*sp, P=new Float64Array(12);
+  for(let r=b0-1;r<=b1;r++){
+    let run=-1;
+    for(let c=c0-1;c<=c1;c++){
+      const v0=F[r*NX+c], v1=F[r*NX+c+1], v2=F[(r+1)*NX+c+1], v3=F[(r+1)*NX+c];
+      const m=(v0>=I)|(v1>=I)<<1|(v2>=I)<<2|(v3>=I)<<3;
+      if(m===15){ if(run<0) run=c; continue; }
+      if(run>=0){ ctx.rect(X(run), Y(r), X(c)-X(run), sp); run=-1; }
+      if(m===0) continue;
+      P[0]=X(c); P[1]=Y(r); P[2]=v0; P[3]=X(c+1); P[4]=Y(r); P[5]=v1;
+      P[6]=X(c+1); P[7]=Y(r+1); P[8]=v2; P[9]=X(c); P[10]=Y(r+1); P[11]=v3;
+      // round the square clockwise, like the bodies: the corners inside and the points where the edge crosses half
+      let first=true;
+      const pt=(x,y)=>{ if(first){ ctx.moveTo(x,y); first=false; } else ctx.lineTo(x,y); };
+      for(let e=0;e<4;e++){ const p=e*3, n=((e+1)%4)*3, ip=P[p+2]>=I;
+        if(ip) pt(P[p], P[p+1]);
+        if(ip!==(P[n+2]>=I)){ const t=(I-P[p+2])/(P[n+2]-P[p+2]); pt(P[p]+(P[n]-P[p])*t, P[p+1]+(P[n+1]-P[p+1])*t); } }
+      ctx.closePath();
+    }
+    if(run>=0) ctx.rect(X(run), Y(r), X(c1+1)-X(run), sp);
+  }
+}
+/* One primitive for both liquids. What stands (liqStands(), the sim's own test) is one level body per column packed onto its floor with the second liquid under it (`under`), its surface sampled at the column's middle and curved through the edges it shares with the body beside it. What is still in the air is one smooth band per falling run of a column, each cell's share as its width, in the same path, so it joins the ledge it leaves and the body it lands on. */
+function liqDraw(data, L, q, col, a, under, lit){
+  const G=roomGeomLive(L), M=q.M, segAt=new Int32Array(GW*GH).fill(-1);
+  const segs=[], byCol=[], blobs=[];
   for(let X=0;X<GW;X++){
     byCol.push([]);
-    let s=null, pend=0;
+    let s=null, pend=0, base=null;
     for(let Y=GH-1;Y>=0;Y--){
       const i=Y*GW+X, has=M[i]>=LIQ_SEEN;
-      if(liqShut(G,i) || (has && !lies(i))){ s=null; continue; }
+      if(liqShut(G,i)){ s=null; pend=0; base=null; continue; }
+      if(base===null) base=zFloor(i);
       const u=under ? liqFill(under.M,under.rho,i) : 0;
-      if(!has){ if(s) pend+=u; continue; }
-      if(!s){ s={X, z0:zFloor(i), v:0, u:0, top:i}; segs.push(s); byCol[X].push(s); pend=0; }
-      s.u+=pend+u; pend=0; s.v+=liqFill(M,q.rho,i); s.top=i; seg[i]=segs.length-1;
+      if(!has || !liqStands(q,G,i)){ if(has) blobs.push(i); pend+=u; continue; }
+      if(!s){ s={X, z0:base, v:0, u:0, top:i}; segs.push(s); byCol[X].push(s); }
+      s.u+=pend+u; pend=0; s.v+=liqFill(M,q.rho,i); s.top=i; segAt[i]=segs.length-1;
     }
   }
   for(const s of segs){ s.zb=s.z0+s.u; s.zt=s.zb+s.v;
@@ -394,7 +391,30 @@ function liqDraw(data, L, q, col, a, under, lit){
   const edge=(s, nz)=> liqY(nz===nz ? clamp((s.zt+nz)/2, s.zb, s.zMax) : s.zt);
   for(const s of segs){ s.yb=liqY(s.zb); s.yt=Math.min(liqY(s.zt), s.yb-1);
     s.eL=Math.min(edge(s, nextTo(s, s.X-1)), s.yb); s.eR=Math.min(edge(s, nextTo(s, s.X+1)), s.yb); }
-  // one path for every body, so the colour stays one shade wherever two of them touch
+  const air=new Uint8Array(GW*GH);
+  for(const i of blobs) air[i]=1;
+  const runs=[];
+  for(let X=0;X<GW;X++) for(let Y=0;Y<GH;Y++){
+    if(!air[Y*GW+X]) continue;
+    let Y1=Y;
+    while(Y1+1<GH && air[(Y1+1)*GW+X]) Y1++;
+    const ws=[];
+    for(let y=Y;y<=Y1;y++){ const i=y*GW+X; ws.push(Math.min(1, M[i]/Math.max(liqCap(q,i),1e-9))*CELL); }
+    const up=(Y-1)*GW+X;
+    // the cell over a body is settled into it every tick (liqFlow()'s last pass), so a pour's foot looks one cell further down for what it lands on
+    let j=Y1+1;
+    if(j<GH && !liqShut(G,j*GW+X) && segAt[j*GW+X]<0 && M[j*GW+X]<LIQ_SEEN) j++;
+    const dn=j*GW+X;
+    // it hangs from a ledge or a body over it and runs into a body or a floor under it
+    const hang=Y>0 && (liqShut(G,up) || segAt[up]>=0);
+    let land=null;
+    if(j>=GH) land=rowTop(GH);
+    else if(liqShut(G,dn)) land=rowTop(j);
+    else if(segAt[dn]>=0){ const s=segs[segAt[dn]]; land=0.25*s.eL+0.5*s.yt+0.25*s.eR; }
+    runs.push({i:Y*GW+X, X, Y0:Y, Y1, ws, hang, land});
+    Y=Y1;
+  }
+  // one path for every body and blob, so the colour stays one shade wherever two of them touch
   const body=on=>{
     ctx.beginPath();
     for(const s of segs){
@@ -403,31 +423,21 @@ function liqDraw(data, L, q, col, a, under, lit){
       ctx.moveTo(x0,s.eL); ctx.quadraticCurveTo(x0+CELL/2,s.yt,x1,s.eR); ctx.lineTo(x1,s.yb); ctx.lineTo(x0,s.yb); ctx.closePath();
       if(on) txt(roomPoolT(L,s.top).toFixed(0)+" K", x0+CELL/2, s.yb-3, {size:8, align:"center", color:C.amber});
     }
+    liqGoo(runs.filter(r=>!!(lit && lit(r.i))===on));
     ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
   };
   body(false);
   if(lit) body(true);
+  // the surface line stops where a pour comes through it
+  ctx.save(); ctx.beginPath(); ctx.rect(GX, rowTop(0), GW*CELL, rowTop(GH)-rowTop(0));
+  for(const r of runs) if(r.land!==null){ const sp=CELL/LIQ_SUB, w=Math.max(r.ws[r.ws.length-1], 1.5*sp)+2*sp, y=rowTop(r.Y1+1)-sp;
+    ctx.rect(GX+(r.X+0.5)*CELL-w/2, y, w, r.land-y+2*sp); }
+  ctx.clip("evenodd");
   ctx.beginPath();
   for(const s of segs){ const x0=GX+s.X*CELL;
     ctx.moveTo(x0, s.eL+0.7); ctx.quadraticCurveTo(x0+CELL/2, s.yt+0.7, x0+CELL, s.eR+0.7); }
   ctx.strokeStyle=col; ctx.lineWidth=1.4; ctx.stroke();
-  const free=i=>M[i]>=LIQ_SEEN && !liqShut(G,i) && !lies(i);
-  for(let X=0;X<GW;X++) for(let Y=0;Y<GH;Y++){
-    if(!free(Y*GW+X)) continue;
-    let Y1=Y;
-    while(Y1+1<GH && free((Y1+1)*GW+X)) Y1++;
-    const yEnd=rowTop(GH);
-    let land=()=>yEnd, foam=true;
-    for(let j=Y1+1;j<GH;j++){ const k=j*GW+X, yj=rowTop(j);
-      if(liqShut(G,k)){ land=()=>yj; break; }
-      // the surface curve's own height under each point of the stream and a little below it, so it meets the water the curve draws and not the sample the curve rounds off
-      if(seg[k]>=0){ const s=segs[seg[k]], x0=GX+X*CELL;
-        land=x=>{ const t=clamp((x-x0)/CELL, 0, 1); return (1-t)*(1-t)*s.eL+2*t*(1-t)*s.yt+t*t*s.eR+CELL*0.05; }; break; }
-      if(M[k]>=LIQ_SEEN){ land=()=>yj; foam=false; break; } }
-    const on=lit && lit(Y*GW+X);
-    liqStream(L, q, X, Y, Y1, land, foam, on?C.amber:col, on?0.50:a);
-    Y=Y1;
-  }
+  ctx.restore();
 }
 function roomNaLayer(data,L){
   if(!L || !L.roomPool) return;
@@ -872,16 +882,37 @@ function contZones(data,L){
       const Z=CONTZ[contzOf(f)], y=rowTop(Y);
       ctx.globalAlpha=Z.a; fillRect(GX+X*CELL,y,CELL,rowTop(Y+1)-y,Z.col); ctx.globalAlpha=1;
     }
-    let sx=0, sy=0, lo=Infinity;
-    for(const i of g.cells){ sx+=i%GW; sy+=(i/GW)|0; }
-    for(const i of g.wall) lo=Math.min(lo, matBurstP(i%GW,(i/GW)|0));
-    if(!isFinite(lo)) continue;
-    const cx=GX+(sx/g.cells.length+0.5)*CELL, cy=rowTop(Math.round(sy/g.cells.length))+11;
-    txt(L?(pr*1000).toFixed(1)+" kPa":"SEALED", cx, cy, {size:8, align:"center", color:C.cyan});
-    if(L) txt(((lo-pr)*1000).toFixed(1)+" kPa MARGIN", cx, cy+10,
-              {size:7, align:"center", color:(lo-pr)<0?C.red:C.ink2});
+    const at = L ? null : contGaugeOf(g);
+    if(at) pipeTag(at.cx, at.cy-5*DRAW_K, "SEALED", C.cyan);
   }
   ctx.restore();
+}
+// the region's top right cell and its weakest wall's rating, or null for a region with no wall
+function contGaugeOf(g){
+  let top=null, rate=Infinity;
+  for(const i of g.cells){ const X=i%GW, Y=(i/GW)|0;
+    if(!top || Y<top.Y || (Y===top.Y && X>top.X)) top={X,Y}; }
+  for(const i of g.wall) rate=Math.min(rate, matRating(i%GW,(i/GW)|0));
+  if(!top || !isFinite(rate)) return null;
+  const r=PIPE_DIAL_R, pad=2*DRAW_K;
+  return {key:top.Y*GW+top.X, rate,
+          cx:Math.round(GX+(top.X+1)*CELL-r-pad), cy:Math.round(rowTop(top.Y)+r+pad)};
+}
+// not a layer, like the pressurizer's: the scale is the weakest wall's rating, marked at 1 and ending at its burst
+function contDials(L){
+  for(const g of matRegions().regions){
+    if(!g.bounded) continue;
+    const at=contGaugeOf(g);
+    if(!at) continue;
+    const pr=regionDP(L,g), burst=at.rate*PIPE_BURST_K, r=PIPE_DIAL_R;
+    const fr=pipeDisplay("cont:"+at.key, at.rate>0 ? pr/at.rate : (pr>0 ? PIPE_BURST_K : 0));
+    pipeDial(at.cx, at.cy, r, fr, C.cyan, (pr*1000).toFixed(1)+" kPa", {lim:1, max:PIPE_BURST_K});
+    pipeTag(at.cx, at.cy+r+11*DRAW_K, ((burst-pr)*1000).toFixed(1)+" kPa MARGIN", burst-pr<0?C.red:C.ink2);
+    TIP(at.cx-r, at.cy-r, 2*r, 2*r, "CONTAINMENT PRESSURE",
+      (pr*1000).toFixed(1)+" kPa over the ship's air at the worst cell inside, "+
+      (at.rate>0 ? Math.round(pr/at.rate*100)+" % of what its weakest wall is rated for ("+(at.rate*1000).toFixed(1)+" kPa)" : "and one of its walls is rated for nothing")+
+      ". That wall splits at "+(burst*1000).toFixed(1)+" kPa, where the dial ends; the red band is past its rating.");
+  }
 }
 // the ship is drawn in SECTION: water is a place, it falls, it runs and it stands where it stands
 function floodLayer(data,L){
@@ -893,11 +924,10 @@ function floodLayer(data,L){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const j=id.indexOf(","), bx=+id.slice(5,j), by=+id.slice(j+1), i=by*GW+bx;
     if(!(W[i]>0)) continue;
-    // off the same solved rate pipeBreaks() draws the plume at: a drained tear bubbles nothing
+    // off the opening's whole solved rate, liquid and flash: a drained tear bubbles nothing
     let rate=0;
     for(const key of pipeCellRuns(bx,by)) rate=Math.max(rate, (L.spillBy&&L.spillBy["break:"+key])||0);
-    const t=liqTop(q,G,i), Yt=(t/GW)|0, yb=rowTop(Yt+1);
-    const br=grect(bx,by,1,1), bt=Math.max(br.y, yb-liqPx(q,t,yb-rowTop(Yt)));
+    const br=grect(bx,by,1,1), bt=Math.max(br.y, liqY(liqSurf(q,G,i)));
     if(!(bt < br.y+br.h)) continue;
     fxCellSpace(br.x, bt, ()=>
       fxBubbles(0, 0, br.w/DRAW_K, (br.y+br.h-bt)/DRAW_K,
