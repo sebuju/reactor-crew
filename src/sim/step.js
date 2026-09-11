@@ -824,9 +824,24 @@ const feedInH = (s,id) => { const h = feedInHBy[feedNode(id)];
   return hOfT(satOfCirc(boilerCirc(id)), s.condT !== undefined ? s.condT : T_FEED); };
 /* refilled by advectStep off the same donor pass the enthalpy integral uses, and empty until one has run */
 const feedInHBy = {};
+// ...and the kg/s that arrived, off the same pass
+const feedInMBy = {};
+/* the same map for the vessel's own inlet, and the same door: the channel starts in the water that ARRIVED, never in the loop mean, which is not the vessel's midpoint */
+const coreInHBy = {};
+/* kJ/kg in the CORE's datum (cp*T); the field's is cp*(T - H_DATUM) */
+const coreInH = (s,id) => { const K = (P.cores && P.cores[id]) || P, cp = K.sat.cp;
+  const h = coreInHBy[coreFold(id)];
+  if(h !== undefined) return h + cp*H_DATUM;
+  /* no transport pass yet: the old algebra, so a plant with no field reads what it read */
+  const cs = s.coreBy && s.coreBy[id];
+  return cp*(TavgOf(s, K.circ) - coreDT0(coreD(id))*(cs ? cs.heat : 1)/2); };
 /* off what the HEATERS pass, which is the condensate flow and not the post-valve feed: the heater train stands between the condenser and the feed pump, upstream of the regulating valve, so a valve movement is not its duty. Read at the shell's own nozzle instead, the bleed collapses whenever the feed dips, the turbine takes the whole raised steam and the plant over-produces by exactly bleedFrac. */
-const feedHeatKW = (s,id) => Math.max(0, s.steamBy[id]||0)
-  * Math.max(0, hOfT(satOfCirc(boilerCirc(id)), T_FEED) - feedInH(s,id));
+// a heater cannot drive the nozzle's water past its own bleed steam's saturation, so a feed line with nothing arriving takes no duty
+const feedHeatKW = (s,id) => { const c = satOfCirc(boilerCirc(id)), nm = feedNode(id), hIn = feedInH(s,id);
+  const duty = Math.max(0, s.steamBy[id]||0)*Math.max(0, hOfT(c, T_FEED) - hIn);
+  const hs = satH(c, boilerP(s,id)), m = (s.mBy && s.mBy[nm]) || 0;
+  const room = Math.max(0, feedInMBy[nm]||0)*Math.max(0, hs - hIn) + m*Math.max(0, hs - netHAt(s,nm))/NET_DT;
+  return Math.min(duty, room); };
 /* an open heater: b kg of steam at h_g plus the rest of the condensate at h_in leave together at T_FEED, so a bleed kilogram gives up h_g - h_in and not h_g - h_fw */
 const feedBleedKgs = (s,id) => feedHeatKW(s,id)
   / Math.max(satHg(satOfCirc(boilerCirc(id)), boilerP(s,id)) - feedInH(s,id), 1);
@@ -1117,7 +1132,9 @@ function holdLineSet(){
 function advectStep(s, dt, runFlow, edgeKg){
   const net = P && P.net;
   advectEdgeKg = advectLandedBy = null;
-  if(!net || !net.name || !s.hBy || !s.mBy){ for(const k in feedInHBy) delete feedInHBy[k]; return; }
+  if(!net || !net.name || !s.hBy || !s.mBy){ for(const k in feedInHBy) delete feedInHBy[k];
+    for(const k in feedInMBy) delete feedInMBy[k];
+    for(const k in coreInHBy) delete coreInHBy[k]; return; }
   const h = s.hBy, mBy = s.mBy;
   // refilled, never rebuilt; a key can only go stale when the net or the field object is replaced
   if(net.advKeysH !== h || net.advKeysM !== mBy){
@@ -1247,20 +1264,38 @@ function advectStep(s, dt, runFlow, edgeKg){
       const budget = (have === undefined ? o*dt : net.F.x[i]*have) / dt + vIn[i];
       if(o > budget) for(let e=0;e<net.edges.length;e++)
         if(gasK[e] === 1 && eFrom[e] === i) gasK[e] = Math.max(budget, 0)/o; } }
+  /* and the mirror below the surface: a water outlet hands over its node's own liquid plus the liquid arriving in the same tick, and carries the rest at the node's mean */
+  const liqK = scratch(net, "liqK", net.edges.length, Float64Array, 0);
+  { const lIn = scratch(net, "lIn", net.n, Float64Array, 0),
+          lOut = scratch(net, "lOut", net.n, Float64Array, 0);
+    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+      const ed = net.edges[e], x = net.F.x[from];
+      if(ed.liqAt === from && x > 0){ liqK[e] = 1; lOut[from] += eM[e]; lIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
+      else lIn[from === ed.u ? ed.v : ed.u] += eM[e]*Math.max(0, 1 - x); }
+    for(let i=0;i<net.n;i++){ const o = lOut[i]; if(!(o > 0)) continue;
+      const have = mBy[net.name[i]];
+      const budget = (have === undefined ? o*dt : (1 - net.F.x[i])*have) / dt + lIn[i];
+      if(o > budget) for(let e=0;e<net.edges.length;e++)
+        if(liqK[e] === 1 && eFrom[e] === i) liqK[e] = Math.max(budget, 0)/o; } }
   for(let e=0;e<net.edges.length;e++){
     const from = eFrom[e]; if(from < 0) continue;
     const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
     const m = eM[e], fn = net.name[from];
     // a steam nozzle hands over the VAPOUR: its enthalpy, and the gas the node is carrying
     const fg = gasK[e], gas = fg > 0;
+    const fl = liqK[e], liq = fl > 0;
     const hg = gas ? satHg(netSatOf(fn), net.F.p[from]) : 0;
-    const hd = gas ? fg*hg + (1 - fg)*h[fn] : h[fn];
+    const hf = liq ? satH(netSatOf(fn), net.F.p[from]) : 0;
+    const hd = gas ? fg*hg + (1 - fg)*h[fn]
+             : liq ? fl*hf + (1 - fl)*h[fn] : h[fn];
     inH[to] += m*hd;
     inM[to] += m;
     // what the steam took over this node's own mean, charged back to it
     if(gas) src[fn] = (src[fn]||0) - m*fg*(hg - h[fn]);
+    if(liq) src[fn] = (src[fn]||0) - m*fl*(hf - h[fn]);
     if(b){ inB[to] += m*b[fn];
-      let cIn = m*cH[fn];
+      // the hydrogen is in the vapour, so a water outlet hands over none of it
+      let cIn = m*cH[fn]*(liq ? 1 - fl : 1);
       if(gas && cH[fn] > 0){
         const m0 = mBy[fn] || 0, have = cH[fn]*m0, mine = cH[fn]*m*dt;
         // all of it is in the vapour, and a node may not hand over more than it holds
@@ -1272,8 +1307,16 @@ function advectStep(s, dt, runFlow, edgeKg){
       inC[to] += cIn; }
   }
   for(const k in feedInHBy) delete feedInHBy[k];
+  for(const k in feedInMBy) delete feedInMBy[k];
   for(const id of boilerIds()){ const nm = feedNode(id), i = net.index[nm];
-    if(i !== undefined && inM[i] > 0) feedInHBy[nm] = inH[i]/inM[i]; }
+    if(i !== undefined && inM[i] > 0){ feedInHBy[nm] = inH[i]/inM[i]; feedInMBy[nm] = inM[i]; } }
+  for(const k in coreInHBy) delete coreInHBy[k];
+  /* the arriving water IS the inlet; the blend only exists below the flow at which a rise stops being a rise, where the channel sits in the water it already holds */
+  for(const id of coreIds()){ const nm = coreFold(id), i = net.index[nm];
+    if(i === undefined || !(inM[i] > 0)) continue;
+    const ref = P.netRefThru && P.netRefThru[nm];
+    const w = ref > 0 ? clamp(inM[i]/(ref*CORE_DT_QMIN), 0, 1) : 0;
+    coreInHBy[nm] = w*(inH[i]/inM[i]) + (1 - w)*h[nm]; }
   mOut.fill(0);
   for(let e=0;e<net.edges.length;e++) if(eFrom[e] >= 0) mOut[eFrom[e]] += eM[e];
   /* advectEdgeKg is signed u->v per edge; advectLandedBy is kg that arrived on a booked node from outside its own book, negative for what left. Charged off the same eM[] the mass integral uses, never off the solve's rate */
@@ -1783,9 +1826,8 @@ function injectNode(tgt){
     const own = pipeMap().cellOwner[tgt.slice(5)];
     const n = own && own.length && runNodeOf(own[0]);
     return (n && net.index[n] !== undefined) ? n : null; }
-  for(let i=0;i<net.n;i++){ const p = net.partOfNode(net.name[i]);
-    if(p && p.id === tgt) return net.name[i]; }
-  return null;
+  const ns = nodeGraph().nodesOf[tgt];
+  return (ns && ns.find(n => net.index[n] !== undefined)) || null;
 }
 function injectFluid(s, dt){
   const q = s.inject;
@@ -1798,14 +1840,48 @@ function injectFluid(s, dt){
   s.mBy[n] = have + kg;
   book(s, "inject", -kg);
 }
-/* water let go inside a bounded region comes back into the held side of the book against a negative `sump` line; it floods from the bottom cell up and drowns what it reaches */
+/* A shot wall is a slot MPC tall and ROOM_DEPTH wide: the part of it above the far surface discharges free (Torricelli integrated over the height), the part below is drowned on the difference of the two surfaces, and one tick never carries it past level. */
+function sumpDrain(s, dt){
+  for(const k in s.holeW) s.holeW[k].q = 0;      // refilled, never rebuilt
+  const holes = matHoles(s);
+  if(!holes.length){ for(const k in s.holeW) delete s.holeW[k]; return; }
+  const R = matRegions(), g2 = 2*G_MPA*1e6, b = ROOM_DEPTH;
+  const kgPerM = g => 1000*regionSpanX(g)*MPC*ROOM_DEPTH;
+  const surf = g => { let bot = -1; for(const i of g.cells){ const Y = (i/GW)|0; if(Y > bot) bot = Y; }
+    return (bot+1)*MPC - regionFloodM(s, g); };
+  for(const h of holes){
+    const ga = R.regions[h.a], gb = R.regions[h.b];
+    const ya = surf(ga), yb = surf(gb);
+    const up = ya <= yb ? ga : gb, dn = up === ga ? gb : ga;
+    const yu = Math.min(ya, yb), yd = Math.max(ya, yb);
+    const top = h.y*MPC, bot = (h.y+1)*MPC;
+    if(!(yu < bot) || !(yd > yu)) continue;
+    const H1 = Math.min(bot, yd) - yu, H2 = Math.max(top - yu, 0);
+    const free = H1 > H2 ? 2/3*ORIF_CD*b*Math.sqrt(g2)*(Math.pow(H1,1.5) - Math.pow(H2,1.5)) : 0;
+    const drown = yd < bot ? ORIF_CD*b*(bot - Math.max(yd, top))*Math.sqrt(g2*(yd - yu)) : 0;
+    const kUp = regionKey(up), kDn = regionKey(dn), have = s.sump[kUp] || 0;
+    const m = Math.min(1000*(free + drown)*dt, have, (bot - yu)*kgPerM(up),
+      (yd - yu)/(1/kgPerM(up) + 1/kgPerM(dn)), regionSumpCap(dn) - (s.sump[kDn] || 0));
+    if(!(m > 0)) continue;
+    s.sump[kDn] = (s.sump[kDn] || 0) + m;
+    s.sump[kUp] = have - m;
+    if(!(s.sump[kUp] > 0)) delete s.sump[kUp];
+    let land = -1;
+    for(const [dx,dy] of [[0,1],[1,0],[-1,0],[0,-1]]){ const X = h.x+dx, Y = h.y+dy;
+      if(X>=0 && X<GW && Y>=0 && Y<GH && R.of[Y*GW+X] === dn.idx){ land = Y*GW+X; break; } }
+    const key = h.x+","+h.y, w = s.holeW[key];
+    if(w){ w.q += m/dt; w.to = land; } else s.holeW[key] = {q: m/dt, to: land};
+  }
+  for(const k in s.holeW) if(!holes.some(h => h.x+","+h.y === k)) delete s.holeW[k];
+}
+/* water let go anywhere on the board lands on its region's floor, the ship's included, and comes back into the held side of the book against a negative `sump` line; it floods from the bottom cell up and drowns what it reaches */
 function sumpStep(s, dt){
   const G = P.net; if(!G) return;
   const kgOf = rate => Math.max(0, rate)/100*loopKg();
   const put = (cells, kg) => {
     if(!(kg > 0) || !cells || !cells.length) return;
-    const c = cells[0], g = matRegionAt(c[0], c[1]);
-    if(!g) return;                       // it went into the ship, which is where it always went
+    const c = cells[0], g = matRegionIn(c[0], c[1]);
+    if(!g) return;                       // a wall cell is in no region
     /* what will not fit is never moved into this book, so it stays booked out at the node it left from */
     const k = regionKey(g), have = s.sump[k]||0;
     const take = Math.min(kg, Math.max(0, regionSumpCap(g) - have));
@@ -1815,7 +1891,7 @@ function sumpStep(s, dt){
   };
   /* a region that stopped being one releases the book that was holding its water back */
   { const live = {};
-    for(const g of matRegionsBounded()) live[regionKey(g)] = g;
+    for(const g of matRegions().regions) live[regionKey(g)] = g;
     for(const k in s.sump){
       const g = live[k];
       if(g){ const cap = regionSumpCap(g);
@@ -1825,35 +1901,41 @@ function sumpStep(s, dt){
     } }
   /* a fluid that burns is not in this book at all: it lands as a pool (s.roomPool, roomFireStep()) with its own mass */
   const burns = fl => !!(fl && fl.c && fl.c.burn);
+  /* what flashed at the opening is roomAddGas()'s air; this book takes the rest, off the same openFlashX() both ask */
+  const wet = (fl, c) => 1 - openFlashX(s, fl, c ? c[1]*GW + c[0] : -1);
   for(const key in s.spillBy){
     const r = G.byKey[key.slice(6)];
     if(!r || !r.cells) continue;
-    if(burns(openFluidH(s, key))) continue;
+    const fl = openFluidH(s, key);
+    if(burns(fl)) continue;
     const open = r.cells.filter(([x,y]) => cellBroken(s,x,y));
-    put(open, kgOf(s.spillBy[key])*dt);
+    put(open, kgOf(s.spillBy[key])*wet(fl, open[0])*dt);
   }
   const tgt = (G.fitTarget)||{}, out = (G.fitVentOut)||{};
   for(const fid in s.reliefVent){
     if(tgt[fid] || out[fid]) continue;
     const q = partOf(fid); if(!q) continue;
-    if(burns(partFluidH(s, fid))) continue;
-    put([[q.x+((q.w/2)|0), q.y+((q.h/2)|0)]], kgOf(s.reliefVent[fid])*dt);
+    const fl = partFluidH(s, fid);
+    if(burns(fl)) continue;
+    const c = [q.x+((q.w/2)|0), q.y+((q.h/2)|0)];
+    put([c], kgOf(s.reliefVent[fid])*wet(fl, c)*dt);
   }
+  sumpDrain(s, dt);
   /* read off the same depth the FLOODING layer draws, so the picture and the failure cannot disagree */
-  for(const g of matRegionsBounded()){
+  for(const g of matRegions().regions){
     const f = regionFlooded(s, g); if(!f) continue;
     const line = f.bot + 1 - f.rows;
     for(const p of LAY.parts){
       if(!fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
-      if(p.y + p.h <= line) continue;
-      if(matRegionOf(p) !== g) continue;
+      if(!floodDrowns(p, line)) continue;
+      if(matRegionInOf(p) !== g) continue;
       s.dmgParts.push(p.id);
       s.dmgWhy[p.id] = "FLOODED";
       const fx = dmgFx(p.id);
       if(fx.hit) fx.hit(s, p.id);
       logE("alarm","FLOODING / "+fx.msg,
         p.name+" is under water - "+f.d.toFixed(1)+
-        " m of it is standing on the floor of the region it is in, and the line has reached the machine. "+fx.why);
+        " m of it is standing on the floor of the region it is in, and it is two thirds of the way up the machine. "+fx.why);
     }
   }
 }
@@ -1969,6 +2051,8 @@ let plantGen=0;
 function resetPlant(){
   plantGen++;
   for(const k in feedInHBy) delete feedInHBy[k];
+  for(const k in feedInMBy) delete feedInMBy[k];
+  for(const k in coreInHBy) delete coreInHBy[k];
   /* the plant commissioning built, put back exactly: plantSettle() is a fixed-point walk that limit-cycles on the secondary, so re-running it on the same drawing lands a different plant */
   if(P.snap0 && P.dsig === designSig()) restoreS(P.snap0); else plantSettle();
   LOG=[]; initHist();
@@ -2129,8 +2213,14 @@ function plantSettle(){
      roomM:new Float32Array(GW*GH).fill(ROOM_MAIR),
      // what each open hole is passing, kg/s, keyed by its own cell
      holeQ:{},
+     // ...and the WATER each is passing, kg/s, which is sumpDrain()'s and not the gas's
+     holeW:{},
      /* the high-water mark, never decayed and never cleared: s.roomP relieves on ROOM_P_TAU and cannot say where the plant has been blown up */
      roomPPk:new Float32Array(GW*GH),
+     // kPa every passage has put above HIT_LO, never decayed, and the tracker that books a passage (roomScarStep())
+     roomScar:new Float32Array(GW*GH), roomScarCur:new Float32Array(GW*GH),
+     // every BLAST charge set off and the cell of the last, so the renderer throws its debris once per charge
+     blastEv:{n:0, at:-1},
      /* one event per explosion, not one per tick: a front at the flammability limit crawls for minutes and would never trip a per-tick gate */
      burnEv:{kg:0, p:0, blast:0, ids:[]},
      /* the same latch for the metal fire, carrying its own joules: burning in air and reacting with water are not worth the same */
@@ -2193,7 +2283,7 @@ function plantSettle(){
       restHeat(outs.byLoop);
       coreEach(S,(cs,K,id)=>{ cs.flowNet = coreFlowNet(K, id, outs, S.flowNet);
         coreStep(K, cs, 0, cs.heat, satT(K.sat, cs.pCore), 0,
-               K.flowK*cs.flowNet, Math.max(cs.flowNet, CORE_DT_QMIN), TavgOf(S, K.circ)); });
+               K.flowK*cs.flowNet, Math.max(cs.flowNet, CORE_DT_QMIN), coreInH(S, id)); });
       coreAgg(S);
       advectStep(S, DTS, rf, outs.edgeKg);
       /* the shell is held at its commissioning level for the same reason the hold tank is pinned: the settle is a rest point, and the feed valve is not walked until after it */
@@ -2251,8 +2341,8 @@ function plantSettle(){
       /* at the pressure the first tick will read (pressRead, off the settled field), never the vessel's nominal */
       { const pf = S.pBy && S.pBy[coreFold(id)]; if(pf !== undefined && isFinite(pf) && pf > 0) cs.pCore = pf; }
       for(let i=0;i<5;i++){
-        o=coreStep(K,cs,0,cs.heat,satT(K.sat,cs.pCore),0,K.flowK*cs.flowNet,Math.max(cs.flowNet,CORE_DT_QMIN),TavgOf(S,K.circ));
-        for(let k=0;k<XNN;k++) cs.nV[k]=cs.nVt[k]; }
+        o=coreStep(K,cs,0,cs.heat,satT(K.sat,cs.pCore),0,K.flowK*cs.flowNet,Math.max(cs.flowNet,CORE_DT_QMIN),coreInH(S,id));
+        for(let k=0;k<XNN;k++){ cs.nV[k]=cs.nVt[k]; cs.nTc[k]=cs.nTct[k]; } }
       cs.voidTh = cs.vf = cs.vNode;        // the rest void K.vf0 is read off, not a 0 the first tick overwrites
       if(id===primaryCore()){ o0=o; K0=K; } });
     S.boron = S.boron0 = o0 ? -(K0.excess+o0.rod+o0.tip+o0.dop+o0.mod+o0.exp+o0.xe+o0.vd) : 0;
@@ -2849,7 +2939,7 @@ function stepMarch(dt){
     if(!(K.coreKg0 > 0) || m === undefined || (K.sat.tc && K.Tref > K.sat.tc)) return 0;
     return Math.max(0, (1 - m/K.coreKg0)/Math.max(1 - satRvl(K.sat, cs.pCore), 1e-3)); })();
   // this tick's flux past the pin, and LAST tick's share for the rise, exactly as the plant figures were ordered
-  const nod = coreStep(K,cs,dt,cs.heat,sat,vLeak,K.flowK*coreFN[id],Math.max(cs.flowNet,CORE_DT_QMIN),TavgOf(s,K.circ));
+  const nod = coreStep(K,cs,dt,cs.heat,sat,vLeak,K.flowK*coreFN[id],Math.max(cs.flowNet,CORE_DT_QMIN),coreInH(s,id));
   cs.fci = nod.fci;
   /* the hydrogen the clad made arrives at the vessel's own node as a concentration, and rides the transport from then on */
   if(nod.h2 > 0 && s.h2By && P.net && P.net.index[nid] !== undefined){

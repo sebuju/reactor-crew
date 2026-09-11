@@ -258,7 +258,7 @@ function coreReset(K,cs,flowNet){
   cs.xI  =new Float64Array(XNN); cs.xX=new Float64Array(XNN);
   cs.nTf =new Float64Array(XNN); cs.nTc=new Float64Array(XNN);
   cs.nV  =new Float64Array(XNN); cs.nRho=new Float64Array(XNN);
-  cs.nVt =new Float64Array(XNN);
+  cs.nVt =new Float64Array(XNN); cs.nTct=new Float64Array(XNN);
   // pressure-tube core: torn channels (latched, whole ring), their share, the cavity relief
   cs.nTube=new Float64Array(XNN); cs.tubesOpen=0; cs.cavRelief=0;
   cs.nCov=new Float64Array(XNN); cs.nFol=new Float64Array(XNN);
@@ -276,7 +276,7 @@ function coreReset(K,cs,flowNet){
   cs.dnbrMin=K.dnbr0; cs.dnbrRing=0; cs.dnbrLev=0;
   for(let k=0;k<XNN;k++){
     cs.xI[k]=ioEq(K,K.n0); cs.xX[k]=K.X0;
-    cs.nTc[k]=K.Tref; cs.nTf[k]=K.TfRef;
+    cs.nTc[k]=cs.nTct[k]=K.Tref; cs.nTf[k]=K.TfRef;
   }
   /* settle the shape once, or tick one kicks a transient nobody asked for */
   rodShape(K,cs,cs.nCov,cs.nFol);
@@ -326,7 +326,7 @@ function coreRodWorth(K,cs){
   return W>0 ? w/W : 0;
 }
 
-function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
+function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
   /* parallel channels at equal dp, so a voiding channel loses the flow it needed to stop voiding */
   { const rvl=satRvl(K.sat, cs.pCore), rq=1/Math.max(rvl,1e-6)-1;
     let tot=0;
@@ -339,7 +339,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
   }
 
   rodShape(K,cs,cs.nCov,cs.nFol);
-  /* the rise first, then the channel centred on Tavg: hanging the inlet off last tick's rise oscillates the plant apart */
+  /* the rise, which the display and the steam side read; the channel itself starts at the inlet the caller measured */
   const mixK=new Float64Array(XNR);
   { let raw=0;
     for(let i=0;i<XNR;i++){
@@ -349,7 +349,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
       raw += ringW[i]*heat*K.dT0*ringP*mixK[i]/Math.max(flowFrac,1e-3);
     }
     cs.coreDT=clamp(raw,0,coreDTMax()); }
-  const Tcold=Tavg-cs.coreDT/2;
+  const Tcold=hIn/K.sat.cp;
   /* qhat is the core's power in the pin balance's units: kelvin of film difference per unit of flux */
   const qhat  = heat*K.rated*1000/Math.max(K.pinUA,1e-9);
   const qpp0  = K.rated*1e6/Math.max(K.aHeat,1e-6);   // rated flux past the pin, W/m2
@@ -367,13 +367,12 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
     const film0=Math.max(Math.pow(Math.max(mflux*chan,0),0.8), K.filmPool||0);
     /* the same water as Saha-Zuber's mass flux G */
     const gCh=Math.max(mflux*chan,1e-3);
-    let h=cp*Tcold;
+    let h=hIn;
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), pw=cs.phi[k];
       const dh=cp*dTn*pw;
       const hMid=h+dh/2; h+=dh;              // the node sits at its own midpoint
-      if(hMid<=hSat) cs.nTc[k]=hMid/cp;
-      else         { cs.nTc[k]=sat; }
+      cs.nTct[k]=hMid<=hSat ? hMid/cp : sat;
       /* xe is negative while subcooled; xd is where vapour detaches, off whichever Saha-Zuber branch this channel is on */
       const q2=Math.max(heat*pw,0);
       const xd=-Math.max(Math.min(K.xSub*q2/gCh, K.xSubLo*q2), 1e-6);
@@ -464,11 +463,13 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,Tavg){
   }
 
   /* the lag is transport: core height over the coolant's own velocity, bounded so a stopped pump cannot divide by zero */
-  { const v=Math.max(mflux,1e-3)*K.G0/Math.max(rhoAt(Tavg),1);
+  { const v=Math.max(mflux,1e-3)*K.G0/Math.max(rhoAt(Tcold),1);
     const tau=clamp(Math.max(K.coreHgt,.05)/Math.max(v,1e-3),0.1,60);
     for(let k=0;k<XNN;k++){
       const vT=clamp(Math.max(cs.nVt[k],vLeak),0,1);
       cs.nV[k]+=(vT-cs.nV[k])*dt/tau;
+      /* the water at a node arrived from the inlet a transit ago, so its temperature cannot step when the power does */
+      cs.nTc[k]+=(cs.nTct[k]-cs.nTc[k])*dt/tau;
     } }
 
   coreSolve(K,cs.phi,cs.nRho);
