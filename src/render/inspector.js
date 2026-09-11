@@ -875,12 +875,11 @@ function paramsForMat(key){
         ["HELD BACK",((1-regionRel(s,g))*100).toFixed(0)+" %",null,
          "How much of a release leaving inside this region stays inside it. It is the weakest material on this wall, not a menu row - and it is zero the moment the wall opens."]);
     }
-    if(live){ const f=regionFlooded(s,g);
-      if(f){ const line=f.bot+1-f.rows;
-        const wet=LAY.parts.filter(q=>matRegionOf(q)===g && floodDrowns(q,line)).map(q=>partName(q));
-        rows.push(["FLOODED TO",f.d.toFixed(1)+" m   "+(regionSump(s,g)/1000).toFixed(1)+" t",
-          f.d>0?C.blue:null,
-          "How deep the water discharged into this region is standing. It fills from the bottom cell up and it cannot pass the deckhead - what will not fit never enters the compartment's book at all."],
+    if(live){ const f=regionFlood(s,g);
+      if(f){ const wet=LAY.parts.filter(q=>{ if(matRegionOf(q)!==g) return false;
+          const l=partFloodLine(s,q); return l!==null && floodDrowns(q,l); }).map(q=>partName(q));
+        rows.push(["FLOODED TO",f.d.toFixed(2)+" m   "+(f.kg/1000).toFixed(1)+" t",C.blue,
+          "How deep the water discharged into this region stands at its deepest, over the region's lowest floor, and how much of it there is. It lands where it came out, falls, and runs along the floor to level - deepest under the break while it is still arriving. What the compartment's own volume will not hold goes back off its book."],
           ["HOLDS",wet.length?wet.join(", "):"nothing yet",wet.length?C.red:null,
            "What the water has drowned: a machine goes when the water is two thirds of the way up it, and it takes the same red hatch every wrecked machine takes."]); } }
     const inside=LAY.parts.filter(q=>matRegionOf(q)===g).map(q=>partName(q));

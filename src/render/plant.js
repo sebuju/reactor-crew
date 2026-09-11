@@ -2297,8 +2297,8 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     const mark = fit ? (L ? annLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
     if(mark){ const c=nameMark(x,y,nameH);
       wdots.push(()=> L ? lamp(c.x,c.y,MARK_R,mark) : dot(c.x-MARK_R,c.y-MARK_R,MARK_R*2,mark)); }
-    // off the same regionFloodLine() the panel's HOLDS row and the drowning sweep read
-    if(live){ const fl=regionFloodLine(L,p);
+    // off the same partFloodLine() the panel's HOLDS row and the drowning sweep read
+    if(live){ const fl=partFloodLine(L,p);
       if(fl!==null){ const wy=Math.max(y, rowTop(Math.max(0,Math.ceil(fl))));
         if(wy < y+h){ ctx.save(); ctx.globalAlpha=0.32;
           fillRect(x,wy,w,y+h-wy,C.blue); ctx.globalAlpha=1;

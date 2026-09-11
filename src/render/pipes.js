@@ -991,10 +991,6 @@ function matSealLines(r,faces,w,dead){
     ctx.fillRect((f[0]==="l"?r.x:r.x+r.w)-lw/2, (f[1]==="t"?r.y:r.y+r.h)-lw/2, lw, lw);
   ctx.restore();
 }
-// kg/s at which a breach draws flat out; the SPILL_FULL idiom
-const HOLE_FULL = 300;
-// the same for water, which a whole cell of hole passes by the tonne
-const HOLE_W_FULL = 2000;
 function matPaintDraw(L){
   if(!D.mat) return;
   ctx.save();
@@ -1032,19 +1028,7 @@ function matPaintDraw(L){
     ctx.restore();
     // clipped to the band, or a shot liner hatches a cell it does not occupy
     if(dead){ ctx.save(); matBandPath(r,faces,w); ctx.clip();
-      hatch(r.x,r.y,r.w,r.h,C.red,.45); ctx.restore();
-      const hq = L.holeQ && L.holeQ[k];
-      if(hq && hq.q > 0){
-        const tx = hq.to%GW, ty = (hq.to/GW)|0;
-        fxCellSpace(r.x+r.w/2, r.y+r.h/2, ()=>
-          fxJet(0, 0, r.w*0.8/DRAW_K, fxEase("brw:"+k, clamp(hq.q/HOLE_FULL,0,1)),
-                "#ffd0c4", Math.sign(tx-x), Math.sign(ty-y), 37)); }
-      const hw = L.holeW && L.holeW[k];
-      if(hw && hw.q > 0 && hw.to >= 0){
-        const tx = hw.to%GW, ty = (hw.to/GW)|0;
-        fxCellSpace(r.x+r.w/2, r.y+r.h/2, ()=>
-          fxJet(0, 0, r.w*0.5/DRAW_K, fxEase("brh:"+k, clamp(hw.q/HOLE_W_FULL,0,1)),
-                C.blue, Math.sign(tx-x), Math.sign(ty-y), 53)); } }
+      hatch(r.x,r.y,r.w,r.h,C.red,.45); ctx.restore(); }
   }
   ctx.restore();
 }

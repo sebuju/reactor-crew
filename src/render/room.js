@@ -87,8 +87,8 @@ function roomCellTip(L){
       row("REGION       ",g.cells.length+" cells   "+matRegVol(g).toFixed(1)+" m3   "+(matSealed(L||null,g)?"SEALED":"OPEN"));
       if(L) row("REGION PRESS ",(regionDP(L,g)*1000).toFixed(1)+" kPa"); }
     const gf=matRegionIn(X,Y)||g;
-    if(L && gf){ const d=regionFloodM(L,gf);
-      if(d>0.05) row("FLOODED TO   ",d.toFixed(1)+" m   "+(regionSump(L,gf)/1000).toFixed(1)+" t"); } }
+    if(L && gf){ const f=regionFlood(L,gf);
+      if(f) row("FLOODED TO   ",f.d.toFixed(2)+" m   "+(f.kg/1000).toFixed(1)+" t"); } }
   if(!rows.length) return;
   TIP(GX+X*CELL, rowTop(Y), CELL, rowTop(Y+1)-rowTop(Y), "CELL "+X+","+Y, rows.join("\n"));
 }
@@ -265,7 +265,8 @@ function waveShown(L){
   let mx=PNOW_LO;
   for(let i=0;i<N;i++){ const f=Math.hypot(g.gx[i], g.gy[i]); shownA[i]=f; if(f>mx) mx=f; }
   if(mx>waveRef) waveRef=mx;
-  for(let i=0;i<N;i++){ const a=shownA[i]/waveRef, on=a>=PNOW_CUT;
+  /* a face under WAVE_P_LO is at rest by the gas step's own gate, which stops solving there and leaves the step standing, so drawn it sticks on screen forever */
+  for(let i=0;i<N;i++){ const a=shownA[i]/waveRef, on=a>=PNOW_CUT && Math.max(Math.abs(g.gx[i]), Math.abs(g.gy[i]))>=WAVE_P_LO;
     shownA[i]=on ? a : 0; shownW[i]=on ? Math.min(1, Math.sqrt(a)/PNOW_A) : 0; }
   return {gx:g.gx, gy:g.gy, a:shownA, w:shownW};
 }
@@ -302,21 +303,135 @@ function roomO2Layer(data,L){
   }
 }
 
-function roomNaLayer(data,L){
-  if(!L || !L.roomPool) return;
-  const cell = ROOM_VCELL*fireRho();
-  for(let Y=0;Y<GH;Y++){
-    const y=rowTop(Y), h=rowTop(Y+1)-y;
-    for(let X=0;X<GW;X++){
-      const i=Y*GW+X, kg=L.roomPool[i];
-      if(!(kg>=0.01) || data.g[Y][X]) continue;
-      const lit=roomPoolLit(L,i);
-      ctx.globalAlpha = lit ? 0.50 : 0.12+0.30*Math.min(1,kg/cell);
-      fillRect(GX+X*CELL,y,CELL,h, lit?C.amber:C.ink2); ctx.globalAlpha=1;
-      if(lit) txt(roomPoolT(L,i).toFixed(0)+" K", GX+X*CELL+CELL/2, y+h-3,
-                  {size:8, align:"center", color:C.amber});
+// kg in a cell before it draws at all
+const LIQ_SEEN = 0.01;
+// share of a cell: a drop shorter than this is water lying on water for the tick the cell under takes to fill, and is drawn lying
+const LIQ_REST = 0.1;
+let liqBuf = {n:0};
+// px of a cell's height a liquid fills from its floor, never under one once it is there at all
+const liqPx = (q, i, hp) => q.M[i] >= LIQ_SEEN ? Math.max(1, Math.min(1, liqFill(q.M, q.rho, i)/MPC)*hp) : 0;
+// px across a falling stream: the share of the cell's volume it fills, seen through the whole depth, so a full cell is the only full-width one
+const liqJetPx = (q, i) => Math.max(1.5, Math.min(1, q.M[i]/Math.max(liqCap(q, i), 1e-9))*CELL);
+/* One stream per falling run of a column: its width taken at each cell's middle so it tapers from cell to cell, its foot on whatever it lands on (`land(x)` the height under each point of it), and foam where that is a surface or a floor. */
+function liqStream(L, q, X, Y0, Y1, land, foam, col, a){
+  const cx=GX+(X+0.5)*CELL, ys=[rowTop(Y0)], ws=[liqJetPx(q, Y0*GW+X)];
+  for(let Y=Y0;Y<=Y1;Y++){ ys.push((rowTop(Y)+rowTop(Y+1))/2); ws.push(liqJetPx(q, Y*GW+X)); }
+  const n=ys.length, wl=ws[n-1], foot=x=>Math.max(land(x), ys[n-1]), yb=foot(cx);
+  // under the width floor a stream fades by what it holds, or a gram in flight draws as a line a cell tall
+  let share=0;
+  for(let Y=Y0;Y<=Y1;Y++){ const i=Y*GW+X; share=Math.max(share, q.M[i]/Math.max(liqCap(q, i), 1e-9)); }
+  const fade=Math.min(1, share*CELL/1.5);
+  ctx.beginPath(); ctx.moveTo(cx-ws[0]/2, ys[0]);
+  for(let k=1;k<n;k++) ctx.lineTo(cx-ws[k]/2, ys[k]);
+  ctx.lineTo(cx-wl/2, foot(cx-wl/2)); ctx.lineTo(cx, yb); ctx.lineTo(cx+wl/2, foot(cx+wl/2));
+  for(let k=n-1;k>=0;k--) ctx.lineTo(cx+ws[k]/2, ys[k]);
+  ctx.closePath();
+  ctx.globalAlpha=a*fade; ctx.fillStyle=col; ctx.fill();
+  ctx.globalAlpha=Math.min(1, a*1.6)*fade; ctx.strokeStyle=lerpC(col, C.bright, 0.3); ctx.lineWidth=1;
+  for(const s of [-1, 1]){ ctx.beginPath(); ctx.moveTo(cx+s*ws[0]/2, ys[0]);
+    for(let k=1;k<n;k++) ctx.lineTo(cx+s*ws[k]/2, ys[k]);
+    ctx.lineTo(cx+s*wl/2, foot(cx+s*wl/2)); ctx.stroke(); }
+  // off the plant clock, so a paused plant holds its streaks still
+  const wMin=Math.min(...ws), dash=CELL*0.22, gap=CELL*0.4;
+  if(wMin > CELL*0.12){
+    ctx.globalAlpha=0.22; ctx.strokeStyle=C.bright; ctx.setLineDash([dash, gap]);
+    ctx.lineDashOffset=-(((L.t||0)*CELL*2) % (dash+gap));
+    for(const s of [-0.22, 0.2]){ ctx.beginPath(); ctx.moveTo(cx+s*wMin, ys[0]); ctx.lineTo(cx+s*wMin, foot(cx+s*wMin)); ctx.stroke(); }
+    ctx.setLineDash([]); ctx.lineDashOffset=0;
+  }
+  // a plunging stream churns the water it lands in white, wider than itself
+  if(foam){
+    const rx=Math.min(CELL*1.1, wl*1.3), k=Math.min(0.8, 0.35+0.5*wl/CELL)*fade;
+    const gr=ctx.createRadialGradient(0,0,0,0,0,rx);
+    gr.addColorStop(0,   alphaC(C.bright, 0.75*k));
+    gr.addColorStop(0.5, alphaC(C.bright, 0.35*k));
+    gr.addColorStop(1,   alphaC(C.bright, 0));
+    ctx.save(); ctx.translate(cx, yb); ctx.scale(1, 0.45); ctx.globalAlpha=1; ctx.fillStyle=gr;
+    ctx.beginPath(); ctx.arc(0, 0, rx, 0, 2*Math.PI); ctx.fill(); ctx.restore();
+  }
+  ctx.globalAlpha=1;
+}
+// the board height of a level z metres over the keel, through the row it falls in
+const liqY = z => { const k=clamp(Math.floor(z/MPC), 0, GH-1), y1=rowTop(GH-k); return y1-clamp(z/MPC-k, 0, 1)*(y1-rowTop(GH-1-k)); };
+/* One primitive for both liquids. What stands in a column, and what leans on the water beside it, is one body per column packed down onto its floor with the second liquid under it (`under`), its surface sampled at the column's middle and curved through the edges it shares with the body beside it; only water with air on both sides is drawn falling. */
+function liqDraw(data, L, q, col, a, under, lit){
+  const G=roomGeomLive(L), N=GW*GH, M=q.M, other={M:q.O, rho:q.oRho};
+  if(liqBuf.n!==N) liqBuf={n:N, lying:new Uint8Array(N), seg:new Int32Array(N)};
+  const lying=liqBuf.lying.fill(0), seg=liqBuf.seg.fill(-1);
+  const falls=i=>M[i]>=LIQ_SEEN && !liqStands(q,G,i), stands=i=>M[i]>=LIQ_SEEN && !falls(i);
+  // water leaning on standing water beside it, or lying on a body with less than LIQ_REST of a drop left, is part of that body, not a stream through air
+  for(let X=0;X<GW;X++) for(let Y=GH-1;Y>=0;Y--){
+    const i=Y*GW+X, b=i+GW;
+    if(!(M[i]>=LIQ_SEEN)) continue;
+    lying[i] = !falls(i) || (lying[b] && 1-(liqFill(M,q.rho,b)+liqFill(other.M,other.rho,b))/MPC < LIQ_REST)
+      || (X>0 && stands(i-1)) || (X<GW-1 && stands(i+1)) ? 1 : 0;
+  }
+  const lies=i=>lying[i]===1;
+  const segs=[], byCol=[];
+  for(let X=0;X<GW;X++){
+    byCol.push([]);
+    let s=null, pend=0;
+    for(let Y=GH-1;Y>=0;Y--){
+      const i=Y*GW+X, has=M[i]>=LIQ_SEEN;
+      if(liqShut(G,i) || (has && !lies(i))){ s=null; continue; }
+      const u=under ? liqFill(under.M,under.rho,i) : 0;
+      if(!has){ if(s) pend+=u; continue; }
+      if(!s){ s={X, z0:zFloor(i), v:0, u:0, top:i}; segs.push(s); byCol[X].push(s); pend=0; }
+      s.u+=pend+u; pend=0; s.v+=liqFill(M,q.rho,i); s.top=i; seg[i]=segs.length-1;
     }
   }
+  for(const s of segs){ s.zb=s.z0+s.u; s.zt=s.zb+s.v;
+    s.zMax=s.top>=GW && liqShut(G,s.top-GW) ? zFloor(s.top)+MPC : Infinity; }
+  // water has no step in it: two bodies side by side meet in a slope, unless the other one starts above this surface or a wall stands at the lower level
+  const nextTo=(s, X)=>{
+    let best=NaN, d=Infinity;
+    if(X<0 || X>=GW) return best;
+    for(const n of byCol[X]){
+      const dz=Math.abs(n.zt-s.zt), Y=GH-1-clamp(Math.floor((Math.min(n.zt,s.zt)-1e-6)/MPC), 0, GH-1);
+      if(dz<=d && n.zb<s.zt && !liqShut(G,Y*GW+X)){ d=dz; best=n.zt; }
+    }
+    return best; };
+  const edge=(s, nz)=> liqY(nz===nz ? clamp((s.zt+nz)/2, s.zb, s.zMax) : s.zt);
+  for(const s of segs){ s.yb=liqY(s.zb); s.yt=Math.min(liqY(s.zt), s.yb-1);
+    s.eL=Math.min(edge(s, nextTo(s, s.X-1)), s.yb); s.eR=Math.min(edge(s, nextTo(s, s.X+1)), s.yb); }
+  // one path for every body, so the colour stays one shade wherever two of them touch
+  const body=on=>{
+    ctx.beginPath();
+    for(const s of segs){
+      if(!!(lit && lit(s.top))!==on) continue;
+      const x0=GX+s.X*CELL, x1=x0+CELL;
+      ctx.moveTo(x0,s.eL); ctx.quadraticCurveTo(x0+CELL/2,s.yt,x1,s.eR); ctx.lineTo(x1,s.yb); ctx.lineTo(x0,s.yb); ctx.closePath();
+      if(on) txt(roomPoolT(L,s.top).toFixed(0)+" K", x0+CELL/2, s.yb-3, {size:8, align:"center", color:C.amber});
+    }
+    ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
+  };
+  body(false);
+  if(lit) body(true);
+  ctx.beginPath();
+  for(const s of segs){ const x0=GX+s.X*CELL;
+    ctx.moveTo(x0, s.eL+0.7); ctx.quadraticCurveTo(x0+CELL/2, s.yt+0.7, x0+CELL, s.eR+0.7); }
+  ctx.strokeStyle=col; ctx.lineWidth=1.4; ctx.stroke();
+  const free=i=>M[i]>=LIQ_SEEN && !liqShut(G,i) && !lies(i);
+  for(let X=0;X<GW;X++) for(let Y=0;Y<GH;Y++){
+    if(!free(Y*GW+X)) continue;
+    let Y1=Y;
+    while(Y1+1<GH && free((Y1+1)*GW+X)) Y1++;
+    const yEnd=rowTop(GH);
+    let land=()=>yEnd, foam=true;
+    for(let j=Y1+1;j<GH;j++){ const k=j*GW+X, yj=rowTop(j);
+      if(liqShut(G,k)){ land=()=>yj; break; }
+      // the surface curve's own height under each point of the stream and a little below it, so it meets the water the curve draws and not the sample the curve rounds off
+      if(seg[k]>=0){ const s=segs[seg[k]], x0=GX+X*CELL;
+        land=x=>{ const t=clamp((x-x0)/CELL, 0, 1); return (1-t)*(1-t)*s.eL+2*t*(1-t)*s.yt+t*t*s.eR+CELL*0.05; }; break; }
+      if(M[k]>=LIQ_SEEN){ land=()=>yj; foam=false; break; } }
+    const on=lit && lit(Y*GW+X);
+    liqStream(L, q, X, Y, Y1, land, foam, on?C.amber:col, on?0.50:a);
+    Y=Y1;
+  }
+}
+function roomNaLayer(data,L){
+  if(!L || !L.roomPool) return;
+  liqDraw(data, L, liqMetal(L), C.ink2, 0.42, liqWater(L), i=>roomPoolLit(L,i));
 }
 
 // the skin, not the air: it has mass, so a box lags the room it stands in
@@ -377,7 +492,7 @@ function leanSpring(o,tx,ty,n,h){
 }
 function leanStep(L,dt){
   if(!(dt>0)) return;
-  const G=roomGeom(), gz=roomPGauge(L), sh=waveShown(L), n=Math.ceil(dt/LEAN_H), h=dt/n;
+  const G=roomGeom(), gz=roomPStatic(L), sh=waveShown(L), n=Math.ceil(dt/LEAN_H), h=dt/n;
   for(const p of LAY.parts){
     if(!fitted(p)) continue;
     // scaled by the brightest cell round the box, not weighted per cell: a dark flat side still pushes back
@@ -559,7 +674,10 @@ function evFx(e,dt,cm,occ){
 // px/s of the air the wave solved, at the cell centre off its two staggered faces
 function airAt(s,x,y){
   const X=clamp(Math.floor((x-GX)/CELL),0,GW-1), Y=clamp(Math.floor((y-rowTop(0))/CELL),0,GH-1), i=Y*GW+X;
-  return [(s.roomPU[i]+(X>0?s.roomPU[i-1]:0))/2*PX_M, (s.roomPV[i]+(Y>0?s.roomPV[i-GW]:0))/2*PX_M];
+  // the faces carry a mass flux; over the two cells' own gas it is a velocity
+  const M=s.roomM, u=(F,a,b)=>F[a]/Math.max((M[a]+M[b])/(2*ROOM_VCELL), 1e-3);
+  return [(u(s.roomPU,i,Math.min(i+1,GW*GH-1))+(X>0?u(s.roomPU,i-1,i):0))/2*PX_M,
+          (u(s.roomPV,i,Math.min(i+GW,GW*GH-1))+(Y>0?u(s.roomPV,i-GW,i):0))/2*PX_M];
 }
 /* tools/wavemock.html's spawnFx(): a charge throws its own debris and smoke, in m/s through PX_M.
    The mark only says a charge went off; what it does is the field. */
@@ -765,38 +883,25 @@ function contZones(data,L){
   }
   ctx.restore();
 }
-// the ship is drawn in SECTION, so standing water is a horizontal line
+// the ship is drawn in SECTION: water is a place, it falls, it runs and it stands where it stands
 function floodLayer(data,L){
-  if(!L) return;
-  const R=matRegions();
+  if(!L || !L.roomWater) return;
+  const W=L.roomWater, G=roomGeomLive(L), q=liqWater(L);
   ctx.save();
-  for(const g of R.regions){
-    const d=regionFloodM(L,g); if(!(d>0.05)) continue;
-    let bot=-1, x0=GW, x1=0;
-    const inRegion=new Set(g.cells);
-    for(const i of g.cells){ const X=i%GW, Y=(i/GW)|0;
-      if(Y>bot) bot=Y; if(X<x0) x0=X; if(X>x1) x1=X; }
-    const topR=Math.max(0, bot+1-Math.ceil(d/MPC)), top=rowTop(topR);
-    // cell by cell, because a machine under the line draws its own water and must not be tinted twice
-    ctx.globalAlpha=0.30;
-    for(let Y=topR;Y<=bot;Y++){ const yr=rowTop(Y), hr=rowTop(Y+1)-yr;
-      for(let X=x0;X<=x1;X++) if(!data.g[Y][X] && inRegion.has(Y*GW+X)) fillRect(GX+X*CELL,yr,CELL,hr,C.blue); }
-    ctx.globalAlpha=1;
-    ctx.strokeStyle=C.blue; ctx.lineWidth=1.4;
-    ctx.beginPath(); ctx.moveTo(GX+x0*CELL, top+0.7); ctx.lineTo(GX+(x1+1)*CELL, top+0.7); ctx.stroke();
-    txt(d.toFixed(1)+" m", GX+(x1+1)*CELL-3, top-3, {size:7, align:"right", color:C.blue});
-    for(const id of (L.dmgParts||[])){
-      if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
-      const j=id.indexOf(","), bx=+id.slice(5,j), by=+id.slice(j+1);
-      if(!inRegion.has(by*GW+bx)) continue;
-      // off the same solved rate pipeBreaks() draws the plume at: a drained tear bubbles nothing
-      let q=0;
-      for(const key of pipeCellRuns(bx,by)) q=Math.max(q, (L.spillBy&&L.spillBy["break:"+key])||0);
-      const br=grect(bx,by,1,1), bt=Math.max(br.y, top);
-      fxCellSpace(br.x, bt, ()=>
-        fxBubbles(0, 0, br.w/DRAW_K, (br.y+br.h-bt)/DRAW_K,
-                  fxEase("fld:"+bx+","+by, clamp(q/SPILL_FULL,0,1)), C.blue, "pool"));
-    }
+  liqDraw(data, L, q, C.blue, 0.30, null, null);
+  for(const id of (L.dmgParts||[])){
+    if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
+    const j=id.indexOf(","), bx=+id.slice(5,j), by=+id.slice(j+1), i=by*GW+bx;
+    if(!(W[i]>0)) continue;
+    // off the same solved rate pipeBreaks() draws the plume at: a drained tear bubbles nothing
+    let rate=0;
+    for(const key of pipeCellRuns(bx,by)) rate=Math.max(rate, (L.spillBy&&L.spillBy["break:"+key])||0);
+    const t=liqTop(q,G,i), Yt=(t/GW)|0, yb=rowTop(Yt+1);
+    const br=grect(bx,by,1,1), bt=Math.max(br.y, yb-liqPx(q,t,yb-rowTop(Yt)));
+    if(!(bt < br.y+br.h)) continue;
+    fxCellSpace(br.x, bt, ()=>
+      fxBubbles(0, 0, br.w/DRAW_K, (br.y+br.h-bt)/DRAW_K,
+                fxEase("fld:"+bx+","+by, clamp(rate/SPILL_FULL,0,1)), C.blue, "pool"));
   }
   ctx.restore();
 }
