@@ -21,7 +21,7 @@ const HULL_EMIS = 0.85;
 // m^2 of skin ONE OUTWARD FACE of a hull cell carries
 const HULL_FACE_A = MPC*ROOM_DEPTH;
 
-/* Bought balance standing in for the structure and the condensation on it. SOURCE side only: g0 is priced off ROOM_C, so the stencil divides it straight back out and the stability limit does not move; never applied to ROOM_MOL or ROOM_MAIR, which are real air. */
+/* Bought balance standing in for the structure and the condensation on it. SOURCE side only: g0 is priced off ROOM_C, so the stencil divides it straight back out and the stability limit does not move; never applied to ROOM_MAIR, which is real air. */
 const ROOM_CGAME = 50;
 /* ROOM_CAIR is the REAL air in one cell, ROOM_C that air plus the ballast: a slow source heats at ROOM_C, a deflagration at ROOM_CAIR because the steel has no time to take any of it. */
 const ROOM_CAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO*ROOM_CP;
@@ -144,7 +144,7 @@ const openBoreM = key => {
 /* Memoised on the arrangement: everything in here is a fact about where things are, never about what they are doing. */
 let roomCache = null, roomCacheSig = "";
 function roomGeom(){
-  /* A wall is always a wall, so damage is NOT in this key: a shot cell still separates and what crosses it goes through roomHoleStep()'s orifice. */
+  /* A wall is always a wall here, so damage is NOT in this key: roomGeomLive() opens a shot cell. */
   const sig = laySig()+"|"+pipeSig()+matSig();
   if(roomCache && roomCacheSig === sig) return roomCache;
   const N = GW*GH;
@@ -208,7 +208,7 @@ function roomGeom(){
     if(Y<GH-1 && occ[i+GW]) n++;
     turb[i] = 1 + H2_TURB*n/4;
   }
-  roomCache = {occ, tight, face, own, pan, turb, parts, runs, shellValves, bx, by, gx, gUp, gDn, comp:null};
+  roomCache = {occ, tight, face, own, pan, turb, parts, runs, shellValves, bx, by, gx, gUp, gDn, hole:null, comp:null};
   roomCacheSig = sig;
   return roomCache;
 }
@@ -232,7 +232,7 @@ function roomComp(G){
   return G.comp = c;
 }
 
-/* A hole passes the wave, the heat and the species, not only the kilograms roomHoleStep() meters; the design object itself where nothing is wrecked, and only the sim takes this. */
+/* A shot wall cell is an ordinary open cell: gas, heat, species and liquid all cross it. The design object itself where nothing is wrecked, and only the sim takes this. */
 let roomLiveCache = null, roomLiveSig = "";
 function roomGeomLive(s){
   const G = roomGeom();
@@ -248,7 +248,7 @@ function roomGeomLive(s){
   const N = GW*GH, hole = new Uint8Array(N);
   for(const k of open.split("|")){ if(!k) continue;
     const j = k.indexOf(","); hole[(+k.slice(j+1))*GW + (+k.slice(0,j))] = 1; }
-  const blk = i => (G.tight[i] && !hole[i]) ? 0 : (G.occ[i] ? ROOM_BLOCK : 1);
+  const blk = i => hole[i] ? 1 : G.tight[i] ? 0 : (G.occ[i] ? ROOM_BLOCK : 1);
   const g0 = ROOM_MIX*ROOM_C/(MPC*MPC);
   const bx = new Float64Array(N), by = new Float64Array(N);
   const gx = new Float64Array(N), gUp = new Float64Array(N), gDn = new Float64Array(N);
@@ -258,7 +258,7 @@ function roomGeomLive(s){
     if(Y<GH-1){ by[i] = blk(i)*blk(i+GW); const b = g0*by[i];
       gUp[i] = b*ROOM_UP; gDn[i] = b; }
   }
-  roomLiveCache = Object.assign({}, G, {bx, by, gx, gUp, gDn, comp:null});
+  roomLiveCache = Object.assign({}, G, {bx, by, gx, gUp, gDn, hole, comp:null});
   roomLiveSig = sig;
   return roomLiveCache;
 }
@@ -276,14 +276,12 @@ const ROOM_ENTRAIN = 25;                  // kg of room air per kg of discharge
 const ROOM_JET_TAU = 1.0;                 // s to entrain it
 const ROOM_MAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO;   // kg of air in one cell
 
-/* s.roomM is kg of gas per cell; pressure follows from it and the air's own temperature by the ideal gas law, so a discharge really raises it and a hole really lowers it. */
+/* s.roomM is kg of gas per cell; pressure follows from it, the cell's own temperature and the room the liquids leave it, by the ideal gas law, so a discharge really raises it and a hole really lowers it. */
 const R_AIR = 0.000287;                   // MPa*m3/(kg*K)
 const ROOM_VCELL = MPC*MPC*ROOM_DEPTH;    // m3 of one cell
+const ROOM_P0 = 101.3;                    // kPa, ambient
 // absolute MPa, off a mass and a temperature - the ONE pressure read
 const roomPOf = (kg, vol, T) => kg*R_AIR*T/Math.max(vol, 1e-6);
-/* One orifice law for any hole between any two gas volumes; AREA m2, PRESSURES MPa absolute, DENSITY of the UPSTREAM gas. */
-const roomHoleKgs = (aM2, pUp, pDn, rhoUp) =>
-  flowW(ORIF_CD*Math.max(aM2,0), rhoUp, pUp, pDn);
 
 /* One expression: heat and hydrogen leave through the same hole at the same rate and must land in the same cells. */
 const roomPlumeFor = (cells, kgps) => roomPlume(cells,
@@ -303,12 +301,21 @@ function roomSpread(F, cells, kgps, amount){
   roomShare(cells, kgps, (i,f) => { F[i] += amount*f; });
 }
 const roomJet = (src, cells, kW, kgps) => roomSpread(src, cells, kgps, kW);
-/* The machinery half of the gas law, and the door anything venting into a compartment calls: the same plume and cells, but a MASS - and a pressure, dp = dm*R*T/V on the same weights, so the rise is highest at the opening rather than even over the region. */
+// hydrogen is gas, so it is part of s.roomM: the transport carries every species as a share of it
+function roomAddH2(s, cells, kgps, kg){
+  if(!(kg > 0)) return;
+  roomShare(cells, kgps, (i,f) => { s.roomH2[i] += kg*f; s.roomM[i] += kg*f; });
+}
+/* The door anything venting STEAM into a compartment calls: the same plume and cells, as a MASS on the same weights times the gas room each cell has, so the rise is highest at the opening and a cell the liquids fill takes none; the pressure is the read. */
+let addGasI = [], addGasW = [];
 function roomAddGas(s, cells, kg, kgps){
   if(!(kg > 0)) return;
-  roomShare(cells, kgps, (i,f) => { const dm = kg*f;
-    s.roomM[i] += dm;
-    roomBlastPost(s, i, dm*R_AIR*s.roomT[i]/ROOM_VCELL*1000); });
+  addGasI.length = 0; addGasW.length = 0;
+  let w = 0;
+  roomShare(cells, kgps, (i,f) => { const v = f*roomVgas(s, i); addGasI.push(i); addGasW.push(v); w += v; });
+  if(!(w > 0)) return;
+  for(let k=0;k<addGasI.length;k++){ const i = addGasI[k], dm = kg*addGasW[k]/w;
+    s.roomM[i] += dm; s.roomVap[i] += dm; }
 }
 /* Charged in ENTHALPY, never cp*dT, and against each cell's OWN air, so the plume both heats and cools and the room can only approach the jet. */
 function roomJetLiq(src, T, cells, kg, h, c){
@@ -345,23 +352,31 @@ function roomPlume(cells, n){
 const roomSteamH = () => steamRise() + CP_W*(T_FEED - T_HULL);
 
 /* The INJECT tool's room half: heat rides the same src[] a fire does, so the cell's own ballast
-   prices it; hydrogen, oxygen and steam go in as mass (steam is whatever roomM holds above air), and
-   `gas` is the cell's whole inventory out. The fluid half is injectFluid() (step.js), because plant
-   inventory is a book and compartment air is not. */
-function injectRoom(s, dt, src){
+   prices it; hydrogen, oxygen and steam go in as mass, and `gas` is the cell's whole inventory out.
+   Fluid aimed at a node is injectFluid()'s (step.js), because plant inventory is a book and compartment
+   air is not; aimed at bare deck it is water on this cell's floor, which is on the ledger (sumpKg()), so it books against `inject` the same way. */
+function injectRoom(s, dt, src, G){
   const q = s.inject, i = q && q.target;
   if(!q || !q.rate || typeof i !== "number" || i < 0 || i >= GW*GH) return;
   if(q.kind === "heat"){ src[i] += q.rate; return; }
   if(q.kind === "gas"){
     if(!(q.rate < 0)) return;
     const f = Math.min(1, -q.rate*dt/Math.max(s.roomM[i], 1e-9));
-    s.roomH2[i] -= s.roomH2[i]*f; s.roomO2[i] -= s.roomO2[i]*f; s.roomM[i] -= s.roomM[i]*f;
+    for(const F of roomGasFields(s)) F[i] -= F[i]*f;
+    return; }
+  if(q.kind === "fluid"){
+    const W = s.roomWater, dm = q.rate > 0 ? q.rate*dt : -Math.min(-q.rate*dt, W[i]);
+    if(!dm) return;
+    if(dm > 0) roomGasDisplace(s, G, i, dm/WATER_RHO);
+    W[i] += dm;
+    book(s, "inject", -dm);
     return; }
   if(!(q.rate > 0)) return;
   const dm = q.rate*dt;
   if(q.kind === "h2") s.roomH2[i] += dm;
   else if(q.kind === "o2") s.roomO2[i] += dm;
-  else if(q.kind !== "steam") return;
+  else if(q.kind === "steam") s.roomVap[i] += dm;
+  else return;
   s.roomM[i] += dm;
 }
 
@@ -370,6 +385,8 @@ function roomStep(s, dt){
   const G = roomGeomLive(s), T = s.roomT, N = roomScratch();
   const src = roomSrc, d = roomD;
   src.fill(0);
+  /* First, off last tick's field: this tick's sources reach the pressure one tick later. */
+  const pmax = roomGasStep(s, dt, G, src);
 
   /* Contents -> skin -> air, every arrow both ways, and what the room gets is booked against the pot it came out of (s.skinQ, spent in step.js). */
   const live = {};
@@ -435,20 +452,19 @@ function roomStep(s, dt){
     const nd = shellNode(id), ms = (s.mBy[nd]||0)*clamp(netQualAt(s,nd),0,1);
     const f = Math.min(1, rate*dt/Math.max(ms, 1e-6));
     s.sgH2By[id] = m - m*f;
-    roomSpread(s.roomH2, cellsOf(id), rate, m*f);
+    roomAddH2(s, cellsOf(id), rate, m*f);
   }
-  /* The primary side as LIQUID, in the state the opening is actually passing; invRate()'s % of loop inventory bridged through loopKg(). */
-  const kgOf = rate => Math.max(0, rate)/100*loopKg();
-  roomLiqOuts(s, G, (cells, rate, fl) => {
+  /* What the opening is actually passing, in the state it passes it: the kilograms the transport booked on that edge this tick. */
+  roomLiqOuts(s, G, (cells, rate, fl, key) => {
     /* A fluid that burns lands as a pool and gives its heat up through its own surface (roomFireStep), so charging the air here would spend the same joules twice. */
     if(fl.c.burn) return;
     /* Only what FLASHES is a gas in here; the rest is on the floor and is sumpStep()'s kilogram, not this book's. */
-    const kg = kgOf(rate)*openFlashX(s, fl, cells.length ? cells[0] : -1);
+    const kg = (advectOutKg[key] || 0)/dt*openFlashX(s, fl, cells.length ? cells[0] : -1);
     roomJetLiq(src, T, cells, kg, fl.h, fl.c);
     roomAddGas(s, cells, kg*dt, kg);
   });
   roomFireStep(s, dt, G, src);
-  injectRoom(s, dt, src);
+  injectRoom(s, dt, src, G);
 
   /* No network presence at all, the shield/catcher idiom; on the main board, so a blackout leaves the room with nothing but its hull. */
   if(!s.blackout) for(const q of G.parts){
@@ -475,11 +491,8 @@ function roomStep(s, dt){
       d[i] -= k*G.face[i]*(Math.pow(T[i],4) - Math.pow(T_SPACE,4)); }
   for(let i=0;i<N;i++) T[i] = clamp(T[i] + d[i]/ROOM_C*dt, T_SPACE, ROOM_TMAX);
 
-  roomH2Step(s, dt, G);
-  /* After the diffusion: the hole is the ONLY path between two volumes and must see what each holds this tick. */
-  roomCondense(s, dt);
-  roomHoleStep(s, dt);
-  roomShipLeak(s, dt);
+  roomH2Step(s, dt, G, pmax);
+  roomCondense(s);
 
   { let mx = 0, at = -1;
     for(let i=0;i<N;i++) if(T[i] > mx){ mx = T[i]; at = i; }
@@ -509,18 +522,18 @@ const H2_LFL = 0.04;                      // volume fraction in air
 const H2_UFL = 0.75;
 const H2_IGN = 773;                       // K
 const H2_LHV = 120000;                    // kJ/kg
-const H2_MMOL = 0.002016, AIR_MMOL = 0.02896;   // kg/mol
+const H2_MMOL = 0.002016, AIR_MMOL = 0.02896, H2O_MMOL = 0.018015;   // kg/mol
 // kg in ONE tick's deflagration worth a log line; see the caller in step.js
 const H2_BURN_EV = 1.0;
-// moles of air in one cell - the denominator every concentration divides by
-const ROOM_MOL = MPC*MPC*ROOM_DEPTH*ROOM_RHO/AIR_MMOL;
+// kg of air one cell holds at ambient, which is what the ship was built at
+const ROOM_M0 = ROOM_P0/1000*ROOM_VCELL/(R_AIR*T_HULL);
 
 /* kg per cell on S, s.roomH2's shape. Combustion is capped at 2 H2 : 1 O2, so a rich cell burns weakly and a sealed corner smothers its own fire; diffuses on the same stencil with NO buoyancy bias. */
 const O2_FRAC0 = 0.2095;                  // volume fraction of dry air
 const O2_MMOL = 0.032;                    // kg/mol
 const O2_LOC = 0.05;                      // limiting oxygen concentration for H2 in air
 // kg of O2 one cell holds at ambient, and what the ventilation set puts back
-const ROOM_O2_0 = O2_FRAC0*ROOM_MOL*O2_MMOL;
+const ROOM_O2_0 = O2_FRAC0*ROOM_M0/AIR_MMOL*O2_MMOL;
 // kg of oxygen a kilogram of hydrogen wants: 2 H2 + O2 -> 2 H2O, arithmetic
 const O2_PER_H2 = O2_MMOL/(2*H2_MMOL);
 /* Hydrogen's own buoyancy against air's ROOM_UP: it collects at the DECKHEAD, and the molar mass ratio IS the bias rather than a second typed number. The explicit stability cap allows about 28 at dt=0.02. */
@@ -538,25 +551,20 @@ function h2Sl(f){
 }
 /* Bought: obstacle-generated turbulence, the mechanism a laminar velocity cannot express, applied off roomGeom()'s occ array. */
 const H2_TURB = 4;
-/* Constant-volume combustion off the SAME q the heat term uses. There is no detonation switch: the axis is burning velocity against ROOM_P_TAU's relief time, and H2_TURB and ROOM_P_TAU are the two to hold still while measuring anything else. */
-const ROOM_P0 = 101.3;                    // kPa, ambient
-const ROOM_P_TAU = 0.5;                   // s
+/* Constant-volume combustion off the SAME q the heat term uses. There is no detonation switch: the axis is burning velocity against how fast the gas transport relieves the cell, and H2_TURB is the one to hold still while measuring anything else. */
 
-/* Linearised Euler on the same grid, so overpressure falls off with distance instead of lifting a
-   whole region at once. Pressure at cell centres (s.roomP, kPa gauge), momentum on the faces
-   (s.roomPU +x, s.roomPV +y, m/s). No fitted number: c^2 = GAMMA*R*T off the cell's own air. */
-const GAMMA_AIR = 1.4, R_SI = 287;        // J/kg/K
-const soundC2 = T => GAMMA_AIR*R_SI*Math.max(T, 1);
-/* Substeps are adaptive off the hottest LIVE cell; ROOM_TMAX bounds them at 172, and this ceiling
-   is a frame budget below that. When it bites the wave covers only part of the tick and says so. */
-const WAVE_SUB_MAX = 48;
-// kPa of excess below which a cell is not carrying a wave, and m/s below which a face is not
+/* The gas is ONE field on the grid: mass per cell (s.roomM), momentum on the faces (s.roomPU +x,
+   s.roomPV +y, kg/m2/s - a mass flux, so a cell that empties or fills does not rescale it), and the
+   pressure a read off each cell's own mass, temperature and gas volume.
+   Linearised Euler taken implicitly, one solve a tick (tools/wavemock.html's A, theta 1), written in
+   the kilograms a face passes so the mass the solve predicts is the mass that moves. The heat pass
+   owns temperature and a cell's air sits in ROOM_CGAME times its own capacity, so the gas is
+   ISOTHERMAL: its compliance is V/(R*T) and its sound speed sqrt(R*T), not sqrt(GAMMA*R*T). */
+const R_SI = 287;                         // J/kg/K
+// kPa across an open face below which the field is at rest, and m/s at ambient density below which a face is not moving
 const WAVE_P_LO = 0.05, WAVE_U_LO = 0.01;
-/* Share of the wave's energy a shut face keeps at normal incidence, tools/wavemock.html's `soak`, set by
-   the user 11/09/26; a machinery space is quoted at 0.1-0.3. The face is an impedance boundary,
-   u = p*y/(rho*c) with y = (1-R)/(1+R), R = sqrt(1-soak); 0 is a mirror. */
-const WAVE_SOAK = 0.5;
-const WAVE_Y = (1 - Math.sqrt(1 - WAVE_SOAK))/(1 + Math.sqrt(1 - WAVE_SOAK));
+// relative residual: at 1e-4 what the solve left drew as a speckle of 0.5 kPa steps over a room being slowly compressed; 1e-7 is the loosest that draws nothing
+const CG_TOL = 1e-7, CG_MAX = 200;
 // kPa of bang a face must take to mark, and what reads as a full mark over it (tools/wavemock.html)
 const HIT_LO = 5, HIT_FULL = 50;
 // cells a part leans per 10 kPa on one 3-cell face of a 6x3 box, and the most a drawn lean may reach
@@ -564,26 +572,16 @@ const LEAN_K = 0.3, LEAN_MAX = 1;
 // soft, so a small lean is still the linear one and a big one sits just under `max`
 const leanCap = (v, max) => { const m = Math.hypot(v.x, v.y);
   if(!(m > 0)) return v; const k = max*Math.tanh(m/max)/m; return {x:v.x*k, y:v.y*k}; };
-let waveCapWarned = false;
-/* Bumped every solve: s.roomP changes here and nowhere else, so a reader's cache keys on it. */
+let cgCapWarned = false;
+// iterations the last gas solve took, 0 when the gate stood it down - a readout for the tools, never state
+let roomCgIt = 0;
+/* Bumped every read: s.roomP changes here and nowhere else, so a reader's cache keys on it. */
 let roomPGen = 0;
 
-/* Posted this tick and consumed by roomWaveStep(): a source states kPa AT A CELL and the wave
-   spreads it, so the burn, the shield and a break venting all arrive the same way. */
-let roomPost = null, roomPostAny = false;
-const roomPostScr = () => { const N = GW*GH;
-  if(!roomPost || roomPost.length !== N) roomPost = new Float64Array(N);
-  return roomPost; };
-function roomBlastPost(s, i, kPa){
-  if(!(kPa > 0) || i < 0 || i >= GW*GH) return;
-  roomPostScr()[i] += kPa; roomPostAny = true;
-}
-/* kJ into one cell's air at constant volume, and the rise that goes with it. The denominator is AMBIENT: P0/T_HULL is rho*R, so the post is identically (gamma-1)*q/V and has no temperature in it. */
+/* kJ into one cell's air at constant volume; the pressure that goes with it is the read. */
 function roomBang(s, i, kJ){
   if(!(kJ > 0) || i < 0 || i >= GW*GH) return;
-  const dT = kJ/ROOM_CVAIR;
-  s.roomT[i] = Math.min(ROOM_TMAX, s.roomT[i] + dT);
-  roomBlastPost(s, i, ROOM_P0*dT/T_HULL);
+  s.roomT[i] = Math.min(ROOM_TMAX, s.roomT[i] + kJ/ROOM_CVAIR);
 }
 /* The BLAST tool's charge, tools/wavemock.html's: a Gaussian BLAST_SIG cells wide peaking at kPa, into
    open air on the charge's own side of every intact wall, as the heat that raises it - a charge is a burn. One cell is a grid-scale source and rings as a checkerboard (17-27 % of lit cells). */
@@ -598,93 +596,150 @@ function roomBlastCharge(s, i, kPa){
   }
 }
 
-let waveKu = null, waveKv = null, waveKp = null, waveRho = null, waveKw = null, waveKwAt = null;
-/* Applies this tick's posts, propagates them, then relaxes what is left toward the region's own
-   lumped pressure - the wave is the transient, roomPGauge() is the attractor it converges to.
-   Returns the worst excess over gauge, which is what a bang is judged on. */
-function roomWaveStep(s, dt, G, gz){
-  roomPGen++;
-  const N = GW*GH, Pr = s.roomP, T = s.roomT, Pk = s.roomPPk;
-  const U = s.roomPU, V = s.roomPV, post = roomPostScr();
-  if(roomPostAny) for(let i=0;i<N;i++) if(post[i] !== 0) Pr[i] += post[i];
-
-  /* The gate: on a quiet tick nothing was posted and nothing is above the layer's own floor, so the
-     solve is skipped outright and the momentum left over is below anything that draws or damages. */
-  let live = roomPostAny;
-  for(let i=0;i<N;i++)
-    if(Math.abs(Pr[i]-gz[i]) > WAVE_P_LO || Math.abs(U[i]) > WAVE_U_LO
-       || Math.abs(V[i]) > WAVE_U_LO){ live = true; break; }
-  if(roomPostAny){ post.fill(0); roomPostAny = false; }
-
-  if(!live){ U.fill(0); V.fill(0); }
+let gsP = null, gsVg = null, gsDI = null, gsAx = null, gsAy = null, gsB = null, gsX = null,
+    gsR = null, gsZ = null, gsD = null, gsAp = null, gsJ = null, gsFx = null, gsFy = null, gsOut = null, gsF = null;
+// y = A x, A = diag(dI) + the face Laplacian; SPD, because every face coefficient is symmetric in its two cells
+function roomCgApply(x, y, dI, ax, ay){
+  const N = GW*GH;
+  for(let i=0;i<N;i++) y[i] = dI[i]*x[i];
+  for(let i=0;i<N-1;i++){ const a = ax[i]; if(a === 0) continue;
+    const q = a*(x[i]-x[i+1]); y[i] += q; y[i+1] -= q; }
+  for(let i=0;i<N-GW;i++){ const a = ay[i]; if(a === 0) continue;
+    const q = a*(x[i]-x[i+GW]); y[i] += q; y[i+GW] -= q; }
+}
+// Jacobi-preconditioned conjugate gradient from x; returns the iterations it took
+function roomCgSolve(b, x, dI, ax, ay){
+  const N = GW*GH, r = gsR, z = gsZ, d = gsD, Ap = gsAp, J = gsJ;
+  for(let i=0;i<N;i++) J[i] = dI[i];
+  for(let i=0;i<N-1;i++){ J[i] += ax[i]; J[i+1] += ax[i]; }
+  for(let i=0;i<N-GW;i++){ J[i] += ay[i]; J[i+GW] += ay[i]; }
+  roomCgApply(x, Ap, dI, ax, ay);
+  let bn = 0, rz = 0;
+  for(let i=0;i<N;i++){ r[i] = b[i]-Ap[i]; z[i] = r[i]/J[i]; d[i] = z[i]; rz += r[i]*z[i]; bn += b[i]*b[i]; }
+  bn = Math.sqrt(bn);
+  if(!(bn > 0)) return 0;
+  let it = 0;
+  for(;it<CG_MAX;it++){
+    let rn = 0; for(let i=0;i<N;i++) rn += r[i]*r[i];
+    if(Math.sqrt(rn) <= CG_TOL*bn) break;
+    roomCgApply(d, Ap, dI, ax, ay);
+    let dAd = 0; for(let i=0;i<N;i++) dAd += d[i]*Ap[i];
+    const a = rz/dAd;
+    let rz1 = 0;
+    for(let i=0;i<N;i++){ x[i] += a*d[i]; r[i] -= a*Ap[i]; z[i] = r[i]/J[i]; rz1 += r[i]*z[i]; }
+    const bt = rz1/rz; rz = rz1;
+    for(let i=0;i<N;i++) d[i] = z[i] + bt*d[i];
+  }
+  if(it >= CG_MAX && !cgCapWarned){ cgCapWarned = true;
+    console.warn("[room] gas solve stopped at "+CG_MAX+" iterations short of its tolerance"); }
+  return it;
+}
+/* Species ride the face kilograms as a mass fraction, upwind and IMPLICIT: what leaves a cell is what it holds once this tick's inflow has mixed in, so gas passing through a cell smaller than the tick's flow carries the upstream share instead of piling its own. Symmetric Gauss-Seidel sweeps of that mixing, so a chain of through-flow in either direction settles in a pair; each update is a convex blend, so every share stays in [0, 1] and a species never outweighs its gas. */
+const ADV_SWEEPS = 4;
+let gsY0 = null, gsY = null;
+function roomAdvect(F, M0, M1, fx, fy){
+  const N = GW*GH, inn = gsJ;
+  if(!gsY0 || gsY0.length !== N){ gsY0 = new Float64Array(N); gsY = new Float64Array(N); }
+  const y0 = gsY0, y = gsY;
+  for(let i=0;i<N;i++){ y0[i] = M0[i] > 0 ? Math.min(1, F[i]/M0[i]) : 0; y[i] = y0[i]; }
+  const upd = i => { const X = i%GW; let n = M0[i]*y0[i];
+    if(X > 0 && fx[i-1] > 0) n += fx[i-1]*y[i-1];
+    if(X < GW-1 && fx[i] < 0) n -= fx[i]*y[i+1];
+    if(i >= GW && fy[i-GW] > 0) n += fy[i-GW]*y[i-GW];
+    if(i < N-GW && fy[i] < 0) n -= fy[i]*y[i+GW];
+    const w = M0[i] + inn[i]; y[i] = w > 0 ? n/w : y0[i]; };
+  for(let it=0;it<ADV_SWEEPS;it++){ for(let i=0;i<N;i++) upd(i); for(let i=N-1;i>=0;i--) upd(i); }
+  for(let i=0;i<N;i++) F[i] = y[i]*M1[i];
+}
+let gsM0 = null;
+/* One tick of the gas: predict the face velocities off one implicit solve, move the mass on them,
+   carry the species and the enthalpy (into src[], priced by the heat pass against ROOM_C), then read
+   the pressure. Returns the worst cell over its own compartment's mean, which a bang is judged on. */
+function roomGasStep(s, dt, G, src){
+  const N = GW*GH, Mm = s.roomM, T = s.roomT, U = s.roomPU, V = s.roomPV, bx = G.bx, by = G.by;
+  if(!gsP || gsP.length !== N){ const f = () => new Float64Array(N);
+    gsP = f(); gsVg = f(); gsDI = f(); gsAx = f(); gsAy = f(); gsB = f(); gsX = f();
+    gsR = f(); gsZ = f(); gsD = f(); gsAp = f(); gsJ = f(); gsFx = f(); gsFy = f(); gsOut = f(); gsF = f(); gsM0 = f(); }
+  const p = gsP, vg = gsVg;
+  for(let i=0;i<N;i++){ vg[i] = roomVgas(s, i); p[i] = roomPOf(Mm[i], vg[i], T[i])*1e6; }
+  /* A cell the liquids fill is not a gas cell: its faces are shut to the gas, or the momentum arriving at a cell that has just filled is stopped in one tick by megapascals. */
+  const fxOpen = i => bx[i] !== 0 && roomGasCell(vg[i]) && roomGasCell(vg[i+1]);
+  const fyOpen = i => by[i] !== 0 && roomGasCell(vg[i]) && roomGasCell(vg[i+GW]);
+  /* The gate: a field with no step across any open face and no face moving costs nothing. */
+  let live = false;
+  const pLo = WAVE_P_LO*1000, uLo = WAVE_U_LO*ROOM_RHO;
+  for(let i=0;i<N && !live;i++)
+    if(Math.abs(U[i]) > uLo || Math.abs(V[i]) > uLo
+       || (fxOpen(i) && Math.abs(p[i]-p[i+1]) > pLo)
+       || (fyOpen(i) && Math.abs(p[i]-p[i+GW]) > pLo)) live = true;
+  if(!live){ U.fill(0); V.fill(0); roomCgIt = 0; }
   else {
-    if(!waveKu || waveKu.length !== N){ waveKu = new Float64Array(N); waveKw = new Float64Array(N); waveKwAt = new Int32Array(N);
-      waveKv = new Float64Array(N); waveKp = new Float64Array(N); waveRho = new Float64Array(N); }
-    const ku = waveKu, kv = waveKv, kp = waveKp, kw = waveKw, kwAt = waveKwAt, rho = waveRho, bx = G.bx, by = G.by;
-    for(let i=0;i<N;i++) rho[i] = Math.max(s.roomM[i]/ROOM_VCELL, 1e-4);
-    /* The stability limit is a property of the DISCRETE operator, not of the gas: the momentum update
-       takes the face's mean density and the pressure update the cell's own, so across a density step
-       one side of the face runs at c^2*2*rho/(rho+rho') - up to twice c^2 where a cell has been
-       emptied. Asking the faces themselves is exact and costs one sweep; guessing c_max off the
-       hottest cell is what let a break at the vacuum floor pump itself. */
-    let c2max = 0;
+    const kp = gsDI, gx = gsAx, gy = gsAy, b = gsB, x = gsX, A = MPC*ROOM_DEPTH, gA = dt*dt*A/MPC;
+    // kg per Pa: the cell's own compliance, and what a face passes in one tick per Pa across it
     for(let i=0;i<N;i++){
-      const c2 = soundC2(T[i]), a = c2*2*rho[i];
-      if(bx[i] !== 0){ const v = a/(rho[i]+rho[i+1])*bx[i]; if(v > c2max) c2max = v; }
-      if(by[i] !== 0){ const v = a/(rho[i]+rho[i+GW])*by[i]; if(v > c2max) c2max = v; }
-      if(i >= 1 && bx[i-1] !== 0){ const v = a/(rho[i]+rho[i-1])*bx[i-1]; if(v > c2max) c2max = v; }
-      if(i >= GW && by[i-GW] !== 0){ const v = a/(rho[i]+rho[i-GW])*by[i-GW]; if(v > c2max) c2max = v; }
+      kp[i] = vg[i]/(R_SI*Math.max(T[i], 1));
+      if(!fxOpen(i)){ gx[i] = 0; U[i] = 0; } else gx[i] = gA*bx[i];
+      if(!fyOpen(i)){ gy[i] = 0; V[i] = 0; } else gy[i] = gA*by[i];
     }
-    if(!(c2max > 0)) c2max = soundC2(T_HULL);
-    /* Tighter than the acoustic dx/(c*sqrt(2)): at the bare acoustic limit this operator amplifies its own field - measured, a 1500 kPa bang reaches 9.5e6 kPa by 1.2 s with NOTHING posting into it. */
-    const dtCfl = MPC/(4*Math.sqrt(c2max));
-    const want = Math.max(1, Math.ceil(dt/dtCfl)), n = Math.min(want, WAVE_SUB_MAX);
-    if(n < want && !waveCapWarned){ waveCapWarned = true;
-      console.warn("[room] blast wave capped at "+WAVE_SUB_MAX+" substeps of "+want
-        +"; the front covers "+(n/want*100).toFixed(0)+" % of a tick"); }
-    const h = dt/want;
-    /* Every coefficient is constant over the substeps, so they are priced once: kPa to Pa, the face's
-       own mean density, and the mask. A face the mask shuts carries no momentum at all. */
+    const fx = gsFx, fy = gsFy;
+    // the kilograms last tick's momentum carries, and the solve is in the increment over last tick's pressure
     for(let i=0;i<N;i++){
-      kp[i] = h*rho[i]*soundC2(T[i])/1000/MPC;
-      if(bx[i] === 0){ ku[i] = 0; U[i] = 0; } else ku[i] = h*2000/((rho[i]+rho[i+1])*MPC)*bx[i];
-      if(by[i] === 0){ kv[i] = 0; V[i] = 0; } else kv[i] = h*2000/((rho[i]+rho[i+GW])*MPC)*by[i];
+      fx[i] = gx[i] !== 0 ? U[i]*A*dt : 0;
+      fy[i] = gy[i] !== 0 ? V[i]*A*dt : 0;
     }
-    /* What each shut face lets through, off the excess over gauge: kp*u with u = dp*y/(rho*c) is
-       h*c/MPC*y*dp per face. A grid edge is shut; a machine face passes ROOM_BLOCK and is not. */
-    let nw = 0;
+    for(let i=0;i<N;i++){ const X = i%GW;
+      b[i] = -(fx[i] - (X > 0 ? fx[i-1] : 0) + fy[i] - (i >= GW ? fy[i-GW] : 0)); }
+    for(let i=0;i<N-1;i++){ const q = gx[i]*(p[i]-p[i+1]); b[i] -= q; b[i+1] += q; }
+    for(let i=0;i<N-GW;i++){ const q = gy[i]*(p[i]-p[i+GW]); b[i] -= q; b[i+GW] += q; }
+    x.fill(0);
+    roomCgIt = roomCgSolve(b, x, kp, gx, gy);
     for(let i=0;i<N;i++){
-      if(G.tight[i]) continue;
-      const X = i%GW, Y = (i/GW)|0;
-      const n = (X === GW-1 || bx[i] === 0) + (X === 0 || bx[i-1] === 0)
-              + (Y === GH-1 || by[i] === 0) + (Y === 0 || by[i-GW] === 0);
-      if(n && WAVE_Y > 0){ kw[nw] = h*Math.sqrt(soundC2(T[i]))/MPC*WAVE_Y*n; kwAt[nw++] = i; }
+      if(gx[i] !== 0) fx[i] -= gx[i]*((p[i+1]+x[i+1]) - (p[i]+x[i]));
+      if(gy[i] !== 0) fy[i] -= gy[i]*((p[i+GW]+x[i+GW]) - (p[i]+x[i]));
     }
-    /* U[i] is the face between i and i+1, so the last column is never written and stays zero; the
-       same entry is what the first column of the next row reads as its own left face. */
-    const nx = N-1, ny = N-GW;
-    for(let k=0;k<n;k++){
-      for(let i=0;i<nx;i++) if(ku[i] !== 0) U[i] -= ku[i]*(Pr[i+1]-Pr[i]);
-      for(let i=0;i<ny;i++) if(kv[i] !== 0) V[i] -= kv[i]*(Pr[i+GW]-Pr[i]);
-      Pr[0] -= kp[0]*(U[0] + V[0]);
-      for(let i=1;i<GW;i++) Pr[i] -= kp[i]*(U[i] - U[i-1] + V[i]);
-      for(let i=GW;i<N;i++) Pr[i] -= kp[i]*(U[i] - U[i-1] + V[i] - V[i-GW]);
-      for(let j=0;j<nw;j++){ const i = kwAt[j]; Pr[i] -= kw[j]*(Pr[i] - gz[i]); }
+    /* The linear solve knows no vacuum: behind a strong front it drives a cell below zero, and clamping that creates gas. So a cell's OUTFLOW is cut to what it holds plus what it is given this tick - the NET, never the gross: a face passes many times a small cell's content in a tick (a choked hole off a few MPa moves a quarter of a tonne), and capping the gross stops the through-flow and piles the inflow without bound. The inflow counted is after its own donors' cuts, so it is iterated. The momentum is what actually crossed. */
+    const out = gsOut, inn = gsJ, k = gsM0.fill(1);
+    for(let it=0;it<4;it++){
+      out.fill(0); inn.fill(0);
+      for(let i=0;i<N;i++){
+        if(fx[i] > 0){ out[i] += fx[i]; inn[i+1] += fx[i]*k[i]; } else if(fx[i] < 0){ out[i+1] -= fx[i]; inn[i] -= fx[i]*k[i+1]; }
+        if(fy[i] > 0){ out[i] += fy[i]; inn[i+GW] += fy[i]*k[i]; } else if(fy[i] < 0){ out[i+GW] -= fy[i]; inn[i] -= fy[i]*k[i+GW]; }
+      }
+      for(let i=0;i<N;i++){ const have = Mm[i] + inn[i]; k[i] = out[i] > have ? have/out[i] : 1; }
+    }
+    for(let i=0;i<N;i++){
+      if(gx[i] !== 0){ fx[i] *= k[fx[i] > 0 ? i : i+1]; U[i] = fx[i]/(A*dt); } else fx[i] = 0;
+      if(gy[i] !== 0){ fy[i] *= k[fy[i] > 0 ? i : i+GW]; V[i] = fy[i]/(A*dt); } else fy[i] = 0;
+    }
+    const M0 = gsM0; M0.set(Mm);
+    { const inn = gsJ.fill(0);
+      for(let i=0;i<N-1;i++){ const m = fx[i]; if(m > 0) inn[i+1] += m; else if(m < 0) inn[i] -= m; }
+      for(let i=0;i<N-GW;i++){ const m = fy[i]; if(m > 0) inn[i+GW] += m; else if(m < 0) inn[i] -= m; } }
+    { const d = gsF.fill(0);
+      for(let i=0;i<N-1;i++) if(fx[i] !== 0){ d[i] -= fx[i]; d[i+1] += fx[i]; }
+      for(let i=0;i<N-GW;i++) if(fy[i] !== 0){ d[i] -= fy[i]; d[i+GW] += fy[i]; }
+      for(let i=0;i<N;i++) if(d[i] !== 0) Mm[i] = Math.max(0, Mm[i] + d[i]); }
+    for(const F of [s.roomH2, s.roomO2, s.roomVap]) roomAdvect(F, M0, Mm, fx, fy);
+    /* A cell's capacity is fixed (ROOM_C) and does not follow its gas, so the receiver's gain comes off the donor: charged only to the receiver, a circulation the heat stencil drives creates energy every tick. Capped at an eighth of the cell per face, advectSrc()'s rule, or a blast's kilograms drive the explicit heat pass past level. */
+    const mix = m => { const g = Math.abs(m)*ROOM_CP; return g*ROOM_C/(ROOM_C + 8*g)/dt; };
+    for(let i=0;i<N;i++){
+      if(fx[i] !== 0){ const a = fx[i] > 0 ? i : i+1, c = a === i ? i+1 : i;
+        const q = mix(fx[i])*(T[a] - T[c]); src[c] += q; src[a] -= q; }
+      if(fy[i] !== 0){ const a = fy[i] > 0 ? i : i+GW, c = a === i ? i+GW : i;
+        const q = mix(fy[i])*(T[a] - T[c]); src[c] += q; src[a] -= q; }
     }
   }
-  /* Only the EXCESS over what the volume holds on its own is a transient, so only that relaxes, and
-     the momentum goes with it on the same time constant. Floored at vacuum: a rarefaction is real,
-     an absolute pressure below zero is not. */
-  const f = Math.min(1, dt/ROOM_P_TAU), fu = 1-f;
-  let pmax = 0;
-  for(let i=0;i<N;i++){
-    let p = Pr[i] - (Pr[i]-gz[i])*f;
-    if(p < -ROOM_P0) p = -ROOM_P0;
-    Pr[i] = p; U[i] *= fu; V[i] *= fu;
-    if(p-gz[i] > pmax) pmax = p-gz[i];
+  roomPGen++;
+  const Pr = s.roomP, Pk = s.roomPPk;
+  /* A cell the liquids fill holds no gas to read, so it carries the gas over its column; read off its own empty volume it is a vacuum, and every wall, scar and gradient beside a flood sees 101 kPa that is not there. Rows run top down, so the cell above is already read. */
+  for(let i=0;i<N;i++){ const q = roomGasCell(vg[i]) ? roomPOf(Mm[i], vg[i], T[i])*1000 - ROOM_P0
+                                                      : (i >= GW ? Pr[i-GW] : 0);
+    Pr[i] = q;
     /* Monotonic and on S, because "this compartment has been blown up" is a fact about the run: it saves, it loads, and a replay lands on the same battlefield. */
-    if(p > Pk[i]) Pk[i] = p;
-  }
+    if(q > Pk[i]) Pk[i] = q; }
+  const st = roomPStatic(s);
+  let pmax = 0;
+  for(let i=0;i<N;i++){ const e = Pr[i] - st[i]; if(e > pmax) pmax = e; }
   return pmax;
 }
 
@@ -695,9 +750,9 @@ const roomFlam = (s,i) => roomFlamOf(roomH2Frac(s,i), roomO2Frac(s,i));
 const ROOM_FR_MIN = 0.1;
 const roomFrontU = (s,i) => Math.max(ROOM_FR_MIN, 1 - s.roomFlame[i]);
 const roomFrontFrac = (s,i) => { const n = s.roomH2[i]/H2_MMOL;
-  return n > 0 ? n/(ROOM_MOL*roomFrontU(s,i) + n) : 0; };
+  return n > 0 ? n/(roomMolX(s,i)*roomFrontU(s,i) + n) : 0; };
 const roomFrontO2 = (s,i) => s.roomO2[i]/O2_MMOL
-  /(ROOM_MOL*roomFrontU(s,i) + s.roomH2[i]/H2_MMOL);
+  /Math.max(1e-9, roomMolX(s,i)*roomFrontU(s,i) + s.roomH2[i]/H2_MMOL);
 // the continuation test; roomFlam() is the IGNITION test, and an unlit cell answers both the same
 const roomFlamFront = (s,i) => roomFlamOf(roomFrontFrac(s,i), roomFrontO2(s,i));
 /* Three sources, ONE predicate: the air, the metal skin the gas actually touches, and a wrecked box sparking at any temperature. */
@@ -732,39 +787,202 @@ const swReact = (row, kgNa) => ({q: kgNa*row.wlhv, h2: kgNa*row.wh2, h2o: kgNa*r
 const swNaFor = (row, kgH2O) => kgH2O/row.wh2o;
 /* Bought: a liquid metal running out over steel stops at a few millimetres, and this is the only thing keeping a gram from burning over a whole cell. */
 const POOL_DMIN = 0.01;                   // metres
-/* A pool falls to the deck and spreads along it, which is what sets the surface a metal fire burns from; a cell holds ROOM_VCELL and no more, so a deep spill stacks. POOL_SPREAD is bought - anything above about 2/s is the same picture one tick later. */
-const POOL_SPREAD = 5;                    // per second
-let poolDM = null, poolDE = null;
-function poolFlow(s, dt, G){
-  const M = s.roomPool, E = s.roomPoolE, N = GW*GH;
-  const cap = ROOM_VCELL*fireRho(), k = Math.min(1, POOL_SPREAD*dt);
-  // nothing on the deck runs nowhere, and the sweeps below are whole-grid
-  { let any = false; for(let i=0;i<N;i++) if(M[i] !== 0 || E[i] !== 0){ any = true; break; }
+/* Water on the floor carries no temperature of its own; the metal carries s.roomPoolE. */
+const WATER_RHO = 1000;                   // kg/m3
+// Bought: the film below which water stops running sideways, POOL_DMIN's job for water
+const WATER_DMIN = 0.001;                 // metres
+const zFloor = i => (GH-1-((i/GW)|0))*MPC;
+// metres of liquid standing in the cell; one cell full is MPC
+const liqFill = (M, rho, i) => M[i]/(rho*MPC*ROOM_DEPTH);
+// m3 of gas over whatever stands on the cell's floor, never under ROOM_VG_MIN of the cell
+const ROOM_VG_MIN = 0.01;
+const roomVgas = (s, i) => Math.max(ROOM_VG_MIN*ROOM_VCELL,
+  ROOM_VCELL - s.roomWater[i]/WATER_RHO - s.roomPool[i]/fireRho());
+// ...and a cell whose gas room is at that floor is the liquids', not the gas's
+const roomGasCell = vg => vg > ROOM_VG_MIN*ROOM_VCELL*1.0001;
+/* Only paint is a floor, a gas-tight wall or shielding; a machine box is open frame to a liquid, and a CATCH PAN's only way out is its own drain line (panDrain()). */
+const liqShut = (G, j) => !(G.hole && G.hole[j]) && (G.tight[j] || (G.occ[j] && G.own[j] < 0));
+const liqRuns = (G, i, j) => !liqShut(G, j) && !(G.pan[i] && !G.pan[j]);
+// a liquid and the one it shares the cell with, which takes that much of the cell's room
+const liqWater = s => ({M:s.roomWater, E:null, Q:s.roomWQ, rho:WATER_RHO, dmin:WATER_DMIN, O:s.roomPool, oRho:fireRho()});
+const liqMetal = s => ({M:s.roomPool, E:s.roomPoolE, Q:s.roomPoolQ, rho:fireRho(), dmin:POOL_DMIN, O:s.roomWater, oRho:WATER_RHO});
+const liqCap = (q, j) => Math.max(0, q.rho*(ROOM_VCELL - q.O[j]/q.oRho));
+const liqFull = (q, j) => q.M[j] >= liqCap(q, j) - 1e-6;
+// standing, not falling: on a floor, or on a full cell that stands itself - a stream too big for its column is full all the way down and still holds nothing up
+function liqStands(q, G, i){
+  for(let j=i+GW;; j+=GW){
+    if(j >= GW*GH || !liqRuns(G, j-GW, j)) return true;
+    if(!liqFull(q, j)) return false;
+  }
+}
+// every cell of a standing column shares the surface of its top cell
+function liqTop(q, G, i){
+  const M = q.M;
+  if(!(M[i] > 0) || liqShut(G, i)) return i;
+  /* a film under the liquid's own running depth is not a surface: a stream's tail left on a column that filled under it would be read as the top, and every kilogram run off the column is taken from that film, so the column stands */
+  while(i >= GW && liqFull(q, i) && liqFill(M, q.rho, i-GW) >= q.dmin && !liqShut(G, i-GW)) i -= GW;
+  return i;
+}
+const liqSurf = (q, G, i) => { const t = liqTop(q, G, i); return zFloor(t) + liqFill(q.M, q.rho, t); };
+// the gas a cell holds, every species riding with the total
+const roomGasFields = s => [s.roomM, s.roomH2, s.roomO2, s.roomVap];
+/* It falls on the free-fall time across one cell, runs sideways on the local inertial shallow-water law off the two columns' heads with its momentum carried on the face (a pool drains at the speed a channel carries, not one velocity head lost at every cell), and a full column takes at its own top, so stacked columns push like a U-tube. */
+const G_SI = G_MPA*1e6;                   // m/s2
+const LIQ_FALL = Math.sqrt(2*G_SI*MPC)/MPC;   // per second
+// s/m^(1/3), Manning's n for smooth steel plate (Chow, Open-Channel Hydraulics)
+const LIQ_MANNING = 0.012;
+/* de Almeida, Bates, Freer and Souvignet 2012: the face takes this share of its own flux and the rest from its two neighbours, or the scheme rings as a checkerboard on a flat floor */
+const LIQ_THETA = 0.7;
+let liqTopS = null, liqSurfS = null, liqSc = null, liqDM = null, liqDE = null, liqVin = null, liqDG = null, liqQ0 = null, liqFallN = null;
+function liqFlow(s, dt, G, q){
+  const N = GW*GH, M = q.M, E = q.E, rho = q.rho;
+  { let any = false; for(let i=0;i<N;i++) if(M[i] !== 0){ any = true; break; }
     if(!any) return; }
-  if(!poolDM || poolDM.length !== N){ poolDM = new Float64Array(N); poolDE = new Float64Array(N); }
-  poolDM.fill(0); poolDE.fill(0);
-  /* A wall or a machine box is a floor. Only the TARGET is asked, so metal standing in a wrecked machine's own cells can still run out of them. */
-  const shut = j => G.tight[j] || (G.occ[j] && !G.pan[j]);
-  /* ...except a CATCH PAN: the one occupied cell the pool may enter, over any face, and its only way out is its own drain line (panDrain()). */
-  const runs = (i, j) => !shut(j) && !(G.pan[i] && !G.pan[j]);
-  // fluxes off the SAME field, so the answer does not depend on the sweep order
-  const move = (i, j, want) => { const take = Math.min(want, M[i], cap - M[j]);
-    if(!(take > 0)) return;
-    const e = E[i]*take/M[i];
-    poolDM[i] -= take; poolDE[i] -= e; poolDM[j] += take; poolDE[j] += e; };
-  for(let Y=0;Y<GH-1;Y++) for(let X=0;X<GW;X++){
-    const i = Y*GW+X, j = i+GW;                       // j is BELOW i on this grid
-    if(M[i] > 0 && runs(i, j)) move(i, j, M[i]*k);
+  if(!liqTopS || liqTopS.length !== N){ liqTopS = new Int32Array(N); liqSurfS = new Float64Array(N);
+    liqSc = new Float64Array(N); liqDM = new Float64Array(N); liqDE = new Float64Array(N);
+    liqVin = new Float64Array(N); liqQ0 = new Float64Array(N); liqFallN = new Int32Array(N); liqDG = null; }
+  const gas = roomGasFields(s);
+  if(!liqDG || liqDG.length !== gas.length) liqDG = gas.map(() => new Float64Array(N));
+  const cap = j => liqCap(q, j);
+  // flat triples: from, to, kg - all off the SAME field, so the sweep order cannot matter
+  const tr = [], fallN = liqFallN;
+  for(let i=0;i<N-GW;i++){
+    if(!(M[i] > 0) || !liqRuns(G, i, i+GW)) continue;
+    // a stream gains speed as it drops, sqrt(2g*h) after n cells of its own run, so it thins on the way down instead of carrying its first cell's kilograms to the floor
+    const up = i-GW;
+    fallN[i] = up >= 0 && M[up] > 0 && liqRuns(G, up, i) && !liqStands(q, G, up) ? fallN[up] + 1 : 1;
+    const kf = Math.min(1, LIQ_FALL*Math.sqrt(fallN[i])*dt);
+    // what a landing pushed past the cell's own room falls at once
+    const c = cap(i), take = Math.min(Math.max(M[i]*kf, M[i] - c), cap(i+GW) - M[i+GW]);
+    if(take > 0) tr.push(i, i+GW, take);
+    /* ...and what is still past it rides down its own stream into the room left in it, to the floor: a stream is thinner than a cell, and a first-order fall caps one column at cap*LIQ_FALL. */
+    let e = M[i] - Math.max(take, 0) - c;
+    for(let j=i+GW; e > 0 && j < N; j += GW){
+      const r = cap(j) - M[j] - (j === i+GW ? Math.max(take, 0) : 0);
+      if(r > 0){ const m = Math.min(e, r); tr.push(i, j, m); e -= m; }
+      if(j+GW >= N || !liqRuns(G, j, j+GW)) break;
+    }
   }
-  /* Sideways only while it is deeper than POOL_DMIN: levelling on the difference alone has no stopping point, and a gram spread over the bay is not a pool. */
-  const dmin = cap*POOL_DMIN/ROOM_DEPTH;
+  /* m of head at each cell: the column's surface plus the gas pressing on it, or, for a column draining through its floor, the gas it drains into. Level alone never pushes water out of a pressurised compartment; the pressure does. */
+  const top = liqTopS, head = liqSurfS, P = s.roomP, kP = 1000/(rho*G_SI);
+  for(let i=0;i<N;i++){ const t = liqTop(q, G, i); top[i] = t;
+    head[i] = zFloor(t) + liqFill(M, rho, t) + kP*(liqStands(q, G, i) ? P[t] : P[i+GW]); }
+  const pair = new Map(), Q = q.Q, Q0 = liqQ0, fr = G_SI*LIQ_MANNING*LIQ_MANNING*dt;
+  Q0.set(Q);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW-1;X++){
-    const i = Y*GW+X, j = i+1, d = (M[i] - M[j])/2;
-    if(d > 0){ if(runs(i, j) && M[i] > dmin) move(i, j, Math.min(d, M[i]-dmin)*k); }
-    else if(d < 0 && runs(j, i) && M[j] > dmin) move(j, i, Math.min(-d, M[j]-dmin)*k);
+    const i = Y*GW+X, j = i+1;
+    if(!(M[i] > 0) && !(M[j] > 0)){ Q[i] = 0; continue; }
+    const hf = Math.min(MPC, Math.max(liqFill(M, rho, i), liqFill(M, rho, j)));
+    if(hf < q.dmin){ Q[i] = 0; continue; }
+    /* a wall and a drain are the scheme's boundaries: a face beside a wall, or across a cell draining through its floor, takes its own flux, or the two sides of a drain average each other out */
+    const qL = X > 0 && Q0[i-1] !== 0 && liqStands(q, G, i) ? Q0[i-1] : Q0[i];
+    const qR = X < GW-2 && Q0[i+1] !== 0 && liqStands(q, G, j) ? Q0[i+1] : Q0[i];
+    // Bates, Horritt and Fewtrell 2010: the head slope pushes the face, friction semi-implicit so a film cannot overshoot
+    let f = (LIQ_THETA*Q0[i] + (1-LIQ_THETA)/2*(qL + qR) - G_SI*hf*dt*(head[j] - head[i])/MPC)
+            /(1 + fr*Math.abs(Q0[i])/Math.pow(hf, 7/3));
+    const d = f > 0 ? i : j, r = d === i ? j : i;
+    // a falling liquid does not run sideways
+    if(!(M[d] > 0) || !liqRuns(G, d, r) || !liqStands(q, G, d) || liqFill(M, rho, d) < q.dmin){ Q[i] = 0; continue; }
+    let b = top[r];
+    if(M[b] >= cap(b) - 1e-6) b = (b >= GW && !liqShut(G, b-GW)) ? b-GW : -1;
+    if(b < 0){ Q[i] = 0; continue; }
+    // the explicit scheme's own Courant bound: a tick never carries a face more than half a cell
+    const fMax = hf*MPC/(2*dt);
+    f = clamp(f, -fMax, fMax);
+    Q[i] = f;
+    const a = top[d], kg = Math.abs(f)*ROOM_DEPTH*rho*dt;
+    const key = a*N+b, pq = pair.get(key);
+    if(pq){ pq.kg += kg; pq.faces.push(i); } else pair.set(key, {a, b, kg, faces:[i], k:-1});
   }
-  for(let i=0;i<N;i++){ M[i] += poolDM[i]; E[i] += poolDE[i];
-    if(M[i] <= 0){ M[i] = 0; E[i] = 0; } }
+  for(const pq of pair.values()){
+    const kg = Math.min(pq.kg, M[pq.a], cap(pq.b) - M[pq.b]);
+    if(kg > 0){ pq.k = tr.length; tr.push(pq.a, pq.b, kg); }
+    else for(const i of pq.faces) Q[i] = 0;
+  }
+  if(!tr.length) return;
+  const sc = liqSc.fill(0), dM = liqDM.fill(0), dE = liqDE.fill(0), vin = liqVin.fill(0);
+  for(let k=0;k<tr.length;k+=3) sc[tr[k]] += tr[k+2];
+  for(let i=0;i<N;i++) sc[i] = sc[i] > M[i] ? M[i]/sc[i] : 1;
+  for(let k=0;k<tr.length;k+=3){ const a = tr[k], b = tr[k+1], m = tr[k+2]*sc[a];
+    tr[k+2] = m; dM[a] -= m; dM[b] += m; vin[b] += m/rho;
+    if(E){ const e = E[a]*m/M[a]; dE[a] -= e; dE[b] += e; } }
+  // the momentum is what actually crossed
+  for(const pq of pair.values()) if(pq.k >= 0){ const f = tr[pq.k+2]/pq.kg;
+    if(f < 1) for(const i of pq.faces) Q[i] *= f; }
+  /* The liquid takes the gas volume of the cell it enters, so that cell's gas goes back where the liquid came from: a swap, and the donor has exactly that much room. */
+  for(const d of liqDG) d.fill(0);
+  for(let k=0;k<tr.length;k+=3){ const a = tr[k], b = tr[k+1], vg = roomVgas(s, b);
+    const f = tr[k+2]/rho/vg*(vin[b] > vg ? vg/vin[b] : 1);
+    for(let n=0;n<gas.length;n++){ const g = gas[n][b]*f; liqDG[n][a] += g; liqDG[n][b] -= g; } }
+  for(let i=0;i<N;i++){
+    M[i] += dM[i];
+    if(E) E[i] += dE[i];
+    if(M[i] <= 0){ M[i] = 0; if(E) E[i] = 0; }
+    for(let n=0;n<gas.length;n++) gas[n][i] = Math.max(0, gas[n][i] + liqDG[n][i]);
+  }
+}
+/* Liquid landing from outside the room takes the gas room it lands in; that gas goes to the open cells beside it, by face and by the room each has for it. */
+function roomGasDisplace(s, G, i, dV){
+  const X = i%GW, nb = [];
+  let w = 0;
+  const put = (j, b) => { if(b > 0){ b *= roomVgas(s, j); nb.push(j, b); w += b; } };
+  if(X < GW-1) put(i+1, G.bx[i]);
+  if(X > 0) put(i-1, G.bx[i-1]);
+  if(i+GW < GW*GH) put(i+GW, G.by[i]);
+  if(i >= GW) put(i-GW, G.by[i-GW]);
+  if(!(w > 0) || !(dV > 0)) return;
+  const f = Math.min(1, dV/roomVgas(s, i));
+  for(const F of roomGasFields(s)){ const g = F[i]*f;
+    F[i] -= g;
+    for(let k=0;k<nb.length;k+=2) F[nb[k]] += g*nb[k+1]/w; }
+}
+/* What a compartment's own volume will not hold goes back on the book it left, off the fullest cells. */
+function waterCap(s){
+  const W = s.roomWater;
+  for(const g of matRegions().regions){
+    let kg = 0;
+    for(const i of g.cells) kg += W[i];
+    let ex = kg - regionSumpCap(g);
+    if(!(ex > 0)) continue;
+    for(const i of g.cells.slice().sort((a,b) => W[b]-W[a])){
+      if(!(ex > 0)) break;
+      const t = Math.min(ex, W[i]);
+      W[i] -= t; ex -= t; book(s, "sump", t);
+    }
+  }
+}
+// the water surface in and beside a machine in rows from the top, or null: the metal burns a machine, it does not drown it
+function partFloodLine(s, p, G){
+  const W = s && s.roomWater;
+  if(!p || !W) return null;
+  G = G || roomGeomLive(s);
+  const q = liqWater(s);
+  let surf = -Infinity;
+  // the box's own columns too: water runs in through the frame
+  for(let X=Math.max(0,p.x-1);X<=Math.min(GW-1,p.x+p.w);X++){
+    for(let Y=Math.max(0,p.y);Y<Math.min(GH,p.y+p.h);Y++){ const i = Y*GW+X;
+      if(!(W[i] > 0) || liqShut(G, i) || !liqStands(q, G, i)) continue;
+      const v = liqSurf(q, G, i);
+      if(v > surf) surf = v; }
+  }
+  if(!(surf > -Infinity)) return null;
+  const line = GH - surf/MPC;
+  return p.y + p.h > line ? line : null;
+}
+// kg standing in a region and its deepest surface over the region's lowest floor, m
+function regionFlood(s, g){
+  const W = s && s.roomWater;
+  if(!W || !g) return null;
+  const G = roomGeomLive(s), q = liqWater(s);
+  let kg = 0, top = -Infinity, bot = -1;
+  for(const i of g.cells){ const Y = (i/GW)|0;
+    if(Y > bot) bot = Y;
+    if(!(W[i] > 0)) continue;
+    kg += W[i];
+    if(!liqStands(q, G, i)) continue;
+    const v = liqSurf(q, G, i);
+    if(v > top) top = v; }
+  return kg > 0 ? {kg, d: top > -Infinity ? Math.max(0, top - zFloor(bot*GW)) : 0} : null;
 }
 /* The JET decides, not a switch: gas Weber number rho_air*v^2*d/sigma off the hole's own velocity and bore, so a small hole sprays and a wide tear dribbles. */
 const SPRAY_WE0 = 13, SPRAY_WE1 = 40.3;
@@ -782,24 +1000,23 @@ const roomPoolLit = (s,i) => { const f = fireRow();
       && roomPoolT(s,i) >= f.ign && roomO2Frac(s,i) >= f.loc; };
 // what the metal put into the air THIS tick, kJ per cell - read by the one q
 let fireQ = null;
-// which region's sump is standing in each cell this tick, -1 for a dry one
-let fireWet = null;
-/* The bund is in poolFlow(); this is the drain, into a sealed tank the board does not draw. The metal was booked out at the opening it left through, so nothing here moves a book. A wrecked pan is still a bund and drains nothing. */
+/* The bund is liqShut()'s; this is the drain, into a sealed tank the board does not draw, water first because it is on the bottom. The metal was booked out at the opening it left through; the water was booked back onto the ship when it landed, so it goes back off here. A wrecked pan is still a bund and drains nothing. */
 const PAN_DRAIN_KGS = 20;                 // kg/s one pan's drain line passes
 function panDrain(s, dt, G){
-  const M = s.roomPool, E = s.roomPoolE;
   for(const q of G.parts){
     if(q.p.role !== "pan" || partWrecked(s, q.p.id)) continue;
     let want = PAN_DRAIN_KGS*dt;
-    for(const i of q.cells){
-      if(!(want > 0)) break;
-      const take = Math.min(want, M[i]);
-      if(!(take > 0)) continue;
-      E[i] -= E[i]*take/M[i];
-      M[i] -= take; want -= take;
-      s.panBy[q.p.id] = (s.panBy[q.p.id] || 0) + take;
-      if(M[i] <= 0){ M[i] = 0; E[i] = 0; }
-    }
+    for(const [M, E] of [[s.roomWater, null], [s.roomPool, s.roomPoolE]])
+      for(const i of q.cells){
+        if(!(want > 0)) break;
+        const take = Math.min(want, M[i]);
+        if(!(take > 0)) continue;
+        if(E) E[i] -= E[i]*take/M[i];
+        else book(s, "sump", take);
+        M[i] -= take; want -= take;
+        s.panBy[q.p.id] = (s.panBy[q.p.id] || 0) + take;
+        if(M[i] <= 0){ M[i] = 0; if(E) E[i] = 0; }
+      }
   }
 }
 
@@ -809,17 +1026,15 @@ function roomFireStep(s, dt, G, src){
   if(!fireQ || fireQ.length !== N) fireQ = new Float64Array(N);
   fireQ.fill(0);
   s.roomFireOn = 0;
-  if(!fireCool()) return;
-  // roomPGauge() is a whole-grid pass, so it is asked once and only if metal is arriving
-  let gz = null, on = 0;
-  roomLiqOuts(s, G, (cells, rate, fl, key) => {
+  const cool = fireCool();
+  let on = 0;
+  if(cool) roomLiqOuts(s, G, (cells, rate, fl, key) => {
     const row = fl.c.burn && FIRE[fl.c.burn];
     if(!row || !cells.length) return;
     /* The kilograms the TRANSPORT booked, never the solve's rate: this mass sits on the deck and must be the same mass that left the loop. */
     const kg = advectOutKg[key] || 0;
     if(!(kg > 0)) return;
-    if(!gz) gz = roomPGauge(s);
-    const pN = netPAt(s, fl.nd)*1e6, pR = (ROOM_P0 + gz[cells[0]])*1000;
+    const pN = netPAt(s, fl.nd)*1e6, pR = (ROOM_P0 + s.roomP[cells[0]])*1000;
     const v = Math.sqrt(2*Math.max(0, pN - pR)/fireRho());
     const d = openBoreM(key);
     const we = ROOM_RHO*v*v*d/row.sigma;
@@ -839,18 +1054,18 @@ function roomFireStep(s, dt, G, src){
     s.fireEv.kg += burnt; s.fireEv.q += burnt*row.lhv;
     // what did not burn in flight is on the deck, over the opening's own cells and not a plume: a liquid falls
     const per = (kg - burnt)/cells.length;
-    if(per > 0) for(const i of cells){ M[i] += per; E[i] += per*cp*(Tin - row.melt); }
+    if(per > 0) for(const i of cells){ roomGasDisplace(s, G, i, per/fireRho());
+      M[i] += per; E[i] += per*cp*(Tin - row.melt); }
   });
-  poolFlow(s, dt, G);
+  const W = s.roomWater;
+  if(cool) liqFlow(s, dt, G, liqMetal(s));
+  liqFlow(s, dt, G, liqWater(s));
   panDrain(s, dt, G);
-  /* The sump is a book per REGION and the pool a field per CELL, so they meet only through the flood line; the region, so reacted kilograms come off the right book. */
-  if(!fireWet || fireWet.length !== N) fireWet = new Int32Array(N);
-  fireWet.fill(-1);
-  for(const g of matRegions().regions){
-    const q = regionFlooded(s, g); if(!q) continue;
-    const line = q.bot + 1 - q.rows, k = regionKey(g);
-    for(const i of g.cells) if(((i/GW)|0) >= line) fireWet[i] = k;
-  }
+  waterCap(s);
+  // a cell the liquids fill holds no gas: what the swaps left in it goes where there is room
+  for(let i=0;i<N;i++)
+    if(s.roomM[i] > 0 && !roomGasCell(roomVgas(s, i))) roomGasDisplace(s, G, i, ROOM_VCELL);
+  if(!cool) return;
   const A0 = MPC*MPC;
   for(let i=0;i<N;i++){
     let m = M[i];
@@ -861,21 +1076,20 @@ function roomFireStep(s, dt, G, src){
     const fo2 = roomO2Frac(s, i);
     // only the FREE surface burns: a stack is one fire, not three
     const open = i < GW || !(M[i-GW] > 0);
-    /* Water needs neither air nor a spark, so this is ungated on oxygen, ignition and temperature. Standing sump water first, then whatever steam a break put in the air; the rate is the smaller of what the surface passes and what water is there. */
+    /* Water needs neither air nor a spark, so this is ungated on oxygen, ignition and temperature. The water in the pool's own cell first - a pool floats on it - then whatever steam a break put in the air; the rate is the smaller of what the surface passes and what water is there. */
     if(open && f.wlhv){
-      const kS = fireWet[i], sump = kS >= 0 ? (s.sump[kS] || 0) : 0;
-      const vap = Math.max(0, s.roomM[i] - ROOM_MAIR);
+      const sump = W[i], vap = s.roomVap[i];
       const mw = Math.min(f.wrate*A*dt, m, swNaFor(f, sump + vap));
       if(mw > 0){
         const r = swReact(f, mw);
         let need = r.h2o;
         if(sump > 0){ const take = Math.min(need, sump);
           /* sumpStep() booked these kilograms back onto the ship; reacted, they are gone, and the book closes on the line it was credited on. */
-          s.sump[kS] =sump - take; book(s, "sump", take); need -= take; }
-        if(need > 0) s.roomM[i] -= Math.min(need, vap);
+          W[i] = sump - take; book(s, "sump", take); need -= take; }
+        if(need > 0){ const t = Math.min(need, vap); s.roomM[i] -= t; s.roomVap[i] -= t; }
         M[i] = m = m - mw;
         E[i] += r.q - mw*cp*(Tp - f.melt);
-        s.roomH2[i] += r.h2;
+        s.roomH2[i] += r.h2; s.roomM[i] += r.h2;
         s.fireEv.kg += mw; s.fireEv.q += r.q;
         on++;
         // so the air test below sees the heat this released rather than seeing it next tick
@@ -909,11 +1123,9 @@ function roomFireStep(s, dt, G, src){
   s.roomFireOn = on;
 }
 
-function roomH2Step(s, dt, G){
+function roomH2Step(s, dt, G, pmax){
   const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame;
   const T = s.roomT;
-  /* Off the real kilograms (roomPOf()), so a discharge raises it and a hole lowers it; the BLAST below rides on top of this. */
-  const pGauge = roomPGauge(s);
   s.roomBurnOn = 0;
   /* Hydrogen is a species the transport carries (s.h2By, advectH2Out by edge key), so the field has already lost it and nothing here debits s.h2. */
   if(s.h2 > 0){
@@ -922,7 +1134,7 @@ function roomH2Step(s, dt, G){
       const m = H2OUT[key];
       if(!(m > 0) || !cells.length) return;
       // the same plume the heat went into, off the same opening at the same rate
-      roomSpread(H, cells, Math.max(0, rate)/100*loopKg(), m);
+      roomAddH2(s, cells, Math.max(0, rate)/100*loopKg(), m);
     };
     roomLiqOuts(s, G, (cells, rate, fl, key) => put(cells, rate, key));
   }
@@ -930,9 +1142,10 @@ function roomH2Step(s, dt, G){
   if(!s.blackout) for(const q of G.parts){
     if(q.p.role !== "vent" || partWrecked(s, q.p.id)) continue;
     const f = Math.min(1, ROOM_VENT_KGS/q.cells.length/ROOM_MAIR*dt);
-    // ...and the AIR with them, so a set running in a pressurised compartment brings it back down
-    for(const i of q.cells){ H[i] -= H[i]*f; O[i] += (ROOM_O2_0 - O[i])*f;
-      s.roomM[i] += (ROOM_MAIR - s.roomM[i])*f; }
+    /* ...and the AIR with them, toward what the rest of the ship holds at ambient and the cell's own temperature and room: the one place the ship outside the drawing exists. */
+    for(const i of q.cells){ H[i] -= H[i]*f; O[i] += (ROOM_O2_0 - O[i])*f; s.roomVap[i] -= s.roomVap[i]*f;
+      const m0 = ROOM_P0/1000*roomVgas(s, i)/(R_AIR*Math.max(T[i], 1));
+      s.roomM[i] += (m0 - s.roomM[i])*f; }
   }
   /* The vent set's expression with the target reversed: nitrogen in, oxygen and hydrogen to zero, mass unmoved. NO POWER, so a blackout does not take it away - and it does not stop sodium meeting water. */
   for(const q of G.parts){
@@ -976,8 +1189,7 @@ function roomH2Step(s, dt, G){
     if(fireQ && fireQ[i] > 0) q += fireQ[i];
     if(q > 0) roomBang(s, i, q);
   }
-  const pmax = roomWaveStep(s, dt, G, pGauge);
-  roomScarStep(s, G, pGauge);
+  roomScarStep(s, G, roomPStatic(s));
   s.roomBurnOn = on; s.roomPMax = pmax;
   if(s.roomFireOn && pmax > s.fireEv.p) s.fireEv.p = pmax;
   /* One event per explosion: a front at 0.05 m/s never trips a per-tick gate, so step.js writes the line when the last flame goes out. */
@@ -1007,116 +1219,28 @@ function roomDiffuse(F, G, dt, up){
   /* No hull term: the stencil is edge-based and conserving, so no-flux is already the default, and the sealed skin is what is wanted. */
 }
 
-/* Each connected gas volume (matRegions()) is LUMPED - one mass, one mean temperature, one pressure - because pressure equalises inside one far faster than a tick; between volumes there is nothing but the orifice matHoles() found. */
-let ROOM_VOL_SCR = null;
-const roomVolScr = n => { let z = ROOM_VOL_SCR;
-  if(!z || z.M.length !== n) z = ROOM_VOL_SCR = {M:new Float64Array(n), V:new Float64Array(n), MT:new Float64Array(n), T:new Float64Array(n), P:new Float64Array(n), RHO:new Float64Array(n)};
-  z.M.fill(0); z.V.fill(0); z.MT.fill(0); return z; };
-function roomVols(s){
-  const R = matRegions(), n = R.regions.length;
-  const Z = roomVolScr(n), M = Z.M, V = Z.V, MT = Z.MT;
-  for(let i=0;i<GW*GH;i++){ const r = R.of[i]; if(r<0) continue;
-    const m = s.roomM[i];
-    M[r] += m; V[r] += ROOM_VCELL; MT[r] += m*s.roomT[i]; }
-  const T = Z.T, P = Z.P, RHO = Z.RHO;
-  for(let r=0;r<n;r++){
-    T[r] = M[r] > 0 ? MT[r]/M[r] : T_HULL;
-    RHO[r] = V[r] > 0 ? M[r]/V[r] : ROOM_RHO;
-    P[r] = roomPOf(M[r], V[r], T[r]);
-  }
-  return {R, n, M, V, T, P, RHO};
+/* The static pressure each cell stands in: its compartment's MEAN, a read over the view (regionPMean()), so a bang is what a cell carries over it. Memoised on the read. */
+let pStatScr = null, pStatFor = null, pStatAt = -1;
+function roomPStatic(s){
+  const N = GW*GH;
+  if(pStatScr && pStatScr.length === N && pStatFor === s && pStatAt === roomPGen) return pStatScr;
+  if(!pStatScr || pStatScr.length !== N) pStatScr = new Float64Array(N);
+  const of = matRegions().of, m = regionPMean(s);
+  for(let i=0;i<N;i++) pStatScr[i] = of[i] < 0 ? 0 : m[of[i]];
+  pStatFor = s; pStatAt = roomPGen;
+  return pStatScr;
 }
-// kPa above ambient per cell, one array so the burn term and the damage sweeps read the same figure
-let pGaugeScr = null;
-function roomPGauge(s){
-  const q = roomVols(s), N = GW*GH;
-  const g = (pGaugeScr && pGaugeScr.length === N) ? pGaugeScr.fill(0) : (pGaugeScr = new Float64Array(N));
-  for(let i=0;i<N;i++){ const r = q.R.of[i]; if(r<0) continue;
-    g[i] = Math.max(0, (q.P[r] - ROOM_P0/1000)*1000); }
-  return g;
-}
-/* Dry air plus vapour: the vapour cannot exceed its saturation partial pressure at the air's temperature, and what will not stay a gas lands on the floor. Instant, because any lag would be a fitted number standing in for an undrawn surface. */
+/* Per cell: the steam cannot exceed its saturation pressure at the cell's own temperature, and what will not stay a gas lands on that cell's floor as water. Instant, because any lag would be a fitted number standing in for an undrawn surface. It was booked out of the plant at the opening, so landing it comes back onto the held side against a negative `sump` line. */
 const R_VAP = 0.0004615;                  // MPa*m3/(kg*K)
-function roomCondense(s, dt){
-  const q = roomVols(s);
-  for(let r=0;r<q.n;r++){
-    const g = q.R.regions[r], n = g.cells.length;
-    const air = ROOM_MAIR*n;
-    const vap = q.M[r] - air;
-    if(!(vap > 0)) continue;
-    // what the air at this temperature will hold as vapour, and no more
-    const cap = satP(SAT_WATER, q.T[r])*q.V[r]/(R_VAP*Math.max(q.T[r],1));
-    const drop = vap - cap;
+function roomCondense(s){
+  const N = GW*GH, Vp = s.roomVap, T = s.roomT, W = s.roomWater;
+  for(let i=0;i<N;i++){
+    const v = Vp[i];
+    if(!(v > 0)) continue;
+    const Tk = Math.max(T[i], 1), drop = Math.min(v, s.roomM[i]) - satP(SAT_WATER, Tk)*roomVgas(s, i)/(R_VAP*Tk);
     if(!(drop > 0)) continue;
-    /* No book: s.roomM is the compartment's GAS and is in none, and these kilograms were already booked out at the opening they left through. */
-    const f = drop/q.M[r];
-    for(const i of g.cells) s.roomM[i] -= s.roomM[i]*f;
-  }
-}
-
-/* Every hole is priced by the SAME relation a pipe break is, and what crosses carries the donor's hydrogen, oxygen and enthalpy into the cell on the far side. Mass is lumped over the volume afterwards; temperature is NOT levelled, because that is the diffusion pass's job. */
-function roomHoleStep(s, dt){
-  const holes = matHoles(s);
-  for(const k in s.holeQ) s.holeQ[k].q = 0;      // refilled, never rebuilt
-  if(!holes.length){ for(const k in s.holeQ) delete s.holeQ[k]; return; }
-  const q = roomVols(s);
-  /* The overshoot guard below is a statement about the PAIR, so with n holes open each may take only 1/n of it; the orifice term is untouched, so area still scales. */
-  const share = {};
-  for(const h of holes){ const k = Math.min(h.a,h.b)+":"+Math.max(h.a,h.b);
-    share[k] = (share[k]||0)+1; }
-  for(const h of holes){
-    const up = q.P[h.a] >= q.P[h.b] ? h.a : h.b, dn = up === h.a ? h.b : h.a;
-    if(!(q.M[up] > 0)) continue;
-    const w = roomHoleKgs(h.area, q.P[up], q.P[dn], q.RHO[up]);
-    /* It may not overshoot the balance: past half the difference in one tick the two volumes ring instead of settling. IN PRESSURE, never in density - a hot region at equal pressure is lighter than the cold ship. */
-    const kUp = q.T[up]/q.V[up], kDn = q.T[dn]/q.V[dn];
-    const even = Math.max(0, (q.P[up]-q.P[dn])/(R_AIR*(kUp+kDn)));
-    const nSh = share[Math.min(h.a,h.b)+":"+Math.max(h.a,h.b)] || 1;
-    const dm = Math.min(w*dt, q.M[up]*0.5, even*0.5/nSh);
-    if(!(dm > 0)) continue;
-    const f = dm/q.M[up];
-    // what leaves the donor volume, taken from every cell of it in proportion
-    const cUp = q.R.regions[up].cells, cDn = q.R.regions[dn].cells;
-    let h2=0, o2=0, en=0;
-    for(const i of cUp){ const take = s.roomM[i]*f;
-      s.roomM[i] -= take;
-      const fh = s.roomH2[i]*f, fo = s.roomO2[i]*f;
-      s.roomH2[i] -= fh; s.roomO2[i] -= fo;
-      h2 += fh; o2 += fo; en += take*ROOM_CP*s.roomT[i]; }
-    // ...and it arrives AT THE HOLE, in the cell on the far side of it
-    let land = -1;
-    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
-      const X=h.x+dx, Y=h.y+dy;
-      if(X<0||X>=GW||Y<0||Y>=GH) continue;
-      if(q.R.of[Y*GW+X] === dn){ land = Y*GW+X; break; }
-    }
-    if(land < 0) land = cDn[0];
-    const was = s.roomM[land], now = was + dm;
-    s.roomT[land] = clamp((was*ROOM_CP*s.roomT[land] + en)/Math.max(now*ROOM_CP, 1e-9),
-                          T_SPACE, ROOM_TMAX);
-    s.roomM[land] = now;
-    s.roomH2[land] += h2; s.roomO2[land] += o2;
-    /* kg/s and which way, so the renderer draws the jet off the flow rather than a proxy. Refilled, never rebuilt. */
-    s.holeQ[h.x+","+h.y] = {q: dm/dt, to: land};
-  }
-  // a cell that is no longer a hole stops drawing one
-  for(const k in s.holeQ) if(!holes.some(h=>h.x+","+h.y===k)) delete s.holeQ[k];
-  /* Redone off a fresh sum: the loop above moved mass between volumes, so the totals it started with are stale by exactly what crossed. */
-  { const R = q.R;
-    const M = new Float64Array(q.n), N = new Float64Array(q.n);
-    for(let i=0;i<GW*GH;i++){ const r=R.of[i]; if(r<0) continue; M[r]+=s.roomM[i]; N[r]++; }
-    for(let i=0;i<GW*GH;i++){ const r=R.of[i]; if(r<0) continue; s.roomM[i]=M[r]/N[r]; } }
-}
-/* A bounded region is sealed and holds what it is given; the ship at large is not, so it bleeds MASS back toward what the compartment holds at rest, at the cell's OWN temperature. Air, not plant inventory, so no book. */
-function roomShipLeak(s, dt){
-  const R = matRegions();
-  for(const g of R.regions){
-    if(g.bounded) continue;
-    const f = Math.min(1, dt/ROOM_P_TAU);
-    for(const i of g.cells){
-      const m0 = ROOM_P0/1000*ROOM_VCELL/(R_AIR*Math.max(s.roomT[i], 1));
-      s.roomM[i] += (m0 - s.roomM[i])*f;
-    }
+    Vp[i] = v - drop; s.roomM[i] -= drop; W[i] += drop;
+    book(s, "sump", -drop);
   }
 }
 
@@ -1129,17 +1253,17 @@ function roomAt(s, p){
 }
 /* A passage is one rise and fall of the bang at a cell: the tracker rides it up and books the peak
    once it has fallen to half, so the next echo is a passage of its own. Ungated, or it misses the fall. */
-function roomScarStep(s, G, gz){
+function roomScarStep(s, G, st){
   const N = GW*GH, P = s.roomP, scar = s.roomScar, cur = s.roomScarCur;
   for(let i=0;i<N;i++){
     if(G.occ[i] || G.tight[i]) continue;
-    const a = Math.abs(P[i] - gz[i]);
+    const a = Math.abs(P[i] - st[i]);
     if(a > cur[i]) cur[i] = a;
     else if(a < cur[i]*0.5){ if(cur[i] > HIT_LO) scar[i] += cur[i] - HIT_LO; cur[i] = a; }
   }
 }
-/* kPa·cells over gauge on the open-air cell outside each face cell, times the face's inward normal;
-   the renderer's lean asks here, and `lit` is the most `w` reaches on those same cells. */
+/* kPa·cells over the static (roomPStatic()) on the open-air cell outside each face cell, times the
+   face's inward normal; the renderer's lean asks here, and `lit` is the most `w` reaches on those cells. */
 function partLoad(s, p, gz, G, w){
   G = G || roomGeom();
   const P = s.roomP;
@@ -1166,11 +1290,13 @@ function roomPAt(s, p, g){
       if(q > v) v = q; }
   return v;
 }
+/* Moles of everything in a cell that is not hydrogen, off the cell's OWN gas: a pressurised cell holds more air, so the same hydrogen is a smaller fraction of it, and a cell full of steam is inert by arithmetic. */
+const roomMolX = (s,i) => Math.max(0, s.roomM[i] - s.roomH2[i] - s.roomVap[i])/AIR_MMOL + s.roomVap[i]/H2O_MMOL;
 // volume fraction, the same expression the ignition test uses so a cell cannot draw as safe and burn
 const roomH2Frac = (s,i) => { const n = s.roomH2[i]/H2_MMOL;
-  return n > 0 ? n/(ROOM_MOL + n) : 0; };
+  return n > 0 ? n/(roomMolX(s,i) + n) : 0; };
 // off the SAME denominator, so a rich cell is oxygen-poor by arithmetic rather than a second rule
-const roomO2Frac = (s,i) => s.roomO2[i]/O2_MMOL/(ROOM_MOL + s.roomH2[i]/H2_MMOL);
+const roomO2Frac = (s,i) => s.roomO2[i]/O2_MMOL/Math.max(1e-9, roomMolX(s,i) + s.roomH2[i]/H2_MMOL);
 // off the same partSkin()/partTsurv() the damage integral reads, so the alarm and the failure name one set
 const roomOverIds = s => LAY.parts.filter(p => { const l = partTsurv(p);
   return l && fitted(p) && partSkin(s,p) > l; }).map(p => p.id);

@@ -219,11 +219,11 @@ function tubeStep(s,cs,K,id,burst){
   cs.breach=true; cs.trip="SHIELD LIFTED";
   logE("alarm","UPPER SHIELD LIFTED / "+nameOf(id),
     "The reactor cavity reached "+(gauge*1000).toFixed(0)+" kPa against the "+(lift*1000).toFixed(0)+" its shield weighs. The shield is off, every channel is torn at its top weld and the whole core is open to the room.","shield:"+id);
-  /* posted the way a burn posts its own blast, so the damage sweep sees no second mechanism */
+  /* a heat into the air, the way a burn and a BLAST charge go in, so the damage sweep sees no second mechanism */
   const p=partOf(id); if(!p) return;
   const kPa=lift*1000;
   for(let X=p.x-1;X<=p.x+p.w;X++) for(let Y=p.y-1;Y<=p.y+p.h;Y++)
-    if(X>=0&&X<GW&&Y>=0&&Y<GH) roomBlastPost(s, Y*GW+X, kPa);
+    if(X>=0&&X<GW&&Y>=0&&Y<GH) roomBang(s, Y*GW+X, kPa*T_HULL*ROOM_CVAIR/ROOM_P0);
   s.roomBang=Math.max(s.roomBang||0, kPa);
 }
 /* FITTED is "somebody wired a scram", ARMED is "and the block driving it is on" */
@@ -1813,8 +1813,8 @@ const ledgerKg = s => { let m = 0;
   m += sumpKg(s);
   return m; };
 const ledgerOut = s => { let k=0; for(const n in s.massOut) k += s.massOut[n]; return k; };
-// what is standing on the floor of every region, and it is HELD - see sumpStep()
-const sumpKg = s => { let k=0; for(const j in (s.sump||{})) k += s.sump[j]; return k; };
+// what is standing on the floor of every cell, and it is HELD - see sumpStep()
+const sumpKg = s => { let k=0; const W=s.roomWater; if(W) for(let i=0;i<W.length;i++) k += W[i]; return k; };
 // kg out of the plant, by name. Negative is a boundary feeding it.
 const book = (s,name,kg) => { if(kg) s.massOut[name] = (s.massOut[name]||0) + kg; };
 /* The INJECT tool's fluid half. It is a boundary the player is holding open, so what it lands on the
@@ -1831,7 +1831,8 @@ function injectNode(tgt){
 }
 function injectFluid(s, dt){
   const q = s.inject;
-  if(!q || q.kind !== "fluid" || !q.rate) return;
+  // a cell index is bare deck, and the water goes on its floor (injectRoom(), room.js)
+  if(!q || q.kind !== "fluid" || !q.rate || typeof q.target !== "string") return;
   const n = injectNode(q.target);
   if(!n || s.mBy[n] === undefined) return;
   const have = s.mBy[n];
@@ -1840,103 +1841,29 @@ function injectFluid(s, dt){
   s.mBy[n] = have + kg;
   book(s, "inject", -kg);
 }
-/* A shot wall is a slot MPC tall and ROOM_DEPTH wide: the part of it above the far surface discharges free (Torricelli integrated over the height), the part below is drowned on the difference of the two surfaces, and one tick never carries it past level. */
-function sumpDrain(s, dt){
-  for(const k in s.holeW) s.holeW[k].q = 0;      // refilled, never rebuilt
-  const holes = matHoles(s);
-  if(!holes.length){ for(const k in s.holeW) delete s.holeW[k]; return; }
-  const R = matRegions(), g2 = 2*G_MPA*1e6, b = ROOM_DEPTH;
-  const kgPerM = g => 1000*regionSpanX(g)*MPC*ROOM_DEPTH;
-  const surf = g => { let bot = -1; for(const i of g.cells){ const Y = (i/GW)|0; if(Y > bot) bot = Y; }
-    return (bot+1)*MPC - regionFloodM(s, g); };
-  for(const h of holes){
-    const ga = R.regions[h.a], gb = R.regions[h.b];
-    const ya = surf(ga), yb = surf(gb);
-    const up = ya <= yb ? ga : gb, dn = up === ga ? gb : ga;
-    const yu = Math.min(ya, yb), yd = Math.max(ya, yb);
-    const top = h.y*MPC, bot = (h.y+1)*MPC;
-    if(!(yu < bot) || !(yd > yu)) continue;
-    const H1 = Math.min(bot, yd) - yu, H2 = Math.max(top - yu, 0);
-    const free = H1 > H2 ? 2/3*ORIF_CD*b*Math.sqrt(g2)*(Math.pow(H1,1.5) - Math.pow(H2,1.5)) : 0;
-    const drown = yd < bot ? ORIF_CD*b*(bot - Math.max(yd, top))*Math.sqrt(g2*(yd - yu)) : 0;
-    const kUp = regionKey(up), kDn = regionKey(dn), have = s.sump[kUp] || 0;
-    const m = Math.min(1000*(free + drown)*dt, have, (bot - yu)*kgPerM(up),
-      (yd - yu)/(1/kgPerM(up) + 1/kgPerM(dn)), regionSumpCap(dn) - (s.sump[kDn] || 0));
-    if(!(m > 0)) continue;
-    s.sump[kDn] = (s.sump[kDn] || 0) + m;
-    s.sump[kUp] = have - m;
-    if(!(s.sump[kUp] > 0)) delete s.sump[kUp];
-    let land = -1;
-    for(const [dx,dy] of [[0,1],[1,0],[-1,0],[0,-1]]){ const X = h.x+dx, Y = h.y+dy;
-      if(X>=0 && X<GW && Y>=0 && Y<GH && R.of[Y*GW+X] === dn.idx){ land = Y*GW+X; break; } }
-    const key = h.x+","+h.y, w = s.holeW[key];
-    if(w){ w.q += m/dt; w.to = land; } else s.holeW[key] = {q: m/dt, to: land};
-  }
-  for(const k in s.holeW) if(!holes.some(h => h.x+","+h.y === k)) delete s.holeW[k];
-}
-/* water let go anywhere on the board lands on its region's floor, the ship's included, and comes back into the held side of the book against a negative `sump` line; it floods from the bottom cell up and drowns what it reaches */
+/* water let go anywhere on the board lands on the opening's own cells and comes back into the held side of the book against a negative `sump` line; it runs from there (liqFlow(), room.js) and drowns what it stands two thirds of the way up */
 function sumpStep(s, dt){
-  const G = P.net; if(!G) return;
-  const kgOf = rate => Math.max(0, rate)/100*loopKg();
-  const put = (cells, kg) => {
-    if(!(kg > 0) || !cells || !cells.length) return;
-    const c = cells[0], g = matRegionIn(c[0], c[1]);
-    if(!g) return;                       // a wall cell is in no region
-    /* what will not fit is never moved into this book, so it stays booked out at the node it left from */
-    const k = regionKey(g), have = s.sump[k]||0;
-    const take = Math.min(kg, Math.max(0, regionSumpCap(g) - have));
-    if(!(take > 0)) return;
-    s.sump[k] = have + take;
-    book(s, "sump", -take);
-  };
-  /* a region that stopped being one releases the book that was holding its water back */
-  { const live = {};
-    for(const g of matRegions().regions) live[regionKey(g)] = g;
-    for(const k in s.sump){
-      const g = live[k];
-      if(g){ const cap = regionSumpCap(g);
-        if(s.sump[k] <= cap) continue;
-        book(s, "sump", s.sump[k]-cap); s.sump[k] = cap; continue; }
-      book(s, "sump", s.sump[k]); delete s.sump[k];
-    } }
-  /* a fluid that burns is not in this book at all: it lands as a pool (s.roomPool, roomFireStep()) with its own mass */
-  const burns = fl => !!(fl && fl.c && fl.c.burn);
-  /* what flashed at the opening is roomAddGas()'s air; this book takes the rest, off the same openFlashX() both ask */
-  const wet = (fl, c) => 1 - openFlashX(s, fl, c ? c[1]*GW + c[0] : -1);
-  for(const key in s.spillBy){
-    const r = G.byKey[key.slice(6)];
-    if(!r || !r.cells) continue;
-    const fl = openFluidH(s, key);
-    if(burns(fl)) continue;
-    const open = r.cells.filter(([x,y]) => cellBroken(s,x,y));
-    put(open, kgOf(s.spillBy[key])*wet(fl, open[0])*dt);
-  }
-  const tgt = (G.fitTarget)||{}, out = (G.fitVentOut)||{};
-  for(const fid in s.reliefVent){
-    if(tgt[fid] || out[fid]) continue;
-    const q = partOf(fid); if(!q) continue;
-    const fl = partFluidH(s, fid);
-    if(burns(fl)) continue;
-    const c = [q.x+((q.w/2)|0), q.y+((q.h/2)|0)];
-    put([c], kgOf(s.reliefVent[fid])*wet(fl, c)*dt);
-  }
-  sumpDrain(s, dt);
-  /* read off the same depth the FLOODING layer draws, so the picture and the failure cannot disagree */
-  for(const g of matRegions().regions){
-    const f = regionFlooded(s, g); if(!f) continue;
-    const line = f.bot + 1 - f.rows;
-    for(const p of LAY.parts){
-      if(!fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
-      if(!floodDrowns(p, line)) continue;
-      if(matRegionInOf(p) !== g) continue;
-      s.dmgParts.push(p.id);
-      s.dmgWhy[p.id] = "FLOODED";
-      const fx = dmgFx(p.id);
-      if(fx.hit) fx.hit(s, p.id);
-      logE("alarm","FLOODING / "+fx.msg,
-        p.name+" is under water - "+f.d.toFixed(1)+
-        " m of it is standing on the floor of the region it is in, and it is two thirds of the way up the machine. "+fx.why);
-    }
+  if(!P.net) return;
+  const W = s.roomWater, G = roomGeomLive(s);
+  /* a fluid that burns lands as a pool (s.roomPool, roomFireStep()); what flashed at the opening is roomAddGas()'s air, off the same openFlashX() and the same transported kilograms both ask */
+  roomLiqOuts(s, G, (cells, rate, fl, key) => {
+    if(!cells.length || (fl.c && fl.c.burn)) return;
+    const kg = (advectOutKg[key] || 0)*(1 - openFlashX(s, fl, cells[0]));
+    if(!(kg > 0)) return;
+    for(const i of cells){ roomGasDisplace(s, G, i, kg/cells.length/WATER_RHO); W[i] += kg/cells.length; }
+    book(s, "sump", -kg);
+  });
+  for(const p of LAY.parts){
+    if(!fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
+    const line = partFloodLine(s, p, G);
+    if(line === null || !floodDrowns(p, line)) continue;
+    s.dmgParts.push(p.id);
+    s.dmgWhy[p.id] = "FLOODED";
+    const fx = dmgFx(p.id);
+    if(fx.hit) fx.hit(s, p.id);
+    logE("alarm","FLOODING / "+fx.msg,
+      p.name+" is under water - it stands "+((p.y+p.h-line)*MPC).toFixed(1)+
+      " m deep against the machine, two thirds of the way up it. "+fx.why);
   }
 }
 
@@ -2146,8 +2073,6 @@ function plantSettle(){
      /* the INJECT tool's live order: the gesture writes a demand, the tick walks the actual, and one
         act on press and one on release keep a held button off the take forest */
      inject:null,
-     /* kg standing on each region's floor, keyed by its lowest cell: water that has left the plant and is still on the ship */
-     sump:{},
      /* what each tank's AUTORULE decided last tick; a rule with two setpoints has to know whether it is already running */
      tankAuto:Object.fromEntries(tankIds().map(k=>[k,false])),
      /* what each tank's own edge is carrying, % of loop inventory per second, tank-out-positive - a readout, refilled */
@@ -2203,19 +2128,19 @@ function plantSettle(){
      /* oxygen seeded at what air holds, the flame front's progress per cell, and the pressure that breaks things; declared here because the snapshot cloner throws on anything it does not know */
      roomO2:new Float32Array(GW*GH).fill(ROOM_O2_0),
      roomFlame:new Float32Array(GW*GH), roomP:new Float32Array(GW*GH),
-     /* the blast wave's momentum, m/s on the faces: roomPU on the +x face of each cell, roomPV on the +y */
+     /* the gas's momentum on the faces, kg/m2/s: roomPU on the +x face of each cell, roomPV on the +y */
      roomPU:new Float32Array(GW*GH), roomPV:new Float32Array(GW*GH),
      /* the metal on the deck and its energy, datum liquid at the melting point, so a pool has a temperature to take the ignition test with */
      roomPool:new Float32Array(GW*GH), roomPoolE:new Float32Array(GW*GH),
+     /* kg of water standing on each cell's floor, left the plant and still on the ship; double, because it is on the ledger */
+     roomWater:new Float64Array(GW*GH),
+     /* each liquid's sideways flux on the +x face of each cell, m2/s: the momentum liqFlow() carries from tick to tick */
+     roomWQ:new Float64Array(GW*GH), roomPoolQ:new Float64Array(GW*GH),
      /* kg each catch pan's drain has taken off the deck; the metal was booked out at the opening it left through, so this moves no book */
      panBy:{},
-     /* kg of gas per cell, and the compartment's pressure follows from it (roomPOf(), room.js) */
-     roomM:new Float32Array(GW*GH).fill(ROOM_MAIR),
-     // what each open hole is passing, kg/s, keyed by its own cell
-     holeQ:{},
-     // ...and the WATER each is passing, kg/s, which is sumpDrain()'s and not the gas's
-     holeW:{},
-     /* the high-water mark, never decayed and never cleared: s.roomP relieves on ROOM_P_TAU and cannot say where the plant has been blown up */
+     /* kg of gas per cell, seeded at ambient, and each cell's pressure is a read off it (roomPOf(), room.js); roomVap is the steam in it */
+     roomM:new Float32Array(GW*GH).fill(ROOM_M0), roomVap:new Float32Array(GW*GH),
+     /* the high-water mark, never decayed and never cleared: s.roomP is a read and cannot say where the plant has been blown up */
      roomPPk:new Float32Array(GW*GH),
      // kPa every passage has put above HIT_LO, never decayed, and the tracker that books a passage (roomScarStep())
      roomScar:new Float32Array(GW*GH), roomScarCur:new Float32Array(GW*GH),
@@ -2710,27 +2635,27 @@ function stepMarch(dt){
       " MPa against a wall rated for "+runRating(r).toFixed(2)+" MPa. "+fx.why);
   }
   /* a wall lets go at its own SHAPE, not its own cell: stress is p*R/t on half the flat span drawn (matSpan(), paint.js). One cell per event, and unlike a pipe it may break again */
-  for(const g of matRegionsBounded()){
-    let lo = Infinity, tie = [];
-    for(const i of g.wall){ const x=i%GW, y=(i/GW)|0;
-      if(s.dmgParts.indexOf("mat:"+x+","+y) >= 0) continue;
+  /* every gas-tight cell once, so the two faces of one wall are one judgement, and the worst lets go */
+  { let lo = Infinity, tie = [];
+    for(const k in D.mat){ const j=k.indexOf(","), x=+k.slice(0,j), y=+k.slice(j+1);
+      if(!matWall(x,y) || s.dmgParts.indexOf("mat:"+k) >= 0) continue;
       const m = matBurstP(x,y) - matCellDP(s,x,y);
       if(m < lo - 1e-9){ lo = m; tie = [[x,y]]; }
       else if(m < lo + 1e-9) tie.push([x,y]); }
-    if(!tie.length || lo > 0) continue;
-    // stood down, it takes the first in board order, as the pipe's own burst does
-    const c = s.diceOff ? tie[0]
-            : tie[Math.min(tie.length-1, Math.floor(srand(s)*tie.length))];
-    const id = "mat:"+c[0]+","+c[1];
-    s.dmgParts.push(id);
-    s.dmgWhy[id] = "BURST";
-    const fx = dmgFx(id);
-    logE("alarm","CONTAINMENT FAILURE / "+fx.msg,
-      "The wall at "+c[0]+","+c[1]+" has let go - "+(matCellDP(s,c[0],c[1])*1000).toFixed(0)+
-      " kPa across it against a cell that bursts at "+(matBurstP(c[0],c[1])*1000).toFixed(0)+
-      " kPa. It is the middle of a "+(matSpan(c[0],c[1])*MPC).toFixed(1)+
-      " m flat span, which is why it was the cell that went. "+fx.why);
-  }
+    if(tie.length && lo <= 0){
+      // stood down, it takes the first in board order, as the pipe's own burst does
+      const c = s.diceOff ? tie[0]
+              : tie[Math.min(tie.length-1, Math.floor(srand(s)*tie.length))];
+      const id = "mat:"+c[0]+","+c[1];
+      s.dmgParts.push(id);
+      s.dmgWhy[id] = "BURST";
+      const fx = dmgFx(id);
+      logE("alarm","CONTAINMENT FAILURE / "+fx.msg,
+        "The wall at "+c[0]+","+c[1]+" has let go - "+(matCellDP(s,c[0],c[1])*1000).toFixed(0)+
+        " kPa across it against a cell that bursts at "+(matBurstP(c[0],c[1])*1000).toFixed(0)+
+        " kPa. It is the middle of a "+(matSpan(c[0],c[1])*MPC).toFixed(1)+
+        " m flat span, which is why it was the cell that went. "+fx.why);
+    } }
   advectStep(s, dt, runFlow, netOut && netOut.edgeKg);
   /* s.inv is a read: every way water leaves is an edge, already booked by the transport pass above, and nothing downstream writes it */
   if(P.invKg0 > 0) s.inv = 100*invNodesKg(s)/P.invKg0;
@@ -3170,11 +3095,11 @@ function stepMarch(dt){
       logE("alarm","EXPLOSION IN THE COMPARTMENT",
         "A hydrogen charge has gone off - "+s.roomPMax.toFixed(0)+
         " kPa above ambient, against the "+minPburst().toFixed(0)+
-        " kPa the weakest machine on this plant is built for. The compartment relieves itself in about half a second, so what it costs is decided now.");
+        " kPa the weakest machine on this plant is built for. What it costs is decided now.");
     }
     const crushLive = {};
     /* the bang is judged on what a source put ON TOP of the volume's own static pressure, never on s.roomP itself */
-    const gauge = roomPGauge(s);
+    const gauge = roomPStatic(s);
     for(const p of LAY.parts){
       const lim = partPburst(p);
       if(!lim || !fitted(p)) continue;

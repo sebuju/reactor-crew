@@ -266,36 +266,9 @@ function matLift(x,y){ const k=matKey(x,y);
   return true;
 }
 
-/* Keyed by a cell index, never a region index: a region index renumbers the moment the paint changes. */
-const regionKey = g => { let lo=g.cells[0];
-  for(const i of g.cells) if(i>lo) lo=i;          // the highest index IS the lowest row
-  return lo; };
-const regionSump = (s,g) => (s && s.sump && s.sump[regionKey(g)]) || 0;
-const regionSpanX = g => { let x0=GW, x1=0;
-  for(const i of g.cells){ const X=i%GW; if(X<x0) x0=X; if(X>x1) x1=X; }
-  return x1-x0+1; };
-/* kg the compartment's own volume holds; what will not fit never enters the sump (sumpStep(), step.js). */
+/* kg of water the compartment's own volume holds; the rest goes back on the book (waterCap(), room.js). */
 const regionSumpCap = g => matRegVol(g)*1000;
-/* m. The ship is drawn in section, so the surface is a horizontal line over the region's width by ROOM_DEPTH. */
-function regionFloodM(s,g){
-  const kg = regionSump(s,g); if(!(kg>0)) return 0;
-  return kg/1000/Math.max(0.01, regionSpanX(g)*MPC*ROOM_DEPTH);
-}
-function regionFlooded(s,g){
-  const d=regionFloodM(s,g); if(!(d>0)) return null;
-  let bot=-1;
-  for(const i of g.cells){ const Y=(i/GW)|0; if(Y>bot) bot=Y; }
-  return {bot, rows: d/MPC, d};
-}
 
 /* Share of a machine's height the water must cover before it drowns: the motor and the electrics stand off the floor, set by the user 11/09/26. */
 const FLOOD_DROWN = 2/3;
 const floodDrowns = (p, line) => line <= p.y + p.h*(1 - FLOOD_DROWN);
-// the water surface over a part, in rows from the top, or null
-function regionFloodLine(s,p){
-  if(!p) return null;
-  const g = matRegionInOf(p); if(!g) return null;
-  const f = regionFlooded(s,g); if(!f) return null;
-  const line = f.bot + 1 - f.rows;
-  return (p.y + p.h > line) ? line : null;
-}
