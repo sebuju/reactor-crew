@@ -11,7 +11,7 @@ const M=require('./bundle').headless(
  'manualScram,turbKgs,condUA,pumpHead,pumpFlow,sgUAOf,partVol,runVol,coreSeen,'+
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
- 'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt,annStep,ANN:()=>ANN,'+
+ 'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,sumpKg,netWorkAt,annStep,ANN:()=>ANN,'+
  'drumIds,boilerIds,boilerLvl,boilerP,boilerDesignP,holdSetP,loopMap,coreMint,designForget,pumpIds,secGensOf,'+
  'coreStep,coreInH,satT,coreDTMax,snapS,restoreS,GW:()=>GW,'+
  'loopHeadOf,pumpSucNode,pumpDisNode,netPressures,netRhoAt,netSatOf,runNodeOf,runBoreMm,runDutyKgs}');
@@ -267,7 +267,7 @@ const CASES={
       const cavNode=P.net.index["cav:core"];
       const line=(t)=>{ const st=M.fuelStages(cs), FL=M.FAIL(), q=FL.findIndex(r=>r.k==="disp");
         let rmH2=0; for(let i=0;i<s.roomH2.length;i++) rmH2+=s.roomH2[i];
-        const rmP=M.roomPGauge(s).reduce((a,v)=>Math.max(a,v),0);
+        const rmP=s.roomP.reduce((a,v)=>Math.max(a,v),0);
         const cav=cavNode===undefined?"-":f((s.pBy["cav:core"]-P.Pcont)*1000,0);
         console.log("  "+f(t,1).padStart(5)+"  "+f(s.n,3).padStart(6)+"  "+f(s.rho,0).padStart(5)+"  "+f(s.rodPos,2).padStart(5)+"  "+f(s.vf,3).padStart(5)+"  "+f(s.pCore,3).padStart(7)+"  "+f(cs.fci/1000,1).padStart(6)+"  "+f(s.TfHot,0).padStart(6)+"  "+f(s.dmg,1).padStart(5)+"  "+f(s.meltFrac*100,1).padStart(5)+"  "+(q>=0?f(st[q]*100,1):"-").padStart(5)+"  "+f(s.parts.xe,0).padStart(5)+"  "+f(s.parts.vd,0).padStart(5)+"  "+f(cs.tipRho,0).padStart(4)+"  "+f(s.sc,1).padStart(5)+"  "+f(M.ledgerKg(s)+M.ledgerOut(s),0).padStart(9)+"  "+f(s.h2,1).padStart(6)+"  "+f(rmH2,1).padStart(4)+"  "+f(rmP,1).padStart(7)+"  "+f(s.roomMax,0).padStart(5)+"  "+f(M.sumpKg(s)/1000,1).padStart(6)+"  "+f((cs.tubesOpen||0)*100,0).padStart(5)+"  "+cav.padStart(7)+"  "+(s.trip||"")); };
       let pkFci=0, fciKJ=0, pkW=0, pkWfci=0, pkWt=0, w0=null; const wrecked=[];

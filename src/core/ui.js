@@ -213,13 +213,13 @@ const TOOLS=[
   {id:"blast", sc:"operate", label:"BLAST", stick:true, fault:true,
    tip:"Click a room cell to set a blast off there, at the overpressure in the box beside this key. It arrives in that cell and spreads out from it as a wave, so what it wrecks depends on how far away it is."},
   {id:"inject", sc:"operate", label:"INJECT", stick:true, fault:true,
-   tip:"Pick a kind to arm it, and pick it again to put it down. Hold the left button on a cell and it adds that kind at the rate in the box beside it, every tick, until you let go. Heat and the gases land in a room cell; coolant lands in the machine or pipe under the pointer."},
+   tip:"Pick a kind to arm it, and pick it again to put it down. Hold the left button on a cell and it adds that kind at the rate in the box beside it, every tick, until you let go. Heat and the gases land in a room cell; coolant lands in the machine or pipe under the pointer, and on bare deck it lands on the floor as water."},
   {id:"rmheat", sc:"operate", label:"REMOVE HEAT", stick:true, fault:true, drain:{kind:"heat", unit:"kW", rate:1000},
    tip:"Hold the left button on a room cell and it takes heat out of the cell's air at the rate in the box beside this key, every tick, until you let go."},
   {id:"rmgas", sc:"operate", label:"REMOVE GAS", stick:true, fault:true, drain:{kind:"gas", unit:"kg/s", rate:50},
    tip:"Hold the left button on a room cell and it takes gas out at the rate in the box beside this key: the cell's whole inventory in proportion, hydrogen, oxygen, air and steam alike, the way a vent set does."},
   {id:"rmliq", sc:"operate", label:"REMOVE LIQUID", stick:true, fault:true, drain:{kind:"fluid", unit:"kg/s", rate:10},
-   tip:"Hold the left button on a machine or a pipe and it takes coolant out of it at the rate in the box beside this key. It is booked against `inject`, so the ledger still closes."},
+   tip:"Hold the left button on a machine or a pipe and it takes coolant out of it at the rate in the box beside this key; on bare deck it takes the water off that cell's floor. It is booked against `inject`, so the ledger still closes."},
 ];
 const toolRow = id => TOOLS.filter(t=>t.id===id)[0] || null;
 const toolArmed = () => { const t=toolRow(TOOL.active); return !!(t && t.stick); };
@@ -255,21 +255,23 @@ const INJECT_KIND=[
   {id:"h2",    label:"HYDROGEN", unit:"kg/s", rate:50,   tip:"Hydrogen into the cell."},
   {id:"o2",    label:"OXYGEN",   unit:"kg/s", rate:50,   tip:"Oxygen into the cell."},
   {id:"steam", label:"STEAM",    unit:"kg/s", rate:50,   tip:"Water vapour into the cell at the cell's own temperature; what the air there cannot hold condenses out."},
-  {id:"fluid", label:"COOLANT",  unit:"kg/s", rate:10,   tip:"Kilograms onto the node under the pointer - a machine or a pipe run. It is booked against `inject`, so the ledger still closes."},
+  {id:"fluid", label:"COOLANT",  unit:"kg/s", rate:1000, tip:"Kilograms onto the node under the pointer - a machine or a pipe run - or, on bare deck, water onto that cell's floor, where it falls, runs and stands like a break's. Either way it is booked against `inject`, so the ledger still closes."},
 ];
 const injectRow = () => INJECT_KIND.filter(k=>k.id===FAULT.injectKind)[0] || INJECT_KIND[0];
 const injectTool = id => id==="inject" || !!(toolRow(id) && toolRow(id).drain);
 // INJECT adds the chosen kind; a REMOVE tool takes its own kind away
 const injectOrder = () => { if(TOOL.active==="inject"){ const k=injectRow(); return {kind:k.id, rate:k.rate}; }
   const t=toolRow(TOOL.active); return t && t.drain ? {kind:t.drain.kind, rate:-t.drain.rate} : null; };
-/* Heat and gas are room-cell fields, so the aim is the bare cell; fluid is plant inventory and lands
-   on a node, so it goes through the same hitAimAt() the combat hit does. The difference is here only. */
+/* Heat and gas are room-cell fields, so the aim is the bare cell; fluid is plant inventory where the
+   same hitAimAt() the combat hit uses finds a node, and water on the cell's floor where it does not. The difference is here only. */
 const injectAim = (pt, kind) => { const c=cellAt(pt);
   if(c[0]<0||c[0]>=GW||c[1]<0||c[1]>=GH) return null;
-  if(kind !== "fluid") return c[1]*GW+c[0];
+  const i=c[1]*GW+c[0];
+  if(kind !== "fluid") return i;
   const a=hitAimAt(pt);
-  // a run or a machine carries a node; a nozzle and a painted wall do not
-  return (a && a.indexOf("port:") !== 0 && a.indexOf("mat:") !== 0) ? a : null; };
+  if(a && injectNode(a)) return a;
+  // a box with no node of its own and an intact wall are no floor either
+  return (typeof S!=="undefined" && S && !liqShut(roomGeomLive(S), i)) ? i : null; };
 let injectAt=null;
 function injectGo(pt){
   const o=injectOrder(); if(!o) return;
