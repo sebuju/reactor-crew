@@ -12,7 +12,9 @@ const M=require('./bundle').headless(
  'plantPreset,latPreset,act,coreD,latRevolve,archPreset,PLANTPRE:()=>PLANTPRE,sgDesignP,sgLiftP,sgBurstP,steamRise,tsatSec,mwT:()=>mwT,'+
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
  'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,roomPGauge,sumpKg,netWorkAt,annStep,ANN:()=>ANN,'+
- 'drumIds,boilerIds,boilerLvl,boilerP,boilerDesignP,holdSetP,loopMap,coreMint,designForget,pumpIds,secGensOf}');
+ 'drumIds,boilerIds,boilerLvl,boilerP,boilerDesignP,holdSetP,loopMap,coreMint,designForget,pumpIds,secGensOf,'+
+ 'coreStep,coreInH,satT,coreDTMax,snapS,restoreS,GW:()=>GW,'+
+ 'loopHeadOf,pumpSucNode,pumpDisNode,netPressures,netRhoAt,netSatOf,runNodeOf,runBoreMm,runDutyKgs}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -34,7 +36,7 @@ const f=(v,d)=>(v===null||v===undefined||Number.isNaN(v))?"-":(+v).toFixed(d===u
 const row=(...c)=>console.log("  "+c.map((x,i)=>String(x).padEnd(i?14:22)).join(""));
 
 function dump(s,label){
-  console.log("\n── "+label+" ──");
+  console.log("\n── "+label+" --");
   const G=M.nodeGraph();
   console.log(" CIRCUITS  ("+G.nCirc+", core is "+G.coreCirc+")");
   const byCirc={};
@@ -112,6 +114,28 @@ function dump(s,label){
 
 const CASES={
   stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
+  // three equal charges 1 s apart beside the first pump: the scar sum after each, the sets they left, a hit's set, the snapshot
+  blast(){
+    const s=withPlant(null); run(s,2);
+    const GW=M.GW(), pump=M.LAY().parts.find(p=>p.role==="pump");
+    const cx=pump.x-3, cy=pump.y+(pump.h>>1), ci=cy*GW+cx;
+    const kPa=+((process.argv.find(a=>/^--kpa=/.test(a))||"").split("=")[1])||500;
+    const sum=a=>{ let t=0; for(let i=0;i<a.length;i++) t+=a[i]; return t; };
+    console.log(" BLAST  "+kPa+" kPa at cell "+cx+","+cy+", beside "+pump.id);
+    const reads=[];
+    for(let k=0;k<3;k++){ M.act("blast",ci,kPa); run(s,1); reads.push(sum(s.roomScar));
+      row("scar sum "+(k+1), f(reads[k],0)+" kPa", "ratio "+f(reads[k]/reads[0],3)); }
+    for(const id of s.dmgParts) row(id, s.dmgWhy[id]);
+    run(s,3);
+    const tgt=M.LAY().parts.find(p=>p.role!=="fitting" && !s.dmgParts.includes(p.id));
+    if(tgt){ M.act("hit",tgt.id); run(s,0.1);
+      row("hit "+tgt.id, s.dmgParts.includes(tgt.id) ? "wrecked" : "NOT wrecked"); }
+    else row("hit", "no part left standing");
+    const scar=s.roomScar.slice(), snap=M.snapS(s); M.restoreS(snap);
+    const r=M.S().roomScar; let same=r.length===scar.length;
+    for(let i=0;same && i<r.length;i++) if(r[i]!==scar[i]) same=false;
+    row("snapshot roomScar", same ? "bit-exact" : "DIFFERS");
+  },
   dual(){
     const i=M.PLANTPRE().findIndex(p=>p[0]==="DUAL");
     M.plantPreset(i); M.buildLayout(); M.commission();
@@ -297,6 +321,102 @@ const CASES={
       const a=M.seedPort("turb",1,-1), b=M.seedPort("turb",3,-1);
       M.seedRun(a,b); });
       run(s,120); dump(s,"a run from a machine back to itself"); },
+  rbmk(){
+    const A=(k,d)=>{const a=process.argv.find(x=>new RegExp("^--"+k+"=").test(x)); return a===undefined?d:a.split("=")[1];};
+    const loads=String(A("load","1")).split(",").map(Number);
+    const settle=+A("settle",20), after=+A("after",20), every=+A("every",5), stepRod=+A("step",0.01);
+    const i=M.PLANTPRE().findIndex(p=>p[0]==="RBMK-1000");
+    for(const L of loads){
+      M.plantPreset(i); M.buildLayout(); M.commission();
+      const s=M.S(), P=M.P(), d=M.derived(); s.diceOff=true;
+      M.blkSinkOff(s,"scram");
+      const cid=Object.keys(s.coreBy)[0], K=P.cores[cid], cp=K.sat.cp, hfg=K.sat.hfg;
+      const b=M.boilerIds()[0];
+      const sub=()=>{ const cs=s.coreBy[cid]; return M.satT(K.sat,cs.pCore) - M.coreInH(s,cid)/cp; };
+      const xOut=()=>{ const cs=s.coreBy[cid], hf=cp*M.satT(K.sat,cs.pCore);
+        return (M.coreInH(s,cid) + cp*cs.coreDT - hf)/hfg; };
+      const vHot=()=>{ const v=s.coreBy[cid].nV; let m=0; for(let k=0;k<v.length;k++) if(v[k]>m) m=v[k]; return m; };
+      const fast=()=>s.parts.vd+s.parts.dop+s.parts.mod;
+      console.log("\n── rbmk  load "+f(L,2)+"  aV "+f(d.aV,0)+" pcm  aM "+f(d.aM,1)+"  rated "+f(P.rated,0)+
+        " MWt  dT0 "+K.dT0+"  aF "+K.aF+"  netRef "+f(P.netRef,0)+" kg/s ──");
+      console.log("    t      n    rho     vd    dop    mod     xe   vNode   vHot    sub    xOut   flow    drumP  lvl    MWe   trip");
+      const line=t=>{ const cs=s.coreBy[cid];
+        console.log("  "+f(t,1).padStart(5)+" "+f(s.n,3).padStart(6)+" "+f(s.rho,0).padStart(6)+" "+
+          f(s.parts.vd,0).padStart(6)+" "+f(s.parts.dop,0).padStart(6)+" "+f(s.parts.mod,0).padStart(6)+" "+
+          f(s.parts.xe,0).padStart(6)+" "+f(cs.vNode,3).padStart(6)+" "+f(vHot(),3).padStart(6)+" "+
+          f(sub(),1).padStart(6)+" "+f(xOut(),3).padStart(7)+" "+f(s.flowNet,2).padStart(6)+" "+
+          f(b?M.boilerP(s,b):0,2).padStart(7)+" "+f(b?M.boilerLvl(s,b):0,0).padStart(4)+" "+
+          f(M.mwE(s),0).padStart(6)+"  "+(s.trip||"")+(s.breach?" BREACH":"")); };
+      if(L!==1) M.act("loadDem",L);
+      let dead=null;
+      const march=(secs,t0)=>{ for(let k=1;k<=secs*50;k++){ const t=t0+k*0.02;
+          M.step(0.02); if(k%(every*50)===0) line(t);
+          if(s.breach){ dead="BREACH "+f(t,1); line(t); return t; } } return t0+secs; };
+      line(0);
+      let t=march(settle,0);
+      if(!dead){
+        /* the static coefficient: the same algebra plantSettle() seeds on, at heat and heat x 1.01 */
+        const cs=s.coreBy[cid];
+        const cl=o=>{ const c={}; for(const k in o){ const v=o[k]; c[k]=ArrayBuffer.isView(v)?v.slice():v; } return c; };
+        const at=q=>{ const c=cl(cs); let o=null;
+          for(let p=0;p<5;p++){ o=M.coreStep(K,c,0,q,M.satT(K.sat,c.pCore),0,K.flowK*c.flowNet,
+                Math.max(c.flowNet,0.004),M.coreInH(s,cid));
+            for(let k=0;k<c.nV.length;k++){ c.nV[k]=c.nVt[k]; c.nTc[k]=c.nTct[k]; } }
+          return o; };
+        const a=at(cs.heat), c2=at(cs.heat*1.01);
+        const dStat=(c2.vd+c2.dop+c2.mod)-(a.vd+a.dop+a.mod);
+        console.log("  STATIC  d(vd+dop+mod) "+f(dStat,1)+" pcm per 1 % power   vd "+f(c2.vd-a.vd,1)+
+          "  dop "+f(c2.dop-a.dop,1)+"  mod "+f(c2.mod-a.mod,1)+"   "+(dStat>0?"POSITIVE":"negative"));
+        const n0=s.n, f0=fast();
+        for(const id in D.blocks) if(D.blocks[id].mode==="sink" && D.blocks[id].sink==="rodStep") M.act("blkOn",id);
+        M.act("rodCommon",s.rodPos+stepRod);
+        console.log("  ── rods frozen at "+f(s.rodDem,3)+", step "+f(stepRod,3)+" ──");
+        t=march(after,t);
+        const dn=s.n-n0, dF=fast()-f0;
+        console.log("  MEASURED  dn "+f(dn*100,2)+" % power   d(vd+dop+mod) "+f(dF,1)+" pcm   coefficient "+
+          (Math.abs(dn)>1e-4?f(dF/(dn*100),1)+" pcm/%":"-")+"   "+
+          (Math.abs(dn)>1e-4?(dF/dn>0?"POSITIVE":"negative"):"-")+
+          "   n "+f(n0,3)+" -> "+f(s.n,3)+"  "+(Math.abs(s.n-n0)<Math.abs(dn)?"returned":"walked"));
+      }
+      console.log("  end   "+(dead||"no event")+"   n "+f(s.n,3)+"  trip "+(s.trip||"-"));
+    }
+  },
+  loophead(){
+    const A=(k,d)=>{const a=process.argv.find(x=>new RegExp("^--"+k+"=").test(x)); return a===undefined?d:a.split("=")[1];};
+    const i=+A("pre",0), at=+A("at",5);
+    M.plantPreset(i); M.buildLayout(); M.commission();
+    const s=M.S(); s.diceOff=true;
+    const P=M.P();
+    run(s,at);
+    const sol=M.netSolve(P.net,s), b=sol.b, edges=sol.net.edges;
+    const drop={}; for(let e=0;e<edges.length;e++){ const ed=edges[e];
+      if(ed.key) drop[ed.key]=(drop[ed.key]||0)+Math.abs(b[ed.u]-b[ed.v]); }
+    const pp=M.netPressures(s);
+    console.log("");
+    console.log("-- loophead  "+M.PLANTPRE()[i][0]+"  t "+f(at,1)+" s  netRef "+f(P.netRef,1)+
+      "  flowK "+f(P.flowK,4)+"  n0 "+f(P.n0,4)+"  flowNet "+f(s.flowNet,4)+
+      "  RED "+(M.designIssues().filter(q=>q[0]==="RED"||q[0]==="HARD").map(q=>q[0]).join("/")||"0")+" --");
+    const L=M.loopMap();
+    for(const id of M.pumpIds()){
+      if(L.partLoop[id]===undefined) continue;
+      const o={}, guess=M.loopHeadOf(id,o);
+      const q=(s.pumpQBy&&s.pumpQBy[id])||0, rated=M.pumpFlow(id);
+      const solved=(pp[M.pumpDisNode(id)]||0)-(pp[M.pumpSucNode(id)]||0);
+      console.log("  "+id+"  bought "+f(M.pumpHead(id),4)+"  guess "+f(guess,4)+"  solved dp "+f(solved,4)+
+        "  q/rated "+f(q/Math.max(rated,1e-9),3)+"  rated "+f(rated,1)+"  w(design) "+f(o.w,1)+
+        "  rhoHot "+f(o.rhoHot,1)+"  rhoCold "+f(o.rhoCold,1)+"  boils "+(!!o.boils));
+      console.log("    run                                 guessMPa   rho_g  hot   solvMPa   rho_s     x");
+      const by=o.byRun||{}, keys=Object.keys(by).sort((a,c)=>by[c].dp-by[a].dp);
+      for(const k of keys){ const g=by[k];
+        const isPart=k.indexOf("part:")===0;
+        const nd=isPart?null:M.runNodeOf(k);
+        const sd=isPart?null:drop[k];
+        const rs=nd&&pp[nd]!==undefined?M.netRhoAt(s,nd):null;
+        const x =nd&&pp[nd]!==undefined?M.netQualAt(s,nd):null;
+        console.log("    "+k.padEnd(34)+f(g.dp,4).padStart(9)+f(g.rho,1).padStart(8)+
+          (g.hot?"  HOT":"     ")+f(sd,4).padStart(10)+f(rs,1).padStart(8)+f(x,3).padStart(7)); }
+    }
+  },
   ledger(){
     const pre=(process.argv.find(a=>/^--pre=/.test(a))||"").split("=")[1];
     const node=(process.argv.find(a=>/^--node=/.test(a))||"").split("=")[1];

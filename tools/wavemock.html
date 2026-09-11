@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>wave mock</title>
+<style>
+  body{margin:0;background:#0a0c10;color:#c8d0da;font:12px/1.5 ui-monospace,Consolas,monospace}
+  #wrap{padding:14px}
+  canvas{display:block;border:1px solid #1e2530}
+  #tr{margin-top:6px}
+  .bar{display:flex;align-items:center;gap:16px;padding:10px 0;flex-wrap:wrap}
+  button{background:#8f2f2f;color:#fff;border:0;padding:9px 22px;font:inherit;font-weight:700;
+         letter-spacing:.08em;cursor:pointer}
+  button:hover{background:#b03a3a}
+  button.dim{background:#2a3340}
+  label{display:flex;align-items:center;gap:7px;white-space:nowrap}
+  input[type=range]{width:96px}
+  #scrub{width:420px}
+  #hint{opacity:.55}
+  .hide{display:none}
+  #cost span{white-space:nowrap}
+</style>
+<div id="wrap">
+  <div class="bar">
+    <button id="go">BLAST</button>
+    <button id="clr">CLEAR</button>
+    <label>view <select id="view">
+      <option value="now" selected>1  NOW - substeps</option>
+      <option value="a">2  A - implicit, one step a tick</option>
+      <option value="b">3  B - front, one step a tick</option>
+    </select></label>
+    <label>A theta <input id="theta" type="range" min="50" max="100" value="100"><span id="vtheta"></span></label>
+    <label>slow <input id="slow" type="range" min="1" max="40" value="1"><span id="vslow"></span></label>
+    <label>soak <input id="soak" type="range" min="0" max="100" value="50"><span id="vsoak"></span></label>
+    <label>size <input id="sig" type="range" min="16" max="40" value="24"><span id="vsig"></span></label>
+    <label>tail <input id="tail" type="range" min="0" max="150" value="0"><span id="vtail"></span></label>
+    <label>colour <select id="mode">
+      <option value="schl" selected>schlieren</option>
+      <option value="press">pressure</option>
+      <option value="sign">signed</option>
+      <option value="dir">direction</option>
+      <option value="off">off</option>
+    </select></label>
+    <label>bump <input id="bump" type="range" min="0" max="20" value="3"><span id="vbump"></span></label>
+    <label><input id="wreck" type="checkbox"> wreck</label>
+    <label>yield <input id="yield" type="range" min="1" max="30" value="8"><span id="vyield"></span></label>
+    <label><input id="hits" type="checkbox" checked> hits</label>
+    <label><input id="scars" type="checkbox" checked> scars</label>
+    <label><input id="sparks" type="checkbox" checked> sparks</label>
+    <label><input id="smoke" type="checkbox" checked> smoke</label>
+    <label><input id="trace" type="checkbox" checked> trace</label>
+    <label>hold <input id="hold" type="range" min="1" max="60" value="12"><span id="vhold"></span></label>
+    <span id="hint">click places the charge, right click places the probe, 1 2 3 switch the view</span>
+  </div>
+  <canvas id="cv"></canvas>
+  <div class="bar">
+    <label><input id="pause" type="checkbox"> pause</label>
+    <label>scrub <input id="scrub" type="range" min="0" max="0" value="0"><span id="vscrub"></span></label>
+    <button id="bang" class="dim">&lt; BANG</button>
+    <span id="hint2" style="opacity:.55">pause keeps the last 600 frames of the view; BANG jumps to its last charge</span>
+  </div>
+  <div class="bar" id="cost"></div>
+  <canvas id="tr"></canvas>
+</div>
+<script>
+// ---- grid -------------------------------------------------------------
+const GW = 120, GH = 68, PX = 10;
+const DX = 0.5;            // m per cell
+const C  = 343;            // m/s
+const RHO = 1.2;           // kg/m3
+// the game's physics step; A and B take exactly one per tick, NOW takes DT substeps inside it
+const TICK = 0.02;
+
+const cv = document.getElementById("cv");
+cv.width = GW*PX; cv.height = GH*PX;
+const ctx = cv.getContext("2d");
+const tr = document.getElementById("tr");
+tr.width = cv.width; tr.height = 130;
+const tctx = tr.getContext("2d");
+
+const N = GW*GH;
+const solid = new Uint8Array(N);
+const wa = new Float64Array(N);     // what the colour layer is drawing this frame
+/* Display only, and it never touches p: the front travels at the true speed of sound and this is a
+   glow left behind it. At game speed the wave crosses the whole compartment in five frames, so
+   without a tail there is nothing on screen long enough to see. */
+const lit = new Float64Array(N);
+let T = 0;                          // plant seconds since CLEAR, the clock all three solvers chase
+/* SCHLIEREN draws the magnitude of the pressure gradient. A shock is a step in SPACE, so this is the
+   quantity a real schlieren photograph is of - and a settled room, at any pressure, has no step in it
+   and goes black on its own. */
+const gxA = new Float64Array(N), gyA = new Float64Array(N), gm = new Float64Array(N);
+function gradOf(S){
+  const p = S.p;
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X;
+    if(solid[i]){ gxA[i]=gyA[i]=gm[i]=0; continue; }
+    const gx = ((X<GW-1?p[i+1]:p[i]) - (X>0?p[i-1]:p[i]))/(2*DX);
+    const gy = ((Y<GH-1?p[i+GW]:p[i]) - (Y>0?p[i-GW]:p[i]))/(2*DX);
+    gxA[i]=gx; gyA[i]=gy; gm[i]=Math.sqrt(gx*gx+gy*gy);
+  }
+}
+/* Which way the wave is GOING is the acoustic intensity, p times the air velocity: p and u carry the
+   same sign on a forward wave, so a suck travelling right points right too. The gradient cannot say
+   this - it flips across every crest. */
+const ixA = new Float64Array(N), iyA = new Float64Array(N);
+function intensOf(S){
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X;
+    if(solid[i]){ ixA[i]=iyA[i]=0; continue; }
+    const [ux, uy] = S.air(S, X, Y, S.t);
+    ixA[i] = S.p[i]*ux; iyA[i] = S.p[i]*uy;
+  }
+}
+function fluidMean(S){ let m = 0, c = 0; for(let i=0;i<N;i++) if(!solid[i]){ m += S.p[i]; c++; } return c ? m/c : 0; }
+// cell-centre air velocity, m/s; faces are staggered so a cell reads the mean of its two
+function faceAir(S, X, Y){
+  X = X<0?0:X>GW-1?GW-1:X|0; Y = Y<0?0:Y>GH-1?GH-1:Y|0;
+  const i = Y*GW+X, u = S.u, v = S.v;
+  return [(u[i] + (X>0?u[i-1]:0))/2, (v[i] + (Y>0?v[i-GW]:0))/2];
+}
+const inFree = (x, y) => x>=0 && y>=0 && x<GW && y<GH && !solid[(y|0)*GW + (x|0)];
+
+const BOXES = [];
+/* The plant keeps its own 60x34 footprint and sits in the LEFT half, centred top to bottom. The right
+   half is open room, so a wave has somewhere to run before it meets anything. */
+const OY = ((GH - 34)/2)|0;
+const box = (x,y,w,h,lab) => { y += OY; BOXES.push({x,y,w,h,lab});
+  for(let Y=y;Y<y+h;Y++) for(let X=x;X<x+w;X++)
+    if(X>=0&&X<GW&&Y>=0&&Y<GH) solid[Y*GW+X] = 1; };
+
+box(14, 4,14, 4,"drum");   box(33, 4,14, 4,"drum");
+box( 4,10, 5,12,"panel");  box(52,10, 5, 8,"turb");
+box(20,16, 6, 3,"pump");   box(36,16, 6, 3,"pump");
+box(12,26,10, 3,"cond");   box(30,26,16, 3,"feed");
+/* A machine is a rigid box the wave loads on every face. Each face is a list of the fluid cells that
+   stand against it, in order along the face, with the inward normal; a cell off the grid is simply
+   missing, and the face is straight there. */
+const SIDES = [
+  {k:"t", nx: 0, ny: 1, at:(b,j)=>[b.x+j, b.y-1],   len:b=>b.w},
+  {k:"r", nx:-1, ny: 0, at:(b,j)=>[b.x+b.w, b.y+j], len:b=>b.h},
+  {k:"b", nx: 0, ny:-1, at:(b,j)=>[b.x+j, b.y+b.h], len:b=>b.w},
+  {k:"l", nx: 1, ny: 0, at:(b,j)=>[b.x-1, b.y+j],   len:b=>b.h},
+];
+for(const b of BOXES){
+  b.side = {};
+  for(const S of SIDES){
+    const L = S.len(b), cells = [];
+    for(let j=0;j<L;j++){ const [X,Y] = S.at(b,j);
+      cells.push(X>=0 && X<GW && Y>=0 && Y<GH && !solid[Y*GW+X] ? Y*GW+X : -1); }
+    b.side[S.k] = cells;
+  }
+}
+/* `ox`/`oy` are PERMANENT SET: a wreck leaves a machine off its feet, drawn there for good while its
+   grid cell - the solid mask, the ports, the hit test - stays exactly where it was. The elastic lean
+   is added on top of it. Each solver rocks its own copy of the boxes. */
+const boxState = () => ({dx:0, dy:0, vx:0, vy:0, pm:0, px:0, py:0, sx:0, sy:0, ox:0, oy:0});
+/* WRECK is the hook the game will call when a part is destroyed: whatever lean the box has at that
+   moment beyond `yield` px stays. In the mock it fires itself, per frame, on any box leaning past the
+   yield - an elastic thing below it, a plastic one above, which is what steel does. */
+function wreckStep(S, yieldPx){
+  for(const o of S.boxes){
+    const m = Math.hypot(o.sx, o.sy);
+    // a ratchet, not a sum: the set is the worst excess seen, or a frame that holds past yield piles up
+    if(m - yieldPx > Math.hypot(o.ox, o.oy)){ const k = (m-yieldPx)/m; o.ox = o.sx*k; o.oy = o.sy*k; }
+  }
+}
+/* BUMP. The push is the sum of the fluid pressure on each face cell times the face's inward normal;
+   the faces do not cancel while the front is on one side. A damped spring turns it into a rock on its
+   feet, stepped at DT whatever the solver, because it is the picture and not the wave: `pf` is the
+   pressure the solver can state at that moment. The scale is fixed - so many px per 10 kPa on one
+   face of a pump-sized box - so a nearer hit is always a bigger one, and a bigger box is a heavier one. */
+const CHARGE_PA = 1e5;
+const BUMP_KPA = 10, BUMP_REF = BUMP_KPA*1e3*3/18;  // slider px per 10 kPa on one 3-cell face of a 6x3 box
+const BUMP_W = 2*Math.PI/0.01, BUMP_Z = 0.7;       // spring: 10 ms period in plant time; a heavy machine kicks once and sits
+const spring = (o, dk, vk, target, dt, z) => {
+  o[vk] += (BUMP_W*BUMP_W*(target-o[dk]) - 2*z*BUMP_W*o[vk])*dt;
+  o[dk] += o[vk]*dt;
+};
+function bumpStep(S, dt, bumpPx, pf){
+  BOXES.forEach((b, n) => { const o = S.boxes[n];
+    let fx = 0, fy = 0;
+    const q = (k, j) => { const i = b.side[k][j]; return i >= 0 ? pf(i) : 0; };
+    for(let j=0;j<b.h;j++) fx += q("l", j) - q("r", j);
+    for(let j=0;j<b.w;j++) fy += q("t", j) - q("b", j);
+    const k = bumpPx/(BUMP_REF*b.w*b.h);
+    spring(o, "dx", "vx", fx*k, dt, BUMP_Z); spring(o, "dy", "vy", fy*k, dt, BUMP_Z);
+    const m = Math.hypot(o.dx, o.dy);
+    if(m > o.pm){ o.pm = m; o.px = o.dx; o.py = o.dy; }
+  });
+}
+/* At 1x a frame is 17 ms and the spring is done inside it, so the screen shows the frame's WORST lean
+   and lets it go over BUMP_SHOW of screen time. That is the one wall-clock thing here, and it is a
+   display hold, like the trail on the game's blast layer. */
+const BUMP_SHOW = 0.12;
+function boxHold(S){
+  const k = Math.exp(-1/60/BUMP_SHOW);
+  for(const o of S.boxes){
+    if(o.pm > Math.hypot(o.sx, o.sy)){ o.sx = o.px; o.sy = o.py; } else { o.sx *= k; o.sy *= k; }
+    o.pm = 0;
+  }
+}
+function drawBoxes(S){
+  ctx.fillStyle = "#a8483f"; ctx.strokeStyle = "#e5a094"; ctx.lineWidth = 2;
+  BOXES.forEach((b, n) => { const o = S.boxes[n];
+    const x = b.x*PX + o.sx + o.ox, y = b.y*PX + o.sy + o.oy, w = b.w*PX, h = b.h*PX;
+    ctx.fillRect(x, y, w, h); ctx.strokeRect(x+1, y+1, w-2, h-2);
+  });
+}
+// pipe runs, drawn only, they are not walls
+const PIPES = [[2,8,58,8],[2,24,58,24],[10,8,10,26],[47,8,47,24],[30,8,30,16],[23,19,23,26]]
+  .map(([x0,y0,x1,y1]) => [x0, y0+OY, x1, y1+OY]);
+
+// ---- NOW: the explicit solver the game runs, substepped -------------------
+const DT = 0.35*DX/C;
+
+/* A bang does not die on a clock, it dies on the SURFACES: every time the front meets one, the wall
+   keeps a share of the ENERGY and reflects the rest. `soak` is that share at normal incidence - 0 is a
+   perfectly hard room that rings for ever, 1 is a wall that never sends anything back. The face is an
+   impedance boundary, u = p*y/(rho*c), and the admittance y that keeps a share a is (1-R)/(1+R) with
+   R = sqrt(1-a): measured 0.58/0.33/0.04 reflected against 0.60/0.33/0 theory at y 0.25/0.5/1. */
+const soakY = soak => { const R = Math.sqrt(Math.max(0, 1-soak)); return (1-R)/(1+R); };
+function stepWave(S, soak){
+  const p = S.p, u = S.u, v = S.v, y = soakY(soak);
+  const ku = DT/(RHO*DX), kp = RHO*C*C*DT/DX, za = y/(RHO*C);
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW-1;X++){ const i = Y*GW+X;
+    if(!solid[i] && !solid[i+1]) u[i] -= ku*(p[i+1]-p[i]); }
+  for(let i=0;i<N-GW;i++) if(!solid[i] && !solid[i+GW]) v[i] -= ku*(p[i+GW]-p[i]);
+  /* The surface is applied HERE, in the balance, not by writing a face first: a face on the hull has
+     no array slot of its own, and at X=0 or Y=0 the index before it is the previous row. Each of the
+     four faces contributes either the fluid velocity or what the wall lets through. */
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X; if(solid[i]){ p[i]=0; continue; }
+    const out = p[i]*za;
+    const rt = (X===GW-1 || solid[i+1])  ?  out : u[i];
+    const lf = (X===0    || solid[i-1])  ? -out : u[i-1];
+    const bt = (Y===GH-1 || solid[i+GW]) ?  out : v[i];
+    const tp = (Y===0    || solid[i-GW]) ? -out : v[i-GW];
+    p[i] -= kp*((rt-lf) + (bt-tp));
+  }
+}
+
+// ---- A: the same equations, implicit, one solve a tick --------------------
+/* Theta method on NOW's own grid and walls: theta 1 is backward Euler (stable, damps), 0.5 is
+   Crank-Nicolson (keeps the energy, rings). Eliminating u leaves one SPD system in p per tick,
+   [I + al*(-L) + be*W] p1 = rhs, solved by Jacobi-preconditioned CG. */
+const openR = new Uint8Array(N), openD = new Uint8Array(N), nOpen = new Uint8Array(N), nWall = new Uint8Array(N);
+for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+  const i = Y*GW+X; if(solid[i]) continue;
+  openR[i] = X<GW-1 && !solid[i+1] ? 1 : 0;
+  openD[i] = Y<GH-1 && !solid[i+GW] ? 1 : 0;
+}
+for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+  const i = Y*GW+X; if(solid[i]) continue;
+  nOpen[i] = openR[i] + openD[i] + (X>0 && openR[i-1]) + (Y>0 && openD[i-GW]);
+  nWall[i] = 4 - nOpen[i];
+}
+const cgR = new Float64Array(N), cgZ = new Float64Array(N), cgP = new Float64Array(N), cgAp = new Float64Array(N),
+      cgB = new Float64Array(N), cgX = new Float64Array(N), cgM = new Float64Array(N), cgPm = new Float64Array(N);
+function cgApply(x, y, al, be){
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X; if(solid[i]){ y[i] = 0; continue; }
+    let s = x[i]*(1 + al*nOpen[i] + be*nWall[i]);
+    if(openR[i]) s -= al*x[i+1];
+    if(X>0 && openR[i-1]) s -= al*x[i-1];
+    if(openD[i]) s -= al*x[i+GW];
+    if(Y>0 && openD[i-GW]) s -= al*x[i-GW];
+    y[i] = s;
+  }
+}
+const CG_TOL = 1e-6, CG_MAX = 3000;
+function cgSolve(b, x, al, be){
+  for(let i=0;i<N;i++) cgM[i] = solid[i] ? 1 : 1 + al*nOpen[i] + be*nWall[i];
+  cgApply(x, cgAp, al, be);
+  let bn = 0, rz = 0;
+  for(let i=0;i<N;i++){ cgR[i] = b[i]-cgAp[i]; cgZ[i] = cgR[i]/cgM[i]; cgP[i] = cgZ[i]; rz += cgR[i]*cgZ[i]; bn += b[i]*b[i]; }
+  bn = Math.sqrt(bn); if(!(bn > 0)) return 0;
+  let it = 0;
+  for(;it<CG_MAX;it++){
+    let rn = 0; for(let i=0;i<N;i++) rn += cgR[i]*cgR[i];
+    if(Math.sqrt(rn) <= CG_TOL*bn) break;
+    cgApply(cgP, cgAp, al, be);
+    let pAp = 0; for(let i=0;i<N;i++) pAp += cgP[i]*cgAp[i];
+    const a = rz/pAp;
+    let rz1 = 0;
+    for(let i=0;i<N;i++){ x[i] += a*cgP[i]; cgR[i] -= a*cgAp[i]; cgZ[i] = cgR[i]/cgM[i]; rz1 += cgR[i]*cgZ[i]; }
+    const bt = rz1/rz; rz = rz1;
+    for(let i=0;i<N;i++) cgP[i] = cgZ[i] + bt*cgP[i];
+  }
+  return it;
+}
+function stepImplicit(S, soak, th){
+  const p = S.p, u = S.u, v = S.v, dt = TICK, y = soakY(soak);
+  const al = C*C*dt*dt*th*th/(DX*DX), bf = C*dt*y/DX;
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X; if(solid[i]){ cgB[i] = 0; cgX[i] = 0; continue; }
+    const du = (u[i] - (X>0?u[i-1]:0) + v[i] - (Y>0?v[i-GW]:0))/DX;
+    let lp = 0;
+    if(openR[i]) lp += p[i+1]-p[i];
+    if(X>0 && openR[i-1]) lp += p[i-1]-p[i];
+    if(openD[i]) lp += p[i+GW]-p[i];
+    if(Y>0 && openD[i-GW]) lp += p[i-GW]-p[i];
+    lp /= DX*DX;
+    cgB[i] = p[i] - RHO*C*C*dt*du + C*C*dt*dt*th*(1-th)*lp - (1-th)*bf*nWall[i]*p[i];
+    cgX[i] = p[i];
+  }
+  S.iters = cgSolve(cgB, cgX, al, th*bf);
+  for(let i=0;i<N;i++) cgPm[i] = th*cgX[i] + (1-th)*p[i];
+  const ku = dt/(RHO*DX);
+  for(let i=0;i<N;i++){
+    if(openR[i]) u[i] -= ku*(cgPm[i+1]-cgPm[i]);
+    if(openD[i]) v[i] -= ku*(cgPm[i+GW]-cgPm[i]);
+  }
+  p.set(cgX);
+}
+
+// ---- B: a front with a closed form, one evaluation a tick -------------------
+/* Measured off NOW in open field (sigma 2.4 cells, a ray along x): the peak a front carries against
+   distance in sigma, and the pulse it carries against s = (c*t - d)/sigma, sampled every 0.25 from
+   s = -5. Linear in P0 and scale-free in sigma, so one run covers every charge. */
+const F_X = [0,0.5,1,1.5,2,2.5,3,4,5,6,8,10,12,15,20,25,30,40,50,60,75];
+const F_P = [1,0.8436,0.5939,0.3339,0.2478,0.2247,0.2015,0.172,0.158,0.14,0.1215,0.1093,0.0969,0.0868,0.0729,0.0634,0.0563,0.0464,0.0396,0.0347,0.0293];
+const G_S0 = -5, G_DS = 0.25;
+const G = [0.005,0.007,0.012,0.018,0.027,0.04,0.058,0.083,0.117,0.16,0.215,0.283,0.365,0.458,0.562,0.671,0.779,0.876,0.951,0.994,0.991,0.931,0.812,0.633,0.396,0.122,-0.17,-0.452,-0.691,-0.866,-0.956,-0.943,-0.843,-0.672,-0.457,-0.239,-0.05,0.083,0.137,0.121,0.052,-0.046,-0.141,-0.207,-0.231,-0.206,-0.151,-0.083,-0.025,0.008,0.01,-0.013,-0.049,-0.081,-0.099,-0.095,-0.074,-0.047,-0.024,-0.014,-0.017,-0.03,-0.046,-0.055,-0.055,-0.046,-0.033,-0.023,-0.019,-0.022,-0.029,-0.035,-0.037,-0.034,-0.028,-0.022,-0.019,-0.02,-0.023,-0.026,-0.027,-0.026,-0.022,-0.019,-0.018,-0.018,-0.02,-0.021,-0.021,-0.02,-0.018,-0.016,-0.016,-0.016,-0.017,-0.018,-0.017,-0.016,-0.015,-0.014,-0.014,-0.015,-0.015,-0.015,-0.014,-0.013,-0.013,-0.013,-0.013,-0.013,-0.013,-0.013,-0.012,-0.012,-0.012,-0.012,-0.012];
+const G_S1 = G_S0 + (G.length-1)*G_DS;
+function peakOf(x){
+  const L = F_X.length-1;
+  if(x >= F_X[L]) return F_P[L]*Math.sqrt(F_X[L]/x);
+  let k = 1; while(F_X[k] < x) k++;
+  const f = (x-F_X[k-1])/(F_X[k]-F_X[k-1]);
+  return F_P[k-1] + (F_P[k]-F_P[k-1])*f;
+}
+function gAt(s){
+  if(!(s > G_S0) || s >= G_S1) return 0;
+  const q = (s-G_S0)/G_DS, k = q|0, f = q-k;
+  return G[k] + (G[k+1]-G[k])*f;
+}
+// the worst |g| a cell saw while s swept s0..s1 - what a tick-sampled field would have stepped over
+function gMaxAbs(s0, s1){
+  let m = Math.max(Math.abs(gAt(s0)), Math.abs(gAt(s1)));
+  const k0 = Math.max(0, Math.ceil((s0-G_S0)/G_DS)), k1 = Math.min(G.length-1, Math.floor((s1-G_S0)/G_DS));
+  for(let k=k0;k<=k1;k++){ const a = Math.abs(G[k]); if(a > m) m = a; }
+  return m;
+}
+/* The distance the front walks to each cell, around the machines: Dijkstra over 16 moves (the knight
+   moves keep a circle within 3 % of round), seeded from every open cell of the charge at its straight
+   distance. Paid once per charge; the ticks after it only read it. */
+const MOVES = [];
+{ const seen = new Set();
+  for(const [a,b] of [[1,0],[1,1],[2,1]]) for(const [x,y] of [[a,b],[b,a]]) for(const sx of [1,-1]) for(const sy of [1,-1]){
+    const mx = x*sx+0, my = y*sy+0, key = mx+","+my; if(seen.has(key)) continue; seen.add(key);
+    const via = Math.abs(mx)===1 && Math.abs(my)===1 ? [[mx,0],[0,my]]
+              : Math.abs(mx)===2 ? [[Math.sign(mx),0],[Math.sign(mx),my]]
+              : Math.abs(my)===2 ? [[0,Math.sign(my)],[mx,Math.sign(my)]] : [];
+    MOVES.push({mx, my, len:Math.hypot(mx,my), via});
+  } }
+function pathDist(cx, cy, sig){
+  // Float64: a Float32 store rounds up past the heap key, and a node re-relaxes its neighbours for ever
+  const d = new Float64Array(N).fill(Infinity), hk = [], hi = [];
+  const push = (k, i) => { let n = hk.length; hk.push(k); hi.push(i);
+    while(n > 0){ const pa = (n-1)>>1; if(hk[pa] <= hk[n]) break;
+      [hk[pa],hk[n]] = [hk[n],hk[pa]]; [hi[pa],hi[n]] = [hi[n],hi[pa]]; n = pa; } };
+  const pop = () => { const k = hk[0], i = hi[0], lk = hk.pop(), li = hi.pop();
+    if(hk.length){ hk[0] = lk; hi[0] = li; let n = 0;
+      for(;;){ const l = 2*n+1, r = l+1; let m = n;
+        if(l < hk.length && hk[l] < hk[m]) m = l; if(r < hk.length && hk[r] < hk[m]) m = r;
+        if(m === n) break; [hk[m],hk[n]] = [hk[n],hk[m]]; [hi[m],hi[n]] = [hi[n],hi[m]]; n = m; } }
+    return [k, i]; };
+  const R = Math.ceil(3*sig);
+  for(let Y=Math.max(0,cy-R);Y<=Math.min(GH-1,cy+R);Y++) for(let X=Math.max(0,cx-R);X<=Math.min(GW-1,cx+R);X++){
+    const j = Y*GW+X; if(solid[j]) continue;
+    const d0 = Math.hypot(X-cx, Y-cy); if(d0 <= R && d0 < d[j]){ d[j] = d0; push(d0, j); } }
+  while(hk.length){
+    const [k, i] = pop(); if(k > d[i]) continue;
+    const X = i%GW, Y = (i/GW)|0;
+    for(const m of MOVES){
+      const x = X+m.mx, y = Y+m.my; if(!inFree(x, y)) continue;
+      if(m.via.some(([a,b]) => !inFree(X+a, Y+b))) continue;
+      const j = y*GW+x, nd = k + m.len;
+      if(nd < d[j]){ d[j] = nd; push(nd, j); }
+    }
+  }
+  return d;
+}
+/* A cell against a wall carries the incident front plus what the wall sends back, (1 + R) at normal
+   incidence, R off the same soak as NOW's walls; `face` is how squarely the front meets its wall. */
+let B_R = Math.sqrt(0.5);
+function chargeFront(S, cx, cy, pa){
+  const d = pathDist(cx, cy, SIG), A = new Float32Array(N), ex = new Float32Array(N), ey = new Float32Array(N),
+        face = new Float32Array(N);
+  let dmax = 0;
+  const dAt = (x, y, i) => inFree(x, y) && isFinite(d[y*GW+x]) ? d[y*GW+x] : d[i];
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X; if(!isFinite(d[i])) continue;
+    A[i] = pa*peakOf(d[i]/SIG); if(d[i] > dmax) dmax = d[i];
+    const gx = dAt(X+1,Y,i) - dAt(X-1,Y,i), gy = dAt(X,Y+1,i) - dAt(X,Y-1,i), m = Math.hypot(gx, gy);
+    if(m > 0){ ex[i] = gx/m; ey[i] = gy/m; }
+    face[i] = Math.max(!inFree(X+1,Y) ? ex[i] : 0, !inFree(X-1,Y) ? -ex[i] : 0,
+                       !inFree(X,Y+1) ? ey[i] : 0, !inFree(X,Y-1) ? -ey[i] : 0);
+  }
+  S.charges.push({t0:S.t, sig:SIG, d, A, ex, ey, face, dmax});
+}
+const sOf = (ch, i, t) => (C*(t-ch.t0)/DX - ch.d[i])/ch.sig;
+const ampOf = (ch, i) => ch.A[i]*(1 + B_R*ch.face[i]);
+function frontP(S, i, t){
+  let q = 0;
+  for(const ch of S.charges) if(ch.A[i] !== 0) q += ampOf(ch, i)*gAt(sOf(ch, i, t));
+  return q;
+}
+// a travelling wave's air speed is p/(rho*c) along the way it is going, so B needs no momentum to carry
+function frontAir(S, X, Y, t){
+  X = X<0?0:X>GW-1?GW-1:X|0; Y = Y<0?0:Y>GH-1?GH-1:Y|0;
+  const i = Y*GW+X; let ux = 0, uy = 0;
+  for(const ch of S.charges) if(ch.A[i] !== 0){
+    const w = ch.A[i]*gAt(sOf(ch, i, t))/(RHO*C); ux += w*ch.ex[i]; uy += w*ch.ey[i]; }
+  return [ux, uy];
+}
+const bPk = new Float64Array(N);
+function stepFront(S){
+  const ta = S.t, tb = S.t + TICK, p = S.p;
+  p.fill(0); bPk.fill(0);
+  for(const ch of S.charges){
+    const A = ch.A;
+    for(let i=0;i<N;i++){
+      if(A[i] === 0) continue;
+      const s1 = sOf(ch, i, tb); if(s1 <= G_S0) continue;
+      const s0 = sOf(ch, i, ta); if(s0 >= G_S1) continue;
+      const a = ampOf(ch, i);
+      p[i] += a*gAt(s1);
+      bPk[i] += a*gMaxAbs(s0, s1);
+    }
+  }
+  for(let i=0;i<N;i++) if(bPk[i] > S.pk[i]) S.pk[i] = bPk[i];
+  S.t = tb;
+  S.charges = S.charges.filter(ch => (C*(S.t-ch.t0)/DX - ch.dmax)/ch.sig < G_S1);
+}
+
+/* HITS. A fluid cell against a wall already carries the REFLECTED pressure, doubled off a hard face,
+   which is the load the game's burst check reads. Each wall face keeps its worst recent reading,
+   against the room mean: a hard room keeps what the charge put in (about 200 Pa). */
+const faces = [];
+for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+  const i = Y*GW+X; if(solid[i]) continue;
+  if(X===GW-1 || solid[i+1])  faces.push({i,X,Y,s:0});
+  if(X===0    || solid[i-1])  faces.push({i,X,Y,s:1});
+  if(Y===GH-1 || solid[i+GW]) faces.push({i,X,Y,s:2});
+  if(Y===0    || solid[i-GW]) faces.push({i,X,Y,s:3});
+}
+const HIT_LO = 5e3, HIT_FULL = 50e3;
+/* SCARS. Every PASSAGE of the wave over a machine face adds what it carried above HIT_LO to that
+   face's scar, so blasts pile up: two half hits mark like one full one. A passage is one rise and
+   fall of the reading - `hitCur` follows it up, and when it has fallen to half of its own peak the
+   peak is booked and the tracker re-arms for the next echo. Drawn for good, inside the box along that
+   face, deeper and darker the more it has taken. Only machine faces scar, the hull does not; each face
+   knows its box so the mark rides on it. `src` is what the solver says each cell carried. */
+function hitStep(S, dt, hold, src, mean){
+  const k = hold > 0 ? Math.exp(-dt/hold) : 0;
+  for(let f=0;f<faces.length;f++){
+    const q = src[faces[f].i]-mean, a = q<0?-q:q, t = S.hitA[f]*k;
+    S.hitA[f] = a > t ? a : t;
+    if(a > S.hitCur[f]) S.hitCur[f] = a;
+    else if(a < S.hitCur[f]*0.5){ if(S.hitCur[f] > HIT_LO) S.hitPk[f] += S.hitCur[f]-HIT_LO; S.hitCur[f] = a; }
+  }
+}
+/* Which face cell stands against each side of each box, in order along the side, -1 where the grid
+   ends. Keyed off `faces`, so the scar and the hit flash read the same reading. */
+const faceAt = new Map(faces.map((f, i) => [f.s+"|"+f.X+"|"+f.Y, i]));
+for(const b of BOXES){
+  const row = (s, X, Y) => { const i = faceAt.get(s+"|"+X+"|"+Y); return i === undefined ? -1 : i; };
+  b.scar = {
+    l: Array.from({length:b.h}, (_, j) => row(0, b.x-1,   b.y+j)),
+    r: Array.from({length:b.h}, (_, j) => row(1, b.x+b.w, b.y+j)),
+    t: Array.from({length:b.w}, (_, j) => row(2, b.x+j,   b.y-1)),
+    b: Array.from({length:b.w}, (_, j) => row(3, b.x+j,   b.y+b.h)),
+  };
+}
+function paintScars(S){
+  /* Per cell, in BLOCKS: the depth at each cell is the booked scar, smoothed 1-2-1 along the side so
+     neighbours do not step wildly, then snapped to half-cell steps and drawn as SCAR_LAYERS flat
+     rectangles from the face inward, each a step lighter. Pixel look, no curves. */
+  const SCAR_DEEP = 0.7, SCAR_LAYERS = 4, SCAR_A = 0.9, STEP = PX/2;
+  ctx.fillStyle = "#1a0c0a"; ctx.globalAlpha = SCAR_A/SCAR_LAYERS;
+  BOXES.forEach((b, n) => { const o = S.boxes[n];
+    const ox = b.x*PX + o.sx + o.ox, oy = b.y*PX + o.sy + o.oy, W = b.w*PX, H = b.h*PX;
+    for(const side of ["l","r","t","b"]){
+      const idx = b.scar[side], L = idx.length, across = (side==="l"||side==="r" ? W : H);
+      const raw = idx.map(i => { if(i < 0) return 0; const a = S.hitPk[i]; if(!(a > 0)) return 0;
+        return STEP + SCAR_DEEP*across*Math.min(1, a/(HIT_FULL-HIT_LO)); });
+      if(!raw.some(d => d > 0)) continue;
+      for(let j=0;j<L;j++){
+        const d = (raw[Math.max(0,j-1)] + 2*raw[j] + raw[Math.min(L-1,j+1)])/4;
+        for(let k=1;k<=SCAR_LAYERS;k++){
+          const D = Math.round(d*k/SCAR_LAYERS/STEP)*STEP; if(D <= 0) continue;
+          if(side==="l")      ctx.fillRect(ox,       oy + j*PX, D, PX);
+          else if(side==="r") ctx.fillRect(ox+W-D,   oy + j*PX, D, PX);
+          else if(side==="t") ctx.fillRect(ox + j*PX, oy,       PX, D);
+          else                ctx.fillRect(ox + j*PX, oy+H-D,   PX, D);
+        }
+      }
+    }
+  });
+  ctx.globalAlpha = 1;
+}
+function paintHits(S){
+  const Tk = 3;
+  ctx.fillStyle = "#fff";
+  for(let f=0;f<faces.length;f++){
+    const a = S.hitA[f]; if(a < HIT_LO) continue;
+    const {X,Y,s} = faces[f];
+    ctx.globalAlpha = 0.25 + 0.75*Math.min(1, a/HIT_FULL);
+    if(s===0)      ctx.fillRect(X===GW-1 ? cv.width-Tk  : (X+1)*PX, Y*PX, Tk, PX);
+    else if(s===1) ctx.fillRect(X===0    ? 0            : X*PX-Tk,  Y*PX, Tk, PX);
+    else if(s===2) ctx.fillRect(X*PX, Y===GH-1 ? cv.height-Tk : (Y+1)*PX, PX, Tk);
+    else           ctx.fillRect(X*PX, Y===0    ? 0             : Y*PX-Tk,  PX, Tk);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* SPARKS and SMOKE ride the air the solver states, plus their own ballistics: gravity on a spark,
+   buoyancy on a puff. The grid is an elevation like the game's, so down is +y. */
+function spawnFx(S, cx, cy){
+  for(let k=0;k<160;k++){ const a = Math.random()*6.283, s = 15 + Math.random()*45;
+    S.sparks.push({x:cx+0.5, y:cy+0.5, vx:Math.cos(a)*s, vy:Math.sin(a)*s, t:0, life:0.8+Math.random()*1.2}); }
+  for(let k=0;k<24;k++){ const a = Math.random()*6.283, s = Math.random()*4;
+    S.smoke.push({x:cx+0.5+Math.cos(a)*1.5, y:cy+0.5+Math.sin(a)*1.5, vx:Math.cos(a)*s, vy:Math.sin(a)*s-1.5,
+                  r:0.6, t:0, life:2.5+Math.random()*2}); }
+}
+function fxStep(S, dt){
+  if(!(dt > 0)) return;
+  const G9 = 9.81, drag = Math.exp(-dt/0.6);
+  for(const o of S.sparks){ o.t += dt; const [ax,ay] = S.air(S, o.x, o.y, T);
+    o.vy += G9*dt; o.vx *= drag; o.vy *= drag;
+    const nx = o.x + (o.vx+ax)*dt/DX, ny = o.y + (o.vy+ay)*dt/DX;
+    if(inFree(nx, ny)){ o.x = nx; o.y = ny; } else { o.vx = 0; o.vy = 0; } }
+  for(const o of S.smoke){ o.t += dt; const [ax,ay] = S.air(S, o.x, o.y, T);
+    o.r += 0.8*dt;
+    const nx = o.x + (o.vx+ax)*dt/DX, ny = o.y + (o.vy+ay)*dt/DX;
+    if(inFree(nx, ny)){ o.x = nx; o.y = ny; } }
+  S.sparks = S.sparks.filter(o => o.t < o.life);
+  S.smoke  = S.smoke.filter(o => o.t < o.life);
+}
+function paintSparks(S){
+  for(const o of S.sparks){ const k = 1 - o.t/o.life;
+    ctx.globalAlpha = k; ctx.fillStyle = k>0.6 ? "#fff0c0" : k>0.3 ? "#e0a030" : "#d94040";
+    ctx.fillRect(o.x*PX-1, o.y*PX-1, 3, 3); }
+  ctx.globalAlpha = 1;
+}
+function paintSmoke(S){
+  ctx.fillStyle = "#8a8f99";
+  for(const o of S.smoke){ const k = 1 - o.t/o.life;
+    ctx.globalAlpha = 0.35*k; ctx.beginPath(); ctx.arc(o.x*PX, o.y*PX, o.r*PX, 0, 6.283); ctx.fill(); }
+  ctx.globalAlpha = 1;
+}
+
+let SIG = 2.4;
+function blast(S, cx, cy, pa){
+  if(S.key === "b"){ const t0 = performance.now(); chargeFront(S, cx, cy, pa); S.msCharge = performance.now()-t0; return; }
+  const k = 1/(2*SIG*SIG);
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X; if(solid[i]) continue;
+    const r2 = (X-cx)*(X-cx) + (Y-cy)*(Y-cy);
+    S.p[i] += pa*Math.exp(-r2*k);
+  }
+}
+
+// ---- the three solvers -------------------------------------------------
+const HIST = 600;
+function mkSolver(key, lab, col, air){
+  const S = {key, lab, col, air, p:new Float64Array(N), u:new Float64Array(N), v:new Float64Array(N),
+    pk:new Float64Array(N), hitA:new Float32Array(faces.length), hitPk:new Float32Array(faces.length),
+    hitCur:new Float32Array(faces.length), boxes:BOXES.map(boxState),
+    hist:Array.from({length:HIST}, () => new Float32Array(N)), histT:new Float64Array(HIST),
+    msTick:0, steps:0, iters:0, msCharge:0};
+  resetSolver(S);
+  return S;
+}
+function resetSolver(S){
+  S.p.fill(0); S.u.fill(0); S.v.fill(0); S.pk.fill(0);
+  S.hitA.fill(0); S.hitPk.fill(0); S.hitCur.fill(0);
+  S.boxes = BOXES.map(boxState);
+  S.sparks = []; S.smoke = []; S.trT = []; S.trP = []; S.charges = [];
+  S.t = 0; S.simDt = 0; S.histN = 0; S.histHead = 0; S.frameNo = 0; S.bangs = [];
+}
+const SOLVERS = [
+  mkSolver("now", "NOW", "#ffd080", (S, X, Y) => faceAir(S, X, Y)),
+  mkSolver("a",   "A",   "#7fd0ff", (S, X, Y) => faceAir(S, X, Y)),
+  mkSolver("b",   "B",   "#b0ff80", (S, X, Y, t) => frontAir(S, X, Y, t)),
+];
+const solverOf = key => SOLVERS.find(S => S.key === key);
+
+/* Each chases the shared clock in its own step: NOW in DT, A and B in whole ticks, so A and B stand
+   still between ticks exactly as the game's state would. The spring and the sparks are the picture
+   and run at their own rate off whatever the solver can state. */
+const ema = (o, k, x) => { o[k] = o[k] ? o[k]*0.9 + x*0.1 : x; };
+function advance(S, soak, bumpPx, th){
+  const t0 = S.t;
+  if(S.key === "now"){
+    let n = Math.floor((T - S.t)/DT + 1e-9), ms = 0;
+    if(n > 400){ n = 400; }
+    for(let k=0;k<n;k++){ const a = performance.now(); stepWave(S, soak); ms += performance.now()-a;
+      bumpStep(S, DT, bumpPx, i => S.p[i]); }
+    S.t = n === 400 ? T : S.t + n*DT;
+    if(n > 0){ ema(S, "msTick", ms/(n*DT/TICK)); S.steps = Math.ceil(TICK/DT); }
+  } else {
+    let n = 0;
+    while(S.t + TICK <= T + 1e-9 && n < 4){
+      const ta = S.t, a = performance.now();
+      if(S.key === "a") stepImplicit(S, soak, th); else stepFront(S);
+      ema(S, "msTick", performance.now()-a);
+      if(S.key === "a") S.t += TICK;
+      const ns = Math.round(TICK/DT), h = TICK/ns;
+      for(let k=0;k<ns;k++){
+        const tk = ta + (k+1)*h;
+        bumpStep(S, h, bumpPx, S.key === "a" ? (i => S.p[i]) : (i => frontP(S, i, tk)));
+      }
+      if(S.key === "a"){ S.trT.push(S.t); S.trP.push(S.p[probe.y*GW+probe.x]); }
+      n++;
+    }
+    if(n === 4 && S.t + TICK <= T) S.t = T - ((T - S.t) % TICK);
+  }
+  S.simDt = S.t - t0;
+  return S.simDt > 0;
+}
+
+// ---- the plant, always visible -----------------------------------------
+// the plate and the pipes never move, so they are painted once; the boxes are drawn live over them
+const oc = document.createElement("canvas");
+oc.width = cv.width; oc.height = cv.height;
+{ const g = oc.getContext("2d");
+  g.fillStyle = "#000"; g.fillRect(0,0,oc.width,oc.height);
+  g.lineWidth = 3; g.strokeStyle = "#e08a7a";
+  for(const [x0,y0,x1,y1] of PIPES){ g.beginPath();
+    g.moveTo(x0*PX, y0*PX); g.lineTo(x1*PX, y1*PX); g.stroke(); }
+}
+
+/* TRACE. One cell's pressure against plant time, like a gauge wired into the trends, all three
+   solvers at once: NOW per frame, A per tick (all it has), B off its closed form per frame. */
+let probe = {x:102, y:34};
+const TR_MAX = 1400;
+function traceStep(S){
+  if(S.key === "a") return;
+  if(S.key === "now"){ if(!(S.simDt > 0)) return; S.trT.push(S.t); S.trP.push(S.p[probe.y*GW+probe.x]); }
+  else { if(pauseEl.checked) return; S.trT.push(T); S.trP.push(frontP(S, probe.y*GW+probe.x, T)); }
+}
+function traceTrim(S){ while(S.trT.length > TR_MAX){ S.trT.shift(); S.trP.shift(); } }
+function paintTrace(V){
+  const W = tr.width, H = tr.height;
+  tctx.fillStyle = "#000"; tctx.fillRect(0,0,W,H);
+  const t1 = Math.max(...SOLVERS.map(S => S.trT.length ? S.trT[S.trT.length-1] : 0));
+  const t0 = Math.max(0, Math.min(...SOLVERS.map(S => S.trT.length ? S.trT[0] : t1)), t1 - 0.4);
+  const span = Math.max(1e-6, t1-t0);
+  let pm = 0;
+  for(const S of SOLVERS) S.trT.forEach((t, k) => { if(t >= t0){ const a = Math.abs(S.trP[k]); if(a > pm) pm = a; } });
+  if(pm < 1) pm = 1;
+  const ym = H/2, ys = (H/2-10)/pm;
+  tctx.strokeStyle = "#2a3340"; tctx.beginPath(); tctx.moveTo(0,ym); tctx.lineTo(W,ym); tctx.stroke();
+  tctx.strokeStyle = "#5a4030";
+  for(const b of V.bangs){ if(b.t < t0) continue; const x = (b.t-t0)/span*W;
+    tctx.beginPath(); tctx.moveTo(x,0); tctx.lineTo(x,H); tctx.stroke(); }
+  for(const S of SOLVERS){
+    tctx.strokeStyle = S.col; tctx.fillStyle = S.col; tctx.lineWidth = S === V ? 2 : 1; tctx.beginPath();
+    let first = true;
+    S.trT.forEach((t, k) => { if(t < t0) return; const x = (t-t0)/span*W, y = ym - S.trP[k]*ys;
+      if(first){ tctx.moveTo(x,y); first = false; } else tctx.lineTo(x,y);
+      if(S.key === "a") tctx.fillRect(x-1.5, y-1.5, 3, 3); });
+    tctx.stroke();
+  }
+  tctx.lineWidth = 1;
+  tctx.font = "11px ui-monospace,Consolas,monospace";
+  tctx.fillStyle = "#8a93a0";
+  tctx.fillText("probe "+probe.x+","+probe.y+"   +-"+(pm/1000).toFixed(1)+" kPa   "+span.toFixed(3)+" s", 6, 13);
+  let x = 330;
+  for(const S of SOLVERS){ tctx.fillStyle = S.col; const s = S.lab+(S.key==="a"?" (dots = its ticks)":"");
+    tctx.fillText(s, x, 13); x += tctx.measureText(s).width + 18; }
+}
+
+/* REPLAY. The last HIST frames of the view's p, so a bang that crossed the room in five frames can be
+   scrubbed. Pause stops the solvers; the scrub shows a stored frame, the live one is put back after. */
+function histPush(S){ S.hist[S.histHead].set(S.p); S.histT[S.histHead] = S.t;
+  S.histHead = (S.histHead+1)%HIST; if(S.histN < HIST) S.histN++; S.frameNo++; }
+const histAt = (S, j) => (S.histHead - S.histN + j + HIST) % HIST;
+const bangScrub = (S, b) => b.frame - (S.frameNo - S.histN);
+const pSave = new Float64Array(N);
+
+let refAbs = 0;
+function draw(V, replay){
+  const tail = +tailEl.value/100;
+  gradOf(V); intensOf(V);
+  ctx.drawImage(oc, 0, 0);
+  drawBoxes(V);
+  const mode = modeEl.value;
+  if(mode !== "off"){ paint(V, mode, replay ? 0 : tail); }
+  else lit.fill(0);
+  if(scarsEl.checked) paintScars(V);
+  if(hitsEl.checked) paintHits(V);
+  if(smokeEl.checked) paintSmoke(V);
+  if(sparksEl.checked) paintSparks(V);
+  // the probe
+  ctx.strokeStyle = "#ffd080"; ctx.lineWidth = 1;
+  ctx.strokeRect(probe.x*PX+0.5, probe.y*PX+0.5, PX-1, PX-1);
+  ctx.font = "bold 14px ui-monospace,Consolas,monospace"; ctx.fillStyle = V.col;
+  ctx.fillText(V.lab, cv.width-40, 20);
+  tr.classList.toggle("hide", !traceEl.checked);
+  if(traceEl.checked) paintTrace(V);
+}
+
+function paint(V, mode, tail){
+  const p = V.p;
+  // signed reads the pressure itself; direction and schlieren read its gradient
+  if(mode === "schl" || mode === "dir") wa.set(gm);
+  else for(let i=0;i<N;i++) wa[i] = p[i]<0 ? -p[i] : p[i];
+  // a cell brightens instantly as the front reaches it and lets go on `tail`, in PLANT seconds
+  const kt = tail > 0 ? Math.exp(-V.simDt/tail) : 0;
+  for(let i=0;i<N;i++){ const t = lit[i]*kt; lit[i] = wa[i] > t ? wa[i] : t; }
+  let mx = 0;
+  for(let i=0;i<N;i++) if(!solid[i] && lit[i]>mx) mx=lit[i];
+  if(mx < 1e-9) return;
+  /* Against the loudest thing that has EVER been in this room, and that reference never falls. Against
+     the current frame's peak the whole field could halve and the picture would not move, so a decaying
+     wave held full brightness and then blinked out at the cull - it disappeared instead of going down. */
+  if(mx > refAbs) refAbs = mx;
+  const k = 1/refAbs;
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
+    const i = Y*GW+X, a = lit[i]*k;
+    if(a < 0.02) continue;
+    // the curve keeps a weak wave visible; a strong one nearly covers what it is over
+    ctx.globalAlpha = Math.min(0.92, Math.pow(a, 0.5));
+    const t = a*a;
+    if(mode === "sign"){
+      // squeeze one way, suck the other: half the wave that |p| was throwing away
+      ctx.fillStyle = p[i] >= 0 ? "rgb(255,"+((120+120*t)|0)+","+((90+140*t)|0)+")"
+                                : "rgb("+((90+140*t)|0)+","+((170+85*t)|0)+",255)";
+    } else if(mode === "dir"){
+      // hue is the way it is TRAVELLING, so a reflection is a different colour from what made it
+      const h = (Math.atan2(iyA[i], ixA[i])*180/Math.PI + 360)%360;
+      ctx.fillStyle = "hsl("+h.toFixed(0)+",85%,"+((40+35*t)|0)+"%)";
+    } else {
+      ctx.fillStyle = "rgb(255,"+((150+105*t)|0)+","+((110+145*t)|0)+")";
+    }
+    ctx.fillRect(X*PX, Y*PX, PX, PX);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- loop -------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const goEl=$("go"), viewEl=$("view"), thetaEl=$("theta"), slowEl=$("slow"), soakEl=$("soak"), sigEl=$("sig"),
+      tailEl=$("tail"), modeEl=$("mode"), bumpEl=$("bump"), wreckEl=$("wreck"), yieldEl=$("yield"),
+      hitsEl=$("hits"), scarsEl=$("scars"), sparksEl=$("sparks"),
+      smokeEl=$("smoke"), traceEl=$("trace"), holdEl=$("hold"),
+      pauseEl=$("pause"), scrubEl=$("scrub"), bangEl=$("bang"), costEl=$("cost");
+const Tx = (id,s) => $(id).textContent = s;
+const show = () => { Tx("vslow",slowEl.value+"x"); Tx("vsoak",soakEl.value+"%");
+  SIG = +sigEl.value/10; Tx("vsig",SIG.toFixed(1));
+  const th = +thetaEl.value/100; Tx("vtheta",th.toFixed(2)+(th===0.5?" CN":th===1?" BE":""));
+  Tx("vtail",(+tailEl.value/100).toFixed(2)+"s");
+  Tx("vbump",bumpEl.value+"px/"+BUMP_KPA+"kPa");
+  Tx("vyield",yieldEl.value+"px"); Tx("vhold",(+holdEl.value/100).toFixed(2)+"s"); };
+for(const el of [thetaEl,slowEl,soakEl,sigEl,tailEl,bumpEl,yieldEl,holdEl]) el.oninput = show;
+show();
+let V = solverOf(viewEl.value);
+const setView = key => { viewEl.value = key; V = solverOf(key); lit.fill(0); refAbs = 0;
+  scrubEl.max = Math.max(0, V.histN-1); scrubEl.value = scrubEl.max; };
+viewEl.onchange = () => setView(viewEl.value);
+addEventListener("keydown", e => { const k = {"1":"now","2":"a","3":"b"}[e.key]; if(k) setView(k); });
+
+let cx = 90, cy = 34;
+const cellAt = e => { const b = cv.getBoundingClientRect();
+  return [Math.floor((e.clientX-b.left)/PX), Math.floor((e.clientY-b.top)/PX)]; };
+cv.onclick = e => { [cx, cy] = cellAt(e); };
+cv.oncontextmenu = e => { e.preventDefault(); const [x,y] = cellAt(e);
+  if(inFree(x, y)) probe = {x, y}; };
+goEl.onclick = () => { for(const S of SOLVERS){ blast(S, cx, cy, CHARGE_PA); spawnFx(S, cx, cy);
+  S.bangs.push({frame:S.frameNo, t:S.t}); if(S.bangs.length > 20) S.bangs.shift(); } };
+$("clr").onclick = () => { T = 0; for(const S of SOLVERS) resetSolver(S);
+  lit.fill(0); refAbs = 0;
+  pauseEl.checked = false; scrubEl.max = 0; scrubEl.value = 0; };
+
+pauseEl.onchange = () => { scrubEl.max = Math.max(0, V.histN-1); scrubEl.value = scrubEl.max; };
+bangEl.onclick = () => { if(!V.bangs.length) return;
+  const j = bangScrub(V, V.bangs[V.bangs.length-1]); if(j < 0) return;
+  pauseEl.checked = true; scrubEl.max = Math.max(0, V.histN-1); scrubEl.value = j; };
+
+function costLine(){
+  const f = S => S.msTick ? S.msTick.toFixed(2)+" ms" : "-";
+  const [n, a, b] = SOLVERS;
+  costEl.innerHTML =
+    "<span style='color:"+n.col+"'>NOW "+f(n)+" per tick, "+n.steps+" substeps</span>"+
+    "<span style='color:"+a.col+"'>A "+f(a)+" per tick, CG "+a.iters+" iterations</span>"+
+    "<span style='color:"+b.col+"'>B "+f(b)+" per tick, "+b.msCharge.toFixed(1)+" ms per charge, "+b.charges.length+" live</span>"+
+    "<span style='opacity:.55'>a tick is 20 ms of plant; this grid is 4x the game's</span>";
+}
+
+function frame(){
+  const paused = pauseEl.checked;
+  if(!paused) T += 1/60/(+slowEl.value);
+  const soak = +soakEl.value/100, bump = +bumpEl.value, th = +thetaEl.value/100, hold = +holdEl.value/100;
+  B_R = Math.sqrt(Math.max(0, 1-soak));
+  for(const S of SOLVERS){
+    const moved = !paused && advance(S, soak, bump, th);
+    if(!paused){
+      boxHold(S);
+      if(wreckEl.checked) wreckStep(S, +yieldEl.value);
+      const dt = 1/60/(+slowEl.value);
+      if(S.key === "b"){ hitStep(S, dt, hold, S.pk, 0); S.pk.fill(0); }
+      else hitStep(S, dt, hold, S.p, fluidMean(S));
+      fxStep(S, dt);
+      traceStep(S); traceTrim(S);
+    }
+    if(moved) histPush(S);
+  }
+  const j = +scrubEl.value, replay = paused && V.histN > 0 && j < V.histN-1;
+  if(replay){ pSave.set(V.p); V.p.set(V.hist[histAt(V, j)]); }
+  draw(V, replay);
+  if(replay) V.p.set(pSave);
+  Tx("vscrub", paused && V.histN > 0 ? "t="+V.histT[histAt(V, j)].toFixed(4)+"s  "+(j+1)+"/"+V.histN
+                                     : "t="+V.t.toFixed(4)+"s");
+  costLine();
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
