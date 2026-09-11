@@ -285,10 +285,23 @@ const holeC = bore => ORIF_CD*areaOf(bore);
 // the path through a component's own body, plus the loss its ROLE states for its internals
 const COMP_C = pipeC(1, NET_COMP_LEN);
 const compC = K => K > 0 ? pipeC(1, NET_COMP_LEN, K) : COMP_C;
+/* MPa the core spends between its own nozzles at rated flow: a real RBMK's inlet throttle and lower water line, a real BWR's bundle orifice. STATED per coolant, never derived - the drawn channel is nothing like the real machine's geometry. */
+const coreDpSuggest = id => COOLANT[(coreD(id) || priD()).cool].dpCore || 0;
+const coreDpOf = id => { const cD = coreD(id); return (cD && cD.dp0) ?? coreDpSuggest(id); };
+/* the whole of it at the INLET face, priced as a resistance on the run that lands there so the guess, the reference and the tick all read it through runK0() */
+const coreEndK = (id, r) => {
+  const dp = coreDpOf(id); if(!(dp > 0)) return null;
+  const w = runDutyKgs(r); if(!(w > 0)) return null;
+  const mm = runBoreMm(r), A = Math.PI/4*Math.pow(mm/1000, 2);
+  return dp*1e6*2*circDesRho(runCircOf(r), false, 0)*A*A/(w*w);
+};
 const runK0 = r => {
-  const endK = pid => { const p = partOf(pid), R = p && ROLE[p.role];
+  const endK = (pid, face) => { const p = partOf(pid), R = p && ROLE[p.role];
+    if(R && R.inlet !== undefined && face === R.inlet){
+      const k = coreEndK(p.id, r); if(k !== null) return k; }
     return R && R.kEnd !== undefined ? R.kEnd : (K_ENTRY + K_EXIT)/2; };
-  return K_BEND*Math.max(0, (r.pts ? r.pts.length : 2) - 2) + endK(r.a) + endK(r.b);
+  return K_BEND*Math.max(0, (r.pts ? r.pts.length : 2) - 2)
+       + endK(r.a, r.sa) + endK(r.b, r.sb);
 };
 /* kg/s an opening WOULD pass at a stated pair of pressures, not what the field says it does */
 const flowW = (C, rho, pHi, pLo) => C > 0
@@ -296,8 +309,10 @@ const flowW = (C, rho, pHi, pLo) => C > 0
   : 0;
 /* a nozzle in the steam space stands in the steam's own density, not the vessel's mixture - for what it passes and for what it weighs. F.void is a vessel whose free SURFACE says there is a space over it: at the condenser's vacuum the quality of a half-full pool is 7e-5 and a bare x > 0 pulls the hotwell out through the exhaust duct. */
 const gasEnd = (F, gasAt, i) => gasAt === i && (F.x[i] > 0 || !!F.void[i]);
+/* and the outlet under the surface stands in the water, the mirror of it: what a drum's downcomer or a surge line passes is the liquid, never the vessel's mixture */
+const liqEnd = (F, liqAt, i) => liqAt === i && F.x[i] > 0;
 let FLOWG_CHOKE = false;          // set by flowG(), spent by edgeG() on the next line
-const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
+const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt, liqAt) => {
   FLOWG_CHOKE = false;
   if(!(C > 0)) return 0;
   /* the differential carries the head, because netFlows() carries Q = g*(p_u - p_v + h) */
@@ -317,7 +332,8 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
   if(F.wet && !F.wet[up]) return 0;
   /* a check valve is signed: +1 passes u->v only */
   if(diode && d*diode < 0) return 0;
-  const rho = gasEnd(F, gasAt, up) ? F.rhoG[up] : F.rhoD[up];
+  const rho = gasEnd(F, gasAt, up) ? F.rhoG[up]
+            : liqEnd(F, liqAt, up) ? F.rhoL[up] : F.rhoD[up];
   const w = C*Math.sqrt(2*Math.max(rho, 1e-3)*eff*1e6);
   return w/act;
 };
@@ -325,7 +341,7 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt) => {
 const scratch = (net, k, n, Ctor, v) => { const b = net.scr || (net.scr = {}); let a = b[k];
   if(!a || a.length !== n) a = b[k] = new Ctor(n); a.fill(v); return a; };
 /* the field the law is linearised about: one tick old on purpose, and per net */
-const netFieldOf = () => ({p:null, rho:null, rhoD:null, rhoG:null, void:null, x:null, wet:null, mu:null});
+const netFieldOf = () => ({p:null, rho:null, rhoD:null, rhoG:null, rhoL:null, void:null, x:null, wet:null, mu:null});
 function netFieldSize(F, n){
   F.p = new Float64Array(n).fill(typeof P!=="undefined" && P ? P.P0 : 1);
   F.rho = new Float64Array(n).fill(typeof P!=="undefined" && P && P.rho0 ? P.rho0 : 700);
@@ -335,6 +351,7 @@ function netFieldSize(F, n){
   F.void = new Uint8Array(n);
   // only a node a steam nozzle stands on ever fills this in (netFieldUpdate)
   F.rhoG = new Float64Array(n);
+  F.rhoL = new Float64Array(n);
   F.x = new Float64Array(n);
   F.wet = new Uint8Array(n).fill(1);
   F.mu = new Float64Array(n).fill(SAT_WATER.mu);
@@ -409,6 +426,7 @@ function netFieldUpdate(net, s){
     F.wet[i] = (netNodeDry(net, s, i, mx.rho) && fedIn[i]*NET_DT <= DRY_FRAC*net.vol[i]*mx.rho) ? 0 : 1;
     F.mu[i] = muMixOf(sat[i], mx.x); }
   for(const i of (net.gasNodes||[])) F.rhoG[i] = rhogOf(sat[i], satT(sat[i], F.p[i]));
+  for(const i of (net.liqNodes||[])) F.rhoL[i] = rhofOf(sat[i], satT(sat[i], F.p[i]));
   /* the pool's own surface, not (p,h): a hotwell short of full has a space over it and every nozzle in that space draws steam */
   if(net.condV && net.condV.length){ F.void.fill(0);
     for(const i of net.condV){ const lvl = poolLvlOf(net, s, i);
@@ -428,7 +446,7 @@ const edgeG = (net, ed, s) => {
   /* the AUTHORED head, never edgeH()'s: the friction law is linearised about the drop it is itself asked to account for, and the momentum term is not one */
   const h = C > 0 ? (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0)) : 0;
   const hSrc = C > 0 && ed.hSrc ? ed.hSrc(s) : 0;
-  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc, ed.chokeAt, ed.gasAt) : 0;
+  const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc, ed.chokeAt, ed.gasAt, ed.liqAt) : 0;
   if(net.choke && ed.i !== undefined) net.choke[ed.i] = (g > 0 && FLOWG_CHOKE) ? 1 : 0;
   return g > 0 ? g/(1 + g*edgeIn(ed)) : g;
 };
@@ -651,6 +669,13 @@ const satOfCirc = ci => {
   if(typeof P !== "undefined" && P && P.coreSat && P.coreSatSig === G.sig && P.coreSat[ci]) return P.coreSat[ci];
   const cid = coreOnCirc(ci)[0], p0 = holdSetP(ci), slot = graphSlot("satOf"), k = cid+"|"+p0;
   return slot.get(k) || (slot.set(k, satCurveOf(cid, p0)), slot.get(k));
+};
+/* The design state of a primary circuit, read by the sizing guess AND by the reference solve so the two cannot price the same loop differently: a loop whose outlet is over the saturation line comes back saturated rather than subcooled. */
+const loopDesignH = ci => {
+  const c = satOfCirc(ci), a = COOLANT[priD().cool], dT = coreDT0();
+  const hf = satH(c, c.p0), boils = hOfT(c, c.Tref + dT/2) > hf;
+  const hIn = boils ? hf : hOfT(c, c.Tref - dT/2);
+  return {c, hIn, hOut: hIn + a.cp*dT, boils};
 };
 /* a PART id and never a circuit index: any drawing edit renumbers those, and the key is on the snapshot */
 const circKey = ci => { if(ci === null || ci === undefined || ci < 0) return null;
@@ -1246,7 +1271,8 @@ const netHole = ed => ed.kind === "break" || ed.kind === "vent" || ed.kind === "
 /* MPa; rho is the MEAN of the two ends, because either end's own value turns on which way round netBuild() pushed the edge. Each end weighs what stands AT it: a steam nozzle on a vessel is a column of steam, and priced at the vessel's mixture a 1.4 m exhaust duct outweighs the whole vacuum span it works in. */
 const staticH = (net, ed, s) => {
   const dz = net.z[ed.u] - net.z[ed.v], F = net.F;
-  const rhoAt = i => gasEnd(F, ed.gasAt, i) ? F.rhoG[i] : F.rho[i];
+  const rhoAt = i => gasEnd(F, ed.gasAt, i) ? F.rhoG[i]
+                   : liqEnd(F, ed.liqAt, i) ? F.rhoL[i] : F.rho[i];
   let h = dz === 0 ? 0 : (rhoAt(ed.u) + rhoAt(ed.v))/2 * G_MPA * dz;
   if(ed.poolAt !== undefined) h += (ed.poolAt === ed.u ? 1 : -1)*poolH(net, s, ed.poolAt);
   return h;
@@ -1311,6 +1337,9 @@ function netEdges(){
   /* A nozzle draws the steam off the top only where there IS a top: a vessel with a level keeps the water it separated, a tee has nowhere to put it and passes its own mixture. Asked of the part, never of the run's kind. */
   const separates = nid => { const p = partOfNode(nid), R = p && ROLE[p.role];
     return !!(R && (p.role === "sg" || p.role === "core" || R.thermal === "sink" || tankIdOf(nid))); };
+  /* and the outlet below the surface hands over the water it stands in. A tank only: a shell pool is fixed and a hotwell drain is already priced at its own liquid, and a riser off the core is a mixture that must reach the drum as one. */
+  const drains = nid => { const t = tankIdOf(nid);
+    return !!t && D.tanks[t] && clamp(D.tanks[t].level ?? 0, 0, 100) < 100; };
 
   /* two half-length edges in series add their K, so the bends, the nozzles and any in-line throttle go on ONE half only */
   for(const r of net){
@@ -1346,6 +1375,8 @@ function netEdges(){
         const fp = partOf(far) || partOf(far.slice(0, -1));
         if(fp && fitMode[fp.id] === "relief"){
           if(at) eb.gasAt = v; else ea.gasAt = u; } }
+      if(ea.gasAt === undefined && drains(coreFold(ends[0]))) ea.liqAt = u;
+      if(eb.gasAt === undefined && drains(coreFold(ends[1]))) eb.liqAt = v;
       edges.push(ea, eb);
       continue;
     }
@@ -1708,6 +1739,7 @@ function netFinish(net2, ctx){
   /* STRUCTURAL: a node every edge touching it reaches through vapour is a steam space, and nothing is named */
   // the nodes a steam nozzle draws on, so the field prices a vapour density for those and no others
   net2.gasNodes = [...new Set(edges.filter(ed => ed.gasAt !== undefined).map(ed => ed.gasAt))];
+  net2.liqNodes = [...new Set(edges.filter(ed => ed.liqAt !== undefined).map(ed => ed.liqAt))];
   net2.vapour = new Uint8Array(net2.n);
   { const any = new Uint8Array(net2.n);
     net2.vapour.fill(1);
@@ -2367,6 +2399,23 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
                            coreDT:0, P:P.P0, pCore:P.P0}, over);
   for(const fid of net.fitIds) if(net.fitMode[fid]==="throttle")
     s.valve[fid] = fitTies(fid) ? 0 : 1;
+  /* ...but not ISOTHERMAL on the core's own circuit: the pump is bought for the loop it runs, so the reference prices the hot side as the mixture the design state puts there. loopDesignH() is the same door loopHeadOf() reads, and a hold tank keeps netHAt()'s answer because holdSeedH() owns it. */
+  { const ci = nodeGraph().coreCirc;
+    if(ci >= 0 && !(over && over.hBy)){
+      const d = loopDesignH(ci), hf = satH(d.c, d.c.p0), hot = hotReach();
+      const hBy = s.hBy = Object.assign({}, s.hBy);
+      const holdNode = {};
+      for(const id in net.tankNode) if(D.tanks[id] && D.tanks[id].hold) holdNode[net.tankNode[id]] = 1;
+      for(let i=0;i<net.n;i++){
+        if(holdNode[i]) continue;
+        const nid = net.name[i];
+        if(circOfNode(coreFold(nid)) !== ci) continue;
+        const rk = runKeyOfNode(nid);
+        hBy[nid] = rk ? (hot.runs[rk] ? d.hOut : d.hIn)
+                 : net.coreSet.has(i) ? d.hOut
+                 : net.tankIdByNode[i] !== undefined ? hf
+                 : hot.nodes[nid] ? d.hOut
+                 : d.hIn; } } }
   /* a standby train is STOPPED, off the same pumpDem0() resetPlant() seeds s.flowBy from; refOpen is the wide-open pass and wants every train turning */
   if(!s.refOpen && !s.flowBy)
     s.flowBy = Object.fromEntries(pumpIds().map(id => [id, pumpDem0(id)]));

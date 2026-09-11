@@ -98,13 +98,13 @@ function matRegions(){
                spanD:new Float64Array(N).fill(NaN), thick:new Float64Array(N).fill(NaN)}; matRegSig=sig;
   return matRegCache;
 }
-function matRegionAt(x,y){
+/* Any region, the ship included: water lands on a floor whether or not a wall is round it. */
+function matRegionIn(x,y){
   if(x==null||x<0||x>=GW||y==null||y<0||y>=GH) return null;
   const R=matRegions(), r=R.of[y*GW+x];
-  if(r<0) return null;
-  const g=R.regions[r];
-  return g.bounded ? g : null;
+  return r<0 ? null : R.regions[r];
 }
+function matRegionAt(x,y){ const g=matRegionIn(x,y); return g && g.bounded ? g : null; }
 /* A tight cell is in no region of its own, so it speaks for what it walls - the first of the two, where it is shared. */
 function matWallRegionAt(x,y){
   if(x==null||x<0||x>=GW||y==null||y<0||y>=GH) return null;
@@ -119,6 +119,7 @@ function matSealCells(x,y){
 }
 const matRegionsBounded = () => matRegions().regions.filter(g=>g.bounded);
 function matRegionOf(p){ return p ? matRegionAt(p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : null; }
+const matRegionInOf = p => p ? matRegionIn(p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : null;
 
 /* Edges, not a field on a region: a hole belongs to both sides equally, and one whose sides are the same volume is absent. */
 const HOLE_A = () => MPC*ROOM_DEPTH;          // m2
@@ -287,10 +288,13 @@ function regionFlooded(s,g){
   return {bot, rows: d/MPC, d};
 }
 
+/* Share of a machine's height the water must cover before it drowns: the motor and the electrics stand off the floor, set by the user 11/09/26. */
+const FLOOD_DROWN = 2/3;
+const floodDrowns = (p, line) => line <= p.y + p.h*(1 - FLOOD_DROWN);
 // the water surface over a part, in rows from the top, or null
 function regionFloodLine(s,p){
   if(!p) return null;
-  const g = matRegionOf(p); if(!g) return null;
+  const g = matRegionInOf(p); if(!g) return null;
   const f = regionFlooded(s,g); if(!f) return null;
   const line = f.bot + 1 - f.rows;
   return (p.y + p.h > line) ? line : null;

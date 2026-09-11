@@ -279,37 +279,55 @@ function shellInitTooltip(){
     tip.style.left=x+"px"; tip.style.top=y+"px";
   };
   // the shape of the scale, not its value: a live needle goes through set()
-  const barSig=g=>!g?"":[g.lo,g.hi,g.dp,g.zones.map(z=>z[0]).join(","),
-                         (g.lim||[]).map(L=>L[0]+L[1]).join(",")].join("|");
+  const barSig=g=>!g?"":[g.lo,g.hi,g.dp,g.zones.map(z=>z[0]).join(","),(g.lim||[]).length].join("|");
+  /* what the box IS, never what it reads: a cell tooltip's body carries live numbers, so keying the
+     rebuild on the text tore the box down and re-parked it every frame - that was the flashing */
+  const tipSig=t=>[t.title||"",barSig(t.g)].join("␟");
+  let bodyEl=null, vrdEl=null, vrdWas=null, limEls=[];
   const buildCanvas=t=>{
     const g=t.g;
     viewAt="";                       // a new box is a new size, so re-park it
-    tip.textContent="";
+    tip.textContent=""; limEls=[]; vrdEl=null; vrdWas=null;
     const head=KIT.el("div","tip-head");
     const b=KIT.el("b"); b.textContent=t.title||""; head.appendChild(b);
     if(g){
-      const z=bandZone(g);
-      const zs=KIT.el("span","tip-verdict"); zs.textContent=z[2]; zs.style.color=z[1];
-      head.appendChild(zs);
-      for(const L of (g.lim||[])){
-        const ls=KIT.el("span","tip-lim"); ls.textContent=L[1]+" "+L[0].toFixed(g.dp);
-        head.appendChild(ls);
+      vrdEl=KIT.el("span","tip-verdict"); head.appendChild(vrdEl);
+      for(let i=0;i<(g.lim||[]).length;i++){
+        const ls=KIT.el("span","tip-lim"); head.appendChild(ls); limEls.push(ls);
       }
     }
     tip.appendChild(head);
-    const p=KIT.el("p"); p.textContent=t.body||""; tip.appendChild(p);
+    bodyEl=KIT.el("p"); tip.appendChild(bodyEl);
     bar = g ? KIT.band({lo:g.lo,hi:g.hi,zones:g.zones,dp:g.dp,lim:g.lim,v:g.v}) : null;
     if(bar) tip.appendChild(bar.el);
   };
+  const paintCanvas=t=>{
+    const g=t.g;
+    if(bodyEl && bodyEl.textContent!==(t.body||"")) bodyEl.textContent=t.body||"";
+    if(!g) return;
+    const z=bandZone(g), sig=z[2]+"␟"+z[1];
+    if(vrdEl && sig!==vrdWas){ vrdWas=sig; vrdEl.textContent=z[2]; vrdEl.style.color=z[1]; }
+    const lim=g.lim||[];
+    for(let i=0;i<limEls.length;i++){
+      const s=lim[i][1]+" "+lim[i][0].toFixed(g.dp);
+      if(limEls[i].textContent!==s) limEls[i].textContent=s;
+    }
+  };
   /* the HTML source wins: a rail sits on top of the canvas, whatever the hit test reads */
   tipSync=()=>{
-    if(owner==="html") return;
+    /* a rail that rebuilds under the pointer takes its element away without ever firing `out`, and
+       the canvas stayed locked out for the rest of the run - ask the pointer, not the event */
+    if(owner==="html"){
+      if(cur && cur.isConnected && cur.matches(":hover")) return;
+      hide();
+    }
     const t=tipHover();
     if(!t){ if(owner==="canvas") hide(); return; }
-    const key=[t.title||"",t.body||"",barSig(t.g)].join("␟");
-    if(key!==cvKey || owner!=="canvas"){
-      cvKey=key; owner="canvas"; buildCanvas(t); KIT.show(tip,true);
+    const sig=tipSig(t);
+    if(sig!==cvKey || owner!=="canvas"){
+      cvKey=sig; owner="canvas"; buildCanvas(t); KIT.show(tip,true);
     }
+    paintCanvas(t);
     if(bar) bar.set(t.g.v);
     placeView();
   };

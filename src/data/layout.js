@@ -176,8 +176,36 @@ const loopHotInlet = p => { const R = p && ROLE[p.role];
   if(!R || R.thermal !== "transfer") return null;
   const IN = roleIns(p)[0];
   return IN ? coreFold(p.id+IN.a) : null; };
-/* Which runs still carry what the core sent out: asked of the transfer machine's declared primary INLET, never of the run's KIND. */
-const runHotSide = r => { const e = runPartEnds(r.a, r.b, r.sa, r.sb); if(!e) return false;
+/* Which face the cold leg lands on; the other declared ports are the outlet the mixture leaves by. */
+const coreInFace = id => { const p = partOf(id), R = p && ROLE[p.role]; return (R && R.inlet) || null; };
+/* Which runs still carry what the core sent out. A transfer machine declares its own hot inlet; a direct cycle declares nothing, so the walk runs from the core's OUTLET face to the first vessel that separates the mixture - a drum, a shell, a sink - and never through a pump or back through the core's own inlet. */
+const hotSepAt = n => { const p = partOf(n) || partOf(n.slice(0,-1)), R = p && ROLE[p.role];
+  return !!(R && (R.thermal === "transfer" || R.thermal === "sink" || p.role === "tank")); };
+function hotReach(){
+  const slot = graphSlot("hotReach"), was = slot.get(1);
+  if(was) return was;
+  const G = nodeGraph(), out = {runs:{}, nodes:{}};
+  slot.set(1, out);
+  const key = (u,v) => u<v ? u+"|"+v : v+"|"+u;
+  const runOf = {};
+  for(const r of pipeNetwork()) runOf[key(r.a+r.sa, r.b+r.sb)] = r.key;
+  const seen = {}, stack = [];
+  for(const p of LAY.parts){ if(p.role !== "core") continue;
+    const inF = coreInFace(p.id);
+    for(const n of (G.nodesOf[p.id]||[])) seen[n] = 1;      // the fold is cut: the cold leg is not what the core sent out
+    for(const f in (ROLE.core.ports||{})) if(f !== inF && G.adj[p.id+f]) stack.push(p.id+f); }
+  while(stack.length){ const u = stack.pop();
+    for(const v of (G.adj[u]||[])){
+      if(seen[v]) continue;
+      seen[v] = 1; out.nodes[v] = 1;
+      const rk = runOf[key(u,v)]; if(rk) out.runs[rk] = 1;
+      const p = partOf(v) || partOf(v.slice(0,-1));
+      if(hotSepAt(v) || (p && p.role === "pump")) continue;
+      stack.push(v); } }
+  return out;
+}
+const runHotSide = r => { if(hotReach().runs[r.key]) return true;
+  const e = runPartEnds(r.a, r.b, r.sa, r.sb); if(!e) return false;
   return e.some(({p,f}) => { const nd = loopHotInlet(p); return !!nd && nd === coreFold(p.id+f); }); };
 /* A pump on no primary LOOP is priced round the circuit it discharges into, each run at its OWN duty: charged the pump's whole flow instead, an emergency feed pump's 139 mm discharge line puts 5 MPa of system curve on the feed pump. One flat design state, because satOfCirc().Tref is undefined off the core's circuit. */
 const circHeadOf = id => {
@@ -192,31 +220,34 @@ const circHeadOf = id => {
     dp += K*w*w/(2*rho*A*A); }
   return dp/1e6;
 };
-const loopHeadOf = id => {
+const loopHeadOf = (id, outs) => {
   const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return circHeadOf(id);
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
   const w = RATED_KW()/(a.cp*coreDT0()*n);
-  const c = satOfCirc(nodeGraph().coreCirc), dT = coreDT0();
+  const dsg = loopDesignH(nodeGraph().coreCirc), c = dsg.c;
   const stAtH = h => { const m = mixState(c, c.p0, h, {x:0, rho:0, b:0});
     return {rho: Math.max(m.rho, 1e-3), mu: muMixOf(c, m.x)}; };
-  const hf = satH(c, c.p0), boils = hOfT(c, c.Tref + dT/2) > hf;
-  const hIn = boils ? hf : hOfT(c, c.Tref - dT/2), hOut = hIn + a.cp*dT;
+  const hIn = dsg.hIn, hOut = dsg.hOut, boils = dsg.boils;
   const hotSt = stAtH(hOut), coldSt = stAtH(hIn);
   const rhoHot = hotSt.rho, rhoCold = coldSt.rho;
   const inLoop = pid => coreOf(pid) === pid || L.partLoop[pid] === li;
   const dpOf = (K, Dm, rho) => { const A = Math.PI/4*Dm*Dm; return K*w*w/(2*rho*A*A); };
   let dp = 0;
   for(const r of pipeNetwork()){ if(!inLoop(r.a) || !inLoop(r.b)) continue;
-    const mm = runBoreMm(r), Dm = mm/1000, st = runHotSide(r) ? hotSt : coldSt;
+    const mm = runBoreMm(r), Dm = mm/1000, hot = runHotSide(r), st = hot ? hotSt : coldSt;
     const K = fricOf(mm/BORE_REF, w, st.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
-    dp += dpOf(K, Dm, st.rho); }
+    const d = dpOf(K, Dm, st.rho); dp += d;
+    if(outs) (outs.byRun || (outs.byRun = {}))[r.key] = {dp:d/1e6, rho:st.rho, hot, K, mm}; }
   // a machine's internal path is priced at BORE_REF over NET_COMP_LEN (compC)
   for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
     const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
     const hot = loopHotInlet(p);
     // the HOT path only, which is the one the declaration puts first
-    { const IN = R.internal[0]; if(IN.K > 0)
-      dp += dpOf(IN.K, BORE_REF/1000, hot === coreFold(pid+IN.a) ? rhoHot : rhoCold); } }
+    { const IN = R.internal[0]; if(IN.K > 0){
+      const isHot = hot === coreFold(pid+IN.a), d = dpOf(IN.K, BORE_REF/1000, isHot ? rhoHot : rhoCold);
+      dp += d;
+      if(outs) (outs.byRun || (outs.byRun = {}))["part:"+pid] = {dp:d/1e6, rho:isHot?rhoHot:rhoCold, hot:isHot, K:IN.K, mm:BORE_REF}; } } }
+  if(outs){ outs.w = w; outs.hIn = hIn; outs.hOut = hOut; outs.rhoHot = rhoHot; outs.rhoCold = rhoCold; outs.boils = boils; }
   return dp/1e6;
 };
 const pumpHeadSuggest = id => {
@@ -542,7 +573,7 @@ function nodeGraph(){
   // every term of sig is a sigMemo keyed on DGEN, so an unchanged DGEN is an unchanged sig
   if(nodeGraphCache && nodeGraphGen===DGEN) return nodeGraphCache;
   // fittingSig(): a mode change moves no cell but changes the fold and the gate. gridSig(): graphSlot() hangs a GWxGH array off this graph.
-  const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig()+gridSig();
+  const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig();
   nodeGraphGen=DGEN;
   if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
   const adj={}, nodesOf={}, runPorts={};
@@ -1336,7 +1367,7 @@ function pipeMap(){
 }
 /* One row per part ROLE, the network + radiation contract. `internal` {a,b,kind} is an edge through the component, face a to face b; `head` puts a pump's own MPa on it, a the SUCTION and b the discharge. `v` m/s and `len` m are the path's DUCT - the velocity its flow area is sized at and the length the water is accelerated over; a path that is not a duct states neither and carries no inertance. `na`/`nb` name each end (five characters at most). `fold` are faces that collapse onto the bare part id. `mu` is attenuation per cell of chord crossed. `ports` is a face WHITELIST, not a count ("*" pools all four). `thermal` is source|transfer|sink|none. `tsurv` is K in the AIR AROUND the machine and `pburst` kPa of blast overpressure, both NULL for structure. A part built with no role takes radMu()'s 0.75 fallback. */
 const ROLE = {
-  core:  {internal:null, fixed:null, fold:["r","b"], kEnd:2, mu:0.50, sgtr:false,
+  core:  {internal:null, fixed:null, fold:["r","b"], inlet:"b", mu:0.50, sgtr:false,
           ports:{r:4, b:5}, thermal:"source", tsurv:1200, pburst:200},
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:450, pburst:35},
@@ -1364,7 +1395,7 @@ const ROLE = {
           ports:{}, thermal:"none", tsurv:340, pburst:20},
   /* One role for every tank: what it is made of and what is behind it are per-instance (D.tanks). Faces fold, because a tank's faces are the same water. tsurv/pburst are the ROLE's floor and a heavy vessel states its own. */
   tank:  {internal:null, fixed:{type:"tank"}, fold:["t","b","l","r"], mu:0.65, sgtr:false,
-          ports:{"*":2}, thermal:"none", tsurv:420, pburst:100},
+          ports:{"*":2}, thermal:"none", tsurv:420, pburst:25},
   bkp:   {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:350, pburst:20},
   catcher: {internal:null, fixed:null, fold:null, mu:0.55, sgtr:false,
@@ -2110,8 +2141,8 @@ function layoutMeasure(){
   return {pipe,sec,dead,head,exposure,access,dose,sep,mass,pzrOK,pzrK,pzrConn,turbConn,sgNoSteam,sgNoRelief,ihxIdle,pumpNoDis,tankZ,injZ:injZ===null?0:injZ,radK,peak,
     inertiaK: 1+0.012*(pipe+sec)};
 }
-// the arrangement half of designSig(): id + grid position only, so a bench slider that moves nothing does not invalidate rad.js's kernels. LAY is null before the first buildLayout()
-const laySig = sigMemo(() => LAY ? LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";") : "");
+// the arrangement half of designSig(): id + grid position + hull only, so a bench slider that moves nothing does not invalidate rad.js's kernels; the hull because every cache keyed here is indexed Y*GW+X. LAY is null before the first buildLayout()
+const laySig = sigMemo(() => (LAY ? LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";") : "")+gridSig());
 
 /* Per-table signatures, not JSON.stringify(D): dbPanelSig compares this every frame and ~150 pipe cells make that a measured hot spot. */
 const D_SCALARS=()=>{ const o={};

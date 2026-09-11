@@ -314,26 +314,35 @@ function crFaultsBuild(container){
   const tools={};
   for(const T of toolFaults()){
     const row=KIT.el("div","cr-flt-row");
-    const b=scram(T.label,{onClick:()=>{ TOOL.set(T.id); }});
-    KIT.tip(b.el,T.label,T.tip);
-    row.appendChild(b.el);
-    let kind=null, num=null;
+    let b=null, kind=null, num=null;
+    // INJECT has no key of its own: picking a kind is what arms it
+    if(T.id!=="inject"){
+      b=scram(T.label,{onClick:()=>{ TOOL.set(T.id); }});
+      KIT.tip(b.el,T.label,T.tip);
+      row.appendChild(b.el);
+    }
     if(T.id==="blast"){
       num=KIT.numInput({val:FAULT.blastMPa, unit:"MPa", dp:2, title:"BLAST SIZE",
         tip:"Overpressure at the cell you click. The layer is banded in kilopascals, and 0.2 MPa there is already enough to open a pressure vessel.",
         onChange:v=>{ FAULT.blastMPa=Math.max(0,v); }});
-    } else {
+    } else if(T.id==="inject"){
       kind=KIT.segSel(INJECT_KIND.map(k=>k.label),{onSelect:i=>{
-        const k=INJECT_KIND[i]; FAULT.injectKind=k.id; FAULT.injectRate=k.rate;
-        kind.set(i); num.set(k.rate); num.el.querySelector(".kit-numinput-unit").textContent=k.unit; }});
-      kind.set(INJECT_KIND.findIndex(k=>k.id===FAULT.injectKind));
+        const k=INJECT_KIND[i], again=TOOL.active==="inject" && FAULT.injectKind===k.id;
+        FAULT.injectKind=k.id;
+        num.set(k.rate); num.el.querySelector(".kit-numinput-unit").textContent=k.unit;
+        if(again) TOOL.set("select"); else if(TOOL.active!=="inject") TOOL.set("inject"); }});
+      KIT.tip(kind.el,T.label,T.tip);
       num=KIT.numInput({val:injectRow().rate, unit:injectRow().unit, dp:2, title:"INJECT RATE",
         tip:"Per second, in the chosen kind's own units, added every tick the button is held.",
         onChange:v=>{ injectRow().rate=v; }});
       row.appendChild(kind.el);
+    } else {
+      num=KIT.numInput({val:T.drain.rate, unit:T.drain.unit, dp:2, title:T.label+" RATE",
+        tip:"Per second, in "+T.drain.unit+", taken every tick the button is held.",
+        onChange:v=>{ T.drain.rate=Math.max(0,v); }});
     }
     row.appendChild(num.el);
-    tools[T.id]={b,row};
+    tools[T.id]={b,kind,row};
   }
   const black=scram("STATION BLACKOUT",{onClick:()=>act("blackout")});
   KIT.tip(black.el,"STATION BLACKOUT","Cuts main power to the coolant pumps.");
@@ -345,7 +354,9 @@ function crFaultsBuild(container){
 }
 function crFaultsSync(h){
   if(!P) return;
-  for(const id in h.tools) h.tools[id].b.set({on:TOOL.active===id});
+  for(const id in h.tools){ const t=h.tools[id];
+    if(t.b) t.b.set({on:TOOL.active===id});
+    if(t.kind) t.kind.set(TOOL.active===id ? INJECT_KIND.findIndex(k=>k.id===FAULT.injectKind) : -1); }
   /* Its own class, never key.set({on}) - menuKey() already owns `on` for whether the menu is open,
      and driving it from two places is the conflict this drawer exists to remove. */
   const armed=toolArmed();

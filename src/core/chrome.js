@@ -123,8 +123,8 @@ function hatch(x,y,w,h,col,a,pitch,lw){
   ctx.restore();
 }
 /* the PLANT's clock, not the wall's, so a paused board stops flashing */
-function lamp(x,y,col){
-  ctx.beginPath(); ctx.arc(x,y,4,0,7);
+function lamp(x,y,r,col){
+  ctx.beginPath(); ctx.arc(x,y,r,0,7);
   ctx.fillStyle = (col===C.red && (fxClock()*1000)%900<450) ? "#5a1109" : col;
   ctx.fill();
 }

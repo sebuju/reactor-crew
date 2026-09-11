@@ -29,9 +29,11 @@ function trRateSlots(){
   return {mid: mid>1?mid:null, fast};
 }
 const trRateLab = v => v==null ? "" : v===Infinity ? "MAX" : v===TR_VLD ? "VLD"
+  : v > 0 && v < 1 ? "X/"+Math.round(1/v)
   : (Number.isInteger(v) ? v : v.toFixed(1))+"X";
-/* a slot answers null when it holds nothing: a key that does nothing and a cell that is not drawn. */
-const TR_RATES = [["0",()=>0,"0X"],["1",()=>0.2,"0.2X"],["2",()=>0.5,"0.5X"],
+/* a slot answers null when it holds nothing: a key that does nothing and a cell that is not drawn.
+   X/40 is tools/wavemock.html's slowest, the one speed a blast front can be watched crossing the room at. */
+const TR_RATES = [["0",()=>0,"0X"],["8",()=>0.025,"X/40"],["1",()=>0.2,"X/5"],["2",()=>0.5,"X/2"],
                   ["3",()=>1,"1X"],["4",()=>trRateSlots().mid,"MID RATE"],
                   ["5",()=>trRateSlots().fast,"FAST RATE"],
                   ["6",()=>Infinity,"MAX"],["7",()=>TR_VLD,"VLD"]];

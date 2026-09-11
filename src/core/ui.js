@@ -27,6 +27,11 @@ const vScr=p=>{ const o=vOrigin();
 const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
 // a point measured on a hosted canvas passes vIn() too, so it is excluded here
 const vHit=p=>!ui.ptrHost&&vIn(p);
+/* The pointer in plant units, taken once a frame while ctx is still at base scale. vOrigin() snaps on
+   the LIVE transform, so the same call made INSIDE the view reads a different origin from the one
+   findTip() matches against - a cell out, at every boundary, for one frame. */
+let vPtr=null;
+const vPtrSet=()=>{ vPtr = vHit(ui.ptr) ? vPt(ui.ptr) : null; };
 function vBox(x,y,w,h){ VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h; }
 function vXf(){ const m=ctx.getTransform&&ctx.getTransform();
   return m&&m.a ? {k:m.a, ex:m.e, ey:m.f} : {k:1, ex:0, ey:0}; }
@@ -208,7 +213,13 @@ const TOOLS=[
   {id:"blast", sc:"operate", label:"BLAST", stick:true, fault:true,
    tip:"Click a room cell to set a blast off there, at the overpressure in the box beside this key. It arrives in that cell and spreads out from it as a wave, so what it wrecks depends on how far away it is."},
   {id:"inject", sc:"operate", label:"INJECT", stick:true, fault:true,
-   tip:"Hold the left button on a cell and it adds at the rate in the box beside this key, every tick, until you let go. The right button takes away instead. What it adds is the kind chosen beside it: heat and gas land in a room cell, fluid lands in the machine or pipe under the pointer."},
+   tip:"Pick a kind to arm it, and pick it again to put it down. Hold the left button on a cell and it adds that kind at the rate in the box beside it, every tick, until you let go. Heat and the gases land in a room cell; coolant lands in the machine or pipe under the pointer."},
+  {id:"rmheat", sc:"operate", label:"REMOVE HEAT", stick:true, fault:true, drain:{kind:"heat", unit:"kW", rate:1000},
+   tip:"Hold the left button on a room cell and it takes heat out of the cell's air at the rate in the box beside this key, every tick, until you let go."},
+  {id:"rmgas", sc:"operate", label:"REMOVE GAS", stick:true, fault:true, drain:{kind:"gas", unit:"kg/s", rate:50},
+   tip:"Hold the left button on a room cell and it takes gas out at the rate in the box beside this key: the cell's whole inventory in proportion, hydrogen, oxygen, air and steam alike, the way a vent set does."},
+  {id:"rmliq", sc:"operate", label:"REMOVE LIQUID", stick:true, fault:true, drain:{kind:"fluid", unit:"kg/s", rate:10},
+   tip:"Hold the left button on a machine or a pipe and it takes coolant out of it at the rate in the box beside this key. It is booked against `inject`, so the ledger still closes."},
 ];
 const toolRow = id => TOOLS.filter(t=>t.id===id)[0] || null;
 const toolArmed = () => { const t=toolRow(TOOL.active); return !!(t && t.stick); };
@@ -219,7 +230,7 @@ TOOL.set = id => {
   const next = (id === TOOL.active && id !== "select") ? "select" : id;
   if(next === TOOL.active) return next;
   if(TOOL.active === "paint") matPen = null;
-  if(TOOL.active === "inject") injectStop();
+  if(injectTool(TOOL.active)) injectStop();
   ui.drag = null;
   ctxClose();
   TOOL.active = next;
@@ -237,27 +248,35 @@ function matLiftAt(pt){ const c=cellAt(pt);
 let matPen = null;
 /* The two fault tools' own dials. Tool state like matPen, never on D and never on S - what reaches S
    is the act, and only when a button goes down. */
-const FAULT={blastMPa:5, injectKind:"heat"};
+const FAULT={blastMPa:1, injectKind:"heat"};
+// the room tells only hydrogen, oxygen and the rest apart, and the rest above air is steam, so no other gas is offered
 const INJECT_KIND=[
-  {id:"heat",  label:"HEAT",  unit:"kW",   rate:1000, tip:"Kilowatts into the cell's own air, on the same source term a fire uses."},
-  {id:"gas",   label:"GAS",   unit:"kg/s", rate:0.5, tip:"Hydrogen into the cell. Removing takes the cell's whole gas inventory out in proportion, the way a vent set does."},
-  {id:"fluid", label:"FLUID", unit:"kg/s", rate:10,  tip:"Kilograms onto the node under the pointer - a machine or a pipe run. It is booked against `inject`, so the ledger still closes."},
+  {id:"heat",  label:"HEAT",     unit:"kW",   rate:1000, tip:"Kilowatts into the cell's own air, on the same source term a fire uses."},
+  {id:"h2",    label:"HYDROGEN", unit:"kg/s", rate:50,   tip:"Hydrogen into the cell."},
+  {id:"o2",    label:"OXYGEN",   unit:"kg/s", rate:50,   tip:"Oxygen into the cell."},
+  {id:"steam", label:"STEAM",    unit:"kg/s", rate:50,   tip:"Water vapour into the cell at the cell's own temperature; what the air there cannot hold condenses out."},
+  {id:"fluid", label:"COOLANT",  unit:"kg/s", rate:10,   tip:"Kilograms onto the node under the pointer - a machine or a pipe run. It is booked against `inject`, so the ledger still closes."},
 ];
 const injectRow = () => INJECT_KIND.filter(k=>k.id===FAULT.injectKind)[0] || INJECT_KIND[0];
+const injectTool = id => id==="inject" || !!(toolRow(id) && toolRow(id).drain);
+// INJECT adds the chosen kind; a REMOVE tool takes its own kind away
+const injectOrder = () => { if(TOOL.active==="inject"){ const k=injectRow(); return {kind:k.id, rate:k.rate}; }
+  const t=toolRow(TOOL.active); return t && t.drain ? {kind:t.drain.kind, rate:-t.drain.rate} : null; };
 /* Heat and gas are room-cell fields, so the aim is the bare cell; fluid is plant inventory and lands
    on a node, so it goes through the same hitAimAt() the combat hit does. The difference is here only. */
-const injectAim = pt => { const c=cellAt(pt);
+const injectAim = (pt, kind) => { const c=cellAt(pt);
   if(c[0]<0||c[0]>=GW||c[1]<0||c[1]>=GH) return null;
-  if(FAULT.injectKind !== "fluid") return c[1]*GW+c[0];
+  if(kind !== "fluid") return c[1]*GW+c[0];
   const a=hitAimAt(pt);
   // a run or a machine carries a node; a nozzle and a painted wall do not
   return (a && a.indexOf("port:") !== 0 && a.indexOf("mat:") !== 0) ? a : null; };
 let injectAt=null;
-function injectGo(pt, sign){
-  const a=injectAim(pt);
-  if(a===null || (a===injectAt && S && S.inject && S.inject.rate*sign>0)) return;
+function injectGo(pt){
+  const o=injectOrder(); if(!o) return;
+  const a=injectAim(pt, o.kind);
+  if(a===null || (a===injectAt && S && S.inject && S.inject.kind===o.kind && S.inject.rate===o.rate)) return;
   injectAt=a;
-  act("injectOn", FAULT.injectKind, injectRow().rate*sign, a);
+  act("injectOn", o.kind, o.rate, a);
 }
 function injectStop(){ if(injectAt===null) return; injectAt=null;
   if(typeof S!=="undefined" && S && S.inject) act("injectOff"); }
@@ -414,11 +433,6 @@ function uiDown(e,el){
       matLiftAt(vPt(p));
       return;
     }
-    if(screen==="operate" && TOOL.active==="inject" && vHit(p)){
-      dragOn({type:"inject", v:1, sign:-1});
-      injectGo(vPt(p), -1);
-      return;
-    }
     if(w&&w.type==="runend"){
       if(sel===w.rid) sel=null;
       removeRun(w.rid);
@@ -449,9 +463,9 @@ function uiDown(e,el){
     if(c[0]>=0&&c[0]<GW&&c[1]>=0&&c[1]<GH) act("blast", c[1]*GW+c[0], FAULT.blastMPa*1000);
     return;
   }
-  if(screen==="operate" && TOOL.active==="inject" && vHit(p)){
-    dragOn({type:"inject", v:1, sign:1});
-    injectGo(vPt(p), 1);
+  if(screen==="operate" && injectTool(TOOL.active) && vHit(p)){
+    dragOn({type:"inject", v:1});
+    injectGo(vPt(p));
     return;
   }
   if(screen==="design" && TOOL.active==="paint" && vHit(p)){
@@ -547,7 +561,7 @@ function uiMove(e,el){
         while(y!==c[1]){ y+=Math.sign(c[1]-y); fn(x,y); }
         d.last=c; buildLayout();
       } }
-    else if(d.type==="inject") injectGo(q, d.sign);
+    else if(d.type==="inject") injectGo(q);
     else if(d.type==="paint"){ d.fn(q,e); }
     else if(d.type==="sld"){
       // ORDERED bounds: a scale may run backwards, and clamp(min>max) pins everything low
