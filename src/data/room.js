@@ -463,8 +463,8 @@ function roomStep(s, dt){
     roomJetLiq(src, T, cells, kg, fl.h, fl.c);
     roomAddGas(s, cells, kg*dt, kg);
   });
-  roomFireStep(s, dt, G, src);
   injectRoom(s, dt, src, G);
+  roomFireStep(s, dt, G, src);
 
   /* No network presence at all, the shield/catcher idiom; on the main board, so a blackout leaves the room with nothing but its hull. */
   if(!s.blackout) for(const q of G.parts){
@@ -514,6 +514,14 @@ function roomOpenCells(s, G, key){
     if(c) out.push(c[1]*GW+c[0]);
   }
   return out;
+}
+/* A torn machine drains from the bottom of its box as one stream: shared over every cell of the box, it rained a thread down each column it spans. */
+function roomPourCells(key, cells){
+  if(key.indexOf("break:") !== 0 || !(breakPart(key) || breakCav(key)) || !cells.length) return cells;
+  let lo = -1;
+  for(const i of cells) lo = Math.max(lo, (i/GW)|0);
+  const row = cells.filter(i => ((i/GW)|0) === lo).sort((a,b) => a-b);
+  return [row[row.length>>1]];
 }
 
 /* Hydrogen leaves with the escaping steam and deflagrates past the flammability limits and auto-ignition; ROOM_DEPTH sets every concentration here. */
@@ -807,7 +815,9 @@ const liqRuns = (G, i, j) => !liqShut(G, j) && !(G.pan[i] && !G.pan[j]);
 const liqWater = s => ({M:s.roomWater, E:null, Q:s.roomWQ, rho:WATER_RHO, dmin:WATER_DMIN, O:s.roomPool, oRho:fireRho()});
 const liqMetal = s => ({M:s.roomPool, E:s.roomPoolE, Q:s.roomPoolQ, rho:fireRho(), dmin:POOL_DMIN, O:s.roomWater, oRho:WATER_RHO});
 const liqCap = (q, j) => Math.max(0, q.rho*(ROOM_VCELL - q.O[j]/q.oRho));
-const liqFull = (q, j) => q.M[j] >= liqCap(q, j) - 1e-6;
+/* Bought: a cell this close to full is full. Read as air, the gap makes a column's bottom cell its surface and its lateral donor, and everything over it falls and runs nowhere sideways, so a pour stands a tower with posts beside it. */
+const LIQ_FULL_K = 0.05;
+const liqFull = (q, j) => q.M[j] >= liqCap(q, j)*(1 - LIQ_FULL_K);
 // standing, not falling: on a floor, or on a full cell that stands itself - a stream too big for its column is full all the way down and still holds nothing up
 function liqStands(q, G, i){
   for(let j=i+GW;; j+=GW){
@@ -833,35 +843,61 @@ const LIQ_FALL = Math.sqrt(2*G_SI*MPC)/MPC;   // per second
 const LIQ_MANNING = 0.012;
 /* de Almeida, Bates, Freer and Souvignet 2012: the face takes this share of its own flux and the rest from its two neighbours, or the scheme rings as a checkerboard on a flat floor */
 const LIQ_THETA = 0.7;
-let liqTopS = null, liqSurfS = null, liqSc = null, liqDM = null, liqDE = null, liqVin = null, liqDG = null, liqQ0 = null, liqFallN = null;
+let liqTopS = null, liqSurfS = null, liqSc = null, liqDM = null, liqDE = null, liqVin = null, liqDG = null, liqQ0 = null, liqFallN = null, liqPend = null, liqSeen = null, liqSeenK = 0;
+/* What a cell holds past its own room once it has fallen fills the lowest room its body touches, and a cell it fills joins that body: a liquid does not compress, so a full body lifts its surface or runs out along its floor, it never packs a cell. `from` is where the push enters that body, the donor itself unless it is pushing into a full neighbour; returns the kg placed. */
+function liqSpill(q, G, i, e, tr, pend, from){
+  const N = GW*GH, M = q.M, e0 = e;
+  if(from === undefined) from = i;
+  if(!liqSeen || liqSeen.length !== N){ liqSeen = new Int32Array(N); liqSeenK = 0; }
+  const k = ++liqSeenK, row = Array.from({length:GH}, () => []), head = new Int32Array(GH);
+  const reach = a => { const X = a%GW;
+    for(const b of [a+GW, X > 0 ? a-1 : -1, X < GW-1 ? a+1 : -1, a-GW]){
+      if(b < 0 || b >= N || liqSeen[b] === k || !liqRuns(G, a, b)) continue;
+      liqSeen[b] = k; row[(b/GW)|0].push(b); } };
+  liqSeen[i] = k;
+  if(from !== i){ liqSeen[from] = k; row[(from/GW)|0].push(from); }
+  else reach(i);
+  while(e > 0){
+    let Y = GH-1;
+    while(Y >= 0 && head[Y] >= row[Y].length) Y--;
+    if(Y < 0) break;
+    const b = row[Y][head[Y]++], r = liqCap(q, b) - M[b] - pend[b];
+    if(r > 0){ const m = Math.min(e, r); tr.push(i, b, m); pend[b] += m; e -= m; }
+    if(e > 0) reach(b);
+  }
+  return e0 - e;
+}
 function liqFlow(s, dt, G, q){
   const N = GW*GH, M = q.M, E = q.E, rho = q.rho;
   { let any = false; for(let i=0;i<N;i++) if(M[i] !== 0){ any = true; break; }
     if(!any) return; }
   if(!liqTopS || liqTopS.length !== N){ liqTopS = new Int32Array(N); liqSurfS = new Float64Array(N);
     liqSc = new Float64Array(N); liqDM = new Float64Array(N); liqDE = new Float64Array(N);
-    liqVin = new Float64Array(N); liqQ0 = new Float64Array(N); liqFallN = new Int32Array(N); liqDG = null; }
+    liqVin = new Float64Array(N); liqQ0 = new Float64Array(N); liqFallN = new Int32Array(N); liqPend = new Float64Array(N); liqDG = null; }
   const gas = roomGasFields(s);
   if(!liqDG || liqDG.length !== gas.length) liqDG = gas.map(() => new Float64Array(N));
   const cap = j => liqCap(q, j);
   // flat triples: from, to, kg - all off the SAME field, so the sweep order cannot matter
-  const tr = [], fallN = liqFallN;
-  for(let i=0;i<N-GW;i++){
-    if(!(M[i] > 0) || !liqRuns(G, i, i+GW)) continue;
-    // a stream gains speed as it drops, sqrt(2g*h) after n cells of its own run, so it thins on the way down instead of carrying its first cell's kilograms to the floor
-    const up = i-GW;
-    fallN[i] = up >= 0 && M[up] > 0 && liqRuns(G, up, i) && !liqStands(q, G, up) ? fallN[up] + 1 : 1;
-    const kf = Math.min(1, LIQ_FALL*Math.sqrt(fallN[i])*dt);
-    // what a landing pushed past the cell's own room falls at once
-    const c = cap(i), take = Math.min(Math.max(M[i]*kf, M[i] - c), cap(i+GW) - M[i+GW]);
-    if(take > 0) tr.push(i, i+GW, take);
-    /* ...and what is still past it rides down its own stream into the room left in it, to the floor: a stream is thinner than a cell, and a first-order fall caps one column at cap*LIQ_FALL. */
-    let e = M[i] - Math.max(take, 0) - c;
-    for(let j=i+GW; e > 0 && j < N; j += GW){
-      const r = cap(j) - M[j] - (j === i+GW ? Math.max(take, 0) : 0);
-      if(r > 0){ const m = Math.min(e, r); tr.push(i, j, m); e -= m; }
-      if(j+GW >= N || !liqRuns(G, j, j+GW)) break;
+  const tr = [], fallN = liqFallN, pend = liqPend.fill(0);
+  for(let i=0;i<N;i++){
+    if(!(M[i] > 0)) continue;
+    let e = M[i] - cap(i);
+    if(i < N-GW && liqRuns(G, i, i+GW)){
+      // a stream gains speed as it drops, sqrt(2g*h) after n cells of its own run, so it thins on the way down instead of carrying its first cell's kilograms to the floor
+      const up = i-GW;
+      fallN[i] = up >= 0 && M[up] > 0 && liqRuns(G, up, i) && !liqStands(q, G, up) ? fallN[up] + 1 : 1;
+      const kf = Math.min(1, LIQ_FALL*Math.sqrt(fallN[i])*dt);
+      // what a landing pushed past the cell's own room falls at once
+      const take = Math.min(Math.max(M[i]*kf, e), cap(i+GW) - M[i+GW]);
+      if(take > 0){ tr.push(i, i+GW, take); pend[i+GW] += take; e -= take; }
+      /* ...and what is still past it rides down its own stream into the room left in it, to the floor: a stream is thinner than a cell, and a first-order fall caps one column at cap*LIQ_FALL. */
+      for(let j=i+GW; e > 0 && j < N; j += GW){
+        const r = cap(j) - M[j] - pend[j];
+        if(r > 0){ const m = Math.min(e, r); tr.push(i, j, m); pend[j] += m; e -= m; }
+        if(j+GW >= N || !liqRuns(G, j, j+GW)) break;
+      }
     }
+    if(e > 1e-6) liqSpill(q, G, i, e, tr, pend);
   }
   /* m of head at each cell: the column's surface plus the gas pressing on it, or, for a column draining through its floor, the gas it drains into. Level alone never pushes water out of a pressurised compartment; the pressure does. */
   const top = liqTopS, head = liqSurfS, P = s.roomP, kP = 1000/(rho*G_SI);
@@ -884,17 +920,29 @@ function liqFlow(s, dt, G, q){
     // a falling liquid does not run sideways
     if(!(M[d] > 0) || !liqRuns(G, d, r) || !liqStands(q, G, d) || liqFill(M, rho, d) < q.dmin){ Q[i] = 0; continue; }
     let b = top[r];
-    if(M[b] >= cap(b) - 1e-6) b = (b >= GW && !liqShut(G, b-GW)) ? b-GW : -1;
-    if(b < 0){ Q[i] = 0; continue; }
+    const capped = liqFull(q, b) && !(b >= GW && !liqShut(G, b-GW));
+    // a top full to within LIQ_FULL_K still has that much room, and fills it before the cell over it takes any
+    const topUp = !capped && liqFull(q, b) && cap(b) - M[b] > 1e-6;
+    if(!capped && !topUp && liqFull(q, b)) b = b-GW;
+    // off water, it meets the column beside at that column's own surface: the side of a body is a slope, not a ledge, and only a floor's edge makes a fall
+    let slide = false;
+    if(!capped && d+GW < N && !liqShut(G, d+GW))
+      while(b+GW < N && liqRuns(G, b, b+GW) && !liqFull(q, b+GW)){ b += GW; slide = true; }
+    // a full cell with a ceiling on it has no top to take at, and a slope's foot may hold less than the face pushes: both go on through the body from where they enter (liqSpill())
+    const thru = capped || slide || topUp;
     // the explicit scheme's own Courant bound: a tick never carries a face more than half a cell
     const fMax = hf*MPC/(2*dt);
     f = clamp(f, -fMax, fMax);
     Q[i] = f;
     const a = top[d], kg = Math.abs(f)*ROOM_DEPTH*rho*dt;
-    const key = a*N+b, pq = pair.get(key);
-    if(pq){ pq.kg += kg; pq.faces.push(i); } else pair.set(key, {a, b, kg, faces:[i], k:-1});
+    const key = thru ? -1-(a*N+b) : a*N+b, pq = pair.get(key);
+    if(pq){ pq.kg += kg; pq.faces.push(i); } else pair.set(key, {a, b, kg, faces:[i], k:-1, thru});
   }
   for(const pq of pair.values()){
+    if(pq.thru){
+      const f = pq.kg > 0 ? liqSpill(q, G, pq.a, Math.min(pq.kg, M[pq.a]), tr, pend, pq.b)/pq.kg : 0;
+      for(const i of pq.faces) Q[i] *= f;
+      continue; }
     const kg = Math.min(pq.kg, M[pq.a], cap(pq.b) - M[pq.b]);
     if(kg > 0){ pq.k = tr.length; tr.push(pq.a, pq.b, kg); }
     else for(const i of pq.faces) Q[i] = 0;
@@ -919,6 +967,16 @@ function liqFlow(s, dt, G, q){
     if(E) E[i] += dE[i];
     if(M[i] <= 0){ M[i] = 0; if(E) E[i] = 0; }
     for(let n=0;n<gas.length;n++) gas[n][i] = Math.max(0, gas[n][i] + liqDG[n][i]);
+  }
+  /* Liquid over a standing cell with room in it is resting, not falling: it fills that room now, and what is left stands on a full cell, or the front of a spreading sheet and the foot of a pour leave a skin over the water for a tick. Bottom row first, so one pass settles a column. */
+  for(let i=N-GW-1;i>=0;i--){
+    const b = i+GW, room = cap(b) - M[b];
+    if(!(M[i] > 0) || !(M[b] > 0) || !(room > 0) || !liqRuns(G, i, b) || liqStands(q, G, i) || !liqStands(q, G, b)) continue;
+    const m = Math.min(M[i], room), f = Math.min(1, m/rho/roomVgas(s, b));
+    for(let n=0;n<gas.length;n++){ const g = gas[n][b]*f; gas[n][b] -= g; gas[n][i] += g; }
+    if(E){ const e = E[i]*m/M[i]; E[b] += e; E[i] -= e; }
+    M[b] += m; M[i] -= m;
+    if(M[i] <= 0){ M[i] = 0; if(E) E[i] = 0; }
   }
 }
 /* Liquid landing from outside the room takes the gas room it lands in; that gas goes to the open cells beside it, by face and by the room each has for it. */
@@ -1052,9 +1110,9 @@ function roomFireStep(s, dt, G, src){
       burnt += m; on++;
     });
     s.fireEv.kg += burnt; s.fireEv.q += burnt*row.lhv;
-    // what did not burn in flight is on the deck, over the opening's own cells and not a plume: a liquid falls
-    const per = (kg - burnt)/cells.length;
-    if(per > 0) for(const i of cells){ roomGasDisplace(s, G, i, per/fireRho());
+    // what did not burn in flight is on the deck, at the opening (roomPourCells()) and not a plume: a liquid falls
+    const pour = roomPourCells(key, cells), per = (kg - burnt)/pour.length;
+    if(per > 0) for(const i of pour){ roomGasDisplace(s, G, i, per/fireRho());
       M[i] += per; E[i] += per*cp*(Tin - row.melt); }
   });
   const W = s.roomWater;

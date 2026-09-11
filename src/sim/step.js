@@ -1850,7 +1850,8 @@ function sumpStep(s, dt){
     if(!cells.length || (fl.c && fl.c.burn)) return;
     const kg = (advectOutKg[key] || 0)*(1 - openFlashX(s, fl, cells[0]));
     if(!(kg > 0)) return;
-    for(const i of cells){ roomGasDisplace(s, G, i, kg/cells.length/WATER_RHO); W[i] += kg/cells.length; }
+    const pour = roomPourCells(key, cells);
+    for(const i of pour){ roomGasDisplace(s, G, i, kg/pour.length/WATER_RHO); W[i] += kg/pour.length; }
     book(s, "sump", -kg);
   });
   for(const p of LAY.parts){
