@@ -218,7 +218,7 @@ const TOOLS=[
    tip:"Hold the left button on a room cell and it takes heat out of the cell's air at the rate in the box beside this key, every tick, until you let go."},
   {id:"rmgas", sc:"operate", label:"REMOVE GAS", stick:true, fault:true, drain:{kind:"gas", unit:"kg/s", rate:50},
    tip:"Hold the left button on a room cell and it takes gas out at the rate in the box beside this key: the cell's whole inventory in proportion, hydrogen, oxygen, air and steam alike, the way a vent set does."},
-  {id:"rmliq", sc:"operate", label:"REMOVE LIQUID", stick:true, fault:true, drain:{kind:"fluid", unit:"kg/s", rate:10},
+  {id:"rmliq", sc:"operate", label:"REMOVE LIQUID", stick:true, fault:true, drain:{kind:"fluid", unit:"t/s", rate:10, kg:1000},
    tip:"Hold the left button on a machine or a pipe and it takes coolant out of it at the rate in the box beside this key; on bare deck it takes the water off that cell's floor. It is booked against `inject`, so the ledger still closes."},
 ];
 const toolRow = id => TOOLS.filter(t=>t.id===id)[0] || null;
@@ -255,13 +255,13 @@ const INJECT_KIND=[
   {id:"h2",    label:"HYDROGEN", unit:"kg/s", rate:50,   tip:"Hydrogen into the cell."},
   {id:"o2",    label:"OXYGEN",   unit:"kg/s", rate:50,   tip:"Oxygen into the cell."},
   {id:"steam", label:"STEAM",    unit:"kg/s", rate:50,   tip:"Water vapour into the cell at the cell's own temperature; what the air there cannot hold condenses out."},
-  {id:"fluid", label:"COOLANT",  unit:"kg/s", rate:1000, tip:"Kilograms onto the node under the pointer - a machine or a pipe run - or, on bare deck, water onto that cell's floor, where it falls, runs and stands like a break's. Either way it is booked against `inject`, so the ledger still closes."},
+  {id:"fluid", label:"COOLANT",  unit:"t/s",  rate:10, kg:1000, tip:"Tonnes a second onto the node under the pointer - a machine or a pipe run - or, on bare deck, water onto that cell's floor, where it falls, runs and stands like a break's. Either way it is booked against `inject`, so the ledger still closes."},
 ];
 const injectRow = () => INJECT_KIND.filter(k=>k.id===FAULT.injectKind)[0] || INJECT_KIND[0];
 const injectTool = id => id==="inject" || !!(toolRow(id) && toolRow(id).drain);
-// INJECT adds the chosen kind; a REMOVE tool takes its own kind away
-const injectOrder = () => { if(TOOL.active==="inject"){ const k=injectRow(); return {kind:k.id, rate:k.rate}; }
-  const t=toolRow(TOOL.active); return t && t.drain ? {kind:t.drain.kind, rate:-t.drain.rate} : null; };
+// INJECT adds the chosen kind; a REMOVE tool takes its own kind away. `kg` turns the box's unit into the act's kg/s
+const injectOrder = () => { if(TOOL.active==="inject"){ const k=injectRow(); return {kind:k.id, rate:k.rate*(k.kg||1)}; }
+  const t=toolRow(TOOL.active); return t && t.drain ? {kind:t.drain.kind, rate:-t.drain.rate*(t.drain.kg||1)} : null; };
 /* Heat and gas are room-cell fields, so the aim is the bare cell; fluid is plant inventory where the
    same hitAimAt() the combat hit uses finds a node, and water on the cell's floor where it does not. The difference is here only. */
 const injectAim = (pt, kind) => { const c=cellAt(pt);
