@@ -73,11 +73,33 @@ function liveBegin(msg){
   pump();
 }
 
-/* structured clone carries Float64Array/Infinity/NaN, so no packVal here. */
-function packet(){
+/* the state rides shared memory (`shm.js`); only what cannot - the log, the take tree, the samples - is
+   posted, and only when it moved. A shape that moved remakes the buffer and sends one clone to rebuild on. */
+let SHM = null, logSeenN = -1, logSeenE = null, recSeen = "";
+function logMoved(){
+  const n = LOG.length, e = LOG[n-1] || null;
+  if(n === logSeenN && e === logSeenE) return false;
+  logSeenN = n; logSeenE = e; return true;
+}
+function recMoved(){
+  const t = REC.takes[REC.cur];
+  const tag = REC.cur+"/"+REC.mode+"/"+REC.takes.length+"/"+REC.roots.length+
+              (t ? "/"+t.evs.length+"/"+t.tick0+"/"+t.verdict+"/"+t.assisted : "");
+  if(tag === recSeen) return false;
+  recSeen = tag; return true;
+}
+function packet(jump){
   const s = sampPend; sampPend = [];
-  return {t:"packet", S:snapS(S), tick:S.tick, log:LOG.slice(), rec:recSummary(),
-          samp:s, sps:TR.sps, tickMs:TR.tickMs};
+  const m = {t:"packet", jump:!!jump, tick:S.tick, samp:s, sps:TR.sps, tickMs:TR.tickMs};
+  if(logMoved()) m.log = LOG.slice();
+  if(recMoved()) m.rec = recSummary(); else m.tickEnd = S.tick;
+  if(SHM_ON){
+    if(!(SHM && shmPush(SHM, S))){ SHM = shmNew(S); shmPush(SHM, S);
+      m.shm = SHM.sab; m.S = S; m.log = LOG.slice(); m.rec = recSummary(); }
+    m.seq = SHM.seq;
+    if(SHM.sdirty || m.S) m.strs = SHM.strs.slice();
+  } else m.S = S;
+  return m;
 }
 
 self.onmessage = function(e){
@@ -107,8 +129,8 @@ self.onmessage = function(e){
       return;
     }
     if(msg.t === "frame"){ self.postMessage(packet()); return; }
-    if(msg.t === "seek"){ seek(msg.take, msg.tick); self.postMessage(packet()); return; }
-    if(msg.t === "branch"){ recBranch(msg.take, msg.tick); self.postMessage(packet()); return; }
+    if(msg.t === "seek"){ seek(msg.take, msg.tick); self.postMessage(packet(true)); return; }
+    if(msg.t === "branch"){ recBranch(msg.take, msg.tick); self.postMessage(packet(true)); return; }
     if(msg.t === "bench"){ trBench(); self.postMessage({t:"bench", tickMs:TR.tickMs, rateMax:TR.rateMax}); return; }
     if(msg.t === "stop"){ pumpOn = false; return; }
   }catch(err){

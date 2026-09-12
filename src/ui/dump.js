@@ -35,7 +35,7 @@ function dumpFrames(){
   line.forEach((t, i) => {
     const end = line[i + 1] ? line[i + 1].tick0 : Infinity;
     for(const k of [{tick:t.tick0, S:t.base}, ...t.keys])
-      if(k.tick < end) out.push(k);
+      if(k.tick < end) out.push(k.S ? k : {tick:k.tick, S:keyState(k)});
   });
   return out.sort((a, b) => a.tick - b.tick);
 }

@@ -234,6 +234,9 @@ function recNew(parent, head){
     assisted:parent !== null,
     thin:1,                       // keyframe spacing multiplier; doubles on eviction
   };
+  /* the shape a packed key is poured back into; a run gains keys on S in its first seconds, so it is
+     re-taken whenever the walk says the shape moved rather than pinned to the take's own base */
+  t.tmpl = t.base; t.tmplSig = shmSig(S);
   REC.takes.push(t);
   return t;
 }
@@ -291,17 +294,26 @@ function recTick(){
   const t = recBoot();
   t.tickEnd = S.tick;
   if(S.tick >= t.nextKey){
-    recKeyAdd(t, {tick:S.tick, S:snapS(S), net:plantStateSave(), lg:LOG.slice(), ei:t.evs.length});
+    const pk = shmKeySave(S);
+    const k = {tick:S.tick, net:plantStateSave(), lg:LOG.slice(), ei:t.evs.length};
+    if(pk.sig === t.tmplSig){ k.pk = pk; k.tmpl = t.tmpl; }
+    else { k.S = snapS(S); t.tmpl = k.S; t.tmplSig = pk.sig; }
+    recKeyAdd(t, k);
     t.nextKey = S.tick + kfSpan(t);
     if(REC.keyBytes > REC_MAX_KEY_BYTES) recEvict();
   }
 }
 // the one door onto t.keys, so the byte book cannot drift from the list
 function recKeyAdd(t, k){
-  k.bytes = k.bytes || snapBytes(k.S) + snapBytes(k.net) + 32 + 8*k.lg.length;
+  k.bytes = k.bytes || (k.pk ? k.pk.bytes : snapBytes(k.S)) + snapBytes(k.net) + 32 + 8*k.lg.length;
   t.keys.push(k); REC.keyCount++; REC.keyBytes += k.bytes;
 }
 function recKeysTake(keys){ let n=0; for(const k of keys) n += k.bytes; return n; }
+/* the one door onto a key's state: a packed one is values only, poured into a copy of its own template */
+function keyState(k){
+  if(k.S) return k.S;
+  const o = snapVal(k.tmpl); shmKeyLoad(k.pk, o); return o;
+}
 // a take built in the worker arrives with keys and no book: price them here
 function recKeysAdopt(t){ const ks=t.keys; t.keys=[]; for(const k of ks) recKeyAdd(t,k); }
 
@@ -361,7 +373,7 @@ function seek(takeId, tick){
   REC.mode = "replay";
   let src = {tick:own.tick0, S:own.base, net:own.baseNet, lg:own.baseLog, ei:0};
   for(const k of own.keys) if(k.tick <= tick && k.tick >= src.tick) src = k;
-  restoreS(src.S); plantStateLoad(src.net); LOG = src.lg.slice();
+  restoreS(keyState(src)); plantStateLoad(src.net); LOG = src.lg.slice();
 
   let i = src.ei;
   while(S.tick < tick){
@@ -538,7 +550,8 @@ function simSpawn(opt, onFail){
       w.postMessage({t:"live", head:recHead(), seed:((opt&&opt.seed)||0)>>>0,
                      diceOff:!!(opt&&opt.diceOff), rate:TR.rate, paused:TR.paused}); }
     else if(m.t === "liveok"){ sim.live = true; if(opt && opt.onLive) opt.onLive(id); }
-    else if(m.t === "packet"){ sim.pending = false; if(SIMBOUND === id) simApply(m); }
+    else if(m.t === "packet"){ sim.pending = false; if(m.jump) simSeekDone(sim);
+      if(SIMBOUND === id) simApply(m); }
     else if(m.t === "bench"){ TR.tickMs = m.tickMs; TR.rateMax = m.rateMax; trRateFit(); }
     else if(m.t === "err"){ clearTimeout(timer); give(m.msg); }
   };
@@ -550,7 +563,8 @@ function simKill(id){
   sim.dead = true; sim.live = false;
   try{ sim.w.terminate(); }catch(e){}
   delete SIMS[id];
-  if(SIMBOUND === id) SIMBOUND = null;
+  /* the buffer belongs to that worker: a new plant is a new one, and the old map would read a dead layout */
+  if(SIMBOUND === id){ SIMBOUND = null; SHMV = null; }
 }
 const simKillAll = () => { for(const k in SIMS) simKill(+k); };
 /* bound AFTER it answers, or the first frame paints a plant that has only just been reset */
@@ -558,7 +572,21 @@ const simBind = id => { SIMBOUND = SIMS[id] ? id : null; };
 const simSend = (id, msg) => { const s = SIMS[id]; if(s && !s.dead) s.w.postMessage(msg); };
 const simTell = msg => { if(SIMBOUND !== null) simSend(SIMBOUND, msg); };
 /* the strip's two doors onto the plant: a seek and a fork both step it, so a bound feed does them */
-const trSeek = (take, tick) => { if(simLiveFeed()) simTell({t:"seek", take, tick}); else seek(take, tick); };
+/* a drag asks for a seek per pointer move and the worker replays from a keyframe for each one, so only the
+   newest is ever in flight: the rest would be plants nobody sees, drawn one queued frame late */
+function trSeek(take, tick){
+  const sim = simLiveFeed();
+  if(!sim){ seek(take, tick); return; }
+  if(sim.seekOut){ sim.seekWant = {take, tick}; return; }
+  sim.seekOut = true; sim.seekWant = null;
+  simSend(sim.id, {t:"seek", take, tick});
+}
+function simSeekDone(sim){
+  if(!sim.seekOut) return;
+  sim.seekOut = false;
+  const w = sim.seekWant; sim.seekWant = null;
+  if(w) trSeek(w.take, w.tick);
+}
 const trBranchAt = (take, tick) => { if(simLiveFeed()) simTell({t:"branch", take, tick}); else recBranch(take, tick); };
 
 /* the one door onto a new plant: a reset is a NEW plant and a new plant is a NEW worker, so P is written
@@ -574,13 +602,21 @@ function simRestart(opt){
     "own thread instead. It is the same plant and the same answer, just sharing the frame with the drawing."));
 }
 
-/* `S` is a `let`, so this is the assignment restoreS() already makes */
+/* the viewer's own map onto the worker's shared state; null until a worker sends the buffer */
+let SHMV = null;
+/* `S` is a `let`, so this is the assignment restoreS() already makes; the packet came through structured
+   clone, so it is already this thread's own state and cloning it again is pure garbage. A jump is the one
+   packet whose picture does not follow the last one, so it alone clears the animation the drawing carries. */
 function simApply(m){
-  restoreS(m.S);
-  LOG = m.log;
+  if(m.S){ S = m.S; SHMV = m.shm ? shmAttach(m.shm, S) : null; }
+  if(m.strs && SHMV) SHMV.strs = m.strs;
+  if(!m.S && SHMV) shmPull(SHMV, S, m.seq);
+  if(m.jump){ if(typeof pipeReset==="function") pipeReset(); if(typeof fxReset==="function") fxReset(); }
+  if(m.log) LOG = m.log;
   for(const v of m.samp) histPush(v);
-  REC.cur = m.rec.cur; REC.mode = m.rec.mode;
-  REC.roots = m.rec.roots; REC.takes = m.rec.takes;
+  if(m.rec){ REC.cur = m.rec.cur; REC.mode = m.rec.mode;
+             REC.roots = m.rec.roots; REC.takes = m.rec.takes; }
+  else if(m.tickEnd !== undefined){ const t = REC.takes[REC.cur]; if(t) t.tickEnd = m.tickEnd; }
   if(m.sps !== undefined) TR.sps = m.sps;
 }
 /* one packet per PAINT, never per tick: a frame nobody asked for is never cloned */
