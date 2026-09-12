@@ -142,11 +142,12 @@ const openBoreM = key => {
 };
 
 /* Memoised on the arrangement: everything in here is a fact about where things are, never about what they are doing. */
-let roomCache = null, roomCacheSig = "";
+let roomCache = null, roomSigA = null, roomSigB = null, roomSigC = null, roomCacheSeq = 0;
 function roomGeom(){
   /* A wall is always a wall here, so damage is NOT in this key: roomGeomLive() opens a shot cell. */
-  const sig = laySig()+"|"+pipeSig()+matSig();
-  if(roomCache && roomCacheSig === sig) return roomCache;
+  /* the three terms compared one at a time: joined, this key was built on every layer of every frame */
+  const sA = laySig(), sB = pipeSig(), sC = matSig();
+  if(roomCache && roomSigA === sA && roomSigB === sB && roomSigC === sC) return roomCache;
   const N = GW*GH;
   const occ = new Uint8Array(N);
   const parts = [], runs = [], hull = new Uint8Array(N), face = new Uint8Array(N);
@@ -209,7 +210,7 @@ function roomGeom(){
     turb[i] = 1 + H2_TURB*n/4;
   }
   roomCache = {occ, tight, face, own, pan, turb, parts, runs, shellValves, bx, by, gx, gUp, gDn, hole:null, comp:null};
-  roomCacheSig = sig;
+  roomSigA = sA; roomSigB = sB; roomSigC = sC; roomCacheSeq++;
   return roomCache;
 }
 /* Which cells the air joins without crossing a wall, off the face mask itself; a machine passes ROOM_BLOCK, so it joins. */
@@ -243,7 +244,7 @@ function roomGeomLive(s){
     if(x>=0 && x<GW && y>=0 && y<GH && matWall(x,y)) open += "|"+x+","+y;
   }
   if(!open) return G;
-  const sig = roomCacheSig+open;
+  const sig = roomCacheSeq+open;
   if(roomLiveCache && roomLiveSig === sig) return roomLiveCache;
   const N = GW*GH, hole = new Uint8Array(N);
   for(const k of open.split("|")){ if(!k) continue;

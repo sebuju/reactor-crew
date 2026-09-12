@@ -419,7 +419,12 @@ const corePumpCap=()=>{ let c=0;
 const partPiped=pid=>{ const u=pipeNetwork().usage;
   for(const f in DIRV) if(u[pid+f]) return true;
   return false; };
-const rolePiped=role=>roleAll(role).filter(partPiped);
+const rolePiped=role=>{
+  const m = nodeGraphCache ? graphSlot("rolePiped") : null, was = m && m.get(role);
+  if(was) return was;
+  const out=roleAll(role).filter(partPiped);
+  if(m) m.set(role, out);
+  return out; };
 const roleCount=role=>rolePiped(role).length;
 const sgCount=()=>roleCount("sg");
 const turbCount=()=>roleCount("turb");
@@ -552,7 +557,8 @@ const minPburst=()=>LAY.parts.reduce((m,p)=>{ const v=partPburst(p);
 /* A fitting is in the loop it sits in: leave it off and loopOfKey() answers null, silently costing the loop a leg. */
 const LOOP_ROLE={core:1, sg:1, ihx:1, pump:1, fitting:1};
 /* Over NODES (partId+face, netBuild()'s own key), not parts: a generator carries two paths that do not meet, so a part-level link goes straight through the tube wall. The hold is a WINDOW, never a latch. */
-let nodeGraphCache=null, nodeGraphSig="", nodeGraphGen=-1, nodeGraphHeld=false;
+let nodeGraphCache=null, nodeGraphSigA=null, nodeGraphSigB=null, nodeGraphSigC=null, nodeGraphSigD=null,
+    nodeGraphSeq=0, nodeGraphGen=-1, nodeGraphHeld=false;
 const nodeGraphHold=on=>{ nodeGraphHeld=!!on && !!nodeGraphCache; };
 /* The settled window. COUNTED, so windows may nest: simTick() takes one around the whole tick and step() takes its own inside it. */
 let layDepth=0;
@@ -573,9 +579,12 @@ function nodeGraph(){
   // every term of sig is a sigMemo keyed on DGEN, so an unchanged DGEN is an unchanged sig
   if(nodeGraphCache && nodeGraphGen===DGEN) return nodeGraphCache;
   // fittingSig(): a mode change moves no cell but changes the fold and the gate. gridSig(): graphSlot() hangs a GWxGH array off this graph.
-  const sig=laySig()+"|"+pipeSig()+"|"+fittingSig()+"|"+portSig();
+  /* the four terms compared one at a time: joining them built the paint thread's largest single string,
+     every frame, because sigFresh() moves DGEN every frame */
+  const sA=laySig(), sB=pipeSig(), sC=fittingSig(), sD=portSig();
   nodeGraphGen=DGEN;
-  if(nodeGraphCache && nodeGraphSig===sig) return nodeGraphCache;
+  if(nodeGraphCache && nodeGraphSigA===sA && nodeGraphSigB===sB && nodeGraphSigC===sC && nodeGraphSigD===sD)
+    return nodeGraphCache;
   const adj={}, nodesOf={}, runPorts={};
   const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
   const link=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b); (adj[b]||(adj[b]=[])).push(a); };
@@ -633,7 +642,9 @@ function nodeGraph(){
   const coreSeed = cores.length ? (nodesOf[cores[0].id]||[])[0] : undefined;
   const coreCirc = coreSeed===undefined ? -1 : circuit[coreSeed];
   const inCore = n => coreCircs[circuit[n]]===1;
-  nodeGraphCache={adj, nodesOf, runPorts, circuit, nCirc, coreCirc, coreCircs, inCore, reach, sig}; nodeGraphSig=sig;
+  /* `sig` is only ever compared for equality (P.coreSatSig), so the graph carries a generation, not a string */
+  nodeGraphCache={adj, nodesOf, runPorts, circuit, nCirc, coreCirc, coreCircs, inCore, reach, sig:++nodeGraphSeq};
+  nodeGraphSigA=sA; nodeGraphSigB=sB; nodeGraphSigC=sC; nodeGraphSigD=sD;
   return nodeGraphCache;
 }
 /* Hung on the node graph's own IDENTITY, so a superseded graph takes its answers with it and nothing has to invalidate anything. One named slot per question. */
@@ -689,7 +700,10 @@ function secGensFromNode(node, cut, dead){
     (G.nodesOf[p.id]||[]).some(n=>seen[n] && !G.inCore(n))).map(p=>p.id);
 }
 /* Which runs short the two sides together - not forbidden, only named. Asked with the run itself CUT, or the run under test makes itself look innocent. */
-function crossTies(){
+/* on the graph: the bench asks this once a frame through layoutWarnings(), and it walks the whole plant */
+const crossTies = () => { const slot=graphSlot("crossTies"), was=slot.get(1); if(was) return was;
+  const out=crossTiesRaw(); slot.set(1, out); return out; };
+function crossTiesRaw(){
   const G=nodeGraph(), out=[];
   for(const c of pipeMap().conns){
     const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
@@ -749,7 +763,8 @@ let secCircCache=null, secCircFor=null;
 function secCircuitOf(pid, seeds){
   const G=nodeGraph();
   if(secCircFor!==G){ secCircCache={}; secCircFor=G; }
-  const key=pid+"|"+(seeds?seeds.join(","):"");
+  /* the seedless call is the per-tick one, and its key is the id itself rather than a string built per call */
+  const key=seeds?pid+"|"+seeds.join(","):pid;
   if(secCircCache[key]) return secCircCache[key];
   const cut={}; for(const sh of shellFaces()) cut[sh.id+sh.feed]=1;
   /* and at a drum's own feed valve, for the same reason: the secondary is a loop, and on a direct cycle it comes round the other way through the core */
@@ -922,7 +937,15 @@ const partOf=id=>(LAY&&LAY.byId.get(id))||null;
 /* The first machine of a role on the drawing, or null: an id literal is a name test, and a blank grid has none of any of them. */
 const roleOf=role=>(LAY&&LAY.parts.find(p=>p.role===role))||null;
 const roleId=role=>{ const p=roleOf(role); return p?p.id:null; };
-const roleAll=role=>LAY?LAY.parts.filter(p=>p.role===role).map(p=>p.id):[];
+/* on the graph, keyed by the role itself: sgIds()/coreIds()/pumpIds() all land here per tick, and each
+   built two arrays. The slot is skipped while the graph is still being built, which is where this is asked from. */
+const roleAll=role=>{
+  if(!LAY) return [];
+  const m = nodeGraphCache ? graphSlot("roleAll") : null, was = m && m.get(role);
+  if(was) return was;
+  const out=LAY.parts.filter(p=>p.role===role).map(p=>p.id);
+  if(m) m.set(role, out);
+  return out; };
 /* THE ONE DOOR: `p.access` is undefined between a rebuild and the next layoutMetrics(), and undefined is unasked, not blocked - so asking makes the measure happen. */
 const partAccess = p => {
   if(!p) return true;
@@ -937,7 +960,9 @@ const coreOf=pid=>{ const p=partOf(pid); if(!p) return null;
 const rodsOf=cid=>{ for(const p of LAY.parts){ const m=D.machines[p.id];
     if(p.role==="rods"&&m&&m.on===cid) return p.id; } return null; };
 const coreCircOf=id=>{ const G=nodeGraph(), ns=G.nodesOf[id]; return ns&&ns.length ? G.circuit[ns[0]] : -1; };
-const coreOnCirc=ci=>coreIds().filter(id=>coreCircOf(id)===ci);
+/* on the graph (graphSlot()): satOfCirc() asks this per node per tick, and the filter built an array each time */
+const coreOnCirc=ci=>{ const slot=graphSlot("coreOnCirc"), was=slot.get(ci); if(was) return was;
+  const out=coreIds().filter(id=>coreCircOf(id)===ci); slot.set(ci,out); return out; };
 /* Off faceOfOffset() and nothing else; NULL where a part has grown past its own port, and every caller asks. */
 function portFaceOf(pid){
   const q=D.ports[pid]; if(!q) return null;
@@ -1866,7 +1891,9 @@ const tankHold  = id => { const t=D.tanks&&D.tanks[id]; return !!(t && t.hold); 
 const holdTankIds = () => tankIds().filter(tankHold);
 /* Every hold tank standing on one circuit. More than one is a design the
    bench warns about and the solve demotes all but the first (netRef()). */
-const holdOnCirc = ci => holdTankIds().filter(id=>tankCircuit(id)===ci);
+/* likewise: holdSetP() is on satOfCirc()'s path, so this ran per node per tick */
+const holdOnCirc = ci => { const slot=graphSlot("holdOnCirc"), was=slot.get(ci); if(was) return was;
+  const out=holdTankIds().filter(id=>tankCircuit(id)===ci); slot.set(ci,out); return out; };
 /* PRIMARY is the component containing the CORE. A tank with a cell is wherever its own nodes are; one with NO cell is condensate inside another machine and takes its HOST's answer; one piped to nothing returns null. */
 const hostPartOf = () => LAY.parts.find(p=>ROLE[p.role] && ROLE[p.role].thermal==="sink") || null;
 // on the graph (graphSlot()): netReadEdges() asks this once per EDGE per solve
