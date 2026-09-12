@@ -17,7 +17,11 @@ function shmWalk(sh, root, wr){
   let dirty = false;
   const w = (v, o, k) => {
     const t = typeof v;
-    if(t === "number"){ sig = (sig*31 + 1)|0; if(wr) f[base+ni] = v; else o[k] = f[base+ni]; ni++; return; }
+    /* only what MOVED is written back: a double stored on a plain object is a heap number every time,
+       and the mirror is ~1950 of them a frame whether the value changed or not */
+    if(t === "number"){ sig = (sig*31 + 1)|0;
+      if(wr) f[base+ni] = v; else { const nv = f[base+ni]; if(v !== nv) o[k] = nv; }
+      ni++; return; }
     if(t === "boolean"){ sig = (sig*31 + 2)|0; if(wr) f[base+ni] = v ? 1 : 0; else o[k] = f[base+ni] !== 0; ni++; return; }
     if(t === "string"){ sig = (sig*31 + 3)|0;
       if(wr){ if(st[si] !== v){ st[si] = v; dirty = true; } } else if(si < st.length) o[k] = st[si];

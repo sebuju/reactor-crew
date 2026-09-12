@@ -1474,10 +1474,13 @@ const hotMass=()=>{ let m=0;
 /* the generators the PLANT has: one nobody piped is a drawing, and the duty is not split over it */
 const sgIds=()=>rolePiped("sg");
 /* WHAT RAISES THE STEAM: a shell, or a drum on the core's own circuit. In board order, and identically sgIds() where nothing has drawn a drum. Readers of the TUBE side stay sgIds()-only - a drum has no tubes. */
-const boilerIds=()=>{ const dr=drumIds(); if(!dr.length) return sgIds();
-  const have=new Set(sgIds().concat(dr)), out=[];
-  for(const p of LAY.parts) if(have.has(p.id)) out.push(p.id);
-  return out; };
+const boilerIds=()=>{ const slot=graphSlot("boilerIds"), was=slot.get(1); if(was) return was;
+  const dr=drumIds();
+  let out;
+  if(!dr.length) out=sgIds();
+  else { const have=new Set(sgIds().concat(dr)); out=[];
+    for(const p of LAY.parts) if(have.has(p.id)) out.push(p.id); }
+  slot.set(1, out); return out; };
 const boilerCount=()=>boilerIds().length;
 const boilerNode=id=>isDrum(id) ? coreFold(id) : shellNode(id);
 const boilerCirc=id=>isDrum(id) ? tankCircuit(id) : shellCirc(id);
@@ -1733,10 +1736,14 @@ function dnbrOf(K,m){
 const DNB_FILM=0.10, DT_LEID=150;
 const dnbLatch = (K, d, dTs, was) => !K.dryout ? 0 : d < 1 ? 1 : (was && dTs > DT_LEID) ? 1 : 0;
 /* `rise` is the enthalpy actually carried to this node, never the core rise peaked by a flux factor */
+/* one scratch: dnbrOf() reads it and keeps nothing, and this is asked per node per tick */
+const MARGIN_M={law:null, dhSub:0, dT:0, Tin:0, Tf:0, q:0, g:0, x:0, p:0};
 function marginNode(K,cs,heat,pw,rise,Tin,Tf,gShare,x,dhSub){
-  return dnbrOf(K,{law:K.dnbLaw, dhSub, dT:rise, Tin, Tf,
-    q:heat*K.rated*1e6/Math.max(K.aHeat,1e-6)*Math.max(pw,1e-3),
-    g:K.G0*gShare, x, p:cs.pCore});
+  const m=MARGIN_M;
+  m.law=K.dnbLaw; m.dhSub=dhSub; m.dT=rise; m.Tin=Tin; m.Tf=Tf;
+  m.q=heat*K.rated*1e6/Math.max(K.aHeat,1e-6)*Math.max(pw,1e-3);
+  m.g=K.G0*gShare; m.x=x; m.p=cs.pCore;
+  return dnbrOf(K,m);
 }
 /* damage is four monotonic per-node integrals (s.nDmg, s.nOx, s.nMelt, s.nDisp - core2d.js); a stage is derived off them and never stored */
 const FAIL=[
@@ -1917,11 +1924,13 @@ function coreState0(K, x0){
 function coreAgg(s){
   const ids=coreIds(); let R=0;
   for(const id of ids) R+=P.cores[id].rated;
-  const w=id=>R>0 ? P.cores[id].rated/R : 0;
-  let n=0,dec=0,grp=DEC_A.map(()=>0),dmg=0,mf=0,Tf=-Infinity,dnbr=Infinity,vf=0,ox=0,qOx=0,fat=0,any=false,scr=false,brk=false,melt=false,trip="";
+  /* the group array S is already carrying, zeroed: it is written straight back onto s.dec below */
+  const grp=(s.dec && s.dec.length===DEC_A.length) ? s.dec.fill(0) : DEC_A.map(()=>0);
+  let n=0,dec=0,dmg=0,mf=0,Tf=-Infinity,dnbr=Infinity,vf=0,ox=0,qOx=0,fat=0,any=false,scr=false,brk=false,melt=false,trip="";
   for(const id of ids){ const c=s.coreBy[id]; if(!c) continue; any=true;
-    n+=w(id)*c.n; dec+=w(id)*c.decay; dmg+=w(id)*c.dmg; mf+=w(id)*c.meltFrac;
-    if(c.dec) for(let i=0;i<grp.length;i++) grp[i]+=w(id)*c.dec[i];
+    const w=R>0 ? P.cores[id].rated/R : 0;
+    n+=w*c.n; dec+=w*c.decay; dmg+=w*c.dmg; mf+=w*c.meltFrac;
+    if(c.dec) for(let i=0;i<grp.length;i++) grp[i]+=w*c.dec[i];
     Tf=Math.max(Tf,c.Tf); dnbr=Math.min(dnbr,c.dnbr); vf=Math.max(vf,c.vf);
     ox=Math.max(ox,c.oxMax); qOx=Math.max(qOx,c.qOx); fat=Math.max(fat,c.fatigue);
     scr=scr||c.scrammed; brk=brk||c.breach; melt=melt||c.melt; if(!trip&&c.trip) trip=c.trip; }
