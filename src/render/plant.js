@@ -283,7 +283,7 @@ function symAt(p,x,y,w,h,ink,L){
       // what the hole is actually passing, on the same scale step() gives it
       if(burst) fxSteam(cx,Y+8,W*.75,
         fxEase(id+":burst",clamp(((L.sgVentBy&&L.sgVentBy[id])||0)
-                                 /Math.max(SG_RELIEF_CAP*ratedSteam(),1e-9),0,1)),"#ffd0c4",67);
+                                 /Math.max(sgVentRef(id),1e-9),0,1)),"#ffd0c4",67);
       // the shell has no setpoint of its own, so the warning is its own distance to the hole
       const ruptured = sgtrLive(L, id), lv=sgLvl(L,id);
       const pFrac = burst ? 0
@@ -1674,7 +1674,7 @@ function readoutsFor(p,s){
       "The temperature of the water and steam in this shell. Heat crosses the tubes on the gap between this and the primary, so a shell that heats up stops cooling the core.");
     secRow("STEAM");
     add("STEAM OUT",(s.steamBy&&s.steamBy[id]||0).toFixed(0)+" kg/s",
-      (s.sgVentBy&&s.sgVentBy[id]>0)?C.red:null,
+      sgVenting(id,(s.sgVentBy&&s.sgVentBy[id])||0)?C.red:null,
       "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go, and the pressure climbs.");
     // off the same sgHot() the heat term reads: behind a barrier the coolant here is the intermediate circuit's
     secRow("TUBE SIDE");
@@ -1974,7 +1974,7 @@ function readoutsForFit(fid,s){
     // both sides in kilograms: the primary's share of loop inventory comes back off that same inventory
     if(sec){
       const kg=(s.reliefSteam&&s.reliefSteam[fid])||0;
-      const full=SG_RELIEF_CAP*ratedSteam()*fitBoreK(fid)*fitBoreK(fid);
+      const full=sgVentRef(fid)*fitBoreK(fid)*fitBoreK(fid);
       add("RELIEF FLOW",kg.toFixed(0)+" kg/s",
         band(kg,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:0}),
         "Steam leaving this generator to atmosphere through this valve. It goes over the side and the water in it does not come back, so a shell held on its valve boils itself dry. What it can pass is set by its BORE - undersize it and the shell bursts anyway.");
@@ -2269,8 +2269,14 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
     const hovd = hov(wd)||drag;
     const ink = !fit?"#3c4c47" : dmgd?C.red : hovd?C.bright : C.metal;
-    // not a valve's: a fitting says it on its own glyph, so the word is not stacked into a label over the pipework
-    const stw = live && p.role!=="fitting" ? partStateWord(p) : null;
+    const plim = live && !dmgd ? partPburst(p) : null;
+    const pk = plim ? roomPAt(L,p) : 0;
+    const sqz = !!plim && !L.roomBurnOn && pk >= plim*0.6;
+    // a squeeze is a word, and not a valve's: a fitting says its own state on its glyph, so only the squeeze overrides that
+    const stw = sqz ? "CRUSH RISK" : (live && p.role!=="fitting" ? partStateWord(p) : null);
+    // the last tenth before the rating is red: amber is a warning, red is the machine about to be taken
+    const stwCol = sqz && pk >= plim*0.9 ? C.red : C.amber;
+    const nmCol = !fit ? "#3c4c47" : dmgd ? C.red : stw ? stwCol : on ? C.amber : C.ink2;
     const nameH = nameRowH(p);
     const symFull = p.role==="tank";
     // the shell sits 1 symbol unit in from the footprint and the case takes it back, both in SCREEN px
@@ -2296,10 +2302,6 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     const mark = fit ? (L ? annLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
     if(mark){ const c=nameMark(x,y,nameH);
       wdots.push(()=> L ? lamp(c.x,c.y,MARK_R,mark) : dot(c.x-MARK_R,c.y-MARK_R,MARK_R*2,mark)); }
-    // a blast leaves a scar and is history; a live squeeze pulses and goes away when the pressure does
-    if(live && !dmgd){ const lim=partPburst(p);
-      if(lim) fxPulse(x+2,y+2,w-4,h-4,C.red,
-        fxEase(p.id+":sqz", roomPAt(L,p) >= lim*0.6 && !L.roomBurnOn ? 1 : 0), 1.1); }
     // selection is an OUTLINE, one stroke for both shapes, inset by half the pen so it lands inside the box
     if(on){ const lw=1*DRAW_K, i=lw/2; ctx.beginPath();
       rr(x+i,y+i,w-lw,h-lw,Math.max(0,boxR-i));
@@ -2310,7 +2312,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // the cause takes the state word's slot: a wreck has no state left to be in
     const nmw=partName(p)+(dmgd?"  "+dmgWhyOf(L,p.id):(stw?"  "+stw:""));
     if(fit && nameH){
-      const nmo=Object.assign({},NAME_TXT,{color:dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))});
+      const nmo=Object.assign({},NAME_TXT,{color:nmCol});
       // a full-box symbol runs under its own name, so the name carries a ground - held clear of the CASE, which is the drawing
       if(symFull){
         const inner=nameInner(w), ls=nameLines(nmw,w);
@@ -2330,7 +2332,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     tags.push(()=>{
       // a fitting's name is put away until the hand is on it, on the same terms as its handles
       if(!nameH && (p.role!=="fitting" || hovd || on))
-        tag(nmw,x+w/2,y-3*DRAW_K,6.5*DRAW_K,.4*DRAW_K,!fit?"#3c4c47":(dmgd?C.red:(stw?C.amber:(on?C.amber:C.ink2))));
+        tag(nmw,x+w/2,y-3*DRAW_K,6.5*DRAW_K,.4*DRAW_K,nmCol);
       // annLamp() is the SAME predicate as the lamp already on this box, so the number and the lamp cannot disagree
       if(v!=null && vb!=null && !showRep)
         tag(v,x+w/2,vb,VAL_TXT_SIZE,0,dmgd?C.red:(annLamp(p.id)||(on?C.amber:C.ink2)));
@@ -2343,7 +2345,11 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
     TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ "+dmgWhyOf(L,p.id)+" ]":"")+
         (partAccess(p)?"":"  [ NO ACCESS ]"),
-      (L?opTipOf(p):p.tip)+(partAccess(p)?"":" It is boxed in on every side - nobody could reach it to repair it.")
+      (L?opTipOf(p):p.tip)
+        +(sqz?" CRUSH RISK: the air round it is at "+pk.toFixed(0)+" kPa, against the "+plim
+              +" kPa of blast its shell is built for - a bang in the compartment now wrecks it, and "
+              +(plim*ROOM_CRUSH_K)+" kPa held on it crushes it outright.":"")
+        +(partAccess(p)?"":" It is boxed in on every side - nobody could reach it to repair it.")
         +(L?pipeThru(p,L):""));
   }
   pipeNozzles(NET,L);           // the joint, over the shell it lands on

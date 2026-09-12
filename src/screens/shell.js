@@ -140,9 +140,8 @@ function shellClock(){
   /* blank, not hidden: the row keeps its box, so the topbar beside it never shifts */
   const live = !!SIMSCREEN[screen];
   shellEls.clockRow.classList.toggle("blank", !live);
-  /* achieved, never asked for: 50 ticks is one second of plant time */
-  const ts = (TR.sps/50).toFixed(1)+"x";
-  const clk=Math.round(TR.sps)+" TPS / "+ts;
+  /* achieved, never asked for: 50 ticks is one second of plant time, and under 1x the strip's own divider is the only label that still says anything */
+  const clk=(TR.sps>0 && TR.sps<10 ? TR.sps.toFixed(1) : Math.round(TR.sps))+" TPS / "+trRateLab(TR.sps/50);
   if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
   /* only a finite rate promises anything, and only a running plant can be behind */
   const owed = live && typeof TR.rate==="number" && isFinite(TR.rate) && !TR.paused && S;

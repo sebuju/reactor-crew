@@ -1415,7 +1415,7 @@ const ROLE = {
   /* One role for every fitting: a tee, a throttle and a relief valve differ by `mode` on the instance. `gate` prices the path off FIT[mode] instead of the flat component length, and `fold` answers per INSTANCE because a tee is one node and a valve is two with the gate between them. */
   fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true, vap:"ab", na:"A", nb:"B", la:"SIDE A", lb:"SIDE B"}], fixed:null,
           fold:p=>fitModeOf(p.id)==="tee" ? ["l","r","t","b"] : {t:"l", b:"r"},
-          mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none", tsurv:600, pburst:70},
+          mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none", tsurv:600, pburst:PIPE_PBURST},
 };
 // asked of the instance and never of the role; the one reader for the fold above and every branch below
 const fitModeOf=id=>(D.fittings[id]&&D.fittings[id].mode)||"tee";
