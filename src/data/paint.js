@@ -217,14 +217,16 @@ function regionDP(s,g){
   let v=0; for(const i of g.cells) if(s.roomP[i]>v) v=s.roomP[i];
   return v/1000;
 }
-/* What one wall cell is actually carrying, MPa: the difference across it, over the neighbours that are gas. With the same volume on both faces it is zero, which is correct; with one face it is the gauge, which already carries the difference against ambient. */
+// kPa gauge the fluid touching a cell's wall stands at: the liquid where one stands there, else the gas
+const roomCellP = (s,i) => Math.max(s.roomWater[i] > 0 ? s.roomWP[i] : -Infinity, s.roomPool[i] > 0 ? s.roomPoolP[i] : -Infinity, (s.roomWater[i] > 0 || s.roomPool[i] > 0) ? -Infinity : s.roomP[i]);
+/* What one wall cell is actually carrying, MPa: the difference across it, over the neighbours that are fluid. With the same volume on both faces it is zero, which is correct; with one face it is the gauge, which already carries the difference against ambient. */
 function matCellDP(s,x,y){
   if(!s || !s.roomP) return 0;
   const of=matRegions().of;
   let hi=-Infinity, lo=Infinity, n=0;
   const put=(X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return;
     const i=Y*GW+X; if(of[i]<0) return;
-    const p=s.roomP[i]; if(p>hi) hi=p; if(p<lo) lo=p; n++; };
+    const p=roomCellP(s,i); if(p>hi) hi=p; if(p<lo) lo=p; n++; };
   put(x-1,y); put(x+1,y); put(x,y-1); put(x,y+1);
   if(!n) return 0;
   return (n===1 ? Math.max(0,hi) : hi-lo)/1000;
@@ -266,9 +268,10 @@ function matLift(x,y){ const k=matKey(x,y);
   return true;
 }
 
-/* kg of water the compartment's own volume holds; the rest goes back on the book (waterCap(), room.js). */
-const regionSumpCap = g => matRegVol(g)*1000;
+
+
 
 /* Share of a machine's height the water must cover before it drowns: the motor and the electrics stand off the floor, set by the user 11/09/26. */
 const FLOOD_DROWN = 2/3;
-const floodDrowns = (p, line) => line <= p.y + p.h*(1 - FLOOD_DROWN);
+// only a role with a motor or electrics in it (ROLE[].drown) drowns: a vessel, a tank or a valve body is steel that sits in water
+const floodDrowns = (p, line) => !!(ROLE[p.role] && ROLE[p.role].drown) && line <= p.y + p.h*(1 - FLOOD_DROWN);

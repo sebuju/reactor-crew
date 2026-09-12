@@ -1841,17 +1841,19 @@ function injectFluid(s, dt){
   s.mBy[n] = have + kg;
   book(s, "inject", -kg);
 }
-/* water let go anywhere on the board lands on the opening's own cells and comes back into the held side of the book against a negative `sump` line; it runs from there (liqFlow(), room.js) and drowns what it stands two thirds of the way up */
+/* water let go anywhere on the board lands on the opening's own cells and comes back into the held side of the book against a negative `sump` line; it runs from there (liqSettle(), room.js) and drowns what it stands two thirds of the way up */
 function sumpStep(s, dt){
   if(!P.net) return;
-  const W = s.roomWater, G = roomGeomLive(s);
+  const G = roomGeomLive(s);
   /* a fluid that burns lands as a pool (s.roomPool, roomFireStep()); what flashed at the opening is roomAddGas()'s air, off the same openFlashX() and the same transported kilograms both ask */
   roomLiqOuts(s, G, (cells, rate, fl, key) => {
     if(!cells.length || (fl.c && fl.c.burn)) return;
     const kg = (advectOutKg[key] || 0)*(1 - openFlashX(s, fl, cells[0]));
     if(!(kg > 0)) return;
     const pour = roomPourCells(key, cells);
-    for(const i of pour){ roomGasDisplace(s, G, i, kg/pour.length/WATER_RHO); W[i] += kg/pour.length; }
+    // saturated liquid at the cell's own gas, on water's curve: the circuit's own reads 293 K at a bar (docs/fidelity.md, the vapour-density row)
+    const hl = satH(SAT_WATER, (ROOM_P0 + Math.max(0, s.roomP[pour[0]]))/1000);
+    for(const i of pour) liqLand(s, G, liqWater(s), i, kg/pour.length, kg/pour.length*hl);
     book(s, "sump", -kg);
   });
   for(const p of LAY.parts){
@@ -2132,11 +2134,12 @@ function plantSettle(){
      /* the gas's momentum on the faces, kg/m2/s: roomPU on the +x face of each cell, roomPV on the +y */
      roomPU:new Float32Array(GW*GH), roomPV:new Float32Array(GW*GH),
      /* the metal on the deck and its energy, datum liquid at the melting point, so a pool has a temperature to take the ignition test with */
-     roomPool:new Float32Array(GW*GH), roomPoolE:new Float32Array(GW*GH),
+     roomPool:new Float64Array(GW*GH), roomPoolE:new Float64Array(GW*GH),
+     /* each liquid's speed on the faces, m/s, the gas's shape, and its pressure at every cell's floor, kPa gauge: a read where it has a surface, the state where it is full and carried */
+     roomPoolU:new Float32Array(GW*GH), roomPoolV:new Float32Array(GW*GH),
+     roomWU:new Float32Array(GW*GH), roomWV:new Float32Array(GW*GH), roomWP:new Float32Array(GW*GH), roomPoolP:new Float32Array(GW*GH),
      /* kg of water standing on each cell's floor, left the plant and still on the ship; double, because it is on the ledger */
-     roomWater:new Float64Array(GW*GH),
-     /* each liquid's sideways flux on the +x face of each cell, m2/s: the momentum liqFlow() carries from tick to tick */
-     roomWQ:new Float64Array(GW*GH), roomPoolQ:new Float64Array(GW*GH),
+     roomWater:new Float64Array(GW*GH), roomWaterE:new Float64Array(GW*GH),
      /* kg each catch pan's drain has taken off the deck; the metal was booked out at the opening it left through, so this moves no book */
      panBy:{},
      /* kg of gas per cell, seeded at ambient, and each cell's pressure is a read off it (roomPOf(), room.js); roomVap is the steam in it */
