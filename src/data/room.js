@@ -368,7 +368,8 @@ function injectRoom(s, dt, src, G){
     const W = s.roomWater, dm = q.rate > 0 ? q.rate*dt : -Math.min(-q.rate*dt, W[i]);
     if(!dm) return;
 
-    if(dm > 0){ liqLand(s, G, liqWater(s), i, dm, dm*hOfT(SAT_WATER, T_HULL)); book(s, "inject", -dm); return; }
+    // the tool states a rate and nothing else: the speed is the one a cell face needs to carry it
+    if(dm > 0){ liqLand(s, G, liqWater(s), i, dm, dm*hOfT(SAT_WATER, T_HULL), q.rate/(WATER_RHO*MPC*ROOM_DEPTH)); book(s, "inject", -dm); return; }
     s.roomWaterE[i] += s.roomWaterE[i]*dm/W[i]; gsScratch(); gsDisp[i] += dm/WATER_RHO;
     W[i] += dm;
     book(s, "inject", -dm);
@@ -676,6 +677,7 @@ function faceInflow(inn, fx, fy){
   for(let i=0;i<N-GW;i++){ const m = fy[i]; if(m > 0) inn[i+GW] += m; else if(m < 0) inn[i] -= m; }
 }
 /* The linear solve knows no vacuum: behind a strong front it drives a cell below zero, and clamping that creates gas. So a cell's OUTFLOW is cut to what it holds plus what it is given this tick - the NET, never the gross: a face passes many times a small cell's content in a tick (a choked hole off a few MPa moves a quarter of a tonne), and capping the gross stops the through-flow and piles the inflow without bound. The inflow counted is after its own donors' cuts, so it is iterated. With `cap`, a cell's INFLOW is cut the same way to the room it has plus what it passes on, so a liquid never lands past a cell's cap. */
+const FACE_TAIL = 16;
 function faceLimit(Mm, fx, fy, n, cap){
   const N = GW*GH, out = gsOut, inn = gsJ, k = gsK.fill(1), ki = gsKi.fill(1);
   for(let it=0;it<n;it++){ let moved = false;
@@ -693,6 +695,23 @@ function faceLimit(Mm, fx, fy, n, cap){
     if(fx[i] > 0) fx[i] *= k[i]*ki[i+1]; else if(fx[i] < 0) fx[i] *= k[i+1]*ki[i];
     if(fy[i] > 0) fy[i] *= k[i]*ki[i+GW]; else if(fy[i] < 0) fy[i] *= k[i+GW]*ki[i];
   }
+  // the fixed point stops at n whether or not it converged, and faceMove()'s clamp would then create mass: shave the overdraw off the scaled fluxes until none is left
+  let cut = 0;
+  for(let it=0;it<=FACE_TAIL;it++){
+    out.fill(0);
+    faceInflow(inn, fx, fy);
+    for(let i=0;i<N-1;i++){ const m = fx[i]; if(m > 0) out[i] += m; else if(m < 0) out[i+1] -= m; }
+    for(let i=0;i<N-GW;i++){ const m = fy[i]; if(m > 0) out[i] += m; else if(m < 0) out[i+GW] -= m; }
+    cut = 0;
+    for(let i=0;i<N;i++){ const have = Mm[i] + inn[i], ex = out[i] - have;
+      const v = ex > have*1e-9 + 1e-9 ? (have > 0 ? have/out[i] : 0) : 1;
+      k[i] = v; if(v !== 1 && ex > cut) cut = ex; }
+    if(!cut || it === FACE_TAIL) break;
+    for(let i=0;i<N-1;i++){ if(fx[i] > 0) fx[i] *= k[i]; else if(fx[i] < 0) fx[i] *= k[i+1]; }
+    for(let i=0;i<N-GW;i++){ if(fy[i] > 0) fy[i] *= k[i]; else if(fy[i] < 0) fy[i] *= k[i+GW]; }
+  }
+  if(cut && !cgCapWarned["faceTail"+n]){ cgCapWarned["faceTail"+n] = true;
+    console.warn("[room] faceLimit("+n+") still overdraws a cell by "+cut.toFixed(6)+" kg after "+FACE_TAIL+" tail passes"); }
 }
 // move the face kilograms; a cell never goes below empty
 function faceMove(Mm, fx, fy){
@@ -894,18 +913,16 @@ const LIQ_V_MAX = 30;
 // m/s under which a cell is at rest, and m of depth step under which a face is
 const LIQ_REST = 0.05, LIQ_H_LO = 0.001;
 const LIQ_CG_TOL = 1e-9, LIQ_CG_MAX = 400;
-// kg past its cap a carried full cell may hold and still be stiff; more is a mound, and the head is its pressure
-const LIQ_SLACK = 1;
 // iterations the last liquid solve took, a readout for the tools like roomCgIt
 let liqCgIt = 0;
 let lqP = null, lqH = null, lqHc = null, lqCap = null, lqComp = null, lqAx = null, lqAy = null, lqAyD = null, lqB = null, lqX = null,
-    lqFx = null, lqFy = null, lqM0 = null, lqDI = null, lqGas = null, lqAwx = null, lqAwy = null, lqFull = null, lqStand = null, lqStiff = null;
+    lqFx = null, lqFy = null, lqM0 = null, lqDI = null, lqGas = null, lqAwx = null, lqAwy = null, lqLcap = null, lqLat = null, lqFull = null, lqStand = null, lqStiff = null;
 function lqScratch(){
   const N = GW*GH;
   if(lqP && lqP.length === N) return N;
   const f = () => new Float64Array(N);
   lqP = f(); lqH = f(); lqHc = f(); lqCap = f(); lqComp = f(); lqAx = f(); lqAy = f(); lqAyD = f(); lqB = f(); lqX = f();
-  lqFx = f(); lqFy = f(); lqM0 = f(); lqDI = f(); lqGas = f(); lqAwx = f(); lqAwy = f();
+  lqFx = f(); lqFy = f(); lqM0 = f(); lqDI = f(); lqGas = f(); lqAwx = f(); lqAwy = f(); lqLcap = f(); lqLat = f();
   lqFull = new Uint8Array(N); lqStand = new Uint8Array(N); lqStiff = new Uint8Array(N);
   return N;
 }
@@ -943,10 +960,20 @@ function liqStep(s, dt, G, q){
   const standWalk = () => { for(let i=N-1;i>=0;i--){ const j = i+GW; stand[i] = (j >= N || !liqRuns(G, i, j)) ? 1 : (full[j] && stand[j]) ? 1 : 0; } };
   standWalk();
   if(!any){ vu.fill(0); vv.fill(0); return; }
+  // a carried cell over its cap is not a mound: the excess climbs the column, liqLand()'s own law
+  for(let i=N-1;i>=GW;i--){
+    if(!(cap[i] > 0 && M[i] > cap[i] && stand[i] && liqRuns(G, i, i-GW) && !liqShut(G, i-GW))) continue;
+    const ex = M[i] - cap[i], eE = E ? E[i]*ex/M[i] : 0;
+    M[i] -= ex; M[i-GW] += ex; if(E){ E[i] -= eE; E[i-GW] += eE; }
+    gsDisp[i-GW] += ex/rho;
+    h[i] = M[i]/(rho*A); h[i-GW] = M[i-GW]/(rho*A);
+    full[i-GW] = cap[i-GW] > 0 && M[i-GW] >= cap[i-GW]*LIQ_FULL_K ? 1 : 0;
+  }
+  standWalk();
   const zf = i => q.U ? liqFill(q.U, q.oRho, i) : 0;
   const pFree = i => gas[i] + rg*h[i];
-  // stiff: full, carried, liquid or a ceiling over it (a full cell with gas over it is a free surface at its own top), not a mound past LIQ_SLACK
-  for(let i=0;i<N;i++) stiff[i] = full[i] && stand[i] && M[i] <= cap[i] + LIQ_SLACK && (i < GW || !liqRuns(G, i, i-GW) || M[i-GW] > 0) ? 1 : 0;
+  // stiff: full, carried, liquid or a ceiling over it (a full cell with gas over it is a free surface at its own top)
+  for(let i=0;i<N;i++) stiff[i] = full[i] && stand[i] && (i < GW || !liqRuns(G, i, i-GW) || h[i-GW] > LIQ_H_LO) ? 1 : 0;
   for(let i=0;i<N;i++) p[i] = stiff[i] ? P0 + LP[i]*1000 : pFree(i);
   const hw = i => Math.min(h[i], hc[i]);
   // N per metre of face from one side over a face hm high: its liquid to its own top, its gas over that; a falling cell presses with its gas alone
@@ -965,19 +992,25 @@ function liqStep(s, dt, G, q){
       if(Math.abs(vv[i]) > LIQ_REST || Math.abs(d) > dLo) live = true; } }
   if(!live){ vu.fill(0); vv.fill(0); liqCgIt = 0; writeP(); return; }
 
-  const ax = lqAx, ay = lqAy, ayD = lqAyD, b = lqB, x = lqX, fx = lqFx, fy = lqFy, dI = lqDI, awx = lqAwx, awy = lqAwy;
+  const ax = lqAx, ay = lqAy, ayD = lqAyD, b = lqB, x = lqX, fx = lqFx, fy = lqFy, dI = lqDI, awx = lqAwx, awy = lqAwy, lat = lqLat;
+  const fallV = k => Math.max(k < N-GW ? Math.abs(vv[k]) : 0, k >= GW ? Math.abs(vv[k-GW]) : 0);
   for(let pass=0;pass<2;pass++){
   for(let i=0;i<N;i++) comp[i] = cap[i] > 0 ? (stiff[i] ? Math.max(cap[i]/K, 1e-9) : A/G_SI) : 1;
-  ax.fill(0); ay.fill(0); ayD.fill(0); fx.fill(0); fy.fill(0); awx.fill(0); awy.fill(0);
+  ax.fill(0); ay.fill(0); ayD.fill(0); fx.fill(0); fy.fill(0); awx.fill(0); awy.fill(0); lat.fill(0);
   for(let i=0;i<N;i++){ const X = i%GW;
-    if(X < GW-1 && runsX(i)){ const j = i+1, hf = Math.max(hw(i), hw(j)), d0 = driveX(i, j);
-      if(hf > 0){ const v = vu[i], up = v > 0 ? i : v < 0 ? j : (d0 >= 0 ? i : j), dn = up === i ? j : i;
+    if(X < GW-1 && runsX(i)){ const j = i+1, hf = Math.max(hw(i), hw(j));
+      // water in the air crosses a face sideways only where it moves sideways faster than it falls
+      const lz = !stand[i] && !stand[j] &&
+        Math.max(Math.abs(vu[i]), X > 0 ? Math.abs(vu[i-1]) : 0, X < GW-2 ? Math.abs(vu[i+1]) : 0) <= Math.max(fallV(i), fallV(j), LIQ_REST);
+      const d0 = lz ? 0 : driveX(i, j);
+      if(hf > 0 && !lz){ const v = vu[i], up = v > 0 ? i : v < 0 ? j : (d0 >= 0 ? i : j), dn = up === i ? j : i;
         const Aw = ROOM_DEPTH*hf, L = MPC;
         let c = n2g*Math.abs(v)/Math.pow(Math.max(hf, 1e-3), 4/3);
-        if(full[up] && !full[dn] && G.hole && (G.hole[i] || G.hole[j])) c += Math.abs(v)/(cd2*L);
+        if(full[up] && !(full[dn] && stand[dn]) && G.hole && (G.hole[i] || G.hole[j])) c += Math.abs(v)/(cd2*L);
         const vup = v > 0 ? (X > 0 && awx[i-1] > 0 ? vu[i-1] : 0) : v < 0 ? (X < GW-2 && runsX(j) ? vu[j] : 0) : 0;
         const adv = Math.abs(v)/MPC, den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
-        awx[i] = Aw; ax[i] = g; fx[i] = rho*Aw*dt*(v + dt*adv*vup)/den + g*d0; } }
+        awx[i] = Aw; ax[i] = g; fx[i] = rho*Aw*dt*(v + dt*adv*vup)/den + g*d0;
+        fx[i] += (lat[i] - lat[j])*dt*dt/L; } }
     if(i < N-GW && runsY(i)){ const j = i+GW, v = vv[i];
       const d0 = p[i] - (full[j] ? p[j] - rg*Math.min(h[j], hc[j]) : gas[j]);
       // the face is as wide as the side that holds liquid: a still face over a full cell is that cell's, or a lid could never push up
@@ -987,8 +1020,10 @@ function liqStep(s, dt, G, q){
       const f = cap[up] > 0 ? Math.min(1, M[up]/cap[up]) : 0;
       // the inertia is the deeper of the two: a film over a body rides the body, a film over air is its own
       if(f > 0){ const Aw = A*f, L = Math.max(hw(i), hw(j), LIQ_L_MIN), hf = Math.max(f*MPC, 1e-3);
+        // a stream landing on a body: its momentum flux, half to each side of the cell it lands in
+        if(!stand[i] && stand[j] && v > 0) lat[j] += 0.5*rho*Aw*v*v;
         let c = n2g*Math.abs(v)/Math.pow(hf, 4/3);
-        if(full[up] && !full[dn] && G.hole && (G.hole[i] || G.hole[j])) c += Math.abs(v)/(cd2*L);
+        if(full[up] && !(full[dn] && stand[dn]) && G.hole && (G.hole[i] || G.hole[j])) c += Math.abs(v)/(cd2*L);
         const vup = v > 0 ? (i >= GW && awy[i-GW] > 0 ? vv[i-GW] : 0) : v < 0 ? (j < N-GW && runsY(j) ? vv[j] : 0) : 0;
         const adv = Math.abs(v)/MPC, den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
         awy[i] = Aw; fy[i] = rho*Aw*dt*(v + dt*adv*vup)/den + g*d0;
@@ -1006,7 +1041,7 @@ function liqStep(s, dt, G, q){
   /* A full cell with gas over it is a lid: a free surface at its own ceiling, so it drains as a free cell; fed from the side it must push what it is given up through that ceiling, which only a stiff cell can, so a lid the pass fills goes stiff and the pass is taken again. */
   if(pass === 0){ let lid = false;
     for(let i=0;i<N;i++){ const X = i%GW;
-      if(!full[i] || stiff[i] || !stand[i] || M[i] > cap[i] + LIQ_SLACK) continue;
+      if(!full[i] || stiff[i] || !stand[i]) continue;
       const net = -fx[i] + (X > 0 ? fx[i-1] : 0) - fy[i] + (i >= GW ? fy[i-GW] : 0);
       if(net > 1e-3){ stiff[i] = 1; lid = true; } }
     if(lid) continue; }
@@ -1019,7 +1054,9 @@ function liqStep(s, dt, G, q){
       if(v < 0 && !liqRuns(G, i+GW, i) && !full[i+GW]) v = 0;
       fy[i] = rho*awy[i]*dt*v; } else fy[i] = 0;
   }
-  faceLimit(M, fx, fy, 32, cap);
+  // only a cell the floor carries is capped: a cell in the air is free to pile, or the throttle at the bottom of a stream propagates up it as one incompressible pipe
+  for(let i=0;i<N;i++) lqLcap[i] = stand[i] ? cap[i] : Infinity;
+  faceLimit(M, fx, fy, 128, lqLcap);
   for(let i=0;i<N;i++){
     vu[i] = awx[i] > 0 ? fx[i]/(rho*awx[i]*dt) : 0;
     vv[i] = awy[i] > 0 ? fy[i]/(rho*awy[i]*dt) : 0;
@@ -1044,12 +1081,14 @@ function liqStep(s, dt, G, q){
 }
 /* Where a source lands: a full cell has no room, so the liquid goes on up the column to the first cell
    that has some, the surface of the body it joined; a sealed column brim full takes it on its top cell. */
-function liqLand(s, G, q, i, kg, kJ){
+function liqLand(s, G, q, i, kg, kJ, v0){
   if(!(kg > 0)) return;
   while(i >= GW && liqFull(q, i) && liqRuns(G, i, i-GW) && !liqShut(G, i-GW)) i -= GW;
   gsScratch(); gsDisp[i] += kg/q.rho;
   q.M[i] += kg;
   if(q.E) q.E[i] += kJ || 0;
+  // a source arrives at the speed it left its opening at, not at rest
+  if(v0 > 0 && i < GW*GH-GW && liqRuns(G, i, i+GW) && !liqFull(q, i+GW)) q.vv[i] = Math.max(q.vv[i], Math.min(v0, LIQ_V_MAX));
 }
 const liqSettle = liqStep;
 let gdQ = null, gdSeen = null, gdK = 0;
@@ -1212,7 +1251,7 @@ function roomFireStep(s, dt, G, src){
     s.fireEv.kg += burnt; s.fireEv.q += burnt*row.lhv;
     // what did not burn in flight is on the deck, at the opening (roomPourCells()) and not a plume: a liquid falls
     const pour = roomPourCells(key, cells), per = (kg - burnt)/pour.length;
-    if(per > 0) for(const i of pour) liqLand(s, G, liqMetal(s), i, per, per*cp*(Tin - row.melt));
+    if(per > 0) for(const i of pour) liqLand(s, G, liqMetal(s), i, per, per*cp*(Tin - row.melt), v);
   });
   const W = s.roomWater;
   if(cool) liqSettle(s, dt, G, liqMetal(s));

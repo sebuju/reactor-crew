@@ -858,6 +858,10 @@ const SG_BURST_K=1.5;
 const SG_P_WARN=0.15, SG_P_HI=0.6;
 /* Multiples of rated steam a full-bore relief passes at its lift point, times the hole's bore squared. */
 const SG_RELIEF_CAP=3.0;
+/* What a shell's vents pass wide open, kg/s; keeps id, because a threshold is per-quantity. */
+const sgVentRef = id => SG_RELIEF_CAP*ratedSteam();
+/* The vent edge carries grammes a second with every spring shut, measured up to 4e-3 kg/s on the stock plant, so the reading is judged against its own reference and never against zero. */
+const sgVenting = (id, q) => q > 1e-4*sgVentRef(id);
 /* Dittus-Boelter: the tube-side film goes as flow^0.8. Physical, not fitted. */
 const UA_FLOW=0.8;
 /* Multiples of this machine's own rated feed per unit of fractional level error - a feed system is paced by the feed it was bought to pass. */
@@ -1853,7 +1857,10 @@ function sumpStep(s, dt){
     const pour = roomPourCells(key, cells);
     // saturated liquid at the cell's own gas, on water's curve: the circuit's own reads 293 K at a bar (docs/fidelity.md, the vapour-density row)
     const hl = satH(SAT_WATER, (ROOM_P0 + Math.max(0, s.roomP[pour[0]]))/1000);
-    for(const i of pour) liqLand(s, G, liqWater(s), i, kg/pour.length, kg/pour.length*hl);
+    // it leaves the opening at the speed its own pressure difference gives it, the Weber number's own figure (roomFireStep())
+    const pN = netPAt(s, fl.nd)*1e6, pR = (ROOM_P0 + s.roomP[pour[0]])*1000;
+    const v0 = Math.sqrt(2*Math.max(0, pN - pR)/WATER_RHO);
+    for(const i of pour) liqLand(s, G, liqWater(s), i, kg/pour.length, kg/pour.length*hl, v0);
     book(s, "sump", -kg);
   });
   for(const p of LAY.parts){
