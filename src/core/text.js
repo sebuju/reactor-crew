@@ -95,6 +95,8 @@ function wrap(s,x,y,maxw,lh,o){
 }
 const wrapCount=(s,maxw,o)=>Math.max(1,wrapLines(s,maxw,o).length);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+/* a switch both threads ask: the worker is spawned with the page's own query on its script url */
+const urlOff=k=>typeof location!=="undefined" && new URLSearchParams(location.search).get(k)==="off";
 const pad=(v,n)=>String(v).padStart(n," ");
 
 const CAP=0.72;                                     // cap height / em

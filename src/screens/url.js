@@ -1,5 +1,8 @@
 "use strict";
 
+// switches, not screen state: urlSync() builds a fresh query and would drop them on the first sync
+const URL_KEEP = ["worker","shm"];
+
 const urlSlug = s => String(s).toLowerCase().replace(/^[\d?]+\s+/,"")
                               .replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
 
@@ -43,6 +46,8 @@ function urlSync(){
   if(!urlWrite) return;
   /* built fresh, never edited in place, so a misspelt param is dropped rather than carried through every reload. */
   const q=new URLSearchParams();
+  const had=new URLSearchParams(location.search);
+  for(const k of URL_KEEP) if(had.get(k)!=null) q.set(k,had.get(k));
   const tb=urlTabRows().find(r=>r.btn.dataset.screen===screen);
   q.set("tab", tb?tb.keys[tb.keys.length-1]:screen);
   const rt=urlRateRows().find(r=>r.v===TR.rate);
