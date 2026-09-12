@@ -96,7 +96,7 @@ function trBuild(sc){
   const replayBtns = KIT.el("div","trs-replaybtns");
   const replayBtn = KIT.button("REPLAY",{sunk:1,onClick:()=>trRate(TR.rate)});
   KIT.tip(replayBtn.el,"REPLAY","Runs the tape on from here. WATCHING DOES NOT FORK: reviewing a run forward changes nothing and leaves no second copy of it in the tree, however many times you do it.");
-  const takeHereBtn = KIT.button("TAKE HERE",{sunk:1,onClick:()=>recBranch(REC.cur,S.tick)});
+  const takeHereBtn = KIT.button("TAKE HERE",{sunk:1,onClick:()=>trBranchAt(REC.cur,S.tick)});
   KIT.tip(takeHereBtn.el,"TAKE HERE","Forks the recording at this moment and runs live from it. TOUCHING FORKS: putting your hand on any control while a replay is up does exactly this by itself, because that is the first moment the two futures can differ. This key is the way to ask for it on purpose, so nothing about the tree is ever a surprise.");
   replayBtns.append(replayBtn.el,takeHereBtn.el);
   modeEl.append(live,replayBtns);
@@ -150,7 +150,7 @@ function trBuild(sc){
   const scrubMove = e=>{
     if(!dragging) return;
     const t=scrubTickAt(e);
-    if(t!==null && S && t!==S.tick) seek(trTip,t);
+    if(t!==null && S && t!==S.tick) trSeek(trTip,t);
   };
   const scrubStop=()=>{ dragging=false; };
   MOUSE.on(scrub,{
@@ -203,7 +203,7 @@ function trTape(h,on){
 function trPickerRow(t){
   const row = KIT.el("div","trs-take-row");
   row.classList.toggle("on", t.id===REC.cur);
-  const go = KIT.button("GO",{sunk:1,size:7,onClick:()=>seek(t.id,t.tickEnd)});
+  const go = KIT.button("GO",{sunk:1,size:7,onClick:()=>trSeek(t.id,t.tickEnd)});
   go.el.classList.add("trs-take-go");
   const name = KIT.el("span","trs-take-name"); name.textContent=trName(t);
   const par = t.parent===null ? null : REC.takes[t.parent];
@@ -211,7 +211,7 @@ function trPickerRow(t){
   if(par){
     fork = KIT.el("button","trs-take-fork",{type:"button"});
     fork.textContent = "<- "+trName(par)+" @ "+trStamp(t.tick0);
-    MOUSE.on(fork,{click(){ seek(par.id,t.tick0); }});
+    MOUSE.on(fork,{click(){ trSeek(par.id,t.tick0); }});
     KIT.tip(fork,"FORK POINT","Click to put the plant on "+trName(par)+" at the moment "+trName(t)+" split off it - the state both runs share, and where you would start from to try a third way.");
   } else {
     fork = KIT.el("span","trs-take-root"); fork.textContent="ROOT";
@@ -224,7 +224,7 @@ function trPickerRow(t){
   if(t.verdict){ verd.textContent=scnVerdLab(t.verdict); verd.style.color=scnVerdCol(t.verdict); }
   KIT.tip(row,trName(t),
     "Design "+t.head.dsig+", seed "+t.head.seed+". Runs "+trStamp(t.tick0)+" to "+
-    trStamp(t.tickEnd)+", "+t.evs.length+" recorded input(s)."+
+    trStamp(t.tickEnd)+", "+recEvN(t)+" recorded input(s)."+
     (t.assisted?" ASSISTED: this run was scrubbed into rather than flown straight through.":"")+
     " GO puts the plant at the end of it.");
   row.append(go.el,name,fork,len,assist,verd);

@@ -739,6 +739,8 @@ function scnGo(){
   if(!P) return;
   if(scnBusy()){ scnCancel(); scnProg=-1; scnNote="RUN CANCELLED"; return; }
   scnVerd=null; scnTake=null; scnProg=0; scnNote="RUNNING "+SCN.name;
+  /* the run brings its own worker and drives this thread's plant if it cannot */
+  simKillAll();
   scnRunAsync(SCN, f=>{ scnProg=f; },
     r=>{ scnProg=-1; scnVerd=r.verdict; scnTake=r.take;
          scnNote=SCN.name+"  "+scnVerdLab(r.verdict); });
@@ -748,6 +750,8 @@ keyAdd({k:"Enter", sc:"scenario", lab:"RUN", fn:scnGo});
 /* order mirrors scnRun(): seed and diceOff must be on the plant before recRoot() takes its base. */
 function scnFly(){
   if(!P || scnBusy()) return;
+  /* SCNRUN is not on S, so an armed scenario is invisible to a worker: a flown run is this thread's */
+  simKillAll();
   scnVerd=null; scnTake=null; scnProg=-1;
   resetPlant();
   seedRng(S, SCN.seed>>>0);

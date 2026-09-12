@@ -160,6 +160,8 @@ function dumpApply(snap, head){
   initHist();
   TR.paused = true;                        // a loaded plant waits to be looked at
   screen = "operate"; layout(); uiDirty();
+  /* handed the state this thread just landed, so both start on the same plant rather than on the same seed */
+  simRestart({snap:snapS(S), log:LOG.slice()});
   return matched;
 }
 

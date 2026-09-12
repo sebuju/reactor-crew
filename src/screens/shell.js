@@ -45,6 +45,8 @@ function shellInit(){
       if(k==="operate"&&(!P||P.dsig!==designSig())){ prewarmStart(); return; }
       if(k==="scenario"&&!P){ commission(); trBench(); trRateFit(); }
       /* the bench writes D.start and the room writes S, so leaving puts the plant back */
+      /* the bench writes D, so the plant the worker commissioned is not the design any more */
+      if(k==="design") simKillAll();
       if(k==="design" && P && S && !scnArmed() && REC.mode==="live") resetPlant();
       if(k==="scenario"&&!scnArmed()) TR.paused=true;
       // a menu or a tool addresses one screen's plant, so neither outlives the screen
@@ -198,7 +200,8 @@ function prewarmStep(){
     let r;
     try{ r=pwGen.next(); }catch(e){ pwGen=null; prewarmSync(false); throw e; }
     /* the benchmark measures the plant just built; it runs on a snapshot and puts it back */
-    if(r.done){ pwGen=null; trBench(); trRateFit(); prewarmSync(false); uiDirty(); return false; }
+    if(r.done){ pwGen=null; trBench(); trRateFit(); prewarmSync(false); uiDirty();
+      simRestart({seed:(S&&S.seed)>>>0}); return false; }
     pwFrac=r.value.frac; pwStage=r.value.stage;
   }while(performance.now()-t0<PREWARM_MS);
   prewarmSync(true);
