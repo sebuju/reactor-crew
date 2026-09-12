@@ -30,10 +30,19 @@ const wNow = () => (typeof performance !== "undefined" ? performance.now() : Dat
 let sampPend = [];
 let pumpOn = false, pumpPrev = 0;
 
-/* setTimeout(0) is clamped to 4 ms once a few calls have nested, which stands the thread down for a
-   quarter of its time; a port yields in microseconds, the trick main.js already uses to run without vsync. */
+/* the port yields in microseconds, the trick main.js uses to run without vsync, and only a slice that owes
+   a tick NOW may have it: between ticks a finite rate spun this thread at ~150 kHz, tracing every wake. */
 let pumpChan = null;
+/* 4, because a nested setTimeout is clamped there anyway: asking for 1 bought no steadier a tick rate */
+const PUMP_IDLE_MS = 4;
+/* paused is asked before the rate: a plant stopped at MAX keeps that rate and would spin on it */
+const pumpWait = () => scnBusy() ? 0
+  : TR.paused ? PUMP_IDLE_MS
+  : (TR.rate === Infinity || TR.rate === TR_VLD) ? 0
+  : clamp(Math.round((0.02 - simAcc)/TR.rate*1000), 0, PUMP_IDLE_MS);
 function pumpNext(){
+  const ms = pumpWait();
+  if(ms > 0){ setTimeout(pump, ms); return; }
   if(!pumpChan){ pumpChan = new MessageChannel(); pumpChan.port1.onmessage = pump; }
   pumpChan.port2.postMessage(0);
 }
@@ -65,7 +74,9 @@ function liveBegin(msg){
     f();
     const i = (hi - 1 + HN) % HN, v = {};
     for(const k in hist) v[k] = hist[k][i];
+    /* the viewer's ring is HN deep: an older sample is cloned across the thread only to be overwritten */
     sampPend.push(v);
+    if(sampPend.length > HN) sampPend.shift();
   }; })(sample);
   TR.rate = msg.rate === undefined ? 1 : msg.rate;
   TR.paused = !!msg.paused;
