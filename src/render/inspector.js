@@ -881,7 +881,7 @@ function paramsForMat(key){
         rows.push(["FLOODED TO",f.d.toFixed(2)+" m   "+(f.kg/1000).toFixed(1)+" t",C.blue,
           "How deep the water discharged into this region stands at its deepest, over the region's lowest floor, and how much of it there is. It lands where it came out, falls, and runs along the floor to level - deepest under the break while it is still arriving. What the compartment's own volume will not hold goes back off its book."],
           ["HOLDS",wet.length?wet.join(", "):"nothing yet",wet.length?C.red:null,
-           "What the water has drowned: a machine goes when the water is two thirds of the way up it, and it takes the same red hatch every wrecked machine takes."]); } }
+           "What the water has drowned: a machine with a motor or electrics in it goes when the water is two thirds of the way up it, and it takes the same red hatch every wrecked machine takes."]); } }
     const inside=LAY.parts.filter(q=>matRegionOf(q)===g).map(q=>partName(q));
     rows.push(["CONTAINS",inside.length?inside.join(", "):"nothing",null,
       "The machines standing inside this region. They are what its pressure will crush and what its wall is holding the release of."],

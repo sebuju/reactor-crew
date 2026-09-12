@@ -1370,7 +1370,7 @@ const ROLE = {
   core:  {internal:null, fixed:null, fold:["r","b"], inlet:"b", mu:0.50, sgtr:false,
           ports:{r:4, b:5}, thermal:"source", tsurv:1200, pburst:200},
   rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none", tsurv:450, pburst:35},
+          ports:{}, thermal:"none", tsurv:450, pburst:35, drown:true},
   /* Two paths that do not meet - tubes (l<->b, primary) and shell (r<->t, secondary) - crossed only by the sgtr LEAK edge. `a` is the INLET on a shell path: the feed regulating valve's head is signed off it. */
   sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, v:5, len:20, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer", tsurv:800, pburst:200},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
@@ -1381,10 +1381,10 @@ const ROLE = {
   /* One pump role and one head law: what makes a pump a feedwater pump is where it is piped. One path, folded r onto t and l onto b, so it splices into a horizontal leg with no rotation knob. */
   pump:  {internal:{a:"t", b:"b", kind:"pump", head:true, v:5, len:4, na:"IN", nb:"OUT", la:"SUCTION", lb:"DISCHARGE"},
           fixed:null, fold:{r:"t", l:"b"}, mu:0.75, sgtr:false,
-          ports:{t:4, b:4, r:4, l:4}, thermal:"none", tsurv:400, pburst:70},
+          ports:{t:4, b:4, r:4, l:4}, thermal:"none", tsurv:400, pburst:70, drown:true},
   /* `vapPath` is off `internal` because its resistance is the GATE and not the body, so it takes turbCOf() rather than COMP_C; `work` is what tells the wheels from the bypass around them. */
   turb:  {internal:null, vapPath:{a:"t", b:"b", work:true}, fixed:null, fold:null, mu:0.82, sgtr:false,
-          ports:{t:4, b:1}, thermal:"none", tsurv:420, pburst:70},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
+          ports:{t:4, b:1}, thermal:"none", tsurv:420, pburst:70, drown:true},                  // t: one steam run per generator, up to the bench's own 4-loop ceiling
   /* Steam side takes exhaust in at t and gives condensate back at r; the water side (b<->l) is the circulating water, crossed only by the tube wall. */
   cond:  {internal:[{a:"t", b:"r", kind:"comp", vap:"a", anch:"ab", na:"EXH", nb:"COND", la:"EXHAUST", lb:"CONDENSATE"},
                     /* b is the INLET and l the outlet - the water runs b->l - and every component on this circuit declares its inlet as `a`. */
@@ -1392,17 +1392,17 @@ const ROLE = {
           fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:1, r:1, l:1, b:2}, thermal:"sink", tsurv:400, pburst:35},
   ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none", tsurv:340, pburst:20},
+          ports:{}, thermal:"none", tsurv:340, pburst:20, drown:true},
   /* One role for every tank: what it is made of and what is behind it are per-instance (D.tanks). Faces fold, because a tank's faces are the same water. tsurv/pburst are the ROLE's floor and a heavy vessel states its own. */
   tank:  {internal:null, fixed:{type:"tank"}, fold:["t","b","l","r"], mu:0.65, sgtr:false,
           ports:{"*":2}, thermal:"none", tsurv:420, pburst:25},
   bkp:   {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none", tsurv:350, pburst:20},
+          ports:{}, thermal:"none", tsurv:350, pburst:20, drown:true},
   catcher: {internal:null, fixed:null, fold:null, mu:0.55, sgtr:false,
           ports:{}, thermal:"none", tsurv:null, pburst:null},             // a structure, not a network part - no run, no ports, no exception needed
   /* A footprint and an effect, in the shield/catcher idiom: one term in roomStep()'s source pass, worth nothing in a blackout, and with bearings of its own - the machine that keeps the room cool is in the room. */
   vent:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none", tsurv:400, pburst:20},
+          ports:{}, thermal:"none", tsurv:400, pburst:20, drown:true},
   /* Two machines because they answer different halves of a spill: inerting takes the oxygen and stops the FIRE, the pan takes the metal and stops everything, since a sodium-water reaction needs no oxygen at all. */
   inert: {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
           ports:{}, thermal:"none", tsurv:600, pburst:20},
