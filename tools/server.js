@@ -169,6 +169,12 @@ function snapApi(req, res, parts){
   }, MAXSNAP);
 }
 
+/* cross-origin isolation, which is what a SharedArrayBuffer costs: without these three the live plant
+   falls back to posting a clone of the state per painted frame (`src/sim/shm.js`). */
+const COI = {"Cross-Origin-Opener-Policy":"same-origin",
+             "Cross-Origin-Embedder-Policy":"require-corp",
+             "Cross-Origin-Resource-Policy":"same-origin"};
+
 const LIVE = process.argv.includes("--live");
 const LIVE_TAG = "<script>new EventSource('/api/live').onmessage=function(){location.reload();};</script>\n";
 const liveClients = new Set();
@@ -215,10 +221,12 @@ function statics(req, res, pathname){
     let src;
     try{ src = fs.readFileSync(abs, "utf8"); }catch(e){ return fail(res, 404, "not found"); }
     const body = Buffer.from(src.replace(/<\/body>/i, LIVE_TAG + "</body>"), "utf8");
-    res.writeHead(200, {"Content-Type": type, "Content-Length": body.length, "Cache-Control": "no-store"});
+    res.writeHead(200, Object.assign({"Content-Type": type, "Content-Length": body.length,
+                                      "Cache-Control": "no-store"}, COI));
     return req.method === "HEAD" ? res.end() : res.end(body);
   }
-  res.writeHead(200, {"Content-Type": type, "Content-Length": st.size, "Cache-Control": "no-store"});
+  res.writeHead(200, Object.assign({"Content-Type": type, "Content-Length": st.size,
+                                    "Cache-Control": "no-store"}, COI));
   if(req.method === "HEAD") return res.end();
   fs.createReadStream(abs).pipe(res);
 }
