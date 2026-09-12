@@ -151,6 +151,12 @@ function sample(){ for(const k in hist){ const v=chSample(k); hist[k][hi]=isFini
     S.perN=S.n; S.perT=S.t; }
   recSample(); }
 function chAt(k,i){ const r=hist[chKey(k)]; return r ? r[((hi-hlen+i)%HN+HN)%HN] : 0; }
+/* a viewer fills its ring off the packet: chSample() cannot answer here, the plant is on the other thread */
+function histPush(v){
+  if(!hlen && !hi) for(const k of CHKEYS()) if(!hist[k]) hist[k]=new Float64Array(HN);
+  for(const k in hist){ const x=v[k]; hist[k][hi]=isFinite(x)?x:0; }
+  hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN);
+}
 function togglePlot(k){ const i=plot.indexOf(k);
   if(i>=0) plot.splice(i,1); else { plot.push(k); if(plot.length>4) plot.shift(); } }
 

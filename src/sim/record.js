@@ -121,6 +121,9 @@ const ACT = {
   injectOff: {lab:"INJECT OFF",   apply:(s)=>{ s.inject=null; }},
   blackout : {lab:"BLACKOUT",     log:on=>(on===undefined?!S.blackout:!!on)?"ON":"RESTORED",
               apply:(s,on)=>{ s.blackout = on===undefined ? !s.blackout : !!on; }},
+  /* an input with no panel: written straight onto S it lands on a viewer's mirror and the next packet erases it */
+  diceOff  : {lab:"DICE",         log:on=>(!!on)?"STOOD DOWN":"LIVE",
+              apply:(s,on)=>{ s.diceOff = !!on; }},
   porvArm  : {lab:"PORV STICKS",  log:()=>"ARMED FOR NEXT LIFT",
               apply:(s)=>{ const fid=primaryRelief(); if(fid) s.reliefArm[fid]=true; }},
   rodJam   : {lab:"ROD JAM",      log:()=>S.rodJam?"CLEARED":"JAMMED", apply:(s)=>{ const on=!s.rodJam; coreEach(s,cs=>{ cs.rodJam=on; }); }},
@@ -137,6 +140,15 @@ const ACTKEYS = Object.keys(ACT);
 /* recorded before it is performed: a fork's base is a snapshot taken here, so applying first would have the branch do the act twice */
 function act(k, ...a){
   if(!ACT[k]) throw new Error("act: no such act "+k);
+  /* a bound feed owns the plant, so this is transport and not a second dispatch - except a RESET,
+     which is a new plant, and a new plant is a new worker */
+  if(typeof simLiveFeed === "function" && simLiveFeed()){
+    if(k !== "reset"){ simTell({t:"act", k, a}); return true; }
+    simKillAll();
+    recAct(k, a); actDo(k, a);
+    simRestart({seed:(S&&S.seed)>>>0});
+    return true;
+  }
   recAct(k, a);
   actDo(k, a);
   return true;
@@ -227,6 +239,17 @@ function recNew(parent, head){
 }
 /* takes are TOMBSTONED, never spliced out: `id` is the index every parent and kid list holds */
 const recCur = () => REC.takes[REC.cur] || null;
+
+/* what a viewer on the other thread needs to draw the tree: keyframes and the trend archive are megabytes and stay here */
+const recSummary = () => ({
+  cur:REC.cur, mode:REC.mode, roots:REC.roots.slice(),
+  takes:REC.takes.map(t => t && ({
+    id:t.id, parent:t.parent, kids:t.kids.slice(), label:t.label,
+    tick0:t.tick0, tickEnd:t.tickEnd, verdict:t.verdict, assisted:t.assisted,
+    evN:t.evs.length, head:{dsig:t.head.dsig, seed:t.head.seed}})),
+});
+// a take is either the real thing or a summary of one, and only this differs
+const recEvN = t => t.evN !== undefined ? t.evN : t.evs.length;
 
 function recRoot(){
   const t = recNew(null, recHead());
@@ -444,6 +467,8 @@ const trClockRate = () => TR.paused ? 0
 function simFrame(dt){
   spsFrame(dt);
   if(!P || !SIMSCREEN[screen]){ simAcc=spsAcc0=0; return false; }
+  /* a bound feed owns the plant: this thread asks for a picture and never steps one */
+  if(simLiveFeed()){ simAcc=spsAcc0=0; return simAsk(); }
   /* once a frame whether or not one is painted: the ticks read cached design signatures, this pass proves them */
   layFresh();
   /* a scenario draining takes the whole frame, or the run would be stepped at two speeds at once */
@@ -488,12 +513,93 @@ function simFrame(dt){
   recTick();
   return n>0;
 }
+/* THE FEED: a worker owns the plant and this thread is a viewer of it. A LIST from the first commit,
+   so a second plant is another entry and never a rewrite of this. */
+const SIMS = {};
+let SIMBOUND = null, simSeq = 0;
+const SIM_HANDSHAKE = 4000;
+const simLiveFeed = () => { const s = SIMBOUND !== null ? SIMS[SIMBOUND] : null;
+  return s && s.live ? s : null; };
+
+/* a worker's whole life is one commissioned plant, so anything that would have reset one spawns another */
+function simSpawn(opt, onFail){
+  if(typeof Worker !== "function" || typeof location === "undefined") return null;
+  let w;
+  try{ w = new Worker("src/sim/runworker.js"); }catch(e){ return null; }
+  const id = ++simSeq, sim = {id, w, live:false, dead:false, pending:false};
+  SIMS[id] = sim;
+  const give = why => { if(sim.dead) return; simKill(id); if(onFail) onFail(why); };
+  const timer = setTimeout(() => give("the worker did not answer"), SIM_HANDSHAKE);
+  w.onerror = () => give("the worker could not load");
+  w.onmessage = ev => {
+    const m = ev.data || {};
+    if(m.t === "ready"){ clearTimeout(timer);
+      w.postMessage({t:"live", head:recHead(), seed:((opt&&opt.seed)||0)>>>0,
+                     diceOff:!!(opt&&opt.diceOff), rate:TR.rate, paused:TR.paused}); }
+    else if(m.t === "liveok"){ sim.live = true; if(opt && opt.onLive) opt.onLive(id); }
+    else if(m.t === "packet"){ sim.pending = false; if(SIMBOUND === id) simApply(m); }
+    else if(m.t === "bench"){ TR.tickMs = m.tickMs; TR.rateMax = m.rateMax; trRateFit(); }
+    else if(m.t === "err"){ clearTimeout(timer); give(m.msg); }
+  };
+  w.postMessage({t:"init", base: location.href.replace(/[^/]*$/, "").split("?")[0]});
+  return id;
+}
+function simKill(id){
+  const sim = SIMS[id]; if(!sim) return;
+  sim.dead = true; sim.live = false;
+  try{ sim.w.terminate(); }catch(e){}
+  delete SIMS[id];
+  if(SIMBOUND === id) SIMBOUND = null;
+}
+const simKillAll = () => { for(const k in SIMS) simKill(+k); };
+/* bound AFTER it answers, or the first frame paints a plant that has only just been reset */
+const simBind = id => { SIMBOUND = SIMS[id] ? id : null; };
+const simSend = (id, msg) => { const s = SIMS[id]; if(s && !s.dead) s.w.postMessage(msg); };
+const simTell = msg => { if(SIMBOUND !== null) simSend(SIMBOUND, msg); };
+/* the strip's two doors onto the plant: a seek and a fork both step it, so a bound feed does them */
+const trSeek = (take, tick) => { if(simLiveFeed()) simTell({t:"seek", take, tick}); else seek(take, tick); };
+const trBranchAt = (take, tick) => { if(simLiveFeed()) simTell({t:"branch", take, tick}); else recBranch(take, tick); };
+
+/* the one door onto a new plant: a reset is a NEW plant and a new plant is a NEW worker, so P is written
+   once per worker and the two copies of it cannot drift. A null id is no worker, which is the single-thread path. */
+function simRestart(opt){
+  simKillAll();
+  const o = Object.assign({}, opt);
+  /* NOT benched here: trBench() puts S back but not the network solver state it advances, which lives
+     on P, so benching the worker's plant would move its next tick off this thread's */
+  o.onLive = id => { simBind(id); };
+  return simSpawn(o, why => logE("info","PLANT ON THIS THREAD",
+    "A background thread was not available ("+why+"), so the plant is being stepped on the page's "+
+    "own thread instead. It is the same plant and the same answer, just sharing the frame with the drawing."));
+}
+
+/* `S` is a `let`, so this is the assignment restoreS() already makes */
+function simApply(m){
+  restoreS(m.S);
+  LOG = m.log;
+  for(const v of m.samp) histPush(v);
+  REC.cur = m.rec.cur; REC.mode = m.rec.mode;
+  REC.roots = m.rec.roots; REC.takes = m.rec.takes;
+  if(m.sps !== undefined) TR.sps = m.sps;
+}
+/* one packet per PAINT, never per tick: a frame nobody asked for is never cloned */
+function simAsk(){
+  const sim = simLiveFeed();
+  if(!sim || sim.pending) return false;
+  sim.pending = true;
+  sim.w.postMessage({t:"frame"});
+  return true;
+}
+
 /* 0X is TR.paused and keeps the rate it was running at, so leaving 0X is a rate the strip already had */
-const trRate=r=>{ if(r===0){ TR.paused=true; return; }
-  TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=null; TR.vldRev=0; };
-const trPause=()=>{ TR.paused=!TR.paused; };
+const trRate=r=>{ if(r===0){ TR.paused=true; simTell({t:"rate", paused:true}); return; }
+  TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=null; TR.vldRev=0;
+  simTell({t:"rate", rate:r, paused:false}); };
+const trPause=()=>{ TR.paused=!TR.paused; simTell({t:"rate", paused:TR.paused}); };
 const TR_STEP_BIG=10;
 const trStepN = e => e&&e.shiftKey ? TR_STEP_BIG : 1;
-const trStep=e=>{ TR.paused=true; TR.step1+=trStepN(e); };
+const trStep=e=>{ const n=trStepN(e); TR.paused=true; TR.step1+=n;
+  simTell({t:"rate", paused:true, step1:n}); };
 /* backwards is a seek: step() is not invertible, so one tick back is a scrub off the nearest keyframe */
-const trStepBack=e=>{ TR.paused=true; TR.step1=0; if(S) seek(REC.cur, S.tick-trStepN(e)); };
+const trStepBack=e=>{ TR.paused=true; TR.step1=0; simTell({t:"rate", paused:true});
+  if(S) trSeek(REC.cur, S.tick-trStepN(e)); };
