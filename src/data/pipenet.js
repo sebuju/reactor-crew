@@ -654,21 +654,38 @@ const circCool = ci => { if(!(ci >= 0)) return null;
   const c = coreOnCirc(ci)[0]; if(c) return COOLANT[coreD(c).cool];
   const h = circCoolTank(ci); return h ? COOLANT[D.tanks[h].cool] : null; };
 /* a HOLD tank first, so where there is one the fluid and the setpoint name the part circKey() keys on; any tank may still state what is in its circuit */
-const circCoolTank = ci => { const names = id => D.tanks[id] && D.tanks[id].cool != null;
-  for(const id of holdOnCirc(ci)) if(names(id)) return id;
-  for(const id of tankIds()) if(names(id) && tankCircuit(id) === ci) return id;
+const circCoolTankOf = ci => {
+  const named = id => D.tanks[id] && D.tanks[id].cool != null;
+  const hold = holdOnCirc(ci);
+  for(let i=0;i<hold.length;i++) if(named(hold[i])) return hold[i];
+  const all = tankIds();
+  for(let i=0;i<all.length;i++) if(named(all[i]) && tankCircuit(all[i]) === ci) return all[i];
   return null; };
+/* on the graph: satOfCirc() and holdPSuggest() both ask it per node per tick */
+const circCoolTank = ci => { const slot = graphSlot("circCoolTank"), was = slot.get(ci);
+  if(was !== undefined) return was;
+  const out = circCoolTankOf(ci); slot.set(ci, out); return out; };
 const satOfCirc = ci => {
   if(ci === null || ci === undefined || ci < 0) return SAT_WATER;
   const G = nodeGraph();
+  /* memoised on the circuit itself, never on a key built out of its parts: this is asked per node per tick
+     and the string was one of the sim's largest allocations */
+  const slot = graphSlot("satOf"), was = slot.get(ci);
   if(G.coreCircs[ci] !== 1){
+    const p0 = holdSetP(ci);
+    if(was && was.h !== undefined && was.p0 === p0) return was.sat;
     const h = circCoolTank(ci); if(!h) return SAT_WATER;
-    const p0 = holdSetP(ci), slot = graphSlot("satOf"), k = h+"|"+D.tanks[h].cool+"|"+p0;
-    return slot.get(k) || (slot.set(k, satCurveFor(COOLANT[D.tanks[h].cool], p0)), slot.get(k));
+    const cool = D.tanks[h].cool;
+    const sat = satCurveFor(COOLANT[cool], p0);
+    slot.set(ci, {h, cool, p0, sat});
+    return sat;
   }
   if(typeof P !== "undefined" && P && P.coreSat && P.coreSatSig === G.sig && P.coreSat[ci]) return P.coreSat[ci];
-  const cid = coreOnCirc(ci)[0], p0 = holdSetP(ci), slot = graphSlot("satOf"), k = cid+"|"+p0;
-  return slot.get(k) || (slot.set(k, satCurveOf(cid, p0)), slot.get(k));
+  const p0 = holdSetP(ci);
+  if(was && was.cid !== undefined && was.p0 === p0) return was.sat;
+  const cid = coreOnCirc(ci)[0], sat = satCurveOf(cid, p0);
+  slot.set(ci, {cid, p0, sat});
+  return sat;
 };
 /* The design state of a primary circuit, read by the sizing guess AND by the reference solve so the two cannot price the same loop differently: a loop whose outlet is over the saturation line comes back saturated rather than subcooled. */
 const loopDesignH = ci => {
@@ -721,13 +738,23 @@ const holdLvlOf = (s, nid) => { const c = satOfCirc(circOfNode(nid));
   const vg = x/Math.max(rg,1e-9), vf = (1-x)/Math.max(rf,1e-9);
   return 100*vf/Math.max(vf+vg, 1e-12); };
 /* MPa: the coolant family's working pressure, else the highest saturated boundary on the circuit, else containment */
-const holdPSuggest = ci => {
+const holdPSuggestOf = ci => {
   { const c = coreOnCirc(ci)[0]; if(c) return COOLANT[coreD(c).cool].P0;
     if(ci === nodeGraph().coreCirc) return COOLANT[priD().cool].P0; }   // the stand-in's own circuit on a blank grid
   { const h = circCoolTank(ci); if(h) return COOLANT[D.tanks[h].cool].P0; }
   let p = 0;
-  for(const id of sgIds()) if(shellCirc(id)===ci) p = Math.max(p, sgDesignP(id));
+  const ids = sgIds();
+  for(let i=0;i<ids.length;i++) if(shellCirc(ids[i])===ci) p = Math.max(p, sgDesignP(ids[i]));
   return p || (typeof P!=="undefined" && P ? P.Pcont : 0.1);
+};
+/* on the graph, and re-asked once a plant exists: holdSetP() puts this on satOfCirc()'s per-node path */
+const holdPSuggest = ci => {
+  const slot = graphSlot("holdPSuggest"), was = slot.get(ci);
+  const hasP = typeof P !== "undefined" && !!P;
+  if(was && was.hasP === hasP) return was.p;
+  const p = holdPSuggestOf(ci);
+  slot.set(ci, {p, hasP});
+  return p;
 };
 // the LOWEST-id hold tank states it, the same one netRef() anchors on
 const holdSetP = ci => { const h = holdOnCirc(ci)[0];
@@ -1192,7 +1219,10 @@ function circOfNode(nid){
   slot.set(nid,c); return c;
 }
 /* both ends fold onto the SAME node, so no potential difference is possible; a run between two DIFFERENT faces of one part is a recirculation line and is not this */
-function selfRuns(){
+/* on the graph, beside crossTies(): layoutWarnings() asks both once a frame while the bench is up */
+const selfRuns = () => { const slot=graphSlot("selfRuns"), was=slot.get(1); if(was) return was;
+  const out=selfRunsRaw(); slot.set(1, out); return out; };
+function selfRunsRaw(){
   const out=[];
   for(const c of pipeMap().conns){
     const a=partOf(c.a), b=partOf(c.b); if(!a||!b) continue;
@@ -1892,8 +1922,11 @@ function circSolid(net, s, ci){
 /* pieces are components over the LIVE edges, so isolation splits the frame; cached on the live signature the factorisation already builds */
 function netPieces(net, s){
   if(net.pc && net.pcSig === netLiveSig(net, s)) return net.pc;
-  const of = new Int32Array(net.n).fill(-1);
-  const adj = new Array(net.n), live = new Uint8Array(net.edges.length);
+  /* the same three buffers every rebuild: net.pc is replaced wholesale and netStateSave() copies it out */
+  const of = scratch(net, "pcOf", net.n, Int32Array, -1);
+  const live = scratch(net, "pcLive", net.edges.length, Uint8Array, 0);
+  const adj = net.pcAdj && net.pcAdj.length === net.n ? net.pcAdj : (net.pcAdj = new Array(net.n));
+  for(let i=0;i<net.n;i++){ const a = adj[i]; if(a) a.length = 0; }
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
     const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
@@ -1905,7 +1938,7 @@ function netPieces(net, s){
   let c = 0;
   for(let i=0;i<net.n;i++){
     if(of[i] >= 0) continue;
-    const st = [i]; of[i] = c;
+    const st = net.pcSt || (net.pcSt = []); st.length = 0; st.push(i); of[i] = c;
     while(st.length){ const a = adj[st.pop()];
       if(a) for(let k=0;k<a.length;k++){ const v = a[k];
         if(of[v] < 0){ of[v] = c; st.push(v); } } }
