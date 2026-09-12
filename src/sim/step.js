@@ -1983,6 +1983,32 @@ const pumpDem0 = id => pumpStandby(id) ? 0 : 1;
 const pumpStart = id => primaryPump(id) ? startOf("flowDem",1)
                                         : startOf(id+":pumpDem", pumpDem0(id));
 const loadStart = () => Math.min(startOf("loadDem",1), P.loadMax);
+
+/* the tick's lagged reads, none of them on S: the transport refills them at the END of a tick and the next tick's head reads them back, so a plant re-derived from a snapshot needs these beside it - the same statement netStateSave() makes about the solver's own march */
+function plantStateSave(){
+  const cp = o => Object.assign({}, o);
+  return { net:netStateSave(P && P.net),
+           feedH:cp(feedInHBy), feedM:cp(feedInMBy), coreH:cp(coreInHBy), metal:cp(metalQ),
+           hbal:Object.assign({}, HEATBAL, {sgQBy:cp(HEATBAL.sgQBy), heatBy:cp(HEATBAL.heatBy)}),
+           edgeKg:advectEdgeKg && Array.from(advectEdgeKg),
+           landed:advectLandedBy && Array.from(advectLandedBy),
+           outKg:cp(advectOutKg), h2Out:cp(advectH2Out), h2Take:cp(h2Take),
+           outPri:advectOutPri, outSec:advectOutSec };
+}
+// false when the graph moved under it, which netStateLoad() decides
+function plantStateLoad(st){
+  if(!st) return false;
+  const put = (o, v) => { for(const k in o) delete o[k]; Object.assign(o, v); };
+  put(feedInHBy, st.feedH); put(feedInMBy, st.feedM);
+  put(coreInHBy, st.coreH); put(metalQ, st.metal);
+  for(const k in st.hbal) if(k !== "sgQBy" && k !== "heatBy") HEATBAL[k] = st.hbal[k];
+  put(HEATBAL.sgQBy, st.hbal.sgQBy); put(HEATBAL.heatBy, st.hbal.heatBy);
+  put(advectOutKg, st.outKg); put(advectH2Out, st.h2Out); put(h2Take, st.h2Take);
+  advectEdgeKg   = st.edgeKg ? Float64Array.from(st.edgeKg) : null;
+  advectLandedBy = st.landed ? Float64Array.from(st.landed) : null;
+  advectOutPri = st.outPri; advectOutSec = st.outSec;
+  return netStateLoad(P && P.net, st.net);
+}
 /* not on S: restoreS() replaces the whole state object, so S identity cannot tell "scrubbed" from "recommissioned" */
 let plantGen=0;
 function resetPlant(){
