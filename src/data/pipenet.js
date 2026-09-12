@@ -1269,11 +1269,12 @@ function netVapourAt(nid){
 const netHole = ed => ed.kind === "break" || ed.kind === "vent" || ed.kind === "sgtr";
 
 /* MPa; rho is the MEAN of the two ends, because either end's own value turns on which way round netBuild() pushed the edge. Each end weighs what stands AT it: a steam nozzle on a vessel is a column of steam, and priced at the vessel's mixture a 1.4 m exhaust duct outweighs the whole vacuum span it works in. */
+/* hoisted out of staticH: one closure per edge per assembly was the sim's largest single allocation */
+const rhoEndOf = (F, ed, i) => gasEnd(F, ed.gasAt, i) ? F.rhoG[i]
+                             : liqEnd(F, ed.liqAt, i) ? F.rhoL[i] : F.rho[i];
 const staticH = (net, ed, s) => {
   const dz = net.z[ed.u] - net.z[ed.v], F = net.F;
-  const rhoAt = i => gasEnd(F, ed.gasAt, i) ? F.rhoG[i]
-                   : liqEnd(F, ed.liqAt, i) ? F.rhoL[i] : F.rho[i];
-  let h = dz === 0 ? 0 : (rhoAt(ed.u) + rhoAt(ed.v))/2 * G_MPA * dz;
+  let h = dz === 0 ? 0 : (rhoEndOf(F, ed, ed.u) + rhoEndOf(F, ed, ed.v))/2 * G_MPA * dz;
   if(ed.poolAt !== undefined) h += (ed.poolAt === ed.u ? 1 : -1)*poolH(net, s, ed.poolAt);
   return h;
 };
@@ -2266,9 +2267,9 @@ function netReadP(sol, byP){
   if(!byP) return;
   const net = sol.net, s = sol.s, b = sol.b, fixed = sol.fixed, touch = sol.touch, ref = sol.ref;
   { const deg = net.Afdeg;
-    const lo = new Float64Array(ref.nPiece).fill(Infinity);
-    const free = new Uint8Array(ref.nPiece).fill(1);
-    const wet = new Uint8Array(ref.nPiece);
+    const lo = scratch(net, "rdLo", ref.nPiece, Float64Array, Infinity);
+    const free = scratch(net, "rdFree", ref.nPiece, Uint8Array, 1);
+    const wet = scratch(net, "rdWet", ref.nPiece, Uint8Array, 0);
     const store = sol.store;
     for(let i=0;i<net.n;i++){ const c = ref.of[i];
       if(fixed[i]!==undefined){ if(touch[i]) free[c]=0; continue; }
