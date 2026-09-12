@@ -220,12 +220,12 @@ function recApplyHead(h){
   layoutMetrics();
   return designSig() === h.dsig && h.nsig === NODE_SIG;
 }
-/* id/parent/kids are the tree, base+baseLog the plant at tick0, keys the cache, evs the recording, tr/trT/trN the trend archive */
+/* id/parent/kids are the tree, base+baseLog+baseNet the plant at tick0, keys the cache, evs the recording, tr/trT/trN the trend archive */
 function recNew(parent, head){
   const t = {
     id:REC.takes.length, parent, head,
     t0:S.t, tick0:S.tick,
-    base:snapS(S), baseLog:LOG.slice(),
+    base:snapS(S), baseLog:LOG.slice(), baseNet:plantStateSave(),
     keys:[], evs:[],
     tr:{}, trT:[], trN:0, trThin:1,   // trThin: samples dropped per sample kept, 1 = full rate
     tickEnd:S.tick, nextKey:S.tick + KF_TICKS,
@@ -291,14 +291,14 @@ function recTick(){
   const t = recBoot();
   t.tickEnd = S.tick;
   if(S.tick >= t.nextKey){
-    recKeyAdd(t, {tick:S.tick, S:snapS(S), lg:LOG.slice(), ei:t.evs.length});
+    recKeyAdd(t, {tick:S.tick, S:snapS(S), net:plantStateSave(), lg:LOG.slice(), ei:t.evs.length});
     t.nextKey = S.tick + kfSpan(t);
     if(REC.keyBytes > REC_MAX_KEY_BYTES) recEvict();
   }
 }
 // the one door onto t.keys, so the byte book cannot drift from the list
 function recKeyAdd(t, k){
-  k.bytes = k.bytes || snapBytes(k.S) + 32 + 8*k.lg.length;
+  k.bytes = k.bytes || snapBytes(k.S) + snapBytes(k.net) + 32 + 8*k.lg.length;
   t.keys.push(k); REC.keyCount++; REC.keyBytes += k.bytes;
 }
 function recKeysTake(keys){ let n=0; for(const k of keys) n += k.bytes; return n; }
@@ -359,9 +359,9 @@ function seek(takeId, tick){
   tick = Math.max(own.tick0, Math.min(tick, own.tickEnd));
 
   REC.mode = "replay";
-  let src = {tick:own.tick0, S:own.base, lg:own.baseLog, ei:0};
+  let src = {tick:own.tick0, S:own.base, net:own.baseNet, lg:own.baseLog, ei:0};
   for(const k of own.keys) if(k.tick <= tick && k.tick >= src.tick) src = k;
-  restoreS(src.S); LOG = src.lg.slice();
+  restoreS(src.S); plantStateLoad(src.net); LOG = src.lg.slice();
 
   let i = src.ei;
   while(S.tick < tick){
@@ -439,17 +439,18 @@ const TRB_ROUNDS=5, TRB_PER=8;
 const TRB_SHARE = TR_MAX_MS/(1000/60);
 function trBench(){
   if(!P||!S){ TR.tickMs=null; TR.tps=0; TR.rateMax=Infinity; return; }
-  const snap=snapS(S), lg=LOG.length;
+  const snap=snapS(S), lg=LOG.length, nst=plantStateSave();
   const tick=()=>{ laySettle(); step(0.02); layRelease(); };
-  for(let i=0;i<TRB_WARM;i++) tick();
   let ms=Infinity;
-  for(let r=0;r<TRB_ROUNDS;r++){
-    const t0=trNow();
-    for(let i=0;i<TRB_PER;i++) tick();
-    const m=(trNow()-t0)/TRB_PER;
-    if(m<ms) ms=m;
-  }
-  restoreS(snap); LOG.length=lg;
+  try {
+    for(let i=0;i<TRB_WARM;i++) tick();
+    for(let r=0;r<TRB_ROUNDS;r++){
+      const t0=trNow();
+      for(let i=0;i<TRB_PER;i++) tick();
+      const m=(trNow()-t0)/TRB_PER;
+      if(m<ms) ms=m;
+    }
+  } finally { restoreS(snap); LOG.length=lg; plantStateLoad(nst); }
   // a clock with no resolution (a stubbed one, a hardened browser) measured nothing
   if(!(ms>0)){ TR.tickMs=null; TR.tps=0; TR.rateMax=Infinity; return; }
   TR.tickMs=ms;
