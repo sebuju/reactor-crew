@@ -2,7 +2,7 @@
 // node tools/splice.js [kind ...] | --list [--secs=N] [--seed=N] [--dice=on] [--dir=bare|fwd|rev] [--v]
 const M = require('./bundle').headless(
  '{commission,step,seedRng,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,LOG:()=>LOG,MACHINE:()=>MACHINE,ROLE:()=>ROLE,'+
- 'buildLayout,buildStockPlumbing,buildStockAutomation,mintMachine,mintTank,mintFitting,removePart,removeRun,'+
+ 'buildLayout,plantPreset,mintMachine,mintTank,mintFitting,removePart,removeRun,'+
  'seedPort,seedRun,runErr,portCell,partOf,pipeMap,runBoreMm,netTempAt,pumpIds,pumpHead,ledgerKg,ledgerOut,netSolve,netReadEdges}');
 
 const D = M.D();
@@ -108,7 +108,7 @@ function facePort(id, face){
 function build(kind, dir){
   const rev = dir === "rev", bare = dir === "bare";
   Object.assign(D, JSON.parse(JSON.stringify(BASE)));
-  M.buildStockPlumbing({loops:1});
+  M.plantPreset(0);
   const notes = [];
   if(kind !== "none"){
     let rid = null, pa = null, pb = null;
@@ -144,8 +144,7 @@ function build(kind, dir){
       if(e1 || e2) return {err:"RUN REFUSED " + (e1 || e2)};
     }
   }
-  /* the cabinet is part of the plant: without one s.fregBy has no live driver, and a frozen feed valve reads as a plant that cannot hold its own generator level */
-  M.buildLayout(); M.buildStockAutomation(); M.commission();
+  M.buildLayout(); M.commission();
   return {notes};
 }
 

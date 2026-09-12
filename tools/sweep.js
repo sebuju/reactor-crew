@@ -9,11 +9,11 @@ const DICE = process.env.SWEEP_DICE !== "off";
 
 if(!isMainThread){
   const M = require("./bundle").headless(
-    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,coreD,buildLayout,buildStockPlumbing,seedRng}");
+    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,coreD,buildLayout,plantPreset,seedRng}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
 
   const set = o => { Object.assign(D, BASE);
-    M.buildStockPlumbing({loops:1});
+    M.plantPreset(0);
     M.archPreset(M.coreD("core"),o.arch); delete o.arch;
     for(const k in o) (["fuel","scram","cool","foll","refl","mod"].includes(k) ? M.coreD("core") : D)[k]=o[k];
     M.buildLayout(); M.commission();
@@ -43,10 +43,10 @@ const os = require("os");
 
 function cases(){
   const M = require("./bundle").headless(
-    "{derived,warnRed,D:()=>D,ARCHPRE:()=>ARCHPRE,FUEL:()=>FUEL,archPreset,coreD,buildLayout,buildStockPlumbing}");
+    "{derived,warnRed,D:()=>D,ARCHPRE:()=>ARCHPRE,FUEL:()=>FUEL,archPreset,coreD,buildLayout,plantPreset}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
   const ok = o => { Object.assign(D, BASE);
-    M.buildStockPlumbing({loops:1});
+    M.plantPreset(0);
     M.archPreset(M.coreD("core"),o.arch); const q = Object.assign({}, o); delete q.arch;
     for(const k in q) (["fuel","scram","cool","foll","refl","mod"].includes(k) ? M.coreD("core") : D)[k]=q[k]; M.buildLayout();
     return !M.derived().warn.some(M.warnRed); };

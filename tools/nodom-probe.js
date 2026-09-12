@@ -13,13 +13,13 @@ const shim = 'let screen="operate"; function layout(){}';
 const src = [shim].concat(files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8'))).join('\n');
 
 const M = new Function(src +
-  '; return {commission,layoutMetrics,buildStockPlumbing,scnRun,scnClone,' +
+  '; return {commission,layoutMetrics,plantPreset,scnRun,scnClone,' +
   'LAY:()=>LAY,SCNPRE:()=>SCNPRE};')();
 
 M.layoutMetrics();
 
-/* the REFERENCE ship, which carries a condensate pump: a feed pump drawing straight off a hotwell has only the column between them, and it cavitates */
-M.buildStockPlumbing({cpump: true});
+/* the ship the bench's preset buttons build, through the same door: an open-coded build is a second plant that drifts from the one the game flies */
+M.plantPreset(0);
 if (!M.LAY().parts.length) throw new Error('the stock plant built nothing');
 M.commission();
 const r = M.scnRun(M.scnClone(M.SCNPRE()[0]));

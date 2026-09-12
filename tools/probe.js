@@ -19,13 +19,20 @@ const M=require('./bundle').headless(
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
 
+/* the ship the bench's preset buttons build, through the same door: an open-coded build is a second plant that drifts from the one the game flies */
 function withPlant(build, opts){
   Object.assign(D,JSON.parse(JSON.stringify(BASE)));
-  
-  M.buildStockPlumbing({loops:(opts&&opts.loops)||1});
+  M.plantPreset((opts&&opts.pre)||0);
   if(build) build(M);
   M.buildLayout();
-  /* the cabinet is part of the plant: a preset always wires one, and without it s.fregBy has no live driver at all, so the feed valve is frozen wherever commissioning left it */
+  M.commission();
+  return M.S();
+}
+/* NOT a preset ship: no PLANTPRE row states a stock plant with four loops */
+function withStockLoops(loops){
+  Object.assign(D,JSON.parse(JSON.stringify(BASE)));
+  M.buildStockPlumbing({loops});
+  M.buildLayout();
   M.buildStockAutomation();
   M.commission();
   return M.S();
@@ -113,7 +120,7 @@ function dump(s,label){
 }
 
 const CASES={
-  stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"stock plant, 1 loop"); },
+  stock(){ const s=withPlant(null); run(s,PSEC); dump(s,"STOCK PWR preset"); },
   // three equal charges 1 s apart beside the first pump: the scar sum after each, the sets they left, a hit's set, the snapshot
   blast(){
     const s=withPlant(null); run(s,2);
@@ -174,13 +181,13 @@ const CASES={
     M.removePart("rods2");      say("REMOVE on the 2nd's drives");
     M.removePart("core1");      say("REMOVE on the 1st reactor");
   },
-  loops4(){ const s=withPlant(null,{loops:4}); run(s,PSEC); dump(s,"stock plant, 4 loops"); },
+  loops4(){ const s=withStockLoops(4); run(s,PSEC); dump(s,"stock plant, 4 loops"); },
   xeosc(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
-    M.buildStockPlumbing({loops:1}); M.latPreset(M.coreD("core"),1);
+    M.plantPreset(0); M.latPreset(M.coreD("core"),1);
     // H/D 2.0: the COMPACT preset alone reads cz 0.70, nowhere near the warning
     { const c=M.coreD("core"); c.lat.len=2*c.lat.len/1.4; M.latRevolve(c); }
-    M.buildLayout(); M.buildStockAutomation(); M.commission();
+    M.buildLayout(); M.commission();
     const s=M.S(), P=M.P(); s.diceOff=true;
     M.act("split",true);
     M.act("rodBank",P.NB-1,Math.min(1,s.rodZ[P.NB-1]+0.10));
@@ -292,6 +299,7 @@ const CASES={
       console.log("  books "+Object.entries(s.massOut).filter(e=>Math.abs(e[1])>1).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,6).map(e=>e[0]+" "+f(e[1],0)).join("  "));
     }
   },
+  /* NOT a preset ship: no PLANTPRE row states a one-loop drum plant */
   drum(){
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
     M.designForget();
