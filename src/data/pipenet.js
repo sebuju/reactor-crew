@@ -2491,6 +2491,30 @@ function netNatCirc(net, s, natLoop){
     for(let e=0;e<net.edges.length;e++) net.edges[e].w = w[e];
     netFieldUpdate(net, s); }
 }
+const netStCopy = v => {
+  if(v === null || typeof v !== "object") return v;
+  if(snapTyped(v)) return Array.from(v);
+  if(Array.isArray(v)) return v.map(netStCopy);
+  const o = {}; for(const k in v) o[k] = netStCopy(v[k]);
+  return o;
+};
+/* the solver's own march, none of it on S: ed.w is what the next solve linearises friction against, net.pc's LABELS fix the order every reader accumulates in, and the natural-circulation answer is held between recomputes */
+function netStateSave(net){
+  if(!net) return null;
+  return { w:net.edges.map(ed => ed.w), pc:netStCopy(net.pc), pcSig:net.pcSig, natTick:net.natTick||0,
+           natPBy:net.natPBy ? Object.assign({}, net.natPBy) : null,
+           natLoop:net.natLoop ? Object.assign({}, net.natLoop) : null };
+}
+// false when the node set moved under it: a state saved on another graph does not fit
+function netStateLoad(net, st){
+  if(!net || !st || st.w.length !== net.edges.length) return false;
+  for(let e=0;e<net.edges.length;e++) net.edges[e].w = st.w[e];
+  net.pc = netStCopy(st.pc); net.pcSig = st.pcSig;
+  net.natTick = st.natTick;
+  net.natPBy  = st.natPBy  ? Object.assign({}, st.natPBy)  : null;
+  net.natLoop = st.natLoop ? Object.assign({}, st.natLoop) : null;
+  return true;
+}
 /* nothing is clamped: a pump develops its own stated head, so the solve is already the answer. The one NaN/negative guard lives here, on the single scalar every caller consumes, never inside the solver */
 function netFlowK(s, byRun, byP, outs){
   const n = P.loops, byLoop = {}, natLoop = {};
