@@ -921,6 +921,9 @@ function pipeLoose(L){
 const MAT_PX = 0.016*DRAW_K;
 // it is the BAND that is hatched, not the cell, so the pitch is a fraction of the band
 const MAT_HATCH_P = 4*DRAW_K, MAT_HATCH_W = 0.9*DRAW_K;
+// the TAKEN stripes are a fraction of the CELL instead: few, fat bars read as solid, where the band's fine pitch reads as a surface
+// C2 is every other bar: lerpC(C.ink2, C.bg, 0.55) darkens them, C.ink2 is one flat grey
+const MAT_TAKEN_P = 0.62*CELL, MAT_TAKEN_W = 0.26*CELL, MAT_TAKEN_C2 = C.ink2;
 const matWallPx = (x,y,r) => clamp(matThick(x,y)*MAT_PX, 1*DRAW_K, Math.min(r.w,r.h));
 // a wall grows from its INNER face outward; a cell with no inner face - a shield - fills its whole cell
 function matInFaces(R,x,y){
@@ -993,6 +996,20 @@ function matSealLines(r,faces,w,dead){
     ctx.fillRect((f[0]==="l"?r.x:r.x+r.w)-lw/2, (f[1]==="t"?r.y:r.y+r.h)-lw/2, lw, lw);
   ctx.restore();
 }
+/* Its own bars, not hatch()'s tile: a fat line in that tile shows the butt cap the tile corners put inside the cell. Odd bars take MAT_TAKEN_C2, and the phase is absolute, so the lattice runs on across a wall. */
+function matTakenBars(r){
+  const P=MAT_TAKEN_P, over=r.w+r.h, y0=r.y-over, y1=r.y+r.h+over;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(r.x,r.y,r.w,r.h); ctx.clip();
+  ctx.globalAlpha=.22; ctx.lineWidth=MAT_TAKEN_W; ctx.lineCap="butt";
+  const m1=Math.ceil((r.x+r.w+r.y+r.h)/P)+1;
+  for(let m=Math.floor((r.x+r.y)/P)-1; m<=m1; m++){
+    const s=m*P;
+    ctx.strokeStyle = (m&1) ? MAT_TAKEN_C2 : C.ink2;
+    ctx.beginPath(); ctx.moveTo(s-y0,y0); ctx.lineTo(s-y1,y1); ctx.stroke();
+  }
+  ctx.restore();
+}
 function matPaintDraw(L){
   if(!D.mat) return;
   ctx.save();
@@ -1018,7 +1035,8 @@ function matPaintDraw(L){
     const dead = L && matWrecked(L,x,y);
     const w = matWallPx(x,y,r), faces = matInFaces(RG,x,y);
     const col = dead ? C.well : m.col;
-    // the hatch is clipped to the band, never the cell, or a thin wall throws diagonals across the compartment
+    // a GAS-TIGHT cell is out of every region and no field may fill it, so the whole cell is struck through in grey; the band's own hatch stays clipped to the real thickness on top
+    if(m.tight) matTakenBars(r);
     matBandPath(r,faces,w);
     ctx.save(); ctx.clip();
     ctx.fillStyle = lerpC(col, C.bg, m.tight ? 0.58 : 0.66);

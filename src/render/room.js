@@ -23,6 +23,9 @@ function roomFace(get, i, worse){
   return v===null ? get(i) : v;
 }
 
+// heat and blast cross a wall and are surveyed onto it; a SPECIES is not, because the cell holds no atmosphere to hold it
+const roomAir = i => matRegions().of[i] >= 0;
+
 // fill skips an occupied cell (the radZones() rule); the iso-line does not, because a machine IS a wall to this field
 function roomZones(data){
   const T=data.T, g=data.g;
@@ -63,15 +66,15 @@ function roomCellTip(L){
   const row=(lab,s)=>rows.push(lab+s);
   if(L){
     // through roomFace(), the layers' own door, or a wall cell reads ambient under a picture that says otherwise
-    const rad=layerData("rad",L), r=rad.f[i],
+    const rad=layerData("rad",L), r=rad.f[i], air=roomAir(i),
           T=roomFace(j=>L.roomT[j],i,Math.max),
           live=roomFace(j=>L.roomP[j],i,Math.max),
           worst=roomFace(j=>L.roomPPk[j],i,Math.max),
-          h2=roomFace(j=>roomH2Frac(L,j),i,Math.max)*100;
+          h2=air ? roomH2Frac(L,i)*100 : 0;
     if(r>=0.005) row("DOSE         ",r.toFixed(2)+" x  "+ZONE[zoneOf(r)].lab);
     row("AIR TEMP     ",T.toFixed(0)+" K  "+HEATZ[heatOf(T)].lab);
     if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
-    row("OXYGEN       ",(roomFace(j=>roomO2Frac(L,j),i,Math.min)*100).toFixed(1)+" %");
+    if(air) row("OXYGEN       ",(roomO2Frac(L,i)*100).toFixed(1)+" %");
     if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
     if(L.roomWater[i]>=0.01) row("WATER        ",L.roomWater[i].toFixed(0)+" kg  "+roomWaterT(L,i).toFixed(0)+" K");
     if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
@@ -94,10 +97,10 @@ function roomCellTip(L){
   TIP(GX+X*CELL, rowTop(Y), CELL, rowTop(Y+1)-rowTop(Y), "CELL "+X+","+Y, rows.join("\n"));
 }
 
-// off roomH2Frac(), the same expression the ignition test uses, so a cell cannot draw as safe and burn
+// per cell off roomH2Frac(), the expression the ignition test takes: a gas-tight cell holds no atmosphere of its own, so the cloud stops at the liner instead of being surveyed onto it
 function roomH2Layer(data,L){
   if(!L) return;
-  const getH2=j=>roomH2Frac(L,j), h2At=i=>roomFace(getH2,i,Math.max);
+  const h2At=i=>roomH2Frac(L,i);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
@@ -293,8 +296,8 @@ function roomO2Layer(data,L){
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
-      const i=Y*GW+X, f=roomFace(getO2,i,Math.min);
-      if(f>=O2_FRAC0*0.9 || data.g[Y][X]) continue;
+      const i=Y*GW+X, f=getO2(i);
+      if(!roomAir(i) || f>=O2_FRAC0*0.9 || data.g[Y][X]) continue;
       const inert = f<O2_LOC;
       ctx.globalAlpha = inert ? 0.42 : 0.10+0.30*(1-f/O2_FRAC0);
       fillRect(GX+X*CELL,y,CELL,h, inert?C.blue:C.ink2); ctx.globalAlpha=1;
@@ -311,6 +314,8 @@ const liqY = z => { const k=clamp(Math.floor(z/MPC), 0, GH-1), y1=rowTop(GH-k); 
 /* One primitive for both liquids: a standing run of a column is a rectangle from its floor, lifted by the liquid under it (`under`), to its surface. What is in the air and moving is a band as wide as the share of its cell it fills, tapered to the cells over and under it, so a stream thins as it falls by continuity alone; a film at rest in the air draws nothing. */
 function liqDraw(data, L, q, col, a, under, lit){
   const G=roomGeomLive(L), M=q.M, segs=[];
+  // nothing under one device pixel is drawn: a 0.04 kg film draws a 1.4 px line across a cell and reads as a body
+  const sc=ctxScale(), px=sc>0 ? 1/sc : 0;
   for(let X=0;X<GW;X++){
     let s=null;
     for(let Y=GH-1;Y>=0;Y--){
@@ -325,7 +330,7 @@ function liqDraw(data, L, q, col, a, under, lit){
   const body=on=>{
     ctx.beginPath();
     for(const s of segs){
-      if(!!(lit && lit(s.top))!==on) continue;
+      if(!!(lit && lit(s.top))!==on || s.yb-s.yt<px) continue;
       const x0=GX+s.X*CELL;
       ctx.rect(x0, s.yt, CELL, s.yb-s.yt);
       if(on) txt(roomPoolT(L,s.top).toFixed(0)+" K", x0+CELL/2, s.yb-3, {size:8, align:"center", color:C.amber});
@@ -335,14 +340,17 @@ function liqDraw(data, L, q, col, a, under, lit){
   body(false);
   if(lit) body(true);
   ctx.beginPath();
-  for(const s of segs){ const x0=GX+s.X*CELL; ctx.moveTo(x0, s.yt); ctx.lineTo(x0+CELL, s.yt); }
+  for(const s of segs){ if(s.yb-s.yt<px) continue; const x0=GX+s.X*CELL; ctx.moveTo(x0, s.yt); ctx.lineTo(x0+CELL, s.yt); }
   ctx.strokeStyle=col; ctx.lineWidth=1.4; ctx.stroke();
   /* The falling water: a trapezoid per moving cell, its width the fill of the cell, its ends the mean with the falling neighbour over and under it. */
   const wOf=i=>{ const s=liqShut(G,i) ? 0 : M[i]/Math.max(liqCap(q,i),1e-9); return clamp(s,0,1)*CELL; };
-  const band=i=>!liqShut(G,i) && M[i]>=LIQ_SEEN && !liqStands(q,G,i) && liqSpeed(q,i)>LIQ_REST;
+  // the pixel gate is part of what a band IS, or a neighbour too thin to draw still counts as one
+  const band=i=>!liqShut(G,i) && M[i]>=LIQ_SEEN && !liqStands(q,G,i) && liqSpeed(q,i)>LIQ_REST && wOf(i)>=px;
+  // a fall one cell tall is a splash, not a stream
+  const lone=i=>!(i>=GW && band(i-GW)) && !(i+GW<GW*GH && band(i+GW));
   ctx.beginPath();
   for(let i=0;i<GW*GH;i++){
-    if(!band(i)) continue;
+    if(!band(i) || lone(i)) continue;
     const X=i%GW, Y=(i/GW)|0, xc=GX+X*CELL+CELL/2, y0=rowTop(Y), y1=rowTop(Y+1), w=wOf(i);
     const wt=i>=GW && band(i-GW) ? (w+wOf(i-GW))/2 : w, wb=i+GW<GW*GH && band(i+GW) ? (w+wOf(i+GW))/2 : w;
     ctx.moveTo(xc-wt/2, y0); ctx.lineTo(xc+wt/2, y0); ctx.lineTo(xc+wb/2, y1); ctx.lineTo(xc-wb/2, y1); ctx.closePath();
@@ -808,21 +816,34 @@ function contGaugeOf(g){
   return {key:top.Y*GW+top.X, rate,
           cx:Math.round(GX+(top.X+1)*CELL-r-pad), cy:Math.round(rowTop(top.Y)+r+pad)};
 }
-// not a layer, like the pressurizer's: the scale is the weakest wall's rating, marked at 1 and ending at its burst
+const shipRegion = () => matRegions().regions.find(g=>!g.bounded) || null;
+/* The volume the ship itself is: its boundary is the hull and not a painted cell, so the scale is what
+   any boundary is built to hold, and it hangs one cell OUTSIDE the grid where nothing can be drawn. */
+function shipGaugeOf(){
+  if(!shipRegion()) return null;
+  const r=PIPE_DIAL_R, pad=2*DRAW_K;
+  return {key:"ship", rate:MAT_PDES,
+          cx:Math.round(GX+(GW+1)*CELL-r-pad), cy:Math.round(rowTop(0)+r+pad)};
+}
+// one dial wherever a volume's pressure is read: the scale is the rating it is judged against, marked at 1 and ending at its burst
+function contDialAt(L,at,pr,wall,title){
+  const burst=at.rate*PIPE_BURST_K, r=PIPE_DIAL_R;
+  const fr=pipeDisplay("cont:"+at.key, at.rate>0 ? pr/at.rate : (pr>0 ? PIPE_BURST_K : 0));
+  pipeDial(at.cx, at.cy, r, fr, C.cyan, (pr*1000).toFixed(1)+" kPa", {lim:1, max:PIPE_BURST_K});
+  TIP(at.cx-r, at.cy-r, 2*r, 2*r, title,
+    (pr*1000).toFixed(1)+" kPa over the ship's air at the worst cell inside, "+
+    (at.rate>0 ? Math.round(pr/at.rate*100)+" % of what "+wall+" is rated for ("+(at.rate*1000).toFixed(1)+" kPa)" : "and "+wall+" is rated for nothing")+
+    ". That wall splits at "+(burst*1000).toFixed(1)+" kPa, where the dial ends; the red band is past its rating.");
+}
+// not a layer, like the pressurizer's
 function contDials(L){
   for(const g of matRegions().regions){
     if(!g.bounded) continue;
     const at=contGaugeOf(g);
-    if(!at) continue;
-    const pr=regionDP(L,g), burst=at.rate*PIPE_BURST_K, r=PIPE_DIAL_R;
-    const fr=pipeDisplay("cont:"+at.key, at.rate>0 ? pr/at.rate : (pr>0 ? PIPE_BURST_K : 0));
-    pipeDial(at.cx, at.cy, r, fr, C.cyan, (pr*1000).toFixed(1)+" kPa", {lim:1, max:PIPE_BURST_K});
-    pipeTag(at.cx, at.cy+r+11*DRAW_K, ((burst-pr)*1000).toFixed(1)+" kPa MARGIN", burst-pr<0?C.red:C.ink2);
-    TIP(at.cx-r, at.cy-r, 2*r, 2*r, "CONTAINMENT PRESSURE",
-      (pr*1000).toFixed(1)+" kPa over the ship's air at the worst cell inside, "+
-      (at.rate>0 ? Math.round(pr/at.rate*100)+" % of what its weakest wall is rated for ("+(at.rate*1000).toFixed(1)+" kPa)" : "and one of its walls is rated for nothing")+
-      ". That wall splits at "+(burst*1000).toFixed(1)+" kPa, where the dial ends; the red band is past its rating.");
+    if(at) contDialAt(L,at,regionDP(L,g),"its weakest wall","CONTAINMENT PRESSURE");
   }
+  const sh=shipGaugeOf();
+  if(sh) contDialAt(L,sh,regionDP(L,shipRegion()),"the hull","GRID PRESSURE");
 }
 // the ship is drawn in SECTION: water is a place, it falls, it runs and it stands where it stands
 function floodLayer(data,L){

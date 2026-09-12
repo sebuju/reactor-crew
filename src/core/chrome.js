@@ -98,9 +98,9 @@ function hatchPat(col,P,lw){
     const c=g.getContext("2d");
     c.setTransform(n/P,0,0,n/P,0,0);
     c.strokeStyle=col; c.lineWidth=lw; c.lineCap="butt";
-    // the tile's own line plus its two neighbours, so the corners wrap
+    // the tile's own line plus its two neighbours, so the corners wrap; each runs a tile past both corners it would otherwise end on, or a FAT line shows its own cap as a notch
     for(const k of [0,P,2*P]){
-      c.beginPath(); c.moveTo(k-P,P); c.lineTo(k+P,-P); c.stroke(); }
+      c.beginPath(); c.moveTo(k-2*P,2*P); c.lineTo(k+2*P,-2*P); c.stroke(); }
     pat=ctx.createPattern(g,"repeat");
     if(pat.setTransform && typeof DOMMatrix!=="undefined")
       pat.setTransform(new DOMMatrix().scaleSelf(P/n));
