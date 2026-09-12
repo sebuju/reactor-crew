@@ -926,19 +926,22 @@ const MAT_HATCH_P = 4*DRAW_K, MAT_HATCH_W = 0.9*DRAW_K;
 const MAT_TAKEN_P = 0.62*CELL, MAT_TAKEN_W = 0.26*CELL, MAT_TAKEN_C2 = C.ink2;
 const matWallPx = (x,y,r) => clamp(matThick(x,y)*MAT_PX, 1*DRAW_K, Math.min(r.w,r.h));
 // a wall grows from its INNER face outward; a cell with no inner face - a shield - fills its whole cell
+/* hoisted, and the answer handed back in one array: this is asked per painted cell per frame, and the
+   closure, the list and the diagonal table were all built again each time. Callers read it and drop it. */
+const matFaceIn=(R,X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return false;
+  if(matWall(X,Y)) return false;
+  const g=R.regions[R.of[Y*GW+X]]; return !!(g && g.bounded); };
+const MAT_DIAG=[[-1,-1,"lt"],[1,-1,"rt"],[-1,1,"lb"],[1,1,"rb"]], MAT_FACES=[];
 function matInFaces(R,x,y){
-  const out=[];
-  const inside=(X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return false;
-    if(matWall(X,Y)) return false;
-    const g=R.regions[R.of[Y*GW+X]]; return !!(g && g.bounded); };
-  if(inside(x-1,y)) out.push("l");
-  if(inside(x+1,y)) out.push("r");
-  if(inside(x,y-1)) out.push("t");
-  if(inside(x,y+1)) out.push("b");
+  const out=MAT_FACES; out.length=0;
+  if(matFaceIn(R,x-1,y)) out.push("l");
+  if(matFaceIn(R,x+1,y)) out.push("r");
+  if(matFaceIn(R,x,y-1)) out.push("t");
+  if(matFaceIn(R,x,y+1)) out.push("b");
   // a corner's inside is DIAGONAL: the orthogonal test comes back empty there, and the diagonal names both faces
   if(!out.length){
-    for(const d of [[-1,-1,"lt"],[1,-1,"rt"],[-1,1,"lb"],[1,1,"rb"]])
-      if(inside(x+d[0],y+d[1])) out.push(d[2]);
+    for(let i=0;i<MAT_DIAG.length;i++){ const d=MAT_DIAG[i];
+      if(matFaceIn(R,x+d[0],y+d[1])) out.push(d[2]); }
   }
   return out;
 }

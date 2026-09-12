@@ -267,7 +267,8 @@ function waveShown(L){
   const g=waveGrad(L), N=g.gx.length;
   if(!shownA || shownA.length!==N){ shownA=new Float64Array(N); shownW=new Float64Array(N); }
   let mx=PNOW_LO;
-  for(let i=0;i<N;i++){ const f=Math.hypot(g.gx[i], g.gy[i]); shownA[i]=f; if(f>mx) mx=f; }
+  /* sqrt, not hypot: hypot takes its arguments as a list and builds one per cell per frame */
+  for(let i=0;i<N;i++){ const ax=g.gx[i], ay=g.gy[i], f=Math.sqrt(ax*ax+ay*ay); shownA[i]=f; if(f>mx) mx=f; }
   if(mx>waveRef) waveRef=mx;
   /* a face under WAVE_P_LO is at rest by the gas step's own gate, which stops solving there and leaves the step standing, so drawn it sticks on screen forever */
   for(let i=0;i<N;i++){ const a=shownA[i]/waveRef, on=a>=PNOW_CUT && Math.max(Math.abs(g.gx[i]), Math.abs(g.gy[i]))>=WAVE_P_LO;

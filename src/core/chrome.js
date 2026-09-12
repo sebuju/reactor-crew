@@ -85,14 +85,17 @@ function segMark(x,y,w,h,frac,marks,col,signed){
 /* reference-cell figures: DRAW_K (layout.js) is not defined this early in the load order */
 const HATCH_P=7, HATCH_W=1.4;
 const ctxScale=()=>{ const m=ctx.getTransform&&ctx.getTransform();
-  return (m&&m.a) ? Math.max(0.05,Math.hypot(m.a,m.b)) : 0; };
+  return (m&&m.a) ? Math.max(0.05,Math.sqrt(m.a*m.a+m.b*m.b)) : 0; };
 const hatchOK=()=>typeof DOMMatrix!=="undefined" && ctxScale()>0;
 function hatchPat(col,P,lw){
-  const sc=ctxScale();
-  const key=col+"@"+sc.toFixed(3)+"@"+P+"@"+lw;
   // a pattern belongs to the context that made it, and hostPaint() swaps ctx
+  /* nested maps, not a joined key: this is asked per hatched cell per frame and the key was built every time */
+  const sc=Math.round(ctxScale()*1000)/1000;
   const pats = ctx.__hatchPats || (ctx.__hatchPats=new Map());
-  let pat=pats.get(key);
+  let byCol=pats.get(col); if(!byCol){ byCol=new Map(); pats.set(col,byCol); }
+  let bySc=byCol.get(sc); if(!bySc){ bySc=new Map(); byCol.set(sc,bySc); }
+  let byP=bySc.get(P); if(!byP){ byP=new Map(); bySc.set(P,byP); }
+  let pat=byP.get(lw);
   if(!pat){ const n=Math.max(1,Math.round(P*sc));
     const g=document.createElement("canvas"); g.width=g.height=n;
     const c=g.getContext("2d");
@@ -104,7 +107,7 @@ function hatchPat(col,P,lw){
     pat=ctx.createPattern(g,"repeat");
     if(pat.setTransform && typeof DOMMatrix!=="undefined")
       pat.setTransform(new DOMMatrix().scaleSelf(P/n));
-    pats.set(key,pat); }
+    byP.set(lw,pat); }
   return pat;
 }
 function hatch(x,y,w,h,col,a,pitch,lw){
