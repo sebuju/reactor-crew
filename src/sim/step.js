@@ -1958,8 +1958,8 @@ const unitFrac=(s,x)=>{ let live=0; coreEach(s,(cs,K)=>{ if(!cs.scrammed) live+=
 const tProg=(s,K,cs)=>{ K = K || s.K || P; return ((cs ? cs.scrammed : s.scrammed) && runbackLive()) ? K.Tref-TPROG_SPAN
              : K.steam ? K.Tref
              : K.Tref-TPROG_SPAN + TPROG_SPAN*(s.load===undefined ? 1 : cs ? unitFrac(s, s.load) : s.load); };
-/* what the turbine is actually taking as a share of full-load raise - the steam side's answer, not the governor's setting */
-const turbShare = s => P.steamRef>0 ? (s.turbWk||0)/P.steamRef : 0;
+/* gross, like the governor's flow match: s.turbWk is net of the bleed and P.steamRef is not, and the bare ratio reads the bleed as a standing core-to-turbine mismatch */
+const turbShare = s => P.steamRef>0 ? ((s.turbWk||0)+bleedPlant(s))/P.steamRef : 0;
 /* the governor as an opening of the fitted swallow, capped at P.swallow; the bypass is a second gate on the same path, does no work, and is not passK-gated because dumping is what a plant does after a turbine trip. Damage and piping are the edge's question, asked per instance */
 const dumpOf = s => (condAvail(s) ? Math.max(clamp((s.Tavg-tProg(s))*DUMP_K,0,P.bypass),
                                             dumpPOf(s)) : 0)
