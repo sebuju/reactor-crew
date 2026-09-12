@@ -948,18 +948,18 @@ function liqStep(s, dt, G, q){
   const A = MPC*ROOM_DEPTH, rg = rho*G_SI, p = lqP, h = lqH, hc = lqHc, cap = lqCap, comp = lqComp, full = lqFull, stand = lqStand, gas = lqGas, stiff = lqStiff;
   const cd2 = 2*LIQ_CD*LIQ_CD, n2g = G_SI*LIQ_MANNING*LIQ_MANNING, P0 = ROOM_P0*1000;
   let any = false;
+  for(let i=0;i<N && !any;i++) if(M[i] > 0) any = true;
+  if(!any){ vu.fill(0); vv.fill(0); return; }
   for(let i=0;i<N;i++){
     cap[i] = liqShut(G, i) ? 0 : liqCap(q, i);
     hc[i] = cap[i]/(rho*A);
     h[i] = M[i]/(rho*A);
-    if(M[i] > 0) any = true;
     gas[i] = (ROOM_P0 + s.roomP[i])*1000;
     full[i] = cap[i] > 0 && M[i] >= cap[i]*LIQ_FULL_K ? 1 : 0;
   }
   // carried by the floor through full cells
   const standWalk = () => { for(let i=N-1;i>=0;i--){ const j = i+GW; stand[i] = (j >= N || !liqRuns(G, i, j)) ? 1 : (full[j] && stand[j]) ? 1 : 0; } };
   standWalk();
-  if(!any){ vu.fill(0); vv.fill(0); return; }
   // a carried cell over its cap is not a mound: the excess climbs the column, liqLand()'s own law
   for(let i=N-1;i>=GW;i--){
     if(!(cap[i] > 0 && M[i] > cap[i] && stand[i] && liqRuns(G, i, i-GW) && !liqShut(G, i-GW))) continue;
