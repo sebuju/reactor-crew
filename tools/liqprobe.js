@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// node tools/liqprobe.js map|still|jet|dam|fall|hole|sheet|side|utube|utubegas|bubble|books|cost|deck|metal [--pre=N] [--dump=y0-y1]
+// node tools/liqprobe.js map|still|jet|dam|fall|hole|sheet|side|utube|utubegas|bubble|books|cost|deck|metal|rowstep|stream|conserve [--pre=N] [--dump=y0-y1]
 // one scenario per run, every figure against the real number the plan names
 const M = require('./bundle').headless(
   '{plantPreset,buildLayout,commission,step,S:()=>S,D:()=>D,act,GW:()=>GW,GH:()=>GH,MPC:()=>MPC,sumpKg,ledgerKg,ledgerOut,' +
   'roomGeomLive,liqWater,liqMetal,liqCap,liqStands,liqSurf,liqRuns,liqShut,liqFill,liqLand,liqSpeed,zFloor,matRegions,matPaint,fireCool,' +
   'roomVgas,roomWaterT,hOfT,matLift,SAT_WATER:()=>SAT_WATER,T_HULL:()=>T_HULL,ROOM_M0:()=>ROOM_M0,ROOM_VCELL:()=>ROOM_VCELL,ROOM_P0:()=>ROOM_P0,' +
-  'G_MPA:()=>G_MPA,WATER_RHO:()=>WATER_RHO,roomDispOf,roomGasFields,liqCgIt:()=>liqCgIt,roomCgIt:()=>roomCgIt,PLANTPRE:()=>PLANTPRE}');
+  'G_MPA:()=>G_MPA,WATER_RHO:()=>WATER_RHO,roomDispOf,roomGasFields,liqCgIt:()=>liqCgIt,roomCgIt:()=>roomCgIt,PLANTPRE:()=>PLANTPRE,CELL:()=>CELL}');
 const { performance: perf } = require('perf_hooks');
 const arg = k => { const a = process.argv.find(x => x.startsWith('--' + k + '=')); return a ? a.slice(k.length + 3) : null; };
 const mode = process.argv[2] || 'map';
@@ -44,11 +44,20 @@ function dump(q, y0, y1) {
     console.log(r);
   }
 }
-process.on('exit', () => { if (msN) console.log('fastest water face ' + vTop.toFixed(1) + ' m/s at ' + vAt + ' (guard 30), ' + (msAcc / msN).toFixed(2) + ' ms/tick over ' + msN + ' ticks'); const d = arg('dump'); if (d) { const [a, b] = d.split('-').map(Number); dump(mode === 'metal' ? metal() : water(), a, b); } });
+process.on('exit', () => { if (msN) console.log('water off its books by ' + consWorst.toFixed(6) + ' kg, worst tick at ' + consAt + ' s'); if (msN) console.log('fastest water face ' + vTop.toFixed(1) + ' m/s at ' + vAt + ' (guard 30), ' + (msAcc / msN).toFixed(2) + ' ms/tick over ' + msN + ' ticks'); const d = arg('dump'); if (d) { const [a, b] = d.split('-').map(Number); dump(mode === 'metal' ? metal() : water(), a, b); } });
 
 let t = 0, msAcc = 0, msN = 0;
 let vTop = 0, vAt = null;
-const tick = k => { const t0 = perf.now(); for (let j = 0; j < k; j++){ M.step(0.02); for (let i = 0; i < N; i++){ const v = Math.max(Math.abs(s.roomWU[i]), Math.abs(s.roomWV[i])); if (v > vTop){ vTop = v; vAt = [i % GW, (i / GW) | 0, +(t + (j + 1) * 0.02).toFixed(2)]; } } } t += k * 0.02; const ms = (perf.now() - t0) / k; msAcc += ms * k; msN += k; return ms; };
+// the water on the deck against its own books: every source and sink of it is a `sump` or an `inject` line
+const wTot = () => { let k = 0; const W = s.roomWater; for (let i = 0; i < N; i++) k += W[i]; return k; };
+const wBook = () => (s.massOut.sump || 0) + (s.massOut.inject || 0);
+let consWorst = 0, consAt = null;
+const tick = k => { const t0 = perf.now(); for (let j = 0; j < k; j++){
+    const w0 = wTot(), b0 = wBook();
+    M.step(0.02);
+    const r = Math.abs(wTot() - w0 + wBook() - b0);
+    if (r > consWorst){ consWorst = r; consAt = +(t + (j + 1) * 0.02).toFixed(2); }
+    for (let i = 0; i < N; i++){ const v = Math.max(Math.abs(s.roomWU[i]), Math.abs(s.roomWV[i])); if (v > vTop){ vTop = v; vAt = [i % GW, (i / GW) | 0, +(t + (j + 1) * 0.02).toFixed(2)]; } } } t += k * 0.02; const ms = (perf.now() - t0) / k; msAcc += ms * k; msN += k; return ms; };
 // standing cells and the surface they show, over a column range
 function surf(x0, x1) {
   const Gg = G(), q = water(), out = [];
@@ -67,6 +76,10 @@ function pool(x0, x1, yFloor, depthM, T) {
     for (let X = x0; X <= x1; X++) { const i = at(X, Y); if (M.liqShut(Gg, i)) continue;
       const kg = f * M.liqCap(q, i); M.liqLand(s, Gg, q, i, kg, kg * e); }
   }
+  // what the lay buried over its own cap, read before the first tick can take it
+  const over = [];
+  for (let i = 0; i < N; i++) { const ex = W()[i] - M.liqCap(q, i);
+    if (ex > 1 && i >= GW && W()[i - GW] > 0 && !M.liqShut(Gg, i - GW)) over.push([i % GW, (i / GW) | 0, ex]); }
   s.roomWU.fill(0); s.roomWV.fill(0); s.roomPU.fill(0); s.roomPV.fill(0); M.roomDispOf().fill(0);
   // the gas the pool pushed aside is spread over the room it has left, at rest
   for (const F of M.roomGasFields(s)) { let tot = 0, vol = 0;
@@ -75,6 +88,7 @@ function pool(x0, x1, yFloor, depthM, T) {
   tick(1);
   for (let Y = yFloor; Y > yFloor - Math.ceil(rows); Y--) for (let X = x0; X <= x1; X++) { const i = at(X, Y);
     if (W()[i] >= M.liqCap(q, i) - 1e-6) s.roomWP[i] = s.roomP[i] + M.WATER_RHO() * g * (depthM - (yFloor - Y) * MPC) / 1000; }
+  return over;
 }
 // standing/falling flips per tick, the figure the instant-level pass was judged on
 function flips(k, label, every) {
@@ -205,4 +219,97 @@ else if (mode === 'still') {
   M.act('hit', arg('part'));
   for (let j = 0; j < +(arg('secs') || 8); j++) { const ms = tick(50);
     console.log('t ' + t.toFixed(0) + ' fireEv kg ' + s.fireEv.kg.toFixed(2) + ' q ' + (s.fireEv.q / 1000).toFixed(1) + ' MJ pool ' + (s.roomPool.reduce((a, b) => a + b, 0) / 1000).toFixed(3) + ' t, ms ' + ms.toFixed(2)); }
+} else if (mode === 'drain') {
+  // the user's sequence: pour a deep pool on the deck, shoot the floor under it, then only wait
+  M.act('injectOn', 'fluid', 10000, at(29, 13));
+  tick(200); M.act('injectOff');
+  tick(100);
+  M.act('hit', 'mat:30,30');
+  const q = water();
+  let prev = null;
+  for (let j = 0; j < 6; j++) { tick(75);
+    const Gg = G(); let kg = 0, cols = 0, lo = null, hi = null, air = 0;
+    for (let X = 7; X <= 36; X++) { let zz = null;
+      for (let Y = 1; Y <= 29; Y++) { const i = at(X, Y), m = W()[i]; kg += m;
+        if (!(m > 0.5) || M.liqShut(Gg, i)) continue;
+        if (M.liqStands(q, Gg, i)) zz = M.liqSurf(q, Gg, i); else air += m; }
+      if (zz === null) continue; cols++; if (lo === null || zz < lo) lo = zz; if (hi === null || zz > hi) hi = zz; }
+    const rate = prev === null ? 0 : (prev - kg) / 1.5;
+    prev = kg;
+    console.log('t ' + t.toFixed(1) + ' on the floor ' + (kg / 1000).toFixed(2) + ' t over ' + cols + ' cols, draining ' +
+      (rate / 1000).toFixed(2) + ' t/s, surface ' + (lo === null ? '-' : f3(lo) + '-' + f3(hi)) +
+      ', span ' + (lo === null ? 0 : ((hi - lo) * 1000).toFixed(0)) + ' mm, in the air ' + air.toFixed(0) + ' kg');
+    // the floor row either side of the hole: fill %, S standing or a in the air, the face speed to its right
+    let row = ' 29';
+    for (let X = 26; X <= 36; X++) { const i = at(X, 29);
+      row += ' ' + X + ':' + (100 * W()[i] / Math.max(M.liqCap(q, i), 1e-9)).toFixed(0) + (M.liqStands(q, Gg, i) ? 'S' : 'a') +
+        (s.roomWU[i] >= 0 ? '+' : '') + s.roomWU[i].toFixed(2); }
+    console.log(row);
+    // what sits on top of it: any mass at all here makes the cell under it stiff
+    let up = ' 28';
+    for (let X = 26; X <= 36; X++) up += ' ' + X + ':' + W()[at(X, 28)].toFixed(3) + 'kg';
+    console.log(up);
+  }
+} else if (mode === 'settle') {
+  // pour onto the deck, stop, and ask whether the surface goes flat - and whether the gas over it is what holds the step
+  M.act('injectOn', 'fluid', 10000, at(29, 13));
+  tick(150); M.act('injectOff');
+  const q = water(), rg = M.WATER_RHO() * g;
+  for (let j = 0; j < 2; j++) { tick(75);
+    const Gg = G(), z = [], top = [], cols = [];
+    for (let X = 7; X <= 36; X++) { let zz = null, tt = null;
+      for (let Y = GH - 1; Y >= 0; Y--) { const i = at(X, Y); if (W()[i] > 0.5 && M.liqStands(q, Gg, i) && !M.liqShut(Gg, i)) { zz = M.liqSurf(q, Gg, i); tt = i; } }
+      if (zz === null) continue;
+      z.push(zz); top.push(tt); cols.push(X); }
+    if (!z.length) { console.log('t ' + t.toFixed(1) + ' no standing water'); continue; }
+    let lo = 0, hi = 0;
+    for (let k = 0; k < z.length; k++) { if (z[k] < z[lo]) lo = k; if (z[k] > z[hi]) hi = k; }
+    // a higher gas pressure holds its own column down: the step the gas alone explains is dp/(rho*g)
+    const dp = (s.roomP[top[lo]] - s.roomP[top[hi]]) * 1000, gasDz = dp / rg, span = z[hi] - z[lo];
+    console.log('t ' + t.toFixed(1) + ' span ' + (span * 1000).toFixed(0) + ' mm, low col ' + cols[lo] + ' high col ' + cols[hi] +
+      ', gas dp ' + (dp / 1000).toFixed(2) + ' kPa = ' + (gasDz * 1000).toFixed(0) + ' mm, water holds ' + ((span - gasDz) * 1000).toFixed(0) + ' mm of it');
+  }
+  /* Four windows in a row, each shorter than the basin's own seiche period: a slosh tilts one way then
+     the other and the sign flips, a step keeps its sign. The gas column is what dp/(rho*g) would hold. */
+  const tilt = () => { const Gg = G(); let l = 0, ln = 0, r = 0, rn = 0, pl = 0, pr = 0;
+    for (let X = 7; X <= 36; X++) { let zz = null, tt = null;
+      for (let Y = GH - 1; Y >= 0; Y--) { const i = at(X, Y); if (W()[i] > 0.5 && M.liqStands(q, Gg, i) && !M.liqShut(Gg, i)) { zz = M.liqSurf(q, Gg, i); tt = i; } }
+      if (zz === null) continue;
+      if (X <= 21) { l += zz; ln++; pl += s.roomP[tt]; } else { r += zz; rn++; pr += s.roomP[tt]; } }
+    return ln && rn ? [r / rn - l / ln, (pl / ln - pr / rn) * 1000 / rg] : [0, 0]; };
+  for (let w = 0; w < 4; w++) { let sum = 0, sumG = 0;
+    for (let j = 0; j < 100; j++) { tick(1); const d = tilt(); sum += d[0]; sumG += d[1]; }
+    console.log('window to t ' + t.toFixed(1) + ': right side stands ' + (sum / 100 * 1000).toFixed(0) +
+      ' mm over left, gas explains ' + (sumG / 100 * 1000).toFixed(0) + ' mm'); }
+} else if (mode === 'rowstep') {
+  // two pools 4 cm apart, the second laid onto a settled first: the lay buries a cell over its cap
+  pool(7, 20, 29, 2.04 * MPC);
+  const buried = pool(21, 36, 29, 1.96 * MPC), q = water();
+  for (const [x, y, ex] of buried) console.log('the lay buried ' + x + ',' + y + ' by ' + ex.toFixed(3) + ' kg over its cap');
+  const lean = () => Math.abs(mean(surf(7, 20)) - mean(surf(21, 36))) * 1000;
+  for (const at of [2, 4, 10]) { tick(Math.round(at * 50 - t * 50)); console.log('t ' + t.toFixed(1) + ' step ' + lean().toFixed(1) + ' mm'); }
+  let over = 0; for (let i = 0; i < N; i++) over = Math.max(over, W()[i] - M.liqCap(q, i));
+  console.log('two pools laid 4 cm apart: step ' + lean().toFixed(1) + ' mm at 10 s, worst cell over cap ' + over.toFixed(4) + ' kg, buried at lay ' + buried.length);
+  verdict(buried.length > 0 && lean() < 5 && over < 1e-3, 'the step levels within 5 mm and no cell sits over its cap');
+} else if (mode === 'stream') {
+  M.act('injectOn', 'fluid', 10000, at(29, 13));
+  const q = water(), pxKg = 1000 * M.ROOM_VCELL() / M.CELL();
+  tick(25);
+  let n1 = 0, n2 = 0, pillar = 0, ticks = 0;
+  for (let j = 0; j < 175; j++) { tick(1); ticks++;
+    const Gg = G();
+    for (let Y = 15; Y <= 24; Y++) for (let X = 7; X <= 36; X++) { if (X === 29) continue;
+      const m = W()[at(X, Y)];
+      if (m >= pxKg && m <= 0.1 * M.liqCap(q, at(X, Y))) { if (Y <= 19) n1++; else n2++; } }
+    let top = null;
+    for (let Y = 0; Y < GH && top === null; Y++) { const i = at(29, Y); if (W()[i] > 0.5 && M.liqStands(q, Gg, i) && !M.liqShut(Gg, i)) top = Y; }
+    if (top !== null && top <= 24) pillar++;
+  }
+  console.log('10 t/s at 29,13 over 0.5-4 s: cells a board pixel wide beside the stream, rows 15-19 ' + (n1 / ticks).toFixed(2) + ' a tick, rows 20-24 ' + (n2 / ticks).toFixed(2) + ', pillar ticks ' + pillar + ' of ' + ticks);
+  verdict(n1 / ticks < 0.1 && pillar === 0, 'no strip beside the falling stream, no standing pillar under it');
+} else if (mode === 'conserve') {
+  M.act('hit', 'pipe:28,15'); M.act('hit', 'mat:20,30'); M.act('injectOn', 'fluid', 10000, at(12, 15));
+  tick(300);
+  console.log('hot leg + floor hole + 10 t/s over 6 s: worst tick off its books by ' + consWorst.toFixed(6) + ' kg at ' + consAt + ' s');
+  verdict(consWorst < 1e-3, 'the liquid moves no kilogram it was not given');
 }
