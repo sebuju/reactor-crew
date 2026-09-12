@@ -1,7 +1,7 @@
 "use strict";
 /* The viewer's copy of S, in memory both threads hold. A structured clone a frame was 0.34 MB of garbage
    per painted frame on each side, which is what the collector was stopping the world for. */
-const SHM_ON = typeof SharedArrayBuffer === "function";
+const SHM_ON = typeof SharedArrayBuffer === "function" && !urlOff("shm");
 const SHM_HEAD = 8;                       // int32 header slots; [0] is the published sequence
 const SHM_TA = [Float64Array, Float32Array, Int32Array, Uint8Array, Int8Array];
 const shmTaOf = v => { for(let i=0;i<SHM_TA.length;i++) if(v instanceof SHM_TA[i]) return i; return -1; };

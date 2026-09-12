@@ -537,8 +537,10 @@ const simLiveFeed = () => { const s = SIMBOUND !== null ? SIMS[SIMBOUND] : null;
 /* a worker's whole life is one commissioned plant, so anything that would have reset one spawns another */
 function simSpawn(opt, onFail){
   if(typeof Worker !== "function" || typeof location === "undefined") return null;
+  if(urlOff("worker")){ if(onFail) onFail("the url asked for no worker"); return null; }
   let w;
-  try{ w = new Worker("src/sim/runworker.js"); }catch(e){ return null; }
+  /* the query rides along, or the worker cannot see a switch the page was opened with */
+  try{ w = new Worker("src/sim/runworker.js" + location.search); }catch(e){ return null; }
   const id = ++simSeq, sim = {id, w, live:false, dead:false, pending:false};
   SIMS[id] = sim;
   const give = why => { if(sim.dead) return; simKill(id); if(onFail) onFail(why); };
