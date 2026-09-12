@@ -4,7 +4,7 @@ const {headless} = require('../bundle');
 const M = headless(
  '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
  'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,'+
- 'buildLayout,buildStockPlumbing,pipeMap,pipeNetwork,nodeGraph,runIdOf,blkSinkOff,'+
+ 'buildLayout,buildStockPlumbing,plantPreset,pipeMap,pipeNetwork,nodeGraph,runIdOf,blkSinkOff,'+
  'tankCircuit,tankPrimary,tankIds,tankKg,tankLvl,tankP,tankLive,partOf,partName,'+
  'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdLive,holdPlumbed,loopP,setLoopP,'+
  'netTempAt,netQualAt,mwE,loopKg,secP,sgIds,sgLvl,circName,ROLE:()=>ROLE,'+

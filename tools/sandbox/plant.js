@@ -6,7 +6,7 @@ return {
   pzrAlone(){
     return {name:"pressurizer alone: vessel, surge line, one boundary",
       build(R){
-        M.buildStockPlumbing({loops:1});
+        M.plantPreset(0);
         for(const fid in D.fittings) if(D.fittings[fid].mode==="relief") D.fittings[fid].bore=0.1;
         return {note:"stock primary, relief throttled shut"};
       },
@@ -18,7 +18,7 @@ return {
 
   pzrIsolate(){
     return {name:"pressurizer isolated at t=20: the circuit must relax to containment",
-      build(R){ M.buildStockPlumbing({loops:1}); return {}; },
+      build(R){ M.plantPreset(0); return {}; },
       cols(){ const ci=M.nodeGraph().coreCirc;
         return {P:colP(ci), live:colHold(ci), lvl:COL.lvl, inv:COL.inv,
                 Tavg:COL.Tavg, sc:COL.sc, mwe:COL.mwe}; },
@@ -28,7 +28,7 @@ return {
   twoHolds(){
     return {name:"a second hold tank on the secondary circuit",
       build(R){
-        M.buildStockPlumbing({loops:1});
+        M.plantPreset(0);
         const p = M.partOf("feed");
         R.tank("pzr2", p.x, Math.max(0,p.y-6), 0, {name:"SEC PRESSURIZER", col:"#a98cf0",
           vol:40, level:50, inf:false, gas:null, hold:{p:7.5}});
@@ -48,7 +48,7 @@ return {
   flowOnly(){
     return {name:"one source, one void, one pipe - the solve with nothing else in it",
       build(R){
-        M.buildStockPlumbing({loops:1});
+        M.plantPreset(0);
         R.source("srcA", 0, 0, 16.0, {name:"SOURCE", vol:30});
         R.void_ ("sinkA", 0, 9, {name:"VOID", vol:30});
         // both tanks are FIXED nodes and netAssemble writes no row for an edge with two known ends: the tee is the free node
@@ -68,7 +68,7 @@ return {
     return {name:"one row per setpoint: what it holds, and what it weighs",
       sweep:[10,12,14,15.5,17,19,21],
       build(R,v){
-        M.buildStockPlumbing({loops:1});
+        M.plantPreset(0);
         for(const id of M.holdTankIds()) D.tanks[id].hold.p = v;
         return {};
       },
@@ -82,7 +82,7 @@ return {
     return {name:"one row per vessel volume: pressure swing after a load step",
       sweep:[20,35,50,70,100],
       build(R,v){
-        M.buildStockPlumbing({loops:1});
+        M.plantPreset(0);
         for(const id of M.holdTankIds()) D.tanks[id].vol = v;
         return {};
       },

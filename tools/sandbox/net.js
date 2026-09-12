@@ -69,14 +69,15 @@ return {
   },
 
   netStock(){
-    return {name:"the stock ship, one loop",
-      build(R){ M.buildStockPlumbing({loops:1}); return {}; },
+    return {name:"the STOCK PWR preset",
+      build(R){ M.plantPreset(0); return {}; },
       cols(){ return Object.assign(NETCOLS(),
         {P:COL.P, inv:COL.inv, Tavg:COL.Tavg, mwe:COL.mwe, flowK:colNet.flowK, nat:colNet.nat}); }};
   },
 
+  /* NOT a preset ship: no PLANTPRE row states a stock plant with three loops */
   netStock3(){
-    return {name:"the stock ship, three loops",
+    return {name:"the stock ship, three loops - not a preset",
       build(R){ M.buildStockPlumbing({loops:3}); return {}; },
       cols(){ return Object.assign(NETCOLS(),
         {P:COL.P, inv:COL.inv, Tavg:COL.Tavg, mwe:COL.mwe, flowK:colNet.flowK, nat:colNet.nat}); }};
