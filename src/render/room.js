@@ -73,6 +73,7 @@ function roomCellTip(L){
     if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
     row("OXYGEN       ",(roomFace(j=>roomO2Frac(L,j),i,Math.min)*100).toFixed(1)+" %");
     if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
+    if(L.roomWater[i]>=0.01) row("WATER        ",L.roomWater[i].toFixed(0)+" kg  "+roomWaterT(L,i).toFixed(0)+" K");
     if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
       roomPoolT(L,i).toFixed(0)+" K"+(roomPoolLit(L,i)?"  BURNING":""));
     if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
@@ -307,137 +308,46 @@ function roomO2Layer(data,L){
 const LIQ_SEEN = 0.01;
 // the board height of a level z metres over the keel, through the row it falls in
 const liqY = z => { const k=clamp(Math.floor(z/MPC), 0, GH-1), y1=rowTop(GH-k); return y1-clamp(z/MPC-k, 0, 1)*(y1-rowTop(GH-1-k)); };
-// samples a cell is cut into each way for the outline falling liquid is drawn with
-const LIQ_SUB = 6;
-let liqFB = null;
-/* What is still in the air is not drawn cell by cell: each cell's share is laid on a fine grid as a band down its column's middle, softened once, and outlined where it crosses half, so a pour, a drip and the pool it lands in are one shape. The outline goes into the path already open, and fills with the bodies in one pass. */
-function liqGoo(runs){
-  if(!runs.length) return;
-  const K=LIQ_SUB, sp=CELL/K, NX=GW*K+2, NY=GH*K+2, x0=GX-sp, y0=rowTop(0)-sp, N=NX*NY, I=0.5;
-  if(!liqFB || liqFB.a.length!==N) liqFB={a:new Float32Array(N), b:new Float32Array(N)};
-  const F=liqFB.a.fill(0), T=liqFB.b.fill(0);
-  let c0=NX, c1=0, b0=NY, b1=0;
-  // under one and a half samples a band would soften away to nothing
-  const band=(cx, w, ya, yb)=>{
-    w=Math.max(w, 1.5*sp);
-    const xa=cx-w/2, xb=cx+w/2;
-    const ca=Math.max(0, Math.floor((xa-x0)/sp)), cb=Math.min(NX-1, Math.floor((xb-x0)/sp));
-    const ra=Math.max(0, Math.floor((ya-y0)/sp)), rb=Math.min(NY-1, Math.floor((yb-y0)/sp));
-    for(let c=ca;c<=cb;c++){ const sx=x0+c*sp, h=(Math.min(xb,sx+sp)-Math.max(xa,sx))/sp;
-      if(!(h>0)) continue;
-      for(let r=ra;r<=rb;r++){ const sy=y0+r*sp, v=h*(Math.min(yb,sy+sp)-Math.max(ya,sy))/sp;
-        if(v>0){ const k=r*NX+c; F[k]=Math.min(1, F[k]+v); } } }
-    c0=Math.min(c0,ca); c1=Math.max(c1,cb); b0=Math.min(b0,ra); b1=Math.max(b1,rb); };
-  for(const r of runs){
-    const cx=GX+(r.X+0.5)*CELL;
-    for(let y=r.Y0;y<=r.Y1;y++) band(cx, r.ws[y-r.Y0], y===r.Y0 && r.hang ? rowTop(y)-sp : rowTop(y), rowTop(y+1));
-    if(r.land!==null) band(cx, r.ws[r.ws.length-1], rowTop(r.Y1+1), r.land+sp);
-  }
-  c0=Math.max(1, c0-1); c1=Math.min(NX-3, c1+1); b0=Math.max(1, b0-1); b1=Math.min(NY-3, b1+1);
-  for(let r=b0-1;r<=b1+1;r++) for(let c=c0;c<=c1;c++){ const k=r*NX+c; T[k]=(F[k-1]+2*F[k]+F[k+1])/4; }
-  for(let r=b0;r<=b1;r++) for(let c=c0;c<=c1;c++){ const k=r*NX+c; F[k]=(T[k-NX]+2*T[k]+T[k+NX])/4; }
-  for(let r=b0-1;r<=b1+1;r++){ F[r*NX+c0-1]=0; F[r*NX+c1+1]=0; }
-  for(let c=c0-1;c<=c1+1;c++){ F[(b0-1)*NX+c]=0; F[(b1+1)*NX+c]=0; }
-  const X=c=>x0+(c+0.5)*sp, Y=r=>y0+(r+0.5)*sp, P=new Float64Array(12);
-  for(let r=b0-1;r<=b1;r++){
-    let run=-1;
-    for(let c=c0-1;c<=c1;c++){
-      const v0=F[r*NX+c], v1=F[r*NX+c+1], v2=F[(r+1)*NX+c+1], v3=F[(r+1)*NX+c];
-      const m=(v0>=I)|(v1>=I)<<1|(v2>=I)<<2|(v3>=I)<<3;
-      if(m===15){ if(run<0) run=c; continue; }
-      if(run>=0){ ctx.rect(X(run), Y(r), X(c)-X(run), sp); run=-1; }
-      if(m===0) continue;
-      P[0]=X(c); P[1]=Y(r); P[2]=v0; P[3]=X(c+1); P[4]=Y(r); P[5]=v1;
-      P[6]=X(c+1); P[7]=Y(r+1); P[8]=v2; P[9]=X(c); P[10]=Y(r+1); P[11]=v3;
-      // round the square clockwise, like the bodies: the corners inside and the points where the edge crosses half
-      let first=true;
-      const pt=(x,y)=>{ if(first){ ctx.moveTo(x,y); first=false; } else ctx.lineTo(x,y); };
-      for(let e=0;e<4;e++){ const p=e*3, n=((e+1)%4)*3, ip=P[p+2]>=I;
-        if(ip) pt(P[p], P[p+1]);
-        if(ip!==(P[n+2]>=I)){ const t=(I-P[p+2])/(P[n+2]-P[p+2]); pt(P[p]+(P[n]-P[p])*t, P[p+1]+(P[n+1]-P[p+1])*t); } }
-      ctx.closePath();
-    }
-    if(run>=0) ctx.rect(X(run), Y(r), X(c1+1)-X(run), sp);
-  }
-}
-/* One primitive for both liquids. What stands (liqStands(), the sim's own test) is one level body per column packed onto its floor with the second liquid under it (`under`), its surface sampled at the column's middle and curved through the edges it shares with the body beside it. What is still in the air is one smooth band per falling run of a column, each cell's share as its width, in the same path, so it joins the ledge it leaves and the body it lands on. */
+/* One primitive for both liquids: a standing run of a column is a rectangle from its floor, lifted by the liquid under it (`under`), to its surface. What is in the air and moving is a band as wide as the share of its cell it fills, tapered to the cells over and under it, so a stream thins as it falls by continuity alone; a film at rest in the air draws nothing. */
 function liqDraw(data, L, q, col, a, under, lit){
-  const G=roomGeomLive(L), M=q.M, segAt=new Int32Array(GW*GH).fill(-1);
-  const segs=[], byCol=[], blobs=[];
+  const G=roomGeomLive(L), M=q.M, segs=[];
   for(let X=0;X<GW;X++){
-    byCol.push([]);
-    let s=null, pend=0, base=null;
+    let s=null;
     for(let Y=GH-1;Y>=0;Y--){
-      const i=Y*GW+X, has=M[i]>=LIQ_SEEN;
-      if(liqShut(G,i)){ s=null; pend=0; base=null; continue; }
-      if(base===null) base=zFloor(i);
-      const u=under ? liqFill(under.M,under.rho,i) : 0;
-      if(!has || !liqStands(q,G,i)){ if(has) blobs.push(i); pend+=u; continue; }
-      if(!s){ s={X, z0:base, v:0, u:0, top:i}; segs.push(s); byCol[X].push(s); }
-      s.u+=pend+u; pend=0; s.v+=liqFill(M,q.rho,i); s.top=i; segAt[i]=segs.length-1;
+      const i=Y*GW+X;
+      if(liqShut(G,i) || !(M[i]>=LIQ_SEEN) || !liqStands(q,G,i)){ s=null; continue; }
+      if(!s){ s={X, z0:zFloor(i), u:0, v:0, top:i}; segs.push(s); }
+      s.u+=under ? liqFill(under.M,under.rho,i) : 0; s.v+=liqFill(M,q.rho,i); s.top=i;
     }
   }
-  for(const s of segs){ s.zb=s.z0+s.u; s.zt=s.zb+s.v;
-    s.zMax=s.top>=GW && liqShut(G,s.top-GW) ? zFloor(s.top)+MPC : Infinity; }
-  // water has no step in it: two bodies side by side meet in a slope, unless the other one starts above this surface or a wall stands at the lower level
-  const nextTo=(s, X)=>{
-    let best=NaN, d=Infinity;
-    if(X<0 || X>=GW) return best;
-    for(const n of byCol[X]){
-      const dz=Math.abs(n.zt-s.zt), Y=GH-1-clamp(Math.floor((Math.min(n.zt,s.zt)-1e-6)/MPC), 0, GH-1);
-      if(dz<=d && n.zb<s.zt && !liqShut(G,Y*GW+X)){ d=dz; best=n.zt; }
-    }
-    return best; };
-  const edge=(s, nz)=> liqY(nz===nz ? clamp((s.zt+nz)/2, s.zb, s.zMax) : s.zt);
-  for(const s of segs){ s.yb=liqY(s.zb); s.yt=Math.min(liqY(s.zt), s.yb-1);
-    s.eL=Math.min(edge(s, nextTo(s, s.X-1)), s.yb); s.eR=Math.min(edge(s, nextTo(s, s.X+1)), s.yb); }
-  const air=new Uint8Array(GW*GH);
-  for(const i of blobs) air[i]=1;
-  const runs=[];
-  for(let X=0;X<GW;X++) for(let Y=0;Y<GH;Y++){
-    if(!air[Y*GW+X]) continue;
-    let Y1=Y;
-    while(Y1+1<GH && air[(Y1+1)*GW+X]) Y1++;
-    const ws=[];
-    for(let y=Y;y<=Y1;y++){ const i=y*GW+X; ws.push(Math.min(1, M[i]/Math.max(liqCap(q,i),1e-9))*CELL); }
-    const up=(Y-1)*GW+X;
-    // the cell over a body is settled into it every tick (liqFlow()'s last pass), so a pour's foot looks one cell further down for what it lands on
-    let j=Y1+1;
-    if(j<GH && !liqShut(G,j*GW+X) && segAt[j*GW+X]<0 && M[j*GW+X]<LIQ_SEEN) j++;
-    const dn=j*GW+X;
-    // it hangs from a ledge or a body over it and runs into a body or a floor under it
-    const hang=Y>0 && (liqShut(G,up) || segAt[up]>=0);
-    let land=null;
-    if(j>=GH) land=rowTop(GH);
-    else if(liqShut(G,dn)) land=rowTop(j);
-    else if(segAt[dn]>=0){ const s=segs[segAt[dn]]; land=0.25*s.eL+0.5*s.yt+0.25*s.eR; }
-    runs.push({i:Y*GW+X, X, Y0:Y, Y1, ws, hang, land});
-    Y=Y1;
-  }
-  // one path for every body and blob, so the colour stays one shade wherever two of them touch
+  for(const s of segs){ s.yb=liqY(s.z0+s.u); s.yt=liqY(s.z0+s.u+s.v); }
+  // one path per shade, so bodies side by side are one colour
   const body=on=>{
     ctx.beginPath();
     for(const s of segs){
       if(!!(lit && lit(s.top))!==on) continue;
-      const x0=GX+s.X*CELL, x1=x0+CELL;
-      ctx.moveTo(x0,s.eL); ctx.quadraticCurveTo(x0+CELL/2,s.yt,x1,s.eR); ctx.lineTo(x1,s.yb); ctx.lineTo(x0,s.yb); ctx.closePath();
+      const x0=GX+s.X*CELL;
+      ctx.rect(x0, s.yt, CELL, s.yb-s.yt);
       if(on) txt(roomPoolT(L,s.top).toFixed(0)+" K", x0+CELL/2, s.yb-3, {size:8, align:"center", color:C.amber});
     }
-    liqGoo(runs.filter(r=>!!(lit && lit(r.i))===on));
     ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
   };
   body(false);
   if(lit) body(true);
-  // the surface line stops where a pour comes through it
-  ctx.save(); ctx.beginPath(); ctx.rect(GX, rowTop(0), GW*CELL, rowTop(GH)-rowTop(0));
-  for(const r of runs) if(r.land!==null){ const sp=CELL/LIQ_SUB, w=Math.max(r.ws[r.ws.length-1], 1.5*sp)+2*sp, y=rowTop(r.Y1+1)-sp;
-    ctx.rect(GX+(r.X+0.5)*CELL-w/2, y, w, r.land-y+2*sp); }
-  ctx.clip("evenodd");
   ctx.beginPath();
-  for(const s of segs){ const x0=GX+s.X*CELL;
-    ctx.moveTo(x0, s.eL+0.7); ctx.quadraticCurveTo(x0+CELL/2, s.yt+0.7, x0+CELL, s.eR+0.7); }
+  for(const s of segs){ const x0=GX+s.X*CELL; ctx.moveTo(x0, s.yt); ctx.lineTo(x0+CELL, s.yt); }
   ctx.strokeStyle=col; ctx.lineWidth=1.4; ctx.stroke();
-  ctx.restore();
+  /* The falling water: a trapezoid per moving cell, its width the fill of the cell, its ends the mean with the falling neighbour over and under it. */
+  const wOf=i=>{ const s=liqShut(G,i) ? 0 : M[i]/Math.max(liqCap(q,i),1e-9); return clamp(s,0,1)*CELL; };
+  const band=i=>!liqShut(G,i) && M[i]>=LIQ_SEEN && !liqStands(q,G,i) && liqSpeed(q,i)>LIQ_REST;
+  ctx.beginPath();
+  for(let i=0;i<GW*GH;i++){
+    if(!band(i)) continue;
+    const X=i%GW, Y=(i/GW)|0, xc=GX+X*CELL+CELL/2, y0=rowTop(Y), y1=rowTop(Y+1), w=wOf(i);
+    const wt=i>=GW && band(i-GW) ? (w+wOf(i-GW))/2 : w, wb=i+GW<GW*GH && band(i+GW) ? (w+wOf(i+GW))/2 : w;
+    ctx.moveTo(xc-wt/2, y0); ctx.lineTo(xc+wt/2, y0); ctx.lineTo(xc+wb/2, y1); ctx.lineTo(xc-wb/2, y1); ctx.closePath();
+  }
+  ctx.globalAlpha=a; ctx.fillStyle=col; ctx.fill(); ctx.globalAlpha=1;
 }
 function roomNaLayer(data,L){
   if(!L || !L.roomPool) return;
