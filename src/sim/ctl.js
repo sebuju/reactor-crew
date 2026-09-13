@@ -176,13 +176,10 @@ const blkSeedOuts=s=>{ for(const id in s.blkBy) blkSeedOut(s,id); };
 const CTL_ORD={ids:null, wire:null, order:[]};
 /* compared element by element, never as a joined string: the key was 108 concatenations and a join, rebuilt every tick to check a cache that almost never moves */
 function ctlWired(s, ids){
-  const w=CTL_ORD.wire, was=CTL_ORD.ids;
-  if(!w || w.length!==ids.length) return false;
-  for(let i=0;i<ids.length;i++){ const id=ids[i];
-    if(was[i]!==id) return false;
-    const a=w[i], c=s.blkBy[id].in;
-    if(a.length!==c.length) return false;
-    for(let k=0;k<a.length;k++) if(a[k]!==c[k]) return false; }
+  const w=CTL_ORD.wire;
+  if(!w || !sameStrList(CTL_ORD.ids, ids)) return false;
+  for(let i=0;i<ids.length;i++)
+    if(!sameStrList(w[i], s.blkBy[ids[i]].in)) return false;
   return true;
 }
 function ctlOrder(s){

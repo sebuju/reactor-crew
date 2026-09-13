@@ -87,7 +87,7 @@ const ACT = {
               apply:(s,id)=>{ if(s.tankByp[id]!==undefined) s.tankByp[id]=!s.tankByp[id]; }},
   portShut : {lab:"PORT VALVE",   part:pid=>"port:"+pid,   log:pid=>portLabel(pid)+" "+(S.portShut[pid]?"OPENED":"SHUT"),
               apply:(s,pid)=>{ if(s.portShut[pid]===undefined) return;
-                s.portShut[pid]=!s.portShut[pid]; }},
+                s.portShut[pid]=!s.portShut[pid]; s.portShutGen=(s.portShutGen|0)+1; }},
   tankDump : {lab:"TANK DUMP",    part:id=>id,    log:id=>(D.tanks[id]?D.tanks[id].name:id)+" DUMP "+(S.tankDump[id]?"SHUT":"OPEN"),
               apply:(s,id)=>{ if(s.tankDump[id]!==undefined) s.tankDump[id]=!s.tankDump[id]; }},
   scram    : {lab:"MANUAL SCRAM", apply:(s)=>{ manualScram(); }},

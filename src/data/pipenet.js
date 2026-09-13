@@ -1968,9 +1968,13 @@ function pieceOf(net, s, node){
 /* "still plumbed to the primary", for every gate below */
 const corePiece = (net, s, cid) => netPieces(net, s).of[cid && net.coreNodes[cid] !== undefined ? net.coreNodes[cid] : net.coreNode];
 // the live piece of EVERY vessel - "still plumbed to a core" is asked of all of them
-const corePieces = (net, s) => { const of = netPieces(net, s).of, set = new Set();
+const corePieces = (net, s) => { const pc = netPieces(net, s), cc = net.corePieceC;
+  if(cc && cc.pc === pc) return cc.set;
+  const of = pc.of, set = new Set();
   for(const id in net.coreNodes) set.add(of[net.coreNodes[id]]);
-  if(!set.size) set.add(of[net.coreNode]); return set; };
+  if(!set.size) set.add(of[net.coreNode]);
+  net.corePieceC = {pc, set};
+  return set; };
 /* its LOOP's pressure while it is live and its own the moment it is not */
 const holdPOf = (s, id) => (s.holdPBy && s.holdPBy[id] != null)
   ? s.holdPBy[id] : loopP(s, tankCircuit(id));
@@ -2134,6 +2138,46 @@ function netFixSetSig(net, fixed){
 // the STRUCTURAL list the signature walks, once per net: which tanks have a node
 const netSigLists = net => net.sigLists || (net.sigLists = {
   tanks: tankIds().filter(id => net.tankNode[id] !== undefined) });
+const sameStrList=(a,b)=>{ const n=a?a.length:0;
+  if(n!==(b?b.length:0)) return false;
+  for(let i=0;i<n;i++) if(a[i]!==b[i]) return false; return true; };
+function liveSame(net, s, L, c){
+  const F = net.fitIds, V = s.valve;
+  if(F.length !== c.fit.length) return false;
+  for(let i=0;i<F.length;i++){ const fid = F[i];
+    if((net.fitMode[fid]==="relief" ? (reliefLive(s,fid)?1:0) : (V ? V[fid] : undefined)) !== c.fit[i]) return false; }
+  if(!sameStrList(s.dmgParts, c.dmg)) return false;
+  if((s.portShutGen|0) !== c.shutGen) return false;
+  { const C = coreIds();
+    if(C.length !== c.cor.length) return false;
+    for(let i=0;i<C.length;i++){ const cs = coreState(s,C[i])||s;
+      if(((cs.breach?4:0)|(cs.tubesOpen>0?2:0)|(cs.cavRelief?1:0)) !== c.cor[i]) return false; } }
+  { const T = L.tanks;
+    if(T.length !== c.tk.length) return false;
+    for(let i=0;i<T.length;i++) if((tankLive(s,T[i])?1:0) !== c.tk[i]) return false; }
+  if(netDrySig(net,s) !== c.dry || netDiodeSig(net,s) !== c.diode) return false;
+  return ((s.turbTrip?1:0)|(s.condLost?2:0)|((s.load>0)?4:0)) === c.flg;
+}
+function liveSnap(net, s, L, sig){
+  const F = net.fitIds, V = s.valve, fit = new Array(F.length);
+  for(let i=0;i<F.length;i++){ const fid = F[i];
+    fit[i] = net.fitMode[fid]==="relief" ? (reliefLive(s,fid)?1:0) : (V ? V[fid] : undefined); }
+  const C = coreIds(), cor = new Array(C.length);
+  for(let i=0;i<C.length;i++){ const cs = coreState(s,C[i])||s;
+    cor[i] = (cs.breach?4:0)|(cs.tubesOpen>0?2:0)|(cs.cavRelief?1:0); }
+  const T = L.tanks, tk = new Array(T.length);
+  for(let i=0;i<T.length;i++) tk[i] = tankLive(s,T[i])?1:0;
+  net.liveC = {fitIds: F, tanks: T, fit, dmg: s.dmgParts ? s.dmgParts.slice() : [], shutGen: (s.portShutGen|0), cor, tk,
+    dry: netDrySig(net,s), diode: netDiodeSig(net,s),
+    flg: (s.turbTrip?1:0)|(s.condLost?2:0)|((s.load>0)?4:0), sig};
+}
+function netLiveSigOf(net, s){
+  const L = netSigLists(net), c = net.liveC;
+  if(c && c.fitIds === net.fitIds && c.tanks === L.tanks && liveSame(net, s, L, c)) return c.sig;
+  const sig = netLiveSigBuild(net, s);
+  liveSnap(net, s, L, sig);
+  return sig;
+}
 function netLiveSig(net, s){
   // netSolve() reads s and never writes it, so inside one solve the string is built once (net.sigLock)
   if(net.sigLock === s && net.sigLockV !== null) return net.sigLockV;
@@ -2141,7 +2185,7 @@ function netLiveSig(net, s){
   if(net.sigLock === s) net.sigLockV = v;
   return v;
 }
-function netLiveSigOf(net, s){
+function netLiveSigBuild(net, s){
   const L = netSigLists(net);
   let tk = '';
   for(let i=0;i<L.tanks.length;i++) tk += tankLive(s, L.tanks[i]) ? '1' : '0';
