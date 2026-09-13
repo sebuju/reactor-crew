@@ -196,7 +196,7 @@ function ctlOrder(s){
 }
 
 /* is the cabinet computing: a controller placed, whole, and fed */
-const ctlHost = () => roleId("ctrl");
+const ctlHost = () => roleAll("ctrl")[0] || null;
 const ctlLive = s => { const id=ctlHost(); return !!id && !partWrecked(s,id) && supplyK(s)>0; };
 const blkDead = (s,b) => { const row=SINK[b.sink]; if(!row) return true;
   const part=row.part(b.arg); return !!part && partWrecked(s,part); };
@@ -223,9 +223,12 @@ function blkEval(s,b,I,dt){
       return b.op==="below" ? (b.out ? (I[0] > off ? 0 : 1) : (I[0] < on ? 1 : 0))
                             : (b.out ? (I[0] < off ? 0 : 1) : (I[0] > on ? 1 : 0)); }
     case "latch":  return I[1]>0.5 ? 0 : I[0]>0.5 ? 1 : b.out;
-    case "sel": { const w=[]; b.in.forEach((src,i)=>{ if(src) w.push(I[i]); }); if(!w.length) return 0;
-      if(b.op==="min") return Math.min(...w); if(b.op==="max") return Math.max(...w);
-      w.sort((p,q)=>p-q); return w[(w.length-1)>>1]; }
+    case "sel": { const w=SEL_W; w.length=0; const ins=b.in;
+      for(let i=0;i<ins.length;i++) if(ins[i]) w.push(I[i]);
+      if(!w.length) return 0;
+      if(b.op==="min"){ let m=w[0]; for(let i=1;i<w.length;i++) if(w[i]<m) m=w[i]; return m; }
+      if(b.op==="max"){ let m=w[0]; for(let i=1;i<w.length;i++) if(w[i]>m) m=w[i]; return m; }
+      w.sort(SEL_CMP); return w[(w.length-1)>>1]; }
     case "sink": { const row=SINK[b.sink]; if(row && !blkDead(s,b)) row.apply(s,b.arg,I[0],dt); return I[0]; }
   }
   return b.out;
@@ -233,6 +236,9 @@ function blkEval(s,b,I,dt){
 
 /* reused: blkEval reads it inside the call and keeps no reference, and 108 blocks built 108 arrays a tick */
 const CTL_IN=[];
+/* sel-block scratch, same contract; the median sorts it in place, tiny enough for no allocation */
+const SEL_W=[];
+const SEL_CMP=(p,q)=>p-q;
 /* at the head of the tick; off, wrecked or dark, every output holds and no sink is written */
 function ctlPass(s,dt){
   if(!s.blkBy) return;
