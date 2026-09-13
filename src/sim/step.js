@@ -239,11 +239,14 @@ const nameOf = id => {
 };
 const nameList = ids => ids.map(nameOf).join(", ");
 /* P is null on the bench, and a plant may legally have no relief fitting, so every reader below answers with an empty list rather than throwing */
-const reliefFitIds = () => { const f=P?P.fittings:D.fittings;
-  return Object.keys(f).filter(id=>f[id].mode==="relief"); };
+const reliefFitIds = () => { const slot=graphSlot("reliefFitIds"), was=slot.get(1); if(was) return was;
+  const f=P?P.fittings:D.fittings;
+  const out=Object.keys(f).filter(id=>f[id].mode==="relief"); slot.set(1,out); return out; };
 /* shellsOf() is the one predicate: a valve that reaches a shell protects it, one that reaches none is primary */
-const reliefSecIds = () => reliefFitIds().filter(id=>shellsOf(id).length>0);
-const reliefPriIds = () => reliefFitIds().filter(id=>shellsOf(id).length===0);
+const reliefSecIds = () => { const slot=graphSlot("reliefSecIds"), was=slot.get(1); if(was) return was;
+  const out=reliefFitIds().filter(id=>shellsOf(id).length>0); slot.set(1,out); return out; };
+const reliefPriIds = () => { const slot=graphSlot("reliefPriIds"), was=slot.get(1); if(was) return was;
+  const out=reliefFitIds().filter(id=>shellsOf(id).length===0); slot.set(1,out); return out; };
 const reliefsOnShell = sgid => reliefFitIds().some(id=>shellsOf(id).indexOf(sgid)>=0);
 const primaryRelief = () => reliefPriIds()[0];
 /* a valve protecting several shells is judged on the worst of them; cached for one pass (layPass()), 0 means not cacheable */
@@ -286,14 +289,16 @@ const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
   return clamp((100 - tankPoolPct(s,h))/(100-HOT_FLOOD), 0, 1); };
 const CW_RISE=10;         // K, circulating water rise at the design point
 /* a condenser is a sink whose internal path declares an anchor; a radiator declares none */
-const condIds = () => LAY.parts.filter(p=>{ const R=ROLE[p.role];
-  return R && R.thermal==="sink" && roleIntern(R).some(IN=>IN.anch); }).map(p=>p.id);
+const condIds = () => { const slot=graphSlot("condIds"), was=slot.get(1); if(was) return was;
+  const out=LAY.parts.filter(p=>{ const R=ROLE[p.role];
+  return R && R.thermal==="sink" && roleIntern(R).some(IN=>IN.anch); }).map(p=>p.id); slot.set(1,out); return out; };
 /* one machine's circulating water paths: the internal paths that declare no anchor */
-const cwPathsOf = id => { const p=partOf(id), R=p&&ROLE[p.role], o=[];
+const cwPathsOf = id => { const slot=graphSlot("cwPathsOf"), was=slot.get(id); if(was) return was;
+  const p=partOf(id), R=p&&ROLE[p.role], o=[];
   if(!R || R.thermal!=="sink") return o;
   for(const IN of roleIntern(R)) if(!IN.anch)
     o.push({key:"comp:"+id+":"+IN.a+IN.b, a:IN.a, b:IN.b});
-  return o; };
+  slot.set(id,o); return o; };
 const cwFlowOf = (m,id) => { let f=0;
   for(const q of cwPathsOf(id)) f += Math.abs(m[q.key]||0); return f; };
 /* the solved pressure field, kept on S for next tick's readers - refilled, never rebuilt */
@@ -1220,8 +1225,9 @@ function advSep(net, s, dt, eFrom, eM, gasK, liqK){
       if(o > budget) for(let e=0;e<net.edges.length;e++)
         if(liqK[e] === 1 && eFrom[e] === i) liqK[e] = Math.max(budget, 0)/o; } }
 }
-function advectStep(s, dt, runFlow, edgeKg){
-  const net = P && P.net;
+/* shared empty SKIP set: reads only, never written (advectAnchors() builds only when needed) */
+const NO_ANCH = {};
+function advectStep(s, dt, runFlow, edgeKg){  const net = P && P.net;
   advectEdgeKg = advectLandedBy = null;
   if(!net || !net.name || !s.hBy || !s.mBy){ for(const k in feedInHBy) delete feedInHBy[k];
     for(const k in feedInMBy) delete feedInMBy[k];
@@ -1234,15 +1240,16 @@ function advectStep(s, dt, runFlow, edgeKg){
     net.advKeysH = h; net.advKeysM = mBy; }
 
   const src = advectSrc(s, dt, runFlow);
-  const A = advectAnchors(s);
   for(const k in h2Take) delete h2Take[k];
-  const anch = Object.assign({}, A.hold);
-  for(const nm in A.holdH) anch[nm] = A.holdH[nm];   // the SKIP set is both maps
   const G = nodeGraph();
   /* A node seeds at the NEAREST anchoring machine's temperature, walked over the runs; only when a node is missing, so a running plant pays nothing. */
-  { let need = false;
-    for(let i=0;i<net.n && !need;i++) if(h[net.name[i]] === undefined) need = true;
-    if(need){
+  let need = false;
+  for(let i=0;i<net.n && !need;i++) if(h[net.name[i]] === undefined) need = true;
+  /* anchors only matter with somewhere to seed or something to hold: a steady march skips the build */
+  const A = (need || netStoreHeld) ? advectAnchors(s) : null;
+  const anch = A ? Object.assign({}, A.hold) : NO_ANCH;
+  if(A) for(const nm in A.holdH) anch[nm] = A.holdH[nm];   // the SKIP set is both maps
+  if(need){
       const T = new Array(net.n), q = [], adj = {};
       for(const nm in A.seed){ const i = net.index[nm];
         if(i !== undefined && T[i] === undefined){ T[i] = A.seed[nm]; q.push(i); } }
@@ -1266,11 +1273,11 @@ function advectStep(s, dt, runFlow, edgeKg){
           : tid !== undefined ? hOfT(satOfCirc(c), tankFluid(tid).temp)
           : (net.vapour && net.vapour[i])
           ? satHg(satOfCirc(c), netPAt(s,nm))
-          : hOfT(satOfCirc(c), (c !== G.coreCirc && T[i] !== undefined) ? T[i] : s.Tavg); } } }
+          : hOfT(satOfCirc(c), (c !== G.coreCirc && T[i] !== undefined) ? T[i] : s.Tavg); } }
 
   // held BEFORE the sweep as well as after, so a donor carries its pot's own state rather than last tick's
-  for(const nm in A.hold) h[nm] = hOfT(satOfCirc(circOfNode(nm)), A.hold[nm]);
-  for(const nm in A.holdH) h[nm] = A.holdH[nm];
+  if(A){ for(const nm in A.hold) h[nm] = hOfT(satOfCirc(circOfNode(nm)), A.hold[nm]);
+    for(const nm in A.holdH) h[nm] = A.holdH[nm]; }
   /* Boron seeds on the core's circuit only; a tank's node is pinned at its FLUID's own concentration every tick. Hydrogen starts at zero. */
   const b = s.bBy, cH = s.h2By;
   if(b && cH){
@@ -2557,6 +2564,25 @@ function step(dt){
   netMarching(true);
   try { stepMarch(dt); } finally { netMarching(false); }
 }
+/* wall lottery entries parsed once; per-tick count+value check rebuilds on any paint edit */
+let wallLot=null;
+/* tick pressure field, reused: netReadP sets or deletes every node, so it ends where a fresh one would */
+let tickPf=null;
+function wallLotGet(){
+  const M=D.mat||{};
+  if(wallLot){
+    let n=0; for(const k in M) n++;
+    if(n===wallLot.length){
+      let ok=true;
+      for(let i=0;i<wallLot.length;i++){ const e=wallLot[i], c=M[e.k]; if(!c||c.m!==e.m){ ok=false; break; } }
+      if(ok) return wallLot;
+    }
+  }
+  const out=[];
+  for(const k in M){ const j=k.indexOf(","), x=+k.slice(0,j), y=+k.slice(j+1); out.push({k,x,y,m:M[k].m}); }
+  wallLot=out;
+  return out;
+}
 function stepMarch(dt){
   const s=S; s.t+=dt; s.tick++;
   if(!s.massOut) s.massOut={};
@@ -2636,7 +2662,7 @@ function stepMarch(dt){
   /* scratch, not sim state: rebuilt fresh every tick, so a local rather than a field on S */
   const runFlow = {};
   /* MPa per node, taken off netFlowK()'s own solve so the tick pays for one solve and not two; pAt() is how every reader below asks it */
-  const pField = pfNew();
+  const pField = tickPf || (tickPf = pfNew());
   /* what the solve found leaving the plant through every opening on it */
   const netOut = {};
   const pumpK = netFlowK(s, runFlow, pField, netOut);
@@ -2677,7 +2703,7 @@ function stepMarch(dt){
   coreEach(s,(cs,K,id)=>{ cs.pCore = pAt(id); });
   s.pCore = pAt(primaryCore());
   /* after the pressures settle and before the SGTR, the feed train and the relief valves read a temperature anywhere */
-  keepPField(s, pField);
+  tickPf = s.pBy; s.pBy = pField;
   pressRead(s, dt);
   /* a run lets go at its own wall, one cell into s.dmgParts, so the hole, the plume, the repair party and the ledger are the mechanism the plant already had */
   /* judged at the run's own node, never pAt()'s s.P fallback: a node the field does not carry is a node nobody can say the pressure at, and that run is not judged */
@@ -2710,13 +2736,13 @@ function stepMarch(dt){
   /* a wall lets go at its own SHAPE, not its own cell: stress is p*R/t on half the flat span drawn (matSpan(), paint.js). One cell per event, and unlike a pipe it may break again */
   /* every gas-tight cell once, so the two faces of one wall are one judgement, and the worst lets go */
   { let lo = Infinity, tie = [];
-    const hasDmg = s.dmgParts.length>0;
-    for(const k in D.mat){ const j=k.indexOf(","), x=+k.slice(0,j), y=+k.slice(j+1);
+    const hasDmg = s.dmgParts.length>0, L = wallLotGet();
+    for(let li=0;li<L.length;li++){ const e=L[li], k=e.k;
       const mc = D.mat[k];
       if(!(mc && matRow(mc.m).tight) || (hasDmg && s.dmgParts.indexOf("mat:"+k) >= 0)) continue;
-      const m = matBurstP(x,y) - matCellDP(s,x,y);
-      if(m < lo - 1e-9){ lo = m; tie = [[x,y]]; }
-      else if(m < lo + 1e-9) tie.push([x,y]); }
+      const m = matBurstP(e.x,e.y) - matCellDP(s,e.x,e.y);
+      if(m < lo - 1e-9){ lo = m; tie = [[e.x,e.y]]; }
+      else if(m < lo + 1e-9) tie.push([e.x,e.y]); }
     if(tie.length && lo <= 0){
       // stood down, it takes the first in board order, as the pipe's own burst does
       const c = s.diceOff ? tie[0]
@@ -2737,7 +2763,6 @@ function stepMarch(dt){
   if(!s.invBy) s.invBy = {};
   coreEach(s,(cs,K,id)=>{ if(K.invKg0 > 0) s.invBy[circKey(K.circ)] = 100*invNodesKg(s, id)/K.invKg0; });
   sumpStep(s, dt);
-
   /* cavitation begins where subcooling reaches zero, asked at the pump's own suction; fed to NEXT tick's solve, because a gate that depends on the answer cannot be part of the question */
   const cavIds = [];               // which pumps, for the log - a local, never on S
   { let worst=0;
