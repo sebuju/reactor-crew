@@ -909,9 +909,11 @@ const FIT_DEFAULT = {
   lift:null, reseat:null,
   tip:"A fitting in the pipe. Say what it is on its own panel - a tee that joins two lines, a throttle you can close, or a relief valve that lifts on pressure.",
 };
-const tankIds   = () => Object.keys(D.tanks);
+const tankIds   = () => { const slot=graphSlot("tankIds"), was=slot.get(1); if(was) return was;
+  const out=Object.keys(D.tanks); slot.set(1,out); return out; };
 /* a hold tank is not a store: ledgerKg() has no column for its pool */
-const secTankIds= () => tankIds().filter(id=>tankSecondary(id) && !D.tanks[id].hold);
+const secTankIds= () => { const slot=graphSlot("secTankIds"), was=slot.get(1); if(was) return was;
+  const out=tankIds().filter(id=>tankSecondary(id) && !D.tanks[id].hold); slot.set(1,out); return out; };
 /* a tank with no cell is HOSTED, the way a hotwell lives inside its condenser */
 const hostedTankIds = () => tankIds().filter(id=>!D.tanks[id].cell);
 /* off what is IN them, never off a name */
@@ -2613,11 +2615,11 @@ function netStateLoad(net, st){
 /* nothing is clamped: a pump develops its own stated head, so the solve is already the answer. The one NaN/negative guard lives here, on the single scalar every caller consumes, never inside the solver */
 function netFlowK(s, byRun, byP, outs){
   const n = P.loops, byLoop = {}, natLoop = {};
-  { const sol = netSolve(P.net, s);
-    netReadP(sol, byP);
-    netReadEdges(sol, byLoop, byRun, null, outs);
+  const sol = netSolve(P.net, s);
+  netReadP(sol, byP);
+  netReadEdges(sol, byLoop, byRun, null, outs);
     /* the solved edge flows, signed along each edge's own u->v: the set the momentum law answered in, where byRun is only a label */
-    if(outs) outs.edgeKg = sol.q; }
+    if(outs) outs.edgeKg = sol.q;
   if(!(outs && outs.noNat)) netNatCirc(P.net, s, natLoop);
   let total = 0, natTot = 0;
   for(let i=0;i<n;i++){ total += byLoop[i]||0; natTot += natLoop[i]||0; }

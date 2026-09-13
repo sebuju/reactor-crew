@@ -399,7 +399,8 @@ const pumpEdgeKey=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return nul
 const primaryPump=id=>{ const p=partOf(id);
   return !!p && roleHead(p.role) && loopOf(id)!==null; };
 /* In LAY order - the set s.flowBy/s.flowDemBy are keyed on, counted and never named. */
-const pumpIds=()=>LAY.parts.filter(p=>roleHead(p.role)).map(p=>p.id);
+const pumpIds=()=>{ const slot=graphSlot("pumpIds"), was=slot.get(1); if(was) return was;
+  const out=LAY.parts.filter(p=>roleHead(p.role)).map(p=>p.id); slot.set(1,out); return out; };
 // EVERY pump the ship carries, wherever it is piped: roleHead() is the same test netBuild() gates its head edge on
 const totalPumpCap=()=>{ let c=0;
   for(const p of LAY.parts) if(roleHead(p.role)) c+=pumpCapOf(p.id);
@@ -1892,7 +1893,8 @@ function fitLoops(id){
 const fitTies=id=>fitLoops(id).length>1;
 /* `hold` is the whole of a pressurizer: a knob on the instance, so a second hold tank on a second circuit is a legal design. */
 const tankHold  = id => { const t=D.tanks&&D.tanks[id]; return !!(t && t.hold); };
-const holdTankIds = () => tankIds().filter(tankHold);
+const holdTankIds = () => { const slot=graphSlot("holdTankIds"), was=slot.get(1); if(was) return was;
+  const out=tankIds().filter(tankHold); slot.set(1,out); return out; };
 /* Every hold tank standing on one circuit. More than one is a design the
    bench warns about and the solve demotes all but the first (netRef()). */
 /* likewise: holdSetP() is on satOfCirc()'s path, so this ran per node per tick */
