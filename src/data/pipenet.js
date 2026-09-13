@@ -340,6 +340,17 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt, liqAt) => {
 // per-net scratch, reused across solves
 const scratch = (net, k, n, Ctor, v) => { const b = net.scr || (net.scr = {}); let a = b[k];
   if(!a || a.length !== n) a = b[k] = new Ctor(n); a.fill(v); return a; };
+/* ONE door onto a node-keyed pressure field, so the container can change without every reader moving.
+   Absence is a real answer here - a node the solve does not carry reads its circuit's setpoint instead. */
+const pfNew = () => ({});
+const pfAt = (f, nid) => f ? f[nid] : undefined;
+const pfSet = (f, nid, v) => { f[nid] = v; };
+const pfDel = (f, nid) => { delete f[nid]; };
+/* refilled, never rebuilt: a key the new field does not carry is stale and goes */
+const pfCopy = (dst, src) => { if(dst === src) return dst;
+  for(const k in src) dst[k] = src[k];
+  for(const k in dst) if(src[k] === undefined) delete dst[k];
+  return dst; };
 /* the field the law is linearised about: one tick old on purpose, and per net */
 const netFieldOf = () => ({p:null, rho:null, rhoD:null, rhoG:null, rhoL:null, void:null, x:null, wet:null, mu:null});
 function netFieldSize(F, n){
@@ -413,7 +424,8 @@ function netFieldUpdate(net, s){
   const mBy = s && s.mBy;
   /* a node that passes more per tick than it holds cannot run itself out, only its supply can */
   const fedIn = scratch(net, "fedIn", net.n, Float64Array, 0);
-  for(const ed of net.edges){ const w = ed.w || 0; if(w > 0) fedIn[ed.v] += w; else if(w < 0) fedIn[ed.u] -= w; }
+  for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e], w = ed.w || 0;
+    if(w > 0) fedIn[ed.v] += w; else if(w < 0) fedIn[ed.u] -= w; }
   for(let i=0;i<net.n;i++){ const nid = net.name[i], p = netPAt(s, nid), h = netHAt(s, nid);
     const m = mBy ? mBy[nid] : undefined, mk = m === undefined ? -1 : m;
     if(p === F.lp[i] && h === F.lh[i] && mk === F.lm[i]) continue;
@@ -986,7 +998,8 @@ const inLoop = (ci, nm) => { const set = loopNodes(ci); if(!set) return true;
 /* a hold tank's level IS its node's void fraction; s.tank[id] must not become a second copy */
 const holdLvlRead = (s,id) => s.lvlBy && s.lvlBy[id] !== undefined ? s.lvlBy[id] : s.lvl;
 /* the node's own solved pressure, or NOTHING: before the first solve a vessel has only its charge to state, and netPAt()'s loop-pressure fallback is not that vessel's answer */
-const tankNodeP = (s,id) => (s && s.pBy && s.pBy[id] !== undefined) ? Math.max(COND_P0, s.pBy[id]) : undefined;
+const tankNodeP = (s,id) => { const p = s && pfAt(s.pBy, id);
+  return p !== undefined ? Math.max(COND_P0, p) : undefined; };
 /* isothermal, p*V constant about the charge: the bubble at the node's own solved pressure, capped at the whole vessel. With no charge the node's own void fraction is the level, the same read a pressurizer takes. */
 const tankLvlRead = (s,id) => { const t = D.tanks[id], V0 = tankGasV0(id);
   if(!(V0 > 0) || !t.gas) return holdLvlOf(s, id);
@@ -1263,7 +1276,7 @@ function netHAt(s, nid){
 }
 /* floored at COND_P0, the plant's own vacuum; a node the solve does not carry reads its OWN circuit's setpoint, which is what runDesignP() walled it for */
 function netPAt(s, nid){
-  const f = s.pBy && s.pBy[nid];
+  const f = pfAt(s.pBy, nid);
   if(f !== undefined) return Math.max(COND_P0, f);
   const c = circSetP(nid);
   return Math.max(COND_P0, c > 0 ? c : (s.P===undefined?P.P0:s.P));
@@ -2220,7 +2233,8 @@ function netFactored(net, s, fixed, bOut, touchOut){
       netAssemble(net.edges, net.n, fixed, s, scratch(net, "AfA", nf*nf, Float64Array, 0),
                   bOut || null,
                   bOut ? (net.store && net.store.src) : null, row, nf, touchOut || null,
-                  net.store && net.store.cap).A, nf, degC, bw);
+                  net.store && net.store.cap).A, nf, degC, bw,
+      scratch(net, "Afd0", nf, Float64Array, 0));
     net.AfB = !!bOut;
     /* scattered back to node index, because every reader of it is; a fixed node stays 0 */
     const deg = scratch(net, "Afdeg", net.n, Uint8Array, 0);
@@ -2312,11 +2326,11 @@ function netReadP(sol, byP){
       if(store && store.pin[i]) free[c] = 0;
       if(b[i] < lo[c]) lo[c] = b[i]; }
     for(let i=0;i<net.n;i++){
-      if(deg && deg[i] && !touch[i] && fixed[i]===undefined){ delete byP[net.nodes[i]]; continue; }
+      if(deg && deg[i] && !touch[i] && fixed[i]===undefined){ pfDel(byP, net.nodes[i]); continue; }
       const c = ref.of[i];
       /* a piece nothing pins is FLOATED so its lowest node sits at the ship's pressure; a shift cancels out of every flow, and a piece with no water in it is not floated at all */
       const off = (free[c] && wet[c] && fixed[i]===undefined && isFinite(lo[c])) ? netPcont(net, s, i) - lo[c] : 0;
-      byP[net.nodes[i]] = b[i] + off;
+      pfSet(byP, net.nodes[i], b[i] + off);
     } }
 }
 
@@ -2460,7 +2474,7 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
         let sol, prev = null, pass = 0;
         for(; pass<REF_PASSES; pass++){
           sol = netSolve(net, s);
-          const pf = {}; netReadP(sol, pf); s.pBy = pf;
+          const pf = pfNew(); netReadP(sol, pf); s.pBy = pf;
           const q = sol.q; let scale = 0, move = 0;
           for(let e=0;e<q.length;e++) scale = Math.max(scale, Math.abs(q[e]));
           if(prev !== null) for(let e=0;e<q.length;e++) move = Math.max(move, Math.abs(q[e]-prev[e]));
@@ -2509,13 +2523,16 @@ function netNatCirc(net, s, natLoop){
   if(net.natLoop && (netReadOnly || ((net.natTick = (net.natTick||0)+1) % NAT_EVERY))){
     Object.assign(natLoop, net.natLoop); return; }
   const sNat = Object.create(s); sNat.flowScale = 0; sNat.pBy = net.natPBy || s.pBy;
-  const w = net.edges.map(ed => ed.w);
+  /* the walk's field and its w backup are per-net scratch: netReadP writes or deletes every node, so a reused object ends where a fresh one would, and eight passes built eight 267-key dictionaries a walk */
+  const pf0 = net.natScr || (net.natScr = pfNew());
+  const w = net.natW || (net.natW = new Array(net.edges.length));
+  for(let e=0;e<net.edges.length;e++) w[e] = net.edges[e].w;
   const was = netStoreHeld; netHoldStore(true);
   try {
     let sol, ans = 0, prev = null;
     for(let pass=0; pass<NAT_PASSES; pass++){
       sol = netSolve(net, sNat);
-      const pf = {}; netReadP(sol, pf); sNat.pBy = pf;
+      netReadP(sol, pf0); sNat.pBy = pf0;
       ans = netReadEdges(sol, null, null, null, null);
       if(prev !== null && Math.abs(ans-prev) <= NAT_TOL*Math.max(Math.abs(ans), 1e-9)) break;
       prev = ans; }
@@ -2552,7 +2569,9 @@ function netStateLoad(net, st){
 /* nothing is clamped: a pump develops its own stated head, so the solve is already the answer. The one NaN/negative guard lives here, on the single scalar every caller consumes, never inside the solver */
 function netFlowK(s, byRun, byP, outs){
   const n = P.loops, byLoop = {}, natLoop = {};
-  { const sol = netSolve(P.net, s); netReadP(sol, byP); netReadEdges(sol, byLoop, byRun, null, outs);
+  { const sol = netSolve(P.net, s);
+    netReadP(sol, byP);
+    netReadEdges(sol, byLoop, byRun, null, outs);
     /* the solved edge flows, signed along each edge's own u->v: the set the momentum law answered in, where byRun is only a label */
     if(outs) outs.edgeKg = sol.q; }
   if(!(outs && outs.noNat)) netNatCirc(P.net, s, natLoop);
