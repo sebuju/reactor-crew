@@ -63,21 +63,19 @@ const skinQRole = (s, role) => { let q = 0;
   for(const p of LAY.parts) if(p.role === role) q += skinQOf(s, p.id);
   return q; };
 /* THE RUN'S OWN NODE, never the machines it lands on or its kind: an isolated line holds what it holds. */
-function runFluidNodes(s, key){
+function runFluidNode(s, key){
   const net = P.net;
   if(!net || !net.index) return null;
   const nid = runNodeOf(key);
-  return net.index[nid] === undefined ? null : [nid];
+  return net.index[nid] === undefined ? null : nid;
 }
-const nodeMean = (nodes, read) => { let t = 0, n = 0;
-  for(const nd of nodes || []){ const v = read(nd); if(isFinite(v)){ t += v; n++; } }
-  return n ? t/n : null; };
-const runFluidT = (s, key) => nodeMean(runFluidNodes(s, key), nd => netTempAt(s, nd));
+const runFluidT = (s, key) => { const nd = runFluidNode(s, key); if(nd === null) return null;
+  const v = netTempAt(s, nd); return isFinite(v) ? v : null; };
 /* ENTHALPY, not temperature: a hole flashes, and the latent heat in the jet is most of what the compartment gets. */
 function runFluidH(s, key){
-  const nodes = runFluidNodes(s, key);
-  const h = nodeMean(nodes, nd => netHAt(s, nd));
-  return h === null ? null : {h, c:netSatOf(nodes[0])};
+  const nd = runFluidNode(s, key); if(nd === null) return null;
+  const h = netHAt(s, nd);
+  return isFinite(h) ? {h, c:netSatOf(nd)} : null;
 }
 /* The DONOR node's water, never a mean of the two sides: averaging in the outlet cools the jet by its own effect. Donor = higher pressure, advectStep()'s upwind rule. */
 function partFluidNode(s, id){

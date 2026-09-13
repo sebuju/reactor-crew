@@ -96,8 +96,14 @@ function radSrc(L){
 }
 const pipeSrc = n => COOLANT[priD().cool].fuelInCoolant ? RAD_PIPE*n : 0;
 
-function radSolve(K,q){
-  const f=new Float64Array(GW*GH);
+/* the grid is D.gw x D.gh, so the buffer is sized on demand rather than at load */
+let radFBuf=null;
+const radFScratch=()=>{ const n=GW*GH;
+  if(!radFBuf || radFBuf.length!==n) radFBuf=new Float64Array(n);
+  return radFBuf; };
+/* reuse only where the field dies in the same statement: a render layer keeps the array it is handed */
+function radSolve(K,q,reuse){
+  const f=reuse?radFScratch():new Float64Array(GW*GH);
   const Kp = q.pipe ? K.pipe : null;
   const n=f.length, air=q.air;
   for(let i=0;i<n;i++) f[i]=air;

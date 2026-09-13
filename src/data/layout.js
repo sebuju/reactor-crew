@@ -585,6 +585,12 @@ function nodeGraph(){
   nodeGraphGen=DGEN;
   if(nodeGraphCache && nodeGraphSigA===sA && nodeGraphSigB===sB && nodeGraphSigC===sC && nodeGraphSigD===sD)
     return nodeGraphCache;
+  nodeGraphCache=nodeGraphBuild();
+  nodeGraphSigA=sA; nodeGraphSigB=sB; nodeGraphSigC=sC; nodeGraphSigD=sD;
+  return nodeGraphCache;
+}
+/* the walk's closures live in their own frame: V8 allocates a context on ENTRY to any function holding one, and the cached read above is asked thousands of times a tick */
+function nodeGraphBuild(){
   const adj={}, nodesOf={}, runPorts={};
   const note=(pid,f)=>{ (nodesOf[pid]||(nodesOf[pid]=[])).push(pid+f); };
   const link=(a,b)=>{ (adj[a]||(adj[a]=[])).push(b); (adj[b]||(adj[b]=[])).push(a); };
@@ -643,9 +649,7 @@ function nodeGraph(){
   const coreCirc = coreSeed===undefined ? -1 : circuit[coreSeed];
   const inCore = n => coreCircs[circuit[n]]===1;
   /* `sig` is only ever compared for equality (P.coreSatSig), so the graph carries a generation, not a string */
-  nodeGraphCache={adj, nodesOf, runPorts, circuit, nCirc, coreCirc, coreCircs, inCore, reach, sig:++nodeGraphSeq};
-  nodeGraphSigA=sA; nodeGraphSigB=sB; nodeGraphSigC=sC; nodeGraphSigD=sD;
-  return nodeGraphCache;
+  return {adj, nodesOf, runPorts, circuit, nCirc, coreCirc, coreCircs, inCore, reach, sig:++nodeGraphSeq};
 }
 /* Hung on the node graph's own IDENTITY, so a superseded graph takes its answers with it and nothing has to invalidate anything. One named slot per question. */
 function graphSlot(name){
