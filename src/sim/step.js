@@ -1,5 +1,8 @@
 "use strict";
 let P=null,S=null;
+let tagGen = 0;
+const tagTick = () => (tagGen = tagGen+1);
+const crushSeen = {}, cookSeen = {}, runSeen = {}, partSeen = {};
 /* a generator so prewarmStep() (screens/shell.js) can drive commissioning a slice at a time */
 function commission(){ const g=commissionGen(); while(!g.next().done); }
 function* commissionGen(){
@@ -1126,6 +1129,97 @@ function holdLineSet(){
     if(set.has(coreFold(e[0])) || set.has(coreFold(e[1]))) out.add(runNodeOf(r.key)); }
   slot.set(1, out); return out;
 }
+/* swept, because an inflow is somebody else's throttled outflow. Outlined to its own function so it compiles apart from advectStep's body. */
+function advCourant(net, s, dt, eFrom, eM, mOut, mIn){
+  const mBy = s.mBy;
+  if(!netStoreHeld){ const bk = netBooked(net);
+    for(let pass=0; pass<COURANT_PASSES; pass++){
+      mOut.fill(0); mIn.fill(0);
+      for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+        const ed = net.edges[e];
+        mOut[from] += eM[e]; mIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
+      const kOut = scratch(net, "kOut", net.n, Float64Array, 1);
+      let bit = false;
+      for(let i=0;i<net.n;i++){ const o = mOut[i]*dt;
+        if(!(o > 0) || (bk[i] && !(net.tankIdByNode && net.tankIdByNode[i] !== undefined))) continue;
+        const have = mBy[net.name[i]];
+        if(have === undefined) continue;
+        const cap = have + mIn[i]*dt;
+        if(o > cap){ kOut[i] = Math.max(cap, 0)/o; bit = true; } }
+      if(!bit) break;
+      for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+        const k = kOut[from]; if(k !== 1) eM[e] *= k; } } }
+}
+/* And it may not take more than its own state weighs at the highest pressure next to it; the excess is simply not carried, so it stays in the donor. Outlined to its own function so it compiles apart from advectStep's body. */
+function advCap(net, s, dt, eFrom, eM){
+  const mBy = s.mBy;
+  const kIn = scratch(net, "kIn", net.n, Float64Array, 1);
+  if(!netStoreHeld){ const bk = netBooked(net), pMax = scratch(net, "pMax", net.n, Float64Array, 0),
+        pNow = scratch(net, "pNow", net.n, Float64Array, 0);
+    // the donor's own pressure, off the raw read rather than off pMax, which the loop below raises as it goes
+    for(let i=0;i<net.n;i++) pMax[i] = pNow[i] = netPAt(s, net.name[i]);
+    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+      const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
+      const pf = pNow[from]; if(pf > pMax[to]) pMax[to] = pf; }
+    const inRaw = scratch(net, "inRaw", net.n, Float64Array, 0), outNow = scratch(net, "outNow", net.n, Float64Array, 0);
+    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+      const ed = net.edges[e]; outNow[from] += eM[e];
+      inRaw[from === ed.u ? ed.v : ed.u] += eM[e]; }
+    for(let i=0;i<net.n;i++){ const ir = inRaw[i]*dt;
+      if(!(ir > 0) || bk[i]) continue;
+      const nm = net.name[i], have = mBy[nm];
+      if(have === undefined || !(net.vol[i] > 0)) continue;
+      /* a vessel with a free surface states its capacity liquid-full: the EOS read at a saturated pool is a knife edge (0.8 kJ/kg spans 86 t to 16 t against 41 t held) and on the low side the limiter refuses every arrival */
+      const c = netSatOf(nm);
+      const cap = net.vol[i]*(net.F.void[i] ? rhofOf(c, satT(c, pMax[i])) : rhoMixOf(c, pMax[i], netHAt(s, nm)));
+      const room = cap - have + outNow[i]*dt;
+      if(ir > room) kIn[i] = Math.max(room, 0)/ir; } }
+  for(let e=0;e<net.edges.length;e++){
+    const from = eFrom[e]; if(from < 0) continue;
+    const ed = net.edges[e], k = kIn[from === ed.u ? ed.v : ed.u];
+    if(k !== 1) eM[e] *= k; }
+}
+/* edgeKg is signed per EDGE; runFlow keyed by RUN is only the fallback for a caller with no solve to hand. Outlined to its own function so it compiles apart from advectStep's body. */
+function advEdge(net, edgeKg, runFlow, eFrom, eM){
+  const kgs = netKgs, bkd = netBooked(net);
+  for(let e=0;e<net.edges.length;e++){
+    const ed = net.edges[e];
+    const q = edgeKg ? edgeKg[e] : runFlow[ed.key];
+    if(!q) continue;
+    const m = kgs(q); if(!(m > 1e-9)) continue;
+    const from = q > 0 ? ed.u : ed.v;
+    /* Containment never donates: it has no book and no bottom, and the solve's donor is last tick's field. */
+    if(bkd[from] === 2) continue;
+    eFrom[e] = from; eM[e] = m;
+  }
+}
+/* A separator passes what it HAS: a gas nozzle hands over its node's own vapour, plus the vapour arriving in the same tick, and carries the rest at the node's mean. Outlined to its own function so it compiles apart from advectStep's body. */
+function advSep(net, s, dt, eFrom, eM, gasK, liqK){
+  const mBy = s.mBy;
+  { const vIn = scratch(net, "vIn", net.n, Float64Array, 0),
+          gOut = scratch(net, "gOut", net.n, Float64Array, 0);
+    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+      const ed = net.edges[e], x = net.F.x[from];
+      if(ed.gasAt === from && x > 0){ gasK[e] = 1; gOut[from] += eM[e]; vIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
+      else vIn[from === ed.u ? ed.v : ed.u] += eM[e]*Math.max(0, x); }
+    for(let i=0;i<net.n;i++){ const o = gOut[i]; if(!(o > 0)) continue;
+      const have = mBy[net.name[i]];
+      const budget = (have === undefined ? o*dt : net.F.x[i]*have) / dt + vIn[i];
+      if(o > budget) for(let e=0;e<net.edges.length;e++)
+        if(gasK[e] === 1 && eFrom[e] === i) gasK[e] = Math.max(budget, 0)/o; } }
+  /* and the mirror below the surface: a water outlet hands over its node's own liquid plus the liquid arriving in the same tick, and carries the rest at the node's mean */
+  { const lIn = scratch(net, "lIn", net.n, Float64Array, 0),
+          lOut = scratch(net, "lOut", net.n, Float64Array, 0);
+    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
+      const ed = net.edges[e], x = net.F.x[from];
+      if(ed.liqAt === from && x > 0){ liqK[e] = 1; lOut[from] += eM[e]; lIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
+      else lIn[from === ed.u ? ed.v : ed.u] += eM[e]*Math.max(0, 1 - x); }
+    for(let i=0;i<net.n;i++){ const o = lOut[i]; if(!(o > 0)) continue;
+      const have = mBy[net.name[i]];
+      const budget = (have === undefined ? o*dt : (1 - net.F.x[i])*have) / dt + lIn[i];
+      if(o > budget) for(let e=0;e<net.edges.length;e++)
+        if(liqK[e] === 1 && eFrom[e] === i) liqK[e] = Math.max(budget, 0)/o; } }
+}
 function advectStep(s, dt, runFlow, edgeKg){
   const net = P && P.net;
   advectEdgeKg = advectLandedBy = null;
@@ -1139,7 +1233,8 @@ function advectStep(s, dt, runFlow, edgeKg){
     for(const k in mBy) if(net.index[k] === undefined) delete mBy[k];
     net.advKeysH = h; net.advKeysM = mBy; }
 
-  const src = advectSrc(s, dt, runFlow), A = advectAnchors(s);
+  const src = advectSrc(s, dt, runFlow);
+  const A = advectAnchors(s);
   for(const k in h2Take) delete h2Take[k];
   const anch = Object.assign({}, A.hold);
   for(const nm in A.holdH) anch[nm] = A.holdH[nm];   // the SKIP set is both maps
@@ -1190,90 +1285,17 @@ function advectStep(s, dt, runFlow, edgeKg){
   const mOut = scratch(net, "mOut", net.n, Float64Array, 0), mIn = scratch(net, "mIn", net.n, Float64Array, 0);
   const inH = scratch(net, "inH", net.n, Float64Array, 0), inM = scratch(net, "inM", net.n, Float64Array, 0);
   const inB = scratch(net, "inB", net.n, Float64Array, 0), inC = scratch(net, "inC", net.n, Float64Array, 0);
-  const kgs = netKgs;
   /* edgeKg is signed per EDGE; runFlow keyed by RUN is only the fallback for a caller with no solve to hand. */
   const eFrom = scratch(net, "eFrom", net.edges.length, Int32Array, -1), eM = scratch(net, "eM", net.edges.length, Float64Array, 0);
-  const bkd = netBooked(net);
-  for(let e=0;e<net.edges.length;e++){
-    const ed = net.edges[e];
-    const q = edgeKg ? edgeKg[e] : runFlow[ed.key];
-    if(!q) continue;
-    const m = kgs(q); if(!(m > 1e-9)) continue;
-    const from = q > 0 ? ed.u : ed.v;
-    /* Containment never donates: it has no book and no bottom, and the solve's donor is last tick's field. */
-    if(bkd[from] === 2) continue;
-    eFrom[e] = from; eM[e] = m;
-  }
+  advEdge(net, edgeKg, runFlow, eFrom, eM);
   /* a node may not give more than it has plus what arrives in the same tick; swept, because an inflow is somebody else's throttled outflow. Neither limiter runs during a settle */
-  if(!netStoreHeld){ const bk = netBooked(net);
-    for(let pass=0; pass<COURANT_PASSES; pass++){
-      mOut.fill(0); mIn.fill(0);
-      for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
-        const ed = net.edges[e];
-        mOut[from] += eM[e]; mIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
-      const kOut = scratch(net, "kOut", net.n, Float64Array, 1);
-      let bit = false;
-      for(let i=0;i<net.n;i++){ const o = mOut[i]*dt;
-        if(!(o > 0) || (bk[i] && !(net.tankIdByNode && net.tankIdByNode[i] !== undefined))) continue;
-        const have = mBy[net.name[i]];
-        if(have === undefined) continue;
-        const cap = have + mIn[i]*dt;
-        if(o > cap){ kOut[i] = Math.max(cap, 0)/o; bit = true; } }
-      if(!bit) break;
-      for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
-        const k = kOut[from]; if(k !== 1) eM[e] *= k; } } }
+  advCourant(net, s, dt, eFrom, eM, mOut, mIn);
   /* And it may not take more than its own state weighs at the highest pressure next to it; the excess is simply not carried, so it stays in the donor. */
-  const kIn = scratch(net, "kIn", net.n, Float64Array, 1);
-  if(!netStoreHeld){ const bk = netBooked(net), pMax = scratch(net, "pMax", net.n, Float64Array, 0),
-        pNow = scratch(net, "pNow", net.n, Float64Array, 0);
-    // the donor's own pressure, off the raw read rather than off pMax, which the loop below raises as it goes
-    for(let i=0;i<net.n;i++) pMax[i] = pNow[i] = netPAt(s, net.name[i]);
-    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
-      const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
-      const pf = pNow[from]; if(pf > pMax[to]) pMax[to] = pf; }
-    const inRaw = scratch(net, "inRaw", net.n, Float64Array, 0), outNow = scratch(net, "outNow", net.n, Float64Array, 0);
-    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
-      const ed = net.edges[e]; outNow[from] += eM[e];
-      inRaw[from === ed.u ? ed.v : ed.u] += eM[e]; }
-    for(let i=0;i<net.n;i++){ const ir = inRaw[i]*dt;
-      if(!(ir > 0) || bk[i]) continue;
-      const nm = net.name[i], have = mBy[nm];
-      if(have === undefined || !(net.vol[i] > 0)) continue;
-      /* a vessel with a free surface states its capacity liquid-full: the EOS read at a saturated pool is a knife edge (0.8 kJ/kg spans 86 t to 16 t against 41 t held) and on the low side the limiter refuses every arrival */
-      const c = netSatOf(nm);
-      const cap = net.vol[i]*(net.F.void[i] ? rhofOf(c, satT(c, pMax[i])) : rhoMixOf(c, pMax[i], netHAt(s, nm)));
-      const room = cap - have + outNow[i]*dt;
-      if(ir > room) kIn[i] = Math.max(room, 0)/ir; } }
-  for(let e=0;e<net.edges.length;e++){
-    const from = eFrom[e]; if(from < 0) continue;
-    const ed = net.edges[e], k = kIn[from === ed.u ? ed.v : ed.u];
-    if(k !== 1) eM[e] *= k; }
+  advCap(net, s, dt, eFrom, eM);
   /* A separator passes what it HAS: a gas nozzle hands over its node's own vapour, plus the vapour arriving in the same tick, and carries the rest at the node's mean - a drum out of steam passes water. Without this a wet node donates its whole flow at hg, charges itself back below its own hf, and prices the gap as a subcooled liquid at gas density. */
   const gasK = scratch(net, "gasK", net.edges.length, Float64Array, 0);
-  { const vIn = scratch(net, "vIn", net.n, Float64Array, 0),
-          gOut = scratch(net, "gOut", net.n, Float64Array, 0);
-    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
-      const ed = net.edges[e], x = net.F.x[from];
-      if(ed.gasAt === from && x > 0){ gasK[e] = 1; gOut[from] += eM[e]; vIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
-      else vIn[from === ed.u ? ed.v : ed.u] += eM[e]*Math.max(0, x); }
-    for(let i=0;i<net.n;i++){ const o = gOut[i]; if(!(o > 0)) continue;
-      const have = mBy[net.name[i]];
-      const budget = (have === undefined ? o*dt : net.F.x[i]*have) / dt + vIn[i];
-      if(o > budget) for(let e=0;e<net.edges.length;e++)
-        if(gasK[e] === 1 && eFrom[e] === i) gasK[e] = Math.max(budget, 0)/o; } }
-  /* and the mirror below the surface: a water outlet hands over its node's own liquid plus the liquid arriving in the same tick, and carries the rest at the node's mean */
   const liqK = scratch(net, "liqK", net.edges.length, Float64Array, 0);
-  { const lIn = scratch(net, "lIn", net.n, Float64Array, 0),
-          lOut = scratch(net, "lOut", net.n, Float64Array, 0);
-    for(let e=0;e<net.edges.length;e++){ const from = eFrom[e]; if(from < 0) continue;
-      const ed = net.edges[e], x = net.F.x[from];
-      if(ed.liqAt === from && x > 0){ liqK[e] = 1; lOut[from] += eM[e]; lIn[from === ed.u ? ed.v : ed.u] += eM[e]; }
-      else lIn[from === ed.u ? ed.v : ed.u] += eM[e]*Math.max(0, 1 - x); }
-    for(let i=0;i<net.n;i++){ const o = lOut[i]; if(!(o > 0)) continue;
-      const have = mBy[net.name[i]];
-      const budget = (have === undefined ? o*dt : (1 - net.F.x[i])*have) / dt + lIn[i];
-      if(o > budget) for(let e=0;e<net.edges.length;e++)
-        if(liqK[e] === 1 && eFrom[e] === i) liqK[e] = Math.max(budget, 0)/o; } }
+  advSep(net, s, dt, eFrom, eM, gasK, liqK);
   for(let e=0;e<net.edges.length;e++){
     const from = eFrom[e]; if(from < 0) continue;
     const ed = net.edges[e], to = from === ed.u ? ed.v : ed.u;
@@ -1550,13 +1572,13 @@ const stageFed=(net,s,id)=>{
   if(!net.nodesOfPart || !net.nodesOfPart[id]) return false;
   const pc=netPieces(net,s), IN=roleIns(partOf(id))[0]; if(!IN) return false;
   const at=f=>{ const i=net.index[coreFold(f)]; return i===undefined ? -1 : pc.of[i]; };
-  const mine=new Set();
-  for(const f of [IN.a, IN.b]){ const p=at(id+f); if(p>=0) mine.add(p); }
-  if(!mine.size) return false;
-  for(const p of corePieces(net,s)) if(mine.has(p)) return true;
+  const a0=at(id+IN.a), a1=at(id+IN.b);
+  if(a0<0 && a1<0) return false;
+  const has=p=>p>=0&&(p===a0||p===a1);
+  for(const p of corePieces(net,s)) if(has(p)) return true;
   for(const q of sgIds().concat(ihxIds())){ if(q===id) continue;
     const C=roleIns(partOf(q))[1]; if(!C) continue;
-    for(const f of [C.a, C.b]) if(mine.has(at(q+f))) return true; }
+    if(has(at(q+C.a))||has(at(q+C.b))) return true; }
   return false; };
 /* Counterflow effectiveness; at equal rates the general expression is 0/0 and the limit is NTU/(1+NTU). */
 const ntuCounter=(NTU,Cr)=>{ if(!(NTU>0)) return 0;
@@ -2139,7 +2161,8 @@ function plantSettle(){
      valveDem:Object.fromEntries(Object.keys(P.fittings).filter(k=>P.fittings[k].mode==="throttle")
        .map(k=>[k, startOf(k+":valve", fitTies(k)?0:1)])),
      /* one isolation valve per port, all commissioning open, with no starting position: a plant nobody has isolated is bit-identical to one with no port valves */
-     portShut:Object.fromEntries(Object.keys(D.ports).map(k=>[k,false])),
+      portShut:Object.fromEntries(Object.keys(D.ports).map(k=>[k,false])),
+      portShutGen:0,
      arLo:P.arLo, arHi:P.arHi,
      dmgParts:[], repair:null, sgtr:false,
      /* two crews, two places: `dose` is the repair party's own integral off the cell it is standing in, `crewDose` the watch's off its own seat */
@@ -2687,8 +2710,10 @@ function stepMarch(dt){
   /* a wall lets go at its own SHAPE, not its own cell: stress is p*R/t on half the flat span drawn (matSpan(), paint.js). One cell per event, and unlike a pipe it may break again */
   /* every gas-tight cell once, so the two faces of one wall are one judgement, and the worst lets go */
   { let lo = Infinity, tie = [];
+    const hasDmg = s.dmgParts.length>0;
     for(const k in D.mat){ const j=k.indexOf(","), x=+k.slice(0,j), y=+k.slice(j+1);
-      if(!matWall(x,y) || s.dmgParts.indexOf("mat:"+k) >= 0) continue;
+      const mc = D.mat[k];
+      if(!(mc && matRow(mc.m).tight) || (hasDmg && s.dmgParts.indexOf("mat:"+k) >= 0)) continue;
       const m = matBurstP(x,y) - matCellDP(s,x,y);
       if(m < lo - 1e-9){ lo = m; tie = [[x,y]]; }
       else if(m < lo + 1e-9) tie.push([x,y]); }
@@ -3147,13 +3172,13 @@ function stepMarch(dt){
         " kPa above ambient, against the "+minPburst().toFixed(0)+
         " kPa the weakest machine on this plant is built for. What it costs is decided now.");
     }
-    const crushLive = {};
+    const cgLive = tagTick();
     /* the bang is judged on what a source put ON TOP of the volume's own static pressure, never on s.roomP itself */
     const gauge = roomPStatic(s);
-    for(const p of LAY.parts){
+    for(let pi=0;pi<LAY.parts.length;pi++){ const p=LAY.parts[pi];
       const lim = partPburst(p);
       if(!lim || !fitted(p)) continue;
-      crushLive[p.id] = 1;
+      crushSeen[p.id] = cgLive;
       if(s.dmgParts.indexOf(p.id) >= 0){ s.roomCrush[p.id]=0; continue; }
       const pk = roomPAt(s,p), bang = (s.roomBurnOn || s.roomFireOn || s.roomBang) ? roomPAt(s,p,gauge) : 0;
       const blast = bang >= lim;
@@ -3173,10 +3198,11 @@ function stepMarch(dt){
         (blast?bang:pk).toFixed(0)+" kPa against the "+(blast?lim:clim)+" kPa it was built for. "+
         (blast ? "" : "This is not a bang: the region round it is holding that pressure, and it will take the next machine too until something relieves it. ")+fx.why);
     }
-    for(const q of cellHazards()){
+    const CHZ = cellHazards();
+    for(let chi=0;chi<CHZ.length;chi++){ const q=CHZ[chi];
       /* a painted cell is not here: the wall sweep already judges it against its own shape-rating, and this loop would take it in board order instead */
       if(q.lim) continue;
-      crushLive[q.id] = 1;
+      crushSeen[q.id] = cgLive;
       if(s.dmgParts.indexOf(q.id) >= 0){ s.roomCrush[q.id]=0; continue; }
       const ci = q.y*GW+q.x, pk = s.roomP[ci], bang = (s.roomBurnOn || s.roomFireOn || s.roomBang) ? pk-gauge[ci] : 0;
       const blast = bang >= PIPE_PBURST;
@@ -3191,19 +3217,21 @@ function stepMarch(dt){
         (blast ? (s.roomBang ? "The reactor shield lifting has taken " : "A hydrogen explosion has taken ") : "Sustained overpressure in the compartment has taken ")+
         q.what+". "+fx.why);
     }
-    for(const id in s.roomCrush) if(!crushLive[id]) delete s.roomCrush[id];
+    for(const id in s.roomCrush) if(crushSeen[id] !== cgLive){ delete s.roomCrush[id]; delete crushSeen[id]; }
     s.roomBang=0;   // a lift is one tick's bang; the pressure it left relaxes with the rest
   }
   /* the room pushing in is above; this is the plant pushing out, judged on the CIRCUIT's pressure and never netPAt(), which carries piezometric head */
   { const G = nodeGraph();
-  for(const p of LAY.parts){
+  const fnc = G.faceNm || (G.faceNm = {});
+  for(let pi=0;pi<LAY.parts.length;pi++){ const p=LAY.parts[pi];
     const lim = partPdes(p);
     if(!lim || !fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
-    let pk = 0, seen = false;
-    for(const f of ["t","r","b","l"]){ const n = coreFold(p.id+f);
+    let pk = 0, seen = false, cP;
+    const ns = fnc[p.id] || (fnc[p.id] = [p.id+"t", p.id+"r", p.id+"b", p.id+"l"]);
+    for(let k=0;k<4;k++){ const n = coreFold(ns[k]);
       if(P.net.index[n] === undefined) continue;
       seen = true;
-      pk = Math.max(pk, G.inCore(n) ? s.P : condP(s));
+      pk = Math.max(pk, G.inCore(n) ? s.P : (cP === undefined ? (cP = condP(s)) : cP));
     }
     if(!seen || pk < lim) continue;
     s.dmgParts.push(p.id);
@@ -3241,13 +3269,13 @@ function stepMarch(dt){
     s.fireEv = {kg:0, p:0, q:0};
   }
   /* what standing in a hot room costs a machine: a ramp rather than a switch, so it cooks over seconds. Structure declares no tsurv */
-  { const live={};
+  { const cgCook = tagTick();
     // the live set only serves the sweep at the end, which has nothing to sweep while no cell is hot
     let track=false; for(const k in s.roomHurt){ track=true; break; }
-    for(const p of LAY.parts){
+    for(let pi=0;pi<LAY.parts.length;pi++){ const p=LAY.parts[pi];
       const lim = partTsurv(p);
       if(!lim || !fitted(p)) continue;
-      live[p.id]=1;
+      cookSeen[p.id]=cgCook;
       if(s.dmgParts.indexOf(p.id) >= 0){ s.roomHurt[p.id]=0; continue; }
       if(!hurtStep(s.roomHurt, p.id, (partSkin(s,p)-lim)/ROOM_DMG_SPAN, ROOM_DMG_TAU, dt)) continue;
       s.dmgParts.push(p.id);
@@ -3262,8 +3290,9 @@ function stepMarch(dt){
         " Fixing it while the room is still this hot only buys the same seconds again.");
     }
     /* the pipework cooks too, and neither a pipe cell nor a nozzle valve is in LAY.parts; judged on the AIR, because what a run carries is no measure of the fire around it */
-    for(const q of cellHazards()){
-      if(track) live[q.id] = 1;
+    const CHZC = cellHazards();
+    for(let chi=0;chi<CHZC.length;chi++){ const q=CHZC[chi];
+      if(track) cookSeen[q.id] = cgCook;
       if(s.dmgParts.indexOf(q.id) >= 0){ s.roomHurt[q.id]=0; continue; }
       const air = s.roomT[q.y*GW+q.x];
       if(!hurtStep(s.roomHurt, q.id, (air-(q.lim||PIPE_TSURV))/ROOM_DMG_SPAN, ROOM_DMG_TAU, dt)) continue;
@@ -3274,7 +3303,7 @@ function stepMarch(dt){
         "The compartment has cooked "+q.what+" - air at "+
         air.toFixed(0)+" K against the "+(q.lim||PIPE_TSURV)+" K it is good for. "+fx.why);
     }
-    if(track) for(const id in s.roomHurt) if(!live[id]) delete s.roomHurt[id]; }
+    if(track) for(const id in s.roomHurt) if(cookSeen[id] !== cgCook){ delete s.roomHurt[id]; delete cookSeen[id]; } }
 
   coreAgg(s);
 
@@ -3434,7 +3463,7 @@ function stepMarch(dt){
       if(fresh || t - s.massWarnT >= LEDGER_QUIET/dt){
         s.massWarn = res; s.massWarnT = t;
         console.warn("[ledger] tick "+t+": "+res.toFixed(3)+" kg unattributed of "
-          +ledgM0.toFixed(0)+" kg", JSON.parse(JSON.stringify(s.massOut))); } } }
+           +ledgM0.toFixed(0)+" kg", JSON.parse(JSON.stringify(s.massOut))); } } }
   layRelease();
 }
 /* one pressure colour for every readout, on the annunciator's own thresholds, so a gauge cannot disagree with the alarm beside it */
