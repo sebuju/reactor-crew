@@ -33,6 +33,9 @@ const matSig = sigMemo(()=>{ let out="";
   for(const k in (D.mat||{})){ const c=D.mat[k]; out += "|"+k+":"+c.m+":"+(c.t===undefined?"-":c.t); }
   return out; });
 
+/* module scope so matRegions() holds no inner closure: entry stays free on its memo fast path */
+const matWallPut=(of,regions,wallOf,seen,i,j)=>{ const r=of[j]; if(r>=0 && !seen[r]){ seen[r]=1; regions[r].wall.push(i);
+  if(regions[r].bounded) (wallOf[i] || (wallOf[i]=[])).push(r); } };
 /* The ship is the component touching the hull ring at the most cells; every other component is a region. Keyed on paint and hull only - a shot wall still separates. */
 let matRegCache=null, matRegSig="", matRegGen=-1;
 function matRegions(){
@@ -69,10 +72,8 @@ function matRegions(){
   for(let i=0;i<N;i++){
     if(!tight[i]) continue;
     const X=i%GW, Y=(i/GW)|0, seen={};
-    const put=j=>{ const r=of[j]; if(r>=0 && !seen[r]){ seen[r]=1; regions[r].wall.push(i);
-      if(regions[r].bounded) (wallOf[i] || (wallOf[i]=[])).push(r); } };
-    if(X>0) put(i-1); if(X<GW-1) put(i+1);
-    if(Y>0) put(i-GW); if(Y<GH-1) put(i+GW);
+    if(X>0) matWallPut(of,regions,wallOf,seen,i,i-1); if(X<GW-1) matWallPut(of,regions,wallOf,seen,i,i+1);
+    if(Y>0) matWallPut(of,regions,wallOf,seen,i,i-GW); if(Y<GH-1) matWallPut(of,regions,wallOf,seen,i,i+GW);
   }
   /* A region's `wall` misses the corners of a painted box; a seal is the connected component of tight cells, corners in. */
   const seal=new Int32Array(N).fill(-1), seals=[];
