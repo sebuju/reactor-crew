@@ -118,6 +118,8 @@ function openFlashX(s, fl, i){
 function roomLiqOuts(s, G, fn){
   const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
   for(const k in s.spillBy){
+    /* the transported book is the only thing either caller makes a kilogram out of: with nothing booked every reader below is a guarded no-op, so the EOS reads and cell walks are skipped, not just their results */
+    if(!((advectOutKg[k] || 0) > 0)) continue;
     const fl = openFluidH(s, k);
     if(fl) fn(roomOpenCells(s, G, k), s.spillBy[k], fl, k);
   }
@@ -470,11 +472,11 @@ function roomStep(s, dt){
   roomFireStep(s, dt, G, src);
 
   /* No network presence at all, the shield/catcher idiom; on the main board, so a blackout leaves the room with nothing but its hull. */
-  if(!s.blackout) for(const q of G.parts){
+  if(!s.blackout) for(let qi=0;qi<G.parts.length;qi++){ const q=G.parts[qi];
     if(q.p.role !== "vent" || partWrecked(s, q.p.id)) continue;
     /* Against T_HULL: the set moves this air to the rest of the ship and draws the same mass back, so there is no mass loss to carry. */
     const ua = ROOM_VENT_KGS*ROOM_CP/q.cells.length;
-    for(const i of q.cells) src[i] -= ua*(T[i] - T_HULL);
+    for(let ci=0;ci<q.cells.length;ci++){ const i=q.cells[ci]; src[i] -= ua*(T[i] - T_HULL); }
   }
 
   /* Explicit, four neighbours, one pass over edges; the vertical pair is ASYMMETRIC and that is the buoyancy. */
@@ -1335,20 +1337,20 @@ function roomH2Step(s, dt, G, pmax){
     roomLiqOuts(s, G, (cells, rate, fl, key) => put(cells, rate, key));
   }
   /* The set moves air against the rest of the ship, so it carries gas both ways; with the hull sealed this is the only removal path that is not a fire. */
-  if(!s.blackout) for(const q of G.parts){
+  if(!s.blackout) for(let qi=0;qi<G.parts.length;qi++){ const q=G.parts[qi];
     if(q.p.role !== "vent" || partWrecked(s, q.p.id)) continue;
     const f = Math.min(1, ROOM_VENT_KGS/q.cells.length/ROOM_MAIR*dt);
     /* ...and the AIR with them, toward what the rest of the ship holds at ambient and the cell's own temperature and room: the one place the ship outside the drawing exists. */
-    for(const i of q.cells){ H[i] -= H[i]*f; s.roomVap[i] -= s.roomVap[i]*f;
+    for(let ci=0;ci<q.cells.length;ci++){ const i=q.cells[ci]; H[i] -= H[i]*f; s.roomVap[i] -= s.roomVap[i]*f;
       const m0 = ROOM_P0/1000*roomVgas(s, i)/(R_AIR*Math.max(T[i], 1));
       O[i] += (ROOM_O2_0/ROOM_M0*m0 - O[i])*f;
       s.roomM[i] += (m0 - s.roomM[i])*f; }
   }
   /* The vent set's expression with the target reversed: nitrogen in, oxygen and hydrogen to zero, mass unmoved. NO POWER, so a blackout does not take it away - and it does not stop sodium meeting water. */
-  for(const q of G.parts){
+  for(let qi=0;qi<G.parts.length;qi++){ const q=G.parts[qi];
     if(q.p.role !== "inert" || partWrecked(s, q.p.id)) continue;
     const f = Math.min(1, INERT_KGS/q.cells.length/ROOM_MAIR*dt);
-    for(const i of q.cells){ H[i] -= H[i]*f; O[i] -= O[i]*f; }
+    for(let ci=0;ci<q.cells.length;ci++){ const i=q.cells[ci]; H[i] -= H[i]*f; O[i] -= O[i]*f; }
   }
   /* One stencil, two biases: hydrogen carries H2_UP and collects at the deckhead, oxygen carries none. */
   roomDiffuse(s, H, G, dt, H2_UP);
