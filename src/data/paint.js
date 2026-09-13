@@ -220,16 +220,17 @@ function regionDP(s,g){
 // kPa gauge the fluid touching a cell's wall stands at: the liquid where one stands there, else the gas
 const roomCellP = (s,i) => Math.max(s.roomWater[i] > 0 ? s.roomWP[i] : -Infinity, s.roomPool[i] > 0 ? s.roomPoolP[i] : -Infinity, (s.roomWater[i] > 0 || s.roomPool[i] > 0) ? -Infinity : s.roomP[i]);
 /* What one wall cell is actually carrying, MPa: the difference across it, over the neighbours that are fluid. With the same volume on both faces it is zero, which is correct; with one face it is the gauge, which already carries the difference against ambient. */
+const CELLDP_A={of:null,s:null,hi:0,lo:0,n:0};
+const CELLDP_PUT=(a,X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return;
+  const i=Y*GW+X; if(a.of[i]<0) return;
+  const p=roomCellP(a.s,i); if(p>a.hi) a.hi=p; if(p<a.lo) a.lo=p; a.n++; };
 function matCellDP(s,x,y){
   if(!s || !s.roomP) return 0;
-  const of=matRegions().of;
-  let hi=-Infinity, lo=Infinity, n=0;
-  const put=(X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return;
-    const i=Y*GW+X; if(of[i]<0) return;
-    const p=roomCellP(s,i); if(p>hi) hi=p; if(p<lo) lo=p; n++; };
-  put(x-1,y); put(x+1,y); put(x,y-1); put(x,y+1);
-  if(!n) return 0;
-  return (n===1 ? Math.max(0,hi) : hi-lo)/1000;
+  const a=CELLDP_A;
+  a.of=matRegions().of; a.s=s; a.hi=-Infinity; a.lo=Infinity; a.n=0;
+  CELLDP_PUT(a,x-1,y); CELLDP_PUT(a,x+1,y); CELLDP_PUT(a,x,y-1); CELLDP_PUT(a,x,y+1);
+  if(!a.n) return 0;
+  return (a.n===1 ? Math.max(0,a.hi) : a.hi-a.lo)/1000;
 }
 const matRatingRaw = (x,y) => { const m=matOf(x,y); if(!m) return 0;
   return 2*m.S*Math.max(matThick(x,y)-WALL_CORR,0)/Math.max(matSpanD(x,y),1); };

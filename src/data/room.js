@@ -391,45 +391,46 @@ function roomStep(s, dt){
   const pmax = roomGasStep(s, dt, G, src);
 
   /* Contents -> skin -> air, every arrow both ways, and what the room gets is booked against the pot it came out of (s.skinQ, spent in step.js). */
-  const live = {};
-  for(const q of G.parts){
+  const cgPart = tagTick();
+  for(let qi=0;qi<G.parts.length;qi++){ const q=G.parts[qi];
     const id = q.p.id, n = q.cells.length, Tp = partTemp(s, q.p);
     const proc = Tp !== null && isFinite(Tp);
-    live[id] = 1;
+    partSeen[id] = cgPart;
     if(s.partT[id] === undefined) s.partT[id] = proc ? Tp : T_HULL;
     const Ts = s.partT[id];
     let air = 0;
-    for(const i of q.cells) air += T[i];
+    for(let ci=0;ci<q.cells.length;ci++) air += T[q.cells[ci]];
     const qProc = proc ? n*ROOM_HK*SKIN_PROC_K*(Tp - Ts) : 0;
     s.skinQ[id] = qProc;
     s.partT[id] = clamp(Ts + (qProc + ROOM_HK*(air - n*Ts))/skinCap(n)*dt,
                         T_SPACE, ROOM_TMAX);
-    for(const i of q.cells) src[i] += ROOM_HK*(Ts - T[i]);
+    for(let ci=0;ci<q.cells.length;ci++){ const i=q.cells[ci]; src[i] += ROOM_HK*(Ts - T[i]); }
   }
-  for(const id in s.partT) if(!live[id]){ delete s.partT[id]; delete s.skinQ[id]; }
+  for(const id in s.partT) if(partSeen[id] !== cgPart){ delete s.partT[id]; delete s.skinQ[id]; delete partSeen[id]; }
   /* A run's wall is the same pot; with no readable fluid it falls to the air at its own time constant rather than pinning at the reactor's mean. */
   // one skin per REGION: a lumped run is infinite axial conductance, so a penetration would carry a broken compartment's air out through its own wall
-  const liveRun = {}, regOf = matRegions().of;
-  for(const r of G.runs){
-    const seg = {};
-    // a cell the wall was painted over is not air, and is in no region
-    for(const i of r.cells){ const ri = regOf[i]; if(ri < 0) continue;
-      if(!seg[ri]) seg[ri] = []; seg[ri].push(i); }
+  const liveRun = runSeen, cgRun = tagTick(), regOf = matRegions().of;
+  for(let ri2=0;ri2<G.runs.length;ri2++){ const r=G.runs[ri2];
+    let sg = r.segC;
+    if(!sg){ sg = r.segC = [];
+      const seg = {};
+      for(let ci=0;ci<r.cells.length;ci++){ const i=r.cells[ci], ri=regOf[i]; if(ri<0) continue;
+        if(!seg[ri]) seg[ri] = []; seg[ri].push(i); }
+      for(const ri in seg){ const cells=seg[ri]; sg.push([ri, cells, r.key+"#"+ri]); } }
     const Tf = runFluidT(s, r.key);
-    for(const ri in seg){
-      const cells = seg[ri], key = r.key+"#"+ri, n = cells.length;
-      liveRun[key] = 1;
+    for(let si=0;si<sg.length;si++){ const ri=sg[si][0], cells=sg[si][1], key=sg[si][2], n=cells.length;
+      liveRun[key] = cgRun;
       if(s.runT[key] === undefined) s.runT[key] = Tf === null ? T_HULL : Tf;
       const Ts = s.runT[key];
       let air = 0;
-      for(const i of cells) air += T[i];
+      for(let ci=0;ci<cells.length;ci++) air += T[cells[ci]];
       const qProc = Tf === null ? 0 : n*ROOM_HK*SKIN_PROC_K*(Tf - Ts);
       s.runT[key] = clamp(Ts + (qProc + ROOM_HK*(air - n*Ts))/skinCap(n)*dt,
                           T_SPACE, ROOM_TMAX);
-      for(const i of cells) src[i] += ROOM_HK*(Ts - T[i]);
+      for(let ci=0;ci<cells.length;ci++){ const i=cells[ci]; src[i] += ROOM_HK*(Ts - T[i]); }
     }
   }
-  for(const k in s.runT) if(!liveRun[k]) delete s.runT[k];
+  for(const k in s.runT) if(liveRun[k] !== cgRun){ delete s.runT[k]; delete runSeen[k]; }
 
   /* net.fitTarget is the gate - a tank to catch this, or straight into the room - and net.fitVentOut the second, gone up the stack because the valve's open face is against the skin. */
   const cellsOf = id => { const q = G.parts.find(w => w.p.id === id); return q ? q.cells : []; };
