@@ -44,6 +44,8 @@ const voidQual = (v,rvl) => { const q=clamp(v,0,1);
 
 /* ring i is an annulus, so it is worth 2i+1 unit cells */
 const ringW=new Float64Array(XNR), nodeW=new Float64Array(XNN);
+/* coreStep never runs inside itself, so one buffer each serves every core on the board */
+const mixKBuf=new Float64Array(XNR), disKBuf=new Float64Array(XNN);
 const faceI=new Float64Array(XNR), faceO=new Float64Array(XNR);
 (function(){
   let t=0; for(let i=0;i<XNR;i++) t+=2*i+1;
@@ -340,7 +342,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
 
   rodShape(K,cs,cs.nCov,cs.nFol);
   /* the rise, which the display and the steam side read; the channel itself starts at the inlet the caller measured */
-  const mixK=new Float64Array(XNR);
+  const mixK=mixKBuf; mixK.fill(0);
   { let raw=0;
     for(let i=0;i<XNR;i++){
       let ringP=0; for(let j=0;j<XNZ;j++) ringP+=cs.phi[XIX(i,j)];
@@ -358,7 +360,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
   const hSat  = cp*sat;                      // kJ/kg
   const rvl   = satRvl(K.sat, cs.pCore);             // the core boils at its own pressure
   let dnbLo=1e30, dnbK=0, TclH=0, ecrH=0, h2=0, oxP=0, fciE=0;
-  const disK=new Float64Array(XNN);
+  const disK=disKBuf; disK.fill(0);
   const dhSub=cp*(sat-Tcold);
   for(let i=0;i<XNR;i++){
     const chan=Math.max(cs.chW[i],1e-3);

@@ -1,9 +1,9 @@
 const NET_EPS = 1e-9, NET_REL = 1e-12;
 
-function netFactor(A, n, deg, bw){
+function netFactor(A, n, deg, bw, d0Out){
   const B = bw === undefined ? n : bw;
   // Relative to the row's own weight: a floating block's last pivot cancels to g x 1e-16.
-  const d0 = new Float64Array(n);
+  const d0 = (d0Out && d0Out.length === n) ? d0Out : new Float64Array(n);
   for(let k=0;k<n;k++) d0[k] = A[k*n+k];
   for(let k=0;k<n;k++){
     const d = A[k*n+k], lim = Math.min(n, k+B+1);

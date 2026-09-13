@@ -173,17 +173,28 @@ function blkSeedOut(s,id){
 const blkSeedOuts=s=>{ for(const id in s.blkBy) blkSeedOut(s,id); };
 
 /* Kahn over the live links, cached on their signature; a block left on a cycle reads last tick's outputs */
-const CTL_ORD={sig:null, order:[]};
+const CTL_ORD={ids:null, wire:null, order:[]};
+/* compared element by element, never as a joined string: the key was 108 concatenations and a join, rebuilt every tick to check a cache that almost never moves */
+function ctlWired(s, ids){
+  const w=CTL_ORD.wire, was=CTL_ORD.ids;
+  if(!w || w.length!==ids.length) return false;
+  for(let i=0;i<ids.length;i++){ const id=ids[i];
+    if(was[i]!==id) return false;
+    const a=w[i], c=s.blkBy[id].in;
+    if(a.length!==c.length) return false;
+    for(let k=0;k<a.length;k++) if(a[k]!==c[k]) return false; }
+  return true;
+}
 function ctlOrder(s){
-  const ids=Object.keys(s.blkBy), sig=ids.map(id=>id+":"+s.blkBy[id].in.join(",")).join(";");
-  if(sig===CTL_ORD.sig) return CTL_ORD.order;
+  const ids=Object.keys(s.blkBy);
+  if(ctlWired(s, ids)) return CTL_ORD.order;
   const deg={}, kids={};
   for(const id of ids){ deg[id]=0; kids[id]=[]; }
   for(const id of ids) for(const src of s.blkBy[id].in) if(src && deg[src]!==undefined){ deg[id]++; kids[src].push(id); }
   const q=ids.filter(id=>deg[id]===0), order=[];
   while(q.length){ const id=q.shift(); order.push(id); for(const k of kids[id]) if(--deg[k]===0) q.push(k); }
   for(const id of ids) if(deg[id]>0) order.push(id);
-  CTL_ORD.sig=sig; CTL_ORD.order=order;
+  CTL_ORD.ids=ids; CTL_ORD.wire=ids.map(id=>s.blkBy[id].in.slice()); CTL_ORD.order=order;
   return order;
 }
 
@@ -223,13 +234,17 @@ function blkEval(s,b,I,dt){
   return b.out;
 }
 
+/* reused: blkEval reads it inside the call and keeps no reference, and 108 blocks built 108 arrays a tick */
+const CTL_IN=[];
 /* at the head of the tick; off, wrecked or dark, every output holds and no sink is written */
 function ctlPass(s,dt){
   if(!s.blkBy) return;
   if(!ctlLive(s)) return;
-  for(const id of ctlOrder(s)){ const b=s.blkBy[id];
+  const ord=ctlOrder(s), I=CTL_IN;
+  for(let j=0;j<ord.length;j++){ const b=s.blkBy[ord[j]];
     if(!b.on) continue;
-    const I=b.in.map(src=>(src&&s.blkBy[src])?s.blkBy[src].out:0);
+    const n=b.in.length; I.length=n;
+    for(let i=0;i<n;i++){ const src=b.in[i], u=src&&s.blkBy[src]; I[i]=u?u.out:0; }
     const v=blkEval(s,b,I,dt);
     b.out=isFinite(v)?v:b.out;
   }

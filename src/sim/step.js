@@ -294,14 +294,7 @@ const cwPathsOf = id => { const p=partOf(id), R=p&&ROLE[p.role], o=[];
 const cwFlowOf = (m,id) => { let f=0;
   for(const q of cwPathsOf(id)) f += Math.abs(m[q.key]||0); return f; };
 /* the solved pressure field, kept on S for next tick's readers - refilled, never rebuilt */
-const keepPField = (s, pf) => {
-  const net = P && P.net, by = s.pBy, has = Object.prototype.hasOwnProperty;
-  let n = 0, added = 0;
-  for(const k in pf){ if(!has.call(by, k)) added++; by[k] = pf[k]; n++; }
-  // pByN is by's key count after the last call on this object, so a stale key is a count that does not add up
-  if(!net || net.pByObj !== by || net.pByN + added !== n)
-    for(const k in by) if(pf[k] === undefined) delete by[k];
-  if(net){ net.pByObj = by; net.pByN = n; } };
+const keepPField = (s, pf) => { pfCopy(s.pBy, pf); };
 /* whether a circulating water path runs a->b, along the solved flow's own direction */
 const cwFwd = (runFlow, key) => { const ref = Math.abs(P.netRefByRun[key]||0);
   return (ref > 1e-9 ? (runFlow[key]||0)/ref : 0) >= 0; };
@@ -599,7 +592,7 @@ function repairStart(id){
   const need=repairNeed(p);
   s.repair={id:p.id,t:0,need};
   /* seeded here, not next tick: s.repRate still holds the last job's field in this window */
-  const f=radSolve(P.radK,radSrc(s));
+  const f=radSolve(P.radK,radSrc(s),true);
   s.repRate=repairRadRate(f,p.id);
   const eta=need/radWorkK(s.repRate);
   /* not partName(p): that lives in core/ui.js, which WORKER_SIM excludes, and this runs in the scenario worker too */
@@ -1011,7 +1004,7 @@ function massSeed(s){
       const a = adj[i]; if(a) for(const v of a) if(!seen[v]){ seen[v] = 1; stack.push(v); } }
     if(plant) continue;
     for(const i of region){ const nm = net.name[i], c = netSatOf(nm), h = satHg(c, P.Pcont);
-      s.hBy[nm] = h; s.mBy[nm] = net.vol[i]*rhoMixOf(c, P.Pcont, h); s.pBy[nm] = P.Pcont; }
+      s.hBy[nm] = h; s.mBy[nm] = net.vol[i]*rhoMixOf(c, P.Pcont, h); pfSet(s.pBy, nm, P.Pcont); }
   }
 }
 /* kW into one vessel's node, one tick old - the solve has to run before there are flows to carry it. */
@@ -1902,13 +1895,24 @@ const coreEach  = (s,fn) => { for(const id of coreIds()) if(s.coreBy && s.coreBy
 const coreOn    = (s,id,fn) => { if(id===undefined) return coreEach(s,fn);
   const cs=coreState(s,id); if(cs) fn(cs, P.cores[id], id); };
 /* one vessel's state over the plant's, with its circuit's own pressure, mean, level, inventory and margin, so a predicate written against S asks that vessel by being handed this */
+/* One view per vessel, refilled. A fresh Object.create(s) per call inserts every field into a new
+   dictionary and measured 6.3 kB a call. Every optional field is written unconditionally at the value
+   the prototype would have returned, or a stale own property from last call would shadow s. */
+let seenS = null, seenBy = null;
 const coreSeen = (s,id) => { const cs = coreState(s,id); if(!cs) return s;
   const K = P.cores && P.cores[id], ci = K ? K.circ : -1, key = circKey(ci), hold = holdOnCirc(ci)[0];
-  const v = Object.assign(Object.create(s), cs);
-  if(K){ v.K = K; v.P = loopP(s, ci); v.Tavg = TavgOf(s, ci); v.dTavg = dTavgOf(s, ci);
-    if(hold && s.lvlBy && s.lvlBy[hold] !== undefined){ v.lvl = s.lvlBy[hold]; v.dLvl = s.dLvlBy ? s.dLvlBy[hold] : s.dLvl; }
-    if(s.invBy && s.invBy[key] !== undefined) v.inv = s.invBy[key];
-    if(s.scBy && s.scBy[ci] !== undefined) v.sc = s.scBy[ci]; }
+  if(seenS !== s){ seenS = s; seenBy = Object.create(null); }
+  const v = seenBy[id] || (seenBy[id] = Object.create(s));
+  Object.assign(v, cs);
+  v.K = K || s.K;
+  v.P = K ? loopP(s, ci) : s.P;
+  v.Tavg = K ? TavgOf(s, ci) : s.Tavg;
+  v.dTavg = K ? dTavgOf(s, ci) : s.dTavg;
+  const lv = K && hold && s.lvlBy && s.lvlBy[hold] !== undefined;
+  v.lvl = lv ? s.lvlBy[hold] : s.lvl;
+  v.dLvl = lv ? (s.dLvlBy ? s.dLvlBy[hold] : s.dLvl) : s.dLvl;
+  v.inv = (K && s.invBy && s.invBy[key] !== undefined) ? s.invBy[key] : s.inv;
+  v.sc = (K && s.scBy && s.scBy[ci] !== undefined) ? s.scBy[ci] : s.sc;
   return v; };
 /* one vessel's share of rated flow: the solve's inflow at its node over its own reference, the plant's figure where the solve was not asked */
 const coreFlowNet = (K, id, outs, fallback) =>
@@ -2123,7 +2127,7 @@ function plantSettle(){
      /* what each tank's own edge is carrying, % of loop inventory per second, tank-out-positive - a readout, refilled */
      tankRate:{},
      /* the enthalpy field and the pressures it is read against, keyed by node name; refilled, never rebuilt */
-     hBy:{}, pBy:{},
+     hBy:{}, pBy:pfNew(),
      /* kg at each node, integrated off the solved flows in the same donor pass the enthalpy takes */
      mBy:{},
      /* boron in pcm and hydrogen in kg per kg of coolant, per node on the same donor pass; s.metalT is the steel round each node, K */
@@ -2247,7 +2251,7 @@ function plantSettle(){
   /* the field has to converge too, because the shells read it (sgHot): advectStep relaxes every node by SETTLE_RELAX a pass while the store is held, until every generator's own inlet stands still */
   { const DTS = 0.02, hotWas = {};
     for(let i=0;i<300;i++){
-      const pf = {}, k = netFlowK(S, rf, pf, outs);
+      const pf = pfNew(), k = netFlowK(S, rf, pf, outs);
       keepPField(S, pf);
       const was = S.flowNet;
       if(k > 0) S.flowNet = k;
@@ -2310,7 +2314,7 @@ function plantSettle(){
   { let o0=null, K0=null;
     coreEach(S,(cs,K,id)=>{ let o=null;
       /* at the pressure the first tick will read (pressRead, off the settled field), never the vessel's nominal */
-      { const pf = S.pBy && S.pBy[coreFold(id)]; if(pf !== undefined && isFinite(pf) && pf > 0) cs.pCore = pf; }
+      { const pf = pfAt(S.pBy, coreFold(id)); if(pf !== undefined && isFinite(pf) && pf > 0) cs.pCore = pf; }
       for(let i=0;i<5;i++){
         o=coreStep(K,cs,0,cs.heat,satT(K.sat,cs.pCore),0,K.flowK*cs.flowNet,Math.max(cs.flowNet,CORE_DT_QMIN),coreInH(S,id));
         for(let k=0;k<XNN;k++){ cs.nV[k]=cs.nVt[k]; cs.nTc[k]=cs.nTct[k]; } }
@@ -2332,7 +2336,7 @@ function plantSettle(){
       S.sgTBy[id] = tsatSec(p[j], shellCirc(id)); });
     /* the residual has to be a function of the pressure alone: every conductance is linearised about last tick's field, so the field is driven to its own fixed point before the reading is taken */
     const solve = () => { restHeat(outs.byLoop);
-      const o = {}, pf = {};
+      const o = {}, pf = pfNew();
       let was = null;
       for(let k=0;k<30;k++){
         for(const key in o) delete o[key];
@@ -2382,7 +2386,7 @@ function plantSettle(){
   { const ids = boilerIds();
     /* the store is LIVE for this walk: the valve is being positioned for the network the TICK marches, and a solve with no node diagonal is not that network */
     netHoldStore(false);
-    const solveFeed = () => { const o = {noNat:true}, pf = {}; netFlowK(S, rf, pf, o);
+    const solveFeed = () => { const o = {noNat:true}, pf = pfNew(); netFlowK(S, rf, pf, o);
       keepPField(S, pf); return o; };
     // read at the field's own fixed point: one solve relinearises the next, so a bracket on single solves never closed
     const feedAt = () => { let was = null, by = {};
@@ -2609,7 +2613,7 @@ function stepMarch(dt){
   /* scratch, not sim state: rebuilt fresh every tick, so a local rather than a field on S */
   const runFlow = {};
   /* MPa per node, taken off netFlowK()'s own solve so the tick pays for one solve and not two; pAt() is how every reader below asks it */
-  const pField = {};
+  const pField = pfNew();
   /* what the solve found leaving the plant through every opening on it */
   const netOut = {};
   const pumpK = netFlowK(s, runFlow, pField, netOut);
@@ -2643,7 +2647,7 @@ function stepMarch(dt){
     if(tankPrimary(tid) && tankInjecting(tid, q)){ inj += q; injIds.push(tid); }
   }
   // coreFold() first: a folded part has ONE node under its bare id, so a caller naming a face would fall through to the s.P default
-  const pAt = n => { const v = pField[coreFold(n)]; return v===undefined ? s.P : v; };
+  const pAt = n => { const v = pfAt(pField, coreFold(n)); return v===undefined ? s.P : v; };
   /* subcooling at a place, on the circuit's own curve (satOfCirc(), pipenet.js) and never the primary's */
   const scAt = n => tsatSec(pAt(n), circOfNode(coreFold(n))) - netTempAt(s, n);
   /* a readout, like s.sc and s.heat: on S because the panel prints it and a snapshot must carry what the panel was showing */
@@ -2659,7 +2663,7 @@ function stepMarch(dt){
   if(net.burstGen !== DGEN){ net.burstP = {}; net.burstGen = DGEN; }
   for(const r of pipeNetwork()){
     if(!r.cells || !r.cells.length) continue;
-    const pa = pField[runNodeOf(r.key)];
+    const pa = pfAt(pField, runNodeOf(r.key));
     if(pa === undefined) continue;
     const pBurst = net.burstP[r.key] ?? (net.burstP[r.key] = runBurstP(r));
     if(pa <= pBurst) continue;
@@ -3008,7 +3012,7 @@ function stepMarch(dt){
     const vent = secVent[id] || 0;                           // its valves, off their own edges
     /* the shell's pressure is its NODE's, read once a tick: secP() is asked from inside the solve and may not see a half-solved field */
     s.sgPBy[id] = open ? regionPAt(s, partOf(id))
-      : Math.max(COND_P0, (s.pBy && s.pBy[nd] !== undefined) ? s.pBy[nd] : shellP);
+      : Math.max(COND_P0, pfAt(s.pBy, nd) ?? shellP);
     /* booked and never subtracted, the sentence the primary's reliefs make (reliefRoom); a lifting valve takes some of the header's own holdup, so it may pass more than this shell sent up the pipe */
     const toCondCut = Math.min(vent, Math.max(steamTo, 0));
     book(s,"sgVent", vent*dt);
@@ -3053,7 +3057,7 @@ function stepMarch(dt){
   { for(const id in s.condTBy) if(!partOf(id)) delete s.condTBy[id];
     for(const id in s.condPBy) if(!partOf(id)) delete s.condPBy[id];
     for(const id of condIds()){
-      const p = s.pBy && s.pBy[condVesNode(id)];
+      const p = pfAt(s.pBy, condVesNode(id));
       if(p !== undefined && isFinite(p))
         s.condPBy[id] = partWrecked(s,id) ? regionPAt(s, partOf(id)) : Math.max(COND_P0, p);
       /* one vessel, so one reading: the pressure is the backpressure and the temperature is what the tubes condense against */
@@ -3125,8 +3129,8 @@ function stepMarch(dt){
   });
   coreAgg(s);
 
-  /* a live field, solved fresh every tick and never stored: a snapshot is a clone of S, and a Float64Array in a module global would not survive a restore */
-  { const f=radSolve(P.radK,radSrc(s));
+  /* solved fresh every tick into a reused buffer and never stored on S: a snapshot is a clone of S, and a Float64Array hung off it would not survive a restore */
+  { const f=radSolve(P.radK,radSrc(s),true);
     s.doseRate = radAt(f,P.radK.crew);
     s.crewDose = Math.min(100, s.crewDose + s.doseRate*RAD_CREW_K*dt);
     /* radParty() wants the coldest free cell next to the job, never the job's own footprint; no party out, no rate */
