@@ -1705,8 +1705,13 @@ function partAt(pt){
   return LAY.parts.find(q=>gx>=q.x&&gx<q.x+q.w&&gy>=q.y&&gy<q.y+q.h)||null;
 }
 /* There is no port PICKER: the hand names the face (faceAt) and a click moves it (portFlip). portPath() is the ONE predicate for "is there anything to choose here" - a part with no declared path is one node and has no sides, and a port flips within its own path, never across. */
-const roleIntern=R=>!R||!R.internal ? []
-  : (Array.isArray(R.internal) ? R.internal : [R.internal]);
+// the wrap is a fact about the ROLE, not the call: cached on the row itself, one per role forever
+const ROLE_INTERN_EMPTY=[];
+const roleIntern=R=>{
+  if(!R||!R.internal) return ROLE_INTERN_EMPTY;
+  if(Array.isArray(R.internal)) return R.internal;
+  return R.internWrap || (R.internWrap=[R.internal]);
+};
 const roleIns=p=>roleIntern(ROLE[p.role]);
 function portPath(p,f){
   if(!p||f==null) return null;
