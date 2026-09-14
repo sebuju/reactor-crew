@@ -129,8 +129,9 @@ function roomLiqOuts(s, G, fn){
     if(tgt[fid] || out[fid]) continue;
     const fl = partFluidH(s, fid);
     if(!fl) continue;
-    const q = G.parts.find(w => w.p.id === fid);
-    fn(q ? q.cells : [], s.reliefVent[fid], fl, ventKeyOf(fid));
+    let qc = null;
+    for(let qi = 0; qi < G.parts.length; qi++) if(G.parts[qi].p.id === fid){ qc = G.parts[qi].cells; break; }
+    fn(qc || [], s.reliefVent[fid], fl, ventKeyOf(fid));
   }
 }
 /* A hole nobody can measure does not spray: a torn machine and a breached cavity state no bore. */
@@ -467,14 +468,7 @@ function roomStep(s, dt){
     roomAddH2(s, roomCellsOf(G, id), rate, m*f);
   }
   /* What the opening is actually passing, in the state it passes it: the kilograms the transport booked on that edge this tick. */
-  roomLiqOuts(s, G, (cells, rate, fl, key) => {
-    /* A fluid that burns lands as a pool and gives its heat up through its own surface (roomFireStep), so charging the air here would spend the same joules twice. */
-    if(fl.c.burn) return;
-    /* Only what FLASHES is a gas in here; the rest is on the floor and is sumpStep()'s kilogram, not this book's. */
-    const kg = (advectOutKg[key] || 0)/dt*openFlashX(s, fl, cells.length ? cells[0] : -1);
-    roomJetLiq(src, T, cells, kg, fl.h, fl.c);
-    roomAddGas(s, cells, kg*dt, kg);
-  });
+  roomStepLiqCall(s, G, src, T, dt);
   injectRoom(s, dt, src, G);
   roomFireStep(s, dt, G, src);
 
@@ -1536,8 +1530,28 @@ const roomH2Frac = (s,i) => { const n = s.roomH2[i]/H2_MMOL;
 // off the SAME denominator, so a rich cell is oxygen-poor by arithmetic rather than a second rule
 const roomO2Frac = (s,i) => s.roomO2[i]/O2_MMOL/Math.max(1e-9, roomMolX(s,i) + s.roomH2[i]/H2_MMOL);
 // off the same partSkin()/partTsurv() the damage integral reads, so the alarm and the failure name one set
-const roomOverIds = s => LAY.parts.filter(p => { const l = partTsurv(p);
-  return l && fitted(p) && partSkin(s,p) > l; }).map(p => p.id);
+// refilled, never rebuilt: callers may pass their own bag, or share the module one when they consume it immediately
+let roomOverScr = null;
+let roomStepCbS = null, roomStepCbSrc = null, roomStepCbT = null, roomStepCbDt = 0;
+function roomStepLiqCb(cells, rate, fl, key){
+  const s = roomStepCbS, src = roomStepCbSrc, T = roomStepCbT, dt = roomStepCbDt;
+  if(fl.c.burn) return;
+  const kg = (advectOutKg[key] || 0)/dt*openFlashX(s, fl, cells.length ? cells[0] : -1);
+  roomJetLiq(src, T, cells, kg, fl.h, fl.c);
+  roomAddGas(s, cells, kg*dt, kg);
+}
+function roomStepLiqCall(s, G, src, T, dt){
+  roomStepCbS = s; roomStepCbSrc = src; roomStepCbT = T; roomStepCbDt = dt;
+  roomLiqOuts(s, G, roomStepLiqCb);
+}
+const roomOverIds = (s, out) => {
+  out = out || roomOverScr || (roomOverScr = []);
+  out.length = 0;
+  for(let pi = 0; pi < LAY.parts.length; pi++){ const p = LAY.parts[pi];
+    const l = partTsurv(p);
+    if(l && fitted(p) && partSkin(s,p) > l) out.push(p.id); }
+  return out;
+};
 const roomH2Peak = s => { let v = 0;
   for(let i=0;i<s.roomH2.length;i++){ const f = roomH2Frac(s,i); if(f > v) v = f; }
   return v; };

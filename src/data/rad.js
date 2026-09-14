@@ -77,22 +77,24 @@ function radGeom(){
 }
 
 /* Never scale the design source term by P.rated or P.n0: 1 by fiat is what makes P.dose purely geometric. */
+let radSrcScr = null;
 function radSrc(L){
   if(!L){ const core={}; for(const id of coreIds()) core[id]=1;
     return {core, sg:0, air:0, pipe:pipeSrc(1)}; }
-  const core={};
+  const o = radSrcScr || (radSrcScr = {core:{}, tank:{}});
+  const core = o.core;
+  for(const k in core) delete core[k];
   for(const id of coreIds()){ const c=(L.coreBy&&L.coreBy[id])||L;
     core[id]=(c.n*PROMPT_F+c.decay)*(c.breach?RAD_BREACH:1)
               + RAD_DMG*c.dmg*contRelPart(L, partOf(id))
               + (!P.catcher?RAD_MELT*c.meltFrac:0); }
-  return {core,
-          sg: L.sgtr?RAD_SGTR:0,
-          tank: (()=>{ const q={};
-            for(const id in (L.tank||{})) q[id] = RAD_TANK*L.tank[id]*tankFluid(id).act;
-            return q; })(),
-          /* Unshielded floor on every cell: a shield stops a ray, not a gas the room is already full of. */
-          air:RAD_AIR*L.release,
-          pipe:pipeSrc(L.n)};
+  const q = o.tank;
+  for(const k in q) delete q[k];
+  for(const id in (L.tank||{})) q[id] = RAD_TANK*L.tank[id]*tankFluid(id).act;
+  o.sg = L.sgtr?RAD_SGTR:0;
+  o.air = RAD_AIR*L.release;
+  o.pipe = pipeSrc(L.n);
+  return o;
 }
 const pipeSrc = n => COOLANT[priD().cool].fuelInCoolant ? RAD_PIPE*n : 0;
 

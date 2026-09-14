@@ -6,6 +6,31 @@ let P=null,S=null;
 let tagGen = 0;
 const tagTick = () => (tagGen = tagGen+1);
 const crushSeen = {}, cookSeen = {}, runSeen = {}, partSeen = {};
+/* zero-alloc tick scratch: persistent bags cleared in place each tick, never reallocated */
+let tickInjIds = null, tickCavIds = null, tickTie = null;
+let tickBoW = null, tickSecVent = null, tickVentKg = null;
+let tickDryIds = null, tickHotIds = null;
+let tickCoreNids = null;
+let sgShareScr = null, stageStreamScrA = null, stageStreamScrB = null;
+/* hoisted per-tick closures: module-scope named functions taking captured values as args */
+function tickRunRatio(runFlow, key){ const r = Math.abs(P.netRefByRun[key]||0);
+  return r > 1e-9 ? (runFlow[key]||0)/r : 0; }
+function tickPAt(pField, n){ const v = pfAt(pField, coreFold(n)); return v===undefined ? S.P : v; }
+function tickScAt(pField, n){ return tsatSec(tickPAt(pField, n), circOfNode(coreFold(n))) - netTempAt(S, n); }
+function tickRadKey(id){ const slot=graphSlot("radKey"), was=slot.get(id); if(was) return was;
+  const IN=ROLE.radiator.internal, k="comp:"+id+":"+IN.a+IN.b;
+  slot.set(id,k); return k; }
+function tickResKg(id, dt){ return advectLanded(P.net && P.net.tankNode[id])/Math.max(dt,1e-9); }
+function tickIsAre(ids){ return ids.length>1 ? "are" : "is"; }
+function tickSteamRun(key, runFlow){
+  const k = P.net.byKey[key].k;
+  if(!runEnds(key,k)) return 0;
+  const b = steamBook(key,k);
+  if(b.vent){ let q = 0;
+    for(const fid of b.taps) q += (S.reliefSteam && S.reliefSteam[fid]) || 0;
+    return q*steamDir(key,k); }
+  return runFlow[key] || 0;
+}
 /* a generator so prewarmStep() (screens/shell.js) can drive commissioning a slice at a time */
 function commission(){ const g=commissionGen(); while(!g.next().done); }
 function* commissionGen(){
@@ -233,9 +258,12 @@ function tubeStep(s,cs,K,id,burst){
   s.roomBang=Math.max(s.roomBang||0, kPa);
 }
 /* FITTED is "somebody wired a scram", ARMED is "and the block driving it is on" */
-const rpsLive  = ()=> coreIds().some(rpsArmed);
-const rpsState = ()=> !coreIds().some(id=>sinkWired(S,"scram",id)) ? "NOT FITTED"
-                    : rpsLive() ? "ARMED" : "BYPASSED";
+const rpsLive  = ()=> { const ids = coreIds();
+  for(let i=0;i<ids.length;i++) if(rpsArmed(ids[i])) return true; return false; };
+const rpsState = ()=> { const ids = coreIds();
+  let fitted = false;
+  for(let i=0;i<ids.length;i++) if(sinkWired(S,"scram",ids[i])){ fitted = true; break; }
+  return !fitted ? "NOT FITTED" : rpsLive() ? "ARMED" : "BYPASSED"; };
 const nameOf = id => {
   const p = partOf(id);
   return p ? partName(p) : id.toUpperCase();
@@ -273,9 +301,14 @@ const reliefAtP = (s,fid) => { const sh=shellsOf(fid);
   /* isolated: nothing feeds the stub, so it holds compartment pressure and the valve cannot lift */
   if(!live.length) return regionPAt(s, partOf(fid));
   let pk=0; for(const id of live) pk=Math.max(pk,secP(s,id)); return pk; };
-const reliefAnyOpen = s => reliefFitIds().some(id=>s.reliefOpen[id] && !s.reliefBlocked[id]);
-const reliefAnyStuck = s => reliefFitIds().some(id=>
-  s.reliefOpen[id] && s.reliefAuto[id] && s.reliefStuck[id] && !s.reliefBlocked[id]);
+const reliefAnyOpen = s => { const ids = reliefFitIds();
+  for(let i=0;i<ids.length;i++){ const id=ids[i];
+    if(s.reliefOpen[id] && !s.reliefBlocked[id]) return true; }
+  return false; };
+const reliefAnyStuck = s => { const ids = reliefFitIds();
+  for(let i=0;i<ids.length;i++){ const id=ids[i];
+    if(s.reliefOpen[id] && s.reliefAuto[id] && s.reliefStuck[id] && !s.reliefBlocked[id]) return true; }
+  return false; };
 /* which bank answers a controller: not tripped, not jammed, and split, on AUTO; whether a controller is live is the caller's question */
 const bankAutoLive = (cs,b) => !cs.scrammed && !cs.rodJam && (!cs.split || cs.bankAuto[b]);
 
@@ -338,8 +371,10 @@ const condRest = qkW => {
 /* bought capacity less what is broken less tubes drowned in condensate; may be exactly 0 */
 const condKOf = (s,id) => partWrecked(s,id) ? 0 : condFrac(s);
 /* a severed exhaust run sits in the vacuum, so what a hole there passes is air going in */
-const exhOpen = s => !!(P && P.net && (P.net.steamBreaks||[]).some(bk =>
-  bk.exh && runHoled(s,bk)));
+const exhOpen = s => { const sb = P && P.net && P.net.steamBreaks;
+  if(!sb) return false;
+  for(let i=0;i<sb.length;i++){ const bk=sb[i]; if(bk.exh && runHoled(s,bk)) return true; }
+  return false; };
 /* past atmospheric a condenser relieves and never gets its vacuum back: nothing on this plant pumps the air out */
 const COND_ATM=0.101;     // MPa, and the pressure a lost condenser sits at
 /* the exhaust pressure a turbine will not tolerate */
@@ -370,22 +405,22 @@ const condTOf = (s,id) => s.condTBy && s.condTBy[id];
 const condTAt = (s,id) => { const v = condTOf(s,id);
   return v===undefined ? cwInAt(s,id) : v; };
 /* K, off the pool's own enthalpy: saturated at T with the space over it holding the vapour the volume forces. On the shelf tOfH() reads Tsat(p) and never h, and p is set off T, so that pair carries no energy. */
+/* hoisted: xAt/hAt closed over (c,m,V) per call and were the largest thing condPoolT built */
+function condXAt(c, m, V, T){ const rf = rhofOf(c,T), rg = rhogOf(c,T);
+  return clamp(rg*(V - m/rf)/Math.max(1e-12, m*(1 - rg/rf)), 0, 1); }
+function condHAt(c, m, V, T){ return hOfT(c,T) + condXAt(c, m, V, T)*hfgOf(c,T); }
 const condPoolT = (s,id) => { const n = condVesNode(id); if(n === null) return undefined;
-  const c = netSatOf(n), m = pfAt(s.mBy,n), h = netHAt(s,n), V = condVolOf(id),
-        fall = () => netTempAt(s,n);
-  if(!(m > 0) || !isFinite(h) || !(V > 0)) return fall();
+  const c = netSatOf(n), m = pfAt(s.mBy,n), h = netHAt(s,n), V = condVolOf(id);
+  if(!(m > 0) || !isFinite(h) || !(V > 0)) return netTempAt(s,n);
   const tb = c.tc && curveTab(c),
         hi = tb ? tb.hi : (c.tc ? c.tc - 1 : (c.Tref || c.T0 || 1)*1.5), lo = CURVE_LO + 1;
-  if(!(hi > lo)) return fall();
+  if(!(hi > lo)) return netTempAt(s,n);
   /* the vapour fraction the VOLUME forces at saturation T: liquid m(1-x)/rhof plus vapour m*x/rhog fill V */
-  const xAt = T => { const rf = rhofOf(c,T), rg = rhogOf(c,T);
-    return clamp(rg*(V - m/rf)/Math.max(1e-12, m*(1 - rg/rf)), 0, 1); };
-  const hAt = T => hOfT(c,T) + xAt(T)*hfgOf(c,T);
   /* no pool the volume will hold, or energy above saturated steam anywhere on the curve: the node is the space */
-  if(xAt(hi) >= 1 || h >= hAt(hi)) return fall();
-  if(h <= hAt(lo)) return lo;
+  if(condXAt(c, m, V, hi) >= 1 || h >= condHAt(c, m, V, hi)) return netTempAt(s,n);
+  if(h <= condHAt(c, m, V, lo)) return lo;
   let a = lo, b = hi;
-  for(let k=0;k<40;k++){ const T = 0.5*(a+b); if(hAt(T) < h) a = T; else b = T; }
+  for(let k=0;k<40;k++){ const T = 0.5*(a+b); if(condHAt(c, m, V, T) < h) a = T; else b = T; }
   return 0.5*(a+b); };
 /* a sink spliced into a primary leg is a vessel on that leg and keeps the leg's read */
 const condTRead = (s,id) => condVacuum(id) ? condPoolT(s,id) : netTempAt(s, condVesNode(id));
@@ -1410,7 +1445,10 @@ function advectStep(s, dt, runFlow, edgeKg){  const net = P && P.net;
   if(!s.dTavgBy) s.dTavgBy = {};
   for(const ci of holdCircs()){ if(G.coreCircs[ci] !== 1) continue;
     const key = circKey(ci), K = (P.cores && P.cores[key]) || P;
-    let m = 0, hm = 0, pm = 0; const coreNids = new Set(coreOnCirc(ci).map(coreFold));
+    let m = 0, hm = 0, pm = 0;
+    const coreNids = tickCoreNids || (tickCoreNids = new Set());
+    coreNids.clear();
+    { const lst = coreOnCirc(ci); for(let ci2 = 0; ci2 < lst.length; ci2++) coreNids.add(coreFold(lst[ci2])); }
     for(let i=0;i<net.n;i++){ const nm = net.name[i];
       if(anch[nm] !== undefined || circOfNode(nm) !== ci || !inLoop(ci, nm)) continue;
       /* Membership is a fraction of this node's own commissioned through-flow, not a switch: a dead end scores zero and a slowing leg fades out continuously. */
@@ -1595,19 +1633,22 @@ const stageKeysOf = id => { const slot=graphSlot("stageKeys"), was=slot.get(id);
   const out = roleIns(partOf(id)).map(IN => IN ? "comp:"+id+":"+IN.a+IN.b : null);
   slot.set(id,out); return out; };
 /* One stream of one machine off the solve; a two-phase stream's heat capacity rate is infinite. */
-const stageStream=(s,id,k,rf)=>{ const key=stageKeysOf(id)[k];
+const stageStream=(s,id,k,rf,out)=>{ const key=stageKeysOf(id)[k];
+  out = out || stageStreamScrA || (stageStreamScrA = {});
   const at=stageInNode(s,id,k), nm=at>=0 ? P.net.name[at] : null;
   const ref=netKgs((P.netRefByRun||{})[key]||0);
   /* A stagnant floor: a rate of exactly zero is a deadlock - no flow, no heat, nothing to start the flow. */
   const w=Math.max(netKgs((rf&&rf[key])||0), 0.02*ref);
   const x=nm===null ? 0 : clamp(netQualAt(s,nm),0,1);
-  return {T: nm===null ? s.Tavg : netTempAt(s,nm), x,
-          fl: ref>1e-9 ? w/ref : 0.02,
-          C: x>0 ? Infinity : w*satOfCirc(circOfNode(nm)).cp}; };
+  out.T = nm===null ? s.Tavg : netTempAt(s,nm); out.x = x;
+  out.fl = ref>1e-9 ? w/ref : 0.02;
+  out.C = x>0 ? Infinity : w*satOfCirc(circOfNode(nm)).cp;
+  return out; };
 /* kW across one exchanger; the film follows the wetter of the two streams. */
 const ihxQAt=(s,id,rf)=>{
   if(s.dmgParts.indexOf(id)>=0) return 0;
-  const a=stageStream(s,id,0,rf), b=stageStream(s,id,1,rf);
+  const a=stageStream(s,id,0,rf,stageStreamScrA || (stageStreamScrA = {}));
+  const b=stageStream(s,id,1,rf,stageStreamScrB || (stageStreamScrB = {}));
   const dT=a.T-b.T; if(!(dT>0)) return 0;
   const UA=ihxUAOf(id)*Math.pow(Math.min(a.fl,b.fl),UA_FLOW)
           *(1-0.85*Math.max(a.x,b.x));
@@ -1651,8 +1692,10 @@ function sgReactStep(s, dt, raw){
 const sglMin=s=>{ const ids=boilerIds(); if(!ids.length) return 100;
   let m=100; for(const id of ids){ const v=boilerLvl(s,id); if(v<m) m=v; } return m; };
 /* each generator's share of the heat leaving the primary, in proportion to its own loop's solved flow; equal split when the solve has nothing to say */
-function sgShare(byLoop){
-  const ids=sgIds(), out={};
+function sgShare(byLoop, out){
+  const ids=sgIds();
+  out = out || sgShareScr || (sgShareScr = {});
+  for(const k in out) delete out[k];
   if(!ids.length) return out;
   let tot=0;
   for(const id of ids){ const i=loopOf(id);
@@ -1749,23 +1792,25 @@ const chfW3 = (p, g, x, dh, dhSub) => {
   return Math.min(w, z + (w - z)*g/gFloor);
 };
 function dnbrOf(K,m){
-  if(m.law==="boil")
-    return K.dnbrK*(m.dhSub/K.sat.cp)/Math.max(m.dT,1e-3);
-  if(m.law==="temp")
-    return K.dnbrK*Math.max(K.tdmg-m.Tin,0)/Math.max(m.Tf-m.Tin,1e-3);
-  return K.dnbrK*chfW3(m.p,Math.max(m.g,1e-3),m.x,K.dh,m.dhSub)/Math.max(m.q,1);
+  if(K.dnbLaw==="boil")
+    return K.dnbrK*(m[MM_DH]/K.sat.cp)/Math.max(m[MM_DT],1e-3);
+  if(K.dnbLaw==="temp")
+    return K.dnbrK*Math.max(K.tdmg-m[MM_TIN],0)/Math.max(m[MM_TF]-m[MM_TIN],1e-3);
+  return K.dnbrK*chfW3(m[MM_P],Math.max(m[MM_G],1e-3),m[MM_X],K.dh,m[MM_DH])/Math.max(m[MM_Q],1);
 }
 /* DNB_FILM is a share of the SINGLE-PHASE COOLANT FILM, not of the whole pellet-to-coolant path; the rewet is a wall-superheat hysteresis, so a wall past DT_LEID stays blanketed however the margin reads */
 const DNB_FILM=0.10, DT_LEID=150;
 const dnbLatch = (K, d, dTs, was) => !K.dryout ? 0 : d < 1 ? 1 : (was && dTs > DT_LEID) ? 1 : 0;
 /* `rise` is the enthalpy actually carried to this node, never the core rise peaked by a flux factor */
-/* one scratch: dnbrOf() reads it and keeps nothing, and this is asked per node per tick */
-const MARGIN_M={law:null, dhSub:0, dT:0, Tin:0, Tf:0, q:0, g:0, x:0, p:0};
+/* one scratch, a Float64Array: a plain object boxed a HeapNumber on every double write, per node per tick;
+   `law` is not stored - it is K.dnbLaw, which the caller already holds. */
+const MM_DH=0, MM_DT=1, MM_TIN=2, MM_TF=3, MM_Q=4, MM_G=5, MM_X=6, MM_P=7;
+const MARGIN_M = new Float64Array(8);
 function marginNode(K,cs,heat,pw,rise,Tin,Tf,gShare,x,dhSub){
   const m=MARGIN_M;
-  m.law=K.dnbLaw; m.dhSub=dhSub; m.dT=rise; m.Tin=Tin; m.Tf=Tf;
-  m.q=heat*K.rated*1e6/Math.max(K.aHeat,1e-6)*Math.max(pw,1e-3);
-  m.g=K.G0*gShare; m.x=x; m.p=cs.pCore;
+  m[MM_DH]=dhSub; m[MM_DT]=rise; m[MM_TIN]=Tin; m[MM_TF]=Tf;
+  m[MM_Q]=heat*K.rated*1e6/Math.max(K.aHeat,1e-6)*Math.max(pw,1e-3);
+  m[MM_G]=K.G0*gShare; m[MM_X]=x; m[MM_P]=cs.pCore;
   return dnbrOf(K,m);
 }
 /* damage is four monotonic per-node integrals (s.nDmg, s.nOx, s.nMelt, s.nDisp - core2d.js); a stage is derived off them and never stored */
@@ -1876,23 +1921,28 @@ function injectFluid(s, dt){
   book(s, "inject", -kg);
 }
 /* water let go anywhere on the board lands on the opening's own cells and comes back into the held side of the book against a negative `sump` line; it runs from there (liqSettle(), room.js) and drowns what it stands two thirds of the way up */
+let sumpCbS = null, sumpCbG = null;
+function sumpLiqCb(cells, rate, fl, key){
+  const s = sumpCbS, G = sumpCbG;
+  if(!cells.length || (fl.c && fl.c.burn)) return;
+  const kg = (advectOutKg[key] || 0)*(1 - openFlashX(s, fl, cells[0]));
+  if(!(kg > 0)) return;
+  const pour = roomPourCells(key, cells);
+  // saturated liquid at the cell's own gas, on water's curve: the circuit's own reads 293 K at a bar (docs/fidelity.md, the vapour-density row)
+  const hl = satH(SAT_WATER, (ROOM_P0 + Math.max(0, s.roomP[pour[0]]))/1000);
+  // it leaves the opening at the speed its own pressure difference gives it, the Weber number's own figure (roomFireStep())
+  const pN = netPAt(s, fl.nd)*1e6, pR = (ROOM_P0 + s.roomP[pour[0]])*1000;
+  const v0 = Math.sqrt(2*Math.max(0, pN - pR)/WATER_RHO);
+  for(let pi = 0; pi < pour.length; pi++){ const i = pour[pi];
+    liqLand(s, G, liqWater(s), i, kg/pour.length, kg/pour.length*hl, v0); }
+  book(s, "sump", -kg);
+}
 function sumpStep(s, dt){
   if(!P.net) return;
   const G = roomGeomLive(s);
   /* a fluid that burns lands as a pool (s.roomPool, roomFireStep()); what flashed at the opening is roomAddGas()'s air, off the same openFlashX() and the same transported kilograms both ask */
-  roomLiqOuts(s, G, (cells, rate, fl, key) => {
-    if(!cells.length || (fl.c && fl.c.burn)) return;
-    const kg = (advectOutKg[key] || 0)*(1 - openFlashX(s, fl, cells[0]));
-    if(!(kg > 0)) return;
-    const pour = roomPourCells(key, cells);
-    // saturated liquid at the cell's own gas, on water's curve: the circuit's own reads 293 K at a bar (docs/fidelity.md, the vapour-density row)
-    const hl = satH(SAT_WATER, (ROOM_P0 + Math.max(0, s.roomP[pour[0]]))/1000);
-    // it leaves the opening at the speed its own pressure difference gives it, the Weber number's own figure (roomFireStep())
-    const pN = netPAt(s, fl.nd)*1e6, pR = (ROOM_P0 + s.roomP[pour[0]])*1000;
-    const v0 = Math.sqrt(2*Math.max(0, pN - pR)/WATER_RHO);
-    for(const i of pour) liqLand(s, G, liqWater(s), i, kg/pour.length, kg/pour.length*hl, v0);
-    book(s, "sump", -kg);
-  });
+  sumpCbS = s; sumpCbG = G;
+  roomLiqOuts(s, G, sumpLiqCb);
   for(const p of LAY.parts){
     if(!fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
     const line = partFloodLine(s, p, G);
@@ -2007,19 +2057,17 @@ const turbShare = s => P.steamRef>0 ? ((s.turbWk||0)+bleedPlant(s))/P.steamRef :
 const dumpOf = s => (condAvail(s) ? Math.max(clamp((s.Tavg-tProg(s))*DUMP_K,0,P.bypass),
                                             dumpPOf(s)) : 0)
                   + ((s.scrammed && tankRuleAny(s,tankSecondary))?0.08:0);
-const turbGate = (s, id) => {
+const turbWorkOf = (s, id) => {
   const c = secCircuitOf(id), piped = (c.boiler && c.sink) ? 1 : 0;
   // the secLoad() idiom: a caller with no load stated is at rated, and undefined through Math.min() is a NaN conductance
   const load = s.load===undefined ? 1 : s.load;
-  return {work: Math.min(load, P.swallow/Math.max(P.steamRef,1e-9))
-                * clamp(piped*(s.turbTrip?0:1),0,1),
-          dump: dumpOf(s)}; };
+  return Math.min(load, P.swallow/Math.max(P.steamRef,1e-9))
+                * clamp(piped*(s.turbTrip?0:1),0,1); };
 /* one edge, two gates: the path passes governor plus bypass, and only the governor's share does work */
 const turbCOf = (s, id) => { if(partWrecked(s,id)) return 0;
-  const g = turbGate(s,id);
-  return P.turbC*Math.max(0, g.work + g.dump); };
-const turbWorkFrac = (s, id) => { const g = turbGate(s,id), t = g.work + g.dump;
-  return t > 0 ? Math.max(0,g.work)/t : 0; };
+  return P.turbC*Math.max(0, turbWorkOf(s, id) + dumpOf(s)); };
+const turbWorkFrac = (s, id) => { const w = turbWorkOf(s, id), t = w + dumpOf(s);
+  return t > 0 ? Math.max(0,w)/t : 0; };
 
 /* a coolant pump answers the plant-wide lever, any other pump only for itself; a standby train commissions stopped, asked of the drawing rather than written into D.start */
 const pumpDem0 = id => pumpStandby(id) ? 0 : 1;
@@ -2642,7 +2690,7 @@ function coreFlowNetStep(cs, K, id, coreFN, netOut, pumpK){ coreFN[id] = coreFlo
 function coreInvByStep(cs, K, id){ if(K.invKg0 > 0) S.invBy[circKey(K.circ)] = 100*invNodesKg(S, id)/K.invKg0; }
 function coreHeatBalStep(cs, K, id){ HEATBAL.heatBy[id]=cs.heat; }
 /* a readout, like s.sc and s.heat: on S because the panel prints it and a snapshot must carry what the panel was showing */
-function coreSetPCore(cs, id, pAtFn){ cs.pCore = pAtFn(id); }
+function coreSetPCore(cs, id, pField){ cs.pCore = tickPAt(pField, id); }
 function coreFatigueStep(cs, dt, inj){ cs.fatigue += 0.35*dt*clamp(inj/1.6,0,2); }
 /* asked at each vessel, not at the pressurizer: what bursts a vessel is the pressure inside it */
 function coreBurstStep(cs, K, id){
@@ -2749,7 +2797,7 @@ function stepMarch(dt){
   if(tickPfNet !== P.net){ tickPf = null; tickPfNet = P.net; }
   const pField = tickPf || (tickPf = pfNew(P.net));
   /* what the solve found leaving the plant through every opening on it */
-  const netOut = {};
+  const netOut = P.netOut || (P.netOut = {});
   __apE("ctlPass");
   __apS();
   const pumpK = netFlowK(s, runFlow, pField, netOut);
@@ -2761,8 +2809,6 @@ function stepMarch(dt){
   { for(const id in s.cwFlowBy) if(!partOf(id)) delete s.cwFlowBy[id];
     for(const id of condIds()) s.cwFlowBy[id] = cwFlowOf(runFlow,id); }
   /* this run against its own reference, signed: 1.0 is what it was built to carry, the direction is the solve's */
-  const runRatio = key => { const r = Math.abs(P.netRefByRun[key]||0);
-    return r > 1e-9 ? (runFlow[key]||0)/r : 0; };
   /* the solved outflow through every opening, charged to inventory through the one flow-to-inventory conversion */
   const spill = invRate(netOut.spill||0);
   /* what each opening is passing, % of loop inventory per second, keyed by the opening's own key - the one figure every pressure-driven effect reads */
@@ -2776,7 +2822,8 @@ function stepMarch(dt){
   const qTankBy = netOut.qTankBy || {};
   /* the positive half of the same signed figure: a tank being filled is not injecting, and summing the two lets one tank hide behind another */
   let inj = 0;
-  const injIds = [];               // which tanks, for the log - a local, never on S
+  const injIds = tickInjIds || (tickInjIds = []);               // which tanks, for the log - a local, never on S
+  injIds.length = 0;
   for(const k in s.tankRate) if(!D.tanks[k]) delete s.tankRate[k];
   for(const tid of tankIds()){
     const q = invRate(qTankBy[tid]||0);
@@ -2786,12 +2833,9 @@ function stepMarch(dt){
     if(tankPrimary(tid) && tankInjecting(tid, q)){ inj += q; injIds.push(tid); }
   }
   // coreFold() first: a folded part has ONE node under its bare id, so a caller naming a face would fall through to the s.P default
-  const pAt = n => { const v = pfAt(pField, coreFold(n)); return v===undefined ? s.P : v; };
-  /* subcooling at a place, on the circuit's own curve (satOfCirc(), pipenet.js) and never the primary's */
-  const scAt = n => tsatSec(pAt(n), circOfNode(coreFold(n))) - netTempAt(s, n);
   /* a readout, like s.sc and s.heat: on S because the panel prints it and a snapshot must carry what the panel was showing */
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreSetPCore(s.coreBy[id], id, pAt);
-  s.pCore = pAt(primaryCore());
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreSetPCore(s.coreBy[id], id, pField);
+  s.pCore = tickPAt(pField, primaryCore());
   /* after the pressures settle and before the SGTR, the feed train and the relief valves read a temperature anywhere */
   tickPf = s.pBy; s.pBy = pField;
   pressRead(s, dt);
@@ -2825,26 +2869,29 @@ function stepMarch(dt){
   }
   /* a wall lets go at its own SHAPE, not its own cell: stress is p*R/t on half the flat span drawn (matSpan(), paint.js). One cell per event, and unlike a pipe it may break again */
   /* every gas-tight cell once, so the two faces of one wall are one judgement, and the worst lets go */
-  { let lo = Infinity, tie = [];
+  { let lo = Infinity;
+    const tie = tickTie || (tickTie = []);
+    tie.length = 0;
     const hasDmg = s.dmgParts.length>0, L = wallLotGet();
     for(let li=0;li<L.length;li++){ const e=L[li], k=e.k;
       const mc = D.mat[k];
       if(!(mc && matRow(mc.m).tight) || (hasDmg && s.dmgParts.indexOf("mat:"+k) >= 0)) continue;
       const m = matBurstP(e.x,e.y) - matCellDP(s,e.x,e.y);
-      if(m < lo - 1e-9){ lo = m; tie = [[e.x,e.y]]; }
-      else if(m < lo + 1e-9) tie.push([e.x,e.y]); }
+      if(m < lo - 1e-9){ lo = m; tie.length = 0; tie.push(e.x*4096+e.y); }
+      else if(m < lo + 1e-9) tie.push(e.x*4096+e.y); }
     if(tie.length && lo <= 0){
       // stood down, it takes the first in board order, as the pipe's own burst does
-      const c = s.diceOff ? tie[0]
+      const cpk = s.diceOff ? tie[0]
               : tie[Math.min(tie.length-1, Math.floor(srand(s)*tie.length))];
-      const id = "mat:"+c[0]+","+c[1];
+      const cx = (cpk/4096)|0, cy = cpk%4096;
+      const id = "mat:"+cx+","+cy;
       s.dmgParts.push(id);
       s.dmgWhy[id] = "BURST";
       const fx = dmgFx(id);
       logE("alarm","CONTAINMENT FAILURE / "+fx.msg,
-        "The wall at "+c[0]+","+c[1]+" has let go - "+(matCellDP(s,c[0],c[1])*1000).toFixed(0)+
-        " kPa across it against a cell that bursts at "+(matBurstP(c[0],c[1])*1000).toFixed(0)+
-        " kPa. It is the middle of a "+(matSpan(c[0],c[1])*MPC).toFixed(1)+
+        "The wall at "+cx+","+cy+" has let go - "+(matCellDP(s,cx,cy)*1000).toFixed(0)+
+        " kPa across it against a cell that bursts at "+(matBurstP(cx,cy)*1000).toFixed(0)+
+        " kPa. It is the middle of a "+(matSpan(cx,cy)*MPC).toFixed(1)+
         " m flat span, which is why it was the cell that went. "+fx.why);
     } }
   __apE("burst");
@@ -2860,14 +2907,15 @@ function stepMarch(dt){
   __apE("sumpStep");
   __apS();
   /* cavitation begins where subcooling reaches zero, asked at the pump's own suction; fed to NEXT tick's solve, because a gate that depends on the answer cannot be part of the question */
-  const cavIds = [];               // which pumps, for the log - a local, never on S
+  const cavIds = tickCavIds || (tickCavIds = []);               // which pumps, for the log - a local, never on S
+  cavIds.length = 0;
   { let worst=0;
     /* every pump at its own suction, keyed by its own id, so piping one badly costs that machine and no other */
     for(const id in s.cavP) if(!partOf(id)) delete s.cavP[id];
     /* it fills and clears over CAV_TAU: instantaneous, a pump reverses its own flow, restores its own suction and chatters */
     const kc = Math.min(dt/CAV_TAU, 1);
     for(const id of pumpIds()){
-      const want = clamp(-scAt(pumpSucNode(id))/CAV_SPAN, 0, 1);
+      const want = clamp(-tickScAt(pField, pumpSucNode(id))/CAV_SPAN, 0, 1);
       if(s.cavP[id]===undefined) s.cavP[id]=want;
       s.cavP[id] += (want - s.cavP[id])*kc;
       const c = s.cavP[id];
@@ -2889,7 +2937,9 @@ function stepMarch(dt){
       if(s.flowDemBy[id]===undefined) s.flowDemBy[id]=1;             // a pump placed mid-run arrives at rated
       /* a standby pump follows its reserve's own valve rather than carrying a second rule, so s.tankByp defeats both with one switch */
       { const r = pumpResOf(id);
-        if(r.length) s.flowDemBy[id] = r.some(t=>tankOpen(s,t)) ? 1 : 0; }
+        if(r.length){ let open = false;
+          for(let ri=0;ri<r.length;ri++) if(tankOpen(s,r[ri])){ open = true; break; }
+          s.flowDemBy[id] = open ? 1 : 0; } }
       if(s.flowBy[id]===undefined) s.flowBy[id]=s.flowDemBy[id];
       const N = s.flowBy[id], want = supplyK(s)*s.flowDemBy[id];
       // up on the motor; down on the rotor, never below what the motor still holds
@@ -2916,7 +2966,9 @@ function stepMarch(dt){
   const dump = dumpOf(s);
   const vNow = clamp(s.vf,0,1.5);
   /* heat crosses on a temperature difference: a conductance times a difference, with slow water, void and a dry shell all properties of the conductance. The tube flow is against the loop's own reference (pumpK), never the rating the core was drawn for */
-  const nSG = Math.max(1, Object.keys(sgW).length);
+  let nSG = 0;
+  for(const k in sgW) nSG++;
+  nSG = Math.max(1, nSG);
   const filmK = (1-0.85*Math.min(vNow,1));
   /* written straight into HEATBAL.sgQBy - it is only ever copied there, so the intermediate bag is dropped and the prune moves ahead of the fill */
   let qTot = 0;
@@ -2938,14 +2990,12 @@ function stepMarch(dt){
   }
   /* a panel cools what it is plumbed to, against the water arriving at it - which end comes off the solve's own sign, never a face label. It is debited only where the live piece reaches the core */
   { const IN = ROLE.radiator.internal;
-    const key = id => { const slot=graphSlot("radKey"), was=slot.get(id); if(was) return was;
-      const k = "comp:"+id+":"+IN.a+IN.b;
-      slot.set(id,k); return k; };
     for(const id in s.radTBy) if(!partOf(id)) { delete s.radTBy[id]; delete s.radQBy[id]; }
     for(const id of radIds()){
       /* no commissioned flow through it, no duty: a panel hung off one line solves at 1e-14 of reference, which is a difference of large numbers and not a flow */
-      const ref = Math.abs(P.netRefByRun[key(id)]||0);
-      const r = runRatio(key(id));
+      const kk = tickRadKey(id);
+      const ref = Math.abs(P.netRefByRun[kk]||0);
+      const r = tickRunRatio(runFlow, kk);
       const nIn = coreFold(id + (r >= 0 ? IN.a : IN.b));
       const fl = Math.max(Math.abs(r), 0.02);
       if(s.radTBy[id]===undefined) s.radTBy[id] = RAD_TDES;
@@ -2978,7 +3028,7 @@ function stepMarch(dt){
     for(const fid in s.reliefVent) delete s.reliefVent[fid];
     for(const fid of reliefPriIds()){
       s.reliefVent[fid]=0;
-      if(fitSpring(fid)) springStep(s,fid,(n=>n===null?s.P:pAt(n))(reliefNodeOf(P.net,fid)));
+      if(fitSpring(fid)) springStep(s,fid,tickPAt(pField, reliefNodeOf(P.net,fid)));
       if(!s.reliefOpen[fid] || s.reliefBlocked[fid]) continue;
       const rate = Math.max(0, invRate((netOut.reliefBy && netOut.reliefBy[fid]) || 0));
       const q = rate*dt;
@@ -3069,13 +3119,16 @@ function stepMarch(dt){
       if(ownWater.has(nm) || netQualAt(s, nm) > 0) continue;
       const T = netTempAt(s, nm);
       if(T > hot){ hot = T; worst = nm; } }
-    s.scBy[ci] = scAt(worst || holdOnCirc(ci)[0] || coreOnCirc(ci)[0] || primaryCore()); }
+    s.scBy[ci] = tickScAt(pField, worst || holdOnCirc(ci)[0] || coreOnCirc(ci)[0] || primaryCore()); }
   const sc = s.scBy[nodeGraph().coreCirc];
   s.heat = heat; s.sc = sc;              // tripCause() reads these outside the tick
   /* what a flow meter would read, never what the pump dial was set to: LOW FLOW has to trip on the delivered figure or shutting every valve trips nothing */
   s.flowNet = pumpK;
   for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFlowNetSet(s.coreBy[id], P.cores[id], id, coreFN);
-  const ids = sgIds(), boW = new Set(boilerIds());
+  const ids = sgIds();
+  const boW = tickBoW || (tickBoW = new Set());
+  boW.clear();
+  { const bl = boilerIds(); for(let bi = 0; bi < bl.length; bi++) boW.add(bl[bi]); }
   for(const id in s.fregBy) if(!boW.has(id)) delete s.fregBy[id];
   for(const id in s.fregDemBy) if(!boW.has(id)) delete s.fregDemBy[id];
   /* both latched here, ahead of the stop valve, because both are the stop valve's answer; the vacuum never comes back but the trip re-latches on a whole, clear machine */
@@ -3091,15 +3144,17 @@ function stepMarch(dt){
       "Exhaust pressure is back under the trip point and the machine is whole. The stop valve is open and the turbine is taking steam again."); }
   /* a hole in the exhaust breaks the vacuum rather than venting a shell; condP() carries it, so the drop, the stop valve and the MWe readout price one backpressure */
   const pCond  = condP(s);
-  /* the governor is an opening (turbGate/turbCOf) on one edge of the one graph, so what each shell passes is what that solve says its own nozzle carried */
+  /* the governor is an opening (turbCOf) on one edge of the one graph, so what each shell passes is what that solve says its own nozzle carried */
   const vapOut = netOut.sgSteamOutBy || {};
   /* the same machine as the primary's reliefs; the one difference is that a valve lifts on the pressure where it was drawn, and shellsOf() answers that off the drawing */
-  const secVent = {};                     // per shell: kg/s its valves' vents are passing, off the transport
+  const secVent = tickSecVent || (tickSecVent = {});                     // per shell: kg/s its valves' vents are passing, off the transport
+  for(const id in secVent) delete secVent[id];
   for(const id in s.reliefSteam) delete s.reliefSteam[id];
-  const ventKg = (()=>{ const by = {}, net = P.net;
+  const ventKg = tickVentKg || (tickVentKg = {});
+  for(const k in ventKg) delete ventKg[k];
+  { const net = P.net;
     if(net && advectEdgeKg) for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e];
-      if(ed.kind === "vent" && advectEdgeKg[e] > 0) by[ed.key] = (by[ed.key]||0) + advectEdgeKg[e]; }
-    return by; })();
+      if(ed.kind === "vent" && advectEdgeKg[e] > 0) ventKg[ed.key] = (ventKg[ed.key]||0) + advectEdgeKg[e]; } }
   for(const fid of reliefSecIds()){
     const shells = shellsLive(s,fid);
     if(fitSpring(fid)) springStep(s,fid,reliefAtP(s,fid));
@@ -3174,8 +3229,10 @@ function stepMarch(dt){
     boiled += steamTo - bleed; boilQ += (steamTo - bleed)*riseCond(s, id, boilerP(s,id));
   }
   /* what a lost vacuum is putting in the turbine hall is what the transport carried out of its own opening, off the same edge the books charge */
-  s.condVent = !s.condLost ? 0
-    : condSinks().reduce((m,id) => m + (advectOutKg[breakKeyOf(id)]||0), 0)/Math.max(dt,1e-9);
+  { let cv = 0;
+    if(s.condLost){ const csl = condSinks();
+      for(let csi = 0; csi < csl.length; csi++) cv += advectOutKg[breakKeyOf(csl[csi])]||0; }
+    s.condVent = !s.condLost ? 0 : cv/Math.max(dt,1e-9); }
   if(s.condVent > 0 && !s.condVentSeen){ s.condVentSeen = true;
     logE("warn","STEAM GOING OVERBOARD",
       "The turbine bypass is passing steam into a machine that is open to atmosphere, and the water going with it does not come back. The hotwell is draining and no valve on the plant is open."); }
@@ -3203,18 +3260,18 @@ function stepMarch(dt){
       if(t !== undefined) s.cwInTBy[id] = t; }
     const m = cwInMean(s); if(m !== undefined) s.cwInT = m; }
   /* a reserve is metered against its own solved edge, signed, tank-out-positive, exactly the way every primary tank is charged */
-  const resKg = id => advectLanded(P.net && P.net.tankNode[id])/Math.max(dt,1e-9);
   /* every secondary tank STANDING ON THE BOARD is metered against its own edge; a hosted one is the condensers' own water and no book at all */
   { for(const id in s.tankOver) delete s.tankOver[id];
     for(const id of secTankIds()){
       if(!D.tanks[id].cell) continue;
       const cap = Math.max(1, tankKg(id));
-      const raw = s.tank[id] + 100*(resKg(id)||0)/cap*dt;
+      const rk = tickResKg(id, dt);
+      const raw = s.tank[id] + 100*(rk||0)/cap*dt;
       /* past full it overflows and the overflow is gone: a silent clamp would swallow a tube rupture's whole inventory and report nothing */
       if(raw > 100) s.tankOver[id] = (raw-100)/100*cap/Math.max(dt,1e-9);          // kg/s
       if(!D.tanks[id].inf){ s.tank[id] = clamp(raw, 0, 100);
         book(s,"tankClampSec", (raw - s.tank[id])/100*cap); }
-      else book(s,"boundaryTank", (resKg(id)||0)*dt);
+      else book(s,"boundaryTank", (rk||0)*dt);
     }
     // a hole in the secondary is a named opening; the condensers' own pool drains through one too
     if(secTankIds().length || condIds().length) book(s,"spillSec", advectOutSec);
@@ -3386,7 +3443,6 @@ function stepMarch(dt){
   coreAgg(s);
 
   // naming the machines means the verb has to agree with how many there were
-  const isAre = ids => ids.length>1 ? "are" : "is";
   const E=s.ev;
   if(s.n>1.10){ if(!E.hipow){ E.hipow=true; logE("warn","POWER ABOVE 110%",
     "Running past rated output. Thermal margin is what pays for it, and DNBR is falling."); } }
@@ -3413,7 +3469,7 @@ function stepMarch(dt){
   /* the quietest way this plant stops: a node with nothing in it feeds nothing, and every gauge downstream goes flat with no alarm behind it */
   { const dryIds = netDryParts(s);
     if(dryIds.length>0){ if(!E.dry){ E.dry=true; logE("alarm","LINE RUN DRY",
-      nameList(dryIds)+" "+isAre(dryIds)+" empty. There is nothing in "+
+      nameList(dryIds)+" "+tickIsAre(dryIds)+" empty. There is nothing in "+
       (dryIds.length>1?"them":"it")+" to pump and nothing will leave "+
       (dryIds.length>1?"them":"it")+" until something fills "+
       (dryIds.length>1?"them":"it")+" again - check what is shut upstream."); } }
@@ -3425,7 +3481,7 @@ function stepMarch(dt){
     "Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burstPOf(P,s).toFixed(1)+" MPa."); } }
   else E.hip=false;
   if(reliefAnyOpen(s)){ if(!E.porv){ E.porv=true; const open=reliefFitIds().filter(id=>s.reliefOpen[id]&&!s.reliefBlocked[id]);
-    logE("warn","RELIEF VALVE PASSING", nameList(open)+" "+isAre(open)+" open and venting. If nobody commanded it, primary coolant is leaving the loop."); } }
+    logE("warn","RELIEF VALVE PASSING", nameList(open)+" "+tickIsAre(open)+" open and venting. If nobody commanded it, primary coolant is leaving the loop."); } }
   else E.porv=false;
   if(reliefAnyStuck(s)){ if(!E.stuck){ E.stuck=true; logE("alarm","PORV FAILED TO RESEAT",
     nameList(reliefFitIds().filter(id=>s.reliefStuck[id]))+
@@ -3441,7 +3497,7 @@ function stepMarch(dt){
   /* not latched either: the room cools once whatever was venting into it stops */
   { const hotIds = roomOverIds(s);
     if(hotIds.length>0){ if(!E.hiroom){ E.hiroom=true; logE("alarm","EQUIPMENT OVER TEMPERATURE",
-      nameList(hotIds)+" "+isAre(hotIds)+" standing in air hotter than "+
+      nameList(hotIds)+" "+tickIsAre(hotIds)+" standing in air hotter than "+
       (hotIds.length>1?"they were":"it was")+" built for. The compartment peaks at "+
       s.roomMax.toFixed(0)+" K. Nothing in there survives it indefinitely - find what is putting heat into the room."); } }
     else E.hiroom=false; }
@@ -3464,7 +3520,7 @@ function stepMarch(dt){
   if(rpsState()==="NOT FITTED"){ if(!E.norps){ E.norps=true; logE("warn","NO PROTECTION SYSTEM FITTED",
     "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call."); } }
   if(injIds.length>0){ if(!E.inj){ E.inj=true; logE("info","INJECTING",
-    nameList(injIds)+" "+isAre(injIds)+" pushing water into the loop at "+
+    nameList(injIds)+" "+tickIsAre(injIds)+" pushing water into the loop at "+
     s.injRate.toFixed(2)+" %/s, and cold shock is ageing the vessel while it runs."); } }
   else E.inj=false;
   if(s.dmg>1){ if(!E.d1){ E.d1=true; logE("alarm","FUEL DAMAGE 1%",
@@ -3516,31 +3572,20 @@ function stepMarch(dt){
   /* s.flowPos[key] is how far the fluid in that run has travelled, in diagram pixels; the renderer slides packets along it and differentiates it for the meters, so the two cannot disagree */
   const d=s.flowPos, sp=60*DRAW_K*dt;
   /* steam and exhaust read a solved hydraulic rate like every liquid run, normalised on steamScale(), which is the meter's own full scale */
-  const steamRun = key => {
-    const k = P.net.byKey[key].k;
-    if(!runEnds(key,k)) return 0;
-    /* a dead-ended branch carries what its own shell is venting: a dead end carries nothing in a network, so the solve cannot answer it */
-    const b = steamBook(key,k);
-    if(b.vent){ let q = 0;
-      for(const fid of b.taps) q += (s.reliefSteam && s.reliefSteam[fid]) || 0;
-      return q*steamDir(key,k); }
-    /* every other steam run reads the same runFlow a liquid run does, signed along the key's own canonical order */
-    return runFlow[key] || 0;
-  };
   for(const key in d){
     const r = P.net.byKey[key];
     if(!r) continue;                           // a design change left a stale key
     /* a shut port valve has to reach the picture; this is a phase, so freezing it is what a stopped line looks like */
     if(!runPortsOpen(s,r)) continue;
     if(r.k==="steam"||r.k==="exh"){
-      d[key] += sp*1.4*steamRun(key)/Math.max(1e-6, steamScale(key,r.k));
+      d[key] += sp*1.4*tickSteamRun(key, runFlow)/Math.max(1e-6, steamScale(key,r.k));
       continue;
     }
     const tag = P.net.tagByKey[key] || 0;
     /* having a solved reference is the test, never carrying a temperature tag: KIND_TEMP is about buoyancy and says nothing about the secondary */
     if(tag || P.netRefByRun[key]!==undefined){
       /* the run's own solved flow with no correlation floor under it, so a plant on natural circulation visibly moves water and one with a valve shut visibly does not */
-      d[key]+=sp*runRatio(key)*1.4;
+      d[key]+=sp*tickRunRatio(runFlow, key)*1.4;
     }
   }
   /* the shafts state a rate, not an angle: an angle kept %360 carries no direction once a frame is worth more than half a turn */

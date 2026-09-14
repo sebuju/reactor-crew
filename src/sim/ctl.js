@@ -185,7 +185,9 @@ function ctlWired(s, ids){
   return true;
 }
 function ctlOrder(s){
-  const ids=Object.keys(s.blkBy);
+  CTL_KEYS.length = 0;
+  const ids = CTL_KEYS;
+  for(const k in s.blkBy) ids.push(k);
   if(ctlWired(s, ids)) return CTL_ORD.order;
   const deg={}, kids={};
   for(const id of ids){ deg[id]=0; kids[id]=[]; }
@@ -193,7 +195,7 @@ function ctlOrder(s){
   const q=ids.filter(id=>deg[id]===0), order=[];
   while(q.length){ const id=q.shift(); order.push(id); for(const k of kids[id]) if(--deg[k]===0) q.push(k); }
   for(const id of ids) if(deg[id]>0) order.push(id);
-  CTL_ORD.ids=ids; CTL_ORD.wire=ids.map(id=>s.blkBy[id].in.slice()); CTL_ORD.order=order;
+  CTL_ORD.ids=ids.slice(); CTL_ORD.wire=ids.map(id=>s.blkBy[id].in.slice()); CTL_ORD.order=order;
   return order;
 }
 
@@ -238,6 +240,8 @@ function blkEval(s,b,I,dt){
 
 /* reused: blkEval reads it inside the call and keeps no reference, and 108 blocks built 108 arrays a tick */
 const CTL_IN=[];
+/* ctlOrder key scratch: Object.keys() built one array a tick just for the cache check */
+const CTL_KEYS=[];
 /* sel-block scratch, same contract; the median sorts it in place, tiny enough for no allocation */
 const SEL_W=[];
 const SEL_CMP=(p,q)=>p-q;

@@ -40,7 +40,9 @@ function netSubst(A, x, n, bw){
 }
 
 // A is compacted onto the free rows by `row`, b stays at full node length; a fixed node is never stamped and reaches free neighbours through b as +g*pFixed.
-function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap){
+// ghG/ghH carry one solve's edge answers (netSolve() fills them once per solve off the same field;
+// s, F and ed.w are all fixed for the length of a solve, so a second evaluation would answer the same).
+function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap, ghG, ghH){
   const wantA = A !== false;
   if(!row) m = n;
   if(wantA) A = A || new Float64Array(m*m);
@@ -49,9 +51,9 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap){
   b.fill(0);
   for(let e=0;e<edges.length;e++){
     const ed = edges[e];
-    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+    const g = ghG ? ghG[e] : (typeof ed.g === 'function' ? ed.g(s) : ed.g);
     if(!(g > 0)) continue;
-    const h = typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0);
+    const h = ghH ? ghH[e] : (typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0));
     const u = ed.u, v = ed.v;
     if(touch){ touch[u]=1; touch[v]=1; }
     const pu = fixed[u], pv = fixed[v];
@@ -74,12 +76,12 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap){
 }
 
 // A fixed node reads its known pressure, never p - netSubst leaves that at 0.
-function netFlows(edges, p, fixed, out, s){
+function netFlows(edges, p, fixed, out, s, ghG, ghH){
   for(let e=0;e<edges.length;e++){
     const ed = edges[e];
-    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+    const g = ghG ? ghG[e] : (typeof ed.g === 'function' ? ed.g(s) : ed.g);
     if(!(g > 0)){ out[e] = 0; continue; }
-    const h = typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0);
+    const h = ghH ? ghH[e] : (typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0));
     const fu = fixed[ed.u], fv = fixed[ed.v];
     const pu = fu === undefined ? p[ed.u] : fu;
     const pv = fv === undefined ? p[ed.v] : fv;

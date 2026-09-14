@@ -220,13 +220,16 @@ const circHeadOf = id => {
     dp += K*w*w/(2*rho*A*A); }
   return dp/1e6;
 };
+/* scratch for loopHeadOf()'s mixState() reads; three Float64 cells, written and consumed inside one call */
+const HEAD_MIX = new Float64Array(3);
 const loopHeadOf = (id, outs) => {
   const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return circHeadOf(id);
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
   const w = RATED_KW()/(a.cp*coreDT0()*n);
   const dsg = loopDesignH(nodeGraph().coreCirc), c = dsg.c;
-  const stAtH = h => { const m = mixState(c, c.p0, h, {x:0, rho:0, b:0});
-    return {rho: Math.max(m.rho, 1e-3), mu: muMixOf(c, m.x)}; };
+  /* mixState()'s out is a Float64Array (MX_RHO/MX_X, pipenet.js) - a plain object boxed every write */
+  const stAtH = h => { const HM = {}; mixState(c, c.p0, h, HM);
+    return {rho: Math.max(HM[MX_RHO], 1e-3), mu: muMixOf(c, HM[MX_X])}; };
   const hIn = dsg.hIn, hOut = dsg.hOut, boils = dsg.boils;
   const hotSt = stAtH(hOut), coldSt = stAtH(hIn);
   const rhoHot = hotSt.rho, rhoCold = coldSt.rho;
@@ -921,14 +924,17 @@ const ihxFeeds=id=>{ const ci=stageCirc(id,1); if(ci<0) return [];
 // key is "kind:aIdFace-bIdFace"; the PARTS carry loop membership, never the label the run is drawn with
 function loopOfKey(key){
   if(!key) return null;
+  const slot=graphSlot("loopOfKey"), was=slot.get(key);
+  if(was!==undefined) return was;
   /* The "#1" suffix (pipeMap()) disambiguates two routes sharing one (part, face) pair; it is not part of either node's name. */
-  key=key.split("#")[0];
-  const ci=key.indexOf(":"); if(ci<0) return null;
-  const rest=key.slice(ci+1), di=rest.indexOf("-");
-  if(di<0) return null;                       // a tap-ended run has no loop identity of its own
+  const base=key.split("#")[0];
+  const ci=base.indexOf(":"); if(ci<0){ slot.set(key,null); return null; }
+  const rest=base.slice(ci+1), di=rest.indexOf("-");
+  if(di<0){ slot.set(key,null); return null; }                       // a tap-ended run has no loop identity of its own
   const aP=rest.slice(0,di-1), bP=rest.slice(di+1,-1);   // strip each node's single-letter face
   const {partLoop}=loopMap();
-  return partLoop[aP]!==undefined ? partLoop[aP] : (partLoop[bP]!==undefined ? partLoop[bP] : null);
+  const v=partLoop[aP]!==undefined ? partLoop[aP] : (partLoop[bP]!==undefined ? partLoop[bP] : null);
+  slot.set(key,v); return v;
 }
 /* Per INSTANCE, off its own bore; FIT_BORE0 is the bore a fitting nobody sized takes (fitBoreSuggest(), pipenet.js). */
 const FIT_MASS=16, FIT_BORE0=412.5;   // mm, the default valve - the reference the mass is per
