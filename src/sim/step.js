@@ -1031,7 +1031,7 @@ function advectSrc(s, dt, runFlow){
     // what fuel out of its pin handed the water last tick (coreStep's o.fci)
     advectAdd(src, net, coreFold(id), (s.coreBy && s.coreBy[id] && s.coreBy[id].fci) || 0); }
   /* ROLE's declaration ORDER says which stream gives the heat up (0) and which takes it (1); neither names a face. */
-  for(const id of sgIds().concat(ihxIds())){
+  for(const id of stageIds(net)){
     const q = HEATBAL.sgQBy[id] || (s.ihxQBy && s.ihxQBy[id]) || 0;
     const R = ROLE[partOf(id).role], INs = roleIntern(R);
     for(let k=0;k<INs.length;k++){ const IN=INs[k];
@@ -1578,6 +1578,8 @@ const sgUACap=(s,id,fl,rf)=>{ const wcp=stageStream(s,id,0,rf).C;
   return isFinite(wcp) ? SG_NTU_MAX*wcp/Math.pow(fl,UA_FLOW) : Infinity; };
 /* Is the water in these tubes the core's own - asked of the drawing, so any number of barriers is the same question. */
 const sgActive = id => nodeGraph().inCore(id + roleIntern(ROLE.sg)[0].a);
+// both stage fleets, in one list: structural, so cached on the net that carries it
+const stageIds=net=>net.stageIds || (net.stageIds=sgIds().concat(ihxIds()));
 /* Is anything still bringing heat to this stage's hot side: a core, or the cold side of another stage. One level, no recursion. */
 const stageFed=(net,s,id)=>{
   if(!net.nodesOfPart || !net.nodesOfPart[id]) return false;
@@ -1587,7 +1589,7 @@ const stageFed=(net,s,id)=>{
   if(a0<0 && a1<0) return false;
   const has=p=>p>=0&&(p===a0||p===a1);
   for(const p of corePieces(net,s)) if(has(p)) return true;
-  for(const q of sgIds().concat(ihxIds())){ if(q===id) continue;
+  for(const q of stageIds(net)){ if(q===id) continue;
     const C=roleIns(partOf(q))[1]; if(!C) continue;
     if(has(at(q+C.a))||has(at(q+C.b))) return true; }
   return false; };

@@ -317,8 +317,10 @@ function fuelStage(cs,k){
   if(cs.nTube && cs.nTube[k]>0) return 1;
   return 0;
 }
+let fuelStagesBuf=null;
 function fuelStages(cs){
-  const o=new Float64Array(FAIL.length);
+  if(!fuelStagesBuf) fuelStagesBuf=new Float64Array(FAIL.length);
+  const o=fuelStagesBuf; o.fill(0);
   for(let k=0;k<XNN;k++) o[fuelStage(cs,k)]+=nodeW[k];
   return o;
 }
