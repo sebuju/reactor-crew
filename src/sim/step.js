@@ -1,4 +1,7 @@
 "use strict";
+/* inert unless tools/allocreg.js sets globalThis.__apOn; a probe outside a loop body never moves a leaf */
+function __apS(){ const m = globalThis.__apOn ? globalThis.__apMeter : undefined; if(m) m.s(); }
+function __apE(k){ const m = globalThis.__apOn ? globalThis.__apMeter : undefined; if(m) m.e(k); }
 let P=null,S=null;
 let tagGen = 0;
 const tagTick = () => (tagGen = tagGen+1);
@@ -1053,11 +1056,11 @@ function advectSrc(s, dt, runFlow){
     add(id+IN.a, q/2); add(id+IN.b, q/2); }
   /* A condenser gives its rejection to the water on its other side - the path that declares no anchor - where that water LEAVES, so the inlet face reads what arrived. */
   { for(const id of condIds()){ const q = condRejOf(s,id);
-      for(const w of cwPathsOf(id)) add(coreFold(id + cwOutFace(runFlow, w)), q); } }
+      for(const w of cwPathsOf(id)) add(partFaceNode(id)[cwOutFace(runFlow, w)], q); } }
   /* A panel takes heat out of whatever is running through it, wherever that is. */
   { const IN = ROLE.radiator.internal;
-    for(const id of radIds()){ const q = (s.radQBy && s.radQBy[id]) || 0;
-      add(coreFold(id+IN.a), -q/2); add(coreFold(id+IN.b), -q/2); } }
+    for(const id of radIds()){ const q = (s.radQBy && s.radQBy[id]) || 0; const fn = partFaceNode(id);
+      add(fn[IN.a], -q/2); add(fn[IN.b], -q/2); } }
   /* Heaters and spray, in kW at the vessel's own node: a pressurizer earns its pressure by boiling and condensing its own water. */
   for(const id of holdTankIds()) add(coreFold(id), pzrQ(s, id));
   /* The steel round each node is a store of its own; metalQ is the one figure both sides read. */
@@ -1082,16 +1085,17 @@ const metalQ = {};
 function advectAnchors(s){
   const hold = {}, seed = {}, holdH = {};
   const at = (m, pid, faces, T) => { if(T === undefined || !isFinite(T)) return;
-    for(const f of faces){ const n = coreFold(pid+f);
+    const fn = partFaceNode(pid);
+    for(const f of faces){ const n = fn[f];
       if(P.net.index[n] !== undefined) m[n] = T; } };
   const FACES = ["t","r","b","l"];
   /* the shell is a vessel now: SEEDED at saturation and held at nothing, or its level is pinned wherever the seed left it */
   for(const id of sgIds()){
-    const IN = roleIntern(ROLE.sg)[1];
-    for(const f of [IN.a, IN.b]){ const n = coreFold(id+f);
+    const IN = roleIntern(ROLE.sg)[1], fn = partFaceNode(id);
+    for(const f of [IN.a, IN.b]){ const n = fn[f];
       if(P.net.index[n] !== undefined) seed[n] = s.sgTBy[id]; }
     /* the settle is not a time march, so through it the heaters simply ARE at their duty; the tick holds nothing and the source has to earn T_FEED on its own */
-    if(netStoreHeld){ const n = coreFold(id+IN.a);
+    if(netStoreHeld){ const n = fn[IN.a];
       if(P.net.index[n] !== undefined) hold[n] = T_FEED; }
   }
   /* A sink is a vessel now: SEEDED at its own temperature and held at nothing, or its pool's level is pinned wherever the seed left it. */
@@ -1537,10 +1541,10 @@ const sgTemp=(s,id)=>{ const v=s&&s.sgTBy&&s.sgTBy[id];
 /* k indexes ROLE[].internal in declaration order: 0 gives the heat up, 1 takes it. The hot stream's inlet is the hottest neighbour and the cold stream's the coldest. */
 const stageInNode=(s,id,k)=>{ const net=P.net; if(!net || !net.name) return -1;
   const p=partOf(id), IN=p && roleIntern(ROLE[p.role])[k]; if(!IN) return -1;
-  const nb = net.sgInNbr || (net.sgInNbr = {}), key = id+"|"+k;
-  let list = nb[key];
+  const nb = net.sgInNbr || (net.sgInNbr = {}), byId = nb[id] || (nb[id] = []);
+  let list = byId[k];
   /* The NEIGHBOURS, not the faces: the crossing lands on the faces, so a face is the extremum the wrong way. Faces are the fallback for an unpiped stage. */
-  if(!list){ list = nb[key] = []; const own = new Set(net.nodesOfPart[id]||[]);
+  if(!list){ list = byId[k] = []; const own = new Set(net.nodesOfPart[id]||[]);
     const mine = [];
     for(const c of (net.cont||[])) own.add(c);      // a hole's far end is the room, not a leg
     for(const f of [IN.a, IN.b]){
@@ -1592,9 +1596,12 @@ const ntuCounter=(NTU,Cr)=>{ if(!(NTU>0)) return 0;
   if(!(Cr<0.999)) return NTU/(1+NTU);
   const e=Math.exp(-NTU*(1-Cr));
   return (1-e)/(1-Cr*e); };
+/* the two streams' own swallow keys, structural per machine - cached on the graph (graphSlot()) beside stageInNode's own neighbour lists */
+const stageKeysOf = id => { const slot=graphSlot("stageKeys"), was=slot.get(id); if(was) return was;
+  const out = roleIns(partOf(id)).map(IN => IN ? "comp:"+id+":"+IN.a+IN.b : null);
+  slot.set(id,out); return out; };
 /* One stream of one machine off the solve; a two-phase stream's heat capacity rate is infinite. */
-const stageStream=(s,id,k,rf)=>{ const IN=roleIns(partOf(id))[k];
-  const key="comp:"+id+":"+IN.a+IN.b;
+const stageStream=(s,id,k,rf)=>{ const key=stageKeysOf(id)[k];
   const at=stageInNode(s,id,k), nm=at>=0 ? P.net.name[at] : null;
   const ref=netKgs((P.netRefByRun||{})[key]||0);
   /* A stagnant floor: a rate of exactly zero is a deadlock - no flow, no heat, nothing to start the flow. */
@@ -1638,7 +1645,7 @@ function sgReactStep(s, dt, raw){
     const f=FIRE[satOfCirc(sgPrimCirc(id)).burn];
     // the same fuel on both sides is two sodium circuits, and nothing happens between them
     if(!f || satOfCirc(shellCirc(id)).burn) continue;
-    const q=raw["sgtr:"+id]||0;
+    const q=raw[sgtrKeyOf(id)]||0;
     if(!q) continue;
     const r=swReact(f, q>0 ? q*dt : swNaFor(f, -q*dt));
     if(q>0){ s.sgSwQBy[id]=r.q/dt; s.sgH2By[id]=(s.sgH2By[id]||0)+r.h2; }
@@ -2584,6 +2591,7 @@ function wallLotGet(){
   return out;
 }
 function stepMarch(dt){
+  __apS();
   const s=S; s.t+=dt; s.tick++;
   if(!s.massOut) s.massOut={};
   const ledgM0 = ledgerKg(s), ledgO0 = ledgerOut(s);
@@ -2659,14 +2667,18 @@ function stepMarch(dt){
   const heat = s.n*PROMPT_F + s.decay;
 
 
-  /* scratch, not sim state: rebuilt fresh every tick, so a local rather than a field on S */
-  const runFlow = {};
+  /* scratch, not sim state: persistent on P (fresh again only when commission() rebuilds P), a local binding onto it so every reader below is unchanged */
+  const runFlow = P.runFlow || (P.runFlow = {});
   /* MPa per node, taken off netFlowK()'s own solve so the tick pays for one solve and not two; pAt() is how every reader below asks it */
   const pField = tickPf || (tickPf = pfNew());
   /* what the solve found leaving the plant through every opening on it */
   const netOut = {};
+  __apE("ctlPass");
+  __apS();
   const pumpK = netFlowK(s, runFlow, pField, netOut);
-  const coreFN = {}; coreEach(s,(cs,K,id)=>{ coreFN[id] = coreFlowNet(K, id, netOut, pumpK); });
+  __apE("netFlowK");
+  __apS();
+  const coreFN = P.coreFN || (P.coreFN = {}); coreEach(s,(cs,K,id)=>{ coreFN[id] = coreFlowNet(K, id, netOut, pumpK); });
   /* what the circulating water is doing, off this tick's own solve; the condenser's balance reads it through cwKOf() */
   { for(const id in s.cwFlowBy) if(!partOf(id)) delete s.cwFlowBy[id];
     for(const id of condIds()) s.cwFlowBy[id] = cwFlowOf(runFlow,id); }
@@ -2757,12 +2769,18 @@ function stepMarch(dt){
         " kPa. It is the middle of a "+(matSpan(c[0],c[1])*MPC).toFixed(1)+
         " m flat span, which is why it was the cell that went. "+fx.why);
     } }
+  __apE("burst");
+  __apS();
   advectStep(s, dt, runFlow, netOut && netOut.edgeKg);
   /* s.inv is a read: every way water leaves is an edge, already booked by the transport pass above, and nothing downstream writes it */
   if(P.invKg0 > 0) s.inv = 100*invNodesKg(s)/P.invKg0;
   if(!s.invBy) s.invBy = {};
   coreEach(s,(cs,K,id)=>{ if(K.invKg0 > 0) s.invBy[circKey(K.circ)] = 100*invNodesKg(s, id)/K.invKg0; });
+  __apE("advectStep");
+  __apS();
   sumpStep(s, dt);
+  __apE("sumpStep");
+  __apS();
   /* cavitation begins where subcooling reaches zero, asked at the pump's own suction; fed to NEXT tick's solve, because a gate that depends on the answer cannot be part of the question */
   const cavIds = [];               // which pumps, for the log - a local, never on S
   { let worst=0;
@@ -2787,7 +2805,8 @@ function stepMarch(dt){
       s.pumpQBy[id] = q > 0 ? netKgs(q) : 0; } }
   /* losing power does not stop a pump dead, it coasts; the backup supply carries the share of pump power the bench sold, scaled off demand */
   { const k = Math.min(dt/FLOW_TAU,1);
-    const live = {};
+    /* every pump, every tick, unconditionally - persistent needs no clear at all */
+    const live = P.pumpLive || (P.pumpLive = {});
     for(const id of pumpIds()){ live[id]=1;
       if(s.flowDemBy[id]===undefined) s.flowDemBy[id]=1;             // a pump placed mid-run arrives at rated
       /* a standby pump follows its reserve's own valve rather than carrying a second rule, so s.tankByp defeats both with one switch */
@@ -2799,7 +2818,9 @@ function stepMarch(dt){
       s.flowBy[id] = want >= N ? N + (want - N)*k
                                : Math.max(want, N - (N*N/(2*pumpRotor(id)) + N/PUMP_FRIC_S)*dt); }
     for(const id in s.flowBy) if(!live[id]){ delete s.flowBy[id]; delete s.flowDemBy[id]; } }
+  __apE("pump");
 
+  __apS();
   /* the pump's speed is part of its own head inside the solve, so pumpK already carries it - and has to, or a coasted-down pump would multiply the thermosiphon by zero */
   const driven = P.flowK * pumpK;
   /* buoyancy is an edge head inside the solve; what is left here is the readout, the share of this tick's flow the plant developed with every pump doing nothing */
@@ -2819,13 +2840,14 @@ function stepMarch(dt){
   /* heat crosses on a temperature difference: a conductance times a difference, with slow water, void and a dry shell all properties of the conductance. The tube flow is against the loop's own reference (pumpK), never the rating the core was drawn for */
   const nSG = Math.max(1, Object.keys(sgW).length);
   const filmK = (1-0.85*Math.min(vNow,1));
-  const sgQBy = {};
+  /* written straight into HEATBAL.sgQBy - it is only ever copied there, so the intermediate bag is dropped and the prune moves ahead of the fill */
   let qTot = 0;
+  for(const id in HEATBAL.sgQBy) if(!(id in sgW)) delete HEATBAL.sgQBy[id];
   for(const id in sgW){
     const fl = Math.max(pumpK*sgW[id]*nSG, 0.02);
     /* the 0.02 floor is stagnant water in tubes the loop still reaches; isolate the generator and no water crosses at all */
     const q  = stageFed(P.net,s,id) ? sgQAt(s,id,fl,filmK,runFlow) : 0;
-    sgQBy[id] = q;
+    HEATBAL.sgQBy[id] = q;
     /* heat leaving the core is what crosses the stage the core's own water reaches, never one behind a barrier */
     if(sgActive(id)) qTot += q;
   }
@@ -2837,7 +2859,10 @@ function stepMarch(dt){
     if(sgActive(id)) qTot += q;
   }
   /* a panel cools what it is plumbed to, against the water arriving at it - which end comes off the solve's own sign, never a face label. It is debited only where the live piece reaches the core */
-  { const IN = ROLE.radiator.internal, key = k => "comp:"+k+":"+IN.a+IN.b;
+  { const IN = ROLE.radiator.internal;
+    const key = id => { const slot=graphSlot("radKey"), was=slot.get(id); if(was) return was;
+      const k = "comp:"+id+":"+IN.a+IN.b;
+      slot.set(id,k); return k; };
     for(const id in s.radTBy) if(!partOf(id)) { delete s.radTBy[id]; delete s.radQBy[id]; }
     for(const id of radIds()){
       /* no commissioned flow through it, no duty: a panel hung off one line solves at 1e-14 of reference, which is a difference of large numbers and not a flow */
@@ -2858,8 +2883,6 @@ function stepMarch(dt){
   HEATBAL.heat=heat; HEATBAL.removal=removal;
   for(const id in HEATBAL.heatBy) if(!s.coreBy[id]) delete HEATBAL.heatBy[id];
   coreEach(s,(cs,K,id)=>{ HEATBAL.heatBy[id]=cs.heat; });
-  for(const id in HEATBAL.sgQBy) if(!(id in sgQBy)) delete HEATBAL.sgQBy[id];
-  for(const id in sgQBy) HEATBAL.sgQBy[id]=sgQBy[id];
   /* the display balance only: s.dTavg and s.Tavg are both reads (advectStep) */
   HEATBAL.dTavg=s.dTavg;
 
@@ -2898,7 +2921,7 @@ function stepMarch(dt){
     const field = tankInField(tid), b = D.tanks[tid].burst;
     /* level points off the deck this tick: a vessel in the field lost them through its own break edge, which spillPri has already booked, and every other tank drains its own pool at HOT_DUMP */
     if(field){
-      const out = 100*(advectOutKg["break:"+tid]||0)/tankKg(tid);
+      const out = 100*(advectOutKg[breakKeyOf(tid)]||0)/tankKg(tid);
       const rel = partWrecked(s,tid) ? 1 : (s.burstBy[tid] && b) ? b.rel : 0;
       if(out > 0 && rel > 0)
         s.release = Math.min(100, s.release + out*rel*tankFluid(tid).act*contRelPart(s,partOf(tid))*P.dose*dt);
@@ -2950,6 +2973,8 @@ function stepMarch(dt){
     if(hot>0) s.release = Math.min(100, s.release + (hot/0.30)*0.02*P.dose*dt); }
   // the raw edge, not s.sgtrBy: the clamp above throws away the sign, and on a sodium plant the sign IS the accident
   sgReactStep(s, dt, netOut.sgtrBy || {});
+  __apE("secondary/therm");
+  __apS();
   /* asked at each vessel, not at the pressurizer: what bursts a vessel is the pressure inside it */
   coreEach(s,(cs,K,id)=>{
     const burst = burstPOf(K,cs);
@@ -2980,7 +3005,9 @@ function stepMarch(dt){
     cs.rho=K.excess+p.rod+p.dop+p.mod+p.exp+p.xe+p.bor+p.vd+p.tip+p.dis; }
   });
   coreAgg(s);
+  __apE("core pin loop");
 
+  __apS();
   /* margin to boiling is measured where the water is hottest, once per circuit; refilled, and s.sc stays the primary's entry */
   for(const ci of holdCircs()){
     /* the hottest node that is still LIQUID: a pressurizer's bubble reads zero margin by definition, and the surge line under it is its own saturated water (holdLineSet) */
@@ -3028,7 +3055,7 @@ function stepMarch(dt){
     s.reliefSteam[fid] = (!s.reliefOpen[fid] || s.reliefBlocked[fid]) ? 0
       : Math.max(0, (netOut.reliefBy && netOut.reliefBy[fid]) || 0);
     /* the exit is the vent, open whether or not the spring has lifted: the stub between seat and vent empties through it either way */
-    const q = (ventKg["vent:"+fid]||0)/Math.max(dt,1e-9);
+    const q = (ventKg[ventKeyOf(fid)]||0)/Math.max(dt,1e-9);
     if(!(q > 0)) continue;
     // one valve's kilograms are split over the shells it reaches by their own overpressure, never offered whole to each
     const back = regionPAt(s, partOf(fid));
@@ -3052,7 +3079,7 @@ function stepMarch(dt){
     s.sgFedBy[id] = (netOut.sgFeedBy && netOut.sgFeedBy[id]) || 0;
     /* there is no lid that is not a placed box: past this the shell is open to atmosphere and stops raising pressure at all. Latched */
     if(!s.sgBurst[id] && shellP > sgBurstP(id)){
-      s.sgBurst[id]=true;
+      s.sgBurst[id]=true; s.sgBurstGen=(s.sgBurstGen|0)+1;
       logE("alarm",nameOf(id)+" SHELL BURST",
         "The secondary shell has ruptured. It was raising steam faster than anything fitted could get rid of, and nothing was fitted to get rid of it. What is in it is going to atmosphere, it will not hold pressure again, and it stops cooling its loop the moment it is empty.");
     }
@@ -3096,7 +3123,7 @@ function stepMarch(dt){
   }
   /* what a lost vacuum is putting in the turbine hall is what the transport carried out of its own opening, off the same edge the books charge */
   s.condVent = !s.condLost ? 0
-    : condSinks().reduce((m,id) => m + (advectOutKg["break:"+id]||0), 0)/Math.max(dt,1e-9);
+    : condSinks().reduce((m,id) => m + (advectOutKg[breakKeyOf(id)]||0), 0)/Math.max(dt,1e-9);
   if(s.condVent > 0 && !s.condVentSeen){ s.condVentSeen = true;
     logE("warn","STEAM GOING OVERBOARD",
       "The turbine bypass is passing steam into a machine that is open to atmosphere, and the water going with it does not come back. The hotwell is draining and no valve on the plant is open."); }
@@ -3140,7 +3167,8 @@ function stepMarch(dt){
     // a hole in the secondary is a named opening; the condensers' own pool drains through one too
     if(secTankIds().length || condIds().length) book(s,"spillSec", advectOutSec);
   }
-
+  __apE("secondary/therm");
+  __apS();
 
   /* floored at 1e-9 rather than a bare 0: the nodal core divides by the power it is given, and an exact zero NaNs every pellet temperature */
   coreEach(s,(cs,K)=>{
@@ -3178,6 +3206,8 @@ function stepMarch(dt){
     if(rel>0) s.release=Math.min(100,s.release+rel*contRelPart(s,partOf(id))*P.dose*dt); }
   });
   coreAgg(s);
+  __apE("core pin loop");
+  __apS();
 
   /* solved fresh every tick into a reused buffer and never stored on S: a snapshot is a clone of S, and a Float64Array hung off it would not survive a restore */
   { const f=radSolve(P.radK,radSrc(s),true);
@@ -3188,6 +3218,8 @@ function stepMarch(dt){
 
   injectFluid(s, dt);
   roomStep(s, dt);
+  __apE("roomStep");
+  __apS();
   /* what the blast costs: instantaneous, not integrated, so a machine either survives the peak its own cells saw or it does not */
   { /* the bang is its own event, latched on s.burnEv so it fires once per passage, at the peak that first threatens the weakest machine */
     if(!s.burnEv.blast && s.roomPMax >= minPburst()){
@@ -3247,13 +3279,12 @@ function stepMarch(dt){
   }
   /* the room pushing in is above; this is the plant pushing out, judged on the CIRCUIT's pressure and never netPAt(), which carries piezometric head */
   { const G = nodeGraph();
-  const fnc = G.faceNm || (G.faceNm = {});
   for(let pi=0;pi<LAY.parts.length;pi++){ const p=LAY.parts[pi];
     const lim = partPdes(p);
     if(!lim || !fitted(p) || s.dmgParts.indexOf(p.id) >= 0) continue;
     let pk = 0, seen = false, cP;
-    const ns = fnc[p.id] || (fnc[p.id] = [p.id+"t", p.id+"r", p.id+"b", p.id+"l"]);
-    for(let k=0;k<4;k++){ const n = coreFold(ns[k]);
+    const fn = partFaceNode(p.id), ns = [fn.t, fn.r, fn.b, fn.l];
+    for(let k=0;k<4;k++){ const n = ns[k];
       if(P.net.index[n] === undefined) continue;
       seen = true;
       pk = Math.max(pk, G.inCore(n) ? s.P : (cP === undefined ? (cP = condP(s)) : cP));
@@ -3267,6 +3298,8 @@ function stepMarch(dt){
       p.name+" has burst. It is holding "+pk.toFixed(1)+" MPa against the "+
       lim.toFixed(1)+" MPa its own shell is built for. "+fx.why);
   } }
+  __apE("blast/overpressure");
+  __apS();
   /* one line for an explosion, not one for a flame: latched, so it goes out when the last flame does and says what the whole passage cost */
   if(!s.roomBurnOn && s.burnEv.kg > 0){
     if(s.burnEv.kg > H2_BURN_EV)
@@ -3490,6 +3523,7 @@ function stepMarch(dt){
         console.warn("[ledger] tick "+t+": "+res.toFixed(3)+" kg unattributed of "
            +ledgM0.toFixed(0)+" kg", JSON.parse(JSON.stringify(s.massOut))); } } }
   layRelease();
+  __apE("events");
 }
 /* one pressure colour for every readout, on the annunciator's own thresholds, so a gauge cannot disagree with the alarm beside it */
 const pColor = v => v > P.P0*1.05 ? C.red : v < P.P0*0.935 ? C.amber : C.cyan;
