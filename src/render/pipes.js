@@ -312,7 +312,7 @@ function pipeRunHoldKg(r,L){
   const net=(typeof P!=="undefined" && P) ? P.net : null;
   const nid=runNodeOf(r.key);
   if(!net || !L || net.index[nid]===undefined) return null;
-  const m=L.mBy && L.mBy[nid];
+  const m=nodeKg(L,nid);
   return m===undefined ? runVol(r)*netRhoAt(L,nid) : m;
 }
 // kg in a machine: every node the solve gave it, each asked of whichever book owns it
@@ -322,7 +322,7 @@ function partHoldKg(id,L){
   const list=net.nodesOfPart[id]; if(!list || !list.length) return null;
   let m=0;
   for(const i of list){ const b=bookedKg(net,L,i);
-    m += b!==undefined ? b : (L.mBy[net.name[i]]||0); }
+    m += b!==undefined ? b : (nodeKg(L,net.name[i])||0); }
   return m;
 }
 // ONE format for both readings, so a pipe and a vessel state the same quantity the same way

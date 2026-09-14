@@ -3,7 +3,7 @@
 const M = require('./bundle').headless(
  '{commission,step,seedRng,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,LOG:()=>LOG,MACHINE:()=>MACHINE,ROLE:()=>ROLE,'+
  'buildLayout,plantPreset,mintMachine,mintTank,mintFitting,removePart,removeRun,'+
- 'seedPort,seedRun,runErr,portCell,partOf,pipeMap,runBoreMm,netTempAt,pumpIds,pumpHead,ledgerKg,ledgerOut,netSolve,netReadEdges}');
+ 'seedPort,seedRun,runErr,portCell,partOf,pipeMap,runBoreMm,netTempAt,pumpIds,pumpHead,ledgerKg,ledgerOut,netSolve,netReadEdges,nodeKg}');
 
 const D = M.D();
 const BASE = JSON.parse(JSON.stringify(D));
@@ -191,7 +191,7 @@ function dump(s, sol, br, kind, dir){
   for(const k in br) if(Math.abs(br[k]) > 1) console.log("   run " + k + "  " + f(br[k], 1) + " kg/s");
   for(let i = 0; i < net.n; i++) if(String(net.name[i]).indexOf(id) === 0)
     console.log("   node " + net.name[i] + "  p " + f(sol.b[i], 3) + "  T " + f(M.netTempAt(s, net.name[i]), 1) +
-                "  x " + f(net.F.x[i], 3) + "  wet " + net.F.wet[i] + "  m " + f(s.mBy[net.name[i]], 1));
+                "  x " + f(net.F.x[i], 3) + "  wet " + net.F.wet[i] + "  m " + f(M.nodeKg(s,net.name[i]), 1));
   for(let e = 0; e < net.edges.length; e++){ const ed = net.edges[e];
     if(String(net.name[ed.u]).indexOf(id) !== 0 && String(net.name[ed.v]).indexOf(id) !== 0) continue;
     console.log("   edge " + ed.kind + " " + (ed.key || "-") + "  " + net.name[ed.u] + " -> " + net.name[ed.v] +

@@ -461,7 +461,7 @@ function roomStep(s, dt){
   for(const id in s.sgH2By){
     const m = s.sgH2By[id], rate = s.sgVentBy[id] || 0;
     if(!(m > 0) || !(rate > 0)) continue;
-    const nd = shellNode(id), ms = (s.mBy[nd]||0)*clamp(netQualAt(s,nd),0,1);
+    const nd = shellNode(id), ms = (nodeKg(s,nd)||0)*clamp(netQualAt(s,nd),0,1);
     const f = Math.min(1, rate*dt/Math.max(ms, 1e-6));
     s.sgH2By[id] = m - m*f;
     roomAddH2(s, roomCellsOf(G, id), rate, m*f);

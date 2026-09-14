@@ -16,21 +16,26 @@ function run(root, pre, N){
   const s = M.S(); s.diceOff = true;
   for (let k = 0; k < N; k++) M.step(0.02);
   const net = M.P() && M.P().net;
-  const canon = (v, has) => {                        // node state may be a name-keyed object OR a typed
-    if (!v || !net || !net.name) return v;           // array beside a presence mask; read out per NAME so
-    const o = {}, arr = ArrayBuffer.isView(v);        // absence ("-") never compares equal to a real 0
+  const canon = (v) => {                              // node state may be a name-keyed object OR a
+    if (!v || !net || !net.name) return v;             // {v,has} pair of typed arrays (pfNew, pipenet.js);
+    const wrap = v.v && ArrayBuffer.isView(v.v) && ArrayBuffer.isView(v.has);  // read out per NAME so
+    const arr = wrap ? null : ArrayBuffer.isView(v);   // absence ("-") never compares equal to a real 0
+    const vv = wrap ? v.v : v, hh = wrap ? v.has : null;
+    const o = {};
     for (let i = 0; i < net.name.length; i++) {
       const nm = net.name[i];
-      o[nm] = arr ? ((has ? has[i] : 1) ? v[i] : '-')
+      o[nm] = (wrap || arr) ? ((hh ? hh[i] : 1) ? vv[i] : '-')
                   : (Object.prototype.hasOwnProperty.call(v, nm) ? v[nm] : '-');
     }
-    if (!arr) for (const k in v) if (!(k in o)) o['?' + k] = v[k];
+    if (!wrap && !arr) for (const k in v) if (!(k in o)) o['?' + k] = v[k];
     return o;
   };
-  if (s.mBy) s.mBy = canon(s.mBy, s.mByHas);
-  if (s.hBy) s.hBy = canon(s.hBy, s.hByHas);
-  if (s.pBy) s.pBy = canon(s.pBy, s.pByHas);
-  delete s.mByHas; delete s.hByHas; delete s.pByHas;
+  if (s.mBy) s.mBy = canon(s.mBy);
+  if (s.hBy) s.hBy = canon(s.hBy);
+  if (s.pBy) s.pBy = canon(s.pBy);
+  if (s.bBy) s.bBy = canon(s.bBy);
+  if (s.h2By) s.h2By = canon(s.h2By);
+  if (s.metalT) s.metalT = canon(s.metalT);
   return { s, name: M.PLANTPRE()[pre][0] };
 }
 

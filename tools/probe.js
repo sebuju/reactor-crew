@@ -14,7 +14,8 @@ const M=require('./bundle').headless(
  'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,sumpKg,netWorkAt,annStep,ANN:()=>ANN,'+
  'drumIds,boilerIds,boilerLvl,boilerP,boilerDesignP,holdSetP,loopMap,coreMint,designForget,pumpIds,secGensOf,'+
  'coreStep,coreInH,satT,coreDTMax,snapS,restoreS,GW:()=>GW,'+
- 'loopHeadOf,pumpSucNode,pumpDisNode,netPressures,netRhoAt,netSatOf,runNodeOf,runBoreMm,runDutyKgs}');
+ 'loopHeadOf,pumpSucNode,pumpDisNode,netPressures,netRhoAt,netSatOf,runNodeOf,runBoreMm,runDutyKgs,'+
+ 'nodeKg,nodeH,nodeP}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -56,7 +57,7 @@ function dump(s,label){
   console.log(" PLANT");
   row("Tavg K",f(s.Tavg,2)); row("P MPa",f(s.P,4));
   row("inventory %",f(s.inv,2)); row("pzr level %",f(s.lvl,2));
-  { let m=0; for(const k in s.mBy) m+=s.mBy[k]; row("node mass kg",f(m,1)); }
+  { let m=0; const v=s.mBy.v, has=s.mBy.has; for(let i=0;i<v.length;i++) if(has[i]) m+=v[i]; row("node mass kg",f(m,1)); }
   row("core MW",f(s.fq*(s.P0mw||0),2)||"-"); row("electric MW",f(M.mwE(s),2));
   row("cond T K",f(s.condT,2)); row("cw in K",f(s.cwInT,2));
   row("release",f(s.release,5)); row("breach",!!s.breach);
@@ -275,7 +276,7 @@ const CASES={
       const line=(t)=>{ const st=M.fuelStages(cs), FL=M.FAIL(), q=FL.findIndex(r=>r.k==="disp");
         let rmH2=0; for(let i=0;i<s.roomH2.length;i++) rmH2+=s.roomH2[i];
         const rmP=s.roomP.reduce((a,v)=>Math.max(a,v),0);
-        const cav=cavNode===undefined?"-":f((s.pBy["cav:core"]-P.Pcont)*1000,0);
+        const cav=cavNode===undefined?"-":f((M.nodeP(s.pBy,"cav:core")-P.Pcont)*1000,0);
         console.log("  "+f(t,1).padStart(5)+"  "+f(s.n,3).padStart(6)+"  "+f(s.rho,0).padStart(5)+"  "+f(s.rodPos,2).padStart(5)+"  "+f(s.vf,3).padStart(5)+"  "+f(s.pCore,3).padStart(7)+"  "+f(cs.fci/1000,1).padStart(6)+"  "+f(s.TfHot,0).padStart(6)+"  "+f(s.dmg,1).padStart(5)+"  "+f(s.meltFrac*100,1).padStart(5)+"  "+(q>=0?f(st[q]*100,1):"-").padStart(5)+"  "+f(s.parts.xe,0).padStart(5)+"  "+f(s.parts.vd,0).padStart(5)+"  "+f(cs.tipRho,0).padStart(4)+"  "+f(s.sc,1).padStart(5)+"  "+f(M.ledgerKg(s)+M.ledgerOut(s),0).padStart(9)+"  "+f(s.h2,1).padStart(6)+"  "+f(rmH2,1).padStart(4)+"  "+f(rmP,1).padStart(7)+"  "+f(s.roomMax,0).padStart(5)+"  "+f(M.sumpKg(s)/1000,1).padStart(6)+"  "+f((cs.tubesOpen||0)*100,0).padStart(5)+"  "+cav.padStart(7)+"  "+(s.trip||"")); };
       let pkFci=0, fciKJ=0, pkW=0, pkWfci=0, pkWt=0, w0=null; const wrecked=[];
       for(let k=0;k<=PSEC*50;k++){ const t=k*0.02;
@@ -440,7 +441,7 @@ const CASES={
     const snap=()=>{ const g={}; let pool=false;
       for(let i=0;i<net.n;i++){ const k=group(i); if(!k) continue;
         if(k==="C"){ if(pool) continue; pool=true; }
-        const v=bk[i]?M.bookedKg(net,s,i):s.mBy[net.name[i]];
+        const v=bk[i]?M.bookedKg(net,s,i):M.nodeKg(s,net.name[i]);
         if(v!==undefined) g[k]=(g[k]||0)+v; }
       return g; };
     const cum={}, ni=node?net.index[node]:undefined;
@@ -471,12 +472,12 @@ const CASES={
         let line="tick "+(k+1)+": res "+f(s.massRes,3)+" kg";
         if(bad.length) line+="  | "+bad.join(", ");
         if(ni!==undefined){ const F=net.F;
-          line+="\n    "+node+": m "+f(s.mBy[node],2)+" h "+f(s.hBy[node],1)+" p "+f(s.pBy&&s.pBy[node],3)+
+          line+="\n    "+node+": m "+f(M.nodeKg(s,node),2)+" h "+f(M.nodeH(s,node),1)+" p "+f(M.nodeP(s.pBy,node),3)+
             " F.p "+f(F.p[ni],3)+" rho "+f(F.rho[ni],1)+" x "+f(F.x[ni],3)+" wet "+F.wet[ni];
           if(ek) for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e]; if(ed.u!==ni&&ed.v!==ni) continue;
             const h=typeof ed.h==="function"?ed.h(s):(ed.h||0);
-            line+="\n      "+(ed.key||ed.kind)+" "+net.name[ed.u]+"("+f(F.p[ed.u],4)+",w"+F.wet[ed.u]+",m"+f(s.mBy[net.name[ed.u]],2)+")->"+
-              net.name[ed.v]+"("+f(F.p[ed.v],4)+",w"+F.wet[ed.v]+",m"+f(s.mBy[net.name[ed.v]],2)+") h "+f(h,4)+" moved "+f(ek[e],3)+" kg"; } }
+            line+="\n      "+(ed.key||ed.kind)+" "+net.name[ed.u]+"("+f(F.p[ed.u],4)+",w"+F.wet[ed.u]+",m"+f(M.nodeKg(s,net.name[ed.u]),2)+")->"+
+              net.name[ed.v]+"("+f(F.p[ed.v],4)+",w"+F.wet[ed.v]+",m"+f(M.nodeKg(s,net.name[ed.v]),2)+") h "+f(h,4)+" moved "+f(ek[e],3)+" kg"; } }
         for(const g in after){ const t=tankOf(g); if(!t) continue;
           line+="\n    "+t+": lvl "+f(M.tankLvl(s,t),3)+" % rate "+f(s.tankRate[t],2)+" landed "+f(M.advectLanded(net.tankNode[t]),3)+" kg"; }
         if(win) console.log(line); else console.log(line.split("\n")[0]); }
