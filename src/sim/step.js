@@ -1020,28 +1020,28 @@ function massSeed(s){
 }
 /* kW into one vessel's node, one tick old - the solve has to run before there are flows to carry it. */
 const coreHeatKW = id => (HEATBAL.heatBy[id]||0)*P.cores[id].rated*1000;
+function advectWetOf(net, nid){ const i = net ? net.index[nid] : undefined;
+  return (i !== undefined && net.F && net.F.wet) ? net.F.wet[i] : 1; }
+function advectAdd(src, net, nid, q){ if(q) src[nid] = (src[nid]||0) + q*advectWetOf(net, nid); }
 function advectSrc(s, dt, runFlow){
   const src = {};
   /* A machine hands its heat to the water that is there, and F.wet is the ONE dryness answer: a second ratio off the EOS density read a full condenser as half spent every third tick, and the heat it dropped was still credited to the circulating water. */
   const net = P.net;
-  const wetOf = nid => { const i = net ? net.index[nid] : undefined;
-    return (i !== undefined && net.F && net.F.wet) ? net.F.wet[i] : 1; };
-  const add = (nid, q) => { if(q) src[nid] = (src[nid]||0) + q*wetOf(nid); };
-  for(const id of coreIds()){ add(coreFold(id), coreHeatKW(id)); add(coreFold(id), -skinQOf(s,id));
+  for(const id of coreIds()){ advectAdd(src, net, coreFold(id), coreHeatKW(id)); advectAdd(src, net, coreFold(id), -skinQOf(s,id));
     // what fuel out of its pin handed the water last tick (coreStep's o.fci)
-    add(coreFold(id), (s.coreBy && s.coreBy[id] && s.coreBy[id].fci) || 0); }
+    advectAdd(src, net, coreFold(id), (s.coreBy && s.coreBy[id] && s.coreBy[id].fci) || 0); }
   /* ROLE's declaration ORDER says which stream gives the heat up (0) and which takes it (1); neither names a face. */
   for(const id of sgIds().concat(ihxIds())){
     const q = HEATBAL.sgQBy[id] || (s.ihxQBy && s.ihxQBy[id]) || 0;
     const R = ROLE[partOf(id).role], INs = roleIntern(R);
     for(let k=0;k<INs.length;k++){ const IN=INs[k];
       /* a shell is ONE vessel: all of what crosses its tubes lands on it, and half on the feed nozzle would only heat the feedwater */
-      if(k && R.sgtr){ add(shellNode(id), q + ((s.sgSwQBy && s.sgSwQBy[id])||0) - skinQOf(s,id)); continue; }
+      if(k && R.sgtr){ advectAdd(src, net, shellNode(id), q + ((s.sgSwQBy && s.sgSwQBy[id])||0) - skinQOf(s,id)); continue; }
       const v=(k?q:-q)/2;
-      add(id+IN.a, v); add(id+IN.b, v); }
+      advectAdd(src, net, id+IN.a, v); advectAdd(src, net, id+IN.b, v); }
   }
   /* The bleed heaters land on the feed nozzle, which is why the water arrives at T_FEED at all. */
-  for(const id of boilerIds()) add(feedNode(id), feedHeatKW(s,id));
+  for(const id of boilerIds()) advectAdd(src, net, feedNode(id), feedHeatKW(s,id));
   /* the tubes take the latent heat out where the WATER is: a steam space at the vacuum holds a few kilograms and a gigawatt through it is not an integrator.
      The wheels come out here too - no edge on the graph takes shaft work out of the stream, so what the turbine made never reaches the exhaust. */
   { const ids = condIds();
@@ -1049,20 +1049,20 @@ function advectSrc(s, dt, runFlow){
     let out = mwE(s)*1000;
     for(const id of boilerIds()) out += feedHeatKW(s,id);
     out /= Math.max(1, ids.length);
-    for(const id of ids) add(condVesNode(id), -condRejOf(s,id) - skinQOf(s,id) - out); }
+    for(const id of ids) advectAdd(src, net, condVesNode(id), -condRejOf(s,id) - skinQOf(s,id) - out); }
   /* A sodium-water reaction happens in the SODIUM, so it lands on the primary faces; the shell's side is a current into its storage row. */
   for(const id in s.sgPwQBy){ const q = s.sgPwQBy[id]; if(!q) continue;
     const IN = roleIns(partOf(id))[0];
-    add(id+IN.a, q/2); add(id+IN.b, q/2); }
+    advectAdd(src, net, id+IN.a, q/2); advectAdd(src, net, id+IN.b, q/2); }
   /* A condenser gives its rejection to the water on its other side - the path that declares no anchor - where that water LEAVES, so the inlet face reads what arrived. */
   { for(const id of condIds()){ const q = condRejOf(s,id);
-      for(const w of cwPathsOf(id)) add(partFaceNode(id)[cwOutFace(runFlow, w)], q); } }
+      for(const w of cwPathsOf(id)) advectAdd(src, net, partFaceNode(id)[cwOutFace(runFlow, w)], q); } }
   /* A panel takes heat out of whatever is running through it, wherever that is. */
   { const IN = ROLE.radiator.internal;
     for(const id of radIds()){ const q = (s.radQBy && s.radQBy[id]) || 0; const fn = partFaceNode(id);
-      add(fn[IN.a], -q/2); add(fn[IN.b], -q/2); } }
+      advectAdd(src, net, fn[IN.a], -q/2); advectAdd(src, net, fn[IN.b], -q/2); } }
   /* Heaters and spray, in kW at the vessel's own node: a pressurizer earns its pressure by boiling and condensing its own water. */
-  for(const id of holdTankIds()) add(coreFold(id), pzrQ(s, id));
+  for(const id of holdTankIds()) advectAdd(src, net, coreFold(id), pzrQ(s, id));
   /* The steel round each node is a store of its own; metalQ is the one figure both sides read. */
   for(const k in metalQ) delete metalQ[k];
   if(net && net.metalKg && s.metalT){
@@ -3367,90 +3367,106 @@ function stepMarch(dt){
 
   // naming the machines means the verb has to agree with how many there were
   const isAre = ids => ids.length>1 ? "are" : "is";
-  const E=s.ev, ev=(k,cond,sev,msg,why,latch)=>{
-    /* `why` may be a thunk: a log line nobody is reading is not worth a string a tick */
-    if(cond && !E[k]){ E[k]=true; logE(sev,msg,typeof why==="function"?why():why); }
-    else if(!cond && !latch) E[k]=false; };
-  ev("hipow",s.n>1.10,"warn","POWER ABOVE 110%",
-    "Running past rated output. Thermal margin is what pays for it, and DNBR is falling.");
-  ev("dnbr13",s.dnbr<1.30,"warn","DNBR BELOW 1.30",
-    "Coolant is approaching film boiling on the fuel pins. Raise pump flow or pressure, or cut power.");
-  ev("dnbr10",s.dnbr<1.00,"alarm","DNBR BELOW 1.00 / CLADDING FAILING",
-    "The fuel is now wrapped in insulating steam. Heat is not reaching the water and damage is accumulating this second.");
+  const E=s.ev;
+  if(s.n>1.10){ if(!E.hipow){ E.hipow=true; logE("warn","POWER ABOVE 110%",
+    "Running past rated output. Thermal margin is what pays for it, and DNBR is falling."); } }
+  else E.hipow=false;
+  if(s.dnbr<1.30){ if(!E.dnbr13){ E.dnbr13=true; logE("warn","DNBR BELOW 1.30",
+    "Coolant is approaching film boiling on the fuel pins. Raise pump flow or pressure, or cut power."); } }
+  else E.dnbr13=false;
+  if(s.dnbr<1.00){ if(!E.dnbr10){ E.dnbr10=true; logE("alarm","DNBR BELOW 1.00 / CLADDING FAILING",
+    "The fuel is now wrapped in insulating steam. Heat is not reaching the water and damage is accumulating this second."); } }
+  else E.dnbr10=false;
   /* the cause is raised before its consequence: these fire in list order within one tick */
-  ev("scram",s.scrammed,"alarm","REACTOR TRIP / "+(s.trip||"SCRAM"),
-    "Rods fully inserted and the turbine tripped with them. Xenon now builds and will hold the reactor down for minutes.");
+  if(s.scrammed){ if(!E.scram){ E.scram=true; logE("alarm","REACTOR TRIP / "+(s.trip||"SCRAM"),
+    "Rods fully inserted and the turbine tripped with them. Xenon now builds and will hold the reactor down for minutes."); } }
+  else E.scram=false;
   /* the rods have to actually BE in, or the alarm fires on every scram and is spent before the real re-criticality arrives */
-  ev("recrit",s.scrammed&&s.rodPos>.98&&s.rho>-200,"alarm","TRIPPED CORE GOING CRITICAL",
-    ()=>"The bank is in and the reactor is climbing back to critical anyway. The xenon it was shut down by has decayed, and the bank alone is worth "+P.sdm.toFixed(0)+" pcm against it. Borate now - the boron system is worth "+P.sdmB.toFixed(0)+" pcm of margin.");
-  ev("cav",s.cav>0.15,"warn","COOLANT PUMP CAVITATION",
-    ()=>"Water arriving at "+(cavIds.length?nameList(cavIds):"the pumps")+
-        " is close to boiling, so "+(cavIds.length>1?"they are":"it is")+
-        " churning vapour. Real flow is far below the bench setting.");
+  if(s.scrammed&&s.rodPos>.98&&s.rho>-200){ if(!E.recrit){ E.recrit=true; logE("alarm","TRIPPED CORE GOING CRITICAL",
+    "The bank is in and the reactor is climbing back to critical anyway. The xenon it was shut down by has decayed, and the bank alone is worth "+P.sdm.toFixed(0)+" pcm against it. Borate now - the boron system is worth "+P.sdmB.toFixed(0)+" pcm of margin."); } }
+  else E.recrit=false;
+  if(s.cav>0.15){ if(!E.cav){ E.cav=true; logE("warn","COOLANT PUMP CAVITATION",
+    "Water arriving at "+(cavIds.length?nameList(cavIds):"the pumps")+
+    " is close to boiling, so "+(cavIds.length>1?"they are":"it is")+
+    " churning vapour. Real flow is far below the bench setting."); } }
+  else E.cav=false;
   /* the quietest way this plant stops: a node with nothing in it feeds nothing, and every gauge downstream goes flat with no alarm behind it */
   { const dryIds = netDryParts(s);
-    ev("dry",dryIds.length>0,"alarm","LINE RUN DRY",
-      ()=>nameList(dryIds)+" "+isAre(dryIds)+" empty. There is nothing in "+
-          (dryIds.length>1?"them":"it")+" to pump and nothing will leave "+
-          (dryIds.length>1?"them":"it")+" until something fills "+
-          (dryIds.length>1?"them":"it")+" again - check what is shut upstream."); }
-  ev("flowfloor",flowDemPri(s)<P.flowMin,"warn","PUMPS ORDERED BELOW DESIGN FLOOR",
-    ()=>"Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone.");
-  ev("hip",s.P>P.P0*1.05,"warn","PRIMARY OVERPRESSURE",
-    ()=>"Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burstPOf(P,s).toFixed(1)+" MPa.");
-  ev("porv",reliefAnyOpen(s),"warn","RELIEF VALVE PASSING",
-    ()=>{ const open=reliefFitIds().filter(id=>s.reliefOpen[id]&&!s.reliefBlocked[id]);
-      return nameList(open)+" "+isAre(open)+" open and venting. If nobody commanded it, primary coolant is leaving the loop."; });
-  ev("stuck",reliefAnyStuck(s),"alarm","PORV FAILED TO RESEAT",
-    ()=>nameList(reliefFitIds().filter(id=>s.reliefStuck[id]))+
-        " lifted on overpressure and did not shut again. Pressurizer level will read HIGH while the loop empties. Close its block valve.");
-  ev("void",s.vf>0.15,"alarm","STEAM VOID IN CORE",
-    "Steam is forming where liquid should be. It carries almost no heat, so fuel temperature climbs even while reactor power falls.");
+    if(dryIds.length>0){ if(!E.dry){ E.dry=true; logE("alarm","LINE RUN DRY",
+      nameList(dryIds)+" "+isAre(dryIds)+" empty. There is nothing in "+
+      (dryIds.length>1?"them":"it")+" to pump and nothing will leave "+
+      (dryIds.length>1?"them":"it")+" until something fills "+
+      (dryIds.length>1?"them":"it")+" again - check what is shut upstream."); } }
+    else E.dry=false; }
+  if(flowDemPri(s)<P.flowMin){ if(!E.flowfloor){ E.flowfloor=true; logE("warn","PUMPS ORDERED BELOW DESIGN FLOOR",
+    "Flow demand is under the "+(P.flowMin*100).toFixed(0)+"% floor the pumps were built for. The protection system trips on LOW FLOW here. Defeat it and the core keeps running on buoyancy alone."); } }
+  else E.flowfloor=false;
+  if(s.P>P.P0*1.05){ if(!E.hip){ E.hip=true; logE("warn","PRIMARY OVERPRESSURE",
+    "Loop pressure above 105% of nominal. The relief valve lifts at 106%, and the vessel bursts near "+burstPOf(P,s).toFixed(1)+" MPa."); } }
+  else E.hip=false;
+  if(reliefAnyOpen(s)){ if(!E.porv){ E.porv=true; const open=reliefFitIds().filter(id=>s.reliefOpen[id]&&!s.reliefBlocked[id]);
+    logE("warn","RELIEF VALVE PASSING", nameList(open)+" "+isAre(open)+" open and venting. If nobody commanded it, primary coolant is leaving the loop."); } }
+  else E.porv=false;
+  if(reliefAnyStuck(s)){ if(!E.stuck){ E.stuck=true; logE("alarm","PORV FAILED TO RESEAT",
+    nameList(reliefFitIds().filter(id=>s.reliefStuck[id]))+
+    " lifted on overpressure and did not shut again. Pressurizer level will read HIGH while the loop empties. Close its block valve."); } }
+  else E.stuck=false;
+  if(s.vf>0.15){ if(!E.void){ E.void=true; logE("alarm","STEAM VOID IN CORE",
+    "Steam is forming where liquid should be. It carries almost no heat, so fuel temperature climbs even while reactor power falls."); } }
+  else E.void=false;
   /* not latched: the field falls back the moment the source does, and an operator watching this number needs to see it fall */
-  ev("hirad",s.doseRate>RAD_HI,"warn","HIGH RADIATION IN THE SPACE",
-    ()=>"The crew's own seat is reading "+s.doseRate.toFixed(2)+"x background. A party out on the plant right now is taking "+(s.repRate*RAD_DOSE_K).toFixed(3)+" dose a second at the job it is standing next to.");
+  if(s.doseRate>RAD_HI){ if(!E.hirad){ E.hirad=true; logE("warn","HIGH RADIATION IN THE SPACE",
+    "The crew's own seat is reading "+s.doseRate.toFixed(2)+"x background. A party out on the plant right now is taking "+(s.repRate*RAD_DOSE_K).toFixed(3)+" dose a second at the job it is standing next to."); } }
+  else E.hirad=false;
   /* not latched either: the room cools once whatever was venting into it stops */
   { const hotIds = roomOverIds(s);
-    ev("hiroom",hotIds.length>0,"alarm","EQUIPMENT OVER TEMPERATURE",
-      ()=>nameList(hotIds)+" "+isAre(hotIds)+" standing in air hotter than "+
-          (hotIds.length>1?"they were":"it was")+" built for. The compartment peaks at "+
-          s.roomMax.toFixed(0)+" K. Nothing in there survives it indefinitely - find what is putting heat into the room."); }
-  ev("h2room",roomH2Peak(s)>=H2_LFL,"alarm","HYDROGEN IN THE COMPARTMENT",
-    "Hydrogen off the cladding has left the primary with the steam and is now above its flammability limit somewhere in the room. It needs no spark, only something hot enough - and there is a great deal in there that is.");
-  ev("pit",-s.parts.xe>3200,"info","XENON PIT",
-    "Xenon-135 past 3200 pcm. Raising power may be physically impossible until it decays, whatever you do with the rods.");
-  ev("jam",s.rodJam,"alarm","CONTROL RODS NOT RESPONDING",
-    "The bank is ignoring demand, a scram included. You are left with boron, flow and load.");
+    if(hotIds.length>0){ if(!E.hiroom){ E.hiroom=true; logE("alarm","EQUIPMENT OVER TEMPERATURE",
+      nameList(hotIds)+" "+isAre(hotIds)+" standing in air hotter than "+
+      (hotIds.length>1?"they were":"it was")+" built for. The compartment peaks at "+
+      s.roomMax.toFixed(0)+" K. Nothing in there survives it indefinitely - find what is putting heat into the room."); } }
+    else E.hiroom=false; }
+  if(roomH2Peak(s)>=H2_LFL){ if(!E.h2room){ E.h2room=true; logE("alarm","HYDROGEN IN THE COMPARTMENT",
+    "Hydrogen off the cladding has left the primary with the steam and is now above its flammability limit somewhere in the room. It needs no spark, only something hot enough - and there is a great deal in there that is."); } }
+  else E.h2room=false;
+  if(-s.parts.xe>3200){ if(!E.pit){ E.pit=true; logE("info","XENON PIT",
+    "Xenon-135 past 3200 pcm. Raising power may be physically impossible until it decays, whatever you do with the rods."); } }
+  else E.pit=false;
+  if(s.rodJam){ if(!E.jam){ E.jam=true; logE("alarm","CONTROL RODS NOT RESPONDING",
+    "The bank is ignoring demand, a scram included. You are left with boron, flow and load."); } }
+  else E.jam=false;
   /* one warning per system the cabinet has but is not running; nothing wired at all is a design decision and is said elsewhere */
-  ev("byp_rps", rpsState()==="BYPASSED", "warn", "PROTECTION SYSTEM SWITCHED OFF",
-    "Automatic trips are defeated. Nothing will shut this reactor down for you.");
-  ev("byp_runback", !!sinkWired(s,"runback",null) && !runbackLive(), "warn", "TURBINE RUNBACK SWITCHED OFF",
-    "A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop.");
-  ev("norps",rpsState()==="NOT FITTED","warn","NO PROTECTION SYSTEM FITTED",
-    "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call.",true);
-  ev("inj",injIds.length>0,"info","INJECTING",
-    ()=>nameList(injIds)+" "+isAre(injIds)+" pushing water into the loop at "+
-        s.injRate.toFixed(2)+" %/s, and cold shock is ageing the vessel while it runs.");
-  ev("d1",s.dmg>1,"alarm","FUEL DAMAGE 1%",
-    "Cladding has started to fail and fission products are entering the coolant. Permanent.",1);
-  ev("d25",s.dmg>25,"alarm","FUEL DAMAGE 25%",
-    "A quarter of the fuel cladding has failed.",1);
+  if(rpsState()==="BYPASSED"){ if(!E.byp_rps){ E.byp_rps=true; logE("warn","PROTECTION SYSTEM SWITCHED OFF",
+    "Automatic trips are defeated. Nothing will shut this reactor down for you."); } }
+  else E.byp_rps=false;
+  if(!!sinkWired(s,"runback",null) && !runbackLive()){ if(!E.byp_runback){ E.byp_runback=true; logE("warn","TURBINE RUNBACK SWITCHED OFF",
+    "A trip no longer sheds load. The turbine will keep drawing steam from a dead core and chill the loop."); } }
+  else E.byp_runback=false;
+  if(rpsState()==="NOT FITTED"){ if(!E.norps){ E.norps=true; logE("warn","NO PROTECTION SYSTEM FITTED",
+    "This plant was commissioned without one. There are no automatic trips to defeat, and none to fall back on. Every scram is yours to call."); } }
+  if(injIds.length>0){ if(!E.inj){ E.inj=true; logE("info","INJECTING",
+    nameList(injIds)+" "+isAre(injIds)+" pushing water into the loop at "+
+    s.injRate.toFixed(2)+" %/s, and cold shock is ageing the vessel while it runs."); } }
+  else E.inj=false;
+  if(s.dmg>1){ if(!E.d1){ E.d1=true; logE("alarm","FUEL DAMAGE 1%",
+    "Cladding has started to fail and fission products are entering the coolant. Permanent."); } }
+  if(s.dmg>25){ if(!E.d25){ E.d25=true; logE("alarm","FUEL DAMAGE 25%",
+    "A quarter of the fuel cladding has failed."); } }
   /* latched: the watch does not get its dose back by the number dipping under 50 % again */
-  ev("crew50",s.crewDose>50,"alarm","WATCH DOSE PAST 50%",
-    "The control-room watch has taken more than half its dose limit for this run. Nobody relieves them - that number only goes one way from here.",1);
-  ev("fat50",s.fatigue>50,"warn","VESSEL FATIGUE PAST 50%",
-    ()=>"Thermal shock has embrittled the vessel. Its burst pressure is now "+burstPOf(P,s).toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+".",1);
-  ev("brk",s.breach,"alarm","VESSEL RUPTURE",
-    ()=>"The pressure vessel failed at "+s.P.toFixed(1)+" MPa. Coolant is leaving faster than anything can replace it. Unrecoverable.",1);
+  if(s.crewDose>50){ if(!E.crew50){ E.crew50=true; logE("alarm","WATCH DOSE PAST 50%",
+    "The control-room watch has taken more than half its dose limit for this run. Nobody relieves them - that number only goes one way from here."); } }
+  if(s.fatigue>50){ if(!E.fat50){ E.fat50=true; logE("warn","VESSEL FATIGUE PAST 50%",
+    "Thermal shock has embrittled the vessel. Its burst pressure is now "+burstPOf(P,s).toFixed(1)+" MPa instead of "+(P.P0*P.burstK).toFixed(1)+"."); } }
+  if(s.breach){ if(!E.brk){ E.brk=true; logE("alarm","VESSEL RUPTURE",
+    "The pressure vessel failed at "+s.P.toFixed(1)+" MPa. Coolant is leaving faster than anything can replace it. Unrecoverable."); } }
   /* a ratio, not a threshold, so it self-scales across every plant size rather than pinning a megawatt figure a small core could never reach */
-  ev("ox",s.qOx>s.n*PROMPT_F,"alarm","CLAD OXIDATION SELF-SUSTAINING",
-    ()=>"Steam is burning the cladding faster than the reactor is making heat: "+
-        (s.qOx*100).toFixed(1)+"% of rated against "+(s.n*PROMPT_F*100).toFixed(1)+
-        "% from fission. Nothing on this ship switches that reaction off - it stops when the metal is gone.",1);
-  ev("h2",s.h2>H2_EV,"alarm","HYDROGEN IN THE PRIMARY",
-    ()=>"Over "+H2_EV+" kg of hydrogen has come off the cladding. It is not water and it does not carry heat - and the moment any of it leaves the loop it is a flammable gas in the compartment, at 4% by volume and 773 K.",1);
-  ev("melt",s.melt,"alarm","CORE MELT",
-    ()=>"A quarter of the fuel is molten and "+s.dmg.toFixed(0)+"% of the cladding has failed. Unrecoverable.",1);
+  if(s.qOx>s.n*PROMPT_F){ if(!E.ox){ E.ox=true; logE("alarm","CLAD OXIDATION SELF-SUSTAINING",
+    "Steam is burning the cladding faster than the reactor is making heat: "+
+    (s.qOx*100).toFixed(1)+"% of rated against "+(s.n*PROMPT_F*100).toFixed(1)+
+    "% from fission. Nothing on this ship switches that reaction off - it stops when the metal is gone."); } }
+  if(s.h2>H2_EV){ if(!E.h2){ E.h2=true; logE("alarm","HYDROGEN IN THE PRIMARY",
+    "Over "+H2_EV+" kg of hydrogen has come off the cladding. It is not water and it does not carry heat - and the moment any of it leaves the loop it is a flammable gas in the compartment, at 4% by volume and 773 K."); } }
+  if(s.melt){ if(!E.melt){ E.melt=true; logE("alarm","CORE MELT",
+    "A quarter of the fuel is molten and "+s.dmg.toFixed(0)+"% of the cladding has failed. Unrecoverable."); } }
   /* here, beside the event latches, because both want the settled window step() is holding open */
   if(s.tick % ANN_TICKS === 0) annStep(s);
 
