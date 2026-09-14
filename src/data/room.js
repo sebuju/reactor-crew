@@ -43,8 +43,9 @@ function partTemp(s, p){
   if(p.role === "sg")   return s.sgTBy[p.id];
   // an exchanger has no pot: what the box contains is what its own nodes hold
   if(p.role === "ihx"){ let t=0, n=0; const fn = partFaceNode(p.id);
-    for(const IN of roleIns(p)) for(const f of [IN.a, IN.b]){
-      t += netTempAt(s, fn[f]); n++; }
+    for(const IN of roleIns(p)){
+      t += netTempAt(s, fn[IN.a]); n++;
+      t += netTempAt(s, fn[IN.b]); n++; }
     return n ? t/n : s.Tavg; }
   if(p.role === "cond") return s.condTBy[p.id];
   if(p.role === "radiator") return s.radTBy[p.id];
@@ -78,11 +79,12 @@ function runFluidH(s, key){
   return isFinite(h) ? {h, c:netSatOf(nd)} : null;
 }
 /* The DONOR node's water, never a mean of the two sides: averaging in the outlet cools the jet by its own effect. Donor = higher pressure, advectStep()'s upwind rule. */
+const FACES4 = ["t","r","b","l"];
 function partFluidNode(s, id){
   const net = P.net;
   if(!net || !net.index) return null;
   let best = null, bp = -Infinity; const fn = partFaceNode(id);
-  for(const face of ["t","r","b","l"]){
+  for(const face of FACES4){
     const nm = fn[face];
     if(!nm || net.index[nm] === undefined) continue;
     const p = netPAt(s, nm);
@@ -526,12 +528,16 @@ function roomOpenCells(s, G, key){
   return out;
 }
 /* A torn machine drains from the bottom of its box as one stream: shared over every cell of the box, it rained a thread down each column it spans. */
+const pourRow = [], pourOut = [0];
 function roomPourCells(key, cells){
   if(key.indexOf("break:") !== 0 || !(breakPart(key) || breakCav(key)) || !cells.length) return cells;
   let lo = -1;
   for(const i of cells) lo = Math.max(lo, (i/GW)|0);
-  const row = cells.filter(i => ((i/GW)|0) === lo).sort((a,b) => a-b);
-  return [row[row.length>>1]];
+  const row = pourRow; row.length = 0;
+  for(const i of cells) if(((i/GW)|0) === lo) row.push(i);
+  row.sort((a,b) => a-b);
+  pourOut[0] = row[row.length>>1];
+  return pourOut;
 }
 
 /* Hydrogen leaves with the escaping steam and deflagrates past the flammability limits and auto-ignition; ROOM_DEPTH sets every concentration here. */
@@ -890,8 +896,13 @@ const liqShut = (G, j) => !(G.hole && G.hole[j]) && (G.tight[j] || (G.occ[j] && 
 const liqRuns = (G, i, j) => !liqShut(G, j) && !(G.pan[i] && !G.pan[j]);
 // a liquid and the one it shares the cell with, which takes that much of the cell's room
 // U is the liquid under this one in a cell: the metal floats on the water, the water ignores the metal
-const liqWater = s => ({M:s.roomWater, E:s.roomWaterE, rho:WATER_RHO, bulk:WATER_BULK, vu:s.roomWU, vv:s.roomWV, P:s.roomWP, O:s.roomPool, oRho:fireRho(), U:null, tag:"water"});
-const liqMetal = s => ({M:s.roomPool, E:s.roomPoolE, rho:fireRho(), bulk:fireCool().bulk, vu:s.roomPoolU, vv:s.roomPoolV, P:s.roomPoolP, O:s.roomWater, oRho:WATER_RHO, U:s.roomWater, tag:"metal"});
+// the bundle is a view onto s's own arrays, stable for s's whole life; one per s, not one per cell
+let liqWaterC = null, liqWaterFor = null;
+const liqWater = s => liqWaterFor === s ? liqWaterC : (liqWaterFor = s,
+  liqWaterC = {M:s.roomWater, E:s.roomWaterE, rho:WATER_RHO, bulk:WATER_BULK, vu:s.roomWU, vv:s.roomWV, P:s.roomWP, O:s.roomPool, oRho:fireRho(), U:null, tag:"water"});
+let liqMetalC = null, liqMetalFor = null;
+const liqMetal = s => liqMetalFor === s ? liqMetalC : (liqMetalFor = s,
+  liqMetalC = {M:s.roomPool, E:s.roomPoolE, rho:fireRho(), bulk:fireCool().bulk, vu:s.roomPoolU, vv:s.roomPoolV, P:s.roomPoolP, O:s.roomWater, oRho:WATER_RHO, U:s.roomWater, tag:"metal"});
 const liqCap = (q, j) => Math.max(0, q.rho*(ROOM_VCELL - q.O[j]/q.oRho));
 // full to the tolerance of its own compressibility: a stiff cell breathes a few grams as its pressure moves
 const LIQ_FULL_K = 1 - 1e-4;
@@ -906,8 +917,10 @@ function liqTop(q, G, i){
   return i;
 }
 const liqSurf = (q, G, i) => { const t = liqTop(q, G, i); return zFloor(t) + liqFill(q.M, q.rho, t); };
-// the gas a cell holds, every species riding with the total
-const roomGasFields = s => [s.roomM, s.roomH2, s.roomO2, s.roomVap];
+// the gas a cell holds, every species riding with the total; one array per s, not one per call
+let roomGasFieldsC = null, roomGasFieldsFor = null;
+const roomGasFields = s => roomGasFieldsFor === s ? roomGasFieldsC : (roomGasFieldsFor = s,
+  roomGasFieldsC = [s.roomM, s.roomH2, s.roomO2, s.roomVap]);
 const G_SI = G_MPA*1e6;                   // m/s2
 // Pa, water's bulk modulus; the metal's is on its COOLANT row
 const WATER_BULK = 2.2e9;
@@ -1221,21 +1234,25 @@ const roomPoolLit = (s,i) => { const f = fireRow();
 let fireQ = null;
 /* The bund is liqShut()'s; this is the drain, into a sealed tank the board does not draw, water first because it is on the bottom. The metal was booked out at the opening it left through; the water was booked back onto the ship when it landed, so it goes back off here. A wrecked pan is still a bund and drains nothing. */
 const PAN_DRAIN_KGS = 20;                 // kg/s one pan's drain line passes
+// one liquid's share of a pan's drain; returns what is left of `want` for the next liquid
+function panDrainField(s, q, want, M, E, W){
+  for(const i of q.cells){
+    if(!(want > 0)) break;
+    const take = Math.min(want, M[i]);
+    if(!(take > 0)) continue;
+    E[i] -= E[i]*take/M[i];
+    if(W) book(s, "sump", take);
+    M[i] -= take; want -= take;
+    s.panBy[q.p.id] = (s.panBy[q.p.id] || 0) + take;
+    if(M[i] <= 0){ M[i] = 0; E[i] = 0; }
+  }
+  return want;
+}
 function panDrain(s, dt, G){
   for(const q of G.parts){
     if(q.p.role !== "pan" || partWrecked(s, q.p.id)) continue;
-    let want = PAN_DRAIN_KGS*dt;
-    for(const [M, E, W] of [[s.roomWater, s.roomWaterE, true], [s.roomPool, s.roomPoolE, false]])
-      for(const i of q.cells){
-        if(!(want > 0)) break;
-        const take = Math.min(want, M[i]);
-        if(!(take > 0)) continue;
-        E[i] -= E[i]*take/M[i];
-        if(W) book(s, "sump", take);
-        M[i] -= take; want -= take;
-        s.panBy[q.p.id] = (s.panBy[q.p.id] || 0) + take;
-        if(M[i] <= 0){ M[i] = 0; E[i] = 0; }
-      }
+    const want = panDrainField(s, q, PAN_DRAIN_KGS*dt, s.roomWater, s.roomWaterE, true);
+    panDrainField(s, q, want, s.roomPool, s.roomPoolE, false);
   }
 }
 
