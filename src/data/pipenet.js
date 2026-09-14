@@ -2599,7 +2599,11 @@ const BETA_W = 0.0025;
 /* MPa per node, resolved fresh and never on S; the tick does NOT call this - step() takes its field off netFlowK()'s own solve */
 function netPressures(s){
   const o = {};
-  if(P && P.net) netReadP(netSolve(P.net, s), o);
+  if(P && P.net){
+    const net = P.net, pf = pfNew(net);
+    netReadP(netSolve(net, s), pf);
+    for(const nid in net.index){ const v = pfAt(pf, nid); if(v !== undefined) o[nid] = v; }
+  }
   return o;
 }
 
