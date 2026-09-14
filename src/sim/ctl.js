@@ -46,11 +46,13 @@ const BLK_MODES=Object.keys(BLK);
 const MATH_OPS=["add","sub","mul","div","min","max"], SEL_OPS=["max","min","median"], CMP_OPS=["above","below"];
 const OPS_OF={math:MATH_OPS, sel:SEL_OPS, compare:CMP_OPS};
 
+function scramRpsHot(cs,K,id,hot,dt){ cs.rpsHot = hot ? cs.rpsHot+dt : 0; }
+function nearTripSet(cs,K,id,v){ cs.rpsNear=v>0.5; }
 /* every demand a block may drive, in the unit the matching SIGNAL row reads; `step` marks a sink that integrates the increment itself */
 const SINK={
   rodStep:{lab:"ROD DRIVE", u:"/tick", scope:"core", step:true, part:id=>rodsOf(id),
     read:(s,id)=>coreSeen(s,id).rodDem,
-    apply:(s,id,v,dt)=>{ coreOn(s,id,(cs,K)=>rodApply(s,cs,K,v,dt)); }},
+    apply:(s,id,v,dt)=>{ coreOn(s,id,rodApplyOn,v,dt); }},
   freg:   {lab:"FEED VALVE", u:"", scope:"sg", part:id=>id,
     read:(s,id)=>s.fregBy[id]||0,
     apply:(s,id,v)=>{ if(s.fregDemBy[id]!==undefined) s.fregDemBy[id]=clamp(v,0,1); }},
@@ -76,14 +78,14 @@ const SINK={
   scram:  {lab:"SCRAM", u:"", scope:"core", part:id=>id,
     read:(s,id)=>coreSeen(s,id).scrammed?1:0,
     apply:(s,id,v,dt)=>{ const hot=v>0.5;
-      coreOn(s,id,c=>{ c.rpsHot = hot ? c.rpsHot+dt : 0; });
+      coreOn(s,id,scramRpsHot,hot,dt);
       const cs=coreSeen(s,id);
       /* to the nearest tick: ten additions of 0.02 come to 0.19999999999999998, so a 200 ms setting would ask for an eleventh */
       if(hot && !cs.scrammed && cs.rpsHot>=P.rpsLag-dt*0.5) rpsScram(id,blkBlame(s,sinkDriver(s,"scram",id))); }},
   /* the warning is an actuator too, never a read out of the middle of a graph the player may rewire */
   nearTrip:{lab:"NEAR TRIP LAMP", u:"", scope:"core", part:id=>id,
     read:(s,id)=>coreSeen(s,id).rpsNear?1:0,
-    apply:(s,id,v)=>{ coreOn(s,id,cs=>{ cs.rpsNear=v>0.5; }); }},
+    apply:(s,id,v)=>{ coreOn(s,id,nearTripSet,v); }},
   /* a one-shot on the rising edge: held, the operator could never raise load again while the latch was in */
   runback:{lab:"TURBINE RUNBACK", u:"", scope:"plant", part:()=>roleId("turb"),
     read:s=>s.rbHot?1:0,

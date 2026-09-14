@@ -46,6 +46,8 @@ const voidQual = (v,rvl) => { const q=clamp(v,0,1);
 const ringW=new Float64Array(XNR), nodeW=new Float64Array(XNN);
 /* coreStep never runs inside itself, so one buffer each serves every core on the board */
 const mixKBuf=new Float64Array(XNR), disKBuf=new Float64Array(XNN);
+// coreStep()'s return: reused, so a caller that must keep it past the next call copies the fields out
+const coreOBuf={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0,dis:0,h2:0,fci:0};
 const faceI=new Float64Array(XNR), faceO=new Float64Array(XNR);
 (function(){
   let t=0; for(let i=0;i<XNR;i++) t+=2*i+1;
@@ -476,7 +478,8 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
 
   coreSolve(K,cs.phi,cs.nRho);
 
-  const o={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0,dis:0};
+  const o=coreOBuf;
+  o.dop=0; o.mod=0; o.exp=0; o.vd=0; o.xe=0; o.rod=0; o.tip=0; o.dis=0;
   let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0,W2=0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
     const k=XIX(i,j), v=nodeW[k], w=v*cs.phi[k], w2=w*cs.phi[k];
@@ -494,7 +497,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
     if(j>=XNZ/2) top+=w; else bot+=w;
     if(i< XNR/2)  inn+=w; else out+=w;
   }
-  if(W2>0) for(const q in o) o[q]/=W2;
+  if(W2>0){ o.dop/=W2; o.mod/=W2; o.exp/=W2; o.vd/=W2; o.xe/=W2; o.rod/=W2; o.tip/=W2; o.dis/=W2; }
   const hot=nodePeak(cs.phi);
   cs.fq=hot.v; cs.hotRing=hot.i; cs.hotLev=hot.j;
   cs.ao=(top-bot)/Math.max(top+bot,1e-6);
