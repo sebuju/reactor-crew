@@ -384,18 +384,19 @@ const pumpH = id => clamp(PUMP_BOX_H0 + Math.round(2*pumpBoxCap(id)), PUMP_BOX_H
 /* Which internal path is the pump casing: `head` sits on the PATH row, not the role, because a role may carry several paths and only one can push. */
 const roleHead=role=>{ const R=ROLE[role]; if(!R||!R.internal) return false;
   return (Array.isArray(R.internal)?R.internal:[R.internal]).some(IN=>IN.head); };
+/* The casing's own faces, folded, and its swallow key - one structural fact, cached on the graph (graphSlot()) so a pump per tick reads a field rather than re-walking ROLE.internal. */
+const pumpCasingKeys=id=>{ const slot=graphSlot("pumpCasingKeys"), was=slot.get(id); if(was) return was;
+  const p=partOf(id), R=p&&ROLE[p.role];
+  const IN=R&&(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
+  const out=IN ? {suc:coreFold(id+IN.a), dis:coreFold(id+IN.b), key:"comp:"+id+":"+IN.a+IN.b}
+               : {suc:id, dis:id, key:null};
+  slot.set(id,out); return out; };
 /* The casing path's own `a` face, FOLDED: a pump spliced into a horizontal leg takes suction on `r` and has no node called "t" at all. */
-const pumpSucNode=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return id;
-  const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
-  return IN ? coreFold(id+IN.a) : id; };
+const pumpSucNode=id=>pumpCasingKeys(id).suc;
 // ...and the same door onto the casing path's `b` face
-const pumpDisNode=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return id;
-  const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
-  return IN ? coreFold(id+IN.b) : id; };
+const pumpDisNode=id=>pumpCasingKeys(id).dis;
 /* fitEdgeKey()'s idiom for a pump: the reference and the tick both read the swallow off this, and a second spelling of the key is a second answer. */
-const pumpEdgeKey=id=>{ const p=partOf(id), R=p&&ROLE[p.role]; if(!R) return null;
-  const IN=(Array.isArray(R.internal)?R.internal:[R.internal]).find(x=>x.head);
-  return IN ? "comp:"+id+":"+IN.a+IN.b : null; };
+const pumpEdgeKey=id=>pumpCasingKeys(id).key;
 const primaryPump=id=>{ const p=partOf(id);
   return !!p && roleHead(p.role) && loopOf(id)!==null; };
 /* In LAY order - the set s.flowBy/s.flowDemBy are keyed on, counted and never named. */

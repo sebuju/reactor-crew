@@ -42,9 +42,9 @@ function partTemp(s, p){
   if(!R || R.thermal === "none") return null;
   if(p.role === "sg")   return s.sgTBy[p.id];
   // an exchanger has no pot: what the box contains is what its own nodes hold
-  if(p.role === "ihx"){ let t=0, n=0;
+  if(p.role === "ihx"){ let t=0, n=0; const fn = partFaceNode(p.id);
     for(const IN of roleIns(p)) for(const f of [IN.a, IN.b]){
-      t += netTempAt(s, coreFold(p.id+f)); n++; }
+      t += netTempAt(s, fn[f]); n++; }
     return n ? t/n : s.Tavg; }
   if(p.role === "cond") return s.condTBy[p.id];
   if(p.role === "radiator") return s.radTBy[p.id];
@@ -81,9 +81,9 @@ function runFluidH(s, key){
 function partFluidNode(s, id){
   const net = P.net;
   if(!net || !net.index) return null;
-  let best = null, bp = -Infinity;
+  let best = null, bp = -Infinity; const fn = partFaceNode(id);
   for(const face of ["t","r","b","l"]){
-    const nm = coreFold(id + face);
+    const nm = fn[face];
     if(!nm || net.index[nm] === undefined) continue;
     const p = netPAt(s, nm);
     if(!(p > bp)) continue;
@@ -128,7 +128,7 @@ function roomLiqOuts(s, G, fn){
     const fl = partFluidH(s, fid);
     if(!fl) continue;
     const q = G.parts.find(w => w.p.id === fid);
-    fn(q ? q.cells : [], s.reliefVent[fid], fl, "vent:"+fid);
+    fn(q ? q.cells : [], s.reliefVent[fid], fl, ventKeyOf(fid));
   }
 }
 /* A hole nobody can measure does not spray: a torn machine and a breached cavity state no bore. */
