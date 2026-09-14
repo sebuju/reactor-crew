@@ -341,16 +341,26 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt, liqAt) => {
 const scratch = (net, k, n, Ctor, v) => { const b = net.scr || (net.scr = {}); let a = b[k];
   if(!a || a.length !== n) a = b[k] = new Ctor(n); a.fill(v); return a; };
 /* ONE door onto a node-keyed pressure field, so the container can change without every reader moving.
-   Absence is a real answer here - a node the solve does not carry reads its circuit's setpoint instead. */
-const pfNew = () => ({});
-const pfAt = (f, nid) => f ? f[nid] : undefined;
-const pfSet = (f, nid, v) => { f[nid] = v; };
-const pfDel = (f, nid) => { delete f[nid]; };
-/* refilled, never rebuilt: a key the new field does not carry is stale and goes */
+   Absence is a real answer here - a node the solve does not carry reads its circuit's setpoint instead.
+   {v,has}: a plain object wrapping two typed arrays, so the structured-clone snapshot (record.js's
+   snapVal) copies both without needing to know about them - an expando on a typed array does not
+   survive that clone, a plain object's own properties do. The index is never stored on the field
+   itself, always resolved off the live net, since a field is only ever read against the net that is
+   actually commissioned. */
+const pfNew = (net) => ({ v: new Float64Array(net.n), has: new Uint8Array(net.n) });
+const pfAt = (f, nid) => { const net = P && P.net, i = net && net.index[nid];
+  return (!f || i === undefined || !f.has[i]) ? undefined : f.v[i]; };
+const pfSet = (f, nid, v) => { const net = P && P.net, i = net && net.index[nid];
+  if(i !== undefined){ f.v[i] = v; f.has[i] = 1; } };
+const pfDel = (f, nid) => { const net = P && P.net, i = net && net.index[nid];
+  if(i !== undefined) f.has[i] = 0; };
+/* refilled, never rebuilt: dst keeps its own identity, src overwrites it whole - both are the same net's shape */
 const pfCopy = (dst, src) => { if(dst === src) return dst;
-  for(const k in src) dst[k] = src[k];
-  for(const k in dst) if(src[k] === undefined) delete dst[k];
-  return dst; };
+  dst.v.set(src.v); dst.has.set(src.has); return dst; };
+/* the same one door onto s.mBy/s.hBy, for readers outside the sim (render, tools) that must not know the field's own container */
+const nodeKg = (s, nid) => s ? pfAt(s.mBy, nid) : undefined;
+const nodeH  = (s, nid) => s ? pfAt(s.hBy, nid) : undefined;
+const nodeP  = pfAt;
 /* the field the law is linearised about: one tick old on purpose, and per net */
 const netFieldOf = () => ({p:null, rho:null, rhoD:null, rhoG:null, rhoL:null, void:null, x:null, wet:null, mu:null});
 function netFieldSize(F, n){
@@ -375,7 +385,7 @@ function netFieldSize(F, n){
 /* structural on purpose: anything richer than s.mBy and net.vol closes a loop back through tankP and overflows the stack on tick one */
 const DRY_FRAC = 1e-3, DRY_MIN_KG = 1e-6;
 const netNodeDry = (net, s, i, rho) => {
-  const nid = net.name[i], m = s && s.mBy ? s.mBy[nid] : undefined;
+  const nid = net.name[i], m = (s && s.mBy && s.mBy.has[i]) ? s.mBy.v[i] : undefined;
   /* against what this node would hold, never a typed density: a near-vacuum holds a milligram and is not spent */
   const eos = net.vol[i]*(rho === undefined ? netRhoAt(s, nid) : rho);
   return m !== undefined && eos > DRY_MIN_KG && m <= DRY_FRAC*eos; };
@@ -427,7 +437,7 @@ function netFieldUpdate(net, s){
   for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e], w = ed.w || 0;
     if(w > 0) fedIn[ed.v] += w; else if(w < 0) fedIn[ed.u] -= w; }
   for(let i=0;i<net.n;i++){ const nid = net.name[i], p = netPAt(s, nid), h = netHAt(s, nid);
-    const m = mBy ? mBy[nid] : undefined, mk = m === undefined ? -1 : m;
+    const m = (mBy && mBy.has[i]) ? mBy.v[i] : undefined, mk = m === undefined ? -1 : m;
     if(p === F.lp[i] && h === F.lh[i] && mk === F.lm[i]) continue;
     F.lp[i] = p; F.lh[i] = h; F.lm[i] = mk;
     mixState(sat[i], p, h, mx);
@@ -1286,7 +1296,7 @@ const KIND_TEMP = {hot: NT_HOT, surge: NT_HOT, cold: NT_COLD, hpi: NT_COLD};
 const netSatOf = nid => satOfCirc(circOfNode(nid));
 /* a node the field has not reached sits at its STRUCTURAL phase: the loop mean on the core's circuit, else saturated steam in a steam space and saturated liquid anywhere else */
 function netHAt(s, nid){
-  const h = s.hBy && s.hBy[nid];
+  const h = pfAt(s.hBy, nid);
   if(h !== undefined) return h;
   const c = netSatOf(nid);
   { const ci = circOfNode(nid); if(circAuthored(ci)) return hOfT(c, TavgOf(s, ci)); }
@@ -1315,7 +1325,7 @@ function netRhoAt(s, nid){
 }
 // kJ of mechanical work this node's holdup can do letting down to containment
 function netWorkAt(s, nid){
-  const c = netSatOf(nid), m = (s.mBy && s.mBy[nid]) || 0;
+  const c = netSatOf(nid), m = pfAt(s.mBy, nid) || 0;
   return m > 0 ? m*expWorkOf(c, netPAt(s,nid), netHAt(s,nid), P ? P.Pcont : COND_P0) : 0;
 }
 
@@ -1342,9 +1352,9 @@ const staticH = (net, ed, s) => {
 };
 /* a pool's level is the water it HOLDS against the volume it has. At the condenser's vacuum a saturated node's void fraction is a knife edge in enthalpy - 0.17 kJ/kg spans the whole range - and the mass is the state. */
 const poolLvlOf = (net, s, i) => { const nm = net.name[i];
-  if(!s || !s.mBy || s.mBy[nm] === undefined) return undefined;
+  if(!s || !s.mBy || !s.mBy.has[i]) return undefined;
   const c = satOfCirc(circOfNode(nm)), rf = rhofOf(c, satT(c, netPAt(s, nm)));
-  return clamp(100*s.mBy[nm]/Math.max(net.vol[i]*rf, 1e-9), 0, 100); };
+  return clamp(100*s.mBy.v[i]/Math.max(net.vol[i]*rf, 1e-9), 0, 100); };
 /* MPa of pool standing over the drain in a vessel's floor: the machine's own drawn height, weighed as liquid, at full commissioning fill and falling away with the pool as it drains. No node elevation can carry it - the surface moves. */
 const poolH = (net, s, i) => { const nm = net.name[i], lvl = poolLvlOf(net, s, i);
   if(lvl === undefined) return 0;
@@ -2095,7 +2105,7 @@ function netStore(net, s){
     const nid = net.name[i];
     /* floored at the run-dry line: a spent node with no diagonal is a degenerate row, and a spent node still has a pressure */
     const mEos = Math.max(net.vol[i]*net.F.rho[i], DRY_MIN_KG);
-    const m = (s && s.mBy && s.mBy[nid] !== undefined) ? s.mBy[nid] : mEos;
+    const m = (s && s.mBy && s.mBy.has[i]) ? s.mBy.v[i] : mEos;
     const V = net.vol[i], hN = netHAt(s, nid);
     const pF = net.F.p[i], rF = net.F.rho[i], bF = net.F.b[i];
     let p0, C;
@@ -2391,11 +2401,11 @@ function netReadP(sol, byP){
       if(store && store.pin[i]) free[c] = 0;
       if(b[i] < lo[c]) lo[c] = b[i]; }
     for(let i=0;i<net.n;i++){
-      if(deg && deg[i] && !touch[i] && fixed[i]===undefined){ pfDel(byP, net.nodes[i]); continue; }
+      if(deg && deg[i] && !touch[i] && fixed[i]===undefined){ byP.has[i] = 0; continue; }
       const c = ref.of[i];
       /* a piece nothing pins is FLOATED so its lowest node sits at the ship's pressure; a shift cancels out of every flow, and a piece with no water in it is not floated at all */
       const off = (free[c] && wet[c] && fixed[i]===undefined && isFinite(lo[c])) ? netPcont(net, s, i) - lo[c] : 0;
-      pfSet(byP, net.nodes[i], b[i] + off);
+      byP.v[i] = b[i] + off; byP.has[i] = 1;
     } }
 }
 
@@ -2526,7 +2536,7 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
   { const ci = nodeGraph().coreCirc;
     if(ci >= 0 && !(over && over.hBy)){
       const d = loopDesignH(ci), hf = satH(d.c, d.c.p0), hot = hotReach();
-      const hBy = s.hBy = Object.assign({}, s.hBy);
+      const hBy = s.hBy = pfNew(net);
       const holdNode = {};
       for(const id in net.tankNode) if(D.tanks[id] && D.tanks[id].hold) holdNode[net.tankNode[id]] = 1;
       for(let i=0;i<net.n;i++){
@@ -2534,11 +2544,12 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
         const nid = net.name[i];
         if(circOfNode(coreFold(nid)) !== ci) continue;
         const rk = runKeyOfNode(nid);
-        hBy[nid] = rk ? (hot.runs[rk] ? d.hOut : d.hIn)
+        hBy.v[i] = rk ? (hot.runs[rk] ? d.hOut : d.hIn)
                  : net.coreSet.has(i) ? d.hOut
                  : net.tankIdByNode[i] !== undefined ? hf
                  : hot.nodes[nid] ? d.hOut
-                 : d.hIn; } } }
+                 : d.hIn;
+        hBy.has[i] = 1; } } }
   /* a standby train is STOPPED, off the same pumpDem0() resetPlant() seeds s.flowBy from; refOpen is the wide-open pass and wants every train turning */
   if(!s.refOpen && !s.flowBy)
     s.flowBy = Object.fromEntries(pumpIds().map(id => [id, pumpDem0(id)]));
@@ -2549,7 +2560,7 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
         let sol, prev = null, pass = 0;
         for(; pass<REF_PASSES; pass++){
           sol = netSolve(net, s);
-          const pf = pfNew(); netReadP(sol, pf); s.pBy = pf;
+          const pf = pfNew(net); netReadP(sol, pf); s.pBy = pf;
           const q = sol.q; let scale = 0, move = 0;
           for(let e=0;e<q.length;e++) scale = Math.max(scale, Math.abs(q[e]));
           if(prev !== null) for(let e=0;e<q.length;e++) move = Math.max(move, Math.abs(q[e]-prev[e]));
@@ -2599,7 +2610,7 @@ function netNatCirc(net, s, natLoop){
     Object.assign(natLoop, net.natLoop); return; }
   const sNat = Object.create(s); sNat.flowScale = 0; sNat.pBy = net.natPBy || s.pBy;
   /* the walk's field and its w backup are per-net scratch: netReadP writes or deletes every node, so a reused object ends where a fresh one would, and eight passes built eight 267-key dictionaries a walk */
-  const pf0 = net.natScr || (net.natScr = pfNew());
+  const pf0 = net.natScr || (net.natScr = pfNew(net));
   const w = net.natW || (net.natW = new Array(net.edges.length));
   for(let e=0;e<net.edges.length;e++) w[e] = net.edges[e].w;
   const was = netStoreHeld; netHoldStore(true);
@@ -2625,10 +2636,14 @@ const netStCopy = v => {
   return o;
 };
 /* the solver's own march, none of it on S: ed.w is what the next solve linearises friction against, net.pc's LABELS fix the order every reader accumulates in, and the natural-circulation answer is held between recomputes */
+/* natPBy is a {v,has} pair of typed arrays (pfNew()), never a plain number-keyed object any more:
+   Object.assign({}, ...) would only copy the two array REFERENCES, and net.natScr keeps writing
+   into those same arrays every solve - a "saved" state would silently drift under the caller's feet */
+const pfClone = f => f ? { v: Float64Array.from(f.v), has: Uint8Array.from(f.has) } : null;
 function netStateSave(net){
   if(!net) return null;
   return { w:net.edges.map(ed => ed.w), pc:netStCopy(net.pc), pcSig:net.pcSig, natTick:net.natTick||0,
-           natPBy:net.natPBy ? Object.assign({}, net.natPBy) : null,
+           natPBy:pfClone(net.natPBy),
            natLoop:net.natLoop ? Object.assign({}, net.natLoop) : null };
 }
 // false when the node set moved under it: a state saved on another graph does not fit
@@ -2637,7 +2652,7 @@ function netStateLoad(net, st){
   for(let e=0;e<net.edges.length;e++) net.edges[e].w = st.w[e];
   net.pc = netStCopy(st.pc); net.pcSig = st.pcSig;
   net.natTick = st.natTick;
-  net.natPBy  = st.natPBy  ? Object.assign({}, st.natPBy)  : null;
+  net.natPBy  = pfClone(st.natPBy);
   net.natLoop = st.natLoop ? Object.assign({}, st.natLoop) : null;
   return true;
 }
