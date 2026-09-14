@@ -1022,13 +1022,13 @@ function massSeed(s){
 }
 /* kW into one vessel's node, one tick old - the solve has to run before there are flows to carry it. */
 const coreHeatKW = id => (HEATBAL.heatBy[id]||0)*P.cores[id].rated*1000;
-function advectWetOf(net, nid){ const i = net ? net.index[nid] : undefined;
-  return (i !== undefined && net.F && net.F.wet) ? net.F.wet[i] : 1; }
-function advectAdd(src, net, nid, q){ if(q) src[nid] = (src[nid]||0) + q*advectWetOf(net, nid); }
+function advectWetAt(net, i){ return (i !== undefined && net.F && net.F.wet) ? net.F.wet[i] : 1; }
+function advectAdd(src, net, nid, q){ if(!q) return; const i = net.index[nid];
+  if(i === undefined) return; src[i] += q*advectWetAt(net, i); }
 function advectSrc(s, dt, runFlow){
-  const src = {};
   /* A machine hands its heat to the water that is there, and F.wet is the ONE dryness answer: a second ratio off the EOS density read a full condenser as half spent every third tick, and the heat it dropped was still credited to the circulating water. */
   const net = P.net;
+  const src = net ? scratch(net, "advectSrc", net.n, Float64Array, 0) : {};
   for(const id of coreIds()){ advectAdd(src, net, coreFold(id), coreHeatKW(id)); advectAdd(src, net, coreFold(id), -skinQOf(s,id));
     // what fuel out of its pin handed the water last tick (coreStep's o.fci)
     advectAdd(src, net, coreFold(id), (s.coreBy && s.coreBy[id] && s.coreBy[id].fci) || 0); }
@@ -1079,7 +1079,7 @@ function advectSrc(s, dt, runFlow){
       const cap = dt > 0 ? mf*Math.abs(hOfT(netSatOf(nm), s.metalT.v[i]) - netHAt(s, nm))/dt : Infinity;
       const q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap);
       // not scaled by wetness: the cap is already the node's own mass, and s.metalT reads metalQ back
-      metalQ[nm] = q; src[nm] = (src[nm]||0) + q; } }
+      metalQ[nm] = q; src[i] += q; } }
   return src;
 }
 const metalQ = {};
@@ -1315,8 +1315,8 @@ function advectStep(s, dt, runFlow, edgeKg){  const net = P && P.net;
     inH[to] += m*hd;
     inM[to] += m;
     // what the steam took over this node's own mean, charged back to it
-    if(gas) src[fn] = (src[fn]||0) - m*fg*(hg - hFrom);
-    if(liq) src[fn] = (src[fn]||0) - m*fl*(hf - hFrom);
+    if(gas) src[from] -= m*fg*(hg - hFrom);
+    if(liq) src[from] -= m*fl*(hf - hFrom);
     if(b){ inB[to] += m*b.v[from];
       const cFrom = cH.v[from];
       // the hydrogen is in the vapour, so a water outlet hands over none of it
@@ -1372,7 +1372,7 @@ function advectStep(s, dt, runFlow, edgeKg){  const net = P && P.net;
   // a pressurizer's bubble is a seeded fact: at a rest point the surge flow is zero, and the settle would collapse it
   const keep = netStoreHeld ? holdNodeSet() : null;
   for(let i=0;i<net.n;i++){
-    const nm0 = net.name[i], q = netStoreHeld ? 0 : (src[nm0] || 0);
+    const nm0 = net.name[i], q = netStoreHeld ? 0 : src[i];
     if((!(inM[i] > 1e-9) && !q) || anch[nm0] !== undefined || (keep && keep.has(nm0))) continue;
     const mass = Math.max(mBy.has[i] ? mBy.v[i] : net.vol[i]*netRhoAt(s, nm0),
                           DRY_MIN_KG);
@@ -1381,9 +1381,8 @@ function advectStep(s, dt, runFlow, edgeKg){  const net = P && P.net;
     /* A settle pass relaxes every node alike: it is a steady-state sweep, not a march. */
     let f = netStoreHeld ? SETTLE_RELAX : inM[i]*dt/mass;
     if(f >= 1){ f = 1; advectClamped++; }
-    const nm = nm0;
     /* The control volume's steady state written down directly, so a machine's heat lands AT the machine. */
-    const target = (inH[i] + (src[nm]||0))/inM[i];
+    const target = (inH[i] + src[i])/inM[i];
     h.v[i] += f*(target - h.v[i]);
     if(b){ b.v[i] += f*(inB[i]/inM[i] - b.v[i]); cH.v[i] += f*(inC[i]/inM[i] - cH.v[i]); }
   }
