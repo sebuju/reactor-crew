@@ -153,26 +153,26 @@ const aliasRate=(key,rate,per)=>aliasStep(key,rate*frameDt(),per);
 const frameDt=()=>fxDt();
 // view caches, never state: refilled (not rebuilt) once a frame off one solve, so no reader holds a stale object
 const pipeDrop={};
-const pipeP={};
+let pipeP=null;
 const pipeKg={};
 // nothing has been solved yet: a reader states no flow at all rather than the zero the empty cache reads as
 let pipeFieldOn=false;
 function pipeFieldRefresh(L){
   pipeFieldOn=false;
   for(const k in pipeDrop) delete pipeDrop[k];
-  for(const k in pipeP) delete pipeP[k];
   for(const k in pipeKg) delete pipeKg[k];
   // the reading places are chosen before anything draws, so the `under` seam can keep off them
   pipeAnchorTick();
   pipeStackTick();
   pipeAnchors(pipeRuns(L));
-  if(!L) return;
+  if(!L || !P || !P.net) return;
+  pipeP = pfNew(P.net);
   netField(L, pipeDrop, pipeP, pipeKg);
   pipeFieldOn=true;
 }
 // null for a TAP-ENDED run, so a caller draws nothing rather than a zero; never floored at zero
 function pipeRunP(r,L){
-  const p=pipeP[runNodeOf(r.key)];
+  const p=nodeP(pipeP,runNodeOf(r.key));
   return p===undefined ? null : p;
 }
 // a run is a steam line because BOTH its ends are steam SPACES, never because its kind is spelt "steam"
