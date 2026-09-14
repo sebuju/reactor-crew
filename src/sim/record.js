@@ -208,8 +208,10 @@ function recHead(){
     seed     : S ? S.seed : 0,
   });
 }
-/* bumped whenever a node name or the set of them changes: s.mBy/s.hBy are keyed by name and designSig() cannot see a graph change */
-const NODE_SIG = "shell-node/1";
+/* bumped whenever a node name or the set of them changes, or the field's own container does: s.mBy/s.hBy/
+   s.pBy/s.bBy/s.h2By/s.metalT are index-addressed off net.index (pfNew(), pipenet.js) and designSig() cannot
+   see a graph change */
+const NODE_SIG = "shell-node/2";
 
 /* returns whether the head rebuilt into the same reactor, and the caller must ask */
 function recApplyHead(h){
