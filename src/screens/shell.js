@@ -230,6 +230,7 @@ function shellInitTooltip(){
   // nothing is hoverable while a prewarm is up: the box would stand on the bar
   const show=el=>{ if(prewarmBusy()) return; cur=el; curRail=railOf(el); curGroup=el.closest(".cr-group"); owner="html";
     tip.innerHTML=`<b>${el.dataset.tipTitle||""}</b><p>${el.dataset.tipBody||""}</p>`;
+    if(bar) bar.free();
     bar=null;
     KIT.show(tip,true);
     const b=el.getBoundingClientRect();
@@ -239,7 +240,8 @@ function shellInitTooltip(){
     if(a) placeAnchor(a);
     else if(curRail) place(curGroup?curGroup.getBoundingClientRect().top:b.top+b.height/2, !!curGroup);
     else placeBy(b); };
-  const hide=()=>{ cur=null; curRail=null; curGroup=null; owner=null; cvKey=null; bar=null; KIT.show(tip,false); };
+  const hide=()=>{ cur=null; curRail=null; curGroup=null; owner=null; cvKey=null;
+    if(bar) bar.free(); bar=null; KIT.show(tip,false); };
   tipHide=hide;
   MOUSE.doc({
     over(e){ const el=e.target.closest("[data-tip-title]");
@@ -300,6 +302,7 @@ function shellInitTooltip(){
     }
     tip.appendChild(head);
     bodyEl=KIT.el("p"); tip.appendChild(bodyEl);
+    if(bar) bar.free();
     bar = g ? KIT.band({lo:g.lo,hi:g.hi,zones:g.zones,dp:g.dp,lim:g.lim,v:g.v}) : null;
     if(bar) tip.appendChild(bar.el);
   };

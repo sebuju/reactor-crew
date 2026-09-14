@@ -82,6 +82,7 @@ function inspCollapse(h,on){
   h.well.el.classList.toggle("folded",h.folded);
 }
 function inspClose(h){
+  if(h.body._h) for(const H of h.body._h) if(H.barKind==="band") H.bar.free();
   const host=h.well.el.parentNode;
   if(host){ host.removeChild(h.well.el); const i=host._wins.indexOf(h); if(i>=0) host._wins.splice(i,1); }
   // shutting the window is letting the thing go; still picked, the peek opens it again next frame
@@ -191,6 +192,7 @@ function inspLeaders(host){
 function inspAim(h,id){
   const p=partOf(id); if(!p) return;
   h.p=p; h.id=id;
+  if(h.body._h) for(const H of h.body._h) if(H.barKind==="band") H.bar.free();
   h.body.innerHTML=""; h.body._sig=null; h.body._h=null; h.body._viz=null; h.body._cols=0;
   h.ctl=null; h.cells=null; h.nRows=0; h.ctlG=null;
   if(h.head){ h.head.remove(); h.head=null; }
