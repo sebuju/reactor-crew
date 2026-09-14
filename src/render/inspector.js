@@ -116,7 +116,10 @@ function fieldRowsSync(container,rows){
     const H=h[i];
     if(H.barKind==="band" && !limSame(rows[i][4].lim,H.lim)){ rebuild=true; break; }
   }
-  if(rebuild){ container.innerHTML=""; h=container._h=fieldRowsBuild(container,rows); }
+  if(rebuild){
+    if(h) for(const H of h) if(H.barKind==="band") H.bar.free();
+    container.innerHTML=""; h=container._h=fieldRowsBuild(container,rows);
+  }
   for(let i=0;i<rows.length;i++){
     const H=h[i], row=rows[i];
     if(!H||row.sec||row.viz) continue;

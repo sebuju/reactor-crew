@@ -505,7 +505,10 @@ function crCautSync(h){
   h.keys=keys;
   const offer=on.some(v=>!v);
   if(h.offer!==offer){ h.clr.classList.toggle("off",!offer); h.offer=offer; }
-  if(!rows.length){ h.body.innerHTML=""; h.body._h=null; return; }
+  if(!rows.length){
+    if(h.body._h) for(const H of h.body._h) if(H.barKind==="band") H.bar.free();
+    h.body.innerHTML=""; h.body._h=null; return;
+  }
   fieldRowsSync(h.body,rows);
 }
 function crRailAlert(panels,red){
