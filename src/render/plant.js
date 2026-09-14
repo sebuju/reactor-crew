@@ -278,7 +278,7 @@ function symAt(p,x,y,w,h,ink,L){
       // boiling dry, on the same 25% the SG LEVEL band calls LOW
       fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",sgLvl(L,id)<SG_DRY?1-wet*.7:0),1.5);
       // on THIS generator's own solved leak, so it slows as the primary comes down to the secondary
-      const sgtrQ = (L.sgtrBy && L.sgtrBy["sgtr:"+id]) || 0;
+      const sgtrQ = (L.sgtrBy && L.sgtrBy[sgtrKeyOf(id)]) || 0;
       fxJet(cx,Y+Hh*.42,W*.45,fxEase(id+":sgtr",clamp(sgtrQ/SGTR_RATE,0,1)),C.red,0,-1,53);
       // what the hole is actually passing, on the same scale step() gives it
       if(burst) fxSteam(cx,Y+8,W*.75,

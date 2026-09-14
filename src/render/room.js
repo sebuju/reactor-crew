@@ -858,7 +858,7 @@ function floodLayer(data,L){
     if(!(W[i]>0)) continue;
     // off the opening's whole solved rate, liquid and flash: a drained tear bubbles nothing
     let rate=0;
-    for(const key of pipeCellRuns(bx,by)) rate=Math.max(rate, (L.spillBy&&L.spillBy["break:"+key])||0);
+    for(const key of pipeCellRuns(bx,by)) rate=Math.max(rate, (L.spillBy&&L.spillBy[breakKeyOf(key)])||0);
     const br=grect(bx,by,1,1), bt=Math.max(br.y, liqY(liqSurf(q,G,i)));
     if(!(bt < br.y+br.h)) continue;
     fxCellSpace(br.x, bt, ()=>

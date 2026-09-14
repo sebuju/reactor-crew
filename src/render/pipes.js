@@ -768,7 +768,7 @@ function pipeBreaks(L){
     const x=+k.slice(0,i), y=+k.slice(i+1);
     // the rate is the connection's, because that is what the solve prices, but the plume is drawn AT THE CELL
     let q=0;
-    for(const key of pipeCellRuns(x,y)) q=Math.max(q, breakPlume(L, "break:"+key, y*GW+x));
+    for(const key of pipeCellRuns(x,y)) q=Math.max(q, breakPlume(L, breakKeyOf(key), y*GW+x));
     if(!(q>0)) continue;
     const [px,py]=cellPos(x,y);
     fxCellSpace(px, py, ()=>
@@ -780,7 +780,7 @@ function pipeBreaks(L){
     const pid=id.slice(5), c=portCell(pid), at=c ? c[1]*GW+c[0] : -1;
     let q=0;
     for(const r of pipeNetwork()) if(r.pa===pid||r.pb===pid)
-      q=Math.max(q, breakPlume(L, "break:"+r.key, at));
+      q=Math.max(q, breakPlume(L, breakKeyOf(r.key), at));
     if(!(q>0)) continue;
     const [px,py]=portPos(pid);
     fxCellSpace(px, py, ()=>
