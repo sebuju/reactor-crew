@@ -1926,10 +1926,10 @@ function seedPower(K, cs, n0){
 }
 /* s.coreBy[id] is one vessel's state, P.cores[id] its constants; coreAgg() writes the sums, the maxima and the first vessel's handles back onto S every tick */
 const coreState = (s,id) => s.coreBy && s.coreBy[id];
-const coreEach  = (s,fn) => { for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) fn(s.coreBy[id], P.cores[id], id); };
+const coreEach  = (s,fn,a,b) => { for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) fn(s.coreBy[id], P.cores[id], id, a, b); };
 /* an order with no id is broadcast; a vessel this design has no bag for is a no-op, exactly as ACT.pumpDem is */
-const coreOn    = (s,id,fn) => { if(id===undefined) return coreEach(s,fn);
-  const cs=coreState(s,id); if(cs) fn(cs, P.cores[id], id); };
+const coreOn    = (s,id,fn,a,b) => { if(id===undefined) return coreEach(s,fn,a,b);
+  const cs=coreState(s,id); if(cs) fn(cs, P.cores[id], id, a, b); };
 /* one vessel's state over the plant's, with its circuit's own pressure, mean, level, inventory and margin, so a predicate written against S asks that vessel by being handed this */
 /* One view per vessel, refilled. A fresh Object.create(s) per call inserts every field into a new
    dictionary and measured 6.3 kB a call. Every optional field is written unconditionally at the value
@@ -2356,7 +2356,8 @@ function plantSettle(){
         o=coreStep(K,cs,0,cs.heat,satT(K.sat,cs.pCore),0,K.flowK*cs.flowNet,Math.max(cs.flowNet,CORE_DT_QMIN),coreInH(S,id));
         for(let k=0;k<XNN;k++){ cs.nV[k]=cs.nVt[k]; cs.nTc[k]=cs.nTct[k]; } }
       cs.voidTh = cs.vf = cs.vNode;        // the rest void K.vf0 is read off, not a 0 the first tick overwrites
-      if(id===primaryCore()){ o0=o; K0=K; } });
+      /* coreStep()'s return is a reused record, so what outlives this pass is copied out, never aliased */
+      if(id===primaryCore()){ o0=Object.assign({}, o); K0=K; } });
     S.boron = S.boron0 = o0 ? -(K0.excess+o0.rod+o0.tip+o0.dop+o0.mod+o0.exp+o0.xe+o0.vd) : 0;
     coreAgg(S); }
   S.boronDem = S.boron;                 // start on demand, or it walks off commissioning
@@ -2549,24 +2550,26 @@ function plantSettle(){
   coreEach(S,(cs,K,id)=>{ if(K.invKg0 > 0) S.invBy[circKey(K.circ)] = 100*invNodesKg(S, id)/K.invKg0; });
 }
 /* the one door for the built-in law and a wired ROD DRIVE sink; the increment is capped at what the drive delivers in a tick, and split, the same error reaches every bank left on AUTO, deliberately undivided */
+function rodPinned(s,cs,K,want,got){
+  if(Math.abs(want-got)>1e-9 && Math.abs(TavgOf(s,K.circ)-tProg(s,K,cs))>0.5) cs.rodBand=true;
+}
 function rodApply(s,cs,K,step,dt){
   const rodErr = clamp(step, -rodRate(K)*dt, rodRate(K)*dt);
   const rodLo=clamp(s.arLo,0,1), rodHi=clamp(Math.max(s.arHi,s.arLo),0,1);
   /* set where the clamp actually bites, never inferred from the position: a bank parked on the band edge with T-avg on programme is obeying */
   cs.rodBand=false;
-  const pinned=(want,got)=>{
-    if(Math.abs(want-got)>1e-9 && Math.abs(TavgOf(s,K.circ)-tProg(s,K,cs))>0.5) cs.rodBand=true; };
   if(!cs.split && bankAutoLive(cs,0)){                // ganged: one controller, one bank
     const want=cs.rodDem+rodErr;
     cs.rodDem=clamp(want, rodLo, rodHi);
-    pinned(want,cs.rodDem);
+    rodPinned(s,cs,K,want,cs.rodDem);
   } else if(cs.split && !cs.reGang){
     for(let b=0;b<K.NB;b++)
       if(bankAutoLive(cs,b)){ const want=cs.rodZDem[b]+rodErr;
         cs.rodZDem[b]=clamp(want, rodLo, rodHi);
-        pinned(want,cs.rodZDem[b]); }
+        rodPinned(s,cs,K,want,cs.rodZDem[b]); }
   }
 }
+function rodApplyOn(cs,K,id,v,dt){ rodApply(S,cs,K,v,dt); }
 function step(dt){
   netMarching(true);
   try { stepMarch(dt); } finally { netMarching(false); }
@@ -2590,21 +2593,9 @@ function wallLotGet(){
   wallLot=out;
   return out;
 }
-function stepMarch(dt){
-  __apS();
-  const s=S; s.t+=dt; s.tick++;
-  if(!s.massOut) s.massOut={};
-  const ledgM0 = ledgerKg(s), ledgO0 = ledgerOut(s);
-  /* settle the node graph for this tick; the hold is dropped on the last line of this function, so it never outlives the tick */
-  laySettle();
-  /* the player's automation reads last tick's solved plant and writes this tick's demands - see ctl.js */
-  ctlPass(s,dt);
-  /* the feed regulating valve is an actuator like every other: the controller writes demand and the motor gets there at VALVE_RATE. Teleported, it is a step change in a line that has mass, which is the one thing a real MOV cannot do. */
-  for(const id in s.fregBy){ const dv=(s.fregDemBy[id]??s.fregBy[id])-s.fregBy[id];
-    if(dv) s.fregBy[id]+=Math.sign(dv)*Math.min(Math.abs(dv),VALVE_RATE*dt); }
-
-  coreEach(s,(cs,K,id)=>{
-  if(!sinkDriver(s,"rodStep",id)) cs.rodBand=false;   // nobody is on the drive, so nobody is out of authority
+// rod motion and reganging, one core
+function coreRodStep(cs, K, id, dt){
+  if(!sinkDriver(S,"rodStep",id)) cs.rodBand=false;   // nobody is on the drive, so nobody is out of authority
 
   /* the banks are driven together, never teleported; the mode stays SPLIT until they have all arrived */
   if(cs.reGang){
@@ -2640,7 +2631,101 @@ function stepMarch(dt){
     /* demand is the master's own command while reganging: deriving it back off the banks erases the order the moment it is given */
     if(!cs.reGang){ let d=0; for(let b=0;b<K.NB;b++) d+=cs.rodZDem[b]; cs.rodDem=d/K.NB; }
   }
-  });
+}
+// decay heat pot, one core
+function coreDecayStep(cs, dt){
+  let d=0;
+  for(let i=0;i<DEC_A.length;i++){
+    cs.dec[i] += DEC_L[i]*(DEC_A[i]*cs.n - cs.dec[i])*dt;
+    d += cs.dec[i];
+  }
+  cs.decay = d; cs.heat = cs.n*PROMPT_F + cs.decay;
+}
+function coreFlowNetStep(cs, K, id, coreFN, netOut, pumpK){ coreFN[id] = coreFlowNet(K, id, netOut, pumpK); }
+function coreInvByStep(cs, K, id){ if(K.invKg0 > 0) S.invBy[circKey(K.circ)] = 100*invNodesKg(S, id)/K.invKg0; }
+function coreHeatBalStep(cs, K, id){ HEATBAL.heatBy[id]=cs.heat; }
+/* a readout, like s.sc and s.heat: on S because the panel prints it and a snapshot must carry what the panel was showing */
+function coreSetPCore(cs, id, pAtFn){ cs.pCore = pAtFn(id); }
+function coreFatigueStep(cs, dt, inj){ cs.fatigue += 0.35*dt*clamp(inj/1.6,0,2); }
+/* asked at each vessel, not at the pressurizer: what bursts a vessel is the pressure inside it */
+function coreBurstStep(cs, K, id){
+  const burst = burstPOf(K,cs);
+  if(K.tube){ tubeStep(S,cs,K,id,burst); return; }
+  if(!cs.breach && cs.pCore > burst){ cs.breach=true; cs.trip="VESSEL RUPTURE"; }
+}
+/* the core boils at ITS OWN pressure, not the pressurizer's; s.vf, s.Tf, s.X and s.I below are whole-core aggregates of a field */
+function coreVesselStep(cs, K, id, dt, coreFN){
+  const sat = satT(K.sat, cs.pCore), nid = coreFold(id);
+  /* the vessel's own node says how short of water it is: (1 - m/m0)/(1 - rvl), never the node's own quality, which a boiling core's vessel carries by design */
+  const m = S.mBy[nid];
+  // a gas has no liquid to be short of: its mass follows p/T and a warm vessel is not a void
+  const vLeak = (!(K.coreKg0 > 0) || m === undefined || (K.sat.tc && K.Tref > K.sat.tc)) ? 0 :
+    Math.max(0, (1 - m/K.coreKg0)/Math.max(1 - satRvl(K.sat, cs.pCore), 1e-3));
+  // this tick's flux past the pin, and LAST tick's share for the rise, exactly as the plant figures were ordered
+  const nod = coreStep(K,cs,dt,cs.heat,sat,vLeak,K.flowK*coreFN[id],Math.max(cs.flowNet,CORE_DT_QMIN),coreInH(S,id));
+  cs.fci = nod.fci;
+  /* the hydrogen the clad made arrives at the vessel's own node as a concentration, and rides the transport from then on */
+  if(nod.h2 > 0 && S.h2By && P.net && P.net.index[nid] !== undefined){
+    const i = P.net.index[nid];
+    const m2 = S.mBy[nid] !== undefined ? S.mBy[nid] : P.net.vol[i]*netRhoAt(S, nid);
+    if(m2 > DRY_MIN_KG){ S.h2By[nid] = (S.h2By[nid]||0) + nod.h2/m2; S.h2 = h2Total(S); } }
+  cs.voidTh = cs.vNode;
+  /* the node fraction stops at 1 and vLeak runs past it on purpose, because s.vf says how far past empty the loop is */
+  cs.vf = clamp(Math.max(vLeak, cs.voidTh), 0, 1.6);
+  { const p=cs.parts;
+    p.rod=nod.rod; p.dop=nod.dop; p.mod=nod.mod; p.exp=nod.exp; p.xe=nod.xe; p.vd=nod.vd;
+    p.tip=nod.tip; p.dis=nod.dis; p.bor=S.boron;
+    cs.rho=K.excess+p.rod+p.dop+p.mod+p.exp+p.xe+p.bor+p.vd+p.tip+p.dis; }
+}
+function coreFlowNetSet(cs, K, id, coreFN){ cs.flowNet = coreFN[id]; }
+/* floored at 1e-9 rather than a bare 0: the nodal core divides by the power it is given, and an exact zero NaNs every pellet temperature */
+function coreKineticsStep(cs, K, dt){
+  const h=dt/4, rk=cs.rho*1e-5;
+  for(let k=0;k<4;k++){
+    let num=0,den=0;
+    for(let i=0;i<6;i++){ const dd=1+h*K.lam[i];
+      num+=K.lam[i]*cs.C[i]/dd; den+=K.lam[i]*h*K.bet[i]/K.LAM/dd; }
+    const a=1-h*(rk-K.BETA)/K.LAM-h*den;
+    let n=a>1e-6?(cs.n+h*num+h*2e-9)/a:cs.n*12;
+    if(!isFinite(n)||n<0) n=cs.n*12;
+    cs.n=Math.min(n,60);
+    for(let i=0;i<6;i++) cs.C[i]=(cs.C[i]+h*K.bet[i]/K.LAM*cs.n)/(1+h*K.lam[i]);
+  }
+  cs.n=Math.max(cs.n,1e-9);
+
+  /* DNBR is local, so the vessel's margin is the minimum over the field and nothing else */
+  cs.dnbr=cs.dnbrMin;
+}
+/* what a hurt core COSTS; the damage itself was settled node by node in coreStep(), and every term here is continuous in how much of the core is hurt */
+function coreMeltStep(cs, K, id, dt){
+  if(!cs.melt && cs.meltFrac>=MELT_LATCH){ cs.melt=true; cs.trip="CORE MELT"; }
+  if(cs.meltFrac>0 && !P.catcher){
+    /* the only mass path on the plant that is not an edge, taken off the core's own node so the field and the ledger see the same kilogram - and it may only take what is there */
+    { const want = MELT_INV*cs.meltFrac*dt/100*loopKg(), nm = coreFold(id);
+      const have = S.mBy[nm];
+      const kg = have === undefined ? 0 : Math.min(want, Math.max(have, 0));
+      if(have !== undefined) S.mBy[nm] = have - kg;
+      book(S,"melt", kg); }
+    cs.fatigue=Math.min(100,cs.fatigue+MELT_FAT*cs.meltFrac*dt); }
+  { const st=fuelStages(cs); let rel=0;
+    for(let q=0;q<FAIL.length;q++) rel+=st[q]*RELK[FAIL[q].k];
+    /* held back by the region this vessel's fuel stands in, read off the LIVE fill, so a wall with a cell shot out stops holding the instant it opens */
+    if(rel>0) S.release=Math.min(100,S.release+rel*contRelPart(S,partOf(id))*P.dose*dt); }
+}
+function stepMarch(dt){
+  __apS();
+  const s=S; s.t+=dt; s.tick++;
+  if(!s.massOut) s.massOut={};
+  const ledgM0 = ledgerKg(s), ledgO0 = ledgerOut(s);
+  /* settle the node graph for this tick; the hold is dropped on the last line of this function, so it never outlives the tick */
+  laySettle();
+  /* the player's automation reads last tick's solved plant and writes this tick's demands - see ctl.js */
+  ctlPass(s,dt);
+  /* the feed regulating valve is an actuator like every other: the controller writes demand and the motor gets there at VALVE_RATE. Teleported, it is a step change in a line that has mass, which is the one thing a real MOV cannot do. */
+  for(const id in s.fregBy){ const dv=(s.fregDemBy[id]??s.fregBy[id])-s.fregBy[id];
+    if(dv) s.fregBy[id]+=Math.sign(dv)*Math.min(Math.abs(dv),VALVE_RATE*dt); }
+
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreRodStep(s.coreBy[id], P.cores[id], id, dt);
 
   /* boron is an actuator: the slider writes demand, the loop gets there at the rate a charging pump can push */
   { const db=s.boronDem-s.boron, rb=(db<0?BOR_IN:BOR_OUT)*dt;
@@ -2657,12 +2742,7 @@ function stepMarch(dt){
 
   s.load += (s.loadDem-s.load)*Math.min(dt/LOAD_TAU,1);
 
-  coreEach(s,cs=>{ let d=0;
-    for(let i=0;i<DEC_A.length;i++){
-      cs.dec[i] += DEC_L[i]*(DEC_A[i]*cs.n - cs.dec[i])*dt;
-      d += cs.dec[i];
-    }
-    cs.decay = d; cs.heat = cs.n*PROMPT_F + cs.decay; });
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreDecayStep(s.coreBy[id], dt);
   coreAgg(s);
   const heat = s.n*PROMPT_F + s.decay;
 
@@ -2678,7 +2758,8 @@ function stepMarch(dt){
   const pumpK = netFlowK(s, runFlow, pField, netOut);
   __apE("netFlowK");
   __apS();
-  const coreFN = P.coreFN || (P.coreFN = {}); coreEach(s,(cs,K,id)=>{ coreFN[id] = coreFlowNet(K, id, netOut, pumpK); });
+  const coreFN = P.coreFN || (P.coreFN = {});
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFlowNetStep(s.coreBy[id], P.cores[id], id, coreFN, netOut, pumpK);
   /* what the circulating water is doing, off this tick's own solve; the condenser's balance reads it through cwKOf() */
   { for(const id in s.cwFlowBy) if(!partOf(id)) delete s.cwFlowBy[id];
     for(const id of condIds()) s.cwFlowBy[id] = cwFlowOf(runFlow,id); }
@@ -2712,7 +2793,7 @@ function stepMarch(dt){
   /* subcooling at a place, on the circuit's own curve (satOfCirc(), pipenet.js) and never the primary's */
   const scAt = n => tsatSec(pAt(n), circOfNode(coreFold(n))) - netTempAt(s, n);
   /* a readout, like s.sc and s.heat: on S because the panel prints it and a snapshot must carry what the panel was showing */
-  coreEach(s,(cs,K,id)=>{ cs.pCore = pAt(id); });
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreSetPCore(s.coreBy[id], id, pAt);
   s.pCore = pAt(primaryCore());
   /* after the pressures settle and before the SGTR, the feed train and the relief valves read a temperature anywhere */
   tickPf = s.pBy; s.pBy = pField;
@@ -2775,7 +2856,7 @@ function stepMarch(dt){
   /* s.inv is a read: every way water leaves is an edge, already booked by the transport pass above, and nothing downstream writes it */
   if(P.invKg0 > 0) s.inv = 100*invNodesKg(s)/P.invKg0;
   if(!s.invBy) s.invBy = {};
-  coreEach(s,(cs,K,id)=>{ if(K.invKg0 > 0) s.invBy[circKey(K.circ)] = 100*invNodesKg(s, id)/K.invKg0; });
+  coreEach(s, coreInvByStep);
   __apE("advectStep");
   __apS();
   sumpStep(s, dt);
@@ -2882,7 +2963,7 @@ function stepMarch(dt){
   HEATBAL.prompt=s.n*PROMPT_F; HEATBAL.decay=s.decay;
   HEATBAL.heat=heat; HEATBAL.removal=removal;
   for(const id in HEATBAL.heatBy) if(!s.coreBy[id]) delete HEATBAL.heatBy[id];
-  coreEach(s,(cs,K,id)=>{ HEATBAL.heatBy[id]=cs.heat; });
+  coreEach(s, coreHeatBalStep);
   /* the display balance only: s.dTavg and s.Tavg are both reads (advectStep) */
   HEATBAL.dTavg=s.dTavg;
 
@@ -2959,7 +3040,7 @@ function stepMarch(dt){
     const r = AUTORULE[D.tanks[id].auto];
     s.tankAuto[id] = !!(r && r.live(s,id));
   }
-  if(inj>0) coreEach(s,cs=>{ cs.fatigue += 0.35*dt*clamp(inj/1.6,0,2); });
+  if(inj>0) for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFatigueStep(s.coreBy[id], dt, inj);
   /* a tube rupture at whatever the differential says; clamped at zero only for the release, because water crossing back the other way carries no primary activity */
   { const leak = Math.max(0, invRate(netOut.qSgtr||0));
     s.sgtrRate = leak;
@@ -2975,35 +3056,8 @@ function stepMarch(dt){
   sgReactStep(s, dt, netOut.sgtrBy || {});
   __apE("secondary/therm");
   __apS();
-  /* asked at each vessel, not at the pressurizer: what bursts a vessel is the pressure inside it */
-  coreEach(s,(cs,K,id)=>{
-    const burst = burstPOf(K,cs);
-    if(K.tube){ tubeStep(s,cs,K,id,burst); return; }
-    if(!cs.breach && cs.pCore > burst){ cs.breach=true; cs.trip="VESSEL RUPTURE"; } });
-  /* the core boils at ITS OWN pressure, not the pressurizer's; s.vf, s.Tf, s.X and s.I below are whole-core aggregates of a field */
-  coreEach(s,(cs,K,id)=>{
-  const sat = satT(K.sat, cs.pCore), nid = coreFold(id);
-  /* the vessel's own node says how short of water it is: (1 - m/m0)/(1 - rvl), never the node's own quality, which a boiling core's vessel carries by design */
-  const vLeak = (() => { const m = s.mBy[nid];
-    // a gas has no liquid to be short of: its mass follows p/T and a warm vessel is not a void
-    if(!(K.coreKg0 > 0) || m === undefined || (K.sat.tc && K.Tref > K.sat.tc)) return 0;
-    return Math.max(0, (1 - m/K.coreKg0)/Math.max(1 - satRvl(K.sat, cs.pCore), 1e-3)); })();
-  // this tick's flux past the pin, and LAST tick's share for the rise, exactly as the plant figures were ordered
-  const nod = coreStep(K,cs,dt,cs.heat,sat,vLeak,K.flowK*coreFN[id],Math.max(cs.flowNet,CORE_DT_QMIN),coreInH(s,id));
-  cs.fci = nod.fci;
-  /* the hydrogen the clad made arrives at the vessel's own node as a concentration, and rides the transport from then on */
-  if(nod.h2 > 0 && s.h2By && P.net && P.net.index[nid] !== undefined){
-    const i = P.net.index[nid];
-    const m = s.mBy[nid] !== undefined ? s.mBy[nid] : P.net.vol[i]*netRhoAt(s, nid);
-    if(m > DRY_MIN_KG){ s.h2By[nid] = (s.h2By[nid]||0) + nod.h2/m; s.h2 = h2Total(s); } }
-  cs.voidTh = cs.vNode;
-  /* the node fraction stops at 1 and vLeak runs past it on purpose, because s.vf says how far past empty the loop is */
-  cs.vf = clamp(Math.max(vLeak, cs.voidTh), 0, 1.6);
-  { const p=cs.parts;
-    p.rod=nod.rod; p.dop=nod.dop; p.mod=nod.mod; p.exp=nod.exp; p.xe=nod.xe; p.vd=nod.vd;
-    p.tip=nod.tip; p.dis=nod.dis; p.bor=s.boron;
-    cs.rho=K.excess+p.rod+p.dop+p.mod+p.exp+p.xe+p.bor+p.vd+p.tip+p.dis; }
-  });
+  coreEach(s, coreBurstStep);
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreVesselStep(s.coreBy[id], P.cores[id], id, dt, coreFN);
   coreAgg(s);
   __apE("core pin loop");
 
@@ -3022,7 +3076,8 @@ function stepMarch(dt){
   const sc = s.scBy[nodeGraph().coreCirc];
   s.heat = heat; s.sc = sc;              // tripCause() reads these outside the tick
   /* what a flow meter would read, never what the pump dial was set to: LOW FLOW has to trip on the delivered figure or shutting every valve trips nothing */
-  s.flowNet = pumpK; coreEach(s,(cs,K,id)=>{ cs.flowNet = coreFN[id]; });
+  s.flowNet = pumpK;
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFlowNetSet(s.coreBy[id], P.cores[id], id, coreFN);
   const ids = sgIds(), boW = new Set(boilerIds());
   for(const id in s.fregBy) if(!boW.has(id)) delete s.fregBy[id];
   for(const id in s.fregDemBy) if(!boW.has(id)) delete s.fregDemBy[id];
@@ -3170,41 +3225,9 @@ function stepMarch(dt){
   __apE("secondary/therm");
   __apS();
 
-  /* floored at 1e-9 rather than a bare 0: the nodal core divides by the power it is given, and an exact zero NaNs every pellet temperature */
-  coreEach(s,(cs,K)=>{
-  const h=dt/4, rk=cs.rho*1e-5;
-  for(let k=0;k<4;k++){
-    let num=0,den=0;
-    for(let i=0;i<6;i++){ const dd=1+h*K.lam[i];
-      num+=K.lam[i]*cs.C[i]/dd; den+=K.lam[i]*h*K.bet[i]/K.LAM/dd; }
-    const a=1-h*(rk-K.BETA)/K.LAM-h*den;
-    let n=a>1e-6?(cs.n+h*num+h*2e-9)/a:cs.n*12;
-    if(!isFinite(n)||n<0) n=cs.n*12;
-    cs.n=Math.min(n,60);
-    for(let i=0;i<6;i++) cs.C[i]=(cs.C[i]+h*K.bet[i]/K.LAM*cs.n)/(1+h*K.lam[i]);
-  }
-  cs.n=Math.max(cs.n,1e-9);
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreKineticsStep(s.coreBy[id], P.cores[id], dt);
 
-  /* DNBR is local, so the vessel's margin is the minimum over the field and nothing else */
-  cs.dnbr=cs.dnbrMin;
-  });
-
-  /* what a hurt core COSTS; the damage itself was settled node by node in coreStep(), and every term here is continuous in how much of the core is hurt */
-  coreEach(s,(cs,K,id)=>{
-  if(!cs.melt && cs.meltFrac>=MELT_LATCH){ cs.melt=true; cs.trip="CORE MELT"; }
-  if(cs.meltFrac>0 && !P.catcher){
-    /* the only mass path on the plant that is not an edge, taken off the core's own node so the field and the ledger see the same kilogram - and it may only take what is there */
-    { const want = MELT_INV*cs.meltFrac*dt/100*loopKg(), nm = coreFold(id);
-      const have = s.mBy[nm];
-      const kg = have === undefined ? 0 : Math.min(want, Math.max(have, 0));
-      if(have !== undefined) s.mBy[nm] = have - kg;
-      book(s,"melt", kg); }
-    cs.fatigue=Math.min(100,cs.fatigue+MELT_FAT*cs.meltFrac*dt); }
-  { const st=fuelStages(cs); let rel=0;
-    for(let q=0;q<FAIL.length;q++) rel+=st[q]*RELK[FAIL[q].k];
-    /* held back by the region this vessel's fuel stands in, read off the LIVE fill, so a wall with a cell shot out stops holding the instant it opens */
-    if(rel>0) s.release=Math.min(100,s.release+rel*contRelPart(s,partOf(id))*P.dose*dt); }
-  });
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreMeltStep(s.coreBy[id], P.cores[id], id, dt);
   coreAgg(s);
   __apE("core pin loop");
   __apS();
