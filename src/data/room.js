@@ -384,6 +384,12 @@ function injectRoom(s, dt, src, G){
   s.roomM[i] += dm;
 }
 
+// id -> cells, off G.parts' own identity so a redesign is the only thing that rebuilds it
+let cellsOfMap = null, cellsOfParts = null;
+function roomCellsOf(G, id){
+  if(cellsOfParts !== G.parts){ cellsOfMap = new Map(); for(const q of G.parts) cellsOfMap.set(q.p.id, q.cells); cellsOfParts = G.parts; }
+  return cellsOfMap.get(id) || [];
+}
 /* Sources, transport, sink, in that order; nothing here writes anything but s.roomT, s.roomH2 and the readouts off them. */
 function roomStep(s, dt){
   const G = roomGeomLive(s), T = s.roomT, N = roomScratch();
@@ -435,20 +441,19 @@ function roomStep(s, dt){
   for(const k in s.runT) if(liveRun[k] !== cgRun){ delete s.runT[k]; delete runSeen[k]; }
 
   /* net.fitTarget is the gate - a tank to catch this, or straight into the room - and net.fitVentOut the second, gone up the stack because the valve's open face is against the skin. */
-  const cellsOf = id => { const q = G.parts.find(w => w.p.id === id); return q ? q.cells : []; };
   const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
   for(const fid in s.reliefSteam){
     if(tgt[fid] || out[fid]) continue;               // caught in a tank, or vented outside
-    roomJet(src, cellsOf(fid), s.reliefSteam[fid]*roomSteamH(), s.reliefSteam[fid]);
-    roomAddGas(s, cellsOf(fid), s.reliefSteam[fid]*dt, s.reliefSteam[fid]);
+    roomJet(src, roomCellsOf(G, fid), s.reliefSteam[fid]*roomSteamH(), s.reliefSteam[fid]);
+    roomAddGas(s, roomCellsOf(G, fid), s.reliefSteam[fid]*dt, s.reliefSteam[fid]);
   }
   /* A hole has no set point, bore or stack, so this is gated on neither map: gating it would make a plant safe by accident. */
   for(const id in s.sgVentBy){
     let byValve = 0;
     for(const fid of (G.shellValves[id] || [])) byValve += s.reliefSteam[fid] || 0;
     const hole = Math.max(0, s.sgVentBy[id] - byValve);
-    roomJet(src, cellsOf(id), hole*roomSteamH(), hole);
-    roomAddGas(s, cellsOf(id), hole*dt, hole);
+    roomJet(src, roomCellsOf(G, id), hole*roomSteamH(), hole);
+    roomAddGas(s, roomCellsOf(G, id), hole*dt, hole);
   }
   /* The shell's hydrogen (sgReactStep(), step.js) leaves in proportion to what it is venting, in the same plume, so it collects at the deckhead. */
   for(const id in s.sgH2By){
@@ -457,7 +462,7 @@ function roomStep(s, dt){
     const nd = shellNode(id), ms = (s.mBy[nd]||0)*clamp(netQualAt(s,nd),0,1);
     const f = Math.min(1, rate*dt/Math.max(ms, 1e-6));
     s.sgH2By[id] = m - m*f;
-    roomAddH2(s, cellsOf(id), rate, m*f);
+    roomAddH2(s, roomCellsOf(G, id), rate, m*f);
   }
   /* What the opening is actually passing, in the state it passes it: the kilograms the transport booked on that edge this tick. */
   roomLiqOuts(s, G, (cells, rate, fl, key) => {
@@ -740,6 +745,10 @@ function roomAdvect(F, M0, M1, fx, fy, inn, lim){
   for(let it=0;it<ADV_SWEEPS;it++){ for(let i=0;i<N;i++) upd(i); for(let i=N-1;i>=0;i--) upd(i); }
   for(let i=0;i<N;i++) F[i] = y[i]*M1[i];
 }
+/* A cell the liquids fill is not a gas cell: its faces are shut to the gas, or the momentum arriving at a cell that has just filled is stopped in one tick by megapascals. */
+function gsFxOpen(bx, vg, i){ return bx[i] !== 0 && roomGasCell(vg[i]) && roomGasCell(vg[i+1]); }
+function gsFyOpen(by, vg, i){ return by[i] !== 0 && roomGasCell(vg[i]) && roomGasCell(vg[i+GW]); }
+function gsMix(dt, m){ const g = Math.abs(m)*ROOM_CP; return g*ROOM_C/(ROOM_C + 8*g)/dt; }
 /* One tick of the gas: predict the face velocities off one implicit solve, move the mass on them,
    carry the species and the enthalpy (into src[], priced by the heat pass against ROOM_C), then read
    the pressure. Returns the worst cell over its own compartment's mean, which a bang is judged on. */
@@ -750,24 +759,21 @@ function roomGasStep(s, dt, G, src){
   const disp = gsDisp;
   let anyDisp = false;
   for(let i=0;i<N;i++){ vg[i] = roomVgas(s, i); if(disp[i] !== 0) anyDisp = true; p[i] = roomPOf(Mm[i], roomGasCell(vg[i]) ? vg[i] + disp[i] : vg[i], T[i])*1e6; }
-  /* A cell the liquids fill is not a gas cell: its faces are shut to the gas, or the momentum arriving at a cell that has just filled is stopped in one tick by megapascals. */
-  const fxOpen = i => bx[i] !== 0 && roomGasCell(vg[i]) && roomGasCell(vg[i+1]);
-  const fyOpen = i => by[i] !== 0 && roomGasCell(vg[i]) && roomGasCell(vg[i+GW]);
   /* The gate: a field with no step across any open face and no face moving costs nothing. */
   let live = anyDisp;
   const pLo = WAVE_P_LO*1000, uLo = WAVE_U_LO*ROOM_RHO;
   for(let i=0;i<N && !live;i++)
     if(Math.abs(U[i]) > uLo || Math.abs(V[i]) > uLo
-       || (fxOpen(i) && Math.abs(p[i]-p[i+1]) > pLo)
-       || (fyOpen(i) && Math.abs(p[i]-p[i+GW]) > pLo)) live = true;
+       || (gsFxOpen(bx, vg, i) && Math.abs(p[i]-p[i+1]) > pLo)
+       || (gsFyOpen(by, vg, i) && Math.abs(p[i]-p[i+GW]) > pLo)) live = true;
   if(!live){ U.fill(0); V.fill(0); roomCgIt = 0; gsX.fill(0); disp.fill(0); }
   else {
     const kp = gsDI, gx = gsAx, gy = gsAy, b = gsB, x = gsX, A = MPC*ROOM_DEPTH, gA = dt*dt*A/MPC;
     // kg per Pa: the cell's own compliance, and what a face passes in one tick per Pa across it
     for(let i=0;i<N;i++){
       kp[i] = vg[i]/(R_SI*Math.max(T[i], 1));
-      if(!fxOpen(i)){ gx[i] = 0; U[i] = 0; } else gx[i] = gA*bx[i];
-      if(!fyOpen(i)){ gy[i] = 0; V[i] = 0; } else gy[i] = gA*by[i];
+      if(!gsFxOpen(bx, vg, i)){ gx[i] = 0; U[i] = 0; } else gx[i] = gA*bx[i];
+      if(!gsFyOpen(by, vg, i)){ gy[i] = 0; V[i] = 0; } else gy[i] = gA*by[i];
     }
     const fx = gsFx, fy = gsFy;
     // the kilograms last tick's momentum carries, and the solve is in the increment over last tick's pressure
@@ -796,14 +802,15 @@ function roomGasStep(s, dt, G, src){
     const M0 = gsM0; M0.set(Mm);
     faceInflow(gsIn, fx, fy);
     faceMove(Mm, fx, fy);
-    for(const F of [s.roomH2, s.roomO2, s.roomVap]) roomAdvect(F, M0, Mm, fx, fy, gsIn);
+    roomAdvect(s.roomH2, M0, Mm, fx, fy, gsIn);
+    roomAdvect(s.roomO2, M0, Mm, fx, fy, gsIn);
+    roomAdvect(s.roomVap, M0, Mm, fx, fy, gsIn);
     /* A cell's capacity is fixed (ROOM_C) and does not follow its gas, so the receiver's gain comes off the donor: charged only to the receiver, a circulation the heat stencil drives creates energy every tick. Capped at an eighth of the cell per face, advectSrc()'s rule, or a blast's kilograms drive the explicit heat pass past level. */
-    const mix = m => { const g = Math.abs(m)*ROOM_CP; return g*ROOM_C/(ROOM_C + 8*g)/dt; };
     for(let i=0;i<N;i++){
       if(fx[i] !== 0){ const a = fx[i] > 0 ? i : i+1, c = a === i ? i+1 : i;
-        const q = mix(fx[i])*(T[a] - T[c]); src[c] += q; src[a] -= q; }
+        const q = gsMix(dt, fx[i])*(T[a] - T[c]); src[c] += q; src[a] -= q; }
       if(fy[i] !== 0){ const a = fy[i] > 0 ? i : i+GW, c = a === i ? i+GW : i;
-        const q = mix(fy[i])*(T[a] - T[c]); src[c] += q; src[a] -= q; }
+        const q = gsMix(dt, fy[i])*(T[a] - T[c]); src[c] += q; src[a] -= q; }
     }
   }
   roomPGen++;
@@ -935,6 +942,33 @@ const liqSpeed = (q, i) => { const X = i%GW; let v = 0;
   if(i < GW*GH-GW) v = Math.max(v, Math.abs(q.vv[i]));
   if(i >= GW) v = Math.max(v, Math.abs(q.vv[i-GW]));
   return v; };
+// carried by the floor through full cells
+function lqStandWalk(N, G, full, stand){
+  for(let i=N-1;i>=0;i--){ const j = i+GW; stand[i] = (j >= N || !liqRuns(G, i, j)) ? 1 : (full[j] && stand[j]) ? 1 : 0; }
+}
+function lqZf(q, i){ return q.U ? liqFill(q.U, q.oRho, i) : 0; }
+function lqPFree(gas, rg, h, i){ return gas[i] + rg*h[i]; }
+function lqHw(h, hc, i){ return Math.min(h[i], hc[i]); }
+// N per metre of face from one side over a face hm high: its liquid to its own top, its gas over that; a falling cell presses with its gas alone
+function lqSide(q, h, hc, stand, p, rg, gas, i, hm){
+  const w = Math.min(lqHw(h, hc, i), hm);
+  return stand[i] ? (p[i] + rg*lqZf(q, i))*w - rg*w*w/2 + gas[i]*(hm - w) : gas[i]*hm;
+}
+function lqDriveX(q, h, hc, stand, p, rg, gas, i, j){
+  const hm = Math.max(lqHw(h, hc, i), lqHw(h, hc, j));
+  return hm > 0 ? (lqSide(q, h, hc, stand, p, rg, gas, i, hm) - lqSide(q, h, hc, stand, p, rg, gas, j, hm))/hm : 0;
+}
+function lqRunsX(cap, G, i){ return cap[i] > 0 && cap[i+1] > 0 && liqRuns(G, i, i+1) && liqRuns(G, i+1, i); }
+function lqRunsY(cap, G, i){ return cap[i] > 0 && cap[i+GW] > 0 && liqRuns(G, i, i+GW); }
+function lqWriteP(N, LP, M, stand, p, gas, P0){
+  for(let i=0;i<N;i++) LP[i] = M[i] > 0 ? ((stand[i] ? p[i] : gas[i]) - P0)/1000 : 0;
+}
+function lqFallV(N, vv, k){ return Math.max(k < N-GW ? Math.abs(vv[k]) : 0, k >= GW ? Math.abs(vv[k-GW]) : 0); }
+// the gas swap, one face at a time: the volume that crossed pushes the same volume of the receiver's gas back over that face, no further
+function lqSwap(s, gf, rho, a, c, m){
+  const dV = m/rho, f = Math.min(1, dV/(roomVgas(s, c) + dV));
+  for(const F of gf){ const g = F[c]*f; F[c] -= g; F[a] += g; }
+}
 /* One tick of a liquid: a pressure at every cell's floor and a speed on every face, one implicit solve of
    roomGasStep()'s shape, then the mass moves on the faces it solved and its energy rides with it.
    p is the pressure at the cell's own floor, Pa absolute. A cell with room left is a free surface,
@@ -960,8 +994,7 @@ function liqStep(s, dt, G, q){
     full[i] = cap[i] > 0 && M[i] >= cap[i]*LIQ_FULL_K ? 1 : 0;
   }
   // carried by the floor through full cells
-  const standWalk = () => { for(let i=N-1;i>=0;i--){ const j = i+GW; stand[i] = (j >= N || !liqRuns(G, i, j)) ? 1 : (full[j] && stand[j]) ? 1 : 0; } };
-  standWalk();
+  lqStandWalk(N, G, full, stand);
   // a carried cell over its cap is not a mound: the excess climbs the column, liqLand()'s own law
   for(let i=N-1;i>=GW;i--){
     if(!(cap[i] > 0 && M[i] > cap[i] && stand[i] && liqRuns(G, i, i-GW) && !liqShut(G, i-GW))) continue;
@@ -971,49 +1004,39 @@ function liqStep(s, dt, G, q){
     h[i] = M[i]/(rho*A); h[i-GW] = M[i-GW]/(rho*A);
     full[i-GW] = cap[i-GW] > 0 && M[i-GW] >= cap[i-GW]*LIQ_FULL_K ? 1 : 0;
   }
-  standWalk();
-  const zf = i => q.U ? liqFill(q.U, q.oRho, i) : 0;
-  const pFree = i => gas[i] + rg*h[i];
+  lqStandWalk(N, G, full, stand);
   // stiff: full, carried, liquid or a ceiling over it (a full cell with gas over it is a free surface at its own top)
   for(let i=0;i<N;i++) stiff[i] = full[i] && stand[i] && (i < GW || !liqRuns(G, i, i-GW) || h[i-GW] > LIQ_H_LO) ? 1 : 0;
-  for(let i=0;i<N;i++) p[i] = stiff[i] ? P0 + LP[i]*1000 : pFree(i);
-  const hw = i => Math.min(h[i], hc[i]);
-  // N per metre of face from one side over a face hm high: its liquid to its own top, its gas over that; a falling cell presses with its gas alone
-  const side = (i, hm) => { const w = Math.min(hw(i), hm); return stand[i] ? (p[i] + rg*zf(i))*w - rg*w*w/2 + gas[i]*(hm - w) : gas[i]*hm; };
-  const driveX = (i, j) => { const hm = Math.max(hw(i), hw(j)); return hm > 0 ? (side(i, hm) - side(j, hm))/hm : 0; };
-  const runsX = i => cap[i] > 0 && cap[i+1] > 0 && liqRuns(G, i, i+1) && liqRuns(G, i+1, i);
-  const runsY = i => cap[i] > 0 && cap[i+GW] > 0 && liqRuns(G, i, i+GW);
-  const writeP = () => { for(let i=0;i<N;i++) LP[i] = M[i] > 0 ? ((stand[i] ? p[i] : gas[i]) - P0)/1000 : 0; };
+  for(let i=0;i<N;i++) p[i] = stiff[i] ? P0 + LP[i]*1000 : lqPFree(gas, rg, h, i);
   /* The gate: a film thinner than LIQ_H_LO steps nowhere, and a body at rest with every face still costs nothing. */
   let live = false;
   const dLo = rg*LIQ_H_LO;
   for(let i=0;i<N && !live;i++){ const X = i%GW;
-    if(X < GW-1 && runsX(i) && (h[i] > 0 || h[i+1] > 0) && (Math.abs(vu[i]) > LIQ_REST || Math.abs(driveX(i, i+1)) > dLo)) live = true;
-    if(i < N-GW && runsY(i) && (h[i] > 0 || h[i+GW] > 0)){ const j = i+GW;
+    if(X < GW-1 && lqRunsX(cap, G, i) && (h[i] > 0 || h[i+1] > 0) && (Math.abs(vu[i]) > LIQ_REST || Math.abs(lqDriveX(q, h, hc, stand, p, rg, gas, i, i+1)) > dLo)) live = true;
+    if(i < N-GW && lqRunsY(cap, G, i) && (h[i] > 0 || h[i+GW] > 0)){ const j = i+GW;
       const d = p[i] - (full[j] ? p[j] - rg*Math.min(h[j], hc[j]) : gas[j]);
       if(Math.abs(vv[i]) > LIQ_REST || Math.abs(d) > dLo) live = true; } }
-  if(!live){ vu.fill(0); vv.fill(0); liqCgIt = 0; writeP(); return; }
+  if(!live){ vu.fill(0); vv.fill(0); liqCgIt = 0; lqWriteP(N, LP, M, stand, p, gas, P0); return; }
 
   const ax = lqAx, ay = lqAy, ayD = lqAyD, b = lqB, x = lqX, fx = lqFx, fy = lqFy, dI = lqDI, awx = lqAwx, awy = lqAwy, lat = lqLat;
-  const fallV = k => Math.max(k < N-GW ? Math.abs(vv[k]) : 0, k >= GW ? Math.abs(vv[k-GW]) : 0);
   for(let pass=0;pass<2;pass++){
   for(let i=0;i<N;i++) comp[i] = cap[i] > 0 ? (stiff[i] ? Math.max(cap[i]/K, 1e-9) : A/G_SI) : 1;
   ax.fill(0); ay.fill(0); ayD.fill(0); fx.fill(0); fy.fill(0); awx.fill(0); awy.fill(0); lat.fill(0);
   for(let i=0;i<N;i++){ const X = i%GW;
-    if(X < GW-1 && runsX(i)){ const j = i+1, hf = Math.max(hw(i), hw(j));
+    if(X < GW-1 && lqRunsX(cap, G, i)){ const j = i+1, hf = Math.max(lqHw(h, hc, i), lqHw(h, hc, j));
       // water in the air crosses a face sideways only where it moves sideways faster than it falls
       const lz = !stand[i] && !stand[j] &&
-        Math.max(Math.abs(vu[i]), X > 0 ? Math.abs(vu[i-1]) : 0, X < GW-2 ? Math.abs(vu[i+1]) : 0) <= Math.max(fallV(i), fallV(j), LIQ_REST);
-      const d0 = lz ? 0 : driveX(i, j);
+        Math.max(Math.abs(vu[i]), X > 0 ? Math.abs(vu[i-1]) : 0, X < GW-2 ? Math.abs(vu[i+1]) : 0) <= Math.max(lqFallV(N, vv, i), lqFallV(N, vv, j), LIQ_REST);
+      const d0 = lz ? 0 : lqDriveX(q, h, hc, stand, p, rg, gas, i, j);
       if(hf > 0 && !lz){ const v = vu[i], up = v > 0 ? i : v < 0 ? j : (d0 >= 0 ? i : j), dn = up === i ? j : i;
         const Aw = ROOM_DEPTH*hf, L = MPC;
         let c = n2g*Math.abs(v)/Math.pow(Math.max(hf, 1e-3), 4/3);
         if(full[up] && !(full[dn] && stand[dn]) && G.hole && (G.hole[i] || G.hole[j])) c += Math.abs(v)/(cd2*L);
-        const vup = v > 0 ? (X > 0 && awx[i-1] > 0 ? vu[i-1] : 0) : v < 0 ? (X < GW-2 && runsX(j) ? vu[j] : 0) : 0;
+        const vup = v > 0 ? (X > 0 && awx[i-1] > 0 ? vu[i-1] : 0) : v < 0 ? (X < GW-2 && lqRunsX(cap, G, j) ? vu[j] : 0) : 0;
         const adv = Math.abs(v)/MPC, den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
         awx[i] = Aw; ax[i] = g; fx[i] = rho*Aw*dt*(v + dt*adv*vup)/den + g*d0;
         fx[i] += (lat[i] - lat[j])*dt*dt/L; } }
-    if(i < N-GW && runsY(i)){ const j = i+GW, v = vv[i];
+    if(i < N-GW && lqRunsY(cap, G, i)){ const j = i+GW, v = vv[i];
       const d0 = p[i] - (full[j] ? p[j] - rg*Math.min(h[j], hc[j]) : gas[j]);
       // the face is as wide as the side that holds liquid: a still face over a full cell is that cell's, or a lid could never push up
       let up = v > 0 ? i : v < 0 ? j : (d0 > 0 ? i : d0 < 0 ? j : (M[i] >= M[j] ? i : j));
@@ -1021,12 +1044,12 @@ function liqStep(s, dt, G, q){
       const dn = up === i ? j : i;
       const f = cap[up] > 0 ? Math.min(1, M[up]/cap[up]) : 0;
       // the inertia is the deeper of the two: a film over a body rides the body, a film over air is its own
-      if(f > 0){ const Aw = A*f, L = Math.max(hw(i), hw(j), LIQ_L_MIN), hf = Math.max(f*MPC, 1e-3);
+      if(f > 0){ const Aw = A*f, L = Math.max(lqHw(h, hc, i), lqHw(h, hc, j), LIQ_L_MIN), hf = Math.max(f*MPC, 1e-3);
         // a stream landing on a body: its momentum flux, half to each side of the cell it lands in
         if(!stand[i] && stand[j] && v > 0) lat[j] += 0.5*rho*Aw*v*v;
         let c = n2g*Math.abs(v)/Math.pow(hf, 4/3);
         if(full[up] && !(full[dn] && stand[dn]) && G.hole && (G.hole[i] || G.hole[j])) c += Math.abs(v)/(cd2*L);
-        const vup = v > 0 ? (i >= GW && awy[i-GW] > 0 ? vv[i-GW] : 0) : v < 0 ? (j < N-GW && runsY(j) ? vv[j] : 0) : 0;
+        const vup = v > 0 ? (i >= GW && awy[i-GW] > 0 ? vv[i-GW] : 0) : v < 0 ? (j < N-GW && lqRunsY(cap, G, j) ? vv[j] : 0) : 0;
         const adv = Math.abs(v)/MPC, den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
         awy[i] = Aw; fy[i] = rho*Aw*dt*(v + dt*adv*vup)/den + g*d0;
         if(full[j]) ay[i] = g; else ayD[i] = g; } } }
@@ -1068,18 +1091,15 @@ function liqStep(s, dt, G, q){
   faceMove(M, fx, fy);
   if(E) roomAdvect(E, M0, M, fx, fy, gsIn, Infinity);
   for(let i=0;i<N;i++) if(M[i] <= 0){ M[i] = 0; if(E) E[i] = 0; }
-  /* The gas swap, one face at a time: the volume that crossed pushes the same volume of the receiver's gas back over that face, no further. */
   const gf = roomGasFields(s);
-  const swap = (a, c, m) => { const dV = m/rho, f = Math.min(1, dV/(roomVgas(s, c) + dV));
-    for(const F of gf){ const g = F[c]*f; F[c] -= g; F[a] += g; } };
   for(let i=0;i<N;i++){
-    if(fx[i] > 0) swap(i, i+1, fx[i]); else if(fx[i] < 0) swap(i+1, i, -fx[i]);
-    if(fy[i] > 0) swap(i, i+GW, fy[i]); else if(fy[i] < 0) swap(i+GW, i, -fy[i]);
+    if(fx[i] > 0) lqSwap(s, gf, rho, i, i+1, fx[i]); else if(fx[i] < 0) lqSwap(s, gf, rho, i+1, i, -fx[i]);
+    if(fy[i] > 0) lqSwap(s, gf, rho, i, i+GW, fy[i]); else if(fy[i] < 0) lqSwap(s, gf, rho, i+GW, i, -fy[i]);
   }
   // the solved pressure is the stiff cells' state; a free cell reads its own head off its new mass
-  for(let i=0;i<N;i++){ h[i] = M[i]/(rho*A); full[i] = cap[i] > 0 && M[i] >= cap[i]*LIQ_FULL_K ? 1 : 0; p[i] = stiff[i] ? p[i] + x[i] : pFree(i); }
-  standWalk();
-  writeP();
+  for(let i=0;i<N;i++){ h[i] = M[i]/(rho*A); full[i] = cap[i] > 0 && M[i] >= cap[i]*LIQ_FULL_K ? 1 : 0; p[i] = stiff[i] ? p[i] + x[i] : lqPFree(gas, rg, h, i); }
+  lqStandWalk(N, G, full, stand);
+  lqWriteP(N, LP, M, stand, p, gas, P0);
 }
 /* Where a source lands: a full cell has no room, so the liquid goes on up the column to the first cell
    that has some, the surface of the body it joined; a sealed column brim full takes it on its top cell. */
