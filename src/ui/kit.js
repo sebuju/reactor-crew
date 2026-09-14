@@ -262,7 +262,9 @@ const KIT = (function(){
       }
     }
     fitLabels();
-    if(typeof ResizeObserver === "function") new ResizeObserver(fitLabels).observe(root);
+    // a torn-down band leaves this watching a detached root for ever unless the caller frees it
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(fitLabels) : null;
+    if(ro) ro.observe(root);
 
     let lastV = null, lastM = null;
     function set(v, mv){
@@ -283,7 +285,7 @@ const KIT = (function(){
       strip.paint(zi, i => cellZone[i] === zi, zoneFill);
     }
     set(opts.v != null ? opts.v : lo);
-    return {el: root, set};
+    return {el: root, set, free(){ if(ro) ro.disconnect(); }};
   }
   function tick(cls, x){
     const l = svgEl("line", cls);
