@@ -42,6 +42,8 @@ function netSubst(A, x, n, bw){
 // A is compacted onto the free rows by `row`, b stays at full node length; a fixed node is never stamped and reaches free neighbours through b as +g*pFixed.
 // ghG/ghH carry one solve's edge answers (netSolve() fills them once per solve off the same field;
 // s, F and ed.w are all fixed for the length of a solve, so a second evaluation would answer the same).
+// `fixed` is the {v,has} holder netFixed() returns: v the pressure, has the 0/1 mask.
+// Doubles live in the Float64Array, never as boxed properties, so the per-solve refill allocates nothing.
 function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap, ghG, ghH){
   const wantA = A !== false;
   if(!row) m = n;
@@ -49,6 +51,7 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap, ghG, ghH
   b = b || new Float64Array(n);
   if(wantA) A.fill(0);
   b.fill(0);
+  const fxV = fixed.v, fxH = fixed.has;
   for(let e=0;e<edges.length;e++){
     const ed = edges[e];
     const g = ghG ? ghG[e] : (typeof ed.g === 'function' ? ed.g(s) : ed.g);
@@ -56,8 +59,7 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap, ghG, ghH
     const h = ghH ? ghH[e] : (typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0));
     const u = ed.u, v = ed.v;
     if(touch){ touch[u]=1; touch[v]=1; }
-    const pu = fixed[u], pv = fixed[v];
-    const gu = pu === undefined, gv = pv === undefined;
+    const gu = !fxH[u], gv = !fxH[v], pu = fxV[u], pv = fxV[v];
     if(wantA){
       const ru = row ? row[u] : u, rv = row ? row[v] : v;
       if(gu) A[ru*m+ru] += g;
@@ -69,29 +71,31 @@ function netAssemble(edges, n, fixed, s, A, b, src, row, m, touch, cap, ghG, ghH
     if(gu && !gv) b[u] += g*pv;
     if(gv && !gu) b[v] += g*pu;
   }
-  if(wantA && cap) for(let i=0;i<n;i++) if(fixed[i]===undefined && cap[i] > 0){
+  if(wantA && cap) for(let i=0;i<n;i++) if(!fxH[i] && cap[i] > 0){
     const ri = row ? row[i] : i; A[ri*m+ri] += cap[i]; }
-  if(src) for(let i=0;i<n;i++) if(fixed[i]===undefined && src[i]) b[i] += src[i];
+  if(src) for(let i=0;i<n;i++) if(!fxH[i] && src[i]) b[i] += src[i];
   return { A, b };
 }
 
 // A fixed node reads its known pressure, never p - netSubst leaves that at 0.
 function netFlows(edges, p, fixed, out, s, ghG, ghH){
+  const fxV = fixed.v, fxH = fixed.has;
   for(let e=0;e<edges.length;e++){
     const ed = edges[e];
     const g = ghG ? ghG[e] : (typeof ed.g === 'function' ? ed.g(s) : ed.g);
     if(!(g > 0)){ out[e] = 0; continue; }
     const h = ghH ? ghH[e] : (typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0));
-    const fu = fixed[ed.u], fv = fixed[ed.v];
-    const pu = fu === undefined ? p[ed.u] : fu;
-    const pv = fv === undefined ? p[ed.v] : fv;
+    const u = ed.u, v = ed.v;
+    const pu = fxH[u] ? fxV[u] : p[u];
+    const pv = fxH[v] ? fxV[v] : p[v];
     out[e] = g * (pu - pv + h);
   }
   return out;
 }
 
-function netUnfix(p, fixed){
-  for(const i in fixed) p[i] = fixed[i];
+function netUnfix(p, fixed, n){
+  const fxV = fixed.v, fxH = fixed.has;
+  for(let i=0;i<n;i++) if(fxH[i]) p[i] = fxV[i];
   return p;
 }
 
