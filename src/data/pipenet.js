@@ -422,7 +422,7 @@ function netDiodeSig(net, s){
   const list = net.diodeEdges || (net.diodeEdges = net.edges.filter(ed => ed.diode));
   let hsh = 0;
   for(let k=0;k<list.length;k++){ const ed = list[k];
-    const h = typeof ed.h === "function" ? ed.h(s) : (ed.h || 0);
+    const h = typeof ed.h === "function" ? edgeH(net, ed, s) : (ed.h || 0);
     if((F.p[ed.u] - F.p[ed.v] + h)*ed.diode < 0) hsh = (Math.imul(hsh, 31) + k + 1)|0; }
   return hsh;
 }
@@ -434,9 +434,13 @@ function netFieldUpdate(net, s){
   const mBy = s && s.mBy;
   /* a node that passes more per tick than it holds cannot run itself out, only its supply can */
   const fedIn = scratch(net, "fedIn", net.n, Float64Array, 0);
-  for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e], w = ed.w || 0;
+  for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e], w = net.wArr[e];
     if(w > 0) fedIn[ed.v] += w; else if(w < 0) fedIn[ed.u] -= w; }
-  for(let i=0;i<net.n;i++){ const nid = net.name[i], p = netPAt(s, nid), h = netHAt(s, nid);
+  __apS();
+  for(let i=0;i<net.n;i++){ const nid = net.name[i], pb = s.pBy, hb = s.hBy;
+    /* pi is i: net.index inverts net.name (verified bit-exact across presets), so no Map round-trip per node */
+    const p = (pb && pb.has[i]) ? Math.max(COND_P0, pb.v[i]) : netPAt(s, nid);
+    const h = (hb && hb.has[i]) ? hb.v[i] : netHAt(s, nid);
     const m = (mBy && mBy.has[i]) ? mBy.v[i] : undefined, mk = m === undefined ? -1 : m;
     if(p === F.lp[i] && h === F.lh[i] && mk === F.lm[i]) continue;
     F.lp[i] = p; F.lh[i] = h; F.lm[i] = mk;
@@ -446,37 +450,90 @@ function netFieldUpdate(net, s){
     F.rhoD[i] = (m !== undefined && net.vol[i] > 0 && runKeyOfNode(nid) !== null)
       ? m/net.vol[i] : mx[MX_RHO];
     F.wet[i] = (netNodeDry(net, s, i, mx[MX_RHO]) && fedIn[i]*NET_DT <= DRY_FRAC*net.vol[i]*mx[MX_RHO]) ? 0 : 1;
-    F.mu[i] = muMixOf(sat[i], mx[MX_X]); }
-  for(const i of (net.gasNodes||[])) F.rhoG[i] = rhogOf(sat[i], satT(sat[i], F.p[i]));
-  for(const i of (net.liqNodes||[])) F.rhoL[i] = rhofOf(sat[i], satT(sat[i], F.p[i]));
+    /* muMixOf inlined: a per-node call returning a `double` boxed */
+    { const xv = mx[MX_X], sc = sat[i], mfv = sc.mu, mgv = sc.muV || sc.mu;
+      F.mu[i] = xv <= 0 ? mfv : xv >= 1 ? mgv : 1/(xv/mgv + (1-xv)/mfv); } }
+  __apE("field.nodes");
+  __apS();
+  const gasN = net.gasNodes||[], liqN = net.liqNodes||[];
+  for(let gi=0;gi<gasN.length;gi++){ const i = gasN[gi]; F.rhoG[i] = rhogOf(sat[i], satT(sat[i], F.p[i])); }
+  for(let li=0;li<liqN.length;li++){ const i = liqN[li]; F.rhoL[i] = rhofOf(sat[i], satT(sat[i], F.p[i])); }
+  __apE("field.rhoGL");
+  __apS();
   /* the pool's own surface, not (p,h): a hotwell short of full has a space over it and every nozzle in that space draws steam */
   if(net.condV && net.condV.length){ F.void.fill(0);
-    for(const i of net.condV){ const lvl = poolLvlOf(net, s, i);
+    for(let cvi=0;cvi<net.condV.length;cvi++){ const i = net.condV[cvi], lvl = poolLvlOf(net, s, i);
       if(lvl !== undefined && lvl < 100) F.void[i] = 1;
       /* and the drain in its floor is under the water, so what this vessel DONATES is liquid. The EOS read at a saturated node is a knife edge and reads it as steam; gasAt already answers for the nozzle in the space above. */
       if(lvl !== undefined && lvl > 0) F.rhoD[i] = rhofOf(sat[i], satT(sat[i], F.p[i])); } }
   /* containment never donates: F.wet is the DONOR's bit, so a break stops supplying without stopping it receiving */
-  for(const i of (net.cont||[])) F.wet[i] = 0;
+  if(net.cont) for(let cti=0;cti<net.cont.length;cti++) F.wet[net.cont[cti]] = 0;
+  __apE("field.cond");
+  __apS();
   /* built here so it cannot be built twice: the diagonal and its own C/dt*p_prev are two halves of one row */
   net.store = netStore(net, s);
+  __apE("field.store");
   /* every conductance is a function of this field, so the generation is netFactored()'s key */
   F.gen = (F.gen||0) + 1;
 }
-/* the ONE place the law is applied: an edge states a flow coefficient, nothing else */
+/* the edge's flow coefficient off data, shared by the solve and any reader that asks "is this
+   branch open" (h2RiseStep): one monomorphic function, so the gate reads identically everywhere.
+   Split hot/cold: k=1/2 (pipe friction, nearly every edge every solve) stays inlineable here;
+   the gate arms move to edgeCvalCold (rare). V8 refuses the whole function (too large). */
+const edgeCval = (net, ed, s) => {
+  if(ed.Ck === undefined) return typeof ed.C === "function" ? ed.C(s) : ed.C;
+  if(ed.Cdead && partWrecked(s, ed.Cdead)) return 0;
+  const k = ed.Ck, F = net.F;
+  if(k === 1 || k === 2){
+    const w = net.wHas[ed.wi] ? net.wArr[ed.wi] : undefined;
+    const f = fricOf(ed.bore, w, F.mu[w !== undefined && w >= 0 ? ed.u : ed.v]);
+    return k === 1 ? ((tankLive(s, ed.tid) && portLive(s, ed.end)) ? pipeC(ed.bore, ed.llen, ed.k0, f) : 0)
+                   : (portLive(s, ed.end) ? throttledC(s, ed.bore, ed.llen, NO_GATES, ed.k0, f) : 0);
+  }
+  return edgeCvalCold(net, ed, s, k);
+};
+const edgeCvalCold = (net, ed, s, k) => {
+  if(k === 0) return ed.Cc;
+  if(k === 3) return ed.gateMode === "throttle" ? throttledC(s, ed.bore, NET_COMP_LEN, ed.gateIds, undefined, undefined)
+                                                : reliefLive(s, ed.pid) ? holeC(ed.bore) : 0;
+  if(k === 4) return feedTrainC()*(1 - clamp((s && s.fregBy && s.fregBy[ed.freg]) || 0, 0, 1));
+  if(k === 5) return turbCOf(s, ed.pid);
+  if(k === 6) return sgtrLive(s, ed.pid) ? sgtrC()*sgWastOf(s, ed.pid) : 0;
+  if(k === 7) return cellBroken(s, ed.cx, ed.cy) ? ed.hC : 0;
+  if(k === 8) return portWrecked(s, ed.pid) ? ed.hC : 0;
+  if(k === 9) return sgOpen(s, ed.pid) ? holeC(BREACH_BORE) : 0;
+  if(k === 10) return partWrecked(s, ed.pid) ? holeC(BREACH_BORE)
+    : (s.condLost && condVacuum(ed.pid)) ? holeC(condVentBore(ed.pid))
+    : condDumpOpen(s) ? dutyC(condDumpKgs(), TANK_RHO) : 0;
+  if(k === 11) return (coreState(s, ed.pid)||s).breach ? holeC(BREACH_BORE) : 0;
+  if(k === 12) return partWrecked(s, ed.pid) ? holeC(BREACH_BORE) : 0;
+  if(k === 13){ const cs = coreState(s, ed.pid); return (cs && cs.tubesOpen > 0) ? cs.tubesOpen*ed.cavN*ed.cavOne : 0; }
+  if(k === 14){ const cs = coreState(s, ed.pid); return !cs ? 0 : cs.breach ? holeC(BREACH_BORE) : cs.cavRelief ? ed.cavRelief : 0; }
+  /* k === 15 */ return partWrecked(s, ed.pid) ? holeC(BREACH_BORE)
+    : (s.burstBy && s.burstBy[ed.pid]) ? tankDiscC(ed.pid) : 0;
+};
+/* the ONE place the law is applied: an edge states a flow coefficient, nothing else.
+   The coefficient itself lives in edgeCval (shared with gate readers); the linearisation here.
+   One monomorphic function over uniformly-shaped edges, so the optimizer can inline it into the
+   solve loop and no double crosses a call boundary per edge per solve. */
 const edgeG = (net, ed, s) => {
-  const C = typeof ed.C === "function" ? ed.C(s) : ed.C;
-  /* the AUTHORED head, never edgeH()'s: the friction law is linearised about the drop it is itself asked to account for, and the momentum term is not one */
-  const h = C > 0 ? (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0)) : 0;
-  const hSrc = C > 0 && ed.hSrc ? ed.hSrc(s) : 0;
+  const C = edgeCval(net, ed, s);
+  /* the AUTHORED head, never edgeH()'s: the friction law is linearised about the drop it is itself asked to account for, and the momentum term is not one.
+     Only a routed pump carries one (ed.pump), every other edge its static column. */
+  const h = C > 0 ? (ed.Ck === undefined ? (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0))
+                                         : (ed.pump ? (pumpHeadNow(s, ed.pump) + staticH(net, ed, s))*HEAD_K : staticH(net, ed, s)*HEAD_K)) : 0;
+  const hSrc = C > 0 ? (ed.Ck === undefined ? (ed.hSrc ? ed.hSrc(s) : 0) : (ed.pump ? pumpHeadNow(s, ed.pump)*HEAD_K : 0)) : 0;
   const g = C > 0 ? flowG(C, net.F, ed.u, ed.v, h, ed.diode, hSrc, ed.chokeAt, ed.gasAt, ed.liqAt) : 0;
   if(net.choke && ed.i !== undefined) net.choke[ed.i] = (g > 0 && FLOWG_CHOKE) ? 1 : 0;
   return g > 0 ? g/(1 + g*edgeIn(ed)) : g;
 };
 /* I/dt in MPa per kg/s, the inertance as a resistance over one tick. `I*dw/dt` is a TIME derivative and is identically zero in a steady solve, so it exists inside a march and nowhere else - a settle, a reference solve and a governor walk all carry none. That is also what leaves `ed.w` at the flows the first march starts from, so its `In*w0` cancels its own conductance factor exactly and the term arrives without a step. An orifice states no length and has none either. */
 const edgeIn = ed => netMarch ? (ed.I || 0)/NET_DT/1e6 : 0;
-/* What the MATRIX drives the edge with: the authored head, plus the momentum the water is already carrying. w0 is last solve's flow, the same one-tick lag the friction and the density take. */
-const edgeH = (ed, s) => (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0))
-  + edgeIn(ed)*(ed.w || 0);
+/* What the MATRIX drives the edge with: the authored head, plus the momentum the water is already carrying. w0 is last solve's flow, the same one-tick lag the friction and the density take.
+   w lives in net.wArr (0 where unwritten, exactly what ed.w||0 read there), so no double boxes into an edge object. */
+const edgeH = (net, ed, s) => (ed.Ck === undefined ? (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0))
+  : (ed.pump ? (pumpHeadNow(s, ed.pump) + staticH(net, ed, s))*HEAD_K : staticH(net, ed, s)*HEAD_K))
+  + edgeIn(ed)*(net.wArr[ed.wi] || 0);
 function netDryParts(s, out){
   const net = (typeof P!=="undefined" && P) ? P.net : null, F = net && net.F;
   if(!net) return out || [];
@@ -513,7 +570,7 @@ const valveLeq = x => x>=1 ? 0 : VALVE_LEQ*(1/Math.max(x,VALVE_XMIN)**2 - 1);
 const NO_GATES = [];
 const throttledC = (s, bore, L, ids, K0, f) => {
   let Ltot = L;
-  for(const fid of ids){
+  for(let ti=0;ti<ids.length;ti++){ const fid = ids[ti];
     const x = s.valve && s.valve[fid];
     if(!(x>0)) return 0;
     Ltot += valveLeq(x);
@@ -563,11 +620,16 @@ const satSlope = (c,p) => { const q = Math.max(p,c.pFloor);
   if(!c.A) return q/(c.n*satT(c,q));
   const d = Math.max(satT(c,q)-c.C, 1); return q*c.B/(d*d); };
 
-/* A/B/C are Antoine, fitted to steam-table points at 0.004, 6.9 and 17 MPa; `cp` is flat and a real error at 17 */
+/* A/B/C are Antoine, fitted to steam-table points at 0.004, 6.9 and 17 MPa; `cp` is flat and a real error at 17.
+   Shape is the curve contract (satCurveFor() builds the same keys in the same order,
+   A/B/C undefined): hot EOS loops read c.tc/c.cp/... megamorphic across two maps
+   otherwise, and TurboFan deopts wrong-map every tick. Tref/burn ride along so the
+   maps unify; Tref=T0 preserves (c.Tref||c.T0), burn is unread. */
 const SAT_WATER = {A:9.844309, B:4174.5246, C:30.4331,
                    tc:647.096, pc:22.06, rhoc:322,
                    p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
-                   hfg:1509, rho:740, cp:5.5, mu:1.2e-4, muV:2.0e-5, solidK:1.4, hFilm:30000};
+                   hfg:1509, rho:740, cp:5.5, mu:1.2e-4, muV:2.0e-5, solidK:1.4, hFilm:30000,
+                   Tref:558, burn:undefined, tab:null};
 /* here and not in step.js: latRevolve() rates the core at module load, before a const in step.js exists */
 const CP_W=SAT_WATER.cp;
 const T_FEED = 490;        // K, where feedwater arrives
@@ -595,10 +657,15 @@ const curveTab = c => { let t = curveTabs.get(c); if(t !== undefined) return t;
   t = {inv: 1/d, hi: c.tc - d, hfg, rf, rg, sp}; curveTabs.set(c, t); return t; };
 const tabAt = (a, t, T) => { const u = (T - CURVE_LO)*t.inv, i = u|0, w = u - i;
   return a[i] + (a[i+1] - a[i])*w; };
-const hfgOf  = (c,T) => { const t = c.tc && curveTab(c); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.hfg, t, T) : hfgRaw(c,T); };
-const rhofOf = (c,T) => { const t = c.tc && curveTab(c); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.rf, t, T) : rhofRaw(c,T); };
-const rhogOf = (c,T) => { const t = c.tc && curveTab(c); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.rg, t, T) : rhogRaw(c,T); };
-const satP   = (c,T) => { const t = c.tc && curveTab(c); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.sp, t, T) : satPRaw(c,T); };
+/* the table rides the curve (c.tab, resolved at construction); the WeakMap is the
+   fallback for exotic curves only. A call boundary boxes the double, so these stay
+   one-liners V8 reliably inlines. */
+const hfgOf  = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.hfg, t, T) : hfgRaw(c,T); };
+const rhofOf = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.rf, t, T) : rhofRaw(c,T); };
+const rhogOf = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.rg, t, T) : rhogRaw(c,T); };
+const satP   = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.sp, t, T) : satPRaw(c,T); };
+/* resolved once at module load, never per call (see satCurveFor) */
+SAT_WATER.tab = curveTab(SAT_WATER);
 /* off the two densities so it cannot disagree with the kilograms */
 const satRvl = (c,p) => { const T = satT(c,p); return rhogOf(c,T)/rhofOf(c,T); };
 const H_DATUM = 273.15;
@@ -608,18 +675,44 @@ const kappaOf = c => BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W);
    `out` is a Float64Array: a plain {x,rho,b} boxed a HeapNumber on every double write, which
    --trace-gc-object-stats showed to be the sim's single largest source of new-space garbage. */
 const MX_X=0, MX_RHO=1, MX_B=2;
-const mixState = (c,p,h,out) => { const Ts = satT(c,p), hf = c.cp*(Ts - H_DATUM),
-    hfg = Math.max(hfgOf(c,Ts), 1e-6);
-  const x = clamp((h-hf)/hfg, 0, 1);
-  out[MX_X] = x; out[MX_B] = h <= hf ? 0 : h >= hf + hfg ? 2 : 1;
-  if(h <= hf){ const T = Math.min(H_DATUM + h/c.cp, Ts);
+/* the curve read is INLINED: satT/hfgOf/rhofOf/rhogOf/satP each returned a `double`
+   across a non-inlined call boundary, which boxed a HeapNumber per call, and this walk
+   runs ~1000 times a tick. Only the rare off-table fallback still calls out. */
+const mixState = (c,p,h,out) => {
+  const tab = c.tc && (c.tab || (c.tab = curveTab(c)));
+  const Ts = c.A ? c.C + c.B/(c.A - Math.log(Math.max(p,c.pFloor)))
+                 : c.T0*Math.pow(Math.max(p,c.pFloor)/c.p0, c.n);
+  const hf = c.cp*(Ts - H_DATUM);
+  let hfg;
+  if(tab && Ts > CURVE_LO && Ts < tab.hi){ const u=(Ts-CURVE_LO)*tab.inv, i=u|0, w=u-i; hfg=tab.hfg[i]+(tab.hfg[i+1]-tab.hfg[i])*w; }
+  else hfg = hfgOf(c,Ts);
+  if(!(hfg>1e-6)) hfg = 1e-6;
+  let x=(h-hf)/hfg; if(x<0)x=0; else if(x>1)x=1;
+  out[MX_X]=x; out[MX_B]= h<=hf?0 : h>=hf+hfg?2:1;
+  if(h<=hf){
+    let T=H_DATUM + h/c.cp; if(T>Ts)T=Ts;
     /* above its own critical temperature there is no liquid branch to be on: p/T off the design point COOLANT[].dens is quoted at */
-    out[MX_RHO] = T >= c.tc ? c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1))
-            : rhofOf(c,T)*(1 + kappaOf(c)*Math.max(0, p - satP(c,T))); }
-  else if(h >= hf + hfg){ const T = Ts + (h - hf - hfg)/c.cp;
-    out[MX_RHO] = rhogOf(c,Ts)*Ts/Math.max(T, 1); }
-  else { const rf = rhofOf(c,Ts);
-    out[MX_RHO] = 1/((1-x)/rf + x/rhogOf(c,Ts)); }
+    if(T>=c.tc) out[MX_RHO] = c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1));
+    else {
+      let rf;
+      if(tab && T > CURVE_LO && T < tab.hi){ const u=(T-CURVE_LO)*tab.inv, i=u|0, w=u-i; rf=tab.rf[i]+(tab.rf[i+1]-tab.rf[i])*w; }
+      else rf = rhofOf(c,T);
+      let sp;
+      if(tab && T > CURVE_LO && T < tab.hi){ const u=(T-CURVE_LO)*tab.inv, i=u|0, w=u-i; sp=tab.sp[i]+(tab.sp[i+1]-tab.sp[i])*w; }
+      else sp = satP(c,T);
+      out[MX_RHO]= rf*(1 + (BETA_W/Math.max(1e-6,c.solidK||SOLID_K_W))*Math.max(0, p - sp));
+    }
+  } else if(h>=hf+hfg){ const T=Ts+(h-hf-hfg)/c.cp;
+    let rg;
+    if(tab && Ts > CURVE_LO && Ts < tab.hi){ const u=(Ts-CURVE_LO)*tab.inv, i=u|0, w=u-i; rg=tab.rg[i]+(tab.rg[i+1]-tab.rg[i])*w; }
+    else rg = rhogOf(c,Ts);
+    out[MX_RHO]= rg*Ts/Math.max(T,1);
+  } else {
+    let rf, rg;
+    if(tab && Ts > CURVE_LO && Ts < tab.hi){ const u=(Ts-CURVE_LO)*tab.inv, i=u|0, w=u-i; rf=tab.rf[i]+(tab.rf[i+1]-tab.rf[i])*w; rg=tab.rg[i]+(tab.rg[i+1]-tab.rg[i])*w; }
+    else { rf = rhofOf(c,Ts); rg = rhogOf(c,Ts); }
+    out[MX_RHO]= 1/((1-x)/rf + x/rg);
+  }
   return out; };
 /* homogeneous (McAdams) - NOT the missing two-phase multiplier */
 const muMixOf = (c, x) => { const mf = c.mu, mg = c.muV || c.mu;
@@ -670,9 +763,18 @@ function satCurveOf(cid, p0){
 /* off a coolant row alone: a circuit between two transfer stages has no vessel to ask */
 function satCurveFor(a, p0){
   const tsat0 = a.tsat*Math.pow(p0/a.P0, coolSatN(a));
-  const c = {p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1, hfg:a.hfg, cp:a.cp, mu:a.mu, muV:a.muV, hFilm:a.hFilm,
-             tc:a.tc, pc:a.pc, rhoc:a.rhoc, rho:a.dens*RHO_K, solidK:a.solidK, burn:a.burn};
-  c.Tref = Math.min(a.Tref, tsat0);
+  /* same keys in the same order as SAT_WATER (A/B/C undefined: no coolant row
+     carries Antoine constants, so c.A stays falsy and the power-law branch is
+     kept); Tref is the programmed temperature, as (c.Tref||c.T0) reads it */
+  const c = {A:a.A, B:a.B, C:a.C,
+             tc:a.tc, pc:a.pc, rhoc:a.rhoc,
+             p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1,
+             hfg:a.hfg, rho:a.dens*RHO_K, cp:a.cp, mu:a.mu, muV:a.muV,
+             solidK:a.solidK, hFilm:a.hFilm,
+             Tref:Math.min(a.Tref, tsat0), burn:a.burn, tab:null};
+  /* the table rides on the curve, never through the WeakMap per call: the miss
+     paths below call mixState() ~1000x a tick and each resolution cost a box */
+  c.tab = curveTab(c);
   return c;
 }
 /* does this circuit say what is in it and what it sits at; everything else is water at the shell's design pressure */
@@ -823,11 +925,12 @@ function holdDampK(){
 }
 /* the primary is always one: a plant with no pressurizer still has a programme */
 function holdCircs(){
+  const slot = graphSlot("holdCircs"), was = slot.get(1); if(was) return was;
   const out = []; for(const id of coreIds()){ const ci = coreCircOf(id); if(ci >= 0 && out.indexOf(ci) < 0) out.push(ci); }
   if(!out.length) out.push(nodeGraph().coreCirc);
   for(const id of holdTankIds()){ const ci = tankCircuit(id);
     if(ci !== null && ci !== undefined && ci >= 0 && out.indexOf(ci) < 0) out.push(ci); }
-  return out;
+  slot.set(1, out); return out;
 }
 
 /* the shell IS the machine's own steam face: one two-phase vessel, the feed valve and the tube leak landing on it */
@@ -1040,12 +1143,12 @@ const tankLvl   = (s,id) => D.tanks[id] && D.tanks[id].hold && holdLvlRead(s,id)
                 : (D.tanks[id] && !D.tanks[id].cell && condPoolLvl(s) !== undefined) ? condPoolLvl(s)
                 : (s.tank && s.tank[id] !== undefined) ? s.tank[id] : D.tanks[id].level;
 /* a vented tank is not a vacuum: with nothing behind it a vessel is open to the compartment */
-function tankP(s,id){
+function tankP(s,id,pc0){
   const t = D.tanks[id];
   if(!t) return 0;
   const ci = tankCircuit(id);
   // CONTROLLED, so no gas law is consulted: a hold tank holds its circuit's setpoint
-  if(t.hold && s && P && P.net && holdLive(P.net, s, ci)) return loopP(s, ci);
+  if(t.hold && s && P && P.net && holdLive(P.net, s, ci, pc0)) return loopP(s, ci);
   /* a vessel whose water is in the field IS its node - the charge law only ever named a pressure nobody solved, and it is left below as the commissioning value */
   if(tankInField(id)){ const v = tankNodeP(s,id); if(v !== undefined) return v; }
   /* an isolated hold tank is a gas tank on the same charge law, charged by the vessel and not the player */
@@ -1307,17 +1410,17 @@ const KIND_TEMP = {hot: NT_HOT, surge: NT_HOT, cold: NT_COLD, hpi: NT_COLD};
 const netSatOf = nid => satOfCirc(circOfNode(nid));
 /* a node the field has not reached sits at its STRUCTURAL phase: the loop mean on the core's circuit, else saturated steam in a steam space and saturated liquid anywhere else */
 function netHAt(s, nid){
-  const h = pfAt(s.hBy, nid);
-  if(h !== undefined) return h;
+  const net = P && P.net, i = net && net.index ? net.index[nid] : undefined, hb = s.hBy;
+  if(hb && i !== undefined && hb.has[i]) return hb.v[i];
   const c = netSatOf(nid);
   { const ci = circOfNode(nid); if(circAuthored(ci)) return hOfT(c, TavgOf(s, ci)); }
-  const net = P && P.net, i = net && net.index ? net.index[nid] : undefined, p = netPAt(s, nid);
+  const p = netPAt(s, nid);
   return (net && net.vapour && i !== undefined && net.vapour[i]) ? satHg(c, p) : hOfT(c, satT(c, p));
 }
 /* floored at COND_P0, the plant's own vacuum; a node the solve does not carry reads its OWN circuit's setpoint, which is what runDesignP() walled it for */
 function netPAt(s, nid){
-  const f = pfAt(s.pBy, nid);
-  if(f !== undefined) return Math.max(COND_P0, f);
+  const net = P && P.net, i = net && net.index ? net.index[nid] : undefined, pb = s.pBy;
+  if(pb && i !== undefined && pb.has[i]) return Math.max(COND_P0, pb.v[i]);
   const c = circSetP(nid);
   return Math.max(COND_P0, c > 0 ? c : (s.P===undefined?P.P0:s.P));
 }
@@ -1436,22 +1539,26 @@ function netEdges(){
     const tid = tankIdOf(ends[0]) || tankIdOf(ends[1]);
     const mid = nodeIdx(runNodeOf(r.key));
     /* one key names the run, and exactly one half is the METER, or a reader summing over a key reads a series pair as twice the flow */
-    const ea = {u, v: mid, h: 0, kind: r.k, key: r.key, end: r.pa, chokeAt: mid};   // LABEL: kind carried for rendering/lookup, never re-compared here
-    const eb = {u: mid, v, h: 0, kind: r.k, key: r.key, end: r.pb, chokeAt: mid, meter: false};
+    const ea = {u, v: mid, h: 0, kind: r.k, key: r.key, end: r.pa, chokeAt: mid, tid: tid||null, bore, llen: Lh, k0: K0};   // LABEL: kind carried for rendering/lookup, never re-compared here
+    const eb = {u: mid, v, h: 0, kind: r.k, key: r.key, end: r.pb, chokeAt: mid, meter: false, tid: tid||null, bore, llen: Lh, k0: 0};
     ea.pair = eb;   // the meter half holds its far half, so "what crosses this pipe" can ask both
     /* the water in the pipe has mass, so the flow through it cannot be changed for nothing: L/A, off the SAME length and area the friction law is priced on */
     ea.I = eb.I = Math.max(Lh, NET_COMP_LEN)/areaOf(bore);
-    /* off the flow this edge carried last solve, at its donor's viscosity: the same one-tick lag the density carries */
-    const fa = () => fricOf(bore, ea.w, F.mu[ea.w >= 0 ? u : mid]);
-    const fb = () => fricOf(bore, eb.w, F.mu[eb.w >= 0 ? mid : v]);
+    /* off the flow this edge carried last solve, at its donor's viscosity: the same one-tick lag the density carries.
+       wArr is 0 where no solve has written and undefined is preserved via wHas, because fricOf maps them
+       differently (undefined takes PIPE_FRIC, 0 takes 64/500) and undefined>=0 is false for the mu index. */
+    const fa = () => { const w = F.wHas[ea.wi] ? F.wArr[ea.wi] : undefined;
+      return fricOf(bore, w, F.mu[w !== undefined && w >= 0 ? u : mid]); };
+    const fb = () => { const w = F.wHas[eb.wi] ? F.wArr[eb.wi] : undefined;
+      return fricOf(bore, w, F.mu[w !== undefined && w >= 0 ? mid : v]); };
     /* a vapour run off a two-phase vessel is a SEPARATOR: it draws the steam, never the drum's mixture */
     if(edgeLaw(r) === LAW_VAPOUR){
       if(separates(coreFold(ends[0]))) ea.gasAt = u;
       if(separates(coreFold(ends[1]))) eb.gasAt = v; }
     if(tid){
       /* a tank's line is ordinary pipe, priced off its own drawn bore and length like every other run */
-      ea.C = s => (tankLive(s,tid) && portLive(s,r.pa)) ? pipeC(bore, Lh, K0, fa()) : 0;
-      eb.C = s => (tankLive(s,tid) && portLive(s,r.pb)) ? pipeC(bore, Lh, 0,  fb()) : 0;
+      ea.C = s => (tankLive(s,tid) && portLive(s,r.pa)) ? pipeC(bore, Lh, K0, fa()) : 0; ea.Ck = 1;
+      eb.C = s => (tankLive(s,tid) && portLive(s,r.pb)) ? pipeC(bore, Lh, 0,  fb()) : 0; eb.Ck = 1;
       // a checked tank's line passes OUT of the tank only (flowG's diode)
       if(D.tanks[tid].check) ea.diode = eb.diode = tankIdOf(ends[0]) ? 1 : -1;
       /* a relief line takes the vessel's VAPOUR; structural, off the fitting the run lands on */
@@ -1465,8 +1572,8 @@ function netEdges(){
       continue;
     }
     /* a steam line is a pipe: one graph, one relation, at each end's own density */
-    ea.C = s => portLive(s,r.pa) ? throttledC(s, bore, Lh, NO_GATES, K0, fa()) : 0;
-    eb.C = s => portLive(s,r.pb) ? throttledC(s, bore, Lh, NO_GATES, 0,  fb()) : 0;
+    ea.C = s => portLive(s,r.pa) ? throttledC(s, bore, Lh, NO_GATES, K0, fa()) : 0; ea.Ck = 2;
+    eb.C = s => portLive(s,r.pb) ? throttledC(s, bore, Lh, NO_GATES, 0,  fb()) : 0; eb.Ck = 2;
     edges.push(ea, eb);
   }
 
@@ -1482,7 +1589,7 @@ function netEdges(){
     if(ua === ub) continue;
     const edge = {u: ua, v: ub,
                   C: compC(IN.K), h: 0, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b,
-                  I: partPathI(p.id, IN)};
+                  I: partPathI(p.id, IN), Ck: 0, Cdead: null, pump: null};
     /* per FACE and not per edge: a shell path is water at the feed nozzle and steam at the steam nozzle */
     if(IN.vap){ edge.vapU = IN.vap.indexOf("a")>=0;
                 edge.vapV = IN.vap.indexOf("b")>=0; }
@@ -1492,34 +1599,41 @@ function netEdges(){
       if(!row) continue;                       // a mode with no edge (tee) - already skipped above
       const bore = fitBoreK(p.id);
       edge.C = s => row.C(s, p.id, bore, NET_COMP_LEN);
+      edge.Ck = 3; edge.gateMode = fitModeOf(p.id); edge.pid = p.id; edge.bore = bore;
+      edge.gateIds = [p.id];
       edge.fit = p.id;
       edge.key = fitEdgeKey(p.id);
       /* a drum has no feed nozzle of its own, so its regulating valve is the fitting in its feed line: the same gate, the same check valve and the same C a shell's own feed path carries */
       const dv = drumFence().valve[p.id];
       if(dv){ const did = dv.id;
         edge.shellOf = did; edge.shellSign = dv.dir; edge.diode = dv.dir;
-        edge.C = s => feedTrainC()*(1 - clamp((s && s.fregBy && s.fregBy[did]) || 0, 0, 1)); }
+        edge.C = s => feedTrainC()*(1 - clamp((s && s.fregBy && s.fregBy[did]) || 0, 0, 1));
+        edge.Ck = 4; edge.freg = did; }
     }
     /* one regulating valve per generator: one pump on a shared header cannot hold two shells at level against their own secP() spread */
     if(R.sgtr && IN === roleIns(p)[1]){
       edge.shellOf = p.id;
       /* a GATE and not a back-pressure: a fraction shut, 0..1, closing the path itself, so no differential can outgrow the valve's authority */
       edge.C = s => feedTrainC()*(1 - clamp((s && s.fregBy && s.fregBy[p.id]) || 0, 0, 1));
+      edge.Ck = 4; edge.freg = p.id;
       /* a feedwater check valve, which every real generator has and for this reason: without one a shell above its own feed header blows down through the nozzle, and a shell that empties backwards takes the heaters with it - the water arriving is then the shell's own and there is no bleed to take */
       edge.diode = 1;
     }
     if(IN.head){
       /* signed a -> b by the CASING and nothing else, so a pump plumbed backwards pumps backwards; a part no run reaches carries no head */
       const routed = net.usage && (net.usage[p.id+"t"]||net.usage[p.id+"b"]||net.usage[p.id+"l"]||net.usage[p.id+"r"]);
-      if(routed) edge.h = s => pumpHeadNow(s, p.id);
+      if(routed){ edge.h = s => pumpHeadNow(s, p.id); edge.pump = p.id; }
       /* the casing is priced off the RATIO the machine states, head per rated kg/s, so the runout multiple is the same for every pump on the grid. The density is the DESIGN one and it is taken once: a passage is a geometry, and read live off F.rho it never cancelled the donor's own F.rhoD in the flow law - a suction that flashed then priced the casing at vapour and passed the law liquid, and the pump became a hole (measured: a feed pump at 23 202 kg/s against a 636 rating, its suction at -0.15 MPa). */
       { const c = circOfNode(coreFold(p.id + IN.a));
         edge.C = pumpCasingC(pumpHead(p.id), pumpFlow(p.id), circDesRho(c, false, 0)); }
+      edge.Ck = 0;
       /* standby and feed pumps only: a coolant or circ pump with a diode welds its loop shut against natural circulation */
       if(pumpStandby(p.id) || pumpBounds(p.id).shell) edge.diode = 1;
     }
     /* a wreck is not a length of pipe: its path is gone, and g<=0 is an ABSENT edge */
     { const c0 = edge.C, pid = p.id;
+      edge.Cdead = pid;
+      if(edge.Ck === 0) edge.Cc = c0;
       const dead = s => partWrecked(s, pid);
       edge.C = typeof c0 === "function" ? s => dead(s) ? 0 : c0(s)
                                         : s => dead(s) ? 0 : c0; }
@@ -1545,7 +1659,8 @@ function netEdges(){
     openSide[fid] = open;
     const q = byId[fid];
     fitVentOut[fid] = !!q && OPENF[side].some(f => hullCell(q.x+DIRV[f][0], q.y+DIRV[f][1]));
-    edges.push({u: open, v: reliefContNode(fid), C: pipeC(fitBoreK(fid), NET_COMP_LEN),
+    const vc = pipeC(fitBoreK(fid), NET_COMP_LEN);
+    edges.push({u: open, v: reliefContNode(fid), C: vc, Ck: 0, Cc: vc,
                 h: 0, kind: "vent", key: "vent:"+fid});   // LABEL: synthetic kind, for the z-pass below
   }
 
@@ -1572,7 +1687,7 @@ function netEdges(){
       breakIds.push(v);
       contZ[v] = zRow(y);                  // the hole's own elevation, not a machine's
       contCell[v] = [x,y];
-      edges.push({u: um, v, C: s => cellBroken(s,x,y) ? hC : 0,
+      edges.push({u: um, v, C: s => cellBroken(s,x,y) ? hC : 0, Ck: 7, cx: x, cy: y, hC,
                   h: 0, kind: "break", sec, steam, key: "break:"+r.key});
     }
     /* a wrecked nozzle valve is one more opening on the same run, discharging at ITS OWN cell */
@@ -1582,7 +1697,7 @@ function netEdges(){
       breakIds.push(v);
       contZ[v] = zRow(c[1]);
       contCell[v] = c;
-      edges.push({u: um, v, C: s => portWrecked(s,pid) ? hC : 0,
+      edges.push({u: um, v, C: s => portWrecked(s,pid) ? hC : 0, Ck: 8, pid, hC,
                   h: 0, kind: "break", sec, steam, key: "break:"+r.key});
     }
   }
@@ -1591,7 +1706,7 @@ function netEdges(){
     const R = ROLE[p.role]; if(!R || !R.vapPath) continue;
     const ua = nodeIdx(coreFold(p.id+R.vapPath.a)), ub = nodeIdx(coreFold(p.id+R.vapPath.b));
     if(ua === ub) continue;
-    edges.push({u: ua, v: ub, C: s => turbCOf(s, p.id), h: 0, kind: "vap",
+    edges.push({u: ua, v: ub, C: s => turbCOf(s, p.id), Ck: 5, pid: p.id, h: 0, kind: "vap",
                 key: "vap:"+p.id, machine: p.id, work: !!R.vapPath.work,
                 vapU: true, vapV: true});
   }
@@ -1599,7 +1714,7 @@ function netEdges(){
   const secTIds = [], secTParts = [];
   for(const q of LAY.parts) if(ROLE[q.role] && ROLE[q.role].sgtr){
     const id = q.id, v = nodeIdx(shellNode(id));
-    edges.push({u: nodeIdx(id+"b"), v, C: s => sgtrLive(s, id) ? sgtrC()*sgWastOf(s, id) : 0,
+    edges.push({u: nodeIdx(id+"b"), v, C: s => sgtrLive(s, id) ? sgtrC()*sgWastOf(s, id) : 0, Ck: 6, pid: id,
                 h: 0, kind: "sgtr", key: "sgtr:"+id});
     /* registered whether or not a steam run routed: it STORES, so its row solves with no edges at all, which is a generator pressurising onto its own safeties */
     secTIds.push(v); secTParts.push(id);
@@ -1608,7 +1723,7 @@ function netEdges(){
       breakIds.push(c);
       contZ[c] = zFace(q, "b");
       contCell[c] = [q.x+((q.w/2)|0), q.y+q.h-1];
-      edges.push({u: v, v: c, C: s => sgOpen(s, id) ? holeC(BREACH_BORE) : 0,
+      edges.push({u: v, v: c, C: s => sgOpen(s, id) ? holeC(BREACH_BORE) : 0, Ck: 9, pid: id,
                   h: 0, kind: "break", sec: 1, key: "break:"+id}); }
   }
 
@@ -1623,7 +1738,7 @@ function netEdges(){
       breakIds.push(c);
       contZ[c] = zFace(q, "b");
       contCell[c] = [q.x+((q.w/2)|0), q.y+q.h-1];
-      edges.push({u: va, v: c, h: 0, kind: "break", sec: 1, key: "break:"+id,
+      edges.push({u: va, v: c, h: 0, kind: "break", sec: 1, key: "break:"+id, Ck: 10, pid: id,
                   C: s => partWrecked(s, id) ? holeC(BREACH_BORE)
                         : (s.condLost && condVacuum(id)) ? holeC(condVentBore(id))
                         : condDumpOpen(s) ? dutyC(condDumpKgs(), TANK_RHO) : 0}); }
@@ -1633,14 +1748,14 @@ function netEdges(){
   for(const cid of coreIds()){ const v = contNode(cid), q0 = byId[cid], u = nodeIdx(coreFold(cid));
     breakIds.push(v);
     contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
-    edges.push({u, v, C: s => (coreState(s,cid)||s).breach ? holeC(BREACH_BORE) : 0,
+    edges.push({u, v, C: s => (coreState(s,cid)||s).breach ? holeC(BREACH_BORE) : 0, Ck: 11, pid: cid,
                 h: 0, kind: "break", key: "break:"+cid}); }
   /* a WRECKED vessel gets a second opening at its own FLOOR, so the column keeps pushing after the pressures equalise; two edges, because net.z is settled at build time and damage is live */
   for(const cid of coreIds()){ const q = byId[cid], v = contNode(cid+":floor"), u = nodeIdx(coreFold(cid));
     breakIds.push(v);
     contZ[v] = zFace(q, "b");
     contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
-    edges.push({u, v, C: s => partWrecked(s, q.id) ? holeC(BREACH_BORE) : 0,
+    edges.push({u, v, C: s => partWrecked(s, q.id) ? holeC(BREACH_BORE) : 0, Ck: 12, pid: q.id,
                 h: 0, kind: "break", key: "break:"+cid}); }
 
   /* a torn channel is two holes of the tube's bore over the share the core has opened; once the shield is off the open face is the one breach figure */
@@ -1650,9 +1765,9 @@ function netEdges(){
     breakIds.push(v); contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
     cavIds.push(cav); cavCont[cid] = v; cavVol[cav] = cavVolM3(c);
     const one = 2*holeC(tubeBoreMm(c)/BORE_REF), n = tubeCount(c), relief = cavReliefC(cid, c, one);
-    edges.push({u, v: cav, C: s => { const cs = coreState(s, cid); return (cs && cs.tubesOpen > 0) ? cs.tubesOpen*n*one : 0; },
+    edges.push({u, v: cav, C: s => { const cs = coreState(s, cid); return (cs && cs.tubesOpen > 0) ? cs.tubesOpen*n*one : 0; }, Ck: 13, pid: cid, cavN: n, cavOne: one,
                 h: 0, kind: "cav", key: "cav:"+cid});   // LABEL: synthetic kind, a channel's two ends
-    edges.push({u: cav, v, C: s => { const cs = coreState(s, cid); return !cs ? 0 : cs.breach ? holeC(BREACH_BORE) : cs.cavRelief ? relief : 0; },
+    edges.push({u: cav, v, C: s => { const cs = coreState(s, cid); return !cs ? 0 : cs.breach ? holeC(BREACH_BORE) : cs.cavRelief ? relief : 0; }, Ck: 14, pid: cid, cavRelief: relief,
                 h: 0, kind: "break", key: "break:cav:"+cid}); }
 
   /* a vessel whose water is the CIRCUIT's sits at an ordinary node, so the only way out of it is an EDGE; a tank with a pool of its own drains its level in step(). A wreck and a rupture disc are the same opening, differing in where on the shell it is. */
@@ -1666,8 +1781,36 @@ function netEdges(){
     contZ[v] = zFace(q, "b");
     contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
     edges.push({u: nodeIdx(id), v, C: s => partWrecked(s, id) ? holeC(BREACH_BORE)
-                                         : (s.burstBy && s.burstBy[id]) ? tankDiscC(id) : 0,
+                                         : (s.burstBy && s.burstBy[id]) ? tankDiscC(id) : 0, Ck: 15, pid: id,
                 h: 0, kind: "break", key: "break:"+id});
+  }
+
+  /* one hidden class for every edge: the literals above build ~21 shapes (and more on other plants),
+     and the churn deoptimizes every hot function per solve (wrong-map). Re-keying in one canonical
+     order at build costs nothing per tick; every later assignment only writes existing keys.
+     Missing keys stay undefined, which every reader already treats as absent. */
+  for(const ed of edges){
+    const v0=ed.u, v1=ed.v, v2=ed.C, v3=ed.Ck, v4=ed.Cc, v5=ed.Cdead,
+          v6=ed.h, v7=ed.h0, v8=ed.hSrc, v9=ed.g, v10=ed.kind, v11=ed.key,
+          v12=ed.end, v13=ed.chokeAt, v14=ed.meter, v15=ed.pair, v16=ed.I,
+          v17=ed.diode, v18=ed.gasAt, v19=ed.liqAt, v20=ed.tid, v21=ed.bore,
+          v22=ed.llen, v23=ed.k0, v24=ed.pid, v25=ed.freg, v26=ed.gateMode,
+          v27=ed.gateIds, v28=ed.fit, v29=ed.shellOf, v30=ed.shellSign,
+          v31=ed.cx, v32=ed.cy, v33=ed.hC, v34=ed.cavN, v35=ed.cavOne,
+          v36=ed.cavRelief, v37=ed.pump, v38=ed.vapU, v39=ed.vapV,
+          v40=ed.poolAt, v41=ed.sec, v42=ed.steam, v43=ed.machine,
+          v44=ed.work, v45=ed.i, v46=ed.wi;
+    for(const k in ed) delete ed[k];
+    ed.u=v0; ed.v=v1; ed.C=v2; ed.Ck=v3; ed.Cc=v4; ed.Cdead=v5;
+    ed.h=v6; ed.h0=v7; ed.hSrc=v8; ed.g=v9; ed.kind=v10; ed.key=v11;
+    ed.end=v12; ed.chokeAt=v13; ed.meter=v14; ed.pair=v15; ed.I=v16;
+    ed.diode=v17; ed.gasAt=v18; ed.liqAt=v19; ed.tid=v20; ed.bore=v21;
+    ed.llen=v22; ed.k0=v23; ed.pid=v24; ed.freg=v25; ed.gateMode=v26;
+    ed.gateIds=v27; ed.fit=v28; ed.shellOf=v29; ed.shellSign=v30;
+    ed.cx=v31; ed.cy=v32; ed.hC=v33; ed.cavN=v34; ed.cavOne=v35;
+    ed.cavRelief=v36; ed.pump=v37; ed.vapU=v38; ed.vapV=v39;
+    ed.poolAt=v40; ed.sec=v41; ed.steam=v42; ed.machine=v43;
+    ed.work=v44; ed.i=v45; ed.wi=v46;
   }
 
   return {runs: net, byKey, byId, partOfNode, tankIdOf, nodes, index, coreNode, edges, F,
@@ -1877,9 +2020,13 @@ function netFinish(net2, ctx){
   /* AFTER the head loop: g is linearised about the full driving differential, and the static term is part of it */
   // its own slot in the choke mask, so edgeG can say which edge the cap bit on
   net2.choke = new Uint8Array(edges.length);
-  for(let i=0;i<edges.length;i++) edges[i].i = i;
+  /* the last-solve flow per edge, typed: ed.w boxed a HeapNumber per solve per edge on write.
+     wi addresses it; wHas preserves the pre-first-solve undefined that fricOf distinguishes. */
+  const wArr = new Float64Array(edges.length), wHas = new Uint8Array(edges.length);
+  net2.F.wArr = wArr; net2.F.wHas = wHas; net2.wArr = wArr; net2.wHas = wHas;
+  for(let i=0;i<edges.length;i++){ edges[i].i = i; edges[i].wi = i; }
   for(const ed of edges) if(ed.C !== undefined){ ed.g = s => edgeG(net2, ed, s);
-    ed.h0 = ed.h; ed.h = s => edgeH(ed, s); }
+    ed.h0 = ed.h; ed.h = s => edgeH(net2, ed, s); }
 
   /* connected components over the STRUCTURAL edge list, never ed.g: a reference frame must not jump when an operator turns a handwheel */
   net2.comp = new Int32Array(net2.n).fill(-1);
@@ -1914,30 +2061,32 @@ function netBounds(net, s){
   const b = netFixed(net, s);
   /* a vessel in the field is nowhere the water GOES - it is somewhere the water is */
   for(const id in net.tankNode){ const i = net.tankNode[id];
-    if(tankStores(id) && !tankInField(id) && b[i] === undefined) b[i] = 0; }
+    if(tankStores(id) && !tankInField(id) && !b.has[i]){ b.v[i] = 0; b.has[i] = 1; } }
   return b;
 }
 /* live when the piece the tank stands in has a CYCLE in it: a tree hanging off the vessel is a stub it pressurises and nothing else */
-function holdLive(net, s, ci){
+function holdLive(net, s, ci, pc0){
   const holds = holdOnCirc(ci);
   if(!holds.length) return true;                  // nothing on this circuit to disconnect
   const t = net.tankNode[holds[0]];
   if(t === undefined) return false;               // a vessel sitting there unplumbed
   /* memoised on what the walk reads: the live edge set and the fixed SET, which beyond that only moves with a burst shell or the commissioning hold. sgBurstGen only ever counts up (record.js), so it is an exact stand-in for the set of bursts it took to reach it */
-  const pc = netPieces(net, s);
+  const pc = pc0 || netPieces(net, s);
   const bk = ((s ? (s.sgBurstGen|0) : 0) << 1) | (netStoreHeld ? 1 : 0);
-  if(net.hlPc !== pc || net.hlKey !== bk){ net.hlPc = pc; net.hlKey = bk; net.hl = {}; }
-  const was = net.hl[ci];
-  if(was !== undefined) return was;
+  if(net.hlPc !== pc || net.hlKey !== bk){ net.hlPc = pc; net.hlKey = bk; net.hlGen = (net.hlGen|0)+1; }
+  /* generation-stamped answer array, indexed by circuit: a fresh {} per piece-change boxed nothing itself but every key added transitioned it; stamps are exact with no clearing */
+  const hlV = net.hlV || (net.hlV = []), hlG = net.hlG || (net.hlG = []);
+  if(hlG[ci] === net.hlGen) return hlV[ci];
   const fixed = netBounds(net, s);
   const adj = pc.adj, live = pc.live;
   // the seed is exempt from its own fixed test: a hold tank's node IS an anchor
-  const seen = scratch(net, "hlSeen", net.n, Uint8Array, 0), stack = [t];
+  const seen = scratch(net, "hlSeen", net.n, Uint8Array, 0), stack = net.hlStack || (net.hlStack = []);
+  stack.length = 0; stack.push(t);
   let nodes = 1; seen[t] = 1;
   while(stack.length){
     const a = adj[stack.pop()];
     if(a) for(let i=0;i<a.length;i++){ const v=a[i];
-      if(seen[v] || fixed[v] !== undefined) continue;   // reached, never crossed
+      if(seen[v] || fixed.has[v]) continue;   // reached, never crossed
       seen[v] = 1; nodes++; stack.push(v); }
   }
   // pairs keyed by u*net.n+v (u<v), the same identity "u|v" named - no string built to reach it
@@ -1948,36 +2097,12 @@ function holdLive(net, s, ci){
     if(!live[e] || !seen[ed.u] || !seen[ed.v] || ed.u === ed.v) continue;
     pairs.add(ed.u < ed.v ? ed.u*net.n+ed.v : ed.v*net.n+ed.u);
   }
-  return (net.hl[ci] = pairs.size >= nodes);
+  const ans = pairs.size >= nodes;
+  hlV[ci] = ans; hlG[ci] = net.hlGen;
+  return ans;
 }
-const pzrLive = (net, s) => holdLive(net, s, nodeGraph().coreCirc);
 
-/* SOLID is: no hold tank holding a bubble (the caller has already asked holdLive), and the live piece reaches no FIXED node */
-const circSeed = (net, ci) => {
-  for(let i=0;i<net.n;i++) if(net.compCirc[net.comp[i]] === ci) return i;
-  return -1; };
-function circSolid(net, s, ci){
-  const holds = holdOnCirc(ci);
-  const own = coreOnCirc(ci)[0];
-  const seed = own ? net.index[coreFold(own)]
-             : holds.length ? net.tankNode[holds[0]] : circSeed(net, ci);
-  if(seed === undefined || seed === null || seed < 0) return false;
-  /* an anchor is a REFERENCE, not a boundary: counting a sealed loop's own anchor says every sealed loop is open */
-  const fixed = netBounds(net, s), ref = net.refNow;
-  const bound = i => fixed[i] !== undefined && ref.anchor[ref.of[i]] !== i;
-  if(bound(seed)) return false;
-  const adj = netPieces(net, s).adj;
-  const seen = new Uint8Array(net.n), st = [seed];
-  seen[seed] = 1;
-  while(st.length){
-    const a = adj[st.pop()];
-    if(a) for(let i=0;i<a.length;i++){ const v = a[i];
-      if(bound(v)) return false;
-      if(seen[v]) continue;
-      seen[v] = 1; st.push(v); }
-  }
-  return true;
-}
+
 /* pieces are components over the LIVE edges, so isolation splits the frame; cached on the live signature the factorisation already builds */
 function netPieces(net, s){
   if(net.pc && net.pcSig === netLiveSig(net, s)) return net.pc;
@@ -1988,7 +2113,7 @@ function netPieces(net, s){
   for(let i=0;i<net.n;i++){ const a = adj[i]; if(a) a.length = 0; }
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
-    const g = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+    const g = typeof ed.g === 'function' ? edgeG(net, ed, s) : ed.g;
     if(!(g > 0)) continue;
     live[e] = 1;
     (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
@@ -2011,10 +2136,11 @@ function pieceOf(net, s, node){
   const i = typeof node === "number" ? node : net.index[node];
   return i === undefined ? -1 : netPieces(net, s).of[i];
 }
-/* "still plumbed to the primary", for every gate below */
-const corePiece = (net, s, cid) => netPieces(net, s).of[cid && net.coreNodes[cid] !== undefined ? net.coreNodes[cid] : net.coreNode];
-// the live piece of EVERY vessel - "still plumbed to a core" is asked of all of them
-const corePieces = (net, s) => { const pc = netPieces(net, s), cc = net.corePieceC;
+/* "still plumbed to the primary", for every gate below (inlined at its sole caller) */
+// the live piece of EVERY vessel - "still plumbed to a core" is asked of all of them.
+// pc is the caller's netPieces() when it already holds it (stageFed, the radiator loop):
+// corePieces() otherwise pays a second live-signature check for the same answer.
+const corePieces = (net, s, pc0) => { const pc = pc0 || netPieces(net, s), cc = net.corePieceC;
   if(cc && cc.pc === pc) return cc.set;
   const of = pc.of, set = new Set();
   for(const id in net.coreNodes) set.add(of[net.coreNodes[id]]);
@@ -2034,44 +2160,48 @@ function netRef(net, s){
   r.p0 = p0; r.anchor = anchor; r.of = piece.of; r.nPiece = piece.n;
   return r;
 }
-/* what a node lets go TO: a containment node knows its own cell, every other node stands in a machine */
-const netCellOf = (net, i) => {
+/* what a node lets go TO: a containment node knows its own cell, every other node stands in a machine.
+   The machine's cell is computed IN PLACE: building the [x,y] pair allocated an array per node per solve. */
+const netPcont = (net, s, i) => {
   const c = net.contCell && net.contCell[i];
-  if(c) return c;
+  if(c) return regionP(s, c[0], c[1]);
   const p = net.partOfNode && net.partOfNode(net.name[i]);
-  return p ? [p.x+((p.w/2)|0), p.y+((p.h/2)|0)] : null;
-};
-const netPcont = (net, s, i) => { const c = netCellOf(net, i);
-  return c ? regionP(s, c[0], c[1]) : P.Pcont; };
+  return p ? regionP(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : P.Pcont; };
+/* The fixed SET as two reused arrays: fixV the absolute pressure, fixHas the 0/1 mask.
+   A double stored to a plain-object property boxes a HeapNumber per store per solve (205 openings);
+   indexed typed arrays store none. Returned as the stable holder net.fixF ({v,has} references only). */
 function netFixed(net, s){
   const ref = netRef(net, s);
-  const f = net.fixScr || (net.fixScr = {});
-  for(const k in f) delete f[k];
+  if(!net.fixV || net.fixV.length !== net.n){ net.fixV = new Float64Array(net.n); net.fixHas = new Uint8Array(net.n); }
+  const fv = net.fixV, fh = net.fixHas;
+  fh.fill(0);
   net.refNow = ref;
   /* every value here is an ABSOLUTE pressure at the node it belongs to; the column rides the EDGES (staticH) */
-  for(let c=0;c<ref.nPiece;c++) if(ref.anchor[c] >= 0) f[ref.anchor[c]] = ref.p0[c];
+  for(let c=0;c<ref.nPiece;c++) if(ref.anchor[c] >= 0){ fv[ref.anchor[c]] = ref.p0[c]; fh[ref.anchor[c]] = 1; }
   /* one node per opening, always fixed: keeping the SET constant lets the factorisation cache key on the break's own live state */
-  for(const i of net.cont) f[i] = netPcont(net, s, i);
+  for(let ci2=0;ci2<net.cont.length;ci2++){ const i = net.cont[ci2]; fv[i] = netPcont(net, s, i); fh[i] = 1; }
   /* the settle stands every store down, so the hold tank is pinned at its setpoint for the length of the walk or the piece floats */
-  if(netStoreHeld) for(const id of holdTankIds()){ const i = net.tankNode[id];
-    if(i !== undefined) f[i] = holdPOf(s, id); }
+  if(netStoreHeld){ const holds = holdTankIds(); for(let hi2=0;hi2<holds.length;hi2++){ const id = holds[hi2], i = net.tankNode[id];
+    if(i !== undefined){ fv[i] = holdPOf(s, id); fh[i] = 1; } } }
   /* a drum is the same case as a shell, and on a direct cycle it is the vessel that AUTHORS the loop's pressure: pinned at its circuit's setpoint for the length of the walk, and a store from the first tick */
-  if(netStoreHeld) for(const id of drumIds()){ const i = net.tankNode[id];
-    if(i !== undefined) f[i] = holdSetP(tankCircuit(id)); }
+  if(netStoreHeld){ const drums = drumIds(); for(let di=0;di<drums.length;di++){ const id = drums[di], i = net.tankNode[id];
+    if(i !== undefined){ fv[i] = holdSetP(tankCircuit(id)); fh[i] = 1; } } }
   /* fixed at what its own gas space holds, open edge or not: an isolated node costs nothing and keeps the fixed SET constant */
   for(const id in net.tankNode){ const i = net.tankNode[id];
     if(D.tanks[id] && D.tanks[id].hold) continue;
     if(tankInField(id)) continue;             // an ordinary vessel: the solve says what it holds
     if(tankStores(id)) continue;              // it gives way instead (netStore)
-    f[i] = tankP(s,id); }
+    fv[i] = tankP(s,id); fh[i] = 1; }
   /* the shell is an ordinary vessel in the field: pinned only while the settle stands the stores down, and open through its own break edge */
-  if(netStoreHeld) net.secT.forEach((i,k)=>{ f[i] = secP(s, net.secTParts[k]); });
+  if(netStoreHeld){ const secT = net.secT; for(let sk=0;sk<secT.length;sk++){ const i = secT[sk]; fv[i] = secP(s, net.secTParts[sk]); fh[i] = 1; } }
   /* the condenser is an ordinary vessel in the field: pinned only while the settle stands the stores down, and open through its own break edge */
   /* ONE end of the machine, never both: an edge between two fixed nodes is an unlimited source at one and an unlimited sink at the other, and the whole condensate train solves round it.
      The VESSEL is the end that is pinned, because its pressure is the one that is known - the saturation over its own pool - and the outlet under it follows through the internal path, column and all. */
   if(netStoreHeld){ const pc = condP(s);
-    net.condParts.forEach((id,k) => { if(condVacuum(id)) f[net.condV[k]] = pc; }); }
-  return f;
+    for(let ck=0;ck<net.condParts.length;ck++){ const id = net.condParts[ck]; if(condVacuum(id)){ fv[net.condV[ck]] = pc; fh[net.condV[ck]] = 1; } } }
+  const ff = net.fixF || (net.fixF = {});
+  ff.v = fv; ff.has = fh;
+  return ff;
 }
 /* simTick()'s literal 0.02, named: a compliance is per SECOND, so a storage term is the one place that has to know how long a tick is */
 const NET_DT = 0.02;
@@ -2095,14 +2225,21 @@ const NET_PMAX = 200;   // a node holding more than any pressure can account for
 function netPStar(c, p0, h, rhoT, r0, b0){
   /* an empty node is at the VACUUM, not at whatever it was last solved at */
   if(!isFinite(rhoT) || rhoT <= 0) return COND_P0;
-  let p = clamp(p0, COND_P0, NET_PMAX), lo = COND_P0, hi = NET_PMAX;
+  let p = p0 < COND_P0 ? COND_P0 : p0 > NET_PMAX ? NET_PMAX : p0, lo = COND_P0, hi = NET_PMAX;
   for(let k=0;k<40;k++){
     let r, b;
     if(k === 0 && p === p0 && r0 !== undefined){ r = r0; b = b0; }
     else { r = mixState(c, p, h, MIX_SCRATCH)[MX_RHO]; b = MIX_SCRATCH[MX_B]; }
     if(Math.abs(r - rhoT) <= 1e-6*rhoT) return p;
     if(r < rhoT) lo = p; else hi = p;
-    const d = DRHO_DP(c, p, h, r, b);
+    /* DRHO_DP inlined: the call returned a `double` per Newton step and boxed it */
+    const dp = Math.max(1e-4, p*1e-3);
+    let p1 = p + dp; mixState(c,p1,h,MIX_SCRATCH2); let r1 = MIX_SCRATCH2[MX_RHO];
+    if(MIX_SCRATCH2[MX_B] !== b){ const p2 = p - dp;
+      if(p2 > 0){ mixState(c,p2,h,MIX_SCRATCH2); if(MIX_SCRATCH2[MX_B] === b){ p1 = p2; r1 = MIX_SCRATCH2[MX_RHO]; }
+        else { mixState(c,p1,h,MIX_SCRATCH2); r1 = MIX_SCRATCH2[MX_RHO]; } }
+      else { mixState(c,p1,h,MIX_SCRATCH2); r1 = MIX_SCRATCH2[MX_RHO]; } }
+    const d = (r1 - r)/(p1 - p);
     const nxt = d > 0 ? p - (r - rhoT)/d : (lo + hi)/2;
     p = (nxt > lo && nxt < hi) ? nxt : (lo + hi)/2;
   }
@@ -2120,33 +2257,39 @@ function netStore(net, s){
         km = stN ? net.stKm : (net.stKm = new Float64Array(net.n).fill(NaN)),
         vP0 = stN ? net.stP0 : (net.stP0 = new Float64Array(net.n)),
         vC = stN ? net.stC : (net.stC = new Float64Array(net.n));
+  __apS();
   for(let i=0;netStoreHeld?0:i<net.n;i++){
     const nid = net.name[i];
     /* floored at the run-dry line: a spent node with no diagonal is a degenerate row, and a spent node still has a pressure */
     const mEos = Math.max(net.vol[i]*net.F.rho[i], DRY_MIN_KG);
     const m = (s && s.mBy && s.mBy.has[i]) ? s.mBy.v[i] : mEos;
-    const V = net.vol[i], hN = netHAt(s, nid);
+    const V = net.vol[i], hb = s.hBy;
+    const hN = (hb && hb.has[i]) ? hb.v[i] : netHAt(s, nid);
     const pF = net.F.p[i], rF = net.F.rho[i], bF = net.F.b[i];
     let p0, C;
     if(pF === kp[i] && hN === kh[i] && m === km[i]){ p0 = vP0[i]; C = vC[i]; }
     else {
       const c = netSatOf(nid);
       p0 = V > 0 ? netPStar(c, pF, hN, m/V, rF, bF) : pF;
-      /* the curve's own slope at the state point, floored by netKappa() so a branch the curve reads flat still has a row to stand on */
+      /* the curve's own slope at the state point, floored by netKappa() so a branch the curve reads flat still has a row to stand on (both inlined) */
       const d = p0 === pF ? DRHO_DP(c, p0, hN, rF, bF) : DRHO_DP(c, p0, hN);
-      C = Math.max(V*d, mEos*netKappa(nid, p0, net.F.x[i]));
+      const xr = net.F.x[i], xq = xr < 0 ? 0 : xr > 1 ? 1 : xr, gk = 1/Math.max(p0, COND_P0);
+      const kf = BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W);
+      C = Math.max(V*d, mEos*(xq*gk + (1-xq)*Math.min(gk, kf)));
       kp[i] = pF; kh[i] = hN; km[i] = m; vP0[i] = p0; vC[i] = C;
     }
     if(!(C > 0) || !isFinite(C) || !isFinite(p0) || !isFinite(m)) continue;
     cap[i] = C/NET_DT; src[i] = C/NET_DT*p0;
     any = true;
   }
+  __apE("store.eos");
+  __apS();
   /* a hold tank takes the generic row above but PINS: a pressurizer is what "something decides this circuit's pressure" means */
   for(const id in net.tankNode) if(D.tanks[id] && D.tanks[id].hold && !netStoreHeld){
     const i = net.tankNode[id]; if(cap[i] > 0) pin[i] = 1; }
   /* and so does a drum: a vessel with its own bubble in it states an absolute pressure the same way a pressurizer does, and on a direct cycle it is the only thing on the loop that states one */
-  if(!netStoreHeld) for(const id of drumIds()){
-    const i = net.tankNode[id]; if(i !== undefined && cap[i] > 0) pin[i] = 1; }
+  if(!netStoreHeld){ const drums2 = drumIds(); for(let di2=0;di2<drums2.length;di2++){
+    const id = drums2[di2], i = net.tankNode[id]; if(i !== undefined && cap[i] > 0) pin[i] = 1; } }
   /* the charge is a COMPLIANCE and nothing else; on a vessel in the field it is linearised about that node's own last pressure, so the row carries no figure the solve did not produce. `pin` is not a matrix term - it is netReadP()'s "this piece does not float". */
   for(const id in net.tankNode){
     const i = net.tankNode[id], C = tankCapAt(s, id);
@@ -2156,6 +2299,8 @@ function netStore(net, s){
     cap[i] = C/NET_DT; src[i] = C/NET_DT*p0; pin[i] = 1;
     any = true;
   }
+  __apE("store.tank");
+  __apS();
   // netStoreHeld leaves the TANKS alone: one that stopped storing unpinned is a piece that floats
   for(let k=0;netStoreHeld?0:k<(net.condV||[]).length;k++){
     const i = net.condV[k], id = net.condParts[k];
@@ -2168,22 +2313,20 @@ function netStore(net, s){
     pin[i] = 1;
     any = true;
   }
+  __apE("store.cond");
   if(!any) return null;
   const st = net.storeScr || (net.storeScr = {});
   st.cap = cap; st.src = src; st.pin = pin;
   return st;
 }
-/* WHICH nodes are fixed, never what they hold: a value only reaches b, but the SET changes the matrix */
-const netFixSig = fixed => Object.keys(fixed).join(',');
-// the same string, joined only when the SET moved: a per-node mask compare is exact and does not allocate
+/* WHICH nodes are fixed, as a generation number: the mask is memcmp'd against the reused copy,
+   so a change is exact with no string built and no slice taken. */
 function netFixSetSig(net, fixed){
-  const n = net.n, m = net.fixMaskNow || (net.fixMaskNow = new Uint8Array(n));
-  let same = !!net.fixMask;
-  for(let i=0;i<n;i++){ const b = fixed[i] === undefined ? 0 : 1;
-    m[i] = b; if(same && net.fixMask[i] !== b) same = false; }
-  if(same) return net.fixMaskSig;
-  net.fixMask = m.slice(); net.fixMaskSig = netFixSig(fixed);
-  return net.fixMaskSig;
+  const n = net.n, fh = fixed.has;
+  if(!net.fixMask || net.fixMask.length !== n){ net.fixMask = new Uint8Array(n); net.fixMask.set(fh); net.fixGen = (net.fixGen|0)+1; return net.fixGen; }
+  const mk = net.fixMask;
+  for(let i=0;i<n;i++) if(mk[i] !== fh[i]){ mk.set(fh); net.fixGen = (net.fixGen|0)+1; return net.fixGen; }
+  return net.fixGen|0;
 }
 
 /* every conductance the edge list evaluates against S, as one string; a stale factorisation is a silent wrong answer, so it is checked every call */
@@ -2274,10 +2417,12 @@ function netLiveSigBuild(net, s){
   + '|' + (s.turbTrip?'T':'') + (s.condLost?'C':'') + (s.load>0?'L':'');
 }
 
+/* exact mask memcmp over n entries; allocation-free, so the order cache stays exact without strings */
+const masksDiffer = (a, b, n) => { for(let i=0;i<n;i++) if(a[i] !== b[i]) return true; return false; };
 /* reverse Cuthill-McKee over the STRUCTURAL edge list, so the band is a property of the drawing and one ordering is right for any gate state; ties on node index, so a re-factor lands on the same one */
 function netOrder(net, fixed){
   const n = net.n, pos = new Int32Array(n).fill(-1), free = [];
-  for(let i=0;i<n;i++) if(fixed[i]===undefined){ pos[i]=free.length; free.push(i); }
+  for(let i=0;i<n;i++) if(!fixed.has[i]){ pos[i]=free.length; free.push(i); }
   const nf = free.length, adj = Array.from({length:nf}, () => []);
   for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e], a=pos[ed.u], b=pos[ed.v];
     if(a<0 || b<0 || a===b) continue; adj[a].push(b); adj[b].push(a); }
@@ -2312,16 +2457,19 @@ function netFactored(net, s, fixed, bOut, touchOut, ghG, ghH){
   net.AfTopo = topo;
   if(!net.Af || net.AfSig !== sig){
     /* a fixed node is not in the matrix at all: its value reaches the system through its free neighbours' b and nowhere else, so compacting to the free rows is exact */
-    // the order is a fact about the topology and the fixed SET
-    if(net.orderSig !== fsig){ net.orderFree = netOrder(net, fixed); net.orderSig = fsig;
-      net.Affree = Int32Array.from(net.orderFree); }
+    // the order is a fact about the topology and the fixed SET: memcmp the mask so a set that flips back reuses its order
+    if(!net.orderMask || net.orderMask.length !== net.n || masksDiffer(net.orderMask, fixed.has, net.n)){
+      if(!net.orderMask || net.orderMask.length !== net.n) net.orderMask = new Uint8Array(net.n);
+      net.orderFree = netOrder(net, fixed); net.orderMask.set(fixed.has);
+      if(!net.Affree || net.Affree.length !== net.orderFree.length) net.Affree = new Int32Array(net.orderFree.length);
+      net.Affree.set(net.orderFree); }
     const free = net.orderFree;
     /* per-net scratch: this block runs on EVERY tick, and a fresh nf x nf matrix each time was the largest thing the collector saw */
     const nf = free.length, row = scratch(net, "Afrow", net.n, Int32Array, 0);
     for(let a=0;a<nf;a++) row[free[a]] = a;
     let bw = 0;
     for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e];
-      if(fixed[ed.u]!==undefined || fixed[ed.v]!==undefined) continue;
+      if(fixed.has[ed.u] || fixed.has[ed.v]) continue;
       const d = Math.abs(row[ed.u]-row[ed.v]); if(d>bw) bw=d; }
     net.Afrow = row; net.Afn = nf; net.Afbw = bw;
     const degC = scratch(net, "AfdegC", nf, Uint8Array, 0);
@@ -2356,12 +2504,13 @@ let divSig = null;
 function netDiverge(net, q, fixed, store, b){
   if(net.AfTopo === divSig) return;
   divSig = net.AfTopo;
-  const d = new Float64Array(net.n);
+  const fxH = fixed.has;
+  const d = scratch(net, "divD", net.n, Float64Array, 0);
   let qmax = 0;
   for(let e=0;e<net.edges.length;e++){ const ed=net.edges[e], f=q[e];
     d[ed.u] -= f; d[ed.v] += f;
     const a=Math.abs(f); if(a>qmax) qmax=a; }
-  const acc = new Float64Array(net.n);
+  const acc = scratch(net, "divA", net.n, Float64Array, 0);
   if(store) for(let i=0;i<net.n;i++){ if(!(store.cap[i] > 0)) continue;
     acc[i] = store.cap[i]*b[i] - store.src[i];
     const a=Math.abs(acc[i]); if(a>qmax) qmax=a; }
@@ -2369,7 +2518,7 @@ function netDiverge(net, q, fixed, store, b){
   /* a REAL floor: against 1e-6 of qmax alone, a rig with nothing flowing compares rounding to rounding */
   const tol = Math.max(1e-6*qmax, DIV_KG);
   for(let i=0;i<net.n;i++){
-    if(fixed[i] !== undefined) continue;
+    if(fxH[i]) continue;
     if(net.Afdeg && net.Afdeg[i]) continue;     // no path to ground: no answer to check
     const r = d[i] - acc[i];
     if(Math.abs(r) > tol)
@@ -2384,8 +2533,8 @@ function netSolve(net, s, qKey){
   if(netPassLive && netPassSol && netPassSolS === s && netPassSol.net === net) return netPassSol;
   net.sigLock = s; net.sigLockV = null;
   try {
-  netFieldUpdate(net, s);
-  const fixed = netFixed(net, s);
+  __apS(); netFieldUpdate(net, s); __apE("solve.field");
+  __apS(); const fixed = netFixed(net, s); __apE("solve.fixed");
   const b = scratch(net, "b", net.n, Float64Array, 0);
   /* which nodes a conducting edge reached: the byP reader tells a fixed node that is PINNING something from one hanging off a shut break */
   const touch = scratch(net, "touch", net.n, Uint8Array, 0);
@@ -2394,19 +2543,21 @@ function netSolve(net, s, qKey){
   const ghH = scratch(net, "ghH", net.edges.length, Float64Array, 0);
   { const es = net.edges;
     for(let e=0;e<es.length;e++){ const ed = es[e];
-      const gv = typeof ed.g === 'function' ? ed.g(s) : ed.g;
+      /* edgeG/edgeH called directly: every function ed.g/ed.h is the netFinish wrapper over these, and calling the shared single function keeps the call monomorphic (a megamorphic double return boxes a HeapNumber per edge per solve) */
+      const gv = typeof ed.g === 'function' ? edgeG(net, ed, s) : ed.g;
       ghG[e] = gv || 0;
-      ghH[e] = typeof ed.h === 'function' ? ed.h(s) : (ed.h || 0); } }
+      ghH[e] = typeof ed.h === 'function' ? edgeH(net, ed, s) : (ed.h || 0); } }
   netFactored(net, s, fixed, b, touch, ghG, ghH);
   if(!net.AfB)
     netAssemble(net.edges, net.n, fixed, s, false, b, net.store && net.store.src,
                 null, null, touch, undefined, ghG, ghH);
   netSubstFree(net, b);
-  netUnfix(b, fixed);
+  netUnfix(b, fixed, net.n);
   const q = qKey ? scratch(net, qKey, net.edges.length, Float64Array, 0) : new Float64Array(net.edges.length);
   netFlows(net.edges, b, fixed, q, s, ghG, ghH);
   // what fricOf() reads next solve
-  if(!netReadOnly) for(let e=0;e<net.edges.length;e++) net.edges[e].w = q[e];
+  if(!netReadOnly){ const wA = net.wArr, wH = net.wHas;
+    for(let e=0;e<net.edges.length;e++){ wA[e] = q[e]; wH[e] = 1; } }
   netDiverge(net, q, fixed, net.store, b);
   const sol = net.solScr || (net.solScr = {});
   sol.net = net; sol.s = s; sol.b = b; sol.q = q; sol.fixed = fixed; sol.touch = touch; sol.ref = net.refNow; sol.store = net.store;
@@ -2419,23 +2570,24 @@ function netSolve(net, s, qKey){
 function netReadP(sol, byP){
   if(!byP) return;
   const net = sol.net, s = sol.s, b = sol.b, fixed = sol.fixed, touch = sol.touch, ref = sol.ref;
+  const fxH = fixed.has;
   { const deg = net.Afdeg;
     const lo = scratch(net, "rdLo", ref.nPiece, Float64Array, Infinity);
     const free = scratch(net, "rdFree", ref.nPiece, Uint8Array, 1);
     const wet = scratch(net, "rdWet", ref.nPiece, Uint8Array, 0);
     const store = sol.store;
     for(let i=0;i<net.n;i++){ const c = ref.of[i];
-      if(fixed[i]!==undefined){ if(touch[i]) free[c]=0; continue; }
+      if(fxH[i]){ if(touch[i]) free[c]=0; continue; }
       if(deg && deg[i] && !touch[i]) continue;
       if(net.F.wet[i]) wet[c] = 1;
       /* a node that stores pins its own piece: its row carries C/dt*p*, an ABSOLUTE pressure, so there is nothing to float */
       if(store && store.pin[i]) free[c] = 0;
       if(b[i] < lo[c]) lo[c] = b[i]; }
     for(let i=0;i<net.n;i++){
-      if(deg && deg[i] && !touch[i] && fixed[i]===undefined){ byP.has[i] = 0; continue; }
+      if(deg && deg[i] && !touch[i] && !fxH[i]){ byP.has[i] = 0; continue; }
       const c = ref.of[i];
       /* a piece nothing pins is FLOATED so its lowest node sits at the ship's pressure; a shift cancels out of every flow, and a piece with no water in it is not floated at all */
-      const off = (free[c] && wet[c] && fixed[i]===undefined && isFinite(lo[c])) ? netPcont(net, s, i) - lo[c] : 0;
+      const off = (free[c] && wet[c] && !fxH[i] && isFinite(lo[c])) ? netPcont(net, s, i) - lo[c] : 0;
       byP.v[i] = b[i] + off; byP.has[i] = 1;
     } }
 }
@@ -2448,17 +2600,72 @@ function runEdgeCommon(net, q, e){
     v = (v >= 0) === (w >= 0) ? (Math.abs(w) < Math.abs(v) ? w : v) : 0; }
   return v;
 }
-/* pure over a netSolve() answer: reads the field and the flows, writes only into the bags it was handed, and returns the core's own circulation */
+/* pure over a netSolve() answer: reads the field and the flows, writes only into the bags it was handed, and returns the core's own circulation.
+   Flow books are typed holders {v: Float64Array, pos: Map} on the tick path (a double stored to a
+   plain object boxes per edge per solve); cold paths (commissioning, tools) pass plain objects and
+   take the legacy branches, which stay exact and allocate only there. Key maps are structural per
+   net and cached by edge identity. */
+const flowMapsOf = net => {
+  if(net.flowMapsE === net.edges) return net.flowMaps;
+  const rk = [], rpos = new Map();
+  { const seen = new Set();
+    for(const e of net.edges) if(e.key && e.meter !== false && !seen.has(e.key)){ seen.add(e.key); rpos.set(e.key, rk.length); rk.push(e.key); } }
+  const ck = Object.keys(net.coreNodes || {}), cpos = new Map();
+  for(let i=0;i<ck.length;i++) cpos.set(ck[i], i);
+  const tk = [], tpos = new Map();
+  for(const id in net.tankNode) if(!(D.tanks[id] && D.tanks[id].hold)){ tpos.set(id, tk.length); tk.push(id); }
+  const sk = [], spos = new Map();
+  for(const e of net.edges) if(e.shellOf !== undefined && !spos.has(e.shellOf)){ spos.set(e.shellOf, sk.length); sk.push(e.shellOf); }
+  const gk = [], gpos = new Map();
+  for(const e of net.edges) if(e.kind === "sgtr" && e.key !== undefined && !gpos.has(e.key)){ gpos.set(e.key, gk.length); gk.push(e.key); }
+  const fk = [], fpos = new Map();
+  for(const fid of (net.fitIds || [])) if(net.fitMode[fid] === "relief"){ fpos.set(fid, fk.length); fk.push(fid); }
+  const bk = [], bpos = new Map();
+  for(const e of net.edges) if(e.kind === "break" && e.key !== undefined && !bpos.has(e.key)){ bpos.set(e.key, bk.length); bk.push(e.key); }
+  net.flowMapsE = net.edges;
+  return (net.flowMaps = { runKeys: rk, runPos: rpos, coreKeys: ck, corePos: cpos,
+                           tankKeys: tk, tankPos: tpos, shellKeys: sk, shellPos: spos,
+                           sgtrKeys: gk, sgtrPos: gpos, reliefKeys: fk, reliefPos: fpos,
+                           byKeys: bk, byPos: bpos });
+};
+/* run-flow value off either container: holder on tick, plain object on cold paths */
+const flowV = (rf, key) => {
+  if(!rf) return 0;
+  if(rf.v) { const i = rf.pos.get(key); return i === undefined ? 0 : rf.v[i]; }
+  return rf[key] || 0;
+};
+/* scalar outs (turbWk/P/A, qSgtr, spill, spillSec, nat) live in one Float64Array per outs object */
+const OWK = 0, OWKP = 1, OWKA = 2, OQSGT = 3, OSPILL = 4, OSPILLSEC = 5, ONAT = 6;
+const outsScalars = outs => outs.scV && outs.scV.length === 7 ? outs.scV : (outs.scV = new Float64Array(7));
+/* either container: typed on tick, legacy prop on cold paths (both with the ||0 the readers had) */
+const outsNum = (outs, i, legacy) => {
+  const v = (outs && outs.scV) ? outs.scV[i] : ((outs && outs[legacy]) || 0);
+  return v || 0;
+};
+/* either bag container: typed holder arrays (pos map rides on outs beside them) or legacy object */
+const outsBag = (outs, vp, op, pp, key) => {
+  if(!outs) return undefined;
+  const V = outs[vp];
+  if(V){ const P2 = outs[pp], i = P2 ? P2.get(key) : undefined; return i === undefined ? undefined : V[i]; }
+  const o = outs[op]; return o ? o[key] : undefined;
+};
 function netReadEdges(sol, byLoop, byRun, byDrop, outs){
   const net = sol.net, s = sol.s, b = sol.b, q = sol.q, fixed = sol.fixed, ref = sol.ref;
-  /* zero exactly the keys the loop below will touch (same predicate, so fill and accumulate can never disagree) - never delete, or a reused byRun goes dictionary-mode */
+  const fxH = fixed.has;
+  /* zero exactly the keys the loop below will touch (same predicate, so fill and accumulate can never disagree) - never delete, or a reused byRun goes dictionary-mode.
+     Typed holder on tick (byRun.v), legacy object on cold paths. */
+  const T = byRun && byRun.v;
+  const FM = T ? flowMapsOf(net) : null;
   if(byRun){
-    const rk = net.runKeyList || (net.runKeyList = (() => {
-      const seen = new Set();
-      for(const e of net.edges) if(e.key && e.meter !== false) seen.add(e.key);
-      return [...seen];
-    })());
-    for(let i=0;i<rk.length;i++) byRun[rk[i]] = 0;
+    if(T) byRun.v.fill(0);
+    else {
+      const rk = net.runKeyList || (net.runKeyList = (() => {
+        const seen = new Set();
+        for(const e of net.edges) if(e.key && e.meter !== false) seen.add(e.key);
+        return [...seen];
+      })());
+      for(let i=0;i<rk.length;i++) byRun[rk[i]] = 0;
+    }
   }
   /* the scale is the SPAN, highest node to lowest, not the highest alone: against the span one edge can never lose more than all of them do */
   let pmax = -Infinity, pmin = Infinity;
@@ -2466,7 +2673,7 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
   for(let c=0;c<ref.nPiece;c++) if(ref.anchor[c] >= 0) isAnchor[ref.anchor[c]] = 1;
   for(let i=0;i<net.n;i++){
     /* free nodes only: a containment node sits far below the loop open or not, and would collapse every drop this scale exists to make legible */
-    if(fixed[i] !== undefined && !isAnchor[i]) continue;
+    if(fxH[i] && !isAnchor[i]) continue;
     if(b[i]>pmax) pmax=b[i]; if(b[i]<pmin) pmin=b[i];
   }
   const span = pmax - pmin;
@@ -2476,53 +2683,73 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
     for(const id in net.tankNode) if(!(D.tanks[id] && D.tanks[id].hold)) m[net.tankNode[id]] = 1;
     return m; })());
   let core = 0, spill = 0, spillSec = 0;
-  let coreBy = null;
+  let coreBy = null, coreByV = null;
+  /* per-outs typed bags, allocated once per outs object and refilled per call; cold paths keep legacy objects */
+  const obag = (prop, n) => { const a = outs[prop];
+    if(!a || a.length !== n){ outs[prop] = new Float64Array(n); return outs[prop]; }
+    a.fill(0); return a; };
   if(outs){
-    coreBy = outs.coreKgBy || (outs.coreKgBy = {});
-    for(const k in coreBy) delete coreBy[k];
-    if(outs.qTankBy) for(const k in outs.qTankBy) delete outs.qTankBy[k];
-    if(outs.sgSteamOutBy) for(const k in outs.sgSteamOutBy) delete outs.sgSteamOutBy[k];
-    if(outs.by) for(const k in outs.by) delete outs.by[k];
-    if(outs.sgFeedBy) for(const k in outs.sgFeedBy) delete outs.sgFeedBy[k];
-    if(outs.sgtrBy) for(const k in outs.sgtrBy) delete outs.sgtrBy[k];
-    if(outs.reliefBy) for(const k in outs.reliefBy) delete outs.reliefBy[k];
-    outs.turbWk = 0; outs.turbWkP = 0; outs.turbWkA = 0; outs.qSgtr = 0;
+    if(T){ const M = FM;
+      coreByV = obag("coreKgV", M.coreKeys.length);
+      obag("qTankV", M.tankKeys.length); obag("sgSteamV", M.shellKeys.length);
+      obag("byV", M.byKeys.length); obag("sgFeedV", M.shellKeys.length);
+      obag("sgtrV", M.sgtrKeys.length); obag("reliefV", M.reliefKeys.length);
+      outsScalars(outs).fill(0);
+      /* pos maps ride beside the arrays so readers stay net-agnostic (nominal nets included) */
+      outs.coreKgPos = M.corePos; outs.qTankPos = M.tankPos; outs.sgSteamPos = M.shellPos;
+      outs.byPos = M.byPos; outs.sgFeedPos = M.shellPos; outs.sgtrPos = M.sgtrPos;
+      outs.reliefPos = M.reliefPos;
+    } else {
+      coreBy = outs.coreKgBy || (outs.coreKgBy = {});
+      for(const k in coreBy) delete coreBy[k];
+      if(outs.qTankBy) for(const k in outs.qTankBy) delete outs.qTankBy[k];
+      if(outs.sgSteamOutBy) for(const k in outs.sgSteamOutBy) delete outs.sgSteamOutBy[k];
+      if(outs.by) for(const k in outs.by) delete outs.by[k];
+      if(outs.sgFeedBy) for(const k in outs.sgFeedBy) delete outs.sgFeedBy[k];
+      if(outs.sgtrBy) for(const k in outs.sgtrBy) delete outs.sgtrBy[k];
+      if(outs.reliefBy) for(const k in outs.reliefBy) delete outs.reliefBy[k];
+      outs.turbWk = 0; outs.turbWkP = 0; outs.turbWkA = 0; outs.qSgtr = 0;
+    }
   }
-  if(byLoop) for(const k in byLoop) delete byLoop[k];
+  if(byLoop){ if(byLoop.fill) byLoop.fill(0); else for(const k in byLoop) delete byLoop[k]; }
   for(let e=0;e<net.edges.length;e++){
     const ed = net.edges[e];
-    if(byRun && ed.key && ed.meter !== false)
-      byRun[ed.key] = (byRun[ed.key]||0) + runEdgeCommon(net, q, e);
+    if(byRun && ed.key && ed.meter !== false){
+      const rv = runEdgeCommon(net, q, e);
+      if(T) byRun.v[byRun.pos.get(ed.key)] += rv;
+      else byRun[ed.key] = (byRun[ed.key]||0) + rv;
+    }
     /* signed per TANK off the tank's OWN node, positive out: a tank whose far end is not the core has no core end for a core-relative sign to read */
     if(outs && net.tankIdByNode){
       const tu = tankNodes[ed.u] ? net.tankIdByNode[ed.u] : undefined,
             tv = tankNodes[ed.v] ? net.tankIdByNode[ed.v] : undefined;
       if(tu !== undefined || tv !== undefined){
-        const by = outs.qTankBy || (outs.qTankBy = {});
         const tid3 = tu !== undefined ? tu : tv;
         const tn = tu !== undefined ? ed.u : ed.v;
         const out = tu !== undefined ? q[e] : -q[e];
            /* the same F.wet bit the transport reads, so the reading and the transport cannot disagree about a spent tank */
-        by[tid3] = (by[tid3]||0)
-                 + ((out > 0 && net.F.wet && !net.F.wet[tn]) ? 0 : out);
+        const add = ((out > 0 && net.F.wet && !net.F.wet[tn]) ? 0 : out);
+        if(T) outs.qTankV[FM.tankPos.get(tid3)] += add;
+        else { const by = outs.qTankBy || (outs.qTankBy = {}); by[tid3] = (by[tid3]||0) + add; }
       }
     }
     /* signed out of the shell; negative is steam ARRIVING from a hotter machine down a shared header, which is why a header equalises */
     if(outs && net.secTById && ed.shellOf === undefined && ed.kind !== "sgtr"){
       const su = net.secTById[ed.u], sv = net.secTById[ed.v];
       if(su !== undefined || sv !== undefined){
-        const by = outs.sgSteamOutBy || (outs.sgSteamOutBy = {});
-        const sid = su !== undefined ? su : sv;
-        by[sid] = (by[sid]||0) + (su !== undefined ? q[e] : -q[e]);
+        const sid = su !== undefined ? su : sv, svv = (su !== undefined ? q[e] : -q[e]);
+        if(T) outs.sgSteamV[FM.shellPos.get(sid)] += svv;
+        else { const by = outs.sgSteamOutBy || (outs.sgSteamOutBy = {}); by[sid] = (by[sid]||0) + svv; }
       }
     }
     /* one edge, two gates: turbCOf() is governor plus bypass, turbWorkFrac() the share that is the wheels. Inlet pressure weighted by what went through */
     if(outs && ed.work){
       const fr = turbWorkFrac(s, ed.machine);
       if(fr > 0){ const w = q[e]*fr;
-        outs.turbWk = (outs.turbWk||0) + w;
-        outs.turbWkP = (outs.turbWkP||0) + b[ed.u]*Math.abs(w);
-        outs.turbWkA = (outs.turbWkA||0) + Math.abs(w); }
+        if(T){ const SC = outs.scV; SC[OWK] += w; SC[OWKP] += b[ed.u]*Math.abs(w); SC[OWKA] += Math.abs(w); }
+        else { outs.turbWk = (outs.turbWk||0) + w;
+               outs.turbWkP = (outs.turbWkP||0) + b[ed.u]*Math.abs(w);
+               outs.turbWkA = (outs.turbWkA||0) + Math.abs(w); } }
     }
     // SUMMED: a run is two half edges and what it spends is both of them
     if(byDrop && ed.key) byDrop[ed.key] = (byDrop[ed.key]||0) + (span>0 ? Math.abs(b[ed.u]-b[ed.v])/span : 0);
@@ -2530,27 +2757,32 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
       /* spilt is what LEFT and only what left: every break edge is u = the plant, v = containment, so positive is out. A steam-side hole is charged at its shell instead */
       if(!ed.steam){ if(ed.sec) spillSec += Math.max(q[e],0); else spill += Math.max(q[e],0); }
       /* per OPENING, because an effect has to be drawn where its own hole is */
-      if(outs){ (outs.by || (outs.by = {}));
-                outs.by[ed.key] = (outs.by[ed.key]||0) + Math.max(q[e],0); }
+      if(outs){ const mq = Math.max(q[e],0);
+        if(T) { const bi = FM.byPos.get(ed.key); if(bi !== undefined){ outs.byV[bi] += mq; } }
+        else { (outs.by || (outs.by = {})); outs.by[ed.key] = (outs.by[ed.key]||0) + mq; } }
     }
     /* off the shell EDGE and not any pipe, so however many lines feed it all arrive here and sum; positive is into the shell */
     if(outs && ed.shellOf !== undefined){
-      (outs.sgFeedBy || (outs.sgFeedBy = {}));
-      // positive INTO the boiler, whichever face of the valve the drum happens to stand on
-      outs.sgFeedBy[ed.shellOf] = (outs.sgFeedBy[ed.shellOf]||0) + (ed.shellSign === -1 ? -q[e] : q[e]);
+      const fv = (ed.shellSign === -1 ? -q[e] : q[e]);
+      if(T) outs.sgFeedV[FM.shellPos.get(ed.shellOf)] += fv;
+      else { (outs.sgFeedBy || (outs.sgFeedBy = {}));
+             outs.sgFeedBy[ed.shellOf] = (outs.sgFeedBy[ed.shellOf]||0) + fv; }
     }
     /* signed: primary into secondary is positive, so it reaches zero on its own once the primary is brought down */
     if(outs && ed.kind === "sgtr"){ // LABEL: synthetic edge kind this function invents
-      outs.qSgtr = (outs.qSgtr||0) + q[e];
-      /* per GENERATOR: the jet belongs on the machine whose tubes went, not on every machine in the row */
-      (outs.sgtrBy || (outs.sgtrBy = {}));
-      outs.sgtrBy[ed.key] = (outs.sgtrBy[ed.key]||0) + q[e];
+      if(T){ const SC = outs.scV; SC[OQSGT] += q[e];
+             outs.sgtrV[FM.sgtrPos.get(ed.key)] += q[e]; }
+      else { outs.qSgtr = (outs.qSgtr||0) + q[e];
+             /* per GENERATOR: the jet belongs on the machine whose tubes went, not on every machine in the row */
+             (outs.sgtrBy || (outs.sgtrBy = {}));
+             outs.sgtrBy[ed.key] = (outs.sgtrBy[ed.key]||0) + q[e]; }
     }
     /* carried on the edge itself, never matched against a run's kind string; this IS the vent */
     if(outs && ed.fit && net.fitMode[ed.fit]==="relief"){
-      const fid = ed.fit;
-      (outs.reliefBy || (outs.reliefBy = {}));
-      outs.reliefBy[fid] = (outs.reliefBy[fid]||0) + Math.abs(q[e]);
+      const fid = ed.fit, av = Math.abs(q[e]);
+      if(T) outs.reliefV[FM.reliefPos.get(fid)] += av;
+      else { (outs.reliefBy || (outs.reliefBy = {}));
+             outs.reliefBy[fid] = (outs.reliefBy[fid]||0) + av; }
     }
     /* by NODE INCIDENCE AND SIGN ALONE, never a kind: a leg carrying water away is a negative contribution and drops out on its own, and KIND_TEMP is a buoyancy tag - read here it deleted the one edge feeding a core whose cold leg had an exchanger spliced into it. A tank edge is a DIFFERENT flow with its own figure. */
     const qTankEdge = !!(tankNodes[ed.u] || tankNodes[ed.v]);
@@ -2559,12 +2791,18 @@ function netReadEdges(sol, byLoop, byRun, byDrop, outs){
     if(!qTankEdge && (inU || inV)){
       const qin = inV ? q[e] : -q[e];
       if(qin > 0){
-        core += qin; if(coreBy){ const cid = net.coreOfNode[inV ? ed.v : ed.u]; if(cid) coreBy[cid] = (coreBy[cid]||0) + qin; }
-        if(byLoop){ const i = loopOfKey(ed.key); if(i!=null) byLoop[i] = (byLoop[i]||0) + qin; }
+        core += qin;
+        if(coreByV){ const cid = net.coreOfNode[inV ? ed.v : ed.u]; if(cid) coreByV[FM.corePos.get(cid)] += qin; }
+        else if(coreBy){ const cid = net.coreOfNode[inV ? ed.v : ed.u]; if(cid) coreBy[cid] = (coreBy[cid]||0) + qin; }
+        if(byLoop){ const i = loopOfKey(ed.key);
+          if(i!=null){ if(byLoop.fill) byLoop[i] += qin; else byLoop[i] = (byLoop[i]||0) + qin; } }
       }
     }
   }
-  if(outs){ outs.spill = spill; outs.spillSec = spillSec; outs.coreKgBy = coreBy; }
+  if(outs){
+    if(T){ const SC = outs.scV; SC[OSPILL] = spill; SC[OSPILLSEC] = spillSec; }
+    else { outs.spill = spill; outs.spillSec = spillSec; outs.coreKgBy = coreBy; }
+  }
   return core;
 }
 
@@ -2655,14 +2893,17 @@ function netPressures(s){
 const NAT_PASSES = 8, NAT_TOL = 1e-3, NAT_EVERY = 25;
 function netNatCirc(net, s, natLoop){
   if(net.natLoop && (netReadOnly || ((net.natTick = (net.natTick||0)+1) % NAT_EVERY))){
-    for(const k in natLoop) delete natLoop[k];
-    Object.assign(natLoop, net.natLoop); return; }
+    if(natLoop.fill){ natLoop.fill(0); natLoop.set(net.natLoop); }
+    else { for(const k in natLoop) delete natLoop[k]; Object.assign(natLoop, net.natLoop); }
+    return; }
   const sNat = (net.sNat && Object.getPrototypeOf(net.sNat) === s) ? net.sNat : (net.sNat = Object.create(s));
   sNat.flowScale = 0; sNat.pBy = net.natPBy || s.pBy;
   /* the walk's field and its w backup are per-net scratch: netReadP writes or deletes every node, so a reused object ends where a fresh one would, and eight passes built eight 267-key dictionaries a walk */
   const pf0 = net.natScr || (net.natScr = pfNew(net));
-  const w = net.natW || (net.natW = new Array(net.edges.length));
-  for(let e=0;e<net.edges.length;e++) w[e] = net.edges[e].w;
+  const wN = net.natW || (net.natW = new Float64Array(net.edges.length));
+  const wNH = net.natWH || (net.natWH = new Uint8Array(net.edges.length));
+  const wA = net.wArr, wHA = net.wHas;
+  for(let e=0;e<net.edges.length;e++){ wN[e] = wA[e]; wNH[e] = wHA[e]; }
   const was = netStoreHeld; netHoldStore(true);
   try {
     let sol, ans = 0, prev = null;
@@ -2674,11 +2915,10 @@ function netNatCirc(net, s, natLoop){
       prev = ans; }
     netReadEdges(sol, natLoop, null, null, null);
     if(!netReadOnly){ net.natPBy = sNat.pBy;
-      if(!net.natLoop) net.natLoop = {};
-      else for(const k in net.natLoop) delete net.natLoop[k];
-      Object.assign(net.natLoop, natLoop); }
+      if(!net.natLoop || net.natLoop.length !== natLoop.length) net.natLoop = new Float64Array(natLoop.length);
+      net.natLoop.set(natLoop); }
   } finally { netHoldStore(was);
-    for(let e=0;e<net.edges.length;e++) net.edges[e].w = w[e];
+    for(let e=0;e<net.edges.length;e++){ wA[e] = wN[e]; wHA[e] = wNH[e]; }
     netFieldUpdate(net, s); }
 }
 const netStCopy = v => {
@@ -2695,36 +2935,50 @@ const netStCopy = v => {
 const pfClone = f => f ? { v: Float64Array.from(f.v), has: Uint8Array.from(f.has) } : null;
 function netStateSave(net){
   if(!net) return null;
-  return { w:net.edges.map(ed => ed.w), pc:netStCopy(net.pc), pcSig:net.pcSig, natTick:net.natTick||0,
+  /* w as a plain array with undefined where no solve has written, exactly the shape ed.w saved before */
+  const w = new Array(net.edges.length);
+  for(let e=0;e<net.edges.length;e++) w[e] = net.wHas[e] ? net.wArr[e] : undefined;
+  return { w, pc:netStCopy(net.pc), pcSig:net.pcSig, natTick:net.natTick||0,
            natPBy:pfClone(net.natPBy),
            natLoop:net.natLoop ? Object.assign({}, net.natLoop) : null };
 }
 // false when the node set moved under it: a state saved on another graph does not fit
 function netStateLoad(net, st){
   if(!net || !st || st.w.length !== net.edges.length) return false;
-  for(let e=0;e<net.edges.length;e++) net.edges[e].w = st.w[e];
+  for(let e=0;e<net.edges.length;e++){ const v = st.w[e];
+    /* undefined (never written) stays unwritten; null is a file round-trip of the same and reads back
+       as ed.w=null did - fricOf(null) takes the 64/500 path and null>=0 holds for the mu index */
+    if(v === undefined){ net.wArr[e] = 0; net.wHas[e] = 0; }
+    else if(v === null){ net.wArr[e] = 0; net.wHas[e] = 1; }
+    else { net.wArr[e] = v; net.wHas[e] = 1; } }
   net.pc = netStCopy(st.pc); net.pcSig = st.pcSig;
   net.natTick = st.natTick;
   net.natPBy  = pfClone(st.natPBy);
-  net.natLoop = st.natLoop ? Object.assign({}, st.natLoop) : null;
+  /* stored as index-keyed objects in files, typed live: the values are identical either way */
+  if(st.natLoop){ let nn = 0; for(const k in st.natLoop) nn = Math.max(nn, +k + 1);
+    const nl = new Float64Array(nn);
+    for(const k in st.natLoop) nl[+k] = st.natLoop[k]; net.natLoop = nl; }
+  else net.natLoop = null;
   return true;
 }
 /* nothing is clamped: a pump develops its own stated head, so the solve is already the answer. The one NaN/negative guard lives here, on the single scalar every caller consumes, never inside the solver */
 function netFlowK(s, byRun, byP, outs){
   const n = P.loops;
-  const byLoop = P.flowLoopScr || (P.flowLoopScr = {});
-  const natLoop = P.flowNatScr || (P.flowNatScr = {});
-  for(const k in byLoop) delete byLoop[k];
-  for(const k in natLoop) delete natLoop[k];
-  const sol = netSolve(P.net, s, "qA");
-  netReadP(sol, byP);
-  netReadEdges(sol, byLoop, byRun, null, outs);
+  if(!P.flowLoopScr || P.flowLoopScr.length !== n) P.flowLoopScr = new Float64Array(n);
+  if(!P.flowNatScr || P.flowNatScr.length !== n) P.flowNatScr = new Float64Array(n);
+  const byLoop = P.flowLoopScr, natLoop = P.flowNatScr;
+  byLoop.fill(0); natLoop.fill(0);
+  __apS(); const sol = netSolve(P.net, s, "qA"); __apE("nfk.solve");
+  __apS(); netReadP(sol, byP); __apE("nfk.readP");
+  __apS(); netReadEdges(sol, byLoop, byRun, null, outs); __apE("nfk.readEdges");
     /* the solved edge flows, signed along each edge's own u->v: the set the momentum law answered in, where byRun is only a label */
     if(outs) outs.edgeKg = sol.q;
-  if(!(outs && outs.noNat)) netNatCirc(P.net, s, natLoop);
+  __apS(); if(!(outs && outs.noNat)) netNatCirc(P.net, s, natLoop); __apE("nfk.nat");
   let total = 0, natTot = 0;
-  for(let i=0;i<n;i++){ total += byLoop[i]||0; natTot += natLoop[i]||0; }
-  if(outs){ const nk = natTot/P.netRef; outs.nat = isFinite(nk) && nk>=0 ? nk : 0;
+  for(let i=0;i<n;i++){ total += byLoop[i]; natTot += natLoop[i]; }
+  if(outs){ const nk = natTot/P.netRef;
+    if(outs.scV) outs.scV[ONAT] = isFinite(nk) && nk>=0 ? nk : 0;
+    else outs.nat = isFinite(nk) && nk>=0 ? nk : 0;
     /* per-loop flow: heat leaves the primary at each generator in proportion to what goes through that generator's own loop */
     outs.byLoop = byLoop; }
   const k = total/P.netRef;
