@@ -447,7 +447,7 @@ function latPlan(cD,x,y,w,h){
   for(let i=1;i<XNR;i++){
     ctx.beginPath(); ctx.arc(CX,CY,i*latM(cD).dr/p*cs,0,7); ctx.stroke();
   }
-  { const hi=nodePeak(corePredict(cD,derived(coreIdOf(cD))).phiCold).i;
+  { const hi=nodePeak(corePredict(cD,derived(coreIdOf(cD))).phiCold)[2];
     ctx.beginPath();
     ctx.arc(CX,CY,(hi+.5)*latM(cD).dr/p*cs,0,7);
     ctx.strokeStyle=C.amber; ctx.lineWidth=1.4; ctx.stroke(); }
@@ -589,19 +589,19 @@ function latSection(cD,x,y,w,h){
   }
   const T = latSecPend && latSecFlux ? latSecFlux
           : (latSecFlux=corePredict(cD,derived(coreIdOf(cD))));
-  const phi=T.phiCold, hot=nodePeak(phi);
+  const phi=T.phiCold, hot=nodePeak(phi), hotV=hot[0], hotI=hot[2], hotJ=hot[3];
   for(let c=0;c<NC;c++){
     const i=Math.abs(c-(XNR-1)), cx=CX+(c-(XNR-1))*cw-cw/2;
     const ff=clamp(latM(cD).frac[i],0,1), oo=clamp(latM(cD).occ[i],0,1);
     for(let j=0;j<XNZ;j++){
       const cy=CY-(j+1)*ch;
       if(oo<.02){ fillRect(cx+cw/2-1,cy+ch/2-1,2,2,"#1b2c33"); continue; }
-      ctx.globalAlpha=.10+.45*clamp(phi[XIX(i,j)]/hot.v,0,1);
+      ctx.globalAlpha=.10+.45*clamp(phi[XIX(i,j)]/hotV,0,1);
       fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.cyan);
       if(ff>.02){ ctx.globalAlpha=.20+.55*ff; fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.amber); }
       if(oo-ff>.02){ ctx.globalAlpha=.20+.55*(oo-ff); fillRect(cx+.4,cy+.4,cw-.8,ch-.8,C.graph); }
       ctx.globalAlpha=1;
-      if(i===hot.i&&j===hot.j) frame(cx+.4,cy+.4,cw-.8,ch-.8,C.amber);
+      if(i===hotI&&j===hotJ) frame(cx+.4,cy+.4,cw-.8,ch-.8,C.amber);
     }
   }
   frame(CX-halfW,CY-colH,2*halfW,colH,C.edge);
