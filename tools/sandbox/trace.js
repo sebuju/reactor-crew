@@ -24,7 +24,7 @@ exports.open = (M, key, spec, opt) => {
   for(let i=0;i<net.n;i++) T.nodes.push({
     name: net.name[i], z: r(net.z[i], 3), vol: r(net.vol[i], 4),
     comp: net.comp[i], vapour: net.vapour[i] ? 1 : 0,
-    fixed: sol.fixed[i] !== undefined ? 1 : 0, at: cellOf(M, net.name[i])});
+    fixed: sol.fixed.has[i] ? 1 : 0, at: cellOf(M, net.name[i])});
   for(const ed of net.edges)
     T.edges.push({u: ed.u, v: ed.v, key: ed.key || null, kind: ed.kind || null});
 
