@@ -99,13 +99,22 @@ function sigArgs(scope){
     case "core": return coreIds();
     case "sg":   return boilerIds();
     case "pump": return pumpIds();
-    case "fit":  return Object.keys(D.fittings);   // D, not P: on the bench P is the LAST plant commissioned
-    case "rpsch":return RPS_CH.map(r=>r[0]);
+    case "fit":  return sigFitIds();
+    case "rpsch":return sigRpsCh();
     case "tank": return tankIds();
-    case "loop": { const n=nodeGraph().nCirc; const a=[]; for(let i=0;i<n;i++) a.push(String(i)); return a; }
+    case "loop": return sigLoops();
     default: return [];
   }
 }
+/* structural per commission/bench: a fresh array per source per tick boxed nothing itself, but the
+   comprehensions behind fit/loop/rpsch did. DGEN gates them like every other drawing cache. */
+let sigFitC = null, sigFitG = -1, sigLoopC = null, sigLoopG = -1, sigRpsC = null;
+const sigFitIds = () => (sigFitG === DGEN && sigFitC) ? sigFitC
+  : (sigFitG = DGEN, sigFitC = Object.keys(D.fittings));
+const sigLoops = () => { const n = nodeGraph().nCirc;
+  if(sigLoopG === DGEN && sigLoopC && sigLoopC.length === n) return sigLoopC;
+  sigLoopG = DGEN; sigLoopC = []; for(let i=0;i<n;i++) sigLoopC.push(String(i)); return sigLoopC; };
+const sigRpsCh = () => sigRpsC || (sigRpsC = RPS_CH.map(r=>r[0]));
 const sigArg0=scope=>{ const a=sigArgs(scope); return a.length?a[0]:null; };
 
 /* a section is a named set of blocks: it picks the tab a block is drawn under and is design only, nothing on S has an opinion about it */
@@ -157,13 +166,14 @@ function setBlockMode(id,mode){
 }
 
 function blkSeed(){
-  const out={};
+  /* fromEntries, never loop-assigned: 100+ dynamic adds put the object in dictionary mode and every per-tick for-in over it (ctlOrder, sinkWired) then builds a key array. Same keys, values and order, fast mode. */
+  const ent = [];
   for(const id in D.blocks){ const b=D.blocks[id], m=BLK[b.mode]; if(!m) continue;
     const L=Object.assign({mode:b.mode, in:m.ins.map((_,i)=>b.in[i]||null), on:b.on!==false, out:0}, m.knobs, m.st||{});
     for(const k in m.knobs) if(b[k]!==undefined) L[k]=b[k];
     if(m.sug) for(const k in m.sug) if(L[k]==null) L[k]=m.sug[k]();
-    out[id]=L; }
-  return out;
+    ent.push([id, blkNormalize(L)]); }
+  return Object.fromEntries(ent);
 }
 /* bumpless: a position-holding block starts where its sink already stands, so a wire landing is not a step */
 function blkSeedOut(s,id){
@@ -185,9 +195,11 @@ function ctlWired(s, ids){
   return true;
 }
 function ctlOrder(s){
-  CTL_KEYS.length = 0;
+  /* indexed writes, never length=0+push: resetting length truncates capacity and 109 pushes regrow it every tick */
+  let nk = 0;
   const ids = CTL_KEYS;
-  for(const k in s.blkBy) ids.push(k);
+  for(const k in s.blkBy) ids[nk++] = k;
+  ids.length = nk;
   if(ctlWired(s, ids)) return CTL_ORD.order;
   const deg={}, kids={};
   for(const id of ids){ deg[id]=0; kids[id]=[]; }
@@ -205,7 +217,10 @@ const ctlLive = s => { const id=ctlHost(); return !!id && !partWrecked(s,id) && 
 const blkDead = (s,b) => { const row=SINK[b.sink]; if(!row) return true;
   const part=row.part(b.arg); return !!part && partWrecked(s,part); };
 
-function blkEval(s,b,I,dt){
+/* sink-apply generation: coreSeen() memoizes per core per tick and this busts it across interleaved writes */
+let ctlSinkGen = 0;
+function blkEval(s,b,I,dt,ix){
+  const OUTV = s.blkOutV, FV = s.blkOutF;
   switch(b.mode){
     case "source": return sigRead(s,b.sig,b.arg);
     case "const":  return b.v;
@@ -214,28 +229,28 @@ function blkEval(s,b,I,dt){
         case "div": r=c!==0?a/c:0; break; case "min": r=Math.min(a,c); break; default: r=Math.max(a,c); }
       return b.k===1 ? r : b.k*r; }
     case "pid": { const e=I[0], rate=I[1], td=b.td||0;
-      const f = b.f + Math.min(dt/Math.max(td/b.n, dt), 1)*(rate - b.f);
+      const f = FV[ix] + Math.min(dt/Math.max(td/b.n, dt), 1)*(rate - FV[ix]);
       const u = Math.abs(e) < b.db ? 0
-        : b.kp*(f + (b.ti>0 ? e/b.ti : 0) + td*(f - b.f)/Math.max(dt,1e-9))*dt;
-      b.f=f; return u; }
-    case "integ":  return clamp(b.out+I[0], b.lo==null?-Infinity:b.lo, b.hi==null?Infinity:b.hi);
-    case "limit": { let v=clamp(I[0], b.lo==null?-Infinity:b.lo, b.hi==null?Infinity:b.hi);
-      if(b.rate!=null){ const d=v-b.out; v=b.out+Math.sign(d)*Math.min(Math.abs(d),b.rate*dt); }
+        : b.kp*(f + (b.ti>0 ? e/b.ti : 0) + td*(f - FV[ix])/Math.max(dt,1e-9))*dt;
+      FV[ix]=f; return u; }
+    case "integ":  return clamp(OUTV[ix]+I[0], b.lo==null?-Infinity:b.lo, b.hi==null?Infinity:b.hi);
+    case "limit": { const o=OUTV[ix]; let v=clamp(I[0], b.lo==null?-Infinity:b.lo, b.hi==null?Infinity:b.hi);
+      if(b.rate!=null){ const d=v-o; v=o+Math.sign(d)*Math.min(Math.abs(d),b.rate*dt); }
       return v; }
-    case "lag":    return b.out + Math.min(dt/Math.max(b.tau,dt),1)*(I[0]-b.out);
+    case "lag":    return OUTV[ix] + Math.min(dt/Math.max(b.tau,dt),1)*(I[0]-OUTV[ix]);
     case "compare":{ const on=(b.in[1]&&s.blkBy[b.in[1]])?I[1]:b.on, off=(b.in[2]&&s.blkBy[b.in[2]])?I[2]:b.off;
-      return b.op==="below" ? (b.out ? (I[0] > off ? 0 : 1) : (I[0] < on ? 1 : 0))
-                            : (b.out ? (I[0] < off ? 0 : 1) : (I[0] > on ? 1 : 0)); }
-    case "latch":  return I[1]>0.5 ? 0 : I[0]>0.5 ? 1 : b.out;
+      return b.op==="below" ? (OUTV[ix] ? (I[0] > off ? 0 : 1) : (I[0] < on ? 1 : 0))
+                            : (OUTV[ix] ? (I[0] < off ? 0 : 1) : (I[0] > on ? 1 : 0)); }
+    case "latch":  return I[1]>0.5 ? 0 : I[0]>0.5 ? 1 : OUTV[ix];
     case "sel": { const w=SEL_W; w.length=0; const ins=b.in;
       for(let i=0;i<ins.length;i++) if(ins[i]) w.push(I[i]);
       if(!w.length) return 0;
       if(b.op==="min"){ let m=w[0]; for(let i=1;i<w.length;i++) if(w[i]<m) m=w[i]; return m; }
       if(b.op==="max"){ let m=w[0]; for(let i=1;i<w.length;i++) if(w[i]>m) m=w[i]; return m; }
       w.sort(SEL_CMP); return w[(w.length-1)>>1]; }
-    case "sink": { const row=SINK[b.sink]; if(row && !blkDead(s,b)) row.apply(s,b.arg,I[0],dt); return I[0]; }
+    case "sink": { const row=SINK[b.sink]; if(row && !blkDead(s,b)){ ctlSinkGen++; row.apply(s,b.arg,I[0],dt); } return I[0]; }
   }
-  return b.out;
+  return OUTV[ix];
 }
 
 /* reused: blkEval reads it inside the call and keeps no reference, and 108 blocks built 108 arrays a tick */
@@ -245,17 +260,52 @@ const CTL_KEYS=[];
 /* sel-block scratch, same contract; the median sorts it in place, tiny enough for no allocation */
 const SEL_W=[];
 const SEL_CMP=(p,q)=>p-q;
+/* block output/filter state live in typed arrays on S (snapshot-native); b.out/b.f stay as the
+   file format and the seed store. CTL_IDX maps id->index, rebuilt with the order below; a rebuild
+   syncs every entry from b.out/b.f (undefined out reads 0, undefined f reads NaN, exactly as before).
+   A plain fast-mode object (fromEntries), never a Map: 360 Map.gets a tick boxed. */
+let CTL_IDX = null, CTL_IDK = null;
+const blkOutOf = (s, id) => {
+  const ix = CTL_IDX ? CTL_IDX[id] : undefined;
+  if(ix !== undefined && s.blkOutV) return s.blkOutV[ix];
+  const b = s.blkBy && s.blkBy[id]; return b ? b.out : undefined;
+};
+/* one hidden class for every block: per-mode knob sets built ~9 shapes and the per-tick loop
+   deoptimized on every one past the fourth. Re-keyed in one canonical order at seed (missing reads
+   undefined, which no arm distinguishes from absent); the rebuild branch below re-normalizes bench edits. */
+const BLK_KEYS = ["mode","in","on","out","sig","arg","v","op","k","kp","ti","td","db","n","f","lo","hi","rate","tau","sink","off"];
+const blkNormalize = b => {
+  const v = new Array(BLK_KEYS.length);
+  for(let i=0;i<BLK_KEYS.length;i++) v[i] = b[BLK_KEYS[i]];
+  for(const k in b) delete b[k];
+  for(let i=0;i<BLK_KEYS.length;i++) b[BLK_KEYS[i]] = v[i];
+  return b;
+};
 /* at the head of the tick; off, wrecked or dark, every output holds and no sink is written */
 function ctlPass(s,dt){
   if(!s.blkBy) return;
   if(!ctlLive(s)) return;
-  const ord=ctlOrder(s), I=CTL_IN;
-  for(let j=0;j<ord.length;j++){ const b=s.blkBy[ord[j]];
+  const ord=ctlOrder(s), I=CTL_IN, ids=CTL_KEYS;
+  /* index with the order (same cache key): first tick, rewired bench, or a snapshot without the arrays */
+  let same = CTL_IDX && CTL_IDK && CTL_IDK.length === ids.length && s.blkOutV && s.blkOutV.length === ids.length && s.blkOutF && s.blkOutF.length === ids.length;
+  if(same) for(let i=0;i<ids.length;i++) if(CTL_IDK[i] !== ids[i]){ same = false; break; }
+  if(!same){
+    if(CTL_IDX && CTL_IDK && s.blkOutV && s.blkOutF) for(let i=0;i<CTL_IDK.length;i++){
+      const b0 = s.blkBy[CTL_IDK[i]]; if(!b0) continue;
+      const ix = CTL_IDX[CTL_IDK[i]]; b0.out = s.blkOutV[ix]; b0.f = s.blkOutF[ix]; }
+    CTL_IDX = Object.fromEntries(ids.map((id,i)=>[id,i])); CTL_IDK = ids.slice();
+    s.blkOutV = new Float64Array(ids.length); s.blkOutF = new Float64Array(ids.length);
+    for(let i=0;i<ids.length;i++){
+      const b0 = blkNormalize(s.blkBy[ids[i]]);
+      s.blkOutV[i] = b0.out === undefined ? 0 : b0.out; s.blkOutF[i] = b0.f; }
+  }
+  const OUTV = s.blkOutV;
+  for(let j=0;j<ord.length;j++){ const id = ord[j], b=s.blkBy[id], ix = CTL_IDX[id];
     if(!b.on) continue;
     const n=b.in.length; I.length=n;
-    for(let i=0;i<n;i++){ const src=b.in[i], u=src&&s.blkBy[src]; I[i]=u?u.out:0; }
-    const v=blkEval(s,b,I,dt);
-    b.out=isFinite(v)?v:b.out;
+    for(let i=0;i<n;i++){ const v = blkOutOf(s,b.in[i]); I[i]=v===undefined?0:v; }
+    const v=blkEval(s,b,I,dt,ix);
+    OUTV[ix]=isFinite(v)?v:OUTV[ix];
   }
 }
 
