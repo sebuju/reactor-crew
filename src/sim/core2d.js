@@ -20,9 +20,9 @@ const xTauF=K=>XTAU_F*K.rodD/ROD_D0;
 const CLAD_DT0=30;
 /* what a covered rod sheds into still water, W/m2/K */
 const H_POOL=2000;
-/* Jens-Lottes wall superheat; water only, so coreStep()'s max() drops it far from boiling */
+/* Jens-Lottes wall superheat; water only, so coreStep()'s max() drops it far from boiling.
+   Fused at its sole caller (coreStep film block): a boundary per node per tick. */
 const JL_K=25, JL_P=6.2;
-const jensLottes=(qpp,p)=>JL_K*Math.pow(Math.max(qpp,1)/1e6,0.25)*Math.exp(-p/JL_P);
 /* drift-flux concentration parameter */
 const XC0=1.13;
 /* cross-flow; at a ceiling of 1 every channel takes the identical rise and the voiding runaway stops existing */
@@ -46,8 +46,14 @@ const voidQual = (v,rvl) => { const q=clamp(v,0,1);
 const ringW=new Float64Array(XNR), nodeW=new Float64Array(XNN);
 /* coreStep never runs inside itself, so one buffer each serves every core on the board */
 const mixKBuf=new Float64Array(XNR), disKBuf=new Float64Array(XNN);
-// coreStep()'s return: reused, so a caller that must keep it past the next call copies the fields out
-const coreOBuf={dop:0,mod:0,exp:0,vd:0,xe:0,rod:0,tip:0,dis:0,h2:0,fci:0};
+// coreStep()'s return: reused typed scratch, so per-node accumulation boxes nothing (a plain
+// object boxed a HeapNumber on every one of ~1600 writes per call); a caller that must keep it
+// past the next call copies the fields out
+const ODOP=0, OMOD=1, OEXP=2, OVD=3, OXE=4, OROD=5, OTIP=6, ODIS=7, OH2=8, OFCI=9;
+const coreOBuf=new Float64Array(10);
+/* cold paths (commissioning snapshots, tools) that keep the record past the next call */
+const coreOToObj = o => ({dop:o[ODOP],mod:o[OMOD],exp:o[OEXP],vd:o[OVD],xe:o[OXE],
+  rod:o[OROD],tip:o[OTIP],dis:o[ODIS],h2:o[OH2],fci:o[OFCI]});
 const faceI=new Float64Array(XNR), faceO=new Float64Array(XNR);
 (function(){
   let t=0; for(let i=0;i<XNR;i++) t+=2*i+1;
@@ -62,9 +68,11 @@ const wMean=a=>{ let m=0; for(let k=0;k<XNN;k++) m+=a[k]*nodeW[k]; return m; };
 const impW=(a,phi)=>{ let m=0,W=0;
   for(let k=0;k<XNN;k++){ const q=nodeW[k]*phi[k]*phi[k]; m+=a[k]*q; W+=q; }
   return W>0 ? m/W : 0; };
-function nodePeak(a){ let v=-1e30,k=0;
+function nodePeak(a, o){ let v=-1e30,k=0;
   for(let q=0;q<XNN;q++) if(a[q]>v){ v=a[q]; k=q; }
-  return {v,k,i:(k/XNZ)|0,j:k%XNZ}; }
+  o = o || nodePeakScr;
+  o[0]=v; o[1]=k; o[2]=(k/XNZ)|0; o[3]=k%XNZ; return o; }
+const nodePeakScr = new Float64Array(4);
 
 /* T is P when commissioning, a scratch object when the bench is only predicting */
 function coreConst(T,c,d){
@@ -181,7 +189,7 @@ function coreFq(T,x){
           +T.enrRho[i]; }
   coreSolve(T,phi,rho,60);
   T.phiCold=phi;
-  return nodePeak(phi).v;
+  return nodePeak(phi)[0];
 }
 
 const FQ=new WeakMap();
@@ -206,7 +214,7 @@ function coreView(L,id){
   return {phi:T.phiCold,nV:null,xX:null,nTf:null,rodZ:null,
     nDmg:null,nOx:null,nMelt:null,nDisp:null,
     bankR:T.bankR,NB:T.NB,tipLen:T.tipLen,tipRho:T.tipRho,TfRef:0,X0:1,
-    dia:T.coreDia,hgt:T.coreHgt,frac:T.frac,peak:nodePeak(T.phiCold),
+    dia:T.coreDia,hgt:T.coreHgt,frac:T.frac,peak:(()=>{ const h=nodePeak(T.phiCold); return {v:h[0],i:h[2],j:h[3]}; })(),
     reflR:T.reflR,reflT:T.reflT,reflB:T.reflB,reflMat:T.reflMat};
 }
 
@@ -288,7 +296,7 @@ function coreReset(K,cs,flowNet){
     cs.nRho[k]=-K.rodA*cs.nCov[k]+K.tipRho*cs.nFol[k]-K.poison*(K.poiG[i]-1)
              -K.nPen[i]+K.enrRho[i]; }
   coreSolve(K,cs.phi,cs.nRho,60);
-  cs.fq=nodePeak(cs.phi).v;
+  cs.fq=nodePeak(cs.phi)[0];
   /* poison on the node's own flux, not the core mean; needs the settled shape, hence here */
   for(let k=0;k<XNN;k++){ const fl=K.n0*cs.phi[k];
     cs.xI[k]=ioEq(K,fl); cs.xX[k]=xeEq(K,fl); }
@@ -333,8 +341,11 @@ function coreRodWorth(K,cs){
 }
 
 function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
-  /* parallel channels at equal dp, so a voiding channel loses the flow it needed to stop voiding */
-  { const rvl=satRvl(K.sat, cs.pCore), rq=1/Math.max(rvl,1e-6)-1;
+  /* parallel channels at equal dp, so a voiding channel loses the flow it needed to stop voiding.
+     rvl is function-scope: the core boils at its own pressure, fixed for the tick, and satRvl
+     costs two saturation reads per call. */
+  const rvl=satRvl(K.sat, cs.pCore);
+  { const rq=1/Math.max(rvl,1e-6)-1;
     let tot=0;
     for(let i=0;i<XNR;i++){
       let x=0; for(let j=0;j<XNZ;j++) x+=voidQual(cs.nV[XIX(i,j)],rvl);
@@ -362,7 +373,6 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
   const ff    = Math.max(flowFrac, 1e-3);
   const cp    = K.sat.cp, dT0 = K.dT0;
   const hSat  = cp*sat;                      // kJ/kg
-  const rvl   = satRvl(K.sat, cs.pCore);             // the core boils at its own pressure
   let dnbLo=1e30, dnbK=0, TclH=0, ecrH=0, h2=0, oxP=0, fciE=0;
   const disK=disKBuf; disK.fill(0);
   const dhSub=cp*(sat-Tcold);
@@ -393,7 +403,7 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
       /* bareness is vLeak, the vessel's shortfall of water, never the node's void */
       const bare=1-clamp(vLeak,0,1);
       const hCsp=film0*bare/K.cladR;
-      const hCnb=qhat*pw*bare/Math.max(sat+jensLottes(qpp0*q2,cs.pCore)-cs.nTc[k],1e-3);
+      const hCnb=qhat*pw*bare/Math.max(sat+JL_K*Math.pow(Math.max(qpp0*q2,1)/1e6,0.25)*Math.exp(-cs.pCore/JL_P)-cs.nTc[k],1e-3);
       const hCw=Math.max(hCsp,hCnb);
       const TclNB=cs.nTc[k]+(cs.nTf[k]-cs.nTc[k])*K.gSolid/(K.gSolid+hCw);
       cs.nDnb[k]=dnbLatch(K,dnb, TclNB-sat, cs.nDnb[k]);
@@ -481,38 +491,38 @@ function coreStep(K,cs,dt,heat,sat,vLeak,mflux,flowFrac,hIn){
   coreSolve(K,cs.phi,cs.nRho);
 
   const o=coreOBuf;
-  o.dop=0; o.mod=0; o.exp=0; o.vd=0; o.xe=0; o.rod=0; o.tip=0; o.dis=0;
+  o[ODOP]=0; o[OMOD]=0; o[OEXP]=0; o[OVD]=0; o[OXE]=0; o[OROD]=0; o[OTIP]=0; o[ODIS]=0;
   let X=0,I=0,V=0,Tf=0,TfH=0,top=0,bot=0,inn=0,out=0,W2=0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
     const k=XIX(i,j), v=nodeW[k], w=v*cs.phi[k], w2=w*cs.phi[k];
-    o.dop+=w2*clamp(K.aF*(cs.nTf[k]-K.TfRef),-6000,3000);
-    o.mod+=w2*clamp(K.aM*(cs.nTc[k]-K.Tref),-6000,2500);
-    o.exp+=w2*clamp(K.aX*(cs.nTf[k]-K.TfRef)+K.aS*(cs.nTc[k]-K.Tref),-6000,2500);
-    o.vd +=w2*K.aV*cs.nV[k];
-    o.xe +=w2*-K.KXE*cs.xX[k];
-    o.rod+=w2*-K.rodA*cs.nCov[k];
-    o.tip+=w2*K.tipRho*cs.nFol[k];
-    o.dis+=w2*disK[k];
+    o[ODOP]+=w2*clamp(K.aF*(cs.nTf[k]-K.TfRef),-6000,3000);
+    o[OMOD]+=w2*clamp(K.aM*(cs.nTc[k]-K.Tref),-6000,2500);
+    o[OEXP]+=w2*clamp(K.aX*(cs.nTf[k]-K.TfRef)+K.aS*(cs.nTc[k]-K.Tref),-6000,2500);
+    o[OVD] +=w2*K.aV*cs.nV[k];
+    o[OXE] +=w2*-K.KXE*cs.xX[k];
+    o[OROD]+=w2*-K.rodA*cs.nCov[k];
+    o[OTIP]+=w2*K.tipRho*cs.nFol[k];
+    o[ODIS]+=w2*disK[k];
     W2+=w2;
     X+=v*cs.xX[k]; I+=v*cs.xI[k]; V+=v*cs.nV[k]; Tf+=w*cs.nTf[k];
     if(cs.nTf[k]>TfH) TfH=cs.nTf[k];
     if(j>=XNZ/2) top+=w; else bot+=w;
     if(i< XNR/2)  inn+=w; else out+=w;
   }
-  if(W2>0){ o.dop/=W2; o.mod/=W2; o.exp/=W2; o.vd/=W2; o.xe/=W2; o.rod/=W2; o.tip/=W2; o.dis/=W2; }
+  if(W2>0){ o[ODOP]/=W2; o[OMOD]/=W2; o[OEXP]/=W2; o[OVD]/=W2; o[OXE]/=W2; o[OROD]/=W2; o[OTIP]/=W2; o[ODIS]/=W2; }
   const hot=nodePeak(cs.phi);
-  cs.fq=hot.v; cs.hotRing=hot.i; cs.hotLev=hot.j;
+  cs.fq=hot[0]; cs.hotRing=hot[2]; cs.hotLev=hot[3];
   cs.ao=(top-bot)/Math.max(top+bot,1e-6);
   cs.ro=(inn-out)/Math.max(inn+out,1e-6);
-  cs.X=X; cs.I=I; cs.Tf=Tf; cs.TfHot=TfH; cs.vNode=V; cs.tipRho=o.tip;
+  cs.X=X; cs.I=I; cs.Tf=Tf; cs.TfHot=TfH; cs.vNode=V; cs.tipRho=o[OTIP];
   /* mass flux, never the enthalpy rise: the two part company the moment the pumps stop */
   cs.hotFlow=Math.max(mflux*cs.chW[cs.hotRing],0.02);
   let dm=0, mf=0;
   for(let k=0;k<XNN;k++){ dm+=nodeW[k]*cs.nDmg[k]; mf+=nodeW[k]*cs.nMelt[k]; }
   cs.dmg=Math.min(100,100*dm); cs.meltFrac=mf;
-  o.h2=h2; cs.oxMax=ecrH; cs.TcladHot=TclH;
+  o[OH2]=h2; cs.oxMax=ecrH; cs.TcladHot=TclH;
   // node-mean kelvin times the pin's heat capacity (pinUA*tauF, kJ/K): kW the water took
-  o.fci=dt>0 ? fciE*xTauF(K)*K.pinUA/dt : 0;
+  o[OFCI]=dt>0 ? fciE*xTauF(K)*K.pinUA/dt : 0;
   // what the metal is making, as a share of rated
   cs.qOx=oxP*K.pinUA/Math.max(K.rated*1000,1e-9);
   cs.dnbrMin=dnbLo; cs.dnbrRing=(dnbK/XNZ)|0; cs.dnbrLev=dnbK%XNZ;
