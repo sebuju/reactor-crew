@@ -116,12 +116,12 @@ function openFlashX(s, fl, i){
   const c = fl.c, hfg = hfgOf(c, satT(c, p));
   return hfg > 0 ? clamp((fl.h - satH(c, p))/hfg, 0, 1) : 1;
 }
-/* One walk for the heat, hydrogen and fire passes: fn(cells, rate, fl, key), key as advectH2Out is keyed. */
+/* One walk for the heat, hydrogen and fire passes: fn(cells, rate, fl, key), key as the OutKg book is keyed. */
 function roomLiqOuts(s, G, fn){
   const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
   for(const k in s.spillBy){
     /* the transported book is the only thing either caller makes a kilogram out of: with nothing booked every reader below is a guarded no-op, so the EOS reads and cell walks are skipped, not just their results */
-    if(!((advectOutKg[k] || 0) > 0)) continue;
+    if(!(outKgOf(P.net, k) > 0)) continue;
     const fl = openFluidH(s, k);
     if(fl) fn(roomOpenCells(s, G, k), s.spillBy[k], fl, k);
   }
@@ -399,9 +399,10 @@ function roomStep(s, dt){
   const src = roomSrc, d = roomD;
   src.fill(0);
   /* First, off last tick's field: this tick's sources reach the pressure one tick later. */
-  const pmax = roomGasStep(s, dt, G, src);
+  __apS(); const pmax = roomGasStep(s, dt, G, src); __apE("room.gas");
 
   /* Contents -> skin -> air, every arrow both ways, and what the room gets is booked against the pot it came out of (s.skinQ, spent in step.js). */
+  __apS();
   const cgPart = tagTick();
   for(let qi=0;qi<G.parts.length;qi++){ const q=G.parts[qi];
     const id = q.p.id, n = q.cells.length, Tp = partTemp(s, q.p);
@@ -418,8 +419,10 @@ function roomStep(s, dt){
     for(let ci=0;ci<q.cells.length;ci++){ const i=q.cells[ci]; src[i] += ROOM_HK*(Ts - T[i]); }
   }
   for(const id in s.partT) if(partSeen[id] !== cgPart){ delete s.partT[id]; delete s.skinQ[id]; delete partSeen[id]; }
+  __apE("room.parts");
   /* A run's wall is the same pot; with no readable fluid it falls to the air at its own time constant rather than pinning at the reactor's mean. */
   // one skin per REGION: a lumped run is infinite axial conductance, so a penetration would carry a broken compartment's air out through its own wall
+  __apS();
   const liveRun = runSeen, cgRun = tagTick(), regOf = matRegions().of;
   for(let ri2=0;ri2<G.runs.length;ri2++){ const r=G.runs[ri2];
     let sg = r.segC;
@@ -443,18 +446,20 @@ function roomStep(s, dt){
   }
   for(const k in s.runT) if(liveRun[k] !== cgRun){ delete s.runT[k]; delete runSeen[k]; }
 
+  __apE("room.runs");
   /* net.fitTarget is the gate - a tank to catch this, or straight into the room - and net.fitVentOut the second, gone up the stack because the valve's open face is against the skin. */
+  __apS();
   const tgt = (P.net && P.net.fitTarget) || {}, out = (P.net && P.net.fitVentOut) || {};
-  for(const fid in s.reliefSteam){
+  for(const fid of reliefSecIds()){
     if(tgt[fid] || out[fid]) continue;               // caught in a tank, or vented outside
     roomJet(src, roomCellsOf(G, fid), s.reliefSteam[fid]*roomSteamH(), s.reliefSteam[fid]);
     roomAddGas(s, roomCellsOf(G, fid), s.reliefSteam[fid]*dt, s.reliefSteam[fid]);
   }
   /* A hole has no set point, bore or stack, so this is gated on neither map: gating it would make a plant safe by accident. */
-  for(const id in s.sgVentBy){
+  for(const id of boilerIds()){
     let byValve = 0;
     for(const fid of (G.shellValves[id] || [])) byValve += s.reliefSteam[fid] || 0;
-    const hole = Math.max(0, s.sgVentBy[id] - byValve);
+    const hole = Math.max(0, (s.sgVentBy[id] || 0) - byValve);
     roomJet(src, roomCellsOf(G, id), hole*roomSteamH(), hole);
     roomAddGas(s, roomCellsOf(G, id), hole*dt, hole);
   }
@@ -467,10 +472,11 @@ function roomStep(s, dt){
     s.sgH2By[id] = m - m*f;
     roomAddH2(s, roomCellsOf(G, id), rate, m*f);
   }
+  __apE("room.jets");
   /* What the opening is actually passing, in the state it passes it: the kilograms the transport booked on that edge this tick. */
-  roomStepLiqCall(s, G, src, T, dt);
-  injectRoom(s, dt, src, G);
-  roomFireStep(s, dt, G, src);
+  __apS(); roomStepLiqCall(s, G, src, T, dt); __apE("room.liqcall");
+  __apS(); injectRoom(s, dt, src, G); __apE("room.inject");
+  __apS(); roomFireStep(s, dt, G, src); __apE("room.fire");
 
   /* No network presence at all, the shield/catcher idiom; on the main board, so a blackout leaves the room with nothing but its hull. */
   if(!s.blackout) for(let qi=0;qi<G.parts.length;qi++){ const q=G.parts[qi];
@@ -481,6 +487,7 @@ function roomStep(s, dt){
   }
 
   /* Explicit, four neighbours, one pass over edges; the vertical pair is ASYMMETRIC and that is the buoyancy. */
+  __apS();
   for(let i=0;i<N;i++) d[i] = src[i];
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW-1;X++){
     const i = Y*GW+X, q = G.gx[i]*(T[i]-T[i+1]);
@@ -497,8 +504,9 @@ function roomStep(s, dt){
       d[i] -= k*G.face[i]*(Math.pow(T[i],4) - Math.pow(T_SPACE,4)); }
   for(let i=0;i<N;i++) T[i] = clamp(T[i] + d[i]/ROOM_C*dt, T_SPACE, ROOM_TMAX);
 
-  roomH2Step(s, dt, G, pmax);
-  roomCondense(s);
+  __apE("room.diffuse");
+  __apS(); roomH2Step(s, dt, G, pmax); __apE("room.h2");
+  __apS(); roomCondense(s); __apE("room.cond");
 
   { let mx = 0, at = -1;
     for(let i=0;i<N;i++) if(T[i] > mx){ mx = T[i]; at = i; }
@@ -758,7 +766,11 @@ function roomGasStep(s, dt, G, src){
   /* The room a landing liquid took since the last solve is a SOURCE: the pressure is read at the room the gas had, and the solve pushes the difference out over the tick, rather than reading a compressed cell and shocking its neighbours. */
   const disp = gsDisp;
   let anyDisp = false;
-  for(let i=0;i<N;i++){ vg[i] = roomVgas(s, i); if(disp[i] !== 0) anyDisp = true; p[i] = roomPOf(Mm[i], roomGasCell(vg[i]) ? vg[i] + disp[i] : vg[i], T[i])*1e6; }
+  /* roomVgas/roomGasCell inlined: per-cell calls returning a `double`/bool boxed */
+  const fr = fireRho(), VGMIN = ROOM_VG_MIN*ROOM_VCELL, VGCELL = VGMIN*1.0001;
+  for(let i=0;i<N;i++){ const vv = Math.max(VGMIN, ROOM_VCELL - s.roomWater[i]/WATER_RHO - s.roomPool[i]/fr); vg[i] = vv;
+    if(disp[i] !== 0) anyDisp = true;
+    p[i] = Mm[i]*R_AIR*T[i]/Math.max(vv > VGCELL ? vv + disp[i] : vv, 1e-6)*1e6; }
   /* The gate: a field with no step across any open face and no face moving costs nothing. */
   let live = anyDisp;
   const pLo = WAVE_P_LO*1000, uLo = WAVE_U_LO*ROOM_RHO;
@@ -815,10 +827,10 @@ function roomGasStep(s, dt, G, src){
   }
   roomPGen++;
   const Pr = s.roomP, Pk = s.roomPPk;
-  for(let i=0;i<N;i++) if(roomGasCell(vg[i])) Pr[i] = roomPOf(Mm[i], vg[i], T[i])*1000 - ROOM_P0;
+  for(let i=0;i<N;i++) if(vg[i] > VGCELL) Pr[i] = Mm[i]*R_AIR*T[i]/Math.max(vg[i],1e-6)*1000 - ROOM_P0;
   /* A cell the liquids fill holds no gas to read, so it carries the gas it would rise to: read off its own empty volume it is a vacuum, and read off the cell over it, a flood under a deck reads the deck plate's untouched air and the level pass holds it there against the open side. */
   for(let i=0;i<N;i++){
-    if(!roomGasCell(vg[i])){ const w = roomGasRing(s, G, i);
+    if(!(vg[i] > VGCELL)){ const w = roomGasRing(s, G, i);
       let q = 0;
       for(let k=0;k<gdRing.length;k+=2) q += Pr[gdRing[k]]*gdRing[k+1];
       Pr[i] = w > 0 ? q/w : (i >= GW ? Pr[i-GW] : 0); }
@@ -1262,7 +1274,7 @@ function roomFireStep(s, dt, G, src){
     const row = fl.c.burn && FIRE[fl.c.burn];
     if(!row || !cells.length) return;
     /* The kilograms the TRANSPORT booked, never the solve's rate: this mass sits on the deck and must be the same mass that left the loop. */
-    const kg = advectOutKg[key] || 0;
+    const kg = outKgOf(P.net, key);
     if(!(kg > 0)) return;
     const pN = netPAt(s, fl.nd)*1e6, pR = (ROOM_P0 + s.roomP[cells[0]])*1000;
     const v = Math.sqrt(2*Math.max(0, pN - pR)/fireRho());
@@ -1356,11 +1368,10 @@ function roomH2Step(s, dt, G, pmax){
   const N = GW*GH, H = s.roomH2, O = s.roomO2, Fl = s.roomFlame;
   const T = s.roomT;
   s.roomBurnOn = 0;
-  /* Hydrogen is a species the transport carries (s.h2By, advectH2Out by edge key), so the field has already lost it and nothing here debits s.h2. */
+  /* Hydrogen is a species the transport carries (s.h2By, OutH2 by edge key), so the field has already lost it and nothing here debits s.h2. */
   if(s.h2 > 0){
-    const H2OUT = advectH2Out;
     const put = (cells, rate, key) => {
-      const m = H2OUT[key];
+      const m = outH2Of(P.net, key);
       if(!(m > 0) || !cells.length) return;
       // the same plume the heat went into, off the same opening at the same rate
       roomAddH2(s, cells, Math.max(0, rate)/100*loopKg(), m);
@@ -1536,7 +1547,7 @@ let roomStepCbS = null, roomStepCbSrc = null, roomStepCbT = null, roomStepCbDt =
 function roomStepLiqCb(cells, rate, fl, key){
   const s = roomStepCbS, src = roomStepCbSrc, T = roomStepCbT, dt = roomStepCbDt;
   if(fl.c.burn) return;
-  const kg = (advectOutKg[key] || 0)/dt*openFlashX(s, fl, cells.length ? cells[0] : -1);
+  const kg = outKgOf(P.net, key)/dt*openFlashX(s, fl, cells.length ? cells[0] : -1);
   roomJetLiq(src, T, cells, kg, fl.h, fl.c);
   roomAddGas(s, cells, kg*dt, kg);
 }
