@@ -13,7 +13,7 @@ const M=require('./bundle').headless(
  'LAT_P0:()=>LAT_P0,ARCHPRE:()=>ARCHPRE,fuelStages,FAIL:()=>FAIL,ledgerKg,ledgerOut,'+
  'netReading,netSolve,blkSinkOff,netBooked,netBookOf,bookedKg,advectLanded,advectEdgeKgOf:()=>advectEdgeKg,tankLvl,sumpKg,netWorkAt,annStep,ANN:()=>ANN,'+
  'drumIds,boilerIds,boilerLvl,boilerP,boilerDesignP,holdSetP,loopMap,coreMint,designForget,pumpIds,secGensOf,'+
- 'coreStep,coreInH,satT,coreDTMax,snapS,restoreS,GW:()=>GW,'+
+ 'coreStep,coreOToObj,coreInH,satT,coreDTMax,snapS,restoreS,GW:()=>GW,'+
  'loopHeadOf,pumpSucNode,pumpDisNode,netPressures,netRhoAt,netSatOf,runNodeOf,runBoreMm,runDutyKgs,'+
  'nodeKg,nodeH,nodeP}');
 
@@ -101,7 +101,7 @@ function dump(s,label){
       din[ed.u]-=q; din[ed.v]+=q;
       const m=ek?ek[e]/0.02:0; tin[ed.u]-=m; tin[ed.v]+=m; }
     let wi=-1,wr=0,wj=-1,wd=0;
-    for(let i=0;i<net.n;i++){ if(sol.fixed[i]!==undefined) continue;
+    for(let i=0;i<net.n;i++){ if(sol.fixed.has[i]) continue;
       const acc = st && st.cap[i]>0 ? st.cap[i]*sol.b[i]-st.src[i] : 0;
       const r=din[i]-acc, d=din[i]-tin[i];
       if(Math.abs(r)>Math.abs(wr)){ wr=r; wi=i; }
@@ -368,8 +368,8 @@ const CASES={
         const cs=s.coreBy[cid];
         const cl=o=>{ const c={}; for(const k in o){ const v=o[k]; c[k]=ArrayBuffer.isView(v)?v.slice():v; } return c; };
         const at=q=>{ const c=cl(cs); let o=null;
-          for(let p=0;p<5;p++){ o=M.coreStep(K,c,0,q,M.satT(K.sat,c.pCore),0,K.flowK*c.flowNet,
-                Math.max(c.flowNet,0.004),M.coreInH(s,cid));
+          for(let p=0;p<5;p++){ o=M.coreOToObj(M.coreStep(K,c,0,q,M.satT(K.sat,c.pCore),0,K.flowK*c.flowNet,
+                Math.max(c.flowNet,0.004),M.coreInH(s,cid)));
             for(let k=0;k<c.nV.length;k++){ c.nV[k]=c.nVt[k]; c.nTc[k]=c.nTct[k]; } }
           return o; };
         const a=at(cs.heat), c2=at(cs.heat*1.01);
