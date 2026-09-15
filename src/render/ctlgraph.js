@@ -202,7 +202,7 @@ function blkTipBody(T,id,s){ const b=T[id], m=BLK[b.mode], note=noteFor(id), L=n
 const SVGNS="http://www.w3.org/2000/svg";
 const svgEl=(n,cls)=>{ const e=document.createElementNS(SVGNS,n); if(cls) e.setAttribute("class",cls); return e; };
 const blkSub=(T,id,s)=>{ const b=T[id];
-  return s ? ctlFmt(b.out,blkLabel(s,id).u) : b.mode==="const" ? ctlFmt(b.v,"") : blkArgName(b)||blkNo(id); };
+  return s ? ctlFmt(blkOutOf(s,id),blkLabel(s,id).u) : b.mode==="const" ? ctlFmt(b.v,"") : blkArgName(b)||blkNo(id); };
 const knobFmt=v=>{ if(v==null) return "-"; const a=Math.abs(v);
   return a>=100?v.toFixed(0):a>=10?v.toFixed(1):a>=1?v.toFixed(2):String(+v.toFixed(3)); };
 const spanFmt=(lo,hi)=> lo!=null&&hi!=null ? knobFmt(lo)+" to "+knobFmt(hi)
