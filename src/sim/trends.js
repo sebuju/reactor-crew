@@ -58,8 +58,8 @@ const SIGNAL={
  sgfed:{scope:"sg",   lab:"FEED IN",    u:"kg/s",f:(s,id)=>(s.sgFedBy&&s.sgFedBy[id])||0},
  sgwant:{scope:"sg",  lab:"FEED WANT",  u:"kg/s",f:(s,id)=>feedWant(s,id)},
  /* Infinity with no shell, so an absent generator cannot make a low-level channel */
- sglo :{scope:"plant",lab:"LOWEST SG LEVEL",u:"%",
-        f:s=>boilerIds().reduce((m,id)=>Math.min(m,boilerLvl(s,id)),Infinity)},
+  sglo :{scope:"plant",lab:"LOWEST SG LEVEL",u:"%",
+         f:s=>{ const ids=boilerIds(); let m=Infinity; for(let i=0;i<ids.length;i++){ const v=boilerLvl(s,ids[i]); if(v<m) m=v; } return m; }},
  pumpq:{scope:"pump", lab:"PUMP SPEED", u:"%",   f:(s,id)=>(s.flowBy[id]||0)*100},
  pumpd:{scope:"pump", lab:"PUMP DEMAND",u:"%",   f:(s,id)=>(s.flowDemBy[id]||0)*100},
  fitp :{scope:"fit",  lab:"VALVE P",    u:"MPa", f:(s,fid)=>reliefP(s,fid)},
