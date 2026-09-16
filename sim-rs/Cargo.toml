@@ -1,0 +1,15 @@
+[package]
+name = "sim-rs"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+# cdylib+staticlib are the shipped artifacts; rlib lets bins/tests link it.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Pinned: codegen differences move last-ulp results (ABI doc section 5).
+libm = "=0.2.15"
+
+[lints.clippy]
+all = "deny"
