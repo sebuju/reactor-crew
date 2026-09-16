@@ -2869,61 +2869,34 @@ function coreMeltStep(cs, K, id, dt){
     /* held back by the region this vessel's fuel stands in, read off the LIVE fill, so a wall with a cell shot out stops holding the instant it opens */
     if(rel>0) S.release=Math.min(100,S.release+rel*contRelPart(S,partOf(id))*P.dose*dt); }
 }
-function stepMarch(dt){
-  __apS();
-  const s=S; s.t+=dt; s.tick++;
-  if(!s.massOut) s.massOut={};
-  const ledgM0 = ledgerKg(s), ledgO0 = ledgerOut(s);
-  /* settle the node graph for this tick; the hold is dropped on the last line of this function, so it never outlives the tick */
-  laySettle();
-  /* the player's automation reads last tick's solved plant and writes this tick's demands - see ctl.js */
-  ctlPass(s,dt);
+/* Tick-segment extractions (§6.6): behavior-preserving moves of inline
+   stepMarch blocks so the gates (and the WASM assembly) can call them by
+   name. Bodies are verbatim copies of the inline code. */
+function actFollow(s,dt){
   /* the feed regulating valve is an actuator like every other: the controller writes demand and the motor gets there at VALVE_RATE. Teleported, it is a step change in a line that has mass, which is the one thing a real MOV cannot do. */
   for(const id in s.fregBy){ const dv=(s.fregDemBy[id]??s.fregBy[id])-s.fregBy[id];
     if(dv) s.fregBy[id]+=Math.sign(dv)*Math.min(Math.abs(dv),VALVE_RATE*dt); }
-
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreRodStep(s.coreBy[id], P.cores[id], id, dt);
-
-  /* boron is an actuator: the slider writes demand, the loop gets there at the rate a charging pump can push */
-  { const db=s.boronDem-s.boron, rb=(db<0?BOR_IN:BOR_OUT)*dt;
-    const d=Math.sign(db)*Math.min(Math.abs(db),rb);
-    s.boron+=d;
-    /* the charging system reaches what the core reaches: every node in its live piece takes the same step, an isolated leg none of it */
-    if(d && P.net && s.bBy){ const pc=netPieces(P.net,s), cps=corePieces(P.net,s);
-      for(let i=0;i<P.net.n;i++) if(cps.has(pc.of[i]) && s.bBy.has[i]) s.bBy.v[i]+=d; } }
-
   /* a throttle is an actuator too: the panel writes demand, the motor gets there at VALVE_RATE */
   for(const id in s.valve){ const dv=s.valveDem[id]-s.valve[id];
     s.valve[id]+=Math.sign(dv)*Math.min(Math.abs(dv),VALVE_RATE*dt); }
-
   s.load += (s.loadDem-s.load)*Math.min(dt/LOAD_TAU,1);
-
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreDecayStep(s.coreBy[id], dt);
-  coreAgg(s);
-  const heat = s.n*PROMPT_F + s.decay;
-
-
-  /* scratch, not sim state: persistent on P (fresh again only when commission() rebuilds P), a local binding onto it so every reader below is unchanged.
-     Run flows ride a typed holder {v, pos} (never a plain object): hundreds of per-edge stores per tick boxed. */
-  const FM0 = flowMapsOf(P.net);
-  if(!P.runFlowH || P.runFlowH.n !== FM0.runKeys.length){ P.runFlowH = { v: new Float64Array(FM0.runKeys.length), pos: FM0.runPos, n: FM0.runKeys.length }; }
-  else if(P.runFlowH.pos !== FM0.runPos) P.runFlowH.pos = FM0.runPos;
-  const runFlow = P.runFlowH;
-  /* MPa per node, taken off netFlowK()'s own solve so the tick pays for one solve and not two; pAt() is how every reader below asks it */
-  if(tickPfNet !== P.net){ tickPf = null; tickPfNet = P.net; }
-  const pField = tickPf || (tickPf = pfNew(P.net));
-  /* what the solve found leaving the plant through every opening on it */
-  const netOut = P.netOut || (P.netOut = {});
-  __apE("ctlPass");
-  __apS();
-  const pumpK = netFlowK(s, runFlow, pField, netOut);
-  __apE("netFlowK");
-  __apS();
-  const coreFN = P.coreFN || (P.coreFN = {});
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFlowNetStep(s.coreBy[id], P.cores[id], id, coreFN, netOut, pumpK);
-  /* what the circulating water is doing, off this tick's own solve; the condenser's balance reads it through cwKOf() */
-  { for(const id in s.cwFlowBy) if(!partOf(id)) delete s.cwFlowBy[id];
-    for(const id of condIds()) s.cwFlowBy[id] = cwFlowOf(runFlow,id); }
+}
+function boronFollow(s,dt){
+  /* boron is an actuator: the slider writes demand, the loop gets there at the rate a charging pump can push */
+  const db=s.boronDem-s.boron, rb=(db<0?BOR_IN:BOR_OUT)*dt;
+  const d=Math.sign(db)*Math.min(Math.abs(db),rb);
+  s.boron+=d;
+  /* the charging system reaches what the core reaches: every node in its live piece takes the same step, an isolated leg none of it */
+  if(d && P.net && s.bBy){ const pc=netPieces(P.net,s), cps=corePieces(P.net,s);
+    for(let i=0;i<P.net.n;i++) if(cps.has(pc.of[i]) && s.bBy.has[i]) s.bBy.v[i]+=d; }
+}
+function pcoreStep(s,pField){
+  // coreFold() first: a folded part has ONE node under its bare id, so a caller naming a face would fall through to the s.P default
+  /* a readout, like s.sc and s.heat: on S because the panel prints it and a snapshot must carry what the panel was showing */
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreSetPCore(s.coreBy[id], id, pField);
+  s.pCore = tickPAt(pField, primaryCore());
+}
+function spillStep(s,netOut){
   /* this run against its own reference, signed: 1.0 is what it was built to carry, the direction is the solve's */
   /* the solved outflow through every opening, charged to inventory through the one flow-to-inventory conversion */
   const spill = invRate(outsNum(netOut, OSPILL, "spill"));
@@ -2937,6 +2910,8 @@ function stepMarch(dt){
   s.spillRate = spill;
   /* kept apart from `spill` at the edge (ed.sec, pipenet.js), because everything below charges spill to s.inv */
   const spillSecKg = outsNum(netOut, OSPILLSEC, "spillSec");
+}
+function tankRateStep(s,netOut){
   /* what the tank actually pushed against the loop it is fighting; signed, because the same edge run backwards fills it */
   /* the positive half of the same signed figure: a tank being filled is not injecting, and summing the two lets one tank hide behind another */
   let inj = 0;
@@ -2950,13 +2925,9 @@ function stepMarch(dt){
     /* inj is what the primary is taking - it feeds vessel fatigue and the injection log line */
     if(tankPrimary(tid) && tankInjecting(tid, q)){ inj += q; injIds.push(tid); }
   }
-  // coreFold() first: a folded part has ONE node under its bare id, so a caller naming a face would fall through to the s.P default
-  /* a readout, like s.sc and s.heat: on S because the panel prints it and a snapshot must carry what the panel was showing */
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreSetPCore(s.coreBy[id], id, pField);
-  s.pCore = tickPAt(pField, primaryCore());
-  /* after the pressures settle and before the SGTR, the feed train and the relief valves read a temperature anywhere */
-  tickPf = s.pBy; s.pBy = pField;
-  pressRead(s, dt);
+  return {inj, injIds};
+}
+function burstDice(s,dt,pField){
   /* a run lets go at its own wall, one cell into s.dmgParts, so the hole, the plume, the repair party and the ledger are the mechanism the plant already had */
   /* judged at the run's own node, never pAt()'s s.P fallback: a node the field does not carry is a node nobody can say the pressure at, and that run is not judged */
   // cached on the net and DGEN, because runDesignP() walks every tank and pump and this asks it of every run
@@ -3012,18 +2983,14 @@ function stepMarch(dt){
         " kPa. It is the middle of a "+(matSpan(cx,cy)*MPC).toFixed(1)+
         " m flat span, which is why it was the cell that went. "+fx.why);
     } }
-  __apE("burst");
-  __apS();
-  advectStep(s, dt, runFlow, netOut && netOut.edgeKg);
+}
+function invStep(s){
   /* s.inv is a read: every way water leaves is an edge, already booked by the transport pass above, and nothing downstream writes it */
   if(P.invKg0 > 0) s.inv = 100*invNodesKg(s)/P.invKg0;
   if(!s.invBy) s.invBy = {};
   coreEach(s, coreInvByStep);
-  __apE("advectStep");
-  __apS();
-  sumpStep(s, dt);
-  __apE("sumpStep");
-  __apS();
+}
+function cavStep(s,dt,pField){
   /* cavitation begins where subcooling reaches zero, asked at the pump's own suction; fed to NEXT tick's solve, because a gate that depends on the answer cannot be part of the question */
   const cavIds = tickCavIds || (tickCavIds = []);               // which pumps, for the log - a local, never on S
   cavIds.length = 0;
@@ -3041,12 +3008,17 @@ function stepMarch(dt){
       if(c>0.15) cavIds.push(id);
     }
     s.cav = worst; }
+  return cavIds;
+}
+function pumpQStep(s,runFlow){
   /* what each pump is passing, through the casing edge and no other: a pump with a run on every face still has one swallow. A reading, never a head */
   { for(const id in s.pumpQBy) if(!partOf(id)) delete s.pumpQBy[id];
     for(const id of pumpIds()){
       const k = pumpEdgeKey(id); if(!k) continue;
       const q = flowV(runFlow, k) || 0;
       s.pumpQBy[id] = q > 0 ? netKgs(q) : 0; } }
+}
+function pumpCoastStep(s,dt){
   /* losing power does not stop a pump dead, it coasts; the backup supply carries the share of pump power the bench sold, scaled off demand */
   { const k = Math.min(dt/FLOW_TAU,1);
     /* every pump, every tick, unconditionally - persistent needs no clear at all */
@@ -3064,9 +3036,8 @@ function stepMarch(dt){
       s.flowBy[id] = want >= N ? N + (want - N)*k
                                : Math.max(want, N - (N*N/(2*pumpRotor(id)) + N/PUMP_FRIC_S)*dt); }
     for(const id in s.flowBy) if(!live[id]){ delete s.flowBy[id]; delete s.flowDemBy[id]; } }
-  __apE("pump");
-
-  __apS();
+}
+function sgHeatStep(s,dt,runFlow,netOut,pumpK,heat){
   /* the pump's speed is part of its own head inside the solve, so pumpK already carries it - and has to, or a coasted-down pump would multiply the thermosiphon by zero */
   const driven = P.flowK * pumpK;
   /* buoyancy is an edge head inside the solve; what is left here is the readout, the share of this tick's flow the plant developed with every pump doing nothing */
@@ -3133,7 +3104,9 @@ function stepMarch(dt){
   coreEach(s, coreHeatBalStep);
   /* the display balance only: s.dTavg and s.Tavg are both reads (advectStep) */
   HEATBAL.dTavg=s.dTavg;
-
+  return {driven, mflux};
+}
+function holdReliefStep(s,dt,pField,netOut){
   /* every loop pressure is a read (pressRead()); what is left of the pressurizer is the machine, heaters and a spray at its own node */
   let vented = 0;
   if(!s.breach){
@@ -3168,6 +3141,8 @@ function stepMarch(dt){
     /* not subtracted from s.inv: what a relief valve passes leaves through its own edge. Still booked, because the ledger's other side is what the plant lost */
     book(s,"reliefRoom", ventLoose/100*loopKg());
   }
+}
+function discTankStep(s,dt){
   /* the rupture disc: past its own setpoint the tank is an opening to containment, latched, and what it dumps costs release in proportion to the activity of what was in it */
   /* one pieces check shared by the hold tanks: tankP() re-checks the live signature per hold tank */
   let discPc = null;
@@ -3199,6 +3174,8 @@ function stepMarch(dt){
       s.release = Math.min(100, s.release + out*b.rel*tankFluid(tid).act*contRelPart(s,partOf(tid))*P.dose*dt);
     }
   }
+}
+function bookTailStep(s,inj){
   book(s,"spillPri", advectOutPri);   // the transport's own kilograms - see advectStep()
   s.injRate = inj;
   /* an inexhaustible tank is the one primary vessel with a level that does not move, so it is the only one with a term: everything else on the core's circuit keeps its water in s.mBy and is metered by the transport like any other node */
@@ -3213,7 +3190,8 @@ function stepMarch(dt){
     const r = AUTORULE[D.tanks[id].auto];
     s.tankAuto[id] = !!(r && r.live(s,id));
   }
-  if(inj>0) for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFatigueStep(s.coreBy[id], dt, inj);
+}
+function sgtrStep(s,dt,netOut){
   /* a tube rupture at whatever the differential says; clamped at zero only for the release, because water crossing back the other way carries no primary activity */
   { const leak = Math.max(0, invRate(outsNum(netOut, OQSGT, "qSgtr")));
     s.sgtrRate = leak;
@@ -3230,14 +3208,8 @@ function stepMarch(dt){
     if(hot>0) s.release = Math.min(100, s.release + (hot/0.30)*0.02*P.dose*dt); }
   // the raw edge, not s.sgtrBy: the clamp above throws away the sign, and on a sodium plant the sign IS the accident
   sgReactStep(s, dt, netOut);
-  __apE("secondary/therm");
-  __apS();
-  coreEach(s, coreBurstStep);
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreVesselStep(s.coreBy[id], P.cores[id], id, dt, coreFN);
-  coreAgg(s);
-  __apE("core pin loop");
-
-  __apS();
+}
+function marginStep(s,pField,heat,pumpK){
   /* margin to boiling is measured where the water is hottest, once per circuit; refilled, and s.sc stays the primary's entry */
   for(const ci of holdCircs()){
     /* the hottest node that is still LIQUID: a pressurizer's bubble reads zero margin by definition, and the surge line under it is its own saturated water (holdLineSet) */
@@ -3268,7 +3240,9 @@ function stepMarch(dt){
   s.heat = heat; s.sc = sc;              // tripCause() reads these outside the tick
   /* what a flow meter would read, never what the pump dial was set to: LOW FLOW has to trip on the delivered figure or shutting every valve trips nothing */
   s.flowNet = pumpK;
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFlowNetSet(s.coreBy[id], P.cores[id], id, coreFN);
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFlowNetSet(s.coreBy[id], P.cores[id], id, P.coreFN);
+}
+function condTurbStep(s){
   const ids = sgIds();
   const boW = tickBoW || (tickBoW = new Set());
   boW.clear();
@@ -3286,6 +3260,8 @@ function stepMarch(dt){
           && condP(s) < TURB_TRIP_P*TURB_RESET_K){ s.turbTrip = false;
     logE("info","TURBINE RELATCHED",
       "Exhaust pressure is back under the trip point and the machine is whole. The stop valve is open and the turbine is taking steam again."); }
+}
+function secVentStep(s,dt,netOut){
   /* a hole in the exhaust breaks the vacuum rather than venting a shell; condP() carries it, so the drop, the stop valve and the MWe readout price one backpressure */
   const pCond  = condP(s);
   /* the governor is an opening (turbCOf) on one edge of the one graph, so what each shell passes is what that solve says its own nozzle carried */
@@ -3316,10 +3292,18 @@ function stepMarch(dt){
     for(const id of shells){ const over = Math.max(0, secP(s,id)-back);
       secVent[id] = (secVent[id]||0) + q*(tot>0 ? over/tot : 1/shells.length); }
   }
+  return {secVent, pCond};
+}
+function shellStep(s,dt,netOut,secVent){
+  const sgW = sgShare(netOut.byLoop);
+  const ids = sgIds();
+  const boW = tickBoW || (tickBoW = new Set());
+  boW.clear();
+  { const bl = boilerIds(); for(let bi = 0; bi < bl.length; bi++) boW.add(bl[bi]); }
   let boiled = 0, boilQ = 0, bleedAll = 0;    // kg/s and kW, each shell at its own pressure - the condenser used to take the design rise
-  for(const id in s.sgTBy)  if(!boW.has(id)) delete s.sgTBy[id];
+  for(const id in s.sgTBy)  if(!s.sgShare.hasOwnProperty(id)) delete s.sgTBy[id];
   for(const id in s.sgPBy) if(!sgW.hasOwnProperty(id)) delete s.sgPBy[id];
-  for(const id in s.sgFedBy) if(!boW.has(id)) delete s.sgFedBy[id];
+  for(const id in s.sgFedBy) if(!s.sgShare.hasOwnProperty(id)) delete s.sgFedBy[id];
   for(const id in s.sgBurst) if(!sgW.hasOwnProperty(id)) delete s.sgBurst[id];
   /* reset, never delete: every shell below is rewritten (skipped shells read 0, exactly as an absent key), so the shape stays stable; boilerIds covers the drum loop too */
   { const bids4 = boilerIds(); for(let bi4=0;bi4<bids4.length;bi4++){ s.steamBy[bids4[bi4]] = 0; s.sgVentBy[bids4[bi4]] = 0; } }
@@ -3374,6 +3358,9 @@ function stepMarch(dt){
     bleedAll += bleed;
     boiled += steamTo - bleed; boilQ += (steamTo - bleed)*riseCond(s, id, boilerP(s,id));
   }
+  return {boiled, boilQ, bleedAll};
+}
+function condVentStep(s,dt){
   /* what a lost vacuum is putting in the turbine hall is what the transport carried out of its own opening, off the same edge the books charge */
   { let cv = 0;
     if(s.condLost){ const csl = condSinks();
@@ -3382,6 +3369,8 @@ function stepMarch(dt){
   if(s.condVent > 0 && !s.condVentSeen){ s.condVentSeen = true;
     logE("warn","STEAM GOING OVERBOARD",
       "The turbine bypass is passing steam into a machine that is open to atmosphere, and the water going with it does not come back. The hotwell is draining and no valve on the plant is open."); }
+}
+function turbStep(s,netOut,pCond,bleedAll){
   /* one number for the plant: what went round through the bypass did no work, and what crossed the wheels did it at the pressure the stop valve is seeing */
   s.turbWk = Math.max(0, outsNum(netOut, OWK, "turbWk") - bleedAll);
   s.turbP  = outsNum(netOut, OWKA, "turbWkA") > 0 ? outsNum(netOut, OWKP, "turbWkP")/outsNum(netOut, OWKA, "turbWkA") : pCond;
@@ -3396,6 +3385,8 @@ function stepMarch(dt){
       const t = condTRead(s, id);
       if(t !== undefined && isFinite(t)) s.condTBy[id] = t; }
     const m = condTMean(s); if(m !== undefined) s.condT = m; }
+}
+function radPanelStep(s,dt,runFlow){
   /* the panel climbs until its duty goes to 0 on the (Tin - Tpanel) term, so the chain stops itself; floored at T_SPACE, because nothing radiates below the sky */
   for(const id of radIds())
     s.radTBy[id] = potStep(s.radTBy[id], radCap_(id), s.radQBy[id]||0,
@@ -3405,6 +3396,8 @@ function stepMarch(dt){
     for(const id of condIds()){ const t = cwInOf(s, runFlow, id);
       if(t !== undefined) s.cwInTBy[id] = t; }
     const m = cwInMean(s); if(m !== undefined) s.cwInT = m; }
+}
+function secTankStep(s,dt){
   /* a reserve is metered against its own solved edge, signed, tank-out-positive, exactly the way every primary tank is charged */
   /* every secondary tank STANDING ON THE BOARD is metered against its own edge; a hosted one is the condensers' own water and no book at all */
   { const stids = secTankIds(); for(let ti=0;ti<stids.length;ti++) s.tankOver[stids[ti]] = 0;
@@ -3422,27 +3415,8 @@ function stepMarch(dt){
     // a hole in the secondary is a named opening; the condensers' own pool drains through one too
     if(secTankIds().length || condIds().length) book(s,"spillSec", advectOutSec);
   }
-  __apE("secondary/therm");
-  __apS();
-
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreKineticsStep(s.coreBy[id], P.cores[id], dt);
-
-  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreMeltStep(s.coreBy[id], P.cores[id], id, dt);
-  coreAgg(s);
-  __apE("core pin loop");
-  __apS();
-
-  /* solved fresh every tick into a reused buffer and never stored on S: a snapshot is a clone of S, and a Float64Array hung off it would not survive a restore */
-  { const f=radSolve(P.radK,radSrc(s),true);
-    s.doseRate = radAt(f,P.radK.crew);
-    s.crewDose = Math.min(100, s.crewDose + s.doseRate*RAD_CREW_K*dt);
-    /* radParty() wants the coldest free cell next to the job, never the job's own footprint; no party out, no rate */
-    s.repRate  = s.repair ? repairRadRate(f, s.repair.id) : 0; }
-
-  injectFluid(s, dt);
-  roomStep(s, dt);
-  __apE("roomStep");
-  __apS();
+}
+function blastStep(s,dt){
   /* what the blast costs: instantaneous, not integrated, so a machine either survives the peak its own cells saw or it does not */
   { /* the bang is its own event, latched on s.burnEv so it fires once per passage, at the peak that first threatens the weakest machine */
     if(!s.burnEv.blast && s.roomPMax >= minPburst()){
@@ -3500,6 +3474,8 @@ function stepMarch(dt){
     for(const id in s.roomCrush) if(crushSeen[id] !== cgLive){ delete s.roomCrush[id]; delete crushSeen[id]; }
     s.roomBang=0;   // a lift is one tick's bang; the pressure it left relaxes with the rest
   }
+}
+function overpressureStep(s){
   /* the room pushing in is above; this is the plant pushing out, judged on the CIRCUIT's pressure and never netPAt(), which carries piezometric head */
   { const G = nodeGraph();
   for(let pi=0;pi<LAY.parts.length;pi++){ const p=LAY.parts[pi];
@@ -3521,8 +3497,8 @@ function stepMarch(dt){
       p.name+" has burst. It is holding "+pk.toFixed(1)+" MPa against the "+
       lim.toFixed(1)+" MPa its own shell is built for. "+fx.why);
   } }
-  __apE("blast/overpressure");
-  __apS();
+}
+function burnFireStep(s){
   /* one line for an explosion, not one for a flame: latched, so it goes out when the last flame does and says what the whole passage cost */
   if(!s.roomBurnOn && s.burnEv.kg > 0){
     if(s.burnEv.kg > H2_BURN_EV)
@@ -3549,6 +3525,8 @@ function stepMarch(dt){
         "pan under the leak takes the pool away and stops both.");
     s.fireEv = {kg:0, p:0, q:0};
   }
+}
+function cookStep(s,dt){
   /* what standing in a hot room costs a machine: a ramp rather than a switch, so it cooks over seconds. Structure declares no tsurv */
   { const cgCook = tagTick();
     // the live set only serves the sweep at the end, which has nothing to sweep while no cell is hot
@@ -3585,7 +3563,8 @@ function stepMarch(dt){
         air.toFixed(0)+" K against the "+(q.lim||PIPE_TSURV)+" K it is good for. "+fx.why);
     }
     if(track) for(const id in s.roomHurt) if(cookSeen[id] !== cgCook){ delete s.roomHurt[id]; delete cookSeen[id]; } }
-
+}
+function evLatchStep(s,cavIds,injIds){
   coreAgg(s);
 
   // naming the machines means the verb has to agree with how many there were
@@ -3691,7 +3670,8 @@ function stepMarch(dt){
     "A quarter of the fuel is molten and "+s.dmg.toFixed(0)+"% of the cladding has failed. Unrecoverable."); } }
   /* here, beside the event latches, because both want the settled window step() is holding open */
   if(s.tick % ANN_TICKS === 0) annStep(s);
-
+}
+function repairStep(s,dt){
   if(s.repair){
     /* advanced by radWorkK(s.repRate)*dt and never plain dt, so the panel's own estimate and this advance cannot read two different numbers for the same job */
     s.repair.t += dt*radWorkK(s.repRate);
@@ -3711,10 +3691,10 @@ function stepMarch(dt){
       const fix=dmgFx(k).fix; if(fix) fix(s, k);
       logE("info","REPAIR COMPLETE / "+k.toUpperCase(),
         "The component is back in service. It took "+s.repair.need.toFixed(0)+" seconds and cost the repair party dose.");
-      s.repair=null;
     }
   }
-
+}
+function flowSpinStep(s,dt,runFlow){
   /* s.flowPos[key] is how far the fluid in that run has travelled, in diagram pixels; the renderer slides packets along it and differentiates it for the meters, so the two cannot disagree */
   const d=s.flowPos, sp=60*DRAW_K*dt;
   /* steam and exhaust read a solved hydraulic rate like every liquid run, normalised on steamScale(), which is the meter's own full scale */
@@ -3735,8 +3715,19 @@ function stepMarch(dt){
     }
   }
   /* the shafts state a rate, not an angle: an angle kept %360 carries no direction once a frame is worth more than half a turn */
-  s.spinV=360*mflux;
+  const driven = P.flowK*s.flowNet;
+  s.spinV=360*driven;
   s.spinTV=360*Math.min(s.load,1.5);
+}
+function radDoseStep(s,dt){
+  /* solved fresh every tick into a reused buffer and never stored on S: a snapshot is a clone of S, and a Float64Array hung off it would not survive a restore */
+  { const f=radSolve(P.radK,radSrc(s),true);
+    s.doseRate = radAt(f,P.radK.crew);
+    s.crewDose = Math.min(100, s.crewDose + s.doseRate*RAD_CREW_K*dt);
+    /* radParty() wants the coldest free cell next to the job, never the job's own footprint; no party out, no rate */
+    s.repRate  = s.repair ? repairRadRate(f, s.repair.id) : 0; }
+}
+function ledgerStep(s,dt,ledgM0,ledgO0){
   /* what the stores lost this tick, less what the named terms say left */
   { const res = (ledgM0 - ledgerKg(s)) - (ledgerOut(s) - ledgO0);
     s.massRes = res;
@@ -3749,6 +3740,118 @@ function stepMarch(dt){
         s.massWarn = res; s.massWarnT = t;
         console.warn("[ledger] tick "+t+": "+res.toFixed(3)+" kg unattributed of "
            +ledgM0.toFixed(0)+" kg", JSON.parse(JSON.stringify(s.massOut))); } } }
+}
+function stepMarch(dt){
+  __apS();
+  const s=S; s.t+=dt; s.tick++;
+  if(!s.massOut) s.massOut={};
+  const ledgM0 = ledgerKg(s), ledgO0 = ledgerOut(s);
+  /* settle the node graph for this tick; the hold is dropped on the last line of this function, so it never outlives the tick */
+  laySettle();
+  /* the player's automation reads last tick's solved plant and writes this tick's demands - see ctl.js */
+  ctlPass(s,dt);
+  actFollow(s,dt);
+
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreRodStep(s.coreBy[id], P.cores[id], id, dt);
+
+  boronFollow(s,dt);
+
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreDecayStep(s.coreBy[id], dt);
+  coreAgg(s);
+  const heat = s.n*PROMPT_F + s.decay;
+
+
+  /* scratch, not sim state: persistent on P (fresh again only when commission() rebuilds P), a local binding onto it so every reader below is unchanged.
+     Run flows ride a typed holder {v, pos} (never a plain object): hundreds of per-edge stores per tick boxed. */
+  const FM0 = flowMapsOf(P.net);
+  if(!P.runFlowH || P.runFlowH.n !== FM0.runKeys.length){ P.runFlowH = { v: new Float64Array(FM0.runKeys.length), pos: FM0.runPos, n: FM0.runKeys.length }; }
+  else if(P.runFlowH.pos !== FM0.runPos) P.runFlowH.pos = FM0.runPos;
+  const runFlow = P.runFlowH;
+  /* MPa per node, taken off netFlowK()'s own solve so the tick pays for one solve and not two; pAt() is how every reader below asks it */
+  if(tickPfNet !== P.net){ tickPf = null; tickPfNet = P.net; }
+  const pField = tickPf || (tickPf = pfNew(P.net));
+  /* what the solve found leaving the plant through every opening on it */
+  const netOut = P.netOut || (P.netOut = {});
+  __apE("ctlPass");
+  __apS();
+  const pumpK = netFlowK(s, runFlow, pField, netOut);
+  __apE("netFlowK");
+  __apS();
+  const coreFN = P.coreFN || (P.coreFN = {});
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFlowNetStep(s.coreBy[id], P.cores[id], id, coreFN, netOut, pumpK);
+  /* what the circulating water is doing, off this tick's own solve; the condenser's balance reads it through cwKOf() */
+  { for(const id in s.cwFlowBy) if(!partOf(id)) delete s.cwFlowBy[id];
+    for(const id of condIds()) s.cwFlowBy[id] = cwFlowOf(runFlow,id); }
+  spillStep(s,netOut);
+  const {inj, injIds} = tankRateStep(s,netOut);
+  pcoreStep(s,pField);
+  /* after the pressures settle and before the SGTR, the feed train and the relief valves read a temperature anywhere */
+  tickPf = s.pBy; s.pBy = pField;
+  pressRead(s, dt);
+  burstDice(s,dt,pField);
+  __apE("burst");
+  __apS();
+  advectStep(s, dt, runFlow, netOut && netOut.edgeKg);
+  invStep(s);
+  __apE("advectStep");
+  __apS();
+  sumpStep(s, dt);
+  __apE("sumpStep");
+  __apS();
+  const cavIds = cavStep(s,dt,pField);
+  pumpQStep(s,runFlow);
+  pumpCoastStep(s,dt);
+  __apE("pump");
+
+  __apS();
+  sgHeatStep(s,dt,runFlow,netOut,pumpK,heat);
+  holdReliefStep(s,dt,pField,netOut);
+  discTankStep(s,dt);
+  bookTailStep(s,inj);
+  if(inj>0) for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreFatigueStep(s.coreBy[id], dt, inj);
+  sgtrStep(s,dt,netOut);
+  __apE("secondary/therm");
+  __apS();
+  coreEach(s, coreBurstStep);
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreVesselStep(s.coreBy[id], P.cores[id], id, dt, coreFN);
+  coreAgg(s);
+  __apE("core pin loop");
+
+  __apS();
+  marginStep(s,pField,heat,pumpK);
+  condTurbStep(s);
+  const {secVent, pCond} = secVentStep(s,dt,netOut);
+  const {bleedAll} = shellStep(s,dt,netOut,secVent);
+  condVentStep(s,dt);
+  turbStep(s,netOut,pCond,bleedAll);
+  radPanelStep(s,dt,runFlow);
+  secTankStep(s,dt);
+  __apE("secondary/therm");
+  __apS();
+
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreKineticsStep(s.coreBy[id], P.cores[id], dt);
+
+  for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) coreMeltStep(s.coreBy[id], P.cores[id], id, dt);
+  coreAgg(s);
+  __apE("core pin loop");
+  __apS();
+
+  radDoseStep(s,dt);
+
+  injectFluid(s, dt);
+  roomStep(s, dt);
+  __apE("roomStep");
+  __apS();
+  blastStep(s,dt);
+  overpressureStep(s);
+  __apE("blast/overpressure");
+  __apS();
+  burnFireStep(s);
+  cookStep(s,dt);
+  evLatchStep(s,cavIds,injIds);
+  repairStep(s,dt);
+  flowSpinStep(s,dt,runFlow);
+  ledgerStep(s,dt,ledgM0,ledgO0);
   layRelease();
   __apE("events");
 }

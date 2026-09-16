@@ -103,7 +103,8 @@ function packet(jump){
   const s = sampPend; sampPend = [];
   const m = {t:"packet", jump:!!jump, tick:S.tick, samp:s, sps:TR.sps, tickMs:TR.tickMs};
   if(logMoved()) m.log = LOG.slice();
-  if(recMoved()) m.rec = recSummary(); else m.tickEnd = S.tick;
+  /* the take's own end, never S.tick: in a replay the plant stands short of it, and the viewer would cut the recorded future */
+  if(recMoved()) m.rec = recSummary(); else if(recCur()) m.tickEnd = recCur().tickEnd;
   if(SHM_ON){
     if(!(SHM && shmPush(SHM, S))){ SHM = shmNew(S); shmPush(SHM, S);
       m.shm = SHM.sab; m.S = S; m.log = LOG.slice(); m.rec = recSummary(); }
