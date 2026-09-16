@@ -5,17 +5,17 @@ body[data-screen="design"] #scr-design{pointer-events:none}
 .plant-layers .layer-switch{justify-content:flex-start;text-align:left}
 
 .scr-head{grid-column:1;grid-row:1;pointer-events:none;display:flex;align-items:flex-start;
-  flex-wrap:wrap;gap:8px;padding:6px 8px;margin-left:308px}
+  flex-wrap:wrap;gap:8px;padding:6px 8px;}
 .scr-head>*{pointer-events:auto}
 .db-head{margin-left:0}
 
 .cr-root,.db-root{position:absolute;display:grid;
   grid-template-rows:auto 1fr;pointer-events:none}
-.cr-root{inset:36px 0 0 0;grid-template-columns:1fr auto}
+.cr-root{inset:0 0 0 0;grid-template-columns:1fr auto}
 .db-root{inset:0;grid-template-columns:1fr auto}
 .db-rail:empty,.cr-rail:empty{display:none}
 
-.cr-vitals{position:absolute;left:4px;top:4px;pointer-events:auto;
+.cr-vitals{position:absolute;left:4px;top:34px;pointer-events:auto;
   display:flex;flex-direction:column;
   width:300px;padding:4px 0;background:var(--c-panel);
   max-height:calc(100% - 12px);overflow-y:auto;scrollbar-width:none}

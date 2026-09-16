@@ -120,6 +120,7 @@ function scnBuild(){
     tip:"Returns the reactor to steady 100% power with all faults cleared and damage counters zeroed. Clears the last run's verdict; keeps the timeline you have authored."});
   const spacer=KIT.el("div","scn-head-spacer");
   const verdictEl=KIT.el("span","scn-verdict");
+  if(trStrip("scenario")) head.appendChild(trStrip("scenario").rate.el);
   head.append(nameEl, secsSlider.el, runBtn.el, playBtn.el, fitBtn.el,
     presetsBtn.el, saveBtn.el, spacer, verdictEl, trendsBtn.el, logBtn.el, resetBtn.el);
 

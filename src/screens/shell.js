@@ -277,8 +277,15 @@ function shellInitTooltip(){
   let viewAt="";
   const placeView=()=>{
     const v=viewRectCss(), r=tip.getBoundingClientRect();
-    const x=Math.max(4,Math.min(v.right-r.width-6, innerWidth-r.width-4));
-    const y=Math.max(4,Math.min(v.bottom-r.height-6,innerHeight-r.height-4));
+    let right=v.right, bottom=v.bottom;
+    /* a pinned timeline covers the view's corner, so the box stands just off its edge */
+    const rv=document.getElementById("rv-app");
+    if(rv && rv.classList.contains("pin") && !rv.classList.contains("hide")){
+      const b=rv.getBoundingClientRect();
+      if(rv.classList.contains("vert")) right=Math.min(right,b.left); else bottom=Math.min(bottom,b.top);
+    }
+    const x=Math.max(4,Math.min(right-r.width-6, innerWidth-r.width-4));
+    const y=Math.max(4,Math.min(bottom-r.height-6,innerHeight-r.height-4));
     const at=x+","+y; if(at===viewAt) return; viewAt=at;
     tip.style.left=x+"px"; tip.style.top=y+"px";
   };

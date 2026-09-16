@@ -590,6 +590,7 @@ function crBuild(){
   railBlank(rail);
 
   const head=KIT.el("div","scr-head cr-head"); root.appendChild(head);
+  if(trStrip("operate")) head.appendChild(trStrip("operate").rate.el);
   /* the handle comes back too: crFaultsSync() lights the key while a sticking tool is armed */
   const drawer=(label,tip,cls)=>{ const m=KIT.menuKey({label,tip,cls:"cr-drawer"});
     const body=KIT.el("div",cls); m.menu.appendChild(body); head.appendChild(m.el);
@@ -679,10 +680,9 @@ if(typeof document!=="undefined" && document.documentElement) CR=crBuild();
 
 function drawOperate(){
   crSync();
-  const stripBox = trStrip("operate") ? hostRect(trStrip("operate").root) : null;
   // an empty rail is display:none, and a hidden box measures zero
   const railBox = CR && CR.rail.offsetParent ? hostRect(CR.rail) : null;
-  const vy = stripBox ? stripBox.y+stripBox.h : TOPBAR_H;
+  const vy = TOPBAR_H;
   const vh=Math.max(120,H-vy);
   /* the head row is transparent, so the view runs under it - measured off the FIT */
   const headBox = CR? hostRect(CR.head) : null;

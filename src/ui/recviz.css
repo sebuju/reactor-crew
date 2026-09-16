@@ -1,0 +1,86 @@
+/* the recorder timeline: a collapsible edge dock over the sim screens. horizontal is the default;
+   .vert swaps the time axis to run top->bottom and docks to the right edge. only a lip shows until hover. */
+#rv-app{position:fixed;left:0;right:0;bottom:0;height:var(--rv-h,300px);z-index:40;
+  display:flex;flex-direction:column;background:var(--c-bg);border-top:1px solid var(--c-edge2);
+  box-shadow:0 -6px 24px rgba(0,0,0,.55);font-family:var(--mono);font-size:12px;color:var(--c-ink);
+  transform:translateY(calc(100% - 6px));transition:transform .28s ease}
+#rv-app:hover{transform:none}
+#rv-app.vert{left:auto;top:0;right:0;bottom:0;width:var(--rv-w,300px);height:auto;
+  border-top:0;border-left:1px solid var(--c-edge2);box-shadow:-6px 0 24px rgba(0,0,0,.55);
+  transform:translateX(calc(100% - 6px))}
+#rv-app.vert:hover,#rv-app.pin{transform:none}
+#rv-app.hide{display:none}
+
+#rv-tl{flex:1 1 auto;min-height:0;min-width:0;position:relative;overflow:hidden;
+  background:radial-gradient(120% 60% at 30% 0,color-mix(in srgb,var(--c-edge) 22%,var(--c-bg)),var(--c-bg))}
+#rv-tree{position:absolute;inset:0}
+
+.rv-grid{position:absolute;left:0;height:0;border-top:1px solid var(--c-edge);opacity:.5;pointer-events:none}
+.rv-grid label{position:absolute;left:10px;top:2px;font-size:9px;color:var(--c-ink2);
+  letter-spacing:.5px;font-variant-numeric:tabular-nums}
+#rv-app:not(.vert) .rv-grid{border-top:0;border-left:1px solid var(--c-edge)}
+#rv-app:not(.vert) .rv-grid label{top:6px;left:4px;white-space:nowrap}
+
+.rv-rail{position:absolute;width:2px;background:var(--c-edge2);pointer-events:none}
+.rv-curpath{position:absolute;width:3px;background:var(--c-green);z-index:2;pointer-events:none}
+.rv-siding{position:absolute;height:2px;background:var(--c-edge2);pointer-events:none}
+.rv-bdot{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--c-rail);z-index:5;pointer-events:none}
+.rv-edot{position:absolute;width:9px;height:9px;border-radius:50%;background:var(--c-bg);
+  border:2px solid var(--c-rail);box-sizing:border-box;z-index:5;pointer-events:none}
+.rv-hitzone{position:absolute;z-index:1;cursor:pointer}
+
+.rv-head{position:absolute;display:flex;align-items:center;gap:6px;font-size:10px;letter-spacing:.5px;
+  color:var(--c-ink);white-space:nowrap;cursor:pointer;padding:3px 6px;margin:-3px -6px;border-radius:4px;z-index:4}
+.rv-head:hover{background:var(--c-panel-float);color:var(--c-bright)}
+.rv-head.live{cursor:default;color:var(--c-bright)}
+.rv-head .rv-swatch{width:8px;height:8px;border-radius:2px}
+
+/* an event is a one-line tag, severity colour as bg, sharp corner at the exact tick */
+.rv-ev{position:absolute;z-index:3;cursor:pointer;white-space:nowrap;
+  font-size:10px;line-height:1;font-weight:600;padding:3px 7px;border-radius:0 3px 3px 0;
+  color:var(--c-ink-on-lit);background:var(--evc)}
+.rv-ev::before{content:"";position:absolute;left:-8px;top:0;bottom:0;width:8px;
+  background:var(--evc);clip-path:polygon(100% 0,100% 100%,0 50%)}
+.rv-ev.alarm{--evc:var(--c-red)}
+.rv-ev.warn{--evc:var(--c-amber)}
+.rv-ev.act{--evc:var(--c-cyan)}
+.rv-ev.info{--evc:var(--c-metal)}
+.rv-ev.off{opacity:.4}
+.rv-ev.pop{animation:rv-pop .45s ease-out}
+@keyframes rv-pop{0%{opacity:0;transform:scale(.7)}60%{opacity:1;transform:scale(1.08)}100%{transform:scale(1)}}
+
+/* horizontal mode: time runs left->right, branches stack down; tags lane off the rail instead of clustering */
+#rv-app:not(.vert) .rv-ev{border-radius:3px}
+#rv-app:not(.vert) .rv-ev::before{display:none}
+.rv-evdot{position:absolute;width:8px;height:8px;border-radius:50%;z-index:4;pointer-events:none;
+  border:1px solid var(--c-bg);box-sizing:border-box;transform:translate(-50%,-50%)}
+.rv-evlead{position:absolute;width:1px;z-index:2;pointer-events:none;transform:translateX(-50%)}
+.rv-evjog{position:absolute;height:1px;z-index:2;pointer-events:none;transform:translateY(-50%)}
+
+#rv-cursor{position:absolute;left:0;height:0;z-index:6;pointer-events:none;display:none}
+#rv-curdot{position:absolute;top:-6px;width:11px;height:11px;border-radius:50%;background:var(--c-green);
+  border:2px solid var(--c-bg);transform:translateX(-50%)}
+#rv-cursor.replay #rv-curdot{background:var(--c-amber)}
+#rv-app:not(.vert) #rv-curdot{transform:translateY(-50%)}
+
+/* the hover-only control cluster: follow chip + orientation + scale, alongside each other */
+#rv-ctrls{position:absolute;right:14px;bottom:12px;z-index:9;display:flex;gap:6px;align-items:center;
+  opacity:0;transition:opacity .15s ease;pointer-events:none}
+#rv-app:hover #rv-ctrls,#rv-app.pin #rv-ctrls{opacity:1;pointer-events:auto}
+#rv-app.vert #rv-ctrls{right:12px;left:12px;top:12px;bottom:auto;flex-wrap:wrap}
+:where(#rv-ctrls) button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;
+  height:24px;padding:0 11px;letter-spacing:1px;font-size:10px}
+#rv-follow{height:26px;border-radius:13px;background:var(--c-on-amber);color:var(--c-amber);
+  border:1px solid color-mix(in srgb,var(--c-amber) 35%,var(--c-bg));box-shadow:0 2px 10px rgba(0,0,0,.5)}
+#rv-follow:hover{background:color-mix(in srgb,var(--c-amber) 22%,var(--c-bg))}
+#rv-follow.hide{display:none}
+.rv-key{background:var(--c-well);color:var(--c-cyan);
+  border:1px solid color-mix(in srgb,var(--c-cyan) 30%,var(--c-bg))}
+.rv-key:hover{background:color-mix(in srgb,var(--c-cyan) 18%,var(--c-bg))}
+#rv-name{font-size:10px;color:var(--c-amber);white-space:nowrap}
+#rv-fork{font-size:10px;color:var(--c-ink2);white-space:nowrap;margin-right:6px}
+#rv-live{font-size:10px;letter-spacing:1.6px;color:var(--c-ink2);margin-right:6px}
+#rv-picker{position:absolute;right:14px;bottom:44px;z-index:10;width:min(720px,calc(100% - 28px))}
+#rv-app.vert #rv-picker{top:84px;bottom:auto;left:12px;right:12px;width:auto}
+#rv-picker .kit-well-body{max-height:200px;overflow-y:auto;padding:8px 4px}
+#rv-pin.on{background:var(--c-on-amber);color:var(--c-amber);border-color:color-mix(in srgb,var(--c-amber) 35%,var(--c-bg))}
