@@ -1,0 +1,4 @@
+[toolchain]
+# Pinned per plan §5. Record upgrades here; CI builds both artifacts.
+channel = "1.89.0"
+targets = ["wasm32-unknown-unknown"]

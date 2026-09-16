@@ -37,3 +37,9 @@ tests/reports/
 
 # Debug dumps - state/timeline CSV, viewport PNG, design sidecars. Scratch, purged from the brand menu.
 snapshots/
+
+# Rust sim (sim-rs) - build outputs, never committed; toolchain rebuilds from Cargo.toml
+sim-rs/target/
+sim-rs/Cargo.lock
+sim-rs/pkg/
+*.wasm

@@ -1,0 +1,16 @@
+{
+ "presets": [
+  "STOCK PWR",
+  "NUSCALE",
+  "BWR/4",
+  "BN-600",
+  "EPR",
+  "RBMK-1000",
+  "MSRE",
+  "WINDSCALE",
+  "DUAL"
+ ],
+ "ticks": 120,
+ "samples": 36,
+ "injects": 36
+}
