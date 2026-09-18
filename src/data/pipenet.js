@@ -9,8 +9,6 @@ const boreForW = (w, rho, v) => Math.round(
 const V_LIQ = 3, V_VAP = 50;
 /* A suction line is one size up, for NPSH. */
 const SUC_BORE_K = 2;
-const legBoreMm = () => { const a = COOLANT[priD().cool];
-  return boreForW(legDutyKgs(), a.dens*RHO_K, a.vLeg); };
 /* P before D: a fitting resized after commissioning must not move the plant that is running */
 const fitBoreMm = fid => { if(BORE_NOM) return fitBoreSuggest(fid);
   const f = (typeof P!=="undefined" && P) ? P.fittings : D.fittings;
@@ -35,7 +33,7 @@ const fitBoreSuggest = fid => {
     const rho = rhogOf(satOfCirc(ci), tsatSec(lift, ci));
     const peers = reliefFitsD().filter(o => fitSpringD(o) && shellsOf(o).some(id => shells.includes(id))).length;
     const want = plantSteam()*shells.length/sgCount()/Math.max(peers, 1);
-    const area = want/(ORIF_CD*Math.sqrt(2*Math.max(rho,1e-3)*(1-RCRIT)*lift*1e6));
+    const area = want/(ORIF_CD*Math.sqrt(2*Math.max(rho,1e-3)*gasDpEq(GAM_VAP, lift, 0)*1e6));
     if(isFinite(area) && area > 0) v = Math.sqrt(4*area/Math.PI)*1000;
   }
   if(pn) fitBoreCache[fid] = v;
@@ -138,6 +136,7 @@ const partPathI = (pid, IN) => { if(!(IN.v > 0) || !(IN.len > 0)) return 0;
 const STEEL_RHO = 7850;    // kg/m^3
 const ALPHA_STEEL = 1e-5;  // m^2/s, thermal diffusivity of a pressure-vessel steel
 const STEEL_S   = 138;     // MPa allowable stress, carbon steel at temperature
+const STEEL_UTS = 485;     // MPa minimum tensile strength, SA-516 grade 70: what the wall actually parts at
 const STEEL_A   = 1.8e-5;  // 1/K linear expansion, austenitic steel
 const WALL_CORR = 3;       // mm of corrosion/handling allowance under any pressure
 // wider than layoutMetrics()'s `pipe` bucket: that one asks what is in the LOOP hydraulically
@@ -207,7 +206,6 @@ const vesselWallMm = (p0, c, cD) => { const d = cD || priD();
   return (d && d.wall) || vesselWallSuggest(p0, c, cD); };
 const vesselRating = (p0, c, cD, wallMm) =>
   2*(STEEL_S/((c&&c.pipeK)||1))*Math.max((wallMm ?? vesselWallMm(p0, c, cD))-WALL_CORR, 0)/(vesselDiaM(cD)*1000);
-const vesselBurstP = (p0, c, cD) => vesselRating(p0, c, cD)*PIPE_BURST_K;
 function vesselShellMass(p0, c, cD, wallMm){
   const dM = vesselDiaM(cD), hM = vesselHgtM(cD);
   const w = (wallMm ?? vesselWallMm(p0, c, cD))/1000;
@@ -222,7 +220,6 @@ const tubeWallSuggest = (p0, c, cD) => wallSuggestMm(tubeBoreMm(cD), p0, c);
 const tubeWallMm = (p0, c, cD) => { const t = tubeOf(cD); return (t && t.wall) || tubeWallSuggest(p0, c, cD); };
 const tubeRating = (p0, c, cD, wallMm) =>
   2*(STEEL_S/((c&&c.pipeK)||1))*Math.max((wallMm ?? tubeWallMm(p0, c, cD))-WALL_CORR, 0)/Math.max(tubeBoreMm(cD), 1);
-const tubeBurstP = (p0, c, cD) => tubeRating(p0, c, cD)*PIPE_BURST_K;
 const tubeCount = cD => { const L = (typeof latM === "function") ? latM(cD || priD()) : null; return (L && L.nAsm) || 0; };
 function tubeMass(p0, c, cD, wallMm){ const d = cD || priD(), L = latM(d);
   const w = (wallMm ?? tubeWallMm(p0, c, d))/1000, b = tubeBoreMm(d)/1000;
@@ -237,49 +234,77 @@ const CAV_LIFT_K = 0.5, CAV_RESEAT_K = 0.8;
 /* m^2: the hole passing one channel's discharge */
 const cavReliefC = (cid, c, one) => {
   const ci = coreCircOf(cid), p0 = holdSetP(ci), sat = satOfCirc(ci), pc = (typeof P!=="undefined" && P) ? P.Pcont : 0.1;
-  const w1 = flowW(one, rhofOf(sat, satT(sat, p0)), p0, pc);
+  const w1 = one*Math.sqrt(2*rhofOf(sat, satT(sat, p0))*omegaDpEq(omegaOf(sat, p0, 0), p0, pc)*1e6);
   const pl = pc + shieldLiftP(c)*CAV_LIFT_K;
-  const per = flowW(1, rhogOf(sat, satT(sat, pl)), pl, pc);
+  const per = flowW(1, rhogOf(sat, satT(sat, pl)), pl, pc, sat.gam);
   return per > 0 ? w1/per : 0; };
 
 // MPa, fitted: the head a pump nobody has sized suggests
 let PUMP_H0 = 0.60;
 // a sweep scale on every head, pump and static column alike; the game never moves it
 let HEAD_K = 1;
-function setPumpH0(v){ PUMP_H0 = v; }
-function setHeadK(v){ HEAD_K = v; }
 
 // gravity, MPa per (kg/m^3 x metre)
 const G_MPA = 9.81e-6;
 // RHO_K turns COOLANT[].dens (water = 100) into kg/m^3; RHO_BETA is DESIGN-time only, the solve asks each node's own (p, h)
 const RHO_K = 7, RHO_BETA = 2.4e-3;
-const rhoAt = T => P.rho0 * (1 - RHO_BETA*(T - P.Tref));
 
 // metres, the floor under every run's length: a zero-length run still has to cost something
 const NET_COMP_LEN = 0.1;
 
 const PIPE_FRIC = 0.02;      // Darcy factor before there is a flow to read
-const RCRIT     = 0.55;      // steam's critical pressure ratio
+const GAM_VAP = 1.3;       // isentropic exponent of superheated steam
+/* Bernoulli-equivalent drops, G^2/(2 rho0) in MPa, so every edge keeps w = C*sqrt(2*rho0*dp).
+   Register DQ_: [0] gam or omega, [1] p0, [2] pd, [3] out, [4] eta_c, [5] x, [6] T, [7] rho_f, [8] rho_g, [9] hfg */
+const DQ_W=0, DQ_P0=1, DQ_PD=2, DQ_OUT=3, DQ_ETA=4, DQ_X=5, DQ_T=6, DQ_RF=7, DQ_RG=8, DQ_HFG=9, DQ_N=10;
+const DQ = new Float64Array(DQ_N);
+function gasDpA(io){ const gam = io[DQ_W], p0 = io[DQ_P0], rc = Math.pow(2/(gam+1), gam/(gam-1)), r = Math.max(io[DQ_PD]/p0, rc);
+  io[DQ_OUT] = p0*gam/(gam-1)*(Math.pow(r, 2/gam) - Math.pow(r, (gam+1)/gam)); }
+const gasDpEq = (gam, p0, pd) => { DQ[DQ_W] = gam; DQ[DQ_P0] = p0; DQ[DQ_PD] = pd; gasDpA(DQ); return DQ[DQ_OUT]; };
+function omegaEtaCA(io){ const w = io[DQ_W]; let lo = 1e-6, hi = 1;
+  for(let k=0;k<50;k++){ const n = (lo + hi)/2;
+    const f = n*n + (w*w - 2*w)*(1 - n)*(1 - n) + 2*w*w*Math.log(n) + 2*w*w*(1 - n);
+    if(f > 0) hi = n; else lo = n; }
+  io[DQ_ETA] = (lo + hi)/2; }
+const omegaEtaC = w => { DQ[DQ_W] = w; omegaEtaCA(DQ); return DQ[DQ_ETA]; };
+/* Leung's omega method (1986): homogeneous equilibrium flashing flow in closed form */
+function omegaDpA(io){ const w = io[DQ_W], p0 = io[DQ_P0]; omegaEtaCA(io);
+  const n = Math.max(io[DQ_PD]/p0, io[DQ_ETA]), d = w*(1/n - 1) + 1;
+  io[DQ_OUT] = p0*Math.max(0, -(w*Math.log(n) + (w - 1)*(1 - n)))/(d*d); }
+const omegaDpEq = (w, p0, pd) => { DQ[DQ_W] = w; DQ[DQ_P0] = p0; DQ[DQ_PD] = pd; omegaDpA(DQ); return DQ[DQ_OUT]; };
+/* omega of a saturated mixture of quality io[DQ_X] at io[DQ_P0], off the curve's own two densities and latent heat, into io[DQ_W] */
+function omegaA(c, io){ const p0 = io[DQ_P0], x = io[DQ_X];
+  satTA(c, io, DQ_P0, DQ_T); curveA(c, CV_RF, io, DQ_T, DQ_RF); curveA(c, CV_RG, io, DQ_T, DQ_RG); curveA(c, CV_HFG, io, DQ_T, DQ_HFG);
+  const T = io[DQ_T], vf = 1/io[DQ_RF], vg = 1/io[DQ_RG], hfg = io[DQ_HFG]*1e3;
+  const v0 = x*vg + (1 - x)*vf, r = (vg - vf)/Math.max(hfg, 1);
+  io[DQ_W] = x*vg/(v0*(c.gam || GAM_VAP)) + c.cp*1e3*T*p0*1e6*r*r/v0; }
+const omegaOf = (c, p0, x) => { DQ[DQ_P0] = p0; DQ[DQ_X] = x; omegaA(c, DQ); return DQ[DQ_W]; };
 const DPFRAC    = 0.00005;   // floor on dp, a FRACTION never an absolute
 const ORIF_CD   = 0.61;      // sharp-edged orifice
 /* Haaland; Re floored so a stopped leg keeps a finite coefficient and can restart */
 const PIPE_ROUGH = 4.5e-5;   // commercial steel
 const K_BEND = 0.3, K_ENTRY = 0.5, K_EXIT = 1.0;
 const RE_FLOOR = 500;
+/* register PC_: bore, flow kg/s, viscosity, Darcy f, length, K0, conductance */
+const PC_BORE=0, PC_W=1, PC_MU=2, PC_F=3, PC_L=4, PC_K0=5, PC_C=6, PC_N=7;
+const PCR = new Float64Array(PC_N);
+function fricA(io){
+  const D = boreM(io[PC_BORE]), Re = Math.max(4*Math.abs(io[PC_W])/(Math.PI*D*io[PC_MU]), RE_FLOOR);
+  if(Re < 2300){ io[PC_F] = 64/Re; return; }
+  const r = -1.8*Math.log10(Math.pow(PIPE_ROUGH/D/3.7, 1.11) + 6.9/Re);
+  io[PC_F] = 1/(r*r);
+}
 const fricOf = (bore, w, mu) => {
   if(!(w !== undefined && mu > 0)) return PIPE_FRIC;
-  const D = boreM(bore), Re = Math.max(4*Math.abs(w)/(Math.PI*D*mu), RE_FLOOR);
-  if(Re < 2300) return 64/Re;
-  const r = -1.8*Math.log10(Math.pow(PIPE_ROUGH/D/3.7, 1.11) + 6.9/Re);
-  return 1/(r*r);
+  PCR[PC_BORE] = bore; PCR[PC_W] = w; PCR[PC_MU] = mu; fricA(PCR); return PCR[PC_F];
 };
 const boreM = bore => Math.max(bore*BORE_REF/1000, 0.01);
 const areaOf = bore => Math.PI/4*boreM(bore)*boreM(bore);
 /* m^2; infinite length reaches exactly 0, which is how a severed pipe says there is no pipe */
-const pipeC = (bore, L, K0, f) => {
-  const K = (f === undefined ? PIPE_FRIC : f)*Math.max(L, NET_COMP_LEN)/boreM(bore) + (K0||0);
-  return isFinite(K) && K > 0 ? areaOf(bore)/Math.sqrt(K) : 0;
-};
+function pipeCA(io){ const bore = io[PC_BORE], K = io[PC_F]*Math.max(io[PC_L], NET_COMP_LEN)/boreM(bore) + io[PC_K0];
+  io[PC_C] = isFinite(K) && K > 0 ? areaOf(bore)/Math.sqrt(K) : 0; }
+const pipeC = (bore, L, K0, f) => { PCR[PC_BORE] = bore; PCR[PC_L] = L; PCR[PC_K0] = K0||0; PCR[PC_F] = f === undefined ? PIPE_FRIC : f;
+  pipeCA(PCR); return PCR[PC_C]; };
 // an orifice has no length term, only its own area
 const holeC = bore => ORIF_CD*areaOf(bore);
 // the path through a component's own body, plus the loss its ROLE states for its internals
@@ -303,9 +328,9 @@ const runK0 = r => {
   return K_BEND*Math.max(0, (r.pts ? r.pts.length : 2) - 2)
        + endK(r.a, r.sa) + endK(r.b, r.sb);
 };
-/* kg/s an opening WOULD pass at a stated pair of pressures, not what the field says it does */
-const flowW = (C, rho, pHi, pLo) => C > 0
-  ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(Math.min(pHi-pLo, (1-RCRIT)*Math.max(pHi,0)), 0)*1e6)
+/* kg/s an opening WOULD pass at a stated pair of pressures, not what the field says it does; gam names a vapour, which expands and chokes */
+const flowW = (C, rho, pHi, pLo, gam) => C > 0
+  ? C*Math.sqrt(2*Math.max(rho,1e-3)*Math.max(gam ? gasDpEq(gam, Math.max(pHi,1e-6), pLo) : pHi-pLo, 0)*1e6)
   : 0;
 /* a nozzle in the steam space stands in the steam's own density, not the vessel's mixture - for what it passes and for what it weighs. F.void is a vessel whose free SURFACE says there is a space over it: at the condenser's vacuum the quality of a half-full pool is 7e-5 and a bare x > 0 pulls the hotwell out through the exhaust duct. */
 const gasEnd = (F, gasAt, i) => gasAt === i && (F.x[i] > 0 || !!F.void[i]);
@@ -326,8 +351,8 @@ const flowG = (C, F, u, v, h, diode, hSrc, chokeAt, gasAt, liqAt) => {
   const act = Math.max(a, floor);
   /* only a vapour expands, only where no head SOURCE drives the edge, and only once per duct: `chokeAt` is the run's own node, so only the half leaving by it expands */
   const choke = !hSrc && F.x && F.x[up] > 0 && (chokeAt === undefined || up === chokeAt);
-  const eff = Math.max(choke ? Math.min(a, (1-RCRIT)*pHi) : a, floor);
-  FLOWG_CHOKE = choke && (1-RCRIT)*pHi < a;
+  const q = choke ? gasDpEq(GAM_VAP, pHi, pHi - a) : a, eff = Math.max(q, floor);
+  FLOWG_CHOKE = choke && q < a;
   /* a spent node feeds nothing; the DONOR's bit, so the same edge still fills it back up */
   if(F.wet && !F.wet[up]) return 0;
   /* a check valve is signed: +1 passes u->v only */
@@ -350,17 +375,6 @@ const scratch = (net, k, n, Ctor, v) => { const b = net.scr || (net.scr = {}); l
 const pfNew = (net) => ({ v: new Float64Array(net.n), has: new Uint8Array(net.n) });
 const pfAt = (f, nid) => { const net = P && P.net, i = net && net.index[nid];
   return (!f || i === undefined || !f.has[i]) ? undefined : f.v[i]; };
-const pfSet = (f, nid, v) => { const net = P && P.net, i = net && net.index[nid];
-  if(i !== undefined){ f.v[i] = v; f.has[i] = 1; } };
-const pfDel = (f, nid) => { const net = P && P.net, i = net && net.index[nid];
-  if(i !== undefined) f.has[i] = 0; };
-/* refilled, never rebuilt: dst keeps its own identity, src overwrites it whole - both are the same net's shape */
-const pfCopy = (dst, src) => { if(dst === src) return dst;
-  dst.v.set(src.v); dst.has.set(src.has); return dst; };
-/* the same one door onto s.mBy/s.hBy, for readers outside the sim (render, tools) that must not know the field's own container */
-const nodeKg = (s, nid) => s ? pfAt(s.mBy, nid) : undefined;
-const nodeH  = (s, nid) => s ? pfAt(s.hBy, nid) : undefined;
-const nodeP  = pfAt;
 /* the field the law is linearised about: one tick old on purpose, and per net */
 const netFieldOf = () => ({p:null, rho:null, rhoD:null, rhoG:null, rhoL:null, void:null, x:null, wet:null, mu:null});
 function netFieldSize(F, n){
@@ -400,14 +414,6 @@ function netBooked(net){
   net.booked = b;
   return b;
 }
-/* the partition netBooked() marks, named; undefined is the field's own, and containment */
-function netBookOf(net){
-  if(net.bookOf) return net.bookOf;
-  const b = new Array(net.n);
-  for(const id in net.tankNode) if(!net.tankField[id]) b[net.tankNode[id]] = "T:"+id;
-  net.bookOf = b;
-  return b;
-}
 /* taken off F.wet so the key and the assembly agree by construction */
 function netDrySig(net, s){
   const w = net.F && net.F.wet;
@@ -436,7 +442,6 @@ function netFieldUpdate(net, s){
   const fedIn = scratch(net, "fedIn", net.n, Float64Array, 0);
   for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e], w = net.wArr[e];
     if(w > 0) fedIn[ed.v] += w; else if(w < 0) fedIn[ed.u] -= w; }
-  __apS();
   for(let i=0;i<net.n;i++){ const nid = net.name[i], pb = s.pBy, hb = s.hBy;
     /* pi is i: net.index inverts net.name (verified bit-exact across presets), so no Map round-trip per node */
     const p = (pb && pb.has[i]) ? Math.max(COND_P0, pb.v[i]) : netPAt(s, nid);
@@ -453,13 +458,9 @@ function netFieldUpdate(net, s){
     /* muMixOf inlined: a per-node call returning a `double` boxed */
     { const xv = mx[MX_X], sc = sat[i], mfv = sc.mu, mgv = sc.muV || sc.mu;
       F.mu[i] = xv <= 0 ? mfv : xv >= 1 ? mgv : 1/(xv/mgv + (1-xv)/mfv); } }
-  __apE("field.nodes");
-  __apS();
   const gasN = net.gasNodes||[], liqN = net.liqNodes||[];
   for(let gi=0;gi<gasN.length;gi++){ const i = gasN[gi]; F.rhoG[i] = rhogOf(sat[i], satT(sat[i], F.p[i])); }
   for(let li=0;li<liqN.length;li++){ const i = liqN[li]; F.rhoL[i] = rhofOf(sat[i], satT(sat[i], F.p[i])); }
-  __apE("field.rhoGL");
-  __apS();
   /* the pool's own surface, not (p,h): a hotwell short of full has a space over it and every nozzle in that space draws steam */
   if(net.condV && net.condV.length){ F.void.fill(0);
     for(let cvi=0;cvi<net.condV.length;cvi++){ const i = net.condV[cvi], lvl = poolLvlOf(net, s, i);
@@ -468,11 +469,8 @@ function netFieldUpdate(net, s){
       if(lvl !== undefined && lvl > 0) F.rhoD[i] = rhofOf(sat[i], satT(sat[i], F.p[i])); } }
   /* containment never donates: F.wet is the DONOR's bit, so a break stops supplying without stopping it receiving */
   if(net.cont) for(let cti=0;cti<net.cont.length;cti++) F.wet[net.cont[cti]] = 0;
-  __apE("field.cond");
-  __apS();
   /* built here so it cannot be built twice: the diagonal and its own C/dt*p_prev are two halves of one row */
   net.store = netStore(net, s);
-  __apE("field.store");
   /* every conductance is a function of this field, so the generation is netFactored()'s key */
   F.gen = (F.gen||0) + 1;
 }
@@ -534,33 +532,6 @@ const edgeIn = ed => netMarch ? (ed.I || 0)/NET_DT/1e6 : 0;
 const edgeH = (net, ed, s) => (ed.Ck === undefined ? (typeof ed.h0 === "function" ? ed.h0(s) : (ed.h0 || 0))
   : (ed.pump ? (pumpHeadNow(s, ed.pump) + staticH(net, ed, s))*HEAD_K : staticH(net, ed, s)*HEAD_K))
   + edgeIn(ed)*(net.wArr[ed.wi] || 0);
-function netDryParts(s, out){
-  const net = (typeof P!=="undefined" && P) ? P.net : null, F = net && net.F;
-  if(!net) return out || [];
-  out = out || net.dryScr || (net.dryScr = []);
-  out.length = 0;
-  if(!F || !F.wet || !net.nodesOfPart) return out;
-  /* a booked node is left out: F.wet reads the mass field there and the book is the answer. So is a vessel, whose emptiness is a LEVEL it already states - a relief tank commissions empty on purpose. */
-  const booked = netBooked(net);
-  for(const id in net.nodesOfPart){
-    if(D.tanks && D.tanks[id]) continue;
-    for(const i of net.nodesOfPart[id])
-      /* a steam space is never RUN DRY: an exhaust hood at the vacuum holds grams, and the alarm would read that noise */
-      if(!F.wet[i] && !booked[i] && !(net.vapour && net.vapour[i])){ out.push(id); break; } }
-  return out;
-}
-/* any edge of that run counts: a run cut by a throttle is two segments, either can be at the cap */
-function netChokedRun(net, key){
-  return netChokedKey(net, k => k === key || k === "break:"+key);
-}
-/* `comp:<id>:` is the key netBuild gives a machine's own internal paths */
-const netChokedPart = (net, id) => netChokedKey(net, k => k.indexOf("comp:"+id+":") === 0);
-function netChokedKey(net, want){
-  if(!net || !net.choke) return false;
-  for(let i=0;i<net.edges.length;i++){ const k = net.edges[i].key;
-    if(net.choke[i] && typeof k === "string" && want(k)) return true; }
-  return false;
-}
 
 // an EQUIVALENT LENGTH, never a multiplier; neither constant is fitted against a measured valve
 const VALVE_LEQ=2, VALVE_XMIN=0.05;
@@ -599,7 +570,6 @@ const cellBroken = (s, x, y) => {
 };
 /* shut is an ABSENT edge, never a large resistance */
 const portOpen    = (s, pid) => !(s.portShut && s.portShut[pid]);
-const runPortsOpen = (s, r)  => portOpen(s, r.pa) && portOpen(s, r.pb);
 /* a wrecked valve body is an opening, not isolation */
 const portLive = (s, pid) => portOpen(s, pid) || portWrecked(s, pid);
 
@@ -610,41 +580,174 @@ const secLoad = (s, id) => {
   const n = Object.keys(s.sgShare).length, w = s.sgShare[id];
   return (n>0 && w!==undefined) ? l*n*w : l;
 };
-/* a power law, or an Antoine where the row carries A; both invert in closed form, which is what lets a shell be a pot */
-const satT = (c,p) => c.A ? c.C + c.B/(c.A - Math.log(Math.max(p,c.pFloor)))
-                          : c.T0*Math.pow(Math.max(p,c.pFloor)/c.p0, c.n);
-const satPRaw = (c,T) => c.A ? Math.exp(c.A - c.B/Math.max(T-c.C, 1))
-                          : c.p0*Math.pow(Math.max(T,c.TFloor)/c.T0, 1/c.n);
-// dp/dT along that same curve, exact rather than differenced
+/* water is IAPWS: IF97 region 4 for the saturation line, Wagner & Pruss (1993) for the two saturated densities, Clapeyron for the latent heat; any other coolant is a power law about its own boiling point */
+const WATER_TC = 647.096, WATER_PC = 22.064;
+const IF97_N = [0.11670521452767e4, -0.72421316703206e6, -0.17073846940092e2, 0.12020824702470e5, -0.32325550322333e7,
+                0.14915108613530e2, -0.48232657361591e4, 0.40511340542057e6, -0.23855557567849, 0.65017534844798e3];
+/* the array-leaf forms (io[k] in, io[o] out) are what the tick calls: a double crossing a call V8 did not inline is a heap allocation */
+const PR = new Float64Array(8), PV = new Float64Array(4), PQ = new Float64Array(4), PQ2 = new Float64Array(4), PQ3 = new Float64Array(8);
+function if97PsatA(io, k, o){ const N = IF97_N, u = Math.min(Math.max(io[k], 273.15), WATER_TC), t = u + N[8]/(u - N[9]);
+  const A = t*t + N[0]*t + N[1], B = N[2]*t*t + N[3]*t + N[4], C = N[5]*t*t + N[6]*t + N[7];
+  io[o] = Math.pow(2*C/(-B + Math.sqrt(B*B - 4*A*C)), 4); }
+const if97Psat = T => { PV[0] = T; if97PsatA(PV, 0, 1); return PV[1]; };
+function if97TsatA(io, k, o){ const N = IF97_N, b = Math.pow(Math.min(Math.max(io[k], 611.213e-6), WATER_PC), 0.25);
+  const E = b*b + N[2]*b + N[5], F = N[0]*b*b + N[3]*b + N[6], G = N[1]*b*b + N[4]*b + N[7];
+  const D = 2*G/(-F - Math.sqrt(F*F - 4*E*G));
+  io[o] = (N[9] + D - Math.sqrt((N[9] + D)*(N[9] + D) - 4*(N[8] + N[9]*D)))/2; }
+const if97Tsat = p => { PR[0] = p; if97TsatA(PR, 0, 1); return PR[1]; };
+function if97SlopeA(io, k, o){ const u = Math.min(io[k], WATER_TC - 0.01), s = PQ;
+  s[0] = u + 0.005; if97PsatA(s, 0, 1); s[2] = u - 0.005; if97PsatA(s, 2, 3);
+  io[o] = (s[1] - s[3])/0.01; }
+const if97Slope = T => { PV[0] = T; if97SlopeA(PV, 0, 1); return PV[1]; };
+function wpRhofA(io, k, o){ const t = Math.min(Math.max(0, 1 - io[k]/WATER_TC), 1 - 273.16/WATER_TC);
+  io[o] = 322*(1 + 1.99274064*Math.pow(t, 1/3) + 1.09965342*Math.pow(t, 2/3) - 0.510839303*Math.pow(t, 5/3)
+    - 1.75493479*Math.pow(t, 16/3) - 45.5170352*Math.pow(t, 43/3) - 6.74694450e5*Math.pow(t, 110/3)); }
+const wpRhof = T => { PV[0] = T; wpRhofA(PV, 0, 1); return PV[1]; };
+function wpRhogA(io, k, o){ const t = Math.min(Math.max(0, 1 - io[k]/WATER_TC), 1 - 273.16/WATER_TC);
+  io[o] = 322*Math.exp(-2.03150240*Math.pow(t, 1/3) - 2.68302940*Math.pow(t, 2/3) - 5.38626492*Math.pow(t, 4/3)
+    - 17.2991605*Math.pow(t, 3) - 44.7586581*Math.pow(t, 37/6) - 63.9201063*Math.pow(t, 71/6)); }
+const wpRhog = T => { PV[0] = T; wpRhogA(PV, 0, 1); return PV[1]; };
+const isWater = c => c.tc === WATER_TC;
+/* IAPWS-IF97 regions 1 and 2, evaluated only at load into the tables below */
+const IF97_R = 0.461526;
+const IF97_I1 = [0,0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,3,3,3,4,4,4,5,8,8,21,23,29,30,31,32];
+const IF97_J1 = [-2,-1,0,1,2,3,4,5,-9,-7,-1,0,1,3,-3,0,1,3,17,-4,0,6,-5,-2,10,-8,-11,-6,-29,-31,-38,-39,-40,-41];
+const IF97_N1 = [0.14632971213167,-0.84548187169114,-0.37563603672040e1,0.33855169168385e1,-0.95791963387872,0.15772038513228,
+  -0.16616417199501e-1,0.81214629983568e-3,0.28319080123804e-3,-0.60706301565874e-3,-0.18990068218419e-1,-0.32529748770505e-1,
+  -0.21841717175414e-1,-0.52838357969930e-4,-0.47184321073267e-3,-0.30001780793026e-3,0.47661393906987e-4,-0.44141845330846e-5,
+  -0.72694996297594e-15,-0.31679644845054e-4,-0.28270797985312e-5,-0.85205128120103e-9,-0.22425281908000e-5,-0.65171222895601e-6,
+  -0.14341729937924e-12,-0.40516996860117e-6,-0.12734301741641e-8,-0.17424871230634e-9,-0.68762131295531e-18,0.14478307828521e-19,
+  0.26335781662795e-22,-0.11947622640071e-22,0.18228094581404e-23,-0.93537087292458e-25];
+const IF97_J0 = [0,1,-5,-4,-3,-2,-1,2,3];
+const IF97_N0 = [-0.96927686500217e1,0.10086655968018e2,-0.56087911283020e-2,0.71452738081455e-1,-0.40710498223928,
+  0.14240819171444e1,-0.43839511319450e1,-0.28408632460772,0.21268463753307e-1];
+const IF97_I2 = [1,1,1,1,1,2,2,2,2,2,3,3,3,3,3,4,4,4,5,6,6,6,7,7,7,8,8,9,10,10,10,16,16,18,20,20,20,21,22,23,24,24,24];
+const IF97_J2 = [0,1,2,3,6,1,2,4,7,36,0,1,3,6,35,1,2,3,7,3,16,35,0,11,25,8,36,13,4,10,14,29,50,57,20,35,48,21,53,39,26,40,58];
+const IF97_N2 = [-0.17731742473213e-2,-0.17834862292358e-1,-0.45996013696365e-1,-0.57581259083432e-1,-0.50325278727930e-1,
+  -0.33032641670203e-4,-0.18948987516315e-3,-0.39392777243355e-2,-0.43797295650573e-1,-0.26674547914087e-4,0.20481737692309e-7,
+  0.43870667284435e-6,-0.32277677238570e-4,-0.15033924542148e-2,-0.40668253562649e-1,-0.78847309559367e-9,0.12790717852285e-7,
+  0.48225372718507e-6,0.22922076337661e-5,-0.16714766451061e-10,-0.21171472321355e-2,-0.23895741934104e2,-0.59059564324270e-17,
+  -0.12621808899101e-5,-0.38946842435739e-1,0.11256211360459e-10,-0.82311340897998e1,0.19809712802088e-7,0.10406965210174e-18,
+  -0.10234747095929e-12,-0.10018179379511e-8,-0.80882908646985e-10,0.10693031879409,-0.33662250574171,0.89185845355421e-24,
+  0.30629316876232e-12,-0.42002467698208e-5,-0.59056029685639e-25,0.37826947613457e-5,-0.12768608934681e-14,0.73087610595061e-28,
+  0.55414715350778e-16,-0.94369707241210e-6];
+const if97R1 = (T, p, out) => { const pi = p/16.53, tau = 1386/T, a = 7.1 - pi, b = tau - 1.222;
+  let gp = 0, gt = 0;
+  for(let k=0;k<34;k++){ const I = IF97_I1[k], J = IF97_J1[k];
+    gp -= IF97_N1[k]*I*Math.pow(a, I-1)*Math.pow(b, J); gt += IF97_N1[k]*Math.pow(a, I)*J*Math.pow(b, J-1); }
+  out[0] = IF97_R*T*pi*gp/(p*1000); out[1] = IF97_R*T*tau*gt; return out; };
+const if97R2 = (T, p, out) => { const tau = 540/T, b = tau - 0.5;
+  let g0t = 0, grp = 0, grt = 0;
+  for(let k=0;k<9;k++) g0t += IF97_N0[k]*IF97_J0[k]*Math.pow(tau, IF97_J0[k]-1);
+  for(let k=0;k<43;k++){ const I = IF97_I2[k], J = IF97_J2[k];
+    grp += IF97_N2[k]*I*Math.pow(p, I-1)*Math.pow(b, J); grt += IF97_N2[k]*Math.pow(p, I)*J*Math.pow(b, J-1); }
+  out[0] = IF97_R*T*(1 + p*grp)/(p*1000); out[1] = IF97_R*T*tau*(g0t + grt); return out; };
+/* saturated liquid off region 1: h_f(T) and the isothermal compressibility, with T(h) its inverse on a uniform h grid */
+const WL_T0 = 273.16, WL_T1 = WATER_TC - 0.5, WL_N = 2048, WL_DT = (WL_T1 - WL_T0)/(WL_N - 1), WL_CP0 = 4.2199;
+const WL_H = new Float64Array(WL_N), WL_K = new Float64Array(WL_N), WL_TH = new Float64Array(WL_N), WL_S = new Float64Array(WL_N);
+let WL_H0 = 0, WL_DH = 1;
+(() => { const o = new Float64Array(2);
+  for(let i=0;i<WL_N;i++){ const T = WL_T0 + i*WL_DT, ps = Math.max(if97Psat(T), 611.657e-6);
+    if97R1(T, ps, o); WL_H[i] = o[1]; const v0 = o[0];
+    const dp = Math.max(1e-3, ps*1e-3); if97R1(T, ps + dp, o); WL_K[i] = Math.max(0, (v0 - o[0])/(v0*dp)); }
+  for(let i=1;i<WL_N;i++){ const Ta = WL_T0 + (i-1)*WL_DT, Tb = Ta + WL_DT, Tm = Ta + WL_DT/2;
+    WL_S[i] = WL_S[i-1] + (WL_H[i] - WL_H[i-1] - (if97Psat(Tb) - if97Psat(Ta))*1000/wpRhof(Tm))/Tm; }
+  WL_H0 = WL_H[0]; WL_DH = (WL_H[WL_N-1] - WL_H0)/(WL_N - 1);
+  let j = 0;
+  for(let i=0;i<WL_N;i++){ const h = WL_H0 + i*WL_DH;
+    while(j < WL_N - 2 && WL_H[j+1] < h) j++;
+    WL_TH[i] = WL_T0 + (j + (h - WL_H[j])/(WL_H[j+1] - WL_H[j]))*WL_DT; } })();
+function wHlA(io, k, o){ const T = io[k];
+  if(T <= WL_T0){ io[o] = WL_H0 + WL_CP0*(T - WL_T0); return; }
+  const u = (T - WL_T0)/WL_DT, i = u|0;
+  io[o] = i >= WL_N - 1 ? WL_H[WL_N-1] + (WL_H[WL_N-1] - WL_H[WL_N-2])*(u - WL_N + 1) : WL_H[i] + (WL_H[i+1] - WL_H[i])*(u - i); }
+const wHl = T => { PR[0] = T; wHlA(PR, 0, 1); return PR[1]; };
+function wTlA(io, k, o){ const h = io[k];
+  if(h <= WL_H0){ io[o] = WL_T0 + (h - WL_H0)/WL_CP0; return; }
+  const u = (h - WL_H0)/WL_DH, i = u|0;
+  io[o] = i >= WL_N - 1 ? WL_T1 + (WL_TH[WL_N-1] - WL_TH[WL_N-2])*(u - WL_N + 1) : WL_TH[i] + (WL_TH[i+1] - WL_TH[i])*(u - i); }
+const wTl = h => { PR[0] = h; wTlA(PR, 0, 1); return PR[1]; };
+function wCplA(io, k, o){ const u = (io[k] - WL_T0)/WL_DT, i = u < 0 ? 0 : u >= WL_N - 1 ? WL_N - 2 : u|0; io[o] = (WL_H[i+1] - WL_H[i])/WL_DT; }
+const wCpl = T => { PR[0] = T; wCplA(PR, 0, 1); return PR[1]; };
+function wSlA(io, k, o){ const T = io[k];
+  if(T <= WL_T0){ io[o] = WL_CP0*Math.log(T/WL_T0); return; }
+  const u = (T - WL_T0)/WL_DT, i = u >= WL_N - 1 ? WL_N - 2 : u|0; io[o] = WL_S[i] + (WL_S[i+1] - WL_S[i])*(u - i); }
+const wSl = T => { PR[0] = T; wSlA(PR, 0, 1); return PR[1]; };
+function wKapA(io, k, o){ const u = (io[k] - WL_T0)/WL_DT, i = u < 0 ? 0 : u >= WL_N - 1 ? WL_N - 2 : u|0, w = u < 0 ? 0 : u - i > 1 ? 1 : u - i;
+  io[o] = WL_K[i] + (WL_K[i+1] - WL_K[i])*w; }
+const wKap = T => { PR[0] = T; wKapA(PR, 0, 1); return PR[1]; };
+/* superheated steam off region 2: per pressure row, T and rho/rho_g(Ts) on a uniform grid of enthalpy above saturation */
+const WV_NP = 64, WV_NH = 256, WV_L0 = Math.log(611.657e-6), WV_L1 = Math.log(WATER_PC), WV_DL = (WV_L1 - WV_L0)/(WV_NP - 1);
+const WV_HMAX = 3000, WV_DH = WV_HMAX/(WV_NH - 1), WV_TMAX = 2000;
+const WV_T = new Float64Array(WV_NP*WV_NH), WV_R = new Float64Array(WV_NP*WV_NH);
+(() => { const o = new Float64Array(2);
+  for(let r=0;r<WV_NP;r++){ const p = Math.exp(WV_L0 + r*WV_DL), Ts = if97Tsat(p);
+    if97R2(Ts, p, o); const h0 = o[1], v0 = o[0];
+    let Ta = Ts, ha = h0, va = v0, k = 0;
+    for(let T = Ts + 2; k < WV_NH; T += 2){
+      if97R2(Math.min(T, WV_TMAX), p, o); const hb = T > WV_TMAX ? ha + 2.5*(T - Ta) : o[1], vb = T > WV_TMAX ? va*T/Ta : o[0];
+      while(k < WV_NH && k*WV_DH <= hb - h0){ const w = (k*WV_DH - (ha - h0))/Math.max(hb - ha, 1e-9);
+        WV_T[r*WV_NH + k] = Ta + (T - Ta)*w; WV_R[r*WV_NH + k] = v0/(va + (vb - va)*w); k++; }
+      Ta = T; ha = hb; va = vb; } } })();
+/* io[kp] = p, io[kd] = dh above saturation, io[o] = the table's value */
+function wVapA(tab, io, kp, kd, o){ const p = io[kp], dh = io[kd];
+  let u = (Math.log(p > 611.657e-6 ? p : 611.657e-6) - WV_L0)/WV_DL; if(u > WV_NP - 1) u = WV_NP - 1;
+  const r = u >= WV_NP - 1 ? WV_NP - 2 : u|0, a = u - r;
+  let v = dh/WV_DH; if(v < 0) v = 0; const extra = v > WV_NH - 1 ? v - (WV_NH - 1) : 0; if(extra) v = WV_NH - 1;
+  const k = v >= WV_NH - 1 ? WV_NH - 2 : v|0, b = v - k, i0 = r*WV_NH + k, i1 = i0 + WV_NH;
+  const lo = tab[i0] + (tab[i0+1] - tab[i0])*b, hi = tab[i1] + (tab[i1+1] - tab[i1])*b, y = lo + (hi - lo)*a;
+  if(!extra){ io[o] = y; return; }
+  const slo = tab[i0+1] - tab[i0], shi = tab[i1+1] - tab[i1];
+  io[o] = y + (slo + (shi - slo)*a)*extra; }
+const WV_IO = new Float64Array(6);
+/* io[kp] = p, io[kd] = dh, io[o] = rho/rho_g(Ts); beyond the table the density follows T at the table's edge */
+function wRvA(io, kp, kd, o){ const dh = io[kd];
+  if(dh <= WV_HMAX){ wVapA(WV_R, io, kp, kd, o); return; }
+  const s = WV_IO; s[0] = io[kp]; s[1] = WV_HMAX; s[2] = dh;
+  wVapA(WV_R, s, 0, 1, 3); wVapA(WV_T, s, 0, 1, 4); wVapA(WV_T, s, 0, 2, 5);
+  io[o] = s[3]*s[4]/s[5]; }
+const wVapAt = (tab, p, dh) => { PR[0] = p; PR[1] = dh; wVapA(tab, PR, 0, 1, 2); return PR[2]; };
+const wTv = (p, dh) => wVapAt(WV_T, p, dh);
+const wRv = (p, dh) => { PR[0] = p; PR[1] = dh; wRvA(PR, 0, 1, 2); return PR[2]; };
+function satTA(c, io, k, o){ if(isWater(c)) if97TsatA(io, k, o); else io[o] = c.T0*Math.pow(Math.max(io[k],c.pFloor)/c.p0, c.n); }
+const satT = (c,p) => { PR[0] = p; satTA(c, PR, 0, 1); return PR[1]; };
+function satPRawA(c, io, k, o){ const T = io[k];
+  if(isWater(c)) if97PsatA(io, k, o); else io[o] = c.p0*Math.pow(Math.max(T,c.TFloor)/c.T0, 1/c.n); }
+const satPRaw = (c,T) => { PV[0] = T; satPRawA(c, PV, 0, 1); return PV[1]; };
+// dp/dT along that same curve
 const satSlope = (c,p) => { const q = Math.max(p,c.pFloor);
-  if(!c.A) return q/(c.n*satT(c,q));
-  const d = Math.max(satT(c,q)-c.C, 1); return q*c.B/(d*d); };
+  return isWater(c) ? if97Slope(satT(c,q)) : q/(c.n*satT(c,q)); };
 
-/* A/B/C are Antoine, fitted to steam-table points at 0.004, 6.9 and 17 MPa; `cp` is flat and a real error at 17.
-   Shape is the curve contract (satCurveFor() builds the same keys in the same order,
-   A/B/C undefined): hot EOS loops read c.tc/c.cp/... megamorphic across two maps
-   otherwise, and TurboFan deopts wrong-map every tick. Tref/burn ride along so the
-   maps unify; Tref=T0 preserves (c.Tref||c.T0), burn is unread. */
-const SAT_WATER = {A:9.844309, B:4174.5246, C:30.4331,
-                   tc:647.096, pc:22.06, rhoc:322,
+/* the curve contract: satCurveFor() builds the same keys in the same order, so the hot EOS loops see one map */
+const SAT_WATER = {tc:WATER_TC, pc:WATER_PC, rhoc:322,
                    p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
-                   hfg:1509, rho:740, cp:5.5, mu:1.2e-4, muV:2.0e-5, solidK:1.4, hFilm:30000,
+                   hfg:1509, rho:740, cp:5.5, mu:1.2e-4, muV:2.0e-5, gam:GAM_VAP, solidK:1.4, hFilm:30000,
                    Tref:558, burn:undefined, tab:null};
 /* here and not in step.js: latRevolve() rates the core at module load, before a const in step.js exists */
 const CP_W=SAT_WATER.cp;
 const T_FEED = 490;        // K, where feedwater arrives
 /* Watson: latent heat falls to zero at the critical point; a curve with no tc keeps its scalar */
 const WATSON = 0.38;
-const hfgRaw = (c,T) => c.tc ? c.hfg*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), WATSON)
-                            : c.hfg;
+function hfgRawA(c, io, k, o){ const T = io[k];
+  if(isWater(c)){
+    if(T >= WATER_TC){ io[o] = 0; return; }
+    const s = PQ2; s[0] = T; wpRhogA(s, 0, 1); wpRhofA(s, 0, 2); if97SlopeA(s, 0, 3);
+    io[o] = T*(1/s[1] - 1/s[2])*s[3]*1e3; return; }
+  io[o] = c.tc ? c.hfg*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), WATSON) : c.hfg; }
+const hfgRaw = (c,T) => { PV[0] = T; hfgRawA(c, PV, 0, 1); return PV[1]; };
 /* the same shape for the gap between the two densities; the exponent is the published critical one */
 const RHO_N = 0.35;
-const rhofRaw = (c,T) => c.tc
-  ? c.rhoc + (c.rho-c.rhoc)*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), RHO_N)
-  : c.rho;
+function rhofRawA(c, io, k, o){ const T = io[k];
+  if(isWater(c)){ wpRhofA(io, k, o); return; }
+  io[o] = c.tc ? c.rhoc + (c.rho-c.rhoc)*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), RHO_N) : c.rho; }
+const rhofRaw = (c,T) => { PV[0] = T; rhofRawA(c, PV, 0, 1); return PV[1]; };
 /* Clausius-Clapeyron backwards, off this curve's own slope and latent heat; ceiled at the liquid */
-const rhogRaw = (c,T) => Math.min(rhofRaw(c,T),
-  Math.max(satSlope(c, satPRaw(c,T))*T*1e3/Math.max(hfgRaw(c,T), 1e-6), 1e-6));
+function rhogRawA(c, io, k, o){ const T = io[k];
+  if(isWater(c)){ wpRhogA(io, k, o); return; }
+  const s = PQ3; s[0] = T; rhofRawA(c, s, 0, 1); satPRawA(c, s, 0, 2);
+  const q = Math.max(s[2], c.pFloor); s[3] = q; satTA(c, s, 3, 4); hfgRawA(c, s, 0, 5);
+  io[o] = Math.min(s[1], Math.max(q/(c.n*s[4])*T*1e3/Math.max(s[5], 1e-6), 1e-6)); }
+const rhogRaw = (c,T) => { PV[0] = T; rhogRawA(c, PV, 0, 1); return PV[1]; };
 /* keyed on the curve object so a re-commissioned P.sat is a fresh table; outside it the raw law answers */
 const CURVE_N = 2048, CURVE_LO = 100;
 const curveTabs = new WeakMap();
@@ -660,77 +763,72 @@ const tabAt = (a, t, T) => { const u = (T - CURVE_LO)*t.inv, i = u|0, w = u - i;
 /* the table rides the curve (c.tab, resolved at construction); the WeakMap is the
    fallback for exotic curves only. A call boundary boxes the double, so these stay
    one-liners V8 reliably inlines. */
-const hfgOf  = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.hfg, t, T) : hfgRaw(c,T); };
-const rhofOf = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.rf, t, T) : rhofRaw(c,T); };
-const rhogOf = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.rg, t, T) : rhogRaw(c,T); };
-const satP   = (c,T) => { const t = c.tc && (c.tab || (c.tab = curveTab(c))); return (t && T > CURVE_LO && T < t.hi) ? tabAt(t.sp, t, T) : satPRaw(c,T); };
+const CV_HFG = 0, CV_RF = 1, CV_RG = 2, CV_SP = 3;
+function curveA(c, sel, io, k, o){ const T = io[k], t = c.tc && (c.tab || (c.tab = curveTab(c)));
+  if(t && T > CURVE_LO && T < t.hi){ const a = sel === CV_HFG ? t.hfg : sel === CV_RF ? t.rf : sel === CV_RG ? t.rg : t.sp;
+    const u = (T - CURVE_LO)*t.inv, i = u|0, w = u - i; io[o] = a[i] + (a[i+1] - a[i])*w; return; }
+  if(sel === CV_HFG) hfgRawA(c, io, k, o); else if(sel === CV_RF) rhofRawA(c, io, k, o);
+  else if(sel === CV_RG) rhogRawA(c, io, k, o); else satPRawA(c, io, k, o); }
+const hfgOf  = (c,T) => { PR[0] = T; curveA(c, CV_HFG, PR, 0, 1); return PR[1]; };
+const rhofOf = (c,T) => { PR[0] = T; curveA(c, CV_RF, PR, 0, 1); return PR[1]; };
+const rhogOf = (c,T) => { PR[0] = T; curveA(c, CV_RG, PR, 0, 1); return PR[1]; };
+const satP   = (c,T) => { PR[0] = T; curveA(c, CV_SP, PR, 0, 1); return PR[1]; };
 /* resolved once at module load, never per call (see satCurveFor) */
 SAT_WATER.tab = curveTab(SAT_WATER);
 /* off the two densities so it cannot disagree with the kilograms */
-const satRvl = (c,p) => { const T = satT(c,p); return rhogOf(c,T)/rhofOf(c,T); };
+function satRvlA(c, io, k, o){ satTA(c, io, k, o); curveA(c, CV_RG, io, o, o+1); curveA(c, CV_RF, io, o, o+2); io[o] = io[o+1]/io[o+2]; }
+const satRvl = (c,p) => { PR[0] = p; satRvlA(c, PR, 0, 1); return PR[1]; };
 const H_DATUM = 273.15;
-/* compressibility, per MPa: COOLANT[].solidK is beta over kappa and BETA_W is beta */
-const kappaOf = c => BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W);
 /* three branches off the state the node is actually in; they meet at x=0 and x=1.
    `out` is a Float64Array: a plain {x,rho,b} boxed a HeapNumber on every double write, which
    --trace-gc-object-stats showed to be the sim's single largest source of new-space garbage. */
-const MX_X=0, MX_RHO=1, MX_B=2;
-/* the curve read is INLINED: satT/hfgOf/rhofOf/rhogOf/satP each returned a `double`
-   across a non-inlined call boundary, which boxed a HeapNumber per call, and this walk
-   runs ~1000 times a tick. Only the rare off-table fallback still calls out. */
-const mixState = (c,p,h,out) => {
-  const tab = c.tc && (c.tab || (c.tab = curveTab(c)));
-  const Ts = c.A ? c.C + c.B/(c.A - Math.log(Math.max(p,c.pFloor)))
-                 : c.T0*Math.pow(Math.max(p,c.pFloor)/c.p0, c.n);
-  const hf = c.cp*(Ts - H_DATUM);
-  let hfg;
-  if(tab && Ts > CURVE_LO && Ts < tab.hi){ const u=(Ts-CURVE_LO)*tab.inv, i=u|0, w=u-i; hfg=tab.hfg[i]+(tab.hfg[i+1]-tab.hfg[i])*w; }
-  else hfg = hfgOf(c,Ts);
+const MX_X=0, MX_RHO=1, MX_B=2, MX_P=3, MX_H=4, MX_TS=5, MX_HF=6, MX_HFG=7, MX_TL=8, MX_MU=9, MX_RFS=10, MX_RGS=11, MX_KAP=12, MX_TC=13, MX_DH=14, MX_T=15, MX_N=16;
+const MIX_IO = new Float64Array(MX_N);
+const mixState = (c,p,h,out) => { const io = MIX_IO; io[MX_P] = p; io[MX_H] = h; mixA(c, io);
+  out[MX_X] = io[MX_X]; out[MX_RHO] = io[MX_RHO]; out[MX_B] = io[MX_B]; return out; };
+/* p and h in, x/rho/branch out, all through io: a double crossing a call that is not inlined is a heap allocation */
+function mixA(c, io){
+  const h = io[MX_H];
+  satTA(c, io, MX_P, MX_TS); hOfTA(c, io, MX_TS, MX_HF); curveA(c, CV_HFG, io, MX_TS, MX_HFG);
+  const Ts = io[MX_TS], hf = io[MX_HF];
+  let hfg = io[MX_HFG];
   if(!(hfg>1e-6)) hfg = 1e-6;
   let x=(h-hf)/hfg; if(x<0)x=0; else if(x>1)x=1;
-  out[MX_X]=x; out[MX_B]= h<=hf?0 : h>=hf+hfg?2:1;
-  if(h<=hf){
-    let T=H_DATUM + h/c.cp; if(T>Ts)T=Ts;
-    /* above its own critical temperature there is no liquid branch to be on: p/T off the design point COOLANT[].dens is quoted at */
-    if(T>=c.tc) out[MX_RHO] = c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1));
-    else {
-      let rf;
-      if(tab && T > CURVE_LO && T < tab.hi){ const u=(T-CURVE_LO)*tab.inv, i=u|0, w=u-i; rf=tab.rf[i]+(tab.rf[i+1]-tab.rf[i])*w; }
-      else rf = rhofOf(c,T);
-      let sp;
-      if(tab && T > CURVE_LO && T < tab.hi){ const u=(T-CURVE_LO)*tab.inv, i=u|0, w=u-i; sp=tab.sp[i]+(tab.sp[i+1]-tab.sp[i])*w; }
-      else sp = satP(c,T);
-      out[MX_RHO]= rf*(1 + (BETA_W/Math.max(1e-6,c.solidK||SOLID_K_W))*Math.max(0, p - sp));
-    }
-  } else if(h>=hf+hfg){ const T=Ts+(h-hf-hfg)/c.cp;
-    let rg;
-    if(tab && Ts > CURVE_LO && Ts < tab.hi){ const u=(Ts-CURVE_LO)*tab.inv, i=u|0, w=u-i; rg=tab.rg[i]+(tab.rg[i+1]-tab.rg[i])*w; }
-    else rg = rhogOf(c,Ts);
-    out[MX_RHO]= rg*Ts/Math.max(T,1);
-  } else {
-    let rf, rg;
-    if(tab && Ts > CURVE_LO && Ts < tab.hi){ const u=(Ts-CURVE_LO)*tab.inv, i=u|0, w=u-i; rf=tab.rf[i]+(tab.rf[i+1]-tab.rf[i])*w; rg=tab.rg[i]+(tab.rg[i+1]-tab.rg[i])*w; }
-    else { rf = rhofOf(c,Ts); rg = rhogOf(c,Ts); }
-    out[MX_RHO]= 1/((1-x)/rf + x/rg);
-  }
-  return out; };
+  io[MX_X]=x; io[MX_B]= h<=hf?0 : h>=hf+hfg?2:1;
+  io[MX_TL] = Ts; io[MX_HFG] = hfg;
+  if(h<=hf) mixLiqA(c, io);
+  else if(h>=hf+hfg) mixVapA(c, io);
+  else { satRhoA(c, io); io[MX_RHO]= 1/((1-x)/io[MX_RFS] + x/io[MX_RGS]); }
+}
+function mixLiqA(c, io){
+  const p = io[MX_P], Ts = io[MX_TS], wat = isWater(c);
+  tLiqA(c, io); let T = io[MX_TL]; if(T>Ts)T=Ts;
+  /* above its own critical temperature there is no liquid branch to be on: p/T off the design point COOLANT[].dens is quoted at */
+  if(T>=c.tc){ io[MX_RHO] = wat ? c.rhoc*(p/c.pc)*(c.tc/T) : c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1)); return; }
+  io[MX_TC] = T; curveA(c, CV_RF, io, MX_TC, MX_RFS); curveA(c, CV_SP, io, MX_TC, MX_DH);
+  const rf = io[MX_RFS], sp = io[MX_DH];
+  if(wat){ wKapA(io, MX_TC, MX_KAP); io[MX_RHO] = rf*Math.exp(io[MX_KAP]*Math.max(0, p - sp)); }
+  else io[MX_RHO] = rf*(1 + (BETA_W/Math.max(1e-6,c.solidK||SOLID_K_W))*Math.max(0, p - sp));
+}
+function mixVapA(c, io){
+  const Ts = io[MX_TS], dh = io[MX_H] - io[MX_HF] - io[MX_HFG];
+  curveA(c, CV_RG, io, MX_TS, MX_RGS);
+  const rg = io[MX_RGS];
+  if(isWater(c)){ io[MX_DH] = dh; wRvA(io, MX_P, MX_DH, MX_RHO); io[MX_RHO] *= rg; }
+  else io[MX_RHO] = rg*Ts/Math.max(Ts+dh/c.cp,1);
+}
 /* homogeneous (McAdams) - NOT the missing two-phase multiplier */
+/* Vogel's law for liquid water (within ~2.5 % of IAPWS 2008 over 273-640 K); a coolant row that is not water keeps its stated figure */
+function muLiqA(c, io){ const T = io[MX_TL];
+  io[MX_MU] = c.tc === WATER_TC ? 2.414e-5*Math.pow(10, 247.8/(Math.max(T, 273) - 140)) : c.mu; }
+const MU_IO = new Float64Array(MX_N);
+const muLiqOf = (c, T) => { MU_IO[MX_TL] = T; muLiqA(c, MU_IO); return MU_IO[MX_MU]; };
+/* both saturated densities at io[MX_TS] */
+function satRhoA(c, io){ curveA(c, CV_RF, io, MX_TS, MX_RFS); curveA(c, CV_RG, io, MX_TS, MX_RGS); }
 const muMixOf = (c, x) => { const mf = c.mu, mg = c.muV || c.mu;
   return x <= 0 ? mf : x >= 1 ? mg : 1/(x/mg + (1-x)/mf); };
-const MIX_SCRATCH = new Float64Array(3), MIX_SCRATCH2 = new Float64Array(3);
+const MIX_SCRATCH = new Float64Array(MX_N), MIX_SCRATCH2 = new Float64Array(MX_N);
 const rhoMixOf = (c,p,h) => mixState(c,p,h,MIX_SCRATCH)[MX_RHO];
-// entropy on mixState's own three branches, so the two cannot disagree
-const mixS = (c,p,h) => { const Ts = satT(c,p), hf = c.cp*(Ts - H_DATUM),
-    hfg = Math.max(hfgOf(c,Ts), 1e-6);
-  if(h <= hf) return c.cp*Math.log(Math.max(Math.min(H_DATUM + h/c.cp, Ts), 1)/H_DATUM);
-  if(h >= hf + hfg) return c.cp*Math.log((Ts + (h - hf - hfg)/c.cp)/H_DATUM) + hfg/Ts;
-  return c.cp*Math.log(Ts/H_DATUM) + (h - hf)/Ts; };
-// kJ/kg a state can do expanding isentropically to p0 (Hicks-Menzies); never per tick
-const expWorkOf = (c,p,h,p0) => { if(!(p > p0)) return 0;
-  const s1 = mixS(c,p,h); let lo = 0, hi = h;
-  for(let i=0;i<50;i++){ const mid = 0.5*(lo+hi);
-    if(mixS(c,p0,mid) < s1) lo = mid; else hi = mid; }
-  return Math.max(0, h - 0.5*(lo+hi)); };
 /* numerically off mixState() itself, stepped to stay on the node's own branch: across the shelf edge two slopes are orders apart */
 const DRHO_DP = (c,p,h,r0,b0) => { const dp = Math.max(1e-4, p*1e-3);
   if(r0 === undefined){ const m = mixState(c,p,h,MIX_SCRATCH); r0 = m[MX_RHO]; b0 = m[MX_B]; }
@@ -741,35 +839,56 @@ const DRHO_DP = (c,p,h,r0,b0) => { const dp = Math.max(1e-4, p*1e-3);
   return (r1 - r0)/(p1 - p); };
 /* K, COOLANT[].dT0; here rather than step.js because layout.js asks for it at module load */
 const coreDT0   = c => COOLANT[(c||priD()).cool].dT0;
-const coreDTMax = () => coreDT0()*8.3;
 /* kJ/kg from H_DATUM; the two ends of the shelf */
-const satH  = (c,p) => c.cp*(satT(c,p) - H_DATUM);
-const satHg = (c,p) => satH(c,p) + hfgOf(c, satT(c,p));
+function hOfTA(c, io, k, o){ if(isWater(c)) wHlA(io, k, o); else io[o] = c.cp*(io[k] - H_DATUM); }
+function satHA(c, io, k, o){ satTA(c, io, k, o); hOfTA(c, io, o, o+1); io[o] = io[o+1]; }
+function satHgA(c, io, k, o){ satTA(c, io, k, o); hOfTA(c, io, o, o+1); curveA(c, CV_HFG, io, o, o+2); io[o] = io[o+1] + io[o+2]; }
+const satH  = (c,p) => { PR[0] = p; satHA(c, PR, 0, 1); return PR[1]; };
+const satHg = (c,p) => { PR[0] = p; satHgA(c, PR, 0, 1); return PR[1]; };
 /* NOT latent heat: the gap is the sensible rise from T_FEED to saturation */
 const hRise = (c,p) => satHg(c,p) - hOfT(c, T_FEED);
 // taken as liquid: the seed, and how a pot's temperature enters the field
-const hOfT  = (c,T) => c.cp*(T - H_DATUM);
-/* on the shelf every enthalpy is the same temperature */
-const tOfH  = (c,p,h) => { const hf=satH(c,p);
-  if(h <= hf) return H_DATUM + h/c.cp;
-  const hg=hf+hfgOf(c, satT(c,p));
-  return h >= hg ? satT(c,p) + (h-hg)/c.cp : satT(c,p); };
-const xOfH  = (c,p,h) => { const hf=satH(c,p);
-  return clamp((h-hf)/Math.max(hfgOf(c, satT(c,p)), 1e-6), 0, 1); };
+const hOfT  = (c,T) => { PR[0] = T; hOfTA(c, PR, 0, 1); return PR[1]; };
+/* kJ/kg/K at T along the liquid line; any other coolant states one figure */
+function cpOfA(c, io, k, o){ if(isWater(c)) wCplA(io, k, o); else io[o] = c.cp; }
+const cpOf  = (c,T) => { PR[0] = T; cpOfA(c, PR, 0, 1); return PR[1]; };
+/* liquid entropy from Tc up to Ts, kJ/kg/K */
+/* io[kh] = Ts, io[kc] = Tc in, io[o] out; io[o+1] is scratch */
+function sLiqA(c, io, kh, kc, o){
+  if(!isWater(c)){ io[o] = c.cp*Math.log(io[kh]/io[kc]); return; }
+  wSlA(io, kh, o); wSlA(io, kc, o + 1); io[o] = io[o] - io[o + 1]; }
+const sLiqOf = (c,Ts,Tc) => { PR[4] = Ts; PR[5] = Tc; sLiqA(c, PR, 4, 5, 6); return PR[6]; };
+/* liquid T off h alone: no pressure term, which is the whole liquid branch of mixState() */
+function tLiqA(c, io){ if(isWater(c)) wTlA(io, MX_H, MX_TL); else io[MX_TL] = H_DATUM + io[MX_H]/c.cp; }
+const TL_IO = new Float64Array(MX_N);
+const tLiqOf = (c,h) => { TL_IO[MX_H] = h; tLiqA(c, TL_IO); return TL_IO[MX_TL]; };
+function kapA(c, io){ if(isWater(c)) wKapA(io, MX_TL, MX_KAP); else io[MX_KAP] = BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W); }
+/* on the shelf every enthalpy is the same temperature: io[MX_P], io[MX_H] in, io[MX_T] out */
+function tOfHA(c, io){ const h = io[MX_H];
+  satTA(c, io, MX_P, MX_TS); hOfTA(c, io, MX_TS, MX_HF);
+  if(h <= io[MX_HF]){ tLiqA(c, io); io[MX_T] = io[MX_TL]; return; }
+  curveA(c, CV_HFG, io, MX_TS, MX_HFG);
+  const hg = io[MX_HF] + io[MX_HFG];
+  if(!(h >= hg)){ io[MX_T] = io[MX_TS]; return; }
+  if(isWater(c)){ io[MX_DH] = h - hg; wVapA(WV_T, io, MX_P, MX_DH, MX_T); }
+  else io[MX_T] = io[MX_TS] + (h - hg)/c.cp; }
+const TOH_IO = new Float64Array(MX_N);
+const tOfH  = (c,p,h) => { const io = TOH_IO; io[MX_P] = p; io[MX_H] = h; tOfHA(c, io); return io[MX_T]; };
+function xOfHA(c, io){
+  satTA(c, io, MX_P, MX_TS); hOfTA(c, io, MX_TS, MX_HF); curveA(c, CV_HFG, io, MX_TS, MX_HFG);
+  const v = (io[MX_H] - io[MX_HF])/Math.max(io[MX_HFG], 1e-6); io[MX_X] = Math.max(0, Math.min(1, v)); }
+const xOfH  = (c,p,h) => { const io = TOH_IO; io[MX_P] = p; io[MX_H] = h; xOfHA(c, io); return io[MX_X]; };
 function satCurveOf(cid, p0){
   if(p0 === undefined) p0 = holdSetP(coreCircOf(cid));
   return satCurveFor(COOLANT[coreD(cid).cool], p0);
 }
 /* off a coolant row alone: a circuit between two transfer stages has no vessel to ask */
 function satCurveFor(a, p0){
-  const tsat0 = a.tsat*Math.pow(p0/a.P0, coolSatN(a));
-  /* same keys in the same order as SAT_WATER (A/B/C undefined: no coolant row
-     carries Antoine constants, so c.A stays falsy and the power-law branch is
-     kept); Tref is the programmed temperature, as (c.Tref||c.T0) reads it */
-  const c = {A:a.A, B:a.B, C:a.C,
-             tc:a.tc, pc:a.pc, rhoc:a.rhoc,
+  const tsat0 = a.tc === WATER_TC ? if97Tsat(p0) : a.tsat*Math.pow(p0/a.P0, coolSatN(a));
+  /* same keys in the same order as SAT_WATER; Tref is the programmed temperature, as (c.Tref||c.T0) reads it */
+  const c = {tc:a.tc, pc:a.pc, rhoc:a.rhoc,
              p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1,
-             hfg:a.hfg, rho:a.dens*RHO_K, cp:a.cp, mu:a.mu, muV:a.muV,
+             hfg:a.hfg, rho:a.dens*RHO_K, cp:a.cp, mu:a.mu, muV:a.muV, gam:a.gam || GAM_VAP,
              solidK:a.solidK, hFilm:a.hFilm,
              Tref:Math.min(a.Tref, tsat0), burn:a.burn, tab:null};
   /* the table rides on the curve, never through the WeakMap per call: the miss
@@ -828,7 +947,6 @@ const loopDesignH = ci => {
 const circKey = ci => { if(ci === null || ci === undefined || ci < 0) return null;
   const s = graphSlot("circKey"), was = s.get(ci); if(was !== undefined) return was;
   const v = coreOnCirc(ci)[0] || holdOnCirc(ci)[0] || null; s.set(ci, v); return v; };
-const primaryCirc = () => nodeGraph().coreCirc;
 // a NET node (folded) on any circuit with a vessel on it; nodeGraph().inCore takes the raw graph node
 const netInCore = nm => nodeGraph().coreCircs[circOfNode(nm)] === 1;
 const tsatSec = (p, ci) => satT(satOfCirc(ci), p);
@@ -839,23 +957,16 @@ const steamRhoDes = () => { const id = boilerIds()[0];
 const psatSec = (T, ci) => satP(satOfCirc(ci), T);
 /* takes a PRESSURE: latent heat is not a constant of a fluid */
 const hfgOfCirc  = (ci,p) => { const c=satOfCirc(ci); return hfgOf(c, satT(c,p)); };
-/* the shell and the condenser want this, never a bare hfg */
-const riseOfCirc = (ci,p) => hRise(satOfCirc(ci), p);
 /* s.PBy keyed on circKey(); s.P is the first vessel's circuit written a second time, for readers that address it by name */
 const loopP    = (s, ci) => { const k = circKey(ci), v = k !== null && s.PBy ? s.PBy[k] : undefined;
   if(v !== undefined) return v;
   if(ci === nodeGraph().coreCirc) return s.P === undefined ? P.P0 : s.P;
   return nodeGraph().coreCircs[ci] === 1 ? satOfCirc(ci).p0 : P.Pcont; };
-const setLoopP = (s, ci, v) => { const k = circKey(ci);
-  if(k !== null) (s.PBy || (s.PBy = {}))[k] = v;
-  if(ci === nodeGraph().coreCirc) s.P = v; };
 /* K, keyed like the pressure; before the first read it is that circuit's own programme */
 const TavgOf  = (s, ci) => { const k = circKey(ci), v = k !== null && s.TavgBy ? s.TavgBy[k] : undefined;
   if(v !== undefined) return v;
   if(ci === nodeGraph().coreCirc && s.Tavg !== undefined) return s.Tavg;
   const c = satOfCirc(ci); return c.Tref !== undefined ? c.Tref : P.Tref; };
-const dTavgOf = (s, ci) => { const k = circKey(ci), v = k !== null && s.dTavgBy ? s.dTavgBy[k] : undefined;
-  return v !== undefined ? v : (ci === nodeGraph().coreCirc && s.dTavg !== undefined ? s.dTavg : 0); };
 /* level is a volume fraction and quality a mass fraction; the one place that knows they are the same fact */
 const holdSeedH = (ci, p, lvl) => { const c = satOfCirc(ci), T = satT(c, p);
   const rf = rhofOf(c,T), rg = rhogOf(c,T), f = clamp(lvl,0,100)/100;
@@ -893,8 +1004,8 @@ const holdSetP = ci => { const h = holdOnCirc(ci)[0];
 /* MPa; wallSuggestMm()'s inverse */
 const runRating = r => 2*(STEEL_S/((PRIMARY_K[r.k] ? COOLANT[priD().cool].pipeK : 1)))
                      * Math.max(runWallMm(r)-WALL_CORR, 0) / Math.max(runBoreMm(r), 1);
-/* the same figure SG_BURST_K carries, so the two pressure boundaries do not each hold their own margin */
-const PIPE_BURST_K = 1.5;
+/* Barlow at the ultimate strength over Barlow at the allowable: ASME VIII-1 sets S = UTS/3.5, so a wall parts at about 3.5x its rating */
+const PIPE_BURST_K = STEEL_UTS/STEEL_S;
 // cached for one pass: asked per run per tick
 let burstCache = {}, burstPass = -1;
 const runBurstP = r => { const pn = layPass();
@@ -945,9 +1056,11 @@ const condOutNode = id => { const IN = condIN(id); return IN ? coreFold(id + IN.
 /* m3 of condensate the ship states, shared over the condensers holding it */
 const condPoolVol = () => { let v = 0; for(const t of hostedTankIds()) v += D.tanks[t].vol;
   return v/Math.max(1, condSinks().length); };
-/* A sink standing IN the primary is a heat exchanger in a hot leg, not a machine at a vacuum: it takes the loop's own pressure, and neither the vacuum's compliance nor the settle's pin belongs on it. */
-const condVacuum = id => { const n = condVesNode(id);
-  return n !== null && !nodeGraph().inCore(n); };
+/* A sink standing IN the primary is a heat exchanger in a hot leg, not a machine at a vacuum - unless a turbine exhausts into that circuit, which is a direct cycle's condenser */
+const condVacuum = id => { const n = condVesNode(id); if(n === null) return false;
+  const G = nodeGraph(); if(!G.inCore(n)) return true;
+  const ci = G.circuit[n];
+  return LAY.parts.some(p => ROLE[p.role] && ROLE[p.role].vapPath && (G.nodesOf[p.id]||[]).some(m => G.circuit[m] === ci)); };
 /* the sinks that are actually at a vacuum: the one set the plant's backpressure, its pool and its disc banks are shared over */
 const condSinks = () => { const slot=graphSlot("condSinks"), was=slot.get(1); if(was) return was;
   const out=condIds().filter(condVacuum); slot.set(1,out); return out; };
@@ -970,7 +1083,7 @@ const condDumpOpen = s => !!(s.tankDump && hostedTankIds().some(id => s.tankDump
 const condVentBore = id => { const ci = circOfNode(condVesNode(id)),
         w = ((typeof P !== "undefined" && P && P.steamRef) || plantSteam())/Math.max(1, condSinks().length),
         rho = rhogOf(satOfCirc(ci), tsatSec(COND_ATM, ci)),
-        area = w/(ORIF_CD*Math.sqrt(2*Math.max(rho,1e-3)*(1-RCRIT)*COND_ATM*1e6));
+        area = w/(ORIF_CD*Math.sqrt(2*Math.max(rho,1e-3)*gasDpEq(GAM_VAP, COND_ATM, 0)*1e6));
   return isFinite(area) && area > 0 ? Math.sqrt(4*area/Math.PI)*1000 : FIT_BORE0; };
 /* the fallback only: what a caller with no live inventory gets */
 const secPTarget = (s, id) => sgDesignP(id)*Math.pow(Math.max(secLoad(s,id),.05),.25);
@@ -1044,8 +1157,6 @@ const boronTankIds = () => { const slot=graphSlot("boronTankIds"), was=slot.get(
   const out=tankIds().filter(id=>tankPrimary(id) && tankFluid(id).boron>0); slot.set(1,out); return out; };
 /* kg off the tank's own volume, never where it is piped */
 const tankKg = id => { const t = D.tanks[id], fl = FLUID[t.fluid]; return t.vol*((fl && fl.dens) || TANK_RHO); };
-const tankPoolKg = (s,list) => { let m=0;
-  for(const id of list) m += clamp(tankLvl(s,id),0,100)/100*tankKg(id); return m; };
 const tankPoolPct = (s,list) => { let c=0, m=0;
   for(const id of list){ const k=tankKg(id); c+=k; m+=clamp(tankLvl(s,id),0,100)/100*k; }
   return c>0 ? 100*m/c : 0; };
@@ -1213,9 +1324,6 @@ const COND_P0 = 0.004;
 const CAV_DERATE = 0.8;
 /* shutoff head is (1+PUMP_DROOP) of stated duty; the droop is the casing's own resistance, in the matrix */
 const PUMP_DROOP = 0.25;
-// kg/s off its own casing edge last tick: a reading, never a head
-const pumpQOf = (s, pid) => (s && s.pumpQBy && s.pumpQBy[pid]!==undefined)
-  ? s.pumpQBy[pid] : pumpFlow(pid);
 /* dp = rho*g*H, against the density it was COMMISSIONED at, so a plant at its design point reads exactly 1 */
 const pumpRhoK = (s, pid) => {
   /* the settle IS the rating point, so it rates at 1: a figure taken at the end of one settle would otherwise derate the pump inside the next */
@@ -1230,7 +1338,6 @@ const pumpHeadNow = (s, pid) => { const N = pumpDrive(s, pid);
   return pumpHead(pid)*N*N*(1 + PUMP_DROOP)*(1 - CAV_DERATE*cavOf(s, pid))*pumpRhoK(s, pid); };
 /* a passage sized to pass the machine's OWN rated duty against CASING_F of the reference friction head; measured against PUMP_H0 and not the machine's own head, because a casing's loss follows what it swallows */
 let CASING_F = 0.05;
-function setCasingF(v){ CASING_F = v; }
 const dutyC = (q, rho) =>
   Math.max(q,0)/Math.sqrt(2*Math.max(rho||700,1)*CASING_F*PUMP_H0*1e6);
 /* the passage costing PUMP_DROOP of the stated head at the stated flow, at the suction's own density; not dutyC, which is a fitted passage */
@@ -1242,14 +1349,6 @@ const feedTrainC = () => dutyC(P.steamRef/Math.max(boilerCount(),1), SAT_WATER.r
 const flowOf = (s, pid) =>
   (s.flowBy && s.flowBy[pid]!==undefined ? s.flowBy[pid] : 1)
   * (s.flowScale===undefined ? 1 : s.flowScale);
-/* the mean over the pumps that serve the core; no coolant pump reads 1, because a 0 would trip the low-flow floor on a design with none. NOT s.flowNet, which is what the core is getting */
-const flowMean = (s, map) => { const ids = pumpIds(); let t=0, n=0;
-  for(let i=0;i<ids.length;i++){ const id=ids[i]; if(!primaryPump(id)) continue;
-    t += (map && map[id]!==undefined) ? map[id] : 1; n++; }
-  if(!n) return 1;
-  return t/n; };
-const flowPri    = s => flowMean(s, s.flowBy);
-const flowDemPri = s => flowMean(s, s.flowDemBy);
 /* the switchboard is NOT here: a dead bus is already in s.flowBy's own target, and reading supplyK() again applies the blackout twice */
 const pumpDrive = (s, pid) =>
   (partWrecked(s, pid) ? 0 : 1) * flowOf(s, pid);
@@ -1291,25 +1390,11 @@ const netPassStart=()=>{ netPassLive=true;  netReadOnly=true;  netPassClear(); }
 const netPassDrop =()=>{ netPassLive=false; netReadOnly=false; netPassClear(); };
 /* a solve nobody is marching on leaves no mark: ed.w is what the next solve linearises friction against, so a reader that writes it feeds the sim */
 let netReadOnly=false;
-const netReading = on => { const was = netReadOnly; netReadOnly = !!on; return was; };
-function reliefRate(s, fid){
-  if(!(P && P.net)) return 0;
-  let o = (netPassLive && reliefOutsFor===s) ? reliefOuts : null;
-  if(!o){ o={}; netReadEdges(netSolve(P.net, s), null, null, null, o);
-    if(netPassLive){ reliefOuts=o; reliefOutsFor=s; } }
-  const q = o.reliefBy && o.reliefBy[fid];
-  return q ? Math.max(0, invRate(q)) : 0;
-}
 /* a lift is about the pressure AT THE VALVE: the upstream end of its own gated edge, null where nothing routed */
 function reliefNodeOf(net, fid){
   for(let e=0;e<net.edges.length;e++)
     if(net.edges[e].fit === fid) return net.name[net.edges[e].u];
   return null;
-}
-function reliefFullRate(s, fid){
-  if(!((P && P.fittings && P.fittings[fid]) || D.fittings[fid])) return 0;
-  const bore = fitBoreK(fid);
-  return Math.max(0, invRate(flowW(holeC(bore), P.rho0, P.P0, regionPAt(s, partOf(fid)))));
 }
 
 // a run key is "kind:aIdSide-bIdSide" and node identity IS that "partId+side" string verbatim; null for a run with no second half
@@ -1355,8 +1440,6 @@ const breakKeyOf = id => { const slot=graphSlot("breakKey"), was=slot.get(id); i
   const k="break:"+id; slot.set(id,k); return k; };
 const ventKeyOf = fid => { const slot=graphSlot("ventKey"), was=slot.get(fid); if(was) return was;
   const k="vent:"+fid; slot.set(fid,k); return k; };
-const sgtrKeyOf = id => { const slot=graphSlot("sgtrKey"), was=slot.get(id); if(was) return was;
-  const k="sgtr:"+id; slot.set(id,k); return k; };
 /* a FOLDED node is the bare part id, so the face is stripped only when the whole name is not itself a part */
 function circOfNode(nid){
   if(nid==null) return -1;
@@ -1424,23 +1507,10 @@ function netPAt(s, nid){
   const c = circSetP(nid);
   return Math.max(COND_P0, c > 0 ? c : (s.P===undefined?P.P0:s.P));
 }
-function netTempAt(s, nid){
-  const c = netSatOf(nid);
-  return tOfH(c, netPAt(s,nid), netHAt(s,nid));
-}
-function netQualAt(s, nid){
-  const c = netSatOf(nid);
-  return xOfH(c, netPAt(s,nid), netHAt(s,nid));
-}
 /* kg/m^3 off the same (p, h): liquid, vapour or mixture is a RESULT, never a setting on the run that reaches it */
 function netRhoAt(s, nid){
   const c = netSatOf(nid);
   return rhoMixOf(c, netPAt(s,nid), netHAt(s,nid));
-}
-// kJ of mechanical work this node's holdup can do letting down to containment
-function netWorkAt(s, nid){
-  const c = netSatOf(nid), m = pfAt(s.mBy, nid) || 0;
-  return m > 0 ? m*expWorkOf(c, netPAt(s,nid), netHAt(s,nid), P ? P.Pcont : COND_P0) : 0;
 }
 
 /* net.vapour's structural answer, asked by node id so a view never has to test a run's kind name */
@@ -2131,22 +2201,6 @@ function netPieces(net, s){
   net.pcSig = netLiveSig(net, s);
   return (net.pc = {of, n: c, adj, live});
 }
-/* by node NAME or index; -1 for a node this plant has not got */
-function pieceOf(net, s, node){
-  const i = typeof node === "number" ? node : net.index[node];
-  return i === undefined ? -1 : netPieces(net, s).of[i];
-}
-/* "still plumbed to the primary", for every gate below (inlined at its sole caller) */
-// the live piece of EVERY vessel - "still plumbed to a core" is asked of all of them.
-// pc is the caller's netPieces() when it already holds it (stageFed, the radiator loop):
-// corePieces() otherwise pays a second live-signature check for the same answer.
-const corePieces = (net, s, pc0) => { const pc = pc0 || netPieces(net, s), cc = net.corePieceC;
-  if(cc && cc.pc === pc) return cc.set;
-  const of = pc.of, set = new Set();
-  for(const id in net.coreNodes) set.add(of[net.coreNodes[id]]);
-  if(!set.size) set.add(of[net.coreNode]);
-  net.corePieceC = {pc, set};
-  return set; };
 /* its LOOP's pressure while it is live and its own the moment it is not */
 const holdPOf = (s, id) => (s.holdPBy && s.holdPBy[id] != null)
   ? s.holdPBy[id] : loopP(s, tankCircuit(id));
@@ -2207,18 +2261,11 @@ function netFixed(net, s){
 const NET_DT = 0.02;
 /* whether the solve being asked for is one tick of a time march; only step() sets it */
 let netMarch = false;
-const netMarching = v => { netMarch = !!v; };
 /* the settle and the reference solve are QUASI-STATIC figures, so every store stands down for them */
 let netStoreHeld = false;
 const netHoldStore = on => { netStoreHeld = !!on; };
 /* per MPa: COOLANT[].solidK is beta over kappa, BETA_W is beta. A gas is exactly 1/p, and a two-phase node is the mass-weighted mixture of the two */
 const SOLID_K_W = COOLANT[0].solidK;
-const netKapF = ci => BETA_W/Math.max(1e-6,
-  satOfCirc(ci).solidK || SOLID_K_W);
-const netKappa = (nid, p, x) => { const q = clamp(x, 0, 1);
-  const g = 1/Math.max(p, COND_P0);
-  // a fluid above its own tc reads x 0 off the fictional tsat, and water's liquid floor is twice a gas's 1/p at 7 MPa
-  return q*g + (1-q)*Math.min(g, netKapF(circOfNode(nid))); };
 /* rho(p, h) is monotone in p on all three branches, so this has one answer: Newton off the curve's own slope, bisection-safeguarded. It is the STATE, not a correction about last tick's solved pressure, which diverges across the saturation line */
 const NET_PMAX = 200;   // a node holding more than any pressure can account for is pinned, not solved
 // r0/b0: the field's own read at p0 (netFieldUpdate), so a node already at its state point costs no curve read
@@ -2257,7 +2304,6 @@ function netStore(net, s){
         km = stN ? net.stKm : (net.stKm = new Float64Array(net.n).fill(NaN)),
         vP0 = stN ? net.stP0 : (net.stP0 = new Float64Array(net.n)),
         vC = stN ? net.stC : (net.stC = new Float64Array(net.n));
-  __apS();
   for(let i=0;netStoreHeld?0:i<net.n;i++){
     const nid = net.name[i];
     /* floored at the run-dry line: a spent node with no diagonal is a degenerate row, and a spent node still has a pressure */
@@ -2274,7 +2320,7 @@ function netStore(net, s){
       /* the curve's own slope at the state point, floored by netKappa() so a branch the curve reads flat still has a row to stand on (both inlined) */
       const d = p0 === pF ? DRHO_DP(c, p0, hN, rF, bF) : DRHO_DP(c, p0, hN);
       const xr = net.F.x[i], xq = xr < 0 ? 0 : xr > 1 ? 1 : xr, gk = 1/Math.max(p0, COND_P0);
-      const kf = BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W);
+      const kf = isWater(c) ? wKap(tLiqOf(c, hN)) : BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W);
       C = Math.max(V*d, mEos*(xq*gk + (1-xq)*Math.min(gk, kf)));
       kp[i] = pF; kh[i] = hN; km[i] = m; vP0[i] = p0; vC[i] = C;
     }
@@ -2282,8 +2328,6 @@ function netStore(net, s){
     cap[i] = C/NET_DT; src[i] = C/NET_DT*p0;
     any = true;
   }
-  __apE("store.eos");
-  __apS();
   /* a hold tank takes the generic row above but PINS: a pressurizer is what "something decides this circuit's pressure" means */
   for(const id in net.tankNode) if(D.tanks[id] && D.tanks[id].hold && !netStoreHeld){
     const i = net.tankNode[id]; if(cap[i] > 0) pin[i] = 1; }
@@ -2299,8 +2343,6 @@ function netStore(net, s){
     cap[i] = C/NET_DT; src[i] = C/NET_DT*p0; pin[i] = 1;
     any = true;
   }
-  __apE("store.tank");
-  __apS();
   // netStoreHeld leaves the TANKS alone: one that stopped storing unpinned is a piece that floats
   for(let k=0;netStoreHeld?0:k<(net.condV||[]).length;k++){
     const i = net.condV[k], id = net.condParts[k];
@@ -2313,7 +2355,6 @@ function netStore(net, s){
     pin[i] = 1;
     any = true;
   }
-  __apE("store.cond");
   if(!any) return null;
   const st = net.storeScr || (net.storeScr = {});
   st.cap = cap; st.src = src; st.pin = pin;
@@ -2533,8 +2574,8 @@ function netSolve(net, s, qKey){
   if(netPassLive && netPassSol && netPassSolS === s && netPassSol.net === net) return netPassSol;
   net.sigLock = s; net.sigLockV = null;
   try {
-  __apS(); netFieldUpdate(net, s); __apE("solve.field");
-  __apS(); const fixed = netFixed(net, s); __apE("solve.fixed");
+  netFieldUpdate(net, s);
+  const fixed = netFixed(net, s);
   const b = scratch(net, "b", net.n, Float64Array, 0);
   /* which nodes a conducting edge reached: the byP reader tells a fixed node that is PINNING something from one hanging off a shut break */
   const touch = scratch(net, "touch", net.n, Uint8Array, 0);
@@ -2637,18 +2678,6 @@ const flowV = (rf, key) => {
 /* scalar outs (turbWk/P/A, qSgtr, spill, spillSec, nat) live in one Float64Array per outs object */
 const OWK = 0, OWKP = 1, OWKA = 2, OQSGT = 3, OSPILL = 4, OSPILLSEC = 5, ONAT = 6;
 const outsScalars = outs => outs.scV && outs.scV.length === 7 ? outs.scV : (outs.scV = new Float64Array(7));
-/* either container: typed on tick, legacy prop on cold paths (both with the ||0 the readers had) */
-const outsNum = (outs, i, legacy) => {
-  const v = (outs && outs.scV) ? outs.scV[i] : ((outs && outs[legacy]) || 0);
-  return v || 0;
-};
-/* either bag container: typed holder arrays (pos map rides on outs beside them) or legacy object */
-const outsBag = (outs, vp, op, pp, key) => {
-  if(!outs) return undefined;
-  const V = outs[vp];
-  if(V){ const P2 = outs[pp], i = P2 ? P2.get(key) : undefined; return i === undefined ? undefined : V[i]; }
-  const o = outs[op]; return o ? o[key] : undefined;
-};
 function netReadEdges(sol, byLoop, byRun, byDrop, outs){
   const net = sol.net, s = sol.s, b = sol.b, q = sol.q, fixed = sol.fixed, ref = sol.ref;
   const fxH = fixed.has;
@@ -2858,132 +2887,12 @@ const netCoreFrac0 = (net, byLoop, byRun, over, outs) => {
 };
 const REF_PASSES = 20, REF_TOL = 1e-4;
 
-/* head lost across every edge, as a fraction of the span; derived, never on S */
-function netDrops(s){
-  const o = {};
-  if(P && P.net) netReadEdges(netSolve(P.net, s), null, null, o, null);
-  return o;
-}
 
-/* one solve, three answers: a renderer wants all of them in the same frame and they come off the same substitution */
-function netField(s, byDrop, byP, byRun){
-  if(!(P && P.net)) return;
-  const sol = netSolve(P.net, s);
-  netReadP(sol, byP);
-  netReadEdges(sol, null, byRun, byDrop, null);
-}
 
-/* % of loop inventory per second: the one place a flow becomes a percentage. 0, not 0/0, for a plant with no circuit at all */
-const invRate = q => { const kg = loopKg(); return kg > 0 ? 100*q/kg : 0; };
 /* 1/K, the volumetric expansion of pressurised water near 300 C; PHYSICAL, not fitted */
 const BETA_W = 0.0025;
 
-/* MPa per node, resolved fresh and never on S; the tick does NOT call this - step() takes its field off netFlowK()'s own solve */
-function netPressures(s){
-  const o = {};
-  if(P && P.net){
-    const net = P.net, pf = pfNew(net);
-    netReadP(netSolve(net, s), pf);
-    for(const nid in net.index){ const v = pfAt(pf, nid); if(v !== undefined) o[nid] = v; }
-  }
-  return o;
-}
 
-/* the thermosiphon, MEASURED: its own solve on its own field, because the head is inside every pump edge's conductance. Held between takes - it feeds a bar and a trend, nothing closed-loop */
-const NAT_PASSES = 8, NAT_TOL = 1e-3, NAT_EVERY = 25;
-function netNatCirc(net, s, natLoop){
-  if(net.natLoop && (netReadOnly || ((net.natTick = (net.natTick||0)+1) % NAT_EVERY))){
-    if(natLoop.fill){ natLoop.fill(0); natLoop.set(net.natLoop); }
-    else { for(const k in natLoop) delete natLoop[k]; Object.assign(natLoop, net.natLoop); }
-    return; }
-  const sNat = (net.sNat && Object.getPrototypeOf(net.sNat) === s) ? net.sNat : (net.sNat = Object.create(s));
-  sNat.flowScale = 0; sNat.pBy = net.natPBy || s.pBy;
-  /* the walk's field and its w backup are per-net scratch: netReadP writes or deletes every node, so a reused object ends where a fresh one would, and eight passes built eight 267-key dictionaries a walk */
-  const pf0 = net.natScr || (net.natScr = pfNew(net));
-  const wN = net.natW || (net.natW = new Float64Array(net.edges.length));
-  const wNH = net.natWH || (net.natWH = new Uint8Array(net.edges.length));
-  const wA = net.wArr, wHA = net.wHas;
-  for(let e=0;e<net.edges.length;e++){ wN[e] = wA[e]; wNH[e] = wHA[e]; }
-  const was = netStoreHeld; netHoldStore(true);
-  try {
-    let sol, ans = 0, prev = null;
-    for(let pass=0; pass<NAT_PASSES; pass++){
-      sol = netSolve(net, sNat, "qB");
-      netReadP(sol, pf0); sNat.pBy = pf0;
-      ans = netReadEdges(sol, null, null, null, null);
-      if(prev !== null && Math.abs(ans-prev) <= NAT_TOL*Math.max(Math.abs(ans), 1e-9)) break;
-      prev = ans; }
-    netReadEdges(sol, natLoop, null, null, null);
-    if(!netReadOnly){ net.natPBy = sNat.pBy;
-      if(!net.natLoop || net.natLoop.length !== natLoop.length) net.natLoop = new Float64Array(natLoop.length);
-      net.natLoop.set(natLoop); }
-  } finally { netHoldStore(was);
-    for(let e=0;e<net.edges.length;e++){ wA[e] = wN[e]; wHA[e] = wNH[e]; }
-    netFieldUpdate(net, s); }
-}
-const netStCopy = v => {
-  if(v === null || typeof v !== "object") return v;
-  if(snapTyped(v)) return Array.from(v);
-  if(Array.isArray(v)) return v.map(netStCopy);
-  const o = {}; for(const k in v) o[k] = netStCopy(v[k]);
-  return o;
-};
-/* the solver's own march, none of it on S: ed.w is what the next solve linearises friction against, net.pc's LABELS fix the order every reader accumulates in, and the natural-circulation answer is held between recomputes */
-/* natPBy is a {v,has} pair of typed arrays (pfNew()), never a plain number-keyed object any more:
-   Object.assign({}, ...) would only copy the two array REFERENCES, and net.natScr keeps writing
-   into those same arrays every solve - a "saved" state would silently drift under the caller's feet */
-const pfClone = f => f ? { v: Float64Array.from(f.v), has: Uint8Array.from(f.has) } : null;
-function netStateSave(net){
-  if(!net) return null;
-  /* w as a plain array with undefined where no solve has written, exactly the shape ed.w saved before */
-  const w = new Array(net.edges.length);
-  for(let e=0;e<net.edges.length;e++) w[e] = net.wHas[e] ? net.wArr[e] : undefined;
-  return { w, pc:netStCopy(net.pc), pcSig:net.pcSig, natTick:net.natTick||0,
-           natPBy:pfClone(net.natPBy),
-           natLoop:net.natLoop ? Object.assign({}, net.natLoop) : null };
-}
-// false when the node set moved under it: a state saved on another graph does not fit
-function netStateLoad(net, st){
-  if(!net || !st || st.w.length !== net.edges.length) return false;
-  for(let e=0;e<net.edges.length;e++){ const v = st.w[e];
-    /* undefined (never written) stays unwritten; null is a file round-trip of the same and reads back
-       as ed.w=null did - fricOf(null) takes the 64/500 path and null>=0 holds for the mu index */
-    if(v === undefined){ net.wArr[e] = 0; net.wHas[e] = 0; }
-    else if(v === null){ net.wArr[e] = 0; net.wHas[e] = 1; }
-    else { net.wArr[e] = v; net.wHas[e] = 1; } }
-  net.pc = netStCopy(st.pc); net.pcSig = st.pcSig;
-  net.natTick = st.natTick;
-  net.natPBy  = pfClone(st.natPBy);
-  /* stored as index-keyed objects in files, typed live: the values are identical either way */
-  if(st.natLoop){ let nn = 0; for(const k in st.natLoop) nn = Math.max(nn, +k + 1);
-    const nl = new Float64Array(nn);
-    for(const k in st.natLoop) nl[+k] = st.natLoop[k]; net.natLoop = nl; }
-  else net.natLoop = null;
-  return true;
-}
-/* nothing is clamped: a pump develops its own stated head, so the solve is already the answer. The one NaN/negative guard lives here, on the single scalar every caller consumes, never inside the solver */
-function netFlowK(s, byRun, byP, outs){
-  const n = P.loops;
-  if(!P.flowLoopScr || P.flowLoopScr.length !== n) P.flowLoopScr = new Float64Array(n);
-  if(!P.flowNatScr || P.flowNatScr.length !== n) P.flowNatScr = new Float64Array(n);
-  const byLoop = P.flowLoopScr, natLoop = P.flowNatScr;
-  byLoop.fill(0); natLoop.fill(0);
-  __apS(); const sol = netSolve(P.net, s, "qA"); __apE("nfk.solve");
-  __apS(); netReadP(sol, byP); __apE("nfk.readP");
-  __apS(); netReadEdges(sol, byLoop, byRun, null, outs); __apE("nfk.readEdges");
-    /* the solved edge flows, signed along each edge's own u->v: the set the momentum law answered in, where byRun is only a label */
-    if(outs) outs.edgeKg = sol.q;
-  __apS(); if(!(outs && outs.noNat)) netNatCirc(P.net, s, natLoop); __apE("nfk.nat");
-  let total = 0, natTot = 0;
-  for(let i=0;i<n;i++){ total += byLoop[i]; natTot += natLoop[i]; }
-  if(outs){ const nk = natTot/P.netRef;
-    if(outs.scV) outs.scV[ONAT] = isFinite(nk) && nk>=0 ? nk : 0;
-    else outs.nat = isFinite(nk) && nk>=0 ? nk : 0;
-    /* per-loop flow: heat leaves the primary at each generator in proportion to what goes through that generator's own loop */
-    outs.byLoop = byLoop; }
-  const k = total/P.netRef;
-  return isFinite(k) && k>=0 ? k : 0;
-}
 
 // freeAdj() per crossed cell and unioned, minus the run's own cells: standing "on" a leak is not standing "beside" it
 function pipeStandCells(cells){
@@ -3046,9 +2955,6 @@ function runWgt(cells){
   for(const [x,y] of cells)
     w += HITW_BASE + (x===0||x===GW-1||y===0||y===GH-1 ? HITW_HULL : 0);
   return w;
-}
-function pipeCellIds(){
-  const out=[]; for(const k in D.pipes) out.push("pipe:"+k); return out;
 }
 
 /* every line here goes through an authoring call a player has; IDEMPOTENT, so calling it twice gives one plant and not two. Kinds are never passed - runKindFor() names every stock run off the pair of ROLES, and a missing one is a missing RUN_KIND row */
@@ -3184,6 +3090,9 @@ function buildStockPlumbing(opt){
   const radAt=(id,x)=>{ mintMachine(id,"radiator",x,0);
     D.machines[id].cell=[x,BOT+3]; buildLayout(); };
   radAt("rad0",AFT-7); radAt("rad1",AFT);
+  /* each facing nozzle needs its own cell, so the gap between the panels is two whatever area they are drawn at */
+  { const r0 = partOf("rad0"), gap = partOf("rad1").x - (r0.x + r0.w);
+    if(gap < 2){ D.machines.rad0.cell = [r0.x - (2 - gap), BOT+3]; buildLayout(); } }
   /* above the PANEL'S own top, never a fixed row: the joint below is two nozzles meeting across a cell boundary and needs one free row each */
   mintMachine("cwp","pump",AFT-6,BOT+1-partOf("rad0").h-pumpH("cwp"));
   setPartName("cwp","CIRC WATER PUMP");

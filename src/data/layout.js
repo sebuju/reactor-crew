@@ -109,7 +109,6 @@ function addTank(x,y){
 }
 /* A tank carries a control row, so it is a machine-sized box; a fitting stays one cell with its handles in the margin below. */
 const FIT_W=1, FIT_H=1;
-const TANK_W0=3;                 // FITSTRIP_W's reference (plant.js), no longer a footprint
 /* Fitted once against the stock HPI tank, the PART_VOL_CELL/RAD_AREA_CELL idiom. The box is the DISPLAY of volume - partVol() stays exact, so the footprint rounds and the cubic metres do not. */
 const TANK_VOL_CELL=3.2;
 const tankAspect = id => { const t=D.tanks&&D.tanks[id];
@@ -220,8 +219,6 @@ const circHeadOf = id => {
     dp += K*w*w/(2*rho*A*A); }
   return dp/1e6;
 };
-/* scratch for loopHeadOf()'s mixState() reads; three Float64 cells, written and consumed inside one call */
-const HEAD_MIX = new Float64Array(3);
 const loopHeadOf = (id, outs) => {
   const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return circHeadOf(id);
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
@@ -504,17 +501,12 @@ const totalSgMass=()=>{ let m=0;
 const totalSgUA=()=>{ let c=0;
   for(const p of LAY.parts) if(p.role==="sg") c+=sgUAOf(p.id);
   return c; };
-// what share of them is still working, so losing one of two costs half
-const roleAlive=(role,s)=>{ const ids=LAY.parts.filter(p=>p.role===role).map(p=>p.id);
-  if(!ids.length) return 0;
-  return ids.filter(id=>!partWrecked(s,id)).length/ids.length; };
 /* The ONE door onto everything s.dmgParts can hold: a machine, a tank, a fitting, a pipe cell ("pipe:x,y") and a port ("port:pid"). */
 let dmgArr = null, dmgLen = -1, dmgSet = null;
 const partWrecked = (s,id) => { if(!(s && s.dmgParts && id) || s.dmgParts.length === 0) return false;
   const a = s.dmgParts;   // every writer pushes or replaces the array, so identity + length is the whole state
   if(a !== dmgArr || a.length !== dmgLen){ dmgSet = new Set(a); dmgArr = a; dmgLen = a.length; }
   return dmgSet.has(id); };
-const dmgWhyOf=(s,id)=>(s && s.dmgWhy && s.dmgWhy[id]) || "WRECKED";
 /* A part whose mass no other measure already counts; off the grid, never off a D flag, so every tonne charged points at a box. */
 const PART_MASS={catcher:66, vent:34, inert:20, pan:12};
 /* Per INSTANCE, not per role: a role-level charge hands out every unit after the first for nothing. */
@@ -819,7 +811,6 @@ function shellsOf(pid, dead){
 // which loop a PART pools capacity with, or null - never read as "is it plumbed at all"
 const loopOf = id => { const v=loopMap().partLoop[id]; return v===undefined?null:v; };
 const ihxIds=()=>roleAll("ihx");
-const ihxCount=()=>ihxIds().length;
 const IHX_T_PER_UA   = 8.0e-4;         // t per kW/K - vessel, tubes, intermediate loop
 /* Saturation SG_APPROACH below the coolant programme, off the COOLANT row and never P. SG_P_MAX is not a curve guard: past it the UA that dT0 implies runs the core into its own HIGH FLUX trip. */
 const SG_APPROACH = 25, SG_P_MAX = 17.0, SG_P_MIN = 0.2;
@@ -1878,12 +1869,6 @@ function runsAtCell(x,y){
     if(out.indexOf(id)<0) out.push(id);
   }
   return out;
-}
-/* Handed back as runIdOf(), because its one caller writes a bore with it and a bore hangs on the id where there is one. */
-function runBetween(a,b){
-  for(const c of pipeMap().conns)
-    if((c.a===a&&c.b===b)||(c.a===b&&c.b===a)) return runIdOf(c);
-  return null;
 }
 /* A fitting with nothing on its far side TERMINATES the run; handing the machine back lets a view name the run after it, so a branch off the header is not itself MAIN STEAM. */
 function runDeadEnd(aId,bId){
