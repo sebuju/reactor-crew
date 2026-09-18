@@ -25,7 +25,7 @@ const DT = 0.02;
 const PRESET_ARG = opt('preset', '');
 const PRESET_ONLY = PRESET_ARG === '' ? null : PRESET_ARG.split(',').map(s => s.trim());
 
-const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P,S:()=>S,D:()=>D,step,' +
+const M = headless('{FREEZE,PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P,S:()=>S,D:()=>D,step,' +
   'GW:()=>GW,GH:()=>GH,' +
   'coreIds:()=>coreIds(),sgIds:()=>sgIds(),boilerIds:()=>boilerIds(),pumpIds:()=>pumpIds(),tankIds:()=>tankIds(),' +
   'reliefFitIds:()=>reliefFitIds(),radIds:()=>radIds(),' +
@@ -71,12 +71,6 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   ' const g=occupied(null,{pipes:false}); return freeAdj(p,g).map(c=>c[1]*GW+c[0]);},' +
   'partSkin:(id)=>{const p=partOf(id); return p?partSkin(S,p):0;},' +
   'LOGlen:()=>LOG.length,LOGget:(i)=>LOG[i],' +
-  // ctl sample readers
-  'ctlLive:(s)=>ctlLive(s),ctlOrder:(s)=>ctlOrder(s),' +
-  'blkOutOf:(s,id)=>blkOutOf(s,id),blkDead:(s,b)=>blkDead(s,b),' +
-  'blkEval:(s,b,I,dt,ix)=>blkEval(s,b,I,dt,ix),' +
-  'sinkDriver:(s,sink,arg)=>sinkDriver(s,sink,arg),blkBlame:(s,drv)=>blkBlame(s,drv),' +
-  'blkName:(id)=>nameFor(id,""),rodsOf:(id)=>rodsOf(id),roleId:(r)=>roleId(r),' +
   // solve readers (tail)
   'netPAt:(nm)=>netPAt(S,nm),netHAt:(nm)=>netHAt(S,nm),poolLvlOf:(i)=>poolLvlOf(P.net,S,i),' +
   'holdPOf:(id)=>holdPOf(S,id),holdSetP:(ci)=>holdSetP(tankCircuit(ci)),' +
@@ -212,7 +206,7 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'steamRise:()=>steamRise(),roomSteamH:()=>roomSteamH(),loopKg:()=>loopKg(),coreDT0:()=>coreDT0(),' +
   'secTankIds:()=>secTankIds(),holdTankIds:()=>holdTankIds(),' +
   'satOfCirc:(ci)=>satOfCirc(ci),satWater:()=>SAT_WATER,holdSetP:(ci)=>holdSetP(ci),' +
-  'TavgOf:(s,ci)=>TavgOf(s,ci),dTavgOf:(s,ci)=>dTavgOf(s,ci),tProg:(s,K,cs)=>tProg(s,K,cs),rodsOf:(id)=>rodsOf(id),rodRate:(K)=>rodRate(K),' +
+  'TavgOf:(s,ci)=>TavgOf(s,ci),dTavgOf:(s,ci)=>dTavgOf(s,ci),rodRate:(K)=>rodRate(K),' +
   'netBookOf:(net)=>netBookOf(net),nodeGraph:()=>nodeGraph(),netHole:(ed)=>netHole(ed),' +
   'netInCore:(nm)=>netInCore(nm),netRefThru:()=>P.netRefThru,' +
   'tminmax:(key)=>{const K=(P.cores&&P.cores[key])||P; return [K.Tmin,K.Tmax];},' +
@@ -242,23 +236,8 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'cavOf:(p)=>cavOf(S,p),pumpRhoK:(p)=>pumpRhoK(S,p),poolH:(i)=>poolH(P.net,S,i),' +
   'HEADK:()=>HEAD_K,CASINGF:()=>CASING_F,PUMPH0:()=>PUMP_H0,' +
   'reliefLive:(id)=>reliefLive(S,id),feedTrainC:()=>feedTrainC(),' +
-  // frozen commission answers for the live edge-Q path (all per-preset const).
-  'pconsts:()=>JSON.stringify({turbC:P.turbC,swallow:P.swallow,bypass:P.bypass,rho0:P.rho0,steamRef:P.steamRef||0,rated:P.rated||0}),' +
-  'pumpRho0:()=>JSON.stringify(P.pumpRho0||{}),' +
-  'secCirc:(id)=>{const c=secCircuitOf(id); return (c.boiler?1:0)|(c.sink?2:0);},' +
-  'poolPartH:(i)=>{const nm=P.net.name[i]; const p=P.net.poolPart?P.net.poolPart[i]:partOf(nm.slice(0,-1)); return p?p.h:null;},' +
-  'h0src:(e)=>{const ed=P.net.edges[e]; return typeof ed.h0==="function"?String(ed.h0).slice(0,120):null;},' +
-  'hsrcSrc:(e)=>{const ed=P.net.edges[e]; return typeof ed.hSrc==="function"?String(ed.hSrc).slice(0,120):null;},' +
-  'ventCirc:(id)=>circOfNode(condVesNode(id)),' +
-  'condVac:(id)=>condVacuum(id)?1:0,' +
-  'condSinkN:()=>condSinks().length,' +
-  'condSinkIds:()=>condSinks().slice(),' +
-  'condPDes:()=>condPDes(),' +
-  'sgBypBand:()=>sgBypBand(),' +
-  'ptref:()=>P.Tref,' +
   'laneEnv:()=>JSON.stringify({hold:netStoreHeld?1:0,ci:circOfNode("efwpt"),hsp1:holdSetP(1),hsp:Object.fromEntries([...Array(24).keys()].map(ci=>[ci,holdSetP(ci)])),rho:Object.fromEntries(pumpIds().map(pid=>{try{const r0=(P.pumpRho0||{})[pid];const nm=pumpSucNode(pid);const c=netSatOf(nm);return [pid,{k:pumpRhoK(S,pid),r0:r0===undefined?null:r0,r:netRhoAt(S,nm),p:netPAt(S,nm),h:netHAt(S,nm),sat:{p0:c.p0,T0:c.T0,cp:c.cp,rho:c.rho}}];}catch(e){return [pid,{err:String(e&&e.message||e)}]};}))}),' +
   'storeHeld:()=>netStoreHeld?1:0,' +
-  'pumpSuc:(id)=>{const k=pumpCasingKeys(id); return (k&&k.suc)||null;},' +
   'holdLiveOf:(id)=>{const pc=netPieces(P.net,S); return holdLive(P.net,S,tankCircuit(id),pc)?1:0;},' +
   'stageFedOf:(id)=>stageFed(P.net,S,id)?1:0,' +
   'tankPof:(tid)=>{const t=D.tanks[tid]; return tankP(S,tid,t.hold?netPieces(P.net,S):undefined);},' +
@@ -270,35 +249,6 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'corePiecesOf:()=>{const pc=netPieces(P.net,S); return [...corePieces(P.net,S,pc)];},' +
   'inLoopOf:(ci,nm)=>inLoop(ci,nm)?1:0,' +
   'outsBag:(a,b,c,k)=>outsBag(P.netOut,a,b,c,k),' +
-  'tailContCell:()=>JSON.stringify(P.net.contCell||{}),' +
-  'tailPartOfNode:()=>JSON.stringify((()=>{const o={},n=P.net;for(let i=0;i<n.n;i++){const p=n.partOfNode&&n.partOfNode(n.name[i]); if(p)o[i]=p.id;} return o;})()),' +
-  'tailSecT:()=>JSON.stringify({t:P.net.secT||[],parts:P.net.secTParts||[]}),' +
-  'tailCondParts:()=>JSON.stringify(P.net.condParts||[]),' +
-  'tailTankIdByNode:()=>JSON.stringify(P.net.tankIdByNode||P.net.tankIdOf||{}),' +
-  'loopNodes:(ci)=>{const s=loopNodes(ci); return s?[...s]:null;},' +
-  'tailSteamBreaks:()=>JSON.stringify(P.net.steamBreaks||[]),' +
-  'tailRegions:()=>JSON.stringify((()=>{const g=matRegions(); return {of:Array.from(g.of),tight:Array.from(g.tight||[]),regions:g.regions.map(r=>({bounded:!!r.bounded,wall:Array.from(r.wall||[]),rel:r.rel||1}))};})()),' +
-  'tailCoreNetRef:()=>JSON.stringify((typeof nomOuts!=="undefined"&&nomOuts.coreKgBy)||{}),' +
-  'tailCoreKNetRef:()=>JSON.stringify(Object.fromEntries(coreIds().map(id=>[id,(P.cores&&P.cores[id]&&P.cores[id].netRef)||0]))),' +
-  'tailTransNids:()=>JSON.stringify(holdCircs().filter(ci=>nodeGraph().coreCircs[ci]===1).map(ci=>coreOnCirc(ci).map(id=>coreFold(id)))),' +
-  'tailRiseE:()=>JSON.stringify(P.net.edges.filter(ed=>!netHole(ed)&&P.net.z[ed.u]!==P.net.z[ed.v]).map(ed=>P.net.edges.indexOf(ed))),' +
-  'tailFitBore:()=>JSON.stringify(Object.fromEntries([...new Set((P.net.fitIds||[]).concat(reliefSecIds()).concat(reliefPriIds()).concat(Object.keys(((typeof P!=="undefined"&&P&&P.fittings)||D.fittings)||{})).concat(LAY.parts.filter(p=>p.role==="fitting").map(p=>p.id)))].map(fid=>[fid,fitBoreMm(fid)]))),' +
-  'tailFitNode:()=>JSON.stringify(Object.fromEntries([...new Set((P.net.fitIds||[]).concat(reliefSecIds()).concat(reliefPriIds()).concat(Object.keys(((typeof P!=="undefined"&&P&&P.fittings)||D.fittings)||{})).concat(LAY.parts.filter(p=>p.role==="fitting").map(p=>p.id)))].map(fid=>[fid,reliefNodeOf(P.net,fid)]))),' +
-  'tailRunBore:()=>JSON.stringify((()=>{const o={},bk=(P.net.byKey||{});for(const k in bk)o[k]=runBoreMm(bk[k]);return o;})()),' +
-  'tailNodesOfPart:()=>JSON.stringify(Object.entries(P.net.nodesOfPart||{}).map(([id,nodes])=>[id,nodes])),' +
-  'tailDgen:()=>DGEN,' +
-  'tailEff:()=>P.eff,' +
-  'tailHTurb:()=>P.hTurb,' +
-  'tailPcSig:()=>String((P.net&&P.net.pcSig)||""),' +
-  'tailPzrK:()=>layoutMetrics().pzrK,' +
-  'tailCondUA:()=>JSON.stringify(Object.fromEntries(condIds().map(id=>[id,condUA(id)]))),' +
-  'tailCondMass:()=>JSON.stringify(Object.fromEntries(condIds().map(id=>[id,partMassOf(id)]))),' +
-  'tailCwRef:()=>JSON.stringify(P.cwRefBy||{}),' +
-  'tailNat:()=>JSON.stringify({tick:P.net.natTick||0,pBy:P.net.natPBy?{v:Array.from(P.net.natPBy.v),has:Array.from(P.net.natPBy.has)}:null,loop:P.net.natLoop?Array.from(P.net.natLoop):null}),' +
-  'tailScrMetal:()=>JSON.stringify({qv:Array.from((P.net.scr&&P.net.scr.metalQV)||[]),qm:Array.from((P.net.scr&&P.net.scr.metalQM)||[])}),' +
-  'tailRunEnds:()=>JSON.stringify((()=>{const o={},bk=(P.net.byKey||{});for(const k in bk){const e=runNodeEnds(k,bk[k].k); if(e)o[k]=e;} return o;})()),' +
-  'tailCont:()=>JSON.stringify(P.net.cont||[]),' +
-  'tailNodeRunKey:()=>JSON.stringify((()=>{const o={};for(const nm of P.net.name){const rk=runKeyOfNode(nm); if(rk)o[nm]=rk;} return o;})()),' +
   'coreCi:(id)=>{const K=P.cores&&P.cores[id]; return K?K.circ:-1;},' +
   'netIndex:()=>Object.keys(P.net.index),booked:()=>Array.from(netBooked(P.net)),netN:()=>P.net.n,' +
   'MPC:()=>MPC,CP_W:()=>CP_W,' +
@@ -335,55 +285,7 @@ const u16 = v => { const b = Buffer.alloc(2); b.writeUInt16LE(v); parts.push(b);
 const strsRaw = a => { for (const s of a) str(s); };
 const u8raw = a => parts.push(Buffer.from(Array.from(a).map(v => v & 0xFF)));
 
-// ---- ctl tables (copied from ctl-gate.js) ----
-const KNOB_KEYS = ['v', 'k', 'kp', 'ti', 'td', 'db', 'n', 'lo', 'hi', 'rate', 'tau', 'on', 'off'];
-const MODE_OF = { source: 0, const: 1, math: 2, pid: 3, integ: 4, limit: 5, lag: 6, compare: 7, latch: 8, sel: 9, sink: 10 };
-const MATH_OF = { add: 0, sub: 1, mul: 2, div: 3, min: 4, max: 5 };
-const SEL_OF = { max: 0, min: 1, median: 2 };
-const CMP_OF = { above: 0, below: 1 };
-const SINK_OF = { rodStep: 0, freg: 1, relief: 2, flowDem: 3, loadDem: 4, boronDem: 5, valveDem: 6, tankOpen: 7, scram: 8, nearTrip: 9, runback: 10 };
-const isNullKnob = v => (v === undefined || v === null);
-
-// ---- actuator snapshot (copied from ctl-gate.js snapAct) ----
-function snapAct(s) {
-  const P = M.P();
-  const coreIds = M.coreIds().filter(id => s.coreBy && s.coreBy[id]);
-  const cores = coreIds.map(id => {
-    const cs = s.coreBy[id], K = P.cores[id];
-    return {
-      id, NB: K.NB, rodDem: cs.rodDem, rodZDem: Array.from(cs.rodZDem),
-      rodBand: !!cs.rodBand, split: !!cs.split, reGang: !!cs.reGang,
-      bankAuto: Array.from(cs.bankAuto), rodJam: !!cs.rodJam,
-      scrammed: !!cs.scrammed, rpsHot: num(cs.rpsHot), rpsNear: !!cs.rpsNear,
-      trip: cs.trip === undefined || cs.trip === null ? '' : String(cs.trip),
-      rated: num(K.rated), rodRate: num(M.rodRate(K)),
-      pinHot: Math.abs(M.TavgOf(s, K.circ) - M.tProg(s, K, cs)) > 0.5,
-      dmgRod: (s.dmgParts || []).includes(M.rodsOf(id)),
-    };
-  });
-  const keys = o => Object.keys(o || {});
-  const fmap = o => { const k = keys(o); return { k, v: k.map(x => num(o[x])), ex: k.map(x => o[x] === undefined ? 0 : 1) }; };
-  return {
-    arLo: num(s.arLo), arHi: num(s.arHi),
-    loadMax: num(P.loadMax), rpsLag: num(P.rpsLag), pRated: num(P.rated),
-    load: num(s.load), loadDem: num(s.loadDem), boronDem: num(s.boronDem), rbHot: !!s.rbHot,
-    freg: fmap(s.fregDemBy), flow: fmap(s.flowDemBy), valve: fmap(s.valveDem),
-    tank: (() => { const k = keys(s.tankOpen); return { k, v: k.map(x => s.tankOpen[x] ? 1 : 0), ex: k.map(x => s.tankOpen[x] === undefined ? 0 : 1) }; })(),
-    relief: (() => {
-      const k = keys(s.reliefOpen);
-      return {
-        k,
-        cell: k.map(fid => ({
-          ex: s.reliefOpen[fid] === undefined ? 0 : 1,
-          open: !!s.reliefOpen[fid], auto: !!s.reliefAuto[fid],
-          stuck: !!s.reliefStuck[fid], arm: !!s.reliefArm[fid],
-          spring: !!((P.fittings && P.fittings[fid] && P.fittings[fid].spring)),
-        })),
-      };
-    })(),
-    cores,
-  };
-}
+const GW = { u8, u16, u32, i32, f64, str };
 
 // ---- events map (merged sec+room+events tables; sec-style matcher:
 /// suffix(1)/exact/prefix('/ ') — copied from sec-gate.js mapEvent) ----
@@ -1227,10 +1129,7 @@ function freshPieces(net) {
   return { of: Array.from(of), n: c, live: Array.from(live) };
 }
 const presetNames = [];
-const ctlTables = [];
-const edgeFrozen = [];
-let edgeFrozenCur = null;
-const tailFrozen = [];
+const freezeBufs = [];
 let nSamples = 0;
 const skipped = { noNet: 0 };
 // coreSeen-bust sequence for the evLatch window (monotonic, never reused).
@@ -1264,12 +1163,12 @@ function marchTick(meta, tag) {
     } catch (e) { }
   }
   // ---- ctlPass ----
-  const actPre = snapAct(S);
+  const actPre = M.FREEZE.snapAct(S);
   ensureBlk(S);
   const pre = { out: Array.from(S.blkOutV || []), f: Array.from(S.blkOutF || []) };
   M.ctlPass(S, DT);
   if (process.env.GATE_DEBUG && tag === 0) console.error('post-ctl fregDem=' + JSON.stringify(S.fregDemBy) + ' freg=' + JSON.stringify(S.fregBy));
-  dumpCtlSample(S, P, DT, pre, actPre);
+  dumpCtlSample(S, DT, pre, actPre);
   // ---- act/boron/rod/decay/agg ----
   M.actFollow(S, DT);
   M.boronFollow(S, DT);
@@ -1369,13 +1268,6 @@ function marchTick(meta, tag) {
       } catch (err) { console.error('jsedge ERR ' + err.message); }
     }
   }
-  // Lane-time setpoint truth (always captured): dumpSecCurves runs before
-  // the inputs complete (stale entries), but the march reads them settled.
-  try {
-    if (tag === 0 && edgeFrozenCur && !edgeFrozenCur.suggest) {
-      edgeFrozenCur.suggest = Object.fromEntries([...Array(24).keys()].map(ci => [ci, M.holdSetP(ci)]));
-    }
-  } catch (e) { }
   if (process.env.GATE_DBGFILE) {
     try { fs.appendFileSync(process.env.GATE_DBGFILE, 'laneenv t=' + tag + ' ' + M.laneEnv() + '\n'); } catch (e) { }
   }
@@ -1866,94 +1758,11 @@ function ensureBlk(S) {
     }
   }
 }
-function dumpCtlSample(S, P, dt, pre, actPre) {
-  const blkBy = S.blkBy || {};
-  const ids = Object.keys(blkBy);
-  const n = ids.length;
-  const idxOf = new Map(ids.map((id, i) => [id, i]));
-  const live = M.ctlLive(S);
-  f64(dt); u8(live ? 1 : 0);
-  u32(n);
-  for (const id of ids) str(id);
-  raw8a(ids.map(id => { const m = blkBy[id].mode; return MODE_OF[m] === undefined ? 255 : MODE_OF[m]; }));
-  u8a(ids.map(id => blkBy[id].on ? 1 : 0));
-  for (const id of ids) {
-    const ins = blkBy[id].in;
-    u32(ins.length);
-    for (const src of ins) i32(src === null || src === undefined ? -1 : (idxOf.has(src) ? idxOf.get(src) : -1));
-  }
-  f64a(ids.map((id, i) => pre.out[i]));
-  f64a(ids.map((id, i) => pre.f[i]));
-  for (const id of ids) {
-    const b = blkBy[id];
-    let mask = 0;
-    const vals = KNOB_KEYS.map((k, ki) => {
-      const v = b[k];
-      if (isNullKnob(v)) { mask |= (1 << ki); return NaN; }
-      return v;
-    });
-    f64a(vals);
-    u16(mask);
-  }
-  raw8a(ids.map(id => { const b = blkBy[id]; return b.mode === 'math' ? (MATH_OF[b.op] === undefined ? 255 : MATH_OF[b.op]) : 0; }));
-  raw8a(ids.map(id => { const b = blkBy[id]; return b.mode === 'sel' ? (SEL_OF[b.op] === undefined ? 255 : SEL_OF[b.op]) : 0; }));
-  raw8a(ids.map(id => { const b = blkBy[id]; return b.mode === 'compare' ? (CMP_OF[b.op] === undefined ? 255 : CMP_OF[b.op]) : 0; }));
-  f64a(ids.map((id, i) => (blkBy[id].mode === 'source') ? num(S.blkOutV[i]) : NaN));
-  raw8a(ids.map(id => { const b = blkBy[id]; return b.mode === 'sink' ? (SINK_OF[b.sink] === undefined ? 255 : SINK_OF[b.sink]) : 255; }));
-  for (const id of ids) {
-    const b = blkBy[id];
-    if (b.mode !== 'sink') { i32(-1); continue; }
-    const pick = l => { const i = l.indexOf(b.arg); return i < 0 ? -1 : i; };
-    let a = -1;
-    switch (b.sink) {
-      case 'rodStep': case 'scram': case 'nearTrip': a = pick(actPre.cores.map(c => c.id)); break;
-      case 'freg': a = pick(actPre.freg.k); break;
-      case 'flowDem': a = pick(actPre.flow.k); break;
-      case 'valveDem': a = pick(actPre.valve.k); break;
-      case 'tankOpen': a = pick(actPre.tank.k); break;
-      case 'relief': a = pick(actPre.relief.k); break;
-      default: a = -1;
-    }
-    i32(a);
-  }
-  u8a(ids.map(id => {
-    const b = blkBy[id];
-    return (b.mode === 'sink') ? (M.blkDead(S, b) ? 1 : 0) : 0;
-  }));
-  for (const id of ids) {
-    const b = blkBy[id];
-    if (b.mode === 'sink' && b.sink === 'scram') {
-      const drv = M.sinkDriver(S, 'scram', b.arg);
-      str(drv ? M.blkBlame(S, drv) : '');
-    } else str('');
-  }
-  const ord = M.ctlOrder(S).map(id => idxOf.get(id));
-  u32(ord.length);
-  for (const i of ord) u32(i);
-  f64(actPre.arLo); f64(actPre.arHi); f64(actPre.loadMax); f64(actPre.rpsLag);
-  f64(actPre.pRated); f64(actPre.load); f64(actPre.loadDem); f64(actPre.boronDem);
-  u8(actPre.rbHot ? 1 : 0);
-  const wmap = m => { u32(m.v.length); f64a(m.v); u8a(m.ex); };
-  wmap(actPre.freg); wmap(actPre.flow); wmap(actPre.valve);
-  u32(actPre.tank.v.length); u8a(actPre.tank.v); u8a(actPre.tank.ex);
-  u32(actPre.relief.cell.length);
-  for (const cl of actPre.relief.cell) u8a([cl.ex, cl.open, cl.auto, cl.stuck, cl.arm, cl.spring]);
-  u32(actPre.cores.length);
-  for (const c of actPre.cores) {
-    str(c.id); u32(c.NB); f64(c.rodDem); f64a(c.rodZDem);
-    u8a([c.rodBand, c.split, c.reGang, c.rodJam, c.scrammed, c.rpsNear]);
-    u8a(c.bankAuto);
-    f64(c.rpsHot); f64(c.rated); f64(c.rodRate);
-    u8a([c.pinHot, c.dmgRod]);
-    str(c.trip);
-  }
-  // want out/f (post-ctl blkOutV/F)
+function dumpCtlSample(S, dt, pre, actPre) {
+  M.FREEZE.ctlSample(GW, S, dt, pre, actPre, i => S.blkOutV[i]);
   f64a(Array.from(S.blkOutV));
   f64a(Array.from(S.blkOutF));
-  // per-tick key lists (fan-out order = actPre orders)
-  strsn(actPre.freg.k); strsn(actPre.flow.k); strsn(actPre.valve.k);
-  strsn(actPre.tank.k); strsn(actPre.relief.k);
-  strsn(actPre.cores.map(c => c.id));
+  M.FREEZE.ctlKeys(GW, actPre);
 }
 
 // ---- per-tick tails (wire order matches step-probe tail readers) ----
@@ -2484,96 +2293,7 @@ for (const k of Object.keys(M.PRE())) {
   M.S().diceOff = true;
   M.S().seed = M.S().rng = (123456789 + 1000003 * +k) >>> 0;
   presetNames.push(M.PRE()[k][0]);
-  { // frozen block table for the live path (same run: names/ids match the dump)
-    const S0 = M.S(), P0 = M.P(), blkBy = S0.blkBy || {}, ids0 = Object.keys(blkBy);
-    const seedNum = v => (v === undefined || v === null || (typeof v === 'number' && isNaN(v))) ? 'NaN' : String(v);
-    ctlTables.push({
-      key: String(k), name: M.PRE()[k][0],
-      blocks: ids0.map(id => ({ id, mode: blkBy[id].mode || '', sig: blkBy[id].sig || '',
-        arg: (blkBy[id].arg === null || blkBy[id].arg === undefined) ? '' : String(blkBy[id].arg),
-        name: M.blkName(id), out: seedNum(blkBy[id].out), f: seedNum(blkBy[id].f) })),
-      rods: Object.fromEntries(M.coreIds().map(id => [id, M.rodsOf(id) || ''])),
-      turb: M.roleId('turb') || '', ctrl: M.roleId('ctrl') || '',
-      steamRef: P0.steamRef || 0,
-    });
-  }
-  { // frozen per-edge lane ids for the live edge-Q path (commission-frozen)
-    const P0 = M.P();
-    const edges = (P0.net && P0.net.edges) || [];
-    const ef = v => (v === undefined || v === null) ? null : v;
-    const pumpIds = [...new Set(edges.map(ed => ed.pump).filter(p => p !== undefined && p !== null))];
-    const pumpSuc = Object.fromEntries(pumpIds.map(pid => [pid, M.pumpSuc(pid)]));
-    const turbIds = [...new Set(edges.filter(ed => ed.Ck === 5).map(ed => ed.pid).filter(p => p !== undefined && p !== null))];
-    const ventIds = [...new Set(edges.filter(ed => ed.Ck === 10).map(ed => ed.pid).filter(p => p !== undefined && p !== null))];
-    const poolNodes = [...new Set(edges.map(ed => ed.poolAt).filter(p => p !== undefined && p !== null))];
-    edgeFrozen.push({
-      key: String(k), name: M.PRE()[k][0], steamRef: P0.steamRef || 0,
-      fitIds: P0.net.fitIds || [],
-      fitRelief: (P0.net.fitIds || []).map(fid => P0.net.fitMode[fid] === 'relief'),
-      sigTanks: M.tankIds().filter(id => P0.net.tankNode[id] !== undefined),
-      pconsts: JSON.parse(M.pconsts()), pumpRho0: JSON.parse(M.pumpRho0()),
-      pumpSuc,
-      secCirc: Object.fromEntries(turbIds.map(pid => [pid, M.secCirc(pid)])),
-      poolPartH: Object.fromEntries(poolNodes.map(i => [i, M.poolPartH(i)])),
-      vent: Object.fromEntries(ventIds.map(pid => [pid, { circ: M.ventCirc(pid), vac: M.condVac(pid) }])),
-      plant: { condSinkN: M.condSinkN(), condSinkIds: M.condSinkIds(), condPDes: M.condPDes(), sgBypBand: M.sgBypBand(), ptref: M.ptref() },
-      consts: { casingF: M.CASINGF(), pumpH0: M.PUMPH0(), headK: M.HEADK(), tankRho: M.TANK_RHO() },
-      pumps: Object.fromEntries(pumpIds.map(pid => [pid, { head: M.pumpHead(pid) }])),
-      edges: edges.map((ed, ei) => ({
-        ck: ed.Ck === undefined ? -1 : ed.Ck,
-        cdead: ef(ed.Cdead), tid: ef(ed.tid), end: ef(ed.end), freg: ef(ed.freg),
-        pid: ef(ed.pid), cx: ef(ed.cx), cy: ef(ed.cy), pump: ef(ed.pump),
-        poolAt: ef(ed.poolAt), gateMode: ef(ed.gateMode), gateIds: ed.gateIds || null,
-        fit: ef(ed.fit), machine: ef(ed.machine),
-        cfn: typeof ed.C === 'function' ? String(ed.C).slice(0, 120) : null,
-        cnum: (typeof ed.C === 'function' || ed.C === undefined) ? null : +ed.C,
-        h0fn: typeof ed.h0 === 'function',
-        h0num: (typeof ed.h0 === 'function' || ed.h0 === undefined) ? null : +ed.h0,
-        h0src: typeof ed.h0 === 'function' ? M.h0src(ei) : null,
-        hsrcFn: typeof ed.hSrc === 'function',
-        hsrcSrc: typeof ed.hSrc === 'function' ? M.hsrcSrc(ei) : null,
-        I: ed.I === undefined ? null : +ed.I,
-      })),
-      suggest: null,
-    });
-    edgeFrozenCur = edgeFrozen[edgeFrozen.length - 1];
-  }
-  { // commission-frozen tail statics for the live path (same run as the dump)
-    const circs = M.holdCircs().filter(ci => M.nodeGraph().coreCircs[ci] === 1);
-    tailFrozen.push({
-      key: String(k), name: M.PRE()[k][0],
-      contCell: JSON.parse(M.tailContCell()),
-      partOfNode: JSON.parse(M.tailPartOfNode()),
-      secT: JSON.parse(M.tailSecT()),
-      condParts: JSON.parse(M.tailCondParts()),
-      tankIdByNode: JSON.parse(M.tailTankIdByNode()),
-      loopNodes: Object.fromEntries(circs.map(ci => [ci, M.loopNodes(ci)])),
-      steamBreaks: JSON.parse(M.tailSteamBreaks()),
-      regions: JSON.parse(M.tailRegions()),
-      coreNetRef: JSON.parse(M.tailCoreNetRef()),
-      coreKNetRef: JSON.parse(M.tailCoreKNetRef()),
-      transCircs: circs,
-      transNids: JSON.parse(M.tailTransNids()),
-      transRiseE: JSON.parse(M.tailRiseE()),
-      fitBoreMm: JSON.parse(M.tailFitBore()),
-      runBoreMm: JSON.parse(M.tailRunBore()),
-      fitNode: JSON.parse(M.tailFitNode()),
-      nodesOfPart: JSON.parse(M.tailNodesOfPart()),
-      dgen: M.tailDgen(),
-      eff: M.tailEff(),
-      pzrK: M.tailPzrK(),
-      hTurb: M.tailHTurb(),
-      pcSig: M.tailPcSig(),
-      condUA: JSON.parse(M.tailCondUA()),
-      condMass: JSON.parse(M.tailCondMass()),
-      cwRef: JSON.parse(M.tailCwRef()),
-      natInit: JSON.parse(M.tailNat()),
-      scrMetal: JSON.parse(M.tailScrMetal()),
-      runEnds: JSON.parse(M.tailRunEnds()),
-      nodeRunKey: JSON.parse(M.tailNodeRunKey()),
-      contOrder: JSON.parse(M.tailCont()),
-    });
-  }
+  freezeBufs.push(Buffer.from(M.FREEZE.build()));
   const C = assertConsts();
   const secMeta = dumpSecMeta(C);
   if (process.env.GATE_DEBUG) console.error('post-secmeta-only ' + parts.reduce((a, b) => a + b.length, 0));
@@ -2680,26 +2400,9 @@ for (const k of Object.keys(M.PRE())) {
   for (const b of parts.splice(0)) fs.writeSync(fd, b);
 }
 fs.closeSync(fd);
-const ctlPath = path.join(tmp, 'ctl.json');
-fs.writeFileSync(ctlPath, JSON.stringify({ presets: ctlTables }));
-console.log('ctl-table ' + ctlPath);
-const edgePath = path.join(tmp, 'edge-frozen.json');
-fs.writeFileSync(edgePath, JSON.stringify({ presets: edgeFrozen }));
-console.log('edge-table ' + edgePath);
-const tailPath = path.join(tmp, 'tail-frozen.json');
-fs.writeFileSync(tailPath, JSON.stringify({ presets: tailFrozen }));
-console.log('tail-table ' + tailPath);
-{
-  // line format for the native harness (tools/ctl-frozen.js shape)
-  const tl = [];
-  for (const p of ctlTables) {
-    tl.push('preset|' + p.key);
-    for (const r of p.blocks) tl.push('blk|' + r.id + '|' + r.mode + '|' + r.sig + '|' + r.arg + '|' + r.name + '|' + r.out + '|' + r.f);
-    tl.push('meta|turb=' + p.turb + '|ctrl=' + p.ctrl + '|steamRef=' + p.steamRef);
-    for (const id of Object.keys(p.rods)) tl.push('rods|' + id + '=' + p.rods[id]);
-  }
-  fs.writeFileSync(path.join(tmp, 'ctl.tbl'), tl.join('\n') + '\n');
-}
+const freezePath = path.join(tmp, 'freeze.bin');
+fs.writeFileSync(freezePath, Buffer.concat(freezeBufs));
+console.log('freeze ' + freezePath);
 
 // ---- probe run ----
 const CARGO = (() => {

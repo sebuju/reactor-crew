@@ -22,7 +22,7 @@ const opt = (k, d) => {
 const TICKS = +(opt('ticks', '120'));
 const DT = 0.02;
 
-const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P,S:()=>S,step,D:()=>D,' +
+const M = headless('{FREEZE,PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P,S:()=>S,step,D:()=>D,' +
   'ctlPass:(s,dt)=>ctlPass(s,dt),ctlOrder:(s)=>ctlOrder(s),' +
   'blkEval:(s,b,I,dt,ix)=>blkEval(s,b,I,dt,ix),' +
   'blkOutOf:(s,id)=>blkOutOf(s,id),blkDead:(s,b)=>blkDead(s,b),' +
@@ -30,8 +30,7 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'ctlLive:(s)=>ctlLive(s),' +
   'getIdx:()=>CTL_IDX,setIdx:(v)=>{CTL_IDX=v;},getIdk:()=>CTL_IDK,setIdk:(v)=>{CTL_IDK=v;},' +
   'bumpSink:()=>{ctlSinkGen++;},' +
-  'TavgOf:(s,ci)=>TavgOf(s,ci),tProg:(s,K,cs)=>tProg(s,K,cs),rodRate:(K)=>rodRate(K),' +
-  'rodsOf:(id)=>rodsOf(id),coreIds:()=>coreIds(),' +
+  'coreIds:()=>coreIds(),' +
   'setPartName:(id,n)=>setPartName(id,n)}');
 
 const KNOB_KEYS = ['v', 'k', 'kp', 'ti', 'td', 'db', 'n', 'lo', 'hi', 'rate', 'tau', 'on', 'off'];
@@ -57,46 +56,7 @@ const u8a = a => parts.push(Buffer.from(Array.from(a).map(v => v ? 1 : 0)));
 const raw8a = a => parts.push(Buffer.from(Array.from(a).map(v => v & 0xFF)));
 const str = s => { const b = Buffer.from(String(s === undefined || s === null ? '' : s), 'utf8'); u32(b.length); parts.push(b); };
 
-// ---- actuator snapshot (hand clone: NaN/undefined-preserving, no JSON) ----
-function snapAct(s) {
-  const P = M.P();
-  const coreIds = M.coreIds().filter(id => s.coreBy && s.coreBy[id]);
-  const cores = coreIds.map(id => {
-    const cs = s.coreBy[id], K = P.cores[id];
-    return {
-      id, NB: K.NB, rodDem: cs.rodDem, rodZDem: Array.from(cs.rodZDem),
-      rodBand: !!cs.rodBand, split: !!cs.split, reGang: !!cs.reGang,
-      bankAuto: Array.from(cs.bankAuto), rodJam: !!cs.rodJam,
-      scrammed: !!cs.scrammed, rpsHot: num(cs.rpsHot), rpsNear: !!cs.rpsNear,
-      trip: cs.trip === undefined || cs.trip === null ? '' : String(cs.trip),
-      rated: num(K.rated), rodRate: num(M.rodRate(K)),
-      pinHot: Math.abs(M.TavgOf(s, K.circ) - M.tProg(s, K, cs)) > 0.5,
-      dmgRod: (s.dmgParts || []).includes(M.rodsOf(id)),
-    };
-  });
-  const keys = o => Object.keys(o || {});
-  const fmap = o => { const k = keys(o); return { k, v: k.map(x => num(o[x])), ex: k.map(x => o[x] === undefined ? 0 : 1) }; };
-  return {
-    arLo: num(s.arLo), arHi: num(s.arHi),
-    loadMax: num(P.loadMax), rpsLag: num(P.rpsLag), pRated: num(P.rated),
-    load: num(s.load), loadDem: num(s.loadDem), boronDem: num(s.boronDem), rbHot: !!s.rbHot,
-    freg: fmap(s.fregDemBy), flow: fmap(s.flowDemBy), valve: fmap(s.valveDem),
-    tank: (() => { const k = keys(s.tankOpen); return { k, v: k.map(x => s.tankOpen[x] ? 1 : 0), ex: k.map(x => s.tankOpen[x] === undefined ? 0 : 1) }; })(),
-    relief: (() => {
-      const k = keys(s.reliefOpen);
-      return {
-        k,
-        cell: k.map(fid => ({
-          ex: s.reliefOpen[fid] === undefined ? 0 : 1,
-          open: !!s.reliefOpen[fid], auto: !!s.reliefAuto[fid],
-          stuck: !!s.reliefStuck[fid], arm: !!s.reliefArm[fid],
-          spring: !!((P.fittings && P.fittings[fid] && P.fittings[fid].spring)),
-        })),
-      };
-    })(),
-    cores,
-  };
-}
+const snapAct = s => M.FREEZE.snapAct(s);
 function restoreAct(s, a) {
   s.arLo = a.arLo; s.arHi = a.arHi;
   s.load = a.load; s.loadDem = a.loadDem; s.boronDem = a.boronDem; s.rbHot = a.rbHot;
