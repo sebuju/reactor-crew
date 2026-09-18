@@ -51,7 +51,7 @@ return {
         M.plantPreset(0);
         R.source("srcA", 0, 0, 16.0, {name:"SOURCE", vol:30});
         R.void_ ("sinkA", 0, 9, {name:"VOID", vol:30});
-        // both tanks are FIXED nodes and netAssemble writes no row for an edge with two known ends: the tee is the free node
+        // both tanks are FIXED nodes and the solve writes no row for an edge with two known ends: the tee is the free node
         const t = R.fit(1, 6, "tee", "RIG TEE");
         R.run(R.port("srcA", 1, M.partOf("srcA").h), R.port(t, 0, -1));
         R.run(R.port(t, 0, 1), R.port("sinkA", 1, -1));
