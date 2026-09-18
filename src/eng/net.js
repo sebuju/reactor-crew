@@ -1,14 +1,25 @@
 "use strict";
-// exports: eNetSolve eNetReadP eNetReadEdges eNetCoreLoop eNetFlowK eNetNat eNetCommitP eNetHold eNetMarching eNetReadOnly eNetScale eNetInvalidate eRegionUpdate eRegionP eRegionPart eNodeP eNodePOf eNodeH eNodeHOf eNodeT eNodeX eNodeRho eNodeSat eCircSat eLoopP eSetLoopP eTavgOf eHoldPOfA eHoldLive eHoldLvlOf ePoolLvl eCondPoolLvl eTankLvl eTankP eTankCap eSecP eCondP eCondPRead eExhOpen eCondDumpOpen eSgtrC eLoopKg ePumpHead eEdgeC eRunCommon eKeyW eRunW eWrecked eNetDryAny ePortLive eSgOpen
+// exports: eNetSolve eNetReadP eNetReadEdges eNetCoreLoop eNetFlowK eNetNat eNetCommitP eNetHold eNetSteady eNetImpose eNetMarching eNetReadOnly eNetScale eNetInvalidate eRegionUpdate eRegionP eRegionPart eNodeP eNodePOf eNodeH eNodeHOf eNodeT eNodeX eNodeRho eNodeSat eCircSat eLoopP eSetLoopP eTavgOf eHoldPOfA eHoldLive eHoldLvlOf ePoolLvl eCondPoolLvl eTankLvl eTankP eTankCap eSecP eCondP eCondPRead eExhOpen eCondDumpOpen eSgtrC eLoopKg ePumpHead eEdgeC eRunCommon eKeyW eRunW eWrecked eNetDryAny ePortLive eSgOpen
 
 const E_NS_TURBWK=0, E_NS_TURBWKP=1, E_NS_TURBWKA=2, E_NS_QSGT=3, E_NS_SPILL=4, E_NS_SPILLSEC=5, E_NS_NAT=6,
       E_NS_CORE=7, E_NS_NPIECE=8, E_NS_NF=9, E_NS_BW=10, E_NS_REFINE=11, E_NS_FACTORS=12, E_NS_N=13;
 const E_NAT_PASSES=8, E_NAT_TOL=1e-3, E_NAT_EVERY=25, E_REFINE_MAX=10, E_REFINE_TOL=1e-10;
 const E_MIX = new Float64Array(MX_N), E_MIX2 = new Float64Array(MX_N);
-let eNetHeldOn = 0, eNetMarchOn = 0, eNetRO = 0, eNetFlowScale = 1;
+let eNetHeldOn = 0, eNetMarchOn = 0, eNetRO = 0, eNetFlowScale = 1, eNetSteadyOn = 0, eNetImp = null;
 let eFacBuilt = -1, eOrderOK = 0, ePcGen = 0, eHlGen = 0, eHlKey = -1, eHlPc = -1, eHlWalk = 0, eChokeBit = 0;
 
 const eNetHold = on => { const w = eNetHeldOn; eNetHeldOn = on ? 1 : 0; return w; };
+/* commissioning's steady solve: direct factorisation, Newton on the flow law. Never set by the tick */
+const eNetSteady = on => { const w = eNetSteadyOn; eNetSteadyOn = on ? 1 : 0;
+  if(on && !w) eSteadyP = Float64Array.from(ST.pBy);
+  return w; };
+/* a gas-charged vessel in the field states its content by its pressure: held, that is the one it entered the solve with */
+let eSteadyP = null;
+const eFieldTankP = i => eNetSteadyOn ? eSteadyP[i] : ST.pBy[i];
+/* kg/s per boiler forced through its feed valve edge (NaN = the valve conducts); commissioning only */
+const eNetImpose = w => { eNetImp = w; };
+const eImpW = e => { if(PT.edCk[e] !== 4) return E_NAN; const b = PT.edFreg[e];
+  return b < 0 ? E_NAN : eNetImp[b]*(PT.edShellSign[e] === -1 ? -1 : 1); };
 const eNetMarching = on => { const w = eNetMarchOn; eNetMarchOn = on ? 1 : 0; return w; };
 const eNetReadOnly = on => { const w = eNetRO; eNetRO = on ? 1 : 0; return w; };
 const eNetScale = v => { const w = eNetFlowScale; eNetFlowScale = v; return w; };
@@ -129,7 +140,7 @@ function eTankLvlA(t){
   if(PT.tankInField[t]){
     const i = PT.tankNode[t], V = PT.tankVol[t], V0 = V*PT.tankVoid[t];
     if(!(V0 > 0) || !PT.tankGas[t]){ if(i >= 0){ eHoldLvlA(i); E_TL[0] = E_HL[MX_T]; } else E_TL[0] = PT.tankLevel0[t]; return; }
-    const pv = i >= 0 ? ST.pBy[i] : E_NAN;
+    const pv = i >= 0 ? eFieldTankP(i) : E_NAN;
     if(!(pv === pv)){ const l = PT.tankLevel0[t]; E_TL[0] = l < 0 ? 0 : l > 100 ? 100 : l; return; }
     E_TL[0] = 100*(1 - Math.min(V, V0*PT.tankGasP0[t]/Math.max(COND_P0, pv))/Math.max(V, 1e-9));
     return;
@@ -145,7 +156,7 @@ function eTankPA(t){
   const ci = PT.tankCirc[t];
   if(PT.tankHold[t] && eHoldLive(ci)){ eLoopPA(ci); E_TP[0] = E_LP[0]; return; }
   if(PT.tankInField[t]){ const i = PT.tankNode[t];
-    if(i >= 0){ const v = ST.pBy[i]; if(v === v){ E_TP[0] = Math.max(COND_P0, v); return; } } }
+    if(i >= 0){ const v = eFieldTankP(i); if(v === v){ E_TP[0] = Math.max(COND_P0, v); return; } } }
   const vf = PT.tankVoid[t];
   const frac = PT.tankGas[t] ? vf : PT.tankHold[t] ? Math.max(0.01, vf) : 0;
   const p0 = PT.tankGas[t] ? PT.tankGasP0[t] : PT.tankHold[t] ? (ci >= 0 ? PT.circSetP[ci] : PK[PK_PCONT]) : 0;
@@ -305,7 +316,7 @@ function eFlowGA(e){
   const rho = gasEnd ? F.fRhoG[up] : liqEnd ? F.fRhoL[up] : F.fRhoD[up];
   const ca = PT.edChoke[e];
   let eff = a;
-  if(!hSrc && (ca < 0 || up === ca)){ E_FG[FG_P0] = F.fP[up]; E_FG[FG_PD] = F.fP[up] - a; E_FG[FG_A] = a;
+  if(!hSrc && (ca < 0 || up === ca)){ E_FG[FG_P0] = F.fP[up] + (up === u ? h : -h); E_FG[FG_PD] = E_FG[FG_P0] - a; E_FG[FG_A] = a;
     eCritDpA(up, gasEnd, liqEnd); eff = E_FG[FG_Q]; }
   eff = Math.max(eff, floor);
   const r = Math.max(rho, 1e-3);
@@ -336,6 +347,7 @@ function eCritDpA(up, gasEnd, liqEnd){
 }
 /* g and the driving head of one edge; inertance only inside a march, as I/dt about last solve's flow */
 function eEdgeGH(e){
+  if(eNetImp && eImpW(e) === eImpW(e)){ SX.edChoke[e] = 0; SX.gG[e] = 0; SX.gH[e] = 0; return; }
   eEdgeCA(e);
   const C = E_EC[0];
   let g = 0, H = 0;
@@ -352,6 +364,8 @@ function eEdgeGH(e){
     const In = eNetMarchOn ? PT.edI[e]/NET_DT/1e6 : 0;
     if(g > 0) g = g/(1 + g*In);
     H = h + In*(ST.edWHas[e] ? ST.edW[e] : 0);
+    /* w ~ sqrt(dp): the tangent is half the secant, and half the last solve's flow rides as a head, so a leg the topology holds still keeps its column */
+    if(eNetSteadyOn && g > 0 && p < 0 && ST.edWHas[e]){ H = h + ST.edW[e]/g; g /= 2; }
   }
   SX.edChoke[e] = (g > 0 && eChokeBit) ? 1 : 0;
   SX.gG[e] = g; SX.gH[e] = H;
@@ -621,6 +635,11 @@ function eNetB(){
     if(gv) b[v] += g*h;
     if(gu && !gv) b[u] += g*fv[v];
     if(gv && !gu) b[v] += g*fv[u]; }
+  if(eNetImp) for(let e=0;e<E;e++){ const w = eImpW(e); if(w !== w) continue;
+    const u = PT.edU[e], v = PT.edV[e];
+    tc[u] = 1; tc[v] = 1;
+    if(!fh[u]) b[u] -= w;
+    if(!fh[v]) b[v] += w; }
   for(let i=0;i<n;i++) if(!fh[i] && src[i]) b[i] += src[i];
 }
 /* r = b - A(g now) x over the free rows, into the compact vector */
@@ -664,7 +683,7 @@ function eNetSolve(pA, direct){
   const n = PT.n.node, E = PT.n.edge;
   eRegionUpdate();
   eNetField(pA);
-  for(let e=0;e<E;e++){ eEdgeGH(e); SX.gLive[e] = SX.gG[e] > 0 ? 1 : 0; }
+  for(let e=0;e<E;e++){ eEdgeGH(e); SX.gLive[e] = SX.gG[e] > 0 || (eNetImp && eImpW(e) === eImpW(e)) ? 1 : 0; }
   if(ePcGen === 0 || eMaskDiff(SX.gLive, SX.pcMask, E)) eNetPieces();
   eNetStore();
   eNetFixed();
@@ -698,6 +717,7 @@ function eNetSolve(pA, direct){
   for(let i=0;i<n;i++) if(fh[i]) x[i] = fv[i];
   for(let e=0;e<E;e++){ const g = SX.gG[e];
     q[e] = g > 0 ? g*(x[PT.edU[e]] - x[PT.edV[e]] + SX.gH[e]) : 0; }
+  if(eNetImp) for(let e=0;e<E;e++){ const w = eImpW(e); if(w === w) q[e] = w; }
   if(!eNetRO){ ST.edW.set(q); ST.edWHas.fill(1); }
 }
 
@@ -802,7 +822,7 @@ const E_TK_HEAT = 0, E_TK_FLOW = 1, E_TK = new Float64Array(2);
 function eNetFlowKA(noNat){
   if(!noNat){ const sc = ST.sc; sc[SC_NATTICK]++;
     if(!sc[SC_NATHAS] || (!eNetRO && !(sc[SC_NATTICK] % E_NAT_EVERY))) eNetNat(); }
-  eNetSolve(ST.pBy, 0);
+  eNetSolve(ST.pBy, eNetSteadyOn);
   eNetReadP(SX.pSolve);
   eNetReadEdges();
   let total = 0, natTot = 0;

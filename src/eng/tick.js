@@ -82,6 +82,26 @@ function eSettleSolve(){
   eNetCommitP();
   return k;
 }
+const E_STEADY_MAX = 60, E_STEADY_TOL = 1e-6, E_SHELL_STALL = 8;
+/* the held field solved until no edge flow, and no pressure of a node that passes flow, moves more than E_STEADY_TOL of the largest (an imposed flow pins a line's flows before its pressures); passes returned, E_STEADY_MAX = never settled */
+function eSettleSteady(){
+  const held = eNetHold(1), st = eNetSteady(1), E = PT.n.edge, n = PT.n.node;
+  const prev = new Float64Array(E), prevP = new Float64Array(n), thru = new Float64Array(n);
+  try {
+    for(let pass=0;pass<E_STEADY_MAX;pass++){
+      eSettleSolve();
+      const q = SX.edQ, p = ST.pBy; let scale = 0, move = 0, pScale = 0, pMove = 0;
+      thru.fill(0);
+      for(let e=0;e<E;e++){ const a = Math.abs(q[e]); if(a > scale) scale = a;
+        thru[PT.edU[e]] += a; thru[PT.edV[e]] += a;
+        const d = Math.abs(q[e] - prev[e]); if(d > move) move = d; }
+      for(let i=0;i<n;i++){ if(!(p[i] === p[i]) || !(thru[i] > E_STEADY_TOL*scale)) continue; const a = Math.abs(p[i]); if(a > pScale) pScale = a;
+        const d = Math.abs(p[i] - prevP[i]); if(d > pMove) pMove = d; }
+      if(pass && move <= E_STEADY_TOL*Math.max(scale, 1e-9) && pMove <= E_STEADY_TOL*Math.max(pScale, 1e-9)) return pass + 1;
+      prev.set(q); prevP.set(p); }
+    return E_STEADY_MAX;
+  } finally { eNetHold(held); eNetSteady(st); }
+}
 
 function eSettleRest(){
   const s = ST, sc = s.sc, nb = PT.n.boiler, ng = PT.n.sg, n0 = PK[PK_N0];
@@ -167,27 +187,20 @@ function eSettleShells(){
   const pOf = () => { const p = new Float64Array(n); for(let g=0;g<n;g++) p[g] = eSecP(g); return p; };
   const setP = p => { for(let g=0;g<n;g++){ const b = bOf(g);
     s.sgPBy[b] = p[g]; s.sgTBy[b] = satT(eBoilerSatOf(b), p[g]); } };
-  const steam = () => { const o = new Float64Array(n); for(let g=0;g<n;g++) o[g] = SX.netSgSteam[bOf(g)]; return o; };
   const solve = () => {
     E_TK[E_TK_HEAT] = sc[SC_HEAT]; E_TK[E_TK_FLOW] = sc[SC_FLOWNET]; eSgHeatStep();
-    let was = null;
-    for(let k=0;k<30;k++){
-      eSettleSolve();
-      const now = steam();
-      if(was){ let ok = true;
-        for(let g=0;g<n;g++) if(Math.abs(now[g] - was[g]) > 1e-6*Math.max(Math.abs(now[g]), 1)){ ok = false; break; }
-        if(ok) break; }
-      was = now; }
+    eSettleSteady();
     const r = new Float64Array(n);
     for(let g=0;g<n;g++) r[g] = SX.netSgSteam[bOf(g)] - s.hbSgQ[bOf(g)]/rise(g, eSecP(g));
     return r; };
   eNetHold(1);
-  let A = null, pPrev = null, rPrev = null, errPrev = E_INF;
+  let A = null, pPrev = null, rPrev = null, errPrev = E_INF, best = null, errBest = E_INF, itBest = 0;
   for(let it=0;it<40;it++){
     const p = pOf(), r0 = solve();
     let err = 0;
     for(let g=0;g<n;g++){ const w = s.hbSgQ[bOf(g)]/rise(g, p[g]); if(w > 0) err = Math.max(err, Math.abs(r0[g])/w); }
-    if(err < 1e-6) break;
+    if(err < errBest){ errBest = err; best = p; itBest = it; }
+    if(err < 1e-6 || it - itBest >= E_SHELL_STALL) break;
     if(!A || err > errPrev){
       A = []; for(let i=0;i<n;i++) A.push(new Float64Array(n));
       for(let j=0;j<n;j++){ const dp = 1e-3*p[j], q = Float64Array.from(p); q[j] += dp; setP(q);
@@ -206,6 +219,7 @@ function eSettleShells(){
     for(let g=0;g<n;g++) q[g] = clamp(p[g] + clamp(d[g], -0.2*p[g], 0.2*p[g]),
                                       eRegionPart(PT.sgPart[g]), PT.sgDesignP[g]*PIPE_BURST_K);
     setP(q); }
+  if(best) setP(best);
   solve();
   eNetHold(0);
   const S = SX.netSc;
@@ -216,85 +230,27 @@ function eSettleShells(){
   sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - eBleedPlant());
 }
 
-/* each feed valve is left where its own shell edge carries what the shell raises; the shells share a header, so the round repeats */
+/* each feed valve passes w[b] (NaN = left as it is): that flow imposed on its edge, the opening read off the drop the network puts across it through the edge's own law; a valve that would need more than wide open stays wide open */
+function eFeedFit(w){
+  const s = ST, E = PT.n.edge, F = SX;
+  eNetImpose(w);
+  try { eSettleSteady(); } finally { eNetImpose(null); }
+  for(let e=0;e<E;e++){ if(PT.edCk[e] !== 4) continue;
+    const b = PT.edFreg[e]; if(b < 0 || !(w[b] === w[b])) continue;
+    eStaticHA(e); const h = E_EC[2]*PK[PK_HEADK], d = F.fP[PT.edU[e]] - F.fP[PT.edV[e]] + h;
+    E_FG[FG_C] = 1; E_FG[FG_H] = h; E_FG[FG_HSRC] = 0; eFlowGA(e);
+    const w1 = d*(PT.edShellSign[e] === -1 ? -1 : 1) > 0 ? E_FG[FG_G]*Math.abs(d) : 0;
+    s.fregBy[b] = w1 > 0 ? clamp(1 - w[b]/w1/PK[PK_FEEDC], 0, 1) : 0; }
+  return eSettleSteady();
+}
+/* at rest each feed valve passes what its shell raises */
 function eSettleFeed(){
   const s = ST, nb = PT.n.boiler;
   if(!nb) return;
-  eNetHold(0);
-  const feedAt = () => { let was = null;
-    for(let k=0;k<30;k++){ eSettleSolve();
-      const now = Float64Array.from(SX.netFeed);
-      if(was){ let ok = true;
-        for(let b=0;b<nb;b++) if(Math.abs(now[b] - was[b]) > 1e-4*Math.max(Math.abs(now[b]), 1)){ ok = false; break; }
-        if(ok) break; }
-      was = now; } };
-  const seed = P.fregSeed || {};
-  const want = b => s.steamBy[b] || 0;
-  const jb = []; for(let b=0;b<nb;b++) if(want(b) > 0) jb.push(b);
-  if(jb.length > 1){
-    const n = jb.length, x = new Float64Array(n);
-    for(let j=0;j<n;j++){ const g = seed[IX.boilerId[jb[j]]]; x[j] = clamp(g === undefined ? s.fregBy[jb[j]] : g, 0, 1); }
-    const setX = () => { for(let j=0;j<n;j++) s.fregBy[jb[j]] = x[j]; };
-    const resid = out => { setX(); feedAt();
-      let err = 0;
-      for(let j=0;j<n;j++){ const w = want(jb[j]); out[j] = (SX.netFeed[jb[j]] - w)/w;
-        const a = Math.abs(out[j]); if(a > err) err = a; }
-      return err; };
-    const r0 = new Float64Array(n), r1 = new Float64Array(n), dx = new Float64Array(n);
-    let err = resid(r0), J = null;
-    for(let it=0; it<12 && err > 1e-5; it++){
-      if(!J){ J = []; for(let i=0;i<n;i++) J.push(new Float64Array(n));
-        for(let j=0;j<n;j++){ const x0 = x[j], h = (x0 > 0.5 ? -1 : 1)*1e-3;
-          x[j] = clamp(x0 + h, 0, 1);
-          const hh = x[j] - x0;
-          if(hh === 0){ J = null; break; }
-          resid(r1);
-          for(let i=0;i<n;i++) J[i][j] = (r1[i] - r0[i])/hh;
-          x[j] = x0; }
-        if(!J) break;
-        resid(r0); }
-      if(!denseSolve(J, Float64Array.from(r0), dx, n)) break;
-      let step = 1, ok = false;
-      for(let t=0;t<6;t++){
-        for(let j=0;j<n;j++) x[j] = clamp(x[j] - step*dx[j], 0, 1);
-        const e2 = resid(r1);
-        if(e2 < err){ err = e2; r0.set(r1); ok = true; break; }
-        for(let j=0;j<n;j++) x[j] = clamp(x[j] + step*dx[j], 0, 1);
-        step /= 2; }
-      if(!ok) break;
-      J = null; }
-    setX();
-    for(let j=0;j<n;j++) seed[IX.boilerId[jb[j]]] = x[j];
-  }
-  for(let r=0;r<12;r++){
-    let moved = 0;
-    for(let b=0;b<nb;b++){ const w = want(b); if(!(w > 0)) continue;
-      const was = s.fregBy[b], tol = 1e-6*w;
-      const f = v => { s.fregBy[b] = v; feedAt(); return SX.netFeed[b] - w; };
-      const land = v => { s.fregBy[b] = v; moved = Math.max(moved, Math.abs(v - was)); };
-      let a = 0, fa, hi = 1, fb, side = 0;
-      const g = r ? was : seed[IX.boilerId[b]];
-      if(g !== undefined){
-        const f0 = f(g); if(Math.abs(f0) < tol){ land(g); continue; }
-        let d = 0.05;
-        if(f0 > 0){ a = g; fa = f0; hi = Math.min(g + d, 1); fb = f(hi);
-          while(fb > 0 && hi < 1){ d *= 2; hi = Math.min(hi + d, 1); fb = f(hi); } }
-        else { hi = g; fb = f0; a = Math.max(g - d, 0); fa = f(a);
-          while(fa < 0 && a > 0){ d *= 2; a = Math.max(a - d, 0); fa = f(a); } } }
-      else { fa = f(a); fb = f(hi); }
-      if(fa <= 0){ land(a); continue; }
-      if(fb >= 0){ land(hi); continue; }
-      for(let k=0;k<30;k++){
-        const c = (a*fb - hi*fa)/(fb - fa), fc = f(c);
-        if(Math.abs(fc) < tol){ a = hi = c; break; }
-        if(fc > 0){ a = c; fa = fc; if(side === 1) fb /= 2; side = 1; }
-        else { hi = c; fb = fc; if(side === -1) fa /= 2; side = -1; } }
-      land((a + hi)/2); }
-    if(moved < 1e-5) break; }
-  const keep = {};
-  for(let b=0;b<nb;b++){ keep[IX.boilerId[b]] = s.fregBy[b]; s.fregDemBy[b] = s.fregBy[b]; }
-  P.fregSeed = keep;
-  eSettleSolve();
+  const w = new Float64Array(nb);
+  for(let b=0;b<nb;b++) w[b] = s.steamBy[b] > 0 ? s.steamBy[b] : E_NAN;
+  eFeedFit(w);
+  for(let b=0;b<nb;b++){ s.fregDemBy[b] = s.fregBy[b]; s.sgFedBy[b] = SX.netFeed[b]; }
 }
 
 /* the condenser on the water that actually arrives, at the heat the shells actually send it */
@@ -354,8 +310,8 @@ function engSettle(){
     const S = SX.netSc;
     sc[SC_TURBP] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKP]/S[E_NS_TURBWKA] : eCondP();
     sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - eBleedPlant()); }
-  eSettleFeed();
   eSettleCond();
+  eSettleFeed();
   eCoreDialBoron();
   eAnnStep();
   eMassSeed();
@@ -367,7 +323,7 @@ function engSettle(){
   eCtlSeedOuts();
 }
 
-/* the commissioned plant put back exactly: the settle is a fixed-point walk that limit-cycles, so re-running it lands a different plant */
+/* the commissioned plant put back exactly: a re-run settle lands it only to its own tolerances */
 function engReset(){
   ePkSync();
   if(P.snap0 && P.dsig === designSig()) engRestore(P.snap0); else engSettle();

@@ -539,9 +539,8 @@ const eLedgerOut = () => { eLedgerA(0, 0); return E_LG[1]; };
 
 /* every unbooked node's mass off the settled field; a stub behind a shut gate seeds at its boundary's state */
 function eMassSeed(){
-  const n = PT.n.node, held = eNetHold(1);
-  eNetSolve(ST.pBy, 1); eNetReadP(ST.pBy);
-  eNetHold(held);
+  const n = PT.n.node;
+  eSettleSteady();
   for(let i=0;i<n;i++) if(!PT.nodeBooked[i]) ST.mBy[i] = PT.nodeFillStores[i]*PT.nodeVol[i]*eNodeRho(i);
   for(let q=0;q<PT.n.cond;q++){ const i = PT.condVes[q];
     if(i < 0 || !PT.condVac[q] || PT.nodeBooked[i]) continue;

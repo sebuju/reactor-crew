@@ -1,6 +1,6 @@
 "use strict";
 // exports: eNetRef E_REF_NOM E_REF_DRAWN E_REF_OPEN
-const E_REF_NOM = 0, E_REF_DRAWN = 1, E_REF_OPEN = 2, E_REF_PASSES = 20, E_REF_TOL = 1e-4;
+const E_REF_NOM = 0, E_REF_DRAWN = 1, E_REF_OPEN = 2;
 
 function eNetNomSwap(){
   let t = PT.edBore; PT.edBore = PT.edBoreNom; PT.edBoreNom = t;
@@ -20,19 +20,11 @@ function eRefState(mode, freg){
   for(let v=0;v<PT.n.relief;v++){ s.reliefOpen[v] = open; s.reliefBlocked[v] = 0; }
   for(let b=0;b<PT.n.boiler;b++) s.fregBy[b] = freg ? freg[b] : 0;
 }
-/* the reference field with every store held, relinearised until no edge moves more than E_REF_TOL of the largest; answers in SX.edQ and eNetReadEdges()'s rows. Commissioning only: engSettle() overwrites all of it */
-function eNetRef(mode, freg){
+/* the reference field, steady (eSettleSteady()), each feed valve fitted to pass want[b] when given; answers in SX.edQ and eNetReadEdges()'s rows. Commissioning only: engSettle() overwrites all of it */
+function eNetRef(mode, freg, want){
   eRefState(mode, freg);
-  const nom = mode === E_REF_NOM, held = eNetHold(1), prev = new Float64Array(PT.n.edge);
+  const nom = mode === E_REF_NOM;
   if(nom) eNetNomSwap();
-  try {
-    for(let pass=0;pass<E_REF_PASSES;pass++){
-      eSettleSolve();
-      const q = SX.edQ; let scale = 0, move = 0;
-      for(let e=0;e<q.length;e++){ const a = Math.abs(q[e]); if(a > scale) scale = a;
-        const d = Math.abs(q[e] - prev[e]); if(d > move) move = d; }
-      if(pass && move <= E_REF_TOL*Math.max(scale, 1e-9)) return pass + 1;
-      prev.set(q); }
-    return E_REF_PASSES;
-  } finally { if(nom) eNetNomSwap(); eNetHold(held); }
+  try { return want ? eFeedFit(want) : eSettleSteady(); }
+  finally { if(nom) eNetNomSwap(); }
 }
