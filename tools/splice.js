@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // node tools/splice.js [kind ...] | --list [--secs=N] [--seed=N] [--dice=on] [--dir=bare|fwd|rev] [--v]
 const M = require('./bundle').headless(
- '{commission,step,seedRng,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,LOG:()=>LOG,MACHINE:()=>MACHINE,ROLE:()=>ROLE,'+
+ '{commission,step,ST:()=>ST,SX:()=>SX,PT:()=>PT,IX:()=>IX,P:()=>P,D:()=>D,LAY:()=>LAY,LOG:()=>LOG,MACHINE:()=>MACHINE,ROLE:()=>ROLE,'+
  'buildLayout,plantPreset,mintMachine,mintTank,mintFitting,removePart,removeRun,'+
- 'seedPort,seedRun,runErr,portCell,partOf,pipeMap,runBoreMm,netTempAt,pumpIds,pumpHead,ledgerKg,ledgerOut,netSolve,netReadEdges,nodeKg}');
+ 'seedPort,seedRun,runErr,portCell,partOf,pipeMap,runBoreMm,pumpIds,pumpHead,eLedgerKg,eLedgerOut,eNodeT,eNodeX}');
 
 const D = M.D();
 const BASE = JSON.parse(JSON.stringify(D));
@@ -148,64 +148,49 @@ function build(kind, dir){
   return {notes};
 }
 
-/* What is being carried into the vessel, off node incidence alone. netReadEdges()'s own figure stands a HOT label down, and a part spliced into the cold leg renames the leg that lands on the core - a label a circulation figure may not read. */
-function coreKgs(sol){
-  const net = sol.net, q = sol.q, tankN = new Set();
-  for(const id in (net.tankNode || {})) tankN.add(net.tankNode[id]);
-  let kg = 0;
-  for(let e = 0; e < net.edges.length; e++){ const ed = net.edges[e];
-    if(tankN.has(ed.u) || tankN.has(ed.v)) continue;
-    const inU = net.coreSet.has(ed.u), inV = net.coreSet.has(ed.v);
-    if(inU === inV) continue;
-    const qin = inV ? q[e] : -q[e];
-    if(qin > 0) kg += qin;
-  }
-  return kg;
-}
+/* What the solve is carrying into the vessels, kg/s */
+function coreKgs(){ const x = M.SX().netCoreKg; let kg = 0; for(let c = 0; c < x.length; c++) kg += Math.max(0, x[c]); return kg; }
 
 function fly(kind, dir, opt){
   const b = build(kind, dir);
   if(b.err) return {err:b.err};
-  const s = M.S();
-  M.seedRng(s, opt.seed); s.diceOff = !opt.dice;
+  const sc = M.ST().sc;
+  sc[SC_SEED] = sc[SC_RNG] = opt.seed; sc[SC_DICEOFF] = opt.dice ? 0 : 1;
   let breach = false;
   /* every kilogram it holds plus every one it has named leaving, against the same sum one tick in: a case whose books do not close has not been measured, whatever its flow reads */
   M.step(0.02);
-  const M0 = M.ledgerKg(s) + M.ledgerOut(s);
-  for(let i = 1; i < opt.secs * 50; i++){ M.step(0.02); if(s.breach){ breach = true; break; } }
-  const res = M.ledgerKg(s) + M.ledgerOut(s) - M0;
-  const br = {};
-  const sol = M.netSolve(M.P().net, s);
-  M.netReadEdges(sol, null, br, null, {});
-  const flow = coreKgs(sol);
-  let burst = 0;
-  for(const k in br) if(/^break:/.test(k) && Math.abs(br[k]) > 1) burst += Math.abs(br[k]);
-  if(opt.v) dump(s, sol, br, kind, dir);
-  return {flow, P:s.P, Tavg:s.Tavg, burst, breach, res, notes:b.notes};
+  const M0 = M.eLedgerKg() + M.eLedgerOut();
+  for(let i = 1; i < opt.secs * 50; i++){ M.step(0.02); if(sc[SC_BREACH]){ breach = true; break; } }
+  const res = M.eLedgerKg() + M.eLedgerOut() - M0;
+  const flow = coreKgs();
+  let burst = 0; const nb = M.SX().netBrk;
+  for(let k = 0; k < nb.length; k++) if(Math.abs(nb[k]) > 1) burst += Math.abs(nb[k]);
+  if(opt.v) dump(kind, dir);
+  return {flow, P:sc[SC_P], Tavg:sc[SC_TAVG], burst, breach, res, notes:b.notes};
 }
 // what the solver itself says about the spliced part, so a red row is attributed and not guessed at
-function dump(s, sol, br, kind, dir){
-  const id = SPID(kind), net = sol.net;
-  console.log("## " + kind + " " + dir + "  inv " + f(s.inv, 1) + "%  breach " + !!s.breach);
+function dump(kind, dir){
+  const id = SPID(kind), ST = M.ST(), PT = M.PT(), IX = M.IX(), sc = ST.sc;
+  console.log("## " + kind + " " + dir + "  inv " + f(sc[SC_INV], 1) + "%  breach " + !!sc[SC_BREACH]);
   for(const e of M.LOG()) if(e.sev === "alarm") console.log("   t" + f(e.t, 1) + " " + e.msg + " -- " + e.why);
-  for(const k in br) if(Math.abs(br[k]) > 1) console.log("   run " + k + "  " + f(br[k], 1) + " kg/s");
-  for(let i = 0; i < net.n; i++) if(String(net.name[i]).indexOf(id) === 0)
-    console.log("   node " + net.name[i] + "  p " + f(sol.b[i], 3) + "  T " + f(M.netTempAt(s, net.name[i]), 1) +
-                "  x " + f(net.F.x[i], 3) + "  wet " + net.F.wet[i] + "  m " + f(M.nodeKg(s,net.name[i]), 1));
-  for(let e = 0; e < net.edges.length; e++){ const ed = net.edges[e];
-    if(String(net.name[ed.u]).indexOf(id) !== 0 && String(net.name[ed.v]).indexOf(id) !== 0) continue;
-    console.log("   edge " + ed.kind + " " + (ed.key || "-") + "  " + net.name[ed.u] + " -> " + net.name[ed.v] +
-                "  C " + f(ed.C ? ed.C(s) : ed.Cv, 4) + "  q " + f(sol.q[e], 1)); }
+  for(let k = 0; k < IX.brkId.length; k++){ const w = M.SX().netBrk[k]; if(Math.abs(w) > 1) console.log("   break " + IX.brkId[k] + "  " + f(w, 1) + " kg/s"); }
+  const has = i => ST.hBy[i] === ST.hBy[i];
+  for(let i = 0; i < PT.n.node; i++) if(String(IX.nodeId[i]).indexOf(id) === 0)
+    console.log("   node " + IX.nodeId[i] + "  p " + f(ST.pBy[i], 3) + "  T " + (has(i) ? f(M.eNodeT(i), 1) : "-") +
+                "  x " + (has(i) ? f(M.eNodeX(i), 3) : "-") + "  m " + f(ST.mBy[i], 1));
+  for(let e = 0; e < PT.n.edge; e++){ const u = PT.edU[e], v = PT.edV[e];
+    if(String(IX.nodeId[u]).indexOf(id) !== 0 && String(IX.nodeId[v]).indexOf(id) !== 0) continue;
+    console.log("   edge " + PT.edCk[e] + " " + (PT.edKey[e] >= 0 ? IX.keyId[PT.edKey[e]] : "-") + "  " + IX.nodeId[u] + " -> " + IX.nodeId[v] +
+                "  C0 " + f(PT.edC0[e], 4) + "  kg/s " + f(ST.edgeKg[e]/0.02, 1)); }
   const hi = [];
-  for(let i = 0; i < net.n; i++) hi.push([sol.b[i], net.name[i]]);
+  for(let i = 0; i < PT.n.node; i++) hi.push([ST.pBy[i], IX.nodeId[i]]);
   hi.sort((a, b) => b[0] - a[0]);
   console.log("   top p  " + hi.slice(0, 5).map(h => h[1] + " " + f(h[0], 2)).join("  "));
-  console.log("   pumps  " + M.pumpIds().map(id => id + " " + f(M.pumpHead(id), 2) + " MPa x" + f((s.flowBy && s.flowBy[id]) || 0, 2)).join("  "));
+  console.log("   pumps  " + M.pumpIds().map((pid, p) => pid + " " + f(M.pumpHead(pid), 2) + " MPa x" + f(ST.flowBy[p] || 0, 2)).join("  "));
   const PM = M.pipeMap();
   for(const key in PM.byKey){ const r = PM.byKey[key];
     console.log("   run " + key + "  kind " + r.k + "  bore " + f(M.runBoreMm(r), 1) + " mm  L " + f(r.L, 1) + " m"); }
 }
-
 /* What "the loop survives" means, and the whole point of the sweep: the core is still being circulated, at a pressure and a temperature the reference plant would recognise, with nothing let go. */
 const FLOW_MIN = 0.5, P_TOL = 0.25, T_TOL = 25, LEDGER_TOL = 1;
 function verdict(r, base, why0){

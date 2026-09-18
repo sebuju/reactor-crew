@@ -22,7 +22,7 @@ return {
       cols(){ const ci=M.nodeGraph().coreCirc;
         return {P:colP(ci), live:colHold(ci), lvl:COL.lvl, inv:COL.inv,
                 Tavg:COL.Tavg, sc:COL.sc, mwe:COL.mwe}; },
-      at:{20:s=>{ s.tankByp = s.tankByp||{}; for(const id of M.holdTankIds()) s.tankByp[id]=true; }}};
+      at:{20:()=>{ for(const id of M.holdTankIds()) if(!M.ST().tankByp[M.uiIx("tank",id)]) M.actId("tankByp",id); }}};
   },
 
   twoHolds(){
@@ -86,7 +86,7 @@ return {
         for(const id of M.holdTankIds()) D.tanks[id].vol = v;
         return {};
       },
-      at:{10:s=>{ s.loadDem=0.5; }},
+      at:{10:()=>{ M.act("loadDem",0.5); }},
       cols(){ const ci=M.nodeGraph().coreCirc;
         return {vol:{dp:0,f:()=>D.tanks[M.holdTankIds()[0]].vol},
                 pzrK:{dp:3,f:()=>M.P().pzrK}, P:colP(ci), lvl:COL.lvl,

@@ -4,7 +4,7 @@ const fs = require('fs'), path = require('path');
 const { ROOT, scriptPaths } = require('./bundle');
 
 const SIMONLY = p =>
-  p === 'src/core/text.js' || p.startsWith('src/data/') || p.startsWith('src/sim/');
+  p === 'src/core/text.js' || p.startsWith('src/data/') || p.startsWith('src/sim/') || p.startsWith('src/eng/');
 
 const files = scriptPaths().filter(SIMONLY);
 if (!files.length) throw new Error('no sim files found in index.html');

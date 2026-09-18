@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // node --expose-gc tools/ticktime.js [pre] [ticks] - without --expose-gc the heap figure is GC timing
 const { headless } = require('./bundle');
-const M = headless('{PLANTPRE:()=>PLANTPRE,plantPreset,buildLayout,commission,S:()=>S,step}');
+const M = headless('{PLANTPRE:()=>PLANTPRE,plantPreset,buildLayout,commission,ST:()=>ST,step}');
 const argv = process.argv.slice(2).filter(a => !a.startsWith('--'));
 const pre = +(argv[0] || 0), N = +(argv[1] || 3000);
 const { performance: perf } = require('perf_hooks');
 let t0 = perf.now(); M.plantPreset(pre); M.buildLayout(); M.commission(); const tc = perf.now() - t0;
-M.S().diceOff = true;
+M.ST().sc[SC_DICEOFF] = 1;
 for (let k = 0; k < 200; k++) M.step(0.02);
 if (global.gc) global.gc();
 const mem0 = process.memoryUsage().heapUsed;

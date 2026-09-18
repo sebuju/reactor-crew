@@ -11,39 +11,34 @@ function cellOf(M, nid){
 }
 
 exports.open = (M, key, spec, opt) => {
-  const net = M.P().net;
+  const PT = M.PT(), IX = M.IX(), ST = M.ST(), SX = M.SX();
   const name = key + (opt.events.length ? "+evt" : "");
-  const s0 = M.S();
-  const sol = M.netSolve(net, s0);
   const T = {
     profile: key, name, title: spec.name,
     secs: opt.secs, every: opt.every, seed: opt.seed, dice: opt.dice,
     events: opt.events.map(e => ({t:e.t, kind:e.kind, arg:e.arg})),
     nodes: [], edges: [], samples: []
   };
-  for(let i=0;i<net.n;i++) T.nodes.push({
-    name: net.name[i], z: r(net.z[i], 3), vol: r(net.vol[i], 4),
-    comp: net.comp[i], vapour: net.vapour[i] ? 1 : 0,
-    fixed: sol.fixed.has[i] ? 1 : 0, at: cellOf(M, net.name[i])});
-  for(const ed of net.edges)
-    T.edges.push({u: ed.u, v: ed.v, key: ed.key || null, kind: ed.kind || null});
+  for(let i=0;i<PT.n.node;i++) T.nodes.push({
+    name: IX.nodeId[i], z: r(PT.nodeZ[i], 3), vol: r(PT.nodeVol[i], 4),
+    comp: PT.nodeComp[i], vapour: PT.nodeVapour[i] ? 1 : 0,
+    fixed: SX.fixHas[i] ? 1 : 0, at: cellOf(M, IX.nodeId[i])});
+  for(let e=0;e<PT.n.edge;e++)
+    T.edges.push({u: PT.edU[e], v: PT.edV[e], key: PT.edKey[e] >= 0 ? IX.keyId[PT.edKey[e]] : null, kind: PT.edCk[e]});
 
   return {
-    sample(s, t){
-      const sol2 = M.netSolve(net, s), P = M.netPressures(s);
-      const row = {t: r(t,2), p: [], T: [], q: [], on: [],
-                   dmg: (s.dmgParts||[]).slice(),
-                   shut: Object.keys(s.portShut||{}).filter(k=>s.portShut[k])};
-      for(let i=0;i<net.n;i++){
-        const nid = net.name[i];
-        row.p.push(P[nid] === undefined ? null : r(P[nid], 4));
-        let tv = null; try{ tv = M.netTempAt(s, nid); }catch(e){ tv = null; }
-        row.T.push(r(tv, 1));
+    sample(t){
+      const row = {t: r(t,2), p: [], T: [], q: [], on: [], dmg: [], shut: []};
+      for(let a=0;a<ST.dmgBy.length;a++) if(ST.dmgBy[a]) row.dmg.push(IX.partId[a]);
+      for(let o=0;o<ST.portShut.length;o++) if(ST.portShut[o]) row.shut.push(IX.portId[o]);
+      for(let i=0;i<PT.n.node;i++){
+        const has = ST.hBy[i] === ST.hBy[i];
+        row.p.push(r(ST.pBy[i], 4));
+        row.T.push(has ? r(M.eNodeT(i), 1) : null);
       }
-      for(let e=0;e<net.edges.length;e++){
-        const ed = net.edges[e], g = typeof ed.g === "function" ? ed.g(s) : ed.g;
-        row.q.push(r(sol2.q[e], 4));
-        row.on.push(g > 0 ? 1 : 0);
+      for(let e=0;e<PT.n.edge;e++){
+        row.q.push(r(ST.edgeKg[e]/0.02, 4));
+        row.on.push(SX.gLive[e] ? 1 : 0);
       }
       T.samples.push(row);
     },

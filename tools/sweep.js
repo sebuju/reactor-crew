@@ -9,7 +9,7 @@ const DICE = process.env.SWEEP_DICE !== "off";
 
 if(!isMainThread){
   const M = require("./bundle").headless(
-    "{commission,step,derived,S:()=>S,D:()=>D,archPreset,coreD,buildLayout,plantPreset,seedRng}");
+    "{commission,step,derived,ST:()=>ST,D:()=>D,archPreset,coreD,buildLayout,plantPreset,uiTripText}");
   const D = M.D(), BASE = JSON.parse(JSON.stringify(D));
 
   const set = o => { Object.assign(D, BASE);
@@ -18,17 +18,17 @@ if(!isMainThread){
     for(const k in o) (["fuel","scram","cool","foll","refl","mod"].includes(k) ? M.coreD("core") : D)[k]=o[k];
     M.buildLayout(); M.commission();
     // after commission(), because that is where resetPlant() rolls its own
-    const s = M.S(); M.seedRng(s, SEED); s.diceOff = !DICE; return s; };
-  const run = (s,secs) => { for(let i=0;i<secs*50;i++){ M.step(0.02); if(s.breach) break; } return s; };
+    const s = M.ST().sc; s[SC_SEED] = s[SC_RNG] = SEED; s[SC_DICEOFF] = DICE ? 0 : 1; return s; };
+  const run = (s,secs) => { for(let i=0;i<secs*50;i++){ M.step(0.02); if(s[SC_BREACH]) break; } return s; };
 
-  const endState = s => [s.n,s.Tf,s.dnbr,s.rodPos,s.boron,s.P,s.vf,s.t]
+  const endState = s => [s[SC_N],s[SC_TF],s[SC_DNBR],s[SC_RODPOS],s[SC_BORON],s[SC_P],s[SC_VF],s[SC_T]]
     .map(v => Number(v).toPrecision(17)).join(",");
 
   // scram is simulated once: P.scram is read only on a plant that trips, and `guard` rechecks that
   const group = c => {
     const s = set({arch:c.a, fuel:c.f, scram:c.built[0], autorod:true});
     run(s, SECS);
-    const r = { i:c.i, scram:c.built[0], trip: s.scrammed ? s.trip : null, t:s.t };
+    const r = { i:c.i, scram:c.built[0], trip: s[SC_SCRAMMED] ? M.uiTripText() : null, t:s[SC_T] };
     if(c.guard) r.guard = c.built.map(sc => {
       const g = set({arch:c.a, fuel:c.f, scram:sc, autorod:true});
       run(g, SECS); return endState(g); });

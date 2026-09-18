@@ -2,14 +2,13 @@
 // node tools/sandbox/sandbox.js [profile ...] --list --secs=N --every=N --seed=N --dice=off --trace --shut=T:portId --hit=T:partId --burst=T:x,y --blackout=T --scram=T --blkoff=T:sink
 const {headless} = require('../bundle');
 const M = headless(
- '{commission,resetPlant,step,derived,S:()=>S,P:()=>P,D:()=>D,LAY:()=>LAY,'+
+ '{commission,resetPlant,step,derived,ST:()=>ST,SX:()=>SX,PT:()=>PT,IX:()=>IX,SCHEMA:()=>SCHEMA,P:()=>P,D:()=>D,LAY:()=>LAY,'+
  'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,'+
- 'buildLayout,buildStockPlumbing,plantPreset,pipeMap,pipeNetwork,nodeGraph,runIdOf,blkSinkOff,'+
- 'tankCircuit,tankPrimary,tankIds,tankKg,tankLvl,tankP,tankLive,partOf,partName,'+
- 'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdLive,holdPlumbed,loopP,setLoopP,'+
- 'netTempAt,netQualAt,mwE,loopKg,secP,sgIds,sgLvl,circName,ROLE:()=>ROLE,'+
- 'netKgs,radIds,invRate,tankMass,layoutMetrics,designIssues,'+
- 'act,seedRng,netSolve,netPressures,netField,netFlowK,netReading,partWrecked,portWrecked}');
+ 'buildLayout,buildStockPlumbing,plantPreset,pipeMap,pipeNetwork,nodeGraph,runIdOf,'+
+ 'tankCircuit,tankPrimary,tankIds,tankKg,partOf,partName,'+
+ 'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdPlumbed,sgIds,circName,ROLE:()=>ROLE,'+
+ 'radIds,tankMass,layoutMetrics,designIssues,act,actId,'+
+ 'eMWe,eLoopP,eHoldLive,eNodeT,uiIx,uiTankLvl,uiTankP,uiNodeT,uiNodeX,uiNodeP,uiSecP,uiBlkSinkOff}');
 
 const D = M.D();
 const BASE = JSON.parse(JSON.stringify(D));
@@ -45,63 +44,60 @@ const RIG = {
     M.buildLayout(); return id; },
 };
 
-// [path, value] written onto S before every tick; dotted paths, one level only
+// [path, value] written onto the state before every tick: a plant scalar by name (and every core's own copy, where it has one), or "field.id"
 let CLAMPS = [];
-const clampSet = (s, path, val) => {
-  const v = typeof val === "function" ? val(s) : val;
+const clampSet = (path, val) => {
+  const ST = M.ST(), IX = M.IX();
+  const v = typeof val === "function" ? val() : val;
   if(v === undefined) return;
   const i = path.indexOf(".");
-  if(i < 0){ s[path] = v; return; }
-  const o = s[path.slice(0,i)];
-  if(o) o[path.slice(i+1)] = v;
+  if(i < 0){
+    const k = globalThis["SC_" + path.toUpperCase()];
+    if(k !== undefined) ST.sc[k] = v;
+    const cs = ST["cs" + path[0].toUpperCase() + path.slice(1)];
+    if(cs && cs.length === M.PT().n.core) cs.fill(v);
+    return; }
+  const field = path.slice(0, i), id = path.slice(i + 1), row = M.SCHEMA().find(r => r[0] === field);
+  if(!row || !ST[field]) return;
+  const m = IX[row[2]], j = m && m.has(id) ? m.get(id) : -1;
+  if(j >= 0) ST[field][j] = v;
 };
 const clamp_ = (path, v) => CLAMPS.push([path, v]);
+const sc = () => M.ST().sc;
 
 const COL = {
-  t:      {dp:1, f:(s,t)=>t},
-  P:      {dp:3, f:s=>s.P},
-  lvl:    {dp:1, f:s=>s.lvl},
-  inv:    {dp:2, f:s=>s.inv},
-  Tavg:   {dp:1, f:s=>s.Tavg},
-  sc:     {dp:1, f:s=>s.sc},
-  mwe:    {dp:1, f:s=>M.mwE(s)},
-  n:      {dp:3, f:s=>s.n},
-  vf:     {dp:3, f:s=>s.vf},
-  rel:    {dp:4, f:s=>s.release},
-  brk:    {dp:0, f:s=>s.breach?1:0},
+  t:      {dp:1, f:t=>t},
+  P:      {dp:3, f:()=>sc()[SC_P]},
+  lvl:    {dp:1, f:()=>sc()[SC_LVL]},
+  inv:    {dp:2, f:()=>sc()[SC_INV]},
+  Tavg:   {dp:1, f:()=>sc()[SC_TAVG]},
+  sc:     {dp:1, f:()=>sc()[SC_SC]},
+  mwe:    {dp:1, f:()=>M.eMWe()},
+  n:      {dp:3, f:()=>sc()[SC_N]},
+  vf:     {dp:3, f:()=>sc()[SC_VF]},
+  rel:    {dp:4, f:()=>sc()[SC_RELEASE]},
+  brk:    {dp:0, f:()=>sc()[SC_BREACH]?1:0},
 };
-const colP    = ci => ({dp:3, f:s=>M.loopP(s,ci)});
-const colTank = id => ({dp:1, f:s=>M.tankLvl(s,id)});
-const colTankP= id => ({dp:3, f:s=>M.tankP(s,id)});
-const colRate = id => ({dp:4, f:s=>(s.tankRate&&s.tankRate[id])||0});
-const colNodeT= n  => ({dp:1, f:s=>M.netTempAt(s,n)});
-const colNodeX= n  => ({dp:3, f:s=>M.netQualAt(s,n)});
-const colNodeP= n  => ({dp:4, f:s=>{ const o=M.netPressures(s); return o[n]===undefined?null:o[n]; }});
-const colSgT  = id => ({dp:1, f:s=>s.sgTBy&&s.sgTBy[id]});
-const colSecP = id => ({dp:3, f:s=>M.secP(s,id)});
-const colHold = ci => ({dp:0, f:s=>M.holdLive(M.P().net,s,ci)?1:0});
-// kg/s out of the tank: s.tankRate is a percentage of loop inventory, which is 0 on a rig with no loop
-const colTankQ = id => ({dp:4, f:s=>{ const net = M.P().net;
-  const i = net && net.tankNode && net.tankNode[id];
-  if(i === undefined || i === null) return null;
-  const sol = M.netSolve(net, s);
-  let q = 0;
-  for(let e=0;e<net.edges.length;e++){ const ed = net.edges[e];
-    if(ed.u === i) q += sol.q[e]; else if(ed.v === i) q -= sol.q[e]; }
-  return q; }});
+const colP    = ci => ({dp:3, f:()=>M.eLoopP(ci)});
+const colTank = id => ({dp:1, f:()=>M.uiTankLvl(id)});
+const colTankP= id => ({dp:3, f:()=>M.uiTankP(id)});
+const colRate = id => ({dp:4, f:()=>{ const t=M.uiIx("tank",id); return t<0?0:M.ST().tankRate[t]; }});
+const colNodeT= n  => ({dp:1, f:()=>M.uiNodeT(n)});
+const colNodeX= n  => ({dp:3, f:()=>M.uiNodeX(n)});
+const colNodeP= n  => ({dp:4, f:()=>{ const v=M.uiNodeP(n); return v===undefined?null:v; }});
+const colSgT  = id => ({dp:1, f:()=>{ const b=M.uiIx("boiler",id); return b<0?null:M.ST().sgTBy[b]; }});
+const colSecP = id => ({dp:3, f:()=>M.uiSecP(id)});
+const colHold = ci => ({dp:0, f:()=>M.eHoldLive(ci)?1:0});
+// kg/s out of the tank, off the solve's own tank edge
+const colTankQ = id => ({dp:4, f:()=>{ const t=M.uiIx("tank",id); return t<0?null:M.SX().netTankQ[t]; }});
 const colNet = {
-  nodes: {dp:0, f:()=>{ const n=M.P().net; return n?n.n:0; }},
-  edges: {dp:0, f:()=>{ const n=M.P().net; return n?n.edges.length:0; }},
-  comps: {dp:0, f:()=>{ const n=M.P().net; return n?n.nComp:0; }},
-  live:  {dp:0, f:s=>{ const n=M.P().net; if(!n) return 0; let c=0;
-    for(const ed of n.edges){ const g = typeof ed.g==="function"?ed.g(s):ed.g; if(g>0) c++; }
-    return c; }},
-  flowK: {dp:4, f:s=>M.netFlowK(s, null, null, {noNat:true})},
-  nat:   {dp:4, f:s=>s.nat},
-  maxQ:  {dp:6, f:s=>{ const n=M.P().net; if(!n) return 0;
-    const sol = M.netSolve(n, s); let m = 0;
-    for(let e=0;e<sol.q.length;e++) if(Math.abs(sol.q[e]) > m) m = Math.abs(sol.q[e]);
-    return m; }},
+  nodes: {dp:0, f:()=>M.PT().n.node},
+  edges: {dp:0, f:()=>M.PT().n.edge},
+  comps: {dp:0, f:()=>M.PT().compCirc.length},
+  live:  {dp:0, f:()=>{ const g=M.SX().gLive; let c=0; for(let e=0;e<g.length;e++) if(g[e]) c++; return c; }},
+  flowK: {dp:4, f:()=>sc()[SC_FLOWNET]},
+  nat:   {dp:4, f:()=>sc()[SC_NAT]},
+  maxQ:  {dp:6, f:()=>{ const k=M.ST().edgeKg; let m=0; for(let e=0;e<k.length;e++) if(Math.abs(k[e])>m) m=Math.abs(k[e]); return m/0.02; }},
 };
 
 const fmt = (v,dp) => (v===null||v===undefined||Number.isNaN(v)) ? ""
@@ -131,10 +127,10 @@ const fireEvent = e => {
   console.log("# t="+e.t.toFixed(1)+" "+e.kind+" "+e.arg);
   if(e.kind === "blackout") M.act("blackout", true);
   else if(e.kind === "scram") M.act("scram");
-  else if(e.kind === "blkoff") M.blkSinkOff(M.S(), e.arg);
-  else if(e.kind === "shut") M.act("portShut", e.arg);
-  else if(e.kind === "hit")  M.act("hit", e.arg);
-  else if(e.kind === "burst")M.act("hit", "pipe:"+e.arg);
+  else if(e.kind === "blkoff") M.uiBlkSinkOff(e.arg);
+  else if(e.kind === "shut") M.actId("portShut", e.arg);
+  else if(e.kind === "hit")  M.actId("hit", e.arg);
+  else if(e.kind === "burst")M.actId("hit", "pipe:"+e.arg);
 };
 
 // the reseed is after commission() because that is where resetPlant() rolls its own
@@ -143,10 +139,10 @@ function setup(spec, v, opt){
   CLAMPS = [];
   const note = spec.build(RIG, v) || {};
   M.buildLayout(); M.commission();
-  const s = M.S();
-  M.seedRng(s, opt.seed);
-  s.diceOff = opt.dice === false;
-  return {s, note};
+  const S = sc();
+  S[SC_SEED] = S[SC_RNG] = opt.seed;
+  S[SC_DICEOFF] = opt.dice === false ? 1 : 0;
+  return {note};
 }
 
 // a profile with a `sweep` prints one settled row per value; everything else a time series
@@ -157,23 +153,21 @@ function flyOne(key, opt){
     console.log("# "+spec.name);
     let names = null;
     for(const v of spec.sweep){
-      const {s} = setup(spec, v, opt);
+      setup(spec, v, opt);
       const C = spec.cols(), n = Math.round(opt.secs*50);
       if(!names){ names = Object.keys(C); console.log(names.join(",")); }
       let ei = 0;
       for(let i=0;i<n;i++){
-        for(const [p,val] of CLAMPS) clampSet(s,p,val);
+        for(const [p,val] of CLAMPS) clampSet(p,val);
         while(ei < evs.length && evs[ei].t <= i/50) fireEvent(evs[ei++]);
-        if(spec.at && spec.at[i/50]) spec.at[i/50](s);
-        M.step(0.02); if(s.breach) break;
+        if(spec.at && spec.at[i/50]) spec.at[i/50]();
+        M.step(0.02); if(sc()[SC_BREACH]) break;
       }
-      M.netReading(true);
-      try { console.log(names.map(k=>fmt(C[k].f(s, opt.secs), C[k].dp)).join(",")); }
-      finally { M.netReading(false); }
+      console.log(names.map(k=>fmt(C[k].f(opt.secs), C[k].dp)).join(","));
     }
     return;
   }
-  const {s, note} = setup(spec, undefined, opt);
+  const {note} = setup(spec, undefined, opt);
   const C = Object.assign({t:COL.t}, spec.cols());
   const names = Object.keys(C);
   const TR = opt.trace ? require('./trace').open(M, key, spec, opt) : null;
@@ -184,20 +178,17 @@ function flyOne(key, opt){
   const n = Math.round(opt.secs*50), step = Math.max(1, Math.round(opt.every*50));
   let ei = 0;
   for(let i=0;i<=n;i++){
-    for(const [p,v] of CLAMPS) clampSet(s,p,v);
+    for(const [p,v] of CLAMPS) clampSet(p,v);
     while(ei < evs.length && evs[ei].t <= i/50) fireEvent(evs[ei++]);
-    if(spec.at && spec.at[i/50]) spec.at[i/50](s);
+    if(spec.at && spec.at[i/50]) spec.at[i/50]();
     if(i%step===0){
-      M.netReading(true);
-      try {
-        if(TR) TR.sample(s, i/50);
-        else console.log(names.map(k=>{ const c=C[k];
-          let v; try{ v=c.f(s,i/50); }catch(e){ v=NaN; }
-          return fmt(typeof v==="boolean"?(v?1:0):v, c.dp); }).join(","));
-      } finally { M.netReading(false); }
+      if(TR) TR.sample(i/50);
+      else console.log(names.map(k=>{ const c=C[k];
+        let v; try{ v=c.f(i/50); }catch(e){ v=NaN; }
+        return fmt(typeof v==="boolean"?(v?1:0):v, c.dp); }).join(","));
     }
     if(i<n) M.step(0.02);
-    if(s.breach){ if(!TR) console.log("# breach at t="+(i/50).toFixed(1)); break; }
+    if(sc()[SC_BREACH]){ if(!TR) console.log("# breach at t="+(i/50).toFixed(1)); break; }
   }
   if(TR) console.log("# wrote "+TR.close());
 }
