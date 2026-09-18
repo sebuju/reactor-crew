@@ -58,7 +58,22 @@ function pump(){
   pumpNext();
 }
 
-function liveBegin(msg){
+let simBase = "";
+const wasmAsked = () => new URLSearchParams(self.location.search).get("engine") === "wasm";
+
+/* the plant is commissioned in JS and handed to the engine once; a failure says so on the log and the plant runs on JS */
+async function wasmBegin(){
+  try{
+    await WasmEngine.live(await WasmEngine.fetchBytes(simBase + WasmEngine.PKG));
+    logE("info", "WASM ENGINE", "This plant is marching on the Rust engine.");
+  }catch(err){
+    WasmEngine.stop();
+    logE("alarm", "WASM ENGINE FAILED", "The Rust engine did not start (" + String((err && err.message) || err) + "). This plant is marching on the JS engine.");
+  }
+}
+
+async function liveBegin(msg){
+  WasmEngine.stop();
   if(!recApplyHead(msg.head)) throw new Error("design did not rebuild identically");
   commission();
   /* a snapshot IS the plant: it lands after commission() and before the root, dumpApply()'s own order */
@@ -80,6 +95,7 @@ function liveBegin(msg){
   }; })(sample);
   TR.rate = msg.rate === undefined ? 1 : msg.rate;
   TR.paused = !!msg.paused;
+  if(wasmAsked()) await wasmBegin();
   pumpOn = true; pumpPrev = wNow();
   pump();
 }
@@ -118,7 +134,7 @@ self.onmessage = function(e){
   const msg = e.data || {};
   try{
     if(msg.t === "init"){
-      const n = loadSim(msg.base);
+      simBase = msg.base; const n = loadSim(msg.base);
       ready = true;
       self.postMessage({t:"ready", files:n});
       return;
@@ -131,7 +147,10 @@ self.onmessage = function(e){
       self.postMessage({t:"done", take:r.take, verdict:r.verdict, endS:snapS(S)});
       return;
     }
-    if(msg.t === "live"){ liveBegin(msg); self.postMessage({t:"liveok", tick:S.tick}); return; }
+    if(msg.t === "live"){
+      liveBegin(msg).then(() => self.postMessage({t:"liveok", tick:S.tick, engine:WasmEngine.isLive() ? "wasm" : "js"}),
+        err => self.postMessage({t:"err", msg:String((err && err.message) || err)}));
+      return; }
     /* every input still goes through act(): posting one across a thread is transport, not a second dispatch */
     if(msg.t === "act"){ act.apply(null, [msg.k].concat(msg.a || [])); return; }
     if(msg.t === "rate"){

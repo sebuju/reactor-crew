@@ -553,7 +553,7 @@ function simSpawn(opt, onFail){
     if(m.t === "ready"){ clearTimeout(timer);
       w.postMessage({t:"live", head:recHead(), seed:((opt&&opt.seed)||0)>>>0,
                      diceOff:!!(opt&&opt.diceOff), rate:TR.rate, paused:TR.paused}); }
-    else if(m.t === "liveok"){ sim.live = true; if(opt && opt.onLive) opt.onLive(id); }
+    else if(m.t === "liveok"){ sim.live = true; sim.engine = m.engine; if(opt && opt.onLive) opt.onLive(id); }
     else if(m.t === "packet"){ sim.pending = false; if(m.jump) simSeekDone(sim);
       if(SIMBOUND === id) simApply(m); }
     else if(m.t === "bench"){ TR.tickMs = m.tickMs; TR.rateMax = m.rateMax; trRateFit(); }

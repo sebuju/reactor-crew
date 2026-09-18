@@ -34,9 +34,9 @@ function urlApply(){
   const tsRaw = q.get("timescale"), tsNum = tsRaw && Number(tsRaw.replace(/x$/i,""));
   if(tsNum>0) trRate(tsNum);
   else { const ts = pick("timescale",urlRateRows()); if(ts) trRate(ts.v); }
-  // the wasm engine is ingest+digest only until its tick is whole; the probe
+  // `engine=wasm` marches the live plant in the worker; `engine=wasm-parity` is the step probe, which
   // reports via window.__wasmParity and never touches the JS sim underneath.
-  if(q.get("engine")==="wasm" && typeof WasmEngine!=="undefined")
+  if(q.get("engine")==="wasm-parity" && typeof WasmEngine!=="undefined")
     WasmEngine.parityBoot(WasmEngine.ASSETS);
 }
 

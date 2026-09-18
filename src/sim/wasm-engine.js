@@ -1,17 +1,11 @@
 "use strict";
 
-/* Loader for the Rust sim (`sim-rs`, `sim_rs.wasm`). Classic script, one
-   global. `?engine=wasm` runs the step parity probe (`parityBoot`): ingest a
-   preset, freeze its tables, step it, and match the native digest per tick. */
+/* Loader for the Rust sim (`sim-rs`, `sim_rs.wasm`). Classic script, one global.
+   `live()` hands it the commissioned plant and `step()` then marches S through it: S and its sidecars
+   go in before every tick and come back after, so everything that reads S is unchanged.
+   `?engine=wasm-parity` runs the step parity probe (`parityBoot`) against native digests. */
 
 var WasmEngine = (function(){
-  // ingest allocates maps/vecs for the whole S0; the inputs sit HIGH so
-  // they never overlap static data or the allocator's heap (which grow up
-  // from `__heap_base`). Found the hard way: a dump at [0,len) eats dlmalloc
-  // metadata and `sim_ingest` traps in `read_sec_meta`.
-  var HEAP_RESERVE = 64 * 1024 * 1024;
-  var PAGE = 65536;
-
   function u64hex(v){
     var b = typeof v === "bigint" ? v : BigInt(v);
     if(b < 0n) b += 1n << 64n;
@@ -33,6 +27,29 @@ var WasmEngine = (function(){
     return new Uint8Array(await r.arrayBuffer());
   }
 
+  async function instantiate(wasmBytes, sink){
+    var mod = await WebAssembly.compile(wasmBytes);
+    checkImports(mod);
+    var inst = null;
+    var env = {
+      log_event: function(sev, code, a, b){ sink.logEvents.push({sev:sev, code:code, a:a, b:b}); },
+      console_warn: function(ptr, len){
+        var mem = new Uint8Array(inst.exports.memory.buffer);
+        sink.warnings.push(new TextDecoder().decode(mem.subarray(ptr, ptr + len)));
+      },
+    };
+    inst = await WebAssembly.instantiate(mod, {env: env});
+    return inst.exports;
+  }
+
+  /* bytes go through the engine's own buffer (`sim_in`), so they can never overlap its heap; the view is
+     taken after the call because the call may grow memory */
+  function put(ex, bytes){
+    var at = ex.sim_in(bytes.length);
+    new Uint8Array(ex.memory.buffer).set(bytes, at);
+    return at;
+  }
+
   // opts: {wasmURL, dumpURL, freezeURL, steps, dt}. Returns {consumed,
   // frozen, digest, ticks, warnings, logEvents}: `digest` is S0's, `ticks`
   // one digest per step.
@@ -40,29 +57,12 @@ var WasmEngine = (function(){
     var wasmBytes = await fetchBytes(opts.wasmURL);
     var dump = await fetchBytes(opts.dumpURL);
     var frz = await fetchBytes(opts.freezeURL);
-    var mod = await WebAssembly.compile(wasmBytes);
-    checkImports(mod);
-    var warnings = [], logEvents = [], inst = null;
-    var env = {
-      log_event: function(sev, code, a, b){ logEvents.push({sev:sev, code:code, a:a, b:b}); },
-      console_warn: function(ptr, len){
-        var mem = new Uint8Array(inst.exports.memory.buffer);
-        warnings.push(new TextDecoder().decode(mem.subarray(ptr, ptr + len)));
-      },
-    };
-    inst = await WebAssembly.instantiate(mod, {env: env});
-    var ex = inst.exports, mem = ex.memory;
-    var need = HEAP_RESERVE + dump.length + frz.length;
-    if(mem.buffer.byteLength < need)
-      mem.grow(Math.ceil((need - mem.buffer.byteLength) / PAGE));
-    var atDump = mem.buffer.byteLength - dump.length;
-    var atFrz = atDump - frz.length;
-    new Uint8Array(mem.buffer).set(dump, atDump);
-    new Uint8Array(mem.buffer).set(frz, atFrz);
-    var consumed = ex.sim_ingest(atDump, dump.length);
-    if(!consumed) throw new Error("wasm engine: sim_ingest rejected the dump (want np==1 ver<=2)");
+    var sink = {warnings: [], logEvents: []};
+    var ex = await instantiate(wasmBytes, sink);
+    var consumed = ex.sim_ingest(put(ex, dump), dump.length);
+    if(!consumed) throw new Error("wasm engine: sim_ingest rejected the dump (want np==1, a known format)");
     var digest = u64hex(ex.sim_digest());
-    var frozen = ex.sim_freeze(atFrz, frz.length);
+    var frozen = ex.sim_freeze(put(ex, frz), frz.length);
     if(!frozen) throw new Error("wasm engine: sim_freeze rejected the tables (magic/version)");
     var ticks = [];
     for(var t = 0; t < opts.steps; t++){
@@ -70,10 +70,10 @@ var WasmEngine = (function(){
       ticks.push(u64hex(ex.sim_digest()));
     }
     return {consumed: consumed, frozen: frozen, digest: digest, ticks: ticks,
-            warnings: warnings, logEvents: logEvents};
+            warnings: sink.warnings, logEvents: sink.logEvents};
   }
 
-  // `?engine=wasm` probe: step the served preset-0 dump in-browser and
+  // `?engine=wasm-parity` probe: step the served preset-0 dump in-browser and
   // compare every digest against expected.json. Reports via
   // `window.__wasmParity` and the document title; never touches the JS sim.
   async function parityBoot(base){
@@ -100,6 +100,51 @@ var WasmEngine = (function(){
     return rep;
   }
 
-  return {load: load, u64hex: u64hex, parityBoot: parityBoot,
-          ASSETS: "tests/out/wasm-parity/"};
+  var eng = null;
+  var TIME = {restore: 0, step: 0, snapshot: 0, apply: 0};
+  var now = function(){ return typeof performance !== "undefined" ? performance.now() : Date.now(); };
+
+  /* the plant as it stands: metas and state in, commission tables frozen */
+  function ingest(){
+    var ex = eng.ex;
+    var w = FREEZE.writer();
+    eng.meta = SIMSTATE.ingest(w);
+    var b = w.bytes();
+    if(!ex.sim_ingest(put(ex, b), b.length)) throw new Error("wasm engine: sim_ingest refused the plant");
+    var f = FREEZE.build();
+    if(!ex.sim_freeze(put(ex, f), f.length)) throw new Error("wasm engine: sim_freeze refused the tables");
+    eng.net = P.net;
+  }
+
+  async function live(wasmBytes){
+    var sink = {warnings: [], logEvents: []};
+    eng = {ex: await instantiate(wasmBytes, sink), sink: sink, meta: null, net: null};
+    try { ingest(); } catch(e){ eng = null; throw e; }
+  }
+
+  /* one tick: S (whatever act() did to it) in, the engine's tick, the result back into S and its sidecars */
+  function step(dt){
+    var ex = eng.ex;
+    if(P.net !== eng.net) throw new Error("wasm engine: the plant was recommissioned under a live engine");
+    S.t += dt;
+    var t0 = now();
+    var w = FREEZE.writer();
+    SIMSTATE.state(w, eng.meta);
+    var b = w.bytes();
+    if(ex.sim_restore(put(ex, b), b.length) !== b.length) throw new Error("wasm engine: sim_restore refused the state");
+    var t1 = now();
+    ex.sim_step(dt);
+    var t2 = now();
+    var n = ex.sim_snapshot(), at = ex.sim_snapshot_ptr();
+    var out = new Uint8Array(ex.memory.buffer, at, n).slice();
+    var t3 = now();
+    SIMSTATE.apply(out);
+    var t4 = now();
+    TIME.restore += t1 - t0; TIME.step += t2 - t1; TIME.snapshot += t3 - t2; TIME.apply += t4 - t3;
+  }
+
+  return {load: load, u64hex: u64hex, parityBoot: parityBoot, fetchBytes: fetchBytes,
+          live: live, step: step, isLive: function(){ return eng !== null; },
+          stop: function(){ eng = null; }, TIME: TIME,
+          ASSETS: "tests/out/wasm-parity/", PKG: "sim-rs/pkg/sim_rs.wasm"};
 })();

@@ -6,6 +6,8 @@
 const FREEZE = (() => {
   const MAGIC = "RCFZ", VERSION = 1;
 
+  const LE = new Uint8Array(new Float64Array([1]).buffer)[7] === 0x3F;
+
   function writer(){
     let buf = new Uint8Array(1 << 16), dv = new DataView(buf.buffer), o = 0;
     const enc = new TextEncoder();
@@ -22,6 +24,18 @@ const FREEZE = (() => {
       u32: v => { room(4); dv.setUint32(o, v >>> 0, true); o += 4; },
       i32: v => { room(4); dv.setInt32(o, v | 0, true); o += 4; },
       f64: v => { room(8); dv.setFloat64(o, v, true); o += 8; },
+      f64arr: a => {
+        const n = a.length; room(8 * n);
+        if(LE && a instanceof Float64Array) buf.set(new Uint8Array(a.buffer, a.byteOffset, 8 * n), o);
+        else for(let i = 0; i < n; i++) dv.setFloat64(o + 8 * i, a[i], true);
+        o += 8 * n;
+      },
+      u8arr: a => {
+        const n = a.length; room(n);
+        if(a instanceof Uint8Array) buf.set(a, o);
+        else for(let i = 0; i < n; i++) buf[o + i] = a[i] & 0xFF;
+        o += n;
+      },
       str: s => { const b = enc.encode(String(s)); w.u32(b.length); room(b.length); buf.set(b, o); o += b.length; },
       bytes: () => buf.slice(0, o),
     };
@@ -31,10 +45,10 @@ const FREEZE = (() => {
   const num = v => (v === undefined || v === null) ? NaN : +v;
   const has = v => v !== undefined && v !== null;
   const strs = (w, a) => { w.u32(a.length); for(const s of a) w.str(s); };
-  const f64s = (w, a) => { w.u32(a.length); for(const v of a) w.f64(num(v)); };
+  const f64s = (w, a) => { w.u32(a.length); w.f64arr(a.map(num)); };
   const u32s = (w, a) => { w.u32(a.length); for(const v of a) w.u32(v); };
   const i32s = (w, a) => { w.u32(a.length); for(const v of a) w.i32(v); };
-  const u8s = (w, a) => { w.u32(a.length); for(const v of a) w.u8(v); };
+  const u8s = (w, a) => { w.u32(a.length); w.u8arr(a); };
   const optStr = (w, v) => { const ok = typeof v === "string"; w.u8(ok ? 1 : 0); if(ok) w.str(v); };
   const optNum = (w, v) => { const ok = has(v) && Number.isFinite(+v); w.u8(ok ? 1 : 0); if(ok) w.f64(+v); };
   const numMap = (w, o) => { const e = Object.entries(o || {}); w.u32(e.length); for(const [k, v] of e){ w.str(k); w.f64(num(v)); } };
@@ -63,7 +77,7 @@ const FREEZE = (() => {
     numMap(w, Object.fromEntries(vents.map(pid => [pid, circOfNode(condVesNode(pid))])));
     w.u32(vents.length); for(const pid of vents){ w.str(pid); w.u8(condVacuum(pid) ? 1 : 0); }
     w.f64(condSinks().length); strs(w, condSinks());
-    w.f64(num(condPDes())); w.f64(num(sgBypBand())); w.f64(num(P.Tref));
+    w.f64(num(condPDes())); w.f64(num(sgBypBand())); w.f64(num(P.Tref)); w.u8(P.steam ? 1 : 0);
     w.u32(24); for(let ci = 0; ci < 24; ci++){ w.i32(ci); w.f64(num(holdSetP(ci))); }
     const fitIds = net.fitIds || [];
     strs(w, fitIds);
@@ -115,13 +129,9 @@ const FREEZE = (() => {
     const nop = Object.entries(net.nodesOfPart || {});
     w.u32(nop.length); for(const [id, nodes] of nop){ w.str(id); u32s(w, nodes); }
     w.f64(DGEN); w.f64(num(P.eff)); w.f64(num(layoutMetrics().pzrK)); w.f64(num(P.hTurb));
-    w.str(String(net.pcSig || ""));
     numMap(w, Object.fromEntries(condIds().map(id => [id, condUA(id)])));
     numMap(w, Object.fromEntries(condIds().map(id => [id, partMassOf(id)])));
     numMap(w, P.cwRefBy);
-    w.f64(net.natTick || 0);
-    f64s(w, net.natPBy ? Array.from(net.natPBy.v) : []); u8s(w, net.natPBy ? Array.from(net.natPBy.has) : []);
-    f64s(w, net.natLoop ? Array.from(net.natLoop) : []);
     f64s(w, Array.from((net.scr && net.scr.metalQV) || [])); u8s(w, Array.from((net.scr && net.scr.metalQM) || []));
     const ends = Object.keys(bk).map(k => [k, runNodeEnds(k, bk[k].k)]).filter(([, e]) => e);
     w.u32(ends.length); for(const [k, e] of ends){ w.str(k); w.str(e[0]); w.str(e[1]); }
