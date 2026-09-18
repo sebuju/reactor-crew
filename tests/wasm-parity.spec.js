@@ -18,7 +18,7 @@ test("wasm engine steps preset-0 and matches native digest per tick", async ({ p
   page.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
   const exp = JSON.parse(fs.readFileSync(path.join("tests", "out", "wasm-parity", "expected.json"), "utf8"));
 
-  await page.goto("/?engine=wasm");
+  await page.goto("/?engine=wasm-parity");
   await page.waitForFunction(() => window.__wasmParity &&
     ["match", "mismatch", "error"].includes(window.__wasmParity.stage),
     null, { timeout: 120000 });

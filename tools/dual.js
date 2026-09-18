@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// node tools/dual.js --pre <n> --ticks <N> [--engine=js|wasm]
+// node tools/dual.js --pre <n> --ticks <N> [--engine=js|wasm|apply]
 // Dual-run harness (plan §7): commission both engines from one seed, step
-// both, compare sim_digest() per tick, halt with full dump on divergence.
-// --engine=wasm needs the sim-rs build; until then only js-vs-js runs (which
-// still gates harness determinism: zero divergences expected).
+// both, compare every S leaf per tick, halt with full dump on divergence.
+// --engine=apply: one JS plant; every tick SIMSTATE.apply(SIMSTATE.state())
+// must leave S and the sidecars exactly as they were, and write the same bytes.
 'use strict';
 const { headless, ROOT } = require('./bundle');
 
@@ -19,10 +19,28 @@ const pre = +(opt('pre', '0')), N = +(opt('ticks', '600')), engine = opt('engine
 
 function boot() {
   Math.random = () => 0.4242424242;
-  const M = headless('{PLANTPRE:()=>PLANTPRE,plantPreset,buildLayout,commission,S:()=>S,step,P:()=>P}');
+  const M = headless('{PLANTPRE:()=>PLANTPRE,plantPreset,buildLayout,commission,S:()=>S,step,P:()=>P,' +
+    'SIMSTATE,FREEZE,WasmEngine,act,coreIds:()=>coreIds(),HB:()=>HEATBAL,LOG:()=>LOG,' +
+    'G:()=>({advectOutPri,advectOutSec,advectLandedBy,advectEdgeKg,roomCgIt,roomPGen,gsX,gsDisp,FLOWG_CHOKE,divSig})}');
   M.plantPreset(pre); M.buildLayout(); M.commission();
   M.S().diceOff = true;
   return M;
+}
+// the plant state that is not on S: what the next tick's head reads back
+function side(M) {
+  const P = M.P(), net = P.net, sc = net.scr || {};
+  const scr = {};
+  for (const k of ['feedInHV', 'feedInHM', 'feedInMV', 'feedInMM', 'coreInHV', 'coreInHM',
+    'outKgV', 'outKgM', 'outH2V', 'outH2M']) scr[k] = sc[k];
+  return {
+    HB: M.HB(), G: M.G(), pumpLive: P.pumpLive, scr,
+    net: {
+      F: net.F, wArr: net.wArr, fixV: net.fixV, stKp: net.stKp, stKh: net.stKh, stKm: net.stKm,
+      stP0: net.stP0, stC: net.stC, pc: net.pc && { of: net.pc.of, n: net.pc.n, live: net.pc.live },
+      pcSig: net.pcSig, AfTopo: net.AfTopo, natTick: net.natTick, natPBy: net.natPBy, natLoop: net.natLoop,
+      fixMask: net.fixMask, fixGen: net.fixGen, burstP: net.burstP, burstGen: net.burstGen,
+    },
+  };
 }
 // sdig.js --leaf semantics: worst continuous leaf + discrete flips.
 function leaves(s) {
@@ -42,12 +60,19 @@ function leaves(s) {
   })(s, 'S');
   return { num, disc };
 }
+// a difference under ABS_FLOOR is rounding on a near-zero leaf; S.nat feeds only a bar and a trend and
+// swings on rounding-level inputs, so it is reported beside the bar, not judged by it
+const ABS_FLOOR = 1e-9, ASIDE = 'S.nat';
+let asideWorst = 0;
 function compare(A, B, tick) {
   let worst = 0, worstPath = '';
   for (const [p, a] of A.num) {
     const b = B.num.get(p);
     if (b === undefined) { worst = Infinity; worstPath = p + ' (missing in B)'; break; }
+    if (Number.isNaN(a) !== Number.isNaN(b)) { worst = Infinity; worstPath = p + ' a=' + a + ' b=' + b; break; }
+    if (!(Math.abs(a - b) > ABS_FLOOR)) continue;
     const rel = Math.abs(a - b) / (Math.abs(a) + Math.abs(b) + 1e-30);
+    if (p === ASIDE) { asideWorst = Math.max(asideWorst, rel); continue; }
     if (rel > worst) { worst = rel; worstPath = p + ' a=' + a + ' b=' + b; }
   }
   const flips = [];
@@ -62,15 +87,71 @@ function compare(A, B, tick) {
   }
   return worst;
 }
+// bit-exact: every leaf on both sides, NaN equal to NaN, -0 distinct from 0
+function exact(A, B, tick) {
+  const bad = [];
+  for (const m of ['num', 'disc'])
+    for (const k of new Set([...A[m].keys(), ...B[m].keys()])) {
+      const a = A[m].get(k), b = B[m].get(k);
+      if (!Object.is(a, b)) bad.push(k + ' ' + a + ' -> ' + b);
+    }
+  if (bad.length) {
+    console.log('APPLY CHANGED S tick=' + tick + ' leaves=' + bad.length);
+    for (const f of bad.slice(0, 20)) console.log('  ' + f);
+    process.exit(1);
+  }
+}
+const stateBytes = (M, meta) => { const w = M.FREEZE.writer(); M.SIMSTATE.state(w, meta); return w.bytes(); };
 
-if (engine === 'wasm') {
-  console.error('dual: --engine=wasm needs sim-rs/pkg built (Phase 1+).');
-  process.exit(2);
+if (engine === 'apply') {
+  const A = boot(), meta = A.SIMSTATE.meta(A.FREEZE.writer());
+  let n = 0;
+  for (let k = 0; k < N; k++) {
+    A.step(0.02);
+    const L0 = leaves({ S: A.S(), side: side(A) });
+    const b = stateBytes(A, meta);
+    A.SIMSTATE.apply(b);
+    exact(L0, leaves({ S: A.S(), side: side(A) }), k);
+    const b2 = stateBytes(A, meta);
+    const at = b.findIndex((v, i) => v !== b2[i]);
+    if (b.length !== b2.length || at >= 0) {
+      console.log('STATE BYTES MOVED tick=' + k + ' len ' + b.length + ' vs ' + b2.length + ' first diff at ' + at);
+      process.exit(1);
+    }
+    n = L0.num.size + L0.disc.size;
+  }
+  console.log('dual apply pre=' + pre + ' ticks=' + N + ' leaves=' + n + ' changed=0 bytes-equal');
+  process.exit(0);
 }
-const A = boot(), B = boot();
-let worst = 0;
-for (let k = 0; k < N; k++) {
-  A.step(0.02); B.step(0.02);
-  worst = Math.max(worst, compare(leaves(A.S()), leaves(B.S()), k));
+// the same inputs on both sides, through act(): a load change, then a rod demand
+function inputs(k, sides) {
+  if (k === 1000) for (const M of sides) M.act('loadDem', 0.9);
+  if (k === 2000) {
+    const v = sides[0].S().coreBy[sides[0].coreIds()[0]].rodDem - 0.02;
+    for (const M of sides) M.act('rodCommon', v);
+  }
 }
-console.log('dual js-vs-js pre=' + pre + ' ticks=' + N + ' worst-leaf=' + worst.toExponential(2) + ' divergences=0 root=' + ROOT);
+const logText = M => M.LOG().map(e => e.tick + ' ' + e.sev + ' ' + e.msg + ' | ' + e.why);
+
+(async () => {
+  const A = boot(), B = boot();
+  if (engine === 'wasm') {
+    const pkg = require('path').join(ROOT, 'sim-rs', 'pkg', 'sim_rs.wasm');
+    await B.WasmEngine.live(new Uint8Array(require('fs').readFileSync(pkg)));
+  }
+  let worst = 0;
+  for (let k = 0; k < N; k++) {
+    inputs(k, [A, B]);
+    A.step(0.02); B.step(0.02);
+    worst = Math.max(worst, compare(leaves(A.S()), leaves(B.S()), k));
+  }
+  const la = logText(A), lb = logText(B);
+  const at = la.findIndex((l, i) => l !== lb[i]);
+  if (la.length !== lb.length || at >= 0) {
+    console.log('LOG DIFFERS lines ' + la.length + ' vs ' + lb.length + ' first at ' + at);
+    console.log('  A: ' + la[at]); console.log('  B: ' + lb[at]);
+    process.exit(1);
+  }
+  console.log('dual js-vs-' + engine + ' pre=' + pre + ' ticks=' + N + ' worst-leaf=' + worst.toExponential(2) +
+    ' divergences=0 log-lines=' + la.length + ' ' + ASIDE + '-worst=' + asideWorst.toExponential(2));
+})().catch(e => { console.error(e); process.exit(2); });

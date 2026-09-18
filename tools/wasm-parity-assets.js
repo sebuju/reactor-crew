@@ -8,6 +8,7 @@
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { build } = require("./wasm-build");
 
 const ROOT = path.resolve(__dirname, "..");
 const OUT = path.join(ROOT, "tests", "out", "wasm-parity");
@@ -28,13 +29,8 @@ const SIMRS = path.join(ROOT, "sim-rs");
 function main() {
   fs.mkdirSync(OUT, { recursive: true });
 
-  // 1. Release wasm (same profile the smoke test verified).
-  run("cargo", ["+" + TOOLCHAIN, "build", "--release",
-    "--target", "wasm32-unknown-unknown", "--lib"], { RUSTUP_TOOLCHAIN: TOOLCHAIN }, SIMRS);
-  const wasmSrc = path.join(ROOT, "sim-rs", "target", "wasm32-unknown-unknown",
-    "release", "sim_rs.wasm");
-  const wasmDst = path.join(OUT, "sim_rs.wasm");
-  fs.copyFileSync(wasmSrc, wasmDst);
+  // 1. Release wasm, the same build the live worker fetches.
+  fs.copyFileSync(build(), path.join(OUT, "sim_rs.wasm"));
 
   // 2. Single-preset gate dump (sim_ingest takes the np==1 S0 section only)
   //    and its freeze (sim_freeze), both off the same commission.
