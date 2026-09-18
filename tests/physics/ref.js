@@ -1,6 +1,6 @@
 "use strict";
 // commissioning's reference solve on STOCK, against continuity, the loop's own momentum balance, hydrostatics and the shell's mass balance
-const {check, commissionPreset, colebrook} = require("./lib.js");
+const {check, commissionPreset, colebrook, tsat} = require("./lib.js");
 const G = commissionPreset(0);
 const P = G.P, PT = G.PT, SX = G.SX, net = P.net;
 const IF97 = "IAPWS-IF97 (2007 revision) region 1";
@@ -74,12 +74,7 @@ const loopW = SX.netLoop[0];
     {unit:"kg/s", pass: closed && Math.abs(loopW - wX) <= 0.02*wX}); }
 
 /* hydrostatics: a conducting liquid edge that carries nothing holds exactly its column. A node the reference states no enthalpy for is saturated liquid at its own pressure */
-{ const R4 = [1167.0521452767, -724213.16703206, -17.073846940092, 12020.82470247, -3232555.0322333,
-    14.91510861353, -4823.2657361591, 405113.40542057, -0.23855557567849, 650.17534844798];
-  const tsat = p => { const b = Math.pow(p, 0.25), e = b*b + R4[2]*b + R4[5], f = R4[0]*b*b + R4[3]*b + R4[6], g = R4[1]*b*b + R4[4]*b + R4[7];
-    const d = 2*g/(-f - Math.sqrt(f*f - 4*e*g)), s = R4[9] + d;
-    return (s - Math.sqrt(s*s - 4*(R4[8] + R4[9]*d)))/2; };
-  check("IF97 region 4 in this test: Tsat(10 MPa)", tsat(10), 584.149488, 1e-8, "IAPWS-IF97 (2007 revision) region 4 verification table", {unit:"K"});
+{ check("IF97 region 4 in this test: Tsat(10 MPa)", tsat(10), 584.149488, 1e-8, "IAPWS-IF97 (2007 revision) region 4 verification table", {unit:"K"});
   const ci0 = G.nodeGraph().coreCirc;
   const Tof = (i, p) => PT.nodeCirc[i] === ci0 ? P.Tref : tsat(p) - 1e-6;
   let worst = 0, n0 = 0, at = "";

@@ -20,4 +20,4 @@ let tOut = NaN;
 for(let e=0;e<PT.n.edge;e++){ const w = ST.edW[e], from = w >= 0 ? PT.edU[e] : PT.edV[e], to = w >= 0 ? PT.edV[e] : PT.edU[e];
   if(from === outI && PT.nodeRun[to] >= 0) tOut = G.eNodeT(to); }
 check("steam generator effectiveness (boiling shell, Cr = 0)", (Tin - tOut)/(Tin - Ts), 1 - Math.exp(-UA/wcp), 0.03,
-  "eps = 1 - exp(-UA/(w cp)) for a counterflow exchanger against a boiling (isothermal) stream", {note:"UA " + (UA).toFixed(0) + " kW/K, wcp " + wcp.toFixed(0) + " kW/K"});
+  "eps = 1 - exp(-UA/(w cp)) for a counterflow exchanger against a boiling (isothermal) stream", {gap:"Steam generator effectiveness", note:"UA " + (UA).toFixed(0) + " kW/K, wcp " + wcp.toFixed(0) + " kW/K"});

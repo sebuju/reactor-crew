@@ -67,4 +67,17 @@ function colebrook(Re, rr){
   return x;
 }
 
-module.exports = {load, check, commissionPreset, rig, march, colebrook};
+/* IAPWS-IF97 region 4, the saturation line of water: T in K, p in MPa */
+const R4 = [1167.0521452767, -724213.16703206, -17.073846940092, 12020.82470247, -3232555.0322333,
+  14.91510861353, -4823.2657361591, 405113.40542057, -0.23855557567849, 650.17534844798];
+function tsat(p){
+  const b = Math.pow(p, 0.25), e = b*b + R4[2]*b + R4[5], f = R4[0]*b*b + R4[3]*b + R4[6], g = R4[1]*b*b + R4[4]*b + R4[7];
+  const d = 2*g/(-f - Math.sqrt(f*f - 4*e*g)), s = R4[9] + d;
+  return (s - Math.sqrt(s*s - 4*(R4[8] + R4[9]*d)))/2;
+}
+function psat(T){
+  const th = T + R4[8]/(T - R4[9]), A = th*th + R4[0]*th + R4[1], B = R4[2]*th*th + R4[3]*th + R4[4], C = R4[5]*th*th + R4[6]*th + R4[7];
+  return Math.pow(2*C/(-B + Math.sqrt(B*B - 4*A*C)), 4);
+}
+
+module.exports = {load, check, commissionPreset, rig, march, colebrook, tsat, psat};
