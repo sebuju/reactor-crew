@@ -140,16 +140,15 @@ const SCNTIP_ON="Say what the reactor is FOR. Lay out a timeline of what will ha
 const OPTIP_ON="The live control room. Opening it commissions the current design. Run the plant, push it past its limits, and repair it when it bites back. Visiting the bench puts the plant back where it was commissioned, and changing anything there rebuilds the unit from scratch the next time you come back here.";
 const LOCKTIP="Locked while a machine is standing where it does not fit. Drag it clear on the design bench.";
 
+/* fixed width, so the readout does not jitter as the speeds move */
+const clockLab = v => (v>0 && v<0.95 ? "x/"+Math.round(1/v) : v.toFixed(1)+"x").padStart(5);
 function shellClock(){
   /* blank, not hidden: the row keeps its box, so the topbar beside it never shifts */
   const live = !!SIMSCREEN[screen];
   shellEls.clockRow.classList.toggle("blank", !live);
-  /* achieved, never asked for: 50 ticks is one second of plant time, and under 1x the strip's own divider is the only label that still says anything */
-  const clk=(TR.sps>0 && TR.sps<10 ? TR.sps.toFixed(1) : Math.round(TR.sps))+" TPS / "+trRateLab(TR.sps/50);
+  const p=TR.tickX;
+  const clk=clockLab(p[0])+" / "+clockLab(p[1])+" / "+clockLab(p[2]);
   if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
-  /* only a finite rate promises anything, and only a running plant can be behind */
-  const owed = live && typeof TR.rate==="number" && isFinite(TR.rate) && !TR.paused && ST;
-  shellEls.clock.classList.toggle("slow", !!owed && TR.sps < 50*TR.rate*0.9);
 }
 function shellSync(){
   helpSync();

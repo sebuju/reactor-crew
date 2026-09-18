@@ -764,6 +764,7 @@ function scnFly(){
     scnVerd=r.verdict; scnTake=r.take;
     scnNote=SCN.name+"  "+scnVerdLab(r.verdict);
   }});
+  if(TR.rate!==1) tickReset();
   TR.paused=false; TR.rate=1;
   scnNote="FLYING "+SCN.name;
   screen="operate"; layout();

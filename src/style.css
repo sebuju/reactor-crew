@@ -42,9 +42,7 @@ body{display:flex;flex-direction:column;font-family:var(--mono)}
 #plant-line.idle{color:var(--c-amber)}
 #clock-row{position:absolute;bottom:-14px}
 #clock-row.blank{visibility:hidden}
-#clock{color:var(--c-ink2);font-size:var(--t8);letter-spacing:1px}
-#clock.slow{color:var(--c-amber)}
-
+#clock{color:var(--c-ink2);font-size:var(--t8);letter-spacing:1px;white-space:pre}
 #stage{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;
   overflow:hidden;background:var(--c-bg)}
 canvas{display:block;background:var(--c-well);touch-action:none;cursor:default}
