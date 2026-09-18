@@ -6,7 +6,7 @@ let screen = "operate";
 function layout(){}
 
 const WORKER_SIM = p =>
-  p === "src/core/text.js" || p.startsWith("src/data/") || p.startsWith("src/sim/");
+  p === "src/core/text.js" || p.startsWith("src/data/") || p.startsWith("src/sim/") || p.startsWith("src/eng/");
 
 let ready = false;
 
@@ -62,11 +62,11 @@ async function liveBegin(msg){
   if(!recApplyHead(msg.head)) throw new Error("design did not rebuild identically");
   commission();
   /* a snapshot IS the plant: it lands after commission() and before the root, dumpApply()'s own order */
-  if(msg.snap){ restoreS(msg.snap); LOG = Array.isArray(msg.log) ? msg.log.slice() : []; }
+  if(msg.snap){ restoreS(msg.snap); LOG = Array.isArray(msg.log) ? msg.log.slice() : []; logResync(); }
   else {
-    seedRng(S, msg.seed >>> 0);
+    ST.sc[SC_SEED] = ST.sc[SC_RNG] = msg.seed >>> 0;
     /* written, not acted: recAct() would open a root of its own before the one below, as scnSliceGo() found */
-    S.diceOff = !!msg.diceOff;
+    ST.sc[SC_DICEOFF] = msg.diceOff ? 1 : 0;
   }
   recRoot();
   initHist();
@@ -101,16 +101,15 @@ function recMoved(){
 }
 function packet(jump){
   const s = sampPend; sampPend = [];
-  const m = {t:"packet", jump:!!jump, tick:S.tick, samp:s, sps:TR.sps, tickMs:TR.tickMs};
+  const m = {t:"packet", jump:!!jump, tick:ST.sc[SC_TICK], samp:s, sps:TR.sps, tickMs:TR.tickMs};
   if(logMoved()) m.log = LOG.slice();
-  /* the take's own end, never S.tick: in a replay the plant stands short of it, and the viewer would cut the recorded future */
+  /* the take's own end, never the plant tick: in a replay the plant stands short of it, and the viewer would cut the recorded future */
   if(recMoved()) m.rec = recSummary(); else if(recCur()) m.tickEnd = recCur().tickEnd;
   if(SHM_ON){
-    if(!(SHM && shmPush(SHM, S))){ SHM = shmNew(S); shmPush(SHM, S);
-      m.shm = SHM.sab; m.S = S; m.log = LOG.slice(); m.rec = recSummary(); }
+    if(!(SHM && shmPush(SHM))){ SHM = shmNew(STBYTES.length); shmPush(SHM);
+      m.shm = SHM.sab; m.log = LOG.slice(); m.rec = recSummary(); }
     m.seq = SHM.seq;
-    if(SHM.sdirty || m.S) m.strs = SHM.strs.slice();
-  } else m.S = S;
+  } else m.st = STBYTES.slice();
   return m;
 }
 
@@ -128,11 +127,11 @@ self.onmessage = function(e){
       if(!recApplyHead(msg.head)) throw new Error("design did not rebuild identically");
       commission();
       const r = scnRun(msg.scn);
-      self.postMessage({t:"done", take:r.take, verdict:r.verdict, endS:snapS(S)});
+      self.postMessage({t:"done", take:r.take, verdict:r.verdict, endS:snapS()});
       return;
     }
     if(msg.t === "live"){
-      liveBegin(msg).then(() => self.postMessage({t:"liveok", tick:S.tick}),
+      liveBegin(msg).then(() => self.postMessage({t:"liveok", tick:ST.sc[SC_TICK]}),
         err => self.postMessage({t:"err", msg:String((err && err.message) || err)}));
       return; }
     /* every input still goes through act(): posting one across a thread is transport, not a second dispatch */

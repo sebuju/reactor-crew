@@ -1,5 +1,5 @@
 "use strict";
-/* limits are judged after the fact off the trend archive; nothing here is on S */
+/* limits are judged after the fact off the trend archive; nothing here is plant state */
 
 /* dt is 0.02 everywhere, so a sim second is exactly 50 ticks; gestures are authored in seconds */
 const SCN_TPS     = 50;
@@ -108,7 +108,8 @@ function scnCompile(scn){
     R.emit(g.a||[], ctx, (dt,a)=>raw.push({t:g.t+dt, seq:raw.length, k:R.act, a}));
   }
   raw.sort((x,y)=> (x.t - y.t) || (x.seq - y.seq));
-  return raw.map(e => ({tick:scnTicks(e.t), k:e.k, a:e.a}));
+  /* ids resolve to indices here, once, so the tape carries what act() takes */
+  return raw.map(e => ({tick:scnTicks(e.t), k:e.k, a:actIx(e.k, e.a)}));
 }
 
 /* fired through act(), live only, on tick equality rather than a cursor, which is what makes a branch re-fire from the seek point */
@@ -132,7 +133,7 @@ function scnDue(tick){
   const due = R.by.get(tick);
   if(due) for(const e of due) act(e.k, ...e.a);
   /* here because both runners already call this every tick; anywhere else is a second clock */
-  if(R.end!=null && (tick>=R.end || S.breach)){
+  if(R.end!=null && (tick>=R.end || ST.sc[SC_BREACH])){
     scnDisarm();
     const verdict = scnJudge(R.take, R.scn.limits);
     R.take.verdict = verdict;
@@ -180,12 +181,12 @@ function scnJudge(take, limits){
   };
 }
 
-/* seed and dice go on S before recRoot() snapshots it as the take's base; a breach ends the run, a melt deliberately does not */
+/* seed and dice go into the state before recRoot() snapshots it as the take's base; a breach ends the run, a melt deliberately does not */
 function scnRun(scn, onProgress){
   const was = SCNRUN;
   resetPlant();
-  seedRng(S, scn.seed >>> 0);
-  S.diceOff = true;
+  ST.sc[SC_SEED] = ST.sc[SC_RNG] = scn.seed >>> 0;
+  ST.sc[SC_DICEOFF] = 1;
   recRoot();
   const take = recCur();
   take.label = scn.name;
@@ -194,11 +195,11 @@ function scnRun(scn, onProgress){
   const end = scnTicks(scn.secs);
   /* coarse on purpose: a callback every tick would cost more than the tick */
   const every = Math.max(1, Math.round(end/50));
-  while(S.tick < end){
+  while(ST.sc[SC_TICK] < end){
     simTick();                          // scnDue() fires from inside it
     recTick();
-    if(onProgress && S.tick % every === 0) onProgress(S.tick/end);
-    if(S.breach) break;
+    if(onProgress && ST.sc[SC_TICK] % every === 0) onProgress(ST.sc[SC_TICK]/end);
+    if(ST.sc[SC_BREACH]) break;
   }
   SCNRUN = was;
 
@@ -211,7 +212,7 @@ function scnRun(scn, onProgress){
 const SCN_BUDGET = 8;
 let SCNJOB = null;
 const scnBusy = () => !!SCNJOB;
-const scnFrac = () => SCNJOB ? Math.min(1, S.tick / Math.max(1, SCNJOB.end)) : 0;
+const scnFrac = () => SCNJOB ? Math.min(1, ST.sc[SC_TICK] / Math.max(1, SCNJOB.end)) : 0;
 
 /* a worker refuses to load into a file:// null origin, so the slice is a real path; the deadline catches one that loads and never answers */
 const SCN_HANDSHAKE = 4000;
@@ -270,9 +271,9 @@ function scnRunAsync(scn, onProgress, onDone){
 
 function scnSliceGo(scn, onProgress, onDone){
   resetPlant();
-  seedRng(S, scn.seed >>> 0);
-  S.diceOff = true;
-  /* order is load-bearing: recRoot() takes base:snapS(S), so the seed and the stood-down dice must already be on S */
+  ST.sc[SC_SEED] = ST.sc[SC_RNG] = scn.seed >>> 0;
+  ST.sc[SC_DICEOFF] = 1;
+  /* order is load-bearing: recRoot() takes base:snapS(), so the seed and the stood-down dice must already be in the state */
   recRoot();
   const take = recCur();
   take.label = scn.name;
@@ -294,12 +295,12 @@ function scnCancel(){
 function scnDrain(){
   if(!SCNJOB) return false;
   const j = SCNJOB, t0 = performance.now();
-  while(S.tick < j.end && performance.now() - t0 < SCN_BUDGET){
+  while(ST.sc[SC_TICK] < j.end && performance.now() - t0 < SCN_BUDGET){
     simTick(); recTick();
-    if(S.breach) break;
+    if(ST.sc[SC_BREACH]) break;
   }
   if(j.onProgress) j.onProgress(scnFrac());
-  if(S.tick >= j.end || S.breach){
+  if(ST.sc[SC_TICK] >= j.end || ST.sc[SC_BREACH]){
     const verdict = scnJudge(j.take, j.scn.limits);
     j.take.verdict = verdict;
     SCNJOB = null; scnDisarm();

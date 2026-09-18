@@ -1,86 +1,84 @@
 "use strict";
-const HT = s => s.Tavg + 15*(s.n*PROMPT_F + s.decay);
-/* fixed: read off the drawing, never the plant */
+/* fixed: read off the drawing, never the plant. Key order is the signal code eSigRead() switches on (E_SIG_KEYS) */
 const SIGNAL={
- pwr :{scope:"core", lab:"POWER",        u:"%",  col:"#57d38c", f:s=>s.n*100},
- dnbr:{scope:"core", lab:"DNBR",         u:"",   col:"#f0a830", f:s=>s.dnbr},
- tf  :{scope:"core", lab:"FUEL TEMP",    u:"K",  col:"#ff5a45", f:s=>s.Tf},
- tavg:{scope:"core", lab:"T-AVG",        u:"K",  col:"#5fd2e2", f:s=>s.Tavg},
- th  :{scope:"core", lab:"T-HOT",        u:"K",  col:"#ffa07a", f:s=>HT(s)},
- tc  :{scope:"core", lab:"T-COLD",       u:"K",  col:"#5aa9d6", f:s=>s.Tavg-15*(s.n*PROMPT_F+s.decay)},
- prs :{scope:"core", lab:"PRESSURE",     u:"MPa",col:"#a98cf0", f:s=>s.P},
- sub :{scope:"core", lab:"SUBCOOLING",   u:"K",  col:"#5fd2e2", f:s=>tsat(s.P)-HT(s)},
- lvl :{scope:"core", lab:"PZR LEVEL",    u:"%",  col:"#c8d8dc", f:s=>s.lvl},
- sgl :{scope:"plant",lab:"SG LEVEL",     u:"%",  col:"#8fa9ae", f:s=>sglMin(s)},
- hot :{scope:"plant",lab:"HOTWELL",      u:"%",  col:"#6f97a8", f:s=>tankPoolPct(s,hostedTankIds())},
- inv :{scope:"core", lab:"INVENTORY",    u:"%",  col:"#5aa9d6", f:s=>s.inv},
+ pwr :{scope:"core", lab:"POWER",        u:"%",  col:"#57d38c"},
+ dnbr:{scope:"core", lab:"DNBR",         u:"",   col:"#f0a830"},
+ tf  :{scope:"core", lab:"FUEL TEMP",    u:"K",  col:"#ff5a45"},
+ tavg:{scope:"core", lab:"T-AVG",        u:"K",  col:"#5fd2e2"},
+ th  :{scope:"core", lab:"T-HOT",        u:"K",  col:"#ffa07a"},
+ tc  :{scope:"core", lab:"T-COLD",       u:"K",  col:"#5aa9d6"},
+ prs :{scope:"core", lab:"PRESSURE",     u:"MPa",col:"#a98cf0"},
+ sub :{scope:"core", lab:"SUBCOOLING",   u:"K",  col:"#5fd2e2"},
+ lvl :{scope:"core", lab:"PZR LEVEL",    u:"%",  col:"#c8d8dc"},
+ sgl :{scope:"plant",lab:"SG LEVEL",     u:"%",  col:"#8fa9ae"},
+ hot :{scope:"plant",lab:"HOTWELL",      u:"%",  col:"#6f97a8"},
+ inv :{scope:"core", lab:"INVENTORY",    u:"%",  col:"#5aa9d6"},
  /* flowNet, not flow: what reaches the core, never what the pumps were told */
- flow:{scope:"core", lab:"CORE FLOW",    u:"%",  col:"#57d38c", f:s=>s.flowNet*100},
- load:{scope:"plant",lab:"LOAD DEMAND",  u:"%",  col:"#f0a830", f:s=>s.load*100},
- rod :{scope:"core", lab:"ROD BANK",     u:"%",  col:"#c8d8dc", f:s=>s.rodPos*100},
- bor :{scope:"plant",lab:"BORON",        u:"pcm",col:"#5fd2e2", f:s=>s.boron},
- xe  :{scope:"core", lab:"XENON",        u:"pcm",col:"#5aa9d6", f:s=>s.parts.xe},
- exp :{scope:"core", lab:"EXPANSION",    u:"pcm",col:"#8fa9ae", f:s=>s.parts.exp},
- dis :{scope:"core", lab:"DISASSEMBLY",  u:"pcm",col:"#a48ad6", f:s=>s.parts.dis},
- fq  :{scope:"core", lab:"PEAKING Fq",  u:"",   col:"#f0a830", f:s=>s.fq},
- ao  :{scope:"core", lab:"AXIAL OFFSET",u:"%",  col:"#a98cf0", f:s=>s.ao*100},
- ro  :{scope:"core", lab:"RADIAL TILT", u:"%",  col:"#5fd2e2", f:s=>s.ro*100},
- rho :{scope:"core", lab:"NET RHO",      u:"pcm",col:"#ff5a45", f:s=>s.rho},
- vd  :{scope:"core", lab:"VOID FRACTION",u:"",   col:"#a98cf0", f:s=>s.vf},
- dmg :{scope:"core", lab:"FUEL DAMAGE",  u:"%",  col:"#ff5a45", f:s=>s.dmg},
- fat :{scope:"core", lab:"VESSEL FATIGUE",u:"%", col:"#f0a830", f:s=>s.fatigue},
- cav :{scope:"plant",lab:"CAVITATION",   u:"",   col:"#f0a830", f:s=>s.cav},
- nat :{scope:"plant",lab:"NAT CIRC",     u:"%",  col:"#57d38c", f:s=>s.nat*100},
- rel :{scope:"plant",lab:"RELEASE",      u:"%",  col:"#ff5a45", f:s=>s.release},
- dec :{scope:"core", lab:"DECAY HEAT",   u:"%",  col:"#ff9a5a", f:s=>s.decay*100},
- rad :{scope:"plant",lab:"AREA DOSE",  u:"x", col:"#c8d8dc", f:s=>s.doseRate},
- cdos:{scope:"plant",lab:"WATCH DOSE", u:"%", col:"#8fa9ae", f:s=>s.crewDose},
+ flow:{scope:"core", lab:"CORE FLOW",    u:"%",  col:"#57d38c"},
+ load:{scope:"plant",lab:"LOAD DEMAND",  u:"%",  col:"#f0a830"},
+ rod :{scope:"core", lab:"ROD BANK",     u:"%",  col:"#c8d8dc"},
+ bor :{scope:"plant",lab:"BORON",        u:"pcm",col:"#5fd2e2"},
+ xe  :{scope:"core", lab:"XENON",        u:"pcm",col:"#5aa9d6"},
+ exp :{scope:"core", lab:"EXPANSION",    u:"pcm",col:"#8fa9ae"},
+ dis :{scope:"core", lab:"DISASSEMBLY",  u:"pcm",col:"#a48ad6"},
+ fq  :{scope:"core", lab:"PEAKING Fq",  u:"",   col:"#f0a830"},
+ ao  :{scope:"core", lab:"AXIAL OFFSET",u:"%",  col:"#a98cf0"},
+ ro  :{scope:"core", lab:"RADIAL TILT", u:"%",  col:"#5fd2e2"},
+ rho :{scope:"core", lab:"NET RHO",      u:"pcm",col:"#ff5a45"},
+ vd  :{scope:"core", lab:"VOID FRACTION",u:"",   col:"#a98cf0"},
+ dmg :{scope:"core", lab:"FUEL DAMAGE",  u:"%",  col:"#ff5a45"},
+ fat :{scope:"core", lab:"VESSEL FATIGUE",u:"%", col:"#f0a830"},
+ cav :{scope:"plant",lab:"CAVITATION",   u:"",   col:"#f0a830"},
+ nat :{scope:"plant",lab:"NAT CIRC",     u:"%",  col:"#57d38c"},
+ rel :{scope:"plant",lab:"RELEASE",      u:"%",  col:"#ff5a45"},
+ dec :{scope:"core", lab:"DECAY HEAT",   u:"%",  col:"#ff9a5a"},
+ rad :{scope:"plant",lab:"AREA DOSE",  u:"x", col:"#c8d8dc"},
+ cdos:{scope:"plant",lab:"WATCH DOSE", u:"%", col:"#8fa9ae"},
  /* appended, never reordered or renamed: a scenario limit names a key by string */
- mlt :{scope:"core", lab:"FUEL MOLTEN",u:"%", col:"#ff9a5a", f:s=>s.meltFrac*100},
- h2  :{scope:"plant",lab:"HYDROGEN",   u:"kg",col:"#a98cf0", f:s=>s.h2},
- rp  :{scope:"plant",lab:"ROOM PRESSURE",u:"kPa",col:"#ff6a6a", f:s=>s.roomPMax},
- dnbm:{scope:"core", lab:"MIN NODE DNBR",u:"",col:"#f0a830", f:s=>s.dnbrMin},
- radt:{scope:"plant",lab:"PANEL TEMP",  u:"K", col:"#b8c4cf", f:s=>radTMax(s)},
+ mlt :{scope:"core", lab:"FUEL MOLTEN",u:"%", col:"#ff9a5a"},
+ h2  :{scope:"plant",lab:"HYDROGEN",   u:"kg",col:"#a98cf0"},
+ rp  :{scope:"plant",lab:"ROOM PRESSURE",u:"kPa",col:"#ff6a6a"},
+ dnbm:{scope:"core", lab:"MIN NODE DNBR",u:"",col:"#f0a830"},
+ radt:{scope:"plant",lab:"PANEL TEMP",  u:"K", col:"#b8c4cf"},
  /* no `col`, so CH below skips these: a block reads them, the chart does not */
- nfr  :{scope:"core", lab:"POWER FRAC", u:"",    f:v=>v.n},
- tprog:{scope:"core", lab:"T-PROG",     u:"K",   f:v=>tProg(v,v.K,v)},
- dtavg:{scope:"core", lab:"T-AVG RATE", u:"K/s", f:v=>v.dTavg},
- tfrac:{scope:"core", lab:"TURB SHARE", u:"",    f:v=>unitFrac(v,turbShare(v))},
- rodd :{scope:"core", lab:"ROD DEMAND", u:"%",   f:v=>v.rodDem*100},
- trip :{scope:"core", lab:"TRIPPED",    u:"",    f:v=>v.scrammed?1:0},
- /* not `sub`: the solved field's hottest liquid node (s.sc, step.js) */
- scc  :{scope:"core", lab:"SUBCOOL MARGIN",u:"K", f:v=>v.sc},
- heat :{scope:"core", lab:"HEAT FRAC",  u:"",    f:v=>v.heat},
- rpsset :{scope:"rpsch", lab:"TRIP SET", u:"",   fixed:true, f:(s,ch)=>rpsSetOf(ch,0)},
- rpsnear:{scope:"rpsch", lab:"NEAR SET", u:"",   fixed:true, f:(s,ch)=>rpsSetOf(ch,RPS_NEAR)},
- sglv :{scope:"sg",   lab:"SG LEVEL",   u:"%",   f:(s,id)=>boilerLvl(s,id)},
- sgp  :{scope:"sg",   lab:"SHELL P",    u:"MPa", f:(s,id)=>boilerP(s,id)},
- sgst :{scope:"sg",   lab:"STEAM OUT",  u:"kg/s",f:(s,id)=>(s.steamBy&&s.steamBy[id])||0},
- sgfed:{scope:"sg",   lab:"FEED IN",    u:"kg/s",f:(s,id)=>(s.sgFedBy&&s.sgFedBy[id])||0},
- sgwant:{scope:"sg",  lab:"FEED WANT",  u:"kg/s",f:(s,id)=>feedWant(s,id)},
+ nfr  :{scope:"core", lab:"POWER FRAC", u:""},
+ tprog:{scope:"core", lab:"T-PROG",     u:"K"},
+ dtavg:{scope:"core", lab:"T-AVG RATE", u:"K/s"},
+ tfrac:{scope:"core", lab:"TURB SHARE", u:""},
+ rodd :{scope:"core", lab:"ROD DEMAND", u:"%"},
+ trip :{scope:"core", lab:"TRIPPED",    u:""},
+ /* not `sub`: the solved field's hottest liquid node */
+ scc  :{scope:"core", lab:"SUBCOOL MARGIN",u:"K"},
+ heat :{scope:"core", lab:"HEAT FRAC",  u:""},
+ rpsset :{scope:"rpsch", lab:"TRIP SET", u:"",   fixed:true},
+ rpsnear:{scope:"rpsch", lab:"NEAR SET", u:"",   fixed:true},
+ sglv :{scope:"sg",   lab:"SG LEVEL",   u:"%"},
+ sgp  :{scope:"sg",   lab:"SHELL P",    u:"MPa"},
+ sgst :{scope:"sg",   lab:"STEAM OUT",  u:"kg/s"},
+ sgfed:{scope:"sg",   lab:"FEED IN",    u:"kg/s"},
+ sgwant:{scope:"sg",  lab:"FEED WANT",  u:"kg/s"},
  /* Infinity with no shell, so an absent generator cannot make a low-level channel */
-  sglo :{scope:"plant",lab:"LOWEST SG LEVEL",u:"%",
-         f:s=>{ const ids=boilerIds(); let m=Infinity; for(let i=0;i<ids.length;i++){ const v=boilerLvl(s,ids[i]); if(v<m) m=v; } return m; }},
- pumpq:{scope:"pump", lab:"PUMP SPEED", u:"%",   f:(s,id)=>(s.flowBy[id]||0)*100},
- pumpd:{scope:"pump", lab:"PUMP DEMAND",u:"%",   f:(s,id)=>(s.flowDemBy[id]||0)*100},
- fitp :{scope:"fit",  lab:"VALVE P",    u:"MPa", f:(s,fid)=>reliefP(s,fid)},
- fitopen:{scope:"fit",lab:"VALVE OPEN", u:"",    f:(s,fid)=>s.reliefOpen[fid]?1:0},
- fitlift:{scope:"fit",lab:"LIFT SET",   u:"MPa", fixed:true, f:(s,fid)=>reliefSet(fid).lift},
- fitreseat:{scope:"fit",lab:"RESEAT SET",u:"MPa", fixed:true, f:(s,fid)=>reliefSet(fid).reseat},
- valve:{scope:"fit",  lab:"VALVE POS",  u:"%",   f:(s,fid)=>(s.valve[fid]||0)*100},
- tankl:{scope:"tank", lab:"TANK LEVEL", u:"%",   f:(s,id)=>tankPoolPct(s,[id])},
- loopp:{scope:"loop", lab:"LOOP P",     u:"MPa", f:(s,ci)=>loopP(s,+ci)},
+ sglo :{scope:"plant",lab:"LOWEST SG LEVEL",u:"%"},
+ pumpq:{scope:"pump", lab:"PUMP SPEED", u:"%"},
+ pumpd:{scope:"pump", lab:"PUMP DEMAND",u:"%"},
+ fitp :{scope:"fit",  lab:"VALVE P",    u:"MPa"},
+ fitopen:{scope:"fit",lab:"VALVE OPEN", u:""},
+ fitlift:{scope:"fit",lab:"LIFT SET",   u:"MPa", fixed:true},
+ fitreseat:{scope:"fit",lab:"RESEAT SET",u:"MPa", fixed:true},
+ valve:{scope:"fit",  lab:"VALVE POS",  u:"%"},
+ tankl:{scope:"tank", lab:"TANK LEVEL", u:"%"},
+ loopp:{scope:"loop", lab:"LOOP P",     u:"MPa"},
  /* read off the DRAWING, so the governor below states no number of its own */
- loopset:{scope:"loop", lab:"LOOP P SET", u:"MPa", fixed:true, f:(s,ci)=>holdSetP(+ci)},
- supply:{scope:"plant",lab:"SUPPLY",    u:"",    f:s=>supplyK(s)},
- dark :{scope:"plant",lab:"BLACKOUT",   u:"",    f:s=>s.blackout?1:0},
- turbtr:{scope:"plant",lab:"TURBINE TRIPPED",u:"", f:s=>s.turbTrip?1:0},
- time :{scope:"plant",lab:"TIME",       u:"s",   f:s=>s.t},
+ loopset:{scope:"loop", lab:"LOOP P SET", u:"MPa", fixed:true},
+ supply:{scope:"plant",lab:"SUPPLY",    u:""},
+ dark :{scope:"plant",lab:"BLACKOUT",   u:""},
+ turbtr:{scope:"plant",lab:"TURBINE TRIPPED",u:""},
+ time :{scope:"plant",lab:"TIME",       u:"s"},
 };
 const CH=Object.fromEntries(Object.entries(SIGNAL).filter(([,r])=>r.col));
-const sigRead=(s,k,arg)=>{ const r=SIGNAL[k]; if(!r) return 0;
-  if(r.scope==="core") return r.f(arg ? coreSeen(s,arg) : s);
-  return r.scope==="plant" ? r.f(s) : r.f(s,arg); };
+/* the UI's door: a key and an id, resolved once here and read by code */
+const sigRead=(k,arg)=>{ const c=eSigCode(k); if(c<0 || !ST) return 0;
+  const r=SIGNAL[k]; return eSigRead(c, r.scope==="plant" ? -1 : eBlkArgIndex(r.scope, arg)); };
 /* no row here = self-scaling */
 const CHVIEW={
  pwr :{rng:()=>[0,125],                     warn:()=>[rpsSetOf("flux",0)]},
@@ -122,12 +120,12 @@ const CHVIEW={
        warn:()=>[RAD_TDES, tsatSec(TURB_TRIP_P)-COND_DT0]},
 };
 
-/* latches a limit may name: CH-shaped, archived, deliberately out of the strip chart's own list */
+/* latches a limit may name: CH-shaped, archived, deliberately out of the strip chart's own list; `c` is the code chRead() switches on */
 const CHB={
- trip  :{lab:"RPS TRIP",      u:"", col:"#ff5a45", f:s=>s.scrammed?1:0},
- melt  :{lab:"CORE MELT",     u:"", col:"#ff5a45", f:s=>s.melt?1:0},
- breach:{lab:"VESSEL BREACH", u:"", col:"#ff5a45", f:s=>s.breach?1:0},
- dmgd  :{lab:"PARTS DOWN",    u:"", col:"#f0a830", f:s=>s.dmgParts.length},
+ trip  :{lab:"RPS TRIP",      u:"", col:"#ff5a45", c:-1},
+ melt  :{lab:"CORE MELT",     u:"", col:"#ff5a45", c:-2},
+ breach:{lab:"VESSEL BREACH", u:"", col:"#ff5a45", c:-3},
+ dmgd  :{lab:"PARTS DOWN",    u:"", col:"#f0a830", c:-4},
 };
 /* the one lookup a limit goes through; never CH or CHB by name */
 const limCh = k => CH[k] || CHB[k];
@@ -135,24 +133,51 @@ const HN=1800, SAMP_TICKS=5; let hist={},hi=0,hlen=0,plot=["pwr","dnbr"];
 /* per-vessel ring under "pwr:core1"; the plain key stays the plant's, which is what a limit names */
 const UNIT_CH=new Set(Object.keys(CH).filter(k=>CH[k].scope==="core"));
 const TREND={unit:null};
-const trendUnits=()=>{ const ids=typeof coreIds==="function"?coreIds():[]; return ids.length>1?ids:[]; };
-const CHKEYS=()=>{ const ks=Object.keys(CH); for(const id of trendUnits()) for(const k of UNIT_CH) if(CH[k]) ks.push(k+":"+id); return ks; };
-const chSplit=k=>{ const i=k.indexOf(":"); return i<0?[k,null]:[k.slice(0,i),k.slice(i+1)]; };
-const chSample=k=>{ const [b,id]=chSplit(k); const row=limCh(b); return id?row.f(coreSeen(S,id)):row.f(S); };
+const trendUnits=()=>{ const ids=IX?IX.coreId:[]; return ids.length>1?ids:[]; };
+/* the channel set, built once per plant: key, code, instance, and the ring each one writes */
+const CHN={keys:[], code:null, arg:null, ring:[], tkeys:[], tcode:null, targ:null};
+function chBuild(){
+  const keys=Object.keys(CH), code=[], arg=[];
+  for(const k of keys){ code.push(eSigCode(k)); arg.push(-1); }
+  for(const id of trendUnits()) for(const k of UNIT_CH){ keys.push(k+":"+id); code.push(eSigCode(k)); arg.push(IX.core.get(id)); }
+  CHN.keys=keys; CHN.code=Int32Array.from(code); CHN.arg=Int32Array.from(arg);
+  const bk=Object.keys(CHB);
+  CHN.tkeys=keys.concat(bk);
+  CHN.tcode=Int32Array.from(code.concat(bk.map(k=>CHB[k].c)));
+  CHN.targ=Int32Array.from(arg.concat(bk.map(()=>-1)));
+}
+const CHKEYS=()=>CHN.keys;
+function chbRead(c){
+  const sc=ST.sc;
+  switch(c){
+    case -1: return sc[SC_SCRAMMED]?1:0;
+    case -2: return sc[SC_MELT]?1:0;
+    case -3: return sc[SC_BREACH]?1:0;
+    case -4: { const d=ST.dmgBy; let n=0; for(let a=0;a<d.length;a++) if(d[a]) n++; return n; }
+  }
+  return 0;
+}
+const chRead=(c,a)=>c>=0 ? eSigRead(c,a) : chbRead(c);
 const chKey=k=>(TREND.unit && UNIT_CH.has(k) && hist[k+":"+TREND.unit]) ? k+":"+TREND.unit : k;
-/* differentiator state lives on S so a scrub restores it */
-const period=()=>S?S.perV:Infinity;
-function initHist(){ hist={}; for(const k of CHKEYS()) hist[k]=new Float64Array(HN); hi=0;hlen=0;
-  if(S){ S.perV=Infinity; S.perN=S.n; S.perT=S.t; } }
-function sample(){ for(const k in hist){ const v=chSample(k); hist[k][hi]=isFinite(v)?v:0; }
+/* differentiator state lives on the state so a scrub restores it */
+const period=()=>ST?ST.sc[SC_PERV]:Infinity;
+function initHist(){
+  if(IX) chBuild();
+  hist={}; CHN.ring=[];
+  for(const k of CHN.keys){ const r=new Float64Array(HN); hist[k]=r; CHN.ring.push(r); }
+  hi=0; hlen=0;
+  if(ST){ const sc=ST.sc; sc[SC_PERV]=Infinity; sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T]; } }
+function sample(){
+  const R=CHN.ring, C=CHN.code, A=CHN.arg;
+  for(let i=0;i<R.length;i++){ const v=chRead(C[i],A[i]); R[i][hi]=isFinite(v)?v:0; }
   hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN);
-  const dt=S.t-S.perT;
-  if(dt>1e-9){ const dn=(S.n-S.perN)/dt;
-    S.perV = Math.abs(dn)<1e-5 ? Infinity : S.n/dn;
-    S.perN=S.n; S.perT=S.t; }
+  const sc=ST.sc, dt=sc[SC_T]-sc[SC_PERT];
+  if(dt>1e-9){ const dn=(sc[SC_N]-sc[SC_PERN])/dt;
+    sc[SC_PERV] = Math.abs(dn)<1e-5 ? Infinity : sc[SC_N]/dn;
+    sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T]; }
   recSample(); }
 function chAt(k,i){ const r=hist[chKey(k)]; return r ? r[((hi-hlen+i)%HN+HN)%HN] : 0; }
-/* a viewer fills its ring off the packet: chSample() cannot answer here, the plant is on the other thread */
+/* a viewer fills its ring off the packet: the plant is on the other thread */
 function histPush(v){
   if(!hlen && !hi) for(const k of CHKEYS()) if(!hist[k]) hist[k]=new Float64Array(HN);
   for(const k in hist){ const x=v[k]; hist[k][hi]=isFinite(x)?x:0; }
@@ -163,21 +188,23 @@ function togglePlot(k){ const i=plot.indexOf(k);
 
 /* chunked so appending never reallocates */
 const TR_CHUNK=4096;
-const TRKEYS=()=>CHKEYS().concat(Object.keys(CHB));
+const TRKEYS=()=>CHN.tkeys;
 
 /* live only: a replay would double-write the archive and disorder the tick index */
 function recSample(){
   if(REC.mode!=="live") return;
   const t=recBoot(); if(!t) return;
+  const K=CHN.tkeys, C=CHN.tcode, A=CHN.targ;
+  if(!t.trA || t.trA.length!==K.length){ t.trA=[]; for(const k of K) t.trA.push(t.tr[k]||(t.tr[k]=[])); }
   const n=t.trN, c=(n/TR_CHUNK)|0, o=n%TR_CHUNK;
-  for(const k of TRKEYS()){
-    const a=t.tr[k]||(t.tr[k]=[]);
+  for(let i=0;i<K.length;i++){
+    const a=t.trA[i];
     if(!a[c]) a[c]=new Float64Array(TR_CHUNK);
-    const v=chSample(k); a[c][o]=isFinite(v)?v:0;
+    const v=chRead(C[i],A[i]); a[c][o]=isFinite(v)?v:0;
   }
   /* the tick is stored, never inferred, so the archive does not depend on the sample cadence */
   if(!t.trT[c]) t.trT[c]=new Int32Array(TR_CHUNK);
-  t.trT[c][o]=S.tick;
+  t.trT[c][o]=ST.sc[SC_TICK];
   t.trN=n+1;
   REC.trBytes += TR_BYTES_PER();
   if(REC.trBytes > REC_MAX_TR_BYTES) trEvict();
@@ -199,6 +226,7 @@ function trThin(take){
       dst[(j/TR_CHUNK)|0][j%TR_CHUNK]=src[(i/TR_CHUNK)|0][i%TR_CHUNK]; }
     return dst; };
   for(const k of TRKEYS()) if(take.tr[k]) take.tr[k]=move(take.tr[k],()=>new Float64Array(TR_CHUNK));
+  take.trA=null;
   take.trT=move(take.trT,()=>new Int32Array(TR_CHUNK));
   REC.trBytes -= (take.trN-n)*TR_BYTES_PER();
   take.trN=n; take.trThin=(take.trThin||1)*2;

@@ -46,50 +46,19 @@ const BLK_MODES=Object.keys(BLK);
 const MATH_OPS=["add","sub","mul","div","min","max"], SEL_OPS=["max","min","median"], CMP_OPS=["above","below"];
 const OPS_OF={math:MATH_OPS, sel:SEL_OPS, compare:CMP_OPS};
 
-function scramRpsHot(cs,K,id,hot,dt){ cs.rpsHot = hot ? cs.rpsHot+dt : 0; }
-function nearTripSet(cs,K,id,v){ cs.rpsNear=v>0.5; }
-/* every demand a block may drive, in the unit the matching SIGNAL row reads; `step` marks a sink that integrates the increment itself */
+/* every demand a block may drive, in the unit the matching SIGNAL row reads; the engine's eSink* switch is the behaviour */
 const SINK={
-  rodStep:{lab:"ROD DRIVE", u:"/tick", scope:"core", step:true, part:id=>rodsOf(id),
-    read:(s,id)=>coreSeen(s,id).rodDem,
-    apply:(s,id,v,dt)=>{ coreOn(s,id,rodApplyOn,v,dt); }},
-  freg:   {lab:"FEED VALVE", u:"", scope:"sg", part:id=>id,
-    read:(s,id)=>s.fregBy[id]||0,
-    apply:(s,id,v)=>{ if(s.fregDemBy[id]!==undefined) s.fregDemBy[id]=clamp(v,0,1); }},
-  relief: {lab:"RELIEF VALVE", u:"", scope:"fit", part:fid=>fid,
-    read:(s,fid)=>s.reliefOpen[fid]?1:0,
-    apply:(s,fid,v)=>{ if(s.reliefOpen[fid]!==undefined && !fitSpring(fid)) reliefCmd(s,fid,v>0.5); }},   // a spring safety takes no orders; an absent valve is a no-op, not a phantom key on S
-  flowDem:{lab:"PUMP DEMAND", u:"%", scope:"pump", part:id=>id,
-    read:(s,id)=>(s.flowDemBy[id]||0)*100,
-    apply:(s,id,v)=>{ if(s.flowDemBy[id]!==undefined) s.flowDemBy[id]=clamp(v/100,0,1.5); }},
-  loadDem:{lab:"LOAD DEMAND", u:"%", scope:"plant", part:()=>roleId("turb"),
-    read:s=>s.loadDem*100,
-    apply:(s,_,v)=>{ s.loadDem=clamp(v/100,0,P.loadMax); }},
-  boronDem:{lab:"BORON DEMAND", u:"pcm", scope:"plant", part:()=>null,
-    read:s=>s.boronDem,
-    apply:(s,_,v)=>{ s.boronDem=v; }},
-  valveDem:{lab:"THROTTLE", u:"%", scope:"fit", part:fid=>fid,
-    read:(s,fid)=>(s.valveDem[fid]||0)*100,
-    apply:(s,fid,v)=>{ if(s.valveDem[fid]!==undefined) s.valveDem[fid]=clamp(v/100,0,1); }},
-  tankOpen:{lab:"TANK VALVE", u:"", scope:"tank", part:id=>id,
-    read:(s,id)=>s.tankOpen[id]?1:0,
-    apply:(s,id,v)=>{ if(s.tankOpen[id]!==undefined) s.tankOpen[id]=v>0.5; }},
-  /* the order waits out P.rpsLag of continuous demand and the timer resets the instant the channel clears: a delay, not an integrator */
-  scram:  {lab:"SCRAM", u:"", scope:"core", part:id=>id,
-    read:(s,id)=>coreSeen(s,id).scrammed?1:0,
-    apply:(s,id,v,dt)=>{ const hot=v>0.5;
-      coreOn(s,id,scramRpsHot,hot,dt);
-      const cs=coreSeen(s,id);
-      /* to the nearest tick: ten additions of 0.02 come to 0.19999999999999998, so a 200 ms setting would ask for an eleventh */
-      if(hot && !cs.scrammed && cs.rpsHot>=P.rpsLag-dt*0.5) rpsScram(id,blkBlame(s,sinkDriver(s,"scram",id))); }},
-  /* the warning is an actuator too, never a read out of the middle of a graph the player may rewire */
-  nearTrip:{lab:"NEAR TRIP LAMP", u:"", scope:"core", part:id=>id,
-    read:(s,id)=>coreSeen(s,id).rpsNear?1:0,
-    apply:(s,id,v)=>{ coreOn(s,id,nearTripSet,v); }},
-  /* a one-shot on the rising edge: held, the operator could never raise load again while the latch was in */
-  runback:{lab:"TURBINE RUNBACK", u:"", scope:"plant", part:()=>roleId("turb"),
-    read:s=>s.rbHot?1:0,
-    apply:(s,_,v)=>{ const hot=v>0.5; if(hot && !s.rbHot) runbackNow(s); s.rbHot=hot; }},
+  rodStep:{lab:"ROD DRIVE", u:"/tick", scope:"core", step:true},
+  freg:   {lab:"FEED VALVE", u:"", scope:"sg"},
+  relief: {lab:"RELIEF VALVE", u:"", scope:"fit"},
+  flowDem:{lab:"PUMP DEMAND", u:"%", scope:"pump"},
+  loadDem:{lab:"LOAD DEMAND", u:"%", scope:"plant"},
+  boronDem:{lab:"BORON DEMAND", u:"pcm", scope:"plant"},
+  valveDem:{lab:"THROTTLE", u:"%", scope:"fit"},
+  tankOpen:{lab:"TANK VALVE", u:"", scope:"tank"},
+  scram:  {lab:"SCRAM", u:"", scope:"core"},
+  nearTrip:{lab:"NEAR TRIP LAMP", u:"", scope:"core"},
+  runback:{lab:"TURBINE RUNBACK", u:"", scope:"plant"},
 };
 const SINK_KEYS=Object.keys(SINK);
 
@@ -165,185 +134,11 @@ function setBlockMode(id,mode){
   D.blocks[id]=nb; dTouch();
 }
 
-function blkSeed(){
-  /* fromEntries, never loop-assigned: 100+ dynamic adds put the object in dictionary mode and every per-tick for-in over it (ctlOrder, sinkWired) then builds a key array. Same keys, values and order, fast mode. */
-  const ent = [];
-  for(const id in D.blocks){ const b=D.blocks[id], m=BLK[b.mode]; if(!m) continue;
-    const L=Object.assign({mode:b.mode, in:m.ins.map((_,i)=>b.in[i]||null), on:b.on!==false, out:0}, m.knobs, m.st||{});
-    for(const k in m.knobs) if(b[k]!==undefined) L[k]=b[k];
-    if(m.sug) for(const k in m.sug) if(L[k]==null) L[k]=m.sug[k]();
-    ent.push([id, blkNormalize(L)]); }
-  return Object.fromEntries(ent);
-}
-/* bumpless: a position-holding block starts where its sink already stands, so a wire landing is not a step */
-function blkSeedOut(s,id){
-  const b=s.blkBy[id]; if(!b || b.mode!=="sink") return;
-  const src=b.in[0], u=src&&s.blkBy[src], row=SINK[b.sink];
-  if(!u || !row || row.step) return;
-  if(u.mode==="integ"||u.mode==="limit"||u.mode==="lag"){ const v=row.read(s,b.arg); if(isFinite(v)) u.out=v; }
-}
-const blkSeedOuts=s=>{ for(const id in s.blkBy) blkSeedOut(s,id); };
 
-/* Kahn over the live links, cached on their signature; a block left on a cycle reads last tick's outputs */
-const CTL_ORD={ids:null, wire:null, order:[]};
-/* compared element by element, never as a joined string: the key was 108 concatenations and a join, rebuilt every tick to check a cache that almost never moves */
-function ctlWired(s, ids){
-  const w=CTL_ORD.wire;
-  if(!w || !sameStrList(CTL_ORD.ids, ids)) return false;
-  for(let i=0;i<ids.length;i++)
-    if(!sameStrList(w[i], s.blkBy[ids[i]].in)) return false;
-  return true;
-}
-function ctlOrder(s){
-  /* indexed writes, never length=0+push: resetting length truncates capacity and 109 pushes regrow it every tick */
-  let nk = 0;
-  const ids = CTL_KEYS;
-  for(const k in s.blkBy) ids[nk++] = k;
-  ids.length = nk;
-  if(ctlWired(s, ids)) return CTL_ORD.order;
-  const deg={}, kids={};
-  for(const id of ids){ deg[id]=0; kids[id]=[]; }
-  for(const id of ids) for(const src of s.blkBy[id].in) if(src && deg[src]!==undefined){ deg[id]++; kids[src].push(id); }
-  const q=ids.filter(id=>deg[id]===0), order=[];
-  while(q.length){ const id=q.shift(); order.push(id); for(const k of kids[id]) if(--deg[k]===0) q.push(k); }
-  for(const id of ids) if(deg[id]>0) order.push(id);
-  CTL_ORD.ids=ids.slice(); CTL_ORD.wire=ids.map(id=>s.blkBy[id].in.slice()); CTL_ORD.order=order;
-  return order;
-}
 
-/* is the cabinet computing: a controller placed, whole, and fed */
-const ctlHost = () => roleAll("ctrl")[0] || null;
-const ctlLive = s => { const id=ctlHost(); return !!id && !partWrecked(s,id) && supplyK(s)>0; };
-const blkDead = (s,b) => { const row=SINK[b.sink]; if(!row) return true;
-  const part=row.part(b.arg); return !!part && partWrecked(s,part); };
 
-/* sink-apply generation: coreSeen() memoizes per core per tick and this busts it across interleaved writes */
-let ctlSinkGen = 0;
-function blkEval(s,b,I,dt,ix){
-  const OUTV = s.blkOutV, FV = s.blkOutF;
-  switch(b.mode){
-    case "source": return sigRead(s,b.sig,b.arg);
-    case "const":  return b.v;
-    case "math": { const a=I[0], c=I[1]; let r;
-      switch(b.op){ case "add": r=a+c; break; case "sub": r=a-c; break; case "mul": r=a*c; break;
-        case "div": r=c!==0?a/c:0; break; case "min": r=Math.min(a,c); break; default: r=Math.max(a,c); }
-      return b.k===1 ? r : b.k*r; }
-    case "pid": { const e=I[0], rate=I[1], td=b.td||0;
-      const f = FV[ix] + Math.min(dt/Math.max(td/b.n, dt), 1)*(rate - FV[ix]);
-      const u = Math.abs(e) < b.db ? 0
-        : b.kp*(f + (b.ti>0 ? e/b.ti : 0) + td*(f - FV[ix])/Math.max(dt,1e-9))*dt;
-      FV[ix]=f; return u; }
-    case "integ":  return clamp(OUTV[ix]+I[0], b.lo==null?-Infinity:b.lo, b.hi==null?Infinity:b.hi);
-    case "limit": { const o=OUTV[ix]; let v=clamp(I[0], b.lo==null?-Infinity:b.lo, b.hi==null?Infinity:b.hi);
-      if(b.rate!=null){ const d=v-o; v=o+Math.sign(d)*Math.min(Math.abs(d),b.rate*dt); }
-      return v; }
-    case "lag":    return OUTV[ix] + Math.min(dt/Math.max(b.tau,dt),1)*(I[0]-OUTV[ix]);
-    case "compare":{ const on=(b.in[1]&&s.blkBy[b.in[1]])?I[1]:b.on, off=(b.in[2]&&s.blkBy[b.in[2]])?I[2]:b.off;
-      return b.op==="below" ? (OUTV[ix] ? (I[0] > off ? 0 : 1) : (I[0] < on ? 1 : 0))
-                            : (OUTV[ix] ? (I[0] < off ? 0 : 1) : (I[0] > on ? 1 : 0)); }
-    case "latch":  return I[1]>0.5 ? 0 : I[0]>0.5 ? 1 : OUTV[ix];
-    case "sel": { const w=SEL_W; w.length=0; const ins=b.in;
-      for(let i=0;i<ins.length;i++) if(ins[i]) w.push(I[i]);
-      if(!w.length) return 0;
-      if(b.op==="min"){ let m=w[0]; for(let i=1;i<w.length;i++) if(w[i]<m) m=w[i]; return m; }
-      if(b.op==="max"){ let m=w[0]; for(let i=1;i<w.length;i++) if(w[i]>m) m=w[i]; return m; }
-      w.sort(SEL_CMP); return w[(w.length-1)>>1]; }
-    case "sink": { const row=SINK[b.sink]; if(row && !blkDead(s,b)){ ctlSinkGen++; row.apply(s,b.arg,I[0],dt); } return I[0]; }
-  }
-  return OUTV[ix];
-}
 
-/* reused: blkEval reads it inside the call and keeps no reference, and 108 blocks built 108 arrays a tick */
-const CTL_IN=[];
-/* ctlOrder key scratch: Object.keys() built one array a tick just for the cache check */
-const CTL_KEYS=[];
-/* sel-block scratch, same contract; the median sorts it in place, tiny enough for no allocation */
-const SEL_W=[];
-const SEL_CMP=(p,q)=>p-q;
-/* block output/filter state live in typed arrays on S (snapshot-native); b.out/b.f stay as the
-   file format and the seed store. CTL_IDX maps id->index, rebuilt with the order below; a rebuild
-   syncs every entry from b.out/b.f (undefined out reads 0, undefined f reads NaN, exactly as before).
-   A plain fast-mode object (fromEntries), never a Map: 360 Map.gets a tick boxed. */
-let CTL_IDX = null, CTL_IDK = null;
-const blkOutOf = (s, id) => {
-  const ix = CTL_IDX ? CTL_IDX[id] : undefined;
-  if(ix !== undefined && s.blkOutV) return s.blkOutV[ix];
-  const b = s.blkBy && s.blkBy[id]; return b ? b.out : undefined;
-};
-/* one hidden class for every block: per-mode knob sets built ~9 shapes and the per-tick loop
-   deoptimized on every one past the fourth. Re-keyed in one canonical order at seed (missing reads
-   undefined, which no arm distinguishes from absent); the rebuild branch below re-normalizes bench edits. */
-const BLK_KEYS = ["mode","in","on","out","sig","arg","v","op","k","kp","ti","td","db","n","f","lo","hi","rate","tau","sink","off"];
-const blkNormalize = b => {
-  const v = new Array(BLK_KEYS.length);
-  for(let i=0;i<BLK_KEYS.length;i++) v[i] = b[BLK_KEYS[i]];
-  for(const k in b) delete b[k];
-  for(let i=0;i<BLK_KEYS.length;i++) b[BLK_KEYS[i]] = v[i];
-  return b;
-};
-/* at the head of the tick; off, wrecked or dark, every output holds and no sink is written */
-function ctlPass(s,dt){
-  if(!s.blkBy) return;
-  if(!ctlLive(s)) return;
-  const ord=ctlOrder(s), I=CTL_IN, ids=CTL_KEYS;
-  /* index with the order (same cache key): first tick, rewired bench, or a snapshot without the arrays */
-  let same = CTL_IDX && CTL_IDK && CTL_IDK.length === ids.length && s.blkOutV && s.blkOutV.length === ids.length && s.blkOutF && s.blkOutF.length === ids.length;
-  if(same) for(let i=0;i<ids.length;i++) if(CTL_IDK[i] !== ids[i]){ same = false; break; }
-  if(!same){
-    if(CTL_IDX && CTL_IDK && s.blkOutV && s.blkOutF) for(let i=0;i<CTL_IDK.length;i++){
-      const b0 = s.blkBy[CTL_IDK[i]]; if(!b0) continue;
-      const ix = CTL_IDX[CTL_IDK[i]]; b0.out = s.blkOutV[ix]; b0.f = s.blkOutF[ix]; }
-    CTL_IDX = Object.fromEntries(ids.map((id,i)=>[id,i])); CTL_IDK = ids.slice();
-    s.blkOutV = new Float64Array(ids.length); s.blkOutF = new Float64Array(ids.length);
-    for(let i=0;i<ids.length;i++){
-      const b0 = blkNormalize(s.blkBy[ids[i]]);
-      s.blkOutV[i] = b0.out === undefined ? 0 : b0.out; s.blkOutF[i] = b0.f; }
-  }
-  const OUTV = s.blkOutV;
-  for(let j=0;j<ord.length;j++){ const id = ord[j], b=s.blkBy[id], ix = CTL_IDX[id];
-    if(!b.on) continue;
-    const n=b.in.length; I.length=n;
-    for(let i=0;i<n;i++){ const v = blkOutOf(s,b.in[i]); I[i]=v===undefined?0:v; }
-    const v=blkEval(s,b,I,dt,ix);
-    OUTV[ix]=isFinite(v)?v:OUTV[ix];
-  }
-}
 
-/* a block switched off is still the block wired to this demand, so `on` is the caller's question; a live block wins over a switched-off peer */
-function sinkWired(s,sink,arg,onOnly){
-  if(!s||!s.blkBy||!ctlLive(s)) return null;
-  let off=null;
-  for(const id in s.blkBy){ const b=s.blkBy[id];
-    if(b.mode!=="sink" || b.sink!==sink || !(b.arg==null||b.arg===arg) || !b.in[0] || !s.blkBy[b.in[0]]) continue;
-    if(b.on) return id;
-    if(!off) off=id; }
-  return onOnly ? null : off;
-}
-const sinkDriver = (s,sink,arg) => sinkWired(s,sink,arg,true);
-/* the deepest hot input the player has named, so a trip's word comes out of the drawn graph and not a table */
-function blkBlame(s,id,seen){
-  if(!id||!s||!s.blkBy) return "";
-  seen=seen||new Set(); if(seen.has(id)) return ""; seen.add(id);
-  const b=s.blkBy[id]; if(!b) return "";
-  /* any source reads "hot" against a zero-or-one test, so the walk would blame the transmitter */
-  if(b.mode==="source"||b.mode==="const") return "";
-  for(const src of b.in){ const u=src&&s.blkBy[src];
-    if(!u || !(u.out>0.5)) continue;
-    const deep=blkBlame(s,src,seen); if(deep) return deep; }
-  return nameFor(id,"");
-}
-/* the label on a wire: the signal's own name and unit where one forces it, the block's kind otherwise */
-function blkLabel(s,id){
-  const b=(s&&s.blkBy&&s.blkBy[id])||D.blocks[id]; if(!b) return {lab:id,u:""};
-  if(b.mode==="source"){ const r=SIGNAL[b.sig]; return {lab:r?r.lab:b.sig, u:r?r.u:""}; }
-  if(b.mode==="sink"){ const r=SINK[b.sink]; return {lab:r?r.lab:b.sink, u:r?r.u:""}; }
-  // a chain keeps its unit until something changes what the number means
-  const up=b.in.find(x=>x), m=BLK[b.mode];
-  const keeps = b.mode==="limit"||b.mode==="lag"||b.mode==="sel"||b.mode==="latch"
-    ||(b.mode==="math"&&(b.op==="add"||b.op==="sub"||b.op==="min"||b.op==="max")&&b.k===1);
-  if(up && keeps) return {lab:m.lab, u:blkLabel(s,up).u};
-  return {lab:m?m.lab:b.mode, u:""};
-}
 
 /* built out of the same blocks the player has, so a preset cannot wire a controller the player could not; blkMk() drops into whichever section is open */
 let SEG_CUR=null;
@@ -476,16 +271,11 @@ function scramBlocksOn(on){
     if(b.mode==="sink" && b.sink==="scram") b.on=!!on; }
   dTouch();
 }
-/* a protection system is a scram somebody wired, asked of the design the way rpsState() asks it of a running plant */
+/* a protection system is a scram somebody wired, asked of the design the way eRpsState() asks it of a running plant */
 const scramWiredD = () => Object.keys(D.blocks).some(id=>{
   const b=D.blocks[id]; return b.mode==="sink" && b.sink==="scram"; });
 const scramArmedD = () => Object.keys(D.blocks).some(id=>{
   const b=D.blocks[id]; return b.mode==="sink" && b.sink==="scram" && b.on && b.in[0]; });
-/* the same order to a plant already running, through act() like every other live change */
-function blkSinkOff(s,sink){
-  for(const id in s.blkBy){ const b=s.blkBy[id];
-    if(b.mode==="sink" && b.sink===sink && b.on) act("blkOn",id); }
-}
 function buildRunbackAuto(){
   const ids=coreIds(); if(!ids.length || !roleId("turb")) return;
   const t=blkOr(ids.map(id=>blkMk("source",{sig:"trip",arg:id},null,"Whether this reactor has tripped.")),
