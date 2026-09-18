@@ -21,11 +21,12 @@
 use std::collections::HashMap;
 
 use crate::{
-    core, ctl, edge, eos, events, field, hydro, net, pieces, read, room, sec, store, tick,
+    core, ctl, edge, eos, events, field, hydro, live, net, pieces, read, room, sec, store, tick,
     transport,
 };
 
 /// Solve scratch carried across ticks (driver-owned).
+#[derive(Clone)]
 pub struct SolveCarried {
     pub fs: field::FieldState,
     pub memo: store::StoreState,
@@ -91,7 +92,148 @@ fn pos_of(t: &[i32]) -> Vec<i32> {
 }
 
 fn bf(v: &[f64], i: usize) -> bool {
-    v[i] == 1.0
+    edge::lane_flag(v, i)
+}
+
+fn opt_idx(v: i32) -> Option<usize> {
+    if v < 0 { None } else { Some(v as usize) }
+}
+
+/// Shared dumped-lane → closure-input builder (solve assembly + sig-probe
+/// diode heads): `CvalIn`, `HeadIn` and the carried flow.
+pub fn edge_inputs<'a>(
+    fz: &SolveFrozen,
+    fs: &field::FieldState,
+    warr: &[f64],
+    q: &'a [f64],
+    gv: &'a [f64],
+    e: usize,
+) -> (edge::CvalIn<'a>, edge::HeadIn, f64) {
+    let wopt = if edge::lane_flag(q, 3) { Some(q[2]) } else { None };
+    let mu = fs.mu[if wopt.map(|w| w >= 0.0).unwrap_or(false) {
+        fz.eu[e] as usize
+    } else {
+        fz.ev[e] as usize
+    }];
+    let kin = edge::CvalIn {
+        ck: fz.ck[e] as i8,
+        c_closure: q[0],
+        cdead_wrecked: edge::lane_flag(q, 1),
+        bore: fz.bore[e],
+        llen: fz.llen[e],
+        k0: fz.k0[e],
+        w: wopt,
+        mu,
+        tank_live: edge::lane_flag(q, 4),
+        port_live: edge::lane_flag(q, 5),
+        gate_valves: gv,
+        gate_throttle: edge::lane_flag(q, 43),
+        relief_live: edge::lane_flag(q, 44),
+        freg: q[6],
+        feed_train_c: q[7],
+        turb_c: q[8],
+        sgtr_live: edge::lane_flag(q, 9),
+        sgtr_prod: q[10],
+        broken: edge::lane_flag(q, 11),
+        wrecked: edge::lane_flag(q, 12),
+        hole_c: fz.hce[e],
+        sg_open: edge::lane_flag(q, 14),
+        vent_active: edge::lane_flag(q, 15),
+        vent_bore: q[16],
+        dump_open: edge::lane_flag(q, 17),
+        dump_q: q[18],
+        dump_rho: q[19],
+        breach: edge::lane_flag(q, 20),
+        tubes_open: q[21],
+        cav_n: fz.cav_n[e],
+        cav_one: fz.cav_one[e],
+        cav_relief_flag: edge::lane_flag(q, 22),
+        cav_relief: fz.cav_relief[e],
+        burst_by: edge::lane_flag(q, 23),
+        disc: edge::DiscIn {
+            kg: q[24],
+            vol: q[25],
+            drain: q[26],
+            at: q[27],
+            has_burst: edge::lane_flag(q, 28),
+            pcont: q[29],
+        },
+        casing_f: q[30],
+        pump_h0: q[31],
+        cc: fz.cc0[e],
+    };
+    let ph = edge::pump_head_now(q[33], q[34], q[35], q[36]);
+    let rho_end = |i: usize| {
+        if fz.gas_at[e] == i as i32 && (fs.x[i] > 0.0 || fs.void_[i] != 0) {
+            fs.rho_g[i]
+        } else if fz.liq_at[e] == i as i32 && fs.x[i] > 0.0 {
+            fs.rho_l[i]
+        } else {
+            fs.rho[i]
+        }
+    };
+    let sth = edge::static_h(
+        fz.dz[e],
+        rho_end(fz.eu[e] as usize),
+        rho_end(fz.ev[e] as usize),
+        if fz.pool_at[e] < 0 {
+            0.0
+        } else {
+            (if fz.pool_at[e] as u32 == fz.eu[e] { 1.0 } else { -1.0 }) * q[37]
+        },
+    );
+    let wraw = if fz.wi[e] < 0 { 0.0 } else { warr[fz.wi[e] as usize] };
+    let hin = edge::HeadIn {
+        ck_undef: fz.ck[e] < 0,
+        is_pump: edge::lane_flag(q, 32),
+        pump_head: ph,
+        static_h: sth,
+        head_k: q[38],
+        h0: q[39],
+        hsrc_closure: q[40],
+        edge_in: edge::edge_in(true, if q[41].is_nan() { 0.0 } else { q[41] }),
+    };
+    (kin, hin, wraw)
+}
+
+/// Full per-edge `(g, h, choke)` from dumped lanes (sig-probe diode heads):
+/// the solve's own edge branch with the field it solved against.
+pub fn edge_gh_lanes(
+    fz: &SolveFrozen,
+    fs: &field::FieldState,
+    warr: &[f64],
+    q: &[f64],
+    gv: &[f64],
+    e: usize,
+    choke_in: bool,
+) -> (f64, f64, bool) {
+    let (kin, hin, wraw) = edge_inputs(fz, fs, warr, q, gv, e);
+    let cc = edge::edge_cval(&kin);
+    let field = hydro::FlowField {
+        p: &fs.p,
+        x: Some(&fs.x),
+        wet: Some(&fs.wet),
+        void_: Some(&fs.void_),
+        rho_d: &fs.rho_d,
+        rho_g: &fs.rho_g,
+        rho_l: &fs.rho_l,
+    };
+    let (g, h, ch) = if fz.g_is_fn[e] != 0 && cc > 0.0 {
+        edge::edge_gh(
+            cc, &hin, &field, fz.eu[e] as usize, fz.ev[e] as usize, fz.diode_s[e],
+            opt_idx(fz.choke_at[e]), opt_idx(fz.gas_at[e]), opt_idx(fz.liq_at[e]), wraw,
+        )
+    } else if fz.g_is_fn[e] != 0 {
+        (0.0, edge::edge_h(&hin, wraw), choke_in)
+    } else {
+        let gg = if fz.g_scalar[e] != 0.0 && !fz.g_scalar[e].is_nan() {
+            fz.g_scalar[e]
+        } else {
+            0.0
+        };
+        (gg, 0.0, choke_in)
+    };
+    (g, edge::head_gate(fz.h_is_fn[e] != 0, h, fz.h_scalar[e]), ch)
 }
 
 /// Per-preset solve tables (mirrors solvefull-probe.rs:262-322 rebuilds).
@@ -157,6 +299,42 @@ pub fn solve_tables(fz: &SolveFrozen) -> SolveTables {
 }
 
 /// One `netSolve` + reads + nat wrapper (= `netFlowK` body, pipenet.js:2965).
+/// Field phase shared by replay and live paths (idempotent on repeat: the
+/// lp/lh/lm memo skips settled nodes, the tail passes recompute identically).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_field(
+    tb: &SolveTables,
+    fz: &SolveFrozen,
+    curves: &[eos::Curve],
+    carried: &mut SolveCarried,
+    pb_v: &[f64],
+    pb_has: &[u8],
+    mb_v: &[f64],
+    mb_has: &[u8],
+    hb_v: &[f64],
+    hb_has: &[u8],
+    fallback_p: &[f64],
+    fallback_h: &[f64],
+    pool_lvl: &[Option<f64>],
+) {
+    let samp = field::FieldSample {
+        pb_v,
+        pb_has,
+        hb_v,
+        hb_has,
+        mb_v,
+        mb_has,
+        w_arr: &carried.warr,
+        edge_u: &fz.eu,
+        edge_v: &fz.ev,
+        fallback_p,
+        fallback_h,
+        pool_lvl,
+    };
+    let mut s3 = [0.0; 3];
+    field::field_update(&tb.field_struct, curves, &mut carried.fs, &samp, &mut s3);
+}
+
 /// Inputs: canonical bags (pre-tick S), carried scratch, dumped tail.
 /// Outputs `SolveOut` + updated carried. Forward-only (no compares).
 #[allow(clippy::too_many_arguments)]
@@ -171,31 +349,21 @@ pub fn solve_tick(
     hb_v: &[f64],
     hb_has: &[u8],
     level: f64,
-    tail: &SolveTail,
+    inp: &SolveIn,
     warns: &mut u32,
 ) -> SolveOut {
+    // Store/pin readers still dumped until their stages port.
+    let tail = inp.tail;
     let tb = solve_tables(fz);
     let n = fz.n;
     let ne = fz.ne;
     let sp = level;
-    let fs = &mut carried.fs;
     // ---- 1. field ----
-    let samp = field::FieldSample {
-        pb_v,
-        pb_has,
-        hb_v,
-        hb_has,
-        mb_v,
-        mb_has,
-        w_arr: &carried.warr,
-        edge_u: &fz.eu,
-        edge_v: &fz.ev,
-        fallback_p: &tail.fallback_p,
-        fallback_h: &tail.fallback_h,
-        pool_lvl: &tail.pool_lvl,
-    };
-    let mut s3 = [0.0; 3];
-    field::field_update(&tb.field_struct, curves, fs, &samp, &mut s3);
+    solve_field(
+        &tb, fz, curves, carried, pb_v, pb_has, mb_v, mb_has, hb_v, hb_has,
+        inp.fallback_p, inp.fallback_h, inp.pool_lvl,
+    );
+    let fs = &mut carried.fs;
     if std::env::var("PROBE_DEBUG").is_ok() {
         let (mn, mx) = fs.p.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
         eprintln!("rsfield p[{mn},{mx}]");
@@ -222,93 +390,10 @@ pub fn solve_tick(
     let mut choke_state = carried.choke;
     let opt = |v: i32| if v < 0 { None } else { Some(v as usize) };
     for e in 0..ne {
-        let q = &tail.edge_q[e];
-        let gv = &tail.edge_gates[e];
-        let wopt = if bf(q, 3) { Some(q[2]) } else { None };
-        let mu = fs.mu[if wopt.map(|w| w >= 0.0).unwrap_or(false) {
-            fz.eu[e] as usize
-        } else {
-            fz.ev[e] as usize
-        }];
-        let kin = edge::CvalIn {
-            ck: fz.ck[e] as i8,
-            c_closure: q[0],
-            cdead_wrecked: bf(q, 1),
-            bore: fz.bore[e],
-            llen: fz.llen[e],
-            k0: fz.k0[e],
-            w: wopt,
-            mu,
-            tank_live: bf(q, 4),
-            port_live: bf(q, 5),
-            gate_valves: gv,
-            gate_throttle: bf(q, 43),
-            relief_live: bf(q, 44),
-            freg: q[6],
-            feed_train_c: q[7],
-            turb_c: q[8],
-            sgtr_live: bf(q, 9),
-            sgtr_prod: q[10],
-            broken: bf(q, 11),
-            wrecked: bf(q, 12),
-            hole_c: fz.hce[e],
-            sg_open: bf(q, 14),
-            vent_active: bf(q, 15),
-            vent_bore: q[16],
-            dump_open: bf(q, 17),
-            dump_q: q[18],
-            dump_rho: q[19],
-            breach: bf(q, 20),
-            tubes_open: q[21],
-            cav_n: fz.cav_n[e],
-            cav_one: fz.cav_one[e],
-            cav_relief_flag: bf(q, 22),
-            cav_relief: fz.cav_relief[e],
-            burst_by: bf(q, 23),
-            disc: edge::DiscIn {
-                kg: q[24],
-                vol: q[25],
-                drain: q[26],
-                at: q[27],
-                has_burst: bf(q, 28),
-                pcont: q[29],
-            },
-            casing_f: q[30],
-            pump_h0: q[31],
-            cc: fz.cc0[e],
-        };
+        let q = &inp.edge_q[e];
+        let gv = &inp.edge_gates[e];
+        let (kin, hin, wraw) = edge_inputs(fz, &fs, &warr, q, gv, e);
         let cc = edge::edge_cval(&kin);
-        let ph = edge::pump_head_now(q[33], q[34], q[35], q[36]);
-        let rho_end = |i: usize| {
-            if fz.gas_at[e] == i as i32 && (fs.x[i] > 0.0 || fs.void_[i] != 0) {
-                fs.rho_g[i]
-            } else if fz.liq_at[e] == i as i32 && fs.x[i] > 0.0 {
-                fs.rho_l[i]
-            } else {
-                fs.rho[i]
-            }
-        };
-        let sth = edge::static_h(
-            fz.dz[e],
-            rho_end(fz.eu[e] as usize),
-            rho_end(fz.ev[e] as usize),
-            if fz.pool_at[e] < 0 {
-                0.0
-            } else {
-                (if fz.pool_at[e] as u32 == fz.eu[e] { 1.0 } else { -1.0 }) * q[37]
-            },
-        );
-        let wraw = if fz.wi[e] < 0 { 0.0 } else { warr[fz.wi[e] as usize] };
-        let hin = edge::HeadIn {
-            ck_undef: fz.ck[e] < 0,
-            is_pump: bf(q, 32),
-            pump_head: ph,
-            static_h: sth,
-            head_k: q[38],
-            h0: q[39],
-            hsrc_closure: q[40],
-            edge_in: edge::edge_in(true, if q[41].is_nan() { 0.0 } else { q[41] }),
-        };
         let (g, h, ch) = if fz.g_is_fn[e] != 0 && cc > 0.0 {
             let (g, h, ch) = edge::edge_gh(
                 cc, &hin, &field, fz.eu[e] as usize, fz.ev[e] as usize, fz.diode_s[e],
@@ -326,28 +411,22 @@ pub fn solve_tick(
             };
             (gg, 0.0, choke_state)
         };
-        let h = if fz.h_is_fn[e] != 0 {
-            h
-        } else if fz.h_scalar[e] != 0.0 && !fz.h_scalar[e].is_nan() {
-            fz.h_scalar[e]
-        } else {
-            0.0
-        };
+        let h = edge::head_gate(fz.h_is_fn[e] != 0, h, fz.h_scalar[e]);
         gh_g[e] = g;
         gh_h[e] = h;
         if std::env::var("PROBE_DEBUG").is_ok() && e == 39 {
-            eprintln!("rsloop39 cc={cc} hsrc={} diode={} choke={} w={wraw} ispump={} ckundef={} sth={sth} h0={} hscl={} ein={} hk={}", q[40], fz.diode_s[e], opt(fz.choke_at[e]).map(|v| v as i32).unwrap_or(-2), bf(q, 32), hin.ck_undef, q[39], q[40], if q[41].is_nan() { 0.0 } else { q[41] }, q[38]);
+            eprintln!("rsloop39 cc={cc} hsrc={} diode={} choke={} w={wraw} ispump={} ckundef={} h0={} hscl={} ein={} hk={}", q[40], fz.diode_s[e], opt(fz.choke_at[e]).map(|v| v as i32).unwrap_or(-2), bf(q, 32), hin.ck_undef, q[39], q[40], if q[41].is_nan() { 0.0 } else { q[41] }, q[38]);
         }
         if std::env::var("PROBE_DEBUG").is_ok() && (g.abs() > 1e4 || h.abs() > 1e4) {
-            eprintln!("biggh e={e} g={g} h={h} ck={} ph={} sth={} h0={} hsrc={} hk={} w={} cc={cc} is_pump={} ckundef={}", fz.ck[e], ph, sth, q[39], q[40], q[38], wraw, bf(q, 32), hin.ck_undef);
+            eprintln!("biggh e={e} g={g} h={h} ck={} h0={} hsrc={} hk={} w={} cc={cc} is_pump={} ckundef={}", fz.ck[e], q[39], q[40], q[38], wraw, bf(q, 32), hin.ck_undef);
         }
     }
     carried.choke = choke_state;
     // ---- 3. pieces: solve-time dump (the JS rebuilds inside the solve as
     // the field update moves the live sig; a pre-solve cache bit is stale) ----
-    let of: Vec<i32> = tail.pc_of.clone();
-    let npc = tail.pc_npc;
-    let live: Vec<u8> = tail.pc_live.clone();
+    let of: Vec<i32> = inp.pc_of.to_vec();
+    let npc = inp.pc_npc;
+    let live: Vec<u8> = inp.pc_live.to_vec();
     carried.pc_of = of.clone();
     carried.pc_npc = npc;
     carried.pc_live = live.clone();
@@ -507,7 +586,7 @@ pub fn solve_tick(
                     bi = e;
                 }
             }
-            let q = &tail.edge_q[bi];
+            let q = &inp.edge_q[bi];
             eprintln!("rsmaxg e={bi} g={bv} cc={} pu={} pv={} xu={} xv={} wetu={} wetv={} diode={} hsrc={} ckat={:?} gat={:?} lat={:?} w={}", {
                 let kin_cc = q[0];
                 kin_cc
@@ -610,13 +689,8 @@ pub fn solve_tick(
         &mut by_drop_leg, Some(&mut bags), &mut leg, Some(&mut core_kg_v), &mut core_tot,
     );
     let _ = by_drop_leg;
-    // ---- nat (dumped loop flows; unported netNatCirc) ----
-    let mut nat_tot = 0.0;
-    for v in &tail.nat_loop {
-        nat_tot += v;
-    }
-    let nk = nat_tot / fz.net_ref;
-    bags.sc[read::ONAT] = if nk.is_finite() && nk >= 0.0 { nk } else { 0.0 };
+    // `netNatCirc` runs AFTER this solve, on the field this one left; the
+    // driver folds its answer into `sc[ONAT]` (`nat_share`).
     // ---- pumpK ----
     let mut total = 0.0;
     for (_, v) in &by_loop_leg {
@@ -763,15 +837,94 @@ pub struct StepOut {
 
 /// One full `stepMarch(dt)` over live state. Tick order mirrors
 /// `src/sim/step.js:3744-3857`; each stage section names its JS lines.
-pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> StepOut {
+pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &mut StepTick) -> StepOut {
+    let mut hook = NoHook;
+    step_replay_hook(meta, st, tick_in, &mut hook)
+}
+
+/// Stage observation hooks for the live-tail harness (`tail-live` probe).
+/// Each fires where the gate captures the matching tail, with the exact
+/// live state the readers see. Default no-ops: `step_replay` (and the
+/// step-probe gate over it) is behaviorally unchanged.
+/// Where the march asks for a tail. The replay has them dumped; the live
+/// engine computes them here off the stage-time state.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stage {
+    Rods,
+    Solve,
+    SecEarly,
+    SecLate,
+    Trans,
+    Room,
+    Core,
+    Vessel,
+    Events,
+    Ann,
+}
+
+pub trait StageHook {
+    /// Fill `tick`'s tails for `at` from live state; no-op replays the dump.
+    fn fill(
+        &mut self,
+        _meta: &StepMeta,
+        _st: &StepState,
+        _sout: Option<&SolveOut>,
+        _at: Stage,
+        _tick: &mut StepTick,
+    ) {
+    }
+    /// Live ctl pass. `None` replays the dumped sample.
+    fn ctl_replay(
+        &mut self,
+        _meta: &StepMeta,
+        _st: &StepState,
+        _tick: &mut StepTick,
+    ) -> Option<ctl::Replay> {
+        None
+    }
+    /// `netNatCirc`: the thermosiphon walk after the main solve. It owns the
+    /// solver scratch for the duration (it restores `w`, not the field), so
+    /// unlike `fill` it takes the state mutably. `None` replays the dump.
+    fn nat(&mut self, _meta: &StepMeta, _st: &mut StepState) -> Option<Vec<f64>> {
+        None
+    }
+    fn pre_solve(&mut self, _meta: &StepMeta, _st: &StepState, _tail: &SolveTail) {}
+    /// Post-solve, pre-spill: pBy swapped, nothing else ran. The gate's
+    /// MISS-path freshPieces reads this exact state.
+    fn post_solve(&mut self, _meta: &StepMeta, _st: &StepState, _sout: &SolveOut, _tail: &SolveTail) {}
+    fn post_early(&mut self, _meta: &StepMeta, _st: &StepState, _sout: &SolveOut, _tail: &SecTail) {}
+    fn pre_advect(&mut self, _meta: &StepMeta, _st: &StepState, _sout: &SolveOut, _tail: &TransTail) {}
+    fn post_kinetics(&mut self, _meta: &StepMeta, _st: &StepState, _tails: &HashMap<String, CoreTail>) {}
+    fn post_cook(&mut self, _meta: &StepMeta, _st: &StepState, _ann_p: &HashMap<String, f64>, _ann_lvl: &HashMap<String, f64>) {}
+    fn post_vessel(&mut self, _meta: &StepMeta, _st: &StepState, _h2: f64) {}
+    fn on_tube(&mut self, _meta: &StepMeta, _st: &StepState, _tube: &HashMap<String, TubeTail>) {}
+    fn at_end(&mut self, _meta: &StepMeta, _st: &StepState, _tick: &StepTick) {}
+}
+
+/// Null hook: replay with zero observation.
+pub struct NoHook;
+impl StageHook for NoHook {}
+
+/// `step_replay` with a stage hook. The hook fires at gate tail-capture
+/// points; it must not mutate state (takes `&StepState`).
+pub fn step_replay_hook(
+    meta: &StepMeta,
+    st: &mut StepState,
+    tick_in: &mut StepTick,
+    hook: &mut dyn StageHook,
+) -> StepOut {
     let dt = tick_in.dt;
     let mut warns: u32 = 0;
     let log0 = st.log.len() as u32;
     let _ = log0;
     // ---- ctlPass (step.js:3752) ----
     let (mut ctl_out, mut ctl_f) = (vec![], vec![]);
-    if let Some(sample) = &tick_in.ctl {
-        let rep = ctl::ctl_replay(sample);
+    let live_rep = hook.ctl_replay(meta, st, tick_in);
+    let rep = match live_rep {
+        Some(r) => Some(r),
+        None => tick_in.ctl.as_ref().map(ctl::ctl_replay),
+    };
+    if let Some(rep) = rep {
         ctl_out = rep.out.clone();
         ctl_f = rep.f.clone();
         apply_ctl_replay(&tick_in.ctl_keys, st, &rep);
@@ -799,6 +952,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
         st.events.load = v;
     }
     // ---- coreRodStep per vessel (3755) ----
+    hook.fill(meta, st, None, Stage::Rods, tick_in);
     for id in &meta.core_ids {
         let k = &meta.core_k[id.as_str()];
         let cs = st.core.get_mut(id.as_str()).unwrap();
@@ -818,10 +972,13 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
     events::core_agg(&meta.events, &mut st.events);
     sync_events_to_sec(st);
     let heat = st.events.n * meta.sec.prompt_f + st.events.decay;
+    hook.fill(meta, st, None, Stage::Solve, tick_in);
+    hook.pre_solve(meta, st, &tick_in.solve_tail);
     // ---- solve = netFlowK (3777) ----
     load_sec(st);
     let level = st.sec.f64s.get("P").copied().unwrap_or(meta.sec.p0);
-    let sout = solve_tick(
+    let sin = SolveIn::from_tail(&tick_in.solve_tail);
+    let mut sout = solve_tick(
         &meta.solve,
         &meta.solve.curves,
         &mut st.solve_carry,
@@ -832,12 +989,22 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
         &st.h_by.v,
         &st.h_by.has,
         level,
-        &tick_in.solve_tail,
+        &sin,
         &mut warns,
     );
+    // ---- netNatCirc (pipenet.js:2976, inside netFlowK, after the solve) ----
+    {
+        let nat = hook.nat(meta, st).unwrap_or_else(|| tick_in.solve_tail.nat_loop.clone());
+        let tot: f64 = nat.iter().sum();
+        let nk = tot / meta.solve.net_ref;
+        let v = if nk.is_finite() && nk >= 0.0 { nk } else { 0.0 };
+        sout.sc_v[read::ONAT] = v;
+        sout.nat_val = v;
+    }
     // pField swap (step.js:3789): tickPf = s.pBy; s.pBy = pField.
     st.p_by.v = sout.p_field_v.clone();
     st.p_by.has = sout.p_field_has.clone();
+    hook.post_solve(meta, st, &sout, &tick_in.solve_tail);
     if std::env::var("PROBE_DEBUG").is_ok() {
         let (mn, mx) = sout.p_field_v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
         eprintln!("solve lv={level} heat={heat} p[{mn},{mx}] ekg0={} by0={}", sout.edge_kg.get(0).copied().unwrap_or(f64::NAN), sout.by_v.get(0).copied().unwrap_or(f64::NAN));
@@ -893,6 +1060,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
     }
     // ---- pcoreStep (3787) + pressRead (3790) + burstDice (3791) ----
     // (spill 3785 + tankRate 3786 run here too: early SecIn.)
+    hook.fill(meta, st, Some(&sout), Stage::SecEarly, tick_in);
     let (inj, inj_ids) = {
         let inp = build_sec_in_early(meta, st, tick_in, &sout, dt);
         let mut ev = std::mem::take(&mut st.log);
@@ -912,7 +1080,11 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
         st.log = ev;
         (inj, inj_ids)
     };
+    hook.fill(meta, st, Some(&sout), Stage::SecLate, tick_in);
+    hook.post_early(meta, st, &sout, &tick_in.sec_tail);
     take_sec(st);
+    hook.fill(meta, st, Some(&sout), Stage::Trans, tick_in);
+    hook.pre_advect(meta, st, &sout, &tick_in.trans_tail);
     // ---- advectStep (3794) ----
     {
         let t = &tick_in.trans_tail;
@@ -1083,6 +1255,8 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
             feed_hm: out.feed_hm,
             feed_mv: out.feed_mv,
             feed_mm: out.feed_mm,
+            core_hv: out.core_hv,
+            core_hm: out.core_hm,
         });
     }
     // ---- invStep (3795; late SecIn) ----
@@ -1115,6 +1289,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
     room_sc.liq_it = st.room_liq_it;
     room_sc.gs.x = st.room_gsx.clone();
     room_sc.disp = st.room_disp.clone();
+    hook.fill(meta, st, Some(&sout), Stage::Room, tick_in);
     {
         let t = &tick_in.room_tail;
         let spill = st.sec.maps.get("spillBy");
@@ -1232,6 +1407,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
     }
     take_sec(st);
     // ---- coreBurstStep (3815) + coreVesselStep (3816) + coreAgg#2 (3817) ----
+    hook.fill(meta, st, Some(&sout), Stage::Core, tick_in);
     for id in meta.core_ids.clone() {
         let k = meta.core_k.get(id.as_str()).cloned();
         let k = match k {
@@ -1336,6 +1512,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
             ev.trip = trip;
         }
     }
+    hook.on_tube(meta, st, &tick_in.tube);
     sync_core_to_events(meta, st);
     events::core_agg(&meta.events, &mut st.events);
     sync_events_to_sec(st);
@@ -1389,6 +1566,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
         }
     }
     // ---- coreMeltStep per vessel (3834): latch + mass path + release ----
+    hook.post_kinetics(meta, st, &tick_in.core_tail);
     for id in meta.core_ids.clone() {
         let k = match meta.core_k.get(id.as_str()).cloned() {
             Some(k) => k,
@@ -1458,13 +1636,15 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
             ev.trip = trip;
         }
     }
-    // S.h2 truth dumped post-vessel (h2Total fallback unported).
+    hook.fill(meta, st, Some(&sout), Stage::Vessel, tick_in);
     st.events.h2 = tick_in.h2_post_vessel;
+    hook.post_vessel(meta, st, tick_in.h2_post_vessel);
     // ---- coreAgg#3 (3835) ----
     sync_core_to_events(meta, st);
     events::core_agg(&meta.events, &mut st.events);
     sync_events_to_sec(st);
     // ---- radDoseStep (3839) ----
+    hook.fill(meta, st, Some(&sout), Stage::Events, tick_in);
     {
         let t = &tick_in.events_tail;
         let mut ev = std::mem::take(&mut st.log);
@@ -1747,8 +1927,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
     );
     let ledg_m0 = events::ledger_kg(&meta.events, &st.events, sump_kg);
     let ledg_o0 = tick::ledger_out_ordered(&st.events.mass_out_order, &st.events.mass_out);
-    let et = &tick_in.events_tail;
-    let stt = &tick_in.sec_tail;
+    let cond_p_tail = tick_in.sec_tail.cond_p;
     let bridge = events::DmgBridge {
         part_role: meta.room.part_roles.clone(),
         part_on: meta.room.part_on.clone(),
@@ -1760,11 +1939,15 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
     {
         let mut ev = std::mem::take(&mut st.log);
         events::blast_step(&meta.events, &mut st.events, &mut ev, dt, &bridge);
-        events::overpressure_step(&meta.events, &mut st.events, &mut ev, &bridge, stt.cond_p);
+        events::overpressure_step(&meta.events, &mut st.events, &mut ev, &bridge, cond_p_tail);
         events::burn_fire_step(&mut st.events, &mut ev);
         events::cook_step(&meta.events, &mut st.events, &mut ev, dt, &bridge, &part_skin);
         st.log = ev;
     }
+    hook.fill(meta, st, Some(&sout), Stage::Ann, tick_in);
+    hook.post_cook(meta, st, &tick_in.ann_sec_p, &tick_in.ann_boiler_lvl);
+    let et = &tick_in.events_tail;
+    let stt = &tick_in.sec_tail;
     let ein = events::EventsIn {
         dt,
         cav_ids: cav_ids.clone(),
@@ -1826,6 +2009,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
     st.sec.u8s.insert("bkpLost".to_string(), st.events.bkp_lost);
     st.room.u8s.insert("bkpLost".to_string(), st.events.bkp_lost);
     st.room.u8s.insert("sgtr".to_string(), st.events.sgtr);
+    hook.at_end(meta, st, tick_in);
     StepOut {
         warns,
         div_got: sout.div_got.clone(),
@@ -1836,7 +2020,7 @@ pub fn step_replay(meta: &StepMeta, st: &mut StepState, tick_in: &StepTick) -> S
 
 /// Frozen ctl topology: sink key lists in Sample-parallel order (dumped once
 /// per preset; the ctl gate repeats them per sample).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct CtlMeta {
     pub freg_keys: Vec<String>,
     pub flow_keys: Vec<String>,
@@ -1851,87 +2035,7 @@ pub struct CtlMeta {
 fn apply_ctl_replay(cmeta: &CtlMeta, st: &mut StepState, rep: &ctl::Replay) {
     st.blk_out = rep.out.clone();
     st.blk_f = rep.f.clone();
-    let act = &rep.act;
-    // runback/load/demands (events home + sec copies, both read them)
-    st.events.load = act.load;
-    st.events.load_dem = act.load_dem;
-    st.sec.f64s.insert("load".to_string(), act.load);
-    st.sec.f64s.insert("loadDem".to_string(), act.load_dem);
-    st.sec.f64s.insert("boronDem".to_string(), act.boron_dem);
-    st.sec.u8s.insert("rbHot".to_string(), act.rb_hot);
-    // freg/flow/valve/tank demands into sec maps
-    for (i, k) in cmeta.freg_keys.iter().enumerate() {
-        if let Some(v) = act.freg.get(i) {
-            st.sec
-                .maps
-                .entry("fregDemBy".to_string())
-                .or_insert_with(sec::SMap::default)
-                .set(k, *v);
-        }
-    }
-    for (i, k) in cmeta.flow_keys.iter().enumerate() {
-        if let Some(v) = act.flow.get(i) {
-            st.sec
-                .maps
-                .entry("flowDemBy".to_string())
-                .or_insert_with(sec::SMap::default)
-                .set(k, *v);
-        }
-    }
-    for (i, k) in cmeta.valve_keys.iter().enumerate() {
-        if let Some(v) = act.valve.get(i) {
-            st.sec
-                .maps
-                .entry("valveDem".to_string())
-                .or_insert_with(sec::SMap::default)
-                .set(k, *v);
-        }
-    }
-    for (i, k) in cmeta.tank_keys.iter().enumerate() {
-        if let Some(v) = act.tank.get(i) {
-            st.sec
-                .maps
-                .entry("tankOpen".to_string())
-                .or_insert_with(sec::SMap::default)
-                .set(k, if *v { 1.0 } else { 0.0 });
-        }
-    }
-    // relief cells: sec struct + events maps
-    for (i, k) in cmeta.relief_keys.iter().enumerate() {
-        if let Some(rc) = act.relief.get(i) {
-            if let Some(cell) = st.sec.relief.get_mut(k) {
-                cell.open = rc.open;
-                cell.auto = rc.auto;
-                cell.stuck = rc.stuck;
-                cell.arm = rc.arm;
-            }
-            st.events.relief_open.insert(k.clone(), rc.open);
-            st.events.relief_auto.insert(k.clone(), rc.auto);
-            st.events.relief_stuck.insert(k.clone(), rc.stuck);
-        }
-    }
-    // per-vessel: CoreState + EvVessel fan-out
-    for (i, id) in cmeta.core_ids.iter().enumerate() {
-        if let Some(ca) = act.cores.get(i) {
-            if let Some(cs) = st.core.get_mut(id) {
-                cs.rod_dem = ca.rod_dem;
-                cs.rod_zdem = ca.rod_zdem.clone();
-                cs.rod_band = ca.rod_band;
-                cs.rod_jam = ca.rod_jam;
-                cs.scrammed = ca.scrammed;
-            }
-            if let Some(ev) = st.events.vessels.get_mut(id) {
-                ev.rod_dem = ca.rod_dem;
-                ev.rod_z_dem = ca.rod_zdem.clone();
-                ev.rod_band = ca.rod_band;
-                ev.rod_jam = ca.rod_jam;
-                ev.scrammed = ca.scrammed;
-                ev.rps_hot = ca.rps_hot;
-                ev.rps_near = ca.rps_near;
-                ev.trip = ca.trip.clone();
-            }
-        }
-    }
+    live::apply_act(cmeta, st, &rep.act);
 }
 
 /// SecIn for actFollow+boronFollow (runs before solve): only dt + dumped
@@ -2007,7 +2111,9 @@ fn build_sec_in_early(
 /// Load canonical bags + mass/dmg into sec state (pre-block).
 /// Tavg/dTavg ride from driver-carried transport state (transport owns them).
 /// roomP grid rides from carried room state (region means readers).
-fn load_sec(st: &mut StepState) {    for (name, bag) in [
+/// Driver sync helpers, shared by replay and engine (bag/mass/dmg/agg
+/// handoffs between the canonical leaves and stage structs).
+pub fn load_sec(st: &mut StepState) {    for (name, bag) in [
         ("pBy", &st.p_by),
         ("hBy", &st.h_by),
         ("mBy", &st.m_by),
@@ -2042,7 +2148,7 @@ fn load_sec(st: &mut StepState) {    for (name, bag) in [
 }
 
 /// Take back canonical bags + mass/dmg from sec state (post-block).
-fn take_sec(st: &mut StepState) {
+pub fn take_sec(st: &mut StepState) {
     for (name, bag) in [
         ("pBy", &mut st.p_by),
         ("hBy", &mut st.h_by),
@@ -2140,7 +2246,7 @@ fn take_events(st: &mut StepState) {
 /// `cx.st.f("n"/"decay"/"vf"/"heat")`; call immediately after every coreAgg.
 /// Deliberately narrow: sec-owned scalars (P/Tavg/load/heat/…) must NOT be
 /// overwritten with events copies (pressRead/margin own them).
-fn sync_events_to_sec(st: &mut StepState) {
+pub fn sync_events_to_sec(st: &mut StepState) {
     st.sec.f64s.insert("n".to_string(), st.events.n);
     st.sec.f64s.insert("decay".to_string(), st.events.decay);
     st.sec.f64s.insert("vf".to_string(), st.events.vf);
@@ -2148,7 +2254,7 @@ fn sync_events_to_sec(st: &mut StepState) {
 }
 /// Project CoreState vessels into EventsState.vessels for `core_agg`
 /// (events.rs:357 reads vessels; per-vessel control state lives there).
-fn sync_core_to_events(meta: &StepMeta, st: &mut StepState) {
+pub fn sync_core_to_events(meta: &StepMeta, st: &mut StepState) {
     for id in &meta.core_ids {
         let cs = match st.core.get(id.as_str()) {
             Some(v) => v,
@@ -2331,7 +2437,7 @@ pub struct SolveFrozen {
 
 /// Per-tick solved outputs (driver-owned; sec/transport/core readers consume).
 /// Only typed-path bags (march is always typed; probe asserts legacy empty).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SolveOut {
     pub p_field_v: Vec<f64>,
     pub p_field_has: Vec<u8>,
@@ -2397,9 +2503,41 @@ pub struct TransMeta {
     pub rise_hi: Vec<u32>,
 }
 
-/// Per-tick tail bundle: gate-evaluated JS readers the replay cannot compute.
-/// Filled by the probe from the stream; the driver consumes.
-#[derive(Default)]
+/// Solve inputs: the live-computable leaves travel by value (replay borrows
+/// them from the tail, the live engine derives them), while the store/pin
+/// readers still arrive dumped until their stages port (`tail`).
+pub struct SolveIn<'a> {
+    pub edge_q: &'a [Vec<f64>],
+    pub edge_gates: &'a [Vec<f64>],
+    pub fallback_p: &'a [f64],
+    pub fallback_h: &'a [f64],
+    pub pool_lvl: &'a [Option<f64>],
+    pub pc_of: &'a [i32],
+    pub pc_npc: usize,
+    pub pc_live: &'a [u8],
+    pub tail: &'a SolveTail,
+}
+
+impl<'a> SolveIn<'a> {
+    /// Replay path: everything borrowed from the dumped tail.
+    pub fn from_tail(tail: &'a SolveTail) -> Self {
+        SolveIn {
+            edge_q: &tail.edge_q,
+            edge_gates: &tail.edge_gates,
+            fallback_p: &tail.fallback_p,
+            fallback_h: &tail.fallback_h,
+            pool_lvl: &tail.pool_lvl,
+            pc_of: &tail.pc_of,
+            pc_npc: tail.pc_npc,
+            pc_live: &tail.pc_live,
+            tail,
+        }
+    }
+}
+
+/// Per-tick tail bundle: the readers the march cannot compute inline. The
+/// replay fills it from the dump, the engine from live state (`StageHook`).
+#[derive(Default, Clone)]
 pub struct StepTick {
     pub dt: f64,
     pub ctl: Option<ctl::Sample>,
@@ -2431,7 +2569,7 @@ pub struct StepTick {
 }
 
 /// Solve-stage dumped readers per tick.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SolveTail {
     pub fallback_p: Vec<f64>,
     pub fallback_h: Vec<f64>,
@@ -2460,7 +2598,7 @@ pub struct SolveTail {
 }
 
 /// Sec-stage dumped readers per tick.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SecTail {
     pub hold_live: Vec<bool>,
     pub stage_fed: Vec<bool>,
@@ -2490,7 +2628,7 @@ pub struct SecTail {
 }
 
 /// Transport-stage dumped readers per tick.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TransTail {
     pub src: Vec<f64>,
     pub metal_qv: Vec<f64>,
@@ -2542,13 +2680,13 @@ pub struct CoreTail {    pub h_in: f64,
 
 /// Room-stage dumped readers per tick (spill/relief transfer replay→replay;
 // out_kg/h2 compute via out_pos; inj carried from S0).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RoomTail {
     pub bore: HashMap<String, f64>,
 }
 
 /// Events-stage dumped readers per tick.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct EventsTail {
     pub rps_state: String,
     pub sink_runback: bool,
@@ -2605,6 +2743,8 @@ pub struct AdvectCache {
     pub feed_hm: Vec<u8>,
     pub feed_mv: Vec<f64>,
     pub feed_mm: Vec<u8>,
+    pub core_hv: Vec<f64>,
+    pub core_hm: Vec<u8>,
 }
 /// Driver-side `book` onto canonical `massOut`, preserving first-insertion
 /// order exactly like JS `book` (step.js:1970; `if(kg)` guard included).

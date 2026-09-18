@@ -939,3 +939,504 @@ mod tests {
         assert!(!r.acted);
     }
 }
+
+/// Live transport-tail readers (step-gate.js:1536-1561 pre_advect).
+/// Exact IEEE op order; NaN semantics via or0/eq in tick.rs.
+use std::collections::HashMap;
+
+/// `TavgOf(s,ci)` (pipenet.js:853): TavgBy[circKey] else core-circuit S.Tavg else circuit Tref else plant Tref.
+pub fn live_tavg_of(
+    circ_key: Option<&str>,
+    tavg_by: &HashMap<String, f64>,
+    tavg: f64,
+    core_circ: i32,
+    ci: i32,
+    tref_circ: Option<f64>,
+    tref_plant: f64,
+) -> f64 {
+    if let Some(k) = circ_key {
+        if let Some(v) = tavg_by.get(k) {
+            return *v;
+        }
+    }
+    if ci == core_circ && !tavg.is_nan() {
+        return tavg;
+    }
+    tref_circ.unwrap_or(tref_plant)
+}
+
+/// `dTavgOf(s,ci)` (pipenet.js:857): dTavgBy[circKey] else core-circuit S.dTavg else 0.
+pub fn live_dtavg_of(
+    circ_key: Option<&str>,
+    dtavg_by: &HashMap<String, f64>,
+    dtavg: f64,
+    core_circ: i32,
+    ci: i32,
+) -> f64 {
+    if let Some(k) = circ_key {
+        if let Some(v) = dtavg_by.get(k) {
+            return *v;
+        }
+    }
+    if ci == core_circ && !dtavg.is_nan() {
+        return dtavg;
+    }
+    0.0
+}
+
+/// `injectNode` target resolution (step.js:1973 + gate 1717-1720).
+/// Empty when numeric/absent; otherwise the first nodesOf candidate carried
+/// by the net index. pipe:-cell resolution needs pipeMap cellOwner (gap).
+pub fn inject_node_name(
+    target: Option<&str>,
+    net_index: &HashMap<String, usize>,
+    nodes_of: &dyn Fn(&str) -> Vec<String>,
+) -> String {
+    let t = match target {
+        Some(s) if !s.is_empty() => s,
+        _ => return String::new(),
+    };
+    if t.parse::<f64>().is_ok() {
+        return String::new();
+    }
+    if t.starts_with("pipe:") {
+        return String::new();
+    }
+    for n in nodes_of(t) {
+        if net_index.contains_key(&n) {
+            return n;
+        }
+    }
+    if net_index.contains_key(t) {
+        return t.to_string();
+    }
+    String::new()
+}
+
+// ---------------------------------------------------------------------------
+// Batch-D live transport-tail readers (step-gate.js:1573-1596 pre_advect).
+// Each mirrors a gate capture site off the same live state the replay holds
+// at the pre_advect hook (post burstDice, sec taken back, bags synced).
+// Op order matches src/sim/step.js:1085-1146 exactly; `||0` reads tick::or0
+// (f64) or live::or0 (Option), Math.max/min read js_max/js_min (NaN-out),
+// Math.pow reads fdlibm::pow (V8 parity).
+// ---------------------------------------------------------------------------
+use crate::{live, netlive, sec, step, tick};
+
+/// FLUID boron pcm per 1% loop inventory (pipenet.js:995-1001).
+pub fn fluid_boron(key: &str) -> f64 {
+    match key {
+        "borated" => 100.0,
+        _ => 0.0,
+    }
+}
+
+/// FLUID temperature K, display/seed only (pipenet.js:995-1001).
+pub fn fluid_temp(key: &str) -> f64 {
+    match key {
+        "condensate" => 320.0,
+        "contaminated" => 400.0,
+        "helium" => 300.0,
+        _ => 310.0,
+    }
+}
+
+/// `bookedKg` (step.js:1179): non-field standing tanks read lvl/100*kg,
+/// everything else is undefined (NaN). `tankField` is exactly
+/// hold||in_field (pipenet.js:1901); `tid` is the tankIdByNode sidecar.
+pub fn live_booked_kg_for(
+    meta: &step::StepMeta,
+    curves: &sec::SecCurves,
+    st: &step::StepState,
+    tid: Option<&str>,
+) -> f64 {
+    let tid = match tid {
+        Some(t) => t,
+        None => return f64::NAN,
+    };
+    let ti = match meta.sec.tank_ids.iter().position(|t| t == tid) {
+        Some(i) => i,
+        None => return f64::NAN,
+    };
+    let t = &meta.sec.tanks[ti];
+    if t.hold || t.in_field {
+        return f64::NAN;
+    }
+    live::live_tank_lvl(meta, curves, st, tid) / 100.0 * netlive::tank_kg(meta, ti)
+}
+
+/// Boron tank pin (step-gate.js:1577-1583): non-hold tank nodes are
+/// overwritten with boron0-100*fluid.boron every tick, else NaN.
+pub fn live_boron_pin_for(
+    meta: &step::StepMeta,
+    boron0: f64,
+    tid: Option<&str>,
+) -> f64 {
+    let tid = match tid {
+        Some(t) => t,
+        None => return f64::NAN,
+    };
+    let ti = match meta.sec.tank_ids.iter().position(|t| t == tid) {
+        Some(i) => i,
+        None => return f64::NAN,
+    };
+    if meta.sec.tanks[ti].hold {
+        return f64::NAN;
+    }
+    tick::or0(boron0) - 100.0 * tick::or0(fluid_boron(&meta.sec.tanks[ti].fluid))
+}
+
+/// `condPDes` (step.js:363): saturation at the design sink on the water curve.
+pub fn live_cond_p_des(water: &Curve) -> f64 {
+    crate::eos::sat_p(water, sec::RAD_TDES + netlive::COND_DT0)
+}
+
+/// `P.hTurb` (step.js:156): the feed-to-steam rise priced at design
+/// backpressure. Commission-static; recomputed here off dumped consts.
+pub fn live_h_turb(steam_rise: f64, cond_p_des: f64, sg_design_p: f64) -> f64 {
+    steam_rise / js_max(0.05, 1.0 - crate::fdlibm::pow(cond_p_des / sg_design_p, 0.19))
+}
+
+/// `P.pRise` (step.js:144): 1 above 3 MPa, else 0.25. Read off d.P0 here;
+/// the JS reads the coolant row's a.P0 (same split on the corpus).
+pub fn live_p_rise(p0: f64) -> f64 {
+    if p0 > 3.0 { 1.0 } else { 0.25 }
+}
+
+/// `holdDampK` (pipenet.js:920-925): bubble volume over the stock vessel.
+/// No hold tank reads exactly 1 (not infinitely stiff).
+pub fn live_hold_damp_k(meta: &step::StepMeta) -> f64 {
+    if meta.sec.hold_tank_ids.is_empty() {
+        return 1.0;
+    }
+    let mut v = 0.0;
+    for &ti in &meta.sec.hold_tank_ids {
+        if let Some(t) = meta.sec.tanks.get(ti) {
+            v += js_max(0.1, t.vol * (100.0 - clamp(t.level, 0.0, 100.0)) / 100.0);
+        }
+    }
+    v / 23.0
+}
+
+/// Live context for `advectSrc`: replay state plus commission sidecars that
+/// have no meta home yet (eff, h_turb, p_rise, pzr_k) and per-tick solved
+/// flow. Curves are the suggest-patched set (same as fallbacks_live).
+pub struct AdvectSrcCtx<'a> {
+    pub meta: &'a step::StepMeta,
+    pub curves: &'a sec::SecCurves,
+    pub st: &'a step::StepState,
+    pub dt: f64,
+    pub wet: &'a [u8],
+    pub run_flow: &'a HashMap<String, f64>,
+    pub exh_open: bool,
+    pub cond_ua: &'a HashMap<String, f64>,
+    pub cw_ref: &'a HashMap<String, f64>,
+    pub cond_frac: f64,
+    pub suggest: &'a [f64],
+    pub eff: f64,
+    pub h_turb: f64,
+    pub p_rise: f64,
+    pub pzr_k: f64,
+    /// Debug/verify seam: replace the sec-owned turbWk read with a dumped
+    /// value. The live engine passes None (reads live state).
+    pub turb_wk_override: Option<f64>,
+}
+
+/// `advectSrc` output: the source plus the metal books it refilled.
+pub struct AdvectSrcOut {
+    pub src: Vec<f64>,
+    pub metal_qv: Vec<f64>,
+    pub metal_qm: Vec<u8>,
+}
+
+fn advect_add(
+    src: &mut [f64],
+    wet: &[u8],
+    net_index: &HashMap<String, usize>,
+    nid: &str,
+    q: f64,
+) {
+    if q == 0.0 || q.is_nan() {
+        return;
+    }
+    if let Some(&i) = net_index.get(nid) {
+        src[i] += q * wet.get(i).copied().unwrap_or(0) as f64;
+    }
+}
+
+fn core_fold<'b>(fold_map: &'b HashMap<String, String>, raw: &'b str) -> &'b str {
+    fold_map.get(raw).map(|s| s.as_str()).unwrap_or(raw)
+}
+
+fn part_role<'b>(meta: &'b step::StepMeta, id: &str) -> Option<&'b str> {
+    meta.sec.part_of.get(id).and_then(|pi| meta.sec.parts.get(*pi)).map(|p| p.role.as_str())
+}
+
+/// `feedInH` (step.js:874): the transport's own inlet book else hotwell water.
+pub fn src_feed_in_h(cx: &AdvectSrcCtx, bi: usize) -> f64 {
+    let nm = cx.meta.sec.feed_node.get(bi).cloned().unwrap_or_default();
+    if let Some(&i) = cx.meta.sec.net_index.get(&nm) {
+        if let Some(cache) = cx.st.advect_cache.as_ref() {
+            if cache.feed_hm.get(i).copied().unwrap_or(0) != 0 {
+                if let Some(&v) = cache.feed_hv.get(i) {
+                    return v;
+                }
+            }
+        }
+    }
+    let c = cx.curves.of(cx.meta.sec.boiler_circ.get(bi).copied().unwrap_or(-1));
+    match cx.st.sec.f64s.get("condT").copied() {
+        None => crate::eos::h_of_t(c, sec::T_FEED),
+        Some(ct) => crate::eos::h_of_t(c, ct),
+    }
+}
+
+/// `feedHeatKW` (step.js:899): bleed duty capped at what the nozzle can take.
+pub fn src_feed_heat_kw(cx: &AdvectSrcCtx, bi: usize) -> f64 {
+    let id = cx.meta.sec.boiler_ids.get(bi).cloned().unwrap_or_default();
+    let c = cx.curves.of(cx.meta.sec.boiler_circ.get(bi).copied().unwrap_or(-1));
+    let nm = cx.meta.sec.feed_node.get(bi).cloned().unwrap_or_default();
+    let h_in = src_feed_in_h(cx, bi);
+    let steam = live::or0(cx.st.sec.maps.get("steamBy").and_then(|m| m.get(&id)));
+    let duty = js_max(0.0, steam) * js_max(0.0, crate::eos::h_of_t(c, sec::T_FEED) - h_in);
+    let hs = crate::eos::sat_h(c, live::live_boiler_p(cx.meta, cx.curves, cx.st, bi));
+    let m = cx.meta.sec.net_index.get(&nm).and_then(|&i| {
+        if cx.st.m_by.has.get(i).copied().unwrap_or(0) != 0 {
+            cx.st.m_by.v.get(i).copied()
+        } else {
+            None
+        }
+    });
+    let m = live::or0(m);
+    let mv = cx.meta.sec.net_index.get(&nm).copied()
+        .and_then(|i| cx.st.advect_cache.as_ref().and_then(|ac| ac.feed_mv.get(i).copied()))
+        .unwrap_or(0.0);
+    let nhat = live::sec_net_h_at(cx.meta, cx.curves, cx.st, &nm);
+    let room = js_max(0.0, mv) * js_max(0.0, hs - h_in)
+        + m * js_max(0.0, hs - nhat) / sec::NET_DT;
+    js_min(duty, room)
+}
+
+/// `turbDh` (step.js:489) inside `mwE` (step.js:493).
+pub fn src_mw_e(cx: &AdvectSrcCtx) -> f64 {
+    let wk = match cx.turb_wk_override {
+        Some(v) => live::or0(Some(v)),
+        None => live::or0(cx.st.sec.f64s.get("turbWk").copied()),
+    };
+    if wk == 0.0 {
+        return 0.0;
+    }
+    let ps = live::or0(cx.st.sec.f64s.get("turbP").copied());
+    let pc = sec::batchb_cond_p(&cx.meta.sec, cx.curves, &cx.st.sec, cx.exh_open);
+    let dh = cx.h_turb
+        * (1.0 - crate::fdlibm::pow(clamp(pc / js_max(ps, 1e-4), 0.0, 1.0), 0.19));
+    wk * dh * cx.eff / 1000.0
+}
+
+/// `cwFwd` (step.js:343): a circulating path runs along the solved flow.
+fn src_cw_fwd(cx: &AdvectSrcCtx, key: &str) -> bool {
+    let flow = live::or0(cx.run_flow.get(key).copied());
+    let r = cx.meta.sec.net_ref_by_run.get(key).copied().unwrap_or(0.0).abs();
+    (if r > 1e-9 { flow / r } else { 0.0 }) >= 0.0
+}
+
+/// `pzrQ` (step.js:1817): heater/spray duty at the vessel's own node.
+pub fn src_pzr_q(cx: &AdvectSrcCtx, id: &str, ti: usize) -> f64 {
+    let ci = cx.meta.sec.tanks.get(ti).map(|t| t.circuit).unwrap_or(-1);
+    if ci < 0 {
+        return 0.0;
+    }
+    let nid = core_fold(&cx.meta.sec.fold_map, id);
+    if !cx.meta.sec.net_index.contains_key(nid) {
+        return 0.0;
+    }
+    let set = live::hold_set_p(cx.meta, ci, cx.suggest);
+    let tavg = live_tavg_of(
+        cx.meta.sec.circ_key_of.get(ci as usize).and_then(|o| o.as_deref()),
+        &cx.st.tavg_by,
+        cx.st.tavg,
+        cx.meta.trans.core_circ,
+        ci,
+        cx.meta.events.circ_tref.get(&ci).copied(),
+        cx.meta.events.tref,
+    );
+    let prog = match cx.meta.sec.core_on_circ.get(ci as usize)
+        .and_then(|v| v.first())
+        .and_then(|own| cx.meta.core_k.get(own.as_str()))
+    {
+        Some(k) => (tavg - k.tref) * set * (0.17 / 15.5) * cx.p_rise / cx.pzr_k,
+        None => 0.0,
+    };
+    let err = (set + prog) - live::sec_net_p_at(cx.meta, cx.curves, cx.st, nid);
+    let vol = cx.meta.sec.tanks.get(ti).map(|t| t.vol).unwrap_or(0.0);
+    let q = 30.0 * js_max(vol, 0.1) * clamp(err / 0.1, -10.0, 1.0);
+    let wrecked = cx.st.dmg_parts.iter().any(|x| x == id);
+    let lvl = live::sec_hold_lvl_of(cx.meta, cx.curves, cx.st, nid);
+    if wrecked || lvl <= 0.5 {
+        js_min(q, 0.0)
+    } else {
+        q
+    }
+}
+
+/// `advectSrc` (step.js:1085-1146) off live state. The metal settle writes
+/// back into `metal_v/metal_has` exactly like the JS (caller passes the
+/// transport's own bags, cloned for verify-only use).
+pub fn live_advect_src(cx: &AdvectSrcCtx, metal_v: &mut [f64], metal_has: &mut [u8]) -> AdvectSrcOut {
+    let meta = cx.meta;
+    let n = meta.trans.n;
+    let mut src = vec![0.0; n];
+    let mut m_qv = vec![0.0; n];
+    let mut m_qm = vec![0u8; n];
+    let skin = |id: &str| live::or0(cx.st.room.maps.get("skinQ").and_then(|m| m.get(id)));
+    // Vessel heat, skin loss, and last tick's pin-to-water share.
+    for id in &meta.core_ids {
+        let fold = core_fold(&meta.sec.fold_map, id);
+        let heat = live::or0(cx.st.sec.heatbal.heat_by.get(id)) * meta.core_k.get(id.as_str()).map(|k| k.rated).unwrap_or(0.0) * 1000.0;
+        advect_add(&mut src, cx.wet, &meta.sec.net_index, fold, heat);
+        advect_add(&mut src, cx.wet, &meta.sec.net_index, fold, -skin(id));
+        let fci = cx.st.core.get(id.as_str()).map(|cs| cs.fci).unwrap_or(0.0);
+        advect_add(&mut src, cx.wet, &meta.sec.net_index, fold, live::or0(Some(fci)));
+    }
+    // Transfer stages: ROLE order says which stream gives heat up.
+    for id in meta.sec.sg_ids.iter().chain(meta.sec.ihx_ids.iter()) {
+        let av = cx.st.sec.heatbal.sg_q_by.get(id).unwrap_or(f64::NAN);
+        let bv = cx.st.sec.maps.get("ihxQBy").and_then(|m| m.get(id)).unwrap_or(f64::NAN);
+        let qq = if av != 0.0 && !av.is_nan() {
+            av
+        } else if bv != 0.0 && !bv.is_nan() {
+            bv
+        } else {
+            0.0
+        };
+        let role = part_role(meta, id).unwrap_or("none");
+        let (ins, sgtr) = match role {
+            "sg" => ([("l", "b"), ("r", "t")].as_slice(), true),
+            "ihx" => ([("l", "r"), ("t", "b")].as_slice(), false),
+            _ => (&[][..], false),
+        };
+        for (k, inn) in ins.iter().enumerate() {
+            if k != 0 && sgtr {
+                let si = meta.sec.sg_ids.iter().position(|s| s == id);
+                let shell = si.and_then(|i| meta.sec.shell_node.get(i).cloned())
+                    .unwrap_or_else(|| core_fold(&meta.sec.fold_map, &format!("{id}t")).to_string());
+                let sw = live::or0(cx.st.sec.maps.get("sgSwQBy").and_then(|m| m.get(id)));
+                advect_add(&mut src, cx.wet, &meta.sec.net_index, &shell, qq + sw - skin(id));
+                continue;
+            }
+            let v = (if k != 0 { qq } else { -qq }) / 2.0;
+            advect_add(&mut src, cx.wet, &meta.sec.net_index, &format!("{id}{}", inn.0), v);
+            advect_add(&mut src, cx.wet, &meta.sec.net_index, &format!("{id}{}", inn.1), v);
+        }
+    }
+    // Bleed heaters land on the feed nozzle.
+    for bi in 0..meta.sec.boiler_ids.len() {
+        let nm = meta.sec.feed_node.get(bi).cloned().unwrap_or_default();
+        advect_add(&mut src, cx.wet, &meta.sec.net_index, &nm, src_feed_heat_kw(cx, bi));
+    }
+    // Turbine work + heater duty leave through the condenser vessels, and
+    // the circulating water carries the rejection to its outlet face.
+    if !meta.sec.cond_ids.is_empty() {
+        let mut out = src_mw_e(cx) * 1000.0;
+        for bi in 0..meta.sec.boiler_ids.len() {
+            out += src_feed_heat_kw(cx, bi);
+        }
+        out /= js_max(1.0, meta.sec.cond_ids.len() as f64);
+        for (ci, id) in meta.sec.cond_ids.iter().enumerate() {
+            let rej = netlive::cond_rej_of(meta, cx.st, cx.cond_ua, cx.cw_ref, cx.cond_frac, id);
+            let ves = meta.sec.cond_ves_node.get(ci).cloned().unwrap_or_default();
+            advect_add(&mut src, cx.wet, &meta.sec.net_index, &ves, -rej - skin(id) - out);
+            for (key, a, b) in meta.sec.cw_paths.get(ci).cloned().unwrap_or_default() {
+                let face = if src_cw_fwd(cx, &key) { &b } else { &a };
+                let nid = core_fold(&meta.sec.fold_map, &format!("{id}{face}")).to_string();
+                advect_add(&mut src, cx.wet, &meta.sec.net_index, &nid, rej);
+            }
+        }
+    }
+    // Sodium-water reaction lands on the primary faces.
+    if let Some(pw) = cx.st.sec.maps.get("sgPwQBy") {
+        for (k, id) in pw.keys.iter().enumerate() {
+            let q = pw.vals.get(k).copied().unwrap_or(0.0);
+            if q == 0.0 || q.is_nan() {
+                continue;
+            }
+            let inn: Option<(&str, &str)> = match part_role(meta, id).unwrap_or("none") {
+                "sg" => Some(("l", "b")),
+                "ihx" => Some(("l", "r")),
+                "cond" => Some(("t", "r")),
+                "radiator" => Some(("l", "r")),
+                _ => None,
+            };
+            if let Some((a, b)) = inn {
+                advect_add(&mut src, cx.wet, &meta.sec.net_index, &format!("{id}{a}"), q / 2.0);
+                advect_add(&mut src, cx.wet, &meta.sec.net_index, &format!("{id}{b}"), q / 2.0);
+            }
+        }
+    }
+    // Panels take heat out of whatever runs through them.
+    for (ri, id) in meta.sec.rad_ids.iter().enumerate() {
+        let q = live::or0(cx.st.sec.maps.get("radQBy").and_then(|m| m.get(id)));
+        let (a, b) = cx.meta.sec.rad_internal.get(ri).cloned().unwrap_or_default();
+        let na = core_fold(&meta.sec.fold_map, &format!("{id}{a}")).to_string();
+        let nb = core_fold(&meta.sec.fold_map, &format!("{id}{b}")).to_string();
+        advect_add(&mut src, cx.wet, &meta.sec.net_index, &na, -q / 2.0);
+        advect_add(&mut src, cx.wet, &meta.sec.net_index, &nb, -q / 2.0);
+    }
+    // Pressurizer heaters and spray at the vessel's own node.
+    for &ti in &meta.sec.hold_tank_ids {
+        if let Some(id) = meta.sec.tank_ids.get(ti).cloned() {
+            let nid = core_fold(&meta.sec.fold_map, &id).to_string();
+            advect_add(&mut src, cx.wet, &meta.sec.net_index, &nid, src_pzr_q(cx, &id, ti));
+        }
+    }
+    // The steel round each node; unscaled by wetness, capped at the node's
+    // own mass. Settles onto its water outside the time march.
+    for i in 0..n {
+        let m = meta.trans.metal_kg.get(i).copied().unwrap_or(0.0);
+        if m.is_nan() || m <= 0.0 {
+            continue;
+        }
+        let nm = meta.sec.net_names.get(i).map(|s| s.as_str()).unwrap_or("");
+        let ci = meta.sec.circ_of_node.get(i).copied().unwrap_or(-1);
+        let c = cx.curves.of(ci);
+        let t = crate::eos::t_of_h(
+            c,
+            live::sec_net_p_at(meta, cx.curves, cx.st, nm),
+            live::sec_net_h_at(meta, cx.curves, cx.st, nm),
+        );
+        if metal_has.get(i).copied().unwrap_or(0) == 0
+            || !metal_v.get(i).copied().unwrap_or(f64::NAN).is_finite()
+        {
+            if let Some(v) = metal_v.get_mut(i) {
+                *v = t;
+            }
+            if let Some(h) = metal_has.get_mut(i) {
+                *h = 1;
+            }
+        }
+        let mv = metal_v.get(i).copied().unwrap_or(f64::NAN);
+        let ua = meta.trans.metal_ua.get(i).copied().unwrap_or(0.0);
+        let tau = meta.trans.metal_tau.get(i).copied().unwrap_or(0.0);
+        let q0 = m * sec::CP_STEEL * (mv - t) / (tau + if ua > 0.0 { m * sec::CP_STEEL / ua } else { 0.0 });
+        let mf = match cx.meta.sec.net_index.get(nm).and_then(|&j| {
+            if cx.st.m_by.has.get(j).copied().unwrap_or(0) != 0 {
+                cx.st.m_by.v.get(j).copied()
+            } else {
+                None
+            }
+        }) {
+            Some(v) if v != 0.0 && !v.is_nan() => v,
+            _ => 0.0,
+        };
+        let cap = if cx.dt > 0.0 {
+            mf * (crate::eos::h_of_t(c, mv) - live::sec_net_h_at(meta, cx.curves, cx.st, nm)).abs() / cx.dt
+        } else {
+            f64::INFINITY
+        };
+        let q = if q0 > 0.0 { js_min(q0, cap) } else { js_max(q0, -cap) };
+        m_qv[i] = q;
+        m_qm[i] = 1;
+        src[i] += q;
+    }
+    AdvectSrcOut { src, metal_qv: m_qv, metal_qm: m_qm }
+}
